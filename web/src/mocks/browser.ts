@@ -646,7 +646,13 @@ export function installMockApi() {
     if (url.pathname === '/api/v1/facility-apps/storage-share' && method(init) === 'GET') return json(mockStorageShare);
     if (url.pathname === '/api/v1/facility-apps/storage-share' && method(init) === 'PUT') {
       const input = init?.body ? await new Response(init.body).json() as { servers?: Array<{ serverId?: string; root?: string }> } : {};
-      return json(saveStorageShare({ servers: (input.servers ?? []).map((item) => ({ serverId: item.serverId ?? '', root: item.root ?? '' })) }));
+      return json(saveStorageShare({ servers: (input.servers ?? []).map((item) => ({ serverId: item.serverId ?? '', root: item.root ?? '' })), version: 0 }));
+    }
+    if (url.pathname === '/api/v1/facility-apps/storage-share/status' && method(init) === 'GET') {
+      return json({
+        servers: mockStorageShare.servers.map((server) => ({ serverId: server.serverId, root: server.root, agentOnline: true, serverInstalled: true, rootExists: true, exportLive: mockStorageShare.enabled })),
+        partitions: [],
+      });
     }
     if (url.pathname === '/api/v1/facility-apps/storage-share/reconcile' && method(init) === 'POST') return json(mockStorageShare);
     if (url.pathname === '/api/v1/facility-apps/storage-share' && method(init) === 'DELETE') {

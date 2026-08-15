@@ -4,8 +4,8 @@ import (
 	"context"
 
 	"panel/internal/modules/applications/runtime"
-	"panel/internal/modules/servers"
 	"panel/internal/modules/applications/spec"
+	"panel/internal/modules/servers"
 	"strings"
 )
 
@@ -49,6 +49,8 @@ func (s *Service) ApplicationsUsingStorageShare(ctx context.Context) ([]StorageS
 		}
 		specValue, issues := appspec.DecodeYAML(raw)
 		if len(issues) > 0 {
+			// 解析失败时保守视为仍在引用，避免卸载/删除门禁被绕过。
+			out = append(out, StorageShareUsage{ApplicationID: id, ApplicationName: name})
 			continue
 		}
 		for _, mount := range specValue.Mounts {

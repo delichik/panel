@@ -103,6 +103,7 @@ const rowImageControllers = new Map<string, AbortController>();
 const facility = ref<ReverseProxyConfig | null>(null);
 const storageShareOptions = ref<{ label: string; value: string }[]>([]);
 const storageShareAvailable = ref(false);
+const storageShareLabelBySource = ref<Record<string, string>>({});
 const storageShareConfig = ref<StorageShareConfig | null>(null);
 const selectedId = ref(String(route.query.application ?? ''));
 const search = ref(String(route.query.search ?? ''));
@@ -1201,20 +1202,27 @@ function savePortDialog() {
 }
 
 async function loadStorageShareOptions() {
-  if (storageShareOptions.value.length) return;
   try {
     const config = await storageShareFacilityApi.get();
     storageShareAvailable.value = config.enabled;
-    storageShareOptions.value = config.enabled
-      ? config.servers.map((server) => ({
-          label: t('applicationsPage.storageShareMountOption', { server: serverNameMap.value.get(server.serverId) || server.serverId, root: server.root }),
-          value: `storage-share:${server.serverId}`,
-        }))
-      : [];
+    const options = config.enabled ? config.servers.map((server) => {
+      const label = t('applicationsPage.storageShareMountOption', { server: serverNameMap.value.get(server.serverId) || server.serverId, root: server.root });
+      storageShareLabelBySource.value[`storage-share:${server.serverId}`] = label;
+      return { label, value: `storage-share:${server.serverId}` };
+    }) : [];
+    if (options.length) storageShareLabelBySource.value['storage-share'] = options[0].label;
+    storageShareOptions.value = options;
   } catch {
     storageShareAvailable.value = false;
     storageShareOptions.value = [];
   }
+}
+
+function mountSourceLabel(mount: MountRow) {
+  if (mount.type === 'storage_share') {
+    return storageShareLabelBySource.value[mount.source] || mount.source || t('applicationsPage.panelManagedSource');
+  }
+  return mount.source || t('applicationsPage.panelManagedSource');
 }
 
 watch(() => mountDraft.type, (type) => {
@@ -1753,7 +1761,7 @@ onBeforeUnmount(() => {
               <template v-else-if="item.kind === 'storage-share'">
                 <div class="facility-card-stat"><strong>{{ storageShareConfig?.partitions.length ?? '—' }}</strong><span>{{ t('applicationsPage.storageSharePartitions') }}</span></div>
                 <div class="facility-card-stat"><strong>{{ storageShareConfig?.servers.length ?? '—' }}</strong><span>{{ t('applicationsPage.storageShareServers') }}</span></div>
-                <div class="facility-card-stat"><strong class="facility-card-stat-truncate">{{ storageShareConfig?.servers[0]?.root ?? '—' }}</strong><span>{{ t('applicationsPage.storageShareRoot') }}</span></div>
+                <div class="facility-card-stat"><strong>{{ storageShareConfig?.servers.filter((server) => server.root).length ?? '—' }}</strong><span>{{ t('applicationsPage.storageShareRoot') }}</span></div>
               </template>
               <template v-else>
                 <div class="facility-card-stat"><strong>{{ facility?.routes ?? '—' }}</strong><span>{{ t('applicationsPage.gatewayRoutes') }}</span></div>
@@ -1764,7 +1772,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="flex flex-wrap items-start gap-2 lg:justify-end">
             <Button size="sm" variant="primary" @click="router.push(`/applications/facility-apps/${item.kind}`)"><Wrench />{{ t('applicationsPage.manageFacility') }}</Button>
-            <Button size="sm" variant="secondary" :loading="pending === `facility-reconcile-${item.kind}`" @click="runOperation(`facility-reconcile-${item.kind}`, () => item.kind === 'storage-share' ? storageShareFacilityApi.reconcile() : reverseProxyFacilityApi.reconcile(), item.kind === 'storage-share' ? 'applicationsPage.storageShareReconcileAccepted' : 'applicationsPage.gatewayReconcileAccepted', 'applicationsPage.gatewayReconcileAcceptedWithoutId')"><Rocket />{{ item.kind === 'storage-share' ? t('applicationsPage.storageShareReconcile') : t('applicationsPage.reconcileGateway') }}</Button>
+            <Button size="sm" variant="secondary" :disabled="item.kind === 'storage-share' && !storageShareConfig?.enabled" :loading="pending === `facility-reconcile-${item.kind}`" @click="runOperation(`facility-reconcile-${item.kind}`, () => item.kind === 'storage-share' ? storageShareFacilityApi.reconcile() : reverseProxyFacilityApi.reconcile(), item.kind === 'storage-share' ? 'applicationsPage.storageShareReconcileAccepted' : 'applicationsPage.gatewayReconcileAccepted', 'applicationsPage.gatewayReconcileAcceptedWithoutId')"><Rocket />{{ item.kind === 'storage-share' ? t('applicationsPage.storageShareReconcile') : t('applicationsPage.reconcileGateway') }}</Button>
           </div>
         </article>
         <EmptyState v-if="!facilities.length" :title="t('applicationsPage.emptyFacilityCatalog')" :description="t('applicationsPage.emptyFacilityCatalogHint')" />
@@ -2033,7 +2041,7 @@ onBeforeUnmount(() => {
               <div class="grid gap-3">
                 <div class="flex items-center justify-between gap-3"><strong>{{ t('applicationsPage.containerEnv') }}</strong><Button size="sm" @click="openRowDialog()"><Plus />{{ t('common.add') }}</Button></div>
                 <div v-for="(row, index) in appDraft.env" :key="row.id" class="item-row"><div><strong>{{ row.key }}</strong><span>{{ row.value || t('common.empty') }}</span></div><div class="row-actions"><Button size="sm" @click="openRowDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeRow(index)">{{ t('common.delete') }}</Button></div></div>
-                <div v-for="(mount, index) in appDraft.mounts" :key="mount.id" class="item-row"><div><strong>{{ t('applicationsPage.mountSummary', { type: mount.type, target: mount.target }) }}</strong><span>{{ mount.source || t('applicationsPage.panelManagedSource') }}</span></div><div class="row-actions"><Button size="sm" @click="openMountDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(appDraft.mounts, index)">{{ t('common.delete') }}</Button></div></div>
+                <div v-for="(mount, index) in appDraft.mounts" :key="mount.id" class="item-row"><div><strong>{{ t('applicationsPage.mountSummary', { type: mount.type, target: mount.target }) }}</strong><span>{{ mountSourceLabel(mount) }}</span></div><div class="row-actions"><Button size="sm" @click="openMountDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(appDraft.mounts, index)">{{ t('common.delete') }}</Button></div></div>
                 <EmptyState v-if="!appDraft.env.length && !appDraft.mounts.length" :title="t('applicationsPage.noStorageConfig')" :description="t('applicationsPage.noStorageConfigHint')" />
               </div>
             </section>
@@ -2114,8 +2122,9 @@ onBeforeUnmount(() => {
       <label class="field">{{ t('common.type') }}<Select v-model="mountDraft.type" :options="mountTypeOptions" /></label>
       <label class="field">{{ t('applicationsPage.source') }}<Select v-if="mountDraft.type === 'storage_share'" v-model="mountDraft.source" :options="storageShareOptions" :placeholder="t('applicationsPage.storageShareMountSourcePlaceholder')" :disabled="!storageShareAvailable" /><Input v-else v-model="mountDraft.source" /></label>
       <p v-if="mountDraft.type === 'storage_share'" class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.storageShareMountHint') }}</p>
+      <p v-if="mountDraft.type === 'storage_share' && !storageShareAvailable" class="m-0 text-xs text-warning">{{ t('applicationsPage.storageShareMountUnconfigured') }} <Button size="sm" variant="ghost" @click="router.push('/applications/facility-apps/storage-share/config')">{{ t('applicationsPage.storageShareGoConfigure') }}</Button></p>
       <label class="field">{{ t('applicationsPage.target') }}<Input v-model="mountDraft.target" /></label>
-      <label class="field">{{ t('applicationsPage.mode') }}<Input v-model="mountDraft.mode" placeholder="0755" /></label>
+      <label v-if="mountDraft.type !== 'storage_share'" class="field">{{ t('applicationsPage.mode') }}<Input v-model="mountDraft.mode" placeholder="0755" /></label>
       <label class="flex items-center justify-between rounded-xl border border-border p-3 text-sm">{{ t('applicationsPage.readOnly') }}<Switch v-model="mountDraft.readOnly" :label="t('applicationsPage.readOnly')" /></label>
     </div>
     <div v-else-if="dialogKind === 'proxy'" class="grid gap-3">

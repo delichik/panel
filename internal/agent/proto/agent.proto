@@ -46,6 +46,9 @@ service AgentService {
   rpc StorageConfigureExport(StorageConfigureExportRequest) returns (OKResponse);
   rpc StorageArchiveDirectory(StorageArchiveDirectoryRequest) returns (StorageArchiveDirectoryResponse);
   rpc StorageDeleteDirectory(StorageDeleteDirectoryRequest) returns (OKResponse);
+  rpc StorageStatus(StorageStatusRequest) returns (StorageStatusResponse);
+  rpc StorageMountStatus(StorageMountStatusRequest) returns (StorageMountStatusResponse);
+  rpc StorageEnsureDirectory(StorageEnsureDirectoryRequest) returns (OKResponse);
 }
 
 service AgentReportService {
@@ -425,6 +428,34 @@ message StorageArchiveDirectoryResponse {
 }
 
 message StorageDeleteDirectoryRequest {
+  string path = 1;
+}
+
+message StorageStatusRequest {
+  string root = 1;
+}
+
+message StorageStatusResponse {
+  bool server_installed = 1;
+  bool root_exists = 2;
+  bool export_live = 3;
+  string detail = 4;
+}
+
+message StorageMountStatusRequest {
+  string source = 1;
+  string target = 2;
+}
+
+message StorageMountStatusResponse {
+  bool volume_exists = 1;
+  string mountpoint = 2;
+  bool mounted = 3;
+  bool writable = 4;
+  string detail = 5;
+}
+
+message StorageEnsureDirectoryRequest {
   string path = 1;
 }
 

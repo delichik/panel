@@ -3695,6 +3695,290 @@ func (x *StorageDeleteDirectoryRequest) GetPath() string {
 	return ""
 }
 
+type StorageStatusRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Root          string                 `protobuf:"bytes,1,opt,name=root,proto3" json:"root,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StorageStatusRequest) Reset() {
+	*x = StorageStatusRequest{}
+	mi := &file_agent_proto_msgTypes[56]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StorageStatusRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StorageStatusRequest) ProtoMessage() {}
+
+func (x *StorageStatusRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[56]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StorageStatusRequest.ProtoReflect.Descriptor instead.
+func (*StorageStatusRequest) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{56}
+}
+
+func (x *StorageStatusRequest) GetRoot() string {
+	if x != nil {
+		return x.Root
+	}
+	return ""
+}
+
+type StorageStatusResponse struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	ServerInstalled bool                   `protobuf:"varint,1,opt,name=server_installed,json=serverInstalled,proto3" json:"server_installed,omitempty"`
+	RootExists      bool                   `protobuf:"varint,2,opt,name=root_exists,json=rootExists,proto3" json:"root_exists,omitempty"`
+	ExportLive      bool                   `protobuf:"varint,3,opt,name=export_live,json=exportLive,proto3" json:"export_live,omitempty"`
+	Detail          string                 `protobuf:"bytes,4,opt,name=detail,proto3" json:"detail,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *StorageStatusResponse) Reset() {
+	*x = StorageStatusResponse{}
+	mi := &file_agent_proto_msgTypes[57]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StorageStatusResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StorageStatusResponse) ProtoMessage() {}
+
+func (x *StorageStatusResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[57]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StorageStatusResponse.ProtoReflect.Descriptor instead.
+func (*StorageStatusResponse) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{57}
+}
+
+func (x *StorageStatusResponse) GetServerInstalled() bool {
+	if x != nil {
+		return x.ServerInstalled
+	}
+	return false
+}
+
+func (x *StorageStatusResponse) GetRootExists() bool {
+	if x != nil {
+		return x.RootExists
+	}
+	return false
+}
+
+func (x *StorageStatusResponse) GetExportLive() bool {
+	if x != nil {
+		return x.ExportLive
+	}
+	return false
+}
+
+func (x *StorageStatusResponse) GetDetail() string {
+	if x != nil {
+		return x.Detail
+	}
+	return ""
+}
+
+type StorageMountStatusRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Source        string                 `protobuf:"bytes,1,opt,name=source,proto3" json:"source,omitempty"`
+	Target        string                 `protobuf:"bytes,2,opt,name=target,proto3" json:"target,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StorageMountStatusRequest) Reset() {
+	*x = StorageMountStatusRequest{}
+	mi := &file_agent_proto_msgTypes[58]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StorageMountStatusRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StorageMountStatusRequest) ProtoMessage() {}
+
+func (x *StorageMountStatusRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[58]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StorageMountStatusRequest.ProtoReflect.Descriptor instead.
+func (*StorageMountStatusRequest) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{58}
+}
+
+func (x *StorageMountStatusRequest) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+func (x *StorageMountStatusRequest) GetTarget() string {
+	if x != nil {
+		return x.Target
+	}
+	return ""
+}
+
+type StorageMountStatusResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	VolumeExists  bool                   `protobuf:"varint,1,opt,name=volume_exists,json=volumeExists,proto3" json:"volume_exists,omitempty"`
+	Mountpoint    string                 `protobuf:"bytes,2,opt,name=mountpoint,proto3" json:"mountpoint,omitempty"`
+	Mounted       bool                   `protobuf:"varint,3,opt,name=mounted,proto3" json:"mounted,omitempty"`
+	Writable      bool                   `protobuf:"varint,4,opt,name=writable,proto3" json:"writable,omitempty"`
+	Detail        string                 `protobuf:"bytes,5,opt,name=detail,proto3" json:"detail,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StorageMountStatusResponse) Reset() {
+	*x = StorageMountStatusResponse{}
+	mi := &file_agent_proto_msgTypes[59]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StorageMountStatusResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StorageMountStatusResponse) ProtoMessage() {}
+
+func (x *StorageMountStatusResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[59]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StorageMountStatusResponse.ProtoReflect.Descriptor instead.
+func (*StorageMountStatusResponse) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{59}
+}
+
+func (x *StorageMountStatusResponse) GetVolumeExists() bool {
+	if x != nil {
+		return x.VolumeExists
+	}
+	return false
+}
+
+func (x *StorageMountStatusResponse) GetMountpoint() string {
+	if x != nil {
+		return x.Mountpoint
+	}
+	return ""
+}
+
+func (x *StorageMountStatusResponse) GetMounted() bool {
+	if x != nil {
+		return x.Mounted
+	}
+	return false
+}
+
+func (x *StorageMountStatusResponse) GetWritable() bool {
+	if x != nil {
+		return x.Writable
+	}
+	return false
+}
+
+func (x *StorageMountStatusResponse) GetDetail() string {
+	if x != nil {
+		return x.Detail
+	}
+	return ""
+}
+
+type StorageEnsureDirectoryRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StorageEnsureDirectoryRequest) Reset() {
+	*x = StorageEnsureDirectoryRequest{}
+	mi := &file_agent_proto_msgTypes[60]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StorageEnsureDirectoryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StorageEnsureDirectoryRequest) ProtoMessage() {}
+
+func (x *StorageEnsureDirectoryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[60]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StorageEnsureDirectoryRequest.ProtoReflect.Descriptor instead.
+func (*StorageEnsureDirectoryRequest) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{60}
+}
+
+func (x *StorageEnsureDirectoryRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
 type DockerPort struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Ip            string                 `protobuf:"bytes,1,opt,name=ip,proto3" json:"ip,omitempty"`
@@ -3707,7 +3991,7 @@ type DockerPort struct {
 
 func (x *DockerPort) Reset() {
 	*x = DockerPort{}
-	mi := &file_agent_proto_msgTypes[56]
+	mi := &file_agent_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3719,7 +4003,7 @@ func (x *DockerPort) String() string {
 func (*DockerPort) ProtoMessage() {}
 
 func (x *DockerPort) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[56]
+	mi := &file_agent_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3732,7 +4016,7 @@ func (x *DockerPort) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerPort.ProtoReflect.Descriptor instead.
 func (*DockerPort) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{56}
+	return file_agent_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *DockerPort) GetIp() string {
@@ -3778,7 +4062,7 @@ type DockerMount struct {
 
 func (x *DockerMount) Reset() {
 	*x = DockerMount{}
-	mi := &file_agent_proto_msgTypes[57]
+	mi := &file_agent_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3790,7 +4074,7 @@ func (x *DockerMount) String() string {
 func (*DockerMount) ProtoMessage() {}
 
 func (x *DockerMount) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[57]
+	mi := &file_agent_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3803,7 +4087,7 @@ func (x *DockerMount) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerMount.ProtoReflect.Descriptor instead.
 func (*DockerMount) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{57}
+	return file_agent_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *DockerMount) GetType() string {
@@ -3874,7 +4158,7 @@ type DockerContainer struct {
 
 func (x *DockerContainer) Reset() {
 	*x = DockerContainer{}
-	mi := &file_agent_proto_msgTypes[58]
+	mi := &file_agent_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3886,7 +4170,7 @@ func (x *DockerContainer) String() string {
 func (*DockerContainer) ProtoMessage() {}
 
 func (x *DockerContainer) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[58]
+	mi := &file_agent_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3899,7 +4183,7 @@ func (x *DockerContainer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerContainer.ProtoReflect.Descriptor instead.
 func (*DockerContainer) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{58}
+	return file_agent_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *DockerContainer) GetId() string {
@@ -3988,7 +4272,7 @@ type DockerContainersResponse struct {
 
 func (x *DockerContainersResponse) Reset() {
 	*x = DockerContainersResponse{}
-	mi := &file_agent_proto_msgTypes[59]
+	mi := &file_agent_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4000,7 +4284,7 @@ func (x *DockerContainersResponse) String() string {
 func (*DockerContainersResponse) ProtoMessage() {}
 
 func (x *DockerContainersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[59]
+	mi := &file_agent_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4013,7 +4297,7 @@ func (x *DockerContainersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerContainersResponse.ProtoReflect.Descriptor instead.
 func (*DockerContainersResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{59}
+	return file_agent_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *DockerContainersResponse) GetItems() []*DockerContainer {
@@ -4033,7 +4317,7 @@ type DockerContainerLogsRequest struct {
 
 func (x *DockerContainerLogsRequest) Reset() {
 	*x = DockerContainerLogsRequest{}
-	mi := &file_agent_proto_msgTypes[60]
+	mi := &file_agent_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4045,7 +4329,7 @@ func (x *DockerContainerLogsRequest) String() string {
 func (*DockerContainerLogsRequest) ProtoMessage() {}
 
 func (x *DockerContainerLogsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[60]
+	mi := &file_agent_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4058,7 +4342,7 @@ func (x *DockerContainerLogsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerContainerLogsRequest.ProtoReflect.Descriptor instead.
 func (*DockerContainerLogsRequest) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{60}
+	return file_agent_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *DockerContainerLogsRequest) GetId() string {
@@ -4085,7 +4369,7 @@ type DockerContainerLogsResponse struct {
 
 func (x *DockerContainerLogsResponse) Reset() {
 	*x = DockerContainerLogsResponse{}
-	mi := &file_agent_proto_msgTypes[61]
+	mi := &file_agent_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4097,7 +4381,7 @@ func (x *DockerContainerLogsResponse) String() string {
 func (*DockerContainerLogsResponse) ProtoMessage() {}
 
 func (x *DockerContainerLogsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[61]
+	mi := &file_agent_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4110,7 +4394,7 @@ func (x *DockerContainerLogsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerContainerLogsResponse.ProtoReflect.Descriptor instead.
 func (*DockerContainerLogsResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{61}
+	return file_agent_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *DockerContainerLogsResponse) GetContainerId() string {
@@ -4137,7 +4421,7 @@ type DockerContainerActionRequest struct {
 
 func (x *DockerContainerActionRequest) Reset() {
 	*x = DockerContainerActionRequest{}
-	mi := &file_agent_proto_msgTypes[62]
+	mi := &file_agent_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4149,7 +4433,7 @@ func (x *DockerContainerActionRequest) String() string {
 func (*DockerContainerActionRequest) ProtoMessage() {}
 
 func (x *DockerContainerActionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[62]
+	mi := &file_agent_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4162,7 +4446,7 @@ func (x *DockerContainerActionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerContainerActionRequest.ProtoReflect.Descriptor instead.
 func (*DockerContainerActionRequest) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{62}
+	return file_agent_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *DockerContainerActionRequest) GetId() string {
@@ -4188,7 +4472,7 @@ type DockerContainerDeleteRequest struct {
 
 func (x *DockerContainerDeleteRequest) Reset() {
 	*x = DockerContainerDeleteRequest{}
-	mi := &file_agent_proto_msgTypes[63]
+	mi := &file_agent_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4200,7 +4484,7 @@ func (x *DockerContainerDeleteRequest) String() string {
 func (*DockerContainerDeleteRequest) ProtoMessage() {}
 
 func (x *DockerContainerDeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[63]
+	mi := &file_agent_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4213,7 +4497,7 @@ func (x *DockerContainerDeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerContainerDeleteRequest.ProtoReflect.Descriptor instead.
 func (*DockerContainerDeleteRequest) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{63}
+	return file_agent_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *DockerContainerDeleteRequest) GetId() string {
@@ -4238,7 +4522,7 @@ type DockerImage struct {
 
 func (x *DockerImage) Reset() {
 	*x = DockerImage{}
-	mi := &file_agent_proto_msgTypes[64]
+	mi := &file_agent_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4250,7 +4534,7 @@ func (x *DockerImage) String() string {
 func (*DockerImage) ProtoMessage() {}
 
 func (x *DockerImage) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[64]
+	mi := &file_agent_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4263,7 +4547,7 @@ func (x *DockerImage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerImage.ProtoReflect.Descriptor instead.
 func (*DockerImage) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{64}
+	return file_agent_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *DockerImage) GetId() string {
@@ -4324,7 +4608,7 @@ type DockerImagesResponse struct {
 
 func (x *DockerImagesResponse) Reset() {
 	*x = DockerImagesResponse{}
-	mi := &file_agent_proto_msgTypes[65]
+	mi := &file_agent_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4336,7 +4620,7 @@ func (x *DockerImagesResponse) String() string {
 func (*DockerImagesResponse) ProtoMessage() {}
 
 func (x *DockerImagesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[65]
+	mi := &file_agent_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4349,7 +4633,7 @@ func (x *DockerImagesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerImagesResponse.ProtoReflect.Descriptor instead.
 func (*DockerImagesResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{65}
+	return file_agent_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *DockerImagesResponse) GetItems() []*DockerImage {
@@ -4368,7 +4652,7 @@ type DockerImagePullRequest struct {
 
 func (x *DockerImagePullRequest) Reset() {
 	*x = DockerImagePullRequest{}
-	mi := &file_agent_proto_msgTypes[66]
+	mi := &file_agent_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4380,7 +4664,7 @@ func (x *DockerImagePullRequest) String() string {
 func (*DockerImagePullRequest) ProtoMessage() {}
 
 func (x *DockerImagePullRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[66]
+	mi := &file_agent_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4393,7 +4677,7 @@ func (x *DockerImagePullRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerImagePullRequest.ProtoReflect.Descriptor instead.
 func (*DockerImagePullRequest) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{66}
+	return file_agent_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *DockerImagePullRequest) GetReference() string {
@@ -4412,7 +4696,7 @@ type DockerImageDeleteRequest struct {
 
 func (x *DockerImageDeleteRequest) Reset() {
 	*x = DockerImageDeleteRequest{}
-	mi := &file_agent_proto_msgTypes[67]
+	mi := &file_agent_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4424,7 +4708,7 @@ func (x *DockerImageDeleteRequest) String() string {
 func (*DockerImageDeleteRequest) ProtoMessage() {}
 
 func (x *DockerImageDeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[67]
+	mi := &file_agent_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4437,7 +4721,7 @@ func (x *DockerImageDeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerImageDeleteRequest.ProtoReflect.Descriptor instead.
 func (*DockerImageDeleteRequest) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{67}
+	return file_agent_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *DockerImageDeleteRequest) GetId() string {
@@ -4462,7 +4746,7 @@ type DockerNetwork struct {
 
 func (x *DockerNetwork) Reset() {
 	*x = DockerNetwork{}
-	mi := &file_agent_proto_msgTypes[68]
+	mi := &file_agent_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4474,7 +4758,7 @@ func (x *DockerNetwork) String() string {
 func (*DockerNetwork) ProtoMessage() {}
 
 func (x *DockerNetwork) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[68]
+	mi := &file_agent_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4487,7 +4771,7 @@ func (x *DockerNetwork) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerNetwork.ProtoReflect.Descriptor instead.
 func (*DockerNetwork) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{68}
+	return file_agent_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *DockerNetwork) GetId() string {
@@ -4548,7 +4832,7 @@ type DockerNetworksResponse struct {
 
 func (x *DockerNetworksResponse) Reset() {
 	*x = DockerNetworksResponse{}
-	mi := &file_agent_proto_msgTypes[69]
+	mi := &file_agent_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4560,7 +4844,7 @@ func (x *DockerNetworksResponse) String() string {
 func (*DockerNetworksResponse) ProtoMessage() {}
 
 func (x *DockerNetworksResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[69]
+	mi := &file_agent_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4573,7 +4857,7 @@ func (x *DockerNetworksResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerNetworksResponse.ProtoReflect.Descriptor instead.
 func (*DockerNetworksResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{69}
+	return file_agent_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *DockerNetworksResponse) GetItems() []*DockerNetwork {
@@ -4593,7 +4877,7 @@ type DockerVolumeUsage struct {
 
 func (x *DockerVolumeUsage) Reset() {
 	*x = DockerVolumeUsage{}
-	mi := &file_agent_proto_msgTypes[70]
+	mi := &file_agent_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4605,7 +4889,7 @@ func (x *DockerVolumeUsage) String() string {
 func (*DockerVolumeUsage) ProtoMessage() {}
 
 func (x *DockerVolumeUsage) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[70]
+	mi := &file_agent_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4618,7 +4902,7 @@ func (x *DockerVolumeUsage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerVolumeUsage.ProtoReflect.Descriptor instead.
 func (*DockerVolumeUsage) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{70}
+	return file_agent_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *DockerVolumeUsage) GetSize() int64 {
@@ -4651,7 +4935,7 @@ type DockerVolume struct {
 
 func (x *DockerVolume) Reset() {
 	*x = DockerVolume{}
-	mi := &file_agent_proto_msgTypes[71]
+	mi := &file_agent_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4663,7 +4947,7 @@ func (x *DockerVolume) String() string {
 func (*DockerVolume) ProtoMessage() {}
 
 func (x *DockerVolume) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[71]
+	mi := &file_agent_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4676,7 +4960,7 @@ func (x *DockerVolume) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerVolume.ProtoReflect.Descriptor instead.
 func (*DockerVolume) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{71}
+	return file_agent_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *DockerVolume) GetName() string {
@@ -4744,7 +5028,7 @@ type DockerVolumesResponse struct {
 
 func (x *DockerVolumesResponse) Reset() {
 	*x = DockerVolumesResponse{}
-	mi := &file_agent_proto_msgTypes[72]
+	mi := &file_agent_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4756,7 +5040,7 @@ func (x *DockerVolumesResponse) String() string {
 func (*DockerVolumesResponse) ProtoMessage() {}
 
 func (x *DockerVolumesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[72]
+	mi := &file_agent_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4769,7 +5053,7 @@ func (x *DockerVolumesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerVolumesResponse.ProtoReflect.Descriptor instead.
 func (*DockerVolumesResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{72}
+	return file_agent_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *DockerVolumesResponse) GetItems() []*DockerVolume {
@@ -4788,7 +5072,7 @@ type DockerVolumeDeleteRequest struct {
 
 func (x *DockerVolumeDeleteRequest) Reset() {
 	*x = DockerVolumeDeleteRequest{}
-	mi := &file_agent_proto_msgTypes[73]
+	mi := &file_agent_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4800,7 +5084,7 @@ func (x *DockerVolumeDeleteRequest) String() string {
 func (*DockerVolumeDeleteRequest) ProtoMessage() {}
 
 func (x *DockerVolumeDeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[73]
+	mi := &file_agent_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4813,7 +5097,7 @@ func (x *DockerVolumeDeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DockerVolumeDeleteRequest.ProtoReflect.Descriptor instead.
 func (*DockerVolumeDeleteRequest) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{73}
+	return file_agent_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *DockerVolumeDeleteRequest) GetName() string {
@@ -5128,6 +5412,28 @@ const file_agent_proto_rawDesc = "" +
 	"\bfilename\x18\x01 \x01(\tR\bfilename\x12\x18\n" +
 	"\acontent\x18\x02 \x01(\fR\acontent\"3\n" +
 	"\x1dStorageDeleteDirectoryRequest\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\"*\n" +
+	"\x14StorageStatusRequest\x12\x12\n" +
+	"\x04root\x18\x01 \x01(\tR\x04root\"\x9c\x01\n" +
+	"\x15StorageStatusResponse\x12)\n" +
+	"\x10server_installed\x18\x01 \x01(\bR\x0fserverInstalled\x12\x1f\n" +
+	"\vroot_exists\x18\x02 \x01(\bR\n" +
+	"rootExists\x12\x1f\n" +
+	"\vexport_live\x18\x03 \x01(\bR\n" +
+	"exportLive\x12\x16\n" +
+	"\x06detail\x18\x04 \x01(\tR\x06detail\"K\n" +
+	"\x19StorageMountStatusRequest\x12\x16\n" +
+	"\x06source\x18\x01 \x01(\tR\x06source\x12\x16\n" +
+	"\x06target\x18\x02 \x01(\tR\x06target\"\xaf\x01\n" +
+	"\x1aStorageMountStatusResponse\x12#\n" +
+	"\rvolume_exists\x18\x01 \x01(\bR\fvolumeExists\x12\x1e\n" +
+	"\n" +
+	"mountpoint\x18\x02 \x01(\tR\n" +
+	"mountpoint\x12\x18\n" +
+	"\amounted\x18\x03 \x01(\bR\amounted\x12\x1a\n" +
+	"\bwritable\x18\x04 \x01(\bR\bwritable\x12\x16\n" +
+	"\x06detail\x18\x05 \x01(\tR\x06detail\"3\n" +
+	"\x1dStorageEnsureDirectoryRequest\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\"t\n" +
 	"\n" +
 	"DockerPort\x12\x0e\n" +
@@ -5224,7 +5530,7 @@ const file_agent_proto_rawDesc = "" +
 	"\x15DockerVolumesResponse\x122\n" +
 	"\x05items\x18\x01 \x03(\v2\x1c.panel.agent.v1.DockerVolumeR\x05items\"/\n" +
 	"\x19DockerVolumeDeleteRequest\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name2\x8c\x1b\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name2\xbc\x1d\n" +
 	"\fAgentService\x12?\n" +
 	"\x06Health\x12\x15.panel.agent.v1.Empty\x1a\x1e.panel.agent.v1.HealthResponse\x12E\n" +
 	"\tOSRelease\x12\x15.panel.agent.v1.Empty\x1a!.panel.agent.v1.OSReleaseResponse\x12K\n" +
@@ -5264,7 +5570,10 @@ const file_agent_proto_rawDesc = "" +
 	"\x18RuntimePersistentRestore\x12/.panel.agent.v1.RuntimePersistentRestoreRequest\x1a0.panel.agent.v1.RuntimePersistentRestoreResponse\x12c\n" +
 	"\x16StorageConfigureExport\x12-.panel.agent.v1.StorageConfigureExportRequest\x1a\x1a.panel.agent.v1.OKResponse\x12z\n" +
 	"\x17StorageArchiveDirectory\x12..panel.agent.v1.StorageArchiveDirectoryRequest\x1a/.panel.agent.v1.StorageArchiveDirectoryResponse\x12c\n" +
-	"\x16StorageDeleteDirectory\x12-.panel.agent.v1.StorageDeleteDirectoryRequest\x1a\x1a.panel.agent.v1.OKResponse2c\n" +
+	"\x16StorageDeleteDirectory\x12-.panel.agent.v1.StorageDeleteDirectoryRequest\x1a\x1a.panel.agent.v1.OKResponse\x12\\\n" +
+	"\rStorageStatus\x12$.panel.agent.v1.StorageStatusRequest\x1a%.panel.agent.v1.StorageStatusResponse\x12k\n" +
+	"\x12StorageMountStatus\x12).panel.agent.v1.StorageMountStatusRequest\x1a*.panel.agent.v1.StorageMountStatusResponse\x12c\n" +
+	"\x16StorageEnsureDirectory\x12-.panel.agent.v1.StorageEnsureDirectoryRequest\x1a\x1a.panel.agent.v1.OKResponse2c\n" +
 	"\x12AgentReportService\x12M\n" +
 	"\x06Report\x12\".panel.agent.v1.AgentReportControl\x1a\x1b.panel.agent.v1.AgentReport(\x010\x01B!Z\x1fpanel/internal/agent/pb;agentpbb\x06proto3"
 
@@ -5280,7 +5589,7 @@ func file_agent_proto_rawDescGZIP() []byte {
 	return file_agent_proto_rawDescData
 }
 
-var file_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 80)
+var file_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 85)
 var file_agent_proto_goTypes = []any{
 	(*Empty)(nil),                            // 0: panel.agent.v1.Empty
 	(*AgentReportControl)(nil),               // 1: panel.agent.v1.AgentReportControl
@@ -5338,53 +5647,58 @@ var file_agent_proto_goTypes = []any{
 	(*StorageArchiveDirectoryRequest)(nil),   // 53: panel.agent.v1.StorageArchiveDirectoryRequest
 	(*StorageArchiveDirectoryResponse)(nil),  // 54: panel.agent.v1.StorageArchiveDirectoryResponse
 	(*StorageDeleteDirectoryRequest)(nil),    // 55: panel.agent.v1.StorageDeleteDirectoryRequest
-	(*DockerPort)(nil),                       // 56: panel.agent.v1.DockerPort
-	(*DockerMount)(nil),                      // 57: panel.agent.v1.DockerMount
-	(*DockerContainer)(nil),                  // 58: panel.agent.v1.DockerContainer
-	(*DockerContainersResponse)(nil),         // 59: panel.agent.v1.DockerContainersResponse
-	(*DockerContainerLogsRequest)(nil),       // 60: panel.agent.v1.DockerContainerLogsRequest
-	(*DockerContainerLogsResponse)(nil),      // 61: panel.agent.v1.DockerContainerLogsResponse
-	(*DockerContainerActionRequest)(nil),     // 62: panel.agent.v1.DockerContainerActionRequest
-	(*DockerContainerDeleteRequest)(nil),     // 63: panel.agent.v1.DockerContainerDeleteRequest
-	(*DockerImage)(nil),                      // 64: panel.agent.v1.DockerImage
-	(*DockerImagesResponse)(nil),             // 65: panel.agent.v1.DockerImagesResponse
-	(*DockerImagePullRequest)(nil),           // 66: panel.agent.v1.DockerImagePullRequest
-	(*DockerImageDeleteRequest)(nil),         // 67: panel.agent.v1.DockerImageDeleteRequest
-	(*DockerNetwork)(nil),                    // 68: panel.agent.v1.DockerNetwork
-	(*DockerNetworksResponse)(nil),           // 69: panel.agent.v1.DockerNetworksResponse
-	(*DockerVolumeUsage)(nil),                // 70: panel.agent.v1.DockerVolumeUsage
-	(*DockerVolume)(nil),                     // 71: panel.agent.v1.DockerVolume
-	(*DockerVolumesResponse)(nil),            // 72: panel.agent.v1.DockerVolumesResponse
-	(*DockerVolumeDeleteRequest)(nil),        // 73: panel.agent.v1.DockerVolumeDeleteRequest
-	nil,                                      // 74: panel.agent.v1.SystemTraitsResponse.TraitsEntry
-	nil,                                      // 75: panel.agent.v1.Fail2BanJail.OptionsEntry
-	nil,                                      // 76: panel.agent.v1.RuntimeSpec.EnvEntry
-	nil,                                      // 77: panel.agent.v1.DockerContainer.LabelsEntry
-	nil,                                      // 78: panel.agent.v1.DockerNetwork.LabelsEntry
-	nil,                                      // 79: panel.agent.v1.DockerVolume.LabelsEntry
-	(*timestamppb.Timestamp)(nil),            // 80: google.protobuf.Timestamp
-	(*wrapperspb.Int32Value)(nil),            // 81: google.protobuf.Int32Value
+	(*StorageStatusRequest)(nil),             // 56: panel.agent.v1.StorageStatusRequest
+	(*StorageStatusResponse)(nil),            // 57: panel.agent.v1.StorageStatusResponse
+	(*StorageMountStatusRequest)(nil),        // 58: panel.agent.v1.StorageMountStatusRequest
+	(*StorageMountStatusResponse)(nil),       // 59: panel.agent.v1.StorageMountStatusResponse
+	(*StorageEnsureDirectoryRequest)(nil),    // 60: panel.agent.v1.StorageEnsureDirectoryRequest
+	(*DockerPort)(nil),                       // 61: panel.agent.v1.DockerPort
+	(*DockerMount)(nil),                      // 62: panel.agent.v1.DockerMount
+	(*DockerContainer)(nil),                  // 63: panel.agent.v1.DockerContainer
+	(*DockerContainersResponse)(nil),         // 64: panel.agent.v1.DockerContainersResponse
+	(*DockerContainerLogsRequest)(nil),       // 65: panel.agent.v1.DockerContainerLogsRequest
+	(*DockerContainerLogsResponse)(nil),      // 66: panel.agent.v1.DockerContainerLogsResponse
+	(*DockerContainerActionRequest)(nil),     // 67: panel.agent.v1.DockerContainerActionRequest
+	(*DockerContainerDeleteRequest)(nil),     // 68: panel.agent.v1.DockerContainerDeleteRequest
+	(*DockerImage)(nil),                      // 69: panel.agent.v1.DockerImage
+	(*DockerImagesResponse)(nil),             // 70: panel.agent.v1.DockerImagesResponse
+	(*DockerImagePullRequest)(nil),           // 71: panel.agent.v1.DockerImagePullRequest
+	(*DockerImageDeleteRequest)(nil),         // 72: panel.agent.v1.DockerImageDeleteRequest
+	(*DockerNetwork)(nil),                    // 73: panel.agent.v1.DockerNetwork
+	(*DockerNetworksResponse)(nil),           // 74: panel.agent.v1.DockerNetworksResponse
+	(*DockerVolumeUsage)(nil),                // 75: panel.agent.v1.DockerVolumeUsage
+	(*DockerVolume)(nil),                     // 76: panel.agent.v1.DockerVolume
+	(*DockerVolumesResponse)(nil),            // 77: panel.agent.v1.DockerVolumesResponse
+	(*DockerVolumeDeleteRequest)(nil),        // 78: panel.agent.v1.DockerVolumeDeleteRequest
+	nil,                                      // 79: panel.agent.v1.SystemTraitsResponse.TraitsEntry
+	nil,                                      // 80: panel.agent.v1.Fail2BanJail.OptionsEntry
+	nil,                                      // 81: panel.agent.v1.RuntimeSpec.EnvEntry
+	nil,                                      // 82: panel.agent.v1.DockerContainer.LabelsEntry
+	nil,                                      // 83: panel.agent.v1.DockerNetwork.LabelsEntry
+	nil,                                      // 84: panel.agent.v1.DockerVolume.LabelsEntry
+	(*timestamppb.Timestamp)(nil),            // 85: google.protobuf.Timestamp
+	(*wrapperspb.Int32Value)(nil),            // 86: google.protobuf.Int32Value
 }
 var file_agent_proto_depIdxs = []int32{
 	3,  // 0: panel.agent.v1.AgentReportControl.config:type_name -> panel.agent.v1.AgentReportConfig
-	80, // 1: panel.agent.v1.AgentReport.sample_at:type_name -> google.protobuf.Timestamp
+	85, // 1: panel.agent.v1.AgentReport.sample_at:type_name -> google.protobuf.Timestamp
 	10, // 2: panel.agent.v1.AgentReport.metrics:type_name -> panel.agent.v1.MetricsSnapshotResponse
-	59, // 3: panel.agent.v1.AgentReport.containers:type_name -> panel.agent.v1.DockerContainersResponse
+	64, // 3: panel.agent.v1.AgentReport.containers:type_name -> panel.agent.v1.DockerContainersResponse
 	13, // 4: panel.agent.v1.AgentReport.package_updates:type_name -> panel.agent.v1.PackageUpdatesResponse
-	65, // 5: panel.agent.v1.AgentReport.images:type_name -> panel.agent.v1.DockerImagesResponse
+	70, // 5: panel.agent.v1.AgentReport.images:type_name -> panel.agent.v1.DockerImagesResponse
 	6,  // 6: panel.agent.v1.HealthResponse.docker:type_name -> panel.agent.v1.DockerHealth
-	74, // 7: panel.agent.v1.SystemTraitsResponse.traits:type_name -> panel.agent.v1.SystemTraitsResponse.TraitsEntry
-	80, // 8: panel.agent.v1.MetricsSnapshotResponse.time:type_name -> google.protobuf.Timestamp
+	79, // 7: panel.agent.v1.SystemTraitsResponse.traits:type_name -> panel.agent.v1.SystemTraitsResponse.TraitsEntry
+	85, // 8: panel.agent.v1.MetricsSnapshotResponse.time:type_name -> google.protobuf.Timestamp
 	11, // 9: panel.agent.v1.MetricsSnapshotResponse.status:type_name -> panel.agent.v1.SystemStatus
-	80, // 10: panel.agent.v1.SystemStatus.server_time:type_name -> google.protobuf.Timestamp
+	85, // 10: panel.agent.v1.SystemStatus.server_time:type_name -> google.protobuf.Timestamp
 	12, // 11: panel.agent.v1.PackageUpdatesResponse.items:type_name -> panel.agent.v1.PackageUpdate
 	18, // 12: panel.agent.v1.UFWStatusResponse.rules:type_name -> panel.agent.v1.UFWRuleStatus
 	17, // 13: panel.agent.v1.UFWInstallRequest.rules:type_name -> panel.agent.v1.UFWRule
 	17, // 14: panel.agent.v1.UFWAllowRequest.rule:type_name -> panel.agent.v1.UFWRule
-	75, // 15: panel.agent.v1.Fail2BanJail.options:type_name -> panel.agent.v1.Fail2BanJail.OptionsEntry
+	80, // 15: panel.agent.v1.Fail2BanJail.options:type_name -> panel.agent.v1.Fail2BanJail.OptionsEntry
 	24, // 16: panel.agent.v1.Fail2BanConfig.jails:type_name -> panel.agent.v1.Fail2BanJail
 	25, // 17: panel.agent.v1.Fail2BanApplyRequest.config:type_name -> panel.agent.v1.Fail2BanConfig
-	76, // 18: panel.agent.v1.RuntimeSpec.env:type_name -> panel.agent.v1.RuntimeSpec.EnvEntry
+	81, // 18: panel.agent.v1.RuntimeSpec.env:type_name -> panel.agent.v1.RuntimeSpec.EnvEntry
 	29, // 19: panel.agent.v1.RuntimeSpec.ports:type_name -> panel.agent.v1.RuntimePort
 	30, // 20: panel.agent.v1.RuntimeSpec.resources:type_name -> panel.agent.v1.RuntimeResources
 	31, // 21: panel.agent.v1.RuntimeSpec.mounts:type_name -> panel.agent.v1.RuntimeMount
@@ -5392,25 +5706,25 @@ var file_agent_proto_depIdxs = []int32{
 	33, // 23: panel.agent.v1.RuntimeSpec.restart:type_name -> panel.agent.v1.RuntimeRestart
 	34, // 24: panel.agent.v1.RuntimeSpec.services:type_name -> panel.agent.v1.RuntimeService
 	35, // 25: panel.agent.v1.RuntimeSpec.checks:type_name -> panel.agent.v1.RuntimeCheck
-	81, // 26: panel.agent.v1.RuntimeMount.uid:type_name -> google.protobuf.Int32Value
-	81, // 27: panel.agent.v1.RuntimeMount.gid:type_name -> google.protobuf.Int32Value
-	81, // 28: panel.agent.v1.RuntimeManagedFile.uid:type_name -> google.protobuf.Int32Value
-	81, // 29: panel.agent.v1.RuntimeManagedFile.gid:type_name -> google.protobuf.Int32Value
+	86, // 26: panel.agent.v1.RuntimeMount.uid:type_name -> google.protobuf.Int32Value
+	86, // 27: panel.agent.v1.RuntimeMount.gid:type_name -> google.protobuf.Int32Value
+	86, // 28: panel.agent.v1.RuntimeManagedFile.uid:type_name -> google.protobuf.Int32Value
+	86, // 29: panel.agent.v1.RuntimeManagedFile.gid:type_name -> google.protobuf.Int32Value
 	28, // 30: panel.agent.v1.RuntimeWriteFilesRequest.spec:type_name -> panel.agent.v1.RuntimeSpec
 	28, // 31: panel.agent.v1.RuntimeReloadRequest.spec:type_name -> panel.agent.v1.RuntimeSpec
 	28, // 32: panel.agent.v1.RuntimeCreateContainerRequest.spec:type_name -> panel.agent.v1.RuntimeSpec
-	80, // 33: panel.agent.v1.RuntimeInstanceResponse.observed_at:type_name -> google.protobuf.Timestamp
-	80, // 34: panel.agent.v1.RuntimeStatusResponse.observed_at:type_name -> google.protobuf.Timestamp
-	56, // 35: panel.agent.v1.DockerContainer.ports:type_name -> panel.agent.v1.DockerPort
-	77, // 36: panel.agent.v1.DockerContainer.labels:type_name -> panel.agent.v1.DockerContainer.LabelsEntry
-	57, // 37: panel.agent.v1.DockerContainer.mounts:type_name -> panel.agent.v1.DockerMount
-	58, // 38: panel.agent.v1.DockerContainersResponse.items:type_name -> panel.agent.v1.DockerContainer
-	64, // 39: panel.agent.v1.DockerImagesResponse.items:type_name -> panel.agent.v1.DockerImage
-	78, // 40: panel.agent.v1.DockerNetwork.labels:type_name -> panel.agent.v1.DockerNetwork.LabelsEntry
-	68, // 41: panel.agent.v1.DockerNetworksResponse.items:type_name -> panel.agent.v1.DockerNetwork
-	79, // 42: panel.agent.v1.DockerVolume.labels:type_name -> panel.agent.v1.DockerVolume.LabelsEntry
-	70, // 43: panel.agent.v1.DockerVolume.usage_data:type_name -> panel.agent.v1.DockerVolumeUsage
-	71, // 44: panel.agent.v1.DockerVolumesResponse.items:type_name -> panel.agent.v1.DockerVolume
+	85, // 33: panel.agent.v1.RuntimeInstanceResponse.observed_at:type_name -> google.protobuf.Timestamp
+	85, // 34: panel.agent.v1.RuntimeStatusResponse.observed_at:type_name -> google.protobuf.Timestamp
+	61, // 35: panel.agent.v1.DockerContainer.ports:type_name -> panel.agent.v1.DockerPort
+	82, // 36: panel.agent.v1.DockerContainer.labels:type_name -> panel.agent.v1.DockerContainer.LabelsEntry
+	62, // 37: panel.agent.v1.DockerContainer.mounts:type_name -> panel.agent.v1.DockerMount
+	63, // 38: panel.agent.v1.DockerContainersResponse.items:type_name -> panel.agent.v1.DockerContainer
+	69, // 39: panel.agent.v1.DockerImagesResponse.items:type_name -> panel.agent.v1.DockerImage
+	83, // 40: panel.agent.v1.DockerNetwork.labels:type_name -> panel.agent.v1.DockerNetwork.LabelsEntry
+	73, // 41: panel.agent.v1.DockerNetworksResponse.items:type_name -> panel.agent.v1.DockerNetwork
+	84, // 42: panel.agent.v1.DockerVolume.labels:type_name -> panel.agent.v1.DockerVolume.LabelsEntry
+	75, // 43: panel.agent.v1.DockerVolume.usage_data:type_name -> panel.agent.v1.DockerVolumeUsage
+	76, // 44: panel.agent.v1.DockerVolumesResponse.items:type_name -> panel.agent.v1.DockerVolume
 	0,  // 45: panel.agent.v1.AgentService.Health:input_type -> panel.agent.v1.Empty
 	0,  // 46: panel.agent.v1.AgentService.OSRelease:input_type -> panel.agent.v1.Empty
 	0,  // 47: panel.agent.v1.AgentService.SystemTraits:input_type -> panel.agent.v1.Empty
@@ -5428,15 +5742,15 @@ var file_agent_proto_depIdxs = []int32{
 	0,  // 59: panel.agent.v1.AgentService.ReleaseFail2Ban:input_type -> panel.agent.v1.Empty
 	0,  // 60: panel.agent.v1.AgentService.RestartSystem:input_type -> panel.agent.v1.Empty
 	0,  // 61: panel.agent.v1.AgentService.DockerContainers:input_type -> panel.agent.v1.Empty
-	60, // 62: panel.agent.v1.AgentService.DockerContainerLogs:input_type -> panel.agent.v1.DockerContainerLogsRequest
-	62, // 63: panel.agent.v1.AgentService.DockerContainerAction:input_type -> panel.agent.v1.DockerContainerActionRequest
-	63, // 64: panel.agent.v1.AgentService.DockerContainerDelete:input_type -> panel.agent.v1.DockerContainerDeleteRequest
+	65, // 62: panel.agent.v1.AgentService.DockerContainerLogs:input_type -> panel.agent.v1.DockerContainerLogsRequest
+	67, // 63: panel.agent.v1.AgentService.DockerContainerAction:input_type -> panel.agent.v1.DockerContainerActionRequest
+	68, // 64: panel.agent.v1.AgentService.DockerContainerDelete:input_type -> panel.agent.v1.DockerContainerDeleteRequest
 	0,  // 65: panel.agent.v1.AgentService.DockerImages:input_type -> panel.agent.v1.Empty
-	66, // 66: panel.agent.v1.AgentService.DockerImagePull:input_type -> panel.agent.v1.DockerImagePullRequest
-	67, // 67: panel.agent.v1.AgentService.DockerImageDelete:input_type -> panel.agent.v1.DockerImageDeleteRequest
+	71, // 66: panel.agent.v1.AgentService.DockerImagePull:input_type -> panel.agent.v1.DockerImagePullRequest
+	72, // 67: panel.agent.v1.AgentService.DockerImageDelete:input_type -> panel.agent.v1.DockerImageDeleteRequest
 	0,  // 68: panel.agent.v1.AgentService.DockerNetworks:input_type -> panel.agent.v1.Empty
 	0,  // 69: panel.agent.v1.AgentService.DockerVolumes:input_type -> panel.agent.v1.Empty
-	73, // 70: panel.agent.v1.AgentService.DockerVolumeDelete:input_type -> panel.agent.v1.DockerVolumeDeleteRequest
+	78, // 70: panel.agent.v1.AgentService.DockerVolumeDelete:input_type -> panel.agent.v1.DockerVolumeDeleteRequest
 	36, // 71: panel.agent.v1.AgentService.RuntimeWriteFiles:input_type -> panel.agent.v1.RuntimeWriteFilesRequest
 	37, // 72: panel.agent.v1.AgentService.RuntimeReload:input_type -> panel.agent.v1.RuntimeReloadRequest
 	39, // 73: panel.agent.v1.AgentService.RuntimeCreateContainer:input_type -> panel.agent.v1.RuntimeCreateContainerRequest
@@ -5449,48 +5763,54 @@ var file_agent_proto_depIdxs = []int32{
 	52, // 80: panel.agent.v1.AgentService.StorageConfigureExport:input_type -> panel.agent.v1.StorageConfigureExportRequest
 	53, // 81: panel.agent.v1.AgentService.StorageArchiveDirectory:input_type -> panel.agent.v1.StorageArchiveDirectoryRequest
 	55, // 82: panel.agent.v1.AgentService.StorageDeleteDirectory:input_type -> panel.agent.v1.StorageDeleteDirectoryRequest
-	1,  // 83: panel.agent.v1.AgentReportService.Report:input_type -> panel.agent.v1.AgentReportControl
-	5,  // 84: panel.agent.v1.AgentService.Health:output_type -> panel.agent.v1.HealthResponse
-	7,  // 85: panel.agent.v1.AgentService.OSRelease:output_type -> panel.agent.v1.OSReleaseResponse
-	8,  // 86: panel.agent.v1.AgentService.SystemTraits:output_type -> panel.agent.v1.SystemTraitsResponse
-	10, // 87: panel.agent.v1.AgentService.MetricsSnapshot:output_type -> panel.agent.v1.MetricsSnapshotResponse
-	13, // 88: panel.agent.v1.AgentService.PackageUpdates:output_type -> panel.agent.v1.PackageUpdatesResponse
-	15, // 89: panel.agent.v1.AgentService.UpgradePackages:output_type -> panel.agent.v1.CommandResponse
-	16, // 90: panel.agent.v1.AgentService.PrepareRestart:output_type -> panel.agent.v1.PrepareRestartResponse
-	19, // 91: panel.agent.v1.AgentService.UFWStatus:output_type -> panel.agent.v1.UFWStatusResponse
-	19, // 92: panel.agent.v1.AgentService.UFWInstall:output_type -> panel.agent.v1.UFWStatusResponse
-	19, // 93: panel.agent.v1.AgentService.UFWEnable:output_type -> panel.agent.v1.UFWStatusResponse
-	19, // 94: panel.agent.v1.AgentService.UFWAllow:output_type -> panel.agent.v1.UFWStatusResponse
-	19, // 95: panel.agent.v1.AgentService.UFWDelete:output_type -> panel.agent.v1.UFWStatusResponse
-	26, // 96: panel.agent.v1.AgentService.Fail2BanStatus:output_type -> panel.agent.v1.Fail2BanStatusResponse
-	26, // 97: panel.agent.v1.AgentService.ApplyFail2Ban:output_type -> panel.agent.v1.Fail2BanStatusResponse
-	26, // 98: panel.agent.v1.AgentService.ReleaseFail2Ban:output_type -> panel.agent.v1.Fail2BanStatusResponse
-	4,  // 99: panel.agent.v1.AgentService.RestartSystem:output_type -> panel.agent.v1.OKResponse
-	59, // 100: panel.agent.v1.AgentService.DockerContainers:output_type -> panel.agent.v1.DockerContainersResponse
-	61, // 101: panel.agent.v1.AgentService.DockerContainerLogs:output_type -> panel.agent.v1.DockerContainerLogsResponse
-	4,  // 102: panel.agent.v1.AgentService.DockerContainerAction:output_type -> panel.agent.v1.OKResponse
-	4,  // 103: panel.agent.v1.AgentService.DockerContainerDelete:output_type -> panel.agent.v1.OKResponse
-	65, // 104: panel.agent.v1.AgentService.DockerImages:output_type -> panel.agent.v1.DockerImagesResponse
-	4,  // 105: panel.agent.v1.AgentService.DockerImagePull:output_type -> panel.agent.v1.OKResponse
-	4,  // 106: panel.agent.v1.AgentService.DockerImageDelete:output_type -> panel.agent.v1.OKResponse
-	69, // 107: panel.agent.v1.AgentService.DockerNetworks:output_type -> panel.agent.v1.DockerNetworksResponse
-	72, // 108: panel.agent.v1.AgentService.DockerVolumes:output_type -> panel.agent.v1.DockerVolumesResponse
-	4,  // 109: panel.agent.v1.AgentService.DockerVolumeDelete:output_type -> panel.agent.v1.OKResponse
-	4,  // 110: panel.agent.v1.AgentService.RuntimeWriteFiles:output_type -> panel.agent.v1.OKResponse
-	38, // 111: panel.agent.v1.AgentService.RuntimeReload:output_type -> panel.agent.v1.RuntimeReloadResponse
-	40, // 112: panel.agent.v1.AgentService.RuntimeCreateContainer:output_type -> panel.agent.v1.RuntimeCreateContainerResponse
-	43, // 113: panel.agent.v1.AgentService.RuntimeStop:output_type -> panel.agent.v1.RuntimeInstanceResponse
-	43, // 114: panel.agent.v1.AgentService.RuntimeRestart:output_type -> panel.agent.v1.RuntimeInstanceResponse
-	45, // 115: panel.agent.v1.AgentService.RuntimeStatus:output_type -> panel.agent.v1.RuntimeStatusResponse
-	47, // 116: panel.agent.v1.AgentService.RuntimeLogs:output_type -> panel.agent.v1.RuntimeLogsResponse
-	49, // 117: panel.agent.v1.AgentService.RuntimePersistentArchive:output_type -> panel.agent.v1.RuntimePersistentArchiveResponse
-	51, // 118: panel.agent.v1.AgentService.RuntimePersistentRestore:output_type -> panel.agent.v1.RuntimePersistentRestoreResponse
-	4,  // 119: panel.agent.v1.AgentService.StorageConfigureExport:output_type -> panel.agent.v1.OKResponse
-	54, // 120: panel.agent.v1.AgentService.StorageArchiveDirectory:output_type -> panel.agent.v1.StorageArchiveDirectoryResponse
-	4,  // 121: panel.agent.v1.AgentService.StorageDeleteDirectory:output_type -> panel.agent.v1.OKResponse
-	2,  // 122: panel.agent.v1.AgentReportService.Report:output_type -> panel.agent.v1.AgentReport
-	84, // [84:123] is the sub-list for method output_type
-	45, // [45:84] is the sub-list for method input_type
+	56, // 83: panel.agent.v1.AgentService.StorageStatus:input_type -> panel.agent.v1.StorageStatusRequest
+	58, // 84: panel.agent.v1.AgentService.StorageMountStatus:input_type -> panel.agent.v1.StorageMountStatusRequest
+	60, // 85: panel.agent.v1.AgentService.StorageEnsureDirectory:input_type -> panel.agent.v1.StorageEnsureDirectoryRequest
+	1,  // 86: panel.agent.v1.AgentReportService.Report:input_type -> panel.agent.v1.AgentReportControl
+	5,  // 87: panel.agent.v1.AgentService.Health:output_type -> panel.agent.v1.HealthResponse
+	7,  // 88: panel.agent.v1.AgentService.OSRelease:output_type -> panel.agent.v1.OSReleaseResponse
+	8,  // 89: panel.agent.v1.AgentService.SystemTraits:output_type -> panel.agent.v1.SystemTraitsResponse
+	10, // 90: panel.agent.v1.AgentService.MetricsSnapshot:output_type -> panel.agent.v1.MetricsSnapshotResponse
+	13, // 91: panel.agent.v1.AgentService.PackageUpdates:output_type -> panel.agent.v1.PackageUpdatesResponse
+	15, // 92: panel.agent.v1.AgentService.UpgradePackages:output_type -> panel.agent.v1.CommandResponse
+	16, // 93: panel.agent.v1.AgentService.PrepareRestart:output_type -> panel.agent.v1.PrepareRestartResponse
+	19, // 94: panel.agent.v1.AgentService.UFWStatus:output_type -> panel.agent.v1.UFWStatusResponse
+	19, // 95: panel.agent.v1.AgentService.UFWInstall:output_type -> panel.agent.v1.UFWStatusResponse
+	19, // 96: panel.agent.v1.AgentService.UFWEnable:output_type -> panel.agent.v1.UFWStatusResponse
+	19, // 97: panel.agent.v1.AgentService.UFWAllow:output_type -> panel.agent.v1.UFWStatusResponse
+	19, // 98: panel.agent.v1.AgentService.UFWDelete:output_type -> panel.agent.v1.UFWStatusResponse
+	26, // 99: panel.agent.v1.AgentService.Fail2BanStatus:output_type -> panel.agent.v1.Fail2BanStatusResponse
+	26, // 100: panel.agent.v1.AgentService.ApplyFail2Ban:output_type -> panel.agent.v1.Fail2BanStatusResponse
+	26, // 101: panel.agent.v1.AgentService.ReleaseFail2Ban:output_type -> panel.agent.v1.Fail2BanStatusResponse
+	4,  // 102: panel.agent.v1.AgentService.RestartSystem:output_type -> panel.agent.v1.OKResponse
+	64, // 103: panel.agent.v1.AgentService.DockerContainers:output_type -> panel.agent.v1.DockerContainersResponse
+	66, // 104: panel.agent.v1.AgentService.DockerContainerLogs:output_type -> panel.agent.v1.DockerContainerLogsResponse
+	4,  // 105: panel.agent.v1.AgentService.DockerContainerAction:output_type -> panel.agent.v1.OKResponse
+	4,  // 106: panel.agent.v1.AgentService.DockerContainerDelete:output_type -> panel.agent.v1.OKResponse
+	70, // 107: panel.agent.v1.AgentService.DockerImages:output_type -> panel.agent.v1.DockerImagesResponse
+	4,  // 108: panel.agent.v1.AgentService.DockerImagePull:output_type -> panel.agent.v1.OKResponse
+	4,  // 109: panel.agent.v1.AgentService.DockerImageDelete:output_type -> panel.agent.v1.OKResponse
+	74, // 110: panel.agent.v1.AgentService.DockerNetworks:output_type -> panel.agent.v1.DockerNetworksResponse
+	77, // 111: panel.agent.v1.AgentService.DockerVolumes:output_type -> panel.agent.v1.DockerVolumesResponse
+	4,  // 112: panel.agent.v1.AgentService.DockerVolumeDelete:output_type -> panel.agent.v1.OKResponse
+	4,  // 113: panel.agent.v1.AgentService.RuntimeWriteFiles:output_type -> panel.agent.v1.OKResponse
+	38, // 114: panel.agent.v1.AgentService.RuntimeReload:output_type -> panel.agent.v1.RuntimeReloadResponse
+	40, // 115: panel.agent.v1.AgentService.RuntimeCreateContainer:output_type -> panel.agent.v1.RuntimeCreateContainerResponse
+	43, // 116: panel.agent.v1.AgentService.RuntimeStop:output_type -> panel.agent.v1.RuntimeInstanceResponse
+	43, // 117: panel.agent.v1.AgentService.RuntimeRestart:output_type -> panel.agent.v1.RuntimeInstanceResponse
+	45, // 118: panel.agent.v1.AgentService.RuntimeStatus:output_type -> panel.agent.v1.RuntimeStatusResponse
+	47, // 119: panel.agent.v1.AgentService.RuntimeLogs:output_type -> panel.agent.v1.RuntimeLogsResponse
+	49, // 120: panel.agent.v1.AgentService.RuntimePersistentArchive:output_type -> panel.agent.v1.RuntimePersistentArchiveResponse
+	51, // 121: panel.agent.v1.AgentService.RuntimePersistentRestore:output_type -> panel.agent.v1.RuntimePersistentRestoreResponse
+	4,  // 122: panel.agent.v1.AgentService.StorageConfigureExport:output_type -> panel.agent.v1.OKResponse
+	54, // 123: panel.agent.v1.AgentService.StorageArchiveDirectory:output_type -> panel.agent.v1.StorageArchiveDirectoryResponse
+	4,  // 124: panel.agent.v1.AgentService.StorageDeleteDirectory:output_type -> panel.agent.v1.OKResponse
+	57, // 125: panel.agent.v1.AgentService.StorageStatus:output_type -> panel.agent.v1.StorageStatusResponse
+	59, // 126: panel.agent.v1.AgentService.StorageMountStatus:output_type -> panel.agent.v1.StorageMountStatusResponse
+	4,  // 127: panel.agent.v1.AgentService.StorageEnsureDirectory:output_type -> panel.agent.v1.OKResponse
+	2,  // 128: panel.agent.v1.AgentReportService.Report:output_type -> panel.agent.v1.AgentReport
+	87, // [87:129] is the sub-list for method output_type
+	45, // [45:87] is the sub-list for method input_type
 	45, // [45:45] is the sub-list for extension type_name
 	45, // [45:45] is the sub-list for extension extendee
 	0,  // [0:45] is the sub-list for field type_name
@@ -5507,7 +5827,7 @@ func file_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_proto_rawDesc), len(file_agent_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   80,
+			NumMessages:   85,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

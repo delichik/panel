@@ -1151,6 +1151,12 @@ func migrateStorageShareServersOn(ctx context.Context, q migrationExecutor) erro
 	if err := ensureColumnsOn(ctx, q, "storage_share_configs", map[string]string{"servers_json": "TEXT NOT NULL DEFAULT '[]'"}); err != nil {
 		return err
 	}
+	if err := ensureColumnsOn(ctx, q, "storage_share_partitions", map[string]string{
+		"target":      "TEXT NOT NULL DEFAULT ''",
+		"volume_name": "TEXT NOT NULL DEFAULT ''",
+	}); err != nil {
+		return err
+	}
 	columns, err := databaseTableColumnsOn(ctx, q, "storage_share_configs")
 	if err != nil {
 		return err
@@ -1229,6 +1235,102 @@ func migrateStorageShareServersOn(ctx context.Context, q migrationExecutor) erro
 	}
 	if _, err := q.ExecContext(ctx, `DROP INDEX IF EXISTS uq_storage_share_partitions_application_server`); err != nil {
 		return err
+	}
+	if _, err := q.ExecContext(ctx, `DROP INDEX IF EXISTS uq_storage_share_partitions_storage_application_server`); err != nil {
+		return err
+	}
+	if err := backfillStorageSharePartitionServer(ctx, q); err != nil {
+		return err
+	}
+	return nil
+}
+
+// backfillStorageSharePartitionServer 回填旧版本分区记录缺失的存储服务器，并把
+// 旧路径格式 root/<node>/<app> 重写为 root/<storageServer>/<node>/<app>。
+func backfillStorageSharePartitionServer(ctx context.Context, q migrationExecutor) error {
+	columns, err := databaseTableColumnsOn(ctx, q, "storage_share_partitions")
+	if err != nil {
+		return err
+	}
+	if !columns["storage_server_id"] || !columns["path"] {
+		return nil
+	}
+	configColumns, err := databaseTableColumnsOn(ctx, q, "storage_share_configs")
+	if err != nil {
+		return err
+	}
+	if !configColumns["servers_json"] {
+		return nil
+	}
+	type configServer struct {
+		ServerID string `json:"serverId"`
+		Root     string `json:"root"`
+	}
+	rows, err := q.QueryContext(ctx, `SELECT servers_json FROM storage_share_configs WHERE id='storage-share'`)
+	if err != nil {
+		return err
+	}
+	var servers []configServer
+	if rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		_ = json.Unmarshal([]byte(raw), &servers)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(servers) != 1 {
+		// 多服务器或未配置时无法安全推断旧分区归属，跳过回填。
+		return nil
+	}
+	serverID := servers[0].ServerID
+	root := servers[0].Root
+	if serverID == "" || root == "" {
+		return nil
+	}
+	partitionRows, err := q.QueryContext(ctx, `SELECT id, path FROM storage_share_partitions WHERE storage_server_id=''`)
+	if err != nil {
+		return err
+	}
+	type partitionRow struct {
+		id   string
+		path string
+	}
+	var pending []partitionRow
+	for partitionRows.Next() {
+		var id, pathValue string
+		if err := partitionRows.Scan(&id, &pathValue); err != nil {
+			_ = partitionRows.Close()
+			return err
+		}
+		pending = append(pending, partitionRow{id: id, path: pathValue})
+	}
+	if err := partitionRows.Close(); err != nil {
+		return err
+	}
+	if err := partitionRows.Err(); err != nil {
+		return err
+	}
+	prefix := root + "/"
+	for _, row := range pending {
+		if !strings.HasPrefix(row.path, prefix) {
+			continue
+		}
+		rest := strings.TrimPrefix(row.path, prefix)
+		// 旧格式 root/<node>/<app> 恰好两段；新格式已含 storageServer 段则跳过。
+		if strings.Count(rest, "/") != 1 {
+			continue
+		}
+		newPath := prefix + serverID + "/" + rest
+		if _, err := q.ExecContext(ctx, `UPDATE storage_share_partitions SET storage_server_id=?, path=? WHERE id=?`, serverID, newPath, row.id); err != nil {
+			return err
+		}
 	}
 	return nil
 }

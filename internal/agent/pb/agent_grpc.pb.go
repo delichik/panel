@@ -57,6 +57,9 @@ const (
 	AgentService_StorageConfigureExport_FullMethodName   = "/panel.agent.v1.AgentService/StorageConfigureExport"
 	AgentService_StorageArchiveDirectory_FullMethodName  = "/panel.agent.v1.AgentService/StorageArchiveDirectory"
 	AgentService_StorageDeleteDirectory_FullMethodName   = "/panel.agent.v1.AgentService/StorageDeleteDirectory"
+	AgentService_StorageStatus_FullMethodName            = "/panel.agent.v1.AgentService/StorageStatus"
+	AgentService_StorageMountStatus_FullMethodName       = "/panel.agent.v1.AgentService/StorageMountStatus"
+	AgentService_StorageEnsureDirectory_FullMethodName   = "/panel.agent.v1.AgentService/StorageEnsureDirectory"
 )
 
 // AgentServiceClient is the client API for AgentService service.
@@ -101,6 +104,9 @@ type AgentServiceClient interface {
 	StorageConfigureExport(ctx context.Context, in *StorageConfigureExportRequest, opts ...grpc.CallOption) (*OKResponse, error)
 	StorageArchiveDirectory(ctx context.Context, in *StorageArchiveDirectoryRequest, opts ...grpc.CallOption) (*StorageArchiveDirectoryResponse, error)
 	StorageDeleteDirectory(ctx context.Context, in *StorageDeleteDirectoryRequest, opts ...grpc.CallOption) (*OKResponse, error)
+	StorageStatus(ctx context.Context, in *StorageStatusRequest, opts ...grpc.CallOption) (*StorageStatusResponse, error)
+	StorageMountStatus(ctx context.Context, in *StorageMountStatusRequest, opts ...grpc.CallOption) (*StorageMountStatusResponse, error)
+	StorageEnsureDirectory(ctx context.Context, in *StorageEnsureDirectoryRequest, opts ...grpc.CallOption) (*OKResponse, error)
 }
 
 type agentServiceClient struct {
@@ -500,6 +506,36 @@ func (c *agentServiceClient) StorageDeleteDirectory(ctx context.Context, in *Sto
 	return out, nil
 }
 
+func (c *agentServiceClient) StorageStatus(ctx context.Context, in *StorageStatusRequest, opts ...grpc.CallOption) (*StorageStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StorageStatusResponse)
+	err := c.cc.Invoke(ctx, AgentService_StorageStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentServiceClient) StorageMountStatus(ctx context.Context, in *StorageMountStatusRequest, opts ...grpc.CallOption) (*StorageMountStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StorageMountStatusResponse)
+	err := c.cc.Invoke(ctx, AgentService_StorageMountStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentServiceClient) StorageEnsureDirectory(ctx context.Context, in *StorageEnsureDirectoryRequest, opts ...grpc.CallOption) (*OKResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(OKResponse)
+	err := c.cc.Invoke(ctx, AgentService_StorageEnsureDirectory_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentServiceServer is the server API for AgentService service.
 // All implementations must embed UnimplementedAgentServiceServer
 // for forward compatibility.
@@ -542,6 +578,9 @@ type AgentServiceServer interface {
 	StorageConfigureExport(context.Context, *StorageConfigureExportRequest) (*OKResponse, error)
 	StorageArchiveDirectory(context.Context, *StorageArchiveDirectoryRequest) (*StorageArchiveDirectoryResponse, error)
 	StorageDeleteDirectory(context.Context, *StorageDeleteDirectoryRequest) (*OKResponse, error)
+	StorageStatus(context.Context, *StorageStatusRequest) (*StorageStatusResponse, error)
+	StorageMountStatus(context.Context, *StorageMountStatusRequest) (*StorageMountStatusResponse, error)
+	StorageEnsureDirectory(context.Context, *StorageEnsureDirectoryRequest) (*OKResponse, error)
 	mustEmbedUnimplementedAgentServiceServer()
 }
 
@@ -665,6 +704,15 @@ func (UnimplementedAgentServiceServer) StorageArchiveDirectory(context.Context, 
 }
 func (UnimplementedAgentServiceServer) StorageDeleteDirectory(context.Context, *StorageDeleteDirectoryRequest) (*OKResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method StorageDeleteDirectory not implemented")
+}
+func (UnimplementedAgentServiceServer) StorageStatus(context.Context, *StorageStatusRequest) (*StorageStatusResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method StorageStatus not implemented")
+}
+func (UnimplementedAgentServiceServer) StorageMountStatus(context.Context, *StorageMountStatusRequest) (*StorageMountStatusResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method StorageMountStatus not implemented")
+}
+func (UnimplementedAgentServiceServer) StorageEnsureDirectory(context.Context, *StorageEnsureDirectoryRequest) (*OKResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method StorageEnsureDirectory not implemented")
 }
 func (UnimplementedAgentServiceServer) mustEmbedUnimplementedAgentServiceServer() {}
 func (UnimplementedAgentServiceServer) testEmbeddedByValue()                      {}
@@ -1364,6 +1412,60 @@ func _AgentService_StorageDeleteDirectory_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentService_StorageStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StorageStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).StorageStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_StorageStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).StorageStatus(ctx, req.(*StorageStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentService_StorageMountStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StorageMountStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).StorageMountStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_StorageMountStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).StorageMountStatus(ctx, req.(*StorageMountStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentService_StorageEnsureDirectory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StorageEnsureDirectoryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).StorageEnsureDirectory(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_StorageEnsureDirectory_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).StorageEnsureDirectory(ctx, req.(*StorageEnsureDirectoryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentService_ServiceDesc is the grpc.ServiceDesc for AgentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1518,6 +1620,18 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "StorageDeleteDirectory",
 			Handler:    _AgentService_StorageDeleteDirectory_Handler,
+		},
+		{
+			MethodName: "StorageStatus",
+			Handler:    _AgentService_StorageStatus_Handler,
+		},
+		{
+			MethodName: "StorageMountStatus",
+			Handler:    _AgentService_StorageMountStatus_Handler,
+		},
+		{
+			MethodName: "StorageEnsureDirectory",
+			Handler:    _AgentService_StorageEnsureDirectory_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

@@ -50,7 +50,7 @@ func TestNFSVolumeNameDeterministic(t *testing.T) {
 }
 
 func TestNFSVolumeOptions(t *testing.T) {
-	opts, err := nfsVolumeOptions("10.0.0.5:/srv/data/app-1")
+	opts, err := nfsVolumeOptions("10.0.0.5:/srv/data/app-1", false)
 	if err != nil {
 		t.Fatal(err)
 	}

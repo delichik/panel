@@ -22,6 +22,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, auth httpx.Middleware) {
 	mux.Handle("GET /api/v1/facility-apps/storage-share", auth(http.HandlerFunc(h.StorageShare)))
 	mux.Handle("PUT /api/v1/facility-apps/storage-share", auth(http.HandlerFunc(h.SaveStorageShare)))
 	mux.Handle("POST /api/v1/facility-apps/storage-share/reconcile", auth(http.HandlerFunc(h.ReconcileStorageShare)))
+	mux.Handle("GET /api/v1/facility-apps/storage-share/status", auth(http.HandlerFunc(h.StorageShareStatusHandler)))
 	mux.Handle("DELETE /api/v1/facility-apps/storage-share", auth(http.HandlerFunc(h.DeleteStorageShare)))
 	mux.Handle("GET /api/v1/facility-apps/storage-share/partitions/{id}/download", auth(http.HandlerFunc(h.DownloadStoragePartition)))
 	mux.Handle("DELETE /api/v1/facility-apps/storage-share/partitions/{id}", auth(http.HandlerFunc(h.DeleteStoragePartition)))

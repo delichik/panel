@@ -11,6 +11,7 @@ import (
 var namePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$`)
 var fileModePattern = regexp.MustCompile(`^[0-7]{3,4}$`)
 var capabilityPattern = regexp.MustCompile(`^[A-Z0-9_]+$`)
+var storageShareSourcePattern = regexp.MustCompile(`^storage-share(:[A-Za-z0-9._-]+)?$`)
 
 func Normalize(spec Spec) Spec {
 	spec.Count = 1
@@ -190,6 +191,9 @@ func Validate(spec Spec) []Issue {
 		}
 		if strings.TrimSpace(mount.Source) == "" && mountType != "persistent" {
 			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d].source", i), Message: "mount source is required"})
+		}
+		if mountType == "storage_share" && !storageShareSourcePattern.MatchString(strings.TrimSpace(mount.Source)) {
+			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d].source", i), Message: "storage share mount source must be storage-share or storage-share:<serverId>"})
 		}
 		if (mountType == "file" || mountType == "persistent") && !validWorkspacePath(mount.Source) {
 			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d].source", i), Message: "workspace mount source must be a relative path inside the application workspace"})

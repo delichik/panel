@@ -27,6 +27,7 @@ import (
 	"time"
 
 	agentcontract "panel/internal/agent/contract"
+	"panel/internal/agent/nfsvol"
 	"panel/internal/modules/applications/runtime"
 )
 
@@ -46,13 +47,14 @@ const (
 )
 
 const (
-	labelManagedFilesHash  = "panel.application.managed_files.hash"
-	labelManagedFilesDrift = "panel.application.managed_files.drift"
-	labelManagedFilesError = "panel.application.managed_files.error"
-	labelGeneration        = "panel.application.generation"
-	labelSpecHash          = "panel.application.spec.hash"
-	labelApplyMode         = "panel.application.apply.mode"
-	labelStorageNFS        = "panel.storage.nfs"
+	labelManagedFilesHash   = "panel.application.managed_files.hash"
+	labelManagedFilesDrift  = "panel.application.managed_files.drift"
+	labelManagedFilesError  = "panel.application.managed_files.error"
+	labelGeneration         = "panel.application.generation"
+	labelSpecHash           = "panel.application.spec.hash"
+	labelApplyMode          = "panel.application.apply.mode"
+	labelStorageNFS         = "panel.storage.nfs"
+	labelStorageApplication = "panel.storage.application"
 )
 
 type LocalRuntime struct {
@@ -119,7 +121,7 @@ func (r *LocalRuntime) Stop(ctx context.Context, req agentcontract.RuntimeStopRe
 		return agentcontract.RuntimeInstanceResponse{}, err
 	}
 	if req.Purge {
-		_ = r.cleanupNFSVolumes(ctx)
+		_ = r.cleanupNFSVolumes(ctx, req.ApplicationID)
 		if req.RemoveApplicationData {
 			appDir, err := safeApplicationRootDir(r.root, req.ApplicationID)
 			if err != nil {
@@ -794,37 +796,38 @@ func (r *LocalRuntime) prepareNFSVolumes(ctx context.Context, spec appruntime.Sp
 		if err != nil {
 			return err
 		}
-		exists := false
 		for _, volume := range volumes {
-			if volume.Name == name {
-				exists = true
-				break
+			if volume.Name != name {
+				continue
 			}
+			// 同名卷必须是我们创建的 NFS 卷且属于当前应用，否则报错避免挂错卷。
+			if volume.Driver != "local" || volume.Labels[labelStorageNFS] != "true" || volume.Labels[labelStorageApplication] != spec.ApplicationID {
+				return fmt.Errorf("nfs volume %s exists but does not match the expected storage configuration", name)
+			}
+			break
 		}
-		if exists {
-			continue
-		}
-		opts, err := nfsVolumeOptions(mount.Source)
+		opts, err := nfsVolumeOptions(mount.Source, mount.ReadOnly)
 		if err != nil {
 			return err
 		}
-		if err := ensureNFSClient(); err != nil {
+		if err := ensureNFSClient(ctx); err != nil {
 			return fmt.Errorf("prepare nfs volume: %w", err)
 		}
-		if err := r.client.createVolume(ctx, name, opts); err != nil {
+		labels := map[string]string{labelStorageNFS: "true", labelStorageApplication: spec.ApplicationID}
+		if err := r.client.createVolume(ctx, name, opts, labels); err != nil {
 			return fmt.Errorf("create nfs volume: %w", err)
 		}
 	}
 	return nil
 }
 
-func (r *LocalRuntime) cleanupNFSVolumes(ctx context.Context) error {
+func (r *LocalRuntime) cleanupNFSVolumes(ctx context.Context, applicationID string) error {
 	volumes, err := r.client.listVolumes(ctx)
 	if err != nil {
 		return err
 	}
 	for _, volume := range volumes {
-		if volume.Labels[labelStorageNFS] != "true" || volume.ContainerCount > 0 {
+		if volume.Labels[labelStorageNFS] != "true" || volume.Labels[labelStorageApplication] != applicationID || volume.ContainerCount > 0 {
 			continue
 		}
 		_ = r.client.removeVolume(ctx, volume.Name)
@@ -833,39 +836,18 @@ func (r *LocalRuntime) cleanupNFSVolumes(ctx context.Context) error {
 }
 
 func nfsVolumeName(source, target string) string {
-	sum := sha256.Sum256([]byte(strings.TrimSpace(source) + "|" + strings.TrimSpace(target)))
-	return "panel-nfs-" + hex.EncodeToString(sum[:12])
+	return nfsvol.Name(source, target)
 }
 
-func nfsVolumeOptions(source string) (map[string]string, error) {
-	host, export, err := splitNFSSource(source)
-	if err != nil {
-		return nil, err
-	}
-	return map[string]string{
-		"type":   "nfs",
-		"o":      "addr=" + host + ",rw,nfsvers=4",
-		"device": ":" + export,
-	}, nil
+func nfsVolumeOptions(source string, readOnly bool) (map[string]string, error) {
+	return nfsvol.Options(source, readOnly)
 }
 
 func splitNFSSource(source string) (string, string, error) {
-	source = strings.TrimSpace(source)
-	if strings.HasPrefix(source, "[") {
-		end := strings.Index(source, "]")
-		if end < 0 || end+1 >= len(source) || source[end+1] != ':' {
-			return "", "", fmt.Errorf("invalid nfs source %q", source)
-		}
-		return source[1:end], source[end+2:], nil
-	}
-	idx := strings.Index(source, ":")
-	if idx <= 0 || idx == len(source)-1 {
-		return "", "", fmt.Errorf("invalid nfs source %q", source)
-	}
-	return source[:idx], source[idx+1:], nil
+	return nfsvol.SplitSource(source)
 }
 
-func ensureNFSClient() error {
+func ensureNFSClient(ctx context.Context) error {
 	if _, err := exec.LookPath("mount.nfs"); err == nil {
 		return nil
 	}
@@ -875,7 +857,8 @@ func ensureNFSClient() error {
 	if goruntime.GOOS != "linux" {
 		return errors.New("nfs client (nfs-common) is required on the host")
 	}
-	cmd := exec.Command("apt-get", "install", "-y", "--no-install-recommends", "nfs-common")
+	cmd := exec.CommandContext(ctx, "apt-get", "install", "-y", "--no-install-recommends", "nfs-common")
+	cmd.Env = append(cmd.Environ(), "DEBIAN_FRONTEND=noninteractive")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("install nfs-common failed: %v: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -2384,12 +2367,12 @@ type dockerVolumeCreateRequest struct {
 	Labels     map[string]string `json:"Labels"`
 }
 
-func (c *dockerAPIClient) createVolume(ctx context.Context, name string, opts map[string]string) error {
+func (c *dockerAPIClient) createVolume(ctx context.Context, name string, opts, labels map[string]string) error {
 	payload := dockerVolumeCreateRequest{
 		Name:       name,
 		Driver:     "local",
 		DriverOpts: opts,
-		Labels:     map[string]string{labelStorageNFS: "true"},
+		Labels:     labels,
 	}
 	body, _ := json.Marshal(payload)
 	req, err := c.newRequest(ctx, http.MethodPost, "/volumes/create", bytes.NewReader(body))

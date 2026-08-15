@@ -450,14 +450,14 @@ func (c *GRPCClient) DockerVolumeDelete(ctx context.Context, endpoint, name stri
 }
 
 func (c *GRPCClient) StorageConfigureExport(ctx context.Context, endpoint, root string, allowedHosts []string, enabled bool) error {
-	_, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.OKResponse, error) {
+	_, err := callRPC(c, ctx, endpoint, 20*time.Minute, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.OKResponse, error) {
 		return client.StorageConfigureExport(ctx, &agentpb.StorageConfigureExportRequest{Root: root, AllowedHosts: allowedHosts, Enabled: enabled})
 	})
 	return err
 }
 
 func (c *GRPCClient) StorageArchiveDirectory(ctx context.Context, endpoint, pathValue string) ([]byte, string, error) {
-	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.StorageArchiveDirectoryResponse, error) {
+	out, err := callRPC(c, ctx, endpoint, 10*time.Minute, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.StorageArchiveDirectoryResponse, error) {
 		return client.StorageArchiveDirectory(ctx, &agentpb.StorageArchiveDirectoryRequest{Path: pathValue})
 	})
 	if err != nil {
@@ -471,6 +471,44 @@ func (c *GRPCClient) StorageDeleteDirectory(ctx context.Context, endpoint, pathV
 		return client.StorageDeleteDirectory(ctx, &agentpb.StorageDeleteDirectoryRequest{Path: pathValue})
 	})
 	return err
+}
+
+func (c *GRPCClient) StorageEnsureDirectory(ctx context.Context, endpoint, pathValue string) error {
+	_, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.OKResponse, error) {
+		return client.StorageEnsureDirectory(ctx, &agentpb.StorageEnsureDirectoryRequest{Path: pathValue})
+	})
+	return err
+}
+
+func (c *GRPCClient) StorageStatus(ctx context.Context, endpoint, root string) (agentcontract.StorageExportStatus, error) {
+	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.StorageStatusResponse, error) {
+		return client.StorageStatus(ctx, &agentpb.StorageStatusRequest{Root: root})
+	})
+	if err != nil {
+		return agentcontract.StorageExportStatus{}, err
+	}
+	return agentcontract.StorageExportStatus{
+		ServerInstalled: out.ServerInstalled,
+		RootExists:      out.RootExists,
+		ExportLive:      out.ExportLive,
+		Detail:          out.Detail,
+	}, nil
+}
+
+func (c *GRPCClient) StorageMountStatus(ctx context.Context, endpoint, source, target string) (agentcontract.StorageMountStatus, error) {
+	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.StorageMountStatusResponse, error) {
+		return client.StorageMountStatus(ctx, &agentpb.StorageMountStatusRequest{Source: source, Target: target})
+	})
+	if err != nil {
+		return agentcontract.StorageMountStatus{}, err
+	}
+	return agentcontract.StorageMountStatus{
+		VolumeExists: out.VolumeExists,
+		Mountpoint:   out.Mountpoint,
+		Mounted:      out.Mounted,
+		Writable:     out.Writable,
+		Detail:       out.Detail,
+	}, nil
 }
 
 func (c *GRPCClient) StreamReports(ctx context.Context, endpoint string, config func() ReportConfig, handle func(context.Context, AgentReport) error) error {
@@ -577,6 +615,9 @@ func callRPC[T any](c *GRPCClient, ctx context.Context, endpoint string, timeout
 	return out, nil
 }
 
+// maxGRPCMessageBytes 允许存储归档等大消息（默认 gRPC 上限为 4MB）。
+const maxGRPCMessageBytes = 64 << 20
+
 func (c *GRPCClient) dial(ctx context.Context, endpoint string) (*grpc.ClientConn, error) {
 	target, err := grpcTarget(endpoint)
 	if err != nil {
@@ -592,6 +633,10 @@ func (c *GRPCClient) dial(ctx context.Context, endpoint string) (*grpc.ClientCon
 			var d net.Dialer
 			return d.DialContext(dialCtx, "tcp", addr)
 		}),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(maxGRPCMessageBytes),
+			grpc.MaxCallSendMsgSize(maxGRPCMessageBytes),
+		),
 	}
 	if tlsAssets == nil {
 		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))

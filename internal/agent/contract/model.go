@@ -417,3 +417,23 @@ type DockerVolumeDeleteRequest struct {
 type OKResponse struct {
 	OK bool `json:"ok"`
 }
+
+// CapabilityStorageShare 表示 Agent 支持存储共享设施（NFS 导出/挂载状态等）。
+const CapabilityStorageShare = "agent.storage.share"
+
+// StorageExportStatus 是一台存储服务器上 NFS 导出的生效状态。
+type StorageExportStatus struct {
+	ServerInstalled bool
+	RootExists      bool
+	ExportLive      bool
+	Detail          string
+}
+
+// StorageMountStatus 是应用节点上一个 NFS 卷挂载的生效状态。
+type StorageMountStatus struct {
+	VolumeExists bool
+	Mountpoint   string
+	Mounted      bool
+	Writable     bool
+	Detail       string
+}

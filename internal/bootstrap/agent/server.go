@@ -47,7 +47,11 @@ func NewServer(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	grpcServer := grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsConfig)))
+	grpcServer := grpc.NewServer(
+		grpc.Creds(credentials.NewTLS(tlsConfig)),
+		grpc.MaxRecvMsgSize(64<<20),
+		grpc.MaxSendMsgSize(64<<20),
+	)
 	handler := agentrpc.NewHandler(agentrpc.HandlerConfig{DockerHost: cfg.DockerHost})
 	agentrpc.RegisterAgentService(grpcServer, handler)
 	agentrpc.RegisterAgentReportService(grpcServer, handler)

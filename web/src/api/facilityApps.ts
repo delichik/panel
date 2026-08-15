@@ -9,7 +9,9 @@ import type {
   ReverseProxyConfig,
   ReverseProxySaveInput,
   StorageShareConfig,
+  StorageShareReconcileResult,
   StorageShareSaveInput,
+  StorageShareStatus,
 } from '@/types/facilityApps';
 
 function id(value: string) {
@@ -24,7 +26,10 @@ export const storageShareFacilityApi = {
     return apiClient.put<StorageShareConfig>('/facility-apps/storage-share', input);
   },
   reconcile() {
-    return apiClient.post<StorageShareConfig>('/facility-apps/storage-share/reconcile');
+    return apiClient.post<StorageShareReconcileResult>('/facility-apps/storage-share/reconcile');
+  },
+  status(options?: ApiRequestOptions) {
+    return apiClient.get<StorageShareStatus>('/facility-apps/storage-share/status', options);
   },
   uninstall() {
     return apiClient.delete<StorageShareConfig>('/facility-apps/storage-share');

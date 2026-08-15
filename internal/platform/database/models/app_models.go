@@ -699,6 +699,8 @@ type StorageSharePartition struct {
 	StorageServerID   string    `orm:"not_null;default:''"`
 	StorageServerName string    `orm:"not_null;default:''"`
 	Path              string    `orm:"not_null"`
+	Target            string    `orm:"not_null;default:''"`
+	VolumeName        string    `orm:"not_null;default:''"`
 	CreatedAt         time.Time `orm:"not_null"`
 	UpdatedAt         time.Time `orm:"not_null"`
 }
@@ -709,7 +711,7 @@ func (*StorageSharePartition) TableName() string { return "storage_share_partiti
 func (*StorageSharePartition) ExtraIndexDDL() map[string][]string {
 	return map[string][]string{
 		"storage_share_partitions": {
-			"CREATE UNIQUE INDEX IF NOT EXISTS uq_storage_share_partitions_storage_application_server ON storage_share_partitions(storage_server_id, application_id, server_id)",
+			"CREATE UNIQUE INDEX IF NOT EXISTS uq_storage_share_partitions_storage_application_server_target ON storage_share_partitions(storage_server_id, application_id, server_id, target)",
 		},
 	}
 }

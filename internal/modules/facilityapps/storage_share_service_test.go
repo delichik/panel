@@ -14,6 +14,7 @@ import (
 	"panel/internal/platform/config"
 	storage "panel/internal/platform/database"
 	panelerr "panel/internal/platform/errors"
+	sshx "panel/internal/platform/ssh"
 )
 
 type fakeServerProvider struct {
@@ -30,6 +31,25 @@ func (f *fakeServerProvider) Get(_ context.Context, id string) (server.Server, e
 	return server.Server{}, panelerr.NotFound("server")
 }
 
+type fakeSSHExecutor struct {
+	execSudoCalls int
+	execErr       error
+}
+
+func (f *fakeSSHExecutor) Exec(context.Context, sshx.Target, sshx.CommandSpec) (sshx.CommandResult, error) {
+	return sshx.CommandResult{}, f.execErr
+}
+func (f *fakeSSHExecutor) ExecSudo(context.Context, sshx.Target, sshx.CommandSpec) (sshx.CommandResult, error) {
+	f.execSudoCalls++
+	return sshx.CommandResult{}, f.execErr
+}
+func (f *fakeSSHExecutor) Upload(context.Context, sshx.Target, sshx.UploadSpec) error {
+	return f.execErr
+}
+func (f *fakeSSHExecutor) Download(context.Context, sshx.Target, sshx.DownloadSpec) error {
+	return f.execErr
+}
+
 type fakeAppsProvider struct {
 	usages []applications.StorageShareUsage
 }
@@ -43,15 +63,27 @@ func (f *fakeAppsProvider) ApplicationsUsingStorageShare(context.Context) ([]app
 
 // fakeStorageAgent 同时满足设施服务的 AgentRuntimeClient 与 StorageAgentClient。
 type fakeStorageAgent struct {
-	configureCalls int
-	configureErr   error
-	archiveErr     error
-	deleteErr      error
-	archiveContent []byte
+	configureCalls   int
+	configureEnabled []bool
+	configureErr     error
+	ensureCalls      int
+	ensureErr        error
+	archiveErr       error
+	deleteErr        error
+	archiveContent   []byte
+	storageStatus    agentcontract.StorageExportStatus
+	storageStatusErr error
+	mountStatus      agentcontract.StorageMountStatus
+	mountStatusErr   error
 }
 
-func (f *fakeStorageAgent) StorageConfigureExport(_ context.Context, _ string, _ string, _ []string, _ bool) error {
+func (f *fakeStorageAgent) StorageEnsureDirectory(context.Context, string, string) error {
+	f.ensureCalls++
+	return f.ensureErr
+}
+func (f *fakeStorageAgent) StorageConfigureExport(_ context.Context, _ string, _ string, _ []string, enabled bool) error {
 	f.configureCalls++
+	f.configureEnabled = append(f.configureEnabled, enabled)
 	return f.configureErr
 }
 func (f *fakeStorageAgent) StorageArchiveDirectory(_ context.Context, _ string, _ string) ([]byte, string, error) {
@@ -62,6 +94,12 @@ func (f *fakeStorageAgent) StorageArchiveDirectory(_ context.Context, _ string, 
 }
 func (f *fakeStorageAgent) StorageDeleteDirectory(_ context.Context, _ string, _ string) error {
 	return f.deleteErr
+}
+func (f *fakeStorageAgent) StorageStatus(context.Context, string, string) (agentcontract.StorageExportStatus, error) {
+	return f.storageStatus, f.storageStatusErr
+}
+func (f *fakeStorageAgent) StorageMountStatus(context.Context, string, string, string) (agentcontract.StorageMountStatus, error) {
+	return f.mountStatus, f.mountStatusErr
 }
 func (f *fakeStorageAgent) RuntimeWriteFiles(context.Context, string, agentcontract.RuntimeWriteFilesRequest) error {
 	return nil
@@ -101,7 +139,8 @@ func newStorageShareTestService(t *testing.T) (*Service, *fakeServerProvider, *f
 	}}
 	apps := &fakeAppsProvider{}
 	agent := &fakeStorageAgent{}
-	svc := NewService(store.AppDB(), agent, servers, apps, WithDataRoot(cfg.DataRoot))
+	ssh := &fakeSSHExecutor{}
+	svc := NewService(store.AppDB(), agent, servers, apps, WithSSHExecutor(ssh), WithDataRoot(cfg.DataRoot))
 	return svc, servers, apps, agent, store
 }
 
@@ -247,11 +286,18 @@ func TestStorageShareUninstallSucceedsWhenAgentCleanupFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("uninstall must succeed even when agent cleanup fails: %v", err)
 	}
-	if result.Enabled {
-		t.Fatal("storage share should be disabled after uninstall")
+	if !result.Enabled {
+		t.Fatal("storage share must stay enabled after failed cleanup so the user can retry uninstall")
 	}
 	if !strings.Contains(result.LastError, "cleanup") {
 		t.Fatalf("expected cleanup warning in result, got %q", result.LastError)
+	}
+	cfg, err := svc.GetStorageShare(ctx)
+	if err != nil {
+		t.Fatalf("get storage share: %v", err)
+	}
+	if !cfg.Enabled {
+		t.Fatal("config must remain enabled after failed cleanup")
 	}
 }
 
@@ -286,5 +332,91 @@ func TestStorageShareDeletePartitionGatedByUsage(t *testing.T) {
 	}
 	if len(partitions) != 0 {
 		t.Fatalf("expected no partitions after delete, got %#v", partitions)
+	}
+}
+
+func TestStorageShareStatusReportsExportAndMount(t *testing.T) {
+	svc, _, _, agent, _ := newStorageShareTestService(t)
+	ctx := context.Background()
+	if _, err := svc.SaveStorageShare(ctx, StorageShareSaveInput{Servers: []StorageServerSetting{{ServerID: "srv-a", Root: "/srv/panel-storage"}}}); err != nil {
+		t.Fatalf("save storage share: %v", err)
+	}
+	if _, err := svc.ResolveStorageShareMounts(ctx,
+		applications.Application{ID: "app-1", Name: "app-1"},
+		server.Server{ID: "srv-b", Name: "app-node-b"},
+		[]appruntime.Mount{{Type: "storage_share", Source: "storage-share:srv-a", Target: "/data"}},
+	); err != nil {
+		t.Fatalf("resolve mounts: %v", err)
+	}
+	agent.storageStatus = agentcontract.StorageExportStatus{ServerInstalled: true, RootExists: true, ExportLive: true}
+	agent.mountStatus = agentcontract.StorageMountStatus{VolumeExists: true, Mounted: true, Writable: true}
+	status, err := svc.StorageShareStatus(ctx)
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if len(status.Servers) != 1 || !status.Servers[0].ExportLive || !status.Servers[0].AgentOnline {
+		t.Fatalf("unexpected server status: %#v", status.Servers)
+	}
+	if len(status.Partitions) != 1 || !status.Partitions[0].Mounted || !status.Partitions[0].Writable || status.Partitions[0].Target != "/data" {
+		t.Fatalf("unexpected partition status: %#v", status.Partitions)
+	}
+}
+
+func TestStorageShareRootImmutableAfterEnabled(t *testing.T) {
+	svc, _, _, _, _ := newStorageShareTestService(t)
+	ctx := context.Background()
+	cfg, err := svc.SaveStorageShare(ctx, StorageShareSaveInput{Servers: []StorageServerSetting{{ServerID: "srv-a", Root: "/srv/a"}}})
+	if err != nil {
+		t.Fatalf("save storage share: %v", err)
+	}
+	if _, err := svc.SaveStorageShare(ctx, StorageShareSaveInput{Servers: []StorageServerSetting{{ServerID: "srv-a", Root: "/srv/b"}}, Version: cfg.Version}); err == nil {
+		t.Fatal("expected root change to be rejected after the facility is enabled")
+	}
+	cfg, err = svc.GetStorageShare(ctx)
+	if err != nil {
+		t.Fatalf("get storage share: %v", err)
+	}
+	if len(cfg.Servers) != 1 || cfg.Servers[0].Root != "/srv/a" {
+		t.Fatalf("config must remain unchanged: %#v", cfg.Servers)
+	}
+}
+
+func TestStorageShareSaveRemovedServerCleansExport(t *testing.T) {
+	svc, _, _, agent, _ := newStorageShareTestService(t)
+	ctx := context.Background()
+	first, err := svc.SaveStorageShare(ctx, StorageShareSaveInput{Servers: []StorageServerSetting{
+		{ServerID: "srv-a", Root: "/srv/a"},
+		{ServerID: "srv-c", Root: "/srv/c"},
+	}})
+	if err != nil {
+		t.Fatalf("save storage share: %v", err)
+	}
+	agent.configureEnabled = nil
+	if _, err := svc.SaveStorageShare(ctx, StorageShareSaveInput{Servers: []StorageServerSetting{{ServerID: "srv-a", Root: "/srv/a"}}, Version: first.Version}); err != nil {
+		t.Fatalf("save with removed server: %v", err)
+	}
+	if len(agent.configureEnabled) != 2 {
+		t.Fatalf("expected one enable (srv-a) and one disable (srv-c), got %#v", agent.configureEnabled)
+	}
+	if agent.configureEnabled[0] != false || agent.configureEnabled[1] != true {
+		t.Fatalf("expected disable removed server then enable kept server, got %#v", agent.configureEnabled)
+	}
+}
+
+func TestStorageShareResolveEnsuresDirectory(t *testing.T) {
+	svc, _, _, agent, _ := newStorageShareTestService(t)
+	ctx := context.Background()
+	if _, err := svc.SaveStorageShare(ctx, StorageShareSaveInput{Servers: []StorageServerSetting{{ServerID: "srv-a", Root: "/srv/panel-storage"}}}); err != nil {
+		t.Fatalf("save storage share: %v", err)
+	}
+	if _, err := svc.ResolveStorageShareMounts(ctx,
+		applications.Application{ID: "app-1", Name: "app-1"},
+		server.Server{ID: "srv-b", Name: "app-node-b"},
+		[]appruntime.Mount{{Type: "storage_share", Source: "storage-share:srv-a", Target: "/data"}},
+	); err != nil {
+		t.Fatalf("resolve mounts: %v", err)
+	}
+	if agent.ensureCalls != 1 {
+		t.Fatalf("expected partition directory to be ensured, got %d calls", agent.ensureCalls)
 	}
 }

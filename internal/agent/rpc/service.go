@@ -7,6 +7,7 @@ import (
 
 	agentcontract "panel/internal/agent/contract"
 	agentdocker "panel/internal/agent/docker"
+	"panel/internal/agent/nfsvol"
 	agentpb "panel/internal/agent/pb"
 	agentstorage "panel/internal/agent/storage"
 	agentsystem "panel/internal/agent/system"
@@ -67,7 +68,7 @@ func (h *Handler) Health(ctx context.Context, _ *agentpb.Empty) (*agentpb.Health
 	if h.runtime != nil {
 		docker = h.runtime.DockerHealth(ctx)
 	}
-	capabilities := append(append([]string(nil), agentcontract.RequiredCapabilities...), agentcontract.CapabilityPrepareRestart)
+	capabilities := append(append([]string(nil), agentcontract.RequiredCapabilities...), agentcontract.CapabilityPrepareRestart, agentcontract.CapabilityStorageShare)
 	return pbHealth(agentcontract.HealthResponse{Status: "ok", Time: time.Now().UTC().Format(time.RFC3339Nano), Version: agentcontract.Version, Capabilities: capabilities, ContractHash: agentcontract.CurrentHash(), Docker: docker}), nil
 }
 
@@ -356,4 +357,44 @@ func (h *Handler) StorageArchiveDirectory(ctx context.Context, req *agentpb.Stor
 func (h *Handler) StorageDeleteDirectory(ctx context.Context, req *agentpb.StorageDeleteDirectoryRequest) (*agentpb.OKResponse, error) {
 	err := agentstorage.DeleteDirectory(ctx, req.Path)
 	return &agentpb.OKResponse{Ok: err == nil}, remoteError(err)
+}
+
+func (h *Handler) StorageEnsureDirectory(ctx context.Context, req *agentpb.StorageEnsureDirectoryRequest) (*agentpb.OKResponse, error) {
+	err := agentstorage.EnsureDirectory(ctx, req.Path)
+	return &agentpb.OKResponse{Ok: err == nil}, remoteError(err)
+}
+
+func (h *Handler) StorageStatus(ctx context.Context, req *agentpb.StorageStatusRequest) (*agentpb.StorageStatusResponse, error) {
+	status := agentstorage.Status(ctx, req.Root)
+	return &agentpb.StorageStatusResponse{
+		ServerInstalled: status.ServerInstalled,
+		RootExists:      status.RootExists,
+		ExportLive:      status.ExportLive,
+		Detail:          status.Detail,
+	}, nil
+}
+
+func (h *Handler) StorageMountStatus(ctx context.Context, req *agentpb.StorageMountStatusRequest) (*agentpb.StorageMountStatusResponse, error) {
+	volumeName := nfsvol.Name(req.Source, req.Target)
+	if err := h.requireRuntime(); err != nil {
+		return &agentpb.StorageMountStatusResponse{Detail: "runtime is not configured"}, nil
+	}
+	volumes, err := h.runtime.Volumes(ctx)
+	if err != nil {
+		return &agentpb.StorageMountStatusResponse{Detail: err.Error()}, nil
+	}
+	for _, volume := range volumes {
+		if volume.Name != volumeName {
+			continue
+		}
+		status := agentstorage.MountStatusAt(ctx, volume.Mountpoint)
+		return &agentpb.StorageMountStatusResponse{
+			VolumeExists: true,
+			Mountpoint:   volume.Mountpoint,
+			Mounted:      status.Mounted,
+			Writable:     status.Writable,
+			Detail:       status.Detail,
+		}, nil
+	}
+	return &agentpb.StorageMountStatusResponse{Detail: "nfs volume not found"}, nil
 }

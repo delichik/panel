@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -10,29 +11,42 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
+
+// exportsMu 串行化导出配置读写，避免并发覆盖 /etc/exports。
+var exportsMu sync.Mutex
 
 const (
 	// ExportsMarker 标记 Panel 托管的 /etc/exports 块。
 	ExportsMarker = "# panel-storage-share:managed"
 	// ExportsPath 是 NFS 导出配置文件。
 	ExportsPath = "/etc/exports"
+	// RootsStatePath 记录当前已配置的存储根目录，用于限制删除/归档/建目录范围。
+	RootsStatePath = "/etc/panel-storage-roots.json"
 
 	archiveTimeout = 10 * time.Minute
 )
 
 var (
 	rootPattern = regexp.MustCompile(`^/[A-Za-z0-9._/-]+$`)
-	hostPattern = regexp.MustCompile(`^[A-Za-z0-9.-]+$`)
+	hostPattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$`)
+
+	deniedRootPrefixes = []string{
+		"/etc", "/var", "/usr", "/bin", "/sbin", "/lib", "/boot",
+		"/dev", "/proc", "/sys", "/run", "/home", "/root", "/tmp",
+	}
 )
 
-// ConfigureExport 在 Agent 所在主机上配置存储共享导出：
-//   - enabled=true：创建根目录、确保安装 nfs-kernel-server、把根目录导出给
-//     allowed hosts（白名单），并重新加载导出；
-//   - enabled=false：移除托管导出块并重新加载导出，不删除数据。
+// ConfigureExport 配置存储共享导出：
+//   - enabled=true：创建根目录、校验 nfs-kernel-server 已安装（安装由 Panel 通过
+//     SSH 完成）、把根目录导出给 allowed hosts 并重新加载导出；
+//   - enabled=false：移除托管导出块、注销根目录并重新加载导出，不删除数据。
 func ConfigureExport(ctx context.Context, root string, allowedHosts []string, enabled bool) error {
-	if !validPath(root) {
+	exportsMu.Lock()
+	defer exportsMu.Unlock()
+	if !validRoot(root) {
 		return fmt.Errorf("invalid storage root %q", root)
 	}
 	if !enabled {
@@ -41,22 +55,46 @@ func ConfigureExport(ctx context.Context, root string, allowedHosts []string, en
 	if err := run(ctx, "mkdir", "-p", root); err != nil {
 		return fmt.Errorf("create storage root: %w", err)
 	}
-	if err := ensureNFSServer(ctx); err != nil {
-		return err
+	if out, err := exec.CommandContext(ctx, "dpkg", "-s", "nfs-kernel-server").CombinedOutput(); err != nil {
+		_ = out
+		return fmt.Errorf("nfs-kernel-server is not installed; install it on the storage server first")
 	}
 	hosts := cleanHosts(allowedHosts)
 	if len(hosts) == 0 {
 		return fmt.Errorf("no allowed hosts configured for storage export")
 	}
-	current, _ := readExports(ctx)
-	next := stripExports(current, root) + exportsBlock(root, hosts)
-	return writeExports(ctx, next)
+	current, err := readExports(ctx)
+	if err != nil {
+		return fmt.Errorf("read exports: %w", err)
+	}
+	next := ensureTrailingNewline(stripExports(current, root)) + exportsBlock(root, hosts)
+	if err := writeExports(ctx, next); err != nil {
+		return err
+	}
+	return registerRoot(ctx, root)
 }
 
-// ArchiveDirectory 把目录打包为 tar.gz 返回。
+// EnsureDirectory 创建存储分区目录（幂等），仅允许在已注册根目录之下。
+func EnsureDirectory(ctx context.Context, pathValue string) error {
+	if !validPath(pathValue) {
+		return fmt.Errorf("invalid storage directory %q", pathValue)
+	}
+	if !underRegisteredRoot(pathValue) {
+		return fmt.Errorf("directory %q is not under a registered storage root", pathValue)
+	}
+	if err := run(ctx, "mkdir", "-p", pathValue); err != nil {
+		return fmt.Errorf("create storage directory %s: %w", pathValue, err)
+	}
+	return nil
+}
+
+// ArchiveDirectory 把目录打包为 tar.gz 返回（仅允许已注册根目录之下）。
 func ArchiveDirectory(ctx context.Context, pathValue string) ([]byte, error) {
 	if !validPath(pathValue) {
 		return nil, fmt.Errorf("invalid storage directory %q", pathValue)
+	}
+	if !underRegisteredRoot(pathValue) {
+		return nil, fmt.Errorf("directory %q is not under a registered storage root", pathValue)
 	}
 	ctx, cancel := context.WithTimeout(ctx, archiveTimeout)
 	defer cancel()
@@ -73,10 +111,13 @@ func ArchiveDirectory(ctx context.Context, pathValue string) ([]byte, error) {
 	return out, nil
 }
 
-// DeleteDirectory 删除目录及其内容（仅限 Panel 分配的存储分区路径）。
+// DeleteDirectory 删除目录及其内容（仅允许已注册根目录之下）。
 func DeleteDirectory(ctx context.Context, pathValue string) error {
 	if !validPath(pathValue) {
 		return fmt.Errorf("invalid storage directory %q", pathValue)
+	}
+	if !underRegisteredRoot(pathValue) {
+		return fmt.Errorf("directory %q is not under a registered storage root", pathValue)
 	}
 	if err := run(ctx, "rm", "-rf", "--", pathValue); err != nil {
 		return fmt.Errorf("delete %s: %w", pathValue, err)
@@ -84,21 +125,16 @@ func DeleteDirectory(ctx context.Context, pathValue string) error {
 	return nil
 }
 
-func ensureNFSServer(ctx context.Context) error {
-	if out, err := exec.CommandContext(ctx, "dpkg", "-s", "nfs-kernel-server").CombinedOutput(); err == nil {
-		_ = out
-		return nil
-	}
-	_ = run(ctx, "apt-get", "update", "-qq")
-	if out, err := exec.CommandContext(ctx, "apt-get", "install", "-y", "--no-install-recommends", "nfs-kernel-server").CombinedOutput(); err != nil {
-		return fmt.Errorf("install nfs-kernel-server: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
 func removeExport(ctx context.Context, root string) error {
-	current, _ := readExports(ctx)
-	return writeExports(ctx, strings.TrimRight(stripExports(current, root), "\n"))
+	current, err := readExports(ctx)
+	if err != nil {
+		return fmt.Errorf("read exports: %w", err)
+	}
+	next := strings.TrimRight(stripExports(current, root), "\n")
+	if err := writeExports(ctx, next); err != nil {
+		return err
+	}
+	return unregisterRoot(ctx, root)
 }
 
 func readExports(ctx context.Context) (string, error) {
@@ -109,8 +145,11 @@ func readExports(ctx context.Context) (string, error) {
 	return string(out), nil
 }
 
+// writeExports 原子写 /etc/exports：临时文件与目标同目录、写入后 fsync、
+// 保留备份，exportfs 失败时回滚。
 func writeExports(ctx context.Context, content string) error {
-	tmp, err := os.CreateTemp("", "panel-exports-*")
+	dir := filepath.Dir(ExportsPath)
+	tmp, err := os.CreateTemp(dir, ".panel-exports-*")
 	if err != nil {
 		return err
 	}
@@ -124,15 +163,34 @@ func writeExports(ctx context.Context, content string) error {
 		_ = tmp.Close()
 		return err
 	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
+	backup := ExportsPath + ".panel-bak"
+	hadBackup := false
+	if _, err := os.Stat(ExportsPath); err == nil {
+		if err := os.Rename(ExportsPath, backup); err != nil {
+			return err
+		}
+		hadBackup = true
+	}
 	if err := os.Rename(tmpName, ExportsPath); err != nil {
+		if hadBackup {
+			_ = os.Rename(backup, ExportsPath)
+		}
 		return err
 	}
 	if err := run(ctx, "exportfs", "-ra"); err != nil {
+		if hadBackup {
+			_ = os.Rename(backup, ExportsPath)
+		}
 		return fmt.Errorf("reload nfs exports: %w", err)
 	}
+	_ = os.Remove(backup)
 	return nil
 }
 
@@ -173,6 +231,16 @@ func stripExports(content, root string) string {
 	return strings.TrimRight(strings.Join(out, "\n"), "\n")
 }
 
+func ensureTrailingNewline(value string) string {
+	if value == "" {
+		return value
+	}
+	if strings.HasSuffix(value, "\n") {
+		return value
+	}
+	return value + "\n"
+}
+
 func cleanHosts(hosts []string) []string {
 	seen := map[string]struct{}{}
 	out := []string{}
@@ -208,6 +276,87 @@ func validPath(value string) bool {
 		}
 	}
 	return true
+}
+
+func validRoot(root string) bool {
+	if !validPath(root) || root == "/" {
+		return false
+	}
+	for _, prefix := range deniedRootPrefixes {
+		if root == prefix || strings.HasPrefix(root, prefix+"/") {
+			return false
+		}
+	}
+	return true
+}
+
+func readRoots() []string {
+	content, err := os.ReadFile(RootsStatePath)
+	if err != nil {
+		return nil
+	}
+	var roots []string
+	if err := json.Unmarshal(content, &roots); err != nil {
+		return nil
+	}
+	return roots
+}
+
+func writeRoots(roots []string) error {
+	sort.Strings(roots)
+	content, _ := json.Marshal(roots)
+	tmp, err := os.CreateTemp(filepath.Dir(RootsStatePath), ".panel-roots-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(content); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, RootsStatePath)
+}
+
+func registerRoot(_ context.Context, root string) error {
+	roots := readRoots()
+	for _, existing := range roots {
+		if existing == root {
+			return nil
+		}
+	}
+	return writeRoots(append(roots, root))
+}
+
+func unregisterRoot(_ context.Context, root string) error {
+	roots := readRoots()
+	out := []string{}
+	for _, existing := range roots {
+		if existing != root {
+			out = append(out, existing)
+		}
+	}
+	return writeRoots(out)
+}
+
+func underRegisteredRoot(pathValue string) bool {
+	roots := readRoots()
+	for _, root := range roots {
+		if root == "" || pathValue == root {
+			continue
+		}
+		if strings.HasPrefix(pathValue, root+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func run(ctx context.Context, name string, args ...string) error {

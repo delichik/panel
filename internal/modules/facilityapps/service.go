@@ -25,6 +25,7 @@ import (
 	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/logging"
+	sshx "panel/internal/platform/ssh"
 
 	"go.uber.org/zap"
 )
@@ -113,6 +114,7 @@ type Service struct {
 	editSessionDir  string
 	editCommitMu    sync.Mutex
 	storageMu       sync.Mutex
+	ssh             sshx.RemoteExecutor
 	// beforeFacilityEditRevisionBump is a deterministic test synchronization point.
 	beforeFacilityEditRevisionBump func()
 }
@@ -149,11 +151,15 @@ func WithDNSProvider(provider DNSProxySyncer) Option {
 	return func(s *Service) { s.dns = provider }
 }
 
+// WithSSHExecutor 注入 SSH 执行器，仅用于在存储服务器上安装 nfs-kernel-server；
+// 其余存储操作（导出配置、建目录、打包、删除、状态）全部走 Agent。
+func WithSSHExecutor(executor sshx.RemoteExecutor) Option {
+	return func(s *Service) { s.ssh = executor }
+}
+
 func WithTaskService(taskSvc *tasks.Service) Option {
 	return func(s *Service) { s.tasks = taskSvc }
 }
-
-
 
 func NewService(db *sql.DB, agent AgentRuntimeClient, servers ServerProvider, apps ApplicationProvider, opts ...Option) *Service {
 	s := &Service{db: db, agent: agent, servers: servers, apps: apps}
@@ -172,9 +178,17 @@ func NewService(db *sql.DB, agent AgentRuntimeClient, servers ServerProvider, ap
 			AllowRetry:  true,
 			Execute:     s.RunDNSSyncTask,
 		})
+		s.tasks.MustRegister(tasks.Definition{
+			Type:        storageReconcileTaskType,
+			Summary:     "Syncing storage share exports",
+			AllowRunNow: true,
+			AllowRetry:  true,
+			Execute:     s.runStorageShareReconcileTask,
+		})
 	}
 	s.recoverFacilityEditSessions(context.Background())
 	s.startFacilityEditSessionCleanup()
+	go s.storageReconcileLoop()
 	return s
 }
 

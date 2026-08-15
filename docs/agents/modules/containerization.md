@@ -71,12 +71,15 @@ commit 前必须重新散列每个新 blob 的 content 目录和每个 `source_a
 
 ### 存储共享设施（storage-share）
 
-- 存储共享是第二个设施应用：配置支持**多台存储服务器，每台各自指定根目录**（`servers: [{serverId, root}]`）。保存后由存储服务器上的 **Agent** 创建根目录、安装/启用 NFS kernel server 并把各自根目录导出给全部 Panel 纳管服务器（exports 白名单 = 服务器 Host IP/主机名，选项 `rw,sync,no_subtree_check,no_root_squash,insecure`）。托管导出块使用 `# panel-storage-share:managed` 标记，卸载时只移除该块并 `exportfs -ra`，不覆盖用户其它导出。
+- 存储共享是第二个设施应用：配置支持**多台存储服务器，每台各自指定根目录**（`servers: [{serverId, root}]`，默认建议 `/opt/panel-shared-storage`）。**根目录启用后不可修改**，要改只能先卸载再重新启用。保存时对**被移除的服务器先关闭导出**，清理失败则阻止保存。**安装 nfs-kernel-server 走 Panel 侧 SSH**；其余（创建根/分区目录、写 `/etc/exports`、`exportfs -ra`、打包、删除、状态检查）全部由存储服务器/应用节点上的 Agent 执行。导出白名单 = 服务器 Host IP/主机名（`rw,sync,no_subtree_check,no_root_squash,insecure`），并由周期任务（每 5 分钟）自动随服务器增删刷新。托管导出块使用 `# panel-storage-share:managed` 标记，写入为 `/etc` 同目录原子替换并保留备份、失败回滚，不覆盖用户其它导出。
 - 设施配置保存在 `storage_share_configs`（单行 id=`storage-share`，多服务器及各自根目录存于 `servers_json`，旧 `server_ids_json`/`server_id` 由迁移回填）；分区历史保存在 `storage_share_partitions`（按 `storage_server_id + application_id + server_id` 唯一，记录存储服务器与分配目录）。
-- 应用挂载新增 `storage_share` 类型：来源为 `storage-share:<存储服务器ID>`（兼容旧值 `storage-share` = 配置的第一台服务器），目标为容器内路径；Panel 在按服务器渲染运行规格时解析为 `nfs` 挂载 `<该服务器根目录>/<storageServerID>/<应用节点ID>/<appID>`，并登记分区记录。每个（存储服务器 × 应用 × 应用节点）自动获得独立目录。**只有挂载列表里确实包含 `storage_share` 的应用才会检查设施配置**，无关应用不受影响。
+- 应用挂载新增 `storage_share` 类型：来源为 `storage-share:<存储服务器ID>`（兼容旧值 `storage-share` = 配置的第一台服务器），目标为容器内路径；Panel 在按服务器渲染运行规格时**先通过 Agent 创建分区目录**，解析为 `nfs` 挂载 `<该服务器根目录>/<storageServerID>/<应用节点ID>/<appID>`，并按「存储服务器 × 应用 × 应用节点 × 容器目标」登记分区记录。**只有挂载列表里确实包含 `storage_share` 的应用才会检查设施配置**，无关应用不受影响。设施配置（服务器/根目录）变化会改变实例期望 spec hash，触发巡检重建。
 - Agent 运行时对 `nfs` 挂载：部署前确保主机安装 `nfs-common`（缺失时 apt-get 安装），用 Docker local 卷 + NFS driver（`type=nfs, o=addr=<ip>,rw,nfsvers=4, device=:/<path>`）创建确定性命名卷 `panel-nfs-<hash>` 并挂入容器；purge 时清理不再被引用的 NFS 卷（NFS 侧数据不受影响）。
-- 卸载门禁：仅当没有任何应用 spec 再引用 `storage_share` 挂载时才允许；导出配置、分区打包下载与目录删除**全部通过 Agent 执行**（`StorageConfigureExport` / `StorageArchiveDirectory` / `StorageDeleteDirectory`），不使用 Panel 侧 SSH。远端清理为**尽力而为**——清理失败不阻塞卸载，配置照常删除、分区历史与数据保留，失败信息通过返回配置的 `lastError` 展示给前端。
-- 分区支持下载（SSH `tar -czf -` 流式返回 tgz）与删除记录+数据（SSH `rm -rf`，需应用已解除引用，前端二次确认）。
+- 卸载/删除分区门禁：应用 spec 仍引用时禁止；另外删除分区或卸载前会**检查运行中的容器是否仍挂载该 NFS 卷**，仍挂载则拒绝并引导先移除挂载。导出配置、分区打包下载、目录删除与状态检查**全部通过 Agent 执行**（`StorageConfigureExport` / `StorageEnsureDirectory` / `StorageArchiveDirectory` / `StorageDeleteDirectory` / `StorageStatus` / `StorageMountStatus`）。远端清理失败不阻塞卸载，配置照常删除、分区历史与数据保留，失败信息通过返回配置的 `lastError` 展示给前端。
+- 分区支持下载（Agent `StorageArchiveDirectory` 打包返回 tgz）与删除记录+数据（Agent `StorageDeleteDirectory`，需应用已解除引用，前端二次确认）。分区记录保存容器挂载目标与确定性卷名（`target`/`volume_name`），用于挂载状态检查。
+- **NFS 生效状态可观测**：Agent 提供 `StorageStatus`（根目录是否存在、nfs-kernel-server 是否安装、`showmount -e localhost` 是否列出该导出、`rpc.nfsd` 是否运行）与 `StorageMountStatus`（卷是否存在、挂载点是否 NFS 挂载、写探测带 5 秒超时）。设施页通过 `GET /api/v1/facility-apps/storage-share/status` **并行**汇总「每台存储服务器导出生效状态 + 每个分区挂载状态」，整体 30 秒超时；页面每 15 秒刷新且有防重入。Agent 侧导出配置读写有互斥锁；分区打包/删除/建目录限定在已注册根目录下。
+- **并发与配置**：保存带版本号乐观锁，冲突返回 409；卸载清理失败时**保留配置并持久化错误**，可重试卸载；只读挂载在 NFS 卷驱动层使用 `ro`；已有同名卷会校验 driver/标签，不匹配报错。
+- **页面重心为共享配置**：设施详情页主体是每台存储服务器的配置与导出状态卡片；关联应用/分区收进「关联应用」弹窗（应用、存储服务器、目录、挂载状态、下载、删除记录+数据），不作为页面主体。配置编辑器支持行级校验、未保存离开保护，保存后留在配置页查看同步结果。
 - API：`GET/PUT /api/v1/facility-apps/storage-share`、`POST .../reconcile`、`DELETE ...`（返回卸载后配置）、`GET .../partitions/{id}/download`、`DELETE .../partitions/{id}`。
 
 ## 托管 Label

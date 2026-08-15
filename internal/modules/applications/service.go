@@ -4614,11 +4614,17 @@ func (s *Service) runtimeSpecForServer(ctx context.Context, app Application, spe
 	out.InstanceID = runtimeInstanceID(app.ID, srv.ID)
 	out.ContainerName = runtimeContainerName(app)
 	if s.storageResolver != nil {
+		mountsBefore := out.Mounts
 		resolved, err := s.storageResolver.ResolveStorageShareMounts(ctx, app, srv, out.Mounts)
 		if err != nil {
 			return appruntime.Spec{}, err
 		}
 		out.Mounts = resolved
+		// 设施配置（存储服务器/根目录）变化会改变解析后的挂载，进而改变
+		// 实例期望 spec hash，触发巡检重建，避免容器继续挂旧路径。
+		if !reflect.DeepEqual(mountsBefore, resolved) {
+			out.SpecHash = runtimeSpecHashWithMounts(app.SpecHash, resolved)
+		}
 	}
 	if out.Env == nil {
 		out.Env = map[string]string{}
@@ -4642,6 +4648,12 @@ func (s *Service) runtimeSpecForServer(ctx context.Context, app Application, spe
 	}
 	out.Files = renderedFiles
 	return out, nil
+}
+
+func runtimeSpecHashWithMounts(base string, mounts []appruntime.Mount) string {
+	raw, _ := json.Marshal(mounts)
+	sum := sha256.Sum256([]byte(base + "\n" + string(raw)))
+	return hex.EncodeToString(sum[:])
 }
 
 func (s *Service) renderManagedFilesForServer(ctx context.Context, app Application, srv server.Server, managed []appruntime.ManagedFile, files []ApplicationFile) ([]appruntime.ManagedFile, error) {

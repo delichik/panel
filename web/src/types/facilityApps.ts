@@ -160,10 +160,41 @@ export interface StorageSharePartition {
   storageServerId?: string;
   storageServerName?: string;
   path: string;
+  target?: string;
+  volumeName?: string;
   createdAt: string;
   updatedAt: string;
 }
 
 export interface StorageShareSaveInput {
   servers: StorageServerSetting[];
+  version: number;
+}
+
+export interface StorageServerStatus {
+  serverId: string;
+  root: string;
+  agentOnline: boolean;
+  serverInstalled: boolean;
+  rootExists: boolean;
+  exportLive: boolean;
+  detail?: string;
+  lastError?: string;
+}
+
+export interface StoragePartitionStatus extends StorageSharePartition {
+  volumeExists: boolean;
+  mounted: boolean;
+  writable: boolean;
+  mountDetail?: string;
+}
+
+export interface StorageShareReconcileResult {
+  taskId: string;
+  config: StorageShareConfig;
+}
+
+export interface StorageShareStatus {
+  servers: StorageServerStatus[];
+  partitions: StoragePartitionStatus[];
 }

@@ -170,6 +170,7 @@ func New(cfg config.Config) (*App, error) {
 		facilityapps.WithPanelHostProvider(installationSvc),
 		facilityapps.WithDNSProvider(dnsSvc),
 		facilityapps.WithTaskService(taskSvc),
+		facilityapps.WithSSHExecutor(executor),
 	)
 	serverSvc.SetDNSSyncTrigger(facilitySvc.SyncServersDNSEntries)
 	containerBridge.facility = facilitySvc
