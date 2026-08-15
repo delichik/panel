@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  applicationDraftWarnings,
   applicationStatus,
-  applyYamlToDraft,
   cloneFacilityDomains,
   cloneProxyRules,
   diffApplications,
@@ -16,7 +14,6 @@ import {
   saveInputFromDraft,
   specYamlFromDraft,
   statusTone,
-  syncDraftToYaml,
   validateApplicationDraft,
   validateFileName,
   validateFacilityDraft,
@@ -62,22 +59,6 @@ describe('application editor model', () => {
     expect(input.deploymentServers).toEqual(['srv-1']);
     expect(input.reverseProxy[0].domain).toBe('api.example.test');
     expect(input.specYaml).toContain('PORT: "8080"');
-  });
-
-  it('syncs YAML from form and applies YAML back to structured sections', () => {
-    const draft = draftFromApplication(app);
-    draft.image = 'ghcr.io/example/api:2';
-    syncDraftToYaml(draft);
-
-    expect(draft.specYaml).toContain('ghcr.io/example/api:2');
-
-    draft.specYaml = 'name: api\nimage: redis:7\nnetworkMode: host\nports:\n  - label: tcp\n    to: 6379\n';
-    draft.yamlDirty = true;
-
-    expect(applyYamlToDraft(draft).ok).toBe(true);
-    expect(draft.image).toBe('redis:7');
-    expect(draft.networkMode).toBe('host');
-    expect(draft.ports[0].to).toBe('6379');
   });
 
   it('reports no pending changes for a freshly opened editor', () => {
@@ -130,15 +111,6 @@ describe('application editor model', () => {
     expect(diffApplications(withCap, draft)).toEqual({ added: 0, changed: 0, removed: 0, warnings: 0 });
   });
 
-  it('reports staged YAML as a warning instead of a blocking error', () => {
-    const draft = draftFromApplication(app);
-    draft.specYaml = 'name: api\nimage: redis:7\n';
-    draft.yamlDirty = true;
-
-    expect(validateApplicationDraft(draft)).toEqual({});
-    expect(applicationDraftWarnings(draft)).toEqual({ specYaml: 'applicationsPage.validationSourceStaged' });
-  });
-
   it('rejects non-numeric CPU and memory values', () => {
     const draft = draftFromApplication(app);
     draft.cpu = 'fast';
@@ -161,7 +133,6 @@ describe('application editor model', () => {
     const draft = draftFromApplication();
     expect(draft.name).toBe('');
     expect(draft.image).toBe('');
-    expect(draft.specYaml).toBe('');
     expect(draft.ports).toEqual([]);
     expect(draft.commandRows).toEqual([]);
     expect(draft.env).toEqual([]);

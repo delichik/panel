@@ -122,7 +122,7 @@
 - `ApplicationEditor.vue` 的可视化编辑只维护 appspec `command` 有序数组。每一行是一个 argv 项，编辑器不得按空格拆分用户输入。
 - `command` 表示完整容器命令数组，包含可执行文件、flag 和参数值；运行时写入 Docker `Cmd`，不得翻译成 `Entrypoint`。
 - 后端 appspec 校验允许多个非空 `command` 项，空 command 项会正规化为未设置，避免不填写 command 时阻塞保存。
-- 应用编辑器使用隐藏独立 `EditorPage`：正文按基本信息、运行设置、网络与访问、环境与存储、部署目标、应用文件顺序连续展开，右侧 sticky 摘要展示保存前检查、变更数量、编辑状态和检查结果；顶部只保留表单/YAML 源码编辑方式，不提供分区切换。创建页强调名称和镜像的起步配置；编辑页强调当前修改和保存结果。
+- 应用编辑器使用隐藏独立 `EditorPage`：正文按基本信息、运行设置、网络与访问、环境与存储、部署目标、应用文件顺序连续展开，右侧 sticky 摘要展示保存前检查、变更数量、编辑状态和检查结果；顶部只保留表单编辑，不提供分区切换。创建页强调名称和镜像的起步配置；编辑页强调当前修改和保存结果。
 - 应用编辑器的可视化草稿必须是结构化数据，不得把容器环境变量、部署服务器、端口、挂载或反向代理规则压成 JSON/多行文本作为主要交互。复杂重复项使用“摘要列表 + 新增/编辑对话框 + 删除确认”，对话框内使用独立克隆草稿，取消不得污染主草稿。
 - 应用反向代理规则对话框必须通过明确 DTO 克隆函数创建独立草稿，不能对 Vue reactive Proxy 直接调用 `structuredClone`；只有点击保存才替换 `form.reverseProxy` 中对应规则，新建或编辑后取消不得留下空规则、空 Path 或高级选项修改。每个 Path 的高级字段复用 `RoutePathAdvancedFields.vue`。
 - 应用反向代理规则的源站集合完全由后端计算：`源站 = 应用部署目标 ∩ 设施全局网关节点`（`selected` 模式取部署服务器，`all` 模式取全部全局网关节点）。前端不提供也不提交源站：保存请求中的 `originServerIds` 与 `anyAccess.primaryOriginServerId` 一律被忽略，当不存在处理；后端保存时重新计算并校验。对话框只读展示自动源站，无可用的源站时提示选择属于网关节点的部署目标。`primary_backup` 策略下前端只排列源站优先级 `anyAccess.originPriority`（必须恰好是自动源站集合，首位即主源站，其余按序为备），主源站由后端据此推导。`AnyAccess` 开启后所有全局网关节点都部署域名，非源站节点通过入口网关转发到源站；`anyAccess.relayServerIds` 为空表示所有非源站全局网关节点，非空表示只在这些指定节点生成转发。转发节点必须属于全局网关节点且不能是源站节点。策略只允许 `round_robin`、`primary_backup`、`ip_hash`。
@@ -136,9 +136,9 @@
 - 设施编辑会话删除静态资产时，服务端必须先检查当前 draft route 对 `assetName` 的引用；仍被引用时应在 revision、资产记录和 blob 均未变化前拒绝，前端把错误显示在对应资产行。
 - 普通应用编辑页使用 `/api/v1/application-edit-sessions` durable 会话：进入时查询可恢复编辑，首次修改后懒创建会话；修改和文件操作串行携带 revision。保存主流程为本地校验 → 服务端检查 → 预览变更 → 保存并应用，提交期间禁用离开和重复提交；成功只表示配置已保存并请求应用，部署完成仍通过任务中心和运行时区观察。
 - v3 编辑页有路由离开和浏览器关闭保护；离开默认保留可恢复草稿，取消按钮会显式 discard 当前会话后返回列表。
-- `mounts` / `volumes` 属于 appspec YAML，必须支持 YAML source 编辑；结构化页也要继续提供挂载编辑入口并与源码往返同步。源码视图不是第二个高级配置区，只能提供“重新生成源码”和“应用到草稿”两个同步动作；校验失败要定位到源码视图。应用文件模板是应用级文件内容，不属于 appspec YAML，不能混入源码编辑。
+- `mounts` / `volumes` 属于 appspec YAML；应用编辑器只提供表单编辑，挂载通过结构化挂载区编辑，表单生成 YAML 时保留未覆盖的规格字段。应用文件模板是应用级文件内容，不属于 appspec YAML，不能混入应用规格。
 - 应用文件名校验拒绝 `/`、`\`、`..` 和控制字符，长度上限 255，避免 zip-slip 与“能保存无法下载”的死数据。
-- YAML source 只编辑 appspec YAML；应用名称、启用状态、部署目标、反向代理规则和应用文件是应用级保存字段，必须留在结构化面板与保存输入中，不能只出现在 YAML source 内。容器环境变量属于 appspec YAML 的 `env`。
+- 应用名称、启用状态、部署目标、反向代理规则和应用文件是应用级保存字段，必须留在结构化面板与保存输入中。容器环境变量属于 appspec YAML 的 `env`，由表单生成。
 - 前端 appspec YAML 解析和输出使用标准 YAML 库，不能再在组件内手写轻量 parser。`command` 中以冒号开头或包含冒号的值（例如 `:9443`、`--listen=:9443`）必须按字符串往返。
 - 应用同步由 planner 创建 lifecycle operation 与 per-server target；HTTP 同步入口只启用应用并触发协调。deployment dispatcher 在 target 被条件 claim 后创建私有 `application_target_apply|stop|purge` 任务作为执行和日志锚点，不再由 collector 创建 `application_target_batch` 父任务或目标子任务。每个目标任务只能处理一个应用在一个服务器上的一个动作，并使用 `application:target:<appId>:<serverId>` 的 `ConcurrencyResourceQueue` key；同一 app/server 的 apply、stop、purge 是否可创建由 lifecycle target planner 决定，任务队列只负责执行期串行。planner 先创建 lifecycle operation 和 `ready` target，并由 dispatcher 把 lifecycle operation/target ID 写入目标任务参数；目标任务只更新自己的 target，aggregation worker 负责把聚合状态收敛为 deployed、failed 或 partially_deployed。Agent 返回“already has requested state”这类已达到目标状态的 stop/purge 响应时必须按幂等成功处理，不能把该目标标为失败并进入下一轮协调。
 - `application_refresh` 和 `application_image_update` executor 自身已经占用应用生命周期并发 key；在任务框架支持“当前生命周期任务完成后触发协调”前，这两个 executor 仍可在任务内部直接执行 runtime apply，以避免在 executor 内创建同应用目标任务被并发准入阻塞。HTTP 保存、同步、停用、删除和设施应用保存不得使用该例外。
@@ -171,13 +171,12 @@
 ## Application Create Editor UX
 
 - The application create/edit workspace uses a top step rail and intent panels instead of the old left section list. The structured panels are Identity, Runtime source, Networking, Storage, Deployment, and Files/Assets.
-- AppSpec has exactly one source editor, labelled `YAML source` / `源码`. Do not reintroduce separate `Advanced YAML` and `YAML` entry points. Source editing is an alternate view of the same draft: structured edits regenerate source, and manual source edits must be applied back to the structured draft before commit.
-- The AppSpec source view uses the shared CodeMirror editor with YAML highlighting, line numbers, undo history, and editor-internal scrolling. Editing marks the source dirty immediately but must not automatically apply, format, or save it; synchronization with the structured draft remains explicit.
-- Structured editing must remain complete. Image, command, env, ports, mounts, reverse proxy, deployment targets, and session files cannot be hidden behind YAML-only editing.
+- AppSpec is edited through the structured form only; there is no YAML source editor. The form regenerates the appspec YAML on save and preserves spec keys it does not cover (`uncoveredSpec`), so advanced fields such as `capAdd`, `sysctls`, healthcheck and resource limits are kept.
+- Structured editing must remain complete. Image, command, env, ports, mounts, reverse proxy, deployment targets, and session files are all edited in the form.
 - Command is edited as a list of arguments, not a textarea. New dialog rows (command, port, mount, proxy rule, proxy path, facility path) start empty; the UI validates required values instead of pre-filling misleading defaults.
-- The create editor starts with a blank draft: application name, image, source YAML, ports, env, mounts, and reverse proxy rules are not pre-filled with sample values; required fields are validated before preview and commit.
+- The create editor starts with a blank draft: application name, image, ports, env, mounts, and reverse proxy rules are not pre-filled with sample values; required fields are validated before preview and commit.
 - The application reverse proxy dialog exposes AnyAccess (kept untranslated) with load-balancing strategy, plus the shared HTTP route options (gzip, request body limit, timeouts, buffering, WebSocket, request/response headers) so application routes carry the same entrance-proxy options as facility paths. Origin servers always follow the application's deployment targets intersected with gateway nodes and are resolved automatically (the client never sends `originServerIds`); the proxy dialog does not expose them. For the primary_backup strategy the dialog lets the user arrange the auto-resolved origin servers into a priority order (first entry is the primary origin, the rest are backups); the client sends only this ordering and never sends originServerIds or primaryOriginServerId.
-- Application name, enabled state, deployment targets, reverse proxy rules, and application files are application-level fields outside AppSpec YAML. Container environment variables belong to AppSpec YAML. They remain part of the same durable edit session and commit flow even when the user opens the source view.
+- Application name, enabled state, deployment targets, reverse proxy rules, and application files are application-level fields outside AppSpec YAML. Container environment variables belong to AppSpec YAML. They remain part of the same durable edit session and commit flow even though the spec YAML is generated from the form.
 - The editor pending-change diff normalizes both the saved application and the current draft through the same pipeline (`draftFromApplication` + `saveInputFromDraft`), so YAML round-trip formatting and defaulted route options do not surface as a fake changed entry when the editor is opened without edits.
 - 服务器选择器（部署目标、网关节点、源服务器、Panel 入口）展示全部服务器，不再只显示已被应用或设施引用的服务器；部署目标选择器对 agent 未兼容或不可达的服务器显示禁用原因，避免用户误选后到部署阶段才失败。
 - 编辑器确认放弃未保存修改并离开后，路由切换必须同步清理脏状态和弹窗状态，避免同一组件实例被复用后再次导航仍弹出放弃确认。

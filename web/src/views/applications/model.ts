@@ -43,8 +43,6 @@ export interface ApplicationDraftUi {
   cpu: string;
   memoryMb: string;
   privileged: boolean;
-  specYaml: string;
-  yamlDirty: boolean;
   env: KeyValueRow[];
   ports: PortRow[];
   mounts: MountRow[];
@@ -119,8 +117,6 @@ export function draftFromApplication(app?: ApplicationDto | null): ApplicationDr
     cpu: stringValue(objectValue(parsed.resources)?.cpu),
     memoryMb: stringValue(objectValue(parsed.resources)?.memoryMb),
     privileged: Boolean(parsed.privileged),
-    specYaml: app?.specYaml || '',
-    yamlDirty: false,
     env: pairsFromRecord(objectToStringRecord(objectValue(parsed.env))),
     ports: arrayValue(parsed.ports).map((item, index) => {
       const port = objectValue(item);
@@ -135,32 +131,6 @@ export function draftFromApplication(app?: ApplicationDto | null): ApplicationDr
     reverseProxy: cloneProxyRules(app?.reverseProxy ?? []).map((rule) => (networkMode === 'host' && rule.targetType === 'container' ? { ...rule, targetType: 'local' } : rule)),
     uncoveredSpec: uncoveredSpecFrom(parsed),
   };
-}
-
-export function applyYamlToDraft(draft: ApplicationDraftUi): { ok: boolean; error?: string } {
-  try {
-    const parsed = parseSpec(draft.specYaml);
-    const next = draftFromApplication({ ...emptyApp(), name: draft.name, enabled: draft.enabled, specYaml: draft.specYaml, deploymentMode: draft.deploymentMode, deploymentServers: draft.deploymentServers, reverseProxy: draft.reverseProxy });
-    draft.image = next.image;
-    draft.commandRows = next.commandRows;
-    draft.networkMode = next.networkMode;
-    draft.cpu = next.cpu;
-    draft.memoryMb = next.memoryMb;
-    draft.privileged = next.privileged;
-    draft.env = next.env;
-    draft.ports = next.ports;
-    draft.mounts = next.mounts;
-    draft.name = draft.name || stringValue(parsed.name);
-    draft.yamlDirty = false;
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : 'Invalid YAML' };
-  }
-}
-
-export function syncDraftToYaml(draft: ApplicationDraftUi) {
-  draft.specYaml = specYamlFromDraft(draft);
-  draft.yamlDirty = false;
 }
 
 export function specYamlFromDraft(draft: ApplicationDraftUi) {
@@ -184,7 +154,7 @@ export function specYamlFromDraft(draft: ApplicationDraftUi) {
 }
 
 export function saveInputFromDraft(draft: ApplicationDraftUi): ApplicationSaveInput {
-  const specYaml = draft.yamlDirty ? draft.specYaml : specYamlFromDraft(draft);
+  const specYaml = specYamlFromDraft(draft);
   return {
     name: draft.name.trim(),
     enabled: draft.enabled,
@@ -204,8 +174,7 @@ export function saveInputFromDraft(draft: ApplicationDraftUi): ApplicationSaveIn
 export function validateApplicationDraft(draft: ApplicationDraftUi): FieldErrors {
   const errors: FieldErrors = {};
   if (!draft.name.trim()) errors.name = 'applicationsPage.validationName';
-  if (draft.yamlDirty && !draft.specYaml.trim()) errors.specYaml = 'applicationsPage.validationSpec';
-  if (!draft.yamlDirty && !draft.image.trim()) errors.image = 'applicationsPage.validationImage';
+  if (!draft.image.trim()) errors.image = 'applicationsPage.validationImage';
   if (draft.cpu.trim() && !Number.isFinite(Number(draft.cpu))) errors.cpu = 'applicationsPage.validationNumber';
   if (draft.memoryMb.trim() && !Number.isFinite(Number(draft.memoryMb))) errors.memoryMb = 'applicationsPage.validationNumber';
   if (draft.deploymentMode === 'selected' && !draft.deploymentServers.length) errors.deploymentServers = 'applicationsPage.validationDeploymentServers';
@@ -213,29 +182,7 @@ export function validateApplicationDraft(draft: ApplicationDraftUi): FieldErrors
   if (draft.ports.some((row) => !row.to.trim())) errors.ports = 'applicationsPage.validationPorts';
   if (draft.mounts.some((row) => !row.target.trim())) errors.mounts = 'applicationsPage.validationMounts';
   if (draft.reverseProxy.some((rule) => !rule.domain.trim() || !rule.targetType || !rule.targetPort || !rule.paths.length || rule.paths.some((path) => !path.path.trim()))) errors.reverseProxy = 'applicationsPage.validationReverseProxyRule';
-  if (draft.yamlDirty) {
-    try {
-      parseSpec(draft.specYaml);
-    } catch {
-      errors.specYaml = 'applicationsPage.validationYaml';
-    }
-  }
   return errors;
-}
-
-export function applicationDraftWarnings(draft: ApplicationDraftUi): FieldErrors {
-  const warnings: FieldErrors = {};
-  if (draft.yamlDirty) {
-    try {
-      parseSpec(draft.specYaml);
-      // Valid YAML that has not been applied back to the structured form is a
-      // warning, not a blocking error: preview/commit still operate on the raw YAML.
-      warnings.specYaml = 'applicationsPage.validationSourceStaged';
-    } catch {
-      // Parse failures are reported as blocking errors by validateApplicationDraft.
-    }
-  }
-  return warnings;
 }
 
 export function validateFileName(name: string): string | null {
@@ -521,6 +468,3 @@ function makeId(prefix: string) {
   return `${prefix}-${localIdSeed}`;
 }
 
-function emptyApp(): ApplicationDto {
-  return { id: '', version: 0, kind: 'application', name: '', enabled: true, specYaml: '', deploymentMode: 'all', deploymentServers: [], reverseProxy: [], generation: 0, specHash: '', imageUpdateAvailable: false, jobId: '', namespace: '', createdAt: '', updatedAt: '' };
-}

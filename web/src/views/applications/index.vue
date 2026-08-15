@@ -1,14 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
-import { AlertTriangle, ClipboardList, Code2, Globe2, HardDrive, History, Plus, RefreshCw, RefreshCcw, Rocket, Save, Square, Trash2, UploadCloud, Wrench } from '@lucide/vue';
+import { AlertTriangle, ClipboardList, Globe2, HardDrive, History, Plus, RefreshCcw, Rocket, Save, Square, Trash2, UploadCloud, Wrench } from '@lucide/vue';
 import { applicationsApi } from '@/api/applications';
 import { serversApi } from '@/api/servers';
 import { saveBlobDownload } from '@/api/download';
 import { reverseProxyFacilityApi, storageShareFacilityApi } from '@/api/facilityApps';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
-import CodeEditor from '@/components/ui/CodeEditor.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import Dialog from '@/components/ui/Dialog.vue';
 import DownloadButton from '@/components/ui/DownloadButton.vue';
@@ -37,9 +36,7 @@ import type { FacilityEditPreviewResult, FacilityEditSession, FacilityRouteDomai
 import type { ServerDto } from '@/types/servers';
 import { formatDateTime } from '@/utils/datetime';
 import {
-  applicationDraftWarnings,
   applicationStatus,
-  applyYamlToDraft,
   cloneFacilityDomains,
   cloneFacilityPath,
   cloneProxyRules,
@@ -62,7 +59,6 @@ import {
   runtimeSummary,
   saveInputFromDraft,
   statusTone,
-  syncDraftToYaml,
   validateApplicationDraft,
   validateFileName,
   validateFacilityDraft,
@@ -138,7 +134,6 @@ let pendingLeaveTarget: string | null = null;
 let pendingFacilityCancel = false;
 let allowLeave = false;
 const appTab = ref('runtime');
-const editorMode = ref<'configure' | 'source'>('configure');
 const fileActionErrors = ref<Record<string, string>>({});
 const fileActionPending = ref('');
 const assetActionErrors = ref<Record<string, string>>({});
@@ -189,7 +184,6 @@ const appStatus = computed(() => currentApplicationSummary.value ? applicationSt
 const appDraft = reactive<ApplicationDraftUi>(draftFromApplication());
 const facilityDraft = reactive<FacilityDraftUi>(facilityDraftFromConfig());
 const appErrors = computed(() => validateApplicationDraft(appDraft));
-const appWarnings = computed(() => applicationDraftWarnings(appDraft));
 const facilityErrors = computed(() => validateFacilityDraft(facilityDraft));
 const appDiff = computed(() => diffApplications(mode.value === 'edit' ? currentApplication.value : null, appDraft));
 const facilityDiff = computed(() => diffFacility(facility.value, facilityDraft));
@@ -901,7 +895,6 @@ async function startApplicationEditorCore() {
   preview.value = null;
   editSession.value = null;
   isDirty.value = false;
-  editorMode.value = 'configure';
   try {
     editSession.value = await applicationsApi.beginEditSession(appId || undefined, saveInputFromDraft(appDraft));
     if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || String(route.params.applicationId ?? '') !== appId) return;
@@ -1168,31 +1161,7 @@ function markDirty() {
 }
 
 function markAppStructuredDirty() {
-  syncDraftToYaml(appDraft);
   markDirty();
-}
-
-function markSpecDirty() {
-  appDraft.yamlDirty = true;
-  markDirty();
-}
-
-function syncYamlFromForm() {
-  syncDraftToYaml(appDraft);
-  markDirty();
-  notifySuccess(t('applicationsPage.yamlSynced'));
-}
-
-function applyYamlToForm() {
-  const result = applyYamlToDraft(appDraft);
-  if (!result.ok) {
-    actionError.value = result.error || t('applicationsPage.validationYaml');
-    editorMode.value = 'source';
-    return;
-  }
-  editorMode.value = 'configure';
-  markDirty();
-  notifySuccess(t('applicationsPage.yamlApplied'));
 }
 
 function openRowDialog(index = -1) {
@@ -1493,7 +1462,6 @@ function instanceStatusLabel(status: string) {
 }
 
 function sourceSummary() {
-  if (appDraft.yamlDirty) return t('applicationsPage.yamlDirtySummary');
   return appDraft.image || t('common.notAvailable');
 }
 
@@ -2018,18 +1986,10 @@ onBeforeUnmount(() => {
           <div class="app-editor-header">
             <div class="app-editor-title-row">
               <p class="editor-flow-hint">{{ t('applicationsPage.editorFlowHint') }}</p>
-              <div class="mode-switch" :aria-label="t('applicationsPage.editMode')">
-                <button class="mode-button" :class="{ active: editorMode === 'configure' }" type="button" @click="editorMode = 'configure'">
-                  <Wrench class="size-4" />{{ t('applicationsPage.configureMode') }}
-                </button>
-                <button class="mode-button" :class="{ active: editorMode === 'source' }" type="button" @click="editorMode = 'source'">
-                  <Code2 class="size-4" />{{ t('applicationsPage.sourceMode') }}
-                </button>
-              </div>
             </div>
           </div>
 
-          <div v-if="editorMode === 'configure'" class="app-editor-body">
+          <div class="app-editor-body">
             <section class="workspace-panel">
               <div class="section-copy"><h3>{{ t('applicationsPage.panelIdentity') }}</h3><p>{{ isCreateMode ? t('applicationsPage.createFastPathHint') : t('applicationsPage.editRuntimeHint') }}</p></div>
               <div class="form-grid">
@@ -2095,20 +2055,6 @@ onBeforeUnmount(() => {
             </section>
           </div>
 
-          <div v-else class="app-editor-body">
-            <section class="workspace-panel source-panel">
-              <div class="section-heading">
-                <div class="section-copy"><h3>{{ t('applicationsPage.sourceViewTitle') }}</h3><p>{{ t('applicationsPage.sourceViewHint') }}</p></div>
-                <div class="flex flex-wrap gap-2">
-                  <Button size="sm" @click="syncYamlFromForm"><RefreshCw />{{ t('applicationsPage.syncSource') }}</Button>
-                  <Button size="sm" variant="primary" @click="applyYamlToForm"><Code2 />{{ t('applicationsPage.applySource') }}</Button>
-                </div>
-              </div>
-              <div class="rounded-xl border border-info-border bg-info-bg p-3 text-sm text-info">{{ t('applicationsPage.sourceGuardHint') }}</div>
-              <div v-if="appWarnings.specYaml" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t(appWarnings.specYaml) }}</div>
-              <CodeEditor v-model="appDraft.specYaml" language="yaml" size="large" :editor-label="t('applicationsPage.specYaml')" :invalid="Boolean(appErrors.specYaml)" @update:model-value="markSpecDirty" />
-            </section>
-          </div>
         </section>
 
         <aside class="app-editor-summary">
@@ -2433,16 +2379,6 @@ strong {
   min-width: 0;
 }
 
-.mode-switch {
-  display: inline-flex;
-  width: max-content;
-  max-width: 100%;
-  border: 1px solid var(--panel-border);
-  border-radius: 0.875rem;
-  background: var(--panel-bg);
-  padding: 0.25rem;
-}
-
 .app-editor-body {
   display: grid;
   align-content: start;
@@ -2469,41 +2405,6 @@ strong {
   gap: 0.75rem;
   min-width: 0;
   align-self: start;
-}
-
-.mode-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.4rem;
-  min-height: 2rem;
-  min-width: 0;
-  border: 0;
-  border-radius: 0.625rem;
-  background: transparent;
-  color: var(--panel-text-muted);
-  padding: 0 0.75rem;
-  font-size: 0.8125rem;
-  font-weight: 650;
-  transition:
-    background-color var(--panel-motion-duration-base) var(--panel-motion-ease-standard),
-    color var(--panel-motion-duration-base) var(--panel-motion-ease-standard),
-    box-shadow var(--panel-motion-duration-base) var(--panel-motion-ease-standard),
-    transform var(--panel-motion-duration-base) var(--panel-motion-ease-standard);
-}
-
-.mode-button:hover {
-  transform: translateY(var(--panel-motion-hover-y));
-}
-
-.mode-button:active {
-  transform: translateY(0) scale(var(--panel-motion-press-scale));
-}
-
-.mode-button.active {
-  background: var(--panel-surface);
-  color: var(--panel-text);
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--panel-text) 8%, transparent);
 }
 
 .workspace-panel {
@@ -2554,10 +2455,6 @@ strong {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.75rem;
-}
-
-.source-panel {
-  background: linear-gradient(180deg, var(--panel-bg), color-mix(in srgb, var(--panel-muted) 35%, transparent));
 }
 
 .item-row {
@@ -2798,16 +2695,6 @@ strong {
   .app-editor-title-row,
   .app-editor-summary {
     grid-template-columns: 1fr;
-  }
-
-  .mode-switch {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    width: 100%;
-  }
-
-  .mode-button {
-    padding: 0 0.5rem;
   }
 
   .app-editor-body {
