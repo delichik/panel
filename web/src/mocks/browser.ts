@@ -654,7 +654,7 @@ export function installMockApi() {
         partitions: [],
       });
     }
-    if (url.pathname === '/api/v1/facility-apps/storage-share/reconcile' && method(init) === 'POST') return json(mockStorageShare);
+    if (url.pathname === '/api/v1/facility-apps/storage-share/reconcile' && method(init) === 'POST') return json({ taskId: 'mock-storage-share-reconcile', config: mockStorageShare }, 202);
     if (url.pathname === '/api/v1/facility-apps/storage-share' && method(init) === 'DELETE') {
       uninstallStorageShare();
       return json(mockStorageShare);

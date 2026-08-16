@@ -1,4 +1,4 @@
-﻿@import "tailwindcss";
+@import "tailwindcss";
 @import "@fontsource/inter/latin.css";
 
 @theme inline {
@@ -240,9 +240,7 @@ button:disabled { cursor: not-allowed; }
 .motion-list-item,
 .motion-card,
 .motion-field,
-.motion-switch,
-.motion-popover,
-.motion-toast {
+.motion-switch {
   transition-duration: var(--panel-motion-duration-base);
   transition-timing-function: var(--panel-motion-ease-standard);
   will-change: transform, opacity;
@@ -291,8 +289,6 @@ button:disabled { cursor: not-allowed; }
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--panel-ring) 22%, transparent);
 }
 
-.motion-popover,
-.motion-toast,
 .motion-enter {
   animation: panel-motion-enter var(--panel-motion-duration-slow) var(--panel-motion-ease-emphasized) both;
 }

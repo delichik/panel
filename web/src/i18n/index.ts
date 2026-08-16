@@ -2410,7 +2410,10 @@ Object.assign(messages['zh-CN'], {
   'debugPage.pprofToggleFailed': '无法更新 pprof 状态。',
 });
 
-const state = reactive({ locale: (globalThis.localStorage?.getItem('panel.locale') as Locale) || 'en' });
+// 持久化的 locale 只接受已知值；被篡改/旧版本残留的非法值回退到默认 'en'，
+// 避免把任意字符串写进 <html lang> 造成浏览器语言识别与文案脱节。
+const storedLocale = globalThis.localStorage?.getItem('panel.locale');
+const state = reactive({ locale: (storedLocale === 'zh-CN' || storedLocale === 'en' ? storedLocale : 'en') as Locale });
 
 function applyDocumentLang(locale: Locale) {
   // Keep <html lang> in sync with the active UI language. Browsers (Chrome
@@ -2426,9 +2429,10 @@ export function useI18n() {
   const locale = computed(() => state.locale);
 
   function setLocale(next: Locale) {
-    state.locale = next;
-    globalThis.localStorage?.setItem('panel.locale', next);
-    applyDocumentLang(next);
+    const value: Locale = next === 'zh-CN' || next === 'en' ? next : 'en';
+    state.locale = value;
+    globalThis.localStorage?.setItem('panel.locale', value);
+    applyDocumentLang(value);
   }
 
   function t(key: string, params?: Record<string, string | number>) {
@@ -2462,8 +2466,6 @@ const taskSummaryTranslations: Array<[string, string]> = [
   ['Monitoring application containers', '监控应用容器'],
   ['Refreshing scheduled image checks', '刷新计划镜像检查'],
   ['Syncing reverse proxy DNS records', '同步反向代理 DNS 记录'],
-  ['Collecting scheduled metrics', '采集计划指标'],
-  ['Collecting metrics for ', '采集指标：'],
   ['Refreshing package updates', '刷新软件包更新'],
   ['Upgrading selected packages', '升级所选软件包'],
   ['Upgrading all packages', '升级全部软件包'],
@@ -2475,8 +2477,17 @@ const taskSummaryTranslations: Array<[string, string]> = [
   ['Restarting server', '重启服务器'],
   ['Collecting system information for ', '收集系统信息：'],
   ['Collecting scheduled system information', '采集计划系统信息'],
+  ['Collecting initial server information', '采集服务器初始信息'],
   ['Checking agent for ', '检查 Agent：'],
   ['Checking configured agents', '检查已配置的 Agent'],
+  ['Syncing storage share exports', '同步存储共享导出'],
+  ['Syncing application ', '同步应用：'],
+  ['Refreshing volumes', '刷新卷'],
+  ['Volumes refreshed', '卷已刷新'],
+  ['Refreshing networks', '刷新网络'],
+  ['Networks refreshed', '网络已刷新'],
+  ['Image updates refreshed', '镜像更新已刷新'],
+  ['Running ', '正在执行 '],
   ['Retrying ', '重试：'],
 ];
 
@@ -2510,7 +2521,10 @@ export function translateTaskSummary(t: (key: string, params?: Record<string, st
 
 export function translateEventSummary(t: (key: string, params?: Record<string, string | number>) => string, summary: string): string {
   if (state.locale !== 'zh-CN') return summary;
-  const translated = translateBackendSummary(t, summary, eventSummaryTranslations);
+  let translated = translateBackendSummary(t, summary, eventSummaryTranslations);
+  // 任务类事件的事件摘要直接使用任务 summary（英文），在事件词典未命中时
+  // 回退到任务摘要词典，避免 zh-CN 下任务事件摘要显示英文。
+  if (translated === summary) translated = translateBackendSummary(t, summary, taskSummaryTranslations);
   return translated.replace(/ \((\d+)\/(\d+) targets succeeded\)$/, '（$1/$2 个目标成功）');
 }
 

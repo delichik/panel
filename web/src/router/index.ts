@@ -81,6 +81,25 @@ function redirectToLogin() {
 
 setUnauthorizedHandler(redirectToLogin);
 
+// Lazy route chunks can fail to load at runtime (network hiccup, stale hashed
+// bundles after a redeploy). Without a handler the navigation rejects and the
+// page area stays blank. Retry once with a full reload; the guard flag is
+// cleared on every successful navigation so a later genuine failure gets its
+// own retry instead of looping forever on a permanently missing chunk.
+router.onError((error) => {
+  const message = String(error?.message ?? error);
+  if (/Failed to fetch dynamically imported module|Importing a module script failed|ChunkLoadError/.test(message)) {
+    if (!globalThis.sessionStorage?.getItem('router.chunkRetry')) {
+      globalThis.sessionStorage?.setItem('router.chunkRetry', '1');
+      window.location.reload();
+    }
+  }
+});
+
+router.afterEach(() => {
+  globalThis.sessionStorage?.removeItem('router.chunkRetry');
+});
+
 router.beforeEach(async (to) => {
   const session = useSessionStore();
   if (!session.ready) await session.restore();
