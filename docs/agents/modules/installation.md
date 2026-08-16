@@ -34,5 +34,5 @@
 
 ## 首启安全基线
 
-- JWT 默认密钥首启随机化：未在配置中显式提供 JWT secret（或仍为公开默认常量）时，首次启动会自动生成随机 secret 并持久化到 `runtime_settings`，避免公开默认密钥长期生效；显式配置的 secret 保留不变。
+- JWT 默认密钥首启随机化：未在配置中显式提供 JWT secret（或仍为公开默认常量）时，首次启动会自动生成随机 secret 并持久化到 `runtime_settings`，避免公开默认密钥长期生效；显式配置的 secret 保留不变。**存量升级**：旧版本可能已把公开默认密钥固化进 `runtime_settings`，启动时检测到默认值会自动轮换为随机密钥（既有会话令牌会失效一次，需重新登录），轮换后不再重复。
 - SSH known_hosts：主机密钥 TOFU 记录存放在 `<dataRoot>/known_hosts`（由启动装配显式指定，不依赖环境变量推导）。

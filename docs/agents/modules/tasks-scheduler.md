@@ -92,7 +92,7 @@
 - 并行子任务错误收集通道容量按最多发送数分配并使用非阻塞兜底发送，避免子任务全部失败时死锁。
 - 单任务日志有上限：每任务最多保留 1000 条，单条日志超过 8192 个字符截断；超出后滚动删除最旧日志，防止长任务无限膨胀。
 - 任务失败对已处于终态的任务直接短路，不再向已完成任务日志流追加误导性失败行。
-- `ExpireStaleQueued` 只清理 `created_at` 超时且 `next_run_at` 已到期（或为空）的 `queued`/`scheduled` 任务，不再误杀未来的调度任务。
+- `ExpireStaleQueued` 只清理 `created_at` 超时且 `next_run_at` 已到期（或为空）的 `queued`/`scheduled` 任务，不再误杀未来的调度任务；且只淘汰真正的孤儿——同一并发键下仍有更早的活跃任务（含 `queued`/`scheduled`/`running`/`failed_retryable`）时，该任务只是在合法排队等待较慢的队首（例如耗时超过 `StaleQueuedAfter` 的部署），不会被按创建时间误杀。
 - 周期任务启动后第一个执行推迟到首个 interval tick 之后（不立即触发），避免 Panel 重启瞬间所有周期任务同时触发。
 
 ## 跨模块依赖
@@ -104,7 +104,7 @@
 - 网络和卷资源页首次打开且本地尚无快照时，前端会提交一次 `network_refresh` 或 `volume_refresh` 任务；刷新任务按任务类型、服务器和资源复用活跃任务。
 - 证书签发、续签、密钥资产重新签发、SSH 密钥重新生成和导入依赖本模块记录任务；ACME 签发/续签任务会记录 `acme_*` 阶段和对应步骤 metadata。新建证书签发在任务持久化后由证书模块主动调用 manager 启动，正常路径不依赖 worker 的周期扫描；worker 仍负责重启恢复和兜底唤醒。
 - `server_info_collect` 的首次 bootstrap 输入在服务器创建后立即执行，失败时允许回滚尚未完成初始化的服务器；普通 refresh 输入固定每小时收集一次完整系统信息，失败只记录为可重试任务，绝不能删除服务器。周期 refresh 仅为存在兼容 Agent 的服务器创建。该任务的注册 executor 必须同步执行到任务终态；业务 API 需要快速返回时只能在创建并标记 running 后使用模块内显式后台启动 helper。
-- 启用服务器 agent 后，`metrics_collect` 与普通 `server_info_collect` 中的读取能力会走目标机 `panel-agent` mTLS 通道，不允许在 agent 失败时回落 SSH。依赖 agent 的定时工作只在 `agent.status=compatible` 且存在 `agent.url` 时创建或执行；agent 未部署、异常、不可部署或版本不一致时跳过当前资源工作，不创建新的资源操作任务。`server_info_collect`、应用运行时任务和容器化任务遇到 agent mTLS server 证书过期或尚未生效时，会标记 agent 不兼容、按受限自动重装策略处理 `server_agent_deploy`，并按当前 agent 错误失败；恢复 agent 本身的 `server_agent_deploy` 不受该跳过规则限制。
+- 启用服务器 agent 后，指标读取走 Agent report stream（见下文 Active Agent Reporting），普通 `server_info_collect` 中的读取能力走目标机 `panel-agent` mTLS 通道，不允许在 agent 失败时回落 SSH。依赖 agent 的定时工作只在 `agent.status=compatible` 且存在 `agent.url` 时创建或执行；agent 未部署、异常、不可部署或版本不一致时跳过当前资源工作，不创建新的资源操作任务。`server_info_collect`、应用运行时任务和容器化任务遇到 agent mTLS server 证书过期或尚未生效时，会标记 agent 不兼容、按受限自动重装策略处理 `server_agent_deploy`，并按当前 agent 错误失败；恢复 agent 本身的 `server_agent_deploy` 不受该跳过规则限制。
 - 软件包刷新/升级、UFW 写操作、fail2ban 安装/接管/应用/取消接管和服务器重启必须路由到兼容 Agent，不允许回退 SSH。长耗时 APT 请求使用独立 Agent maintenance gRPC 超时并把命令输出写入 Panel 任务日志；软件包升级任务声明 `DisallowCancel`，Panel 重启、连接断开或删除服务器都不会取消远端 apt。SSH 只保留 Agent bootstrap、安装、修复和证书恢复。
 - 软件包升级任务（`package_upgrade_selected` / `package_upgrade_all`）注册了 `Execute` 并声明 `AllowRunNow` / `AllowRetry`：Panel 重启后遗留的 `queued` 升级任务可由 worker 恢复执行而不是死任务；升级与刷新共用 per-server 维护互斥，同一服务器同一时间只允许一种软件包维护动作，被互斥拒绝的任务会以明确的“维护中”错误进入失败态。
 

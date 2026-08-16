@@ -86,7 +86,7 @@
 ## 版本化迁移步骤
 
 - `orm.RunSteps(ctx, db, steps []Step)`：在指定库上按序执行给定 steps，`orm_migrations(id, applied_at)` 记录已执行，失败整体回滚；按库隔离时只传入该库的 steps。
-- `orm.RegisterSteps(Step{ID, Run})`：重复 ID 报错；`orm.MigrateSteps(ctx, db)` 委托 `RunSteps`，steps 为全局注册清单。
+- `orm.RunSteps(ctx, db, steps []Step)`：在指定库上按序执行给定 steps，`orm_migrations(id, applied_at)` 记录已执行，失败整体回滚；按库隔离时只传入该库的 steps。步骤在 `internal/platform/database/migrations.go` 中按库分组注册（`preAppMigrationSteps` 在 destructive schema sync 之前运行，用于搬移即将被删列的数据）。
 - 存量 `migrations.go` 中的一次性数据迁移已包装为 Step（保留原守卫条件，旧库首次升级执行一次且为 no-op），由 `Store.Migrate` 按库执行；DDL 由模型 + AutoMigrate 取代。
 
 ## 与 Store.Migrate 的分工

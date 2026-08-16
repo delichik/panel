@@ -15,8 +15,9 @@
   - not-found 错误的精确翻译（英文 fallback 以 " not found" 结尾时也有兜底翻译）；
   - `remote_timeout` 翻译；
   - agent / ssh 相关错误的前缀翻译。
-  - 现状：全部已知 panelerr 错误码均已覆盖。
+  - 现状：全部已知 panelerr 错误码均已覆盖。本轮补充 `storage_share_*` 系列错误码（配置校验、分区、挂载、Agent 要求等静态词条 + 带服务器/应用名的前缀词条）与 `range_invalid` 中文文案中的 `24h` 取值；SSH 主机密钥错误（`ssh_host_key_mismatch` / `ssh_host_key_verification_failed`）在执行器侧剥离 x/crypto 的 `ssh: handshake failed:` 包装后再翻译，前缀匹配可命中；已删除无发射点的 `application_reconcile_collector_only` 词条。
 - 任务错误：任务 error 在写入前对 panelerr 错误做 i18n 翻译，避免把当前语言下的文案固化进任务记录。
+- 前端摘要词典（`taskSummaryTranslations`）：新增 "Syncing storage share exports"、"Collecting initial server information"、"Refreshing volumes/networks"、"Volumes/Networks refreshed"、"Image updates refreshed"、"Syncing application <name>" 前缀与 "Running <type> batch" 前缀；删除已无发射点的 "Collecting scheduled metrics" / "Collecting metrics for " 词条。`translateEventSummary` 在事件词典未命中时回退到任务摘要词典，任务类事件摘要（续签证书、刷新软件包等）在 zh-CN 下不再显示英文。
 
 ## 已知剩余未翻译项
 

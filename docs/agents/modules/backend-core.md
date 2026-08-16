@@ -59,7 +59,7 @@
 - API method/path 清单由 `internal/bootstrap/panel/routes_manifest_test.go` 固化；有意调整 API 时必须同步确认前后端契约后更新清单，目录重构不得顺便改变清单。设施类型没有通用 list 路由；反向代理设施完整详情使用 `GET /api/v1/facility-apps/reverse-proxy`。
 - 存储共享设施 API 位于 `/api/v1/facility-apps/storage-share`（GET/PUT 配置、POST `/reconcile`、DELETE 卸载并返回卸载后配置、GET `/status` 汇总导出/挂载生效状态）与 `/partitions/{id}`（GET `/download` 打包下载、DELETE 删除记录+数据）；配置表 `storage_share_configs`（多存储服务器及各自根目录存于 `servers_json`，迁移回填旧 `server_ids_json`/`server_id`）、分区记录表 `storage_share_partitions`（含 `target`/`volume_name`）位于 AppDB。存储服务器的导出配置、打包下载、目录删除与生效状态检查通过 Agent RPC（`StorageConfigureExport`/`StorageArchiveDirectory`/`StorageDeleteDirectory`/`StorageStatus`/`StorageMountStatus`）执行，不使用 Panel 侧 SSH。
 - SSH 解密后的凭据传输模型定义在 `internal/platform/ssh`，服务器凭据模块通过类型别名实现该平台端口，避免 platform 反向依赖业务模块。
-- `internal/platform/ssh.SSHExecutor` 默认开启主机密钥 TOFU：首次连接把目标机公钥按 `host:port` 身份写入 known_hosts 格式文件，后续连接必须匹配，否则拒绝连接并返回 `ssh_host_key_mismatch`（BadGateway）。known_hosts 默认位于 `<dataRoot>/known_hosts`（`PANEL_DATA_ROOT` 未设置时回退 `data`），可用 `WithKnownHosts` 指定路径、`WithoutKnownHosts` 显式关闭；存储文件读写失败时按失败关闭连接，返回 `ssh_host_key_verification_failed`。
+- `internal/platform/ssh.SSHExecutor` 默认开启主机密钥 TOFU：首次连接把目标机公钥按 `host:port` 身份写入 known_hosts 格式文件，后续连接必须匹配，否则拒绝连接并返回 `ssh_host_key_mismatch`（BadGateway）。known_hosts 默认位于 `<dataRoot>/known_hosts`（`PANEL_DATA_ROOT` 未设置时回退 `data`），可用 `WithKnownHosts` 指定路径；存储文件读写失败时按失败关闭连接，返回 `ssh_host_key_verification_failed`。服务器记录的 `host_key_mismatch` 列由类型化错误码（`ssh_host_key_mismatch`）在写入时判定，读取端不再依赖错误消息文本子串（子串仅作为迁移前旧行回退）。
 
 ## 数据库约定
 
