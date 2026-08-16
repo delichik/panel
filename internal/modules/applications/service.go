@@ -453,8 +453,12 @@ func (s *Service) ListForReconcile(ctx context.Context) ([]Application, error) {
 	apps := make([]Application, 0, len(rows))
 	for _, m := range rows {
 		app := toDomainApplication(m)
-		if routes := routesByApp[app.ID]; len(routes) > 0 {
-			app.ReverseProxy = routes
+		if app.Kind != ApplicationKindFacility {
+			// 设施应用的 reverse_proxy_routes 行是设施域名路由（target_port 恒
+			// 为 0），不属于应用反向代理规则，协调巡检只读取状态字段。
+			if routes := routesByApp[app.ID]; len(routes) > 0 {
+				app.ReverseProxy = routes
+			}
 		}
 		apps = append(apps, app)
 	}
@@ -479,11 +483,17 @@ func (s *Service) getApplication(ctx context.Context, appID string) (Application
 		return Application{}, err
 	}
 	app := toDomainApplication(m)
-	routes, err := s.loadReverseProxyRoutes(ctx, appID)
-	if err != nil {
-		return Application{}, err
+	if app.Kind != ApplicationKindFacility {
+		// 设施应用（如 facility-reverse-proxy）的 reverse_proxy_routes 行是
+		// 设施域名路由，由设施模块管理（target_port 恒为 0，不使用应用目标
+		// 端口语义），不得作为应用反向代理规则加载，否则部署规划会在
+		// normalizeReverseProxyRules 处把它们当作非法端口拒绝。
+		routes, err := s.loadReverseProxyRoutes(ctx, appID)
+		if err != nil {
+			return Application{}, err
+		}
+		app.ReverseProxy = routes
 	}
-	app.ReverseProxy = routes
 	return app, nil
 }
 
