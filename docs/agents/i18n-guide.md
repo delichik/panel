@@ -49,6 +49,8 @@ import { useI18n } from '@/i18n';
 const { t } = useI18n();
 ```
 
+语言切换（`setLocale`）必须保持 `<html lang>` 属性与当前语言同步：`setLocale` 内部与 `web/index.html` 的首帧内联脚本都会写 `document.documentElement.lang`（值为 `en` 或 `zh-CN`），否则浏览器翻译提示、屏幕阅读器与搜索引擎会一直把页面当成默认语言（英文）处理。不要在业务代码里自行设置该属性，统一由 i18n 模块负责。
+
 需要格式化日期、时间、任务状态等时，优先使用 i18n 提供的辅助函数：
 
 - `formatDateTime`

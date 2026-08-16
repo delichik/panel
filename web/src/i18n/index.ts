@@ -2410,12 +2410,23 @@ Object.assign(messages['zh-CN'], {
 
 const state = reactive({ locale: (globalThis.localStorage?.getItem('panel.locale') as Locale) || 'en' });
 
+function applyDocumentLang(locale: Locale) {
+  // Keep <html lang> in sync with the active UI language. Browsers (Chrome
+  // translate prompt), screen readers and search engines read this attribute;
+  // without it the page keeps reporting the static index.html default (en)
+  // even after the user switches to Chinese.
+  if (typeof document !== 'undefined') document.documentElement.lang = locale;
+}
+
+applyDocumentLang(state.locale);
+
 export function useI18n() {
   const locale = computed(() => state.locale);
 
   function setLocale(next: Locale) {
     state.locale = next;
     globalThis.localStorage?.setItem('panel.locale', next);
+    applyDocumentLang(next);
   }
 
   function t(key: string, params?: Record<string, string | number>) {

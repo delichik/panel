@@ -19,6 +19,12 @@
           var dark = mode === 'dark' || (mode !== 'light' && !!media && media.matches);
           document.documentElement.dataset.theme = dark ? 'dark' : 'light';
           document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+          // Reflect the saved UI language on <html lang> before first paint so
+          // browsers never treat the page as English after a Chinese switch.
+          var locale = localStorage.getItem('panel.locale');
+          if (locale === 'zh-CN' || locale === 'en') {
+            document.documentElement.lang = locale;
+          }
         } catch (error) {
           // Ignore storage access errors; the CSS fallback below still applies.
         }
