@@ -131,6 +131,93 @@ func TestFacilityEditSessionApplyFailureRemainsCommitted(t *testing.T) {
 	}
 }
 
+// TestFacilityEditSessionReuploadedAssetResolvesReferences 复现用户流程：
+// 会话内删除静态资产 → 草稿重新引用该资产名 → 重新上传同名资产后校验必须通过，
+// 且删除后未恢复时的诊断必须携带 domain/path/assetName 细节。
+func TestFacilityEditSessionReuploadedAssetResolvesReferences(t *testing.T) {
+	svc, _, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	uploadAsset := func(sessionID, clientOperationID string, revision int) FacilityEditSession {
+		t.Helper()
+		session, err := svc.PutFacilityEditAsset(ctx, sessionID, "main", clientOperationID, FacilityEditAssetInput{
+			Revision: revision, ClientOperationID: clientOperationID, Name: "main", Kind: StaticSourceUploadedFile,
+			ContentMode: "text", FileName: "index.html", Content: []byte("hello"),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return session
+	}
+	withRoute := func(domains []FacilityRouteDomain, assetName string) []FacilityRouteDomain {
+		out := append([]FacilityRouteDomain(nil), domains...)
+		for i := range out {
+			if out[i].Domain == "static.example.test" {
+				out[i].Paths = []FacilityRoutePath{{Path: "/", RuleType: StaticRuleStatic, SourceType: StaticSourceUploadedFile, AssetName: assetName}}
+			}
+		}
+		return out
+	}
+	patch := func(session FacilityEditSession, domains []FacilityRouteDomain) FacilityEditSession {
+		t.Helper()
+		next, err := svc.PatchFacilityEditSession(ctx, session.ID, PatchFacilityEditSessionInput{Revision: session.Revision, BaseResourceVersion: session.BaseResourceVersion.Value, Draft: ReverseProxySaveInput{DeploymentServers: []string{"srv-a"}, Domains: domains}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return next
+	}
+
+	// 1. 提交带静态路由的设施配置。
+	if _, err := svc.UploadStaticAsset(ctx, StaticAssetUploadInput{Name: "main", Kind: StaticSourceUploadedFile, FileName: "index.html", Content: []byte("hello")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SaveReverseProxy(ctx, ReverseProxySaveInput{
+		DeploymentServers: []string{"srv-a"},
+		Domains:           []FacilityRouteDomain{{Domain: "static.example.test", OriginServerIDs: []string{"srv-a"}, Paths: []FacilityRoutePath{{Path: "/", RuleType: StaticRuleStatic, SourceType: StaticSourceUploadedFile, AssetName: "main"}}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// 2. 打开编辑会话（前端会带上当前配置作为草稿）。
+	cfg, err := svc.GetReverseProxy(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft := ReverseProxySaveInput{DeploymentServers: cfg.DeploymentServers, PanelEntry: cfg.PanelEntry, Domains: cfg.Domains}
+	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{Draft: &draft})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 3. 先从草稿移除引用该资产的路由，再删除资产。
+	emptyDomains := []FacilityRouteDomain{{Domain: "static.example.test", OriginServerIDs: []string{"srv-a"}, Paths: []FacilityRoutePath{}}}
+	session = patch(session, emptyDomains)
+	session, err = svc.DeleteFacilityEditAsset(ctx, session.ID, "main", "asset-delete", FacilityEditMutationInput{Revision: session.Revision, ClientOperationID: "asset-delete"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 4. 重新添加引用已删除资产的路由：校验必须失败且带细节。
+	session = patch(session, withRoute(emptyDomains, "main"))
+	validation, err := svc.ValidateFacilityEditSession(ctx, session.ID, session.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(validation.Diagnostics) != 1 || validation.Diagnostics[0].Code != "facility_static_asset_referenced_after_delete" {
+		t.Fatalf("diagnostics = %#v, want facility_static_asset_referenced_after_delete", validation.Diagnostics)
+	}
+	detail := validation.Diagnostics[0].Details
+	if detail["domain"] != "static.example.test" || detail["path"] != "/" || detail["assetName"] != "main" {
+		t.Fatalf("diagnostic details = %#v, want domain/path/assetName", detail)
+	}
+	// 5. 重新上传同名资产后，同一草稿必须通过校验。
+	session = uploadAsset(session.ID, "asset-put", session.Revision)
+	validation, err = svc.ValidateFacilityEditSession(ctx, session.ID, session.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(validation.Diagnostics) != 0 {
+		t.Fatalf("re-uploaded asset must resolve route references, diagnostics = %#v", validation.Diagnostics)
+	}
+}
+
 func TestFacilityEditSessionDeletedReferencedAssetIsBlocking(t *testing.T) {
 	svc, _, closeStore := newFacilityEditTestService(t)
 	defer closeStore()

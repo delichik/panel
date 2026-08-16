@@ -245,17 +245,11 @@ function serverDeployBlockReason(server: ServerDto) {
   if (!server.reachable) return t('resourcesPage.blockUnreachable');
   return t('resourcesPage.blockAgent');
 }
-const assetOptions = computed(() => {
-  const byName = new Map<string, { value: string; label: string }>();
-  for (const asset of facility.value?.staticAssets ?? []) {
-    byName.set(asset.name, { value: asset.name, label: `${asset.name} / ${asset.filename}` });
-  }
-  // 编辑会话中的同名资产是未提交的新版本，优先展示并去重
-  for (const asset of facilitySession.value?.assets ?? []) {
-    byName.set(asset.name, { value: asset.name, label: `${asset.name} / ${asset.filename}` });
-  }
-  return [...byName.values()];
-});
+// 编辑器资产选项只来自编辑会话：beginEdit 已把全部已提交资产复制进会话，
+// 会话内删除的资产会立即从选择器消失，避免把路由引用指向已删除资产
+// （此前混入 facility.staticAssets 会让被删资产仍可选，保存时触发
+// facility_static_asset_referenced_after_delete 且无法定位）。
+const assetOptions = computed(() => (facilitySession.value?.assets ?? []).map((asset) => ({ value: asset.name, label: `${asset.name} / ${asset.filename}` })));
 const fileLanguageOptions = computed(() => (['plain', 'yaml', 'json', 'shell', 'nginx', 'properties', 'dockerfile'] as TemplateLanguage[]).map((value) => ({
   value,
   label: t(`applicationsPage.templateLanguage.${value}`),
@@ -1469,6 +1463,22 @@ function instanceStatusLabel(status: string) {
   return label === key ? status : label;
 }
 
+// 诊断详情（domain/path/assetName 等）只放在 details 里，页面必须展示出来，
+// 否则像“仍有路由引用了已删除的静态资产”这类错误无法定位到具体域名与路径。
+function diagnosticDetailText(item: Diagnostic): string {
+  const details = item.details ?? {};
+  const parts: string[] = [];
+  const domain = typeof details.domain === 'string' ? details.domain : '';
+  const path = typeof details.path === 'string' ? details.path : '';
+  const assetName = typeof details.assetName === 'string' ? details.assetName : '';
+  const serverId = typeof details.serverId === 'string' ? details.serverId : '';
+  if (domain) parts.push(`${t('applicationsPage.domain')}: ${domain}`);
+  if (path) parts.push(`${t('common.path')}: ${path}`);
+  if (assetName) parts.push(`${t('applicationsPage.assetReferenceName')}: ${assetName}`);
+  if (serverId) parts.push(`${t('applicationsPage.server')}: ${serverId}`);
+  return parts.length ? ` — ${parts.join(' · ')}` : '';
+}
+
 function sourceSummary() {
   return appDraft.image || t('common.notAvailable');
 }
@@ -1889,7 +1899,7 @@ onBeforeUnmount(() => {
             <section class="rounded-2xl border border-border bg-card p-4">
               <h3>{{ t('applicationsPage.diagnostics') }}</h3>
               <div class="mt-3 grid gap-2">
-                <div v-for="item in facilityDiagnostics" :key="`${item.code}-${item.field}`" class="rounded-xl border p-3 text-sm" :class="item.severity === 'error' ? 'border-danger-border bg-danger-bg text-danger' : 'border-warning-border bg-warning-bg text-warning'">{{ item.field ? `${item.field}: ` : '' }}{{ item.message }}</div>
+                <div v-for="item in facilityDiagnostics" :key="`${item.code}-${item.field}`" class="rounded-xl border p-3 text-sm" :class="item.severity === 'error' ? 'border-danger-border bg-danger-bg text-danger' : 'border-warning-border bg-warning-bg text-warning'">{{ item.field ? `${item.field}: ` : '' }}{{ item.message }}{{ diagnosticDetailText(item) }}</div>
                 <p v-if="!facilityDiagnostics.length" class="m-0 text-sm text-muted-foreground">{{ t('applicationsPage.noDiagnostics') }}</p>
               </div>
             </section>
@@ -2078,7 +2088,7 @@ onBeforeUnmount(() => {
           <section class="rounded-2xl border border-border bg-card p-4">
             <h3>{{ t('applicationsPage.diagnostics') }}</h3>
             <div class="mt-3 grid gap-2">
-              <div v-for="item in diagnostics" :key="`${item.code}-${item.field}`" class="rounded-xl border p-3 text-sm" :class="item.severity === 'error' ? 'border-danger-border bg-danger-bg text-danger' : 'border-warning-border bg-warning-bg text-warning'">{{ item.field ? `${item.field}: ` : '' }}{{ item.message }}</div>
+              <div v-for="item in diagnostics" :key="`${item.code}-${item.field}`" class="rounded-xl border p-3 text-sm" :class="item.severity === 'error' ? 'border-danger-border bg-danger-bg text-danger' : 'border-warning-border bg-warning-bg text-warning'">{{ item.field ? `${item.field}: ` : '' }}{{ item.message }}{{ diagnosticDetailText(item) }}</div>
               <p v-if="!diagnostics.length" class="m-0 text-sm text-muted-foreground">{{ t('applicationsPage.noDiagnostics') }}</p>
             </div>
           </section>
