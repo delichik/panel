@@ -326,7 +326,7 @@ export function makeFacilityDomain(): FacilityRouteDomain {
 }
 
 export function makeFacilityPath(type: StaticRuleType = 'static'): FacilityRoutePath {
-  return { path: '', ruleType: type, sourceType: 'uploaded_file', rootPath: '', assetName: '', redirectUrl: '', redirectCode: 0, proxyUrl: '', proxySourceMode: '', options: defaultRouteOptions() };
+  return { path: '', ruleType: type, sourceType: 'uploaded_file', assetName: '', redirectUrl: '', redirectCode: 0, proxyUrl: '', proxySourceMode: '', options: defaultRouteOptions() };
 }
 
 export function cloneProxyRules(rules: ReverseProxyRule[]) {
@@ -342,7 +342,8 @@ export function cloneProxyRules(rules: ReverseProxyRule[]) {
 
 export function normalizeFacilityPath(path: FacilityRoutePath): FacilityRoutePath {
   // proxy_pass 是设施 Path 的一等规则类型（后端完整支持并渲染），必须原样保留；
-  // 只对遗留的 host_path 静态来源做兼容降级。
+  // 遗留 host_path 静态来源（该功能已整体移除）在加载时降级为 uploaded_file，
+  // 用户需重新选择静态文件。
   const ruleType: StaticRuleType = (path.ruleType as StaticRuleType) || 'static';
   const sourceType: StaticSourceType = path.sourceType === 'host_path' ? 'uploaded_file' : (path.sourceType as StaticSourceType) || 'uploaded_file';
   const normalized: FacilityRoutePath = {
@@ -352,7 +353,6 @@ export function normalizeFacilityPath(path: FacilityRoutePath): FacilityRoutePat
     sourceType,
     options: { ...defaultRouteOptions(), ...(path.options ?? {}) },
   };
-  normalized.rootPath = '';
   if (normalized.ruleType !== 'proxy_pass') {
     normalized.proxyUrl = '';
     normalized.proxySourceMode = '';

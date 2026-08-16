@@ -15,7 +15,29 @@ import (
 	"panel/internal/modules/servers"
 	"panel/internal/platform/config"
 	storage "panel/internal/platform/database"
+	panelerr "panel/internal/platform/errors"
 )
+
+// TestNormalizeInputRejectsHostPathSource 回归测试：host_path 静态站点来源已
+// 整体移除（前端不再提供、后端不再渲染），保存时必须被拒绝并返回
+// facility_static_site_source_invalid，而不是继续生成宿主机目录 bind mount。
+func TestNormalizeInputRejectsHostPathSource(t *testing.T) {
+	_, err := normalizeInput(ReverseProxySaveInput{
+		DeploymentServers: []string{"srv-a"},
+		Domains: []FacilityRouteDomain{{
+			Domain:          "static.example.test",
+			OriginServerIDs: []string{"srv-a"},
+			Paths:           []FacilityRoutePath{{Path: "/", RuleType: StaticRuleStatic, SourceType: "host_path"}},
+		}},
+	})
+	if err == nil {
+		t.Fatal("expected host_path source to be rejected")
+	}
+	var pe *panelerr.Error
+	if !errors.As(err, &pe) || pe.Code != "facility_static_site_source_invalid" {
+		t.Fatalf("error = %v, want facility_static_site_source_invalid", err)
+	}
+}
 
 func TestNormalizeInputUsesDomainOriginsAndAnyAccess(t *testing.T) {
 	cfg, err := normalizeInput(ReverseProxySaveInput{

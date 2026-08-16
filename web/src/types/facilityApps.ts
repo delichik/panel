@@ -1,6 +1,6 @@
 import type { AnyAccessConfig, ApplicationEditPreviewResult, ApplicationRuntime, Diagnostic, HttpRouteOptions, LifecycleOperation, PreviewToken, ResourceVersion } from './applications';
 
-export type StaticSourceType = 'host_path' | 'uploaded_file' | 'uploaded_bundle';
+export type StaticSourceType = 'uploaded_file' | 'uploaded_bundle';
 export type StaticRuleType = 'static' | 'redirect' | 'proxy_pass';
 export interface PanelEntry {
   enabled: boolean;
@@ -11,7 +11,6 @@ export interface PanelEntry {
 export interface FacilityRoutePath {
   path: string;
   ruleType?: StaticRuleType | string;
-  rootPath?: string;
   sourceType: StaticSourceType | string;
   assetName?: string;
   redirectUrl?: string;

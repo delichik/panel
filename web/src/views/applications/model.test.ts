@@ -194,7 +194,7 @@ describe('application editor model', () => {
     draft.panelEnabled = true;
     draft.panelServerId = 'srv-1';
     draft.panelDomain = 'panel.example.test';
-    draft.domains.push({ domain: 'static.example.test', originServerIds: ['srv-1'], anyAccess: { enabled: false }, paths: [{ path: '/', ruleType: 'static', sourceType: 'host_path', rootPath: '/srv/www' }] });
+    draft.domains.push({ domain: 'static.example.test', originServerIds: ['srv-1'], anyAccess: { enabled: false }, paths: [{ path: '/', ruleType: 'static', sourceType: 'uploaded_file', assetName: 'index.html' }] });
 
     expect(validateFacilityDraft(draft)).toEqual({});
     expect(facilitySaveInputFromDraft(draft).panelEntry.domain).toBe('panel.example.test');
@@ -254,41 +254,41 @@ describe('application editor model', () => {
 });
 describe('facility path dialog validation', () => {
   it('accepts a clean redirect target', () => {
-    const errors = validateFacilityPathFields({ path: '/go', ruleType: 'redirect', sourceType: 'host_path', redirectUrl: 'https://example.com/target?q=1&r=2' });
+    const errors = validateFacilityPathFields({ path: '/go', ruleType: 'redirect', sourceType: 'uploaded_file', redirectUrl: 'https://example.com/target?q=1&r=2' });
     expect(errors).toEqual({});
   });
 
   it('rejects an empty redirect target', () => {
-    const errors = validateFacilityPathFields({ path: '/go', ruleType: 'redirect', sourceType: 'host_path', redirectUrl: '' });
+    const errors = validateFacilityPathFields({ path: '/go', ruleType: 'redirect', sourceType: 'uploaded_file', redirectUrl: '' });
     expect(errors.redirectUrl).toBe('applicationsPage.validationRedirectUrl');
   });
 
   it('rejects a redirect target with spaces or special characters', () => {
-    const spaced = validateFacilityPathFields({ path: '/go', ruleType: 'redirect', sourceType: 'host_path', redirectUrl: 'https://example.com/a b' });
+    const spaced = validateFacilityPathFields({ path: '/go', ruleType: 'redirect', sourceType: 'uploaded_file', redirectUrl: 'https://example.com/a b' });
     expect(spaced.redirectUrl).toBe('applicationsPage.validationRedirectUrl');
-    const semi = validateFacilityPathFields({ path: '/go', ruleType: 'redirect', sourceType: 'host_path', redirectUrl: 'https://example.com/a;b' });
+    const semi = validateFacilityPathFields({ path: '/go', ruleType: 'redirect', sourceType: 'uploaded_file', redirectUrl: 'https://example.com/a;b' });
     expect(semi.redirectUrl).toBe('applicationsPage.validationRedirectUrl');
-    const fragment = validateFacilityPathFields({ path: '/go', ruleType: 'redirect', sourceType: 'host_path', redirectUrl: 'https://example.com/a#b' });
+    const fragment = validateFacilityPathFields({ path: '/go', ruleType: 'redirect', sourceType: 'uploaded_file', redirectUrl: 'https://example.com/a#b' });
     expect(fragment.redirectUrl).toBe('applicationsPage.validationRedirectUrl');
   });
 
   it('rejects a proxy target without http(s) scheme', () => {
-    const errors = validateFacilityPathFields({ path: '/p', ruleType: 'proxy_pass', sourceType: 'host_path', proxyUrl: '127.0.0.1:9000' });
+    const errors = validateFacilityPathFields({ path: '/p', ruleType: 'proxy_pass', sourceType: 'uploaded_file', proxyUrl: '127.0.0.1:9000' });
     expect(errors.proxyUrl).toBe('applicationsPage.validationProxyUrl');
   });
 
   it('accepts an http proxy target', () => {
-    const errors = validateFacilityPathFields({ path: '/p', ruleType: 'proxy_pass', sourceType: 'host_path', proxyUrl: 'http://127.0.0.1:9000' });
+    const errors = validateFacilityPathFields({ path: '/p', ruleType: 'proxy_pass', sourceType: 'uploaded_file', proxyUrl: 'http://127.0.0.1:9000' });
     expect(errors).toEqual({});
   });
 
   it('rejects a path that does not start with a slash', () => {
-    const errors = validateFacilityPathFields({ path: 'go', ruleType: 'static', sourceType: 'host_path', rootPath: '/srv/www' });
+    const errors = validateFacilityPathFields({ path: 'go', ruleType: 'static', sourceType: 'uploaded_file', assetName: 'index.html' });
     expect(errors.path).toBe('applicationsPage.validationPath');
   });
 
   it('rejects an empty path', () => {
-    const errors = validateFacilityPathFields({ path: '', ruleType: 'static', sourceType: 'host_path', rootPath: '/srv/www' });
+    const errors = validateFacilityPathFields({ path: '', ruleType: 'static', sourceType: 'uploaded_file', assetName: 'index.html' });
     expect(errors.path).toBe('applicationsPage.validationPath');
   });
 
@@ -305,15 +305,15 @@ describe('facility path dialog validation', () => {
       anyAccess: { enabled: false },
       paths: [
         { path: '/api', ruleType: 'proxy_pass', sourceType: 'uploaded_file', proxyUrl: 'http://127.0.0.1:8080', proxySourceMode: 'preserve_source' },
-        { path: '/static', ruleType: 'static', sourceType: 'host_path', rootPath: '/srv/www' },
+        { path: '/static', ruleType: 'static', sourceType: 'host_path' },
       ],
     }])[0];
 
     expect(domain.paths[0].ruleType).toBe('proxy_pass');
     expect(domain.paths[0].proxyUrl).toBe('http://127.0.0.1:8080');
     expect(domain.paths[0].proxySourceMode).toBe('preserve_source');
+    // 遗留 host_path 来源（该功能已整体移除）降级为 uploaded_file，需重新选择静态文件。
     expect(domain.paths[1].sourceType).toBe('uploaded_file');
-    expect(domain.paths[1].rootPath).toBe('');
   });
 
   it('keeps proxy_pass paths intact through cloneFacilityPath', () => {
@@ -333,7 +333,7 @@ describe('facility path dialog validation', () => {
   });
 });
 describe('facility domain dialog validation', () => {
-  const baseDomain = { domain: 'a.example.test', originServerIds: ['srv-1'], anyAccess: { enabled: false, strategy: 'round_robin' }, paths: [{ path: '/', ruleType: 'static', sourceType: 'host_path' }] };
+  const baseDomain = { domain: 'a.example.test', originServerIds: ['srv-1'], anyAccess: { enabled: false, strategy: 'round_robin' }, paths: [{ path: '/', ruleType: 'static', sourceType: 'uploaded_file', assetName: 'index.html' }] };
 
   it('accepts a clean domain with origin servers', () => {
     const errors = validateFacilityDomainFields(baseDomain, [baseDomain], 0);

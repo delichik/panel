@@ -1476,16 +1476,14 @@ function sourceSummary() {
 function pathTarget(path: FacilityRoutePath) {
   if (path.ruleType === 'redirect') return path.redirectUrl || t('common.notAvailable');
   if (path.ruleType === 'proxy_pass') return path.proxyUrl || t('common.notAvailable');
-  return path.sourceType === 'host_path' ? path.rootPath : path.assetName;
+  return path.assetName;
 }
 
 function facilityPathTargetLabel(path: FacilityRoutePath) {
   if (path.ruleType === 'static') {
-    const source = path.sourceType === 'host_path'
-      ? t('applicationsPage.sourceType.host_path')
-      : path.sourceType === 'uploaded_file'
-        ? t('applicationsPage.sourceType.uploaded_file')
-        : t('applicationsPage.sourceType.uploaded_bundle');
+    const source = path.sourceType === 'uploaded_file'
+      ? t('applicationsPage.sourceType.uploaded_file')
+      : t('applicationsPage.sourceType.uploaded_bundle');
     return `${source}: ${pathTarget(path) || t('common.notAvailable')}`;
   }
   return pathTarget(path) || t('common.notAvailable');

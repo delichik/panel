@@ -21,7 +21,6 @@ const (
 	proxyStaticMountRoot = "/srv/panel-static"
 	proxyTLSMountRoot    = "/etc/panel-certs"
 
-	StaticSourceHostPath       = "host_path"
 	StaticSourceUploadedFile   = "uploaded_file"
 	StaticSourceUploadedBundle = "uploaded_bundle"
 
@@ -92,7 +91,6 @@ type FacilityRouteDomain struct {
 type FacilityRoutePath struct {
 	Path            string                        `json:"path"`
 	RuleType        string                        `json:"ruleType,omitempty"`
-	RootPath        string                        `json:"rootPath,omitempty"`
 	SourceType      string                        `json:"sourceType"`
 	AssetName       string                        `json:"assetName,omitempty"`
 	AssetID         string                        `json:"-"`

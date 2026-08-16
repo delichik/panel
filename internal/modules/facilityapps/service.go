@@ -942,13 +942,6 @@ func hostForDomain(hosts map[string]*proxyHost, domain string) *proxyHost {
 func (s *Service) staticSiteMount(ctx context.Context, site FacilityRoutePath, mountTarget string, mounts *[]appruntime.Mount, files *[]appruntime.ManagedFile) (*staticMountAsset, error) {
 	sourceType := normalizedStaticSourceType(site.SourceType)
 	switch sourceType {
-	case StaticSourceHostPath:
-		root := strings.TrimSpace(site.RootPath)
-		if root == "" {
-			return nil, nil
-		}
-		*mounts = append(*mounts, appruntime.Mount{Type: "bind", Source: root, Target: mountTarget, ReadOnly: true})
-		return &staticMountAsset{Kind: StaticSourceUploadedBundle}, nil
 	case StaticSourceUploadedFile, StaticSourceUploadedBundle:
 		assetName := strings.TrimSpace(site.AssetName)
 		if assetName == "" {
@@ -1619,7 +1612,6 @@ func normalizeInput(in ReverseProxySaveInput) (ReverseProxyConfig, error) {
 func normalizeFacilityRoutePath(site FacilityRoutePath) (FacilityRoutePath, error) {
 	ruleType := normalizedStaticRuleType(site.RuleType)
 	sourceType := normalizedStaticSourceType(site.SourceType)
-	root := strings.TrimSpace(site.RootPath)
 	assetName := strings.TrimSpace(site.AssetName)
 	if assetName == "" {
 		assetName = strings.TrimSpace(site.AssetID)
@@ -1631,16 +1623,10 @@ func normalizeFacilityRoutePath(site FacilityRoutePath) (FacilityRoutePath, erro
 	switch ruleType {
 	case StaticRuleStatic:
 		switch sourceType {
-		case StaticSourceHostPath:
-			if root == "" || strings.Contains(root, "\x00") {
-				return FacilityRoutePath{}, panelerr.Validation("facility_static_site_root_invalid", "Static content root path is invalid")
-			}
-			assetName = ""
 		case StaticSourceUploadedFile, StaticSourceUploadedBundle:
 			if assetName == "" || strings.ContainsAny(assetName, `/\`) {
 				return FacilityRoutePath{}, panelerr.Validation("facility_static_site_asset_required", "Static content asset is required")
 			}
-			root = ""
 		default:
 			return FacilityRoutePath{}, panelerr.Validation("facility_static_site_source_invalid", "Static content source is invalid")
 		}
@@ -1649,7 +1635,7 @@ func normalizeFacilityRoutePath(site FacilityRoutePath) (FacilityRoutePath, erro
 		if !validNginxValue(redirectURL) {
 			return FacilityRoutePath{}, panelerr.Validation("facility_static_site_redirect_invalid", "Redirect target is invalid")
 		}
-		root, assetName, proxyURL, proxySourceMode = "", "", "", ""
+		assetName, proxyURL, proxySourceMode = "", "", ""
 	case StaticRuleProxyPass:
 		if !validNginxValue(proxyURL) || !validProxyURL(proxyURL) {
 			return FacilityRoutePath{}, panelerr.Validation("facility_static_site_proxy_invalid", "Manual proxy target is invalid")
@@ -1657,7 +1643,7 @@ func normalizeFacilityRoutePath(site FacilityRoutePath) (FacilityRoutePath, erro
 		if proxySourceMode != ProxySourcePreserve && proxySourceMode != ProxySourceHide {
 			return FacilityRoutePath{}, panelerr.Validation("facility_static_site_proxy_mode_invalid", "Proxy request information mode is invalid")
 		}
-		root, assetName, redirectURL, redirectCode = "", "", "", 0
+		assetName, redirectURL, redirectCode = "", "", 0
 	default:
 		return FacilityRoutePath{}, panelerr.Validation("facility_static_site_rule_invalid", "Reverse proxy route type is invalid")
 	}
@@ -1678,7 +1664,7 @@ func normalizeFacilityRoutePath(site FacilityRoutePath) (FacilityRoutePath, erro
 	if err != nil {
 		return FacilityRoutePath{}, err
 	}
-	return FacilityRoutePath{Path: pathValue, RuleType: ruleType, RootPath: root, SourceType: sourceType, AssetName: assetName, RedirectURL: redirectURL, RedirectCode: redirectCode, ProxyURL: proxyURL, ProxySourceMode: proxySourceMode, Options: options}, nil
+	return FacilityRoutePath{Path: pathValue, RuleType: ruleType, SourceType: sourceType, AssetName: assetName, RedirectURL: redirectURL, RedirectCode: redirectCode, ProxyURL: proxyURL, ProxySourceMode: proxySourceMode, Options: options}, nil
 }
 
 func (s *Service) buildProxyRelay(ctx context.Context, domain string, originServerIDs []string, anyAccess applications.AnyAccessConfig) (*proxyRelay, error) {
@@ -1798,7 +1784,7 @@ func normalizedStaticRuleType(value string) string {
 func normalizedStaticSourceType(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return StaticSourceHostPath
+		return StaticSourceUploadedFile
 	}
 	return value
 }
