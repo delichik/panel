@@ -638,7 +638,9 @@ func (s *Service) validateFacilityEditDraft(ctx context.Context, record facility
 	assetDiagnostics := []applications.Diagnostic{}
 	for _, domain := range normalized.Domains {
 		for _, route := range domain.Paths {
-			if route.SourceType != StaticSourceUploadedFile && route.SourceType != StaticSourceUploadedBundle {
+			// 只有静态规则才引用静态资产；redirect/proxy_pass 路由（即使
+			// sourceType 被前端默认值带成 uploaded_file）不得参与资产校验。
+			if route.RuleType != StaticRuleStatic || (route.SourceType != StaticSourceUploadedFile && route.SourceType != StaticSourceUploadedBundle) {
 				continue
 			}
 			asset, ok := assets[route.AssetName]

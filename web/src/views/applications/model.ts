@@ -326,7 +326,9 @@ export function makeFacilityDomain(): FacilityRouteDomain {
 }
 
 export function makeFacilityPath(type: StaticRuleType = 'static'): FacilityRoutePath {
-  return { path: '', ruleType: type, sourceType: 'uploaded_file', assetName: '', redirectUrl: '', redirectCode: 0, proxyUrl: '', proxySourceMode: '', options: defaultRouteOptions() };
+  // sourceType 只对静态规则有意义；redirect/proxy_pass 不带默认值，避免
+  // 后端资产引用校验把非静态路由误判为引用了已删除资产。
+  return { path: '', ruleType: type, sourceType: type === 'static' ? 'uploaded_file' : '', assetName: '', redirectUrl: '', redirectCode: 0, proxyUrl: '', proxySourceMode: '', options: defaultRouteOptions() };
 }
 
 export function cloneProxyRules(rules: ReverseProxyRule[]) {
@@ -362,6 +364,7 @@ export function normalizeFacilityPath(path: FacilityRoutePath): FacilityRoutePat
     normalized.redirectCode = 0;
   }
   if (normalized.ruleType !== 'static') {
+    normalized.sourceType = '';
     normalized.assetName = '';
   }
   return normalized;

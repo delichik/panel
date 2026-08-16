@@ -148,15 +148,6 @@ func TestFacilityEditSessionReuploadedAssetResolvesReferences(t *testing.T) {
 		}
 		return session
 	}
-	withRoute := func(domains []FacilityRouteDomain, assetName string) []FacilityRouteDomain {
-		out := append([]FacilityRouteDomain(nil), domains...)
-		for i := range out {
-			if out[i].Domain == "static.example.test" {
-				out[i].Paths = []FacilityRoutePath{{Path: "/", RuleType: StaticRuleStatic, SourceType: StaticSourceUploadedFile, AssetName: assetName}}
-			}
-		}
-		return out
-	}
 	patch := func(session FacilityEditSession, domains []FacilityRouteDomain) FacilityEditSession {
 		t.Helper()
 		next, err := svc.PatchFacilityEditSession(ctx, session.ID, PatchFacilityEditSessionInput{Revision: session.Revision, BaseResourceVersion: session.BaseResourceVersion.Value, Draft: ReverseProxySaveInput{DeploymentServers: []string{"srv-a"}, Domains: domains}})
@@ -193,14 +184,23 @@ func TestFacilityEditSessionReuploadedAssetResolvesReferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 4. 重新添加引用已删除资产的路由：校验必须失败且带细节。
-	session = patch(session, withRoute(emptyDomains, "main"))
+	// 4. 重新添加引用已删除资产的路由：校验必须失败且带细节；同一域名下的
+	// redirect / proxy_pass 路由即使 sourceType 被前端默认值带成 uploaded_file，
+	// 也绝不能触发资产引用诊断。
+	session = patch(session, []FacilityRouteDomain{{
+		Domain: "static.example.test", OriginServerIDs: []string{"srv-a"},
+		Paths: []FacilityRoutePath{
+			{Path: "/", RuleType: StaticRuleStatic, SourceType: StaticSourceUploadedFile, AssetName: "main"},
+			{Path: "/go", RuleType: StaticRuleRedirect, SourceType: StaticSourceUploadedFile, RedirectURL: "https://target.example.test", RedirectCode: 302},
+			{Path: "/api", RuleType: StaticRuleProxyPass, SourceType: StaticSourceUploadedFile, ProxyURL: "http://127.0.0.1:8080", ProxySourceMode: ProxySourcePreserve},
+		},
+	}})
 	validation, err := svc.ValidateFacilityEditSession(ctx, session.ID, session.Revision)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(validation.Diagnostics) != 1 || validation.Diagnostics[0].Code != "facility_static_asset_referenced_after_delete" {
-		t.Fatalf("diagnostics = %#v, want facility_static_asset_referenced_after_delete", validation.Diagnostics)
+		t.Fatalf("diagnostics = %#v, want only facility_static_asset_referenced_after_delete for the static route", validation.Diagnostics)
 	}
 	detail := validation.Diagnostics[0].Details
 	if detail["domain"] != "static.example.test" || detail["path"] != "/" || detail["assetName"] != "main" {

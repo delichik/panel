@@ -1638,7 +1638,7 @@ func normalizeFacilityRoutePath(site FacilityRoutePath) (FacilityRoutePath, erro
 		if !validNginxValue(redirectURL) {
 			return FacilityRoutePath{}, panelerr.Validation("facility_static_site_redirect_invalid", "Redirect target is invalid")
 		}
-		assetName, proxyURL, proxySourceMode = "", "", ""
+		sourceType, assetName, proxyURL, proxySourceMode = "", "", "", ""
 	case StaticRuleProxyPass:
 		if !validNginxValue(proxyURL) || !validProxyURL(proxyURL) {
 			return FacilityRoutePath{}, panelerr.Validation("facility_static_site_proxy_invalid", "Manual proxy target is invalid")
@@ -1646,7 +1646,7 @@ func normalizeFacilityRoutePath(site FacilityRoutePath) (FacilityRoutePath, erro
 		if proxySourceMode != ProxySourcePreserve && proxySourceMode != ProxySourceHide {
 			return FacilityRoutePath{}, panelerr.Validation("facility_static_site_proxy_mode_invalid", "Proxy request information mode is invalid")
 		}
-		assetName, redirectURL, redirectCode = "", "", 0
+		sourceType, assetName, redirectURL, redirectCode = "", "", "", 0
 	default:
 		return FacilityRoutePath{}, panelerr.Validation("facility_static_site_rule_invalid", "Reverse proxy route type is invalid")
 	}
