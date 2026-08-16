@@ -502,6 +502,9 @@ func (s *Service) ReconcileReverseProxyNow(ctx context.Context) (ReconcileResult
 		_ = s.setLastError(ctx, err.Error())
 		return ReconcileResult{}, err
 	}
+	// 触发（含同步规划）成功即清空持久化的 last_error：此前只有“保存设施”
+	// 会清掉旧失败信息，手动协调成功后旧横幅会一直留在详情页。
+	_ = s.setLastError(ctx, "")
 	cfg, err := s.GetReverseProxy(ctx)
 	if err != nil {
 		return ReconcileResult{}, err

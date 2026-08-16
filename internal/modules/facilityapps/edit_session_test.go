@@ -131,8 +131,7 @@ func TestFacilityEditSessionApplyFailureRemainsCommitted(t *testing.T) {
 	}
 }
 
-// TestFacilityEditSessionReuploadedAssetResolvesReferences 复现用户流程：
-// 会话内删除静态资产 → 草稿重新引用该资产名 → 重新上传同名资产后校验必须通过，
+// TestFacilityEditSessionReuploadedAssetResolvesReferences 复现用户流程：// 会话内删除静态资产 → 草稿重新引用该资产名 → 重新上传同名资产后校验必须通过，
 // 且删除后未恢复时的诊断必须携带 domain/path/assetName 细节。
 func TestFacilityEditSessionReuploadedAssetResolvesReferences(t *testing.T) {
 	svc, _, closeStore := newFacilityEditTestService(t)
@@ -989,5 +988,38 @@ func assertFacilityPanelError(t *testing.T, err error, code string) {
 	var target *panelerr.Error
 	if !errors.As(err, &target) || target.Code != code {
 		t.Fatalf("error=%v want=%s", err, code)
+	}
+}
+
+type fakeFacilityReconcileTrigger struct{}
+
+func (fakeFacilityReconcileTrigger) TriggerApplicationReconcile(context.Context, tasks.PeriodicTrigger) (tasks.Task, bool, error) {
+	return tasks.Task{}, false, nil
+}
+
+// TestReconcileReverseProxyNowClearsStaleLastError 回归测试：手动协调成功后必须
+// 清空持久化的 last_error，否则旧的失败横幅（如端口校验错误）会一直留在设施
+// 详情页，即使根因已修复。
+func TestReconcileReverseProxyNowClearsStaleLastError(t *testing.T) {
+	svc, _, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	// 先保存一次配置建立 facility_app_configs 行；无协调器时保存成功但
+	// last_error 会被触发错误填充。
+	if _, err := svc.SaveReverseProxy(ctx, ReverseProxySaveInput{DeploymentServers: []string{"srv-a"}}); err != nil {
+		t.Fatal(err)
+	}
+	// 预置一条旧失败信息（模拟端口校验错误横幅）。
+	if err := svc.setLastError(ctx, "reverse proxy target port must be between 1 and 65535"); err != nil {
+		t.Fatal(err)
+	}
+	// 注入协调器后手动协调成功，旧 last_error 必须被清空。
+	svc.reconciler = fakeFacilityReconcileTrigger{}
+	result, err := svc.ReconcileReverseProxyNow(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Config.LastError != "" {
+		t.Fatalf("lastError = %q, want cleared after successful reconcile", result.Config.LastError)
 	}
 }
