@@ -54,6 +54,7 @@
 - 新增或替换跨页面同类交互时，优先复用 `web/src/components/ui/` 的 SearchInput、PaginationBar、ConfirmDialog、FileUploadButton、DownloadButton、StatusBadge，以及 `web/src/components/patterns/` 的 ServerContextSelector、ServerMultiPicker、AutoRefreshControl、AssetFileManager；适用边界见 `docs/agents/specifications/frontend/interaction-patterns.md`。
 - `web/src/views/applications/index.vue`、`web/src/views/tasks/index.vue`、`web/src/views/security/index.vue` 与 `web/src/views/resources/index.vue` 已开始接入统一 patterns：搜索使用 `SearchInput`，任务分页使用 `PaginationBar`，任务/应用状态使用 `StatusBadge`，应用/设施服务器多选使用 `ServerMultiPicker`，安全/资源服务器上下文使用单一 `ServerContextSelector`，持久化与文件内容操作使用 `DownloadButton` / `FileUploadButton`。应用和设施编辑器采用同一连续纵向瀑布流：所有配置区在一个编辑正文中按业务顺序展开，正文独立滚动，右侧保留摘要；不得恢复分区切换、分页卡片或隐藏其他配置区的交互。后续页面修改不得在 `ServerContextSelector` 上方叠加服务器 Select 下拉。
 - 图标统一使用 `@lucide/vue`。
+- 构建链路：路由组件全部懒加载（`component: () => import(...)`），每个页面族独立 chunk，初始包只含 AppShell 外壳与共享依赖；`web/vite.config.ts` 通过 `build.rollupOptions.output.manualChunks` 固定拆分 `vue-vendor`（vue/vue-router/pinia）、`code-editor`（@codemirror/*）、`echarts`、`yaml` 等大依赖块，保持各 chunk 低于 500 kB 警告阈值。新增页面族路由必须继续使用懒加载，不得恢复静态组件导入。
 - 主题支持 `system` / `light` / `dark` 明暗模式，以及 `lighthouse`（灯塔，默认）/ `ocean`（蔚蓝）两套配色方案，分别通过 `data-theme` / `data-scheme` 和 CSS 变量运行；配色偏好保存在 localStorage `panel.theme.scheme`。
 - 首次加载的启动遮罩（web/index.html 内联 boot-screen）在首帧渲染前按 panel.theme.mode、panel.theme.scheme 与 prefers-color-scheme 应用主题与配色，避免深色模式先闪白屏；内联色值与各方案 --panel-bg / --panel-border-strong / --panel-primary 保持一致。
 - 中大屏 AppShell 必须填满视口并禁止页面级滚动；滚动限制在模板正文、表格、详情、日志或编辑正文内部。
