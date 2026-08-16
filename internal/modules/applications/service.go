@@ -2683,6 +2683,13 @@ func (s *Service) updateLifecycleTarget(ctx context.Context, targetID string, in
 	if in.State != "" {
 		updates = append(updates, "state=?", "status=?")
 		args = append(args, in.State, lifecycleStatusForState(in.State))
+		if in.State == LifecycleTargetStateVerifying {
+			// 进入验证阶段意味着变更（apply/stop/purge）已经完成，变更租约
+			// 必须立即释放：claimVerifyTarget 只有在租约已释放/过期时才能
+			// 接管目标，否则验证会一直等到变更租约（3 分钟）自然过期，
+			// 每次成功部署都被迫白等约 3 分钟。
+			updates = append(updates, "lease_owner=''", "lease_expires_at=''")
+		}
 	}
 	if in.Stage != "" {
 		updates = append(updates, "stage=?")
@@ -2872,6 +2879,13 @@ func (s *Service) afterLifecycleTargetVerified(ctx context.Context, target Lifec
 		}
 	}
 	if target.Action == LifecycleTargetActionApply || target.Action == LifecycleTargetActionStop || target.Action == LifecycleTargetActionPurge {
+		// 入口代理自身的同步完成后不再触发一次自己：该钩子的目的是让代理
+		// 立刻拿到其他应用刚变更的路由；代理自己的目标刚验证成功，写入的
+		// 就是最新期望配置，再触发只会形成"完成→再同步→完成"的自循环
+		// （修复前每个周期还被验证等待拖到约 3 分钟）。
+		if target.ApplicationID == FacilityProxyApplicationID {
+			return nil
+		}
 		return s.reconcileReverseProxy(ctx)
 	}
 	return nil

@@ -548,3 +548,66 @@ func TestFailStaleTargetTaskAnchorsCancelsObsoleteAnchors(t *testing.T) {
 		t.Fatalf("live anchor should stay queued, got %#v", gotLive)
 	}
 }
+
+// TestDeploymentDispatcherVerifyDoesNotWaitForMutationLease 回归测试：
+// apply 完成转入 verifying 时必须立即释放变更租约，验证无需等租约（3 分钟）
+// 自然过期；否则每次部署都会被拖慢约 3 分钟，入口代理还会因此形成
+// "同步→等待→完成→再同步"的自循环。
+func TestDeploymentDispatcherVerifyDoesNotWaitForMutationLease(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	app := enabledTestApplication(t, svc, "web", "name: web\nimage: nginx\n")
+
+	plan, err := svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{ApplicationID: app.ID, ServerIDs: []string{"srv-a"}, Force: true, TriggerType: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.CreatedTargets) != 1 {
+		t.Fatalf("expected one apply target, got %#v", plan)
+	}
+	targetID := plan.CreatedTargets[0].ID
+	dispatcher := NewDeploymentDispatcher(svc, WithDeploymentDispatcherQueueSize(8)).(*deploymentDispatcher)
+	// 接入真实调度器：apply 完成后的验证走 EnqueueVerify/claimVerifyTarget 路径。
+	svc.deployment = dispatcher
+	if err := dispatcher.processExecuteTarget(ctx, targetID); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		target, err := svc.lifecycleTargetByID(ctx, targetID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if target.State == LifecycleTargetStateVerifying {
+			if target.LeaseOwner != "" || target.LeaseExpiresAt != nil {
+				t.Fatalf("verifying target must have released the mutation lease, got %#v", target)
+			}
+			// 验证应立即可认领：修复前要等 3 分钟租约过期。
+			ok, err := dispatcher.claimVerifyTarget(ctx, targetID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !ok {
+				t.Fatalf("verify must be claimable right after apply completes, target=%#v", target)
+			}
+			if err := dispatcher.processVerifyTarget(ctx, targetID); err != nil {
+				t.Fatal(err)
+			}
+			succeeded, err := svc.lifecycleTargetByID(ctx, targetID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if succeeded.State != LifecycleTargetStateSucceeded {
+				t.Fatalf("expected verify to succeed target, got %#v", succeeded)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	target, err := svc.lifecycleTargetByID(ctx, targetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Fatalf("apply task did not reach verifying state, target=%#v", target)
+}

@@ -32,6 +32,12 @@ const (
 
 	ReconcileStopAfterFailures = 10
 
+	// FacilityProxyApplicationID 是入口代理设施应用 ID，镜像
+	// facilityapps.proxyApplicationID。applications 包不能反向依赖
+	// facilityapps，这里仅用于判断"刚验证成功的目标是否属于入口代理自身"，
+	// 避免代理自己同步完成后再次触发自己。
+	FacilityProxyApplicationID = "facility-reverse-proxy"
+
 	ApplicationFileKindBinary   = "binary"
 	ApplicationFileKindTemplate = "template"
 	ApplicationFileKindArchive  = "archive"

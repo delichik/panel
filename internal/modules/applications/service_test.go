@@ -2431,3 +2431,43 @@ func TestStopDoesNotOverwriteConcurrentDerivedFields(t *testing.T) {
 		t.Fatalf("app should be disabled")
 	}
 }
+
+type countingReverseProxyReconciler struct {
+	calls int
+	err   error
+}
+
+func (c *countingReverseProxyReconciler) ReconcileReverseProxy(context.Context) error {
+	c.calls++
+	return c.err
+}
+
+// TestAfterLifecycleTargetVerifiedSkipsFacilityProxySelfRetrigger 回归测试：
+// 入口代理设施自身的目标验证成功后不得再次触发代理同步，否则会形成
+// "同步完成→立即再同步"的自循环（配合验证等待时周期为约 3 分钟）。
+func TestAfterLifecycleTargetVerifiedSkipsFacilityProxySelfRetrigger(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconciler := &countingReverseProxyReconciler{}
+	svc.SetReverseProxyReconciler(reconciler)
+
+	if err := svc.afterLifecycleTargetVerified(ctx, LifecycleTarget{ApplicationID: FacilityProxyApplicationID, Action: LifecycleTargetActionApply}); err != nil {
+		t.Fatal(err)
+	}
+	if reconciler.calls != 0 {
+		t.Fatalf("facility proxy own target must not re-trigger proxy reconcile, got %d calls", reconciler.calls)
+	}
+
+	if err := svc.afterLifecycleTargetVerified(ctx, LifecycleTarget{ApplicationID: app.ID, Action: LifecycleTargetActionApply}); err != nil {
+		t.Fatal(err)
+	}
+	if reconciler.calls != 1 {
+		t.Fatalf("user application target must trigger proxy reconcile, got %d calls", reconciler.calls)
+	}
+}
