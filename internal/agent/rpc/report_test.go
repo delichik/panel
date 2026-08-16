@@ -69,6 +69,31 @@ func TestReportIntervalDueUsesUnixBoundary(t *testing.T) {
 	}
 }
 
+func TestMetricCacheSnapshotRejectsStaleMetrics(t *testing.T) {
+	c := &metricCache{}
+	c.setCPU(12)
+	c.setMemory(2048, 1024)
+	c.setDisk(8192, 4096)
+	c.setNetwork(1.5, 0.5)
+	c.setStatus(linux.SystemStatus{})
+	if _, ok := c.snapshot(); !ok {
+		t.Fatal("expected a fresh cache to snapshot ok")
+	}
+	// 某个指标持续采样失败超过新鲜度窗口后，快照必须被拒绝，
+	// 否则冻结的旧值会随整点时间前进伪装成新样本。
+	now := time.Now().UTC()
+	c.mu.Lock()
+	c.cpuUpdatedAt = now.Add(-metricFreshnessWindow - time.Second)
+	c.mu.Unlock()
+	if _, ok := c.snapshotAt(now); ok {
+		t.Fatal("expected a cache with a stale metric to be rejected")
+	}
+	c.setCPU(13)
+	if _, ok := c.snapshot(); !ok {
+		t.Fatal("expected the cache to recover after a fresh sample")
+	}
+}
+
 type okReportCollector struct{}
 
 func (okReportCollector) CPUUsage(context.Context) (float64, error) { return 12, nil }

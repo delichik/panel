@@ -71,28 +71,48 @@ type reportWatcherSnapshot struct {
 
 // metricCache 保存各指标采样协程产出的最新值。上报循环只读取这份缓存并
 // 在整点统一提交，因此单次采集耗时不会拖慢或跳过上报表的整点调度。
+// 每个指标同时记录最近一次成功写入时间：某个指标持续采样失败超过
+// metricFreshnessWindow 后，snapshot 不再返回该缓存，避免冻结的旧值随
+// 不断前进的整点时间伪装成新样本落库。
+const metricFreshnessWindow = 15 * time.Second
+
 type metricCache struct {
 	mu sync.RWMutex
 
 	cpuUsagePercent    float64
+	cpuUpdatedAt       time.Time
 	hasCPU             bool
 	memoryUsedBytes    int64
 	memoryTotalBytes   int64
+	memoryUpdatedAt    time.Time
 	hasMemory          bool
 	diskUsedBytes      int64
 	diskTotalBytes     int64
+	diskUpdatedAt      time.Time
 	hasDisk            bool
 	networkRxBytesRate float64
 	networkTxBytesRate float64
+	networkUpdatedAt   time.Time
 	hasNetwork         bool
 	status             linux.SystemStatus
+	statusUpdatedAt    time.Time
 	hasStatus          bool
 }
 
 func (c *metricCache) snapshot() (linux.MetricsSnapshot, bool) {
+	return c.snapshotAt(time.Now().UTC())
+}
+
+func (c *metricCache) snapshotAt(now time.Time) (linux.MetricsSnapshot, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if !c.hasCPU || !c.hasMemory || !c.hasDisk || !c.hasNetwork || !c.hasStatus {
+		return linux.MetricsSnapshot{}, false
+	}
+	staleBefore := now.Add(-metricFreshnessWindow)
+	if c.cpuUpdatedAt.Before(staleBefore) || c.memoryUpdatedAt.Before(staleBefore) ||
+		c.diskUpdatedAt.Before(staleBefore) || c.networkUpdatedAt.Before(staleBefore) ||
+		c.statusUpdatedAt.Before(staleBefore) {
 		return linux.MetricsSnapshot{}, false
 	}
 	return linux.MetricsSnapshot{
@@ -110,6 +130,7 @@ func (c *metricCache) snapshot() (linux.MetricsSnapshot, bool) {
 func (c *metricCache) setCPU(value float64) {
 	c.mu.Lock()
 	c.cpuUsagePercent = value
+	c.cpuUpdatedAt = time.Now().UTC()
 	c.hasCPU = true
 	c.mu.Unlock()
 }
@@ -118,6 +139,7 @@ func (c *metricCache) setMemory(total, used int64) {
 	c.mu.Lock()
 	c.memoryTotalBytes = total
 	c.memoryUsedBytes = used
+	c.memoryUpdatedAt = time.Now().UTC()
 	c.hasMemory = true
 	c.mu.Unlock()
 }
@@ -126,6 +148,7 @@ func (c *metricCache) setDisk(total, used int64) {
 	c.mu.Lock()
 	c.diskTotalBytes = total
 	c.diskUsedBytes = used
+	c.diskUpdatedAt = time.Now().UTC()
 	c.hasDisk = true
 	c.mu.Unlock()
 }
@@ -134,6 +157,7 @@ func (c *metricCache) setNetwork(rx, tx float64) {
 	c.mu.Lock()
 	c.networkRxBytesRate = rx
 	c.networkTxBytesRate = tx
+	c.networkUpdatedAt = time.Now().UTC()
 	c.hasNetwork = true
 	c.mu.Unlock()
 }
@@ -141,6 +165,7 @@ func (c *metricCache) setNetwork(rx, tx float64) {
 func (c *metricCache) setStatus(status linux.SystemStatus) {
 	c.mu.Lock()
 	c.status = status
+	c.statusUpdatedAt = time.Now().UTC()
 	c.hasStatus = true
 	c.mu.Unlock()
 }
