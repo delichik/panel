@@ -1004,7 +1004,18 @@ func (s *Service) ExpireStaleQueued(ctx context.Context, now time.Time, maxAge t
 	finishedAt := now.UTC().Format(time.RFC3339Nano)
 	cutoff := now.UTC().Add(-maxAge).Format(time.RFC3339Nano)
 	message := "Task stayed queued or scheduled past the worker startup timeout and was marked failed; retry the operation if it is still needed"
-	query := `UPDATE tasks SET status=?, stage=CASE WHEN stage='' THEN 'expired' ELSE stage END, error=CASE WHEN error='' THEN ? ELSE error END, next_run_at=NULL, finished_at=? WHERE status IN (?,?) AND created_at<=? AND (next_run_at IS NULL OR next_run_at='' OR next_run_at<=?) AND type IN (` + strings.Join(placeholders, ",") + `)`
+	// 只淘汰真正的孤儿：队首之后有更早创建的 **running** 任务（同一并发键）
+	// 时，说明该任务只是在合法排队等待一个较慢的队首（例如耗时超过
+	// StaleQueuedAfter 的部署），不能按 created_at 误杀；等队首结束后它会
+	// 自然被 worker 取走。队首是 queued/scheduled/failed_retryable 且长期
+	// 未推进时视为整条队列停滞（worker 不可用），等待任务照常按年龄淘汰。
+	query := `UPDATE tasks SET status=?, stage=CASE WHEN stage='' THEN 'expired' ELSE stage END, error=CASE WHEN error='' THEN ? ELSE error END, next_run_at=NULL, finished_at=? WHERE status IN (?,?) AND created_at<=? AND (next_run_at IS NULL OR next_run_at='' OR next_run_at<=?) AND type IN (` + strings.Join(placeholders, ",") + `) AND (tasks.concurrency_key = '' OR NOT EXISTS (
+		SELECT 1 FROM tasks AS t2
+		WHERE t2.concurrency_key = tasks.concurrency_key
+			AND t2.id <> tasks.id
+			AND t2.status = 'running'
+			AND (t2.created_at < tasks.created_at OR (t2.created_at = tasks.created_at AND t2.id < tasks.id))
+	))`
 	updateArgs := []any{StatusFailed, message, finishedAt, StatusQueued, StatusScheduled, cutoff, now.UTC().Format(time.RFC3339Nano)}
 	updateArgs = append(updateArgs, args...)
 	res, err := orm.RawExec(ctx, s.db, query, updateArgs...)

@@ -642,6 +642,59 @@ func TestExpireStaleQueuedMarksOnlySelectedOldQueuedTasksFailed(t *testing.T) {
 	}
 }
 
+func TestExpireStaleQueuedKeepsTasksWaitingBehindActiveHead(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	// 队首任务（更早创建、同一并发键）仍在活跃，其后的排队任务即使 age 超过
+	// maxAge 也不能被当作孤儿淘汰——否则一次耗时超过 StaleQueuedAfter 的部署
+	// 会杀掉所有合法排队的后续任务。
+	head, err := svc.Create(ctx, CreateInput{Type: "server_ufw_install", Summary: "installing firewall", ConcurrencyKey: "k1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiter, err := svc.Create(ctx, CreateInput{Type: "server_ufw_install", Summary: "waiting behind head", ConcurrencyKey: "k1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	orphan, err := svc.Create(ctx, CreateInput{Type: "server_restart", Summary: "orphan"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := now.Add(-10 * time.Minute).Format(time.RFC3339Nano)
+	older := now.Add(-20 * time.Minute).Format(time.RFC3339Nano)
+	if _, err := svc.db.ExecContext(ctx, `UPDATE tasks SET created_at=?, status='running' WHERE id=?`, older, head.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, taskID := range []string{waiter.ID, orphan.ID} {
+		if _, err := svc.db.ExecContext(ctx, `UPDATE tasks SET created_at=? WHERE id=?`, old, taskID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	expired, err := svc.ExpireStaleQueued(ctx, now, 5*time.Minute, []string{"server_ufw_install", "server_restart"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired != 1 {
+		t.Fatalf("expected only the orphan to expire, got %d", expired)
+	}
+	gotWaiter, err := svc.Get(ctx, waiter.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotWaiter.Status != StatusQueued {
+		t.Fatalf("expected the waiter behind an active head to stay queued, got %#v", gotWaiter)
+	}
+	gotOrphan, err := svc.Get(ctx, orphan.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotOrphan.Status != StatusFailed {
+		t.Fatalf("expected the orphan to expire, got %#v", gotOrphan)
+	}
+}
+
 func TestTaskOperationTriggerMetadataAndSteps(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
