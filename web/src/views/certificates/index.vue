@@ -529,19 +529,19 @@ function onFileChange(value: File | File[]) {
               </template>
             </EmptyState>
             <EmptyState v-if="!error && mode === 'domains' && !certs.length" :title="t('certificatesPage.noCertificates')" :description="t('certificatesPage.noCertificatesHint')" />
-            <button v-for="cert in mode === 'domains' ? certs : []" :key="cert.id" type="button" class="motion-list-item mb-2 grid w-full gap-2 rounded-xl border p-3 text-left hover:bg-accent" :class="selectedId === cert.id ? 'border-border-strong bg-background' : 'border-transparent'" :aria-current="selectedId === cert.id ? 'true' : undefined" @click="selectedId = cert.id">
+            <button v-for="cert in mode === 'domains' ? certs : []" :key="cert.id" type="button" class="motion-list-item mb-2 grid w-full gap-2 rounded-xl border p-3 text-left hover:bg-accent" :class="selectedId === cert.id ? 'border-border-strong bg-muted' : 'border-transparent'" :aria-current="selectedId === cert.id ? 'true' : undefined" @click="selectedId = cert.id">
               <div class="flex items-center justify-between gap-2"><strong class="truncate text-sm">{{ cert.name }}</strong><Badge :tone="certificateTone(cert)">{{ t(certificateState(cert)) }}</Badge></div>
               <span class="truncate text-xs text-muted-foreground">{{ cert.domains.join(', ') }}</span>
             </button>
 
             <EmptyState v-if="!error && mode === 'self' && !selfSigned.length" :title="t('certificatesPage.noSelf')" :description="t('certificatesPage.noSelfHint')" />
-            <button v-for="cert in mode === 'self' ? selfSigned : []" :key="cert.id" type="button" class="motion-list-item mb-2 grid w-full gap-2 rounded-xl border p-3 text-left hover:bg-accent" :class="selectedId === cert.id ? 'border-border-strong bg-background' : 'border-transparent'" :aria-current="selectedId === cert.id ? 'true' : undefined" @click="selectedId = cert.id">
+            <button v-for="cert in mode === 'self' ? selfSigned : []" :key="cert.id" type="button" class="motion-list-item mb-2 grid w-full gap-2 rounded-xl border p-3 text-left hover:bg-accent" :class="selectedId === cert.id ? 'border-border-strong bg-muted' : 'border-transparent'" :aria-current="selectedId === cert.id ? 'true' : undefined" @click="selectedId = cert.id">
               <div class="flex items-center justify-between gap-2"><strong class="truncate text-sm">{{ cert.name }}</strong><Badge :tone="selfSignedTone(cert)">{{ selfSignedKindLabel(cert.kind) }}</Badge></div>
               <span class="truncate text-xs text-muted-foreground">{{ cert.commonName }}</span>
             </button>
 
             <EmptyState v-if="!error && mode === 'keys' && !userAssets.length" :title="t('certificatesPage.noAssets')" :description="t('certificatesPage.noAssetsHint')" />
-            <button v-for="asset in mode === 'keys' ? userAssets : []" :key="asset.id" type="button" class="motion-list-item mb-2 grid w-full gap-2 rounded-xl border p-3 text-left hover:bg-accent" :class="selectedId === asset.id ? 'border-border-strong bg-background' : 'border-transparent'" :aria-current="selectedId === asset.id ? 'true' : undefined" @click="selectedId = asset.id">
+            <button v-for="asset in mode === 'keys' ? userAssets : []" :key="asset.id" type="button" class="motion-list-item mb-2 grid w-full gap-2 rounded-xl border p-3 text-left hover:bg-accent" :class="selectedId === asset.id ? 'border-border-strong bg-muted' : 'border-transparent'" :aria-current="selectedId === asset.id ? 'true' : undefined" @click="selectedId = asset.id">
               <div class="flex items-center justify-between gap-2"><strong class="truncate text-sm">{{ asset.name }}</strong><Badge :tone="assetTone(asset)">{{ assetTypeLabel(asset.type) }}</Badge></div>
               <span class="truncate text-xs text-muted-foreground">{{ asset.fingerprint || t('common.notAvailable') }}</span>
             </button>
@@ -565,15 +565,15 @@ function onFileChange(value: File | File[]) {
             </header>
             <div class="min-h-0 overflow-auto p-5">
               <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-                <section class="rounded-2xl border border-border bg-background p-4">
+                <section class="rounded-2xl border border-border bg-muted p-4">
                   <h3 class="m-0 text-sm font-semibold">{{ t('certificatesPage.coverage') }}</h3>
                   <div class="mt-3 flex flex-wrap gap-2"><Badge v-for="domain in selectedCert.domains" :key="domain" tone="info">{{ domain }}</Badge></div>
                   <p v-if="selectedCert.lastError" class="mt-4 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ selectedCert.lastError }}</p>
                 </section>
                 <aside class="grid content-start gap-3">
-                  <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('common.status') }}</div><strong>{{ t(certificateState(selectedCert)) }}</strong></div>
-                  <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.expiresAt') }}</div><strong>{{ formatDateTime(selectedCert.notAfter) || t('common.notAvailable') }}</strong></div>
-                  <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.taskEntry') }}</div><strong>{{ selectedCert.status === 'issuing' ? t('certificatesPage.openTaskCenter') : t('certificatesPage.noActiveTask') }}</strong></div>
+                  <div class="rounded-2xl border border-border bg-muted p-4 text-sm"><div class="text-muted-foreground">{{ t('common.status') }}</div><strong>{{ t(certificateState(selectedCert)) }}</strong></div>
+                  <div class="rounded-2xl border border-border bg-muted p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.expiresAt') }}</div><strong>{{ formatDateTime(selectedCert.notAfter) || t('common.notAvailable') }}</strong></div>
+                  <div class="rounded-2xl border border-border bg-muted p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.taskEntry') }}</div><strong>{{ selectedCert.status === 'issuing' ? t('certificatesPage.openTaskCenter') : t('certificatesPage.noActiveTask') }}</strong></div>
                 </aside>
               </div>
             </div>
@@ -591,10 +591,10 @@ function onFileChange(value: File | File[]) {
             </header>
             <div class="min-h-0 overflow-auto p-5">
               <div class="grid gap-3 md:grid-cols-2">
-                <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('common.type') }}</div><strong>{{ selfSignedKindLabel(selectedSelf.kind) }}</strong></div>
-                <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.fingerprint') }}</div><strong>{{ selectedSelf.fingerprint }}</strong></div>
-                <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.expiresAt') }}</div><strong>{{ formatDateTime(selectedSelf.notAfter) }}</strong></div>
-                <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.dnsNames') }}</div><strong>{{ displayEntries(selectedSelf.dnsNames) }}</strong></div>
+                <div class="rounded-2xl border border-border bg-muted p-4 text-sm"><div class="text-muted-foreground">{{ t('common.type') }}</div><strong>{{ selfSignedKindLabel(selectedSelf.kind) }}</strong></div>
+                <div class="rounded-2xl border border-border bg-muted p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.fingerprint') }}</div><strong>{{ selectedSelf.fingerprint }}</strong></div>
+                <div class="rounded-2xl border border-border bg-muted p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.expiresAt') }}</div><strong>{{ formatDateTime(selectedSelf.notAfter) }}</strong></div>
+                <div class="rounded-2xl border border-border bg-muted p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.dnsNames') }}</div><strong>{{ displayEntries(selectedSelf.dnsNames) }}</strong></div>
               </div>
             </div>
           </article>
@@ -615,12 +615,12 @@ function onFileChange(value: File | File[]) {
             <div class="min-h-0 overflow-auto p-5">
               <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
                 <section class="grid gap-3 md:grid-cols-2">
-                  <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.fingerprint') }}</div><strong>{{ selectedAsset.fingerprint }}</strong></div>
-                  <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.references') }}</div><strong>{{ selectedAsset.referenceCount }}</strong></div>
-                  <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.children') }}</div><strong>{{ selectedAsset.childCount }}</strong></div>
-                  <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.expiresAt') }}</div><strong>{{ formatDateTime(selectedAsset.notAfter) || t('common.notAvailable') }}</strong></div>
+                  <div class="rounded-2xl border border-border bg-muted p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.fingerprint') }}</div><strong>{{ selectedAsset.fingerprint }}</strong></div>
+                  <div class="rounded-2xl border border-border bg-muted p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.references') }}</div><strong>{{ selectedAsset.referenceCount }}</strong></div>
+                  <div class="rounded-2xl border border-border bg-muted p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.children') }}</div><strong>{{ selectedAsset.childCount }}</strong></div>
+                  <div class="rounded-2xl border border-border bg-muted p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.expiresAt') }}</div><strong>{{ formatDateTime(selectedAsset.notAfter) || t('common.notAvailable') }}</strong></div>
                 </section>
-                <aside class="rounded-2xl border border-border bg-background p-4">
+                <aside class="rounded-2xl border border-border bg-muted p-4">
                   <h3 class="m-0 text-sm font-semibold">{{ t('certificatesPage.downloads') }}</h3>
                   <div class="mt-3 grid gap-2">
                     <Button v-for="kind in selectedAsset.downloadKinds" :key="kind" size="sm" :loading="saving" @click="downloadAssetFile(selectedAsset, kind)"><Download />{{ fileKindLabel(kind) }}</Button>
@@ -650,7 +650,7 @@ function onFileChange(value: File | File[]) {
             <Button size="sm" @click="addEntry(issueForm.subdomains)"><Plus />{{ t('certificatesPage.addSubdomain') }}</Button>
           </div>
         </section>
-        <section class="rounded-xl border border-border bg-background p-3">
+        <section class="rounded-xl border border-border bg-muted p-3">
           <div class="text-sm font-medium">{{ t('certificatesPage.coveragePreview') }}</div>
           <div class="mt-2 flex flex-wrap gap-2"><Badge v-for="domain in issueCoverage" :key="domain" tone="info">{{ domain }}</Badge></div>
         </section>

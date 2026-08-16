@@ -7,7 +7,7 @@ defineProps<{ title: string; description?: string }>();
 <template>
   <div class="grid min-h-48 place-items-center rounded-xl border border-dashed border-border bg-muted/30 p-8 text-center">
     <div class="grid max-w-sm gap-2 justify-items-center">
-      <div class="grid size-10 place-items-center rounded-xl border border-border bg-background text-muted-foreground">
+      <div class="grid size-10 place-items-center rounded-xl border border-border bg-muted text-muted-foreground">
         <Inbox class="size-5" aria-hidden="true" />
       </div>
       <h3 class="m-0 text-sm font-semibold text-foreground">{{ title }}</h3>

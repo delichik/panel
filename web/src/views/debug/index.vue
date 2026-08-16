@@ -265,7 +265,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
           <div class="min-w-0 rounded-2xl border border-border bg-card p-5">
             <h3>{{ t('debugPage.taskRuntime') }}</h3>
             <div class="mt-4 grid grid-cols-3 gap-3 max-md:grid-cols-1">
-              <div v-for="metric in taskMetricRows" :key="metric.key" class="rounded-xl border border-border bg-background p-3"><span>{{ metric.label }}</span><strong>{{ metric.value }}</strong></div>
+              <div v-for="metric in taskMetricRows" :key="metric.key" class="rounded-xl border border-border bg-muted p-3"><span>{{ metric.label }}</span><strong>{{ metric.value }}</strong></div>
             </div>
             <div class="mt-6 min-w-0">
               <h3>{{ t('debugPage.taskDefinitions') }}</h3>

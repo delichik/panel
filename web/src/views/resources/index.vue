@@ -448,11 +448,11 @@ onBeforeUnmount(() => {
           <p class="m-0 mt-1 text-xs text-muted-foreground">{{ t('resourcesPage.selectServerHint') }}</p>
         </div>
         <div class="grid grid-cols-2 gap-2 border-b border-border p-4 text-center text-xs">
-          <div class="rounded-xl border border-border bg-background p-3">
+          <div class="rounded-xl border border-border bg-muted p-3">
             <strong class="block text-lg text-foreground">{{ servers.filter(canMaintainPackages).length }}</strong>
             <span class="text-muted-foreground">{{ t('resourcesPage.packageReady') }}</span>
           </div>
-          <div class="rounded-xl border border-border bg-background p-3">
+          <div class="rounded-xl border border-border bg-muted p-3">
             <strong class="block text-lg text-foreground">{{ servers.filter(canUseDockerResources).length }}</strong>
             <span class="text-muted-foreground">{{ t('resourcesPage.dockerReady') }}</span>
           </div>
@@ -494,7 +494,7 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="min-h-0 p-5">
-            <section v-if="activeTab === 'packages'" class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] rounded-2xl border border-border bg-background">
+            <section v-if="activeTab === 'packages'" class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] rounded-2xl border border-border bg-muted">
               <div class="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
                 <label class="relative block w-full max-w-sm">
                   <Search class="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" />
@@ -539,7 +539,7 @@ onBeforeUnmount(() => {
 
             <section v-else-if="activeTab === 'containers'" class="motion-stagger grid h-full min-h-0 grid-cols-3 gap-3 overflow-y-auto overflow-x-hidden max-2xl:grid-cols-2 max-lg:grid-cols-1">
               <template v-if="loadingResource && !containers.length">
-                <article v-for="item in 6" :key="item" class="grid min-h-[220px] grid-rows-[auto_minmax(0,1fr)_auto] rounded-2xl border border-border bg-background" aria-hidden="true">
+                <article v-for="item in 6" :key="item" class="grid min-h-[220px] grid-rows-[auto_minmax(0,1fr)_auto] rounded-2xl border border-border bg-muted" aria-hidden="true">
                   <header class="border-b border-border p-4">
                     <div class="motion-skeleton h-4 w-36 rounded bg-muted animate-pulse" />
                     <div class="motion-skeleton mt-2 h-3 w-56 max-w-full rounded bg-muted animate-pulse" />
@@ -559,7 +559,7 @@ onBeforeUnmount(() => {
                 </template>
               </EmptyState>
               <EmptyState v-else-if="!containers.length" :title="t('resourcesPage.noContainers')" :description="t('resourcesPage.noContainersHint')" />
-              <article v-for="item in containers" v-else :key="item.id" class="motion-reveal grid grid-rows-[auto_auto_auto] rounded-2xl border border-border bg-background">
+              <article v-for="item in containers" v-else :key="item.id" class="motion-reveal grid grid-rows-[auto_auto_auto] rounded-2xl border border-border bg-muted">
                 <header class="border-b border-border p-4">
                   <div class="flex items-start justify-between gap-3">
                     <div class="min-w-0">
@@ -584,7 +584,7 @@ onBeforeUnmount(() => {
               </article>
             </section>
 
-            <section v-else-if="activeTab === 'images'" class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-background">
+            <section v-else-if="activeTab === 'images'" class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-muted">
               <div class="flex flex-wrap items-center justify-between gap-2 border-b border-border p-4">
                 <div class="flex items-center gap-2 text-sm text-muted-foreground"><Boxes class="size-4" />{{ formatDateTime(images?.observedAt) || t('common.never') }}</div>
                 <div class="flex flex-wrap gap-2">
@@ -624,7 +624,7 @@ onBeforeUnmount(() => {
             </section>
 
             <section v-else-if="activeTab === 'networks'" class="grid h-full min-h-0 grid-cols-[minmax(0,1fr)_300px] grid-rows-[minmax(0,1fr)] gap-4 max-xl:grid-cols-1">
-              <div class="motion-stagger min-h-0 overflow-auto rounded-2xl border border-border bg-background p-3">
+              <div class="motion-stagger min-h-0 overflow-auto rounded-2xl border border-border bg-muted p-3">
                 <div v-if="loadingResource && !networks.length" class="grid gap-2" aria-hidden="true">
                   <article v-for="item in 6" :key="item" class="rounded-xl border border-border p-4">
                     <div class="motion-skeleton h-4 w-40 rounded bg-muted animate-pulse" />
@@ -659,7 +659,7 @@ onBeforeUnmount(() => {
               </aside>
             </section>
 
-            <section v-else class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-background">
+            <section v-else class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-muted">
               <div class="flex flex-wrap items-center justify-between gap-2 border-b border-border p-4">
                 <div class="flex items-center gap-2 text-sm text-muted-foreground"><Database class="size-4" />{{ t('resourcesPage.volumeSafety') }}</div>
                 <Button size="sm" variant="danger" @click="confirm('volume-prune')"><Trash2 />{{ t('resourcesPage.pruneUnusedVolumes') }}</Button>

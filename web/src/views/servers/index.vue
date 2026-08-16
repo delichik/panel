@@ -567,7 +567,7 @@ onBeforeUnmount(() => {
             :key="server.id"
             type="button"
             class="motion-list-item mb-2 grid w-full gap-2 rounded-xl border p-3 text-left hover:bg-accent"
-            :class="selectedId === server.id ? 'border-border-strong bg-background' : 'border-transparent bg-transparent'"
+            :class="selectedId === server.id ? 'border-border-strong bg-muted' : 'border-transparent bg-transparent'"
             :aria-current="selectedId === server.id ? 'true' : undefined"
             @click="selectedId = server.id; router.replace({ query: { ...route.query, server: server.id } })"
           >
@@ -596,7 +596,7 @@ onBeforeUnmount(() => {
           <div class="min-h-0 overflow-auto p-5">
             <div class="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_320px]">
               <div class="grid gap-4">
-                <section v-for="item in 3" :key="item" class="rounded-2xl border border-border bg-background p-4">
+                <section v-for="item in 3" :key="item" class="rounded-2xl border border-border bg-muted p-4">
                   <Skeleton class="h-4 w-32" />
                   <div class="mt-4 grid grid-cols-2 gap-3 max-md:grid-cols-1">
                     <Skeleton v-for="line in 4" :key="line" class="h-10" />
@@ -644,7 +644,7 @@ onBeforeUnmount(() => {
           <div class="min-h-0 overflow-auto p-5">
             <div class="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_320px]">
               <div class="grid gap-4">
-                <section class="rounded-2xl border border-border bg-background p-4">
+                <section class="rounded-2xl border border-border bg-muted p-4">
                   <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.connection') }}</h3>
                   <dl class="mt-3 grid grid-cols-2 gap-3 text-sm max-md:grid-cols-1">
                     <div><dt>{{ t('serversPage.host') }}</dt><dd>{{ selectedServer.host }}</dd></div>
@@ -653,7 +653,7 @@ onBeforeUnmount(() => {
                     <div><dt>{{ t('serversPage.dockerHost') }}</dt><dd>{{ selectedServer.dockerHost || t('common.notAvailable') }}</dd></div>
                   </dl>
                 </section>
-                <section class="rounded-2xl border border-border bg-background p-4">
+                <section class="rounded-2xl border border-border bg-muted p-4">
                   <div class="flex flex-wrap items-center justify-between gap-3">
                     <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.metrics') }}</h3>
                     <div class="flex flex-wrap items-center gap-2">
@@ -684,7 +684,7 @@ onBeforeUnmount(() => {
                     </div>
                   </template>
                 </section>
-                <section class="rounded-2xl border border-border bg-background p-4">
+                <section class="rounded-2xl border border-border bg-muted p-4">
                   <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.recentOperations') }}</h3>
                   <div class="mt-3 grid gap-2 text-sm text-muted-foreground">
                     <span>{{ t('serversPage.lastChecked') }}: {{ formatDateTime(selectedServer.lastCheckedAt) || t('common.never') }}</span>
@@ -694,7 +694,7 @@ onBeforeUnmount(() => {
                 </section>
               </div>
               <aside class="grid content-start gap-3">
-                <section class="rounded-2xl border border-border bg-background p-4">
+                <section class="rounded-2xl border border-border bg-muted p-4">
                   <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.agent') }}</h3>
                   <p class="mt-2 text-sm text-muted-foreground">{{ agentText(selectedServer) }}</p>
                   <div class="mt-3 grid gap-2">
@@ -702,7 +702,7 @@ onBeforeUnmount(() => {
                     <Button :disabled="!canRunPrivilegedOperation(selectedServer)" :loading="pendingOperation === 'restart'" @click="confirmRestart(selectedServer)"><PlayCircle />{{ t('serversPage.restart') }}</Button>
                   </div>
                 </section>
-                <section class="rounded-2xl border border-border bg-background p-4">
+                <section class="rounded-2xl border border-border bg-muted p-4">
                   <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.privilegeAndSecurity') }}</h3>
                   <p class="mt-2 text-sm text-muted-foreground">{{ privilegeText(selectedServer) }}</p>
                   <Button class="mt-3 w-full" :disabled="!canInstallUfw(selectedServer)" :loading="pendingOperation === 'ufw'" @click="confirmInstallUfw(selectedServer)">

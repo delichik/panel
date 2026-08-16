@@ -234,7 +234,7 @@ onBeforeUnmount(() => {
             </template>
           </EmptyState>
           <EmptyState v-else-if="!groups.length" :title="t('tasksPage.empty')" :description="t('tasksPage.emptyHint')" />
-          <button v-for="group in groups" v-else :key="group.operationId" type="button" class="motion-list-item mb-2 grid w-full min-w-0 gap-2 overflow-hidden rounded-xl border p-3 text-left hover:bg-accent" :class="selectedOperationId === group.operationId ? 'border-border-strong bg-background' : 'border-transparent'" :aria-current="selectedOperationId === group.operationId ? 'true' : undefined" @click="selectedOperationId = group.operationId">
+          <button v-for="group in groups" v-else :key="group.operationId" type="button" class="motion-list-item mb-2 grid w-full min-w-0 gap-2 overflow-hidden rounded-xl border p-3 text-left hover:bg-accent" :class="selectedOperationId === group.operationId ? 'border-border-strong bg-muted' : 'border-transparent'" :aria-current="selectedOperationId === group.operationId ? 'true' : undefined" @click="selectedOperationId = group.operationId">
             <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 max-[420px]:grid-cols-1">
               <strong class="min-w-0 truncate text-sm text-foreground">{{ translateTaskSummary(t, group.title) }}</strong>
               <StatusBadge class="max-w-full shrink-0 justify-self-start whitespace-nowrap" :status="group.status" domain="task" :label="t(`tasksPage.status.${group.status}`)" />
@@ -266,14 +266,14 @@ onBeforeUnmount(() => {
             </div>
           </header>
           <div class="grid min-h-0 min-w-0 grid-cols-[minmax(0,280px)_minmax(0,1fr)] gap-4 overflow-hidden p-4 max-lg:grid-cols-1">
-            <section class="motion-stagger min-h-0 min-w-0 overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-background p-3">
+            <section class="motion-stagger min-h-0 min-w-0 overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-muted p-3">
               <h3 class="m-0 mb-3 flex min-w-0 items-center gap-2 text-sm font-semibold"><ListFilter class="size-4 shrink-0" /><span class="min-w-0 truncate">{{ t('tasksPage.executionItems') }}</span></h3>
               <button v-for="task in selectedGroup.tasks" :key="task.id" type="button" class="motion-list-item mb-2 grid w-full min-w-0 gap-1 overflow-hidden rounded-xl border p-3 text-left text-sm hover:bg-accent" :class="selectedTaskId === task.id ? 'border-border-strong bg-card' : 'border-border'" :aria-current="selectedTaskId === task.id ? 'true' : undefined" @click="selectedTaskId = task.id">
                 <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 max-[420px]:grid-cols-1"><strong class="min-w-0 truncate">{{ translateTaskSummary(t, task.summary) }}</strong><StatusBadge class="max-w-full shrink-0 justify-self-start whitespace-nowrap" :status="task.status" domain="task" :label="taskStatusLabel(task.status)" /></div>
                 <span class="min-w-0 truncate text-xs text-muted-foreground">{{ task.type }}</span>
               </button>
             </section>
-            <section class="min-h-0 min-w-0 overflow-hidden rounded-2xl border border-border bg-background p-4">
+            <section class="min-h-0 min-w-0 overflow-hidden rounded-2xl border border-border bg-muted p-4">
               <Tabs v-model="tab" class="h-full min-h-0" :tabs="[{ label: t('tasksPage.steps'), value: 'steps' }, { label: t('tasksPage.logs'), value: 'logs' }, { label: t('tasksPage.error'), value: 'error' }]">
                 <div v-if="tab === 'steps'" class="motion-stagger min-h-0 min-w-0 overflow-y-auto overflow-x-hidden">
                   <div v-if="detailLoading && !steps.length" class="relative grid min-h-48 place-items-center">

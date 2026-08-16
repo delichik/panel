@@ -52,7 +52,7 @@ function goNext() {
 </script>
 
 <template>
-  <nav class="flex min-h-12 flex-wrap items-center justify-between gap-3 border-t border-border bg-background/95 px-1 py-3" :aria-label="resolvedNavLabel">
+  <nav class="flex min-h-12 flex-wrap items-center justify-between gap-3 border-t border-border bg-card/95 px-1 py-3" :aria-label="resolvedNavLabel">
     <p class="m-0 text-sm text-muted-foreground">
       <slot name="summary" :start="start" :end="end" :total="total" :page="currentPage" :page-count="pageCount">
         {{ resolvedSummary }}

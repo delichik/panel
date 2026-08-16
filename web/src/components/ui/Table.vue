@@ -39,7 +39,7 @@ function skeletonClass(rowIndex: number, columnIndex: number, align?: 'left' | '
             </th>
           </tr>
       </thead>
-      <tbody class="divide-y divide-border bg-background">
+      <tbody class="divide-y divide-border">
           <template v-if="loading && !rows.length">
             <tr v-for="rowIndex in loadingRows" :key="`loading-${rowIndex}`">
               <td v-for="(column, columnIndex) in columns" :key="column.key" class="px-3 py-3">

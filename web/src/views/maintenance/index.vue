@@ -236,9 +236,9 @@ onBeforeUnmount(() => {
           </div>
           <div class="h-3 overflow-hidden rounded-full bg-muted"><div class="h-full bg-primary transition-all" :style="{ width: `${status?.progress || 0}%` }" /></div>
           <div class="grid grid-cols-3 gap-3 max-md:grid-cols-1">
-            <div class="rounded-xl border border-border bg-background p-3"><span>{{ t('maintenancePage.revision') }}</span><strong>{{ status?.revision ?? '-' }}</strong></div>
-            <div class="rounded-xl border border-border bg-background p-3"><span>{{ t('maintenancePage.startedAt') }}</span><strong>{{ formatDateTime(status?.startedAt) || t('common.never') }}</strong></div>
-            <div class="rounded-xl border border-border bg-background p-3"><span>{{ t('maintenancePage.restart') }}</span><strong>{{ status?.restartSupported ? t('state.healthy') : t('common.notAvailable') }}</strong></div>
+            <div class="rounded-xl border border-border bg-muted p-3"><span>{{ t('maintenancePage.revision') }}</span><strong>{{ status?.revision ?? '-' }}</strong></div>
+            <div class="rounded-xl border border-border bg-muted p-3"><span>{{ t('maintenancePage.startedAt') }}</span><strong>{{ formatDateTime(status?.startedAt) || t('common.never') }}</strong></div>
+            <div class="rounded-xl border border-border bg-muted p-3"><span>{{ t('maintenancePage.restart') }}</span><strong>{{ status?.restartSupported ? t('state.healthy') : t('common.notAvailable') }}</strong></div>
           </div>
           <div v-if="status?.error || status?.errorDetail" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ status.errorDetail?.message || status.error }}</div>
         </article>

@@ -359,7 +359,7 @@ async function confirmDelete() {
   min-width: 0;
   border: 1px solid var(--panel-border);
   border-radius: 0.875rem;
-  background: var(--panel-bg);
+  background: var(--panel-surface);
   padding: 0.75rem;
   transition:
     background-color var(--panel-motion-duration-base) var(--panel-motion-ease-standard),

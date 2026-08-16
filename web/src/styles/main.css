@@ -52,8 +52,8 @@
   --panel-bg: #f6f4ef;
   --panel-surface: #ffffff;
   --panel-surface-raised: #fbf9f4;
-  --panel-muted: rgba(46, 40, 28, 0.05);
-  --panel-hover: rgba(46, 40, 28, 0.07);
+  --panel-muted: rgba(0, 0, 0, 0.05);
+  --panel-hover: rgba(0, 0, 0, 0.07);
   --panel-popover: #ffffff;
   --panel-border: #eae5da;
   --panel-border-strong: #d4ccbc;
@@ -99,8 +99,8 @@
   --panel-bg: #eff5fa;
   --panel-surface: #ffffff;
   --panel-surface-raised: #e9f2f9;
-  --panel-muted: rgba(23, 74, 112, 0.06);
-  --panel-hover: rgba(23, 74, 112, 0.09);
+  --panel-muted: rgba(0, 0, 0, 0.05);
+  --panel-hover: rgba(0, 0, 0, 0.07);
   --panel-popover: #ffffff;
   --panel-border: #d7e6f2;
   --panel-border-strong: #afcbe0;
@@ -139,8 +139,8 @@
   --panel-bg: #0e151c;
   --panel-surface: #131d26;
   --panel-surface-raised: #18242f;
-  --panel-muted: rgba(168, 203, 230, 0.06);
-  --panel-hover: rgba(168, 203, 230, 0.1);
+  --panel-muted: rgba(255, 255, 255, 0.06);
+  --panel-hover: rgba(255, 255, 255, 0.09);
   --panel-popover: #17232e;
   --panel-border: rgba(154, 196, 228, 0.14);
   --panel-border-strong: rgba(154, 196, 228, 0.26);
@@ -178,8 +178,8 @@
   --panel-bg: #0a1626;
   --panel-surface: #0f2036;
   --panel-surface-raised: #162a44;
-  --panel-muted: rgba(140, 190, 230, 0.07);
-  --panel-hover: rgba(140, 190, 230, 0.11);
+  --panel-muted: rgba(255, 255, 255, 0.06);
+  --panel-hover: rgba(255, 255, 255, 0.09);
   --panel-popover: #12253c;
   --panel-border: rgba(120, 175, 220, 0.16);
   --panel-border-strong: rgba(120, 175, 220, 0.3);

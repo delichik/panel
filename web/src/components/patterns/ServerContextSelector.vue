@@ -35,7 +35,7 @@ defineEmits<{ 'update:modelValue': [value: string] }>();
 <template>
   <section class="grid gap-2 motion-stagger" role="radiogroup" :aria-label="label" :aria-busy="loading ? 'true' : undefined">
     <div v-if="loading && !servers.length" class="grid gap-2">
-      <div v-for="item in loadingRows" :key="item" class="grid min-h-20 gap-2 rounded-xl border border-border bg-background p-3" aria-hidden="true">
+      <div v-for="item in loadingRows" :key="item" class="grid min-h-20 gap-2 rounded-xl border border-border bg-card p-3" aria-hidden="true">
         <div class="flex items-start gap-3">
           <div class="motion-skeleton size-5 rounded-md bg-muted animate-pulse" />
           <div class="min-w-0 flex-1">
@@ -57,7 +57,7 @@ defineEmits<{ 'update:modelValue': [value: string] }>();
         role="radio"
         :disabled="disabled || server.disabled"
         :aria-checked="modelValue === server.id"
-        class="motion-list-item grid min-h-20 w-full gap-2 rounded-xl border border-border bg-background p-3 text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50 aria-checked:border-primary aria-checked:bg-primary/10"
+        class="motion-list-item grid min-h-20 w-full gap-2 rounded-xl border border-border bg-card p-3 text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50 aria-checked:border-primary aria-checked:bg-primary/10"
         @click="$emit('update:modelValue', server.id)"
       >
         <span class="flex min-w-0 items-start gap-3">

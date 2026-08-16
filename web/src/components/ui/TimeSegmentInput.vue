@@ -49,7 +49,7 @@ function onWheel(event: WheelEvent) {
     inputmode="numeric"
     :value="display"
     :aria-label="label"
-    class="motion-field h-7 w-10 rounded-lg border border-input bg-background text-center text-xs tabular-nums text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+    class="motion-field h-7 w-10 rounded-lg border border-input bg-card text-center text-xs tabular-nums text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
     @input="onInput"
     @blur="onBlur"
     @keydown="onKeydown"

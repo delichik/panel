@@ -54,7 +54,7 @@ function handleOpenChange(value: boolean) {
   <Dialog :open="open" :title="title" :description="description" @update:open="handleOpenChange">
     <div class="grid gap-4">
       <div v-if="impact" class="flex gap-3 rounded-xl border p-3" :class="iconToneClass">
-        <div class="grid size-9 shrink-0 place-items-center rounded-lg border border-current/20 bg-background/60">
+        <div class="grid size-9 shrink-0 place-items-center rounded-lg border border-current/20 bg-muted">
           <ShieldAlert v-if="tone === 'danger'" class="size-4" aria-hidden="true" />
           <AlertTriangle v-else-if="tone === 'warning'" class="size-4" aria-hidden="true" />
           <Info v-else class="size-4" aria-hidden="true" />

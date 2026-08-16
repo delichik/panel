@@ -1580,7 +1580,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="motion-stagger min-h-0 overflow-auto p-2">
           <div v-if="loading && !applications.length" class="grid gap-2" aria-hidden="true">
-            <div v-for="item in 7" :key="item" class="grid gap-2 rounded-xl border border-border bg-background p-3">
+            <div v-for="item in 7" :key="item" class="grid gap-2 rounded-xl border border-border bg-muted p-3">
               <div class="flex items-center justify-between gap-2">
                 <div class="motion-skeleton h-4 w-36 rounded bg-muted animate-pulse" />
                 <div class="motion-skeleton h-6 w-20 rounded-full bg-muted animate-pulse" />
@@ -1598,7 +1598,7 @@ onBeforeUnmount(() => {
             </template>
           </EmptyState>
           <EmptyState v-else-if="!appRows.length" :title="t('applicationsPage.emptyApplications')" :description="t('applicationsPage.emptyApplicationsHint')" />
-          <button v-for="row in appRows" v-else :key="row.app.id" type="button" class="motion-list-item mb-2 grid w-full gap-2 rounded-xl border p-3 text-left transition-colors hover:bg-accent" :class="selectedId === row.app.id ? 'border-border-strong bg-background' : 'border-transparent bg-transparent'" @click="selectedId = row.app.id">
+          <button v-for="row in appRows" v-else :key="row.app.id" type="button" class="motion-list-item mb-2 grid w-full gap-2 rounded-xl border p-3 text-left transition-colors hover:bg-accent" :class="selectedId === row.app.id ? 'border-border-strong bg-muted' : 'border-transparent bg-transparent'" @click="selectedId = row.app.id">
             <div class="flex items-center justify-between gap-2">
               <strong class="truncate text-sm text-foreground">{{ row.app.name }}</strong>
               <StatusBadge :status="applicationStatus(row.app, runtimes[row.app.id])" :tone="statusTone(applicationStatus(row.app, runtimes[row.app.id]))" :label="t(`applicationsPage.status.${applicationStatus(row.app, runtimes[row.app.id])}`)" />
@@ -1661,11 +1661,11 @@ onBeforeUnmount(() => {
                 <Tabs v-model="appTab" :tabs="[{ label: t('applicationsPage.runtime'), value: 'runtime' }, { label: t('applicationsPage.routes'), value: 'routes' }, { label: t('applicationsPage.files'), value: 'files' }]">
                   <section v-if="appTab === 'runtime'" class="grid gap-4">
                     <div class="grid grid-cols-3 gap-3 max-md:grid-cols-1">
-                      <div class="rounded-2xl border border-border bg-background p-4"><span>{{ t('applicationsPage.instances') }}</span><strong>{{ runtimeSummary(currentRuntime).total }}</strong></div>
-                      <div class="rounded-2xl border border-border bg-background p-4"><span>{{ t('applicationsPage.running') }}</span><strong>{{ runtimeSummary(currentRuntime).running }}</strong></div>
-                      <div class="rounded-2xl border border-border bg-background p-4"><span>{{ t('applicationsPage.failed') }}</span><strong>{{ runtimeSummary(currentRuntime).failed }}</strong></div>
+                      <div class="rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.instances') }}</span><strong>{{ runtimeSummary(currentRuntime).total }}</strong></div>
+                      <div class="rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.running') }}</span><strong>{{ runtimeSummary(currentRuntime).running }}</strong></div>
+                      <div class="rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.failed') }}</span><strong>{{ runtimeSummary(currentRuntime).failed }}</strong></div>
                     </div>
-                    <div class="rounded-2xl border border-border bg-background p-4">
+                    <div class="rounded-2xl border border-border bg-muted p-4">
                       <h3>{{ t('applicationsPage.nodeInstances') }}</h3>
                       <div v-if="!runtimeLoading && currentRuntime?.instances?.length" class="mt-3 grid gap-2">
                         <div v-for="instance in currentRuntime.instances" :key="instance.instanceId || instance.id" class="grid gap-1 rounded-xl border border-border p-3 text-sm">
@@ -1687,14 +1687,14 @@ onBeforeUnmount(() => {
                     </div>
                   </section>
                   <section v-else-if="appTab === 'routes'" class="grid gap-3 motion-stagger">
-                    <div v-for="rule in selectedApplication.reverseProxy" :key="rule.domain" class="motion-reveal rounded-2xl border border-border bg-background p-4">
+                    <div v-for="rule in selectedApplication.reverseProxy" :key="rule.domain" class="motion-reveal rounded-2xl border border-border bg-muted p-4">
                       <div class="flex items-center justify-between gap-2"><strong>{{ rule.domain }}</strong><Badge tone="info">{{ rule.targetPort }}</Badge></div>
                       <p class="text-sm text-muted-foreground">{{ t('applicationsPage.originServers', { count: rule.originServerIds.length }) }} · {{ rule.originServerIds.map((id) => serverDisplayName(id)).join(', ') || t('common.notAvailable') }}</p>
                       <div class="mt-2 flex flex-wrap gap-2"><Badge v-for="path in rule.paths" :key="path.path" tone="neutral">{{ path.path }}</Badge></div>
                     </div>
                     <EmptyState v-if="!selectedApplication.reverseProxy.length" :title="t('applicationsPage.noRoutes')" :description="t('applicationsPage.noRoutesHint')" />
                   </section>
-                  <section v-else class="rounded-2xl border border-border bg-background p-4">
+                  <section v-else class="rounded-2xl border border-border bg-muted p-4">
                     <div class="grid gap-3 motion-stagger">
                       <div v-for="file in applicationFiles[selectedApplication.id] || []" :key="file.name" class="item-row motion-reveal">
                         <div><strong>{{ file.name }}</strong><span>{{ file.size }} {{ t('applicationsPage.bytes') }}</span></div>
@@ -1708,7 +1708,7 @@ onBeforeUnmount(() => {
                 </Tabs>
               </div>
               <aside class="grid content-start gap-3">
-                <section class="rounded-2xl border border-border bg-background p-4">
+                <section class="rounded-2xl border border-border bg-muted p-4">
                   <h3>{{ t('applicationsPage.operations') }}</h3>
                   <div class="mt-3 grid gap-2">
                     <Button :disabled="!selectedApplication.imageUpdateAvailable" :loading="pending === 'image-update'" @click="runOperation('image-update', () => applicationsApi.updateImage(selectedApplication.id), 'applicationsPage.imageUpdateAccepted', 'applicationsPage.imageUpdateAcceptedWithoutId')"><UploadCloud />{{ t('applicationsPage.updateImage') }}</Button>
@@ -1717,7 +1717,7 @@ onBeforeUnmount(() => {
                     <Button variant="danger" @click="ask('delete', selectedApplication.id)"><Trash2 />{{ t('common.delete') }}</Button>
                   </div>
                 </section>
-                <section class="rounded-2xl border border-border bg-background p-4">
+                <section class="rounded-2xl border border-border bg-muted p-4">
                   <h3>{{ t('applicationsPage.persistentData') }}</h3>
                   <p class="text-sm text-muted-foreground">{{ selectedApplication.persistentPath ? t('applicationsPage.persistentDataHint') : t('applicationsPage.persistentDataUnavailable') }}</p>
                   <div class="mt-3 flex flex-wrap gap-2">
@@ -1747,7 +1747,7 @@ onBeforeUnmount(() => {
         <article
           v-for="item in facilities"
           :key="item.kind"
-          class="motion-list-item grid gap-5 rounded-2xl border border-border bg-background p-5 lg:grid-cols-[auto_minmax(0,1fr)_auto]"
+          class="motion-list-item grid gap-5 rounded-2xl border border-border bg-card p-5 lg:grid-cols-[auto_minmax(0,1fr)_auto]"
         >
           <div class="grid size-14 shrink-0 place-items-center rounded-2xl border border-border bg-muted/40 text-foreground">
             <component :is="item.icon" class="size-6" aria-hidden="true" />
@@ -1928,12 +1928,12 @@ onBeforeUnmount(() => {
         </div>
         <div v-else-if="facility" class="grid gap-4">
           <div class="grid grid-cols-4 gap-3 max-lg:grid-cols-2 max-sm:grid-cols-1">
-            <div class="rounded-2xl border border-border bg-background p-4"><span>{{ t('applicationsPage.gatewayNodes') }}</span><strong>{{ facilityConfigSummary.gateways }}</strong></div>
-            <div class="rounded-2xl border border-border bg-background p-4"><span>{{ t('applicationsPage.gatewayRoutes') }}</span><strong>{{ facilityConfigSummary.routes }}</strong></div>
-            <div class="rounded-2xl border border-border bg-background p-4"><span>{{ t('applicationsPage.staticAssets') }}</span><strong>{{ facilityConfigSummary.assets }}</strong></div>
-            <div class="rounded-2xl border border-border bg-background p-4"><span>{{ t('applicationsPage.applicationRoutes') }}</span><strong>{{ facilityConfigSummary.appRoutes }}</strong></div>
+            <div class="rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.gatewayNodes') }}</span><strong>{{ facilityConfigSummary.gateways }}</strong></div>
+            <div class="rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.gatewayRoutes') }}</span><strong>{{ facilityConfigSummary.routes }}</strong></div>
+            <div class="rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.staticAssets') }}</span><strong>{{ facilityConfigSummary.assets }}</strong></div>
+            <div class="rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.applicationRoutes') }}</span><strong>{{ facilityConfigSummary.appRoutes }}</strong></div>
           </div>
-          <section class="rounded-2xl border border-border bg-background p-4">
+          <section class="rounded-2xl border border-border bg-muted p-4">
             <h3>{{ t('applicationsPage.routeSummaries') }}</h3>
             <div class="mt-3 grid gap-2 motion-stagger">
               <div v-for="summary in facility.routeSummaries" :key="`${summary.domain}-${summary.path}-${summary.source}`" class="motion-reveal grid gap-1 rounded-xl border border-border p-3 text-sm">
@@ -1943,7 +1943,7 @@ onBeforeUnmount(() => {
               <EmptyState v-if="!facility.routeSummaries.length" :title="t('applicationsPage.noGatewayRoutes')" :description="t('applicationsPage.noGatewayRoutesHint')" />
             </div>
           </section>
-          <section class="rounded-2xl border border-border bg-background p-4">
+          <section class="rounded-2xl border border-border bg-muted p-4">
             <h3>{{ t('applicationsPage.dnsSyncTitle') }}</h3>
             <div class="mt-3 grid gap-2 motion-stagger">
               <div v-for="domain in facility.domains" :key="`dns-${domain.domain}`" class="motion-reveal flex items-center justify-between gap-3 rounded-xl border border-border p-3 text-sm">
@@ -1957,7 +1957,7 @@ onBeforeUnmount(() => {
               <EmptyState v-if="!facility.domains.length && !(facility.panelEntry.enabled && facility.panelEntry.domain)" :title="t('applicationsPage.noDomains')" :description="t('applicationsPage.noDomainsHint')" />
             </div>
           </section>
-          <section class="rounded-2xl border border-border bg-background p-4">
+          <section class="rounded-2xl border border-border bg-muted p-4">
             <h3>{{ t('applicationsPage.staticAssets') }}</h3>
             <div class="mt-3 grid gap-2 motion-stagger">
               <div v-for="asset in facility.staticAssets" :key="asset.name" class="item-row motion-reveal">
@@ -2111,7 +2111,7 @@ onBeforeUnmount(() => {
 
   <Dialog v-model:open="logsOpen" :title="t('applicationsPage.logs')" :close-label="t('common.close')">
     <div class="relative">
-      <pre class="max-h-[520px] overflow-auto whitespace-pre-wrap rounded-xl border border-border bg-background p-3 text-xs text-foreground">{{ logsText }}</pre>
+      <pre class="max-h-[520px] overflow-auto whitespace-pre-wrap rounded-xl border border-border bg-muted p-3 text-xs text-foreground">{{ logsText }}</pre>
       <LoadingOverlay v-if="logsLoading" :label="t('applicationsPage.logsLoading')" />
     </div>
   </Dialog>
@@ -2432,7 +2432,7 @@ strong {
   max-width: 70rem;
   border: 1px solid var(--panel-border);
   border-radius: 1rem;
-  background: var(--panel-bg);
+  background: var(--panel-muted);
   padding: 1rem;
   animation: panel-motion-enter var(--panel-motion-duration-slow) var(--panel-motion-ease-emphasized) both;
 }
@@ -2482,7 +2482,7 @@ strong {
   min-width: 0;
   border: 1px solid var(--panel-border);
   border-radius: 0.875rem;
-  background: var(--panel-bg);
+  background: var(--panel-surface);
   padding: 0.75rem;
   transition:
     background-color var(--panel-motion-duration-base) var(--panel-motion-ease-standard),
@@ -2524,7 +2524,7 @@ strong {
   min-width: 0;
   border: 1px solid var(--panel-border);
   border-radius: 0.875rem;
-  background: color-mix(in srgb, var(--panel-muted) 30%, transparent);
+  background: var(--panel-surface);
   padding: 0.875rem;
 }
 
@@ -2569,7 +2569,7 @@ strong {
   min-width: 0;
   border: 1px solid var(--panel-border);
   border-radius: 0.75rem;
-  background: var(--panel-bg);
+  background: var(--panel-surface);
   padding: 0.625rem 0.75rem;
 }
 

@@ -279,7 +279,7 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
             :key="credential.id"
             type="button"
             class="motion-list-item mb-2 grid w-full gap-2 rounded-xl border p-3 text-left hover:bg-accent"
-            :class="selectedId === credential.id ? 'border-border-strong bg-background' : 'border-transparent bg-transparent'"
+            :class="selectedId === credential.id ? 'border-border-strong bg-muted' : 'border-transparent bg-transparent'"
             :aria-current="selectedId === credential.id ? 'true' : undefined"
             @click="selectedId = credential.id"
           >
@@ -316,7 +316,7 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
 
           <div class="min-h-0 overflow-auto p-5">
             <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-              <section class="rounded-2xl border border-border bg-background p-4">
+              <section class="rounded-2xl border border-border bg-muted p-4">
                 <h3 class="flex items-center gap-2 text-sm font-semibold text-foreground"><KeyRound class="size-4 text-muted-foreground" />{{ t('credentialsPage.keySummary') }}</h3>
                 <div v-if="detailLoading" class="mt-4 grid gap-2">
                   <Skeleton v-for="item in 3" :key="item" class="h-10" />
@@ -343,7 +343,7 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
                 <p v-else-if="selectedCredential.type === 'private_key'" class="m-0 mt-4 text-sm text-muted-foreground">{{ t('credentialsPage.keySummaryUnavailable') }}</p>
                 <p v-else class="m-0 mt-4 text-sm text-muted-foreground">{{ t('credentialsPage.passwordCredentialSummary', { username: selectedCredential.username }) }}</p>
               </section>
-              <aside class="rounded-2xl border border-border bg-background p-4">
+              <aside class="rounded-2xl border border-border bg-muted p-4">
                 <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('credentialsPage.references') }}</h3>
                 <div v-if="references.length" class="mt-3 grid gap-2">
                   <div v-for="ref in references" :key="ref.id" class="rounded-xl border border-border p-3">

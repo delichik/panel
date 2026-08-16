@@ -1,4 +1,4 @@
-﻿# v4 视觉 Token 规范
+# v4 视觉 Token 规范
 
 > 当前落地处为 `web/src/styles/main.css`、`web/src/design/theme.ts` 与 `web/src/design/tokens.ts`。视觉参考 OpenShip 的克制低边框、高密度工作台和黑白主操作，但不复制其品牌、logo、文案或页面结构。
 
@@ -14,15 +14,25 @@
 
 - 页面背景：`--panel-bg`
 - 面板表面：`--panel-surface`
-- 弱表面：`--panel-muted`
-- hover 表面：`--panel-hover`
+- 弱表面：`--panel-muted`（中性灰内嵌/弱表面；浅色为黑 5%、深色为白 6%，不带方案色调）
+- hover 表面：`--panel-hover`（与 `--panel-muted` 同基调，加深一档）
 - 边框：`--panel-border` / `--panel-border-strong`
 - 文本：`--panel-text` / `--panel-text-secondary` / `--panel-text-muted`
 - 主按钮：`--panel-primary` / `--panel-primary-foreground`
 - 强调色（激活 / 选中）：`--panel-brand` / `--panel-brand-bg` / `--panel-brand-border`，用于导航激活、Tab 激活、下拉与选择选中态
 - 状态：`--panel-success-*`、`--panel-warning-*`、`--panel-danger-*`、`--panel-info-*`、`--panel-neutral-*`
 
-浅色主题以白、近白和低对比灰为主；深色主题以黑、近黑和半透明白边框为主。状态色使用浅背景 + 有色文本/边框，避免整页单色化。
+### 表面层级约定
+
+页面、卡片与卡片内组件构成固定的三层表面，禁止跨层复用：
+
+- `--panel-bg` 只用于页面根（AppShell / LoginPage / maintenance 根容器）、页头与页脚条（AppShell header、EditorPage footer），以及直接铺在页面上的页面级面板（如网关编辑器外的 `.workspace-panel` 已归入 muted，不再属于此类）。
+- 卡片 / 面板一律 `--panel-surface`；卡片内部任何组件**禁止**再使用 `--panel-bg`。
+- 卡片内的内嵌分区、统计小格、表格头、选中列表项使用 `--panel-muted`（中性灰井道），选中项叠加 `--panel-border-strong`。
+- 输入类控件（Input / Select / Textarea / CodeEditor / 次要按钮 / 开关滑块 / 服务器选择行）使用 `--panel-surface` + 边框，在卡片内与卡片同色、靠边框区分。
+- 表格体透明继承容器背景，行间用 `divide-border` 分隔；列表行默认透明 + 边框，hover 用 `--panel-hover`。
+
+浅色主题以白、近白和低对比灰为主；深色主题以黑、近黑和半透明白边框为主。内嵌表面固定为中性灰，不与页面底色同色，避免白色卡片内出现页面色色块。状态色使用浅背景 + 有色文本/边框，避免整页单色化。
 
 ## 字体与尺寸
 

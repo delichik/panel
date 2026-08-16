@@ -261,11 +261,11 @@ async function deleteRecord() {
           <SearchInput v-model="search" clearable :placeholder="t('dnsPage.searchDomains')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
         </div>
         <div class="grid grid-cols-2 gap-2 border-b border-border p-4 text-sm">
-          <div class="rounded-xl border border-border bg-background p-3">
+          <div class="rounded-xl border border-border bg-muted p-3">
             <div class="text-xs text-muted-foreground">{{ t('dnsPage.provider') }}</div>
             <strong class="mt-1 block text-foreground">Cloudflare</strong>
           </div>
-          <div class="rounded-xl border border-border bg-background p-3">
+          <div class="rounded-xl border border-border bg-muted p-3">
             <div class="text-xs text-muted-foreground">{{ t('dnsPage.zones') }}</div>
             <strong class="mt-1 block text-foreground">{{ totalDomains }}</strong>
           </div>
@@ -286,7 +286,7 @@ async function deleteRecord() {
             :key="domain.id"
             type="button"
             class="motion-list-item mb-2 grid w-full gap-2 rounded-xl border p-3 text-left hover:bg-accent"
-            :class="selectedId === domain.id ? 'border-border-strong bg-background' : 'border-transparent'"
+            :class="selectedId === domain.id ? 'border-border-strong bg-muted' : 'border-transparent'"
             :aria-current="selectedId === domain.id ? 'true' : undefined"
             @click="selectedId = domain.id"
           >
@@ -332,7 +332,7 @@ async function deleteRecord() {
                 <thead class="sticky top-0 bg-muted text-xs uppercase text-muted-foreground">
                   <tr><th class="px-3 py-2 text-left">{{ t('common.type') }}</th><th class="px-3 py-2 text-left">{{ t('common.name') }}</th><th class="px-3 py-2 text-left">{{ t('dnsPage.content') }}</th><th class="px-3 py-2 text-left">TTL</th><th class="px-3 py-2 text-right">{{ t('common.actions') }}</th></tr>
                 </thead>
-                <tbody class="motion-stagger divide-y divide-border bg-background">
+                <tbody class="motion-stagger divide-y divide-border">
                   <tr v-if="loadingRecords && !records.length"><td colspan="5" class="px-3 py-3"><div class="grid gap-2"><Skeleton v-for="item in 4" :key="item" class="h-8" /></div></td></tr>
                   <tr v-if="recordsError && !loadingRecords"><td colspan="5" class="px-3 py-8"><EmptyState :title="t('common.loadFailed')" :description="recordsError"><template #actions><Button size="sm" :loading="loadingRecords" @click="loadRecords()"><RefreshCcw />{{ t('common.retry') }}</Button></template></EmptyState></td></tr>
                   <tr v-if="!records.length && !loadingRecords && !recordsError"><td colspan="5" class="px-3 py-8"><EmptyState :title="t('dnsPage.noRecords')" :description="t('dnsPage.noRecordsHint')" /></td></tr>

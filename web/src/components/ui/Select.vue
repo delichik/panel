@@ -37,8 +37,8 @@ const listboxStyle = ref<Record<string, string>>({});
 
 const rootClasses = computed(() => cn('relative w-full min-w-0', attrs.class as string));
 const buttonClasses = computed(() => cn(
-  'motion-field flex h-9 w-full min-w-0 items-center justify-between gap-2 rounded-xl border border-input bg-background px-3 text-left text-sm text-foreground transition-colors',
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+  'motion-field flex h-9 w-full min-w-0 items-center justify-between gap-2 rounded-xl border border-input bg-card px-3 text-left text-sm text-foreground transition-colors',
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-offset-2 focus-visible:ring-offset-card',
   'disabled:cursor-not-allowed disabled:opacity-45',
   open.value && 'border-border-strong bg-popover shadow-[var(--panel-motion-shadow-raised)]',
 ));

@@ -45,7 +45,7 @@ function toggle(id: string) {
       type="button"
       :disabled="disabled || blocked.has(server.id)"
       :aria-pressed="selected.has(server.id)"
-      class="motion-list-item grid min-h-20 w-full gap-2 rounded-xl border border-border bg-background p-3 text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50 aria-pressed:border-primary aria-pressed:bg-primary/10"
+      class="motion-list-item grid min-h-20 w-full gap-2 rounded-xl border border-border bg-card p-3 text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50 aria-pressed:border-primary aria-pressed:bg-primary/10"
       @click="toggle(server.id)"
     >
       <span class="flex min-w-0 items-start gap-3">

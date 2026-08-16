@@ -691,7 +691,7 @@ onBeforeUnmount(() => {
             <article
               v-for="card in cards"
               :key="card.id"
-              class="motion-card motion-reveal overview-card relative grid min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-background p-4"
+              class="motion-card motion-reveal overview-card relative grid min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-muted p-4"
               :class="[
                 card.kind === 'placeholder' ? 'border-dashed bg-muted/30' : '',
                 editMode ? 'cursor-move ring-1 ring-primary/20' : '',
@@ -768,7 +768,7 @@ onBeforeUnmount(() => {
               <Badge :tone="risks.some((item) => item.tone === 'danger') ? 'danger' : risks.length ? 'warning' : 'success'">{{ risks.length }}</Badge>
             </div>
             <div v-if="risks.length" class="grid gap-2 motion-stagger">
-              <button v-for="risk in risks" :key="risk.id" type="button" class="motion-list-item grid min-w-0 rounded-xl border border-border bg-background p-3 text-left hover:bg-accent" @click="router.push(risk.to)">
+              <button v-for="risk in risks" :key="risk.id" type="button" class="motion-list-item grid min-w-0 rounded-xl border border-border bg-muted p-3 text-left hover:bg-accent" @click="router.push(risk.to)">
                 <div class="flex min-w-0 items-center justify-between gap-2">
                   <strong class="truncate text-sm text-foreground">{{ risk.title }}</strong>
                   <Badge class="shrink-0" :tone="risk.tone">{{ t(`overviewPage.risk.${risk.tone}`) }}</Badge>

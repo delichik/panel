@@ -55,14 +55,14 @@ function editorPhrases(): Record<string, string> {
 }
 
 const theme = EditorView.theme({
-  '&': { height: '100%', minHeight: '0', backgroundColor: 'var(--panel-bg)', color: 'var(--panel-text)' },
+  '&': { height: '100%', minHeight: '0', backgroundColor: 'var(--panel-muted)', color: 'var(--panel-text)' },
   '&.cm-focused': { outline: '2px solid var(--panel-ring)', outlineOffset: '-2px' },
   '.cm-scroller': { overflow: 'auto', fontFamily: 'var(--font-mono, ui-monospace, monospace)', lineHeight: '1.55' },
   '.cm-content': { padding: '0.75rem 0' },
-  '.cm-gutters': { backgroundColor: 'var(--panel-muted)', color: 'var(--panel-text-muted)', borderRight: '1px solid var(--panel-border)' },
+  '.cm-gutters': { backgroundColor: 'var(--panel-surface)', color: 'var(--panel-text-muted)', borderRight: '1px solid var(--panel-border)' },
   '.cm-activeLine, .cm-activeLineGutter': { backgroundColor: 'var(--panel-hover)' },
   '.cm-panel.cm-search': {
-    backgroundColor: 'var(--panel-bg)',
+    backgroundColor: 'var(--panel-surface)',
     color: 'var(--panel-text)',
     borderBottom: '1px solid var(--panel-border)',
     padding: '0.5rem',
@@ -73,7 +73,7 @@ const theme = EditorView.theme({
     fontSize: '0.8125rem',
   },
   '.cm-panel.cm-search input.cm-textfield': {
-    backgroundColor: 'var(--panel-bg)',
+    backgroundColor: 'var(--panel-surface)',
     border: '1px solid var(--panel-input-border)',
     borderRadius: '0.375rem',
     color: 'var(--panel-text)',

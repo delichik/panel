@@ -327,15 +327,15 @@ onBeforeUnmount(() => {
           <p class="m-0 mt-1 text-xs text-muted-foreground">{{ t('securityPage.selectServerHint') }}</p>
         </div>
         <div class="grid grid-cols-3 gap-2 border-b border-border p-4 text-center text-xs">
-          <div class="rounded-xl border border-border bg-background p-3">
+          <div class="rounded-xl border border-border bg-muted p-3">
             <strong class="block text-lg text-foreground">{{ servers.length }}</strong>
             <span class="text-muted-foreground">{{ t('securityPage.nodes') }}</span>
           </div>
-          <div class="rounded-xl border border-border bg-background p-3">
+          <div class="rounded-xl border border-border bg-muted p-3">
             <strong class="block text-lg text-foreground">{{ servers.filter((item) => item.traits?.['sys.ufw_active'] === 'true').length }}</strong>
             <span class="text-muted-foreground">UFW</span>
           </div>
-          <div class="rounded-xl border border-border bg-background p-3">
+          <div class="rounded-xl border border-border bg-muted p-3">
             <strong class="block text-lg text-foreground">{{ servers.filter((item) => item.traits?.['agent.status'] === 'compatible').length }}</strong>
             <span class="text-muted-foreground">Agent</span>
           </div>
@@ -372,7 +372,7 @@ onBeforeUnmount(() => {
 
           <div class="min-h-0 p-5">
             <div v-if="activeTab === 'ufw'" class="grid h-full min-h-0 grid-rows-[minmax(0,1fr)] gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-              <section class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-background">
+              <section class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-muted">
                 <div class="flex items-center justify-between gap-3 border-b border-border p-4">
                   <div class="flex items-center gap-3">
                     <ShieldCheck class="size-5 text-muted-foreground" />
@@ -412,7 +412,7 @@ onBeforeUnmount(() => {
               </section>
 
               <aside class="grid content-start gap-3">
-                <section class="rounded-2xl border border-border bg-background p-4">
+                <section class="rounded-2xl border border-border bg-muted p-4">
                   <h3 class="m-0 flex items-center gap-2 text-sm font-semibold"><Shield class="size-4" />{{ t('securityPage.ufwPosture') }}</h3>
                   <dl class="mt-3 grid gap-2 text-sm">
                     <div><dt>{{ t('securityPage.supported') }}</dt><dd>{{ ufwState?.supported ? t('state.healthy') : t('state.critical') }}</dd></div>
@@ -434,7 +434,7 @@ onBeforeUnmount(() => {
             </div>
 
             <div v-else class="grid h-full min-h-0 grid-rows-[minmax(0,1fr)] gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
-              <section class="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] rounded-2xl border border-border bg-background">
+              <section class="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] rounded-2xl border border-border bg-muted">
                 <div class="flex items-center justify-between gap-3 border-b border-border p-4">
                   <div>
                     <h3 class="m-0 text-sm font-semibold">{{ t('securityPage.fail2banRules') }}</h3>
@@ -496,7 +496,7 @@ onBeforeUnmount(() => {
               </section>
 
               <aside class="grid content-start gap-3">
-                <section class="rounded-2xl border border-border bg-background p-4">
+                <section class="rounded-2xl border border-border bg-muted p-4">
                   <h3 class="m-0 flex items-center gap-2 text-sm font-semibold"><LockKeyhole class="size-4" />{{ t('securityPage.fail2banStatus') }}</h3>
                   <dl class="mt-3 grid gap-2 text-sm">
                     <div><dt>{{ t('securityPage.installed') }}</dt><dd>{{ fail2banState?.installed ? t('state.healthy') : t('state.warning') }}</dd></div>
@@ -505,7 +505,7 @@ onBeforeUnmount(() => {
                     <div><dt>{{ t('securityPage.updatedAt') }}</dt><dd>{{ formatDateTime(fail2banState?.updatedAt) || t('common.never') }}</dd></div>
                   </dl>
                 </section>
-                <section class="rounded-2xl border border-border bg-background p-4">
+                <section class="rounded-2xl border border-border bg-muted p-4">
                   <h3 class="m-0 text-sm font-semibold">{{ t('securityPage.detectedJails') }}</h3>
                   <div class="mt-3 flex flex-wrap gap-2">
                     <Badge v-for="jail in runtimeJails" :key="jail" tone="info">{{ jail }}</Badge>

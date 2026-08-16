@@ -317,7 +317,7 @@ onBeforeUnmount(() => {
               </template>
             </EmptyState>
             <EmptyState v-else-if="!rows.length" :title="t('applicationOperationsPage.empty')" :description="t('applicationOperationsPage.emptyHint')" />
-            <button v-for="row in rows" v-else :key="row.operationId" type="button" class="motion-list-item mb-2 grid w-full min-w-0 gap-2 overflow-hidden rounded-xl border p-3 text-left text-sm hover:bg-accent" :class="selectedOperationId === row.operationId ? 'border-border-strong bg-background' : 'border-transparent'" :aria-current="selectedOperationId === row.operationId ? 'true' : undefined" @click="selectedOperationId = row.operationId">
+            <button v-for="row in rows" v-else :key="row.operationId" type="button" class="motion-list-item mb-2 grid w-full min-w-0 gap-2 overflow-hidden rounded-xl border p-3 text-left text-sm hover:bg-accent" :class="selectedOperationId === row.operationId ? 'border-border-strong bg-muted' : 'border-transparent'" :aria-current="selectedOperationId === row.operationId ? 'true' : undefined" @click="selectedOperationId = row.operationId">
               <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 max-[420px]:grid-cols-1">
                 <div class="grid min-w-0 gap-0.5">
                   <strong class="min-w-0 truncate text-foreground">{{ applicationLabel(row) }}</strong>
@@ -384,7 +384,7 @@ onBeforeUnmount(() => {
             </header>
 
             <div class="motion-stagger min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-4">
-              <section class="motion-reveal rounded-2xl border border-border bg-background p-4">
+              <section class="motion-reveal rounded-2xl border border-border bg-muted p-4">
                 <h3 class="m-0 mb-3 text-sm font-semibold">{{ t('applicationOperationsPage.servers') }}</h3>
                 <div v-if="!detail.targets.length" class="grid gap-2">
                   <EmptyState :title="t('applicationOperationsPage.noTargets')" :description="t('applicationOperationsPage.noTargetsHint')" />

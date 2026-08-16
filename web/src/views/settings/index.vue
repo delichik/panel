@@ -378,7 +378,7 @@ onMounted(load);
 
     <div class="relative grid h-full min-h-[640px] grid-cols-[260px_minmax(0,1fr)] gap-4 max-lg:grid-cols-1">
       <aside class="min-h-0 overflow-auto rounded-2xl border border-border bg-card p-2">
-        <button v-for="section in sections" :key="section.key" type="button" class="mb-1 flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm hover:bg-accent" :class="activeSection === section.key ? 'bg-background text-foreground' : 'text-muted-foreground'" @click="router.push(section.to)">
+        <button v-for="section in sections" :key="section.key" type="button" class="mb-1 flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm hover:bg-accent" :class="activeSection === section.key ? 'bg-muted text-foreground' : 'text-muted-foreground'" @click="router.push(section.to)">
           {{ section.label }}
           <Badge v-if="section.key === 'backups' && (exportPending || restorePending)" tone="warning">{{ restarting ? t('settingsPage.restarting') : t('settingsPage.pending') }}</Badge>
         </button>
@@ -418,7 +418,7 @@ onMounted(load);
             <label class="grid gap-1 text-sm">{{ t('settingsPage.tokenExpiration') }}<Select v-model="form.tokenExpiration" :options="tokenOptions" /></label>
             <label class="grid gap-1 text-sm">{{ t('settingsPage.remoteTimeout') }}<Input v-model="form.remoteCommandTimeoutSeconds" type="number" min="1" :invalid="Boolean(fieldErrors.remoteCommandTimeoutSeconds)" /><span v-if="fieldErrors.remoteCommandTimeoutSeconds" class="text-xs text-danger">{{ t(fieldErrors.remoteCommandTimeoutSeconds) }}</span></label>
           </div>
-          <div class="grid gap-3 rounded-xl border border-border bg-background p-4">
+          <div class="grid gap-3 rounded-xl border border-border bg-muted p-4">
             <div class="flex flex-wrap items-center justify-between gap-3 text-sm">
               <span class="text-muted-foreground">{{ t('settingsPage.jwtSecretConfigured') }}</span>
               <Badge :tone="runtime?.jwtSecretConfigured ? 'success' : 'warning'">{{ runtime?.jwtSecretConfigured ? t('state.healthy') : t('state.warning') }}</Badge>
@@ -441,7 +441,7 @@ onMounted(load);
           <p class="m-0 text-sm text-muted-foreground">{{ t('settingsPage.systemCertificatesHint') }}</p>
           <EmptyState v-if="!systemCertificates.length" :title="t('settingsPage.systemCertificatesEmpty')" :description="t('settingsPage.systemCertificatesEmptyHint')" />
           <div v-else class="grid gap-3 motion-stagger">
-            <article v-for="cert in systemCertificates" :key="cert.id" class="motion-reveal grid gap-3 rounded-xl border border-border bg-background p-4">
+            <article v-for="cert in systemCertificates" :key="cert.id" class="motion-reveal grid gap-3 rounded-xl border border-border bg-muted p-4">
               <div class="flex min-w-0 flex-wrap items-start justify-between gap-3">
                 <div class="min-w-0">
                   <h3 class="truncate">{{ cert.name }}</h3>
@@ -476,7 +476,7 @@ onMounted(load);
 
         <section v-else-if="activeSection === 'system'" class="grid gap-4 rounded-2xl border border-border bg-card p-5">
           <h2>{{ t('settingsPage.section.system') }}</h2>
-          <div class="grid gap-3 rounded-xl border border-border bg-background p-4 text-sm">
+          <div class="grid gap-3 rounded-xl border border-border bg-muted p-4 text-sm">
             <div class="grid grid-cols-2 gap-3 max-md:grid-cols-1">
               <div><span class="text-muted-foreground">{{ t('settingsPage.panelVersion') }}</span><strong class="block text-foreground">{{ version?.version || t('common.notAvailable') }}</strong></div>
               <div><span class="text-muted-foreground">{{ t('settingsPage.releaseChannel') }}</span><strong class="block text-foreground">{{ version?.channel || t('common.notAvailable') }}</strong></div>
