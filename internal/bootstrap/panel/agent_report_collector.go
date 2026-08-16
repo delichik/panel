@@ -301,6 +301,7 @@ func (c *agentReportCollector) recordReportStream(ctx context.Context, serverID 
 
 func (c *agentReportCollector) runServerStream(ctx context.Context, srv server.Server, entry *agentReportStream) {
 	backoff := 5 * time.Second
+	var wait time.Duration
 	for ctx.Err() == nil {
 		err := c.client.StreamReports(ctx, entry.endpoint, func() agentclient.ReportConfig {
 			rt := c.settings.Runtime()
@@ -316,17 +317,38 @@ func (c *agentReportCollector) runServerStream(ctx context.Context, srv server.S
 		if ctx.Err() != nil {
 			return
 		}
+		// 本次连接曾经收到过上报（lastMessageAt 非零）说明链路本身是通的，
+		// 断流只是瞬时故障，重连退避必须重置回 5s；只有连续失败才逐次翻倍，
+		// 否则一次偶发断流会让后续每次重连越等越久（5s→…→5min 封顶）。
+		hadMessages := !entry.lastMessageAt.IsZero()
 		logging.L().Warn("agent report stream failed", zap.String("server_id", srv.ID), zap.Error(err))
 		c.markDisconnected(entry, err.Error())
+		wait, backoff = reconnectBackoff(hadMessages, backoff)
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(backoff):
-		}
-		if backoff < 5*time.Minute {
-			backoff *= 2
+		case <-time.After(wait):
 		}
 	}
+}
+
+// reconnectBackoff 计算断流后的重连等待与下一次累计值。本次连接曾收到上报
+// （hadMessages=true）说明链路本身是通的，等待重置回初始 5s，下一次连续
+// 失败从 10s 起继续翻倍；未收到上报时按当前累计值等待并继续翻倍（封顶
+// 5 分钟）。
+func reconnectBackoff(hadMessages bool, current time.Duration) (wait, next time.Duration) {
+	if hadMessages {
+		return 5 * time.Second, 10 * time.Second
+	}
+	if current < 5*time.Second {
+		current = 5 * time.Second
+	}
+	wait = current
+	next = wait * 2
+	if next > 5*time.Minute {
+		next = 5 * time.Minute
+	}
+	return wait, next
 }
 
 func (c *agentReportCollector) saveReportedImages(ctx context.Context, serverID string, images []agentcontract.DockerImage) error {
@@ -360,23 +382,38 @@ func (c *agentReportCollector) handleReport(ctx context.Context, serverID string
 		c.saveReportedImages(ctx, serverID, report.Images)
 	}
 	rt := c.settings.Runtime()
-	if report.Metrics != nil && sampleAligned(report.SampleAt, rt.MetricsCollectionIntervalSeconds) {
-		if err := c.metrics.SaveReported(ctx, serverID, report.SampleAt, *report.Metrics); err != nil {
-			// 与包/镜像推送路径一致：落库失败只记录日志，不中断上报流。
-			logging.L().Warn("agent metrics report save failed", zap.String("server_id", serverID), zap.Error(err))
+	if report.Metrics != nil {
+		if sampleAligned(report.SampleAt, rt.MetricsCollectionIntervalSeconds) {
+			if err := c.metrics.SaveReported(ctx, serverID, report.SampleAt, *report.Metrics); err != nil {
+				// 与包/镜像推送路径一致：落库失败只记录日志，不中断上报流。
+				logging.L().Warn("agent metrics report save failed", zap.String("server_id", serverID), zap.Error(err))
+			}
+		} else {
+			// agent 按发送时的间隔计算整点、Panel 按收到时的间隔校验；
+			// 设置项在上报在途时变更会让样本落在新间隔之外，这里记录日志便于排查，
+			// 但同样不中断上报流。
+			logging.L().Debug("agent metrics report skipped: sample not aligned to collection interval",
+				zap.String("server_id", serverID),
+				zap.Time("sample_at", report.SampleAt),
+				zap.Int("interval_seconds", rt.MetricsCollectionIntervalSeconds))
 		}
 	}
 	// 容器分支：仅当上报明确携带容器快照（非 nil）时才替换观察集合；
 	// 未携带快照（nil）时保留既有观察，由 SaveReportedContainers 内部保障。
 	if report.HasContainers && report.Containers != nil && (sampleAligned(report.SampleAt, rt.ContainerReportIntervalSeconds) || report.Reason == "container_change") {
 		if err := c.containers.SaveReportedContainers(ctx, serverID, report.SampleAt, report.Containers); err != nil {
-			return err
+			// 与指标分支一致：容器观察落库失败只记录日志，不中断上报流，
+			// 否则一次瞬时错误会让指标采集随整条流一起断掉并触发重连退避。
+			logging.L().Warn("agent container report save failed", zap.String("server_id", serverID), zap.Error(err))
+		} else {
+			_, _, err := c.containers.TriggerApplicationReconcile(context.Background(), tasks.PeriodicTrigger{
+				Type: "agent_report", TriggerResourceType: "server", TriggerResourceID: serverID,
+				Payload: containerization.ApplicationReconcileTrigger{ServerIDs: []string{serverID}, Reason: firstNonEmpty(report.Reason, "agent_report")},
+			})
+			if err != nil {
+				logging.L().Warn("agent report reconcile trigger failed", zap.String("server_id", serverID), zap.Error(err))
+			}
 		}
-		_, _, err := c.containers.TriggerApplicationReconcile(context.Background(), tasks.PeriodicTrigger{
-			Type: "agent_report", TriggerResourceType: "server", TriggerResourceID: serverID,
-			Payload: containerization.ApplicationReconcileTrigger{ServerIDs: []string{serverID}, Reason: firstNonEmpty(report.Reason, "agent_report")},
-		})
-		return err
 	}
 	return nil
 }

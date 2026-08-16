@@ -24,6 +24,46 @@ func TestSampleAligned(t *testing.T) {
 	}
 }
 
+func TestReconnectBackoffResetsAfterDeliveredConnection(t *testing.T) {
+	cases := []struct {
+		name        string
+		hadMessages bool
+		current     time.Duration
+		wantWait    time.Duration
+		wantNext    time.Duration
+	}{
+		{"first failure waits initial 5s and doubles for next", false, 5 * time.Second, 5 * time.Second, 10 * time.Second},
+		{"consecutive failures keep doubling", false, 20 * time.Second, 20 * time.Second, 40 * time.Second},
+		{"backoff caps at 5 minutes", false, 5 * time.Minute, 5 * time.Minute, 5 * time.Minute},
+		{"never waits below 5s", false, 0, 5 * time.Second, 10 * time.Second},
+		{"delivered connection resets wait to 5s", true, 5 * time.Minute, 5 * time.Second, 10 * time.Second},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			wait, next := reconnectBackoff(tc.hadMessages, tc.current)
+			if wait != tc.wantWait || next != tc.wantNext {
+				t.Fatalf("reconnectBackoff(%v, %s) = (%s, %s), want (%s, %s)", tc.hadMessages, tc.current, wait, next, tc.wantWait, tc.wantNext)
+			}
+		})
+	}
+}
+
+func TestAgentReportHandleReportContainerSaveFailureKeepsStreamAlive(t *testing.T) {
+	recorder := &fakeReportServerProvider{}
+	collector := newAgentReportCollector(recorder, nil, newReportCollectorSettings(t), nil, &containerization.Service{}, nil)
+	// 空 serverID 会让 SaveReportedContainers 返回校验错误；容器分支必须
+	// 只记录日志并把错误吞掉，否则整个上报流会被杀掉并触发重连退避。
+	err := collector.handleReport(context.Background(), "", agentclient.AgentReport{
+		SampleAt:      time.Unix(30, 0).UTC(),
+		HasContainers: true,
+		Containers:    []agentcontract.DockerContainer{{ID: "c1"}},
+		Reason:        "container_change",
+	})
+	if err != nil {
+		t.Fatalf("handleReport must not fail the stream on container save errors, got %v", err)
+	}
+}
+
 func TestAgentReportStreamEndpointChangeKeepsNewEntry(t *testing.T) {
 	recorder := &fakeReportServerProvider{servers: []server.Server{reportReadyServer("srv-1", "https://127.0.0.1:9786")}}
 	collector := newAgentReportCollector(recorder, nil, newReportCollectorSettings(t), nil, nil, nil)
