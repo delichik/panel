@@ -16,7 +16,9 @@ import (
 	"panel/internal/platform/config"
 	panelerr "panel/internal/platform/errors"
 	httpx "panel/internal/platform/http"
+	"panel/internal/platform/logging"
 
+	"go.uber.org/zap"
 	_ "modernc.org/sqlite"
 )
 
@@ -193,12 +195,34 @@ func (a *ExportApp) downloadAPI(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, panelerr.NotFound("backup export"))
 		return
 	}
-	a.mu.Lock()
-	a.downloadedAt = time.Now().UTC()
-	a.mu.Unlock()
+	a.markDownloaded(status.ExportID)
 	w.Header().Set("Content-Disposition", `attachment; filename="panel-`+filepath.Base(path)+`"`)
 	w.Header().Set("Content-Type", "application/octet-stream")
 	http.ServeFile(w, r, path)
+}
+
+// markDownloaded 记录归档已下载：内存标记之外再写一个持久化 marker 文件，
+// 否则维护进程在用户下载后、退出前若被重启，内存标记丢失，用户会被
+// backup_export_not_downloaded 锁在维护模式（归档实际已在客户端）。
+func (a *ExportApp) markDownloaded(exportID string) {
+	now := time.Now().UTC()
+	a.mu.Lock()
+	a.downloadedAt = now
+	a.mu.Unlock()
+	path := a.downloadMarkerPath(exportID)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(now.Format(time.RFC3339Nano)), 0o600); err == nil {
+		if err := os.Rename(tmp, path); err != nil {
+			_ = os.Remove(tmp)
+			logging.L().Warn("failed to persist backup download marker", zap.Error(err))
+		}
+	} else {
+		logging.L().Warn("failed to persist backup download marker", zap.Error(err))
+	}
+}
+
+func (a *ExportApp) downloadMarkerPath(exportID string) string {
+	return filepath.Join(a.cfg.DataRoot, "tmp", "backups", exportID+".downloaded")
 }
 
 func (a *ExportApp) exitAPI(w http.ResponseWriter, r *http.Request) {
@@ -230,8 +254,20 @@ func (a *ExportApp) exitAPI(w http.ResponseWriter, r *http.Request) {
 
 func (a *ExportApp) downloadConfirmed() bool {
 	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return !a.downloadedAt.IsZero()
+	confirmed := !a.downloadedAt.IsZero()
+	a.mu.RUnlock()
+	if confirmed {
+		return true
+	}
+	// 内存标记在维护进程重启后丢失，回退检查持久化 marker。
+	status := a.currentStatus()
+	if status.ExportID == "" {
+		return false
+	}
+	if _, err := os.Stat(a.downloadMarkerPath(status.ExportID)); err == nil {
+		return true
+	}
+	return false
 }
 
 func (a *ExportApp) cleanupTemporaryFiles(status Status) error {
@@ -243,6 +279,10 @@ func (a *ExportApp) cleanupTemporaryFiles(status Status) error {
 		path := filepath.Join(a.cfg.DataRoot, "tmp", "backups", status.ExportID+".panel-backup")
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			joined = errors.Join(joined, fmt.Errorf("remove backup archive: %w", err))
+		}
+		// 下载确认 marker 与归档同生命周期，退出维护时一并清理。
+		if err := os.Remove(a.downloadMarkerPath(status.ExportID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			joined = errors.Join(joined, fmt.Errorf("remove backup download marker: %w", err))
 		}
 	}
 	return joined
