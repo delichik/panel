@@ -14,14 +14,10 @@ type Step struct {
 	Run func(ctx context.Context, tx *sql.Tx) error
 }
 
-// RegisterSteps registers versioned migration steps. Duplicate IDs are
-// rejected.
-
 // RunSteps applies the given steps in order inside a single transaction on
 // the given database, recording each applied step in orm_migrations.
-// Already applied steps are skipped. This is the per-database variant of
-// MigrateSteps: callers pass exactly the steps that belong to one database,
-// so libraries stay isolated.
+// Already applied steps are skipped. Callers pass exactly the steps that
+// belong to one database, so libraries stay isolated.
 func RunSteps(ctx context.Context, db *sql.DB, steps []Step) error {
 	for _, s := range steps {
 		if strings.TrimSpace(s.ID) == "" {
@@ -55,8 +51,3 @@ func RunSteps(ctx context.Context, db *sql.DB, steps []Step) error {
 	}
 	return tx.Commit()
 }
-
-// MigrateSteps applies all registered steps in order inside a single
-// transaction, recording each applied step in orm_migrations. Already
-// applied steps are skipped. It delegates to RunSteps with the globally
-// registered steps.
