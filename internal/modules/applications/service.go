@@ -1799,6 +1799,7 @@ func (s *Service) prepareWithFiles(ctx context.Context, in SaveInput, generation
 	if err != nil {
 		return preparedApplication{}, err
 	}
+	enforceHostModeProxyTarget(spec.NetworkMode, in.ReverseProxy)
 	reverseProxy, err := normalizeReverseProxyRules(in.ReverseProxy)
 	if err != nil {
 		return preparedApplication{}, err
@@ -5322,6 +5323,20 @@ func normalizeReverseProxyTargetType(value string) string {
 		return ReverseProxyTargetContainer
 	default:
 		return ""
+	}
+}
+
+// enforceHostModeProxyTarget 强制 host 模式应用的反代目标为 local：host 模式
+// 容器不在受管容器网桥内，反代容器无法按名解析其上游，前端已禁选 container
+// 目标，这里在后端保存路径上做同样的降级，防止绕过前端直接提交。
+func enforceHostModeProxyTarget(networkMode string, rules []ReverseProxyRule) {
+	if networkMode != "host" {
+		return
+	}
+	for i := range rules {
+		if normalizeReverseProxyTargetType(rules[i].TargetType) == ReverseProxyTargetContainer {
+			rules[i].TargetType = ReverseProxyTargetLocal
+		}
 	}
 }
 

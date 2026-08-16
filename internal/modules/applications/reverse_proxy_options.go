@@ -34,11 +34,7 @@ func NormalizeAnyAccessConfig(in AnyAccessConfig, originServerIDs []string) (Any
 		// Application rules provide the origin ordering explicitly; the first
 		// entry is the primary origin. Facility rules keep the explicit primary.
 		if len(in.OriginPriority) > 0 {
-			var err error
-			priority, err = normalizeOriginPriority(in.OriginPriority, origins)
-			if err != nil {
-				return AnyAccessConfig{}, err
-			}
+			priority = normalizeOriginPriority(in.OriginPriority, origins)
 			primary = priority[0]
 		}
 		if primary == "" || !containsStringValue(origins, primary) {
@@ -55,42 +51,51 @@ func NormalizeAnyAccessConfig(in AnyAccessConfig, originServerIDs []string) (Any
 	return AnyAccessConfig{Enabled: in.Enabled, Strategy: strategy, PrimaryOriginServerID: primary, RelayServerIDs: relay, OriginPriority: priority}, nil
 }
 
-// normalizeOriginPriority validates that priority is exactly the origin
-// server set, in the user-arranged order and without duplicates.
-func normalizeOriginPriority(priority, origins []string) ([]string, error) {
-	seen := map[string]struct{}{}
-	out := make([]string, 0, len(priority))
+// normalizeOriginPriority projects the user-arranged priority onto the current
+// origin set instead of failing when the two diverge. Servers that were removed
+// from the origin set (gateway or deployment target changes) are dropped,
+// duplicates are collapsed, and newly added servers are appended in sorted
+// order; servers kept from the stored priority preserve the user's relative
+// order. Without this forward migration a stale priority would block every
+// save and every automatic reconcile after a gateway change.
+func normalizeOriginPriority(priority, origins []string) []string {
+	originSet := map[string]struct{}{}
+	cleanedOrigins := make([]string, 0, len(origins))
+	for _, item := range origins {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if _, ok := originSet[item]; ok {
+			continue
+		}
+		originSet[item] = struct{}{}
+		cleanedOrigins = append(cleanedOrigins, item)
+	}
+	stored := make([]string, 0, len(priority))
+	storedSet := map[string]struct{}{}
 	for _, item := range priority {
 		item = strings.TrimSpace(item)
 		if item == "" {
 			continue
 		}
-		if _, ok := seen[item]; ok {
-			return nil, panelerr.Validation("reverse_proxy_origin_priority_invalid", "AnyAccess origin priority contains duplicate servers")
+		if _, ok := originSet[item]; !ok {
+			continue // server no longer part of the origin set
 		}
-		seen[item] = struct{}{}
-		out = append(out, item)
+		if _, ok := storedSet[item]; ok {
+			continue // duplicate guard
+		}
+		storedSet[item] = struct{}{}
+		stored = append(stored, item)
 	}
-	if len(out) != len(origins) || !sameStringSet(out, origins) {
-		return nil, panelerr.Validation("reverse_proxy_origin_priority_invalid", "AnyAccess origin priority must contain exactly the origin servers")
-	}
-	return out, nil
-}
-
-func sameStringSet(items, reference []string) bool {
-	ref := map[string]struct{}{}
-	for _, item := range reference {
-		ref[item] = struct{}{}
-	}
-	if len(items) != len(ref) {
-		return false
-	}
-	for _, item := range items {
-		if _, ok := ref[item]; !ok {
-			return false
+	missing := make([]string, 0, len(cleanedOrigins))
+	for _, item := range cleanedOrigins {
+		if _, ok := storedSet[item]; !ok {
+			missing = append(missing, item)
 		}
 	}
-	return true
+	sort.Strings(missing)
+	return append(stored, missing...)
 }
 
 func uniqueSortedStrings(items []string) []string {

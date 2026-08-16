@@ -23,8 +23,10 @@ func (s *Service) finishTargetRunningStages(ctx context.Context, targetID, statu
 		finish = *finishedAt
 	}
 	exceptStage = strings.TrimSpace(exceptStage)
+	// running 步骤的 finished_at 在库里是空字符串（''，见 recordTargetStage），
+	// 不是 NULL，COALESCE 对空串无效；必须显式把空串也视为"未结束"。
 	_, err := orm.RawExec(ctx, s.lifecycleDB(), `UPDATE application_target_stages
-		SET status=?, finished_at=COALESCE(finished_at, ?), updated_at=?
+		SET status=?, finished_at=CASE WHEN finished_at IS NULL OR finished_at='' THEN ? ELSE finished_at END, updated_at=?
 		WHERE target_id=? AND status='running' AND (?='' OR stage<>?)`,
 		strings.TrimSpace(status), formatTime(finish), formatTime(finish), targetID, exceptStage, exceptStage)
 	return err
@@ -58,7 +60,7 @@ func (s *Service) recordTargetStage(ctx context.Context, targetID, stage, status
 			status=excluded.status,
 			detail=CASE WHEN excluded.detail <> '' THEN excluded.detail ELSE application_target_stages.detail END,
 			started_at=COALESCE(application_target_stages.started_at, excluded.started_at),
-			finished_at=CASE WHEN excluded.status='running' THEN '' ELSE COALESCE(excluded.finished_at, application_target_stages.finished_at) END,
+			finished_at=CASE WHEN excluded.status='running' THEN '' ELSE COALESCE(NULLIF(excluded.finished_at, ''), NULLIF(application_target_stages.finished_at, ''), excluded.updated_at) END,
 			updated_at=excluded.updated_at`,
 		id.New("atst"), operationID, targetID, applicationID, serverID, strings.TrimSpace(stage), strings.TrimSpace(status),
 		strings.TrimSpace(detail), formatTime(*start), optionalTimeString(finishedAt), formatTime(now), formatTime(now))

@@ -6,6 +6,25 @@ import (
 	panelerr "panel/internal/platform/errors"
 )
 
+func TestEnforceHostModeProxyTarget(t *testing.T) {
+	rules := []ReverseProxyRule{
+		{Domain: "app.example.test", TargetType: ReverseProxyTargetContainer, TargetPort: 8080},
+		{Domain: "other.example.test", TargetType: ReverseProxyTargetLocal, TargetPort: 80},
+	}
+	enforceHostModeProxyTarget("host", rules)
+	if rules[0].TargetType != ReverseProxyTargetLocal {
+		t.Fatalf("host-mode container target must be downgraded to local, got %q", rules[0].TargetType)
+	}
+	if rules[1].TargetType != ReverseProxyTargetLocal {
+		t.Fatalf("host-mode local target must be kept, got %q", rules[1].TargetType)
+	}
+	bridgeRules := []ReverseProxyRule{{Domain: "app.example.test", TargetType: ReverseProxyTargetContainer, TargetPort: 8080}}
+	enforceHostModeProxyTarget("bridge", bridgeRules)
+	if bridgeRules[0].TargetType != ReverseProxyTargetContainer {
+		t.Fatalf("bridge mode must not rewrite container targets, got %q", bridgeRules[0].TargetType)
+	}
+}
+
 func TestNormalizeAnyAccessConfigOriginPriority(t *testing.T) {
 	origins := []string{"srv-a", "srv-b", "srv-c"}
 
@@ -43,29 +62,51 @@ func TestNormalizeAnyAccessConfigOriginPriority(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects a priority that is not exactly the origin set", func(t *testing.T) {
-		_, err := NormalizeAnyAccessConfig(AnyAccessConfig{
+	t.Run("projects a stale priority onto the current origin set", func(t *testing.T) {
+		// A server was removed from the gateway/deployment set: it is dropped,
+		// the remaining stored order is preserved and the new server is
+		// appended, so saves and automatic reconciles keep working instead of
+		// failing on the stale priority.
+		cfg, err := NormalizeAnyAccessConfig(AnyAccessConfig{
 			Enabled:        true,
 			Strategy:       AnyAccessStrategyPrimaryBackup,
 			OriginPriority: []string{"srv-a", "srv-b"},
 		}, origins)
-		assertValidationCode(t, err, "reverse_proxy_origin_priority_invalid")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.PrimaryOriginServerID != "srv-a" {
+			t.Fatalf("expected primary srv-a, got %q", cfg.PrimaryOriginServerID)
+		}
+		if len(cfg.OriginPriority) != 3 || cfg.OriginPriority[0] != "srv-a" || cfg.OriginPriority[1] != "srv-b" || cfg.OriginPriority[2] != "srv-c" {
+			t.Fatalf("expected projected priority [srv-a srv-b srv-c], got %v", cfg.OriginPriority)
+		}
 
-		_, err = NormalizeAnyAccessConfig(AnyAccessConfig{
+		cfg, err = NormalizeAnyAccessConfig(AnyAccessConfig{
 			Enabled:        true,
 			Strategy:       AnyAccessStrategyPrimaryBackup,
 			OriginPriority: []string{"srv-a", "srv-b", "srv-x"},
 		}, origins)
-		assertValidationCode(t, err, "reverse_proxy_origin_priority_invalid")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(cfg.OriginPriority) != 3 || cfg.OriginPriority[2] != "srv-c" {
+			t.Fatalf("expected stale srv-x to be dropped and srv-c appended, got %v", cfg.OriginPriority)
+		}
 	})
 
-	t.Run("rejects duplicate entries in the priority", func(t *testing.T) {
-		_, err := NormalizeAnyAccessConfig(AnyAccessConfig{
+	t.Run("collapses duplicate entries in the priority", func(t *testing.T) {
+		cfg, err := NormalizeAnyAccessConfig(AnyAccessConfig{
 			Enabled:        true,
 			Strategy:       AnyAccessStrategyPrimaryBackup,
 			OriginPriority: []string{"srv-a", "srv-a", "srv-b", "srv-c"},
 		}, origins)
-		assertValidationCode(t, err, "reverse_proxy_origin_priority_invalid")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(cfg.OriginPriority) != 3 || cfg.OriginPriority[0] != "srv-a" {
+			t.Fatalf("expected duplicates collapsed, got %v", cfg.OriginPriority)
+		}
 	})
 
 	t.Run("clears priority for non-primary-backup strategies", func(t *testing.T) {
