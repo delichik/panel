@@ -763,9 +763,25 @@ func sanitizeStorageDownloadName(value string) string {
 	return strings.Trim(builder.String(), "-")
 }
 
+// deniedStorageRootPrefixes 与 agent 侧 internal/agent/storage 的
+// deniedRootPrefixes 保持一致：这些系统目录不允许作为存储共享根目录，
+// 否则配置在保存后会在 agent 导出阶段失败，长期处于"已启用但导出失败"状态。
+var deniedStorageRootPrefixes = []string{
+	"/etc", "/var", "/usr", "/bin", "/sbin", "/lib", "/boot",
+	"/dev", "/proc", "/sys", "/run", "/home", "/root", "/tmp",
+}
+
 func validStorageRoot(root string) bool {
 	if !storageRootPattern.MatchString(root) {
 		return false
+	}
+	if root == "/" {
+		return false
+	}
+	for _, prefix := range deniedStorageRootPrefixes {
+		if root == prefix || strings.HasPrefix(root, prefix+"/") {
+			return false
+		}
 	}
 	return !hasUnsafePathSegment(root)
 }
@@ -829,6 +845,17 @@ func (s *Service) StorageShareStatus(ctx context.Context) (StorageShareStatus, e
 	statusCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	out := StorageShareStatus{Servers: []StorageServerStatus{}, Partitions: []StoragePartitionStatus{}}
+	var mu sync.Mutex
+	addServer := func(item StorageServerStatus) {
+		mu.Lock()
+		out.Servers = append(out.Servers, item)
+		mu.Unlock()
+	}
+	addPartition := func(item StoragePartitionStatus) {
+		mu.Lock()
+		out.Partitions = append(out.Partitions, item)
+		mu.Unlock()
+	}
 	var wait sync.WaitGroup
 	for _, setting := range cfg.Servers {
 		wait.Add(1)
@@ -838,19 +865,19 @@ func (s *Service) StorageShareStatus(ctx context.Context) (StorageShareStatus, e
 			agent, ok := s.storageAgent()
 			if !ok {
 				item.Detail = "agent does not support storage; upgrade the agent"
-				out.Servers = append(out.Servers, item)
+				addServer(item)
 				return
 			}
 			srv, getErr := s.servers.Get(statusCtx, setting.ServerID)
 			if getErr != nil {
 				item.Detail = getErr.Error()
-				out.Servers = append(out.Servers, item)
+				addServer(item)
 				return
 			}
 			baseURL, endpointOK := storageAgentEndpoint(srv)
 			if !endpointOK {
 				item.Detail = "agent endpoint unavailable"
-				out.Servers = append(out.Servers, item)
+				addServer(item)
 				return
 			}
 			if status, statusErr := agent.StorageStatus(statusCtx, baseURL, setting.Root); statusErr == nil {
@@ -863,7 +890,7 @@ func (s *Service) StorageShareStatus(ctx context.Context) (StorageShareStatus, e
 				item.AgentOnline = false
 				item.Detail = storageAgentError(statusErr).Error()
 			}
-			out.Servers = append(out.Servers, item)
+			addServer(item)
 		}(setting)
 	}
 	partitions, err := s.listStoragePartitions(statusCtx)
@@ -877,31 +904,31 @@ func (s *Service) StorageShareStatus(ctx context.Context) (StorageShareStatus, e
 			item := StoragePartitionStatus{StoragePartition: partition}
 			if strings.TrimSpace(partition.VolumeName) == "" || strings.TrimSpace(partition.Target) == "" {
 				item.MountDetail = "volume metadata missing"
-				out.Partitions = append(out.Partitions, item)
+				addPartition(item)
 				return
 			}
 			storageServer, serverErr := s.storageServerForPartition(statusCtx, partition)
 			if serverErr != nil {
 				item.MountDetail = serverErr.Error()
-				out.Partitions = append(out.Partitions, item)
+				addPartition(item)
 				return
 			}
 			nodeServer, nodeErr := s.servers.Get(statusCtx, partition.ServerID)
 			if nodeErr != nil {
 				item.MountDetail = "app node server is not known"
-				out.Partitions = append(out.Partitions, item)
+				addPartition(item)
 				return
 			}
 			agent, ok := s.storageAgent()
 			if !ok {
 				item.MountDetail = "agent does not support storage; upgrade the agent"
-				out.Partitions = append(out.Partitions, item)
+				addPartition(item)
 				return
 			}
 			baseURL, endpointOK := storageAgentEndpoint(nodeServer)
 			if !endpointOK {
 				item.MountDetail = "app node agent is unavailable"
-				out.Partitions = append(out.Partitions, item)
+				addPartition(item)
 				return
 			}
 			source := storageNFSSource(storageServer.Host, partition.Path)
@@ -913,7 +940,7 @@ func (s *Service) StorageShareStatus(ctx context.Context) (StorageShareStatus, e
 			} else {
 				item.MountDetail = storageAgentError(statusErr).Error()
 			}
-			out.Partitions = append(out.Partitions, item)
+			addPartition(item)
 		}(partition)
 	}
 	wait.Wait()

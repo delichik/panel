@@ -19,6 +19,14 @@ func TestValidStorageRoot(t *testing.T) {
 		{"/srv//data", false},
 		{"/srv/panel-storage/", false},
 		{"/srv/panel-storage\nrm -rf /", false},
+		// 与 agent 侧 deniedRootPrefixes 保持一致：系统目录不能作为导出根目录，
+		// 否则保存后会在 agent 导出阶段失败。
+		{"/etc", false},
+		{"/var/lib/panel", false},
+		{"/usr/share", false},
+		{"/root/storage", false},
+		{"/tmp/panel", false},
+		{"/home/user/data", false},
 	}
 	for _, tc := range cases {
 		if got := validStorageRoot(tc.value); got != tc.want {
