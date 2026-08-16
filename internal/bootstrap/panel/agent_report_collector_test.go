@@ -91,10 +91,20 @@ func TestAgentReportAuditMarksSilentStreamDisconnected(t *testing.T) {
 	recorder := &fakeReportServerProvider{}
 	collector := newAgentReportCollector(recorder, nil, newReportCollectorSettings(t), nil, nil, nil)
 	cancelled := false
+	// streaming=true 表示连接已建立但静默无上报：audit 必须回收。
 	collector.streams["srv-1"] = &agentReportStream{
 		serverID:  "srv-1",
 		endpoint:  "https://127.0.0.1:9786",
 		cancel:    func() { cancelled = true },
+		startedAt: time.Now().UTC().Add(-3 * time.Minute),
+		streaming: true,
+	}
+	// streaming=false 表示处于重连退避等待中的条目：audit 不得回收，
+	// 否则会把刚积累的退避清零，断线 Agent 永远按 5s 轮询。
+	collector.streams["srv-2"] = &agentReportStream{
+		serverID:  "srv-2",
+		endpoint:  "https://127.0.0.1:9786",
+		cancel:    func() { t.Fatal("backoff entry must not be cancelled") },
 		startedAt: time.Now().UTC().Add(-3 * time.Minute),
 	}
 
@@ -105,6 +115,9 @@ func TestAgentReportAuditMarksSilentStreamDisconnected(t *testing.T) {
 	}
 	if collector.streams["srv-1"] != nil {
 		t.Fatal("silent stream should be removed")
+	}
+	if collector.streams["srv-2"] == nil {
+		t.Fatal("backoff entry should stay in the stream map")
 	}
 	if len(recorder.reportRecords) != 1 || recorder.reportRecords[0].connected {
 		t.Fatalf("expected one disconnected record, got %#v", recorder.reportRecords)

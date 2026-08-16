@@ -51,6 +51,13 @@ type agentReportStream struct {
 	startedAt     time.Time
 	lastMessageAt time.Time
 	connected     bool
+	// streaming 表示当前是否正阻塞在 StreamReports 调用内（连接已建立或正在
+	// 建立）；false 表示处于两次尝试之间的退避等待。auditSilentStreams 只回收
+	// streaming 的静默连接，避免把正在退避重试的条目取消掉而重置退避。
+	streaming bool
+	// delivered 表示本次连接（自上次尝试起）是否收到过至少一条上报；用于
+	// 重连退避判断"上一次连接是通的"，跨连接不保留。
+	delivered bool
 }
 
 func newAgentReportCollector(serverSvc interface {
@@ -172,6 +179,11 @@ func (c *agentReportCollector) auditSilentStreams() {
 	var disconnected []streamDisconnect
 	c.mu.Lock()
 	for id, entry := range c.streams {
+		// 处于退避重试间的条目（streaming=false）由 runServerStream 自己负责
+		// 重连节奏；回收它们只会把退避清零，让断线 Agent 永远按 5s 轮询。
+		if !entry.streaming {
+			continue
+		}
 		last := entry.lastMessageAt
 		if last.IsZero() {
 			last = entry.startedAt
@@ -232,6 +244,7 @@ func (c *agentReportCollector) markConnected(entry *agentReportStream, at time.T
 		wasConnected = entry.connected
 		entry.connected = true
 		entry.lastMessageAt = at
+		entry.delivered = true
 	}
 	c.mu.Unlock()
 	c.recordReportStream(context.Background(), entry.serverID, true, at, "")
@@ -303,6 +316,13 @@ func (c *agentReportCollector) runServerStream(ctx context.Context, srv server.S
 	backoff := 5 * time.Second
 	var wait time.Duration
 	for ctx.Err() == nil {
+		// 每次尝试开始时清零 delivered：退避重置只应依据"本次连接"是否收到
+		// 过上报，跨连接保留 lastMessageAt 会让健康过一段时间的断线 Agent
+		// 永远按 5s 重连（退避永不翻倍）。
+		c.mu.Lock()
+		entry.streaming = true
+		entry.delivered = false
+		c.mu.Unlock()
 		err := c.client.StreamReports(ctx, entry.endpoint, func() agentclient.ReportConfig {
 			rt := c.settings.Runtime()
 			return agentclient.ReportConfig{
@@ -317,13 +337,16 @@ func (c *agentReportCollector) runServerStream(ctx context.Context, srv server.S
 		if ctx.Err() != nil {
 			return
 		}
-		// 本次连接曾经收到过上报（lastMessageAt 非零）说明链路本身是通的，
-		// 断流只是瞬时故障，重连退避必须重置回 5s；只有连续失败才逐次翻倍，
-		// 否则一次偶发断流会让后续每次重连越等越久（5s→…→5min 封顶）。
-		hadMessages := !entry.lastMessageAt.IsZero()
+		c.mu.Lock()
+		entry.streaming = false
+		delivered := entry.delivered
+		c.mu.Unlock()
+		// 本次连接曾经收到过上报说明链路本身是通的，断流只是瞬时故障，重连
+		// 退避必须重置回 5s；只有连续失败才逐次翻倍，否则一次偶发断流会让
+		// 后续每次重连越等越久（5s→…→5min 封顶）。
 		logging.L().Warn("agent report stream failed", zap.String("server_id", srv.ID), zap.Error(err))
 		c.markDisconnected(entry, err.Error())
-		wait, backoff = reconnectBackoff(hadMessages, backoff)
+		wait, backoff = reconnectBackoff(delivered, backoff)
 		select {
 		case <-ctx.Done():
 			return
