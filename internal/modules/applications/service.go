@@ -5611,6 +5611,16 @@ func (s *Service) reconcileReverseProxy(ctx context.Context) error {
 }
 
 func (s *Service) refreshApplicationSnapshot(ctx context.Context, current Application) (Application, error) {
+	// 设施应用（如入口代理 facility-reverse-proxy）的 generation/spec_hash
+	// 由设施模块独占维护（facilityapps.ensureReverseProxyApplication，
+	// hash 为 facilityConfigHash）。这里不得用应用级 applicationHash 覆盖
+	// SpecHash 或据此递增 generation：两个写入方交替改写同一行会造成每次
+	// 协调触发都 bump 代次，容器 applied-state 标签永远落后于应用行代次，
+	// 5 秒漂移巡检把入口代理当作"全部漂移"无限全量重部署，generation 持续
+	// 增长且协调记录被刷屏。
+	if current.Kind == ApplicationKindFacility {
+		return current, nil
+	}
 	in := SaveInput{
 		Name:              current.Name,
 		Enabled:           current.Enabled,

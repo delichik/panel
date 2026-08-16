@@ -2471,3 +2471,50 @@ func TestAfterLifecycleTargetVerifiedSkipsFacilityProxySelfRetrigger(t *testing.
 		t.Fatalf("user application target must trigger proxy reconcile, got %d calls", reconciler.calls)
 	}
 }
+
+// TestRefreshApplicationSnapshotDoesNotChurnFacilityApplication 回归测试：
+// 设施应用（入口代理）的 generation/spec_hash 只由设施模块
+// （ensureReverseProxyApplication，hash 为 facilityConfigHash）维护。
+// 应用侧 refresh 若用 applicationHash 覆盖 SpecHash 并递增 generation，
+// 两个写入方会交替改写同一行（每次协调 +2 代），容器 applied-state 标签
+// 永远落后于应用行代次，5 秒漂移巡检把入口代理当作全部漂移无限重部署。
+func TestRefreshApplicationSnapshotDoesNotChurnFacilityApplication(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	if _, err := svc.db.ExecContext(ctx, `INSERT INTO applications(id,name,kind,enabled,spec_yaml,deployment_mode,deployment_server_ids_json,generation,spec_hash,job_id,namespace,created_at,updated_at)
+		VALUES(?,?,?,1,?,?,?,?,?,?,?,?,?)`,
+		FacilityProxyApplicationID, "facility", ApplicationKindFacility,
+		"kind: facility/reverse-proxy\nname: entrance-gateway\nimage: nginx:1.27-alpine\n",
+		DeploymentModeSelected, `["srv-a"]`, 7, "facility-config-hash", FacilityProxyApplicationID, "facility",
+		formatTime(now), formatTime(now)); err != nil {
+		t.Fatal(err)
+	}
+
+	// 模拟 ensureReverseProxyApplication 之后、refresh 之前的稳定状态。
+	current, err := svc.Get(ctx, FacilityProxyApplicationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Kind != ApplicationKindFacility {
+		t.Fatalf("fixture should be a facility app, got kind %q", current.Kind)
+	}
+	refreshed, err := svc.refreshApplicationSnapshot(ctx, current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.Generation != 7 || refreshed.SpecHash != "facility-config-hash" {
+		t.Fatalf("facility refresh must not bump generation or overwrite spec hash, got generation=%d specHash=%q", refreshed.Generation, refreshed.SpecHash)
+	}
+
+	// 再次 refresh（模拟下一轮计划/apply）也必须保持稳定，不能出现 +1/+2 递增。
+	again, err := svc.refreshApplicationSnapshot(ctx, refreshed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Generation != 7 || again.SpecHash != "facility-config-hash" {
+		t.Fatalf("facility refresh must stay stable across calls, got generation=%d specHash=%q", again.Generation, again.SpecHash)
+	}
+}

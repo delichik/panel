@@ -85,6 +85,7 @@
 - 应用运行时部署、停止、重启、状态刷新和日志读取遇到 agent mTLS server 证书过期或尚未生效时，必须交给服务器模块标记 Agent 状态并按受限自动重装策略处理；当前应用操作仍按原始 agent 错误失败，避免在证书未修复前继续误操作。部署 target 失败原因必须写入 lifecycle target，供运行时视图展示。
 - Application 容器使用 `panel.application.*` Label 标识；设施应用的反向代理 nginx 容器也复用 runtime 原子能力创建，但其配置来源和生命周期归 `internal/modules/facilityapps` 管理。
 - 设施应用（入口网关）的运行时 spec 使用应用级 SpecHash：`RuntimeSpecForServer` 返回前把 `spec.SpecHash` 覆盖为 `app.SpecHash`（非空时）。每台服务器的渲染内容只体现在 managed file 层，不再单独参与 spec hash，否则 lifecycle target 期望 hash、部署校验与容器漂移检测三处会永远对不上，导致部署反复 verify_failed。
+- 设施应用的 `generation`/`spec_hash` 只允许设施模块写入（`ensureReverseProxyApplication`，hash 为 `facilityConfigHash`）：`refreshApplicationSnapshot`/`prepareDeploy` 等应用侧路径对 `kind=facility_application` 必须原样返回、不得用 `applicationHash` 覆盖 SpecHash 或据此递增 generation。两个写入方交替改写同一行会造成每次协调触发都 bump 代次（每轮 +2），容器 applied-state 标签永远落后于应用行代次，5 秒漂移巡检把入口代理当作"全部漂移"无限全量重部署、generation 持续增长。
 - Application 容器创建时不得向 Docker Engine 下发 `RestartPolicy`；appspec 默认 `restart.policy=no`，应用编辑器不再主动输出 `restart` 块，容器长期重启、停止和重部署只由 Panel 的任务、协调和生命周期流程管理。
 - Application 部署、停止、重启和镜像更新后的容器重建与普通容器操作共享目标服务器的单队列。
 - 同步校验阶段发现 spec hash 与期望不一致时，target 按 `failed_retryable` 进入指数退避重试，而不是终态失败；dispatcher 到期恢复后重新执行部署，协调器扫描仍然作为兜底恢复路径。失败汇总文案使用服务器当前名称并隐藏原始 hash，hash 只保留在 target 详情和任务日志。
