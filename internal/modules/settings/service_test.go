@@ -100,6 +100,46 @@ func TestRuntimeSettingsFirstStartRandomizesDefaultJWTSecret(t *testing.T) {
 	}
 }
 
+func TestRuntimeSettingsRotatesLegacyDefaultJWTSecret(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 模拟旧版本安装：默认密钥已被旧代码固化进 runtime_settings。
+	if _, err := store.AppDB().Exec(`INSERT INTO runtime_settings(key, value, updated_at) VALUES('jwtSecret', ?, 'now')`, DefaultJWTSecret); err != nil {
+		t.Fatal(err)
+	}
+	svc, err := NewService(store.AppDB(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if svc.JWTSecret() == DefaultJWTSecret {
+		t.Fatal("legacy default jwt secret should be rotated on startup")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// 再次启动不应再次轮换（幂等），且与首次轮换值一致。
+	store2, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store2.Close() })
+	svc2, err := NewService(store2.AppDB(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if svc2.JWTSecret() != svc.JWTSecret() {
+		t.Fatalf("rotated jwt secret should be stable across restarts: %q != %q", svc2.JWTSecret(), svc.JWTSecret())
+	}
+}
+
 func TestRuntimeSettingsPreservesExplicitConfigJWTSecret(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()

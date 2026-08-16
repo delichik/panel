@@ -296,6 +296,22 @@ func (s *Service) ensureDefaultRuntimeSettings(ctx context.Context) error {
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for key, value := range runtimeValues(defaults, true) {
+		if key == RuntimeSettingJWTSecret {
+			// 存量安装可能已在 runtime_settings 里固化旧默认密钥（升级前由旧
+			// 代码写入）；检测到默认值就轮换为随机密钥，避免升级后继续用可预测
+			// 的默认密钥签名会话。轮换会使既有会话令牌失效（需重新登录一次），
+			// 属安全修复的预期副作用；轮换后值不再是默认值，后续启动不会重复。
+			if _, err := orm.RawExec(ctx, s.db, `
+				INSERT INTO runtime_settings(key, value, updated_at)
+				VALUES (?, ?, ?)
+				ON CONFLICT(key) DO UPDATE SET
+					value=CASE WHEN runtime_settings.value='' OR runtime_settings.value=? THEN excluded.value ELSE runtime_settings.value END,
+					updated_at=CASE WHEN runtime_settings.value='' OR runtime_settings.value=? THEN excluded.updated_at ELSE runtime_settings.updated_at END
+			`, key, value, now, DefaultJWTSecret, DefaultJWTSecret); err != nil {
+				return err
+			}
+			continue
+		}
 		if _, err := orm.RawExec(ctx, s.db, `
 			INSERT INTO runtime_settings(key, value, updated_at)
 			VALUES (?, ?, ?)
