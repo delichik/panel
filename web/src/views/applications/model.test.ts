@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applicationStatus,
   cloneFacilityDomains,
+  cloneFacilityPath,
   cloneProxyRules,
   diffApplications,
   diffFacility,
@@ -297,7 +298,7 @@ describe('facility path dialog validation', () => {
     expect(path.sourceType).toBe('uploaded_file');
   });
 
-  it('normalizes legacy gateway proxy and host-directory paths', () => {
+  it('keeps gateway proxy paths and normalizes legacy host-directory paths', () => {
     const domain = cloneFacilityDomains([{
       domain: 'example.test',
       originServerIds: ['srv-1'],
@@ -308,11 +309,19 @@ describe('facility path dialog validation', () => {
       ],
     }])[0];
 
-    expect(domain.paths[0].ruleType).toBe('static');
-    expect(domain.paths[0].proxyUrl).toBe('');
-    expect(domain.paths[0].proxySourceMode).toBe('');
+    expect(domain.paths[0].ruleType).toBe('proxy_pass');
+    expect(domain.paths[0].proxyUrl).toBe('http://127.0.0.1:8080');
+    expect(domain.paths[0].proxySourceMode).toBe('preserve_source');
     expect(domain.paths[1].sourceType).toBe('uploaded_file');
     expect(domain.paths[1].rootPath).toBe('');
+  });
+
+  it('keeps proxy_pass paths intact through cloneFacilityPath', () => {
+    const path = cloneFacilityPath({ path: '/api', ruleType: 'proxy_pass', sourceType: 'uploaded_file', proxyUrl: 'http://127.0.0.1:9000', proxySourceMode: 'hide_source', options: {} });
+    expect(path.ruleType).toBe('proxy_pass');
+    expect(path.proxyUrl).toBe('http://127.0.0.1:9000');
+    expect(path.proxySourceMode).toBe('hide_source');
+    expect(path.assetName).toBe('');
   });
 
   it('requires a static asset for uploaded file sources', () => {

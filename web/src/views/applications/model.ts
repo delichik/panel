@@ -341,7 +341,9 @@ export function cloneProxyRules(rules: ReverseProxyRule[]) {
 }
 
 export function normalizeFacilityPath(path: FacilityRoutePath): FacilityRoutePath {
-  const ruleType: StaticRuleType = path.ruleType === 'proxy_pass' ? 'static' : (path.ruleType as StaticRuleType) || 'static';
+  // proxy_pass 是设施 Path 的一等规则类型（后端完整支持并渲染），必须原样保留；
+  // 只对遗留的 host_path 静态来源做兼容降级。
+  const ruleType: StaticRuleType = (path.ruleType as StaticRuleType) || 'static';
   const sourceType: StaticSourceType = path.sourceType === 'host_path' ? 'uploaded_file' : (path.sourceType as StaticSourceType) || 'uploaded_file';
   const normalized: FacilityRoutePath = {
     ...makeFacilityPath(ruleType),

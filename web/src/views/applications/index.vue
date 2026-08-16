@@ -279,7 +279,7 @@ const facilityAssetItems = computed<AssetFileItem[]>(() => (facilitySession.valu
   editable: asset.contentMode === 'text',
 })));
 const mountTypeOptions = computed(() => ['persistent', 'volume', 'host', 'file', 'panel_file', 'storage_share'].map((value) => ({ label: t(`applicationsPage.mountType.${value}`), value })));
-const routeTypeOptions = computed(() => ['static', 'redirect'].map((value) => ({ label: t(`applicationsPage.routeType.${value}`), value })));
+const routeTypeOptions = computed(() => ['static', 'redirect', 'proxy_pass'].map((value) => ({ label: t(`applicationsPage.routeType.${value}`), value })));
 const sourceTypeOptions = computed(() => ['uploaded_file', 'uploaded_bundle'].map((value) => ({ label: t(`applicationsPage.sourceType.${value}`), value })));
 const proxyTargetTypeOptions = computed(() => {
   const options = [{ label: t('applicationsPage.targetType.local'), value: 'local' }];
