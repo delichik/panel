@@ -49,6 +49,7 @@ type Server struct {
 	ArchitectureArch       string         `orm:"not_null;default:''"`
 	ArchitectureMachine    string         `orm:"not_null;default:''"`
 	Reachable              bool           `orm:"not_null;default:0"`
+	HostKeyMismatch        bool           `orm:"not_null;default:0;column:host_key_mismatch"`
 	SudoPasswordless       bool           `orm:"not_null;default:0"`
 	SudoLastCheckedAt      *time.Time
 	PrivilegeMode          string `orm:"not_null;default:''"`

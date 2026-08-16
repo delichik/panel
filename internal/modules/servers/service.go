@@ -182,11 +182,14 @@ func (s *Service) TestConnectivity(ctx context.Context, serverID string) (Server
 	}
 	target := serverTarget(srv)
 	if _, err := s.exec.Exec(ctx, target, sshx.CommandSpec{Command: "true", Timeout: connectivitySudoTimeout}); err != nil {
-		_ = s.recordReachability(ctx, serverID, false, err.Error())
+		// 通过类型化错误判定主机密钥不匹配并持久化，避免依赖错误消息文本
+		// 子串（消息格式变化时该安全标志会静默失效）。
+		hostKeyMismatch := errors.Is(err, sshx.ErrHostKeyMismatch)
+		_ = s.recordReachability(ctx, serverID, false, hostKeyMismatch, err.Error())
 		return Server{}, err
 	}
 	mode, _ := s.detectPrivilege(ctx, target)
-	if err := s.recordConnectivity(ctx, serverID, true, mode, ""); err != nil {
+	if err := s.recordConnectivity(ctx, serverID, true, mode, false, ""); err != nil {
 		return Server{}, err
 	}
 	return s.Get(ctx, serverID)
@@ -715,21 +718,21 @@ func serverInfoBootstrap(task tasks.Task) bool {
 }
 
 func (s *Service) RecordMetricsReachability(ctx context.Context, serverID string, reachable bool, message string) error {
-	return s.recordReachability(ctx, serverID, reachable, message)
+	return s.recordReachability(ctx, serverID, reachable, false, message)
 }
 
-func (s *Service) recordReachability(ctx context.Context, serverID string, reachable bool, message string) error {
+func (s *Service) recordReachability(ctx context.Context, serverID string, reachable bool, hostKeyMismatch bool, message string) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	return orm.New(s.db).From("servers").Where("id=?", serverID).UpdateColumns(ctx, map[string]any{
-		"reachable": reachable, "last_checked_at": now, "last_error": message, "updated_at": now,
+		"reachable": reachable, "last_checked_at": now, "last_error": message, "host_key_mismatch": hostKeyMismatch, "updated_at": now,
 	})
 }
 
-func (s *Service) recordConnectivity(ctx context.Context, serverID string, reachable bool, mode string, message string) error {
+func (s *Service) recordConnectivity(ctx context.Context, serverID string, reachable bool, mode string, hostKeyMismatch bool, message string) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	return orm.New(s.db).From("servers").Where("id=?", serverID).UpdateColumns(ctx, map[string]any{
 		"reachable": reachable, "privilege_mode": mode, "privilege_last_checked_at": now,
-		"last_checked_at": now, "last_error": message, "updated_at": now,
+		"last_checked_at": now, "last_error": message, "host_key_mismatch": hostKeyMismatch, "updated_at": now,
 	})
 }
 

@@ -41,13 +41,10 @@ func WithKnownHosts(path string) SSHExecutorOption {
 	}
 }
 
-// WithoutKnownHosts disables host key verification, matching the legacy
-// insecure behavior. Tests that do not want TOFU must pass this option or
-// provide a temporary known_hosts path.
-
 // NewSSHExecutorWithOptions builds an executor with functional options. Host
 // key TOFU verification is enabled by default using the known_hosts file
-// under the data root; see WithKnownHosts and WithoutKnownHosts.
+// under the data root; see WithKnownHosts. Tests that do not want TOFU must
+// provide a temporary known_hosts path.
 func NewSSHExecutorWithOptions(resolver CredentialResolver, defaultTimeout time.Duration, options ...SSHExecutorOption) *SSHExecutor {
 	e := &SSHExecutor{resolver: resolver, defaultTimeout: defaultTimeout}
 	for _, opt := range options {
@@ -278,14 +275,22 @@ func (e *SSHExecutor) dial(ctx context.Context, target Target) (*ssh.Client, err
 		_ = conn.Close()
 		switch {
 		case errors.Is(err, ErrHostKeyMismatch):
-			return nil, panelerr.BadGateway("ssh_host_key_mismatch", err.Error())
+			return nil, panelerr.BadGateway("ssh_host_key_mismatch", sshHandshakeMessage(err))
 		case errors.Is(err, ErrHostKeyVerification):
-			return nil, panelerr.BadGateway("ssh_host_key_verification_failed", err.Error())
+			return nil, panelerr.BadGateway("ssh_host_key_verification_failed", sshHandshakeMessage(err))
 		default:
 			return nil, panelerr.BadGateway("ssh_auth_failed", "SSH authentication failed")
 		}
 	}
 	return ssh.NewClient(c, chans, reqs), nil
+}
+
+// sshHandshakeMessage strips the "ssh: handshake failed: " wrapper that
+// x/crypto adds around host key errors, so the stable error text ("ssh host key
+// mismatch: …") reaches the i18n prefix translation and the servers
+// HostKeyMismatch flag unchanged.
+func sshHandshakeMessage(err error) string {
+	return strings.TrimPrefix(err.Error(), "ssh: handshake failed: ")
 }
 
 func (e *SSHExecutor) hostKeyCallback(identity string) ssh.HostKeyCallback {

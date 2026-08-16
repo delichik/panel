@@ -39,7 +39,8 @@ func (r *ServerRepository) List(ctx context.Context) ([]domain.Server, error) {
 func (r *ServerRepository) ListSummaries(ctx context.Context) ([]domain.ServerSummary, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT id,name,host,port,credential_id,reachable,sudo_passwordless,privilege_mode,last_checked_at,last_error,updated_at,
 		COALESCE(json_extract(traits,'$."agent.enabled"'),''),COALESCE(json_extract(traits,'$."agent.url"'),''),COALESCE(json_extract(traits,'$."agent.status"'),''),
-		COALESCE(json_extract(traits,'$."sys.ufw_supported"'),''),COALESCE(json_extract(traits,'$."sys.ufw_installed"'),'')
+		COALESCE(json_extract(traits,'$."sys.ufw_supported"'),''),COALESCE(json_extract(traits,'$."sys.ufw_installed"'),''),
+		COALESCE(host_key_mismatch,0)
 		FROM servers ORDER BY created_at DESC,id ASC`)
 	if err != nil {
 		return nil, err
@@ -51,12 +52,14 @@ func (r *ServerRepository) ListSummaries(ctx context.Context) ([]domain.ServerSu
 		var reachable, sudo int
 		var lastChecked sql.NullString
 		var updatedAt, agentEnabled, agentURL, agentStatus, ufwSupported, ufwInstalled string
-		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &item.CredentialID, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &ufwSupported, &ufwInstalled); err != nil {
+		var hostKeyMismatch int
+		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &item.CredentialID, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &ufwSupported, &ufwInstalled, &hostKeyMismatch); err != nil {
 			return nil, err
 		}
 		item.Reachable = reachable == 1
 		item.Sudo.Passwordless = sudo == 1
-		item.HostKeyMismatch = strings.Contains(item.LastError, "ssh host key mismatch")
+		// 列值优先（写入时按类型化错误码判定）；子串仅作为迁移前旧行的回退。
+		item.HostKeyMismatch = hostKeyMismatch == 1 || strings.Contains(item.LastError, "ssh host key mismatch")
 		normalizeSummaryPrivilege(&item)
 		item.Traits = map[string]string{"agent.enabled": agentEnabled, "agent.url": agentURL, "agent.status": agentStatus, "sys.ufw_supported": ufwSupported, "sys.ufw_installed": ufwInstalled}
 		if lastChecked.Valid {
@@ -86,7 +89,8 @@ func (r *ServerRepository) ListSummaryPage(ctx context.Context, page, pageSize i
 	listArgs := append(append([]any{}, args...), pageSize, (page-1)*pageSize)
 	rows, err := r.db.QueryContext(ctx, `SELECT id,name,host,port,credential_id,reachable,sudo_passwordless,privilege_mode,last_checked_at,last_error,updated_at,
 		COALESCE(json_extract(traits,'$."agent.enabled"'),''),COALESCE(json_extract(traits,'$."agent.url"'),''),COALESCE(json_extract(traits,'$."agent.status"'),''),
-		COALESCE(json_extract(traits,'$."sys.ufw_supported"'),''),COALESCE(json_extract(traits,'$."sys.ufw_installed"'),'')
+		COALESCE(json_extract(traits,'$."sys.ufw_supported"'),''),COALESCE(json_extract(traits,'$."sys.ufw_installed"'),''),
+		COALESCE(host_key_mismatch,0)
 		FROM servers WHERE `+filter+` ORDER BY created_at DESC,id ASC LIMIT ? OFFSET ?`, listArgs...)
 	if err != nil {
 		return httpx.ListPage[domain.ServerSummary]{}, err
@@ -98,11 +102,12 @@ func (r *ServerRepository) ListSummaryPage(ctx context.Context, page, pageSize i
 		var reachable, sudo int
 		var lastChecked sql.NullString
 		var updatedAt, agentEnabled, agentURL, agentStatus, ufwSupported, ufwInstalled string
-		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &item.CredentialID, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &ufwSupported, &ufwInstalled); err != nil {
+		var hostKeyMismatch int
+		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &item.CredentialID, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &ufwSupported, &ufwInstalled, &hostKeyMismatch); err != nil {
 			return httpx.ListPage[domain.ServerSummary]{}, err
 		}
 		item.Reachable, item.Sudo.Passwordless = reachable == 1, sudo == 1
-		item.HostKeyMismatch = strings.Contains(item.LastError, "ssh host key mismatch")
+		item.HostKeyMismatch = hostKeyMismatch == 1 || strings.Contains(item.LastError, "ssh host key mismatch")
 		normalizeSummaryPrivilege(&item)
 		item.Traits = map[string]string{"agent.enabled": agentEnabled, "agent.url": agentURL, "agent.status": agentStatus, "sys.ufw_supported": ufwSupported, "sys.ufw_installed": ufwInstalled}
 		if lastChecked.Valid {
@@ -188,25 +193,26 @@ func (r *ServerRepository) Delete(ctx context.Context, serverID string) error {
 // scanServer 的默认值与归一化语义（空 privilege_mode -> none 等）。
 func toDomainServer(m models.Server) domain.Server {
 	srv := domain.Server{
-		ID:              m.ID,
-		Name:            m.Name,
-		Host:            m.Host,
-		IPv4:            m.IPv4,
-		IPv6:            m.IPv6,
-		Port:            m.Port,
-		SSHUsername:     m.SSHUsername,
-		CredentialID:    m.CredentialID,
-		DockerHost:      m.DockerHost,
-		Traits:          stringMap(m.Traits),
-		Variables:       stringMap(m.VariablesJSON),
-		Notes:           m.Notes,
-		OS:              linux.OSRelease{ID: m.OSID, VersionID: m.OSVersionID, PrettyName: m.OSPrettyName, Supported: m.OSSupported},
-		Architecture:    domain.ArchitectureInfo{OS: m.ArchitectureOS, Arch: m.ArchitectureArch, RawMachine: m.ArchitectureMachine},
-		Sudo:            domain.SudoState{Passwordless: m.SudoPasswordless, LastCheckedAt: m.SudoLastCheckedAt},
-		Reachable:       m.Reachable,
-		LastCheckedAt:   m.LastCheckedAt,
-		LastError:       m.LastError,
-		HostKeyMismatch: strings.Contains(m.LastError, "ssh host key mismatch"),
+		ID:            m.ID,
+		Name:          m.Name,
+		Host:          m.Host,
+		IPv4:          m.IPv4,
+		IPv6:          m.IPv6,
+		Port:          m.Port,
+		SSHUsername:   m.SSHUsername,
+		CredentialID:  m.CredentialID,
+		DockerHost:    m.DockerHost,
+		Traits:        stringMap(m.Traits),
+		Variables:     stringMap(m.VariablesJSON),
+		Notes:         m.Notes,
+		OS:            linux.OSRelease{ID: m.OSID, VersionID: m.OSVersionID, PrettyName: m.OSPrettyName, Supported: m.OSSupported},
+		Architecture:  domain.ArchitectureInfo{OS: m.ArchitectureOS, Arch: m.ArchitectureArch, RawMachine: m.ArchitectureMachine},
+		Sudo:          domain.SudoState{Passwordless: m.SudoPasswordless, LastCheckedAt: m.SudoLastCheckedAt},
+		Reachable:     m.Reachable,
+		LastCheckedAt: m.LastCheckedAt,
+		LastError:     m.LastError,
+		// 类型化列优先；子串仅作为迁移前旧行的回退。
+		HostKeyMismatch: m.HostKeyMismatch || strings.Contains(m.LastError, "ssh host key mismatch"),
 		CreatedAt:       m.CreatedAt,
 		UpdatedAt:       m.UpdatedAt,
 	}
@@ -255,6 +261,7 @@ func fromDomainServer(srv domain.Server) *models.Server {
 		ArchitectureArch:       srv.Architecture.Arch,
 		ArchitectureMachine:    srv.Architecture.RawMachine,
 		Reachable:              srv.Reachable,
+		HostKeyMismatch:        srv.HostKeyMismatch,
 		SudoPasswordless:       srv.Sudo.Passwordless,
 		SudoLastCheckedAt:      srv.Sudo.LastCheckedAt,
 		PrivilegeMode:          srv.Privilege.Mode,
