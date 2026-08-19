@@ -17,6 +17,7 @@ func TestOpenGeneratesMasterKeyAndEncryptsFields(t *testing.T) {
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -53,6 +54,7 @@ func TestOpenRejectsMismatchedEnvKey(t *testing.T) {
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -80,6 +82,7 @@ func TestOpenRejectsMissingKeyWhenDNSCredentialsAreEncrypted(t *testing.T) {
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -103,6 +106,7 @@ func TestOpenRejectsMissingKeyWhenSSHCredentialsAreEncrypted(t *testing.T) {
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)

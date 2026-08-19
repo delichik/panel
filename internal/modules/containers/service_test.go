@@ -975,6 +975,64 @@ func TestSaveReportedContainersEmptyListClearsObservations(t *testing.T) {
 	}
 }
 
+// TestSaveReportedContainersSkipsManagedContainerWithUnknownApplication 覆盖
+// 生产事故场景：托管容器标签引用的 application_id 在 applications 表不存在
+// （应用已删除但容器残留，或服务器接入前由别的面板部署）。此前该容器会让
+// application_reconcile_states 外键失败，回滚整笔观测事务，导致同一服务器上
+// 所有容器（包括正常应用）的观测都无法保存，协调巡检按过期观测把正常容器
+// 当作漂移反复删除重建。修复后未知应用的托管容器只跳过协调状态登记，观测
+// 本身照常保存。
+func TestSaveReportedContainersSkipsManagedContainerWithUnknownApplication(t *testing.T) {
+	svc, _, _, store := newContainerizationTestService(t)
+	app := applications.Application{ID: "app-1", Name: "web", Enabled: true, Generation: 1, SpecHash: "hash-1"}
+	insertReconcileFixtureRows(t, store, app)
+	items := []agentcontract.DockerContainer{
+		{ID: "container-1", Names: []string{"plain"}, State: "running"},
+		{
+			ID:    "container-2",
+			Names: []string{"web"},
+			State: "running",
+			Labels: map[string]string{
+				"panel.application.managed":     "true",
+				"panel.application.id":          "app-1",
+				"panel.application.instance.id": "app-1-server-1",
+			},
+		},
+		{
+			ID:    "container-3",
+			Names: []string{"ghost"},
+			State: "running",
+			Labels: map[string]string{
+				"panel.application.managed":     "true",
+				"panel.application.id":          "app-gone",
+				"panel.application.instance.id": "app-gone-server-1",
+			},
+		},
+	}
+	saveReportedContainers(t, svc, "server-1", items)
+
+	observed, observedAt, err := svc.reportedContainerSummaries(context.Background(), "server-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(observed) != 3 || observedAt == nil {
+		t.Fatalf("all reported containers must be observed, got %#v observedAt=%v", observed, observedAt)
+	}
+	var knownInstance, orphanInstance int
+	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM application_reconcile_states WHERE instance_id='app-1-server-1'`).Scan(&knownInstance); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM application_reconcile_states WHERE instance_id='app-gone-server-1'`).Scan(&orphanInstance); err != nil {
+		t.Fatal(err)
+	}
+	if knownInstance != 1 {
+		t.Fatalf("known application instance state rows = %d, want 1", knownInstance)
+	}
+	if orphanInstance != 0 {
+		t.Fatalf("unknown application instance must not get a reconcile state row, got %d", orphanInstance)
+	}
+}
+
 func TestRunQueueRecoversFromPanic(t *testing.T) {
 	svc := &Service{queues: map[string]*serverQueue{}}
 	q := svc.queue("server-1")

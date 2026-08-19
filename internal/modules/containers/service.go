@@ -138,6 +138,10 @@ type Service struct {
 	queues      map[string]*serverQueue
 	refreshMu   sync.Mutex
 	refreshing  map[string]bool
+	// orphanWarnMu/orphanWarned 节流"托管容器引用未知应用"告警，避免残留容器
+	// 每份上报都刷一条日志。
+	orphanWarnMu sync.Mutex
+	orphanWarned map[string]time.Time
 }
 
 type Option func(*Service)
@@ -151,6 +155,7 @@ func NewService(db *sql.DB, servers ServerProvider, agentClient AgentClient, tas
 		db: db, servers: servers, agent: agentClient, tasks: taskSvc,
 		resolver: applications.NewRegistryImageResolver(),
 		queues:   map[string]*serverQueue{}, refreshing: map[string]bool{},
+		orphanWarned: map[string]time.Time{},
 	}
 	if handler, ok := servers.(AgentErrorHandler); ok {
 		s.agentErrors = handler
@@ -202,6 +207,16 @@ func (s *Service) SaveReportedContainers(ctx context.Context, serverID string, s
 	}
 	sampleAt = sampleAt.UTC().Truncate(time.Second)
 	now := time.Now().UTC()
+	// 托管容器标签的 application_id 必须存在于 applications 表，否则
+	// application_reconcile_states.application_id 外键会让整笔观测事务失败，
+	// 该服务器的全部容器观测（包括正常应用）都无法落库，协调巡检只能按过期
+	// 观测判断漂移，导致容器被反复删除重建。因此对未知应用的托管容器只跳过
+	// 协调状态登记，观测本身照常保存；残留的孤儿状态行由下方"已消失实例"
+	// 清理顺带删除。
+	knownApps, err := s.knownApplicationIDs(ctx)
+	if err != nil {
+		return err
+	}
 	return orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		if err := orm.New(tx).From("container_observations").Where("server_id = ?", serverID).Delete(ctx); err != nil {
 			return err
@@ -240,13 +255,21 @@ func (s *Service) SaveReportedContainers(ctx context.Context, serverID string, s
 			}); err != nil {
 				return err
 			}
-			if managed {
-				currentManaged[instanceID] = struct{}{}
-				if _, err := orm.RawExec(ctx, tx, `INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at)
-					VALUES(?,?,?,?) ON CONFLICT(instance_id) DO UPDATE SET application_id=excluded.application_id,server_id=excluded.server_id,observed_at=excluded.observed_at`,
-					instanceID, appID, serverID, sampleAt.Format(time.RFC3339Nano)); err != nil {
-					return err
-				}
+			if !managed {
+				continue
+			}
+			if _, ok := knownApps[appID]; !ok {
+				// 未知应用的托管容器（如应用已删除但容器残留）不登记协调状态：
+				// 外键约束失败会回滚整笔事务；不加入 currentManaged 会让下方清理
+				// 删除它可能残留的旧状态行。
+				s.warnUnknownManagedContainer(serverID, appID, instanceID)
+				continue
+			}
+			currentManaged[instanceID] = struct{}{}
+			if _, err := orm.RawExec(ctx, tx, `INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at)
+				VALUES(?,?,?,?) ON CONFLICT(instance_id) DO UPDATE SET application_id=excluded.application_id,server_id=excluded.server_id,observed_at=excluded.observed_at`,
+				instanceID, appID, serverID, sampleAt.Format(time.RFC3339Nano)); err != nil {
+				return err
 			}
 		}
 		// 清理已消失实例的 reconcile 状态行，与 applications 侧删除实例时的行为一致。
@@ -278,6 +301,51 @@ func (s *Service) SaveReportedContainers(ctx context.Context, serverID string, s
 		}
 		return nil
 	})
+}
+
+// applicationIDRow 是 knownApplicationIDs 的扫描行；ORM 元数据解析要求具名
+// struct（匿名 struct 的 Type.Name() 为空，无法推导表名）。
+type applicationIDRow struct {
+	ID string
+}
+
+// knownApplicationIDs 返回 applications 表的全部应用 ID。保存上报容器观测时
+// 用它校验托管容器标签里的 application_id，未知应用只跳过协调状态登记，
+// 避免 application_reconcile_states 外键失败回滚整笔观测事务。
+func (s *Service) knownApplicationIDs(ctx context.Context) (map[string]struct{}, error) {
+	rows := []applicationIDRow{}
+	if err := orm.New(s.db).From("applications").Select("id").All(ctx, &rows); err != nil {
+		return nil, err
+	}
+	out := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		out[row.ID] = struct{}{}
+	}
+	return out, nil
+}
+
+// warnUnknownManagedContainer 记录"托管容器引用了不存在的应用"告警；同一
+// 服务器+应用每 15 分钟最多记一次，避免残留容器每份上报都刷一条日志。
+func (s *Service) warnUnknownManagedContainer(serverID, appID, instanceID string) {
+	key := serverID + "\x00" + appID
+	now := time.Now()
+	s.orphanWarnMu.Lock()
+	defer s.orphanWarnMu.Unlock()
+	if last, ok := s.orphanWarned[key]; ok && now.Sub(last) < 15*time.Minute {
+		return
+	}
+	s.orphanWarned[key] = now
+	if len(s.orphanWarned) > 128 {
+		for k, v := range s.orphanWarned {
+			if now.Sub(v) >= 15*time.Minute {
+				delete(s.orphanWarned, k)
+			}
+		}
+	}
+	logging.L().Warn("managed container references unknown application; reconcile state registration skipped",
+		zap.String("server_id", serverID),
+		zap.String("application_id", appID),
+		zap.String("instance_id", instanceID))
 }
 
 func (s *Service) reportedContainerSummaries(ctx context.Context, serverID string) ([]ContainerSummary, *time.Time, error) {

@@ -132,7 +132,21 @@ func appMigrationSteps() []orm.Step {
 		{ID: "fix_reverse_proxy_routes_facility_app_id", Run: func(ctx context.Context, tx *sql.Tx) error {
 			return fixReverseProxyRoutesFacilityAppIDOn(ctx, tx)
 		}},
+		{ID: "purge_orphan_application_reconcile_states", Run: func(ctx context.Context, tx *sql.Tx) error {
+			return purgeOrphanApplicationReconcileStatesOn(ctx, tx)
+		}},
 	}
+}
+
+// purgeOrphanApplicationReconcileStatesOn 删除 application_reconcile_states 中
+// application_id 已不在 applications 表里的孤儿行（应用删除后残留的托管容器
+// 仍可能保留旧标签）。这些行会让 SaveReportedContainers 在
+// application_reconcile_states.application_id 外键上失败，回滚整笔观测事务，
+// 导致该服务器全部容器观测无法落库、协调巡检按过期观测反复重建容器。
+func purgeOrphanApplicationReconcileStatesOn(ctx context.Context, q migrationExecutor) error {
+	_, err := q.ExecContext(ctx, `DELETE FROM application_reconcile_states
+		WHERE application_id NOT IN (SELECT id FROM applications)`)
+	return err
 }
 
 // backfillServerPrivilegeModeOn fixes servers that were inherited from older
