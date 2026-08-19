@@ -24,6 +24,7 @@ export interface RuntimeSettings {
   language: string;
   logLevel: string;
   remoteCommandTimeoutSeconds: number;
+  reconcileTraceEnabled: boolean;
   branding: RuntimeBrandingSettings;
   certificates: RuntimeCertificateSettings;
   jwtSecretConfigured: boolean;
@@ -41,6 +42,7 @@ export interface RuntimeUpdate {
   language: string;
   logLevel: string;
   remoteCommandTimeoutSeconds: number;
+  reconcileTraceEnabled?: boolean;
   branding?: RuntimeBrandingSettings;
   certificates?: RuntimeCertificateSettings;
 }

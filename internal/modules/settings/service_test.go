@@ -8,6 +8,7 @@ import (
 
 	"panel/internal/platform/config"
 	storage "panel/internal/platform/database"
+	"panel/internal/platform/reconciletrace"
 )
 
 func newTestService(t *testing.T) *Service {
@@ -62,6 +63,66 @@ func TestRuntimeSettingsUpdatePersists(t *testing.T) {
 	}
 	if reloaded.Runtime().LogLevel != "debug" {
 		t.Fatalf("log level was not persisted: %q", reloaded.Runtime().LogLevel)
+	}
+}
+
+// TestRuntimeSettingsReconcileTracePersists 验证协调追踪开关的持久化与开关
+// 同步：更新后内存缓存、重新加载后的值，以及 reconciletrace 包的运行时状态。
+func TestRuntimeSettingsReconcileTracePersists(t *testing.T) {
+	svc := newTestService(t)
+	enabled := true
+	got, err := svc.Update(context.Background(), RuntimeUpdate{
+		MetricsRetentionDays:             7,
+		MetricsCollectionIntervalSeconds: 60,
+		ContainerReportIntervalSeconds:   30,
+		CleanupSchedule:                  "daily",
+		RuntimeEventRetentionDays:        30,
+		RuntimeEventDetailRetentionDays:  7,
+		RuntimeEventCleanupSchedule:      "daily",
+		TokenExpiration:                  TokenExpiration1Day,
+		Language:                         "en",
+		LogLevel:                         "info",
+		RemoteCommandTimeoutSeconds:      30,
+		ReconcileTraceEnabled:            &enabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.ReconcileTraceEnabled {
+		t.Fatalf("reconcile trace was not enabled: %#v", got)
+	}
+	if !reconciletrace.Enabled() {
+		t.Fatal("reconcile trace switch was not applied to the tracing package")
+	}
+	// 未传该字段时保持当前值（*bool 语义）。
+	got, err = svc.Update(context.Background(), RuntimeUpdate{
+		MetricsRetentionDays:             7,
+		MetricsCollectionIntervalSeconds: 60,
+		ContainerReportIntervalSeconds:   30,
+		CleanupSchedule:                  "daily",
+		RuntimeEventRetentionDays:        30,
+		RuntimeEventDetailRetentionDays:  7,
+		RuntimeEventCleanupSchedule:      "daily",
+		TokenExpiration:                  TokenExpiration1Day,
+		Language:                         "en",
+		LogLevel:                         "info",
+		RemoteCommandTimeoutSeconds:      30,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.ReconcileTraceEnabled {
+		t.Fatalf("reconcile trace should keep its current value when not provided: %#v", got)
+	}
+	reloaded, err := NewService(svc.db, svc.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reloaded.Runtime().ReconcileTraceEnabled {
+		t.Fatalf("reconcile trace was not persisted: %#v", reloaded.Runtime())
+	}
+	if !reconciletrace.Enabled() {
+		t.Fatal("reconcile trace switch was not restored after reload")
 	}
 }
 

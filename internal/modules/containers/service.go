@@ -20,6 +20,7 @@ import (
 	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/logging"
+	"panel/internal/platform/reconciletrace"
 
 	"go.uber.org/zap"
 )
@@ -865,17 +866,33 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string
 				continue
 			}
 			container, found := observed[item.ID]
-			drifted := !found || container.State != "running"
-			if found {
-				drifted = drifted ||
-					container.Labels["panel.application.generation"] != strconv.Itoa(app.Generation) ||
-					container.Labels["panel.application.spec.hash"] != app.SpecHash ||
-					container.Labels["panel.application.managed_files.drift"] == "true"
+			driftReason := ""
+			switch {
+			case !found:
+				driftReason = "missing"
+			case container.State != "running":
+				driftReason = "stopped"
+			case container.Labels["panel.application.generation"] != strconv.Itoa(app.Generation):
+				driftReason = "generation"
+			case container.Labels["panel.application.spec.hash"] != app.SpecHash:
+				driftReason = "spec_hash"
+			case container.Labels["panel.application.managed_files.drift"] == "true":
+				driftReason = "managed_files"
+			}
+			if driftReason != "" {
+				reconciletrace.Trace("drift",
+					zap.String("trigger", triggerType),
+					zap.String("application_id", app.ID),
+					zap.String("server_id", srv.ID),
+					zap.String("instance_id", item.ID),
+					zap.String("reason", driftReason),
+					zap.Int("expected_generation", app.Generation),
+					zap.String("expected_spec_hash", app.SpecHash))
 			}
 			observation := observations[app.ID]
 			observation.app = app
 			observation.seen = true
-			if drifted {
+			if driftReason != "" {
 				observation.driftedServerIDs = append(observation.driftedServerIDs, srv.ID)
 			}
 			observations[app.ID] = observation
@@ -886,6 +903,7 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string
 			continue
 		}
 		if len(observation.driftedServerIDs) == 0 {
+			reconciletrace.Trace("healthy", zap.String("application_id", appID))
 			_ = s.recordApplicationReconcileHealthy(ctx, appID)
 			continue
 		}
@@ -895,17 +913,35 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string
 			return nil, err
 		}
 		if !bypassBackoff && nextRunAt != nil && nextRunAt.After(time.Now().UTC()) {
+			reconciletrace.Trace("backoff",
+				zap.String("application_id", appID),
+				zap.Strings("server_ids", observation.driftedServerIDs),
+				zap.String("next_run_at", nextRunAt.UTC().Format(time.RFC3339)))
 			continue
 		}
-		_, err = s.apps.PlanApplicationDeployment(ctx, applications.DeploymentPlanRequest{
+		reconciletrace.Trace("plan_requested",
+			zap.String("trigger", triggerType),
+			zap.String("application_id", appID),
+			zap.Strings("server_ids", observation.driftedServerIDs),
+			zap.Bool("bypass_backoff", bypassBackoff))
+		result, err := s.apps.PlanApplicationDeployment(ctx, applications.DeploymentPlanRequest{
 			ApplicationID:        appID,
 			ServerIDs:            observation.driftedServerIDs,
 			ObservedRuntimeDrift: true,
 			TriggerType:          triggerType,
 		})
 		if err != nil {
+			reconciletrace.Trace("plan_failed",
+				zap.String("application_id", appID),
+				zap.Error(err))
 			return nil, err
 		}
+		reconciletrace.Trace("plan_result",
+			zap.String("application_id", appID),
+			zap.Strings("created_targets", result.CreatedTargetIDs),
+			zap.Strings("reused_targets", result.ReusedTargetIDs),
+			zap.Strings("superseded_targets", result.SupersededTargetIDs),
+			zap.Strings("blocked_targets", result.BlockedTargetIDs))
 	}
 	return nil, nil
 }

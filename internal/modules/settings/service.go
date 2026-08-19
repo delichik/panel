@@ -20,6 +20,7 @@ import (
 	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/i18n"
 	"panel/internal/platform/logging"
+	"panel/internal/platform/reconciletrace"
 )
 
 var serverVariableKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -56,6 +57,7 @@ type RuntimeUpdate struct {
 	Language                         string                      `json:"language"`
 	LogLevel                         string                      `json:"logLevel"`
 	RemoteCommandTimeoutSeconds      int                         `json:"remoteCommandTimeoutSeconds"`
+	ReconcileTraceEnabled            *bool                       `json:"reconcileTraceEnabled"`
 	Branding                         *RuntimeBrandingSettings    `json:"branding"`
 	Certificates                     *RuntimeCertificateSettings `json:"certificates"`
 }
@@ -76,6 +78,7 @@ type RuntimeSettings struct {
 	Language                         string                     `json:"language"`
 	LogLevel                         string                     `json:"logLevel"`
 	RemoteCommandTimeoutSeconds      int                        `json:"remoteCommandTimeoutSeconds"`
+	ReconcileTraceEnabled            bool                       `json:"reconcileTraceEnabled"`
 	Branding                         RuntimeBrandingSettings    `json:"branding"`
 	Certificates                     RuntimeCertificateSettings `json:"certificates"`
 	JWTSecret                        string                     `json:"-"`
@@ -87,6 +90,7 @@ const (
 	RuntimeSettingLogLevel                             = "log.level"
 	RuntimeSettingJWTSecret                            = "jwtSecret"
 	RuntimeSettingRemoteCommandTimeoutSeconds          = "remoteCommandTimeoutSeconds"
+	RuntimeSettingReconcileTrace                       = "reconcile.trace"
 	RuntimeSettingBrandingLoginTitle                   = "branding.loginTitle"
 	RuntimeSettingBrandingLoginSubtitle                = "branding.loginSubtitle"
 	RuntimeSettingCertificateEmail                     = "certificates.email"
@@ -205,10 +209,14 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 		Language:                         i18n.NormalizeLocale(input.Language),
 		LogLevel:                         logging.NormalizeLevel(input.LogLevel),
 		RemoteCommandTimeoutSeconds:      input.RemoteCommandTimeoutSeconds,
+		ReconcileTraceEnabled:            current.ReconcileTraceEnabled,
 		Branding:                         brandingSettings,
 		Certificates:                     certSettings,
 		JWTSecret:                        current.JWTSecret,
 		JWTSecretConfigured:              current.JWTSecretConfigured,
+	}
+	if input.ReconcileTraceEnabled != nil {
+		next.ReconcileTraceEnabled = *input.ReconcileTraceEnabled
 	}
 	if err := validateRuntimeSettings(next); err != nil {
 		return RuntimeSettings{}, err
@@ -228,12 +236,14 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 	s.rt.Language = next.Language
 	s.rt.LogLevel = next.LogLevel
 	s.rt.RemoteCommandTimeoutSeconds = next.RemoteCommandTimeoutSeconds
+	s.rt.ReconcileTraceEnabled = next.ReconcileTraceEnabled
 	s.rt.Branding = next.Branding
 	s.rt.Certificates = next.Certificates
 	out := s.rt
 	s.mu.Unlock()
 	i18n.SetDefaultLocale(out.Language)
 	_ = logging.SetLevel(out.LogLevel)
+	reconciletrace.SetEnabled(out.ReconcileTraceEnabled)
 	return out, nil
 }
 
@@ -391,6 +401,8 @@ func (s *Service) load(ctx context.Context) error {
 			if n, err := strconv.Atoi(value); err == nil {
 				next.RemoteCommandTimeoutSeconds = n
 			}
+		case RuntimeSettingReconcileTrace:
+			next.ReconcileTraceEnabled = strings.TrimSpace(value) == "true"
 		case RuntimeSettingBrandingLoginTitle:
 			next.Branding.LoginTitle = value
 		case RuntimeSettingBrandingLoginSubtitle:
@@ -411,6 +423,7 @@ func (s *Service) load(ctx context.Context) error {
 	s.mu.Unlock()
 	i18n.SetDefaultLocale(next.Language)
 	_ = logging.SetLevel(next.LogLevel)
+	reconciletrace.SetEnabled(next.ReconcileTraceEnabled)
 	return nil
 }
 
@@ -463,6 +476,7 @@ func runtimeValues(settings RuntimeSettings, includeJWT bool) map[string]string 
 		"language":                                         settings.Language,
 		RuntimeSettingLogLevel:                             settings.LogLevel,
 		RuntimeSettingRemoteCommandTimeoutSeconds:          strconv.Itoa(settings.RemoteCommandTimeoutSeconds),
+		RuntimeSettingReconcileTrace:                       strconv.FormatBool(settings.ReconcileTraceEnabled),
 		RuntimeSettingBrandingLoginTitle:                   settings.Branding.LoginTitle,
 		RuntimeSettingBrandingLoginSubtitle:                settings.Branding.LoginSubtitle,
 		RuntimeSettingCertificateEmail:                     settings.Certificates.Email,

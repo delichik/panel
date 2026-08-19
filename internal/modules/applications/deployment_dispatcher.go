@@ -12,6 +12,9 @@ import (
 	"panel/internal/modules/tasks"
 	"panel/internal/platform/database/orm"
 	id "panel/internal/platform/identity"
+	"panel/internal/platform/reconciletrace"
+
+	"go.uber.org/zap"
 )
 
 const (
@@ -303,6 +306,14 @@ func (d *deploymentDispatcher) claimExecuteTarget(ctx context.Context, targetID 
 	target.LeaseOwner = lifecycleTaskLeaseOwner(task.ID)
 	target.LeaseExpiresAt = &leaseExpiresAt
 	target.ClaimedTaskID = task.ID
+	reconciletrace.Trace("target_claimed",
+		zap.String("target_id", target.ID),
+		zap.String("app_id", target.ApplicationID),
+		zap.String("server_id", target.ServerID),
+		zap.String("action", target.Action),
+		zap.String("task_id", task.ID),
+		zap.String("operation_id", target.OperationID),
+		zap.Int("attempt", target.Attempt))
 	return target, true, nil
 }
 

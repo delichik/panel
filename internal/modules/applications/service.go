@@ -30,7 +30,10 @@ import (
 	panelerr "panel/internal/platform/errors"
 	httpx "panel/internal/platform/http"
 	id "panel/internal/platform/identity"
+	"panel/internal/platform/reconciletrace"
 	"panel/internal/platform/templating"
+
+	"go.uber.org/zap"
 )
 
 type Config struct {
@@ -2017,6 +2020,7 @@ func (s *Service) runApplyLifecycleTargetTask(ctx context.Context, task tasks.Ta
 		_ = s.tasks.AppendLog(ctx, taskID, "system", "deploying "+instanceSpec.ContainerName+" on "+targetName)
 	}
 	var result agentcontract.RuntimeInstanceResponse
+	var created agentcontract.RuntimeCreateContainerResponse
 	if err := s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{State: LifecycleTargetStateApplying, Stage: "waiting_server_queue", InstanceID: instanceSpec.InstanceID, ContainerName: instanceSpec.ContainerName, OwnerTaskID: taskID}); err != nil {
 		return err
 	}
@@ -2082,7 +2086,6 @@ func (s *Service) runApplyLifecycleTargetTask(ctx context.Context, task tasks.Ta
 			}); err != nil {
 				return deploymentStageError{stage: "remove_target_container", code: "remove_container_failed", retryable: true, err: err}
 			}
-			var created agentcontract.RuntimeCreateContainerResponse
 			if err := s.ensureLifecycleTargetStillOwnedByTask(runCtx, targetID, taskID); err != nil {
 				return err
 			}
@@ -2140,7 +2143,16 @@ func (s *Service) runApplyLifecycleTargetTask(ctx context.Context, task tasks.Ta
 	})
 	if err != nil {
 		if errors.Is(err, errLifecycleTargetLeaseLost) {
+			reconciletrace.Trace("target_lease_lost",
+				zap.String("target_id", targetID),
+				zap.String("app_id", app.ID),
+				zap.String("server_id", target.ID))
 			return err
+		}
+		if created.ContainerID != "" {
+			// create 成功但后续步骤失败：尽力清理已创建容器，避免残留容器持续
+			// 占用容器名，让下一次协调的 create 再次冲突。
+			_ = s.runtimeClient.DockerContainerDelete(ctx, baseURL, created.ContainerID)
 		}
 		stageErr := normalizeDeploymentStageError(err, "apply", "application_runtime_operation_failed", true)
 		_ = s.handleAgentError(ctx, target, stageErr.err)
@@ -2160,6 +2172,14 @@ func (s *Service) runApplyLifecycleTargetTask(ctx context.Context, task tasks.Ta
 		_ = s.enqueueDeploymentAggregate(ctx, targetRow.OperationID)
 		return err
 	}
+	reconciletrace.Trace("apply_succeeded",
+		zap.String("target_id", targetID),
+		zap.String("app_id", app.ID),
+		zap.String("server_id", target.ID),
+		zap.String("container_name", instanceSpec.ContainerName),
+		zap.String("container_id", result.ContainerID),
+		zap.String("instance_id", instanceSpec.InstanceID),
+		zap.String("status", result.Status))
 	if err := s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{State: LifecycleTargetStateVerifying, Stage: "inspect", InstanceID: instanceSpec.InstanceID, ContainerName: instanceSpec.ContainerName, ContainerID: result.ContainerID, OwnerTaskID: taskID}); err != nil {
 		return err
 	}
@@ -2335,6 +2355,7 @@ func (s *Service) deployRuntimeSpecTargets(ctx context.Context, taskID string, a
 			_ = s.tasks.AppendLog(ctx, taskID, "system", "deploying "+instanceSpec.ContainerName+" on "+targetName)
 		}
 		var result agentcontract.RuntimeInstanceResponse
+		var created agentcontract.RuntimeCreateContainerResponse
 		err = s.executeContainerOperation(ctx, target.ID, func(runCtx context.Context) error {
 			if err := s.ensureLifecycleTargetStillOwnedByTask(runCtx, targetID, leaseTaskID); err != nil {
 				return err
@@ -2383,7 +2404,6 @@ func (s *Service) deployRuntimeSpecTargets(ctx context.Context, taskID string, a
 			}); err != nil {
 				return err
 			}
-			var created agentcontract.RuntimeCreateContainerResponse
 			if err := s.ensureLifecycleTargetStillOwnedByTask(runCtx, targetID, leaseTaskID); err != nil {
 				return err
 			}
@@ -2434,7 +2454,16 @@ func (s *Service) deployRuntimeSpecTargets(ctx context.Context, taskID string, a
 		})
 		if err != nil {
 			if errors.Is(err, errLifecycleTargetLeaseLost) {
+				reconciletrace.Trace("target_lease_lost",
+					zap.String("target_id", targetID),
+					zap.String("app_id", app.ID),
+					zap.String("server_id", target.ID))
 				return err
+			}
+			if created.ContainerID != "" {
+				// create 成功但后续步骤失败：尽力清理已创建容器，避免残留容器
+				// 持续占用容器名，让下一次协调的 create 再次冲突。
+				_ = s.runtimeClient.DockerContainerDelete(ctx, baseURL, created.ContainerID)
 			}
 			_ = s.handleAgentError(ctx, target, err)
 			_ = s.upsertRuntimeInstance(ctx, app.ID, target.ID, instanceSpec, appruntime.DesiredRunning, appruntime.StatusFailed, "", err.Error())
@@ -2456,6 +2485,14 @@ func (s *Service) deployRuntimeSpecTargets(ctx context.Context, taskID string, a
 		if result.Status != appruntime.StatusRunning {
 			targetStatus = result.Status
 		}
+		reconciletrace.Trace("apply_succeeded",
+			zap.String("target_id", targetID),
+			zap.String("app_id", app.ID),
+			zap.String("server_id", target.ID),
+			zap.String("container_name", instanceSpec.ContainerName),
+			zap.String("container_id", result.ContainerID),
+			zap.String("instance_id", instanceSpec.InstanceID),
+			zap.String("status", result.Status))
 		_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: targetStatus, Stage: "inspect", InstanceID: instanceSpec.InstanceID, ContainerName: instanceSpec.ContainerName, ContainerID: result.ContainerID, Finished: true})
 	}
 	if len(failures) > 0 {
@@ -2839,6 +2876,12 @@ func (s *Service) failLifecycleTargetExecution(ctx context.Context, targetID, st
 	if err := s.finishTargetRunningStages(ctx, targetID, "succeeded", nil, stage); err != nil {
 		return err
 	}
+	reconciletrace.Trace("target_failed",
+		zap.String("target_id", targetID),
+		zap.String("stage", stage),
+		zap.String("code", firstNonEmpty(code, "application_runtime_operation_failed")),
+		zap.Bool("retryable", retryable),
+		zap.Error(cause))
 	return s.recordTargetStage(ctx, targetID, stage, "failed", cause.Error(), nil, &now)
 }
 
@@ -2982,6 +3025,12 @@ func (s *Service) verifyLifecycleTargetNow(ctx context.Context, targetID string)
 	if err != nil {
 		return err
 	}
+	reconciletrace.Trace("target_succeeded",
+		zap.String("target_id", target.ID),
+		zap.String("app_id", target.ApplicationID),
+		zap.String("server_id", target.ServerID),
+		zap.String("action", target.Action),
+		zap.String("stage", firstNonEmpty(target.Stage, "verify")))
 	return s.finishTargetRunningStages(ctx, target.ID, "succeeded", nil, "")
 }
 
@@ -3400,9 +3449,22 @@ func (s *Service) runRuntimeDeployStep(ctx context.Context, taskID, targetName, 
 	if s.tasks != nil && taskID != "" {
 		_ = s.tasks.AppendLog(ctx, taskID, "system", step+" on "+targetName)
 	}
+	reconciletrace.Trace("deploy_step_start",
+		zap.String("step", step),
+		zap.String("target", targetName),
+		zap.String("task_id", taskID))
 	if err := run(ctx); err != nil {
+		reconciletrace.Trace("deploy_step_failed",
+			zap.String("step", step),
+			zap.String("target", targetName),
+			zap.String("task_id", taskID),
+			zap.Error(err))
 		return fmt.Errorf("%s failed: %w", step, err)
 	}
+	reconciletrace.Trace("deploy_step_ok",
+		zap.String("step", step),
+		zap.String("target", targetName),
+		zap.String("task_id", taskID))
 	return nil
 }
 
@@ -4116,10 +4178,22 @@ func (s *Service) planTargetActions(ctx context.Context, app Application, spec a
 			return result, err
 		}
 		if !found {
+			reconciletrace.Trace("plan_decision",
+				zap.String("application_id", app.ID),
+				zap.String("server_id", serverID),
+				zap.String("action", action),
+				zap.String("decision", "create"))
 			createIDs = append(createIDs, serverID)
 			continue
 		}
 		if active.Action == action && active.DesiredGeneration == spec.Generation && strings.TrimSpace(active.DesiredSpecHash) == strings.TrimSpace(spec.SpecHash) {
+			reconciletrace.Trace("plan_decision",
+				zap.String("application_id", app.ID),
+				zap.String("server_id", serverID),
+				zap.String("action", action),
+				zap.String("decision", "reuse"),
+				zap.String("target_id", active.ID),
+				zap.String("target_state", active.State))
 			result.ReusedTargetIDs = append(result.ReusedTargetIDs, active.ID)
 			result.ReusedTargets = append(result.ReusedTargets, active)
 			continue
@@ -4127,6 +4201,14 @@ func (s *Service) planTargetActions(ctx context.Context, app Application, spec a
 		if action == LifecycleTargetActionApply && active.Action == LifecycleTargetActionApply &&
 			(active.DesiredGeneration != spec.Generation || strings.TrimSpace(active.DesiredSpecHash) != strings.TrimSpace(spec.SpecHash)) {
 			if !lifecycleTargetCanBeSupersededBeforeMutation(active.State) {
+				reconciletrace.Trace("plan_decision",
+					zap.String("application_id", app.ID),
+					zap.String("server_id", serverID),
+					zap.String("action", action),
+					zap.String("decision", "blocked"),
+					zap.String("target_id", active.ID),
+					zap.String("target_state", active.State),
+					zap.String("reason", "active_apply_target_mutating"))
 				result.BlockedTargetIDs = append(result.BlockedTargetIDs, active.ID)
 				result.BlockedTargets = append(result.BlockedTargets, active)
 				continue
@@ -4138,6 +4220,13 @@ func (s *Service) planTargetActions(ctx context.Context, app Application, spec a
 			active.Status = LifecycleTargetStatusSuperseded
 			result.SupersededTargetIDs = append(result.SupersededTargetIDs, active.ID)
 			result.SupersededTargets = append(result.SupersededTargets, active)
+			reconciletrace.Trace("plan_decision",
+				zap.String("application_id", app.ID),
+				zap.String("server_id", serverID),
+				zap.String("action", action),
+				zap.String("decision", "supersede_and_create"),
+				zap.String("superseded_target_id", active.ID),
+				zap.String("reason", "desired_revision_changed"))
 			createIDs = append(createIDs, serverID)
 			continue
 		}
@@ -4149,9 +4238,24 @@ func (s *Service) planTargetActions(ctx context.Context, app Application, spec a
 			active.Status = LifecycleTargetStatusSuperseded
 			result.SupersededTargetIDs = append(result.SupersededTargetIDs, active.ID)
 			result.SupersededTargets = append(result.SupersededTargets, active)
+			reconciletrace.Trace("plan_decision",
+				zap.String("application_id", app.ID),
+				zap.String("server_id", serverID),
+				zap.String("action", action),
+				zap.String("decision", "supersede_and_create"),
+				zap.String("superseded_target_id", active.ID),
+				zap.String("reason", "higher_priority_action"))
 			createIDs = append(createIDs, serverID)
 			continue
 		}
+		reconciletrace.Trace("plan_decision",
+			zap.String("application_id", app.ID),
+			zap.String("server_id", serverID),
+			zap.String("action", action),
+			zap.String("decision", "blocked"),
+			zap.String("target_id", active.ID),
+			zap.String("target_state", active.State),
+			zap.String("reason", "active_target_conflict"))
 		result.BlockedTargetIDs = append(result.BlockedTargetIDs, active.ID)
 		result.BlockedTargets = append(result.BlockedTargets, active)
 	}
