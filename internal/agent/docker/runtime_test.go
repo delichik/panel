@@ -262,6 +262,54 @@ func TestDockerAPIClientCreateContainerSendsCapAdd(t *testing.T) {
 	}
 }
 
+func TestLocalRuntimeCreateContainerRetriesAfterNameConflict(t *testing.T) {
+	var creates, deletes int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/containers/create":
+			creates++
+			if creates == 1 {
+				w.WriteHeader(http.StatusConflict)
+				_, _ = w.Write([]byte(`{"message":"Conflict. The container name \"/panel-web\" is already in use by container \"old-id\". You have to remove (or rename) that container to be able to reuse that name."}`))
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"container-2"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/containers/old-id/json":
+			// 冲突自愈路径会 inspect 占用者以记录归属信息。
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"old-id","Name":"/panel-web","Created":"2026-01-01T00:00:00Z","Config":{"Image":"nginx","Labels":{"panel.application.managed":"true","panel.application.id":"app-1","panel.application.instance.id":"inst-1","panel.application.generation":"1","panel.application.spec.hash":"h1"}},"State":{"Status":"running","Running":true}}`))
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/containers/"):
+			deletes++
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	rt := &LocalRuntime{root: t.TempDir(), client: &dockerAPIClient{host: server.URL, client: server.Client()}}
+	id, err := rt.CreateContainer(context.Background(), appruntime.Spec{
+		ApplicationID: "app-1",
+		InstanceID:    "inst-1",
+		Image:         "nginx:1.27",
+		ContainerName: "panel-web",
+	})
+	if err != nil {
+		t.Fatalf("CreateContainer() error = %v", err)
+	}
+	if id != "container-2" {
+		t.Fatalf("id = %q, want container-2", id)
+	}
+	if creates != 2 {
+		t.Fatalf("create attempts = %d, want 2", creates)
+	}
+	if deletes != 1 {
+		t.Fatalf("delete calls = %d, want 1", deletes)
+	}
+}
+
 func TestLocalRuntimeStatusReportsMissingWhenContainerNotFound(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {

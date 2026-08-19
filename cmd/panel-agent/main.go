@@ -13,6 +13,7 @@ import (
 
 	agentcli "panel/internal/agent/cli"
 	agentbootstrap "panel/internal/bootstrap/agent"
+	"panel/internal/platform/buildinfo"
 
 	"google.golang.org/grpc"
 )
@@ -72,7 +73,7 @@ func serveAgent() int {
 
 	errCh := make(chan error, 1)
 	go func() {
-		log.Printf("panel agent listening on grpc://%s", cfg.ListenAddress)
+		log.Printf("panel agent listening on grpc://%s (version=%s channel=%s commit=%s)", cfg.ListenAddress, buildinfo.NormalizedVersion(), buildinfo.NormalizedChannel(), buildinfo.Commit)
 		errCh <- server.Serve()
 	}()
 

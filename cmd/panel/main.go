@@ -12,6 +12,7 @@ import (
 
 	panelbootstrap "panel/internal/bootstrap/panel"
 	"panel/internal/modules/backups"
+	"panel/internal/platform/buildinfo"
 	"panel/internal/platform/config"
 	"panel/internal/platform/logging"
 
@@ -39,6 +40,12 @@ func main() {
 
 	logger := logging.L()
 	defer logging.Sync()
+
+	logger.Info("panel starting",
+		zap.String("version", buildinfo.NormalizedVersion()),
+		zap.String("channel", buildinfo.NormalizedChannel()),
+		zap.String("repository", buildinfo.Repository),
+		zap.String("commit", buildinfo.Commit))
 
 	cfg, err := config.Load(os.Getenv("PANEL_CONFIG"))
 	if err != nil {

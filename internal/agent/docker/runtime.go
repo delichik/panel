@@ -21,6 +21,7 @@ import (
 	"path"
 	"path/filepath"
 	goruntime "runtime"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,6 +30,9 @@ import (
 	agentcontract "panel/internal/agent/contract"
 	"panel/internal/agent/nfsvol"
 	"panel/internal/modules/applications/runtime"
+	"panel/internal/platform/logging"
+
+	"go.uber.org/zap"
 )
 
 const defaultRuntimeRoot = "/opt/panel/apps"
@@ -481,11 +485,34 @@ func (r *LocalRuntime) ContainerRestart(ctx context.Context, id string) error {
 }
 
 func (r *LocalRuntime) ContainerDelete(ctx context.Context, id string) error {
+	// 记录删除目标：先 inspect 拿到实际容器 ID 与归属（是否面板托管），
+	// NotFound 视为已删除。删除是协调收敛的关键步骤，日志里必须能看到
+	// "删的是哪个容器、结果如何"。
+	if inspect, err := r.client.inspectContainer(ctx, id); err == nil {
+		labels := inspect.Config.Labels
+		logging.L().Debug("removing container",
+			zap.String("container_name", id),
+			zap.String("container_id", inspect.ID),
+			zap.String("status", inspect.State.Status),
+			zap.String("managed", labels["panel.application.managed"]),
+			zap.String("application_id", labels["panel.application.id"]),
+			zap.String("instance_id", labels["panel.application.instance.id"]),
+			zap.String("generation", labels["panel.application.generation"]),
+			zap.String("spec_hash", labels["panel.application.spec.hash"]))
+	} else if !isDockerNotFound(err) {
+		logging.L().Debug("container inspect before delete failed", zap.String("container_name", id), zap.Error(err))
+	}
 	err := r.client.removeContainer(ctx, id, true)
 	if isDockerNotFound(err) {
+		logging.L().Debug("container delete skipped: not found", zap.String("container_name", id))
 		return nil
 	}
-	return err
+	if err != nil {
+		logging.L().Error("container delete failed", zap.String("container_name", id), zap.Error(err))
+		return err
+	}
+	logging.L().Info("container deleted", zap.String("container_name", id))
+	return nil
 }
 
 func (r *LocalRuntime) WriteManagedFiles(ctx context.Context, spec appruntime.Spec) error {
@@ -575,14 +602,72 @@ func (r *LocalRuntime) CreateContainer(ctx context.Context, spec appruntime.Spec
 		return "", err
 	}
 	id, err := r.client.createContainer(ctx, spec)
+	if err != nil && isDockerNameConflict(err) {
+		// 同名容器冲突：并发部署交错或上次失败残留的容器仍占用名字时，Docker
+		// create 会 409。这里强制删除占用者后重试一次，保证"创建"幂等——否则
+		// 协调器每次触发都失败且无法自愈（调用方删除与创建之间窗口外的残留
+		// 无法用"先删后建"覆盖）。
+		r.logContainerConflict(spec.ContainerName, err)
+		if removeErr := r.client.removeContainer(ctx, spec.ContainerName, true); removeErr != nil && !isDockerNotFound(removeErr) {
+			return "", fmt.Errorf("remove conflicting container %s before create: %w", spec.ContainerName, removeErr)
+		}
+		id, err = r.client.createContainer(ctx, spec)
+	}
 	if err != nil {
 		return "", err
 	}
+	logging.L().Info("container created",
+		zap.String("container_name", spec.ContainerName),
+		zap.String("container_id", id),
+		zap.String("instance_id", spec.InstanceID),
+		zap.String("application_id", spec.ApplicationID),
+		zap.Int("generation", spec.Generation),
+		zap.String("spec_hash", spec.SpecHash))
 	if err := r.writeAppliedState(spec, id, "recreate"); err != nil {
 		_ = r.client.removeContainer(ctx, id, true)
 		return "", err
 	}
 	return id, nil
+}
+
+// logContainerConflict 记录创建容器时的同名冲突详情：占用者是谁、是否面板
+// 托管、属于哪个实例。占用者 ID 从 Docker 错误文本解析，随后 inspect 拿到
+// 归属信息；inspect 失败只降级为记录错误文本，不阻断后续自愈。
+func (r *LocalRuntime) logContainerConflict(containerName string, conflictErr error) {
+	fields := []zap.Field{
+		zap.String("container_name", containerName),
+		zap.Error(conflictErr),
+	}
+	if occupantID := conflictingContainerID(conflictErr); occupantID != "" {
+		fields = append(fields, zap.String("occupant_id", occupantID))
+		if inspect, err := r.client.inspectContainer(context.Background(), occupantID); err == nil {
+			labels := inspect.Config.Labels
+			fields = append(fields,
+				zap.String("occupant_name", inspect.Name),
+				zap.String("occupant_status", inspect.State.Status),
+				zap.String("occupant_image", inspect.Config.Image),
+				zap.String("occupant_created_at", inspect.Created),
+				zap.String("occupant_managed", labels["panel.application.managed"]),
+				zap.String("occupant_application_id", labels["panel.application.id"]),
+				zap.String("occupant_instance_id", labels["panel.application.instance.id"]),
+				zap.String("occupant_generation", labels["panel.application.generation"]),
+				zap.String("occupant_spec_hash", labels["panel.application.spec.hash"]))
+		}
+	}
+	logging.L().Warn("container name conflict; removing occupant before retry", fields...)
+}
+
+// conflictingContainerID 从 Docker 的 create 冲突错误文本中提取占用容器的
+// ID，形如 "... is already in use by container \"<id>\" ..."。
+func conflictingContainerID(err error) string {
+	if err == nil {
+		return ""
+	}
+	matches := conflictOccupantIDPattern.FindStringSubmatch(err.Error())
+	if len(matches) != 2 {
+		return ""
+	}
+	return strings.TrimSpace(matches[1])
 }
 
 func (r *LocalRuntime) Images(ctx context.Context) ([]agentcontract.DockerImage, error) {
@@ -2533,10 +2618,12 @@ func dockerExtraHosts(mode string) []string {
 }
 
 type dockerInspectResponse struct {
-	ID     string `json:"Id"`
-	Name   string `json:"Name"`
-	Config struct {
-		Image string `json:"Image"`
+	ID      string `json:"Id"`
+	Name    string `json:"Name"`
+	Created string `json:"Created"`
+	Config  struct {
+		Image  string            `json:"Image"`
+		Labels map[string]string `json:"Labels"`
 	} `json:"Config"`
 	State struct {
 		Status     string `json:"Status"`
@@ -2655,6 +2742,10 @@ type dockerNotFound struct{ name string }
 
 func (e dockerNotFound) Error() string { return "docker container not found: " + e.name }
 
+// conflictOccupantIDPattern 匹配 Docker create 冲突消息中的占用容器 ID，
+// 形如 `The container name "/x" is already in use by container "abc123"`。
+var conflictOccupantIDPattern = regexp.MustCompile(`already in use by container "([A-Za-z0-9]+)"`)
+
 func isDockerNotFound(err error) bool {
 	var nf dockerNotFound
 	return errors.As(err, &nf)
@@ -2666,6 +2757,16 @@ func isDockerAlreadyExists(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "already exists") || strings.Contains(msg, "is already present")
+}
+
+// isDockerNameConflict 判断创建容器/网络时的同名冲突（Docker 409，
+// 消息形如 "The container name ... is already in use by container ..."）。
+func isDockerNameConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "already in use") || strings.Contains(msg, "name conflict")
 }
 
 type dockerNotModified struct{ name string }
