@@ -32,15 +32,17 @@ func (f *fakeServerProvider) Get(_ context.Context, id string) (server.Server, e
 }
 
 type fakeSSHExecutor struct {
-	execSudoCalls int
-	execErr       error
+	execSudoCalls    int
+	execSudoCommands []string
+	execErr          error
 }
 
 func (f *fakeSSHExecutor) Exec(context.Context, sshx.Target, sshx.CommandSpec) (sshx.CommandResult, error) {
 	return sshx.CommandResult{}, f.execErr
 }
-func (f *fakeSSHExecutor) ExecSudo(context.Context, sshx.Target, sshx.CommandSpec) (sshx.CommandResult, error) {
+func (f *fakeSSHExecutor) ExecSudo(_ context.Context, _ sshx.Target, spec sshx.CommandSpec) (sshx.CommandResult, error) {
 	f.execSudoCalls++
+	f.execSudoCommands = append(f.execSudoCommands, spec.Command)
 	return sshx.CommandResult{}, f.execErr
 }
 func (f *fakeSSHExecutor) Upload(context.Context, sshx.Target, sshx.UploadSpec) error {

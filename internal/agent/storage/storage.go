@@ -28,7 +28,6 @@ const (
 
 	archiveTimeout = 10 * time.Minute
 )
-
 var (
 	rootPattern = regexp.MustCompile(`^/[A-Za-z0-9._/-]+$`)
 	hostPattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$`)
@@ -41,7 +40,7 @@ var (
 
 // ConfigureExport 配置存储共享导出：
 //   - enabled=true：创建根目录、校验 nfs-kernel-server 已安装（安装由 Panel 通过
-//     SSH 完成）、把根目录导出给 allowed hosts 并重新加载导出；
+//     SSH 完成）并确保服务运行、把根目录导出给 allowed hosts 并重新加载导出；
 //   - enabled=false：移除托管导出块、注销根目录并重新加载导出，不删除数据。
 func ConfigureExport(ctx context.Context, root string, allowedHosts []string, enabled bool) error {
 	exportsMu.Lock()
@@ -59,6 +58,9 @@ func ConfigureExport(ctx context.Context, root string, allowedHosts []string, en
 		_ = out
 		return fmt.Errorf("nfs-kernel-server is not installed; install it on the storage server first")
 	}
+	if err := ensureNFSServerRunning(ctx); err != nil {
+		return err
+	}
 	hosts := cleanHosts(allowedHosts)
 	if len(hosts) == 0 {
 		return fmt.Errorf("no allowed hosts configured for storage export")
@@ -71,7 +73,10 @@ func ConfigureExport(ctx context.Context, root string, allowedHosts []string, en
 	if err := writeExports(ctx, next); err != nil {
 		return err
 	}
-	return registerRoot(ctx, root)
+	if err := registerRoot(ctx, root); err != nil {
+		return err
+	}
+	return ensureNFSPortsAllowed(ctx)
 }
 
 // EnsureDirectory 创建存储分区目录（幂等），仅允许在已注册根目录之下。
@@ -134,7 +139,10 @@ func removeExport(ctx context.Context, root string) error {
 	if err := writeExports(ctx, next); err != nil {
 		return err
 	}
-	return unregisterRoot(ctx, root)
+	if err := unregisterRoot(ctx, root); err != nil {
+		return err
+	}
+	return removeNFSPortRules(ctx)
 }
 
 func readExports(ctx context.Context) (string, error) {
@@ -239,6 +247,58 @@ func ensureTrailingNewline(value string) string {
 		return value
 	}
 	return value + "\n"
+}
+
+// ensureNFSServerRunning 确保 nfs-kernel-server 服务已启用并运行：优先
+// systemd，无 systemd 的环境回退 sysvinit 的 service 命令。配置导出依赖
+// rpc.nfsd/rpc.mountd 进程，仅安装包不启动服务时 exportfs/showmount 与
+// 客户端挂载都会失败。Panel 的 5 分钟导出同步周期会调用 ConfigureExport，
+// 因此本函数同时承担自愈：服务被手动停止后会在下一次周期同步自动拉起。
+func ensureNFSServerRunning(ctx context.Context) error {
+	if err := run(ctx, "systemctl", "enable", "--now", "nfs-kernel-server"); err == nil {
+		return nil
+	}
+	if err := run(ctx, "service", "nfs-kernel-server", "start"); err == nil {
+		return nil
+	}
+	return fmt.Errorf("start nfs-kernel-server service: systemctl and service both failed")
+}
+
+// ensureNFSPortsAllowed 在 UFW 已安装时放行 NFS 端口（2049/tcp 与 2049/udp，
+// 幂等：规则已存在时 ufw allow 直接更新）。客户端挂载固定使用 NFSv4
+// （nfsvers=4），只需 2049/tcp，2049/udp 一并放行以兼容旧客户端。未安装
+// UFW 时跳过（无本地防火墙即视为放行）；云厂商安全组等 UFW 之外的防火墙
+// 需用户自行放行 2049。Panel 的导出同步周期会反复调用本函数，规则被删除
+// 后会自动加回。
+func ensureNFSPortsAllowed(ctx context.Context) error {
+	if _, err := exec.LookPath("ufw"); err != nil {
+		return nil
+	}
+	for _, spec := range []string{"2049/tcp", "2049/udp"} {
+		if _, err := exec.CommandContext(ctx, "ufw", "allow", spec).CombinedOutput(); err != nil {
+			return fmt.Errorf("allow nfs port %s: %w", spec, err)
+		}
+	}
+	return nil
+}
+
+// removeNFSPortRules 尽力移除 NFS 端口放行规则。规则不存在时 ufw delete 会
+// 报 "Invalid update" 类错误，这里容忍该情况，与卸载"尽力清理"语义一致。
+func removeNFSPortRules(ctx context.Context) error {
+	if _, err := exec.LookPath("ufw"); err != nil {
+		return nil
+	}
+	for _, spec := range []string{"2049/tcp", "2049/udp"} {
+		out, err := exec.CommandContext(ctx, "ufw", "delete", "allow", spec).CombinedOutput()
+		if err != nil {
+			msg := strings.ToLower(string(out))
+			if strings.Contains(msg, "invalid update") || strings.Contains(msg, "couldn't") {
+				continue
+			}
+			return fmt.Errorf("remove nfs port rule %s: %w: %s", spec, err, strings.TrimSpace(string(out)))
+		}
+	}
+	return nil
 }
 
 func cleanHosts(hosts []string) []string {

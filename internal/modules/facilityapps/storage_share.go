@@ -657,8 +657,12 @@ func (s *Service) reconcileStorageServer(ctx context.Context, setting StorageSer
 	return nil
 }
 
-// installNFSServer 通过 SSH 在存储服务器上安装 nfs-kernel-server（唯一允许走
-// SSH 的存储操作）。
+// installNFSServer 通过 SSH 在存储服务器上安装并启用 nfs-kernel-server
+// （唯一允许走 SSH 的存储操作）。仅安装包不启动服务时 rpc.nfsd/rpc.mountd
+// 不会运行，exportfs 刷新与客户端挂载都会失败（apt 的 postinst 在容器/精简
+// 环境常被 policy-rc.d 阻止启动，且 dpkg -s 检测到已安装后不会重新触发），
+// 因此安装后必须显式启用并启动服务：优先 systemd，无 systemd 的环境回退
+// sysvinit 的 service 命令，两者都失败才报错。
 func (s *Service) installNFSServer(ctx context.Context, serverID string) error {
 	if s.ssh == nil {
 		return panelerr.Validation("storage_share_ssh_unavailable", "SSH executor is unavailable for installing NFS on the storage server")
@@ -667,7 +671,8 @@ func (s *Service) installNFSServer(ctx context.Context, serverID string) error {
 	if err != nil {
 		return err
 	}
-	command := "dpkg -s nfs-kernel-server >/dev/null 2>&1 || (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nfs-kernel-server)"
+	command := "dpkg -s nfs-kernel-server >/dev/null 2>&1 || (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nfs-kernel-server); " +
+		"(systemctl enable --now nfs-kernel-server 2>/dev/null || service nfs-kernel-server start) || exit 1"
 	if _, err := s.ssh.ExecSudo(ctx, server.Target(srv), sshx.CommandSpec{Command: command, Timeout: 20 * time.Minute}); err != nil {
 		return fmt.Errorf("install nfs-kernel-server on %s: %w", serverID, err)
 	}
