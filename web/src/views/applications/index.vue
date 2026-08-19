@@ -1920,8 +1920,8 @@ onBeforeUnmount(() => {
     <template v-else-if="isStorageShareFacility">
       <StorageShareFacility :mode="mode" :servers="servers" @back="goBackFromFacilityPage" />
     </template>
-    <div v-else class="grid h-full min-h-[640px] gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
-      <section class="min-h-0 overflow-auto rounded-2xl border border-border bg-card p-5">
+    <div v-else class="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <section class="rounded-2xl border border-border bg-card p-5">
         <EmptyState v-if="!currentFacilitySummary" :title="t('applicationsPage.facilityUnavailable')" :description="t('applicationsPage.facilityUnavailableDescription', { kind: facilityKind })" />
         <div v-else-if="loading && !facility" class="relative grid min-h-64 place-items-center">
           <LoadingOverlay />

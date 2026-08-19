@@ -309,9 +309,9 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="grid h-full min-h-[640px] gap-4">
-    <div v-if="isConfigMode" class="grid h-full min-h-0 grid-cols-[minmax(0,1fr)_360px] gap-4 max-xl:grid-cols-1">
-      <section class="min-h-0 overflow-auto rounded-2xl border border-border bg-card p-5">
+  <div class="grid gap-4">
+    <div v-if="isConfigMode" class="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <section class="rounded-2xl border border-border bg-card p-5">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div class="section-copy">
             <h3>{{ t('applicationsPage.storageShareConfigTitle') }}</h3>
@@ -336,7 +336,7 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <aside class="min-h-0 overflow-auto rounded-2xl border border-border bg-card p-5">
+      <aside class="grid content-start gap-3 rounded-2xl border border-border bg-card p-5">
         <div class="section-copy">
           <h3>{{ t('applicationsPage.storageShareStateTitle') }}</h3>
           <p>{{ t('applicationsPage.storageShareStateHint') }}</p>
@@ -380,7 +380,7 @@ onBeforeUnmount(() => {
         <p class="m-0 text-sm text-danger">{{ error }}</p>
         <Button size="sm" :loading="loading" @click="load">{{ t('common.retry') }}</Button>
       </div>
-      <div v-else class="grid min-h-0 grid-cols-1 gap-4 lg:grid-cols-2">
+      <div v-else class="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div v-for="server in status?.servers ?? []" :key="server.serverId" class="grid gap-2 rounded-2xl border border-border bg-card p-4">
           <div class="flex items-center justify-between gap-2">
             <strong class="truncate">{{ serverName(server.serverId) }}</strong>
@@ -394,7 +394,11 @@ onBeforeUnmount(() => {
           <p v-if="!server.exportLive && server.detail" class="m-0 text-xs text-danger">{{ server.detail }}</p>
         </div>
         <div v-if="!status?.servers.length" class="rounded-2xl border border-border bg-card p-6">
-          <EmptyState :title="t('applicationsPage.storageShareStateNoServers')" :description="t('applicationsPage.storageShareStateNoServersHint')" />
+          <EmptyState :title="t('applicationsPage.storageShareStateNoServers')" :description="t('applicationsPage.storageShareStateNoServersHint')">
+            <template #actions>
+              <Button size="sm" variant="primary" @click="openConfig"><Wrench />{{ t('applicationsPage.storageShareGoConfigure') }}</Button>
+            </template>
+          </EmptyState>
         </div>
       </div>
     </template>
