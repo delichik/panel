@@ -49,7 +49,7 @@ const (
 
 var (
 	Version              = buildinfo.NormalizedVersion()
-	RequiredCapabilities = []string{"health", "os-release", "system-traits", "metrics-snapshot", "packages-list", "packages-upgrade", "ufw-status", "ufw-write", "fail2ban-status", "fail2ban-write", "fail2ban-release", "system-restart", "runtime-write-files", "runtime-reload", "runtime-create-container", "runtime-status", "runtime-logs", "runtime-persistent-archive", "runtime-stop", "runtime-restart", "runtime-container-name", "docker-containers", "docker-container-logs", "docker-images", "docker-networks", "docker-volumes"}
+	RequiredCapabilities = []string{"health", "os-release", "system-traits", "metrics-snapshot", "packages-list", "packages-upgrade", "ufw-status", "ufw-write", "fail2ban-status", "fail2ban-write", "fail2ban-release", "system-restart", "runtime-write-files", "runtime-reconcile", "runtime-reload", "runtime-create-container", "runtime-status", "runtime-logs", "runtime-persistent-archive", "runtime-stop", "runtime-restart", "runtime-container-name", "docker-containers", "docker-container-logs", "docker-images", "docker-networks", "docker-volumes"}
 )
 
 type Client interface {
@@ -212,6 +212,44 @@ type Fail2BanApplyRequest struct {
 
 type RuntimeWriteFilesRequest struct {
 	Spec appruntime.Spec `json:"spec"`
+}
+
+type RuntimeReconcileRequest struct {
+	JobID                 string          `json:"jobId"`
+	ExecutionID           string          `json:"executionId"`
+	ApplicationID         string          `json:"applicationId"`
+	InstanceID            string          `json:"instanceId"`
+	ServerID              string          `json:"serverId"`
+	Action                string          `json:"action"`
+	DesiredGeneration     int             `json:"desiredGeneration"`
+	DesiredSpecHash       string          `json:"desiredSpecHash"`
+	DesiredRevisionID     string          `json:"desiredRevisionId"`
+	Spec                  appruntime.Spec `json:"spec"`
+	RemoveData            bool            `json:"removeData"`
+	PreviousContainerName string          `json:"previousContainerName,omitempty"`
+}
+
+type RuntimeReconcileStep struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Detail string `json:"detail,omitempty"`
+}
+
+type RuntimeReconcileResponse struct {
+	ObservedState       string                 `json:"observedState"`
+	ContainerName       string                 `json:"containerName"`
+	ContainerID         string                 `json:"containerId,omitempty"`
+	ObservedGeneration  int                    `json:"observedGeneration"`
+	ObservedSpecHash    string                 `json:"observedSpecHash"`
+	ObservedImageDigest string                 `json:"observedImageDigest,omitempty"`
+	ObservedAt          time.Time              `json:"observedAt"`
+	Steps               []RuntimeReconcileStep `json:"steps,omitempty"`
+	ErrorCode           string                 `json:"errorCode,omitempty"`
+	ErrorClass          string                 `json:"errorClass,omitempty"`
+	ErrorMessage        string                 `json:"errorMessage,omitempty"`
+	ErrorDetail         string                 `json:"errorDetail,omitempty"`
+	Retryable           bool                   `json:"retryable"`
+	RetryAfter          time.Duration          `json:"retryAfter"`
 }
 
 type RuntimeReloadRequest struct {

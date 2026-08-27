@@ -21,6 +21,7 @@ func TestSetupPromotesPendingHostAndConfiguresPanelEntry(t *testing.T) {
 	cfg.AppDatabase = cfg.DataRoot + "/app.db"
 	cfg.LogDatabase = cfg.DataRoot + "/log.db"
 	cfg.MetricsDatabase = cfg.DataRoot + "/metrics.db"
+	cfg.CoordinationDatabase = cfg.DataRoot + "/coordination.db"
 	store, err := database.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -64,9 +65,13 @@ func (setupCredentialFake) Delete(context.Context, string) error { return nil }
 
 type setupServerFake struct{ srv servers.Server }
 
-func (f setupServerFake) Create(context.Context, servers.SaveRequest) (servers.Server, error) { return f.srv, nil }
-func (f setupServerFake) Get(context.Context, string) (servers.Server, error)                 { return f.srv, nil }
-func (f setupServerFake) DeployAgent(context.Context, string) (tasks.Task, error)            { return tasks.Task{}, nil }
+func (f setupServerFake) Create(context.Context, servers.SaveRequest) (servers.Server, error) {
+	return f.srv, nil
+}
+func (f setupServerFake) Get(context.Context, string) (servers.Server, error) { return f.srv, nil }
+func (f setupServerFake) DeployAgent(context.Context, string) (tasks.Task, error) {
+	return tasks.Task{}, nil
+}
 
 type setupTaskFake struct{}
 
@@ -75,7 +80,7 @@ func (setupTaskFake) Get(context.Context, string) (tasks.Task, error) {
 }
 
 type setupFacilityFake struct {
-	saved facilityapps.ReverseProxySaveInput
+	saved     facilityapps.ReverseProxySaveInput
 	committed bool
 }
 
@@ -84,7 +89,7 @@ func (f *setupFacilityFake) GetReverseProxy(context.Context) (facilityapps.Rever
 	if f.committed {
 		operationID = "operation-new"
 	}
-	operation := &applications.LifecycleOperation{ID: operationID, Status: applications.LifecycleStatusDeployed, UpdatedAt: time.Now()}
+	operation := &applications.LifecycleOperation{ID: operationID, Status: "succeeded", UpdatedAt: time.Now()}
 	return facilityapps.ReverseProxyConfig{DeploymentServers: append([]string(nil), f.saved.DeploymentServers...), PanelEntry: f.saved.PanelEntry, Domains: f.saved.Domains, Operation: operation}, nil
 }
 func (f *setupFacilityFake) SaveReverseProxy(_ context.Context, input facilityapps.ReverseProxySaveInput) (facilityapps.ReverseProxyConfig, error) {

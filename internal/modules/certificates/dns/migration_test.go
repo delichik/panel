@@ -19,6 +19,7 @@ func TestMigrateProviderCredentialsEncryptsLegacyTokenAndDropsProviderColumns(t 
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
 
 	db, err := sql.Open("sqlite", cfg.AppDatabase)
@@ -126,6 +127,7 @@ func TestMigrateProviderCredentialsAllowsLegacyAccountWithoutToken(t *testing.T)
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
 
 	db, err := sql.Open("sqlite", cfg.AppDatabase)

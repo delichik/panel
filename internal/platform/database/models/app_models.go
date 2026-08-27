@@ -153,6 +153,95 @@ func (*ApplicationReconcileState) ExtraIndexDDL() map[string][]string {
 	}
 }
 
+// ApplicationRevisionV3 对应 AppDB 中不可变的应用运行时修订。
+//
+// application_revisions 曾经位于 LogDB。新的控制面必须在同一个数据库
+// 边界内保存 revision 与 desired state，worker 执行时只读取这份不可变快照。
+// 旧 LogDB 表暂时由兼容迁移保留，但新写入统一落到 AppDB。
+type ApplicationRevisionV3 struct {
+	ID string `orm:"primary_key"`
+	// The legacy LogDB compatibility model uses the same table name without a
+	// cross-database foreign key. Keep the revision row self-contained here;
+	// application deletion is finalized by the orchestrator rather than by a
+	// database cascade.
+	ApplicationID       string           `orm:"not_null"`
+	Generation          int              `orm:"not_null"`
+	SpecHash            string           `orm:"not_null"`
+	RenderedRuntimeSpec map[string]any   `orm:"json;not_null;default:'{}'"`
+	ManagedFileManifest []map[string]any `orm:"json;not_null;default:'[]'"`
+	ImageReference      string           `orm:"not_null;default:''"`
+	ResolvedImageDigest string           `orm:"not_null;default:''"`
+	SpecYAML            string           `orm:"not_null;default:''"`
+	JobJSON             map[string]any   `orm:"json;not_null;default:'{}'"`
+	CreatedAt           time.Time        `orm:"not_null"`
+}
+
+func (*ApplicationRevisionV3) TableName() string { return "application_revisions" }
+
+// ExtraIndexDDL 返回 revision 表无法用 orm tag 表达的复合索引与唯一约束。
+func (*ApplicationRevisionV3) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"application_revisions": {
+			"CREATE INDEX IF NOT EXISTS idx_application_revisions_app_created ON application_revisions(application_id, created_at)",
+			"CREATE UNIQUE INDEX IF NOT EXISTS uq_application_revisions_application_generation ON application_revisions(application_id, generation)",
+		},
+	}
+}
+
+// Job 对应应用/服务器冲突域当前唯一的协调工作。
+// 任务中心的 task 行是兼容投影，不能替代本表作为部署事实来源。
+type Job struct {
+	ID                  string         `orm:"primary_key"`
+	ApplicationID       string         `orm:"not_null;references:applications(id);on_delete:RESTRICT"`
+	ServerID            string         `orm:"not_null;references:servers(id);on_delete:RESTRICT"`
+	InstanceID          string         `orm:"not_null;default:''"`
+	Action              string         `orm:"not_null;default:'apply'"`
+	DesiredGeneration   int            `orm:"not_null;default:0"`
+	DesiredSpecHash     string         `orm:"not_null;default:''"`
+	DesiredRevisionID   string         `orm:"not_null;default:''"`
+	DesiredSpecJSON     map[string]any `orm:"json;not_null;default:'{}'"`
+	RemoveData          bool           `orm:"not_null;default:0"`
+	ForceNonce          int64          `orm:"not_null;default:0"`
+	State               string         `orm:"not_null;default:'pending'"`
+	Priority            int            `orm:"not_null;default:0"`
+	Attempts            int            `orm:"not_null;default:0"`
+	NextRunAt           *time.Time
+	LeaseOwner          string `orm:"not_null;default:''"`
+	LeaseToken          string `orm:"not_null;default:''"`
+	LeaseExpiresAt      *time.Time
+	ExecutionID         string           `orm:"not_null;default:''"`
+	IntentID            string           `orm:"not_null;default:''"`
+	TriggerType         string           `orm:"not_null;default:''"`
+	TriggerResourceType string           `orm:"not_null;default:''"`
+	TriggerResourceID   string           `orm:"not_null;default:''"`
+	Reason              string           `orm:"not_null;default:''"`
+	IdempotencyKey      string           `orm:"not_null;default:''"`
+	LastStage           string           `orm:"not_null;default:''"`
+	LastStepsJSON       []map[string]any `orm:"json;not_null;default:'[]'"`
+	ErrorCode           string           `orm:"not_null;default:''"`
+	ErrorClass          string           `orm:"not_null;default:''"`
+	ErrorMessage        string           `orm:"not_null;default:''"`
+	ErrorDetail         string           `orm:"not_null;default:''"`
+	CreatedAt           time.Time        `orm:"not_null"`
+	StartedAt           *time.Time
+	FinishedAt          *time.Time
+	UpdatedAt           time.Time `orm:"not_null"`
+}
+
+func (*Job) TableName() string { return "jobs" }
+
+// ExtraIndexDDL 返回 jobs 的活跃冲突域、到期扫描和 intent 查询索引。
+func (*Job) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"jobs": {
+			"CREATE UNIQUE INDEX IF NOT EXISTS uq_jobs_active_app_server ON jobs(application_id, server_id) WHERE state IN ('pending','running','failed_retryable')",
+			"CREATE UNIQUE INDEX IF NOT EXISTS uq_jobs_idempotency ON jobs(application_id, idempotency_key) WHERE idempotency_key <> ''",
+			"CREATE INDEX IF NOT EXISTS idx_jobs_due ON jobs(state, next_run_at, priority, created_at)",
+			"CREATE INDEX IF NOT EXISTS idx_jobs_intent ON jobs(intent_id, created_at)",
+		},
+	}
+}
+
 // ContainerObservation 对应 container_observations。
 type ContainerObservation struct {
 	ServerID      string         `orm:"primary_key;not_null;references:servers(id);on_delete:CASCADE"`
@@ -350,12 +439,31 @@ type ApplicationInstance struct {
 	ContainerName          string         `orm:"not_null"`
 	ContainerID            string         `orm:"not_null;default:''"`
 	DesiredState           string         `orm:"not_null;default:'running'"`
+	DesiredGeneration      int            `orm:"not_null;default:0"`
+	DesiredSpecHash        string         `orm:"not_null;default:''"`
+	DesiredRevisionID      string         `orm:"not_null;default:''"`
+	DesiredSpecJSON        map[string]any `orm:"json;not_null;default:'{}'"`
 	Status                 string         `orm:"not_null;default:'pending'"`
 	RuntimeSpecJSON        map[string]any `orm:"json;not_null;default:'{}'"`
 	LastDeployedGeneration int            `orm:"not_null;default:0"`
-	LastError              string         `orm:"not_null;default:''"`
-	CreatedAt              time.Time      `orm:"not_null"`
-	UpdatedAt              time.Time      `orm:"not_null"`
+	ObservedState          string         `orm:"not_null;default:'unknown'"`
+	ObservedContainerName  string         `orm:"not_null;default:''"`
+	ObservedContainerID    string         `orm:"not_null;default:''"`
+	ObservedGeneration     int            `orm:"not_null;default:0"`
+	ObservedSpecHash       string         `orm:"not_null;default:''"`
+	ObservedImageDigest    string         `orm:"not_null;default:''"`
+	ObservedAt             *time.Time
+	ObservedSequence       int64  `orm:"not_null;default:0"`
+	ObservedSource         string `orm:"not_null;default:''"`
+	LastReconcileJobID     string `orm:"not_null;default:''"`
+	LastErrorCode          string `orm:"not_null;default:''"`
+	LastErrorClass         string `orm:"not_null;default:''"`
+	LastErrorMessage       string `orm:"not_null;default:''"`
+	LastErrorDetail        string `orm:"not_null;default:''"`
+	LastErrorAt            *time.Time
+	LastError              string    `orm:"not_null;default:''"`
+	CreatedAt              time.Time `orm:"not_null"`
+	UpdatedAt              time.Time `orm:"not_null"`
 }
 
 func (*ApplicationInstance) TableName() string { return "application_instances" }

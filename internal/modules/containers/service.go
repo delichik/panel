@@ -16,6 +16,7 @@ import (
 	"panel/internal/modules/applications"
 	"panel/internal/modules/servers"
 	"panel/internal/modules/tasks"
+	controlplane "panel/internal/orchestrator"
 	"panel/internal/platform/database/models"
 	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
@@ -26,12 +27,13 @@ import (
 )
 
 const (
-	TaskImageRefresh         = "image_refresh"
-	TaskImageUpgradeMany     = "application_image_upgrade_selected"
-	TaskImageUpgradeAll      = "application_image_upgrade_all"
-	TaskVolumeRefresh        = "volume_refresh"
-	TaskNetworkRefresh       = "network_refresh"
-	TaskApplicationReconcile = "application_reconcile"
+	TaskImageRefresh              = "image_refresh"
+	TaskImageUpgradeMany          = "application_image_upgrade_selected"
+	TaskImageUpgradeAll           = "application_image_upgrade_all"
+	TaskVolumeRefresh             = "volume_refresh"
+	TaskNetworkRefresh            = "network_refresh"
+	TaskApplicationReconcile      = "application_reconcile"
+	TaskApplicationReconcileBatch = "application_reconcile_batch"
 )
 
 const (
@@ -128,17 +130,18 @@ type serverQueue struct {
 }
 
 type Service struct {
-	db          *sql.DB
-	servers     ServerProvider
-	agentErrors AgentErrorHandler
-	agent       AgentClient
-	tasks       *tasks.Service
-	apps        ApplicationUpdater
-	resolver    applications.ImageDigestResolver
-	queueMu     sync.Mutex
-	queues      map[string]*serverQueue
-	refreshMu   sync.Mutex
-	refreshing  map[string]bool
+	db           *sql.DB
+	servers      ServerProvider
+	agentErrors  AgentErrorHandler
+	agent        AgentClient
+	tasks        *tasks.Service
+	apps         ApplicationUpdater
+	resolver     applications.ImageDigestResolver
+	queueMu      sync.Mutex
+	queues       map[string]*serverQueue
+	refreshMu    sync.Mutex
+	refreshing   map[string]bool
+	observations *controlplane.ObservationWriter
 	// orphanWarnMu/orphanWarned 节流"托管容器引用未知应用"告警，避免残留容器
 	// 每份上报都刷一条日志。
 	orphanWarnMu sync.Mutex
@@ -158,6 +161,7 @@ func NewService(db *sql.DB, servers ServerProvider, agentClient AgentClient, tas
 		queues:   map[string]*serverQueue{}, refreshing: map[string]bool{},
 		orphanWarned: map[string]time.Time{},
 	}
+	s.observations = controlplane.NewObservationWriter(db)
 	if handler, ok := servers.(AgentErrorHandler); ok {
 		s.agentErrors = handler
 	}
@@ -218,7 +222,7 @@ func (s *Service) SaveReportedContainers(ctx context.Context, serverID string, s
 	if err != nil {
 		return err
 	}
-	return orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+	if err := orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		if err := orm.New(tx).From("container_observations").Where("server_id = ?", serverID).Delete(ctx); err != nil {
 			return err
 		}
@@ -301,7 +305,63 @@ func (s *Service) SaveReportedContainers(ctx context.Context, serverID string, s
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	return s.writeInstanceObservations(ctx, serverID, sampleAt, items, knownApps, "agent_report")
+}
+
+func (s *Service) writeInstanceObservations(ctx context.Context, serverID string, sampleAt time.Time, items []agentcontract.DockerContainer, knownApps map[string]struct{}, source string) error {
+	if s == nil || s.observations == nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	for _, item := range items {
+		appID, instanceID, managed := managedLabels(item.Labels)
+		if !managed || instanceID == "" {
+			continue
+		}
+		if _, ok := knownApps[appID]; !ok {
+			continue
+		}
+		seen[instanceID] = struct{}{}
+		state := controlplane.ObservedStopped
+		if strings.EqualFold(strings.TrimSpace(item.State), "running") {
+			state = controlplane.ObservedRunning
+		}
+		generation, _ := strconv.Atoi(strings.TrimSpace(item.Labels["panel.application.generation"]))
+		containerName := ""
+		if len(item.Names) > 0 {
+			containerName = strings.TrimPrefix(item.Names[0], "/")
+		}
+		if _, err := s.observations.Write(ctx, controlplane.Observation{
+			InstanceID: instanceID, Source: source, ObservedAt: sampleAt,
+			ObservedState: state, ContainerName: containerName, ContainerID: item.ID,
+			ObservedGeneration: generation, ObservedSpecHash: item.Labels["panel.application.spec.hash"],
+		}); err != nil {
+			return err
+		}
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM application_instances WHERE server_id=?`, serverID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var instanceID string
+		if err := rows.Scan(&instanceID); err != nil {
+			return err
+		}
+		if _, ok := seen[instanceID]; ok {
+			continue
+		}
+		if _, err := s.observations.Write(ctx, controlplane.Observation{
+			InstanceID: instanceID, Source: source, ObservedAt: sampleAt, ObservedState: controlplane.ObservedMissing,
+		}); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 // applicationIDRow 是 knownApplicationIDs 的扫描行；ORM 元数据解析要求具名
@@ -834,10 +894,18 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string
 		if !srv.Reachable || srv.Traits[agentcontract.TraitStatus] != agentcontract.StatusCompatible {
 			continue
 		}
-		containers, _, err := s.reportedContainers(ctx, srv.ID)
+		containers, observedAt, err := s.reportedContainers(ctx, srv.ID)
 		if err != nil {
 			logging.L().Warn("failed to read reported containers for reconcile scan", zap.String("server_id", srv.ID), zap.Error(err))
 			continue
+		}
+		if observedAt != nil {
+			knownApps, knownErr := s.knownApplicationIDs(ctx)
+			if knownErr == nil {
+				if writeErr := s.writeInstanceObservations(ctx, srv.ID, *observedAt, containers, knownApps, "periodic_scan"); writeErr != nil {
+					logging.L().Warn("failed to write periodic application observations", zap.String("server_id", srv.ID), zap.Error(writeErr))
+				}
+			}
 		}
 		observed := map[string]agentcontract.DockerContainer{}
 		for _, container := range containers {
@@ -938,10 +1006,8 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string
 		}
 		reconciletrace.Trace("plan_result",
 			zap.String("application_id", appID),
-			zap.Strings("created_targets", result.CreatedTargetIDs),
-			zap.Strings("reused_targets", result.ReusedTargetIDs),
-			zap.Strings("superseded_targets", result.SupersededTargetIDs),
-			zap.Strings("blocked_targets", result.BlockedTargetIDs))
+			zap.Strings("job_ids", result.JobIDs),
+			zap.Strings("created_job_ids", result.CreatedJobIDs))
 	}
 	return nil, nil
 }

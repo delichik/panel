@@ -6,7 +6,7 @@ func AllModels() []any {
 	return append(append(append(append([]any{}, AppModels()...), LogModels()...), CoordinationModels()...), MetricsModels()...)
 }
 
-// AppModels 返回 app 库 33 张表的模型注册清单。
+// AppModels 返回 app 库模型注册清单。
 // 顺序满足 FK 依赖：父表（credentials、servers、applications、dns_domains、
 // 各 edit_sessions）先于引用它们的子表。
 func AppModels() []any {
@@ -14,6 +14,7 @@ func AppModels() []any {
 		&Credential{}, &Server{}, &PanelInstallation{}, &PackageUpdate{}, &PackageRefresh{},
 		&Fail2banConfig{}, &ImageUpdate{}, &ImageRefresh{}, &Application{},
 		&ApplicationReconcileState{}, &ContainerObservation{}, &DockerResourceSnapshot{},
+		&ApplicationRevisionV3{}, &Job{},
 		&DNSDomain{}, &DNSRecordSnapshot{}, &ApplicationEditSession{},
 		&ApplicationEditSessionFile{}, &ApplicationEditSessionOperation{},
 		&ApplicationFile{}, &ApplicationInstance{}, &FacilityAppConfig{},
@@ -32,11 +33,10 @@ func LogModels() []any {
 	}
 }
 
-// CoordinationModels 返回协调库 3 张表的模型注册清单。
+// CoordinationModels 返回协调库的模型注册清单。旧 lifecycle 表已下线，
+// 协调库不再注册任何模型。
 func CoordinationModels() []any {
-	return []any{
-		&ApplicationLifecycleOperation{}, &ApplicationLifecycleTarget{}, &ApplicationTargetStage{},
-	}
+	return []any{}
 }
 
 // MetricsModels 返回 metrics 库 1 张表的模型注册清单。

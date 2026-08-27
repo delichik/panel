@@ -2,16 +2,19 @@ package applications
 
 import (
 	"context"
-	"database/sql"
-	"strings"
-	"time"
-
-	appruntime "panel/internal/modules/applications/runtime"
+	"encoding/json"
+	controlplane "panel/internal/orchestrator"
+	"panel/internal/platform/database/models"
 	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
+	"sort"
+	"strings"
+	"time"
 )
 
-// 协调记录：记录页列表/详情直接从协调库聚合生命周期操作与目标，不落投影表。
+// 协调记录：记录页列表/详情直接聚合 AppDB jobs（按 intent_id 分组），不再
+// 读取旧 lifecycle 表。一个 intent（一次触发）对应一条协调记录，一个
+// application/server Job 对应一个目标。
 
 type OperationRecordFilter struct {
 	ApplicationID string
@@ -64,7 +67,6 @@ type OperationRecordTarget struct {
 	Stage              string                 `json:"stage,omitempty"`
 	Attempt            int                    `json:"attempt,omitempty"`
 	NextRunAt          *time.Time             `json:"nextRunAt,omitempty"`
-	ClaimedTaskID      string                 `json:"claimedTaskId,omitempty"`
 	ContainerName      string                 `json:"containerName,omitempty"`
 	DesiredState       string                 `json:"desiredState,omitempty"`
 	DesiredGeneration  int                    `json:"desiredGeneration,omitempty"`
@@ -98,7 +100,38 @@ type OperationRecordListResult struct {
 	PageSize int                      `json:"pageSize"`
 }
 
-// ListApplicationOperationRecords 分页查询协调记录，读取时聚合生命周期表。
+type operationGroup struct {
+	IntentID      string
+	ApplicationID string
+	Jobs          []jobRecordRow
+}
+
+type jobRecordRow struct {
+	ID                string
+	ApplicationID     string
+	ServerID          string
+	InstanceID        string
+	Action            string
+	State             string
+	Attempt           int
+	NextRunAt         *time.Time
+	IntentID          string
+	TriggerType       string
+	TriggerResourceID string
+	Reason            string
+	DesiredGeneration int
+	DesiredSpecHash   string
+	LastStage         string
+	LastStepsJSON     string
+	ErrorCode         string
+	ErrorMessage      string
+	ErrorDetail       string
+	CreatedAt         time.Time
+	StartedAt         *time.Time
+	FinishedAt        *time.Time
+	UpdatedAt         time.Time
+}
+
 func (s *Service) ListApplicationOperationRecords(ctx context.Context, filter OperationRecordFilter) (OperationRecordListResult, error) {
 	if s == nil {
 		return OperationRecordListResult{}, panelerr.Validation("application_operation_service_unavailable", "Application service is unavailable")
@@ -109,165 +142,314 @@ func (s *Service) ListApplicationOperationRecords(ctx context.Context, filter Op
 	if filter.Offset < 0 {
 		filter.Offset = 0
 	}
-	q := orm.New(s.lifecycleDB()).From("application_lifecycle_operations")
-	appendRecordFilter(q, filter)
-	total, err := q.Count(ctx)
+	groups, err := s.operationGroups(ctx, filter)
 	if err != nil {
 		return OperationRecordListResult{}, err
 	}
-	q = orm.New(s.lifecycleDB()).From("application_lifecycle_operations")
-	appendRecordFilter(q, filter)
-	q.OrderBy("created_at DESC", "id DESC").Limit(filter.Limit).Offset(filter.Offset)
-	var ops []LifecycleOperation
-	if err := q.All(ctx, &ops); err != nil {
-		return OperationRecordListResult{}, err
-	}
-	items := make([]OperationRecordSummary, 0, len(ops))
-	for _, op := range ops {
-		summary, err := s.recordSummary(ctx, op)
+	items := make([]OperationRecordSummary, 0, len(groups))
+	for _, group := range groups {
+		summary, err := s.recordSummaryFromJobs(ctx, group)
 		if err != nil {
 			return OperationRecordListResult{}, err
 		}
+		if filter.Status != "" && summary.Status != filter.Status {
+			continue
+		}
 		items = append(items, summary)
 	}
-	return OperationRecordListResult{Items: items, Total: int(total), PageSize: filter.Limit, Page: filter.Offset/filter.Limit + 1}, nil
+	total := len(items)
+	start := filter.Offset
+	if start > total {
+		start = total
+	}
+	end := start + filter.Limit
+	if end > total {
+		end = total
+	}
+	items = items[start:end]
+	return OperationRecordListResult{Items: items, Total: total, Page: filter.Offset/filter.Limit + 1, PageSize: filter.Limit}, nil
 }
 
-// GetApplicationOperationRecord 返回一条协调记录详情（操作 + 目标 + 步骤日志）。
 func (s *Service) GetApplicationOperationRecord(ctx context.Context, operationID string) (OperationRecordDetail, error) {
 	if s == nil {
 		return OperationRecordDetail{}, panelerr.Validation("application_operation_service_unavailable", "Application service is unavailable")
 	}
-	op, err := s.lifecycleOperationByID(ctx, operationID)
+	filter := OperationRecordFilter{ApplicationID: "", Limit: 200}
+	groups, err := s.operationGroups(ctx, filter)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return OperationRecordDetail{}, panelerr.NotFound("application_operation")
+		return OperationRecordDetail{}, err
+	}
+	for _, group := range groups {
+		if group.IntentID != operationID {
+			continue
 		}
-		return OperationRecordDetail{}, err
+		summary, err := s.recordSummaryFromJobs(ctx, group)
+		if err != nil {
+			return OperationRecordDetail{}, err
+		}
+		targets, err := s.recordTargetsFromJobs(ctx, group)
+		if err != nil {
+			return OperationRecordDetail{}, err
+		}
+		return OperationRecordDetail{Operation: summary, Targets: targets}, nil
 	}
-	summary, err := s.recordSummary(ctx, op)
-	if err != nil {
-		return OperationRecordDetail{}, err
-	}
-	targets := append([]LifecycleTarget(nil), op.Targets...)
-	targets = s.mergeConsistentServers(ctx, op, targets)
-	stages, err := s.stagesByOperation(ctx, operationID)
-	if err != nil {
-		return OperationRecordDetail{}, err
-	}
-	targetDTOs := make([]OperationRecordTarget, 0, len(targets))
-	for _, target := range targets {
-		targetDTOs = append(targetDTOs, operationRecordTargetDTO(target, stages[target.ID]))
-	}
-	return OperationRecordDetail{Operation: summary, Targets: targetDTOs}, nil
+	return OperationRecordDetail{}, panelerr.NotFound("application_operation")
 }
 
-func appendRecordFilter(q *orm.Query, filter OperationRecordFilter) {
+// operationGroups 按 intent_id 聚合 AppDB jobs，并按过滤条件排序分页。
+func (s *Service) operationGroups(ctx context.Context, filter OperationRecordFilter) ([]operationGroup, error) {
+	query := orm.New(s.db).From("jobs")
+	// 设施应用不属于面向普通用户的协调记录；这里在 SQL 侧同时排除全部
+	// facility 类型与保留 identity，避免详情接口通过子查询遗漏后再暴露。
+	query = query.Where(
+		"application_id NOT IN (SELECT id FROM applications WHERE kind=? OR id=?)",
+		ApplicationKindFacility,
+		FacilityProxyApplicationID,
+	)
 	if strings.TrimSpace(filter.ApplicationID) != "" {
-		q.And("application_id = ?", strings.TrimSpace(filter.ApplicationID))
-	}
-	if value := operationStatusFilterValue(filter.Status); value != "" {
-		q.And("status = ?", value)
+		query = query.Where("application_id=?", strings.TrimSpace(filter.ApplicationID))
 	}
 	if strings.TrimSpace(filter.Source) != "" {
-		q.And("trigger = ?", strings.TrimSpace(filter.Source))
+		query = query.Where("trigger_type=?", strings.TrimSpace(filter.Source))
 	}
 	if filter.From != nil {
-		q.And("created_at >= ?", formatTime(filter.From.UTC()))
+		query = query.Where("created_at >= ?", formatTime(filter.From.UTC()))
 	}
 	if filter.To != nil {
-		q.And("created_at <= ?", formatTime(filter.To.UTC()))
+		query = query.Where("created_at <= ?", formatTime(filter.To.UTC()))
+	}
+	rows := []models.Job{}
+	if err := query.OrderBy("created_at DESC", "id DESC").All(ctx, &rows); err != nil {
+		return nil, err
+	}
+	groups := []operationGroup{}
+	index := map[string]int{}
+	for _, m := range rows {
+		intent := strings.TrimSpace(m.IntentID)
+		if intent == "" {
+			intent = m.ID
+		}
+		key := intent + "\x00" + m.ApplicationID
+		if idx, ok := index[key]; ok {
+			groups[idx].Jobs = append(groups[idx].Jobs, jobRecordRowFromModel(m))
+			continue
+		}
+		index[key] = len(groups)
+		groups = append(groups, operationGroup{IntentID: intent, ApplicationID: m.ApplicationID, Jobs: []jobRecordRow{jobRecordRowFromModel(m)}})
+	}
+	// 最新操作在前；同一 intent 内按服务器聚合。
+	sort.SliceStable(groups, func(i, j int) bool {
+		return groups[i].latest().After(groups[j].latest())
+	})
+	return groups, nil
+}
+
+func jobRecordRowFromModel(m models.Job) jobRecordRow {
+	return jobRecordRow{
+		ID:                m.ID,
+		ApplicationID:     m.ApplicationID,
+		ServerID:          m.ServerID,
+		InstanceID:        m.InstanceID,
+		Action:            m.Action,
+		State:             m.State,
+		Attempt:           m.Attempts,
+		NextRunAt:         m.NextRunAt,
+		IntentID:          m.IntentID,
+		TriggerType:       m.TriggerType,
+		TriggerResourceID: m.TriggerResourceID,
+		Reason:            m.Reason,
+		DesiredGeneration: m.DesiredGeneration,
+		DesiredSpecHash:   m.DesiredSpecHash,
+		LastStage:         m.LastStage,
+		LastStepsJSON:     string(jsonBytes(m.LastStepsJSON)),
+		ErrorCode:         m.ErrorCode,
+		ErrorMessage:      m.ErrorMessage,
+		ErrorDetail:       m.ErrorDetail,
+		CreatedAt:         m.CreatedAt,
+		StartedAt:         m.StartedAt,
+		FinishedAt:        m.FinishedAt,
+		UpdatedAt:         m.UpdatedAt,
 	}
 }
 
-// operationStatusFilterValue 把展示状态映射为生命周期操作状态（列表过滤用）。
-func operationStatusFilterValue(display string) string {
-	switch strings.TrimSpace(display) {
-	case "queued":
-		return LifecycleStatusPending
-	case "running":
-		return LifecycleStatusDeploying
-	case "succeeded":
-		return LifecycleStatusDeployed
-	case "partial_failed":
-		return LifecycleStatusPartiallyDeployed
-	case "failed":
-		return LifecycleStatusFailed
-	case "cancelled", "superseded":
-		return LifecycleStatusSuperseded
-	default:
-		return ""
+func jsonBytes(value []map[string]any) []byte {
+	if value == nil {
+		return nil
 	}
+	out, _ := json.Marshal(value)
+	return out
 }
 
-func (s *Service) recordSummary(ctx context.Context, op LifecycleOperation) (OperationRecordSummary, error) {
-	targets, err := s.lifecycleTargets(ctx, op.ID)
-	if err != nil {
-		return OperationRecordSummary{}, err
+func (g operationGroup) latest() time.Time {
+	latest := g.Jobs[0].CreatedAt
+	for _, job := range g.Jobs {
+		if job.UpdatedAt.After(latest) {
+			latest = job.UpdatedAt
+		}
 	}
-	appName := strings.TrimSpace(op.ApplicationID)
-	if app, err := s.Get(ctx, op.ApplicationID); err == nil {
+	return latest
+}
+
+func (s *Service) recordSummaryFromJobs(ctx context.Context, group operationGroup) (OperationRecordSummary, error) {
+	appName := strings.TrimSpace(group.ApplicationID)
+	if app, err := s.Get(ctx, group.ApplicationID); err == nil {
 		appName = strings.TrimSpace(firstNonEmpty(app.Name, app.ID))
 	}
-	summary := operationRecordSummary(op, targets, appName)
-	servers, err := s.recordServerNames(ctx, op, targets)
-	if err != nil {
-		return OperationRecordSummary{}, err
+	total := len(group.Jobs)
+	succeeded := 0
+	failed := 0
+	active := false
+	var firstCreated, latest time.Time
+	var firstError string
+	servers := []string{}
+	actions := map[string]bool{}
+	for _, job := range group.Jobs {
+		if firstCreated.IsZero() || job.CreatedAt.Before(firstCreated) {
+			firstCreated = job.CreatedAt
+		}
+		if job.UpdatedAt.After(latest) {
+			latest = job.UpdatedAt
+		}
+		actions[job.Action] = true
+		if job.State == controlplane.JobSucceeded {
+			succeeded++
+		}
+		if job.State == controlplane.JobFailed || job.State == controlplane.JobCancelled {
+			failed++
+		}
+		if job.State == controlplane.JobPending || job.State == controlplane.JobRunning || job.State == controlplane.JobFailedRetryable {
+			active = true
+		}
+		if firstError == "" && strings.TrimSpace(job.ErrorMessage) != "" {
+			firstError = job.ErrorMessage
+		}
+		if serverName := s.recordServerName(ctx, job.ServerID); serverName != "" {
+			servers = append(servers, serverName)
+		}
 	}
-	summary.TargetServers = servers
+	summary := OperationRecordSummary{
+		OperationID:     group.IntentID,
+		ApplicationID:   group.ApplicationID,
+		ApplicationName: appName,
+		Action:          firstOperationAction(actions),
+		Source:          firstNonEmpty(group.Jobs[0].TriggerType, "system"),
+		TriggeredBy:     firstNonEmpty(group.Jobs[0].Reason, group.Jobs[0].TriggerResourceID),
+		Status:          operationRecordStatusFromJobs(group.Jobs),
+		TargetTotal:     total,
+		TargetSucceeded: succeeded,
+		TargetFailed:    failed,
+		TargetServers:   uniqueStringItems(servers),
+		LatestAt:        latest,
+		FailureSummary:  firstError,
+		CreatedAt:       firstCreated,
+		UpdatedAt:       latest,
+	}
+	for _, job := range group.Jobs {
+		if job.StartedAt != nil && (summary.StartedAt == nil || job.StartedAt.Before(*summary.StartedAt)) {
+			summary.StartedAt = job.StartedAt
+		}
+		if job.FinishedAt != nil && (summary.FinishedAt == nil || job.FinishedAt.After(*summary.FinishedAt)) {
+			summary.FinishedAt = job.FinishedAt
+		}
+	}
+	if !active {
+		// 全部终态：completed/failed 事件语义已由 Job 终态表达。
+		_ = summary
+	}
 	return summary, nil
 }
 
-func operationRecordSummary(op LifecycleOperation, targets []LifecycleTarget, appName string) OperationRecordSummary {
-	summary := OperationRecordSummary{
-		OperationID:     op.ID,
-		ApplicationID:   op.ApplicationID,
-		ApplicationName: appName,
-		Action:          lifecycleOperationAction(op),
-		Source:          firstNonEmpty(op.Trigger, "system"),
-		TriggeredBy:     op.Trigger,
-		Status:          operationRecordStatus(op, targets),
-		StartedAt:       op.StartedAt,
-		FinishedAt:      op.FinishedAt,
-		TargetTotal:     len(targets),
-		TargetSucceeded: countLifecycleTargets(targets, LifecycleTargetStateSucceeded),
-		TargetFailed:    countLifecycleTargets(targets, LifecycleTargetStateFailed, LifecycleTargetStateFailedRetryable, LifecycleTargetStateCancelled),
-		LatestAt:        op.UpdatedAt,
-		FailureSummary:  firstTargetError(targets),
-		CreatedAt:       op.CreatedAt,
-		UpdatedAt:       op.UpdatedAt,
+func (s *Service) recordServerName(ctx context.Context, serverID string) string {
+	if s.servers == nil {
+		return serverID
 	}
-	for _, target := range targets {
-		if target.UpdatedAt.After(summary.LatestAt) {
-			summary.LatestAt = target.UpdatedAt
-		}
+	if srv, err := s.servers.Get(ctx, serverID); err == nil {
+		return strings.TrimSpace(firstNonEmpty(srv.Name, srv.ID))
 	}
-	return summary
+	return serverID
 }
 
-func operationRecordStatus(op LifecycleOperation, targets []LifecycleTarget) string {
-	switch op.Status {
-	case LifecycleStatusPending:
-		return "queued"
-	case LifecycleStatusDeploying:
-		return "running"
-	case LifecycleStatusDeployed:
-		return "succeeded"
-	case LifecycleStatusPartiallyDeployed:
-		return "partial_failed"
-	case LifecycleStatusFailed:
-		return "failed"
-	case LifecycleStatusSuperseded:
-		return "superseded"
+func (s *Service) recordTargetsFromJobs(ctx context.Context, group operationGroup) ([]OperationRecordTarget, error) {
+	instanceRows, err := s.recordInstanceRows(ctx, group.Jobs)
+	if err != nil {
+		return nil, err
 	}
-	hasActive, hasFailed, hasSucceeded := false, false, false
-	for _, target := range targets {
-		switch target.State {
-		case LifecycleTargetStateSucceeded:
+	out := make([]OperationRecordTarget, 0, len(group.Jobs))
+	for _, job := range group.Jobs {
+		target := OperationRecordTarget{
+			ID:                job.ID,
+			OperationID:       group.IntentID,
+			ApplicationID:     job.ApplicationID,
+			ServerID:          job.ServerID,
+			ServerName:        s.recordServerName(ctx, job.ServerID),
+			Action:            job.Action,
+			State:             job.State,
+			Status:            operationRecordTargetStatus(job.State),
+			Stage:             job.LastStage,
+			Attempt:           job.Attempt,
+			NextRunAt:         job.NextRunAt,
+			ContainerName:     "",
+			DesiredState:      desiredStateForAction(job.Action),
+			DesiredGeneration: job.DesiredGeneration,
+			DesiredSpecHash:   job.DesiredSpecHash,
+			ErrorCode:         job.ErrorCode,
+			ErrorMessage:      job.ErrorMessage,
+			ErrorDetail:       job.ErrorDetail,
+			CreatedAt:         job.CreatedAt,
+			StartedAt:         job.StartedAt,
+			FinishedAt:        job.FinishedAt,
+			UpdatedAt:         job.UpdatedAt,
+			Stages:            stagesFromJobSteps(job),
+		}
+		if inst, ok := instanceRows[job.InstanceID]; ok {
+			target.ContainerName = strings.TrimSpace(firstNonEmpty(inst.ContainerName, inst.ObservedContainerName))
+			target.ObservedState = inst.ObservedState
+			target.ObservedExitCode = ""
+			target.ObservedError = inst.LastError
+			target.ObservedGeneration = inst.ObservedGeneration
+			target.ObservedSpecHash = inst.ObservedSpecHash
+			target.ObservedImage = inst.ObservedImageDigest
+			target.ObservedAt = inst.ObservedAt
+		}
+		out = append(out, target)
+	}
+	return out, nil
+}
+
+func (s *Service) recordInstanceRows(ctx context.Context, jobs []jobRecordRow) (map[string]models.ApplicationInstance, error) {
+	out := map[string]models.ApplicationInstance{}
+	if len(jobs) == 0 {
+		return out, nil
+	}
+	ids := make([]any, 0, len(jobs))
+	for _, job := range jobs {
+		if job.InstanceID != "" {
+			ids = append(ids, job.InstanceID)
+		}
+	}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	var rows []models.ApplicationInstance
+	if err := orm.New(s.db).From("application_instances").AndIn("id", ids).All(ctx, &rows); err != nil {
+		return out, err
+	}
+	for _, row := range rows {
+		out[row.ID] = row
+	}
+	return out, nil
+}
+
+func operationRecordStatusFromJobs(jobs []jobRecordRow) string {
+	hasActive, hasFailed, hasSucceeded, hasCancelled := false, false, false, false
+	for _, job := range jobs {
+		switch job.State {
+		case controlplane.JobSucceeded:
 			hasSucceeded = true
-		case LifecycleTargetStateFailed, LifecycleTargetStateFailedRetryable:
+		case controlplane.JobFailed:
 			hasFailed = true
-		case LifecycleTargetStateCancelled, LifecycleTargetStateSuperseded:
+		case controlplane.JobCancelled:
+			hasCancelled = true
 		default:
 			hasActive = true
 		}
@@ -281,178 +463,82 @@ func operationRecordStatus(op LifecycleOperation, targets []LifecycleTarget) str
 	if hasFailed {
 		return "failed"
 	}
+	if hasCancelled {
+		return "cancelled"
+	}
 	if hasSucceeded {
 		return "succeeded"
 	}
 	return "queued"
 }
 
-func lifecycleTargetRecordStatus(target LifecycleTarget) string {
-	switch strings.TrimSpace(target.State) {
-	case "consistent":
-		return "consistent"
-	case LifecycleTargetStateSucceeded:
+func operationRecordTargetStatus(state string) string {
+	switch state {
+	case controlplane.JobSucceeded:
 		return "succeeded"
-	case LifecycleTargetStateFailedRetryable, LifecycleTargetStateFailed:
+	case controlplane.JobFailedRetryable, controlplane.JobFailed:
 		return "failed"
-	case LifecycleTargetStateCancelled:
+	case controlplane.JobCancelled:
 		return "cancelled"
-	case LifecycleTargetStateSuperseded:
-		return "superseded"
-	case LifecycleTargetStatePlanned, LifecycleTargetStateReady:
+	case controlplane.JobPending:
 		return "queued"
-	default:
+	case controlplane.JobRunning:
 		return "running"
+	default:
+		return "queued"
 	}
 }
 
-func firstTargetError(targets []LifecycleTarget) string {
-	for _, target := range targets {
-		if value := strings.TrimSpace(firstNonEmpty(target.ErrorMessage, target.ErrorDetail, target.Error)); value != "" {
-			return value
-		}
+func desiredStateForAction(action string) string {
+	switch action {
+	case controlplane.ActionStop:
+		return controlplane.DesiredStopped
+	case controlplane.ActionPurge:
+		return controlplane.DesiredPurged
+	default:
+		return controlplane.DesiredRunning
 	}
-	return ""
 }
 
-// recordServerNames 返回记录涉及的服务器显示名（去重，含“一致”的期望服务器）。
-func (s *Service) recordServerNames(ctx context.Context, op LifecycleOperation, targets []LifecycleTarget) ([]string, error) {
-	seen := map[string]struct{}{}
-	names := make([]string, 0, len(targets))
-	add := func(id, name string) {
-		key := strings.TrimSpace(firstNonEmpty(name, id))
-		if key == "" {
-			return
-		}
-		if _, ok := seen[key]; ok {
-			return
-		}
-		seen[key] = struct{}{}
-		names = append(names, key)
-	}
-	for _, target := range targets {
-		add(target.ServerID, target.ServerName)
-	}
-	if app, err := s.Get(ctx, op.ApplicationID); err == nil {
-		for _, serverID := range app.DeploymentServers {
-			name := strings.TrimSpace(serverID)
-			if s.servers != nil {
-				if srv, err := s.servers.Get(ctx, serverID); err == nil {
-					name = strings.TrimSpace(firstNonEmpty(srv.Name, srv.ID))
-				}
-			}
-			add(serverID, name)
+func firstOperationAction(actions map[string]bool) string {
+	for _, action := range []string{controlplane.ActionPurge, controlplane.ActionStop, controlplane.ActionApply} {
+		if actions[action] {
+			return action
 		}
 	}
-	return names, nil
+	return controlplane.ActionApply
 }
 
-// mergeConsistentServers 把期望部署服务器中“没有目标”的服务器补成一致行。
-func (s *Service) mergeConsistentServers(ctx context.Context, op LifecycleOperation, targets []LifecycleTarget) []LifecycleTarget {
-	app, err := s.Get(ctx, op.ApplicationID)
-	if err != nil {
-		return targets
+func stagesFromJobSteps(job jobRecordRow) []OperationRecordStage {
+	if strings.TrimSpace(job.LastStepsJSON) == "" || job.LastStepsJSON == "null" || job.LastStepsJSON == "[]" {
+		return nil
 	}
-	hasTarget := map[string]struct{}{}
-	for _, target := range targets {
-		hasTarget[target.ServerID] = struct{}{}
+	var steps []controlplane.Step
+	if err := json.Unmarshal([]byte(job.LastStepsJSON), &steps); err != nil {
+		return nil
 	}
-	out := targets
-	for _, serverID := range app.DeploymentServers {
-		if _, ok := hasTarget[serverID]; ok {
-			continue
-		}
-		serverName := strings.TrimSpace(serverID)
-		if s.servers != nil {
-			if srv, err := s.servers.Get(ctx, serverID); err == nil {
-				serverName = strings.TrimSpace(firstNonEmpty(srv.Name, srv.ID))
-			}
-		}
-		out = append(out, LifecycleTarget{
-			ID:                "expected-" + serverID,
-			OperationID:       op.ID,
-			ApplicationID:     op.ApplicationID,
-			ServerID:          serverID,
-			ServerName:        serverName,
-			State:             "consistent",
-			Status:            "consistent",
-			DesiredState:      appruntime.DesiredRunning,
-			DesiredGeneration: op.Generation,
-			DesiredSpecHash:   op.SpecHash,
-			CreatedAt:         op.CreatedAt,
-			UpdatedAt:         op.UpdatedAt,
+	stages := make([]OperationRecordStage, 0, len(steps))
+	for idx, step := range steps {
+		stages = append(stages, OperationRecordStage{
+			ID:     job.ID + ":" + step.Name,
+			Stage:  step.Name,
+			Status: stepStatus(step.Status),
+			Detail: step.Detail,
 		})
+		_ = idx
 	}
-	return out
+	return stages
 }
 
-// targetStageRow 是 application_target_stages 的字符串行映射：started_at /
-// finished_at 在库中以空串表示“未开始/未结束”，不能直接用 time.Time 扫描。
-type targetStageRow struct {
-	ID         string  `orm:"column:id"`
-	TargetID   string  `orm:"column:target_id"`
-	Stage      string  `orm:"column:stage"`
-	Status     string  `orm:"column:status"`
-	Detail     string  `orm:"column:detail"`
-	StartedAt  *string `orm:"column:started_at"`
-	FinishedAt *string `orm:"column:finished_at"`
-}
-
-// stagesByOperation 读取一次操作内所有目标的步骤日志，按目标分组、按开始时间排序。
-func (s *Service) stagesByOperation(ctx context.Context, operationID string) (map[string][]OperationRecordStage, error) {
-	var rows []targetStageRow
-	if err := orm.New(s.lifecycleDB()).From("application_target_stages").
-		Where("operation_id = ?", strings.TrimSpace(operationID)).
-		OrderBy("started_at ASC", "created_at ASC", "id ASC").
-		All(ctx, &rows); err != nil {
-		return nil, err
-	}
-	out := map[string][]OperationRecordStage{}
-	for _, row := range rows {
-		out[row.TargetID] = append(out[row.TargetID], OperationRecordStage{
-			ID:         row.ID,
-			Stage:      row.Stage,
-			Status:     row.Status,
-			Detail:     row.Detail,
-			StartedAt:  parseOptionalStringTimePtr(row.StartedAt),
-			FinishedAt: parseOptionalStringTimePtr(row.FinishedAt),
-		})
-	}
-	return out, nil
-}
-
-func operationRecordTargetDTO(target LifecycleTarget, stages []OperationRecordStage) OperationRecordTarget {
-	return OperationRecordTarget{
-		ID:                 target.ID,
-		OperationID:        target.OperationID,
-		ApplicationID:      target.ApplicationID,
-		ServerID:           target.ServerID,
-		ServerName:         target.ServerName,
-		Action:             target.Action,
-		State:              target.State,
-		Status:             lifecycleTargetRecordStatus(target),
-		Stage:              target.Stage,
-		Attempt:            target.Attempt,
-		NextRunAt:          target.NextRunAt,
-		ClaimedTaskID:      target.ClaimedTaskID,
-		ContainerName:      target.ContainerName,
-		DesiredState:       target.DesiredState,
-		DesiredGeneration:  target.DesiredGeneration,
-		DesiredSpecHash:    target.DesiredSpecHash,
-		ObservedState:      target.ObservedState,
-		ObservedExitCode:   target.ObservedExitCode,
-		ObservedError:      target.ObservedError,
-		ObservedGeneration: target.ObservedGeneration,
-		ObservedSpecHash:   target.ObservedSpecHash,
-		ObservedImage:      target.ObservedImage,
-		ObservedAt:         target.ObservedAt,
-		ErrorCode:          target.ErrorCode,
-		ErrorMessage:       target.ErrorMessage,
-		ErrorDetail:        target.ErrorDetail,
-		CreatedAt:          target.CreatedAt,
-		StartedAt:          target.StartedAt,
-		FinishedAt:         target.FinishedAt,
-		UpdatedAt:          target.UpdatedAt,
-		Stages:             stages,
+func stepStatus(status string) string {
+	switch strings.TrimSpace(status) {
+	case "succeeded", "success", "ok":
+		return "succeeded"
+	case "failed", "error":
+		return "failed"
+	case "running", "started", "":
+		return "running"
+	default:
+		return status
 	}
 }

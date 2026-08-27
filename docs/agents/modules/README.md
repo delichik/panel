@@ -30,6 +30,7 @@
 ## 常见跨模块关系
 
 - 应用部署依赖 `modules/applications`、`agent`、`modules/servers`、`modules/tasks`，反向代理还会读取证书模块。
+- 应用部署控制面位于 `internal/orchestrator`：AppDB 的 immutable revision、instance desired/observed 与 Job lease 由 Planner/Controller 管理，Agent 通过 `RuntimeReconcile` 执行；任务表只保留用户操作/触发记录，CoordDB 不再注册任何模型（旧 `application_lifecycle_*` 表已随迁移删除），协调记录由 AppDB jobs 按 intent_id 聚合。
 - 服务器 agent 健康检查依赖 `modules/servers`、`agent`、`modules/tasks`；应用 runtime 和设施应用操作通过 agent 调用 Docker Engine API。
 - DNS 证书签发依赖 `modules/certificates` 和 `modules/tasks`，证书变量会被应用模块解析。
 - 软件包维护和指标采集依赖 `modules/servers`、`platform/ssh`、`platform/linux`、`modules/tasks`，结果分别落在应用数据库和指标数据库。

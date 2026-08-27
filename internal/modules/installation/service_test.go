@@ -14,6 +14,7 @@ func TestSetHostServerIsSingleton(t *testing.T) {
 	cfg.AppDatabase = cfg.DataRoot + "/app.db"
 	cfg.LogDatabase = cfg.DataRoot + "/log.db"
 	cfg.MetricsDatabase = cfg.DataRoot + "/metrics.db"
+	cfg.CoordinationDatabase = cfg.DataRoot + "/coordination.db"
 	store, err := database.Open(cfg)
 	if err != nil {
 		t.Fatal(err)

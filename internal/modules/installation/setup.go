@@ -8,7 +8,6 @@ import (
 	"time"
 
 	agentcontract "panel/internal/agent/contract"
-	"panel/internal/modules/applications"
 	"panel/internal/modules/facilityapps"
 	"panel/internal/modules/servers"
 	"panel/internal/modules/servers/credential"
@@ -161,8 +160,8 @@ func (s *SetupService) Run(ctx context.Context, input SetupInput) (SetupResult, 
 	}
 	_, err = s.facility.SaveReverseProxy(ctx, facilityapps.ReverseProxySaveInput{
 		DeploymentServers: servers,
-		PanelEntry: facilityapps.PanelEntry{Enabled: true, ServerID: srv.ID, Domain: input.Domain},
-		Domains: cfg.Domains,
+		PanelEntry:        facilityapps.PanelEntry{Enabled: true, ServerID: srv.ID, Domain: input.Domain},
+		Domains:           cfg.Domains,
 	})
 	if err != nil {
 		_ = s.installation.RecordFailure(ctx, "proxy_deploy", err)
@@ -207,9 +206,9 @@ func (s *SetupService) waitFacility(ctx context.Context, previousOperationID str
 		}
 		if cfg.Operation != nil && cfg.Operation.ID != previousOperationID {
 			switch cfg.Operation.Status {
-			case applications.LifecycleStatusDeployed:
+			case "succeeded":
 				return nil
-			case applications.LifecycleStatusFailed, applications.LifecycleStatusPartiallyDeployed:
+			case "failed":
 				return fmt.Errorf("Panel entrance gateway deployment %s: %s", cfg.Operation.Status, cfg.Operation.Error)
 			}
 		}

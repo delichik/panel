@@ -28,6 +28,9 @@ var (
 
 func TestMain(m *testing.M) {
 	if os.Getenv("PANEL_INIT_HELPER_PROCESS") == "1" {
+		// The test helper runs before testing.Main parses flags, so parse the
+		// supervisor-supplied arguments before reading the flag values.
+		flag.Parse()
 		runPanelInitHelper()
 		return
 	}

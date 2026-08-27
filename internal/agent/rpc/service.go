@@ -262,6 +262,18 @@ func (h *Handler) RuntimeWriteFiles(ctx context.Context, req *agentpb.RuntimeWri
 	return &agentpb.OKResponse{Ok: err == nil}, remoteError(err)
 }
 
+func (h *Handler) RuntimeReconcile(ctx context.Context, req *agentpb.RuntimeReconcileRequest) (*agentpb.RuntimeReconcileResponse, error) {
+	if err := h.requireRuntime(); err != nil {
+		return nil, err
+	}
+	result, err := h.runtime.Reconcile(ctx, agentcontract.RuntimeReconcileRequest{
+		JobID: req.JobId, ExecutionID: req.ExecutionId, ApplicationID: req.ApplicationId, InstanceID: req.InstanceId,
+		ServerID: req.ServerId, Action: req.Action, DesiredGeneration: int(req.DesiredGeneration), DesiredSpecHash: req.DesiredSpecHash,
+		DesiredRevisionID: req.DesiredRevisionId, Spec: goSpec(req.Spec), RemoveData: req.RemoveData, PreviousContainerName: req.PreviousContainerName,
+	})
+	return PBRuntimeReconcileResponse(result), remoteError(err)
+}
+
 func (h *Handler) RuntimeReload(ctx context.Context, req *agentpb.RuntimeReloadRequest) (*agentpb.RuntimeReloadResponse, error) {
 	if err := h.requireRuntime(); err != nil {
 		return nil, err

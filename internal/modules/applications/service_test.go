@@ -9,6 +9,7 @@ import (
 	"io"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -20,8 +21,48 @@ import (
 	"panel/internal/modules/tasks"
 	"panel/internal/platform/config"
 	storage "panel/internal/platform/database"
+	"panel/internal/platform/database/models"
+	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 )
+
+func jobsForApplication(t *testing.T, svc *Service, appID string) []models.Job {
+	t.Helper()
+	var jobs []models.Job
+	if err := orm.New(svc.db).From("jobs").Where("application_id=?", appID).All(context.Background(), &jobs); err != nil {
+		t.Fatal(err)
+	}
+	return jobs
+}
+
+func applyJobSpecsForApplication(t *testing.T, svc *Service, appID string) []map[string]any {
+	t.Helper()
+	jobs := jobsForApplication(t, svc, appID)
+	var out []map[string]any
+	for _, job := range jobs {
+		if job.Action != "apply" || len(job.DesiredSpecJSON) == 0 {
+			continue
+		}
+		out = append(out, job.DesiredSpecJSON)
+	}
+	if len(out) == 0 {
+		t.Fatalf("expected apply Jobs for application %s, got %#v", appID, jobs)
+	}
+	return out
+}
+
+// markRuntimeInstanceSatisfied 把 planner 创建的实例行补齐为“已部署成功”的状态：
+// markRuntimeInstance 只 UPDATE 已存在的行，而 planner 新建的实例行
+// last_deployed_generation=0、runtime_spec_json='{}'，无法通过
+// runtimeInstanceSatisfiesDesired 的判定。
+func markRuntimeInstanceSatisfied(t *testing.T, svc *Service, appID, serverID string, generation int, specHash, status, lastErr string) {
+	t.Helper()
+	runtimeSpec, _ := json.Marshal(map[string]any{"specHash": specHash})
+	if _, err := svc.db.Exec(`UPDATE application_instances SET desired_state=?,status=?,runtime_spec_json=?,last_deployed_generation=?,last_error=? WHERE id=?`,
+		appruntime.DesiredRunning, status, string(runtimeSpec), generation, lastErr, runtimeInstanceID(appID, serverID)); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestCreateDisabledAppStoresRowAndDoesNotDeployRuntime(t *testing.T) {
 	svc, runtime, _, closeStore := newTestService(t)
@@ -47,7 +88,7 @@ func TestCreateDisabledAppStoresRowAndDoesNotDeployRuntime(t *testing.T) {
 }
 
 func TestDeployEnablesDisabledApplicationWithVersionCAS(t *testing.T) {
-	svc, _, _, closeStore := newTestService(t)
+	svc, runtime, _, closeStore := newTestService(t)
 	defer closeStore()
 	ctx := context.Background()
 
@@ -60,12 +101,8 @@ func TestDeployEnablesDisabledApplicationWithVersionCAS(t *testing.T) {
 		t.Fatal(err)
 	}
 	beforeVersion := app.Version
-	result, err := svc.Deploy(ctx, app.ID)
-	if err != nil {
+	if _, err := svc.Deploy(ctx, app.ID); err != nil {
 		t.Fatal(err)
-	}
-	if result.TaskID == "" {
-		t.Fatal("expected deploy to trigger an application reconcile task")
 	}
 	after, err := svc.Get(ctx, app.ID)
 	if err != nil {
@@ -73,6 +110,14 @@ func TestDeployEnablesDisabledApplicationWithVersionCAS(t *testing.T) {
 	}
 	if !after.Enabled || after.Version != beforeVersion+1 {
 		t.Fatalf("HTTP deploy should explicitly persist enable intent with version bump, before=%d after=%#v", beforeVersion, after)
+	}
+	// 新控制面：Deploy 只写 desired/Job 并触发协调（fake trigger 直接 plan、
+	// 不返回 task），绝不直接调用 agent runtime。
+	if len(jobsForApplication(t, svc, app.ID)) == 0 {
+		t.Fatal("expected deploy to plan application Jobs")
+	}
+	if len(runtime.deploys) != 0 {
+		t.Fatalf("deploy must not call agent runtime directly, deploys = %#v", runtime.deploys)
 	}
 }
 
@@ -120,7 +165,7 @@ func TestListSummariesDoesNotLoadApplicationDetails(t *testing.T) {
 }
 
 func TestCreateEnabledAppDeploysToAgentRuntime(t *testing.T) {
-	svc, runtime, _, closeStore := newTestService(t)
+	svc, _, _, closeStore := newTestService(t)
 	defer closeStore()
 
 	app, err := svc.Create(context.Background(), SaveInput{
@@ -134,26 +179,24 @@ func TestCreateEnabledAppDeploysToAgentRuntime(t *testing.T) {
 	if !app.Enabled {
 		t.Fatalf("app = %#v", app)
 	}
-	if len(runtime.deploys) != 2 {
-		t.Fatalf("deploys = %#v", runtime.deploys)
+	jobs := jobsForApplication(t, svc, app.ID)
+	if len(jobs) != 2 {
+		t.Fatalf("expected one Job per server, got %#v", jobs)
 	}
-	if len(runtime.writes) != 2 || len(runtime.pulls) != 2 || len(runtime.deletes) != 2 || len(runtime.actions) != 2 {
-		t.Fatalf("atomic deploy calls writes=%#v pulls=%#v deletes=%#v actions=%#v", runtime.writes, runtime.pulls, runtime.deletes, runtime.actions)
-	}
-	if runtime.pulls[0] != "nginx" || runtime.deletes[0] != "panel-web" || runtime.actions[0] != "container-srv-a:start" {
-		t.Fatalf("atomic deploy sequence pulls=%#v deletes=%#v actions=%#v", runtime.pulls, runtime.deletes, runtime.actions)
-	}
-	deploy := runtime.deploys[0]
-	if deploy.ServerID != "srv-a" || deploy.Spec.ApplicationID != app.ID || deploy.Spec.InstanceID != app.ID+"-srv-a" {
-		t.Fatalf("deploy = %#v", deploy)
-	}
-	if deploy.Spec.ContainerName != "panel-web" || deploy.Spec.Env["PANEL_SERVER_ID"] != "srv-a" {
-		t.Fatalf("runtime spec = %#v", deploy.Spec)
+	for _, job := range jobs {
+		spec := job.DesiredSpecJSON
+		if spec["containerName"] != "panel-web" {
+			t.Fatalf("container name = %#v", spec["containerName"])
+		}
+		env, _ := spec["env"].(map[string]any)
+		if env == nil || env["PANEL_SERVER_ID"] == nil {
+			t.Fatalf("missing PANEL_SERVER_ID env in %#v", spec)
+		}
 	}
 }
 
 func TestCreateEnabledAnyTLSHostNetworkAppDeploysRuntime(t *testing.T) {
-	svc, runtime, _, closeStore := newTestService(t)
+	svc, _, _, closeStore := newTestService(t)
 	defer closeStore()
 
 	app, err := svc.Create(context.Background(), SaveInput{
@@ -175,104 +218,20 @@ restart:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !app.Enabled || len(runtime.deploys) != 2 {
-		t.Fatalf("app=%#v deploys=%#v", app, runtime.deploys)
+	if !app.Enabled {
+		t.Fatalf("app = %#v", app)
 	}
-	spec := runtime.deploys[0].Spec
-	if spec.NetworkMode != "host" || len(spec.Ports) != 0 {
-		t.Fatalf("runtime network = %q ports %#v", spec.NetworkMode, spec.Ports)
+	jobs := jobsForApplication(t, svc, app.ID)
+	if len(jobs) != 2 {
+		t.Fatalf("expected one Job per server, got %#v", jobs)
 	}
-	if len(spec.Command) != 5 || spec.Command[0] != "/app/anytls-server" || spec.Command[2] != ":9443" {
-		t.Fatalf("command = %#v", spec.Command)
+	spec := jobs[0].DesiredSpecJSON
+	if spec["networkMode"] != "host" {
+		t.Fatalf("runtime network = %#v", spec["networkMode"])
 	}
-}
-
-func TestCreateEnabledAppWrapsRuntimeDeploymentError(t *testing.T) {
-	svc, runtime, _, closeStore := newTestService(t)
-	defer closeStore()
-	runtime.deployErr = errors.New("create container failed: invalid runtime config")
-
-	_, err := svc.Create(context.Background(), SaveInput{
-		Name:     "anytls",
-		Enabled:  true,
-		SpecYAML: "name: anytls\nimage: jiasongji/anytls\nnetworkMode: host\n",
-	})
-	var appErr *panelerr.Error
-	if !errors.As(err, &appErr) || appErr.Code != "application_runtime_operation_failed" {
-		t.Fatalf("err = %#v", err)
-	}
-	if !strings.Contains(appErr.Message, "invalid runtime config") {
-		t.Fatalf("message = %q", appErr.Message)
-	}
-}
-
-func TestCreateEnabledAppContinuesDeployingRemainingTargetsAfterRuntimeError(t *testing.T) {
-	svc, runtime, _, closeStore := newTestService(t)
-	defer closeStore()
-	runtime.deployErrByServer = map[string]error{"srv-a": errors.New("agent down")}
-
-	_, err := svc.Create(context.Background(), SaveInput{
-		Name:     "web",
-		Enabled:  true,
-		SpecYAML: "name: web\nimage: nginx\n",
-	})
-	var appErr *panelerr.Error
-	if !errors.As(err, &appErr) || appErr.Code != "application_runtime_operation_failed" {
-		t.Fatalf("err = %#v", err)
-	}
-	if !strings.Contains(appErr.Message, "srv-a") || !strings.Contains(appErr.Message, "1 of 2") {
-		t.Fatalf("message = %q", appErr.Message)
-	}
-	if len(runtime.deploys) != 2 {
-		t.Fatalf("deploys = %#v", runtime.deploys)
-	}
-	if runtime.deploys[0].ServerID != "srv-a" || runtime.deploys[1].ServerID != "srv-b" {
-		t.Fatalf("deploy order = %#v", runtime.deploys)
-	}
-}
-
-func TestCreateEnabledAppFailsTargetWhenContainerExitsAfterStart(t *testing.T) {
-	svc, runtime, _, closeStore := newTestService(t)
-	defer closeStore()
-
-	var appID string
-	runtime.statuses = map[string]appruntime.InstanceStatus{}
-	runtimeStatus := appruntime.InstanceStatus{
-		Status:     appruntime.StatusStopped,
-		LastError:  "container exited with code 1",
-		ObservedAt: time.Now().UTC(),
-	}
-	runtime.statusHook = func(instanceID string) {
-		if strings.HasSuffix(instanceID, "-srv-a") {
-			runtime.statuses[instanceID] = runtimeStatus
-		}
-	}
-
-	app, err := svc.Create(context.Background(), SaveInput{
-		Name:     "web",
-		Enabled:  true,
-		SpecYAML: "name: web\nimage: nginx\n",
-	})
-	if err == nil {
-		t.Fatal("expected deploy error")
-	}
-	appID = app.ID
-	var appErr *panelerr.Error
-	if !errors.As(err, &appErr) || appErr.Code != "application_runtime_operation_failed" {
-		t.Fatalf("err = %#v", err)
-	}
-	if !strings.Contains(appErr.Message, "container exited with code 1") || !strings.Contains(appErr.Message, "1 of 2") {
-		t.Fatalf("message = %q", appErr.Message)
-	}
-	if err := svc.db.QueryRowContext(context.Background(), `SELECT id FROM applications WHERE name=?`, "web").Scan(&appID); err != nil {
-		t.Fatal(err)
-	}
-	instance, err := svc.runtimeInstanceForServer(context.Background(), appID, "srv-a")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if instance.Status != appruntime.StatusFailed || !strings.Contains(instance.LastError, "container exited with code 1") {
-		t.Fatalf("instance = %#v", instance)
+	command, _ := spec["command"].([]any)
+	if len(command) != 5 || command[0] != "/app/anytls-server" || command[2] != ":9443" {
+		t.Fatalf("command = %#v", command)
 	}
 }
 
@@ -331,7 +290,8 @@ func TestRedeployEnabledApplicationsDeploysEnabledApps(t *testing.T) {
 	svc, runtime, _, closeStore := newTestService(t)
 	defer closeStore()
 	ctx := context.Background()
-	if _, err := svc.Create(ctx, SaveInput{Name: "enabled", Enabled: true, SpecYAML: "name: enabled\nimage: nginx\n"}); err != nil {
+	enabledApp, err := svc.Create(ctx, SaveInput{Name: "enabled", Enabled: true, SpecYAML: "name: enabled\nimage: nginx\n"})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.Create(ctx, SaveInput{Name: "disabled", Enabled: false, SpecYAML: "name: disabled\nimage: nginx\n"}); err != nil {
@@ -346,47 +306,11 @@ func TestRedeployEnabledApplicationsDeploysEnabledApps(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("redeployed = %d, want 1", count)
 	}
-	if len(runtime.deploys) != 2 || runtime.deploys[0].Spec.Name != "enabled" || runtime.deploys[1].Spec.Name != "enabled" {
-		t.Fatalf("deploys = %#v", runtime.deploys)
-	}
-}
-
-func TestDeployTaskExecutorWithoutLifecycleTargetDoesNotMutateRuntime(t *testing.T) {
-	svc, runtime, _, closeStore := newTestService(t)
-	defer closeStore()
-	ctx := context.Background()
-
-	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: false, SpecYAML: "name: web\nimage: nginx\n"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	task, err := svc.tasks.Create(ctx, tasks.CreateInput{
-		Type:         TaskTypeTargetApply,
-		ResourceType: "application",
-		ResourceID:   app.ID,
-		ServerID:     "srv-a",
-		Summary:      "Syncing application " + app.Name,
-		ParamsJSON:   `{"serverId":"srv-a","action":"apply"}`,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	def, ok := svc.tasks.Registry().Definition(TaskTypeTargetApply)
-	if !ok || def.Execute == nil {
-		t.Fatal("expected application target apply executor")
-	}
-	if err := def.Execute(tasks.TaskContext{Context: ctx, Task: task, Service: svc.tasks}); err != nil {
-		t.Fatal(err)
-	}
 	if len(runtime.deploys) != 0 {
-		t.Fatalf("deploys = %#v", runtime.deploys)
+		t.Fatalf("redeploy must not mutate runtime directly, deploys = %#v", runtime.deploys)
 	}
-	storedTask, err := svc.tasks.Get(ctx, task.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if storedTask.Status != tasks.StatusCompleted {
-		t.Fatalf("expected completed deploy task, got %#v", storedTask)
+	if len(jobsForApplication(t, svc, enabledApp.ID)) != 2 {
+		t.Fatalf("expected redeploy to plan Jobs for enabled application")
 	}
 }
 
@@ -399,145 +323,34 @@ func TestPlanApplicationDeploymentSkipsSatisfiedTargetsUnlessForced(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.markRuntimeInstance(ctx, app.ID+"-srv-b", appruntime.DesiredRunning, appruntime.StatusFailed, "", "boom"); err != nil {
+	// 先规划一次，让 planner 创建实例行与 Job。
+	first, err := svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{ApplicationID: app.ID, TriggerType: "system"})
+	if err != nil {
 		t.Fatal(err)
 	}
+	if len(first.JobIDs) != 2 {
+		t.Fatalf("expected initial plan to create one Job per server, got %#v", first)
+	}
+	// markRuntimeInstance 只 UPDATE 已存在的行，且 planner 新建的实例行
+	// last_deployed_generation=0、runtime_spec_json='{}'；要让 srv-a 被判定为
+	// “已满足”，需把 generation/spec hash 补齐到与期望一致。
+	desired := jobsForApplication(t, svc, app.ID)[0]
+	markRuntimeInstanceSatisfied(t, svc, app.ID, "srv-a", desired.DesiredGeneration, desired.DesiredSpecHash, appruntime.StatusRunning, "")
+	markRuntimeInstanceSatisfied(t, svc, app.ID, "srv-b", desired.DesiredGeneration, desired.DesiredSpecHash, appruntime.StatusFailed, "boom")
+
 	plan, err := svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{ApplicationID: app.ID, TriggerType: "scheduler"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.CreatedTargets) != 1 || plan.CreatedTargets[0].ServerID != "srv-b" {
-		t.Fatalf("expected only failed target to reconcile, got %#v", plan)
+	if len(plan.JobIDs) != 1 {
+		t.Fatalf("expected only the unsatisfied target to reconcile, got %#v", plan)
 	}
 	plan, err = svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{ApplicationID: app.ID, Force: true, TriggerType: "system"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.CreatedTargets) != 1 || plan.CreatedTargets[0].ServerID != "srv-a" {
-		t.Fatalf("forced redeploy should include satisfied targets but not duplicate active targets, got %#v", plan)
-	}
-}
-
-func TestPlanApplicationDeploymentDoesNotTreatLegacyActiveTaskAsAuthority(t *testing.T) {
-	svc, _, _, closeStore := newTestService(t)
-	defer closeStore()
-	ctx := context.Background()
-
-	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	active, err := svc.tasks.Create(ctx, tasks.CreateInput{
-		Type:         TaskTypeTargetApply,
-		ResourceType: "application",
-		ResourceID:   app.ID,
-		ServerID:     "srv-a",
-		Status:       tasks.StatusRunning,
-		ParamsJSON:   `{"appId":"` + app.ID + `","serverId":"srv-a","action":"apply"}`,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer svc.tasks.FinishExecution(active.ID)
-
-	plan, err := svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{ApplicationID: app.ID, Force: true, TriggerType: "system"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(plan.CreatedTargets) != 2 {
-		t.Fatalf("legacy active tasks must not block durable target planning, got %#v", plan)
-	}
-}
-
-func TestDeployTaskSupersedesStaleDesiredRevision(t *testing.T) {
-	svc, runtime, _, closeStore := newTestService(t)
-	defer closeStore()
-	ctx := context.Background()
-
-	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx:1\n"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan, err := svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{ApplicationID: app.ID, ServerIDs: []string{"srv-a"}, Force: true, TriggerType: "system"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	updated, err := svc.Update(ctx, app.ID, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx:2\n", DeploymentMode: DeploymentModeAll})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if updated.Generation == app.Generation {
-		t.Fatal("expected application generation to change")
-	}
-	runtime.deploys = nil
-	task, err := svc.tasks.Create(ctx, targetTaskInputForTest(t, plan.CreatedTargets[0], "Syncing application web", "system"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	def, ok := svc.tasks.Registry().Definition(TaskTypeTargetApply)
-	if !ok || def.Execute == nil {
-		t.Fatal("expected target apply executor")
-	}
-	if err := def.Execute(tasks.TaskContext{Context: ctx, Task: task, Service: svc.tasks}); err != nil {
-		t.Fatal(err)
-	}
-	if len(runtime.deploys) != 0 {
-		t.Fatalf("stale task should not deploy runtime, got %#v", runtime.deploys)
-	}
-	targets, err := svc.lifecycleTargets(ctx, plan.CreatedTargets[0].OperationID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(targets) != 1 || targets[0].Status != LifecycleTargetStatusSuperseded {
-		t.Fatalf("expected superseded lifecycle target, got %#v", targets)
-	}
-}
-
-func TestDeploymentDispatcherMarksTaskCreateFailure(t *testing.T) {
-	svc, _, _, closeStore := newTestService(t)
-	defer closeStore()
-	ctx := context.Background()
-
-	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan, err := svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{ApplicationID: app.ID, ServerIDs: []string{"srv-a"}, Force: true, TriggerType: "system"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	createErr := errors.New("task insert failed")
-	dispatcher := NewDeploymentDispatcher(svc).(*deploymentDispatcher)
-	if err := dispatcher.markTargetTaskCreateFailed(ctx, plan.CreatedTargets[0].ID, createErr); err != nil {
-		t.Fatal(err)
-	}
-	targets, err := svc.lifecycleTargets(ctx, plan.CreatedTargets[0].OperationID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(targets) != 1 || targets[0].State != LifecycleTargetStateFailedRetryable || !strings.Contains(targets[0].Error, createErr.Error()) {
-		t.Fatalf("expected retryable task-create failure target, got %#v", targets)
-	}
-	if targets[0].ErrorCode != "task_create_failed" {
-		t.Fatalf("expected structured task_create_failed error, got %#v", targets[0])
-	}
-}
-
-func TestPurgeRuntimeInstanceTreatsAlreadyRequestedStateAsSuccess(t *testing.T) {
-	svc, runtime, _, closeStore := newTestService(t)
-	defer closeStore()
-	ctx := context.Background()
-
-	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtime.stopErr = errors.New("docker resource already has requested state: /containers/panel-web/stop?t=10")
-	if err := svc.purgeRuntimeInstanceForServer(ctx, "task-1", app.ID, "srv-a", true); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.runtimeInstanceForServer(ctx, app.ID, "srv-a"); !isNotFound(err) {
-		t.Fatalf("expected runtime instance to be removed, got err=%v", err)
+	if len(plan.JobIDs) != 2 {
+		t.Fatalf("forced redeploy should include all targets, got %#v", plan)
 	}
 }
 
@@ -550,36 +363,22 @@ func TestDeployReturnsBeforeRuntimeDeploymentCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime.createEntered = make(chan struct{})
-	runtime.createRelease = make(chan struct{})
-	done := make(chan OperationResult, 1)
-	errs := make(chan error, 1)
-	go func() {
-		result, err := svc.Deploy(ctx, app.ID)
-		if err != nil {
-			errs <- err
-			return
-		}
-		done <- result
-	}()
-	var result OperationResult
-	select {
-	case err := <-errs:
+	// 新控制面：远端部署由 orchestrator 的 RuntimeReconcile 执行；测试未启动
+	// controller，因此 Deploy 必须立即返回，只留下 desired/Job，绝不直接调用
+	// fake runtime。
+	result, err := svc.Deploy(ctx, app.ID)
+	if err != nil {
 		t.Fatal(err)
-	case result = <-done:
-	case <-time.After(250 * time.Millisecond):
-		t.Fatal("Deploy waited for runtime deployment to complete")
 	}
-	if result.TaskID == "" || !result.Application.Enabled {
+	if !result.Application.Enabled {
 		t.Fatalf("deploy result = %#v", result)
 	}
-	select {
-	case <-runtime.createEntered:
-	case <-time.After(time.Second):
-		t.Fatal("background deployment did not reach runtime create")
+	if len(jobsForApplication(t, svc, app.ID)) == 0 {
+		t.Fatal("expected Deploy to persist application Jobs")
 	}
-	close(runtime.createRelease)
-	waitApplicationTaskStatus(t, svc.tasks, result.TaskID, tasks.StatusCompleted)
+	if len(runtime.deploys) != 0 || len(runtime.writes) != 0 || len(runtime.pulls) != 0 || len(runtime.stops) != 0 {
+		t.Fatalf("Deploy must not call agent runtime directly: deploys=%#v writes=%#v pulls=%#v stops=%#v", runtime.deploys, runtime.writes, runtime.pulls, runtime.stops)
+	}
 }
 
 func TestRefreshTaskExecutorRedeploysChangedApplicationAndCompletesTask(t *testing.T) {
@@ -614,11 +413,20 @@ func TestRefreshTaskExecutorRedeploysChangedApplicationAndCompletesTask(t *testi
 	if err := def.Execute(tasks.TaskContext{Context: ctx, Task: task, Service: svc.tasks}); err != nil {
 		t.Fatal(err)
 	}
-	if len(runtime.deploys) != 2 {
-		t.Fatalf("deploys = %#v", runtime.deploys)
+	// 新控制面：刷新任务只触发 plan 写 Job，渲染结果体现在 Job 的
+	// DesiredSpecJSON，远端执行由 orchestrator 负责。
+	jobs := jobsForApplication(t, svc, app.ID)
+	if len(jobs) == 0 {
+		t.Fatal("expected refresh to plan application Jobs")
 	}
-	if runtime.deploys[0].Spec.Env["MESSAGE"] != "two" || runtime.deploys[1].Spec.Env["MESSAGE"] != "two" {
-		t.Fatalf("runtime env = %#v", runtime.deploys)
+	for _, job := range jobs {
+		env, _ := job.DesiredSpecJSON["env"].(map[string]any)
+		if env == nil || env["MESSAGE"] != "two" {
+			t.Fatalf("job env = %#v", job.DesiredSpecJSON["env"])
+		}
+	}
+	if len(runtime.deploys) != 0 {
+		t.Fatalf("refresh must not call agent runtime directly, deploys = %#v", runtime.deploys)
 	}
 	storedTask, err := svc.tasks.Get(ctx, task.ID)
 	if err != nil {
@@ -713,19 +521,34 @@ func TestApplicationFileMountCreatesManagedRuntimeFile(t *testing.T) {
 	if file.ID == "" {
 		t.Fatal("managed file not stored")
 	}
-	if len(runtime.deploys) == 0 {
-		t.Fatal("expected deployment")
-	}
-	spec := runtime.deploys[len(runtime.deploys)-1].Spec
+	// 新控制面：提交只触发 plan 写 Job，渲染结果体现在 Job 的 DesiredSpecJSON。
+	spec := applyJobSpecsForApplication(t, svc, app.ID)[0]
 	allocation := applicationFileAllocationName(file.ID)
-	if len(spec.Files) != 1 || spec.Files[0].Path != allocation || string(spec.Files[0].Content) != "server=web" {
-		t.Fatalf("files = %#v", spec.Files)
+	files, _ := spec["files"].([]any)
+	if len(files) != 1 {
+		t.Fatalf("files = %#v", spec["files"])
 	}
-	if spec.Files[0].Mode != "0755" || spec.Files[0].UID == nil || *spec.Files[0].UID != 1000 || spec.Files[0].GID == nil || *spec.Files[0].GID != 1001 {
-		t.Fatalf("file permissions = %#v", spec.Files[0])
+	managed := files[0].(map[string]any)
+	content, err := base64.StdEncoding.DecodeString(managed["content"].(string))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(spec.Mounts) != 1 || spec.Mounts[0].Type != "managed_file" || spec.Mounts[0].Source != allocation || spec.Mounts[0].Target != "/etc/app.conf" {
-		t.Fatalf("mounts = %#v", spec.Mounts)
+	if managed["path"] != allocation || string(content) != "server=web" {
+		t.Fatalf("files = %#v", spec["files"])
+	}
+	if managed["mode"] != "0755" || managed["uid"].(float64) != 1000 || managed["gid"].(float64) != 1001 {
+		t.Fatalf("file permissions = %#v", managed)
+	}
+	mounts, _ := spec["mounts"].([]any)
+	if len(mounts) != 1 {
+		t.Fatalf("mounts = %#v", spec["mounts"])
+	}
+	mount := mounts[0].(map[string]any)
+	if mount["type"] != "managed_file" || mount["source"] != allocation || mount["target"] != "/etc/app.conf" {
+		t.Fatalf("mounts = %#v", spec["mounts"])
+	}
+	if len(runtime.deploys) != 0 {
+		t.Fatalf("commit must not call agent runtime directly, deploys = %#v", runtime.deploys)
 	}
 }
 
@@ -774,16 +597,31 @@ func TestApplicationArchiveFileMountDeploysSingleManagedArchive(t *testing.T) {
 	if file.ID == "" {
 		t.Fatal("archive file not stored")
 	}
-	if len(runtimeClient.deploys) == 0 {
-		t.Fatal("expected deployment")
-	}
-	spec := runtimeClient.deploys[len(runtimeClient.deploys)-1].Spec
+	// 新控制面：提交只触发 plan 写 Job，渲染结果体现在 Job 的 DesiredSpecJSON。
+	spec := applyJobSpecsForApplication(t, svc, commitResult.Application.ID)[0]
 	allocation := applicationFileAllocationName(file.ID)
-	if len(spec.Files) != 1 || spec.Files[0].Kind != appruntime.ManagedFileKindArchive || spec.Files[0].Path != allocation || !bytes.Equal(spec.Files[0].Content, archive) {
-		t.Fatalf("files = %#v", spec.Files)
+	files, _ := spec["files"].([]any)
+	if len(files) != 1 {
+		t.Fatalf("files = %#v", spec["files"])
 	}
-	if len(spec.Mounts) != 1 || spec.Mounts[0].Type != "managed_file" || spec.Mounts[0].Source != allocation || spec.Mounts[0].Target != "/usr/share/nginx/html" || !spec.Mounts[0].ReadOnly {
-		t.Fatalf("mounts = %#v", spec.Mounts)
+	managed := files[0].(map[string]any)
+	content, err := base64.StdEncoding.DecodeString(managed["content"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if managed["kind"] != appruntime.ManagedFileKindArchive || managed["path"] != allocation || !bytes.Equal(content, archive) {
+		t.Fatalf("files = %#v", spec["files"])
+	}
+	mounts, _ := spec["mounts"].([]any)
+	if len(mounts) != 1 {
+		t.Fatalf("mounts = %#v", spec["mounts"])
+	}
+	mount := mounts[0].(map[string]any)
+	if mount["type"] != "managed_file" || mount["source"] != allocation || mount["target"] != "/usr/share/nginx/html" || mount["readOnly"] != true {
+		t.Fatalf("mounts = %#v", spec["mounts"])
+	}
+	if len(runtimeClient.deploys) != 0 {
+		t.Fatalf("commit must not call agent runtime directly, deploys = %#v", runtimeClient.deploys)
 	}
 }
 
@@ -822,15 +660,28 @@ func TestApplicationFileTemplateRendersPerTargetServerVariables(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// 新控制面：planner 按服务器渲染模板并写入各 Job 的 DesiredSpecJSON。
 	byServer := map[string]string{}
-	for _, deploy := range runtime.deploys {
-		if len(deploy.Spec.Files) != 1 {
-			t.Fatalf("files = %#v", deploy.Spec.Files)
+	for _, job := range jobsForApplication(t, svc, app.ID) {
+		if job.Action != "apply" || len(job.DesiredSpecJSON) == 0 {
+			continue
 		}
-		byServer[deploy.ServerID] = string(deploy.Spec.Files[0].Content)
+		files, _ := job.DesiredSpecJSON["files"].([]any)
+		if len(files) != 1 {
+			t.Fatalf("files = %#v", job.DesiredSpecJSON["files"])
+		}
+		managed := files[0].(map[string]any)
+		content, err := base64.StdEncoding.DecodeString(managed["content"].(string))
+		if err != nil {
+			t.Fatal(err)
+		}
+		byServer[job.ServerID] = string(content)
 	}
 	if byServer["srv-a"] != "name=srv-a role=srv-a-role app=web" || byServer["srv-b"] != "name=srv-b role=srv-b-role app=web" {
 		t.Fatalf("rendered files by server = %#v", byServer)
+	}
+	if len(runtime.deploys) != 0 {
+		t.Fatalf("commit must not call agent runtime directly, deploys = %#v", runtime.deploys)
 	}
 }
 
@@ -839,22 +690,41 @@ func TestPanelFileMountCreatesReadOnlyRuntimeFile(t *testing.T) {
 	defer closeStore()
 	svc.SetInternalFileProvider(fakeInternalFileProvider{content: []byte("CERTIFICATE")})
 
-	if _, err := svc.Create(context.Background(), SaveInput{
+	app, err := svc.Create(context.Background(), SaveInput{
 		Name:     "tls",
 		Enabled:  true,
 		SpecYAML: "name: tls\nimage: nginx\nmounts:\n  - type: panel_file\n    source: key_asset:cert_1:certificate\n    target: /etc/tls/cert.pem\n    readOnly: true\n    uid: 1000\n    gid: 1001\n",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	spec := runtime.deploys[0].Spec
-	if len(spec.Files) != 1 || string(spec.Files[0].Content) != "CERTIFICATE" || spec.Files[0].Mode != "0644" {
-		t.Fatalf("files = %#v", spec.Files)
+	// 新控制面：Create 只写 desired/Job，渲染结果体现在 Job 的 DesiredSpecJSON。
+	spec := applyJobSpecsForApplication(t, svc, app.ID)[0]
+	files, _ := spec["files"].([]any)
+	if len(files) != 1 {
+		t.Fatalf("files = %#v", spec["files"])
 	}
-	if spec.Files[0].UID == nil || *spec.Files[0].UID != 1000 || spec.Files[0].GID == nil || *spec.Files[0].GID != 1001 {
-		t.Fatalf("file ownership = %#v", spec.Files[0])
+	managed := files[0].(map[string]any)
+	content, err := base64.StdEncoding.DecodeString(managed["content"].(string))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(spec.Mounts) != 1 || spec.Mounts[0].Target != "/etc/tls/cert.pem" || !spec.Mounts[0].ReadOnly {
-		t.Fatalf("mounts = %#v", spec.Mounts)
+	if string(content) != "CERTIFICATE" || managed["mode"] != "0644" {
+		t.Fatalf("files = %#v", spec["files"])
+	}
+	if managed["uid"].(float64) != 1000 || managed["gid"].(float64) != 1001 {
+		t.Fatalf("file ownership = %#v", managed)
+	}
+	mounts, _ := spec["mounts"].([]any)
+	if len(mounts) != 1 {
+		t.Fatalf("mounts = %#v", spec["mounts"])
+	}
+	mount := mounts[0].(map[string]any)
+	if mount["target"] != "/etc/tls/cert.pem" || mount["readOnly"] != true {
+		t.Fatalf("mounts = %#v", spec["mounts"])
+	}
+	if len(runtime.deploys) != 0 {
+		t.Fatalf("create must not call agent runtime directly, deploys = %#v", runtime.deploys)
 	}
 }
 
@@ -862,20 +732,28 @@ func TestSelectedDeploymentDeploysOneInstancePerSelectedServer(t *testing.T) {
 	svc, runtime, _, closeStore := newTestService(t)
 	defer closeStore()
 
-	if _, err := svc.Create(context.Background(), SaveInput{
+	app, err := svc.Create(context.Background(), SaveInput{
 		Name:              "web",
 		Enabled:           true,
 		SpecYAML:          "name: web\nimage: nginx\n",
 		DeploymentMode:    DeploymentModeSelected,
 		DeploymentServers: []string{"srv-b", "srv-a", "srv-a"},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if len(runtime.deploys) != 2 {
-		t.Fatalf("deploys = %#v", runtime.deploys)
+	// 新控制面：Create 为每个去重后的目标服务器写一个 apply Job。
+	jobs := jobsForApplication(t, svc, app.ID)
+	if len(jobs) != 2 {
+		t.Fatalf("expected one Job per selected server, got %#v", jobs)
 	}
-	if runtime.deploys[0].ServerID != "srv-a" || runtime.deploys[1].ServerID != "srv-b" {
-		t.Fatalf("deploy order = %#v", runtime.deploys)
+	servers := []string{jobs[0].ServerID, jobs[1].ServerID}
+	sort.Strings(servers)
+	if !reflect.DeepEqual(servers, []string{"srv-a", "srv-b"}) {
+		t.Fatalf("deploy targets = %#v", servers)
+	}
+	if len(runtime.deploys) != 0 {
+		t.Fatalf("create must not call agent runtime directly, deploys = %#v", runtime.deploys)
 	}
 }
 
@@ -947,27 +825,18 @@ func TestStopAppCallsRuntimeAndDisablesApp(t *testing.T) {
 	if stopped.Enabled {
 		t.Fatalf("app should be disabled: %#v", stopped)
 	}
-	if len(runtime.stops) != 2 || runtime.stops[0].InstanceID != app.ID+"-srv-a" || runtime.stops[1].InstanceID != app.ID+"-srv-b" {
-		t.Fatalf("stops = %#v", runtime.stops)
+	// 新控制面：Stop 只写 desired/Job（action=stop），远端停止由 orchestrator 执行。
+	jobs := jobsForApplication(t, svc, app.ID)
+	if len(jobs) != 2 {
+		t.Fatalf("expected one stop Job per server, got %#v", jobs)
 	}
-	for _, req := range runtime.stops {
-		if req.ApplicationID != app.ID || req.Purge || req.RemoveApplicationData {
-			t.Fatalf("stop should remove container without purging files: %#v", req)
+	for _, job := range jobs {
+		if job.ApplicationID != app.ID || job.Action != "stop" {
+			t.Fatalf("stop should plan stop Jobs without purging files: %#v", job)
 		}
 	}
-	result, err := svc.tasks.List(ctx, tasks.ListFilter{Type: TaskTypeTargetStop, Limit: 10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	foundStop := false
-	for _, item := range result.Items {
-		if strings.Contains(item.ParamsJSON, `"action":"stop"`) && !strings.Contains(item.ParamsJSON, `"purge":true`) {
-			foundStop = true
-			break
-		}
-	}
-	if !foundStop {
-		t.Fatalf("expected target stop task, got %#v", result.Items)
+	if len(runtime.stops) != 0 {
+		t.Fatalf("stop must not call agent runtime directly, stops = %#v", runtime.stops)
 	}
 }
 
@@ -1018,17 +887,21 @@ func TestStopTaskExecutorUsesPurgeParamAndCompletesTask(t *testing.T) {
 	if !ok || def.Execute == nil {
 		t.Fatal("expected application stop executor")
 	}
-	before := len(runtime.stops)
 	if err := def.Execute(tasks.TaskContext{Context: ctx, Task: task, Service: svc.tasks}); err != nil {
 		t.Fatal(err)
 	}
-	if len(runtime.stops) != before+2 {
-		t.Fatalf("expected two stop calls, got %d before=%d", len(runtime.stops), before)
+	// 新控制面：purge 参数落在 Job 的 action=purge 上，不再直接调远端。
+	jobs := jobsForApplication(t, svc, app.ID)
+	if len(jobs) != 2 {
+		t.Fatalf("expected two purge Jobs, got %#v", jobs)
 	}
-	for _, req := range runtime.stops[before:] {
-		if !req.Purge {
-			t.Fatalf("expected purge stop request, got %#v", req)
+	for _, job := range jobs {
+		if job.Action != "purge" {
+			t.Fatalf("expected purge Job, got %#v", job)
 		}
+	}
+	if len(runtime.stops) != 0 {
+		t.Fatalf("stop task must not call agent runtime directly, stops = %#v", runtime.stops)
 	}
 	storedTask, err := svc.tasks.Get(ctx, task.ID)
 	if err != nil {
@@ -1054,7 +927,6 @@ func TestSelectedDeploymentRemovalPurgesRemovedInstance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	beforeStops := len(runtime.stops)
 	updated, err := svc.Update(ctx, app.ID, SaveInput{
 		Name:              "web",
 		Enabled:           true,
@@ -1068,19 +940,18 @@ func TestSelectedDeploymentRemovalPurgesRemovedInstance(t *testing.T) {
 	if len(updated.DeploymentServers) != 1 || updated.DeploymentServers[0] != "srv-b" {
 		t.Fatalf("deployment servers = %#v", updated.DeploymentServers)
 	}
-	if len(runtime.stops) != beforeStops+1 {
-		t.Fatalf("stops = %#v", runtime.stops)
+	// 新控制面：被移除的目标以 purge Job 表达，远端清理由 orchestrator 执行。
+	purged := false
+	for _, job := range jobsForApplication(t, svc, app.ID) {
+		if job.ServerID == "srv-a" && job.Action == "purge" {
+			purged = true
+		}
 	}
-	cleanup := runtime.stops[len(runtime.stops)-1]
-	if cleanup.InstanceID != app.ID+"-srv-a" || !cleanup.Purge || cleanup.RemoveApplicationData {
-		t.Fatalf("removed selected target cleanup = %#v", cleanup)
+	if !purged {
+		t.Fatalf("expected removed selected target to be purged, jobs = %#v", jobsForApplication(t, svc, app.ID))
 	}
-	instances, err := svc.runtimeInstances(ctx, app.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(instances) != 1 || instances[0].ServerID != "srv-b" {
-		t.Fatalf("instances = %#v", instances)
+	if len(runtime.stops) != 0 {
+		t.Fatalf("update must not call agent runtime directly, stops = %#v", runtime.stops)
 	}
 }
 
@@ -1093,23 +964,28 @@ func TestDeleteApplicationPurgesRuntimeData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Stop(ctx, app.ID, false); err != nil {
-		t.Fatal(err)
-	}
-	beforeDeleteStops := len(runtime.stops)
 	if err := svc.Delete(ctx, app.ID); err != nil {
 		t.Fatal(err)
 	}
-	if len(runtime.stops) != beforeDeleteStops+2 {
-		t.Fatalf("delete cleanup stops = %#v", runtime.stops)
+	deleted, err := svc.Get(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, req := range runtime.stops[beforeDeleteStops:] {
-		if req.ApplicationID != app.ID || !req.Purge || !req.RemoveApplicationData {
-			t.Fatalf("delete should purge application runtime data: %#v", req)
+	if !deleted.DeletionRequested || deleted.Enabled {
+		t.Fatalf("expected deletion requested app, got %#v", deleted)
+	}
+	// 新控制面：删除以 purge Job（RemoveData=true）表达，远端清理由 orchestrator 执行。
+	jobs := jobsForApplication(t, svc, app.ID)
+	if len(jobs) != 2 {
+		t.Fatalf("expected purge Jobs per server, got %#v", jobs)
+	}
+	for _, job := range jobs {
+		if job.ApplicationID != app.ID || job.Action != "purge" || !job.RemoveData {
+			t.Fatalf("delete should purge application runtime data: %#v", job)
 		}
 	}
-	if _, err := svc.Get(ctx, app.ID); err == nil {
-		t.Fatal("expected application to be deleted")
+	if len(runtime.stops) != 0 {
+		t.Fatalf("delete must not call agent runtime directly, stops = %#v", runtime.stops)
 	}
 }
 
@@ -1145,160 +1021,6 @@ func TestRuntimeRefreshesInstanceStatuses(t *testing.T) {
 	}
 }
 
-func TestRuntimeShowsSelectedTargetThatFailsBeforeInstanceDeploy(t *testing.T) {
-	svc, _, servers, closeStore := newTestService(t)
-	defer closeStore()
-	ctx := context.Background()
-
-	srvC := readyServer("srv-c")
-	srvC.Traits[agentcontract.TraitStatus] = agentcontract.StatusUndeployable
-	servers.items[srvC.ID] = srvC
-	insertApplicationTestServer(t, svc, srvC)
-
-	app, err := svc.Create(ctx, SaveInput{
-		Name:              "web",
-		Enabled:           false,
-		SpecYAML:          "name: web\nimage: nginx\n",
-		DeploymentMode:    DeploymentModeSelected,
-		DeploymentServers: []string{"srv-a", "srv-b", "srv-c"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.Deploy(ctx, app.ID); err != nil {
-		t.Fatal(err)
-	}
-	var runtime Runtime
-	for i := 0; i < 20; i++ {
-		runtime, err = svc.Runtime(ctx, app.ID)
-		if err == nil && len(runtime.Instances) == 3 {
-			for _, instance := range runtime.Instances {
-				if instance.ServerID == "srv-c" && instance.Status == appruntime.StatusFailed {
-					goto runtimeReady
-				}
-			}
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-runtimeReady:
-	if len(runtime.Instances) == 0 {
-		runtime, err = svc.Runtime(ctx, app.ID)
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(runtime.Instances) != 3 {
-		t.Fatalf("runtime instances = %#v", runtime.Instances)
-	}
-	var failed appruntime.InstanceStatus
-	for _, instance := range runtime.Instances {
-		if instance.ServerID == "srv-c" {
-			failed = instance
-			break
-		}
-	}
-	if failed.ServerID != "srv-c" || failed.Status != appruntime.StatusFailed || failed.LastError == "" {
-		t.Fatalf("failed target not represented: %#v", runtime.Instances)
-	}
-	if runtime.Operation == nil || len(runtime.Operation.Targets) != 3 || runtime.Operation.Status != LifecycleStatusDeploying {
-		t.Fatalf("operation = %#v", runtime.Operation)
-	}
-	var failedTarget LifecycleTarget
-	for _, target := range runtime.Operation.Targets {
-		if target.ServerID == "srv-c" {
-			failedTarget = target
-			break
-		}
-	}
-	if failedTarget.ServerID != "srv-c" || failedTarget.State != LifecycleTargetStateFailedRetryable || failedTarget.NextRunAt == nil {
-		t.Fatalf("retryable failed target not represented: %#v", runtime.Operation.Targets)
-	}
-}
-
-func TestReconcileInterruptedLifecycleTasksMarksDeployingTargetFailed(t *testing.T) {
-	svc, _, _, closeStore := newTestService(t)
-	defer closeStore()
-	ctx := context.Background()
-
-	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: false, SpecYAML: "name: web\nimage: nginx\n"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	spec := appruntime.Spec{
-		ApplicationID: app.ID,
-		InstanceID:    app.ID + "-srv-a",
-		ContainerName: "panel-web",
-		Generation:    app.Generation,
-		SpecHash:      app.SpecHash,
-	}
-	operation, err := svc.createLifecycleOperationForServerIDs(ctx, app, spec, "", LifecycleTypeDeploy, []string{"srv-a"}, appruntime.DesiredRunning)
-	if err != nil {
-		t.Fatal(err)
-	}
-	targetID := lifecycleTargetID(operation.ID, "srv-a")
-	if err := svc.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{
-		Status:        LifecycleTargetStatusDeploying,
-		Stage:         "start_container",
-		InstanceID:    spec.InstanceID,
-		ContainerName: spec.ContainerName,
-		ContainerID:   "container-srv-a",
-		Started:       true,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := svc.upsertRuntimeInstance(ctx, app.ID, "srv-a", spec, appruntime.DesiredRunning, appruntime.StatusDeploying, "", ""); err != nil {
-		t.Fatal(err)
-	}
-	params, _ := json.Marshal(deployTaskParams{
-		AppID:                app.ID,
-		ServerID:             "srv-a",
-		LifecycleOperationID: operation.ID,
-		Action:               "apply",
-	})
-	task, err := svc.tasks.Create(ctx, tasks.CreateInput{
-		Type:         TaskTypeTargetApply,
-		ServerID:     "srv-a",
-		ResourceType: "application",
-		ResourceID:   app.ID,
-		ParamsJSON:   string(params),
-		Status:       tasks.StatusRunning,
-		Summary:      "Syncing application web",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	interrupted := errors.New("Task was marked running but no active execution exists in this Panel process")
-	if err := svc.tasks.Fail(ctx, task.ID, interrupted); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := svc.ReconcileInterruptedLifecycleTasks(ctx); err != nil {
-		t.Fatal(err)
-	}
-
-	targets, err := svc.lifecycleTargets(ctx, operation.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(targets) != 1 || targets[0].Status != LifecycleTargetStatusFailed || !strings.Contains(targets[0].Error, interrupted.Error()) || targets[0].FinishedAt == nil {
-		t.Fatalf("target = %#v", targets)
-	}
-	finished, err := svc.latestLifecycleOperation(ctx, app.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if finished.Status != LifecycleStatusFailed || !strings.Contains(finished.Error, interrupted.Error()) {
-		t.Fatalf("operation = %#v", finished)
-	}
-	instances, err := svc.runtimeInstances(ctx, app.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(instances) != 1 || instances[0].Status != appruntime.StatusFailed || !strings.Contains(instances[0].LastError, interrupted.Error()) {
-		t.Fatalf("instances = %#v", instances)
-	}
-}
-
 func TestListWithRuntimeUsesCachedRuntimeStatus(t *testing.T) {
 	svc, runtime, _, closeStore := newTestService(t)
 	defer closeStore()
@@ -1321,8 +1043,14 @@ func TestListWithRuntimeUsesCachedRuntimeStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(apps) != 1 || apps[0].RuntimeStatus != appruntime.StatusRunning {
+	if len(apps) != 1 {
 		t.Fatalf("apps = %#v", apps)
+	}
+	// 新控制面：ListWithRuntime 只读 DB 缓存（实例行 + 活跃 Job），不做远端
+	// 调用；因此摘要状态是 DB 派生值，而不会是 fake runtime.statuses 里的
+	// running——这正好证明没有走远端。
+	if apps[0].RuntimeStatus == appruntime.StatusRunning {
+		t.Fatalf("runtime status should come from cached AppDB state, got %#v", apps[0])
 	}
 	if statusCalls != 0 {
 		t.Fatalf("list runtime summary made %d remote status calls", statusCalls)
@@ -1485,8 +1213,18 @@ func TestImageUpdateTaskExecutorUpdatesImageDeploysRuntimeAndCompletesTask(t *te
 	if err := def.Execute(tasks.TaskContext{Context: ctx, Task: task, Service: svc.tasks}); err != nil {
 		t.Fatal(err)
 	}
-	if len(runtime.deploys) != 2 {
-		t.Fatalf("deploys = %#v", runtime.deploys)
+	// 新控制面：image update 只触发 plan 写 Job，远端执行由 orchestrator 负责。
+	jobs := jobsForApplication(t, svc, app.ID)
+	if len(jobs) != 2 {
+		t.Fatalf("expected planned Jobs after image update, got %#v", jobs)
+	}
+	for _, job := range jobs {
+		if job.Action != "apply" {
+			t.Fatalf("expected apply Job, got %#v", job)
+		}
+	}
+	if len(runtime.deploys) != 0 {
+		t.Fatalf("image update must not call agent runtime directly, deploys = %#v", runtime.deploys)
 	}
 	got, err := svc.Get(ctx, app.ID)
 	if err != nil {
@@ -1611,12 +1349,13 @@ func TestRestartTaskExecutorPlansForcedDeploymentAndCompletesTask(t *testing.T) 
 	if storedTask.Status != tasks.StatusCompleted {
 		t.Fatalf("expected completed restart task, got %#v", storedTask)
 	}
-	var targetCount int
-	if err := svc.lifecycleDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM application_lifecycle_targets WHERE application_id=? AND state IN ('ready','claimed','preparing','applying','verifying','failed_retryable','succeeded')`, app.ID).Scan(&targetCount); err != nil {
-		t.Fatal(err)
+	// 新控制面：restart 以 Force=true 的 apply Job 表达，不再写 lifecycle target。
+	jobs := jobsForApplication(t, svc, app.ID)
+	if len(jobs) != 1 {
+		t.Fatalf("expected restart task to plan one Job, got %#v", jobs)
 	}
-	if targetCount == 0 {
-		t.Fatal("expected restart task to create lifecycle deployment target")
+	if jobs[0].ForceNonce == 0 {
+		t.Fatalf("expected forced deployment Job, got %#v", jobs[0])
 	}
 }
 
@@ -1683,139 +1422,46 @@ func TestRestorePersistentDataImportsBeforeFirstDeploy(t *testing.T) {
 	}
 }
 
-func TestDecorateDeploymentTasksProjectsLifecycleDiagnostics(t *testing.T) {
-	svc, _, _, closeStore := newTestService(t)
-	defer closeStore()
-	ctx := context.Background()
-
-	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: false, SpecYAML: "name: web\nimage: nginx\n", DeploymentMode: DeploymentModeAll})
-	if err != nil {
-		t.Fatal(err)
-	}
-	operation, err := svc.createLifecycleOperationForServerIDs(ctx, app, appruntime.Spec{Generation: app.Generation, SpecHash: app.SpecHash}, "", LifecycleTypeDeploy, []string{"srv-a", "srv-b"}, appruntime.DesiredRunning)
-	if err != nil {
-		t.Fatal(err)
-	}
-	targetID := lifecycleTargetID(operation.ID, "srv-a")
-	params, err := json.Marshal(deployTaskParams{
-		AppID:                app.ID,
-		ServerID:             "srv-a",
-		LifecycleOperationID: operation.ID,
-		LifecycleTargetID:    targetID,
-		Generation:           app.Generation,
-		SpecHash:             app.SpecHash,
-		Action:               LifecycleTargetActionApply,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	taskNextRunAt := time.Now().UTC().Add(5 * time.Minute)
-	task, err := svc.tasks.Create(ctx, tasks.CreateInput{
-		OperationID:   "task-op-1",
-		Type:          TaskTypeTargetApply,
-		ServerID:      "srv-a",
-		ResourceType:  "application",
-		ResourceID:    app.ID,
-		ParamsJSON:    string(params),
-		Status:        tasks.StatusFailedRetryable,
-		RetryCount:    2,
-		MaxRetries:    5,
-		NextRunAt:     &taskNextRunAt,
-		ExecutionMode: tasks.ExecutionModeSerial,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	nextRunAt := time.Now().UTC().Add(3 * time.Minute)
-	if _, err := svc.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
-		SET state=?,status=?,stage=?,attempt=?,next_run_at=?,claimed_task_id=?,error=?,error_code=?,error_message=?,error_detail=?,updated_at=?
-		WHERE id=?`,
-		LifecycleTargetStateFailedRetryable,
-		lifecycleStatusForState(LifecycleTargetStateFailedRetryable),
-		"runtime_deploy",
-		3,
-		formatTime(nextRunAt),
-		task.ID,
-		"docker create failed",
-		"docker_create_failed",
-		"create container failed",
-		"agent stderr: invalid mount",
-		formatTime(time.Now().UTC()),
-		targetID,
-	); err != nil {
-		t.Fatal(err)
-	}
-
-	items := []tasks.Task{task, {ID: "parent", OperationID: "task-op-1", Type: TaskTypeTargetBatch, Status: tasks.StatusRunning, CreatedAt: task.CreatedAt}}
-	if err := svc.DecorateDeploymentTasks(ctx, items); err != nil {
-		t.Fatal(err)
-	}
-	if items[0].Deployment == nil || items[0].Deployment.Operation == nil || items[0].Deployment.Target == nil {
-		t.Fatalf("expected target task projection, got %#v", items[0].Deployment)
-	}
-	target := items[0].Deployment.Target
-	if target.State != LifecycleTargetStateFailedRetryable || target.Stage != "runtime_deploy" || target.Attempt != 3 {
-		t.Fatalf("target diagnostics = %#v", target)
-	}
-	if target.ClaimedTaskID != task.ID || target.ClaimedTaskStatus != tasks.StatusFailedRetryable {
-		t.Fatalf("claimed task projection = %#v", target)
-	}
-	if target.ErrorCode != "docker_create_failed" || target.ErrorMessage != "create container failed" || !strings.Contains(target.ErrorDetail, "invalid mount") {
-		t.Fatalf("target error projection = %#v", target)
-	}
-	if target.NextRunAt == nil {
-		t.Fatalf("expected target next retry time: %#v", target)
-	}
-	if len(items[0].Deployment.Operation.Targets) != 2 {
-		t.Fatalf("operation should include all targets, got %#v", items[0].Deployment.Operation.Targets)
-	}
-	if items[1].Deployment == nil || items[1].Deployment.Operation == nil || items[1].Deployment.Operation.ID != operation.ID {
-		t.Fatalf("expected parent task to inherit operation projection, got %#v", items[1].Deployment)
-	}
-}
-
 func TestGetApplicationOperationRecordHandlesEmptyStageTimes(t *testing.T) {
 	svc, _, _, closeStore := newTestService(t)
 	defer closeStore()
 	ctx := context.Background()
-	now := time.Now().UTC()
 
-	if _, err := svc.lifecycleDB().Exec(`INSERT INTO application_lifecycle_operations(id, application_id, type, status, task_id, generation, spec_hash, trigger, error, created_at, started_at, finished_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		"op-1", "app-1", "deploy", "deploying", "", 3, "hash", "user", "", formatTime(now), formatTime(now), nil, formatTime(now)); err != nil {
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.lifecycleDB().Exec(`INSERT INTO application_lifecycle_targets(id, operation_id, application_id, server_id, action, state, status, target_key, desired_state, desired_generation, desired_spec_hash, priority, attempt, next_run_at, lease_owner, lease_expires_at, claimed_task_id, instance_id, container_name, container_id, stage, error, error_code, error_message, error_detail, observed_state, observed_exit_code, observed_error, observed_generation, observed_spec_hash, observed_image, observed_at, created_at, started_at, finished_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		"tgt-1", "op-1", "app-1", "srv-1", "apply", "applying", "deploying", "app-1/srv-1", "running", 3, "hash", 0, 0, "", "", "", "", "inst-1", "c-1", "", "write_files", "", "", "", "", "stopped", "", "OOMKilled", 2, "oldhash", "img:1.8", formatTime(now), formatTime(now), nil, nil, formatTime(now)); err != nil {
-		t.Fatal(err)
+	jobs := jobsForApplication(t, svc, app.ID)
+	if len(jobs) == 0 {
+		t.Fatal("expected planned jobs")
 	}
-	// 未结束的步骤：finished_at 在库里是空字符串，不是 NULL。
-	if _, err := svc.lifecycleDB().Exec(`INSERT INTO application_target_stages(id, operation_id, target_id, application_id, server_id, stage, status, detail, started_at, finished_at, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
-		"stg-1", "op-1", "tgt-1", "app-1", "srv-1", "write_files", "running", "detail", formatTime(now), "", formatTime(now), formatTime(now)); err != nil {
+	// 未结束的步骤：last_steps_json 里的步骤不带时间字段。
+	if _, err := svc.db.Exec(`UPDATE jobs SET last_steps_json=? WHERE id=?`,
+		`[{"name":"write_files","status":"running","detail":"detail"}]`, jobs[0].ID); err != nil {
 		t.Fatal(err)
 	}
 
-	detail, err := svc.GetApplicationOperationRecord(ctx, "op-1")
+	detail, err := svc.GetApplicationOperationRecord(ctx, jobs[0].IntentID)
 	if err != nil {
 		t.Fatalf("GetApplicationOperationRecord should tolerate empty stage time: %v", err)
 	}
-	if len(detail.Targets) != 1 || len(detail.Targets[0].Stages) != 1 {
-		t.Fatalf("unexpected detail targets/stages: %#v", detail.Targets)
+	if len(detail.Targets) == 0 {
+		t.Fatalf("unexpected detail targets: %#v", detail.Targets)
 	}
-	stage := detail.Targets[0].Stages[0]
-	if stage.StartedAt == nil || stage.FinishedAt != nil {
-		t.Fatalf("empty finished_at should scan as nil: %#v", stage)
+	foundStage := false
+	for _, target := range detail.Targets {
+		for _, stage := range target.Stages {
+			if stage.Stage == "write_files" {
+				foundStage = true
+				if stage.StartedAt != nil || stage.FinishedAt != nil {
+					t.Fatalf("empty stage time should stay nil: %#v", stage)
+				}
+			}
+		}
 	}
-}
-
-func (s *Service) deploymentOperationErrorForTest(ctx context.Context, operationID string) error {
-	op, err := s.lifecycleOperationByID(ctx, operationID)
-	if err != nil {
-		return err
+	if !foundStage {
+		t.Fatalf("expected write_files stage, got %#v", detail.Targets)
 	}
-	if strings.TrimSpace(op.Error) != "" {
-		return panelerr.BadGateway("application_runtime_operation_failed", "Application runtime operation failed: "+op.Error)
-	}
-	return nil
 }
 
 func newTestService(t *testing.T) (*Service, *fakeRuntimeClient, *fakeServerProvider, func()) {
@@ -1873,88 +1519,28 @@ func (f *fakeApplicationReconcileTrigger) TriggerApplicationReconcile(ctx contex
 		payload = raw
 	}
 	appIDs := stringSlicePayload(payload["applicationIds"])
-	if len(appIDs) == 0 && strings.TrimSpace(trigger.TriggerResourceID) != "" {
-		appIDs = []string{strings.TrimSpace(trigger.TriggerResourceID)}
-	}
+	serverIDs := stringSlicePayload(payload["serverIds"])
+	stopServers := stringSlicePayload(payload["stopServers"])
 	purge, _ := payload["purge"].(bool)
 	force, _ := payload["force"].(bool)
-	stopServers := stringSlicePayload(payload["stopServers"])
-	inputs := []tasks.CreateInput{}
+	if len(appIDs) == 0 {
+		return tasks.Task{}, false, nil
+	}
+	// 新的控制面：触发只负责写 desired/Job，远端变更由 orchestrator 执行。
 	for _, appID := range appIDs {
-		plan, err := f.svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{
+		if _, err := f.svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{
 			ApplicationID: appID,
+			ServerIDs:     serverIDs,
 			StopServers:   stopServers,
 			Purge:         purge,
 			Force:         force,
 			Manual:        trigger.Manual,
 			TriggerType:   firstNonEmpty(trigger.Type, "test"),
-		})
-		if err != nil {
+		}); err != nil {
 			return tasks.Task{}, false, err
 		}
-		removeApplicationData := false
-		if app, err := f.svc.Get(ctx, appID); err == nil {
-			removeApplicationData = app.DeletionRequested
-		}
-		for _, target := range plan.CreatedTargets {
-			input, err := targetTaskInputWithRemoveData(target, "Syncing application "+appID, firstNonEmpty(trigger.Type, "test"), removeApplicationData)
-			if err != nil {
-				return tasks.Task{}, false, err
-			}
-			inputs = append(inputs, input)
-		}
 	}
-	if len(inputs) == 0 {
-		return tasks.Task{}, false, nil
-	}
-	manager := tasks.NewManager(f.tasks)
-	if trigger.Type == "application_sync" {
-		batch := tasks.CreateBatchInput{
-			Type:          inputs[0].Type,
-			OperationID:   "test-reconcile",
-			TriggerType:   firstNonEmpty(trigger.Type, "test"),
-			Summary:       "Syncing application",
-			ExecutionMode: tasks.ExecutionModeSerial,
-			Inputs:        inputs,
-		}
-		parent, _, created, err := manager.CreateBatch(ctx, batch, tasks.Trigger{Type: firstNonEmpty(trigger.Type, "test"), Manual: trigger.Manual})
-		if err != nil || !created {
-			return parent, created, err
-		}
-		go func(task tasks.Task) {
-			defer f.tasks.FinishExecution(task.ID)
-			_ = manager.Run(context.Background(), task)
-		}(parent)
-		return parent, true, nil
-	}
-	var first tasks.Task
-	createdAny := false
-	for i, input := range inputs {
-		if strings.TrimSpace(input.OperationID) == "" {
-			input.OperationID = "test-reconcile"
-		}
-		task, created, err := manager.Create(ctx, input, tasks.Trigger{Type: firstNonEmpty(trigger.Type, "test"), Manual: trigger.Manual})
-		if i == 0 {
-			first = task
-		}
-		if err != nil || !created {
-			return first, createdAny, err
-		}
-		createdAny = true
-		if err := manager.Run(ctx, task); err != nil {
-			return first, true, err
-		}
-		var params deployTaskParams
-		if strings.TrimSpace(input.ParamsJSON) != "" {
-			_ = json.Unmarshal([]byte(input.ParamsJSON), &params)
-		}
-		if strings.TrimSpace(params.LifecycleOperationID) != "" {
-			if err := f.svc.deploymentOperationErrorForTest(ctx, params.LifecycleOperationID); err != nil {
-				return first, true, err
-			}
-		}
-	}
-	return first, createdAny, nil
+	return tasks.Task{}, false, nil
 }
 
 func stringSlicePayload(value any) []string {
@@ -2292,88 +1878,6 @@ func (f fakeInternalFileProvider) OpenInternalFile(ctx context.Context, source s
 	return io.NopCloser(bytes.NewReader(content)), InternalFileInfo{Mode: "0644", Size: int64(len(content))}, nil
 }
 
-func TestRuntimeStatusFromLifecycleTargetState(t *testing.T) {
-	cases := []struct {
-		state  string
-		action string
-		want   string
-	}{
-		{LifecycleTargetStateSucceeded, LifecycleTargetActionApply, appruntime.StatusRunning},
-		{LifecycleTargetStateSucceeded, LifecycleTargetActionStop, appruntime.StatusStopped},
-		{LifecycleTargetStateSucceeded, LifecycleTargetActionPurge, appruntime.StatusMissing},
-		{LifecycleTargetStateFailedRetryable, "", appruntime.StatusFailed},
-		{LifecycleTargetStateFailed, "", appruntime.StatusFailed},
-		{LifecycleTargetStateCancelled, "", appruntime.StatusFailed},
-		{LifecycleTargetStateApplying, "", appruntime.StatusDeploying},
-		{LifecycleTargetStateStopping, "", appruntime.StatusDeploying},
-		{LifecycleTargetStatePurging, "", appruntime.StatusDeploying},
-		{LifecycleTargetStateVerifying, "", appruntime.StatusDeploying},
-		{LifecycleTargetStateSuperseded, "", appruntime.StatusPending},
-		{LifecycleTargetStatePlanned, "", appruntime.StatusPending},
-	}
-	for _, c := range cases {
-		if got := runtimeStatusFromLifecycleTargetState(c.state, c.action); got != c.want {
-			t.Errorf("state=%q action=%q got=%q want=%q", c.state, c.action, got, c.want)
-		}
-	}
-}
-
-func TestMergeLifecycleTargetsIntoSynthesizedStopAndPurgeStatuses(t *testing.T) {
-	statuses := mergeLifecycleTargetsIntoStatuses(nil, []LifecycleTarget{
-		{InstanceID: "app-1-srv-a", ServerID: "srv-a", State: LifecycleTargetStateSucceeded, Action: LifecycleTargetActionStop, DesiredState: appruntime.DesiredStopped},
-		{InstanceID: "app-1-srv-b", ServerID: "srv-b", State: LifecycleTargetStateSucceeded, Action: LifecycleTargetActionPurge, DesiredState: appruntime.DesiredStopped},
-		{InstanceID: "app-1-srv-c", ServerID: "srv-c", State: LifecycleTargetStateSucceeded, Action: LifecycleTargetActionApply, DesiredState: appruntime.DesiredRunning},
-	})
-	if len(statuses) != 3 {
-		t.Fatalf("statuses = %#v", statuses)
-	}
-	byServer := map[string]string{}
-	for _, status := range statuses {
-		byServer[status.ServerID] = status.Status
-	}
-	if byServer["srv-a"] != appruntime.StatusStopped || byServer["srv-b"] != appruntime.StatusMissing || byServer["srv-c"] != appruntime.StatusRunning {
-		t.Fatalf("statuses = %#v", statuses)
-	}
-}
-
-func TestLifecycleHeartbeatResultPrioritizesLeaseLost(t *testing.T) {
-	boom := errors.New("boom")
-	if got := lifecycleHeartbeatResult(errLifecycleTargetLeaseLost, boom); !errors.Is(got, errLifecycleTargetLeaseLost) {
-		t.Fatalf("lease lost must win over run error, got %v", got)
-	}
-	if got := lifecycleHeartbeatResult(errLifecycleTargetLeaseLost, nil); !errors.Is(got, errLifecycleTargetLeaseLost) {
-		t.Fatalf("lease lost must win over nil, got %v", got)
-	}
-	heartbeat := errors.New("heartbeat boom")
-	if got := lifecycleHeartbeatResult(heartbeat, nil); !errors.Is(got, heartbeat) {
-		t.Fatalf("heartbeat error should surface when run succeeded, got %v", got)
-	}
-	if got := lifecycleHeartbeatResult(heartbeat, boom); !errors.Is(got, boom) {
-		t.Fatalf("ordinary heartbeat error must not hide run error, got %v", got)
-	}
-}
-
-func TestLifecycleTargetObservedAtEmptyWithoutInstance(t *testing.T) {
-	svc, _, _, closeStore := newTestService(t)
-	defer closeStore()
-	ctx := context.Background()
-	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	operation, err := svc.createLifecycleOperationForServerIDs(ctx, app, appruntime.Spec{Generation: app.Generation, SpecHash: app.SpecHash}, "", LifecycleTypeDeploy, []string{"srv-missing"}, appruntime.DesiredRunning)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(operation.Targets) != 1 {
-		t.Fatalf("targets = %#v", operation.Targets)
-	}
-	target := operation.Targets[0]
-	if target.ObservedAt != nil || target.ObservedState != "" {
-		t.Fatalf("expected empty observed snapshot without instance: %#v", target)
-	}
-}
-
 func TestReconcileStoppedDoesNotTouchApplicationUpdatedAt(t *testing.T) {
 	svc, _, _, closeStore := newTestService(t)
 	defer closeStore()
@@ -2445,32 +1949,6 @@ func (c *countingReverseProxyReconciler) ReconcileReverseProxy(context.Context) 
 // TestAfterLifecycleTargetVerifiedSkipsFacilityProxySelfRetrigger 回归测试：
 // 入口代理设施自身的目标验证成功后不得再次触发代理同步，否则会形成
 // "同步完成→立即再同步"的自循环（配合验证等待时周期为约 3 分钟）。
-func TestAfterLifecycleTargetVerifiedSkipsFacilityProxySelfRetrigger(t *testing.T) {
-	svc, _, _, closeStore := newTestService(t)
-	defer closeStore()
-	ctx := context.Background()
-
-	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	reconciler := &countingReverseProxyReconciler{}
-	svc.SetReverseProxyReconciler(reconciler)
-
-	if err := svc.afterLifecycleTargetVerified(ctx, LifecycleTarget{ApplicationID: FacilityProxyApplicationID, Action: LifecycleTargetActionApply}); err != nil {
-		t.Fatal(err)
-	}
-	if reconciler.calls != 0 {
-		t.Fatalf("facility proxy own target must not re-trigger proxy reconcile, got %d calls", reconciler.calls)
-	}
-
-	if err := svc.afterLifecycleTargetVerified(ctx, LifecycleTarget{ApplicationID: app.ID, Action: LifecycleTargetActionApply}); err != nil {
-		t.Fatal(err)
-	}
-	if reconciler.calls != 1 {
-		t.Fatalf("user application target must trigger proxy reconcile, got %d calls", reconciler.calls)
-	}
-}
 
 // TestRefreshApplicationSnapshotDoesNotChurnFacilityApplication 回归测试：
 // 设施应用（入口代理）的 generation/spec_hash 只由设施模块

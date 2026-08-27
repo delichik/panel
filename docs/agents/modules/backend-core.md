@@ -29,6 +29,7 @@
 - 配置：`internal/platform/config/config.go`
 - 进程日志：`internal/platform/logging/`
 - 数据库连接和迁移：`internal/platform/database/store.go`、`internal/platform/database/migrations.go`、`internal/platform/database/orm/`、`internal/platform/database/models/`
+- 应用部署控制面：`internal/orchestrator/`（Planner、Job lease、ObservationWriter、RuntimeReconcile worker）
 - 认证：`internal/modules/identity/`
 - 运行时设置：`internal/modules/settings/`
 - 统一 HTTP 响应与路由注册契约：`internal/platform/http/`
@@ -39,11 +40,11 @@
 
 ## 结构约定
 
-- `bootstrap/panel.New` 负责打开数据库、创建 service、连接跨模块依赖、集中注册业务任务、启动 tasks 内部 worker 和各模块自有后台 worker，并调用各模块路由注册器。业务任务定义必须在所有相关业务 service 和 bridge 创建完成后，通过集中注册阶段调用各模块 `RegisterTasks`，不要穿插在 service 构造过程中零散注册。证书、密钥资产、应用和容器之间的双向协作通过 `internal/bootstrap/panel/bridges.go` 中的窄接口 bridge 注入，禁止在生产装配中用 service setter 回连形成环。
+- `bootstrap/panel.New` 负责打开数据库、创建 service、连接跨模块依赖、集中注册业务任务、启动应用部署控制面、tasks 内部 worker 和各模块自有后台 worker，并调用各模块路由注册器。业务任务定义必须在所有相关业务 service 和 bridge 创建完成后，通过集中注册阶段调用各模块 `RegisterTasks`，不要穿插在 service 构造过程中零散注册。证书、密钥资产、应用和容器之间的双向协作通过 `internal/bootstrap/panel/bridges.go` 中的窄接口 bridge 注入，禁止在生产装配中用 service setter 回连形成环。
 - Panel 与 Panel Agent 启动装配都会校验构建时生成的 Agent gRPC contract hash；该 hash 基于 `agent.proto` 的 protobuf descriptor，变量为空时必须立即返回明确启动错误，不能以空 hash 继续运行。
 - Agent gRPC 契约包含 `PrepareRestart` 流式重启就绪检查（详见 servers.md）：Panel 在部署/重启 agent 前调用，避免打断 agent 发起的软件包升级；旧 agent 缺失该能力时 Panel 直接继续部署。
 - bootstrap bridge 在依赖尚未装配时必须返回明确错误，不能 nil pointer panic；相关防护由 `internal/bootstrap/panel/bridges_test.go` 覆盖。
-- `bootstrap/panel.New` 创建任务服务后会立即校验数据库中的 `running` 任务；当前进程内没有对应 execution 对象的任务会在其他后台服务启动前标记为失败。应用服务装配完成后还会收敛这些失败目标任务对应的 lifecycle target，避免重启后应用运行时状态永久停在部署中。
+- `bootstrap/panel.New` 创建任务服务后会立即校验数据库中的 `running` 任务；当前进程内没有对应 execution 对象的任务会在其他后台服务启动前标记为失败。应用服务装配完成后启动 AppDB Job controller，由它恢复过期 lease、扫描 pending/failed_retryable Job，并通过 execution ID 与 lease token 继续收敛应用运行时；旧 lifecycle target 层已全部下线，不再读取。
 - API 统一挂在 `/api/v1/`。`/api/v1/auth/login`、`/api/v1/auth/session` 和只返回登录页标题/说明的 `GET /api/v1/settings/public-branding` 是开放入口，其余 API 经认证中间件保护。业务 API 路由由各模块的 `RegisterRoutes(*http.ServeMux, httpx.Middleware)` 注册，bootstrap 不再维护业务路径 switch。
 - 根路径由后端静态托管 `web/dist`；没有构建前端时返回纯文本后端运行提示。
 - `GET /api/v1/system/version` 返回构建时注入的版本、通道（`release` 或 `dev`）、commit、仓库和缓存的最新版本状态。`internal/modules/systeminfo` 每 6 小时只读检查 GitHub 最新 Release；只有 `release` 通道且版本为三段数字核心版本（可带 `v` 前缀和预发布后缀）时才检查更新。未注入或无效通道按 `dev` 处理，不发起检查，也不提供下载或安装能力。
@@ -53,7 +54,7 @@
 - 运行时设置从数据库读取，并以配置文件、环境变量和内置默认值作为基础。登录页自定义标题和说明分别使用 `branding.loginTitle`、`branding.loginSubtitle` 键持久化；进程日志等级使用 `log.level` 键持久化，默认 `info`，更新 `/api/v1/settings/runtime` 后立即调整 zap `AtomicLevel`；协调追踪使用 `reconcile.trace` 键持久化（默认关闭，更新后立即同步 `internal/platform/reconciletrace` 开关），开启后协调/部署全链路输出结构化追踪日志，事件与字段见 containerization.md 的协调追踪小节；旧数据库启动时由默认设置写入流程自动补齐空值。
 - 后端进程日志统一使用 `internal/platform/logging` 的 zap JSON logger，输出路径固定为 `stdout`。启动、关闭、后台服务和 HTTP 请求日志保持英文消息，不进入多语言翻译；成功和重定向 HTTP 完成日志使用 debug，4xx 使用 warn，5xx 使用 error。
 - 概览仪表盘卡片布局通过 `overview_card_configurations` 保存在应用数据库；当前单管理员模型使用固定 `default` 记录，整套有序卡片配置以稳定值 JSON 原子替换。
-- Docker 镜像更新缓存使用 `image_updates`、`image_refreshes`，Application 容器协调观察状态使用 `application_reconcile_states`；fail2ban 的 Panel 草稿 YAML 与接管开关使用 `fail2ban_configs` 按服务器保存；Docker 实时资源清单不复制到数据库。
+- Docker 镜像更新缓存使用 `image_updates`、`image_refreshes`，Application 的 planner/Job 运行状态使用 `jobs`，实例 desired/observed 使用 `application_instances`，兼容性退避状态使用 `application_reconcile_states`；fail2ban 的 Panel 草稿 YAML 与接管开关使用 `fail2ban_configs` 按服务器保存；Docker 实时资源清单不复制到数据库。
 - 后端对外错误响应需要走 `platform/errors`、`platform/http` 和 `platform/i18n`，不要在 handler 中散落用户可见错误文案。
 - `internal/platform` 禁止依赖 `internal/modules`；业务模块之间禁止直接导入其他模块的 `store` 实现。`internal/architecture/dependencies_test.go` 固化这些依赖边界。
 - API method/path 清单由 `internal/bootstrap/panel/routes_manifest_test.go` 固化；有意调整 API 时必须同步确认前后端契约后更新清单，目录重构不得顺便改变清单。设施类型没有通用 list 路由；反向代理设施完整详情使用 `GET /api/v1/facility-apps/reverse-proxy`。
@@ -63,7 +64,7 @@
 
 ## 数据库约定
 
-- 应用业务数据在 `Store.AppDB()`，任务、任务日志、应用 revision 记录、密钥资产导出记录和应用 lifecycle 历史在 `Store.LogDB()`，指标数据在 `Store.MetricsDB()`；不要把 log 表或指标表误建到应用数据库。`application_revisions` 与 `key_asset_exports` 从 AppDB 移出后不迁移旧数据，也不读取旧 AppDB 表兼容。
+- 应用业务数据、不可变 `application_revisions`、应用 `application_instances` 和部署 `jobs` 在 `Store.AppDB()`；任务中心的 task、任务步骤/日志、旧 revision 兼容副本和密钥资产导出记录在 `Store.LogDB()`；指标数据在 `Store.MetricsDB()`。协调库 `Store.CoordDB()` 不再注册任何模型，旧 `application_lifecycle_operations` / `application_lifecycle_targets` / `application_target_stages` 三张表已随迁移 DROP 删除。新的部署事实来源不得写入 LogDB task；启动迁移会把旧 LogDB revision 行复制到 AppDB，旧 LogDB 表仍可供兼容诊断读取。
 - 数据库路径配置包括 `appDatabase`、`logDatabase`、`metricsDatabase`，环境变量分别是 `PANEL_APP_DATABASE`、`PANEL_LOG_DATABASE`、`PANEL_METRICS_DATABASE`，三者必须指向不同文件。旧 `taskDatabase` 配置、`PANEL_TASK_DATABASE` 环境变量和默认 `data/db/tasks.db` 文件仅作为升级兼容入口，启动时会迁移到 `data/db/log.db`。
 - SQLite 连接由 `internal/platform/database` 统一配置为 WAL、5 秒 busy timeout 和小连接池；普通路径与 `file:` DSN 都必须保留这些默认 pragma，除非用户显式覆盖。
 - 当前处于 alpha 但已有使用者，修改表结构必须考虑旧版本迁移。
@@ -71,7 +72,7 @@
 - 入口网关设施配置表 `facility_app_configs` 只保存 `version`、`deployment_server_ids_json`、`panel_entry_json`、`dns_sync_json`、`last_error`、`updated_at`；所有路由（设施域名与应用反向代理规则）统一保存在 `reverse_proxy_routes` 表：`domain` 主键全局唯一，`app_id` 标识所属应用（设施代理自身使用 `facility-reverse-proxy`），`origin_server_ids`/`any_access_json`/`target_type`/`target_port`/`paths_json` 为统一字段。升级旧库时启动预迁移先把旧 `facility_app_configs.domains_json` 与 `applications.reverse_proxy_json`（含 legacy 格式转换与域名所有权冲突检查）回填到新表，再删除旧列；迁移完成后业务代码不保留旧 JSON 字段兼容。
 - `panel_installation` 是固定 `default` 记录的单例安装状态，使用服务器外键保存待初始化节点和唯一 Panel 宿主节点。宿主节点不能通过普通服务器删除流程移除；Panel 入口启用时必须绑定该节点，宿主节点可由 setup 或设施应用网关配置首次保存登记。
 - 新字段或新表优先使用可重复执行的增量迁移，并在 `internal/platform/database/store_test.go` 或相关 service 测试覆盖旧库升级路径。
-- 数据库迁移兼容基线不再包含短期内部结构：`applications.persistent_path`、AppDB 中的 `application_lifecycle_operations`/`application_lifecycle_targets`、以及不支持 `application_files.kind='archive'` 的旧 `application_files` 约束；处理这些更早内部快照时应先用带兼容迁移的版本升级。
+- 数据库迁移兼容基线不再包含短期内部结构：`applications.persistent_path`、CoordDB 的 `application_lifecycle_operations`/`application_lifecycle_targets`（已随迁移删除）、以及不支持 `application_files.kind='archive'` 的旧 `application_files` 约束；处理这些更早内部快照时应先用带兼容迁移的版本升级。AppDB 的 `application_revisions`、`jobs` 和实例 desired/observed 字段必须通过可重复迁移补齐。
 - 会被展示的持久化配置只保存稳定 key、kind、value，不保存当前语言下的展示文案。
 
 ## API 变更检查
@@ -94,8 +95,8 @@
 ## 运行事件装配
 
 - 统一运行事件模块位于 `internal/modules/runtimeevents/`，生产装配在 `internal/bootstrap/panel/app.go` 中创建服务、注册 `/api/v1/application-operations` 与 `/api/v1/system-events` 路由，并启动独立清理 worker。
-- `runtime_events`、`runtime_event_details` 和 `application_operation_records` 属于高增长运行历史，必须保存在 `Store.LogDB()`；`runtimeEventRetentionDays`、`runtimeEventDetailRetentionDays`、`runtimeEventCleanupSchedule` 作为 runtime settings 保存在 `Store.AppDB()`。
-- 记录保留时间必须大于或等于详情保留时间。清理 worker 先清详情并标记详情不可用，再删除过期摘要和应用操作投影。
+- `runtime_events`、`runtime_event_details` 属于高增长运行历史，保存在 `Store.LogDB()`；`application_operation_records` 已随旧 lifecycle 层删除，不再创建。`runtimeEventRetentionDays`、`runtimeEventDetailRetentionDays`、`runtimeEventCleanupSchedule` 作为 runtime settings 保存在 `Store.AppDB()`。
+- 记录保留时间必须大于或等于详情保留时间。清理 worker 按 `runtimeEventRetentionDays` 删除过期 `runtime_events`；`runtime_event_details` 不再读写，原应用操作阶段/投影清理已随旧 lifecycle 层下线。
 
 ## 密钥资产启动与存储
 
@@ -120,5 +121,5 @@
 - HTTP 请求体上限：`internal/platform/http/httpx.go` 的 `Decode` 使用 `http.MaxBytesReader` 限制 10 MiB，超限返回 400 `request_body_too_large`；multipart 上传接口不经 `Decode`，不受影响。
 - HTTP Server 超时：`cmd/panel/main.go` 增加 `IdleTimeout: 120s` 与 `MaxHeaderBytes: 1MiB`；不设置 `WriteTimeout`，避免打断任务日志、诊断流与文件下载等长响应。
 - 分页上限：`internal/platform/http/list.go` 的 `ParseListPage` 将 `page` 限制在 10000 以内，避免 `(page-1)*pageSize` 溢出。
-- 启动失败清理：`internal/bootstrap/panel/app.go` 统一 `stopBackgroundServices` 清理路径；`deploymentDispatcher.Start` / `StartControlServer` 失败时都会取消 `CheckConfiguredAgents` goroutine、等待其退出后再关闭 store；正常 `Close()` 也等待该 goroutine 退出。
+- 启动失败清理：`internal/bootstrap/panel/app.go` 统一 `stopBackgroundServices` 清理路径；应用 orchestrator、`StartControlServer` 失败时都会取消 `CheckConfiguredAgents` goroutine、等待其退出后再关闭 store；正常 `Close()` 也先停止 Job controller，再停止 tasks 和其他后台 worker，最后等待该 goroutine 退出。
 - 配置加载：`internal/platform/config` 对默认 admin 密码哈希使用包级 `sync.Once` 缓存，避免每次 `Default()/Load()` 重复执行 bcrypt。

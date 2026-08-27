@@ -98,7 +98,6 @@ type PanelHostProvider interface {
 
 type Service struct {
 	db              *sql.DB
-	coordDB         *sql.DB
 	dataRoot        string
 	agent           AgentRuntimeClient
 	servers         ServerProvider
@@ -127,12 +126,6 @@ func WithContainerOperationQueue(queue ContainerOperationQueue) Option {
 
 func WithDataRoot(dataRoot string) Option {
 	return func(s *Service) { s.dataRoot = dataRoot }
-}
-
-// WithCoordDB 注入协调库（CoordDB），设施应用的 lifecycle 记录
-// application_lifecycle_operations / application_lifecycle_targets 位于该库。
-func WithCoordDB(db *sql.DB) Option {
-	return func(s *Service) { s.coordDB = db }
 }
 
 func WithCertificateProvider(provider CertificateProvider) Option {
@@ -238,11 +231,11 @@ func (s *Service) GetReverseProxy(ctx context.Context) (ReverseProxyConfig, erro
 		recordSubqueryError("route_summaries", summaryErr)
 	}
 	cfg.ApplicationRoutes = appRoutes
-	if operation, opErr := s.latestLifecycleOperation(ctx); opErr == nil && operation.ID != "" {
+	if operation, opErr := s.latestJobOperation(ctx); opErr == nil && operation.ID != "" {
 		cfg.Operation = &operation
 	} else if opErr != nil && !isPanelNotFound(opErr) {
-		// 还没有 lifecycle 记录是正常状态，不记录警告。
-		recordSubqueryError("lifecycle_operation", opErr)
+		// 还没有 Job 记录是正常状态，不记录警告。
+		recordSubqueryError("job_operation", opErr)
 	}
 	cfg.ReconcileStopped = s.proxyReconcileStopped(ctx)
 	if len(warnings) > 0 {
@@ -1437,122 +1430,6 @@ func (s *Service) ensureReverseProxyApplication(ctx context.Context, cfg Reverse
 	return generation, cfgHash, nil
 }
 
-// lifecycleDB 返回协调库（CoordDB）；未注入时回退到 AppDB，保持旧调用与测试兼容。
-func (s *Service) lifecycleDB() *sql.DB {
-	if s.coordDB != nil {
-		return s.coordDB
-	}
-	return s.db
-}
-
-type lifecycleTargetUpdate struct {
-	Status        string
-	Stage         string
-	InstanceID    string
-	ContainerName string
-	ContainerID   string
-	Error         string
-	Started       bool
-	Finished      bool
-}
-
-func (s *Service) updateLifecycleTarget(ctx context.Context, targetID string, in lifecycleTargetUpdate) error {
-	updates := []string{}
-	args := []any{}
-	add := func(column string, value any) {
-		updates = append(updates, column+"=?")
-		args = append(args, value)
-	}
-	if in.Status != "" {
-		updates = append(updates, "status=?", `state=CASE
-			WHEN ?='pending' THEN 'planned'
-			WHEN ?='preparing' THEN 'preparing'
-			WHEN ?='deploying' AND action='stop' THEN 'stopping'
-			WHEN ?='deploying' AND action='purge' THEN 'purging'
-			WHEN ?='deploying' THEN 'applying'
-			WHEN ?='running' THEN 'succeeded'
-			WHEN ?='failed' THEN 'failed'
-			WHEN ?='superseded' THEN 'superseded'
-			ELSE state END`)
-		args = append(args, in.Status)
-		for i := 0; i < 8; i++ {
-			args = append(args, in.Status)
-		}
-	}
-	if in.Stage != "" {
-		add("stage", in.Stage)
-	}
-	if in.InstanceID != "" {
-		add("instance_id", in.InstanceID)
-	}
-	if in.ContainerName != "" {
-		add("container_name", in.ContainerName)
-	}
-	if in.ContainerID != "" {
-		add("container_id", in.ContainerID)
-	}
-	if in.Error != "" {
-		add("error", in.Error)
-		updates = append(updates,
-			"error_message=CASE WHEN error_message='' THEN ? ELSE error_message END",
-			"error_detail=CASE WHEN error_detail='' THEN ? ELSE error_detail END",
-		)
-		args = append(args, in.Error, in.Error)
-	}
-	now := formatTime(time.Now().UTC())
-	if in.Started {
-		add("started_at", now)
-	}
-	if in.Finished {
-		add("finished_at", now)
-	}
-	add("updated_at", now)
-	args = append(args, targetID)
-	_, err := s.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets SET `+strings.Join(updates, ",")+` WHERE id=?`, args...)
-	return err
-}
-
-func (s *Service) latestLifecycleOperation(ctx context.Context) (applications.LifecycleOperation, error) {
-	row := s.lifecycleDB().QueryRowContext(ctx, `SELECT id,application_id,type,status,task_id,generation,spec_hash,trigger,error,created_at,started_at,finished_at,updated_at
-		FROM application_lifecycle_operations WHERE application_id=? ORDER BY created_at DESC, id DESC LIMIT 1`, proxyApplicationID)
-	operation, err := scanLifecycleOperation(row)
-	if err == sql.ErrNoRows {
-		return applications.LifecycleOperation{}, panelerr.NotFound("facility_app_lifecycle_operation")
-	}
-	if err != nil {
-		return applications.LifecycleOperation{}, err
-	}
-	targets, err := s.lifecycleTargets(ctx, operation.ID)
-	if err != nil {
-		return applications.LifecycleOperation{}, err
-	}
-	operation.Targets = targets
-	return operation, nil
-}
-
-func (s *Service) lifecycleTargets(ctx context.Context, operationID string) ([]applications.LifecycleTarget, error) {
-	rows, err := s.lifecycleDB().QueryContext(ctx, `SELECT t.id,t.operation_id,t.application_id,t.server_id,'',t.action,t.state,t.status,t.target_key,t.desired_state,t.desired_generation,t.desired_spec_hash,t.priority,t.attempt,t.next_run_at,t.lease_owner,t.lease_expires_at,t.claimed_task_id,t.instance_id,t.container_name,t.container_id,t.stage,t.error,t.error_code,t.error_message,t.error_detail,t.created_at,t.started_at,t.finished_at,t.updated_at
-		FROM application_lifecycle_targets t WHERE t.operation_id=? ORDER BY t.server_id ASC`, operationID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	targets := []applications.LifecycleTarget{}
-	for rows.Next() {
-		target, err := scanLifecycleTarget(rows)
-		if err != nil {
-			return nil, err
-		}
-		if strings.TrimSpace(target.ServerName) == "" && s.servers != nil {
-			if srv, getErr := s.servers.Get(ctx, target.ServerID); getErr == nil {
-				target.ServerName = strings.TrimSpace(firstNonEmpty(srv.Name, srv.ID))
-			}
-		}
-		targets = append(targets, target)
-	}
-	return targets, rows.Err()
-}
-
 func normalizeInput(in ReverseProxySaveInput) (ReverseProxyConfig, error) {
 	servers := uniqueSorted(in.DeploymentServers)
 	serverSet := map[string]struct{}{}
@@ -2075,20 +1952,6 @@ type lifecycleScanner interface {
 	Scan(dest ...any) error
 }
 
-func scanLifecycleOperation(row lifecycleScanner) (applications.LifecycleOperation, error) {
-	var operation applications.LifecycleOperation
-	var created, updated string
-	var started, finished sql.NullString
-	if err := row.Scan(&operation.ID, &operation.ApplicationID, &operation.Type, &operation.Status, &operation.TaskID, &operation.Generation, &operation.SpecHash, &operation.Trigger, &operation.Error, &created, &started, &finished, &updated); err != nil {
-		return applications.LifecycleOperation{}, err
-	}
-	operation.CreatedAt = parseTime(created)
-	operation.StartedAt = parseOptionalTime(started)
-	operation.FinishedAt = parseOptionalTime(finished)
-	operation.UpdatedAt = parseTime(updated)
-	return operation, nil
-}
-
 func scanLifecycleTarget(row lifecycleScanner) (applications.LifecycleTarget, error) {
 	var target applications.LifecycleTarget
 	var created, updated string
@@ -2168,6 +2031,45 @@ func isPanelNotFound(err error) bool {
 		return pe.Code == "not_found"
 	}
 	return false
+}
+
+// latestJobOperation 从 AppDB jobs 派生入口代理的当前操作投影（部署中/
+// 成功/失败），供设施配置与 setup 等待入口代理收敛使用。不再读取旧
+// lifecycle 表。
+func (s *Service) latestJobOperation(ctx context.Context) (applications.LifecycleOperation, error) {
+	if s == nil || s.db == nil {
+		return applications.LifecycleOperation{}, panelerr.Validation("application_operation_unavailable", "Application database is unavailable")
+	}
+	var id, action, state, trigger, specHash string
+	var generation int
+	var createdAt, updatedAt time.Time
+	err := s.db.QueryRowContext(ctx, `SELECT id,action,state,trigger_type,desired_generation,desired_spec_hash,created_at,updated_at
+		FROM jobs WHERE application_id=? ORDER BY created_at DESC, id DESC LIMIT 1`, proxyApplicationID).
+		Scan(&id, &action, &state, &trigger, &generation, &specHash, &createdAt, &updatedAt)
+	if err == sql.ErrNoRows {
+		return applications.LifecycleOperation{}, panelerr.NotFound("facility_app_lifecycle_operation")
+	}
+	if err != nil {
+		return applications.LifecycleOperation{}, err
+	}
+	status := "succeeded"
+	switch state {
+	case "pending", "running", "failed_retryable":
+		status = "deploying"
+	case "failed", "cancelled":
+		status = "failed"
+	}
+	return applications.LifecycleOperation{
+		ID:            id,
+		ApplicationID: proxyApplicationID,
+		Type:          action,
+		Status:        status,
+		Generation:    generation,
+		SpecHash:      specHash,
+		Trigger:       trigger,
+		CreatedAt:     createdAt,
+		UpdatedAt:     updatedAt,
+	}, nil
 }
 
 func (cfg ReverseProxyConfig) String() string {

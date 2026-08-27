@@ -49,10 +49,9 @@ type App struct {
 	metricsCleanup *metrics.CleanupWorker
 	eventCleanup   *runtimeevents.CleanupWorker
 	eventLogs      *runtimeevents.BufferedWriter
-	stageCleanup   *applications.StageCleanupWorker
+	applicationSvc *applications.Service
 	system         *systeminfo.Service
 	agentReports   *agentReportCollector
-	deployments    applications.DeploymentDispatcher
 	control        *installation.ControlServer
 	diagnostics    *diagnostics.Service
 	checkCancel    context.CancelFunc
@@ -146,8 +145,6 @@ func New(cfg config.Config) (*App, error) {
 	)
 	containerBridge.containers = containerSvc
 	applicationSvc.SetApplicationReconcileTrigger(containerSvc)
-	deploymentDispatcher := applications.NewDeploymentDispatcher(applicationSvc)
-	applicationSvc.SetDeploymentDispatcher(deploymentDispatcher)
 	metricsSvc := metrics.NewService(store.MetricsDB(), serverSvc)
 	packageSvc := packages.NewService(store.AppDB(), serverSvc, executor, taskSvc, agentClient)
 	overviewSvc := overview.NewService(store.AppDB(), serverSvc, metricsSvc, packageSvc)
@@ -162,7 +159,6 @@ func New(cfg config.Config) (*App, error) {
 		certs.WithApplicationRefresher(certBridge),
 	)
 	facilitySvc := facilityapps.NewService(store.AppDB(), agentClient, serverSvc, applicationSvc,
-		facilityapps.WithCoordDB(store.CoordDB()),
 		facilityapps.WithContainerOperationQueue(containerSvc),
 		facilityapps.WithDataRoot(cfg.DataRoot),
 		facilityapps.WithCertificateProvider(certSvc),
@@ -178,10 +174,6 @@ func New(cfg config.Config) (*App, error) {
 	applicationSvc.SetReverseProxyPolicyProvider(facilitySvc)
 	applicationSvc.SetFacilityRuntimeProvider(facilitySvc)
 	applicationSvc.SetStorageShareResolver(facilitySvc)
-	if err := applicationSvc.ReconcileInterruptedLifecycleTasks(context.Background()); err != nil {
-		_ = store.Close()
-		return nil, err
-	}
 	internalFileRegistry.Register("certificate", certSvc)
 	variableRegistry.Register("certs", certSvc)
 	registerTaskDefinitions(taskSvc, settingsSvc, keyAssetSvc, serverSvc, applicationSvc, containerSvc, packageSvc, certSvc)
@@ -211,13 +203,6 @@ func New(cfg config.Config) (*App, error) {
 			Schedule:      runtime.RuntimeEventCleanupSchedule,
 		}
 	})
-	stageCleanup := applications.NewStageCleanupWorker(applicationSvc, func() applications.StageCleanupSettings {
-		runtime := settingsSvc.Runtime()
-		return applications.StageCleanupSettings{
-			RetentionDays: runtime.RuntimeEventDetailRetentionDays,
-			Schedule:      runtime.RuntimeEventCleanupSchedule,
-		}
-	})
 	backupSvc := backups.NewService(backups.ArchiveConfig{
 		DataRoot:             cfg.DataRoot,
 		AppDatabase:          cfg.AppDatabase,
@@ -240,9 +225,8 @@ func New(cfg config.Config) (*App, error) {
 		eventLogs:      eventWriter,
 		system:         systemSvc,
 		agentReports:   reportCollector,
-		deployments:    deploymentDispatcher,
 		diagnostics:    diagnosticsSvc,
-		stageCleanup:   stageCleanup,
+		applicationSvc: applicationSvc,
 	}
 	checkCtx, checkCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	checkDone := make(chan struct{})
@@ -252,7 +236,7 @@ func New(cfg config.Config) (*App, error) {
 		defer close(checkDone)
 		serverSvc.CheckConfiguredAgents(checkCtx)
 	}()
-	if err := deploymentDispatcher.Start(context.Background()); err != nil {
+	if err := applicationSvc.StartOrchestrator(context.Background()); err != nil {
 		checkCancel()
 		<-checkDone
 		a.stopBackgroundServices()
@@ -264,7 +248,6 @@ func New(cfg config.Config) (*App, error) {
 	metricsCleanup.Start(context.Background())
 	eventCleanup.Start(context.Background())
 	eventWriter.Start(context.Background())
-	stageCleanup.Start(context.Background())
 	reportCollector.Start(context.Background())
 	var controlServer *installation.ControlServer
 	if goruntime.GOOS != "windows" {
@@ -281,7 +264,6 @@ func New(cfg config.Config) (*App, error) {
 	}
 	logging.L().Info("background services started")
 	taskHandler := tasks.NewHandler(taskSvc, taskWorker)
-	taskHandler.SetDeploymentProjectionProvider(applicationSvc)
 	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), taskHandler, metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), runtimeevents.NewHandler(eventSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), facilityapps.NewHandler(facilitySvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc), backups.NewHandler(backupSvc))
 	logging.L().Info("application initialized")
 	return a, nil
@@ -307,6 +289,9 @@ func (a *App) stopBackgroundServices() {
 	if a.control != nil {
 		_ = a.control.Close()
 	}
+	if a.applicationSvc != nil {
+		_ = a.applicationSvc.StopOrchestrator()
+	}
 	if a.tasks != nil {
 		a.tasks.Stop()
 	}
@@ -322,17 +307,11 @@ func (a *App) stopBackgroundServices() {
 	if a.eventLogs != nil {
 		a.eventLogs.Stop()
 	}
-	if a.stageCleanup != nil {
-		a.stageCleanup.Stop()
-	}
 	if a.system != nil {
 		a.system.Close()
 	}
 	if a.agentReports != nil {
 		a.agentReports.Stop()
-	}
-	if a.deployments != nil {
-		_ = a.deployments.Stop(context.Background())
 	}
 	if a.diagnostics != nil {
 		_ = a.diagnostics.Close()

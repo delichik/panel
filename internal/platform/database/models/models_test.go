@@ -19,7 +19,7 @@ var appTables = []string{
 	"credentials", "servers", "panel_installation", "package_updates", "package_refreshes",
 	"fail2ban_configs", "image_updates", "image_refreshes", "application_reconcile_states",
 	"container_observations", "docker_resource_snapshots", "dns_record_snapshots",
-	"applications", "application_edit_sessions", "application_edit_session_files",
+	"applications", "application_revisions", "jobs", "application_edit_sessions", "application_edit_session_files",
 	"application_edit_session_operations", "application_files", "application_instances",
 	"facility_app_configs", "facility_static_assets", "reverse_proxy_routes", "facility_edit_sessions",
 	"facility_edit_session_assets", "facility_edit_session_operations", "storage_share_configs",
@@ -33,9 +33,7 @@ var logTables = []string{
 	"runtime_events", "runtime_event_details", "key_asset_exports",
 }
 
-var coordTables = []string{
-	"application_lifecycle_operations", "application_lifecycle_targets", "application_target_stages",
-}
+var coordTables = []string{}
 
 var metricsTables = []string{"metrics_snapshots"}
 
@@ -46,6 +44,7 @@ func openMigratedStore(t *testing.T) *database.Store {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	store, err := database.Open(cfg)
@@ -244,8 +243,8 @@ func TestTakeoverAllLegacyTables(t *testing.T) {
 			if err := c.db.QueryRow(`SELECT COUNT(*) FROM orm_meta`).Scan(&metaCount); err != nil {
 				t.Fatalf("%s: count orm_meta: %v", c.name, err)
 			}
-			if metaCount != len(models.AllModels()) {
-				t.Fatalf("%s: orm_meta 行数 = %d, want %d", c.name, metaCount, len(models.AllModels()))
+			if metaCount != len(allModelTables()) {
+				t.Fatalf("%s: orm_meta 行数 = %d, want %d", c.name, metaCount, len(allModelTables()))
 			}
 		})
 	}
@@ -319,8 +318,14 @@ func TestExtraIndexDDLCoversInexpressibleIndexes(t *testing.T) {
 func allModelTables() []string {
 	models := models.AllModels()
 	out := make([]string, 0, len(models))
+	seen := make(map[string]struct{}, len(models))
 	for _, m := range models {
-		out = append(out, m.(interface{ TableName() string }).TableName())
+		table := m.(interface{ TableName() string }).TableName()
+		if _, ok := seen[table]; ok {
+			continue
+		}
+		seen[table] = struct{}{}
+		out = append(out, table)
 	}
 	return out
 }
@@ -339,7 +344,7 @@ func subtractStrings(base, remove []string) []string {
 	return out
 }
 
-// TestModelDDLMatchesLegacyColumns 在全新空库上由模型建出全部 42 张表，
+// TestModelDDLMatchesLegacyColumns 在全新空库上由模型建出全部存量表，
 // 逐列对比（cid/name/type/notnull/dflt/pk）与 Store.Migrate 产生的存量 schema 是否一致，
 // 用于校验模型对 DDL 的精确复刻（类型、默认值、非空、主键）。
 func TestModelDDLMatchesLegacyColumns(t *testing.T) {

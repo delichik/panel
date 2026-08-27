@@ -156,10 +156,11 @@ func TestKnownHostsStoreReplaceWritesAtomically(t *testing.T) {
 // testSSHServer is a minimal SSH server used to exercise the executor end to
 // end. Its host key can be swapped to simulate a changed server key.
 type testSSHServer struct {
-	listener   net.Listener
-	hostKey    atomic.Value // ssh.Signer
-	silentExec atomic.Bool
-	closeOnce  sync.Once
+	listener        net.Listener
+	hostKey         atomic.Value // ssh.Signer
+	requirePassword string
+	silentExec      atomic.Bool
+	closeOnce       sync.Once
 }
 
 func newTestSSHServer(t *testing.T, signer ssh.Signer) *testSSHServer {
@@ -168,7 +169,7 @@ func newTestSSHServer(t *testing.T, signer ssh.Signer) *testSSHServer {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	srv := &testSSHServer{listener: ln}
+	srv := &testSSHServer{listener: ln, requirePassword: "secret"}
 	srv.hostKey.Store(signer)
 	go srv.serve()
 	t.Cleanup(srv.Close)
@@ -193,7 +194,13 @@ func (s *testSSHServer) serve() {
 
 func (s *testSSHServer) handleConn(conn net.Conn) {
 	defer conn.Close()
-	cfg := &ssh.ServerConfig{NoClientAuth: true}
+	cfg := &ssh.ServerConfig{}
+	cfg.PasswordCallback = func(_ ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
+		if string(password) == s.requirePassword {
+			return &ssh.Permissions{}, nil
+		}
+		return nil, errors.New("password rejected")
+	}
 	cfg.AddHostKey(s.hostKey.Load().(ssh.Signer))
 	sshConn, chans, reqs, err := ssh.NewServerConn(conn, cfg)
 	if err != nil {

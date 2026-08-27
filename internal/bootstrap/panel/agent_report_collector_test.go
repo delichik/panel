@@ -152,6 +152,7 @@ func newReportCollectorSettings(t *testing.T) *settings.Service {
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)

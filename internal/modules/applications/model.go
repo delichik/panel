@@ -7,10 +7,6 @@ import (
 )
 
 const (
-	TaskTypeTargetBatch = "application_target_batch"
-	TaskTypeTargetApply = "application_target_apply"
-	TaskTypeTargetStop  = "application_target_stop"
-	TaskTypeTargetPurge = "application_target_purge"
 	TaskTypeStop        = "application_stop"
 	TaskTypeRestart     = "application_restart"
 	TaskTypeRefresh     = "application_refresh"
@@ -41,40 +37,6 @@ const (
 	ApplicationFileKindBinary   = "binary"
 	ApplicationFileKindTemplate = "template"
 	ApplicationFileKindArchive  = "archive"
-
-	LifecycleTypeDeploy = "deploy"
-
-	LifecycleStatusPending           = "pending"
-	LifecycleStatusDeploying         = "deploying"
-	LifecycleStatusDeployed          = "deployed"
-	LifecycleStatusPartiallyDeployed = "partially_deployed"
-	LifecycleStatusFailed            = "failed"
-	LifecycleStatusSuperseded        = "superseded"
-
-	LifecycleTargetStatusPending    = "pending"
-	LifecycleTargetStatusPreparing  = "preparing"
-	LifecycleTargetStatusDeploying  = "deploying"
-	LifecycleTargetStatusRunning    = "running"
-	LifecycleTargetStatusFailed     = "failed"
-	LifecycleTargetStatusSuperseded = "superseded"
-
-	LifecycleTargetActionApply = "apply"
-	LifecycleTargetActionStop  = "stop"
-	LifecycleTargetActionPurge = "purge"
-
-	LifecycleTargetStatePlanned         = "planned"
-	LifecycleTargetStateReady           = "ready"
-	LifecycleTargetStateClaimed         = "claimed"
-	LifecycleTargetStatePreparing       = "preparing"
-	LifecycleTargetStateApplying        = "applying"
-	LifecycleTargetStateStopping        = "stopping"
-	LifecycleTargetStatePurging         = "purging"
-	LifecycleTargetStateVerifying       = "verifying"
-	LifecycleTargetStateSucceeded       = "succeeded"
-	LifecycleTargetStateFailedRetryable = "failed_retryable"
-	LifecycleTargetStateFailed          = "failed"
-	LifecycleTargetStateSuperseded      = "superseded"
-	LifecycleTargetStateCancelled       = "cancelled"
 )
 
 type Application struct {
@@ -475,15 +437,8 @@ type DeploymentPlanRequest struct {
 }
 
 type DeploymentPlanResult struct {
-	OperationIDs        []string
-	CreatedTargetIDs    []string
-	ReusedTargetIDs     []string
-	SupersededTargetIDs []string
-	BlockedTargetIDs    []string
-	CreatedTargets      []LifecycleTarget
-	ReusedTargets       []LifecycleTarget
-	SupersededTargets   []LifecycleTarget
-	BlockedTargets      []LifecycleTarget
+	JobIDs        []string
+	CreatedJobIDs []string
 }
 
 type ValidationIssue struct {

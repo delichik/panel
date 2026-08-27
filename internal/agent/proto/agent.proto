@@ -35,6 +35,7 @@ service AgentService {
   rpc DockerVolumes(Empty) returns (DockerVolumesResponse);
   rpc DockerVolumeDelete(DockerVolumeDeleteRequest) returns (OKResponse);
   rpc RuntimeWriteFiles(RuntimeWriteFilesRequest) returns (OKResponse);
+  rpc RuntimeReconcile(RuntimeReconcileRequest) returns (RuntimeReconcileResponse);
   rpc RuntimeReload(RuntimeReloadRequest) returns (RuntimeReloadResponse);
   rpc RuntimeCreateContainer(RuntimeCreateContainerRequest) returns (RuntimeCreateContainerResponse);
   rpc RuntimeStop(RuntimeStopRequest) returns (RuntimeInstanceResponse);
@@ -311,6 +312,44 @@ message RuntimeCheck {
 
 message RuntimeWriteFilesRequest {
   RuntimeSpec spec = 1;
+}
+
+message RuntimeReconcileRequest {
+  string job_id = 1;
+  string execution_id = 2;
+  string application_id = 3;
+  string instance_id = 4;
+  string server_id = 5;
+  string action = 6;
+  int32 desired_generation = 7;
+  string desired_spec_hash = 8;
+  string desired_revision_id = 9;
+  RuntimeSpec spec = 10;
+  bool remove_data = 11;
+  string previous_container_name = 12;
+}
+
+message RuntimeReconcileStep {
+  string name = 1;
+  string status = 2;
+  string detail = 3;
+}
+
+message RuntimeReconcileResponse {
+  string observed_state = 1;
+  string container_name = 2;
+  string container_id = 3;
+  int32 observed_generation = 4;
+  string observed_spec_hash = 5;
+  string observed_image_digest = 6;
+  google.protobuf.Timestamp observed_at = 7;
+  repeated RuntimeReconcileStep steps = 8;
+  string error_code = 9;
+  string error_class = 10;
+  string error_message = 11;
+  string error_detail = 12;
+  bool retryable = 13;
+  int32 retry_after_seconds = 14;
 }
 
 message RuntimeReloadRequest {

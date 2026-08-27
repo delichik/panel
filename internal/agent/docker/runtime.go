@@ -20,8 +20,8 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	goruntime "runtime"
 	"regexp"
+	goruntime "runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -603,12 +603,20 @@ func (r *LocalRuntime) CreateContainer(ctx context.Context, spec appruntime.Spec
 	}
 	id, err := r.client.createContainer(ctx, spec)
 	if err != nil && isDockerNameConflict(err) {
-		// 同名容器冲突：并发部署交错或上次失败残留的容器仍占用名字时，Docker
-		// create 会 409。这里强制删除占用者后重试一次，保证"创建"幂等——否则
-		// 协调器每次触发都失败且无法自愈（调用方删除与创建之间窗口外的残留
-		// 无法用"先删后建"覆盖）。
+		// 同名容器冲突：只有确认占用者是同一应用/实例的托管容器，才允许
+		// 删除后重试。非托管资源或归属不一致时必须把冲突交给 planner，不能
+		// 让一次重试意外删除用户容器。
+		occupantID := conflictingContainerID(err)
+		inspectName := firstNonEmpty(occupantID, spec.ContainerName)
+		occupant, inspectErr := r.client.inspectContainer(ctx, inspectName)
+		if inspectErr != nil {
+			return "", fmt.Errorf("inspect conflicting container %s: %w", inspectName, inspectErr)
+		}
+		if !managedContainerMatches(occupant, spec.ApplicationID, spec.InstanceID) {
+			return "", fmt.Errorf("non-managed container conflict for %s", spec.ContainerName)
+		}
 		r.logContainerConflict(spec.ContainerName, err)
-		if removeErr := r.client.removeContainer(ctx, spec.ContainerName, true); removeErr != nil && !isDockerNotFound(removeErr) {
+		if removeErr := r.client.removeContainer(ctx, firstNonEmpty(occupantID, spec.ContainerName), true); removeErr != nil && !isDockerNotFound(removeErr) {
 			return "", fmt.Errorf("remove conflicting container %s before create: %w", spec.ContainerName, removeErr)
 		}
 		id, err = r.client.createContainer(ctx, spec)
@@ -628,6 +636,153 @@ func (r *LocalRuntime) CreateContainer(ctx context.Context, spec appruntime.Spec
 		return "", err
 	}
 	return id, nil
+}
+
+// Reconcile converges one managed application instance to an immutable
+// request. It is intentionally at-least-once safe: every step re-inspects
+// the named resource and only removes containers carrying the panel managed
+// identity for the same application and instance.
+func (r *LocalRuntime) Reconcile(ctx context.Context, req agentcontract.RuntimeReconcileRequest) (agentcontract.RuntimeReconcileResponse, error) {
+	if r == nil || r.client == nil {
+		return agentcontract.RuntimeReconcileResponse{ErrorCode: "docker_unavailable", ErrorClass: "docker_unavailable", ErrorMessage: "runtime is not configured", Retryable: true}, nil
+	}
+	if req.Action == "stop" || req.Action == "purge" {
+		name := firstNonEmpty(req.PreviousContainerName, containerNameForInstance(req.InstanceID))
+		inspect, inspectErr := r.client.inspectContainer(ctx, name)
+		if inspectErr == nil {
+			if !managedContainerMatches(inspect, req.ApplicationID, req.InstanceID) {
+				return agentcontract.RuntimeReconcileResponse{ErrorCode: "non_managed_conflict", ErrorClass: "non_managed_conflict", ErrorMessage: "container name is owned by a different resource", Retryable: false, Steps: []agentcontract.RuntimeReconcileStep{{Name: req.Action, Status: "failed"}}}, nil
+			}
+		} else if !isDockerNotFound(inspectErr) {
+			return agentcontract.RuntimeReconcileResponse{ErrorCode: "inspect_failed", ErrorClass: "docker_unavailable", ErrorMessage: inspectErr.Error(), Retryable: true, Steps: []agentcontract.RuntimeReconcileStep{{Name: req.Action, Status: "failed"}}}, inspectErr
+		}
+		result, err := r.Stop(ctx, agentcontract.RuntimeStopRequest{ApplicationID: req.ApplicationID, InstanceID: req.InstanceID, ContainerName: req.PreviousContainerName, Purge: req.Action == "purge", RemoveApplicationData: req.RemoveData})
+		if err != nil {
+			return agentcontract.RuntimeReconcileResponse{ErrorCode: "stop_failed", ErrorClass: "runtime", ErrorMessage: err.Error(), Retryable: true, Steps: []agentcontract.RuntimeReconcileStep{{Name: req.Action, Status: "failed"}}}, err
+		}
+		state := appruntime.StatusStopped
+		if req.Action == "purge" {
+			state = appruntime.StatusMissing
+		}
+		return agentcontract.RuntimeReconcileResponse{ObservedState: state, ContainerName: result.ContainerName, ContainerID: result.ContainerID, ObservedAt: result.ObservedAt, Steps: []agentcontract.RuntimeReconcileStep{{Name: req.Action, Status: "succeeded"}}}, nil
+	}
+	if req.Action != "apply" {
+		return agentcontract.RuntimeReconcileResponse{ErrorCode: "invalid_action", ErrorClass: "invalid_spec", ErrorMessage: "unsupported runtime action", Retryable: false}, nil
+	}
+	spec := req.Spec
+	if strings.TrimSpace(spec.ApplicationID) == "" {
+		spec.ApplicationID = req.ApplicationID
+	}
+	if strings.TrimSpace(spec.InstanceID) == "" {
+		spec.InstanceID = req.InstanceID
+	}
+	if strings.TrimSpace(spec.ContainerName) == "" {
+		return agentcontract.RuntimeReconcileResponse{ErrorCode: "invalid_spec", ErrorClass: "invalid_spec", ErrorMessage: "container name is required", Retryable: false}, nil
+	}
+	if strings.TrimSpace(spec.Image) == "" {
+		return agentcontract.RuntimeReconcileResponse{ErrorCode: "invalid_spec", ErrorClass: "invalid_spec", ErrorMessage: "image is required", Retryable: false}, nil
+	}
+	if spec.ApplicationID != req.ApplicationID || spec.InstanceID != req.InstanceID {
+		return agentcontract.RuntimeReconcileResponse{ErrorCode: "invalid_spec_identity", ErrorClass: "invalid_spec", ErrorMessage: "runtime spec identity does not match request", Retryable: false}, nil
+	}
+	steps := []agentcontract.RuntimeReconcileStep{{Name: "write_files", Status: "running"}}
+	if err := r.WriteManagedFiles(ctx, spec); err != nil {
+		steps[0].Status = "failed"
+		return agentcontract.RuntimeReconcileResponse{ErrorCode: "write_files_failed", ErrorClass: "runtime", ErrorMessage: err.Error(), Retryable: true, Steps: steps}, err
+	}
+	steps[0].Status = "succeeded"
+
+	steps = append(steps, agentcontract.RuntimeReconcileStep{Name: "inspect_container", Status: "running"})
+	inspect, inspectErr := r.client.inspectContainer(ctx, spec.ContainerName)
+	if inspectErr == nil {
+		labels := inspect.Config.Labels
+		if !managedContainerMatches(inspect, req.ApplicationID, req.InstanceID) {
+			steps[len(steps)-1].Status = "failed"
+			return agentcontract.RuntimeReconcileResponse{ErrorCode: "non_managed_conflict", ErrorClass: "non_managed_conflict", ErrorMessage: "container name is owned by a different resource", Retryable: false, Steps: steps}, nil
+		}
+		if labels["panel.application.spec.hash"] == req.DesiredSpecHash && labels["panel.application.generation"] == strconv.Itoa(req.DesiredGeneration) && inspect.State.Running {
+			steps[len(steps)-1].Status = "succeeded"
+			steps = append(steps, agentcontract.RuntimeReconcileStep{Name: "reuse_container", Status: "succeeded"})
+			return r.reconcileStatusResponse(ctx, req, spec, steps)
+		}
+		if err := r.client.stopContainer(ctx, spec.ContainerName, 10); err != nil && !isDockerNotFound(err) {
+			steps[len(steps)-1].Status = "failed"
+			return agentcontract.RuntimeReconcileResponse{ErrorCode: "replace_stop_failed", ErrorClass: "runtime", ErrorMessage: err.Error(), Retryable: true, Steps: steps}, err
+		}
+		if err := r.client.removeContainer(ctx, spec.ContainerName, true); err != nil && !isDockerNotFound(err) {
+			steps[len(steps)-1].Status = "failed"
+			return agentcontract.RuntimeReconcileResponse{ErrorCode: "replace_remove_failed", ErrorClass: "runtime", ErrorMessage: err.Error(), Retryable: true, Steps: steps}, err
+		}
+	} else if !isDockerNotFound(inspectErr) {
+		steps[len(steps)-1].Status = "failed"
+		return agentcontract.RuntimeReconcileResponse{ErrorCode: "inspect_failed", ErrorClass: "docker_unavailable", ErrorMessage: inspectErr.Error(), Retryable: true, Steps: steps}, inspectErr
+	}
+	steps[len(steps)-1].Status = "succeeded"
+	steps = append(steps, agentcontract.RuntimeReconcileStep{Name: "ensure_image", Status: "running"})
+	if err := r.client.pullImage(ctx, spec.Image); err != nil {
+		steps[len(steps)-1].Status = "failed"
+		return agentcontract.RuntimeReconcileResponse{ErrorCode: "image_pull_failed", ErrorClass: "registry_unavailable", ErrorMessage: err.Error(), Retryable: true, Steps: steps}, err
+	}
+	steps[len(steps)-1].Status = "succeeded"
+
+	steps = append(steps, agentcontract.RuntimeReconcileStep{Name: "create_container", Status: "running"})
+	containerID, err := r.CreateContainer(ctx, spec)
+	if err != nil {
+		steps[len(steps)-1].Status = "failed"
+		return agentcontract.RuntimeReconcileResponse{ErrorCode: "create_container_failed", ErrorClass: "runtime", ErrorMessage: err.Error(), Retryable: true, Steps: steps}, err
+	}
+	steps[len(steps)-1].Status = "succeeded"
+	steps = append(steps, agentcontract.RuntimeReconcileStep{Name: "start_container", Status: "running"})
+	if err := r.client.startContainer(ctx, containerID); err != nil {
+		steps[len(steps)-1].Status = "failed"
+		return agentcontract.RuntimeReconcileResponse{ErrorCode: "start_container_failed", ErrorClass: "container_start_failed", ErrorMessage: err.Error(), Retryable: true, Steps: steps}, err
+	}
+	steps[len(steps)-1].Status = "succeeded"
+	steps = append(steps, agentcontract.RuntimeReconcileStep{Name: "verify_running", Status: "running"})
+	response, err := r.reconcileStatusResponse(ctx, req, spec, steps)
+	if err != nil {
+		return response, err
+	}
+	if response.ObservedState != appruntime.StatusRunning {
+		response.ErrorCode = "container_not_running"
+		response.ErrorClass = "container_start_failed"
+		response.ErrorMessage = "container did not reach running state"
+		response.Retryable = true
+		return response, nil
+	}
+	if response.ContainerID == "" {
+		response.ContainerID = containerID
+	}
+	return response, nil
+}
+
+func (r *LocalRuntime) reconcileStatusResponse(ctx context.Context, req agentcontract.RuntimeReconcileRequest, spec appruntime.Spec, steps []agentcontract.RuntimeReconcileStep) (agentcontract.RuntimeReconcileResponse, error) {
+	status, err := r.Status(ctx, req.InstanceID, spec.ContainerName, req.ServerID)
+	if err != nil {
+		return agentcontract.RuntimeReconcileResponse{ErrorCode: "verification_failed", ErrorClass: "runtime", ErrorMessage: err.Error(), Retryable: true, Steps: steps}, err
+	}
+	if len(steps) > 0 {
+		steps[len(steps)-1].Status = "succeeded"
+	}
+	return agentcontract.RuntimeReconcileResponse{
+		ObservedState: status.Status, ContainerName: status.ContainerName, ContainerID: status.ContainerID,
+		ObservedGeneration: req.DesiredGeneration, ObservedSpecHash: req.DesiredSpecHash,
+		ObservedImageDigest: imageDigestFromReference(status.Image), ObservedAt: status.ObservedAt, Steps: steps,
+	}, nil
+}
+
+func imageDigestFromReference(reference string) string {
+	if index := strings.Index(reference, "@sha256:"); index >= 0 {
+		return reference[index+1:]
+	}
+	return ""
+}
+
+func managedContainerMatches(inspect dockerInspectResponse, applicationID, instanceID string) bool {
+	labels := inspect.Config.Labels
+	return labels["panel.application.managed"] == "true" &&
+		labels["panel.application.id"] == applicationID &&
+		labels["panel.application.instance.id"] == instanceID
 }
 
 // logContainerConflict 记录创建容器时的同名冲突详情：占用者是谁、是否面板
@@ -2744,7 +2899,7 @@ func (e dockerNotFound) Error() string { return "docker container not found: " +
 
 // conflictOccupantIDPattern 匹配 Docker create 冲突消息中的占用容器 ID，
 // 形如 `The container name "/x" is already in use by container "abc123"`。
-var conflictOccupantIDPattern = regexp.MustCompile(`already in use by container "([A-Za-z0-9]+)"`)
+var conflictOccupantIDPattern = regexp.MustCompile(`already in use by container "([A-Za-z0-9][A-Za-z0-9_.-]*)"`)
 
 func isDockerNotFound(err error) bool {
 	var nf dockerNotFound

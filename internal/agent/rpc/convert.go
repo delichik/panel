@@ -496,6 +496,48 @@ func GoFail2BanStatus(in *agentpb.Fail2BanStatusResponse) agentcontract.Fail2Ban
 	return goFail2BanStatus(in)
 }
 func PBSpec(in appruntime.Spec) *agentpb.RuntimeSpec { return pbSpec(in) }
+func PBRuntimeReconcileRequest(in agentcontract.RuntimeReconcileRequest) *agentpb.RuntimeReconcileRequest {
+	return &agentpb.RuntimeReconcileRequest{
+		JobId: in.JobID, ExecutionId: in.ExecutionID, ApplicationId: in.ApplicationID, InstanceId: in.InstanceID,
+		ServerId: in.ServerID, Action: in.Action, DesiredGeneration: int32(in.DesiredGeneration), DesiredSpecHash: in.DesiredSpecHash,
+		DesiredRevisionId: in.DesiredRevisionID, Spec: pbSpec(in.Spec), RemoveData: in.RemoveData, PreviousContainerName: in.PreviousContainerName,
+	}
+}
+
+func GoRuntimeReconcileResponse(in *agentpb.RuntimeReconcileResponse) agentcontract.RuntimeReconcileResponse {
+	if in == nil {
+		return agentcontract.RuntimeReconcileResponse{}
+	}
+	out := agentcontract.RuntimeReconcileResponse{
+		ObservedState: in.ObservedState, ContainerName: in.ContainerName, ContainerID: in.ContainerId,
+		ObservedGeneration: int(in.ObservedGeneration), ObservedSpecHash: in.ObservedSpecHash, ObservedImageDigest: in.ObservedImageDigest,
+		ObservedAt: goTime(in.ObservedAt), ErrorCode: in.ErrorCode, ErrorClass: in.ErrorClass, ErrorMessage: in.ErrorMessage,
+		ErrorDetail: in.ErrorDetail, Retryable: in.Retryable, RetryAfter: time.Duration(in.RetryAfterSeconds) * time.Second,
+	}
+	if len(in.Steps) > 0 {
+		out.Steps = make([]agentcontract.RuntimeReconcileStep, 0, len(in.Steps))
+		for _, step := range in.Steps {
+			if step == nil {
+				continue
+			}
+			out.Steps = append(out.Steps, agentcontract.RuntimeReconcileStep{Name: step.Name, Status: step.Status, Detail: step.Detail})
+		}
+	}
+	return out
+}
+
+func PBRuntimeReconcileResponse(in agentcontract.RuntimeReconcileResponse) *agentpb.RuntimeReconcileResponse {
+	steps := make([]*agentpb.RuntimeReconcileStep, 0, len(in.Steps))
+	for _, step := range in.Steps {
+		steps = append(steps, &agentpb.RuntimeReconcileStep{Name: step.Name, Status: step.Status, Detail: step.Detail})
+	}
+	return &agentpb.RuntimeReconcileResponse{
+		ObservedState: in.ObservedState, ContainerName: in.ContainerName, ContainerId: in.ContainerID,
+		ObservedGeneration: int32(in.ObservedGeneration), ObservedSpecHash: in.ObservedSpecHash, ObservedImageDigest: in.ObservedImageDigest,
+		ObservedAt: pbTime(in.ObservedAt), Steps: steps, ErrorCode: in.ErrorCode, ErrorClass: in.ErrorClass,
+		ErrorMessage: in.ErrorMessage, ErrorDetail: in.ErrorDetail, Retryable: in.Retryable, RetryAfterSeconds: int32(in.RetryAfter / time.Second),
+	}
+}
 func GoRuntimeInstance(in *agentpb.RuntimeInstanceResponse) agentcontract.RuntimeInstanceResponse {
 	return goRuntimeInstance(in)
 }

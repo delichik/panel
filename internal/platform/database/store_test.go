@@ -84,6 +84,7 @@ func TestOpenCreatesDirectoryForFileDSN(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = "file:" + filepath.ToSlash(filepath.Join(dbDir, "app.db")) + "?cache=shared"
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	store, err := Open(cfg)
@@ -101,6 +102,7 @@ func TestOpenCreatesSeparateSchemas(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	store, err := Open(cfg)
@@ -129,6 +131,7 @@ func TestOpenUsesSmallSQLiteConnectionPool(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	store, err := Open(cfg)
@@ -154,6 +157,7 @@ func TestMigrateAddsLoadColumnsToLegacyMetricsSchema(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 
@@ -199,6 +203,7 @@ func TestMigrateAddsConstrainedFacilityContentModeToLegacyRows(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	db, err := sql.Open("sqlite", sqliteDSN(cfg.AppDatabase))
@@ -279,6 +284,7 @@ func TestFreshSchemaUsesApplicationTables(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	store, err := Open(cfg)
@@ -287,7 +293,7 @@ func TestFreshSchemaUsesApplicationTables(t *testing.T) {
 	}
 	defer store.Close()
 
-	for _, table := range []string{"applications", "application_files", "auth_state", "overview_card_configurations", "image_updates", "image_refreshes", "application_reconcile_states"} {
+	for _, table := range []string{"applications", "application_files", "auth_state", "overview_card_configurations", "image_updates", "image_refreshes", "application_reconcile_states", "application_revisions", "jobs"} {
 		if !tableExists(t, store.AppDB(), table) {
 			t.Fatalf("expected table %q to exist", table)
 		}
@@ -298,11 +304,11 @@ func TestFreshSchemaUsesApplicationTables(t *testing.T) {
 		}
 	}
 	for _, table := range []string{"application_lifecycle_operations", "application_lifecycle_targets", "application_target_stages"} {
-		if !tableExists(t, store.CoordDB(), table) {
-			t.Fatalf("expected coordination table %q to exist", table)
+		if tableExists(t, store.CoordDB(), table) {
+			t.Fatalf("legacy coordination table %q must be dropped", table)
 		}
 	}
-	for _, table := range []string{"application_revisions", "application_lifecycle_operations", "application_lifecycle_targets", "application_target_stages", "key_asset_exports"} {
+	for _, table := range []string{"application_lifecycle_operations", "application_lifecycle_targets", "application_target_stages", "key_asset_exports"} {
 		if tableExists(t, store.AppDB(), table) {
 			t.Fatalf("fresh app schema must not contain log/coordination table %q", table)
 		}
@@ -363,6 +369,7 @@ func TestMigrateAllowsCertificatePrefixesScope(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 
@@ -517,6 +524,7 @@ func TestMigrateAddsFail2BanManagedColumn(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 
@@ -547,93 +555,6 @@ func TestMigrateAddsFail2BanManagedColumn(t *testing.T) {
 	}
 }
 
-func TestMigrateAddsLifecycleTargetStateBeforeStateIndexes(t *testing.T) {
-	dir := t.TempDir()
-	cfg := config.Default()
-	cfg.DataRoot = filepath.Join(dir, "data")
-	cfg.AppDatabase = filepath.Join(dir, "app.db")
-	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
-	cfg.LogDatabase = filepath.Join(dir, "log.db")
-	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
-
-	db, err := sql.Open("sqlite", sqliteDSN(cfg.CoordinationDatabase))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`CREATE TABLE application_lifecycle_operations (
-		id TEXT PRIMARY KEY,
-		application_id TEXT NOT NULL,
-		type TEXT NOT NULL,
-		status TEXT NOT NULL DEFAULT 'pending',
-		task_id TEXT NOT NULL DEFAULT '',
-		generation INTEGER NOT NULL DEFAULT 0,
-		spec_hash TEXT NOT NULL DEFAULT '',
-		trigger TEXT NOT NULL DEFAULT '',
-		error TEXT NOT NULL DEFAULT '',
-		created_at TEXT NOT NULL,
-		started_at TEXT,
-		finished_at TEXT,
-		updated_at TEXT NOT NULL
-	)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`CREATE TABLE application_lifecycle_targets (
-		id TEXT PRIMARY KEY,
-		operation_id TEXT NOT NULL,
-		application_id TEXT NOT NULL,
-		server_id TEXT NOT NULL,
-		status TEXT NOT NULL DEFAULT 'pending',
-		desired_state TEXT NOT NULL DEFAULT 'running',
-		instance_id TEXT NOT NULL DEFAULT '',
-		container_name TEXT NOT NULL DEFAULT '',
-		container_id TEXT NOT NULL DEFAULT '',
-		stage TEXT NOT NULL DEFAULT '',
-		error TEXT NOT NULL DEFAULT '',
-		created_at TEXT NOT NULL,
-		started_at TEXT,
-		finished_at TEXT,
-		updated_at TEXT NOT NULL,
-		UNIQUE(operation_id, server_id)
-	)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`INSERT INTO application_lifecycle_operations(id,application_id,type,status,task_id,generation,spec_hash,trigger,error,created_at,started_at,finished_at,updated_at)
-		VALUES('op_legacy','app_legacy','deploy','pending','',3,'hash_legacy','system','','now',NULL,NULL,'now')`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`INSERT INTO application_lifecycle_targets(id,operation_id,application_id,server_id,status,desired_state,instance_id,container_name,container_id,stage,error,created_at,started_at,finished_at,updated_at)
-		VALUES('target_legacy','op_legacy','app_legacy','srv_legacy','pending','running','','','','','', 'now',NULL,NULL,'now')`); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	store, err := Open(cfg)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer store.Close()
-
-	columns := tableColumns(t, store.CoordDB(), "application_lifecycle_targets")
-	for _, required := range []string{"state", "target_key", "next_run_at", "lease_owner", "claimed_task_id"} {
-		if !columns[required] {
-			t.Fatalf("migrated lifecycle target schema is missing %q", required)
-		}
-	}
-	for _, index := range []string{"idx_application_lifecycle_targets_state_due", "idx_application_lifecycle_targets_app_server"} {
-		if !indexExists(t, store.CoordDB(), index) {
-			t.Fatalf("expected migrated lifecycle target index %q", index)
-		}
-	}
-	var copied int
-	if err := store.CoordDB().QueryRow(`SELECT COUNT(*) FROM application_lifecycle_targets`).Scan(&copied); err != nil {
-		t.Fatal(err)
-	}
-	if copied != 1 {
-		t.Fatalf("copied lifecycle rows = %d, want 1", copied)
-	}
-}
 
 func TestMigrateNormalizesLegacyNullDefaults(t *testing.T) {
 	dir := t.TempDir()
@@ -641,6 +562,7 @@ func TestMigrateNormalizesLegacyNullDefaults(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 
@@ -728,6 +650,7 @@ func TestMigrateRebuildsLegacyFacilityRoutesAsDomains(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 
@@ -778,6 +701,7 @@ func TestMigratePreservesPasswordlessSudoAsPrivilegeMode(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 
@@ -815,6 +739,7 @@ func TestMigrateRecognizesRootSSHUserAsPrivilegeMode(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 
@@ -852,6 +777,7 @@ func TestMigrateDropsLegacyTaskHistory(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 
@@ -976,6 +902,7 @@ func TestMigrateMovesReverseProxyRoutesToUnifiedTable(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 

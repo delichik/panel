@@ -89,166 +89,6 @@ func fromDomainApplication(app Application) *models.Application {
 	}
 }
 
-func toDomainLifecycleOperation(m models.ApplicationLifecycleOperation) LifecycleOperation {
-	return LifecycleOperation{
-		ID:            m.ID,
-		ApplicationID: m.ApplicationID,
-		Type:          m.Type,
-		Status:        m.Status,
-		TaskID:        m.TaskID,
-		Generation:    m.Generation,
-		SpecHash:      m.SpecHash,
-		Trigger:       m.Trigger,
-		Error:         m.Error,
-		CreatedAt:     m.CreatedAt,
-		StartedAt:     m.StartedAt,
-		FinishedAt:    m.FinishedAt,
-		UpdatedAt:     m.UpdatedAt,
-	}
-}
-
-func fromDomainLifecycleOperation(op LifecycleOperation) *models.ApplicationLifecycleOperation {
-	return &models.ApplicationLifecycleOperation{
-		ID:            op.ID,
-		ApplicationID: op.ApplicationID,
-		Type:          op.Type,
-		Status:        op.Status,
-		TaskID:        op.TaskID,
-		Generation:    op.Generation,
-		SpecHash:      op.SpecHash,
-		Trigger:       op.Trigger,
-		Error:         op.Error,
-		CreatedAt:     op.CreatedAt,
-		StartedAt:     op.StartedAt,
-		FinishedAt:    op.FinishedAt,
-		UpdatedAt:     op.UpdatedAt,
-	}
-}
-
-// lifecycleTargetRow 使用字符串承载 next_run_at/lease_expires_at/started_at/
-// finished_at：存量数据以 ” 作为默认值，models 的 time.Time 无法解析空串，
-// 原 scanLifecycleTarget 亦以可空字符串解析（”/NULL 均视为 nil）。
-type lifecycleTargetRow struct {
-	ID                 string    `orm:"column:id"`
-	OperationID        string    `orm:"column:operation_id"`
-	ApplicationID      string    `orm:"column:application_id"`
-	ServerID           string    `orm:"column:server_id"`
-	Action             string    `orm:"column:action"`
-	State              string    `orm:"column:state"`
-	Status             string    `orm:"column:status"`
-	TargetKey          string    `orm:"column:target_key"`
-	DesiredState       string    `orm:"column:desired_state"`
-	DesiredGeneration  int       `orm:"column:desired_generation"`
-	DesiredSpecHash    string    `orm:"column:desired_spec_hash"`
-	Priority           int       `orm:"column:priority"`
-	Attempt            int       `orm:"column:attempt"`
-	NextRunAt          string    `orm:"column:next_run_at"`
-	LeaseOwner         string    `orm:"column:lease_owner"`
-	LeaseExpiresAt     string    `orm:"column:lease_expires_at"`
-	ClaimedTaskID      string    `orm:"column:claimed_task_id"`
-	InstanceID         string    `orm:"column:instance_id"`
-	ContainerName      string    `orm:"column:container_name"`
-	ContainerID        string    `orm:"column:container_id"`
-	Stage              string    `orm:"column:stage"`
-	Error              string    `orm:"column:error"`
-	ErrorCode          string    `orm:"column:error_code"`
-	ErrorMessage       string    `orm:"column:error_message"`
-	ErrorDetail        string    `orm:"column:error_detail"`
-	ObservedState      string    `orm:"column:observed_state"`
-	ObservedExitCode   string    `orm:"column:observed_exit_code"`
-	ObservedError      string    `orm:"column:observed_error"`
-	ObservedGeneration int       `orm:"column:observed_generation"`
-	ObservedSpecHash   string    `orm:"column:observed_spec_hash"`
-	ObservedImage      string    `orm:"column:observed_image"`
-	ObservedAt         *string   `orm:"column:observed_at"`
-	CreatedAt          time.Time `orm:"column:created_at"`
-	StartedAt          *string   `orm:"column:started_at"`
-	FinishedAt         *string   `orm:"column:finished_at"`
-	UpdatedAt          time.Time `orm:"column:updated_at"`
-}
-
-func toDomainLifecycleTarget(r lifecycleTargetRow) LifecycleTarget {
-	return LifecycleTarget{
-		ID:                 r.ID,
-		OperationID:        r.OperationID,
-		ApplicationID:      r.ApplicationID,
-		ServerID:           r.ServerID,
-		Action:             r.Action,
-		State:              r.State,
-		Status:             r.Status,
-		TargetKey:          r.TargetKey,
-		DesiredState:       r.DesiredState,
-		DesiredGeneration:  r.DesiredGeneration,
-		DesiredSpecHash:    r.DesiredSpecHash,
-		Priority:           r.Priority,
-		Attempt:            r.Attempt,
-		NextRunAt:          parseOptionalStringTime(r.NextRunAt),
-		LeaseOwner:         r.LeaseOwner,
-		LeaseExpiresAt:     parseOptionalStringTime(r.LeaseExpiresAt),
-		ClaimedTaskID:      r.ClaimedTaskID,
-		InstanceID:         r.InstanceID,
-		ContainerName:      r.ContainerName,
-		ContainerID:        r.ContainerID,
-		Stage:              r.Stage,
-		Error:              r.Error,
-		ErrorCode:          r.ErrorCode,
-		ErrorMessage:       r.ErrorMessage,
-		ErrorDetail:        r.ErrorDetail,
-		ObservedState:      r.ObservedState,
-		ObservedExitCode:   r.ObservedExitCode,
-		ObservedError:      r.ObservedError,
-		ObservedGeneration: r.ObservedGeneration,
-		ObservedSpecHash:   r.ObservedSpecHash,
-		ObservedImage:      r.ObservedImage,
-		ObservedAt:         parseOptionalStringTimePtr(r.ObservedAt),
-		CreatedAt:          r.CreatedAt,
-		StartedAt:          parseOptionalStringTimePtr(r.StartedAt),
-		FinishedAt:         parseOptionalStringTimePtr(r.FinishedAt),
-		UpdatedAt:          r.UpdatedAt,
-	}
-}
-
-func fromDomainLifecycleTarget(t LifecycleTarget) lifecycleTargetRow {
-	return lifecycleTargetRow{
-		ID:                 t.ID,
-		OperationID:        t.OperationID,
-		ApplicationID:      t.ApplicationID,
-		ServerID:           t.ServerID,
-		Action:             t.Action,
-		State:              t.State,
-		Status:             t.Status,
-		TargetKey:          t.TargetKey,
-		DesiredState:       t.DesiredState,
-		DesiredGeneration:  t.DesiredGeneration,
-		DesiredSpecHash:    t.DesiredSpecHash,
-		Priority:           t.Priority,
-		Attempt:            t.Attempt,
-		NextRunAt:          optionalTimeString(t.NextRunAt),
-		LeaseOwner:         t.LeaseOwner,
-		LeaseExpiresAt:     optionalTimeString(t.LeaseExpiresAt),
-		ClaimedTaskID:      t.ClaimedTaskID,
-		InstanceID:         t.InstanceID,
-		ContainerName:      t.ContainerName,
-		ContainerID:        t.ContainerID,
-		Stage:              t.Stage,
-		Error:              t.Error,
-		ErrorCode:          t.ErrorCode,
-		ErrorMessage:       t.ErrorMessage,
-		ErrorDetail:        t.ErrorDetail,
-		ObservedState:      t.ObservedState,
-		ObservedExitCode:   t.ObservedExitCode,
-		ObservedError:      t.ObservedError,
-		ObservedGeneration: t.ObservedGeneration,
-		ObservedSpecHash:   t.ObservedSpecHash,
-		ObservedImage:      t.ObservedImage,
-		ObservedAt:         optionalTimeStringPtr(t.ObservedAt),
-		CreatedAt:          t.CreatedAt,
-		StartedAt:          optionalTimeStringPtr(t.StartedAt),
-		FinishedAt:         optionalTimeStringPtr(t.FinishedAt),
-		UpdatedAt:          t.UpdatedAt,
-	}
-}
-
 func parseOptionalStringTime(value string) *time.Time {
 	if strings.TrimSpace(value) == "" {
 		return nil
@@ -322,15 +162,25 @@ func toRuntimeInstance(m models.ApplicationInstance) appruntime.Instance {
 	instance.ID = m.ID
 	instance.ApplicationID = m.ApplicationID
 	instance.ServerID = m.ServerID
-	instance.ContainerName = m.ContainerName
-	instance.ContainerID = m.ContainerID
+	instance.ContainerName = firstNonEmpty(m.ObservedContainerName, m.ContainerName)
+	instance.ContainerID = firstNonEmpty(m.ObservedContainerID, m.ContainerID)
 	instance.DesiredState = m.DesiredState
 	instance.Status = m.Status
+	if strings.TrimSpace(m.ObservedSource) != "" && strings.TrimSpace(m.ObservedState) != "" {
+		instance.Status = m.ObservedState
+	}
 	instance.LastDeployedGeneration = m.LastDeployedGeneration
-	instance.LastError = m.LastError
+	if m.ObservedGeneration > 0 {
+		instance.LastDeployedGeneration = m.ObservedGeneration
+	}
+	instance.LastError = firstNonEmpty(m.LastErrorMessage, m.LastError)
 	instance.CreatedAt = m.CreatedAt
 	instance.UpdatedAt = m.UpdatedAt
-	if raw, err := json.Marshal(m.RuntimeSpecJSON); err == nil {
+	runtimeSpecJSON := m.RuntimeSpecJSON
+	if len(m.DesiredSpecJSON) > 0 {
+		runtimeSpecJSON = m.DesiredSpecJSON
+	}
+	if raw, err := json.Marshal(runtimeSpecJSON); err == nil {
 		_ = json.Unmarshal(raw, &instance.RuntimeSpec)
 	}
 	return instance

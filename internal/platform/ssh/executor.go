@@ -166,7 +166,7 @@ func (e *SSHExecutor) TrustHostKey(ctx context.Context, target Target) error {
 	c, _, _, err := ssh.NewClientConn(conn, address, cfg)
 	if err != nil {
 		_ = conn.Close()
-		return panelerr.BadGateway("ssh_auth_failed", "SSH authentication failed")
+		return classifySSHHandshakeError(err)
 	}
 	_ = c.Close()
 	if presented == nil {
@@ -273,14 +273,7 @@ func (e *SSHExecutor) dial(ctx context.Context, target Target) (*ssh.Client, err
 	c, chans, reqs, err := ssh.NewClientConn(conn, address, cfg)
 	if err != nil {
 		_ = conn.Close()
-		switch {
-		case errors.Is(err, ErrHostKeyMismatch):
-			return nil, panelerr.BadGateway("ssh_host_key_mismatch", sshHandshakeMessage(err))
-		case errors.Is(err, ErrHostKeyVerification):
-			return nil, panelerr.BadGateway("ssh_host_key_verification_failed", sshHandshakeMessage(err))
-		default:
-			return nil, panelerr.BadGateway("ssh_auth_failed", "SSH authentication failed")
-		}
+		return nil, classifySSHHandshakeError(err)
 	}
 	return ssh.NewClient(c, chans, reqs), nil
 }
@@ -291,6 +284,25 @@ func (e *SSHExecutor) dial(ctx context.Context, target Target) (*ssh.Client, err
 // HostKeyMismatch flag unchanged.
 func sshHandshakeMessage(err error) string {
 	return strings.TrimPrefix(err.Error(), "ssh: handshake failed: ")
+}
+
+// classifySSHHandshakeError keeps protocol-level transport failures distinct from
+// failed credentials. A server that accepts TCP but drops the connection during
+// the SSH banner/key exchange is not an authentication failure.
+func classifySSHHandshakeError(err error) *panelerr.Error {
+	switch {
+	case errors.Is(err, ErrHostKeyMismatch):
+		return panelerr.BadGateway("ssh_host_key_mismatch", sshHandshakeMessage(err))
+	case errors.Is(err, ErrHostKeyVerification):
+		return panelerr.BadGateway("ssh_host_key_verification_failed", sshHandshakeMessage(err))
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF),
+		errors.Is(err, net.ErrClosed), errors.Is(err, os.ErrDeadlineExceeded),
+		errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded),
+		strings.Contains(strings.ToLower(err.Error()), "connection reset"):
+		return panelerr.BadGateway("ssh_connection_failed", "SSH connection failed")
+	default:
+		return panelerr.BadGateway("ssh_auth_failed", "SSH authentication failed")
+	}
 }
 
 func (e *SSHExecutor) hostKeyCallback(identity string) ssh.HostKeyCallback {

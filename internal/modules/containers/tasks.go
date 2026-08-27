@@ -7,7 +7,6 @@ import (
 	"time"
 
 	agentcontract "panel/internal/agent/contract"
-	"panel/internal/modules/applications"
 	"panel/internal/modules/tasks"
 	panelerr "panel/internal/platform/errors"
 	id "panel/internal/platform/identity"
@@ -41,6 +40,10 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 				Interval:      5 * time.Second,
 				CollectInputs: s.CollectApplicationReconcileInputs,
 			},
+		},
+		{
+			Type:    TaskApplicationReconcileBatch,
+			Execute: func(tasks.TaskContext) error { return nil },
 		},
 		{
 			Type:              TaskImageUpgradeMany,
@@ -109,7 +112,7 @@ func (s *Service) CollectApplicationReconcileInputs(ctx context.Context, trigger
 	}
 	triggerType := firstNonEmpty(trigger.Type, "scheduler")
 	return tasks.CreateBatchInput{
-		Type:          applications.TaskTypeTargetBatch,
+		Type:          TaskApplicationReconcileBatch,
 		TriggerType:   triggerType,
 		Summary:       "Monitoring application containers",
 		ExecutionMode: tasks.ExecutionModeSerial,

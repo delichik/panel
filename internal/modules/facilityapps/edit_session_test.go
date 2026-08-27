@@ -973,13 +973,14 @@ func newFacilityEditTestService(t *testing.T) (*Service, *storage.Store, func())
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := NewService(store.AppDB(), nil, facilityTestServers{items: map[string]server.Server{}}, nil, WithDataRoot(cfg.DataRoot), WithCoordDB(store.CoordDB()))
+	svc := NewService(store.AppDB(), nil, facilityTestServers{items: map[string]server.Server{}}, nil, WithDataRoot(cfg.DataRoot))
 	return svc, store, func() { _ = store.Close() }
 }
 

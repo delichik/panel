@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"panel/internal/modules/applications"
 	appruntime "panel/internal/modules/applications/runtime"
@@ -257,6 +256,7 @@ func TestRuntimeSpecForServerUsesApplicationSpecHash(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
@@ -600,33 +600,6 @@ func TestGetReverseProxyExposesReconcileStopped(t *testing.T) {
 	}
 }
 
-func TestGetReverseProxyReadsLifecycleFromCoordDB(t *testing.T) {
-	svc, store, closeStore := newFacilityEditTestService(t)
-	defer closeStore()
-	ctx := context.Background()
-	now := formatTime(time.Now().UTC())
-	if _, err := store.CoordDB().ExecContext(ctx, `INSERT INTO application_lifecycle_operations(id,application_id,type,status,task_id,generation,spec_hash,trigger,error,created_at,started_at,finished_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		"alop-1", proxyApplicationID, applications.LifecycleTypeDeploy, applications.LifecycleStatusDeploying, "task-1", 1, "hash-1", "facility_app", "", now, now, nil, now); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.CoordDB().ExecContext(ctx, `INSERT INTO application_lifecycle_targets(id,operation_id,application_id,server_id,action,state,status,target_key,desired_state,desired_generation,desired_spec_hash,priority,attempt,next_run_at,lease_owner,lease_expires_at,claimed_task_id,instance_id,container_name,container_id,stage,error,error_code,error_message,error_detail,created_at,started_at,finished_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		"alop-1-srv-a", "alop-1", proxyApplicationID, "srv-a", applications.LifecycleTargetActionApply, applications.LifecycleTargetStatePlanned, applications.LifecycleTargetStatusPending, lifecycleTargetKey(proxyApplicationID, "srv-a"), appruntime.DesiredRunning, 1, "hash-1", 10, 0, "", "", "", "", "facility-reverse-proxy-srv-a", proxyContainerName, "", "", "", "", "", "", now, nil, nil, now); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := svc.GetReverseProxy(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Operation == nil || cfg.Operation.ID != "alop-1" {
-		t.Fatalf("operation = %#v, want alop-1 from CoordDB", cfg.Operation)
-	}
-	if len(cfg.Operation.Targets) != 1 || cfg.Operation.Targets[0].ID != "alop-1-srv-a" || cfg.Operation.Targets[0].ApplicationID != proxyApplicationID {
-		t.Fatalf("targets = %#v", cfg.Operation.Targets)
-	}
-}
-
 type facilityTestApplicationRoutesProvider struct {
 	configs []applications.ApplicationReverseProxyConfig
 }
@@ -662,6 +635,7 @@ func TestEnsureReverseProxyApplicationGenerationBumpsOnApplicationRouteChange(t 
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	store, err := storage.Open(cfg)
 	if err != nil {

@@ -262,6 +262,13 @@ func (c *GRPCClient) RuntimeWriteFiles(ctx context.Context, endpoint string, req
 	return err
 }
 
+func (c *GRPCClient) RuntimeReconcile(ctx context.Context, endpoint string, req agentcontract.RuntimeReconcileRequest) (agentcontract.RuntimeReconcileResponse, error) {
+	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.RuntimeReconcileResponse, error) {
+		return client.RuntimeReconcile(ctx, agentrpc.PBRuntimeReconcileRequest(req))
+	})
+	return agentrpc.GoRuntimeReconcileResponse(out), err
+}
+
 func (c *GRPCClient) RuntimeReload(ctx context.Context, endpoint string, req agentcontract.RuntimeReloadRequest) (agentcontract.RuntimeReloadResponse, error) {
 	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.RuntimeReloadResponse, error) {
 		return client.RuntimeReload(ctx, &agentpb.RuntimeReloadRequest{

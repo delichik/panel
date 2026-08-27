@@ -43,6 +43,13 @@ func (s *Store) Migrate(ctx context.Context) error {
 			return fmt.Errorf("auto migrate schema: %w", err)
 		}
 	}
+	// application_revisions used to be written to LogDB. Copy the immutable
+	// snapshots forward before new planners start creating AppDB jobs. The
+	// legacy table remains readable for older diagnostics, but it is no longer
+	// part of the control-plane write path.
+	if err := s.migrateApplicationRevisionsToAppDB(ctx); err != nil {
+		return fmt.Errorf("migrate application revisions: %w", err)
+	}
 	// 3. Cheap idempotent normalization that must re-run on every start so
 	//    rows inserted between restarts stay normalized.
 	if err := normalizeAppDefaultsOn(ctx, s.appDB); err != nil {
@@ -169,12 +176,17 @@ func logMigrationSteps() []orm.Step {
 }
 
 // coordMigrationSteps are the one-time data migrations for the coordination
-// database. The lifecycle target normalization runs here because the
-// lifecycle tables now live in the coordination database.
+// database. The legacy lifecycle tables are dropped here; the application
+// deployment control plane now lives entirely in AppDB (jobs/instances).
 func coordMigrationSteps() []orm.Step {
 	return []orm.Step{
-		{ID: "legacy_migrate_application_lifecycle_targets", Run: func(ctx context.Context, tx *sql.Tx) error {
-			return migrateApplicationLifecycleTargetsOn(ctx, tx)
+		{ID: "drop_legacy_lifecycle_tables", Run: func(ctx context.Context, tx *sql.Tx) error {
+			for _, table := range []string{"application_target_stages", "application_lifecycle_targets", "application_lifecycle_operations"} {
+				if _, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS `+table); err != nil {
+					return err
+				}
+			}
+			return nil
 		}},
 	}
 }
@@ -310,6 +322,28 @@ func normalizeAppDefaultsOn(ctx context.Context, q migrationExecutor) error {
 			last_error=COALESCE(last_error, ''),
 			created_at=COALESCE(NULLIF(created_at, ''), ` + nowExpr + `),
 			updated_at=COALESCE(NULLIF(updated_at, ''), NULLIF(created_at, ''), ` + nowExpr + `)`,
+		`UPDATE application_instances SET
+			desired_state=CASE WHEN desired_state IN ('running','stopped','purged') THEN desired_state ELSE 'running' END,
+			desired_generation=CASE WHEN desired_generation > 0 THEN desired_generation ELSE COALESCE(last_deployed_generation, 0) END,
+			desired_spec_hash=COALESCE(NULLIF(desired_spec_hash, ''), json_extract(runtime_spec_json, '$.specHash'), ''),
+			desired_spec_json=CASE WHEN trim(COALESCE(desired_spec_json, '')) IN ('', 'null') THEN COALESCE(NULLIF(runtime_spec_json, ''), '{}') ELSE desired_spec_json END,
+			observed_state=CASE
+				WHEN observed_state IN ('running','stopped','missing','failed','unknown') THEN observed_state
+				WHEN status IN ('running','stopped','missing','failed','unknown') THEN status
+				ELSE 'unknown' END,
+			observed_container_name=COALESCE(NULLIF(observed_container_name, ''), container_name, ''),
+			observed_container_id=COALESCE(NULLIF(observed_container_id, ''), container_id, ''),
+			observed_generation=CASE WHEN observed_generation > 0 THEN observed_generation ELSE COALESCE(last_deployed_generation, 0) END,
+			observed_spec_hash=COALESCE(NULLIF(observed_spec_hash, ''), desired_spec_hash, ''),
+			observed_source=COALESCE(NULLIF(observed_source, ''), 'legacy'),
+			observed_sequence=COALESCE(observed_sequence, 0),
+			last_reconcile_job_id=COALESCE(last_reconcile_job_id, ''),
+			last_error_code=COALESCE(last_error_code, ''),
+			last_error_class=COALESCE(last_error_class, ''),
+			last_error_message=COALESCE(last_error_message, ''),
+			last_error_detail=COALESCE(last_error_detail, ''),
+			last_error=COALESCE(last_error, ''),
+			updated_at=COALESCE(NULLIF(updated_at, ''), ` + nowExpr + `)`,
 	}
 	for _, stmt := range statements {
 		if _, err := q.ExecContext(ctx, stmt); err != nil {
@@ -319,99 +353,36 @@ func normalizeAppDefaultsOn(ctx context.Context, q migrationExecutor) error {
 	return nil
 }
 
-func migrateApplicationLifecycleTargetsOn(ctx context.Context, q migrationExecutor) error {
-	if err := ensureColumnsOn(ctx, q, "application_lifecycle_targets", map[string]string{
-		"action":             "TEXT NOT NULL DEFAULT 'apply'",
-		"state":              "TEXT NOT NULL DEFAULT 'planned'",
-		"target_key":         "TEXT NOT NULL DEFAULT ''",
-		"desired_generation": "INTEGER NOT NULL DEFAULT 0",
-		"desired_spec_hash":  "TEXT NOT NULL DEFAULT ''",
-		"priority":           "INTEGER NOT NULL DEFAULT 0",
-		"attempt":            "INTEGER NOT NULL DEFAULT 0",
-		"next_run_at":        "TEXT NOT NULL DEFAULT ''",
-		"lease_owner":        "TEXT NOT NULL DEFAULT ''",
-		"lease_expires_at":   "TEXT NOT NULL DEFAULT ''",
-		"claimed_task_id":    "TEXT NOT NULL DEFAULT ''",
-		"error_code":         "TEXT NOT NULL DEFAULT ''",
-		"error_message":      "TEXT NOT NULL DEFAULT ''",
-		"error_detail":       "TEXT NOT NULL DEFAULT ''",
-	}); err != nil {
+func (s *Store) migrateApplicationRevisionsToAppDB(ctx context.Context) error {
+	if s == nil || s.appDB == nil || s.logDB == nil {
+		return nil
+	}
+	rows, err := s.logDB.QueryContext(ctx, `SELECT id,application_id,generation,spec_hash,rendered_runtime_spec,managed_file_manifest,image_reference,resolved_image_digest,spec_yaml,job_json,created_at FROM application_revisions`)
+	if err != nil {
+		// A fresh/older LogDB can legitimately have no legacy revision table.
+		if strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			return nil
+		}
 		return err
 	}
-	statements := []string{
-		`UPDATE application_lifecycle_targets
-			SET action=CASE
-					WHEN action IN ('apply','stop','purge') THEN action
-					WHEN desired_state='stopped' THEN 'stop'
-					ELSE 'apply'
-				END,
-				state=CASE
-					WHEN state IN ('planned','ready','claimed','preparing','applying','stopping','purging','verifying','succeeded','failed_retryable','failed','superseded','cancelled') THEN state
-					WHEN status='pending' THEN 'planned'
-					WHEN status='preparing' THEN 'preparing'
-					WHEN status='deploying' AND desired_state='stopped' THEN 'stopping'
-					WHEN status='deploying' THEN 'applying'
-					WHEN status='running' THEN 'succeeded'
-					WHEN status='failed' THEN 'failed'
-					WHEN status='superseded' THEN 'superseded'
-					ELSE 'planned'
-				END,
-				target_key=CASE
-					WHEN target_key <> '' THEN target_key
-					ELSE 'application:' || application_id || ':server:' || server_id
-				END,
-				desired_generation=CASE
-					WHEN desired_generation > 0 THEN desired_generation
-					ELSE COALESCE((SELECT generation FROM application_lifecycle_operations WHERE application_lifecycle_operations.id=application_lifecycle_targets.operation_id), 0)
-				END,
-				desired_spec_hash=CASE
-					WHEN desired_spec_hash <> '' THEN desired_spec_hash
-					ELSE COALESCE((SELECT spec_hash FROM application_lifecycle_operations WHERE application_lifecycle_operations.id=application_lifecycle_targets.operation_id), '')
-				END,
-				priority=CASE
-					WHEN priority > 0 THEN priority
-					WHEN action='purge' THEN 30
-					WHEN action='stop' OR desired_state='stopped' THEN 20
-					ELSE 10
-				END,
-				error_message=CASE WHEN error_message <> '' THEN error_message ELSE COALESCE(error, '') END,
-				error_detail=CASE WHEN error_detail <> '' THEN error_detail ELSE COALESCE(error, '') END`,
-		`WITH ranked AS (
-			SELECT id,
-				ROW_NUMBER() OVER (
-					PARTITION BY target_key
-					ORDER BY updated_at DESC, created_at DESC, id DESC
-				) AS rn
-			FROM application_lifecycle_targets
-			WHERE target_key <> ''
-			  AND state IN ('planned','ready','claimed','preparing','applying','stopping','purging','verifying','failed_retryable')
-		)
-		UPDATE application_lifecycle_targets
-			SET state='superseded',
-				status='superseded',
-				error=CASE WHEN error <> '' THEN error ELSE 'Superseded during lifecycle state-machine migration' END,
-				error_code=CASE WHEN error_code <> '' THEN error_code ELSE 'superseded' END,
-				error_message=CASE WHEN error_message <> '' THEN error_message ELSE 'Superseded during lifecycle state-machine migration' END,
-				error_detail=CASE WHEN error_detail <> '' THEN error_detail ELSE 'Older duplicate active target superseded before adding active target uniqueness' END,
-				stage=CASE WHEN stage <> '' THEN stage ELSE 'superseded' END,
-				finished_at=COALESCE(finished_at, strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-				updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
-			WHERE id IN (SELECT id FROM ranked WHERE rn > 1)`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_application_lifecycle_targets_active_key
-			ON application_lifecycle_targets(target_key)
-			WHERE target_key <> ''
-			  AND state IN ('planned','ready','claimed','preparing','applying','stopping','purging','verifying','failed_retryable')`,
-		`CREATE INDEX IF NOT EXISTS idx_application_lifecycle_targets_state_due
-			ON application_lifecycle_targets(state, next_run_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_application_lifecycle_targets_app_server
-			ON application_lifecycle_targets(application_id, server_id, state)`,
-	}
-	for _, stmt := range statements {
-		if _, err := q.ExecContext(ctx, stmt); err != nil {
+	defer rows.Close()
+	for rows.Next() {
+		var id, applicationID, specHash, runtimeSpec, manifest, imageReference, digest, specYAML, jobJSON, createdAt string
+		var generation int
+		if err := rows.Scan(&id, &applicationID, &generation, &specHash, &runtimeSpec, &manifest, &imageReference, &digest, &specYAML, &jobJSON, &createdAt); err != nil {
+			return err
+		}
+		if _, err := s.appDB.ExecContext(ctx, `INSERT OR IGNORE INTO application_revisions(id,application_id,generation,spec_hash,rendered_runtime_spec,managed_file_manifest,image_reference,resolved_image_digest,spec_yaml,job_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+			id, applicationID, generation, specHash, runtimeSpec, manifest, imageReference, digest, specYAML, jobJSON, createdAt); err != nil {
+			// A deleted application may still have a legacy revision row. It is
+			// safe to skip that orphan because AppDB enforces the new FK.
+			if strings.Contains(strings.ToLower(err.Error()), "foreign key") {
+				continue
+			}
 			return err
 		}
 	}
-	return nil
+	return rows.Err()
 }
 
 type legacyFacilityRoutePath struct {

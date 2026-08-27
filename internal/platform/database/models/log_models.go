@@ -101,13 +101,17 @@ func (*TaskLog) ExtraIndexDDL() map[string][]string {
 
 // ApplicationRevision 对应 application_revisions。
 type ApplicationRevision struct {
-	ID            string         `orm:"primary_key"`
-	ApplicationID string         `orm:"not_null"`
-	Generation    int            `orm:"not_null"`
-	SpecHash      string         `orm:"not_null"`
-	SpecYAML      string         `orm:"not_null"`
-	JobJSON       map[string]any `orm:"json;not_null"`
-	CreatedAt     time.Time      `orm:"not_null"`
+	ID                  string           `orm:"primary_key"`
+	ApplicationID       string           `orm:"not_null"`
+	Generation          int              `orm:"not_null"`
+	SpecHash            string           `orm:"not_null"`
+	RenderedRuntimeSpec map[string]any   `orm:"json;not_null;default:'{}'"`
+	ManagedFileManifest []map[string]any `orm:"json;not_null;default:'[]'"`
+	ImageReference      string           `orm:"not_null;default:''"`
+	ResolvedImageDigest string           `orm:"not_null;default:''"`
+	SpecYAML            string           `orm:"not_null;default:''"`
+	JobJSON             map[string]any   `orm:"json;not_null;default:'{}'"`
+	CreatedAt           time.Time        `orm:"not_null"`
 }
 
 func (*ApplicationRevision) TableName() string { return "application_revisions" }

@@ -66,21 +66,9 @@ func TestTrustHostKeyDisabledWhenVerificationDisabled(t *testing.T) {
 func TestTrustHostKeyConnectionFailure(t *testing.T) {
 	knownHosts := filepath.Join(t.TempDir(), "known_hosts")
 	executor := NewSSHExecutorWithOptions(testPasswordResolver(), 2*time.Second, WithKnownHosts(knownHosts))
-	// Reserve an address and close it so the port is (almost certainly) unused.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	host, port := splitTestAddr(ln.Addr().String())
-	_ = ln.Close()
-	err = executor.TrustHostKey(context.Background(), testTarget(host, port))
-	if !isPanelCode(err, "ssh_connection_failed") {
-		t.Fatalf("expected ssh_connection_failed, got %v", err)
-	}
-}
 
-func TestTrustHostKeyAuthFailure(t *testing.T) {
-	knownHosts := filepath.Join(t.TempDir(), "known_hosts")
+	// Accept the TCP connection, then drop it before SSH authentication. This
+	// remains a transport failure and must not be reported as bad credentials.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -96,17 +84,30 @@ func TestTrustHostKeyAuthFailure(t *testing.T) {
 		}
 	}()
 	host, port := splitTestAddr(ln.Addr().String())
-	executor := NewSSHExecutorWithOptions(testPasswordResolver(), 2*time.Second, WithKnownHosts(knownHosts))
+
 	err = executor.TrustHostKey(context.Background(), testTarget(host, port))
+	if !isPanelCode(err, "ssh_connection_failed") {
+		t.Fatalf("expected ssh_connection_failed, got %v", err)
+	}
+}
+
+func TestTrustHostKeyAuthFailure(t *testing.T) {
+	knownHosts := filepath.Join(t.TempDir(), "known_hosts")
+	srv := newTestSSHServer(t, testSigner(t))
+	host, port := splitTestAddr(srv.listener.Addr().String())
+
+	resolver := fakeResolver{cred: ResolvedCredential{
+		Type:     CredentialTypePassword,
+		Username: "test",
+		Password: "wrong-password",
+	}}
+	executor := NewSSHExecutorWithOptions(resolver, 2*time.Second, WithKnownHosts(knownHosts))
+	err := executor.TrustHostKey(context.Background(), testTarget(host, port))
 	if !isPanelCode(err, "ssh_auth_failed") {
 		t.Fatalf("expected ssh_auth_failed, got %v", err)
 	}
 }
 
-func isPanelCode(err error, code string) bool {
-	var perr *panelerr.Error
-	return errors.As(err, &perr) && perr.Code == code
-}
 func TestPasswordAuthMethod(t *testing.T) {
 	_, err := authMethod(ResolvedCredential{Type: CredentialTypePassword, Password: "secret"})
 	if err != nil {
@@ -159,4 +160,9 @@ func TestStreamWriterEmitsLinesAndFlushesPartialLine(t *testing.T) {
 			t.Fatalf("line %d = %q, want %q", i, lines[i], want[i])
 		}
 	}
+}
+
+func isPanelCode(err error, code string) bool {
+	var perr *panelerr.Error
+	return errors.As(err, &perr) && perr.Code == code
 }

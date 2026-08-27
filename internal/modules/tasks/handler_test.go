@@ -24,38 +24,6 @@ type capabilityRunner struct {
 	recordingRunner
 }
 
-type fakeDeploymentProvider struct{}
-
-func (fakeDeploymentProvider) DecorateDeploymentTasks(ctx context.Context, items []Task) error {
-	for idx := range items {
-		items[idx].Deployment = &TaskDeploymentProjection{
-			Operation: &TaskDeploymentOperationProjection{
-				ID:              "life-op-1",
-				ApplicationID:   "app-1",
-				ApplicationName: "web",
-				Type:            "deploy",
-				Status:          "deploying",
-				CreatedAt:       items[idx].CreatedAt,
-				UpdatedAt:       items[idx].CreatedAt,
-			},
-			Target: &TaskDeploymentTargetProjection{
-				ID:              "life-target-1",
-				OperationID:     "life-op-1",
-				ApplicationID:   "app-1",
-				ApplicationName: "web",
-				ServerID:        "srv-1",
-				Status:          "failed",
-				State:           "failed_retryable",
-				CreatedAt:       items[idx].CreatedAt,
-				UpdatedAt:       items[idx].CreatedAt,
-			},
-		}
-	}
-	return nil
-}
-
-// waitForRunnerTask 轮询等待异步分发的 RunNow 被 runner 接收（RunNow/Retry
-// 改为异步执行后，runner 调用发生在响应返回之后）。
 func waitForRunnerTask(t *testing.T, runner *recordingRunner, wantID string) Task {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -205,57 +173,6 @@ func TestHandlerRetryRejectsNonFailedTask(t *testing.T) {
 
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected queued retry to be rejected, got %d", rec.Code)
-	}
-}
-
-func TestHandlerDecoratesDeploymentProjectionOnlyOnGet(t *testing.T) {
-	svc := newTestService(t)
-	svc.MustRegister(Definition{Type: "application_target_apply", ConcurrencyPolicy: ConcurrencyParallelAllowed})
-	task, err := svc.Create(context.Background(), CreateInput{Type: "application_target_apply", ServerID: "srv-1", ResourceType: "application", ResourceID: "app-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	handler := NewHandler(svc)
-	handler.SetDeploymentProjectionProvider(fakeDeploymentProvider{})
-
-	getRec := serveTaskRoute(handler, http.MethodGet, "/api/v1/tasks/"+task.ID)
-	if getRec.Code != http.StatusOK {
-		t.Fatalf("expected get to succeed, got %d", getRec.Code)
-	}
-	var getEnvelope httpx.Envelope
-	if err := json.NewDecoder(getRec.Body).Decode(&getEnvelope); err != nil {
-		t.Fatal(err)
-	}
-	rawGet, err := json.Marshal(getEnvelope.Data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got Task
-	if err := json.Unmarshal(rawGet, &got); err != nil {
-		t.Fatal(err)
-	}
-	if got.Deployment == nil || got.Deployment.Target == nil || got.Deployment.Target.State != "failed_retryable" {
-		t.Fatalf("expected deployment projection on get response, got %#v", got.Deployment)
-	}
-
-	listRec := serveTaskRoute(handler, http.MethodGet, "/api/v1/tasks?includeInternal=true")
-	if listRec.Code != http.StatusOK {
-		t.Fatalf("expected list to succeed, got %d", listRec.Code)
-	}
-	var listEnvelope httpx.Envelope
-	if err := json.NewDecoder(listRec.Body).Decode(&listEnvelope); err != nil {
-		t.Fatal(err)
-	}
-	rawList, err := json.Marshal(listEnvelope.Data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var result ListResult
-	if err := json.Unmarshal(rawList, &result); err != nil {
-		t.Fatal(err)
-	}
-	if len(result.Items) == 0 || result.Items[0].Deployment != nil || result.Items[0].ParamsJSON != "" || result.Items[0].MetadataJSON != "" {
-		t.Fatalf("expected lightweight list response, got %#v", result.Items)
 	}
 }
 

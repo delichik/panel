@@ -746,18 +746,7 @@ func TestImagesMarkInUseFromReportedContainerImageIDs(t *testing.T) {
 }
 
 func TestTriggerApplicationReconcileUsesPeriodicPayload(t *testing.T) {
-	svc, taskSvc, _, _ := newContainerizationTestService(t)
-	taskSvc.MustRegister(tasks.Definition{
-		Type:              applications.TaskTypeTargetBatch,
-		ConcurrencyPolicy: tasks.ConcurrencyResourceExclusive,
-		Execute:           func(tasks.TaskContext) error { return nil },
-	})
-	taskSvc.MustRegister(tasks.Definition{
-		Type: applications.TaskTypeTargetApply,
-		Execute: func(tc tasks.TaskContext) error {
-			return tc.Service.Complete(tc.Context, tc.Task.ID, "Application deployment handled")
-		},
-	})
+	svc, _, _, _ := newContainerizationTestService(t)
 	updater := &fakeApplicationUpdater{}
 	svc.apps = updater
 	task, created, err := svc.TriggerApplicationReconcile(context.Background(), tasks.PeriodicTrigger{
@@ -787,6 +776,7 @@ func newContainerizationTestService(t *testing.T) (*Service, *tasks.Service, *fa
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	store, err := storage.Open(cfg)
 	if err != nil {

@@ -33,22 +33,22 @@
 
 ## 数据与行为约定
 
-- 任务与任务日志使用独立 SQLite 日志数据库 `Store.LogDB()`，默认文件是 `data/db/log.db`；任务主表是 `tasks`，步骤表是 `task_steps`，日志表是 `task_logs`。应用部署 lifecycle 的 `application_lifecycle_operations`、`application_lifecycle_targets` 和 `application_target_stages`（目标步骤日志）已迁到独立协调库 `Store.CoordDB()`（默认 `data/db/coordination.db`）。任务参数写入 `tasks.params_json`，展示和诊断补充信息写入 `tasks.metadata_json`，步骤级执行详情写入 `task_steps.metadata_json`。
+- 任务与任务日志使用独立 SQLite 日志数据库 `Store.LogDB()`，默认文件是 `data/db/log.db`；任务主表是 `tasks`，步骤表是 `task_steps`，日志表是 `task_logs`。应用部署控制面的 `application_revisions`、`application_instances`、`jobs` 位于 `Store.AppDB()`；协调库 `Store.CoordDB()` 不再注册任何模型，旧 `application_lifecycle_*` 表已随迁移 DROP 删除。任务参数写入 `tasks.params_json`，展示和诊断补充信息写入 `tasks.metadata_json`，步骤级执行详情写入 `task_steps.metadata_json`。
 - 当前 alpha 阶段任务历史不是稳定持久化契约；注册式任务系统重构会重建 `tasks`、`task_steps` 和 `task_logs`，旧任务中心历史可直接丢弃，但业务数据库和指标数据库不得受影响。
 - 任务系统建模使用“操作 + 任务”两层语义：操作是由用户、调度器、系统恢复或其他业务因素发起的一次聚合意图，使用同一个 `operation_id` 追踪；任务是操作中的具体执行对象，必须包含本次执行所需变量，例如目标服务器、资源 ID、参数 JSON、触发来源和资源类型。任务中心用户可见位置不直接展示任务/操作原始 id：操作组副标题展示 `type`，执行项以 `summary` 为标题、`type` 为副标题；原始 id 仍用于搜索与 URL 恢复。
-- 业务动作只要可能拆成多个变量不同的执行对象，就应优先按一个操作拆多个任务建模，而不是把所有目标藏进单个任务的 metadata 或业务私有 target 表。典型例子：一次应用协调面向服务器 A 和 B，应创建一个操作聚合，并在该操作下创建“应用目标应用 A”和“应用目标应用 B”两个私有目标任务。
-- 私有业务表可以继续记录领域状态，例如镜像检查缓存或证书签发详情；应用 lifecycle operation/target 属于高增长操作历史，必须保存在 `Store.LogDB()`。这些表不能取代任务系统里的执行对象。任务中心需要能通过 `operation_id`、父子任务字段和任务参数看见操作拆分后的具体任务。
+- 业务动作只要可能拆成多个变量不同的执行对象，就应优先按一个操作拆多个任务建模；应用部署是例外：一次协调面向服务器 A 和 B 时，由 AppDB planner 创建两个 app/server Job，任务表只保留用户操作或周期触发投影，不创建“应用目标应用 A/B”远端 executor。
+- 私有业务表可以继续记录镜像检查缓存或证书签发详情；应用部署的 Job/Instance 是控制面事实；旧 CoordDB lifecycle 层已下线（三张 `application_lifecycle_*` 表已随迁移删除，协调库不再注册模型）。任务中心不再提供 deployment 投影；部署进度/协调记录由应用模块从 AppDB jobs 聚合（协调记录页 `/application-operations`），不能从 task logs 推断部署状态。
 - 单目标动作使用 `tasks.Manager.Create` 或封装入口创建单个任务；多目标或多变量动作使用 `tasks.Manager.CreateBatch` / `CreateBatchAndRun` 创建父任务和子任务，子任务可以使用各自注册任务类型，但必须共享同一 `operation_id`，并把每个目标自己的变量写入对应 `CreateInput`。
 - 注册方负责通过任务定义、并发策略和业务封装入口约束该任务类型是否允许异步/并行执行：允许并行时批量输入可使用 `ExecutionModeParallel`，否则必须使用 `ExecutionModeSerial` 或单任务执行。调用方不得绕开注册定义，把不允许并行的任务强行拆成并行 goroutine；普通 `Execute` 返回 `nil` 表示该任务执行已完成或已由 executor 写入终态，不能只启动后台 goroutine 后返回成功，否则 manager 会按成功自动完成任务。后续如果新增显式异步能力字段，也必须由注册方声明并同步任务中心展示。
 - `internal/modules/tasks` 只提供任务框架能力，不维护业务任务类型清单、业务 executor 或业务周期输入。业务任务类型必须由拥有该任务的业务模块在自己的 `RegisterTasks` 入口注册；生产装配由 `internal/bootstrap/panel/app.go` 的集中任务注册阶段统一调用各模块入口。
-- 所有任务类型必须提前注册后才能创建或执行。业务模块通过任务 manager 创建任务；未注册类型必须返回校验错误，不能直接写入任务表。框架测试如果需要业务形状的任务类型，必须在测试夹具中显式注册本测试所需的假定义，不允许把业务类型补回 `tasks` 包默认清单。
+- 所有任务类型必须提前注册后才能创建或执行。业务模块通过任务 manager 创建任务；未注册类型必须返回校验错误，不能直接写入任务表。应用 `jobs` 不属于任务类型，必须由 `internal/orchestrator.Planner` 创建，不能借任务 manager 或直接写 `tasks` 表替代。
 - 注册方通过任务定义声明参数校验、执行函数、`BeforeStart`、完成 hook、失败 hook、重试/手动运行能力、并发策略、一次性 worker 排队超时清理能力和周期配置。
 - 业务模块的 `tasks.go` 必须保持声明式：`Execute` 直接绑定接受 `tasks.TaskContext` 的具名方法，`CollectInputs` 直接绑定具名 collector。禁止使用只为转调另一函数而存在的匿名 executor，也禁止在任务定义中内联节流、扫描和批量输入组装等大段逻辑。
 - 多个周期任务共用的时间节流使用 `tasks.NewIntervalCollector`；业务模块仍负责提供实际输入 collector，tasks 框架只管理调用间隔和上次成功产出时间。
 - `Hidden`、`AllowRunNow`、`AllowRetry`、`DisallowCancel`、`DefaultMaxRetries`、`StaleQueuedAfter`、并发策略、executor 和周期配置都属于任务定义的一部分；这些能力随业务模块注册，不由任务中心或任务内部 worker 根据 task type 字符串另行维护。没有注册 `Execute` 的记录型任务不得声明 `AllowRunNow` 或 `AllowRetry`，避免任务中心暴露无法真正执行的手动运行或重试入口。
 - 注册方可通过 `DisallowCancel` 声明任务不可取消；不可取消任务不能被 `Cancel` 或 `CancelByServer` 取消，任务 API 返回 `allowCancel=false`，删除服务器也不会终止这类任务。
 - 任务列表、详情、重试和手动运行 API 返回任务时，会根据当前注册定义补充 `allowRunNow` 与 `allowRetry`。前端必须使用这两个响应字段决定操作入口，不得维护 task type 白名单；即使定义误声明能力但没有 executor，API 也必须返回不可操作。
-- 周期任务类型通过 `Periodic.CollectInputs` 收集本轮自动触发需要的参数，并决定是否创建任务实例。返回 `shouldRun=false` 时不创建任务、不执行、不写日志、不进入任务中心；返回 `shouldRun=true` 时交给任务 manager 创建任务。单个输入创建普通任务，多个输入创建一个父任务和多个子任务；collector 可以返回负责展示/编排的 `batch.Type` 和实际执行 handler 的 `CreateInput.Type`，但应用协调是例外：它只请求应用 planner 创建或复用 durable target，生产路径不返回 `application_target_*` 输入，目标任务由 deployment dispatcher 在 claim target 后创建。父任务负责编排、等待子任务终态并汇总结果。手动执行周期任务仍按普通任务语义处理，调用方必须显式传入参数，不会调用 `CollectInputs` 自动补齐。周期 collector 面向多个资源时必须共享一个 `operation_id`，每个资源生成独立任务输入。
+- 周期任务类型通过 `Periodic.CollectInputs` 收集本轮自动触发需要的参数，并决定是否创建任务实例。返回 `shouldRun=false` 时不创建任务、不执行、不写日志、不进入任务中心；返回 `shouldRun=true` 时交给任务 manager 创建任务。应用协调是例外：collector 只把 report/周期输入交给应用 planner，由 planner 创建或合并 AppDB Job，生产路径不返回 `application_target_*` 输入，也不启动应用部署 executor。手动执行周期任务仍按普通任务语义处理，调用方必须显式传入参数，不会调用 `CollectInputs` 自动补齐。
 - 外部业务可以通过 `tasks.Manager.TriggerPeriodicNow` 按任务类型立即触发一次周期任务 collector。该入口会传入 `tasks.PeriodicTrigger`，其中 `Payload any` 是本次 collector 调用的内存上下文，用于额外过滤或补充输入，不自动落库；collector 产出的 `CreateInput` 才是持久化任务输入。定时器触发时使用 `Type=scheduler` 的空 payload；外部触发必须继续走 manager 的创建、并发和执行流程，不得绕开 task 框架手写 executor goroutine。
 - 任务框架统一管理活跃任务并发准入。注册方只声明策略，例如允许并行、同资源互斥、同资源排队、同类型全局互斥或自定义并发 key；业务代码不要再手写同类型活跃任务查询。需要复用活跃任务时通过 `tasks.Manager.Create` 的 `created=false` 结果处理。
 - 多组同类型参数会创建父任务和多个子任务。父任务负责串行或并行编排与汇总，子任务执行同一注册定义；在任务中心语义中，`operation_id` 对应一次“操作”聚合，子任务对应操作中的具体执行任务。任一子任务结束为 `failed`、`failed_retryable`、`blocked` 或 `cancelled` 时，父任务必须汇总为失败，不能因为 executor 已经完成落库而把操作误标为 completed。
@@ -78,7 +78,7 @@
 - 长耗时后台操作应写入任务日志，并尽量拆出步骤，方便任务中心展示进度。
 - tasks 内部 worker 负责驱动注册的周期任务、唤醒到期队列任务、清理 stale queued 状态和检查 orphan running 状态。它不是独立业务模块，不注册任何特殊任务，也不通过业务 task type 字符串维护 executor 或 run-now/retry switch。
 - tasks 内部 worker 每 30 秒扫描一次 `queued`、`scheduled` 和到期 `failed_retryable` 任务作为兜底唤醒；队列唤醒、stale queued 清理和 orphan 检查统一为 30 秒一次，业务模块如果已经有自己的即时 dispatcher，仍应在创建任务后主动启动执行，不能依赖轮询满足低延迟契约。到期扫描每类任务只取最早的一批（`created_at ASC`，`Limit 50`），避免旧任务被新任务挤掉而饿死。
-- 终态任务（completed/failed/failed_retryable/blocked/cancelled）历史默认保留 24 小时：任务记录不暴露在产品导航界面，`tasks.CleanupWorker` 每小时按 `finished_at` 分批删除超期 `tasks`/`task_steps`/`task_logs`；`tasks` 表维护 `(status, next_run_at)` 索引支撑到期查询与 orphan 检查，防止任务表无限增长拖慢轮询。应用协调记录在协调库中独立保留，不随任务表清理而丢失。
+- 终态任务（completed/failed/failed_retryable/blocked/cancelled）历史默认保留 24 小时：任务记录不暴露在产品导航界面，`tasks.CleanupWorker` 每小时按 `finished_at` 分批删除超期 `tasks`/`task_steps`/`task_logs`；`tasks` 表维护 `(status, next_run_at)` 索引支撑到期查询与 orphan 检查。应用部署 Job/Instance 不随任务表清理，AppDB 控制面按自己的保留/终结策略维护。
 - 证书续签、镜像刷新和软件包刷新的周期采集统一为 30 分钟一次；`application_reconcile` 保持 5 秒采集频率以满足容器变化即时性。
 - 全量备份导出不在正常业务运行期执行。设置页只写 pending export 并提示重启；下一次启动进入备份导出维护模式，此时正常 tasks worker 与周期驱动尚未启动，导出进度本身不依赖任务系统。
 - 到期队列唤醒直接扫描注册表中带 executor 的定义，并统一调用 `tasks.Manager.Run`；不得注册或持久化 `task_queue_drain`，不得直接调用 `Definition.Execute` 绕过任务启动、execution registry、hook、完成和失败落库。
@@ -98,7 +98,7 @@
 ## 跨模块依赖
 
 - 服务器测试、重启、UFW、fail2ban、agent 部署和软件包维护依赖本模块记录任务；其中没有 executor 的一次性 worker 或记录型任务只保留任务记录，不暴露任务中心重试。fail2ban 的接管/应用和取消接管共用 `server_fail2ban_apply` 一次性 worker 任务，保存草稿不创建任务。
-- 应用同步、停止收敛、清理收敛、重启、镜像检查和镜像更新依赖本模块记录任务；保存、停用、删除等业务入口只写 desired state 并触发 `application_reconcile`，协调器先请求应用 planner 创建或复用 lifecycle target。生产路径不再由 collector 产出可见父任务 `application_target_batch` 或私有目标任务；`application_target_apply`、`application_target_stop` 和 `application_target_purge` 只能由 deployment dispatcher 在 claim target 后创建。每个目标任务只能处理一个应用在一个服务器上的一个动作，并使用 `application:target:<appId>:<serverId>` 队列 key 串行运行。
+- 应用同步、停止、清理、重启和镜像更新可以由本模块记录用户操作/周期触发任务；保存、停用、删除等入口只写 desired state 并触发 `application_reconcile`，应用 planner 在 AppDB 创建或合并 Job。生产路径不创建 `application_target_batch` 或 `application_target_apply|stop|purge`，也不把任务并发队列当作应用部署事实；同一 app/server 的串行与 fencing 由 orchestrator Job lease 负责。
 - 容器启动、停止、重启、删除，镜像拉取、删除、删除未使用，以及卷删除、删除未使用由容器化模块同步串行执行，不再创建操作任务；容器状态由 Agent report stream 更新缓存，镜像和卷操作成功后会立即创建 `image_refresh` 或 `volume_refresh` 刷新任务。
 - 手动镜像刷新、Application 镜像升级和 Application 协调恢复仍依赖本模块记录任务；同服务器 Docker 写操作由容器化模块串行执行。
 - 网络和卷资源页首次打开且本地尚无快照时，前端会提交一次 `network_refresh` 或 `volume_refresh` 任务；刷新任务按任务类型、服务器和资源复用活跃任务。
@@ -126,7 +126,7 @@
 ## Active Agent Reporting
 
 - The legacy `metrics_collect` task registration has been removed; normal metrics ingestion comes from the agent report stream.
-- Container status refresh no longer drives application reconciliation by pulling every compatible agent. Reconciliation uses cached reported observations and asks the application planner to create or reuse lifecycle targets for drifted app/server pairs; it does not create `application_target_*` task inputs itself.
+- Container status refresh no longer drives application reconciliation by pulling every compatible agent. Reconciliation uses cached reported observations and asks the application planner to create or reuse AppDB Jobs for drifted app/server pairs; it does not create `application_target_*` task inputs itself.
 - Runtime report intervals are pushed to agents through Panel-initiated report streams, so changing settings must not require creating or retrying task records.
 - The agent report stream is a watcher of an agent-side shared collector hub. Task scheduling must not add separate metrics or Docker polling loops for the same data path.
 
@@ -138,16 +138,14 @@
 
 ## Application Deployment Coordination
 
-- Application reconciliation collectors return no target task inputs in production. Deployment visibility comes from lifecycle operation/target projection, and target task log anchors are created later by the deployment dispatcher after a durable target is claimed. `application_reconcile` 是 collector-only 周期入口，不暴露任务中心 run-now/retry，也不注册固定失败的 executor；显式协调由业务入口携带 `PeriodicTrigger` payload 触发 collector/planner。
+- Application reconciliation collectors return no target task inputs in production. `application_reconcile` 是 collector-only 周期入口，不暴露任务中心 run-now/retry，也不注册应用部署 executor；显式协调由业务入口携带 `PeriodicTrigger` payload 触发 collector/planner，planner 只写 AppDB desired/revision/Job。
 - collector-only 周期任务允许没有 `Execute`；tasks periodic runner 和 `TriggerPeriodicNow` 仍必须调用其 `CollectInputs`。如果 collector 返回 `shouldRun=false`，不创建任务记录；如果返回需要创建的输入，返回的 batch 或 child task type 必须指向已注册 executor 的任务类型，不能把 collector-only 类型本身作为可执行任务。
 - `ConcurrencyResourceQueue` and `ConcurrencyResourceExclusive` honor a registered `ConcurrencyKey` callback when one is provided, then fall back to the default `type/resource` key. Business modules that need target-level serialization must declare the callback in their task definition.
-- Application target tasks remain `ConcurrencyResourceQueue`; this queue serializes execution for the same app/server but intentionally does not deduplicate task creation. Deduplication for application deployment must happen in the application planner before lifecycle operation/target rows are created, and is backed by the `application_lifecycle_targets.target_key` partial unique index for active target states.
-- Application deployment has a module-owned dispatcher. The dispatcher consumes plan/execute/verify/aggregate queues, first recovers due `failed_retryable` targets back to `ready`, then creates task log anchors only after a lifecycle target is conditionally claimed from `ready` to `claimed`; task rows are execution/log records rather than the authority for whether deployment work exists. Queue overflow dirty flags must trigger DB repair/full planning rather than silently dropping durable work.
-- Application target executors must also verify or acquire the lifecycle target claim before mutating remote runtime state. A runnable task without ownership of its `lifecycleTargetId` is skipped rather than treated as deployment authority.
-- `application_restart` is a replayable planning task, not a direct runtime restart executor. It forces application deployment planning and completes after lifecycle targets are created or reused; remote runtime mutation still happens only through dispatcher-created `application_target_apply|stop|purge` task anchors.
-- Application target task metadata should include stable deployment context (`applicationId`, `applicationName`, `serverId`, `action`, `generation`, `specHash`, `lifecycleOperationId`, `lifecycleTargetId`) so Task Center can display the deployment object and target state without parsing logs.
-- The tasks HTTP handler supports a `DeploymentProjectionProvider` hook. Production wiring sets the applications service as that provider, so `GET /api/v1/tasks` and `GET /api/v1/tasks/{id}` may include `task.deployment.operation` and `task.deployment.target` for application lifecycle tasks. Task Center must prefer this structured projection over legacy metadata and use it to show operation targets, target state/stage, backoff retry time, claimed task/log anchor, and original Docker/Agent error diagnostics.
-- Business modules that create domain lifecycle rows before task rows must provide their own compensation path for task creation failures. The generic task manager cannot roll back domain lifecycle rows or infer their retry state.
+- Application Job execution does not use `ConcurrencyResourceQueue` or a task dispatcher. `orchestrator.Controller` scans `jobs`, claims one active app/server Job, maintains lease heartbeat, calls Agent `RuntimeReconcile`, writes observations with the lease token, and requeues when desired changed. `uq_jobs_active_app_server` and DB due scan provide cross-process correctness; wake is only a latency optimization.
+- `application_restart` is a replayable planning task, not a direct runtime restart executor. It triggers planner apply and completes after a Job is created or merged; remote mutation happens only in the orchestrator controller.
+- Application deployment diagnostics must carry stable `applicationId`, `serverId`, `action`, `generation`, `specHash`, `jobId`, `intentId`, `executionId`, `stage` and structured Agent/Docker errors. Task Center no longer provides a deployment projection; coordination records aggregate AppDB jobs by intent_id and must not infer Job state from task logs.
+- The tasks HTTP handler has no deployment projection: `DeploymentProjectionProvider` and the historical lifecycle rows it read were removed. Coordination records (`/api/v1/application-operations`) aggregate AppDB Job/Instance observed data; task cleanup must never delete active Job/Instance state.
+- Domain desired-state writes and Job creation are an AppDB responsibility. The generic task manager cannot roll back or advance Job state; it must not create a replacement target task when a planner call fails.
 ## 列表读取约束
 
-`GET /api/v1/tasks` 保持分页响应，但必须使用列表专用查询，以空投影代替 `params_json` 和 `metadata_json`，也不得逐任务拼接 deployment operation/target；完整任务和 deployment projection 仅由 `GET /api/v1/tasks/{id}` 返回。内部协调与恢复代码继续使用完整 `Service.List`，HTTP handler 使用 `ListSummaries`，不得混用这两个读取边界。跨页搜索通过 `q` 参数在列表专用查询内完成，不得退化为全表加载后在前端过滤。
+`GET /api/v1/tasks` 保持分页响应，但必须使用列表专用查询，以空投影代替 `params_json` 和 `metadata_json`，也不得逐任务拼接 deployment operation/target（deployment projection 已删除）。`GET /api/v1/tasks/{id}` 只返回任务自身，不再返回 deployment projection。内部协调与恢复代码继续使用完整 `Service.List`，HTTP handler 使用 `ListSummaries`，不得混用这两个读取边界。跨页搜索通过 `q` 参数在列表专用查询内完成，不得退化为全表加载后在前端过滤。
