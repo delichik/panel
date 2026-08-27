@@ -1041,6 +1041,10 @@ function goBackFromFacilityPage() {
     cancelFacilityEdit();
     return;
   }
+  if (isStorageShareFacility.value && mode.value === 'facilityConfig') {
+    void router.replace('/applications/facility-apps/storage-share');
+    return;
+  }
   void router.push('/applications/facility-apps');
 }
 
@@ -1918,7 +1922,7 @@ onBeforeUnmount(() => {
       </EditorPage>
     </template>
     <template v-else-if="isStorageShareFacility">
-      <StorageShareFacility :mode="mode" :servers="servers" @back="goBackFromFacilityPage" />
+      <StorageShareFacility :mode="mode" :servers="servers" />
     </template>
     <div v-else class="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
       <section class="rounded-2xl border border-border bg-card p-5">

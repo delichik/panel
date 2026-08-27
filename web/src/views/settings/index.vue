@@ -410,7 +410,7 @@ onMounted(load);
             <label class="grid gap-1 text-sm">{{ t('settingsPage.runtimeEventCleanupSchedule') }}<Select v-model="form.runtimeEventCleanupSchedule" :options="cleanupOptions" /></label>
             <label class="grid gap-1 text-sm">{{ t('settingsPage.language') }}<Select v-model="form.language" :options="languageOptions" /></label>
             <label class="grid gap-1 text-sm">{{ t('settingsPage.logLevel') }}<Select v-model="form.logLevel" :options="logOptions" /></label>
-            <label class="grid gap-1 text-sm">{{ t('settingsPage.reconcileTrace') }}<Switch v-model="form.reconcileTraceEnabled" /><span class="text-xs text-muted-foreground">{{ t('settingsPage.reconcileTraceHint') }}</span></label>
+            <label class="grid gap-1 text-sm">{{ t('settingsPage.reconcileTrace') }}<Switch v-model="form.reconcileTraceEnabled" :label="t('settingsPage.reconcileTrace')" /><span class="text-xs text-muted-foreground">{{ t('settingsPage.reconcileTraceHint') }}</span></label>
           </div>
           <p v-if="!runtimeEventRetentionValid" class="m-0 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ t('settingsPage.runtimeEventRetentionValidation') }}</p>
           <Button class="w-fit" variant="primary" :disabled="!runtimeSectionValid || !runtimeEventRetentionValid" :loading="pending === 'save-runtime'" @click="saveRuntimeSection('runtime')"><Save />{{ t('settingsPage.saveSection') }}</Button>

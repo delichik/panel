@@ -17,7 +17,8 @@ export let mockRuntimeSettings: RuntimeSettings = {
   logLevel: 'info',
   remoteCommandTimeoutSeconds: 45,
   branding: { loginTitle: 'Seamark', loginSubtitle: 'Demo operations control plane' },
-  certificates: { email: 'ops@example.com', dnsPropagationDelaySeconds: 30 },
+  certificates: { email: 'ops.com', dnsPropagationDelaySeconds: 30 },
+  reconcileTraceEnabled: false,
   jwtSecretConfigured: true,
 };
 

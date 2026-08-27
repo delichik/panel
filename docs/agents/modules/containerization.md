@@ -29,7 +29,7 @@
 
 资源页为服务器上下文资源维护台，外层左侧选择服务器、右侧为内部滚动工作区。软件包、容器、镜像、网络和卷是独立路由页面，不使用页内 tabs；可以复用同一个资源上下文，但必须保持不同的信息架构和操作闭环，不得退回同质通用列表。所有控件使用 Panel 自有 primitives，禁止引入 Naive UI / Vuetify。
 
-- 设施应用页面是 `/applications/facility-apps` 独立入口，必须先呈现设施目录；内置“反向代理”与“存储共享”两个设施项。`facilityKind=reverse-proxy` 的只读详情展示路由与部署状态；独立配置页保存 Nginx 镜像、全局网关节点、Panel 入口、域名策略、Path 规则和静态资产草稿。指定的全局网关节点即视为开启反向代理能力。`facilityKind=storage-share` 由独立组件 `web/src/views/applications/StorageShareFacility.vue` 渲染详情与配置，详见下文“存储共享设施”。
+- 设施应用页面是 `/applications/facility-apps` 独立入口，必须先呈现设施目录；内置“反向代理”与“存储共享”两个设施项。`facilityKind=reverse-proxy` 的只读详情展示路由与部署状态；独立配置页保存 Nginx 镜像、全局网关节点、Panel 入口、域名策略、Path 规则和静态资产草稿。指定的全局网关节点即视为开启反向代理能力。`facilityKind=storage-share` 由独立组件 `web/src/views/applications/StorageShareFacility.vue` 渲染健康、分区与设置，详见下文“存储共享设施”。
 - 容器支持查询、查看日志、启动、停止、重启、删除；日志入口与其他行操作使用带图标的小型操作，托管 Application 容器的直接停止、重启和删除入口必须禁用并提示改走 Application 生命周期。
 - 容器卡片端口行在没有发布端口时显示「无端口映射」，不使用「不可用」，避免与容器故障状态混淆。
 - 镜像支持查询、拉取、删除、删除未使用镜像、刷新更新状态、升级选中 Application 和全部升级；批量危险操作必须通过确认对话框触发。
@@ -80,7 +80,7 @@ commit 前必须重新散列每个新 blob 的 content 目录和每个 `source_a
 - 分区支持下载（Agent `StorageArchiveDirectory` 打包返回 tgz）与删除记录+数据（Agent `StorageDeleteDirectory`，需应用已解除引用，前端二次确认）。分区记录保存容器挂载目标与确定性卷名（`target`/`volume_name`），用于挂载状态检查。
 - **NFS 生效状态可观测**：Agent 提供 `StorageStatus`（根目录是否存在、nfs-kernel-server 是否安装、`showmount -e localhost` 是否列出该导出、`rpc.nfsd` 是否运行）与 `StorageMountStatus`（卷是否存在、挂载点是否 NFS 挂载、写探测带 5 秒超时）。设施页通过 `GET /api/v1/facility-apps/storage-share/status` **并行**汇总「每台存储服务器导出生效状态 + 每个分区挂载状态」，整体 30 秒超时；页面每 15 秒刷新且有防重入。Agent 侧导出配置读写有互斥锁；分区打包/删除/建目录限定在已注册根目录下。
 - **并发与配置**：保存带版本号乐观锁，冲突返回 409；卸载清理失败时**保留配置并持久化错误**，可重试卸载；只读挂载在 NFS 卷驱动层使用 `ro`；已有同名卷会校验 driver/标签，不匹配报错。
-- **页面重心为共享配置**：设施详情页主体是每台存储服务器的配置与导出状态卡片；关联应用/分区收进「关联应用」弹窗（应用、存储服务器、目录、挂载状态、下载、删除记录+数据），不作为页面主体。配置编辑器支持行级校验、未保存离开保护，保存后留在配置页查看同步结果。
+- **详情与设置分段**：存储共享详情用页内「导出健康」「分区数据」「设置」分段承载运行摘要、每台服务器 Agent/根目录/NFS/导出检查、关联应用、分区资产（宿主机路径、容器目标、卷名、挂载状态、下载、删除记录+数据）与多服务器配置。`/config` 继续作为设置的深链入口；配置编辑器支持行级校验、取消恢复草稿、未保存路由离开和浏览器关闭保护，保存后留在设置视图查看同步结果。
 - API：`GET/PUT /api/v1/facility-apps/storage-share`、`GET .../status`（并行汇总导出与挂载状态，30 秒超时）、`POST .../reconcile`（返回 `{taskId, config}`）、`DELETE ...`（返回卸载后配置）、`GET .../partitions/{id}/download`、`DELETE .../partitions/{id}`。
 
 ## 托管 Label
