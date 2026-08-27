@@ -39,6 +39,7 @@ const saving = ref(false);
 const pending = ref('');
 const error = ref('');
 const detailView = ref<DetailView>('health');
+const requestedDetailView = ref<DetailView | null>(null);
 const form = reactive({ servers: [] as StorageServerSetting[] });
 const formErrors = ref<Record<number, string>>({});
 const savedServerIds = ref<string[]>([]);
@@ -313,6 +314,7 @@ function selectView(value: string | number) {
     return;
   }
   if (isSettingsMode.value) {
+    requestedDetailView.value = value as DetailView;
     leaveSettings();
     return;
   }
@@ -339,7 +341,13 @@ watch(() => form.servers, () => {
 }, { deep: true });
 
 watch(() => props.mode, (mode) => {
-  if (mode !== 'facilityConfig') return;
+  if (mode !== 'facilityConfig') {
+    if (requestedDetailView.value) {
+      detailView.value = requestedDetailView.value;
+      requestedDetailView.value = null;
+    }
+    return;
+  }
   if (!form.servers.length) resetDraft();
 });
 
