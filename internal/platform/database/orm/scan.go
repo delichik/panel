@@ -76,6 +76,12 @@ func applyRaw(fv reflect.Value, f *fieldInfo, raw any) error {
 		}
 		return setBool(fv, b)
 	case kindTime:
+		if blankStringValue(raw) {
+			// 存量 SQLite 行可能用空串表示“未设置”的时间（例如 jobs 的
+			// next_run_at/lease_expires_at 曾被写成 ''）。按未设置处理：
+			// 指针字段保持 nil，避免 orm: cannot parse time "" 错误。
+			return nil
+		}
 		tm, err := asTime(raw)
 		if err != nil {
 			return err

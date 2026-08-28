@@ -136,7 +136,7 @@ func (s *Store) Requeue(ctx context.Context, job Job, reason string) (bool, erro
 	if errors.Is(err, sql.ErrNoRows) && job.Action == ActionPurge {
 		// The purge finalizer may have removed the desired row after the
 		// remote call. There is no next runtime action to enqueue.
-		result, updateErr := s.db.ExecContext(ctx, `UPDATE jobs SET state='succeeded',lease_owner='',lease_token='',lease_expires_at='',last_stage='purged',error_code='',error_class='',error_message='',error_detail='',finished_at=?,updated_at=? WHERE id=? AND state='running' AND lease_owner=? AND lease_token=?`, now, now, job.ID, job.LeaseOwner, job.LeaseToken)
+		result, updateErr := s.db.ExecContext(ctx, `UPDATE jobs SET state='succeeded',lease_owner='',lease_token='',lease_expires_at=NULL,last_stage='purged',error_code='',error_class='',error_message='',error_detail='',finished_at=?,updated_at=? WHERE id=? AND state='running' AND lease_owner=? AND lease_token=?`, now, now, job.ID, job.LeaseOwner, job.LeaseToken)
 		if updateErr != nil {
 			return false, updateErr
 		}
@@ -150,7 +150,7 @@ func (s *Store) Requeue(ctx context.Context, job Job, reason string) (bool, erro
 		return false, err
 	}
 	action := actionForDesired(desiredState)
-	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET state='pending',action=?,desired_generation=?,desired_spec_hash=?,desired_revision_id=?,desired_spec_json=?,remove_data=?,force_nonce=?,lease_owner='',lease_token='',lease_expires_at='',next_run_at='',last_stage='superseded',error_code='desired_changed',error_class='superseded',error_message=?,error_detail='desired state changed while runtime call was in flight',finished_at=NULL,updated_at=? WHERE id=? AND state='running' AND lease_owner=? AND lease_token=?`,
+	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET state='pending',action=?,desired_generation=?,desired_spec_hash=?,desired_revision_id=?,desired_spec_json=?,remove_data=?,force_nonce=?,lease_owner='',lease_token='',lease_expires_at=NULL,next_run_at=NULL,last_stage='superseded',error_code='desired_changed',error_class='superseded',error_message=?,error_detail='desired state changed while runtime call was in flight',finished_at=NULL,updated_at=? WHERE id=? AND state='running' AND lease_owner=? AND lease_token=?`,
 		action, desiredGeneration, desiredSpecHash, desiredRevisionID, desiredSpecJSON, boolInt(removeData), forceNonce, reason, now, job.ID, job.LeaseOwner, job.LeaseToken)
 	if err != nil {
 		return false, err
@@ -240,7 +240,7 @@ func (s *Store) Renew(ctx context.Context, job Job, leaseTTL time.Duration) (boo
 func (s *Store) Succeed(ctx context.Context, job Job, response ReconcileResponse) (bool, error) {
 	now := s.now().UTC()
 	steps, _ := json.Marshal(response.Steps)
-	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET state='succeeded',lease_owner='',lease_token='',lease_expires_at='',last_stage=?,last_steps_json=?,error_code='',error_class='',error_message='',error_detail='',finished_at=?,updated_at=? WHERE id=? AND state='running' AND lease_owner=? AND lease_token=?`,
+	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET state='succeeded',lease_owner='',lease_token='',lease_expires_at=NULL,last_stage=?,last_steps_json=?,error_code='',error_class='',error_message='',error_detail='',finished_at=?,updated_at=? WHERE id=? AND state='running' AND lease_owner=? AND lease_token=?`,
 		lastStep(response.Steps), string(steps), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), job.ID, job.LeaseOwner, job.LeaseToken)
 	if err != nil {
 		return false, err
@@ -252,13 +252,13 @@ func (s *Store) Succeed(ctx context.Context, job Job, response ReconcileResponse
 func (s *Store) Fail(ctx context.Context, job Job, response ReconcileResponse) (bool, error) {
 	now := s.now().UTC()
 	state := JobFailed
-	nextRun := ""
+	var nextRun any
 	if response.Retryable {
 		state = JobFailedRetryable
 		nextRun = now.Add(retryDelay(job.Attempts, response.RetryAfter)).Format(time.RFC3339Nano)
 	}
 	steps, _ := json.Marshal(response.Steps)
-	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET state=?,lease_owner='',lease_token='',lease_expires_at='',last_stage=?,last_steps_json=?,error_code=?,error_class=?,error_message=?,error_detail=?,next_run_at=?,finished_at=CASE WHEN ?='failed' THEN ? ELSE NULL END,updated_at=? WHERE id=? AND state='running' AND lease_owner=? AND lease_token=?`,
+	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET state=?,lease_owner='',lease_token='',lease_expires_at=NULL,last_stage=?,last_steps_json=?,error_code=?,error_class=?,error_message=?,error_detail=?,next_run_at=?,finished_at=CASE WHEN ?='failed' THEN ? ELSE NULL END,updated_at=? WHERE id=? AND state='running' AND lease_owner=? AND lease_token=?`,
 		state, lastStep(response.Steps), string(steps), response.ErrorCode, response.ErrorClass, response.ErrorMessage, response.ErrorDetail,
 		nextRun, state, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), job.ID, job.LeaseOwner, job.LeaseToken)
 	if err != nil {
@@ -275,11 +275,11 @@ func (s *Store) RecoverExpiredLeases(ctx context.Context) error {
 		return err
 	}
 	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET state=CASE WHEN last_stage='' THEN 'pending' ELSE 'failed_retryable' END,
-		lease_owner='',lease_token='',lease_expires_at='',error_code=CASE WHEN last_stage='' THEN error_code ELSE 'lease_lost' END,
+		lease_owner='',lease_token='',lease_expires_at=NULL,error_code=CASE WHEN last_stage='' THEN error_code ELSE 'lease_lost' END,
 		error_class=CASE WHEN last_stage='' THEN error_class ELSE 'ownership' END,
 		error_message=CASE WHEN last_stage='' THEN error_message ELSE 'orchestrator lease expired' END,
 		error_detail=CASE WHEN last_stage='' THEN error_detail ELSE 'running job recovered after lease expiry' END,
-		next_run_at=CASE WHEN last_stage='' THEN '' ELSE ? END,updated_at=?
+		next_run_at=CASE WHEN last_stage='' THEN NULL ELSE ? END,updated_at=?
 		WHERE state='running' AND lease_expires_at IS NOT NULL AND lease_expires_at<>'' AND lease_expires_at<=?`,
 		now.Add(retryDelay(1, 0)).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 	if err != nil {

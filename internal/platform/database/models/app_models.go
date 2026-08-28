@@ -138,8 +138,8 @@ type ApplicationReconcileState struct {
 	ServerID               string    `orm:"not_null;references:servers(id);on_delete:CASCADE"`
 	ObservedAt             time.Time `orm:"not_null"`
 	ReconcileFailures      int       `orm:"not_null;default:0"`
-	ReconcileNextRunAt     time.Time `orm:"not_null;default:''"`
-	ReconcileSuccessStreak int       `orm:"not_null;default:0"`
+	ReconcileNextRunAt     *time.Time
+	ReconcileSuccessStreak int `orm:"not_null;default:0"`
 }
 
 func (*ApplicationReconcileState) TableName() string { return "application_reconcile_states" }
@@ -311,20 +311,20 @@ func (*Application) TableName() string { return "applications" }
 
 // ApplicationEditSession 对应 application_edit_sessions。
 type ApplicationEditSession struct {
-	ID                    string         `orm:"primary_key"`
-	ApplicationID         string         `orm:"not_null;default:''"`
-	OwnerID               string         `orm:"not_null"`
-	ClientDraftKey        string         `orm:"not_null;default:''"`
-	State                 string         `orm:"not_null"`
-	BaseResourceVersion   int            `orm:"not_null;default:0"`
-	BaseResourceUpdatedAt time.Time      `orm:"not_null;default:''"`
+	ID                    string `orm:"primary_key"`
+	ApplicationID         string `orm:"not_null;default:''"`
+	OwnerID               string `orm:"not_null"`
+	ClientDraftKey        string `orm:"not_null;default:''"`
+	State                 string `orm:"not_null"`
+	BaseResourceVersion   int    `orm:"not_null;default:0"`
+	BaseResourceUpdatedAt *time.Time
 	DraftJSON             map[string]any `orm:"json;not_null;default:'{}'"`
 	Revision              int            `orm:"not_null;default:1"`
 	PreviewToken          string         `orm:"not_null;default:''"`
 	PreviewRevision       int            `orm:"not_null;default:0"`
-	PreviewExpiresAt      time.Time      `orm:"not_null;default:''"`
-	CommitLeaseOwner      string         `orm:"not_null;default:''"`
-	CommitLeaseExpiresAt  time.Time      `orm:"not_null;default:''"`
+	PreviewExpiresAt      *time.Time
+	CommitLeaseOwner      string `orm:"not_null;default:''"`
+	CommitLeaseExpiresAt  *time.Time
 	CommitIdempotencyKey  string         `orm:"not_null;default:''"`
 	CommitApplicationID   string         `orm:"not_null;default:''"`
 	CommitResultJSON      map[string]any `orm:"json;not_null;default:''"`
@@ -333,7 +333,7 @@ type ApplicationEditSession struct {
 	AbsoluteExpiresAt     time.Time      `orm:"not_null"`
 	CreatedAt             time.Time      `orm:"not_null"`
 	UpdatedAt             time.Time      `orm:"not_null"`
-	CommittedAt           time.Time      `orm:"not_null;default:''"`
+	CommittedAt           *time.Time
 }
 
 func (*ApplicationEditSession) TableName() string { return "application_edit_sessions" }
@@ -551,9 +551,9 @@ type FacilityEditSession struct {
 	Revision             int            `orm:"not_null;default:1"`
 	PreviewToken         string         `orm:"not_null;default:''"`
 	PreviewRevision      int            `orm:"not_null;default:0"`
-	PreviewExpiresAt     time.Time      `orm:"not_null;default:''"`
-	CommitLeaseOwner     string         `orm:"not_null;default:''"`
-	CommitLeaseExpiresAt time.Time      `orm:"not_null;default:''"`
+	PreviewExpiresAt     *time.Time
+	CommitLeaseOwner     string `orm:"not_null;default:''"`
+	CommitLeaseExpiresAt *time.Time
 	CommitIdempotencyKey string         `orm:"not_null;default:''"`
 	CommitResultJSON     map[string]any `orm:"json;not_null;default:''"`
 	ManifestPath         string         `orm:"not_null;default:''"`
@@ -562,7 +562,7 @@ type FacilityEditSession struct {
 	AbsoluteExpiresAt    time.Time      `orm:"not_null"`
 	CreatedAt            time.Time      `orm:"not_null"`
 	UpdatedAt            time.Time      `orm:"not_null"`
-	CommittedAt          time.Time      `orm:"not_null;default:''"`
+	CommittedAt          *time.Time
 }
 
 func (*FacilityEditSession) TableName() string { return "facility_edit_sessions" }
@@ -654,23 +654,23 @@ func (*DNSDomain) TableConstraints() []string {
 
 // Certificate 对应 certificates。
 type Certificate struct {
-	ID              string    `orm:"primary_key"`
-	Name            string    `orm:"not_null"`
-	DomainID        string    `orm:"not_null;default:'';references:dns_domains(id)"`
-	Domain          string    `orm:"not_null"`
-	Prefix          string    `orm:"not_null;default:'@'"`
-	Scope           string    `orm:"not_null"`
-	DomainsJSON     []string  `orm:"json;not_null;default:'[]'"`
-	VariableName    string    `orm:"not_null;unique"`
-	CertificatePath string    `orm:"not_null"`
-	PrivateKeyPath  string    `orm:"not_null"`
-	Issuer          string    `orm:"not_null;default:''"`
-	Status          string    `orm:"not_null;default:'pending'"`
-	LastError       string    `orm:"not_null;default:''"`
-	AutoRenew       bool      `orm:"not_null;default:1"`
-	NextRenewAt     time.Time `orm:"not_null;default:''"`
-	NotBefore       time.Time `orm:"not_null;default:''"`
-	NotAfter        time.Time `orm:"not_null;default:''"`
+	ID              string   `orm:"primary_key"`
+	Name            string   `orm:"not_null"`
+	DomainID        string   `orm:"not_null;default:'';references:dns_domains(id)"`
+	Domain          string   `orm:"not_null"`
+	Prefix          string   `orm:"not_null;default:'@'"`
+	Scope           string   `orm:"not_null"`
+	DomainsJSON     []string `orm:"json;not_null;default:'[]'"`
+	VariableName    string   `orm:"not_null;unique"`
+	CertificatePath string   `orm:"not_null"`
+	PrivateKeyPath  string   `orm:"not_null"`
+	Issuer          string   `orm:"not_null;default:''"`
+	Status          string   `orm:"not_null;default:'pending'"`
+	LastError       string   `orm:"not_null;default:''"`
+	AutoRenew       bool     `orm:"not_null;default:1"`
+	NextRenewAt     *time.Time
+	NotBefore       *time.Time
+	NotAfter        *time.Time
 	CreatedAt       time.Time `orm:"not_null"`
 	UpdatedAt       time.Time `orm:"not_null"`
 }
@@ -684,19 +684,19 @@ func (*Certificate) TableConstraints() []string {
 
 // SelfSignedCertificate 对应 self_signed_certificates。
 type SelfSignedCertificate struct {
-	ID              string    `orm:"primary_key"`
-	ParentCAID      string    `orm:"not_null;default:'';column:parent_ca_id"`
-	Kind            string    `orm:"not_null"`
-	Name            string    `orm:"not_null"`
-	CommonName      string    `orm:"not_null"`
-	DNSNamesJSON    []string  `orm:"json;not_null;default:'[]'"`
-	IPAddressesJSON []string  `orm:"json;not_null;default:'[]'"`
-	CertificatePath string    `orm:"not_null"`
-	PrivateKeyPath  string    `orm:"not_null"`
-	PublicKeyPath   string    `orm:"not_null"`
-	Fingerprint     string    `orm:"not_null;default:''"`
-	NotBefore       time.Time `orm:"not_null;default:''"`
-	NotAfter        time.Time `orm:"not_null;default:''"`
+	ID              string   `orm:"primary_key"`
+	ParentCAID      string   `orm:"not_null;default:'';column:parent_ca_id"`
+	Kind            string   `orm:"not_null"`
+	Name            string   `orm:"not_null"`
+	CommonName      string   `orm:"not_null"`
+	DNSNamesJSON    []string `orm:"json;not_null;default:'[]'"`
+	IPAddressesJSON []string `orm:"json;not_null;default:'[]'"`
+	CertificatePath string   `orm:"not_null"`
+	PrivateKeyPath  string   `orm:"not_null"`
+	PublicKeyPath   string   `orm:"not_null"`
+	Fingerprint     string   `orm:"not_null;default:''"`
+	NotBefore       *time.Time
+	NotAfter        *time.Time
 	CreatedAt       time.Time `orm:"not_null"`
 	UpdatedAt       time.Time `orm:"not_null"`
 }
@@ -724,10 +724,10 @@ type KeyAsset struct {
 	PrivateKeyCiphertext  string         `orm:"not_null;default:''"`
 	PublicKey             string         `orm:"not_null;default:''"`
 	MetadataJSON          map[string]any `orm:"json;not_null;default:'{}'"`
-	NotBefore             time.Time      `orm:"not_null;default:''"`
-	NotAfter              time.Time      `orm:"not_null;default:''"`
-	CreatedAt             time.Time      `orm:"not_null"`
-	UpdatedAt             time.Time      `orm:"not_null"`
+	NotBefore             *time.Time
+	NotAfter              *time.Time
+	CreatedAt             time.Time `orm:"not_null"`
+	UpdatedAt             time.Time `orm:"not_null"`
 }
 
 func (*KeyAsset) TableName() string { return "key_assets" }

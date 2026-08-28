@@ -42,7 +42,8 @@
 ### 类型映射
 
 - string→TEXT；int/uint→INTEGER；float→REAL；bool→INTEGER(0/1)；time.Time→TEXT(RFC3339Nano, UTC) 或 unix INTEGER；[]byte→BLOB；nil/any→TEXT；同时实现 sql.Scanner 与 driver.Valuer 的类型透传。
-- 可空列用 `*T` 或 `sql.Null*`；NULL 读入 `*T` 时保持 nil，读入非指针标量时留零值。
+- 可空列用 `*T` 或 `sql.Null*`；NULL 读入 `*T` 时保持 nil，读入非指针标量时留零值。时间列的空串 `''` 是历史脏数据，统一表示“未设置”，ORM 三处全局兜底：读取时（scan）按未设置处理、指针保持 nil，不报 `orm: cannot parse time ""`；写入时（UpdateColumns）对可空时间列自动把 `""` 归一为 NULL；启动时（NormalizeBlankTimeColumns）对所有库/所有模型的可空时间列把存量 `''` 清成 NULL。
+- 约定：时间列一律用 `time.Time` / `*time.Time`（可空），**不要**用 `not_null;default:''` 表示“未设置”；无值必须写 NULL。存量模型里的 `not_null;default:''` 时间列已全部收敛为可空 `*time.Time`：AutoMigrate 检测到“模型可空但存量列仍 NOT NULL/default”的漂移时，会做一次性重建（保留数据）把列改成可空；NormalizeBlankTimeColumns 只清理物理上可空的列，绝不因未收敛的旧 schema 启动失败。
 
 ## Builder API
 

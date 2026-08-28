@@ -500,8 +500,15 @@ func (q *Query) UpdateColumns(ctx context.Context, values map[string]any) error 
 	args := make([]any, 0, len(cols)+8)
 	for _, c := range cols {
 		if meta != nil {
-			if _, ok := meta.byColumn[c]; !ok {
+			f, ok := meta.byColumn[c]
+			if !ok {
 				return fmt.Errorf("orm: unknown column %q", c)
+			}
+			if f.kind == kindTime && f.nullable && blankStringValue(values[c]) {
+				// Same rule as scanning: an empty string in a nullable time column
+				// means "not set". Normalize it to NULL on write so legacy ""
+				// cannot be re-introduced (orm: cannot parse time "").
+				values[c] = nil
 			}
 		}
 		sets = append(sets, quoteIdent(c)+" = ?")
@@ -602,6 +609,11 @@ func fieldValue(f *fieldInfo, fv reflect.Value) (any, error) {
 		}
 		if f.timeUnix {
 			return t.Unix(), nil
+		}
+		if f.nullable && t.IsZero() {
+			// Zero time in a nullable time column means "not set"; write NULL
+			// instead of a fake 0001-01-01T00:00:00Z timestamp.
+			return nil, nil
 		}
 		return t.UTC().Format(time.RFC3339Nano), nil
 	case kindBytes:

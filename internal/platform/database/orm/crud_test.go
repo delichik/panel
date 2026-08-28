@@ -601,3 +601,109 @@ func TestCRUDRawEscapeHatch(t *testing.T) {
 		t.Fatalf("raw row = %q", v)
 	}
 }
+
+type crudEvent struct {
+	ID         string `orm:"primary_key"`
+	StartedAt  *time.Time
+	FinishedAt *time.Time
+}
+
+func (crudEvent) TableName() string { return "crud_events" }
+
+func TestCRUDTimeColumnBlankStringTreatedAsUnset(t *testing.T) {
+	db := openTestDB(t)
+	if err := Register(&crudEvent{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE crud_events (
+		id TEXT PRIMARY KEY,
+		started_at TEXT,
+		finished_at TEXT
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := db.Exec(`INSERT INTO crud_events(id, started_at, finished_at) VALUES('e1', '', NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	var got crudEvent
+	if err := New(db).From("crud_events").Where("id = ?", "e1").First(ctx, &got); err != nil {
+		t.Fatalf("scan row with legacy empty-string time column: %v", err)
+	}
+	if got.StartedAt != nil {
+		t.Fatalf("started_at = %v, want nil for legacy '' value", got.StartedAt)
+	}
+	if got.FinishedAt != nil {
+		t.Fatalf("finished_at = %v, want nil", got.FinishedAt)
+	}
+}
+
+func TestCRUDTimeColumnBlankStringNormalized(t *testing.T) {
+	db := openTestDB(t)
+	if err := Register(&crudEvent{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE crud_events (
+		id TEXT PRIMARY KEY,
+		started_at TEXT,
+		finished_at TEXT
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := db.Exec(`INSERT INTO crud_events(id, started_at, finished_at) VALUES('e1', '', NULL)`); err != nil {
+		t.Fatal(err)
+	}
+
+	// 写入端：UpdateColumns 对可空时间列把 "" 归一为 NULL，避免再次写入脏数据。
+	if err := New(db).From("crud_events").Where("id = ?", "e1").UpdateColumns(ctx, map[string]any{"started_at": ""}); err != nil {
+		t.Fatal(err)
+	}
+	var row crudEvent
+	if err := New(db).From("crud_events").Where("id = ?", "e1").First(ctx, &row); err != nil {
+		t.Fatal(err)
+	}
+	if row.StartedAt != nil {
+		t.Fatalf("after UpdateColumns(\"\"): started_at = %v, want NULL", row.StartedAt)
+	}
+
+	// 数据端：通用归一化把存量 '' 清成 NULL。
+	if _, err := db.Exec(`INSERT INTO crud_events(id, started_at, finished_at) VALUES('e2', '', '')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := NormalizeBlankTimeColumns(ctx, db, []any{&crudEvent{}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := New(db).From("crud_events").Where("id = ?", "e2").First(ctx, &row); err != nil {
+		t.Fatal(err)
+	}
+	if row.StartedAt != nil || row.FinishedAt != nil {
+		t.Fatalf("after NormalizeBlankTimeColumns: started_at=%v finished_at=%v, want both nil", row.StartedAt, row.FinishedAt)
+	}
+}
+
+func TestCRUDTimeColumnZeroPointerWrittenAsNull(t *testing.T) {
+	db := openTestDB(t)
+	if err := Register(&crudEvent{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE crud_events (
+		id TEXT PRIMARY KEY,
+		started_at TEXT,
+		finished_at TEXT
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	zero := time.Time{}
+	if err := Insert(ctx, db, &crudEvent{ID: "z1", StartedAt: &zero}); err != nil {
+		t.Fatal(err)
+	}
+	var row crudEvent
+	if err := New(db).From("crud_events").Where("id = ?", "z1").First(ctx, &row); err != nil {
+		t.Fatal(err)
+	}
+	if row.StartedAt != nil {
+		t.Fatalf("started_at = %v, want NULL for zero time pointer", row.StartedAt)
+	}
+}

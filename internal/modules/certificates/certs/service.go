@@ -487,7 +487,7 @@ func (s *Service) ListSummaries(ctx context.Context, page, pageSize int, query s
 	}
 	total := int(total64)
 	listArgs := append(append([]any{}, args...), pageSize, (page-1)*pageSize)
-	rows, err := orm.Raw(ctx, s.db, `SELECT id,name,domain_id,domain,prefix,scope,domains_json,issuer,status,last_error,auto_renew,next_renew_at,not_before,not_after,created_at,updated_at FROM certificates WHERE `+filter+` ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?`, listArgs...)
+	rows, err := orm.Raw(ctx, s.db, `SELECT id,name,domain_id,domain,prefix,scope,domains_json,issuer,status,last_error,auto_renew,COALESCE(next_renew_at,''),COALESCE(not_before,''),COALESCE(not_after,''),created_at,updated_at FROM certificates WHERE `+filter+` ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?`, listArgs...)
 	if err != nil {
 		return httpx.ListPage[CertificateSummary]{}, err
 	}
@@ -1117,7 +1117,7 @@ func certificateValidity(certPEM []byte) (time.Time, time.Time) {
 
 type certScanner interface{ Scan(dest ...any) error }
 
-const certificateColumns = `id,name,domain_id,domain,prefix,scope,domains_json,variable_name,certificate_path,private_key_path,issuer,status,last_error,auto_renew,next_renew_at,not_before,not_after,created_at,updated_at`
+const certificateColumns = `id,name,domain_id,domain,prefix,scope,domains_json,variable_name,certificate_path,private_key_path,issuer,status,last_error,auto_renew,COALESCE(next_renew_at,''),COALESCE(not_before,''),COALESCE(not_after,''),created_at,updated_at`
 
 func scanCertificate(row certScanner) (Certificate, error) {
 	var cert Certificate
@@ -1196,9 +1196,9 @@ func formatTime(value time.Time) string {
 	return value.UTC().Format(time.RFC3339Nano)
 }
 
-func formatOptionalTime(value time.Time) string {
+func formatOptionalTime(value time.Time) any {
 	if value.IsZero() {
-		return ""
+		return nil
 	}
 	return formatTime(value)
 }

@@ -180,7 +180,7 @@ func (s *Service) PatchFacilityEditSession(ctx context.Context, sessionID string
 		return FacilityEditSession{}, err
 	}
 	now := time.Now().UTC()
-	res, err := s.db.ExecContext(ctx, `UPDATE facility_edit_sessions SET draft_json=?,base_resource_version=?,revision=revision+1,state=?,conflict_json='',preview_token='',preview_revision=0,preview_expires_at='',updated_at=?,idle_expires_at=? WHERE id=? AND owner_id=? AND revision=? AND state IN (?,?) AND absolute_expires_at>? AND idle_expires_at>?`,
+	res, err := s.db.ExecContext(ctx, `UPDATE facility_edit_sessions SET draft_json=?,base_resource_version=?,revision=revision+1,state=?,conflict_json='',preview_token='',preview_revision=0,preview_expires_at=NULL,updated_at=?,idle_expires_at=? WHERE id=? AND owner_id=? AND revision=? AND state IN (?,?) AND absolute_expires_at>? AND idle_expires_at>?`,
 		string(raw), baseVersion, FacilityEditSessionActive, formatTime(now), formatTime(now.Add(facilityEditIdleTTL)), strings.TrimSpace(sessionID), facilityEditOwner, in.Revision, FacilityEditSessionActive, FacilityEditSessionConflict, formatTime(now), formatTime(now))
 	if err != nil {
 		return FacilityEditSession{}, err
@@ -713,7 +713,7 @@ func facilityDiagnosticsBlock(items []applications.Diagnostic) bool {
 }
 
 func (s *Service) loadFacilityEditSession(ctx context.Context, sessionID string) (facilityEditRecord, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,owner_id,client_draft_key,state,base_resource_version,draft_json,revision,preview_token,preview_revision,preview_expires_at,commit_lease_owner,commit_lease_expires_at,commit_idempotency_key,commit_result_json,manifest_path,idle_expires_at,absolute_expires_at,created_at,updated_at,committed_at FROM facility_edit_sessions WHERE id=? AND owner_id=?`, strings.TrimSpace(sessionID), facilityEditOwner)
+	row := s.db.QueryRowContext(ctx, `SELECT id,owner_id,client_draft_key,state,base_resource_version,draft_json,revision,preview_token,preview_revision,COALESCE(preview_expires_at,''),commit_lease_owner,COALESCE(commit_lease_expires_at,''),commit_idempotency_key,commit_result_json,manifest_path,idle_expires_at,absolute_expires_at,created_at,updated_at,COALESCE(committed_at,'') FROM facility_edit_sessions WHERE id=? AND owner_id=?`, strings.TrimSpace(sessionID), facilityEditOwner)
 	var record facilityEditRecord
 	var draftRaw, preview, previewExpires, leaseExpires, resultRaw, idle, absolute, created, updated, committed string
 	var baseVersion int
@@ -792,7 +792,7 @@ func (s *Service) loadFacilityEditAssets(ctx context.Context, sessionID string) 
 
 func bumpFacilityEditRevision(ctx context.Context, tx *sql.Tx, sessionID string, revision int) error {
 	now := time.Now().UTC()
-	res, err := tx.ExecContext(ctx, `UPDATE facility_edit_sessions SET revision=revision+1,state=?,preview_token='',preview_revision=0,preview_expires_at='',updated_at=?,idle_expires_at=? WHERE id=? AND owner_id=? AND revision=? AND state IN (?,?) AND idle_expires_at>? AND absolute_expires_at>?`,
+	res, err := tx.ExecContext(ctx, `UPDATE facility_edit_sessions SET revision=revision+1,state=?,preview_token='',preview_revision=0,preview_expires_at=NULL,updated_at=?,idle_expires_at=? WHERE id=? AND owner_id=? AND revision=? AND state IN (?,?) AND idle_expires_at>? AND absolute_expires_at>?`,
 		FacilityEditSessionActive, formatTime(now), formatTime(now.Add(facilityEditIdleTTL)), sessionID, facilityEditOwner, revision, FacilityEditSessionActive, FacilityEditSessionConflict, formatTime(now), formatTime(now))
 	if err != nil {
 		return err
@@ -1022,7 +1022,7 @@ func (s *Service) commitFacilityManifestDB(ctx context.Context, manifest facilit
 func (s *Service) finishFacilityCommit(ctx context.Context, record facilityEditRecord, leaseOwner string, result FacilityEditCommitResult) error {
 	raw, _ := json.Marshal(result)
 	now := time.Now().UTC()
-	res, err := s.db.ExecContext(ctx, `UPDATE facility_edit_sessions SET state=?,commit_result_json=?,commit_lease_owner='',commit_lease_expires_at='',committed_at=?,updated_at=? WHERE id=? AND owner_id=? AND commit_lease_owner=?`, FacilityEditSessionCommitted, string(raw), formatTime(now), formatTime(now), record.ID, facilityEditOwner, leaseOwner)
+	res, err := s.db.ExecContext(ctx, `UPDATE facility_edit_sessions SET state=?,commit_result_json=?,commit_lease_owner='',commit_lease_expires_at=NULL,committed_at=?,updated_at=? WHERE id=? AND owner_id=? AND commit_lease_owner=?`, FacilityEditSessionCommitted, string(raw), formatTime(now), formatTime(now), record.ID, facilityEditOwner, leaseOwner)
 	if err != nil {
 		return err
 	}
@@ -1033,7 +1033,7 @@ func (s *Service) finishFacilityCommit(ctx context.Context, record facilityEditR
 }
 
 func (s *Service) resetFacilityCommit(ctx context.Context, sessionID, leaseOwner, state, conflict string) {
-	_, _ = s.db.ExecContext(ctx, `UPDATE facility_edit_sessions SET state=?,conflict_json=?,commit_lease_owner='',commit_lease_expires_at='',updated_at=? WHERE id=? AND commit_lease_owner=?`, state, conflict, formatTime(time.Now().UTC()), sessionID, leaseOwner)
+	_, _ = s.db.ExecContext(ctx, `UPDATE facility_edit_sessions SET state=?,conflict_json=?,commit_lease_owner='',commit_lease_expires_at=NULL,updated_at=? WHERE id=? AND commit_lease_owner=?`, state, conflict, formatTime(time.Now().UTC()), sessionID, leaseOwner)
 }
 
 func (s *Service) renewFacilityCommitLease(ctx context.Context, sessionID, leaseOwner string) error {
@@ -1184,7 +1184,7 @@ func (s *Service) startFacilityEditSessionCleanup() {
 func (s *Service) cleanupFacilityEditSessions(now time.Time) {
 	s.editCommitMu.Lock()
 	defer s.editCommitMu.Unlock()
-	rows, err := s.db.Query(`SELECT id FROM facility_edit_sessions WHERE state=? AND (commit_lease_expires_at='' OR commit_lease_expires_at<=?)`, FacilityEditSessionCommitting, formatTime(now))
+	rows, err := s.db.Query(`SELECT id FROM facility_edit_sessions WHERE state=? AND (commit_lease_expires_at IS NULL OR commit_lease_expires_at='' OR commit_lease_expires_at<=?)`, FacilityEditSessionCommitting, formatTime(now))
 	if err == nil {
 		ids := []string{}
 		for rows.Next() {

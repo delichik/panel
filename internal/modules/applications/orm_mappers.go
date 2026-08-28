@@ -187,9 +187,10 @@ func toRuntimeInstance(m models.ApplicationInstance) appruntime.Instance {
 }
 
 // editSessionRow 使用字符串承载 base_resource_updated_at/preview_expires_at/
-// commit_lease_expires_at/committed_at 等列：存量数据以 ” 作为默认值，
-// models 的 time.Time 无法解析空串。draft_json/commit_result_json/conflict_json
-// 以字符串透传，保持与原 loadEditSession 的手工 json.Unmarshal 语义一致。
+// commit_lease_expires_at/committed_at 等列：ORM 读取 NULL 时字符串留空，
+// 存量空串 ” 也按“未设置”处理（parseEditTime），与已收敛为可空列的时间
+// 语义一致。draft_json/commit_result_json/conflict_json 以字符串透传，保持
+// 与原 loadEditSession 的手工 json.Unmarshal 语义一致。
 type editSessionRow struct {
 	ID                    string `orm:"column:id"`
 	ApplicationID         string `orm:"column:application_id"`

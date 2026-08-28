@@ -155,7 +155,7 @@ func (s *Service) PatchEditSession(ctx context.Context, owner, sessionID string,
 		return ApplicationEditSession{}, err
 	}
 	now := time.Now().UTC()
-	res, err := orm.RawExec(ctx, s.db, `UPDATE application_edit_sessions SET draft_json=?,revision=revision+1,preview_token='',preview_revision=0,preview_expires_at='',state=?,updated_at=?,idle_expires_at=? WHERE id=? AND owner_id=? AND revision=? AND state IN (?,?) AND absolute_expires_at>?`,
+	res, err := orm.RawExec(ctx, s.db, `UPDATE application_edit_sessions SET draft_json=?,revision=revision+1,preview_token='',preview_revision=0,preview_expires_at=NULL,state=?,updated_at=?,idle_expires_at=? WHERE id=? AND owner_id=? AND revision=? AND state IN (?,?) AND absolute_expires_at>?`,
 		string(raw), EditSessionStateActive, formatTime(now), formatTime(now.Add(editSessionIdleTTL)), strings.TrimSpace(sessionID), normalizeEditOwner(owner), in.Revision, EditSessionStateActive, EditSessionStateConflict, formatTime(now))
 	if err != nil {
 		return ApplicationEditSession{}, err
@@ -573,7 +573,7 @@ func (s *Service) writeEditSessionFile(ctx context.Context, owner, sessionID, fi
 
 func (s *Service) bumpEditRevision(ctx context.Context, tx *sql.Tx, owner, sessionID string, revision int) error {
 	now := time.Now().UTC()
-	res, err := orm.RawExec(ctx, tx, `UPDATE application_edit_sessions SET revision=revision+1,preview_token='',preview_revision=0,preview_expires_at='',state=?,updated_at=?,idle_expires_at=? WHERE id=? AND owner_id=? AND revision=? AND state IN (?,?) AND absolute_expires_at>?`,
+	res, err := orm.RawExec(ctx, tx, `UPDATE application_edit_sessions SET revision=revision+1,preview_token='',preview_revision=0,preview_expires_at=NULL,state=?,updated_at=?,idle_expires_at=? WHERE id=? AND owner_id=? AND revision=? AND state IN (?,?) AND absolute_expires_at>?`,
 		EditSessionStateActive, formatTime(now), formatTime(now.Add(editSessionIdleTTL)), sessionID, owner, revision, EditSessionStateActive, EditSessionStateConflict, formatTime(now))
 	if err != nil {
 		return err
@@ -794,7 +794,7 @@ func (s *Service) recoverPersistedEditCommit(ctx context.Context, record editSes
 	}
 	raw, _ := json.Marshal(result)
 	now := time.Now().UTC()
-	res, err := orm.RawExec(ctx, s.db, `UPDATE application_edit_sessions SET state=?,commit_result_json=?,commit_lease_owner='',commit_lease_expires_at='',committed_at=?,updated_at=? WHERE id=? AND owner_id=? AND state=?`, EditSessionStateCommitted, string(raw), formatTime(now), formatTime(now), record.ID, record.OwnerID, EditSessionStateCommitting)
+	res, err := orm.RawExec(ctx, s.db, `UPDATE application_edit_sessions SET state=?,commit_result_json=?,commit_lease_owner='',commit_lease_expires_at=NULL,committed_at=?,updated_at=? WHERE id=? AND owner_id=? AND state=?`, EditSessionStateCommitted, string(raw), formatTime(now), formatTime(now), record.ID, record.OwnerID, EditSessionStateCommitting)
 	if err != nil || expectEditMutation(res) != nil {
 		return EditCommitResult{}, false
 	}
@@ -968,7 +968,7 @@ func (s *Service) cleanupEditSessions(now time.Time) {
 	// cleanup becomes the recovery worker even if no client performs GET.
 	var committing []editSessionCleanupRow
 	err := orm.New(s.db).From("application_edit_sessions").Select("id", "owner_id").Where("state=?", EditSessionStateCommitting).WhereGroup(func(c *orm.Condition) {
-		c.Or("commit_lease_expires_at=?", "").Or("commit_lease_expires_at<=?", formatTime(now))
+		c.Or("commit_lease_expires_at IS NULL").Or("commit_lease_expires_at=?", "").Or("commit_lease_expires_at<=?", formatTime(now))
 	}).All(context.Background(), &committing)
 	if err == nil {
 		for _, item := range committing {
@@ -1112,9 +1112,9 @@ func normalizeEditOwner(owner string) string {
 	return owner
 }
 
-func formatOptionalEditTime(value time.Time) string {
+func formatOptionalEditTime(value time.Time) any {
 	if value.IsZero() {
-		return ""
+		return nil
 	}
 	return formatTime(value)
 }

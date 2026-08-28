@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func contains(list []string, s string) bool {
@@ -747,4 +748,93 @@ func TestMigrateDriftReportFields(t *testing.T) {
 		t.Fatalf("AddedTables = %v", r.AddedTables)
 	}
 
+}
+
+type migTimeV1 struct {
+	ID        string    `orm:"primary_key"`
+	NotBefore time.Time `orm:"not_null;default:''"`
+}
+
+func (migTimeV1) TableName() string { return "mig_time" }
+
+type migTimeV2 struct {
+	ID        string `orm:"primary_key"`
+	NotBefore *time.Time
+}
+
+func (migTimeV2) TableName() string { return "mig_time" }
+
+func TestMigrateRebuildsLegacyBlankTimeColumnAsNullable(t *testing.T) {
+	db := openTestDB(t)
+	if err := Register(&migTimeV1{}); err != nil {
+		t.Fatal(err)
+	}
+	runMigrate(t, db, true)
+	if _, err := db.Exec(`INSERT INTO mig_time (id, not_before) VALUES (?, ?)`, "t1", ""); err != nil {
+		t.Fatal(err)
+	}
+	// legacy column shape before convergence
+	if notNull, hasDflt := timeColumnShape(t, db, "mig_time", "not_before"); !notNull || !hasDflt {
+		t.Fatalf("legacy not_before: notNull=%v hasDflt=%v, want NOT NULL with default", notNull, hasDflt)
+	}
+
+	if err := Register(&migTimeV2{}); err != nil {
+		t.Fatal(err)
+	}
+	r := runMigrate(t, db, true)
+	if !contains(r.RebuiltTables, "mig_time") {
+		t.Fatalf("RebuiltTables = %v, want mig_time", r.RebuiltTables)
+	}
+	if notNull, hasDflt := timeColumnShape(t, db, "mig_time", "not_before"); notNull || hasDflt {
+		t.Fatalf("after converge not_before: notNull=%v hasDflt=%v, want nullable without default", notNull, hasDflt)
+	}
+
+	// data preserved; generic normalization then clears '' -> NULL
+	var id string
+	if err := db.QueryRow(`SELECT id FROM mig_time WHERE id = ?`, "t1").Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if id != "t1" {
+		t.Fatalf("data lost after rebuild: %q", id)
+	}
+	if err := NormalizeBlankTimeColumns(context.Background(), db, []any{&migTimeV2{}}); err != nil {
+		t.Fatal(err)
+	}
+	var nb *string
+	if err := db.QueryRow(`SELECT not_before FROM mig_time WHERE id = ?`, "t1").Scan(&nb); err != nil {
+		t.Fatal(err)
+	}
+	if nb != nil {
+		t.Fatalf("not_before = %q, want NULL after normalization", *nb)
+	}
+
+	// stable: no further rebuild once the schema matches the model
+	r2 := runMigrate(t, db, true)
+	if contains(r2.RebuiltTables, "mig_time") {
+		t.Fatalf("mig_time rebuilt again: %v", r2.RebuiltTables)
+	}
+}
+
+func timeColumnShape(t *testing.T, db *sql.DB, table, col string) (notNull, hasDflt bool) {
+	t.Helper()
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notnull int
+		var dflt sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			t.Fatal(err)
+		}
+		if name == col {
+			return notnull != 0, dflt.Valid
+		}
+	}
+	t.Fatalf("column %s not found in %s", col, table)
+	return false, false
 }

@@ -309,7 +309,7 @@ func (s *Service) List(ctx context.Context) ([]Asset, error) {
 
 func (s *Service) ListSummaries(ctx context.Context) ([]Asset, error) {
 	rows, err := orm.Raw(ctx, s.db, `SELECT id,type,name,parent_asset_id,algorithm,key_size,common_name,dns_names_json,ip_addresses_json,fingerprint,
-		CASE WHEN public_key<>'' THEN 1 ELSE 0 END,not_before,not_after,created_at,updated_at FROM key_assets WHERE `+userVisibleAssetsFilter+` ORDER BY type,name,id`)
+		CASE WHEN public_key<>'' THEN 1 ELSE 0 END,COALESCE(not_before,''),COALESCE(not_after,''),created_at,updated_at FROM key_assets WHERE `+userVisibleAssetsFilter+` ORDER BY type,name,id`)
 	if err != nil {
 		return nil, err
 	}
@@ -393,7 +393,7 @@ func (s *Service) listSummaryPage(ctx context.Context, page, pageSize int, query
 	total := int(total64)
 	listArgs := append(append([]any{}, args...), pageSize, (page-1)*pageSize)
 	rows, err := orm.Raw(ctx, s.db, `SELECT id,type,name,parent_asset_id,algorithm,key_size,common_name,dns_names_json,ip_addresses_json,fingerprint,
-		CASE WHEN public_key<>'' THEN 1 ELSE 0 END,not_before,not_after,created_at,updated_at FROM key_assets WHERE `+filter+` ORDER BY type,name,id LIMIT ? OFFSET ?`, listArgs...)
+		CASE WHEN public_key<>'' THEN 1 ELSE 0 END,COALESCE(not_before,''),COALESCE(not_after,''),created_at,updated_at FROM key_assets WHERE `+filter+` ORDER BY type,name,id LIMIT ? OFFSET ?`, listArgs...)
 	if err != nil {
 		return httpx.ListPage[Asset]{}, err
 	}
@@ -1790,7 +1790,7 @@ func scanStoredAsset(row interface{ Scan(dest ...any) error }) (storedAsset, err
 	return asset, nil
 }
 
-const assetColumns = `id,type,name,parent_asset_id,algorithm,key_size,common_name,dns_names_json,ip_addresses_json,fingerprint,certificate_ciphertext,private_key_ciphertext,public_key,metadata_json,not_before,not_after,created_at,updated_at`
+const assetColumns = `id,type,name,parent_asset_id,algorithm,key_size,common_name,dns_names_json,ip_addresses_json,fingerprint,certificate_ciphertext,private_key_ciphertext,public_key,metadata_json,COALESCE(not_before,''),COALESCE(not_after,''),created_at,updated_at`
 
 func decorateAsset(asset Asset, references []AssetReference, childCount int) Asset {
 	asset.References = append([]AssetReference(nil), references...)
@@ -1858,9 +1858,9 @@ func formatTime(value time.Time) string {
 	return value.UTC().Format(time.RFC3339Nano)
 }
 
-func formatOptionalTime(value time.Time) string {
+func formatOptionalTime(value time.Time) any {
 	if value.IsZero() {
-		return ""
+		return nil
 	}
 	return formatTime(value)
 }

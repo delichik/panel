@@ -933,6 +933,21 @@ func (m *migrator) syncTable(ctx context.Context, meta *modelInfo, snap *snapsho
 			break
 		}
 	}
+	// Nullable time drift: a model time column that is nullable (*time.Time)
+	// must not stay NOT NULL / default:'' in the database. This converges the
+	// legacy "not_null;default:'' means no value" anti-pattern to proper NULL
+	// semantics with a one-time rebuild (data is preserved). After the
+	// rebuild the actual column matches the model, so this never repeats.
+	timeDrift := false
+	for _, f := range meta.fields {
+		if f.kind != kindTime || !f.nullable {
+			continue
+		}
+		if col, ok := actual.columns[f.column]; ok && (col.notNull || col.hasDflt) {
+			timeDrift = true
+			break
+		}
+	}
 	dropTriggered := false
 	for _, name := range dropCols {
 		col := actual.columns[name]
@@ -950,7 +965,7 @@ func (m *migrator) syncTable(ctx context.Context, meta *modelInfo, snap *snapsho
 		}
 	}
 
-	if addTriggered || (dropTriggered && m.destructive) {
+	if addTriggered || timeDrift || (dropTriggered && m.destructive) {
 		if err := m.rebuildTable(ctx, meta, actual, snap); err != nil {
 			return err
 		}

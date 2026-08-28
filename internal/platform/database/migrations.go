@@ -43,6 +43,15 @@ func (s *Store) Migrate(ctx context.Context) error {
 			return fmt.Errorf("auto migrate schema: %w", err)
 		}
 	}
+	// 2.5. Generic blank-time cleanup (global): every nullable time column of
+	//      every registered model is normalized so '' becomes NULL. Runs on
+	//      every start so legacy writers (and future regressions) can never
+	//      leave rows that break scans with "orm: cannot parse time \"\"".
+	for _, pass := range dbs {
+		if err := orm.NormalizeBlankTimeColumns(ctx, pass.db, pass.models); err != nil {
+			return fmt.Errorf("normalize blank time columns: %w", err)
+		}
+	}
 	// application_revisions used to be written to LogDB. Copy the immutable
 	// snapshots forward before new planners start creating AppDB jobs. The
 	// legacy table remains readable for older diagnostics, but it is no longer

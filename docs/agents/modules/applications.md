@@ -226,5 +226,6 @@
 - 记录列表/详情由应用模块提供（`GET /api/v1/application-operations`、`GET /api/v1/application-operations/{id}`），读取时直接聚合 AppDB jobs，**不建投影表**；`application_operation_records` 已随旧 lifecycle 层删除（不建、不用）。
 - 旧 `application_lifecycle_operations`、`application_lifecycle_targets`、`application_target_stages` 位于独立协调库 `Store.CoordDB()`（默认 `data/db/coordination.db`），已通过迁移步骤 DROP TABLE IF EXISTS 删除；协调库不再注册任何模型（`CoordinationModels` 返回空）。
 - 目标信息来自 Job 及其 Instance observed：Job 保存 action、状态、attempt/backoff、`last_steps_json` 与结构化错误；`application_instances` observed 字段提供“期望 vs 实际”观测快照（observed_state / observed_generation / observed_spec_hash / observed_image / observed_at 等），读不到实例则留空，前端显示“未知”。详情接口的目标携带由 Job 步骤派生的 `stages[]`。
+- jobs 可空时间列（next_run_at / lease_expires_at / started_at / finished_at）统一以 NULL 表示“未设置”：orchestrator 不再写入空串；ORM 读取时把空串按未设置处理，启动期通用归一化（`orm.NormalizeBlankTimeColumns`，覆盖全部库/全部模型的可空时间列）把存量空串清成 NULL，协调记录列表/详情不会因 `orm: cannot parse time ""` 返回 500。
 - 运行时状态由 `application_instances` observed 字段 + 活跃 Job（pending/running/failed_retryable）派生；没有 lifecycle 目标/步骤表需要清理，原 `applications.StageCleanupWorker` 已删除。
 - 事件（`runtimeevents`）仅作系统事件页诊断，协调记录不依赖事件、不返回事件。
