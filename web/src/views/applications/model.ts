@@ -39,7 +39,6 @@ export interface ApplicationDraftUi {
   enabled: boolean;
   image: string;
   commandRows: CommandRow[];
-  networkMode: 'bridge' | 'host';
   cpu: string;
   memoryMb: string;
   privileged: boolean;
@@ -103,13 +102,11 @@ export function statusTone(status: string) {
 export function draftFromApplication(app?: ApplicationDto | null): ApplicationDraftUi {
   const parsed = parseSpec(app?.specYaml || '');
   const command = arrayValue(parsed.command).map((item) => String(item)).filter((item) => item.trim() !== '');
-  const networkMode: 'bridge' | 'host' = stringValue(parsed.networkMode) === 'host' ? 'host' : 'bridge';
   return {
     name: app?.name || stringValue(parsed.name) || '',
     enabled: app?.enabled ?? true,
     image: stringValue(parsed.image),
     commandRows: command.map((value) => ({ id: makeId('cmd'), value })),
-    networkMode,
     cpu: stringValue(objectValue(parsed.resources)?.cpu),
     memoryMb: stringValue(objectValue(parsed.resources)?.memoryMb),
     privileged: Boolean(parsed.privileged),
@@ -124,7 +121,7 @@ export function draftFromApplication(app?: ApplicationDto | null): ApplicationDr
     }),
     deploymentMode: app?.deploymentMode === 'selected' ? 'selected' : 'all',
     deploymentServers: [...(app?.deploymentServers ?? [])],
-    reverseProxy: cloneProxyRules(app?.reverseProxy ?? []).map((rule) => (networkMode === 'host' && rule.targetType === 'container' ? { ...rule, targetType: 'local' } : rule)),
+    reverseProxy: cloneProxyRules(app?.reverseProxy ?? []),
     uncoveredSpec: uncoveredSpecFrom(parsed),
   };
 }
@@ -134,7 +131,6 @@ export function specYamlFromDraft(draft: ApplicationDraftUi) {
   const doc: Record<string, unknown> = { ...uncovered };
   doc.name = draft.name;
   doc.image = draft.image;
-  doc.networkMode = draft.networkMode;
   const command = draft.commandRows.map((row) => row.value.trim()).filter(Boolean);
   if (command.length) doc.command = command; else delete doc.command;
   const env = recordFromPairs(draft.env);
@@ -160,10 +156,7 @@ export function saveInputFromDraft(draft: ApplicationDraftUi): ApplicationSaveIn
     // Origin servers and the primary origin are resolved by the backend from
     // the global gateway nodes and the deployment targets. The client only
     // sends the user-arranged priority order for primary_backup.
-    reverseProxy: cloneProxyRules(draft.reverseProxy).map((rule) => {
-      const next = { ...rule, originServerIds: [] as string[], anyAccess: { ...rule.anyAccess, primaryOriginServerId: '' } };
-      return draft.networkMode === 'host' && next.targetType === 'container' ? { ...next, targetType: 'local' } : next;
-    }),
+    reverseProxy: cloneProxyRules(draft.reverseProxy).map((rule) => ({ ...rule, originServerIds: [] as string[], anyAccess: { ...rule.anyAccess, primaryOriginServerId: '' } })),
   };
 }
 
@@ -177,7 +170,7 @@ export function validateApplicationDraft(draft: ApplicationDraftUi): FieldErrors
   if (draft.env.some((row) => !row.key.trim())) errors.env = 'applicationsPage.validationEnv';
   if (draft.ports.some((row) => !row.to.trim())) errors.ports = 'applicationsPage.validationPorts';
   if (draft.mounts.some((row) => !row.target.trim())) errors.mounts = 'applicationsPage.validationMounts';
-  if (draft.reverseProxy.some((rule) => !rule.domain.trim() || !rule.targetType || !rule.targetPort || !rule.paths.length || rule.paths.some((path) => !path.path.trim()))) errors.reverseProxy = 'applicationsPage.validationReverseProxyRule';
+  if (draft.reverseProxy.some((rule) => !rule.domain.trim() || !rule.targetPort || !rule.paths.length || rule.paths.some((path) => !path.path.trim()))) errors.reverseProxy = 'applicationsPage.validationReverseProxyRule';
   return errors;
 }
 
@@ -303,7 +296,7 @@ export function makeMountRow(type = 'persistent'): MountRow {
 }
 
 export function makeProxyRule(): ReverseProxyRule {
-  return { domain: '', targetType: undefined, targetPort: 0, originServerIds: [], anyAccess: { enabled: false, strategy: '', originPriority: [], relayServerIds: [] }, paths: [] };
+  return { domain: '', targetPort: 0, originServerIds: [], anyAccess: { enabled: false, strategy: '', originPriority: [], relayServerIds: [] }, paths: [] };
 }
 
 export function makeProxyPath(): ReverseProxyPath {
@@ -323,7 +316,6 @@ export function makeFacilityPath(type: StaticRuleType = 'static'): FacilityRoute
 export function cloneProxyRules(rules: ReverseProxyRule[]) {
   return rules.map((rule) => ({
     domain: rule.domain,
-    targetType: rule.targetType || 'local',
     targetPort: Number(rule.targetPort || 0),
     originServerIds: [...(rule.originServerIds ?? [])],
     anyAccess: { enabled: Boolean(rule.anyAccess?.enabled), strategy: rule.anyAccess?.strategy || '', originPriority: [...(rule.anyAccess?.originPriority ?? [])], relayServerIds: [...(rule.anyAccess?.relayServerIds ?? [])] },

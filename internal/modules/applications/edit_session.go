@@ -1074,6 +1074,7 @@ func saveInputFromApplication(app Application) SaveInput {
 }
 
 func normalizeEditDraft(in SaveInput) SaveInput {
+	in = stripDeprecatedApplicationConfig(in)
 	if strings.TrimSpace(in.DeploymentMode) == "" {
 		in.DeploymentMode = DeploymentModeAll
 	}
@@ -1084,6 +1085,40 @@ func normalizeEditDraft(in SaveInput) SaveInput {
 		in.ReverseProxy = []ReverseProxyRule{}
 	}
 	return in
+}
+
+func stripDeprecatedApplicationConfig(in SaveInput) SaveInput {
+	in.SpecYAML = stripDeprecatedNetworkModeYAML(in.SpecYAML)
+	return in
+}
+
+func stripDeprecatedNetworkModeYAML(raw string) string {
+	lines := strings.SplitAfter(raw, "\n")
+	if len(lines) == 0 {
+		return raw
+	}
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		content := strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+		if content != "" && content[0] != ' ' && content[0] != '\t' {
+			if key, _, found := strings.Cut(content, ":"); found && isDeprecatedNetworkModeYAMLKey(key) {
+				continue
+			}
+		}
+		filtered = append(filtered, line)
+	}
+	return strings.Join(filtered, "")
+}
+
+func isDeprecatedNetworkModeYAMLKey(key string) bool {
+	key = strings.TrimSpace(key)
+	if key == "networkMode" {
+		return true
+	}
+	if len(key) < 2 {
+		return false
+	}
+	return (key[0] == '"' && key[len(key)-1] == '"' || key[0] == '\'' && key[len(key)-1] == '\'') && key[1:len(key)-1] == "networkMode"
 }
 
 func applicationResourceVersion(app Application) ResourceVersion {

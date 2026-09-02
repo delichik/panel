@@ -189,6 +189,12 @@ func TestDockerAPIClientCreateContainerOmitsRestartPolicy(t *testing.T) {
 	if _, ok := hostConfig["RestartPolicy"]; ok {
 		t.Fatalf("RestartPolicy was sent in create payload: %#v", hostConfig["RestartPolicy"])
 	}
+	if hostConfig["NetworkMode"] != managedBridgeNetwork {
+		t.Fatalf("NetworkMode = %#v, want %q", hostConfig["NetworkMode"], managedBridgeNetwork)
+	}
+	if _, ok := hostConfig["ExtraHosts"]; ok {
+		t.Fatalf("ExtraHosts must not be sent: %#v", hostConfig["ExtraHosts"])
+	}
 }
 
 func TestWriteManagedFilesRemovesStaleManagedFiles(t *testing.T) {
@@ -266,6 +272,8 @@ func TestLocalRuntimeCreateContainerRetriesAfterNameConflict(t *testing.T) {
 	var creates, deletes int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/networks/"+managedBridgeNetwork:
+			w.WriteHeader(http.StatusOK)
 		case r.Method == http.MethodPost && r.URL.Path == "/containers/create":
 			creates++
 			if creates == 1 {
@@ -644,5 +652,22 @@ func TestRestorePersistentArchiveSwapsAtomicallyAndPreservesOldOnFailure(t *test
 	}
 	if got, err := os.ReadFile(filepath.Join(dir, "new.txt")); err != nil || string(got) != "hello" {
 		t.Fatalf("existing tree was damaged by cancelled restore: %q err=%v", got, err)
+	}
+}
+
+func TestManagedContainerMatchesDesiredRuntimeRequiresManagedBridgeNetwork(t *testing.T) {
+	inspect := dockerInspectResponse{}
+	inspect.Config.Labels = map[string]string{
+		"panel.application.spec.hash": "hash",
+		"panel.application.generation": "2",
+	}
+	inspect.State.Running = true
+	inspect.HostConfig.NetworkMode = managedBridgeNetwork
+	if !managedContainerMatchesDesiredRuntime(inspect, "hash", 2) {
+		t.Fatal("managed bridge container should be reusable")
+	}
+	inspect.HostConfig.NetworkMode = "host"
+	if managedContainerMatchesDesiredRuntime(inspect, "hash", 2) {
+		t.Fatal("legacy host-network container must be recreated")
 	}
 }

@@ -27,9 +27,9 @@ func TestFacilityApplicationNeverExposesFacilityRoutesAsAppRules(t *testing.T) {
 		DeploymentModeSelected, `["srv-a"]`, 1, "facility-hash", "nginx:1.27-alpine", "facility-reverse-proxy", "facility", now, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.db.ExecContext(ctx, `INSERT INTO reverse_proxy_routes(domain,app_id,origin_server_ids,any_access_json,target_type,target_port,paths_json,created_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?)`,
-		"gateway.example.test", "facility-reverse-proxy", `["srv-a"]`, `{}`, "", 0,
+	if _, err := svc.db.ExecContext(ctx, `INSERT INTO reverse_proxy_routes(domain,app_id,origin_server_ids,any_access_json,target_port,paths_json,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?)`,
+		"gateway.example.test", "facility-reverse-proxy", `["srv-a"]`, `{}`, 0,
 		`[{"path":"/","ruleType":"static","assetName":"index"}]`, now, now); err != nil {
 		t.Fatal(err)
 	}
@@ -80,9 +80,9 @@ func TestUserApplicationStillLoadsReverseProxyRoutes(t *testing.T) {
 		"name: user-app\nimage: nginx:alpine\n", DeploymentModeAll, `[]`, 1, "user-hash", "nginx:alpine", "app-user", "default", now, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.db.ExecContext(ctx, `INSERT INTO reverse_proxy_routes(domain,app_id,origin_server_ids,any_access_json,target_type,target_port,paths_json,created_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?)`,
-		"api.example.test", "app-user", `["srv-a"]`, `{}`, "", 8317, `[{"path":"/"}]`, now, now); err != nil {
+	if _, err := svc.db.ExecContext(ctx, `INSERT INTO reverse_proxy_routes(domain,app_id,origin_server_ids,any_access_json,target_port,paths_json,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?)`,
+		"api.example.test", "app-user", `["srv-a"]`, `{}`, 8317, `[{"path":"/"}]`, now, now); err != nil {
 		t.Fatal(err)
 	}
 	app, err := svc.Get(ctx, "app-user")

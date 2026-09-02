@@ -339,7 +339,7 @@ func TestListReportsExactPanelFileAndReverseProxyReferences(t *testing.T) {
 		"name: refs\nmounts:\n  - type: panel_file\n    source: key_asset:"+sshAsset.ID+":private_key\n    target: /root/.ssh/id_ed25519\n"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AppDB().Exec(`INSERT INTO reverse_proxy_routes(domain,app_id,origin_server_ids,any_access_json,target_type,target_port,paths_json,created_at,updated_at) VALUES('api.example.com','app_refs','[]','{}','',0,'[]','now','now')`); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO reverse_proxy_routes(domain,app_id,origin_server_ids,any_access_json,target_port,paths_json,created_at,updated_at) VALUES('api.example.com','app_refs','[]','{}',0,'[]','now','now')`); err != nil {
 		t.Fatal(err)
 	}
 

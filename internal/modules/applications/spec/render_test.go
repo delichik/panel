@@ -71,9 +71,6 @@ func TestRenderApplicationSpecAsRuntimeSpec(t *testing.T) {
 	if runtimeSpec.Generation != 3 || runtimeSpec.SpecHash != "hash-1" {
 		t.Fatalf("runtime revision = %#v", runtimeSpec)
 	}
-	if runtimeSpec.NetworkMode != "bridge" {
-		t.Fatalf("network mode = %q", runtimeSpec.NetworkMode)
-	}
 	if got := runtimeSpec.Ports; len(got) != 1 || got[0].Label != "http" || got[0].ContainerPort != 80 || got[0].HostPort != 8080 || got[0].Protocol != "tcp" {
 		t.Fatalf("ports = %#v", got)
 	}
@@ -120,7 +117,7 @@ func TestHashIsStable(t *testing.T) {
 	}
 }
 
-func TestRenderHostNetworkAndPrivilegedContainer(t *testing.T) {
+func TestRenderPrivilegedContainer(t *testing.T) {
 	runtimeSpec, issues := Render(RenderInput{
 		AppID:      "app-1",
 		Generation: 1,
@@ -129,27 +126,20 @@ func TestRenderHostNetworkAndPrivilegedContainer(t *testing.T) {
 		Region:     "global",
 		Datacenter: "dc1",
 		Spec: Spec{
-			Name:        "agent",
-			Image:       "alpine",
-			NetworkMode: "host",
-			Privileged:  true,
-			CapAdd:      []string{"net_admin", "NET_ADMIN", "SYS_TIME"},
+			Name:       "agent",
+			Image:      "alpine",
+			Privileged: true,
+			CapAdd:     []string{"net_admin", "NET_ADMIN", "SYS_TIME"},
 		},
 	})
 	if len(issues) > 0 {
 		t.Fatalf("issues = %#v", issues)
-	}
-	if runtimeSpec.NetworkMode != "host" {
-		t.Fatalf("network = %q", runtimeSpec.NetworkMode)
 	}
 	if !runtimeSpec.Privileged {
 		t.Fatalf("privileged = false")
 	}
 	if got := runtimeSpec.CapAdd; len(got) != 2 || got[0] != "NET_ADMIN" || got[1] != "SYS_TIME" {
 		t.Fatalf("capAdd = %#v", got)
-	}
-	if len(runtimeSpec.Ports) != 0 {
-		t.Fatalf("host mode should not render ports: %#v", runtimeSpec.Ports)
 	}
 }
 
@@ -182,10 +172,9 @@ func TestRenderLeavesEmptyAndZeroResourcesUnlimited(t *testing.T) {
 	}
 }
 
-func TestRenderAnyTLSHostNetworkSpec(t *testing.T) {
+func TestRenderAnyTLSSpec(t *testing.T) {
 	spec, issues := DecodeYAML(`name: anytls
 image: jiasongji/anytls
-networkMode: host
 command:
   - "/app/anytls-server"
   - "-l"
@@ -209,9 +198,6 @@ restart:
 	})
 	if len(issues) > 0 {
 		t.Fatalf("render issues = %#v", issues)
-	}
-	if runtimeSpec.NetworkMode != "host" || len(runtimeSpec.Ports) != 0 {
-		t.Fatalf("host network render = mode %q ports %#v", runtimeSpec.NetworkMode, runtimeSpec.Ports)
 	}
 	if got := runtimeSpec.Command; len(got) != 5 || got[0] != "/app/anytls-server" || got[2] != ":9443" {
 		t.Fatalf("command = %#v", got)

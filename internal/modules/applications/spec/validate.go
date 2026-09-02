@@ -17,9 +17,6 @@ func Normalize(spec Spec) Spec {
 	spec.Count = 1
 	spec.Command = nonEmptyStringItems(spec.Command)
 	spec.CapAdd = normalizeCapabilities(spec.CapAdd)
-	if spec.NetworkMode == "" {
-		spec.NetworkMode = "bridge"
-	}
 	if spec.Env == nil {
 		spec.Env = map[string]string{}
 	}
@@ -88,9 +85,6 @@ func Validate(spec Spec) []Issue {
 	if strings.TrimSpace(spec.Image) == "" {
 		issues = append(issues, Issue{Field: "image", Message: "image is required"})
 	}
-	if spec.NetworkMode != "bridge" && spec.NetworkMode != "host" {
-		issues = append(issues, Issue{Field: "networkMode", Message: "networkMode must be bridge or host"})
-	}
 	if spec.Resources.CPU < 0 {
 		issues = append(issues, Issue{Field: "resources.cpu", Message: "cpu cannot be negative"})
 	}
@@ -127,9 +121,6 @@ func Validate(spec Spec) []Issue {
 	}
 
 	portLabels := map[string]struct{}{}
-	if spec.NetworkMode == "host" && len(spec.Ports) > 0 {
-		issues = append(issues, Issue{Field: "ports", Message: "ports cannot be configured when networkMode is host"})
-	}
 	seenStatic := map[int]struct{}{}
 	for i, port := range spec.Ports {
 		if !validName(port.Label) {

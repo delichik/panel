@@ -6,25 +6,6 @@ import (
 	panelerr "panel/internal/platform/errors"
 )
 
-func TestEnforceHostModeProxyTarget(t *testing.T) {
-	rules := []ReverseProxyRule{
-		{Domain: "app.example.test", TargetType: ReverseProxyTargetContainer, TargetPort: 8080},
-		{Domain: "other.example.test", TargetType: ReverseProxyTargetLocal, TargetPort: 80},
-	}
-	enforceHostModeProxyTarget("host", rules)
-	if rules[0].TargetType != ReverseProxyTargetLocal {
-		t.Fatalf("host-mode container target must be downgraded to local, got %q", rules[0].TargetType)
-	}
-	if rules[1].TargetType != ReverseProxyTargetLocal {
-		t.Fatalf("host-mode local target must be kept, got %q", rules[1].TargetType)
-	}
-	bridgeRules := []ReverseProxyRule{{Domain: "app.example.test", TargetType: ReverseProxyTargetContainer, TargetPort: 8080}}
-	enforceHostModeProxyTarget("bridge", bridgeRules)
-	if bridgeRules[0].TargetType != ReverseProxyTargetContainer {
-		t.Fatalf("bridge mode must not rewrite container targets, got %q", bridgeRules[0].TargetType)
-	}
-}
-
 func TestNormalizeAnyAccessConfigOriginPriority(t *testing.T) {
 	origins := []string{"srv-a", "srv-b", "srv-c"}
 
@@ -141,7 +122,6 @@ func TestNormalizeAnyAccessConfigOriginPriority(t *testing.T) {
 func TestNormalizeReverseProxyRulesIgnoresClientOrigins(t *testing.T) {
 	rules, err := normalizeReverseProxyRules([]ReverseProxyRule{{
 		Domain:          "api.example.test",
-		TargetType:      ReverseProxyTargetLocal,
 		TargetPort:      8080,
 		OriginServerIDs: []string{"srv-x"},
 		AnyAccess: AnyAccessConfig{

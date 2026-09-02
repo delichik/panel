@@ -565,6 +565,7 @@ func (s *Service) createWithFiles(ctx context.Context, in SaveInput, files []App
 }
 
 func (s *Service) createWithFilesID(ctx context.Context, appID string, in SaveInput, files []ApplicationFile) (Application, error) {
+	in = stripDeprecatedApplicationConfig(in)
 	files = normalizeApplicationFilesForSave(appID, files, time.Now().UTC())
 	prepared, err := s.prepare(ctx, in, 1, appID)
 	if err != nil {
@@ -645,6 +646,7 @@ func (s *Service) updateWithFilesIfVersion(ctx context.Context, appID string, ex
 }
 
 func (s *Service) updateWithFilesVersioned(ctx context.Context, appID string, expectedVersion int, enforceVersion bool, in SaveInput, files []ApplicationFile) (Application, error) {
+	in = stripDeprecatedApplicationConfig(in)
 	current, err := s.Get(ctx, appID)
 	if err != nil {
 		return Application{}, err
@@ -1627,7 +1629,6 @@ func (s *Service) prepareWithFiles(ctx context.Context, in SaveInput, generation
 	if err != nil {
 		return preparedApplication{}, err
 	}
-	enforceHostModeProxyTarget(spec.NetworkMode, in.ReverseProxy)
 	reverseProxy, err := normalizeReverseProxyRules(in.ReverseProxy)
 	if err != nil {
 		return preparedApplication{}, err
@@ -1846,7 +1847,6 @@ func reverseProxyRuleToModel(appID string, rule ReverseProxyRule) models.Reverse
 		AppID:           appID,
 		OriginServerIDs: append([]string(nil), rule.OriginServerIDs...),
 		AnyAccessJSON:   anyAccess,
-		TargetType:      normalizeReverseProxyTargetType(rule.TargetType),
 		TargetPort:      rule.TargetPort,
 		PathsJSON:       paths,
 		CreatedAt:       now,
@@ -1861,13 +1861,8 @@ func reverseProxyRouteFromModel(m models.ReverseProxyRoute) ReverseProxyRule {
 	pathsRaw, _ := json.Marshal(m.PathsJSON)
 	var paths []ReverseProxyPath
 	_ = json.Unmarshal(pathsRaw, &paths)
-	targetType := strings.TrimSpace(m.TargetType)
-	if targetType == "" {
-		targetType = ReverseProxyTargetLocal
-	}
 	return ReverseProxyRule{
 		Domain:          m.Domain,
-		TargetType:      targetType,
 		TargetPort:      m.TargetPort,
 		OriginServerIDs: append([]string(nil), m.OriginServerIDs...),
 		AnyAccess:       anyAccess,
@@ -3211,10 +3206,6 @@ func normalizeReverseProxyRules(rules []ReverseProxyRule) ([]ReverseProxyRule, e
 		if !validReverseProxyDomain(domain) {
 			return nil, panelerr.Validation("application_reverse_proxy_domain_invalid", "reverse proxy domain is invalid")
 		}
-		targetType := normalizeReverseProxyTargetType(rule.TargetType)
-		if targetType == "" {
-			return nil, panelerr.Validation("application_reverse_proxy_target_type_invalid", "reverse proxy target type is invalid")
-		}
 		if rule.TargetPort <= 0 || rule.TargetPort > 65535 {
 			return nil, panelerr.Validation("application_reverse_proxy_target_port_invalid", "reverse proxy target port must be between 1 and 65535")
 		}
@@ -3253,7 +3244,6 @@ func normalizeReverseProxyRules(rules []ReverseProxyRule) ([]ReverseProxyRule, e
 		}
 		out = append(out, ReverseProxyRule{
 			Domain:          domain,
-			TargetType:      targetType,
 			TargetPort:      rule.TargetPort,
 			OriginServerIDs: nil,
 			AnyAccess:       anyAccess,
@@ -3261,31 +3251,6 @@ func normalizeReverseProxyRules(rules []ReverseProxyRule) ([]ReverseProxyRule, e
 		})
 	}
 	return out, nil
-}
-
-func normalizeReverseProxyTargetType(value string) string {
-	switch strings.TrimSpace(value) {
-	case "", ReverseProxyTargetLocal:
-		return ReverseProxyTargetLocal
-	case ReverseProxyTargetContainer:
-		return ReverseProxyTargetContainer
-	default:
-		return ""
-	}
-}
-
-// enforceHostModeProxyTarget 强制 host 模式应用的反代目标为 local：host 模式
-// 容器不在受管容器网桥内，反代容器无法按名解析其上游，前端已禁选 container
-// 目标，这里在后端保存路径上做同样的降级，防止绕过前端直接提交。
-func enforceHostModeProxyTarget(networkMode string, rules []ReverseProxyRule) {
-	if networkMode != "host" {
-		return
-	}
-	for i := range rules {
-		if normalizeReverseProxyTargetType(rules[i].TargetType) == ReverseProxyTargetContainer {
-			rules[i].TargetType = ReverseProxyTargetLocal
-		}
-	}
 }
 
 func (s *Service) renderReverseProxyRules(ctx context.Context, rules []ReverseProxyRule, data map[string]any) ([]ReverseProxyRule, error) {
@@ -3339,7 +3304,7 @@ func (s *Service) renderReverseProxyRules(ctx context.Context, rules []ReversePr
 			options, _ := NormalizeHTTPRouteOptions(HTTPRouteOptions{}, true, true, HTTPRouteModeOff)
 			paths = append(paths, ReverseProxyPath{Path: "/", Options: options})
 		}
-		out = append(out, ReverseProxyRule{Domain: domain, TargetType: normalizeReverseProxyTargetType(rule.TargetType), TargetPort: rule.TargetPort, OriginServerIDs: originServerIDs, AnyAccess: anyAccess, Paths: paths})
+		out = append(out, ReverseProxyRule{Domain: domain, TargetPort: rule.TargetPort, OriginServerIDs: originServerIDs, AnyAccess: anyAccess, Paths: paths})
 	}
 	return out, nil
 }
@@ -3376,7 +3341,7 @@ func (s *Service) renderReverseProxyConfig(ctx context.Context, app Application,
 			b.WriteString(proxyPath.Path)
 			b.WriteString(" {\n")
 			b.WriteString("        proxy_pass ")
-			b.WriteString(reverseProxyUpstream(rule, runtimeContainerName(app), "127.0.0.1"))
+			b.WriteString(reverseProxyUpstream(runtimeContainerName(app), rule.TargetPort))
 			b.WriteString(";\n")
 			b.WriteString("        proxy_set_header Host $host;\n")
 			b.WriteString("        proxy_set_header X-Real-IP $remote_addr;\n")
@@ -3391,18 +3356,8 @@ func (s *Service) renderReverseProxyConfig(ctx context.Context, app Application,
 	return reverseProxyConfigName(app), b.String(), nil
 }
 
-func reverseProxyUpstream(rule ReverseProxyRule, containerName, localHost string) string {
-	host := strings.TrimSpace(localHost)
-	if host == "" {
-		host = "127.0.0.1"
-	}
-	if normalizeReverseProxyTargetType(rule.TargetType) == ReverseProxyTargetContainer {
-		container := strings.TrimSpace(containerName)
-		if container != "" && validNginxToken(container) {
-			host = container
-		}
-	}
-	return "http://" + host + ":" + strconv.Itoa(rule.TargetPort)
+func reverseProxyUpstream(containerName string, targetPort int) string {
+	return "http://" + strings.TrimSpace(containerName) + ":" + strconv.Itoa(targetPort)
 }
 
 func (s *Service) ApplicationReverseProxyConfigs(ctx context.Context) ([]ApplicationReverseProxyConfig, error) {
@@ -3433,7 +3388,7 @@ func (s *Service) ApplicationReverseProxyConfigs(ctx context.Context) ([]Applica
 			for _, item := range rule.Paths {
 				paths = append(paths, ReverseProxyPath{Path: item.Path, WebSocket: item.WebSocket, Options: item.Options})
 			}
-			routes = append(routes, ReverseProxyRoute{Domain: rule.Domain, TargetType: normalizeReverseProxyTargetType(rule.TargetType), TargetPort: rule.TargetPort, TargetContainer: runtimeContainerName(app), OriginServerIDs: append([]string(nil), rule.OriginServerIDs...), AnyAccess: rule.AnyAccess, Paths: paths})
+			routes = append(routes, ReverseProxyRoute{Domain: rule.Domain, TargetPort: rule.TargetPort, TargetContainer: runtimeContainerName(app), OriginServerIDs: append([]string(nil), rule.OriginServerIDs...), AnyAccess: rule.AnyAccess, Paths: paths})
 		}
 		out = append(out, ApplicationReverseProxyConfig{
 			ApplicationID:     app.ID,

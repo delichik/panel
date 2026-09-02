@@ -275,11 +275,6 @@ const facilityAssetItems = computed<AssetFileItem[]>(() => (facilitySession.valu
 const mountTypeOptions = computed(() => ['persistent', 'volume', 'host', 'file', 'panel_file', 'storage_share'].map((value) => ({ label: t(`applicationsPage.mountType.${value}`), value })));
 const routeTypeOptions = computed(() => ['static', 'redirect', 'proxy_pass'].map((value) => ({ label: t(`applicationsPage.routeType.${value}`), value })));
 const sourceTypeOptions = computed(() => ['uploaded_file', 'uploaded_bundle'].map((value) => ({ label: t(`applicationsPage.sourceType.${value}`), value })));
-const proxyTargetTypeOptions = computed(() => {
-  const options = [{ label: t('applicationsPage.targetType.local'), value: 'local' }];
-  if (appDraft.networkMode !== 'host') options.push({ label: t('applicationsPage.targetType.container'), value: 'container' });
-  return options;
-});
 const saving = computed(() => pending.value === 'preview' || pending.value === 'commit');
 const proxyPathWebSocket = computed({
   get: () => Boolean(proxyPathDraft.webSocket),
@@ -1247,19 +1242,11 @@ function saveMountDialog() {
   markAppStructuredDirty();
 }
 
-function onAppNetworkModeChange() {
-  if (appDraft.networkMode === 'host') {
-    appDraft.reverseProxy = appDraft.reverseProxy.map((rule) => ({ ...rule, targetType: 'local' }));
-  }
-  markAppStructuredDirty();
-}
-
 function openProxyDialog(index = -1) {
   dialogKind.value = 'proxy';
   dialogIndex.value = index;
   const base = index >= 0 ? cloneProxyRules([appDraft.reverseProxy[index]])[0] : makeProxyRule();
   Object.assign(proxyDraft, { ...base });
-  if (appDraft.networkMode === 'host') proxyDraft.targetType = 'local';
   proxyRelayScope.value = base.anyAccess?.relayServerIds?.length ? 'selected' : 'all';
   dialogOpen.value = true;
 }
@@ -1279,10 +1266,8 @@ function removeCommandRow(id: string) {
 
 function saveProxyDialog() {
   const port = Number(proxyDraft.targetPort);
-  const targetType = proxyDraft.targetType === 'local' || proxyDraft.targetType === 'container' ? proxyDraft.targetType : undefined;
   const next: ReverseProxyRule = {
     domain: proxyDraft.domain.trim().toLowerCase(),
-    targetType,
     targetPort: Number.isFinite(port) && port > 0 ? port : 0,
     originServerIds: [],
     anyAccess: {
@@ -2006,7 +1991,6 @@ onBeforeUnmount(() => {
               <div class="section-copy"><h3>{{ t('applicationsPage.panelRuntimeSource') }}</h3><p>{{ t('applicationsPage.sourceHint') }}</p></div>
               <div class="form-grid">
                 <label class="field wide-field">{{ t('applicationsPage.image') }}<Input v-model="appDraft.image" :invalid="Boolean(appErrors.image)" @input="markAppStructuredDirty" /></label>
-                <label class="field">{{ t('applicationsPage.networkMode') }}<Select v-model="appDraft.networkMode" :options="[{ label: 'bridge', value: 'bridge' }, { label: 'host', value: 'host' }]" @change="onAppNetworkModeChange" /></label>
                 <label class="field">{{ t('applicationsPage.cpu') }}<Input v-model="appDraft.cpu" placeholder="0.5" :invalid="Boolean(appErrors.cpu)" @input="markAppStructuredDirty" /></label>
                 <label class="field">{{ t('applicationsPage.memoryMb') }}<Input v-model="appDraft.memoryMb" placeholder="512" :invalid="Boolean(appErrors.memoryMb)" @input="markAppStructuredDirty" /></label>
                 <div class="field wide-field">
@@ -2027,7 +2011,7 @@ onBeforeUnmount(() => {
               <div class="section-heading"><div class="section-copy"><h3>{{ t('applicationsPage.panelNetworking') }}</h3><p>{{ t('applicationsPage.networkingHint') }}</p></div><div class="flex flex-wrap gap-2"><Button size="sm" @click="openPortDialog()"><Plus />{{ t('applicationsPage.addPort') }}</Button><Button size="sm" @click="openProxyDialog()"><Globe2 />{{ t('applicationsPage.addProxyRule') }}</Button></div></div>
               <div class="grid gap-3">
                 <div v-for="(port, index) in appDraft.ports" :key="port.id" class="item-row"><div><strong>{{ port.label || t('applicationsPage.unnamedPort') }}</strong><span>{{ t('applicationsPage.containerPortSummary', { port: port.to }) }} · {{ port.staticPort ? t('applicationsPage.staticPort', { port: port.staticPort }) : t('applicationsPage.dynamicPort') }}</span></div><div class="row-actions"><Button size="sm" @click="openPortDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(appDraft.ports, index)">{{ t('common.delete') }}</Button></div></div>
-                <div v-for="(rule, index) in appDraft.reverseProxy" :key="index" class="item-row"><div><strong>{{ rule.domain || t('applicationsPage.unnamedDomain') }}</strong><span>{{ t('applicationsPage.routeTargetSummary', { type: rule.targetType || t('common.notAvailable'), port: rule.targetPort, paths: rule.paths.map((path) => path.path).join(', ') }) }}</span></div><div class="row-actions"><Button size="sm" @click="openProxyDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(appDraft.reverseProxy, index)">{{ t('common.delete') }}</Button></div></div>
+                <div v-for="(rule, index) in appDraft.reverseProxy" :key="index" class="item-row"><div><strong>{{ rule.domain || t('applicationsPage.unnamedDomain') }}</strong><span>{{ t('applicationsPage.routeTargetSummary', { port: rule.targetPort, paths: rule.paths.map((path) => path.path).join(', ') }) }}</span></div><div class="row-actions"><Button size="sm" @click="openProxyDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(appDraft.reverseProxy, index)">{{ t('common.delete') }}</Button></div></div>
                 <EmptyState v-if="!appDraft.ports.length && !appDraft.reverseProxy.length" :title="t('applicationsPage.noRoutes')" :description="t('applicationsPage.networkingEmptyHint')" />
               </div>
             </section>
@@ -2126,8 +2110,6 @@ onBeforeUnmount(() => {
     <div v-else-if="dialogKind === 'proxy'" class="grid gap-3">
       <label class="field">{{ t('applicationsPage.domain') }}<Input v-model="proxyDraft.domain" /></label>
       <label class="field">{{ t('applicationsPage.targetPort') }}<Input v-model="proxyDraft.targetPort" /></label>
-      <label class="field">{{ t('applicationsPage.targetType') }}<Select v-model="proxyDraft.targetType" :options="proxyTargetTypeOptions" /></label>
-      <p v-if="appDraft.networkMode === 'host'" class="m-0 text-sm text-muted-foreground">{{ t('applicationsPage.targetType.containerDisabledHint') }}</p>
       <div class="options-block">
         <div class="section-copy"><h3>{{ t('applicationsPage.anyAccess') }}</h3><p>{{ t('applicationsPage.anyAccessHint') }}</p></div>
         <label class="switch-field">{{ t('applicationsPage.anyAccess') }}<Switch v-model="proxyAnyAccessModel" :label="t('applicationsPage.anyAccess')" /></label>

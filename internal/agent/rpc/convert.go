@@ -270,7 +270,7 @@ func pbSpec(in appruntime.Spec) *agentpb.RuntimeSpec {
 	return &agentpb.RuntimeSpec{
 		Id: in.ID, ApplicationId: in.ApplicationID, InstanceId: in.InstanceID, ContainerName: in.ContainerName,
 		Name: in.Name, Image: in.Image, Command: append([]string(nil), in.Command...),
-		Env: cloneMap(in.Env), Ports: ports, NetworkMode: in.NetworkMode,
+		Env: cloneMap(in.Env), Ports: ports,
 		Resources:  &agentpb.RuntimeResources{Cpu: int32(in.Resources.CPU), MemoryMb: int32(in.Resources.MemoryMB)},
 		Privileged: in.Privileged, CapAdd: append([]string(nil), in.CapAdd...), Mounts: mounts, Files: files,
 		Restart:  &agentpb.RuntimeRestart{Policy: in.Restart.Policy, Attempts: int32(in.Restart.Attempts), IntervalSeconds: int32(in.Restart.IntervalSeconds), DelaySeconds: int32(in.Restart.DelaySeconds), Mode: in.Restart.Mode},
@@ -342,7 +342,7 @@ func goSpec(in *agentpb.RuntimeSpec) appruntime.Spec {
 	out := appruntime.Spec{
 		ID: in.Id, ApplicationID: in.ApplicationId, InstanceID: in.InstanceId, ContainerName: in.ContainerName,
 		Name: in.Name, Image: in.Image, Command: append([]string(nil), in.Command...),
-		Env: cloneMap(in.Env), Ports: ports, NetworkMode: in.NetworkMode, Privileged: in.Privileged, CapAdd: append([]string(nil), in.CapAdd...),
+		Env: cloneMap(in.Env), Ports: ports, Privileged: in.Privileged, CapAdd: append([]string(nil), in.CapAdd...),
 		Mounts: mounts, Files: files, Services: services, Checks: checks, Generation: int(in.Generation), SpecHash: in.SpecHash,
 	}
 	if in.Resources != nil {

@@ -139,7 +139,6 @@ func TestRuntimeSpecRoundTripIncludesWrappersFilesCapsAndRestart(t *testing.T) {
 		Ports: []appruntime.Port{
 			{Label: "http", ContainerPort: 8080, HostPort: 18080, Protocol: "tcp"},
 		},
-		NetworkMode: "bridge",
 		Resources:   appruntime.Resources{CPU: 2, MemoryMB: 512},
 		Privileged:  true,
 		CapAdd:      []string{"NET_ADMIN", "SYS_TIME"},

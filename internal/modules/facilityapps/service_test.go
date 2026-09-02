@@ -149,14 +149,14 @@ func TestRenderApplicationAnyAccessUsesOriginAndRelay(t *testing.T) {
 		"srv-origin": {ID: "srv-origin", Host: "10.0.0.21"},
 		"srv-relay":  {ID: "srv-relay", Host: "10.0.0.22"},
 	}}}
-	route := applications.ReverseProxyRoute{Domain: "app.example.test", TargetType: applications.ReverseProxyTargetLocal, TargetPort: 8080, OriginServerIDs: []string{"srv-origin"}, AnyAccess: applications.AnyAccessConfig{Enabled: true, Strategy: applications.AnyAccessStrategyIPHash}, Paths: []applications.ReverseProxyPath{{Path: "/"}}}
+	route := applications.ReverseProxyRoute{Domain: "app.example.test", TargetContainer: "panel-app-1", TargetPort: 8080, OriginServerIDs: []string{"srv-origin"}, AnyAccess: applications.AnyAccessConfig{Enabled: true, Strategy: applications.AnyAccessStrategyIPHash}, Paths: []applications.ReverseProxyPath{{Path: "/"}}}
 	app := applications.ApplicationReverseProxyConfig{ApplicationID: "app-1", ApplicationName: "app", Routes: []applications.ReverseProxyRoute{route}}
 	cfg := ReverseProxyConfig{DeploymentServers: []string{"srv-origin", "srv-relay"}}
 	_, _, originFiles, err := svc.renderNginxConfig(context.Background(), "srv-origin", cfg, []applications.ApplicationReverseProxyConfig{app}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if origin := managedConfigText(originFiles); !strings.Contains(origin, "proxy_pass http://127.0.0.1:8080") || !strings.Contains(origin, "proxy_cache off;") {
+	if origin := managedConfigText(originFiles); !strings.Contains(origin, "set $panel_proxy_upstream panel-app-1;") || !strings.Contains(origin, "proxy_pass http://$panel_proxy_upstream:8080;") || !strings.Contains(origin, "proxy_cache off;") {
 		t.Fatalf("origin config:\n%s", origin)
 	}
 	_, _, relayFiles, err := svc.renderNginxConfig(context.Background(), "srv-relay", cfg, []applications.ApplicationReverseProxyConfig{app}, nil)
@@ -202,7 +202,7 @@ func TestRenderApplicationAnyAccessHonorsSpecifiedRelayServers(t *testing.T) {
 		"srv-relay-2": {ID: "srv-relay-2", Host: "10.0.0.43"},
 	}}}
 	route := applications.ReverseProxyRoute{
-		Domain: "app.example.test", TargetType: applications.ReverseProxyTargetLocal, TargetPort: 8080,
+		Domain: "app.example.test", TargetContainer: "panel-app-1", TargetPort: 8080,
 		OriginServerIDs: []string{"srv-origin"},
 		AnyAccess:       applications.AnyAccessConfig{Enabled: true, Strategy: applications.AnyAccessStrategyRoundRobin, RelayServerIDs: []string{"srv-relay-1"}},
 		Paths:           []applications.ReverseProxyPath{{Path: "/"}},
@@ -247,6 +247,13 @@ func TestProxySpecUsesFixedSupportedImage(t *testing.T) {
 	}
 	if spec.Image != supportedProxyImage {
 		t.Fatalf("image = %q", spec.Image)
+	}
+	wantPorts := []appruntime.Port{
+		{Label: "http", ContainerPort: 80, HostPort: 80, Protocol: "tcp"},
+		{Label: "https", ContainerPort: 443, HostPort: 443, Protocol: "tcp"},
+	}
+	if !reflect.DeepEqual(spec.Ports, wantPorts) {
+		t.Fatalf("ports = %#v, want %#v", spec.Ports, wantPorts)
 	}
 }
 
@@ -403,7 +410,7 @@ func TestContainerProxyTargetDefersUpstreamResolution(t *testing.T) {
 	svc := &Service{}
 	cfg := ReverseProxyConfig{DeploymentServers: []string{"srv-a"}}
 	apps := []applications.ApplicationReverseProxyConfig{{Routes: []applications.ReverseProxyRoute{{
-		Domain: "app.example.test", TargetType: applications.ReverseProxyTargetContainer, TargetContainer: "panel-cpa-private", TargetPort: 8080,
+		Domain: "app.example.test", TargetContainer: "panel-cpa-private", TargetPort: 8080,
 		OriginServerIDs: []string{"srv-a"}, Paths: []applications.ReverseProxyPath{{Path: "/"}},
 	}}}}
 	mainConfig, _, files, err := svc.renderNginxConfig(context.Background(), "srv-a", cfg, apps, nil)
@@ -551,7 +558,6 @@ func TestFacilityConfigHashIncludesApplicationRoutes(t *testing.T) {
 		ApplicationID: "app-1",
 		Routes: []applications.ReverseProxyRoute{{
 			Domain:          "app.example.test",
-			TargetType:      applications.ReverseProxyTargetLocal,
 			TargetPort:      8080,
 			OriginServerIDs: []string{"srv-a"},
 		}},
@@ -600,7 +606,6 @@ func TestEnsureReverseProxyApplicationGenerationBumpsOnApplicationRouteChange(t 
 		ApplicationID: "app-1",
 		Routes: []applications.ReverseProxyRoute{{
 			Domain:          "app.example.test",
-			TargetType:      applications.ReverseProxyTargetLocal,
 			TargetPort:      8080,
 			OriginServerIDs: []string{"srv-a"},
 		}},

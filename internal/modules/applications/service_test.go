@@ -195,7 +195,7 @@ func TestCreateEnabledAppDeploysToAgentRuntime(t *testing.T) {
 	}
 }
 
-func TestCreateEnabledAnyTLSHostNetworkAppDeploysRuntime(t *testing.T) {
+func TestCreateEnabledAppRemovesRetiredNetworkMode(t *testing.T) {
 	svc, _, _, closeStore := newTestService(t)
 	defer closeStore()
 
@@ -204,7 +204,7 @@ func TestCreateEnabledAnyTLSHostNetworkAppDeploysRuntime(t *testing.T) {
 		Enabled: true,
 		SpecYAML: `name: anytls
 image: jiasongji/anytls
-networkMode: host
+"networkMode": host
 command:
   - "/app/anytls-server"
   - "-l"
@@ -226,8 +226,11 @@ restart:
 		t.Fatalf("expected one Job per server, got %#v", jobs)
 	}
 	spec := jobs[0].DesiredSpecJSON
-	if spec["networkMode"] != "host" {
-		t.Fatalf("runtime network = %#v", spec["networkMode"])
+	if _, found := spec["networkMode"]; found {
+		t.Fatalf("runtime spec must not persist networkMode: %#v", spec)
+	}
+	if strings.Contains(app.SpecYAML, "networkMode") {
+		t.Fatalf("application spec must not persist networkMode: %q", app.SpecYAML)
 	}
 	command, _ := spec["command"].([]any)
 	if len(command) != 5 || command[0] != "/app/anytls-server" || command[2] != ":9443" {
@@ -260,7 +263,6 @@ func TestCreateDisabledSelectedApplicationWithCommandStoresTargets(t *testing.T)
 		Enabled: false,
 		SpecYAML: `name: anytls
 image: jiasongji/anytls
-networkMode: host
 command:
   - /app/anytls-server
   - -l
@@ -1594,22 +1596,15 @@ func readyServer(id string) server.Server {
 	}
 }
 
-func TestNormalizeReverseProxyRulesTargetType(t *testing.T) {
+func TestNormalizeReverseProxyRules(t *testing.T) {
 	rules, err := normalizeReverseProxyRules([]ReverseProxyRule{
-		{Domain: "local.example.test", TargetPort: 8080, OriginServerIDs: []string{"srv-a"}, AnyAccess: AnyAccessConfig{Strategy: AnyAccessStrategyRoundRobin}, Paths: []ReverseProxyPath{{Path: "/"}}},
-		{Domain: "container.example.test", TargetType: ReverseProxyTargetContainer, TargetPort: 80, OriginServerIDs: []string{"srv-a"}, AnyAccess: AnyAccessConfig{Strategy: AnyAccessStrategyRoundRobin}, Paths: []ReverseProxyPath{{Path: "/app"}}},
+		{Domain: "app.example.test", TargetPort: 8080, OriginServerIDs: []string{"srv-a"}, AnyAccess: AnyAccessConfig{Strategy: AnyAccessStrategyRoundRobin}, Paths: []ReverseProxyPath{{Path: "/"}}},
 	})
 	if err != nil {
 		t.Fatalf("normalize reverse proxy: %v", err)
 	}
-	if rules[0].TargetType != ReverseProxyTargetLocal {
-		t.Fatalf("local target type = %q", rules[0].TargetType)
-	}
-	if rules[1].TargetType != ReverseProxyTargetContainer {
-		t.Fatalf("container target type = %q", rules[1].TargetType)
-	}
-	if _, err := normalizeReverseProxyRules([]ReverseProxyRule{{Domain: "bad.example.test", TargetType: "remote", TargetPort: 80, OriginServerIDs: []string{"srv-a"}}}); err == nil {
-		t.Fatal("expected invalid target type error")
+	if len(rules) != 1 || rules[0].TargetPort != 8080 || rules[0].Domain != "app.example.test" {
+		t.Fatalf("normalized rules = %#v", rules)
 	}
 }
 
@@ -1621,7 +1616,6 @@ func TestRenderReverseProxyConfigDisablesCacheAndWritesAdvancedPathOptions(t *te
 		Name: "proxy-options",
 		ReverseProxy: []ReverseProxyRule{{
 			Domain:          "app.example.test",
-			TargetType:      ReverseProxyTargetLocal,
 			TargetPort:      8080,
 			OriginServerIDs: []string{"srv-a"},
 			AnyAccess:       AnyAccessConfig{Strategy: AnyAccessStrategyRoundRobin},

@@ -480,7 +480,6 @@ type ReverseProxyRoute struct {
 	AppID           string           `orm:"not_null;column:app_id"`
 	OriginServerIDs []string         `orm:"json;not_null;default:'[]';column:origin_server_ids"`
 	AnyAccessJSON   map[string]any   `orm:"json;not_null;default:'{}';column:any_access_json"`
-	TargetType      string           `orm:"not_null;default:'';column:target_type"`
 	TargetPort      int              `orm:"not_null;default:0;column:target_port"`
 	PathsJSON       []map[string]any `orm:"json;not_null;default:'[]';column:paths_json"`
 	CreatedAt       time.Time        `orm:"not_null"`

@@ -243,7 +243,8 @@ message RuntimeSpec {
   reserved "args";
   map<string, string> env = 9;
   repeated RuntimePort ports = 10;
-  string network_mode = 11;
+  reserved 11;
+  reserved "network_mode";
   RuntimeResources resources = 12;
   bool privileged = 13;
   repeated RuntimeMount mounts = 14;

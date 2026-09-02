@@ -151,6 +151,9 @@ func appMigrationSteps() []orm.Step {
 		{ID: "purge_orphan_application_reconcile_states", Run: func(ctx context.Context, tx *sql.Tx) error {
 			return purgeOrphanApplicationReconcileStatesOn(ctx, tx)
 		}},
+		{ID: "remove_application_network_mode_and_proxy_target_type", Run: func(ctx context.Context, tx *sql.Tx) error {
+			return removeDeprecatedApplicationNetworkingOn(ctx, tx)
+		}},
 	}
 }
 
@@ -181,7 +184,255 @@ func backfillServerPrivilegeModeOn(ctx context.Context, q migrationExecutor) err
 
 // logMigrationSteps are the one-time data migrations for the log database.
 func logMigrationSteps() []orm.Step {
-	return []orm.Step{}
+	return []orm.Step{
+		{ID: "remove_application_network_mode_and_proxy_target_type", Run: func(ctx context.Context, tx *sql.Tx) error {
+			return removeDeprecatedApplicationNetworkingOn(ctx, tx)
+		}},
+	}
+}
+
+// removeDeprecatedApplicationNetworkingOn clears fields that were retired
+// when application containers became bridge-only. Revisions are rewritten as
+// part of this schema migration so obsolete runtime fields cannot be replayed.
+func removeDeprecatedApplicationNetworkingOn(ctx context.Context, q migrationExecutor) error {
+	if err := stripNetworkModeFromYAMLColumnOn(ctx, q, "applications", "spec_yaml"); err != nil {
+		return err
+	}
+	if err := stripNetworkModeFromYAMLColumnOn(ctx, q, "application_revisions", "spec_yaml"); err != nil {
+		return err
+	}
+	for _, column := range []string{"draft_json", "commit_result_json", "conflict_json"} {
+		if err := stripDeprecatedApplicationDraftColumnOn(ctx, q, "application_edit_sessions", column); err != nil {
+			return err
+		}
+	}
+	for _, item := range []struct {
+		table  string
+		column string
+	}{
+		{table: "jobs", column: "desired_spec_json"},
+		{table: "application_instances", column: "desired_spec_json"},
+		{table: "application_instances", column: "runtime_spec_json"},
+		{table: "application_revisions", column: "rendered_runtime_spec"},
+		{table: "application_revisions", column: "job_json"},
+	} {
+		if err := stripNetworkModeFromRuntimeSpecColumnOn(ctx, q, item.table, item.column); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func stripNetworkModeFromYAMLColumnOn(ctx context.Context, q migrationExecutor, table, column string) error {
+	columns, err := databaseTableColumnsOn(ctx, q, table)
+	if err != nil {
+		return err
+	}
+	if !columns["id"] || !columns[column] {
+		return nil
+	}
+	rows, err := q.QueryContext(ctx, `SELECT id, `+column+` FROM `+table)
+	if err != nil {
+		return err
+	}
+	type update struct{ id, value string }
+	updates := []update{}
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if cleaned := stripDeprecatedNetworkModeYAML(raw); cleaned != raw {
+			updates = append(updates, update{id: id, value: cleaned})
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, item := range updates {
+		if _, err := q.ExecContext(ctx, `UPDATE `+table+` SET `+column+`=? WHERE id=?`, item.value, item.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func stripDeprecatedApplicationDraftColumnOn(ctx context.Context, q migrationExecutor, table, column string) error {
+	columns, err := databaseTableColumnsOn(ctx, q, table)
+	if err != nil {
+		return err
+	}
+	if !columns["id"] || !columns[column] {
+		return nil
+	}
+	rows, err := q.QueryContext(ctx, `SELECT id, `+column+` FROM `+table)
+	if err != nil {
+		return err
+	}
+	type update struct{ id, value string }
+	updates := []update{}
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		cleaned, changed := stripDeprecatedApplicationDraftJSON(raw)
+		if changed {
+			updates = append(updates, update{id: id, value: cleaned})
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, item := range updates {
+		if _, err := q.ExecContext(ctx, `UPDATE `+table+` SET `+column+`=? WHERE id=?`, item.value, item.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func stripNetworkModeFromRuntimeSpecColumnOn(ctx context.Context, q migrationExecutor, table, column string) error {
+	columns, err := databaseTableColumnsOn(ctx, q, table)
+	if err != nil {
+		return err
+	}
+	if !columns["id"] || !columns[column] {
+		return nil
+	}
+	rows, err := q.QueryContext(ctx, `SELECT id, `+column+` FROM `+table)
+	if err != nil {
+		return err
+	}
+	type update struct{ id, value string }
+	updates := []update{}
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		cleaned, changed := stripDeprecatedRuntimeSpecJSON(raw)
+		if changed {
+			updates = append(updates, update{id: id, value: cleaned})
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, item := range updates {
+		if _, err := q.ExecContext(ctx, `UPDATE `+table+` SET `+column+`=? WHERE id=?`, item.value, item.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func stripDeprecatedNetworkModeYAML(raw string) string {
+	lines := strings.SplitAfter(raw, "\n")
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		content := strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+		if content != "" && content[0] != ' ' && content[0] != '\t' {
+			if key, _, found := strings.Cut(content, ":"); found && isDeprecatedNetworkModeYAMLKey(key) {
+				continue
+			}
+		}
+		filtered = append(filtered, line)
+	}
+	return strings.Join(filtered, "")
+}
+
+func isDeprecatedNetworkModeYAMLKey(key string) bool {
+	key = strings.TrimSpace(key)
+	if key == "networkMode" {
+		return true
+	}
+	if len(key) < 2 {
+		return false
+	}
+	return (key[0] == '"' && key[len(key)-1] == '"' || key[0] == '\'' && key[len(key)-1] == '\'') && key[1:len(key)-1] == "networkMode"
+}
+
+func stripDeprecatedApplicationDraftJSON(raw string) (string, bool) {
+	var value any
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		return raw, false
+	}
+	if !stripDeprecatedApplicationDraftValue(value) {
+		return raw, false
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return raw, false
+	}
+	return string(encoded), true
+}
+
+func stripDeprecatedApplicationDraftValue(value any) bool {
+	switch item := value.(type) {
+	case map[string]any:
+		changed := false
+		if specYAML, ok := item["specYaml"].(string); ok {
+			if cleaned := stripDeprecatedNetworkModeYAML(specYAML); cleaned != specYAML {
+				item["specYaml"] = cleaned
+				changed = true
+			}
+		}
+		if rules, ok := item["reverseProxy"].([]any); ok {
+			for _, rule := range rules {
+				if ruleMap, ok := rule.(map[string]any); ok {
+					if _, found := ruleMap["targetType"]; found {
+						delete(ruleMap, "targetType")
+						changed = true
+					}
+				}
+			}
+		}
+		for _, child := range item {
+			if stripDeprecatedApplicationDraftValue(child) {
+				changed = true
+			}
+		}
+		return changed
+	case []any:
+		changed := false
+		for _, child := range item {
+			if stripDeprecatedApplicationDraftValue(child) {
+				changed = true
+			}
+		}
+		return changed
+	default:
+		return false
+	}
+}
+
+func stripDeprecatedRuntimeSpecJSON(raw string) (string, bool) {
+	var value map[string]any
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		return raw, false
+	}
+	if _, found := value["networkMode"]; !found {
+		return raw, false
+	}
+	delete(value, "networkMode")
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return raw, false
+	}
+	return string(encoded), true
 }
 
 // coordMigrationSteps are the one-time data migrations for the coordination
@@ -598,6 +849,7 @@ func migrateReverseProxyConfigurationOn(ctx context.Context, tx *sql.Tx) error {
 				delete(rule, "entryServerIds")
 				delete(rule, "upstreamMode")
 				delete(rule, "strategy")
+				delete(rule, "targetType")
 				delete(rule, "primaryServerId")
 				if index, exists := byDomain[domain]; exists {
 					merged[index]["paths"] = append(anySliceJSONValue(merged[index]["paths"]), anySliceJSONValue(rule["paths"])...)
@@ -670,9 +922,7 @@ func migrateReverseProxyRoutesTableOn(ctx context.Context, tx *sql.Tx) error {
 		app_id TEXT NOT NULL,
 		origin_server_ids TEXT NOT NULL DEFAULT '[]',
 		any_access_json TEXT NOT NULL DEFAULT '{}',
-		target_type TEXT NOT NULL DEFAULT '',
 		target_port INTEGER NOT NULL DEFAULT 0,
-		target_container TEXT NOT NULL DEFAULT '',
 		paths_json TEXT NOT NULL DEFAULT '[]',
 		created_at TEXT NOT NULL,
 		updated_at TEXT NOT NULL
@@ -706,7 +956,6 @@ func backfillApplicationReverseProxyRoutesOn(ctx context.Context, tx *sql.Tx) er
 		AppID      string
 		Origins    string
 		AnyAccess  string
-		TargetType string
 		TargetPort int
 		Paths      string
 	}
@@ -732,7 +981,6 @@ func backfillApplicationReverseProxyRoutesOn(ctx context.Context, tx *sql.Tx) er
 				AppID:      appID,
 				Origins:    marshalProxyJSONList(rule["originServerIds"]),
 				AnyAccess:  marshalProxyJSONObject(rule["anyAccess"]),
-				TargetType: stringJSONValue(rule["targetType"]),
 				TargetPort: intJSONValue(rule["targetPort"]),
 				Paths:      marshalProxyJSONList(rule["paths"]),
 			})
@@ -742,8 +990,8 @@ func backfillApplicationReverseProxyRoutesOn(ctx context.Context, tx *sql.Tx) er
 		return err
 	}
 	for _, route := range routes {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO reverse_proxy_routes(domain,app_id,origin_server_ids,any_access_json,target_type,target_port,paths_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
-			route.Domain, route.AppID, route.Origins, route.AnyAccess, route.TargetType, route.TargetPort, route.Paths, now, now); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO reverse_proxy_routes(domain,app_id,origin_server_ids,any_access_json,target_port,paths_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`,
+			route.Domain, route.AppID, route.Origins, route.AnyAccess, route.TargetPort, route.Paths, now, now); err != nil {
 			return fmt.Errorf("reverse proxy migration: insert application route %q for %q: %w", route.Domain, route.AppID, err)
 		}
 	}
@@ -782,8 +1030,8 @@ func backfillFacilityReverseProxyRoutesOn(ctx context.Context, tx *sql.Tx) error
 		if name == "" {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO reverse_proxy_routes(domain,app_id,origin_server_ids,any_access_json,target_type,target_port,paths_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
-			name, "facility-reverse-proxy", marshalProxyJSONList(domain["originServerIds"]), marshalProxyJSONObject(domain["anyAccess"]), "", 0, marshalProxyJSONList(domain["paths"]), now, now); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO reverse_proxy_routes(domain,app_id,origin_server_ids,any_access_json,target_port,paths_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`,
+			name, "facility-reverse-proxy", marshalProxyJSONList(domain["originServerIds"]), marshalProxyJSONObject(domain["anyAccess"]), 0, marshalProxyJSONList(domain["paths"]), now, now); err != nil {
 			return fmt.Errorf("reverse proxy migration: insert facility route %q: %w", name, err)
 		}
 	}
@@ -1092,7 +1340,7 @@ func stringSliceJSONValue(value any) []string {
 }
 
 func sameMigratedProxyTarget(left, right map[string]any) bool {
-	return stringJSONValue(left["targetType"]) == stringJSONValue(right["targetType"]) && fmt.Sprint(left["targetPort"]) == fmt.Sprint(right["targetPort"])
+	return fmt.Sprint(left["targetPort"]) == fmt.Sprint(right["targetPort"])
 }
 
 func ensureColumns(ctx context.Context, db *sql.DB, table string, columns map[string]string) error {

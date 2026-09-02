@@ -4,7 +4,6 @@ type Spec struct {
 	Name        string            `json:"name" yaml:"name"`
 	Image       string            `json:"image" yaml:"image"`
 	Count       int               `json:"count" yaml:"count"`
-	NetworkMode string            `json:"networkMode" yaml:"networkMode"`
 	Command     []string          `json:"command" yaml:"command"`
 	Env         map[string]string `json:"env" yaml:"env"`
 	Ports       []Port            `json:"ports" yaml:"ports"`

@@ -1,6 +1,5 @@
 export type DeploymentMode = 'all' | 'selected';
 export type FileKind = 'binary' | 'template' | 'archive';
-export type ReverseProxyTargetType = 'local' | 'container';
 
 export interface AnyAccessConfig {
   enabled: boolean;
@@ -35,7 +34,6 @@ export interface ReverseProxyPath {
 
 export interface ReverseProxyRule {
   domain: string;
-  targetType?: ReverseProxyTargetType;
   targetPort: number;
   originServerIds: string[];
   anyAccess: AnyAccessConfig;

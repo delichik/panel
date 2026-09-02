@@ -42,7 +42,6 @@ type Spec struct {
 	Command       []string          `json:"command,omitempty"`
 	Env           map[string]string `json:"env,omitempty"`
 	Ports         []Port            `json:"ports,omitempty"`
-	NetworkMode   string            `json:"networkMode"`
 	Resources     Resources         `json:"resources"`
 	Privileged    bool              `json:"privileged,omitempty"`
 	CapAdd        []string          `json:"capAdd,omitempty"`

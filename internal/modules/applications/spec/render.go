@@ -30,7 +30,6 @@ func Render(in RenderInput) (appruntime.Spec, []Issue) {
 		Command:       append([]string(nil), spec.Command...),
 		Env:           cloneStringMap(spec.Env),
 		Ports:         renderPorts(spec.Ports),
-		NetworkMode:   spec.NetworkMode,
 		Resources:     appruntime.Resources{CPU: spec.Resources.CPU, MemoryMB: spec.Resources.MemoryMB},
 		Privileged:    spec.Privileged,
 		CapAdd:        append([]string(nil), spec.CapAdd...),

@@ -203,27 +203,16 @@ describe('application editor model', () => {
     expect(specYamlFromDraft(draft)).toContain('mounts:');
   });
 
-  it('forces local proxy targets for host-network applications', () => {
+  it('removes retired network and proxy target fields from a legacy application', () => {
     const hostApp: ApplicationDto = {
       ...app,
       specYaml: 'name: api\nimage: nginx\nnetworkMode: host\n',
       reverseProxy: [{ domain: 'api.example.test', targetType: 'container', targetPort: 8080, originServerIds: ['srv-1'], anyAccess: { enabled: false }, paths: [{ path: '/' }] }],
-    };
+    } as unknown as ApplicationDto;
     const draft = draftFromApplication(hostApp);
 
-    expect(draft.networkMode).toBe('host');
-    expect(draft.reverseProxy[0].targetType).toBe('local');
-
-    draft.reverseProxy[0].targetType = 'container';
-    expect(saveInputFromDraft(draft).reverseProxy[0].targetType).toBe('local');
-  });
-
-  it('keeps container targets for bridge-network applications', () => {
-    const draft = draftFromApplication(app);
-    expect(draft.networkMode).toBe('bridge');
-
-    draft.reverseProxy[0].targetType = 'container';
-    expect(saveInputFromDraft(draft).reverseProxy[0].targetType).toBe('container');
+    expect(specYamlFromDraft(draft)).not.toContain('networkMode');
+    expect(saveInputFromDraft(draft).reverseProxy[0]).not.toHaveProperty('targetType');
   });
 });
 describe('facility path dialog validation', () => {

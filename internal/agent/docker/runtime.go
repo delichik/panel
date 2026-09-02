@@ -595,7 +595,7 @@ func (r *LocalRuntime) CreateContainer(ctx context.Context, spec appruntime.Spec
 	if strings.TrimSpace(spec.Image) == "" {
 		return "", errors.New("image is required")
 	}
-	if err := r.client.ensureManagedNetwork(ctx, dockerNetworkMode(spec.NetworkMode)); err != nil {
+	if err := r.client.ensureManagedNetwork(ctx); err != nil {
 		return "", err
 	}
 	if err := r.prepareNFSVolumes(ctx, spec); err != nil {
@@ -695,12 +695,11 @@ func (r *LocalRuntime) Reconcile(ctx context.Context, req agentcontract.RuntimeR
 	steps = append(steps, agentcontract.RuntimeReconcileStep{Name: "inspect_container", Status: "running"})
 	inspect, inspectErr := r.client.inspectContainer(ctx, spec.ContainerName)
 	if inspectErr == nil {
-		labels := inspect.Config.Labels
 		if !managedContainerMatches(inspect, req.ApplicationID, req.InstanceID) {
 			steps[len(steps)-1].Status = "failed"
 			return agentcontract.RuntimeReconcileResponse{ErrorCode: "non_managed_conflict", ErrorClass: "non_managed_conflict", ErrorMessage: "container name is owned by a different resource", Retryable: false, Steps: steps}, nil
 		}
-		if labels["panel.application.spec.hash"] == req.DesiredSpecHash && labels["panel.application.generation"] == strconv.Itoa(req.DesiredGeneration) && inspect.State.Running {
+		if managedContainerMatchesDesiredRuntime(inspect, req.DesiredSpecHash, req.DesiredGeneration) {
 			steps[len(steps)-1].Status = "succeeded"
 			steps = append(steps, agentcontract.RuntimeReconcileStep{Name: "reuse_container", Status: "succeeded"})
 			return r.reconcileStatusResponse(ctx, req, spec, steps)
@@ -783,6 +782,14 @@ func managedContainerMatches(inspect dockerInspectResponse, applicationID, insta
 	return labels["panel.application.managed"] == "true" &&
 		labels["panel.application.id"] == applicationID &&
 		labels["panel.application.instance.id"] == instanceID
+}
+
+func managedContainerMatchesDesiredRuntime(inspect dockerInspectResponse, specHash string, generation int) bool {
+	labels := inspect.Config.Labels
+	return labels["panel.application.spec.hash"] == specHash &&
+		labels["panel.application.generation"] == strconv.Itoa(generation) &&
+		inspect.HostConfig.NetworkMode == managedBridgeNetwork &&
+		inspect.State.Running
 }
 
 // logContainerConflict 记录创建容器时的同名冲突详情：占用者是谁、是否面板
@@ -2208,8 +2215,7 @@ func (c *dockerAPIClient) createContainer(ctx context.Context, spec appruntime.S
 		HostConfig: dockerHostConfig{
 			Binds:        dockerBinds(defaultRuntimeRoot, spec),
 			PortBindings: dockerPortBindings(spec.Ports),
-			NetworkMode:  dockerNetworkMode(spec.NetworkMode),
-			ExtraHosts:   dockerExtraHosts(spec.NetworkMode),
+			NetworkMode:  managedBridgeNetwork,
 			Privileged:   spec.Privileged,
 			CapAdd:       append([]string(nil), spec.CapAdd...),
 		},
@@ -2689,17 +2695,13 @@ type dockerHostConfig struct {
 	Binds        []string                       `json:"Binds,omitempty"`
 	PortBindings map[string][]map[string]string `json:"PortBindings,omitempty"`
 	NetworkMode  string                         `json:"NetworkMode,omitempty"`
-	ExtraHosts   []string                       `json:"ExtraHosts,omitempty"`
 	Privileged   bool                           `json:"Privileged,omitempty"`
 	CapAdd       []string                       `json:"CapAdd,omitempty"`
 	Memory       int64                          `json:"Memory,omitempty"`
 	NanoCPUs     int64                          `json:"NanoCpus,omitempty"`
 }
 
-func (c *dockerAPIClient) ensureManagedNetwork(ctx context.Context, networkMode string) error {
-	if networkMode != managedBridgeNetwork {
-		return nil
-	}
+func (c *dockerAPIClient) ensureManagedNetwork(ctx context.Context) error {
 	if err := c.inspectNetwork(ctx, managedBridgeNetwork); err == nil {
 		return nil
 	} else if !isDockerNotFound(err) {
@@ -2758,20 +2760,6 @@ func (c *dockerAPIClient) createNetwork(ctx context.Context, name string) error 
 	return nil
 }
 
-func dockerNetworkMode(mode string) string {
-	if strings.TrimSpace(mode) == "bridge" {
-		return managedBridgeNetwork
-	}
-	return mode
-}
-
-func dockerExtraHosts(mode string) []string {
-	if strings.TrimSpace(mode) == "bridge" {
-		return []string{"host.docker.internal:host-gateway"}
-	}
-	return nil
-}
-
 type dockerInspectResponse struct {
 	ID      string `json:"Id"`
 	Name    string `json:"Name"`
@@ -2780,6 +2768,9 @@ type dockerInspectResponse struct {
 		Image  string            `json:"Image"`
 		Labels map[string]string `json:"Labels"`
 	} `json:"Config"`
+	HostConfig struct {
+		NetworkMode string `json:"NetworkMode"`
+	} `json:"HostConfig"`
 	State struct {
 		Status     string `json:"Status"`
 		Running    bool   `json:"Running"`

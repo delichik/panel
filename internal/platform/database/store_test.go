@@ -555,7 +555,6 @@ func TestMigrateAddsFail2BanManagedColumn(t *testing.T) {
 	}
 }
 
-
 func TestMigrateNormalizesLegacyNullDefaults(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -980,8 +979,88 @@ func TestMigrateMovesReverseProxyRoutesToUnifiedTable(t *testing.T) {
 	if appColumns["reverse_proxy_json"] {
 		t.Fatal("applications.reverse_proxy_json must be dropped after migration")
 	}
+	routeColumns := tableColumns(t, store.AppDB(), "reverse_proxy_routes")
+	if routeColumns["target_container"] {
+		t.Fatal("reverse_proxy_routes.target_container must be dropped after migration")
+	}
 	facilityColumns := tableColumns(t, store.AppDB(), "facility_app_configs")
 	if facilityColumns["domains_json"] {
 		t.Fatal("facility_app_configs.domains_json must be dropped after migration")
+	}
+}
+
+func TestRemoveDeprecatedApplicationNetworkingOnClearsLegacySnapshots(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	for _, statement := range []string{
+		`CREATE TABLE applications (id TEXT PRIMARY KEY, spec_yaml TEXT NOT NULL)`,
+		`CREATE TABLE application_revisions (id TEXT PRIMARY KEY, spec_yaml TEXT NOT NULL, rendered_runtime_spec TEXT NOT NULL, job_json TEXT NOT NULL)`,
+		`CREATE TABLE application_edit_sessions (id TEXT PRIMARY KEY, draft_json TEXT NOT NULL, commit_result_json TEXT NOT NULL, conflict_json TEXT NOT NULL)`,
+		`CREATE TABLE jobs (id TEXT PRIMARY KEY, desired_spec_json TEXT NOT NULL)`,
+		`CREATE TABLE application_instances (id TEXT PRIMARY KEY, desired_spec_json TEXT NOT NULL, runtime_spec_json TEXT NOT NULL)`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	legacyYAML := "name: legacy\nimage: nginx\n\"networkMode\": host\n"
+	legacyRuntime := `{"containerName":"panel-legacy","networkMode":"host"}`
+	legacyDraft := `{"specYaml":"name: legacy\nimage: nginx\n'networkMode': host\n","reverseProxy":[{"domain":"legacy.example.test","targetType":"local","targetPort":8080}]}`
+	legacyResult := `{"application":{"specYaml":"name: legacy\n'networkMode': host\n","reverseProxy":[{"targetType":"container"}]}}`
+	legacyConflict := `{"draft":{"specYaml":"name: legacy\n\"networkMode\": host\n","reverseProxy":[{"targetType":"local"}]}}`
+
+	if _, err := db.Exec(`INSERT INTO applications(id,spec_yaml) VALUES(?,?)`, "app-1", legacyYAML); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO application_revisions(id,spec_yaml,rendered_runtime_spec,job_json) VALUES(?,?,?,?)`, "revision-1", legacyYAML, legacyRuntime, legacyRuntime); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO application_edit_sessions(id,draft_json,commit_result_json,conflict_json) VALUES(?,?,?,?)`, "session-1", legacyDraft, legacyResult, legacyConflict); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO jobs(id,desired_spec_json) VALUES(?,?)`, "job-1", legacyRuntime); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO application_instances(id,desired_spec_json,runtime_spec_json) VALUES(?,?,?)`, "instance-1", legacyRuntime, legacyRuntime); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := removeDeprecatedApplicationNetworkingOn(context.Background(), tx); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	queries := []string{
+		`SELECT spec_yaml FROM applications WHERE id='app-1'`,
+		`SELECT spec_yaml FROM application_revisions WHERE id='revision-1'`,
+		`SELECT rendered_runtime_spec FROM application_revisions WHERE id='revision-1'`,
+		`SELECT job_json FROM application_revisions WHERE id='revision-1'`,
+		`SELECT draft_json FROM application_edit_sessions WHERE id='session-1'`,
+		`SELECT commit_result_json FROM application_edit_sessions WHERE id='session-1'`,
+		`SELECT conflict_json FROM application_edit_sessions WHERE id='session-1'`,
+		`SELECT desired_spec_json FROM jobs WHERE id='job-1'`,
+		`SELECT desired_spec_json FROM application_instances WHERE id='instance-1'`,
+		`SELECT runtime_spec_json FROM application_instances WHERE id='instance-1'`,
+	}
+	for _, query := range queries {
+		var value string
+		if err := db.QueryRow(query).Scan(&value); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(value, "networkMode") || strings.Contains(value, "targetType") {
+			t.Fatalf("legacy networking field remains after migration: %q", value)
+		}
 	}
 }

@@ -79,13 +79,6 @@ func TestValidateRejectsInvalidRestartPolicy(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsPortsWithHostNetwork(t *testing.T) {
-	issues := Validate(Spec{Name: "web", Image: "nginx", NetworkMode: "host", Ports: []Port{{Label: "http", To: 80}}})
-	if !hasIssue(issues, "ports") {
-		t.Fatalf("issues = %#v", issues)
-	}
-}
-
 func TestDecodeYAMLReturnsIssueForMalformedYAML(t *testing.T) {
 	_, issues := DecodeYAML("name: [")
 	if !hasIssue(issues, "specYaml") {

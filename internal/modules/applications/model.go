@@ -19,8 +19,6 @@ const (
 	DeploymentModeAll      = "all"
 	DeploymentModeSelected = "selected"
 
-	ReverseProxyTargetLocal     = "local"
-	ReverseProxyTargetContainer = "container"
 	HTTPRouteModeInherit        = "inherit"
 	HTTPRouteModeOn             = "on"
 	HTTPRouteModeOff            = "off"
@@ -99,7 +97,6 @@ type ImageUpdateTarget struct {
 
 type ReverseProxyRule struct {
 	Domain          string             `json:"domain"`
-	TargetType      string             `json:"targetType,omitempty"`
 	TargetPort      int                `json:"targetPort"`
 	OriginServerIDs []string           `json:"originServerIds"`
 	AnyAccess       AnyAccessConfig    `json:"anyAccess"`
@@ -152,7 +149,6 @@ type ApplicationReverseProxyConfig struct {
 
 type ReverseProxyRoute struct {
 	Domain          string             `json:"domain"`
-	TargetType      string             `json:"targetType,omitempty"`
 	TargetPort      int                `json:"targetPort"`
 	TargetContainer string             `json:"targetContainer,omitempty"`
 	OriginServerIDs []string           `json:"originServerIds"`

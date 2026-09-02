@@ -103,7 +103,7 @@ Open **Applications → Applications**, select **Add application**, and configur
 1. Set the application name to `hello-nginx`.
 2. Enable the application.
 3. Set the image to `nginx:alpine`.
-4. Keep network mode set to `bridge`.
+4. Application networking is fixed to the managed `panel-apps` bridge network; no configuration is required.
 5. Add a port mapping from container port `80` to an unused host port such as `8081`.
 6. Set deployment mode to selected servers and choose one healthy server.
 7. Select **Save and apply**.
@@ -127,7 +127,7 @@ The application editor supports visual configuration and YAML. Common sections i
 - Container image and command.
 - CPU, memory, privilege, and Linux capability settings.
 - Container environment variables.
-- Port mappings and network mode.
+- Port mappings (application networking is always the managed `panel-apps` bridge network).
 - Host, Docker volume, managed file, and persistent mounts.
 - Application files and templates.
 - Deployment to all healthy servers or selected servers.
