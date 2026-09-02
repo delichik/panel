@@ -376,8 +376,6 @@ export let mockFacility: ReverseProxyConfig = {
   id: 'reverse_proxy',
   version: 8,
   deploymentServers: ['srv-edge-sgp', 'srv-edge-sgp-02', 'srv-api-hkg', 'srv-api-hkg-02', 'srv-edge-lax'],
-  panelHostServerId: 'srv-edge-sgp',
-  panelEntry: { enabled: true, serverId: 'srv-edge-sgp', domain: 'panel.example.test' },
   domains: [
     {
       domain: 'static.example.test',
@@ -729,7 +727,7 @@ export function beginFacilitySession(): FacilityEditSession {
     clientDraftKey: 'facility:reverse-proxy',
     state: 'active',
     baseResourceVersion: { value: String(mockFacility.version), updatedAt: mockFacility.updatedAt },
-    draft: { deploymentServers: mockFacility.deploymentServers, panelEntry: mockFacility.panelEntry, domains: mockFacility.domains },
+    draft: { deploymentServers: mockFacility.deploymentServers, domains: mockFacility.domains },
     revision: 1,
     assets: mockFacility.staticAssets.map((asset) => ({ name: asset.name, kind: asset.kind, contentMode: asset.contentMode, filename: asset.filename, size: asset.size, sha256: asset.sha256, createdAt: asset.createdAt, updatedAt: asset.updatedAt })),
     idleExpiresAt: '2026-07-22T08:00:00.000Z',
@@ -804,7 +802,6 @@ export function facilityStaticAssetContent(assetName: string): { name: string; c
 export function facilityDiagnostics(session: FacilityEditSession): Diagnostic[] {
   const issues: Diagnostic[] = [];
   if (!session.draft.deploymentServers.length) issues.push({ code: 'facility_gateway_servers_required', severity: 'error', field: 'deploymentServers', message: 'At least one gateway server is required.' });
-  if (session.draft.panelEntry.enabled && !session.draft.panelEntry.domain) issues.push({ code: 'facility_panel_entry_domain_invalid', severity: 'error', field: 'panelEntry.domain', message: 'Seamark entry domain is required.' });
   if (session.draft.domains.some((domain) => domain.domain.includes('conflict'))) issues.push({ code: 'facility_domain_owner_conflict', severity: 'error', message: 'Domain is already used by another route.' });
   if (JSON.stringify(session.draft).length > 1200) issues.push({ code: 'facility_long_config', severity: 'warning', message: 'Gateway configuration is long.' });
   return issues;
@@ -818,7 +815,6 @@ export function commitFacilitySession(id: string) {
     ...mockFacility,
     version: mockFacility.version + 1,
     deploymentServers: session.draft.deploymentServers,
-    panelEntry: session.draft.panelEntry,
     domains: session.draft.domains,
     staticAssets: session.assets.map((asset) => ({
       name: asset.name,
@@ -831,7 +827,7 @@ export function commitFacilitySession(id: string) {
       updatedAt: asset.updatedAt,
     })),
     updatedAt: now,
-    routes: session.draft.domains.reduce((sum, domain) => sum + domain.paths.length, session.draft.panelEntry.enabled ? 1 : 0),
+    routes: session.draft.domains.reduce((sum, domain) => sum + domain.paths.length, 0),
   };
   return { config: mockFacility, resourceVersion: { value: String(mockFacility.version), updatedAt: now }, applyRequested: true, diagnostics: [] };
 }

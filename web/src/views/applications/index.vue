@@ -973,7 +973,7 @@ async function startFacilityEditorCore() {
   try {
     facilitySession.value = await reverseProxyFacilityApi.beginEdit(facilitySaveInputFromDraft(facilityDraft));
     if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || facilityKind.value !== kindAtStart) return;
-    Object.assign(facilityDraft, facilityDraftFromConfig({ ...(facility.value ?? emptyFacility()), deploymentServers: facilitySession.value.draft.deploymentServers, panelEntry: facilitySession.value.draft.panelEntry, domains: facilitySession.value.draft.domains }));
+    Object.assign(facilityDraft, facilityDraftFromConfig({ ...(facility.value ?? emptyFacility()), deploymentServers: facilitySession.value.draft.deploymentServers, domains: facilitySession.value.draft.domains }));
   } catch (err) {
     if (isAbortError(err)) return;
     const message = err instanceof Error ? err.message : t('applicationsPage.editorStartFailed');
@@ -1525,7 +1525,7 @@ function applicationFromSummary(app?: ApplicationSummaryDto | null): Application
 }
 
 function emptyFacility(): ReverseProxyConfig {
-  return { id: 'reverse_proxy', version: 0, deploymentServers: [], panelEntry: { enabled: false }, domains: [], staticAssets: [], routeSummaries: [], applicationRoutes: [], updatedAt: '', routes: 0, enabledServers: [] };
+  return { id: 'reverse_proxy', version: 0, deploymentServers: [], domains: [], staticAssets: [], routeSummaries: [], applicationRoutes: [], updatedAt: '', routes: 0, enabledServers: [] };
 }
 
 function isAbortError(error: unknown) {
@@ -1870,17 +1870,6 @@ onBeforeUnmount(() => {
               </section>
   
               <section class="workspace-panel">
-                <div class="section-copy"><h3>{{ t('applicationsPage.panelEntry') }}</h3><p>{{ t('applicationsPage.panelEntryHint') }}</p></div>
-                <label class="switch-field">{{ t('applicationsPage.panelEntry') }}<Switch v-model="facilityDraft.panelEnabled" :label="t('applicationsPage.panelEntry')" @click="markDirty" /></label>
-                <template v-if="facilityDraft.panelEnabled">
-                  <label class="field">{{ t('applicationsPage.panelServer') }}<ServerContextSelector v-model="facilityDraft.panelServerId" :servers="serverOptions" :disabled="Boolean(facilityDraft.panelHostServerId)" :label="t('applicationsPage.panelServer')" @update:model-value="markDirty" /></label>
-                  <label class="field">{{ t('applicationsPage.panelDomain') }}<Input v-model="facilityDraft.panelDomain" :invalid="Boolean(facilityErrors.panelDomain)" @input="markDirty" /></label>
-                  <p v-if="facilityDraft.panelHostServerId" class="text-xs text-muted-foreground">{{ t('applicationsPage.panelHostRegisteredHint') }}</p>
-                  <p v-else class="text-xs text-warning">{{ t('applicationsPage.panelHostNotRegisteredHint') }}</p>
-                </template>
-              </section>
-  
-              <section class="workspace-panel">
                 <AssetFileManager
                   :items="facilityAssetItems" :adapter="facilityAssetAdapter" :disabled="!facilitySession"
                   :labels="{ title: t('applicationsPage.staticAssets'), hint: t('applicationsPage.assetUploadLimit'), uploadAsset: t('applicationsPage.uploadAsset'), uploadAssetTitle: t('applicationsPage.uploadAssetTitle'), uploadType: t('applicationsPage.uploadType'), uploadTypeText: t('applicationsPage.uploadTypeText'), uploadTypeBinary: t('applicationsPage.uploadTypeBinary'), uploadTypeArchive: t('applicationsPage.uploadTypeArchive'), uploadFile: t('applicationsPage.uploadFile'), uploadArchive: t('applicationsPage.uploadArchive'), operationFailed: t('applicationsPage.operationFailed'), edit: t('common.edit'), replace: t('common.replace'), download: t('common.download'), delete: t('common.delete'), bytes: t('applicationsPage.bytes'), noAssets: t('applicationsPage.noAssets'), noAssetsHint: t('applicationsPage.noAssetsHint'), textTitle: t('applicationsPage.editTextFile'), newTextTitle: t('applicationsPage.newTextFile'), name: t('applicationsPage.assetReferenceName'), nameHint: t('applicationsPage.assetReferenceNameHint'), filename: t('applicationsPage.assetDownloadFilename'), filenameHint: t('applicationsPage.assetDownloadFilenameHint'), language: t('applicationsPage.highlightLanguage'), content: t('applicationsPage.fileContent'), loading: t('applicationsPage.fileLoading'), loadFailed: t('applicationsPage.fileLoadFailed'), cancel: t('common.cancel'), save: t('common.save'), close: t('common.close'), reload: t('applicationsPage.discardTextAndReload'), deleteTitle: t('applicationsPage.confirm.facility-asset-delete.title'), deleteDescription: t('applicationsPage.confirm.facility-asset-delete.description'), confirmDelete: t('common.delete') }"
@@ -1954,11 +1943,7 @@ onBeforeUnmount(() => {
                 <strong>{{ domain.domain }}</strong>
                 <Badge :tone="facilityDnsTone(facilityDnsStatus(domain.domain))" :title="facilityDnsError(domain.domain) || undefined">{{ t(`applicationsPage.dnsSync.${facilityDnsStatus(domain.domain) || 'unknown'}`) }}</Badge>
               </div>
-              <div v-if="facility.panelEntry.enabled && facility.panelEntry.domain" class="flex items-center justify-between gap-3 rounded-xl border border-border p-3 text-sm">
-                <strong>{{ facility.panelEntry.domain }} <span class="text-xs text-muted-foreground">{{ t('applicationsPage.panelEntry') }}</span></strong>
-                <Badge :tone="facilityDnsTone(facilityDnsStatus(facility.panelEntry.domain))" :title="facilityDnsError(facility.panelEntry.domain) || undefined">{{ t(`applicationsPage.dnsSync.${facilityDnsStatus(facility.panelEntry.domain) || 'unknown'}`) }}</Badge>
-              </div>
-              <EmptyState v-if="!facility.domains.length && !(facility.panelEntry.enabled && facility.panelEntry.domain)" :title="t('applicationsPage.noDomains')" :description="t('applicationsPage.noDomainsHint')" />
+              <EmptyState v-if="!facility.domains.length" :title="t('applicationsPage.noDomains')" :description="t('applicationsPage.noDomainsHint')" />
             </div>
           </section>
           <section class="rounded-2xl border border-border bg-muted p-4">
@@ -1976,7 +1961,6 @@ onBeforeUnmount(() => {
       <aside class="grid content-start gap-3 rounded-2xl border border-border bg-card p-5">
         <h3>{{ t('applicationsPage.gatewayDetails') }}</h3>
         <div v-if="facility" class="grid gap-3 text-sm">
-          <div><span>{{ t('applicationsPage.panelEntry') }}</span><strong>{{ facility.panelEntry.enabled ? facility.panelEntry.domain : t('applicationsPage.panelEntryDisabled') }}</strong></div>
           <div><span>{{ t('applicationsPage.lastUpdated') }}</span><strong>{{ formatDateTime(facility.updatedAt) || t('common.never') }}</strong></div>
           <div v-if="facility.operation"><span>{{ t('applicationsPage.currentOperation') }}</span><StatusBadge :status="facility.operation.status" domain="operation" /></div>
           <div v-if="facility.reconcileStopped"><StatusBadge :status="'needs_attention'" domain="operation" :label="t('applicationsPage.status.attention')" /></div>

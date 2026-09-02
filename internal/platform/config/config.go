@@ -71,7 +71,7 @@ func defaultAdminHash() string {
 
 func Default() Config {
 	return Config{
-		ListenAddress:               "127.0.0.1:8080",
+		ListenAddress:               "127.0.0.1:8443",
 		AdminUsername:               "admin",
 		AdminPasswordHash:           defaultAdminHash(),
 		JWTSecret:                   "change-me-panel-jwt-secret",

@@ -62,24 +62,6 @@ type Server struct {
 
 func (*Server) TableName() string { return "servers" }
 
-// PanelInstallation 对应 panel_installation。
-type PanelInstallation struct {
-	ID              string    `orm:"primary_key"`
-	HostServerID    *string   `orm:"unique;references:servers(id)"`
-	PendingServerID *string   `orm:"unique;references:servers(id);on_delete:SET NULL"`
-	Stage           string    `orm:"not_null;default:''"`
-	LastError       string    `orm:"not_null;default:''"`
-	CreatedAt       time.Time `orm:"not_null"`
-	UpdatedAt       time.Time `orm:"not_null"`
-}
-
-func (*PanelInstallation) TableName() string { return "panel_installation" }
-
-// TableConstraints 返回 panel_installation 表无法用 orm tag 表达的原始约束。
-func (*PanelInstallation) TableConstraints() []string {
-	return []string{"CHECK(id = 'default')"}
-}
-
 // PackageUpdate 对应 package_updates。
 type PackageUpdate struct {
 	ServerID         string    `orm:"primary_key;not_null;references:servers(id);on_delete:CASCADE"`
@@ -483,7 +465,6 @@ type FacilityAppConfig struct {
 	ID                      string         `orm:"primary_key"`
 	Version                 int            `orm:"not_null;default:1"`
 	DeploymentServerIDsJSON []string       `orm:"json;not_null;default:'[]';column:deployment_server_ids_json"`
-	PanelEntryJSON          map[string]any `orm:"json;not_null;default:'{}'"`
 
 	DNSSyncJSON map[string]any `orm:"json;not_null;default:'{}';column:dns_sync_json"`
 	LastError   string         `orm:"not_null;default:''"`

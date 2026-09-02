@@ -2,6 +2,7 @@ package settings
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,6 +11,18 @@ import (
 	storage "panel/internal/platform/database"
 	"panel/internal/platform/reconciletrace"
 )
+
+type failingPanelTLSProvider struct{ err error }
+
+func (p failingPanelTLSProvider) AssetType(context.Context, string) (string, error) {
+	return "tls_certificate", nil
+}
+
+func (p failingPanelTLSProvider) ReadFile(context.Context, string, string) ([]byte, string, error) {
+	return nil, "", p.err
+}
+
+func (p failingPanelTLSProvider) SyncPanelTLS(context.Context, string, string) error { return p.err }
 
 func newTestService(t *testing.T) *Service {
 	t.Helper()
@@ -64,6 +77,53 @@ func TestRuntimeSettingsUpdatePersists(t *testing.T) {
 	}
 	if reloaded.Runtime().LogLevel != "debug" {
 		t.Fatalf("log level was not persisted: %q", reloaded.Runtime().LogLevel)
+	}
+}
+
+func TestRuntimeSettingsDoesNotPersistPanelSelectionWhenTLSActivationFails(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	svc, err := NewService(store.AppDB(), cfg, WithTLSAssetProvider(failingPanelTLSProvider{err: errors.New("write fixed certificate")}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := svc.Runtime()
+	_, err = svc.Update(context.Background(), RuntimeUpdate{
+		MetricsRetentionDays:             current.MetricsRetentionDays,
+		RuntimeEventRetentionDays:        current.RuntimeEventRetentionDays,
+		RuntimeEventDetailRetentionDays:  current.RuntimeEventDetailRetentionDays,
+		MetricsCollectionIntervalSeconds: current.MetricsCollectionIntervalSeconds,
+		ContainerReportIntervalSeconds:   current.ContainerReportIntervalSeconds,
+		CleanupSchedule:                  current.CleanupSchedule,
+		RuntimeEventCleanupSchedule:      current.RuntimeEventCleanupSchedule,
+		TokenExpiration:                  current.TokenExpiration,
+		Language:                         current.Language,
+		LogLevel:                         current.LogLevel,
+		RemoteCommandTimeoutSeconds:      current.RemoteCommandTimeoutSeconds,
+		Panel:                            &RuntimePanelSettings{Domain: "panel.example.test"},
+	})
+	if err == nil {
+		t.Fatal("expected Panel TLS activation failure")
+	}
+	if got := svc.Runtime().Panel; got != current.Panel {
+		t.Fatalf("runtime Panel settings changed despite activation failure: %#v", got)
+	}
+	var domain string
+	if err := store.AppDB().QueryRow(`SELECT value FROM runtime_settings WHERE key='panel.domain'`).Scan(&domain); err != nil {
+		t.Fatal(err)
+	}
+	if domain != current.Panel.Domain {
+		t.Fatalf("persisted Panel domain = %q, want %q", domain, current.Panel.Domain)
 	}
 }
 

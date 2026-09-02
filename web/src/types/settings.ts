@@ -8,6 +8,11 @@ export interface RuntimeBrandingSettings {
   loginSubtitle: string;
 }
 
+export interface RuntimePanelSettings {
+  domain: string;
+  tlsCertificateId: string;
+}
+
 export interface RuntimeSettings {
   listenAddress: string;
   appDatabase: string;
@@ -27,6 +32,7 @@ export interface RuntimeSettings {
   reconcileTraceEnabled: boolean;
   branding: RuntimeBrandingSettings;
   certificates: RuntimeCertificateSettings;
+  panel: RuntimePanelSettings;
   jwtSecretConfigured: boolean;
 }
 
@@ -45,6 +51,7 @@ export interface RuntimeUpdate {
   reconcileTraceEnabled?: boolean;
   branding?: RuntimeBrandingSettings;
   certificates?: RuntimeCertificateSettings;
+  panel?: RuntimePanelSettings;
 }
 
 export interface ServerVariableDefinition {

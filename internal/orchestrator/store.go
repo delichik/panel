@@ -274,31 +274,31 @@ func (s *Store) RecoverExpiredLeases(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET state=CASE WHEN last_stage='' THEN 'pending' ELSE 'failed_retryable' END,
-		lease_owner='',lease_token='',lease_expires_at=NULL,error_code=CASE WHEN last_stage='' THEN error_code ELSE 'lease_lost' END,
-		error_class=CASE WHEN last_stage='' THEN error_class ELSE 'ownership' END,
-		error_message=CASE WHEN last_stage='' THEN error_message ELSE 'orchestrator lease expired' END,
-		error_detail=CASE WHEN last_stage='' THEN error_detail ELSE 'running job recovered after lease expiry' END,
-		next_run_at=CASE WHEN last_stage='' THEN NULL ELSE ? END,updated_at=?
-		WHERE state='running' AND lease_expires_at IS NOT NULL AND lease_expires_at<>'' AND lease_expires_at<=?`,
-		now.Add(retryDelay(1, 0)).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
-	if err != nil {
-		return err
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
 	for _, job := range expired {
 		state := "pending"
+		var nextRun any
 		if job.LastStage != "" {
 			state = JobFailedRetryable
+			nextRun = now.Add(retryDelay(job.Attempts, 0)).Format(time.RFC3339Nano)
+		}
+		// Update each job independently so its retry delay reflects the number
+		// of attempts already consumed. The lease predicates fence out a worker
+		// that renewed/reclaimed the job after the initial snapshot.
+		_, err := s.db.ExecContext(ctx, `UPDATE jobs SET state=?,lease_owner='',lease_token='',lease_expires_at=NULL,
+			error_code=CASE WHEN ?='pending' THEN error_code ELSE 'lease_lost' END,
+			error_class=CASE WHEN ?='pending' THEN error_class ELSE 'ownership' END,
+			error_message=CASE WHEN ?='pending' THEN error_message ELSE 'orchestrator lease expired' END,
+			error_detail=CASE WHEN ?='pending' THEN error_detail ELSE 'running job recovered after lease expiry' END,
+			next_run_at=?,updated_at=?
+			WHERE id=? AND state='running' AND lease_expires_at IS NOT NULL AND lease_expires_at<>'' AND lease_expires_at<=?`,
+			state, state, state, state, state, nextRun, now.Format(time.RFC3339Nano), job.ID, now.Format(time.RFC3339Nano))
+		if err != nil {
+			return err
 		}
 		traceJobEvent("lease_lost", job,
 			zap.String("reason", "lease_expired"),
 			zap.String("recovered_state", state))
 	}
-	_ = affected
 	return nil
 }
 

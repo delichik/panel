@@ -11,7 +11,7 @@ Seamark is distributed as a container image. Use Docker Compose or Docker to run
 - A Linux host with Docker Engine installed.
 - Docker Compose plugin for the recommended Compose workflow, or Docker alone for the `docker run` workflow.
 - A supported host architecture: `amd64` or `arm64`.
-- An available TCP port for the web UI. The examples use port `8080`.
+- An available TCP port for the web UI. The examples use HTTPS port `8443`.
 
 The host running Seamark is separate from the target servers that Seamark manages. You do not need to mount the Seamark host's Docker Socket into the Seamark container.
 
@@ -33,7 +33,7 @@ services:
     container_name: panel
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8443:8443"
     volumes:
       - panel-data:/app/data
 
@@ -56,15 +56,7 @@ docker compose ps
 docker compose logs --tail=100 panel
 ```
 
-After startup, make sure the Seamark domain points to this host, then run on the host over SSH:
-
-```bash
-docker exec -it panel /app/panel setup
-```
-
-Enter the host IP literal (IPv4 or IPv6), port, user, credential, and Seamark domain. Seamark connects back to the host over SSH, enrolls it, installs the Agent, records it as the singleton Seamark host, and deploys Seamark's own Nginx entrance. When setup completes, open the reported `http://<panel-domain>` URL. Setup is a convenience path; you can also sign in to the UI and enable the Seamark access entry under **Applications → Facility Apps**, where the first save registers the chosen server as the host node.
-
-Setup is resumable. If Agent or entrance deployment fails, run the command again to continue from the saved stage. Passwords and private-key passphrases are read interactively and should not be passed as command arguments.
+After startup, open `https://<host>:8443`. The default certificate is self-signed, so the first browser visit will require a certificate exception. After signing in, use **Settings → Certificates** to configure the Panel domain and select a user-managed TLS certificate.
 
 Default account:
 
@@ -87,7 +79,7 @@ Start Seamark:
 docker run -d \
   --name panel \
   --restart unless-stopped \
-  -p 127.0.0.1:8080:8080 \
+  -p 127.0.0.1:8443:8443 \
   -v panel-data:/app/data \
   ghcr.io/delichik/panel:latest
 ```
@@ -99,7 +91,7 @@ docker ps --filter name=panel
 docker logs --tail=100 panel
 ```
 
-Run `docker exec -it panel /app/panel setup`, then sign in to the reported domain with `admin/admin` and change the password when prompted.
+Open `https://127.0.0.1:8443`, accept the initial self-signed certificate warning, then sign in with `admin/admin` and change the password when prompted.
 
 ## Data Persistence
 
@@ -150,7 +142,7 @@ docker rm panel
 docker run -d \
   --name panel \
   --restart unless-stopped \
-  -p 8080:8080 \
+  -p 8443:8443 \
   -v panel-data:/app/data \
   ghcr.io/delichik/panel:latest
 ```
@@ -175,16 +167,16 @@ docker start panel
 
 ## Network and HTTPS
 
-The examples publish Seamark port `8080` only on the host loopback interface. The public Seamark entrance is deployed by the entrance gateway after `panel setup`; the raw Seamark port does not need to be exposed publicly.
+The examples publish the Panel HTTPS port `8443` only on the host loopback interface. Configure a public domain and user-managed certificate in **Settings → Certificates** before exposing the listener publicly.
 
 For a reverse proxy running on the same host, you can bind Seamark to loopback instead:
 
 ```yaml
 ports:
-  - "127.0.0.1:8080:8080"
+  - "127.0.0.1:8443:8443"
 ```
 
-Terminate HTTPS at the reverse proxy and forward requests to `http://127.0.0.1:8080`. If the reverse proxy runs in another container, connect both containers through a private Docker network instead of using the loopback binding.
+Terminate HTTPS at the reverse proxy and forward requests to `https://127.0.0.1:8443` (trust the Panel self-signed certificate or configure a user certificate). If the reverse proxy runs in another container, connect both containers through a private Docker network instead of using the loopback binding.
 
 ## Troubleshooting
 
@@ -204,16 +196,16 @@ docker logs --tail=200 panel
 
 Confirm that the `panel-data` volume is writable and that the host architecture is `amd64` or `arm64`.
 
-### Port 8080 is already in use
+### Port 8443 is already in use
 
 Change only the host side of the port mapping. For example, publish Seamark on host port `9080`:
 
 ```yaml
 ports:
-  - "9080:8080"
+  - "9080:8443"
 ```
 
-Then open `http://<panel-host>:9080`.
+Then open `https://<panel-host>:9080`.
 
 ### The page is not reachable from another machine
 

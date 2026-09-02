@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
@@ -88,6 +89,144 @@ mounts:
 	}
 	if err := svc.Delete(ctx, sshAsset.ID); err == nil {
 		t.Fatal("expected in-use SSH asset delete to be blocked")
+	}
+}
+
+func TestOverwriteImportRejectsSelectedPanelCertificateOutsideDomain(t *testing.T) {
+	svc, store, closeFn := newTestService(t)
+	defer closeFn()
+	ctx := context.Background()
+
+	ca, err := svc.CreateCA(ctx, CreateCARequest{Name: "Panel CA", CommonName: "panel-ca.internal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := svc.CreateTLS(ctx, CreateTLSRequest{
+		Name:          "Panel HTTPS",
+		ParentAssetID: ca.ID,
+		CommonName:    "panel.example.test",
+		DNSNames:      []string{"panel.example.test"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := setPanelTLSSelection(ctx, store, "panel.example.test", active.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SyncPanelTLS(ctx, "panel.example.test", active.ID); err != nil {
+		t.Fatal(err)
+	}
+	activeCertificate, err := os.ReadFile(filepath.Join(svc.cfg.DataRoot, "tls", "panel.crt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	incoming, err := svc.CreateTLS(ctx, CreateTLSRequest{
+		Name:          "Wrong Panel HTTPS",
+		ParentAssetID: ca.ID,
+		CommonName:    "other.example.test",
+		DNSNames:      []string{"other.example.test"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	incomingCertificate, _, err := svc.ReadFile(ctx, incoming.ID, "certificate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	incomingKey, _, err := svc.ReadFile(ctx, incoming.ID, "private_key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, err := encryptArchive("very-secret-12", archivePayload{Assets: []archiveAsset{{
+		ID:             active.ID,
+		Type:           TypeTLSCertificate,
+		Name:           active.Name,
+		ParentAssetID:  ca.ID,
+		CommonName:     "other.example.test",
+		Algorithm:      incoming.Algorithm,
+		KeySize:        incoming.KeySize,
+		CertificatePEM: string(incomingCertificate),
+		PrivateKeyPEM:  string(incomingKey),
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preflight, err := svc.PreflightImport(ctx, ImportPreflightRequest{ArchiveBase64: encodeBase64(archive), Password: "very-secret-12"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ExecuteImport(ctx, preflight.PlanID, ImportExecuteRequest{
+		Strategy:                  "overwrite_existing",
+		ConfirmOverwriteInUse:     true,
+		ConfirmDangerousOverwrite: true,
+	}); err == nil {
+		t.Fatal("expected Panel-domain validation failure")
+	}
+	currentCertificate, err := os.ReadFile(filepath.Join(svc.cfg.DataRoot, "tls", "panel.crt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(currentCertificate) != string(activeCertificate) {
+		t.Fatal("failed overwrite import changed the active Panel certificate")
+	}
+	storedCertificate, _, err := svc.ReadFile(ctx, active.ID, "certificate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(storedCertificate) != string(activeCertificate) {
+		t.Fatal("failed overwrite import changed the stored Panel certificate")
+	}
+}
+
+func TestReissueSelectedPanelCertificateSynchronizesFixedPair(t *testing.T) {
+	svc, store, closeFn := newTestService(t)
+	defer closeFn()
+	ctx := context.Background()
+
+	ca, err := svc.CreateCA(ctx, CreateCARequest{Name: "Panel CA", CommonName: "panel-ca.internal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	asset, err := svc.CreateTLS(ctx, CreateTLSRequest{
+		Name:          "Panel HTTPS",
+		ParentAssetID: ca.ID,
+		CommonName:    "panel.example.test",
+		DNSNames:      []string{"panel.example.test"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := setPanelTLSSelection(ctx, store, "panel.example.test", asset.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SyncPanelTLS(ctx, "panel.example.test", asset.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := svc.ReissueTLS(ctx, asset.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixedCertificate, err := tls.LoadX509KeyPair(
+		filepath.Join(svc.cfg.DataRoot, "tls", "panel.crt"),
+		filepath.Join(svc.cfg.DataRoot, "tls", "panel.key"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(fixedCertificate.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leaf.VerifyHostname("panel.example.test") != nil {
+		t.Fatalf("reissued fixed certificate does not cover Panel domain: %v", leaf.VerifyHostname("panel.example.test"))
+	}
+	if certificateFingerprint(leaf) != result.Asset.Fingerprint {
+		t.Fatalf("fixed certificate fingerprint = %q, want %q", certificateFingerprint(leaf), result.Asset.Fingerprint)
+	}
+	if fixedCertificate.PrivateKey == nil {
+		t.Fatal("fixed Panel private key is empty")
 	}
 }
 
@@ -523,6 +662,23 @@ func newTestService(t *testing.T) (*Service, *storage.Store, func()) {
 	svc := NewService(store.AppDB(), cfg, secrets, taskSvc, WithLogDB(store.LogDB()))
 	svc.RegisterTasks(taskSvc)
 	return svc, store, func() { _ = store.Close() }
+}
+
+func setPanelTLSSelection(ctx context.Context, store *storage.Store, domain, assetID string) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for key, value := range map[string]string{
+		"panel.domain":           domain,
+		"panel.tlsCertificateId": assetID,
+	} {
+		if _, err := store.AppDB().ExecContext(ctx, `
+			INSERT INTO runtime_settings(key, value, updated_at)
+			VALUES (?, ?, ?)
+			ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+		`, key, value, now); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func encodeBase64(value []byte) string {

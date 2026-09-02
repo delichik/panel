@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"net/http"
@@ -15,18 +16,20 @@ import (
 	"panel/internal/platform/buildinfo"
 	"panel/internal/platform/config"
 	"panel/internal/platform/logging"
+	"panel/internal/platform/paneltls"
 
 	"go.uber.org/zap"
 )
 
 type maintenanceApplication interface {
-	ListenAndServe(address string) error
+	ListenAndServeTLS(address string) error
+}
+
+type tlsApplication interface {
+	TLSConfig() *tls.Config
 }
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "setup" {
-		os.Exit(runSetupCLI(os.Args[2:]))
-	}
 	maintenanceMode := flag.String("maintenance-mode", backups.MaintenanceModeNormal, "startup maintenance mode")
 	initRestartURL := flag.String("init-restart-url", "", "local panel_init restart URL")
 	initRestartToken := flag.String("init-restart-token", "", "local panel_init restart token")
@@ -88,14 +91,22 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 	}
-	serve := server.ListenAndServe
+	if configured, ok := application.(tlsApplication); ok {
+		server.TLSConfig = configured.TLSConfig()
+	} else {
+		server.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			panelCertificate, err := paneltls.FixedCertificate(cfg.DataRoot, "")
+			return &panelCertificate, err
+		}}
+	}
+	serve := func() error { return server.ListenAndServeTLS("", "") }
 	if isolated, ok := application.(maintenanceApplication); ok {
-		serve = func() error { return isolated.ListenAndServe(cfg.ListenAddress) }
+		serve = func() error { return isolated.ListenAndServeTLS(cfg.ListenAddress) }
 	}
 
 	errCh := make(chan error, 1)
 	go func() {
-		logger.Info("panel listening", zap.String("address", cfg.ListenAddress), zap.String("url", "http://"+cfg.ListenAddress))
+		logger.Info("panel listening", zap.String("address", cfg.ListenAddress), zap.String("url", "https://"+cfg.ListenAddress))
 		errCh <- serve()
 	}()
 

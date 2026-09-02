@@ -399,22 +399,6 @@ func TestProxySpecMountsTLSCertificatesOutsideNginxDirectory(t *testing.T) {
 	}
 }
 
-func TestPanelEntryUsesHostGatewayInBridgeMode(t *testing.T) {
-	svc := &Service{}
-	cfg := ReverseProxyConfig{PanelEntry: PanelEntry{Enabled: true, ServerID: "srv-a", Domain: "panel.example.test"}}
-	apps := []applications.ApplicationReverseProxyConfig{{Routes: []applications.ReverseProxyRoute{{
-		Domain: "app.example.test", TargetType: applications.ReverseProxyTargetContainer, TargetContainer: "panel-app", TargetPort: 8080,
-		OriginServerIDs: []string{"srv-a"}, Paths: []applications.ReverseProxyPath{{Path: "/"}},
-	}}}}
-	_, _, files, err := svc.renderNginxConfig(context.Background(), "srv-a", cfg, apps, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if text := managedConfigText(files); !strings.Contains(text, "proxy_pass http://host.docker.internal:8080") {
-		t.Fatalf("Panel bridge upstream missing:\n%s", text)
-	}
-}
-
 func TestContainerProxyTargetDefersUpstreamResolution(t *testing.T) {
 	svc := &Service{}
 	cfg := ReverseProxyConfig{DeploymentServers: []string{"srv-a"}}
@@ -525,54 +509,6 @@ func (p facilityTestServers) Get(_ context.Context, id string) (server.Server, e
 		return server.Server{}, errors.New("server not found")
 	}
 	return item, nil
-}
-
-type facilityPanelHostFake struct {
-	hostServerID string
-	registered   []string
-}
-
-func (f *facilityPanelHostFake) HostServerID(context.Context) (string, error) {
-	return f.hostServerID, nil
-}
-
-func (f *facilityPanelHostFake) RegisterHostServer(_ context.Context, serverID string) error {
-	f.registered = append(f.registered, serverID)
-	f.hostServerID = serverID
-	return nil
-}
-
-func TestSaveReverseProxyRegistersUnregisteredPanelHost(t *testing.T) {
-	svc, _, closeStore := newFacilityEditTestService(t)
-	defer closeStore()
-	host := &facilityPanelHostFake{}
-	svc.panelHost = host
-	ctx := context.Background()
-	cfg, err := svc.SaveReverseProxy(ctx, ReverseProxySaveInput{
-		DeploymentServers: []string{"srv-a"},
-		PanelEntry:        PanelEntry{Enabled: true, ServerID: "srv-a", Domain: "panel.example.test"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(host.registered, []string{"srv-a"}) {
-		t.Fatalf("registered=%v want [srv-a]", host.registered)
-	}
-	if cfg.PanelHostServerID != "srv-a" {
-		t.Fatalf("panelHostServerId=%q want srv-a", cfg.PanelHostServerID)
-	}
-}
-
-func TestSaveReverseProxyRequiresRegisteredPanelHostWhenSet(t *testing.T) {
-	svc, _, closeStore := newFacilityEditTestService(t)
-	defer closeStore()
-	svc.panelHost = &facilityPanelHostFake{hostServerID: "srv-host"}
-	ctx := context.Background()
-	_, err := svc.SaveReverseProxy(ctx, ReverseProxySaveInput{
-		DeploymentServers: []string{"srv-a"},
-		PanelEntry:        PanelEntry{Enabled: true, ServerID: "srv-a", Domain: "panel.example.test"},
-	})
-	assertFacilityPanelError(t, err, "facility_panel_entry_host_required")
 }
 
 func TestGetReverseProxyExposesReconcileStopped(t *testing.T) {

@@ -18,6 +18,7 @@ export let mockRuntimeSettings: RuntimeSettings = {
   remoteCommandTimeoutSeconds: 45,
   branding: { loginTitle: 'Seamark', loginSubtitle: 'Demo operations control plane' },
   certificates: { email: 'ops.com', dnsPropagationDelaySeconds: 30 },
+  panel: { domain: 'localhost', tlsCertificateId: '' },
   reconcileTraceEnabled: false,
   jwtSecretConfigured: true,
 };
@@ -35,7 +36,7 @@ export function saveRuntime(input: Partial<RuntimeSettings>) {
   if (input.logLevel === 'debug' && input.remoteCommandTimeoutSeconds === 13) {
     throw new Error('Runtime settings changed on the server. Refresh and apply this section again.');
   }
-  mockRuntimeSettings = { ...mockRuntimeSettings, ...input, branding: { ...mockRuntimeSettings.branding, ...input.branding }, certificates: { ...mockRuntimeSettings.certificates, ...input.certificates } };
+  mockRuntimeSettings = { ...mockRuntimeSettings, ...input, branding: { ...mockRuntimeSettings.branding, ...input.branding }, certificates: { ...mockRuntimeSettings.certificates, ...input.certificates }, panel: { ...mockRuntimeSettings.panel, ...input.panel } };
   return mockRuntimeSettings;
 }
 

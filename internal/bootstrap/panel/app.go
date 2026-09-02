@@ -2,10 +2,10 @@ package panel
 
 import (
 	"context"
+	"crypto/tls"
 	"net/http"
 	"os"
 	"path/filepath"
-	goruntime "runtime"
 	"strings"
 	"time"
 
@@ -18,7 +18,6 @@ import (
 	"panel/internal/modules/containers"
 	"panel/internal/modules/facilityapps"
 	"panel/internal/modules/identity"
-	"panel/internal/modules/installation"
 	"panel/internal/modules/keyassets"
 	"panel/internal/modules/observability/diagnostics"
 	"panel/internal/modules/observability/metrics"
@@ -33,6 +32,7 @@ import (
 	"panel/internal/platform/config"
 	"panel/internal/platform/database"
 	"panel/internal/platform/logging"
+	"panel/internal/platform/paneltls"
 	"panel/internal/platform/secrets"
 	"panel/internal/platform/ssh"
 
@@ -50,9 +50,10 @@ type App struct {
 	eventCleanup   *runtimeevents.CleanupWorker
 	eventLogs      *runtimeevents.BufferedWriter
 	applicationSvc *applications.Service
+	settings       *settings.Service
+	keyAssets      *keyassets.Service
 	system         *systeminfo.Service
 	agentReports   *agentReportCollector
-	control        *installation.ControlServer
 	diagnostics    *diagnostics.Service
 	checkCancel    context.CancelFunc
 	checkDone      chan struct{}
@@ -75,7 +76,6 @@ func New(cfg config.Config) (*App, error) {
 	eventSvc := runtimeevents.NewService(store.LogDB())
 	eventWriter := runtimeevents.NewBufferedWriter(eventSvc, 5*time.Second)
 	taskSvc.SetRuntimeEvents(eventWriter)
-	installationSvc := installation.NewService(store.AppDB())
 	certBridge := &applicationCertificateBridge{}
 	containerBridge := &applicationContainerBridge{}
 	credSvc := credential.NewService(store.AppDB(), secretStore)
@@ -96,7 +96,7 @@ func New(cfg config.Config) (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	settingsSvc, err := settings.NewService(store.AppDB(), cfg)
+	settingsSvc, err := settings.NewService(store.AppDB(), cfg, settings.WithTLSAssetProvider(keyAssetSvc))
 	if err != nil {
 		_ = store.Close()
 		return nil, err
@@ -125,7 +125,6 @@ func New(cfg config.Config) (*App, error) {
 		server.WithAgentTLSAssets(agentTLS),
 		server.WithAgentTLSProvider(keyAssetSvc),
 		server.WithMetricsDB(store.MetricsDB()),
-		server.WithPanelHostGuard(installationSvc),
 	)
 	applicationSvc := applications.NewServiceWithOptions(store.AppDB(), agentClient, taskSvc, applications.Config{
 		SaveSessionDir: applicationSaveSessionDir(cfg),
@@ -163,7 +162,6 @@ func New(cfg config.Config) (*App, error) {
 		facilityapps.WithDataRoot(cfg.DataRoot),
 		facilityapps.WithCertificateProvider(certSvc),
 		facilityapps.WithApplicationReconcileTrigger(containerSvc),
-		facilityapps.WithPanelHostProvider(installationSvc),
 		facilityapps.WithDNSProvider(dnsSvc),
 		facilityapps.WithTaskService(taskSvc),
 		facilityapps.WithSSHExecutor(executor),
@@ -227,6 +225,8 @@ func New(cfg config.Config) (*App, error) {
 		agentReports:   reportCollector,
 		diagnostics:    diagnosticsSvc,
 		applicationSvc: applicationSvc,
+		settings:       settingsSvc,
+		keyAssets:      keyAssetSvc,
 	}
 	checkCtx, checkCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	checkDone := make(chan struct{})
@@ -249,19 +249,6 @@ func New(cfg config.Config) (*App, error) {
 	eventCleanup.Start(context.Background())
 	eventWriter.Start(context.Background())
 	reportCollector.Start(context.Background())
-	var controlServer *installation.ControlServer
-	if goruntime.GOOS != "windows" {
-		setupSvc := installation.NewSetupService(installationSvc, credSvc, serverSvc, taskSvc, facilitySvc)
-		controlServer, err = installation.StartControlServer(cfg.DataRoot, setupSvc)
-		if err != nil {
-			checkCancel()
-			<-checkDone
-			a.stopBackgroundServices()
-			_ = a.store.Close()
-			return nil, err
-		}
-		a.control = controlServer
-	}
 	logging.L().Info("background services started")
 	taskHandler := tasks.NewHandler(taskSvc, taskWorker)
 	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), taskHandler, metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), runtimeevents.NewHandler(eventSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), facilityapps.NewHandler(facilitySvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc), backups.NewHandler(backupSvc))
@@ -286,9 +273,6 @@ func (a *App) Close() error {
 // order. Every Stop/Close is nil-safe and idempotent, so it can be reused for
 // both startup failure cleanup and normal shutdown.
 func (a *App) stopBackgroundServices() {
-	if a.control != nil {
-		_ = a.control.Close()
-	}
 	if a.applicationSvc != nil {
 		_ = a.applicationSvc.StopOrchestrator()
 	}
@@ -319,6 +303,16 @@ func (a *App) stopBackgroundServices() {
 }
 func (a *App) Handler() http.Handler {
 	return logging.HTTPMiddleware(a.mux)
+}
+
+func (a *App) TLSConfig() *tls.Config {
+	return &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+		certificate, err := paneltls.FixedCertificate(a.cfg.DataRoot, a.settings.Runtime().Panel.Domain)
+		if err != nil {
+			return nil, err
+		}
+		return &certificate, nil
+	}}
 }
 
 func registerTaskDefinitions(taskSvc *tasks.Service, settingsSvc *settings.Service, keyAssetSvc *keyassets.Service, serverSvc *server.Service, applicationSvc *applications.Service, containerSvc *containerization.Service, packageSvc *packages.Service, certSvc *certs.Service) {

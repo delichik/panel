@@ -181,7 +181,6 @@ describe('application editor model', () => {
       id: 'reverse_proxy',
       version: 1,
       deploymentServers: ['srv-1'],
-      panelEntry: { enabled: false },
       domains: [],
       staticAssets: [],
       routeSummaries: [],
@@ -191,35 +190,10 @@ describe('application editor model', () => {
       enabledServers: ['srv-1'],
     } satisfies ReverseProxyConfig;
     const draft = facilityDraftFromConfig(base);
-    draft.panelEnabled = true;
-    draft.panelServerId = 'srv-1';
-    draft.panelDomain = 'panel.example.test';
     draft.domains.push({ domain: 'static.example.test', originServerIds: ['srv-1'], anyAccess: { enabled: false }, paths: [{ path: '/', ruleType: 'static', sourceType: 'uploaded_file', assetName: 'index.html' }] });
 
     expect(validateFacilityDraft(draft)).toEqual({});
-    expect(facilitySaveInputFromDraft(draft).panelEntry.domain).toBe('panel.example.test');
-    expect(diffFacility(base, draft)).toMatchObject({ added: 1, changed: 2 });
-  });
-
-  it('defaults the panel server to the registered host node', () => {
-    const base = {
-      id: 'reverse_proxy',
-      version: 1,
-      deploymentServers: ['srv-host'],
-      panelEntry: { enabled: true, serverId: 'srv-host', domain: 'panel.example.test' },
-      panelHostServerId: 'srv-host',
-      domains: [],
-      staticAssets: [],
-      routeSummaries: [],
-      applicationRoutes: [],
-      updatedAt: '',
-      routes: 1,
-      enabledServers: ['srv-host'],
-    } satisfies ReverseProxyConfig;
-    const draft = facilityDraftFromConfig(base);
-    expect(draft.panelServerId).toBe('srv-host');
-    expect(draft.panelHostServerId).toBe('srv-host');
-    expect(draft.panelDomain).toBe('panel.example.test');
+    expect(diffFacility(base, draft)).toMatchObject({ added: 1, changed: 0 });
   });
 
   it('keeps generated YAML parseable for changed runtime fields', () => {

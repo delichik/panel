@@ -77,7 +77,7 @@ func (s *Service) BeginFacilityEditSession(ctx context.Context, in BeginFacility
 	if err != nil {
 		return FacilityEditSession{}, err
 	}
-	draft := ReverseProxySaveInput{DeploymentServers: append([]string(nil), cfg.DeploymentServers...), PanelEntry: cfg.PanelEntry, Domains: cloneFacilityDomains(cfg.Domains)}
+	draft := ReverseProxySaveInput{DeploymentServers: append([]string(nil), cfg.DeploymentServers...), Domains: cloneFacilityDomains(cfg.Domains)}
 	if in.Draft != nil {
 		draft = cloneFacilityDraft(*in.Draft)
 	}
@@ -509,9 +509,6 @@ func (s *Service) CommitFacilityEditSession(ctx context.Context, sessionID, idem
 	if facilityDiagnosticsBlock(diagnostics) {
 		return FacilityEditCommitResult{}, panelerr.WithDetails(panelerr.Validation("facility_reverse_proxy_invalid", "facility edit session is invalid"), map[string]any{"diagnostics": diagnostics})
 	}
-	if err := s.ensurePanelHostRegisteredForDraft(ctx, record.Draft); err != nil {
-		return FacilityEditCommitResult{}, err
-	}
 	manifest, err := s.prepareFacilityCommitManifest(record)
 	if err != nil {
 		return FacilityEditCommitResult{}, err
@@ -627,9 +624,6 @@ func (s *Service) validateFacilityEditDraft(ctx context.Context, record facility
 	if err != nil {
 		return facilityDiagnosticForError(err)
 	}
-	if err := s.validatePanelHost(ctx, normalized); err != nil {
-		return facilityDiagnosticForError(err)
-	}
 	assets := map[string]FacilityEditAsset{}
 	for _, asset := range record.Assets {
 		assets[asset.AssetKey] = asset
@@ -685,11 +679,6 @@ func facilityTopologyDiagnostics(draft ReverseProxySaveInput) []applications.Dia
 			if _, ok := gateways[primary]; !ok {
 				diagnostics = append(diagnostics, applications.Diagnostic{Code: "facility_gateway_removal_invalidates_anyaccess_primary", Severity: "error", Field: "domains", Message: i18n.Translate("facility_gateway_removal_invalidates_anyaccess_primary", "Removing a gateway would remove the AnyAccess primary origin"), Details: map[string]any{"domain": domain.Domain, "serverId": primary}})
 			}
-		}
-	}
-	if draft.PanelEntry.Enabled {
-		if _, ok := gateways[strings.TrimSpace(draft.PanelEntry.ServerID)]; !ok {
-			diagnostics = append(diagnostics, applications.Diagnostic{Code: "facility_gateway_removal_invalidates_panel_entry", Severity: "error", Field: "panelEntry.serverId", Message: i18n.Translate("facility_gateway_removal_invalidates_panel_entry", "Panel Entry server must remain in the gateway set"), Details: map[string]any{"serverId": draft.PanelEntry.ServerID}})
 		}
 	}
 	return diagnostics
@@ -997,13 +986,12 @@ func (s *Service) commitFacilityManifestDB(ctx context.Context, manifest facilit
 		}
 	}
 	serversRaw, _ := json.Marshal(normalized.DeploymentServers)
-	panelRaw, _ := json.Marshal(normalized.PanelEntry)
 	now := formatTime(time.Now().UTC())
 	var result sql.Result
 	if manifest.BaseVersion == 0 {
-		result, err = tx.ExecContext(ctx, `INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,panel_entry_json,last_error,updated_at) VALUES(?,1,?,?,?,?) ON CONFLICT(id) DO NOTHING`, ReverseProxyID, string(serversRaw), string(panelRaw), "", now)
+		result, err = tx.ExecContext(ctx, `INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,last_error,updated_at) VALUES(?,1,?,?,?) ON CONFLICT(id) DO NOTHING`, ReverseProxyID, string(serversRaw), "", now)
 	} else {
-		result, err = tx.ExecContext(ctx, `UPDATE facility_app_configs SET version=version+1,deployment_server_ids_json=?,panel_entry_json=?,last_error='',updated_at=? WHERE id=? AND version=?`, string(serversRaw), string(panelRaw), now, ReverseProxyID, manifest.BaseVersion)
+		result, err = tx.ExecContext(ctx, `UPDATE facility_app_configs SET version=version+1,deployment_server_ids_json=?,last_error='',updated_at=? WHERE id=? AND version=?`, string(serversRaw), now, ReverseProxyID, manifest.BaseVersion)
 	}
 	if err != nil {
 		return err
@@ -1136,8 +1124,8 @@ func (s *Service) facilityManifestDBCommitted(ctx context.Context, manifest faci
 	if err != nil {
 		return false
 	}
-	want, _ := json.Marshal(ReverseProxySaveInput{DeploymentServers: normalized.DeploymentServers, PanelEntry: normalized.PanelEntry, Domains: normalized.Domains})
-	got, _ := json.Marshal(ReverseProxySaveInput{DeploymentServers: cfg.DeploymentServers, PanelEntry: cfg.PanelEntry, Domains: cfg.Domains})
+	want, _ := json.Marshal(ReverseProxySaveInput{DeploymentServers: normalized.DeploymentServers, Domains: normalized.Domains})
+	got, _ := json.Marshal(ReverseProxySaveInput{DeploymentServers: cfg.DeploymentServers, Domains: cfg.Domains})
 	if string(want) != string(got) {
 		return false
 	}
@@ -1276,7 +1264,7 @@ func (s *Service) facilityEditPath(sessionID string) string {
 }
 
 func cloneFacilityDraft(in ReverseProxySaveInput) ReverseProxySaveInput {
-	return ReverseProxySaveInput{DeploymentServers: append([]string(nil), in.DeploymentServers...), PanelEntry: in.PanelEntry, Domains: cloneFacilityDomains(in.Domains)}
+	return ReverseProxySaveInput{DeploymentServers: append([]string(nil), in.DeploymentServers...), Domains: cloneFacilityDomains(in.Domains)}
 }
 
 func cloneFacilityDomains(in []FacilityRouteDomain) []FacilityRouteDomain {

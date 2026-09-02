@@ -47,22 +47,15 @@ func TestAffectedFacilityDomainsIgnoresPathOnlyChanges(t *testing.T) {
 	}
 }
 
-func TestAffectedFacilityDomainsTracksServersAndPanelEntry(t *testing.T) {
+func TestAffectedFacilityDomainsTracksServerChanges(t *testing.T) {
 	previous := ReverseProxyConfig{
-		Domains:    []FacilityRouteDomain{{Domain: "app.example.test", OriginServerIDs: []string{"srv-a"}}},
-		PanelEntry: PanelEntry{Enabled: true, ServerID: "srv-a", Domain: "panel.example.test"},
+		Domains: []FacilityRouteDomain{{Domain: "app.example.test", OriginServerIDs: []string{"srv-a"}}},
 	}
 	next := ReverseProxyConfig{
-		Domains:    []FacilityRouteDomain{{Domain: "app.example.test", OriginServerIDs: []string{"srv-a", "srv-b"}}},
-		PanelEntry: PanelEntry{Enabled: true, ServerID: "srv-a", Domain: "panel.example.test"},
+		Domains: []FacilityRouteDomain{{Domain: "app.example.test", OriginServerIDs: []string{"srv-a", "srv-b"}}},
 	}
 	affected := affectedFacilityDomains(previous, next)
 	if len(affected) != 1 || affected[0] != "app.example.test" {
-		t.Fatalf("affected = %#v", affected)
-	}
-	next.PanelEntry.Domain = "panel2.example.test"
-	affected = affectedFacilityDomains(previous, next)
-	if len(affected) != 3 {
 		t.Fatalf("affected = %#v", affected)
 	}
 }
@@ -78,10 +71,9 @@ func TestDNSSyncDomainsOnSaveIncludesEveryCurrentDomain(t *testing.T) {
 			{Domain: "app.example.test", OriginServerIDs: []string{"srv-a"}},
 			{Domain: "new.example.test", OriginServerIDs: []string{"srv-b"}},
 		},
-		PanelEntry: PanelEntry{Enabled: true, ServerID: "srv-a", Domain: "panel.example.test"},
 	}
 	got := dnsSyncDomainsOnSave(previous, next)
-	want := []string{"app.example.test", "gone.example.test", "new.example.test", "panel.example.test"}
+	want := []string{"app.example.test", "gone.example.test", "new.example.test"}
 	if len(got) != len(want) {
 		t.Fatalf("domains = %#v, want %#v", got, want)
 	}

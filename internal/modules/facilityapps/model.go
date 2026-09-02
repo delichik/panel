@@ -53,8 +53,6 @@ type ReverseProxyConfig struct {
 	ID                string                                       `json:"id"`
 	Version           int                                          `json:"version"`
 	DeploymentServers []string                                     `json:"deploymentServers"`
-	PanelHostServerID string                                       `json:"panelHostServerId,omitempty"`
-	PanelEntry        PanelEntry                                   `json:"panelEntry"`
 	Domains           []FacilityRouteDomain                        `json:"domains"`
 	StaticAssets      []StaticAsset                                `json:"staticAssets"`
 	RouteSummaries    []RouteSummary                               `json:"routeSummaries"`
@@ -71,14 +69,7 @@ type ReverseProxyConfig struct {
 
 type ReverseProxySaveInput struct {
 	DeploymentServers []string              `json:"deploymentServers"`
-	PanelEntry        PanelEntry            `json:"panelEntry"`
 	Domains           []FacilityRouteDomain `json:"domains"`
-}
-
-type PanelEntry struct {
-	Enabled  bool   `json:"enabled"`
-	ServerID string `json:"serverId,omitempty"`
-	Domain   string `json:"domain,omitempty"`
 }
 
 type FacilityRouteDomain struct {

@@ -157,6 +157,7 @@ func NewService(db *sql.DB, runtimeClient AgentRuntimeClient, taskSvc *tasks.Ser
 	s.orchestrator = controlplane.NewController(controlStore, &serviceRuntimeReconciler{service: s}, controlplane.ControllerConfig{
 		Owner:       "application-orchestrator",
 		OnSucceeded: s.onOrchestratorJobSucceeded,
+		OnFailed:    s.onOrchestratorJobFailed,
 	})
 	s.startEditSessionCleanup()
 	return s
@@ -260,6 +261,21 @@ func (s *Service) onOrchestratorJobSucceeded(ctx context.Context, job controlpla
 	}
 	if err := s.deleteApplicationIfRuntimeGone(cleanupCtx, job.ApplicationID); err != nil && !isNotFound(err) {
 		log.Printf("application purge finalization failed app_id=%s: %v", job.ApplicationID, err)
+	}
+}
+
+// onOrchestratorJobFailed records every Job failure (retryable and terminal)
+// against the application reconcile failure counter. Consecutive failures grow
+// the exponential backoff and, once they reach ReconcileStopAfterFailures,
+// place the application into reconcile_stopped so automatic reconciliation
+// terminates instead of retrying forever. An explicit user operation resets
+// the counter through PlanApplicationDeployment.
+func (s *Service) onOrchestratorJobFailed(ctx context.Context, job controlplane.Job, _ controlplane.ReconcileResponse) {
+	if s == nil || s.db == nil || strings.TrimSpace(job.ApplicationID) == "" {
+		return
+	}
+	if err := s.recordApplicationReconcileFailure(ctx, job.ApplicationID); err != nil {
+		log.Printf("application reconcile failure recording failed app_id=%s: %v", job.ApplicationID, err)
 	}
 }
 

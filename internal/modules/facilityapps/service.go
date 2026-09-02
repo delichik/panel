@@ -44,8 +44,6 @@ const (
 type facilityConfigRow struct {
 	Version                 int
 	DeploymentServerIDsJSON string `orm:"column:deployment_server_ids_json"`
-	PanelEntryJSON          string `orm:"column:panel_entry_json"`
-
 	DNSSyncJSON string `orm:"column:dns_sync_json"`
 	LastError   string
 	UpdatedAt   string
@@ -91,11 +89,6 @@ type CertificateProvider interface {
 	ReverseProxyCertificates(ctx context.Context) ([]proxycert.Certificate, error)
 }
 
-type PanelHostProvider interface {
-	HostServerID(ctx context.Context) (string, error)
-	RegisterHostServer(ctx context.Context, serverID string) error
-}
-
 type Service struct {
 	db              *sql.DB
 	dataRoot        string
@@ -106,7 +99,6 @@ type Service struct {
 	agentErrors     AgentErrorHandler
 	queue           ContainerOperationQueue
 	reconciler      ApplicationReconcileTrigger
-	panelHost       PanelHostProvider
 	dns             DNSProxySyncer
 	tasks           *tasks.Service
 	editCleanupOnce sync.Once
@@ -134,10 +126,6 @@ func WithCertificateProvider(provider CertificateProvider) Option {
 
 func WithApplicationReconcileTrigger(trigger ApplicationReconcileTrigger) Option {
 	return func(s *Service) { s.reconciler = trigger }
-}
-
-func WithPanelHostProvider(provider PanelHostProvider) Option {
-	return func(s *Service) { s.panelHost = provider }
 }
 
 func WithDNSProvider(provider DNSProxySyncer) Option {
@@ -209,16 +197,6 @@ func (s *Service) GetReverseProxy(ctx context.Context) (ReverseProxyConfig, erro
 		cfg.Routes += len(domain.Paths)
 	}
 	cfg.Routes += routeCount(cfg.DeploymentServers, appRoutes)
-	if cfg.PanelEntry.Enabled {
-		cfg.Routes++
-	}
-	if s.panelHost != nil {
-		if hostID, hostErr := s.panelHost.HostServerID(ctx); hostErr == nil {
-			cfg.PanelHostServerID = hostID
-		} else {
-			recordSubqueryError("panel_host", hostErr)
-		}
-	}
 	cfg.EnabledServers = append([]string(nil), cfg.DeploymentServers...)
 	if assets, assetErr := s.listStaticAssets(ctx); assetErr == nil {
 		cfg.StaticAssets = assets
@@ -269,13 +247,7 @@ func (s *Service) SaveReverseProxy(ctx context.Context, in ReverseProxySaveInput
 	if err != nil {
 		return ReverseProxyConfig{}, err
 	}
-	if err := s.validatePanelHost(ctx, next); err != nil {
-		return ReverseProxyConfig{}, err
-	}
 	if err := s.validateRouteConflicts(ctx, next); err != nil {
-		return ReverseProxyConfig{}, err
-	}
-	if err := s.ensurePanelHostRegistered(ctx, next); err != nil {
 		return ReverseProxyConfig{}, err
 	}
 	if err := s.saveConfig(ctx, next); err != nil {
@@ -293,51 +265,6 @@ func (s *Service) SaveReverseProxy(ctx context.Context, in ReverseProxySaveInput
 		}
 	}
 	return s.GetReverseProxy(ctx)
-}
-
-func (s *Service) validatePanelHost(ctx context.Context, cfg ReverseProxyConfig) error {
-	if !cfg.PanelEntry.Enabled {
-		return nil
-	}
-	if s.panelHost == nil {
-		return panelerr.Validation("panel_host_provider_unavailable", "Panel host registration is unavailable")
-	}
-	hostServerID, err := s.panelHost.HostServerID(ctx)
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(hostServerID) == "" {
-		// 尚未登记宿主节点时允许校验通过，保存链路会把入口服务器登记为宿主节点。
-		return nil
-	}
-	if cfg.PanelEntry.ServerID != hostServerID {
-		return panelerr.Validation("facility_panel_entry_host_required", "Panel entry must use the configured Panel host server")
-	}
-	return nil
-}
-
-// ensurePanelHostRegistered 在 Panel 入口启用且尚未登记宿主节点时，把入口服务器登记为宿主节点。
-func (s *Service) ensurePanelHostRegistered(ctx context.Context, cfg ReverseProxyConfig) error {
-	if !cfg.PanelEntry.Enabled || s.panelHost == nil {
-		return nil
-	}
-	hostServerID, err := s.panelHost.HostServerID(ctx)
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(hostServerID) != "" || strings.TrimSpace(cfg.PanelEntry.ServerID) == "" {
-		return nil
-	}
-	return s.panelHost.RegisterHostServer(ctx, cfg.PanelEntry.ServerID)
-}
-
-// ensurePanelHostRegisteredForDraft 是编辑会话提交路径使用的登记入口。
-func (s *Service) ensurePanelHostRegisteredForDraft(ctx context.Context, draft ReverseProxySaveInput) error {
-	normalized, err := normalizeInput(draft)
-	if err != nil {
-		return err
-	}
-	return s.ensurePanelHostRegistered(ctx, normalized)
 }
 
 func (s *Service) syncReverseProxyTraits(ctx context.Context, previous, next []string) error {
@@ -406,9 +333,6 @@ func (s *Service) ValidateApplicationReverseProxy(ctx context.Context, applicati
 	owners := map[string]string{}
 	for _, domain := range cfg.Domains {
 		owners[domain.Domain] = "facility route"
-	}
-	if cfg.PanelEntry.Enabled {
-		owners[cfg.PanelEntry.Domain] = "Panel entry"
 	}
 	rows, err := orm.Raw(ctx, s.db, `SELECT r.domain, a.name FROM reverse_proxy_routes r JOIN applications a ON a.id = r.app_id WHERE r.app_id <> ? AND r.app_id <> ?`, proxyApplicationID, applicationID)
 	if err != nil {
@@ -749,9 +673,6 @@ func (s *Service) renderNginxConfig(ctx context.Context, serverID string, cfg Re
 			if domain == "" || route.TargetPort <= 0 {
 				continue
 			}
-			if cfg.PanelEntry.Enabled && cfg.PanelEntry.ServerID == serverID && domain == cfg.PanelEntry.Domain {
-				return "", nil, nil, panelerr.Conflict("facility_panel_entry_route_conflict", "Panel entry domain conflicts with an application route")
-			}
 			host := hostForDomain(hosts, domain)
 			if containsString(route.OriginServerIDs, serverID) {
 				host.Proxy = append(host.Proxy, route)
@@ -764,21 +685,6 @@ func (s *Service) renderNginxConfig(ctx context.Context, serverID string, cfg Re
 				}
 				host.Relay = relay
 			}
-		}
-	}
-	if cfg.PanelEntry.Enabled && cfg.PanelEntry.ServerID == serverID {
-		domain := sanitizeNginxToken(cfg.PanelEntry.Domain)
-		if domain != "" {
-			host := hostForDomain(hosts, domain)
-			if host.Relay != nil {
-				return "", nil, nil, panelerr.Conflict("facility_panel_entry_upstream_domain_conflict", "Panel entry domain conflicts with an upstream-mode facility domain")
-			}
-			host.Facility = append(host.Facility, proxyFacilityRoute{
-				Path:            "/",
-				RuleType:        StaticRuleProxyPass,
-				ProxyURL:        "http://" + localUpstreamHost + ":8080",
-				ProxySourceMode: ProxySourcePreserve,
-			})
 		}
 	}
 	domains := make([]string, 0, len(hosts))
@@ -1205,7 +1111,7 @@ func applicationProxyUpstream(route applications.ReverseProxyRoute, localUpstrea
 func (s *Service) loadConfig(ctx context.Context) (ReverseProxyConfig, error) {
 	cfg := ReverseProxyConfig{ID: ReverseProxyID, DeploymentServers: []string{}, Domains: []FacilityRouteDomain{}}
 	var row facilityConfigRow
-	if err := orm.New(s.db).From("facility_app_configs").Select("version", "deployment_server_ids_json", "panel_entry_json", "dns_sync_json", "last_error", "updated_at").Where("id=?", ReverseProxyID).First(ctx, &row); err != nil {
+	if err := orm.New(s.db).From("facility_app_configs").Select("version", "deployment_server_ids_json", "dns_sync_json", "last_error", "updated_at").Where("id=?", ReverseProxyID).First(ctx, &row); err != nil {
 		if err == sql.ErrNoRows {
 			return cfg, nil
 		}
@@ -1214,7 +1120,6 @@ func (s *Service) loadConfig(ctx context.Context) (ReverseProxyConfig, error) {
 	cfg.Version = row.Version
 	cfg.LastError = row.LastError
 	_ = json.Unmarshal([]byte(row.DeploymentServerIDsJSON), &cfg.DeploymentServers)
-	_ = json.Unmarshal([]byte(row.PanelEntryJSON), &cfg.PanelEntry)
 	domains, err := s.loadFacilityRouteDomains(ctx)
 	if err != nil {
 		return ReverseProxyConfig{}, err
@@ -1224,7 +1129,6 @@ func (s *Service) loadConfig(ctx context.Context) (ReverseProxyConfig, error) {
 	if cfg.DeploymentServers == nil {
 		cfg.DeploymentServers = []string{}
 	}
-	cfg.PanelEntry = normalizeStoredPanelEntry(cfg.PanelEntry)
 	if cfg.Domains == nil {
 		cfg.Domains = []FacilityRouteDomain{}
 	}
@@ -1334,10 +1238,6 @@ func (s *Service) saveConfig(ctx context.Context, cfg ReverseProxyConfig) error 
 	if err != nil {
 		return err
 	}
-	panelRaw, err := json.Marshal(cfg.PanelEntry)
-	if err != nil {
-		return err
-	}
 	dnsSyncRaw, err := json.Marshal(cfg.DNSSync)
 	if err != nil {
 		return err
@@ -1351,10 +1251,10 @@ func (s *Service) saveConfig(ctx context.Context, cfg ReverseProxyConfig) error 
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,panel_entry_json,dns_sync_json,last_error,updated_at)
-		VALUES(?,1,?,?,?,?,?)
-		ON CONFLICT(id) DO UPDATE SET version=facility_app_configs.version+1,deployment_server_ids_json=excluded.deployment_server_ids_json,panel_entry_json=excluded.panel_entry_json,dns_sync_json=excluded.dns_sync_json,last_error=excluded.last_error,updated_at=excluded.updated_at`,
-		ReverseProxyID, string(serversRaw), string(panelRaw), string(dnsSyncRaw), cfg.LastError, now); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,dns_sync_json,last_error,updated_at)
+		VALUES(?,1,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET version=facility_app_configs.version+1,deployment_server_ids_json=excluded.deployment_server_ids_json,dns_sync_json=excluded.dns_sync_json,last_error=excluded.last_error,updated_at=excluded.updated_at`,
+		ReverseProxyID, string(serversRaw), string(dnsSyncRaw), cfg.LastError, now); err != nil {
 		return err
 	}
 	if err := replaceFacilityRouteDomains(ctx, tx, cfg.Domains); err != nil {
@@ -1482,11 +1382,7 @@ func normalizeInput(in ReverseProxySaveInput) (ReverseProxyConfig, error) {
 		domains = append(domains, FacilityRouteDomain{Domain: domain, OriginServerIDs: origins, AnyAccess: anyAccess, Paths: paths})
 	}
 	sort.Slice(domains, func(i, j int) bool { return domains[i].Domain < domains[j].Domain })
-	panelEntry, err := normalizePanelEntry(in.PanelEntry, serverSet, domains)
-	if err != nil {
-		return ReverseProxyConfig{}, err
-	}
-	return ReverseProxyConfig{ID: ReverseProxyID, DeploymentServers: servers, PanelEntry: panelEntry, Domains: domains}, nil
+	return ReverseProxyConfig{ID: ReverseProxyID, DeploymentServers: servers, Domains: domains}, nil
 }
 
 func normalizeFacilityRoutePath(site FacilityRoutePath) (FacilityRoutePath, error) {
@@ -1571,12 +1467,6 @@ func (s *Service) validateRouteConflicts(ctx context.Context, cfg ReverseProxyCo
 	for _, domain := range cfg.Domains {
 		owners[domain.Domain] = "facility route"
 	}
-	if cfg.PanelEntry.Enabled {
-		if owner, ok := owners[cfg.PanelEntry.Domain]; ok {
-			return panelerr.Conflict("facility_domain_owner_conflict", "Panel entry domain is already used by "+owner)
-		}
-		owners[cfg.PanelEntry.Domain] = "Panel entry"
-	}
 	if s.apps == nil {
 		return nil
 	}
@@ -1616,41 +1506,6 @@ func containsString(items []string, value string) bool {
 		}
 	}
 	return false
-}
-
-func normalizePanelEntry(in PanelEntry, serverSet map[string]struct{}, domains []FacilityRouteDomain) (PanelEntry, error) {
-	if !in.Enabled {
-		return PanelEntry{}, nil
-	}
-	serverID := strings.TrimSpace(in.ServerID)
-	domain := strings.TrimSpace(in.Domain)
-	if serverID == "" {
-		return PanelEntry{}, panelerr.Validation("facility_panel_entry_server_required", "Panel entry server is required")
-	}
-	if _, ok := serverSet[serverID]; !ok {
-		return PanelEntry{}, panelerr.Validation("facility_panel_entry_server_invalid", "Panel entry server must be selected as a gateway node")
-	}
-	if domain == "" || !validNginxToken(domain) {
-		return PanelEntry{}, panelerr.Validation("facility_panel_entry_domain_invalid", "Panel entry domain is invalid")
-	}
-	domain = strings.ToLower(domain)
-	for _, routeDomain := range domains {
-		if routeDomain.Domain == domain {
-			return PanelEntry{}, panelerr.Conflict("facility_domain_owner_conflict", "Panel entry domain is already used by a facility route")
-		}
-	}
-	return PanelEntry{Enabled: true, ServerID: serverID, Domain: domain}, nil
-}
-
-func normalizeStoredPanelEntry(in PanelEntry) PanelEntry {
-	if !in.Enabled {
-		return PanelEntry{}
-	}
-	return PanelEntry{
-		Enabled:  true,
-		ServerID: strings.TrimSpace(in.ServerID),
-		Domain:   strings.TrimSpace(in.Domain),
-	}
 }
 
 func normalizedStaticRuleType(value string) string {
@@ -1898,9 +1753,6 @@ func (s *Service) routeSummaries(ctx context.Context, cfg ReverseProxyConfig, ap
 			out = append(out, routeSummary(domain, firstNonEmpty(path.Path, "/"), "facility", serverIDs, certificates))
 		}
 	}
-	if cfg.PanelEntry.Enabled {
-		out = append(out, routeSummary(cfg.PanelEntry.Domain, "/", "system_panel", []string{cfg.PanelEntry.ServerID}, certificates))
-	}
 	for _, apps := range routes {
 		for _, app := range apps {
 			for _, route := range app.Routes {
@@ -1997,7 +1849,6 @@ func lifecycleTargetKey(appID, serverID string) string {
 func facilityConfigHash(cfg ReverseProxyConfig) string {
 	raw, _ := json.Marshal(map[string]any{
 		"deploymentServers": cfg.DeploymentServers,
-		"panelEntry":        cfg.PanelEntry,
 		"domains":           cfg.Domains,
 		"applicationRoutes": cfg.ApplicationRoutes,
 	})
@@ -2034,8 +1885,7 @@ func isPanelNotFound(err error) bool {
 }
 
 // latestJobOperation 从 AppDB jobs 派生入口代理的当前操作投影（部署中/
-// 成功/失败），供设施配置与 setup 等待入口代理收敛使用。不再读取旧
-// lifecycle 表。
+// 成功/失败），供设施配置展示入口代理收敛状态使用。不再读取旧 lifecycle 表。
 func (s *Service) latestJobOperation(ctx context.Context) (applications.LifecycleOperation, error) {
 	if s == nil || s.db == nil {
 		return applications.LifecycleOperation{}, panelerr.Validation("application_operation_unavailable", "Application database is unavailable")

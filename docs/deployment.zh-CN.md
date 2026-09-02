@@ -11,7 +11,7 @@ Seamark 通过容器镜像发布。请使用 Docker Compose 或 Docker 运行。
 - 一台已安装 Docker Engine 的 Linux 主机。
 - 推荐方案需要 Docker Compose 插件；也可以只使用 Docker 和 `docker run`。
 - 主机架构为 `amd64` 或 `arm64`。
-- 一个可用于 Web 界面的 TCP 端口，本文示例使用 `8080`。
+- 一个可用于 Web 界面的 TCP 端口，本文示例使用 HTTPS `8443`。
 
 运行 Seamark 的主机与被 Seamark 管理的目标服务器是两个概念。Seamark 容器不需要挂载 Seamark 主机的 Docker Socket。
 
@@ -33,7 +33,7 @@ services:
     container_name: panel
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8443:8443"
     volumes:
       - panel-data:/app/data
 
@@ -56,15 +56,7 @@ docker compose ps
 docker compose logs --tail=100 panel
 ```
 
-启动后，先确认 Seamark 域名已经指向当前宿主机，并通过 SSH 在宿主机执行：
-
-```bash
-docker exec -it panel /app/panel setup
-```
-
-按提示输入宿主机 IP 地址（IPv4 或 IPv6，必须是 IP 字面量）、端口、用户、凭据和 Seamark 域名。Seamark 会从容器通过 SSH 纳管当前宿主机、安装 Agent、将其登记为唯一 Seamark 宿主节点，并部署 Seamark 自身的 Nginx 入口。setup 成功后访问命令输出的 `http://<Seamark域名>`。setup 只是便捷路径；也可以登录界面后在 **应用 → 设施应用** 中配置 Seamark 访问入口，首次保存时会把所选服务器登记为宿主节点。
-
-setup 可重复执行；Agent 或入口部署失败时，再次执行会从已保存的阶段继续。SSH 密码和私钥口令通过交互输入，不应写入命令参数。
+启动后访问 `https://<主机>:8443`。默认使用自签名证书，首次浏览器访问需要接受证书提示。登录后可在 **设置 → 证书** 中配置 Panel 域名和用户 TLS 证书。
 
 默认账号：
 
@@ -87,7 +79,7 @@ docker volume create panel-data
 docker run -d \
   --name panel \
   --restart unless-stopped \
-  -p 127.0.0.1:8080:8080 \
+  -p 127.0.0.1:8443:8443 \
   -v panel-data:/app/data \
   ghcr.io/delichik/panel:latest
 ```
@@ -99,7 +91,7 @@ docker ps --filter name=panel
 docker logs --tail=100 panel
 ```
 
-运行 `docker exec -it panel /app/panel setup` 完成宿主节点和 Seamark 入口初始化，再使用 `admin/admin` 登录命令输出的域名，并按提示修改密码。
+启动后访问 `https://<主机>:8443`，首次浏览器访问需要接受自签名证书提示，再使用 `admin/admin` 登录并按提示修改密码。之后可在 **设置 → 证书** 配置 Panel 域名和用户 TLS 证书。
 
 ## 数据持久化
 
@@ -150,7 +142,7 @@ docker rm panel
 docker run -d \
   --name panel \
   --restart unless-stopped \
-  -p 8080:8080 \
+  -p 8443:8443 \
   -v panel-data:/app/data \
   ghcr.io/delichik/panel:latest
 ```
@@ -175,16 +167,16 @@ docker start panel
 
 ## 网络与 HTTPS
 
-本文示例只把 Seamark 的 `8080` 端口发布到宿主机回环地址。Seamark 自身的公网入口由 `panel setup` 纳管宿主机后部署的入口网关提供，不需要公开裸露的 8080 端口。
+本文示例只把 Panel 的 HTTPS `8443` 端口发布到宿主机回环地址。配置域名和用户证书后，再按需通过反向代理或防火墙公开该端口。
 
 如果反向代理运行在同一台主机，可以只绑定本机回环地址：
 
 ```yaml
 ports:
-  - "127.0.0.1:8080:8080"
+  - "127.0.0.1:8443:8443"
 ```
 
-在反向代理终止 HTTPS，并把请求转发到 `http://127.0.0.1:8080`。如果反向代理也运行在容器中，应让两个容器加入同一个私有 Docker 网络，而不是使用回环地址绑定。
+在反向代理终止 HTTPS，并把请求转发到 `https://127.0.0.1:8443`（可信任 Panel 自签名证书，或先在设置中配置用户证书）。如果反向代理也运行在容器中，应让两个容器加入同一个私有 Docker 网络，而不是使用回环地址绑定。
 
 ## 常见问题
 
@@ -204,16 +196,16 @@ docker logs --tail=200 panel
 
 确认 `panel-data` 数据卷可写，并确认主机架构为 `amd64` 或 `arm64`。
 
-### 8080 端口已被占用
+### 8443 端口已被占用
 
 只修改端口映射左侧的宿主机端口。例如改为宿主机 `9080`：
 
 ```yaml
 ports:
-  - "9080:8080"
+  - "9080:8443"
 ```
 
-之后访问 `http://<Seamark主机地址>:9080`。
+之后访问 `https://<Seamark主机地址>:9080`。
 
 ### 其他设备无法打开页面
 

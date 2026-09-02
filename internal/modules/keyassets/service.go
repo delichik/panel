@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto"
+	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
 	"encoding/base64"
@@ -29,6 +30,7 @@ import (
 	panelerr "panel/internal/platform/errors"
 	httpx "panel/internal/platform/http"
 	id "panel/internal/platform/identity"
+	"panel/internal/platform/paneltls"
 	"panel/internal/platform/secrets"
 )
 
@@ -56,6 +58,22 @@ type storedAsset struct {
 	Asset
 	certificateText      string
 	privateKeyCiphertext string
+}
+
+type panelTLSMaterialReader struct {
+	certificatePEM []byte
+	privateKeyPEM  []byte
+}
+
+func (r panelTLSMaterialReader) ReadFile(_ context.Context, _ string, kind string) ([]byte, string, error) {
+	switch kind {
+	case "certificate":
+		return r.certificatePEM, "panel.crt", nil
+	case "private_key":
+		return r.privateKeyPEM, "panel.key", nil
+	default:
+		return nil, "", panelerr.Validation("panel_file_kind_invalid", "Key asset file kind is invalid")
+	}
 }
 
 type importPlan struct {
@@ -89,6 +107,45 @@ func WithLogDB(db *sql.DB) Option {
 			s.logDB = db
 		}
 	}
+}
+
+// SyncPanelTLS copies the selected TLS asset into the fixed listener
+// location. The listener can then reload it without consulting the database.
+func (s *Service) SyncPanelTLS(ctx context.Context, domain, assetID string) error {
+	return paneltls.SyncCertificate(ctx, s.cfg.DataRoot, domain, assetID, s)
+}
+
+func (s *Service) panelTLSSelection(ctx context.Context) (string, string, error) {
+	var domain, assetID string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT
+			COALESCE((SELECT value FROM runtime_settings WHERE key=?), ''),
+			COALESCE((SELECT value FROM runtime_settings WHERE key=?), '')`,
+		"panel.domain", "panel.tlsCertificateId").Scan(&domain, &assetID)
+	if err != nil {
+		return "", "", err
+	}
+	return strings.TrimSpace(domain), strings.TrimSpace(assetID), nil
+}
+
+func (s *Service) activatePanelTLSAsset(ctx context.Context, domain string, asset storedAsset) error {
+	if asset.Type != TypeTLSCertificate {
+		return panelerr.Validation("invalid_panel_tls_certificate", "Selected Panel certificate must be a TLS certificate")
+	}
+	certificatePEM := []byte(asset.certificateText)
+	privateKeyPEM := []byte(asset.privateKeyCiphertext)
+	certificate, err := tls.X509KeyPair(certificatePEM, privateKeyPEM)
+	if err != nil || len(certificate.Certificate) == 0 {
+		return panelerr.Validation("invalid_panel_tls_certificate", "Selected Panel TLS certificate and private key do not match")
+	}
+	leaf, err := x509.ParseCertificate(certificate.Certificate[0])
+	if err != nil || leaf.VerifyHostname(domain) != nil {
+		return panelerr.Validation("invalid_panel_tls_certificate", "Selected Panel TLS certificate does not cover the Panel domain")
+	}
+	return paneltls.SyncCertificate(ctx, s.cfg.DataRoot, domain, asset.ID, panelTLSMaterialReader{
+		certificatePEM: certificatePEM,
+		privateKeyPEM:  privateKeyPEM,
+	})
 }
 
 func NewService(db *sql.DB, cfg config.Config, secrets *secretstore.Store, taskSvc *tasks.Service, opts ...Option) *Service {
@@ -473,6 +530,14 @@ func (s *Service) Get(ctx context.Context, assetID string) (Asset, error) {
 		return Asset{}, err
 	}
 	return decorateAsset(stored.Asset, references[assetID], childCounts[assetID]), nil
+}
+
+func (s *Service) AssetType(ctx context.Context, assetID string) (string, error) {
+	asset, err := s.getStoredAsset(ctx, assetID)
+	if err != nil {
+		return "", err
+	}
+	return asset.Type, nil
 }
 
 func (s *Service) CreateCA(ctx context.Context, in CreateCARequest) (Asset, error) {
@@ -1298,39 +1363,70 @@ func (s *Service) ExecuteImport(ctx context.Context, planID string, in ImportExe
 		}
 	}
 	imported := []Asset{}
-	err = orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		for _, asset := range assets {
-			if strategy == "skip_existing" {
-				if _, err := s.getStoredAssetTx(ctx, tx, asset.ID); err == nil {
-					skipped++
-					continue
-				}
-				if existingByName, err := s.getStoredAssetByNameTx(ctx, tx, asset.Name); err == nil && existingByName.ID != asset.ID {
-					skipped++
-					continue
-				}
-			}
-			if strategy == "overwrite_existing" {
-				if existing, err := s.getStoredAssetTx(ctx, tx, asset.ID); err == nil {
-					asset.CreatedAt = existing.CreatedAt
-					asset.UpdatedAt = time.Now().UTC()
-					if err := s.updateAssetTx(ctx, tx, asset); err != nil {
-						return err
+	commitImport := func() error {
+		return orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+			for _, asset := range assets {
+				if strategy == "skip_existing" {
+					if _, err := s.getStoredAssetTx(ctx, tx, asset.ID); err == nil {
+						skipped++
+						continue
 					}
-					imported = append(imported, decorateAsset(asset.Asset, nil, 0))
-					continue
+					if existingByName, err := s.getStoredAssetByNameTx(ctx, tx, asset.Name); err == nil && existingByName.ID != asset.ID {
+						skipped++
+						continue
+					}
 				}
+				if strategy == "overwrite_existing" {
+					if existing, err := s.getStoredAssetTx(ctx, tx, asset.ID); err == nil {
+						asset.CreatedAt = existing.CreatedAt
+						asset.UpdatedAt = time.Now().UTC()
+						if err := s.updateAssetTx(ctx, tx, asset); err != nil {
+							return err
+						}
+						imported = append(imported, decorateAsset(asset.Asset, nil, 0))
+						continue
+					}
+				}
+				if asset.CreatedAt.IsZero() {
+					asset.CreatedAt = time.Now().UTC()
+				}
+				asset.UpdatedAt = asset.CreatedAt
+				if err := s.insertAssetTx(ctx, tx, asset); err != nil {
+					return err
+				}
+				imported = append(imported, decorateAsset(asset.Asset, nil, 0))
 			}
-			if asset.CreatedAt.IsZero() {
-				asset.CreatedAt = time.Now().UTC()
+			return nil
+		})
+	}
+	err = paneltls.WithUpdate(func() error {
+		panelDomain, panelAssetID, err := s.panelTLSSelection(ctx)
+		if err != nil {
+			return err
+		}
+		if strategy != "overwrite_existing" || panelAssetID == "" {
+			return commitImport()
+		}
+		for _, asset := range assets {
+			if asset.ID != panelAssetID {
+				continue
 			}
-			asset.UpdatedAt = asset.CreatedAt
-			if err := s.insertAssetTx(ctx, tx, asset); err != nil {
+			if _, err := s.getStoredAsset(ctx, asset.ID); err != nil {
+				continue
+			}
+			snapshot, err := paneltls.SnapshotFixedPair(s.cfg.DataRoot)
+			if err != nil {
 				return err
 			}
-			imported = append(imported, decorateAsset(asset.Asset, nil, 0))
+			if err := s.activatePanelTLSAsset(ctx, panelDomain, asset); err != nil {
+				return errors.Join(err, paneltls.RestoreFixedPair(s.cfg.DataRoot, snapshot))
+			}
+			if err := commitImport(); err != nil {
+				return errors.Join(err, paneltls.RestoreFixedPair(s.cfg.DataRoot, snapshot))
+			}
+			return nil
 		}
-		return nil
+		return commitImport()
 	})
 	if err != nil {
 		_ = fail(err)
@@ -1607,8 +1703,31 @@ func (s *Service) insertAssetTx(ctx context.Context, tx *sql.Tx, asset storedAss
 }
 
 func (s *Service) updateAsset(ctx context.Context, asset storedAsset) error {
-	return orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		return s.updateAssetTx(ctx, tx, asset)
+	return paneltls.WithUpdate(func() error {
+		panelDomain, panelAssetID, err := s.panelTLSSelection(ctx)
+		if err != nil {
+			return err
+		}
+		activatedPanelAsset := panelAssetID != "" && panelAssetID == asset.ID
+		var snapshot paneltls.FixedPairSnapshot
+		if activatedPanelAsset {
+			snapshot, err = paneltls.SnapshotFixedPair(s.cfg.DataRoot)
+			if err != nil {
+				return err
+			}
+			if err := s.activatePanelTLSAsset(ctx, panelDomain, asset); err != nil {
+				return errors.Join(err, paneltls.RestoreFixedPair(s.cfg.DataRoot, snapshot))
+			}
+		}
+		if err := orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+			return s.updateAssetTx(ctx, tx, asset)
+		}); err != nil {
+			if activatedPanelAsset {
+				return errors.Join(err, paneltls.RestoreFixedPair(s.cfg.DataRoot, snapshot))
+			}
+			return err
+		}
+		return nil
 	})
 }
 
@@ -1677,6 +1796,18 @@ func (s *Service) assetReferences(ctx context.Context) (map[string][]AssetRefere
 		return nil, err
 	}
 	references := map[string][]AssetReference{}
+	var panelTLSAssetID string
+	if err := orm.New(s.db).From("runtime_settings").Where("key = ?", "panel.tlsCertificateId").Select("value").ScanValue(ctx, &panelTLSAssetID); err != nil && err != sql.ErrNoRows {
+		return nil, err
+	}
+	if panelTLSAssetID = strings.TrimSpace(panelTLSAssetID); panelTLSAssetID != "" {
+		references[panelTLSAssetID] = appendAssetReference(references[panelTLSAssetID], AssetReference{
+			ResourceType: "settings",
+			ResourceID:   "runtime",
+			ResourceName: "Panel HTTPS",
+			Relation:     "panel_tls",
+		})
+	}
 	for rows.Next() {
 		var applicationID, applicationName, specYAML string
 		if err := rows.Scan(&applicationID, &applicationName, &specYAML); err != nil {

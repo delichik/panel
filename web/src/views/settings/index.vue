@@ -20,7 +20,7 @@ import ConsolePage from '@/components/templates/ConsolePage.vue';
 import SettingsPage from '@/components/templates/SettingsPage.vue';
 import { useI18n } from '@/i18n';
 import { useSessionStore } from '@/stores/session';
-import type { SystemCertificateDto } from '@/types/keyAssets';
+import type { KeyAssetDto, SystemCertificateDto } from '@/types/keyAssets';
 import type { RestorePreflightResponse, RuntimeSettings, RuntimeUpdate, ServerVariableDefinition } from '@/types/settings';
 import { createLatestRequestGuard } from '@/views/_shared/requestState';
 import { formatDateTime } from '@/utils/datetime';
@@ -36,6 +36,7 @@ const runtime = ref<RuntimeSettings | null>(null);
 const version = ref<VersionInfo | null>(null);
 const serverVariables = ref<ServerVariableDefinition[]>([]);
 const systemCertificates = ref<SystemCertificateDto[]>([]);
+const tlsCertificates = ref<KeyAssetDto[]>([]);
 const activeSection = ref(sectionFromPath(route.path));
 const loading = ref(false);
 const listRequests = createLatestRequestGuard();
@@ -69,6 +70,8 @@ const form = reactive({
   loginSubtitle: '',
   certificateEmail: '',
   dnsPropagationDelaySeconds: '30',
+  panelDomain: 'localhost',
+  panelTlsCertificateId: '',
   variablesText: '',
   exportEncrypt: true,
   exportPassword: '',
@@ -88,6 +91,10 @@ const cleanupOptions = computed(() => ['hourly', 'daily', 'weekly'].map((value) 
 const tokenOptions = computed(() => ['10m', '1h', '1d', '5d', '30d', 'never'].map((value) => ({ label: t(`settingsPage.token.${value}`), value })));
 const languageOptions = computed(() => [{ label: t('settingsPage.language.en'), value: 'en' }, { label: t('settingsPage.language.zh'), value: 'zh-CN' }]);
 const logOptions = computed(() => ['debug', 'info', 'warn', 'error'].map((value) => ({ label: value, value })));
+const panelTlsOptions = computed(() => [
+  { label: t('settingsPage.panelBuiltInCertificate'), value: '' },
+  ...tlsCertificates.value.map((certificate) => ({ label: certificate.name, value: certificate.id })),
+]);
 const jwtSecretValid = computed(() => form.jwtSecret.trim().length >= 16);
 const runtimeEventRetentionValid = computed(() => {
   const retention = Number(form.runtimeEventRetentionDays);
@@ -117,11 +124,12 @@ async function load() {
   loading.value = true;
   error.value = '';
   try {
-    const [settingsResult, variablesResult, versionResult, certsResult] = await Promise.allSettled([
+    const [settingsResult, variablesResult, versionResult, certsResult, tlsResult] = await Promise.allSettled([
       settingsApi.runtime(),
       settingsApi.serverVariables(),
       systemApi.version(),
       keyAssetsApi.systemCertificates(),
+      keyAssetsApi.listPage({ page: 1, pageSize: 200 }),
     ]);
     if (!listRequests.isCurrent(requestId)) return;
     let firstError = '';
@@ -132,7 +140,8 @@ async function load() {
     if (versionResult.status === 'fulfilled') version.value = versionResult.value;
     else if (!firstError) firstError = versionResult.reason instanceof Error ? versionResult.reason.message : t('settingsPage.loadFailed');
     if (certsResult.status === 'fulfilled') systemCertificates.value = certsResult.value;
-    else if (!firstError) firstError = certsResult.reason instanceof Error ? certsResult.reason.message : t('settingsPage.loadFailed');
+      else if (!firstError) firstError = certsResult.reason instanceof Error ? certsResult.reason.message : t('settingsPage.loadFailed');
+    if (tlsResult.status === 'fulfilled') tlsCertificates.value = tlsResult.value.items.filter((item) => item.type === 'tls_certificate');
     if (settingsResult.status === 'fulfilled' && variablesResult.status === 'fulfilled') {
       hydrate(settingsResult.value, variablesResult.value);
     }
@@ -167,6 +176,8 @@ function hydrate(settings: RuntimeSettings, variables: ServerVariableDefinition[
     loginSubtitle: settings.branding.loginSubtitle,
     certificateEmail: settings.certificates.email,
     dnsPropagationDelaySeconds: String(settings.certificates.dnsPropagationDelaySeconds),
+    panelDomain: settings.panel.domain,
+    panelTlsCertificateId: settings.panel.tlsCertificateId,
     variablesText: variables.map((item) => `${item.required ? '*' : ''}${item.key}=${item.name}`).join('\n'),
   });
 }
@@ -291,6 +302,7 @@ function buildRuntimeUpdate(kind: 'runtime' | 'security' | 'certificates' | 'sys
     remoteCommandTimeoutSeconds: current.remoteCommandTimeoutSeconds,
     branding: current.branding,
     certificates: current.certificates,
+    panel: current.panel,
   };
   if (kind === 'runtime') {
     update.metricsRetentionDays = numberField(form.metricsRetentionDays, current.metricsRetentionDays);
@@ -313,6 +325,7 @@ function buildRuntimeUpdate(kind: 'runtime' | 'security' | 'certificates' | 'sys
       email: form.certificateEmail,
       dnsPropagationDelaySeconds: numberField(form.dnsPropagationDelaySeconds, current.certificates.dnsPropagationDelaySeconds),
     };
+    update.panel = { domain: form.panelDomain.trim().toLowerCase(), tlsCertificateId: form.panelTlsCertificateId };
   }
   if (kind === 'system') {
     update.branding = { loginTitle: form.loginTitle, loginSubtitle: form.loginSubtitle };
@@ -435,6 +448,12 @@ onMounted(load);
 
         <section v-else-if="activeSection === 'certificates'" class="grid gap-4 rounded-2xl border border-border bg-card p-5">
           <h2>{{ t('settingsPage.section.certificates') }}</h2>
+          <div class="grid gap-3 rounded-xl border border-border bg-muted p-4">
+            <h3>{{ t('settingsPage.panelHttps') }}</h3>
+            <label class="grid gap-1 text-sm">{{ t('settingsPage.panelDomain') }}<Input v-model="form.panelDomain" /></label>
+            <label class="grid gap-1 text-sm">{{ t('settingsPage.panelTlsCertificate') }}<Select v-model="form.panelTlsCertificateId" :options="panelTlsOptions" /></label>
+            <p class="m-0 text-xs text-muted-foreground">{{ t('settingsPage.panelHttpsHint') }}</p>
+          </div>
           <label class="grid gap-1 text-sm">{{ t('settingsPage.certificateEmail') }}<Input v-model="form.certificateEmail" /></label>
           <label class="grid gap-1 text-sm">{{ t('settingsPage.dnsDelay') }}<Input v-model="form.dnsPropagationDelaySeconds" type="number" min="0" :invalid="Boolean(fieldErrors.dnsPropagationDelaySeconds)" /><span v-if="fieldErrors.dnsPropagationDelaySeconds" class="text-xs text-danger">{{ t(fieldErrors.dnsPropagationDelaySeconds) }}</span></label>
           <Button class="w-fit" variant="primary" :disabled="Boolean(fieldErrors.dnsPropagationDelaySeconds)" :loading="pending === 'save-certificates'" @click="saveRuntimeSection('certificates')"><Save />{{ t('settingsPage.saveSection') }}</Button>

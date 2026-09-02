@@ -2,6 +2,7 @@ package backups
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"net/http"
 	"sync"
@@ -13,16 +14,17 @@ type maintenanceListener struct {
 	server *http.Server
 }
 
-func (l *maintenanceListener) listenAndServe(address string, handler http.Handler) error {
+func (l *maintenanceListener) listenAndServeTLS(address string, handler http.Handler, tlsConfig *tls.Config) error {
 	server := &http.Server{
 		Addr:              address,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
+		TLSConfig:         tlsConfig,
 	}
 	l.mu.Lock()
 	l.server = server
 	l.mu.Unlock()
-	return server.ListenAndServe()
+	return server.ListenAndServeTLS("", "")
 }
 
 func (l *maintenanceListener) shutdown(ctx context.Context) error {

@@ -440,8 +440,8 @@ func migrateReverseProxyConfigurationOn(ctx context.Context, tx *sql.Tx) error {
 	}
 
 	type facilityRow struct {
-		ID, ServersRaw, PanelRaw, StaticRaw, PoliciesRaw, LastError, UpdatedAt string
-		Domains                                                                []migratedFacilityDomain
+		ID, ServersRaw, StaticRaw, PoliciesRaw, LastError, UpdatedAt string
+		Domains                                                      []migratedFacilityDomain
 	}
 	staticColumn := `'[]'`
 	if columns["static_sites_json"] {
@@ -451,7 +451,7 @@ func migrateReverseProxyConfigurationOn(ctx context.Context, tx *sql.Tx) error {
 	if columns["domain_policies_json"] {
 		policiesColumn = "domain_policies_json"
 	}
-	rows, err := tx.QueryContext(ctx, fmt.Sprintf(`SELECT id,deployment_server_ids_json,panel_entry_json,%s,%s,last_error,updated_at FROM facility_app_configs`, staticColumn, policiesColumn))
+	rows, err := tx.QueryContext(ctx, fmt.Sprintf(`SELECT id,deployment_server_ids_json,%s,%s,last_error,updated_at FROM facility_app_configs`, staticColumn, policiesColumn))
 	if err != nil {
 		return err
 	}
@@ -460,7 +460,7 @@ func migrateReverseProxyConfigurationOn(ctx context.Context, tx *sql.Tx) error {
 	owners := map[string]string{}
 	for rows.Next() {
 		var row facilityRow
-		if err := rows.Scan(&row.ID, &row.ServersRaw, &row.PanelRaw, &row.StaticRaw, &row.PoliciesRaw, &row.LastError, &row.UpdatedAt); err != nil {
+		if err := rows.Scan(&row.ID, &row.ServersRaw, &row.StaticRaw, &row.PoliciesRaw, &row.LastError, &row.UpdatedAt); err != nil {
 			rows.Close()
 			return err
 		}
@@ -525,13 +525,6 @@ func migrateReverseProxyConfigurationOn(ctx context.Context, tx *sql.Tx) error {
 				return fmt.Errorf("reverse proxy migration: facility domain %q has no valid origin server", domain)
 			}
 			if err := reserveProxyDomain(owners, domain, "facility route"); err != nil {
-				rows.Close()
-				return err
-			}
-		}
-		var panel map[string]any
-		if json.Unmarshal([]byte(row.PanelRaw), &panel) == nil && boolJSONValue(panel["enabled"]) {
-			if err := reserveProxyDomain(owners, normalizeProxyDomain(stringJSONValue(panel["domain"])), "Panel entry"); err != nil {
 				rows.Close()
 				return err
 			}
@@ -633,7 +626,6 @@ func migrateReverseProxyConfigurationOn(ctx context.Context, tx *sql.Tx) error {
 		id TEXT PRIMARY KEY,
 		version INTEGER NOT NULL DEFAULT 1,
 		deployment_server_ids_json TEXT NOT NULL DEFAULT '[]',
-		panel_entry_json TEXT NOT NULL DEFAULT '{}',
 		domains_json TEXT NOT NULL DEFAULT '[]',
 		last_error TEXT NOT NULL DEFAULT '',
 		updated_at TEXT NOT NULL
@@ -645,7 +637,7 @@ func migrateReverseProxyConfigurationOn(ctx context.Context, tx *sql.Tx) error {
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO facility_app_configs_new(id,version,deployment_server_ids_json,panel_entry_json,domains_json,last_error,updated_at) VALUES(?,?,?,?,?,?,?)`, row.ID, 1, row.ServersRaw, row.PanelRaw, string(domainsRaw), row.LastError, row.UpdatedAt); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO facility_app_configs_new(id,version,deployment_server_ids_json,domains_json,last_error,updated_at) VALUES(?,?,?,?,?,?)`, row.ID, 1, row.ServersRaw, string(domainsRaw), row.LastError, row.UpdatedAt); err != nil {
 			return err
 		}
 	}

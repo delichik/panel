@@ -11,6 +11,12 @@ import (
 	"go.uber.org/zap"
 )
 
+// defaultMaxJobAttempts caps how many total execution attempts a Job may have
+// before a retryable failure becomes terminal. Every retry must terminate so a
+// permanently failing target (for example an unreachable agent during purge)
+// cannot retry forever.
+const defaultMaxJobAttempts = 10
+
 type RuntimeReconciler interface {
 	Reconcile(context.Context, ReconcileRequestRPC) (ReconcileResponse, error)
 }
@@ -21,7 +27,13 @@ type ControllerConfig struct {
 	LeaseTTL     time.Duration
 	QueueSize    int
 	Owner        string
-	OnSucceeded  func(context.Context, Job, ReconcileResponse)
+	// MaxAttempts is the maximum number of total execution attempts (including
+	// the first) for a Job. Once a retryable failure reaches this threshold the
+	// Job transitions to terminal failed with error_code=max_attempts_exceeded.
+	// Zero uses defaultMaxJobAttempts.
+	MaxAttempts int
+	OnSucceeded func(context.Context, Job, ReconcileResponse)
+	OnFailed    func(context.Context, Job, ReconcileResponse)
 }
 
 type Controller struct {
@@ -55,6 +67,9 @@ func NewController(store *Store, runtime RuntimeReconciler, cfg ControllerConfig
 	}
 	if cfg.QueueSize < cfg.WorkerCount*2 {
 		cfg.QueueSize = cfg.WorkerCount * 2
+	}
+	if cfg.MaxAttempts <= 0 {
+		cfg.MaxAttempts = defaultMaxJobAttempts
 	}
 	if strings.TrimSpace(cfg.Owner) == "" {
 		cfg.Owner = "orchestrator-worker"
@@ -317,6 +332,12 @@ func firstRuntimeSpec(candidate, fallback []byte) []byte {
 }
 
 func (c *Controller) fail(ctx context.Context, job Job, response ReconcileResponse) error {
+	if response.Retryable && c.config.MaxAttempts > 0 && job.Attempts >= c.config.MaxAttempts {
+		response.Retryable = false
+		response.ErrorCode = "max_attempts_exceeded"
+		response.ErrorClass = "retry_exhausted"
+		response.ErrorMessage = fmt.Sprintf("job exceeded %d attempts (%d); giving up", c.config.MaxAttempts, job.Attempts)
+	}
 	ok, err := c.store.Fail(ctx, job, response)
 	if err != nil {
 		return err
@@ -324,6 +345,9 @@ func (c *Controller) fail(ctx context.Context, job Job, response ReconcileRespon
 	if !ok {
 		traceJobEvent("lease_lost", job, zap.String("reason", "fail_fencing"))
 		return ErrOwnershipLost
+	}
+	if c.config.OnFailed != nil {
+		c.config.OnFailed(ctx, job, response)
 	}
 	if response.Retryable {
 		traceJobEvent("job_retry_scheduled", job,

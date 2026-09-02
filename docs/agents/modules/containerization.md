@@ -42,7 +42,7 @@ Panel API 挂在 `/api/v1/servers/{serverId}/containers|images|networks|volumes`
 
 设施类型没有通用目录 API；前后端按设施分别内置适配器。当前入口代理设施直接使用 `reverse-proxy` 专属配置与 `/facility-apps/reverse-proxy` 端点。新事务编辑器使用持久 `/edit-sessions` API：创建、draft patch、按设施内唯一 `assetName` PUT/DELETE 资产、validate、preview、commit 和 discard；会话由稳定单管理员主体持有，idle TTL 为 24 小时、absolute TTL 为 7 天，draft/资产操作使用 revision，资产操作和 commit 使用幂等键。session 资产下载通过 `GET .../assets/{assetName}/content` 解析当前 blob；未替换的既有资产回退读取内部 `source_asset_id` 正式目录。正式资产通过 `GET .../static-assets/{assetName}/content` 下载，bundle 目录即时打包为 zip。物理 asset key/id 只用于存储、提交 manifest 和旧数据兼容。
 
-持久设施会话中的既有资产只保存 `source_asset_id` 和 metadata，不复制正文；新增或替换资产写入唯一 blob 目录。路由草稿在编辑期间以 `assetName` 引用资产，commit manifest 决定内部最终 asset id 并在写数据库前统一改写。删除仍被 route 引用的资产、移除仍被 origin/AnyAccess primary/Panel Entry 使用的 gateway、或把 Panel Entry 绑定到非 setup Panel host 都是阻断诊断，服务端不得静默修剪。
+持久设施会话中的既有资产只保存 `source_asset_id` 和 metadata，不复制正文；新增或替换资产写入唯一 blob 目录。路由草稿在编辑期间以 `assetName` 引用资产，commit manifest 决定内部最终 asset id 并在写数据库前统一改写。删除仍被 route 引用的资产或移除仍被 origin/AnyAccess primary 使用的 gateway 都是阻断诊断，服务端不得静默修剪。
 
 所有会修改正式设施配置或正式静态资产的新入口共享同一单资源提交锁：edit-session commit 不得交错文件 rename 或数据库写。新会话冲突后可通过 draft PATCH 携带当前 `baseResourceVersion` 执行 rebase；rebase 保留 session assets、更新 base version、清除 conflict 后允许重新 preview/commit。
 
@@ -54,13 +54,12 @@ commit 前必须重新散列每个新 blob 的 content 目录和每个 `source_a
 
 ## 设施应用
 
-- 设施应用配置保存在 `facility_app_configs`，不写入普通 `applications` 表；当前持久字段为 `version`、`deployment_server_ids_json`、`panel_entry_json`、`dns_sync_json`、错误和更新时间，域名路由统一存 `reverse_proxy_routes`（`app_id='facility-reverse-proxy'`），旧 `domain_policies_json/static_sites_json` 与 `domains_json` 已由迁移转换删除。保存反向代理设施应用时会派生维护服务器 traits 中的 `agent.reverse_proxy.enabled`，该值只反映设施全局网关范围，不作为独立节点开关。`last_error` 只在触发失败时写入，成功保存（`SaveReverseProxy` 落库空值）或手动协调成功（`ReconcileReverseProxyNow`）都会清空，避免旧失败横幅长期残留。设施路由行 `target_type=''`、`target_port=0` 是设计值（设施 Path 使用 ruleType/静态/代理 URL），应用模块读取设施应用（`Get`/`ListForReconcile`）时必须跳过这些行，不得把设施路由当作应用反向代理规则校验，否则设施应用部署规划会在应用侧端口校验（`application_reverse_proxy_target_port_invalid`）处失败。
+- 设施应用配置保存在 `facility_app_configs`，不写入普通 `applications` 表；部署节点、DNS 同步状态、错误和更新时间保存在设施配置中，域名路由统一存 `reverse_proxy_routes`。设施路由行 `target_type=''`、`target_port=0` 是设计值，应用模块读取设施应用时必须跳过这些行。
 - 反向代理设施应用使用普通 agent runtime 原子能力：拉取 nginx 镜像、写托管 nginx 配置、容器内执行结构化命令、reload 或重建容器；不得新增 agent 侧胖反向代理接口。
 - Panel 托管的 Nginx 配置目录只读挂载到独立的 `/etc/panel-nginx`，容器以 `nginx -c /etc/panel-nginx/nginx.conf` 显式启动；不得挂载或覆盖镜像原生 `/etc/nginx`，以保留 `mime.types` 等镜像资产。不能把主配置作为单文件 bind mount，否则宿主机原子 rename 后运行容器仍可能引用旧 inode。证书 managed directory 独立只读挂载到 `/etc/panel-certs`。设施为每次差异返回 reload 或 recreate：纯路由、upstream、Header 和现有挂载内证书变化可使用显式指定 `/etc/panel-nginx/nginx.conf` 的 validate/reload，网络、端口、镜像、命令或 mount 结构变化必须 recreate。validate 失败回滚 managed files 并保留旧 worker；reload 失败回退 recreate。
 - 默认情况下 nginx 容器使用 host network，监听节点本机端口并把应用反向代理规则转发到 `127.0.0.1:<targetPort>`。当任一应用反向代理规则选择 `targetType=container` 时，nginx 容器改用受管 `panel-apps` bridge 网络并绑定宿主机 80/443；本地目标改为通过 `host.docker.internal:<targetPort>` 访问节点本地端口，容器目标通过 Application 容器名访问目标端口。
 - 容器目标的应用代理 location 使用 `$panel_proxy_upstream` 变量延迟解析，主配置固定写入 `resolver 127.0.0.11`。目标容器暂时不存在或未运行时，Nginx 仍能启动、校验和重载；请求会显示统一的上游不可用提示页，容器恢复后可自动重新解析连通，无需再次保存或同步入口网关。
 - 代理上游返回 502/504 时，Nginx 内部跳转到 `@panel_upstream_unavailable` 展示与 Seamark 风格一致的静态提示页，标题左侧带红色断开图标，底部使用 Seamark 图标和名称；文案内置中英文并按浏览器语言显示，只说明服务暂时无法连接，不暴露 Nginx、错误码或容器名等技术细节。
-- Panel 入口同样遵循入口容器网络模式：host network 使用 `127.0.0.1:8080`，`panel-apps` bridge 使用 `host.docker.internal:8080`。不得在 bridge 模式继续把 Panel upstream 指向入口容器自身的回环地址。
 - 静态站点配置保存域名、路径和宿主机根目录；部署时作为只读 bind mount 挂入 nginx 容器。
 - 应用里的 `reverseProxy` 规则只会被下发到反向代理设施应用覆盖的服务器；未指定为设施应用部署目标的服务器忽略这些规则。
 - 每个设施域名必须显式选择至少一台入口节点，且入口节点必须属于设施全局网关节点；新保存请求不得把空选择解释为全部节点。读取旧配置时，旧 `deploymentServers` 为空仍按当时全部全局网关节点展开，多个旧 Path 使用不同节点集合时取并集，避免迁移缩小已有访问范围。
@@ -139,7 +138,7 @@ Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并
 
 ## 设施应用反向代理静态站点与 TLS
 
-- `facility_app_configs` 只持久化 `deployment_server_ids_json`、`panel_entry_json`、`dns_sync_json` 等设施级配置；域名路由统一存 `reverse_proxy_routes`，按 `domain`（全局唯一主键）保存 `originServerIds`、`anyAccess`、`targetType`/`targetPort` 与嵌套 Path。旧 `image`、`static_sites_json`、`domain_policies_json` 以及 `domains_json`/`applications.reverse_proxy_json` 在启动预迁移中一次性转换并删列。
+- `facility_app_configs` 只持久化部署节点、DNS 同步状态和设施级错误；域名路由统一存 `reverse_proxy_routes`。旧字段在启动预迁移中转换后删除。
 - 设施入口网关镜像固定为 `nginx:1.28-alpine`，API 和前端不提供镜像设置。
 - 每个设施域名至少选择一个源站节点，且源站必须属于全局网关节点。AnyAccess 关闭时只有源站节点开放域名；开启时其他全局网关作为转发节点（`relayServerIds` 为空表示全部非源站网关节点，非空表示指定子集），按轮询、主备或客户端 IP 哈希连接源站入口网关。转发节点必须属于全局网关节点且不能是源站节点。
 - 设施路由、应用路由和 Panel 入口的规范化域名全局唯一。旧库迁移发现跨所有者冲突时必须中止并列出冲突，不得静默合并。
@@ -159,7 +158,7 @@ Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并
 ## Entrance Gateway UI And Static Content
 
 - The reverse proxy facility app is presented in the frontend as an entrance gateway. Deployment servers are called gateway nodes in this context because selecting them means those nodes listen on 80/443 and process application routes plus static sites.
-- The entrance gateway owns the Panel access entry. `panelEntry` is a system route, not a normal static site row: it is locked to the singleton Panel host registered by `panel setup`, and that host must remain a global gateway node. Host-network gateways use `127.0.0.1:8080`; bridge-network gateways use `host.docker.internal:8080`.
+- The Panel runs on its own HTTPS listener with a built-in self-signed certificate by default. Users can select a TLS key asset and configure the Panel domain in Settings.
 - The facility catalog page lists facility apps first. The reverse-proxy facility detail page is read-only, exposes immediate sync and the link to `/applications/facility-apps/reverse-proxy/config`, and must not render editable gateway, domain, path, Panel-entry, or asset controls.
 - Entrance gateway routes are edited on the facility configuration route `/applications/facility-apps/:facilityKind/config` with `facilityKind=reverse-proxy` as `domains` with nested paths. The configuration page contains only editable facility settings; application routes remain read-only on the facility detail page.
 - Origin selection and AnyAccess are edited at domain level. A path row does not expose its own node selector. Origins are required and are chosen only from the current global gateway nodes.
@@ -180,7 +179,7 @@ Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并
 - The agent sends periodic full container snapshots and near-real-time change snapshots over the report stream. Panel replaces the per-server observation set atomically for each full report. 上报未携带容器快照（nil）时保留既有观察，不会清空；只有明确携带空列表时才允许清空。完整快照替换时，已消失实例的 `application_reconcile_states` 行也会同步清理，与 applications 侧删除实例时的行为一致。 Report 快照只包含协调与列表展示所需字段（id、names、image、image_id、state、status、ports、labels），不再携带 command/created/mounts；完整详情仍可按需通过 Docker 原子接口获取。镜像页的使用状态与关联 Application 依赖快照中的 image_id 与镜像 id 精确匹配。
 - Application reconciliation collectors read cached observations only. A server that reports a failed container, stale generation/spec hash, or managed file manifest drift can cause the application planner to create or reuse an AppDB Job for that server without redeploying other servers that are already healthy.
 - `application_reconcile_states` keeps the exponential backoff state. Automatic reconciliation must honor `reconcile_next_run_at`; healthy observations clear failures only after the configured success streak.
-- 自动协调连续失败达到 10 次后，应用进入 `reconcile_stopped` 停止状态；调度器扫描与 agent 上报的 `container_change` 漂移协调都不再创建新部署，用户显式操作清除状态后重新计数。
+- 自动协调连续失败达到 10 次后，应用进入 `reconcile_stopped` 停止状态；调度器扫描与 agent 上报的 `container_change` 漂移协调都不再创建新部署，用户显式操作清除状态后重新计数。失败计数由 orchestrator Controller 的 `OnFailed` 回调在每次 Job 失败（含可重试与终态）时累计到 `application_reconcile_states.reconcile_failures`。可重试 Job 同样有终止条件：每个 Job 最大尝试次数（默认 10 次、含首次），达到上限后以 `error_code=max_attempts_exceeded` 进入终态失败，不再无限重试。
 - Agent reports and forced/manual reconciliation triggers must not create another Job while the same app/server conflict domain already has an active Job. The application planner owns that durable in-flight check before Job rows are created; report collectors only provide the requested app/server scope.
 - Agent report 的 `container_change` 触发在 collector 已确认应用/服务器发生停止、缺失、generation/spec hash 或 managed file drift 后，可绕过应用级 `application_reconcile_states.reconcile_next_run_at` 退避立即请求 planner；该绕过只作用于已 drift 的 app/server，不等同于 `force=true`，不得重部署同节点其它已满足 desired state 的应用。普通 scheduler 与非强制显式协调仍尊重应用级退避。 Agent 容器上报的 managed-file drift 判定基于本地 stat 指纹缓存（`state/managed-files.fingerprint.json`），未变化的文件不会反复哈希；事件触发的 container_change 快照与周期快照使用同一 drift 判定。
 - `SaveReportedContainers` 保存观测时只对 `application_id` 存在于 `applications` 表的托管容器登记/更新 `application_reconcile_states`（该表 `application_id` 有外键）；标签引用未知应用（应用已删除但容器残留、或服务器接入前由其它面板部署）的托管容器跳过协调状态登记，观测本身照常保存，其可能残留的孤儿状态行在"已消失实例"清理时删除。这保证单个残留容器不会因外键失败回滚整笔观测事务、进而让该服务器全部观测停更并触发无限重建。启动迁移 `purge_orphan_application_reconcile_states` 会清理存量孤儿行。

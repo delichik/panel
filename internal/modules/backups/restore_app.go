@@ -2,6 +2,7 @@ package backups
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"html/template"
@@ -13,6 +14,7 @@ import (
 
 	"panel/internal/platform/config"
 	httpx "panel/internal/platform/http"
+	"panel/internal/platform/paneltls"
 )
 
 type RestoreApp struct {
@@ -131,8 +133,15 @@ func NewRestoreApp(cfg config.Config) (*RestoreApp, error) {
 
 func (a *RestoreApp) Handler() http.Handler { return a.mux }
 
-func (a *RestoreApp) ListenAndServe(address string) error {
-	return a.listener.listenAndServe(address, a.Handler())
+func (a *RestoreApp) ListenAndServeTLS(address string) error {
+	return a.listener.listenAndServeTLS(address, a.Handler(), a.tlsConfig())
+}
+
+func (a *RestoreApp) tlsConfig() *tls.Config {
+	return &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+		certificate, err := paneltls.FixedCertificate(a.cfg.DataRoot, "")
+		return &certificate, err
+	}}
 }
 
 func (a *RestoreApp) Close() error {

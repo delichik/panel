@@ -5,7 +5,7 @@
 - Container runtime starts `cmd/panel-init/main.go`; local development may still run `cmd/panel/main.go` directly.
 - `panel_init` starts a random local `127.0.0.1:0` restart listener, generates a random restart token, starts the child Panel process with `--init-restart-url`, `--init-restart-token`, and `--maintenance-mode`, and exits when the child exits without a restart request.
 - Backup/restore restart requests POST the next mode to the local `panel_init` listener, asking it to restart Panel with `--maintenance-mode backup_export`, `restore`, or `normal`.
-- Normal Panel startup also creates `<dataRoot>/run/panel-control.sock` on Linux with owner-only permissions. `panel setup` uses this local socket to ask the already-running process to perform the fixed Panel-host bootstrap workflow; the CLI must not open the databases or duplicate business-service assembly.
+- Normal and maintenance Panel startup listen on the configured standalone HTTPS address and serve a process-global cached pair from `dataRoot/tls/panel.crt` plus `dataRoot/tls/panel.key`. Runtime settings and key assets synchronize this fixed pair; activation, persistence, and failure rollback run in one process-local critical section using an in-memory fixed-pair snapshot. A successful update clears the cache, and the next new TLS connection reloads it. When the pair is absent or incomplete, Panel creates and serves a local self-signed certificate from the data root.
 - `cmd/panel/main.go` must not enter backup/restore maintenance mode from pending files alone; the maintenance mode argument is the required gate.
 
 ## Agent Report Stream
@@ -69,8 +69,8 @@
 - SQLite 连接由 `internal/platform/database` 统一配置为 WAL、5 秒 busy timeout 和小连接池；普通路径与 `file:` DSN 都必须保留这些默认 pragma，除非用户显式覆盖。
 - 当前处于 alpha 但已有使用者，修改表结构必须考虑旧版本迁移。
 - `Store.Migrate` 已由 ORM 驱动：对 app/log/metrics 三库分别调用 `orm.AutoMigrateModels(WithDestructive(true))`（DDL 由 `internal/platform/database/models` 的 42 个模型负责，CHECK 约束经 `TableConstraints()` 声明），随后按 `models.ExtraIndexDDL()` 幂等创建复合/部分/复合 UNIQUE 索引，并用 `orm.RunSteps` 执行一次性数据迁移；历史遗留表（旧 tasks/certificates）由对应 Step/直连迁移清理，不依赖自动删除。证书 scope 约束重建因需事务外切换 `PRAGMA foreign_keys`，由 Migrate 直接调用而非 Step。
-- 入口网关设施配置表 `facility_app_configs` 只保存 `version`、`deployment_server_ids_json`、`panel_entry_json`、`dns_sync_json`、`last_error`、`updated_at`；所有路由（设施域名与应用反向代理规则）统一保存在 `reverse_proxy_routes` 表：`domain` 主键全局唯一，`app_id` 标识所属应用（设施代理自身使用 `facility-reverse-proxy`），`origin_server_ids`/`any_access_json`/`target_type`/`target_port`/`paths_json` 为统一字段。升级旧库时启动预迁移先把旧 `facility_app_configs.domains_json` 与 `applications.reverse_proxy_json`（含 legacy 格式转换与域名所有权冲突检查）回填到新表，再删除旧列；迁移完成后业务代码不保留旧 JSON 字段兼容。
-- `panel_installation` 是固定 `default` 记录的单例安装状态，使用服务器外键保存待初始化节点和唯一 Panel 宿主节点。宿主节点不能通过普通服务器删除流程移除；Panel 入口启用时必须绑定该节点，宿主节点可由 setup 或设施应用网关配置首次保存登记。
+- 入口网关设施配置表只保存部署节点、DNS 同步状态、错误和更新时间；所有路由统一保存在 `reverse_proxy_routes` 表。升级旧库时启动预迁移会忽略历史 Panel 入口字段，并继续迁移旧域名路由。
+- 运行时设置保存 Panel 域名和可选 TLS 密钥资产 ID。设置和证书资产负责把当前证书同步到 `<dataRoot>/tls/panel.crt` 与 `<dataRoot>/tls/panel.key`，并清空进程级 TLS 缓存；文件激活、配置持久化及失败回滚在同一进程内临界区执行，回滚直接恢复固定文件快照而不再读取数据库。下一条新 TLS 连接才加锁加载这对固定文件，缓存命中不做文件 I/O。固定文件缺失或不完整时使用内置自签名证书，空 ID 会恢复默认自签名证书。
 - 新字段或新表优先使用可重复执行的增量迁移，并在 `internal/platform/database/store_test.go` 或相关 service 测试覆盖旧库升级路径。
 - 数据库迁移兼容基线不再包含短期内部结构：`applications.persistent_path`、CoordDB 的 `application_lifecycle_operations`/`application_lifecycle_targets`（已随迁移删除）、以及不支持 `application_files.kind='archive'` 的旧 `application_files` 约束；处理这些更早内部快照时应先用带兼容迁移的版本升级。AppDB 的 `application_revisions`、`jobs` 和实例 desired/observed 字段必须通过可重复迁移补齐。
 - 会被展示的持久化配置只保存稳定 key、kind、value，不保存当前语言下的展示文案。

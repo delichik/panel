@@ -132,7 +132,7 @@ func (s *Service) insertStaticAsset(ctx context.Context, asset StaticAsset) erro
 
 func bumpFacilityConfigVersionTx(ctx context.Context, tx *sql.Tx) error {
 	now := formatTime(time.Now().UTC())
-	_, err := orm.RawExec(ctx, tx, `INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,panel_entry_json,last_error,updated_at) VALUES(?,1,'[]','{}','',?) ON CONFLICT(id) DO UPDATE SET version=facility_app_configs.version+1,updated_at=excluded.updated_at`, ReverseProxyID, now)
+	_, err := orm.RawExec(ctx, tx, `INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,last_error,updated_at) VALUES(?,1,'[]','',?) ON CONFLICT(id) DO UPDATE SET version=facility_app_configs.version+1,updated_at=excluded.updated_at`, ReverseProxyID, now)
 	return err
 }
 

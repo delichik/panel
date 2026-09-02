@@ -105,9 +105,8 @@ func (h *Handler) Retry(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, err)
 		return
 	}
-	if h.runner != nil {
-		go h.dispatchRunNow(task)
-	}
+	// 普通 retry 必须遵守 Service.Retry 计算出的退避窗口；由后台 worker
+	// 在 next_run_at 到期后执行。用户若需要立即执行，应显式调用 run-now。
 	h.decorateTask(&task)
 	httpx.JSON(w, http.StatusAccepted, task)
 }

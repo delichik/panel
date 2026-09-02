@@ -92,8 +92,6 @@
 - 特权能力统一持久化为 `privilege.mode=root|passwordless_sudo|none`、派生的 `privilege.privileged` 和检查时间。UID 0 使用 `root` 并直接执行特权命令；非 root 且 `sudo -n` 成功时使用 `passwordless_sudo`；其他情况使用 `none`。软件包、UFW、重启和 Agent bootstrap 只按 `privilege.mode` 判断准入。
 - 服务器架构信息使用结构化 `architecture.os`、`architecture.arch` 和 `architecture.rawMachine`，数据库列为 `architecture_os`、`architecture_arch`、`architecture_machine`。Agent 部署选包优先读取结构化架构字段；字段缺失时通过 SSH `uname -m` 探测目标节点并写回结构化字段。
 - bootstrap 成功后按现有受限自动部署状态机创建 Agent 部署任务。Agent 部署或完整系统信息刷新失败不得删除节点；系统自动部署失败按 `agent.auto_deploy_failures` 和 `agent.auto_deploy_last_failure_at` 做指数退避，连续失败 2 次后标记 `agent.status=undeployable` 和 `agent.auto_deploy_blocked=true`，周期检查停止自动部署。用户手动部署会解除阻止并重置自动退避时间基准，部署及兼容性检查成功后恢复为 `compatible`；自动部署失败计数必须等 Agent 健康检查连续 5 次正常后才清空。
-- `docker exec -it panel /app/panel setup` 通过 Panel 本地控制 socket 复用凭据创建、服务器首次 bootstrap 和 Agent 部署流程。Agent 兼容后节点才会从 `panel_installation.pending_server_id` 提升为唯一 `host_server_id`；Agent 或入口部署失败时保存阶段和错误供重复 setup 恢复。
-- 普通服务器删除流程必须拒绝删除 `panel_installation.host_server_id` 指向的 Panel 宿主节点。替换或解除宿主关系需要独立迁移流程，不能由普通 Delete 隐式完成。
 - 完整系统信息由兼容 Agent 读取并交给 `internal/platform/linux/` 解析支持的 Debian/Ubuntu 版本；Agent 内部直接读取 `/etc/os-release`、`/proc`、`/sys`、网络接口和 `statfs`，不再使用系统信息 bash 脚本。如果已启用 agent，读取必须要求 `agent.status=compatible` 并走 agent，不允许在 agent 未就绪、异常、不可部署或客户端缺失时回落 SSH。
 - 服务器列表和详情读取不得创建连通性或系统信息后台任务。`POST /api/v1/servers/{id}/test` 是同步普通函数，只验证 SSH 并更新可达状态与特权模式，不进入任务中心。周期可达状态以 agent 指标上报流为准：上报成功标记可达，实际采集失败标记不可达。
 - `server_info_collect` 首次 bootstrap 在创建服务器后立即运行；后续完整系统信息 refresh 固定每小时一次且只走兼容 Agent。refresh 失败只能使任务失败或可重试，不得回滚或删除已有服务器。任务中心、周期 worker 和 retry/run-now 通过注册 executor 执行时必须同步跑到任务终态，不能只启动后台 goroutine 后返回成功；创建服务器等需要快速返回任务 ID 的入口可使用模块内后台启动 helper。

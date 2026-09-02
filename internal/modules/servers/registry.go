@@ -105,15 +105,6 @@ func (s *Service) Update(ctx context.Context, serverID string, req SaveRequest) 
 }
 
 func (s *Service) Delete(ctx context.Context, serverID string) error {
-	if s.hostGuard != nil {
-		isHost, err := s.hostGuard.IsHostServer(ctx, serverID)
-		if err != nil {
-			return err
-		}
-		if isHost {
-			return panelerr.Conflict("panel_host_server_delete_forbidden", "Panel host server cannot be deleted")
-		}
-	}
 	if s.tasks != nil {
 		if _, err := s.tasks.CancelByServer(ctx, serverID, "Task cancelled because the server was removed"); err != nil {
 			return err

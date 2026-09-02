@@ -8,6 +8,11 @@ import (
 	panelerr "panel/internal/platform/errors"
 )
 
+// DefaultMaxTaskRetries is the safety limit used when a retryable task
+// definition does not provide an explicit limit. It counts retries after the
+// initial execution, so a task is attempted at most four times in total.
+const DefaultMaxTaskRetries = 3
+
 const (
 	ConcurrencyParallelAllowed   = "parallel_allowed"
 	ConcurrencyResourceExclusive = "resource_exclusive"
@@ -79,6 +84,9 @@ func (r *Registry) Register(def Definition) error {
 	if def.ConcurrencyPolicy == "" {
 		def.ConcurrencyPolicy = ConcurrencyResourceExclusive
 	}
+	if def.AllowRetry && def.Execute != nil && def.DefaultMaxRetries <= 0 {
+		def.DefaultMaxRetries = DefaultMaxTaskRetries
+	}
 	if r.defs == nil {
 		r.defs = map[string]Definition{}
 	}
@@ -102,6 +110,9 @@ func (r *Registry) Replace(def Definition) {
 	}
 	if def.ConcurrencyPolicy == "" {
 		def.ConcurrencyPolicy = ConcurrencyResourceExclusive
+	}
+	if def.AllowRetry && def.Execute != nil && def.DefaultMaxRetries <= 0 {
+		def.DefaultMaxRetries = DefaultMaxTaskRetries
 	}
 	if r.defs == nil {
 		r.defs = map[string]Definition{}

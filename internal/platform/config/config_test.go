@@ -35,7 +35,7 @@ func TestLoadRejectsLegacyRuntimeConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 	raw := `{
-		"listenAddress": "127.0.0.1:8080",
+		"listenAddress": "127.0.0.1:8443",
 		"adminUsername": "admin",
 		"jwtSecret": "secret-jwt-value",
 		"dataRoot": "data",
@@ -61,7 +61,7 @@ func TestLoadRejectsLegacyRuntimeConfig(t *testing.T) {
 func TestLoadCertificateConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	raw := `{
-		"listenAddress": "127.0.0.1:8080",
+		"listenAddress": "127.0.0.1:8443",
 		"adminUsername": "admin",
 		"jwtSecret": "secret-jwt-value",
 		"dataRoot": "data",
@@ -93,7 +93,7 @@ func TestLoadLogDatabaseConfigAndLegacyTaskDatabase(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(dir, name+".json")
 			raw := `{
-				"listenAddress": "127.0.0.1:8080",
+				"listenAddress": "127.0.0.1:8443",
 				"adminUsername": "admin",
 				"jwtSecret": "secret-jwt-value",
 				"dataRoot": "data",
@@ -118,7 +118,7 @@ func TestLoadLogDatabaseConfigAndLegacyTaskDatabase(t *testing.T) {
 func TestLoadRejectsRuntimeSettingsInConfigFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	body := `{
-		"listenAddress": "127.0.0.1:8080",
+				"listenAddress": "127.0.0.1:8443",
 		"adminUsername": "admin",
 		"adminPasswordHash": "hash",
 		"jwtSecret": "long-enough-jwt-secret",

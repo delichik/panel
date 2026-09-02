@@ -29,7 +29,7 @@ Seamark 不需要把目标服务器的 Docker Socket 挂载到 Seamark 容器。
 
 ## 1. 首次登录
 
-推荐先在 Seamark 宿主机执行 `docker exec -it panel /app/panel setup`：该命令通过 SSH 将当前宿主机纳管、安装 Agent、登记唯一 Seamark 宿主节点，并部署 Seamark 自身的域名入口，完成后使用命令输出的 URL 登录。setup 只是便捷路径——也可以跳过它，在 **应用 → 设施应用** 的入口网关里启用 Seamark 访问入口并选择服务器与域名；首次保存时，所选服务器会被登记为 Seamark 宿主节点。
+启动后直接访问 Panel 的 HTTPS 地址。默认监听端口为 `8443`，并使用内置自签名证书。登录后可在 **设置 → 证书** 中配置 Panel 域名，并选择用户自己配置的 TLS 证书。
 
 打开 Seamark 地址，使用初始账号登录：
 

@@ -2,6 +2,7 @@ package backups
 
 import (
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	panelerr "panel/internal/platform/errors"
 	httpx "panel/internal/platform/http"
 	"panel/internal/platform/logging"
+	"panel/internal/platform/paneltls"
 
 	"go.uber.org/zap"
 	_ "modernc.org/sqlite"
@@ -82,8 +84,15 @@ func NewExportApp(cfg config.Config) (*ExportApp, error) {
 
 func (a *ExportApp) Handler() http.Handler { return a.mux }
 
-func (a *ExportApp) ListenAndServe(address string) error {
-	return a.listener.listenAndServe(address, a.Handler())
+func (a *ExportApp) ListenAndServeTLS(address string) error {
+	return a.listener.listenAndServeTLS(address, a.Handler(), a.tlsConfig())
+}
+
+func (a *ExportApp) tlsConfig() *tls.Config {
+	return &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+		certificate, err := paneltls.FixedCertificate(a.cfg.DataRoot, "")
+		return &certificate, err
+	}}
 }
 
 func (a *ExportApp) Close() error {

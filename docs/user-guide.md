@@ -29,7 +29,7 @@ Restrict `9786/tcp` to the Seamark host where possible. You do not need to expos
 
 ## 1. First Login
 
-First run `docker exec -it panel /app/panel setup` on the Seamark host. It enrolls the current host over SSH, installs the Agent, records the singleton Seamark host, and deploys Seamark's own domain entrance. Sign in using the URL printed by the command. Setup is a convenience path: you can also skip it and enable the Seamark access entry in **Applications → Facility Apps**, choosing a server and domain; the first save registers the chosen server as the Seamark host node.
+Open the Panel HTTPS address exposed by the container. The default listener uses port `8443` and a built-in self-signed certificate. Sign in and configure the Panel domain and an optional user TLS certificate under **Settings → Certificates**.
 
 Open the Seamark URL and sign in with the initial account:
 

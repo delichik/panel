@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math/rand/v2"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,6 +52,8 @@ const (
 	maxTaskLogLinesPerTask = 1000
 	// maxTaskLogLineLength 是单条日志最多保留的 rune 数，超出部分截断。
 	maxTaskLogLineLength = 8192
+	baseTaskRetryDelay = 30 * time.Second
+	maxTaskRetryDelay  = 10 * time.Minute
 )
 
 type ListResult struct {
@@ -385,7 +388,10 @@ func (s *Service) FailRetryable(ctx context.Context, taskID string, cause error)
 		return nil
 	}
 	msg := taskErrorText(cause)
-	if task.MaxRetries > 0 && task.RetryCount >= task.MaxRetries {
+	if task.MaxRetries <= 0 {
+		task.MaxRetries = DefaultMaxTaskRetries
+	}
+	if task.RetryCount >= task.MaxRetries {
 		return s.Block(ctx, taskID, cause)
 	}
 	nextRetry := task.RetryCount + 1
@@ -1113,6 +1119,20 @@ func (s *Service) Retry(ctx context.Context, taskID string) (Task, error) {
 	if err != nil {
 		return Task{}, err
 	}
+	def, ok := s.Registry().Definition(old.Type)
+	if !ok || !def.AllowRetry || def.Execute == nil {
+		return Task{}, panelerr.Validation("task_retry_unsupported", "This task type cannot be retried from the task center")
+	}
+	// Manual retries are immediate, but consume the same retry budget as
+	// automatic retries so a new task cannot reset the counter indefinitely.
+	if old.MaxRetries <= 0 {
+		old.MaxRetries = DefaultMaxTaskRetries
+	}
+	if old.RetryCount >= old.MaxRetries {
+		return Task{}, panelerr.Conflict("task_retry_exhausted", "Task retry limit has been reached")
+	}
+	nextRetry := old.RetryCount + 1
+	nextRun := time.Now().UTC().Add(backoffDuration(nextRetry))
 	task, err := s.Create(ctx, CreateInput{
 		OperationID:         old.OperationID,
 		Type:                old.Type,
@@ -1130,7 +1150,9 @@ func (s *Service) Retry(ctx context.Context, taskID string) (Task, error) {
 		ParamsJSON:          old.ParamsJSON,
 		MetadataJSON:        old.MetadataJSON,
 		Summary:             "Retrying " + old.Summary,
+		RetryCount:          nextRetry,
 		MaxRetries:          old.MaxRetries,
+		NextRunAt:           &nextRun,
 	})
 	if err == nil {
 		err = s.writeTaskEvent(ctx, runtimeevents.EventTaskRetried, task, task.Summary, runtimeevents.SeverityInfo)
@@ -1276,16 +1298,22 @@ func (r stepRow) toStep() Step {
 
 func backoffDuration(retryCount int) time.Duration {
 	if retryCount <= 1 {
-		return 30 * time.Second
+		return baseTaskRetryDelay
 	}
-	delay := 30 * time.Second
+	delay := baseTaskRetryDelay
 	for i := 1; i < retryCount; i++ {
 		delay *= 2
-		if delay >= 10*time.Minute {
-			return 10 * time.Minute
+		if delay >= maxTaskRetryDelay {
+			return maxTaskRetryDelay
 		}
 	}
-	return delay
+	// Add bounded jitter to avoid synchronized retries across servers while
+	// keeping the configured maximum as a hard upper bound.
+	jittered := time.Duration(float64(delay) * (0.8 + rand.Float64()*0.4))
+	if jittered > maxTaskRetryDelay {
+		return maxTaskRetryDelay
+	}
+	return jittered
 }
 
 func firstNonEmpty(values ...string) string {

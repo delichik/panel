@@ -50,15 +50,6 @@ func affectedFacilityDomains(previous, next ReverseProxyConfig) []string {
 		}
 		delete(names, name)
 	}
-	if panelEntryDNSSignature(previous.PanelEntry) != panelEntryDNSSignature(next.PanelEntry) {
-		for _, panel := range []PanelEntry{previous.PanelEntry, next.PanelEntry} {
-			if panel.Enabled {
-				if name := normalizeDNSName(panel.Domain); name != "" {
-					names[name] = struct{}{}
-				}
-			}
-		}
-	}
 	out := make([]string, 0, len(names))
 	for name := range names {
 		out = append(out, name)
@@ -79,11 +70,6 @@ func dnsSyncDomainsOnSave(previous, next ReverseProxyConfig) []string {
 			names[name] = struct{}{}
 		}
 	}
-	if next.PanelEntry.Enabled {
-		if name := normalizeDNSName(next.PanelEntry.Domain); name != "" {
-			names[name] = struct{}{}
-		}
-	}
 	for _, name := range affectedFacilityDomains(previous, next) {
 		names[name] = struct{}{}
 	}
@@ -101,10 +87,6 @@ func domainDNSSignature(domain FacilityRouteDomain) string {
 
 func anyAccessDNSSignature(config applications.AnyAccessConfig) string {
 	return fmt.Sprintf("%v|%s|%s", config.Enabled, config.Strategy, config.PrimaryOriginServerID)
-}
-
-func panelEntryDNSSignature(entry PanelEntry) string {
-	return fmt.Sprintf("%v|%s|%s", entry.Enabled, entry.ServerID, normalizeDNSName(entry.Domain))
 }
 
 func normalizeDNSName(value string) string {
@@ -138,13 +120,6 @@ func (s *Service) SyncServersDNSEntries(ctx context.Context, serverIDs []string)
 			if _, ok := changed[id]; ok {
 				affected[normalizeDNSName(domain.Domain)] = struct{}{}
 				break
-			}
-		}
-	}
-	if cfg.PanelEntry.Enabled {
-		if _, ok := changed[cfg.PanelEntry.ServerID]; ok {
-			if name := normalizeDNSName(cfg.PanelEntry.Domain); name != "" {
-				affected[name] = struct{}{}
 			}
 		}
 	}
@@ -254,11 +229,6 @@ func (s *Service) runDNSSync(ctx context.Context, domains []string) error {
 	for _, domain := range cfg.Domains {
 		domainEntries[normalizeDNSName(domain.Domain)] = domain
 	}
-	panelDomain := ""
-	if cfg.PanelEntry.Enabled {
-		panelDomain = normalizeDNSName(cfg.PanelEntry.Domain)
-	}
-
 	states := map[string]DNSSyncState{}
 	removals := []string{}
 	type zoneSync struct {
@@ -272,13 +242,9 @@ func (s *Service) runDNSSync(ctx context.Context, domains []string) error {
 			continue
 		}
 		domain, exists := domainEntries[name]
-		if !exists && name != panelDomain {
+		if !exists {
 			// Removed domain: its managed records must be cleaned up.
 		} else {
-			if name == panelDomain {
-				domain = FacilityRouteDomain{Domain: name, OriginServerIDs: nonEmptyStrings(cfg.PanelEntry.ServerID)}
-				exists = true
-			}
 			serverIDs := presentServers(domainDNSServers(cfg, domain), servers)
 			if len(serverIDs) == 0 {
 				zone := matchProxyZone(zoneNames, name)
@@ -352,7 +318,7 @@ func (s *Service) runDNSSync(ctx context.Context, domains []string) error {
 			continue
 		}
 		for _, name := range entry.domains {
-			if _, exists := domainEntries[name]; !exists && name != panelDomain {
+			if _, exists := domainEntries[name]; !exists {
 				removals = append(removals, name)
 				continue
 			}

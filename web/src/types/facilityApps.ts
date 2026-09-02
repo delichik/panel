@@ -2,12 +2,6 @@ import type { AnyAccessConfig, ApplicationEditPreviewResult, ApplicationRuntime,
 
 export type StaticSourceType = 'uploaded_file' | 'uploaded_bundle';
 export type StaticRuleType = 'static' | 'redirect' | 'proxy_pass';
-export interface PanelEntry {
-  enabled: boolean;
-  serverId?: string;
-  domain?: string;
-}
-
 export interface FacilityRoutePath {
   path: string;
   ruleType?: StaticRuleType | string;
@@ -63,8 +57,6 @@ export interface ReverseProxyConfig {
   id: string;
   version: number;
   deploymentServers: string[];
-  panelHostServerId?: string;
-  panelEntry: PanelEntry;
   domains: FacilityRouteDomain[];
   staticAssets: StaticAsset[];
   routeSummaries: RouteSummary[];
@@ -87,7 +79,6 @@ export interface FacilityDnsSyncState {
 
 export interface ReverseProxySaveInput {
   deploymentServers: string[];
-  panelEntry: PanelEntry;
   domains: FacilityRouteDomain[];
 }
 

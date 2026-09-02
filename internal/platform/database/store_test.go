@@ -14,7 +14,7 @@ import (
 func TestMigrateReverseProxyConfigurationUpdatesApplicationOrigins(t *testing.T) {
 	db := openLegacyReverseProxyMigrationDB(t)
 	defer db.Close()
-	if _, err := db.Exec(`INSERT INTO facility_app_configs VALUES('reverse_proxy','["srv-a","srv-b"]','nginx:legacy','{}','[]','[]','','2026-01-01T00:00:00Z')`); err != nil {
+	if _, err := db.Exec(`INSERT INTO facility_app_configs VALUES('reverse_proxy','["srv-a","srv-b"]','nginx:legacy','[]','[]','','2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO applications VALUES('app-1','website','application','selected','["srv-b"]','[{"domain":"app.example.test","targetType":"local","targetPort":8080,"paths":[{"path":"/"}]}]')`); err != nil {
@@ -42,7 +42,7 @@ func TestMigrateReverseProxyConfigurationUpdatesApplicationOrigins(t *testing.T)
 func TestMigrateReverseProxyConfigurationRejectsDomainOwnerConflict(t *testing.T) {
 	db := openLegacyReverseProxyMigrationDB(t)
 	defer db.Close()
-	if _, err := db.Exec(`INSERT INTO facility_app_configs VALUES('reverse_proxy','["srv-a"]','nginx:legacy','{}','[{"domain":"shared.example.test","path":"/","ruleType":"redirect","redirectUrl":"https://target.example.test","deploymentServers":["srv-a"]}]','[]','','2026-01-01T00:00:00Z')`); err != nil {
+	if _, err := db.Exec(`INSERT INTO facility_app_configs VALUES('reverse_proxy','["srv-a"]','nginx:legacy','[{"domain":"shared.example.test","path":"/","ruleType":"redirect","redirectUrl":"https://target.example.test","deploymentServers":["srv-a"]}]','[]','','2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO applications VALUES('app-1','website','application','selected','["srv-a"]','[{"domain":"shared.example.test","targetType":"local","targetPort":8080,"paths":[{"path":"/"}]}]')`); err != nil {
@@ -66,7 +66,7 @@ func openLegacyReverseProxyMigrationDB(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	statements := []string{
-		`CREATE TABLE facility_app_configs(id TEXT PRIMARY KEY,deployment_server_ids_json TEXT NOT NULL,image TEXT NOT NULL,panel_entry_json TEXT NOT NULL,static_sites_json TEXT NOT NULL,domain_policies_json TEXT NOT NULL,last_error TEXT NOT NULL,updated_at TEXT NOT NULL)`,
+		`CREATE TABLE facility_app_configs(id TEXT PRIMARY KEY,deployment_server_ids_json TEXT NOT NULL,image TEXT NOT NULL,static_sites_json TEXT NOT NULL,domain_policies_json TEXT NOT NULL,last_error TEXT NOT NULL,updated_at TEXT NOT NULL)`,
 		`CREATE TABLE applications(id TEXT PRIMARY KEY,name TEXT NOT NULL,kind TEXT NOT NULL,deployment_mode TEXT NOT NULL,deployment_server_ids_json TEXT NOT NULL,reverse_proxy_json TEXT NOT NULL)`,
 	}
 	for _, statement := range statements {
@@ -662,15 +662,14 @@ func TestMigrateRebuildsLegacyFacilityRoutesAsDomains(t *testing.T) {
 		id TEXT PRIMARY KEY,
 		deployment_server_ids_json TEXT NOT NULL DEFAULT '[]',
 		image TEXT NOT NULL DEFAULT '',
-		panel_entry_json TEXT NOT NULL DEFAULT '{}',
 		static_sites_json TEXT NOT NULL DEFAULT '[]',
 		last_error TEXT NOT NULL DEFAULT '',
 		updated_at TEXT NOT NULL DEFAULT ''
 	)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO facility_app_configs(id,deployment_server_ids_json,image,panel_entry_json,static_sites_json,last_error,updated_at)
-		VALUES('reverse_proxy','["srv-edge"]','nginx:legacy','{}','[{"domain":"legacy.example.test","path":"/"}]','','2026-01-01T00:00:00Z')`); err != nil {
+	if _, err := db.Exec(`INSERT INTO facility_app_configs(id,deployment_server_ids_json,image,static_sites_json,last_error,updated_at)
+		VALUES('reverse_proxy','["srv-edge"]','nginx:legacy','[{"domain":"legacy.example.test","path":"/"}]','','2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
@@ -934,7 +933,6 @@ func TestMigrateMovesReverseProxyRoutesToUnifiedTable(t *testing.T) {
 		id TEXT PRIMARY KEY,
 		version INTEGER NOT NULL DEFAULT 1,
 		deployment_server_ids_json TEXT NOT NULL DEFAULT '[]',
-		panel_entry_json TEXT NOT NULL DEFAULT '{}',
 		domains_json TEXT NOT NULL DEFAULT '[]',
 		last_error TEXT NOT NULL DEFAULT '',
 		updated_at TEXT NOT NULL
@@ -944,7 +942,7 @@ func TestMigrateMovesReverseProxyRoutesToUnifiedTable(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,job_id,namespace,created_at,updated_at) VALUES('app-1','web',1,'name: web\nimage: nginx\n','all','["srv-a"]','[{"domain":"app.example.test","targetType":"local","targetPort":8080,"originServerIds":["srv-a"],"anyAccess":{"enabled":false,"strategy":"round_robin"},"paths":[{"path":"/","webSocket":"off"}]}]',1,'hash','job','default','now','now')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,panel_entry_json,domains_json,last_error,updated_at) VALUES('reverse_proxy',1,'["srv-a"]','{}','[{"domain":"site.example.test","originServerIds":["srv-a"],"anyAccess":{"enabled":false,"strategy":"round_robin"},"paths":[{"path":"/","ruleType":"redirect","redirectUrl":"https://target.example.test"}]}]','','now')`); err != nil {
+	if _, err := db.Exec(`INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,domains_json,last_error,updated_at) VALUES('reverse_proxy',1,'["srv-a"]','[{"domain":"site.example.test","originServerIds":["srv-a"],"anyAccess":{"enabled":false,"strategy":"round_robin"},"paths":[{"path":"/","ruleType":"redirect","redirectUrl":"https://target.example.test"}]}]','','now')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {

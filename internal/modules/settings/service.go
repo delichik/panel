@@ -3,9 +3,13 @@ package settings
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/mail"
 	"regexp"
 	"strconv"
@@ -20,7 +24,10 @@ import (
 	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/i18n"
 	"panel/internal/platform/logging"
+	"panel/internal/platform/paneltls"
 	"panel/internal/platform/reconciletrace"
+
+	"go.uber.org/zap"
 )
 
 var serverVariableKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -33,6 +40,17 @@ type RuntimeCertificateSettings struct {
 type RuntimeBrandingSettings struct {
 	LoginTitle    string `json:"loginTitle"`
 	LoginSubtitle string `json:"loginSubtitle"`
+}
+
+type RuntimePanelSettings struct {
+	Domain           string `json:"domain"`
+	TLSCertificateID string `json:"tlsCertificateId"`
+}
+
+type TLSAssetProvider interface {
+	AssetType(context.Context, string) (string, error)
+	ReadFile(context.Context, string, string) ([]byte, string, error)
+	SyncPanelTLS(context.Context, string, string) error
 }
 
 type ServerVariableDefinition struct {
@@ -60,6 +78,7 @@ type RuntimeUpdate struct {
 	ReconcileTraceEnabled            *bool                       `json:"reconcileTraceEnabled"`
 	Branding                         *RuntimeBrandingSettings    `json:"branding"`
 	Certificates                     *RuntimeCertificateSettings `json:"certificates"`
+	Panel                            *RuntimePanelSettings       `json:"panel"`
 }
 
 type RuntimeSettings struct {
@@ -81,6 +100,7 @@ type RuntimeSettings struct {
 	ReconcileTraceEnabled            bool                       `json:"reconcileTraceEnabled"`
 	Branding                         RuntimeBrandingSettings    `json:"branding"`
 	Certificates                     RuntimeCertificateSettings `json:"certificates"`
+	Panel                            RuntimePanelSettings       `json:"panel"`
 	JWTSecret                        string                     `json:"-"`
 	JWTSecretConfigured              bool                       `json:"jwtSecretConfigured"`
 }
@@ -96,6 +116,8 @@ const (
 	RuntimeSettingCertificateEmail                     = "certificates.email"
 	RuntimeSettingCertificateDNSPropagationDelaySecond = "certificates.dnsPropagationDelaySeconds"
 	RuntimeSettingServerVariableDefinitions            = "serverVariables.definitions"
+	RuntimeSettingPanelDomain                          = "panel.domain"
+	RuntimeSettingPanelTLSCertificateID                = "panel.tlsCertificateId"
 
 	TokenExpiration10Minutes = "10m"
 	TokenExpiration1Hour     = "1h"
@@ -109,19 +131,34 @@ const (
 )
 
 type Service struct {
-	db  *sql.DB
-	cfg config.Config
-	mu  sync.RWMutex
-	rt  RuntimeSettings
+	db        *sql.DB
+	cfg       config.Config
+	mu        sync.RWMutex
+	rt        RuntimeSettings
+	tlsAssets TLSAssetProvider
 }
 
-func NewService(db *sql.DB, cfg config.Config) (*Service, error) {
+type Option func(*Service)
+
+func WithTLSAssetProvider(provider TLSAssetProvider) Option {
+	return func(s *Service) { s.tlsAssets = provider }
+}
+
+func NewService(db *sql.DB, cfg config.Config, options ...Option) (*Service, error) {
 	s := &Service{db: db, cfg: cfg, rt: defaultRuntimeSettings(cfg)}
+	for _, option := range options {
+		option(s)
+	}
 	if err := s.ensureDefaultRuntimeSettings(context.Background()); err != nil {
 		return nil, err
 	}
 	if err := s.load(context.Background()); err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(s.rt.Panel.TLSCertificateID) != "" {
+		if err := s.syncPanelTLS(context.Background(), s.rt.Panel); err != nil {
+			logging.L().Warn("failed to synchronize Panel TLS certificate", zap.Error(err))
+		}
 	}
 	return s, nil
 }
@@ -186,6 +223,10 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 	if input.Certificates != nil {
 		certSettings = *input.Certificates
 	}
+	panelSettings := current.Panel
+	if input.Panel != nil {
+		panelSettings = RuntimePanelSettings{Domain: strings.ToLower(strings.TrimSpace(input.Panel.Domain)), TLSCertificateID: strings.TrimSpace(input.Panel.TLSCertificateID)}
+	}
 	brandingSettings := current.Branding
 	if input.Branding != nil {
 		brandingSettings = RuntimeBrandingSettings{
@@ -212,6 +253,7 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 		ReconcileTraceEnabled:            current.ReconcileTraceEnabled,
 		Branding:                         brandingSettings,
 		Certificates:                     certSettings,
+		Panel:                            panelSettings,
 		JWTSecret:                        current.JWTSecret,
 		JWTSecretConfigured:              current.JWTSecretConfigured,
 	}
@@ -221,7 +263,26 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 	if err := validateRuntimeSettings(next); err != nil {
 		return RuntimeSettings{}, err
 	}
-	if err := s.saveValues(ctx, runtimeValues(next, false)); err != nil {
+	if err := s.validatePanelTLS(next); err != nil {
+		return RuntimeSettings{}, err
+	}
+	if input.Panel != nil {
+		if err := paneltls.WithUpdate(func() error {
+			snapshot, err := paneltls.SnapshotFixedPair(s.cfg.DataRoot)
+			if err != nil {
+				return err
+			}
+			if err := s.syncPanelTLS(ctx, next.Panel); err != nil {
+				return errors.Join(err, paneltls.RestoreFixedPair(s.cfg.DataRoot, snapshot))
+			}
+			if err := s.saveValues(ctx, runtimeValues(next, false)); err != nil {
+				return errors.Join(err, paneltls.RestoreFixedPair(s.cfg.DataRoot, snapshot))
+			}
+			return nil
+		}); err != nil {
+			return RuntimeSettings{}, err
+		}
+	} else if err := s.saveValues(ctx, runtimeValues(next, false)); err != nil {
 		return RuntimeSettings{}, err
 	}
 	s.mu.Lock()
@@ -239,12 +300,20 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 	s.rt.ReconcileTraceEnabled = next.ReconcileTraceEnabled
 	s.rt.Branding = next.Branding
 	s.rt.Certificates = next.Certificates
+	s.rt.Panel = next.Panel
 	out := s.rt
 	s.mu.Unlock()
 	i18n.SetDefaultLocale(out.Language)
 	_ = logging.SetLevel(out.LogLevel)
 	reconciletrace.SetEnabled(out.ReconcileTraceEnabled)
 	return out, nil
+}
+
+func (s *Service) syncPanelTLS(ctx context.Context, panel RuntimePanelSettings) error {
+	if s.tlsAssets == nil {
+		return nil
+	}
+	return s.tlsAssets.SyncPanelTLS(ctx, panel.Domain, panel.TLSCertificateID)
 }
 
 func (s *Service) SetJWTSecret(ctx context.Context, secret string) (RuntimeSettings, error) {
@@ -413,9 +482,16 @@ func (s *Service) load(ctx context.Context) error {
 			if n, err := strconv.Atoi(value); err == nil {
 				next.Certificates.DNSPropagationDelaySeconds = n
 			}
+		case RuntimeSettingPanelDomain:
+			next.Panel.Domain = value
+		case RuntimeSettingPanelTLSCertificateID:
+			next.Panel.TLSCertificateID = value
 		}
 	}
 	if err := validateRuntimeSettings(next); err != nil {
+		return err
+	}
+	if err := s.validatePanelTLS(next); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -458,6 +534,7 @@ func defaultRuntimeSettings(cfg config.Config) RuntimeSettings {
 			Email:                      strings.TrimSpace(cfg.Certificates.Email),
 			DNSPropagationDelaySeconds: dnsDelay,
 		},
+		Panel:               RuntimePanelSettings{Domain: "localhost"},
 		JWTSecret:           jwtSecret,
 		JWTSecretConfigured: jwtSecret != "",
 	}
@@ -481,6 +558,8 @@ func runtimeValues(settings RuntimeSettings, includeJWT bool) map[string]string 
 		RuntimeSettingBrandingLoginSubtitle:                settings.Branding.LoginSubtitle,
 		RuntimeSettingCertificateEmail:                     settings.Certificates.Email,
 		RuntimeSettingCertificateDNSPropagationDelaySecond: strconv.Itoa(settings.Certificates.DNSPropagationDelaySeconds),
+		RuntimeSettingPanelDomain:                          settings.Panel.Domain,
+		RuntimeSettingPanelTLSCertificateID:                settings.Panel.TLSCertificateID,
 	}
 	if includeJWT {
 		values[RuntimeSettingJWTSecret] = settings.JWTSecret
@@ -543,7 +622,55 @@ func validateRuntimeSettings(settings RuntimeSettings) error {
 			return panelerr.Validation("invalid_certificate_email", "Certificate email must be valid")
 		}
 	}
+	if err := validatePanelDomain(settings.Panel.Domain); err != nil {
+		return err
+	}
 	return ValidateJWTSecret(settings.JWTSecret)
+}
+
+func (s *Service) validatePanelTLS(settings RuntimeSettings) error {
+	if strings.TrimSpace(settings.Panel.TLSCertificateID) == "" {
+		return nil
+	}
+	if s.tlsAssets == nil {
+		return panelerr.Validation("invalid_panel_tls_certificate", "Panel TLS certificate provider is unavailable")
+	}
+	id := strings.TrimSpace(settings.Panel.TLSCertificateID)
+	assetType, err := s.tlsAssets.AssetType(context.Background(), id)
+	if err != nil {
+		return panelerr.Validation("invalid_panel_tls_certificate", "Selected Panel TLS certificate is unavailable")
+	}
+	if assetType != "tls_certificate" {
+		return panelerr.Validation("invalid_panel_tls_certificate", "Selected Panel certificate must be a TLS certificate")
+	}
+	certPEM, _, err := s.tlsAssets.ReadFile(context.Background(), id, "certificate")
+	if err != nil {
+		return panelerr.Validation("invalid_panel_tls_certificate", "Selected Panel TLS certificate cannot be read")
+	}
+	keyPEM, _, err := s.tlsAssets.ReadFile(context.Background(), id, "private_key")
+	if err != nil {
+		return panelerr.Validation("invalid_panel_tls_certificate", "Selected Panel TLS private key cannot be read")
+	}
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil || len(cert.Certificate) == 0 {
+		return panelerr.Validation("invalid_panel_tls_certificate", "Selected Panel TLS certificate and private key do not match")
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil || leaf.VerifyHostname(strings.TrimSpace(settings.Panel.Domain)) != nil {
+		return panelerr.Validation("invalid_panel_tls_certificate", "Selected Panel TLS certificate does not cover the Panel domain")
+	}
+	return nil
+}
+
+func validatePanelDomain(value string) error {
+	domain := strings.ToLower(strings.TrimSpace(value))
+	if domain == "" || strings.ContainsAny(domain, "/\\?#@ :") || strings.Contains(domain, "..") {
+		return panelerr.Validation("invalid_panel_domain", "Panel domain must be a valid hostname or IP address")
+	}
+	if net.ParseIP(domain) == nil && domain != "localhost" && (!strings.Contains(domain, ".") || len(domain) > 253) {
+		return panelerr.Validation("invalid_panel_domain", "Panel domain must be a valid hostname or IP address")
+	}
+	return nil
 }
 
 func normalizeServerVariableDefinitions(in []ServerVariableDefinition) ([]ServerVariableDefinition, error) {

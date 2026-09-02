@@ -101,7 +101,7 @@
 - 包位置：`internal/platform/database/models`，为 `migrations.go` 中全部存量表（44 张）提供 ORM 模型。
 - 与 orm 包的关系：models 只含纯 tag 结构体，仅 import `time` / `database/sql`（`sql.Null*`），不 import orm（tag 只是字符串）；由使用方在初始化时 `orm.Register(models.AllModels()...)` 注册后参与 `AutoMigrate`；按库分组注册用 `models.AppModels()` / `LogModels()` / `MetricsModels()`。
 - 三库划分（按库分文件，结构体内按模块分组）：
-  - `app_models.go`：app 库 36 张（credentials、servers、panel_installation、packages/image/container 相关、applications 及编辑会话/文件、facility 相关、dns/certificates/key_assets、settings/auth 等）。
+  - `app_models.go`：app 库模型覆盖 credentials、servers、packages/image/container、applications 及编辑会话/文件、facility、dns/certificates/key_assets、settings/auth 等。
   - `log_models.go`：log 库 7 张（tasks、task_steps、task_logs、application_revisions、runtime_events、runtime_event_details、key_asset_exports）。
   - `metrics_models.go`：metrics 库 1 张（metrics_snapshots）。
 - 命名约定：结构体名 = 表名 PascalCase，实现 `TableName() string` 返回真实表名；列名 = 存量 snake_case 列名，字段名 snake_case 与存量列名不一致时用 `column:xxx` 显式指定（如 `os_id`、`load_1`、`deployment_server_ids_json`）；类型/默认值/not_null/unique/index/primary_key/references 与 migrations.go DDL 逐一对应；时间列一律 `time.Time`（TEXT RFC3339Nano，不写 `time_format`），可空列用 `*T`，布尔用 `bool`（INTEGER 0/1），JSON 列用 `orm:"json"` + map/slice/struct。

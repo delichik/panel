@@ -57,10 +57,6 @@ export interface ApplicationDraftUi {
 
 export interface FacilityDraftUi {
   deploymentServers: string[];
-  panelEnabled: boolean;
-  panelServerId: string;
-  panelHostServerId: string;
-  panelDomain: string;
   domains: FacilityRouteDomain[];
 }
 
@@ -196,10 +192,6 @@ export function validateFileName(name: string): string | null {
 export function facilityDraftFromConfig(config?: ReverseProxyConfig | null): FacilityDraftUi {
   return {
     deploymentServers: [...(config?.deploymentServers ?? [])],
-    panelEnabled: Boolean(config?.panelEntry?.enabled),
-    panelServerId: config?.panelHostServerId ?? config?.panelEntry?.serverId ?? '',
-    panelDomain: config?.panelEntry?.domain ?? '',
-    panelHostServerId: config?.panelHostServerId ?? '',
     domains: cloneFacilityDomains(config?.domains ?? []),
   };
 }
@@ -207,7 +199,6 @@ export function facilityDraftFromConfig(config?: ReverseProxyConfig | null): Fac
 export function facilitySaveInputFromDraft(draft: FacilityDraftUi): ReverseProxySaveInput {
   return {
     deploymentServers: [...draft.deploymentServers],
-    panelEntry: { enabled: draft.panelEnabled, serverId: draft.panelEnabled ? draft.panelServerId.trim() : '', domain: draft.panelEnabled ? draft.panelDomain.trim().toLowerCase() : '' },
     domains: cloneFacilityDomains(draft.domains).map((domain) => ({ ...domain, domain: domain.domain.trim().toLowerCase() })),
   };
 }
@@ -215,8 +206,6 @@ export function facilitySaveInputFromDraft(draft: FacilityDraftUi): ReverseProxy
 export function validateFacilityDraft(draft: FacilityDraftUi): FieldErrors {
   const errors: FieldErrors = {};
   if (!draft.deploymentServers.length) errors.deploymentServers = 'applicationsPage.validationGatewayServers';
-  if (draft.panelEnabled && !draft.panelServerId.trim()) errors.panelServerId = 'applicationsPage.validationPanelServer';
-  if (draft.panelEnabled && !draft.panelDomain.trim()) errors.panelDomain = 'applicationsPage.validationPanelDomain';
   if (draft.domains.some((domain) => !domain.domain.trim())) errors.domains = 'applicationsPage.validationDomains';
   if (draft.domains.some((domain) => !domain.originServerIds.length || domain.originServerIds.some((id) => !draft.deploymentServers.includes(id)))) errors.originServers = 'applicationsPage.validationOriginServers';
   if (draft.domains.some((domain) => !domain.paths.length)) errors.paths = 'applicationsPage.validationPaths';
@@ -275,11 +264,11 @@ export function diffApplications(base?: ApplicationDto | null, draft?: Applicati
 export function diffFacility(base?: ReverseProxyConfig | null, draft?: FacilityDraftUi | null): PreviewDiff {
   if (!draft) return { added: 0, changed: 0, removed: 0, warnings: 0 };
   const input = facilitySaveInputFromDraft(draft);
-  if (!base) return { added: input.deploymentServers.length + input.domains.length + Number(input.panelEntry.enabled), changed: 0, removed: 0, warnings: 0 };
+  if (!base) return { added: input.deploymentServers.length + input.domains.length, changed: 0, removed: 0, warnings: 0 };
   return {
     added: Math.max(0, input.domains.length - base.domains.length) + Math.max(0, input.deploymentServers.length - base.deploymentServers.length),
     removed: Math.max(0, base.domains.length - input.domains.length) + Math.max(0, base.deploymentServers.length - input.deploymentServers.length),
-    changed: countChanged([JSON.stringify(input.panelEntry) !== JSON.stringify(base.panelEntry), JSON.stringify(input.domains) !== JSON.stringify(base.domains), JSON.stringify(input.deploymentServers) !== JSON.stringify(base.deploymentServers)]),
+    changed: countChanged([JSON.stringify(input.domains) !== JSON.stringify(base.domains), JSON.stringify(input.deploymentServers) !== JSON.stringify(base.deploymentServers)]),
     warnings: input.domains.some((domain) => domain.domain.includes('conflict')) ? 1 : 0,
   };
 }
@@ -472,4 +461,3 @@ function makeId(prefix: string) {
   localIdSeed += 1;
   return `${prefix}-${localIdSeed}`;
 }
-

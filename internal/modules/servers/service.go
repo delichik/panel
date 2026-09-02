@@ -81,14 +81,9 @@ type Service struct {
 	agentTLS  *agentsecurity.TLSAssets
 	agentKeys agentTLSProvider
 	tasks     *tasks.Service
-	hostGuard PanelHostGuard
 	// dnsSyncTrigger notifies the reverse proxy facility when server
 	// addresses change so affected proxy domains can resync their records.
 	dnsSyncTrigger func(context.Context, []string) error
-}
-
-type PanelHostGuard interface {
-	IsHostServer(ctx context.Context, serverID string) (bool, error)
 }
 
 // hostKeyTrustExecutor is the narrow capability the server service needs to
@@ -120,10 +115,6 @@ func WithAgentTLSAssets(assets *agentsecurity.TLSAssets) Option {
 
 func WithAgentTLSProvider(provider agentTLSProvider) Option {
 	return func(s *Service) { s.agentKeys = provider }
-}
-
-func WithPanelHostGuard(guard PanelHostGuard) Option {
-	return func(s *Service) { s.hostGuard = guard }
 }
 
 func (s *Service) SetDNSSyncTrigger(trigger func(context.Context, []string) error) {
