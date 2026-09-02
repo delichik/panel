@@ -12,3 +12,4 @@ tmp
 docs/servers.md
 internal/agent/contract/contract_hash_generated.go
 **/data/
+.pnpm-store
