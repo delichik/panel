@@ -1,0 +1,603 @@
+package applications
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	panelerr "panel/internal/platform/errors"
+	"panel/internal/platform/http"
+)
+
+const (
+	persistentArchiveMaxBytes   = 64 << 20
+	persistentArchiveFormMemory = 8 << 20
+)
+
+var errApplicationUploadTooLarge = errors.New("application upload exceeds limit")
+
+func readApplicationUpload(reader io.Reader, limit int64) ([]byte, error) {
+	content, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(content)) > limit {
+		return nil, errApplicationUploadTooLarge
+	}
+	return content, nil
+}
+
+type applicationService interface {
+	List(ctx context.Context) ([]Application, error)
+	Get(ctx context.Context, id string) (Application, error)
+	Delete(ctx context.Context, id string) error
+	ListFiles(ctx context.Context, id string) ([]ApplicationFile, error)
+	GetFile(ctx context.Context, id, fileID string) (ApplicationFile, error)
+	PersistentData(ctx context.Context, id string) (PackageResult, error)
+	RestorePersistentData(ctx context.Context, id string, content []byte) (OperationResult, error)
+	UpdateImage(ctx context.Context, id string) (OperationResult, error)
+	Deploy(ctx context.Context, id string) (OperationResult, error)
+	Stop(ctx context.Context, id string, purge bool) (OperationResult, error)
+	Restart(ctx context.Context, id string) (OperationResult, error)
+	Runtime(ctx context.Context, id string) (ApplicationRuntime, error)
+	Logs(ctx context.Context, id string, in LogInput) (LogResult, error)
+	ListApplicationOperationRecords(ctx context.Context, filter OperationRecordFilter) (OperationRecordListResult, error)
+	GetApplicationOperationRecord(ctx context.Context, operationID string) (OperationRecordDetail, error)
+}
+
+type applicationRuntimeListService interface {
+	ListWithRuntime(ctx context.Context) ([]Application, error)
+}
+
+type applicationSummaryListService interface {
+	ListSummaries(ctx context.Context, page, pageSize int, query string) (httpx.ListPage[ApplicationSummary], error)
+}
+
+type applicationEditSessionService interface {
+	BeginEditSession(context.Context, string, BeginEditSessionInput) (ApplicationEditSession, error)
+	PatchEditSession(context.Context, string, string, PatchEditSessionInput) (ApplicationEditSession, error)
+	PutEditSessionFile(context.Context, string, string, string, string, EditSessionFileInput) (ApplicationEditSession, error)
+	UploadEditSessionBinary(context.Context, string, string, string, string, EditSessionBinaryInput) (ApplicationEditSession, error)
+	UploadEditSessionArchive(context.Context, string, string, string, EditSessionArchiveInput) (ApplicationEditSession, error)
+	DeleteEditSessionFile(context.Context, string, string, string, string, EditSessionMutationInput) (ApplicationEditSession, error)
+	ValidateEditSession(context.Context, string, string, int) (EditSessionValidationResult, error)
+	PreviewEditSession(context.Context, string, string, int) (EditSessionPreviewResult, error)
+	CommitEditSession(context.Context, string, string, string, CommitEditSessionInput) (EditCommitResult, error)
+	DiscardEditSession(context.Context, string, string) error
+}
+
+type Handler struct {
+	service applicationService
+}
+
+func NewHandler(service applicationService) *Handler {
+	return &Handler{service: service}
+}
+
+func (h *Handler) editSessions() (applicationEditSessionService, error) {
+	service, ok := h.service.(applicationEditSessionService)
+	if !ok {
+		return nil, panelerr.New(http.StatusNotImplemented, "application_edit_sessions_unavailable", "Application edit sessions are not available")
+	}
+	return service, nil
+}
+
+func editSessionOwner(ctx context.Context) string {
+	// Panel currently has one administrator principal. The username is editable,
+	// so it cannot be used as durable edit-session ownership identity.
+	return applicationEditSessionOwner
+}
+
+func (h *Handler) BeginEditSession(w http.ResponseWriter, r *http.Request) {
+	service, err := h.editSessions()
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	var in BeginEditSessionInput
+	if !httpx.Decode(w, r, &in) {
+		return
+	}
+	result, err := service.BeginEditSession(r.Context(), editSessionOwner(r.Context()), in)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusCreated, result)
+}
+
+func (h *Handler) PatchEditSession(w http.ResponseWriter, r *http.Request) {
+	service, err := h.editSessions()
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	var in PatchEditSessionInput
+	if !httpx.Decode(w, r, &in) {
+		return
+	}
+	result, err := service.PatchEditSession(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), in)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) PutEditSessionFile(w http.ResponseWriter, r *http.Request) {
+	service, err := h.editSessions()
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	var in EditSessionFileInput
+	if !httpx.Decode(w, r, &in) {
+		return
+	}
+	key, ok := editIdempotencyKey(w, r)
+	if !ok {
+		return
+	}
+	result, err := service.PutEditSessionFile(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), editSessionAssetNameFromRequest(r), key, in)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) UploadEditSessionBinary(w http.ResponseWriter, r *http.Request) {
+	service, err := h.editSessions()
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, persistentArchiveMaxBytes+(1<<20))
+	if err := r.ParseMultipartForm(persistentArchiveFormMemory); err != nil {
+		httpx.Error(w, panelerr.BadRequest("bad_request", "Invalid multipart request body"))
+		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		httpx.Error(w, panelerr.Validation("bad_request", "File is required"))
+		return
+	}
+	defer file.Close()
+	content, err := readApplicationUpload(file, persistentArchiveMaxBytes)
+	if errors.Is(err, errApplicationUploadTooLarge) {
+		httpx.Error(w, panelerr.Validation("application_file_too_large", "File exceeds the 64 MiB limit"))
+		return
+	}
+	if err != nil {
+		httpx.Error(w, panelerr.BadRequest("bad_request", "Failed to read file upload"))
+		return
+	}
+	revision, _ := strconv.Atoi(r.FormValue("revision"))
+	key, ok := editIdempotencyKey(w, r)
+	if !ok {
+		return
+	}
+	result, err := service.UploadEditSessionBinary(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), editSessionAssetNameFromRequest(r), key, EditSessionBinaryInput{Revision: revision, ClientOperationID: r.FormValue("clientOperationId"), Name: firstNonEmpty(r.FormValue("name"), r.FormValue("path")), FileName: header.Filename, Content: content})
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) UploadEditSessionArchive(w http.ResponseWriter, r *http.Request) {
+	service, err := h.editSessions()
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, persistentArchiveMaxBytes+(1<<20))
+	if err := r.ParseMultipartForm(persistentArchiveFormMemory); err != nil {
+		httpx.Error(w, panelerr.BadRequest("bad_request", "Invalid multipart request body"))
+		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		httpx.Error(w, panelerr.Validation("bad_request", "Archive file is required"))
+		return
+	}
+	defer file.Close()
+	content, err := readApplicationUpload(file, persistentArchiveMaxBytes)
+	if errors.Is(err, errApplicationUploadTooLarge) {
+		httpx.Error(w, panelerr.Validation("application_file_too_large", "File exceeds the 64 MiB limit"))
+		return
+	}
+	if err != nil {
+		httpx.Error(w, panelerr.BadRequest("bad_request", "Failed to read archive upload"))
+		return
+	}
+	revision, _ := strconv.Atoi(r.FormValue("revision"))
+	key, ok := editIdempotencyKey(w, r)
+	if !ok {
+		return
+	}
+	result, err := service.UploadEditSessionArchive(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), key, EditSessionArchiveInput{Revision: revision, ClientOperationID: r.FormValue("clientOperationId"), FileKey: r.FormValue("fileKey"), Name: firstNonEmpty(r.FormValue("name"), r.FormValue("basePath")), Kind: r.FormValue("kind"), FileName: header.Filename, Content: content})
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) DeleteEditSessionFile(w http.ResponseWriter, r *http.Request) {
+	service, err := h.editSessions()
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	var in EditSessionMutationInput
+	if !httpx.Decode(w, r, &in) {
+		return
+	}
+	key, ok := editIdempotencyKey(w, r)
+	if !ok {
+		return
+	}
+	result, err := service.DeleteEditSessionFile(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), editSessionAssetNameFromRequest(r), key, in)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) ValidateEditSession(w http.ResponseWriter, r *http.Request) {
+	h.handleEditSessionRevisionAction(w, r, "validate")
+}
+
+func (h *Handler) PreviewEditSession(w http.ResponseWriter, r *http.Request) {
+	h.handleEditSessionRevisionAction(w, r, "preview")
+}
+
+func (h *Handler) handleEditSessionRevisionAction(w http.ResponseWriter, r *http.Request, action string) {
+	service, err := h.editSessions()
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	var in struct {
+		Revision int `json:"revision"`
+	}
+	if !httpx.Decode(w, r, &in) {
+		return
+	}
+	if action == "validate" {
+		result, err := service.ValidateEditSession(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), in.Revision)
+		if err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, result)
+		return
+	}
+	result, err := service.PreviewEditSession(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), in.Revision)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) CommitEditSession(w http.ResponseWriter, r *http.Request) {
+	service, err := h.editSessions()
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	var in CommitEditSessionInput
+	if !httpx.Decode(w, r, &in) {
+		return
+	}
+	key, ok := editIdempotencyKey(w, r)
+	if !ok {
+		return
+	}
+	result, err := service.CommitEditSession(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), key, in)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) DiscardEditSession(w http.ResponseWriter, r *http.Request) {
+	service, err := h.editSessions()
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	if err := service.DiscardEditSession(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r)); err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.NoContent(w)
+}
+
+func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
+	if summaryList, ok := h.service.(applicationSummaryListService); ok {
+		page, pageSize, err := httpx.ParseListPage(r, "q")
+		if err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		summaries, err := summaryList.ListSummaries(r.Context(), page, pageSize, strings.TrimSpace(r.URL.Query().Get("q")))
+		if err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, summaries)
+		return
+	}
+	var (
+		apps []Application
+		err  error
+	)
+	if runtimeList, ok := h.service.(applicationRuntimeListService); ok {
+		apps, err = runtimeList.ListWithRuntime(r.Context())
+	} else {
+		apps, err = h.service.List(r.Context())
+	}
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	summaries := make([]ApplicationSummary, 0, len(apps))
+	for _, app := range apps {
+		summaries = append(summaries, applicationSummaryFromApplication(app))
+	}
+	httpx.JSON(w, http.StatusOK, summaries)
+}
+
+func applicationSummaryFromApplication(app Application) ApplicationSummary {
+	return ApplicationSummary{
+		ID:                   app.ID,
+		Name:                 app.Name,
+		Enabled:              app.Enabled,
+		ImageReference:       app.ImageReference,
+		JobID:                app.JobID,
+		Namespace:            app.Namespace,
+		RuntimeStatus:        app.RuntimeStatus,
+		ImageUpdateAvailable: app.ImageUpdateAvailable,
+		LastError:            app.LastError,
+		UpdatedAt:            app.UpdatedAt,
+	}
+}
+
+func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
+	app, err := h.service.Get(r.Context(), applicationIDFromRequest(r))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, app)
+}
+
+func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
+	if err := h.service.Delete(r.Context(), applicationIDFromRequest(r)); err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.NoContent(w)
+}
+
+func (h *Handler) ListFiles(w http.ResponseWriter, r *http.Request) {
+	files, err := h.service.ListFiles(r.Context(), applicationIDFromRequest(r))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, files)
+}
+
+func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) {
+	file, err := h.service.GetFile(r.Context(), applicationIDFromRequest(r), applicationFileIDFromRequest(r))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	name := file.Name
+	contentType := file.ContentType
+	if file.Kind == ApplicationFileKindArchive {
+		name = file.ContentType
+		contentType = inferApplicationFileContentType(name, file.Content, false)
+	}
+	serveApplicationFileContent(w, r, name, contentType, file.Content)
+}
+
+func (h *Handler) PersistentData(w http.ResponseWriter, r *http.Request) {
+	result, err := h.service.PersistentData(r.Context(), applicationIDFromRequest(r))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", applicationContentDisposition(result.Filename))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(result.Content)
+}
+
+func (h *Handler) RestorePersistentData(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, persistentArchiveMaxBytes)
+	if err := r.ParseMultipartForm(persistentArchiveFormMemory); err != nil {
+		httpx.Error(w, panelerr.BadRequest("bad_request", "Invalid multipart request body"))
+		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		httpx.Error(w, panelerr.Validation("bad_request", "Archive file is required"))
+		return
+	}
+	defer file.Close()
+	content, err := io.ReadAll(file)
+	if err != nil {
+		httpx.Error(w, panelerr.BadRequest("bad_request", "Failed to read archive upload"))
+		return
+	}
+	if len(content) == 0 {
+		httpx.Error(w, panelerr.Validation("bad_request", "Archive file is required"))
+		return
+	}
+	result, err := h.service.RestorePersistentData(r.Context(), applicationIDFromRequest(r), content)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) UpdateImage(w http.ResponseWriter, r *http.Request) {
+	result, err := h.service.UpdateImage(r.Context(), applicationIDFromRequest(r))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) Deploy(w http.ResponseWriter, r *http.Request) {
+	result, err := h.service.Deploy(r.Context(), applicationIDFromRequest(r))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) Stop(w http.ResponseWriter, r *http.Request) {
+	result, err := h.service.Stop(r.Context(), applicationIDFromRequest(r), r.URL.Query().Get("purge") == "true")
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) Restart(w http.ResponseWriter, r *http.Request) {
+	result, err := h.service.Restart(r.Context(), applicationIDFromRequest(r))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) Runtime(w http.ResponseWriter, r *http.Request) {
+	result, err := h.service.Runtime(r.Context(), applicationIDFromRequest(r))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
+	tail, _ := strconv.Atoi(r.URL.Query().Get("tail"))
+	result, err := h.service.Logs(r.Context(), applicationIDFromRequest(r), LogInput{
+		InstanceID: r.URL.Query().Get("instanceId"),
+		Type:       r.URL.Query().Get("type"),
+		Tail:       tail,
+	})
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) ListApplicationOperationRecords(w http.ResponseWriter, r *http.Request) {
+	page, pageSize, err := httpx.ParseListPage(r, "applicationId", "status", "source", "from", "to")
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	from, err := parseRecordQueryTime(r.URL.Query().Get("from"))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	to, err := parseRecordQueryTime(r.URL.Query().Get("to"))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	result, err := h.service.ListApplicationOperationRecords(r.Context(), OperationRecordFilter{
+		ApplicationID: r.URL.Query().Get("applicationId"),
+		Status:        r.URL.Query().Get("status"),
+		Source:        r.URL.Query().Get("source"),
+		From:          from,
+		To:            to,
+		Limit:         pageSize,
+		Offset:        (page - 1) * pageSize,
+	})
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) GetApplicationOperationRecord(w http.ResponseWriter, r *http.Request) {
+	detail, err := h.service.GetApplicationOperationRecord(r.Context(), strings.TrimSpace(r.PathValue("id")))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, detail)
+}
+
+func parseRecordQueryTime(value string) (*time.Time, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return nil, panelerr.BadRequest("time_invalid", "from and to must use RFC3339 format")
+	}
+	return &t, nil
+}
+
+func applicationIDFromRequest(r *http.Request) string {
+	return strings.TrimSpace(r.PathValue("id"))
+}
+
+func applicationFileIDFromRequest(r *http.Request) string {
+	return strings.TrimSpace(r.PathValue("name"))
+}
+
+func editSessionAssetNameFromRequest(r *http.Request) string {
+	if value := strings.TrimSpace(r.PathValue("name")); value != "" {
+		return value
+	}
+	return strings.TrimSpace(r.PathValue("fileKey"))
+}
+
+func editSessionIDFromRequest(r *http.Request) string {
+	return strings.TrimSpace(r.PathValue("id"))
+}
+
+func editIdempotencyKey(w http.ResponseWriter, r *http.Request) (string, bool) {
+	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if key == "" {
+		httpx.Error(w, panelerr.Validation("idempotency_key_required", "Idempotency-Key header is required"))
+		return "", false
+	}
+	return key, true
+}

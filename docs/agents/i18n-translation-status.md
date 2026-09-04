@@ -1,68 +1,36 @@
-﻿# 澶氳瑷€缈昏瘧鐘舵€?
+# 多语言翻译状态
 
-鏈枃妗ｈ褰曞綋鍓嶅璇█瀹炵幇浠嶆湭瀹屾垚缈昏瘧鐨勫尯鍩熴€傚悗缁瘡娆″鐞嗗璇█鐩稿叧浠诲姟鏃讹紝閮藉簲鍚屾鏇存柊銆?
+本文档记录多语言覆盖现状与已知未翻译项；规则与流程见 [i18n-guide.md](i18n-guide.md)。
 
-## 褰撳墠浠嶆湭瀹屽叏瑕嗙洊
+## 当前状态
 
-### 鏈€杩戝凡琛ラ綈
+- 本轮存储共享详情页新增「导出健康/分区数据/设置」分段词条（`applicationsPage.storageShareTab*`、状态检查与分区字段、删除确认勾选等），en / zh-CN 已同步。
+- 本轮移除应用编辑器的 YAML 源码编辑模式（表单 / YAML 源码切换、源码面板与往返同步），删除 `applicationsPage.editMode`、`configureMode`、`sourceMode`、`syncSource`、`applySource`、`sourceViewTitle`、`sourceViewHint`、`sourceGuardHint`、`yamlSynced`、`yamlApplied`、`yamlDirtySummary`、`specYaml`、`validationSpec`、`validationYaml`、`validationSourceStaged` 词条，en / zh-CN 已同步；`editorFlowHint` 文案已更新。
+- 前端词条：en / zh-CN key 集合一致，由 `web/src/i18n/i18n.test.ts` 强制校验（含 en 不得残留中文值、词条非空）。本轮移除应用反向代理对话框中的只读“源服务器”摘要展示及对应 `applicationsPage.proxyOriginHint` 词条；`applicationsPage.originServers` 与 `proxyOriginEmptyHint` 保留（设施域名选择器、路由摘要与主备优先级仍在使用），en / zh-CN 已同步。本轮新增存储共享设施与共享存储挂载相关词条；应用代理规则新增源站优先级（`applicationsPage.originPriority`、`originPriorityHint`、`moveUp`、`moveDown`）词条，en / zh-CN 已同步。
+- 本轮为共享编辑器 `CodeEditor` 新增查找/替换面板词条（`codeEditor.*`，en / zh-CN 已同步）；面板文案（查找、替换、下一个/上一个、全部、区分大小写、正则、整词、关闭及替换播报）随界面语言切换。
+- 前端语言逻辑：`web/src/i18n/index.ts`（`state.locale` + `setLocale`）。
+- 前端辅助函数：`translateRuntimeEventType`、`translateTaskSummary`、`translateEventSummary`；后两者用于把后端英文任务摘要 / 运行时事件摘要按当前语言渲染翻译，任务中心与系统事件页使用。
+- 本轮新增 `api.*` 前缀错误文案 key，供前端错误展示使用。
+- 后端错误码翻译（`internal/platform/i18n/i18n.go`）本轮补齐：
+  - 大量缺失错误码的中文词条；
+  - not-found 错误的精确翻译（英文 fallback 以 " not found" 结尾时也有兜底翻译）；
+  - `remote_timeout` 翻译；
+  - agent / ssh 相关错误的前缀翻译。
+  - 现状：全部已知 panelerr 错误码均已覆盖。本轮补充 `storage_share_*` 系列错误码（配置校验、分区、挂载、Agent 要求等静态词条 + 带服务器/应用名的前缀词条）与 `range_invalid` 中文文案中的 `24h` 取值；SSH 主机密钥错误（`ssh_host_key_mismatch` / `ssh_host_key_verification_failed`）在执行器侧剥离 x/crypto 的 `ssh: handshake failed:` 包装后再翻译，前缀匹配可命中；已删除无发射点的 `application_reconcile_collector_only` 词条。
+- 任务错误：任务 error 在写入前对 panelerr 错误做 i18n 翻译，避免把当前语言下的文案固化进任务记录。
+- 本轮新增 `key_asset_system_managed` 后端错误码，已补充简体中文翻译；用于阻止普通密钥资产接口修改 Panel/Agent 系统托管资产。
+- 本轮新增 Panel HTTPS 域名、证书选择及内置自签名证书的 en / zh-CN 词条。
+- 前端摘要词典（`taskSummaryTranslations`）：新增 "Syncing storage share exports"、"Collecting initial server information"、"Refreshing volumes/networks"、"Volumes/Networks refreshed"、"Image updates refreshed"、"Syncing application <name>" 前缀与 "Running <type> batch" 前缀；删除已无发射点的 "Collecting scheduled metrics" / "Collecting metrics for " 词条。`translateEventSummary` 在事件词典未命中时回退到任务摘要词典，任务类事件摘要（续签证书、刷新软件包等）在 zh-CN 下不再显示英文。
 
-- `web/src/layouts/AppLayout.vue`
-  - 绉诲姩绔鑸叆鍙ｆ枃妗堝凡鎺ュ叆 `web/src/i18n/index.ts`
-  - 鏈惎鐢ㄧ殑 DNS 璁板綍瀵艰埅鍏ュ彛宸茬Щ闄わ紝瀵瑰簲 `layout.nav.records` 璇嶆潯涓嶅啀淇濈暀銆?- `web/src/views/dns/domains/index.vue`
-  - DNS 鍩熷悕璇︽儏銆丆loudflare 璁板綍鍒楄〃銆佽褰曞垱寤?缂栬緫/鍒犻櫎鍜?TTL/浠ｇ悊鐘舵€佹枃妗堝凡鎺ュ叆 `web/src/i18n/index.ts`銆?- `web/src/api/client.ts`
-  - 闈?JSON API 鍝嶅簲鐨勫彲璇婚敊璇枃妗堝凡鎺ュ叆 `web/src/i18n/index.ts`銆?- `internal/dns`
-  - Cloudflare 闈?JSON 鍝嶅簲閿欒鐮佸凡鎺ュ叆 `internal/i18n/i18n.go`銆?- `web/src/views/settings/_shared/SettingsPageContent.vue`
-  - Token 杩囨湡鏃堕棿璁剧疆鍙婇€夐」鏂囨宸叉帴鍏?`web/src/i18n/index.ts`
-  - 璁剧疆鍒嗙被瀛愯彍鍗曘€侀€氱敤璁剧疆銆佸畨鍏ㄨ缃€丯omad 璁剧疆銆佽瘉涔﹁缃€佺郴缁熶俊鎭枃妗堝凡鎺ュ叆 `web/src/i18n/index.ts`
-  - 鐧诲綍椤垫爣棰樺拰璇存槑鑷畾涔夊瓧娈点€佺暀绌哄洖閫€鎻愮ず宸叉帴鍏?`web/src/i18n/index.ts`
-- `web/src/views/auth/change-password/index.vue`
-  - 棣栨寮哄埗鏀瑰瘑椤甸潰鏂囨宸叉帴鍏?`web/src/i18n/index.ts`
-- `internal/auth`
-  - 鐧诲綍澶辫触鐨勯€氱敤閿欒鏂囨 `Authentication failed` 宸叉帴鍏?`internal/i18n/i18n.go`
-  - 寮哄埗鏀瑰瘑銆佽处鍙锋洿鏂般€丣WT 瀵嗛挜鏇存柊鐩稿叧閿欒鏂囨宸叉帴鍏?`internal/i18n/i18n.go`
-- `web/src/views/runtime/nomad/nodes/index.vue`
-  - Nomad 鑺傜偣閲嶉儴缃层€侀泦缇ら噸寤恒€乻erver 鍒囨崲鍙婂垏鎹㈠悗 client 閰嶇疆鍚屾鏂囨宸叉帴鍏?`web/src/i18n/index.ts`
-  - 鏃ч泦缇ょ綉缁滃湴鍧€杩佺Щ銆丼SH host IP 涓?Nomad 缃戝崱 IP 鐨?advertise 鍦板潃閫夋嫨銆侀噸寤哄悗搴旂敤鎭㈠鎻愮ず宸叉帴鍏?`web/src/i18n/index.ts`
-  - 鍔犲叆銆侀噸閮ㄧ讲銆侀噸寤哄拰鍒囨崲鎿嶄綔鐨?advertise 鍦板潃閫夋嫨鏍囩涓庣┖鐘舵€佹彁绀哄凡鎺ュ叆 `web/src/i18n/index.ts`
-  - 棣栦釜 server 寮曞浠诲姟鍏ュ彛銆佸弽鍚戜唬鐞嗗悓姝ヤ换鍔℃彁绀烘枃妗堝凡鎺ュ叆 `web/src/i18n/index.ts`
-- `web/src/views/servers/_shared/ServersPageContent.vue`
-  - 鏈嶅姟鍣ㄥ嚟鎹繀閫夋彁绀恒€侀噸鍚‘璁や笌浠诲姟鍏ュ彛銆乁FW 瀹夎浠诲姟鍏ュ彛銆佺郴缁熸灦鏋?CPU/鍒嗛」缃戝崱璇︽儏鏂囨宸叉帴鍏?`web/src/i18n/index.ts`
-  - 鏂板鏈嶅姟鍣ㄥ悗鐨勯杩炰俊鎭噰闆嗕换鍔℃彁绀恒€佸け璐ュ洖閫€鎻愮ず鍜岃秴鏃舵彁绀哄凡鎺ュ叆 `web/src/i18n/index.ts`
-- `web/src/views/servers/firewall/index.vue`
-  - UFW 闃茬伀澧欑姸鎬併€佸惎鐢ㄧ‘璁ゃ€佽鍒欒〃鍗曘€佽鍒欏垪琛ㄣ€佸垹闄ょ‘璁ゅ拰浠诲姟鍏ュ彛鏂囨宸叉帴鍏?`web/src/i18n/index.ts`
-- `web/src/views/tasks/index.vue`
-  - 浠诲姟绫诲瀷鍚嶇О銆佺被鍨嬬瓫閫夌壒娈婇€夐」銆佹悳绱㈡寜閽拰澶氶€夌瓫閫夊崰浣嶆枃妗堝凡鎺ュ叆 `web/src/i18n/index.ts`
-  - 鎿嶄綔鏍囬銆佹楠ゅ悕绉般€佷换鍔￠樁娈靛拰鏃ュ織闈㈡澘浠诲姟绫诲瀷宸叉寜绋冲畾鏍囪瘑缈昏瘧銆?- `web/src/components/AppPagination.vue`
-  - 鍏变韩鍒嗛〉缁勪欢鐨勬瘡椤垫潯鏁颁笌鎬绘暟鏂囨宸叉帴鍏?`web/src/i18n/index.ts`銆?- `web/src/components/PageLoadingState.vue`
-  - 鍏变韩鍔犺浇缁勪欢鏂囨 `common.loading` 宸叉帴鍏?`web/src/i18n/index.ts`锛岃嫳鏂囧拰绠€浣撲腑鏂囧潎宸茶ˉ榻愩€?- `web/src/views/runtime/applications/ApplicationEditor.vue`
-  - 鑷畾涔夊彉閲忚〃鍗曘€佸彉閲忔彃鍏ュ拰 Panel 鎵樼鏂囦欢鎸傝浇鏂囨宸叉帴鍏ヨ嫳鏂囧拰绠€浣撲腑鏂囥€?- `web/src/views/certificates/`
-  - Nomad 鍐呯疆璇佷功銆佸煙鍚嶇珛鍗崇画绛俱€佽嚜绛?CA/璇佷功绠＄悊鍜屽嵄闄╃‘璁ゆ枃妗堝凡鎺ュ叆鑻辨枃鍜岀畝浣撲腑鏂囥€?- `web/src/layouts/AppLayout.vue`銆乣web/src/views/settings/_shared/SettingsPageContent.vue`
-  - 褰撳墠鐗堟湰銆佹渶鏂扮増鏈急鎻愮ず鍜岀郴缁熺増鏈瓧娈靛凡鎺ュ叆 `web/src/i18n/index.ts`銆?- raw Nomad jobs/deployments 娓呭崟鍏ュ彛宸茬Щ闄わ紝瀵瑰簲椤甸潰鏂囨鍜岃矾鐢辫瘝鏉′笉鍐嶄繚鐣欍€?- `internal/nomad`
-  - Nomad 閲嶉儴缃层€侀泦缇ら噸寤恒€乻erver 鍒囨崲鐩稿叧 API 閿欒鐮佸凡鎺ュ叆 `internal/i18n/i18n.go`
-  - Nomad advertise 鍦板潃鏍￠獙閿欒鐮佸凡鏇存柊涓烘敮鎸佺綉鍗?IP 鎴?SSH host IP 鐨勬枃妗堛€?
-### 鍓嶇浠嶆湁灏戦噺绗笁鏂瑰師濮嬫枃鏈?
-浠ヤ笅鍐呭浠嶄細灞曠ず绗笁鏂圭郴缁熺洿鎺ヨ繑鍥炵殑鍘熷鎻忚堪锛屽綋鍓嶄繚鐣欏師鏍蜂互閬垮厤璇瘧锛?
+## 已知剩余未翻译项
 
-- `web/src/views/runtime/applications/ApplicationRuntimePanel.vue`
-  - `deployment.StatusDescription`
-  - `evaluation.StatusDescription`
-  - `evaluation.Type`
+- 任务 / 事件中非 panelerr 的自由文本错误（例如远端命令返回的原始错误文本）。
+- 应用操作 `stage.detail` 中的英文技术文本（如镜像名、容器名等）。
+- Mock 数据中的文案（dev 专用，不走正式翻译链路）。
 
-### 鍚庣缈昏瘧浠嶄负閮ㄥ垎瑕嗙洊
+## 维护约定
 
-褰撳墠鍚庣宸茶鐩栫粺涓€ API 閿欒缈昏瘧鍏ュ彛锛屼絾浠ヤ笅绫诲埆浠嶉渶缁х画琛ラ綈锛?
-
-- Cloudflare / ACME / 闀滃儚浠撳簱鐩稿叧閿欒鐮?- SSH / 杩滅▼鎵ц / 瓒呮椂鐩稿叧閿欒鐮?- 妯℃澘娓叉煋銆侀€夋嫨鍣ㄨВ鏋愮瓑搴曞眰閿欒鐮?- 绗笁鏂圭郴缁熺洿鎺ヨ繑鍥炵殑鍘熷閿欒鏂囨湰
-- 浠诲姟鎽樿銆佷换鍔?system 鏃ュ織銆佷换鍔¤繃鏈熸竻鐞嗗啓鍏ョ殑閿欒鍘熷洜涓庤繙绋嬪懡浠よ瘖鏂枃鏈粛浠ュ師濮嬫墽琛屾枃鏈睍绀猴紝鍖呮嫭 Nomad 寮曞/鍔犲叆娴佺▼鏃ュ織
-
-## 鏇存柊瑙勫垯
-
-鍙戠敓浠ヤ笅浠讳竴鎯呭喌鏃讹紝蹇呴』鏇存柊鏈枃妗ｏ細
-
-- 鏂伴〉闈㈡垨鏂扮粍浠舵帴鍏ヤ簡澶氳瑷€
-- 鏌愪釜椤甸潰浠嶆湭缈昏瘧浣嗙户缁淇敼
-- 鏂板浜嗗悗绔敊璇爜鎴栫敤鎴峰彲瑙侀敊璇枃鏈?
-- 鏂板浜嗙敤鎴峰彲瑙佹枃妗堜絾鏆傛湭瀹屾垚缈昏瘧
-
-## 瀵嗛挜涓庤瘉涔?
-- `web/src/views/certificates/key-assets/index.vue` 鐨?CA銆乀LS銆丼SH銆佹壒閲忓鍏ュ鍑恒€佸啿绐佺‘璁ゅ拰寮曠敤鎻愮ず宸叉帴鍏ヨ嫳鏂囦笌绠€浣撲腑鏂囪瘝鏉°€?- `key_asset_*` 涓诲瘑閽ャ€佸綊妗ｃ€佺被鍨嬨€佺埗 CA銆佷娇鐢ㄤ腑鍜屽鍏ュ啿绐侀敊璇爜宸叉帴鍏?`internal/i18n/i18n.go`銆?- 浠诲姟涓績宸茶ˉ鍏呭瘑閽ヨ祫浜т换鍔＄被鍨嬨€侀樁娈靛拰鎿嶄綔鏍囬缈昏瘧銆?
+- 新增错误码时必须同步补充中文词条。
+- en / zh-CN 的 key 集合必须保持一致，新增词条时两侧同步。
+- 摘要以稳定英文存储、前端按当前语言渲染翻译，不要把展示语言耦合进摘要写入逻辑。
+- 修改用户可见文案后，按需同步更新本文档与 [i18n-guide.md](i18n-guide.md)。

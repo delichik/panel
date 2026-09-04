@@ -1,0 +1,187 @@
+# 容器化资源管理
+
+## List And Snapshot Contracts
+
+- Container list reads deserialize `container_observations.summary_json`, not full `container_json`. Reports persist both forms and migration backfills old observations.
+- Container, image, network, and volume GET responses use `items`, `observedAt`, `stale`, `refreshing`, optional `refreshTaskId`, and optional `lastRefreshError`. 镜像/网络/卷的 `refreshing`、`refreshTaskId` 从该服务器当前活跃刷新任务（queued/running）推导，`lastRefreshError` 从最新一次刷新任务（若为 failed/failed_retryable）推导；GET 不会联系 Agent。
+- Image, network, and volume refreshes are async task POSTs. Resource GET handlers never contact the Agent, and the frontend reloads snapshots after successful task completion.
+- When a network or volume page first opens with no local snapshot, the frontend automatically submits one `network_refresh` / `volume_refresh` task and waits for it before showing the empty state; failures keep the empty state and manual refresh remains available.
+
+## 适用场景
+
+修改 Docker 容器、镜像、网络、卷资源页，设施应用、Application 托管 Label，每服务器容器操作队列，镜像更新检查或容器协调监控时，先读本文档。
+
+## 关键入口
+
+- Panel 服务与 API：`internal/modules/containers/`；HTTP 路由在 `routes.go` 注册。
+- 设施应用服务与 API：`internal/modules/facilityapps/`；当前内置反向代理与存储共享两个设施应用。
+- Agent Docker Engine API：`internal/agent/docker/`；Agent gRPC service：`internal/agent/rpc/`
+- Application 运行时：`internal/modules/applications/service.go`
+- Application 控制面与统一观测写回：`internal/orchestrator/`
+- 周期任务：`internal/modules/containers/tasks.go`，由 `internal/modules/tasks/` 内部 worker 驱动
+- 前端资源页面（v4 阶段 4A）：`web/src/views/resources/index.vue`，纯函数在 `web/src/views/resources/model.ts`，API 在 `web/src/api/containers.ts` 与 `web/src/api/packages.ts`。
+- 前端设施应用页面：`web/src/views/applications/index.vue` 的 `/applications/facility-apps` 目录、`/:facilityKind` 详情和 `/:facilityKind/config` 配置三层 renderer。
+- 前端 API：`web/src/api/containerization.ts`、`web/src/api/facilityApps.ts`
+
+## 页面与 API
+
+菜单上容器相关能力拆分为“资源”和“应用”两个一级分组：资源包含软件包、容器、镜像、网络、卷、防火墙，以及 dev-only Fail2Ban；应用包含普通应用和设施应用两个独立入口。容器、镜像、网络、卷使用左侧服务器选择器和右侧内部滚动列表。
+
+资源页为服务器上下文资源维护台，外层左侧选择服务器、右侧为内部滚动工作区。软件包、容器、镜像、网络和卷是独立路由页面，不使用页内 tabs；可以复用同一个资源上下文，但必须保持不同的信息架构和操作闭环，不得退回同质通用列表。所有控件使用 Panel 自有 primitives，禁止引入 Naive UI / Vuetify。
+
+- 设施应用页面是 `/applications/facility-apps` 独立入口，必须先呈现设施目录；内置“反向代理”与“存储共享”两个设施项。`facilityKind=reverse-proxy` 的只读详情展示路由与部署状态；独立配置页保存 Nginx 镜像、全局网关节点、Panel 入口、域名策略、Path 规则和静态资产草稿。指定的全局网关节点即视为开启反向代理能力。`facilityKind=storage-share` 由独立组件 `web/src/views/applications/StorageShareFacility.vue` 渲染健康、分区与设置，详见下文“存储共享设施”。
+- 容器支持查询、查看日志、启动、停止、重启、删除；日志入口与其他行操作使用带图标的小型操作，托管 Application 容器的直接停止、重启和删除入口必须禁用并提示改走 Application 生命周期。
+- 容器卡片端口行在没有发布端口时显示「无端口映射」，不使用「不可用」，避免与容器故障状态混淆。
+- 镜像支持查询、拉取、删除、删除未使用镜像、刷新更新状态、升级选中 Application 和全部升级；批量危险操作必须通过确认对话框触发。
+- 网络只读。
+- 卷支持查询、单个删除和批量删除未使用卷，必须展示使用状态；批量删除执行时需重新查询使用状态，只删除执行瞬间仍未使用的卷。
+- 容器、镜像、卷页面发起的资源写操作同步执行并返回；手动镜像刷新和 Application 镜像升级仍创建任务。
+- 同步资源写操作成功后，容器列表等待 Agent report stream 的近实时/周期快照更新缓存；镜像和卷仍立即创建对应刷新任务：镜像使用 `image_refresh`，卷使用 `volume_refresh`。
+
+Panel API 挂在 `/api/v1/servers/{serverId}/containers|images|networks|volumes`；容器日志使用 `GET /api/v1/servers/{serverId}/containers/{containerId}/logs`，tail 行数最大为 10000；批量 Application 镜像更新使用 `/api/v1/images/upgrade-selected|upgrade-all`。
+
+设施类型没有通用目录 API；前后端按设施分别内置适配器。当前入口代理设施直接使用 `reverse-proxy` 专属配置与 `/facility-apps/reverse-proxy` 端点。新事务编辑器使用持久 `/edit-sessions` API：创建、draft patch、按设施内唯一 `assetName` PUT/DELETE 资产、validate、preview、commit 和 discard；会话由稳定单管理员主体持有，idle TTL 为 24 小时、absolute TTL 为 7 天，draft/资产操作使用 revision，资产操作和 commit 使用幂等键。session 资产下载通过 `GET .../assets/{assetName}/content` 解析当前 blob；未替换的既有资产回退读取内部 `source_asset_id` 正式目录。正式资产通过 `GET .../static-assets/{assetName}/content` 下载，bundle 目录即时打包为 zip。物理 asset key/id 只用于存储、提交 manifest 和旧数据兼容。
+
+持久设施会话中的既有资产只保存 `source_asset_id` 和 metadata，不复制正文；新增或替换资产写入唯一 blob 目录。路由草稿在编辑期间以 `assetName` 引用资产，commit manifest 决定内部最终 asset id 并在写数据库前统一改写。删除仍被 route 引用的资产或移除仍被 origin/AnyAccess primary 使用的 gateway 都是阻断诊断，服务端不得静默修剪。
+
+所有会修改正式设施配置或正式静态资产的新入口共享同一单资源提交锁：edit-session commit 不得交错文件 rename 或数据库写。新会话冲突后可通过 draft PATCH 携带当前 `baseResourceVersion` 执行 rebase；rebase 保留 session assets、更新 base version、清除 conflict 后允许重新 preview/commit。
+
+设施资产的数据库 metadata 和 dataRoot 目录通过可恢复 commit manifest 协调：先记录目标、backup、blob 和 base version，再移动旧/新目录，然后在单一事务中替换资产、CAS 保存配置并递增 version。启动或 commit lease 过期时会读取 manifest；DB 未提交则回滚目录并恢复会话，DB 已提交或可由 version+配置精确确认则只完成收尾并标记 committed，不重复写配置。配置提交与 `application_reconcile` 请求分离；协调器不可用时 commit 仍返回 committed，并携带 `facility_apply_request_failed` warning。
+
+commit 前必须重新散列每个新 blob 的 content 目录和每个 `source_asset_id` 的正式 content 目录，并与 session 创建/上传时记录的 `content_sha256` 比较；缺失或漂移会阻断 commit。恢复只在 config version 精确等于 `base+1` 且配置及全部资产 ID/sha256 匹配 manifest 时认定 DB 已提交。恢复会实际重新请求 traits 同步和 application reconcile；失败时 `applyRequested=false` 并返回 warning，不能把“已恢复配置”谎报成“已请求应用”。commit、recovery 和 cleanup 使用同一资源锁，长文件阶段续期 commit lease；活跃 lease 即使超过普通 TTL 也保护 workspace。
+
+上传 handler 使用 64 MiB request 上限并清理 multipart 临时文件。bundle 解包限制最多 10000 个文件、32 层路径、256 MiB 解包总量和 100 倍压缩比。当前版本明确暂缓独立 heartbeat API、每管理员/全局草稿配额、`confirmedDiagnosticCodes` warning 确认协议和 commit/recovery 专用结构化日志；客户端可通过现有 draft/asset mutation、validate 和 preview 延长 idle TTL，GET 只执行 TTL/lease 状态检查，阻断错误仍不能绕过。
+
+## 设施应用
+
+- 设施应用配置保存在 `facility_app_configs`，不写入普通 `applications` 表；部署节点、DNS 同步状态、错误和更新时间保存在设施配置中，域名路由统一存 `reverse_proxy_routes`。设施路由行的 `target_port=0` 是设计值，应用模块读取设施应用时必须跳过这些行。
+- 反向代理设施应用使用普通 agent runtime 原子能力：拉取 nginx 镜像、写托管 nginx 配置、容器内执行结构化命令、reload 或重建容器；不得新增 agent 侧胖反向代理接口。
+- Panel 托管的 Nginx 配置目录只读挂载到独立的 `/etc/panel-nginx`，容器以 `nginx -c /etc/panel-nginx/nginx.conf` 显式启动；不得挂载或覆盖镜像原生 `/etc/nginx`，以保留 `mime.types` 等镜像资产。不能把主配置作为单文件 bind mount，否则宿主机原子 rename 后运行容器仍可能引用旧 inode。证书 managed directory 独立只读挂载到 `/etc/panel-certs`。设施为每次差异返回 reload 或 recreate：纯路由、upstream、Header 和现有挂载内证书变化可使用显式指定 `/etc/panel-nginx/nginx.conf` 的 validate/reload，网络、端口、镜像、命令或 mount 结构变化必须 recreate。validate 失败回滚 managed files 并保留旧 worker；reload 失败回退 recreate。
+- nginx 容器始终使用受管 `panel-apps` bridge 网络，并绑定宿主机 80/443。应用反向代理规则始终通过同节点 Application 容器名和目标端口转发；不提供 host 网络、本地端口目标、`targetType` 或 `host.docker.internal` 兼容路径。
+- 应用代理 location 使用 `$panel_proxy_upstream` 变量延迟解析，主配置固定写入 `resolver 127.0.0.11`。目标容器暂时不存在或未运行时，Nginx 仍能启动、校验和重载；请求会显示统一的上游不可用提示页，容器恢复后可自动重新解析连通，无需再次保存或同步入口网关。
+- 代理上游返回 502/504 时，Nginx 内部跳转到 `@panel_upstream_unavailable` 展示与 Seamark 风格一致的静态提示页，标题左侧带红色断开图标，底部使用 Seamark 图标和名称；文案内置中英文并按浏览器语言显示，只说明服务暂时无法连接，不暴露 Nginx、错误码或容器名等技术细节。
+- 静态站点配置保存域名、路径和已上传的受管资产；部署时作为只读 managed-file 挂载挂入 nginx 容器。
+- 应用里的 `reverseProxy` 规则只会被下发到反向代理设施应用覆盖的服务器；未指定为设施应用部署目标的服务器忽略这些规则。
+- 每个设施域名必须显式选择至少一台入口节点，且入口节点必须属于设施全局网关节点；新保存请求不得把空选择解释为全部节点。读取旧配置时，旧 `deploymentServers` 为空仍按当时全部全局网关节点展开，多个旧 Path 使用不同节点集合时取并集，避免迁移缩小已有访问范围。
+- 入口代理保存会联动 DNS：当前全部域名进入异步 `dns_proxy_records_sync` 任务检查生效状态，已生效且未变化的记录只比对不写入，只有与期望记录不一致时才创建/更新/删除。记录目标服务器与路由语义一致：anyAccess 关闭时用域名源站列表，开启时用全部全局网关节点；服务器 `ipv4` → A、`ipv6` → AAAA。每域名同步状态在设施配置响应 `dnsSync` 中返回并在页面展示。同步任务读取服务器列表失败时直接失败（域名保持 pending），不得把“读不到服务器”当成“没有服务器”进入清理分支误删记录。任务执行时会合并当前所有 pending 域名，同一任务活跃期间新触发的域名不会因 params 遗漏而停留在 pending。
+- 域名开启上游模式后，入口节点成为上游并保留原始静态、重定向和手工代理 Path；其余全局网关节点只生成域名级 `/` 转发。AnyAccess 的 `relayServerIds` 为空时转发节点为所有非源站全局网关节点；非空时只在指定节点生成转发，前端提供“所有未部署的服务器 / 指定服务器（多选）”两种范围。策略支持轮询、主备和客户端 IP 哈希，固定 `max_fails=3 fail_timeout=30s`。匹配到域名证书时节点间使用 HTTPS、SNI 和证书校验，否则使用 HTTP；上游全部不可用时由 Nginx 返回 502，不回退本地处理。
+- 上游模式域名由设施独占，不允许普通应用或 Panel 入口共享同一规范化域名。非上游模式仍按实际服务器上的精确 `domain + path` 检测设施、应用和 Panel 入口冲突。
+- 设施手工代理、普通应用代理、Panel 入口和跨节点转发的每个 Nginx location 都必须显式写入 `proxy_cache off;`。Panel 不管理客户端缓存 Header；用户如通过通用响应 Header 设置 `Cache-Control` 等字段，其语义由用户负责。
+- 设施应用部署和普通 Docker/Application 写操作共享每服务器容器操作队列。
+
+### 存储共享设施（storage-share）
+
+- 存储共享是第二个设施应用：配置支持**多台存储服务器，每台各自指定根目录**（`servers: [{serverId, root}]`，默认建议 `/opt/panel-shared-storage`）。**根目录启用后不可修改**，要改只能先卸载再重新启用；根目录校验与 Agent 侧一致，拒绝系统目录（`/etc`、`/var`、`/usr`、`/bin`、`/sbin`、`/lib`、`/boot`、`/dev`、`/proc`、`/sys`、`/run`、`/home`、`/root`、`/tmp` 及其子路径）。保存时对**被移除的服务器先关闭导出**，清理失败则阻止保存。**安装并启用 nfs-kernel-server 走 Panel 侧 SSH**（安装后立即 `systemctl enable --now nfs-kernel-server`，无 systemd 的环境回退 `service nfs-kernel-server start`，两者都失败才报错——仅安装包不启动服务时 rpc.nfsd/rpc.mountd 不运行，exportfs 刷新与客户端挂载都会失败）；其余（创建根/分区目录、写 `/etc/exports`、`exportfs -ra`、打包、删除、状态检查）全部由存储服务器/应用节点上的 Agent 执行。Agent 每次配置导出前也会确保 nfs-kernel-server 服务运行（幂等自愈：服务被手动停止后由 5 分钟周期同步自动拉起），并在 UFW 已安装时放行 NFS 端口 `2049/tcp` 与 `2049/udp`（幂等；客户端挂载固定 NFSv4 只需 2049/tcp，2049/udp 兼容旧客户端；规则被删后周期同步自动加回），关闭导出时尽力移除这两条规则（规则不存在视为已清理）。云厂商安全组等 UFW 之外的防火墙不在 Panel 控制范围内，需要用户自行放行 2049。导出白名单 = 服务器 Host IP/主机名（`rw,sync,no_subtree_check,no_root_squash,insecure`），并由周期任务（每 5 分钟）自动随服务器增删刷新。托管导出块使用 `# panel-storage-share:managed` 标记，写入为 `/etc` 同目录原子替换并保留备份、失败回滚，不覆盖用户其它导出。
+- 设施配置保存在 `storage_share_configs`（单行 id=`storage-share`，多服务器及各自根目录存于 `servers_json`，旧 `server_ids_json`/`server_id` 由迁移回填）；分区历史保存在 `storage_share_partitions`（按 `storage_server_id + application_id + server_id + target` 唯一，记录存储服务器与分配目录；旧唯一索引由迁移移除，以允许同一应用/节点挂载多台存储服务器）。
+- 应用挂载新增 `storage_share` 类型：来源为 `storage-share:<存储服务器ID>`（兼容旧值 `storage-share` = 配置的第一台服务器），目标为容器内路径；Panel 在按服务器渲染运行规格时**先通过 Agent 创建分区目录**，解析为 `nfs` 挂载 `<该服务器根目录>/<storageServerID>/<应用节点ID>/<appID>`，并按「存储服务器 × 应用 × 应用节点 × 容器目标」登记分区记录。**只有挂载列表里确实包含 `storage_share` 的应用才会检查设施配置**，无关应用不受影响。设施配置（服务器/根目录）变化会改变实例期望 spec hash，触发巡检重建。
+- Agent 运行时对 `nfs` 挂载：部署前确保主机安装 `nfs-common`（缺失时 apt-get 安装），用 Docker local 卷 + NFS driver（`type=nfs, o=addr=<ip>,rw,nfsvers=4, device=:/<path>`）创建确定性命名卷 `panel-nfs-<hash>` 并挂入容器；purge 时清理不再被引用的 NFS 卷（NFS 侧数据不受影响）。
+- 卸载/删除分区门禁：应用 spec 仍引用时禁止；另外删除分区或卸载前会**检查运行中的容器是否仍挂载该 NFS 卷**，仍挂载则拒绝并引导先移除挂载。导出配置、分区打包下载、目录删除与状态检查**全部通过 Agent 执行**（`StorageConfigureExport` / `StorageEnsureDirectory` / `StorageArchiveDirectory` / `StorageDeleteDirectory` / `StorageStatus` / `StorageMountStatus`）。远端清理失败不阻塞卸载，配置照常删除、分区历史与数据保留，失败信息通过返回配置的 `lastError` 展示给前端。
+- 分区支持下载（Agent `StorageArchiveDirectory` 打包返回 tgz）与删除记录+数据（Agent `StorageDeleteDirectory`，需应用已解除引用，前端二次确认）。分区记录保存容器挂载目标与确定性卷名（`target`/`volume_name`），用于挂载状态检查。
+- **NFS 生效状态可观测**：Agent 提供 `StorageStatus`（根目录是否存在、nfs-kernel-server 是否安装、`showmount -e localhost` 是否列出该导出、`rpc.nfsd` 是否运行）与 `StorageMountStatus`（卷是否存在、挂载点是否 NFS 挂载、写探测带 5 秒超时）。设施页通过 `GET /api/v1/facility-apps/storage-share/status` **并行**汇总「每台存储服务器导出生效状态 + 每个分区挂载状态」，整体 30 秒超时；页面每 15 秒刷新且有防重入。Agent 侧导出配置读写有互斥锁；分区打包/删除/建目录限定在已注册根目录下。
+- **并发与配置**：保存带版本号乐观锁，冲突返回 409；卸载清理失败时**保留配置并持久化错误**，可重试卸载；只读挂载在 NFS 卷驱动层使用 `ro`；已有同名卷会校验 driver/标签，不匹配报错。
+- **详情与设置分段**：存储共享详情用页内「导出健康」「分区数据」「设置」分段承载运行摘要、每台服务器 Agent/根目录/NFS/导出检查、关联应用、分区资产（宿主机路径、容器目标、卷名、挂载状态、下载、删除记录+数据）与多服务器配置。`/config` 继续作为设置的深链入口；配置编辑器支持行级校验、取消恢复草稿、未保存路由离开和浏览器关闭保护，保存后留在设置视图查看同步结果。
+- API：`GET/PUT /api/v1/facility-apps/storage-share`、`GET .../status`（并行汇总导出与挂载状态，30 秒超时）、`POST .../reconcile`（返回 `{taskId, config}`）、`DELETE ...`（返回卸载后配置）、`GET .../partitions/{id}/download`、`DELETE .../partitions/{id}`。
+
+## 托管 Label
+
+Application 新部署容器只写入：
+
+- `panel.application.managed`
+- `panel.application.id`
+- `panel.application.instance.id`
+- `panel.application.generation`
+- `panel.application.spec.hash`
+
+Application 托管容器只识别以上 Label。
+
+Agent 上报托管容器快照时会在返回给 Panel 的 Label map 中补充观测字段，不写入 Docker 容器本身：`panel.application.files.manifest.v1` 保存当前节点 managed files 的 path、sha256、mode、uid、gid；`panel.application.files.manifest.error` 保存读取失败原因。协调器只把这些观测 Label 用于漂移判断，不把它们当作容器身份 Label。
+
+Application bridge 网络容器由 Agent 创建时自动放入受管 Docker 网络 `panel-apps`；该网络不存在时由 Agent 创建。该网络用于入口网关在容器目标模式下解析并访问 Application 容器名。
+
+Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并在创建容器时写入 Docker `HostConfig.CapAdd`。缺省或空数组不下发任何 capability；该字段仅表示用户显式追加的 Linux capability，可与 `Privileged` 同时出现。
+
+## Agent 只读 CLI（--cli apps）
+
+- 节点上可直接运行 `panel-agent --cli apps ...` 读取 Panel 管理的容器信息（判定标准：`panel.application.managed=true`），用于排查与脚本化；命令、selector 规则与退出码见 `docs/agents/modules/servers.md` 的 Agent 只读 CLI 小节。
+- `apps list` / `apps inspect` 直接查询节点 Docker Engine（复用 `internal/agent/docker`），不走 `container_observations` 快照。
+- `apps where` 的应用主目录固定为 `/opt/panel/apps/<appID>`，实例目录为 `/opt/panel/apps/<appID>/instances/<instanceID>`，persistent 目录为 `/opt/panel/apps/<appID>/persistent`。
+- CLI 只读，不提供容器、镜像、网络或卷的任何变更操作。
+
+## 队列、同步操作与协调
+
+- 每台服务器一条独立 Docker 资源写操作队列；同服务器串行，不同服务器并行。单个任务执行 panic 时会被队列 worker 捕获并记录日志，该任务以错误结束，不会带走整条队列。
+- 普通容器、镜像、卷页面发起的写操作进入队列同步执行，不创建操作任务；API 在 Agent 操作完成或失败后返回。
+- 镜像拉取是长耗时操作，Panel 到 agent 以及 agent 到 Docker Engine 的 pull 请求超时均为 15 分钟；未显式写 tag 的镜像引用按 Docker CLI 语义拉取 `latest`，agent 调 Docker Engine API 时必须显式传递 `tag=latest`；其它 Docker 查询、容器动作和卷动作保持常规短超时。
+- Application 部署、停止、重启和清理由 `internal/orchestrator.Controller` 统一拥有同一服务器的 Job 执行边界；应用服务只通过 planner 写 desired/revision/Job，不在容器模块或任务 executor 中直接调用 Agent runtime。Agent 只实现 `RuntimeReconcile` 幂等 ensure，Panel 侧仍保留普通资源 API 的服务器队列。
+- 设施应用保存和手动同步不直接执行远端 Docker 操作；它们通过 `TriggerPeriodicNow(application_reconcile)` 触发指定应用协调，设施模块只提供校验和 per-server runtime spec provider。`facility-reverse-proxy` 的部署同样写 AppDB Instance/Job，不能新建 lifecycle target 或 `application_target_*` 任务。
+- 刷新任务按任务类型、服务器和资源复用活跃任务；Agent 操作按目标状态幂等。
+- 容器、镜像、网络、卷的 GET 列表只读取本地快照，不得同步调用 Agent。容器使用 `container_observations`；镜像、网络和卷使用 `docker_resource_snapshots`。镜像、网络、卷刷新分别通过 `image_refresh`、`network_refresh`、`volume_refresh` 任务访问 Agent 并原子替换快照；首次尚无快照时 GET 返回空集合。刷新任务遇到 agent mTLS server 证书过期或尚未生效时，必须交给服务器模块标记 Agent 状态并按受限自动重装策略处理。
+- 镜像和卷的“删除未使用”是 Panel 侧同步批量操作，通过现有 Agent 单项删除接口逐项执行；执行瞬间仍在使用的资源会跳过，删除失败会使当前请求失败。
+- containers 模块周期任务每 5 秒收集 Agent report/周期巡检输入，由 `ObservationWriter` 做 sequence/source CAS；发现容器缺失、停止、generation/spec hash 或 managed-file manifest 漂移时，只调用应用 planner 确保对应 AppDB Job 存在。`application_reconcile_states` 仍只保存应用级自动熔断，不能替代 Job 的 attempts/next_run_at。显式 payload 可传 `applicationIds`、`serverIds`、`force`、`stopServers` 和 `purge`，但任何路径都不能绕过 `uq_jobs_active_app_server`。
+- Container resource actions may directly mutate containers that cached observations identify as managed Application containers (`panel.application.managed=true`). The container page keeps start/stop/restart/delete enabled and shows a hint that application reconciliation can restore the container; the backend no longer rejects these actions. Application reconciliation still owns desired-state recovery and drift repair, so direct changes are treated as node-side drift.
+
+## 镜像更新
+
+- `image_updates` 保存每服务器镜像引用、本地摘要、远端摘要、状态、错误和检查时间。
+- `image_refreshes` 保存最近刷新时间。镜像更新状态由 Panel 每 30 分钟主动检查一次；Agent 发现 Docker image 事件时直接在 report stream 推送镜像快照（`images` 字段），Panel 落库 `docker_resource_snapshots`，作为周期检查之外的实时补充。
+- 镜像刷新必须在数据库事务外完成所有远端 registry digest 查询；结果准备完成后再用短事务原子替换 `image_updates` 并更新 `image_refreshes`，禁止在持有 SQLite 写锁时等待网络请求。
+- containers 模块注册的镜像检查周期与软件包刷新一致。
+- 所有带标签且可解析的镜像都显示更新状态；普通容器镜像不提供升级操作。
+- Application 镜像升级复用 `applications.Service.UpdateImage` 并重新部署。
+- Application 详情不提供手动镜像检查按钮；镜像检查由 containers 周期任务自动刷新，用户只手动触发实际更新。
+- Application 详情会按运行实例的服务器和镜像引用读取 `image_updates` 聚合为应用级状态；任一节点可更新即视为该应用可更新。应用镜像更新成功后，应用模块会同步对应节点的检查缓存，后续周期刷新再校准实际 Docker 镜像状态。
+
+## 验证
+
+- 后端改动运行 `task test:backend`，必要时运行 `task build:backend`。
+- 前端改动运行 `task test:web` 和 `task build:web`。
+
+## 设施应用反向代理静态站点与 TLS
+
+- `facility_app_configs` 只持久化部署节点、DNS 同步状态和设施级错误；域名路由统一存 `reverse_proxy_routes`。旧字段在启动预迁移中转换后删除。
+- 设施入口网关镜像固定为 `nginx:1.28-alpine`，API 和前端不提供镜像设置。
+- 每个设施域名至少选择一个源站节点，且源站必须属于全局网关节点。AnyAccess 关闭时只有源站节点开放域名；开启时其他全局网关作为转发节点（`relayServerIds` 为空表示全部非源站网关节点，非空表示指定子集），按轮询、主备或客户端 IP 哈希连接源站入口网关。转发节点必须属于全局网关节点且不能是源站节点。
+- 设施路由、应用路由和 Panel 入口的规范化域名全局唯一。旧库迁移发现跨所有者冲突时必须中止并列出冲突，不得静默合并。
+- 手工代理、应用代理、Panel 入口和 AnyAccess 转发均明确生成 `proxy_cache off;`；Panel 不管理客户端缓存 Header。
+
+- `facility_static_assets` 保存设施应用上传的静态资产元数据；每个设施内的 `name` 唯一，编辑会话内的资产 `name` 也唯一。文件内容存放在内部 `<dataRoot>/facility-apps/static-assets/<assetId>/content`，asset id 不属于公开契约。普通文件永远不解压；文件夹包支持 zip、tar、tar.gz 或 tgz，并限制最多 10000 个文件、32 层目录、256 MiB 解包总量和 100 倍压缩比。
+- 入口网关路径规则保存在 `domains[].paths` 中，`ruleType` 支持 `static`、`redirect`、`proxy_pass`，配置页 Path 对话框提供全部三种规则类型（`proxy_pass` 即“反向代理”）。`proxy_pass` 目标必须是 `http(s)://` 前缀的 upstream URL，前端校验与后端 `validProxyURL` 一致；proxy_pass 路径在加载、编辑会话和再次保存时原样保留，不得纠正为 `static`。
+- `static` 规则的 `sourceType` 只支持 `uploaded_file` 与 `uploaded_bundle`；`host_path`（服务器目录）来源已整体移除，前后端都不再提供或渲染，保存携带 `host_path` 返回 `facility_static_site_source_invalid`。遗留 `host_path` 配置在前端加载/再次保存时自动纠正为 `uploaded_file`（需重新选择静态文件）；后端渲染遇到尚未纠正的遗留 `host_path` 路由会以 `facility_static_site_source_invalid` 失败并停止协调，需在配置页修复该路由。上传来源通过 agent managed files 下发到节点并只读挂载。
+- `redirect` 规则写入 nginx `return`，支持 301、302、307、308；`proxy_pass` 规则写入手工 upstream URL，并通过 `proxySourceMode` 控制是否透传源请求信息（`preserve_source`/`hide_source`）。
+- 前端按域名设置源站节点，Path 不再单独保存节点字段。每个域名至少选择一台源站，且只能从设施全局网关节点中选择。
+- 反向代理部署时自动读取证书服务的 `ReverseProxyCertificates` 聚合结果。域名证书优先；没有匹配域名证书时使用匹配的用户域自签 TLS 证书；都没有时只生成 80 端口，不生成 443。
+- `GET /api/v1/facility-apps/reverse-proxy` 返回 `routeSummaries`，供前端按域名汇总 HTTPS 状态：`domain_certificate`、`self_signed_certificate` 或 `disabled`。nginx 生成逻辑必须与该摘要使用同一套证书匹配规则；UI 不应把 HTTPS 状态展示成路径属性。
+- 静态资产 HTTP API 只保留 `GET /api/v1/facility-apps/reverse-proxy/static-assets/{assetName}/content` 认证下载；上传、删除和 list 不再作为 HTTP 入口，静态资产改动统一随设施编辑会话提交。正式配置的 `staticAssets` 集合由入口代理自己的配置响应返回。配置页与应用编辑器使用连续纵向配置流和统一文件行操作；静态文件的引用名称用于路由选择，下载文件名用于下载结果；新建文本资产未单独填写下载文件名时默认使用引用名称，替换传回原 `assetName`，删除被引用资产继续由 validate/commit 阻断，冲突提供明确的放弃修改并重新加载入口。编辑器的资产下拉只列编辑会话内的资产（beginEdit 已复制全部已提交资产），会话内删除的资产立即从下拉消失，避免把路由引用指向已删除资产；`facility_static_asset_referenced_after_delete` / `facility_static_site_asset_kind_invalid` 等资产诊断必须把 `details` 中的 `domain`/`path`/`assetName` 展示在诊断面板中，否则无法定位具体域名与路径。资产引用校验只对 `ruleType=static` 且来源为上传资产的路由生效：`redirect`/`proxy_pass` 路由即使 `sourceType` 被前端默认值带成 `uploaded_file` 也不得参与校验，后端 normalize 会把非静态规则的 `sourceType` 清空。
+- Facility asset metadata carries `contentMode=text|binary` independently from `kind=uploaded_file|uploaded_bundle`. Existing rows and multipart clients without the field default to `binary`; bundles are always binary. Text assets are valid UTF-8 up to 1 MiB (including empty files), retain their current facility-local `name` for replacement and route references inside an edit session, and are the only facility assets exposed to the text editor. Commit keeps the internal temporary-key-to-final-ID mapping for newly created assets; reopened sessions use the stable name while preserving `contentMode`.
+- An asset's content mode and kind are immutable for a given facility-local `name`; conversion requires deleting and recreating the asset. Rejected conversions do not change the blob, metadata, route references, or session revision.
+
+## Entrance Gateway UI And Static Content
+
+- The reverse proxy facility app is presented in the frontend as an entrance gateway. Deployment servers are called gateway nodes in this context because selecting them means those nodes listen on 80/443 and process application routes plus static sites.
+- The Panel runs on its own HTTPS listener with a built-in self-signed certificate by default. Users can select a TLS key asset and configure the Panel domain in Settings.
+- The facility catalog page lists facility apps first. The reverse-proxy facility detail page is read-only, exposes immediate sync and the link to `/applications/facility-apps/reverse-proxy/config`, and must not render editable gateway, domain, path, Panel-entry, or asset controls.
+- Entrance gateway routes are edited on the facility configuration route `/applications/facility-apps/:facilityKind/config` with `facilityKind=reverse-proxy` as `domains` with nested paths. The configuration page contains only editable facility settings; application routes remain read-only on the facility detail page.
+- Origin selection and AnyAccess are edited at domain level. A path row does not expose its own node selector. Origins are required and are chosen only from the current global gateway nodes.
+- Each path route is static content, a redirect, or a manual proxy_pass upstream in the gateway UI; proxy_pass targets must start with http(s):// and are preserved as-is on load and save. The route row displays route-specific fields only; HTTPS status belongs to the domain group header because certificates are matched by domain, not by path.
+- A static route points at an uploaded file or an uploaded folder archive in the gateway UI; the `host_path` server-directory source was removed entirely from both the frontend and the backend (legacy host-path sources are corrected to uploaded files on load/save; rendering an uncorrected legacy `host_path` route fails the facility reconcile with `facility_static_site_source_invalid`). Uploaded folder archives are treated as directory trees, so one route path can serve multiple files below that path.
+- The user must not configure or see the nginx container mount target. The backend chooses internal read-only mount targets for bind mounts and managed-file assets during reconciliation.
+- nginx config generation writes a tuned managed `/etc/panel-nginx/nginx.conf` that retains the image-provided `/etc/nginx/mime.types` and includes `/etc/panel-nginx/conf.d/*.conf`; each domain gets one managed `conf.d/<domain>.conf` file on every node where it should be reachable. Upstream nodes contain original facility routes; relay nodes contain a domain upstream pool and one catch-all proxy location. Manual facility and application proxy paths use the shared structured Gzip, timeout, buffering, WebSocket, request-header and response-header options.
+- Facility routes and application reverse proxy routes both show HTTPS/certificate state on the domain group header. Individual path rows show only path-specific properties such as rule type, target, static source, redirect target, or upstream proxy target.
+- The facility app selector remains scalable and only identifies the facility app. Metrics, route summaries and deployment records belong in the read-only detail workspace. The dedicated configuration page is one full-height work surface with internal body scrolling; it keeps all changes in a local draft and performs a single Save and apply operation.
+- Facility actions follow the shared operation model: immediate sync and entering configuration live in the read-only detail header; the configuration page owns its Save and apply action. Domain/path/asset deletion requires a standard confirmation dialog. Path editing uses an independent dialog draft, and saving is blocked by a persistent progress overlay while assets and configuration are committed through the edit session.
+- Uploaded site content is distributed through agent managed files and mounted read-only into the nginx container. Managed file parent directories are fixed to `0755` and uploaded files to `0644` so the nginx worker can traverse and read them.
+- Agent managed files use full desired-set synchronization: ordinary files are written to temporary siblings and renamed, the manifest is committed last, and files managed by the previous manifest but absent from the new manifest are removed. Files that never belonged to a Panel manifest are preserved. This applies to both reload and recreate.
+- Facility reverse proxy keeps the hidden application identity `facility-reverse-proxy` only for compatibility filtering. Its configuration remains in `facility_app_configs`; each save/reconcile now writes AppDB Instance desired state and a per-node Job, and the controller owns RuntimeReconcile. `/api/v1/application-operations` aggregates AppDB jobs (grouped by intent_id) and no longer reads CoordDB lifecycle tables; facility deployment state comes from Job/Instance observed data. 设施配置响应继续暴露 `reconcileStopped`；设施应用的 generation/spec_hash 只由设施模块维护，应用侧 `refreshApplicationSnapshot` 不得改写。
+ 
+## Agent Report Cache
+
+- Container list reads use the latest `container_observations` snapshot saved from the agent report stream. They no longer pull `DockerContainers` during normal list or application reconciliation paths.
+- The agent sends periodic full container snapshots and near-real-time change snapshots over the report stream. Panel replaces the per-server observation set atomically for each full report. 上报未携带容器快照（nil）时保留既有观察，不会清空；只有明确携带空列表时才允许清空。完整快照替换时，已消失实例的 `application_reconcile_states` 行也会同步清理，与 applications 侧删除实例时的行为一致。 Report 快照只包含协调与列表展示所需字段（id、names、image、image_id、state、status、ports、labels），不再携带 command/created/mounts；完整详情仍可按需通过 Docker 原子接口获取。镜像页的使用状态与关联 Application 依赖快照中的 image_id 与镜像 id 精确匹配。
+- Application reconciliation collectors read cached observations only. A server that reports a failed container, stale generation/spec hash, or managed file manifest drift can cause the application planner to create or reuse an AppDB Job for that server without redeploying other servers that are already healthy.
+- `application_reconcile_states` keeps the exponential backoff state. Automatic reconciliation must honor `reconcile_next_run_at`; healthy observations clear failures only after the configured success streak.
+- 自动协调连续失败达到 10 次后，应用进入 `reconcile_stopped` 停止状态；调度器扫描与 agent 上报的 `container_change` 漂移协调都不再创建新部署，用户显式操作清除状态后重新计数。失败计数由 orchestrator Controller 的 `OnFailed` 回调在每次 Job 失败（含可重试与终态）时累计到 `application_reconcile_states.reconcile_failures`。可重试 Job 同样有终止条件：每个 Job 最大尝试次数（默认 10 次、含首次），达到上限后以 `error_code=max_attempts_exceeded` 进入终态失败，不再无限重试。
+- Agent reports and forced/manual reconciliation triggers must not create another Job while the same app/server conflict domain already has an active Job. The application planner owns that durable in-flight check before Job rows are created; report collectors only provide the requested app/server scope.
+- Agent report 的 `container_change` 触发在 collector 已确认应用/服务器发生停止、缺失、generation/spec hash 或 managed file drift 后，可绕过应用级 `application_reconcile_states.reconcile_next_run_at` 退避立即请求 planner；该绕过只作用于已 drift 的 app/server，不等同于 `force=true`，不得重部署同节点其它已满足 desired state 的应用。普通 scheduler 与非强制显式协调仍尊重应用级退避。 Agent 容器上报的 managed-file drift 判定基于本地 stat 指纹缓存（`state/managed-files.fingerprint.json`），未变化的文件不会反复哈希；事件触发的 container_change 快照与周期快照使用同一 drift 判定。
+- `SaveReportedContainers` 保存观测时只对 `application_id` 存在于 `applications` 表的托管容器登记/更新 `application_reconcile_states`（该表 `application_id` 有外键）；标签引用未知应用（应用已删除但容器残留、或服务器接入前由其它面板部署）的托管容器跳过协调状态登记，观测本身照常保存，其可能残留的孤儿状态行在"已消失实例"清理时删除。这保证单个残留容器不会因外键失败回滚整笔观测事务、进而让该服务器全部观测停更并触发无限重建。启动迁移 `purge_orphan_application_reconcile_states` 会清理存量孤儿行。
+- **协调追踪（reconcile trace）**：协调/部署全链路支持可开关的结构化追踪日志，默认关闭，通过运行时设置 `reconcile.trace` 控制。开启后建议按 `app_id`/`server_id`/`job_id`/`intent_id`/`execution_id` 串联漂移判定、plan、claim、RuntimeReconcile 步骤、ObservationWriter 接受/丢弃、Job retry/success/failure 和 lease 丢失；Agent 侧容器操作另有常规日志，不能记录 secret、完整环境变量或敏感文件内容。
+- Immediate application reconcile triggers call `PlanApplicationDeployment` directly and return no `application_target_*` task inputs. If planning fails, the caller reports the AppDB planner error; no task log anchor or lifecycle target is synthesized as a fallback.

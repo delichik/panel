@@ -1,0 +1,792 @@
+<script setup lang="ts">
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { AlertTriangle, Cable, KeyRound, PlayCircle, Plus, RefreshCcw, ServerCog, ShieldPlus, Trash2, Wrench } from '@lucide/vue';
+import { credentialsApi } from '@/api/credentials';
+import { serversApi, type ServerMetricsRange, type ServerMetricsSeries } from '@/api/servers';
+import Badge from '@/components/ui/Badge.vue';
+import Button from '@/components/ui/Button.vue';
+import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
+import Dialog from '@/components/ui/Dialog.vue';
+import EmptyState from '@/components/ui/EmptyState.vue';
+import Input from '@/components/ui/Input.vue';
+import PaginationBar from '@/components/ui/PaginationBar.vue';
+import SearchInput from '@/components/ui/SearchInput.vue';
+import Select from '@/components/ui/Select.vue';
+import Skeleton from '@/components/ui/Skeleton.vue';
+import Textarea from '@/components/ui/Textarea.vue';
+import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
+import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
+import ConsolePage from '@/components/templates/ConsolePage.vue';
+import AutoRefreshControl from '@/components/patterns/AutoRefreshControl.vue';
+import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
+import { useAutoRefresh } from '@/composables/useAutoRefresh';
+import { useI18n } from '@/i18n';
+import type { CredentialDto } from '@/types/credentials';
+import type { ServerDto, ServerProbeResult, ServerSaveInput } from '@/types/servers';
+import { agentTone, canInstallUfw, canRunPrivilegedOperation, connectionHost, credentialLabel, serverReachabilityTone, validateServerInput } from './model';
+import { createLatestRequestGuard } from '@/views/_shared/requestState';
+import { formatDateTime } from '@/utils/datetime';
+
+const { t } = useI18n();
+const MetricLineChart = defineAsyncComponent(() => import('@/views/overview/MetricLineChart.vue'));
+const route = useRoute();
+const router = useRouter();
+const notifyError = useErrorToast();
+const notifySuccess = useSuccessToast();
+const { mode: autoRefreshMode, enabled: autoRefreshEnabled, intervalMs: autoRefreshIntervalMs } = useAutoRefresh();
+
+const servers = ref<ServerDto[]>([]);
+const serverDetails = ref<Record<string, ServerDto>>({});
+const credentials = ref<CredentialDto[]>([]);
+const selectedId = ref('');
+const search = ref(String(route.query.search ?? ''));
+const page = ref(1);
+const pageSize = 50;
+const totalServers = ref(0);
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
+let detailController: AbortController | null = null;
+let metricsController: AbortController | null = null;
+let detailRequestId = 0;
+let metricsRequestId = 0;
+let metricsInFlight = false;
+let metricsAutoRefreshTimer: number | undefined;
+const listRequests = createLatestRequestGuard();
+const loading = ref(false);
+const detailLoading = ref(false);
+const error = ref('');
+const credentialError = ref('');
+const actionError = ref('');
+const serverDialog = ref(false);
+const confirmDialog = ref(false);
+const saving = ref(false);
+const probing = ref(false);
+const testing = ref(false);
+const openingEdit = ref(false);
+const probeResult = ref<ServerProbeResult | null>(null);
+const editing = ref<ServerDto | null>(null);
+const confirmTarget = ref<ServerDto | null>(null);
+const confirmOperation = ref<'restart' | 'ufw' | 'trustHostKey' | null>(null);
+const pendingOperation = ref('');
+const metrics = ref<ServerMetricsSeries | null>(null);
+const metricsServerId = ref('');
+const metricsLoading = ref(false);
+const metricsError = ref('');
+const metricsRange = ref<ServerMetricsRange>('1h');
+const metricsRangeOptions = [
+  { value: '1h', label: '1h' },
+  { value: '6h', label: '6h' },
+  { value: '1d', label: '1d' },
+  { value: '7d', label: '7d' },
+];
+
+const form = reactive({
+  name: '',
+  ipv4: '',
+  ipv6: '',
+  port: '22',
+  sshUsername: '',
+  credentialId: '',
+  dockerHost: 'unix:///var/run/docker.sock',
+  variables: '',
+  notes: '',
+});
+
+const selectedServer = computed(() => serverDetails.value[selectedId.value] ?? servers.value.find((item) => item.id === selectedId.value) ?? null);
+
+const credentialOptions = computed(() => credentials.value.map((item) => ({ label: `${item.name} / ${item.username}`, value: item.id })));
+const formPayload = computed<ServerSaveInput>(() => ({
+  name: form.name,
+  ipv4: form.ipv4,
+  ipv6: form.ipv6,
+  port: Number(form.port),
+  sshUsername: form.sshUsername,
+  credentialId: form.credentialId,
+  dockerHost: form.dockerHost,
+  variables: parsePairs(form.variables),
+  notes: form.notes,
+}));
+const validation = computed(() => validateServerInput(formPayload.value));
+const latestMetrics = computed(() => {
+  const series = metrics.value;
+  return {
+    cpu: series?.cpu.at(-1),
+    memory: series?.memory.at(-1),
+    disk: series?.disk.at(-1),
+    network: series?.network.at(-1),
+    load: series?.load.at(-1),
+  };
+});
+
+const metricChartPanels = computed(() => {
+  const series = metrics.value;
+  if (!series) return [];
+  const serverName = selectedServer.value?.name ?? '';
+  const single = (values: number[]) => [{ id: selectedId.value, name: serverName, values }];
+  const percentValues = (points: Array<{ usedBytes?: number; totalBytes?: number }>) => points.map((point) => (point.totalBytes ? ((point.usedBytes ?? 0) / point.totalBytes) * 100 : 0));
+  return [
+    { key: 'cpu', label: 'CPU', current: percent(latestMetrics.value.cpu?.usagePercent), valueKind: 'percent' as const, labels: series.cpu.map((point) => point.time), series: single(series.cpu.map((point) => point.usagePercent)) },
+    { key: 'memory', label: t('serversPage.memory'), current: `${bytes(latestMetrics.value.memory?.usedBytes)} / ${bytes(latestMetrics.value.memory?.totalBytes)}`, valueKind: 'percent' as const, labels: series.memory.map((point) => point.time), series: single(percentValues(series.memory)) },
+    { key: 'disk', label: t('serversPage.disk'), current: `${bytes(latestMetrics.value.disk?.usedBytes)} / ${bytes(latestMetrics.value.disk?.totalBytes)}`, valueKind: 'percent' as const, labels: series.disk.map((point) => point.time), series: single(percentValues(series.disk)) },
+    { key: 'network', label: t('serversPage.network'), current: `${bytesPerSecond(latestMetrics.value.network?.rxBytesPerSecond)} / ${bytesPerSecond(latestMetrics.value.network?.txBytesPerSecond)}`, valueKind: 'bytes' as const, labels: series.network.map((point) => point.time), series: [
+      { id: `${selectedId.value}-rx`, name: t('serversPage.networkRx'), values: series.network.map((point) => point.rxBytesPerSecond ?? 0) },
+      { id: `${selectedId.value}-tx`, name: t('serversPage.networkTx'), values: series.network.map((point) => point.txBytesPerSecond ?? 0) },
+    ] },
+  ];
+});
+
+watch(search, (value) => {
+  void router.replace({ query: { ...route.query, search: value || undefined } });
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    if (page.value !== 1) page.value = 1;
+    else void loadServers();
+  }, 250);
+});
+watch(page, () => { void loadServers(); });
+watch(selectedId, () => {
+  void loadServerDetail();
+  void loadMetrics(true);
+});
+watch(metricsRange, () => {
+  void loadMetrics(true);
+});
+
+async function loadServerDetail() {
+  const id = selectedId.value;
+  detailController?.abort();
+  const requestId = ++detailRequestId;
+  if (!id || serverDetails.value[id]) {
+    detailLoading.value = false;
+    return;
+  }
+  const controller = new AbortController();
+  detailController = controller;
+  detailLoading.value = true;
+  try {
+    const detail = await serversApi.get(id, { signal: controller.signal });
+    if (requestId !== detailRequestId || selectedId.value !== id) return;
+    serverDetails.value = { ...serverDetails.value, [id]: detail };
+  } catch (err) {
+    if (isAbortError(err)) return;
+    actionError.value = err instanceof Error ? err.message : t('serversPage.loadFailed');
+    notifyError(err instanceof Error ? err.message : t('serversPage.loadFailed'));
+  } finally {
+    if (requestId === detailRequestId) detailLoading.value = false;
+  }
+}
+
+async function load() {
+  const requestId = listRequests.begin();
+  loading.value = true;
+  error.value = '';
+  credentialError.value = '';
+  try {
+    const [serversResult, credentialsResult] = await Promise.allSettled([serversApi.listPage({ page: page.value, pageSize, q: search.value.trim() || undefined }), credentialsApi.list()]);
+    if (!listRequests.isCurrent(requestId)) return;
+    if (serversResult.status === 'fulfilled') {
+      const nextServers = serversResult.value.items;
+      totalServers.value = serversResult.value.total;
+      servers.value = nextServers;
+      const queryServer = String(route.query.server ?? '');
+      selectedId.value = nextServers.some((item) => item.id === queryServer)
+        ? queryServer
+        : nextServers.some((item) => item.id === selectedId.value)
+          ? selectedId.value
+          : nextServers[0]?.id || '';
+    } else {
+      error.value = serversResult.reason instanceof Error ? serversResult.reason.message : t('serversPage.loadFailed');
+      notifyError(serversResult.reason instanceof Error ? serversResult.reason.message : t('serversPage.loadFailed'));
+    }
+    const detailId = selectedId.value;
+    if (detailId && serverDetails.value[detailId]) {
+      const nextDetails = { ...serverDetails.value };
+      delete nextDetails[detailId];
+      serverDetails.value = nextDetails;
+      void loadServerDetail();
+    }
+    if (credentialsResult.status === 'fulfilled') {
+      credentials.value = credentialsResult.value;
+    } else {
+      credentials.value = [];
+      credentialError.value = credentialsResult.reason instanceof Error ? credentialsResult.reason.message : t('serversPage.credentialsLoadFailed');
+      notifyError(credentialsResult.reason instanceof Error ? credentialsResult.reason.message : t('serversPage.credentialsLoadFailed'));
+    }
+  } finally {
+    if (listRequests.isCurrent(requestId)) loading.value = false;
+  }
+}
+
+async function loadServers() {
+  const requestId = listRequests.begin();
+  loading.value = true;
+  error.value = '';
+  try {
+    const result = await serversApi.listPage({ page: page.value, pageSize, q: search.value.trim() || undefined });
+    if (!listRequests.isCurrent(requestId)) return;
+    servers.value = result.items;
+    totalServers.value = result.total;
+    selectedId.value = result.items.some((item) => item.id === selectedId.value) ? selectedId.value : result.items[0]?.id ?? '';
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('serversPage.loadFailed');
+    notifyError(err instanceof Error ? err.message : t('serversPage.loadFailed'));
+  } finally {
+    if (listRequests.isCurrent(requestId)) loading.value = false;
+  }
+}
+
+async function loadMetrics(force = false) {
+  // 自动轮询期间已有在途请求时跳过本轮，避免自伤 abort；仅切换范围/服务器或手动刷新时强制中止旧请求。
+  if (!force && metricsInFlight) return;
+  if (force) metricsController?.abort();
+  const requestId = ++metricsRequestId;
+  const id = selectedId.value;
+  metricsError.value = '';
+  // 切换服务器时立即清空旧数据；同服务器刷新保留旧数据，避免闪跳
+  if (metricsServerId.value !== id) {
+    metrics.value = null;
+    metricsServerId.value = '';
+  }
+  if (!id) {
+    metricsLoading.value = false;
+    metricsInFlight = false;
+    return;
+  }
+  const controller = new AbortController();
+  metricsController = controller;
+  metricsLoading.value = true;
+  metricsInFlight = true;
+  try {
+    const next = await serversApi.metrics(id, metricsRange.value, { signal: controller.signal });
+    if (requestId !== metricsRequestId || selectedId.value !== id) return;
+    metrics.value = next;
+    metricsServerId.value = id;
+  } catch (err) {
+    if (isAbortError(err)) return;
+    metricsError.value = err instanceof Error ? err.message : t('serversPage.metricsFailed');
+    notifyError(err instanceof Error ? err.message : t('serversPage.metricsFailed'));
+  } finally {
+    if (requestId === metricsRequestId) {
+      metricsLoading.value = false;
+      metricsInFlight = false;
+    }
+  }
+}
+
+function startMetricsAutoRefresh() {
+  stopMetricsAutoRefresh();
+  if (!autoRefreshEnabled.value) return;
+  metricsAutoRefreshTimer = window.setInterval(() => {
+    if (document.visibilityState === 'visible') void loadMetrics();
+  }, autoRefreshIntervalMs.value);
+}
+
+function stopMetricsAutoRefresh() {
+  if (metricsAutoRefreshTimer !== undefined) {
+    window.clearInterval(metricsAutoRefreshTimer);
+    metricsAutoRefreshTimer = undefined;
+  }
+}
+
+watch(autoRefreshMode, startMetricsAutoRefresh, { immediate: true });
+
+function openCreate() {
+  editing.value = null;
+  probeResult.value = null;
+  Object.assign(form, {
+    name: '',
+    ipv4: '',
+    ipv6: '',
+    port: '22',
+    sshUsername: '',
+    credentialId: credentials.value[0]?.id ?? '',
+    dockerHost: 'unix:///var/run/docker.sock',
+    variables: '',
+    notes: '',
+  });
+  serverDialog.value = true;
+}
+
+async function openEdit(server: ServerDto) {
+  openingEdit.value = true;
+  try {
+    const detail = serverDetails.value[server.id] ?? await serversApi.get(server.id);
+    serverDetails.value = { ...serverDetails.value, [server.id]: detail };
+    server = detail;
+    editing.value = server;
+    probeResult.value = null;
+    Object.assign(form, {
+      name: server.name,
+      ipv4: server.ipv4 ?? '',
+      ipv6: server.ipv6 ?? '',
+      port: String(server.port || 22),
+      sshUsername: server.sshUsername ?? '',
+      credentialId: server.credentialId,
+      dockerHost: server.dockerHost || 'unix:///var/run/docker.sock',
+      variables: stringifyPairs(server.variables),
+      notes: server.notes ?? '',
+    });
+    serverDialog.value = true;
+  } catch (err) {
+    notifyError(err instanceof Error ? err.message : t('serversPage.loadFailed'));
+  } finally {
+    openingEdit.value = false;
+  }
+}
+
+async function probe() {
+  probing.value = true;
+  probeResult.value = null;
+  actionError.value = '';
+  try {
+    probeResult.value = await serversApi.probe(formPayload.value);
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('serversPage.probeFailed');
+    notifyError(err instanceof Error ? err.message : t('serversPage.probeFailed'));
+  } finally {
+    probing.value = false;
+  }
+}
+
+async function saveServer() {
+  if (Object.keys(validation.value).length) return;
+  saving.value = true;
+  actionError.value = '';
+  try {
+    const saved = editing.value ? await serversApi.update(editing.value.id, formPayload.value) : await serversApi.create(formPayload.value);
+    selectedId.value = saved.id;
+    invalidateServerDetail(saved.id);
+    notifySuccess(saved.initialTaskId ? t('serversPage.createdWithTask', { taskId: saved.initialTaskId }) : t(editing.value ? 'serversPage.updated' : 'serversPage.created'));
+    serverDialog.value = false;
+    await load();
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('serversPage.saveFailed');
+    notifyError(err instanceof Error ? err.message : t('serversPage.saveFailed'));
+  } finally {
+    saving.value = false;
+  }
+}
+
+async function testConnection(server: ServerDto) {
+  testing.value = true;
+  try {
+    await runInline(async () => {
+      const tested = await serversApi.test(server.id);
+      invalidateServerDetail(tested.id);
+      notifySuccess(t('serversPage.testSucceeded', { name: tested.name }));
+      await load();
+    });
+  } finally {
+    testing.value = false;
+  }
+}
+
+function confirmDelete(server: ServerDto) {
+  confirmTarget.value = server;
+  confirmDialog.value = true;
+}
+
+async function deleteSelected() {
+  const target = confirmTarget.value;
+  if (!target) return;
+  await runInline(async () => {
+    await serversApi.delete(target.id);
+    const nextDetails = { ...serverDetails.value };
+    delete nextDetails[target.id];
+    serverDetails.value = nextDetails;
+    notifySuccess(t('serversPage.deleted', { name: target.name }));
+    confirmDialog.value = false;
+    selectedId.value = '';
+    await load();
+  });
+}
+
+async function deployAgent(server: ServerDto) {
+  await runInline(async () => {
+    const accepted = await serversApi.deployAgent(server.id);
+    notifySuccess(t('serversPage.agentTaskAccepted', { taskId: accepted.taskId }));
+  }, 'agent');
+}
+
+function invalidateServerDetail(id?: string) {
+  const target = id || selectedId.value;
+  if (!target) return;
+  const next = { ...serverDetails.value };
+  delete next[target];
+  serverDetails.value = next;
+  if (target === selectedId.value) void loadServerDetail();
+}
+
+function confirmRestart(server: ServerDto) {
+  if (!canRunPrivilegedOperation(server)) return;
+  confirmTarget.value = server;
+  confirmOperation.value = 'restart';
+}
+
+function confirmInstallUfw(server: ServerDto) {
+  if (!canInstallUfw(server)) return;
+  confirmTarget.value = server;
+  confirmOperation.value = 'ufw';
+}
+function confirmTrustHostKey(server: ServerDto) {
+  confirmTarget.value = server;
+  confirmOperation.value = 'trustHostKey';
+}
+
+async function runConfirmedOperation() {
+  const server = confirmTarget.value;
+  const operation = confirmOperation.value;
+  if (!server || !operation) return;
+  confirmOperation.value = null;
+  if (operation === 'restart') {
+    await runInline(async () => {
+      const accepted = await serversApi.restart(server.id);
+      notifySuccess(t('serversPage.restartAccepted', { taskId: accepted.taskId }));
+    }, 'restart');
+  } else if (operation === 'ufw') {
+    await runInline(async () => {
+      const accepted = await serversApi.installUfw(server.id);
+      notifySuccess(t('serversPage.ufwAccepted', { taskId: accepted.taskId }));
+    }, 'ufw');
+  } else {
+    await runInline(async () => {
+      const trusted = await serversApi.trustHostKey(server.id);
+      invalidateServerDetail(trusted.id);
+      notifySuccess(t('serversPage.trustHostKeySucceeded', { name: trusted.name }));
+      await load();
+    }, 'trustHostKey');
+  }
+  confirmTarget.value = null;
+}
+
+async function runInline(action: () => Promise<void>, operation = 'default') {
+  pendingOperation.value = operation;
+  actionError.value = '';
+  try {
+    await action();
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('common.operationFailed');
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
+  } finally {
+    pendingOperation.value = '';
+  }
+}
+
+function statusText(server: ServerDto) {
+  return server.reachable ? t('serversPage.reachable') : t('serversPage.unreachable');
+}
+
+function agentText(server: ServerDto) {
+  const status = server.traits?.['agent.status'];
+  if (status === 'compatible') return t('serversPage.agentCompatible');
+  if (status === 'unavailable') return t('serversPage.agentUnavailable');
+  if (status === 'undeployable') return t('serversPage.agentUndeployable');
+  return server.traits?.['agent.enabled'] === 'true' ? t('serversPage.agentIncompatible') : t('serversPage.agentNotInstalled');
+}
+
+function privilegeText(server: ServerDto) {
+  if (server.privilege?.privileged) return t('serversPage.privileged');
+  if (server.sudo?.passwordless) return t('serversPage.passwordlessSudo');
+  return t('serversPage.noPrivilege');
+}
+
+function parsePairs(raw: string) {
+  return Object.fromEntries(raw.split('\n').map((line) => line.trim()).filter(Boolean).map((line) => {
+    const [key, ...rest] = line.split('=');
+    return [key.trim(), rest.join('=').trim()];
+  }).filter(([key]) => key));
+}
+
+function stringifyPairs(value?: Record<string, string>) {
+  return Object.entries(value ?? {}).map(([key, val]) => `${key}=${val}`).join('\n');
+}
+
+function percent(value?: number) {
+  return typeof value === 'number' ? `${value.toFixed(1)}%` : t('common.notAvailable');
+}
+
+function bytes(value?: number) {
+  if (typeof value !== 'number') return t('common.notAvailable');
+  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GiB`;
+  if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MiB`;
+  return `${value} B`;
+}
+
+function bytesPerSecond(value?: number) {
+  if (typeof value !== 'number') return t('common.notAvailable');
+  if (!value) return '0 B/s';
+  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s', 'TB/s'];
+  let unitIndex = 0;
+  let scaled = value;
+  while (scaled >= 1024 && unitIndex < units.length - 1) {
+    scaled /= 1024;
+    unitIndex += 1;
+  }
+  return `${scaled >= 100 ? scaled.toFixed(0) : scaled.toFixed(1)} ${units[unitIndex]}`;
+}
+
+function isAbortError(error: unknown) {
+  return Boolean(error && typeof error === 'object' && 'code' in error && (error as { code?: string }).code === 'request_aborted');
+}
+
+onMounted(load);
+onBeforeUnmount(() => {
+  if (searchTimer) clearTimeout(searchTimer);
+  detailController?.abort();
+  metricsController?.abort();
+  stopMetricsAutoRefresh();
+});
+</script>
+
+<template>
+  <ConsolePage :title="t('routes.servers.title')" :description="t('routes.servers.description')">
+    <template #actions>
+      <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
+      <Button size="sm" variant="primary" @click="openCreate"><Plus />{{ t('serversPage.addServer') }}</Button>
+    </template>
+
+    <MasterDetailLayout class="h-full min-h-[640px]">
+      <template #master>
+      <aside class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] rounded-2xl border border-border bg-card">
+        <div class="border-b border-border p-4">
+          <SearchInput v-model="search" clearable :placeholder="t('serversPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
+        </div>
+        <div class="motion-stagger min-h-0 overflow-auto p-2">
+          <div v-if="loading && !servers.length" class="grid gap-2">
+            <Skeleton v-for="item in 6" :key="item" class="h-20" />
+          </div>
+          <EmptyState v-else-if="error && !servers.length" :title="t('common.loadFailed')" :description="error">
+            <template #actions>
+              <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
+            </template>
+          </EmptyState>
+          <EmptyState v-else-if="!servers.length" :title="t('serversPage.noServers')" :description="t('serversPage.noServersHint')" />
+          <button
+            v-for="server in servers"
+            v-else
+            :key="server.id"
+            type="button"
+            class="motion-list-item mb-2 grid w-full gap-2 rounded-xl border p-3 text-left hover:bg-accent"
+            :class="selectedId === server.id ? 'border-border-strong bg-muted' : 'border-transparent bg-transparent'"
+            :aria-current="selectedId === server.id ? 'true' : undefined"
+            @click="selectedId = server.id; router.replace({ query: { ...route.query, server: server.id } })"
+          >
+            <div class="flex items-center justify-between gap-2">
+              <strong class="truncate text-sm text-foreground">{{ server.name }}</strong>
+              <Badge :tone="serverReachabilityTone(server)">{{ statusText(server) }}</Badge>
+            </div>
+            <span class="truncate text-xs text-muted-foreground">{{ server.host }}:{{ server.port }}</span>
+            <div class="flex flex-wrap gap-1.5">
+              <Badge :tone="agentTone(server)">{{ agentText(server) }}</Badge>
+              <Badge :tone="canRunPrivilegedOperation(server) ? 'success' : 'warning'">{{ privilegeText(server) }}</Badge>
+            </div>
+          </button>
+        </div>
+        <PaginationBar v-model:page="page" class="px-3" :page-size="pageSize" :total="totalServers" :loading="loading" :previous-label="t('common.previous')" :next-label="t('common.next')" />
+      </aside>
+      </template>
+
+      <template #detail>
+      <main class="grid min-h-0 min-w-0">
+        <article v-if="loading && !servers.length" class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
+          <header class="border-b border-border p-5">
+            <Skeleton class="h-7 w-48" />
+            <Skeleton class="mt-3 h-4 w-72 max-w-full" />
+          </header>
+          <div class="min-h-0 overflow-auto p-5">
+            <div class="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_320px]">
+              <div class="grid gap-4">
+                <section v-for="item in 3" :key="item" class="rounded-2xl border border-border bg-muted p-4">
+                  <Skeleton class="h-4 w-32" />
+                  <div class="mt-4 grid grid-cols-2 gap-3 max-md:grid-cols-1">
+                    <Skeleton v-for="line in 4" :key="line" class="h-10" />
+                  </div>
+                </section>
+              </div>
+              <aside class="grid content-start gap-3">
+                <Skeleton v-for="item in 2" :key="item" class="h-36" />
+              </aside>
+            </div>
+          </div>
+        </article>
+        <EmptyState v-else-if="!selectedServer" :title="t('serversPage.selectServer')" :description="t('serversPage.selectServerHint')" />
+        <article v-else class="relative grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
+          <LoadingOverlay v-if="detailLoading && !serverDetails[selectedId]" />
+          <header class="flex items-start justify-between gap-4 border-b border-border p-5 max-md:grid">
+            <div class="min-w-0">
+              <div class="flex flex-wrap items-center gap-2">
+                <h2 class="m-0 truncate text-xl font-semibold text-foreground">{{ selectedServer.name }}</h2>
+                <Badge :tone="serverReachabilityTone(selectedServer)">{{ statusText(selectedServer) }}</Badge>
+                <Badge :tone="agentTone(selectedServer)">{{ agentText(selectedServer) }}</Badge>
+              </div>
+              <p class="m-0 mt-1 text-sm text-muted-foreground">{{ selectedServer.host }}:{{ selectedServer.port }} / {{ selectedServer.os?.prettyName || t('common.notAvailable') }}</p>
+            </div>
+            <div class="flex flex-wrap justify-end gap-2">
+              <Button size="sm" :loading="testing" @click="testConnection(selectedServer)"><Cable />{{ t('serversPage.testConnection') }}</Button>
+              <Button size="sm" :loading="openingEdit" @click="openEdit(selectedServer)"><Wrench />{{ t('common.edit') }}</Button>
+              <Button size="sm" variant="danger" @click="confirmDelete(selectedServer)"><Trash2 />{{ t('common.delete') }}</Button>
+            </div>
+          </header>
+
+          <div v-if="selectedServer.hostKeyMismatch || selectedServer.lastError" class="grid gap-2 border-b border-border p-4">
+            <div v-if="selectedServer.hostKeyMismatch" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div class="grid min-w-0 gap-1">
+                  <strong>{{ t('serversPage.hostKeyMismatchTitle') }}</strong>
+                  <p class="m-0">{{ t('serversPage.hostKeyMismatchDescription') }}</p>
+                </div>
+                <Button size="sm" variant="danger" :loading="pendingOperation === 'trustHostKey'" @click="confirmTrustHostKey(selectedServer)"><KeyRound />{{ t('serversPage.trustHostKey') }}</Button>
+              </div>
+            </div>
+            <div v-if="selectedServer.lastError" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ selectedServer.lastError }}</div>
+          </div>
+
+          <div class="min-h-0 overflow-auto p-5">
+            <div class="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_320px]">
+              <div class="grid gap-4">
+                <section class="rounded-2xl border border-border bg-muted p-4">
+                  <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.connection') }}</h3>
+                  <dl class="mt-3 grid grid-cols-2 gap-3 text-sm max-md:grid-cols-1">
+                    <div><dt>{{ t('serversPage.host') }}</dt><dd>{{ selectedServer.host }}</dd></div>
+                    <div><dt>{{ t('serversPage.port') }}</dt><dd>{{ selectedServer.port }}</dd></div>
+                    <div><dt>{{ t('serversPage.credential') }}</dt><dd>{{ credentialLabel(selectedServer.credentialId, credentials) || t('common.notAvailable') }}</dd></div>
+                    <div><dt>{{ t('serversPage.dockerHost') }}</dt><dd>{{ selectedServer.dockerHost || t('common.notAvailable') }}</dd></div>
+                  </dl>
+                </section>
+                <section class="rounded-2xl border border-border bg-muted p-4">
+                  <div class="flex flex-wrap items-center justify-between gap-3">
+                    <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.metrics') }}</h3>
+                    <div class="flex flex-wrap items-center gap-2">
+                      <Select v-model="metricsRange" :options="metricsRangeOptions" class="w-24" />
+                      <AutoRefreshControl
+                        :off-label="t('autoRefresh.off')"
+                        :short-label="t('autoRefresh.5s')"
+                        :long-label="t('autoRefresh.10s')"
+                        :hint-label="t('autoRefresh.hint')"
+                      />
+                      <Button size="sm" variant="ghost" :loading="metricsLoading" @click="loadMetrics(true)"><RefreshCcw />{{ t('common.refresh') }}</Button>
+                    </div>
+                  </div>
+                  <LoadingOverlay v-if="metricsLoading && !metrics" />
+                  <p v-else-if="metricsError && !metrics" class="mt-3 text-sm text-danger">{{ metricsError }}</p>
+                  <template v-else-if="metrics">
+
+                    <div class="mt-4 grid gap-3 xl:grid-cols-2">
+                      <div v-for="panel in metricChartPanels" :key="panel.key" class="rounded-xl border border-border bg-card p-3">
+                        <div class="flex items-center justify-between gap-3">
+                          <span class="text-xs font-medium text-muted-foreground">{{ panel.label }}</span>
+                          <span class="truncate text-sm font-semibold text-foreground">{{ panel.current }}</span>
+                        </div>
+                        <div class="mt-2 h-28 min-w-0">
+                          <MetricLineChart :labels="panel.labels" :series="panel.series" :value-kind="panel.valueKind" />
+                        </div>
+                      </div>
+                    </div>
+                  </template>
+                </section>
+                <section class="rounded-2xl border border-border bg-muted p-4">
+                  <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.recentOperations') }}</h3>
+                  <div class="mt-3 grid gap-2 text-sm text-muted-foreground">
+                    <span>{{ t('serversPage.lastChecked') }}: {{ formatDateTime(selectedServer.lastCheckedAt) || t('common.never') }}</span>
+                    <span>{{ t('serversPage.updatedAt') }}: {{ formatDateTime(selectedServer.updatedAt) || t('common.never') }}</span>
+                    <span v-if="selectedServer.initialTaskId">{{ t('serversPage.initialTask') }}: {{ selectedServer.initialTaskId }}</span>
+                  </div>
+                </section>
+              </div>
+              <aside class="grid content-start gap-3">
+                <section class="rounded-2xl border border-border bg-muted p-4">
+                  <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.agent') }}</h3>
+                  <p class="mt-2 text-sm text-muted-foreground">{{ agentText(selectedServer) }}</p>
+                  <div class="mt-3 grid gap-2">
+                    <Button :loading="pendingOperation === 'agent'" @click="deployAgent(selectedServer)"><ServerCog />{{ t('serversPage.deployAgent') }}</Button>
+                    <Button :disabled="!canRunPrivilegedOperation(selectedServer)" :loading="pendingOperation === 'restart'" @click="confirmRestart(selectedServer)"><PlayCircle />{{ t('serversPage.restart') }}</Button>
+                  </div>
+                </section>
+                <section class="rounded-2xl border border-border bg-muted p-4">
+                  <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.privilegeAndSecurity') }}</h3>
+                  <p class="mt-2 text-sm text-muted-foreground">{{ privilegeText(selectedServer) }}</p>
+                  <Button class="mt-3 w-full" :disabled="!canInstallUfw(selectedServer)" :loading="pendingOperation === 'ufw'" @click="confirmInstallUfw(selectedServer)">
+                    <ShieldPlus />{{ t('serversPage.installUfw') }}
+                  </Button>
+                </section>
+              </aside>
+            </div>
+          </div>
+        </article>
+      </main>
+      </template>
+    </MasterDetailLayout>
+
+    <Dialog v-model:open="serverDialog" :title="editing ? t('serversPage.editServer') : t('serversPage.createServer')" :description="t('serversPage.formDescription')" :close-label="t('common.close')">
+      <div class="grid gap-4">
+        <div class="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
+          <label class="grid gap-1 text-sm">{{ t('serversPage.name') }}<Input v-model="form.name" :invalid="Boolean(validation.name)" /></label>
+          <label class="grid gap-1 text-sm">{{ t('serversPage.ipv4') }}<Input v-model="form.ipv4" :invalid="Boolean(validation.ipv4)" placeholder="203.0.113.10" /></label>
+          <label class="grid gap-1 text-sm">{{ t('serversPage.ipv6') }}<Input v-model="form.ipv6" :invalid="Boolean(validation.ipv6)" placeholder="2001:db8::10" /></label>
+          <p class="col-span-2 m-0 text-xs text-muted-foreground">{{ t('serversPage.addressHint') }} <span class="panel-mono">{{ connectionHost(form) || t('common.notAvailable') }}</span></p>
+          <label class="grid gap-1 text-sm">{{ t('serversPage.port') }}<Input v-model="form.port" type="number" :invalid="Boolean(validation.port)" /></label>
+          <label class="grid gap-1 text-sm">{{ t('serversPage.credential') }}<Select v-model="form.credentialId" :options="credentialOptions" :placeholder="t('serversPage.selectCredential')" /></label>
+          <label class="col-span-2 grid gap-1 text-sm max-sm:col-span-1">{{ t('serversPage.sshUsername') }}<Input v-model="form.sshUsername" :placeholder="t('serversPage.sshUsernameHint')" /></label>
+          <label class="col-span-2 grid gap-1 text-sm max-sm:col-span-1">{{ t('serversPage.dockerHost') }}<Input v-model="form.dockerHost" :invalid="Boolean(validation.dockerHost)" /></label>
+          <label class="col-span-2 grid gap-1 text-sm max-sm:col-span-1">{{ t('serversPage.variables') }}<Textarea v-model="form.variables" :placeholder="t('serversPage.pairsHint')" class="font-mono" /></label>
+          <label class="col-span-2 grid gap-1 text-sm max-sm:col-span-1">{{ t('serversPage.notes') }}<Textarea v-model="form.notes" /></label>
+        </div>
+        <div v-if="Object.values(validation).length" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">
+          {{ t(Object.values(validation)[0] || 'serversPage.validationGeneric') }}
+        </div>
+        <div v-if="probeResult" class="rounded-xl border border-info-border bg-info-bg p-3 text-sm text-info">
+          {{ probeResult.reachable ? t('serversPage.probeReachable') : t('serversPage.probeUnreachable') }}
+          <span v-if="probeResult.error"> {{ probeResult.error }}</span>
+        </div>
+      </div>
+      <template #footer>
+        <div v-if="actionError" class="mr-auto min-w-0 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ actionError }}</div>
+        <Button variant="secondary" :disabled="Boolean(Object.keys(validation).length)" :loading="probing" @click="probe"><Cable />{{ t('serversPage.probe') }}</Button>
+        <Button variant="secondary" @click="serverDialog = false">{{ t('common.cancel') }}</Button>
+        <Button variant="primary" :loading="saving" :disabled="Boolean(Object.keys(validation).length)" @click="saveServer">{{ editing ? t('common.save') : t('common.create') }}</Button>
+      </template>
+    </Dialog>
+
+    <Dialog v-model:open="confirmDialog" :title="t('serversPage.deleteServer')" :description="confirmTarget ? t('serversPage.deleteServerDescription', { name: confirmTarget.name }) : ''" :close-label="t('common.close')">
+      <div class="flex gap-3 rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">
+        <AlertTriangle class="size-4 shrink-0" />
+        <span>{{ t('serversPage.deleteServerImpact') }}</span>
+      </div>
+      <template #footer>
+        <Button variant="secondary" @click="confirmDialog = false">{{ t('common.cancel') }}</Button>
+        <Button variant="danger" :loading="pendingOperation === 'default'" @click="deleteSelected">{{ t('common.delete') }}</Button>
+      </template>
+    </Dialog>
+
+    <ConfirmDialog
+      :open="Boolean(confirmOperation)"
+      :title="confirmOperation === 'restart' ? t('serversPage.confirmRestartTitle') : confirmOperation === 'ufw' ? t('serversPage.confirmUfwTitle') : t('serversPage.confirmTrustHostKeyTitle')"
+      :description="confirmTarget ? (confirmOperation === 'restart' ? t('serversPage.confirmRestartDescription', { name: confirmTarget.name }) : confirmOperation === 'ufw' ? t('serversPage.confirmUfwDescription', { name: confirmTarget.name }) : t('serversPage.confirmTrustHostKeyDescription', { name: confirmTarget.name })) : ''"
+      :impact="confirmOperation === 'restart' ? t('serversPage.confirmRestartImpact') : confirmOperation === 'ufw' ? t('serversPage.confirmUfwImpact') : t('serversPage.confirmTrustHostKeyImpact')"
+      tone="danger"
+      :loading="Boolean(pendingOperation)"
+      :confirm-label="t('common.confirm')"
+      :cancel-label="t('common.cancel')"
+      :require-checkbox="confirmOperation === 'trustHostKey'"
+      :checkbox-label="confirmOperation === 'trustHostKey' ? t('serversPage.trustHostKeyCheckbox') : t('serversPage.confirmCheckbox')"
+      @update:open="(value) => { if (!value) confirmOperation = null }"
+      @confirm="runConfirmedOperation"
+      @cancel="confirmOperation = null"
+    />
+  </ConsolePage>
+</template>
+
+<style scoped>
+dt {
+  margin: 0 0 4px;
+  color: var(--panel-text-muted);
+  font-size: 12px;
+}
+
+dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--panel-text);
+  font-weight: 600;
+}
+</style>

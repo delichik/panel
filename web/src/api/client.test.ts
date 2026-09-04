@@ -1,81 +1,116 @@
-import { ApiClient } from './client';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ApiClient, setAuthTokenProvider, setUnauthorizedHandler } from './client';
 
-function jsonResponse(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
+const originalFetch = globalThis.fetch;
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  setAuthTokenProvider(null);
+  setUnauthorizedHandler(null);
+  vi.restoreAllMocks();
+});
 
 describe('ApiClient', () => {
-  it('unwraps successful response envelopes', async () => {
-    const fetcher = vi.fn().mockResolvedValue(jsonResponse({ data: { ok: true }, error: null }));
-    const client = new ApiClient({ baseUrl: '/api/v1', fetcher });
+  it('unwraps successful data envelopes', async () => {
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ data: { ok: true } }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })) as typeof fetch;
 
-    await expect(client.get<{ ok: boolean }>('/health')).resolves.toEqual({ ok: true });
-    expect(fetcher).toHaveBeenCalledWith('/api/v1/health', expect.objectContaining({ method: 'GET' }));
+    await expect(new ApiClient('/api/v1').get('/ping')).resolves.toEqual({ ok: true });
   });
 
-  it('adds bearer tokens when present', async () => {
-    const fetcher = vi.fn().mockResolvedValue(jsonResponse({ data: { ok: true }, error: null }));
-    const client = new ApiClient({ fetcher, getToken: () => 'jwt-token' });
+  it('throws structured errors for API error envelopes', async () => {
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ error: { code: 'unauthorized', message: 'No session' } }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    })) as typeof fetch;
 
-    await client.get<{ ok: boolean }>('/health');
-
-    const init = fetcher.mock.calls[0][1] as RequestInit;
-    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer jwt-token');
-  });
-
-  it('throws typed errors from error envelopes', async () => {
-    const fetcher = vi.fn().mockResolvedValue(
-      jsonResponse(
-        {
-          data: null,
-          error: { code: 'unauthorized', message: 'bad credentials', details: { field: 'password' } },
-        },
-        401,
-      ),
-    );
-    const client = new ApiClient({ fetcher });
-
-    await expect(client.post('/auth/login', {})).rejects.toMatchObject({
+    await expect(new ApiClient('/api/v1').get('/session')).rejects.toMatchObject({
       status: 401,
       code: 'unauthorized',
-      message: 'bad credentials',
-      details: { field: 'password' },
+      message: 'No session',
     });
   });
 
-  it('throws readable errors for non-JSON responses', async () => {
-    const fetcher = vi.fn().mockResolvedValue(
-      new Response('<!DOCTYPE html><title>Panel</title>', {
-        status: 200,
-        headers: { 'Content-Type': 'text/html' },
-      }),
-    );
-    const client = new ApiClient({ fetcher });
-
-    await expect(client.get('/dns/domains')).rejects.toMatchObject({
+  it('rejects HTML responses instead of pretending they are API data', async () => {
+    globalThis.fetch = vi.fn(async () => new Response('<html></html>', {
       status: 200,
-      code: 'invalid_response',
-      message: expect.stringContaining('non-JSON response'),
-      details: expect.objectContaining({
-        contentType: 'text/html',
-      }),
+      headers: { 'Content-Type': 'text/html' },
+    })) as typeof fetch;
+
+    await expect(new ApiClient('/api/v1').get('/overview')).rejects.toMatchObject({
+      code: 'html_response',
     });
   });
 
-  it('keeps FormData bodies intact for multipart requests', async () => {
-    const fetcher = vi.fn().mockResolvedValue(jsonResponse({ data: { ok: true }, error: null }));
-    const client = new ApiClient({ fetcher });
-    const formData = new FormData();
-    formData.set('password', 'secret');
+  it('accepts 204 No Content for delete operations', async () => {
+    globalThis.fetch = vi.fn(async () => new Response(null, { status: 204 })) as typeof fetch;
 
-    await client.postForm('/key-assets/imports/preflight', formData);
+    await expect(new ApiClient('/api/v1').delete('/servers/srv-1')).resolves.toBeUndefined();
+  });
 
-    const init = fetcher.mock.calls[0][1] as RequestInit;
-    expect(init.method).toBe('POST');
-    expect(init.body).toBe(formData);
-    expect(new Headers(init.headers).get('Content-Type')).toBeNull();
+  it('injects the bearer token from the configured provider', async () => {
+    setAuthTokenProvider(() => 'token-1');
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ data: { ok: true } }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })) as typeof fetch;
+
+    await new ApiClient('/api/v1').get('/servers');
+
+    const headers = new Headers((vi.mocked(globalThis.fetch).mock.calls[0]?.[1] as RequestInit).headers);
+    expect(headers.get('Authorization')).toBe('Bearer token-1');
+  });
+
+  it('skips bearer token injection for public requests', async () => {
+    setAuthTokenProvider(() => 'token-1');
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ data: { ok: true } }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })) as typeof fetch;
+
+    await new ApiClient('/api/v1').get('/settings/public-branding', { skipAuth: true });
+
+    const headers = new Headers((vi.mocked(globalThis.fetch).mock.calls[0]?.[1] as RequestInit).headers);
+    expect(headers.has('Authorization')).toBe(false);
+  });
+});
+describe('global 401 handling', () => {
+  it('invokes the on-401 handler for JSON 401 responses', async () => {
+    const onUnauthorized = vi.fn();
+    setUnauthorizedHandler(onUnauthorized);
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ error: { code: 'unauthorized' } }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    })) as typeof fetch;
+
+    await expect(new ApiClient('/api/v1').get('/servers')).rejects.toMatchObject({ status: 401, code: 'unauthorized' });
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+  });
+
+  it('normalizes non-JSON 401 responses to unauthorized and fires the handler', async () => {
+    const onUnauthorized = vi.fn();
+    setUnauthorizedHandler(onUnauthorized);
+    globalThis.fetch = vi.fn(async () => new Response('<html>Unauthorized</html>', {
+      status: 401,
+      headers: { 'Content-Type': 'text/html' },
+    })) as typeof fetch;
+
+    await expect(new ApiClient('/api/v1').get('/servers')).rejects.toMatchObject({ status: 401, code: 'unauthorized' });
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not fire the handler for skipped-auth (login) 401 responses', async () => {
+    const onUnauthorized = vi.fn();
+    setUnauthorizedHandler(onUnauthorized);
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ error: { code: 'unauthorized' } }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    })) as typeof fetch;
+
+    await expect(new ApiClient('/api/v1').post('/auth/login', { username: 'u', password: 'p' }, { skipAuth: true }))
+      .rejects.toMatchObject({ status: 401, code: 'unauthorized' });
+    expect(onUnauthorized).not.toHaveBeenCalled();
   });
 });

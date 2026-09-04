@@ -4,30 +4,41 @@
 
 - `.github/workflows/docker-release.yml` 负责发布容器镜像。
 - 根目录 `version.json` 指定自动发布版本的 `major` 和 `minor`，两个字段都必须是非负整数。
-- 发布流程由 `main` 分支 push 触发，不使用 Git tag 或 GitHub Release 事件触发。
+- 正式发布由 `main` 分支 push 触发，开发发布由 `dev` 分支 push 触发；两者都不使用 Git tag 或 GitHub Release 事件触发。
 - workflow 自动生成并推送形如 `v<major>.<minor>.<patch>` 的 tag，最后在镜像打包、multi-arch manifest 发布和 inspect 都成功后，为同一个 tag 创建 GitHub Release。
+- dev 发布生成形如 `v<major>.<minor>.<patch>.<yyyyMMddHHmmss>` 的构建版本，但不创建 Git tag 或 GitHub Release，只覆盖 `dev` 镜像标签。
 
 ## 关键流程
 
-- `generate-version` 读取并校验 `version.json`，拉取远端全部 tag，查找当前主版本和次版本下的最大修订号并加一；首次发布该主次版本时修订号为 `0`。
-- workflow 使用固定的 `docker-release-main` concurrency group 串行处理 `main` push，避免多个运行同时生成相同版本。
+- `generate-version` 读取并校验 `version.json`，拉取远端全部 tag，并查找当前主版本和次版本下的最大正式修订号。
+- main 发布将最大正式修订号加一；首次发布该主次版本时修订号为 `0`。
+- dev 发布复用当前最大正式修订号并追加 UTC 时间戳；尚无正式 tag 时以修订号 `0` 为基线。
+- workflow 按分支使用独立 concurrency group。main 发布串行执行；新的 dev push 会取消同分支尚未完成的旧构建。
 - 新版本 tag 会在构建前指向触发 workflow 的 `main` commit 并推送到仓库，以占用版本号；同一主次版本的修订号只会递增，不会复用历史缺口。
-- `build-amd64` 和 `build-arm64` 分别构建对应架构镜像，并按 digest 推送到 GHCR。
-- 两个架构构建都会把自动生成的版本、`${{ github.repository }}` 和 commit SHA 作为 Docker build args 传入，再通过 Go `ldflags` 注入 `internal/buildinfo`。
+- 编译阶段先完全并行产出平台无关和平台相关 artifact：
+  - `build-web` 只构建一次前端 `web/dist`，不区分目标平台。
+  - `prepare-go-cache` 先下载 Go modules 并写入 Actions cache，后续 Go 编译 job 再并行恢复该缓存，降低冷缓存时的重复下载。
+  - `build-agent-bundle` 只构建一次完整 agent bundle，当前包含 `linux-amd64/panel-agent` 与 `linux-arm64/panel-agent`。
+  - `build-target-binary` 只按 `linux/amd64` / `linux/arm64` 做平台矩阵；每个平台 job 必须在同一个任务内连续编译 `panel` 和 `panel-init`，并分别上传 `panel-<platform>` 与 `panel-init-<platform>` artifact。
+- 所有 Go 编译 job 都会把自动生成的版本、发布通道（`release` 或 `dev`）、`${{ github.repository }}` 和 commit SHA 通过 Go `ldflags` 注入 `internal/platform/buildinfo`。
+- Docker 镜像打包阶段由 `package-image` 在 `linux/amd64` 和 `linux/arm64` 上并行执行，只把前一阶段产出的 artifact 复制进镜像并按 digest 推送到 GHCR；CI 使用 Dockerfile 的 `runtime-from-artifacts` target。本地默认 `docker build` 仍会通过 Dockerfile 内置阶段自行构建前端、目标平台 `panel` / `panel-init` 和完整 agent bundle。
+- 运行时镜像通过 `PANEL_LISTEN_ADDRESS=0.0.0.0:8443` 暴露 Panel HTTPS；Docker `EXPOSE` 和健康检查必须保持 `8443`，健康检查使用 `https://127.0.0.1:8443/` 并跳过内置自签名 CA 校验。`8080` 仅保留给本地开发代理，不得用于容器运行时探活。
+- Docker 镜像同时包含主服务 `/app/panel` 和独立 agent bundle `/app/panel-agents/`。每个架构的镜像都必须携带完整 agent bundle，且 agent 二进制必须注入与 Panel 相同的版本信息；Panel 自动部署 agent 时会按目标服务器架构读取对应文件并上传到目标机。Go 编译在编译 Panel 和两种架构 Agent 前先生成被忽略的 `internal/agent/contract/contract_hash_generated.go`，确保三个二进制引用同一个 gRPC contract hash；Agent 是否需要重部署由健康检查返回的版本号与当前 Panel 版本是否完全一致决定，不再由能力列表或 gRPC contract hash 决定。
 - `publish-manifest` 汇总两个架构的 digest，发布以下镜像标签：
-  - 自动生成的版本号。
-  - `latest`。
-  - commit sha。
-- `publish-manifest` 末尾使用 `softprops/action-gh-release` 为自动生成的版本 tag 创建 GitHub Release，并启用自动 release notes。
+  - main：自动生成的版本号、`latest` 和 commit sha。
+  - dev：只发布并覆盖 `dev`，不发布版本号、commit sha 或 `latest`。
+- dev 的 manifest 发布并 inspect 成功后，会清理同一 GHCR container package 中旧的开发版本：保留当前 `dev`、正式版本号标签、`latest` 和本轮多架构 manifest 依赖的当前平台 digest，删除其他未受保护的 package version，包括旧的无标签 digest 和 sha-only 版本。
+- main 的 `publish-manifest` 末尾使用 `softprops/action-gh-release` 为自动生成的版本 tag 创建 GitHub Release，并启用自动 release notes；dev 跳过该步骤。
 
 ## 修改注意事项
 
 - 调整发布系列时只修改 `version.json` 的 `major` 和 `minor`；不要在文件中维护 `patch`。
-- 不要把发布触发器改为 `release` 事件；合并或推送到 `main` 后会自动发布。
+- 不要把发布触发器改为 `release` 事件；推送到 `main` 或 `dev` 后会发布对应通道。
 - workflow 需要 `permissions.contents: write` 来推送版本 tag 和创建 GitHub Release，推送 GHCR 镜像需要 `permissions.packages: write`。
-- 不要移除全局串行 concurrency；版本生成依赖它避免并发运行选择相同修订号。
+- 不要移除 main 的串行 concurrency；正式版本生成依赖它避免并发运行选择相同修订号。
+- dev 通道不得创建 tag、Release，或覆盖 `latest`、正式版本号和 commit sha 标签；dev 清理只能在 `dev` manifest 已成功发布并 inspect 后运行，且必须保护本轮 `/tmp/digests` 中的当前平台 digest，避免删除当前多架构 manifest 仍引用的镜像内容。
 - 如果新增 release 附件，必须确保附件生成和上传步骤在创建 GitHub Release 之前完成，且失败时不要创建 release。
-- 发布构建必须保持 `PANEL_VERSION`、`PANEL_REPOSITORY`、`PANEL_COMMIT` 注入一致，否则系统信息和更新检查会退化为开发版本行为。
+- 发布构建必须保持 `PANEL_VERSION`、`PANEL_CHANNEL`、`PANEL_REPOSITORY`、`PANEL_COMMIT` 注入一致；`PANEL_CHANNEL` 在 main 为 `release`、dev 为 `dev`，未注入或无效值按开发通道处理。
 - 修改发布流程后同步更新本文档和模块索引。
 
 ## 检查和测试范围

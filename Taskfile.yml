@@ -8,8 +8,15 @@ env:
   GOCACHE: "{{.ROOT_DIR}}/tmp/go-build"
 
 tasks:
+  generate:agent-contract-hash:
+    desc: Generate the Agent gRPC contract hash
+    cmds:
+      - go run ./cmd/generate-agent-contract-hash
+
   run:backend:
     desc: Debug-run backend service
+    deps:
+      - generate:agent-contract-hash
     env:
       PANEL_LISTEN_ADDRESS: "{{.BACKEND_LISTEN_ADDRESS}}"
     cmds:
@@ -22,6 +29,14 @@ tasks:
     cmds:
       - npm --prefix {{.WEB_DIR}} run dev
 
+  run:web:test:
+    desc: Run web dev server with the built-in Mock API (set AUTH=true to enable auth validation)
+    env:
+      VITE_PANEL_TEST_MODE: "true"
+      VITE_PANEL_TEST_AUTH: "{{.AUTH}}"
+    cmds:
+      - npm --prefix {{.WEB_DIR}} run dev
+
   test:
     desc: Run all tests
     cmds:
@@ -30,22 +45,31 @@ tasks:
 
   test:backend:
     desc: Run backend tests
+    deps:
+      - generate:agent-contract-hash
     cmds:
       - go test ./...
 
   test:web:
-    desc: Run frontend tests
+    desc: Run frontend unit tests (component/E2E/a11y stages return with the v3 rewrite)
     cmds:
-      - npm --prefix {{.WEB_DIR}} run test
+      - task test:web:unit
+
+  test:web:unit:
+    desc: Run frontend unit tests in the Node environment
+    cmds:
+      - npm --prefix {{.WEB_DIR}} run test:unit
 
   build:
     desc: Build backend and frontend
-    cmds:
-      - task build:backend
-      - task build:web
+    deps:
+      - build:backend
+      - build:web
 
   build:backend:
     desc: Compile backend packages
+    deps:
+      - generate:agent-contract-hash
     cmds:
       - go build ./...
 

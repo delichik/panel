@@ -1,0 +1,455 @@
+import YAML from 'yaml';
+import type { ApplicationDto, ApplicationRuntime, ApplicationSaveInput, ApplicationSummaryDto, Diagnostic, HttpRouteOptions, ReverseProxyPath, ReverseProxyRule } from '@/types/applications';
+import type { FacilityRouteDomain, FacilityRoutePath, ReverseProxyConfig, ReverseProxySaveInput, StaticRuleType, StaticSourceType } from '@/types/facilityApps';
+
+export type AppMode = 'apps' | 'create' | 'edit' | 'facilityCatalog' | 'facilityDetail' | 'facilityConfig';
+export type SaveStage = 'idle' | 'validate' | 'preview' | 'commit';
+
+export interface KeyValueRow {
+  id: string;
+  key: string;
+  value: string;
+}
+
+export interface PortRow {
+  id: string;
+  label: string;
+  to: string;
+  staticPort: string;
+}
+
+export interface CommandRow {
+  id: string;
+  value: string;
+}
+
+export interface MountRow {
+  id: string;
+  type: string;
+  source: string;
+  target: string;
+  readOnly: boolean;
+  mode: string;
+}
+
+export type ProxyRuleDraft = ReverseProxyRule;
+
+export interface ApplicationDraftUi {
+  name: string;
+  enabled: boolean;
+  image: string;
+  commandRows: CommandRow[];
+  cpu: string;
+  memoryMb: string;
+  privileged: boolean;
+  env: KeyValueRow[];
+  ports: PortRow[];
+  mounts: MountRow[];
+  deploymentMode: 'all' | 'selected';
+  deploymentServers: string[];
+  reverseProxy: ReverseProxyRule[];
+  /** Structured editing only covers a subset of spec keys; anything else
+   *  (capAdd, sysctls, healthcheck, resource limits, ...) is preserved here
+   *  and merged back when the YAML is regenerated. */
+  uncoveredSpec: Record<string, unknown>;
+}
+
+export interface FacilityDraftUi {
+  deploymentServers: string[];
+  domains: FacilityRouteDomain[];
+}
+
+export interface FieldErrors {
+  [field: string]: string;
+}
+
+export interface PreviewDiff {
+  added: number;
+  changed: number;
+  removed: number;
+  warnings: number;
+}
+
+let localIdSeed = 0;
+
+export function routeMode(path: string, params: Record<string, unknown>): AppMode {
+  if (path.endsWith('/create')) return 'create';
+  if (params.applicationId) return 'edit';
+  if (path.endsWith('/config') && params.facilityKind) return 'facilityConfig';
+  if (params.facilityKind) return 'facilityDetail';
+  if (path.endsWith('/facility-apps')) return 'facilityCatalog';
+  return 'apps';
+}
+
+export function applicationStatus(app: ApplicationDto | ApplicationSummaryDto, runtime?: ApplicationRuntime | null) {
+  const status = runtime?.status || app.runtimeStatus;
+  if (!app.enabled) return 'disabled';
+  if (app.reconcileStopped) return 'attention';
+  if (status === 'deploying' || status === 'pending') return 'deploying';
+  if (status === 'failed' || app.lastError) return 'failed';
+  if (status === 'partially_deployed') return 'partial';
+  if (status === 'deployed' || status === 'running') return 'deployed';
+  return app.enabled ? 'enabled' : 'unknown';
+}
+
+export function statusTone(status: string) {
+  if (['deployed', 'enabled', 'running'].includes(status)) return 'success';
+  if (['deploying', 'partial', 'warning', 'pending', 'attention'].includes(status)) return 'warning';
+  if (['failed', 'disabled', 'error'].includes(status)) return 'danger';
+  return 'neutral';
+}
+
+export function draftFromApplication(app?: ApplicationDto | null): ApplicationDraftUi {
+  const parsed = parseSpec(app?.specYaml || '');
+  const command = arrayValue(parsed.command).map((item) => String(item)).filter((item) => item.trim() !== '');
+  return {
+    name: app?.name || stringValue(parsed.name) || '',
+    enabled: app?.enabled ?? true,
+    image: stringValue(parsed.image),
+    commandRows: command.map((value) => ({ id: makeId('cmd'), value })),
+    cpu: stringValue(objectValue(parsed.resources)?.cpu),
+    memoryMb: stringValue(objectValue(parsed.resources)?.memoryMb),
+    privileged: Boolean(parsed.privileged),
+    env: pairsFromRecord(objectToStringRecord(objectValue(parsed.env))),
+    ports: arrayValue(parsed.ports).map((item, index) => {
+      const port = objectValue(item);
+      return { id: makeId('port'), label: stringValue(port?.label) || `port-${index + 1}`, to: stringValue(port?.to) || '80', staticPort: stringValue(port?.static) };
+    }),
+    mounts: arrayValue(parsed.mounts).map((item) => {
+      const mount = objectValue(item);
+      return { id: makeId('mount'), type: stringValue(mount?.type) || 'volume', source: stringValue(mount?.source), target: stringValue(mount?.target) || '/data', readOnly: Boolean(mount?.readOnly), mode: stringValue(mount?.mode) };
+    }),
+    deploymentMode: app?.deploymentMode === 'selected' ? 'selected' : 'all',
+    deploymentServers: [...(app?.deploymentServers ?? [])],
+    reverseProxy: cloneProxyRules(app?.reverseProxy ?? []),
+    uncoveredSpec: uncoveredSpecFrom(parsed),
+  };
+}
+
+export function specYamlFromDraft(draft: ApplicationDraftUi) {
+  const uncovered = draft.uncoveredSpec ?? {};
+  const doc: Record<string, unknown> = { ...uncovered };
+  doc.name = draft.name;
+  doc.image = draft.image;
+  const command = draft.commandRows.map((row) => row.value.trim()).filter(Boolean);
+  if (command.length) doc.command = command; else delete doc.command;
+  const env = recordFromPairs(draft.env);
+  if (Object.keys(env).length) doc.env = env; else delete doc.env;
+  const ports = draft.ports.map((port) => compact({ label: port.label.trim(), to: numberOrString(port.to), static: numberOrUndefined(port.staticPort) })).filter((port) => port.to);
+  if (ports.length) doc.ports = ports; else delete doc.ports;
+  const mounts = draft.mounts.map((mount) => compact({ type: mount.type, source: mount.source.trim(), target: mount.target.trim(), readOnly: mount.readOnly || undefined, mode: mount.mode.trim() || undefined })).filter((mount) => mount.type && mount.target);
+  if (mounts.length) doc.mounts = mounts; else delete doc.mounts;
+  const resources = { ...(objectValue(uncovered.resources) ?? {}), ...compact({ cpu: numberOrUndefined(draft.cpu), memoryMb: numberOrUndefined(draft.memoryMb) }) };
+  if (Object.keys(resources).length) doc.resources = resources; else delete doc.resources;
+  if (draft.privileged) doc.privileged = true; else delete doc.privileged;
+  return `${YAML.stringify(doc).trim()}\n`;
+}
+
+export function saveInputFromDraft(draft: ApplicationDraftUi): ApplicationSaveInput {
+  const specYaml = specYamlFromDraft(draft);
+  return {
+    name: draft.name.trim(),
+    enabled: draft.enabled,
+    specYaml,
+    deploymentMode: draft.deploymentMode,
+    deploymentServers: draft.deploymentMode === 'selected' ? [...draft.deploymentServers] : [],
+    // Origin servers and the primary origin are resolved by the backend from
+    // the global gateway nodes and the deployment targets. The client only
+    // sends the user-arranged priority order for primary_backup.
+    reverseProxy: cloneProxyRules(draft.reverseProxy).map((rule) => ({ ...rule, originServerIds: [] as string[], anyAccess: { ...rule.anyAccess, primaryOriginServerId: '' } })),
+  };
+}
+
+export function validateApplicationDraft(draft: ApplicationDraftUi): FieldErrors {
+  const errors: FieldErrors = {};
+  if (!draft.name.trim()) errors.name = 'applicationsPage.validationName';
+  if (!draft.image.trim()) errors.image = 'applicationsPage.validationImage';
+  if (draft.cpu.trim() && !Number.isFinite(Number(draft.cpu))) errors.cpu = 'applicationsPage.validationNumber';
+  if (draft.memoryMb.trim() && !Number.isFinite(Number(draft.memoryMb))) errors.memoryMb = 'applicationsPage.validationNumber';
+  if (draft.deploymentMode === 'selected' && !draft.deploymentServers.length) errors.deploymentServers = 'applicationsPage.validationDeploymentServers';
+  if (draft.env.some((row) => !row.key.trim())) errors.env = 'applicationsPage.validationEnv';
+  if (draft.ports.some((row) => !row.to.trim())) errors.ports = 'applicationsPage.validationPorts';
+  if (draft.mounts.some((row) => !row.target.trim())) errors.mounts = 'applicationsPage.validationMounts';
+  if (draft.reverseProxy.some((rule) => !rule.domain.trim() || !rule.targetPort || !rule.paths.length || rule.paths.some((path) => !path.path.trim()))) errors.reverseProxy = 'applicationsPage.validationReverseProxyRule';
+  return errors;
+}
+
+export function validateFileName(name: string): string | null {
+  const value = name.trim();
+  if (!value || /[\\/]/.test(value) || value.includes('..') || /[\x00-\x1f\x7f]/.test(value)) {
+    return 'applicationsPage.validationFileName';
+  }
+  return null;
+}
+
+export function facilityDraftFromConfig(config?: ReverseProxyConfig | null): FacilityDraftUi {
+  return {
+    deploymentServers: [...(config?.deploymentServers ?? [])],
+    domains: cloneFacilityDomains(config?.domains ?? []),
+  };
+}
+
+export function facilitySaveInputFromDraft(draft: FacilityDraftUi): ReverseProxySaveInput {
+  return {
+    deploymentServers: [...draft.deploymentServers],
+    domains: cloneFacilityDomains(draft.domains).map((domain) => ({ ...domain, domain: domain.domain.trim().toLowerCase() })),
+  };
+}
+
+export function validateFacilityDraft(draft: FacilityDraftUi): FieldErrors {
+  const errors: FieldErrors = {};
+  if (!draft.deploymentServers.length) errors.deploymentServers = 'applicationsPage.validationGatewayServers';
+  if (draft.domains.some((domain) => !domain.domain.trim())) errors.domains = 'applicationsPage.validationDomains';
+  if (draft.domains.some((domain) => !domain.originServerIds.length || domain.originServerIds.some((id) => !draft.deploymentServers.includes(id)))) errors.originServers = 'applicationsPage.validationOriginServers';
+  if (draft.domains.some((domain) => !domain.paths.length)) errors.paths = 'applicationsPage.validationPaths';
+  return errors;
+}
+
+export function validateFacilityPathFields(path: FacilityRoutePath): FieldErrors {
+  const errors: FieldErrors = {};
+  const pathValue = (path.path ?? '').trim();
+  if (pathValue === '' || !pathValue.startsWith('/') || /[\s;{}#"\\']/.test(pathValue)) {
+    errors.path = 'applicationsPage.validationPath';
+  }
+  if (path.ruleType === 'redirect') {
+    const target = (path.redirectUrl ?? '').trim();
+    if (!target || /[\s\x00;{}#"\\']/.test(target)) {
+      errors.redirectUrl = 'applicationsPage.validationRedirectUrl';
+    }
+  } else if (path.ruleType === 'proxy_pass') {
+    const target = (path.proxyUrl ?? '').trim();
+    const lower = target.toLowerCase();
+    if (!target || !(lower.startsWith('http://') || lower.startsWith('https://')) || /[\s\x00;{}#"\\']/.test(target)) {
+      errors.proxyUrl = 'applicationsPage.validationProxyUrl';
+    }
+  } else if (path.ruleType === 'static') {
+    const source = (path.sourceType ?? '').trim();
+    if ((source === 'uploaded_file' || source === 'uploaded_bundle') && !(path.assetName ?? '').trim()) {
+      errors.asset = 'applicationsPage.validationStaticAsset';
+    }
+  }
+  return errors;
+}
+export function validateFacilityDomainFields(domain: FacilityRouteDomain, existing: FacilityRouteDomain[], selfIndex: number): FieldErrors {
+  const errors: FieldErrors = {};
+  const value = (domain.domain ?? '').trim().toLowerCase();
+  if (!value || /[\s;{}]/.test(value)) {
+    errors.domain = 'applicationsPage.validationDomain';
+  } else if (existing.some((item, index) => index !== selfIndex && (item.domain ?? '').trim().toLowerCase() === value)) {
+    errors.domain = 'applicationsPage.validationDomainDuplicate';
+  }
+  if (!domain.originServerIds.length) {
+    errors.originServers = 'applicationsPage.validationDomainOriginServers';
+  }
+  return errors;
+}
+export function diffApplications(base?: ApplicationDto | null, draft?: ApplicationDraftUi | null): PreviewDiff {
+  if (!draft) return { added: 0, changed: 0, removed: 0, warnings: 0 };
+  if (!base?.id) return { added: 1 + draft.reverseProxy.length + draft.mounts.length + draft.ports.length, changed: 0, removed: 0, warnings: 0 };
+  const input = saveInputFromDraft(draft);
+  // Normalize the saved application through the same draft pipeline so that
+  // YAML round-trip formatting and defaulted route options do not surface as
+  // a fake "changed" entry on a freshly opened editor.
+  const baseComparable = saveInputFromDraft(draftFromApplication(base));
+  return diffObjects(baseComparable, input);
+}
+
+export function diffFacility(base?: ReverseProxyConfig | null, draft?: FacilityDraftUi | null): PreviewDiff {
+  if (!draft) return { added: 0, changed: 0, removed: 0, warnings: 0 };
+  const input = facilitySaveInputFromDraft(draft);
+  if (!base) return { added: input.deploymentServers.length + input.domains.length, changed: 0, removed: 0, warnings: 0 };
+  return {
+    added: Math.max(0, input.domains.length - base.domains.length) + Math.max(0, input.deploymentServers.length - base.deploymentServers.length),
+    removed: Math.max(0, base.domains.length - input.domains.length) + Math.max(0, base.deploymentServers.length - input.deploymentServers.length),
+    changed: countChanged([JSON.stringify(input.domains) !== JSON.stringify(base.domains), JSON.stringify(input.deploymentServers) !== JSON.stringify(base.deploymentServers)]),
+    warnings: input.domains.some((domain) => domain.domain.includes('conflict')) ? 1 : 0,
+  };
+}
+
+export function hasBlockingDiagnostic(items: Diagnostic[]) {
+  return items.some((item) => item.severity === 'error');
+}
+
+export function routeSummary(app: ApplicationDto) {
+  return app.reverseProxy.flatMap((rule) => rule.paths.map((path) => `${rule.domain}${path.path || '/'}`));
+}
+
+export function runtimeSummary(runtime?: ApplicationRuntime | null) {
+  if (!runtime) return { total: 0, failed: 0, running: 0 };
+  return {
+    total: runtime.instances.length,
+    failed: runtime.instances.filter((item) => item.status === 'failed' || item.state === 'failed').length,
+    running: runtime.instances.filter((item) => ['running', 'ready', 'deployed'].includes(String(item.status || item.state))).length,
+  };
+}
+
+export function makeKeyValueRow(key = '', value = ''): KeyValueRow {
+  return { id: makeId('kv'), key, value };
+}
+
+export function makePortRow(): PortRow {
+  return { id: makeId('port'), label: '', to: '', staticPort: '' };
+}
+
+export function makeMountRow(type = 'persistent'): MountRow {
+  return { id: makeId('mount'), type, source: '', target: '', readOnly: type === 'file' || type === 'panel_file', mode: '' };
+}
+
+export function makeProxyRule(): ReverseProxyRule {
+  return { domain: '', targetPort: 0, originServerIds: [], anyAccess: { enabled: false, strategy: '', originPriority: [], relayServerIds: [] }, paths: [] };
+}
+
+export function makeProxyPath(): ReverseProxyPath {
+  return { path: '', webSocket: false, options: defaultRouteOptions() };
+}
+
+export function makeFacilityDomain(): FacilityRouteDomain {
+  return { domain: '', originServerIds: [], anyAccess: { enabled: false, strategy: 'round_robin', relayServerIds: [] }, paths: [makeFacilityPath()] };
+}
+
+export function makeFacilityPath(type: StaticRuleType = 'static'): FacilityRoutePath {
+  // sourceType 只对静态规则有意义；redirect/proxy_pass 不带默认值，避免
+  // 后端资产引用校验把非静态路由误判为引用了已删除资产。
+  return { path: '', ruleType: type, sourceType: type === 'static' ? 'uploaded_file' : '', assetName: '', redirectUrl: '', redirectCode: 0, proxyUrl: '', proxySourceMode: '', options: defaultRouteOptions() };
+}
+
+export function cloneProxyRules(rules: ReverseProxyRule[]) {
+  return rules.map((rule) => ({
+    domain: rule.domain,
+    targetPort: Number(rule.targetPort || 0),
+    originServerIds: [...(rule.originServerIds ?? [])],
+    anyAccess: { enabled: Boolean(rule.anyAccess?.enabled), strategy: rule.anyAccess?.strategy || '', originPriority: [...(rule.anyAccess?.originPriority ?? [])], relayServerIds: [...(rule.anyAccess?.relayServerIds ?? [])] },
+    paths: (rule.paths ?? []).map((path) => ({ path: path.path || '/', webSocket: Boolean(path.webSocket), options: { ...defaultRouteOptions(), ...(path.options ?? {}) } })),
+  }));
+}
+
+export function normalizeFacilityPath(path: FacilityRoutePath): FacilityRoutePath {
+  // proxy_pass 是设施 Path 的一等规则类型（后端完整支持并渲染），必须原样保留；
+  // 遗留 host_path 静态来源（该功能已整体移除）在加载时降级为 uploaded_file，
+  // 用户需重新选择静态文件。
+  const ruleType: StaticRuleType = (path.ruleType as StaticRuleType) || 'static';
+  const sourceType: StaticSourceType = path.sourceType === 'host_path' ? 'uploaded_file' : (path.sourceType as StaticSourceType) || 'uploaded_file';
+  const normalized: FacilityRoutePath = {
+    ...makeFacilityPath(ruleType),
+    ...path,
+    ruleType,
+    sourceType,
+    options: { ...defaultRouteOptions(), ...(path.options ?? {}) },
+  };
+  if (normalized.ruleType !== 'proxy_pass') {
+    normalized.proxyUrl = '';
+    normalized.proxySourceMode = '';
+  }
+  if (normalized.ruleType !== 'redirect') {
+    normalized.redirectUrl = '';
+    normalized.redirectCode = 0;
+  }
+  if (normalized.ruleType !== 'static') {
+    normalized.sourceType = '';
+    normalized.assetName = '';
+  }
+  return normalized;
+}
+
+export function cloneFacilityDomains(domains: FacilityRouteDomain[]) {
+  return domains.map((domain) => ({
+    domain: domain.domain,
+    originServerIds: [...(domain.originServerIds ?? [])],
+    anyAccess: { enabled: Boolean(domain.anyAccess?.enabled), strategy: domain.anyAccess?.strategy || 'round_robin', primaryOriginServerId: domain.anyAccess?.primaryOriginServerId || '', relayServerIds: [...(domain.anyAccess?.relayServerIds ?? [])] },
+    paths: (domain.paths ?? []).map((path) => normalizeFacilityPath(path)),
+  }));
+}
+
+export function cloneFacilityPath(path: FacilityRoutePath) {
+  return normalizeFacilityPath(path);
+}
+
+export function defaultRouteOptions(): HttpRouteOptions {
+  return { gzipMode: 'inherit', clientMaxBodySizeMb: 0, connectTimeoutSeconds: 0, readTimeoutSeconds: 0, sendTimeoutSeconds: 0, bufferingMode: 'inherit', webSocketMode: 'off', requestHeaders: [], responseHeaders: [] };
+}
+
+function uncoveredSpecFrom(parsed: Record<string, unknown>): Record<string, unknown> {
+  const uncovered: Record<string, unknown> = { ...parsed };
+  delete uncovered.name;
+  delete uncovered.image;
+  delete uncovered.command;
+  delete uncovered.env;
+  delete uncovered.ports;
+  delete uncovered.mounts;
+  delete uncovered.privileged;
+  delete uncovered.networkMode;
+  const resources = objectValue(parsed.resources);
+  if (resources) {
+    const rest = { ...resources };
+    delete rest.cpu;
+    delete rest.memoryMb;
+    if (Object.keys(rest).length) uncovered.resources = rest;
+    else delete uncovered.resources;
+  }
+  return uncovered;
+}
+
+function parseSpec(raw: string) {
+  const parsed = YAML.parse(raw || '{}');
+  return objectValue(parsed) ?? {};
+}
+
+function pairsFromRecord(value?: Record<string, unknown>) {
+  return Object.entries(value ?? {}).map(([key, val]) => makeKeyValueRow(key, String(val ?? '')));
+}
+
+function recordFromPairs(rows: KeyValueRow[]) {
+  const out: Record<string, string> = {};
+  rows.forEach((row) => {
+    const key = row.key.trim();
+    if (key) out[key] = row.value;
+  });
+  return out;
+}
+
+function objectToStringRecord(value?: Record<string, unknown>) {
+  if (!value) return {};
+  return Object.fromEntries(Object.entries(value).map(([key, val]) => [key, String(val ?? '')]));
+}
+
+function arrayValue(value: unknown) {
+  return Array.isArray(value) ? value : [];
+}
+
+function objectValue(value: unknown) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function stringValue(value: unknown) {
+  if (value === undefined || value === null) return '';
+  return String(value);
+}
+
+function numberOrString(raw: string) {
+  const value = Number(raw);
+  return Number.isFinite(value) && raw.trim() !== '' ? value : raw.trim();
+}
+
+function numberOrUndefined(raw: string) {
+  const value = Number(raw);
+  return Number.isFinite(value) && raw.trim() !== '' ? value : undefined;
+}
+
+function compact<T extends Record<string, unknown>>(input: T) {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined && value !== '')) as Partial<T>;
+}
+
+function countChanged(values: boolean[]) {
+  return values.filter(Boolean).length;
+}
+
+function diffObjects(base: unknown, next: unknown): PreviewDiff {
+  const baseValue = JSON.stringify(base);
+  const nextValue = JSON.stringify(next);
+  return { added: 0, changed: baseValue === nextValue ? 0 : 1, removed: 0, warnings: 0 };
+}
+
+function makeId(prefix: string) {
+  localIdSeed += 1;
+  return `${prefix}-${localIdSeed}`;
+}

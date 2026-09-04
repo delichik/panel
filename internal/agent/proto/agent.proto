@@ -1,0 +1,614 @@
+syntax = "proto3";
+
+package panel.agent.v1;
+
+option go_package = "panel/internal/agent/pb;agentpb";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/wrappers.proto";
+
+service AgentService {
+  rpc Health(Empty) returns (HealthResponse);
+  rpc OSRelease(Empty) returns (OSReleaseResponse);
+  rpc SystemTraits(Empty) returns (SystemTraitsResponse);
+  rpc MetricsSnapshot(MetricsSnapshotRequest) returns (MetricsSnapshotResponse);
+  rpc PackageUpdates(Empty) returns (PackageUpdatesResponse);
+  rpc UpgradePackages(PackageUpgradeRequest) returns (CommandResponse);
+  rpc PrepareRestart(Empty) returns (stream PrepareRestartResponse);
+  rpc UFWStatus(Empty) returns (UFWStatusResponse);
+  rpc UFWInstall(UFWInstallRequest) returns (UFWStatusResponse);
+  rpc UFWEnable(UFWEnableRequest) returns (UFWStatusResponse);
+  rpc UFWAllow(UFWAllowRequest) returns (UFWStatusResponse);
+  rpc UFWDelete(UFWDeleteRequest) returns (UFWStatusResponse);
+  rpc Fail2BanStatus(Empty) returns (Fail2BanStatusResponse);
+  rpc ApplyFail2Ban(Fail2BanApplyRequest) returns (Fail2BanStatusResponse);
+  rpc ReleaseFail2Ban(Empty) returns (Fail2BanStatusResponse);
+  rpc RestartSystem(Empty) returns (OKResponse);
+  rpc DockerContainers(Empty) returns (DockerContainersResponse);
+  rpc DockerContainerLogs(DockerContainerLogsRequest) returns (DockerContainerLogsResponse);
+  rpc DockerContainerAction(DockerContainerActionRequest) returns (OKResponse);
+  rpc DockerContainerDelete(DockerContainerDeleteRequest) returns (OKResponse);
+  rpc DockerImages(Empty) returns (DockerImagesResponse);
+  rpc DockerImagePull(DockerImagePullRequest) returns (OKResponse);
+  rpc DockerImageDelete(DockerImageDeleteRequest) returns (OKResponse);
+  rpc DockerNetworks(Empty) returns (DockerNetworksResponse);
+  rpc DockerVolumes(Empty) returns (DockerVolumesResponse);
+  rpc DockerVolumeDelete(DockerVolumeDeleteRequest) returns (OKResponse);
+  rpc RuntimeWriteFiles(RuntimeWriteFilesRequest) returns (OKResponse);
+  rpc RuntimeReconcile(RuntimeReconcileRequest) returns (RuntimeReconcileResponse);
+  rpc RuntimeReload(RuntimeReloadRequest) returns (RuntimeReloadResponse);
+  rpc RuntimeCreateContainer(RuntimeCreateContainerRequest) returns (RuntimeCreateContainerResponse);
+  rpc RuntimeStop(RuntimeStopRequest) returns (RuntimeInstanceResponse);
+  rpc RuntimeRestart(RuntimeRestartRequest) returns (RuntimeInstanceResponse);
+  rpc RuntimeStatus(RuntimeStatusRequest) returns (RuntimeStatusResponse);
+  rpc RuntimeLogs(RuntimeLogsRequest) returns (RuntimeLogsResponse);
+  rpc RuntimePersistentArchive(RuntimePersistentArchiveRequest) returns (RuntimePersistentArchiveResponse);
+  rpc RuntimePersistentRestore(RuntimePersistentRestoreRequest) returns (RuntimePersistentRestoreResponse);
+  rpc StorageConfigureExport(StorageConfigureExportRequest) returns (OKResponse);
+  rpc StorageArchiveDirectory(StorageArchiveDirectoryRequest) returns (StorageArchiveDirectoryResponse);
+  rpc StorageDeleteDirectory(StorageDeleteDirectoryRequest) returns (OKResponse);
+  rpc StorageStatus(StorageStatusRequest) returns (StorageStatusResponse);
+  rpc StorageMountStatus(StorageMountStatusRequest) returns (StorageMountStatusResponse);
+  rpc StorageEnsureDirectory(StorageEnsureDirectoryRequest) returns (OKResponse);
+}
+
+service AgentReportService {
+  rpc Report(stream AgentReportControl) returns (stream AgentReport);
+}
+
+message Empty {}
+
+message AgentReportControl {
+  string server_id = 1;
+  AgentReportConfig config = 2;
+}
+
+message AgentReport {
+  google.protobuf.Timestamp sample_at = 1;
+  MetricsSnapshotResponse metrics = 2;
+  DockerContainersResponse containers = 3;
+  string reason = 4;
+  PackageUpdatesResponse package_updates = 5;
+  DockerImagesResponse images = 6;
+}
+
+message AgentReportConfig {
+  int32 metrics_interval_seconds = 1;
+  int32 containers_interval_seconds = 2;
+}
+
+message OKResponse {
+  bool ok = 1;
+}
+
+message HealthResponse {
+  string status = 1;
+  string time = 2;
+  string version = 3;
+  repeated string capabilities = 4;
+  string contract_hash = 5;
+  DockerHealth docker = 6;
+}
+
+message DockerHealth {
+  string host = 1;
+  string status = 2;
+  string error = 3;
+}
+
+message OSReleaseResponse {
+  string id = 1;
+  string version_id = 2;
+  string pretty_name = 3;
+  bool supported = 4;
+}
+
+message SystemTraitsResponse {
+  map<string, string> traits = 1;
+}
+
+message MetricsSnapshotRequest {
+  string server_id = 1;
+}
+
+message MetricsSnapshotResponse {
+  string server_id = 1;
+  google.protobuf.Timestamp time = 2;
+  double cpu_usage_percent = 3;
+  int64 memory_used_bytes = 4;
+  int64 memory_total_bytes = 5;
+  int64 disk_used_bytes = 6;
+  int64 disk_total_bytes = 7;
+  double network_rx_bytes_rate = 8;
+  double network_tx_bytes_rate = 9;
+  SystemStatus status = 10;
+}
+
+message SystemStatus {
+  string hostname = 1;
+  string kernel_version = 2;
+  string os_version = 3;
+  google.protobuf.Timestamp server_time = 4;
+  int64 uptime_seconds = 5;
+  string load_average = 6;
+  double load1 = 7;
+  double load5 = 8;
+  double load15 = 9;
+}
+
+message PackageUpdate {
+  string name = 1;
+  string installed_version = 2;
+  string candidate_version = 3;
+  string source = 4;
+}
+
+message PackageUpdatesResponse {
+  repeated PackageUpdate items = 1;
+}
+
+message PackageUpgradeRequest {
+  repeated string names = 1;
+  bool all = 2;
+}
+
+message CommandResponse {
+  string output = 1;
+}
+
+message PrepareRestartResponse {
+  string state = 1;
+}
+
+message UFWRule {
+  int32 port = 1;
+  string protocol = 2;
+  string from = 3;
+}
+
+message UFWRuleStatus {
+  int32 number = 1;
+  string to = 2;
+  string action = 3;
+  string from = 4;
+}
+
+message UFWStatusResponse {
+  bool installed = 1;
+  bool active = 2;
+  string status = 3;
+  string default = 4;
+  repeated UFWRuleStatus rules = 5;
+  string raw = 6;
+}
+
+message UFWInstallRequest {
+  repeated UFWRule rules = 1;
+}
+
+message UFWEnableRequest {
+  int32 ssh_port = 1;
+}
+
+message UFWAllowRequest {
+  UFWRule rule = 1;
+}
+
+message UFWDeleteRequest {
+  int32 number = 1;
+}
+
+message Fail2BanJail {
+  string name = 1;
+  bool enabled = 2;
+  string preset = 3;
+  string filter = 4;
+  string log_path = 5;
+  string backend = 6;
+  string port = 7;
+  string protocol = 8;
+  string action = 9;
+  int32 max_retry = 10;
+  string find_time = 11;
+  string ban_time = 12;
+  repeated string ignore_ip = 13;
+  map<string, string> options = 14;
+}
+
+message Fail2BanConfig {
+  repeated Fail2BanJail jails = 1;
+}
+
+message Fail2BanStatusResponse {
+  bool installed = 1;
+  bool active = 2;
+  bool panel_config_present = 3;
+  repeated string jails = 4;
+  string raw = 5;
+}
+
+message Fail2BanApplyRequest {
+  Fail2BanConfig config = 1;
+}
+
+message RuntimeSpec {
+  string id = 1;
+  string application_id = 2;
+  string instance_id = 3;
+  string container_name = 4;
+  string name = 5;
+  string image = 6;
+  repeated string command = 7;
+  reserved 8;
+  reserved "args";
+  map<string, string> env = 9;
+  repeated RuntimePort ports = 10;
+  reserved 11;
+  reserved "network_mode";
+  RuntimeResources resources = 12;
+  bool privileged = 13;
+  repeated RuntimeMount mounts = 14;
+  repeated RuntimeManagedFile files = 15;
+  RuntimeRestart restart = 16;
+  repeated RuntimeService services = 17;
+  repeated RuntimeCheck checks = 18;
+  int32 generation = 19;
+  string spec_hash = 20;
+  repeated string cap_add = 21;
+}
+
+message RuntimePort {
+  string label = 1;
+  int32 container_port = 2;
+  int32 host_port = 3;
+  string protocol = 4;
+}
+
+message RuntimeResources {
+  int32 cpu = 1;
+  int32 memory_mb = 2;
+}
+
+message RuntimeMount {
+  string type = 1;
+  string source = 2;
+  string target = 3;
+  bool read_only = 4;
+  google.protobuf.Int32Value uid = 5;
+  google.protobuf.Int32Value gid = 6;
+  string mode = 7;
+}
+
+message RuntimeManagedFile {
+  string path = 1;
+  bytes content = 2;
+  string mode = 3;
+  google.protobuf.Int32Value uid = 4;
+  google.protobuf.Int32Value gid = 5;
+}
+
+message RuntimeRestart {
+  string policy = 1;
+  int32 attempts = 2;
+  int32 interval_seconds = 3;
+  int32 delay_seconds = 4;
+  string mode = 5;
+}
+
+message RuntimeService {
+  string name = 1;
+  string port = 2;
+  repeated string tags = 3;
+}
+
+message RuntimeCheck {
+  string name = 1;
+  string type = 2;
+  string port = 3;
+  string path = 4;
+  int32 interval_seconds = 5;
+  int32 timeout_seconds = 6;
+  string command = 7;
+}
+
+message RuntimeWriteFilesRequest {
+  RuntimeSpec spec = 1;
+}
+
+message RuntimeReconcileRequest {
+  string job_id = 1;
+  string execution_id = 2;
+  string application_id = 3;
+  string instance_id = 4;
+  string server_id = 5;
+  string action = 6;
+  int32 desired_generation = 7;
+  string desired_spec_hash = 8;
+  string desired_revision_id = 9;
+  RuntimeSpec spec = 10;
+  bool remove_data = 11;
+  string previous_container_name = 12;
+}
+
+message RuntimeReconcileStep {
+  string name = 1;
+  string status = 2;
+  string detail = 3;
+}
+
+message RuntimeReconcileResponse {
+  string observed_state = 1;
+  string container_name = 2;
+  string container_id = 3;
+  int32 observed_generation = 4;
+  string observed_spec_hash = 5;
+  string observed_image_digest = 6;
+  google.protobuf.Timestamp observed_at = 7;
+  repeated RuntimeReconcileStep steps = 8;
+  string error_code = 9;
+  string error_class = 10;
+  string error_message = 11;
+  string error_detail = 12;
+  bool retryable = 13;
+  int32 retry_after_seconds = 14;
+}
+
+message RuntimeReloadRequest {
+  RuntimeSpec spec = 1;
+  string container_name = 2;
+  repeated string validate_command = 3;
+  repeated string reload_command = 4;
+}
+
+message RuntimeReloadResponse {
+  bool reloaded = 1;
+  string phase = 2;
+  int32 exit_code = 3;
+  string output = 4;
+  string error = 5;
+}
+
+message RuntimeCreateContainerRequest {
+  string server_id = 1;
+  RuntimeSpec spec = 2;
+}
+
+message RuntimeCreateContainerResponse {
+  string container_id = 1;
+}
+
+message RuntimeStopRequest {
+  string application_id = 1;
+  string instance_id = 2;
+  string container_name = 3;
+  bool purge = 4;
+  bool remove_application_data = 5;
+}
+
+message RuntimeRestartRequest {
+  string instance_id = 1;
+  string container_name = 2;
+}
+
+message RuntimeInstanceResponse {
+  string instance_id = 1;
+  string container_name = 2;
+  string container_id = 3;
+  string status = 4;
+  string error = 5;
+  google.protobuf.Timestamp observed_at = 6;
+}
+
+message RuntimeStatusRequest {
+  string instance_id = 1;
+  string container_name = 2;
+}
+
+message RuntimeStatusResponse {
+  string instance_id = 1;
+  string server_id = 2;
+  string server_name = 3;
+  string container_name = 4;
+  string container_id = 5;
+  string status = 6;
+  string desired_state = 7;
+  string stage = 8;
+  string image = 9;
+  string started_at = 10;
+  string finished_at = 11;
+  int32 exit_code = 12;
+  string last_error = 13;
+  google.protobuf.Timestamp observed_at = 14;
+}
+
+message RuntimeLogsRequest {
+  string instance_id = 1;
+  string container_name = 2;
+  int32 tail = 3;
+}
+
+message RuntimeLogsResponse {
+  string instance_id = 1;
+  string logs = 2;
+}
+
+message RuntimePersistentArchiveRequest {
+  string application_id = 1;
+}
+
+message RuntimePersistentArchiveResponse {
+  string application_id = 1;
+  string filename = 2;
+  bytes content = 3;
+}
+
+message RuntimePersistentRestoreRequest {
+  string application_id = 1;
+  bytes content = 2;
+}
+
+message RuntimePersistentRestoreResponse {
+  string application_id = 1;
+  bool restored = 2;
+}
+
+message StorageConfigureExportRequest {
+  string root = 1;
+  repeated string allowed_hosts = 2;
+  bool enabled = 3;
+}
+
+message StorageArchiveDirectoryRequest {
+  string path = 1;
+}
+
+message StorageArchiveDirectoryResponse {
+  string filename = 1;
+  bytes content = 2;
+}
+
+message StorageDeleteDirectoryRequest {
+  string path = 1;
+}
+
+message StorageStatusRequest {
+  string root = 1;
+}
+
+message StorageStatusResponse {
+  bool server_installed = 1;
+  bool root_exists = 2;
+  bool export_live = 3;
+  string detail = 4;
+}
+
+message StorageMountStatusRequest {
+  string source = 1;
+  string target = 2;
+}
+
+message StorageMountStatusResponse {
+  bool volume_exists = 1;
+  string mountpoint = 2;
+  bool mounted = 3;
+  bool writable = 4;
+  string detail = 5;
+}
+
+message StorageEnsureDirectoryRequest {
+  string path = 1;
+}
+
+message DockerPort {
+  string ip = 1;
+  int32 private_port = 2;
+  int32 public_port = 3;
+  string type = 4;
+}
+
+message DockerMount {
+  string type = 1;
+  string name = 2;
+  string source = 3;
+  string destination = 4;
+  string driver = 5;
+  string mode = 6;
+  bool rw = 7;
+}
+
+message DockerContainer {
+  string id = 1;
+  repeated string names = 2;
+  string image = 3;
+  string image_id = 4;
+  string command = 5;
+  int64 created = 6;
+  string state = 7;
+  string status = 8;
+  repeated DockerPort ports = 9;
+  map<string, string> labels = 10;
+  repeated DockerMount mounts = 11;
+}
+
+message DockerContainersResponse {
+  repeated DockerContainer items = 1;
+}
+
+message DockerContainerLogsRequest {
+  string id = 1;
+  int32 tail = 2;
+}
+
+message DockerContainerLogsResponse {
+  string container_id = 1;
+  string logs = 2;
+}
+
+message DockerContainerActionRequest {
+  string id = 1;
+  string action = 2;
+}
+
+message DockerContainerDeleteRequest {
+  string id = 1;
+}
+
+message DockerImage {
+  string id = 1;
+  string parent_id = 2;
+  repeated string repo_tags = 3;
+  repeated string repo_digests = 4;
+  int64 created = 5;
+  int64 size = 6;
+  int32 containers = 7;
+}
+
+message DockerImagesResponse {
+  repeated DockerImage items = 1;
+}
+
+message DockerImagePullRequest {
+  string reference = 1;
+}
+
+message DockerImageDeleteRequest {
+  string id = 1;
+}
+
+message DockerNetwork {
+  string id = 1;
+  string name = 2;
+  string driver = 3;
+  string scope = 4;
+  string created = 5;
+  bool internal = 6;
+  map<string, string> labels = 7;
+}
+
+message DockerNetworksResponse {
+  repeated DockerNetwork items = 1;
+}
+
+message DockerVolumeUsage {
+  int64 size = 1;
+  int64 ref_count = 2;
+}
+
+message DockerVolume {
+  string name = 1;
+  string driver = 2;
+  string mountpoint = 3;
+  string created_at = 4;
+  map<string, string> labels = 5;
+  DockerVolumeUsage usage_data = 6;
+  bool in_use = 7;
+  int32 container_count = 8;
+}
+
+message DockerVolumesResponse {
+  repeated DockerVolume items = 1;
+}
+
+message DockerVolumeDeleteRequest {
+  string name = 1;
+}

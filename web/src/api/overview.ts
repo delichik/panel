@@ -1,11 +1,18 @@
-import { apiClient } from './client';
-import type { MetricsRange, MetricsSeriesDto, OverviewDto } from '@/types/api';
+import { apiGet, apiPut } from './client';
+import type { OverviewCardConfigurationSet, OverviewCardData, OverviewDto } from '@/types/overview';
 
 export const overviewApi = {
   getOverview() {
-    return apiClient.get<OverviewDto>('/overview');
+    return apiGet<OverviewDto>('/overview');
   },
-  getMetrics(serverId: string, range: MetricsRange) {
-    return apiClient.get<MetricsSeriesDto>(`/servers/${serverId}/metrics?range=${range}`);
+  getCards() {
+    return apiGet<OverviewCardConfigurationSet>('/overview/cards');
+  },
+  updateCards(input: OverviewCardConfigurationSet) {
+    return apiPut<OverviewCardConfigurationSet>('/overview/cards', input);
+  },
+  getCardData(cardId: string, since?: string) {
+    const query = since ? `?since=${encodeURIComponent(since)}` : '';
+    return apiGet<OverviewCardData>(`/overview/cards/${encodeURIComponent(cardId)}/data${query}`);
   },
 };
