@@ -22,6 +22,7 @@
   - `build-target-binary` 只按 `linux/amd64` / `linux/arm64` 做平台矩阵；每个平台 job 必须在同一个任务内连续编译 `panel` 和 `panel-init`，并分别上传 `panel-<platform>` 与 `panel-init-<platform>` artifact。
 - 所有 Go 编译 job 都会把自动生成的版本、发布通道（`release` 或 `dev`）、`${{ github.repository }}` 和 commit SHA 通过 Go `ldflags` 注入 `internal/platform/buildinfo`。
 - Docker 镜像打包阶段由 `package-image` 在 `linux/amd64` 和 `linux/arm64` 上并行执行，只把前一阶段产出的 artifact 复制进镜像并按 digest 推送到 GHCR；CI 使用 Dockerfile 的 `runtime-from-artifacts` target。本地默认 `docker build` 仍会通过 Dockerfile 内置阶段自行构建前端、目标平台 `panel` / `panel-init` 和完整 agent bundle。
+- 运行时镜像通过 `PANEL_LISTEN_ADDRESS=0.0.0.0:8443` 暴露 Panel HTTPS；Docker `EXPOSE` 和健康检查必须保持 `8443`，健康检查使用 `https://127.0.0.1:8443/` 并跳过内置自签名 CA 校验。`8080` 仅保留给本地开发代理，不得用于容器运行时探活。
 - Docker 镜像同时包含主服务 `/app/panel` 和独立 agent bundle `/app/panel-agents/`。每个架构的镜像都必须携带完整 agent bundle，且 agent 二进制必须注入与 Panel 相同的版本信息；Panel 自动部署 agent 时会按目标服务器架构读取对应文件并上传到目标机。Go 编译在编译 Panel 和两种架构 Agent 前先生成被忽略的 `internal/agent/contract/contract_hash_generated.go`，确保三个二进制引用同一个 gRPC contract hash；Agent 是否需要重部署由健康检查返回的版本号与当前 Panel 版本是否完全一致决定，不再由能力列表或 gRPC contract hash 决定。
 - `publish-manifest` 汇总两个架构的 digest，发布以下镜像标签：
   - main：自动生成的版本号、`latest` 和 commit sha。

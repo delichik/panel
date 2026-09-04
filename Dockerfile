@@ -105,15 +105,15 @@ RUN apk add --no-cache ca-certificates tzdata \
   && mkdir -p /app/data /app/web/dist \
   && chown -R panel:panel /app
 
-ENV PANEL_LISTEN_ADDRESS=0.0.0.0:8080 \
+ENV PANEL_LISTEN_ADDRESS=0.0.0.0:8443 \
     PANEL_DATA_ROOT=/app/data \
     PANEL_APP_DATABASE=/app/data/db/app.db \
     PANEL_METRICS_DATABASE=/app/data/db/metrics.db
 
-EXPOSE 8080
+EXPOSE 8443
 VOLUME ["/app/data"]
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD wget -qO- http://127.0.0.1:8080/ >/dev/null || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD wget --no-check-certificate -qO- https://127.0.0.1:8443/ >/dev/null || exit 1
 
 FROM runtime-base AS runtime-from-artifacts
 ARG TARGETOS
