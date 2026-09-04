@@ -97,7 +97,7 @@ func TestOverwriteImportRejectsSelectedPanelCertificateOutsideDomain(t *testing.
 	defer closeFn()
 	ctx := context.Background()
 
-	ca, err := svc.CreateCA(ctx, CreateCARequest{Name: "Panel CA", CommonName: "panel-ca.internal"})
+	ca, err := svc.CreateCA(ctx, CreateCARequest{Name: "Panel CA", CommonName: "panel-ca.internal", Algorithm: AlgorithmRSA, KeySize: 2048})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,6 +106,8 @@ func TestOverwriteImportRejectsSelectedPanelCertificateOutsideDomain(t *testing.
 		ParentAssetID: ca.ID,
 		CommonName:    "panel.example.test",
 		DNSNames:      []string{"panel.example.test"},
+		Algorithm:     AlgorithmRSA,
+		KeySize:       2048,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -117,6 +119,10 @@ func TestOverwriteImportRejectsSelectedPanelCertificateOutsideDomain(t *testing.
 		t.Fatal(err)
 	}
 	activeCertificate, err := os.ReadFile(filepath.Join(svc.cfg.DataRoot, "tls", "panel.crt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeStoredCertificate, _, err := svc.ReadFile(ctx, active.ID, "certificate")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +180,7 @@ func TestOverwriteImportRejectsSelectedPanelCertificateOutsideDomain(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(storedCertificate) != string(activeCertificate) {
+	if string(storedCertificate) != string(activeStoredCertificate) {
 		t.Fatal("failed overwrite import changed the stored Panel certificate")
 	}
 }
@@ -184,7 +190,7 @@ func TestReissueSelectedPanelCertificateSynchronizesFixedPair(t *testing.T) {
 	defer closeFn()
 	ctx := context.Background()
 
-	ca, err := svc.CreateCA(ctx, CreateCARequest{Name: "Panel CA", CommonName: "panel-ca.internal"})
+	ca, err := svc.CreateCA(ctx, CreateCARequest{Name: "Panel CA", CommonName: "panel-ca.internal", Algorithm: AlgorithmRSA, KeySize: 2048})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,6 +199,8 @@ func TestReissueSelectedPanelCertificateSynchronizesFixedPair(t *testing.T) {
 		ParentAssetID: ca.ID,
 		CommonName:    "panel.example.test",
 		DNSNames:      []string{"panel.example.test"},
+		Algorithm:     AlgorithmRSA,
+		KeySize:       2048,
 	})
 	if err != nil {
 		t.Fatal(err)

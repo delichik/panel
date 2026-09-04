@@ -20,7 +20,7 @@
 - fail2ban 配置：`internal/modules/servers/fail2ban.go`
 - Agent 部署任务、自动部署限流和安装流程：`internal/modules/servers/agent_deployment.go`
 - Agent 健康检查、兼容性判断和证书时间错误恢复：`internal/modules/servers/agent_health.go`
-- Agent 系统证书签发、展示与重置：`internal/modules/servers/agent_certificates.go`
+- Agent 与 Panel HTTPS 系统证书签发、展示与重置：`internal/modules/servers/agent_certificates.go`、`internal/modules/keyassets/panel_tls.go`
 - Agent gRPC 协议、客户端与 TLS：`internal/agent/contract/`、`internal/agent/client/`、`internal/agent/rpc/`、`internal/agent/security/`
 - SSH 执行器：`internal/platform/ssh/`
 - Linux 发行版适配：`internal/platform/linux/`
@@ -58,7 +58,7 @@
 - 凭据：`GET/POST /api/v1/credentials`，`GET/PUT/DELETE /api/v1/credentials/{id}`
 - 服务器：`GET/POST /api/v1/servers`，`POST /api/v1/servers/probe`，`PUT/DELETE /api/v1/servers/{id}`
 - Agent 部署：`POST /api/v1/servers/{id}/agent/deploy`，Agent 证书包：`POST /api/v1/servers/{id}/agent/certificate`
-- Agent 系统证书：`GET /api/v1/key-assets/system`，重置：`POST /api/v1/key-assets/system/{id}/reset`
+- Agent 与 Panel HTTPS 系统证书：`GET /api/v1/key-assets/system`，重置：`POST /api/v1/key-assets/system/{id}/reset`
 - 服务器操作：同步连通性检查 `POST /api/v1/servers/{id}/test`，信任新主机密钥 `POST /api/v1/servers/{id}/trust-host-key`，任务型重启 `POST /api/v1/servers/{id}/restart`，任务型 UFW 安装 `POST /api/v1/servers/{id}/ufw/install`
 - UFW：`GET /api/v1/servers/{id}/ufw`，`POST /api/v1/servers/{id}/ufw/enable`，`POST /api/v1/servers/{id}/ufw/rules`，`DELETE /api/v1/servers/{id}/ufw/rules/{number}`
 - fail2ban：`GET /api/v1/servers/{id}/fail2ban`，`PUT /api/v1/servers/{id}/fail2ban`，`POST /api/v1/servers/{id}/fail2ban/enable`，`POST /api/v1/servers/{id}/fail2ban/release`，`POST /api/v1/servers/{id}/fail2ban/install`
@@ -115,7 +115,7 @@
 - Agent gRPC service 契约定义在 `internal/agent/proto/agent.proto`，生成代码位于 `internal/agent/pb`；`internal/agent/rpc` 只负责 protobuf message 与现有业务类型之间的转换和服务实现。不要恢复 HTTP fallback，也不要在业务模块中直接拼远端路径。
 - Panel Agent 启动时必须先校验构建生成的 gRPC contract hash 非空；该 hash 基于生成代码暴露的 protobuf descriptor，缺少生成文件或生成流程失效时直接返回启动错误。
 - Agent 状态机固定为四类：`compatible` 表示正常，只有该状态允许依赖 Agent 的系统探测、UFW 状态、fail2ban 状态与配置应用、指标、应用运行时和容器化操作；`incompatible` 表示 agent 构建版本与 Panel 不一致或证书时间需要修复，系统定时检查必须自动创建或复用部署任务修复；`unavailable` 表示当前不可用，包括连不上、健康检查失败、Docker 不可用或尚未部署，其中尚未配置 agent URL 会自动部署，普通网络/远端不可达错误只记录状态并跳过依赖 agent 的工作，不得直接触发重装；`undeployable` 表示连续 2 次系统自动部署失败后的无法部署状态，系统定时检查不得继续部署，只保留手动重装入口，手动重装会清除自动部署停止标记。
-- Agent CA、Panel Agent 客户端证书和每台服务器已签发的 Agent 服务端证书作为“系统内置”资产展示，底层可作为 `metadata.systemManaged=true` 的系统托管资产保存，但不属于用户域 key asset，不能删除、导入、导出或注册为应用内部文件来源，只允许重置。每台服务器的 Agent 服务端证书是安装/重装任务同步到目标机 `/etc/panel-agent` 的部署产物；只有已记录证书指纹和有效期元数据的服务器证书会进入系统证书列表，重置单台服务器证书会复用该服务器的 Agent 部署任务。
+- Agent CA、Panel Agent 客户端证书、每台服务器已签发的 Agent 服务端证书，以及 Panel HTTPS 的独立 RSA-2048 `panel-ca`/`panel-tls` 链作为“系统内置”资产展示，底层使用 `metadata.systemManaged=true` 和用途 scope 保存，但不属于用户域 key asset，不能删除、导入、导出、重签、下载或注册为应用内部文件来源，只允许查看和 reset。Agent CA 继续使用 Ed25519 mTLS；Panel HTTPS 不复用 Agent CA。每台服务器的 Agent 服务端证书是安装/重装任务同步到目标机 `/etc/panel-agent` 的部署产物；只有已记录证书指纹和有效期元数据的服务器证书会进入系统证书列表，重置单台服务器证书会复用该服务器的 Agent 部署任务。
 - 重置 Panel Agent 客户端证书时保留 Agent CA，并热加载所有服务共享的 Agent gRPC client；重置 Agent CA 时同时生成新的客户端证书、热加载 gRPC client，并为所有已配置服务器排队重部署 Agent；重置单台服务器证书复用该服务器的 Agent 部署任务。
 - Agent 部署成功后把服务端证书指纹和有效期写入服务器 traits，供服务器 Agent 状态、最后错误和部署任务排查使用；健康检查成功时也会从 TLS 握手中的远端服务端证书刷新这些元数据。
 - 服务器必须启用 agent，通过 traits 记录：`agent.enabled=true` 且 `agent.url=https://host:9786`。该值表示 mTLS gRPC endpoint，沿用 `https://` 形式以兼容既有 trait 和证书部署逻辑，不再表示 HTTP API。Panel 启动后会扫描服务器，调度器也会周期检查已配置 agent；没有配置 agent URL 的服务器会自动创建 `server_agent_deploy` 任务；已配置 agent 但 URL 不是当前默认地址的服务器会标记为 `incompatible` 并自动重装；已配置当前默认 URL 的服务器会执行健康检查，检查结果写入 `agent.status`、`agent.last_checked_at`、`agent.version` 和 `agent.last_error` traits。`agent.version` 必须与当前 Panel 构建版本完全一致，否则标记 `incompatible` 并自动重装；健康检查返回的 `capabilities`、agent gRPC contract hash 和 Docker host 不作为兼容性门槛。连续系统自动部署失败达到上限后进入 `undeployable`。

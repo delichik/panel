@@ -21,15 +21,11 @@ func (r testAssetReader) ReadFile(_ context.Context, _ string, kind string) ([]b
 	return r.privateKey, "private.key", nil
 }
 
-func TestFixedCertificateReloadsSyncedPairAndFallsBackWhenMissing(t *testing.T) {
+func TestFixedCertificateLoadsSyncedPairAndFailsWhenMissing(t *testing.T) {
 	invalidateCertificate()
 	dataRoot := t.TempDir()
-	initial, err := FixedCertificate(dataRoot, "localhost")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(initial.Certificate) == 0 {
-		t.Fatal("default certificate is empty")
+	if _, err := FixedCertificate(dataRoot, "localhost"); err == nil {
+		t.Fatal("missing fixed certificate pair was accepted")
 	}
 
 	certificatePEM, privateKeyPEM, err := newCertificate("panel.example.test")
@@ -42,7 +38,7 @@ func TestFixedCertificateReloadsSyncedPairAndFallsBackWhenMissing(t *testing.T) 
 	}); err != nil {
 		t.Fatal(err)
 	}
-	reloaded, err := FixedCertificate(dataRoot, "localhost")
+	reloaded, err := FixedCertificate(dataRoot, "panel.example.test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +60,7 @@ func TestFixedCertificateReloadsSyncedPairAndFallsBackWhenMissing(t *testing.T) 
 	if err := os.WriteFile(filepath.Join(dataRoot, "tls", "panel.key"), secondPrivateKeyPEM, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	stillCached, err := FixedCertificate(dataRoot, "localhost")
+	stillCached, err := FixedCertificate(dataRoot, "panel.example.test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,23 +76,22 @@ func TestFixedCertificateReloadsSyncedPairAndFallsBackWhenMissing(t *testing.T) 
 	if err := os.Remove(filepath.Join(dataRoot, "tls", "panel.key")); err != nil {
 		t.Fatal(err)
 	}
-	fallback, err := FixedCertificate(dataRoot, "localhost")
-	if err != nil {
-		t.Fatal(err)
-	}
-	fallbackLeaf, err := x509.ParseCertificate(fallback.Certificate[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fallbackLeaf.VerifyHostname("localhost") != nil {
-		t.Fatalf("fallback certificate does not cover localhost: %v", fallbackLeaf.VerifyHostname("localhost"))
+	if _, err := FixedCertificate(dataRoot, "panel.example.test"); err == nil {
+		t.Fatal("incomplete fixed certificate pair was accepted")
 	}
 }
 
 func TestSyncCertificateRejectsMismatchedPair(t *testing.T) {
 	invalidateCertificate()
 	dataRoot := t.TempDir()
-	if _, err := FixedCertificate(dataRoot, "localhost"); err != nil {
+	initialCertificatePEM, initialPrivateKeyPEM, err := newCertificate("localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SyncCertificate(context.Background(), dataRoot, "localhost", "asset-current", testAssetReader{
+		certificate: initialCertificatePEM,
+		privateKey:  initialPrivateKeyPEM,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	certificatePEM, _, err := newCertificate("panel.example.test")
@@ -157,7 +152,7 @@ func TestRestoreFixedPairRestoresSnapshotWithoutAssetLookup(t *testing.T) {
 	if err := RestoreFixedPair(dataRoot, snapshot); err != nil {
 		t.Fatal(err)
 	}
-	restored, err := FixedCertificate(dataRoot, "localhost")
+	restored, err := FixedCertificate(dataRoot, "old.example.test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +203,7 @@ func TestFixedCertificateRecoversInterruptedPairReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	recovered, err := FixedCertificate(dataRoot, "localhost")
+	recovered, err := FixedCertificate(dataRoot, "old.example.test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +241,7 @@ func TestFixedCertificateKeepsValidPairWhenTransactionMarkerIsCorrupt(t *testing
 		t.Fatal(err)
 	}
 
-	recovered, err := FixedCertificate(dataRoot, "localhost")
+	recovered, err := FixedCertificate(dataRoot, "panel.example.test")
 	if err != nil {
 		t.Fatal(err)
 	}

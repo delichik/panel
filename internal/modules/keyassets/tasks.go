@@ -2,6 +2,7 @@ package keyassets
 
 import (
 	"strings"
+	"time"
 
 	"panel/internal/modules/tasks"
 )
@@ -22,6 +23,21 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 		return
 	}
 	for _, def := range []tasks.Definition{
+		{
+			Type:              TaskTypePanelTLSReconcile,
+			Summary:           "Reconciling Panel TLS assets",
+			Hidden:            true,
+			AllowRetry:        true,
+			ConcurrencyPolicy: tasks.ConcurrencyResourceExclusive,
+			ConcurrencyKey: func(in tasks.CreateInput) string {
+				return "key_asset:" + SystemPanelTLSAssetID
+			},
+			Execute: s.RunPanelTLSReconcileTask,
+			Periodic: &tasks.Periodic{
+				Interval:      30 * time.Minute,
+				CollectInputs: s.CollectPanelTLSInputs,
+			},
+		},
 		{Type: TaskTypeTLSReissue, ConcurrencyPolicy: tasks.ConcurrencyResourceExclusive, ConcurrencyKey: keyAssetConcurrencyKey},
 		{Type: TaskTypeSSHRegenerate, ConcurrencyPolicy: tasks.ConcurrencyResourceExclusive, ConcurrencyKey: keyAssetConcurrencyKey},
 		{Type: TaskTypeExport, ConcurrencyPolicy: tasks.ConcurrencyResourceExclusive, ConcurrencyKey: keyAssetConcurrencyKey},

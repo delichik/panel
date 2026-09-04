@@ -56,6 +56,20 @@ func (s *Service) SetAgentTLSAssets(assets *agentsecurity.TLSAssets) {
 	s.agentTLS = assets
 }
 
+type fakePanelTLSProvider struct {
+	items   []SystemCertificate
+	resetID string
+}
+
+func (f *fakePanelTLSProvider) PanelSystemCertificateInfos(context.Context) ([]SystemCertificate, error) {
+	return f.items, nil
+}
+
+func (f *fakePanelTLSProvider) ResetPanelTLS(_ context.Context, id string) (tasks.Task, error) {
+	f.resetID = id
+	return tasks.Task{ID: "panel-reset-task", ResourceID: id}, nil
+}
+
 func setServerArchitecture(t *testing.T, store *storage.Store, serverID string) {
 	t.Helper()
 	if _, err := store.AppDB().Exec(`UPDATE servers SET architecture_os='linux', architecture_arch='amd64', architecture_machine='x86_64' WHERE id=?`, serverID); err != nil {
@@ -1380,6 +1394,34 @@ func TestSystemCertificatesIncludeAgentServerCertificates(t *testing.T) {
 	if items[2].ID != "agent-server:srv_agent" || items[2].ServerID != "srv_agent" || items[2].ServerName != "s" || items[2].Fingerprint != "ABC" || !items[2].BuiltIn || !items[2].CanReset {
 		t.Fatalf("unexpected agent server certificate item: %#v", items[2])
 	}
+}
+
+func TestSystemCertificatesIncludePanelTLSAssetsAndResetDelegates(t *testing.T) {
+	svc, taskSvc, _ := testServerService(t, nil)
+	assets, err := agentsecurity.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.SetAgentTLSAssets(assets)
+	panelProvider := &fakePanelTLSProvider{items: []SystemCertificate{
+		{ID: "panel-ca", Type: "ca_certificate", Name: "Panel HTTPS CA", BuiltIn: true, CanReset: true},
+		{ID: "panel-tls", Type: "tls_certificate", Name: "Panel HTTPS certificate", BuiltIn: true, CanReset: true},
+	}}
+	svc.panelTLS = panelProvider
+	items, err := svc.SystemCertificates(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 4 || items[2].ID != "panel-ca" || items[3].ID != "panel-tls" {
+		t.Fatalf("Panel system certificates = %#v", items)
+	}
+	if _, err := svc.ResetSystemCertificate(context.Background(), "panel-tls"); err != nil {
+		t.Fatal(err)
+	}
+	if panelProvider.resetID != "panel-tls" {
+		t.Fatalf("Panel reset delegated ID = %q", panelProvider.resetID)
+	}
+	_ = taskSvc
 }
 
 func TestSystemCertificatesSkipAgentServerWithoutCertificateMetadata(t *testing.T) {

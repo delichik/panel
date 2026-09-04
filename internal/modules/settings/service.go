@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
-	"crypto/x509"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -655,9 +654,8 @@ func (s *Service) validatePanelTLS(settings RuntimeSettings) error {
 	if err != nil || len(cert.Certificate) == 0 {
 		return panelerr.Validation("invalid_panel_tls_certificate", "Selected Panel TLS certificate and private key do not match")
 	}
-	leaf, err := x509.ParseCertificate(cert.Certificate[0])
-	if err != nil || leaf.VerifyHostname(strings.TrimSpace(settings.Panel.Domain)) != nil {
-		return panelerr.Validation("invalid_panel_tls_certificate", "Selected Panel TLS certificate does not cover the Panel domain")
+	if err := paneltls.ValidateListenerCertificate(cert, strings.TrimSpace(settings.Panel.Domain)); err != nil {
+		return panelerr.Validation("invalid_panel_tls_certificate", err.Error())
 	}
 	return nil
 }

@@ -5,7 +5,7 @@
 - Container runtime starts `cmd/panel-init/main.go`; local development may still run `cmd/panel/main.go` directly.
 - `panel_init` starts a random local `127.0.0.1:0` restart listener, generates a random restart token, starts the child Panel process with `--init-restart-url`, `--init-restart-token`, and `--maintenance-mode`, and exits when the child exits without a restart request.
 - Backup/restore restart requests POST the next mode to the local `panel_init` listener, asking it to restart Panel with `--maintenance-mode backup_export`, `restore`, or `normal`.
-- Normal and maintenance Panel startup listen on the configured standalone HTTPS address and serve a process-global cached pair from `dataRoot/tls/panel.crt` plus `dataRoot/tls/panel.key`. Runtime settings and key assets synchronize this fixed pair; activation, persistence, and failure rollback run in one process-local critical section using an in-memory fixed-pair snapshot. A successful update clears the cache, and the next new TLS connection reloads it. When the pair is absent or incomplete, Panel creates and serves a local self-signed certificate from the data root.
+- Normal and maintenance Panel startup listen on the configured standalone HTTPS address and serve a process-global cached pair from `dataRoot/tls/panel.crt` plus `dataRoot/tls/panel.key`. At normal startup, `bootstrap/panel.New` first reconciles the database-backed `panel-ca` (RSA-2048 parent CA) and `panel-tls` (RSA-2048 ServerAuth leaf), then synchronizes the selected asset into this fixed pair before accepting traffic. Runtime settings and key assets synchronize the pair; activation, persistence, and failure rollback run in one process-local critical section using an in-memory fixed-pair snapshot. The fixed files are only a listener cache, while `key_assets` is the source of truth. If the pair is missing or incomplete, the listener fails closed rather than generating an unregistered certificate.
 - `cmd/panel/main.go` must not enter backup/restore maintenance mode from pending files alone; the maintenance mode argument is the required gate.
 
 ## Agent Report Stream
@@ -70,7 +70,7 @@
 - 当前处于 alpha 但已有使用者，修改表结构必须考虑旧版本迁移。
 - `Store.Migrate` 已由 ORM 驱动：对 app/log/metrics 三库分别调用 `orm.AutoMigrateModels(WithDestructive(true))`（DDL 由 `internal/platform/database/models` 的 42 个模型负责，CHECK 约束经 `TableConstraints()` 声明），随后按 `models.ExtraIndexDDL()` 幂等创建复合/部分/复合 UNIQUE 索引，并用 `orm.RunSteps` 执行一次性数据迁移；历史遗留表（旧 tasks/certificates）由对应 Step/直连迁移清理，不依赖自动删除。证书 scope 约束重建因需事务外切换 `PRAGMA foreign_keys`，由 Migrate 直接调用而非 Step。
 - 入口网关设施配置表只保存部署节点、DNS 同步状态、错误和更新时间；所有路由统一保存在 `reverse_proxy_routes` 表。升级旧库时启动预迁移会忽略历史 Panel 入口字段，并继续迁移旧域名路由。
-- 运行时设置保存 Panel 域名和可选 TLS 密钥资产 ID。设置和证书资产负责把当前证书同步到 `<dataRoot>/tls/panel.crt` 与 `<dataRoot>/tls/panel.key`，并清空进程级 TLS 缓存；文件激活、配置持久化及失败回滚在同一进程内临界区执行，回滚直接恢复固定文件快照而不再读取数据库。下一条新 TLS 连接才加锁加载这对固定文件，缓存命中不做文件 I/O。固定文件缺失或不完整时使用内置自签名证书，空 ID 会恢复默认自签名证书。
+- 运行时设置保存 Panel 域名和可选 TLS 密钥资产 ID。默认监听使用 `key_assets` 中独立用途的 `panel-ca`/`panel-tls` RSA 链；Agent 的 `agent-ca`/客户端证书仍是独立的 Ed25519 mTLS 链。设置和证书资产负责把当前证书同步到 `<dataRoot>/tls/panel.crt` 与 `<dataRoot>/tls/panel.key`，并清空进程级 TLS 缓存；文件激活、配置持久化及失败回滚在同一进程内临界区执行，回滚直接恢复固定文件快照而不再读取数据库。下一条新 TLS 连接才加锁加载这对固定文件，缓存命中不做文件 I/O。固定文件缺失或不完整时直接报错，不再旁路生成未登记证书；空 ID 选择内置 `panel-tls`。
 - 新字段或新表优先使用可重复执行的增量迁移，并在 `internal/platform/database/store_test.go` 或相关 service 测试覆盖旧库升级路径。
 - 数据库迁移兼容基线不再包含短期内部结构：`applications.persistent_path`、CoordDB 的 `application_lifecycle_operations`/`application_lifecycle_targets`（已随迁移删除）、以及不支持 `application_files.kind='archive'` 的旧 `application_files` 约束；处理这些更早内部快照时应先用带兼容迁移的版本升级。AppDB 的 `application_revisions`、`jobs` 和实例 desired/observed 字段必须通过可重复迁移补齐。
 - 会被展示的持久化配置只保存稳定 key、kind、value，不保存当前语言下的展示文案。
@@ -102,6 +102,7 @@
 
 - `bootstrap/panel.New` 必须在证书、应用和 tasks 内部 worker 启动前初始化 `internal/platform/secrets`、迁移 DNS provider 凭据、初始化 `internal/modules/keyassets` 并完成旧自签证书迁移。
 - `key_assets` 保存统一密钥与证书元数据和密文私钥；`key_asset_exports` 位于 `Store.LogDB()`，保存短期批量导出下载信息，沿用 30 分钟 `expires_at` 语义并由密钥资产服务清理过期记录和归档文件。旧 AppDB 中的导出记录不迁移、不读取兼容。
+- `panel-ca` 与 `panel-tls` 是 `metadata.systemManaged=true`、`systemScope=panel_tls` 的系统资产，私钥通过 secret store 加密保存；它们只在系统证书接口中查看或 reset，不能作为普通 key asset 删除、重签、下载、导出、导入覆盖、应用文件来源或反向代理证书。自定义 Panel 监听证书仍可选用，但保存前必须满足 RSA-2048、有效期、Panel 域名 SAN、ServerAuth、完整父链和 RSA 签名算法兼容基线。
 - `credentials.secret_ciphertext` 使用同一 `secretstore` 保存 SSH 密码、私钥和私钥口令的加密 JSON；新凭据不得把秘密写入独立文件或旧明文字段。
 - 主密钥优先读取 `PANEL_KEY_ASSETS_MASTER_KEY`，否则读取 `<dataRoot>/secrets/key-assets-master.key`；首次无资产时自动生成文件并使用 `0600` 权限。
 - 数据库存在加密资产、DNS 凭据或 SSH 凭据但主密钥缺失、格式错误或环境变量与文件不一致时，Panel 必须拒绝启动，不能生成新密钥覆盖。

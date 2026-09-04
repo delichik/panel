@@ -10,10 +10,11 @@ const (
 	AlgorithmEd25519 = "ed25519"
 	AlgorithmRSA     = "rsa"
 
-	TaskTypeTLSReissue    = "key_asset_tls_reissue"
-	TaskTypeSSHRegenerate = "key_asset_ssh_regenerate"
-	TaskTypeExport        = "key_asset_export"
-	TaskTypeImport        = "key_asset_import"
+	TaskTypeTLSReissue        = "key_asset_tls_reissue"
+	TaskTypePanelTLSReconcile = "panel_tls_reconcile"
+	TaskTypeSSHRegenerate     = "key_asset_ssh_regenerate"
+	TaskTypeExport            = "key_asset_export"
+	TaskTypeImport            = "key_asset_import"
 )
 
 type Asset struct {

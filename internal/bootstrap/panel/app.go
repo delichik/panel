@@ -101,6 +101,13 @@ func New(cfg config.Config) (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
+	// Synchronize the built-in Panel RSA CA/leaf before any listener can accept
+	// traffic. User-selected certificates remain selected and are only
+	// validated/activated here.
+	if err := keyAssetSvc.SyncPanelTLS(context.Background(), settingsSvc.Runtime().Panel.Domain, settingsSvc.Runtime().Panel.TLSCertificateID); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
 	logging.L().Info("runtime settings loaded", zap.String("log_level", settingsSvc.Runtime().LogLevel))
 	authSvc, err := auth.NewService(store.AppDB(), cfg, settingsSvc)
 	if err != nil {
@@ -124,6 +131,7 @@ func New(cfg config.Config) (*App, error) {
 		server.WithAgentClient(agentClient),
 		server.WithAgentTLSAssets(agentTLS),
 		server.WithAgentTLSProvider(keyAssetSvc),
+		server.WithPanelTLSProvider(keyAssetSvc),
 		server.WithMetricsDB(store.MetricsDB()),
 	)
 	applicationSvc := applications.NewServiceWithOptions(store.AppDB(), agentClient, taskSvc, applications.Config{

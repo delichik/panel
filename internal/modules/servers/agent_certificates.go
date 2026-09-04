@@ -67,6 +67,13 @@ func (s *Service) SystemCertificates(ctx context.Context) ([]SystemCertificate, 
 		systemCertificateFromInfo("agent-ca", "ca_certificate", "Panel Agent CA", caInfo),
 		systemCertificateFromInfo("agent-panel-client", "tls_certificate", "Panel Agent client", clientInfo),
 	}
+	if s.panelTLS != nil {
+		panelCertificates, err := s.panelTLS.PanelSystemCertificateInfos(ctx)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, panelCertificates...)
+	}
 	servers, err := s.List(ctx)
 	if err != nil {
 		return nil, err
@@ -81,6 +88,11 @@ func (s *Service) SystemCertificates(ctx context.Context) ([]SystemCertificate, 
 
 func (s *Service) ResetSystemCertificate(ctx context.Context, certificateID string) (tasks.Task, error) {
 	switch certificateID {
+	case "panel-ca", "panel-tls":
+		if s.panelTLS == nil {
+			return tasks.Task{}, panelerr.NotFound("system certificate")
+		}
+		return s.panelTLS.ResetPanelTLS(ctx, certificateID)
 	case "agent-ca", "agent-panel-client":
 		task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
 			Type:         agentCertificateResetTaskType,

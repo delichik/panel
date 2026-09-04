@@ -16,6 +16,7 @@ import (
 
 	agentcontract "panel/internal/agent/contract"
 	agentsecurity "panel/internal/agent/security"
+	serverdomain "panel/internal/modules/servers/domain"
 	"panel/internal/modules/servers/ports"
 	serversqlite "panel/internal/modules/servers/store/sqlite"
 	"panel/internal/modules/tasks"
@@ -80,6 +81,7 @@ type Service struct {
 	agent     agentcontract.Client
 	agentTLS  *agentsecurity.TLSAssets
 	agentKeys agentTLSProvider
+	panelTLS  panelTLSProvider
 	tasks     *tasks.Service
 	// dnsSyncTrigger notifies the reverse proxy facility when server
 	// addresses change so affected proxy domains can resync their records.
@@ -99,6 +101,14 @@ type agentTLSProvider interface {
 	ResetAgentClientCertificate(ctx context.Context) (*agentsecurity.TLSAssets, error)
 }
 
+// panelTLSProvider keeps the system-certificate endpoint independent from the
+// keyassets implementation. The DTO lives in the servers domain package so
+// keyassets can provide it without importing the servers service package.
+type panelTLSProvider interface {
+	PanelSystemCertificateInfos(context.Context) ([]serverdomain.SystemCertificate, error)
+	ResetPanelTLS(context.Context, string) (tasks.Task, error)
+}
+
 type Option func(*Service)
 
 func WithMetricsDB(db *sql.DB) Option {
@@ -115,6 +125,10 @@ func WithAgentTLSAssets(assets *agentsecurity.TLSAssets) Option {
 
 func WithAgentTLSProvider(provider agentTLSProvider) Option {
 	return func(s *Service) { s.agentKeys = provider }
+}
+
+func WithPanelTLSProvider(provider panelTLSProvider) Option {
+	return func(s *Service) { s.panelTLS = provider }
 }
 
 func (s *Service) SetDNSSyncTrigger(trigger func(context.Context, []string) error) {

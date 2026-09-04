@@ -163,6 +163,10 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, err)
 		return
 	}
+	if isSystemManagedAsset(result) {
+		httpx.Error(w, panelerr.NotFound("key asset"))
+		return
+	}
 	httpx.JSON(w, http.StatusOK, toAssetDetailDTO(result))
 }
 
@@ -240,6 +244,15 @@ func (h *Handler) Regenerate(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) {
 	assetID, kind := keyAssetFileFromRequest(r)
+	asset, err := h.service.Get(r.Context(), assetID)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	if isSystemManagedAsset(asset) {
+		httpx.Error(w, panelerr.NotFound("key asset file"))
+		return
+	}
 	content, filename, err := h.service.ReadFile(r.Context(), assetID, kind)
 	if err != nil {
 		httpx.Error(w, err)

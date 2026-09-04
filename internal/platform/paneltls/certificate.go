@@ -2,8 +2,8 @@ package paneltls
 
 import (
 	"context"
-	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -101,8 +101,8 @@ func RestoreFixedPair(dataRoot string, snapshot FixedPairSnapshot) error {
 }
 
 // FixedCertificate loads the certificate pair used by the HTTP listener. The
-// pair is deliberately independent of the database: a missing or incomplete
-// pair is replaced with the managed self-signed certificate.
+// pair is loaded from the fixed listener location. Startup synchronizes this
+// location from the managed key asset before the listener accepts traffic.
 func FixedCertificate(dataRoot, fallbackDomain string) (tls.Certificate, error) {
 	if certificate := cachedCertificate.Load(); certificate != nil {
 		return *certificate, nil
@@ -117,19 +117,19 @@ func FixedCertificate(dataRoot, fallbackDomain string) (tls.Certificate, error) 
 		return tls.Certificate{}, err
 	}
 	certPath, keyPath := fixedCertificatePaths(dataRoot)
-	if certificate, err := tls.LoadX509KeyPair(certPath, keyPath); err == nil {
-		cacheCertificate(certificate)
-		return certificate, nil
+	certificate, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		return tls.Certificate{}, errors.Join(errors.New("Panel TLS certificate pair is unavailable"), err)
 	}
-	certificate, err := certificateLocked(dataRoot, fallbackDomain)
-	if err == nil {
-		cacheCertificate(certificate)
+	if err := ValidateListenerCertificate(certificate, fallbackDomain); err != nil {
+		return tls.Certificate{}, err
 	}
-	return certificate, err
+	cacheCertificate(certificate)
+	return certificate, nil
 }
 
-// SyncCertificate writes the selected certificate pair to the fixed listener
-// location. An empty asset ID restores the managed self-signed certificate.
+// SyncCertificate writes an already validated, managed certificate pair to the
+// fixed listener location. The caller owns the database-backed asset source.
 func SyncCertificate(ctx context.Context, dataRoot, domain, assetID string, reader AssetReader) error {
 	mu.Lock()
 	defer mu.Unlock()
@@ -139,11 +139,7 @@ func SyncCertificate(ctx context.Context, dataRoot, domain, assetID string, read
 
 	assetID = strings.TrimSpace(assetID)
 	if assetID == "" {
-		_, err := managedCertificateLocked(dataRoot, domain)
-		if err == nil {
-			invalidateCertificate()
-		}
-		return err
+		return errors.New("Panel TLS asset ID is required")
 	}
 	if reader == nil {
 		return errors.New("Panel TLS asset reader is unavailable")
@@ -156,7 +152,11 @@ func SyncCertificate(ctx context.Context, dataRoot, domain, assetID string, read
 	if err != nil {
 		return err
 	}
-	if _, err := tls.X509KeyPair(certificatePEM, privateKeyPEM); err != nil {
+	pair, err := tls.X509KeyPair(certificatePEM, privateKeyPEM)
+	if err != nil {
+		return err
+	}
+	if err := ValidateListenerCertificate(pair, domain); err != nil {
 		return err
 	}
 	if err := writeCertificatePair(dataRoot, certificatePEM, privateKeyPEM); err != nil {
@@ -173,43 +173,6 @@ func cacheCertificate(certificate tls.Certificate) {
 
 func invalidateCertificate() {
 	cachedCertificate.Store(nil)
-}
-
-func certificateLocked(dataRoot, domain string) (tls.Certificate, error) {
-	domain = strings.ToLower(strings.TrimSpace(domain))
-	if domain == "" {
-		domain = "localhost"
-	}
-	certPath, keyPath := fixedCertificatePaths(dataRoot)
-	if cert, err := tls.LoadX509KeyPair(certPath, keyPath); err == nil && certificateCoversDomain(cert, domain) {
-		return cert, nil
-	}
-	if err := os.MkdirAll(filepath.Dir(certPath), 0o700); err != nil {
-		return tls.Certificate{}, err
-	}
-	certPEM, keyPEM, err := newCertificate(domain)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-	if err := writeCertificatePair(dataRoot, certPEM, keyPEM); err != nil {
-		return tls.Certificate{}, err
-	}
-	return tls.X509KeyPair(certPEM, keyPEM)
-}
-
-func managedCertificateLocked(dataRoot, domain string) (tls.Certificate, error) {
-	domain = strings.ToLower(strings.TrimSpace(domain))
-	if domain == "" {
-		domain = "localhost"
-	}
-	certPEM, keyPEM, err := newCertificate(domain)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-	if err := writeCertificatePair(dataRoot, certPEM, keyPEM); err != nil {
-		return tls.Certificate{}, err
-	}
-	return tls.X509KeyPair(certPEM, keyPEM)
 }
 
 func fixedCertificatePaths(dataRoot string) (string, string) {
@@ -360,25 +323,74 @@ func replaceFile(source, target string) error {
 	return os.Rename(source, target)
 }
 
-func certificateCoversDomain(cert tls.Certificate, domain string) bool {
-	if len(cert.Certificate) == 0 {
+// ValidateListenerCertificate enforces the compatibility baseline for the
+// public Panel HTTPS listener. Agent mTLS certificates intentionally do not
+// use this check and may continue using Ed25519.
+func ValidateListenerCertificate(certificate tls.Certificate, domain string) error {
+	if len(certificate.Certificate) == 0 {
+		return errors.New("Panel TLS certificate is empty")
+	}
+	parsed := make([]*x509.Certificate, 0, len(certificate.Certificate))
+	for _, der := range certificate.Certificate {
+		cert, err := x509.ParseCertificate(der)
+		if err != nil {
+			return errors.New("Panel TLS certificate chain is invalid")
+		}
+		parsed = append(parsed, cert)
+	}
+	leaf := parsed[0]
+	now := time.Now()
+	if leaf.IsCA || now.Before(leaf.NotBefore) || now.After(leaf.NotAfter) {
+		return errors.New("Panel TLS certificate is expired or not yet valid")
+	}
+	if rsaKey, ok := leaf.PublicKey.(*rsa.PublicKey); !ok || rsaKey.N.BitLen() < 2048 {
+		return errors.New("Panel TLS certificate must use an RSA key of at least 2048 bits")
+	}
+	if !listenerSignatureAlgorithm(leaf.SignatureAlgorithm) {
+		return errors.New("Panel TLS certificate uses an unsupported signature algorithm")
+	}
+	if len(leaf.ExtKeyUsage) > 0 {
+		serverAuth := false
+		for _, usage := range leaf.ExtKeyUsage {
+			if usage == x509.ExtKeyUsageServerAuth {
+				serverAuth = true
+				break
+			}
+		}
+		if !serverAuth {
+			return errors.New("Panel TLS certificate is not valid for server authentication")
+		}
+	}
+	if domain = strings.ToLower(strings.TrimSpace(domain)); domain != "" && leaf.VerifyHostname(domain) != nil {
+		return errors.New("Panel TLS certificate does not cover the Panel domain")
+	}
+	for index := 1; index < len(parsed); index++ {
+		parent := parsed[index]
+		if !parent.IsCA || now.Before(parent.NotBefore) || now.After(parent.NotAfter) || !listenerSignatureAlgorithm(parent.SignatureAlgorithm) || parent.KeyUsage&x509.KeyUsageCertSign == 0 {
+			return errors.New("Panel TLS certificate chain is not compatible")
+		}
+		if parsed[index-1].CheckSignatureFrom(parent) != nil {
+			return errors.New("Panel TLS certificate chain signature is invalid")
+		}
+	}
+	return nil
+}
+
+func listenerSignatureAlgorithm(algorithm x509.SignatureAlgorithm) bool {
+	switch algorithm {
+	case x509.SHA256WithRSA, x509.SHA384WithRSA, x509.SHA512WithRSA:
+		return true
+	default:
 		return false
 	}
-	leaf, err := x509.ParseCertificate(cert.Certificate[0])
-	if err != nil || time.Now().After(leaf.NotAfter) {
-		return false
-	}
-	if ip := net.ParseIP(domain); ip != nil {
-		return leaf.VerifyHostname(ip.String()) == nil
-	}
-	return leaf.VerifyHostname(domain) == nil
 }
 
 func newCertificate(domain string) ([]byte, []byte, error) {
-	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, nil, err
 	}
+	publicKey := privateKey.Public()
 	serialLimit := new(big.Int).Lsh(big.NewInt(1), 128)
 	serial, err := rand.Int(rand.Reader, serialLimit)
 	if err != nil {

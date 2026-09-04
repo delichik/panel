@@ -111,6 +111,7 @@
 ## 密钥资产任务
 
 - `key_asset_tls_reissue`、`key_asset_ssh_regenerate`、`key_asset_export`、`key_asset_import` 记录密钥资产操作；当前这些记录型任务不注册 executor，因此不暴露任务中心手动运行或重试。
+- `panel_tls_reconcile` 是隐藏的系统任务，复用同一 worker 和周期触发机制，每 30 分钟检查 `panel-ca`/`panel-tls` 的完整性、域名 SAN、有效期和 RSA 链；叶子证书距离过期 30 天内、缺失或损坏时自动重建并同步固定监听缓存。用户从系统证书页 reset 时复用该任务类型；自定义 `panel.tlsCertificateId` 保持优先，不会被静默替换。
 - 重新签发、重新生成和导入任务会触发已启用应用重新部署，任务终态必须注销 execution。
 - 导出任务完成后通过 `/api/v1/key-assets/exports/{taskId}/download` 下载短期加密归档。
 

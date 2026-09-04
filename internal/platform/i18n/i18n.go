@@ -24,6 +24,7 @@ var (
 			"restore_archive_too_large":                              "还原归档超过大小上限",
 			"auth_rate_limited":                                      "尝试过于频繁，请稍后再试",
 			"key_asset_operation_in_progress":                        "该密钥资产已有操作正在进行",
+			"key_asset_system_managed":                               "系统托管密钥资产只能在系统证书页面重置",
 			"internal_error":                                         "服务器内部错误",
 			"bad_request":                                            "请求体 JSON 无效",
 			"unauthorized":                                           "未授权",

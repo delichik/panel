@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto"
-	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
 	"encoding/base64"
@@ -112,7 +111,7 @@ func WithLogDB(db *sql.DB) Option {
 // SyncPanelTLS copies the selected TLS asset into the fixed listener
 // location. The listener can then reload it without consulting the database.
 func (s *Service) SyncPanelTLS(ctx context.Context, domain, assetID string) error {
-	return paneltls.SyncCertificate(ctx, s.cfg.DataRoot, domain, assetID, s)
+	return s.syncPanelTLS(ctx, domain, assetID)
 }
 
 func (s *Service) panelTLSSelection(ctx context.Context) (string, string, error) {
@@ -126,26 +125,6 @@ func (s *Service) panelTLSSelection(ctx context.Context) (string, string, error)
 		return "", "", err
 	}
 	return strings.TrimSpace(domain), strings.TrimSpace(assetID), nil
-}
-
-func (s *Service) activatePanelTLSAsset(ctx context.Context, domain string, asset storedAsset) error {
-	if asset.Type != TypeTLSCertificate {
-		return panelerr.Validation("invalid_panel_tls_certificate", "Selected Panel certificate must be a TLS certificate")
-	}
-	certificatePEM := []byte(asset.certificateText)
-	privateKeyPEM := []byte(asset.privateKeyCiphertext)
-	certificate, err := tls.X509KeyPair(certificatePEM, privateKeyPEM)
-	if err != nil || len(certificate.Certificate) == 0 {
-		return panelerr.Validation("invalid_panel_tls_certificate", "Selected Panel TLS certificate and private key do not match")
-	}
-	leaf, err := x509.ParseCertificate(certificate.Certificate[0])
-	if err != nil || leaf.VerifyHostname(domain) != nil {
-		return panelerr.Validation("invalid_panel_tls_certificate", "Selected Panel TLS certificate does not cover the Panel domain")
-	}
-	return paneltls.SyncCertificate(ctx, s.cfg.DataRoot, domain, asset.ID, panelTLSMaterialReader{
-		certificatePEM: certificatePEM,
-		privateKeyPEM:  privateKeyPEM,
-	})
 }
 
 func NewService(db *sql.DB, cfg config.Config, secrets *secretstore.Store, taskSvc *tasks.Service, opts ...Option) *Service {
@@ -612,6 +591,9 @@ func (s *Service) CreateTLS(ctx context.Context, in CreateTLSRequest) (Asset, er
 	if parent.Type != TypeCACertificate {
 		return Asset{}, panelerr.Validation("key_asset_ca_invalid", "Selected parent asset is not a CA certificate")
 	}
+	if isSystemManagedAsset(parent.Asset) {
+		return Asset{}, systemAssetMutationError()
+	}
 	dnsNames := normalizeDNSNames(in.DNSNames)
 	ipStrings, ips, err := parseIPs(in.IPAddresses)
 	if err != nil {
@@ -757,6 +739,9 @@ func (s *Service) Delete(ctx context.Context, assetID string) error {
 	if err != nil {
 		return err
 	}
+	if isSystemManagedAsset(stored.Asset) {
+		return systemAssetMutationError()
+	}
 	if stored.Type == TypeCACertificate {
 		children, err := orm.New(s.db).From("key_assets").Where("parent_asset_id = ?", assetID).Count(ctx)
 		if err != nil {
@@ -781,6 +766,9 @@ func (s *Service) ReissueTLS(ctx context.Context, assetID string) (ReissueResult
 	if err != nil {
 		return ReissueResult{}, err
 	}
+	if isSystemManagedAsset(stored.Asset) {
+		return ReissueResult{}, systemAssetMutationError()
+	}
 	if stored.Type != TypeTLSCertificate {
 		return ReissueResult{}, panelerr.Validation("key_asset_type_invalid", "Only TLS certificates can be reissued")
 	}
@@ -793,6 +781,11 @@ func (s *Service) ReissueTLS(ctx context.Context, assetID string) (ReissueResult
 	}
 	parent, err := s.getStoredAsset(ctx, stored.ParentAssetID)
 	if err != nil {
+		_ = fail(err)
+		return ReissueResult{}, err
+	}
+	if isSystemManagedAsset(parent.Asset) {
+		err := systemAssetMutationError()
 		_ = fail(err)
 		return ReissueResult{}, err
 	}
@@ -872,6 +865,9 @@ func (s *Service) RegenerateSSH(ctx context.Context, assetID string) (Regenerate
 	if err != nil {
 		return RegenerateResult{}, err
 	}
+	if isSystemManagedAsset(stored.Asset) {
+		return RegenerateResult{}, systemAssetMutationError()
+	}
 	if stored.Type != TypeSSHKeyPair {
 		return RegenerateResult{}, panelerr.Validation("key_asset_type_invalid", "Only SSH key pairs can be regenerated")
 	}
@@ -922,6 +918,9 @@ func (s *Service) ReadFile(ctx context.Context, assetID, kind string) ([]byte, s
 	stored, err := s.getStoredAsset(ctx, assetID)
 	if err != nil {
 		return nil, "", err
+	}
+	if isSystemManagedAsset(stored.Asset) {
+		return nil, "", panelerr.NotFound("key asset file")
 	}
 	kind = strings.TrimSpace(kind)
 	switch stored.Type {
@@ -995,7 +994,7 @@ func (s *Service) OpenInternalFile(ctx context.Context, source string) (io.ReadC
 }
 
 func (s *Service) ReverseProxyCertificates(ctx context.Context) ([]proxycert.Certificate, error) {
-	rows, err := orm.Raw(ctx, s.db, `SELECT `+assetColumns+` FROM key_assets WHERE type=? ORDER BY name`, TypeTLSCertificate)
+	rows, err := orm.Raw(ctx, s.db, `SELECT `+assetColumns+` FROM key_assets WHERE type=? AND `+userVisibleAssetsFilter+` ORDER BY name`, TypeTLSCertificate)
 	if err != nil {
 		return nil, err
 	}
@@ -1045,6 +1044,11 @@ func (s *Service) CreateExport(ctx context.Context, in ExportRequest) (ExportRes
 		seen[assetID] = struct{}{}
 		stored, err := s.getStoredAsset(ctx, assetID)
 		if err != nil {
+			_ = fail(err)
+			return ExportResult{}, err
+		}
+		if isSystemManagedAsset(stored.Asset) {
+			err := systemAssetMutationError()
 			_ = fail(err)
 			return ExportResult{}, err
 		}
@@ -1229,6 +1233,12 @@ func (s *Service) PreflightImport(ctx context.Context, in ImportPreflightRequest
 	conflicts := []ImportConflict{}
 	overwriteInUse := []string{}
 	for _, item := range payload.Assets {
+		if isReservedSystemAssetID(item.ID) {
+			return ImportPreflightResult{}, systemAssetMutationError()
+		}
+		if item.Metadata[systemManagedKey] == true {
+			return ImportPreflightResult{}, systemAssetMutationError()
+		}
 		stored, err := s.prepareImportedAsset(ctx, ImportRequest{
 			Type:           item.Type,
 			Name:           item.Name,
@@ -1248,6 +1258,9 @@ func (s *Service) PreflightImport(ctx context.Context, in ImportPreflightRequest
 		stored.UpdatedAt = now
 		assets = append(assets, stored)
 		if existingByID, err := s.getStoredAsset(ctx, item.ID); err == nil {
+			if isSystemManagedAsset(existingByID.Asset) {
+				return ImportPreflightResult{}, systemAssetMutationError()
+			}
 			conflicts = append(conflicts, ImportConflict{IncomingID: item.ID, IncomingName: item.Name, ExistingID: existingByID.ID, ExistingName: existingByID.Name, ConflictByID: true})
 			if used, err := s.assetInUse(ctx, existingByID.ID); err == nil && used {
 				overwriteInUse = append(overwriteInUse, existingByID.ID)
@@ -1255,6 +1268,9 @@ func (s *Service) PreflightImport(ctx context.Context, in ImportPreflightRequest
 		}
 		existingByName, err := s.getStoredAssetByName(ctx, item.Name)
 		if err == nil && existingByName.ID != item.ID {
+			if isSystemManagedAsset(existingByName.Asset) {
+				return ImportPreflightResult{}, systemAssetMutationError()
+			}
 			conflicts = append(conflicts, ImportConflict{IncomingID: item.ID, IncomingName: item.Name, ExistingID: existingByName.ID, ExistingName: existingByName.Name, ConflictByName: true})
 		}
 	}
@@ -1341,6 +1357,13 @@ func (s *Service) ExecuteImport(ctx context.Context, planID string, in ImportExe
 		}
 	}
 	assets := cloneStoredAssets(plan.Assets)
+	for _, asset := range assets {
+		if isSystemManagedAsset(asset.Asset) {
+			err := systemAssetMutationError()
+			_ = fail(err)
+			return ImportExecuteResult{}, err
+		}
+	}
 	skipped := 0
 	idMap := map[string]string{}
 	for i := range assets {
@@ -1378,6 +1401,9 @@ func (s *Service) ExecuteImport(ctx context.Context, planID string, in ImportExe
 				}
 				if strategy == "overwrite_existing" {
 					if existing, err := s.getStoredAssetTx(ctx, tx, asset.ID); err == nil {
+						if isSystemManagedAsset(existing.Asset) {
+							return systemAssetMutationError()
+						}
 						asset.CreatedAt = existing.CreatedAt
 						asset.UpdatedAt = time.Now().UTC()
 						if err := s.updateAssetTx(ctx, tx, asset); err != nil {
@@ -1548,6 +1574,9 @@ func (s *Service) prepareImportedCertificateAsset(ctx context.Context, in Import
 		}
 		if parent.Type != TypeCACertificate {
 			return storedAsset{}, panelerr.Validation("key_asset_ca_invalid", "Selected parent asset is not a CA certificate")
+		}
+		if isSystemManagedAsset(parent.Asset) {
+			return storedAsset{}, systemAssetMutationError()
 		}
 		parentCert, err := parent.certificate()
 		if err != nil {
@@ -1936,6 +1965,19 @@ func decorateAsset(asset Asset, references []AssetReference, childCount int) Ass
 
 func isSystemManagedAsset(asset Asset) bool {
 	return asset.Metadata[systemManagedKey] == true
+}
+
+func isReservedSystemAssetID(assetID string) bool {
+	switch strings.TrimSpace(assetID) {
+	case SystemAgentCAAssetID, SystemAgentClientAssetID, SystemPanelCAAssetID, SystemPanelTLSAssetID:
+		return true
+	default:
+		return strings.HasPrefix(strings.TrimSpace(assetID), "agent-server-")
+	}
+}
+
+func systemAssetMutationError() error {
+	return panelerr.Conflict("key_asset_system_managed", "System-managed key assets can only be reset from the system certificates page")
 }
 
 // userVisibleAssetsFilter restricts user-facing summaries to non-system assets.
