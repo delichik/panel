@@ -46,7 +46,7 @@
 - bootstrap bridge 在依赖尚未装配时必须返回明确错误，不能 nil pointer panic；相关防护由 `internal/bootstrap/panel/bridges_test.go` 覆盖。
 - `bootstrap/panel.New` 创建任务服务后会立即校验数据库中的 `running` 任务；当前进程内没有对应 execution 对象的任务会在其他后台服务启动前标记为失败。应用服务装配完成后启动 AppDB Job controller，由它恢复过期 lease、扫描 pending/failed_retryable Job，并通过 execution ID 与 lease token 继续收敛应用运行时；旧 lifecycle target 层已全部下线，不再读取。
 - API 统一挂在 `/api/v1/`。`/api/v1/auth/login`、`/api/v1/auth/session` 和只返回登录页标题/说明的 `GET /api/v1/settings/public-branding` 是开放入口，其余 API 经认证中间件保护。业务 API 路由由各模块的 `RegisterRoutes(*http.ServeMux, httpx.Middleware)` 注册，bootstrap 不再维护业务路径 switch。
-- 根路径由后端静态托管 `web/dist`；没有构建前端时返回纯文本后端运行提示。
+- 根路径由后端静态托管 `web/dist`；没有构建前端时返回纯文本后端运行提示。构建产物 `assets/` 下的 Vite 指纹资源响应 `Cache-Control: public, max-age=31536000, immutable`，其他非 HTML 静态资源缓存 1 天；`index.html` 和 SPA 回退响应使用 `Cache-Control: no-cache`，允许存储但每次发布重新验证，避免入口继续引用旧资源。
 - `GET /api/v1/system/version` 返回构建时注入的版本、通道（`release` 或 `dev`）、commit、仓库和缓存的最新版本状态。`internal/modules/systeminfo` 每 6 小时只读检查 GitHub 最新 Release；只有 `release` 通道且版本为三段数字核心版本（可带 `v` 前缀和预发布后缀）时才检查更新。未注入或无效通道按 `dev` 处理，不发起检查，也不提供下载或安装能力。
 - `GET /api/v1/debug/snapshot` 是仅认证用户可访问的只读诊断接口，由 `internal/modules/observability/diagnostics` 提供同一快照时间点的进程、Go runtime 内存/GC、tasks worker 运行状态、注册任务定义能力和 app/log/metrics 三库统计。数据库信息包含连接池、文件/SQLite 页面大小，以及用户表的准确行数、表数据页大小、索引大小、总占用和数据库占比；表级空间通过 SQLite `dbstat` 读取，不可用时只降级空间统计。接口不返回数据库路径、schema SQL、配置值、任务参数或任何业务记录与秘密。
 - Debug 页面还提供 pprof 开关：`GET /api/v1/debug/pprof` 返回当前启用状态与监听地址，`PUT /api/v1/debug/pprof`（请求体 `{"enabled": true|false}`）启停 pprof 服务。pprof 固定只监听 `127.0.0.1:6060`，不经过认证中间件、也不暴露在 Panel 对外端口；进程退出或关闭时自动停止。端口被占用时返回 `pprof_start_failed`，停服失败返回 `pprof_stop_failed`。

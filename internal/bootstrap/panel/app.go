@@ -39,6 +39,16 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	// Vite fingerprints files emitted below assets/, so they can safely stay
+	// in a browser cache for the lifetime of the build.
+	staticImmutableCacheControl = "public, max-age=31536000, immutable"
+	staticResourceCacheControl  = "public, max-age=86400"
+	// The entry document is intentionally revalidated so a new frontend build
+	// can point the browser at its new asset filenames immediately.
+	staticDocumentCacheControl = "no-cache"
+)
+
 type App struct {
 	cfg            config.Config
 	store          *database.Store
@@ -372,6 +382,7 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 func (a *App) static(w http.ResponseWriter, r *http.Request) {
 	dist := filepath.Join("web", "dist")
 	if _, err := os.Stat(dist); err != nil {
+		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("Panel backend is running. Build the frontend into web/dist to serve the UI.\n"))
 		return
@@ -379,8 +390,22 @@ func (a *App) static(w http.ResponseWriter, r *http.Request) {
 	rel := strings.TrimPrefix(filepath.Clean(r.URL.Path), string(filepath.Separator))
 	path := filepath.Join(dist, rel)
 	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		w.Header().Set("Cache-Control", staticCacheControl(rel))
 		http.ServeFile(w, r, path)
 		return
 	}
+	w.Header().Set("Cache-Control", staticDocumentCacheControl)
 	http.ServeFile(w, r, filepath.Join(dist, "index.html"))
+}
+
+func staticCacheControl(rel string) string {
+	rel = filepath.ToSlash(filepath.Clean(rel))
+	rel = strings.TrimPrefix(rel, "/")
+	if strings.EqualFold(filepath.Ext(rel), ".html") {
+		return staticDocumentCacheControl
+	}
+	if strings.HasPrefix(rel, "assets/") {
+		return staticImmutableCacheControl
+	}
+	return staticResourceCacheControl
 }
