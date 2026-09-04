@@ -39,6 +39,10 @@ type summaryListService interface {
 	ListSummaryPage(context.Context, int, int, string) (httpx.ListPage[Asset], error)
 }
 
+type panelTLSCandidateService interface {
+	ListPanelTLSCandidates(context.Context, string) ([]Asset, error)
+}
+
 type Handler struct {
 	service service
 }
@@ -154,6 +158,24 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		items = append(items, toAssetSummaryDTO(asset))
 	}
 	httpx.JSON(w, http.StatusOK, httpx.ListPage[assetSummaryDTO]{Items: items, Total: result.Total, Page: result.Page, PageSize: result.PageSize})
+}
+
+func (h *Handler) ListPanelTLSCandidates(w http.ResponseWriter, r *http.Request) {
+	service, ok := h.service.(panelTLSCandidateService)
+	if !ok {
+		httpx.Error(w, panelerr.BadGateway("key_asset_type_invalid", "Panel TLS candidate service is unavailable"))
+		return
+	}
+	assets, err := service.ListPanelTLSCandidates(r.Context(), strings.TrimSpace(r.URL.Query().Get("domain")))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	items := make([]assetSummaryDTO, 0, len(assets))
+	for _, asset := range assets {
+		items = append(items, toAssetSummaryDTO(asset))
+	}
+	httpx.JSON(w, http.StatusOK, items)
 }
 
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {

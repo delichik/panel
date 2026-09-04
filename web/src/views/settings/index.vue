@@ -124,12 +124,11 @@ async function load() {
   loading.value = true;
   error.value = '';
   try {
-    const [settingsResult, variablesResult, versionResult, certsResult, tlsResult] = await Promise.allSettled([
+    const [settingsResult, variablesResult, versionResult, certsResult] = await Promise.allSettled([
       settingsApi.runtime(),
       settingsApi.serverVariables(),
       systemApi.version(),
       keyAssetsApi.systemCertificates(),
-      keyAssetsApi.listPage({ page: 1, pageSize: 200 }),
     ]);
     if (!listRequests.isCurrent(requestId)) return;
     let firstError = '';
@@ -141,9 +140,16 @@ async function load() {
     else if (!firstError) firstError = versionResult.reason instanceof Error ? versionResult.reason.message : t('settingsPage.loadFailed');
     if (certsResult.status === 'fulfilled') systemCertificates.value = certsResult.value;
       else if (!firstError) firstError = certsResult.reason instanceof Error ? certsResult.reason.message : t('settingsPage.loadFailed');
-    if (tlsResult.status === 'fulfilled') tlsCertificates.value = tlsResult.value.items.filter((item) => item.type === 'tls_certificate');
     if (settingsResult.status === 'fulfilled' && variablesResult.status === 'fulfilled') {
       hydrate(settingsResult.value, variablesResult.value);
+    }
+    if (settingsResult.status === 'fulfilled') {
+      try {
+        const candidates = await keyAssetsApi.panelTLSCandidates(settingsResult.value.panel.domain);
+        if (listRequests.isCurrent(requestId)) tlsCertificates.value = candidates;
+      } catch (err) {
+        if (listRequests.isCurrent(requestId) && !firstError) firstError = err instanceof Error ? err.message : t('settingsPage.loadFailed');
+      }
     }
     if (firstError) {
       error.value = firstError;

@@ -32,7 +32,7 @@
 - 立即续签：`POST /api/v1/certificates/{id}/renew`
 - Agent 与 Panel HTTPS 系统内置证书由服务器模块提供：`GET /api/v1/key-assets/system`，重置使用 `POST /api/v1/key-assets/system/{id}/reset`。Panel 默认链为独立的 RSA-2048 `panel-ca` -> `panel-tls`，不复用 Agent 的 Ed25519 CA。
 - 自签证书：`GET/POST /api/v1/self-signed-certificates`，`POST /api/v1/self-signed-cas`，`POST /api/v1/self-signed-certificates/{id}/renew`，`DELETE /api/v1/self-signed-certificates/{id}`
-- 统一密钥资产：`GET /api/v1/key-assets`，`GET /api/v1/key-assets/{id}`，`POST /api/v1/key-assets/ca|tls|ssh/generate|import|exports`，`POST /api/v1/key-assets/imports/preflight`，`POST /api/v1/key-assets/imports/{planId}/execute`，`POST /api/v1/key-assets/{id}/reissue|regenerate`，`DELETE /api/v1/key-assets/{id}`，下载路径 `/api/v1/key-assets/{id}/files/{kind}` 与 `/api/v1/key-assets/exports/{taskId}/download`
+- 统一密钥资产：`GET /api/v1/key-assets`，`GET /api/v1/key-assets/{id}`，`POST /api/v1/key-assets/ca|tls|ssh/generate|import|exports`，`POST /api/v1/key-assets/imports/preflight`，`POST /api/v1/key-assets/imports/{planId}/execute`，`POST /api/v1/key-assets/{id}/reissue|regenerate`，`DELETE /api/v1/key-assets/{id}`，下载路径 `/api/v1/key-assets/{id}/files/{kind}` 与 `/api/v1/key-assets/exports/{taskId}/download`。Panel HTTPS 选择器使用专用候选接口 `GET /api/v1/key-assets/panel-tls?domain=...`，包含通过监听兼容性校验的用户 TLS 与 ACME TLS，排除系统资产。
 
 ## Cloudflare 认证
 

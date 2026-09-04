@@ -182,6 +182,66 @@ func TestSyncPanelTLSRejectsEd25519Certificate(t *testing.T) {
 	}
 }
 
+func TestListPanelTLSCandidatesIncludesACMEAndFiltersIncompatibleAssets(t *testing.T) {
+	svc, store, closeFn := newTestService(t)
+	defer closeFn()
+	ctx := context.Background()
+
+	ca, err := svc.CreateCA(ctx, CreateCARequest{
+		Name:       "Panel Candidate CA",
+		CommonName: "candidate-ca.example.test",
+		Algorithm:  AlgorithmRSA,
+		KeySize:    2048,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid, err := svc.CreateTLS(ctx, CreateTLSRequest{
+		Name:          "ACME Panel HTTPS",
+		ParentAssetID: ca.ID,
+		CommonName:    "panel.example.test",
+		DNSNames:      []string{"panel.example.test"},
+		Algorithm:     AlgorithmRSA,
+		KeySize:       2048,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().ExecContext(ctx, `UPDATE key_assets SET metadata_json=? WHERE id=?`, `{"origin":"acme"}`, valid.ID); err != nil {
+		t.Fatal(err)
+	}
+	incompatible, err := svc.CreateTLS(ctx, CreateTLSRequest{
+		Name:          "Ed25519 Panel HTTPS",
+		ParentAssetID: ca.ID,
+		CommonName:    "panel.example.test",
+		DNSNames:      []string{"panel.example.test"},
+		Algorithm:     AlgorithmEd25519,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := svc.EnsurePanelTLSAssets(ctx, "panel.example.test"); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := svc.ListPanelTLSCandidates(ctx, "panel.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundValid := false
+	for _, candidate := range candidates {
+		if candidate.ID == valid.ID {
+			foundValid = true
+		}
+		if candidate.ID == incompatible.ID || candidate.ID == SystemPanelTLSAssetID {
+			t.Fatalf("incompatible or system asset leaked into Panel TLS candidates: %#v", candidate)
+		}
+	}
+	if !foundValid {
+		t.Fatalf("ACME TLS asset %q missing from Panel TLS candidates: %#v", valid.ID, candidates)
+	}
+}
+
 func TestPanelSystemAssetsAreNotUserMutableOrProxyCertificates(t *testing.T) {
 	svc, _, closeFn := newTestService(t)
 	defer closeFn()
