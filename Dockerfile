@@ -99,7 +99,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM --platform=$TARGETPLATFORM alpine:3.22 AS runtime-base
 WORKDIR /app
 
-RUN apk add --no-cache ca-certificates tzdata \
+RUN apk add --no-cache ca-certificates tzdata wget \
   && addgroup -S panel \
   && adduser -S -G panel -h /app panel \
   && mkdir -p /app/data /app/web/dist \
