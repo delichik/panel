@@ -163,7 +163,7 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, err)
 		return
 	}
-	if isSystemManagedAsset(result) {
+	if isSystemManagedAsset(result) || isACMEAsset(result) {
 		httpx.Error(w, panelerr.NotFound("key asset"))
 		return
 	}
@@ -249,7 +249,7 @@ func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, err)
 		return
 	}
-	if isSystemManagedAsset(asset) {
+	if isSystemManagedAsset(asset) || isACMEAsset(asset) {
 		httpx.Error(w, panelerr.NotFound("key asset file"))
 		return
 	}

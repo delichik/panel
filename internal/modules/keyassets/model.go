@@ -9,6 +9,7 @@ const (
 
 	AlgorithmEd25519 = "ed25519"
 	AlgorithmRSA     = "rsa"
+	AlgorithmECDSA   = "ecdsa"
 
 	TaskTypeTLSReissue        = "key_asset_tls_reissue"
 	TaskTypePanelTLSReconcile = "panel_tls_reconcile"
@@ -90,6 +91,16 @@ type ImportRequest struct {
 	PrivateKeyPEM  string `json:"privateKeyPem"`
 	PublicKeyPEM   string `json:"publicKeyPem"`
 	PublicKey      string `json:"publicKey"`
+}
+
+// ACMETLSAssetInput contains certificate material produced by the ACME
+// issuer. The accompanying certificate record only keeps lifecycle metadata.
+type ACMETLSAssetInput struct {
+	AssetID        string
+	CertificateID  string
+	Name           string
+	CertificatePEM string
+	PrivateKeyPEM  string
 }
 
 type ReissueResult struct {

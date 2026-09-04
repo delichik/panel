@@ -462,9 +462,9 @@ func (*ApplicationInstance) ExtraIndexDDL() map[string][]string {
 
 // FacilityAppConfig 对应 facility_app_configs。
 type FacilityAppConfig struct {
-	ID                      string         `orm:"primary_key"`
-	Version                 int            `orm:"not_null;default:1"`
-	DeploymentServerIDsJSON []string       `orm:"json;not_null;default:'[]';column:deployment_server_ids_json"`
+	ID                      string   `orm:"primary_key"`
+	Version                 int      `orm:"not_null;default:1"`
+	DeploymentServerIDsJSON []string `orm:"json;not_null;default:'[]';column:deployment_server_ids_json"`
 
 	DNSSyncJSON map[string]any `orm:"json;not_null;default:'{}';column:dns_sync_json"`
 	LastError   string         `orm:"not_null;default:''"`
@@ -632,22 +632,25 @@ func (*DNSDomain) TableConstraints() []string {
 	return []string{"CHECK(provider IN ('cloudflare'))"}
 }
 
-// Certificate 对应 certificates。
+// Certificate 保存 ACME 生命周期元数据，并通过 AssetID 关联 key_assets 中的
+// 统一证书材料。pending/failed 记录可以在签发前没有 AssetID。
 type Certificate struct {
-	ID              string   `orm:"primary_key"`
-	Name            string   `orm:"not_null"`
-	DomainID        string   `orm:"not_null;default:'';references:dns_domains(id)"`
-	Domain          string   `orm:"not_null"`
-	Prefix          string   `orm:"not_null;default:'@'"`
-	Scope           string   `orm:"not_null"`
-	DomainsJSON     []string `orm:"json;not_null;default:'[]'"`
-	VariableName    string   `orm:"not_null;unique"`
-	CertificatePath string   `orm:"not_null"`
-	PrivateKeyPath  string   `orm:"not_null"`
-	Issuer          string   `orm:"not_null;default:''"`
-	Status          string   `orm:"not_null;default:'pending'"`
-	LastError       string   `orm:"not_null;default:''"`
-	AutoRenew       bool     `orm:"not_null;default:1"`
+	ID           string   `orm:"primary_key"`
+	AssetID      string   `orm:"not_null;default:'';index"`
+	Name         string   `orm:"not_null"`
+	DomainID     string   `orm:"not_null;default:'';references:dns_domains(id)"`
+	Domain       string   `orm:"not_null"`
+	Prefix       string   `orm:"not_null;default:'@'"`
+	Scope        string   `orm:"not_null"`
+	DomainsJSON  []string `orm:"json;not_null;default:'[]'"`
+	VariableName string   `orm:"not_null;unique"`
+	// Deprecated legacy migration fields. New records keep both fields empty.
+	CertificatePath string `orm:"not_null"`
+	PrivateKeyPath  string `orm:"not_null"`
+	Issuer          string `orm:"not_null;default:''"`
+	Status          string `orm:"not_null;default:'pending'"`
+	LastError       string `orm:"not_null;default:''"`
+	AutoRenew       bool   `orm:"not_null;default:1"`
 	NextRenewAt     *time.Time
 	NotBefore       *time.Time
 	NotAfter        *time.Time
@@ -656,6 +659,16 @@ type Certificate struct {
 }
 
 func (*Certificate) TableName() string { return "certificates" }
+
+// ExtraIndexDDL 保证一个证书材料最多被一个 ACME 生命周期记录拥有；
+// 空 asset_id 允许 pending/failed 记录在尚未签发时存在。
+func (*Certificate) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"certificates": {
+			"CREATE UNIQUE INDEX IF NOT EXISTS uq_certificates_asset_id ON certificates(asset_id) WHERE asset_id <> ''",
+		},
+	}
+}
 
 // TableConstraints 返回 certificates 表无法用 orm tag 表达的原始约束。
 func (*Certificate) TableConstraints() []string {

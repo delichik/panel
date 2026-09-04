@@ -1215,6 +1215,7 @@ func migrateCertificateScopeConstraintOn(ctx context.Context, tx *sql.Tx) error 
 	}
 	if _, err := tx.ExecContext(ctx, `CREATE TABLE certificates_new (
 		id TEXT PRIMARY KEY,
+		asset_id TEXT NOT NULL DEFAULT '',
 		name TEXT NOT NULL,
 		domain_id TEXT NOT NULL DEFAULT '',
 		domain TEXT NOT NULL,
@@ -1237,8 +1238,8 @@ func migrateCertificateScopeConstraintOn(ctx context.Context, tx *sql.Tx) error 
 	)`); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO certificates_new(id,name,domain_id,domain,prefix,scope,domains_json,variable_name,certificate_path,private_key_path,issuer,status,last_error,auto_renew,next_renew_at,not_before,not_after,created_at,updated_at)
-		SELECT id,name,domain_id,domain,prefix,scope,domains_json,variable_name,certificate_path,private_key_path,issuer,status,last_error,auto_renew,next_renew_at,not_before,not_after,created_at,updated_at FROM certificates`); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO certificates_new(id,asset_id,name,domain_id,domain,prefix,scope,domains_json,variable_name,certificate_path,private_key_path,issuer,status,last_error,auto_renew,next_renew_at,not_before,not_after,created_at,updated_at)
+		SELECT id,COALESCE(asset_id,''),name,domain_id,domain,prefix,scope,domains_json,variable_name,certificate_path,private_key_path,issuer,status,last_error,auto_renew,next_renew_at,not_before,not_after,created_at,updated_at FROM certificates`); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DROP TABLE certificates`); err != nil {

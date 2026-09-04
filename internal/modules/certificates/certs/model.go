@@ -19,6 +19,7 @@ const (
 
 type Certificate struct {
 	ID              string    `json:"id"`
+	AssetID         string    `json:"assetId"`
 	Name            string    `json:"name"`
 	DomainID        string    `json:"domainId"`
 	Domain          string    `json:"domain"`
@@ -26,8 +27,8 @@ type Certificate struct {
 	Scope           string    `json:"scope"`
 	Domains         []string  `json:"domains"`
 	VariableName    string    `json:"-"`
-	CertificatePath string    `json:"certificatePath"`
-	PrivateKeyPath  string    `json:"privateKeyPath"`
+	CertificatePath string    `json:"-"`
+	PrivateKeyPath  string    `json:"-"`
 	Issuer          string    `json:"issuer"`
 	Status          string    `json:"status"`
 	LastError       string    `json:"lastError,omitempty"`

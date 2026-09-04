@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -32,7 +33,6 @@ var (
 
 type Service struct {
 	db               *sql.DB
-	dataRoot         string
 	cfg              config.Config
 	configProvider   func(config.Config) config.Config
 	domains          domainResolver
@@ -62,6 +62,15 @@ type keyAssetProvider interface {
 	ReverseProxyCertificates(ctx context.Context) ([]proxycert.Certificate, error)
 }
 
+type acmeAssetProvider interface {
+	UpsertACMETLS(ctx context.Context, in keyassets.ACMETLSAssetInput) (keyassets.Asset, error)
+	ReadFile(ctx context.Context, assetID, kind string) ([]byte, string, error)
+}
+
+type acmeAssetMutationProvider interface {
+	DeleteACMETLS(ctx context.Context, assetID string) error
+}
+
 type Option func(*Service)
 
 func WithApplicationRefresher(refresher applicationRefresher) Option {
@@ -77,7 +86,7 @@ func WithConfigProvider(provider func(config.Config) config.Config) Option {
 }
 
 func NewService(db *sql.DB, cfg config.Config, domains domainResolver, taskSvc *tasks.Service, opts ...Option) *Service {
-	s := &Service{db: db, dataRoot: cfg.DataRoot, cfg: cfg, domains: domains, tasks: taskSvc, issuer: "acme"}
+	s := &Service{db: db, cfg: cfg, domains: domains, tasks: taskSvc, issuer: "acme"}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -85,11 +94,113 @@ func NewService(db *sql.DB, cfg config.Config, domains domainResolver, taskSvc *
 }
 
 func NewServiceWithProvider(db *sql.DB, cfg config.Config, provider Provider, taskSvc *tasks.Service, opts ...Option) *Service {
-	s := &Service{db: db, dataRoot: cfg.DataRoot, cfg: cfg, providerOverride: provider, tasks: taskSvc, issuer: "acme"}
+	s := &Service{db: db, cfg: cfg, providerOverride: provider, tasks: taskSvc, issuer: "acme"}
 	for _, opt := range opts {
 		opt(s)
 	}
 	return s
+}
+
+// EnsureLegacyACMEAssetsMigrated moves certificate material from the legacy
+// filesystem layout into the encrypted asset store. The stable certificate ID
+// is reused as the asset ID so existing panel_file references keep working.
+func (s *Service) EnsureLegacyACMEAssetsMigrated(ctx context.Context) error {
+	provider, ok := s.keyAssets.(acmeAssetProvider)
+	if !ok {
+		return nil
+	}
+	rows, err := orm.Raw(ctx, s.db, `SELECT id,name,asset_id,certificate_path,private_key_path FROM certificates WHERE TRIM(COALESCE(certificate_path,''))<>'' OR TRIM(COALESCE(private_key_path,''))<>''`)
+	if err != nil {
+		return err
+	}
+	type legacyCertificate struct {
+		id, name, assetID, certificatePath, privateKeyPath string
+	}
+	var records []legacyCertificate
+	for rows.Next() {
+		var item legacyCertificate
+		if err := rows.Scan(&item.id, &item.name, &item.assetID, &item.certificatePath, &item.privateKeyPath); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		records = append(records, item)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, item := range records {
+		assetID := firstNonEmpty(item.assetID, item.id)
+		// A previous startup may already have imported the asset but failed to
+		// clear the legacy paths. Keep the existing encrypted material and only
+		// finish cleanup in that case.
+		if item.assetID != "" {
+			_, _, certErr := provider.ReadFile(ctx, assetID, "certificate")
+			_, _, keyErr := provider.ReadFile(ctx, assetID, "private_key")
+			if certErr == nil && keyErr == nil {
+				if err := s.clearLegacyACMEPaths(ctx, item); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+		if strings.TrimSpace(item.certificatePath) == "" || strings.TrimSpace(item.privateKeyPath) == "" {
+			return fmt.Errorf("legacy ACME certificate %s has incomplete file paths", item.id)
+		}
+		certificatePEM, err := os.ReadFile(item.certificatePath)
+		if err != nil {
+			return fmt.Errorf("legacy ACME certificate %s: %w", item.id, err)
+		}
+		privateKeyPEM, err := os.ReadFile(item.privateKeyPath)
+		if err != nil {
+			return fmt.Errorf("legacy ACME private key %s: %w", item.id, err)
+		}
+		if _, err := provider.UpsertACMETLS(ctx, keyassets.ACMETLSAssetInput{
+			AssetID:        assetID,
+			CertificateID:  item.id,
+			Name:           item.name,
+			CertificatePEM: string(certificatePEM),
+			PrivateKeyPEM:  string(privateKeyPEM),
+		}); err != nil {
+			return err
+		}
+		if err := orm.New(s.db).From("certificates").Where("id = ?", item.id).UpdateColumns(ctx, map[string]any{
+			"asset_id":         assetID,
+			"certificate_path": "",
+			"private_key_path": "",
+		}); err != nil {
+			return err
+		}
+		removeLegacyACMEFiles(item.certificatePath, item.privateKeyPath)
+	}
+	return nil
+}
+
+func (s *Service) clearLegacyACMEPaths(ctx context.Context, item struct {
+	id, name, assetID, certificatePath, privateKeyPath string
+}) error {
+	if err := orm.New(s.db).From("certificates").Where("id = ?", item.id).UpdateColumns(ctx, map[string]any{
+		"certificate_path": "",
+		"private_key_path": "",
+	}); err != nil {
+		return err
+	}
+	removeLegacyACMEFiles(item.certificatePath, item.privateKeyPath)
+	return nil
+}
+
+func removeLegacyACMEFiles(paths ...string) {
+	dirs := map[string]struct{}{}
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		_ = os.Remove(path)
+		dirs[filepath.Dir(path)] = struct{}{}
+	}
+	for dir := range dirs {
+		_ = os.Remove(dir)
+	}
 }
 
 func (s *Service) currentConfig() config.Config {
@@ -165,12 +276,6 @@ func (s *Service) QueueIssue(ctx context.Context, in IssueRequest) (IssueResult,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
-	certDir := filepath.Join(s.dataRoot, "certs", cert.ID)
-	if err := os.MkdirAll(certDir, 0700); err != nil {
-		return IssueResult{}, err
-	}
-	cert.CertificatePath = filepath.Join(certDir, "certificate.pem")
-	cert.PrivateKeyPath = filepath.Join(certDir, "private-key.pem")
 	if err := s.insert(ctx, cert); err != nil {
 		return IssueResult{}, err
 	}
@@ -250,25 +355,17 @@ func (s *Service) issueIntoCertificate(ctx context.Context, cert Certificate, ta
 	if err := validateBundle(bundle); err != nil {
 		return err
 	}
-	if err := writeCertificateFiles(cert.CertificatePath, append(bundle.CertificatePEM, bundle.CAChainPEM...), cert.PrivateKeyPath, bundle.PrivateKeyPEM); err != nil {
+	assetID, err := s.upsertACMEAsset(ctx, cert, bundle)
+	if err != nil {
 		return err
 	}
+	cert.AssetID = assetID
 	cert.NotBefore, cert.NotAfter = certificateValidity(bundle.CertificatePEM)
 	cert.NextRenewAt = nextRenewAt(cert.NotAfter)
 	cert.LastError = ""
 	cert.Status = StatusIssued
 	cert.UpdatedAt = time.Now().UTC()
 	return s.updateIssuedCertificate(ctx, cert)
-}
-
-func writeCertificateFiles(certificatePath string, certificatePEM []byte, privateKeyPath string, privateKeyPEM []byte) error {
-	if fileExists(certificatePath) || fileExists(privateKeyPath) {
-		return replaceCertificateFiles(certificatePath, certificatePEM, privateKeyPath, privateKeyPEM)
-	}
-	if err := os.WriteFile(certificatePath, certificatePEM, 0600); err != nil {
-		return err
-	}
-	return os.WriteFile(privateKeyPath, privateKeyPEM, 0600)
 }
 
 func (s *Service) RenewTask(tc tasks.TaskContext) error {
@@ -329,16 +426,13 @@ func (s *Service) runRenewTask(ctx context.Context, task tasks.Task) error {
 		_ = s.failRenewalTask(ctx, task.ID, err)
 		return err
 	}
-	if err := replaceCertificateFiles(
-		cert.CertificatePath,
-		append(bundle.CertificatePEM, bundle.CAChainPEM...),
-		cert.PrivateKeyPath,
-		bundle.PrivateKeyPEM,
-	); err != nil {
+	assetID, err := s.upsertACMEAsset(ctx, cert, bundle)
+	if err != nil {
 		_ = s.updateLastError(ctx, cert.ID, err.Error())
 		_ = s.failRenewalTask(ctx, task.ID, err)
 		return err
 	}
+	cert.AssetID = assetID
 	cert.NotBefore, cert.NotAfter = certificateValidity(bundle.CertificatePEM)
 	cert.NextRenewAt = nextRenewAt(cert.NotAfter)
 	cert.LastError = ""
@@ -357,95 +451,6 @@ func (s *Service) runRenewTask(ctx context.Context, task tasks.Task) error {
 		return s.tasks.Complete(ctx, task.ID, "Renewed certificate for "+cert.Domain)
 	}
 	return nil
-}
-
-func replaceCertificateFiles(certificatePath string, certificatePEM []byte, privateKeyPath string, privateKeyPEM []byte) error {
-	certTemp, err := writeCertificateTemp(certificatePath, certificatePEM)
-	if err != nil {
-		return err
-	}
-	defer os.Remove(certTemp)
-	keyTemp, err := writeCertificateTemp(privateKeyPath, privateKeyPEM)
-	if err != nil {
-		return err
-	}
-	defer os.Remove(keyTemp)
-
-	certBackup := certificatePath + ".previous"
-	keyBackup := privateKeyPath + ".previous"
-	_ = os.Remove(certBackup)
-	_ = os.Remove(keyBackup)
-	certBackedUp := false
-	if err := os.Rename(certificatePath, certBackup); err != nil {
-		if !os.IsNotExist(err) {
-			return err
-		}
-	} else {
-		certBackedUp = true
-	}
-	defer func() {
-		if certBackedUp {
-			_ = os.Rename(certBackup, certificatePath)
-		}
-	}()
-	keyBackedUp := false
-	if err := os.Rename(privateKeyPath, keyBackup); err != nil {
-		if !os.IsNotExist(err) {
-			return err
-		}
-	} else {
-		keyBackedUp = true
-	}
-	defer func() {
-		if keyBackedUp {
-			_ = os.Rename(keyBackup, privateKeyPath)
-		}
-	}()
-	if err := os.Rename(certTemp, certificatePath); err != nil {
-		return err
-	}
-	if err := os.Rename(keyTemp, privateKeyPath); err != nil {
-		_ = os.Remove(certificatePath)
-		return err
-	}
-	certBackedUp = false
-	keyBackedUp = false
-	_ = os.Remove(certBackup)
-	_ = os.Remove(keyBackup)
-	return nil
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
-func writeCertificateTemp(target string, content []byte) (string, error) {
-	file, err := os.CreateTemp(filepath.Dir(target), filepath.Base(target)+".tmp-*")
-	if err != nil {
-		return "", err
-	}
-	tempPath := file.Name()
-	if err := file.Chmod(0o600); err != nil {
-		file.Close()
-		_ = os.Remove(tempPath)
-		return "", err
-	}
-	if _, err := file.Write(content); err != nil {
-		file.Close()
-		_ = os.Remove(tempPath)
-		return "", err
-	}
-	if err := file.Sync(); err != nil {
-		file.Close()
-		_ = os.Remove(tempPath)
-		return "", err
-	}
-	if err := file.Close(); err != nil {
-		_ = os.Remove(tempPath)
-		return "", err
-	}
-	return tempPath, nil
 }
 
 func (s *Service) List(ctx context.Context) ([]Certificate, error) {
@@ -531,6 +536,17 @@ func (s *Service) Delete(ctx context.Context, certID string) error {
 	} else if used {
 		return panelerr.Conflict("certificate_in_use", "Certificate is still used by an application or reverse proxy")
 	}
+	if cert.AssetID != "" && s.keyAssets != nil {
+		var deleteErr error
+		if provider, ok := s.keyAssets.(acmeAssetMutationProvider); ok {
+			deleteErr = provider.DeleteACMETLS(ctx, cert.AssetID)
+		} else {
+			deleteErr = s.keyAssets.Delete(ctx, cert.AssetID)
+		}
+		if deleteErr != nil {
+			return deleteErr
+		}
+	}
 	res, err := orm.RawExec(ctx, s.db, `DELETE FROM certificates WHERE id=?`, certID)
 	if err != nil {
 		return err
@@ -585,20 +601,11 @@ func (s *Service) OpenInternalFile(ctx context.Context, source string) (io.ReadC
 	if cert.Status != StatusIssued {
 		return nil, applications.InternalFileInfo{}, panelerr.NotFound("certificate internal file")
 	}
-	path, filename, mode, err := certificateInternalFilePath(cert, kind)
+	content, filename, mode, err := s.readCertificateFile(ctx, cert, kind)
 	if err != nil {
 		return nil, applications.InternalFileInfo{}, err
 	}
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, applications.InternalFileInfo{}, err
-	}
-	info, err := file.Stat()
-	if err != nil {
-		_ = file.Close()
-		return nil, applications.InternalFileInfo{}, err
-	}
-	return file, applications.InternalFileInfo{Name: filename, Mode: mode, Size: info.Size()}, nil
+	return io.NopCloser(strings.NewReader(string(content))), applications.InternalFileInfo{Name: filename, Mode: mode, Size: int64(len(content))}, nil
 }
 
 func (s *Service) BuiltinVariables(ctx context.Context) (map[string]any, error) {
@@ -619,11 +626,11 @@ func (s *Service) ApplicationVariables(ctx context.Context, render applications.
 		if cert.Status != StatusIssued {
 			continue
 		}
-		certPEM, err := os.ReadFile(cert.CertificatePath)
+		certPEM, _, _, err := s.readCertificateFile(ctx, cert, "certificate")
 		if err != nil {
 			return nil, err
 		}
-		keyPEM, err := os.ReadFile(cert.PrivateKeyPath)
+		keyPEM, _, _, err := s.readCertificateFile(ctx, cert, "private_key")
 		if err != nil {
 			return nil, err
 		}
@@ -744,11 +751,11 @@ func (s *Service) ReverseProxyCertificates(ctx context.Context) ([]proxycert.Cer
 		if cert.Status != StatusIssued {
 			continue
 		}
-		certPEM, err := os.ReadFile(cert.CertificatePath)
+		certPEM, _, _, err := s.readCertificateFile(ctx, cert, "certificate")
 		if err != nil {
 			return nil, err
 		}
-		keyPEM, err := os.ReadFile(cert.PrivateKeyPath)
+		keyPEM, _, _, err := s.readCertificateFile(ctx, cert, "private_key")
 		if err != nil {
 			return nil, err
 		}
@@ -776,13 +783,14 @@ func (s *Service) insert(ctx context.Context, cert Certificate) error {
 	if err != nil {
 		return err
 	}
-	_, err = orm.RawExec(ctx, s.db, `INSERT INTO certificates(id,name,domain_id,domain,prefix,scope,domains_json,variable_name,certificate_path,private_key_path,issuer,status,last_error,auto_renew,next_renew_at,not_before,not_after,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		cert.ID, cert.Name, cert.DomainID, cert.Domain, cert.Prefix, cert.Scope, string(domains), cert.VariableName, cert.CertificatePath, cert.PrivateKeyPath, cert.Issuer, cert.Status, cert.LastError, boolInt(cert.AutoRenew), formatOptionalTime(cert.NextRenewAt), formatOptionalTime(cert.NotBefore), formatOptionalTime(cert.NotAfter), formatTime(cert.CreatedAt), formatTime(cert.UpdatedAt))
+	_, err = orm.RawExec(ctx, s.db, `INSERT INTO certificates(id,asset_id,name,domain_id,domain,prefix,scope,domains_json,variable_name,certificate_path,private_key_path,issuer,status,last_error,auto_renew,next_renew_at,not_before,not_after,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		cert.ID, cert.AssetID, cert.Name, cert.DomainID, cert.Domain, cert.Prefix, cert.Scope, string(domains), cert.VariableName, cert.CertificatePath, cert.PrivateKeyPath, cert.Issuer, cert.Status, cert.LastError, boolInt(cert.AutoRenew), formatOptionalTime(cert.NextRenewAt), formatOptionalTime(cert.NotBefore), formatOptionalTime(cert.NotAfter), formatTime(cert.CreatedAt), formatTime(cert.UpdatedAt))
 	return err
 }
 
 func (s *Service) updateRenewal(ctx context.Context, cert Certificate) error {
 	return orm.New(s.db).From("certificates").Where("id = ?", cert.ID).UpdateColumns(ctx, map[string]any{
+		"asset_id":      cert.AssetID,
 		"not_before":    formatOptionalTime(cert.NotBefore),
 		"not_after":     formatOptionalTime(cert.NotAfter),
 		"next_renew_at": formatOptionalTime(cert.NextRenewAt),
@@ -797,6 +805,7 @@ func (s *Service) updateIssuedCertificate(ctx context.Context, cert Certificate)
 		return err
 	}
 	return orm.New(s.db).From("certificates").Where("id = ?", cert.ID).UpdateColumns(ctx, map[string]any{
+		"asset_id":      cert.AssetID,
 		"name":          cert.Name,
 		"domain_id":     cert.DomainID,
 		"domain":        cert.Domain,
@@ -988,6 +997,55 @@ func (s *Service) refreshApplications(ctx context.Context) error {
 	return joined
 }
 
+func (s *Service) upsertACMEAsset(ctx context.Context, cert Certificate, bundle Bundle) (string, error) {
+	assetID := firstNonEmpty(cert.AssetID, cert.ID)
+	certificatePEM := append([]byte(nil), bundle.CertificatePEM...)
+	certificatePEM = append(certificatePEM, bundle.CAChainPEM...)
+	provider, ok := s.keyAssets.(acmeAssetProvider)
+	if !ok {
+		return "", panelerr.BadGateway("key_asset_type_invalid", "Certificate asset service is unavailable")
+	}
+	asset, err := provider.UpsertACMETLS(ctx, keyassets.ACMETLSAssetInput{
+		AssetID:        assetID,
+		CertificateID:  cert.ID,
+		Name:           cert.Name,
+		CertificatePEM: string(certificatePEM),
+		PrivateKeyPEM:  string(bundle.PrivateKeyPEM),
+	})
+	if err != nil {
+		return "", err
+	}
+	return asset.ID, nil
+}
+
+func (s *Service) readCertificateFile(ctx context.Context, cert Certificate, kind string) ([]byte, string, string, error) {
+	if provider, ok := s.keyAssets.(acmeAssetProvider); ok && strings.TrimSpace(cert.AssetID) != "" {
+		content, filename, err := provider.ReadFile(ctx, cert.AssetID, kind)
+		if err == nil {
+			mode := "0644"
+			if kind == "private_key" {
+				mode = "0600"
+			}
+			return content, filename, mode, nil
+		}
+		if cert.CertificatePath == "" && cert.PrivateKeyPath == "" {
+			return nil, "", "", err
+		}
+	}
+	path, filename, mode, err := certificateInternalFilePath(cert, kind)
+	if err != nil {
+		return nil, "", "", err
+	}
+	if strings.TrimSpace(path) == "" {
+		return nil, "", "", panelerr.NotFound("certificate internal file")
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, "", "", err
+	}
+	return content, filename, mode, nil
+}
+
 type preparedIssueRequest struct {
 	Name    string
 	Domain  string
@@ -1117,7 +1175,7 @@ func certificateValidity(certPEM []byte) (time.Time, time.Time) {
 
 type certScanner interface{ Scan(dest ...any) error }
 
-const certificateColumns = `id,name,domain_id,domain,prefix,scope,domains_json,variable_name,certificate_path,private_key_path,issuer,status,last_error,auto_renew,COALESCE(next_renew_at,''),COALESCE(not_before,''),COALESCE(not_after,''),created_at,updated_at`
+const certificateColumns = `id,asset_id,name,domain_id,domain,prefix,scope,domains_json,variable_name,certificate_path,private_key_path,issuer,status,last_error,auto_renew,COALESCE(next_renew_at,''),COALESCE(not_before,''),COALESCE(not_after,''),created_at,updated_at`
 
 func scanCertificate(row certScanner) (Certificate, error) {
 	var cert Certificate
@@ -1125,7 +1183,7 @@ func scanCertificate(row certScanner) (Certificate, error) {
 	var autoRenew int
 	var nextRenewAt, notBefore, notAfter string
 	var created, updated string
-	if err := row.Scan(&cert.ID, &cert.Name, &cert.DomainID, &cert.Domain, &cert.Prefix, &cert.Scope, &domains, &cert.VariableName, &cert.CertificatePath, &cert.PrivateKeyPath, &cert.Issuer, &cert.Status, &cert.LastError, &autoRenew, &nextRenewAt, &notBefore, &notAfter, &created, &updated); err != nil {
+	if err := row.Scan(&cert.ID, &cert.AssetID, &cert.Name, &cert.DomainID, &cert.Domain, &cert.Prefix, &cert.Scope, &domains, &cert.VariableName, &cert.CertificatePath, &cert.PrivateKeyPath, &cert.Issuer, &cert.Status, &cert.LastError, &autoRenew, &nextRenewAt, &notBefore, &notAfter, &created, &updated); err != nil {
 		return Certificate{}, err
 	}
 	if domains != "" {

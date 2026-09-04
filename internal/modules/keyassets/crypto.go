@@ -2,7 +2,9 @@ package keyassets
 
 import (
 	"crypto"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -57,8 +59,13 @@ func normalizeKeyAlgorithm(algorithm string, keySize int) (string, int, error) {
 		default:
 			return "", 0, panelerr.Validation("key_asset_type_invalid", "RSA key size must be 2048, 3072, or 4096 bits")
 		}
+	case AlgorithmECDSA:
+		if keySize == 0 || keySize == 256 {
+			return AlgorithmECDSA, 256, nil
+		}
+		return "", 0, panelerr.Validation("key_asset_type_invalid", "ECDSA key size must be 256 bits")
 	default:
-		return "", 0, panelerr.Validation("key_asset_type_invalid", "Key asset algorithm must be ed25519 or rsa")
+		return "", 0, panelerr.Validation("key_asset_type_invalid", "Key asset algorithm must be ed25519, ecdsa, or rsa")
 	}
 }
 
@@ -80,8 +87,14 @@ func generateKeyMaterial(algorithm string, keySize int) (keyMaterial, error) {
 			return keyMaterial{}, err
 		}
 		return keyMaterial{algorithm: algorithm, keySize: keySize, private: privateKey, public: privateKey.Public()}, nil
+	case AlgorithmECDSA:
+		privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			return keyMaterial{}, err
+		}
+		return keyMaterial{algorithm: algorithm, keySize: 256, private: privateKey, public: privateKey.Public()}, nil
 	default:
-		return keyMaterial{}, panelerr.Validation("key_asset_type_invalid", "Key asset algorithm must be ed25519 or rsa")
+		return keyMaterial{}, panelerr.Validation("key_asset_type_invalid", "Key asset algorithm must be ed25519, ecdsa, or rsa")
 	}
 }
 
@@ -111,7 +124,8 @@ func sshFingerprint(publicKey ssh.PublicKey) string {
 }
 
 func parseCertificatePEM(certificatePEM string) (*x509.Certificate, []byte, error) {
-	block, _ := pem.Decode([]byte(strings.TrimSpace(certificatePEM)))
+	rest := []byte(strings.TrimSpace(certificatePEM))
+	block, rest := pem.Decode(rest)
 	if block == nil || block.Type != "CERTIFICATE" {
 		return nil, nil, panelerr.Validation("key_asset_type_invalid", "Certificate PEM is invalid")
 	}
@@ -119,7 +133,19 @@ func parseCertificatePEM(certificatePEM string) (*x509.Certificate, []byte, erro
 	if err != nil {
 		return nil, nil, panelerr.Validation("key_asset_type_invalid", "Certificate PEM is invalid")
 	}
-	return cert, pem.EncodeToMemory(block), nil
+	normalized := pem.EncodeToMemory(block)
+	for len(strings.TrimSpace(string(rest))) > 0 {
+		var next *pem.Block
+		next, rest = pem.Decode(rest)
+		if next == nil || next.Type != "CERTIFICATE" {
+			return nil, nil, panelerr.Validation("key_asset_type_invalid", "Certificate PEM is invalid")
+		}
+		if _, err := x509.ParseCertificate(next.Bytes); err != nil {
+			return nil, nil, panelerr.Validation("key_asset_type_invalid", "Certificate PEM is invalid")
+		}
+		normalized = append(normalized, pem.EncodeToMemory(next)...)
+	}
+	return cert, normalized, nil
 }
 
 func parsePrivateKeyPEM(privateKeyPEM string) (keyMaterial, []byte, error) {
@@ -180,8 +206,10 @@ func materialFromPrivateKey(privateKey any, encoded []byte) (keyMaterial, []byte
 		return keyMaterial{algorithm: AlgorithmEd25519, private: key, public: key.Public()}, encoded, nil
 	case *rsa.PrivateKey:
 		return keyMaterial{algorithm: AlgorithmRSA, keySize: key.N.BitLen(), private: key, public: key.Public()}, encoded, nil
+	case *ecdsa.PrivateKey:
+		return keyMaterial{algorithm: AlgorithmECDSA, keySize: key.Params().BitSize, private: key, public: key.Public()}, encoded, nil
 	default:
-		return keyMaterial{}, nil, panelerr.Validation("key_asset_type_invalid", "Only ed25519 and rsa key assets are supported")
+		return keyMaterial{}, nil, panelerr.Validation("key_asset_type_invalid", "Only ed25519, ecdsa, and rsa key assets are supported")
 	}
 }
 

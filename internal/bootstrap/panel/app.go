@@ -165,6 +165,10 @@ func New(cfg config.Config) (*App, error) {
 		certs.WithKeyAssetProvider(keyAssetSvc),
 		certs.WithApplicationRefresher(certBridge),
 	)
+	if err := certSvc.EnsureLegacyACMEAssetsMigrated(context.Background()); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
 	facilitySvc := facilityapps.NewService(store.AppDB(), agentClient, serverSvc, applicationSvc,
 		facilityapps.WithContainerOperationQueue(containerSvc),
 		facilityapps.WithDataRoot(cfg.DataRoot),

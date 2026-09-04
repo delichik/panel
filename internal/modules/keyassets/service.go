@@ -308,7 +308,7 @@ func (s *Service) EnsureLegacySelfSignedMigrated(ctx context.Context) error {
 }
 
 func (s *Service) List(ctx context.Context) ([]Asset, error) {
-	rows, err := orm.Raw(ctx, s.db, `SELECT `+assetColumns+` FROM key_assets ORDER BY type,name`)
+	rows, err := orm.Raw(ctx, s.db, `SELECT `+assetColumns+` FROM key_assets WHERE `+userVisibleAssetsFilter+` ORDER BY type,name`)
 	if err != nil {
 		return nil, err
 	}
@@ -734,10 +734,73 @@ func (s *Service) Import(ctx context.Context, in ImportRequest) (Asset, error) {
 	return s.Get(ctx, stored.ID)
 }
 
+// UpsertACMETLS stores an ACME-issued certificate and its private key in the
+// same encrypted certificate-material store used by all other TLS assets.
+// The ID is stable so existing certificate references remain valid on renew.
+func (s *Service) UpsertACMETLS(ctx context.Context, in ACMETLSAssetInput) (Asset, error) {
+	stored, err := s.prepareImportedAsset(ctx, ImportRequest{
+		Type:           TypeTLSCertificate,
+		Name:           in.Name,
+		CertificatePEM: in.CertificatePEM,
+		PrivateKeyPEM:  in.PrivateKeyPEM,
+	}, strings.TrimSpace(in.AssetID))
+	if err != nil {
+		return Asset{}, err
+	}
+	if strings.TrimSpace(stored.ID) == "" {
+		return Asset{}, panelerr.Validation("key_asset_type_invalid", "ACME certificate asset ID is required")
+	}
+	stored.Metadata = map[string]any{"origin": "acme", "certificateId": strings.TrimSpace(in.CertificateID)}
+	stored.CreatedAt = time.Now().UTC()
+	if existing, err := s.getStoredAsset(ctx, stored.ID); err == nil {
+		// Keep the internal name stable across renewals, even if the lifecycle
+		// record's display name changes later.
+		stored.Name = existing.Name
+		stored.CreatedAt = existing.CreatedAt
+		stored.UpdatedAt = time.Now().UTC()
+		if err := s.updateAsset(ctx, stored); err != nil {
+			return Asset{}, err
+		}
+	} else if isNotFoundError(err) {
+		// Certificate names are not unique in the ACME lifecycle table, while
+		// key asset names are. Resolve a collision without changing the name
+		// shown by the certificate workflow.
+		if existingByName, nameErr := s.getStoredAssetByName(ctx, stored.Name); nameErr == nil && existingByName.ID != stored.ID {
+			stored.Name = "acme-" + stored.ID
+		} else if nameErr != nil && !isNotFoundError(nameErr) {
+			return Asset{}, nameErr
+		}
+		stored.UpdatedAt = stored.CreatedAt
+		if err := s.insertAsset(ctx, stored); err != nil {
+			return Asset{}, err
+		}
+	} else {
+		return Asset{}, err
+	}
+	return s.Get(ctx, stored.ID)
+}
+
 func (s *Service) Delete(ctx context.Context, assetID string) error {
+	return s.delete(ctx, assetID, false)
+}
+
+// DeleteACMETLS removes an ACME-owned TLS asset as part of deleting its
+// certificate lifecycle record. It is intentionally separate from the public
+// key-asset delete path so ACME assets cannot be mutated through that API.
+func (s *Service) DeleteACMETLS(ctx context.Context, assetID string) error {
+	return s.delete(ctx, assetID, true)
+}
+
+func (s *Service) delete(ctx context.Context, assetID string, allowACME bool) error {
 	stored, err := s.getStoredAsset(ctx, assetID)
 	if err != nil {
 		return err
+	}
+	if isACMEAsset(stored.Asset) && !allowACME {
+		return panelerr.NotFound("key asset")
+	}
+	if allowACME && !isACMEAsset(stored.Asset) {
+		return panelerr.NotFound("key asset")
 	}
 	if isSystemManagedAsset(stored.Asset) {
 		return systemAssetMutationError()
@@ -768,6 +831,9 @@ func (s *Service) ReissueTLS(ctx context.Context, assetID string) (ReissueResult
 	}
 	if isSystemManagedAsset(stored.Asset) {
 		return ReissueResult{}, systemAssetMutationError()
+	}
+	if isACMEAsset(stored.Asset) {
+		return ReissueResult{}, panelerr.NotFound("key asset")
 	}
 	if stored.Type != TypeTLSCertificate {
 		return ReissueResult{}, panelerr.Validation("key_asset_type_invalid", "Only TLS certificates can be reissued")
@@ -953,7 +1019,7 @@ func (s *Service) InternalFileCatalog(ctx context.Context) ([]applications.Panel
 	}
 	out := make([]applications.PanelFileDefinition, 0, len(assets)*3)
 	for _, asset := range assets {
-		if isSystemManagedAsset(asset) {
+		if isSystemManagedAsset(asset) || isACMEAsset(asset) {
 			continue
 		}
 		for _, kind := range fileKindsForAsset(asset.Type) {
@@ -1049,6 +1115,11 @@ func (s *Service) CreateExport(ctx context.Context, in ExportRequest) (ExportRes
 		}
 		if isSystemManagedAsset(stored.Asset) {
 			err := systemAssetMutationError()
+			_ = fail(err)
+			return ExportResult{}, err
+		}
+		if isACMEAsset(stored.Asset) {
+			err := panelerr.NotFound("key asset")
 			_ = fail(err)
 			return ExportResult{}, err
 		}
@@ -1238,6 +1309,10 @@ func (s *Service) PreflightImport(ctx context.Context, in ImportPreflightRequest
 		}
 		if item.Metadata[systemManagedKey] == true {
 			return ImportPreflightResult{}, systemAssetMutationError()
+		}
+		origin, _ := item.Metadata["origin"].(string)
+		if strings.EqualFold(strings.TrimSpace(origin), "acme") {
+			return ImportPreflightResult{}, panelerr.NotFound("key asset")
 		}
 		stored, err := s.prepareImportedAsset(ctx, ImportRequest{
 			Type:           item.Type,
@@ -1967,6 +2042,11 @@ func isSystemManagedAsset(asset Asset) bool {
 	return asset.Metadata[systemManagedKey] == true
 }
 
+func isACMEAsset(asset Asset) bool {
+	origin, _ := asset.Metadata["origin"].(string)
+	return strings.EqualFold(strings.TrimSpace(origin), "acme")
+}
+
 func isReservedSystemAssetID(assetID string) bool {
 	switch strings.TrimSpace(assetID) {
 	case SystemAgentCAAssetID, SystemAgentClientAssetID, SystemPanelCAAssetID, SystemPanelTLSAssetID:
@@ -1983,7 +2063,7 @@ func systemAssetMutationError() error {
 // userVisibleAssetsFilter restricts user-facing summaries to non-system assets.
 // Panel built-in agent TLS assets are system managed and shown on the dedicated
 // system certificates page instead of the self-signed certificates / keys lists.
-const userVisibleAssetsFilter = `json_extract(metadata_json,'$.systemManaged') IS NOT 1 AND COALESCE(json_extract(metadata_json,'$.systemScope'),'') <> 'agent_tls'`
+const userVisibleAssetsFilter = `json_extract(metadata_json,'$.systemManaged') IS NOT 1 AND COALESCE(json_extract(metadata_json,'$.systemScope'),'') <> 'agent_tls' AND COALESCE(json_extract(metadata_json,'$.origin'),'') <> 'acme'`
 
 func panelFileMode(kind string) string {
 	switch strings.TrimSpace(kind) {
