@@ -184,7 +184,7 @@ func (s *Service) activatePanelTLSAsset(ctx context.Context, domain string, asse
 	if err != nil || len(certificate.Certificate) == 0 {
 		return panelerr.Validation("invalid_panel_tls_certificate", "Selected Panel TLS certificate and private key do not match")
 	}
-	if err := paneltls.ValidateListenerCertificate(certificate, normalizePanelDomain(domain)); err != nil {
+	if err := paneltls.ValidateListenerCertificate(certificate, ""); err != nil {
 		return panelerr.Validation("invalid_panel_tls_certificate", err.Error())
 	}
 	return paneltls.SyncCertificate(ctx, s.cfg.DataRoot, domain, asset.ID, panelTLSMaterialReader{

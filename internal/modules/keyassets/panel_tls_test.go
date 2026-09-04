@@ -182,7 +182,7 @@ func TestSyncPanelTLSRejectsEd25519Certificate(t *testing.T) {
 	}
 }
 
-func TestListPanelTLSCandidatesIncludesACMEAndFiltersIncompatibleAssets(t *testing.T) {
+func TestListTLSCertificatesIncludesACMEAndBuiltInAndFiltersIncompatibleAssets(t *testing.T) {
 	svc, store, closeFn := newTestService(t)
 	defer closeFn()
 	ctx := context.Background()
@@ -210,6 +210,28 @@ func TestListPanelTLSCandidatesIncludesACMEAndFiltersIncompatibleAssets(t *testi
 	if _, err := store.AppDB().ExecContext(ctx, `UPDATE key_assets SET metadata_json=? WHERE id=?`, `{"origin":"acme"}`, valid.ID); err != nil {
 		t.Fatal(err)
 	}
+	differentDomain, err := svc.CreateTLS(ctx, CreateTLSRequest{
+		Name:          "Unrelated TLS",
+		ParentAssetID: ca.ID,
+		CommonName:    "other.example.test",
+		DNSNames:      []string{"other.example.test"},
+		Algorithm:     AlgorithmRSA,
+		KeySize:       2048,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ecdsaCandidate, err := svc.CreateTLS(ctx, CreateTLSRequest{
+		Name:          "ECDSA Panel HTTPS",
+		ParentAssetID: ca.ID,
+		CommonName:    "ecdsa.example.test",
+		DNSNames:      []string{"ecdsa.example.test"},
+		Algorithm:     AlgorithmECDSA,
+		KeySize:       256,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	incompatible, err := svc.CreateTLS(ctx, CreateTLSRequest{
 		Name:          "Ed25519 Panel HTTPS",
 		ParentAssetID: ca.ID,
@@ -224,21 +246,42 @@ func TestListPanelTLSCandidatesIncludesACMEAndFiltersIncompatibleAssets(t *testi
 	if _, err := svc.EnsurePanelTLSAssets(ctx, "panel.example.test"); err != nil {
 		t.Fatal(err)
 	}
-	candidates, err := svc.ListPanelTLSCandidates(ctx, "panel.example.test")
+	candidates, err := svc.ListTLSCertificates(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	foundValid := false
+	foundBuiltIn := false
+	foundDifferentDomain := false
+	foundECDSA := false
 	for _, candidate := range candidates {
 		if candidate.ID == valid.ID {
 			foundValid = true
 		}
-		if candidate.ID == incompatible.ID || candidate.ID == SystemPanelTLSAssetID {
-			t.Fatalf("incompatible or system asset leaked into Panel TLS candidates: %#v", candidate)
+		if candidate.ID == SystemPanelTLSAssetID {
+			foundBuiltIn = true
+		}
+		if candidate.ID == differentDomain.ID {
+			foundDifferentDomain = true
+		}
+		if candidate.ID == ecdsaCandidate.ID {
+			foundECDSA = true
+		}
+		if candidate.ID == incompatible.ID {
+			t.Fatalf("incompatible asset leaked into Panel TLS candidates: %#v", candidate)
 		}
 	}
 	if !foundValid {
 		t.Fatalf("ACME TLS asset %q missing from Panel TLS candidates: %#v", valid.ID, candidates)
+	}
+	if !foundBuiltIn {
+		t.Fatalf("built-in Panel TLS asset missing from candidates: %#v", candidates)
+	}
+	if !foundDifferentDomain {
+		t.Fatalf("TLS asset with unrelated SAN was incorrectly filtered: %#v", candidates)
+	}
+	if !foundECDSA {
+		t.Fatalf("ECDSA TLS asset missing from candidates: %#v", candidates)
 	}
 }
 

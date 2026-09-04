@@ -23,10 +23,7 @@ export const keyAssetsApi = {
     Object.entries(params).forEach(([name, value]) => { if (value !== undefined && value !== '') query.set(name, String(value)); });
     return apiClient.get<ListPage<KeyAssetDto>>(`/key-assets${query.size ? `?${query}` : ''}`);
   },
-  panelTLSCandidates: (domain?: string) => {
-    const query = domain?.trim() ? `?domain=${encodeURIComponent(domain.trim())}` : '';
-    return apiClient.get<KeyAssetDto[]>(`/key-assets/panel-tls${query}`);
-  },
+  tlsCertificates: () => apiClient.get<KeyAssetDto[]>('/key-assets/tls'),
   createCa: (input: CreateCaAssetInput) => apiClient.post<KeyAssetMutationResult>('/key-assets/ca', input),
   createTls: (input: CreateTlsAssetInput) => apiClient.post<KeyAssetMutationResult>('/key-assets/tls', input),
   generateSsh: (input: GenerateSshAssetInput) => apiClient.post<KeyAssetMutationResult>('/key-assets/ssh/generate', input),

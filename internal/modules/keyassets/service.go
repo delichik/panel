@@ -397,14 +397,18 @@ func (s *Service) ListSummaryPageByTypes(ctx context.Context, page, pageSize int
 	return s.listSummaryPage(ctx, page, pageSize, query, types)
 }
 
-// ListPanelTLSCandidates returns TLS assets that can be activated by the
-// public Panel HTTPS listener for the requested domain. Unlike the regular
-// key-asset list, this intentionally includes ACME-owned assets while still
-// excluding system-managed assets.
-func (s *Service) ListPanelTLSCandidates(ctx context.Context, domain string) ([]Asset, error) {
+// ListTLSCertificates returns all complete TLS assets that can be activated by
+// the public Panel HTTPS listener. Selection is never filtered by a domain.
+func (s *Service) ListTLSCertificates(ctx context.Context) ([]Asset, error) {
+	domain, _, err := s.panelTLSSelection(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.EnsurePanelTLSAssets(ctx, domain); err != nil {
+		return nil, err
+	}
 	rows, err := orm.Raw(ctx, s.db, `SELECT `+assetColumns+` FROM key_assets WHERE type=? AND
-		json_extract(metadata_json,'$.systemManaged') IS NOT 1 AND
-		COALESCE(json_extract(metadata_json,'$.systemScope'),'') NOT IN ('agent_tls','panel_tls')
+		COALESCE(json_extract(metadata_json,'$.systemScope'),'') <> 'agent_tls'
 		ORDER BY name,id`, TypeTLSCertificate)
 	if err != nil {
 		return nil, err
@@ -421,12 +425,12 @@ func (s *Service) ListPanelTLSCandidates(ctx context.Context, domain string) ([]
 		if err != nil {
 			continue
 		}
-		privateKeyPEM, err := s.decryptPrivateKeyPEM(stored)
+		privateKeyPEM, err := s.panelTLSPrivateKeyPEM(stored)
 		if err != nil {
 			continue
 		}
 		pair, err := tls.X509KeyPair(certificatePEM, privateKeyPEM)
-		if err != nil || paneltls.ValidateListenerCertificate(pair, normalizePanelDomain(domain)) != nil {
+		if err != nil || paneltls.ValidateListenerCertificate(pair, "") != nil {
 			continue
 		}
 		assets = append(assets, stored.Asset)

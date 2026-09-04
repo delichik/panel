@@ -92,7 +92,7 @@ mounts:
 	}
 }
 
-func TestOverwriteImportRejectsSelectedPanelCertificateOutsideDomain(t *testing.T) {
+func TestOverwriteImportAllowsSelectedPanelCertificateOutsideDomain(t *testing.T) {
 	svc, store, closeFn := newTestService(t)
 	defer closeFn()
 	ctx := context.Background()
@@ -132,6 +132,8 @@ func TestOverwriteImportRejectsSelectedPanelCertificateOutsideDomain(t *testing.
 		ParentAssetID: ca.ID,
 		CommonName:    "other.example.test",
 		DNSNames:      []string{"other.example.test"},
+		Algorithm:     AlgorithmRSA,
+		KeySize:       2048,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -166,22 +168,22 @@ func TestOverwriteImportRejectsSelectedPanelCertificateOutsideDomain(t *testing.
 		Strategy:                  "overwrite_existing",
 		ConfirmOverwriteInUse:     true,
 		ConfirmDangerousOverwrite: true,
-	}); err == nil {
-		t.Fatal("expected Panel-domain validation failure")
+	}); err != nil {
+		t.Fatalf("expected selected Panel certificate overwrite to succeed: %v", err)
 	}
 	currentCertificate, err := os.ReadFile(filepath.Join(svc.cfg.DataRoot, "tls", "panel.crt"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(currentCertificate) != string(activeCertificate) {
-		t.Fatal("failed overwrite import changed the active Panel certificate")
+	if string(currentCertificate) == string(activeCertificate) {
+		t.Fatal("successful overwrite import did not activate the selected Panel certificate")
 	}
 	storedCertificate, _, err := svc.ReadFile(ctx, active.ID, "certificate")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(storedCertificate) != string(activeStoredCertificate) {
-		t.Fatal("failed overwrite import changed the stored Panel certificate")
+	if string(storedCertificate) == string(activeStoredCertificate) {
+		t.Fatal("successful overwrite import did not update the selected Panel certificate")
 	}
 }
 

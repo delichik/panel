@@ -102,7 +102,7 @@
 
 - `bootstrap/panel.New` 必须在证书、应用和 tasks 内部 worker 启动前初始化 `internal/platform/secrets`、迁移 DNS provider 凭据、初始化 `internal/modules/keyassets` 并完成旧自签证书迁移。
 - `key_assets` 保存统一密钥与证书元数据和密文私钥；`key_asset_exports` 位于 `Store.LogDB()`，保存短期批量导出下载信息，沿用 30 分钟 `expires_at` 语义并由密钥资产服务清理过期记录和归档文件。旧 AppDB 中的导出记录不迁移、不读取兼容。
-- `panel-ca` 与 `panel-tls` 是 `metadata.systemManaged=true`、`systemScope=panel_tls` 的系统资产，私钥通过 secret store 加密保存；它们只在系统证书接口中查看或 reset，不能作为普通 key asset 删除、重签、下载、导出、导入覆盖、应用文件来源或反向代理证书。自定义 Panel 监听证书仍可选用，但保存前必须满足 RSA-2048、有效期、Panel 域名 SAN、ServerAuth、完整父链和 RSA 签名算法兼容基线。
+- `panel-ca` 与 `panel-tls` 是 `metadata.systemManaged=true`、`systemScope=panel_tls` 的系统资产，私钥通过 secret store 加密保存；它们可在系统证书接口中查看或 reset，`panel-tls` 也会作为只读选项出现在统一 Panel TLS 选择器中，但不能作为普通 key asset 删除、重签、下载、导出、导入覆盖、应用文件来源或反向代理证书。Panel 证书选择统一读取 `GET /api/v1/key-assets/tls`，内置证书和用户/ACME TLS 资产均从同一 `key_assets` 表返回。自定义 Panel 监听证书保存前必须满足有效期、ServerAuth、完整父链以及 RSA-2048 或 ECDSA P-256/P-384/P-521 和 SHA-2 签名算法兼容基线；候选列表不按 Panel 域名 SAN 筛选。
 - `credentials.secret_ciphertext` 使用同一 `secretstore` 保存 SSH 密码、私钥和私钥口令的加密 JSON；新凭据不得把秘密写入独立文件或旧明文字段。
 - 主密钥优先读取 `PANEL_KEY_ASSETS_MASTER_KEY`，否则读取 `<dataRoot>/secrets/key-assets-master.key`；首次无资产时自动生成文件并使用 `0600` 权限。
 - 数据库存在加密资产、DNS 凭据或 SSH 凭据但主密钥缺失、格式错误或环境变量与文件不一致时，Panel 必须拒绝启动，不能生成新密钥覆盖。

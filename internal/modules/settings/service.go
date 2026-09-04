@@ -654,7 +654,7 @@ func (s *Service) validatePanelTLS(settings RuntimeSettings) error {
 	if err != nil || len(cert.Certificate) == 0 {
 		return panelerr.Validation("invalid_panel_tls_certificate", "Selected Panel TLS certificate and private key do not match")
 	}
-	if err := paneltls.ValidateListenerCertificate(cert, strings.TrimSpace(settings.Panel.Domain)); err != nil {
+	if err := paneltls.ValidateListenerCertificate(cert, ""); err != nil {
 		return panelerr.Validation("invalid_panel_tls_certificate", err.Error())
 	}
 	return nil

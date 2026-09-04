@@ -9,7 +9,7 @@ import (
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, auth httpx.Middleware) {
 	mux.Handle("GET /api/v1/key-assets", auth(http.HandlerFunc(h.List)))
-	mux.Handle("GET /api/v1/key-assets/panel-tls", auth(http.HandlerFunc(h.ListPanelTLSCandidates)))
+	mux.Handle("GET /api/v1/key-assets/tls", auth(http.HandlerFunc(h.ListTLSCertificates)))
 	mux.Handle("POST /api/v1/key-assets/ca", auth(http.HandlerFunc(h.CreateCA)))
 	mux.Handle("POST /api/v1/key-assets/tls", auth(http.HandlerFunc(h.CreateTLS)))
 	mux.Handle("POST /api/v1/key-assets/ssh/generate", auth(http.HandlerFunc(h.GenerateSSH)))

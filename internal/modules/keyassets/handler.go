@@ -39,8 +39,8 @@ type summaryListService interface {
 	ListSummaryPage(context.Context, int, int, string) (httpx.ListPage[Asset], error)
 }
 
-type panelTLSCandidateService interface {
-	ListPanelTLSCandidates(context.Context, string) ([]Asset, error)
+type tlsCertificateListService interface {
+	ListTLSCertificates(context.Context) ([]Asset, error)
 }
 
 type Handler struct {
@@ -160,13 +160,13 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, httpx.ListPage[assetSummaryDTO]{Items: items, Total: result.Total, Page: result.Page, PageSize: result.PageSize})
 }
 
-func (h *Handler) ListPanelTLSCandidates(w http.ResponseWriter, r *http.Request) {
-	service, ok := h.service.(panelTLSCandidateService)
+func (h *Handler) ListTLSCertificates(w http.ResponseWriter, r *http.Request) {
+	service, ok := h.service.(tlsCertificateListService)
 	if !ok {
-		httpx.Error(w, panelerr.BadGateway("key_asset_type_invalid", "Panel TLS candidate service is unavailable"))
+		httpx.Error(w, panelerr.BadGateway("key_asset_type_invalid", "TLS certificate list service is unavailable"))
 		return
 	}
-	assets, err := service.ListPanelTLSCandidates(r.Context(), strings.TrimSpace(r.URL.Query().Get("domain")))
+	assets, err := service.ListTLSCertificates(r.Context())
 	if err != nil {
 		httpx.Error(w, err)
 		return

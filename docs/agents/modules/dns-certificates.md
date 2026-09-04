@@ -3,7 +3,7 @@
 ## List And Snapshot Contracts
 
 - Domain certificates, self-signed certificates, and key assets return `ListPage` responses. List rows omit private material, file paths, metadata, and reference detail.
-- 自签证书列表（`GET /api/v1/self-signed-certificates`）与密钥资产列表（`GET /api/v1/key-assets`）只返回用户资产；Panel 内置的 Agent CA/TLS（`systemManaged` / `agent_tls`）和 Panel HTTPS 的 `panel-ca`/`panel-tls`（`systemManaged` / `panel_tls`）不会出现在这两个列表中，统一由「设置 → 系统证书」页面（`GET /api/v1/key-assets/system`）单独管理。
+- 自签证书列表（`GET /api/v1/self-signed-certificates`）与普通密钥资产列表（`GET /api/v1/key-assets`）只返回用户资产；Panel 内置的 Agent CA/TLS（`systemManaged` / `agent_tls`）不会出现在这些列表中，仍由「设置 → 系统证书」页面（`GET /api/v1/key-assets/system`）管理。Panel HTTPS 的 `panel-ca`/`panel-tls`（`systemManaged` / `panel_tls`）同样不进入普通分页列表，但 `panel-tls` 会通过统一的 TLS 选择接口提供为可用的只读选项。
 - DNS record GET reads `dns_record_snapshots` only and returns `items`, `observedAt`, `stale`, `refreshing`, optional `refreshTaskId`, and optional `lastRefreshError`; it never calls a DNS provider.
 - Record refresh is an async POST returning `202` and `taskId`; the frontend waits for completion and reloads the snapshot.
 - `GET /api/v1/dns/domains` is a paginated local summary query with optional `q`; provider credentials and provider access checks are excluded from the list path.
@@ -32,7 +32,7 @@
 - 立即续签：`POST /api/v1/certificates/{id}/renew`
 - Agent 与 Panel HTTPS 系统内置证书由服务器模块提供：`GET /api/v1/key-assets/system`，重置使用 `POST /api/v1/key-assets/system/{id}/reset`。Panel 默认链为独立的 RSA-2048 `panel-ca` -> `panel-tls`，不复用 Agent 的 Ed25519 CA。
 - 自签证书：`GET/POST /api/v1/self-signed-certificates`，`POST /api/v1/self-signed-cas`，`POST /api/v1/self-signed-certificates/{id}/renew`，`DELETE /api/v1/self-signed-certificates/{id}`
-- 统一密钥资产：`GET /api/v1/key-assets`，`GET /api/v1/key-assets/{id}`，`POST /api/v1/key-assets/ca|tls|ssh/generate|import|exports`，`POST /api/v1/key-assets/imports/preflight`，`POST /api/v1/key-assets/imports/{planId}/execute`，`POST /api/v1/key-assets/{id}/reissue|regenerate`，`DELETE /api/v1/key-assets/{id}`，下载路径 `/api/v1/key-assets/{id}/files/{kind}` 与 `/api/v1/key-assets/exports/{taskId}/download`。Panel HTTPS 选择器使用专用候选接口 `GET /api/v1/key-assets/panel-tls?domain=...`，包含通过监听兼容性校验的用户 TLS 与 ACME TLS，排除系统资产。
+- 统一密钥资产：`GET /api/v1/key-assets`，`GET /api/v1/key-assets/{id}`，`POST /api/v1/key-assets/ca|tls|ssh/generate|import|exports`，`POST /api/v1/key-assets/imports/preflight`，`POST /api/v1/key-assets/imports/{planId}/execute`，`POST /api/v1/key-assets/{id}/reissue|regenerate`，`DELETE /api/v1/key-assets/{id}`，下载路径 `/api/v1/key-assets/{id}/files/{kind}` 与 `/api/v1/key-assets/exports/{taskId}/download`。Panel HTTPS 选择器使用统一的 `GET /api/v1/key-assets/tls`，返回同一 `key_assets` 表中具备完整证书和私钥、通过监听兼容性校验的 TLS 资产，包含 ACME、用户资产和 Panel 内置 `panel-tls`，排除 Agent 专用证书，不传域名也不按 SAN 筛选。
 
 ## Cloudflare 认证
 

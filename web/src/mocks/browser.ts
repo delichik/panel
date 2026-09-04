@@ -79,7 +79,7 @@ import {
 } from './applications';
 import type { ApplicationEditSession } from '@/types/applications';
 import type { FacilityEditSession } from '@/types/facilityApps';
-import type { SystemCertificateDto } from '@/types/keyAssets';
+import type { KeyAssetDto, SystemCertificateDto } from '@/types/keyAssets';
 import type { UfwAllowInput } from '@/types/security';
 import {
   mockAddUfwRule,
@@ -175,6 +175,40 @@ function systemCertificates(): SystemCertificateDto[] {
     builtIn: true,
     canReset: true,
   })));
+}
+
+function tlsCertificates(): KeyAssetDto[] {
+  const builtIn: KeyAssetDto = {
+    id: 'panel-tls',
+    type: 'tls_certificate',
+    name: 'Panel HTTPS certificate',
+    parentAssetId: 'panel-ca',
+    algorithm: 'rsa',
+    keySize: 2048,
+    commonName: 'localhost',
+    dnsNames: ['localhost'],
+    ipAddresses: ['127.0.0.1', '::1'],
+    fingerprint: 'SHA256:PANELTLS',
+    notBefore: '2026-01-01T00:00:00.000Z',
+    notAfter: '2027-01-01T00:00:00.000Z',
+    hasCertificate: true,
+    hasPrivateKey: true,
+    hasPublicKey: true,
+    downloadKinds: ['certificate', 'private_key'],
+    childCount: 0,
+    referenceCount: 0,
+    references: [],
+    canReissue: false,
+    canRegenerate: false,
+    canDelete: false,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T02:00:00.000Z',
+  };
+  return [builtIn, ...mockKeyAssets.filter((asset) => asset.type === 'tls_certificate'
+    && asset.hasCertificate
+    && asset.hasPrivateKey
+    && (!asset.notBefore || asset.notBefore <= '2026-08-01T02:00:00.000Z')
+    && (!asset.notAfter || asset.notAfter > '2026-08-01T02:00:00.000Z'))];
 }
 
 function json<T>(data: T, status = 200) {
@@ -440,6 +474,7 @@ export function installMockApi() {
       return json(listPage(mockKeyAssets, url, (item, q) => includesText(q, item.name, item.commonName, item.fingerprint, item.id)));
     }
     if (url.pathname === '/api/v1/key-assets/ca' && method(init) === 'POST') return json(createAsset(await body(init), 'ca_certificate'), 201);
+    if (url.pathname === '/api/v1/key-assets/tls' && method(init) === 'GET') return json(tlsCertificates());
     if (url.pathname === '/api/v1/key-assets/tls' && method(init) === 'POST') return json(createAsset(await body(init), 'tls_certificate'), 201);
     if (url.pathname === '/api/v1/key-assets/ssh/generate' && method(init) === 'POST') return json(createAsset(await body(init), 'ssh_key_pair'), 201);
     if (url.pathname === '/api/v1/key-assets/import' && method(init) === 'POST') return json(createAsset(await body(init)), 201);

@@ -51,6 +51,7 @@ const restoreFile = ref<File | null>(null);
 const exportPending = ref(false);
 const restorePending = ref(false);
 const restarting = ref(false);
+const builtInPanelTLSAssetID = 'panel-tls';
 
 const form = reactive({
   metricsRetentionDays: '14',
@@ -91,10 +92,7 @@ const cleanupOptions = computed(() => ['hourly', 'daily', 'weekly'].map((value) 
 const tokenOptions = computed(() => ['10m', '1h', '1d', '5d', '30d', 'never'].map((value) => ({ label: t(`settingsPage.token.${value}`), value })));
 const languageOptions = computed(() => [{ label: t('settingsPage.language.en'), value: 'en' }, { label: t('settingsPage.language.zh'), value: 'zh-CN' }]);
 const logOptions = computed(() => ['debug', 'info', 'warn', 'error'].map((value) => ({ label: value, value })));
-const panelTlsOptions = computed(() => [
-  { label: t('settingsPage.panelBuiltInCertificate'), value: '' },
-  ...tlsCertificates.value.map((certificate) => ({ label: certificate.name, value: certificate.id })),
-]);
+const panelTlsOptions = computed(() => tlsCertificates.value.map((certificate) => ({ label: certificate.name, value: certificate.id })));
 const jwtSecretValid = computed(() => form.jwtSecret.trim().length >= 16);
 const runtimeEventRetentionValid = computed(() => {
   const retention = Number(form.runtimeEventRetentionDays);
@@ -124,11 +122,12 @@ async function load() {
   loading.value = true;
   error.value = '';
   try {
-    const [settingsResult, variablesResult, versionResult, certsResult] = await Promise.allSettled([
+    const [settingsResult, variablesResult, versionResult, certsResult, tlsResult] = await Promise.allSettled([
       settingsApi.runtime(),
       settingsApi.serverVariables(),
       systemApi.version(),
       keyAssetsApi.systemCertificates(),
+      keyAssetsApi.tlsCertificates(),
     ]);
     if (!listRequests.isCurrent(requestId)) return;
     let firstError = '';
@@ -140,16 +139,10 @@ async function load() {
     else if (!firstError) firstError = versionResult.reason instanceof Error ? versionResult.reason.message : t('settingsPage.loadFailed');
     if (certsResult.status === 'fulfilled') systemCertificates.value = certsResult.value;
       else if (!firstError) firstError = certsResult.reason instanceof Error ? certsResult.reason.message : t('settingsPage.loadFailed');
+    if (tlsResult.status === 'fulfilled') tlsCertificates.value = tlsResult.value;
+    else if (!firstError) firstError = tlsResult.reason instanceof Error ? tlsResult.reason.message : t('settingsPage.loadFailed');
     if (settingsResult.status === 'fulfilled' && variablesResult.status === 'fulfilled') {
       hydrate(settingsResult.value, variablesResult.value);
-    }
-    if (settingsResult.status === 'fulfilled') {
-      try {
-        const candidates = await keyAssetsApi.panelTLSCandidates(settingsResult.value.panel.domain);
-        if (listRequests.isCurrent(requestId)) tlsCertificates.value = candidates;
-      } catch (err) {
-        if (listRequests.isCurrent(requestId) && !firstError) firstError = err instanceof Error ? err.message : t('settingsPage.loadFailed');
-      }
     }
     if (firstError) {
       error.value = firstError;
@@ -183,7 +176,7 @@ function hydrate(settings: RuntimeSettings, variables: ServerVariableDefinition[
     certificateEmail: settings.certificates.email,
     dnsPropagationDelaySeconds: String(settings.certificates.dnsPropagationDelaySeconds),
     panelDomain: settings.panel.domain,
-    panelTlsCertificateId: settings.panel.tlsCertificateId,
+    panelTlsCertificateId: settings.panel.tlsCertificateId || builtInPanelTLSAssetID,
     variablesText: variables.map((item) => `${item.required ? '*' : ''}${item.key}=${item.name}`).join('\n'),
   });
 }
@@ -331,7 +324,10 @@ function buildRuntimeUpdate(kind: 'runtime' | 'security' | 'certificates' | 'sys
       email: form.certificateEmail,
       dnsPropagationDelaySeconds: numberField(form.dnsPropagationDelaySeconds, current.certificates.dnsPropagationDelaySeconds),
     };
-    update.panel = { domain: form.panelDomain.trim().toLowerCase(), tlsCertificateId: form.panelTlsCertificateId };
+    update.panel = {
+      domain: form.panelDomain.trim().toLowerCase(),
+      tlsCertificateId: form.panelTlsCertificateId === builtInPanelTLSAssetID ? '' : form.panelTlsCertificateId,
+    };
   }
   if (kind === 'system') {
     update.branding = { loginTitle: form.loginTitle, loginSubtitle: form.loginSubtitle };
