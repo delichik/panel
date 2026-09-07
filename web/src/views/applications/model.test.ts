@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applicationFileMountOptions,
   applicationStatus,
   cloneFacilityDomains,
   cloneFacilityPath,
@@ -44,6 +45,18 @@ const app = {
 } satisfies ApplicationDto;
 
 describe('application editor model', () => {
+  it('offers application files by stable name and preserves a missing legacy reference', () => {
+    expect(applicationFileMountOptions([{ name: 'app.conf' }, { name: 'public' }])).toEqual([
+      { label: 'app.conf', value: 'app.conf' },
+      { label: 'public', value: 'public' },
+    ]);
+    expect(applicationFileMountOptions([{ name: 'app.conf' }], 'deleted.conf', (name) => `${name} (missing)`)).toEqual([
+      { label: 'deleted.conf (missing)', value: 'deleted.conf', disabled: true },
+      { label: 'app.conf', value: 'app.conf' },
+    ]);
+    expect(applicationFileMountOptions([{ name: 'app.conf' }], 'app.conf')).toHaveLength(1);
+  });
+
   it('marks stopped reconciliation as needing attention', () => {
     expect(applicationStatus({ ...app, reconcileStopped: true })).toBe('attention');
     expect(statusTone('attention')).toBe('warning');

@@ -52,6 +52,12 @@ describe('application and facility file closure', () => {
     expect(viewSource).not.toContain('v-model="facilityPathDraft.assetId"');
   });
 
+  it('selects application file mount sources from the active edit session', () => {
+    expect(viewSource).toContain(':options="applicationFileMountOptions"');
+    expect(viewSource).toContain("mountDraft.type === 'file'");
+    expect(viewSource).toContain("t('applicationsPage.applicationFileMountMissing'");
+  });
+
   it('renders application and facility configuration as one continuous workspace', () => {
     expect(viewSource).toContain('class="app-editor-body"');
     expect(viewSource).toContain('class="workspace-panel"');

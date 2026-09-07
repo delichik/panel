@@ -36,6 +36,7 @@ import type { FacilityEditPreviewResult, FacilityEditSession, FacilityRouteDomai
 import type { ServerDto } from '@/types/servers';
 import { formatDateTime } from '@/utils/datetime';
 import {
+  applicationFileMountOptions as makeApplicationFileMountOptions,
   applicationStatus,
   cloneFacilityDomains,
   cloneFacilityPath,
@@ -263,6 +264,13 @@ const applicationAssetItems = computed<AssetFileItem[]>(() => (editSession.value
   sha256: file.sha256,
   editable: file.kind === 'template',
 })));
+const applicationFileMountOptions = computed(() => makeApplicationFileMountOptions(
+  editSession.value?.files ?? [],
+  mountDraft.type === 'file' ? mountDraft.source : '',
+  (name) => t('applicationsPage.applicationFileMountMissing', { name }),
+));
+const applicationFileMountSourceValid = computed(() => mountDraft.type !== 'file'
+  || applicationFileMountOptions.value.some((option) => option.value === mountDraft.source.trim() && !option.disabled));
 const facilityAssetItems = computed<AssetFileItem[]>(() => (facilitySession.value?.assets ?? []).map((asset) => ({
   key: asset.name,
   name: asset.name,
@@ -1231,6 +1239,10 @@ function openMountDialog(index = -1) {
 }
 
 function saveMountDialog() {
+  if (mountDraft.type === 'file' && !applicationFileMountSourceValid.value) {
+    notifyError(t('applicationsPage.applicationFileMountSourceRequired'));
+    return;
+  }
   if (mountDraft.type === 'storage_share' && !mountDraft.source) {
     notifyError(t('applicationsPage.storageShareMountSourceRequired'));
     return;
@@ -2100,7 +2112,9 @@ onBeforeUnmount(() => {
     </div>
     <div v-else-if="dialogKind === 'mount'" class="grid gap-3">
       <label class="field">{{ t('common.type') }}<Select v-model="mountDraft.type" :options="mountTypeOptions" /></label>
-      <label class="field">{{ t('applicationsPage.source') }}<Select v-if="mountDraft.type === 'storage_share'" v-model="mountDraft.source" :options="storageShareOptions" :placeholder="t('applicationsPage.storageShareMountSourcePlaceholder')" :disabled="!storageShareAvailable" /><Input v-else v-model="mountDraft.source" /></label>
+      <label class="field">{{ t('applicationsPage.source') }}<Select v-if="mountDraft.type === 'file'" v-model="mountDraft.source" :options="applicationFileMountOptions" :placeholder="t('applicationsPage.applicationFileMountSourcePlaceholder')" /><Select v-else-if="mountDraft.type === 'storage_share'" v-model="mountDraft.source" :options="storageShareOptions" :placeholder="t('applicationsPage.storageShareMountSourcePlaceholder')" :disabled="!storageShareAvailable" /><Input v-else v-model="mountDraft.source" /></label>
+      <p v-if="mountDraft.type === 'file' && !editSession?.files.length" class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.applicationFileMountEmpty') }}</p>
+      <p v-else-if="mountDraft.type === 'file' && mountDraft.source && !applicationFileMountSourceValid" class="m-0 text-xs text-danger">{{ t('applicationsPage.applicationFileMountMissing', { name: mountDraft.source }) }}</p>
       <p v-if="mountDraft.type === 'storage_share'" class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.storageShareMountHint') }}</p>
       <p v-if="mountDraft.type === 'storage_share' && !storageShareAvailable" class="m-0 text-xs text-warning">{{ t('applicationsPage.storageShareMountUnconfigured') }} <Button size="sm" variant="ghost" @click="router.push('/applications/facility-apps/storage-share/config')">{{ t('applicationsPage.storageShareGoConfigure') }}</Button></p>
       <label class="field">{{ t('applicationsPage.target') }}<Input v-model="mountDraft.target" /></label>

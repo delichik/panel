@@ -1,5 +1,5 @@
 import YAML from 'yaml';
-import type { ApplicationDto, ApplicationRuntime, ApplicationSaveInput, ApplicationSummaryDto, Diagnostic, HttpRouteOptions, ReverseProxyPath, ReverseProxyRule } from '@/types/applications';
+import type { ApplicationDto, ApplicationFile, ApplicationRuntime, ApplicationSaveInput, ApplicationSummaryDto, Diagnostic, HttpRouteOptions, ReverseProxyPath, ReverseProxyRule } from '@/types/applications';
 import type { FacilityRouteDomain, FacilityRoutePath, ReverseProxyConfig, ReverseProxySaveInput, StaticRuleType, StaticSourceType } from '@/types/facilityApps';
 
 export type AppMode = 'apps' | 'create' | 'edit' | 'facilityCatalog' | 'facilityDetail' | 'facilityConfig';
@@ -30,6 +30,25 @@ export interface MountRow {
   target: string;
   readOnly: boolean;
   mode: string;
+}
+
+export interface ApplicationFileMountOption {
+  label: string;
+  value: string;
+  disabled?: boolean;
+}
+
+export function applicationFileMountOptions(
+  files: Array<Pick<ApplicationFile, 'name'>>,
+  currentSource = '',
+  missingLabel: (name: string) => string = (name) => name,
+): ApplicationFileMountOption[] {
+  const options: ApplicationFileMountOption[] = files.map((file) => ({ label: file.name, value: file.name }));
+  const selected = currentSource.trim();
+  if (selected && !options.some((option) => option.value === selected)) {
+    options.unshift({ label: missingLabel(selected), value: selected, disabled: true });
+  }
+  return options;
 }
 
 export type ProxyRuleDraft = ReverseProxyRule;
