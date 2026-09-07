@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -287,11 +288,35 @@ func (s *Service) runDeployAgent(ctx context.Context, taskID string, srv Server)
 	// fall back to proceeding directly; cancellation aborts the deployment.
 	if _, configured := agentURL(srv); configured {
 		_ = s.tasks.Advance(ctx, taskID, "checking", "waiting for agent restart readiness")
-		if err := s.prepareAgentRestart(ctx, srv); err != nil {
+		waitStarted := time.Now()
+		var lastProgressAt time.Time
+		onState := func(state string) {
+			if state == agentcontract.PrepareRestartStateReady {
+				_ = s.tasks.AppendLog(ctx, taskID, "system", "agent restart readiness confirmed (state=ready)")
+				return
+			}
+			if state != agentcontract.PrepareRestartStateHoldOn {
+				_ = s.tasks.AppendLog(ctx, taskID, "system", "agent reported unknown restart readiness state: "+state)
+				return
+			}
+			now := time.Now()
+			if !lastProgressAt.IsZero() && now.Sub(lastProgressAt) < agentPrepareRestartProgressInterval {
+				return
+			}
+			lastProgressAt = now
+			waited := now.Sub(waitStarted).Round(time.Second)
+			_ = s.tasks.AppendLog(ctx, taskID, "system", fmt.Sprintf("agent requested a restart delay (state=holdon; %s elapsed); the protocol did not provide a reason", waited))
+		}
+		if err := s.prepareAgentRestartWithProgress(ctx, srv, onState); err != nil {
 			if ctx.Err() != nil {
 				return
 			}
-			_ = s.tasks.AppendLog(ctx, taskID, "system", "agent restart readiness check skipped: "+err.Error())
+			if errors.Is(err, context.DeadlineExceeded) {
+				waited := time.Since(waitStarted).Round(time.Second)
+				_ = s.tasks.AppendLog(ctx, taskID, "system", fmt.Sprintf("agent restart readiness wait timed out after %s; deployment will continue", waited))
+			} else {
+				_ = s.tasks.AppendLog(ctx, taskID, "system", "agent restart readiness check skipped: "+err.Error())
+			}
 		}
 	}
 	bundle, err := s.IssueAgentCertificate(ctx, srv.ID)
@@ -446,6 +471,10 @@ func hasAgentCapability(capabilities []string, capability string) bool {
 // agents. Other errors (network, TLS, agent failures) are returned and logged
 // by the caller, which still proceeds with the deployment.
 func (s *Service) prepareAgentRestart(ctx context.Context, srv Server) error {
+	return s.prepareAgentRestartWithProgress(ctx, srv, nil)
+}
+
+func (s *Service) prepareAgentRestartWithProgress(ctx context.Context, srv Server, onState func(string)) error {
 	if s.agent == nil {
 		return nil
 	}
@@ -468,6 +497,9 @@ func (s *Service) prepareAgentRestart(ctx context.Context, srv Server) error {
 	// forever. On timeout the caller logs and proceeds with the deployment.
 	readyCtx, cancel := context.WithTimeout(ctx, agentPrepareRestartTimeout)
 	defer cancel()
+	if progress, ok := s.agent.(agentcontract.RestartReadinessProgressClient); ok {
+		return progress.PrepareRestartWithProgress(readyCtx, baseURL, onState)
+	}
 	return readiness.PrepareRestart(readyCtx, baseURL)
 }
 func (s *Service) failAgentDeployTask(ctx context.Context, taskID string, srv Server, cause error) {

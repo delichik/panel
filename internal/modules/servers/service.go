@@ -50,6 +50,7 @@ const agentDeployTimeout = 2 * time.Minute
 // agentPrepareRestartTimeout bounds how long a deployment waits for the agent
 // to report restart readiness before proceeding (logged as a degraded path).
 const agentPrepareRestartTimeout = 10 * time.Minute
+const agentPrepareRestartProgressInterval = 15 * time.Second
 
 // agentDeployCompatibilityMaxAttempts and agentDeployCompatibilityPollInterval
 // bound the post-deploy health poll instead of a fixed sleep.

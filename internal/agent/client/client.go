@@ -41,6 +41,11 @@ const maintenanceTimeout = 65 * time.Minute
 // behavior is fixed and not configurable.
 var prepareRestartTimeout = 10 * time.Minute
 
+// A conforming agent reports either "ready" immediately or "holdon" once per
+// second. Treat a stream that produces no initial state as broken instead of
+// leaving an Agent deployment parked until the full readiness deadline.
+var prepareRestartInitialStateTimeout = 15 * time.Second
+
 type ReportConfig struct {
 	ServerID                  string
 	MetricsIntervalSeconds    int
@@ -167,6 +172,13 @@ func (c *GRPCClient) UpgradePackages(ctx context.Context, endpoint string, req a
 // agent reports "ready" or the stream/context ends. Agents that do not support
 // the RPC return an error so callers can fall back to proceeding directly.
 func (c *GRPCClient) PrepareRestart(ctx context.Context, endpoint string) error {
+	return c.PrepareRestartWithProgress(ctx, endpoint, nil)
+}
+
+// PrepareRestartWithProgress behaves like PrepareRestart and reports every
+// state received from the readiness stream. The callback runs synchronously;
+// callers that persist progress should throttle repeated "holdon" states.
+func (c *GRPCClient) PrepareRestartWithProgress(ctx context.Context, endpoint string, onState func(string)) error {
 	// The readiness stream is expected to end quickly after a package upgrade,
 	// but a broken agent must not be able to hold a deployment open forever.
 	// The deadline covers both connection establishment and the stream.
@@ -181,6 +193,39 @@ func (c *GRPCClient) PrepareRestart(ctx context.Context, endpoint string) error 
 	if err != nil {
 		return wrapAgentError(err)
 	}
+	type receiveResult struct {
+		msg *agentpb.PrepareRestartResponse
+		err error
+	}
+	firstResult := make(chan receiveResult, 1)
+	go func() {
+		msg, recvErr := stream.Recv()
+		firstResult <- receiveResult{msg: msg, err: recvErr}
+	}()
+	initialTimer := time.NewTimer(prepareRestartInitialStateTimeout)
+	defer initialTimer.Stop()
+	var first *agentpb.PrepareRestartResponse
+	select {
+	case result := <-firstResult:
+		if result.err != nil {
+			if ctxErr := waitCtx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			return wrapAgentError(result.err)
+		}
+		first = result.msg
+	case <-initialTimer.C:
+		return fmt.Errorf("agent restart readiness stream reported no state within %s: %w", prepareRestartInitialStateTimeout, context.DeadlineExceeded)
+	case <-waitCtx.Done():
+		return waitCtx.Err()
+	}
+	state := first.GetState()
+	if onState != nil {
+		onState(state)
+	}
+	if state == agentcontract.PrepareRestartStateReady {
+		return nil
+	}
 	for {
 		msg, err := stream.Recv()
 		if err != nil {
@@ -189,7 +234,11 @@ func (c *GRPCClient) PrepareRestart(ctx context.Context, endpoint string) error 
 			}
 			return wrapAgentError(err)
 		}
-		if msg.GetState() == agentcontract.PrepareRestartStateReady {
+		state := msg.GetState()
+		if onState != nil {
+			onState(state)
+		}
+		if state == agentcontract.PrepareRestartStateReady {
 			return nil
 		}
 	}

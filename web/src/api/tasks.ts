@@ -6,7 +6,7 @@ function id(value: string) {
 }
 
 export const tasksApi = {
-  list(params: { status?: string; type?: string; page?: number; pageSize?: number; operationPage?: boolean; q?: string } = {}) {
+  list(params: { status?: string; type?: string; serverId?: string; page?: number; pageSize?: number; operationPage?: boolean; q?: string } = {}) {
     const query = new URLSearchParams();
     Object.entries(params).forEach(([key, value]) => {
       if (value !== undefined && value !== '' && value !== false) query.set(key, String(value));

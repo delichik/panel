@@ -2037,16 +2037,17 @@ type errString string
 func (e errString) Error() string { return string(e) }
 
 type serverFakeAgentClient struct {
-	ufwURL              string
-	ufw                 remoteops.UFWStatus
-	health              agentcontract.HealthResponse
-	osRelease           linux.OSRelease
-	systemTraits        map[string]string
-	err                 error
-	allowedRule         remoteops.UFWRule
-	capabilities        []string
-	prepareRestartErr   error
-	prepareRestartCalls int
+	ufwURL               string
+	ufw                  remoteops.UFWStatus
+	health               agentcontract.HealthResponse
+	osRelease            linux.OSRelease
+	systemTraits         map[string]string
+	err                  error
+	allowedRule          remoteops.UFWRule
+	capabilities         []string
+	prepareRestartErr    error
+	prepareRestartCalls  int
+	prepareRestartStates []string
 }
 
 func agentHealth(version string) agentcontract.HealthResponse {
@@ -2119,8 +2120,17 @@ func (f *serverFakeAgentClient) RestartSystem(context.Context, string) error {
 	return f.err
 }
 
-func (f *serverFakeAgentClient) PrepareRestart(context.Context, string) error {
+func (f *serverFakeAgentClient) PrepareRestart(ctx context.Context, url string) error {
+	return f.PrepareRestartWithProgress(ctx, url, nil)
+}
+
+func (f *serverFakeAgentClient) PrepareRestartWithProgress(_ context.Context, _ string, onState func(string)) error {
 	f.prepareRestartCalls++
+	for _, state := range f.prepareRestartStates {
+		if onState != nil {
+			onState(state)
+		}
+	}
 	return f.prepareRestartErr
 }
 
@@ -2385,6 +2395,41 @@ func TestAgentDeployProceedsWhenReadinessCheckFails(t *testing.T) {
 	}
 	if exec.uploads != 1 {
 		t.Fatalf("expected binary upload after readiness failure, got %d", exec.uploads)
+	}
+}
+
+func TestAgentDeployLogsOpaqueRestartDelayState(t *testing.T) {
+	traits := map[string]string{
+		agentcontract.TraitEnabled: "true",
+		agentcontract.TraitURL:     "https://127.0.0.1:9786",
+		agentcontract.TraitStatus:  agentcontract.StatusIncompatible,
+		agentcontract.TraitVersion: agentcontract.Version,
+	}
+	svc, taskSvc, serverID, _, agent := newDeployTestService(t, traits)
+	agent.health = agentHealthWithPrepareRestart(agentcontract.Version)
+	agent.prepareRestartStates = []string{agentcontract.PrepareRestartStateHoldOn}
+
+	task, err := svc.DeployAgent(context.Background(), serverID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished := waitDeployTaskTerminal(t, taskSvc, task.ID)
+	if finished.Status != tasks.StatusCompleted {
+		t.Fatalf("expected completed deploy, got %#v", finished)
+	}
+	logs, _, err := taskSvc.Logs(context.Background(), task.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, entry := range logs {
+		if strings.Contains(entry.Line, "state=holdon") && strings.Contains(entry.Line, "did not provide a reason") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected opaque restart delay log, got %#v", logs)
 	}
 }
 

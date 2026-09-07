@@ -108,7 +108,7 @@ import {
   mockUpgradePackages,
   mockVolumes,
 } from './resources';
-import { completedTask, mockTasks, mockTaskLogs, mockTaskSteps, retryTask, runTaskNow } from './tasks';
+import { acceptedAgentDeployment, completedTask, mockTasks, mockTaskLogs, mockTaskSteps, retryTask, runTaskNow } from './tasks';
 import { applicationOperationDetail, mockApplicationOperations, mockSystemEvents } from './runtimeEvents';
 import { confirmRestore, mockRuntimeSettings, mockServerVariables, restorePreflight, saveRuntime, saveServerVariables, startExport } from './settings';
 import { advanceExport, exportStatus, resetExport, restoreStatus } from './maintenance';
@@ -291,6 +291,9 @@ export function installMockApi() {
         } catch (err) {
           return error('server_unreachable', err instanceof Error ? err.message : 'Server is unreachable.', 502);
         }
+      }
+      if (op === 'agent/deploy' && mockServers.some((item) => item.id === id)) {
+        return json({ taskId: acceptedAgentDeployment(id) }, 202);
       }
       return mockServers.some((item) => item.id === id) ? json(accepted(op.replace('/', '-')), 202) : error('server_not_found', 'Server was not found.', 404);
     }
@@ -765,12 +768,14 @@ export function installMockApi() {
     if (url.pathname === '/api/v1/tasks' && method(init) === 'GET') {
       const status = url.searchParams.get('status') || '';
       const type = url.searchParams.get('type') || '';
+      const serverId = url.searchParams.get('serverId') || '';
       const operationId = url.searchParams.get('operationId') || '';
       const page = Math.max(1, Number(url.searchParams.get('page') || 1));
       const pageSize = Math.max(1, Math.min(100, Number(url.searchParams.get('pageSize') || url.searchParams.get('limit') || 50)));
       let items = mockTasks;
       if (status) items = items.filter((item) => item.status === status);
       if (type) items = items.filter((item) => item.type === type);
+      if (serverId) items = items.filter((item) => item.serverId === serverId);
       if (operationId) items = items.filter((item) => item.operationId === operationId);
       const total = items.length;
       const start = (page - 1) * pageSize;

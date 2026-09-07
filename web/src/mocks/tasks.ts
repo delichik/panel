@@ -3,6 +3,7 @@ import type { TaskDto, TaskLog, TaskStep } from '@/types/tasks';
 const now = new Date('2026-08-01T08:00:00.000Z');
 
 export const mockTasks: TaskDto[] = [
+  agentDeploymentTask(),
   task('task-deploy-1', 'op-deploy-storefront', 'application_deploy', 'running', 'app-storefront', 'Deploy storefront to edge nodes', 64, true, false),
   task('task-deploy-2', 'op-deploy-storefront', 'application_deploy_target', 'completed', 'srv-edge-sgp', 'Target edge-sgp-01 completed', 100, false, false),
   task('task-deploy-3', 'op-deploy-storefront', 'application_deploy_target', 'failed_retryable', 'srv-api-hkg', 'Target api-hkg-01 failed while pulling image', 38, true, true, 'registry timeout after 30s'),
@@ -83,6 +84,11 @@ export const mockTaskSteps: Record<string, TaskStep[]> = {
 };
 
 export const mockTaskLogs: Record<string, TaskLog[]> = {
+  'task-agent-deploy-edge': [
+    { cursor: 1, time: new Date(now.getTime() - 180000).toISOString(), stream: 'system', line: 'preparing panel agent deployment' },
+    { cursor: 2, time: new Date(now.getTime() - 175000).toISOString(), stream: 'system', line: 'waiting for agent restart readiness' },
+    { cursor: 3, time: new Date(now.getTime() - 160000).toISOString(), stream: 'system', line: 'agent requested a restart delay (state=holdon; 15s elapsed); the protocol did not provide a reason' },
+  ],
   'task-deploy-1': longLogs('task-deploy-1', 'Pulling ghcr.io/example/storefront:1.9.0'),
   'task-deploy-3': longLogs('task-deploy-3', 'retryable pull failure: registry timeout after 30s', 'stderr'),
   'task-cert-1': longLogs('task-cert-1', 'waiting for _acme-challenge.staging.internal.test TXT record', 'stderr'),
@@ -94,6 +100,12 @@ export const mockTaskLogs: Record<string, TaskLog[]> = {
   'task-billing-image': longLogs('task-billing-image', 'billing image digest updated on api-hkg-01 and edge-sgp-01'),
   'task-webhook-sync': longLogs('task-webhook-sync', 'syncing webhook-ingress config to edge-lax-01'),
 };
+
+function agentDeploymentTask(): TaskDto {
+  const item = task('task-agent-deploy-edge', 'op-agent-deploy-edge', 'server_agent_deploy', 'running', 'srv-edge-sgp', 'Deploying panel agent for edge-sgp-01', 0, true, false);
+  item.stage = 'checking';
+  return item;
+}
 
 export function task(id: string, operationId: string, type: string, status: string, resourceId: string, summary: string, percentage: number, allowRetry: boolean, allowRunNow: boolean, error = ''): TaskDto {
   return {
@@ -128,6 +140,18 @@ function numericSeed(id: string) {
 export function completedTask(prefix: string) {
   const taskId = `${prefix}-${Date.now()}`;
   mockTasks.unshift(task(taskId, `op-${prefix}`, 'server_resource_refresh', 'completed', 'system', `${prefix} finished`, 100, false, false));
+  return taskId;
+}
+
+export function acceptedAgentDeployment(serverId: string) {
+  const taskId = `task-agent-deploy-${Date.now()}`;
+  const item = task(taskId, `op-agent-deploy-${Date.now()}`, 'server_agent_deploy', 'running', serverId, `Deploying panel agent for ${serverId}`, 0, true, false);
+  item.stage = 'checking';
+  mockTasks.unshift(item);
+  mockTaskLogs[taskId] = [
+    { cursor: 1, time: new Date().toISOString(), stream: 'system', line: 'preparing panel agent deployment' },
+    { cursor: 2, time: new Date().toISOString(), stream: 'system', line: 'waiting for agent restart readiness' },
+  ];
   return taskId;
 }
 

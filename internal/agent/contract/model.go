@@ -68,6 +68,14 @@ type RestartReadinessClient interface {
 	PrepareRestart(ctx context.Context, url string) error
 }
 
+// RestartReadinessProgressClient is the observable form of
+// RestartReadinessClient. Implementations report each state received from the
+// agent so callers can surface a long "holdon" wait without polling or
+// duplicating the readiness stream.
+type RestartReadinessProgressClient interface {
+	PrepareRestartWithProgress(ctx context.Context, url string, onState func(string)) error
+}
+
 type MaintenanceClient interface {
 	PackageUpdates(ctx context.Context, url string) ([]linux.PackageUpdate, error)
 	UpgradePackages(ctx context.Context, url string, req PackageUpgradeRequest) (CommandResponse, error)

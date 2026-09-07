@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -208,6 +209,22 @@ func TestGRPCClientPrepareRestartAppliesInternalTimeout(t *testing.T) {
 	}
 }
 
+func TestGRPCClientPrepareRestartRejectsStreamWithoutInitialState(t *testing.T) {
+	old := prepareRestartInitialStateTimeout
+	prepareRestartInitialStateTimeout = 100 * time.Millisecond
+	defer func() { prepareRestartInitialStateTimeout = old }()
+	client, endpoint, stop := newPrepareRestartTestClient(t, &prepareRestartServerStub{block: true})
+	defer stop()
+	started := time.Now()
+	err := client.PrepareRestart(context.Background(), endpoint)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected initial state deadline exceeded, got %v", err)
+	}
+	if elapsed := time.Since(started); elapsed >= time.Second {
+		t.Fatalf("expected initial state timeout before the full readiness deadline, took %v", elapsed)
+	}
+}
+
 func TestWrapAgentErrorPreservesGRPCCodeSemantics(t *testing.T) {
 	cases := []struct {
 		name string
@@ -231,5 +248,24 @@ func TestWrapAgentErrorPreservesGRPCCodeSemantics(t *testing.T) {
 				t.Fatalf("http status = %d, want %d (%#v)", domain.HTTPStatus, tc.want, domain)
 			}
 		})
+	}
+}
+
+func TestGRPCClientPrepareRestartReportsProgressStates(t *testing.T) {
+	client, endpoint, stop := newPrepareRestartTestClient(t, &prepareRestartServerStub{holdOnCount: 2})
+	defer stop()
+	var states []string
+	if err := client.PrepareRestartWithProgress(context.Background(), endpoint, func(state string) {
+		states = append(states, state)
+	}); err != nil {
+		t.Fatalf("PrepareRestartWithProgress returned error: %v", err)
+	}
+	want := []string{
+		agentcontract.PrepareRestartStateHoldOn,
+		agentcontract.PrepareRestartStateHoldOn,
+		agentcontract.PrepareRestartStateReady,
+	}
+	if !slices.Equal(states, want) {
+		t.Fatalf("progress states = %#v, want %#v", states, want)
 	}
 }

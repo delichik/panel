@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { AlertTriangle, Cable, KeyRound, PlayCircle, Plus, RefreshCcw, ServerCog, ShieldPlus, Trash2, Wrench } from '@lucide/vue';
 import { credentialsApi } from '@/api/credentials';
 import { serversApi, type ServerMetricsRange, type ServerMetricsSeries } from '@/api/servers';
+import { tasksApi } from '@/api/tasks';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
@@ -14,6 +15,7 @@ import PaginationBar from '@/components/ui/PaginationBar.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
 import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
+import StatusBadge from '@/components/ui/StatusBadge.vue';
 import Textarea from '@/components/ui/Textarea.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
@@ -24,6 +26,7 @@ import { useAutoRefresh } from '@/composables/useAutoRefresh';
 import { useI18n } from '@/i18n';
 import type { CredentialDto } from '@/types/credentials';
 import type { ServerDto, ServerProbeResult, ServerSaveInput } from '@/types/servers';
+import type { TaskDto, TaskLog } from '@/types/tasks';
 import { agentTone, canInstallUfw, canRunPrivilegedOperation, connectionHost, credentialLabel, serverReachabilityTone, validateServerInput } from './model';
 import { createLatestRequestGuard } from '@/views/_shared/requestState';
 import { formatDateTime } from '@/utils/datetime';
@@ -51,7 +54,10 @@ let detailRequestId = 0;
 let metricsRequestId = 0;
 let metricsInFlight = false;
 let metricsAutoRefreshTimer: number | undefined;
+let agentTaskPollTimer: number | undefined;
+let agentTaskInFlight = false;
 const listRequests = createLatestRequestGuard();
+const agentTaskRequests = createLatestRequestGuard();
 const loading = ref(false);
 const detailLoading = ref(false);
 const error = ref('');
@@ -73,6 +79,12 @@ const metricsServerId = ref('');
 const metricsLoading = ref(false);
 const metricsError = ref('');
 const metricsRange = ref<ServerMetricsRange>('1h');
+const agentTask = ref<TaskDto | null>(null);
+const agentTaskLogs = ref<TaskLog[]>([]);
+const agentTaskLogCursor = ref(0);
+const agentTaskServerId = ref('');
+const agentTaskLoading = ref(false);
+const agentTaskError = ref('');
 const metricsRangeOptions = [
   { value: '1h', label: '1h' },
   { value: '6h', label: '6h' },
@@ -117,6 +129,8 @@ const latestMetrics = computed(() => {
     load: series?.load.at(-1),
   };
 });
+const visibleAgentTaskLogs = computed(() => agentTaskLogs.value.slice(-20));
+const agentTaskActive = computed(() => isActiveTask(agentTask.value));
 
 const metricChartPanels = computed(() => {
   const series = metrics.value;
@@ -147,6 +161,7 @@ watch(page, () => { void loadServers(); });
 watch(selectedId, () => {
   void loadServerDetail();
   void loadMetrics(true);
+  void loadAgentDeployment(true);
 });
 watch(metricsRange, () => {
   void loadMetrics(true);
@@ -405,7 +420,113 @@ async function deployAgent(server: ServerDto) {
   await runInline(async () => {
     const accepted = await serversApi.deployAgent(server.id);
     notifySuccess(t('serversPage.agentTaskAccepted', { taskId: accepted.taskId }));
+    await loadAgentDeployment(true, accepted.taskId);
   }, 'agent');
+}
+
+async function loadAgentDeployment(reset = false, preferredTaskId = '') {
+  if (!reset && agentTaskInFlight) return;
+  const serverId = selectedId.value;
+  if (!serverId) {
+    clearAgentDeployment();
+    return;
+  }
+  const requestId = agentTaskRequests.begin();
+  agentTaskInFlight = true;
+  agentTaskLoading.value = true;
+  agentTaskError.value = '';
+  if (reset || agentTaskServerId.value !== serverId) {
+    agentTask.value = null;
+    agentTaskLogs.value = [];
+    agentTaskLogCursor.value = 0;
+    agentTaskServerId.value = serverId;
+  }
+  try {
+    let nextTask: TaskDto | null;
+    if (preferredTaskId) {
+      nextTask = await tasksApi.get(preferredTaskId);
+    } else if (agentTask.value?.id && agentTaskServerId.value === serverId) {
+      nextTask = await tasksApi.get(agentTask.value.id);
+    } else {
+      const result = await tasksApi.list({ serverId, type: 'server_agent_deploy', page: 1, pageSize: 1 });
+      nextTask = result.items[0] ?? null;
+    }
+    if (!agentTaskRequests.isCurrent(requestId) || selectedId.value !== serverId) return;
+    if (!nextTask) {
+      agentTask.value = null;
+      agentTaskLogs.value = [];
+      agentTaskLogCursor.value = 0;
+      return;
+    }
+    const previousWasActive = isActiveTask(agentTask.value);
+    const taskChanged = agentTask.value?.id !== nextTask.id;
+    agentTask.value = nextTask;
+    if (taskChanged) {
+      agentTaskLogs.value = [];
+      agentTaskLogCursor.value = 0;
+    }
+    const nextLogs = await tasksApi.logs(nextTask.id, agentTaskLogCursor.value);
+    if (!agentTaskRequests.isCurrent(requestId) || selectedId.value !== serverId) return;
+    agentTaskLogs.value = [...agentTaskLogs.value, ...nextLogs.logs];
+    agentTaskLogCursor.value = nextLogs.nextCursor;
+    if (previousWasActive && !isActiveTask(nextTask)) invalidateServerDetail(serverId);
+  } catch (err) {
+    if (!agentTaskRequests.isCurrent(requestId) || selectedId.value !== serverId) return;
+    agentTaskError.value = err instanceof Error ? err.message : t('serversPage.agentTaskLoadFailed');
+  } finally {
+    if (agentTaskRequests.isCurrent(requestId)) {
+      agentTaskInFlight = false;
+      agentTaskLoading.value = false;
+    }
+  }
+}
+
+function clearAgentDeployment() {
+  agentTaskRequests.invalidate();
+  agentTask.value = null;
+  agentTaskLogs.value = [];
+  agentTaskLogCursor.value = 0;
+  agentTaskServerId.value = '';
+  agentTaskError.value = '';
+  agentTaskLoading.value = false;
+  agentTaskInFlight = false;
+}
+
+function isActiveTask(task: TaskDto | null) {
+  return Boolean(task && ['queued', 'scheduled', 'running', 'failed_retryable'].includes(task.status));
+}
+
+function agentTaskStageLabel(stage: string) {
+  const key = ({
+    preparing: 'serversPage.agentTaskStagePreparing',
+    checking: 'serversPage.agentTaskStageChecking',
+    uploading: 'serversPage.agentTaskStageUploading',
+    configuring: 'serversPage.agentTaskStageConfiguring',
+    starting: 'serversPage.agentTaskStageStarting',
+    restarting: 'serversPage.agentTaskStageRestarting',
+    collecting: 'serversPage.agentTaskStageCollecting',
+    completed: 'serversPage.agentTaskStageCompleted',
+  } as Record<string, string>)[stage];
+  return key ? t(key) : stage || t('common.notAvailable');
+}
+
+function formatAgentTaskLog(line: string) {
+  if (line === 'waiting for agent restart readiness') return t('serversPage.agentTaskLogWaitingReadiness');
+  if (line === 'agent restart readiness confirmed (state=ready)') return t('serversPage.agentTaskLogReadinessConfirmed');
+  const restartDelay = line.match(/^agent requested a restart delay \(state=holdon; (.+) elapsed\); the protocol did not provide a reason$/);
+  if (restartDelay) return t('serversPage.agentTaskLogRestartDelay', { elapsed: restartDelay[1] });
+  const maintenanceWait = line.match(/^panel agent is still running package maintenance; waiting to restart \((.+) elapsed\)$/);
+  if (maintenanceWait) return t('serversPage.agentTaskLogRestartDelay', { elapsed: maintenanceWait[1] });
+  const readinessTimeout = line.match(/^agent restart readiness wait timed out after (.+); deployment will continue$/);
+  if (readinessTimeout) return t('serversPage.agentTaskLogReadinessTimeout', { timeout: readinessTimeout[1] });
+  return line;
+}
+
+function startAgentTaskPolling() {
+  window.clearInterval(agentTaskPollTimer);
+  agentTaskPollTimer = window.setInterval(() => {
+    if (document.visibilityState === 'visible' && agentTaskActive.value) void loadAgentDeployment();
+  }, 2000);
 }
 
 function invalidateServerDetail(id?: string) {
@@ -529,12 +650,17 @@ function isAbortError(error: unknown) {
   return Boolean(error && typeof error === 'object' && 'code' in error && (error as { code?: string }).code === 'request_aborted');
 }
 
-onMounted(load);
+onMounted(async () => {
+  await load();
+  startAgentTaskPolling();
+});
 onBeforeUnmount(() => {
   if (searchTimer) clearTimeout(searchTimer);
   detailController?.abort();
   metricsController?.abort();
   stopMetricsAutoRefresh();
+  window.clearInterval(agentTaskPollTimer);
+  agentTaskRequests.invalidate();
 });
 </script>
 
@@ -694,9 +820,29 @@ onBeforeUnmount(() => {
                 </section>
               </div>
               <aside class="grid content-start gap-3">
-                <section class="rounded-2xl border border-border bg-muted p-4">
-                  <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.agent') }}</h3>
+                <section class="relative rounded-2xl border border-border bg-muted p-4">
+                  <div class="flex min-w-0 flex-wrap items-center justify-between gap-2">
+                    <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.agent') }}</h3>
+                    <StatusBadge v-if="agentTask" :status="agentTask.status" domain="task" :label="t(`tasksPage.status.${agentTask.status}`)" />
+                  </div>
                   <p class="mt-2 text-sm text-muted-foreground">{{ agentText(selectedServer) }}</p>
+                  <LoadingOverlay v-if="agentTaskLoading && !agentTask" :label="t('serversPage.agentTaskLoading')" />
+                  <div v-if="agentTask" class="mt-3 grid min-w-0 gap-2 rounded-xl border border-border bg-card p-3 text-xs">
+                    <div class="flex min-w-0 flex-wrap items-center justify-between gap-2">
+                      <strong class="text-foreground">{{ t('serversPage.agentTaskCurrentStage') }}</strong>
+                      <span class="text-muted-foreground">{{ agentTaskStageLabel(agentTask.stage) }}</span>
+                    </div>
+                    <p v-if="agentTask.error" class="m-0 break-words text-danger">{{ agentTask.error }}</p>
+                    <div class="grid min-w-0 gap-1">
+                      <strong class="text-foreground">{{ t('serversPage.agentTaskRecentLogs') }}</strong>
+                      <pre aria-live="polite" class="m-0 max-h-48 min-w-0 overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words rounded-lg bg-muted p-2 text-[11px] text-muted-foreground [overflow-wrap:anywhere]">{{ visibleAgentTaskLogs.map((line) => `[${line.stream}] ${formatAgentTaskLog(line.line)}`).join('\n') || t('serversPage.agentTaskNoLogs') }}</pre>
+                    </div>
+                  </div>
+                  <div v-if="agentTaskError" class="mt-3 grid gap-2 rounded-xl border border-danger-border bg-danger-bg p-3 text-xs text-danger">
+                    <span class="break-words">{{ agentTaskError }}</span>
+                    <Button size="sm" variant="secondary" :loading="agentTaskLoading" @click="loadAgentDeployment(true)"><RefreshCcw />{{ t('common.retry') }}</Button>
+                  </div>
+                  <p v-else-if="!agentTask && !agentTaskLoading" class="mt-3 text-xs text-muted-foreground">{{ t('serversPage.agentTaskNoHistory') }}</p>
                   <div class="mt-3 grid gap-2">
                     <Button :loading="pendingOperation === 'agent'" @click="deployAgent(selectedServer)"><ServerCog />{{ t('serversPage.deployAgent') }}</Button>
                     <Button :disabled="!canRunPrivilegedOperation(selectedServer)" :loading="pendingOperation === 'restart'" @click="confirmRestart(selectedServer)"><PlayCircle />{{ t('serversPage.restart') }}</Button>

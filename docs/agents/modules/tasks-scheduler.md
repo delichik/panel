@@ -73,7 +73,7 @@
 - `FinishExecution` 只在数据库中的任务状态已经不再是 `running` 时清理内存执行对象；如果终态写库失败导致数据库仍为 `running`，必须保留 execution，避免 orphan 检查误判。
 - Panel 启动时以及 tasks 内部 worker 运行期间每 30 秒检查数据库中的 `running` 任务；如果任务 ID 无法在当前进程 execution registry 中找到，会立即标记为失败并记录为 orphaned。
 - 由内存 goroutine 直接执行、无法跨进程恢复的一次性 worker 任务，例如服务器重启、UFW 安装/启用、fail2ban 应用，必须在 API 返回前先标记为 `running`。`server_agent_deploy` 虽然也由内存 goroutine 执行，但必须接入调度器 `run-now` / `retry`，用于恢复旧的排队部署任务并重新同步 agent 证书。
-- `server_agent_deploy` 自动触发失败达到上限后不得继续自动排队或启动新任务；任务中心和服务器详情仍允许用户手动重试。
+- `server_agent_deploy` 自动触发失败达到上限后不得继续自动排队或启动新任务；任务中心和服务器详情仍允许用户手动重试。服务器详情 Agent 卡片通过 `serverId + server_agent_deploy` 查询恢复最近任务，并增量读取 `/tasks/{id}/logs`；重启就绪流返回 `holdon` 时，部署任务按 15 秒节流记录 Agent 请求延迟重启的原始状态和已等待时长，不在协议未提供原因时推断为软件包维护。
 - 由内存 goroutine 直接执行、无法跨进程恢复的一次性 worker 任务，如果需要清理遗留 `queued`/`scheduled` 状态，必须在任务定义中设置 `StaleQueuedAfter`；tasks 内部 worker 只扫描注册表中声明了该能力的任务类型，并在超时后标记为失败提示用户重试。过期清理同时覆盖 `queued` 与 `scheduled` 两种状态，避免旧版本遗留或等待轮次超时的任务锚点永久占住并发键。
 - 长耗时后台操作应写入任务日志，并尽量拆出步骤，方便任务中心展示进度。
 - tasks 内部 worker 负责驱动注册的周期任务、唤醒到期队列任务、清理 stale queued 状态和检查 orphan running 状态。它不是独立业务模块，不注册任何特殊任务，也不通过业务 task type 字符串维护 executor 或 run-now/retry switch。

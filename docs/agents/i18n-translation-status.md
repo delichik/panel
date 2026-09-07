@@ -4,6 +4,7 @@
 
 ## 当前状态
 
+- 本轮服务器详情 Agent 卡片新增部署状态、阶段、日志空态/错误及 PrepareRestart 词条（`serversPage.agentTask*`），en / zh-CN 已同步；结构化的重启就绪、不透明 `holdon` 等待和超时日志会在前端转换为当前语言，不再把未携带原因的 `holdon` 推断为软件包升级；其他远端自由文本仍保持原样。
 - 本轮存储共享详情页新增「导出健康/分区数据/设置」分段词条（`applicationsPage.storageShareTab*`、状态检查与分区字段、删除确认勾选等），en / zh-CN 已同步。
 - 本轮移除应用编辑器的 YAML 源码编辑模式（表单 / YAML 源码切换、源码面板与往返同步），删除 `applicationsPage.editMode`、`configureMode`、`sourceMode`、`syncSource`、`applySource`、`sourceViewTitle`、`sourceViewHint`、`sourceGuardHint`、`yamlSynced`、`yamlApplied`、`yamlDirtySummary`、`specYaml`、`validationSpec`、`validationYaml`、`validationSourceStaged` 词条，en / zh-CN 已同步；`editorFlowHint` 文案已更新。
 - 前端词条：en / zh-CN key 集合一致，由 `web/src/i18n/i18n.test.ts` 强制校验（含 en 不得残留中文值、词条非空）。本轮移除应用反向代理对话框中的只读“源服务器”摘要展示及对应 `applicationsPage.proxyOriginHint` 词条；`applicationsPage.originServers` 与 `proxyOriginEmptyHint` 保留（设施域名选择器、路由摘要与主备优先级仍在使用），en / zh-CN 已同步。本轮新增存储共享设施与共享存储挂载相关词条；应用代理规则新增源站优先级（`applicationsPage.originPriority`、`originPriorityHint`、`moveUp`、`moveDown`）词条，en / zh-CN 已同步。
