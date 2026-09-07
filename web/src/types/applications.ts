@@ -28,7 +28,6 @@ export interface HttpRouteOptions {
 
 export interface ReverseProxyPath {
   path: string;
-  webSocket?: boolean;
   options?: HttpRouteOptions;
 }
 

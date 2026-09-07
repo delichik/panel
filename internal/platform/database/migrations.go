@@ -148,6 +148,9 @@ func appMigrationSteps() []orm.Step {
 		{ID: "fix_reverse_proxy_routes_facility_app_id", Run: func(ctx context.Context, tx *sql.Tx) error {
 			return fixReverseProxyRoutesFacilityAppIDOn(ctx, tx)
 		}},
+		{ID: "canonicalize_reverse_proxy_websocket_mode", Run: func(ctx context.Context, tx *sql.Tx) error {
+			return canonicalizeReverseProxyWebSocketModeOn(ctx, tx)
+		}},
 		{ID: "purge_orphan_application_reconcile_states", Run: func(ctx context.Context, tx *sql.Tx) error {
 			return purgeOrphanApplicationReconcileStatesOn(ctx, tx)
 		}},
@@ -915,6 +918,139 @@ func fixReverseProxyRoutesFacilityAppIDOn(ctx context.Context, tx *sql.Tx) error
 		return err
 	}
 	return nil
+}
+
+// canonicalizeReverseProxyWebSocketModeOn performs the one-time data upgrade
+// from the removed paths[].webSocket field to options.webSocketMode. Runtime
+// DTOs intentionally contain no fallback for the retired field.
+func canonicalizeReverseProxyWebSocketModeOn(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, `SELECT domain, paths_json FROM reverse_proxy_routes`)
+	if err != nil {
+		return err
+	}
+	type routePathsUpdate struct {
+		domain string
+		raw    string
+	}
+	updates := []routePathsUpdate{}
+	for rows.Next() {
+		var domain, raw string
+		if err := rows.Scan(&domain, &raw); err != nil {
+			rows.Close()
+			return err
+		}
+		var paths []map[string]any
+		if err := json.Unmarshal([]byte(raw), &paths); err != nil {
+			rows.Close()
+			return fmt.Errorf("canonicalize reverse proxy websocket mode for %q: %w", domain, err)
+		}
+		changed := false
+		for _, path := range paths {
+			changed = canonicalizeReverseProxyPathWebSocket(path) || changed
+		}
+		if changed {
+			encoded, err := json.Marshal(paths)
+			if err != nil {
+				rows.Close()
+				return err
+			}
+			updates = append(updates, routePathsUpdate{domain: domain, raw: string(encoded)})
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, update := range updates {
+		if _, err := tx.ExecContext(ctx, `UPDATE reverse_proxy_routes SET paths_json=? WHERE domain=?`, update.raw, update.domain); err != nil {
+			return err
+		}
+	}
+	return canonicalizeApplicationEditSessionWebSocketModeOn(ctx, tx)
+}
+
+func canonicalizeApplicationEditSessionWebSocketModeOn(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, `SELECT id, draft_json FROM application_edit_sessions`)
+	if err != nil {
+		return err
+	}
+	type sessionDraftUpdate struct {
+		id  string
+		raw string
+	}
+	updates := []sessionDraftUpdate{}
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			rows.Close()
+			return err
+		}
+		var draft map[string]any
+		if err := json.Unmarshal([]byte(raw), &draft); err != nil {
+			rows.Close()
+			return fmt.Errorf("canonicalize application edit session websocket mode for %q: %w", id, err)
+		}
+		changed := false
+		rules, _ := draft["reverseProxy"].([]any)
+		for _, ruleValue := range rules {
+			rule, _ := ruleValue.(map[string]any)
+			paths, _ := rule["paths"].([]any)
+			for _, pathValue := range paths {
+				path, _ := pathValue.(map[string]any)
+				changed = canonicalizeReverseProxyPathWebSocket(path) || changed
+			}
+		}
+		if changed {
+			encoded, err := json.Marshal(draft)
+			if err != nil {
+				rows.Close()
+				return err
+			}
+			updates = append(updates, sessionDraftUpdate{id: id, raw: string(encoded)})
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, update := range updates {
+		if _, err := tx.ExecContext(ctx, `UPDATE application_edit_sessions SET draft_json=? WHERE id=?`, update.raw, update.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func canonicalizeReverseProxyPathWebSocket(path map[string]any) bool {
+	legacy, exists := path["webSocket"]
+	if !exists {
+		return false
+	}
+	options, _ := path["options"].(map[string]any)
+	if options == nil {
+		options = map[string]any{}
+	}
+	if strings.TrimSpace(stringJSONValue(options["webSocketMode"])) == "" {
+		options["webSocketMode"] = legacyWebSocketMode(legacy)
+	}
+	path["options"] = options
+	delete(path, "webSocket")
+	return true
+}
+
+func legacyWebSocketMode(value any) string {
+	switch typed := value.(type) {
+	case bool:
+		if typed {
+			return "on"
+		}
+	case string:
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "true", "on":
+			return "on"
+		case "auto":
+			return "auto"
+		}
+	}
+	return "off"
 }
 func migrateReverseProxyRoutesTableOn(ctx context.Context, tx *sql.Tx) error {
 	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS reverse_proxy_routes (

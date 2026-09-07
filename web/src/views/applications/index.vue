@@ -42,6 +42,7 @@ import {
   applicationStatus,
   cloneFacilityDomains,
   cloneFacilityPath,
+  cloneProxyPath,
   cloneProxyRules,
   defaultRouteOptions,
   diffApplications,
@@ -297,11 +298,6 @@ const mountTypeOptions = computed(() => ['persistent', 'volume', 'host', 'file',
 const routeTypeOptions = computed(() => ['static', 'redirect', 'proxy_pass'].map((value) => ({ label: t(`applicationsPage.routeType.${value}`), value })));
 const sourceTypeOptions = computed(() => ['uploaded_file', 'uploaded_bundle'].map((value) => ({ label: t(`applicationsPage.sourceType.${value}`), value })));
 const saving = computed(() => pending.value === 'preview' || pending.value === 'commit');
-const proxyPathWebSocket = computed({
-  get: () => Boolean(proxyPathDraft.webSocket),
-  set: (value: boolean) => { proxyPathDraft.webSocket = value; },
-});
-
 const proxyAnyAccessModel = computed({
   get: () => Boolean(proxyDraft.anyAccess.enabled),
   set: (value: boolean) => { proxyDraft.anyAccess.enabled = value; },
@@ -1310,7 +1306,6 @@ function saveProxyDialog() {
     },
     paths: proxyDraft.paths.map((path) => ({
       path: path.path.trim() || '/',
-      webSocket: Boolean(path.webSocket),
       options: {
         ...defaultRouteOptions(),
         ...(path.options ?? {}),
@@ -1327,8 +1322,7 @@ function openProxyPathDialog(index = -1) {
   dialogKind.value = 'proxyPath';
   dialogParentIndex.value = dialogIndex.value;
   dialogIndex.value = index;
-  Object.assign(proxyPathDraft, index >= 0 ? structuredClone(proxyDraft.paths[index]) : makeProxyPath());
-  if (!proxyPathDraft.options) Object.assign(proxyPathDraft, { options: defaultRouteOptions() });
+  Object.assign(proxyPathDraft, index >= 0 ? cloneProxyPath(proxyDraft.paths[index]) : makeProxyPath());
   proxyRequestHeaders.value = (proxyPathDraft.options?.requestHeaders ?? []).map((header) => makeKeyValueRow(header.name, header.value));
   proxyResponseHeaders.value = (proxyPathDraft.options?.responseHeaders ?? []).map((header) => makeKeyValueRow(header.name, header.value));
   dialogOpen.value = true;
@@ -1348,6 +1342,15 @@ function saveProxyPathDialog() {
   else proxyDraft.paths.push(next);
   dialogKind.value = 'proxy';
   dialogIndex.value = dialogParentIndex.value;
+}
+
+function cancelDialog() {
+  if (dialogKind.value === 'proxyPath') {
+    dialogKind.value = 'proxy';
+    dialogIndex.value = dialogParentIndex.value;
+    return;
+  }
+  dialogOpen.value = false;
 }
 
 function openFacilityDomainDialog(index = -1) {
@@ -2175,11 +2178,10 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div class="section-heading"><strong>{{ t('common.path') }}</strong><Button size="sm" @click="openProxyPathDialog()"><Plus />{{ t('common.addPath') }}</Button></div>
-      <div v-for="(path, index) in proxyDraft.paths" :key="`${path.path}-${index}`" class="item-row"><div><strong>{{ path.path }}</strong><span>WebSocket: {{ path.webSocket ? 'on' : 'off' }}</span></div><div class="row-actions"><Button size="sm" @click="openProxyPathDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="proxyDraft.paths.splice(index, 1)">{{ t('common.delete') }}</Button></div></div>
+      <div v-for="(path, index) in proxyDraft.paths" :key="`${path.path}-${index}`" class="item-row"><div><strong>{{ path.path }}</strong><span>{{ t('applicationsPage.webSocketMode') }}: {{ t(`applicationsPage.httpMode.${path.options?.webSocketMode || 'off'}`) }}</span></div><div class="row-actions"><Button size="sm" @click="openProxyPathDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="proxyDraft.paths.splice(index, 1)">{{ t('common.delete') }}</Button></div></div>
     </div>
     <div v-else-if="dialogKind === 'proxyPath'" class="grid gap-3">
       <label class="field">{{ t('common.path') }}<Input v-model="proxyPathDraft.path" /></label>
-      <label class="field">{{ t('applicationsPage.webSocket') }}<Switch v-model="proxyPathWebSocket" :label="t('applicationsPage.webSocket')" /></label>
       <div class="options-block">
         <div class="section-copy"><h3>{{ t('applicationsPage.advancedOptions') }}</h3><p>{{ t('applicationsPage.advancedOptionsHint') }}</p></div>
         <label class="field">{{ t('applicationsPage.gzipMode') }}<Select v-model="proxyGzipMode" :options="httpModeOptions" /></label>
@@ -2274,7 +2276,7 @@ onBeforeUnmount(() => {
       </div>
     </div>
     <template #footer>
-      <Button variant="secondary" @click="dialogOpen = false">{{ t('common.cancel') }}</Button>
+      <Button variant="secondary" @click="cancelDialog">{{ t('common.cancel') }}</Button>
       <Button v-if="dialogKind === 'env'" variant="primary" @click="saveRowDialog">{{ t('common.save') }}</Button>
       <Button v-else-if="dialogKind === 'port'" variant="primary" @click="savePortDialog">{{ t('common.save') }}</Button>
       <Button v-else-if="dialogKind === 'mount'" variant="primary" @click="saveMountDialog">{{ t('common.save') }}</Button>

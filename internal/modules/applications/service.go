@@ -3281,15 +3281,11 @@ func normalizeReverseProxyRules(rules []ReverseProxyRule) ([]ReverseProxyRule, e
 				return nil, panelerr.Validation("application_reverse_proxy_path_duplicate", "reverse proxy path is duplicated")
 			}
 			pathKeys[proxyPath] = struct{}{}
-			defaultWebSocketMode := HTTPRouteModeOff
-			if item.WebSocket {
-				defaultWebSocketMode = HTTPRouteModeOn
-			}
-			options, err := NormalizeHTTPRouteOptions(item.Options, true, true, defaultWebSocketMode)
+			options, err := NormalizeHTTPRouteOptions(item.Options, true, true, HTTPRouteModeOff)
 			if err != nil {
 				return nil, err
 			}
-			paths = append(paths, ReverseProxyPath{Path: proxyPath, WebSocket: options.WebSocketMode != HTTPRouteModeOff, Options: options})
+			paths = append(paths, ReverseProxyPath{Path: proxyPath, Options: options})
 		}
 		if len(paths) == 0 {
 			options, _ := NormalizeHTTPRouteOptions(HTTPRouteOptions{}, true, true, HTTPRouteModeOff)
@@ -3343,15 +3339,11 @@ func (s *Service) renderReverseProxyRules(ctx context.Context, rules []ReversePr
 				return nil, panelerr.Validation("application_reverse_proxy_path_duplicate", "reverse proxy path is duplicated")
 			}
 			pathKeys[proxyPath] = struct{}{}
-			defaultWebSocketMode := HTTPRouteModeOff
-			if item.WebSocket {
-				defaultWebSocketMode = HTTPRouteModeOn
-			}
-			options, err := NormalizeHTTPRouteOptions(item.Options, true, true, defaultWebSocketMode)
+			options, err := NormalizeHTTPRouteOptions(item.Options, true, true, HTTPRouteModeOff)
 			if err != nil {
 				return nil, err
 			}
-			paths = append(paths, ReverseProxyPath{Path: proxyPath, WebSocket: options.WebSocketMode != HTTPRouteModeOff, Options: options})
+			paths = append(paths, ReverseProxyPath{Path: proxyPath, Options: options})
 		}
 		if len(paths) == 0 {
 			options, _ := NormalizeHTTPRouteOptions(HTTPRouteOptions{}, true, true, HTTPRouteModeOff)
@@ -3439,7 +3431,7 @@ func (s *Service) ApplicationReverseProxyConfigs(ctx context.Context) ([]Applica
 		for _, rule := range rules {
 			paths := make([]ReverseProxyPath, 0, len(rule.Paths))
 			for _, item := range rule.Paths {
-				paths = append(paths, ReverseProxyPath{Path: item.Path, WebSocket: item.WebSocket, Options: item.Options})
+				paths = append(paths, ReverseProxyPath{Path: item.Path, Options: item.Options})
 			}
 			routes = append(routes, ReverseProxyRoute{Domain: rule.Domain, TargetPort: rule.TargetPort, TargetContainer: runtimeContainerName(app), OriginServerIDs: append([]string(nil), rule.OriginServerIDs...), AnyAccess: rule.AnyAccess, Paths: paths})
 		}

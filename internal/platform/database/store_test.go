@@ -938,7 +938,7 @@ func TestMigrateMovesReverseProxyRoutesToUnifiedTable(t *testing.T) {
 	)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,job_id,namespace,created_at,updated_at) VALUES('app-1','web',1,'name: web\nimage: nginx\n','all','["srv-a"]','[{"domain":"app.example.test","targetType":"local","targetPort":8080,"originServerIds":["srv-a"],"anyAccess":{"enabled":false,"strategy":"round_robin"},"paths":[{"path":"/","webSocket":"off"}]}]',1,'hash','job','default','now','now')`); err != nil {
+	if _, err := db.Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,job_id,namespace,created_at,updated_at) VALUES('app-1','web',1,'name: web\nimage: nginx\n','all','["srv-a"]','[{"domain":"app.example.test","targetType":"local","targetPort":8080,"originServerIds":["srv-a"],"anyAccess":{"enabled":false,"strategy":"round_robin"},"paths":[{"path":"/","webSocket":true}]}]',1,'hash','job','default','now','now')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,domains_json,last_error,updated_at) VALUES('reverse_proxy',1,'["srv-a"]','[{"domain":"site.example.test","originServerIds":["srv-a"],"anyAccess":{"enabled":false,"strategy":"round_robin"},"paths":[{"path":"/","ruleType":"redirect","redirectUrl":"https://target.example.test"}]}]','','now')`); err != nil {
@@ -972,7 +972,7 @@ func TestMigrateMovesReverseProxyRoutesToUnifiedTable(t *testing.T) {
 	if err := store.AppDB().QueryRow(`SELECT domain, paths_json FROM reverse_proxy_routes WHERE domain='app.example.test'`).Scan(&routeDomain, &routePaths); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(routePaths, `"path":"/"`) || !strings.Contains(routePaths, `"webSocket":"off"`) {
+	if !strings.Contains(routePaths, `"path":"/"`) || !strings.Contains(routePaths, `"webSocketMode":"on"`) || strings.Contains(routePaths, `"webSocket":`) {
 		t.Fatalf("application route paths = %q", routePaths)
 	}
 	appColumns := tableColumns(t, store.AppDB(), "applications")
@@ -986,6 +986,29 @@ func TestMigrateMovesReverseProxyRoutesToUnifiedTable(t *testing.T) {
 	facilityColumns := tableColumns(t, store.AppDB(), "facility_app_configs")
 	if facilityColumns["domains_json"] {
 		t.Fatal("facility_app_configs.domains_json must be dropped after migration")
+	}
+}
+
+func TestCanonicalizeReverseProxyPathWebSocketRemovesLegacyField(t *testing.T) {
+	path := map[string]any{"path": "/socket", "webSocket": true}
+	if !canonicalizeReverseProxyPathWebSocket(path) {
+		t.Fatal("legacy path must be changed")
+	}
+	if _, exists := path["webSocket"]; exists {
+		t.Fatal("legacy webSocket field must be removed")
+	}
+	options, ok := path["options"].(map[string]any)
+	if !ok || options["webSocketMode"] != "on" {
+		t.Fatalf("options = %#v, want webSocketMode=on", path["options"])
+	}
+
+	path = map[string]any{"path": "/socket", "webSocket": false, "options": map[string]any{"webSocketMode": "auto"}}
+	if !canonicalizeReverseProxyPathWebSocket(path) {
+		t.Fatal("legacy field must still be removed when structured mode exists")
+	}
+	options = path["options"].(map[string]any)
+	if options["webSocketMode"] != "auto" {
+		t.Fatalf("existing structured mode was overwritten: %#v", options)
 	}
 }
 

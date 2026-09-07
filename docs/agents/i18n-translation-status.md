@@ -4,6 +4,7 @@
 
 ## 当前状态
 
+- 本轮应用代理 Path 移除旧 `webSocket` 布尔兼容字段与重复开关，只保留 `applicationsPage.webSocketMode` 的 auto/on/off 选择器；删除 `applicationsPage.webSocket` 词条，en / zh-CN 已同步。
 - 本轮应用环境变量编辑新增占位符目录与稳定应用容器引用词条（`applicationsPage.insertVariable`、`noInsertableVariables`、`variableReferenceHint`、`applicationContainerVariable`、`currentApplicationVariable`），en / zh-CN 已同步。
 - 本轮应用挂载的“应用文件”来源改为当前编辑会话文件下拉选择，新增空文件提示、失效旧引用和必选校验词条（`applicationsPage.applicationFileMount*`），en / zh-CN 已同步。
 - 本轮服务器详情 Agent 卡片新增部署状态、阶段、日志空态/错误及 PrepareRestart 词条（`serversPage.agentTask*`），en / zh-CN 已同步；结构化的重启就绪、不透明 `holdon` 等待和超时日志会在前端转换为当前语言，不再把未携带原因的 `holdon` 推断为软件包升级；其他远端自由文本仍保持原样。

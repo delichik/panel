@@ -116,9 +116,8 @@ type AnyAccessConfig struct {
 }
 
 type ReverseProxyPath struct {
-	Path      string           `json:"path"`
-	WebSocket bool             `json:"webSocket"`
-	Options   HTTPRouteOptions `json:"options,omitempty"`
+	Path    string           `json:"path"`
+	Options HTTPRouteOptions `json:"options,omitempty"`
 }
 
 type HTTPHeader struct {

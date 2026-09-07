@@ -319,7 +319,19 @@ export function makeProxyRule(): ReverseProxyRule {
 }
 
 export function makeProxyPath(): ReverseProxyPath {
-  return { path: '', webSocket: false, options: defaultRouteOptions() };
+  return { path: '', options: defaultRouteOptions() };
+}
+
+export function cloneProxyPath(path: ReverseProxyPath): ReverseProxyPath {
+  return {
+    path: path.path || '/',
+    options: {
+      ...defaultRouteOptions(),
+      ...(path.options ?? {}),
+      requestHeaders: (path.options?.requestHeaders ?? []).map((header) => ({ ...header })),
+      responseHeaders: (path.options?.responseHeaders ?? []).map((header) => ({ ...header })),
+    },
+  };
 }
 
 export function makeFacilityDomain(): FacilityRouteDomain {
@@ -338,7 +350,7 @@ export function cloneProxyRules(rules: ReverseProxyRule[]) {
     targetPort: Number(rule.targetPort || 0),
     originServerIds: [...(rule.originServerIds ?? [])],
     anyAccess: { enabled: Boolean(rule.anyAccess?.enabled), strategy: rule.anyAccess?.strategy || '', originPriority: [...(rule.anyAccess?.originPriority ?? [])], relayServerIds: [...(rule.anyAccess?.relayServerIds ?? [])] },
-    paths: (rule.paths ?? []).map((path) => ({ path: path.path || '/', webSocket: Boolean(path.webSocket), options: { ...defaultRouteOptions(), ...(path.options ?? {}) } })),
+    paths: (rule.paths ?? []).map((path) => cloneProxyPath(path)),
   }));
 }
 

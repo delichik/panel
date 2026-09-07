@@ -985,11 +985,7 @@ func writeFacilityProxyLocation(b *strings.Builder, pathValue, target, sourceMod
 func writeProxyLocations(b *strings.Builder, route applications.ReverseProxyRoute, https bool) {
 	for _, routePath := range route.Paths {
 		pathValue := sanitizeNginxPath(firstNonEmpty(routePath.Path, "/"))
-		defaultWebSocketMode := applications.HTTPRouteModeOff
-		if routePath.WebSocket {
-			defaultWebSocketMode = applications.HTTPRouteModeOn
-		}
-		options, _ := applications.NormalizeHTTPRouteOptions(routePath.Options, true, true, defaultWebSocketMode)
+		options, _ := applications.NormalizeHTTPRouteOptions(routePath.Options, true, true, applications.HTTPRouteModeOff)
 		b.WriteString("        location " + pathValue + " {\n")
 		writeApplicationProxyPass(b, route)
 		b.WriteString("            proxy_set_header Host $host;\n")

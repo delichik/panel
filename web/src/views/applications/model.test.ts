@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { reactive } from 'vue';
 import {
   applicationFileMountOptions,
   applicationStatus,
   cloneFacilityDomains,
   cloneFacilityPath,
+  cloneProxyPath,
   cloneProxyRules,
   diffApplications,
   diffFacility,
@@ -226,6 +228,39 @@ describe('application editor model', () => {
 
     expect(specYamlFromDraft(draft)).not.toContain('networkMode');
     expect(saveInputFromDraft(draft).reverseProxy[0]).not.toHaveProperty('targetType');
+  });
+
+  it('clones an existing proxy path for editing with all values isolated', () => {
+    const source = {
+      path: '/events',
+      options: {
+        gzipMode: 'off',
+        clientMaxBodySizeMb: 16,
+        connectTimeoutSeconds: 5,
+        readTimeoutSeconds: 60,
+        sendTimeoutSeconds: 30,
+        bufferingMode: 'off',
+        webSocketMode: 'on',
+        requestHeaders: [{ name: 'X-Request-ID', value: '$request_id' }],
+        responseHeaders: [{ name: 'X-Frame-Options', value: 'DENY' }],
+      },
+    };
+
+    const draft = cloneProxyPath(reactive(source));
+
+    expect(draft).toEqual(source);
+    draft.path = '/changed';
+    draft.options!.requestHeaders![0].value = 'changed';
+    expect(source.path).toBe('/events');
+    expect(source.options.requestHeaders[0].value).toBe('$request_id');
+  });
+
+  it('uses only the structured WebSocket mode when cloning an existing path', () => {
+    const source = reactive({ path: '/socket', options: { webSocketMode: 'on' } });
+    const draft = cloneProxyPath(source);
+
+    expect(draft.options?.webSocketMode).toBe('on');
+    expect(draft).not.toHaveProperty('webSocket');
   });
 });
 describe('facility path dialog validation', () => {
