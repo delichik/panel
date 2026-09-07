@@ -543,6 +543,23 @@ export function installMockApi() {
     if (url.pathname === '/api/v1/applications' && method(init) === 'GET') {
       return json(listPage(mockApplicationSummaries(), url, (item, q) => includesText(q, item.name, item.imageReference, item.namespace, item.id)));
     }
+    if (url.pathname === '/api/v1/applications/template-catalog' && method(init) === 'GET') {
+      return json({
+        variables: [
+          { key: 'app.id', category: 'application', specExpression: '{{ .app.id }}', templateExpression: '{{ .app.id }}' },
+          { key: 'app.name', category: 'application', specExpression: '{{ .app.name }}', templateExpression: '{{ .app.name }}' },
+          ...mockApplications.map((app) => ({
+            key: `applications.${app.id}.containerName`,
+            category: 'application_reference',
+            specExpression: `{{ (index .applications "${app.id}").containerName }}`,
+            templateExpression: `{{ (index .applications "${app.id}").containerName }}`,
+            resourceId: app.id,
+            resourceName: app.name,
+          })),
+        ],
+        panelFiles: [],
+      });
+    }
     const appMatch = url.pathname.match(/^\/api\/v1\/applications\/([^/]+)$/);
     if (appMatch && method(init) === 'GET') {
       const found = mockApplications.find((item) => item.id === decodeURIComponent(appMatch[1]));

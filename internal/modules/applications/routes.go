@@ -24,6 +24,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, auth httpx.Middleware) {
 	mux.Handle("GET /api/v1/application-operations/{id}", auth(http.HandlerFunc(h.GetApplicationOperationRecord)))
 
 	mux.Handle("GET /api/v1/applications", auth(http.HandlerFunc(h.List)))
+	mux.Handle("GET /api/v1/applications/template-catalog", auth(http.HandlerFunc(h.TemplateCatalog)))
 	mux.Handle("GET /api/v1/applications/{id}", auth(http.HandlerFunc(h.Get)))
 	mux.Handle("DELETE /api/v1/applications/{id}", auth(http.HandlerFunc(h.Delete)))
 	mux.Handle("GET /api/v1/applications/{id}/files", auth(http.HandlerFunc(h.ListFiles)))

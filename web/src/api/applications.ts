@@ -12,6 +12,7 @@ import type {
   ApplicationFile,
   ApplicationRuntime,
   ApplicationSaveInput,
+  ApplicationTemplateCatalog,
   ApplicationSummaryDto,
   LogResult,
   OperationResult,
@@ -63,6 +64,9 @@ export const applicationsApi = {
   },
   get(applicationId: string, options?: ApiRequestOptions) {
     return apiClient.get<ApplicationDto>(`/applications/${id(applicationId)}`, options);
+  },
+  templateCatalog(options?: ApiRequestOptions) {
+    return apiClient.get<ApplicationTemplateCatalog>('/applications/template-catalog', options);
   },
   listFiles(applicationId: string, options?: ApiRequestOptions) {
     return apiClient.get<ApplicationFile[]>(`/applications/${id(applicationId)}/files`, options);

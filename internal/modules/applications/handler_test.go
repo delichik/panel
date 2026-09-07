@@ -210,6 +210,14 @@ func TestHandlerRuntimeAndLogs(t *testing.T) {
 	}
 }
 
+func TestHandlerTemplateCatalog(t *testing.T) {
+	handler := NewHandler(&fakeApplicationService{})
+	rec := serveTestRoute(handler, http.MethodGet, "/api/v1/applications/template-catalog", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 type fakeApplicationService struct {
 	apps                      []Application
 	app                       Application

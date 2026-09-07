@@ -64,28 +64,29 @@ type AgentErrorHandler interface {
 }
 
 type Service struct {
-	db               *sql.DB
-	logDB            *sql.DB
-	coordDB          *sql.DB
-	runtimeClient    AgentRuntimeClient
-	servers          ServerProvider
-	agentErrors      AgentErrorHandler
-	tasks            *tasks.Service
-	config           Config
-	configProvider   func() Config
-	renderer         templatex.Renderer
-	builtinResolver  BuiltinVariableResolver
-	internalFiles    InternalFileProvider
-	proxyReconciler  ReverseProxyReconciler
-	proxyPolicy      ReverseProxyPolicyProvider
-	reconcileTrigger ApplicationReconcileTrigger
-	imageResolver    ImageDigestResolver
-	operationQueue   ContainerOperationQueue
-	facilityRuntime  FacilityRuntimeProvider
-	storageResolver  StorageShareResolver
-	events           runtimeevents.EventWriter
-	orchestrator     *controlplane.Controller
-	editCleanupOnce  sync.Once
+	db                    *sql.DB
+	logDB                 *sql.DB
+	coordDB               *sql.DB
+	runtimeClient         AgentRuntimeClient
+	servers               ServerProvider
+	agentErrors           AgentErrorHandler
+	tasks                 *tasks.Service
+	config                Config
+	configProvider        func() Config
+	renderer              templatex.Renderer
+	builtinResolver       BuiltinVariableResolver
+	applicationReferences BuiltinVariableResolver
+	internalFiles         InternalFileProvider
+	proxyReconciler       ReverseProxyReconciler
+	proxyPolicy           ReverseProxyPolicyProvider
+	reconcileTrigger      ApplicationReconcileTrigger
+	imageResolver         ImageDigestResolver
+	operationQueue        ContainerOperationQueue
+	facilityRuntime       FacilityRuntimeProvider
+	storageResolver       StorageShareResolver
+	events                runtimeevents.EventWriter
+	orchestrator          *controlplane.Controller
+	editCleanupOnce       sync.Once
 }
 
 type ApplicationRuntime = Runtime
@@ -152,7 +153,16 @@ func NewService(db *sql.DB, runtimeClient AgentRuntimeClient, taskSvc *tasks.Ser
 	if cfg.SaveSessionDir == "" {
 		cfg.SaveSessionDir = filepath.Join("tmp", "application-save-sessions")
 	}
-	s := &Service{db: db, runtimeClient: runtimeClient, tasks: taskSvc, config: cfg, renderer: templatex.NewGoRenderer(), builtinResolver: NewApplicationVariableRegistry(), imageResolver: NewRegistryImageResolver()}
+	s := &Service{
+		db:                    db,
+		runtimeClient:         runtimeClient,
+		tasks:                 taskSvc,
+		config:                cfg,
+		renderer:              templatex.NewGoRenderer(),
+		builtinResolver:       NewApplicationVariableRegistry(),
+		applicationReferences: applicationReferenceResolver{source: applicationReferenceVariableSource{db: db}},
+		imageResolver:         NewRegistryImageResolver(),
+	}
 	controlStore := controlplane.NewStore(db)
 	s.orchestrator = controlplane.NewController(controlStore, &serviceRuntimeReconciler{service: s}, controlplane.ControllerConfig{
 		Owner:       "application-orchestrator",
@@ -344,6 +354,11 @@ func (s *Service) TemplateCatalog(ctx context.Context) (TemplateCatalog, error) 
 		{Key: "server.ssh_username", Category: "server", SpecExpression: "${node.meta.panel_ssh_username}", TemplateExpression: `{{ env "PANEL_SERVER_SSH_USERNAME" }}`},
 		{Key: "server.variables.<key>", Category: "server", SpecExpression: "", TemplateExpression: `{{ index .server.variables "<key>" }}`},
 	}}
+	applicationReferences, err := applicationReferenceDefinitions(ctx, s.db)
+	if err != nil {
+		return TemplateCatalog{}, err
+	}
+	catalog.Variables = append(catalog.Variables, applicationReferences...)
 	if s.internalFiles != nil {
 		files, err := s.internalFiles.InternalFileCatalog(ctx)
 		if err != nil {
@@ -737,6 +752,7 @@ func (s *Service) updateWithFilesVersioned(ctx context.Context, appID string, ex
 		if err := s.reconcileReverseProxy(ctx); err != nil {
 			return Application{}, err
 		}
+		s.refreshReferencesAfterRename(ctx, current, app)
 		return s.Get(ctx, app.ID)
 	}
 	if err := s.commitApplicationStateVersioned(ctx, app, files, prepared.job, false, prepared.hash != current.SpecHash, expectedVersion, enforceVersion, configurationChanged); err != nil {
@@ -750,7 +766,20 @@ func (s *Service) updateWithFilesVersioned(ctx context.Context, appID string, ex
 	if err := s.reconcileReverseProxy(ctx); err != nil {
 		return Application{}, err
 	}
+	s.refreshReferencesAfterRename(ctx, current, app)
 	return s.Get(ctx, app.ID)
+}
+
+func (s *Service) refreshReferencesAfterRename(ctx context.Context, before, after Application) {
+	if strings.TrimSpace(before.Name) == strings.TrimSpace(after.Name) {
+		return
+	}
+	if _, err := s.RedeployChangedApplications(ctx); err != nil {
+		// The source rename is already committed at this point. Keep the save
+		// result truthful and leave dependency refresh retryable through the
+		// regular application refresh path instead of reporting a rollback.
+		log.Printf("application reference refresh failed source_app_id=%s: %v", after.ID, err)
+	}
 }
 
 func applicationUserConfigurationEqual(left, right Application) bool {
@@ -1608,7 +1637,16 @@ func (s *Service) prepare(ctx context.Context, in SaveInput, generation int, app
 }
 
 func (s *Service) prepareWithFiles(ctx context.Context, in SaveInput, generation int, appID string, files []ApplicationFile) (preparedApplication, error) {
-	appContext := Application{ID: appID, Name: in.Name, Generation: generation, Namespace: s.currentConfig().Namespace, DeploymentMode: in.DeploymentMode}
+	appContext := Application{
+		ID:                appID,
+		Name:              in.Name,
+		Generation:        generation,
+		Namespace:         s.currentConfig().Namespace,
+		DeploymentMode:    in.DeploymentMode,
+		DeploymentServers: append([]string(nil), in.DeploymentServers...),
+		ReverseProxy:      append([]ReverseProxyRule(nil), in.ReverseProxy...),
+		SpecYAML:          in.SpecYAML,
+	}
 	data, err := s.templateData(ctx, appContext, files, nil)
 	if err != nil {
 		return preparedApplication{}, err
@@ -1776,8 +1814,23 @@ func (s *Service) renderTemplate(ctx context.Context, source string, data map[st
 func (s *Service) templateData(ctx context.Context, app Application, files []ApplicationFile, target *server.Server) (map[string]any, error) {
 	data := map[string]any{}
 	data["files"] = fileVariables(files)
+	renderContext := ApplicationVariableContext{
+		Application:              app,
+		Config:                   s.currentConfig(),
+		Server:                   target,
+		ReferencedApplicationIDs: referencedApplicationIDs(app, files),
+	}
+	if s.applicationReferences != nil {
+		references, err := s.applicationReferences.BuiltinVariables(ctx, renderContext)
+		if err != nil {
+			return nil, err
+		}
+		for key, value := range references {
+			data[key] = value
+		}
+	}
 	if s.builtinResolver != nil {
-		builtins, err := s.builtinResolver.BuiltinVariables(ctx, ApplicationVariableContext{Application: app, Config: s.currentConfig(), Server: target})
+		builtins, err := s.builtinResolver.BuiltinVariables(ctx, renderContext)
 		if err != nil {
 			return nil, err
 		}

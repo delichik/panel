@@ -476,6 +476,88 @@ func TestTemplateVariablesRenderIntoRuntimeSpec(t *testing.T) {
 	}
 }
 
+func TestApplicationContainerReferenceTracksRenamedTarget(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	target, err := svc.Create(ctx, SaveInput{
+		Name:     "redis",
+		Enabled:  false,
+		SpecYAML: "name: redis\nimage: redis:7\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expression := applicationContainerTemplateExpression(target.ID)
+	consumer, err := svc.Create(ctx, SaveInput{
+		Name:     "api",
+		Enabled:  true,
+		SpecYAML: "name: api\nimage: nginx\nenv:\n  REDIS_HOST: '" + expression + "'\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeGeneration := consumer.Generation
+
+	if _, err := svc.Update(ctx, target.ID, SaveInput{
+		Name:     "cache",
+		Enabled:  false,
+		SpecYAML: "name: cache\nimage: redis:7\n",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	consumer, err = svc.Get(ctx, consumer.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if consumer.Generation <= beforeGeneration {
+		t.Fatalf("consumer generation = %d, want > %d after referenced app rename", consumer.Generation, beforeGeneration)
+	}
+	jobSpecs := applyJobSpecsForApplication(t, svc, consumer.ID)
+	latest := jobSpecs[len(jobSpecs)-1]
+	env, _ := latest["env"].(map[string]any)
+	if env["REDIS_HOST"] != "panel-cache" {
+		t.Fatalf("REDIS_HOST = %#v, want panel-cache", env["REDIS_HOST"])
+	}
+}
+
+func TestApplicationContainerReferenceMissingTargetFailsValidation(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	_, err := svc.Create(context.Background(), SaveInput{
+		Name:     "api",
+		Enabled:  false,
+		SpecYAML: "name: api\nimage: nginx\nenv:\n  REDIS_HOST: '{{ (index .applications \"app-missing\").containerName }}'\n",
+	})
+	var appErr *panelerr.Error
+	if !errors.As(err, &appErr) || appErr.Code != "template_render_failed" {
+		t.Fatalf("err = %#v, want template_render_failed", err)
+	}
+}
+
+func TestTemplateCatalogListsStableApplicationContainerReferences(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	target, err := svc.Create(ctx, SaveInput{Name: "redis", Enabled: false, SpecYAML: "name: redis\nimage: redis:7\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := svc.TemplateCatalog(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expression := applicationContainerTemplateExpression(target.ID)
+	for _, variable := range catalog.Variables {
+		if variable.ResourceID == target.ID && variable.SpecExpression == expression && variable.ResourceName == "redis" {
+			return
+		}
+	}
+	t.Fatalf("application reference missing from catalog: %#v", catalog.Variables)
+}
+
 func TestApplicationFileMountCreatesManagedRuntimeFile(t *testing.T) {
 	svc, runtime, _, closeStore := newTestService(t)
 	defer closeStore()

@@ -4,6 +4,8 @@
 
 ## 当前状态
 
+- 本轮应用环境变量编辑新增占位符目录与稳定应用容器引用词条（`applicationsPage.insertVariable`、`noInsertableVariables`、`variableReferenceHint`、`applicationContainerVariable`、`currentApplicationVariable`），en / zh-CN 已同步。
+- 本轮应用挂载的“应用文件”来源改为当前编辑会话文件下拉选择，新增空文件提示、失效旧引用和必选校验词条（`applicationsPage.applicationFileMount*`），en / zh-CN 已同步。
 - 本轮服务器详情 Agent 卡片新增部署状态、阶段、日志空态/错误及 PrepareRestart 词条（`serversPage.agentTask*`），en / zh-CN 已同步；结构化的重启就绪、不透明 `holdon` 等待和超时日志会在前端转换为当前语言，不再把未携带原因的 `holdon` 推断为软件包升级；其他远端自由文本仍保持原样。
 - 本轮存储共享详情页新增「导出健康/分区数据/设置」分段词条（`applicationsPage.storageShareTab*`、状态检查与分区字段、删除确认勾选等），en / zh-CN 已同步。
 - 本轮移除应用编辑器的 YAML 源码编辑模式（表单 / YAML 源码切换、源码面板与往返同步），删除 `applicationsPage.editMode`、`configureMode`、`sourceMode`、`syncSource`、`applySource`、`sourceViewTitle`、`sourceViewHint`、`sourceGuardHint`、`yamlSynced`、`yamlApplied`、`yamlDirtySummary`、`specYaml`、`validationSpec`、`validationYaml`、`validationSourceStaged` 词条，en / zh-CN 已同步；`editorFlowHint` 文案已更新。

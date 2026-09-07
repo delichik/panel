@@ -107,6 +107,27 @@ export interface ApplicationSaveInput {
   reverseProxy: ReverseProxyRule[];
 }
 
+export interface TemplateVariableDefinition {
+  key: string;
+  category: string;
+  specExpression: string;
+  templateExpression: string;
+  resourceId?: string;
+  resourceName?: string;
+}
+
+export interface ApplicationTemplateCatalog {
+  variables: TemplateVariableDefinition[];
+  panelFiles: Array<{
+    id: string;
+    resourceId: string;
+    resourceType: string;
+    name: string;
+    kind: string;
+    source: string;
+  }>;
+}
+
 export interface ApplicationFile {
   applicationId?: string;
   name: string;

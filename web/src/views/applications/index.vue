@@ -24,6 +24,8 @@ import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import { useErrorToast, useSuccessToast, useToast } from '@/components/ui/toast';
 import ServerMultiPicker from '@/components/patterns/ServerMultiPicker.vue';
 import ServerContextSelector from '@/components/patterns/ServerContextSelector.vue';
+import TemplateVariableInput from '@/components/patterns/TemplateVariableInput.vue';
+import type { TemplateVariableOption } from '@/components/patterns/templateVariable';
 import StorageShareFacility from './StorageShareFacility.vue';
 import AssetFileManager from '@/components/patterns/AssetFileManager.vue';
 import type { AssetFileAdapter, AssetFileItem } from '@/components/patterns/assetFileManager';
@@ -31,7 +33,7 @@ import ConsolePage from '@/components/templates/ConsolePage.vue';
 import EditorPage from '@/components/templates/EditorPage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
-import type { ApplicationDto, ApplicationEditPreviewResult, ApplicationEditSession, ApplicationFile, ApplicationRuntime, ApplicationSummaryDto, Diagnostic, ReverseProxyRule } from '@/types/applications';
+import type { ApplicationDto, ApplicationEditPreviewResult, ApplicationEditSession, ApplicationFile, ApplicationRuntime, ApplicationSummaryDto, Diagnostic, ReverseProxyRule, TemplateVariableDefinition } from '@/types/applications';
 import type { FacilityEditPreviewResult, FacilityEditSession, FacilityRouteDomain, FacilityRoutePath, ReverseProxyConfig, StaticAsset, StorageShareConfig } from '@/types/facilityApps';
 import type { ServerDto } from '@/types/servers';
 import { formatDateTime } from '@/utils/datetime';
@@ -96,6 +98,7 @@ let searchTimer: ReturnType<typeof setTimeout> | null = null;
 let dnsPollTimer: ReturnType<typeof setTimeout> | null = null;
 
 const applications = ref<ApplicationSummaryDto[]>([]);
+const templateVariables = ref<TemplateVariableDefinition[]>([]);
 const applicationDetails = ref<Record<string, ApplicationDto>>({});
 const applicationFiles = ref<Record<string, ApplicationFile[]>>({});
 const runtimes = ref<Record<string, ApplicationRuntime>>({});
@@ -200,6 +203,16 @@ const facilityConfigSummary = computed(() => ({
 }));
 const servers = ref<ServerDto[]>([]);
 const serverNameMap = computed(() => new Map(servers.value.map((server) => [server.id, server.name])));
+const applicationTemplateVariableOptions = computed<TemplateVariableOption[]>(() => templateVariables.value
+  .filter((variable) => variable.specExpression && (variable.category === 'application' || variable.category === 'application_reference'))
+  .map((variable) => ({
+    id: variable.key,
+    expression: variable.specExpression,
+    label: variable.category === 'application_reference'
+      ? t('applicationsPage.applicationContainerVariable', { name: variable.resourceName || variable.resourceId || variable.key })
+      : t('applicationsPage.currentApplicationVariable', { key: variable.key }),
+    description: variable.category === 'application_reference' ? variable.resourceId : variable.specExpression,
+  })));
 function serverDisplayName(id: string) {
   return serverNameMap.value.get(id) || id;
 }
@@ -880,6 +893,13 @@ async function startApplicationEditorCore() {
   const modeAtStart = mode.value;
   await ensureApplicationsLoaded();
   await ensureFacilityLoaded();
+  try {
+    const catalog = await applicationsApi.templateCatalog({ signal: controller.signal });
+    templateVariables.value = catalog.variables ?? [];
+  } catch (err) {
+    if (isAbortError(err)) return;
+    templateVariables.value = [];
+  }
   if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || String(route.params.applicationId ?? '') !== appId) return;
   let app: ApplicationDto | null = null;
   if (appId) {
@@ -2103,7 +2123,16 @@ onBeforeUnmount(() => {
   <Dialog v-model:open="dialogOpen" :title="t(`applicationsPage.dialog.${dialogKind}`)" :close-label="t('common.close')">
     <div v-if="dialogKind === 'env'" class="grid gap-3">
       <label class="field">{{ t('common.name') }}<Input v-model="rowDraft.key" /></label>
-      <label class="field">{{ t('common.value') }}<Input v-model="rowDraft.value" /></label>
+      <label class="field">
+        {{ t('common.value') }}
+        <TemplateVariableInput
+          v-model="rowDraft.value"
+          :options="applicationTemplateVariableOptions"
+          :insert-label="t('applicationsPage.insertVariable')"
+          :empty-label="t('applicationsPage.noInsertableVariables')"
+        />
+        <span class="text-xs text-muted-foreground">{{ t('applicationsPage.variableReferenceHint') }}</span>
+      </label>
     </div>
     <div v-else-if="dialogKind === 'port'" class="grid gap-3">
       <label class="field">{{ t('common.name') }}<Input v-model="portDraft.label" /></label>

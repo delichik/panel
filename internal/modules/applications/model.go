@@ -19,10 +19,10 @@ const (
 	DeploymentModeAll      = "all"
 	DeploymentModeSelected = "selected"
 
-	HTTPRouteModeInherit        = "inherit"
-	HTTPRouteModeOn             = "on"
-	HTTPRouteModeOff            = "off"
-	HTTPRouteWebSocketAuto      = "auto"
+	HTTPRouteModeInherit   = "inherit"
+	HTTPRouteModeOn        = "on"
+	HTTPRouteModeOff       = "off"
+	HTTPRouteWebSocketAuto = "auto"
 
 	ReconcileStopAfterFailures = 10
 
@@ -452,6 +452,8 @@ type TemplateVariableDefinition struct {
 	Category           string `json:"category"`
 	SpecExpression     string `json:"specExpression"`
 	TemplateExpression string `json:"templateExpression"`
+	ResourceID         string `json:"resourceId,omitempty"`
+	ResourceName       string `json:"resourceName,omitempty"`
 }
 
 type PanelFileDefinition struct {

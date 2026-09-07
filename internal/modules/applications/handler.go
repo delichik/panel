@@ -57,6 +57,10 @@ type applicationSummaryListService interface {
 	ListSummaries(ctx context.Context, page, pageSize int, query string) (httpx.ListPage[ApplicationSummary], error)
 }
 
+type applicationTemplateCatalogService interface {
+	TemplateCatalog(ctx context.Context) (TemplateCatalog, error)
+}
+
 type applicationEditSessionService interface {
 	BeginEditSession(context.Context, string, BeginEditSessionInput) (ApplicationEditSession, error)
 	PatchEditSession(context.Context, string, string, PatchEditSessionInput) (ApplicationEditSession, error)
@@ -76,6 +80,20 @@ type Handler struct {
 
 func NewHandler(service applicationService) *Handler {
 	return &Handler{service: service}
+}
+
+func (h *Handler) TemplateCatalog(w http.ResponseWriter, r *http.Request) {
+	service, ok := h.service.(applicationTemplateCatalogService)
+	if !ok {
+		httpx.Error(w, panelerr.New(http.StatusNotImplemented, "application_template_catalog_unavailable", "Application template catalog is not available"))
+		return
+	}
+	result, err := service.TemplateCatalog(r.Context())
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) editSessions() (applicationEditSessionService, error) {
