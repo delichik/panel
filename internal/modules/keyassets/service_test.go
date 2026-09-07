@@ -534,6 +534,55 @@ func TestEnsureAgentTLSAssetsPersistsInKeyAssets(t *testing.T) {
 	}
 }
 
+func TestIssueAgentServerCertificateUpsertsSystemAssetWithoutOpeningPublicImport(t *testing.T) {
+	svc, _, closeFn := newTestService(t)
+	defer closeFn()
+	ctx := context.Background()
+
+	if _, err := svc.EnsureAgentTLSAssets(ctx); err != nil {
+		t.Fatal(err)
+	}
+	firstCertificate, _, err := svc.IssueAgentServerCertificate(ctx, "server-1", "Primary", "192.0.2.10")
+	if err != nil {
+		t.Fatalf("first server certificate issue failed: %v", err)
+	}
+	assetID := agentServerAssetID("server-1")
+	firstAsset, err := svc.Get(ctx, assetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstAsset.ParentAssetID != SystemAgentCAAssetID ||
+		firstAsset.Metadata[systemManagedKey] != true ||
+		firstAsset.Metadata[systemScopeKey] != systemAgentScope ||
+		firstAsset.Metadata[systemRoleKey] != "server" ||
+		firstAsset.Metadata[systemServerIDKey] != "server-1" {
+		t.Fatalf("agent server asset = %#v", firstAsset)
+	}
+
+	if _, _, err := svc.IssueAgentServerCertificate(ctx, "server-1", "Primary", "192.0.2.10"); err != nil {
+		t.Fatalf("server certificate reissue failed: %v", err)
+	}
+	secondAsset, err := svc.Get(ctx, assetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondAsset.Fingerprint == firstAsset.Fingerprint {
+		t.Fatal("server certificate fingerprint did not change after reissue")
+	}
+
+	_, err = svc.Import(ctx, ImportRequest{
+		Type:           TypeTLSCertificate,
+		Name:           "Unauthorized Agent certificate import",
+		ParentAssetID:  SystemAgentCAAssetID,
+		CertificatePEM: string(firstCertificate.CertPEM),
+		PrivateKeyPEM:  string(firstCertificate.KeyPEM),
+	})
+	var typed *panelerr.Error
+	if !errors.As(err, &typed) || typed.Code != "key_asset_system_managed" {
+		t.Fatalf("public import error = %v, want key_asset_system_managed", err)
+	}
+}
+
 func TestEnsureAgentTLSAssetsRecreatesMissingCAAndClientTogether(t *testing.T) {
 	svc, store, closeFn := newTestService(t)
 	defer closeFn()

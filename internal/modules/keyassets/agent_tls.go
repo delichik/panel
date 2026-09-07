@@ -129,7 +129,7 @@ func (s *Service) upsertAgentServerCertificate(ctx context.Context, serverID, se
 		return err
 	}
 	assetID := agentServerAssetID(serverID)
-	certAsset, err := s.prepareImportedAsset(ctx, ImportRequest{Type: TypeTLSCertificate, Name: "Agent server certificate - " + strings.TrimSpace(serverName), ParentAssetID: ca.ID, CertificatePEM: string(cert.CertPEM), PrivateKeyPEM: string(cert.KeyPEM)}, assetID)
+	certAsset, err := s.prepareImportedSystemCertificateAsset(ctx, ImportRequest{Type: TypeTLSCertificate, Name: "Agent server certificate - " + strings.TrimSpace(serverName), ParentAssetID: ca.ID, CertificatePEM: string(cert.CertPEM), PrivateKeyPEM: string(cert.KeyPEM)}, assetID)
 	if err != nil {
 		return err
 	}
@@ -199,7 +199,7 @@ func (s *Service) importSystemCertificate(ctx context.Context, assetID, name, pa
 	} else if !isNotFoundError(err) {
 		return err
 	}
-	asset, err := s.prepareImportedAsset(ctx, ImportRequest{
+	asset, err := s.prepareImportedSystemCertificateAsset(ctx, ImportRequest{
 		Type:           TypeTLSCertificate,
 		Name:           name,
 		ParentAssetID:  parentID,

@@ -8,6 +8,7 @@ import {
   Image,
   KeyRound,
   ListChecks,
+  ListTodo,
   Network,
   Package,
   RadioTower,
@@ -70,6 +71,7 @@ export const navGroups: NavGroup[] = [
     key: 'system',
     titleKey: 'layout.nav.settings',
     items: [
+      { key: 'tasks', titleKey: 'routes.tasks.title', to: '/tasks', icon: ListTodo },
       { key: 'system-events', titleKey: 'routes.systemEvents.title', to: '/system-events', icon: RadioTower },
       { key: 'settings', titleKey: 'routes.settings.title', to: '/settings/general', icon: Settings },
     ],

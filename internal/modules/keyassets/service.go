@@ -1642,7 +1642,7 @@ func (s *Service) prepareImportedAsset(ctx context.Context, in ImportRequest, fo
 	assetType := strings.TrimSpace(in.Type)
 	switch assetType {
 	case TypeCACertificate, TypeTLSCertificate:
-		return s.prepareImportedCertificateAsset(ctx, in, forcedID)
+		return s.prepareImportedCertificateAsset(ctx, in, forcedID, false)
 	case TypeSSHKeyPair:
 		return s.prepareImportedSSHAsset(in, forcedID)
 	default:
@@ -1650,7 +1650,11 @@ func (s *Service) prepareImportedAsset(ctx context.Context, in ImportRequest, fo
 	}
 }
 
-func (s *Service) prepareImportedCertificateAsset(ctx context.Context, in ImportRequest, forcedID string) (storedAsset, error) {
+func (s *Service) prepareImportedSystemCertificateAsset(ctx context.Context, in ImportRequest, forcedID string) (storedAsset, error) {
+	return s.prepareImportedCertificateAsset(ctx, in, forcedID, true)
+}
+
+func (s *Service) prepareImportedCertificateAsset(ctx context.Context, in ImportRequest, forcedID string, allowSystemManagedParent bool) (storedAsset, error) {
 	cert, normalizedCertPEM, err := parseCertificatePEM(in.CertificatePEM)
 	if err != nil {
 		return storedAsset{}, err
@@ -1695,7 +1699,7 @@ func (s *Service) prepareImportedCertificateAsset(ctx context.Context, in Import
 		if parent.Type != TypeCACertificate {
 			return storedAsset{}, panelerr.Validation("key_asset_ca_invalid", "Selected parent asset is not a CA certificate")
 		}
-		if isSystemManagedAsset(parent.Asset) {
+		if isSystemManagedAsset(parent.Asset) && !allowSystemManagedParent {
 			return storedAsset{}, systemAssetMutationError()
 		}
 		parentCert, err := parent.certificate()

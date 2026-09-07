@@ -51,7 +51,7 @@
 - 节点 tab 使用 MasterDetailLayout 模板：左列固定 280px，搜索为客户端过滤（name/host）并同步进 URL query `q`，初始化中的服务器显示"初始化中"进度态；右列详情分头部（可达性 + 操作组 + 错误横幅，`agent.last_error` 优先）与状态 / 系统 / 运行时 / 访问四区。
 - 凭据页使用 MasterDetailLayout 模板：左列搜索为客户端过滤（name/username），分页固定底部并同步进 URL query `page`；右列详情展示密钥摘要与服务器引用，选择凭据时按需加载 `GET /api/v1/credentials/{id}`。
 - 创建服务器保存成功即关对话框：新记录插入列表顶部，前端轮询 `initialTaskId`（1.5s × 90 上限）到终态；成功刷新数据，失败显示原因与"服务器记录已回滚"提示。
-- 任务类操作（Agent 部署 / 重启 / UFW 安装）反馈只承诺任务已提交；旧 `/tasks` 兼容路由不再作为产品入口，后续诊断应优先通过系统事件或后端提供的任务引用查看。
+- 任务类操作（Agent 部署 / 重启 / UFW 安装）反馈只承诺任务已提交；可通过系统导航中的任务中心 `/tasks` 查看完整任务状态和日志，服务器详情 Agent 卡片继续提供当前服务器的就地诊断。
 
 ## API 范围
 
@@ -77,7 +77,7 @@
 - `GET /api/v1/credentials/{id}` 对私钥类型凭据按需解密并返回非敏感密钥摘要（算法、位长、SHA256 指纹、密钥注释/名称），密码类型不返回摘要；摘要解析失败时仅省略摘要字段，任何响应都不返回秘密内容。
 - SSH 执行器 `internal/platform/ssh` 默认开启主机密钥 TOFU：首次连接把目标机公钥按 `host:port` 身份记录到 known_hosts 文件并持久化，后续连接校验公钥；指纹不匹配拒绝连接并返回 `ssh_host_key_mismatch` 错误（BadGateway）。known_hosts 默认位于 `<dataRoot>/known_hosts`（`PANEL_DATA_ROOT` 未设置时回退 `data`），可用 `WithKnownHosts` 指定路径；涉及 SSH 的测试应提供临时目录。`HostKeyMismatch` 标志由服务器记录的类型化判定（`ssh_host_key_mismatch` 错误码）持久化，不再依赖错误消息文本子串。
 - 主机密钥不一致时，服务器读取层（`Server`/`ServerSummary`）根据 `lastError` 是否包含稳定特征 `ssh host key mismatch` 暴露 `hostKeyMismatch`（JSON `hostKeyMismatch`，`omitempty`），List 与 Get 一致返回。`POST /api/v1/servers/{id}/trust-host-key` 是管理员显式信任流程：Service 先取服务器并按 `TestConnectivity` 相同方式构造 Target，调用执行器 `TrustHostKey` 建立一次性 SSH 连接（HostKeyCallback 只捕获公钥并接受连接，不校验 known_hosts），认证成功后以 `net.JoinHostPort(host, port)` 身份调用 `knownHosts.Replace` 覆盖记录；随后复用 `TestConnectivity` 刷新可达性并清空旧 `lastError`，成功返回更新后的服务器 JSON。known_hosts 未启用时返回 Validation `host_key_verification_disabled`；连接失败返回 `ssh_connection_failed`，其中 SSH 握手阶段出现 EOF/重置/超时也视为连接失败；凭据被拒绝才返回 `ssh_auth_failed`；known_hosts 写入失败返回 `ssh_host_key_verification_failed`。前端在详情错误/状态区对 `hostKeyMismatch === true` 展示显著安全提示（说明可能是主机重装或中间人攻击），并提供“信任新主机密钥”按钮：`ConfirmDialog`（danger + requireCheckbox）确认后调用 `trustHostKey`，成功后 toast 并失效详情缓存重拉（`invalidateServerDetail` + `load`），失败显示错误。
-- 创建初始化、Agent 部署、重启、UFW 安装为任务型操作：前端只展示已提交/进行中，不承诺请求返回时已完成；新诊断入口应使用系统事件或后端返回的稳定任务引用，不能新增 `/tasks?task=<id>` 产品链接。
+- 创建初始化、Agent 部署、重启、UFW 安装为任务型操作：前端只展示已提交/进行中，不承诺请求返回时已完成；任务中心 `/tasks` 是基础设施任务的完整诊断入口，业务页面可继续使用后端返回的稳定任务引用提供就地状态与日志。
 - 本阶段验证仅限 `task test:web:unit` 与 `task build:web`。
 
 - `servers` 和 `credentials` 在应用数据库，指标快照在指标数据库。

@@ -20,7 +20,7 @@
 - API：`web/src/api/tasks.ts`
 - 类型：`web/src/types/api.ts`
 
-> `/tasks` 旧路由仅保留兼容，不再作为产品导航入口。新的应用工作记录入口是 `/application-operations`，系统诊断事件入口是 `/system-events`；不要把新运行事件能力接回旧任务中心。
+> `/tasks` 是系统导航中的基础设施任务中心，用于查看任务状态、步骤、日志和执行重试。应用工作记录仍由 `/application-operations` 承载，系统诊断事件由 `/system-events` 承载；三者保持各自的数据与产品边界。
 
 ## API 范围
 
@@ -134,7 +134,7 @@
 ## Runtime Events
 
 - `tasks.Service` may be wired with `runtimeevents.Service` by production bootstrap. When present, task create/start/complete/fail/retry/cancel and task log reference events are written as `category=system` runtime events.
-- Runtime events do not replace the task tables or old task APIs. `/tasks` remains compatibility UI only and must not become the new application operation entry.
+- Runtime events do not replace the task tables or task APIs. `/tasks` is the infrastructure task and log entry, but must not become the application operation entry.
 - Task log events store log references and summaries only; do not copy full task log bodies into runtime event details.
 
 ## Application Deployment Coordination
