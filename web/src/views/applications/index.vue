@@ -2052,12 +2052,18 @@ onBeforeUnmount(() => {
             </section>
 
             <section class="workspace-panel">
+              <div class="section-heading"><div class="section-copy"><h3>{{ t('applicationsPage.containerEnv') }}</h3><p>{{ t('applicationsPage.environmentHint') }}</p></div><Button size="sm" @click="openRowDialog()"><Plus />{{ t('common.add') }}</Button></div>
+              <div class="grid gap-3">
+                <div v-for="(row, index) in appDraft.env" :key="row.id" class="item-row"><div><strong>{{ row.key }}</strong><span>{{ row.value || t('common.empty') }}</span></div><div class="row-actions"><Button size="sm" @click="openRowDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeRow(index)">{{ t('common.delete') }}</Button></div></div>
+                <EmptyState v-if="!appDraft.env.length" :title="t('applicationsPage.noEnvironment')" :description="t('applicationsPage.noEnvironmentHint')" />
+              </div>
+            </section>
+
+            <section class="workspace-panel">
               <div class="section-heading"><div class="section-copy"><h3>{{ t('applicationsPage.panelStorage') }}</h3><p>{{ t('applicationsPage.storageHint') }}</p></div><Button size="sm" @click="openMountDialog()"><Plus />{{ t('applicationsPage.addMount') }}</Button></div>
               <div class="grid gap-3">
-                <div class="flex items-center justify-between gap-3"><strong>{{ t('applicationsPage.containerEnv') }}</strong><Button size="sm" @click="openRowDialog()"><Plus />{{ t('common.add') }}</Button></div>
-                <div v-for="(row, index) in appDraft.env" :key="row.id" class="item-row"><div><strong>{{ row.key }}</strong><span>{{ row.value || t('common.empty') }}</span></div><div class="row-actions"><Button size="sm" @click="openRowDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeRow(index)">{{ t('common.delete') }}</Button></div></div>
                 <div v-for="(mount, index) in appDraft.mounts" :key="mount.id" class="item-row"><div><strong>{{ t('applicationsPage.mountSummary', { type: mount.type, target: mount.target }) }}</strong><span>{{ mountSourceLabel(mount) }}</span></div><div class="row-actions"><Button size="sm" @click="openMountDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(appDraft.mounts, index)">{{ t('common.delete') }}</Button></div></div>
-                <EmptyState v-if="!appDraft.env.length && !appDraft.mounts.length" :title="t('applicationsPage.noStorageConfig')" :description="t('applicationsPage.noStorageConfigHint')" />
+                <EmptyState v-if="!appDraft.mounts.length" :title="t('applicationsPage.noMounts')" :description="t('applicationsPage.noMountsHint')" />
               </div>
             </section>
 

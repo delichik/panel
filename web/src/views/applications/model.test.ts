@@ -211,6 +211,49 @@ describe('application editor model', () => {
     expect(diffFacility(base, draft)).toMatchObject({ added: 1, changed: 0 });
   });
 
+  it('classifies facility additions, removals, and content changes without double counting', () => {
+    const existingDomain: ReverseProxyConfig['domains'][number] = {
+      domain: 'static.example.test',
+      originServerIds: ['srv-1'],
+      anyAccess: { enabled: false },
+      paths: [{ path: '/', ruleType: 'static', sourceType: 'uploaded_file', assetName: 'index.html' }],
+    };
+    const base = {
+      id: 'reverse_proxy',
+      version: 1,
+      deploymentServers: ['srv-1'],
+      domains: [existingDomain],
+      staticAssets: [],
+      routeSummaries: [],
+      applicationRoutes: [],
+      updatedAt: '',
+      routes: 1,
+      enabledServers: ['srv-1'],
+    } satisfies ReverseProxyConfig;
+
+    expect(diffFacility(base, facilityDraftFromConfig(base))).toEqual({ added: 0, changed: 0, removed: 0, warnings: 0 });
+
+    const added = facilityDraftFromConfig(base);
+    added.domains.push({ ...cloneFacilityDomains([existingDomain])[0], domain: 'new.example.test' });
+    expect(diffFacility(base, added)).toEqual({ added: 1, changed: 0, removed: 0, warnings: 0 });
+
+    const removed = facilityDraftFromConfig(base);
+    removed.domains = [];
+    expect(diffFacility(base, removed)).toEqual({ added: 0, changed: 0, removed: 1, warnings: 0 });
+
+    const changed = facilityDraftFromConfig(base);
+    changed.domains[0].paths[0].assetName = 'changed.html';
+    expect(diffFacility(base, changed)).toEqual({ added: 0, changed: 1, removed: 0, warnings: 0 });
+
+    const replaced = facilityDraftFromConfig(base);
+    replaced.domains[0].domain = 'replacement.example.test';
+    expect(diffFacility(base, replaced)).toEqual({ added: 1, changed: 0, removed: 1, warnings: 0 });
+
+    const serverAdded = facilityDraftFromConfig(base);
+    serverAdded.deploymentServers.push('srv-2');
+    expect(diffFacility(base, serverAdded)).toEqual({ added: 1, changed: 0, removed: 0, warnings: 0 });
+  });
+
   it('keeps generated YAML parseable for changed runtime fields', () => {
     const draft = draftFromApplication(app);
     draft.mounts.push({ id: 'm1', type: 'persistent', source: '', target: '/data', readOnly: false, mode: '0755' });

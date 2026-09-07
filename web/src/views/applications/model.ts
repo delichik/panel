@@ -277,10 +277,20 @@ export function diffFacility(base?: ReverseProxyConfig | null, draft?: FacilityD
   if (!draft) return { added: 0, changed: 0, removed: 0, warnings: 0 };
   const input = facilitySaveInputFromDraft(draft);
   if (!base) return { added: input.deploymentServers.length + input.domains.length, changed: 0, removed: 0, warnings: 0 };
+  const baseInput = facilitySaveInputFromDraft(facilityDraftFromConfig(base));
+  const baseDomains = new Map(baseInput.domains.map((domain) => [domain.domain, domain]));
+  const inputDomains = new Map(input.domains.map((domain) => [domain.domain, domain]));
+  const baseServers = new Set(baseInput.deploymentServers);
+  const inputServers = new Set(input.deploymentServers);
   return {
-    added: Math.max(0, input.domains.length - base.domains.length) + Math.max(0, input.deploymentServers.length - base.deploymentServers.length),
-    removed: Math.max(0, base.domains.length - input.domains.length) + Math.max(0, base.deploymentServers.length - input.deploymentServers.length),
-    changed: countChanged([JSON.stringify(input.domains) !== JSON.stringify(base.domains), JSON.stringify(input.deploymentServers) !== JSON.stringify(base.deploymentServers)]),
+    added: [...inputDomains.keys()].filter((domain) => !baseDomains.has(domain)).length
+      + [...inputServers].filter((server) => !baseServers.has(server)).length,
+    removed: [...baseDomains.keys()].filter((domain) => !inputDomains.has(domain)).length
+      + [...baseServers].filter((server) => !inputServers.has(server)).length,
+    changed: [...inputDomains].filter(([domain, next]) => {
+      const previous = baseDomains.get(domain);
+      return previous !== undefined && JSON.stringify(next) !== JSON.stringify(previous);
+    }).length,
     warnings: input.domains.some((domain) => domain.domain.includes('conflict')) ? 1 : 0,
   };
 }

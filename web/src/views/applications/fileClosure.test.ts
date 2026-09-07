@@ -71,4 +71,17 @@ describe('application and facility file closure', () => {
     expect(viewSource).not.toContain('v-show="');
     expect(viewSource).not.toContain(' 路 ');
   });
+
+  it('separates networking, container environment, and storage into peer panels', () => {
+    const networkingPanel = viewSource.indexOf("<h3>{{ t('applicationsPage.panelNetworking') }}</h3>");
+    const environmentPanel = viewSource.indexOf("<h3>{{ t('applicationsPage.containerEnv') }}</h3>");
+    const storagePanel = viewSource.indexOf("<h3>{{ t('applicationsPage.panelStorage') }}</h3>");
+
+    expect(networkingPanel).toBeGreaterThan(-1);
+    expect(environmentPanel).toBeGreaterThan(networkingPanel);
+    expect(storagePanel).toBeGreaterThan(environmentPanel);
+    expect(viewSource).toContain('v-if="!appDraft.env.length"');
+    expect(viewSource).toContain('v-if="!appDraft.mounts.length"');
+    expect(viewSource).not.toContain('v-if="!appDraft.env.length && !appDraft.mounts.length"');
+  });
 });
