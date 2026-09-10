@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path"
 	"strconv"
@@ -75,15 +76,16 @@ const agentBundleBinaryName = "panel-agent"
 var reverseProxyTCPPorts = []int{80, 443}
 
 type Service struct {
-	db        *sql.DB
-	repo      ports.ServerRepository
-	metricsDB *sql.DB
-	exec      sshx.RemoteExecutor
-	agent     agentcontract.Client
-	agentTLS  *agentsecurity.TLSAssets
-	agentKeys agentTLSProvider
-	panelTLS  panelTLSProvider
-	tasks     *tasks.Service
+	db                   *sql.DB
+	repo                 ports.ServerRepository
+	metricsDB            *sql.DB
+	exec                 sshx.RemoteExecutor
+	agent                agentcontract.Client
+	agentTLS             *agentsecurity.TLSAssets
+	agentKeys            agentTLSProvider
+	panelTLS             panelTLSProvider
+	tasks                *tasks.Service
+	firewallChannelCheck func(context.Context, Server) error
 	// dnsSyncTrigger notifies the reverse proxy facility when server
 	// addresses change so affected proxy domains can resync their records.
 	dnsSyncTrigger func(context.Context, []string) error
@@ -241,16 +243,27 @@ func (s *Service) AllowUFW(ctx context.Context, serverID string, req UFWAllowReq
 	if err != nil {
 		return UFWState{}, err
 	}
+	if err := validateProtectedUFWPort(req.Port, srv); err != nil {
+		return UFWState{}, err
+	}
+	if err := s.verifyFirewallControlChannels(ctx, srv); err != nil {
+		return UFWState{}, err
+	}
 	if maintenance, baseURL, ok, err := s.agentMaintenance(srv); ok || err != nil {
 		if err != nil {
 			return UFWState{}, err
 		}
 		status, callErr := maintenance.UFWAllow(ctx, baseURL, agentcontract.UFWAllowRequest{
-			Rule: remoteops.UFWRule{Port: req.Port, Protocol: req.Protocol, From: req.From},
+			Rule:      remoteops.UFWRule{Port: req.Port, Protocol: req.Protocol, From: req.From},
+			SSHPort:   normalizedTCPPort(srv.Port),
+			AgentPort: agentControlPort(srv),
 		})
 		if callErr != nil {
 			_ = s.handleAgentCertificateTimeError(ctx, srv, callErr)
 			return UFWState{}, callErr
+		}
+		if err := s.verifyFirewallControlChannels(ctx, srv); err != nil {
+			return UFWState{}, err
 		}
 		return ufwStateFromStatus(srv.ID, true, status), nil
 	}
@@ -266,6 +279,9 @@ func (s *Service) AllowUFW(ctx context.Context, serverID string, req UFWAllowReq
 	}
 	status, err := s.fetchUFWStatusSSH(ctx, srv)
 	if err != nil {
+		return UFWState{}, err
+	}
+	if err := s.verifyFirewallControlChannels(ctx, srv); err != nil {
 		return UFWState{}, err
 	}
 	return ufwStateFromStatus(srv.ID, true, status), nil
@@ -311,21 +327,42 @@ func (s *Service) DeleteUFWRule(ctx context.Context, serverID string, number int
 	if err != nil {
 		return UFWState{}, err
 	}
+	if err := s.verifyFirewallControlChannels(ctx, srv); err != nil {
+		return UFWState{}, err
+	}
 	if maintenance, baseURL, ok, err := s.agentMaintenance(srv); ok || err != nil {
 		if err != nil {
 			return UFWState{}, err
 		}
-		status, callErr := maintenance.UFWDelete(ctx, baseURL, agentcontract.UFWDeleteRequest{Number: number})
+		current, statusErr := s.fetchUFWStatus(ctx, srv)
+		if statusErr != nil {
+			return UFWState{}, statusErr
+		}
+		if _, validateErr := validateUFWRuleDeletion(current, number, srv); validateErr != nil {
+			return UFWState{}, validateErr
+		}
+		status, callErr := maintenance.UFWDelete(ctx, baseURL, agentcontract.UFWDeleteRequest{Number: number, SSHPort: normalizedTCPPort(srv.Port), AgentPort: agentControlPort(srv)})
 		if callErr != nil {
 			_ = s.handleAgentCertificateTimeError(ctx, srv, callErr)
 			return UFWState{}, callErr
+		}
+		if err := s.verifyFirewallControlChannels(ctx, srv); err != nil {
+			return UFWState{}, err
 		}
 		return ufwStateFromStatus(srv.ID, true, status), nil
 	}
 	if err := s.ensureUFWInstalled(ctx, srv); err != nil {
 		return UFWState{}, err
 	}
-	script, err := remoteops.UFWDeleteRuleScript(number)
+	current, err := s.fetchUFWStatusSSH(ctx, srv)
+	if err != nil {
+		return UFWState{}, err
+	}
+	rule, err := validateUFWRuleDeletion(current, number, srv)
+	if err != nil {
+		return UFWState{}, err
+	}
+	script, err := remoteops.UFWSafeDeleteRuleScript(rule, normalizedTCPPort(srv.Port), agentControlPort(srv))
 	if err != nil {
 		return UFWState{}, err
 	}
@@ -336,7 +373,90 @@ func (s *Service) DeleteUFWRule(ctx context.Context, serverID string, number int
 	if err != nil {
 		return UFWState{}, err
 	}
+	if err := s.verifyFirewallControlChannels(ctx, srv); err != nil {
+		return UFWState{}, err
+	}
 	return ufwStateFromStatus(srv.ID, true, status), nil
+}
+
+func (s *Service) VerifyFirewallControlChannels(ctx context.Context, serverID string) error {
+	srv, err := s.Get(ctx, serverID)
+	if err != nil {
+		return err
+	}
+	return s.verifyFirewallControlChannels(ctx, srv)
+}
+
+func (s *Service) verifyFirewallControlChannels(ctx context.Context, srv Server) error {
+	if s.firewallChannelCheck != nil {
+		return s.firewallChannelCheck(ctx, srv)
+	}
+	if s.exec == nil {
+		return panelerr.Validation("server_executor_unavailable", "SSH connectivity verification is unavailable")
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if _, err := s.exec.Exec(checkCtx, serverTarget(srv), sshx.CommandSpec{Command: "true", Timeout: connectivitySudoTimeout}); err != nil {
+		return panelerr.Validation("firewall_ssh_preflight_failed", "SSH connectivity must be healthy before and after firewall changes: "+err.Error())
+	}
+	baseURL, ok := agentURL(srv)
+	if !ok || s.agent == nil {
+		return panelerr.Validation("firewall_agent_preflight_failed", "Panel Agent connectivity is required for firewall changes")
+	}
+	health, err := s.agent.Health(checkCtx, baseURL)
+	if err != nil || !strings.EqualFold(strings.TrimSpace(health.Status), "ok") {
+		if err != nil {
+			return panelerr.Validation("firewall_agent_preflight_failed", "Panel Agent connectivity must be healthy before and after firewall changes: "+err.Error())
+		}
+		return panelerr.Validation("firewall_agent_preflight_failed", "Panel Agent connectivity must be healthy before and after firewall changes")
+	}
+	return nil
+}
+
+func validateProtectedUFWPort(port int, srv Server) error {
+	if port == normalizedTCPPort(srv.Port) {
+		return panelerr.Validation("ufw_ssh_port_protected", "The SSH firewall port cannot be modified")
+	}
+	if port == agentControlPort(srv) {
+		return panelerr.Validation("ufw_agent_port_protected", "The Panel Agent firewall port cannot be modified")
+	}
+	return nil
+}
+
+func agentControlPort(srv Server) int {
+	endpoint, ok := agentURL(srv)
+	if !ok {
+		return defaultAgentPort
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Port() == "" {
+		return defaultAgentPort
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil || port <= 0 || port > 65535 {
+		return defaultAgentPort
+	}
+	return port
+}
+
+func validateUFWRuleDeletion(status remoteops.UFWStatus, number int, srv Server) (remoteops.UFWRuleStatus, error) {
+	for _, rule := range status.Rules {
+		if rule.Number != number {
+			continue
+		}
+		port, ok := remoteops.UFWRuleTargetPort(rule)
+		if !ok {
+			return remoteops.UFWRuleStatus{}, panelerr.Validation("ufw_rule_target_unknown", "Unable to resolve UFW rule target; refusing deletion")
+		}
+		if err := validateProtectedUFWPort(port, srv); err != nil {
+			return remoteops.UFWRuleStatus{}, err
+		}
+		if remoteops.UFWRuleManagedByApplication(rule) {
+			return remoteops.UFWRuleStatus{}, panelerr.Validation("ufw_application_rule_managed", "Application-managed UFW rules cannot be deleted manually")
+		}
+		return rule, nil
+	}
+	return remoteops.UFWRuleStatus{}, panelerr.Validation("ufw_rule_target_unknown", "Unable to resolve UFW rule target; refusing deletion")
 }
 
 func (s *Service) InstallUFW(ctx context.Context, serverID string) (tasks.Task, error) {
@@ -749,13 +869,17 @@ func (s *Service) rollbackInitialServer(ctx context.Context, serverID string) er
 func (s *Service) runInstallUFW(ctx context.Context, taskID string, srv Server, adapter linux.DistroAdapter) {
 	defer s.tasks.FinishExecution(taskID)
 	_ = s.tasks.Start(ctx, taskID)
+	if err := s.verifyFirewallControlChannels(ctx, srv); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
 	if maintenance, baseURL, ok, err := s.agentMaintenance(srv); ok || err != nil {
 		if err != nil {
 			_ = s.tasks.Fail(ctx, taskID, err)
 			return
 		}
 		_ = s.tasks.Advance(ctx, taskID, "installing", "installing UFW through panel agent")
-		rules := []remoteops.UFWRule{{Port: normalizedTCPPort(srv.Port), Protocol: "tcp"}, {Port: defaultAgentPort, Protocol: "tcp"}}
+		rules := []remoteops.UFWRule{{Port: normalizedTCPPort(srv.Port), Protocol: "tcp"}, {Port: agentControlPort(srv), Protocol: "tcp"}}
 		if traitEnabled(srv.Traits[reverseProxyEnabledTrait]) {
 			for _, port := range reverseProxyTCPPorts {
 				rules = append(rules, remoteops.UFWRule{Port: port, Protocol: "tcp"})
@@ -767,6 +891,10 @@ func (s *Service) runInstallUFW(ctx context.Context, taskID string, srv Server, 
 			return
 		}
 		if err := s.refreshServerTraits(ctx, taskID, srv); err != nil {
+			_ = s.tasks.Fail(ctx, taskID, err)
+			return
+		}
+		if err := s.verifyFirewallControlChannels(ctx, srv); err != nil {
 			_ = s.tasks.Fail(ctx, taskID, err)
 			return
 		}
@@ -809,23 +937,35 @@ func (s *Service) runInstallUFW(ctx context.Context, taskID string, srv Server, 
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
 	}
+	if err := s.verifyFirewallControlChannels(ctx, srv); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
 	_ = s.tasks.Complete(ctx, taskID, "UFW installed")
 }
 
 func (s *Service) runEnableUFW(ctx context.Context, taskID string, srv Server, adapter linux.DistroAdapter) {
 	defer s.tasks.FinishExecution(taskID)
+	if err := s.verifyFirewallControlChannels(ctx, srv); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
 	if maintenance, baseURL, ok, err := s.agentMaintenance(srv); ok || err != nil {
 		if err != nil {
 			_ = s.tasks.Fail(ctx, taskID, err)
 			return
 		}
 		_ = s.tasks.Advance(ctx, taskID, "enabling", "enabling UFW through panel agent")
-		if _, callErr := maintenance.UFWEnable(ctx, baseURL, agentcontract.UFWEnableRequest{SSHPort: normalizedTCPPort(srv.Port)}); callErr != nil {
+		if _, callErr := maintenance.UFWEnable(ctx, baseURL, agentcontract.UFWEnableRequest{SSHPort: normalizedTCPPort(srv.Port), AgentPort: agentControlPort(srv)}); callErr != nil {
 			_ = s.handleAgentCertificateTimeError(ctx, srv, callErr)
 			_ = s.tasks.Fail(ctx, taskID, callErr)
 			return
 		}
 		if err := s.refreshServerTraits(ctx, taskID, srv); err != nil {
+			_ = s.tasks.Fail(ctx, taskID, err)
+			return
+		}
+		if err := s.verifyFirewallControlChannels(ctx, srv); err != nil {
 			_ = s.tasks.Fail(ctx, taskID, err)
 			return
 		}
@@ -846,7 +986,7 @@ func (s *Service) runEnableUFW(ctx context.Context, taskID string, srv Server, a
 		}
 	}
 	_ = s.tasks.Advance(ctx, taskID, "enabling", "enabling UFW")
-	enableScript, err := remoteops.UFWEnableScript(normalizedTCPPort(srv.Port))
+	enableScript, err := remoteops.UFWEnableScript(normalizedTCPPort(srv.Port), agentControlPort(srv))
 	if err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
@@ -857,6 +997,10 @@ func (s *Service) runEnableUFW(ctx context.Context, taskID string, srv Server, a
 	}
 	_ = s.tasks.Advance(ctx, taskID, "verifying", "refreshing server system traits")
 	if err := s.refreshServerTraits(ctx, taskID, srv); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	if err := s.verifyFirewallControlChannels(ctx, srv); err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
 	}
@@ -1502,7 +1646,7 @@ func (s serverTaskLogSink) AppendLog(ctx context.Context, stream, line string) e
 
 func ufwInstallScript(adapter linux.DistroAdapter, srv Server) string {
 	command := strings.TrimSpace(adapter.UFWInstallScript())
-	rules := []remoteops.UFWRule{{Port: normalizedTCPPort(srv.Port), Protocol: "tcp"}}
+	rules := []remoteops.UFWRule{{Port: normalizedTCPPort(srv.Port), Protocol: "tcp"}, {Port: agentControlPort(srv), Protocol: "tcp"}}
 	if traitEnabled(srv.Traits[reverseProxyEnabledTrait]) {
 		for _, port := range reverseProxyTCPPorts {
 			rules = append(rules, remoteops.UFWRule{Port: port, Protocol: "tcp"})

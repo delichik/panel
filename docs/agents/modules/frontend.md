@@ -14,10 +14,9 @@
 - Applications, servers, domain certificates, self-signed certificates, and key assets consume server-side `ListPage` responses.
 - Searchable master lists send `q` to the backend and reset to page 1 when the query changes.
 - Async resource and DNS refresh actions wait for task completion and then reload the local snapshot. GET lists are never implicit refresh commands.
-- 主列表页（servers、credentials、applications、dns、certificates、tasks、application-operations、system-events）加载失败时在列表区显示错误空态（common.loadFailed + 错误详情 + 重试按钮），不得把加载失败伪装成“暂无数据”。
+- 主列表页（servers、credentials、applications、dns、certificates、activity）加载失败时在列表区显示错误空态（common.loadFailed + 错误详情 + 重试按钮），不得把加载失败伪装成“暂无数据”。
 - 资源页（packages/containers/images/networks/volumes）与安全页（UFW/fail2ban）的区块加载失败同样用 error/actionError 进入错误空态而不是“暂无数据”；DNS 记录区的 recordsError 必须在记录表格内渲染错误 + 重试，不能是死状态。
 - 证书页（domains/self-signed/keys）的 page、选中项、搜索词同步 URL query，初始化从 URL 恢复，搜索词通过 q 传给后端列表接口；密钥资产批量导入是独立入口（asset-preflight 对话框 + FileUploadButton），存在冲突时执行前必须经显式危险确认（requiresDangerConfirm），不能直接以 confirmDanger=true 执行。
-- 任务中心搜索透传 q 到 GET /api/v1/tasks 做跨页搜索（id/summary/type/error LIKE）并重置 page=1，不再只过滤当前页；状态筛选覆盖 scheduled/blocked/cancelled/failed_retryable，StatusBadge 显示本地化 label。
 - servers/credentials 主从工作台的搜索、分页与选中项同步到 URL query，并在刷新/回退时恢复；任务中心详情（steps/logs）加载失败显示错误 + 重试，与“无步骤/无日志”空态分离。
 - 服务器重启、UFW 安装、重置 JWT secret、清除待处理还原等危险操作必须经 danger 确认对话框并说明影响范围；维护页在 applying 阶段隐藏“清除待处理还原”按钮。
 - 概览页多服务器指标按时间戳对齐后聚合（不按数组下标）；进入编辑态提供取消/放弃按钮与路由离开保护；卡片删除需确认；containerUpdates 卡片当前展示“指标陈旧主机”计数（数据源未提供容器更新计数）。多服务器折线中某服务器缺失的时间点渲染为空缺（gap），不填充 0。
@@ -52,7 +51,7 @@
 - 复杂无样式交互可使用 headless 组件库；业务页面仍必须通过 Panel 自有 primitives 暴露一致样式。
 - `web/src/components/ui/` 当前基础组件：Button、IconButton、Input、Textarea、Select、Dialog、Dropdown、DropdownItem、Tabs、Badge、Table、ToastProvider/useToast、Skeleton、EmptyState、Tooltip、Switch、DateTimeRangePicker、TimeSegmentInput。
 - 等待网络接口响应的加载效果统一使用 `web/src/components/ui/LoadingOverlay.vue` 或既有骨架/按钮 loading；文本加载位置不得只显示文字。
-- 所有异步数据列表统一为「骨架/加载态 → 内容交错填充」：加载期按页面结构显示 Skeleton（`Table` 自带表格骨架行），数据就绪后经 `motion-stagger` + `motion-reveal` / `motion-table-row` 播放逐项进场动效（与 system-events 列表一致）；已有内容刷新不重放。
+- 所有异步数据列表统一为「骨架/加载态 → 内容交错填充」：加载期按页面结构显示 Skeleton（`Table` 自带表格骨架行），数据就绪后经 `motion-stagger` + `motion-reveal` / `motion-table-row` 播放逐项进场动效（与 activity 列表一致）；已有内容刷新不重放。
 - 列表、详情、轮询等异步加载必须使用 `createLatestRequestGuard` 或 AbortController 丢弃过期响应；轮询必须防重入、标签页不可见时暂停轮询，刷新按钮应覆盖其对应面板的全部数据源。
 - 新增或替换跨页面同类交互时，优先复用 `web/src/components/ui/` 的 SearchInput、PaginationBar、ConfirmDialog、FileUploadButton、DownloadButton、StatusBadge，以及 `web/src/components/patterns/` 的 ServerContextSelector、ServerMultiPicker、AutoRefreshControl、AssetFileManager；适用边界见 `docs/agents/specifications/frontend/interaction-patterns.md`。
 - `web/src/views/applications/index.vue`、`web/src/views/tasks/index.vue`、`web/src/views/security/index.vue` 与 `web/src/views/resources/index.vue` 已开始接入统一 patterns：搜索使用 `SearchInput`，任务分页使用 `PaginationBar`，任务/应用状态使用 `StatusBadge`，应用/设施服务器多选使用 `ServerMultiPicker`，安全/资源服务器上下文使用单一 `ServerContextSelector`，持久化与文件内容操作使用 `DownloadButton` / `FileUploadButton`。应用和设施编辑器采用同一连续纵向瀑布流：所有配置区在一个编辑正文中按业务顺序展开，正文独立滚动，右侧保留摘要；不得恢复分区切换、分页卡片或隐藏其他配置区的交互。后续页面修改不得在 `ServerContextSelector` 上方叠加服务器 Select 下拉。
@@ -77,9 +76,7 @@
 - `web/src/views/applications/`
 - `web/src/views/dns/`
 - `web/src/views/certificates/`
-- `web/src/views/application-operations/`
-- `web/src/views/system-events/`
-- `web/src/views/tasks/`
+- `web/src/views/activity/`
 - `web/src/views/settings/`
 - `web/src/views/auth/`
 - `web/src/views/maintenance/`
@@ -122,6 +119,7 @@
 - 普通应用页 `/applications/apps` 是独立控制面，不再通过应用/设施应用顶层 tabs 互切。左侧应用选择与镜像/实例摘要读取 `/api/v1/applications` 的 `ApplicationSummary[]`（含 `imageReference` 与 `instanceCount`），行内镜像与实例数量在列表加载或刷新期间显示骨架动画，摘要缺少镜像引用的行按需读取详情补齐；右侧详情和编辑入口按需读取 `/api/v1/applications/{id}` 完整 DTO 后展示状态、镜像更新、反向代理路由、运行时节点实例、日志入口、同步、停用、删除和持久化数据操作。运行时仍使用 `/api/v1/applications/{id}/runtime`，其他正式 API 使用 `/logs`、`/deploy`、`/stop`、`/image/check`、`/image/update`、`GET/POST /persistent-data` 和 `DELETE /api/v1/applications/{id}`；持久化下载走 blob 下载，上传走 multipart restore。
 - 创建/编辑应用走隐藏路由 `/applications/apps/create` 与 `/applications/apps/:applicationId/edit`，使用 `EditorPage` 与 `/api/v1/application-edit-sessions` durable 会话；编辑器是分层 header + 连续纵向配置流 + 摘要区，不得恢复分区切换或等宽分页卡片。基本信息、运行设置、网络与访问、环境与存储、部署目标、应用文件按顺序全部展开，正文统一滚动；窄屏字段单列组织，禁止横向裁切。应用规格只通过表单编辑，不提供 YAML 源码视图。文件区固定为一个上传入口，弹窗内选择文本文件、普通文件或文件夹压缩包：文本 JSON PUT 固定保存为 `template`，普通文件通过 `/uploads/{name}` multipart 固定保存为 `binary`，文件夹压缩包通过 `/archives` 保存为单个 `archive` 条目；类型和 MIME 不由用户填写。三类文件都支持会话态下载，binary/archive 替换必须保留原 `name`，正式详情支持已提交文件下载。文件工作区必须复用 `AssetFileManager`，不在应用页另写文件行交互。编辑器提交按钮点击时自动执行服务端检查并展示诊断，不再提供单独的「检查配置」按钮；修改草稿后自动清除过期的检查结果。应用与设施编辑器在编辑会话就绪前不渲染可编辑表单，加载失败就地提供重试，预览/提交按钮在会话就绪前禁用，避免用户修改尚未加载完成的草稿。
 - 应用编辑器把命令作为参数列表编辑（不再用 textarea），新建对话框项默认空值；应用反向代理对话框提供 AnyAccess（保留英文）和入口代理同款 HTTP 选项，origin servers 始终按部署目标与网关节点自动推导并只读展示，不提供手动覆盖；应用与设施编辑器保存期间使用覆盖整个编辑器的阻塞遮罩并禁止关闭。
+- 应用端口映射使用摘要列表与标准对话框编辑：协议为 TCP/UDP（新建默认 TCP），防火墙管理开关默认关闭且只有固定宿主机端口存在时可开启；摘要明确显示协议和防火墙由 Panel 管理/保持不变。结构化 YAML 往返只显式写入 UDP 与开启状态，TCP/关闭保持缺省，以兼容旧应用哈希。
 - 设施应用页 `/applications/facility-apps` 是独立入口，不再通过应用/设施应用顶层 tabs 互切，也不暴露隐藏 `facility-reverse-proxy` 应用。设施类型由前端内置适配器固定提供，不调用设施 list API；当前唯一内置设施是 `reverse-proxy`，页面直接使用其专属详情与配置 API。新增设施类型时新增自己的类型、配置和 API adapter。
 - 设施应用目录以带大图标和路由数等摘要的卡片按两列网格展示，点击卡片直接进入设施详情 `/applications/facility-apps/:facilityKind`；卡片统计数字随设施配置异步加载并在加载或刷新期间显示骨架动画，目录页正文直接使用 ConsolePage 滚动容器，不再套独立卡片外层。详情读取 `/api/v1/facility-apps/reverse-proxy`，展示网关节点、路由摘要、静态资产、应用路由、Panel 入口和当前 lifecycle operation。详情页“编辑”按钮在同一页就地展开编辑器，不再跳转独立配置页；兼容深链 `/applications/facility-apps/:facilityKind/config` 仍可直达编辑态。编辑器走 `/api/v1/facility-apps/reverse-proxy/edit-sessions`，与应用编辑器统一为连续纵向配置流 + sticky 摘要；网关服务器、域名和路由、Panel 访问入口和静态文件按顺序全部展开，正文统一滚动；域名和 Path 使用列表 + 对话框；域名对话框可配置负载均衡策略（轮询 / IP 哈希 / 主备切换及主源服务器），location 对话框可配置 gzip、请求体上限、代理超时、代理缓冲、WebSocket 模式、来源信息转发和自定义请求/响应头；服务器选择与展示统一使用服务器名称（名称来自 `/api/v1/servers`，未知 ID 回退为原值），Panel 入口服务器使用单选选择器。提交或取消后回到详情视图（提交后刷新设施数据）。静态文件新增/同 name 替换使用 `PUT .../assets/{assetName}` multipart，会话态和正式态分别通过对应 `/content` 接口下载；冲突时提供放弃当前修改并重新加载正式配置的明确入口。静态文件与应用文件共用 `AssetFileManager` 和请求封装，设施 adapter 只负责映射自己的配置契约。Path 弹窗保存时前端即时校验 path、跳转 URL、代理目标并内联报错；提交按钮点击时自动执行检查并展示诊断，不再提供单独的「检查配置」按钮；修改草稿后自动清除过期的检查结果。
 - 设施详情与编辑器按域名展示 DNS 同步状态（未同步/同步中/已生效/失败/跳过），状态来自 `ReverseProxyConfig.dnsSync`；提交后存在 pending 状态时前端刷新配置获取最新状态。
@@ -131,25 +129,29 @@
 
 ### 阶段 7：任务 + 设置 + 维护 + 诊断
 
-`web/src/views/tasks/`、`web/src/views/settings/`、`web/src/views/maintenance/`、`web/src/views/debug/` 已替换阶段占位：
+`web/src/views/settings/`、`web/src/views/maintenance/`、`web/src/views/debug/` 已替换阶段占位：
 
-- 任务中心 `/tasks` 位于系统导航分组，用于查看基础设施后台任务的状态、步骤、日志以及执行重试；诊断页 `/debug` 保留直达但不显示在菜单中。应用部署等应用域操作仍通过“应用”一级菜单下的 `/application-operations` 查看，系统诊断事件通过 `/system-events` 展示。
-- 任务中心按 `operationId` 聚合，左侧保留操作组搜索、状态筛选和 URL query 恢复，右侧展示具体任务、步骤、日志、错误、重试和立即运行。任务执行项以 `summary` 为标题、`type` 为副标题，操作组副标题展示 `type`，用户可见位置不直接展示任务/操作原始 id；原始 id 仍用于搜索与 URL 恢复。正式 API 使用 `/api/v1/tasks`、`/api/v1/tasks/{id}`、`/logs`、`/steps`、`/retry`、`/run-now`。
-- 服务器详情的 Agent 卡片提供就地诊断，任务中心提供完整任务日志入口：页面按 `serverId` 与 `server_agent_deploy` 查询最近任务，展示任务状态、部署阶段、错误和最近 20 条日志；运行中的任务每 2 秒增量读取日志，标签页不可见时暂停，刷新页面或切回服务器时恢复最近任务。重启就绪、Agent 返回的不透明 `holdon` 状态和等待超时日志在卡片内翻译为当前界面语言；界面不得在协议未提供原因时自行将 `holdon` 解释为软件包升级，其他远端自由文本保持原样。
 - 设置页按 Runtime、安全、证书、系统、系统证书、备份还原分区独立保存，不提供全局保存。Panel HTTPS 证书选择器通过统一的 `GET /api/v1/key-assets/tls` 获取可激活的完整 TLS 资产；该接口包含 ACME、用户导入/生成和 Panel 内置证书，排除 Agent 专用证书，不接收域名参数，也不按 SAN 做筛选。正式 API 使用 `/api/v1/settings/runtime`、`/api/v1/settings/server-variables`、`/api/v1/auth/jwt-secret`、`/api/v1/system/version`、`/api/v1/key-assets/tls`、`/api/v1/key-assets/system`、`/api/v1/key-assets/system/{id}/reset`、`/api/v1/backups/export`、`/api/v1/backups/restore/preflight`、`/api/v1/backups/restore/confirm`；系统版本只读展示，不和 Runtime 设置保存混在一起。由于 `/settings/runtime` 后端仍接收完整 runtime payload，前端保存某个分区时必须以已加载的 runtime 当前值为基底，只合入当前分区表单，避免提交其他分区尚未保存的脏值。系统证书分区展示 Panel 侧 Agent CA、Panel Agent client 证书以及服务器上报的 Agent 服务端证书，重置操作通过后台任务执行。
 - 维护页是独立 shell，不走全局 AppShell；导出和还原维护 token 分别保存在 `sessionStorage.panel.maintenance.export.token` 与 `sessionStorage.panel.maintenance.restore.token`，二者和普通登录 session 隔离。正式 API 使用维护模式下的 `/api/v1/auth/*`、`/api/v1/backups/export/current|start|password|exit|{id}/download`、`/api/v1/restore/status|password|retry|clear-pending`；导出归档下载通过带 Authorization header 的 blob 请求完成。维护页当前模式由后端维护状态决定、不可手动切换，页面显示对应模式说明文案。
 - 诊断页使用 Runtime / Tasks / Database tabs，支持暂停/恢复轮询和手动刷新；刷新失败时保留上一份可用快照。Tasks tab 将运行时计数与任务定义分开呈现，任务定义必须使用可滚动表格展示，禁止直接把对象数组字符串化为 `[object Object]`。正式 API 使用 `/api/v1/debug/snapshot`。
 - 诊断页顶部提供 pprof 开关卡片，开启后展示本机 pprof 访问地址；状态与开关分别使用 `GET /api/v1/debug/pprof` 与 `PUT /api/v1/debug/pprof`。
-- Mock 模式覆盖同名正式路径，包含正常、失败、长日志、维护中、保存冲突、诊断失败保留旧快照和任务中心多页分页样本；未实现路径继续返回 `mock_route_not_found`。
+- Mock 模式覆盖同名正式路径，包含正常、失败、长日志、维护中、保存冲突、诊断失败保留旧快照和统一日志跨批次及重试恢复样本；未实现路径继续返回 `mock_route_not_found`。
 
-### 运行事件：协调记录 + 系统事件
+### 统一日志
 
-`web/src/views/application-operations/`（协调记录）与 `web/src/views/system-events/`（系统事件）是两个独立页面族，不再共用同一套组件结构：
+`web/src/views/activity/` 替换原 tasks、system-events、application-operations 三类历史页面，导航只保留 `/activity`。API/types/mock 分别为 `web/src/api/activity.ts`、`web/src/types/activity.ts`、`web/src/mocks/activity.ts`。
 
-- 协调记录页（页面名“协调记录”，原“操作记录”）读取 `/api/v1/application-operations`，主体是协调库生命周期操作的读时聚合，支持按应用 ID、来源和状态筛选。页面为左列表 + 右详情：左侧每条显示应用/设施名、操作、结果徽标、涉及服务器（含“一致”服务器）、失败原因、时间/来源；右侧详情显示头部（结果与失败目标）、服务器列表（每台服务器的状态、不一致说明、期望 vs 实际、当前阶段、步骤日志按钮），“步骤日志”从右侧抽屉按时间展示每步（开始时间、耗时、结果、详情）。用户可见位置不展示 `applicationId` / `operationId` / `srv_xxx` 原始 id，设施统一显示“入口代理设施”。
-- 系统事件读取 `/api/v1/system-events`，主体是诊断事件，支持按关联对象 ID、级别和类别筛选。页面只展示后端提供的事件类型与类别，不假设独立 alert 服务。
-- 协调记录页使用 `MasterDetailLayout`、`SearchInput`、`Select`、`PaginationBar`、`StatusBadge`、`Badge` 和 `ConsolePage`，保持桌面内部滚动，不恢复页面级滚动；筛选变更带 250ms 防抖；步骤日志抽屉接入 `useOverlayBehavior`（Escape/显式关闭，不响应遮罩点击），`operationId` 不在当前页时详情区显示提示并允许清除；系统事件页保持原有列表结构。
-- Mock 模式覆盖同名正式路径，包含步骤日志、一致服务器、分页和筛选样本。
+- 默认事件视图与按操作视图读取同一不可变日志；系统事件不要求 operationId。事件列表按接收顺序分页，操作列表由后端聚合，不在前端拼接当前页事件。
+- 筛选、视图、cursor、snapshotSeq、operationId/eventId/executionId 进入 URL；资源入口携带 resourceType/resourceId。请求使用迟到响应隔离；切换详情立即清空原对象内容。
+- MasterDetailLayout 保持标准双栏几何；中等桌面选择对象后切换详情，列表与详情内部独立滚动，窄屏恢复页面滚动。
+- EventTimeline 展示请求、协调决策、步骤、输出与结果，异常默认展开，连续同一步骤输出折叠；原始技术标识折叠显示。筛选异常后可读取未筛选前后文。
+- PaginationBar 的 cursor 模式不显示虚假页码或页数。每批至多 100 条，时间线按快照切换相邻较早/较新批次以限制 DOM，只保留当前最多 100 条事件，历史导航只保存游标字符串而不缓存正文；完整历史可继续翻批或按固定快照导出 JSONL。
+- 自动接收复用 AutoRefreshControl/useAutoRefresh，标签页隐藏暂停，操作结束后仍检查迟到证据；新证据提示后由用户载入，避免调查时重排当前快照。
+- 服务器 Agent 卡片当前阶段来自 `/api/v1/executions` 执行控制；历史输出来自 `/activity/events?executionId=...&kind=output`，完整历史跳转统一日志。
+- `/activity/summary.capacity` 为 warning/blocked 时显示容量横幅和可用 MiB；blocked 明确停止接收新变更但仍可查询导出，不增加保留期限设置。自动刷新同步容量状态，并保持当前列表快照不变。
+- 原始日志页面没有修改、删除、结果覆盖与保留期限设置。指标保留策略仍由指标模块管理。
+- 成功/失败 Toast 通过 `activityPath` 解析本次响应的 operationId、acceptedEventId/eventId、executionId/taskId；不能从普通资源 id 或提示文本推断。带操作入口的 Toast 保留 15 秒，使用 RouterLink 进入对应过程。ApiError 保留错误 envelope 的关联，原 details 不变；执行等待超时/失败也携带原 taskId。
+- `availableCommands` 仅代表当前执行能力。retry/run-now 经确认后提交到 `/executions`；resolve 使用独立人工核对表单，必须选择核对成功/失败并填写依据，明确不是系统自动验证。请求追加人工观察与结果事实，界面不得修改旧时间线或隐藏此前未知状态。
 
 ### 阶段 6：DNS + 证书 + 密钥资产
 
@@ -178,7 +180,7 @@
 
 - 新增或修改用户可见文案必须写入 `web/src/i18n/index.ts` 英文和简体中文词条。
 - 路由元信息只写 `meta.titleKey`，不写用户可见文案。
-- 多语言入口为 `web/src/i18n/index.ts`（`state.locale` + `setLocale`）；任务中心 / 系统事件页使用 `translateTaskSummary` / `translateEventSummary` 对后端英文摘要按当前语言渲染翻译。
+- 多语言入口为 `web/src/i18n/index.ts`（`state.locale` + `setLocale`）；统一日志页面使用 `translateTaskSummary` / `translateEventSummary` 对后端英文摘要按当前语言渲染翻译。
 
 ## 验证
 

@@ -3,6 +3,7 @@ package tasks
 import (
 	"context"
 	"errors"
+	"panel/internal/platform/activitylog"
 	"sync"
 	"testing"
 	"time"
@@ -149,7 +150,7 @@ func TestFirstActiveByConcurrencyKeyInvalidatesOnExpireStaleQueued(t *testing.T)
 	assertNoActive(t, svc, "k1")
 }
 
-func TestFirstActiveByConcurrencyKeyInvalidatesOnFailRunningWithoutExecution(t *testing.T) {
+func TestFirstActiveByConcurrencyKeyRetainsUncertainExecution(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
 	input := CreateInput{Type: "test", ConcurrencyKey: "k1", Status: StatusRunning, ResourceType: "server", ResourceID: "srv_1", ServerID: "srv_1"}
@@ -177,6 +178,11 @@ func TestFirstActiveByConcurrencyKeyInvalidatesOnFailRunningWithoutExecution(t *
 	}
 	if failed != 1 {
 		t.Fatalf("expected 1 orphaned task to fail, got %d", failed)
+	}
+	assertFirstActive(t, svc, "k1", first.ID)
+	actorCtx := activitylog.WithActor(ctx, activitylog.Actor{Kind: "user", ID: "admin"})
+	if _, err := svc.ResolveUncertain(actorCtx, first.ID, "failed", "verified the previous executor stopped"); err != nil {
+		t.Fatal(err)
 	}
 	assertFirstActive(t, svc, "k1", second.ID)
 }

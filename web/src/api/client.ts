@@ -9,6 +9,11 @@ export interface ApiErrorPayload {
   code?: string;
   message?: string;
   details?: unknown;
+  operationId?: string;
+  acceptedEventId?: string;
+  eventId?: string;
+  executionId?: string;
+  taskId?: string;
 }
 
 export interface ApiRequestOptions {
@@ -29,6 +34,7 @@ export class ApiError extends Error {
     readonly status: number,
     readonly code = 'api_error',
     readonly details?: unknown,
+    readonly activity?: unknown,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -173,7 +179,7 @@ export async function fetchJson<T>(path: string, options: ApiRequestOptions = {}
     if (!response.ok || envelope.error) {
       const payload = envelope.error ?? {};
       const code = payload.code ?? (response.status === 401 ? 'unauthorized' : 'api_error');
-      throw new ApiError(payload.message ?? defaultMessage(response.status, code), response.status, code, payload.details);
+      throw new ApiError(payload.message ?? defaultMessage(response.status, code), response.status, code, payload.details, payload);
     }
 
     if (!('data' in envelope)) {
@@ -211,7 +217,7 @@ export async function fetchBlob(path: string, options: ApiRequestOptions & { fal
           throw new ApiError(t('api.invalidJson'), response.status, 'invalid_json_response', error);
         })) as ApiEnvelope<unknown>;
         const code = envelope.error?.code ?? (response.status === 401 ? 'unauthorized' : 'api_error');
-        throw new ApiError(envelope.error?.message ?? defaultMessage(response.status, code), response.status, code, envelope.error?.details);
+        throw new ApiError(envelope.error?.message ?? defaultMessage(response.status, code), response.status, code, envelope.error?.details, envelope.error);
       }
       throw new ApiError(
         t('api.downloadFailedStatus', { status: response.status }),

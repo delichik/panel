@@ -19,7 +19,7 @@
 
 ## 行为约定
 
-- 备份是全实例导出，默认包含 `dataRoot`、app/log/metrics 三个 SQLite 数据库、密钥资产主密钥文件和必要元数据。`log` 与 `metrics` 属于低价值历史，但全量包默认包含它们；恢复旧归档时仍兼容 `databases/tasks.db`。
+- 备份是全实例导出，默认包含 `dataRoot`、app/log/metrics 三个 SQLite 数据库、密钥资产主密钥文件和必要元数据。原始日志及证据属于 AppDB 的持久事实，必须备份；`log` 中的查询投影可以重建，`metrics` 独立保留，全量包默认包含它们；恢复旧归档时仍兼容 `databases/tasks.db`。
 - 备份密码可选；前端默认启用加密，关闭加密时必须提示归档可恢复整套 Panel 身份。
 - 正常运行期点击导出只写入 `data/tmp/backup-export-pending/pending.json`，再通过 `panel_init` 随机本地监听请求下一次子进程以 `--maintenance-mode backup_export` 启动；不会在业务运行时复制 SQLite 或归档数据。加密导出的密码不写入 pending 文件，启动期维护页会要求用户输入密码后再继续。
 - 只有同时存在 pending export 且启动参数为 `--maintenance-mode backup_export` 时，Panel 才进入备份导出维护模式；pending 文件本身不能触发维护逻辑。`ExportApp` 启动时只短暂打开 `app.db` 读取管理员用户名和 bcrypt 密码哈希，随后立即关闭连接；维护态登录和会话校验只使用内存中的哈希与 token。若数据库不可读，可回退到 Panel 配置中的管理员验证材料，但绝不开放匿名维护 API。
@@ -120,3 +120,7 @@
 - `panel_init` listens on a random `127.0.0.1:0` HTTP port, generates a random restart token, and passes both to the child as `--init-restart-url` and `--init-restart-token`. The listener is not exposed as a Panel business route and must reject requests whose `X-Panel-Init-Token` does not match.
 - The local restart request carries the next startup mode: `backup_export`, `restore`, or `normal`. Backup export and restore confirmation write pending files first, then request `backup_export` or `restore`; completed export exit, completed restore, and restore clear-pending remove temporary pending data and request `normal`.
 - When `--init-restart-url` or `--init-restart-token` is absent, `restartSupported` must be false and backup/restore APIs must not exit or restart the process. This prevents standalone `panel` runs from entering maintenance logic unexpectedly.
+
+## 统一日志
+
+备份必须保留 AppDB activity_events/activity_evidence_chunks。恢复不得改写事件内容；LogDB投影可删除后从事实重建。完整实例还原会回退本机日志历史，不提供独立的外部防回滚审计保证。

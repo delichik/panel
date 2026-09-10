@@ -19,9 +19,11 @@ type Spec struct {
 }
 
 type Port struct {
-	Label  string `json:"label" yaml:"label"`
-	To     int    `json:"to" yaml:"to"`
-	Static int    `json:"static" yaml:"static"`
+	Label        string `json:"label" yaml:"label"`
+	To           int    `json:"to" yaml:"to"`
+	Static       int    `json:"static" yaml:"static"`
+	Protocol     string `json:"protocol,omitempty" yaml:"protocol,omitempty"`
+	OpenFirewall bool   `json:"openFirewall,omitempty" yaml:"openFirewall,omitempty"`
 }
 
 type Resources struct {

@@ -174,6 +174,53 @@ func TestValidateRejectsDuplicateStaticPorts(t *testing.T) {
 	}
 }
 
+func TestNormalizeCanonicalizesPortProtocolsForHashing(t *testing.T) {
+	spec := Normalize(Spec{Ports: []Port{{Protocol: " TCP "}, {Protocol: " UDP "}}})
+	if spec.Ports[0].Protocol != "" || spec.Ports[1].Protocol != "udp" {
+		t.Fatalf("protocols = %#v", spec.Ports)
+	}
+}
+
+func TestValidateRejectsInvalidPortProtocol(t *testing.T) {
+	issues := Validate(Spec{Name: "web", Image: "nginx", Ports: []Port{{Label: "http", To: 80, Protocol: "sctp"}}})
+	if !hasIssue(issues, "ports[0].protocol") {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
+func TestValidateRequiresStaticPortForFirewallAccess(t *testing.T) {
+	issues := Validate(Spec{Name: "web", Image: "nginx", Ports: []Port{{Label: "http", To: 80, OpenFirewall: true}}})
+	if !hasIssue(issues, "ports[0].openFirewall") {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
+func TestValidateStaticPortDuplicatesAreProtocolSpecific(t *testing.T) {
+	issues := Validate(Spec{
+		Name:  "web",
+		Image: "nginx",
+		Ports: []Port{
+			{Label: "http", To: 80, Static: 8080},
+			{Label: "dns", To: 53, Static: 8080, Protocol: "udp"},
+		},
+	})
+	if len(issues) != 0 {
+		t.Fatalf("tcp and udp may share a static port: %#v", issues)
+	}
+
+	issues = Validate(Spec{
+		Name:  "web",
+		Image: "nginx",
+		Ports: []Port{
+			{Label: "http", To: 80, Static: 8080},
+			{Label: "admin", To: 81, Static: 8080, Protocol: " TCP "},
+		},
+	})
+	if !hasIssue(issues, "ports[1].static") {
+		t.Fatalf("canonical tcp duplicate was not rejected: %#v", issues)
+	}
+}
+
 func TestValidateRejectsInvalidEnvKeys(t *testing.T) {
 	issues := Validate(Spec{
 		Name:  "web",

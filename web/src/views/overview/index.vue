@@ -110,7 +110,7 @@ async function load() {
     await Promise.all(cards.value.map((card) => loadCard(card.id)));
   } catch (err) {
     pageError.value = err instanceof Error ? err.message : t('common.loadFailed');
-    notifyError(err instanceof Error ? err.message : t('common.loadFailed'));
+    notifyError(err instanceof Error ? err.message : t('common.loadFailed'), err);
   } finally {
     loading.value = false;
   }
@@ -149,7 +149,7 @@ async function loadCard(cardId: string) {
   } catch (err) {
     if (cardRequests.get(cardId) !== requestId) return;
     const message = err instanceof Error ? err.message : t('overviewPage.cardFailed');
-    notifyError(message);
+    notifyError(message, err);
     cardErrors.value = { ...cardErrors.value, [cardId]: t('overviewPage.cardFailed') };
   } finally {
     if (cardRequests.get(cardId) === requestId) {
@@ -209,7 +209,7 @@ async function saveCards() {
     await Promise.all(cards.value.map((card) => loadCard(card.id)));
   } catch (err) {
     saveError.value = err instanceof Error ? err.message : t('overviewPage.saveFailed');
-    notifyError(err instanceof Error ? err.message : t('overviewPage.saveFailed'));
+    notifyError(err instanceof Error ? err.message : t('overviewPage.saveFailed'), err);
   } finally {
     saving.value = false;
   }
@@ -785,7 +785,7 @@ onBeforeUnmount(() => {
               <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/servers')"><Server class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.servers.title') }}</span></Button>
               <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/credentials')"><ShieldCheck class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.credentials.title') }}</span></Button>
               <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/resources/packages')"><Boxes class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.packages.title') }}</span></Button>
-              <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/application-operations')"><Activity class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.applicationOperations.title') }}</span></Button>
+              <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/activity')"><Activity class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.activity.title') }}</span></Button>
             </div>
           </section>
         </div>

@@ -1,3 +1,4 @@
+import type { ActivityReceipt } from './activity';
 export interface ServerOsRelease {
   id?: string;
   versionId?: string;
@@ -76,7 +77,7 @@ export interface ServerProbeResult {
   passwordlessSudoText?: string;
 }
 
-export interface OperationAccepted {
+export interface OperationAccepted extends ActivityReceipt {
   taskId: string;
 }
 

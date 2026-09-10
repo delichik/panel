@@ -5,6 +5,7 @@ import { AlertTriangle, Cable, KeyRound, PlayCircle, Plus, RefreshCcw, ServerCog
 import { credentialsApi } from '@/api/credentials';
 import { serversApi, type ServerMetricsRange, type ServerMetricsSeries } from '@/api/servers';
 import { tasksApi } from '@/api/tasks';
+import { activityApi } from '@/api/activity';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
@@ -185,7 +186,7 @@ async function loadServerDetail() {
   } catch (err) {
     if (isAbortError(err)) return;
     actionError.value = err instanceof Error ? err.message : t('serversPage.loadFailed');
-    notifyError(err instanceof Error ? err.message : t('serversPage.loadFailed'));
+    notifyError(err instanceof Error ? err.message : t('serversPage.loadFailed'), err);
   } finally {
     if (requestId === detailRequestId) detailLoading.value = false;
   }
@@ -244,7 +245,7 @@ async function loadServers() {
     selectedId.value = result.items.some((item) => item.id === selectedId.value) ? selectedId.value : result.items[0]?.id ?? '';
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('serversPage.loadFailed');
-    notifyError(err instanceof Error ? err.message : t('serversPage.loadFailed'));
+    notifyError(err instanceof Error ? err.message : t('serversPage.loadFailed'), err);
   } finally {
     if (listRequests.isCurrent(requestId)) loading.value = false;
   }
@@ -279,7 +280,7 @@ async function loadMetrics(force = false) {
   } catch (err) {
     if (isAbortError(err)) return;
     metricsError.value = err instanceof Error ? err.message : t('serversPage.metricsFailed');
-    notifyError(err instanceof Error ? err.message : t('serversPage.metricsFailed'));
+    notifyError(err instanceof Error ? err.message : t('serversPage.metricsFailed'), err);
   } finally {
     if (requestId === metricsRequestId) {
       metricsLoading.value = false;
@@ -343,7 +344,7 @@ async function openEdit(server: ServerDto) {
     });
     serverDialog.value = true;
   } catch (err) {
-    notifyError(err instanceof Error ? err.message : t('serversPage.loadFailed'));
+    notifyError(err instanceof Error ? err.message : t('serversPage.loadFailed'), err);
   } finally {
     openingEdit.value = false;
   }
@@ -357,7 +358,7 @@ async function probe() {
     probeResult.value = await serversApi.probe(formPayload.value);
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('serversPage.probeFailed');
-    notifyError(err instanceof Error ? err.message : t('serversPage.probeFailed'));
+    notifyError(err instanceof Error ? err.message : t('serversPage.probeFailed'), err);
   } finally {
     probing.value = false;
   }
@@ -371,12 +372,12 @@ async function saveServer() {
     const saved = editing.value ? await serversApi.update(editing.value.id, formPayload.value) : await serversApi.create(formPayload.value);
     selectedId.value = saved.id;
     invalidateServerDetail(saved.id);
-    notifySuccess(saved.initialTaskId ? t('serversPage.createdWithTask', { taskId: saved.initialTaskId }) : t(editing.value ? 'serversPage.updated' : 'serversPage.created'));
+    notifySuccess(saved.initialTaskId ? t('serversPage.createdWithTask', { taskId: saved.initialTaskId }) : t(editing.value ? 'serversPage.updated' : 'serversPage.created'), saved);
     serverDialog.value = false;
     await load();
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('serversPage.saveFailed');
-    notifyError(err instanceof Error ? err.message : t('serversPage.saveFailed'));
+    notifyError(err instanceof Error ? err.message : t('serversPage.saveFailed'), err);
   } finally {
     saving.value = false;
   }
@@ -388,7 +389,7 @@ async function testConnection(server: ServerDto) {
     await runInline(async () => {
       const tested = await serversApi.test(server.id);
       invalidateServerDetail(tested.id);
-      notifySuccess(t('serversPage.testSucceeded', { name: tested.name }));
+      notifySuccess(t('serversPage.testSucceeded', { name: tested.name }), tested);
       await load();
     });
   } finally {
@@ -405,11 +406,11 @@ async function deleteSelected() {
   const target = confirmTarget.value;
   if (!target) return;
   await runInline(async () => {
-    await serversApi.delete(target.id);
+    const result = await serversApi.delete(target.id);
     const nextDetails = { ...serverDetails.value };
     delete nextDetails[target.id];
     serverDetails.value = nextDetails;
-    notifySuccess(t('serversPage.deleted', { name: target.name }));
+    notifySuccess(t('serversPage.deleted', { name: target.name }), result);
     confirmDialog.value = false;
     selectedId.value = '';
     await load();
@@ -419,7 +420,7 @@ async function deleteSelected() {
 async function deployAgent(server: ServerDto) {
   await runInline(async () => {
     const accepted = await serversApi.deployAgent(server.id);
-    notifySuccess(t('serversPage.agentTaskAccepted', { taskId: accepted.taskId }));
+    notifySuccess(t('serversPage.agentTaskAccepted', { taskId: accepted.taskId }), accepted);
     await loadAgentDeployment(true, accepted.taskId);
   }, 'agent');
 }
@@ -465,10 +466,10 @@ async function loadAgentDeployment(reset = false, preferredTaskId = '') {
       agentTaskLogs.value = [];
       agentTaskLogCursor.value = 0;
     }
-    const nextLogs = await tasksApi.logs(nextTask.id, agentTaskLogCursor.value);
+    const nextLogs = await activityApi.events({ executionId: nextTask.id, kind: 'output', limit: 20 });
     if (!agentTaskRequests.isCurrent(requestId) || selectedId.value !== serverId) return;
-    agentTaskLogs.value = [...agentTaskLogs.value, ...nextLogs.logs];
-    agentTaskLogCursor.value = nextLogs.nextCursor;
+    agentTaskLogs.value = [...nextLogs.items].sort((left, right) => left.seq - right.seq).map(event => ({ cursor: event.seq, time: event.occurredAt, stream: event.stream || 'stdout', line: event.text || '' }));
+    agentTaskLogCursor.value = nextLogs.headSeq;
     if (previousWasActive && !isActiveTask(nextTask)) invalidateServerDetail(serverId);
   } catch (err) {
     if (!agentTaskRequests.isCurrent(requestId) || selectedId.value !== serverId) return;
@@ -525,7 +526,7 @@ function formatAgentTaskLog(line: string) {
 function startAgentTaskPolling() {
   window.clearInterval(agentTaskPollTimer);
   agentTaskPollTimer = window.setInterval(() => {
-    if (document.visibilityState === 'visible' && agentTaskActive.value) void loadAgentDeployment();
+    if (document.visibilityState === 'visible' && Boolean(agentTask.value)) void loadAgentDeployment();
   }, 2000);
 }
 
@@ -562,18 +563,18 @@ async function runConfirmedOperation() {
   if (operation === 'restart') {
     await runInline(async () => {
       const accepted = await serversApi.restart(server.id);
-      notifySuccess(t('serversPage.restartAccepted', { taskId: accepted.taskId }));
+      notifySuccess(t('serversPage.restartAccepted', { taskId: accepted.taskId }), accepted);
     }, 'restart');
   } else if (operation === 'ufw') {
     await runInline(async () => {
       const accepted = await serversApi.installUfw(server.id);
-      notifySuccess(t('serversPage.ufwAccepted', { taskId: accepted.taskId }));
+      notifySuccess(t('serversPage.ufwAccepted', { taskId: accepted.taskId }), accepted);
     }, 'ufw');
   } else {
     await runInline(async () => {
       const trusted = await serversApi.trustHostKey(server.id);
       invalidateServerDetail(trusted.id);
-      notifySuccess(t('serversPage.trustHostKeySucceeded', { name: trusted.name }));
+      notifySuccess(t('serversPage.trustHostKeySucceeded', { name: trusted.name }), trusted);
       await load();
     }, 'trustHostKey');
   }
@@ -587,7 +588,7 @@ async function runInline(action: () => Promise<void>, operation = 'default') {
     await action();
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('common.operationFailed');
-    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
   } finally {
     pendingOperation.value = '';
   }
@@ -811,7 +812,7 @@ onBeforeUnmount(() => {
                   </template>
                 </section>
                 <section class="rounded-2xl border border-border bg-muted p-4">
-                  <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.recentOperations') }}</h3>
+                  <div class="flex flex-wrap items-center justify-between gap-2"><h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.recentOperations') }}</h3><Button size="sm" variant="ghost" @click="router.push({ path: '/activity', query: { resourceType: 'server', resourceId: selectedServer.id } })">{{ t('activity.relatedLogs') }}</Button></div>
                   <div class="mt-3 grid gap-2 text-sm text-muted-foreground">
                     <span>{{ t('serversPage.lastChecked') }}: {{ formatDateTime(selectedServer.lastCheckedAt) || t('common.never') }}</span>
                     <span>{{ t('serversPage.updatedAt') }}: {{ formatDateTime(selectedServer.updatedAt) || t('common.never') }}</span>
@@ -834,7 +835,7 @@ onBeforeUnmount(() => {
                     </div>
                     <p v-if="agentTask.error" class="m-0 break-words text-danger">{{ agentTask.error }}</p>
                     <div class="grid min-w-0 gap-1">
-                      <strong class="text-foreground">{{ t('serversPage.agentTaskRecentLogs') }}</strong>
+                      <div class="flex flex-wrap items-center justify-between gap-2"><strong class="text-foreground">{{ t('serversPage.agentTaskRecentLogs') }}</strong><Button size="sm" variant="ghost" @click="router.push({ path: '/activity', query: { executionId: agentTask.id } })">{{ t('activity.relatedLogs') }}</Button></div>
                       <pre aria-live="polite" class="m-0 max-h-48 min-w-0 overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words rounded-lg bg-muted p-2 text-[11px] text-muted-foreground [overflow-wrap:anywhere]">{{ visibleAgentTaskLogs.map((line) => `[${line.stream}] ${formatAgentTaskLog(line.line)}`).join('\n') || t('serversPage.agentTaskNoLogs') }}</pre>
                     </div>
                   </div>

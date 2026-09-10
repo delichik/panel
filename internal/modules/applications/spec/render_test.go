@@ -1,6 +1,10 @@
 package appspec
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 const sampleSpecYAML = `
 name: web
@@ -114,6 +118,57 @@ func TestHashIsStable(t *testing.T) {
 	}
 	if first != second {
 		t.Fatalf("hashes differ: %q != %q", first, second)
+	}
+}
+
+func TestHashTreatsExplicitTCPAsCompatibleDefault(t *testing.T) {
+	omitted := Spec{Name: "web", Image: "nginx", Ports: []Port{{Label: "http", To: 80, Static: 8080}}}
+	explicit := Spec{Name: "web", Image: "nginx", Ports: []Port{{Label: "http", To: 80, Static: 8080, Protocol: "tcp", OpenFirewall: false}}}
+	omittedHash, err := Hash(omitted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	explicitHash, err := Hash(explicit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if omittedHash != explicitHash {
+		t.Fatalf("default tcp changed hash: omitted=%q explicit=%q", omittedHash, explicitHash)
+	}
+	raw, err := json.Marshal(Normalize(omitted))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value := string(raw); strings.Contains(value, "protocol") || strings.Contains(value, "openFirewall") {
+		t.Fatalf("default port fields must remain omitted from the hash payload: %s", value)
+	}
+
+	udp := explicit
+	udp.Ports = append([]Port(nil), explicit.Ports...)
+	udp.Ports[0].Protocol = "udp"
+	udpHash, err := Hash(udp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if udpHash == omittedHash {
+		t.Fatalf("udp protocol must change hash: %q", udpHash)
+	}
+}
+
+func TestRenderUDPPortWithFirewallAccess(t *testing.T) {
+	runtimeSpec, issues := Render(RenderInput{
+		AppID: "app-1",
+		Spec: Spec{
+			Name:  "dns",
+			Image: "example/dns",
+			Ports: []Port{{Label: "dns", To: 53, Static: 5353, Protocol: " UDP ", OpenFirewall: true}},
+		},
+	})
+	if len(issues) > 0 {
+		t.Fatalf("issues = %#v", issues)
+	}
+	if got := runtimeSpec.Ports; len(got) != 1 || got[0].Protocol != "udp" || !got[0].OpenFirewall {
+		t.Fatalf("ports = %#v", got)
 	}
 }
 

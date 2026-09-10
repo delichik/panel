@@ -15,6 +15,8 @@ import {
   makeFacilityDomain,
   makeFacilityPath,
   makeKeyValueRow,
+  makePortRow,
+  panelFileMountOptions,
   saveInputFromDraft,
   specYamlFromDraft,
   statusTone,
@@ -59,6 +61,17 @@ describe('application editor model', () => {
     expect(applicationFileMountOptions([{ name: 'app.conf' }], 'app.conf')).toHaveLength(1);
   });
 
+  it('offers catalogued Seamark files by stable source and preserves a missing reference', () => {
+    const files = [{ name: 'deploy-key', kind: 'private_key', resourceType: 'key_asset', source: 'key_asset:key-1:private_key' }];
+    expect(panelFileMountOptions(files, '', (file) => `${file.name} / ${file.kind}`)).toEqual([
+      { label: 'deploy-key / private_key', value: 'key_asset:key-1:private_key' },
+    ]);
+    expect(panelFileMountOptions(files, 'certificate:gone:certificate', undefined, (source) => `${source} (missing)`)).toEqual([
+      { label: 'certificate:gone:certificate (missing)', value: 'certificate:gone:certificate', disabled: true },
+      { label: 'deploy-key', value: 'key_asset:key-1:private_key' },
+    ]);
+  });
+
   it('marks stopped reconciliation as needing attention', () => {
     expect(applicationStatus({ ...app, reconcileStopped: true })).toBe('attention');
     expect(statusTone('attention')).toBe('warning');
@@ -75,6 +88,35 @@ describe('application editor model', () => {
     expect(input.deploymentServers).toEqual(['srv-1']);
     expect(input.reverseProxy[0].domain).toBe('api.example.test');
     expect(input.specYaml).toContain('PORT: "8080"');
+  });
+
+  it('defaults legacy ports to TCP without firewall management and omits both defaults when saved', () => {
+    const draft = draftFromApplication(app);
+
+    expect(draft.ports[0]).toMatchObject({ protocol: 'tcp', openFirewall: false });
+    draft.ports[0].staticPort = '8080';
+    const yaml = specYamlFromDraft(draft);
+    expect(yaml).not.toContain('protocol:');
+    expect(yaml).not.toContain('openFirewall:');
+    expect(makePortRow()).toMatchObject({ protocol: 'tcp', openFirewall: false });
+  });
+
+  it('serializes UDP and Seamark-managed firewall access for a static host port', () => {
+    const draft = draftFromApplication(app);
+    Object.assign(draft.ports[0], { staticPort: '8080', protocol: 'udp', openFirewall: true });
+
+    const yaml = specYamlFromDraft(draft);
+    expect(yaml).toContain('static: 8080');
+    expect(yaml).toContain('protocol: udp');
+    expect(yaml).toContain('openFirewall: true');
+  });
+
+  it('requires a static host port before firewall management can be enabled', () => {
+    const draft = draftFromApplication(app);
+    draft.ports[0].openFirewall = true;
+
+    expect(validateApplicationDraft(draft).ports).toBe('applicationsPage.validationFirewallStaticPort');
+    expect(specYamlFromDraft(draft)).not.toContain('openFirewall:');
   });
 
   it('reports no pending changes for a freshly opened editor', () => {

@@ -43,7 +43,7 @@ export async function waitForTask(taskId: string, timeoutMs = 90_000, signal?: A
       const task = await tasksApi.get(taskId, { signal });
       transientFailures = 0;
       if (terminalStatuses.has(task.status)) {
-        if (task.status !== 'completed') throw new Error(task.error || t('api.taskEndedStatus', { status: task.status }));
+        if (task.status !== 'completed') throw new ApiError(task.error || t('api.taskEndedStatus', { status: task.status }), 409, 'execution_failed', { operationId: task.operationId, taskId });
         return task;
       }
     } catch (error) {
@@ -56,5 +56,5 @@ export async function waitForTask(taskId: string, timeoutMs = 90_000, signal?: A
     }
     await sleep(POLL_INTERVAL_MS, signal);
   }
-  throw new Error(t('api.taskTimeout'));
+  throw new ApiError(t('api.taskTimeout'), 408, 'execution_wait_timeout', { taskId });
 }

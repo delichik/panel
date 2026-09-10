@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +27,10 @@ type serviceRuntimeReconciler struct {
 // non-orchestrator callers can continue to use the primitive APIs.
 type AgentRuntimeReconcileClient interface {
 	RuntimeReconcile(ctx context.Context, baseURL string, req agentcontract.RuntimeReconcileRequest) (agentcontract.RuntimeReconcileResponse, error)
+}
+
+type firewallControlChannelChecker interface {
+	VerifyFirewallControlChannels(context.Context, string) error
 }
 
 type agentRuntimeHealthClient interface {
@@ -58,7 +64,7 @@ func (r *serviceRuntimeReconciler) Reconcile(ctx context.Context, req controlpla
 		if err != nil {
 			return failureResponse("agent_health_failed", "agent_unavailable", true, nil, err)
 		}
-		if !containsAgentCapability(health.Capabilities, "runtime-reconcile") {
+		if !containsAgentCapability(health.Capabilities, "runtime-reconcile") || !containsAgentCapability(health.Capabilities, agentcontract.CapabilityExecutionEvents) {
 			return controlplane.ReconcileResponse{ErrorCode: "agent_capability_missing", ErrorClass: "agent_unavailable", ErrorMessage: "agent does not support runtime-reconcile", Retryable: true}, nil
 		}
 	}
@@ -72,12 +78,35 @@ func (r *serviceRuntimeReconciler) Reconcile(ctx context.Context, req controlpla
 		if err != nil {
 			return failureResponse("invalid_spec", "invalid_spec", false, nil, err)
 		}
-		response, err := client.RuntimeReconcile(runCtx, endpoint, agentcontract.RuntimeReconcileRequest{
+		sshPort := normalizedRuntimeSSHPort(serverRecord.Port)
+		agentPort := normalizedRuntimeAgentPort(endpoint)
+		if code, err := validateRuntimeFirewallPorts(spec, sshPort, agentPort); err != nil {
+			return controlplane.ReconcileResponse{ErrorCode: code, ErrorClass: "configuration", ErrorMessage: err.Error(), Retryable: false}, nil
+		}
+		checker, checksChannels := r.service.servers.(firewallControlChannelChecker)
+		if checksChannels {
+			if err := checker.VerifyFirewallControlChannels(runCtx, req.ServerID); err != nil {
+				return firewallChannelFailure("firewall_channel_preflight_failed", nil, err), nil
+			}
+		}
+		response, callErr := r.callTracked(runCtx, endpoint, req, client, agentcontract.RuntimeReconcileRequest{
+			OperationID: req.OperationID, RunID: req.RunID,
 			JobID: req.JobID, ExecutionID: req.ExecutionID, ApplicationID: req.ApplicationID, InstanceID: req.InstanceID,
 			ServerID: req.ServerID, Action: req.Action, DesiredGeneration: req.DesiredGeneration, DesiredSpecHash: req.DesiredSpecHash,
 			DesiredRevisionID: req.DesiredRevisionID, Spec: spec, RemoveData: req.RemoveData, PreviousContainerName: req.PreviousContainerName,
+			SSHPort: sshPort, AgentPort: agentPort,
 		})
-		return reconcileResponseFromAgent(response), err
+		var postflightErr error
+		if checksChannels {
+			postflightErr = checker.VerifyFirewallControlChannels(context.WithoutCancel(ctx), req.ServerID)
+		}
+		if callErr != nil || response.ErrorCode != "" {
+			return response, callErr
+		}
+		if postflightErr != nil {
+			return firewallChannelFailure("firewall_channel_postflight_failed", response.Steps, postflightErr), nil
+		}
+		return response, nil
 	}
 
 	switch req.Action {
@@ -139,6 +168,51 @@ func (r *serviceRuntimeReconciler) apply(ctx context.Context, endpoint string, r
 		ObservedAt:          status.ObservedAt,
 		Steps:               steps,
 	}, nil
+}
+
+func validateRuntimeFirewallPorts(spec appruntime.Spec, sshPort, agentPort int) (string, error) {
+	for _, port := range spec.Ports {
+		if port.HostPort <= 0 {
+			continue
+		}
+		if port.HostPort == sshPort {
+			return "application_ssh_port_reserved", fmt.Errorf("host port %d is reserved for server SSH access", sshPort)
+		}
+		if port.HostPort == agentPort {
+			return "application_agent_port_reserved", fmt.Errorf("host port %d is reserved for Panel Agent access", agentPort)
+		}
+	}
+	return "", nil
+}
+
+func firewallChannelFailure(code string, steps []controlplane.Step, err error) controlplane.ReconcileResponse {
+	message := "firewall control channel verification failed"
+	if err != nil && strings.TrimSpace(err.Error()) != "" {
+		message = err.Error()
+	}
+	return controlplane.ReconcileResponse{
+		ErrorCode: code, ErrorClass: "agent_unavailable", ErrorMessage: message, Retryable: true,
+		Steps: append([]controlplane.Step(nil), steps...),
+	}
+}
+
+func normalizedRuntimeAgentPort(endpoint string) int {
+	parsed, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil || parsed.Port() == "" {
+		return 9786
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil || port <= 0 || port > 65535 {
+		return 9786
+	}
+	return port
+}
+
+func normalizedRuntimeSSHPort(port int) int {
+	if port <= 0 || port > 65535 {
+		return 22
+	}
+	return port
 }
 
 func runtimeSpecForRequest(req controlplane.ReconcileRequestRPC) (appruntime.Spec, error) {

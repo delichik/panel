@@ -48,6 +48,7 @@ func serveTaskRoute(handler *Handler, method, target string) *httptest.ResponseR
 
 func TestHandlerRunNowDispatchesQueuedTask(t *testing.T) {
 	svc := newTestService(t)
+	enableTestExecutor(svc, "server_connectivity_test")
 	task, err := svc.Create(context.Background(), CreateInput{Type: "server_connectivity_test", ServerID: "srv_1"})
 	if err != nil {
 		t.Fatal(err)
@@ -55,7 +56,7 @@ func TestHandlerRunNowDispatchesQueuedTask(t *testing.T) {
 	runner := &recordingRunner{}
 	handler := NewHandler(svc, runner)
 
-	rec := serveTaskRoute(handler, http.MethodPost, "/api/v1/tasks/"+task.ID+"/run-now")
+	rec := serveTaskRoute(handler, http.MethodPost, "/api/v1/executions/"+task.ID+"/run-now")
 
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("expected %d, got %d", http.StatusAccepted, rec.Code)
@@ -75,7 +76,7 @@ func TestHandlerRunNowRejectsUnsupportedTaskType(t *testing.T) {
 	runner := &capabilityRunner{}
 	handler := NewHandler(svc, runner)
 
-	rec := serveTaskRoute(handler, http.MethodPost, "/api/v1/tasks/"+task.ID+"/run-now")
+	rec := serveTaskRoute(handler, http.MethodPost, "/api/v1/executions/"+task.ID+"/run-now")
 
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected unsupported task to be rejected, got %d", rec.Code)
@@ -94,7 +95,7 @@ func TestHandlerRunNowRejectsDefinitionWithoutCapability(t *testing.T) {
 	runner := &capabilityRunner{}
 	handler := NewHandler(svc, runner)
 
-	rec := serveTaskRoute(handler, http.MethodPost, "/api/v1/tasks/"+task.ID+"/run-now")
+	rec := serveTaskRoute(handler, http.MethodPost, "/api/v1/executions/"+task.ID+"/run-now")
 
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected unsupported task to be rejected, got %d", rec.Code)
@@ -104,8 +105,9 @@ func TestHandlerRunNowRejectsDefinitionWithoutCapability(t *testing.T) {
 	}
 }
 
-func TestHandlerRetryDispatchesRunnableFailedTask(t *testing.T) {
+func TestHandlerRetrySchedulesRunnableFailedTask(t *testing.T) {
 	svc := newTestService(t)
+	enableTestExecutor(svc, "package_refresh")
 	task, err := svc.Create(context.Background(), CreateInput{Type: "package_refresh", ServerID: "srv_1", ResourceType: "server", ResourceID: "srv_1", Status: StatusFailed})
 	if err != nil {
 		t.Fatal(err)
@@ -113,15 +115,25 @@ func TestHandlerRetryDispatchesRunnableFailedTask(t *testing.T) {
 	runner := &capabilityRunner{}
 	handler := NewHandler(svc, runner)
 
-	rec := serveTaskRoute(handler, http.MethodPost, "/api/v1/tasks/"+task.ID+"/retry")
+	rec := serveTaskRoute(handler, http.MethodPost, "/api/v1/executions/"+task.ID+"/retry")
 
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("expected retry to be accepted, got %d", rec.Code)
 	}
-	retried := waitForRunnerTask(t, &runner.recordingRunner, "")
-	if retried.ID == "" || retried.ID == task.ID || retried.TriggerTaskID != task.ID {
-		t.Fatalf("expected runner to receive retry task, got %#v", retried)
+	var response struct {
+		Data Task `json:"data"`
 	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	retried := response.Data
+	if retried.ID == "" || retried.ID == task.ID || retried.TriggerTaskID != task.ID || retried.NextRunAt == nil {
+		t.Fatalf("retry must preserve the failed attempt and schedule its new execution: %#v", retried)
+	}
+	if runner.task.ID != "" {
+		t.Fatal("retry bypassed the persisted backoff")
+	}
+
 }
 
 func TestHandlerDecoratesAllowCancelFromDefinition(t *testing.T) {
@@ -136,7 +148,7 @@ func TestHandlerDecoratesAllowCancelFromDefinition(t *testing.T) {
 	}
 	handler := NewHandler(svc)
 
-	rec := serveTaskRoute(handler, http.MethodGet, "/api/v1/tasks/"+blocked.ID)
+	rec := serveTaskRoute(handler, http.MethodGet, "/api/v1/executions/"+blocked.ID)
 	var response struct {
 		Data Task `json:"data"`
 	}
@@ -148,7 +160,7 @@ func TestHandlerDecoratesAllowCancelFromDefinition(t *testing.T) {
 		t.Fatalf("expected non-cancellable task to expose allowCancel=false, got %#v", got)
 	}
 
-	rec = serveTaskRoute(handler, http.MethodGet, "/api/v1/tasks/"+allowed.ID)
+	rec = serveTaskRoute(handler, http.MethodGet, "/api/v1/executions/"+allowed.ID)
 	response = struct {
 		Data Task `json:"data"`
 	}{}
@@ -169,7 +181,7 @@ func TestHandlerRetryRejectsNonFailedTask(t *testing.T) {
 	}
 	handler := NewHandler(svc, &capabilityRunner{})
 
-	rec := serveTaskRoute(handler, http.MethodPost, "/api/v1/tasks/"+task.ID+"/retry")
+	rec := serveTaskRoute(handler, http.MethodPost, "/api/v1/executions/"+task.ID+"/retry")
 
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected queued retry to be rejected, got %d", rec.Code)
@@ -199,7 +211,7 @@ func TestHandlerListParsesMultiValueFilters(t *testing.T) {
 	}
 	handler := NewHandler(svc)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks?status=running&status=failed&type=sample_task&type=package_refresh&includeInternal=true", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/executions?status=running&status=failed&type=sample_task&type=package_refresh&includeInternal=true", nil)
 	rec := httptest.NewRecorder()
 
 	handler.List(rec, req)

@@ -2,13 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { activeNavKey, navGroups } from './navModel';
 
 describe('shell navigation model', () => {
-  it('exposes the task center and activates it for task routes', () => {
-    const taskItem = navGroups.flatMap((group) => group.items).find((item) => item.key === 'tasks');
-
-    expect(taskItem).toMatchObject({
-      titleKey: 'routes.tasks.title',
-      to: '/tasks',
-    });
-    expect(activeNavKey('/tasks')).toBe('tasks');
+  it('provides one unified log entry and retires the three history entries', () => {
+    const items = navGroups.flatMap(group => group.items);
+    expect(items.find(item => item.key === 'activity')).toMatchObject({ titleKey: 'routes.activity.title', to: '/activity' });
+    expect(items.some(item => ['tasks', 'application-operations', 'system-events'].includes(item.key))).toBe(false);
+    expect(activeNavKey('/activity')).toBe('activity');
   });
 });

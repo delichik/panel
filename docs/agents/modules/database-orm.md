@@ -124,3 +124,7 @@
 - 证书表约束迁移：`migrations.go` 的 `migrateCertificateScopeConstraint` 使用 `db.Conn` 在单一连接上完成 `PRAGMA foreign_keys = OFF`、事务与恢复 `ON`，避免共享连接池上 FK 约束失效或残留关闭。
 - `store.Open` 目录计算：对 `file:` 形式的 DSN 先去掉 `file:` 前缀与查询串（如 `?cache=shared`）再取目录 `MkdirAll`；内存库 DSN（`:memory:`）跳过目录创建。
 - tasks.db → log.db 边界：`migrateLegacyLogDatabasePath` 发现 `log.db-wal` / `log.db-shm` 已存在时不再静默跳过，而是记录 warn，避免覆盖活跃 WAL。
+
+## 统一日志事实表
+
+activity_events/activity_evidence_chunks 由 internal/platform/activitylog 专门管理，不注册到破坏性 AutoMigrate，不参与空时间字段清洗或表重建。UPDATE/DELETE/覆盖INSERT受触发器保护。tasks/task_steps现在位于AppDB，用于执行控制；LogDB不再拥有task_logs。

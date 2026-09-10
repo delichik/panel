@@ -15,9 +15,16 @@ type RunNowRunner interface {
 	RunNow(ctx context.Context, task Task) error
 }
 
+type ExternalExecutionResolver func(context.Context, string, string, string) (any, error)
+
 type Handler struct {
-	service *Service
-	runner  RunNowRunner
+	externalResolver ExternalExecutionResolver
+	service          *Service
+	runner           RunNowRunner
+}
+
+func (h *Handler) SetExternalResolver(resolver ExternalExecutionResolver) {
+	h.externalResolver = resolver
 }
 
 func NewHandler(service *Service, runners ...RunNowRunner) *Handler {
@@ -165,6 +172,12 @@ func (h *Handler) decorateList(result *ListResult) {
 
 func (h *Handler) decorateTask(task *Task) {
 	if task == nil || h.service == nil {
+		return
+	}
+	if task.Stage == "uncertain" {
+		task.AllowCancel = false
+		task.AllowRunNow = false
+		task.AllowRetry = false
 		return
 	}
 	def, ok := h.service.Registry().Definition(task.Type)

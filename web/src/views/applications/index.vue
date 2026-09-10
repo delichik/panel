@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ActivityLink from '@/components/activity/ActivityLink.vue';
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import { AlertTriangle, ClipboardList, Globe2, HardDrive, History, Plus, RefreshCcw, Rocket, Save, Square, Trash2, UploadCloud, Wrench } from '@lucide/vue';
@@ -33,7 +34,7 @@ import ConsolePage from '@/components/templates/ConsolePage.vue';
 import EditorPage from '@/components/templates/EditorPage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
-import type { ApplicationDto, ApplicationEditPreviewResult, ApplicationEditSession, ApplicationFile, ApplicationRuntime, ApplicationSummaryDto, Diagnostic, ReverseProxyRule, TemplateVariableDefinition } from '@/types/applications';
+import type { ApplicationDto, ApplicationEditPreviewResult, ApplicationEditSession, ApplicationFile, ApplicationRuntime, ApplicationSummaryDto, Diagnostic, PanelFileDefinition, ReverseProxyRule, TemplateVariableDefinition } from '@/types/applications';
 import type { FacilityEditPreviewResult, FacilityEditSession, FacilityRouteDomain, FacilityRoutePath, ReverseProxyConfig, StaticAsset, StorageShareConfig } from '@/types/facilityApps';
 import type { ServerDto } from '@/types/servers';
 import { formatDateTime } from '@/utils/datetime';
@@ -58,6 +59,7 @@ import {
   makePortRow,
   makeProxyPath,
   makeProxyRule,
+  panelFileMountOptions as makePanelFileMountOptions,
   routeMode,
   routeSummary,
   runtimeSummary,
@@ -100,6 +102,7 @@ let dnsPollTimer: ReturnType<typeof setTimeout> | null = null;
 
 const applications = ref<ApplicationSummaryDto[]>([]);
 const templateVariables = ref<TemplateVariableDefinition[]>([]);
+const panelFiles = ref<PanelFileDefinition[]>([]);
 const applicationDetails = ref<Record<string, ApplicationDto>>({});
 const applicationFiles = ref<Record<string, ApplicationFile[]>>({});
 const runtimes = ref<Record<string, ApplicationRuntime>>({});
@@ -285,6 +288,24 @@ const applicationFileMountOptions = computed(() => makeApplicationFileMountOptio
 ));
 const applicationFileMountSourceValid = computed(() => mountDraft.type !== 'file'
   || applicationFileMountOptions.value.some((option) => option.value === mountDraft.source.trim() && !option.disabled));
+function panelFileLabel(file: Pick<PanelFileDefinition, 'kind' | 'name' | 'resourceType'>) {
+  const resourceKey = file.resourceType === 'certificate' ? 'certificate' : file.resourceType === 'key_asset' ? 'key_asset' : '';
+  const kindKey = ['certificate', 'private_key', 'public_key', 'ssh_public_key'].includes(file.kind) ? file.kind : '';
+  return t('applicationsPage.panelFileMountOption', {
+    resource: resourceKey ? t(`applicationsPage.panelFileResource.${resourceKey}`) : file.resourceType,
+    name: file.name,
+    kind: kindKey ? t(`applicationsPage.panelFileKind.${kindKey}`) : file.kind,
+  });
+}
+const panelFileMountOptions = computed(() => makePanelFileMountOptions(
+  panelFiles.value,
+  mountDraft.type === 'panel_file' ? mountDraft.source : '',
+  panelFileLabel,
+  (source) => t('applicationsPage.panelFileMountMissing', { source }),
+));
+const panelFileMountSourceValid = computed(() => mountDraft.type !== 'panel_file'
+  || panelFileMountOptions.value.some((option) => option.value === mountDraft.source.trim() && !option.disabled));
+const panelFileLabelBySource = computed(() => new Map(panelFiles.value.map((file) => [file.source, panelFileLabel(file)])));
 const facilityAssetItems = computed<AssetFileItem[]>(() => (facilitySession.value?.assets ?? []).map((asset) => ({
   key: asset.name,
   name: asset.name,
@@ -295,6 +316,7 @@ const facilityAssetItems = computed<AssetFileItem[]>(() => (facilitySession.valu
   editable: asset.contentMode === 'text',
 })));
 const mountTypeOptions = computed(() => ['persistent', 'volume', 'host', 'file', 'panel_file', 'storage_share'].map((value) => ({ label: t(`applicationsPage.mountType.${value}`), value })));
+const portProtocolOptions = computed(() => (['tcp', 'udp'] as const).map((value) => ({ label: value.toUpperCase(), value })));
 const routeTypeOptions = computed(() => ['static', 'redirect', 'proxy_pass'].map((value) => ({ label: t(`applicationsPage.routeType.${value}`), value })));
 const sourceTypeOptions = computed(() => ['uploaded_file', 'uploaded_bundle'].map((value) => ({ label: t(`applicationsPage.sourceType.${value}`), value })));
 const saving = computed(() => pending.value === 'preview' || pending.value === 'commit');
@@ -694,7 +716,7 @@ async function loadApplications(options: { loadSelectedRuntime?: boolean } = {})
   } catch (err) {
     if (isAbortError(err)) return;
     error.value = err instanceof Error ? err.message : t('applicationsPage.loadFailed');
-    notifyError(err instanceof Error ? err.message : t('applicationsPage.loadFailed'));
+    notifyError(err instanceof Error ? err.message : t('applicationsPage.loadFailed'), err);
   } finally {
     if (requestId === pageLoadRequestId) loading.value = false;
   }
@@ -726,7 +748,7 @@ async function loadFacilityData() {
   } catch (err) {
     if (isAbortError(err)) return;
     error.value = err instanceof Error ? err.message : t('applicationsPage.loadFailed');
-    notifyError(err instanceof Error ? err.message : t('applicationsPage.loadFailed'));
+    notifyError(err instanceof Error ? err.message : t('applicationsPage.loadFailed'), err);
   } finally {
     if (requestId === pageLoadRequestId) loading.value = false;
   }
@@ -757,7 +779,7 @@ async function loadApplicationDetail(applicationId: string) {
     applicationFiles.value = { ...applicationFiles.value, [applicationId]: files };
   } catch (err) {
     if (isAbortError(err)) return;
-    notifyError(err instanceof Error ? err.message : t('applicationsPage.loadFailed'));
+    notifyError(err instanceof Error ? err.message : t('applicationsPage.loadFailed'), err);
   } finally {
     if (requestId === applicationDetailRequestId) detailLoading.value = false;
   }
@@ -787,7 +809,7 @@ async function loadRuntime(applicationId: string) {
     runtimes.value = { ...runtimes.value, [applicationId]: runtime };
   } catch (err) {
     if (isAbortError(err)) return;
-    notifyError(err instanceof Error ? err.message : t('applicationsPage.runtimeUnavailable'));
+    notifyError(err instanceof Error ? err.message : t('applicationsPage.runtimeUnavailable'), err);
   } finally {
     if (requestId === runtimeRequestId) {
       detailLoading.value = false;
@@ -802,18 +824,18 @@ async function runOperation(name: string, action: () => Promise<unknown>, succes
   try {
     const result = await action();
     const params = taskParams(result);
-    notifySuccess(params ? t(successKey, params) : t(successKeyWithoutId || successKey));
+    notifySuccess(params ? t(successKey, params) : t(successKeyWithoutId || successKey), result);
     await load();
   } catch (err) {
-    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
   } finally {
     pending.value = '';
   }
 }
 
 function taskParams(result: unknown) {
-  const record = result as { taskId?: string; deploymentId?: string; evalId?: string };
-  const taskId = record?.taskId || record?.deploymentId || record?.evalId;
+  const record = result as { taskId?: string; operationId?: string; deploymentId?: string; evalId?: string };
+  const taskId = record?.operationId || record?.taskId || record?.deploymentId || record?.evalId;
   return taskId ? { taskId } : null;
 }
 
@@ -825,7 +847,7 @@ async function showLogs(app: ApplicationDto) {
     logsText.value = (await applicationsApi.logs(app.id, { tail: 240 })).logs;
   } catch (err) {
     const message = err instanceof Error ? err.message : t('applicationsPage.logsFailed');
-    notifyError(message);
+    notifyError(message, err);
     logsText.value = t('applicationsPage.logsFailed');
   } finally {
     logsLoading.value = false;
@@ -852,7 +874,7 @@ async function confirmAction() {
 async function downloadPersistentData(app: ApplicationDto) {
   await runOperation('persistent-download', async () => {
     saveBlobDownload(await applicationsApi.downloadPersistentData(app.id));
-    return { taskId: 'download' };
+    return undefined;
   }, 'applicationsPage.downloadStarted');
 }
 
@@ -892,9 +914,11 @@ async function startApplicationEditorCore() {
   try {
     const catalog = await applicationsApi.templateCatalog({ signal: controller.signal });
     templateVariables.value = catalog.variables ?? [];
+    panelFiles.value = catalog.panelFiles ?? [];
   } catch (err) {
     if (isAbortError(err)) return;
     templateVariables.value = [];
+    panelFiles.value = [];
   }
   if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || String(route.params.applicationId ?? '') !== appId) return;
   let app: ApplicationDto | null = null;
@@ -917,7 +941,7 @@ async function startApplicationEditorCore() {
     if (isAbortError(err)) return;
     const message = err instanceof Error ? err.message : t('applicationsPage.editorStartFailed');
     actionError.value = message;
-    notifyError(message);
+    notifyError(message, err);
   }
 }
 
@@ -958,7 +982,7 @@ async function commitApplication() {
   }
   await runEditorAction(async () => {
     const result = await applicationsApi.commitEditSession(editSession.value!, preview.value!);
-    notifySuccess(result.applyRequested ? t('applicationsPage.committedAndApplied') : t('applicationsPage.committed'));
+    notifySuccess(result.applyRequested ? t('applicationsPage.committedAndApplied') : t('applicationsPage.committed'), result);
     isDirty.value = false;
     await router.push({ path: '/applications/apps', query: { application: result.application.id } });
     await load();
@@ -997,7 +1021,7 @@ async function startFacilityEditorCore() {
     if (isAbortError(err)) return;
     const message = err instanceof Error ? err.message : t('applicationsPage.editorStartFailed');
     actionError.value = message;
-    notifyError(message);
+    notifyError(message, err);
   }
 }
 
@@ -1092,7 +1116,7 @@ async function reloadFacilityEditor() {
     await loadFacilityData();
     await startFacilityEditor();
   } catch (err) {
-    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
   } finally {
     pending.value = '';
   }
@@ -1136,7 +1160,7 @@ async function commitFacilityConfig() {
   await runEditorAction(async () => {
     const result = await reverseProxyFacilityApi.commitEdit(facilitySession.value!, facilityPreview.value!);
     facility.value = result.config;
-    notifySuccess(result.applyRequested ? t('applicationsPage.gatewayCommittedAndApplied') : t('applicationsPage.gatewayCommitted'));
+    notifySuccess(result.applyRequested ? t('applicationsPage.gatewayCommittedAndApplied') : t('applicationsPage.gatewayCommitted'), result);
     isDirty.value = false;
     if (mode.value === 'facilityConfig') {
       await router.replace(`/applications/facility-apps/${facilityKind.value}`);
@@ -1155,7 +1179,7 @@ async function runEditorAction(action: () => Promise<void>, name = 'editor') {
   try {
     await action();
   } catch (err) {
-    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
   } finally {
     pending.value = '';
     saveStage.value = 'idle';
@@ -1207,6 +1231,7 @@ function openPortDialog(index = -1) {
   dialogKind.value = 'port';
   dialogIndex.value = index;
   Object.assign(portDraft, index >= 0 ? appDraft.ports[index] : makePortRow());
+  if (!portDraft.staticPort.trim()) portDraft.openFirewall = false;
   dialogOpen.value = true;
 }
 
@@ -1216,6 +1241,10 @@ function savePortDialog() {
   else appDraft.ports.push(next);
   dialogOpen.value = false;
   markAppStructuredDirty();
+}
+
+function onPortStaticPortInput() {
+  if (!portDraft.staticPort.trim()) portDraft.openFirewall = false;
 }
 
 async function loadStorageShareOptions() {
@@ -1239,6 +1268,9 @@ function mountSourceLabel(mount: MountRow) {
   if (mount.type === 'storage_share') {
     return storageShareLabelBySource.value[mount.source] || mount.source || t('applicationsPage.panelManagedSource');
   }
+  if (mount.type === 'panel_file') {
+    return panelFileLabelBySource.value.get(mount.source) || mount.source || t('applicationsPage.panelManagedSource');
+  }
   return mount.source || t('applicationsPage.panelManagedSource');
 }
 
@@ -1257,6 +1289,10 @@ function openMountDialog(index = -1) {
 function saveMountDialog() {
   if (mountDraft.type === 'file' && !applicationFileMountSourceValid.value) {
     notifyError(t('applicationsPage.applicationFileMountSourceRequired'));
+    return;
+  }
+  if (mountDraft.type === 'panel_file' && !panelFileMountSourceValid.value) {
+    notifyError(t('applicationsPage.panelFileMountSourceRequired'));
     return;
   }
   if (mountDraft.type === 'storage_share' && !mountDraft.source) {
@@ -1456,7 +1492,7 @@ async function runFileAction(key: string, action: () => Promise<void>) {
   try {
     await action();
   } catch (err) {
-    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
   } finally {
     fileActionPending.value = '';
   }
@@ -1474,7 +1510,7 @@ async function runAssetAction(key: string, action: () => Promise<void>) {
   try {
     await action();
   } catch (err) {
-    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
   } finally {
     assetActionPending.value = '';
   }
@@ -1736,7 +1772,7 @@ onBeforeUnmount(() => {
                   <h3>{{ t('applicationsPage.operations') }}</h3>
                   <div class="mt-3 grid gap-2">
                     <Button :disabled="!selectedApplication.imageUpdateAvailable" :loading="pending === 'image-update'" @click="runOperation('image-update', () => applicationsApi.updateImage(selectedApplication.id), 'applicationsPage.imageUpdateAccepted', 'applicationsPage.imageUpdateAcceptedWithoutId')"><UploadCloud />{{ t('applicationsPage.updateImage') }}</Button>
-                    <Button @click="router.push({ path: '/application-operations', query: { applicationId: selectedApplication.id } })"><ClipboardList />{{ t('applicationsPage.operationRecords') }}</Button>
+                    <Button @click="router.push({ path: '/activity', query: { resourceType: 'application', resourceId: selectedApplication.id } })"><ClipboardList />{{ t('activity.relatedLogs') }}</Button>
                     <Button :loading="logsLoading" @click="showLogs(selectedApplication)"><History />{{ t('applicationsPage.logs') }}</Button>
                     <Button variant="danger" @click="ask('delete', selectedApplication.id)"><Trash2 />{{ t('common.delete') }}</Button>
                   </div>
@@ -1816,7 +1852,7 @@ onBeforeUnmount(() => {
     <template #actions>
       <template v-if="!facilityEditingView">
         <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
-        <Button v-if="currentFacilitySummary && isReverseProxyFacility" size="sm" @click="runOperation(`facility-reconcile-${facilityKind}`, () => reverseProxyFacilityApi.reconcile(), 'applicationsPage.gatewayReconcileAccepted', 'applicationsPage.gatewayReconcileAcceptedWithoutId')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
+        <ActivityLink v-if="currentFacilitySummary" resource-type="facility_app" :resource-id="facilityKind" /><Button v-if="currentFacilitySummary && isReverseProxyFacility" size="sm" @click="runOperation(`facility-reconcile-${facilityKind}`, () => reverseProxyFacilityApi.reconcile(), 'applicationsPage.gatewayReconcileAccepted', 'applicationsPage.gatewayReconcileAcceptedWithoutId')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
         <Button v-if="currentFacilitySummary && isReverseProxyFacility" size="sm" variant="primary" @click="startInPlaceFacilityEdit"><Wrench />{{ t('common.edit') }}</Button>
       </template>
     </template>
@@ -2045,7 +2081,7 @@ onBeforeUnmount(() => {
             <section class="workspace-panel">
               <div class="section-heading"><div class="section-copy"><h3>{{ t('applicationsPage.panelNetworking') }}</h3><p>{{ t('applicationsPage.networkingHint') }}</p></div><div class="flex flex-wrap gap-2"><Button size="sm" @click="openPortDialog()"><Plus />{{ t('applicationsPage.addPort') }}</Button><Button size="sm" @click="openProxyDialog()"><Globe2 />{{ t('applicationsPage.addProxyRule') }}</Button></div></div>
               <div class="grid gap-3">
-                <div v-for="(port, index) in appDraft.ports" :key="port.id" class="item-row"><div><strong>{{ port.label || t('applicationsPage.unnamedPort') }}</strong><span>{{ t('applicationsPage.containerPortSummary', { port: port.to }) }} · {{ port.staticPort ? t('applicationsPage.staticPort', { port: port.staticPort }) : t('applicationsPage.dynamicPort') }}</span></div><div class="row-actions"><Button size="sm" @click="openPortDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(appDraft.ports, index)">{{ t('common.delete') }}</Button></div></div>
+                <div v-for="(port, index) in appDraft.ports" :key="port.id" class="item-row"><div><strong>{{ port.label || t('applicationsPage.unnamedPort') }}</strong><span>{{ t('applicationsPage.containerPortSummary', { port: port.to }) }} · {{ port.staticPort ? t('applicationsPage.staticPort', { port: port.staticPort }) : t('applicationsPage.dynamicPort') }} · {{ t('applicationsPage.protocolSummary', { protocol: port.protocol.toUpperCase() }) }} · {{ port.openFirewall ? t('applicationsPage.firewallManaged') : t('applicationsPage.firewallUnchanged') }}</span></div><div class="row-actions"><Button size="sm" @click="openPortDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(appDraft.ports, index)">{{ t('common.delete') }}</Button></div></div>
                 <div v-for="(rule, index) in appDraft.reverseProxy" :key="index" class="item-row"><div><strong>{{ rule.domain || t('applicationsPage.unnamedDomain') }}</strong><span>{{ t('applicationsPage.routeTargetSummary', { port: rule.targetPort, paths: rule.paths.map((path) => path.path).join(', ') }) }}</span></div><div class="row-actions"><Button size="sm" @click="openProxyDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(appDraft.reverseProxy, index)">{{ t('common.delete') }}</Button></div></div>
                 <EmptyState v-if="!appDraft.ports.length && !appDraft.reverseProxy.length" :title="t('applicationsPage.noRoutes')" :description="t('applicationsPage.networkingEmptyHint')" />
               </div>
@@ -2146,13 +2182,18 @@ onBeforeUnmount(() => {
     <div v-else-if="dialogKind === 'port'" class="grid gap-3">
       <label class="field">{{ t('common.name') }}<Input v-model="portDraft.label" /></label>
       <label class="field">{{ t('applicationsPage.containerPort') }}<Input v-model="portDraft.to" /></label>
-      <label class="field">{{ t('applicationsPage.hostPort') }}<Input v-model="portDraft.staticPort" /></label>
+      <label class="field">{{ t('applicationsPage.hostPort') }}<Input v-model="portDraft.staticPort" @input="onPortStaticPortInput" /></label>
+      <label class="field">{{ t('applicationsPage.protocol') }}<Select v-model="portDraft.protocol" :options="portProtocolOptions" /></label>
+      <label class="switch-field">{{ t('applicationsPage.openFirewall') }}<Switch v-model="portDraft.openFirewall" :label="t('applicationsPage.openFirewall')" :disabled="!portDraft.staticPort.trim()" /></label>
+      <p class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.openFirewallHint') }}</p>
     </div>
     <div v-else-if="dialogKind === 'mount'" class="grid gap-3">
       <label class="field">{{ t('common.type') }}<Select v-model="mountDraft.type" :options="mountTypeOptions" /></label>
-      <label class="field">{{ t('applicationsPage.source') }}<Select v-if="mountDraft.type === 'file'" v-model="mountDraft.source" :options="applicationFileMountOptions" :placeholder="t('applicationsPage.applicationFileMountSourcePlaceholder')" /><Select v-else-if="mountDraft.type === 'storage_share'" v-model="mountDraft.source" :options="storageShareOptions" :placeholder="t('applicationsPage.storageShareMountSourcePlaceholder')" :disabled="!storageShareAvailable" /><Input v-else v-model="mountDraft.source" /></label>
+      <label class="field">{{ t('applicationsPage.source') }}<Select v-if="mountDraft.type === 'file'" v-model="mountDraft.source" :options="applicationFileMountOptions" :placeholder="t('applicationsPage.applicationFileMountSourcePlaceholder')" /><Select v-else-if="mountDraft.type === 'panel_file'" v-model="mountDraft.source" :options="panelFileMountOptions" :placeholder="t('applicationsPage.panelFileMountSourcePlaceholder')" /><Select v-else-if="mountDraft.type === 'storage_share'" v-model="mountDraft.source" :options="storageShareOptions" :placeholder="t('applicationsPage.storageShareMountSourcePlaceholder')" :disabled="!storageShareAvailable" /><Input v-else v-model="mountDraft.source" /></label>
       <p v-if="mountDraft.type === 'file' && !editSession?.files.length" class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.applicationFileMountEmpty') }}</p>
       <p v-else-if="mountDraft.type === 'file' && mountDraft.source && !applicationFileMountSourceValid" class="m-0 text-xs text-danger">{{ t('applicationsPage.applicationFileMountMissing', { name: mountDraft.source }) }}</p>
+      <p v-if="mountDraft.type === 'panel_file' && !panelFiles.length" class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.panelFileMountEmpty') }}</p>
+      <p v-else-if="mountDraft.type === 'panel_file' && mountDraft.source && !panelFileMountSourceValid" class="m-0 text-xs text-danger">{{ t('applicationsPage.panelFileMountMissing', { source: mountDraft.source }) }}</p>
       <p v-if="mountDraft.type === 'storage_share'" class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.storageShareMountHint') }}</p>
       <p v-if="mountDraft.type === 'storage_share' && !storageShareAvailable" class="m-0 text-xs text-warning">{{ t('applicationsPage.storageShareMountUnconfigured') }} <Button size="sm" variant="ghost" @click="router.push('/applications/facility-apps/storage-share/config')">{{ t('applicationsPage.storageShareGoConfigure') }}</Button></p>
       <label class="field">{{ t('applicationsPage.target') }}<Input v-model="mountDraft.target" /></label>

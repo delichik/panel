@@ -25,11 +25,11 @@ var appTables = []string{
 	"facility_edit_session_assets", "facility_edit_session_operations", "storage_share_configs",
 	"storage_share_partitions", "dns_domains",
 	"certificates", "self_signed_certificates", "key_assets", "overview_card_configurations",
-	"runtime_settings", "auth_state", "auth_accounts",
+	"runtime_settings", "auth_state", "auth_accounts", "tasks", "task_steps",
 }
 
 var logTables = []string{
-	"tasks", "task_steps", "task_logs", "application_revisions",
+	"application_revisions",
 	"runtime_events", "runtime_event_details", "key_asset_exports",
 }
 
@@ -92,7 +92,7 @@ func assertEmpty(t *testing.T, dbName, field string, got []string) {
 
 func listTables(t *testing.T, db *sql.DB) []string {
 	t.Helper()
-	rows, err := db.Query(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('orm_meta','orm_migrations') ORDER BY name`)
+	rows, err := db.Query(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('orm_meta','orm_migrations','activity_events','activity_evidence_chunks') ORDER BY name`)
 	if err != nil {
 		t.Fatalf("list tables: %v", err)
 	}

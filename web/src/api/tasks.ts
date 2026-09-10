@@ -11,22 +11,22 @@ export const tasksApi = {
     Object.entries(params).forEach(([key, value]) => {
       if (value !== undefined && value !== '' && value !== false) query.set(key, String(value));
     });
-    return apiClient.get<TaskListResult>(`/tasks${query.size ? `?${query}` : ''}`);
+    return apiClient.get<TaskListResult>(`/executions${query.size ? `?${query}` : ''}`);
   },
   get(taskId: string, options?: ApiRequestOptions) {
-    return apiClient.get<TaskDto>(`/tasks/${id(taskId)}`, options);
+    return apiClient.get<TaskDto>(`/executions/${id(taskId)}`, options);
   },
   steps(taskId: string) {
-    return apiClient.get<TaskStep[]>(`/tasks/${id(taskId)}/steps`);
+    return apiClient.get<TaskStep[]>(`/executions/${id(taskId)}/steps`);
   },
   logs(taskId: string, after = 0) {
     const query = after ? `?after=${after}` : '';
-    return apiClient.get<TaskLogsResult>(`/tasks/${id(taskId)}/logs${query}`);
+    return apiClient.get<TaskLogsResult>(`/executions/${id(taskId)}/logs${query}`);
   },
   retry(taskId: string) {
-    return apiClient.post<TaskDto>(`/tasks/${id(taskId)}/retry`);
+    return apiClient.post<TaskDto>(`/executions/${id(taskId)}/retry`);
   },
   runNow(taskId: string) {
-    return apiClient.post<TaskDto>(`/tasks/${id(taskId)}/run-now`);
+    return apiClient.post<TaskDto>(`/executions/${id(taskId)}/run-now`);
   },
 };

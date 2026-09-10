@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"panel/internal/platform/activitylog"
 	id "panel/internal/platform/identity"
 
 	"go.uber.org/zap"
@@ -176,6 +177,10 @@ func (p *Planner) planTx(ctx context.Context, tx *sql.Tx, in PlanInput) (PlanRes
 	if in.DesiredSpecJSON == nil {
 		in.DesiredSpecJSON = json.RawMessage(`{}`)
 	}
+	in.Reason = activitylog.Redact(in.Reason)
+	if err := appendPlanRequest(ctx, tx, in); err != nil {
+		return PlanResult{}, err
+	}
 	now := p.store.now().UTC().Format(time.RFC3339Nano)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO application_instances(id,application_id,server_id,container_name,container_id,desired_state,desired_generation,desired_spec_hash,desired_revision_id,desired_spec_json,status,runtime_spec_json,last_deployed_generation,last_error,created_at,updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?, 'pending','{}',0,'',?,?)
@@ -192,6 +197,11 @@ func (p *Planner) planTx(ctx context.Context, tx *sql.Tx, in PlanInput) (PlanRes
 		return PlanResult{}, err
 	}
 	if found {
+		if active.State == JobRunning && active.IntentID != in.IntentID {
+			if err := appendRunningIntent(ctx, tx, active, in); err != nil {
+				return PlanResult{}, err
+			}
+		}
 		if active.State == JobPending || active.State == JobFailedRetryable {
 			if _, err := tx.ExecContext(ctx, `UPDATE jobs SET instance_id=?,action=?,desired_generation=?,desired_spec_hash=?,desired_revision_id=?,desired_spec_json=?,remove_data=?,force_nonce=?,priority=?,next_run_at=NULL,intent_id=?,trigger_type=?,trigger_resource_type=?,trigger_resource_id=?,reason=?,error_code='',error_class='',error_message='',error_detail='',finished_at=NULL,updated_at=? WHERE id=? AND state IN ('pending','failed_retryable')`,
 				in.InstanceID, in.Action, in.DesiredGeneration, in.DesiredSpecHash, in.DesiredRevisionID, string(in.DesiredSpecJSON), boolInt(in.RemoveData), in.ForceNonce,
@@ -300,3 +310,44 @@ var ErrStoreUnavailable = errors.New("orchestrator store unavailable")
 type ValidationError struct{ Message string }
 
 func (e *ValidationError) Error() string { return e.Message }
+
+// An in-flight row keeps its original intent/execution fencing. New requests
+// nevertheless get immutable identities and a relation to the shared work.
+func appendRunningIntent(ctx context.Context, tx *sql.Tx, active Job, in PlanInput) error {
+	resources := []activitylog.Resource{{Type: "application", ID: in.ApplicationID, Role: "target", RevisionID: in.DesiredRevisionID, Generation: in.DesiredGeneration}, {Type: "server", ID: in.ServerID, Role: "executor"}}
+	for i := range resources {
+		table := "applications"
+		if resources[i].Type == "server" {
+			table = "servers"
+		}
+		_ = tx.QueryRowContext(ctx, "SELECT name FROM "+table+" WHERE id=?", resources[i].ID).Scan(&resources[i].Name)
+	}
+
+	relation := activitylog.EventInput{EventType: "execution.linked", Kind: "relation", Domain: "application", Action: in.Action, OperationID: in.IntentID, ExecutionID: active.ExecutionID, Resources: resources, Data: map[string]any{"jobId": active.ID, "relatedOperationId": active.IntentID, "phase": "waiting"}}
+	if active.DesiredGeneration != in.DesiredGeneration || active.DesiredRevisionID != in.DesiredRevisionID || active.Action != in.Action || active.ForceNonce != in.ForceNonce {
+		relation.EventType = "intent.superseded"
+		relation.OperationID = active.IntentID
+		relation.Data["relatedOperationId"] = in.IntentID
+		relation.Data["phase"] = "ended"
+		relation.Data["result"] = "superseded"
+	}
+	_, err := activitylog.AppendTx(ctx, tx, []activitylog.EventInput{relation})
+	return err
+}
+
+func appendPlanRequest(ctx context.Context, tx *sql.Tx, in PlanInput) error {
+	resources := []activitylog.Resource{{Type: "application", ID: in.ApplicationID, Role: "target", RevisionID: in.DesiredRevisionID, Generation: in.DesiredGeneration}, {Type: "server", ID: in.ServerID, Role: "executor"}}
+	for i := range resources {
+		table := "applications"
+		if resources[i].Type == "server" {
+			table = "servers"
+		}
+		_ = tx.QueryRowContext(ctx, "SELECT name FROM "+table+" WHERE id=?", resources[i].ID).Scan(&resources[i].Name)
+	}
+	actor := activitylog.ActorFromContext(ctx)
+	if actor.Kind == "" {
+		actor = activitylog.Actor{Kind: "controller", ID: "application"}
+	}
+	_, err := activitylog.AppendTx(ctx, tx, []activitylog.EventInput{{EventType: "operation.requested", Kind: "request", Domain: "application", Action: in.Action, OperationID: in.IntentID, RunID: in.IntentID, Trigger: in.TriggerType, Actor: actor, Initiator: actor, Resources: resources, Text: in.Reason, Data: map[string]any{"applicationId": in.ApplicationID, "serverId": in.ServerID, "desiredGeneration": in.DesiredGeneration, "desiredRevisionId": in.DesiredRevisionID, "phase": "queued"}}})
+	return err
+}

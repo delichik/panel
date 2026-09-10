@@ -88,6 +88,17 @@ func TestUFWStatusRoundTrip(t *testing.T) {
 	assertDeepEqual(t, got, in)
 }
 
+func TestUFWMutationRequestsRoundTripSSHPort(t *testing.T) {
+	allow := agentcontract.UFWAllowRequest{
+		Rule:    remoteops.UFWRule{Port: 8080, Protocol: "tcp", From: "Anywhere"},
+		SSHPort: 2222,
+	}
+	assertDeepEqual(t, GoUFWAllowRequest(PBUFWAllowRequest(allow)), allow)
+
+	deleteRequest := agentcontract.UFWDeleteRequest{Number: 7, SSHPort: 2222}
+	assertDeepEqual(t, GoUFWDeleteRequest(PBUFWDeleteRequest(deleteRequest)), deleteRequest)
+}
+
 func TestFail2BanRoundTrip(t *testing.T) {
 	config := agentcontract.Fail2BanConfig{
 		Jails: []agentcontract.Fail2BanJail{
@@ -137,11 +148,11 @@ func TestRuntimeSpecRoundTripIncludesWrappersFilesCapsAndRestart(t *testing.T) {
 		Command:       []string{"demo", "--serve"},
 		Env:           map[string]string{"PANEL_ENV": "test"},
 		Ports: []appruntime.Port{
-			{Label: "http", ContainerPort: 8080, HostPort: 18080, Protocol: "tcp"},
+			{Label: "http", ContainerPort: 8080, HostPort: 18080, Protocol: "tcp", OpenFirewall: true},
 		},
-		Resources:   appruntime.Resources{CPU: 2, MemoryMB: 512},
-		Privileged:  true,
-		CapAdd:      []string{"NET_ADMIN", "SYS_TIME"},
+		Resources:  appruntime.Resources{CPU: 2, MemoryMB: 512},
+		Privileged: true,
+		CapAdd:     []string{"NET_ADMIN", "SYS_TIME"},
 		Mounts: []appruntime.Mount{
 			{Type: "bind", Source: "/srv/app", Target: "/app/data", ReadOnly: true, UID: &uid, GID: &gid, Mode: "0750"},
 			{Type: "volume", Source: "cache", Target: "/cache", Mode: "rw"},
@@ -183,6 +194,25 @@ func TestRuntimeSpecRoundTripIncludesWrappersFilesCapsAndRestart(t *testing.T) {
 
 	got := goSpec(pb)
 	assertDeepEqual(t, got, in)
+}
+
+func TestRuntimeReconcileRequestRoundTripIncludesSSHPortAndFirewallPorts(t *testing.T) {
+	in := agentcontract.RuntimeReconcileRequest{
+		OperationID: "operation-1", RunID: "run-1", JobID: "job-1", ExecutionID: "execution-1",
+		ApplicationID: "app-1", InstanceID: "instance-1", ServerID: "server-1", Action: "apply",
+		DesiredGeneration: 3, DesiredSpecHash: "hash-1", DesiredRevisionID: "revision-1",
+		Spec:       appruntime.Spec{Ports: []appruntime.Port{{Label: "dns", ContainerPort: 53, HostPort: 5353, Protocol: "udp", OpenFirewall: true}}},
+		RemoveData: true, PreviousContainerName: "panel-old", SSHPort: 2222,
+	}
+	pb := PBRuntimeReconcileRequest(in)
+	if pb.SshPort != 2222 || len(pb.Spec.Ports) != 1 || !pb.Spec.Ports[0].OpenFirewall {
+		t.Fatalf("protobuf request lost protected fields: %#v", pb)
+	}
+	got := GoRuntimeReconcileRequest(pb)
+	if got.SSHPort != in.SSHPort || got.OperationID != in.OperationID || got.PreviousContainerName != in.PreviousContainerName {
+		t.Fatalf("request identity mismatch: got %#v want %#v", got, in)
+	}
+	assertDeepEqual(t, got.Spec.Ports, in.Spec.Ports)
 }
 
 func TestDockerResourcesRoundTrip(t *testing.T) {

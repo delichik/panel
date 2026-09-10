@@ -59,6 +59,7 @@ type Port struct {
 	ContainerPort int    `json:"containerPort"`
 	HostPort      int    `json:"hostPort,omitempty"`
 	Protocol      string `json:"protocol,omitempty"`
+	OpenFirewall  bool   `json:"openFirewall,omitempty"`
 }
 
 type Resources struct {

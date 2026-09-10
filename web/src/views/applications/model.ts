@@ -1,5 +1,5 @@
 import YAML from 'yaml';
-import type { ApplicationDto, ApplicationFile, ApplicationRuntime, ApplicationSaveInput, ApplicationSummaryDto, Diagnostic, HttpRouteOptions, ReverseProxyPath, ReverseProxyRule } from '@/types/applications';
+import type { ApplicationDto, ApplicationFile, ApplicationRuntime, ApplicationSaveInput, ApplicationSummaryDto, Diagnostic, HttpRouteOptions, PanelFileDefinition, ReverseProxyPath, ReverseProxyRule } from '@/types/applications';
 import type { FacilityRouteDomain, FacilityRoutePath, ReverseProxyConfig, ReverseProxySaveInput, StaticRuleType, StaticSourceType } from '@/types/facilityApps';
 
 export type AppMode = 'apps' | 'create' | 'edit' | 'facilityCatalog' | 'facilityDetail' | 'facilityConfig';
@@ -16,6 +16,8 @@ export interface PortRow {
   label: string;
   to: string;
   staticPort: string;
+  protocol: 'tcp' | 'udp';
+  openFirewall: boolean;
 }
 
 export interface CommandRow {
@@ -44,6 +46,20 @@ export function applicationFileMountOptions(
   missingLabel: (name: string) => string = (name) => name,
 ): ApplicationFileMountOption[] {
   const options: ApplicationFileMountOption[] = files.map((file) => ({ label: file.name, value: file.name }));
+  const selected = currentSource.trim();
+  if (selected && !options.some((option) => option.value === selected)) {
+    options.unshift({ label: missingLabel(selected), value: selected, disabled: true });
+  }
+  return options;
+}
+
+export function panelFileMountOptions(
+  files: Array<Pick<PanelFileDefinition, 'name' | 'kind' | 'resourceType' | 'source'>>,
+  currentSource = '',
+  optionLabel: (file: Pick<PanelFileDefinition, 'name' | 'kind' | 'resourceType' | 'source'>) => string = (file) => file.name,
+  missingLabel: (source: string) => string = (source) => source,
+): ApplicationFileMountOption[] {
+  const options: ApplicationFileMountOption[] = files.map((file) => ({ label: optionLabel(file), value: file.source }));
   const selected = currentSource.trim();
   if (selected && !options.some((option) => option.value === selected)) {
     options.unshift({ label: missingLabel(selected), value: selected, disabled: true });
@@ -132,7 +148,14 @@ export function draftFromApplication(app?: ApplicationDto | null): ApplicationDr
     env: pairsFromRecord(objectToStringRecord(objectValue(parsed.env))),
     ports: arrayValue(parsed.ports).map((item, index) => {
       const port = objectValue(item);
-      return { id: makeId('port'), label: stringValue(port?.label) || `port-${index + 1}`, to: stringValue(port?.to) || '80', staticPort: stringValue(port?.static) };
+      return {
+        id: makeId('port'),
+        label: stringValue(port?.label) || `port-${index + 1}`,
+        to: stringValue(port?.to) || '80',
+        staticPort: stringValue(port?.static),
+        protocol: stringValue(port?.protocol).toLowerCase() === 'udp' ? 'udp' : 'tcp',
+        openFirewall: port?.openFirewall === true,
+      };
     }),
     mounts: arrayValue(parsed.mounts).map((item) => {
       const mount = objectValue(item);
@@ -154,7 +177,13 @@ export function specYamlFromDraft(draft: ApplicationDraftUi) {
   if (command.length) doc.command = command; else delete doc.command;
   const env = recordFromPairs(draft.env);
   if (Object.keys(env).length) doc.env = env; else delete doc.env;
-  const ports = draft.ports.map((port) => compact({ label: port.label.trim(), to: numberOrString(port.to), static: numberOrUndefined(port.staticPort) })).filter((port) => port.to);
+  const ports = draft.ports.map((port) => compact({
+    label: port.label.trim(),
+    to: numberOrString(port.to),
+    static: numberOrUndefined(port.staticPort),
+    protocol: port.protocol === 'udp' ? 'udp' : undefined,
+    openFirewall: port.staticPort.trim() && port.openFirewall ? true : undefined,
+  })).filter((port) => port.to);
   if (ports.length) doc.ports = ports; else delete doc.ports;
   const mounts = draft.mounts.map((mount) => compact({ type: mount.type, source: mount.source.trim(), target: mount.target.trim(), readOnly: mount.readOnly || undefined, mode: mount.mode.trim() || undefined })).filter((mount) => mount.type && mount.target);
   if (mounts.length) doc.mounts = mounts; else delete doc.mounts;
@@ -188,6 +217,7 @@ export function validateApplicationDraft(draft: ApplicationDraftUi): FieldErrors
   if (draft.deploymentMode === 'selected' && !draft.deploymentServers.length) errors.deploymentServers = 'applicationsPage.validationDeploymentServers';
   if (draft.env.some((row) => !row.key.trim())) errors.env = 'applicationsPage.validationEnv';
   if (draft.ports.some((row) => !row.to.trim())) errors.ports = 'applicationsPage.validationPorts';
+  if (draft.ports.some((row) => row.openFirewall && !row.staticPort.trim())) errors.ports = 'applicationsPage.validationFirewallStaticPort';
   if (draft.mounts.some((row) => !row.target.trim())) errors.mounts = 'applicationsPage.validationMounts';
   if (draft.reverseProxy.some((rule) => !rule.domain.trim() || !rule.targetPort || !rule.paths.length || rule.paths.some((path) => !path.path.trim()))) errors.reverseProxy = 'applicationsPage.validationReverseProxyRule';
   return errors;
@@ -317,7 +347,7 @@ export function makeKeyValueRow(key = '', value = ''): KeyValueRow {
 }
 
 export function makePortRow(): PortRow {
-  return { id: makeId('port'), label: '', to: '', staticPort: '' };
+  return { id: makeId('port'), label: '', to: '', staticPort: '', protocol: 'tcp', openFirewall: false };
 }
 
 export function makeMountRow(type = 'persistent'): MountRow {

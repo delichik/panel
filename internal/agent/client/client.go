@@ -257,21 +257,21 @@ func (c *GRPCClient) UFWInstall(ctx context.Context, endpoint string, req agentc
 
 func (c *GRPCClient) UFWEnable(ctx context.Context, endpoint string, req agentcontract.UFWEnableRequest) (remoteops.UFWStatus, error) {
 	out, err := callRPC(c, ctx, endpoint, maintenanceTimeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.UFWStatusResponse, error) {
-		return client.UFWEnable(ctx, &agentpb.UFWEnableRequest{SshPort: int32(req.SSHPort)})
+		return client.UFWEnable(ctx, &agentpb.UFWEnableRequest{SshPort: int32(req.SSHPort), AgentPort: int32(req.AgentPort)})
 	})
 	return agentrpc.GoUFWStatus(out), err
 }
 
 func (c *GRPCClient) UFWAllow(ctx context.Context, endpoint string, req agentcontract.UFWAllowRequest) (remoteops.UFWStatus, error) {
 	out, err := callRPC(c, ctx, endpoint, maintenanceTimeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.UFWStatusResponse, error) {
-		return client.UFWAllow(ctx, &agentpb.UFWAllowRequest{Rule: agentrpc.PBUFWRule(req.Rule)})
+		return client.UFWAllow(ctx, agentrpc.PBUFWAllowRequest(req))
 	})
 	return agentrpc.GoUFWStatus(out), err
 }
 
 func (c *GRPCClient) UFWDelete(ctx context.Context, endpoint string, req agentcontract.UFWDeleteRequest) (remoteops.UFWStatus, error) {
 	out, err := callRPC(c, ctx, endpoint, maintenanceTimeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.UFWStatusResponse, error) {
-		return client.UFWDelete(ctx, &agentpb.UFWDeleteRequest{Number: int32(req.Number)})
+		return client.UFWDelete(ctx, agentrpc.PBUFWDeleteRequest(req))
 	})
 	return agentrpc.GoUFWStatus(out), err
 }
@@ -312,6 +312,9 @@ func (c *GRPCClient) RuntimeWriteFiles(ctx context.Context, endpoint string, req
 }
 
 func (c *GRPCClient) RuntimeReconcile(ctx context.Context, endpoint string, req agentcontract.RuntimeReconcileRequest) (agentcontract.RuntimeReconcileResponse, error) {
+	if err := c.requireExecutionEvents(ctx, endpoint); err != nil {
+		return agentcontract.RuntimeReconcileResponse{}, err
+	}
 	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.RuntimeReconcileResponse, error) {
 		return client.RuntimeReconcile(ctx, agentrpc.PBRuntimeReconcileRequest(req))
 	})

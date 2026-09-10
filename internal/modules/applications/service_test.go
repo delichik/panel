@@ -1579,7 +1579,7 @@ func newTestService(t *testing.T) (*Service, *fakeRuntimeClient, *fakeServerProv
 			t.Fatal(err)
 		}
 	}
-	taskSvc := tasks.NewService(store.LogDB())
+	taskSvc := tasks.NewService(store.AppDB())
 	svc := NewServiceWithOptions(store.AppDB(), runtime, taskSvc, Config{
 		Namespace:      "apps",
 		Region:         "global",
@@ -1589,7 +1589,7 @@ func newTestService(t *testing.T) (*Service, *fakeRuntimeClient, *fakeServerProv
 	svc.RegisterTasks(taskSvc)
 	svc.SetServerProvider(servers)
 	svc.SetApplicationReconcileTrigger(&fakeApplicationReconcileTrigger{svc: svc, tasks: taskSvc})
-	return svc, runtime, servers, func() { _ = store.Close() }
+	return svc, runtime, servers, func() { _ = svc.StopOrchestrator(); _ = store.Close() }
 }
 
 type fakeApplicationReconcileTrigger struct {
@@ -1911,7 +1911,15 @@ func (f *fakeRuntimeClient) RuntimePersistentRestore(ctx context.Context, baseUR
 }
 
 type fakeServerProvider struct {
-	items map[string]server.Server
+	items                map[string]server.Server
+	firewallChannelCheck func(context.Context, string) error
+}
+
+func (f *fakeServerProvider) VerifyFirewallControlChannels(ctx context.Context, id string) error {
+	if f.firewallChannelCheck != nil {
+		return f.firewallChannelCheck(ctx, id)
+	}
+	return nil
 }
 
 func (f *fakeServerProvider) List(ctx context.Context) ([]server.Server, error) {

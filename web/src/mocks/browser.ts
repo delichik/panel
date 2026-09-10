@@ -109,7 +109,7 @@ import {
   mockVolumes,
 } from './resources';
 import { acceptedAgentDeployment, completedTask, mockTasks, mockTaskLogs, mockTaskSteps, retryTask, runTaskNow } from './tasks';
-import { applicationOperationDetail, mockApplicationOperations, mockSystemEvents } from './runtimeEvents';
+import { mockActivityRoute, resolveMockExecution } from './activity';
 import { confirmRestore, mockRuntimeSettings, mockServerVariables, restorePreflight, saveRuntime, saveServerVariables, startExport } from './settings';
 import { advanceExport, exportStatus, resetExport, restoreStatus } from './maintenance';
 import { debugPprofStatus, debugSnapshot, setDebugPprof } from './debug';
@@ -557,7 +557,29 @@ export function installMockApi() {
             resourceName: app.name,
           })),
         ],
-        panelFiles: [],
+        panelFiles: [
+          ...mockKeyAssets.flatMap((asset) => asset.downloadKinds.map((downloadKind) => {
+            const kind = asset.type === 'ssh_key_pair' && downloadKind === 'public_key' ? 'ssh_public_key' : downloadKind;
+            return {
+              id: `${asset.id}:${kind}`,
+              resourceId: asset.id,
+              resourceType: 'key_asset',
+              name: asset.name,
+              kind,
+              source: `key_asset:${asset.id}:${kind}`,
+            };
+          })),
+          ...mockDomainCertificates
+            .filter((certificate) => certificate.status === 'issued')
+            .flatMap((certificate) => ['certificate', 'private_key'].map((kind) => ({
+              id: `${certificate.id}:${kind}`,
+              resourceId: certificate.id,
+              resourceType: 'certificate',
+              name: certificate.name,
+              kind,
+              source: `certificate:${certificate.id}:${kind}`,
+            }))),
+        ],
       });
     }
     const appMatch = url.pathname.match(/^\/api\/v1\/applications\/([^/]+)$/);
@@ -782,7 +804,10 @@ export function installMockApi() {
       }
     }
 
-    if (url.pathname === '/api/v1/tasks' && method(init) === 'GET') {
+    const activityResponse = mockActivityRoute(url, method(init));
+    if (activityResponse) return activityResponse;
+
+    if (url.pathname === '/api/v1/executions' && method(init) === 'GET') {
       const status = url.searchParams.get('status') || '';
       const type = url.searchParams.get('type') || '';
       const serverId = url.searchParams.get('serverId') || '';
@@ -798,60 +823,28 @@ export function installMockApi() {
       const start = (page - 1) * pageSize;
       return json({ items: items.slice(start, start + pageSize), total, page, pageSize });
     }
-    const taskMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)$/);
+    const taskMatch = url.pathname.match(/^\/api\/v1\/executions\/([^/]+)$/);
     if (taskMatch && method(init) === 'GET') {
       const found = mockTasks.find((item) => item.id === decodeURIComponent(taskMatch[1]));
       return found ? json(found) : error('task_not_found', 'Task was not found.', 404);
     }
-    const taskStepsMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)\/steps$/);
+    const taskStepsMatch = url.pathname.match(/^\/api\/v1\/executions\/([^/]+)\/steps$/);
     if (taskStepsMatch && method(init) === 'GET') return json(mockTaskSteps[decodeURIComponent(taskStepsMatch[1])] ?? []);
-    const taskLogsMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)\/logs$/);
+    const taskLogsMatch = url.pathname.match(/^\/api\/v1\/executions\/([^/]+)\/logs$/);
     if (taskLogsMatch && method(init) === 'GET') {
       const after = Number(url.searchParams.get('after') || 0);
       const logs = (mockTaskLogs[decodeURIComponent(taskLogsMatch[1])] ?? []).filter((item) => item.cursor > after);
       return json({ nextCursor: logs.at(-1)?.cursor ?? after, logs });
     }
-    const taskOperationMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)\/(retry|run-now)$/);
+    const resolveMatch = url.pathname.match(/^\/api\/v1\/executions\/([^/]+)\/resolve$/);
+    if (resolveMatch && method(init) === 'POST') {
+      const result = resolveMockExecution(decodeURIComponent(resolveMatch[1]!), await body(init));
+      return result ? json(result) : error('execution_verification_invalid', 'Choose a verified outcome and provide the supporting reason for an uncertain execution.', 409);
+    }
+    const taskOperationMatch = url.pathname.match(/^\/api\/v1\/executions\/([^/]+)\/(retry|run-now)$/);
     if (taskOperationMatch && method(init) === 'POST') {
       const result = taskOperationMatch[2] === 'retry' ? retryTask(decodeURIComponent(taskOperationMatch[1])) : runTaskNow(decodeURIComponent(taskOperationMatch[1]));
       return result ? json(result, 202) : error('task_operation_unavailable', 'Task operation is unavailable for this task.', 422);
-    }
-
-    if (url.pathname === '/api/v1/application-operations' && method(init) === 'GET') {
-      const applicationId = url.searchParams.get('applicationId') || '';
-      const status = url.searchParams.get('status') || '';
-      const source = url.searchParams.get('source') || '';
-      const page = Math.max(1, Number(url.searchParams.get('page') || 1));
-      const pageSize = Math.max(1, Math.min(100, Number(url.searchParams.get('pageSize') || 20)));
-      let items = mockApplicationOperations;
-      if (applicationId) items = items.filter((item) => item.applicationId.includes(applicationId));
-      if (status) items = items.filter((item) => item.status === status);
-      if (source) items = items.filter((item) => item.source === source);
-      const total = items.length;
-      const start = (page - 1) * pageSize;
-      return json({ items: items.slice(start, start + pageSize), total, page, pageSize });
-    }
-    const applicationOperationMatch = url.pathname.match(/^\/api\/v1\/application-operations\/([^/]+)$/);
-    if (applicationOperationMatch && method(init) === 'GET') {
-      const found = applicationOperationDetail(decodeURIComponent(applicationOperationMatch[1]));
-      return found ? json(found) : error('application_operation_detail_unavailable', 'Application operation detail is unavailable.', 404);
-    }
-
-    if (url.pathname === '/api/v1/system-events' && method(init) === 'GET') {
-      const eventType = url.searchParams.get('eventType') || '';
-      const severity = url.searchParams.get('severity') || '';
-      const from = url.searchParams.get('from') || '';
-      const to = url.searchParams.get('to') || '';
-      const page = Math.max(1, Number(url.searchParams.get('page') || 1));
-      const pageSize = Math.max(1, Math.min(100, Number(url.searchParams.get('pageSize') || 20)));
-      let items = mockSystemEvents;
-      if (eventType) items = items.filter((item) => item.eventType.includes(eventType));
-      if (severity) items = items.filter((item) => item.severity === severity);
-      if (from) items = items.filter((item) => item.occurredAt >= from);
-      if (to) items = items.filter((item) => item.occurredAt <= to);
-      const total = items.length;
-      const start = (page - 1) * pageSize;
-      return json({ items: items.slice(start, start + pageSize), total, page, pageSize });
     }
 
     if (url.pathname === '/api/v1/settings/runtime' && method(init) === 'GET') {

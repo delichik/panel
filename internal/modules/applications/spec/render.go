@@ -51,7 +51,11 @@ func Render(in RenderInput) (appruntime.Spec, []Issue) {
 func renderPorts(ports []Port) []appruntime.Port {
 	out := make([]appruntime.Port, 0, len(ports))
 	for _, port := range ports {
-		out = append(out, appruntime.Port{Label: port.Label, ContainerPort: port.To, HostPort: port.Static, Protocol: "tcp"})
+		protocol := port.Protocol
+		if protocol == "" {
+			protocol = "tcp"
+		}
+		out = append(out, appruntime.Port{Label: port.Label, ContainerPort: port.To, HostPort: port.Static, Protocol: protocol, OpenFirewall: port.OpenFirewall})
 	}
 	return out
 }

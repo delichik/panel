@@ -4,14 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"math/rand/v2"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"panel/internal/modules/runtimeevents"
-	"panel/internal/platform/database/models"
+	"panel/internal/platform/activitylog"
 	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/i18n"
@@ -47,11 +47,6 @@ type ListFilter struct {
 var terminalStatuses = []string{StatusCompleted, StatusFailed, StatusBlocked, StatusCancelled}
 
 const (
-	// maxTaskLogLinesPerTask 是单任务最多保留的日志条数；超出后滚动删除最旧日志，
-	// 防止长任务无限膨胀。
-	maxTaskLogLinesPerTask = 1000
-	// maxTaskLogLineLength 是单条日志最多保留的 rune 数，超出部分截断。
-	maxTaskLogLineLength = 8192
 	baseTaskRetryDelay = 30 * time.Second
 	maxTaskRetryDelay  = 10 * time.Minute
 )
@@ -177,6 +172,15 @@ func (s *Service) createTx(ctx context.Context, tx *sql.Tx, in CreateInput) (Tas
 }
 
 func createTask(ctx context.Context, exec orm.Executor, in CreateInput, beforeInsert func(Task)) (Task, error) {
+	if err := activitylog.CheckAdmission(ctx, exec); err != nil {
+		return Task{}, err
+	}
+	if actor := activitylog.ActorFromContext(ctx); actor.Kind != "" {
+		in.TriggeredBy = firstNonEmpty(actor.ID, actor.Name)
+		if in.TriggerType == "" {
+			in.TriggerType = "user"
+		}
+	}
 	if strings.TrimSpace(in.Type) == "" {
 		return Task{}, panelerr.Validation("task_type_required", "Task type is required")
 	}
@@ -207,7 +211,7 @@ func createTask(ctx context.Context, exec orm.Executor, in CreateInput, beforeIn
 		ParamsJSON:          firstNonEmpty(strings.TrimSpace(in.ParamsJSON), "{}"),
 		MetadataJSON:        firstNonEmpty(strings.TrimSpace(in.MetadataJSON), "{}"),
 		Status:              status,
-		Summary:             in.Summary,
+		Summary:             Redact(in.Summary),
 		RetryCount:          in.RetryCount,
 		MaxRetries:          in.MaxRetries,
 		NextRunAt:           in.NextRunAt,
@@ -260,7 +264,24 @@ func createTask(ctx context.Context, exec orm.Executor, in CreateInput, beforeIn
 		StartedAt:           t.StartedAt,
 		FinishedAt:          t.FinishedAt,
 	})
+	if err == nil {
+		err = recordTaskReceipt(ctx, exec, t)
+	}
 	return t, err
+}
+
+func recordTaskReceipt(ctx context.Context, exec orm.Executor, task Task) error {
+	var eventID string
+	var seq int64
+	err := exec.QueryRowContext(ctx, `SELECT event_id,seq FROM activity_events WHERE operation_id=? AND run_id=? AND event_type IN ('operation.requested','retry.requested') ORDER BY seq DESC LIMIT 1`, task.OperationID, task.ID).Scan(&eventID, &seq)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	activitylog.RecordReceipt(ctx, task.OperationID, eventID, seq)
+	return nil
 }
 
 func (s *Service) Start(ctx context.Context, taskID string) error {
@@ -278,9 +299,12 @@ func (s *Service) startExecution(ctx context.Context, taskID string) (bool, erro
 	if _, exists := s.runningExecutions[taskID]; exists {
 		return false, nil
 	}
+	if err := activitylog.CheckAdmission(ctx, s.db); err != nil {
+		return false, err
+	}
 	s.registerRunningExecutionLocked(taskID)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET status=?, error='', next_run_at=NULL, percentage=COALESCE(percentage, 0), started_at=COALESCE(started_at, ?), finished_at=NULL WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`, append([]any{StatusRunning, now, taskID}, stringArgs(terminalStatuses)...)...)
+	res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET status=?, error='', next_run_at=NULL, percentage=COALESCE(percentage, 0), started_at=COALESCE(started_at, ?), finished_at=NULL WHERE id=? AND stage<>'uncertain' AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`, append([]any{StatusRunning, now, taskID}, stringArgs(terminalStatuses)...)...)
 	if err != nil {
 		s.unregisterRunningExecutionLocked(taskID)
 		return false, err
@@ -299,7 +323,7 @@ func (s *Service) startExecution(ctx context.Context, taskID string) (bool, erro
 }
 
 func (s *Service) Advance(ctx context.Context, taskID, stage, message string) error {
-	res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET stage=? WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`, append([]any{stage, taskID}, stringArgs(terminalStatuses)...)...)
+	res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET stage=? WHERE id=? AND stage<>'uncertain' AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`, append([]any{stage, taskID}, stringArgs(terminalStatuses)...)...)
 	if err != nil {
 		return err
 	}
@@ -313,36 +337,33 @@ func (s *Service) Advance(ctx context.Context, taskID, stage, message string) er
 	return nil
 }
 
+// AppendLog accepts the complete redacted output. Retention and line-length
+// limits must never turn an accepted execution fact into missing evidence.
 func (s *Service) AppendLog(ctx context.Context, taskID, stream, line string) error {
-	line = Redact(line)
-	if runes := []rune(line); len(runes) > maxTaskLogLineLength {
-		line = string(runes[:maxTaskLogLineLength])
-	}
-	log := models.TaskLog{TaskID: taskID, Time: time.Now().UTC(), Stream: stream, Line: line}
-	if err := orm.Insert(ctx, s.db, &log); err != nil {
-		return err
-	}
-	return s.trimTaskLogs(ctx, taskID)
-}
-
-// trimTaskLogs 保证单任务日志条数不超过上限：超出时删除最旧日志。
-func (s *Service) trimTaskLogs(ctx context.Context, taskID string) error {
-	count, err := orm.New(s.db).From("task_logs").Where("task_id = ?", taskID).Count(ctx)
+	task, err := s.Get(ctx, taskID)
 	if err != nil {
 		return err
 	}
-	if count <= maxTaskLogLinesPerTask {
-		return nil
+	level := "info"
+	if stream == "stderr" {
+		level = "error"
 	}
-	_, err = orm.RawExec(ctx, s.db, `DELETE FROM task_logs WHERE task_id=? AND id NOT IN (SELECT id FROM task_logs WHERE task_id=? ORDER BY id DESC LIMIT ?)`, taskID, taskID, maxTaskLogLinesPerTask)
+	_, err = activitylog.Append(ctx, s.db, []activitylog.EventInput{{
+		EventType: "output.chunk", Kind: "output", Level: level, Domain: firstNonEmpty(task.ResourceType, "system"), Action: task.Type,
+		OperationID: task.OperationID, RunID: task.ID, ExecutionID: task.ID + ":attempt:" + fmt.Sprint(task.RetryCount),
+		SourceStreamID: task.ID, Stream: stream, Text: Redact(line),
+		Resources: []activitylog.Resource{{Type: task.ResourceType, ID: task.ResourceID, Role: "target"}},
+		Data:      map[string]any{"taskId": task.ID},
+	}})
 	return err
 }
 
 func (s *Service) Complete(ctx context.Context, taskID, summary string) error {
+	summary = Redact(summary)
 	s.runningMu.Lock()
 	defer s.runningMu.Unlock()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET status=?, stage=?, percentage=100, summary=?, next_run_at=NULL, finished_at=? WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`, append([]any{StatusCompleted, "completed", summary, now, taskID}, stringArgs(terminalStatuses)...)...)
+	res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET status=?, stage=?, percentage=100, summary=?, next_run_at=NULL, finished_at=? WHERE id=? AND stage<>'uncertain' AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`, append([]any{StatusCompleted, "completed", summary, now, taskID}, stringArgs(terminalStatuses)...)...)
 	if err == nil {
 		if affected, _ := res.RowsAffected(); affected > 0 {
 			s.unregisterRunningExecutionLocked(taskID)
@@ -360,7 +381,7 @@ func (s *Service) Fail(ctx context.Context, taskID string, err error) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	s.runningMu.Lock()
 	defer s.runningMu.Unlock()
-	res, updateErr := orm.RawExec(ctx, s.db, `UPDATE tasks SET status=?, error=?, finished_at=? WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`, append([]any{StatusFailed, msg, now, taskID}, stringArgs(terminalStatuses)...)...)
+	res, updateErr := orm.RawExec(ctx, s.db, `UPDATE tasks SET status=?, error=?, finished_at=? WHERE id=? AND stage<>'uncertain' AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`, append([]any{StatusFailed, msg, now, taskID}, stringArgs(terminalStatuses)...)...)
 	if updateErr != nil {
 		return updateErr
 	}
@@ -401,7 +422,7 @@ func (s *Service) FailRetryable(ctx context.Context, taskID string, cause error)
 	}
 	s.runningMu.Lock()
 	defer s.runningMu.Unlock()
-	res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET status=?, error=?, retry_count=?, next_run_at=?, finished_at=NULL WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`,
+	res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET status=?, error=?, retry_count=?, next_run_at=?, finished_at=NULL WHERE id=? AND stage<>'uncertain' AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`,
 		append([]any{StatusFailedRetryable, msg, nextRetry, nextRun.Format(time.RFC3339Nano), taskID}, stringArgs(terminalStatuses)...)...)
 	if err == nil {
 		if affected, _ := res.RowsAffected(); affected > 0 {
@@ -422,7 +443,7 @@ func (s *Service) Block(ctx context.Context, taskID string, cause error) error {
 	}
 	s.runningMu.Lock()
 	defer s.runningMu.Unlock()
-	res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET status=?, error=?, next_run_at=NULL, finished_at=? WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`, append([]any{StatusBlocked, msg, now, taskID}, stringArgs(terminalStatuses)...)...)
+	res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET status=?, error=?, next_run_at=NULL, finished_at=? WHERE id=? AND stage<>'uncertain' AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`, append([]any{StatusBlocked, msg, now, taskID}, stringArgs(terminalStatuses)...)...)
 	if err == nil {
 		if affected, _ := res.RowsAffected(); affected > 0 {
 			s.unregisterRunningExecutionLocked(taskID)
@@ -527,7 +548,7 @@ func (s *Service) CancelByServer(ctx context.Context, serverID, message string) 
 	keys := []string{}
 	for _, taskID := range rows {
 		task, getErr := s.Get(ctx, taskID)
-		if getErr == nil && s.isCancellationBlocked(task.Type) {
+		if getErr == nil && (s.isCancellationBlocked(task.Type) || task.Stage == "uncertain") {
 			continue
 		}
 		taskIDs = append(taskIDs, taskID)
@@ -579,11 +600,11 @@ func (s *Service) Cancel(ctx context.Context, taskID, message string) error {
 	if strings.TrimSpace(message) == "" {
 		message = "Task cancelled"
 	}
-	if task, getErr := s.Get(ctx, taskID); getErr == nil && s.isCancellationBlocked(task.Type) {
+	if task, getErr := s.Get(ctx, taskID); getErr == nil && (s.isCancellationBlocked(task.Type) || task.Stage == "uncertain") {
 		return panelerr.Validation("task_cancel_unsupported", "This task type cannot be cancelled")
 	}
 	finishedAt := time.Now().UTC().Format(time.RFC3339Nano)
-	res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET status=?, stage=?, error=?, next_run_at=NULL, finished_at=? WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`,
+	res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET status=?, stage=?, error=?, next_run_at=NULL, finished_at=? WHERE id=? AND stage<>'uncertain' AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`,
 		append([]any{StatusCancelled, "cancelled", Redact(message), finishedAt, taskID}, stringArgs(terminalStatuses)...)...)
 	if err != nil {
 		return err
@@ -616,59 +637,10 @@ func (s *Service) SetTriggeredBy(ctx context.Context, taskID, triggeredBy string
 		UpdateColumns(ctx, map[string]any{"triggered_by": triggeredBy})
 }
 
+// CleanupRetained is retained for internal callers during the control-plane
+// transition. Audit evidence and its execution context are never age-deleted.
 func (s *Service) CleanupRetained(ctx context.Context, retention time.Duration) (int64, error) {
-	if retention <= 0 {
-		return 0, nil
-	}
-	cutoff := time.Now().UTC().Add(-retention).Format(time.RFC3339Nano)
-	var deleted int64
-	for {
-		ids := []string{}
-		if err := orm.New(s.db).From("tasks").
-			Where("status IN (?,?,?,?,?)", StatusCompleted, StatusFailed, StatusFailedRetryable, StatusBlocked, StatusCancelled).
-			And("COALESCE(finished_at,'') <> ''").
-			And("finished_at < ?", cutoff).
-			Limit(500).
-			Pluck(ctx, "id", &ids); err != nil {
-			return deleted, err
-		}
-		if len(ids) == 0 {
-			return deleted, nil
-		}
-		ph := placeholders(len(ids))
-		args := stringArgs(ids)
-		if _, err := orm.RawExec(ctx, s.db, `DELETE FROM task_steps WHERE task_id IN (`+ph+`)`, args...); err != nil {
-			return deleted, err
-		}
-		if _, err := orm.RawExec(ctx, s.db, `DELETE FROM task_logs WHERE task_id IN (`+ph+`)`, args...); err != nil {
-			return deleted, err
-		}
-		res, err := orm.RawExec(ctx, s.db, `DELETE FROM tasks WHERE id IN (`+ph+`)`, args...)
-		if err != nil {
-			return deleted, err
-		}
-		affected, err := res.RowsAffected()
-		if err != nil {
-			return deleted, err
-		}
-		deleted += affected
-		if len(ids) > 0 {
-			deletedSet := make(map[string]struct{}, len(ids))
-			for _, taskID := range ids {
-				deletedSet[taskID] = struct{}{}
-			}
-			s.queueMu.Lock()
-			for key, taskID := range s.firstActiveByKey {
-				if _, ok := deletedSet[taskID]; ok {
-					delete(s.firstActiveByKey, key)
-				}
-			}
-			s.queueMu.Unlock()
-		}
-		if len(ids) < 500 {
-			return deleted, nil
-		}
-	}
+	return 0, nil
 }
 
 func (s *Service) Get(ctx context.Context, taskID string) (Task, error) {
@@ -904,19 +876,18 @@ func (s *Service) FailRunningWithoutExecution(ctx context.Context, now time.Time
 	s.runningMu.Lock()
 	defer s.runningMu.Unlock()
 	taskIDs := []string{}
-	if err := orm.New(s.db).From("tasks").Where("status = ?", StatusRunning).Pluck(ctx, "id", &taskIDs); err != nil {
+	if err := orm.New(s.db).From("tasks").Where("status = ?", StatusRunning).And("stage <> ?", "uncertain").Pluck(ctx, "id", &taskIDs); err != nil {
 		return 0, err
 	}
 
 	failed := 0
-	finishedAt := now.UTC().Format(time.RFC3339Nano)
-	const message = "Task was marked running but no active execution exists in this Panel process"
+	const message = "No active execution exists in this Panel process; the remote result requires verification"
 	for _, taskID := range taskIDs {
 		if _, ok := s.runningExecutions[taskID]; ok {
 			continue
 		}
-		res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET status=?, stage=CASE WHEN stage='' THEN 'orphaned' ELSE stage END, error=CASE WHEN error='' THEN ? ELSE error END, next_run_at=NULL, finished_at=? WHERE id=? AND status=?`,
-			StatusFailed, message, finishedAt, taskID, StatusRunning)
+		res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET stage='uncertain', error=?, next_run_at=NULL, finished_at=NULL WHERE id=? AND status=? AND stage<>'uncertain'`,
+			message, taskID, StatusRunning)
 		if err != nil {
 			return failed, err
 		}
@@ -1039,23 +1010,30 @@ func (s *Service) ExpireStaleQueued(ctx context.Context, now time.Time, maxAge t
 }
 
 func (s *Service) Logs(ctx context.Context, taskID string, after int64) ([]Log, int64, error) {
-	rows := []models.TaskLog{}
-	if err := orm.New(s.db).From("task_logs").Select("id", "time", "stream", "line").
-		Where("task_id = ?", taskID).And("id > ?", after).OrderBy("id ASC").Limit(200).
-		All(ctx, &rows); err != nil {
+	rows, err := s.db.QueryContext(ctx, `SELECT seq,occurred_at,stream,text FROM activity_events WHERE event_type='output.chunk' AND json_extract(data_json,'$.taskId')=? AND seq>? ORDER BY seq LIMIT 200`, taskID, after)
+	if err != nil {
 		return nil, after, err
 	}
-	logs := make([]Log, 0, len(rows))
+	defer rows.Close()
+	logs := []Log{}
 	next := after
-	for _, row := range rows {
-		l := Log{Cursor: row.ID, Time: row.Time, Stream: row.Stream, Line: row.Line}
-		next = l.Cursor
+	for rows.Next() {
+		var l Log
+		var stamp string
+		if err := rows.Scan(&l.Cursor, &stamp, &l.Stream, &l.Line); err != nil {
+			return nil, after, err
+		}
+		if l.Time, err = time.Parse(time.RFC3339Nano, stamp); err != nil {
+			return nil, after, err
+		}
 		logs = append(logs, l)
+		next = l.Cursor
 	}
-	return logs, next, nil
+	return logs, next, rows.Err()
 }
 
 func (s *Service) UpsertStep(ctx context.Context, taskID string, in StepInput) (Step, error) {
+	in.Error = Redact(in.Error)
 	if strings.TrimSpace(in.Step) == "" {
 		return Step{}, panelerr.Validation("task_step_required", "Task step is required")
 	}
@@ -1066,7 +1044,7 @@ func (s *Service) UpsertStep(ctx context.Context, taskID string, in StepInput) (
 	if err == sql.ErrNoRows {
 		existingID = id.New("step")
 		var startedAt, finishedAt *time.Time
-		if in.Status == StatusRunning || in.Status == StatusCompleted {
+		if in.Status == StatusRunning {
 			startedAt = &now
 		}
 		if in.Status == StatusCompleted || in.Status == StatusFailed || in.Status == StatusCancelled {
@@ -1087,8 +1065,8 @@ func (s *Service) UpsertStep(ctx context.Context, taskID string, in StepInput) (
 	assignments := `status=?,percentage=?,metadata_json=?,error=?`
 	args := []any{in.Status, in.Percentage, in.MetadataJSON, in.Error}
 	if in.Status == StatusRunning {
-		assignments += `,started_at=COALESCE(started_at,?)`
-		args = append(args, now.Format(time.RFC3339Nano))
+		assignments += `,started_at=CASE WHEN status='running' THEN COALESCE(started_at,?) ELSE ? END,finished_at=NULL`
+		args = append(args, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 	}
 	if in.Status == StatusCompleted || in.Status == StatusFailed || in.Status == StatusCancelled {
 		assignments += `,finished_at=?`
@@ -1118,6 +1096,9 @@ func (s *Service) Retry(ctx context.Context, taskID string) (Task, error) {
 	old, err := s.Get(ctx, taskID)
 	if err != nil {
 		return Task{}, err
+	}
+	if old.Stage == "uncertain" {
+		return Task{}, panelerr.Conflict("execution_result_unverified", "Verify the execution result before retrying")
 	}
 	def, ok := s.Registry().Definition(old.Type)
 	if !ok || !def.AllowRetry || def.Execute == nil {
@@ -1160,23 +1141,9 @@ func (s *Service) Retry(ctx context.Context, taskID string) (Task, error) {
 	return task, err
 }
 
+// State transitions are recorded by AppDB triggers inside the control
+// transaction; emitting a second post-commit runtime event would split truth.
 func (s *Service) writeTaskEvent(ctx context.Context, eventType string, task Task, summary, severity string) error {
-	if s == nil || s.events == nil || task.ID == "" {
-		return nil
-	}
-	if summary == "" {
-		summary = task.Type
-	}
-	s.events.Log(ctx, runtimeevents.WriteEventInput{
-		EventType:    eventType,
-		Category:     runtimeevents.CategoryTask,
-		Severity:     severity,
-		Source:       firstNonEmpty(task.TriggerType, "task"),
-		SourceModule: "tasks",
-		DedupeKey:    "task:" + task.ID + ":" + eventType + ":" + strconv.Itoa(task.RetryCount),
-		Summary:      summary,
-		OccurredAt:   time.Now().UTC(),
-	})
 	return nil
 }
 
@@ -1333,19 +1300,4 @@ func taskErrorText(err error) string {
 	return Redact(err.Error())
 }
 
-func Redact(s string) string {
-	replacers := []string{"password=", "privateKey=", "passphrase="}
-	for _, r := range replacers {
-		idx := strings.Index(strings.ToLower(s), strings.ToLower(r))
-		if idx >= 0 {
-			end := strings.IndexAny(s[idx+len(r):], " \n\r\t")
-			if end < 0 {
-				s = s[:idx+len(r)] + "[REDACTED]"
-			} else {
-				pos := idx + len(r) + end
-				s = s[:idx+len(r)] + "[REDACTED]" + s[pos:]
-			}
-		}
-	}
-	return s
-}
+func Redact(s string) string { return activitylog.Redact(s) }

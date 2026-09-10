@@ -1,3 +1,4 @@
+import type { ActivityReceipt } from './activity';
 export type KeyAssetType = 'ca_certificate' | 'tls_certificate' | 'ssh_key_pair';
 export type KeyAssetAlgorithm = 'ed25519' | 'rsa';
 
@@ -36,7 +37,7 @@ export interface KeyAssetDto {
   metadata?: Record<string, unknown>;
 }
 
-export interface KeyAssetMutationResult {
+export interface KeyAssetMutationResult extends ActivityReceipt {
   asset?: KeyAssetDto;
   taskId?: string;
   operationId?: string;
@@ -57,7 +58,7 @@ export interface SystemCertificateDto {
   canReset: boolean;
 }
 
-export interface SystemCertificateResetResult {
+export interface SystemCertificateResetResult extends ActivityReceipt {
   taskId: string;
 }
 
@@ -108,7 +109,7 @@ export interface ExportKeyAssetsInput {
   password: string;
 }
 
-export interface ExportKeyAssetsResult {
+export interface ExportKeyAssetsResult extends ActivityReceipt {
   taskId: string;
 }
 
@@ -160,7 +161,7 @@ export interface ImportExecuteInput {
   resolutions: Array<{ assetId: string; action: string; targetAssetId?: string }>;
 }
 
-export interface ImportExecuteResult {
+export interface ImportExecuteResult extends ActivityReceipt {
   taskId: string;
   operationId?: string;
 }

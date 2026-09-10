@@ -102,7 +102,7 @@ async function loadDomains() {
     selectedId.value = domains.value.some((item) => item.id === queryDomain) ? queryDomain : selectedId.value || domains.value[0]?.id || '';
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('dnsPage.loadFailed');
-    notifyError(err instanceof Error ? err.message : t('dnsPage.loadFailed'));
+    notifyError(err instanceof Error ? err.message : t('dnsPage.loadFailed'), err);
   } finally {
     if (listRequests.isCurrent(requestId)) loadingDomains.value = false;
   }
@@ -126,7 +126,7 @@ async function loadRecords(domainId = selectedId.value, signal?: AbortSignal) {
   } catch (err) {
     if (signal?.aborted || requestId !== recordsRequestId) return;
     recordsError.value = err instanceof Error ? err.message : t('dnsPage.recordsLoadFailed');
-    notifyError(err instanceof Error ? err.message : t('dnsPage.recordsLoadFailed'));
+    notifyError(err instanceof Error ? err.message : t('dnsPage.recordsLoadFailed'), err);
     providerErrorDomainId.value = domainId;
   } finally {
     if (requestId === recordsRequestId) loadingRecords.value = false;
@@ -140,13 +140,13 @@ async function syncRecords() {
   recordsError.value = '';
   try {
     const result = await dnsApi.refreshRecords(domainId);
-    notifySuccess(t('resourcesPage.taskAccepted', { taskId: result.taskId }));
+    notifySuccess(t('resourcesPage.taskAccepted', { taskId: result.taskId }), result);
     await waitForTask(result.taskId, 90_000, syncTaskSignal());
     if (selectedId.value !== domainId) return;
     await loadRecords(domainId);
   } catch (err) {
     recordsError.value = err instanceof Error ? err.message : t('dnsPage.recordsLoadFailed');
-    notifyError(err instanceof Error ? err.message : t('dnsPage.recordsLoadFailed'));
+    notifyError(err instanceof Error ? err.message : t('dnsPage.recordsLoadFailed'), err);
   } finally {
     if (selectedId.value === domainId) loadingRecords.value = false;
   }
@@ -171,12 +171,12 @@ async function saveDomain() {
     const input = { name: domainForm.name, provider: 'cloudflare' as const, apiToken: domainForm.apiToken || undefined };
     const saved = editingDomain.value ? await dnsApi.updateDomain(editingDomain.value.id, input) : await dnsApi.createDomain(input);
     selectedId.value = saved.id;
-    notifySuccess(t(editingDomain.value ? 'dnsPage.domainUpdated' : 'dnsPage.domainCreated'));
+    notifySuccess(t(editingDomain.value ? 'dnsPage.domainUpdated' : 'dnsPage.domainCreated'), saved);
     domainDialog.value = false;
     await loadDomains();
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.operationFailed');
-    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
   } finally {
     saving.value = false;
   }
@@ -200,14 +200,13 @@ async function saveRecord() {
   recordsError.value = '';
   try {
     const input = { type: recordForm.type, name: normalizeRecordName(recordForm.name), value: recordForm.value, ttl: Number(recordForm.ttl) || 300, proxied: recordForm.proxied === 'true' };
-    if (editingRecord.value) await dnsApi.updateRecord(selectedDomain.value.id, editingRecord.value.id, input);
-    else await dnsApi.createRecord(selectedDomain.value.id, input);
-    notifySuccess(t(editingRecord.value ? 'dnsPage.recordUpdated' : 'dnsPage.recordCreated'));
+    const result = editingRecord.value ? await dnsApi.updateRecord(selectedDomain.value.id, editingRecord.value.id, input) : await dnsApi.createRecord(selectedDomain.value.id, input);
+    notifySuccess(t(editingRecord.value ? 'dnsPage.recordUpdated' : 'dnsPage.recordCreated'), result);
     recordDialog.value = false;
     await loadRecords();
   } catch (err) {
     recordsError.value = err instanceof Error ? err.message : t('common.operationFailed');
-    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
   } finally {
     saving.value = false;
   }
@@ -217,14 +216,14 @@ async function deleteDomain() {
   if (!deleteTarget.value) return;
   saving.value = true;
   try {
-    await dnsApi.deleteDomain(deleteTarget.value.id);
-    notifySuccess(t('dnsPage.domainDeleted'));
+    const result = await dnsApi.deleteDomain(deleteTarget.value.id);
+    notifySuccess(t('dnsPage.domainDeleted'), result);
     selectedId.value = '';
     deleteDialog.value = false;
     await loadDomains();
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.operationFailed');
-    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
   } finally {
     saving.value = false;
   }
@@ -234,13 +233,13 @@ async function deleteRecord() {
   if (!selectedDomain.value || !recordDeleteTarget.value) return;
   saving.value = true;
   try {
-    await dnsApi.deleteRecord(selectedDomain.value.id, recordDeleteTarget.value.id);
-    notifySuccess(t('dnsPage.recordDeleted'));
+    const result = await dnsApi.deleteRecord(selectedDomain.value.id, recordDeleteTarget.value.id);
+    notifySuccess(t('dnsPage.recordDeleted'), result);
     recordDeleteDialog.value = false;
     await loadRecords();
   } catch (err) {
     recordsError.value = err instanceof Error ? err.message : t('common.operationFailed');
-    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
   } finally {
     saving.value = false;
   }

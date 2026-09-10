@@ -42,6 +42,9 @@ func (m *Manager) Create(ctx context.Context, in CreateInput, trigger Trigger) (
 		if existing, ok, err := m.service.ExistingActiveByConcurrencyKey(ctx, in.ConcurrencyKey); err != nil {
 			return Task{}, false, err
 		} else if ok {
+			if err := recordTaskReceipt(ctx, m.service.db, existing); err != nil {
+				return Task{}, false, err
+			}
 			return existing, false, nil
 		}
 	}

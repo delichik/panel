@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"database/sql"
+	"panel/internal/platform/activitylog"
 	"strings"
 	"time"
 )
@@ -20,6 +21,8 @@ func (w *ObservationWriter) Write(ctx context.Context, in Observation) (WriteRes
 	if strings.TrimSpace(in.InstanceID) == "" {
 		return WriteResult{}, &ValidationError{Message: "instance is required"}
 	}
+	in.LastErrorMessage = activitylog.Redact(in.LastErrorMessage)
+	in.LastErrorDetail = activitylog.Redact(in.LastErrorDetail)
 	observedAt := in.ObservedAt.UTC()
 	if observedAt.IsZero() {
 		observedAt = time.Now().UTC()
@@ -48,10 +51,31 @@ func (w *ObservationWriter) Write(ctx context.Context, in Observation) (WriteRes
 		query += ` AND EXISTS (SELECT 1 FROM jobs WHERE jobs.id=? AND jobs.state='running' AND jobs.lease_token=?)`
 		queryArgs = append(queryArgs, in.JobID, in.LeaseToken)
 	}
-	result, err := w.db.ExecContext(ctx, query, queryArgs...)
+	tx, err := w.db.BeginTx(ctx, nil)
+	if err != nil {
+		return WriteResult{}, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, query, queryArgs...)
 	if err != nil {
 		return WriteResult{}, err
 	}
 	affected, err := result.RowsAffected()
-	return WriteResult{Accepted: affected == 1}, err
+	if err != nil {
+		return WriteResult{}, err
+	}
+	if affected == 0 {
+		var operationID, executionID string
+		if in.JobID != "" {
+			_ = tx.QueryRowContext(ctx, `SELECT intent_id,execution_id FROM jobs WHERE id=?`, in.JobID).Scan(&operationID, &executionID)
+		}
+		_, err = activitylog.AppendTx(ctx, tx, []activitylog.EventInput{{EventType: "observation.rejected", Kind: "observation", Level: "warning", Domain: "application", OperationID: operationID, ExecutionID: executionID, Data: map[string]any{"instanceId": in.InstanceID, "observedState": state, "observedGeneration": in.ObservedGeneration, "observedAt": observedAt, "source": in.Source, "reason": "stale_or_ownership_lost"}}})
+		if err != nil {
+			return WriteResult{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return WriteResult{}, err
+	}
+	return WriteResult{Accepted: affected == 1}, nil
 }

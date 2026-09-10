@@ -39,3 +39,10 @@ func (s *Service) requireAuth(next http.Handler, allowPasswordChange bool) http.
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), sessionKey, sess)))
 	})
 }
+
+// FromContext returns the authenticated session without exposing the token to consumers.
+func FromContext(ctx context.Context) Session {
+	sess, _ := ctx.Value(sessionKey).(Session)
+	sess.Token = ""
+	return sess
+}

@@ -136,6 +136,8 @@ type Step struct {
 }
 
 type ReconcileRequestRPC struct {
+	OperationID           string
+	RunID                 string
 	JobID                 string
 	ExecutionID           string
 	ApplicationID         string

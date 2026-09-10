@@ -64,12 +64,9 @@ type ServerVariableDefinitionsUpdate struct {
 
 type RuntimeUpdate struct {
 	MetricsRetentionDays             int                         `json:"metricsRetentionDays"`
-	RuntimeEventRetentionDays        int                         `json:"runtimeEventRetentionDays"`
-	RuntimeEventDetailRetentionDays  int                         `json:"runtimeEventDetailRetentionDays"`
 	MetricsCollectionIntervalSeconds int                         `json:"metricsCollectionIntervalSeconds"`
 	ContainerReportIntervalSeconds   int                         `json:"containerReportIntervalSeconds"`
 	CleanupSchedule                  string                      `json:"cleanupSchedule"`
-	RuntimeEventCleanupSchedule      string                      `json:"runtimeEventCleanupSchedule"`
 	TokenExpiration                  string                      `json:"tokenExpiration"`
 	Language                         string                      `json:"language"`
 	LogLevel                         string                      `json:"logLevel"`
@@ -86,12 +83,9 @@ type RuntimeSettings struct {
 	MetricsDatabase                  string                     `json:"metricsDatabase"`
 	DataRoot                         string                     `json:"dataRoot"`
 	MetricsRetentionDays             int                        `json:"metricsRetentionDays"`
-	RuntimeEventRetentionDays        int                        `json:"runtimeEventRetentionDays"`
-	RuntimeEventDetailRetentionDays  int                        `json:"runtimeEventDetailRetentionDays"`
 	MetricsCollectionIntervalSeconds int                        `json:"metricsCollectionIntervalSeconds"`
 	ContainerReportIntervalSeconds   int                        `json:"containerReportIntervalSeconds"`
 	CleanupSchedule                  string                     `json:"cleanupSchedule"`
-	RuntimeEventCleanupSchedule      string                     `json:"runtimeEventCleanupSchedule"`
 	TokenExpiration                  string                     `json:"tokenExpiration"`
 	Language                         string                     `json:"language"`
 	LogLevel                         string                     `json:"logLevel"`
@@ -209,15 +203,6 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 	if input.ContainerReportIntervalSeconds == 0 {
 		input.ContainerReportIntervalSeconds = current.ContainerReportIntervalSeconds
 	}
-	if input.RuntimeEventRetentionDays == 0 {
-		input.RuntimeEventRetentionDays = current.RuntimeEventRetentionDays
-	}
-	if input.RuntimeEventDetailRetentionDays == 0 {
-		input.RuntimeEventDetailRetentionDays = current.RuntimeEventDetailRetentionDays
-	}
-	if input.RuntimeEventCleanupSchedule == "" {
-		input.RuntimeEventCleanupSchedule = current.RuntimeEventCleanupSchedule
-	}
 	certSettings := current.Certificates
 	if input.Certificates != nil {
 		certSettings = *input.Certificates
@@ -239,12 +224,9 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 		MetricsDatabase:                  current.MetricsDatabase,
 		DataRoot:                         current.DataRoot,
 		MetricsRetentionDays:             input.MetricsRetentionDays,
-		RuntimeEventRetentionDays:        input.RuntimeEventRetentionDays,
-		RuntimeEventDetailRetentionDays:  input.RuntimeEventDetailRetentionDays,
 		MetricsCollectionIntervalSeconds: input.MetricsCollectionIntervalSeconds,
 		ContainerReportIntervalSeconds:   input.ContainerReportIntervalSeconds,
 		CleanupSchedule:                  input.CleanupSchedule,
-		RuntimeEventCleanupSchedule:      input.RuntimeEventCleanupSchedule,
 		TokenExpiration:                  NormalizeTokenExpiration(input.TokenExpiration),
 		Language:                         i18n.NormalizeLocale(input.Language),
 		LogLevel:                         logging.NormalizeLevel(input.LogLevel),
@@ -286,12 +268,9 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 	}
 	s.mu.Lock()
 	s.rt.MetricsRetentionDays = next.MetricsRetentionDays
-	s.rt.RuntimeEventRetentionDays = next.RuntimeEventRetentionDays
-	s.rt.RuntimeEventDetailRetentionDays = next.RuntimeEventDetailRetentionDays
 	s.rt.MetricsCollectionIntervalSeconds = next.MetricsCollectionIntervalSeconds
 	s.rt.ContainerReportIntervalSeconds = next.ContainerReportIntervalSeconds
 	s.rt.CleanupSchedule = next.CleanupSchedule
-	s.rt.RuntimeEventCleanupSchedule = next.RuntimeEventCleanupSchedule
 	s.rt.TokenExpiration = next.TokenExpiration
 	s.rt.Language = next.Language
 	s.rt.LogLevel = next.LogLevel
@@ -430,14 +409,6 @@ func (s *Service) load(ctx context.Context) error {
 			if n, err := strconv.Atoi(value); err == nil {
 				next.MetricsRetentionDays = n
 			}
-		case "runtimeEventRetentionDays":
-			if n, err := strconv.Atoi(value); err == nil {
-				next.RuntimeEventRetentionDays = n
-			}
-		case "runtimeEventDetailRetentionDays":
-			if n, err := strconv.Atoi(value); err == nil {
-				next.RuntimeEventDetailRetentionDays = n
-			}
 		case "metricsCollectionIntervalSeconds":
 			if n, err := strconv.Atoi(value); err == nil {
 				next.MetricsCollectionIntervalSeconds = n
@@ -448,8 +419,6 @@ func (s *Service) load(ctx context.Context) error {
 			}
 		case "cleanupSchedule":
 			next.CleanupSchedule = value
-		case "runtimeEventCleanupSchedule":
-			next.RuntimeEventCleanupSchedule = value
 		case RuntimeSettingTokenExpiration:
 			if tokenExpiration := NormalizeTokenExpiration(value); tokenExpiration != "" {
 				next.TokenExpiration = tokenExpiration
@@ -518,12 +487,9 @@ func defaultRuntimeSettings(cfg config.Config) RuntimeSettings {
 		MetricsDatabase:                  cfg.MetricsDatabase,
 		DataRoot:                         cfg.DataRoot,
 		MetricsRetentionDays:             7,
-		RuntimeEventRetentionDays:        30,
-		RuntimeEventDetailRetentionDays:  7,
 		MetricsCollectionIntervalSeconds: 60,
 		ContainerReportIntervalSeconds:   30,
 		CleanupSchedule:                  "daily",
-		RuntimeEventCleanupSchedule:      "daily",
 		TokenExpiration:                  DefaultTokenExpiration,
 		Language:                         i18n.DefaultLocale(),
 		LogLevel:                         logging.DefaultLevel,
@@ -542,12 +508,9 @@ func defaultRuntimeSettings(cfg config.Config) RuntimeSettings {
 func runtimeValues(settings RuntimeSettings, includeJWT bool) map[string]string {
 	values := map[string]string{
 		"metricsRetentionDays":                             strconv.Itoa(settings.MetricsRetentionDays),
-		"runtimeEventRetentionDays":                        strconv.Itoa(settings.RuntimeEventRetentionDays),
-		"runtimeEventDetailRetentionDays":                  strconv.Itoa(settings.RuntimeEventDetailRetentionDays),
 		"metricsCollectionIntervalSeconds":                 strconv.Itoa(settings.MetricsCollectionIntervalSeconds),
 		"containerReportIntervalSeconds":                   strconv.Itoa(settings.ContainerReportIntervalSeconds),
 		"cleanupSchedule":                                  settings.CleanupSchedule,
-		"runtimeEventCleanupSchedule":                      settings.RuntimeEventCleanupSchedule,
 		RuntimeSettingTokenExpiration:                      settings.TokenExpiration,
 		"language":                                         settings.Language,
 		RuntimeSettingLogLevel:                             settings.LogLevel,
@@ -570,15 +533,6 @@ func validateRuntimeSettings(settings RuntimeSettings) error {
 	if settings.MetricsRetentionDays < 1 {
 		return panelerr.Validation("invalid_metrics_retention", "Metrics retention must be at least 1 day")
 	}
-	if settings.RuntimeEventRetentionDays < 1 {
-		return panelerr.Validation("invalid_runtime_event_retention", "Runtime event retention must be at least 1 day")
-	}
-	if settings.RuntimeEventDetailRetentionDays < 1 {
-		return panelerr.Validation("invalid_runtime_event_detail_retention", "Runtime event detail retention must be at least 1 day")
-	}
-	if settings.RuntimeEventRetentionDays < settings.RuntimeEventDetailRetentionDays {
-		return panelerr.Validation("invalid_runtime_event_retention_order", "Runtime event retention must be greater than or equal to detail retention")
-	}
 	if settings.MetricsCollectionIntervalSeconds < 1 {
 		return panelerr.Validation("invalid_metrics_interval", "Metrics collection interval must be at least 1 second")
 	}
@@ -589,11 +543,6 @@ func validateRuntimeSettings(settings RuntimeSettings) error {
 	case "hourly", "daily", "weekly":
 	default:
 		return panelerr.Validation("invalid_cleanup_schedule", "Cleanup schedule must be hourly, daily, or weekly")
-	}
-	switch settings.RuntimeEventCleanupSchedule {
-	case "hourly", "daily", "weekly":
-	default:
-		return panelerr.Validation("invalid_runtime_event_cleanup_schedule", "Runtime event cleanup schedule must be hourly, daily, or weekly")
 	}
 	if tokenExpiration := NormalizeTokenExpiration(settings.TokenExpiration); tokenExpiration == "" {
 		return panelerr.Validation("invalid_token_expiration", "Token expiration must be 10 minutes, 1 hour, 1 day, 5 days, 30 days, or never")

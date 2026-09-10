@@ -40,6 +40,7 @@ func newServerTestCredentialService(t *testing.T, store *storage.Store, cfg conf
 
 func newServerServiceForTest(store *storage.Store, exec sshx.RemoteExecutor, taskSvc *tasks.Service, opts ...Option) *Service {
 	svc := NewService(store.AppDB(), exec, taskSvc, opts...)
+	svc.firewallChannelCheck = func(context.Context, Server) error { return nil }
 	svc.RegisterTasks(taskSvc)
 	return svc
 }
@@ -170,7 +171,7 @@ func TestCreateListServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.LogDB())
+	taskSvc := tasks.NewService(store.AppDB())
 	svc := newServerServiceForTest(store, nil, taskSvc)
 	_, err = svc.Create(context.Background(), SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: cred.ID})
 	if err != nil {
@@ -201,7 +202,7 @@ func TestListServersLoadsMetricsDBLoadAverage(t *testing.T) {
 	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.LogDB())
+	taskSvc := tasks.NewService(store.AppDB())
 	svc := newServerServiceForTest(store, nil, taskSvc)
 	svc.SetMetricsDB(store.MetricsDB())
 	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
@@ -334,7 +335,7 @@ func TestConnectivityUsesBoundedSudoTimeoutAndCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.LogDB())
+	taskSvc := tasks.NewService(store.AppDB())
 	exec := &connectivityFakeExec{}
 	svc := newServerServiceForTest(store, exec, taskSvc)
 	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: cred.ID})
@@ -591,7 +592,7 @@ func TestUFWStateAllowAndDeleteRule(t *testing.T) {
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,reachable,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1','debian','13',1,1,1,'passwordless_sudo','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.LogDB())
+	taskSvc := tasks.NewService(store.AppDB())
 	exec := &ufwManageFakeExec{}
 	svc := newServerServiceForTest(store, exec, taskSvc)
 
@@ -600,6 +601,13 @@ func TestUFWStateAllowAndDeleteRule(t *testing.T) {
 	}
 	if len(exec.commands) != 0 {
 		t.Fatalf("expected no SSH UFW status fallback, got %#v", exec.commands)
+	}
+	before := len(exec.commands)
+	if _, err := svc.AllowUFW(context.Background(), "srv_1", UFWAllowRequest{Port: 22, Protocol: "tcp"}); err == nil {
+		t.Fatal("expected SSH firewall port to be protected")
+	}
+	if len(exec.commands) != before {
+		t.Fatalf("SSH rejection must happen before remote mutation: %#v", exec.commands)
 	}
 	if _, err := svc.AllowUFW(context.Background(), "srv_1", UFWAllowRequest{Port: 443, Protocol: "tcp", From: "10.0.0.0/8"}); err != nil {
 		t.Fatal(err)
@@ -613,6 +621,21 @@ func TestUFWStateAllowAndDeleteRule(t *testing.T) {
 	}
 	if !strings.Contains(commands, "ufw --force delete 1") {
 		t.Fatalf("expected delete command, got:\n%s", commands)
+	}
+}
+
+func TestValidateUFWRuleDeletionProtectsSSHAndManagedRules(t *testing.T) {
+	for name, status := range map[string]remoteops.UFWStatus{
+		"ssh":     {Rules: []remoteops.UFWRuleStatus{{Number: 1, To: "22022/tcp", Action: "ALLOW IN", From: "Anywhere"}}},
+		"managed": {Rules: []remoteops.UFWRuleStatus{{Number: 1, To: "8080/tcp", Action: "ALLOW IN", From: "Anywhere # panel:application:app-a"}}},
+		"unknown": {Rules: []remoteops.UFWRuleStatus{{Number: 1, To: "OpenSSH", Action: "ALLOW IN", From: "Anywhere"}}},
+		"agent":   {Rules: []remoteops.UFWRuleStatus{{Number: 1, To: "9786/tcp", Action: "ALLOW IN", From: "Anywhere"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := validateUFWRuleDeletion(status, 1, Server{Port: 22022, Traits: map[string]string{agentcontract.TraitURL: "https://127.0.0.1:9786"}}); err == nil {
+				t.Fatal("expected fail-closed validation error")
+			}
+		})
 	}
 }
 
@@ -636,7 +659,7 @@ func TestUFWStateUsesAgentWhenConfigured(t *testing.T) {
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_supported,reachable,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1',?,'debian','13',1,1,1,'passwordless_sudo','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, traits); err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.LogDB())
+	taskSvc := tasks.NewService(store.AppDB())
 	exec := &ufwManageFakeExec{}
 	agentClient := &serverFakeAgentClient{ufw: remoteops.UFWStatus{Installed: true, Active: true, Status: "active", Rules: []remoteops.UFWRuleStatus{{Number: 7, To: "9786/tcp", Action: "ALLOW IN", From: "Anywhere"}}}}
 	svc := newServerServiceForTest(store, exec, taskSvc)
@@ -674,7 +697,7 @@ func TestUFWStateUsesCompatibleAgentWithoutStoredPrivilege(t *testing.T) {
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_supported,reachable,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1',?,'debian','13',1,1,0,'none','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, traits); err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.LogDB())
+	taskSvc := tasks.NewService(store.AppDB())
 	exec := &ufwManageFakeExec{}
 	agentClient := &serverFakeAgentClient{ufw: remoteops.UFWStatus{Installed: true, Active: false, Status: "inactive"}}
 	svc := newServerServiceForTest(store, exec, taskSvc)
@@ -712,11 +735,16 @@ func TestUFWWriteOperationsUseAgentWhenConfigured(t *testing.T) {
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_supported,reachable,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1',?,'debian','13',1,1,1,'passwordless_sudo','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, traits); err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.LogDB())
+	taskSvc := tasks.NewService(store.AppDB())
 	exec := &ufwManageFakeExec{}
 	agentClient := &serverFakeAgentClient{ufw: remoteops.UFWStatus{Installed: true, Active: true, Status: "active"}}
 	svc := newServerServiceForTest(store, exec, taskSvc)
 	svc.SetAgentClient(agentClient)
+	channelChecks := 0
+	svc.firewallChannelCheck = func(context.Context, Server) error {
+		channelChecks++
+		return nil
+	}
 
 	if _, err := svc.AllowUFW(context.Background(), "srv_1", UFWAllowRequest{Port: 443, Protocol: "tcp"}); err != nil {
 		t.Fatal(err)
@@ -724,8 +752,18 @@ func TestUFWWriteOperationsUseAgentWhenConfigured(t *testing.T) {
 	if len(exec.commands) != 0 {
 		t.Fatalf("expected no SSH commands, got %#v", exec.commands)
 	}
-	if agentClient.ufwURL != "https://127.0.0.1:9786" || agentClient.allowedRule.Port != 443 {
-		t.Fatalf("expected agent UFW write, got url=%q rule=%#v", agentClient.ufwURL, agentClient.allowedRule)
+	if agentClient.ufwURL != "https://127.0.0.1:9786" || agentClient.allowedRule.Port != 443 || agentClient.allowedSSHPort != 22 {
+		t.Fatalf("expected agent UFW write with SSH protection, got url=%q rule=%#v ssh=%d", agentClient.ufwURL, agentClient.allowedRule, agentClient.allowedSSHPort)
+	}
+	agentClient.ufw.Rules = []remoteops.UFWRuleStatus{{Number: 3, To: "443/tcp", Action: "ALLOW IN", From: "Anywhere"}}
+	if _, err := svc.DeleteUFWRule(context.Background(), "srv_1", 3); err != nil {
+		t.Fatal(err)
+	}
+	if agentClient.deletedSSHPort != 22 {
+		t.Fatalf("delete SSHPort = %d, want 22", agentClient.deletedSSHPort)
+	}
+	if channelChecks != 4 {
+		t.Fatalf("firewall channel checks = %d, want pre/post for allow and delete", channelChecks)
 	}
 }
 
@@ -1494,7 +1532,7 @@ func TestUFWStateDoesNotFallbackOnAgentCertificateTimeError(t *testing.T) {
 		t.Fatal(err)
 	}
 	exec := &ufwManageFakeExec{}
-	svc := newServerServiceForTest(store, exec, tasks.NewService(store.LogDB()))
+	svc := newServerServiceForTest(store, exec, tasks.NewService(store.AppDB()))
 	certErr := x509.CertificateInvalidError{Reason: x509.Expired}
 	svc.SetAgentClient(&serverFakeAgentClient{err: certErr})
 
@@ -1909,7 +1947,7 @@ Status: active
 
      To                         Action      From
      --                         ------      ----
-[ 1] 22/tcp                     ALLOW IN    Anywhere
+[ 1] 443/tcp                    ALLOW IN    Anywhere
 `, ExitCode: 0}, nil
 	}
 	return sshx.CommandResult{ExitCode: 0}, nil
@@ -2044,6 +2082,8 @@ type serverFakeAgentClient struct {
 	systemTraits         map[string]string
 	err                  error
 	allowedRule          remoteops.UFWRule
+	allowedSSHPort       int
+	deletedSSHPort       int
 	capabilities         []string
 	prepareRestartErr    error
 	prepareRestartCalls  int
@@ -2099,10 +2139,12 @@ func (f *serverFakeAgentClient) UFWEnable(_ context.Context, url string, _ agent
 func (f *serverFakeAgentClient) UFWAllow(_ context.Context, url string, req agentcontract.UFWAllowRequest) (remoteops.UFWStatus, error) {
 	f.ufwURL = url
 	f.allowedRule = req.Rule
+	f.allowedSSHPort = req.SSHPort
 	return f.ufw, f.err
 }
-func (f *serverFakeAgentClient) UFWDelete(_ context.Context, url string, _ agentcontract.UFWDeleteRequest) (remoteops.UFWStatus, error) {
+func (f *serverFakeAgentClient) UFWDelete(_ context.Context, url string, req agentcontract.UFWDeleteRequest) (remoteops.UFWStatus, error) {
 	f.ufwURL = url
+	f.deletedSSHPort = req.SSHPort
 	return f.ufw, f.err
 }
 
@@ -2169,7 +2211,7 @@ func testServerService(t *testing.T, exec sshx.RemoteExecutor) (*Service, *tasks
 	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.LogDB())
+	taskSvc := tasks.NewService(store.AppDB())
 	return newServerServiceForTest(store, exec, taskSvc), taskSvc, store
 }
 

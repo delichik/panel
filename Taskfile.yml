@@ -8,6 +8,25 @@ env:
   GOCACHE: "{{.ROOT_DIR}}/tmp/go-build"
 
 tasks:
+  test:appdeploy:
+    desc: Test real application deployment scenarios and activity transport adapters
+    deps:
+      - generate:agent-contract-hash
+    cmds:
+      - go test ./internal/integration/appdeploy ./internal/modules/applications
+
+  generate:agent-proto:
+    desc: Generate Agent protobuf and gRPC bindings (requires protoc and Go plugins)
+    cmds:
+      - protoc -I internal/agent/proto --go_out=internal/agent/pb --go_opt=paths=source_relative --go-grpc_out=internal/agent/pb --go-grpc_opt=paths=source_relative internal/agent/proto/agent.proto
+
+  test:agent:
+    desc: Test Agent event transport, runtime, RPC and contract
+    deps:
+      - generate:agent-contract-hash
+    cmds:
+      - go test ./internal/agent/...
+
   generate:agent-contract-hash:
     desc: Generate the Agent gRPC contract hash
     cmds:

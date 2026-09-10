@@ -34,12 +34,12 @@ describe('domain mock routes', () => {
     expect(credentialsEnvelope.data.total).toBeGreaterThanOrEqual(15);
     expect(credentialsEnvelope.data.items.length).toBe(credentialsEnvelope.data.total);
 
-    const tasks = await fetch('/api/v1/tasks?pageSize=12&page=1');
+    const tasks = await fetch('/api/v1/executions?pageSize=12&page=1');
     const tasksEnvelope = await tasks.json();
     expect(tasksEnvelope.data.total).toBeGreaterThan(80);
     expect(tasksEnvelope.data.items.length).toBe(12);
 
-    const secondPage = await fetch('/api/v1/tasks?pageSize=12&page=2');
+    const secondPage = await fetch('/api/v1/executions?pageSize=12&page=2');
     const secondEnvelope = await secondPage.json();
     expect(secondEnvelope.data.items[0].id).not.toBe(tasksEnvelope.data.items[0].id);
   });
@@ -86,7 +86,7 @@ describe('domain mock routes', () => {
     expect(certsEnvelope.data.total).toBeGreaterThanOrEqual(10);
     expect(certsEnvelope.data.items.some((cert: { status: string }) => cert.status === 'renewing')).toBe(true);
 
-    const events = await fetch('/api/v1/system-events?pageSize=20&page=1');
+    const events = await fetch('/api/v1/activity/events?limit=20');
     const eventsEnvelope = await events.json();
     expect(eventsEnvelope.data.total).toBeGreaterThan(40);
     expect(eventsEnvelope.data.items.length).toBe(20);
@@ -237,23 +237,23 @@ describe('domain mock routes', () => {
   });
 
   it('serves task operation groups with steps, long logs, retry, and run-now routes', async () => {
-    const tasks = await fetch('/api/v1/tasks?operationPage=true&pageSize=80');
+    const tasks = await fetch('/api/v1/executions?operationPage=true&pageSize=80');
     const tasksEnvelope = await tasks.json();
     expect(tasks.status).toBe(200);
     expect(tasksEnvelope.data.items.some((task: { operationId: string }) => task.operationId === 'op-deploy-storefront')).toBe(true);
 
-    const steps = await fetch('/api/v1/tasks/task-deploy-3/steps');
+    const steps = await fetch('/api/v1/executions/task-deploy-3/steps');
     const stepsEnvelope = await steps.json();
     expect(stepsEnvelope.data.some((step: { status: string }) => step.status === 'failed_retryable')).toBe(true);
 
-    const logs = await fetch('/api/v1/tasks/task-deploy-3/logs');
+    const logs = await fetch('/api/v1/executions/task-deploy-3/logs');
     const logsEnvelope = await logs.json();
     expect(logsEnvelope.data.logs.length).toBeGreaterThan(30);
 
-    const retry = await fetch('/api/v1/tasks/task-deploy-3/retry', { method: 'POST' });
+    const retry = await fetch('/api/v1/executions/task-deploy-3/retry', { method: 'POST' });
     expect(retry.status).toBe(202);
 
-    const runNow = await fetch('/api/v1/tasks/task-backup-1/run-now', { method: 'POST' });
+    const runNow = await fetch('/api/v1/executions/task-backup-1/run-now', { method: 'POST' });
     expect(runNow.status).toBe(202);
   });
 

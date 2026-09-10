@@ -11,6 +11,12 @@ afterEach(() => {
 });
 
 describe('ApiClient', () => {
+  it('preserves operation references on a failed request without changing structured error details', async () => {
+    const details = { field: 'name' };
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ error: { code: 'execution_failed', message: 'Failed after acceptance', operationId: 'op-accepted', taskId: 'task-1', details } }), { status: 409, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
+    await expect(new ApiClient('/api/v1').post('/deploy')).rejects.toMatchObject({ details, activity: { operationId: 'op-accepted', taskId: 'task-1' } });
+  });
+
   it('unwraps successful data envelopes', async () => {
     globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ data: { ok: true } }), {
       status: 200,

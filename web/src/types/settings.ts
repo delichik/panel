@@ -22,9 +22,6 @@ export interface RuntimeSettings {
   metricsCollectionIntervalSeconds: number;
   containerReportIntervalSeconds: number;
   cleanupSchedule: string;
-  runtimeEventRetentionDays: number;
-  runtimeEventDetailRetentionDays: number;
-  runtimeEventCleanupSchedule: string;
   tokenExpiration: string;
   language: string;
   logLevel: string;
@@ -41,9 +38,6 @@ export interface RuntimeUpdate {
   metricsCollectionIntervalSeconds: number;
   containerReportIntervalSeconds: number;
   cleanupSchedule: string;
-  runtimeEventRetentionDays: number;
-  runtimeEventDetailRetentionDays: number;
-  runtimeEventCleanupSchedule: string;
   tokenExpiration: string;
   language: string;
   logLevel: string;

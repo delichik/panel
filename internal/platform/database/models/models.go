@@ -21,14 +21,14 @@ func AppModels() []any {
 		&FacilityStaticAsset{}, &ReverseProxyRoute{}, &FacilityEditSession{}, &FacilityEditSessionAsset{},
 		&FacilityEditSessionOperation{}, &StorageShareConfig{}, &StorageSharePartition{}, &Certificate{}, &SelfSignedCertificate{},
 		&KeyAsset{}, &OverviewCardConfiguration{}, &RuntimeSetting{}, &AuthState{},
-		&AuthAccount{},
+		&AuthAccount{}, &Task{}, &TaskStep{},
 	}
 }
 
 // LogModels 返回 log 库 7 张表的模型注册清单（事件与任务日志）。
 func LogModels() []any {
 	return []any{
-		&Task{}, &TaskStep{}, &TaskLog{}, &ApplicationRevision{},
+		&ApplicationRevision{},
 		&RuntimeEvent{}, &RuntimeEventDetail{}, &KeyAssetExport{},
 	}
 }

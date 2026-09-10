@@ -104,7 +104,7 @@ Open **Applications → Applications**, select **Add application**, and configur
 2. Enable the application.
 3. Set the image to `nginx:alpine`.
 4. Application networking is fixed to the managed `panel-apps` bridge network; no configuration is required.
-5. Add a port mapping from container port `80` to an unused host port such as `8081`.
+5. Add a TCP port mapping from container port `80` to an unused host port such as `8081`. Optionally enable **Manage firewall rule** to let Panel maintain the matching UFW allow rule on each deployment server.
 6. Set deployment mode to selected servers and choose one healthy server.
 7. Select **Save and apply**.
 
@@ -118,16 +118,16 @@ When the instance is running, open:
 http://<target-server>:8081
 ```
 
-If the target firewall is active, allow the selected host port under **Security → Firewall** or use a reverse proxy instead of publishing the test port publicly.
+If the target firewall is active and Panel is not managing this mapping's rule, allow the selected host port under **Resources → Firewall** or use a reverse proxy instead of publishing the test port publicly. Panel never installs or enables UFW as a side effect of application deployment, and it refuses application or manual firewall operations that target the server's SSH or Agent port. Every firewall write requires live SSH and Agent connectivity before and after the change.
 
 ## 6. Build a Real Application Configuration
 
-The application editor supports visual configuration and YAML. Common sections include:
+The application editor uses a structured configuration form. Common sections include:
 
 - Container image and command.
 - CPU, memory, privilege, and Linux capability settings.
 - Container environment variables.
-- Port mappings (application networking is always the managed `panel-apps` bridge network).
+- TCP/UDP port mappings and optional Panel-managed UFW rules (application networking is always the managed `panel-apps` bridge network). Managed rules require a fixed host port and are removed when the application stops, is deleted, or leaves a deployment server; pre-existing manual rules are never removed.
 - Host, Docker volume, managed file, and persistent mounts.
 - Application files and templates.
 - Deployment to all healthy servers or selected servers.

@@ -1,4 +1,6 @@
 import { inject, type InjectionKey } from 'vue';
+import { useI18n } from '@/i18n';
+import { activityPath } from '@/api/activityReference';
 
 export type ToastTone = 'success' | 'info' | 'warning' | 'danger';
 
@@ -6,10 +8,13 @@ export interface ToastPayload {
   title: string;
   description?: string;
   tone?: ToastTone;
+  action?: { label: string; to: string };
 }
 
-export interface ToastRecord extends Required<ToastPayload> {
+export interface ToastRecord extends ToastPayload {
   id: number;
+  description: string;
+  tone: ToastTone;
 }
 
 export interface ToastApi {
@@ -27,10 +32,18 @@ export function useToast() {
 
 export function useErrorToast() {
   const toast = useToast();
-  return (title: string) => toast.push({ title, tone: 'danger' });
+  const { t } = useI18n();
+  return (title: string, reference?: unknown) => {
+    const to = activityPath(reference);
+    toast.push({ title, tone: 'danger', action: to ? { label: t('activity.viewProcess'), to } : undefined });
+  };
 }
 
 export function useSuccessToast() {
   const toast = useToast();
-  return (title: string) => toast.push({ title, tone: 'success' });
+  const { t } = useI18n();
+  return (title: string, reference?: unknown) => {
+    const to = activityPath(reference);
+    toast.push({ title, tone: 'success', action: to ? { label: t('activity.viewProcess'), to } : undefined });
+  };
 }

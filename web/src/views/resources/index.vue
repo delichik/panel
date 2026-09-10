@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ActivityLink from '@/components/activity/ActivityLink.vue';
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { Boxes, Database, DownloadCloud, FileText, Package, Play, RefreshCcw, Router, Search, Square, Trash2 } from '@lucide/vue';
@@ -140,7 +141,7 @@ async function loadServers() {
   } catch (err) {
     if (isAbortError(err)) return;
     error.value = err instanceof Error ? err.message : t('resourcesPage.loadServersFailed');
-    notifyError(err instanceof Error ? err.message : t('resourcesPage.loadServersFailed'));
+    notifyError(err instanceof Error ? err.message : t('resourcesPage.loadServersFailed'), err);
   } finally {
     if (requestId === serversRequestId) loadingServers.value = false;
   }
@@ -193,7 +194,7 @@ async function loadResource() {
   } catch (err) {
     if (isAbortError(err)) return;
     actionError.value = err instanceof Error ? err.message : t('resourcesPage.loadResourceFailed');
-    notifyError(err instanceof Error ? err.message : t('resourcesPage.loadResourceFailed'));
+    notifyError(err instanceof Error ? err.message : t('resourcesPage.loadResourceFailed'), err);
     clearResource(tab);
   } finally {
     if (requestId === resourceRequestId) loadingResource.value = false;
@@ -224,19 +225,19 @@ async function refreshCurrent() {
   await run('refresh', async () => {
     if (activeTab.value === 'packages') {
       const result = await packagesApi.refresh(server.id);
-      notifySuccess(result.taskId ? t('resourcesPage.taskAccepted', { taskId: result.taskId }) : t('resourcesPage.refreshing'));
+      notifySuccess(result.taskId ? t('resourcesPage.taskAccepted', { taskId: result.taskId }) : t('resourcesPage.refreshing'), result);
       if (result.taskId) await waitForTask(result.taskId, 90_000, taskWaitSignal());
     } else if (activeTab.value === 'images') {
       const accepted = await containersApi.refreshImages(server.id);
-      notifySuccess(t('resourcesPage.taskAccepted', { taskId: accepted.taskId }));
+      notifySuccess(t('resourcesPage.taskAccepted', { taskId: accepted.taskId }), accepted);
     await waitForTask(accepted.taskId, 90_000, taskWaitSignal());
     } else if (activeTab.value === 'networks') {
       const accepted = await containersApi.refreshNetworks(server.id);
-      notifySuccess(t('resourcesPage.taskAccepted', { taskId: accepted.taskId }));
+      notifySuccess(t('resourcesPage.taskAccepted', { taskId: accepted.taskId }), accepted);
     await waitForTask(accepted.taskId, 90_000, taskWaitSignal());
     } else if (activeTab.value === 'volumes') {
       const accepted = await containersApi.refreshVolumes(server.id);
-      notifySuccess(t('resourcesPage.taskAccepted', { taskId: accepted.taskId }));
+      notifySuccess(t('resourcesPage.taskAccepted', { taskId: accepted.taskId }), accepted);
     await waitForTask(accepted.taskId, 90_000, taskWaitSignal());
     } else {
       await loadResource();
@@ -259,7 +260,7 @@ async function ensureSnapshot(serverId: string, tab: 'networks' | 'volumes') {
     if (!isAbortError(err)) {
       const message = err instanceof Error ? err.message : t('resourcesPage.loadResourceFailed');
       actionError.value = message;
-      notifyError(message);
+      notifyError(message, err);
     }
   } finally {
     autoRefreshing.delete(key);
@@ -271,7 +272,7 @@ async function upgradeSelectedPackages() {
   if (!selectedServer.value || !selectedPackages.value.length) return;
   await run('upgrade-selected', async () => {
     const accepted = await packagesApi.upgradeSelected(selectedServer.value!.id, selectedPackages.value);
-    notifySuccess(t('resourcesPage.taskAccepted', { taskId: accepted.taskId }));
+    notifySuccess(t('resourcesPage.taskAccepted', { taskId: accepted.taskId }), accepted);
     await loadResource();
   });
 }
@@ -286,8 +287,8 @@ async function containerAction(container: ContainerDto, action: 'start' | 'stop'
   if (!selectedServer.value || containerActionDisabled(container, action)) return;
   if (action === 'start') {
     await run(`start-${container.id}`, async () => {
-      await containersApi.containerAction(selectedServer.value!.id, container.id, 'start');
-      notifySuccess(t('resourcesPage.operationCompleted'));
+      const result = await containersApi.containerAction(selectedServer.value!.id, container.id, 'start');
+      notifySuccess(t('resourcesPage.operationCompleted'), result);
       await loadResource();
     });
     return;
@@ -318,19 +319,18 @@ async function confirmDanger() {
   await run(`confirm-${target.kind}`, async () => {
     if (target.kind === 'packages-upgrade-all') {
       const accepted = await packagesApi.upgradeAll(server.id);
-      notifySuccess(t('resourcesPage.taskAccepted', { taskId: accepted.taskId }));
+      notifySuccess(t('resourcesPage.taskAccepted', { taskId: accepted.taskId }), accepted);
     }
+    let result: unknown;
     if (target.kind === 'container-action' && target.id) {
-      if (target.action === 'delete') await containersApi.deleteContainer(server.id, target.id);
-      else await containersApi.containerAction(server.id, target.id, target.action ?? 'stop');
-      notifySuccess(t('resourcesPage.operationCompleted'));
+      result = target.action === 'delete' ? await containersApi.deleteContainer(server.id, target.id) : await containersApi.containerAction(server.id, target.id, target.action ?? 'stop');
     }
-    if (target.kind === 'container' && target.id) await containersApi.deleteContainer(server.id, target.id);
-    if (target.kind === 'image' && target.id) await containersApi.deleteImage(server.id, target.id);
-    if (target.kind === 'image-prune') await containersApi.deleteUnusedImages(server.id);
-    if (target.kind === 'volume' && target.id) await containersApi.deleteVolume(server.id, target.id);
-    if (target.kind === 'volume-prune') await containersApi.deleteUnusedVolumes(server.id);
-    if (target.kind !== 'packages-upgrade-all') notifySuccess(t('resourcesPage.operationCompleted'));
+    if (target.kind === 'container' && target.id) result = await containersApi.deleteContainer(server.id, target.id);
+    if (target.kind === 'image' && target.id) result = await containersApi.deleteImage(server.id, target.id);
+    if (target.kind === 'image-prune') result = await containersApi.deleteUnusedImages(server.id);
+    if (target.kind === 'volume' && target.id) result = await containersApi.deleteVolume(server.id, target.id);
+    if (target.kind === 'volume-prune') result = await containersApi.deleteUnusedVolumes(server.id);
+    if (target.kind !== 'packages-upgrade-all') notifySuccess(t('resourcesPage.operationCompleted'), result);
     confirmDialog.value = false;
     await loadResource();
   });
@@ -339,8 +339,8 @@ async function confirmDanger() {
 async function pullImage() {
   if (!selectedServer.value || !pullForm.reference.trim()) return;
   await run('pull-image', async () => {
-    await containersApi.pullImage(selectedServer.value!.id, pullForm.reference);
-    notifySuccess(t('resourcesPage.imagePulled'));
+    const result = await containersApi.pullImage(selectedServer.value!.id, pullForm.reference);
+    notifySuccess(t('resourcesPage.imagePulled'), result);
     pullDialog.value = false;
     await loadResource();
   });
@@ -349,7 +349,7 @@ async function pullImage() {
 async function upgradeImages(selected: boolean) {
   await run(selected ? 'upgrade-images-selected' : 'upgrade-images-all', async () => {
     const accepted = selected ? await containersApi.upgradeSelectedImages(imageUpgradeIds.value) : await containersApi.upgradeAllImages();
-    notifySuccess(t('resourcesPage.taskAccepted', { taskId: accepted.taskId }));
+    notifySuccess(t('resourcesPage.taskAccepted', { taskId: accepted.taskId }), accepted);
   });
 }
 
@@ -360,7 +360,7 @@ async function run(operation: string, action: () => Promise<void>) {
     await action();
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('common.operationFailed');
-    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
   } finally {
     pending.value = '';
   }
@@ -483,7 +483,7 @@ onBeforeUnmount(() => {
               <p class="m-0 mt-1 text-sm text-muted-foreground">{{ selectedServer.host }} · {{ selectedServer.dockerHost || t('common.notAvailable') }}</p>
             </div>
             <div class="flex flex-wrap gap-2">
-              <Button v-if="activeTab === 'packages' && selectedPackages.length" size="sm" variant="primary" :disabled="!canMaintainPackages(selectedServer)" :loading="pending === 'upgrade-selected'" @click="upgradeSelectedPackages"><Package />{{ t('resourcesPage.upgradeSelected') }}</Button>
+              <ActivityLink resource-type="server" :resource-id="selectedServer.id" /><Button v-if="activeTab === 'packages' && selectedPackages.length" size="sm" variant="primary" :disabled="!canMaintainPackages(selectedServer)" :loading="pending === 'upgrade-selected'" @click="upgradeSelectedPackages"><Package />{{ t('resourcesPage.upgradeSelected') }}</Button>
               <Button v-if="activeTab === 'images'" size="sm" variant="primary" :disabled="!canUseDockerResources(selectedServer)" @click="pullDialog = true"><DownloadCloud />{{ t('resourcesPage.pullImage') }}</Button>
             </div>
           </header>

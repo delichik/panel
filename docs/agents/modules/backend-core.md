@@ -95,11 +95,12 @@
 
 修改启动装配、配置项、运行时设置、进程日志、认证流程、API 路由、构建版本信息、数据库表/字段、错误响应结构、维护状态或恢复模式启动行为时，必须更新本文档或模块索引。
 
-## 运行事件装配
+## 统一日志装配与设置
 
-- 统一运行事件模块位于 `internal/modules/runtimeevents/`，生产装配在 `internal/bootstrap/panel/app.go` 中创建服务、注册 `/api/v1/application-operations` 与 `/api/v1/system-events` 路由，并启动独立清理 worker。
-- `runtime_events`、`runtime_event_details` 属于高增长运行历史，保存在 `Store.LogDB()`；`application_operation_records` 已随旧 lifecycle 层删除，不再创建。`runtimeEventRetentionDays`、`runtimeEventDetailRetentionDays`、`runtimeEventCleanupSchedule` 作为 runtime settings 保存在 `Store.AppDB()`。
-- 记录保留时间必须大于或等于详情保留时间。清理 worker 按 `runtimeEventRetentionDays` 删除过期 `runtime_events`；`runtime_event_details` 不再读写，原应用操作阶段/投影清理已随旧 lifecycle 层下线。
+- 统一日志查询位于 `internal/modules/activity/`，事实 Writer 和控制触发器位于 `internal/platform/activitylog/`。原始事实保存在 AppDB，任务执行控制与协调关键事实在同一事务提交；LogDB 用于可重建的查询数据。
+- `/api/v1/activity` 是统一日志命名空间，原三套任务/系统事件/应用协调历史入口退出使用。任务执行命令使用 `/api/v1/executions`，不提供编辑或删除日志的接口。
+- `runtimeEventRetentionDays`、`runtimeEventDetailRetentionDays`、`runtimeEventCleanupSchedule` 已从 runtime settings 的模型、默认值、读取、保存与校验移除，不再创建历史清理 worker。日志只追加且不自动过期；指标数据的 `metricsRetentionDays` / `cleanupSchedule` 继续独立生效。
+- `activity_redact` / `activity_redact_json` / `activity_hash` 在 SQLite 驱动打开连接前全局注册；控制触发器对字符串与结构化快照使用同一脱敏规则，并为控制业务载荷保存 SHA-256 散列。
 
 ## 密钥资产启动与存储
 

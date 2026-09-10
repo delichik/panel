@@ -33,6 +33,8 @@ const (
 // WriteEventInput 是系统日志的一条待写入记录。系统日志只保留简单可读字段，
 // 不承载 payload、日志/任务/目标引用或关联对象。
 type WriteEventInput struct {
+ ResourceID string
+ ResourceName string
 	ID           string
 	EventType    string
 	Category     string

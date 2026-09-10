@@ -952,15 +952,33 @@ func (s *Service) editSessionPath(sessionID string) string {
 
 func (s *Service) startEditSessionCleanup() {
 	s.editCleanupOnce.Do(func() {
+		s.editCleanupStop = make(chan struct{})
+		s.editCleanupDone = make(chan struct{})
 		go func() {
+			defer close(s.editCleanupDone)
 			s.cleanupEditSessions(time.Now().UTC())
 			ticker := time.NewTicker(editSessionCleanupPeriod)
 			defer ticker.Stop()
-			for now := range ticker.C {
-				s.cleanupEditSessions(now.UTC())
+			for {
+				select {
+				case <-s.editCleanupStop:
+					return
+				case now := <-ticker.C:
+					s.cleanupEditSessions(now.UTC())
+				}
 			}
 		}()
 	})
+}
+
+// Stop waits for the currently running cleanup before callers close its DB or
+// remove its filesystem root. No goroutine may recreate files after shutdown.
+func (s *Service) stopEditSessionCleanup() {
+	if s.editCleanupStop == nil {
+		return
+	}
+	s.editCleanupStopOnce.Do(func() { close(s.editCleanupStop) })
+	<-s.editCleanupDone
 }
 
 func (s *Service) cleanupEditSessions(now time.Time) {

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ActivityLink from '@/components/activity/ActivityLink.vue';
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { Download, FileArchive, KeyRound, Plus, RefreshCcw, RotateCcw, Trash2 } from '@lucide/vue';
@@ -158,7 +159,7 @@ async function load() {
     }
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('certificatesPage.loadFailed');
-    notifyError(err instanceof Error ? err.message : t('certificatesPage.loadFailed'));
+    notifyError(err instanceof Error ? err.message : t('certificatesPage.loadFailed'), err);
   } finally {
     if (listRequests.isCurrent(requestId)) loading.value = false;
   }
@@ -195,14 +196,14 @@ async function issueCertificate() {
     const prefixes = issuePrefixes();
     const input = { name: issueForm.name, domainId: issueForm.domainId, prefixes: prefixes.length ? prefixes : ['@'] };
     const result = editingCertificateId.value ? await certificatesApi.reissue(editingCertificateId.value, input) : await certificatesApi.issue(input);
-    notifySuccess(result.taskId ? t('certificatesPage.issueTask', { taskId: result.taskId }) : t('certificatesPage.issued'));
+    notifySuccess(result.taskId ? t('certificatesPage.issueTask', { taskId: result.taskId }) : t('certificatesPage.issued'), result);
     selectedId.value = result.certificate.id;
     editingCertificateId.value = '';
     dialog.value = '';
     await load();
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.operationFailed');
-    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
   } finally {
     saving.value = false;
   }
@@ -210,8 +211,8 @@ async function issueCertificate() {
 
 async function renewCertificate(cert: DomainCertificateDto) {
   await run(async () => {
-    await certificatesApi.renew(cert.id);
-    notifySuccess(t('certificatesPage.renewAccepted'));
+    const result = await certificatesApi.renew(cert.id);
+    notifySuccess(t('certificatesPage.renewAccepted'), result);
     await load();
   });
 }
@@ -228,12 +229,12 @@ async function saveSelf() {
       ? await certificatesApi.createSelfSignedCa({ name: selfForm.name, commonName: selfForm.commonName, years: Number(selfForm.years) || 5 })
       : await certificatesApi.createSelfSignedLeaf({ name: selfForm.name, caId: selfForm.caId, commonName: selfForm.commonName, dnsNames: cleanEntries(selfForm.dnsNames), ipAddresses: cleanEntries(selfForm.ipAddresses), days: Number(selfForm.days) || 90 });
     selectedId.value = saved.id;
-    notifySuccess(t('certificatesPage.selfSaved'));
+    notifySuccess(t('certificatesPage.selfSaved'), saved);
     dialog.value = '';
     await load();
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.operationFailed');
-    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
   } finally {
     saving.value = false;
   }
@@ -243,7 +244,7 @@ async function renewSelf(cert: SelfSignedCertificateDto) {
   await run(async () => {
     const renewed = await certificatesApi.renewSelfSigned(cert.id);
     selectedId.value = renewed.id;
-    notifySuccess(t('certificatesPage.selfRenewed'));
+    notifySuccess(t('certificatesPage.selfRenewed'), renewed);
     await load();
   });
 }
@@ -268,12 +269,12 @@ async function saveAsset() {
     if (dialog.value === 'asset-ssh') result = await keyAssetsApi.generateSsh({ name: assetForm.name, algorithm: assetForm.algorithm as 'ed25519' | 'rsa', keySize: Number(assetForm.keySize) || 0, comment: assetForm.comment });
     if (dialog.value === 'asset-import') result = await keyAssetsApi.importOne({ type: assetForm.type, name: assetForm.name, parentAssetId: assetForm.parentAssetId, commonName: assetForm.commonName, algorithm: assetForm.algorithm, keySize: Number(assetForm.keySize) || 0, certificatePem: assetForm.certificatePem, privateKeyPem: assetForm.privateKeyPem, publicKey: assetForm.publicKey });
     selectedId.value = result?.asset?.id ?? selectedId.value;
-    notifySuccess(t('certificatesPage.assetSaved'));
+    notifySuccess(t('certificatesPage.assetSaved'), result);
     dialog.value = '';
     await load();
   } catch (err) {
     const message = err instanceof Error ? err.message : t('common.operationFailed');
-    notifyError(message);
+    notifyError(message, err);
     if (assetDialog === 'asset-import') assetActionError.value = message;
     else error.value = message;
   } finally {
@@ -284,7 +285,7 @@ async function saveAsset() {
 async function reissueAsset(asset: KeyAssetDto) {
   await run(async () => {
     const result = asset.type === 'ssh_key_pair' ? await keyAssetsApi.regenerate(asset.id) : await keyAssetsApi.reissue(asset.id);
-    notifySuccess(result.taskId ? t('certificatesPage.assetTask', { taskId: result.taskId }) : t('certificatesPage.assetSaved'));
+    notifySuccess(result.taskId ? t('certificatesPage.assetTask', { taskId: result.taskId }) : t('certificatesPage.assetSaved'), result);
     await load();
   });
 }
@@ -292,7 +293,7 @@ async function reissueAsset(asset: KeyAssetDto) {
 async function createExport() {
   await run(async () => {
     const result = await keyAssetsApi.createExport({ assetIds: selectedAsset.value ? [selectedAsset.value.id] : userAssets.value.map((item) => item.id), password: assetForm.password });
-    notifySuccess(t('certificatesPage.exportTask', { taskId: result.taskId }));
+    notifySuccess(t('certificatesPage.exportTask', { taskId: result.taskId }), result);
     saveBlobDownload(await keyAssetsApi.downloadExport(result.taskId));
     dialog.value = '';
   });
@@ -315,7 +316,7 @@ async function executeImport(confirmDanger = false) {
   if (!importPlan.value) return;
   await run(async () => {
     const result = await keyAssetsApi.executeImport(importPlan.value!.planId, { strategy: 'overwrite', confirmOverwriteInUse: confirmDanger, confirmDangerousOverwrite: confirmDanger, resolutions: [] });
-    notifySuccess(t('certificatesPage.importTask', { taskId: result.taskId }));
+    notifySuccess(t('certificatesPage.importTask', { taskId: result.taskId }), result);
     dialog.value = '';
     importConfirmOpen.value = false;
     await load();
@@ -324,10 +325,11 @@ async function executeImport(confirmDanger = false) {
 
 async function deleteSelected() {
   await run(async () => {
-    if (mode.value === 'domains' && selectedCert.value) await certificatesApi.delete(selectedCert.value.id);
-    if (mode.value === 'self' && selectedSelf.value) await certificatesApi.deleteSelfSigned(selectedSelf.value.id);
-    if (mode.value === 'keys' && selectedAsset.value) await keyAssetsApi.delete(selectedAsset.value.id);
-    notifySuccess(t('certificatesPage.deleted'));
+    let result: unknown;
+    if (mode.value === 'domains' && selectedCert.value) result = await certificatesApi.delete(selectedCert.value.id);
+    if (mode.value === 'self' && selectedSelf.value) result = await certificatesApi.deleteSelfSigned(selectedSelf.value.id);
+    if (mode.value === 'keys' && selectedAsset.value) result = await keyAssetsApi.delete(selectedAsset.value.id);
+    notifySuccess(t('certificatesPage.deleted'), result);
     selectedId.value = '';
     confirmDelete.value = false;
     await load();
@@ -341,7 +343,7 @@ async function run(action: () => Promise<void>) {
     await action();
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.operationFailed');
-    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
   } finally {
     saving.value = false;
   }
@@ -556,7 +558,7 @@ function onFileChange(value: File | File[]) {
           <EmptyState v-if="mode === 'domains' && !selectedCert" :title="t('certificatesPage.selectCertificate')" :description="t('certificatesPage.selectCertificateHint')" />
           <article v-else-if="mode === 'domains' && selectedCert" class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
             <header class="flex items-start justify-between gap-3 border-b border-border p-5 max-md:grid">
-              <div><h2 class="m-0 text-xl font-semibold">{{ selectedCert.name }}</h2><p class="m-0 mt-1 text-sm text-muted-foreground">{{ selectedCert.domain }} / {{ selectedCert.issuer }}</p></div>
+              <div><ActivityLink resource-type="certificate" :resource-id="selectedCert.id" /><h2 class="m-0 text-xl font-semibold">{{ selectedCert.name }}</h2><p class="m-0 mt-1 text-sm text-muted-foreground">{{ selectedCert.domain }} / {{ selectedCert.issuer }}</p></div>
               <div class="flex flex-wrap gap-2">
                 <Button size="sm" @click="openReissue(selectedCert)"><RotateCcw />{{ t('certificatesPage.adjustReissue') }}</Button>
                 <Button size="sm" :loading="saving" @click="renewCertificate(selectedCert)"><RotateCcw />{{ t('certificatesPage.renew') }}</Button>
@@ -573,7 +575,7 @@ function onFileChange(value: File | File[]) {
                 <aside class="grid content-start gap-3">
                   <div class="rounded-2xl border border-border bg-muted p-4 text-sm"><div class="text-muted-foreground">{{ t('common.status') }}</div><strong>{{ t(certificateState(selectedCert)) }}</strong></div>
                   <div class="rounded-2xl border border-border bg-muted p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.expiresAt') }}</div><strong>{{ formatDateTime(selectedCert.notAfter) || t('common.notAvailable') }}</strong></div>
-                  <div class="rounded-2xl border border-border bg-muted p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.taskEntry') }}</div><strong>{{ selectedCert.status === 'issuing' ? t('certificatesPage.openTaskCenter') : t('certificatesPage.noActiveTask') }}</strong></div>
+                  <div class="rounded-2xl border border-border bg-muted p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.taskEntry') }}</div><ActivityLink resource-type="certificate" :resource-id="selectedCert.id" /></div>
                 </aside>
               </div>
             </div>
@@ -582,7 +584,7 @@ function onFileChange(value: File | File[]) {
           <EmptyState v-if="mode === 'self' && !selectedSelf" :title="t('certificatesPage.selectSelf')" :description="t('certificatesPage.selectSelfHint')" />
           <article v-else-if="mode === 'self' && selectedSelf" class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
             <header class="flex items-start justify-between gap-3 border-b border-border p-5 max-md:grid">
-              <div><h2 class="m-0 text-xl font-semibold">{{ selectedSelf.name }}</h2><p class="m-0 mt-1 text-sm text-muted-foreground">{{ selectedSelf.commonName }}</p></div>
+              <div><ActivityLink resource-type="certificate" :resource-id="selectedSelf.id" /><h2 class="m-0 text-xl font-semibold">{{ selectedSelf.name }}</h2><p class="m-0 mt-1 text-sm text-muted-foreground">{{ selectedSelf.commonName }}</p></div>
               <div class="flex flex-wrap gap-2">
                 <Button size="sm" @click="openSelf('self-leaf')"><Plus />{{ t('certificatesPage.generateLeaf') }}</Button>
                 <Button size="sm" :loading="saving" @click="renewSelf(selectedSelf)"><RotateCcw />{{ t('certificatesPage.reissue') }}</Button>
@@ -602,7 +604,7 @@ function onFileChange(value: File | File[]) {
           <EmptyState v-if="mode === 'keys' && !selectedAsset" :title="t('certificatesPage.selectAsset')" :description="t('certificatesPage.selectAssetHint')" />
           <article v-else-if="mode === 'keys' && selectedAsset" class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
             <header class="flex items-start justify-between gap-3 border-b border-border p-5 max-md:grid">
-              <div><h2 class="m-0 text-xl font-semibold">{{ selectedAsset.name }}</h2><p class="m-0 mt-1 text-sm text-muted-foreground">{{ assetTypeLabel(selectedAsset.type) }} / {{ selectedAsset.algorithm }}</p></div>
+              <div><ActivityLink resource-type="key_asset" :resource-id="selectedAsset.id" /><h2 class="m-0 text-xl font-semibold">{{ selectedAsset.name }}</h2><p class="m-0 mt-1 text-sm text-muted-foreground">{{ assetTypeLabel(selectedAsset.type) }} / {{ selectedAsset.algorithm }}</p></div>
               <div class="flex flex-wrap gap-2">
                 <Button size="sm" @click="openAsset('asset-ca')">{{ t('certificatesPage.generateCa') }}</Button>
                 <Button size="sm" @click="openAsset('asset-tls')">{{ t('certificatesPage.generateTls') }}</Button>

@@ -5,7 +5,11 @@ package appdeploy
 
 import (
 	"context"
+	"errors"
+	"panel/internal/agent/executionevents"
+	"path/filepath"
 	"sync"
+	"testing"
 	"time"
 
 	agentcontract "panel/internal/agent/contract"
@@ -52,6 +56,7 @@ type CallRecord struct {
 }
 
 type ScriptedAgent struct {
+	spool     *executionevents.Store
 	mu        sync.Mutex
 	script    map[ScriptKey]ScriptedResponse
 	defaults  []ScriptedResponse // 顺序取用；用尽后取最后一条
@@ -61,8 +66,15 @@ type ScriptedAgent struct {
 	stopErr   error
 }
 
-func NewScriptedAgent() *ScriptedAgent {
+func NewScriptedAgent(t *testing.T) *ScriptedAgent {
+	t.Helper()
+	spool, err := executionevents.Open(filepath.Join(t.TempDir(), "execution-events"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = spool.Close() })
 	return &ScriptedAgent{
+		spool:  spool,
 		script: map[ScriptKey]ScriptedResponse{},
 		calls:  map[ScriptKey]int{},
 		reconcile: func(ctx context.Context, baseURL string, req agentcontract.RuntimeReconcileRequest) (agentcontract.RuntimeReconcileResponse, error) {
@@ -115,7 +127,40 @@ func (a *ScriptedAgent) RecordCount(appID, serverID, action string) int {
 }
 
 // RuntimeReconcile 按剧本响应。这是 orchestrator 唯一调用的部署 RPC。
-func (a *ScriptedAgent) RuntimeReconcile(ctx context.Context, baseURL string, req agentcontract.RuntimeReconcileRequest) (agentcontract.RuntimeReconcileResponse, error) {
+func (a *ScriptedAgent) RuntimeReconcile(ctx context.Context, baseURL string, req agentcontract.RuntimeReconcileRequest) (result agentcontract.RuntimeReconcileResponse, runErr error) {
+	session, previous, err := a.spool.Begin(ctx, req)
+	if err != nil {
+		return result, err
+	}
+	if previous != nil {
+		if previous.State == "finished" && previous.Result != nil {
+			return *previous.Result, nil
+		}
+		return result, errors.New("execution is still unresolved")
+	}
+	defer session.Abandon()
+	started := time.Now().UTC()
+	stepID := req.ExecutionID + ":script"
+	if err = session.Append(ctx, agentcontract.ExecutionEvent{EventType: "step.started", StepID: stepID, StepName: req.Action, Status: "running", OccurredAt: started}); err != nil {
+		return result, err
+	}
+	defer func() {
+		finished := time.Now().UTC()
+		state := "succeeded"
+		if runErr != nil || result.ErrorCode != "" {
+			state = "failed"
+		}
+		if err := session.Append(context.WithoutCancel(ctx), agentcontract.ExecutionEvent{EventType: "step.finished", StepID: stepID, StepName: req.Action, Status: state, OccurredAt: finished, Text: result.ErrorMessage}); err != nil {
+			runErr = err
+			return
+		}
+		if len(result.Steps) == 0 {
+			result.Steps = []agentcontract.RuntimeReconcileStep{{StepID: stepID, Name: req.Action, Status: state, StartedAt: &started, FinishedAt: &finished}}
+		}
+		if err := session.Finish(context.WithoutCancel(ctx), result, runErr); err != nil {
+			runErr = err
+		}
+	}()
 	a.mu.Lock()
 	key := ScriptKey{ApplicationID: req.ApplicationID, ServerID: req.ServerID, Action: req.Action}
 	a.calls[key]++
@@ -228,3 +273,15 @@ func (a *ScriptedAgent) DockerContainerDelete(ctx context.Context, baseURL, id s
 func (a *ScriptedAgent) DockerContainerAction(ctx context.Context, baseURL, id, action string) error {
 	return nil
 }
+
+func (a *ScriptedAgent) ReadExecutionEvents(ctx context.Context, endpoint string, req agentcontract.ExecutionEventsRequest) (agentcontract.ExecutionEventsResponse, error) {
+	return a.spool.Read(ctx, req)
+}
+func (a *ScriptedAgent) AckExecutionEvents(ctx context.Context, endpoint string, req agentcontract.ExecutionEventsAck) error {
+	return a.spool.Ack(ctx, req)
+}
+func (a *ScriptedAgent) GetExecutionResult(ctx context.Context, endpoint, executionID string) (agentcontract.ExecutionResult, error) {
+	return a.spool.Result(ctx, executionID)
+}
+
+var _ agentcontract.ExecutionEventsClient = (*ScriptedAgent)(nil)

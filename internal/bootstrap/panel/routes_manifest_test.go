@@ -15,7 +15,7 @@ import (
 	"testing"
 )
 
-func TestAPIRouteManifestUnchanged(t *testing.T) {
+func TestAPIRouteManifest(t *testing.T) {
 	root := panelRepositoryRoot(t)
 	files := []string{filepath.Join(root, "internal", "bootstrap", "panel", "app.go")}
 	err := filepath.WalkDir(filepath.Join(root, "internal", "modules"), func(path string, entry fs.DirEntry, walkErr error) error {
@@ -32,8 +32,8 @@ func TestAPIRouteManifestUnchanged(t *testing.T) {
 	}
 
 	patterns := routePatterns(t, files)
-	const wantCount = 158
-	const wantHash = "af929361a5a5c059d1c51f8805c5a78ea30a83df028d0a2f818d27d9e422a741"
+	const wantCount = 166
+	const wantHash = "d71030358907e481d03ba3b8b2ffad24bab67ef931cbc6966c87d628dd9f19e9"
 	manifest := strings.Join(patterns, "\n") + "\n"
 	gotHash := fmt.Sprintf("%x", sha256.Sum256([]byte(manifest)))
 	if len(patterns) != wantCount || gotHash != wantHash {

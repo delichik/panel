@@ -1,3 +1,4 @@
+import type { ActivityReceipt } from './activity';
 export type DeploymentMode = 'all' | 'selected';
 export type FileKind = 'binary' | 'template' | 'archive';
 
@@ -115,16 +116,18 @@ export interface TemplateVariableDefinition {
   resourceName?: string;
 }
 
+export interface PanelFileDefinition {
+  id: string;
+  resourceId: string;
+  resourceType: string;
+  name: string;
+  kind: string;
+  source: string;
+}
+
 export interface ApplicationTemplateCatalog {
   variables: TemplateVariableDefinition[];
-  panelFiles: Array<{
-    id: string;
-    resourceId: string;
-    resourceType: string;
-    name: string;
-    kind: string;
-    source: string;
-  }>;
+  panelFiles: PanelFileDefinition[];
 }
 
 export interface ApplicationFile {
@@ -198,7 +201,7 @@ export interface ApplicationEditPreviewResult {
   expiresAt: string;
 }
 
-export interface ApplicationEditCommitResult {
+export interface ApplicationEditCommitResult extends ActivityReceipt {
   application: ApplicationDto;
   resourceVersion: ResourceVersion;
   applyRequested: boolean;
@@ -257,7 +260,7 @@ export interface ApplicationRuntime {
   observedAt: string;
 }
 
-export interface OperationResult {
+export interface OperationResult extends ActivityReceipt {
   taskId?: string;
   evalId?: string;
   deploymentId?: string;

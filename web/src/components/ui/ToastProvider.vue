@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { provide, ref } from 'vue';
+import { RouterLink } from 'vue-router';
 import { useI18n } from '@/i18n';
 import { toastKey, type ToastPayload, type ToastRecord } from './toast';
 
@@ -14,9 +15,10 @@ function push(payload: ToastPayload) {
     title: payload.title,
     description: payload.description ?? '',
     tone: payload.tone ?? 'info',
+    action: payload.action,
   };
   toasts.value = [...toasts.value, record];
-  window.setTimeout(() => remove(id), 4200);
+  window.setTimeout(() => remove(id), payload.action ? 15000 : 4200);
 }
 
 function remove(id: number) {
@@ -45,6 +47,7 @@ provide(toastKey, { push, remove });
         <div class="flex items-start justify-between gap-3">
           <div class="min-w-0">
             <strong class="block text-foreground">{{ toast.title }}</strong>
+            <RouterLink v-if="toast.action" :to="toast.action.to" class="mt-2 inline-flex items-center rounded-lg text-sm font-medium text-brand underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40" @click="remove(toast.id)">{{ toast.action.label }}</RouterLink>
             <p v-if="toast.description" class="m-0 mt-1 text-muted-foreground">{{ toast.description }}</p>
           </div>
           <button type="button" class="motion-icon-control text-muted-foreground hover:text-foreground" :aria-label="t('common.close')" @click="remove(toast.id)">x</button>

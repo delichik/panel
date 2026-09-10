@@ -2,15 +2,20 @@ package rpc
 
 import (
 	"context"
+	"errors"
+	executionevents "panel/internal/agent/executionevents"
 	"path/filepath"
+	"sync"
 	"time"
 
 	agentcontract "panel/internal/agent/contract"
 	agentdocker "panel/internal/agent/docker"
+	agentfirewall "panel/internal/agent/firewall"
 	"panel/internal/agent/nfsvol"
 	agentpb "panel/internal/agent/pb"
 	agentstorage "panel/internal/agent/storage"
 	agentsystem "panel/internal/agent/system"
+	appruntime "panel/internal/modules/applications/runtime"
 	"panel/internal/platform/linux/remoteops"
 
 	"google.golang.org/grpc"
@@ -21,14 +26,26 @@ import (
 type Handler struct {
 	agentpb.UnimplementedAgentServiceServer
 	agentpb.UnimplementedAgentReportServiceServer
-	collector agentsystem.LocalCollector
-	runtime   *agentdocker.LocalRuntime
-	reports   *reportHub
-	upgrades  packageUpgradeTracker
+	collector        agentsystem.LocalCollector
+	runtime          *agentdocker.LocalRuntime
+	runtimeReconcile func(context.Context, agentcontract.RuntimeReconcileRequest) (agentcontract.RuntimeReconcileResponse, error)
+	firewall         runtimeFirewall
+	reports          *reportHub
+	upgrades         packageUpgradeTracker
+	eventOnce        sync.Once
+	eventStore       *executionevents.Store
+	eventErr         error
+	eventDir         string
+}
+
+type runtimeFirewall interface {
+	EnsureApplicationRules(context.Context, string, int, int, []agentfirewall.Rule) error
+	CleanupApplicationRules(context.Context, string, int, int, []agentfirewall.Rule) error
 }
 
 type HandlerConfig struct {
-	DockerHost string
+	ExecutionEventsDir string
+	DockerHost         string
 }
 
 func NewHandler(cfg ...HandlerConfig) *Handler {
@@ -38,7 +55,11 @@ func NewHandler(cfg ...HandlerConfig) *Handler {
 	}
 	runtime, _ := agentdocker.NewLocalRuntime(dockerHost)
 	collector := agentsystem.LocalCollector{}
-	return &Handler{collector: collector, runtime: runtime, reports: newReportHub(collector, runtime)}
+	eventDir := "/opt/panel/agent/execution-events"
+	if len(cfg) > 0 && cfg[0].ExecutionEventsDir != "" {
+		eventDir = cfg[0].ExecutionEventsDir
+	}
+	return &Handler{collector: collector, runtime: runtime, runtimeReconcile: runtime.Reconcile, firewall: agentfirewall.New(), reports: newReportHub(collector, runtime), eventDir: eventDir}
 }
 
 func RegisterAgentService(server *grpc.Server, handler *Handler) {
@@ -114,17 +135,17 @@ func (h *Handler) UFWInstall(ctx context.Context, req *agentpb.UFWInstallRequest
 }
 
 func (h *Handler) UFWEnable(ctx context.Context, req *agentpb.UFWEnableRequest) (*agentpb.UFWStatusResponse, error) {
-	status, err := h.collector.EnableUFW(ctx, agentcontract.UFWEnableRequest{SSHPort: int(req.SshPort)})
+	status, err := h.collector.EnableUFW(ctx, agentcontract.UFWEnableRequest{SSHPort: int(req.SshPort), AgentPort: int(req.AgentPort)})
 	return pbUFWStatus(status), remoteError(err)
 }
 
 func (h *Handler) UFWAllow(ctx context.Context, req *agentpb.UFWAllowRequest) (*agentpb.UFWStatusResponse, error) {
-	status, err := h.collector.AllowUFW(ctx, agentcontract.UFWAllowRequest{Rule: goUFWRule(req.Rule)})
+	status, err := h.collector.AllowUFW(ctx, GoUFWAllowRequest(req))
 	return pbUFWStatus(status), remoteError(err)
 }
 
 func (h *Handler) UFWDelete(ctx context.Context, req *agentpb.UFWDeleteRequest) (*agentpb.UFWStatusResponse, error) {
-	status, err := h.collector.DeleteUFW(ctx, agentcontract.UFWDeleteRequest{Number: int(req.Number)})
+	status, err := h.collector.DeleteUFW(ctx, GoUFWDeleteRequest(req))
 	return pbUFWStatus(status), remoteError(err)
 }
 
@@ -266,12 +287,117 @@ func (h *Handler) RuntimeReconcile(ctx context.Context, req *agentpb.RuntimeReco
 	if err := h.requireRuntime(); err != nil {
 		return nil, err
 	}
-	result, err := h.runtime.Reconcile(ctx, agentcontract.RuntimeReconcileRequest{
-		JobID: req.JobId, ExecutionID: req.ExecutionId, ApplicationID: req.ApplicationId, InstanceID: req.InstanceId,
-		ServerID: req.ServerId, Action: req.Action, DesiredGeneration: int(req.DesiredGeneration), DesiredSpecHash: req.DesiredSpecHash,
-		DesiredRevisionID: req.DesiredRevisionId, Spec: goSpec(req.Spec), RemoveData: req.RemoveData, PreviousContainerName: req.PreviousContainerName,
-	})
-	return PBRuntimeReconcileResponse(result), remoteError(err)
+	store, err := h.executionEvents()
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, "durable execution event store is unavailable: "+err.Error())
+	}
+	input := GoRuntimeReconcileRequest(req)
+	session, previous, err := store.Begin(ctx, input)
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
+	if previous != nil {
+		if previous.State != "finished" || previous.Result == nil {
+			return nil, status.Error(codes.FailedPrecondition, "execution is "+previous.State+"; query its result instead of repeating the mutation")
+		}
+		return PBRuntimeReconcileResponse(*previous.Result), nil
+	}
+	defer session.Abandon()
+	runCtx := agentcontract.WithExecutionEventSink(ctx, session)
+	result, runErr := h.reconcileRuntimeAndFirewall(runCtx, input)
+	result.ErrorMessage = session.Redact(result.ErrorMessage)
+	result.ErrorDetail = session.Redact(result.ErrorDetail)
+	for i := range result.Steps {
+		result.Steps[i].Detail = session.Redact(result.Steps[i].Detail)
+	}
+	// Persist even if the initiating RPC disconnected. A durable result can then
+	// be recovered through GetExecutionResult by the next Panel process.
+	if runErr != nil && result.ErrorCode == "" {
+		result.ErrorCode = "runtime_error"
+		result.ErrorMessage = session.Redact(runErr.Error())
+	}
+	if err = session.Finish(context.WithoutCancel(ctx), result, runErr); err != nil {
+		return nil, status.Error(codes.Unavailable, "execution result persistence failed: "+err.Error())
+	}
+	// Reconcile failures have structured results. Returning an RPC error would
+	// discard them in gRPC, so business failures remain in this response.
+	if runErr != nil && result.ErrorCode == "" {
+		result.ErrorCode = "runtime_error"
+		result.ErrorMessage = session.Redact(runErr.Error())
+	}
+	persisted, persistErr := store.Result(context.WithoutCancel(ctx), input.ExecutionID)
+	if persistErr != nil {
+		return nil, remoteError(persistErr)
+	}
+	if persisted.State == "unknown" {
+		return nil, status.Error(codes.Unavailable, "execution outcome is unknown; query the durable execution result before another mutation")
+	}
+	return PBRuntimeReconcileResponse(result), nil
+}
+
+func (h *Handler) reconcileRuntimeAndFirewall(ctx context.Context, input agentcontract.RuntimeReconcileRequest) (agentcontract.RuntimeReconcileResponse, error) {
+	manager := h.firewall
+	if manager == nil {
+		manager = agentfirewall.New()
+	}
+	reconcile := h.runtimeReconcile
+	if reconcile == nil && h.runtime != nil {
+		reconcile = h.runtime.Reconcile
+	}
+	if reconcile == nil {
+		return firewallReconcileFailure("runtime", errors.New("runtime is not configured"))
+	}
+	desired := applicationFirewallRules(input.Spec)
+	if input.Action == "apply" {
+		if err := manager.EnsureApplicationRules(ctx, input.ApplicationID, input.SSHPort, input.AgentPort, desired); err != nil {
+			return firewallReconcileFailure("ensure_firewall", err)
+		}
+	}
+
+	result, runErr := reconcile(ctx, input)
+	if runErr != nil || result.ErrorCode != "" {
+		return result, runErr
+	}
+	switch input.Action {
+	case "apply":
+		if err := manager.CleanupApplicationRules(ctx, input.ApplicationID, input.SSHPort, input.AgentPort, desired); err != nil {
+			return mergeFirewallFailure(result, "cleanup_firewall", err)
+		}
+	case "stop", "purge":
+		if err := manager.CleanupApplicationRules(ctx, input.ApplicationID, input.SSHPort, input.AgentPort, nil); err != nil {
+			return mergeFirewallFailure(result, "cleanup_firewall", err)
+		}
+	}
+	return result, nil
+}
+
+func applicationFirewallRules(spec appruntime.Spec) []agentfirewall.Rule {
+	rules := make([]agentfirewall.Rule, 0, len(spec.Ports))
+	for _, port := range spec.Ports {
+		if !port.OpenFirewall || port.HostPort <= 0 {
+			continue
+		}
+		rules = append(rules, agentfirewall.Rule{Port: port.HostPort, Protocol: port.Protocol})
+	}
+	return rules
+}
+
+func firewallReconcileFailure(step string, err error) (agentcontract.RuntimeReconcileResponse, error) {
+	now := time.Now().UTC()
+	return agentcontract.RuntimeReconcileResponse{
+		ObservedAt: now, ErrorCode: "firewall_reconcile_failed", ErrorClass: "firewall", ErrorMessage: err.Error(), Retryable: true,
+		Steps: []agentcontract.RuntimeReconcileStep{{Name: step, Status: "failed", Detail: err.Error(), StartedAt: &now, FinishedAt: &now}},
+	}, err
+}
+
+func mergeFirewallFailure(result agentcontract.RuntimeReconcileResponse, step string, err error) (agentcontract.RuntimeReconcileResponse, error) {
+	now := time.Now().UTC()
+	result.ErrorCode = "firewall_reconcile_failed"
+	result.ErrorClass = "firewall"
+	result.ErrorMessage = err.Error()
+	result.Retryable = true
+	result.Steps = append(result.Steps, agentcontract.RuntimeReconcileStep{Name: step, Status: "failed", Detail: err.Error(), StartedAt: &now, FinishedAt: &now})
+	return result, err
 }
 
 func (h *Handler) RuntimeReload(ctx context.Context, req *agentpb.RuntimeReloadRequest) (*agentpb.RuntimeReloadResponse, error) {

@@ -47,7 +47,7 @@ async function login() {
     schedulePoll();
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('maintenancePage.loginFailed');
-    notifyError(err instanceof Error ? err.message : t('maintenancePage.loginFailed'));
+    notifyError(err instanceof Error ? err.message : t('maintenancePage.loginFailed'), err);
   } finally {
     pending.value = '';
   }
@@ -69,7 +69,7 @@ async function load() {
       return;
     }
     const message = err instanceof Error ? err.message : t('maintenancePage.loadFailed');
-    notifyError(message);
+    notifyError(message, err);
     if (mode.value === 'export') {
       mode.value = 'restore';
       try {
@@ -105,7 +105,7 @@ async function command(name: 'start' | 'password' | 'retry' | 'clear' | 'exit') 
       return;
     }
     error.value = err instanceof Error ? err.message : t('common.operationFailed');
-    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
   } finally {
     pending.value = '';
     schedulePoll();
@@ -155,7 +155,7 @@ async function downloadArchive() {
     saveBlobDownload(await maintenanceApi.downloadExport(status.value));
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.operationFailed');
-    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
   } finally {
     pending.value = '';
   }
