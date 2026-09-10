@@ -1,3 +1,4 @@
+import type { ActivityReceipt } from './activity';
 export type CertificateScope = 'single' | 'wildcard' | 'prefixes';
 export type CertificateStatus = 'pending' | 'issuing' | 'issued' | 'failed';
 
@@ -30,12 +31,12 @@ export interface IssueCertificateInput {
   scope?: CertificateScope;
 }
 
-export interface IssueCertificateResult {
+export interface IssueCertificateResult extends ActivityReceipt {
   certificate: DomainCertificateDto;
   taskId?: string;
 }
 
-export interface RenewCertificateResult {
+export interface RenewCertificateResult extends ActivityReceipt {
   renewed: boolean;
 }
 

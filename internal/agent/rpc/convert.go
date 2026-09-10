@@ -498,6 +498,7 @@ func GoFail2BanStatus(in *agentpb.Fail2BanStatusResponse) agentcontract.Fail2Ban
 func PBSpec(in appruntime.Spec) *agentpb.RuntimeSpec { return pbSpec(in) }
 func PBRuntimeReconcileRequest(in agentcontract.RuntimeReconcileRequest) *agentpb.RuntimeReconcileRequest {
 	return &agentpb.RuntimeReconcileRequest{
+		OperationId: in.OperationID, RunId: in.RunID,
 		JobId: in.JobID, ExecutionId: in.ExecutionID, ApplicationId: in.ApplicationID, InstanceId: in.InstanceID,
 		ServerId: in.ServerID, Action: in.Action, DesiredGeneration: int32(in.DesiredGeneration), DesiredSpecHash: in.DesiredSpecHash,
 		DesiredRevisionId: in.DesiredRevisionID, Spec: pbSpec(in.Spec), RemoveData: in.RemoveData, PreviousContainerName: in.PreviousContainerName,
@@ -509,6 +510,7 @@ func GoRuntimeReconcileResponse(in *agentpb.RuntimeReconcileResponse) agentcontr
 		return agentcontract.RuntimeReconcileResponse{}
 	}
 	out := agentcontract.RuntimeReconcileResponse{
+		VerificationSource: in.VerificationSource, VerificationReason: in.VerificationReason, VerifiedBy: in.VerifiedBy, VerifiedByName: in.VerifiedByName, VerifiedAt: optionalGoTime(in.VerifiedAt),
 		ObservedState: in.ObservedState, ContainerName: in.ContainerName, ContainerID: in.ContainerId,
 		ObservedGeneration: int(in.ObservedGeneration), ObservedSpecHash: in.ObservedSpecHash, ObservedImageDigest: in.ObservedImageDigest,
 		ObservedAt: goTime(in.ObservedAt), ErrorCode: in.ErrorCode, ErrorClass: in.ErrorClass, ErrorMessage: in.ErrorMessage,
@@ -520,7 +522,7 @@ func GoRuntimeReconcileResponse(in *agentpb.RuntimeReconcileResponse) agentcontr
 			if step == nil {
 				continue
 			}
-			out.Steps = append(out.Steps, agentcontract.RuntimeReconcileStep{Name: step.Name, Status: step.Status, Detail: step.Detail})
+			out.Steps = append(out.Steps, agentcontract.RuntimeReconcileStep{Name: step.Name, Status: step.Status, Detail: step.Detail, StepID: step.StepId, StartedAt: optionalGoTime(step.StartedAt), FinishedAt: optionalGoTime(step.FinishedAt)})
 		}
 	}
 	return out
@@ -529,9 +531,10 @@ func GoRuntimeReconcileResponse(in *agentpb.RuntimeReconcileResponse) agentcontr
 func PBRuntimeReconcileResponse(in agentcontract.RuntimeReconcileResponse) *agentpb.RuntimeReconcileResponse {
 	steps := make([]*agentpb.RuntimeReconcileStep, 0, len(in.Steps))
 	for _, step := range in.Steps {
-		steps = append(steps, &agentpb.RuntimeReconcileStep{Name: step.Name, Status: step.Status, Detail: step.Detail})
+		steps = append(steps, &agentpb.RuntimeReconcileStep{Name: step.Name, Status: step.Status, Detail: step.Detail, StepId: step.StepID, StartedAt: optionalPBTime(step.StartedAt), FinishedAt: optionalPBTime(step.FinishedAt)})
 	}
 	return &agentpb.RuntimeReconcileResponse{
+		VerificationSource: in.VerificationSource, VerificationReason: in.VerificationReason, VerifiedBy: in.VerifiedBy, VerifiedByName: in.VerifiedByName, VerifiedAt: optionalPBTime(in.VerifiedAt),
 		ObservedState: in.ObservedState, ContainerName: in.ContainerName, ContainerId: in.ContainerID,
 		ObservedGeneration: int32(in.ObservedGeneration), ObservedSpecHash: in.ObservedSpecHash, ObservedImageDigest: in.ObservedImageDigest,
 		ObservedAt: pbTime(in.ObservedAt), Steps: steps, ErrorCode: in.ErrorCode, ErrorClass: in.ErrorClass,

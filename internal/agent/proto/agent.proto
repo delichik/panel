@@ -36,6 +36,10 @@ service AgentService {
   rpc DockerVolumeDelete(DockerVolumeDeleteRequest) returns (OKResponse);
   rpc RuntimeWriteFiles(RuntimeWriteFilesRequest) returns (OKResponse);
   rpc RuntimeReconcile(RuntimeReconcileRequest) returns (RuntimeReconcileResponse);
+  rpc ReadExecutionEvents(ExecutionEventsRequest) returns (ExecutionEventsResponse);
+  rpc AckExecutionEvents(ExecutionEventsAck) returns (OKResponse);
+  rpc GetExecutionResult(ExecutionResultRequest) returns (ExecutionResultResponse);
+  rpc ResolveExecution(ExecutionResolutionRequest) returns (ExecutionResultResponse);
   rpc RuntimeReload(RuntimeReloadRequest) returns (RuntimeReloadResponse);
   rpc RuntimeCreateContainer(RuntimeCreateContainerRequest) returns (RuntimeCreateContainerResponse);
   rpc RuntimeStop(RuntimeStopRequest) returns (RuntimeInstanceResponse);
@@ -328,12 +332,17 @@ message RuntimeReconcileRequest {
   RuntimeSpec spec = 10;
   bool remove_data = 11;
   string previous_container_name = 12;
+  string operation_id = 13;
+  string run_id = 14;
 }
 
 message RuntimeReconcileStep {
   string name = 1;
   string status = 2;
   string detail = 3;
+  string step_id = 4;
+  google.protobuf.Timestamp started_at = 5;
+  google.protobuf.Timestamp finished_at = 6;
 }
 
 message RuntimeReconcileResponse {
@@ -351,6 +360,11 @@ message RuntimeReconcileResponse {
   string error_detail = 12;
   bool retryable = 13;
   int32 retry_after_seconds = 14;
+  string verification_source = 15;
+  string verification_reason = 16;
+  string verified_by = 17;
+  string verified_by_name = 18;
+  google.protobuf.Timestamp verified_at = 19;
 }
 
 message RuntimeReloadRequest {
@@ -611,4 +625,65 @@ message DockerVolumesResponse {
 
 message DockerVolumeDeleteRequest {
   string name = 1;
+}
+
+
+// One sequence domain per actual executor invocation. Channels such as stderr
+// are event attributes and must never partition this sequence for ACK purposes.
+message ExecutionEvent {
+  string event_id = 1;
+  int64 source_seq = 2;
+  google.protobuf.Timestamp occurred_at = 3;
+  string event_type = 4;
+  string operation_id = 5;
+  string run_id = 6;
+  string execution_id = 7;
+  string step_id = 8;
+  string step_name = 9;
+  string status = 10;
+  string stream = 11;
+  string text = 12;
+  string data_json = 13;
+}
+message ExecutionEventsRequest {
+  string execution_id = 1;
+  string source_epoch = 2;
+  string source_stream_id = 3;
+  int64 after_source_seq = 4;
+  int32 limit = 5;
+}
+message ExecutionEventsResponse {
+  string source_id = 1;
+  string source_epoch = 2;
+  string source_stream_id = 3;
+  repeated ExecutionEvent events = 4;
+  int64 head_seq = 5;
+  int64 end_seq = 6;
+  bool has_more = 7;
+  int64 acked_through_seq = 8;
+}
+message ExecutionEventsAck {
+  string execution_id = 1;
+  string source_id = 2;
+  string source_epoch = 3;
+  string source_stream_id = 4;
+  int64 through_source_seq = 5;
+}
+message ExecutionResultRequest { string execution_id = 1; }
+message ExecutionResultResponse {
+  string state = 1;
+  RuntimeReconcileResponse result = 2;
+  string error = 3;
+  int64 end_seq = 4;
+}
+
+
+// Only the authenticated Panel may submit a human declaration for an unknown
+// execution. It cannot modify earlier source facts or resolve a running action.
+message ExecutionResolutionRequest {
+  string execution_id = 1;
+  string outcome = 2;
+  string reason = 3;
+  string actor_id = 4;
+  string actor_name = 5;
 }

@@ -170,7 +170,7 @@ func TestCreateListServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.LogDB())
+	taskSvc := tasks.NewService(store.AppDB())
 	svc := newServerServiceForTest(store, nil, taskSvc)
 	_, err = svc.Create(context.Background(), SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: cred.ID})
 	if err != nil {
@@ -201,7 +201,7 @@ func TestListServersLoadsMetricsDBLoadAverage(t *testing.T) {
 	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.LogDB())
+	taskSvc := tasks.NewService(store.AppDB())
 	svc := newServerServiceForTest(store, nil, taskSvc)
 	svc.SetMetricsDB(store.MetricsDB())
 	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
@@ -334,7 +334,7 @@ func TestConnectivityUsesBoundedSudoTimeoutAndCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.LogDB())
+	taskSvc := tasks.NewService(store.AppDB())
 	exec := &connectivityFakeExec{}
 	svc := newServerServiceForTest(store, exec, taskSvc)
 	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: cred.ID})
@@ -591,7 +591,7 @@ func TestUFWStateAllowAndDeleteRule(t *testing.T) {
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,reachable,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1','debian','13',1,1,1,'passwordless_sudo','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.LogDB())
+	taskSvc := tasks.NewService(store.AppDB())
 	exec := &ufwManageFakeExec{}
 	svc := newServerServiceForTest(store, exec, taskSvc)
 
@@ -636,7 +636,7 @@ func TestUFWStateUsesAgentWhenConfigured(t *testing.T) {
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_supported,reachable,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1',?,'debian','13',1,1,1,'passwordless_sudo','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, traits); err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.LogDB())
+	taskSvc := tasks.NewService(store.AppDB())
 	exec := &ufwManageFakeExec{}
 	agentClient := &serverFakeAgentClient{ufw: remoteops.UFWStatus{Installed: true, Active: true, Status: "active", Rules: []remoteops.UFWRuleStatus{{Number: 7, To: "9786/tcp", Action: "ALLOW IN", From: "Anywhere"}}}}
 	svc := newServerServiceForTest(store, exec, taskSvc)
@@ -674,7 +674,7 @@ func TestUFWStateUsesCompatibleAgentWithoutStoredPrivilege(t *testing.T) {
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_supported,reachable,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1',?,'debian','13',1,1,0,'none','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, traits); err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.LogDB())
+	taskSvc := tasks.NewService(store.AppDB())
 	exec := &ufwManageFakeExec{}
 	agentClient := &serverFakeAgentClient{ufw: remoteops.UFWStatus{Installed: true, Active: false, Status: "inactive"}}
 	svc := newServerServiceForTest(store, exec, taskSvc)
@@ -712,7 +712,7 @@ func TestUFWWriteOperationsUseAgentWhenConfigured(t *testing.T) {
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_supported,reachable,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1',?,'debian','13',1,1,1,'passwordless_sudo','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, traits); err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.LogDB())
+	taskSvc := tasks.NewService(store.AppDB())
 	exec := &ufwManageFakeExec{}
 	agentClient := &serverFakeAgentClient{ufw: remoteops.UFWStatus{Installed: true, Active: true, Status: "active"}}
 	svc := newServerServiceForTest(store, exec, taskSvc)
@@ -1494,7 +1494,7 @@ func TestUFWStateDoesNotFallbackOnAgentCertificateTimeError(t *testing.T) {
 		t.Fatal(err)
 	}
 	exec := &ufwManageFakeExec{}
-	svc := newServerServiceForTest(store, exec, tasks.NewService(store.LogDB()))
+	svc := newServerServiceForTest(store, exec, tasks.NewService(store.AppDB()))
 	certErr := x509.CertificateInvalidError{Reason: x509.Expired}
 	svc.SetAgentClient(&serverFakeAgentClient{err: certErr})
 
@@ -2169,7 +2169,7 @@ func testServerService(t *testing.T, exec sshx.RemoteExecutor) (*Service, *tasks
 	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.LogDB())
+	taskSvc := tasks.NewService(store.AppDB())
 	return newServerServiceForTest(store, exec, taskSvc), taskSvc, store
 }
 

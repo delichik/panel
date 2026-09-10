@@ -58,7 +58,7 @@ func (r *serviceRuntimeReconciler) Reconcile(ctx context.Context, req controlpla
 		if err != nil {
 			return failureResponse("agent_health_failed", "agent_unavailable", true, nil, err)
 		}
-		if !containsAgentCapability(health.Capabilities, "runtime-reconcile") {
+		if !containsAgentCapability(health.Capabilities, "runtime-reconcile") || !containsAgentCapability(health.Capabilities, agentcontract.CapabilityExecutionEvents) {
 			return controlplane.ReconcileResponse{ErrorCode: "agent_capability_missing", ErrorClass: "agent_unavailable", ErrorMessage: "agent does not support runtime-reconcile", Retryable: true}, nil
 		}
 	}
@@ -72,12 +72,12 @@ func (r *serviceRuntimeReconciler) Reconcile(ctx context.Context, req controlpla
 		if err != nil {
 			return failureResponse("invalid_spec", "invalid_spec", false, nil, err)
 		}
-		response, err := client.RuntimeReconcile(runCtx, endpoint, agentcontract.RuntimeReconcileRequest{
+		return r.callTracked(runCtx, endpoint, req, client, agentcontract.RuntimeReconcileRequest{
+			OperationID: req.OperationID, RunID: req.RunID,
 			JobID: req.JobID, ExecutionID: req.ExecutionID, ApplicationID: req.ApplicationID, InstanceID: req.InstanceID,
 			ServerID: req.ServerID, Action: req.Action, DesiredGeneration: req.DesiredGeneration, DesiredSpecHash: req.DesiredSpecHash,
 			DesiredRevisionID: req.DesiredRevisionID, Spec: spec, RemoveData: req.RemoveData, PreviousContainerName: req.PreviousContainerName,
 		})
-		return reconcileResponseFromAgent(response), err
 	}
 
 	switch req.Action {

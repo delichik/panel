@@ -1,3 +1,4 @@
+import type { ActivityReceipt } from './activity';
 import type { AnyAccessConfig, ApplicationEditPreviewResult, ApplicationRuntime, Diagnostic, HttpRouteOptions, LifecycleOperation, PreviewToken, ResourceVersion } from './applications';
 
 export type StaticSourceType = 'uploaded_file' | 'uploaded_bundle';
@@ -118,7 +119,7 @@ export interface FacilityEditValidationResult {
 
 export type FacilityEditPreviewResult = ApplicationEditPreviewResult;
 
-export interface FacilityEditCommitResult {
+export interface FacilityEditCommitResult extends ActivityReceipt {
   config: ReverseProxyConfig;
   resourceVersion: ResourceVersion;
   applyRequested: boolean;
@@ -179,7 +180,7 @@ export interface StoragePartitionStatus extends StorageSharePartition {
   mountDetail?: string;
 }
 
-export interface StorageShareReconcileResult {
+export interface StorageShareReconcileResult extends ActivityReceipt {
   taskId: string;
   config: StorageShareConfig;
 }

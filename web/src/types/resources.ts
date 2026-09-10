@@ -1,3 +1,4 @@
+import type { ActivityReceipt } from './activity';
 export interface PackageUpdateList {
   serverId: string;
   lastRefreshedAt?: string | null;
@@ -12,13 +13,13 @@ export interface PackageUpdate {
   source: string;
 }
 
-export interface RefreshResult {
+export interface RefreshResult extends ActivityReceipt {
   serverId: string;
   refreshing: boolean;
   taskId?: string;
 }
 
-export interface OperationResult {
+export interface OperationResult extends ActivityReceipt {
   refreshTaskId?: string;
 }
 

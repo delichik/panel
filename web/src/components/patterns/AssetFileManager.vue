@@ -88,7 +88,7 @@ function firstFile(value: File | File[]) {
 
 function setError(key: string, error: unknown) {
   const message = error instanceof Error && error.message ? error.message : props.labels.operationFailed;
-  notifyError(message);
+  notifyError(message, error);
   errors.value = { ...errors.value, [key]: message };
 }
 
@@ -173,7 +173,7 @@ async function openText(item: AssetFileItem) {
   } catch (error) {
     if (generation === loadGeneration.value) {
       const message = error instanceof Error ? error.message : props.labels.loadFailed;
-      notifyError(message);
+      notifyError(message, error);
       textError.value = message;
     }
   } finally {
@@ -199,7 +199,7 @@ async function saveText() {
     assetOpen.value = false;
   } catch (error) {
     const message = error instanceof Error ? error.message : props.labels.loadFailed;
-    notifyError(message);
+    notifyError(message, error);
     textError.value = message;
     textConflict.value = (error as { code?: string })?.code === 'edit_session_revision_conflict';
   } finally {
@@ -223,7 +223,7 @@ async function reloadText() {
     textConflict.value = false;
   } catch (error) {
     const message = error instanceof Error ? error.message : props.labels.loadFailed;
-    notifyError(message);
+    notifyError(message, error);
     textError.value = message;
   } finally {
     textLoading.value = false;

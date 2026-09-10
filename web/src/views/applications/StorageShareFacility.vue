@@ -118,7 +118,7 @@ async function load() {
   try {
     config.value = await storageShareFacilityApi.get();
   } catch (err) {
-    notifyError(errorText(err));
+    notifyError(errorText(err), err);
     error.value = errorText(err);
   } finally {
     loading.value = false;
@@ -196,11 +196,11 @@ async function save() {
       version: config.value?.version ?? 0,
     });
     resetDraft();
-    notifySuccess(t('applicationsPage.storageShareConfigSaved'));
+    notifySuccess(t('applicationsPage.storageShareConfigSaved'), config.value);
     if (config.value.lastError) notifyError(`${t('applicationsPage.storageShareLastError')}: ${config.value.lastError}`);
     await loadStatus();
   } catch (err) {
-    notifyError(errorText(err));
+    notifyError(errorText(err), err);
   } finally {
     saving.value = false;
     pending.value = '';
@@ -212,10 +212,10 @@ async function reconcile() {
   try {
     const result = await storageShareFacilityApi.reconcile();
     config.value = result.config;
-    notifySuccess(t('applicationsPage.storageShareReconcileTaskAccepted'));
+    notifySuccess(t('applicationsPage.storageShareReconcileTaskAccepted'), result);
     await loadStatus();
   } catch (err) {
-    notifyError(errorText(err));
+    notifyError(errorText(err), err);
   } finally {
     pending.value = '';
   }
@@ -228,10 +228,10 @@ async function uninstall() {
     uninstallOpen.value = false;
     config.value = result;
     status.value = null;
-    notifySuccess(t('applicationsPage.storageShareUninstalled'));
+    notifySuccess(t('applicationsPage.storageShareUninstalled'), result);
     if (result.lastError) notifyError(`${t('applicationsPage.storageShareLastError')}: ${result.lastError}`);
   } catch (err) {
-    notifyError(errorText(err));
+    notifyError(errorText(err), err);
   } finally {
     pending.value = '';
   }
@@ -242,7 +242,7 @@ async function downloadPartition(partition: StorageSharePartition) {
   try {
     saveBlobDownload(await storageShareFacilityApi.downloadPartition(partition.id, `${partition.applicationName}-${partition.serverName}-storage.tgz`));
   } catch (err) {
-    notifyError(errorText(err));
+    notifyError(errorText(err), err);
   } finally {
     pending.value = '';
   }
@@ -253,13 +253,13 @@ async function deletePartition() {
   if (!partition) return;
   pending.value = `delete-${partition.id}`;
   try {
-    await storageShareFacilityApi.deletePartition(partition.id);
-    notifySuccess(t('applicationsPage.storageSharePartitionDeleted'));
+    const result = await storageShareFacilityApi.deletePartition(partition.id);
+    notifySuccess(t('applicationsPage.storageSharePartitionDeleted'), result);
     deletePartitionTarget.value = null;
     await load();
     await loadStatus();
   } catch (err) {
-    notifyError(errorText(err));
+    notifyError(errorText(err), err);
   } finally {
     pending.value = '';
   }

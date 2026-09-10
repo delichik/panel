@@ -1,3 +1,4 @@
+import type { ActivityReceipt } from './activity';
 export type DeploymentMode = 'all' | 'selected';
 export type FileKind = 'binary' | 'template' | 'archive';
 
@@ -198,7 +199,7 @@ export interface ApplicationEditPreviewResult {
   expiresAt: string;
 }
 
-export interface ApplicationEditCommitResult {
+export interface ApplicationEditCommitResult extends ActivityReceipt {
   application: ApplicationDto;
   resourceVersion: ResourceVersion;
   applyRequested: boolean;
@@ -257,7 +258,7 @@ export interface ApplicationRuntime {
   observedAt: string;
 }
 
-export interface OperationResult {
+export interface OperationResult extends ActivityReceipt {
   taskId?: string;
   evalId?: string;
   deploymentId?: string;

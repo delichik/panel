@@ -11,6 +11,7 @@ import (
 
 	agentclient "panel/internal/agent/client"
 	agentcontract "panel/internal/agent/contract"
+	"panel/internal/modules/activity"
 	"panel/internal/modules/applications"
 	"panel/internal/modules/backups"
 	"panel/internal/modules/certificates/certs"
@@ -23,7 +24,6 @@ import (
 	"panel/internal/modules/observability/metrics"
 	"panel/internal/modules/observability/overview"
 	"panel/internal/modules/packages"
-	"panel/internal/modules/runtimeevents"
 	"panel/internal/modules/servers"
 	"panel/internal/modules/servers/credential"
 	"panel/internal/modules/settings"
@@ -55,10 +55,9 @@ type App struct {
 	mux            *http.ServeMux
 	auth           *auth.Service
 	tasks          *tasks.Worker
-	tasksCleanup   *tasks.CleanupWorker
 	metricsCleanup *metrics.CleanupWorker
-	eventCleanup   *runtimeevents.CleanupWorker
-	eventLogs      *runtimeevents.BufferedWriter
+	activity       *activity.Service
+	eventLogs      *systemEventWriter
 	applicationSvc *applications.Service
 	settings       *settings.Service
 	keyAssets      *keyassets.Service
@@ -82,9 +81,14 @@ func New(cfg config.Config) (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	taskSvc := tasks.NewService(store.LogDB())
-	eventSvc := runtimeevents.NewService(store.LogDB())
-	eventWriter := runtimeevents.NewBufferedWriter(eventSvc, 5*time.Second)
+	taskSvc := tasks.NewService(store.AppDB())
+	activitySvc := activity.NewService(store.AppDB(), store.LogDB())
+	if err := activitySvc.Init(context.Background()); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	activitySvc.Commands = activityCommands(taskSvc, store.AppDB())
+	eventWriter := &systemEventWriter{service: activitySvc}
 	taskSvc.SetRuntimeEvents(eventWriter)
 	certBridge := &applicationCertificateBridge{}
 	containerBridge := &applicationContainerBridge{}
@@ -200,7 +204,6 @@ func New(cfg config.Config) (*App, error) {
 	systemSvc := systeminfo.NewService(nil)
 	systemSvc.Start(context.Background())
 	taskWorker := tasks.NewWorker(taskSvc)
-	taskCleanup := tasks.NewCleanupWorker(taskSvc)
 	diagnosticsSvc := diagnostics.NewServiceWithTaskRuntime(
 		taskWorker,
 		diagnostics.DatabaseSource{Name: "app", DB: store.AppDB(), Path: cfg.AppDatabase},
@@ -216,13 +219,7 @@ func New(cfg config.Config) (*App, error) {
 			Schedule:      runtime.CleanupSchedule,
 		}
 	})
-	eventCleanup := runtimeevents.NewCleanupWorker(eventSvc, func() runtimeevents.CleanupSettings {
-		runtime := settingsSvc.Runtime()
-		return runtimeevents.CleanupSettings{
-			RetentionDays: runtime.RuntimeEventRetentionDays,
-			Schedule:      runtime.RuntimeEventCleanupSchedule,
-		}
-	})
+
 	backupSvc := backups.NewService(backups.ArchiveConfig{
 		DataRoot:             cfg.DataRoot,
 		AppDatabase:          cfg.AppDatabase,
@@ -239,9 +236,8 @@ func New(cfg config.Config) (*App, error) {
 		mux:            http.NewServeMux(),
 		auth:           authSvc,
 		tasks:          taskWorker,
-		tasksCleanup:   taskCleanup,
 		metricsCleanup: metricsCleanup,
-		eventCleanup:   eventCleanup,
+		activity:       activitySvc,
 		eventLogs:      eventWriter,
 		system:         systemSvc,
 		agentReports:   reportCollector,
@@ -266,14 +262,13 @@ func New(cfg config.Config) (*App, error) {
 		return nil, err
 	}
 	taskWorker.Start(context.Background())
-	taskCleanup.Start(context.Background())
 	metricsCleanup.Start(context.Background())
-	eventCleanup.Start(context.Background())
 	eventWriter.Start(context.Background())
 	reportCollector.Start(context.Background())
 	logging.L().Info("background services started")
 	taskHandler := tasks.NewHandler(taskSvc, taskWorker)
-	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), taskHandler, metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), runtimeevents.NewHandler(eventSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), facilityapps.NewHandler(facilitySvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc), backups.NewHandler(backupSvc))
+	taskHandler.SetExternalResolver(applicationSvc.ResolveExecutionManually)
+	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), taskHandler, metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), activity.NewHandler(activitySvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), facilityapps.NewHandler(facilitySvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc), backups.NewHandler(backupSvc))
 	logging.L().Info("application initialized")
 	return a, nil
 }
@@ -301,14 +296,8 @@ func (a *App) stopBackgroundServices() {
 	if a.tasks != nil {
 		a.tasks.Stop()
 	}
-	if a.tasksCleanup != nil {
-		a.tasksCleanup.Stop()
-	}
 	if a.metricsCleanup != nil {
 		a.metricsCleanup.Stop()
-	}
-	if a.eventCleanup != nil {
-		a.eventCleanup.Stop()
 	}
 	if a.eventLogs != nil {
 		a.eventLogs.Stop()
@@ -350,14 +339,14 @@ func applicationSaveSessionDir(cfg config.Config) string {
 	return filepath.Join(cfg.DataRoot, "tmp", "application-save-sessions")
 }
 
-func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, eventH *runtimeevents.Handler, applicationH *applications.Handler, containerH *containerization.Handler, facilityH *facilityapps.Handler, overviewH *overview.Handler, settingsH *settings.Handler, systemH *systeminfo.Handler, diagnosticsH *diagnostics.Handler, backupH *backups.Handler) {
+func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, eventH *activity.Handler, applicationH *applications.Handler, containerH *containerization.Handler, facilityH *facilityapps.Handler, overviewH *overview.Handler, settingsH *settings.Handler, systemH *systeminfo.Handler, diagnosticsH *diagnostics.Handler, backupH *backups.Handler) {
 	a.mux.HandleFunc("POST /api/v1/auth/login", authH.Login)
 	a.mux.Handle("POST /api/v1/auth/logout", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.Logout)))
 	a.mux.Handle("POST /api/v1/auth/account", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.UpdateAccount)))
 	a.mux.Handle("POST /api/v1/auth/jwt-secret", a.auth.RequireAuth(http.HandlerFunc(authH.UpdateJWTSecret)))
 	a.mux.HandleFunc("GET /api/v1/auth/session", authH.Session)
 
-	authenticated := a.auth.RequireAuth
+	authenticated := a.activityAuth
 	settingsH.RegisterPublicRoutes(a.mux)
 	backupH.RegisterRoutes(a.mux, authenticated)
 	credH.RegisterRoutes(a.mux, authenticated)

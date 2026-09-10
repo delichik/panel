@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"panel/internal/platform/activitylog"
 	"panel/internal/platform/database/models"
 	"panel/internal/platform/database/orm"
 )
@@ -100,6 +101,12 @@ func (s *Store) Migrate(ctx context.Context) error {
 		if _, err := orm.AutoMigrateModels(ctx, pass.db, pass.models); err != nil {
 			return fmt.Errorf("auto migrate refresh: %w", err)
 		}
+	}
+	if err := activitylog.Migrate(ctx, s.appDB); err != nil {
+		return err
+	}
+	if err := activitylog.InstallControlTriggers(ctx, s.appDB); err != nil {
+		return err
 	}
 	return nil
 }

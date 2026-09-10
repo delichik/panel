@@ -21,6 +21,11 @@ type RuntimeReconciler interface {
 	Reconcile(context.Context, ReconcileRequestRPC) (ReconcileResponse, error)
 }
 
+// ExecutionResultResolver verifies a previously submitted execution without rerunning it.
+type ExecutionResultResolver interface {
+	ResolveExecution(context.Context, ReconcileRequestRPC) (ReconcileResponse, bool, error)
+}
+
 type ControllerConfig struct {
 	WorkerCount  int
 	ScanInterval time.Duration
@@ -164,6 +169,13 @@ func (c *Controller) enqueueDue(ctx context.Context) error {
 	if err := c.store.RecoverExpiredLeases(ctx); err != nil {
 		return err
 	}
+	uncertain, err := c.store.ListUncertain(ctx, c.config.QueueSize)
+	if err != nil {
+		return err
+	}
+	for _, job := range uncertain {
+		c.processAsync(ctx, job.ID)
+	}
 	jobs, err := c.store.ListDue(ctx, c.config.QueueSize)
 	if err != nil {
 		return err
@@ -221,6 +233,10 @@ func (c *Controller) releaseKey(key string) {
 }
 
 func (c *Controller) process(ctx context.Context, jobID string) error {
+	existing, getErr := c.store.GetJob(ctx, jobID)
+	if getErr == nil && existing.State == JobRunning && existing.ErrorClass == "uncertainty" {
+		return c.resolveUncertain(ctx, existing)
+	}
 	job, claimed, err := c.store.Claim(ctx, jobID, c.config.Owner, c.config.LeaseTTL)
 	if err != nil || !claimed {
 		return err
@@ -237,7 +253,7 @@ func (c *Controller) process(ctx context.Context, jobID string) error {
 		}
 	}
 	previousContainerName, _ := c.store.InstanceContainerName(ctx, job.InstanceID)
-	rpc := ReconcileRequestRPC{JobID: job.ID, ExecutionID: job.ExecutionID, ApplicationID: job.ApplicationID, InstanceID: job.InstanceID, ServerID: job.ServerID, Action: job.Action, DesiredGeneration: job.DesiredGeneration, DesiredSpecHash: job.DesiredSpecHash, DesiredRevisionID: job.DesiredRevisionID, RenderedRuntimeSpec: firstRuntimeSpec(job.DesiredSpecJSON, revision.RenderedRuntimeSpec), RemoveData: job.RemoveData, PreviousContainerName: previousContainerName}
+	rpc := ReconcileRequestRPC{OperationID: job.IntentID, RunID: job.IntentID, JobID: job.ID, ExecutionID: job.ExecutionID, ApplicationID: job.ApplicationID, InstanceID: job.InstanceID, ServerID: job.ServerID, Action: job.Action, DesiredGeneration: job.DesiredGeneration, DesiredSpecHash: job.DesiredSpecHash, DesiredRevisionID: job.DesiredRevisionID, RenderedRuntimeSpec: firstRuntimeSpec(job.DesiredSpecJSON, revision.RenderedRuntimeSpec), RemoveData: job.RemoveData, PreviousContainerName: previousContainerName}
 	if c.runtime == nil {
 		return c.fail(ctx, job, ReconcileResponse{ErrorCode: "runtime_unavailable", ErrorClass: "agent_unavailable", ErrorMessage: "runtime reconciler is unavailable", Retryable: true})
 	}
@@ -246,12 +262,16 @@ func (c *Controller) process(ctx context.Context, jobID string) error {
 	go c.renewLease(leaseCtx, job)
 	traceJobEvent("agent_reconcile_started", job)
 	response, runErr := c.runtime.Reconcile(ctx, rpc)
-	if runErr != nil && response.ErrorMessage == "" {
-		response.ErrorCode = "runtime_reconcile_failed"
-		response.ErrorClass = "runtime"
-		response.ErrorMessage = runErr.Error()
-		response.Retryable = true
+	if runErr != nil {
+		// A transport error is not proof of remote failure. Keep the conflict row
+		// owned and resolve the same execution identity before allowing new work.
+		return c.store.MarkUncertain(context.WithoutCancel(ctx), job, runErr.Error())
 	}
+	return c.acceptResponse(ctx, job, response)
+}
+
+func (c *Controller) acceptResponse(ctx context.Context, job Job, response ReconcileResponse) error {
+
 	traceJobEvent("agent_reconcile_finished", job,
 		zap.String("observed_state", response.ObservedState),
 		zap.String("error_code", response.ErrorCode),
@@ -301,6 +321,19 @@ func (c *Controller) process(ctx context.Context, jobID string) error {
 		c.config.OnSucceeded(ctx, job, response)
 	}
 	return nil
+}
+
+func (c *Controller) resolveUncertain(ctx context.Context, job Job) error {
+	resolver, ok := c.runtime.(ExecutionResultResolver)
+	if !ok {
+		return nil
+	}
+	rpc := ReconcileRequestRPC{OperationID: job.IntentID, RunID: job.IntentID, JobID: job.ID, ExecutionID: job.ExecutionID, ApplicationID: job.ApplicationID, InstanceID: job.InstanceID, ServerID: job.ServerID, Action: job.Action, DesiredGeneration: job.DesiredGeneration, DesiredSpecHash: job.DesiredSpecHash, DesiredRevisionID: job.DesiredRevisionID}
+	response, finished, err := resolver.ResolveExecution(ctx, rpc)
+	if err != nil || !finished {
+		return err
+	}
+	return c.acceptResponse(ctx, job, response)
 }
 
 func (c *Controller) renewLease(ctx context.Context, job Job) {

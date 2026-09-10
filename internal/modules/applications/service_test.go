@@ -1579,7 +1579,7 @@ func newTestService(t *testing.T) (*Service, *fakeRuntimeClient, *fakeServerProv
 			t.Fatal(err)
 		}
 	}
-	taskSvc := tasks.NewService(store.LogDB())
+	taskSvc := tasks.NewService(store.AppDB())
 	svc := NewServiceWithOptions(store.AppDB(), runtime, taskSvc, Config{
 		Namespace:      "apps",
 		Region:         "global",
@@ -1589,7 +1589,7 @@ func newTestService(t *testing.T) (*Service, *fakeRuntimeClient, *fakeServerProv
 	svc.RegisterTasks(taskSvc)
 	svc.SetServerProvider(servers)
 	svc.SetApplicationReconcileTrigger(&fakeApplicationReconcileTrigger{svc: svc, tasks: taskSvc})
-	return svc, runtime, servers, func() { _ = store.Close() }
+	return svc, runtime, servers, func() { _ = svc.StopOrchestrator(); _ = store.Close() }
 }
 
 type fakeApplicationReconcileTrigger struct {

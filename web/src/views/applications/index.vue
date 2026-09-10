@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ActivityLink from '@/components/activity/ActivityLink.vue';
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import { AlertTriangle, ClipboardList, Globe2, HardDrive, History, Plus, RefreshCcw, Rocket, Save, Square, Trash2, UploadCloud, Wrench } from '@lucide/vue';
@@ -694,7 +695,7 @@ async function loadApplications(options: { loadSelectedRuntime?: boolean } = {})
   } catch (err) {
     if (isAbortError(err)) return;
     error.value = err instanceof Error ? err.message : t('applicationsPage.loadFailed');
-    notifyError(err instanceof Error ? err.message : t('applicationsPage.loadFailed'));
+    notifyError(err instanceof Error ? err.message : t('applicationsPage.loadFailed'), err);
   } finally {
     if (requestId === pageLoadRequestId) loading.value = false;
   }
@@ -726,7 +727,7 @@ async function loadFacilityData() {
   } catch (err) {
     if (isAbortError(err)) return;
     error.value = err instanceof Error ? err.message : t('applicationsPage.loadFailed');
-    notifyError(err instanceof Error ? err.message : t('applicationsPage.loadFailed'));
+    notifyError(err instanceof Error ? err.message : t('applicationsPage.loadFailed'), err);
   } finally {
     if (requestId === pageLoadRequestId) loading.value = false;
   }
@@ -757,7 +758,7 @@ async function loadApplicationDetail(applicationId: string) {
     applicationFiles.value = { ...applicationFiles.value, [applicationId]: files };
   } catch (err) {
     if (isAbortError(err)) return;
-    notifyError(err instanceof Error ? err.message : t('applicationsPage.loadFailed'));
+    notifyError(err instanceof Error ? err.message : t('applicationsPage.loadFailed'), err);
   } finally {
     if (requestId === applicationDetailRequestId) detailLoading.value = false;
   }
@@ -787,7 +788,7 @@ async function loadRuntime(applicationId: string) {
     runtimes.value = { ...runtimes.value, [applicationId]: runtime };
   } catch (err) {
     if (isAbortError(err)) return;
-    notifyError(err instanceof Error ? err.message : t('applicationsPage.runtimeUnavailable'));
+    notifyError(err instanceof Error ? err.message : t('applicationsPage.runtimeUnavailable'), err);
   } finally {
     if (requestId === runtimeRequestId) {
       detailLoading.value = false;
@@ -802,18 +803,18 @@ async function runOperation(name: string, action: () => Promise<unknown>, succes
   try {
     const result = await action();
     const params = taskParams(result);
-    notifySuccess(params ? t(successKey, params) : t(successKeyWithoutId || successKey));
+    notifySuccess(params ? t(successKey, params) : t(successKeyWithoutId || successKey), result);
     await load();
   } catch (err) {
-    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
   } finally {
     pending.value = '';
   }
 }
 
 function taskParams(result: unknown) {
-  const record = result as { taskId?: string; deploymentId?: string; evalId?: string };
-  const taskId = record?.taskId || record?.deploymentId || record?.evalId;
+  const record = result as { taskId?: string; operationId?: string; deploymentId?: string; evalId?: string };
+  const taskId = record?.operationId || record?.taskId || record?.deploymentId || record?.evalId;
   return taskId ? { taskId } : null;
 }
 
@@ -825,7 +826,7 @@ async function showLogs(app: ApplicationDto) {
     logsText.value = (await applicationsApi.logs(app.id, { tail: 240 })).logs;
   } catch (err) {
     const message = err instanceof Error ? err.message : t('applicationsPage.logsFailed');
-    notifyError(message);
+    notifyError(message, err);
     logsText.value = t('applicationsPage.logsFailed');
   } finally {
     logsLoading.value = false;
@@ -852,7 +853,7 @@ async function confirmAction() {
 async function downloadPersistentData(app: ApplicationDto) {
   await runOperation('persistent-download', async () => {
     saveBlobDownload(await applicationsApi.downloadPersistentData(app.id));
-    return { taskId: 'download' };
+    return undefined;
   }, 'applicationsPage.downloadStarted');
 }
 
@@ -917,7 +918,7 @@ async function startApplicationEditorCore() {
     if (isAbortError(err)) return;
     const message = err instanceof Error ? err.message : t('applicationsPage.editorStartFailed');
     actionError.value = message;
-    notifyError(message);
+    notifyError(message, err);
   }
 }
 
@@ -958,7 +959,7 @@ async function commitApplication() {
   }
   await runEditorAction(async () => {
     const result = await applicationsApi.commitEditSession(editSession.value!, preview.value!);
-    notifySuccess(result.applyRequested ? t('applicationsPage.committedAndApplied') : t('applicationsPage.committed'));
+    notifySuccess(result.applyRequested ? t('applicationsPage.committedAndApplied') : t('applicationsPage.committed'), result);
     isDirty.value = false;
     await router.push({ path: '/applications/apps', query: { application: result.application.id } });
     await load();
@@ -997,7 +998,7 @@ async function startFacilityEditorCore() {
     if (isAbortError(err)) return;
     const message = err instanceof Error ? err.message : t('applicationsPage.editorStartFailed');
     actionError.value = message;
-    notifyError(message);
+    notifyError(message, err);
   }
 }
 
@@ -1092,7 +1093,7 @@ async function reloadFacilityEditor() {
     await loadFacilityData();
     await startFacilityEditor();
   } catch (err) {
-    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
   } finally {
     pending.value = '';
   }
@@ -1136,7 +1137,7 @@ async function commitFacilityConfig() {
   await runEditorAction(async () => {
     const result = await reverseProxyFacilityApi.commitEdit(facilitySession.value!, facilityPreview.value!);
     facility.value = result.config;
-    notifySuccess(result.applyRequested ? t('applicationsPage.gatewayCommittedAndApplied') : t('applicationsPage.gatewayCommitted'));
+    notifySuccess(result.applyRequested ? t('applicationsPage.gatewayCommittedAndApplied') : t('applicationsPage.gatewayCommitted'), result);
     isDirty.value = false;
     if (mode.value === 'facilityConfig') {
       await router.replace(`/applications/facility-apps/${facilityKind.value}`);
@@ -1155,7 +1156,7 @@ async function runEditorAction(action: () => Promise<void>, name = 'editor') {
   try {
     await action();
   } catch (err) {
-    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
   } finally {
     pending.value = '';
     saveStage.value = 'idle';
@@ -1456,7 +1457,7 @@ async function runFileAction(key: string, action: () => Promise<void>) {
   try {
     await action();
   } catch (err) {
-    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
   } finally {
     fileActionPending.value = '';
   }
@@ -1474,7 +1475,7 @@ async function runAssetAction(key: string, action: () => Promise<void>) {
   try {
     await action();
   } catch (err) {
-    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
   } finally {
     assetActionPending.value = '';
   }
@@ -1736,7 +1737,7 @@ onBeforeUnmount(() => {
                   <h3>{{ t('applicationsPage.operations') }}</h3>
                   <div class="mt-3 grid gap-2">
                     <Button :disabled="!selectedApplication.imageUpdateAvailable" :loading="pending === 'image-update'" @click="runOperation('image-update', () => applicationsApi.updateImage(selectedApplication.id), 'applicationsPage.imageUpdateAccepted', 'applicationsPage.imageUpdateAcceptedWithoutId')"><UploadCloud />{{ t('applicationsPage.updateImage') }}</Button>
-                    <Button @click="router.push({ path: '/application-operations', query: { applicationId: selectedApplication.id } })"><ClipboardList />{{ t('applicationsPage.operationRecords') }}</Button>
+                    <Button @click="router.push({ path: '/activity', query: { resourceType: 'application', resourceId: selectedApplication.id } })"><ClipboardList />{{ t('activity.relatedLogs') }}</Button>
                     <Button :loading="logsLoading" @click="showLogs(selectedApplication)"><History />{{ t('applicationsPage.logs') }}</Button>
                     <Button variant="danger" @click="ask('delete', selectedApplication.id)"><Trash2 />{{ t('common.delete') }}</Button>
                   </div>
@@ -1816,7 +1817,7 @@ onBeforeUnmount(() => {
     <template #actions>
       <template v-if="!facilityEditingView">
         <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
-        <Button v-if="currentFacilitySummary && isReverseProxyFacility" size="sm" @click="runOperation(`facility-reconcile-${facilityKind}`, () => reverseProxyFacilityApi.reconcile(), 'applicationsPage.gatewayReconcileAccepted', 'applicationsPage.gatewayReconcileAcceptedWithoutId')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
+        <ActivityLink v-if="currentFacilitySummary" resource-type="facility_app" :resource-id="facilityKind" /><Button v-if="currentFacilitySummary && isReverseProxyFacility" size="sm" @click="runOperation(`facility-reconcile-${facilityKind}`, () => reverseProxyFacilityApi.reconcile(), 'applicationsPage.gatewayReconcileAccepted', 'applicationsPage.gatewayReconcileAcceptedWithoutId')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
         <Button v-if="currentFacilitySummary && isReverseProxyFacility" size="sm" variant="primary" @click="startInPlaceFacilityEdit"><Wrench />{{ t('common.edit') }}</Button>
       </template>
     </template>

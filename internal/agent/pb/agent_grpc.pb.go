@@ -47,6 +47,10 @@ const (
 	AgentService_DockerVolumeDelete_FullMethodName       = "/panel.agent.v1.AgentService/DockerVolumeDelete"
 	AgentService_RuntimeWriteFiles_FullMethodName        = "/panel.agent.v1.AgentService/RuntimeWriteFiles"
 	AgentService_RuntimeReconcile_FullMethodName         = "/panel.agent.v1.AgentService/RuntimeReconcile"
+	AgentService_ReadExecutionEvents_FullMethodName      = "/panel.agent.v1.AgentService/ReadExecutionEvents"
+	AgentService_AckExecutionEvents_FullMethodName       = "/panel.agent.v1.AgentService/AckExecutionEvents"
+	AgentService_GetExecutionResult_FullMethodName       = "/panel.agent.v1.AgentService/GetExecutionResult"
+	AgentService_ResolveExecution_FullMethodName         = "/panel.agent.v1.AgentService/ResolveExecution"
 	AgentService_RuntimeReload_FullMethodName            = "/panel.agent.v1.AgentService/RuntimeReload"
 	AgentService_RuntimeCreateContainer_FullMethodName   = "/panel.agent.v1.AgentService/RuntimeCreateContainer"
 	AgentService_RuntimeStop_FullMethodName              = "/panel.agent.v1.AgentService/RuntimeStop"
@@ -95,6 +99,10 @@ type AgentServiceClient interface {
 	DockerVolumeDelete(ctx context.Context, in *DockerVolumeDeleteRequest, opts ...grpc.CallOption) (*OKResponse, error)
 	RuntimeWriteFiles(ctx context.Context, in *RuntimeWriteFilesRequest, opts ...grpc.CallOption) (*OKResponse, error)
 	RuntimeReconcile(ctx context.Context, in *RuntimeReconcileRequest, opts ...grpc.CallOption) (*RuntimeReconcileResponse, error)
+	ReadExecutionEvents(ctx context.Context, in *ExecutionEventsRequest, opts ...grpc.CallOption) (*ExecutionEventsResponse, error)
+	AckExecutionEvents(ctx context.Context, in *ExecutionEventsAck, opts ...grpc.CallOption) (*OKResponse, error)
+	GetExecutionResult(ctx context.Context, in *ExecutionResultRequest, opts ...grpc.CallOption) (*ExecutionResultResponse, error)
+	ResolveExecution(ctx context.Context, in *ExecutionResolutionRequest, opts ...grpc.CallOption) (*ExecutionResultResponse, error)
 	RuntimeReload(ctx context.Context, in *RuntimeReloadRequest, opts ...grpc.CallOption) (*RuntimeReloadResponse, error)
 	RuntimeCreateContainer(ctx context.Context, in *RuntimeCreateContainerRequest, opts ...grpc.CallOption) (*RuntimeCreateContainerResponse, error)
 	RuntimeStop(ctx context.Context, in *RuntimeStopRequest, opts ...grpc.CallOption) (*RuntimeInstanceResponse, error)
@@ -408,6 +416,46 @@ func (c *agentServiceClient) RuntimeReconcile(ctx context.Context, in *RuntimeRe
 	return out, nil
 }
 
+func (c *agentServiceClient) ReadExecutionEvents(ctx context.Context, in *ExecutionEventsRequest, opts ...grpc.CallOption) (*ExecutionEventsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExecutionEventsResponse)
+	err := c.cc.Invoke(ctx, AgentService_ReadExecutionEvents_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentServiceClient) AckExecutionEvents(ctx context.Context, in *ExecutionEventsAck, opts ...grpc.CallOption) (*OKResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(OKResponse)
+	err := c.cc.Invoke(ctx, AgentService_AckExecutionEvents_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentServiceClient) GetExecutionResult(ctx context.Context, in *ExecutionResultRequest, opts ...grpc.CallOption) (*ExecutionResultResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExecutionResultResponse)
+	err := c.cc.Invoke(ctx, AgentService_GetExecutionResult_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentServiceClient) ResolveExecution(ctx context.Context, in *ExecutionResolutionRequest, opts ...grpc.CallOption) (*ExecutionResultResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExecutionResultResponse)
+	err := c.cc.Invoke(ctx, AgentService_ResolveExecution_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *agentServiceClient) RuntimeReload(ctx context.Context, in *RuntimeReloadRequest, opts ...grpc.CallOption) (*RuntimeReloadResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RuntimeReloadResponse)
@@ -580,6 +628,10 @@ type AgentServiceServer interface {
 	DockerVolumeDelete(context.Context, *DockerVolumeDeleteRequest) (*OKResponse, error)
 	RuntimeWriteFiles(context.Context, *RuntimeWriteFilesRequest) (*OKResponse, error)
 	RuntimeReconcile(context.Context, *RuntimeReconcileRequest) (*RuntimeReconcileResponse, error)
+	ReadExecutionEvents(context.Context, *ExecutionEventsRequest) (*ExecutionEventsResponse, error)
+	AckExecutionEvents(context.Context, *ExecutionEventsAck) (*OKResponse, error)
+	GetExecutionResult(context.Context, *ExecutionResultRequest) (*ExecutionResultResponse, error)
+	ResolveExecution(context.Context, *ExecutionResolutionRequest) (*ExecutionResultResponse, error)
 	RuntimeReload(context.Context, *RuntimeReloadRequest) (*RuntimeReloadResponse, error)
 	RuntimeCreateContainer(context.Context, *RuntimeCreateContainerRequest) (*RuntimeCreateContainerResponse, error)
 	RuntimeStop(context.Context, *RuntimeStopRequest) (*RuntimeInstanceResponse, error)
@@ -687,6 +739,18 @@ func (UnimplementedAgentServiceServer) RuntimeWriteFiles(context.Context, *Runti
 }
 func (UnimplementedAgentServiceServer) RuntimeReconcile(context.Context, *RuntimeReconcileRequest) (*RuntimeReconcileResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RuntimeReconcile not implemented")
+}
+func (UnimplementedAgentServiceServer) ReadExecutionEvents(context.Context, *ExecutionEventsRequest) (*ExecutionEventsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReadExecutionEvents not implemented")
+}
+func (UnimplementedAgentServiceServer) AckExecutionEvents(context.Context, *ExecutionEventsAck) (*OKResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AckExecutionEvents not implemented")
+}
+func (UnimplementedAgentServiceServer) GetExecutionResult(context.Context, *ExecutionResultRequest) (*ExecutionResultResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetExecutionResult not implemented")
+}
+func (UnimplementedAgentServiceServer) ResolveExecution(context.Context, *ExecutionResolutionRequest) (*ExecutionResultResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ResolveExecution not implemented")
 }
 func (UnimplementedAgentServiceServer) RuntimeReload(context.Context, *RuntimeReloadRequest) (*RuntimeReloadResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RuntimeReload not implemented")
@@ -1248,6 +1312,78 @@ func _AgentService_RuntimeReconcile_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentService_ReadExecutionEvents_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExecutionEventsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).ReadExecutionEvents(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_ReadExecutionEvents_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).ReadExecutionEvents(ctx, req.(*ExecutionEventsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentService_AckExecutionEvents_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExecutionEventsAck)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).AckExecutionEvents(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_AckExecutionEvents_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).AckExecutionEvents(ctx, req.(*ExecutionEventsAck))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentService_GetExecutionResult_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExecutionResultRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).GetExecutionResult(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_GetExecutionResult_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).GetExecutionResult(ctx, req.(*ExecutionResultRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentService_ResolveExecution_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExecutionResolutionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).ResolveExecution(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_ResolveExecution_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).ResolveExecution(ctx, req.(*ExecutionResolutionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AgentService_RuntimeReload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RuntimeReloadRequest)
 	if err := dec(in); err != nil {
@@ -1614,6 +1750,22 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RuntimeReconcile",
 			Handler:    _AgentService_RuntimeReconcile_Handler,
+		},
+		{
+			MethodName: "ReadExecutionEvents",
+			Handler:    _AgentService_ReadExecutionEvents_Handler,
+		},
+		{
+			MethodName: "AckExecutionEvents",
+			Handler:    _AgentService_AckExecutionEvents_Handler,
+		},
+		{
+			MethodName: "GetExecutionResult",
+			Handler:    _AgentService_GetExecutionResult_Handler,
+		},
+		{
+			MethodName: "ResolveExecution",
+			Handler:    _AgentService_ResolveExecution_Handler,
 		},
 		{
 			MethodName: "RuntimeReload",

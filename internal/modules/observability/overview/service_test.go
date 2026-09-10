@@ -255,7 +255,7 @@ func newCardDataTestService(t *testing.T) (*Service, []string, func()) {
 	`, now, now); err != nil {
 		t.Fatalf("insert credential: %v", err)
 	}
-	serverSvc := serverpkg.NewService(store.AppDB(), nil, tasks.NewService(store.LogDB()), serverpkg.WithMetricsDB(store.MetricsDB()))
+	serverSvc := serverpkg.NewService(store.AppDB(), nil, tasks.NewService(store.AppDB()), serverpkg.WithMetricsDB(store.MetricsDB()))
 	first, err := serverSvc.Create(context.Background(), serverpkg.SaveRequest{Name: "Alpha", IPv4: "10.0.0.1", Port: 22, SSHUsername: "root", CredentialID: "cred-test"})
 	if err != nil {
 		t.Fatalf("create first server: %v", err)

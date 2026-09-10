@@ -127,7 +127,7 @@ async function loadPprof() {
   try {
     pprof.value = await debugApi.pprofStatus();
   } catch (err) {
-    notifyError(err instanceof Error ? err.message : t('debugPage.pprofLoadFailed'));
+    notifyError(err instanceof Error ? err.message : t('debugPage.pprofLoadFailed'), err);
   }
 }
 
@@ -137,7 +137,7 @@ async function togglePprof(enabled: boolean) {
   try {
     pprof.value = await debugApi.setPprof(enabled);
   } catch (err) {
-    notifyError(err instanceof Error ? err.message : t('debugPage.pprofToggleFailed'));
+    notifyError(err instanceof Error ? err.message : t('debugPage.pprofToggleFailed'), err);
   } finally {
     pprofPending.value = false;
   }
@@ -155,7 +155,7 @@ async function load() {
   } catch (err) {
     if (requestId !== snapshotRequestId) return;
     error.value = err instanceof Error ? err.message : t('debugPage.loadFailed');
-    notifyError(err instanceof Error ? err.message : t('debugPage.loadFailed'));
+    notifyError(err instanceof Error ? err.message : t('debugPage.loadFailed'), err);
     snapshot.value = null;
   } finally {
     if (requestId === snapshotRequestId) loading.value = false;

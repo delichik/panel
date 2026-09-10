@@ -2,7 +2,9 @@ package rpc
 
 import (
 	"context"
+	executionevents "panel/internal/agent/executionevents"
 	"path/filepath"
+	"sync"
 	"time"
 
 	agentcontract "panel/internal/agent/contract"
@@ -21,14 +23,19 @@ import (
 type Handler struct {
 	agentpb.UnimplementedAgentServiceServer
 	agentpb.UnimplementedAgentReportServiceServer
-	collector agentsystem.LocalCollector
-	runtime   *agentdocker.LocalRuntime
-	reports   *reportHub
-	upgrades  packageUpgradeTracker
+	collector  agentsystem.LocalCollector
+	runtime    *agentdocker.LocalRuntime
+	reports    *reportHub
+	upgrades   packageUpgradeTracker
+	eventOnce  sync.Once
+	eventStore *executionevents.Store
+	eventErr   error
+	eventDir   string
 }
 
 type HandlerConfig struct {
-	DockerHost string
+	ExecutionEventsDir string
+	DockerHost         string
 }
 
 func NewHandler(cfg ...HandlerConfig) *Handler {
@@ -38,7 +45,11 @@ func NewHandler(cfg ...HandlerConfig) *Handler {
 	}
 	runtime, _ := agentdocker.NewLocalRuntime(dockerHost)
 	collector := agentsystem.LocalCollector{}
-	return &Handler{collector: collector, runtime: runtime, reports: newReportHub(collector, runtime)}
+	eventDir := "/opt/panel/agent/execution-events"
+	if len(cfg) > 0 && cfg[0].ExecutionEventsDir != "" {
+		eventDir = cfg[0].ExecutionEventsDir
+	}
+	return &Handler{collector: collector, runtime: runtime, reports: newReportHub(collector, runtime), eventDir: eventDir}
 }
 
 func RegisterAgentService(server *grpc.Server, handler *Handler) {
@@ -266,12 +277,55 @@ func (h *Handler) RuntimeReconcile(ctx context.Context, req *agentpb.RuntimeReco
 	if err := h.requireRuntime(); err != nil {
 		return nil, err
 	}
-	result, err := h.runtime.Reconcile(ctx, agentcontract.RuntimeReconcileRequest{
-		JobID: req.JobId, ExecutionID: req.ExecutionId, ApplicationID: req.ApplicationId, InstanceID: req.InstanceId,
+	store, err := h.executionEvents()
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, "durable execution event store is unavailable: "+err.Error())
+	}
+	input := agentcontract.RuntimeReconcileRequest{
+		OperationID: req.OperationId, RunID: req.RunId, JobID: req.JobId, ExecutionID: req.ExecutionId, ApplicationID: req.ApplicationId, InstanceID: req.InstanceId,
 		ServerID: req.ServerId, Action: req.Action, DesiredGeneration: int(req.DesiredGeneration), DesiredSpecHash: req.DesiredSpecHash,
 		DesiredRevisionID: req.DesiredRevisionId, Spec: goSpec(req.Spec), RemoveData: req.RemoveData, PreviousContainerName: req.PreviousContainerName,
-	})
-	return PBRuntimeReconcileResponse(result), remoteError(err)
+	}
+	session, previous, err := store.Begin(ctx, input)
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
+	if previous != nil {
+		if previous.State != "finished" || previous.Result == nil {
+			return nil, status.Error(codes.FailedPrecondition, "execution is "+previous.State+"; query its result instead of repeating the mutation")
+		}
+		return PBRuntimeReconcileResponse(*previous.Result), nil
+	}
+	defer session.Abandon()
+	result, runErr := h.runtime.Reconcile(agentcontract.WithExecutionEventSink(ctx, session), input)
+	result.ErrorMessage = session.Redact(result.ErrorMessage)
+	result.ErrorDetail = session.Redact(result.ErrorDetail)
+	for i := range result.Steps {
+		result.Steps[i].Detail = session.Redact(result.Steps[i].Detail)
+	}
+	// Persist even if the initiating RPC disconnected. A durable result can then
+	// be recovered through GetExecutionResult by the next Panel process.
+	if runErr != nil && result.ErrorCode == "" {
+		result.ErrorCode = "runtime_error"
+		result.ErrorMessage = session.Redact(runErr.Error())
+	}
+	if err = session.Finish(context.WithoutCancel(ctx), result, runErr); err != nil {
+		return nil, status.Error(codes.Unavailable, "execution result persistence failed: "+err.Error())
+	}
+	// Reconcile failures have structured results. Returning an RPC error would
+	// discard them in gRPC, so business failures remain in this response.
+	if runErr != nil && result.ErrorCode == "" {
+		result.ErrorCode = "runtime_error"
+		result.ErrorMessage = session.Redact(runErr.Error())
+	}
+	persisted, persistErr := store.Result(context.WithoutCancel(ctx), input.ExecutionID)
+	if persistErr != nil {
+		return nil, remoteError(persistErr)
+	}
+	if persisted.State == "unknown" {
+		return nil, status.Error(codes.Unavailable, "execution outcome is unknown; query the durable execution result before another mutation")
+	}
+	return PBRuntimeReconcileResponse(result), nil
 }
 
 func (h *Handler) RuntimeReload(ctx context.Context, req *agentpb.RuntimeReloadRequest) (*agentpb.RuntimeReloadResponse, error) {

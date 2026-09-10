@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -39,7 +40,7 @@ func TestPackageServiceBlocksUnsupportedServer(t *testing.T) {
 	}
 	credSvc := credential.NewService(store.AppDB(), secrets)
 	cred, _ := credSvc.Create(ctx, credential.CreateRequest{Name: "c", Type: credential.TypePassword, Username: "du", Password: "secret"})
-	taskSvc := tasks.NewService(store.LogDB())
+	taskSvc := tasks.NewService(store.AppDB())
 	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
 	serverSvc.RegisterTasks(taskSvc)
 	srv, _ := serverSvc.Create(ctx, server.SaveRequest{Name: "s", IPv4: "10.0.0.1", Port: 22, SSHUsername: "du", CredentialID: cred.ID})
@@ -69,7 +70,7 @@ func TestPackageServiceAcceptsRootPrivilegeWithoutSudo(t *testing.T) {
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv','s','h',22,'root','cred','debian','12',1,0,'root','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.LogDB())
+	taskSvc := tasks.NewService(store.AppDB())
 	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
 	svc := NewService(store.AppDB(), serverSvc, nil, taskSvc)
 	srv, err := svc.ensurePackageAllowed(context.Background(), "srv", true)
@@ -102,7 +103,7 @@ func TestRefreshRecordsTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.LogDB())
+	taskSvc := tasks.NewService(store.AppDB())
 	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
 	serverSvc.RegisterTasks(taskSvc)
 	svc := NewService(store.AppDB(), serverSvc, nil, taskSvc)
@@ -119,7 +120,7 @@ func TestRefreshRecordsTask(t *testing.T) {
 	waitForPackageRefresh(t, svc, "srv")
 
 	var count int
-	if err := store.LogDB().QueryRow(`SELECT COUNT(*) FROM tasks WHERE type='package_refresh'`).Scan(&count); err != nil {
+	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM tasks WHERE type='package_refresh'`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 {
@@ -165,7 +166,7 @@ func TestRefreshFailureRecordsFailedTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.LogDB())
+	taskSvc := tasks.NewService(store.AppDB())
 	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
 	serverSvc.RegisterTasks(taskSvc)
 	svc := NewService(store.AppDB(), serverSvc, nil, taskSvc)
@@ -222,7 +223,7 @@ func TestRefreshUsesUbuntuAdapter(t *testing.T) {
 		t.Fatal(err)
 	}
 	exec := &aptPackageExecutor{stdout: "Listing...\nopenssl/jammy-updates 3.0.2-0ubuntu1 amd64 [upgradable from: 3.0.1-0ubuntu1]\n"}
-	taskSvc := tasks.NewService(store.LogDB())
+	taskSvc := tasks.NewService(store.AppDB())
 	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
 	serverSvc.RegisterTasks(taskSvc)
 	svc := NewService(store.AppDB(), serverSvc, exec, taskSvc)
@@ -345,10 +346,16 @@ func registerPackageTestTasks(taskSvc *tasks.Service, svc *Service) {
 }
 
 type blockingUpgradeAdapter struct {
+	selectedCalls atomic.Int64
 	fakePackageAdapter
 	entered chan struct{}
 	release chan struct{}
 	once    sync.Once
+}
+
+func (b *blockingUpgradeAdapter) UpgradeSelected(context.Context, sshx.RemoteExecutor, sshx.Target, []string, linux.LogSink) error {
+	b.selectedCalls.Add(1)
+	return nil
 }
 
 func (b *blockingUpgradeAdapter) UpgradeAll(ctx context.Context, exec sshx.RemoteExecutor, target sshx.Target, sink linux.LogSink) error {
@@ -372,7 +379,7 @@ func waitForTaskStatus(t *testing.T, taskSvc *tasks.Service, taskID, status stri
 }
 
 // TestUpgradeMaintenanceMutexBlocksConcurrentUpgrade 验证升级使用 per-server
-// 维护互斥：第一个升级进行中时，第二个升级任务必须失败而不是并发执行。
+// 维护互斥：第一个升级进行中时，第二个升级任务必须记录可重试失败和退避，并且不得调用升级副作用。
 func TestUpgradeMaintenanceMutexBlocksConcurrentUpgrade(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -393,7 +400,7 @@ func TestUpgradeMaintenanceMutexBlocksConcurrentUpgrade(t *testing.T) {
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv','s','h',22,'du','cred','debian','12',1,1,'passwordless_sudo','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.LogDB())
+	taskSvc := tasks.NewService(store.AppDB())
 	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
 	svc := NewService(store.AppDB(), serverSvc, nil, taskSvc)
 	registerPackageTestTasks(taskSvc, svc)
@@ -413,10 +420,13 @@ func TestUpgradeMaintenanceMutexBlocksConcurrentUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitForTaskStatus(t, taskSvc, second.ID, tasks.StatusFailed)
+	waitForTaskStatus(t, taskSvc, second.ID, tasks.StatusFailedRetryable)
 	secondTask, err := taskSvc.Get(ctx, second.ID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if secondTask.NextRunAt == nil || secondTask.RetryCount != 1 || adapter.selectedCalls.Load() != 0 {
+		t.Fatalf("maintenance conflict must persist backoff without invoking a second upgrade: %#v calls=%d", secondTask, adapter.selectedCalls.Load())
 	}
 	if !strings.Contains(secondTask.Error, "maintenance") {
 		t.Fatalf("expected maintenance conflict, got %#v", secondTask)
@@ -447,7 +457,7 @@ func TestUpgradeQueuedTaskRecoversAfterRestart(t *testing.T) {
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv','s','h',22,'du','cred','debian','12',1,1,'passwordless_sudo','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.LogDB())
+	taskSvc := tasks.NewService(store.AppDB())
 	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
 	svc := NewService(store.AppDB(), serverSvc, nil, taskSvc)
 	registerPackageTestTasks(taskSvc, svc)

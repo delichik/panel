@@ -24,13 +24,17 @@ func (r agentReconciler) Reconcile(ctx context.Context, req controlplane.Reconci
 	var spec appruntime.Spec
 	_ = json.Unmarshal(req.RenderedRuntimeSpec, &spec)
 	resp, err := r.agent.RuntimeReconcile(ctx, "", agentcontract.RuntimeReconcileRequest{
-		JobID: req.JobID, ExecutionID: req.ExecutionID, ApplicationID: req.ApplicationID, InstanceID: req.InstanceID,
+		OperationID: req.OperationID, RunID: req.RunID, JobID: req.JobID, ExecutionID: req.ExecutionID, ApplicationID: req.ApplicationID, InstanceID: req.InstanceID,
 		ServerID: req.ServerID, Action: req.Action, DesiredGeneration: req.DesiredGeneration, DesiredSpecHash: req.DesiredSpecHash,
 		DesiredRevisionID: req.DesiredRevisionID, Spec: spec, RemoveData: req.RemoveData, PreviousContainerName: req.PreviousContainerName,
 	})
 	if err != nil {
-		return controlplane.ReconcileResponse{ErrorCode: "runtime_reconcile_failed", ErrorClass: "runtime", ErrorMessage: err.Error(), Retryable: true}, nil
+		return controlplane.ReconcileResponse{ErrorCode: "runtime_reconcile_failed", ErrorClass: "runtime", ErrorMessage: err.Error(), Retryable: true}, err
 	}
+	return scriptedControlResponse(resp), nil
+}
+
+func scriptedControlResponse(resp agentcontract.RuntimeReconcileResponse) controlplane.ReconcileResponse {
 	steps := make([]controlplane.Step, 0, len(resp.Steps))
 	for _, s := range resp.Steps {
 		steps = append(steps, controlplane.Step{Name: s.Name, Status: s.Status, Detail: s.Detail})
@@ -41,7 +45,18 @@ func (r agentReconciler) Reconcile(ctx context.Context, req controlplane.Reconci
 		ObservedAt: resp.ObservedAt, Steps: steps,
 		ErrorCode: resp.ErrorCode, ErrorClass: resp.ErrorClass, ErrorMessage: resp.ErrorMessage, ErrorDetail: resp.ErrorDetail,
 		Retryable: resp.Retryable, RetryAfter: resp.RetryAfter,
-	}, nil
+	}
+}
+
+func (r agentReconciler) ResolveExecution(ctx context.Context, req controlplane.ReconcileRequestRPC) (controlplane.ReconcileResponse, bool, error) {
+	result, err := r.agent.GetExecutionResult(ctx, "", req.ExecutionID)
+	if err != nil {
+		return controlplane.ReconcileResponse{}, false, err
+	}
+	if result.State != "finished" || result.Result == nil {
+		return controlplane.ReconcileResponse{}, false, nil
+	}
+	return scriptedControlResponse(*result.Result), true, nil
 }
 
 // orchHarness 是 orchestrator 层剧本台：短租约 controller + 真实 store。
@@ -79,7 +94,7 @@ func newOrchHarness(t *testing.T) *orchHarness {
 		VALUES('srv-a','srv-a','127.0.0.1',22,'root','cred-srv-a','unix:///var/run/docker.sock','{}','{}',?,?)`, now, now); err != nil {
 		t.Fatal(err)
 	}
-	return &orchHarness{t: t, store: store, agent: NewScriptedAgent(), db: controlplane.NewStore(store.AppDB())}
+	return &orchHarness{t: t, store: store, agent: NewScriptedAgent(t), db: controlplane.NewStore(store.AppDB())}
 }
 
 // planApply 通过 planner 规划一个 apply Job。
@@ -125,64 +140,77 @@ func (o *orchHarness) startController(leaseTTL time.Duration, owner string) *con
 	return ctrl
 }
 
-// 剧本：agent 挂起超过租约 → 租约过期 → 恢复为 failed_retryable + lease_lost
-// + 未来 next_run_at；旧 worker 写回被 fencing 拒绝；重试后成功收敛。
-// 剧本：worker 崩溃（claim 后不再续租）→ 租约过期 → 新 controller 恢复为
-// failed_retryable + lease_lost + 未来 next_run_at；退避到期后重试成功。
-func TestScenarioLeaseExpiryRecoveryReplays(t *testing.T) {
+// The remote action completed durably, but worker A lost its response before
+// committing the Job result. Lease expiry must verify that same execution;
+// neither expiry nor a missing local result authorizes a second side effect.
+func TestScenarioLeaseExpiryRecoveryVerifiesDurableResult(t *testing.T) {
 	o := newOrchHarness(t)
 	job := o.planApply()
-
-	// 模拟 worker A 崩溃：claim 成功但不再续租（200ms 租约自然过期）。
-	claimed, ok, err := o.db.Claim(context.Background(), job.ID, "worker-a", 200*time.Millisecond)
+	claimed, ok, err := o.db.Claim(context.Background(), job.ID, "worker-a", time.Minute)
 	if err != nil || !ok {
-		t.Fatalf("claim failed ok=%v err=%v", ok, err)
+		t.Fatalf("claim: %v %v", ok, err)
 	}
-	_ = claimed
-	// 模拟已进入变更阶段（last_stage 非空）：租约过期后应恢复为 failed_retryable + lease_lost。
-	if _, err := o.store.AppDB().Exec(`UPDATE jobs SET last_stage='reconcile_started' WHERE id=?`, job.ID); err != nil {
+	var spec appruntime.Spec
+	if err = json.Unmarshal(claimed.DesiredSpecJSON, &spec); err != nil {
 		t.Fatal(err)
 	}
-
-	// worker B 启动：扫描时恢复过期租约。
+	_, err = o.agent.RuntimeReconcile(context.Background(), "", agentcontract.RuntimeReconcileRequest{OperationID: claimed.IntentID, RunID: claimed.IntentID, JobID: claimed.ID, ExecutionID: claimed.ExecutionID, ApplicationID: claimed.ApplicationID, InstanceID: claimed.InstanceID, ServerID: claimed.ServerID, Action: claimed.Action, DesiredGeneration: claimed.DesiredGeneration, DesiredSpecHash: claimed.DesiredSpecHash, DesiredRevisionID: claimed.DesiredRevisionID, Spec: spec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano)
+	if _, err = o.store.AppDB().Exec(`UPDATE jobs SET last_stage='reconcile_started',lease_expires_at=? WHERE id=?`, past, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = o.db.RecoverExpiredLeases(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := o.db.GetJob(context.Background(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.State != controlplane.JobRunning || pending.ErrorClass != "uncertainty" || pending.ExecutionID != claimed.ExecutionID || pending.LeaseToken != claimed.LeaseToken || pending.NextRunAt != nil {
+		t.Fatalf("uncertain execution lost its identity/fence: %+v", pending)
+	}
+	if _, claimedAgain, err := o.db.Claim(context.Background(), job.ID, "worker-b", time.Second); err != nil || claimedAgain {
+		t.Fatalf("uncertain job was reclaimed: %v %v", claimedAgain, err)
+	}
 	ctrl := o.startController(2*time.Second, "worker-b")
 	defer ctrl.Stop()
-
 	deadline := time.Now().Add(10 * time.Second)
-	var recovered controlplane.Job
 	for time.Now().Before(deadline) {
-		j, err := o.db.GetJob(context.Background(), job.ID)
-		if err == nil && j.State == controlplane.JobFailedRetryable && j.ErrorCode == "lease_lost" {
-			recovered = j
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if recovered.ID == "" {
-		t.Fatalf("job did not recover with lease_lost after lease expiry, state=%s", mustJobState(t, o, job.ID))
-	}
-	if recovered.NextRunAt == nil || !recovered.NextRunAt.After(time.Now()) {
-		t.Fatalf("recovered job should persist future next_run_at, got %v", recovered.NextRunAt)
-	}
-	// 旧 token 已清空：恢复后新 owner 才能重试。
-	if recovered.LeaseToken != "" {
-		t.Fatalf("recovered job should have cleared lease token, got %q", recovered.LeaseToken)
-	}
-
-	// 模拟退避到期，worker B 重试并成功收敛。
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := o.store.AppDB().Exec(`UPDATE jobs SET next_run_at=? WHERE id=?`, now, job.ID); err != nil {
-		t.Fatal(err)
-	}
-	deadline = time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		j, err := o.db.GetJob(context.Background(), job.ID)
-		if err == nil && j.State == controlplane.JobSucceeded {
+		current, err := o.db.GetJob(context.Background(), job.ID)
+		if err == nil && current.State == controlplane.JobSucceeded {
+			if current.ExecutionID != claimed.ExecutionID || current.Attempts != 1 || o.agent.RecordCount("app-1", "srv-a", "apply") != 1 {
+				t.Fatalf("recovery repeated execution: %+v calls=%d", current, o.agent.RecordCount("app-1", "srv-a", "apply"))
+			}
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("job did not succeed after recovery retry, state=%s calls=%d", mustJobState(t, o, job.ID), o.agent.RecordCount("app-1", "srv-a", "apply"))
+	t.Fatalf("durable remote result did not resolve uncertainty, state=%s", mustJobState(t, o, job.ID))
+}
+
+func TestScenarioLeaseExpiryWithoutResultRetainsFence(t *testing.T) {
+	o := newOrchHarness(t)
+	job := o.planApply()
+	claimed, ok, err := o.db.Claim(context.Background(), job.ID, "worker-a", time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
+	if _, err = o.store.AppDB().Exec(`UPDATE jobs SET lease_expires_at=? WHERE id=?`, time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	ctrl := o.startController(2*time.Second, "worker-b")
+	defer ctrl.Stop()
+	time.Sleep(100 * time.Millisecond)
+	current, err := o.db.GetJob(context.Background(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.State != controlplane.JobRunning || current.ErrorClass != "uncertainty" || current.ExecutionID != claimed.ExecutionID || o.agent.RecordCount("app-1", "srv-a", "apply") != 0 {
+		t.Fatalf("unverified side effect was retried: %+v", current)
+	}
 }
 
 func mustJobState(t *testing.T, o *orchHarness, jobID string) string {

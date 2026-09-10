@@ -58,9 +58,6 @@ const form = reactive({
   metricsCollectionIntervalSeconds: '60',
   containerReportIntervalSeconds: '30',
   cleanupSchedule: 'daily',
-  runtimeEventRetentionDays: '30',
-  runtimeEventDetailRetentionDays: '7',
-  runtimeEventCleanupSchedule: 'daily',
   tokenExpiration: '1d',
   language: 'zh-CN',
   logLevel: 'info',
@@ -94,14 +91,9 @@ const languageOptions = computed(() => [{ label: t('settingsPage.language.en'), 
 const logOptions = computed(() => ['debug', 'info', 'warn', 'error'].map((value) => ({ label: value, value })));
 const panelTlsOptions = computed(() => tlsCertificates.value.map((certificate) => ({ label: certificate.name, value: certificate.id })));
 const jwtSecretValid = computed(() => form.jwtSecret.trim().length >= 16);
-const runtimeEventRetentionValid = computed(() => {
-  const retention = Number(form.runtimeEventRetentionDays);
-  const detailRetention = Number(form.runtimeEventDetailRetentionDays);
-  return Number.isFinite(retention) && Number.isFinite(detailRetention) && retention >= detailRetention;
-});
 const fieldErrors = computed<Record<string, string>>(() => {
   const errors: Record<string, string> = {};
-  const positive: Array<keyof typeof form> = ['metricsRetentionDays', 'metricsCollectionIntervalSeconds', 'containerReportIntervalSeconds', 'runtimeEventRetentionDays', 'runtimeEventDetailRetentionDays', 'remoteCommandTimeoutSeconds'];
+  const positive: Array<keyof typeof form> = ['metricsRetentionDays', 'metricsCollectionIntervalSeconds', 'containerReportIntervalSeconds', 'remoteCommandTimeoutSeconds'];
   positive.forEach((key) => {
     const value = Number(form[key]);
     if (!Number.isFinite(value) || value < 1) errors[key] = 'settingsPage.validationPositiveNumber';
@@ -111,7 +103,7 @@ const fieldErrors = computed<Record<string, string>>(() => {
   }
   return errors;
 });
-const runtimeSectionValid = computed(() => !fieldErrors.value.metricsRetentionDays && !fieldErrors.value.metricsCollectionIntervalSeconds && !fieldErrors.value.containerReportIntervalSeconds && !fieldErrors.value.runtimeEventRetentionDays && !fieldErrors.value.runtimeEventDetailRetentionDays);
+const runtimeSectionValid = computed(() => !fieldErrors.value.metricsRetentionDays && !fieldErrors.value.metricsCollectionIntervalSeconds && !fieldErrors.value.containerReportIntervalSeconds);
 
 watch(() => route.path, (path) => {
   activeSection.value = sectionFromPath(path);
@@ -150,7 +142,7 @@ async function load() {
     }
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('settingsPage.loadFailed');
-    notifyError(err instanceof Error ? err.message : t('settingsPage.loadFailed'));
+    notifyError(err instanceof Error ? err.message : t('settingsPage.loadFailed'), err);
   } finally {
     if (listRequests.isCurrent(requestId)) loading.value = false;
   }
@@ -162,9 +154,6 @@ function hydrate(settings: RuntimeSettings, variables: ServerVariableDefinition[
     metricsCollectionIntervalSeconds: String(settings.metricsCollectionIntervalSeconds),
     containerReportIntervalSeconds: String(settings.containerReportIntervalSeconds),
     cleanupSchedule: settings.cleanupSchedule,
-    runtimeEventRetentionDays: String(settings.runtimeEventRetentionDays),
-    runtimeEventDetailRetentionDays: String(settings.runtimeEventDetailRetentionDays),
-    runtimeEventCleanupSchedule: settings.runtimeEventCleanupSchedule,
     tokenExpiration: settings.tokenExpiration,
     language: settings.language,
     logLevel: settings.logLevel,
@@ -204,7 +193,7 @@ async function resetSystemCertificate() {
   if (!cert) return;
   await run(`system-certificate-${cert.id}`, async () => {
     const result = await keyAssetsApi.resetSystemCertificate(cert.id);
-    notifySuccess(t('settingsPage.systemCertificateResetAccepted', { taskId: result.taskId }));
+    notifySuccess(t('settingsPage.systemCertificateResetAccepted', { taskId: result.taskId }), result);
     confirmOpen.value = false;
     selectedSystemCertificate.value = null;
   });
@@ -212,8 +201,8 @@ async function resetSystemCertificate() {
 
 async function saveRuntimeSection(kind: 'runtime' | 'security' | 'certificates' | 'system') {
   if (!runtime.value) return;
-  if (kind === 'runtime' && (!runtimeSectionValid.value || !runtimeEventRetentionValid.value)) {
-    actionError.value = t('settingsPage.runtimeEventRetentionValidation');
+  if (kind === 'runtime' && !runtimeSectionValid.value) {
+    actionError.value = t('settingsPage.validationPositiveNumber');
     return;
   }
   if (kind === 'security' && fieldErrors.value.remoteCommandTimeoutSeconds) {
@@ -228,14 +217,14 @@ async function saveRuntimeSection(kind: 'runtime' | 'security' | 'certificates' 
     runtime.value = await settingsApi.updateRuntime(buildRuntimeUpdate(kind));
     hydrate(runtime.value, serverVariables.value);
     if (kind === 'runtime') setLocale(runtime.value.language === 'zh-CN' ? 'zh-CN' : 'en');
-    notifySuccess(t(`settingsPage.saved.${kind}`));
+    notifySuccess(t(`settingsPage.saved.${kind}`), runtime.value);
   });
 }
 
 async function saveVariables() {
   await run('save-variables', async () => {
     serverVariables.value = await settingsApi.updateServerVariables(parseVariables(form.variablesText));
-    notifySuccess(t('settingsPage.saved.system'));
+    notifySuccess(t('settingsPage.saved.system'), serverVariables.value);
   });
 }
 
@@ -247,7 +236,7 @@ async function startBackup() {
   await run('export', async () => {
     const result = await settingsApi.startBackupExport({ encrypt: form.exportEncrypt, password: form.exportPassword || undefined });
     exportPending.value = true;
-    notifySuccess(t('settingsPage.backupStarted', { exportId: result.exportId }));
+    notifySuccess(t('settingsPage.backupStarted', { exportId: result.exportId }), result);
     confirmOpen.value = false;
   });
 }
@@ -279,7 +268,7 @@ async function run(name: string, action: () => Promise<void>) {
   try {
     await action();
   } catch (err) {
-    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
   } finally {
     pending.value = '';
   }
@@ -292,9 +281,6 @@ function buildRuntimeUpdate(kind: 'runtime' | 'security' | 'certificates' | 'sys
     metricsCollectionIntervalSeconds: current.metricsCollectionIntervalSeconds,
     containerReportIntervalSeconds: current.containerReportIntervalSeconds,
     cleanupSchedule: current.cleanupSchedule,
-    runtimeEventRetentionDays: current.runtimeEventRetentionDays,
-    runtimeEventDetailRetentionDays: current.runtimeEventDetailRetentionDays,
-    runtimeEventCleanupSchedule: current.runtimeEventCleanupSchedule,
     tokenExpiration: current.tokenExpiration,
     language: current.language,
     logLevel: current.logLevel,
@@ -308,9 +294,6 @@ function buildRuntimeUpdate(kind: 'runtime' | 'security' | 'certificates' | 'sys
     update.metricsCollectionIntervalSeconds = numberField(form.metricsCollectionIntervalSeconds, current.metricsCollectionIntervalSeconds);
     update.containerReportIntervalSeconds = numberField(form.containerReportIntervalSeconds, current.containerReportIntervalSeconds);
     update.cleanupSchedule = form.cleanupSchedule;
-    update.runtimeEventRetentionDays = numberField(form.runtimeEventRetentionDays, current.runtimeEventRetentionDays);
-    update.runtimeEventDetailRetentionDays = numberField(form.runtimeEventDetailRetentionDays, current.runtimeEventDetailRetentionDays);
-    update.runtimeEventCleanupSchedule = form.runtimeEventCleanupSchedule;
     update.language = form.language;
     update.logLevel = form.logLevel;
     update.reconcileTraceEnabled = form.reconcileTraceEnabled;
@@ -420,15 +403,11 @@ onMounted(load);
             <label class="grid gap-1 text-sm">{{ t('settingsPage.metricsInterval') }}<Input v-model="form.metricsCollectionIntervalSeconds" type="number" min="1" :invalid="Boolean(fieldErrors.metricsCollectionIntervalSeconds)" /><span v-if="fieldErrors.metricsCollectionIntervalSeconds" class="text-xs text-danger">{{ t(fieldErrors.metricsCollectionIntervalSeconds) }}</span></label>
             <label class="grid gap-1 text-sm">{{ t('settingsPage.containerInterval') }}<Input v-model="form.containerReportIntervalSeconds" type="number" min="1" :invalid="Boolean(fieldErrors.containerReportIntervalSeconds)" /><span v-if="fieldErrors.containerReportIntervalSeconds" class="text-xs text-danger">{{ t(fieldErrors.containerReportIntervalSeconds) }}</span></label>
             <label class="grid gap-1 text-sm">{{ t('settingsPage.cleanupSchedule') }}<Select v-model="form.cleanupSchedule" :options="cleanupOptions" /></label>
-            <label class="grid gap-1 text-sm">{{ t('settingsPage.runtimeEventRetention') }}<Input v-model="form.runtimeEventRetentionDays" type="number" min="1" :invalid="Boolean(fieldErrors.runtimeEventRetentionDays)" /><span v-if="fieldErrors.runtimeEventRetentionDays" class="text-xs text-danger">{{ t(fieldErrors.runtimeEventRetentionDays) }}</span></label>
-            <label class="grid gap-1 text-sm">{{ t('settingsPage.runtimeEventDetailRetention') }}<Input v-model="form.runtimeEventDetailRetentionDays" type="number" min="1" :invalid="Boolean(fieldErrors.runtimeEventDetailRetentionDays)" /><span v-if="fieldErrors.runtimeEventDetailRetentionDays" class="text-xs text-danger">{{ t(fieldErrors.runtimeEventDetailRetentionDays) }}</span></label>
-            <label class="grid gap-1 text-sm">{{ t('settingsPage.runtimeEventCleanupSchedule') }}<Select v-model="form.runtimeEventCleanupSchedule" :options="cleanupOptions" /></label>
             <label class="grid gap-1 text-sm">{{ t('settingsPage.language') }}<Select v-model="form.language" :options="languageOptions" /></label>
             <label class="grid gap-1 text-sm">{{ t('settingsPage.logLevel') }}<Select v-model="form.logLevel" :options="logOptions" /></label>
             <label class="grid gap-1 text-sm">{{ t('settingsPage.reconcileTrace') }}<Switch v-model="form.reconcileTraceEnabled" :label="t('settingsPage.reconcileTrace')" /><span class="text-xs text-muted-foreground">{{ t('settingsPage.reconcileTraceHint') }}</span></label>
           </div>
-          <p v-if="!runtimeEventRetentionValid" class="m-0 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ t('settingsPage.runtimeEventRetentionValidation') }}</p>
-          <Button class="w-fit" variant="primary" :disabled="!runtimeSectionValid || !runtimeEventRetentionValid" :loading="pending === 'save-runtime'" @click="saveRuntimeSection('runtime')"><Save />{{ t('settingsPage.saveSection') }}</Button>
+          <Button class="w-fit" variant="primary" :disabled="!runtimeSectionValid" :loading="pending === 'save-runtime'" @click="saveRuntimeSection('runtime')"><Save />{{ t('settingsPage.saveSection') }}</Button>
         </section>
 
         <section v-else-if="activeSection === 'security'" class="grid gap-4 rounded-2xl border border-border bg-card p-5">

@@ -305,6 +305,6 @@ func (w *Worker) failOrphanedRunning(ctx context.Context) {
 		return
 	}
 	if failed > 0 {
-		log.Printf("task running execution check marked %d orphaned task(s) failed", failed)
+		log.Printf("task running execution check marked %d orphaned task(s) awaiting verification", failed)
 	}
 }

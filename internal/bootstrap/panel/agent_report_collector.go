@@ -293,6 +293,7 @@ func (c *agentReportCollector) logStreamStatus(entry *agentReportStream, connect
 		}
 	}
 	c.logs.Log(context.Background(), runtimeevents.WriteEventInput{
+ ResourceID: entry.serverID, ResourceName: entry.serverName,
 		EventType:    eventType,
 		Category:     runtimeevents.CategorySystem,
 		Severity:     severity,

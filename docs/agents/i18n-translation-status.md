@@ -4,6 +4,10 @@
 
 ## 当前状态
 
+- 统一日志新增容量 warning/blocked 横幅与可用空间词条，明确容量持续增长和停止接收新变更时仍可查询导出，en / zh-CN 已同步。
+- 统一日志补充 Toast“查看过程”和人工核对执行结果的双语文案；人工核对明确标注人为判断并要求依据，不将其表述为系统自动验证。
+- 统一日志页面新增 `activity.*` 与 `routes.activity.title`，en / zh-CN 同步；请求、生命周期及状态显示按稳定词条渲染，原始远端输出保留原文。旧日志保留天数设置退出界面。
+
 - 本轮应用代理 Path 移除旧 `webSocket` 布尔兼容字段与重复开关，只保留 `applicationsPage.webSocketMode` 的 auto/on/off 选择器；删除 `applicationsPage.webSocket` 词条，en / zh-CN 已同步。
 - 本轮应用环境变量编辑新增占位符目录与稳定应用容器引用词条（`applicationsPage.insertVariable`、`noInsertableVariables`、`variableReferenceHint`、`applicationContainerVariable`、`currentApplicationVariable`），en / zh-CN 已同步。
 - 本轮应用挂载的“应用文件”来源改为当前编辑会话文件下拉选择，新增空文件提示、失效旧引用和必选校验词条（`applicationsPage.applicationFileMount*`），en / zh-CN 已同步。

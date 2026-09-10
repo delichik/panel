@@ -63,7 +63,7 @@ async function submit() {
     }
     await router.push(safeRedirect(route.query.redirect));
   } catch (err) {
-    notifyError(err instanceof Error ? err.message : t('auth.signInFailed'));
+    notifyError(err instanceof Error ? err.message : t('auth.signInFailed'), err);
     password.value = '';
   } finally {
     loading.value = false;
@@ -93,7 +93,7 @@ async function updateAccount() {
     });
     await router.push(safeRedirect(route.query.redirect));
   } catch (err) {
-    notifyError(err instanceof Error ? err.message : t('auth.changePasswordFailed'));
+    notifyError(err instanceof Error ? err.message : t('auth.changePasswordFailed'), err);
   } finally {
     loading.value = false;
   }

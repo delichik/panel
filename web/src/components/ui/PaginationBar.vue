@@ -5,9 +5,12 @@ import { useI18n } from '@/i18n';
 import Button from './Button.vue';
 
 const props = withDefaults(defineProps<{
-  page: number;
-  pageSize: number;
-  total: number;
+  page?: number;
+  pageSize?: number;
+  total?: number;
+  mode?: 'page' | 'cursor';
+  hasPrevious?: boolean;
+  hasNext?: boolean;
   disabled?: boolean;
   loading?: boolean;
   summaryLabel?: string;
@@ -15,6 +18,10 @@ const props = withDefaults(defineProps<{
   nextLabel: string;
   navLabel?: string;
 }>(), {
+  page: 1,
+  pageSize: 20,
+  total: 0,
+  mode: 'page',
   disabled: false,
   loading: false,
 });
@@ -31,22 +38,22 @@ const pageCount = computed(() => Math.max(1, Math.ceil(props.total / Math.max(1,
 const currentPage = computed(() => Math.min(Math.max(1, props.page), pageCount.value));
 const start = computed(() => props.total === 0 ? 0 : (currentPage.value - 1) * props.pageSize + 1);
 const end = computed(() => Math.min(props.total, currentPage.value * props.pageSize));
-const canPrevious = computed(() => currentPage.value > 1 && !props.disabled && !props.loading);
-const canNext = computed(() => currentPage.value < pageCount.value && !props.disabled && !props.loading);
+const canPrevious = computed(() => (props.mode === 'cursor' ? props.hasPrevious : currentPage.value > 1) && !props.disabled && !props.loading);
+const canNext = computed(() => (props.mode === 'cursor' ? props.hasNext : currentPage.value < pageCount.value) && !props.disabled && !props.loading);
 const resolvedNavLabel = computed(() => props.navLabel || t('pagination.navLabel'));
 const resolvedSummary = computed(() => props.summaryLabel || t('pagination.summary', { start: start.value, end: end.value, total: props.total }));
 
 function goPrevious() {
   if (!canPrevious.value) return;
   const nextPage = currentPage.value - 1;
-  emit('update:page', nextPage);
+  if (props.mode !== 'cursor') emit('update:page', nextPage);
   emit('previous', nextPage);
 }
 
 function goNext() {
   if (!canNext.value) return;
   const nextPage = currentPage.value + 1;
-  emit('update:page', nextPage);
+  if (props.mode !== 'cursor') emit('update:page', nextPage);
   emit('next', nextPage);
 }
 </script>
@@ -63,7 +70,7 @@ function goNext() {
         <ChevronLeft />
         {{ previousLabel }}
       </Button>
-      <span class="min-w-16 text-center text-sm font-medium text-foreground">
+      <span v-if="mode !== 'cursor'" class="min-w-16 text-center text-sm font-medium text-foreground">
         {{ currentPage }} / {{ pageCount }}
       </span>
       <Button size="sm" variant="secondary" :disabled="!canNext" :loading="loading && currentPage < pageCount" @click="goNext">

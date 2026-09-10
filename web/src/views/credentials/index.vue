@@ -111,7 +111,7 @@ async function load() {
     }
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('credentialsPage.loadFailed');
-    notifyError(err instanceof Error ? err.message : t('credentialsPage.loadFailed'));
+    notifyError(err instanceof Error ? err.message : t('credentialsPage.loadFailed'), err);
   } finally {
     if (listRequests.isCurrent(requestId)) loading.value = false;
   }
@@ -172,12 +172,12 @@ async function saveCredential() {
     const payload = secretPayload(form, Boolean(editing.value));
     const saved = editing.value ? await credentialsApi.update(editing.value.id, payload) : await credentialsApi.create(payload);
     selectedId.value = saved.id;
-    notifySuccess(t(editing.value ? 'credentialsPage.updated' : 'credentialsPage.created'));
+    notifySuccess(t(editing.value ? 'credentialsPage.updated' : 'credentialsPage.created'), saved);
     dialogOpen.value = false;
     await load();
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('credentialsPage.saveFailed');
-    notifyError(err instanceof Error ? err.message : t('credentialsPage.saveFailed'));
+    notifyError(err instanceof Error ? err.message : t('credentialsPage.saveFailed'), err);
   } finally {
     saving.value = false;
   }
@@ -193,13 +193,13 @@ async function deleteCredential() {
   if (!target) return;
   actionError.value = '';
   try {
-    await credentialsApi.delete(target.id);
-    notifySuccess(t('credentialsPage.deleted'));
+    const result = await credentialsApi.delete(target.id);
+    notifySuccess(t('credentialsPage.deleted'), result);
     confirmOpen.value = false;
     await load();
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('credentialsPage.deleteFailed');
-    notifyError(err instanceof Error ? err.message : t('credentialsPage.deleteFailed'));
+    notifyError(err instanceof Error ? err.message : t('credentialsPage.deleteFailed'), err);
   }
 }
 
@@ -218,12 +218,12 @@ async function testCredential(credential: CredentialDto, serverId: string) {
   try {
     const ref = credentialReferences(credential.id, servers.value).find((item) => item.id === serverId);
     if (!ref) return;
-    await serversApi.test(ref.id);
+    const result = await serversApi.test(ref.id);
     testOpen.value = false;
-    notifySuccess(t('credentialsPage.testSucceeded', { name: ref.name }));
+    notifySuccess(t('credentialsPage.testSucceeded', { name: ref.name }), result);
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('credentialsPage.testFailed');
-    notifyError(err instanceof Error ? err.message : t('credentialsPage.testFailed'));
+    notifyError(err instanceof Error ? err.message : t('credentialsPage.testFailed'), err);
   } finally {
     testing.value = false;
   }

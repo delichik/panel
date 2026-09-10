@@ -69,8 +69,8 @@ func NewHarness(t *testing.T) *Harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.LogDB())
-	agent := NewScriptedAgent()
+	taskSvc := tasks.NewService(store.AppDB())
+	agent := NewScriptedAgent(t)
 	prov := &fakeServerProvider{items: map[string]server.Server{}}
 	trigger := &harnessTrigger{}
 	appSvc := applications.NewServiceWithOptions(store.AppDB(), agent, taskSvc, applications.Config{
@@ -85,6 +85,7 @@ func NewHarness(t *testing.T) *Harness {
 	h := &Harness{T: t, Store: store, AppSvc: appSvc, TaskSvc: taskSvc, Agent: agent, servers: prov, ctx: ctx, cancel: cancel}
 	t.Cleanup(func() {
 		cancel()
+		_ = appSvc.StopOrchestrator()
 		_ = store.Close()
 	})
 	if err := appSvc.StartOrchestrator(ctx); err != nil {

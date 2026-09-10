@@ -717,7 +717,7 @@ func newTestService(t *testing.T) (*Service, *storage.Store, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.LogDB())
+	taskSvc := tasks.NewService(store.AppDB())
 	svc := NewService(store.AppDB(), cfg, secrets, taskSvc, WithLogDB(store.LogDB()))
 	svc.RegisterTasks(taskSvc)
 	return svc, store, func() { _ = store.Close() }

@@ -6,13 +6,13 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"panel/internal/platform/activitylog"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"panel/internal/modules/runtimeevents"
 	"panel/internal/platform/config"
 	storage "panel/internal/platform/database"
 	panelerr "panel/internal/platform/errors"
@@ -33,7 +33,7 @@ func newTestService(t *testing.T) *Service {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	svc := NewService(store.LogDB())
+	svc := NewService(store.AppDB())
 	for _, def := range []Definition{
 		{Type: "test", ConcurrencyPolicy: ConcurrencyParallelAllowed},
 		{Type: "sample_task", AllowRetry: true, ConcurrencyPolicy: ConcurrencyParallelAllowed},
@@ -51,6 +51,12 @@ func newTestService(t *testing.T) *Service {
 		svc.MustRegister(def)
 	}
 	return svc
+}
+
+func enableTestExecutor(svc *Service, taskType string) {
+	def, _ := svc.Registry().Definition(taskType)
+	def.Execute = func(TaskContext) error { return nil }
+	svc.Registry().Replace(def)
 }
 
 func TestCancelRejectsNonCancellableTask(t *testing.T) {
@@ -421,7 +427,7 @@ func TestListOperationPagePaginatesOperationsAndReturnsTheirTasks(t *testing.T) 
 	}
 }
 
-func TestFailRunningWithoutExecutionMarksOnlyUntrackedTasksFailed(t *testing.T) {
+func TestMissingExecutionPreservesUncertainResult(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -455,8 +461,8 @@ func TestFailRunningWithoutExecutionMarksOnlyUntrackedTasksFailed(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotUntracked.Status != StatusFailed || gotUntracked.FinishedAt == nil || !strings.Contains(gotUntracked.Error, "no active execution") {
-		t.Fatalf("expected untracked task to fail, got %#v", gotUntracked)
+	if gotUntracked.Status != StatusRunning || gotUntracked.Stage != "uncertain" || gotUntracked.FinishedAt != nil || !strings.Contains(gotUntracked.Error, "requires verification") {
+		t.Fatalf("expected untracked task to retain uncertainty, got %#v", gotUntracked)
 	}
 }
 
@@ -501,6 +507,7 @@ func TestStartIsIdempotentForActiveExecution(t *testing.T) {
 
 func TestRetryPreservesTaskParams(t *testing.T) {
 	svc := newTestService(t)
+	enableTestExecutor(svc, "server_info_collect")
 	ctx := context.Background()
 	original, err := svc.Create(ctx, CreateInput{
 		OperationID:   "op-1",
@@ -698,6 +705,7 @@ func TestExpireStaleQueuedKeepsTasksWaitingBehindActiveHead(t *testing.T) {
 
 func TestTaskOperationTriggerMetadataAndSteps(t *testing.T) {
 	svc := newTestService(t)
+	enableTestExecutor(svc, "sample_task")
 	ctx := context.Background()
 	task, err := svc.Create(ctx, CreateInput{
 		OperationID:         "op_1",
@@ -754,7 +762,7 @@ func TestTaskOperationTriggerMetadataAndSteps(t *testing.T) {
 	}
 }
 
-func TestCleanupRetainedDeletesOldTerminalHistory(t *testing.T) {
+func TestCleanupRetainedPreservesHistory(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
 
@@ -781,18 +789,18 @@ func TestCleanupRetainedDeletesOldTerminalHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cleanup failed: %v", err)
 	}
-	if deleted != 1 {
-		t.Fatalf("expected exactly one old task to be deleted, got %d", deleted)
+	if deleted != 0 {
+		t.Fatalf("expected no task to be deleted, got %d", deleted)
 	}
-	if _, err := svc.Get(ctx, old.ID); err == nil {
-		t.Fatal("expected old task to be removed")
+	if _, err := svc.Get(ctx, old.ID); err != nil {
+		t.Fatal("expected old task to remain")
 	}
 	var logCount int
-	if err := svc.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_logs WHERE task_id=?`, old.ID).Scan(&logCount); err != nil {
+	if err := svc.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM activity_events WHERE event_type='output.chunk' AND json_extract(data_json,'$.taskId')=?`, old.ID).Scan(&logCount); err != nil {
 		t.Fatal(err)
 	}
-	if logCount != 0 {
-		t.Fatalf("expected task logs for the old task to be removed, got %d", logCount)
+	if logCount != 1 {
+		t.Fatalf("expected task logs for the old task to remain, got %d", logCount)
 	}
 	if _, err := svc.Get(ctx, recent.ID); err != nil {
 		t.Fatalf("expected recent task to remain, got %v", err)
@@ -895,7 +903,7 @@ func TestHandlerListAcceptsQuery(t *testing.T) {
 	if _, err := svc.Create(context.Background(), CreateInput{Type: "sample_restart", Summary: "restart"}); err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks?q=deploy&includeInternal=true", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/executions?q=deploy&includeInternal=true", nil)
 	rec := httptest.NewRecorder()
 	NewHandler(svc).List(rec, req)
 	if rec.Code != http.StatusOK {
@@ -918,41 +926,41 @@ func TestHandlerListAcceptsQuery(t *testing.T) {
 	}
 }
 
-func TestAppendLogTrimsOldestBeyondCap(t *testing.T) {
+func TestAppendLogPreservesAllAcceptedLines(t *testing.T) {
 	svc := newTestService(t)
 	task, err := svc.Create(context.Background(), CreateInput{Type: "sample_task"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	for i := 0; i < maxTaskLogLinesPerTask+5; i++ {
+	for i := 0; i < 1005; i++ {
 		if err := svc.AppendLog(ctx, task.ID, "stdout", "line "+strconv.Itoa(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	var count int
-	if err := svc.db.QueryRow(`SELECT COUNT(*) FROM task_logs WHERE task_id=?`, task.ID).Scan(&count); err != nil {
+	if err := svc.db.QueryRow(`SELECT COUNT(*) FROM activity_events WHERE event_type='output.chunk' AND json_extract(data_json,'$.taskId')=?`, task.ID).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count != maxTaskLogLinesPerTask {
-		t.Fatalf("expected %d logs after trim, got %d", maxTaskLogLinesPerTask, count)
+	if count != 1005 {
+		t.Fatalf("expected %d preserved logs, got %d", 1005, count)
 	}
 	logs, _, err := svc.Logs(ctx, task.ID, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(logs) == 0 || logs[0].Line != "line 5" {
-		t.Fatalf("expected oldest logs to roll off, first=%#v", logs)
+	if len(logs) == 0 || logs[0].Line != "line 0" {
+		t.Fatalf("expected oldest logs to remain, first=%#v", logs)
 	}
 }
 
-func TestAppendLogTruncatesOverlongLine(t *testing.T) {
+func TestAppendLogPreservesOverlongUnicodeLine(t *testing.T) {
 	svc := newTestService(t)
 	task, err := svc.Create(context.Background(), CreateInput{Type: "sample_task"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	long := strings.Repeat("长", maxTaskLogLineLength+100)
+	long := strings.Repeat("长", 8292)
 	if err := svc.AppendLog(context.Background(), task.ID, "stdout", long); err != nil {
 		t.Fatal(err)
 	}
@@ -960,8 +968,8 @@ func TestAppendLogTruncatesOverlongLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(logs) != 1 || len([]rune(logs[0].Line)) != maxTaskLogLineLength {
-		t.Fatalf("expected truncated log of %d runes, got %d", maxTaskLogLineLength, len([]rune(logs[0].Line)))
+	if len(logs) != 1 || logs[0].Line != long {
+		t.Fatalf("expected complete log of %d runes, got %d", 8292, len([]rune(logs[0].Line)))
 	}
 }
 
@@ -1035,43 +1043,129 @@ func TestExpireStaleQueuedKeepsFutureScheduledTask(t *testing.T) {
 
 func TestCancelByServerWritesCancelEvents(t *testing.T) {
 	svc := newTestService(t)
-	events := runtimeevents.NewService(svc.db)
-	svc.SetRuntimeEvents(events)
 	ctx := context.Background()
 	task, err := svc.Create(ctx, CreateInput{Type: "package_refresh", ServerID: "srv_1", ResourceType: "server", ResourceID: "srv_1", Status: StatusRunning})
 	if err != nil {
 		t.Fatal(err)
 	}
-	count, err := svc.CancelByServer(ctx, "srv_1", "server removed")
+	for i := 0; i < 2; i++ {
+		if _, err := svc.CancelByServer(ctx, "srv_1", "server removed"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var n int
+	if err := svc.db.QueryRowContext(ctx, `SELECT count(*) FROM activity_events WHERE operation_id=? AND event_type='execution.finished' AND json_extract(data_json,'$.result')='cancelled'`, task.OperationID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("expected one immutable cancellation, got %d", n)
+	}
+}
+
+func TestExecutionStartRollsBackWhenAuditCannotPersist(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	task, err := svc.Create(ctx, CreateInput{Type: "sample_task"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count != 1 {
-		t.Fatalf("expected 1 cancelled, got %d", count)
-	}
-	result, err := events.ListSystemEvents(ctx, runtimeevents.ListFilter{EventType: runtimeevents.EventTaskCancelled, Category: runtimeevents.CategoryTask})
+	_, err = svc.db.ExecContext(ctx, `CREATE TRIGGER reject_audit BEFORE INSERT ON activity_events WHEN NEW.event_type='execution.started' BEGIN SELECT RAISE(ABORT,'simulated_disk_failure'); END`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Total != 1 || len(result.Items) != 1 {
-		t.Fatalf("expected one cancel event, got %#v", result.Items)
+	if err := svc.Start(ctx, task.ID); err == nil {
+		t.Fatal("execution must not begin without its durable fact")
 	}
-	if result.Items[0].Source != task.TriggerType && result.Items[0].Source != "task" {
-		t.Fatalf("unexpected event source: %#v", result.Items[0])
-	}
-	// 再次批量取消（已终态）不应追加新事件。
-	count, err = svc.CancelByServer(ctx, "srv_1", "server removed")
+	got, err := svc.Get(ctx, task.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count != 0 {
-		t.Fatalf("expected 0 cancelled on second pass, got %d", count)
+	if got.Status != StatusQueued || svc.HasRunningExecution(task.ID) {
+		t.Fatalf("execution escaped rolled back audit transaction: %#v", got)
 	}
-	result, err = events.ListSystemEvents(ctx, runtimeevents.ListFilter{EventType: runtimeevents.EventTaskCancelled, Category: runtimeevents.CategoryTask})
+}
+
+func TestTaskLogsReadEveryPageAfterCompletion(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	task, err := svc.Create(ctx, CreateInput{Type: "sample_task"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Total != 1 {
-		t.Fatalf("expected still one cancel event, got %#v", result.Items)
+	for i := 0; i < 405; i++ {
+		if err := svc.AppendLog(ctx, task.ID, "stdout", strconv.Itoa(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := svc.Complete(ctx, task.ID, "finished"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.AppendLog(ctx, task.ID, "stdout", "late"); err != nil {
+		t.Fatal(err)
+	}
+	var cursor int64
+	total := 0
+	last := ""
+	for {
+		logs, next, err := svc.Logs(ctx, task.ID, cursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(logs) == 0 {
+			break
+		}
+		cursor = next
+		total += len(logs)
+		last = logs[len(logs)-1].Line
+	}
+	if total != 406 || last != "late" {
+		t.Fatalf("incomplete history: %d %q", total, last)
+	}
+}
+
+func TestCreatedExecutionExposesCanonicalRequestReceipt(t *testing.T) {
+	svc := newTestService(t)
+	ctx := activitylog.WithReceipt(context.Background())
+	task, err := svc.Create(ctx, CreateInput{Type: "sample_task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationID, eventID, seq := activitylog.ReceiptFromContext(ctx)
+	if operationID != task.OperationID || eventID == "" || seq < 1 {
+		t.Fatalf("missing canonical receipt: %s %s %d", operationID, eventID, seq)
+	}
+	var stored string
+	if err := svc.db.QueryRow(`SELECT event_type FROM activity_events WHERE event_id=? AND seq=?`, eventID, seq).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != "operation.requested" {
+		t.Fatalf("receipt is not the accepted request: %s", stored)
+	}
+}
+
+func TestManualRetryChainKeepsLogicalExecutionIdentity(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	enableTestExecutor(svc, "sample_task")
+	first, err := svc.Create(ctx, CreateInput{Type: "sample_task", Status: StatusFailed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := svc.Retry(ctx, first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	third, err := svc.Retry(ctx, second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range []Task{first, second, third} {
+		var logical string
+		if err := svc.db.QueryRow(`SELECT json_extract(data_json,'$.logicalExecutionId') FROM activity_events WHERE run_id=? AND event_type IN ('operation.requested','retry.requested') ORDER BY seq LIMIT 1`, task.ID).Scan(&logical); err != nil {
+			t.Fatal(err)
+		}
+		if logical != first.ID {
+			t.Fatalf("retry chain changed logical execution: task=%s logical=%s", task.ID, logical)
+		}
 	}
 }

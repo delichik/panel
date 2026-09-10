@@ -14,6 +14,6 @@ describe('tasksApi', () => {
 
     await tasksApi.list({ serverId: 'srv edge', type: 'server_agent_deploy', page: 1, pageSize: 1 });
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/tasks?serverId=srv+edge&type=server_agent_deploy&page=1&pageSize=1', expect.any(Object));
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/executions?serverId=srv+edge&type=server_agent_deploy&page=1&pageSize=1', expect.any(Object));
   });
 });

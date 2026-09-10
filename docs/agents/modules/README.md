@@ -19,7 +19,8 @@
 | Vue 页面、API client、Pinia store、路由、样式和前端测试 | [frontend.md](frontend.md) |
 | 服务器、SSH 凭据、系统探测、UFW、概览指标、APT 软件包 | [servers.md](servers.md) |
 | 后台任务、任务步骤、任务日志、重试、手动运行、周期调度 | [tasks-scheduler.md](tasks-scheduler.md) |
-| 统一运行事件、操作记录、系统事件、详情保留状态 | [runtime-events.md](runtime-events.md) |
+| 统一只追加日志、事件流、操作聚合、证据、查询与导出 | [activity.md](activity.md) |
+| Agent 执行事件持久缓冲、补传 ACK、未知结果核对 | [agent-execution-events.md](agent-execution-events.md) |
 | 应用定义、appspec、文件、修订、部署、运行时、日志、镜像更新 | [applications.md](applications.md) |
 | Docker 容器、镜像、网络、卷、设施应用、容器操作队列、镜像检查和 Application 容器协调 | [containerization.md](containerization.md) |
 | DNS 域名、Cloudflare、ACME 证书、证书续签 | [dns-certificates.md](dns-certificates.md) |
@@ -29,7 +30,7 @@
 ## 常见跨模块关系
 
 - 应用部署依赖 `modules/applications`、`agent`、`modules/servers`、`modules/tasks`，反向代理还会读取证书模块。
-- 应用部署控制面位于 `internal/orchestrator`：AppDB 的 immutable revision、instance desired/observed 与 Job lease 由 Planner/Controller 管理，Agent 通过 `RuntimeReconcile` 执行；任务表只保留用户操作/触发记录，CoordDB 不再注册任何模型（旧 `application_lifecycle_*` 表已随迁移删除），协调记录由 AppDB jobs 按 intent_id 聚合。
+- 应用部署控制面位于 `internal/orchestrator`：AppDB 的 immutable revision、instance desired/observed 与 Job lease 由 Planner/Controller 管理，Agent 通过 `RuntimeReconcile` 执行；任务表仅承担 AppDB 内执行控制；历史由 AppDB activity_events 追加事实及 LogDB 投影查询。CoordDB 不再注册模型，不允许从当前 Job/Instance 反推历史。
 - 服务器 agent 健康检查依赖 `modules/servers`、`agent`、`modules/tasks`；应用 runtime 和设施应用操作通过 agent 调用 Docker Engine API。
 - DNS 证书签发依赖 `modules/certificates` 和 `modules/tasks`，证书变量会被应用模块解析。
 - 软件包维护和指标采集依赖 `modules/servers`、`platform/ssh`、`platform/linux`、`modules/tasks`，结果分别落在应用数据库和指标数据库。

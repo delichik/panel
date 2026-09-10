@@ -87,6 +87,9 @@ type Service struct {
 	events                runtimeevents.EventWriter
 	orchestrator          *controlplane.Controller
 	editCleanupOnce       sync.Once
+	editCleanupStopOnce   sync.Once
+	editCleanupStop       chan struct{}
+	editCleanupDone       chan struct{}
 }
 
 type ApplicationRuntime = Runtime
@@ -247,6 +250,9 @@ func (s *Service) StartOrchestrator(ctx context.Context) error {
 }
 
 func (s *Service) StopOrchestrator() error {
+	if s != nil {
+		s.stopEditSessionCleanup()
+	}
 	if s == nil || s.orchestrator == nil {
 		return nil
 	}

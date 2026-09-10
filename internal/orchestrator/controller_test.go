@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -147,5 +148,67 @@ func TestControllerRetryableFailureStaysRetryableBelowMaxAttempts(t *testing.T) 
 	_ = ctrl.Stop()
 	if got := rec.calls.Load(); got != 1 {
 		t.Fatalf("reconciler calls before max attempts = %d, want 1", got)
+	}
+}
+
+type uncertainReconciler struct {
+	calls    int
+	finished bool
+}
+
+func (r *uncertainReconciler) Reconcile(context.Context, ReconcileRequestRPC) (ReconcileResponse, error) {
+	r.calls++
+	return ReconcileResponse{}, errors.New("response lost after remote side effect")
+}
+func (r *uncertainReconciler) ResolveExecution(context.Context, ReconcileRequestRPC) (ReconcileResponse, bool, error) {
+	return ReconcileResponse{ObservedState: "stopped", ObservedGeneration: 1, ObservedSpecHash: "hash-1"}, r.finished, nil
+}
+
+func TestUncertainExecutionIsResolvedWithoutRepeatingSideEffect(t *testing.T) {
+	db := newOrchestratorTestDB(t)
+	insertOrchestratorTestRows(t, db)
+	if _, err := db.Exec(`UPDATE jobs SET action='stop',desired_revision_id='' WHERE id='job-1'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE application_instances SET desired_state='stopped',desired_revision_id='' WHERE id='inst-1'`); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &uncertainReconciler{}
+	store := NewStore(db)
+	ctrl := NewController(store, runtime, ControllerConfig{})
+	ctx := context.Background()
+	if err := ctrl.process(ctx, "job-1"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.GetJob(ctx, "job-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.State != JobRunning || before.ErrorClass != "uncertainty" {
+		t.Fatalf("missing uncertainty: %#v", before)
+	}
+	if _, claimed, err := store.Claim(ctx, "job-1", "other", time.Minute); err != nil || claimed {
+		t.Fatalf("unknown work must not be reclaimed: %v %v", claimed, err)
+	}
+	if err := ctrl.process(ctx, "job-1"); err != nil {
+		t.Fatal(err)
+	}
+	runtime.finished = true
+	if err := ctrl.process(ctx, "job-1"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.GetJob(ctx, "job-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.calls != 1 || after.State != JobSucceeded || after.ExecutionID != before.ExecutionID {
+		t.Fatalf("resolution repeated or changed execution: calls=%d job=%#v", runtime.calls, after)
+	}
+	var facts int
+	if err := db.QueryRow(`SELECT count(*) FROM activity_events WHERE event_type='uncertainty.detected'`).Scan(&facts); err != nil {
+		t.Fatal(err)
+	}
+	if facts != 1 {
+		t.Fatalf("uncertainty fact lost: %d", facts)
 	}
 }

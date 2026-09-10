@@ -111,11 +111,11 @@ func TestOpenCreatesSeparateSchemas(t *testing.T) {
 	}
 	defer store.Close()
 
-	if _, err := store.LogDB().Exec(`INSERT INTO tasks(id,type,status,created_at) VALUES('task_test','x','queued','now')`); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO tasks(id,type,status,created_at) VALUES('task_test','x','queued','now')`); err != nil {
 		t.Fatalf("task schema missing tasks table: %v", err)
 	}
-	if _, err := store.AppDB().Exec(`INSERT INTO tasks(id,type,status,created_at) VALUES('task_test','x','queued','now')`); err == nil {
-		t.Fatal("tasks table must not exist in app database")
+	if _, err := store.LogDB().Exec(`INSERT INTO tasks(id,type,status,created_at) VALUES('task_test','x','queued','now')`); err == nil {
+		t.Fatal("tasks table must not exist in log database")
 	}
 	if _, err := store.MetricsDB().Exec(`INSERT INTO metrics_snapshots(server_id,time,cpu_usage_percent,memory_used_bytes,memory_total_bytes,disk_used_bytes,disk_total_bytes,network_rx_bps,network_tx_bps) VALUES('srv','now',1,2,3,4,5,6,7)`); err != nil {
 		t.Fatalf("metrics schema missing snapshots table: %v", err)
@@ -293,12 +293,12 @@ func TestFreshSchemaUsesApplicationTables(t *testing.T) {
 	}
 	defer store.Close()
 
-	for _, table := range []string{"applications", "application_files", "auth_state", "overview_card_configurations", "image_updates", "image_refreshes", "application_reconcile_states", "application_revisions", "jobs"} {
+	for _, table := range []string{"applications", "application_files", "auth_state", "overview_card_configurations", "image_updates", "image_refreshes", "application_reconcile_states", "application_revisions", "jobs", "tasks", "task_steps", "activity_events", "activity_evidence_chunks"} {
 		if !tableExists(t, store.AppDB(), table) {
 			t.Fatalf("expected table %q to exist", table)
 		}
 	}
-	for _, table := range []string{"tasks", "task_steps", "task_logs", "application_revisions", "key_asset_exports"} {
+	for _, table := range []string{"application_revisions", "key_asset_exports"} {
 		if !tableExists(t, store.LogDB(), table) {
 			t.Fatalf("expected log table %q to exist", table)
 		}
@@ -829,14 +829,14 @@ func TestMigrateDropsLegacyTaskHistory(t *testing.T) {
 	}
 	defer store.Close()
 
-	taskColumns := tableColumns(t, store.LogDB(), "tasks")
+	taskColumns := tableColumns(t, store.AppDB(), "tasks")
 	for _, required := range []string{"params_json", "parent_task_id", "concurrency_key", "schedule_key"} {
 		if !taskColumns[required] {
 			t.Fatalf("migrated task schema is missing %q", required)
 		}
 	}
 	var count int
-	if err := store.LogDB().QueryRow(`SELECT COUNT(*) FROM tasks`).Scan(&count); err != nil {
+	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM tasks`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 0 {

@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"database/sql"
+	"panel/internal/platform/activitylog"
 	"testing"
 	"time"
 
@@ -17,7 +18,7 @@ func newOrchestratorTestDB(t *testing.T) *sql.DB {
 	}
 	db.SetMaxOpenConns(1)
 	statements := []string{
-		`CREATE TABLE applications (id TEXT PRIMARY KEY, deletion_requested INTEGER NOT NULL DEFAULT 0)`,
+		`CREATE TABLE applications (id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', deletion_requested INTEGER NOT NULL DEFAULT 0)`,
 		`CREATE TABLE application_revisions (id TEXT PRIMARY KEY, application_id TEXT NOT NULL, generation INTEGER NOT NULL, spec_hash TEXT NOT NULL, rendered_runtime_spec TEXT NOT NULL DEFAULT '{}', managed_file_manifest TEXT NOT NULL DEFAULT '[]', image_reference TEXT NOT NULL DEFAULT '', resolved_image_digest TEXT NOT NULL DEFAULT '', spec_yaml TEXT NOT NULL DEFAULT '', job_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL)`,
 		`CREATE TABLE application_instances (
 			id TEXT PRIMARY KEY, application_id TEXT NOT NULL, server_id TEXT NOT NULL,
@@ -61,6 +62,12 @@ func newOrchestratorTestDB(t *testing.T) *sql.DB {
 	}
 	if _, err := db.Exec(`CREATE UNIQUE INDEX uq_test_application_revisions_app_generation ON application_revisions(application_id,generation)`); err != nil {
 		db.Close()
+		t.Fatal(err)
+	}
+	if err := activitylog.Migrate(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	if err := activitylog.InstallControlTriggers(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })

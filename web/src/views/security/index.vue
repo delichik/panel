@@ -131,7 +131,7 @@ async function loadServers() {
   } catch (err) {
     if (isAbortError(err)) return;
     error.value = err instanceof Error ? err.message : t('securityPage.loadServersFailed');
-    notifyError(err instanceof Error ? err.message : t('securityPage.loadServersFailed'));
+    notifyError(err instanceof Error ? err.message : t('securityPage.loadServersFailed'), err);
   } finally {
     if (requestId === serversRequestId) loadingServers.value = false;
   }
@@ -175,7 +175,7 @@ async function loadPanel(options: { clear?: boolean } = {}) {
   } catch (err) {
     if (isAbortError(err)) return;
     actionError.value = err instanceof Error ? err.message : t('securityPage.loadPanelFailed');
-    notifyError(err instanceof Error ? err.message : t('securityPage.loadPanelFailed'));
+    notifyError(err instanceof Error ? err.message : t('securityPage.loadPanelFailed'), err);
     if (tab === 'ufw') ufwState.value = null;
     else fail2banState.value = null;
   } finally {
@@ -205,7 +205,7 @@ async function addRule() {
   if (!selectedServer.value || Object.keys(ruleValidation.value).length) return;
   await run('add-rule', async () => {
     ufwState.value = await securityApi.addUfwRule(selectedServer.value!.id, { port: Number(ruleForm.port), protocol: ruleForm.protocol, from: ruleForm.from });
-    notifySuccess(t('securityPage.ruleAdded'));
+    notifySuccess(t('securityPage.ruleAdded'), ufwState.value);
     ruleDialog.value = false;
   });
 }
@@ -224,23 +224,23 @@ async function confirmAction() {
   await run(kind || 'confirm', async () => {
     if (kind === 'enable-ufw') {
       const accepted = await securityApi.enableUfw(server.id);
-      notifySuccess(t('securityPage.taskAccepted', { taskId: accepted.taskId }));
+      notifySuccess(t('securityPage.taskAccepted', { taskId: accepted.taskId }), accepted);
     }
     if (kind === 'install-ufw') {
       const accepted = await securityApi.installUfw(server.id);
-      notifySuccess(t('securityPage.taskAccepted', { taskId: accepted.taskId }));
+      notifySuccess(t('securityPage.taskAccepted', { taskId: accepted.taskId }), accepted);
     }
     if (kind === 'delete-rule' && targetRule.value) {
       ufwState.value = await securityApi.deleteUfwRule(server.id, targetRule.value.number);
-      notifySuccess(t('securityPage.ruleDeleted'));
+      notifySuccess(t('securityPage.ruleDeleted'), ufwState.value);
     }
     if (kind === 'enable-fail2ban') {
       const accepted = await securityApi.enableFail2Ban(server.id, { configYaml: yamlDraft.value, confirmTakeover: takeoverConfirmed.value });
-      notifySuccess(t('securityPage.taskAccepted', { taskId: accepted.taskId }));
+      notifySuccess(t('securityPage.taskAccepted', { taskId: accepted.taskId }), accepted);
     }
     if (kind === 'release-fail2ban') {
       const accepted = await securityApi.releaseFail2Ban(server.id);
-      notifySuccess(t('securityPage.taskAccepted', { taskId: accepted.taskId }));
+      notifySuccess(t('securityPage.taskAccepted', { taskId: accepted.taskId }), accepted);
     }
     confirmDialog.value = false;
     await loadPanel();
@@ -253,7 +253,7 @@ async function saveFail2BanDraft() {
     fail2banState.value = await securityApi.saveFail2Ban(selectedServer.value!.id, yamlDraft.value);
     yamlDraft.value = fail2banState.value.configYaml ?? '';
     jailDrafts.value = fail2banState.value.config.jails ?? [];
-    notifySuccess(t('securityPage.draftSaved'));
+    notifySuccess(t('securityPage.draftSaved'), fail2banState.value);
   });
 }
 
@@ -261,7 +261,7 @@ async function installFail2Ban() {
   if (!selectedServer.value) return;
   await run('install-fail2ban', async () => {
     const accepted = await securityApi.installFail2Ban(selectedServer.value!.id);
-    notifySuccess(t('securityPage.taskAccepted', { taskId: accepted.taskId }));
+    notifySuccess(t('securityPage.taskAccepted', { taskId: accepted.taskId }), accepted);
     await loadPanel();
   });
 }
@@ -285,7 +285,7 @@ async function run(operation: string, action: () => Promise<void>) {
     await action();
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('common.operationFailed');
-    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
   } finally {
     pending.value = '';
   }

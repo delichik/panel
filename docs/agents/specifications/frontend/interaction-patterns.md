@@ -5,7 +5,7 @@
 ## UI primitives
 
 - `SearchInput`：用于列表、资源、任务、证书等搜索输入。支持 `v-model`、`placeholder`、可选清空按钮和禁用态；启用清空按钮时必须传入本地化 `clearLabel`。搜索状态仍由页面同步到 URL query。
-- `PaginationBar`：用于长列表分页底栏。支持 `page`、`pageSize`、`total`、`v-model:page`、`previous`、`next`，固定放在列表模板底部，不随表格正文滚动；上一页、下一页和摘要文案由页面 i18n 传入。
+- `PaginationBar`：支持 `mode="cursor"`、`hasPrevious`、`hasNext`，此模式只发出 previous/next，不计算或显示页码；必须由页面传入快照摘要并维护真实游标历史。原有 page 模式保持不变。用于长列表分页底栏。支持 `page`、`pageSize`、`total`、`v-model:page`、`previous`、`next`，固定放在列表模板底部，不随表格正文滚动；上一页、下一页和摘要文案由页面 i18n 传入。
 - `ConfirmDialog`：用于删除、停用、重置、覆盖导入等需要用户决策的操作。必须传入影响说明 `impact`；危险操作使用 `tone="danger"`，高风险操作可启用 `requireCheckbox`；确认、取消、勾选确认文案由页面 i18n 传入。
 - `FileUploadButton`：用于单文件或多文件选择，页面负责执行上传。禁止在业务页裸露不同样式的 `<input type="file">`。
 - `DownloadButton`：用于 blob、归档、证书、密钥等下载动作，页面负责调用 API 并处理 `saveBlobDownload`。
@@ -13,7 +13,7 @@
 - `Select`：用于单选下拉。交付形态必须是 Panel 自有 combobox + listbox 浮层，使用 popover 表面、统一 hover/selected/focus/motion 状态和暗色主题 token；不得把浏览器原生 `<option>` 展开菜单作为用户可见交互形态。
 - `Dropdown`：菜单 Teleport 到 `body`，使用 fixed 定位、视口边界收敛和上下碰撞选择，不能留在业务容器内被 `overflow` 裁切；菜单宽度按内容收缩并保持紧凑，禁止 fixed 后按视口宽度拉伸；继续支持方向键、Home/End、Escape 和焦点恢复。
 - `Dialog`：不响应遮罩点击关闭，只能通过关闭按钮、取消操作或 Escape 关闭；普通和 large 尺寸的 body 都必须有可靠的内部纵向滚动，页脚保持在弹窗网格底部；业务正文不能依赖外层页面滚动才能到达。
-- `ToastProvider`：全局顶部 toast；页面和组件内 catch 到的异常统一以 danger toast 展示，字段校验与结构化诊断仍就地展示。
+- `ToastProvider`：支持可选 `action={label,to}` 路由动作，带动作保留 15 秒；`useSuccessToast(title, receipt)` / `useErrorToast(title, error)` 从本次返回的真实关联生成“查看过程”，禁止用全局最近请求或解析提示文本关联。全局顶部 toast；页面和组件内 catch 到的异常统一以 danger toast 展示，字段校验与结构化诊断仍就地展示。
 - `LoadingOverlay`：用于对话框正文、文本编辑区、卡片或区块等待网络响应时的统一加载覆盖；不得用裸文字代替加载效果。
 - `Table`：用于表格型列表。首次加载且没有旧数据时传入 `loading` 与本地化 `loadingLabel`，由组件渲染表格骨架行；已有数据刷新时保留当前 rows，只让刷新入口或分页入口显示 loading。 表格行由组件统一加 `motion-table-row` 交错入场（`--panel-stagger`，仅首屏/新增行播放）。
 - `CodeEditor`：文本/代码编辑器（CodeMirror）。内置查找/替换面板：`Ctrl/Cmd+F` 打开查找、`Ctrl/Cmd+H` 打开同一面板进入替换、`F3/Shift+F3` 或 `Ctrl/Cmd+G` 下一个/上一个、`Esc` 关闭；全部匹配高亮，支持 正则 / 区分大小写 / 整词 三个开关；只读态自动隐藏替换区；面板文案由组件内 i18n 词条（`codeEditor.*`）随界面语言切换，业务页面无需额外传参。
@@ -42,7 +42,9 @@
 
 ## 当前接入记录
 
-- `web/src/views/tasks/index.vue`：任务搜索、分页和任务状态已接入 `SearchInput`、`PaginationBar`、`StatusBadge`。
-- `web/src/views/application-operations/index.vue` 与 `web/src/views/system-events/index.vue`：运行事件列表筛选、分页、状态、首次加载表格骨架和详情可用性提示已接入 `SearchInput`、`Select`、`Table`、`PaginationBar`、`StatusBadge`、`Tooltip` 与 `Dialog`。
 - `web/src/views/applications/index.vue`：应用搜索、状态、应用/设施连续纵向配置流、部署/网关/源站服务器多选、持久化数据下载/恢复，以及应用文件和设施静态资产共用的 `AssetFileManager` 已接入统一 primitives/patterns。 未保存修改的离开/取消保护已接入 `ConfirmDialog`。
 - `web/src/views/security/index.vue` 与 `web/src/views/resources/index.vue`：服务器上下文选择已接入 `ServerContextSelector` 及其加载骨架，页面不得再在同一上下文区域叠加 Select 下拉。
+
+- `web/src/components/activity/EventTimeline.vue`：统一只读事实时间线，同步骤连续输出可折叠，异常和决策展开，技术标识折叠；通过 context/evidence 事件交由页面读取上下文与下载证据。`/activity` 页面同时接入自动刷新与 cursor 分页；正文每次替换为当前 100 条批次，较早/较新导航只保存游标，禁止不断追加 DOM。
+
+- `ActivityLink` 统一从资源或操作进入 `/activity`，接受 operationId/eventId/executionId/resourceType/resourceId；不得再创建独立任务日志或协调历史入口。

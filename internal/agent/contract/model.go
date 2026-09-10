@@ -41,7 +41,9 @@ const (
 
 	DefaultDockerHost = "unix:///var/run/docker.sock"
 
-	CapabilityPrepareRestart = "prepare-restart"
+	CapabilityPrepareRestart      = "prepare-restart"
+	CapabilityExecutionEvents     = "execution-events-v1"
+	CapabilityExecutionResolution = "execution-resolution-v1"
 
 	PrepareRestartStateHoldOn = "holdon"
 	PrepareRestartStateReady  = "ready"
@@ -49,7 +51,7 @@ const (
 
 var (
 	Version              = buildinfo.NormalizedVersion()
-	RequiredCapabilities = []string{"health", "os-release", "system-traits", "metrics-snapshot", "packages-list", "packages-upgrade", "ufw-status", "ufw-write", "fail2ban-status", "fail2ban-write", "fail2ban-release", "system-restart", "runtime-write-files", "runtime-reconcile", "runtime-reload", "runtime-create-container", "runtime-status", "runtime-logs", "runtime-persistent-archive", "runtime-stop", "runtime-restart", "runtime-container-name", "docker-containers", "docker-container-logs", "docker-images", "docker-networks", "docker-volumes"}
+	RequiredCapabilities = []string{CapabilityExecutionEvents, CapabilityExecutionResolution, "health", "os-release", "system-traits", "metrics-snapshot", "packages-list", "packages-upgrade", "ufw-status", "ufw-write", "fail2ban-status", "fail2ban-write", "fail2ban-release", "system-restart", "runtime-write-files", "runtime-reconcile", "runtime-reload", "runtime-create-container", "runtime-status", "runtime-logs", "runtime-persistent-archive", "runtime-stop", "runtime-restart", "runtime-container-name", "docker-containers", "docker-container-logs", "docker-images", "docker-networks", "docker-volumes"}
 )
 
 type Client interface {
@@ -223,6 +225,8 @@ type RuntimeWriteFilesRequest struct {
 }
 
 type RuntimeReconcileRequest struct {
+	OperationID           string          `json:"operationId"`
+	RunID                 string          `json:"runId"`
 	JobID                 string          `json:"jobId"`
 	ExecutionID           string          `json:"executionId"`
 	ApplicationID         string          `json:"applicationId"`
@@ -238,12 +242,20 @@ type RuntimeReconcileRequest struct {
 }
 
 type RuntimeReconcileStep struct {
-	Name   string `json:"name"`
-	Status string `json:"status"`
-	Detail string `json:"detail,omitempty"`
+	StepID     string     `json:"stepId"`
+	StartedAt  *time.Time `json:"startedAt,omitempty"`
+	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+	Name       string     `json:"name"`
+	Status     string     `json:"status"`
+	Detail     string     `json:"detail,omitempty"`
 }
 
 type RuntimeReconcileResponse struct {
+	VerificationSource  string                 `json:"verificationSource,omitempty"`
+	VerificationReason  string                 `json:"verificationReason,omitempty"`
+	VerifiedBy          string                 `json:"verifiedBy,omitempty"`
+	VerifiedByName      string                 `json:"verifiedByName,omitempty"`
+	VerifiedAt          *time.Time             `json:"verifiedAt,omitempty"`
 	ObservedState       string                 `json:"observedState"`
 	ContainerName       string                 `json:"containerName"`
 	ContainerID         string                 `json:"containerId,omitempty"`

@@ -7,8 +7,6 @@ import {
   HardDrive,
   Image,
   KeyRound,
-  ListChecks,
-  ListTodo,
   Network,
   Package,
   RadioTower,
@@ -51,7 +49,6 @@ export const navGroups: NavGroup[] = [
     items: [
       { key: 'applications', titleKey: 'routes.applications.title', to: '/applications/apps', icon: AppWindow },
       { key: 'facility-apps', titleKey: 'routes.facilityApps.title', to: '/applications/facility-apps', icon: FolderKanban },
-      { key: 'application-operations', titleKey: 'routes.applicationOperations.title', to: '/application-operations', icon: ListChecks },
     ],
   },
   {
@@ -71,8 +68,7 @@ export const navGroups: NavGroup[] = [
     key: 'system',
     titleKey: 'layout.nav.settings',
     items: [
-      { key: 'tasks', titleKey: 'routes.tasks.title', to: '/tasks', icon: ListTodo },
-      { key: 'system-events', titleKey: 'routes.systemEvents.title', to: '/system-events', icon: RadioTower },
+      { key: 'activity', titleKey: 'routes.activity.title', to: '/activity', icon: RadioTower },
       { key: 'settings', titleKey: 'routes.settings.title', to: '/settings/general', icon: Settings },
     ],
   },

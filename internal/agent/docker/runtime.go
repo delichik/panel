@@ -642,32 +642,53 @@ func (r *LocalRuntime) CreateContainer(ctx context.Context, spec appruntime.Spec
 // request. It is intentionally at-least-once safe: every step re-inspects
 // the named resource and only removes containers carrying the panel managed
 // identity for the same application and instance.
-func (r *LocalRuntime) Reconcile(ctx context.Context, req agentcontract.RuntimeReconcileRequest) (agentcontract.RuntimeReconcileResponse, error) {
+func (r *LocalRuntime) Reconcile(ctx context.Context, req agentcontract.RuntimeReconcileRequest) (response agentcontract.RuntimeReconcileResponse, runErr error) {
+	recorder := &reconcileRecorder{ctx: ctx, executionID: req.ExecutionID}
+	defer func() { response.Steps = append([]agentcontract.RuntimeReconcileStep(nil), recorder.steps...) }()
+	fail := func(code, class string, err error) (agentcontract.RuntimeReconcileResponse, error) {
+		if errors.Is(err, errReconcileOwnership) {
+			return agentcontract.RuntimeReconcileResponse{ErrorCode: "non_managed_conflict", ErrorClass: "non_managed_conflict", ErrorMessage: err.Error()}, nil
+		}
+		return agentcontract.RuntimeReconcileResponse{ErrorCode: code, ErrorClass: class, ErrorMessage: err.Error(), Retryable: true}, err
+	}
 	if r == nil || r.client == nil {
-		return agentcontract.RuntimeReconcileResponse{ErrorCode: "docker_unavailable", ErrorClass: "docker_unavailable", ErrorMessage: "runtime is not configured", Retryable: true}, nil
+		return fail("docker_unavailable", "docker_unavailable", fmt.Errorf("runtime is not configured"))
 	}
 	if req.Action == "stop" || req.Action == "purge" {
 		name := firstNonEmpty(req.PreviousContainerName, containerNameForInstance(req.InstanceID))
-		inspect, inspectErr := r.client.inspectContainer(ctx, name)
-		if inspectErr == nil {
-			if !managedContainerMatches(inspect, req.ApplicationID, req.InstanceID) {
-				return agentcontract.RuntimeReconcileResponse{ErrorCode: "non_managed_conflict", ErrorClass: "non_managed_conflict", ErrorMessage: "container name is owned by a different resource", Retryable: false, Steps: []agentcontract.RuntimeReconcileStep{{Name: req.Action, Status: "failed"}}}, nil
+		err := recorder.do("inspect_container", func(stepctx context.Context) error {
+			inspect, err := r.client.inspectContainer(stepctx, name)
+			if isDockerNotFound(err) {
+				return nil
 			}
-		} else if !isDockerNotFound(inspectErr) {
-			return agentcontract.RuntimeReconcileResponse{ErrorCode: "inspect_failed", ErrorClass: "docker_unavailable", ErrorMessage: inspectErr.Error(), Retryable: true, Steps: []agentcontract.RuntimeReconcileStep{{Name: req.Action, Status: "failed"}}}, inspectErr
-		}
-		result, err := r.Stop(ctx, agentcontract.RuntimeStopRequest{ApplicationID: req.ApplicationID, InstanceID: req.InstanceID, ContainerName: req.PreviousContainerName, Purge: req.Action == "purge", RemoveApplicationData: req.RemoveData})
+			if err != nil {
+				return err
+			}
+			if !managedContainerMatches(inspect, req.ApplicationID, req.InstanceID) {
+				return errReconcileOwnership
+			}
+			return nil
+		})
 		if err != nil {
-			return agentcontract.RuntimeReconcileResponse{ErrorCode: "stop_failed", ErrorClass: "runtime", ErrorMessage: err.Error(), Retryable: true, Steps: []agentcontract.RuntimeReconcileStep{{Name: req.Action, Status: "failed"}}}, err
+			return fail("inspect_failed", "docker_unavailable", err)
+		}
+		var result agentcontract.RuntimeInstanceResponse
+		err = recorder.do(req.Action, func(stepctx context.Context) error {
+			var err error
+			result, err = r.Stop(stepctx, agentcontract.RuntimeStopRequest{ApplicationID: req.ApplicationID, InstanceID: req.InstanceID, ContainerName: req.PreviousContainerName, Purge: req.Action == "purge", RemoveApplicationData: req.RemoveData})
+			return err
+		})
+		if err != nil {
+			return fail("stop_failed", "runtime", err)
 		}
 		state := appruntime.StatusStopped
 		if req.Action == "purge" {
 			state = appruntime.StatusMissing
 		}
-		return agentcontract.RuntimeReconcileResponse{ObservedState: state, ContainerName: result.ContainerName, ContainerID: result.ContainerID, ObservedAt: result.ObservedAt, Steps: []agentcontract.RuntimeReconcileStep{{Name: req.Action, Status: "succeeded"}}}, nil
+		return agentcontract.RuntimeReconcileResponse{ObservedState: state, ContainerName: result.ContainerName, ContainerID: result.ContainerID, ObservedAt: result.ObservedAt}, nil
 	}
 	if req.Action != "apply" {
-		return agentcontract.RuntimeReconcileResponse{ErrorCode: "invalid_action", ErrorClass: "invalid_spec", ErrorMessage: "unsupported runtime action", Retryable: false}, nil
+		return agentcontract.RuntimeReconcileResponse{ErrorCode: "invalid_action", ErrorClass: "invalid_spec", ErrorMessage: "unsupported runtime action"}, nil
 	}
 	spec := req.Spec
 	if strings.TrimSpace(spec.ApplicationID) == "" {
@@ -676,83 +697,92 @@ func (r *LocalRuntime) Reconcile(ctx context.Context, req agentcontract.RuntimeR
 	if strings.TrimSpace(spec.InstanceID) == "" {
 		spec.InstanceID = req.InstanceID
 	}
-	if strings.TrimSpace(spec.ContainerName) == "" {
-		return agentcontract.RuntimeReconcileResponse{ErrorCode: "invalid_spec", ErrorClass: "invalid_spec", ErrorMessage: "container name is required", Retryable: false}, nil
-	}
-	if strings.TrimSpace(spec.Image) == "" {
-		return agentcontract.RuntimeReconcileResponse{ErrorCode: "invalid_spec", ErrorClass: "invalid_spec", ErrorMessage: "image is required", Retryable: false}, nil
+	if strings.TrimSpace(spec.ContainerName) == "" || strings.TrimSpace(spec.Image) == "" {
+		return agentcontract.RuntimeReconcileResponse{ErrorCode: "invalid_spec", ErrorClass: "invalid_spec", ErrorMessage: "container name and image are required"}, nil
 	}
 	if spec.ApplicationID != req.ApplicationID || spec.InstanceID != req.InstanceID {
-		return agentcontract.RuntimeReconcileResponse{ErrorCode: "invalid_spec_identity", ErrorClass: "invalid_spec", ErrorMessage: "runtime spec identity does not match request", Retryable: false}, nil
+		return agentcontract.RuntimeReconcileResponse{ErrorCode: "invalid_spec_identity", ErrorClass: "invalid_spec", ErrorMessage: "runtime spec identity does not match request"}, nil
 	}
-	steps := []agentcontract.RuntimeReconcileStep{{Name: "write_files", Status: "running"}}
-	if err := r.WriteManagedFiles(ctx, spec); err != nil {
-		steps[0].Status = "failed"
-		return agentcontract.RuntimeReconcileResponse{ErrorCode: "write_files_failed", ErrorClass: "runtime", ErrorMessage: err.Error(), Retryable: true, Steps: steps}, err
+	if err := recorder.do("write_files", func(stepctx context.Context) error { return r.WriteManagedFiles(stepctx, spec) }); err != nil {
+		return fail("write_files_failed", "runtime", err)
 	}
-	steps[0].Status = "succeeded"
-
-	steps = append(steps, agentcontract.RuntimeReconcileStep{Name: "inspect_container", Status: "running"})
-	inspect, inspectErr := r.client.inspectContainer(ctx, spec.ContainerName)
-	if inspectErr == nil {
+	var inspect dockerInspectResponse
+	var inspectErr error
+	err := recorder.do("inspect_container", func(stepctx context.Context) error {
+		inspect, inspectErr = r.client.inspectContainer(stepctx, spec.ContainerName)
+		if isDockerNotFound(inspectErr) {
+			return nil
+		}
+		if inspectErr != nil {
+			return inspectErr
+		}
 		if !managedContainerMatches(inspect, req.ApplicationID, req.InstanceID) {
-			steps[len(steps)-1].Status = "failed"
-			return agentcontract.RuntimeReconcileResponse{ErrorCode: "non_managed_conflict", ErrorClass: "non_managed_conflict", ErrorMessage: "container name is owned by a different resource", Retryable: false, Steps: steps}, nil
+			return errReconcileOwnership
 		}
+		return nil
+	})
+	if err != nil {
+		return fail("inspect_failed", "docker_unavailable", err)
+	}
+	verify := func() (agentcontract.RuntimeReconcileResponse, error) {
+		var result agentcontract.RuntimeReconcileResponse
+		err := recorder.do("verify_running", func(stepctx context.Context) error {
+			var err error
+			result, err = r.reconcileStatusResponse(stepctx, req, spec, nil)
+			if err != nil {
+				return err
+			}
+			if result.ObservedState != appruntime.StatusRunning {
+				return fmt.Errorf("container did not reach running state")
+			}
+			return nil
+		})
+		if err != nil {
+			result.ErrorCode = "container_not_running"
+			result.ErrorClass = "container_start_failed"
+			result.ErrorMessage = err.Error()
+			result.Retryable = true
+		}
+		return result, err
+	}
+	if inspectErr == nil {
 		if managedContainerMatchesDesiredRuntime(inspect, req.DesiredSpecHash, req.DesiredGeneration) {
-			steps[len(steps)-1].Status = "succeeded"
-			steps = append(steps, agentcontract.RuntimeReconcileStep{Name: "reuse_container", Status: "succeeded"})
-			return r.reconcileStatusResponse(ctx, req, spec, steps)
+			return verify()
 		}
-		if err := r.client.stopContainer(ctx, spec.ContainerName, 10); err != nil && !isDockerNotFound(err) {
-			steps[len(steps)-1].Status = "failed"
-			return agentcontract.RuntimeReconcileResponse{ErrorCode: "replace_stop_failed", ErrorClass: "runtime", ErrorMessage: err.Error(), Retryable: true, Steps: steps}, err
+		if err := recorder.do("replace_stop", func(stepctx context.Context) error {
+			err := r.client.stopContainer(stepctx, spec.ContainerName, 10)
+			if isDockerNotFound(err) {
+				return nil
+			}
+			return err
+		}); err != nil {
+			return fail("replace_stop_failed", "runtime", err)
 		}
-		if err := r.client.removeContainer(ctx, spec.ContainerName, true); err != nil && !isDockerNotFound(err) {
-			steps[len(steps)-1].Status = "failed"
-			return agentcontract.RuntimeReconcileResponse{ErrorCode: "replace_remove_failed", ErrorClass: "runtime", ErrorMessage: err.Error(), Retryable: true, Steps: steps}, err
+		if err := recorder.do("replace_remove", func(stepctx context.Context) error {
+			err := r.client.removeContainer(stepctx, spec.ContainerName, true)
+			if isDockerNotFound(err) {
+				return nil
+			}
+			return err
+		}); err != nil {
+			return fail("replace_remove_failed", "runtime", err)
 		}
-	} else if !isDockerNotFound(inspectErr) {
-		steps[len(steps)-1].Status = "failed"
-		return agentcontract.RuntimeReconcileResponse{ErrorCode: "inspect_failed", ErrorClass: "docker_unavailable", ErrorMessage: inspectErr.Error(), Retryable: true, Steps: steps}, inspectErr
 	}
-	steps[len(steps)-1].Status = "succeeded"
-	steps = append(steps, agentcontract.RuntimeReconcileStep{Name: "ensure_image", Status: "running"})
-	if err := r.client.pullImage(ctx, spec.Image); err != nil {
-		steps[len(steps)-1].Status = "failed"
-		return agentcontract.RuntimeReconcileResponse{ErrorCode: "image_pull_failed", ErrorClass: "registry_unavailable", ErrorMessage: err.Error(), Retryable: true, Steps: steps}, err
+	if err := recorder.do("ensure_image", func(stepctx context.Context) error { return r.client.pullImage(stepctx, spec.Image) }); err != nil {
+		return fail("image_pull_failed", "registry_unavailable", err)
 	}
-	steps[len(steps)-1].Status = "succeeded"
-
-	steps = append(steps, agentcontract.RuntimeReconcileStep{Name: "create_container", Status: "running"})
-	containerID, err := r.CreateContainer(ctx, spec)
-	if err != nil {
-		steps[len(steps)-1].Status = "failed"
-		return agentcontract.RuntimeReconcileResponse{ErrorCode: "create_container_failed", ErrorClass: "runtime", ErrorMessage: err.Error(), Retryable: true, Steps: steps}, err
+	var containerID string
+	if err := recorder.do("create_container", func(stepctx context.Context) error {
+		var err error
+		containerID, err = r.CreateContainer(stepctx, spec)
+		return err
+	}); err != nil {
+		return fail("create_container_failed", "runtime", err)
 	}
-	steps[len(steps)-1].Status = "succeeded"
-	steps = append(steps, agentcontract.RuntimeReconcileStep{Name: "start_container", Status: "running"})
-	if err := r.client.startContainer(ctx, containerID); err != nil {
-		steps[len(steps)-1].Status = "failed"
-		return agentcontract.RuntimeReconcileResponse{ErrorCode: "start_container_failed", ErrorClass: "container_start_failed", ErrorMessage: err.Error(), Retryable: true, Steps: steps}, err
+	if err := recorder.do("start_container", func(stepctx context.Context) error { return r.client.startContainer(stepctx, containerID) }); err != nil {
+		return fail("start_container_failed", "container_start_failed", err)
 	}
-	steps[len(steps)-1].Status = "succeeded"
-	steps = append(steps, agentcontract.RuntimeReconcileStep{Name: "verify_running", Status: "running"})
-	response, err := r.reconcileStatusResponse(ctx, req, spec, steps)
-	if err != nil {
-		return response, err
-	}
-	if response.ObservedState != appruntime.StatusRunning {
-		response.ErrorCode = "container_not_running"
-		response.ErrorClass = "container_start_failed"
-		response.ErrorMessage = "container did not reach running state"
-		response.Retryable = true
-		return response, nil
-	}
-	if response.ContainerID == "" {
-		response.ContainerID = containerID
-	}
-	return response, nil
+	return verify()
 }
 
 func (r *LocalRuntime) reconcileStatusResponse(ctx context.Context, req agentcontract.RuntimeReconcileRequest, spec appruntime.Spec, steps []agentcontract.RuntimeReconcileStep) (agentcontract.RuntimeReconcileResponse, error) {
@@ -2168,8 +2198,33 @@ func (c *dockerAPIClient) pullImage(ctx context.Context, image string) error {
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return dockerError(res, "pull image")
 	}
-	_, _ = io.Copy(io.Discard, res.Body)
-	return nil
+	// Docker reports pull errors inside successful HTTP responses. Decode each
+	// progress message and durably forward only its public progress fields.
+	decoder := json.NewDecoder(res.Body)
+	for {
+		var progress struct {
+			Status   string `json:"status"`
+			ID       string `json:"id"`
+			Progress string `json:"progress"`
+			Error    string `json:"error"`
+		}
+		if err := decoder.Decode(&progress); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+		text := strings.TrimSpace(strings.Join([]string{progress.ID, progress.Status, progress.Progress, progress.Error}, " "))
+		if sink := agentcontract.ExecutionEventSinkFromContext(ctx); sink != nil && text != "" {
+			stepID, _ := ctx.Value(executionStepKey{}).(string)
+			if err := sink.Append(ctx, agentcontract.ExecutionEvent{EventType: "output.chunk", StepID: stepID, Stream: "system", Text: text}); err != nil {
+				return &agentcontract.EventPersistenceError{Stage: "output", Err: err}
+			}
+		}
+		if progress.Error != "" {
+			return errors.New(progress.Error)
+		}
+	}
 }
 
 func dockerPullImageQuery(image string) url.Values {

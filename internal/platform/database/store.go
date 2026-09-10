@@ -148,8 +148,12 @@ func sqliteDSN(path string) string {
 func appendSQLitePragmas(dsn string) string {
 	base, rawQuery, hasQuery := strings.Cut(dsn, "?")
 	values, _ := url.ParseQuery(rawQuery)
+	if values.Get("_txlock") == "" {
+		values.Set("_txlock", "immediate")
+	}
 	ensureSQLitePragma(values, "busy_timeout", "busy_timeout(5000)")
 	ensureSQLitePragma(values, "journal_mode", "journal_mode(WAL)")
+	ensureSQLitePragma(values, "synchronous", "synchronous(FULL)")
 	ensureSQLitePragma(values, "foreign_keys", "foreign_keys(ON)")
 	encoded := values.Encode()
 	if encoded == "" {

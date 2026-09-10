@@ -36,7 +36,7 @@ func TestWorkerRunNowUsesManagerLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != StatusFailed || !strings.Contains(got.Error, "worker failed") || !failureHookCalled {
+	if got.Status != StatusFailedRetryable || got.NextRunAt == nil || !strings.Contains(got.Error, "worker failed") || !failureHookCalled {
 		t.Fatalf("expected manager failure lifecycle, task=%#v hook=%v", got, failureHookCalled)
 	}
 	if svc.HasRunningExecution(task.ID) {
@@ -165,7 +165,7 @@ func TestWorkerExpiresRegisteredStaleQueuedTypes(t *testing.T) {
 	}
 }
 
-func TestWorkerFailsOrphanedRunningTasks(t *testing.T) {
+func TestWorkerPreservesUncertainOrphanedTasks(t *testing.T) {
 	svc := newTestService(t)
 	task, err := svc.Create(context.Background(), CreateInput{Type: "test"})
 	if err != nil {
@@ -181,8 +181,8 @@ func TestWorkerFailsOrphanedRunningTasks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != StatusFailed || !strings.Contains(got.Error, "no active execution") {
-		t.Fatalf("expected orphaned task to fail, got %#v", got)
+	if got.Status != StatusRunning || got.Stage != "uncertain" || !strings.Contains(got.Error, "requires verification") {
+		t.Fatalf("expected orphaned task to await verification, got %#v", got)
 	}
 }
 
