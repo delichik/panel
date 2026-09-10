@@ -15,6 +15,7 @@ import {
   makeFacilityDomain,
   makeFacilityPath,
   makeKeyValueRow,
+  panelFileMountOptions,
   saveInputFromDraft,
   specYamlFromDraft,
   statusTone,
@@ -60,6 +61,17 @@ describe('application editor model', () => {
   });
 
   it('marks stopped reconciliation as needing attention', () => {
+  it('offers catalogued Seamark files by stable source and preserves a missing reference', () => {
+    const files = [{ name: 'deploy-key', kind: 'private_key', resourceType: 'key_asset', source: 'key_asset:key-1:private_key' }];
+    expect(panelFileMountOptions(files, '', (file) => `${file.name} / ${file.kind}`)).toEqual([
+      { label: 'deploy-key / private_key', value: 'key_asset:key-1:private_key' },
+    ]);
+    expect(panelFileMountOptions(files, 'certificate:gone:certificate', undefined, (source) => `${source} (missing)`)).toEqual([
+      { label: 'certificate:gone:certificate (missing)', value: 'certificate:gone:certificate', disabled: true },
+      { label: 'deploy-key', value: 'key_asset:key-1:private_key' },
+    ]);
+  });
+
     expect(applicationStatus({ ...app, reconcileStopped: true })).toBe('attention');
     expect(statusTone('attention')).toBe('warning');
     expect(applicationStatus({ ...app, reconcileStopped: false })).toBe('enabled');

@@ -58,6 +58,13 @@ describe('application and facility file closure', () => {
     expect(viewSource).toContain("t('applicationsPage.applicationFileMountMissing'");
   });
 
+  it('selects Seamark file mount sources from the shared template catalog', () => {
+    expect(viewSource).toContain('panelFiles.value = catalog.panelFiles ?? []');
+    expect(viewSource).toContain(':options="panelFileMountOptions"');
+    expect(viewSource).toContain("mountDraft.type === 'panel_file'");
+    expect(viewSource).toContain("t('applicationsPage.panelFileMountMissing'");
+  });
+
   it('renders application and facility configuration as one continuous workspace', () => {
     expect(viewSource).toContain('class="app-editor-body"');
     expect(viewSource).toContain('class="workspace-panel"');

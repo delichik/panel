@@ -1,5 +1,5 @@
 import YAML from 'yaml';
-import type { ApplicationDto, ApplicationFile, ApplicationRuntime, ApplicationSaveInput, ApplicationSummaryDto, Diagnostic, HttpRouteOptions, ReverseProxyPath, ReverseProxyRule } from '@/types/applications';
+import type { ApplicationDto, ApplicationFile, ApplicationRuntime, ApplicationSaveInput, ApplicationSummaryDto, Diagnostic, HttpRouteOptions, PanelFileDefinition, ReverseProxyPath, ReverseProxyRule } from '@/types/applications';
 import type { FacilityRouteDomain, FacilityRoutePath, ReverseProxyConfig, ReverseProxySaveInput, StaticRuleType, StaticSourceType } from '@/types/facilityApps';
 
 export type AppMode = 'apps' | 'create' | 'edit' | 'facilityCatalog' | 'facilityDetail' | 'facilityConfig';
@@ -44,6 +44,20 @@ export function applicationFileMountOptions(
   missingLabel: (name: string) => string = (name) => name,
 ): ApplicationFileMountOption[] {
   const options: ApplicationFileMountOption[] = files.map((file) => ({ label: file.name, value: file.name }));
+  const selected = currentSource.trim();
+  if (selected && !options.some((option) => option.value === selected)) {
+    options.unshift({ label: missingLabel(selected), value: selected, disabled: true });
+  }
+  return options;
+}
+
+export function panelFileMountOptions(
+  files: Array<Pick<PanelFileDefinition, 'name' | 'kind' | 'resourceType' | 'source'>>,
+  currentSource = '',
+  optionLabel: (file: Pick<PanelFileDefinition, 'name' | 'kind' | 'resourceType' | 'source'>) => string = (file) => file.name,
+  missingLabel: (source: string) => string = (source) => source,
+): ApplicationFileMountOption[] {
+  const options = files.map((file) => ({ label: optionLabel(file), value: file.source }));
   const selected = currentSource.trim();
   if (selected && !options.some((option) => option.value === selected)) {
     options.unshift({ label: missingLabel(selected), value: selected, disabled: true });

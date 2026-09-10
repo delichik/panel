@@ -116,16 +116,18 @@ export interface TemplateVariableDefinition {
   resourceName?: string;
 }
 
+export interface PanelFileDefinition {
+  id: string;
+  resourceId: string;
+  resourceType: string;
+  name: string;
+  kind: string;
+  source: string;
+}
+
 export interface ApplicationTemplateCatalog {
   variables: TemplateVariableDefinition[];
-  panelFiles: Array<{
-    id: string;
-    resourceId: string;
-    resourceType: string;
-    name: string;
-    kind: string;
-    source: string;
-  }>;
+  panelFiles: PanelFileDefinition[];
 }
 
 export interface ApplicationFile {

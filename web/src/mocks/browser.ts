@@ -557,7 +557,29 @@ export function installMockApi() {
             resourceName: app.name,
           })),
         ],
-        panelFiles: [],
+        panelFiles: [
+          ...mockKeyAssets.flatMap((asset) => asset.downloadKinds.map((downloadKind) => {
+            const kind = asset.type === 'ssh_key_pair' && downloadKind === 'public_key' ? 'ssh_public_key' : downloadKind;
+            return {
+              id: `${asset.id}:${kind}`,
+              resourceId: asset.id,
+              resourceType: 'key_asset',
+              name: asset.name,
+              kind,
+              source: `key_asset:${asset.id}:${kind}`,
+            };
+          })),
+          ...mockDomainCertificates
+            .filter((certificate) => certificate.status === 'issued')
+            .flatMap((certificate) => ['certificate', 'private_key'].map((kind) => ({
+              id: `${certificate.id}:${kind}`,
+              resourceId: certificate.id,
+              resourceType: 'certificate',
+              name: certificate.name,
+              kind,
+              source: `certificate:${certificate.id}:${kind}`,
+            }))),
+        ],
       });
     }
     const appMatch = url.pathname.match(/^\/api\/v1\/applications\/([^/]+)$/);

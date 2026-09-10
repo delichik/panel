@@ -34,7 +34,7 @@ import ConsolePage from '@/components/templates/ConsolePage.vue';
 import EditorPage from '@/components/templates/EditorPage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
-import type { ApplicationDto, ApplicationEditPreviewResult, ApplicationEditSession, ApplicationFile, ApplicationRuntime, ApplicationSummaryDto, Diagnostic, ReverseProxyRule, TemplateVariableDefinition } from '@/types/applications';
+import type { ApplicationDto, ApplicationEditPreviewResult, ApplicationEditSession, ApplicationFile, ApplicationRuntime, ApplicationSummaryDto, Diagnostic, PanelFileDefinition, ReverseProxyRule, TemplateVariableDefinition } from '@/types/applications';
 import type { FacilityEditPreviewResult, FacilityEditSession, FacilityRouteDomain, FacilityRoutePath, ReverseProxyConfig, StaticAsset, StorageShareConfig } from '@/types/facilityApps';
 import type { ServerDto } from '@/types/servers';
 import { formatDateTime } from '@/utils/datetime';
@@ -59,6 +59,7 @@ import {
   makePortRow,
   makeProxyPath,
   makeProxyRule,
+  panelFileMountOptions as makePanelFileMountOptions,
   routeMode,
   routeSummary,
   runtimeSummary,
@@ -101,6 +102,7 @@ let dnsPollTimer: ReturnType<typeof setTimeout> | null = null;
 
 const applications = ref<ApplicationSummaryDto[]>([]);
 const templateVariables = ref<TemplateVariableDefinition[]>([]);
+const panelFiles = ref<PanelFileDefinition[]>([]);
 const applicationDetails = ref<Record<string, ApplicationDto>>({});
 const applicationFiles = ref<Record<string, ApplicationFile[]>>({});
 const runtimes = ref<Record<string, ApplicationRuntime>>({});
@@ -286,6 +288,24 @@ const applicationFileMountOptions = computed(() => makeApplicationFileMountOptio
 ));
 const applicationFileMountSourceValid = computed(() => mountDraft.type !== 'file'
   || applicationFileMountOptions.value.some((option) => option.value === mountDraft.source.trim() && !option.disabled));
+function panelFileLabel(file: Pick<PanelFileDefinition, 'kind' | 'name' | 'resourceType'>) {
+  const resourceKey = file.resourceType === 'certificate' ? 'certificate' : file.resourceType === 'key_asset' ? 'key_asset' : '';
+  const kindKey = ['certificate', 'private_key', 'public_key', 'ssh_public_key'].includes(file.kind) ? file.kind : '';
+  return t('applicationsPage.panelFileMountOption', {
+    resource: resourceKey ? t(`applicationsPage.panelFileResource.${resourceKey}`) : file.resourceType,
+    name: file.name,
+    kind: kindKey ? t(`applicationsPage.panelFileKind.${kindKey}`) : file.kind,
+  });
+}
+const panelFileMountOptions = computed(() => makePanelFileMountOptions(
+  panelFiles.value,
+  mountDraft.type === 'panel_file' ? mountDraft.source : '',
+  panelFileLabel,
+  (source) => t('applicationsPage.panelFileMountMissing', { source }),
+));
+const panelFileMountSourceValid = computed(() => mountDraft.type !== 'panel_file'
+  || panelFileMountOptions.value.some((option) => option.value === mountDraft.source.trim() && !option.disabled));
+const panelFileLabelBySource = computed(() => new Map(panelFiles.value.map((file) => [file.source, panelFileLabel(file)])));
 const facilityAssetItems = computed<AssetFileItem[]>(() => (facilitySession.value?.assets ?? []).map((asset) => ({
   key: asset.name,
   name: asset.name,
@@ -894,9 +914,11 @@ async function startApplicationEditorCore() {
     const catalog = await applicationsApi.templateCatalog({ signal: controller.signal });
     templateVariables.value = catalog.variables ?? [];
   } catch (err) {
+    panelFiles.value = catalog.panelFiles ?? [];
     if (isAbortError(err)) return;
     templateVariables.value = [];
   }
+    panelFiles.value = [];
   if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || String(route.params.applicationId ?? '') !== appId) return;
   let app: ApplicationDto | null = null;
   if (appId) {
@@ -1246,6 +1268,9 @@ function mountSourceLabel(mount: MountRow) {
 watch(() => mountDraft.type, (type) => {
   if (type === 'storage_share') void loadStorageShareOptions();
 });
+  if (mount.type === 'panel_file') {
+    return panelFileLabelBySource.value.get(mount.source) || mount.source || t('applicationsPage.panelManagedSource');
+  }
 
 function openMountDialog(index = -1) {
   dialogKind.value = 'mount';
@@ -1266,6 +1291,10 @@ function saveMountDialog() {
   }
   const next = { ...mountDraft };
   if (dialogIndex.value >= 0) appDraft.mounts[dialogIndex.value] = next;
+  if (mountDraft.type === 'panel_file' && !panelFileMountSourceValid.value) {
+    notifyError(t('applicationsPage.panelFileMountSourceRequired'));
+    return;
+  }
   else appDraft.mounts.push(next);
   dialogOpen.value = false;
   markAppStructuredDirty();
@@ -2151,7 +2180,7 @@ onBeforeUnmount(() => {
     </div>
     <div v-else-if="dialogKind === 'mount'" class="grid gap-3">
       <label class="field">{{ t('common.type') }}<Select v-model="mountDraft.type" :options="mountTypeOptions" /></label>
-      <label class="field">{{ t('applicationsPage.source') }}<Select v-if="mountDraft.type === 'file'" v-model="mountDraft.source" :options="applicationFileMountOptions" :placeholder="t('applicationsPage.applicationFileMountSourcePlaceholder')" /><Select v-else-if="mountDraft.type === 'storage_share'" v-model="mountDraft.source" :options="storageShareOptions" :placeholder="t('applicationsPage.storageShareMountSourcePlaceholder')" :disabled="!storageShareAvailable" /><Input v-else v-model="mountDraft.source" /></label>
+      <label class="field">{{ t('applicationsPage.source') }}<Select v-if="mountDraft.type === 'file'" v-model="mountDraft.source" :options="applicationFileMountOptions" :placeholder="t('applicationsPage.applicationFileMountSourcePlaceholder')" /><Select v-else-if="mountDraft.type === 'panel_file'" v-model="mountDraft.source" :options="panelFileMountOptions" :placeholder="t('applicationsPage.panelFileMountSourcePlaceholder')" /><Select v-else-if="mountDraft.type === 'storage_share'" v-model="mountDraft.source" :options="storageShareOptions" :placeholder="t('applicationsPage.storageShareMountSourcePlaceholder')" :disabled="!storageShareAvailable" /><Input v-else v-model="mountDraft.source" /></label>
       <p v-if="mountDraft.type === 'file' && !editSession?.files.length" class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.applicationFileMountEmpty') }}</p>
       <p v-else-if="mountDraft.type === 'file' && mountDraft.source && !applicationFileMountSourceValid" class="m-0 text-xs text-danger">{{ t('applicationsPage.applicationFileMountMissing', { name: mountDraft.source }) }}</p>
       <p v-if="mountDraft.type === 'storage_share'" class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.storageShareMountHint') }}</p>
@@ -2163,6 +2192,8 @@ onBeforeUnmount(() => {
     <div v-else-if="dialogKind === 'proxy'" class="grid gap-3">
       <label class="field">{{ t('applicationsPage.domain') }}<Input v-model="proxyDraft.domain" /></label>
       <label class="field">{{ t('applicationsPage.targetPort') }}<Input v-model="proxyDraft.targetPort" /></label>
+      <p v-if="mountDraft.type === 'panel_file' && !panelFiles.length" class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.panelFileMountEmpty') }}</p>
+      <p v-else-if="mountDraft.type === 'panel_file' && mountDraft.source && !panelFileMountSourceValid" class="m-0 text-xs text-danger">{{ t('applicationsPage.panelFileMountMissing', { source: mountDraft.source }) }}</p>
       <div class="options-block">
         <div class="section-copy"><h3>{{ t('applicationsPage.anyAccess') }}</h3><p>{{ t('applicationsPage.anyAccessHint') }}</p></div>
         <label class="switch-field">{{ t('applicationsPage.anyAccess') }}<Switch v-model="proxyAnyAccessModel" :label="t('applicationsPage.anyAccess')" /></label>
