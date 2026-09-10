@@ -202,8 +202,12 @@ func UFWAllowScript(rules []UFWRule) (string, error) {
 	return strings.Join(commands, "\n"), nil
 }
 
-func UFWEnableScript(sshPort int) (string, error) {
+func UFWEnableScript(sshPort, agentPort int) (string, error) {
 	allowSSH, err := ufwAllowCommand(UFWRule{Port: sshPort, Protocol: "tcp"})
+	if err != nil {
+		return "", err
+	}
+	allowAgent, err := ufwAllowCommand(UFWRule{Port: agentPort, Protocol: "tcp"})
 	if err != nil {
 		return "", err
 	}
@@ -215,6 +219,8 @@ func UFWEnableScript(sshPort int) (string, error) {
 		`fi`,
 		`echo "[panel] ensuring SSH access before enabling UFW"`,
 		allowSSH,
+		`echo "[panel] ensuring Agent access before enabling UFW"`,
+		allowAgent,
 		`echo "[panel] enabling UFW"`,
 		`ufw --force enable`,
 	}, "\n"), nil
@@ -233,6 +239,58 @@ func UFWDeleteRuleScript(number int) (string, error) {
 		return "", panelerr.Validation("ufw_rule_number_invalid", "UFW rule number must be positive")
 	}
 	return "set -eu\nufw --force delete " + strconv.Itoa(number), nil
+}
+
+// UFWSafeDeleteRuleScript re-reads the numbered rule immediately before
+// deletion. It fails closed if the target changed, cannot be parsed, belongs
+// to an application, or resolves to the server SSH port.
+func UFWSafeDeleteRuleScript(rule UFWRuleStatus, sshPort, agentPort int) (string, error) {
+	if rule.Number <= 0 {
+		return "", panelerr.Validation("ufw_rule_number_invalid", "UFW rule number must be positive")
+	}
+	port, ok := UFWRuleTargetPort(rule)
+	if !ok {
+		return "", panelerr.Validation("ufw_rule_target_unknown", "Unable to resolve UFW rule target; refusing deletion")
+	}
+	if sshPort <= 0 || sshPort > 65535 {
+		sshPort = 22
+	}
+	if port == sshPort {
+		return "", panelerr.Validation("ufw_ssh_port_protected", "The SSH firewall port cannot be modified")
+	}
+	if agentPort <= 0 || agentPort > 65535 {
+		agentPort = 9786
+	}
+	if port == agentPort {
+		return "", panelerr.Validation("ufw_agent_port_protected", "The Panel Agent firewall port cannot be modified")
+	}
+	if UFWRuleManagedByApplication(rule) {
+		return "", panelerr.Validation("ufw_application_rule_managed", "Application-managed UFW rules cannot be deleted manually")
+	}
+	number := strconv.Itoa(rule.Number)
+	expected := strings.Join([]string{strings.TrimSpace(rule.To), strings.TrimSpace(rule.Action), strings.TrimSpace(rule.From)}, "|")
+	return strings.Join([]string{
+		"set -eu",
+		`line="$(ufw status numbered | sed -n 's/^[[:space:]]*\[[[:space:]]*` + number + `\][[:space:]]*//p')"`,
+		`[ -n "$line" ] || { echo "[panel] UFW rule target is unavailable; refusing deletion" >&2; exit 1; }`,
+		`current="$(printf '%s\n' "$line" | awk -F '[[:space:]][[:space:]]+' '{ print $1 "|" $2 "|" $3 }')"`,
+		`[ "$current" = ` + ShellQuote(expected) + ` ] || { echo "[panel] UFW rule changed; refresh before deleting" >&2; exit 1; }`,
+		`case "$line" in *"# panel:application:"*) echo "[panel] application-managed UFW rules cannot be deleted manually" >&2; exit 1;; esac`,
+		"ufw --force delete " + number,
+	}, "\n"), nil
+}
+
+func UFWRuleTargetPort(rule UFWRuleStatus) (int, bool) {
+	target := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(rule.To), "(v6)"))
+	if slash := strings.IndexByte(target, '/'); slash >= 0 {
+		target = target[:slash]
+	}
+	port, err := strconv.Atoi(strings.TrimSpace(target))
+	return port, err == nil && port > 0 && port <= 65535
+}
+
+func UFWRuleManagedByApplication(rule UFWRuleStatus) bool {
+	return strings.Contains(rule.From, "# panel:application:")
 }
 
 func ParseUFWStatus(out string) UFWStatus {

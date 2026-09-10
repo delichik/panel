@@ -176,15 +176,20 @@ type UFWInstallRequest struct {
 }
 
 type UFWEnableRequest struct {
-	SSHPort int `json:"sshPort"`
+	SSHPort   int `json:"sshPort"`
+	AgentPort int `json:"agentPort"`
 }
 
 type UFWAllowRequest struct {
-	Rule remoteops.UFWRule `json:"rule"`
+	Rule      remoteops.UFWRule `json:"rule"`
+	SSHPort   int               `json:"sshPort"`
+	AgentPort int               `json:"agentPort"`
 }
 
 type UFWDeleteRequest struct {
-	Number int `json:"number"`
+	Number    int `json:"number"`
+	SSHPort   int `json:"sshPort"`
+	AgentPort int `json:"agentPort"`
 }
 
 type Fail2BanConfig struct {
@@ -239,6 +244,8 @@ type RuntimeReconcileRequest struct {
 	Spec                  appruntime.Spec `json:"spec"`
 	RemoveData            bool            `json:"removeData"`
 	PreviousContainerName string          `json:"previousContainerName,omitempty"`
+	SSHPort               int             `json:"sshPort,omitempty"`
+	AgentPort             int             `json:"agentPort,omitempty"`
 }
 
 type RuntimeReconcileStep struct {

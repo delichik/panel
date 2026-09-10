@@ -316,6 +316,7 @@ const facilityAssetItems = computed<AssetFileItem[]>(() => (facilitySession.valu
   editable: asset.contentMode === 'text',
 })));
 const mountTypeOptions = computed(() => ['persistent', 'volume', 'host', 'file', 'panel_file', 'storage_share'].map((value) => ({ label: t(`applicationsPage.mountType.${value}`), value })));
+const portProtocolOptions = computed(() => (['tcp', 'udp'] as const).map((value) => ({ label: value.toUpperCase(), value })));
 const routeTypeOptions = computed(() => ['static', 'redirect', 'proxy_pass'].map((value) => ({ label: t(`applicationsPage.routeType.${value}`), value })));
 const sourceTypeOptions = computed(() => ['uploaded_file', 'uploaded_bundle'].map((value) => ({ label: t(`applicationsPage.sourceType.${value}`), value })));
 const saving = computed(() => pending.value === 'preview' || pending.value === 'commit');
@@ -913,12 +914,12 @@ async function startApplicationEditorCore() {
   try {
     const catalog = await applicationsApi.templateCatalog({ signal: controller.signal });
     templateVariables.value = catalog.variables ?? [];
-  } catch (err) {
     panelFiles.value = catalog.panelFiles ?? [];
+  } catch (err) {
     if (isAbortError(err)) return;
     templateVariables.value = [];
-  }
     panelFiles.value = [];
+  }
   if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || String(route.params.applicationId ?? '') !== appId) return;
   let app: ApplicationDto | null = null;
   if (appId) {
@@ -1230,6 +1231,7 @@ function openPortDialog(index = -1) {
   dialogKind.value = 'port';
   dialogIndex.value = index;
   Object.assign(portDraft, index >= 0 ? appDraft.ports[index] : makePortRow());
+  if (!portDraft.staticPort.trim()) portDraft.openFirewall = false;
   dialogOpen.value = true;
 }
 
@@ -1239,6 +1241,10 @@ function savePortDialog() {
   else appDraft.ports.push(next);
   dialogOpen.value = false;
   markAppStructuredDirty();
+}
+
+function onPortStaticPortInput() {
+  if (!portDraft.staticPort.trim()) portDraft.openFirewall = false;
 }
 
 async function loadStorageShareOptions() {
@@ -1262,15 +1268,15 @@ function mountSourceLabel(mount: MountRow) {
   if (mount.type === 'storage_share') {
     return storageShareLabelBySource.value[mount.source] || mount.source || t('applicationsPage.panelManagedSource');
   }
+  if (mount.type === 'panel_file') {
+    return panelFileLabelBySource.value.get(mount.source) || mount.source || t('applicationsPage.panelManagedSource');
+  }
   return mount.source || t('applicationsPage.panelManagedSource');
 }
 
 watch(() => mountDraft.type, (type) => {
   if (type === 'storage_share') void loadStorageShareOptions();
 });
-  if (mount.type === 'panel_file') {
-    return panelFileLabelBySource.value.get(mount.source) || mount.source || t('applicationsPage.panelManagedSource');
-  }
 
 function openMountDialog(index = -1) {
   dialogKind.value = 'mount';
@@ -1285,16 +1291,16 @@ function saveMountDialog() {
     notifyError(t('applicationsPage.applicationFileMountSourceRequired'));
     return;
   }
+  if (mountDraft.type === 'panel_file' && !panelFileMountSourceValid.value) {
+    notifyError(t('applicationsPage.panelFileMountSourceRequired'));
+    return;
+  }
   if (mountDraft.type === 'storage_share' && !mountDraft.source) {
     notifyError(t('applicationsPage.storageShareMountSourceRequired'));
     return;
   }
   const next = { ...mountDraft };
   if (dialogIndex.value >= 0) appDraft.mounts[dialogIndex.value] = next;
-  if (mountDraft.type === 'panel_file' && !panelFileMountSourceValid.value) {
-    notifyError(t('applicationsPage.panelFileMountSourceRequired'));
-    return;
-  }
   else appDraft.mounts.push(next);
   dialogOpen.value = false;
   markAppStructuredDirty();
@@ -2075,7 +2081,7 @@ onBeforeUnmount(() => {
             <section class="workspace-panel">
               <div class="section-heading"><div class="section-copy"><h3>{{ t('applicationsPage.panelNetworking') }}</h3><p>{{ t('applicationsPage.networkingHint') }}</p></div><div class="flex flex-wrap gap-2"><Button size="sm" @click="openPortDialog()"><Plus />{{ t('applicationsPage.addPort') }}</Button><Button size="sm" @click="openProxyDialog()"><Globe2 />{{ t('applicationsPage.addProxyRule') }}</Button></div></div>
               <div class="grid gap-3">
-                <div v-for="(port, index) in appDraft.ports" :key="port.id" class="item-row"><div><strong>{{ port.label || t('applicationsPage.unnamedPort') }}</strong><span>{{ t('applicationsPage.containerPortSummary', { port: port.to }) }} · {{ port.staticPort ? t('applicationsPage.staticPort', { port: port.staticPort }) : t('applicationsPage.dynamicPort') }}</span></div><div class="row-actions"><Button size="sm" @click="openPortDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(appDraft.ports, index)">{{ t('common.delete') }}</Button></div></div>
+                <div v-for="(port, index) in appDraft.ports" :key="port.id" class="item-row"><div><strong>{{ port.label || t('applicationsPage.unnamedPort') }}</strong><span>{{ t('applicationsPage.containerPortSummary', { port: port.to }) }} · {{ port.staticPort ? t('applicationsPage.staticPort', { port: port.staticPort }) : t('applicationsPage.dynamicPort') }} · {{ t('applicationsPage.protocolSummary', { protocol: port.protocol.toUpperCase() }) }} · {{ port.openFirewall ? t('applicationsPage.firewallManaged') : t('applicationsPage.firewallUnchanged') }}</span></div><div class="row-actions"><Button size="sm" @click="openPortDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(appDraft.ports, index)">{{ t('common.delete') }}</Button></div></div>
                 <div v-for="(rule, index) in appDraft.reverseProxy" :key="index" class="item-row"><div><strong>{{ rule.domain || t('applicationsPage.unnamedDomain') }}</strong><span>{{ t('applicationsPage.routeTargetSummary', { port: rule.targetPort, paths: rule.paths.map((path) => path.path).join(', ') }) }}</span></div><div class="row-actions"><Button size="sm" @click="openProxyDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(appDraft.reverseProxy, index)">{{ t('common.delete') }}</Button></div></div>
                 <EmptyState v-if="!appDraft.ports.length && !appDraft.reverseProxy.length" :title="t('applicationsPage.noRoutes')" :description="t('applicationsPage.networkingEmptyHint')" />
               </div>
@@ -2176,13 +2182,18 @@ onBeforeUnmount(() => {
     <div v-else-if="dialogKind === 'port'" class="grid gap-3">
       <label class="field">{{ t('common.name') }}<Input v-model="portDraft.label" /></label>
       <label class="field">{{ t('applicationsPage.containerPort') }}<Input v-model="portDraft.to" /></label>
-      <label class="field">{{ t('applicationsPage.hostPort') }}<Input v-model="portDraft.staticPort" /></label>
+      <label class="field">{{ t('applicationsPage.hostPort') }}<Input v-model="portDraft.staticPort" @input="onPortStaticPortInput" /></label>
+      <label class="field">{{ t('applicationsPage.protocol') }}<Select v-model="portDraft.protocol" :options="portProtocolOptions" /></label>
+      <label class="switch-field">{{ t('applicationsPage.openFirewall') }}<Switch v-model="portDraft.openFirewall" :label="t('applicationsPage.openFirewall')" :disabled="!portDraft.staticPort.trim()" /></label>
+      <p class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.openFirewallHint') }}</p>
     </div>
     <div v-else-if="dialogKind === 'mount'" class="grid gap-3">
       <label class="field">{{ t('common.type') }}<Select v-model="mountDraft.type" :options="mountTypeOptions" /></label>
       <label class="field">{{ t('applicationsPage.source') }}<Select v-if="mountDraft.type === 'file'" v-model="mountDraft.source" :options="applicationFileMountOptions" :placeholder="t('applicationsPage.applicationFileMountSourcePlaceholder')" /><Select v-else-if="mountDraft.type === 'panel_file'" v-model="mountDraft.source" :options="panelFileMountOptions" :placeholder="t('applicationsPage.panelFileMountSourcePlaceholder')" /><Select v-else-if="mountDraft.type === 'storage_share'" v-model="mountDraft.source" :options="storageShareOptions" :placeholder="t('applicationsPage.storageShareMountSourcePlaceholder')" :disabled="!storageShareAvailable" /><Input v-else v-model="mountDraft.source" /></label>
       <p v-if="mountDraft.type === 'file' && !editSession?.files.length" class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.applicationFileMountEmpty') }}</p>
       <p v-else-if="mountDraft.type === 'file' && mountDraft.source && !applicationFileMountSourceValid" class="m-0 text-xs text-danger">{{ t('applicationsPage.applicationFileMountMissing', { name: mountDraft.source }) }}</p>
+      <p v-if="mountDraft.type === 'panel_file' && !panelFiles.length" class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.panelFileMountEmpty') }}</p>
+      <p v-else-if="mountDraft.type === 'panel_file' && mountDraft.source && !panelFileMountSourceValid" class="m-0 text-xs text-danger">{{ t('applicationsPage.panelFileMountMissing', { source: mountDraft.source }) }}</p>
       <p v-if="mountDraft.type === 'storage_share'" class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.storageShareMountHint') }}</p>
       <p v-if="mountDraft.type === 'storage_share' && !storageShareAvailable" class="m-0 text-xs text-warning">{{ t('applicationsPage.storageShareMountUnconfigured') }} <Button size="sm" variant="ghost" @click="router.push('/applications/facility-apps/storage-share/config')">{{ t('applicationsPage.storageShareGoConfigure') }}</Button></p>
       <label class="field">{{ t('applicationsPage.target') }}<Input v-model="mountDraft.target" /></label>
@@ -2192,8 +2203,6 @@ onBeforeUnmount(() => {
     <div v-else-if="dialogKind === 'proxy'" class="grid gap-3">
       <label class="field">{{ t('applicationsPage.domain') }}<Input v-model="proxyDraft.domain" /></label>
       <label class="field">{{ t('applicationsPage.targetPort') }}<Input v-model="proxyDraft.targetPort" /></label>
-      <p v-if="mountDraft.type === 'panel_file' && !panelFiles.length" class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.panelFileMountEmpty') }}</p>
-      <p v-else-if="mountDraft.type === 'panel_file' && mountDraft.source && !panelFileMountSourceValid" class="m-0 text-xs text-danger">{{ t('applicationsPage.panelFileMountMissing', { source: mountDraft.source }) }}</p>
       <div class="options-block">
         <div class="section-copy"><h3>{{ t('applicationsPage.anyAccess') }}</h3><p>{{ t('applicationsPage.anyAccessHint') }}</p></div>
         <label class="switch-field">{{ t('applicationsPage.anyAccess') }}<Switch v-model="proxyAnyAccessModel" :label="t('applicationsPage.anyAccess')" /></label>

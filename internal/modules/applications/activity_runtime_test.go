@@ -10,17 +10,20 @@ import (
 
 	contract "panel/internal/agent/contract"
 	"panel/internal/agent/executionevents"
+	server "panel/internal/modules/servers"
 	control "panel/internal/orchestrator"
 	"panel/internal/platform/activitylog"
 )
 
 type activityTransportClient struct {
 	*fakeRuntimeClient
-	spool     *executionevents.Store
-	db        *sql.DB
-	serverID  string
-	ackCount  int
-	transform func(contract.ExecutionEventsResponse) contract.ExecutionEventsResponse
+	spool             *executionevents.Store
+	db                *sql.DB
+	serverID          string
+	ackCount          int
+	transform         func(contract.ExecutionEventsResponse) contract.ExecutionEventsResponse
+	finishOnReconcile *executionevents.Session
+	lastReconcile     contract.RuntimeReconcileRequest
 }
 
 func (c *activityTransportClient) ReadExecutionEvents(ctx context.Context, _ string, req contract.ExecutionEventsRequest) (contract.ExecutionEventsResponse, error) {
@@ -44,8 +47,15 @@ func (c *activityTransportClient) AckExecutionEvents(ctx context.Context, _ stri
 func (c *activityTransportClient) GetExecutionResult(ctx context.Context, _ string, id string) (contract.ExecutionResult, error) {
 	return c.spool.Result(ctx, id)
 }
-func (c *activityTransportClient) RuntimeReconcile(context.Context, string, contract.RuntimeReconcileRequest) (contract.RuntimeReconcileResponse, error) {
-	return contract.RuntimeReconcileResponse{ObservedState: "running"}, nil
+func (c *activityTransportClient) RuntimeReconcile(ctx context.Context, _ string, req contract.RuntimeReconcileRequest) (contract.RuntimeReconcileResponse, error) {
+	c.lastReconcile = req
+	result := contract.RuntimeReconcileResponse{ObservedState: "running"}
+	if c.finishOnReconcile != nil {
+		if err := c.finishOnReconcile.Finish(ctx, result, nil); err != nil {
+			return contract.RuntimeReconcileResponse{}, err
+		}
+	}
+	return result, nil
 }
 
 func trackedTransport(t *testing.T) (*serviceRuntimeReconciler, *activityTransportClient, control.ReconcileRequestRPC, *executionevents.Session) {
@@ -71,6 +81,115 @@ func trackedTransport(t *testing.T) (*serviceRuntimeReconciler, *activityTranspo
 	return &serviceRuntimeReconciler{service: svc}, client, req, session
 }
 
+func TestRuntimeReconcilePropagatesNormalizedSSHPort(t *testing.T) {
+	r, client, req, session := trackedTransport(t)
+	r.service.servers.(*fakeServerProvider).items[req.ServerID] = func() server.Server {
+		srv := readyServer(req.ServerID)
+		srv.Port = 22022
+		srv.Traits[contract.TraitURL] = "https://127.0.0.1:10986"
+		return srv
+	}()
+	channelChecks := 0
+	r.service.servers.(*fakeServerProvider).firewallChannelCheck = func(context.Context, string) error {
+		channelChecks++
+		return nil
+	}
+	client.finishOnReconcile = session
+	req.Action = "stop"
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if client.lastReconcile.SSHPort != 22022 || client.lastReconcile.AgentPort != 10986 {
+		t.Fatalf("management ports = ssh:%d agent:%d", client.lastReconcile.SSHPort, client.lastReconcile.AgentPort)
+	}
+	if channelChecks != 2 {
+		t.Fatalf("channel checks = %d, want pre/post", channelChecks)
+	}
+}
+
+func TestRuntimeReconcileRejectsReservedSSHHostPortBeforeAgentCall(t *testing.T) {
+	r, client, req, _ := trackedTransport(t)
+	r.service.servers.(*fakeServerProvider).items[req.ServerID] = func() server.Server {
+		srv := readyServer(req.ServerID)
+		srv.Port = 22022
+		return srv
+	}()
+	req.RenderedRuntimeSpec = []byte(`{"applicationId":"app","instanceId":"instance","containerName":"panel-app","image":"nginx","ports":[{"containerPort":8080,"hostPort":22022}]}`)
+	result, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ErrorCode != "application_ssh_port_reserved" || result.Retryable {
+		t.Fatalf("result = %#v", result)
+	}
+	if client.lastReconcile.ApplicationID != "" {
+		t.Fatalf("agent must not be called, request = %#v", client.lastReconcile)
+	}
+}
+
+func TestRuntimeReconcileRejectsReservedAgentHostPortBeforeAgentCall(t *testing.T) {
+	r, client, req, _ := trackedTransport(t)
+	r.service.servers.(*fakeServerProvider).items[req.ServerID].Traits[contract.TraitURL] = "https://127.0.0.1:10986"
+	req.RenderedRuntimeSpec = []byte(`{"applicationId":"app","instanceId":"instance","containerName":"panel-app","image":"nginx","ports":[{"containerPort":8080,"hostPort":10986}]}`)
+	result, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ErrorCode != "application_agent_port_reserved" || result.Retryable {
+		t.Fatalf("result = %#v", result)
+	}
+	if client.lastReconcile.ApplicationID != "" {
+		t.Fatalf("agent must not be called, request = %#v", client.lastReconcile)
+	}
+}
+
+func TestRuntimeReconcileReportsFirewallChannelPreflightAsRetryableWithoutAgentCall(t *testing.T) {
+	r, client, req, _ := trackedTransport(t)
+	req.RenderedRuntimeSpec = []byte(`{"applicationId":"app","instanceId":"instance","containerName":"panel-app","image":"nginx"}`)
+	r.service.servers.(*fakeServerProvider).firewallChannelCheck = func(context.Context, string) error {
+		return errors.New("ssh unavailable")
+	}
+	result, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ErrorCode != "firewall_channel_preflight_failed" || !result.Retryable {
+		t.Fatalf("result = %#v", result)
+	}
+	if client.lastReconcile.ApplicationID != "" {
+		t.Fatalf("agent must not be called, request = %#v", client.lastReconcile)
+	}
+}
+
+func TestRuntimeReconcileReportsFirewallChannelPostflightAsRetryableKnownFailure(t *testing.T) {
+	r, client, req, session := trackedTransport(t)
+	req.RenderedRuntimeSpec = []byte(`{"applicationId":"app","instanceId":"instance","containerName":"panel-app","image":"nginx"}`)
+	checks := 0
+	r.service.servers.(*fakeServerProvider).firewallChannelCheck = func(context.Context, string) error {
+		checks++
+		if checks == 2 {
+			return errors.New("agent reconnect failed")
+		}
+		return nil
+	}
+	client.finishOnReconcile = session
+	result, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ErrorCode != "firewall_channel_postflight_failed" || !result.Retryable {
+		t.Fatalf("result = %#v", result)
+	}
+	if client.lastReconcile.ApplicationID != req.ApplicationID {
+		t.Fatalf("agent request = %#v", client.lastReconcile)
+	}
+}
+
+func TestNormalizedRuntimeSSHPortDefaultsTo22(t *testing.T) {
+	if got := normalizedRuntimeSSHPort(0); got != 22 {
+		t.Fatalf("normalized port = %d, want 22", got)
+	}
+}
 func TestActivityTransportPreservesOriginalIdentityAndDrainsClosedStream(t *testing.T) {
 	ctx := context.Background()
 	r, client, req, session := trackedTransport(t)

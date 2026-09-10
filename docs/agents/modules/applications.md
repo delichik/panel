@@ -58,6 +58,7 @@
 - appspec 以 YAML 输入，经 `internal/modules/applications/spec/` 校验并渲染为 `appruntime.Spec`；部署时由 Panel 选择目标服务器并编排运行时步骤，再通过目标机 `panel-agent` 的原子接口写入托管文件、拉取镜像、删除旧容器、创建容器、启动容器和刷新状态。
 - appspec 的 `resources.cpu` 和 `resources.memoryMb` 只有设置为正数时才表示运行时限制；字段缺省或显式为 `0` 都表示不限制，不得在规范化、渲染或部署流程中自动补默认 CPU/内存限制。
 - appspec 支持 `capAdd` 字符串数组，对应 Docker `--cap-add` / `HostConfig.CapAdd`；规范化时去空、去重并转为大写。`capAdd` 只在用户显式配置时下发，可与 `privileged: true` 并存，当前不提供 `capDrop`。
+- appspec `ports` 支持 `protocol=tcp|udp`（缺省为 TCP）和 `openFirewall`（缺省为 false）。`openFirewall=true` 只允许用于固定宿主机端口；应用宿主机端口不得等于目标节点的 SSH 或 Agent 监听端口。运行时在每个部署节点确保对应协议的 UFW Anywhere allow 规则，并使用稳定注释标记 Panel 所有权；每次涉及规则协调的 `RuntimeReconcile` 前后都必须实时确认 Panel 可通过 SSH 和 Agent 两条管理通道连接节点。已有等价人工 allow 规则可满足检查但不被接管；停用、删除、移除部署节点、迁移或切换节点时，stop/purge 协调只清理由该应用拥有的规则。TCP/false 在规范化哈希中保持缺省省略，避免旧应用仅因新增默认字段改变 spec hash。
 - `application_instances` 是 Panel 的当前运行时事实表，按 `application_id + server_id` 记录 desired 与 observed 两组字段：desired 包括状态、generation、spec hash、revision 和安全的 runtime spec 快照；observed 包括状态、容器身份、generation、spec hash、镜像 digest、时间、sequence、source 和最后一次协调错误。业务模块只能读取 observed；所有 Agent report、周期巡检和 `RuntimeReconcile` 回写统一通过 `internal/orchestrator.ObservationWriter`。
 - `jobs` 是每个 application/server 冲突域当前唯一的 durable 协调工作。`pending/running/failed_retryable` 通过 AppDB partial unique index 保证同键最多一条；Job 保存 action、revision、lease token、execution ID、attempt/backoff、步骤和结构化错误。任务表只做用户操作/触发记录，不是部署事实来源。
 - 应用部署控制面的入口是 `Service.PlanApplicationDeployment` → `orchestrator.Planner` → `orchestrator.Controller`。planner 只保存 desired、不可变 revision 和 Job，不直接执行 Agent/Docker RPC；controller 负责 scanner、claim、lease heartbeat、RuntimeReconcile、ObservationWriter 写回、fencing 和重试。提交后只发送 wake，wake 丢失由 DB due scan 修复。
@@ -131,6 +132,7 @@
 - 后端 appspec 校验允许多个非空 `command` 项，空 command 项会正规化为未设置，避免不填写 command 时阻塞保存。
 - 应用编辑器使用隐藏独立 `EditorPage`：正文按基本信息、运行设置、网络与访问、环境与存储、部署目标、应用文件顺序连续展开，右侧 sticky 摘要展示保存前检查、变更数量、编辑状态和检查结果；顶部只保留表单编辑，不提供分区切换。创建页强调名称和镜像的起步配置；编辑页强调当前修改和保存结果。
 - 应用编辑器的可视化草稿必须是结构化数据，不得把容器环境变量、部署服务器、端口、挂载或反向代理规则压成 JSON/多行文本作为主要交互。复杂重复项使用“摘要列表 + 新增/编辑对话框 + 删除确认”，对话框内使用独立克隆草稿，取消不得污染主草稿。
+- 端口映射对话框提供 TCP/UDP 协议选择（新建默认 TCP）和“由 Panel 管理防火墙规则”开关（默认关闭）；开关仅在固定宿主机端口存在时可用。摘要必须区分协议、固定/动态端口以及“防火墙由 Panel 管理”或“防火墙不变”，关闭开关不得表述成防火墙已关闭。
 - 应用反向代理规则对话框必须通过明确 DTO 克隆函数创建独立草稿，不能对 Vue reactive Proxy 直接调用 `structuredClone`；只有点击保存才替换 `form.reverseProxy` 中对应规则，新建或编辑后取消不得留下空规则、空 Path 或高级选项修改。每个 Path 的高级字段复用 `RoutePathAdvancedFields.vue`。
 - 应用反向代理规则的源站集合完全由后端计算：`源站 = 应用部署目标 ∩ 设施全局网关节点`（`selected` 模式取部署服务器，`all` 模式取全部全局网关节点）。前端不提供也不提交源站：保存请求中的 `originServerIds` 与 `anyAccess.primaryOriginServerId` 一律被忽略，当不存在处理；后端保存时重新计算并校验。对话框只读展示自动源站，无可用的源站时提示选择属于网关节点的部署目标。`primary_backup` 策略下前端只排列源站优先级 `anyAccess.originPriority`（首位即主源站，其余按序为备），主源站由后端据此推导。源站集合在保存后变化（网关或部署目标变更）时，后端对存储的优先级做**前向投影**而不是报错：仍存在的服务器保留用户排列的相对顺序，被移除的服务器丢弃，新增服务器按序追加——避免陈旧优先级卡死后续保存与自动协调。`AnyAccess` 开启后所有全局网关节点都部署域名，非源站节点通过入口网关转发到源站；`anyAccess.relayServerIds` 为空表示所有非源站全局网关节点，非空表示只在这些指定节点生成转发。转发节点必须属于全局网关节点且不能是源站节点。策略只允许 `round_robin`、`primary_backup`、`ip_hash`。
 - 应用反向代理域名在设施路由、其他应用代理规则和 Panel 入口之间全局唯一；同一规则下可配置多个 Path，不允许通过多个所有者共享域名。

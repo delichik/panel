@@ -13,6 +13,7 @@ import (
 	"time"
 
 	agentcontract "panel/internal/agent/contract"
+	agentfirewall "panel/internal/agent/firewall"
 	"panel/internal/platform/linux"
 	"panel/internal/platform/linux/remoteops"
 )
@@ -55,47 +56,66 @@ func (LocalCollector) UpgradePackages(ctx context.Context, req agentcontract.Pac
 }
 
 func (c LocalCollector) InstallUFW(ctx context.Context, req agentcontract.UFWInstallRequest) (remoteops.UFWStatus, error) {
-	if _, err := runCommand(ctx, 15*time.Minute, "apt-get", "update"); err != nil {
-		return remoteops.UFWStatus{}, err
-	}
-	if _, err := runCommand(ctx, 15*time.Minute, "apt-get", "install", "-y", "ufw"); err != nil {
-		return remoteops.UFWStatus{}, err
-	}
-	for _, rule := range req.Rules {
-		if err := runUFWAllow(ctx, rule); err != nil {
-			return remoteops.UFWStatus{}, err
+	err := agentfirewall.WithMutationLock(func() error {
+		if _, err := runCommand(ctx, 15*time.Minute, "apt-get", "update"); err != nil {
+			return err
 		}
+		if _, err := runCommand(ctx, 15*time.Minute, "apt-get", "install", "-y", "ufw"); err != nil {
+			return err
+		}
+		for _, rule := range req.Rules {
+			if err := runUFWAllow(ctx, rule); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return remoteops.UFWStatus{}, err
 	}
 	return c.UFWStatus(ctx)
 }
 
 func (c LocalCollector) EnableUFW(ctx context.Context, req agentcontract.UFWEnableRequest) (remoteops.UFWStatus, error) {
-	if _, err := exec.LookPath("ufw"); err != nil {
-		if _, installErr := runCommand(ctx, 15*time.Minute, "apt-get", "install", "-y", "ufw"); installErr != nil {
-			return remoteops.UFWStatus{}, installErr
+	err := agentfirewall.WithMutationLock(func() error {
+		if _, err := exec.LookPath("ufw"); err != nil {
+			if _, installErr := runCommand(ctx, 15*time.Minute, "apt-get", "install", "-y", "ufw"); installErr != nil {
+				return installErr
+			}
 		}
-	}
-	if err := runUFWAllow(ctx, remoteops.UFWRule{Port: req.SSHPort, Protocol: "tcp"}); err != nil {
-		return remoteops.UFWStatus{}, err
-	}
-	if _, err := runCommand(ctx, time.Minute, "ufw", "--force", "enable"); err != nil {
+		// Ensuring SSH access is the only operation allowed to touch the SSH
+		// port; it must happen before enabling the default-deny firewall.
+		if err := runUFWAllow(ctx, remoteops.UFWRule{Port: req.SSHPort, Protocol: "tcp"}); err != nil {
+			return err
+		}
+		agentPort := req.AgentPort
+		if agentPort <= 0 || agentPort > 65535 {
+			agentPort = 9786
+		}
+		if err := runUFWAllow(ctx, remoteops.UFWRule{Port: agentPort, Protocol: "tcp"}); err != nil {
+			return err
+		}
+		_, err := runCommand(ctx, time.Minute, "ufw", "--force", "enable")
+		return err
+	})
+	if err != nil {
 		return remoteops.UFWStatus{}, err
 	}
 	return c.UFWStatus(ctx)
 }
 
 func (c LocalCollector) AllowUFW(ctx context.Context, req agentcontract.UFWAllowRequest) (remoteops.UFWStatus, error) {
-	if err := runUFWAllow(ctx, req.Rule); err != nil {
+	if err := agentfirewall.ValidateProtectedPort(req.Rule.Port, req.SSHPort, req.AgentPort); err != nil {
+		return remoteops.UFWStatus{}, err
+	}
+	if err := agentfirewall.WithMutationLock(func() error { return runUFWAllow(ctx, req.Rule) }); err != nil {
 		return remoteops.UFWStatus{}, err
 	}
 	return c.UFWStatus(ctx)
 }
 
 func (c LocalCollector) DeleteUFW(ctx context.Context, req agentcontract.UFWDeleteRequest) (remoteops.UFWStatus, error) {
-	if req.Number <= 0 {
-		return remoteops.UFWStatus{}, errors.New("UFW rule number must be positive")
-	}
-	if _, err := runCommand(ctx, time.Minute, "ufw", "--force", "delete", strconv.Itoa(req.Number)); err != nil {
+	if err := agentfirewall.New().DeleteRule(ctx, req.Number, req.SSHPort, req.AgentPort); err != nil {
 		return remoteops.UFWStatus{}, err
 	}
 	return c.UFWStatus(ctx)

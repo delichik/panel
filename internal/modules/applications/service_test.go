@@ -1911,7 +1911,15 @@ func (f *fakeRuntimeClient) RuntimePersistentRestore(ctx context.Context, baseUR
 }
 
 type fakeServerProvider struct {
-	items map[string]server.Server
+	items                map[string]server.Server
+	firewallChannelCheck func(context.Context, string) error
+}
+
+func (f *fakeServerProvider) VerifyFirewallControlChannels(ctx context.Context, id string) error {
+	if f.firewallChannelCheck != nil {
+		return f.firewallChannelCheck(ctx, id)
+	}
+	return nil
 }
 
 func (f *fakeServerProvider) List(ctx context.Context) ([]server.Server, error) {

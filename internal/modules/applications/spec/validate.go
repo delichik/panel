@@ -17,6 +17,9 @@ func Normalize(spec Spec) Spec {
 	spec.Count = 1
 	spec.Command = nonEmptyStringItems(spec.Command)
 	spec.CapAdd = normalizeCapabilities(spec.CapAdd)
+	for i := range spec.Ports {
+		spec.Ports[i].Protocol = normalizePortProtocol(spec.Ports[i].Protocol)
+	}
 	if spec.Env == nil {
 		spec.Env = map[string]string{}
 	}
@@ -46,6 +49,14 @@ func Normalize(spec Spec) Spec {
 		spec.Restart.Mode = "delay"
 	}
 	return spec
+}
+
+func normalizePortProtocol(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "tcp" {
+		return ""
+	}
+	return value
 }
 
 func nonEmptyStringItems(items []string) []string {
@@ -121,7 +132,11 @@ func Validate(spec Spec) []Issue {
 	}
 
 	portLabels := map[string]struct{}{}
-	seenStatic := map[int]struct{}{}
+	type staticPortKey struct {
+		port     int
+		protocol string
+	}
+	seenStatic := map[staticPortKey]struct{}{}
 	for i, port := range spec.Ports {
 		if !validName(port.Label) {
 			issues = append(issues, Issue{Field: fmt.Sprintf("ports[%d].label", i), Message: "port label must use application name format"})
@@ -134,11 +149,18 @@ func Validate(spec Spec) []Issue {
 		if port.Static != 0 && !validPort(port.Static) {
 			issues = append(issues, Issue{Field: fmt.Sprintf("ports[%d].static", i), Message: "static port must be between 1 and 65535"})
 		}
+		if port.Protocol != "" && port.Protocol != "udp" {
+			issues = append(issues, Issue{Field: fmt.Sprintf("ports[%d].protocol", i), Message: "port protocol must be tcp or udp"})
+		}
+		if port.OpenFirewall && port.Static == 0 {
+			issues = append(issues, Issue{Field: fmt.Sprintf("ports[%d].openFirewall", i), Message: "firewall access requires a static port"})
+		}
 		if port.Static != 0 {
-			if _, ok := seenStatic[port.Static]; ok {
+			key := staticPortKey{port: port.Static, protocol: port.Protocol}
+			if _, ok := seenStatic[key]; ok {
 				issues = append(issues, Issue{Field: fmt.Sprintf("ports[%d].static", i), Message: "static port is duplicated"})
 			}
-			seenStatic[port.Static] = struct{}{}
+			seenStatic[key] = struct{}{}
 		}
 	}
 

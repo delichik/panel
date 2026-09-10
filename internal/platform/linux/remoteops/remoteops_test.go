@@ -34,13 +34,14 @@ func TestUFWAllowScriptBuildsPortRules(t *testing.T) {
 }
 
 func TestUFWEnableScriptAllowsSSHBeforeEnable(t *testing.T) {
-	script, err := UFWEnableScript(22022)
+	script, err := UFWEnableScript(22022, 10986)
 	if err != nil {
 		t.Fatal(err)
 	}
 	allowIndex := strings.Index(script, "ufw allow 22022/tcp")
+	agentIndex := strings.Index(script, "ufw allow 10986/tcp")
 	enableIndex := strings.Index(script, "ufw --force enable")
-	if allowIndex < 0 || enableIndex < 0 || allowIndex >= enableIndex {
+	if allowIndex < 0 || agentIndex < 0 || enableIndex < 0 || allowIndex >= enableIndex || agentIndex >= enableIndex {
 		t.Fatalf("expected SSH allow before UFW enable:\n%s", script)
 	}
 }
@@ -93,5 +94,29 @@ func TestWriteFileSudoScriptRequiresAbsolutePath(t *testing.T) {
 	}
 	if !strings.Contains(script, "install -d -m 0755 '/etc/panel'") || !strings.Contains(script, "install -m 0640") {
 		t.Fatalf("unexpected write script:\n%s", script)
+	}
+}
+
+func TestUFWSafeDeleteRuleScriptRejectsProtectedTargets(t *testing.T) {
+	if _, err := UFWSafeDeleteRuleScript(UFWRuleStatus{Number: 1, To: "22022/tcp", Action: "ALLOW IN", From: "Anywhere"}, 22022, 9786); err == nil {
+		t.Fatal("expected SSH-port rejection")
+	}
+	if _, err := UFWSafeDeleteRuleScript(UFWRuleStatus{Number: 2, To: "8080/tcp", Action: "ALLOW IN", From: "Anywhere # panel:application:app-a"}, 22, 9786); err == nil {
+		t.Fatal("expected managed-rule rejection")
+	}
+	if _, err := UFWSafeDeleteRuleScript(UFWRuleStatus{Number: 3, To: "OpenSSH", Action: "ALLOW IN", From: "Anywhere"}, 22, 9786); err == nil {
+		t.Fatal("expected unknown-target rejection")
+	}
+}
+
+func TestUFWSafeDeleteRuleScriptRevalidatesBeforeDeleting(t *testing.T) {
+	script, err := UFWSafeDeleteRuleScript(UFWRuleStatus{Number: 7, To: "443/tcp", Action: "ALLOW IN", From: "Anywhere"}, 22, 9786)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"ufw status numbered", "UFW rule changed", "panel:application:", "ufw --force delete 7"} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("safe delete script missing %q:\n%s", want, script)
+		}
 	}
 }

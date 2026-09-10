@@ -192,14 +192,19 @@ message UFWInstallRequest {
 
 message UFWEnableRequest {
   int32 ssh_port = 1;
+  int32 agent_port = 2;
 }
 
 message UFWAllowRequest {
   UFWRule rule = 1;
+  int32 ssh_port = 2;
+  int32 agent_port = 3;
 }
 
 message UFWDeleteRequest {
   int32 number = 1;
+  int32 ssh_port = 2;
+  int32 agent_port = 3;
 }
 
 message Fail2BanJail {
@@ -266,6 +271,7 @@ message RuntimePort {
   int32 container_port = 2;
   int32 host_port = 3;
   string protocol = 4;
+  bool open_firewall = 5;
 }
 
 message RuntimeResources {
@@ -334,6 +340,8 @@ message RuntimeReconcileRequest {
   string previous_container_name = 12;
   string operation_id = 13;
   string run_id = 14;
+  int32 ssh_port = 15;
+  int32 agent_port = 16;
 }
 
 message RuntimeReconcileStep {

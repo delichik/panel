@@ -77,6 +77,41 @@ func TestGRPCClientHealthCapturesPeerCertificateInfo(t *testing.T) {
 	}
 }
 
+type ufwMutationServerStub struct {
+	agentpb.UnimplementedAgentServiceServer
+	allow  *agentpb.UFWAllowRequest
+	delete *agentpb.UFWDeleteRequest
+}
+
+func (s *ufwMutationServerStub) UFWAllow(_ context.Context, req *agentpb.UFWAllowRequest) (*agentpb.UFWStatusResponse, error) {
+	s.allow = req
+	return &agentpb.UFWStatusResponse{}, nil
+}
+
+func (s *ufwMutationServerStub) UFWDelete(_ context.Context, req *agentpb.UFWDeleteRequest) (*agentpb.UFWStatusResponse, error) {
+	s.delete = req
+	return &agentpb.UFWStatusResponse{}, nil
+}
+
+func TestGRPCClientUFWMutationsCarryProtectedPorts(t *testing.T) {
+	server := &ufwMutationServerStub{}
+	client, endpoint, stop := newPrepareRestartTestClient(t, server)
+	defer stop()
+
+	if _, err := client.UFWAllow(context.Background(), endpoint, agentcontract.UFWAllowRequest{SSHPort: 2222, AgentPort: 10986}); err != nil {
+		t.Fatal(err)
+	}
+	if server.allow == nil || server.allow.SshPort != 2222 || server.allow.AgentPort != 10986 {
+		t.Fatalf("allow request = %#v", server.allow)
+	}
+	if _, err := client.UFWDelete(context.Background(), endpoint, agentcontract.UFWDeleteRequest{Number: 7, SSHPort: 2222, AgentPort: 10986}); err != nil {
+		t.Fatal(err)
+	}
+	if server.delete == nil || server.delete.Number != 7 || server.delete.SshPort != 2222 || server.delete.AgentPort != 10986 {
+		t.Fatalf("delete request = %#v", server.delete)
+	}
+}
+
 func TestWrapAgentErrorAsBadGateway(t *testing.T) {
 	err := wrapAgentError(status.Error(codes.Internal, "ufw: permission denied"))
 	if err == nil {

@@ -231,7 +231,7 @@ func goFail2BanStatus(in *agentpb.Fail2BanStatusResponse) agentcontract.Fail2Ban
 func pbSpec(in appruntime.Spec) *agentpb.RuntimeSpec {
 	ports := make([]*agentpb.RuntimePort, 0, len(in.Ports))
 	for _, item := range in.Ports {
-		ports = append(ports, &agentpb.RuntimePort{Label: item.Label, ContainerPort: int32(item.ContainerPort), HostPort: int32(item.HostPort), Protocol: item.Protocol})
+		ports = append(ports, &agentpb.RuntimePort{Label: item.Label, ContainerPort: int32(item.ContainerPort), HostPort: int32(item.HostPort), Protocol: item.Protocol, OpenFirewall: item.OpenFirewall})
 	}
 	mounts := make([]*agentpb.RuntimeMount, 0, len(in.Mounts))
 	for _, item := range in.Mounts {
@@ -287,7 +287,7 @@ func goSpec(in *agentpb.RuntimeSpec) appruntime.Spec {
 		if item == nil {
 			continue
 		}
-		ports = append(ports, appruntime.Port{Label: item.Label, ContainerPort: int(item.ContainerPort), HostPort: int(item.HostPort), Protocol: item.Protocol})
+		ports = append(ports, appruntime.Port{Label: item.Label, ContainerPort: int(item.ContainerPort), HostPort: int(item.HostPort), Protocol: item.Protocol, OpenFirewall: item.OpenFirewall})
 	}
 	mounts := make([]appruntime.Mount, 0, len(in.Mounts))
 	for _, item := range in.Mounts {
@@ -487,7 +487,25 @@ func PBSnapshot(in linux.MetricsSnapshot) *agentpb.MetricsSnapshotResponse { ret
 func GoPackageUpdates(items []*agentpb.PackageUpdate) []linux.PackageUpdate {
 	return goPackageUpdates(items)
 }
-func PBUFWRule(in remoteops.UFWRule) *agentpb.UFWRule               { return pbUFWRule(in) }
+func PBUFWRule(in remoteops.UFWRule) *agentpb.UFWRule { return pbUFWRule(in) }
+func PBUFWAllowRequest(in agentcontract.UFWAllowRequest) *agentpb.UFWAllowRequest {
+	return &agentpb.UFWAllowRequest{Rule: pbUFWRule(in.Rule), SshPort: int32(in.SSHPort), AgentPort: int32(in.AgentPort)}
+}
+func GoUFWAllowRequest(in *agentpb.UFWAllowRequest) agentcontract.UFWAllowRequest {
+	if in == nil {
+		return agentcontract.UFWAllowRequest{}
+	}
+	return agentcontract.UFWAllowRequest{Rule: goUFWRule(in.Rule), SSHPort: int(in.SshPort), AgentPort: int(in.AgentPort)}
+}
+func PBUFWDeleteRequest(in agentcontract.UFWDeleteRequest) *agentpb.UFWDeleteRequest {
+	return &agentpb.UFWDeleteRequest{Number: int32(in.Number), SshPort: int32(in.SSHPort), AgentPort: int32(in.AgentPort)}
+}
+func GoUFWDeleteRequest(in *agentpb.UFWDeleteRequest) agentcontract.UFWDeleteRequest {
+	if in == nil {
+		return agentcontract.UFWDeleteRequest{}
+	}
+	return agentcontract.UFWDeleteRequest{Number: int(in.Number), SSHPort: int(in.SshPort), AgentPort: int(in.AgentPort)}
+}
 func GoUFWStatus(in *agentpb.UFWStatusResponse) remoteops.UFWStatus { return goUFWStatus(in) }
 func PBFail2BanConfig(in agentcontract.Fail2BanConfig) *agentpb.Fail2BanConfig {
 	return pbFail2BanConfig(in)
@@ -501,7 +519,18 @@ func PBRuntimeReconcileRequest(in agentcontract.RuntimeReconcileRequest) *agentp
 		OperationId: in.OperationID, RunId: in.RunID,
 		JobId: in.JobID, ExecutionId: in.ExecutionID, ApplicationId: in.ApplicationID, InstanceId: in.InstanceID,
 		ServerId: in.ServerID, Action: in.Action, DesiredGeneration: int32(in.DesiredGeneration), DesiredSpecHash: in.DesiredSpecHash,
-		DesiredRevisionId: in.DesiredRevisionID, Spec: pbSpec(in.Spec), RemoveData: in.RemoveData, PreviousContainerName: in.PreviousContainerName,
+		DesiredRevisionId: in.DesiredRevisionID, Spec: pbSpec(in.Spec), RemoveData: in.RemoveData, PreviousContainerName: in.PreviousContainerName, SshPort: int32(in.SSHPort), AgentPort: int32(in.AgentPort),
+	}
+}
+
+func GoRuntimeReconcileRequest(in *agentpb.RuntimeReconcileRequest) agentcontract.RuntimeReconcileRequest {
+	if in == nil {
+		return agentcontract.RuntimeReconcileRequest{}
+	}
+	return agentcontract.RuntimeReconcileRequest{
+		OperationID: in.OperationId, RunID: in.RunId, JobID: in.JobId, ExecutionID: in.ExecutionId, ApplicationID: in.ApplicationId, InstanceID: in.InstanceId,
+		ServerID: in.ServerId, Action: in.Action, DesiredGeneration: int(in.DesiredGeneration), DesiredSpecHash: in.DesiredSpecHash,
+		DesiredRevisionID: in.DesiredRevisionId, Spec: goSpec(in.Spec), RemoveData: in.RemoveData, PreviousContainerName: in.PreviousContainerName, SSHPort: int(in.SshPort), AgentPort: int(in.AgentPort),
 	}
 }
 
