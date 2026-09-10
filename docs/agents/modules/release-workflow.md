@@ -1,5 +1,8 @@
 # GitHub Actions 发布流程模块
 
+> [!WARNING]
+> 本文是非规范的历史实现说明，已由 [工程质量、构建与发布验收规范](../acceptance/engineering-release.md) 替代。后续改动以稳定验收编号为准。
+
 ## 范围
 
 - `.github/workflows/docker-release.yml` 负责发布容器镜像。

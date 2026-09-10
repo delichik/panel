@@ -1,5 +1,8 @@
 # 容器化资源管理
 
+> [!WARNING]
+> 本文是非规范的历史实现说明，已由 [容器与资源验收合同](../acceptance/containers-and-resources.md) 替代。后续改动以稳定验收编号为准。
+
 ## List And Snapshot Contracts
 
 - Container list reads deserialize `container_observations.summary_json`, not full `container_json`. Reports persist both forms and migration backfills old observations.

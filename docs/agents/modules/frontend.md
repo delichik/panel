@@ -1,5 +1,8 @@
 # 前端模块
 
+> [!WARNING]
+> 本文是非规范的历史实现说明，已由 [界面外壳与交互约定](../acceptance/ui-shell-and-conventions.md) 和 [逐页面验收](../acceptance/ui-pages.md) 替代。后续改动以稳定验收编号为准；可复用组件规则仍以 `docs/agents/specifications/frontend/` 为准。
+
 ## 品牌
 
 - 产品名已改为 Seamark（仅英文），界面内不再使用中文名称；品牌图标位于 `web/public/favicon.svg`，用于登录页、侧栏和 favicon。

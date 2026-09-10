@@ -1,5 +1,8 @@
 # 服务器、凭据、指标与软件包
 
+> [!WARNING]
+> 本文是非规范的历史实现说明，已由 [服务器、安全防护与软件包验收规范](../acceptance/servers-security-packages.md) 替代。后续改动以稳定验收编号为准。
+
 ## List API Contract
 
 - `GET /api/v1/servers` returns `ListPage<ServerSummary>` and accepts only `page`, `pageSize`, and `q`.

@@ -1,5 +1,8 @@
 # 应用模块
 
+> [!WARNING]
+> 本文是非规范的历史实现说明，已由 [应用与设施应用验收合同](../acceptance/applications-and-facilities.md) 和 [协调、任务与运行事件验收合同](../acceptance/orchestration-and-tasks.md) 替代。后续改动以稳定验收编号为准。
+
 ## List API Contract
 
 - `GET /api/v1/applications` returns `ListPage<ApplicationSummary>` and accepts only `page`, `pageSize`, and `q`.

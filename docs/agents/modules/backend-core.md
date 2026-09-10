@@ -1,5 +1,8 @@
 # 后端核心、配置与存储
 
+> [!WARNING]
+> 本文是非规范的历史实现说明，已由 [架构、数据与 API 验收规范](../acceptance/architecture-data-api.md) 和 [身份、设置与系统验收规范](../acceptance/identity-settings-system.md) 替代。后续改动以稳定验收编号为准。
+
 ## Process supervisor
 
 - Container runtime starts `cmd/panel-init/main.go`; local development may still run `cmd/panel/main.go` directly.

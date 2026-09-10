@@ -1,5 +1,8 @@
 # 任务与调度
 
+> [!WARNING]
+> 本文是非规范的历史实现说明，已由 [协调、任务与运行事件验收合同](../acceptance/orchestration-and-tasks.md) 替代。后续改动以稳定验收编号为准。
+
 ## List Query Contract
 
 - List endpoints accept camelCase parameters only. Shared validation rejects unknown parameters, `limit`, snake_case aliases, invalid pages, and invalid timestamps with HTTP 400.

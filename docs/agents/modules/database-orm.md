@@ -1,5 +1,8 @@
 # 轻量 ORM（internal/platform/database/orm）
 
+> [!WARNING]
+> 本文是非规范的历史实现说明，已由 [架构、数据与 API 验收规范](../acceptance/architecture-data-api.md) 替代。后续改动以稳定验收编号为准。
+
 ## 适用场景
 
 使用或扩展 Panel 的轻量 ORM：模型注册、链式查询、CRUD、自动迁移（AutoMigrate/AutoMigrateModels）与版本化迁移步骤（RunSteps）。ORM 已接管存量数据库迁移：`Store.Migrate` 的 schema 由模型 + AutoMigrateModels 管理，一次性数据迁移包装为 Step 执行。

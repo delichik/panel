@@ -1,5 +1,8 @@
 # DNS 与证书模块
 
+> [!WARNING]
+> 本文是非规范的历史实现说明，已由 [DNS、证书与密钥资产验收规范](../acceptance/dns-certificates-key-assets.md) 替代。后续改动以稳定验收编号为准。
+
 ## List And Snapshot Contracts
 
 - Domain certificates, self-signed certificates, and key assets return `ListPage` responses. List rows omit private material, file paths, metadata, and reference detail.
