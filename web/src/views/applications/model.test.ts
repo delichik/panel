@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { reactive } from 'vue';
 import {
   applicationFileMountOptions,
+  applicationRuntimePollDelay,
   applicationStatus,
   cloneFacilityDomains,
   cloneFacilityPath,
@@ -18,6 +19,7 @@ import {
   makePortRow,
   panelFileMountOptions,
   saveInputFromDraft,
+  shouldPollApplicationRuntime,
   specYamlFromDraft,
   statusTone,
   validateApplicationDraft,
@@ -76,6 +78,26 @@ describe('application editor model', () => {
     expect(applicationStatus({ ...app, reconcileStopped: true })).toBe('attention');
     expect(statusTone('attention')).toBe('warning');
     expect(applicationStatus({ ...app, reconcileStopped: false })).toBe('enabled');
+  });
+
+  // UI-APP-002: runtime polling follows durable Job state and stops at terminal outcomes.
+  it('keeps retryable deployment failures visible and polls only active runtime states', () => {
+    const runtime = { applicationId: 'app-1', runtimeId: 'runtime-1', status: 'failed_retryable', instances: [], observedAt: '' };
+    expect(applicationStatus(app, runtime)).toBe('failed_retryable');
+    expect(statusTone('failed_retryable')).toBe('warning');
+    expect(shouldPollApplicationRuntime(runtime)).toBe(true);
+    expect(shouldPollApplicationRuntime({ ...runtime, status: 'deployed' })).toBe(false);
+    expect(shouldPollApplicationRuntime({ ...runtime, status: 'deployed', operation: { id: 'job-1', applicationId: 'app-1', type: 'apply', status: 'running', generation: 2, createdAt: '', updatedAt: '' } })).toBe(true);
+    expect(shouldPollApplicationRuntime({ ...runtime, status: 'deploying', operation: { id: 'job-1', applicationId: 'app-1', type: 'apply', status: 'succeeded', generation: 2, createdAt: '', updatedAt: '' } })).toBe(false);
+  });
+
+  it('backs off runtime polling until the next retry without exceeding 30 seconds', () => {
+    const runtime = {
+      applicationId: 'app-1', runtimeId: 'runtime-1', status: 'failed_retryable', instances: [], observedAt: '',
+      operation: { id: 'job-1', applicationId: 'app-1', type: 'apply', status: 'failed_retryable', generation: 2, nextRunAt: '2026-09-11T00:00:20.000Z', createdAt: '', updatedAt: '' },
+    };
+    expect(applicationRuntimePollDelay(runtime, Date.parse('2026-09-11T00:00:00.000Z'))).toBe(20250);
+    expect(applicationRuntimePollDelay({ ...runtime, operation: { ...runtime.operation, nextRunAt: '2026-09-11T00:02:00.000Z' } }, Date.parse('2026-09-11T00:00:00.000Z'))).toBe(30000);
   });
 
   it('builds save input from structured editor draft without storing display text', () => {

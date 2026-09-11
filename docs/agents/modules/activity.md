@@ -52,6 +52,9 @@
 - 事件每批默认100、最多500；全局搜索支持短文本和正文索引，筛选输入必须绑定参数。
 - timeline 增量读取不因完成事件停止；Agent stream.closed 前不宣告远端证据完整。
 - 业务页面使用 ActivityLink 和 Toast action 进入日志；错误响应仍保留真实关联标识。
+- 应用资源入口默认进入按操作视图，本次操作有真实 `operationId` 时直接打开对应时间线，不能让用户从全局事件接收顺序猜测因果关系。
+- 操作投影的失败摘要只从结构化 `data.error`、`data.detail`、`data.errorCode` 依次取值，不使用 trigger reason 或普通 `text` 冒充失败原因；这三个结构化错误字段同时进入 FTS，允许按真实错误和稳定错误码搜索。投影 schema 版本变化会重建 LogDB 可重建索引，不改写 AppDB 原始事实。
+- 预期的无 Job 陈旧/重复观测不写 `observation.rejected` warning；真正的 durable Job lease/fencing/实例异常拒绝必须携带关联操作、资源、明确 reason 与新旧观测诊断。
 - 复用 v4 ConsolePage/MasterDetailLayout/primitives，桌面滚动限制在正文，窄屏恢复自然布局。
 - 原 `/tasks`、`/system-events`、`/application-operations` 历史路由退出使用。`/executions` 只负责当前执行控制与允许的命令，不是另一个日志入口。
 

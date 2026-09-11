@@ -22,7 +22,7 @@
 | 资源与安全 | `/resources/packages`、`containers`、`images`、`networks`、`volumes`、`firewall`、开发模式 `fail2ban`，以及旧 `/security*` 重定向 |
 | 应用 | `/applications/apps`、`create`、`:applicationId/edit`、`facility-apps`、`:facilityKind`、`:facilityKind/config` |
 | DNS 与证书 | `/dns/domains`、`/certificates/domains`、`self-signed`、`keys` |
-| 可观测性 | `/application-operations`、`/system-events`、`/tasks`、`/debug` |
+| 可观测性 | `/activity`（事件/按操作）、`/system-events`、`/tasks`、`/debug` |
 | 设置 | `/settings/general`、`security`、`certificates`、`system-certificates`、`system`、`backups`，以及 `/settings` 重定向 |
 
 - `COV-UI-001`：同一路由内新增或调整字段选择、校验、空态等用户可见行为时，路由数量可以不变，但必须同步更新 `ui-pages.md` 的稳定验收项和对应前端测试。
@@ -70,6 +70,7 @@
 
 - `COV-DATA-001`：新增表必须列入正确数据库；同名跨库表必须分别说明用途、备份和迁移，不得按表名误连。
 - `COV-DATA-002`：删除表必须同时处理模型、迁移、索引、外键、服务查询、备份恢复和旧版本升级；仅从 `AllModels` 移除不构成安全删除。
+- `COV-DATA-003`：AppDB 的 `activity_events/activity_evidence_chunks` 使用专有只追加 schema，不计入 ORM 模型数量；LogDB 的 Activity projection/checkpoint/FTS 是可重建查询索引。原始事实与投影不得交换归属或互相替代。
 
 ## 5. 常驻与周期后台行为
 

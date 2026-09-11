@@ -118,9 +118,14 @@ export function routeMode(path: string, params: Record<string, unknown>): AppMod
 
 export function applicationStatus(app: ApplicationDto | ApplicationSummaryDto, runtime?: ApplicationRuntime | null) {
   const status = runtime?.status || app.runtimeStatus;
+  const operationStatus = runtime?.operation?.status;
   if (!app.enabled) return 'disabled';
   if (app.reconcileStopped) return 'attention';
+  if (operationStatus === 'failed_retryable') return 'failed_retryable';
+  if (['deploying', 'pending', 'queued', 'running', 'waiting'].includes(operationStatus || '')) return 'deploying';
+  if (operationStatus === 'failed' || operationStatus === 'failure') return 'failed';
   if (status === 'deploying' || status === 'pending') return 'deploying';
+  if (status === 'failed_retryable') return 'failed_retryable';
   if (status === 'failed' || app.lastError) return 'failed';
   if (status === 'partially_deployed') return 'partial';
   if (status === 'deployed' || status === 'running') return 'deployed';
@@ -129,9 +134,23 @@ export function applicationStatus(app: ApplicationDto | ApplicationSummaryDto, r
 
 export function statusTone(status: string) {
   if (['deployed', 'enabled', 'running'].includes(status)) return 'success';
-  if (['deploying', 'partial', 'warning', 'pending', 'attention'].includes(status)) return 'warning';
+  if (['deploying', 'failed_retryable', 'partial', 'warning', 'pending', 'attention'].includes(status)) return 'warning';
   if (['failed', 'disabled', 'error'].includes(status)) return 'danger';
   return 'neutral';
+}
+
+export function shouldPollApplicationRuntime(runtime?: ApplicationRuntime | null) {
+  const active = new Set(['deploying', 'pending', 'queued', 'running', 'waiting', 'failed_retryable']);
+  if (!runtime) return false;
+  return runtime.operation?.status ? active.has(runtime.operation.status) : active.has(runtime.status);
+}
+
+export function applicationRuntimePollDelay(runtime: ApplicationRuntime, now = Date.now()) {
+  const baseDelay = 3000;
+  if (runtime.operation?.status !== 'failed_retryable' || !runtime.operation.nextRunAt) return baseDelay;
+  const nextRunAt = Date.parse(runtime.operation.nextRunAt);
+  if (!Number.isFinite(nextRunAt)) return baseDelay;
+  return Math.min(30000, Math.max(baseDelay, nextRunAt - now + 250));
 }
 
 export function draftFromApplication(app?: ApplicationDto | null): ApplicationDraftUi {

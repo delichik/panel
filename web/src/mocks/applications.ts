@@ -277,9 +277,9 @@ const runtimes: Record<string, ApplicationRuntime> = {
     observedAt: now,
     instances: [
       { instanceId: 'inst-edge', serverId: 'srv-edge-sgp', serverName: 'edge-sgp-01', containerName: 'panel-storefront', status: 'running', observedGeneration: 7 },
-      { instanceId: 'inst-api', serverId: 'srv-api-hkg', serverName: 'api-hkg-01', containerName: 'panel-storefront', status: 'failed', error: 'health check timed out' },
+      { instanceId: 'inst-api', serverId: 'srv-api-hkg', serverName: 'api-hkg-01', containerName: 'panel-storefront', status: 'failed', lastError: 'health check timed out' },
     ],
-    operation: { id: 'op-storefront', applicationId: 'app-storefront', type: 'deploy', status: 'deploying', taskId: 'task-application-77', generation: 7, trigger: 'user', createdAt: now, updatedAt: now },
+    operation: { id: 'op-storefront', operationId: 'op-storefront', applicationId: 'app-storefront', type: 'deploy', status: 'deploying', taskId: 'task-application-77', generation: 7, trigger: 'user', attempt: 1, createdAt: now, updatedAt: now },
   },
   'app-worker': {
     applicationId: 'app-worker',
@@ -304,10 +304,10 @@ const runtimes: Record<string, ApplicationRuntime> = {
     status: 'failed',
     observedAt: now,
     instances: [
-      { instanceId: 'inst-analytics-a', serverId: 'srv-worker-nrt', serverName: 'worker-nrt-queue-a', containerName: 'panel-analytics', status: 'failed', error: 'exit code 137' },
+      { instanceId: 'inst-analytics-a', serverId: 'srv-worker-nrt', serverName: 'worker-nrt-queue-a', containerName: 'panel-analytics', status: 'failed', lastError: 'exit code 137' },
       { instanceId: 'inst-analytics-b', serverId: 'srv-batch-iad', serverName: 'batch-iad-nightly', containerName: 'panel-analytics', status: 'running', observedGeneration: 5 },
     ],
-    operation: { id: 'op-analytics', applicationId: 'app-analytics', type: 'deploy', status: 'failed', taskId: 'task-analytics-17', generation: 5, trigger: 'scheduler', error: 'One target failed.', createdAt: now, updatedAt: now },
+    operation: { id: 'op-analytics', operationId: 'op-analytics', applicationId: 'app-analytics', type: 'deploy', status: 'failed', taskId: 'task-analytics-17', generation: 5, trigger: 'scheduler', errorCode: 'target_failed', error: 'One target failed.', errorDetail: 'Worker exited with code 137.', attempt: 3, createdAt: now, updatedAt: now },
   },
   'app-internal-docs': {
     applicationId: 'app-internal-docs',
@@ -334,7 +334,7 @@ const runtimes: Record<string, ApplicationRuntime> = {
     observedAt: now,
     instances: [
       { instanceId: 'inst-webhook-sgp', serverId: 'srv-edge-sgp', serverName: 'edge-sgp-01', containerName: 'panel-webhooks', status: 'running', observedGeneration: 4 },
-      { instanceId: 'inst-webhook-lax', serverId: 'srv-edge-lax', serverName: 'edge-lax-01', containerName: 'panel-webhooks', status: 'unknown', error: 'agent report stale for 12m' },
+      { instanceId: 'inst-webhook-lax', serverId: 'srv-edge-lax', serverName: 'edge-lax-01', containerName: 'panel-webhooks', status: 'unknown', lastError: 'agent report stale for 12m' },
     ],
   },
   'app-media': {
@@ -346,7 +346,7 @@ const runtimes: Record<string, ApplicationRuntime> = {
       { instanceId: 'inst-media-syd', serverId: 'srv-media-syd', serverName: 'media-syd-transcode', containerName: 'panel-media', status: 'running', observedGeneration: 6 },
       { instanceId: 'inst-media-gpu', serverId: 'srv-gpu-nrt', serverName: 'gpu-nrt-render', containerName: 'panel-media', status: 'starting', observedGeneration: 6 },
     ],
-    operation: { id: 'op-media', applicationId: 'app-media', type: 'deploy', status: 'deploying', taskId: 'task-media-12', generation: 6, trigger: 'user', createdAt: now, updatedAt: now },
+    operation: { id: 'op-media', operationId: 'op-media', applicationId: 'app-media', type: 'deploy', status: 'deploying', taskId: 'task-media-12', generation: 6, trigger: 'user', attempt: 1, createdAt: now, updatedAt: now },
   },
   'app-cache-sidecar': {
     applicationId: 'app-cache-sidecar',
@@ -360,8 +360,8 @@ const runtimes: Record<string, ApplicationRuntime> = {
     runtimeId: 'runtime-canary',
     status: 'failed',
     observedAt: now,
-    instances: [{ instanceId: 'inst-canary', serverId: 'srv-api-hkg-02', serverName: 'api-hkg-02-canary', containerName: 'panel-checkout-canary', status: 'failed', error: 'readiness probe failed' }],
-    operation: { id: 'op-canary', applicationId: 'app-canary-broken', type: 'deploy', status: 'failed', taskId: 'task-canary-3', generation: 11, trigger: 'user', error: 'Canary probe failed.', createdAt: now, updatedAt: now },
+    instances: [{ instanceId: 'inst-canary', serverId: 'srv-api-hkg-02', serverName: 'api-hkg-02-canary', containerName: 'panel-checkout-canary', status: 'failed', lastError: 'readiness probe failed' }],
+    operation: { id: 'op-canary', operationId: 'op-canary', applicationId: 'app-canary-broken', type: 'deploy', status: 'failed', taskId: 'task-canary-3', generation: 11, trigger: 'user', errorCode: 'readiness_failed', error: 'Canary probe failed.', errorDetail: 'The /ready endpoint returned 503.', attempt: 3, createdAt: now, updatedAt: now },
   },
   'app-backup-agent': {
     applicationId: 'app-backup-agent',

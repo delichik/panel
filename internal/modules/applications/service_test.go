@@ -19,6 +19,7 @@ import (
 	"panel/internal/modules/applications/runtime"
 	"panel/internal/modules/servers"
 	"panel/internal/modules/tasks"
+	controlplane "panel/internal/orchestrator"
 	"panel/internal/platform/config"
 	storage "panel/internal/platform/database"
 	"panel/internal/platform/database/models"
@@ -101,8 +102,12 @@ func TestDeployEnablesDisabledApplicationWithVersionCAS(t *testing.T) {
 		t.Fatal(err)
 	}
 	beforeVersion := app.Version
-	if _, err := svc.Deploy(ctx, app.ID); err != nil {
+	result, err := svc.Deploy(ctx, app.ID)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if result.NoChange || result.DeploymentID == "" {
+		t.Fatalf("deploy result should identify planned work, got %#v", result)
 	}
 	after, err := svc.Get(ctx, app.ID)
 	if err != nil {
@@ -111,13 +116,74 @@ func TestDeployEnablesDisabledApplicationWithVersionCAS(t *testing.T) {
 	if !after.Enabled || after.Version != beforeVersion+1 {
 		t.Fatalf("HTTP deploy should explicitly persist enable intent with version bump, before=%d after=%#v", beforeVersion, after)
 	}
-	// 新控制面：Deploy 只写 desired/Job 并触发协调（fake trigger 直接 plan、
-	// 不返回 task），绝不直接调用 agent runtime。
+	// 新控制面：Deploy 直接写 desired/Job，远端工作仍由 orchestrator 执行，
+	// 绝不在 HTTP 请求中直接调用 agent runtime。
 	if len(jobsForApplication(t, svc, app.ID)) == 0 {
 		t.Fatal("expected deploy to plan application Jobs")
 	}
 	if len(runtime.deploys) != 0 {
 		t.Fatalf("deploy must not call agent runtime directly, deploys = %#v", runtime.deploys)
+	}
+}
+
+// APP-LIFE-003: an explicit deploy is manual work and cannot be swallowed by automatic backoff.
+func TestDeployBypassesAutomaticReconcileBackoff(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.Exec(`UPDATE jobs SET state='succeeded',finished_at=updated_at WHERE application_id=?`, app.ID); err != nil {
+		t.Fatal(err)
+	}
+	nextRunAt := time.Now().UTC().Add(10 * time.Minute).Format(time.RFC3339Nano)
+	if _, err := svc.db.Exec(`INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at,reconcile_failures,reconcile_next_run_at)
+		SELECT id,application_id,server_id,'now',4,? FROM application_instances WHERE application_id=?`, nextRunAt, app.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := svc.Deploy(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.NoChange || result.DeploymentID == "" {
+		t.Fatalf("manual deploy must plan despite automatic backoff, got %#v", result)
+	}
+	var requests int
+	if err := svc.db.QueryRow(`SELECT COUNT(*) FROM activity_events WHERE operation_id<>'' AND event_type='operation.requested' AND trigger='application_sync' AND json_extract(data_json,'$.applicationId')=?`, app.ID).Scan(&requests); err != nil {
+		t.Fatal(err)
+	}
+	if requests == 0 {
+		t.Fatal("manual deploy was silently skipped instead of creating a traceable intent")
+	}
+}
+
+// APP-LIFE-003: a satisfied explicit deploy reports a truthful no-change outcome.
+func TestDeployReportsNoChangeWhenAllTargetsAreSatisfied(t *testing.T) {
+	svc, _, servers, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.Exec(`UPDATE jobs SET state='succeeded',finished_at=updated_at WHERE application_id=?`, app.ID); err != nil {
+		t.Fatal(err)
+	}
+	for serverID := range servers.items {
+		markRuntimeInstanceSatisfied(t, svc, app.ID, serverID, app.Generation, app.SpecHash, appruntime.StatusRunning, "")
+	}
+
+	result, err := svc.Deploy(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.NoChange || result.DeploymentID != "" {
+		t.Fatalf("satisfied deploy should report an explicit no-op, got %#v", result)
 	}
 }
 
@@ -1082,6 +1148,12 @@ func TestRuntimeRefreshesInstanceStatuses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// This test exercises refreshed instance aggregation, not an in-flight
+	// deployment. Finish the planner-only fixture Jobs so they do not correctly
+	// keep the runtime in deploying state.
+	if _, err := svc.db.Exec(`UPDATE jobs SET state='succeeded',finished_at=updated_at WHERE application_id=?`, app.ID); err != nil {
+		t.Fatal(err)
+	}
 	instanceID := app.ID + "-srv-a"
 	runtime.statuses = map[string]appruntime.InstanceStatus{
 		instanceID: {InstanceID: instanceID, ContainerName: "panel-web", Status: appruntime.StatusRunning, Image: "nginx", ObservedAt: time.Now().UTC()},
@@ -1102,6 +1174,74 @@ func TestRuntimeRefreshesInstanceStatuses(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("runtime instances = %#v", result.Instances)
+	}
+}
+
+// APP-RUN-001: the latest terminal Job failure remains visible through runtime.
+func TestRuntimeExposesLatestTerminalJobFailure(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs := jobsForApplication(t, svc, app.ID)
+	if len(jobs) == 0 {
+		t.Fatal("expected planned jobs")
+	}
+	if _, err := svc.db.Exec(`UPDATE jobs SET state='succeeded',finished_at=?,updated_at=? WHERE application_id=?`,
+		time.Now().UTC().Add(-time.Minute).Format(time.RFC3339Nano), time.Now().UTC().Add(-time.Minute).Format(time.RFC3339Nano), app.ID); err != nil {
+		t.Fatal(err)
+	}
+	failedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := svc.db.Exec(`UPDATE jobs SET state='failed',attempts=3,last_stage='start_container',error_code='container_start_failed',error_class='runtime',error_message='container exited immediately',error_detail='exit code 1',next_run_at=NULL,finished_at=?,updated_at=? WHERE id=?`, failedAt, failedAt, jobs[0].ID); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := svc.Runtime(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != appruntime.StatusFailed || result.Operation == nil {
+		t.Fatalf("terminal deployment failure should remain visible, got %#v", result)
+	}
+	operation := result.Operation
+	if operation.Status != controlplane.JobFailed || operation.OperationID == "" || operation.Stage != "start_container" || operation.Attempt != 3 || operation.ErrorCode != "container_start_failed" || operation.Error != "container exited immediately" || operation.ErrorDetail != "exit code 1" {
+		t.Fatalf("runtime operation lost structured failure: %#v", operation)
+	}
+}
+
+// APP-RUN-001: retry state and schedule are part of the runtime operation contract.
+func TestRuntimeExposesRetryableJobStateAndSchedule(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs := jobsForApplication(t, svc, app.ID)
+	if len(jobs) == 0 {
+		t.Fatal("expected planned jobs")
+	}
+	if _, err := svc.db.Exec(`UPDATE jobs SET state='succeeded',finished_at=updated_at WHERE application_id=?`, app.ID); err != nil {
+		t.Fatal(err)
+	}
+	nextRunAt := time.Now().UTC().Add(30 * time.Second).Truncate(time.Millisecond)
+	if _, err := svc.db.Exec(`UPDATE jobs SET state='failed_retryable',attempts=2,error_code='agent_unavailable',error_class='agent',error_message='agent connection failed',next_run_at=?,updated_at=? WHERE id=?`,
+		nextRunAt.Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano), jobs[0].ID); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := svc.Runtime(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != appruntime.StatusFailed || result.Operation == nil || result.Operation.Status != controlplane.JobFailedRetryable || result.Operation.NextRunAt == nil || !result.Operation.NextRunAt.Equal(nextRunAt) {
+		t.Fatalf("retryable deployment state should remain visible with its schedule, got %#v", result)
 	}
 }
 

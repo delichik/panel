@@ -4,6 +4,7 @@
 
 ## 当前状态
 
+- 本轮应用部署与统一日志修复新增 `applicationsPage.deployNoChange`、当前部署阶段/步骤/尝试/下次重试/错误、`failed_retryable` 状态，以及 `activity.observationRejected.*` 精确拒绝原因词条；en / zh-CN 已同步。观测拒绝文案明确说明不是部署重试，应用页直接展示结构化 Job 错误。
 - 本轮应用端口映射新增 TCP/UDP 协议、Panel 防火墙管理开关、固定端口约束和规则状态摘要词条，en / zh-CN 已同步；后端补充端口协议、UFW 未安装、SSH/Agent 管理端口保护、双通道连通性门禁和受管规则冲突等稳定错误翻译。
 
 - 统一日志新增容量 warning/blocked 横幅与可用空间词条，明确容量持续增长和停止接收新变更时仍可查询导出，en / zh-CN 已同步。

@@ -35,14 +35,14 @@
 - 设施应用 API：`web/src/api/facilityApps.ts`
 - 类型：`web/src/types/applications.ts`、`web/src/types/facilityApps.ts`
 - Mock：`web/src/mocks/applications.ts`，由 `web/src/mocks/browser.ts` 挂载同名正式路径。
-- 日志入口：应用详情跳转 `/activity?resourceType=application&resourceId=<id>`；历史按不可变事件读取，不从当前 jobs 或 instance observed 反推。
+- 日志入口：应用详情跳转 `/activity?view=operations&resourceType=application&resourceId=<id>`；本次部署有 `operationId` 时优先深链到该操作。历史按不可变事件读取，不从当前 jobs 或 instance observed 反推。
 
 ## API 范围
 
 - 应用列表/详情/删除：`GET /api/v1/applications` 返回 `ApplicationSummary[]` 轻量列表，`GET/DELETE /api/v1/applications/{id}` 提供完整详情与删除；创建和更新统一通过 durable edit-session 提交。
 - 应用文件：`GET /api/v1/applications/{id}/files` 列表，`GET /api/v1/applications/{id}/files/{name}/content` 认证流式下载；`name` 是应用内唯一外部身份，物理 file id 只用于存储和运行时分配。
 - 编辑会话校验：`POST /api/v1/application-edit-sessions/{id}/validate`，`POST /api/v1/application-edit-sessions/{id}/preview`
-- 运行操作：`POST /api/v1/applications/{id}/deploy`，`POST /api/v1/applications/{id}/stop`，`POST /api/v1/applications/{id}/restart`
+- 运行操作：`POST /api/v1/applications/{id}/deploy`，`POST /api/v1/applications/{id}/stop`，`POST /api/v1/applications/{id}/restart`。deploy 是人工协调入口，直接调用 planner、绕过自动协调退避但不强制重建已满足目标；全部目标已满足时返回 `noChange=true`，实际规划时返回 Job `deploymentId`，HTTP activity 中间件同时附加本次 `operationId` 回执。
 - 镜像：`POST /api/v1/applications/{id}/image/update`；手动检查入口 `POST /api/v1/applications/{id}/image/check` 已移除，检查由 `application_image_check` 任务驱动
 - 运行时和日志：`GET /api/v1/applications/{id}/runtime`，`GET /api/v1/applications/{id}/logs`
 - 持久化数据：`GET /api/v1/applications/{id}/persistent-data` 下载，`POST /api/v1/applications/{id}/persistent-data` 上传 zip 覆盖并重启
@@ -65,6 +65,7 @@
 - `application_instances` 是 Panel 的当前运行时事实表，按 `application_id + server_id` 记录 desired 与 observed 两组字段：desired 包括状态、generation、spec hash、revision 和安全的 runtime spec 快照；observed 包括状态、容器身份、generation、spec hash、镜像 digest、时间、sequence、source 和最后一次协调错误。业务模块只能读取 observed；所有 Agent report、周期巡检和 `RuntimeReconcile` 回写统一通过 `internal/orchestrator.ObservationWriter`。
 - `jobs` 是每个 application/server 冲突域当前唯一的 durable 协调工作。`pending/running/failed_retryable` 通过 AppDB partial unique index 保证同键最多一条；Job 保存 action、revision、lease token、execution ID、attempt/backoff、步骤和结构化错误。任务表只做用户操作/触发记录，不是部署事实来源。
 - 应用部署控制面的入口是 `Service.PlanApplicationDeployment` → `orchestrator.Planner` → `orchestrator.Controller`。planner 只保存 desired、不可变 revision 和 Job，不直接执行 Agent/Docker RPC；controller 负责 scanner、claim、lease heartbeat、RuntimeReconcile、ObservationWriter 写回、fencing 和重试。提交后只发送 wake，wake 丢失由 DB due scan 修复。
+- HTTP deploy 不经过 collector-only 周期任务包装层；它以 `Manual=true` 直接规划，不能被 `application_reconcile_states.reconcile_next_run_at` 静默跳过。自动扫描与非人工显式协调继续遵守退避。已经通过请求准入并持久化的 Job 属于在途工作，Controller claim 不重复执行新请求容量门禁；扫描、入队、执行和续租内部错误必须输出限频结构化进程诊断，不能静默丢弃。
 - 停止、禁用和删除分别规划 `stop` / `purge` Job；删除使用 finalizer：先设置 `deletion_requested=true`，所有现有 instance 变为 `desired_state=purged`，每个 purge Job 成功并写入 observed `missing` 后删除 instance，最后在无 instance 时物理删除应用；物理删除前会先清理该应用的终态 Job（succeeded/failed/cancelled），因为 `jobs` 对 `applications` 使用 RESTRICT 外键（设计上禁止级联删除 Job），不清理会导致 finalizer 无法删应用。不得通过应用删除级联绕过 active Job。
 - `ApplicationInstance.status`、`runtime_spec_json`、`last_deployed_generation` 等旧列仅作为兼容投影；新代码读取 desired/observed 字段，旧投影由 ObservationWriter 在需要时同步，不能反向覆盖控制面事实。
 - 默认部署模式为 `all`，会在所有 agent 健康且兼容的服务器上各创建一个实例；`selected` 只部署到选中的服务器。含 `persistent` 挂载的应用必须且只能部署到一个服务器；已有运行时实例后，可通过实例所在服务器的 agent 将 `/opt/panel/apps/<applicationId>/persistent` 打包下载，或上传 zip 由 agent 校验路径后全量覆盖该目录并触发应用重启。尚未部署的 `persistent` 应用允许先向选定服务器导入 zip，agent 会创建并覆盖 Panel 托管的 persistent 目录，导入完成后不触发重启，用于从 compose 等外部运行方式迁移数据后再首次启动。
@@ -83,14 +84,15 @@
 - `file`、`panel_file`、内部文件和模板渲染后的 managed file 统一以只读 `managed_file` 挂载到容器。archive 在应用 Panel、设施 bundle Panel 和 Agent 实际解包侧都限制最多 10000 个总条目（文件与目录均计数）、32 层目录、256 MiB 解包总量和 100 倍压缩比，并继续拒绝路径逃逸和不支持格式；Agent 保存原始压缩包副本并校验 sha256，再覆盖解包到挂载目录。普通文件 drift 检查 sha256、mode 和显式 uid/gid，archive drift 检查节点保留原包 sha256 和解包目录 tree hash；drift 检查先用 stat 指纹（size+mtime）快速跳过未变化的文件，指纹缓存在 Agent 本地 `state/managed-files.fingerprint.json`，只有元数据变化时才重新计算 sha256 / tree hash。Agent 解包采用单遍流式写盘（边写边算 sha256），不再把解压内容整包读入内存。
 - 保存会话服务层的临时目录仍由应用装配层设置到 `<dataRoot>/tmp/application-save-sessions`；该基础目录也用于推导 durable edit-session 工作目录，不得依赖进程工作目录下的相对 `tmp`。
 - 编辑会话的临时文件生命周期集中在 `edit_session.go`（归档解包与文件名归一辅助位于 `archive_helpers.go`）；旧的 save-session 内存会话实现与 HTTP 接口已移除，应用 CRUD、部署和运行时流程不得复制会话锁或临时目录清理逻辑。
-- 启用、停用、部署同步、删除和镜像更新等流程先校验并保存 desired state，再通过 task 框架触发 `application_reconcile`；collector 只收集报告/周期输入并调用 planner，不能创建 `application_target_*` 任务或直接执行远端变更。编辑器“保存并应用”仍只提交编辑会话，部署完成通过 Job/runtime 视图观察。
+- 启用、停用、删除和镜像更新等流程先校验并保存 desired state，再按各自触发语义请求 planner；HTTP deploy 作为人工入口直接调用 planner，自动/依赖变化可通过 collector-only `application_reconcile` 触发。collector 只收集报告/周期输入并调用 planner，不能创建 `application_target_*` 任务或直接执行远端变更。编辑器“保存并应用”仍只提交编辑会话，部署完成通过 Job/runtime 视图观察。
 - planner 按完整目标集合规划 apply 与 removed-target purge；每台服务器写入一个 Instance desired 和一个可合并 Job。`force` 只能绕过满足态过滤和应用级退避，不能绕过 application/server active Job 唯一性；running Job 不会被第二个 Job 并发覆盖，执行结束会重新比较最新 desired。
 - Controller 在 AppDB 外调用 Agent `RuntimeReconcile`，按 lease token 保护 observation、Job succeed/fail 和 desired-change requeue；RPC deadline 小于 lease TTL，同时由 heartbeat 延长合法长任务。单个服务器失败只影响该 Job，其它服务器继续由 scanner/worker 收敛。
 - Agent 只负责 RuntimeReconcile 的幂等 ensure：校验 managed identity，写托管文件、确保镜像、检查/复用或替换托管容器、启动并确认 running；非托管同名资源必须返回 terminal conflict，不能删除。stop/purge 对缺失或已达到目标状态按成功处理。
 - 应用运行时错误写入 Job 的 `error_code/error_class/error_message/error_detail` 和 `last_steps_json`，可重试错误按 30 秒起、上限 1 小时并带 jitter 退避；每个 Job 有最大尝试次数（`orchestrator.ControllerConfig.MaxAttempts`，默认 10 次、含首次），达到上限后以 `error_code=max_attempts_exceeded` 进入终态失败，不再无限重试；任务表不能反过来覆盖 Job 状态。
 - 应用同步的 `pull image` 步骤允许最长 15 分钟，以适配较慢的镜像仓库或大镜像下载；未显式写 tag 的镜像引用必须按 Docker CLI 语义拉取 `latest`，不得触发 Docker Engine API 拉取仓库全部标签；其它 agent/runtime 操作仍使用常规短超时。
 - RuntimeReconcile 的 apply 步骤为 `validate_spec`、`write_files`、`ensure_image`、`inspect/reuse_or_replace`、`create`、`start`、`verify_running`；Agent 不暴露胖部署 handler。应用 runtime 调用只在 `agent.url` 存在且 `agent.status=compatible` 时执行，不回退 SSH；Agent 未就绪的 Job 保持可重试并等待服务器修复。
-- 应用运行时状态读取优先使用 AppDB observed 快照；详情页需要主动刷新时才调用 Agent status，刷新结果仍必须经 ObservationWriter，不得由 handler 直接写 Instance。证书/Docker/网络错误保留原始结构化诊断并按 Job retry policy 收敛。
+- 应用运行时状态读取优先使用 AppDB observed 快照；详情页需要主动刷新时才调用 Agent status，刷新结果仍必须经 ObservationWriter，不得由 handler 直接写 Instance。runtime 的当前操作投影返回 active Job；没有 active Job 且最新 Job 为终态失败时仍返回其 `operationId/stage/attempt/nextRunAt/errorCode/errorClass/error/errorDetail`，避免失败从页面消失。证书/Docker/网络错误保留原始结构化诊断并按 Job retry policy 收敛。
+- 应用详情对 `pending/running/failed_retryable` 等活跃操作做有界 runtime 轮询：基线 3 秒、失败退避时按 `nextRunAt` 对齐且单次等待不超过 30 秒，最多 24 次或 2 分钟；页面不可见时暂停，操作终态后停止。实例错误读取 API 的 `lastError` 字段，不能使用不存在的 `error` 别名；当前 Job 的错误、步骤、尝试次数和下次重试时间必须就地展示并提供本次 `operationId` 日志入口。
 - Application 容器使用 `panel.application.*` Label 标识；设施应用的反向代理 nginx 容器也复用 runtime 原子能力创建，但其配置来源和生命周期归 `internal/modules/facilityapps` 管理。
 - 设施应用（入口网关）的运行时 spec 使用应用级 SpecHash：`RuntimeSpecForServer` 返回前把 `spec.SpecHash` 覆盖为 `app.SpecHash`（非空时）。每台服务器的渲染内容只体现在 managed file 层，Job 的 desired spec 保存该服务器实际渲染快照，避免期望 hash、部署校验与容器漂移检测互相不一致。
 - 设施应用的 `generation`/`spec_hash` 只允许设施模块写入（`ensureReverseProxyApplication`，hash 为 `facilityConfigHash`）：`refreshApplicationSnapshot`/`prepareDeploy` 等应用侧路径对 `kind=facility_application` 必须原样返回、不得用 `applicationHash` 覆盖 SpecHash 或据此递增 generation。设施的 per-server runtime spec 作为该 Job 的 desired spec 快照保存，不能再写 lifecycle target。
@@ -98,7 +100,7 @@
 - Application 部署、停止、重启和镜像更新后的容器重建与普通容器操作共享目标服务器的单队列。
 - 同步校验阶段发现 spec hash 与期望不一致时，Job 按 `failed_retryable` 进入指数退避重试，而不是终态失败；controller 到期恢复后重新执行 RuntimeReconcile，协调器扫描仍然作为兜底恢复路径。失败汇总文案使用服务器当前名称并隐藏原始 hash，hash 只保留在 Job/Instance 诊断字段。
 - 自动协调连续失败达到 10 次后，应用置为 `reconcile_stopped` 特殊状态并停止自动重试：调度器扫描与 agent 上报的漂移协调不再创建新部署；用户显式同步、部署、重启等人工操作会清除该状态并重新开始计数。失败计数由 orchestrator Controller 的 `OnFailed` 回调在每次 Job 失败（含可重试与终态）时累计到 `application_reconcile_states.reconcile_failures`，并在未达到阈值期间以指数退避控制下次扫描。前端在应用列表与详情将该状态展示为“需人工处理”。标记/清除 `reconcile_stopped` 是派生状态变更，不得写 `applications.updated_at`，避免协调动作污染配置更新时间。
-- containers 模块注册的周期协调任务只处理已经观察到新托管 Label 的实例；发现缺失、停止、generation/spec hash 偏差或 managed file manifest 漂移时，由 `application_reconcile` collector 请求应用 planner 创建或复用对应 app/server 的 Job，collector 本身不再产出 `application_target_apply|stop|purge` 输入。collector 必须在内部规划请求中标记这些节点已经由 Agent 观测到运行时漂移；planner 对这组明确节点不得再使用可能滞后的 running 缓存做满足态过滤，否则 Docker 服务重启或节点侧停止容器后会漏掉自动恢复。显式协调 payload 支持按 `applicationIds`、`serverIds` 过滤；默认同步只为未满足 desired state 的目标规划 Job，已经 running 且 generation/spec hash 与 managed files 都匹配的成功节点不得因为其他节点失败而重复部署；配置保存、停用、删除、设施应用保存和系统级重部署等 desired state 变更可以使用 `force=true` 绕过退避和满足态过滤，但不能绕过 `uq_jobs_active_app_server`。设施应用可以通过应用模块的 facility runtime provider 提供每台服务器的 runtime spec；目标拆分和 Agent RuntimeReconcile 仍复用应用控制面。collector 收集为空或只完成规划时不创建任务记录。同一应用连续协调失败后必须按应用级指数退避设置下一次运行时间，退避状态保存在 `application_reconcile_states`，自动协调和非强制显式协调必须尊重 `reconcile_next_run_at`。
+- containers 模块注册的周期协调任务只处理已经观察到新托管 Label 的实例；发现缺失、停止、generation/spec hash 偏差或 managed file manifest 漂移时，由 `application_reconcile` collector 请求应用 planner 创建或复用对应 app/server 的 Job，collector 本身不再产出 `application_target_apply|stop|purge` 输入。collector 必须在内部规划请求中标记这些节点已经由 Agent 观测到运行时漂移；planner 对这组明确节点不得再使用可能滞后的 running 缓存做满足态过滤，否则 Docker 服务重启或节点侧停止容器后会漏掉自动恢复。显式协调 payload 支持按 `applicationIds`、`serverIds` 过滤；默认同步只为未满足 desired state 的目标规划 Job，已经 running 且 generation/spec hash 与 managed files 都匹配的成功节点不得因为其他节点失败而重复部署；配置保存、停用、删除、设施应用保存和系统级重部署等 desired state 变更可以使用 `force=true` 绕过退避和满足态过滤，但不能绕过 `uq_jobs_active_app_server`。设施应用可以通过应用模块的 facility runtime provider 提供每台服务器的 runtime spec；目标拆分和 Agent RuntimeReconcile 仍复用应用控制面。collector 收集为空或只完成规划时不创建任务记录。同一应用连续协调失败后必须按应用级指数退避设置下一次运行时间，退避状态保存在 `application_reconcile_states`；自动协调和非人工、非强制显式协调尊重 `reconcile_next_run_at`，`Manual=true` 的人工操作绕过退避但仍保留满足态过滤。
 - 设施 runtime provider 可额外实现逐次更新规划。默认和未知结果均为 recreate；只有设施为当前新旧 spec 明确返回 reload strategy，且应用层确认镜像、命令、环境、网络、端口、挂载、权限、资源和 restart 等容器结构完全一致时，才调用 Agent `RuntimeReload`。validate 失败保留旧容器并使 target 失败；reload 或 reload 后状态确认失败时在同一服务器操作队列内回退现有 recreate 流程。
 - Docker labels 在创建后不可修改。Agent 在 recreate 或 reload 成功后写入实例 `applied-state.json`，容器报告仅在 container ID/name 匹配时用动态 generation/spec hash 覆盖静态 labels，避免成功 reload 后被协调器误判为旧版本。
 - 日志记录发生时的事实及观测快照；容器当前健康继续通过运行时面板展示，禁止把当前观测替换进旧操作详情。
@@ -120,8 +122,8 @@
 - 已删除的应用级自定义变量不再参与模板渲染；旧模板若引用这些变量，渲染会以 missing variable 校验错误失败，需改用 `server.variables.<key>` 或内置模板变量。
 - 模板目录提供 `server.id`、`server.name`、`server.host`、`server.ssh_host`、`server.ssh_port`、`server.ssh_username`、`server.variables.<key>` 等节点变量；appspec YAML 中的节点差异仍通过 `${node.meta.panel_*}` 和容器内 `PANEL_SERVER_*` 环境变量表达，应用文件模板在部署到每台目标服务器前会用实际目标服务器上下文重新渲染，因此同一应用在不同服务器会得到不同文件内容。
 - `panel_file` 挂载通过应用侧内部文件 registry 分发，来源模块必须在装配阶段显式注册自己的 source scheme；当前注册 `key_asset:<asset-id>:<kind>`（用户域自签 CA/TLS 与 SSH 密钥资产）和 `certificate:<cert-id>:certificate|private_key`（已签发的域名 HTTPS 证书）。
-- 内部文件读取接口使用 `OpenInternalFile` 流式打开，registry 只负责按 source scheme 分发；当前 agent managed-file 契约仍在应用部署组装阶段读取为内存内容后下发。
 - 应用可视化编辑器的 `panel_file` 来源必须使用 `GET /api/v1/applications/template-catalog` 返回的 `panelFiles` 目录选择，不要求用户手填内部 source；目录按资源类型、名称和文件种类展示。已保存但目录中已不存在的旧引用保留为禁用选项并阻止再次保存，避免静默清空配置。
+- 内部文件读取接口使用 `OpenInternalFile` 流式打开，registry 只负责按 source scheme 分发；当前 agent managed-file 契约仍在应用部署组装阶段读取为内存内容后下发。
 - 系统内置 Agent CA、Panel Agent 客户端证书和 Agent 服务端证书不注册为应用内部文件来源，即使底层作为系统托管资产保存，也不能作为应用文件挂载。
 - 应用内置变量同样通过应用侧变量 registry 注册，来源模块按根 key 注册变量集合；当前证书模块注册 `certs`，模板仍通过 `.certs.<variable>` 读取。
 - 私钥内容不通过目录 API 返回，只在部署渲染时由后端解密并作为只读 managed file 下发给 agent。
@@ -224,14 +226,14 @@
 ## 旧 Lifecycle/Dispatcher 层（已全部下线）
 
 - 以下旧实现已全部删除，不再存在：CoordDB 的 `application_lifecycle_operations` / `application_lifecycle_targets` / `application_target_stages` 三张表（迁移步骤 DROP TABLE IF EXISTS，协调库不再注册任何模型）；旧 deployment dispatcher（claim / executor / recovery / repair / startup、verify 与 aggregate worker）；旧 lifecycle executor；`application_target_batch|apply|stop|purge` 任务类型；Task Center 的 DeploymentProjection（TaskDeploymentOperationProjection / TaskDeploymentTargetProjection、task.deployment 字段）以及 `afterLifecycleTargetVerified` 等验证/聚合钩子。
-- 生产部署权威是 AppDB `jobs` + `orchestrator.Controller` + Agent `RuntimeReconcile`：planner 只写 desired / immutable revision / Job，controller 负责 claim、lease、RuntimeReconcile、ObservationWriter 写回与重试；运行时状态由 `application_instances` observed 字段 + 活跃 Job（pending/running/failed_retryable）派生；执行历史来自 AppDB activity_events；jobs 仅提供当前控制状态。
+- 生产部署权威是 AppDB `jobs` + `orchestrator.Controller` + Agent `RuntimeReconcile`：planner 只写 desired / immutable revision / Job，controller 负责 claim、lease、RuntimeReconcile、ObservationWriter 写回与重试；运行时状态由 `application_instances` observed 字段 + 活跃 Job（pending/running/failed_retryable）派生，最新终态 failed Job 继续作为用户可见失败诊断返回，直到后续成功或新操作取代；执行历史来自 AppDB activity_events；jobs 仅提供当前控制状态。
 
 ## 统一操作日志
 
 - `/api/v1/application-operations` 列表和详情路由退役；查询历史统一通过 `/api/v1/activity`，以 `operationId`（原 intent ID）关联全过程。
 - Planner 新增、合并和替代请求均追加事件。正在运行的 Job 仍保留原执行快照，新请求分别追加 `operation.requested` 和 `execution.linked` / `intent.superseded`；重新规划时引用最新请求意图。
 - AppDB 控制触发器将领取、执行结果、错误、步骤摘要和已接受观测写成不可变事实；历史名称、修订、generation、容器状态来自发生时快照。Job 后续更新、成功或删除不会改变旧事实。
-- ObservationWriter 对被 CAS 或租约拒绝的观测追加 `observation.rejected`，明确说明旧观测没有影响运行状态。证据入库失败不能伪装为已经接受。
+- ObservationWriter 对带 durable Job 的租约、围栏或实例异常拒绝追加 `observation.rejected`，reason 区分 `lease_lost`、`instance_missing`、`job_missing`、`instance_fencing_mismatch` 与 `stale_observation`，并携带应用/服务器资源及 incoming/current 诊断。无 Job 的 Agent report 陈旧或重复 CAS miss 是预期缓存竞争，不进入用户 warning；证据入库失败不能伪装为已经接受。
 - RPC 返回错误或租约到期时保存 `uncertainty.detected`；Job 保持 `running` 冲突锁，`error_class=uncertainty`，租约到期时间为空。不能凭超时重做远端副作用。
 - Controller 通过可选 `ExecutionResultResolver.ResolveExecution` 按原 execution ID 核对结果；只有明确完成才应用结果或安排已知失败的重试，无法确认则继续等待。核对不会调用第二次 Reconcile。
 - 队列/租约/实例当前状态仍允许修改；日志事实和封存证据只追加，不属于 Job finalizer 的清理范围。

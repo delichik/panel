@@ -328,6 +328,73 @@ func TestLateErrorOutputPersistsAcrossProjectionBatches(t *testing.T) {
 	}
 }
 
+// ORCH-ACT-001: operation summaries and search use structured errors, not trigger text.
+func TestFailureSummaryUsesStructuredJobErrorInsteadOfTriggerReason(t *testing.T) {
+	s := testActivity(t)
+	ctx := context.Background()
+	_, err := s.Append(ctx, []EventInput{{
+		EventID:     "job-failed",
+		EventType:   "execution.finished",
+		Level:       "error",
+		Domain:      "application",
+		Action:      "apply",
+		OperationID: "intent-one",
+		ExecutionID: "job-one:attempt:1",
+		Trigger:     "agent_report",
+		Text:        "agent_report",
+		Data: map[string]any{
+			"phase":     "ended",
+			"result":    "failed",
+			"error":     "image pull failed: password=registry-secret",
+			"detail":    "registry rejected the manifest",
+			"errorCode": "image_pull_failed",
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := s.Operation(ctx, "intent-one", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := detail.Operation.FailureSummary, "image pull failed: password=[REDACTED]"; got != want {
+		t.Fatalf("failure summary = %q, want %q", got, want)
+	}
+	event, err := s.GetEvent(ctx, "job-failed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Text != "agent_report" {
+		t.Fatalf("raw trigger reason changed: %q", event.Text)
+	}
+	page, err := s.Events(ctx, Filter{Q: "image_pull_failed"})
+	if err != nil || len(page.Items) != 1 || page.Items[0].EventID != "job-failed" {
+		t.Fatalf("structured error should be searchable: page=%#v err=%v", page, err)
+	}
+}
+
+// ORCH-ACT-001: structured failure fields have a stable fallback order.
+func TestFailureSummaryStructuredFallbacks(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		data map[string]any
+		want string
+	}{
+		{name: "detail", data: map[string]any{"detail": "runtime detail", "errorCode": "runtime_failed"}, want: "runtime detail"},
+		{name: "error code", data: map[string]any{"errorCode": "runtime_failed"}, want: "runtime_failed"},
+		{name: "no structured failure", data: map[string]any{}, want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := Event{EventInput: EventInput{Level: "error", Text: "manual", Data: tc.data}}
+			state := newState("operation")
+			applyEvent(&state, e)
+			if got := state.Operation.FailureSummary; got != tc.want {
+				t.Fatalf("failure summary = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestQueuedAggregateDoesNotReportSuccessBeforeChildren(t *testing.T) {
 	s := testActivity(t)
 	ctx := context.Background()

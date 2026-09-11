@@ -1041,14 +1041,18 @@ func (s *Service) Deploy(ctx context.Context, appID string) (OperationResult, er
 	if err != nil {
 		return OperationResult{}, err
 	}
-	task, err := s.triggerApplicationReconcileTask(ctx, app.ID, "application_sync", map[string]any{
-		"applicationIds": []string{app.ID},
-		"reason":         "application_sync",
+	plan, err := s.PlanApplicationDeployment(ctx, DeploymentPlanRequest{
+		ApplicationID:       app.ID,
+		Manual:              true,
+		TriggerType:         "application_sync",
+		TriggerResourceType: "application",
+		TriggerResourceID:   app.ID,
+		Reason:              "application_sync",
 	})
 	if err != nil {
 		return OperationResult{}, err
 	}
-	result := OperationResult{TaskID: task.ID, Application: app}
+	result := OperationResult{DeploymentID: firstString(plan.JobIDs), NoChange: len(plan.JobIDs) == 0, Application: app}
 	if runtime, err := s.Runtime(ctx, app.ID); err == nil {
 		result.ApplicationRuntime = &runtime
 	}
@@ -1379,51 +1383,57 @@ func (s *Service) withRuntimeSummary(ctx context.Context, app Application) (Appl
 
 // jobDerivedRuntimeStatus 从 AppDB 实例观测与活跃 Job 派生运行时状态与
 // 当前操作投影：存在 pending/running Job 表示部署中，failed_retryable
-// 表示失败重试；否则按实例观测聚合。不再读取旧 lifecycle 表。
+// 表示失败重试；没有 active Job 时仍返回最新的终态失败，确保用户能看见
+// 部署为什么停止。成功终态继续由实例观测聚合，不再读取旧 lifecycle 表。
 func (s *Service) jobDerivedRuntimeStatus(ctx context.Context, app Application, instanceStatuses []appruntime.InstanceStatus) (string, *LifecycleOperation) {
 	base := aggregateRuntimeStatus(app.Enabled, instanceStatuses)
 	if s == nil || s.db == nil {
 		return base, nil
 	}
-	var rows []struct {
-		ID                string
-		Action            string
-		State             string
-		Trigger           string
-		DesiredGeneration int
-		DesiredSpecHash   string
-		UpdatedAt         string
-	}
-	if err := orm.New(s.db).From("jobs").Select("id", "action", "state", "trigger_type", "desired_generation", "desired_spec_hash", "updated_at").
+	var rows []models.Job
+	if err := orm.New(s.db).From("jobs").
 		Where("application_id=?", app.ID).And("state IN (?,?,?)", controlplane.JobPending, controlplane.JobRunning, controlplane.JobFailedRetryable).
-		All(ctx, &rows); err != nil {
+		OrderBy("updated_at DESC", "id ASC").All(ctx, &rows); err != nil {
 		return base, nil
 	}
 	if len(rows) == 0 {
-		return base, nil
+		if err := orm.New(s.db).From("jobs").Where("application_id=?", app.ID).
+			OrderBy("updated_at DESC", "id ASC").Limit(1).All(ctx, &rows); err != nil || len(rows) == 0 || rows[0].State != controlplane.JobFailed {
+			return base, nil
+		}
 	}
 	status := appruntime.StatusDeploying
-	var first LifecycleOperation
+	selected := rows[0]
 	for _, row := range rows {
 		if row.State == controlplane.JobFailedRetryable {
 			status = appruntime.StatusFailed
-		}
-		if first.ID == "" {
-			first = LifecycleOperation{
-				ID:            row.ID,
-				ApplicationID: app.ID,
-				Type:          row.Action,
-				Status:        status,
-				Generation:    row.DesiredGeneration,
-				SpecHash:      row.DesiredSpecHash,
-				Trigger:       row.Trigger,
-				CreatedAt:     parseApplicationTime(row.UpdatedAt),
-				UpdatedAt:     parseApplicationTime(row.UpdatedAt),
-			}
+			selected = row
+			break
 		}
 	}
-	first.Status = status
-	return status, &first
+	if selected.State == controlplane.JobFailed {
+		status = appruntime.StatusFailed
+	}
+	operation := LifecycleOperation{
+		ID:            selected.ID,
+		OperationID:   selected.IntentID,
+		ApplicationID: app.ID,
+		Type:          selected.Action,
+		Status:        selected.State,
+		Generation:    selected.DesiredGeneration,
+		SpecHash:      selected.DesiredSpecHash,
+		Trigger:       selected.TriggerType,
+		Stage:         selected.LastStage,
+		Attempt:       selected.Attempts,
+		NextRunAt:     selected.NextRunAt,
+		Error:         selected.ErrorMessage,
+		ErrorCode:     selected.ErrorCode,
+		ErrorClass:    selected.ErrorClass,
+		ErrorDetail:   selected.ErrorDetail,
+		CreatedAt:     selected.CreatedAt,
+		UpdatedAt:     selected.UpdatedAt,
+	}
+	return status, &operation
 }
 
 func parseApplicationTime(value string) time.Time {

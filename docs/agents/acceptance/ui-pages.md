@@ -109,16 +109,25 @@
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
 | UI-APP-001 | `/applications/apps` 搜索、翻页、选择 | 服务端分页/q；URL 恢复 search/page/application；列表显示状态、镜像引用、实例数和镜像更新 | summary 缺 imageReference 时仅按行补详情并显示骨架；失败不得把整表清空为假空态 | 行级补载互不阻塞，选中项完整详情/runtime/files 按需请求 |
-| UI-APP-002 | 查看 Runtime tab | 显示实例总数/运行/失败及每服务器实例、容器和错误 | runtime 失败 toast 且局部可重试/刷新；换应用清旧 runtime | 实例状态文本与徽标一致，不暴露无意义空对象 |
+| UI-APP-002 | 查看 Runtime tab | 显示实例总数/运行/失败及每服务器实例、容器和 `lastError`；当前 Job 显示真实状态、步骤、attempt、nextRunAt、错误码/消息/详情与 operation 深链 | runtime 失败 toast 且局部可重试/刷新；换应用清旧 runtime；终态 failed 不得消失 | 实例/Job 状态文本与徽标一致；active 状态基线 3 秒有界轮询，按 nextRunAt 对齐，隐藏暂停，最多 24 次或 2 分钟且终态停止 |
 | UI-APP-003 | 查看 Routes/Files tab | Routes 显示域名、目标端口、来源服务器名和 paths；Files 只列已提交文件并支持 blob 下载 | 无路由/文件有专属空态；服务器名未知才回退 ID | 文件名和下载名符合 kind/contentType，下载带 auth |
-| UI-APP-004 | 点击同步/部署 | 提交 deploy/协调请求；有返回 ID 才展示 ID，没有则提示已接受；随后刷新当前页面 | 不得宣称部署完成 | toast 与实际响应字段一致，运行记录可恢复后续状态 |
+| UI-APP-004 | 点击同步/部署 | 提交人工 deploy；实际规划时显示真实 operationId/deploymentId 并刷新，`noChange=true` 时明确提示已是期望状态 | 不得被自动退避静默吞掉，不得把 no-change 或请求接受宣称为部署完成 | toast 与实际响应字段一致，operation 深链可恢复后续状态 |
 | UI-APP-005 | 停用应用 | enabled 时可点，先 danger 确认后调用 stop；成功只提示请求接受并刷新 | 已停用禁用；失败保持应用状态 | 取消无请求，成功后状态来自重载而非前端假改 |
 | UI-APP-006 | 检查并更新镜像 | 仅 `imageUpdateAvailable` 时启用；提交 update 并按两阶段反馈 | 无更新时不请求 | 返回 ID 的 toast 正确，刷新后徽标由后端决定 |
 | UI-APP-007 | 查看日志 | 立即打开带 LoadingOverlay 的日志 Dialog，拉取 tail=240 并在内部滚动展示 | 失败 toast 且弹窗显示明确失败文案，不假装空日志 | 长日志不撑开页面，关闭可恢复详情 |
-| UI-APP-008 | 打开协调记录 | 携带当前 applicationId 跳 `/application-operations` | 不直接展示原始 ID 作为用户标题 | 目标页面筛选与当前应用对应 |
+| UI-APP-008 | 打开协调记录 | 携带 `view=operations` 与当前 application resource filter 跳 `/activity`；已有 operationId 时直接打开本次时间线 | 不从全局相邻事件猜测因果，不直接展示原始 ID 作为用户标题 | 目标页面筛选与当前应用对应，本次部署入口定位同一 operation |
 | UI-APP-009 | 删除应用 | 显示影响说明并 danger 确认；成功重载列表 | 失败不移除对象；需要由后端处理引用/协调冲突 | 取消零请求，已删除应用不再选中 |
 | UI-APP-010 | 下载持久化数据 | 仅有 persistentPath 时启用，走授权 blob 下载 | 无持久化路径禁用；下载失败不生成损坏文件 | 浏览器保存有效归档，按钮有单独 loading |
 | UI-APP-011 | 选择 zip 恢复持久化数据 | 文件选择后必须经 danger+强制勾选确认，再 multipart restore | 取消选择/确认不上传；没有 persistentPath 禁用 | 仅确认后发一笔请求，反馈只承诺已接受 |
+
+### UI-ACT-001 Activity 事件与操作可读性
+
+- **前置**：`/activity` 同时包含部署 operation、普通事件、结构化错误及观测拒绝。
+- **动作**：浏览事件/按操作视图、打开时间线或复制摘要。
+- **结果**：错误优先显示 errorCode/error/detail；观测拒绝按稳定 reason 显示人类可读说明；复制内容与可见摘要一致，完整事件 JSON 只在技术信息中折叠展示。
+- **失败**：不得仅显示 eventType 或 trigger reason 掩盖真实错误；不同 resource/operation 的相邻事件不得被表现为同一因果链。
+- **不变量**：原始输出和已脱敏技术证据不翻译、不改写；应用入口默认按 operation 查看。
+- **验证**：activity model/timeline、operation deep-link tests。
 
 ## 10. 应用创建/编辑器
 

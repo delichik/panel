@@ -47,7 +47,7 @@
 | 全局导航、会话、布局、通用交互 | [界面外壳与交互约定](ui-shell-and-conventions.md) |
 | 任一具体页面或用户操作 | [逐页面验收](ui-pages.md) |
 | 应用、挂载来源、应用文件、修订、部署、设施应用、存储共享 | [应用与设施应用](applications-and-facilities.md) |
-| desired/observed、协调 Job、任务、日志、运行事件 | [协调、任务与运行事件](orchestration-and-tasks.md) |
+| desired/observed、协调 Job、统一追加活动日志、任务、运行事件 | [协调、任务与运行事件](orchestration-and-tasks.md) |
 | 容器、镜像、网络、卷、资源缓存与操作队列 | [容器与资源](containers-and-resources.md) |
 | 登录、账号、运行时设置、概览、系统版本 | [身份、设置与系统](identity-settings-system.md) |
 | 凭据、服务器、Agent、SSH、UFW、Fail2ban、APT | [服务器、安全与软件包](servers-security-packages.md) |

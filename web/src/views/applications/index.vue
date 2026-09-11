@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import ActivityLink from '@/components/activity/ActivityLink.vue';
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import { AlertTriangle, ClipboardList, Globe2, HardDrive, History, Plus, RefreshCcw, Rocket, Save, Square, Trash2, UploadCloud, Wrench } from '@lucide/vue';
@@ -40,6 +39,7 @@ import type { ServerDto } from '@/types/servers';
 import { formatDateTime } from '@/utils/datetime';
 import {
   applicationFileMountOptions as makeApplicationFileMountOptions,
+  applicationRuntimePollDelay,
   applicationStatus,
   cloneFacilityDomains,
   cloneFacilityPath,
@@ -64,6 +64,7 @@ import {
   routeSummary,
   runtimeSummary,
   saveInputFromDraft,
+  shouldPollApplicationRuntime,
   statusTone,
   validateApplicationDraft,
   validateFileName,
@@ -99,6 +100,13 @@ let applicationDetailRequestId = 0;
 let editorQueryRequestId = 0;
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 let dnsPollTimer: ReturnType<typeof setTimeout> | null = null;
+let runtimePollTimer: ReturnType<typeof setTimeout> | null = null;
+let runtimePollApplicationId = '';
+let runtimePollDeadline = 0;
+let runtimePollAttempts = 0;
+let runtimePollInFlight = false;
+const runtimePollMaxAttempts = 24;
+const runtimePollMaxDurationMs = 120000;
 
 const applications = ref<ApplicationSummaryDto[]>([]);
 const templateVariables = ref<TemplateVariableDefinition[]>([]);
@@ -189,6 +197,7 @@ const currentApplicationSummary = computed(() => applications.value.find((item) 
 const currentApplication = computed(() => selectedId.value ? applicationDetails.value[selectedId.value] ?? null : null);
 const selectedApplication = computed(() => currentApplication.value ?? applicationFromSummary(currentApplicationSummary.value) ?? emptyApplication());
 const currentRuntime = computed(() => selectedId.value ? runtimes.value[selectedId.value] : null);
+const currentOperation = computed(() => currentRuntime.value?.operation);
 const appStatus = computed(() => currentApplicationSummary.value ? applicationStatus(selectedApplication.value, currentRuntime.value) : 'unknown');
 const appDraft = reactive<ApplicationDraftUi>(draftFromApplication());
 const facilityDraft = reactive<FacilityDraftUi>(facilityDraftFromConfig());
@@ -785,7 +794,64 @@ async function loadApplicationDetail(applicationId: string) {
   }
 }
 
-async function loadRuntime(applicationId: string) {
+function clearRuntimePollTimer() {
+  if (runtimePollTimer) clearTimeout(runtimePollTimer);
+  runtimePollTimer = null;
+}
+
+function stopRuntimePolling() {
+  clearRuntimePollTimer();
+  runtimePollApplicationId = '';
+  runtimePollDeadline = 0;
+  runtimePollAttempts = 0;
+}
+
+function scheduleRuntimePoll(applicationId: string) {
+  clearRuntimePollTimer();
+  const runtime = runtimes.value[applicationId];
+  if (
+    mode.value !== 'apps'
+    || selectedId.value !== applicationId
+    || !shouldPollApplicationRuntime(runtime)
+    || runtimePollAttempts >= runtimePollMaxAttempts
+    || Date.now() >= runtimePollDeadline
+    || document.visibilityState !== 'visible'
+  ) return;
+
+  const delay = Math.min(applicationRuntimePollDelay(runtime), Math.max(0, runtimePollDeadline - Date.now()));
+  runtimePollTimer = setTimeout(async () => {
+    runtimePollTimer = null;
+    if (runtimePollInFlight || runtimeLoading.value || document.visibilityState !== 'visible') {
+      scheduleRuntimePoll(applicationId);
+      return;
+    }
+    runtimePollInFlight = true;
+    runtimePollAttempts += 1;
+    try {
+      await loadRuntime(applicationId, { poll: true });
+    } finally {
+      runtimePollInFlight = false;
+    }
+  }, delay);
+}
+
+function startRuntimePolling(applicationId: string) {
+  runtimePollApplicationId = applicationId;
+  runtimePollDeadline = Date.now() + runtimePollMaxDurationMs;
+  runtimePollAttempts = 0;
+  scheduleRuntimePoll(applicationId);
+}
+
+function handleVisibilityChange() {
+  if (document.visibilityState !== 'visible') {
+    clearRuntimePollTimer();
+    return;
+  }
+  if (runtimePollApplicationId && Date.now() < runtimePollDeadline) scheduleRuntimePoll(runtimePollApplicationId);
+}
+
+async function loadRuntime(applicationId: string, options: { poll?: boolean } = {}) {
+  if (!options.poll) stopRuntimePolling();
   runtimeController?.abort();
   const requestId = ++runtimeRequestId;
   const modeAtStart = mode.value;
@@ -807,9 +873,16 @@ async function loadRuntime(applicationId: string) {
     const runtime = await applicationsApi.runtime(applicationId, { signal: controller.signal });
     if (requestId !== runtimeRequestId || mode.value !== modeAtStart || applicationId !== selectedId.value) return;
     runtimes.value = { ...runtimes.value, [applicationId]: runtime };
+    if (shouldPollApplicationRuntime(runtime)) {
+      if (!options.poll || runtimePollApplicationId !== applicationId) startRuntimePolling(applicationId);
+      else scheduleRuntimePoll(applicationId);
+    } else {
+      stopRuntimePolling();
+    }
   } catch (err) {
     if (isAbortError(err)) return;
-    notifyError(err instanceof Error ? err.message : t('applicationsPage.runtimeUnavailable'), err);
+    if (!options.poll) notifyError(err instanceof Error ? err.message : t('applicationsPage.runtimeUnavailable'), err);
+    if (options.poll && runtimePollApplicationId === applicationId) scheduleRuntimePoll(applicationId);
   } finally {
     if (requestId === runtimeRequestId) {
       detailLoading.value = false;
@@ -818,13 +891,14 @@ async function loadRuntime(applicationId: string) {
   }
 }
 
-async function runOperation(name: string, action: () => Promise<unknown>, successKey: string, successKeyWithoutId = '') {
+async function runOperation(name: string, action: () => Promise<unknown>, successKey: string, successKeyWithoutId = '', noChangeKey = '') {
   pending.value = name;
   actionError.value = '';
   try {
     const result = await action();
     const params = taskParams(result);
-    notifySuccess(params ? t(successKey, params) : t(successKeyWithoutId || successKey), result);
+    const noChange = Boolean((result as { noChange?: boolean } | null)?.noChange);
+    notifySuccess(noChange && noChangeKey ? t(noChangeKey) : params ? t(successKey, params) : t(successKeyWithoutId || successKey), result);
     await load();
   } catch (err) {
     notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
@@ -1523,6 +1597,39 @@ function instanceStatusLabel(status: string) {
   return label === key ? status : label;
 }
 
+function operationStatusLabel(status: string) {
+  if (!status) return t('common.notAvailable');
+  const keys = [`applicationsPage.operationStatus.${status}`, `activity.state.${status}`, `tasksPage.status.${status}`];
+  for (const key of keys) {
+    const label = t(key);
+    if (label !== key) return label;
+  }
+  return status;
+}
+
+function operationStageLabel(stage: string) {
+  if (!stage) return t('common.notAvailable');
+  const key = `applicationOperationsPage.stage.${stage}`;
+  const label = t(key);
+  return label === key ? stage : label;
+}
+
+function openApplicationActivity(operationId = '') {
+  void router.push({
+    path: '/activity',
+    query: {
+      view: 'operations',
+      operationId: operationId || undefined,
+      resourceType: 'application',
+      resourceId: selectedApplication.value.id,
+    },
+  });
+}
+
+function openFacilityActivity() {
+  void router.push({ path: '/activity', query: { view: 'operations', resourceType: 'facility_app', resourceId: facilityKind.value } });
+}
+
 // 诊断详情（domain/path/assetName 等）只放在 details 里，页面必须展示出来，
 // 否则像“仍有路由引用了已删除的静态资产”这类错误无法定位到具体域名与路径。
 function diagnosticDetailText(item: Diagnostic): string {
@@ -1589,6 +1696,7 @@ function isAbortError(error: unknown) {
 }
 
 function cancelRuntimeLoad() {
+  stopRuntimePolling();
   runtimeController?.abort();
   runtimeRequestId += 1;
   detailLoading.value = false;
@@ -1608,6 +1716,7 @@ function cancelEditorQuery() {
 
 onMounted(async () => {
   window.addEventListener('beforeunload', handleBeforeUnload);
+  document.addEventListener('visibilitychange', handleVisibilityChange);
   await load();
   if (isAppEditor.value) await startApplicationEditor();
   if (isFacilityEditor.value) await startFacilityEditor();
@@ -1617,6 +1726,7 @@ onBeforeUnmount(() => {
   if (searchTimer) clearTimeout(searchTimer);
   if (dnsPollTimer) clearTimeout(dnsPollTimer);
   window.removeEventListener('beforeunload', handleBeforeUnload);
+  document.removeEventListener('visibilitychange', handleVisibilityChange);
   pageLoadController?.abort();
   cancelRuntimeLoad();
   cancelApplicationDetailLoad();
@@ -1711,7 +1821,7 @@ onBeforeUnmount(() => {
             </div>
             <div class="flex flex-wrap gap-2">
               <Button @click="router.push(`/applications/apps/${encodeURIComponent(selectedApplication.id)}/edit`)"><Wrench />{{ t('common.edit') }}</Button>
-              <Button :loading="pending === 'deploy'" @click="runOperation('deploy', () => applicationsApi.deploy(selectedApplication.id), 'applicationsPage.deployAccepted', 'applicationsPage.deployAcceptedWithoutId')"><Rocket />{{ t('applicationsPage.sync') }}</Button>
+              <Button :loading="pending === 'deploy'" @click="runOperation('deploy', () => applicationsApi.deploy(selectedApplication.id), 'applicationsPage.deployAccepted', 'applicationsPage.deployAcceptedWithoutId', 'applicationsPage.deployNoChange')"><Rocket />{{ t('applicationsPage.sync') }}</Button>
               <Button variant="danger" :disabled="!selectedApplication.enabled" @click="ask('stop', selectedApplication.id)"><Square />{{ t('applicationsPage.disable') }}</Button>
             </div>
           </header>
@@ -1725,13 +1835,34 @@ onBeforeUnmount(() => {
                       <div class="rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.running') }}</span><strong>{{ runtimeSummary(currentRuntime).running }}</strong></div>
                       <div class="rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.failed') }}</span><strong>{{ runtimeSummary(currentRuntime).failed }}</strong></div>
                     </div>
+                    <div v-if="currentOperation" class="grid gap-3 rounded-2xl border border-border bg-muted p-4">
+                      <div class="flex flex-wrap items-center justify-between gap-2">
+                        <h3 class="m-0">{{ t('applicationsPage.currentDeployment') }}</h3>
+                        <Button v-if="currentOperation.operationId" size="sm" variant="ghost" @click="openApplicationActivity(currentOperation.operationId)"><ClipboardList />{{ t('applicationsPage.viewOperation') }}</Button>
+                      </div>
+                      <div class="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
+                        <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationPhase') }}</span><StatusBadge :status="currentOperation.status" domain="operation" :label="operationStatusLabel(currentOperation.status)" /></div>
+                        <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationStage') }}</span><strong>{{ operationStageLabel(currentOperation.stage || '') }}</strong></div>
+                        <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationAttempt') }}</span><strong>{{ currentOperation.attempt ?? t('common.notAvailable') }}</strong></div>
+                        <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationNextRetry') }}</span><strong>{{ currentOperation.nextRunAt ? formatDateTime(currentOperation.nextRunAt) : t('common.notAvailable') }}</strong></div>
+                      </div>
+                      <div v-if="currentOperation.error || currentOperation.errorCode || currentOperation.errorDetail" role="alert" class="grid gap-1 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
+                        <strong>{{ t('applicationsPage.operationError') }}<span v-if="currentOperation.errorCode"> · {{ currentOperation.errorCode }}</span></strong>
+                        <span v-if="currentOperation.error">{{ currentOperation.error }}</span>
+                        <span v-if="currentOperation.errorDetail && currentOperation.errorDetail !== currentOperation.error">{{ currentOperation.errorDetail }}</span>
+                      </div>
+                    </div>
+                    <div v-else-if="selectedApplication.lastError" role="alert" class="rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">
+                      <strong>{{ t('applicationsPage.operationError') }}</strong>
+                      <p class="m-0 mt-1 whitespace-pre-wrap break-words">{{ selectedApplication.lastError }}</p>
+                    </div>
                     <div class="rounded-2xl border border-border bg-muted p-4">
                       <h3>{{ t('applicationsPage.nodeInstances') }}</h3>
-                      <div v-if="!runtimeLoading && currentRuntime?.instances?.length" class="mt-3 grid gap-2">
+                      <div v-if="currentRuntime?.instances?.length" class="mt-3 grid gap-2">
                         <div v-for="instance in currentRuntime.instances" :key="instance.instanceId || instance.id" class="grid gap-1 rounded-xl border border-border p-3 text-sm">
                           <div class="flex items-center justify-between gap-2"><strong>{{ instance.serverName || instance.serverId || instance.instanceId }}</strong><StatusBadge :status="instance.status || instance.state || 'unknown'" :tone="statusTone(instance.status || instance.state || 'unknown')" :label="instanceStatusLabel(instance.status || instance.state || '')" /></div>
                           <span class="text-muted-foreground">{{ instance.containerName || instance.containerId || t('common.notAvailable') }}</span>
-                          <span v-if="instance.error" class="text-danger">{{ instance.error }}</span>
+                          <span v-if="instance.lastError" class="text-danger">{{ instance.lastError }}</span>
                         </div>
                       </div>
                       <div v-else-if="runtimeLoading" class="mt-3 grid gap-2" aria-hidden="true">
@@ -1772,7 +1903,7 @@ onBeforeUnmount(() => {
                   <h3>{{ t('applicationsPage.operations') }}</h3>
                   <div class="mt-3 grid gap-2">
                     <Button :disabled="!selectedApplication.imageUpdateAvailable" :loading="pending === 'image-update'" @click="runOperation('image-update', () => applicationsApi.updateImage(selectedApplication.id), 'applicationsPage.imageUpdateAccepted', 'applicationsPage.imageUpdateAcceptedWithoutId')"><UploadCloud />{{ t('applicationsPage.updateImage') }}</Button>
-                    <Button @click="router.push({ path: '/activity', query: { resourceType: 'application', resourceId: selectedApplication.id } })"><ClipboardList />{{ t('activity.relatedLogs') }}</Button>
+                    <Button @click="openApplicationActivity()"><ClipboardList />{{ t('activity.relatedLogs') }}</Button>
                     <Button :loading="logsLoading" @click="showLogs(selectedApplication)"><History />{{ t('applicationsPage.logs') }}</Button>
                     <Button variant="danger" @click="ask('delete', selectedApplication.id)"><Trash2 />{{ t('common.delete') }}</Button>
                   </div>
@@ -1852,7 +1983,7 @@ onBeforeUnmount(() => {
     <template #actions>
       <template v-if="!facilityEditingView">
         <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
-        <ActivityLink v-if="currentFacilitySummary" resource-type="facility_app" :resource-id="facilityKind" /><Button v-if="currentFacilitySummary && isReverseProxyFacility" size="sm" @click="runOperation(`facility-reconcile-${facilityKind}`, () => reverseProxyFacilityApi.reconcile(), 'applicationsPage.gatewayReconcileAccepted', 'applicationsPage.gatewayReconcileAcceptedWithoutId')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
+        <Button v-if="currentFacilitySummary" size="sm" variant="ghost" @click="openFacilityActivity"><ClipboardList />{{ t('activity.relatedLogs') }}</Button><Button v-if="currentFacilitySummary && isReverseProxyFacility" size="sm" @click="runOperation(`facility-reconcile-${facilityKind}`, () => reverseProxyFacilityApi.reconcile(), 'applicationsPage.gatewayReconcileAccepted', 'applicationsPage.gatewayReconcileAcceptedWithoutId')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
         <Button v-if="currentFacilitySummary && isReverseProxyFacility" size="sm" variant="primary" @click="startInPlaceFacilityEdit"><Wrench />{{ t('common.edit') }}</Button>
       </template>
     </template>

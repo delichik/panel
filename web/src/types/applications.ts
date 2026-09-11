@@ -221,7 +221,7 @@ export interface ApplicationRuntimeInstance {
   desiredGeneration?: number;
   observedGeneration?: number;
   updatedAt?: string;
-  error?: string;
+  lastError?: string;
 }
 
 export interface LifecycleTarget {
@@ -239,13 +239,20 @@ export interface LifecycleTarget {
 
 export interface LifecycleOperation {
   id: string;
+  operationId?: string;
   applicationId: string;
   type: string;
   status: string;
   taskId?: string;
   generation: number;
   trigger?: string;
+  stage?: string;
+  errorCode?: string;
+  errorClass?: string;
   error?: string;
+  errorDetail?: string;
+  attempt?: number;
+  nextRunAt?: string;
   targets?: LifecycleTarget[];
   createdAt: string;
   updatedAt: string;
@@ -264,6 +271,7 @@ export interface OperationResult extends ActivityReceipt {
   taskId?: string;
   evalId?: string;
   deploymentId?: string;
+  noChange?: boolean;
   application: ApplicationDto;
   runtime?: ApplicationRuntime;
 }

@@ -237,10 +237,10 @@
 
 - **前置**：应用可部署，可能处于 disabled 或 `reconcile_stopped`。
 - **动作**：`POST /applications/{id}/deploy` 或显式同步。
-- **结果**：必要时以 version CAS 启用，清除人工停止协调状态，保存 desired/revision/Job 并返回 operation 结果；已经满足且非 force 的目标不重复规划。
-- **失败**：并发配置变化时不得整行覆盖；planner 失败原样报告，不合成 target task/log anchor。
-- **不变量**：force 仅绕过满足态和应用级退避，不绕过 app/server active Job 唯一性。
-- **验证**：enable CAS、skip satisfied、force planning tests。
+- **结果**：必要时以 version CAS 启用，清除人工停止协调状态，并以 `Manual=true` 直接请求 Planner；实际规划时保存 desired/revision/Job，返回 Job `deploymentId` 且响应附本次 `operationId`，全部目标已满足时返回 `noChange=true`。
+- **失败**：人工 deploy 不得被自动协调 `reconcile_next_run_at` 静默跳过；并发配置变化时不得整行覆盖；planner 失败原样报告，不合成 target task/log anchor。
+- **不变量**：人工操作绕过应用级退避但仍执行满足态过滤；force 才同时绕过满足态，不绕过 app/server active Job 唯一性。
+- **验证**：enable CAS、manual bypass backoff、explicit no-change、skip satisfied、force planning tests。
 
 ### APP-LIFE-004 停止
 
@@ -291,10 +291,10 @@
 
 - **前置**：Instance 具有 desired/observed，可能存在 active Job。
 - **动作**：GET runtime，必要时主动查询 Agent status。
-- **结果**：默认以 AppDB observed 快照派生 status/stage；主动结果也经 ObservationWriter CAS 写回；返回 serverId/serverName、generation、容器身份、错误和 observedAt。
-- **失败**：Docker not found 映射 `missing` 而非 stopped；Agent 不兼容/不可达不回退 SSH。
+- **结果**：默认以 AppDB observed 快照派生 status/stage；主动结果也经 ObservationWriter CAS 写回；返回 serverId/serverName、generation、容器身份、`lastError` 和 observedAt。存在 active Job 时返回其真实 pending/running/failed_retryable 状态；没有 active Job 且最新 Job 为 failed 时继续返回 operationId、stage、attempt、nextRunAt 和结构化错误。
+- **失败**：Docker not found 映射 `missing` 而非 stopped；Agent 不兼容/不可达不回退 SSH；终态部署错误不得因 active 查询为空而从 runtime 响应消失。
 - **不变量**：handler/业务服务不得直接覆盖 observed；无容器的 pending/failed Job 不提供日志入口。
-- **验证**：runtime cache/refresh/missing tests。
+- **验证**：runtime cache/refresh/missing、retryable schedule、terminal failure projection tests。
 
 ### APP-RUN-002 实例日志
 
@@ -551,10 +551,10 @@
 
 - **前置**：列表/详情/runtime/设施 API 可独立慢或失败。
 - **动作**：进入页面、切换选择、执行操作。
-- **结果**：当前页列表摘要先加载；选中详情/runtime 按需异步；骨架不以 0/jobId 冒充数据；行级 mutation 错误留在对应行/弹窗；设施直达 URL 先加载目录再判断 kind。
-- **失败**：旧请求响应不得覆盖新选择；普通应用入口不得预拉设施或多应用 runtime。
+- **结果**：当前页列表摘要先加载；选中详情/runtime 按需异步；骨架不以 0/jobId 冒充数据；当前部署就地显示真实状态、步骤、尝试次数、下次重试和结构化错误，并可按 operationId 深链；设施直达 URL 先加载目录再判断 kind。
+- **失败**：旧请求响应不得覆盖新选择；普通应用入口不得预拉设施或多应用 runtime；实例错误不得读取不存在的 `error` 字段而丢失后端 `lastError`。
 - **不变量**：危险删除/批量操作必须标准确认；部署请求完成与运行收敛状态分开展示。
-- **验证**：API call-count、race/stale-response、UI component tests。
+- **验证**：API call-count、race/stale-response、status/error contract、bounded polling model tests。
 
 ## 10. 覆盖来源与已知缺口
 

@@ -345,6 +345,7 @@ type Runtime struct {
 
 type LifecycleOperation struct {
 	ID            string            `json:"id"`
+	OperationID   string            `json:"operationId,omitempty"`
 	ApplicationID string            `json:"applicationId"`
 	Type          string            `json:"type"`
 	Status        string            `json:"status"`
@@ -352,7 +353,13 @@ type LifecycleOperation struct {
 	Generation    int               `json:"generation"`
 	SpecHash      string            `json:"specHash,omitempty"`
 	Trigger       string            `json:"trigger,omitempty"`
+	Stage         string            `json:"stage,omitempty"`
+	Attempt       int               `json:"attempt,omitempty"`
+	NextRunAt     *time.Time        `json:"nextRunAt,omitempty"`
 	Error         string            `json:"error,omitempty"`
+	ErrorCode     string            `json:"errorCode,omitempty"`
+	ErrorClass    string            `json:"errorClass,omitempty"`
+	ErrorDetail   string            `json:"errorDetail,omitempty"`
 	Targets       []LifecycleTarget `json:"targets,omitempty"`
 	CreatedAt     time.Time         `json:"createdAt"`
 	StartedAt     *time.Time        `json:"startedAt,omitempty"`
@@ -413,6 +420,7 @@ type OperationResult struct {
 	TaskID             string      `json:"taskId,omitempty"`
 	EvalID             string      `json:"evalId,omitempty"`
 	DeploymentID       string      `json:"deploymentId,omitempty"`
+	NoChange           bool        `json:"noChange,omitempty"`
 	Application        Application `json:"application"`
 	ApplicationRuntime *Runtime    `json:"runtime,omitempty"`
 }
