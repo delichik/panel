@@ -3,10 +3,87 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Linux Server Panel</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>Seamark</title>
+    <script>
+      // Resolve the saved theme before first paint so the boot overlay never
+      // flashes white when dark mode is enabled.
+      (function () {
+        try {
+          var mode = localStorage.getItem('panel.theme.mode');
+          var scheme = localStorage.getItem('panel.theme.scheme');
+          if (scheme === 'ocean' || scheme === 'lighthouse') {
+            document.documentElement.dataset.scheme = scheme;
+          }
+          var media = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+          var dark = mode === 'dark' || (mode !== 'light' && !!media && media.matches);
+          document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+          document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+          // Reflect the saved UI language on <html lang> before first paint so
+          // browsers never treat the page as English after a Chinese switch.
+          var locale = localStorage.getItem('panel.locale');
+          if (locale === 'zh-CN' || locale === 'en') {
+            document.documentElement.lang = locale;
+          }
+        } catch (error) {
+          // Ignore storage access errors; the CSS fallback below still applies.
+        }
+      })();
+    </script>
+    <style>
+      :root {
+        --boot-bg: #f6f4ef;
+        --boot-track: #e0d9ca;
+        --boot-accent: #0e6b52;
+      }
+      :root[data-scheme='ocean'] {
+        --boot-bg: #eff5fa;
+        --boot-track: #c9deef;
+        --boot-accent: #1b4a78;
+      }
+      :root[data-theme='dark'] {
+        --boot-bg: #0e151c;
+        --boot-track: rgba(154, 196, 228, 0.2);
+        --boot-accent: #46e89c;
+      }
+      :root[data-theme='dark'][data-scheme='ocean'] {
+        --boot-bg: #0a1626;
+        --boot-track: rgba(120, 175, 220, 0.22);
+        --boot-accent: #38c6d9;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme]) {
+          --boot-bg: #0e151c;
+          --boot-track: rgba(154, 196, 228, 0.2);
+          --boot-accent: #46e89c;
+        }
+      }
+      .boot-screen {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        background: var(--boot-bg, #ffffff);
+      }
+      .boot-spinner {
+        width: 32px;
+        height: 32px;
+        border: 3px solid var(--boot-track, #d7d7d7);
+        border-top-color: var(--boot-accent, rgba(0, 0, 0, 0.92));
+        border-radius: 9999px;
+        animation: boot-spin 0.8s linear infinite;
+      }
+      @keyframes boot-spin {
+        to { transform: rotate(360deg); }
+      }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <div class="boot-screen" role="status" aria-label="Loading">
+        <span class="boot-spinner"></span>
+      </div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

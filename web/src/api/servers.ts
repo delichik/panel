@@ -1,100 +1,82 @@
-import { apiClient } from './client';
-import type { CredentialDto, ServerDto, UfwAllowInput, UfwStateDto } from '@/types/api';
+import { apiClient, type ApiRequestOptions } from './client';
+import type { OperationAccepted, ServerDto, ServerProbeResult, ServerSaveInput } from '@/types/servers';
+import type { ListPage } from '@/types/pagination';
 
-export interface ServerInput {
-  name: string;
-  host: string;
-  port: number;
-  sshUsername: string;
-  credentialId: string;
-  traits: Record<string, string>;
-  notes: string;
+export interface MetricsPoint {
+  time: string;
 }
 
-export interface CredentialInput {
-  name: string;
-  type: 'password' | 'private_key';
-  username: string;
-  password?: string;
-  privateKey?: string;
-  passphrase?: string;
+export interface CpuMetricPoint extends MetricsPoint {
+  usagePercent: number;
 }
 
-export interface TaskCreatedDto {
-  taskId: string;
+export interface MemoryMetricPoint extends MetricsPoint {
+  usedBytes: number;
+  totalBytes: number;
 }
 
-export interface ServerProbeDto {
-  reachable: boolean;
-  passwordlessSudo: boolean;
-  root: boolean;
-  privileged: boolean;
-  os: {
-    id: string;
-    versionId: string;
-    prettyName: string;
-    supported: boolean;
-  };
-  traits: Record<string, string>;
-  error?: string;
-  passwordlessSudoText?: string;
+export interface NetworkMetricPoint extends MetricsPoint {
+  rxBytesPerSecond: number;
+  txBytesPerSecond: number;
 }
 
-function normalizeList<T>(items: T[] | null | undefined) {
-  return Array.isArray(items) ? items : [];
+export interface LoadMetricPoint extends MetricsPoint {
+  load1: number;
+  load5: number;
+  load15: number;
 }
 
-export function createServersApi(client = apiClient) {
-  return {
-    async listServers() {
-      return normalizeList(await client.get<ServerDto[] | null>('/servers'));
-    },
-    createServer(input: ServerInput) {
-      return client.post<ServerDto>('/servers', input);
-    },
-    probeServer(input: ServerInput) {
-      return client.post<ServerProbeDto>('/servers/probe', input);
-    },
-    updateServer(serverId: string, input: ServerInput) {
-      return client.put<ServerDto>(`/servers/${serverId}`, input);
-    },
-    deleteServer(serverId: string) {
-      return client.delete(`/servers/${serverId}`);
-    },
-    testConnection(serverId: string) {
-      return client.post<TaskCreatedDto>(`/servers/${serverId}/test`);
-    },
-    restartServer(serverId: string) {
-      return client.post<TaskCreatedDto>(`/servers/${serverId}/restart`);
-    },
-    installUFW(serverId: string) {
-      return client.post<TaskCreatedDto>(`/servers/${serverId}/ufw/install`);
-    },
-    ufwState(serverId: string) {
-      return client.get<UfwStateDto>(`/servers/${serverId}/ufw`);
-    },
-    allowUFW(serverId: string, input: UfwAllowInput) {
-      return client.post<UfwStateDto>(`/servers/${serverId}/ufw/rules`, input);
-    },
-    enableUFW(serverId: string) {
-      return client.post<TaskCreatedDto>(`/servers/${serverId}/ufw/enable`);
-    },
-    deleteUFWRule(serverId: string, number: number) {
-      return client.delete<UfwStateDto>(`/servers/${serverId}/ufw/rules/${number}`);
-    },
-    async listCredentials() {
-      return normalizeList(await client.get<CredentialDto[] | null>('/credentials'));
-    },
-    createCredential(input: CredentialInput) {
-      return client.post<CredentialDto>('/credentials', input);
-    },
-    updateCredential(credentialId: string, input: CredentialInput) {
-      return client.put<CredentialDto>(`/credentials/${credentialId}`, input);
-    },
-    deleteCredential(credentialId: string) {
-      return client.delete(`/credentials/${credentialId}`);
-    },
-  };
+export interface ServerMetricsSeries {
+  range: string;
+  cpu: CpuMetricPoint[];
+  memory: MemoryMetricPoint[];
+  disk: MemoryMetricPoint[];
+  network: NetworkMetricPoint[];
+  load: LoadMetricPoint[];
 }
 
-export const serversApi = createServersApi();
+export type ServerMetricsRange = '1h' | '6h' | '1d' | '7d';
+
+export const serversApi = {
+  list(options?: ApiRequestOptions) {
+    return apiClient.get<ListPage<ServerDto>>('/servers?pageSize=200', options).then((result) => result.items);
+  },
+  listPage(params: { page?: number; pageSize?: number; q?: string } = {}, options?: ApiRequestOptions) {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([name, value]) => { if (value !== undefined && value !== '') query.set(name, String(value)); });
+    return apiClient.get<ListPage<ServerDto>>(`/servers${query.size ? `?${query}` : ''}`, options);
+  },
+  get(id: string, options?: ApiRequestOptions) {
+    return apiClient.get<ServerDto>(`/servers/${encodeURIComponent(id)}`, options);
+  },
+  create(input: ServerSaveInput) {
+    return apiClient.post<ServerDto>('/servers', input);
+  },
+  update(id: string, input: ServerSaveInput) {
+    return apiClient.put<ServerDto>(`/servers/${encodeURIComponent(id)}`, input);
+  },
+  delete(id: string) {
+    return apiClient.delete<void>(`/servers/${encodeURIComponent(id)}`);
+  },
+  probe(input: ServerSaveInput) {
+    return apiClient.post<ServerProbeResult>('/servers/probe', input);
+  },
+  test(id: string) {
+    return apiClient.post<ServerDto>(`/servers/${encodeURIComponent(id)}/test`);
+  },
+  trustHostKey(id: string) {
+    return apiClient.post<ServerDto>(`/servers/${encodeURIComponent(id)}/trust-host-key`);
+  },
+  restart(id: string) {
+    return apiClient.post<OperationAccepted>(`/servers/${encodeURIComponent(id)}/restart`);
+  },
+  deployAgent(id: string) {
+    return apiClient.post<OperationAccepted>(`/servers/${encodeURIComponent(id)}/agent/deploy`);
+  },
+  metrics(id: string, range: ServerMetricsRange = '1h', options?: ApiRequestOptions) {
+    return apiClient.get<ServerMetricsSeries>(`/servers/${encodeURIComponent(id)}/metrics?range=${encodeURIComponent(range)}`, options);
+  },
+  installUfw(id: string) {
+    return apiClient.post<OperationAccepted>(`/servers/${encodeURIComponent(id)}/ufw/install`);
+  },
+};

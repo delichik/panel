@@ -2,11 +2,9 @@
   "listenAddress": "127.0.0.1:8080",
   "dataRoot": "data",
   "appDatabase": "data/db/app.db",
+  "logDatabase": "data/db/log.db",
+  "coordinationDatabase": "data/db/coordination.db",
   "metricsDatabase": "data/db/metrics.db",
-  "nomad": {
-    "address": "http://127.0.0.1:4646",
-    "token": ""
-  },
   "certificates": {
     "acmeDirectoryUrl": "https://acme-v02.api.letsencrypt.org/directory"
   }
