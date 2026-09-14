@@ -91,3 +91,42 @@ func TestEquivalentIntentReceivesSharedExecutionResult(t *testing.T) {
 		t.Fatalf("shared intent must reach a durable result, got %d", n)
 	}
 }
+
+func TestAutomaticEquivalentPlanPreservesRetryBackoffAndDoesNotAppendIntent(t *testing.T) {
+	db := newOrchestratorTestDB(t)
+	if _, err := db.Exec(`INSERT INTO applications(id,name) VALUES('app','service')`); err != nil {
+		t.Fatal(err)
+	}
+	planner := NewPlanner(NewStore(db))
+	in := PlanInput{ApplicationID: "app", ServerID: "server", InstanceID: "app-server", IntentID: "first", Action: ActionApply, DesiredState: DesiredRunning, DesiredGeneration: 1, DesiredSpecHash: "hash", TriggerType: "agent_report"}
+	first, err := planner.Plan(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextRun := "2026-09-14T03:00:00Z"
+	if _, err := db.Exec(`UPDATE jobs SET state='failed_retryable',attempts=9,next_run_at=?,error_code='start_failed' WHERE id=?`, nextRun, first.Job.ID); err != nil {
+		t.Fatal(err)
+	}
+	in.IntentID = "duplicate"
+	merged, err := planner.Plan(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !merged.Merged || merged.Job.ID != first.Job.ID {
+		t.Fatalf("equivalent reconcile did not reuse job: %#v", merged)
+	}
+	var attempts, duplicateEvents int
+	var state, gotNextRun, errorCode string
+	if err := db.QueryRow(`SELECT state,attempts,next_run_at,error_code FROM jobs WHERE id=?`, first.Job.ID).Scan(&state, &attempts, &gotNextRun, &errorCode); err != nil {
+		t.Fatal(err)
+	}
+	if state != JobFailedRetryable || attempts != 9 || gotNextRun != nextRun || errorCode != "start_failed" {
+		t.Fatalf("equivalent reconcile reset retry state: state=%s attempts=%d next=%s error=%s", state, attempts, gotNextRun, errorCode)
+	}
+	if err := db.QueryRow(`SELECT count(*) FROM activity_events WHERE operation_id='duplicate'`).Scan(&duplicateEvents); err != nil {
+		t.Fatal(err)
+	}
+	if duplicateEvents != 0 {
+		t.Fatalf("equivalent automatic reconcile appended %d duplicate events", duplicateEvents)
+	}
+}

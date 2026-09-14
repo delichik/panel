@@ -178,9 +178,6 @@ func (p *Planner) planTx(ctx context.Context, tx *sql.Tx, in PlanInput) (PlanRes
 		in.DesiredSpecJSON = json.RawMessage(`{}`)
 	}
 	in.Reason = activitylog.Redact(in.Reason)
-	if err := appendPlanRequest(ctx, tx, in); err != nil {
-		return PlanResult{}, err
-	}
 	now := p.store.now().UTC().Format(time.RFC3339Nano)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO application_instances(id,application_id,server_id,container_name,container_id,desired_state,desired_generation,desired_spec_hash,desired_revision_id,desired_spec_json,status,runtime_spec_json,last_deployed_generation,last_error,created_at,updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?, 'pending','{}',0,'',?,?)
@@ -194,6 +191,17 @@ func (p *Planner) planTx(ctx context.Context, tx *sql.Tx, in PlanInput) (PlanRes
 	}
 	active, found, err := scanActiveJob(ctx, tx, in.ApplicationID, in.ServerID)
 	if err != nil {
+		return PlanResult{}, err
+	}
+	// Periodic/report reconciliation may observe the same drift many times
+	// while its single durable Job is pending, running, or backing off. Reuse
+	// that work silently: creating a fresh intent and rewriting a retryable Job
+	// here defeats its backoff/max-attempt boundary and floods the immutable
+	// activity stream with linked/superseded relations.
+	if found && automaticReconcileTrigger(in.TriggerType) && samePlannedWork(active, in) {
+		return PlanResult{Job: active, Merged: true}, nil
+	}
+	if err := appendPlanRequest(ctx, tx, in); err != nil {
 		return PlanResult{}, err
 	}
 	if found {
@@ -245,6 +253,25 @@ func (p *Planner) planTx(ctx context.Context, tx *sql.Tx, in PlanInput) (PlanRes
 	}
 	traceJobEvent("job_created", job, zap.String("reason", "no_active_job"))
 	return PlanResult{Job: job, Created: true}, nil
+}
+
+func automaticReconcileTrigger(trigger string) bool {
+	switch strings.TrimSpace(trigger) {
+	case "scheduler", "agent_report":
+		return true
+	default:
+		return false
+	}
+}
+
+func samePlannedWork(job Job, in PlanInput) bool {
+	return job.InstanceID == in.InstanceID &&
+		job.Action == in.Action &&
+		job.DesiredGeneration == in.DesiredGeneration &&
+		job.DesiredSpecHash == in.DesiredSpecHash &&
+		job.DesiredRevisionID == in.DesiredRevisionID &&
+		job.RemoveData == in.RemoveData &&
+		job.ForceNonce == in.ForceNonce
 }
 
 func validatePlanInput(in PlanInput) error {

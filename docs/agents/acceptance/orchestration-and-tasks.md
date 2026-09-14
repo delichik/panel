@@ -88,10 +88,10 @@
 
 - **前置**：冲突域已有 pending 或 failed_retryable Job，desired 发生变化。
 - **动作**：Plan 新意图。
-- **结果**：复用同 Job 并用最新 desired/action/revision/spec/removeData/priority/intent/trigger/reason 更新，清 nextRun/error/finished。
+- **结果**：desired 或显式操作发生变化时复用同 Job 并用最新 desired/action/revision/spec/removeData/priority/intent/trigger/reason 更新，清 nextRun/error/finished；scheduler/agent_report 对完全相同工作的重复规划只返回既有 Job，不改 attempts、nextRun、错误或 intent，也不追加重复活动事件。
 - **失败**：不得增加第二条 active Job或保留旧 backoff 阻挡新 desired。
 - **不变量**：Instance desired 与合并 Job 的 desired snapshot 在同事务一致。
-- **验证**：planner merge/update desired test。
+- **验证**：planner merge/update desired、automatic equivalent plan preserves backoff/no duplicate intent tests。
 
 ### ORCH-PLAN-004 running Job 合并与 force nonce
 
