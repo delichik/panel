@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, useId, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { Languages, LoaderCircle, Menu, Moon, Palette, PanelLeftClose, PanelLeftOpen, Sun, UserCircle, X } from '@lucide/vue';
 import { useOverlayBehavior } from '@/composables/useOverlayBehavior';
@@ -8,8 +8,10 @@ import Dropdown from '@/components/ui/Dropdown.vue';
 import DropdownItem from '@/components/ui/DropdownItem.vue';
 import IconButton from '@/components/ui/IconButton.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
+import { useErrorToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import { useThemeMode, type ThemeMode, type ThemeScheme } from '@/design/theme';
+import { settingsApi } from '@/api/settings';
 import { useSessionStore } from '@/stores/session';
 import { routeNavigation } from '@/router/navigationState';
 import { activeNavKey, navGroups } from './navModel';
@@ -18,6 +20,7 @@ const route = useRoute();
 const router = useRouter();
 const session = useSessionStore();
 const { t, locale, setLocale } = useI18n();
+const notifyError = useErrorToast();
 const { mode, resolved, setMode, scheme, setScheme } = useThemeMode();
 const collapsed = ref(localStorage.getItem('panel.nav.collapsed') === 'true');
 const drawerId = useId();
@@ -38,6 +41,8 @@ function closeDrawerOnDesktop(event: MediaQueryListEvent) {
 lgQuery?.addEventListener('change', closeDrawerOnDesktop);
 onBeforeUnmount(() => lgQuery?.removeEventListener('change', closeDrawerOnDesktop));
 const signingOut = ref(false);
+const languageSaving = ref(false);
+let languageRequestId = 0;
 const activeKey = computed(() => activeNavKey(route.path));
 const pendingNavKey = computed(() => routeNavigation.pending.value ? activeNavKey(routeNavigation.targetPath.value.split('?')[0] || '') : undefined);
 const displayedActiveKey = computed(() => pendingNavKey.value || activeKey.value);
@@ -55,6 +60,41 @@ watch(() => route.fullPath, () => {
 watch(() => routeNavigation.pending.value, (pending) => {
   if (pending) drawerOpen.value = false;
 });
+
+function supportedLocale(value: string) {
+  return value === 'zh-CN' ? 'zh-CN' : 'en';
+}
+
+onMounted(async () => {
+  const requestId = languageRequestId;
+  try {
+    const settings = await settingsApi.runtime();
+    if (requestId === languageRequestId) setLocale(supportedLocale(settings.language));
+  } catch {
+    // Keep the locally stored locale when runtime settings are temporarily
+    // unavailable; the next explicit switch retries persistence.
+  }
+});
+
+async function toggleLanguage() {
+  if (languageSaving.value) return;
+  const requestId = ++languageRequestId;
+  const previous = locale.value;
+  const next = previous === 'zh-CN' ? 'en' : 'zh-CN';
+  languageSaving.value = true;
+  setLocale(next);
+  try {
+    const settings = await settingsApi.updateLanguage(next);
+    if (requestId === languageRequestId) setLocale(supportedLocale(settings.language));
+  } catch (error) {
+    if (requestId === languageRequestId) {
+      setLocale(previous);
+      notifyError(t('layout.language.saveFailed'), error);
+    }
+  } finally {
+    if (requestId === languageRequestId) languageSaving.value = false;
+  }
+}
 
 const themeItems: Array<{ key: ThemeMode; labelKey: string }> = [
   { key: 'system', labelKey: 'layout.theme.system' },
@@ -154,8 +194,9 @@ async function signOut() {
               {{ t(item.labelKey) }}
             </DropdownItem>
           </Dropdown>
-          <IconButton :label="t('layout.language')" @click="setLocale(locale === 'zh-CN' ? 'en' : 'zh-CN')">
-            <Languages />
+          <IconButton :label="t(languageSaving ? 'layout.language.saving' : 'layout.language')" :disabled="languageSaving" :aria-busy="languageSaving ? 'true' : undefined" @click="toggleLanguage">
+            <LoaderCircle v-if="languageSaving" class="animate-spin motion-reduce:animate-none" aria-hidden="true" />
+            <Languages v-else />
           </IconButton>
           <Dropdown>
             <template #trigger>

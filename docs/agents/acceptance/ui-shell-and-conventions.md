@@ -43,7 +43,7 @@
 | --- | --- | --- | --- | --- |
 | UI-SHELL-020 | 首帧、主题切换或系统配色变化 | 支持 `system/light/dark`，存 `panel.theme.mode`；解析后写 `html[data-theme]` 和 `color-scheme`；system 实时跟随媒体查询 | 非法存储值回退 system；启动遮罩必须在 Vue 前使用同一偏好，避免深色白闪 | 刷新保持选择；系统主题变化只在 system 模式生效 |
 | UI-SHELL-021 | 配色方案切换 | 支持 `lighthouse/ocean`，存 `panel.theme.scheme` 并写 `html[data-scheme]` | 非法值回退 lighthouse；状态色不得被方案色替代 | 两种方案在明/暗主题均可用，刷新不丢失 |
-| UI-SHELL-022 | 用户点击顶栏语言按钮或保存运行时语言 | 仅在 `en` 与 `zh-CN` 间切换，存 `panel.locale`，立即更新全部翻译和 `<html lang>` | 非法 locale 回退 `en`；业务代码不得自行写 html.lang | 切换无需刷新；刷新前的内联脚本即应用正确 lang |
+| UI-SHELL-022 | 用户点击顶栏语言按钮或保存运行时语言 | 仅在 `en` 与 `zh-CN` 间切换，立即更新 `panel.locale`、全部翻译和 `<html lang>`；顶栏切换必须同步保存 `/settings/runtime` 中的语言，等待期间显示保存状态并防重复提交 | 持久化失败必须回滚界面语言、本地偏好与 `<html lang>` 并显示 danger toast；非法 locale 回退 `en`；业务代码不得自行写 html.lang | 进入控制台后以已持久化的 runtime language 校准本地状态；切换无需刷新，重新读取设置及进程重启后保持新语言 |
 | UI-SHELL-023 | 新增或修改用户可见文案 | 通过稳定 i18n key 渲染，en/zh-CN key 集合完全一致、值非空、英文表无中文残留 | 后端/远端自由技术文本可原样展示；路由 meta 仅存 key | `web/src/i18n/i18n.test.ts` 通过，界面不出现缺失 key 字面量 |
 | UI-SHELL-024 | 展示任务/系统事件摘要或运行事件类型 | 英文存储摘要在 zh-CN 下经统一翻译辅助函数映射；未命中内容保持原文，不臆造翻译 | 技术标识、镜像名、容器名和自由错误不得被错误替换 | 已知摘要显示中文，未知摘要无损回退；英文界面保持后端原文 |
 | UI-SHELL-025 | 展示时间 | 所有页面调用统一格式化，按浏览器本地时区输出 `yyyy-MM-dd HH:mm:ss` | 空值使用调用方给定 fallback；无法解析值原样返回 | 不同页面同一时间戳格式一致，相关单测通过 |

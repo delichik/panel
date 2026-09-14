@@ -25,7 +25,7 @@ import type { RestorePreflightResponse, RuntimeSettings, RuntimeUpdate, ServerVa
 import { createLatestRequestGuard } from '@/views/_shared/requestState';
 import { formatDateTime } from '@/utils/datetime';
 
-const { t, setLocale } = useI18n();
+const { t, locale, setLocale } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const session = useSessionStore();
@@ -107,6 +107,10 @@ const runtimeSectionValid = computed(() => !fieldErrors.value.metricsRetentionDa
 
 watch(() => route.path, (path) => {
   activeSection.value = sectionFromPath(path);
+});
+watch(locale, (value) => {
+  form.language = value;
+  if (runtime.value) runtime.value = { ...runtime.value, language: value };
 });
 
 async function load() {

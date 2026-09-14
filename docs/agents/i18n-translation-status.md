@@ -4,6 +4,8 @@
 
 ## 当前状态
 
+- 本轮新增顶栏语言持久化等待与回滚词条 `layout.language.saving` / `layout.language.saveFailed`，en / zh-CN 已同步。
+
 - 本轮新增慢网路由切换反馈词条 `layout.navigation.loading`，en / zh-CN 已同步；目标页标题继续复用现有 `routes.*.title` 词条。
 
 - 本轮应用端口映射新增 TCP/UDP 协议、Panel 防火墙管理开关、固定端口约束和规则状态摘要词条，en / zh-CN 已同步；后端补充端口协议、UFW 未安装、SSH/Agent 管理端口保护、双通道连通性门禁和受管规则冲突等稳定错误翻译。

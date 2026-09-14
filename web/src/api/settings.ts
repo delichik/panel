@@ -5,6 +5,19 @@ async function multipart<T>(path: string, form: FormData): Promise<T> {
   return fetchJson<T>(`/api/v1${path}`, { method: 'POST', body: form });
 }
 
+export function runtimeLanguageUpdate(current: RuntimeSettings, language: 'en' | 'zh-CN'): RuntimeUpdate {
+  return {
+    metricsRetentionDays: current.metricsRetentionDays,
+    metricsCollectionIntervalSeconds: current.metricsCollectionIntervalSeconds,
+    containerReportIntervalSeconds: current.containerReportIntervalSeconds,
+    cleanupSchedule: current.cleanupSchedule,
+    tokenExpiration: current.tokenExpiration,
+    language,
+    logLevel: current.logLevel,
+    remoteCommandTimeoutSeconds: current.remoteCommandTimeoutSeconds,
+  };
+}
+
 export const settingsApi = {
   publicBranding() {
     return apiClient.get<RuntimeSettings['branding']>('/settings/public-branding', { skipAuth: true });
@@ -14,6 +27,10 @@ export const settingsApi = {
   },
   updateRuntime(input: RuntimeUpdate) {
     return apiClient.put<RuntimeSettings>('/settings/runtime', input);
+  },
+  async updateLanguage(language: 'en' | 'zh-CN') {
+    const current = await apiClient.get<RuntimeSettings>('/settings/runtime');
+    return apiClient.put<RuntimeSettings>('/settings/runtime', runtimeLanguageUpdate(current, language));
   },
   serverVariables() {
     return apiClient.get<ServerVariableDefinition[]>('/settings/server-variables');

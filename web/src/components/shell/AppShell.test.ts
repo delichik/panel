@@ -3,8 +3,11 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { createPinia } from 'pinia';
 import { createMemoryHistory, createRouter, type Router } from 'vue-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { settingsApi } from '@/api/settings';
+import { toastKey } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import { beginRouteNavigation, finishRouteNavigation } from '@/router/navigationState';
+import type { RuntimeSettings } from '@/types/settings';
 
 // This vitest jsdom environment does not provide localStorage; stub it like
 // other tests stub fetch so AppShell / theme can read persistence keys.
@@ -48,6 +51,29 @@ function makeRouter(): Router {
 // AppShell teleports the mobile drawer to <body>; unmount every mounted shell
 // after each test so no stale teleported DOM leaks into the next test.
 const mountedWrappers: VueWrapper[] = [];
+const toastPush = vi.fn();
+
+function runtimeSettings(language = 'en'): RuntimeSettings {
+  return {
+    listenAddress: '127.0.0.1:8080',
+    appDatabase: 'app.db',
+    metricsDatabase: 'metrics.db',
+    dataRoot: 'data',
+    metricsRetentionDays: 14,
+    metricsCollectionIntervalSeconds: 60,
+    containerReportIntervalSeconds: 30,
+    cleanupSchedule: 'daily',
+    tokenExpiration: '1d',
+    language,
+    logLevel: 'info',
+    remoteCommandTimeoutSeconds: 45,
+    reconcileTraceEnabled: false,
+    branding: { loginTitle: 'Seamark', loginSubtitle: '' },
+    certificates: { email: '', dnsPropagationDelaySeconds: 30 },
+    panel: { domain: 'localhost', tlsCertificateId: '' },
+    jwtSecretConfigured: true,
+  };
+}
 
 async function mountShell() {
   const { default: AppShell } = await import('./AppShell.vue');
@@ -56,7 +82,10 @@ async function mountShell() {
   await router.isReady();
   const wrapper = mount(AppShell, {
     attachTo: document.body,
-    global: { plugins: [createPinia(), router] },
+    global: {
+      plugins: [createPinia(), router],
+      provide: { [toastKey as symbol]: { push: toastPush, remove: vi.fn() } },
+    },
   });
   mountedWrappers.push(wrapper);
   await flushPromises();
@@ -85,6 +114,9 @@ function stubMatchMedia() {
 }
 
 beforeEach(() => {
+  toastPush.mockReset();
+  vi.spyOn(settingsApi, 'runtime').mockResolvedValue(runtimeSettings());
+  vi.spyOn(settingsApi, 'updateLanguage').mockImplementation(async (language) => runtimeSettings(language));
   useI18n().setLocale('en');
 });
 
@@ -95,9 +127,49 @@ afterEach(() => {
   document.body.style.overflow = '';
   localStorage.clear();
   useI18n().setLocale('zh-CN');
+  vi.restoreAllMocks();
 });
 
 describe('AppShell mobile nav drawer', () => {
+  it('persists a language switch and exposes its pending state', async () => {
+    let resolveSave!: (settings: RuntimeSettings) => void;
+    vi.mocked(settingsApi.updateLanguage).mockImplementation(() => new Promise((resolve) => { resolveSave = resolve; }));
+    const { wrapper } = await mountShell();
+    const button = wrapper.get('button[aria-label="Language"]');
+
+    await button.trigger('click');
+
+    expect(settingsApi.updateLanguage).toHaveBeenCalledWith('zh-CN');
+    expect(useI18n().locale.value).toBe('zh-CN');
+    expect(button.attributes('disabled')).toBeDefined();
+    expect(button.attributes('aria-busy')).toBe('true');
+    expect(button.attributes('aria-label')).toBe('正在保存语言');
+
+    resolveSave(runtimeSettings('zh-CN'));
+    await flushPromises();
+
+    expect(button.attributes('disabled')).toBeUndefined();
+    expect(button.attributes('aria-busy')).toBeUndefined();
+    expect(localStorage.getItem('panel.locale')).toBe('zh-CN');
+  });
+
+  it('rolls back the language and reports an error when persistence fails', async () => {
+    vi.mocked(settingsApi.updateLanguage).mockRejectedValue(new Error('offline'));
+    const { wrapper } = await mountShell();
+    const button = wrapper.get('button[aria-label="Language"]');
+
+    await button.trigger('click');
+    await flushPromises();
+
+    expect(useI18n().locale.value).toBe('en');
+    expect(document.documentElement.lang).toBe('en');
+    expect(localStorage.getItem('panel.locale')).toBe('en');
+    expect(toastPush).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Unable to save language. Your previous language has been restored.',
+      tone: 'danger',
+    }));
+  });
+
   it('shows immediate target feedback while a route is still resolving', async () => {
     const { wrapper } = await mountShell();
 
