@@ -66,10 +66,14 @@ func (h *Handler) ClearRuntimeData(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, panelerr.Validation("clear_runtime_data_confirmation_required", "Type the required confirmation to clear runtime data"))
 		return
 	}
-	result, err := h.service.ClearRuntimeData(r.Context())
+	result, err := h.service.StartClearRuntimeData()
 	if err != nil {
 		httpx.Error(w, panelerr.New(http.StatusInternalServerError, "clear_runtime_data_failed", "Unable to clear runtime data"))
 		return
 	}
-	httpx.JSON(w, http.StatusOK, result)
+	httpx.JSON(w, http.StatusAccepted, result)
+}
+
+func (h *Handler) ClearRuntimeDataStatus(w http.ResponseWriter, _ *http.Request) {
+	httpx.JSON(w, http.StatusOK, h.service.ClearRuntimeDataStatus())
 }

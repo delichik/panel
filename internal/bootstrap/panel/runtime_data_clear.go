@@ -49,9 +49,13 @@ func (a *App) clearRuntimeData(ctx context.Context) (diagnostics.ClearRuntimeDat
 	if err := clearNamedTables(ctx, a.store.MetricsDB(), []string{"metrics_snapshots"}); err != nil {
 		return diagnostics.ClearRuntimeDataResult{}, err
 	}
+	// Logical clearing above uses SQLite's fast whole-table deletion path where
+	// possible. Checkpoint first so the cleared state is durable; VACUUM is best
+	// effort physical compaction and must not turn a successful clear into a
+	// rolled-back or timed-out HTTP operation.
 	for _, db := range []*sql.DB{a.store.AppDB(), a.store.LogDB(), a.store.CoordDB(), a.store.MetricsDB()} {
 		_, _ = db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`)
-		_, _ = db.ExecContext(ctx, `VACUUM`)
+		_, _ = db.ExecContext(context.Background(), `VACUUM`)
 	}
 	return diagnostics.ClearRuntimeDataResult{Cleared: true}, nil
 }
@@ -62,6 +66,12 @@ func clearAppCoordination(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	defer tx.Rollback()
+	// SQLite has no TRUNCATE statement. An unconditional DELETE with no
+	// DELETE trigger uses its truncate optimization; disabling secure_delete
+	// avoids overwriting every freed page before VACUUM replaces the file.
+	if _, err = tx.ExecContext(ctx, `PRAGMA secure_delete=OFF`); err != nil {
+		return err
+	}
 	statements := []string{
 		`DELETE FROM task_steps`,
 		`DELETE FROM tasks`,
@@ -87,6 +97,9 @@ func clearNamedTables(ctx context.Context, db *sql.DB, tables []string) error {
 		return err
 	}
 	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `PRAGMA secure_delete=OFF`); err != nil {
+		return err
+	}
 	for _, table := range tables {
 		var exists int
 		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&exists); err != nil {

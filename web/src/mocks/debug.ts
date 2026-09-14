@@ -50,3 +50,7 @@ export function setDebugPprof(enabled: boolean): DebugPprofStatus {
   pprofEnabled = enabled;
   return debugPprofStatus();
 }
+
+export function debugClearRuntimeDataStatus() {
+  return { cleared: true, running: false, status: 'succeeded' as const };
+}

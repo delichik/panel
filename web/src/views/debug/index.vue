@@ -166,6 +166,12 @@ async function clearRuntimeData() {
   try {
     await debugApi.clearRuntimeData();
     clearOpen.value = false;
+    for (;;) {
+      await new Promise(resolve => window.setTimeout(resolve, 1000));
+      const status = await debugApi.clearRuntimeDataStatus();
+      if (status.status === 'failed') throw new Error(t('debugPage.clearRuntimeDataFailed'));
+      if (status.status === 'succeeded') break;
+    }
     notifySuccess(t('debugPage.clearRuntimeDataSucceeded'));
     await loadAll();
   } catch (err) {

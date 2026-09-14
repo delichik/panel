@@ -29,7 +29,7 @@
 
 ## 3. HTTP API 基线
 
-当前主 Panel 注册 161 个 `/api` method/path 组合，路由清单 SHA-256 为 `b547484fd994c4bd7c2d85ae2840570b12b8fd7ecf07323ca54e1862d0cd05e2`。来源计数如下：
+当前逐项清单记录 162 个 `/api` method/path 组合，路由清单 SHA-256 为 `5505ce557efc24f297296dfc239768468c35d127c34a8431256ceea691f82465`。来源计数如下：
 
 | 注册来源 | 数量 | 验收领域 |
 | --- | ---: | --- |
@@ -41,7 +41,7 @@
 | containers | 17 | 容器与资源 |
 | facilityapps | 19 | 应用与设施应用 |
 | keyassets | 14 | DNS、证书与密钥资产 |
-| diagnostics | 6 | 备份、恢复与诊断 |
+| diagnostics | 7 | 备份、恢复与诊断 |
 | metrics | 1 | 身份、设置与系统；服务器、安全与软件包 |
 | overview | 4 | 身份、设置与系统 |
 | packages | 4 | 服务器、安全与软件包 |

@@ -1,6 +1,13 @@
 import { apiClient } from './client';
 import type { DebugDatabaseSnapshots, DebugPprofStatus, DebugRuntimeSnapshot, DebugTaskSnapshot } from '@/types/debug';
 
+export interface ClearRuntimeDataStatus {
+  cleared: boolean;
+  running: boolean;
+  status: 'idle' | 'running' | 'succeeded' | 'failed';
+  errorCode?: string;
+}
+
 export const debugApi = {
   runtime() {
     return apiClient.get<DebugRuntimeSnapshot>('/debug/runtime');
@@ -18,6 +25,9 @@ export const debugApi = {
     return apiClient.put<DebugPprofStatus>('/debug/pprof', { enabled });
   },
   clearRuntimeData() {
-    return apiClient.post<{ cleared: boolean }>('/debug/clear-runtime-data', { confirmation: 'CLEAR RUNTIME DATA' });
+    return apiClient.post<ClearRuntimeDataStatus>('/debug/clear-runtime-data', { confirmation: 'CLEAR RUNTIME DATA' });
+  },
+  clearRuntimeDataStatus() {
+    return apiClient.get<ClearRuntimeDataStatus>('/debug/clear-runtime-data');
   },
 };

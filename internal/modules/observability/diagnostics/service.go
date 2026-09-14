@@ -29,23 +29,56 @@ type Service struct {
 	pprof       *PprofServer
 	clearMu     sync.Mutex
 	clearHook   func(context.Context) (ClearRuntimeDataResult, error)
+	clearStatus ClearRuntimeDataResult
 }
 
 type ClearRuntimeDataResult struct {
-	Cleared bool `json:"cleared"`
+	Cleared bool   `json:"cleared"`
+	Running bool   `json:"running"`
+	Status  string `json:"status"`
+	Error   string `json:"errorCode,omitempty"`
 }
 
 func (s *Service) SetClearRuntimeDataHook(hook func(context.Context) (ClearRuntimeDataResult, error)) {
 	s.clearHook = hook
 }
 
-func (s *Service) ClearRuntimeData(ctx context.Context) (ClearRuntimeDataResult, error) {
+func (s *Service) StartClearRuntimeData() (ClearRuntimeDataResult, error) {
 	s.clearMu.Lock()
-	defer s.clearMu.Unlock()
 	if s.clearHook == nil {
+		s.clearMu.Unlock()
 		return ClearRuntimeDataResult{}, fmt.Errorf("runtime data clearing is unavailable")
 	}
-	return s.clearHook(ctx)
+	if s.clearStatus.Running {
+		result := s.clearStatus
+		s.clearMu.Unlock()
+		return result, nil
+	}
+	s.clearStatus = ClearRuntimeDataResult{Running: true, Status: "running"}
+	hook := s.clearHook
+	s.clearMu.Unlock()
+	go func() {
+		result, err := hook(context.Background())
+		s.clearMu.Lock()
+		defer s.clearMu.Unlock()
+		if err != nil {
+			s.clearStatus = ClearRuntimeDataResult{Status: "failed", Error: "clear_runtime_data_failed"}
+			return
+		}
+		result.Running = false
+		result.Status = "succeeded"
+		s.clearStatus = result
+	}()
+	return ClearRuntimeDataResult{Running: true, Status: "running"}, nil
+}
+
+func (s *Service) ClearRuntimeDataStatus() ClearRuntimeDataResult {
+	s.clearMu.Lock()
+	defer s.clearMu.Unlock()
+	if s.clearStatus.Status == "" {
+		return ClearRuntimeDataResult{Status: "idle"}
+	}
+	return s.clearStatus
 }
 
 type RuntimeSnapshot struct {

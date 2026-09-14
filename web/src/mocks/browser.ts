@@ -112,7 +112,7 @@ import { acceptedAgentDeployment, completedTask, mockTasks, mockTaskLogs, mockTa
 import { mockActivityRoute, resolveMockExecution } from './activity';
 import { confirmRestore, mockRuntimeSettings, mockServerVariables, restorePreflight, saveRuntime, saveServerVariables, startExport } from './settings';
 import { advanceExport, exportStatus, resetExport, restoreStatus } from './maintenance';
-import { debugDatabases, debugPprofStatus, debugRuntime, debugTasks, setDebugPprof } from './debug';
+import { debugClearRuntimeDataStatus, debugDatabases, debugPprofStatus, debugRuntime, debugTasks, setDebugPprof } from './debug';
 
 const nativeFetch = window.fetch.bind(window);
 const mockAuthToken = 'panel_mock_admin_token';
@@ -945,6 +945,8 @@ export function installMockApi() {
         return error('debug_databases_failed', err instanceof Error ? err.message : 'Unable to collect database diagnostics.', 503);
       }
     }
+    if (url.pathname === '/api/v1/debug/clear-runtime-data' && method(init) === 'GET') return json(debugClearRuntimeDataStatus());
+    if (url.pathname === '/api/v1/debug/clear-runtime-data' && method(init) === 'POST') return json({ cleared: false, running: true, status: 'running' }, 202);
 
     const packagesMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)\/packages\/(updates|refresh|upgrade-selected|upgrade-all)$/);
     if (packagesMatch) {
