@@ -19,7 +19,7 @@ var appTables = []string{
 	"credentials", "servers", "package_updates", "package_refreshes",
 	"fail2ban_configs", "image_updates", "image_refreshes", "application_reconcile_states",
 	"container_observations", "docker_resource_snapshots", "dns_record_snapshots",
-	"applications", "application_revisions", "jobs", "application_edit_sessions", "application_edit_session_files",
+	"applications", "application_persistent_locations", "application_revisions", "jobs", "application_edit_sessions", "application_edit_session_files",
 	"application_edit_session_operations", "application_files", "application_instances",
 	"facility_app_configs", "facility_static_assets", "reverse_proxy_routes", "facility_edit_sessions",
 	"facility_edit_session_assets", "facility_edit_session_operations", "storage_share_configs",

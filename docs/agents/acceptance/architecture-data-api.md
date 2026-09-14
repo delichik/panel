@@ -59,6 +59,8 @@
 
 ## 6. 持久化模型与迁移
 
+应用持久化位置由 app 库 `application_persistent_locations` 表追加记录，以 `(application_id, server_id)` 唯一；部署目标变化不得删除历史位置，应用物理删除时通过 application FK 级联清理。alpha 升级迁移从当前持久化应用的部署目标、实例与历史 Job 回填位置。
+
 - `DATA-MIG-001`：全部在管表必须在 `internal/platform/database/models` 有模型并按 app/log/coordination/metrics 明确分组；新增表必须同时进入正确清单。
 - `DATA-MIG-002`：启动迁移按库隔离执行，不得因全局注册表把模型建入错误数据库；父表排序、外键、CHECK、复合/部分/唯一索引必须可重复创建且与模型合同一致。
 - `DATA-MIG-003`：迁移必须幂等。同一版本数据库连续启动不得产生 schema drift、重复数据或重复索引。

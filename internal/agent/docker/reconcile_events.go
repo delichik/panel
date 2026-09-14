@@ -77,7 +77,7 @@ func (r *LocalRuntime) VerifyExecution(ctx context.Context, req contract.Runtime
 	if req.Action == "stop" {
 		return result, !inspect.State.Running, nil
 	}
-	if req.Action != "apply" || !managedContainerMatchesDesiredRuntime(inspect, req.DesiredSpecHash, req.DesiredGeneration) {
+	if req.Action != "apply" || !managedContainerMatchesDesiredRuntime(inspect, req.DesiredSpecHash, req.DesiredGeneration, req.ApplicationID, req.InstanceID) {
 		return result, false, nil
 	}
 	manifestHash, drift, err := r.managedFilesDrift(req.ApplicationID, req.InstanceID)

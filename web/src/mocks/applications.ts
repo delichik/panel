@@ -424,6 +424,11 @@ export let mockFacility: ReverseProxyConfig = {
   enabledServers: ['srv-edge-sgp', 'srv-edge-sgp-02', 'srv-api-hkg', 'srv-api-hkg-02', 'srv-edge-lax'],
 };
 
+for (const app of mockApplications) {
+  app.persistentServers = app.persistentPath ? [...app.deploymentServers] : [];
+  app.hasPersistentData = Boolean(app.persistentPath || app.persistentServers.length);
+}
+
 export function mockApplicationSummaries(): ApplicationSummaryDto[] {
   return mockApplications.map((app) => ({
     id: app.id,

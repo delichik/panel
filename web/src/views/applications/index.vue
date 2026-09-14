@@ -137,6 +137,7 @@ const confirmOpen = ref(false);
 const confirmKind = ref<'delete' | 'stop'>('delete');
 const confirmTarget = ref('');
 const restoreConfirmOpen = ref(false);
+const persistentServerId = ref('');
 let restoreFile: File | null = null;
 const discardDialogOpen = ref(false);
 let pendingLeaveTarget: string | null = null;
@@ -188,6 +189,7 @@ const facilityEditingView = computed(() => (mode.value === 'facilityConfig' && i
 const currentApplicationSummary = computed(() => applications.value.find((item) => item.id === selectedId.value) ?? null);
 const currentApplication = computed(() => selectedId.value ? applicationDetails.value[selectedId.value] ?? null : null);
 const selectedApplication = computed(() => currentApplication.value ?? applicationFromSummary(currentApplicationSummary.value) ?? emptyApplication());
+const persistentServerOptions = computed(() => (selectedApplication.value.persistentServers ?? []).map((serverId) => ({ label: serverDisplayName(serverId), value: serverId })));
 const currentRuntime = computed(() => selectedId.value ? runtimes.value[selectedId.value] : null);
 const appStatus = computed(() => currentApplicationSummary.value ? applicationStatus(selectedApplication.value, currentRuntime.value) : 'unknown');
 const appDraft = reactive<ApplicationDraftUi>(draftFromApplication());
@@ -584,12 +586,20 @@ watch(page, () => {
 });
 
 watch(selectedId, async (value) => {
+	persistentServerId.value = '';
   if (value) {
     await router.replace({ query: { ...route.query, application: value } });
     void loadApplicationDetail(value);
     await loadRuntime(value);
   }
 });
+
+watch(() => selectedApplication.value.persistentServers, (serverIds) => {
+  const locations = serverIds ?? [];
+  if (!locations.includes(persistentServerId.value)) {
+    persistentServerId.value = locations.length === 1 ? locations[0] : '';
+  }
+}, { immediate: true });
 
 watch(facilityEditingView, (editing) => {
   if (editing && dnsPollTimer) {
@@ -864,7 +874,7 @@ async function confirmAction() {
   const app = selectedApplication.value;
   if (!currentApplicationSummary.value) return;
   if (confirmKind.value === 'delete') {
-    await runOperation('delete', () => applicationsApi.delete(app.id), 'applicationsPage.deleted');
+    await runOperation('delete', () => applicationsApi.delete(app.id, Boolean(app.hasPersistentData)), 'applicationsPage.deleted');
   } else {
     await runOperation('stop', () => applicationsApi.stop(app.id), 'applicationsPage.stopAccepted', 'applicationsPage.stopAcceptedWithoutId');
   }
@@ -872,8 +882,9 @@ async function confirmAction() {
 }
 
 async function downloadPersistentData(app: ApplicationDto) {
+	if (!persistentServerId.value) return;
   await runOperation('persistent-download', async () => {
-    saveBlobDownload(await applicationsApi.downloadPersistentData(app.id));
+    saveBlobDownload(await applicationsApi.downloadPersistentData(app.id, persistentServerId.value));
     return undefined;
   }, 'applicationsPage.downloadStarted');
 }
@@ -1779,9 +1790,13 @@ onBeforeUnmount(() => {
                 </section>
                 <section class="rounded-2xl border border-border bg-muted p-4">
                   <h3>{{ t('applicationsPage.persistentData') }}</h3>
-                  <p class="text-sm text-muted-foreground">{{ selectedApplication.persistentPath ? t('applicationsPage.persistentDataHint') : t('applicationsPage.persistentDataUnavailable') }}</p>
+                  <p class="text-sm text-muted-foreground">{{ selectedApplication.hasPersistentData ? t('applicationsPage.persistentDataHint') : t('applicationsPage.persistentDataUnavailable') }}</p>
+                  <div v-if="persistentServerOptions.length" class="mt-3 grid gap-1.5">
+                    <span class="text-xs text-muted-foreground">{{ t('applicationsPage.persistentDataNode') }}</span>
+                    <Select v-model="persistentServerId" :options="persistentServerOptions" :placeholder="t('applicationsPage.selectPersistentDataNode')" />
+                  </div>
                   <div class="mt-3 flex flex-wrap gap-2">
-                    <DownloadButton size="sm" :disabled="!selectedApplication.persistentPath" :loading="pending === 'persistent-download'" :label="t('applicationsPage.downloadPersistentData')" @click="downloadPersistentData(selectedApplication)" />
+                    <DownloadButton size="sm" :disabled="!persistentServerId" :loading="pending === 'persistent-download'" :label="t('applicationsPage.downloadPersistentData')" @click="downloadPersistentData(selectedApplication)" />
                     <FileUploadButton size="sm" accept=".zip,application/zip" :disabled="!selectedApplication.persistentPath" :loading="pending === 'persistent-restore'" :label="t('applicationsPage.restorePersistentData')" @change="restorePersistentData" />
                   </div>
                 </section>
@@ -2334,7 +2349,21 @@ onBeforeUnmount(() => {
     </template>
   </Dialog>
 
-  <Dialog v-model:open="confirmOpen" :title="t(`applicationsPage.confirm.${confirmKind}.title`)" :description="t(`applicationsPage.confirm.${confirmKind}.description`)" :close-label="t('common.close')">
+  <ConfirmDialog
+    v-if="confirmKind === 'delete' && selectedApplication.hasPersistentData"
+    :open="confirmOpen"
+    :title="t('applicationsPage.confirm.deletePersistent.title')"
+    :impact="t('applicationsPage.confirm.deletePersistent.impact')"
+    tone="danger"
+    :confirm-label="t('common.confirm')"
+    :cancel-label="t('common.cancel')"
+    :require-checkbox="true"
+    :checkbox-label="t('applicationsPage.confirm.deletePersistent.checkbox')"
+    @confirm="confirmAction"
+    @update:open="(open: boolean) => { confirmOpen = open }"
+  />
+
+  <Dialog v-else v-model:open="confirmOpen" :title="t(`applicationsPage.confirm.${confirmKind}.title`)" :description="t(`applicationsPage.confirm.${confirmKind}.description`)" :close-label="t('common.close')">
     <div class="flex gap-3 rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning"><AlertTriangle class="size-4 shrink-0" />{{ t('applicationsPage.confirmImpact') }}</div>
     <template #footer>
       <Button variant="secondary" @click="confirmOpen = false">{{ t('common.cancel') }}</Button>

@@ -1087,3 +1087,54 @@ func TestRemoveDeprecatedApplicationNetworkingOnClearsLegacySnapshots(t *testing
 		}
 	}
 }
+
+func TestBackfillApplicationPersistentLocationsOn(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, statement := range []string{
+		`CREATE TABLE applications (id TEXT PRIMARY KEY, spec_yaml TEXT NOT NULL, deployment_server_ids_json TEXT NOT NULL, created_at TEXT NOT NULL)`,
+		`CREATE TABLE application_instances (application_id TEXT NOT NULL, server_id TEXT NOT NULL, desired_spec_json TEXT NOT NULL, runtime_spec_json TEXT NOT NULL, created_at TEXT NOT NULL)`,
+		`CREATE TABLE jobs (application_id TEXT NOT NULL, server_id TEXT NOT NULL, desired_spec_json TEXT NOT NULL, created_at TEXT NOT NULL)`,
+		`CREATE TABLE application_persistent_locations (application_id TEXT NOT NULL, server_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(application_id,server_id))`,
+		`INSERT INTO applications VALUES ('persistent','name: db\nmounts:\n  - type: persistent\n','["srv-current"]','2026-01-01T00:00:00Z')`,
+		`INSERT INTO applications VALUES ('stateless','name: web\nimage: nginx\n','["srv-ignore"]','2026-01-01T00:00:00Z')`,
+		`INSERT INTO application_instances VALUES ('persistent','srv-instance','{}','{}','2026-01-02T00:00:00Z')`,
+		`INSERT INTO jobs VALUES ('persistent','srv-job','{}','2026-01-03T00:00:00Z')`,
+		`INSERT INTO jobs VALUES ('stateless','srv-historical','{"mounts":[{"type":"persistent"}]}','2026-01-03T00:00:00Z')`,
+		`INSERT INTO jobs VALUES ('stateless','srv-ignore-job','{}','2026-01-03T00:00:00Z')`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backfillApplicationPersistentLocationsOn(context.Background(), tx); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := db.Query(`SELECT server_id FROM application_persistent_locations ORDER BY server_id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var serverID string
+		if err := rows.Scan(&serverID); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, serverID)
+	}
+	if strings.Join(got, ",") != "srv-current,srv-historical,srv-instance,srv-job" {
+		t.Fatalf("backfilled servers = %#v", got)
+	}
+}

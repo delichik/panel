@@ -164,7 +164,46 @@ func appMigrationSteps() []orm.Step {
 		{ID: "remove_application_network_mode_and_proxy_target_type", Run: func(ctx context.Context, tx *sql.Tx) error {
 			return removeDeprecatedApplicationNetworkingOn(ctx, tx)
 		}},
+		{ID: "backfill_application_persistent_locations", Run: func(ctx context.Context, tx *sql.Tx) error {
+			return backfillApplicationPersistentLocationsOn(ctx, tx)
+		}},
 	}
+}
+
+// backfillApplicationPersistentLocationsOn preserves the nodes that can hold
+// data for applications created before location history was introduced. The
+// YAML predicate limits the conservative instance/job union to applications
+// that currently declare a persistent mount.
+func backfillApplicationPersistentLocationsOn(ctx context.Context, q migrationExecutor) error {
+	persistentApps := `SELECT id FROM applications
+		WHERE instr(lower(spec_yaml), 'type: persistent') > 0
+		   OR instr(lower(spec_yaml), 'type: "persistent"') > 0
+		   OR instr(lower(spec_yaml), 'type: ''persistent''') > 0`
+	statements := []string{
+		`INSERT OR IGNORE INTO application_persistent_locations(application_id,server_id,created_at)
+		 SELECT applications.id, json_each.value, COALESCE(NULLIF(applications.created_at,''), strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+		 FROM applications, json_each(applications.deployment_server_ids_json)
+		 WHERE applications.id IN (` + persistentApps + `) AND trim(json_each.value) <> ''`,
+		`INSERT OR IGNORE INTO application_persistent_locations(application_id,server_id,created_at)
+		 SELECT application_id, server_id, COALESCE(NULLIF(created_at,''), strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+		 FROM application_instances
+		 WHERE trim(server_id) <> '' AND application_id IN (SELECT id FROM applications)
+		   AND (application_id IN (` + persistentApps + `)
+		     OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(desired_spec_json) THEN desired_spec_json ELSE '{}' END, '$.mounts') WHERE json_extract(value, '$.type')='persistent')
+		     OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(runtime_spec_json) THEN runtime_spec_json ELSE '{}' END, '$.mounts') WHERE json_extract(value, '$.type')='persistent'))`,
+		`INSERT OR IGNORE INTO application_persistent_locations(application_id,server_id,created_at)
+		 SELECT application_id, server_id, COALESCE(NULLIF(created_at,''), strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+		 FROM jobs
+		 WHERE trim(server_id) <> '' AND application_id IN (SELECT id FROM applications)
+		   AND (application_id IN (` + persistentApps + `)
+		     OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(desired_spec_json) THEN desired_spec_json ELSE '{}' END, '$.mounts') WHERE json_extract(value, '$.type')='persistent'))`,
+	}
+	for _, statement := range statements {
+		if _, err := q.ExecContext(ctx, statement); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // purgeOrphanApplicationReconcileStatesOn 删除 application_reconcile_states 中

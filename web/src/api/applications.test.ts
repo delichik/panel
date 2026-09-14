@@ -47,3 +47,26 @@ describe('applicationsApi.list', () => {
     await expect(applicationsApi.list()).rejects.toMatchObject({ code: 'invalid_api_response' });
   });
 });
+
+describe('applicationsApi persistent lifecycle', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('sends the persistent deletion confirmation to the backend', async () => {
+    const fetchMock = vi.fn(async () => response(null));
+    vi.stubGlobal('fetch', fetchMock);
+    await applicationsApi.delete('app-1', true);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/applications/app-1?confirmPersistentDataDeletion=true');
+  });
+
+  it('downloads persistent data from the selected node', async () => {
+    const fetchMock = vi.fn(async () => new Response(new Blob(['zip']), {
+      status: 200,
+      headers: { 'Content-Disposition': 'attachment; filename="data.zip"' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    await applicationsApi.downloadPersistentData('app-1', 'srv-old');
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/applications/app-1/persistent-data?serverId=srv-old');
+  });
+});

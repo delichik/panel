@@ -87,7 +87,9 @@ func (r *LocalRuntime) ApplicationHome(applicationID string) (string, error) {
 	return safeApplicationRootDir(r.root, applicationID)
 }
 
-// InstanceDir returns the per-instance runtime directory.
+// InstanceDir returns the node-local application workspace. An application
+// has at most one instance on a node, so the instance ID is validated but is
+// intentionally not encoded into the filesystem layout.
 func (r *LocalRuntime) InstanceDir(applicationID, instanceID string) (string, error) {
 	if r == nil || r.client == nil {
 		return "", errors.New("runtime is not configured")
@@ -135,11 +137,7 @@ func (r *LocalRuntime) Stop(ctx context.Context, req agentcontract.RuntimeStopRe
 				return agentcontract.RuntimeInstanceResponse{}, err
 			}
 		} else {
-			instanceDir, err := safeApplicationRuntimeDir(r.root, req.ApplicationID, filepath.Join("instances", req.InstanceID))
-			if err != nil {
-				return agentcontract.RuntimeInstanceResponse{}, err
-			}
-			if err := os.RemoveAll(instanceDir); err != nil {
+			if err := r.removeApplicationWorkspace(req.ApplicationID, req.InstanceID); err != nil {
 				return agentcontract.RuntimeInstanceResponse{}, err
 			}
 		}
@@ -292,6 +290,9 @@ func (r *LocalRuntime) PersistentArchive(ctx context.Context, applicationID stri
 	if r == nil {
 		return nil, errors.New("runtime is not configured")
 	}
+	if err := r.migrateLegacyPersistentWorkspace(applicationID); err != nil {
+		return nil, err
+	}
 	dir, err := safeApplicationRuntimeDir(r.root, applicationID, "persistent")
 	if err != nil {
 		return nil, err
@@ -357,6 +358,9 @@ func (r *LocalRuntime) RestorePersistentArchive(ctx context.Context, application
 		return errors.New("runtime is not configured")
 	}
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := r.migrateLegacyPersistentWorkspace(applicationID); err != nil {
 		return err
 	}
 	dir, err := safeApplicationRuntimeDir(r.root, applicationID, "persistent")
@@ -542,6 +546,9 @@ func (r *LocalRuntime) Reload(ctx context.Context, req agentcontract.RuntimeRelo
 	}
 	if !inspect.State.Running {
 		return agentcontract.RuntimeReloadResponse{Phase: "unsupported", Error: "container is not running"}, nil
+	}
+	if containerUsesLegacyInstanceWorkspace(inspect, req.Spec.ApplicationID, req.Spec.InstanceID) {
+		return agentcontract.RuntimeReloadResponse{Phase: "unsupported", Error: "legacy application workspace requires container recreation"}, nil
 	}
 	snapshot, err := r.snapshotManagedFiles(req.Spec.ApplicationID, req.Spec.InstanceID)
 	if err != nil {
@@ -743,10 +750,16 @@ func (r *LocalRuntime) Reconcile(ctx context.Context, req agentcontract.RuntimeR
 			result.ErrorMessage = err.Error()
 			result.Retryable = true
 		}
+		if err == nil {
+			err = recorder.do("cleanup_legacy_workspace", func(stepctx context.Context) error {
+				_ = stepctx
+				return r.removeLegacyInstanceWorkspace(spec.ApplicationID, spec.InstanceID)
+			})
+		}
 		return result, err
 	}
 	if inspectErr == nil {
-		if managedContainerMatchesDesiredRuntime(inspect, req.DesiredSpecHash, req.DesiredGeneration) {
+		if managedContainerMatchesDesiredRuntime(inspect, req.DesiredSpecHash, req.DesiredGeneration, req.ApplicationID, req.InstanceID) {
 			return verify()
 		}
 		if err := recorder.do("replace_stop", func(stepctx context.Context) error {
@@ -814,12 +827,28 @@ func managedContainerMatches(inspect dockerInspectResponse, applicationID, insta
 		labels["panel.application.instance.id"] == instanceID
 }
 
-func managedContainerMatchesDesiredRuntime(inspect dockerInspectResponse, specHash string, generation int) bool {
+func managedContainerMatchesDesiredRuntime(inspect dockerInspectResponse, specHash string, generation int, applicationID, instanceID string) bool {
 	labels := inspect.Config.Labels
 	return labels["panel.application.spec.hash"] == specHash &&
 		labels["panel.application.generation"] == strconv.Itoa(generation) &&
 		inspect.HostConfig.NetworkMode == managedBridgeNetwork &&
+		!containerUsesLegacyInstanceWorkspace(inspect, applicationID, instanceID) &&
 		inspect.State.Running
+}
+
+func containerUsesLegacyInstanceWorkspace(inspect dockerInspectResponse, applicationID, instanceID string) bool {
+	legacyRoot := filepath.Clean(filepath.Join(defaultRuntimeRoot, applicationID, "instances", instanceID))
+	for _, bind := range inspect.HostConfig.Binds {
+		source := bind
+		if index := strings.Index(source, ":"); index >= 0 {
+			source = source[:index]
+		}
+		source = filepath.Clean(source)
+		if source == legacyRoot || strings.HasPrefix(source, legacyRoot+string(os.PathSeparator)) {
+			return true
+		}
+	}
+	return false
 }
 
 // logContainerConflict 记录创建容器时的同名冲突详情：占用者是谁、是否面板
@@ -887,6 +916,9 @@ func (r *LocalRuntime) DeleteVolume(ctx context.Context, name string) error {
 }
 
 func (r *LocalRuntime) writeManagedFiles(spec appruntime.Spec) error {
+	if err := r.migrateLegacyInstanceWorkspace(spec.ApplicationID, spec.InstanceID); err != nil {
+		return err
+	}
 	previous, err := r.readManagedFilesManifest(spec.ApplicationID, spec.InstanceID)
 	if err != nil {
 		return err
@@ -1319,7 +1351,7 @@ func (r *LocalRuntime) removeStaleManagedFiles(appID, instanceID string, previou
 		if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		removeEmptyParents(filepath.Dir(target), filepath.Join(r.root, appID, "instances", instanceID, "files"))
+		removeEmptyParents(filepath.Dir(target), filepath.Join(r.root, appID, "files"))
 	}
 	return nil
 }
@@ -1974,11 +2006,14 @@ func cloneInt(value *int) *int {
 }
 
 func safeRuntimePath(root, appID, instanceID, area, rel string) (string, error) {
+	if _, err := safeApplicationInstanceDir(root, appID, instanceID); err != nil {
+		return "", err
+	}
 	rel = path.Clean(strings.TrimPrefix(rel, "/"))
 	if rel == "." || strings.HasPrefix(rel, "../") || rel == ".." {
 		return "", errors.New("runtime file path must stay inside the application workspace")
 	}
-	base := filepath.Join(root, appID, "instances", instanceID, area)
+	base := filepath.Join(root, appID, area)
 	target := filepath.Join(base, filepath.FromSlash(rel))
 	cleanBase, err := filepath.Abs(base)
 	if err != nil {
@@ -2046,15 +2081,150 @@ func safeApplicationInstanceDir(root, appID, instanceID string) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	target := filepath.Join(base, "instances", instanceID)
+	return base, nil
+}
+
+func safeLegacyApplicationInstanceDir(root, appID, instanceID string) (string, error) {
+	base, err := safeApplicationInstanceDir(root, appID, instanceID)
+	if err != nil {
+		return "", err
+	}
+	target := filepath.Join(base, "instances", strings.TrimSpace(instanceID))
 	cleanTarget, err := filepath.Abs(target)
 	if err != nil {
 		return "", err
 	}
-	if cleanTarget != base && !strings.HasPrefix(cleanTarget, base+string(os.PathSeparator)) {
-		return "", errors.New("runtime application path escapes the application workspace")
+	if !strings.HasPrefix(cleanTarget, base+string(os.PathSeparator)) {
+		return "", errors.New("legacy runtime path escapes the application workspace")
 	}
 	return cleanTarget, nil
+}
+
+func (r *LocalRuntime) migrateLegacyInstanceWorkspace(appID, instanceID string) error {
+	legacyDir, err := safeLegacyApplicationInstanceDir(r.root, appID, instanceID)
+	if err != nil {
+		return err
+	}
+	appDir, err := safeApplicationInstanceDir(r.root, appID, instanceID)
+	if err != nil {
+		return err
+	}
+	for _, area := range []string{"files", "archives", "manifest", "state"} {
+		source := filepath.Join(legacyDir, area)
+		if _, err := os.Stat(source); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		target := filepath.Join(appDir, area)
+		if _, err := os.Stat(target); err == nil {
+			return fmt.Errorf("legacy and current application workspace both contain %s", area)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := os.Rename(source, target); err != nil {
+			return fmt.Errorf("migrate legacy application workspace %s: %w", area, err)
+		}
+	}
+	return r.removeLegacyInstanceWorkspace(appID, instanceID)
+}
+
+// migrateLegacyPersistentWorkspace discovers the single legacy instance on
+// this node so archive/restore work before another apply has had a chance to
+// migrate the old layout. Multiple legacy copies or simultaneous old/new
+// trees are rejected to avoid choosing or overwriting data silently.
+func (r *LocalRuntime) migrateLegacyPersistentWorkspace(appID string) error {
+	appDir, err := safeApplicationRootDir(r.root, appID)
+	if err != nil {
+		return err
+	}
+	instancesDir := filepath.Join(appDir, "instances")
+	entries, err := os.ReadDir(instancesDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	legacyPersistentDirs := []string{}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		legacyDir, err := safeLegacyApplicationInstanceDir(r.root, appID, entry.Name())
+		if err != nil {
+			return err
+		}
+		persistentDir := filepath.Join(legacyDir, "persistent")
+		if _, err := os.Stat(persistentDir); err == nil {
+			legacyPersistentDirs = append(legacyPersistentDirs, persistentDir)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	if len(legacyPersistentDirs) == 0 {
+		return nil
+	}
+	if len(legacyPersistentDirs) > 1 {
+		return errors.New("multiple legacy application persistent directories found")
+	}
+	target := filepath.Join(appDir, "persistent")
+	if _, err := os.Stat(target); err == nil {
+		return errors.New("legacy and current application workspace both contain persistent data")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.Rename(legacyPersistentDirs[0], target); err != nil {
+		return fmt.Errorf("migrate legacy application workspace persistent: %w", err)
+	}
+	return nil
+}
+
+func (r *LocalRuntime) removeLegacyInstanceWorkspace(appID, instanceID string) error {
+	legacyDir, err := safeLegacyApplicationInstanceDir(r.root, appID, instanceID)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(legacyDir); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	instancesDir := filepath.Dir(legacyDir)
+	if err := os.Remove(instancesDir); err != nil && !errors.Is(err, os.ErrNotExist) && !isDirectoryNotEmpty(err) {
+		return err
+	}
+	return nil
+}
+
+func (r *LocalRuntime) removeApplicationWorkspace(appID, instanceID string) error {
+	appDir, err := safeApplicationInstanceDir(r.root, appID, instanceID)
+	if err != nil {
+		return err
+	}
+	for _, area := range []string{"files", "archives", "manifest", "state"} {
+		if err := os.RemoveAll(filepath.Join(appDir, area)); err != nil {
+			return err
+		}
+	}
+	legacyDir, err := safeLegacyApplicationInstanceDir(r.root, appID, instanceID)
+	if err != nil {
+		return err
+	}
+	if err := os.RemoveAll(legacyDir); err != nil {
+		return err
+	}
+	instancesDir := filepath.Dir(legacyDir)
+	if err := os.Remove(instancesDir); err != nil && !errors.Is(err, os.ErrNotExist) && !isDirectoryNotEmpty(err) {
+		return err
+	}
+	if err := os.Remove(appDir); err != nil && !errors.Is(err, os.ErrNotExist) && !isDirectoryNotEmpty(err) {
+		return err
+	}
+	return nil
+}
+
+func isDirectoryNotEmpty(err error) bool {
+	message := strings.ToLower(err.Error())
+	return errors.Is(err, os.ErrExist) || strings.Contains(message, "directory not empty") || strings.Contains(message, "not empty")
 }
 
 func safePersistentMountDir(root, appID, source string) (string, error) {
@@ -2824,7 +2994,8 @@ type dockerInspectResponse struct {
 		Labels map[string]string `json:"Labels"`
 	} `json:"Config"`
 	HostConfig struct {
-		NetworkMode string `json:"NetworkMode"`
+		NetworkMode string   `json:"NetworkMode"`
+		Binds       []string `json:"Binds"`
 	} `json:"HostConfig"`
 	State struct {
 		Status     string `json:"Status"`
@@ -2889,7 +3060,7 @@ func dockerBinds(root string, spec appruntime.Spec) []string {
 		source := mount.Source
 		switch mount.Type {
 		case "managed_file":
-			source = filepath.Join(root, spec.ApplicationID, "instances", spec.InstanceID, "files", filepath.FromSlash(path.Clean(strings.TrimPrefix(mount.Source, "/"))))
+			source = filepath.Join(root, spec.ApplicationID, "files", filepath.FromSlash(path.Clean(strings.TrimPrefix(mount.Source, "/"))))
 		case "persistent":
 			source = mount.Source
 		case "nfs":

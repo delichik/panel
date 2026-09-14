@@ -1048,7 +1048,7 @@ func TestDeleteApplicationPurgesRuntimeData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Delete(ctx, app.ID); err != nil {
+	if err := svc.Delete(ctx, app.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	deleted, err := svc.Get(ctx, app.ID)
@@ -1189,7 +1189,7 @@ func TestPersistentDataDownloadsFromRuntimeInstance(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime.archiveContent = []byte("zip")
-	result, err := svc.PersistentData(ctx, app.ID)
+	result, err := svc.PersistentData(ctx, app.ID, "srv-a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1213,8 +1213,79 @@ func TestPersistentDataRejectsApplicationWithoutPersistentStorage(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.PersistentData(ctx, app.ID); err == nil {
+	if _, err := svc.PersistentData(ctx, app.ID, ""); err == nil {
 		t.Fatal("expected persistent data download to be rejected")
+	}
+}
+
+func TestPersistentDataDownloadsBeforeFirstApplyFromRecordedNode(t *testing.T) {
+	svc, runtime, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{
+		Name:              "db-before-apply",
+		Enabled:           false,
+		SpecYAML:          "name: db-before-apply\nimage: postgres\nmounts:\n  - type: persistent\n    source: data\n    target: /var/lib/postgresql/data\n",
+		DeploymentMode:    DeploymentModeSelected,
+		DeploymentServers: []string{"srv-a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(app.PersistentServers) != 1 || app.PersistentServers[0] != "srv-a" {
+		t.Fatalf("persistent servers = %#v", app.PersistentServers)
+	}
+	runtime.archiveContent = []byte("zip-before-apply")
+	result, err := svc.PersistentData(ctx, app.ID, "srv-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(result.Content) != "zip-before-apply" || runtime.archiveBaseURL != "https://srv-a.agent" {
+		t.Fatalf("unexpected download result=%q baseURL=%q", result.Content, runtime.archiveBaseURL)
+	}
+}
+
+func TestPersistentApplicationDeleteRequiresConfirmationAndPurgesAllRecordedNodes(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	spec := "name: db-delete\nimage: postgres\nmounts:\n  - type: persistent\n    source: data\n    target: /var/lib/postgresql/data\n"
+
+	app, err := svc.Create(ctx, SaveInput{Name: "db-delete", Enabled: false, SpecYAML: spec, DeploymentMode: DeploymentModeSelected, DeploymentServers: []string{"srv-a"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, err = svc.Update(ctx, app.ID, SaveInput{Name: "db-delete", Enabled: false, SpecYAML: spec, DeploymentMode: DeploymentModeSelected, DeploymentServers: []string{"srv-b"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(app.PersistentServers) != 2 {
+		t.Fatalf("persistent servers = %#v", app.PersistentServers)
+	}
+	if err := svc.Delete(ctx, app.ID, false); err == nil {
+		t.Fatal("expected persistent deletion confirmation error")
+	}
+	unchanged, err := svc.Get(ctx, app.ID)
+	if err != nil || unchanged.DeletionRequested {
+		t.Fatalf("delete must not mutate before confirmation: app=%#v err=%v", unchanged, err)
+	}
+	if err := svc.Delete(ctx, app.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	jobs := jobsForApplication(t, svc, app.ID)
+	if len(jobs) != 2 {
+		t.Fatalf("expected two historical purge jobs, got %#v", jobs)
+	}
+	seen := map[string]bool{}
+	for _, job := range jobs {
+		if job.Action != "purge" || !job.RemoveData {
+			t.Fatalf("unexpected persistent purge job: %#v", job)
+		}
+		seen[job.ServerID] = true
+	}
+	if !seen["srv-a"] || !seen["srv-b"] {
+		t.Fatalf("purge nodes = %#v", seen)
 	}
 }
 

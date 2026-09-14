@@ -47,6 +47,8 @@ type Application struct {
 	DeletionRequested    bool                `json:"deletionRequested,omitempty"`
 	SpecYAML             string              `json:"specYaml"`
 	PersistentPath       string              `json:"persistentPath,omitempty"`
+	PersistentServers    []string            `json:"persistentServers"`
+	HasPersistentData    bool                `json:"hasPersistentData"`
 	DeploymentMode       string              `json:"deploymentMode"`
 	DeploymentServers    []string            `json:"deploymentServers"`
 	ReverseProxy         []ReverseProxyRule  `json:"reverseProxy"`

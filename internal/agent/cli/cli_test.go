@@ -140,7 +140,7 @@ func TestRunInspectByContainerName(t *testing.T) {
 		managedContainer("aaaaaaaaaaaa111111111111", "web", "app-a", "inst-a"),
 	}}
 	f.home = "/opt/panel/apps/app-a"
-	f.instanceDir = "/opt/panel/apps/app-a/instances/inst-a"
+	f.instanceDir = "/opt/panel/apps/app-a"
 	f.persistent = "/opt/panel/apps/app-a/persistent"
 	var stdout, stderr bytes.Buffer
 	for _, selector := range []string{"web", "/web"} {
@@ -164,7 +164,7 @@ func TestRunInspectByInstanceAndAppID(t *testing.T) {
 		managedContainer("aaaaaaaaaaaa111111111111", "web", "app-a", "inst-a"),
 	}}
 	f.home = "/opt/panel/apps/app-a"
-	f.instanceDir = "/opt/panel/apps/app-a/instances/inst-a"
+	f.instanceDir = "/opt/panel/apps/app-a"
 	f.persistent = "/opt/panel/apps/app-a/persistent"
 	var stdout, stderr bytes.Buffer
 	if code := run([]string{"apps", "inspect", "inst-a"}, &stdout, &stderr, fakeFactory(f)); code != exitOK {
@@ -206,7 +206,7 @@ func TestRunInspectJSON(t *testing.T) {
 		managedContainer("aaaaaaaaaaaa111111111111", "web", "app-a", "inst-a"),
 	}}
 	f.home = "/opt/panel/apps/app-a"
-	f.instanceDir = "/opt/panel/apps/app-a/instances/inst-a"
+	f.instanceDir = "/opt/panel/apps/app-a"
 	f.persistent = "/opt/panel/apps/app-a/persistent"
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"apps", "inspect", "web", "--json"}, &stdout, &stderr, fakeFactory(f))
@@ -220,7 +220,7 @@ func TestRunInspectJSON(t *testing.T) {
 	if out.Panel.ApplicationID != "app-a" || out.Panel.InstanceID != "inst-a" || out.Panel.Generation != "3" {
 		t.Fatalf("unexpected panel info: %+v", out.Panel)
 	}
-	if out.Paths.Home != "/opt/panel/apps/app-a" || out.Paths.InstanceDir != "/opt/panel/apps/app-a/instances/inst-a" || out.Paths.PersistentDir != "/opt/panel/apps/app-a/persistent" {
+	if out.Paths.Home != "/opt/panel/apps/app-a" || out.Paths.InstanceDir != "/opt/panel/apps/app-a" || out.Paths.PersistentDir != "/opt/panel/apps/app-a/persistent" {
 		t.Fatalf("unexpected paths: %+v", out.Paths)
 	}
 }

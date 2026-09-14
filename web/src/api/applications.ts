@@ -74,8 +74,9 @@ export const applicationsApi = {
   downloadFile(applicationId: string, fileName: string, filename: string): Promise<DownloadResult> {
     return fetchDownload(`/api/v1/applications/${id(applicationId)}/files/${id(fileName)}/content`, {}, filename);
   },
-  delete(applicationId: string) {
-    return apiClient.delete<void>(`/applications/${id(applicationId)}`);
+  delete(applicationId: string, confirmPersistentDataDeletion = false) {
+    const query = confirmPersistentDataDeletion ? '?confirmPersistentDataDeletion=true' : '';
+    return apiClient.delete<void>(`/applications/${id(applicationId)}${query}`);
   },
 
   updateImage(applicationId: string) {
@@ -97,8 +98,9 @@ export const applicationsApi = {
     });
     return apiClient.get<LogResult>(`/applications/${id(applicationId)}/logs${query.size ? `?${query}` : ''}`);
   },
-  downloadPersistentData(applicationId: string): Promise<DownloadResult> {
-    return fetchDownload(`/api/v1/applications/${id(applicationId)}/persistent-data`, {}, `${applicationId}-persistent.zip`);
+  downloadPersistentData(applicationId: string, serverId: string): Promise<DownloadResult> {
+    const query = new URLSearchParams({ serverId });
+    return fetchDownload(`/api/v1/applications/${id(applicationId)}/persistent-data?${query}`, {}, `${applicationId}-persistent.zip`);
   },
   restorePersistentData(applicationId: string, file: File) {
     const form = new FormData();

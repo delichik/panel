@@ -59,11 +59,11 @@
 
 ## 4. 持久化基线
 
-当前 ORM 模型有 43 个数据库内表声明；`application_revisions` 在 app 与 log 库分别存在，含义不同。coordination 库当前 0 个业务模型。
+当前 ORM 模型有 44 个数据库内表声明；`application_revisions` 在 app 与 log 库分别存在，含义不同。coordination 库当前 0 个业务模型。
 
 | 数据库 | 在管表 |
 | --- | --- |
-| app | `credentials`、`servers`、`package_updates`、`package_refreshes`、`fail2ban_configs`、`image_updates`、`image_refreshes`、`applications`、`application_reconcile_states`、`container_observations`、`docker_resource_snapshots`、`application_revisions`、`jobs`、`dns_domains`、`dns_record_snapshots`、`application_edit_sessions`、`application_edit_session_files`、`application_edit_session_operations`、`application_files`、`application_instances`、`facility_app_configs`、`facility_static_assets`、`reverse_proxy_routes`、`facility_edit_sessions`、`facility_edit_session_assets`、`facility_edit_session_operations`、`storage_share_configs`、`storage_share_partitions`、`certificates`、`self_signed_certificates`、`key_assets`、`overview_card_configurations`、`runtime_settings`、`auth_state`、`auth_accounts` |
+| app | `credentials`、`servers`、`package_updates`、`package_refreshes`、`fail2ban_configs`、`image_updates`、`image_refreshes`、`applications`、`application_persistent_locations`、`application_reconcile_states`、`container_observations`、`docker_resource_snapshots`、`application_revisions`、`jobs`、`dns_domains`、`dns_record_snapshots`、`application_edit_sessions`、`application_edit_session_files`、`application_edit_session_operations`、`application_files`、`application_instances`、`facility_app_configs`、`facility_static_assets`、`reverse_proxy_routes`、`facility_edit_sessions`、`facility_edit_session_assets`、`facility_edit_session_operations`、`storage_share_configs`、`storage_share_partitions`、`certificates`、`self_signed_certificates`、`key_assets`、`overview_card_configurations`、`runtime_settings`、`auth_state`、`auth_accounts` |
 | log | `tasks`、`task_steps`、`task_logs`、`application_revisions`、`runtime_events`、`runtime_event_details`、`key_asset_exports` |
 | coordination | 无业务表 |
 | metrics | `metrics_snapshots` |
@@ -95,7 +95,7 @@
 | Web bundle | 懒加载页面 chunk、指纹化静态资源、生产 API client |
 | `panel` | HTTPS API、静态托管、全部主模块和后台服务 |
 | `panel-init` | 容器启动/维护恢复所需初始化行为 |
-| `panel-agent` amd64/arm64 | 同一 RPC contract 与版本元数据、Docker/系统能力 |
+| `panel-agent` amd64/arm64 | 同一 RPC contract 与版本元数据、Docker/系统能力、无 server 子层的节点应用工作区及旧布局升级 |
 | linux/amd64 image | amd64 Panel/init + 两架构 Agent bundle + Web |
 | linux/arm64 image | arm64 Panel/init + 两架构 Agent bundle + Web |
 | GHCR manifest | main 正式多架构标签或唯一 dev 标签集合 |

@@ -228,10 +228,10 @@
 
 - **前置**：存在兼容/不兼容 Agent 与 `all/selected` 部署模式。
 - **动作**：部署或保存并应用。
-- **结果**：all 对所有健康兼容 Agent 节点各规划一实例；selected 仅规划所选节点，并对被移除旧目标规划 purge。
+- **结果**：all 对所有健康兼容 Agent 节点各规划一实例；selected 仅规划所选节点，并对被移除旧目标规划 purge；无整应用删除意图的 purge 只删除该节点应用目录内的 managed workspace，保留同节点应用级 persistent 和其它节点各自的数据。
 - **失败**：selected 空目标、不可用 Agent 或不合法目标返回稳定校验；持 persistent 的应用必须且只能选择一个节点。
 - **不变量**：单节点失败不阻断其它节点收敛；目标集合在单次 batch 事务中可见，不暴露部分计划。
-- **验证**：selected/all、removed target purge、persistent target tests。
+- **验证**：selected/all、removed target purge、node-workspace-only purge、persistent target tests。
 
 ### APP-LIFE-003 显式部署/同步
 
@@ -262,30 +262,39 @@
 
 ### APP-LIFE-006 删除 finalizer
 
-- **前置**：应用存在实例、持久数据及终态/活跃 Jobs。
-- **动作**：`DELETE /applications/{id}`。
-- **结果**：先置 `deletion_requested=1` 并隐藏列表，将实例 desired=purged、Job action=purge/removeData=true；observed=missing 后删实例，全部实例消失后清理终态 Job 并物理删除应用与整个应用运行目录（含 persistent）。
-- **失败**：purge 失败保留应用/实例供重试；不得通过 FK cascade 绕过 active Job。
-- **不变量**：jobs→applications 为 RESTRICT；应用停止与删除的数据语义不得混淆。
-- **验证**：delete finalizer full-chain integration test。
+- **前置**：应用存在当前实例、首次部署前恢复的数据，或曾在已移除部署节点上保留持久数据。
+- **动作**：`DELETE /applications/{id}`；存在持久化配置或已记录位置时必须显式传入持久数据删除确认。
+- **结果**：确认通过后才置 `deletion_requested=1` 并隐藏列表；对当前实例与 `application_persistent_locations` 历史节点并集规划 desired=purged、action=purge/removeData=true。即使当前零实例，也必须先为历史节点建立清理 Job；全部节点 observed=missing 后清理终态 Job 并物理删除应用，位置记录随应用级联删除。
+- **失败**：未确认、历史节点无法解析或 purge 失败时保留应用/实例和位置记录供重试；不得提前置 deletion_requested，也不得通过 FK cascade 绕过 active Job。
+- **不变量**：普通移除部署节点只删除 managed workspace 并永久保留位置记录与 persistent；jobs→applications 为 RESTRICT；应用停止、移除节点与删除应用的数据语义不得混淆。
+- **验证**：confirmation-before-mutation、zero-instance historical-node purge、multi-node delete finalizer full-chain integration tests。
 
 ### APP-LIFE-007 持久数据导出与恢复
 
 - **前置**：AppSpec 真正包含 persistent mount；可处于已有单实例或首次部署前。
-- **动作**：GET persistent-data 或 multipart POST zip。
-- **结果**：已有实例从其节点 `/opt/panel/apps/<appId>/persistent` 打包/全量原子替换并规划强制重启；首次部署前可在选定节点创建并导入，导入成功不触发重启。
-- **失败**：无 persistent、目标不唯一、归档为空/路径逃逸或替换失败时拒绝并保留旧数据。
+- **动作**：GET persistent-data 携带 `serverId`，或 multipart POST zip。
+- **结果**：下载节点必须属于该应用已记录位置；单一位置可兼容省略 `serverId`，多位置必须明确选择。下载不依赖当前 Instance，因此首次 apply 前恢复到选定节点的数据及已移除部署节点上的旧副本均可导出；恢复在远端写入前追加位置记录，已有实例恢复后规划强制重启，首次部署前恢复成功不触发重启。
+- **失败**：无已记录位置、下载目标不唯一/不属于应用、归档为空/路径逃逸或替换失败时拒绝并保留旧数据。
 - **不变量**：上传恢复采用临时目录/原子 swap；失败不破坏旧 persistent。
-- **验证**：persistent download/restore/predeploy/atomic Agent tests。
+- **验证**：explicit/implicit node selection、unapplied/historical-node download、restore/predeploy/atomic Agent tests。
 
 ### APP-LIFE-008 无损迁移门禁
 
 - **前置**：恰有一个 running 来源实例，指定兼容且无该实例的目标节点。
 - **动作**：请求迁移。
-- **结果**：仅无 persistent、host/global bind、Docker volume 的应用可迁移；先部署目标成功，再删来源容器/实例目录/instance 行并切换部署目标。
+- **结果**：仅无 persistent、host/global bind、Docker volume 的应用可迁移；先部署目标成功，再删来源容器/节点应用 managed workspace/instance 行并切换部署目标。
 - **失败**：任一门禁、目标冲突或目标部署失败时保留来源运行态与数据。
 - **不变量**：不得先删来源再尝试目标。
 - **验证**：迁移成功/拒绝/目标失败故障注入。
+
+### APP-LIFE-009 节点应用目录布局与旧版本升级
+
+- **前置**：节点首次部署应用，或升级前已存在 `/opt/panel/apps/<appId>/instances/<instanceId>` 旧 workspace 与引用该路径的运行容器。
+- **动作**：Agent 执行 apply、reload、persistent archive/restore 或 purge。
+- **结果**：节点本地 managed workspace 直接使用 `/opt/panel/apps/<appId>/{files,archives,manifest,state}`，persistent 继续位于同级 `persistent`；apply 将单节点唯一旧实例的各 managed area 幂等迁移到新位置，persistent archive/restore 也会在未 apply 时发现并迁移唯一旧 persistent 后继续，且重建仍引用旧 bind 路径的容器；purge 按删除意图区分只删 managed workspace 或删除整个应用目录。
+- **失败**：新旧布局同一 area 同时存在时停止迁移并保留两侧数据；旧 bind 容器不得执行 reload 后伪报成功，必须降级为 recreate；迁移失败不得删除 persistent。
+- **不变量**：`instanceId/serverId` 仍是控制面和容器身份，不再进入节点文件路径；同一节点同一应用只能有一个 Instance，因此不得重新引入 server 目录层。
+- **验证**：flat workspace path、legacy migration/conflict、pre-apply legacy persistent archive、legacy bind recreate/reload fallback、workspace-only/full purge tests。
 
 ### APP-RUN-001 runtime 状态与刷新写回
 

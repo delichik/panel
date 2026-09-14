@@ -12,7 +12,7 @@ func AllModels() []any {
 func AppModels() []any {
 	return []any{
 		&Credential{}, &Server{}, &PackageUpdate{}, &PackageRefresh{},
-		&Fail2banConfig{}, &ImageUpdate{}, &ImageRefresh{}, &Application{},
+		&Fail2banConfig{}, &ImageUpdate{}, &ImageRefresh{}, &Application{}, &ApplicationPersistentLocation{},
 		&ApplicationReconcileState{}, &ContainerObservation{}, &DockerResourceSnapshot{},
 		&ApplicationRevisionV3{}, &Job{},
 		&DNSDomain{}, &DNSRecordSnapshot{}, &ApplicationEditSession{},

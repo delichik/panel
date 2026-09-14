@@ -61,6 +61,8 @@ export interface ApplicationDto {
   reconcileStopped?: boolean;
   specYaml: string;
   persistentPath?: string;
+  persistentServers?: string[];
+  hasPersistentData?: boolean;
   deploymentMode: DeploymentMode | string;
   deploymentServers: string[];
   reverseProxy: ReverseProxyRule[];

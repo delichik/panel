@@ -62,7 +62,7 @@ func TestScenarioDeleteFinalizerConverges(t *testing.T) {
 	h.WaitJobState(app.ID, "srv-a", "succeeded")
 	h.WaitInstanceObserved(app.ID, "srv-a", "running")
 
-	if err := h.AppSvc.Delete(h.ctx, app.ID); err != nil {
+	if err := h.AppSvc.Delete(h.ctx, app.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	// purge Job 执行后，finalizer 会连同终态 Job 一起清理，因此等应用物理删除。

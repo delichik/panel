@@ -563,6 +563,12 @@ func (s *Service) getApplication(ctx context.Context, appID string) (Application
 		return Application{}, err
 	}
 	app := toDomainApplication(m)
+	persistentServers, err := s.persistentLocationServerIDs(ctx, appID)
+	if err != nil {
+		return Application{}, err
+	}
+	app.PersistentServers = persistentServers
+	app.HasPersistentData = len(persistentServers) > 0 || strings.TrimSpace(app.PersistentPath) != ""
 	if app.Kind != ApplicationKindFacility {
 		// 设施应用（如 facility-reverse-proxy）的 reverse_proxy_routes 行是
 		// 设施域名路由，由设施模块管理（target_port 恒为 0，不使用应用目标
@@ -801,10 +807,22 @@ func resourceVersionConflict(expected, current int) error {
 	})
 }
 
-func (s *Service) Delete(ctx context.Context, appID string) error {
+func (s *Service) Delete(ctx context.Context, appID string, confirmPersistentDataDeletion bool) error {
 	app, err := s.Get(ctx, appID)
 	if err != nil {
 		return err
+	}
+	persistentServers := append([]string(nil), app.PersistentServers...)
+	if app.HasPersistentData && !confirmPersistentDataDeletion {
+		return panelerr.Conflict("application_persistent_delete_confirmation_required", "Deleting this application requires confirmation because persistent data may exist")
+	}
+	for _, serverID := range persistentServers {
+		if s.servers == nil {
+			return panelerr.Validation("server_provider_unavailable", "Server provider is unavailable")
+		}
+		if _, err := s.servers.Get(ctx, serverID); err != nil {
+			return err
+		}
 	}
 	app.Enabled = false
 	app.DeletionRequested = true
@@ -814,7 +832,7 @@ func (s *Service) Delete(ctx context.Context, appID string) error {
 	}
 	if instances, err := s.runtimeInstances(ctx, app.ID); err != nil {
 		return err
-	} else if len(instances) == 0 {
+	} else if len(instances) == 0 && len(persistentServers) == 0 {
 		if err := orm.New(s.db).From("applications").Where("id=?", app.ID).And("deletion_requested=1").Delete(ctx); err != nil {
 			return err
 		}
@@ -1527,19 +1545,25 @@ func (s *Service) Logs(ctx context.Context, appID string, in LogInput) (LogResul
 	return LogResult{InstanceID: instance.ID, ContainerName: instance.ContainerName, Type: "combined", Logs: logs.Logs}, nil
 }
 
-func (s *Service) PersistentData(ctx context.Context, appID string) (PackageResult, error) {
+func (s *Service) PersistentData(ctx context.Context, appID, requestedServerID string) (PackageResult, error) {
 	app, err := s.Get(ctx, appID)
 	if err != nil {
 		return PackageResult{}, err
 	}
-	if strings.TrimSpace(app.PersistentPath) == "" {
+	if len(app.PersistentServers) == 0 {
 		return PackageResult{}, panelerr.Validation("application_persistent_data_unavailable", "Application does not use persistent storage")
 	}
-	instance, err := s.primaryRuntimeInstance(ctx, app.ID)
-	if err != nil {
-		return PackageResult{}, err
+	serverID := strings.TrimSpace(requestedServerID)
+	if serverID == "" {
+		if len(app.PersistentServers) != 1 {
+			return PackageResult{}, panelerr.Validation("application_persistent_server_required", "Select a node to download persistent data")
+		}
+		serverID = app.PersistentServers[0]
 	}
-	srv, err := s.servers.Get(ctx, instance.ServerID)
+	if !stringBoolSet(app.PersistentServers)[serverID] {
+		return PackageResult{}, panelerr.Validation("application_persistent_server_invalid", "Selected node is not a recorded persistent data location")
+	}
+	srv, err := s.servers.Get(ctx, serverID)
 	if err != nil {
 		return PackageResult{}, err
 	}
@@ -1586,6 +1610,9 @@ func (s *Service) RestorePersistentData(ctx context.Context, appID string, conte
 			return OperationResult{}, err
 		}
 		shouldRestart = false
+	}
+	if err := s.ensurePersistentLocation(ctx, app.ID, serverID); err != nil {
+		return OperationResult{}, err
 	}
 	srv, err := s.servers.Get(ctx, serverID)
 	if err != nil {
@@ -1937,6 +1964,9 @@ func (s *Service) insertApplicationWithRoutes(ctx context.Context, app Applicati
 	if err := s.insertApplicationWithExec(ctx, tx, app); err != nil {
 		return err
 	}
+	if err := ensurePersistentLocations(ctx, tx, app); err != nil {
+		return err
+	}
 	if err := replaceApplicationReverseProxyRoutes(ctx, tx, app.ID, app.ReverseProxy); err != nil {
 		return err
 	}
@@ -1950,6 +1980,9 @@ func (s *Service) updateApplicationWithRoutes(ctx context.Context, app Applicati
 	}
 	defer func() { _ = tx.Rollback() }()
 	if err := s.updateApplicationWithExec(ctx, tx, app); err != nil {
+		return err
+	}
+	if err := ensurePersistentLocations(ctx, tx, app); err != nil {
 		return err
 	}
 	if err := replaceApplicationReverseProxyRoutes(ctx, tx, app.ID, app.ReverseProxy); err != nil {
@@ -2038,6 +2071,11 @@ func (s *Service) commitApplicationStateVersioned(ctx context.Context, app Appli
 		}
 		if currentVersion != expectedVersion {
 			return resourceVersionConflict(expectedVersion, currentVersion)
+		}
+	}
+	if insertApp || configurationChanged {
+		if err := ensurePersistentLocations(ctx, tx, app); err != nil {
+			return err
 		}
 	}
 	if !insertApp && !configurationChanged {
@@ -2326,6 +2364,11 @@ func (s *Service) planOrchestratorTargets(ctx context.Context, app Application, 
 	}
 	inputs := make([]controlplane.PlanInput, 0, len(serverIDs))
 	for _, serverID := range serverIDs {
+		if action == controlplane.ActionApply && strings.TrimSpace(app.PersistentPath) != "" {
+			if err := s.ensurePersistentLocation(ctx, app.ID, serverID); err != nil {
+				return result, err
+			}
+		}
 		instanceID := runtimeInstanceID(app.ID, serverID)
 		containerName := runtimeContainerName(app)
 		desiredSpec := []byte(`{}`)
@@ -2462,6 +2505,17 @@ func (s *Service) reconcileStopTargets(ctx context.Context, app Application, tar
 			continue
 		}
 		out = append(out, instance.ServerID)
+	}
+	if app.DeletionRequested {
+		persistentServers, err := s.persistentLocationServerIDs(ctx, app.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, serverID := range persistentServers {
+			if len(wanted) == 0 || wanted[serverID] {
+				out = append(out, serverID)
+			}
+		}
 	}
 	if app.Kind == ApplicationKindFacility {
 		for _, serverID := range targetIDs {

@@ -305,7 +305,7 @@
 
 - **前置**：容器存在、停止或缺失；managed files/persistent 可能存在。
 - **动作**：RuntimeReconcile stop/purge。
-- **结果**：stop 删除容器、保留工作文件和 persistent；purge 删除容器及整个应用运行目录；资源已缺失视为幂等成功并返回 observed missing。
+- **结果**：stop 删除容器、保留 managed workspace 和 persistent；普通目标 purge 删除容器及 `/opt/panel/apps/<appId>` 下的 `files/archives/manifest/state`，保留 persistent；整应用删除意图的 purge 才删除整个应用目录；资源已缺失视为幂等成功并返回 observed missing。
 - **失败**：身份不匹配终态冲突；removeData 不能在 stop 中误启用。
 - **不变量**：NFS 侧共享数据不因 purge 删除，只清理无人引用本地 NFS volume。
 - **验证**：stop/purge convergence/finalizer tests。
@@ -314,7 +314,7 @@
 
 - **前置**：旧 manifest 和新 desired files 不同。
 - **动作**：write_files。
-- **结果**：普通文件写临时 sibling 后原子 rename，manifest 最后提交；旧 manifest 管理而新集合缺失的文件删除；从未属于 Panel manifest 的文件保留。
+- **结果**：managed area 直接位于 `/opt/panel/apps/<appId>/{files,archives,manifest,state}`；普通文件写临时 sibling 后原子 rename，manifest 最后提交；旧 manifest 管理而新集合缺失的文件删除；从未属于 Panel manifest 的文件保留。
 - **失败**：写入/rename/manifest 失败返回错误，不能发布半份新 manifest 为完成。
 - **不变量**：父目录0755；普通文件显式 chmod desired mode 并在要求时 chown。
 - **验证**：removes stale files/mode/traversable dirs tests。
@@ -325,7 +325,7 @@
 - **动作**：Agent full/change report。
 - **结果**：普通文件比较 sha256/mode/显式 uid/gid，archive 比较 retained archive sha256+tree hash；size+mtime 未变时用 cache 快速跳过 hash。
 - **失败**：cache 损坏/缺失退回实际 hash，不得默认无漂移。
-- **不变量**：cache 位于 `state/managed-files.fingerprint.json`，仅优化计算，不是事实源。
+- **不变量**：cache 位于 `/opt/panel/apps/<appId>/state/managed-files.fingerprint.json`，仅优化计算，不是事实源；节点路径不包含 instance/server ID。
 - **验证**：managed file fingerprint/drift tests。
 
 ### AGRT-FILE-003 archive 落盘

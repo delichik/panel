@@ -141,13 +141,22 @@ func TestHandlerPersistentData(t *testing.T) {
 	fake := &fakeApplicationService{persistentData: PackageResult{Filename: "web-persistent.zip", Content: []byte("data")}}
 	handler := NewHandler(fake)
 
-	rec := serveTestRoute(handler, http.MethodGet, "/api/v1/applications/app-1/persistent-data", nil)
+	rec := serveTestRoute(handler, http.MethodGet, "/api/v1/applications/app-1/persistent-data?serverId=srv-a", nil)
 
-	if rec.Code != http.StatusOK || fake.persistentDataID != "app-1" || rec.Body.String() != "data" {
+	if rec.Code != http.StatusOK || fake.persistentDataID != "app-1" || fake.persistentDataServerID != "srv-a" || rec.Body.String() != "data" {
 		t.Fatalf("persistent data status=%d id=%q body=%q", rec.Code, fake.persistentDataID, rec.Body.String())
 	}
 	if got := rec.Header().Get("Content-Type"); got != "application/zip" {
 		t.Fatalf("content type = %q", got)
+	}
+}
+
+func TestHandlerDeleteParsesPersistentDataConfirmation(t *testing.T) {
+	fake := &fakeApplicationService{}
+	handler := NewHandler(fake)
+	rec := serveTestRoute(handler, http.MethodDelete, "/api/v1/applications/app-1?confirmPersistentDataDeletion=true", nil)
+	if rec.Code != http.StatusNoContent || fake.deletedApplicationID != "app-1" || !fake.confirmedPersistentDelete {
+		t.Fatalf("delete status=%d app=%q confirmed=%v", rec.Code, fake.deletedApplicationID, fake.confirmedPersistentDelete)
 	}
 }
 
@@ -235,8 +244,11 @@ type fakeApplicationService struct {
 	logID                     string
 	logInput                  LogInput
 	deletedFileID             string
+	deletedApplicationID      string
+	confirmedPersistentDelete bool
 	persistentData            PackageResult
 	persistentDataID          string
+	persistentDataServerID    string
 	restoredPersistentID      string
 	restoredPersistentContent []byte
 	updatedImageID            string
@@ -274,7 +286,9 @@ func (f *fakeApplicationService) Update(ctx context.Context, id string, in SaveI
 	return f.app, nil
 }
 
-func (f *fakeApplicationService) Delete(ctx context.Context, id string) error {
+func (f *fakeApplicationService) Delete(ctx context.Context, id string, confirmPersistentDataDeletion bool) error {
+	f.deletedApplicationID = id
+	f.confirmedPersistentDelete = confirmPersistentDataDeletion
 	return nil
 }
 
@@ -305,8 +319,9 @@ func (f *fakeApplicationService) DeleteFile(ctx context.Context, id, fileID stri
 	return nil
 }
 
-func (f *fakeApplicationService) PersistentData(ctx context.Context, id string) (PackageResult, error) {
+func (f *fakeApplicationService) PersistentData(ctx context.Context, id, serverID string) (PackageResult, error) {
 	f.persistentDataID = id
+	f.persistentDataServerID = serverID
 	return f.persistentData, nil
 }
 

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -234,6 +235,49 @@ func TestAppliedStateMatchesContainerIdentity(t *testing.T) {
 	}
 }
 
+func TestWriteManagedFilesMigratesLegacyInstanceWorkspace(t *testing.T) {
+	root := t.TempDir()
+	legacyFile := filepath.Join(root, "app", "instances", "app-srv", "files", "config", "app.conf")
+	if err := os.MkdirAll(filepath.Dir(legacyFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyFile, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := &LocalRuntime{root: root}
+	if err := r.writeManagedFiles(appruntime.Spec{
+		ApplicationID: "app",
+		InstanceID:    "app-srv",
+		Files:         []appruntime.ManagedFile{{Path: "config/app.conf", Content: []byte("new"), Mode: "0644"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	currentFile := filepath.Join(root, "app", "files", "config", "app.conf")
+	if got, err := os.ReadFile(currentFile); err != nil || string(got) != "new" {
+		t.Fatalf("migrated file = %q, %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "app", "instances")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy instances directory still exists: %v", err)
+	}
+}
+
+func TestWriteManagedFilesRejectsConflictingLegacyAndCurrentWorkspace(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{
+		filepath.Join(root, "app", "files"),
+		filepath.Join(root, "app", "instances", "app-srv", "files"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := &LocalRuntime{root: root}
+	err := r.writeManagedFiles(appruntime.Spec{ApplicationID: "app", InstanceID: "app-srv"})
+	if err == nil || !strings.Contains(err.Error(), "both contain files") {
+		t.Fatalf("conflicting layout error = %v", err)
+	}
+}
+
 func TestDockerAPIClientCreateContainerSendsCapAdd(t *testing.T) {
 	bodies := make(chan map[string]any, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -374,7 +418,7 @@ func TestPreparePersistentMountsCreatesManagedDirectory(t *testing.T) {
 func TestWriteManagedFilesAppliesFileMode(t *testing.T) {
 	root := t.TempDir()
 	r := &LocalRuntime{root: root}
-	target := filepath.Join(root, "app-1", "instances", "app-1-srv-a", "files", "bin", "start.sh")
+	target := filepath.Join(root, "app-1", "files", "bin", "start.sh")
 	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -406,7 +450,7 @@ func TestWriteManagedFilesAppliesFileMode(t *testing.T) {
 func TestWriteManagedFilesMakesDirectoriesTraversable(t *testing.T) {
 	root := t.TempDir()
 	r := &LocalRuntime{root: root}
-	parent := filepath.Join(root, "app-1", "instances", "app-1-srv-a", "files", "static-assets", "asset-1")
+	parent := filepath.Join(root, "app-1", "files", "static-assets", "asset-1")
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -449,8 +493,8 @@ func TestWriteManagedArchiveKeepsArchiveAndOverwritesExtractedFiles(t *testing.T
 	if err := r.writeManagedFiles(spec); err != nil {
 		t.Fatal(err)
 	}
-	archivePath := filepath.Join(root, "app-1", "instances", "app-1-srv-a", "archives", "public.archive")
-	extractedPath := filepath.Join(root, "app-1", "instances", "app-1-srv-a", "files", "public", "index.html")
+	archivePath := filepath.Join(root, "app-1", "archives", "public.archive")
+	extractedPath := filepath.Join(root, "app-1", "files", "public", "index.html")
 	if got, err := os.ReadFile(archivePath); err != nil || !bytes.Equal(got, content) {
 		t.Fatalf("archive content = %q err=%v", got, err)
 	}
@@ -539,12 +583,12 @@ func TestManagedFilesDriftUsesFingerprintCache(t *testing.T) {
 	if _, drifted, err := r.managedFilesDrift("app-1", "app-1-srv-a"); err != nil || drifted {
 		t.Fatalf("expected healthy after write: drifted=%v err=%v", drifted, err)
 	}
-	cachePath := filepath.Join(root, "app-1", "instances", "app-1-srv-a", "state", managedFingerprintsPath)
+	cachePath := filepath.Join(root, "app-1", "state", managedFingerprintsPath)
 	if _, err := os.Stat(cachePath); err != nil {
 		t.Fatalf("fingerprint cache should exist after first drift check: %v", err)
 	}
 	// A metadata-only touch must not count as drift and must refresh the cache.
-	target := filepath.Join(root, "app-1", "instances", "app-1-srv-a", "files", "bin", "start.sh")
+	target := filepath.Join(root, "app-1", "files", "bin", "start.sh")
 	now := time.Now()
 	if err := os.Chtimes(target, now, now.Add(2*time.Second)); err != nil {
 		t.Fatal(err)
@@ -655,19 +699,126 @@ func TestRestorePersistentArchiveSwapsAtomicallyAndPreservesOldOnFailure(t *test
 	}
 }
 
+func TestPersistentArchiveMigratesLegacyDataBeforeApply(t *testing.T) {
+	root := t.TempDir()
+	r := &LocalRuntime{root: root}
+	legacyDir := filepath.Join(root, "app-1", "instances", "app-1-srv-a", "persistent")
+	if err := os.MkdirAll(legacyDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyDir, "legacy.txt"), []byte("legacy-data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := r.PersistentArchive(context.Background(), "app-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reader.File) != 1 || reader.File[0].Name != "legacy.txt" {
+		t.Fatalf("archive entries = %#v", reader.File)
+	}
+	file, err := reader.File[0].Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := io.ReadAll(file)
+	_ = file.Close()
+	if err != nil || string(content) != "legacy-data" {
+		t.Fatalf("archive content = %q err=%v", content, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "app-1", "persistent", "legacy.txt")); err != nil {
+		t.Fatalf("legacy persistent data was not migrated: %v", err)
+	}
+}
+
+func TestStopPurgeRemovesOnlyNodeApplicationWorkspace(t *testing.T) {
+	root := t.TempDir()
+	workspaceDir := filepath.Join(root, "app-1", "files")
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceDir, "managed.txt"), []byte("managed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	persistentDir := filepath.Join(root, "app-1", "persistent")
+	if err := os.MkdirAll(persistentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(persistentDir, "keep.txt"), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/volumes":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Volumes":[]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/containers/json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/stop"):
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/"):
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected Docker request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	runtime := &LocalRuntime{root: root, client: &dockerAPIClient{host: server.URL, client: server.Client()}}
+	result, err := runtime.Stop(context.Background(), agentcontract.RuntimeStopRequest{
+		ApplicationID: "app-1", InstanceID: "app-1-srv-1", ContainerName: "panel-app", Purge: true,
+	})
+	if err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	if result.Status != "purged" {
+		t.Fatalf("status = %q, want purged", result.Status)
+	}
+	if _, err := os.Stat(workspaceDir); !os.IsNotExist(err) {
+		t.Fatalf("application workspace still exists or stat failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(persistentDir, "keep.txt")); err != nil {
+		t.Fatalf("persistent data was removed: %v", err)
+	}
+}
+
 func TestManagedContainerMatchesDesiredRuntimeRequiresManagedBridgeNetwork(t *testing.T) {
 	inspect := dockerInspectResponse{}
 	inspect.Config.Labels = map[string]string{
-		"panel.application.spec.hash": "hash",
+		"panel.application.spec.hash":  "hash",
 		"panel.application.generation": "2",
 	}
 	inspect.State.Running = true
 	inspect.HostConfig.NetworkMode = managedBridgeNetwork
-	if !managedContainerMatchesDesiredRuntime(inspect, "hash", 2) {
+	if !managedContainerMatchesDesiredRuntime(inspect, "hash", 2, "app-1", "app-1-srv-1") {
 		t.Fatal("managed bridge container should be reusable")
 	}
 	inspect.HostConfig.NetworkMode = "host"
-	if managedContainerMatchesDesiredRuntime(inspect, "hash", 2) {
+	if managedContainerMatchesDesiredRuntime(inspect, "hash", 2, "app-1", "app-1-srv-1") {
 		t.Fatal("legacy host-network container must be recreated")
+	}
+}
+
+func TestManagedContainerMatchesDesiredRuntimeRejectsLegacyWorkspaceBind(t *testing.T) {
+	inspect := dockerInspectResponse{}
+	inspect.Config.Labels = map[string]string{
+		"panel.application.spec.hash":  "hash",
+		"panel.application.generation": "2",
+	}
+	inspect.State.Running = true
+	inspect.HostConfig.NetworkMode = managedBridgeNetwork
+	inspect.HostConfig.Binds = []string{"/opt/panel/apps/app-1/instances/app-1-srv-1/files/app.conf:/etc/app.conf:ro"}
+	if managedContainerMatchesDesiredRuntime(inspect, "hash", 2, "app-1", "app-1-srv-1") {
+		t.Fatal("container using the legacy instance workspace must be recreated")
+	}
+	inspect.HostConfig.Binds = []string{"/opt/panel/apps/app-1/files/app.conf:/etc/app.conf:ro"}
+	if !managedContainerMatchesDesiredRuntime(inspect, "hash", 2, "app-1", "app-1-srv-1") {
+		t.Fatal("container using the flat application workspace should be reusable")
 	}
 }

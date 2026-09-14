@@ -34,10 +34,10 @@ func readApplicationUpload(reader io.Reader, limit int64) ([]byte, error) {
 type applicationService interface {
 	List(ctx context.Context) ([]Application, error)
 	Get(ctx context.Context, id string) (Application, error)
-	Delete(ctx context.Context, id string) error
+	Delete(ctx context.Context, id string, confirmPersistentDataDeletion bool) error
 	ListFiles(ctx context.Context, id string) ([]ApplicationFile, error)
 	GetFile(ctx context.Context, id, fileID string) (ApplicationFile, error)
-	PersistentData(ctx context.Context, id string) (PackageResult, error)
+	PersistentData(ctx context.Context, id, serverID string) (PackageResult, error)
 	RestorePersistentData(ctx context.Context, id string, content []byte) (OperationResult, error)
 	UpdateImage(ctx context.Context, id string) (OperationResult, error)
 	Deploy(ctx context.Context, id string) (OperationResult, error)
@@ -406,7 +406,8 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
-	if err := h.service.Delete(r.Context(), applicationIDFromRequest(r)); err != nil {
+	confirmPersistent, _ := strconv.ParseBool(strings.TrimSpace(r.URL.Query().Get("confirmPersistentDataDeletion")))
+	if err := h.service.Delete(r.Context(), applicationIDFromRequest(r), confirmPersistent); err != nil {
 		httpx.Error(w, err)
 		return
 	}
@@ -438,7 +439,7 @@ func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) PersistentData(w http.ResponseWriter, r *http.Request) {
-	result, err := h.service.PersistentData(r.Context(), applicationIDFromRequest(r))
+	result, err := h.service.PersistentData(r.Context(), applicationIDFromRequest(r), strings.TrimSpace(r.URL.Query().Get("serverId")))
 	if err != nil {
 		httpx.Error(w, err)
 		return

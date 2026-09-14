@@ -291,6 +291,19 @@ type Application struct {
 
 func (*Application) TableName() string { return "applications" }
 
+// ApplicationPersistentLocation records every node that may contain an
+// application's managed persistent directory. Rows are intentionally kept
+// when deployment targets change and are removed only with the application.
+type ApplicationPersistentLocation struct {
+	ApplicationID string    `orm:"primary_key;references:applications(id);on_delete:CASCADE"`
+	ServerID      string    `orm:"primary_key;not_null"`
+	CreatedAt     time.Time `orm:"not_null"`
+}
+
+func (*ApplicationPersistentLocation) TableName() string {
+	return "application_persistent_locations"
+}
+
 // ApplicationEditSession 对应 application_edit_sessions。
 type ApplicationEditSession struct {
 	ID                    string `orm:"primary_key"`

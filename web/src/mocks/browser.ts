@@ -588,6 +588,10 @@ export function installMockApi() {
       return found ? json(found) : error('application_not_found', 'Application was not found.', 404);
     }
     if (appMatch && method(init) === 'DELETE') {
+	  const app = mockApplications.find((item) => item.id === decodeURIComponent(appMatch[1]));
+	  if (app?.hasPersistentData && url.searchParams.get('confirmPersistentDataDeletion') !== 'true') {
+		return error('application_persistent_delete_confirmation_required', 'Persistent data deletion requires confirmation.', 409);
+	  }
       return deleteApp(decodeURIComponent(appMatch[1])) ? json(null) : error('application_not_found', 'Application was not found.', 404);
     }
     const appFileListMatch = url.pathname.match(/^\/api\/v1\/applications\/([^/]+)\/files$/);
@@ -618,7 +622,9 @@ export function installMockApi() {
       const appId = decodeURIComponent(appPersistentMatch[1]);
       const app = mockApplications.find((item) => item.id === appId);
       if (!app) return error('application_not_found', 'Application was not found.', 404);
-      if (!app.persistentPath) return error('application_persistent_data_unavailable', 'Application has no persistent data mount.', 422);
+	  const serverId = url.searchParams.get('serverId') ?? '';
+	  if (!(app.persistentServers ?? []).includes(serverId)) return error('application_persistent_server_invalid', 'Select a recorded persistent data node.', 422);
+      if (!app.hasPersistentData) return error('application_persistent_data_unavailable', 'Application has no persistent data mount.', 422);
       return blobResponse(`mock persistent archive\napplication=${appId}\npath=${app.persistentPath}\n`, `${appId}-persistent.zip`, 'application/zip');
     }
     if (appPersistentMatch && method(init) === 'POST') {
