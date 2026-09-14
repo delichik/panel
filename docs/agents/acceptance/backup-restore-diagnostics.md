@@ -114,7 +114,7 @@
 - `DIAG-CLR-001`：只有认证用户可在 `/debug` 经危险确认调用 `POST /api/v1/debug/clear-runtime-data`；确认值不精确匹配时必须 422 且不删除任何数据。接受后必须立即返回 202，并由 `GET /api/v1/debug/clear-runtime-data` 查询后台任务状态，客户端断开不得取消清理。
 - `DIAG-CLR-002`：清理必须暂停协调与任务 worker，删除 activity/system logs、metrics、tasks/steps、Jobs、reconcile backoff 及全部协调库记录，并清除资源上的悬空 Job 投影。
 - `DIAG-CLR-003`：清理不得删除应用、服务器、凭据、证书、密钥资产、应用修订或期望/观测状态；完成后 worker 必须重启并从当前状态重新收敛。
-- `DIAG-CLR-004`：整表清理必须使用 SQLite 无条件删除的快速清空路径；成功删除后应 checkpoint WAL，再以不影响逻辑清理结果的方式尝试 VACUUM 回收文件空间；状态响应只返回阶段和结果，不暴露路径或被删除内容。
+- `DIAG-CLR-004`：清理期间必须暂停业务 writer，并以最多 1000 行的短事务分批删除；每批独立提交，任一批失败不得回滚此前已完成批次，也不得用覆盖整个清理过程的长写事务阻塞数据库。完成后应 checkpoint WAL，再以不影响逻辑清理结果的方式尝试 VACUUM 回收文件空间；状态响应只返回阶段和结果，不暴露路径或被删除内容。
 
 ## 13. 验收证据
 
