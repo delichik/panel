@@ -189,7 +189,7 @@
 
 - **前置**：RuntimeReconcile 返回结构化错误或普通 error。
 - **动作**：Controller fail。
-- **结果**：保存 error_code/class/message/detail、last steps/stage；普通 error 且无 message 时正规化 `runtime_reconcile_failed/runtime` 并设 retryable。
+- **结果**：保存 error_code/class/message/detail、last steps/stage；Reconciler 同时返回结构化失败和实现 error 时以结构化结果进入正常重试，只有未返回可信结果的传输中断才标记 uncertainty。
 - **失败**：不得把原始 Docker/Agent 诊断压成仅一条翻译文案或 secret/full env/file content。
 - **不变量**：任务表不得反写 Job 错误或状态。
 - **验证**：error propagation/trace redaction tests。
@@ -198,7 +198,7 @@
 
 - **前置**：Job 第 N 次失败，response retryable。
 - **动作**：Fail。
-- **结果**：进入 failed_retryable，nextRunAt 以 30s 为指数退避基数、上限 1h，并施加 ±20% jitter（结果仍不超过 1h）或尊重不超过 1h 的 RetryAfter；达到 MaxAttempts（默认总尝试10）改 terminal failed、`max_attempts_exceeded/retry_exhausted`。
+- **结果**：进入 failed_retryable，nextRunAt 以 30s 为指数退避基数、上限 1h，并施加 ±20% jitter（结果仍不超过 1h）或尊重不超过 1h 的 RetryAfter；达到 MaxAttempts（默认总尝试10）改 terminal failed、`max_attempts_exceeded/retry_exhausted`，同时保留最后一次真实错误 message 并在 detail 记录原 code/class。
 - **失败**：永久错误不得无限重试；未到上限的 retryable 不得提前 terminal。
 - **不变量**：attempts 包含首次执行。
 - **验证**：controller max-attempts/backoff tests。

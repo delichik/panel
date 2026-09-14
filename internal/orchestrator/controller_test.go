@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,6 +18,18 @@ import (
 type failingReconciler struct {
 	calls      atomic.Int64
 	retryAfter time.Duration
+}
+
+type structuredErrorReconciler struct{}
+
+func (*structuredErrorReconciler) Reconcile(context.Context, ReconcileRequestRPC) (ReconcileResponse, error) {
+	return ReconcileResponse{
+		ErrorCode:    "agent_health_failed",
+		ErrorClass:   "agent_unavailable",
+		ErrorMessage: "agent connection refused",
+		ErrorDetail:  "health preflight did not start remote execution",
+		Retryable:    true,
+	}, errors.New("agent connection refused")
 }
 
 // ORCH-CTRL-001/002: persistent controller errors are structured and rate limited.
@@ -87,13 +100,16 @@ func TestControllerRetryTerminatesAfterMaxAttempts(t *testing.T) {
 
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		var state, code string
-		if err := db.QueryRow(`SELECT state,error_code FROM jobs WHERE id='job-1'`).Scan(&state, &code); err != nil {
+		var state, code, message, detail string
+		if err := db.QueryRow(`SELECT state,error_code,error_message,error_detail FROM jobs WHERE id='job-1'`).Scan(&state, &code, &message, &detail); err != nil {
 			t.Fatal(err)
 		}
 		if state == JobFailed {
 			if code != "max_attempts_exceeded" {
 				t.Fatalf("terminal job error_code = %q, want max_attempts_exceeded", code)
+			}
+			if message != "boom" || !strings.Contains(detail, "last error code=boom") {
+				t.Fatalf("terminal job lost root failure: message=%q detail=%q", message, detail)
 			}
 			break
 		}
@@ -116,6 +132,26 @@ func TestControllerRetryTerminatesAfterMaxAttempts(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if got := rec.calls.Load(); got != 3 {
 		t.Fatalf("reconciler calls after termination = %d, want 3", got)
+	}
+}
+
+func TestStructuredReconcileErrorUsesRetryPolicyInsteadOfUncertainty(t *testing.T) {
+	db := newOrchestratorTestDB(t)
+	insertOrchestratorTestRows(t, db)
+	if _, err := db.Exec(`UPDATE jobs SET action='stop',desired_revision_id='' WHERE id='job-1'`); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(db)
+	ctrl := NewController(store, &structuredErrorReconciler{}, ControllerConfig{Owner: "test", MaxAttempts: 10})
+	if err := ctrl.process(context.Background(), "job-1"); err != nil {
+		t.Fatal(err)
+	}
+	job, err := store.GetJob(context.Background(), "job-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.State != JobFailedRetryable || job.ErrorClass != "agent_unavailable" || job.ErrorMessage != "agent connection refused" || job.NextRunAt == nil {
+		t.Fatalf("structured failure was not scheduled normally: %#v", job)
 	}
 }
 

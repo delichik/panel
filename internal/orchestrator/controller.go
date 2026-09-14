@@ -318,6 +318,12 @@ func (c *Controller) process(ctx context.Context, jobID string) error {
 	traceJobEvent("agent_reconcile_started", job)
 	response, runErr := c.runtime.Reconcile(ctx, rpc)
 	if runErr != nil {
+		// A structured business failure is a known outcome and follows the normal
+		// retry policy. Uncertainty is reserved for calls with no trustworthy
+		// result, such as a transport loss after a possible remote side effect.
+		if response.ErrorCode != "" || response.ErrorMessage != "" {
+			return c.fail(ctx, job, response)
+		}
 		// A transport error is not proof of remote failure. Keep the conflict row
 		// owned and resolve the same execution identity before allowing new work.
 		return c.store.MarkUncertain(context.WithoutCancel(ctx), job, runErr.Error())
@@ -426,10 +432,18 @@ func firstRuntimeSpec(candidate, fallback []byte) []byte {
 
 func (c *Controller) fail(ctx context.Context, job Job, response ReconcileResponse) error {
 	if response.Retryable && c.config.MaxAttempts > 0 && job.Attempts >= c.config.MaxAttempts {
+		rootCode, rootClass := response.ErrorCode, response.ErrorClass
+		rootDetail := strings.TrimSpace(response.ErrorDetail)
+		if rootDetail == "" {
+			rootDetail = strings.TrimSpace(response.ErrorMessage)
+		}
 		response.Retryable = false
 		response.ErrorCode = "max_attempts_exceeded"
 		response.ErrorClass = "retry_exhausted"
-		response.ErrorMessage = fmt.Sprintf("job exceeded %d attempts (%d); giving up", c.config.MaxAttempts, job.Attempts)
+		if strings.TrimSpace(response.ErrorMessage) == "" {
+			response.ErrorMessage = fmt.Sprintf("job exceeded %d attempts (%d); giving up", c.config.MaxAttempts, job.Attempts)
+		}
+		response.ErrorDetail = fmt.Sprintf("retry limit reached after %d attempts; last error code=%s class=%s: %s", job.Attempts, rootCode, rootClass, rootDetail)
 	}
 	ok, err := c.store.Fail(ctx, job, response)
 	if err != nil {
