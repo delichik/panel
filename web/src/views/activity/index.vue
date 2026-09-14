@@ -29,7 +29,7 @@ import type { ActivityEvent, ActivityOperation, ActivityOperationDetail, Activit
 import { formatDateTime } from '@/utils/datetime';
 import { createLatestRequestGuard } from '@/views/_shared/requestState';
 import { emptyTimelineWindow, replaceTimelineWindow } from './timelineWindow';
-import { eventMessage, eventStream, eventTone, mergeEvents, operationTone, manualResolution, capacityNotice } from './model';
+import { eventDisplayMessage, eventMessage, eventStream, eventTone, mergeEvents, operationTone, manualResolution, capacityNotice } from './model';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -114,7 +114,7 @@ const levelOptions = computed(() => [{ value: '', label: t('activity.filter.defa
 const domainOptions = computed(() => [{ value: '', label: t('activity.filter.allDomains') }, ...['application', 'server', 'container', 'network', 'certificate', 'key_asset', 'package', 'system', 'security'].map(value => ({ value, label: t(`activity.domain.${value}`) }))]);
 const triggerOptions = computed(() => [{ value: '', label: t('activity.filter.allTriggers') }, ...['user', 'schedule', 'reconcile', 'startup', 'dependency'].map(value => ({ value, label: t(`activity.trigger.${value}`) }))]);
 function stateLabel(value: string) { const key = `activity.state.${value}`; return t(key) === key ? value : t(key); }
-function message(event: ActivityEvent) { return translateEventSummary(t, eventMessage(event)); }
+function message(event: ActivityEvent) { return translateEventSummary(t, eventDisplayMessage(event, t)); }
 function updateQuery(values: Record<string, string | undefined>, reset = true) {
   void router.replace({ query: { ...route.query, ...(reset ? { cursor: undefined, snapshotSeq: undefined, cursorTrail: undefined } : {}), ...values } });
 }

@@ -3,12 +3,14 @@ package orchestrator
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	"go.uber.org/zap"
+	"panel/internal/platform/logging"
 )
 
 // defaultMaxJobAttempts caps how many total execution attempts a Job may have
@@ -16,6 +18,10 @@ import (
 // permanently failing target (for example an unreachable agent during purge)
 // cannot retry forever.
 const defaultMaxJobAttempts = 10
+
+// controllerDiagnosticInterval prevents a persistent database/runtime fault
+// from producing one identical process log on every 250 ms scan.
+const controllerDiagnosticInterval = 30 * time.Second
 
 type RuntimeReconciler interface {
 	Reconcile(context.Context, ReconcileRequestRPC) (ReconcileResponse, error)
@@ -53,6 +59,7 @@ type Controller struct {
 	wg           sync.WaitGroup
 	mu           sync.Mutex
 	keys         map[string]struct{}
+	diagnostics  map[string]time.Time
 }
 
 type queuedJob struct {
@@ -83,7 +90,7 @@ func NewController(store *Store, runtime RuntimeReconciler, cfg ControllerConfig
 	if store != nil {
 		db = store.DB()
 	}
-	return &Controller{store: store, planner: NewPlanner(store), observations: NewObservationWriter(db), runtime: runtime, config: cfg, wake: make(chan struct{}, 1), queue: make(chan queuedJob, cfg.QueueSize), keys: map[string]struct{}{}}
+	return &Controller{store: store, planner: NewPlanner(store), observations: NewObservationWriter(db), runtime: runtime, config: cfg, wake: make(chan struct{}, 1), queue: make(chan queuedJob, cfg.QueueSize), keys: map[string]struct{}{}, diagnostics: map[string]time.Time{}}
 }
 
 func (c *Controller) Planner() *Planner { return c.planner }
@@ -154,7 +161,7 @@ func (c *Controller) scanLoop(ctx context.Context) {
 	defer ticker.Stop()
 	for {
 		if err := c.enqueueDue(ctx); err != nil && ctx.Err() == nil {
-			_ = err
+			c.logControllerError("enqueue_due", "", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -196,6 +203,9 @@ func (c *Controller) processAsync(ctx context.Context, jobID string) {
 	job, err := c.store.GetJob(ctx, jobID)
 	if err == nil {
 		key = job.ApplicationID + ":" + job.ServerID
+	} else {
+		c.logControllerError("enqueue_job_lookup", jobID, err)
+		return
 	}
 	c.mu.Lock()
 	if _, exists := c.keys[key]; exists {
@@ -210,6 +220,7 @@ func (c *Controller) processAsync(ctx context.Context, jobID string) {
 		c.releaseKey(key)
 	default:
 		c.releaseKey(key)
+		c.logControllerError("enqueue_queue_full", jobID, errors.New("orchestrator work queue is full; job deferred to the next scan"))
 	}
 }
 
@@ -220,10 +231,54 @@ func (c *Controller) workerLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case item := <-c.queue:
-			_ = c.process(ctx, item.id)
+			if err := c.process(ctx, item.id); err != nil && ctx.Err() == nil {
+				c.logControllerError("process_job", item.id, err)
+			}
 			c.releaseKey(item.key)
 		}
 	}
+}
+
+func (c *Controller) logControllerError(stage, jobID string, err error) {
+	if c == nil || err == nil {
+		return
+	}
+	now := time.Now()
+	key := stage + "\x00" + jobID
+	c.mu.Lock()
+	if c.diagnostics == nil {
+		c.diagnostics = map[string]time.Time{}
+	}
+	if last, ok := c.diagnostics[key]; ok && now.Sub(last) < controllerDiagnosticInterval {
+		c.mu.Unlock()
+		return
+	}
+	c.diagnostics[key] = now
+	if len(c.diagnostics) > 256 {
+		for existingKey, last := range c.diagnostics {
+			if now.Sub(last) >= controllerDiagnosticInterval {
+				delete(c.diagnostics, existingKey)
+			}
+		}
+		for len(c.diagnostics) > 256 {
+			var oldestKey string
+			var oldest time.Time
+			for existingKey, last := range c.diagnostics {
+				if oldestKey == "" || last.Before(oldest) {
+					oldestKey, oldest = existingKey, last
+				}
+			}
+			delete(c.diagnostics, oldestKey)
+		}
+	}
+	c.mu.Unlock()
+	logging.L().Error("orchestrator controller operation failed",
+		zap.String("component", "orchestrator_controller"),
+		zap.String("stage", stage),
+		zap.String("owner", c.config.Owner),
+		zap.String("job_id", jobID),
+		zap.Duration("repeat_suppression", controllerDiagnosticInterval),
+		zap.Error(err))
 }
 
 func (c *Controller) releaseKey(key string) {
@@ -349,7 +404,12 @@ func (c *Controller) renewLease(ctx context.Context, job Job) {
 			return
 		case <-ticker.C:
 			owned, err := c.store.Renew(ctx, job, c.config.LeaseTTL)
-			if err != nil || !owned {
+			if err != nil {
+				c.logControllerError("renew_lease", job.ID, err)
+				return
+			}
+			if !owned {
+				c.logControllerError("renew_lease", job.ID, ErrOwnershipLost)
 				return
 			}
 		}

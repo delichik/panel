@@ -44,6 +44,7 @@ func TestScenarioStopConverges(t *testing.T) {
 	}
 	h.WaitJobState(app.ID, "srv-a", "succeeded")
 	h.WaitInstanceObserved(app.ID, "srv-a", "stopped")
+	h.WaitNoActiveJob(app.ID, "srv-a")
 	if got := h.RuntimeStatus(app.ID); got != "stopped" {
 		t.Fatalf("runtime status = %q, want stopped", got)
 	}
@@ -94,6 +95,7 @@ func TestScenarioReenableRestoresRunning(t *testing.T) {
 	}
 	h.WaitJobState(app.ID, "srv-a", "succeeded")
 	h.WaitInstanceObserved(app.ID, "srv-a", "running")
+	h.WaitNoActiveJob(app.ID, "srv-a")
 	if got := h.RuntimeStatus(app.ID); got != "running" {
 		t.Fatalf("runtime status after re-enable = %q, want running", got)
 	}

@@ -7,6 +7,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // failingReconciler always returns a retryable failure so the controller's
@@ -14,6 +17,28 @@ import (
 type failingReconciler struct {
 	calls      atomic.Int64
 	retryAfter time.Duration
+}
+
+// ORCH-CTRL-001/002: persistent controller errors are structured and rate limited.
+func TestControllerDiagnosticsAreStructuredAndRateLimited(t *testing.T) {
+	core, logs := observer.New(zap.ErrorLevel)
+	restore := zap.ReplaceGlobals(zap.New(core))
+	defer restore()
+
+	ctrl := NewController(nil, nil, ControllerConfig{Owner: "test-owner"})
+	err := errors.New("database unavailable")
+	ctrl.logControllerError("process_job", "job-1", err)
+	ctrl.logControllerError("process_job", "job-1", err)
+	ctrl.logControllerError("renew_lease", "job-1", err)
+
+	entries := logs.FilterMessage("orchestrator controller operation failed").All()
+	if len(entries) != 2 {
+		t.Fatalf("diagnostic entries = %d, want one per stage inside suppression window", len(entries))
+	}
+	fields := entries[0].ContextMap()
+	if fields["component"] != "orchestrator_controller" || fields["stage"] != "process_job" || fields["owner"] != "test-owner" || fields["job_id"] != "job-1" {
+		t.Fatalf("diagnostic fields = %#v", fields)
+	}
 }
 
 func (f *failingReconciler) Reconcile(context.Context, ReconcileRequestRPC) (ReconcileResponse, error) {

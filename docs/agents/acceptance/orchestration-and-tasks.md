@@ -42,9 +42,9 @@
 - **前置**：已有 observed_source/sequence/time，收到乱序 report 或 reconcile 回写。
 - **动作**：写 Observation。
 - **结果**：有 sequence 的报告仅在 sequence 严格递增时接受；无 sequence report 仅在时间不旧且当前 source 非 reconcile 时接受；reconcile source 可按 fencing 条件更新。
-- **失败**：陈旧 observation 返回 `Accepted=false` 且实例不变。
-- **不变量**：带 jobId+leaseToken 的写回必须验证该 Job 仍 running 且 token 匹配。
-- **验证**：sequence and lease fencing tests。
+- **失败**：陈旧 observation 返回 `Accepted=false` 且实例不变；无 durable Job 的 report/cache CAS miss 属预期竞争，不得逐实例追加用户 warning。
+- **不变量**：只要携带 jobId 就必须验证该 Job 仍 running 且非空 leaseToken 匹配，空 token 不得绕过 fencing；durable Job 拒绝记录明确 reason、应用/服务器资源及 incoming/current 诊断，但不得记录 lease token。
+- **验证**：sequence、routine stale no-warning、lease/instance rejection diagnostics tests。
 
 ## 3. 不可变修订与 Planner
 
@@ -118,7 +118,7 @@
 - **前置**：Store 可用，存在 pending、到期 retryable 或过期 running leases。
 - **动作**：Controller Start/Wake/定时 scan。
 - **结果**：启动先 RecoverExpiredLeases；扫描按 priority DESC、created/id ASC 取到期工作；wake 仅降低延迟，丢失后 scan 仍收敛。
-- **失败**：Store 不可用或 schema 无效则启动失败，不得运行半配置 worker。
+- **失败**：Store 不可用或 schema 无效则启动失败，不得运行半配置 worker；扫描、Job 查询和处理错误必须输出按 stage/job 限频的结构化进程诊断，不得每 250ms 刷屏或静默吞掉。
 - **不变量**：Start 幂等；默认 worker=8、scan=250ms、lease=3m、队列至少 worker×2（除非显式合法配置）。
 - **验证**：controller start/recovery/order tests。
 
@@ -127,7 +127,7 @@
 - **前置**：多个 due Jobs，可能同 app/server。
 - **动作**：enqueue/processAsync。
 - **结果**：同 app/server key 同时最多一个进入本进程队列，不同 key 可并发。
-- **失败**：队列满可丢 latency wake，但 Job 保持 durable 并由后续 scan 捡起。
+- **失败**：队列满可丢 latency wake，但 Job 保持 durable 并由后续 scan 捡起，同时输出限频结构化诊断。
 - **不变量**：跨进程互斥依靠 DB claim/index，而非进程 map。
 - **验证**：concurrent claim and queue saturation recovery tests。
 
@@ -135,7 +135,7 @@
 
 - **前置**：Job pending 或到期 failed_retryable。
 - **动作**：Store.Claim。
-- **结果**：单条条件 UPDATE 转 running，生成唯一 leaseToken/executionId、attempts+1、设置 owner/expiry 和首次 startedAt；竞争者 affected=0。
+- **结果**：单条条件 UPDATE 转 running，生成唯一 leaseToken/executionId、attempts+1、设置 owner/expiry 和首次 startedAt；竞争者 affected=0。请求准入时已持久化的 Job 属在途工作，claim 不重复执行“新请求”日志容量门禁。
 - **失败**：未来 nextRunAt、终态或已 running 不可 claim。
 - **不变量**：一个 Job 每次执行有新 executionId/token。
 - **验证**：concurrent claim test。
@@ -249,6 +249,24 @@
 - **失败**：存量空字符串时间不得导致 500；不得凭 task log 合成 stage。
 - **不变量**：ORM 启动归一化 blank nullable times 为 NULL。
 - **验证**：legacy empty time/operation detail tests。
+
+### ORCH-ACT-001 结构化失败摘要与搜索
+
+- **前置**：同一 operation 的错误事件同时含稳定 trigger/reason 文本与 `data.error/detail/errorCode`。
+- **动作**：重建 Activity 查询投影、列出 operation 或搜索错误。
+- **结果**：failure summary 依次使用 error、detail、errorCode；三个字段均进入 FTS，原始只追加事件保持不变。
+- **失败**：不得把 `application_sync`、`agent_report` 等触发原因或普通 Event.Text 冒充真实失败；投影失败不得改写 AppDB 原始事实。
+- **不变量**：投影 schema 升级只清理并重建 LogDB 可重建索引；结构化错误沿用写入时脱敏结果。
+- **验证**：structured failure summary、redaction、error-code search、projection rebuild tests。
+
+### ORCH-ACT-002 观测拒绝的用户可见边界
+
+- **前置**：ObservationWriter 因普通陈旧 report 或 durable Job lease/fencing/实例异常拒绝写入。
+- **动作**：生成并展示 Activity 事件。
+- **结果**：普通无 Job CAS miss 不生成 warning；durable Job 拒绝使用明确 reason，关联 operation/execution 与资源，界面说明该事件不是部署重试并将原始 JSON 留在折叠技术信息中。
+- **失败**：不得用 `stale_or_ownership_lost` 混淆新事件的陈旧与所有权原因，也不得让一轮多实例扫描线性制造 warning。
+- **不变量**：历史旧 reason 仍可读；真正 lease/fencing 异常不得因降噪而丢失。
+- **验证**：observation writer rejection、activity display-message tests。
 
 ## 6. 通用任务注册与创建
 

@@ -39,7 +39,7 @@ func (s *Service) Init(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS activity_projection_execution ON activity_projection_events(execution_id,seq)`,
 		`CREATE TABLE IF NOT EXISTS activity_operation_versions(operation_id TEXT NOT NULL,applied_seq INTEGER NOT NULL,body_json TEXT NOT NULL,state_json TEXT NOT NULL,PRIMARY KEY(operation_id,applied_seq))`,
 		`CREATE TABLE IF NOT EXISTS activity_projection_checkpoint(id INTEGER PRIMARY KEY CHECK(id=1),seq INTEGER NOT NULL,version INTEGER NOT NULL)`,
-		`INSERT OR IGNORE INTO activity_projection_checkpoint(id,seq,version) VALUES(1,0,3)`,
+		`INSERT OR IGNORE INTO activity_projection_checkpoint(id,seq,version) VALUES(1,0,4)`,
 		`CREATE VIRTUAL TABLE IF NOT EXISTS activity_search USING fts5(text, tokenize='trigram')`,
 	} {
 		if _, err := s.index.ExecContext(ctx, q); err != nil {
@@ -50,13 +50,13 @@ func (s *Service) Init(ctx context.Context) error {
 	if err := s.index.QueryRowContext(ctx, `SELECT version FROM activity_projection_checkpoint WHERE id=1`).Scan(&version); err != nil {
 		return err
 	}
-	if version != 3 {
+	if version != 4 {
 		tx, err := s.index.BeginTx(ctx, nil)
 		if err != nil {
 			return err
 		}
 		defer tx.Rollback()
-		for _, q := range []string{`DELETE FROM activity_projection_events`, `DELETE FROM activity_operation_versions`, `DELETE FROM activity_search`, `UPDATE activity_projection_checkpoint SET seq=0,version=3 WHERE id=1`} {
+		for _, q := range []string{`DELETE FROM activity_projection_events`, `DELETE FROM activity_operation_versions`, `DELETE FROM activity_search`, `UPDATE activity_projection_checkpoint SET seq=0,version=4 WHERE id=1`} {
 			if _, err = tx.ExecContext(ctx, q); err != nil {
 				return err
 			}
@@ -149,7 +149,8 @@ func (s *Service) projectBatch(ctx context.Context, tx *sql.Tx, batch []Event) e
 		if err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO activity_search(rowid,text) VALUES(?,?)`, e.Seq, e.Text+" "+e.EventType+" "+e.Action+" "+e.EventID+" "+e.OperationID+" "+string(resources))
+		searchText := strings.Join([]string{e.Text, e.EventType, e.Action, e.EventID, e.OperationID, string(resources), textData(e, "error"), textData(e, "detail"), textData(e, "errorCode")}, " ")
+		_, err = tx.ExecContext(ctx, `INSERT INTO activity_search(rowid,text) VALUES(?,?)`, e.Seq, searchText)
 		if err != nil {
 			return err
 		}
@@ -189,6 +190,14 @@ func textData(e Event, key string) string {
 		return ""
 	}
 	return fmt.Sprint(v)
+}
+func failureSummary(e Event) string {
+	for _, key := range []string{"error", "detail", "errorCode"} {
+		if value := strings.TrimSpace(textData(e, key)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 func phaseResult(e Event) (string, string) {
 	p, r := textData(e, "phase"), ""
@@ -287,7 +296,9 @@ func applyEvent(s *operationState, e Event) {
 	}
 	if e.Level == "error" {
 		o.HadError = true
-		o.FailureSummary = e.Text
+		if summary := failureSummary(e); summary != "" {
+			o.FailureSummary = summary
+		}
 	}
 	p, r := phaseResult(e)
 	if e.EventType == "uncertainty.detected" || textData(e, "errorClass") == "uncertainty" || textData(e, "uncertainty") == "true" || textData(e, "uncertainty") == "1" {

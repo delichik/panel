@@ -369,6 +369,39 @@ func TestNonForcedExplicitApplicationReconcileRespectsStoredBackoffTime(t *testi
 	}
 }
 
+// APP-LIFE-003: manual reconciliation bypasses automatic backoff without forcing satisfied targets.
+func TestManualExplicitApplicationReconcileIgnoresStoredBackoffTime(t *testing.T) {
+	svc, _, _, store := newContainerizationTestService(t)
+	ctx := context.Background()
+	app := applications.Application{ID: "app-1", Name: "web", Enabled: true, Generation: 3, SpecHash: "hash-3"}
+	insertReconcileFixtureRows(t, store, app)
+	updater := &fakeApplicationUpdater{apps: []applications.Application{app}}
+	svc.apps = updater
+	nextRunAt := time.Now().UTC().Add(5 * time.Minute).Truncate(time.Second)
+	if _, err := store.AppDB().Exec(`INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at,reconcile_failures,reconcile_next_run_at)
+		VALUES('app-1-server-1','app-1','server-1','now',4,?)`, nextRunAt.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+
+	inputs, err := svc.CollectApplicationReconcileTasks(ctx, "op-1", tasks.PeriodicTrigger{
+		Type:   "application_change",
+		Manual: true,
+		Payload: ApplicationReconcileTrigger{
+			ApplicationIDs: []string{app.ID},
+			ServerIDs:      []string{"server-1"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inputs) != 0 {
+		t.Fatalf("reconcile collector must not create target task inputs, got %#v", inputs)
+	}
+	if len(updater.plans) != 1 || updater.plans[0].ApplicationID != app.ID || !updater.plans[0].Manual {
+		t.Fatalf("manual reconcile plan = %#v", updater.plans)
+	}
+}
+
 func TestForcedExplicitApplicationReconcileIgnoresStoredBackoffTime(t *testing.T) {
 	svc, _, _, store := newContainerizationTestService(t)
 	ctx := context.Background()
@@ -508,6 +541,51 @@ func TestApplicationReconcileDoesNotPlanHealthyContainerWithoutReconcileState(t 
 	}
 	if len(updater.plans) != 0 {
 		t.Fatalf("healthy container should not plan, got %#v", updater.plans)
+	}
+}
+
+// ORCH-ACT-002: scanning cached reports must not replay observations or create rejection noise.
+func TestApplicationReconcileScanDoesNotRewriteCachedInstanceObservation(t *testing.T) {
+	svc, _, fakeAgent, store := newContainerizationTestService(t)
+	ctx := context.Background()
+	app := applications.Application{ID: "app-1", Name: "web", Enabled: true, Generation: 3, SpecHash: "hash-3"}
+	insertReconcileFixtureRows(t, store, app)
+	updater := &fakeApplicationUpdater{apps: []applications.Application{app}}
+	svc.apps = updater
+	fakeAgent.containers = []agentcontract.DockerContainer{{
+		ID:    "container-1",
+		State: "running",
+		Labels: map[string]string{
+			"panel.application.managed":     "true",
+			"panel.application.id":          app.ID,
+			"panel.application.instance.id": app.ID + "-server-1",
+			"panel.application.generation":  "3",
+			"panel.application.spec.hash":   "hash-3",
+		},
+	}}
+	saveReportedContainers(t, svc, "server-1", fakeAgent.containers)
+	observedAt := time.Date(2026, 9, 10, 14, 30, 0, 0, time.UTC).Format(time.RFC3339Nano)
+	if _, err := store.AppDB().Exec(`UPDATE application_instances SET observed_source='reconcile',observed_state='running',observed_generation=99,observed_spec_hash='reconcile-hash',observed_at=? WHERE id='app-1-server-1'`, observedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := svc.CollectApplicationReconcileTasks(ctx, "op-1", tasks.PeriodicTrigger{Type: "scheduler"}); err != nil {
+		t.Fatal(err)
+	}
+	var source, state, specHash, storedObservedAt string
+	var generation int
+	if err := store.AppDB().QueryRow(`SELECT observed_source,observed_state,observed_generation,observed_spec_hash,observed_at FROM application_instances WHERE id='app-1-server-1'`).Scan(&source, &state, &generation, &specHash, &storedObservedAt); err != nil {
+		t.Fatal(err)
+	}
+	if source != "reconcile" || state != "running" || generation != 99 || specHash != "reconcile-hash" || storedObservedAt != observedAt {
+		t.Fatalf("cached scan rewrote observation: source=%q state=%q generation=%d specHash=%q observedAt=%q", source, state, generation, specHash, storedObservedAt)
+	}
+	var rejections int
+	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM activity_events WHERE event_type='observation.rejected'`).Scan(&rejections); err != nil {
+		t.Fatal(err)
+	}
+	if rejections != 0 {
+		t.Fatalf("cached scan appended %d observation rejection warnings", rejections)
 	}
 }
 

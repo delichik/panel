@@ -894,18 +894,10 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string
 		if !srv.Reachable || srv.Traits[agentcontract.TraitStatus] != agentcontract.StatusCompatible {
 			continue
 		}
-		containers, observedAt, err := s.reportedContainers(ctx, srv.ID)
+		containers, _, err := s.reportedContainers(ctx, srv.ID)
 		if err != nil {
 			logging.L().Warn("failed to read reported containers for reconcile scan", zap.String("server_id", srv.ID), zap.Error(err))
 			continue
-		}
-		if observedAt != nil {
-			knownApps, knownErr := s.knownApplicationIDs(ctx)
-			if knownErr == nil {
-				if writeErr := s.writeInstanceObservations(ctx, srv.ID, *observedAt, containers, knownApps, "periodic_scan"); writeErr != nil {
-					logging.L().Warn("failed to write periodic application observations", zap.String("server_id", srv.ID), zap.Error(writeErr))
-				}
-			}
 		}
 		observed := map[string]agentcontract.DockerContainer{}
 		for _, container := range containers {

@@ -202,9 +202,6 @@ func (s *Store) ListDue(ctx context.Context, limit int) ([]Job, error) {
 }
 
 func (s *Store) Claim(ctx context.Context, jobID, owner string, leaseTTL time.Duration) (Job, bool, error) {
-	if err := activitylog.CheckAdmission(ctx, s.db); err != nil {
-		return Job{}, false, err
-	}
 	now := s.now().UTC()
 	if leaseTTL <= 0 {
 		leaseTTL = 3 * time.Minute

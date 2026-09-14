@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"panel/internal/platform/activitylog"
 	"testing"
 	"time"
@@ -122,6 +123,7 @@ func TestRequeueRefreshesCurrentDesiredSnapshot(t *testing.T) {
 	}
 }
 
+// ORCH-STATE-004 / ORCH-ACT-002: routine stale reports stay quiet while lease loss remains visible.
 func TestObservationWriterUsesSequenceAndLeaseFencing(t *testing.T) {
 	db := newOrchestratorTestDB(t)
 	insertOrchestratorTestRows(t, db)
@@ -135,6 +137,13 @@ func TestObservationWriterUsesSequenceAndLeaseFencing(t *testing.T) {
 	if err != nil || stale.Accepted {
 		t.Fatalf("stale observation = %#v, %v", stale, err)
 	}
+	var routineRejections int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM activity_events WHERE event_type='observation.rejected'`).Scan(&routineRejections); err != nil {
+		t.Fatal(err)
+	}
+	if routineRejections != 0 {
+		t.Fatalf("routine stale report must not append a user warning, got %d", routineRejections)
+	}
 	store := NewStore(db).withNow(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 	job, claimed, err := store.Claim(ctx, "job-1", "worker-a", time.Minute)
 	if err != nil || !claimed {
@@ -144,9 +153,64 @@ func TestObservationWriterUsesSequenceAndLeaseFencing(t *testing.T) {
 	if err != nil || wrong.Accepted {
 		t.Fatalf("wrong lease observation = %#v, %v", wrong, err)
 	}
+	var dataRaw, resourcesRaw string
+	if err := db.QueryRow(`SELECT data_json,resources_json FROM activity_events WHERE event_type='observation.rejected' ORDER BY seq DESC LIMIT 1`).Scan(&dataRaw, &resourcesRaw); err != nil {
+		t.Fatal(err)
+	}
+	var data map[string]any
+	var resources []activitylog.Resource
+	if err := json.Unmarshal([]byte(dataRaw), &data); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(resourcesRaw), &resources); err != nil {
+		t.Fatal(err)
+	}
+	if data["reason"] != "lease_lost" {
+		t.Fatalf("rejection reason = %#v, want lease_lost", data["reason"])
+	}
+	if len(resources) != 2 || resources[0].Type != "application" || resources[0].ID != "app-1" || resources[1].Type != "server" || resources[1].ID != "srv-1" {
+		t.Fatalf("rejection resources = %#v", resources)
+	}
+	incoming, _ := data["incoming"].(map[string]any)
+	current, _ := data["current"].(map[string]any)
+	if incoming["source"] != "reconcile" || current["jobState"] != JobRunning || current["leaseMatches"] != false {
+		t.Fatalf("rejection diagnostics missing: incoming=%#v current=%#v", incoming, current)
+	}
 	owned, err := writer.Write(ctx, Observation{InstanceID: "inst-1", Source: "reconcile", ObservedAt: time.Unix(4, 0).UTC(), ObservedState: ObservedRunning, JobID: job.ID, LeaseToken: job.LeaseToken})
 	if err != nil || !owned.Accepted {
 		t.Fatalf("owned observation = %#v, %v", owned, err)
+	}
+}
+
+// ORCH-ACT-002: durable Job rejection identifies a missing instance precisely.
+func TestObservationWriterExplainsMissingInstanceForDurableJob(t *testing.T) {
+	db := newOrchestratorTestDB(t)
+	insertOrchestratorTestRows(t, db)
+	store := NewStore(db)
+	job, claimed, err := store.Claim(context.Background(), "job-1", "worker-a", time.Minute)
+	if err != nil || !claimed {
+		t.Fatalf("claim: %#v %v %v", job, claimed, err)
+	}
+	if _, err := db.Exec(`DELETE FROM application_instances WHERE id='inst-1'`); err != nil {
+		t.Fatal(err)
+	}
+	result, err := NewObservationWriter(db).Write(context.Background(), Observation{
+		InstanceID: "inst-1", Source: "reconcile", ObservedAt: time.Now().UTC(), ObservedState: ObservedRunning,
+		JobID: job.ID, LeaseToken: job.LeaseToken,
+	})
+	if err != nil || result.Accepted {
+		t.Fatalf("missing instance observation = %#v, %v", result, err)
+	}
+	var dataRaw string
+	if err := db.QueryRow(`SELECT data_json FROM activity_events WHERE event_type='observation.rejected' ORDER BY seq DESC LIMIT 1`).Scan(&dataRaw); err != nil {
+		t.Fatal(err)
+	}
+	var data map[string]any
+	if err := json.Unmarshal([]byte(dataRaw), &data); err != nil {
+		t.Fatal(err)
+	}
+	if data["reason"] != "instance_missing" {
+		t.Fatalf("rejection reason = %#v, want instance_missing", data["reason"])
 	}
 }
 
