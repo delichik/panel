@@ -29,6 +29,7 @@ import type { ActivityEvent, ActivityOperation, ActivityOperationDetail, Activit
 import { formatDateTime } from '@/utils/datetime';
 import { createLatestRequestGuard } from '@/views/_shared/requestState';
 import { emptyTimelineWindow, replaceTimelineWindow } from './timelineWindow';
+import { initializeActivityList } from './initialLoad';
 import { eventDisplayMessage, eventMessage, eventStream, eventTone, mergeEvents, operationTone, manualResolution, capacityNotice } from './model';
 
 const { t } = useI18n();
@@ -271,7 +272,7 @@ watch(search, value => { clearTimeout(searchTimer); searchTimer = setTimeout(() 
 watch(() => read('q'), value => { if (search.value !== value) search.value = value; });
 watch(() => JSON.stringify([view.value, query.value, read('cursor'), read('snapshotSeq')]), () => { void load(); });
 watch(selectedId, () => { if (selectedId.value) void loadDetail(); else { detailGuard.invalidate(); detail.value = null; timeline.value = []; } });
-onMounted(() => { if (!read('from')) updateQuery({ from: initialFrom }, false); else void load(); if (selectedId.value) void loadDetail(); autoRefresh.start(poll); });
+onMounted(() => { initializeActivityList(Boolean(read('from')), initialFrom, updateQuery, load); if (selectedId.value) void loadDetail(); autoRefresh.start(poll); });
 onBeforeUnmount(() => { clearTimeout(searchTimer); listGuard.invalidate(); detailGuard.invalidate(); contextGuard.invalidate(); });
 </script>
 
