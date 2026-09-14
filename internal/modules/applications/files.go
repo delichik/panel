@@ -122,7 +122,7 @@ func (s *Service) attachFiles(ctx context.Context, job appruntime.Spec, spec app
 		}
 		name, err := normalizeApplicationFileName(mount.Source)
 		if err != nil {
-			return appruntime.Spec{}, err
+			return appruntime.Spec{}, panelerr.WithDetails(panelerr.Validation("application_file_name_invalid", "Application file name is invalid"), map[string]any{"field": "mounts.source", "fileName": mount.Source})
 		}
 		file, ok := filesByName[name]
 		if !ok {

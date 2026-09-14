@@ -439,6 +439,7 @@ export function mockApplicationSummaries(): ApplicationSummaryDto[] {
     jobId: app.jobId,
     namespace: app.namespace,
     runtimeStatus: app.runtimeStatus,
+    planningError: app.planningError,
     imageUpdateAvailable: app.imageUpdateAvailable,
     lastError: app.lastError,
     updatedAt: app.updatedAt,

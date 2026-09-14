@@ -86,6 +86,7 @@ type Service struct {
 	storageResolver       StorageShareResolver
 	events                runtimeevents.EventWriter
 	orchestrator          *controlplane.Controller
+	planningLocks         [64]sync.Mutex
 	editCleanupOnce       sync.Once
 	editCleanupStopOnce   sync.Once
 	editCleanupStop       chan struct{}
@@ -421,7 +422,7 @@ func (s *Service) ListSummaries(ctx context.Context, page, pageSize int, query s
 	}
 	total := int(total64)
 	var rows []models.Application
-	err = base.Select("id", "name", "enabled", "reconcile_stopped", "image_reference", "image_update_available", "job_id", "namespace", "last_error", "updated_at").
+	err = base.Select("id", "name", "enabled", "reconcile_stopped", "image_reference", "image_update_available", "job_id", "namespace", "last_error", "planning_error_json", "updated_at").
 		OrderBy("name ASC", "id ASC").Limit(pageSize).Offset((page-1)*pageSize).All(ctx, &rows)
 	if err != nil {
 		return httpx.ListPage[ApplicationSummary]{}, err
@@ -440,6 +441,7 @@ func (s *Service) ListSummaries(ctx context.Context, page, pageSize int, query s
 			JobID:                m.JobID,
 			Namespace:            m.Namespace,
 			LastError:            m.LastError,
+			PlanningError:        decodePlanningError(m.PlanningErrorJSON),
 			UpdatedAt:            m.UpdatedAt,
 		}
 		byID[summary.ID] = len(summaries)
@@ -472,19 +474,23 @@ func (s *Service) ListSummaries(ctx context.Context, page, pageSize int, query s
 	// 中，failed_retryable 表示失败重试；不再读取旧 lifecycle 表。
 	activeJobStates := make(map[string]string, len(summaries))
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(pageIDs)), ",")
-	jobRows, err := s.db.QueryContext(ctx, `SELECT application_id,state FROM jobs
+	jobRows, err := s.db.QueryContext(ctx, `SELECT application_id,state,error_class FROM jobs
 		WHERE application_id IN (`+placeholders+`) AND state IN ('pending','running','failed_retryable')`, pageIDs...)
 	if err != nil {
 		return httpx.ListPage[ApplicationSummary]{}, err
 	}
 	defer jobRows.Close()
 	for jobRows.Next() {
-		var appID, state string
-		if err := jobRows.Scan(&appID, &state); err != nil {
+		var appID, state, errorClass string
+		if err := jobRows.Scan(&appID, &state, &errorClass); err != nil {
 			return httpx.ListPage[ApplicationSummary]{}, err
 		}
 		if _, ok := byID[appID]; ok {
-			if state == "failed_retryable" {
+			if errorClass == "uncertainty" {
+				activeJobStates[appID] = "needs_attention"
+			} else if activeJobStates[appID] == "needs_attention" {
+				continue
+			} else if state == "failed_retryable" {
 				activeJobStates[appID] = "failed"
 			} else if activeJobStates[appID] != "failed" {
 				activeJobStates[appID] = "deploying"
@@ -1055,10 +1061,6 @@ func (s *Service) Deploy(ctx context.Context, appID string) (OperationResult, er
 	if err != nil {
 		return OperationResult{}, err
 	}
-	app, _, err = s.prepareDeploy(ctx, appID)
-	if err != nil {
-		return OperationResult{}, err
-	}
 	plan, err := s.PlanApplicationDeployment(ctx, DeploymentPlanRequest{
 		ApplicationID:       app.ID,
 		Manual:              true,
@@ -1067,6 +1069,10 @@ func (s *Service) Deploy(ctx context.Context, appID string) (OperationResult, er
 		TriggerResourceID:   app.ID,
 		Reason:              "application_sync",
 	})
+	if err != nil {
+		return OperationResult{}, err
+	}
+	app, err = s.Get(ctx, appID)
 	if err != nil {
 		return OperationResult{}, err
 	}
@@ -1375,6 +1381,7 @@ func (s *Service) Runtime(ctx context.Context, appID string) (ApplicationRuntime
 	}
 	out := ApplicationRuntime{
 		ApplicationID: app.ID,
+		PlanningError: app.PlanningError,
 		RuntimeID:     app.JobID,
 		Status:        appruntime.StatusStopped,
 		ObservedAt:    time.Now().UTC(),
@@ -1423,7 +1430,14 @@ func (s *Service) jobDerivedRuntimeStatus(ctx context.Context, app Application, 
 	status := appruntime.StatusDeploying
 	selected := rows[0]
 	for _, row := range rows {
-		if row.State == controlplane.JobFailedRetryable {
+		if row.ErrorClass == "uncertainty" {
+			selected = row
+			status = "needs_attention"
+			break
+		}
+	}
+	for _, row := range rows {
+		if status != "needs_attention" && row.State == controlplane.JobFailedRetryable {
 			status = appruntime.StatusFailed
 			selected = row
 			break
@@ -2255,9 +2269,29 @@ func (s *Service) PlanApplicationDeployment(ctx context.Context, req DeploymentP
 	if s == nil || s.orchestrator == nil {
 		return DeploymentPlanResult{}, controlplane.ErrStoreUnavailable
 	}
-	result, err := s.planApplicationDeploymentV3(ctx, req)
+	// Serialize planning outcomes for one application; a late failure must not
+	// overwrite a newer successful plan for the same configuration.
+	key := sha256.Sum256([]byte(req.ApplicationID))
+	lock := &s.planningLocks[int(key[0])%len(s.planningLocks)]
+	lock.Lock()
+	defer lock.Unlock()
+	app, err := s.Get(ctx, req.ApplicationID)
 	if err != nil {
 		return DeploymentPlanResult{}, err
+	}
+	result, err := s.planApplicationDeploymentV3(ctx, req)
+	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err != nil {
+		if recordErr := s.recordPlanningOutcome(recordCtx, app, req, err); recordErr != nil {
+			log.Printf("application %s planning failure could not be recorded", app.ID)
+		}
+		return DeploymentPlanResult{}, err
+	}
+	if result.planningValidated || len(result.JobIDs) > 0 {
+		if recordErr := s.recordPlanningOutcome(recordCtx, app, req, nil); recordErr != nil {
+			log.Printf("application %s planning recovery could not be recorded", app.ID)
+		}
 	}
 	s.enqueueDeploymentPlanResult(result)
 	return result, nil
@@ -2326,6 +2360,7 @@ func (s *Service) planApplicationDeploymentV3(ctx context.Context, req Deploymen
 			return DeploymentPlanResult{}, err
 		}
 		targets = filterDeploymentTargets(targets, targetIDs)
+		validated := len(targets) > 0
 		if !req.Force && !req.ObservedRuntimeDrift {
 			targets, err = s.filterUnsatisfiedDeploymentTargets(ctx, app, baseSpec, targets)
 			if err != nil {
@@ -2336,6 +2371,7 @@ func (s *Service) planApplicationDeploymentV3(ctx context.Context, req Deploymen
 		if err != nil {
 			return DeploymentPlanResult{}, err
 		}
+		result.planningValidated = validated
 	}
 
 	removedTargets, err := s.reconcileRemovedTargets(ctx, app)
@@ -2500,6 +2536,7 @@ func mergeDeploymentPlanResults(items ...DeploymentPlanResult) DeploymentPlanRes
 	for _, item := range items {
 		out.JobIDs = append(out.JobIDs, item.JobIDs...)
 		out.CreatedJobIDs = append(out.CreatedJobIDs, item.CreatedJobIDs...)
+		out.planningValidated = out.planningValidated || item.planningValidated
 	}
 	return out
 }

@@ -38,52 +38,54 @@ const (
 )
 
 type Application struct {
-	ID                   string              `json:"id"`
-	Version              int                 `json:"version"`
-	Kind                 string              `json:"kind"`
-	Name                 string              `json:"name"`
-	Enabled              bool                `json:"enabled"`
-	ReconcileStopped     bool                `json:"reconcileStopped,omitempty"`
-	DeletionRequested    bool                `json:"deletionRequested,omitempty"`
-	SpecYAML             string              `json:"specYaml"`
-	PersistentPath       string              `json:"persistentPath,omitempty"`
-	PersistentServers    []string            `json:"persistentServers"`
-	HasPersistentData    bool                `json:"hasPersistentData"`
-	DeploymentMode       string              `json:"deploymentMode"`
-	DeploymentServers    []string            `json:"deploymentServers"`
-	ReverseProxy         []ReverseProxyRule  `json:"reverseProxy"`
-	Generation           int                 `json:"generation"`
-	SpecHash             string              `json:"specHash"`
-	ImageReference       string              `json:"imageReference,omitempty"`
-	ImageDigest          string              `json:"imageDigest,omitempty"`
-	ImageLatestDigest    string              `json:"imageLatestDigest,omitempty"`
-	ImageCheckedAt       *time.Time          `json:"imageCheckedAt,omitempty"`
-	ImageUpdateAvailable bool                `json:"imageUpdateAvailable"`
-	ImageUpdateTargets   []ImageUpdateTarget `json:"imageUpdateTargets,omitempty"`
-	ImageLastError       string              `json:"imageLastError,omitempty"`
-	JobID                string              `json:"jobId"`
-	Namespace            string              `json:"namespace"`
-	LastEvalID           string              `json:"lastEvalId,omitempty"`
-	LastDeploymentID     string              `json:"lastDeploymentId,omitempty"`
-	LastError            string              `json:"lastError,omitempty"`
-	RuntimeStatus        string              `json:"runtimeStatus,omitempty"`
-	CreatedAt            time.Time           `json:"createdAt"`
-	UpdatedAt            time.Time           `json:"updatedAt"`
+	ID                   string                   `json:"id"`
+	Version              int                      `json:"version"`
+	Kind                 string                   `json:"kind"`
+	Name                 string                   `json:"name"`
+	Enabled              bool                     `json:"enabled"`
+	ReconcileStopped     bool                     `json:"reconcileStopped,omitempty"`
+	DeletionRequested    bool                     `json:"deletionRequested,omitempty"`
+	SpecYAML             string                   `json:"specYaml"`
+	PersistentPath       string                   `json:"persistentPath,omitempty"`
+	PersistentServers    []string                 `json:"persistentServers"`
+	HasPersistentData    bool                     `json:"hasPersistentData"`
+	DeploymentMode       string                   `json:"deploymentMode"`
+	DeploymentServers    []string                 `json:"deploymentServers"`
+	ReverseProxy         []ReverseProxyRule       `json:"reverseProxy"`
+	Generation           int                      `json:"generation"`
+	SpecHash             string                   `json:"specHash"`
+	ImageReference       string                   `json:"imageReference,omitempty"`
+	ImageDigest          string                   `json:"imageDigest,omitempty"`
+	ImageLatestDigest    string                   `json:"imageLatestDigest,omitempty"`
+	ImageCheckedAt       *time.Time               `json:"imageCheckedAt,omitempty"`
+	ImageUpdateAvailable bool                     `json:"imageUpdateAvailable"`
+	ImageUpdateTargets   []ImageUpdateTarget      `json:"imageUpdateTargets,omitempty"`
+	ImageLastError       string                   `json:"imageLastError,omitempty"`
+	JobID                string                   `json:"jobId"`
+	Namespace            string                   `json:"namespace"`
+	LastEvalID           string                   `json:"lastEvalId,omitempty"`
+	LastDeploymentID     string                   `json:"lastDeploymentId,omitempty"`
+	LastError            string                   `json:"lastError,omitempty"`
+	PlanningError        *DeploymentPlanningError `json:"planningError,omitempty"`
+	RuntimeStatus        string                   `json:"runtimeStatus,omitempty"`
+	CreatedAt            time.Time                `json:"createdAt"`
+	UpdatedAt            time.Time                `json:"updatedAt"`
 }
 
 type ApplicationSummary struct {
-	ID                   string    `json:"id"`
-	Name                 string    `json:"name"`
-	Enabled              bool      `json:"enabled"`
-	ReconcileStopped     bool      `json:"reconcileStopped,omitempty"`
-	ImageReference       string    `json:"imageReference,omitempty"`
-	InstanceCount        int       `json:"instanceCount"`
-	JobID                string    `json:"jobId"`
-	Namespace            string    `json:"namespace"`
-	RuntimeStatus        string    `json:"runtimeStatus,omitempty"`
-	ImageUpdateAvailable bool      `json:"imageUpdateAvailable"`
-	LastError            string    `json:"lastError,omitempty"`
-	UpdatedAt            time.Time `json:"updatedAt"`
+	ID                   string                   `json:"id"`
+	Name                 string                   `json:"name"`
+	Enabled              bool                     `json:"enabled"`
+	ReconcileStopped     bool                     `json:"reconcileStopped,omitempty"`
+	ImageReference       string                   `json:"imageReference,omitempty"`
+	InstanceCount        int                      `json:"instanceCount"`
+	JobID                string                   `json:"jobId"`
+	Namespace            string                   `json:"namespace"`
+	RuntimeStatus        string                   `json:"runtimeStatus,omitempty"`
+	ImageUpdateAvailable bool                     `json:"imageUpdateAvailable"`
+	LastError            string                   `json:"lastError,omitempty"`
+	PlanningError        *DeploymentPlanningError `json:"planningError,omitempty"`
+	UpdatedAt            time.Time                `json:"updatedAt"`
 }
 
 type ImageUpdateTarget struct {
@@ -341,6 +343,7 @@ type Runtime struct {
 	RuntimeID     string                      `json:"runtimeId"`
 	Status        string                      `json:"status"`
 	Operation     *LifecycleOperation         `json:"operation,omitempty"`
+	PlanningError *DeploymentPlanningError    `json:"planningError,omitempty"`
 	Instances     []appruntime.InstanceStatus `json:"instances"`
 	ObservedAt    time.Time                   `json:"observedAt"`
 }
@@ -442,8 +445,9 @@ type DeploymentPlanRequest struct {
 }
 
 type DeploymentPlanResult struct {
-	JobIDs        []string
-	CreatedJobIDs []string
+	JobIDs            []string
+	CreatedJobIDs     []string
+	planningValidated bool
 }
 
 type ValidationIssue struct {

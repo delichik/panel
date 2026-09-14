@@ -27,6 +27,8 @@
 
 - `COV-UI-001`：同一路由内新增或调整字段选择、校验、空态等用户可见行为时，路由数量可以不变，但必须同步更新 `ui-pages.md` 的稳定验收项和对应前端测试。
 
+- 应用部署反馈：既有应用页增加部署规划失败、结果待核实、原因与活动入口，不新增路由；对应 `UI-APP-001/002/004`、`APP-PLAN-001`、`APP-RUN-004`。
+
 ## 3. HTTP API 基线
 
 当前逐项清单记录 162 个 `/api` method/path 组合，路由清单 SHA-256 为 `5505ce557efc24f297296dfc239768468c35d127c34a8431256ceea691f82465`。来源计数如下：
@@ -53,6 +55,8 @@
 
 - `COV-API-001`：路由清单测试失败时必须先确定是哪一个 method/path 改变，再更新消费者、Mock、验收项和期望哈希；不得只替换哈希让测试通过。
 
+- 应用详情、列表摘要、runtime 增加可选 `planningError`（code/message/field/fileName/retryable/operationId/occurredAt/configVersion），列表 runtimeStatus 与 runtime.status 支持 `needs_attention`；对应 `APP-PLAN-001`、`APP-RUN-004`，API method/path 数量不变。
+
 - `COV-API-002`：维护导出/恢复的独立最小应用路由不计入上述主 Panel 161 条，但必须由备份恢复文档覆盖其认证、状态、密码、下载、重试、退出和清除 pending 操作。
 
 - `COV-API-003`：161 个 method/path 的逐项映射见 [主 Panel API 路由逐项清单](api-route-inventory.md)；路由清单测试与该表必须同步变化。
@@ -72,6 +76,8 @@
 - `COV-DATA-002`：删除表必须同时处理模型、迁移、索引、外键、服务查询、备份恢复和旧版本升级；仅从 `AllModels` 移除不构成安全删除。
 - `COV-DATA-003`：AppDB 的 `activity_events/activity_evidence_chunks` 使用专有只追加 schema，不计入 ORM 模型数量；LogDB 的 Activity projection/checkpoint/FTS 是可重建查询索引。原始事实与投影不得交换归属或互相替代。
 
+- `applications.planning_error_json` 保存当前规划诊断，默认空值；随应用进入备份/恢复，旧数据库由 ORM 增列且不修改原有配置。失败与恢复事件继续使用 AppDB 活动日志，不新增表；对应 `APP-PLAN-001`、`ORCH-PLAN-006`。
+
 ## 5. 常驻与周期后台行为
 
 | 后台行为 | 主要事实/输出 | 验收领域 |
@@ -88,6 +94,8 @@
 
 - `COV-BG-001`：新增 goroutine、ticker、cron 或 queue consumer 必须说明启动顺序、停止等待、重复运行、失败重试、配置热更新和进程重启恢复。
 - `COV-BG-002`：后台触发的远端写操作必须与等价手动操作共享服务端安全门和可追踪记录。
+
+- Agent report collector 对应用规划失败逐应用隔离并继续扫描，自动相同诊断去重，不新增定时任务；对应 `ORCH-PLAN-006`。
 
 ## 6. 构建与交付产物
 
@@ -110,3 +118,5 @@
 - `COV-TEST-002`：关键 UI 状态至少覆盖：会话守卫、顶栏语言持久化及失败回滚、日志页默认范围首次加载、慢网路由进行中反馈及清理、请求竞态、加载/错误/空态、确认弹窗、状态色语义、日期范围和编辑器输入。
 - `COV-TEST-003`：本文件的静态数量只作为漏项信号，不允许通过增加空测试或合并路由来追求数量不变。
 - `COV-TEST-004`：应用编辑器的嵌套代理 path 必须覆盖 Vue reactive 既有值回显所需的完整克隆与父草稿隔离；不得把 reactive Proxy 直接交给浏览器深拷贝 API。
+
+- 本轮增加 `planning_outcome_test.go`、`planning_error_migration_test.go`，扩展容器巡检与前端应用模型测试，覆盖 `APP-PLAN-001`、`APP-RUN-004`、`ORCH-PLAN-006`；Vitest 缓存固定在仓库 `tmp/vitest`，遵守 `ENG-TEST-001/003` 的测试入口和中间产物约定。

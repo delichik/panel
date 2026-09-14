@@ -285,6 +285,7 @@ type Application struct {
 	LastEvalID           string    `orm:"not_null;default:''"`
 	LastDeploymentID     string    `orm:"not_null;default:''"`
 	LastError            string    `orm:"not_null;default:''"`
+	PlanningErrorJSON    string    `orm:"not_null;default:''"`
 	CreatedAt            time.Time `orm:"not_null"`
 	UpdatedAt            time.Time `orm:"not_null"`
 }

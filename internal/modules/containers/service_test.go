@@ -2,6 +2,7 @@ package containerization
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -679,6 +680,24 @@ func TestApplicationReconcileFailuresClearAfterFiveHealthyObservations(t *testin
 	}
 }
 
+func TestApplicationPlanningFailureDoesNotStopOtherApplications(t *testing.T) {
+	svc, _, _, store := newContainerizationTestService(t)
+	app := applications.Application{ID: "app-1", Name: "invalid", Enabled: true, Generation: 1, SpecHash: "hash"}
+	insertReconcileFixtureRows(t, store, app)
+	other := applications.Application{ID: "app-2", Name: "healthy", Enabled: true, Generation: 1, SpecHash: "hash"}
+	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,job_id,created_at,updated_at) VALUES('app-2','healthy',1,'name: healthy','panel-healthy','now','now'); INSERT INTO application_instances(id,application_id,server_id,container_name,desired_state,status,created_at,updated_at) VALUES('app-2-server-1','app-2','server-1','panel-healthy','running','missing','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	updater := &fakeApplicationUpdater{apps: []applications.Application{app, other}, planErrors: map[string]error{app.ID: errors.New("invalid configuration")}}
+	svc.apps = updater
+	if _, err := svc.CollectApplicationReconcileTasks(context.Background(), "op-1", tasks.PeriodicTrigger{Type: "scheduler"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(updater.plans) != 2 {
+		t.Fatalf("one failed application blocked the scan: %#v", updater.plans)
+	}
+}
+
 func TestApplicationReconcileForcePlansDeployment(t *testing.T) {
 	svc, _, _, _ := newContainerizationTestService(t)
 	ctx := context.Background()
@@ -970,9 +989,10 @@ type blockingImageResolver struct {
 }
 
 type fakeApplicationUpdater struct {
-	apps  []applications.Application
-	err   error
-	plans []applications.DeploymentPlanRequest
+	apps       []applications.Application
+	err        error
+	planErrors map[string]error
+	plans      []applications.DeploymentPlanRequest
 }
 
 func (f fakeApplicationUpdater) List(context.Context) ([]applications.Application, error) {
@@ -989,6 +1009,9 @@ func (f fakeApplicationUpdater) Deploy(context.Context, string) (applications.Op
 
 func (f *fakeApplicationUpdater) PlanApplicationDeployment(_ context.Context, req applications.DeploymentPlanRequest) (applications.DeploymentPlanResult, error) {
 	f.plans = append(f.plans, req)
+	if err := f.planErrors[req.ApplicationID]; err != nil {
+		return applications.DeploymentPlanResult{}, err
+	}
 	return applications.DeploymentPlanResult{}, f.err
 }
 

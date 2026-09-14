@@ -40,6 +40,8 @@ import { formatDateTime } from '@/utils/datetime';
 import {
   applicationFileMountOptions as makeApplicationFileMountOptions,
   applicationRuntimePollDelay,
+  applicationPlanningError,
+  applicationOperationStatus,
   applicationStatus,
   cloneFacilityDomains,
   cloneFacilityPath,
@@ -200,6 +202,8 @@ const selectedApplication = computed(() => currentApplication.value ?? applicati
 const persistentServerOptions = computed(() => (selectedApplication.value.persistentServers ?? []).map((serverId) => ({ label: serverDisplayName(serverId), value: serverId })));
 const currentRuntime = computed(() => selectedId.value ? runtimes.value[selectedId.value] : null);
 const currentOperation = computed(() => currentRuntime.value?.operation);
+const planningError = computed(() => applicationPlanningError(selectedApplication.value, currentRuntime.value));
+const currentOperationStatus = computed(() => applicationOperationStatus(currentRuntime.value));
 const appStatus = computed(() => currentApplicationSummary.value ? applicationStatus(selectedApplication.value, currentRuntime.value) : 'unknown');
 const appDraft = reactive<ApplicationDraftUi>(draftFromApplication());
 const facilityDraft = reactive<FacilityDraftUi>(facilityDraftFromConfig());
@@ -912,6 +916,9 @@ async function runOperation(name: string, action: () => Promise<unknown>, succes
     await load();
   } catch (err) {
     notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
+    // Planning can fail before a Job exists. Reload the durable diagnostic so
+    // the reason remains visible after the error toast disappears.
+    await load();
   } finally {
     pending.value = '';
   }
@@ -1694,6 +1701,7 @@ function applicationFromSummary(app?: ApplicationSummaryDto | null): Application
     namespace: app.namespace,
     runtimeStatus: app.runtimeStatus,
     lastError: app.lastError,
+    planningError: app.planningError,
     updatedAt: app.updatedAt,
   };
 }
@@ -1846,24 +1854,35 @@ onBeforeUnmount(() => {
                       <div class="rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.running') }}</span><strong>{{ runtimeSummary(currentRuntime).running }}</strong></div>
                       <div class="rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.failed') }}</span><strong>{{ runtimeSummary(currentRuntime).failed }}</strong></div>
                     </div>
+                    <div v-if="planningError" role="alert" class="grid gap-2 rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">
+                      <div class="flex flex-wrap items-center justify-between gap-2">
+                        <strong>{{ t('applicationsPage.planningFailed') }}</strong>
+                        <Button size="sm" variant="ghost" @click="openApplicationActivity(planningError.operationId)"><ClipboardList />{{ t('applicationsPage.viewOperation') }}</Button>
+                      </div>
+                      <span class="whitespace-pre-wrap break-words">{{ planningError.message }}</span>
+                      <span v-if="planningError.fileName" class="break-words">{{ t('applicationsPage.planningFile') }}: {{ planningError.fileName }}</span>
+                      <span v-if="planningError.field">{{ t('applicationsPage.planningField') }}: {{ planningError.field }}</span>
+                      <span>{{ t(planningError.retryable ? 'applicationsPage.planningRetryHint' : 'applicationsPage.planningFixHint') }}</span>
+                    </div>
                     <div v-if="currentOperation" class="grid gap-3 rounded-2xl border border-border bg-muted p-4">
                       <div class="flex flex-wrap items-center justify-between gap-2">
                         <h3 class="m-0">{{ t('applicationsPage.currentDeployment') }}</h3>
                         <Button v-if="currentOperation.operationId" size="sm" variant="ghost" @click="openApplicationActivity(currentOperation.operationId)"><ClipboardList />{{ t('applicationsPage.viewOperation') }}</Button>
                       </div>
                       <div class="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
-                        <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationPhase') }}</span><StatusBadge :status="currentOperation.status" domain="operation" :label="operationStatusLabel(currentOperation.status)" /></div>
+                        <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationPhase') }}</span><StatusBadge :status="currentOperationStatus" domain="operation" :tone="currentOperationStatus === 'result_unknown' ? 'warning' : undefined" :label="operationStatusLabel(currentOperationStatus)" /></div>
                         <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationStage') }}</span><strong>{{ operationStageLabel(currentOperation.stage || '') }}</strong></div>
                         <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationAttempt') }}</span><strong>{{ currentOperation.attempt ?? t('common.notAvailable') }}</strong></div>
                         <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationNextRetry') }}</span><strong>{{ currentOperation.nextRunAt ? formatDateTime(currentOperation.nextRunAt) : t('common.notAvailable') }}</strong></div>
                       </div>
+                      <p v-if="currentOperationStatus === 'result_unknown'" class="m-0 text-sm text-warning">{{ t('applicationsPage.unknownResultHint') }}</p>
                       <div v-if="currentOperation.error || currentOperation.errorCode || currentOperation.errorDetail" role="alert" class="grid gap-1 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
                         <strong>{{ t('applicationsPage.operationError') }}<span v-if="currentOperation.errorCode"> · {{ currentOperation.errorCode }}</span></strong>
                         <span v-if="currentOperation.error">{{ currentOperation.error }}</span>
                         <span v-if="currentOperation.errorDetail && currentOperation.errorDetail !== currentOperation.error">{{ currentOperation.errorDetail }}</span>
                       </div>
                     </div>
-                    <div v-else-if="selectedApplication.lastError" role="alert" class="rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">
+                    <div v-else-if="!planningError && selectedApplication.lastError" role="alert" class="rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">
                       <strong>{{ t('applicationsPage.operationError') }}</strong>
                       <p class="m-0 mt-1 whitespace-pre-wrap break-words">{{ selectedApplication.lastError }}</p>
                     </div>

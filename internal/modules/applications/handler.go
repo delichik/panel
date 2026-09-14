@@ -392,6 +392,7 @@ func applicationSummaryFromApplication(app Application) ApplicationSummary {
 		RuntimeStatus:        app.RuntimeStatus,
 		ImageUpdateAvailable: app.ImageUpdateAvailable,
 		LastError:            app.LastError,
+		PlanningError:        app.PlanningError,
 		UpdatedAt:            app.UpdatedAt,
 	}
 }

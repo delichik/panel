@@ -108,10 +108,10 @@
 
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
-| UI-APP-001 | `/applications/apps` 搜索、翻页、选择 | 服务端分页/q；URL 恢复 search/page/application；列表显示状态、镜像引用、实例数和镜像更新 | summary 缺 imageReference 时仅按行补详情并显示骨架；失败不得把整表清空为假空态 | 行级补载互不阻塞，选中项完整详情/runtime/files 按需请求 |
-| UI-APP-002 | 查看 Runtime tab | 显示实例总数/运行/失败及每服务器实例、容器和 `lastError`；当前 Job 显示真实状态、步骤、attempt、nextRunAt、错误码/消息/详情与 operation 深链 | runtime 失败 toast 且局部可重试/刷新；换应用清旧 runtime；终态 failed 不得消失 | 实例/Job 状态文本与徽标一致；active 状态基线 3 秒有界轮询，按 nextRunAt 对齐，隐藏暂停，最多 24 次或 2 分钟且终态停止 |
+| UI-APP-001 | `/applications/apps` 搜索、翻页、选择 | 服务端分页/q；URL 恢复 search/page/application；列表显示状态、镜像引用、实例数和镜像更新；规划失败显示“部署被阻塞”，uncertainty 显示“结果待核实” | summary 缺 imageReference 时仅按行补详情并显示骨架；失败不得把整表清空为假空态；不能将运行实例存在解释为最新部署成功 | 行级补载互不阻塞，选中项完整详情/runtime/files 按需请求；状态按 `APP-PLAN-001`、`APP-RUN-004` 派生 |
+| UI-APP-002 | 查看 Runtime tab | 显示实例总数/运行/失败及每服务器实例、容器和 `lastError`；当前 Job 显示真实状态、步骤、attempt、nextRunAt、错误码/消息/详情与 operation 深链；独立显示规划失败原因、可用字段/文件名、修复或重试说明及活动入口；uncertainty 明确提示结果待核实 | runtime 失败 toast 且局部可重试/刷新；换应用清旧 runtime；终态 failed 不得消失；无 Job 的规划失败也必须显示，不能覆盖实际实例状态 | 实例/Job 状态文本与徽标一致；active 或当前规划错误基线 3 秒有界轮询，按 nextRunAt 对齐，隐藏暂停，最多 24 次或 2 分钟；新 runtime 无规划错误时清除旧 DTO 告警 |
 | UI-APP-003 | 查看 Routes/Files tab | Routes 显示域名、目标端口、来源服务器名和 paths；Files 只列已提交文件并支持 blob 下载 | 无路由/文件有专属空态；服务器名未知才回退 ID | 文件名和下载名符合 kind/contentType，下载带 auth |
-| UI-APP-004 | 点击同步/部署 | 提交人工 deploy；实际规划时显示真实 operationId/deploymentId 并刷新，`noChange=true` 时明确提示已是期望状态 | 不得被自动退避静默吞掉，不得把 no-change 或请求接受宣称为部署完成 | toast 与实际响应字段一致，operation 深链可恢复后续状态 |
+| UI-APP-004 | 点击同步/部署 | 提交人工 deploy；实际规划时显示真实 operationId/deploymentId 并刷新，`noChange=true` 时明确提示已是期望状态 | 不得被自动退避静默吞掉，不得把 no-change 或请求接受宣称为部署完成；失败后也重载列表/详情/runtime，使持久化规划诊断立即可见 | toast 与实际响应字段一致，operation 深链可恢复后续状态；修正后计划成功或已满足期望时清当前告警、保留失败历史 |
 | UI-APP-005 | 停用应用 | enabled 时可点，先 danger 确认后调用 stop；成功只提示请求接受并刷新 | 已停用禁用；失败保持应用状态 | 取消无请求，成功后状态来自重载而非前端假改 |
 | UI-APP-006 | 检查并更新镜像 | 仅 `imageUpdateAvailable` 时启用；提交 update 并按两阶段反馈 | 无更新时不请求 | 返回 ID 的 toast 正确，刷新后徽标由后端决定 |
 | UI-APP-007 | 查看日志 | 立即打开带 LoadingOverlay 的日志 Dialog，拉取 tail=240 并在内部滚动展示 | 失败 toast 且弹窗显示明确失败文案，不假装空日志 | 长日志不撑开页面，关闭可恢复详情 |

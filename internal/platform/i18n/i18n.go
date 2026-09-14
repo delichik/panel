@@ -293,6 +293,7 @@ var (
 			"application_file_content_invalid":                       "应用文件内容无效",
 			"application_file_mount_missing":                         "应用文件挂载引用缺失",
 			"application_file_name_invalid":                          "应用文件名称无效",
+			"application_deployment_plan_failed":                     "无法生成部署计划",
 			"application_file_path_invalid":                          "应用文件路径无效",
 			"application_apply_request_failed":                       "配置已提交，但无法请求应用",
 			"application_commit_recovered":                           "已提交的应用在响应中断后已恢复",

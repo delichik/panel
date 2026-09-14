@@ -994,7 +994,10 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string
 			reconciletrace.Trace("plan_failed",
 				zap.String("application_id", appID),
 				zap.Error(err))
-			return nil, err
+			// The application planner persists its own failure. One invalid
+			// application must not prevent healthy applications from converging.
+			logging.L().Warn("application deployment planning failed", zap.String("application_id", appID))
+			continue
 		}
 		reconciletrace.Trace("plan_result",
 			zap.String("application_id", appID),

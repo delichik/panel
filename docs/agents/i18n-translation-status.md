@@ -4,6 +4,8 @@
 
 ## 当前状态
 
+- 应用部署反馈新增 `applicationsPage.status.planning_failed`、`status.result_unknown`、`operationStatus.result_unknown`、`planningFailed`、`planningFile`、`planningField`、`planningFixHint`、`planningRetryHint`、`unknownResultHint`，en / zh-CN 已同步；后端新增 `application_deployment_plan_failed` 通用安全错误翻译，字段/文件名以诊断原值显示。
+
 - Debug 页新增清空日志、metrics 和全部协调记录的危险确认操作，`debugPage.clearRuntimeData*` 及后端确认/失败错误已同步 en / zh-CN。
 
 - 本轮应用持久化数据新增下载节点选择器、全节点永久删除强确认文案，以及下载节点必选/非法与删除确认必需的后端稳定错误翻译；en / zh-CN 已同步。

@@ -102,6 +102,15 @@
 - **不变量**：旧 lease/token 继续 fence 当前执行；运行中非 force desired 由 Instance 最新值触发 requeue。
 - **验证**：stop-during-apply、force nonce integration tests。
 
+### ORCH-PLAN-006 规划失败记录与应用间隔离
+
+- **前置**：应用进入 Planner 后，在生成可执行 Job 前失败。
+- **动作**：手动同步或 Agent report 触发自动巡检。
+- **结果**：按 `APP-PLAN-001` 原子持久化应用诊断和 `operation.failed` 活动事件，标明 `stage=planning`、应用资源和配置版本；operationId 独立可查询，不创建假 execution 或假 Job。恢复追加 `deployment.planning_recovered`，不改写历史失败终态。
+- **失败**：自动巡检记录该应用失败后继续处理其它应用，单一错误不能阻断整轮收敛；同配置同原因自动重试不重复追加失败事件。
+- **不变量**：规划诊断不写 observed 或远端执行结果；并发规划结果按应用串行且写入受配置 version 条件保护。执行结果不确定的展示遵守 `APP-RUN-004`，不解除 fencing。
+- **验证**：应用规划结果测试、`TestApplicationPlanningFailureDoesNotStopOtherApplications`。
+
 ### ORCH-PLAN-005 满足态与 force
 
 - **前置**：目标 observed 已匹配 desired，或部分节点 drift。

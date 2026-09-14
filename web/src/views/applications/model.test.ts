@@ -4,6 +4,8 @@ import {
   applicationFileMountOptions,
   applicationRuntimePollDelay,
   applicationStatus,
+  applicationPlanningError,
+  applicationOperationStatus,
   cloneFacilityDomains,
   cloneFacilityPath,
   cloneProxyPath,
@@ -51,6 +53,28 @@ const app = {
 } satisfies ApplicationDto;
 
 describe('application editor model', () => {
+  it('shows planning failure separately from a running container and clears it from a fresh runtime response', () => {
+    const planningError = { code: 'application_file_name_invalid', message: 'Invalid file name', retryable: false, operationId: 'plan-1', occurredAt: '', configVersion: 1 };
+    const snapshot = { ...app, runtimeStatus: 'running', planningError };
+    expect(applicationStatus(snapshot)).toBe('planning_failed');
+    expect(statusTone('planning_failed')).toBe('danger');
+    const runtime = { applicationId: app.id, runtimeId: 'runtime-1', status: 'running', instances: [], observedAt: '' };
+    expect(applicationStatus(snapshot, { ...runtime, planningError })).toBe('planning_failed');
+    expect(shouldPollApplicationRuntime({ ...runtime, planningError })).toBe(true);
+    expect(applicationPlanningError(snapshot, runtime)).toBeUndefined();
+    expect(applicationStatus(snapshot, runtime)).toBe('deployed');
+  });
+
+  it('distinguishes an unconfirmed execution from normal deployment while continuing to poll', () => {
+    const runtime = { applicationId: app.id, runtimeId: 'runtime-1', status: 'deploying', instances: [], observedAt: '', operation: { id: 'job-1', applicationId: app.id, type: 'apply', status: 'running', errorClass: 'uncertainty', generation: 1, createdAt: '', updatedAt: '' } };
+    expect(applicationStatus(app, runtime)).toBe('result_unknown');
+    expect(applicationStatus({ ...app, runtimeStatus: 'needs_attention' })).toBe('result_unknown');
+    expect(applicationOperationStatus(runtime)).toBe('result_unknown');
+    expect(statusTone('result_unknown')).toBe('warning');
+    expect(shouldPollApplicationRuntime(runtime)).toBe(true);
+    expect(applicationStatus(app, { ...runtime, operation: { ...runtime.operation, errorClass: '' } })).toBe('deploying');
+  });
+
   it('offers application files by stable name and preserves a missing legacy reference', () => {
     expect(applicationFileMountOptions([{ name: 'app.conf' }, { name: 'public' }])).toEqual([
       { label: 'app.conf', value: 'app.conf' },

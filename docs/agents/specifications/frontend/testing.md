@@ -14,6 +14,8 @@
 
 执行范围遵守 AGENTS.md：只改前端不跑后端测试；纯文档改动不跑测试/编译。
 
+Vitest 缓存通过 `vitest.unit.config.ts` 的 `cacheDir` 写入仓库 `tmp/vitest`，测试中间产物不写入依赖目录。
+
 ## 单元测试组织
 
 - 测试文件 `*.test.ts` **就近放置**在被测对象旁（如 `web/src/components/shell/navModel.test.ts`、`web/src/components/templates/templates.test.ts`、`web/src/design/useThemeMode.test.ts`），不建平行的 `tests/` 目录镜像。

@@ -42,6 +42,7 @@ func toDomainApplication(m models.Application) Application {
 		LastEvalID:           m.LastEvalID,
 		LastDeploymentID:     m.LastDeploymentID,
 		LastError:            m.LastError,
+		PlanningError:        decodePlanningError(m.PlanningErrorJSON),
 		CreatedAt:            m.CreatedAt,
 		UpdatedAt:            m.UpdatedAt,
 	}

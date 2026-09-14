@@ -51,6 +51,17 @@ export interface ImageUpdateTarget {
   lastError?: string;
 }
 
+export interface DeploymentPlanningError {
+  code: string;
+  message: string;
+  field?: string;
+  fileName?: string;
+  retryable: boolean;
+  operationId: string;
+  occurredAt: string;
+  configVersion: number;
+}
+
 export interface ApplicationDto {
   id: string;
   version: number;
@@ -81,11 +92,13 @@ export interface ApplicationDto {
   lastDeploymentId?: string;
   lastError?: string;
   runtimeStatus?: string;
+  planningError?: DeploymentPlanningError;
   createdAt: string;
   updatedAt: string;
 }
 
 export interface ApplicationSummaryDto {
+  planningError?: DeploymentPlanningError;
   id: string;
   name: string;
   enabled: boolean;
@@ -261,6 +274,7 @@ export interface LifecycleOperation {
 }
 
 export interface ApplicationRuntime {
+  planningError?: DeploymentPlanningError;
   applicationId: string;
   runtimeId: string;
   status: string;

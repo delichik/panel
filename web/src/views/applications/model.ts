@@ -119,8 +119,10 @@ export function routeMode(path: string, params: Record<string, unknown>): AppMod
 export function applicationStatus(app: ApplicationDto | ApplicationSummaryDto, runtime?: ApplicationRuntime | null) {
   const status = runtime?.status || app.runtimeStatus;
   const operationStatus = runtime?.operation?.status;
+  if (applicationPlanningError(app, runtime)) return 'planning_failed';
   if (!app.enabled) return 'disabled';
   if (app.reconcileStopped) return 'attention';
+  if (status === 'needs_attention' || runtime?.operation?.errorClass === 'uncertainty') return 'result_unknown';
   if (operationStatus === 'failed_retryable') return 'failed_retryable';
   if (['deploying', 'pending', 'queued', 'running', 'waiting'].includes(operationStatus || '')) return 'deploying';
   if (operationStatus === 'failed' || operationStatus === 'failure') return 'failed';
@@ -132,7 +134,17 @@ export function applicationStatus(app: ApplicationDto | ApplicationSummaryDto, r
   return app.enabled ? 'enabled' : 'unknown';
 }
 
+export function applicationPlanningError(app: ApplicationDto | ApplicationSummaryDto, runtime?: ApplicationRuntime | null) {
+  return runtime ? runtime.planningError : app.planningError;
+}
+
+export function applicationOperationStatus(runtime?: ApplicationRuntime | null) {
+  return runtime?.operation?.errorClass === 'uncertainty' ? 'result_unknown' : runtime?.operation?.status || '';
+}
+
 export function statusTone(status: string) {
+  if (status === 'result_unknown') return 'warning';
+  if (status === 'planning_failed') return 'danger';
   if (['deployed', 'enabled', 'running'].includes(status)) return 'success';
   if (['deploying', 'failed_retryable', 'partial', 'warning', 'pending', 'attention'].includes(status)) return 'warning';
   if (['failed', 'disabled', 'error'].includes(status)) return 'danger';
@@ -142,6 +154,7 @@ export function statusTone(status: string) {
 export function shouldPollApplicationRuntime(runtime?: ApplicationRuntime | null) {
   const active = new Set(['deploying', 'pending', 'queued', 'running', 'waiting', 'failed_retryable']);
   if (!runtime) return false;
+  if (runtime.planningError) return true;
   return runtime.operation?.status ? active.has(runtime.operation.status) : active.has(runtime.status);
 }
 
