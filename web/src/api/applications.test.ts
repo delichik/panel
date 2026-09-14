@@ -54,14 +54,14 @@ describe('applicationsApi persistent lifecycle', () => {
   });
 
   it('sends the persistent deletion confirmation to the backend', async () => {
-    const fetchMock = vi.fn(async () => response(null));
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response(null));
     vi.stubGlobal('fetch', fetchMock);
     await applicationsApi.delete('app-1', true);
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/applications/app-1?confirmPersistentDataDeletion=true');
   });
 
   it('downloads persistent data from the selected node', async () => {
-    const fetchMock = vi.fn(async () => new Response(new Blob(['zip']), {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(new Blob(['zip']), {
       status: 200,
       headers: { 'Content-Disposition': 'attachment; filename="data.zip"' },
     }));
