@@ -2487,7 +2487,11 @@ func (c *dockerAPIClient) startContainer(ctx context.Context, id string) error {
 func (c *dockerAPIClient) stopContainer(ctx context.Context, name string, timeout int) error {
 	query := url.Values{}
 	query.Set("t", strconv.Itoa(timeout))
-	return c.emptyPost(ctx, "/containers/"+url.PathEscape(name)+"/stop?"+query.Encode(), "stop container")
+	err := c.emptyPost(ctx, "/containers/"+url.PathEscape(name)+"/stop?"+query.Encode(), "stop container")
+	if isDockerNotModified(err) {
+		return nil
+	}
+	return err
 }
 
 func (c *dockerAPIClient) restartContainer(ctx context.Context, name string, timeout int) error {

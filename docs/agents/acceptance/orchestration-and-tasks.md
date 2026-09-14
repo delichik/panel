@@ -176,6 +176,15 @@
 - **不变量**：purge finalizer 已删 Instance 时可将旧 purge 直接幂等 succeed；apply/stop 缺 Instance 仍视为 desired changed。
 - **验证**：desired-change and purge finalizer tests。
 
+### ORCH-CTRL-006 容器状态转换幂等
+
+- **前置**：apply/stop/purge 在重试、不确定恢复或并发观测后再次请求容器状态转换。
+- **动作**：Agent 请求 Docker start/stop/remove 以收敛期望态。
+- **结果**：Docker 确认容器已处于请求状态时按成功处理，继续后续观测与 Job 收敛。
+- **失败**：不得将 Docker `304 Not Modified`/already stopped 归类为可重试部署失败；其他 Docker 错误仍须保留结构化诊断。
+- **不变量**：幂等成功不得跳过最终状态观测或 lease fencing。
+- **验证**：Docker start/stop already-requested-state tests，reconcile retry convergence tests。
+
 ### ORCH-RETRY-001 错误结构和分类
 
 - **前置**：RuntimeReconcile 返回结构化错误或普通 error。

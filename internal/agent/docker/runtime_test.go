@@ -198,6 +198,28 @@ func TestDockerAPIClientCreateContainerOmitsRestartPolicy(t *testing.T) {
 	}
 }
 
+func TestDockerAPIClientStopContainerTreatsAlreadyStoppedAsSuccess(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/containers/panel-web/stop" {
+			t.Errorf("path = %s, want stop endpoint", r.URL.Path)
+		}
+		if r.URL.Query().Get("t") != "10" {
+			t.Errorf("timeout = %q, want 10", r.URL.Query().Get("t"))
+		}
+		w.WriteHeader(http.StatusNotModified)
+		_, _ = w.Write([]byte(`{"message":"Container panel-web is already stopped"}`))
+	}))
+	defer server.Close()
+
+	client := &dockerAPIClient{host: server.URL, client: server.Client()}
+	if err := client.stopContainer(context.Background(), "panel-web", 10); err != nil {
+		t.Fatalf("stopContainer() error = %v", err)
+	}
+}
+
 func TestWriteManagedFilesRemovesStaleManagedFiles(t *testing.T) {
 	runtime := &LocalRuntime{root: t.TempDir()}
 	spec := appruntime.Spec{ApplicationID: "app", InstanceID: "instance", Files: []appruntime.ManagedFile{
