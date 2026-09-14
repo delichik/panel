@@ -39,9 +39,14 @@ func init() {
 // InstallControlTriggers records control transitions in the same SQLite
 // transaction that accepts them. Queue rows remain mutable; these facts do not.
 func InstallControlTriggers(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("activity control begin: %w", err)
+	}
+	defer tx.Rollback()
 	has := func(table string) bool {
 		var n int
-		return db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&n) == nil && n > 0
+		return tx.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&n) == nil && n > 0
 	}
 	name := func(table, expr string) string {
 		if !has(table) {
@@ -63,12 +68,18 @@ func InstallControlTriggers(ctx context.Context, db *sql.DB) error {
 		if !has(table) {
 			return nil
 		}
-		statement := `CREATE TRIGGER IF NOT EXISTS ` + name + ` AFTER ` + when + ` ON ` + table
+		// Control triggers are executable schema. Replacing each owned trigger in
+		// this transaction ensures an upgraded binary cannot silently retain an
+		// older CREATE TRIGGER IF NOT EXISTS definition from the existing DB.
+		if _, err := tx.ExecContext(ctx, `DROP TRIGGER IF EXISTS `+name); err != nil {
+			return fmt.Errorf("activity control drop %s: %w", name, err)
+		}
+		statement := `CREATE TRIGGER ` + name + ` AFTER ` + when + ` ON ` + table
 		if condition != "" {
 			statement += ` WHEN ` + condition
 		}
 		statement += ` BEGIN ` + controlInsert(fields) + `; END`
-		if _, err := db.ExecContext(ctx, statement); err != nil {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("activity control %s: %w", name, err)
 		}
 		return nil
@@ -131,13 +142,25 @@ func InstallControlTriggers(ctx context.Context, db *sql.DB) error {
 		insert = strings.Replace(insert, ") VALUES (", ") SELECT ", 1)
 		insert = strings.TrimSuffix(insert, ")")
 		insert += ` FROM (SELECT DISTINCT operation_id FROM activity_events e WHERE e.event_type='execution.linked' AND json_extract(e.data_json,'$.jobId')=NEW.id AND e.operation_id<>NEW.intent_id AND NOT EXISTS(SELECT 1 FROM activity_events s WHERE s.operation_id=e.operation_id AND s.event_type='intent.superseded')) linked`
-		_, err := db.ExecContext(ctx, `CREATE TRIGGER IF NOT EXISTS activity_job_shared_result AFTER UPDATE ON jobs WHEN OLD.state<>NEW.state OR OLD.execution_id<>NEW.execution_id OR OLD.error_class<>NEW.error_class BEGIN `+insert+`; END`)
+		if _, err := tx.ExecContext(ctx, `DROP TRIGGER IF EXISTS activity_job_shared_result`); err != nil {
+			return fmt.Errorf("activity shared execution drop: %w", err)
+		}
+		// Intermediate transitions belong to the durable Job execution itself.
+		// Replaying them to every historical linked intent makes each claim/retry
+		// O(number of old intents). Only a terminal result needs fan-out.
+		_, err := tx.ExecContext(ctx, `CREATE TRIGGER activity_job_shared_result AFTER UPDATE ON jobs WHEN OLD.state<>NEW.state AND NEW.state IN ('succeeded','failed','cancelled') BEGIN `+insert+`; END`)
 		if err != nil {
 			return fmt.Errorf("activity shared execution: %w", err)
 		}
 	}
 	observation := map[string]string{"event_type": `'observation.accepted'`, "kind": `'observation'`, "domain": `'application'`, "operation_id": `COALESCE((SELECT intent_id FROM jobs WHERE id=NEW.last_reconcile_job_id),'')`, "execution_id": `COALESCE((SELECT execution_id FROM jobs WHERE id=NEW.last_reconcile_job_id),'')`, "resources_json": `json_array(json_object('resourceType','application','resourceId',NEW.application_id,'nameSnapshot',COALESCE(` + name("applications", "NEW.application_id") + `,'')),json_object('resourceType','server','resourceId',NEW.server_id,'nameSnapshot',COALESCE(` + name("servers", "NEW.server_id") + `,'')))`, "text": "NEW.observed_state", "data_json": `json_object('instanceId',NEW.id,'source',NEW.observed_source,'observedAt',NEW.observed_at,'observedState',NEW.observed_state,'containerName',NEW.observed_container_name,'containerId',NEW.observed_container_id,'observedGeneration',NEW.observed_generation,'observedSpecHash',NEW.observed_spec_hash,'observedImageDigest',NEW.observed_image_digest,'errorCode',NEW.last_error_code,'error',NEW.last_error_message)`}
-	return install("application_instances", "activity_observation", "UPDATE", `NEW.observed_source='reconcile' OR OLD.observed_state<>NEW.observed_state OR OLD.observed_generation<>NEW.observed_generation OR OLD.observed_spec_hash<>NEW.observed_spec_hash OR OLD.observed_container_id<>NEW.observed_container_id OR OLD.last_error_code<>NEW.last_error_code OR OLD.last_error_message<>NEW.last_error_message`, observation)
+	if err := install("application_instances", "activity_observation", "UPDATE", `OLD.observed_state<>NEW.observed_state OR OLD.observed_generation<>NEW.observed_generation OR OLD.observed_spec_hash<>NEW.observed_spec_hash OR OLD.observed_container_name<>NEW.observed_container_name OR OLD.observed_container_id<>NEW.observed_container_id OR OLD.observed_image_digest<>NEW.observed_image_digest OR OLD.last_error_code<>NEW.last_error_code OR OLD.last_error_message<>NEW.last_error_message`, observation); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("activity control commit: %w", err)
+	}
+	return nil
 }
 
 func controlInsert(fields map[string]string) string {

@@ -70,6 +70,7 @@ type Revision struct {
 }
 
 type PlanInput struct {
+	Automatic           bool
 	ApplicationID       string
 	ServerID            string
 	InstanceID          string

@@ -98,7 +98,7 @@ func TestAutomaticEquivalentPlanPreservesRetryBackoffAndDoesNotAppendIntent(t *t
 		t.Fatal(err)
 	}
 	planner := NewPlanner(NewStore(db))
-	in := PlanInput{ApplicationID: "app", ServerID: "server", InstanceID: "app-server", IntentID: "first", Action: ActionApply, DesiredState: DesiredRunning, DesiredGeneration: 1, DesiredSpecHash: "hash", TriggerType: "agent_report"}
+	in := PlanInput{Automatic: true, ApplicationID: "app", ServerID: "server", InstanceID: "app-server", IntentID: "first", Action: ActionApply, DesiredState: DesiredRunning, DesiredGeneration: 1, DesiredSpecHash: "hash", TriggerType: "agent_report"}
 	first, err := planner.Plan(context.Background(), in)
 	if err != nil {
 		t.Fatal(err)

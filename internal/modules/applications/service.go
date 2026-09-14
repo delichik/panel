@@ -2401,6 +2401,7 @@ func (s *Service) planOrchestratorTargets(ctx context.Context, app Application, 
 			}
 		}
 		inputs = append(inputs, controlplane.PlanInput{
+			Automatic:           !req.Manual,
 			ApplicationID:       app.ID,
 			ServerID:            serverID,
 			InstanceID:          instanceID,

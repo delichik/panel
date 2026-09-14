@@ -88,7 +88,7 @@
 
 - **前置**：冲突域已有 pending 或 failed_retryable Job，desired 发生变化。
 - **动作**：Plan 新意图。
-- **结果**：desired 或显式操作发生变化时复用同 Job 并用最新 desired/action/revision/spec/removeData/priority/intent/trigger/reason 更新，清 nextRun/error/finished；scheduler/agent_report 对完全相同工作的重复规划只返回既有 Job，不改 attempts、nextRun、错误或 intent，也不追加重复活动事件。
+- **结果**：desired 或显式操作发生变化时复用同 Job 并用最新 desired/action/revision/spec/removeData/priority/intent/trigger/reason 更新，清 nextRun/error/finished；所有显式标记为 automatic 的协调对完全相同工作的重复规划只返回既有 Job，不得根据 trigger 文本猜测语义，不改 attempts、nextRun、错误或 intent，也不追加重复活动事件。
 - **失败**：不得增加第二条 active Job或保留旧 backoff 阻挡新 desired。
 - **不变量**：Instance desired 与合并 Job 的 desired snapshot 在同事务一致。
 - **验证**：planner merge/update desired、automatic equivalent plan preserves backoff/no duplicate intent tests。
@@ -212,6 +212,15 @@
 - **不变量**：逐 Job 计算 retry delay，不能批量使用同一错误 attempts。
 - **验证**：lease expiry replay/stale snapshot tests。
 
+### ORCH-LEASE-004 不确定执行缺失证据
+
+- **前置**：Job 处于 `running + uncertainty`，并且通过认证的 Agent 明确返回该 execution `missing`。
+- **动作**：Controller 恢复原 execution。
+- **结果**：以 `execution_evidence_missing/evidence` 进入有上限的正常重试，释放旧 execution fence，下次 claim 使用新 execution identity。
+- **失败**：Agent 不可达、超时或响应无法验证时仍必须保持 uncertainty，不得盲目重复远端写操作。
+- **不变量**：missing 重放仍受 MaxAttempts、幂等资源标签和 conflict-domain 唯一性约束。
+- **验证**：authenticated missing result bounded-retry test，unreachable Agent remains uncertain test。
+
 ### ORCH-DRIFT-001 漂移来源与修复范围
 
 - **前置**：Agent report cache 显示 missing/stopped/failed、generation/hash 或 managed-file manifest 漂移。
@@ -276,6 +285,15 @@
 - **失败**：不得用 `stale_or_ownership_lost` 混淆新事件的陈旧与所有权原因，也不得让一轮多实例扫描线性制造 warning。
 - **不变量**：历史旧 reason 仍可读；真正 lease/fencing 异常不得因降噪而丢失。
 - **验证**：observation writer rejection、activity display-message tests。
+
+### ORCH-ACT-003 协调事件有界放大与触发器升级
+
+- **前置**：同一 Job 可能保留任意数量的历史 linked intent，或数据库中已安装旧版本 Activity control trigger。
+- **动作**：Job claim、retry、uncertainty 等中间状态转换，写入相同 reconcile observation，或新版本启动并安装 control trigger。
+- **结果**：中间 Job 转换只追加当前执行的常数数量事实，不向历史 intent 写 `execution.shared_result`；共享结果只在 Job 进入 terminal state 时传播；事实字段完全相同的 reconcile observation 不追加事件；安装过程在一个事务内替换本模块拥有的同名旧 trigger。
+- **失败**：不得因历史 linked intent 数量使一次 claim/retry 产生线性事件扇出，也不得用 `CREATE TRIGGER IF NOT EXISTS` 静默保留旧可执行定义；trigger 替换失败必须整体回滚。
+- **不变量**：既有 Activity 事实不可修改或删除；真实 observed state/generation/spec/container/image/error 变化仍各追加一条 observation；终态共享结果仍可追溯到原 linked intent。
+- **验证**：legacy trigger replacement、high-cardinality linked-intent intermediate transition O(1)、identical/changed reconcile observation tests。
 
 ## 6. 通用任务注册与创建
 

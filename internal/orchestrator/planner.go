@@ -198,7 +198,7 @@ func (p *Planner) planTx(ctx context.Context, tx *sql.Tx, in PlanInput) (PlanRes
 	// that work silently: creating a fresh intent and rewriting a retryable Job
 	// here defeats its backoff/max-attempt boundary and floods the immutable
 	// activity stream with linked/superseded relations.
-	if found && automaticReconcileTrigger(in.TriggerType) && samePlannedWork(active, in) {
+	if found && in.Automatic && samePlannedWork(active, in) {
 		return PlanResult{Job: active, Merged: true}, nil
 	}
 	if err := appendPlanRequest(ctx, tx, in); err != nil {
@@ -253,15 +253,6 @@ func (p *Planner) planTx(ctx context.Context, tx *sql.Tx, in PlanInput) (PlanRes
 	}
 	traceJobEvent("job_created", job, zap.String("reason", "no_active_job"))
 	return PlanResult{Job: job, Created: true}, nil
-}
-
-func automaticReconcileTrigger(trigger string) bool {
-	switch strings.TrimSpace(trigger) {
-	case "scheduler", "agent_report":
-		return true
-	default:
-		return false
-	}
 }
 
 func samePlannedWork(job Job, in PlanInput) bool {

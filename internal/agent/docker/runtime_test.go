@@ -844,3 +844,96 @@ func TestManagedContainerMatchesDesiredRuntimeRejectsLegacyWorkspaceBind(t *test
 		t.Fatal("container using the flat application workspace should be reusable")
 	}
 }
+
+func TestReconcileStartsMatchingExitedContainerBeforeVerify(t *testing.T) {
+	var inspectCalls, startCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/containers/panel-web/json":
+			inspectCalls++
+			running := inspectCalls > 1
+			status := "exited"
+			exitCode := 255
+			if running {
+				status, exitCode = "running", 0
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"Id":"container-1","Name":"/panel-web","Config":{"Image":"example/web:1","Labels":{"panel.application.managed":"true","panel.application.id":"app-1","panel.application.instance.id":"inst-1","panel.application.generation":"2","panel.application.spec.hash":"hash"}},"HostConfig":{"NetworkMode":"panel-apps"},"State":{"Status":%q,"Running":%t,"ExitCode":%d}}`, status, running, exitCode)
+		case r.Method == http.MethodPost && r.URL.Path == "/containers/panel-web/start":
+			startCalls++
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected Docker request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	runtime := &LocalRuntime{root: t.TempDir(), client: &dockerAPIClient{host: server.URL, client: server.Client()}}
+	result, err := runtime.Reconcile(context.Background(), agentcontract.RuntimeReconcileRequest{
+		ExecutionID: "exec-1", ApplicationID: "app-1", InstanceID: "inst-1", Action: "apply", DesiredGeneration: 2, DesiredSpecHash: "hash",
+		Spec: appruntime.Spec{ApplicationID: "app-1", InstanceID: "inst-1", ContainerName: "panel-web", Image: "example/web:1", Generation: 2, SpecHash: "hash"},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if result.ObservedState != appruntime.StatusRunning {
+		t.Fatalf("observed state = %q, want running; result=%#v", result.ObservedState, result)
+	}
+	if startCalls != 1 || inspectCalls != 2 {
+		t.Fatalf("start calls = %d, inspect calls = %d; want 1 and 2", startCalls, inspectCalls)
+	}
+	startIndex, verifyIndex := -1, -1
+	for i, step := range result.Steps {
+		if step.Name == "start_container" {
+			startIndex = i
+		}
+		if step.Name == "verify_running" {
+			verifyIndex = i
+		}
+	}
+	if startIndex < 0 || verifyIndex != startIndex+1 {
+		t.Fatalf("steps = %#v", result.Steps)
+	}
+}
+
+func TestReconcileReportsBoundedExitedContainerDiagnostic(t *testing.T) {
+	longDockerError := "token=top-secret " + strings.Repeat("process failed ", 500)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/containers/panel-web/json":
+			w.Header().Set("Content-Type", "application/json")
+			body := map[string]any{
+				"Id": "container-1", "Name": "/panel-web",
+				"Config":     map[string]any{"Image": "example/web:1", "Labels": map[string]string{"panel.application.managed": "true", "panel.application.id": "app-1", "panel.application.instance.id": "inst-1", "panel.application.generation": "2", "panel.application.spec.hash": "hash"}},
+				"HostConfig": map[string]any{"NetworkMode": "panel-apps"},
+				"State":      map[string]any{"Status": "exited", "Running": false, "ExitCode": 255, "Error": longDockerError, "StartedAt": "2026-09-14T01:00:00Z", "FinishedAt": "2026-09-14T01:00:01Z"},
+			}
+			_ = json.NewEncoder(w).Encode(body)
+		case r.Method == http.MethodPost && r.URL.Path == "/containers/panel-web/start":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected Docker request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	runtime := &LocalRuntime{root: t.TempDir(), client: &dockerAPIClient{host: server.URL, client: server.Client()}}
+	result, err := runtime.Reconcile(context.Background(), agentcontract.RuntimeReconcileRequest{
+		ExecutionID: "exec-1", ApplicationID: "app-1", InstanceID: "inst-1", Action: "apply", DesiredGeneration: 2, DesiredSpecHash: "hash",
+		Spec: appruntime.Spec{ApplicationID: "app-1", InstanceID: "inst-1", ContainerName: "panel-web", Image: "example/web:1", Generation: 2, SpecHash: "hash"},
+	})
+	if err == nil {
+		t.Fatal("Reconcile() error = nil, want exited-container failure")
+	}
+	if result.ErrorCode != "container_not_running" || !strings.Contains(result.ErrorDetail, "status=failed") || !strings.Contains(result.ErrorDetail, "exitCode=255") || !strings.Contains(result.ErrorDetail, "dockerError=") {
+		t.Fatalf("result did not retain exit diagnostics: %#v", result)
+	}
+	if len([]rune(result.ErrorDetail)) > maxContainerDiagnosticRunes+1 {
+		t.Fatalf("diagnostic runes = %d, want bounded", len([]rune(result.ErrorDetail)))
+	}
+	if strings.Contains(result.ErrorDetail, "top-secret") || !strings.Contains(result.ErrorDetail, "token=[REDACTED]") {
+		t.Fatalf("diagnostic secret was not redacted: %q", result.ErrorDetail)
+	}
+}

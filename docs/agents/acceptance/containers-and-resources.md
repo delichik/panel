@@ -296,10 +296,10 @@
 
 - **前置**：合法 immutable runtime spec。
 - **动作**：Agent RuntimeReconcile apply。
-- **结果**：依次 `validate_spec/write_files/ensure_image/inspect-reuse_or_replace/create/start/verify_running`，达到 desired 的资源重复调用成功且不重复破坏。
-- **失败**：任一步返回结构化 steps/error/retryable；不提供胖 deploy handler。
+- **结果**：依次 `validate_spec/write_files/ensure_image/inspect-reuse_or_replace/create/start/verify_running`，达到 desired 的资源重复调用成功且不重复破坏；标签和 immutable spec 匹配但进程已停止/退出的容器必须先幂等 start 再验证，不得只重复 verify。
+- **失败**：任一步返回结构化 steps/error/retryable；启动后仍未 running 时错误必须包含有界且脱敏的容器状态、exit code、Docker State.Error 和已有启动/结束时间，不得退化为无原因的 `container did not reach running state`；不提供胖 deploy handler。
 - **不变量**：Agent 只 ensure 单节点目标，不选择服务器、不写 Panel DB。
-- **验证**：runtime unit + full appdeploy happy/retry tests。
+- **验证**：runtime unit + full appdeploy happy/retry tests，以及 matching-exited restart/exit-diagnostic tests。
 
 ### AGRT-STOP-001 stop 与 purge
 

@@ -256,6 +256,18 @@ func TestActivityTransportRejectsWrongExecutionAssociationBeforeACK(t *testing.T
 	}
 }
 
+func TestResolveExecutionMissingReleasesUncertaintyToBoundedRetry(t *testing.T) {
+	r, _, req, _ := trackedTransport(t)
+	req.ExecutionID = "execution-not-on-agent"
+	response, finished, err := r.ResolveExecution(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !finished || !response.Retryable || response.ErrorCode != "execution_evidence_missing" {
+		t.Fatalf("missing execution did not become bounded retry: finished=%v response=%#v", finished, response)
+	}
+}
+
 func TestActivityTransportRecordsAndResolvesMissingEvidence(t *testing.T) {
 	ctx := context.Background()
 	r, client, req, session := trackedTransport(t)

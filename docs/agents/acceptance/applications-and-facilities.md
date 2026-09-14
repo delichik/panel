@@ -301,7 +301,7 @@
 - **前置**：Instance 具有 desired/observed，可能存在 active Job。
 - **动作**：GET runtime，必要时主动查询 Agent status。
 - **结果**：默认以 AppDB observed 快照派生 status/stage；主动结果也经 ObservationWriter CAS 写回；返回 serverId/serverName、generation、容器身份、`lastError` 和 observedAt。存在 active Job 时返回其真实 pending/running/failed_retryable 状态；没有 active Job 且最新 Job 为 failed 时继续返回 operationId、stage、attempt、nextRunAt 和结构化错误。
-- **失败**：Docker not found 映射 `missing` 而非 stopped；Agent 不兼容/不可达不回退 SSH；终态部署错误不得因 active 查询为空而从 runtime 响应消失。
+- **失败**：Docker not found 映射 `missing` 而非 stopped；Agent 不兼容/不可达不回退 SSH；终态部署错误不得因 active 查询为空而从 runtime 响应消失；容器启动后退出的结构化错误必须保留有界脱敏的状态、exit code 与 Docker State.Error，供 Job/runtime 投影具体根因。
 - **不变量**：handler/业务服务不得直接覆盖 observed；无容器的 pending/failed Job 不提供日志入口。
 - **验证**：runtime cache/refresh/missing、retryable schedule、terminal failure projection tests。
 

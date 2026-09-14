@@ -176,11 +176,23 @@ func (r *serviceRuntimeReconciler) ResolveExecution(ctx context.Context, req con
 	if err != nil {
 		return controlplane.ReconcileResponse{}, false, err
 	}
+	if result.State == "missing" {
+		// An authenticated Agent has authoritatively confirmed that it has no
+		// durable record for this execution. Keeping the Job uncertain forever
+		// would permanently occupy the application/server conflict domain. Runtime
+		// reconcile is identity-labelled and idempotent, so release it through the
+		// bounded retry policy with a fresh execution identity.
+		return controlplane.ReconcileResponse{
+			ErrorCode:    "execution_evidence_missing",
+			ErrorClass:   "evidence",
+			ErrorMessage: "agent has no durable record for the uncertain execution",
+			ErrorDetail:  "the execution will be retried with a new identity",
+			Retryable:    true,
+		}, true, nil
+	}
 	var endSeq int64
-	if result.State != "missing" {
-		if endSeq, err = r.collectExecutionEvents(ctx, endpoint, req); err != nil {
-			return controlplane.ReconcileResponse{}, false, err
-		}
+	if endSeq, err = r.collectExecutionEvents(ctx, endpoint, req); err != nil {
+		return controlplane.ReconcileResponse{}, false, err
 	}
 	if result.State != "finished" || result.Result == nil || endSeq == 0 || result.EndSeq != endSeq {
 		return controlplane.ReconcileResponse{}, false, nil

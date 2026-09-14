@@ -747,7 +747,8 @@ func (r *LocalRuntime) Reconcile(ctx context.Context, req agentcontract.RuntimeR
 		if err != nil {
 			result.ErrorCode = "container_not_running"
 			result.ErrorClass = "container_start_failed"
-			result.ErrorMessage = err.Error()
+			result.ErrorMessage = containerNotRunningMessage(result, err)
+			result.ErrorDetail = containerExitDiagnostic(result)
 			result.Retryable = true
 		}
 		if err == nil {
@@ -760,6 +761,17 @@ func (r *LocalRuntime) Reconcile(ctx context.Context, req agentcontract.RuntimeR
 	}
 	if inspectErr == nil {
 		if managedContainerMatchesDesiredRuntime(inspect, req.DesiredSpecHash, req.DesiredGeneration, req.ApplicationID, req.InstanceID) {
+			// A matching immutable spec does not imply that the desired running
+			// state is satisfied. Containers whose process exited used to enter an
+			// endless verify-only retry loop. Starting by name is idempotent and
+			// preserves the exact container/configuration we already validated.
+			if !inspect.State.Running {
+				if err := recorder.do("start_container", func(stepctx context.Context) error {
+					return r.client.startContainer(stepctx, spec.ContainerName)
+				}); err != nil {
+					return fail("start_container_failed", "container_start_failed", err)
+				}
+			}
 			return verify()
 		}
 		if err := recorder.do("replace_stop", func(stepctx context.Context) error {
@@ -810,7 +822,53 @@ func (r *LocalRuntime) reconcileStatusResponse(ctx context.Context, req agentcon
 		ObservedState: status.Status, ContainerName: status.ContainerName, ContainerID: status.ContainerID,
 		ObservedGeneration: req.DesiredGeneration, ObservedSpecHash: req.DesiredSpecHash,
 		ObservedImageDigest: imageDigestFromReference(status.Image), ObservedAt: status.ObservedAt, Steps: steps,
+		ErrorDetail: containerStatusDiagnostic(status),
 	}, nil
+}
+
+const maxContainerDiagnosticRunes = 4096
+
+var containerDiagnosticCredential = regexp.MustCompile(`(?i)(password|passwd|passphrase|privatekey|token|authorization|secret)([=:][ \t]*)([^\s,;]+)`)
+var containerDiagnosticBearer = regexp.MustCompile(`(?i)bearer\s+[^\s,;]+`)
+
+func containerNotRunningMessage(result agentcontract.RuntimeReconcileResponse, fallback error) string {
+	detail := strings.TrimSpace(result.ErrorDetail)
+	if detail != "" {
+		return boundedDiagnostic("container did not reach running state: " + detail)
+	}
+	return boundedDiagnostic(fallback.Error())
+}
+
+func containerExitDiagnostic(result agentcontract.RuntimeReconcileResponse) string {
+	return boundedDiagnostic(strings.TrimSpace(result.ErrorDetail))
+}
+
+func containerStatusDiagnostic(status appruntime.InstanceStatus) string {
+	if status.Status == appruntime.StatusRunning {
+		return ""
+	}
+	parts := []string{fmt.Sprintf("status=%s", firstNonEmpty(status.Status, "unknown")), fmt.Sprintf("exitCode=%d", status.ExitCode)}
+	if value := strings.TrimSpace(status.LastError); value != "" {
+		parts = append(parts, "dockerError="+value)
+	}
+	if value := strings.TrimSpace(status.StartedAt); value != "" {
+		parts = append(parts, "startedAt="+value)
+	}
+	if value := strings.TrimSpace(status.FinishedAt); value != "" {
+		parts = append(parts, "finishedAt="+value)
+	}
+	return boundedDiagnostic(strings.Join(parts, "; "))
+}
+
+func boundedDiagnostic(value string) string {
+	value = containerDiagnosticCredential.ReplaceAllString(value, "${1}${2}[REDACTED]")
+	value = containerDiagnosticBearer.ReplaceAllString(value, "Bearer [REDACTED]")
+	value = strings.Join(strings.Fields(value), " ")
+	runes := []rune(value)
+	if len(runes) <= maxContainerDiagnosticRunes {
+		return value
+	}
+	return string(runes[:maxContainerDiagnosticRunes]) + "…"
 }
 
 func imageDigestFromReference(reference string) string {
@@ -832,8 +890,7 @@ func managedContainerMatchesDesiredRuntime(inspect dockerInspectResponse, specHa
 	return labels["panel.application.spec.hash"] == specHash &&
 		labels["panel.application.generation"] == strconv.Itoa(generation) &&
 		inspect.HostConfig.NetworkMode == managedBridgeNetwork &&
-		!containerUsesLegacyInstanceWorkspace(inspect, applicationID, instanceID) &&
-		inspect.State.Running
+		!containerUsesLegacyInstanceWorkspace(inspect, applicationID, instanceID)
 }
 
 func containerUsesLegacyInstanceWorkspace(inspect dockerInspectResponse, applicationID, instanceID string) bool {
