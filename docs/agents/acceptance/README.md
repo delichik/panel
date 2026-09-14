@@ -44,7 +44,7 @@
 | --- | --- |
 | 全部改动、跨模块行为 | 本文、[架构、数据与 API](architecture-data-api.md) |
 | 产品范围、端到端用户旅程、全局非目标 | [产品范围与端到端验收](product-scope.md) |
-| 全局导航、会话、布局、通用交互 | [界面外壳与交互约定](ui-shell-and-conventions.md) |
+| 全局导航、慢网路由反馈、会话、布局、通用交互 | [界面外壳与交互约定](ui-shell-and-conventions.md) |
 | 任一具体页面或用户操作 | [逐页面验收](ui-pages.md) |
 | 应用、挂载来源、应用文件、修订、部署、设施应用、存储共享 | [应用与设施应用](applications-and-facilities.md) |
 | desired/observed、协调 Job、任务、日志、运行事件 | [协调、任务与运行事件](orchestration-and-tasks.md) |

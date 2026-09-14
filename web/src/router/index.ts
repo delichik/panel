@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router';
 import type { RouteLocationGeneric } from 'vue-router';
 import { setUnauthorizedHandler } from '@/api/client';
 import { useSessionStore } from '@/stores/session';
+import { installRouteNavigationFeedback } from './navigationState';
 
 // Route components are lazy-loaded so each page family ships as its own async
 // chunk; the initial bundle only carries the shell (AppShell is the single
@@ -63,6 +64,8 @@ export const router = createRouter({
     },
   ],
 });
+
+installRouteNavigationFeedback(router);
 
 function redirectToLogin() {
   const session = useSessionStore();

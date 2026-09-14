@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, useId, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Languages, Menu, Moon, Palette, PanelLeftClose, PanelLeftOpen, Sun, UserCircle, X } from '@lucide/vue';
+import { Languages, LoaderCircle, Menu, Moon, Palette, PanelLeftClose, PanelLeftOpen, Sun, UserCircle, X } from '@lucide/vue';
 import { useOverlayBehavior } from '@/composables/useOverlayBehavior';
 import Badge from '@/components/ui/Badge.vue';
 import Dropdown from '@/components/ui/Dropdown.vue';
@@ -11,6 +11,7 @@ import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import { useI18n } from '@/i18n';
 import { useThemeMode, type ThemeMode, type ThemeScheme } from '@/design/theme';
 import { useSessionStore } from '@/stores/session';
+import { routeNavigation } from '@/router/navigationState';
 import { activeNavKey, navGroups } from './navModel';
 
 const route = useRoute();
@@ -38,11 +39,21 @@ lgQuery?.addEventListener('change', closeDrawerOnDesktop);
 onBeforeUnmount(() => lgQuery?.removeEventListener('change', closeDrawerOnDesktop));
 const signingOut = ref(false);
 const activeKey = computed(() => activeNavKey(route.path));
+const pendingNavKey = computed(() => routeNavigation.pending.value ? activeNavKey(routeNavigation.targetPath.value.split('?')[0] || '') : undefined);
+const displayedActiveKey = computed(() => pendingNavKey.value || activeKey.value);
 const title = computed(() => t(String(route.meta.titleKey || 'app.name')));
+const navigationLabel = computed(() => {
+  if (!routeNavigation.pending.value) return title.value;
+  const targetTitle = routeNavigation.titleKey.value ? t(routeNavigation.titleKey.value) : title.value;
+  return t('layout.navigation.loading', { title: targetTitle });
+});
 
 watch(collapsed, (value) => localStorage.setItem('panel.nav.collapsed', String(value)));
 watch(() => route.fullPath, () => {
   drawerOpen.value = false;
+});
+watch(() => routeNavigation.pending.value, (pending) => {
+  if (pending) drawerOpen.value = false;
 });
 
 const themeItems: Array<{ key: ThemeMode; labelKey: string }> = [
@@ -90,10 +101,12 @@ async function signOut() {
             :key="item.key"
             :to="item.to"
             :title="collapsed ? t(item.titleKey) : undefined"
+            :aria-busy="pendingNavKey === item.key ? 'true' : undefined"
             class="mb-1 flex h-9 items-center rounded-xl px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            :class="[activeKey === item.key ? 'bg-brand-bg text-brand' : '', collapsed ? 'justify-center px-0' : 'gap-3']"
+            :class="[displayedActiveKey === item.key ? 'bg-brand-bg text-brand' : '', collapsed ? 'justify-center px-0' : 'gap-3']"
           >
-            <component :is="item.icon" class="size-4 shrink-0" aria-hidden="true" />
+            <LoaderCircle v-if="pendingNavKey === item.key" class="size-4 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+            <component :is="item.icon" v-else class="size-4 shrink-0" aria-hidden="true" />
             <Transition name="fade">
               <span v-if="!collapsed" class="truncate">{{ t(item.titleKey) }}</span>
             </Transition>
@@ -103,7 +116,7 @@ async function signOut() {
     </aside>
 
     <main class="grid min-h-dvh min-w-0 grid-rows-[56px_auto] lg:min-h-0 lg:grid-rows-[56px_minmax(0,1fr)]">
-      <header class="flex min-w-0 items-center justify-between gap-3 border-b border-border bg-background px-4">
+      <header class="relative flex min-w-0 items-center justify-between gap-3 border-b border-border bg-background px-4" :aria-busy="routeNavigation.pending.value ? 'true' : undefined">
         <div class="flex min-w-0 items-center gap-2">
           <IconButton class="lg:hidden" :label="t('layout.nav.open')" :aria-expanded="drawerOpen" :aria-controls="drawerId" aria-haspopup="dialog" @click="drawerOpen = true">
             <Menu />
@@ -114,7 +127,7 @@ async function signOut() {
               <PanelLeftClose v-else />
             </Transition>
           </IconButton>
-          <h1 class="truncate text-base font-semibold text-foreground">{{ title }}</h1>
+          <h1 class="truncate text-base font-semibold text-foreground">{{ navigationLabel }}</h1>
           <Badge>{{ t('layout.alpha') }}</Badge>
         </div>
         <div class="flex items-center gap-1">
@@ -153,6 +166,9 @@ async function signOut() {
             <div class="px-3 py-2 text-xs text-muted-foreground">{{ session.username }}</div>
             <DropdownItem @click="signOut">{{ t('layout.logout') }}</DropdownItem>
           </Dropdown>
+        </div>
+        <div v-if="routeNavigation.pending.value" class="absolute inset-x-0 bottom-0 h-0.5 overflow-hidden bg-accent" role="progressbar" :aria-label="navigationLabel">
+          <div class="h-full w-1/2 animate-pulse bg-brand motion-reduce:animate-none" />
         </div>
       </header>
       <section class="min-h-0 min-w-0 overflow-visible lg:overflow-hidden">
@@ -201,10 +217,12 @@ async function signOut() {
                   v-for="item in group.items"
                   :key="item.key"
                   :to="item.to"
+                  :aria-busy="pendingNavKey === item.key ? 'true' : undefined"
                   class="mb-1 flex h-9 items-center gap-3 rounded-xl px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                  :class="activeKey === item.key ? 'bg-brand-bg text-brand' : ''"
+                  :class="displayedActiveKey === item.key ? 'bg-brand-bg text-brand' : ''"
                 >
-                  <component :is="item.icon" class="size-4 shrink-0" aria-hidden="true" />
+                  <LoaderCircle v-if="pendingNavKey === item.key" class="size-4 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                  <component :is="item.icon" v-else class="size-4 shrink-0" aria-hidden="true" />
                   <span class="truncate">{{ t(item.titleKey) }}</span>
                 </RouterLink>
               </section>

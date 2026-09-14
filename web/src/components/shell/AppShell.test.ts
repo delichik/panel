@@ -4,6 +4,7 @@ import { createPinia } from 'pinia';
 import { createMemoryHistory, createRouter, type Router } from 'vue-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useI18n } from '@/i18n';
+import { beginRouteNavigation, finishRouteNavigation } from '@/router/navigationState';
 
 // This vitest jsdom environment does not provide localStorage; stub it like
 // other tests stub fetch so AppShell / theme can read persistence keys.
@@ -88,6 +89,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  finishRouteNavigation();
   while (mountedWrappers.length) mountedWrappers.pop()!.unmount();
   document.body.innerHTML = '';
   document.body.style.overflow = '';
@@ -96,6 +98,25 @@ afterEach(() => {
 });
 
 describe('AppShell mobile nav drawer', () => {
+  it('shows immediate target feedback while a route is still resolving', async () => {
+    const { wrapper } = await mountShell();
+
+    beginRouteNavigation('/servers', 'routes.servers.title');
+    await flushPromises();
+
+    const pendingLink = wrapper.get('aside nav a[href="/servers"]');
+    expect(pendingLink.attributes('aria-busy')).toBe('true');
+    expect(pendingLink.classes()).toContain('text-brand');
+    expect(wrapper.get('header h1').text()).toBe('Opening Servers…');
+    expect(wrapper.get('header [role="progressbar"]').attributes('aria-label')).toBe('Opening Servers…');
+
+    finishRouteNavigation();
+    await flushPromises();
+
+    expect(pendingLink.attributes('aria-busy')).toBeUndefined();
+    expect(wrapper.find('header [role="progressbar"]').exists()).toBe(false);
+  });
+
   it('opens as a modal dialog with aria wiring, focus and background lock', async () => {
     const { wrapper } = await mountShell();
     const trigger = wrapper.get('button[aria-label="Open navigation"]');
