@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installMockApi } from './browser';
+import { setDebugFailure } from './debug';
 
 const nativeFetch = globalThis.fetch;
 
@@ -20,6 +21,19 @@ describe('domain mock routes', () => {
     const envelope = await response.json();
     expect(response.status).toBe(200);
     expect(envelope.data.cards.length).toBeGreaterThan(0);
+  });
+
+  it('keeps runtime and task diagnostics available when database collection fails', async () => {
+    setDebugFailure(true);
+    const [runtime, tasks, databases] = await Promise.all([
+      fetch('/api/v1/debug/runtime'),
+      fetch('/api/v1/debug/tasks'),
+      fetch('/api/v1/debug/databases'),
+    ]);
+
+    expect(runtime.status).toBe(200);
+    expect(tasks.status).toBe(200);
+    expect(databases.status).toBe(503);
   });
 
   it('serves demo-sized inventory data for pagination and varied states', async () => {
@@ -319,9 +333,15 @@ describe('domain mock routes', () => {
     const currentEnvelope = await current.json();
     expect(currentEnvelope.data.mode).toBe('backup_exporting');
 
-    const diagnostics = await fetch('/api/v1/debug/snapshot');
-    const diagnosticsEnvelope = await diagnostics.json();
-    expect(diagnosticsEnvelope.data.databases.length).toBeGreaterThan(0);
+    const runtimeDiagnostics = await fetch('/api/v1/debug/runtime');
+    const taskDiagnostics = await fetch('/api/v1/debug/tasks');
+    const databaseDiagnostics = await fetch('/api/v1/debug/databases');
+    const runtimeEnvelope = await runtimeDiagnostics.json();
+    const taskEnvelope = await taskDiagnostics.json();
+    const databaseEnvelope = await databaseDiagnostics.json();
+    expect(runtimeEnvelope.data.process.pid).toBeGreaterThan(0);
+    expect(taskEnvelope.data.tasks.registeredTypes).toBeGreaterThan(0);
+    expect(databaseEnvelope.data.databases.length).toBeGreaterThan(0);
   });
 
   it('covers committed files, edit session uploads, DNS/resource refresh and certificate detail routes', async () => {

@@ -110,7 +110,9 @@ func (a *App) activityAuth(next http.Handler) http.Handler {
 		receivedID := ""
 		mutation := r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch || r.Method == http.MethodDelete
 		if mutation && a.activity != nil {
-			if !strings.HasSuffix(r.URL.Path, "/resolve") {
+			// Recovery operations that reduce ledger usage must remain available
+			// when normal mutations are blocked by the activity capacity gate.
+			if !strings.HasSuffix(r.URL.Path, "/resolve") && r.URL.Path != "/api/v1/debug/clear-runtime-data" {
 				if err := activitylog.CheckAdmission(ctx, a.store.AppDB()); err != nil {
 					httpx.Error(w, err)
 					return

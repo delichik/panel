@@ -2396,6 +2396,15 @@ Object.assign(messages.en, {
   'debugPage.pprofDisabledHint': 'Enable the pprof server to collect runtime performance profiles.',
   'debugPage.pprofLoadFailed': 'Unable to load pprof status.',
   'debugPage.pprofToggleFailed': 'Unable to update pprof status.',
+  'debugPage.clearRuntimeData': 'Clear runtime data',
+  'debugPage.clearRuntimeDataHint': 'Remove logs, metrics, tasks, and all orchestration records while keeping resource configuration.',
+  'debugPage.clearRuntimeDataTitle': 'Clear all runtime data?',
+  'debugPage.clearRuntimeDataDescription': 'This diagnostic operation permanently removes accumulated operational history.',
+  'debugPage.clearRuntimeDataImpact': 'Activity and system logs, metrics, task history, jobs, retry state, and orchestration records will be deleted. Applications, servers, credentials, and configuration remain.',
+  'debugPage.clearRuntimeDataCheckbox': 'I understand this operational history cannot be recovered without a backup.',
+  'debugPage.clearRuntimeDataConfirm': 'Clear runtime data',
+  'debugPage.clearRuntimeDataSucceeded': 'Runtime data cleared.',
+  'debugPage.clearRuntimeDataFailed': 'Unable to clear runtime data.',
 });
 
 Object.assign(messages['zh-CN'], {
@@ -2738,6 +2747,15 @@ Object.assign(messages['zh-CN'], {
   'debugPage.pprofDisabledHint': '启用后将在本机启动 pprof 服务，用于采集运行时性能数据。',
   'debugPage.pprofLoadFailed': '无法加载 pprof 状态。',
   'debugPage.pprofToggleFailed': '无法更新 pprof 状态。',
+  'debugPage.clearRuntimeData': '清空运行数据',
+  'debugPage.clearRuntimeDataHint': '删除日志、指标、任务和全部协调记录，保留资源配置。',
+  'debugPage.clearRuntimeDataTitle': '清空所有运行数据？',
+  'debugPage.clearRuntimeDataDescription': '该诊断操作会永久删除已累积的运行历史。',
+  'debugPage.clearRuntimeDataImpact': '活动与系统日志、metrics、任务历史、Job、重试状态和协调记录都会被删除。应用、服务器、凭据和配置保留。',
+  'debugPage.clearRuntimeDataCheckbox': '我理解如果没有备份，这些运行历史无法恢复。',
+  'debugPage.clearRuntimeDataConfirm': '清空运行数据',
+  'debugPage.clearRuntimeDataSucceeded': '运行数据已清空。',
+  'debugPage.clearRuntimeDataFailed': '无法清空运行数据。',
 });
 
 // 持久化的 locale 只接受已知值；被篡改/旧版本残留的非法值回退到默认 'en'，

@@ -95,10 +95,10 @@
 
 ## 10. 诊断快照
 
-- `DIAG-SNP-001`：只有认证用户可调用 `GET /api/v1/debug/snapshot`；响应的process、memory、tasks和所有数据库统计必须使用同一collectedAt语义生成。
-- `DIAG-SNP-002`：process必须包含启动时间、非负uptime、PID、Go版本、OS/架构、CPU、goroutine和cgo计数；memory必须包含当前/累计/heap/stack/cache/span/GC统计及可选lastGCAt。
-- `DIAG-SNP-003`：tasks部分必须反映worker运行、注册/可执行/周期类型、运行execution数及每个definition的hidden/executable/periodic/run-now/retry/max-retry/concurrency/stale/interval能力，不得含任务参数或日志。
-- `DIAG-SNP-004`：每个app/log/metrics数据库必须返回连接池、文件大小、SQLite page/free/used和用户表统计；行数是准确COUNT，表按总大小降序、同大小按名称排序。
+- `DIAG-SNP-001`：只有认证用户可调用 `GET /api/v1/debug/runtime`、`GET /api/v1/debug/tasks` 和 `GET /api/v1/debug/databases`；三类诊断必须独立采集和响应，任一接口变慢或失败不得阻塞另两个接口完成加载；每个响应提供自身采集语义的 `collectedAt`。
+- `DIAG-SNP-002`：runtime 响应的process必须包含启动时间、非负uptime、PID、Go版本、OS/架构、CPU、goroutine和cgo计数；memory必须包含当前/累计/heap/stack/cache/span/GC统计及可选lastGCAt。
+- `DIAG-SNP-003`：tasks响应必须反映worker运行、注册/可执行/周期类型、运行execution数及每个definition的hidden/executable/periodic/run-now/retry/max-retry/concurrency/stale/interval能力，不得含任务参数或日志。
+- `DIAG-SNP-004`：databases响应中的每个app/log/metrics数据库必须返回连接池、文件大小、SQLite page/free/used和用户表统计；行数是准确COUNT，表按总大小降序、同大小按名称排序。
 - `DIAG-SNP-005`：dbstat不可用时只设置 `database_table_sizes_unavailable` 并保留健康连接、行数和其他统计；单表COUNT失败只标该表错误，数据库不可用则标安全errorCode而非让整个快照失败。
 - `DIAG-SNP-006`：诊断响应绝不返回数据库路径/DSN、schema SQL、配置值、秘密、业务行、任务参数或绝对敏感文件路径；文件路径只在服务内用于stat。
 
@@ -109,7 +109,14 @@
 - `DIAG-PPF-003`：重复enable和disable必须幂等；disable失败返回 `pprof_stop_failed`；Panel关闭必须自动disable且重复Close安全。
 - `DIAG-PPF-004`：pprof状态是进程内临时状态，重启默认关闭；不得持久化为runtime setting或在维护应用中启动。
 
-## 12. 验收证据
+## 12. Debug 运行数据清理
+
+- `DIAG-CLR-001`：只有认证用户可在 `/debug` 经危险确认调用 `POST /api/v1/debug/clear-runtime-data`；确认值不精确匹配时必须 422 且不删除任何数据。
+- `DIAG-CLR-002`：清理必须暂停协调与任务 worker，删除 activity/system logs、metrics、tasks/steps、Jobs、reconcile backoff 及全部协调库记录，并清除资源上的悬空 Job 投影。
+- `DIAG-CLR-003`：清理不得删除应用、服务器、凭据、证书、密钥资产、应用修订或期望/观测状态；完成后 worker 必须重启并从当前状态重新收敛。
+- `DIAG-CLR-004`：成功删除后应 checkpoint WAL 并尝试 VACUUM 回收文件空间；响应只返回清理结果，不暴露路径或被删除内容。
+
+## 13. 验收证据
 
 - `BKP-EVD-001`：测试必须覆盖正常态只写pending、mode显式门禁、最小维护路由、三类token隔离、登录限流、下载前禁止exit和清理失败不重启。
 - `BKP-EVD-002`：归档测试必须覆盖加密/非加密往返、路径穿越、临时目录排除、超长段拒绝、写失败、8GiB限制和错误码映射。

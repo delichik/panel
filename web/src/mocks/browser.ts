@@ -112,7 +112,7 @@ import { acceptedAgentDeployment, completedTask, mockTasks, mockTaskLogs, mockTa
 import { mockActivityRoute, resolveMockExecution } from './activity';
 import { confirmRestore, mockRuntimeSettings, mockServerVariables, restorePreflight, saveRuntime, saveServerVariables, startExport } from './settings';
 import { advanceExport, exportStatus, resetExport, restoreStatus } from './maintenance';
-import { debugPprofStatus, debugSnapshot, setDebugPprof } from './debug';
+import { debugDatabases, debugPprofStatus, debugRuntime, debugTasks, setDebugPprof } from './debug';
 
 const nativeFetch = window.fetch.bind(window);
 const mockAuthToken = 'panel_mock_admin_token';
@@ -936,11 +936,13 @@ export function installMockApi() {
       const input = await body<{ enabled?: boolean }>(init);
       return json(setDebugPprof(input.enabled === true));
     }
-    if (url.pathname === '/api/v1/debug/snapshot') {
+    if (url.pathname === '/api/v1/debug/runtime' && method(init) === 'GET') return json(debugRuntime());
+    if (url.pathname === '/api/v1/debug/tasks' && method(init) === 'GET') return json(debugTasks());
+    if (url.pathname === '/api/v1/debug/databases' && method(init) === 'GET') {
       try {
-        return json(debugSnapshot());
+        return json(debugDatabases());
       } catch (err) {
-        return error('debug_snapshot_failed', err instanceof Error ? err.message : 'Unable to collect diagnostics.', 503);
+        return error('debug_databases_failed', err instanceof Error ? err.message : 'Unable to collect database diagnostics.', 503);
       }
     }
 

@@ -32,7 +32,7 @@ func (fakeTaskRuntimeProvider) TaskRuntime() tasks.RuntimeStats {
 	}
 }
 
-func TestSnapshotCollectsRuntimeAndSafeDatabaseStatistics(t *testing.T) {
+func TestSeparateDiagnosticsCollectRuntimeTasksAndSafeDatabaseStatistics(t *testing.T) {
 	dir := t.TempDir()
 	sources := make([]DatabaseSource, 0, 3)
 	for _, name := range []string{"app", "task", "metrics"} {
@@ -48,17 +48,20 @@ func TestSnapshotCollectsRuntimeAndSafeDatabaseStatistics(t *testing.T) {
 		sources = append(sources, DatabaseSource{Name: name, DB: db, Path: path})
 	}
 
-	snapshot := NewServiceWithTaskRuntime(fakeTaskRuntimeProvider{}, sources...).Snapshot(context.Background())
-	if snapshot.Process.GoVersion == "" || snapshot.Process.CPUCount < 1 || snapshot.Process.PID < 1 {
-		t.Fatalf("runtime fields not populated: %#v", snapshot.Process)
+	service := NewServiceWithTaskRuntime(fakeTaskRuntimeProvider{}, sources...)
+	runtimeSnapshot := service.Runtime()
+	taskSnapshot := service.Tasks()
+	databaseSnapshots := service.Databases(context.Background())
+	if runtimeSnapshot.Process.GoVersion == "" || runtimeSnapshot.Process.CPUCount < 1 || runtimeSnapshot.Process.PID < 1 {
+		t.Fatalf("runtime fields not populated: %#v", runtimeSnapshot.Process)
 	}
-	if len(snapshot.Databases) != 3 {
-		t.Fatalf("databases = %d, want 3", len(snapshot.Databases))
+	if len(databaseSnapshots.Databases) != 3 {
+		t.Fatalf("databases = %d, want 3", len(databaseSnapshots.Databases))
 	}
-	if !snapshot.Tasks.WorkerRunning || snapshot.Tasks.RegisteredTypes != 12 || snapshot.Tasks.RunningExecutions != 2 {
-		t.Fatalf("task runtime fields not populated: %#v", snapshot.Tasks)
+	if !taskSnapshot.Tasks.WorkerRunning || taskSnapshot.Tasks.RegisteredTypes != 12 || taskSnapshot.Tasks.RunningExecutions != 2 {
+		t.Fatalf("task runtime fields not populated: %#v", taskSnapshot.Tasks)
 	}
-	for _, database := range snapshot.Databases {
+	for _, database := range databaseSnapshots.Databases {
 		if !database.Healthy {
 			t.Fatalf("database %q unhealthy: %#v", database.Name, database)
 		}
@@ -72,11 +75,11 @@ func TestSnapshotCollectsRuntimeAndSafeDatabaseStatistics(t *testing.T) {
 			t.Fatalf("missing database sizes for %q: %#v", database.Name, database)
 		}
 	}
-	if len(snapshot.Tasks.Definitions) != 1 || snapshot.Tasks.Definitions[0].Type != "metrics_collect" {
-		t.Fatalf("task definitions not populated: %#v", snapshot.Tasks.Definitions)
+	if len(taskSnapshot.Tasks.Definitions) != 1 || taskSnapshot.Tasks.Definitions[0].Type != "metrics_collect" {
+		t.Fatalf("task definitions not populated: %#v", taskSnapshot.Tasks.Definitions)
 	}
 
-	payload, err := json.Marshal(snapshot)
+	payload, err := json.Marshal([]any{runtimeSnapshot, taskSnapshot, databaseSnapshots})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,15 +109,15 @@ func TestSnapshotKeepsHealthyDatabasesWhenOneFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	snapshot := NewService(
+	snapshots := NewService(
 		DatabaseSource{Name: "app", DB: healthy, Path: path},
 		DatabaseSource{Name: "task", DB: failed},
-	).Snapshot(context.Background())
+	).Databases(context.Background())
 
-	if !snapshot.Databases[0].Healthy {
-		t.Fatalf("healthy database lost: %#v", snapshot.Databases[0])
+	if !snapshots.Databases[0].Healthy {
+		t.Fatalf("healthy database lost: %#v", snapshots.Databases[0])
 	}
-	if snapshot.Databases[1].Healthy || snapshot.Databases[1].ErrorCode != "database_unavailable" {
-		t.Fatalf("failed database not isolated: %#v", snapshot.Databases[1])
+	if snapshots.Databases[1].Healthy || snapshots.Databases[1].ErrorCode != "database_unavailable" {
+		t.Fatalf("failed database not isolated: %#v", snapshots.Databases[1])
 	}
 }

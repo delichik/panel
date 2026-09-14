@@ -1,34 +1,45 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { Activity, Database, Pause, Play, RefreshCcw } from '@lucide/vue';
+import { Activity, Database, Pause, Play, RefreshCcw, Trash2 } from '@lucide/vue';
 import { debugApi } from '@/api/debug';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
+import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import Switch from '@/components/ui/Switch.vue';
 import Table from '@/components/ui/Table.vue';
 import Tabs from '@/components/ui/Tabs.vue';
-import { useErrorToast } from '@/components/ui/toast';
+import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import WorkspacePage from '@/components/templates/WorkspacePage.vue';
 import { useI18n } from '@/i18n';
-import type { DebugDatabase, DebugPprofStatus, DebugSnapshot, DebugTaskDefinition } from '@/types/debug';
+import type { DebugDatabase, DebugDatabaseSnapshots, DebugPprofStatus, DebugRuntimeSnapshot, DebugTaskDefinition, DebugTaskSnapshot } from '@/types/debug';
 import { formatDateTime } from '@/utils/datetime';
 
 const { t } = useI18n();
 const notifyError = useErrorToast();
+const notifySuccess = useSuccessToast();
 
-const snapshot = ref<DebugSnapshot | null>(null);
-const lastGoodSnapshot = ref<DebugSnapshot | null>(null);
+const runtimeSnapshot = ref<DebugRuntimeSnapshot | null>(null);
+const taskSnapshot = ref<DebugTaskSnapshot | null>(null);
+const databaseSnapshots = ref<DebugDatabaseSnapshots | null>(null);
 const activeTab = ref('runtime');
-const loading = ref(false);
+const runtimeLoading = ref(false);
+const tasksLoading = ref(false);
+const databasesLoading = ref(false);
 const paused = ref(false);
-const error = ref('');
+const runtimeError = ref('');
+const tasksError = ref('');
+const databasesError = ref('');
 let timer: number | undefined;
-let snapshotRequestId = 0;
+let runtimeRequestId = 0;
+let tasksRequestId = 0;
+let databasesRequestId = 0;
 const pprof = ref<DebugPprofStatus | null>(null);
 const pprofPending = ref(false);
+const clearOpen = ref(false);
+const clearPending = ref(false);
 
 type TaskMetricRow = { key: string; label: string; value: string };
 type TaskDefinitionRow = {
@@ -42,8 +53,14 @@ type TaskDefinitionRow = {
 };
 
 const taskMetricOrder = ['workerRunning', 'registeredTypes', 'executableTypes', 'periodicTypes', 'runningExecutions'];
-const view = computed(() => snapshot.value ?? lastGoodSnapshot.value);
-const stale = computed(() => Boolean(error.value && lastGoodSnapshot.value));
+const loading = computed(() => runtimeLoading.value || tasksLoading.value || databasesLoading.value);
+const stale = computed(() => Boolean(runtimeError.value || tasksError.value || databasesError.value));
+const collectedAt = computed(() => {
+  const values = [runtimeSnapshot.value?.collectedAt, taskSnapshot.value?.collectedAt, databaseSnapshots.value?.collectedAt]
+    .filter((value): value is string => Boolean(value))
+    .sort();
+  return values[values.length - 1];
+});
 const tabs = computed(() => [
   { label: t('debugPage.runtime'), value: 'runtime' },
   { label: t('debugPage.tasks'), value: 'tasks' },
@@ -59,14 +76,14 @@ const taskDefinitionColumns = computed<Array<{ key: keyof TaskDefinitionRow & st
   { key: 'periodicInterval', label: t('debugPage.periodicInterval'), align: 'right' },
 ]);
 const taskMetricRows = computed<TaskMetricRow[]>(() => {
-  const tasks = view.value?.tasks;
+  const tasks = taskSnapshot.value?.tasks;
   if (!tasks) return [];
   const entries = Object.entries(tasks).filter((entry): entry is [string, string | number | boolean | null | undefined] => entry[0] !== 'definitions' && isScalarDiagnosticValue(entry[1]));
   return entries
     .sort(([left], [right]) => taskMetricSortIndex(left) - taskMetricSortIndex(right) || left.localeCompare(right))
     .map(([key, value]) => ({ key, label: taskMetricLabel(key), value: formatDiagnosticValue(value) }));
 });
-const taskDefinitionRows = computed<TaskDefinitionRow[]>(() => (view.value?.tasks.definitions ?? []).map((definition) => ({
+const taskDefinitionRows = computed<TaskDefinitionRow[]>(() => (taskSnapshot.value?.tasks.definitions ?? []).map((definition) => ({
   type: definition.type,
   kind: formatTaskKind(definition),
   actions: formatTaskActions(definition),
@@ -78,7 +95,7 @@ const taskDefinitionRows = computed<TaskDefinitionRow[]>(() => (view.value?.task
 const pprofUrl = computed(() => (pprof.value?.enabled && pprof.value?.address) ? `http://${pprof.value.address}/debug/pprof/` : null);
 
 const databaseTotals = computed(() => {
-  const dbs = view.value?.databases ?? [];
+  const dbs = databaseSnapshots.value?.databases ?? [];
   return {
     healthy: dbs.filter((item) => item.healthy).length,
     total: dbs.length,
@@ -143,23 +160,77 @@ async function togglePprof(enabled: boolean) {
   }
 }
 
-async function load() {
-  const requestId = ++snapshotRequestId;
-  loading.value = true;
-  error.value = '';
+async function clearRuntimeData() {
+  if (clearPending.value) return;
+  clearPending.value = true;
   try {
-    const next = await debugApi.snapshot();
-    if (requestId !== snapshotRequestId) return;
-    snapshot.value = next;
-    lastGoodSnapshot.value = next;
+    await debugApi.clearRuntimeData();
+    clearOpen.value = false;
+    notifySuccess(t('debugPage.clearRuntimeDataSucceeded'));
+    await loadAll();
   } catch (err) {
-    if (requestId !== snapshotRequestId) return;
-    error.value = err instanceof Error ? err.message : t('debugPage.loadFailed');
-    notifyError(err instanceof Error ? err.message : t('debugPage.loadFailed'), err);
-    snapshot.value = null;
+    notifyError(err instanceof Error ? err.message : t('debugPage.clearRuntimeDataFailed'), err);
   } finally {
-    if (requestId === snapshotRequestId) loading.value = false;
+    clearPending.value = false;
   }
+}
+
+async function loadRuntime() {
+  if (runtimeLoading.value) return;
+  const requestId = ++runtimeRequestId;
+  runtimeLoading.value = true;
+  runtimeError.value = '';
+  try {
+    const next = await debugApi.runtime();
+    if (requestId !== runtimeRequestId) return;
+    runtimeSnapshot.value = next;
+  } catch (err) {
+    if (requestId !== runtimeRequestId) return;
+    runtimeError.value = err instanceof Error ? err.message : t('debugPage.loadFailed');
+    notifyError(err instanceof Error ? err.message : t('debugPage.loadFailed'), err);
+  } finally {
+    if (requestId === runtimeRequestId) runtimeLoading.value = false;
+  }
+}
+
+async function loadTasks() {
+  if (tasksLoading.value) return;
+  const requestId = ++tasksRequestId;
+  tasksLoading.value = true;
+  tasksError.value = '';
+  try {
+    const next = await debugApi.tasks();
+    if (requestId !== tasksRequestId) return;
+    taskSnapshot.value = next;
+  } catch (err) {
+    if (requestId !== tasksRequestId) return;
+    tasksError.value = err instanceof Error ? err.message : t('debugPage.loadFailed');
+    notifyError(err instanceof Error ? err.message : t('debugPage.loadFailed'), err);
+  } finally {
+    if (requestId === tasksRequestId) tasksLoading.value = false;
+  }
+}
+
+async function loadDatabases() {
+  if (databasesLoading.value) return;
+  const requestId = ++databasesRequestId;
+  databasesLoading.value = true;
+  databasesError.value = '';
+  try {
+    const next = await debugApi.databases();
+    if (requestId !== databasesRequestId) return;
+    databaseSnapshots.value = next;
+  } catch (err) {
+    if (requestId !== databasesRequestId) return;
+    databasesError.value = err instanceof Error ? err.message : t('debugPage.loadFailed');
+    notifyError(err instanceof Error ? err.message : t('debugPage.loadFailed'), err);
+  } finally {
+    if (requestId === databasesRequestId) databasesLoading.value = false;
+  }
+}
+
+async function loadAll() {
+  await Promise.allSettled([loadRuntime(), loadTasks(), loadDatabases()]);
 }
 
 function formatBytes(value?: number) {
@@ -188,12 +259,12 @@ function dbTone(db: DebugDatabase) {
 
 function startPolling() {
   timer = window.setInterval(() => {
-    if (!paused.value && !loading.value && document.visibilityState === 'visible') void load();
+    if (!paused.value && document.visibilityState === 'visible') void loadAll();
   }, 8000);
 }
 
-onMounted(async () => {
-  await load();
+onMounted(() => {
+  void loadAll();
   void loadPprof();
   startPolling();
 });
@@ -203,7 +274,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
 <template>
   <ConsolePage :title="t('routes.debug.title')" :description="t('routes.debug.description')">
     <template #actions>
-      <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
+      <Button size="sm" :loading="loading" @click="loadAll"><RefreshCcw />{{ t('common.refresh') }}</Button>
       <Button size="sm" :variant="paused ? 'primary' : 'secondary'" @click="paused = !paused">
         <Play v-if="paused" />
         <Pause v-else />
@@ -216,7 +287,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div class="flex flex-wrap gap-2">
             <Badge :tone="stale ? 'warning' : 'success'">{{ stale ? t('debugPage.staleSnapshot') : t('debugPage.liveSnapshot') }}</Badge>
-            <Badge tone="info">{{ formatDateTime(view?.collectedAt) || t('common.never') }}</Badge>
+            <Badge tone="info">{{ formatDateTime(collectedAt) || t('common.never') }}</Badge>
           </div>
         </div>
       </template>
@@ -234,54 +305,74 @@ onBeforeUnmount(() => window.clearInterval(timer));
         </div>
       </section>
 
-      <div v-if="loading && !view" class="relative grid min-h-[600px] place-items-center">
-        <LoadingOverlay />
-      </div>
-      <EmptyState v-else-if="error && !view" :title="t('common.loadFailed')" :description="error">
-        <template #actions>
-          <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
-        </template>
-      </EmptyState>
-      <EmptyState v-else-if="!view" :title="t('debugPage.empty')" :description="t('debugPage.emptyHint')" />
-      <Tabs v-else v-model="activeTab" class="h-full min-h-[600px]" :tabs="tabs">
-        <section v-if="activeTab === 'runtime'" class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <div class="grid gap-4 md:grid-cols-3">
-            <div class="rounded-2xl border border-border bg-card p-4"><span>{{ t('debugPage.uptime') }}</span><strong>{{ view.process.uptimeSeconds }}s</strong></div>
-            <div class="rounded-2xl border border-border bg-card p-4"><span>{{ t('debugPage.goroutines') }}</span><strong>{{ view.process.goroutineCount }}</strong></div>
-            <div class="rounded-2xl border border-border bg-card p-4"><span>{{ t('debugPage.heap') }}</span><strong>{{ formatBytes(Number(view.memory.heapAllocBytes || view.memory.allocBytes || 0)) }}</strong></div>
+      <section class="mb-4 rounded-2xl border border-danger-border bg-danger-bg p-5">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div class="grid gap-1">
+            <h3 class="text-danger"><Trash2 class="size-4" />{{ t('debugPage.clearRuntimeData') }}</h3>
+            <p class="text-sm text-danger">{{ t('debugPage.clearRuntimeDataHint') }}</p>
           </div>
-          <section class="rounded-2xl border border-border bg-card p-5">
-            <h3><Activity class="size-4" />{{ t('debugPage.process') }}</h3>
-            <dl class="mt-4 grid grid-cols-2 gap-3 text-sm max-md:grid-cols-1">
-              <div><dt>PID</dt><dd>{{ view.process.pid }}</dd></div>
-              <div><dt>{{ t('debugPage.goVersion') }}</dt><dd>{{ view.process.goVersion }}</dd></div>
-              <div><dt>{{ t('debugPage.platform') }}</dt><dd>{{ view.process.os }} / {{ view.process.architecture }}</dd></div>
-              <div><dt>{{ t('debugPage.cpu') }}</dt><dd>{{ view.process.cpuCount }}</dd></div>
-            </dl>
-          </section>
+          <Button variant="danger" :loading="clearPending" @click="clearOpen = true"><Trash2 />{{ t('debugPage.clearRuntimeData') }}</Button>
+        </div>
+      </section>
+
+      <Tabs v-model="activeTab" class="h-full min-h-[600px]" :tabs="tabs">
+        <section v-if="activeTab === 'runtime'" class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+          <div v-if="runtimeLoading && !runtimeSnapshot" class="relative grid min-h-96 place-items-center xl:col-span-2"><LoadingOverlay /></div>
+          <EmptyState v-else-if="runtimeError && !runtimeSnapshot" class="xl:col-span-2" :title="t('common.loadFailed')" :description="runtimeError">
+            <template #actions><Button size="sm" :loading="runtimeLoading" @click="loadRuntime"><RefreshCcw />{{ t('common.retry') }}</Button></template>
+          </EmptyState>
+          <template v-else-if="runtimeSnapshot">
+            <div class="grid gap-4 md:grid-cols-3">
+              <div class="rounded-2xl border border-border bg-card p-4"><span>{{ t('debugPage.uptime') }}</span><strong>{{ runtimeSnapshot.process.uptimeSeconds }}s</strong></div>
+              <div class="rounded-2xl border border-border bg-card p-4"><span>{{ t('debugPage.goroutines') }}</span><strong>{{ runtimeSnapshot.process.goroutineCount }}</strong></div>
+              <div class="rounded-2xl border border-border bg-card p-4"><span>{{ t('debugPage.heap') }}</span><strong>{{ formatBytes(Number(runtimeSnapshot.memory.heapAllocBytes || runtimeSnapshot.memory.allocBytes || 0)) }}</strong></div>
+            </div>
+            <section class="rounded-2xl border border-border bg-card p-5">
+              <h3><Activity class="size-4" />{{ t('debugPage.process') }}</h3>
+              <dl class="mt-4 grid grid-cols-2 gap-3 text-sm max-md:grid-cols-1">
+                <div><dt>PID</dt><dd>{{ runtimeSnapshot.process.pid }}</dd></div>
+                <div><dt>{{ t('debugPage.goVersion') }}</dt><dd>{{ runtimeSnapshot.process.goVersion }}</dd></div>
+                <div><dt>{{ t('debugPage.platform') }}</dt><dd>{{ runtimeSnapshot.process.os }} / {{ runtimeSnapshot.process.architecture }}</dd></div>
+                <div><dt>{{ t('debugPage.cpu') }}</dt><dd>{{ runtimeSnapshot.process.cpuCount }}</dd></div>
+              </dl>
+            </section>
+          </template>
+          <EmptyState v-else class="xl:col-span-2" :title="t('debugPage.empty')" :description="t('debugPage.emptyHint')" />
         </section>
 
         <section v-else-if="activeTab === 'tasks'" class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <div class="min-w-0 rounded-2xl border border-border bg-card p-5">
-            <h3>{{ t('debugPage.taskRuntime') }}</h3>
-            <div class="mt-4 grid grid-cols-3 gap-3 max-md:grid-cols-1">
-              <div v-for="metric in taskMetricRows" :key="metric.key" class="rounded-xl border border-border bg-muted p-3"><span>{{ metric.label }}</span><strong>{{ metric.value }}</strong></div>
+          <div v-if="tasksLoading && !taskSnapshot" class="relative grid min-h-96 place-items-center xl:col-span-2"><LoadingOverlay /></div>
+          <EmptyState v-else-if="tasksError && !taskSnapshot" class="xl:col-span-2" :title="t('common.loadFailed')" :description="tasksError">
+            <template #actions><Button size="sm" :loading="tasksLoading" @click="loadTasks"><RefreshCcw />{{ t('common.retry') }}</Button></template>
+          </EmptyState>
+          <template v-else-if="taskSnapshot">
+            <div class="min-w-0 rounded-2xl border border-border bg-card p-5">
+              <h3>{{ t('debugPage.taskRuntime') }}</h3>
+              <div class="mt-4 grid grid-cols-3 gap-3 max-md:grid-cols-1">
+                <div v-for="metric in taskMetricRows" :key="metric.key" class="rounded-xl border border-border bg-muted p-3"><span>{{ metric.label }}</span><strong>{{ metric.value }}</strong></div>
+              </div>
+              <div class="mt-6 min-w-0">
+                <h3>{{ t('debugPage.taskDefinitions') }}</h3>
+                <Table v-if="taskDefinitionRows.length" class="mt-4 max-h-96" :columns="taskDefinitionColumns" :rows="taskDefinitionRows" row-key="type" />
+                <p v-else class="mt-3 text-sm text-muted-foreground">{{ t('debugPage.noTaskDefinitions') }}</p>
+              </div>
             </div>
-            <div class="mt-6 min-w-0">
-              <h3>{{ t('debugPage.taskDefinitions') }}</h3>
-              <Table v-if="taskDefinitionRows.length" class="mt-4 max-h-96" :columns="taskDefinitionColumns" :rows="taskDefinitionRows" row-key="type" />
-              <p v-else class="mt-3 text-sm text-muted-foreground">{{ t('debugPage.noTaskDefinitions') }}</p>
-            </div>
-          </div>
-          <aside class="rounded-2xl border border-border bg-card p-5">
-            <h3>{{ t('debugPage.polling') }}</h3>
-            <p class="text-sm text-muted-foreground">{{ paused ? t('debugPage.pausedHint') : t('debugPage.runningHint') }}</p>
-          </aside>
+            <aside class="rounded-2xl border border-border bg-card p-5">
+              <h3>{{ t('debugPage.polling') }}</h3>
+              <p class="text-sm text-muted-foreground">{{ paused ? t('debugPage.pausedHint') : t('debugPage.runningHint') }}</p>
+            </aside>
+          </template>
+          <EmptyState v-else class="xl:col-span-2" :title="t('debugPage.empty')" :description="t('debugPage.emptyHint')" />
         </section>
 
         <section v-else class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <div class="grid min-h-0 gap-3">
-            <article v-for="db in view.databases" :key="db.name" class="grid gap-3 rounded-2xl border border-border bg-card p-4">
+          <div v-if="databasesLoading && !databaseSnapshots" class="relative grid min-h-96 place-items-center xl:col-span-2"><LoadingOverlay /></div>
+          <EmptyState v-else-if="databasesError && !databaseSnapshots" class="xl:col-span-2" :title="t('common.loadFailed')" :description="databasesError">
+            <template #actions><Button size="sm" :loading="databasesLoading" @click="loadDatabases"><RefreshCcw />{{ t('common.retry') }}</Button></template>
+          </EmptyState>
+          <template v-else-if="databaseSnapshots">
+            <div class="grid min-h-0 gap-3">
+              <article v-for="db in databaseSnapshots.databases" :key="db.name" class="grid gap-3 rounded-2xl border border-border bg-card p-4">
               <div class="flex items-center justify-between gap-3">
                 <h3><Database class="size-4" />{{ db.name }}</h3>
                 <Badge :tone="dbTone(db)">{{ db.healthy ? t('state.healthy') : db.errorCode || t('state.critical') }}</Badge>
@@ -297,18 +388,33 @@ onBeforeUnmount(() => window.clearInterval(timer));
                   <tbody><tr v-for="table in db.tables" :key="table.name" class="border-t border-border"><td class="p-2">{{ table.name }}</td><td class="p-2">{{ table.rowCount }}</td><td class="p-2">{{ formatBytes(table.totalSizeBytes) }}</td></tr></tbody>
                 </table>
               </div>
-            </article>
-          </div>
-          <aside class="rounded-2xl border border-border bg-card p-5">
-            <h3>{{ t('debugPage.databaseSummary') }}</h3>
-            <div class="mt-4 grid gap-3 text-sm">
-              <div><span>{{ t('debugPage.healthyDatabases') }}</span><strong>{{ databaseTotals.healthy }} / {{ databaseTotals.total }}</strong></div>
-              <div><span>{{ t('debugPage.used') }}</span><strong>{{ formatBytes(databaseTotals.used) }}</strong></div>
+              </article>
             </div>
-          </aside>
+            <aside class="rounded-2xl border border-border bg-card p-5">
+              <h3>{{ t('debugPage.databaseSummary') }}</h3>
+              <div class="mt-4 grid gap-3 text-sm">
+                <div><span>{{ t('debugPage.healthyDatabases') }}</span><strong>{{ databaseTotals.healthy }} / {{ databaseTotals.total }}</strong></div>
+                <div><span>{{ t('debugPage.used') }}</span><strong>{{ formatBytes(databaseTotals.used) }}</strong></div>
+              </div>
+            </aside>
+          </template>
+          <EmptyState v-else class="xl:col-span-2" :title="t('debugPage.empty')" :description="t('debugPage.emptyHint')" />
         </section>
       </Tabs>
     </WorkspacePage>
+    <ConfirmDialog
+      v-model:open="clearOpen"
+      :title="t('debugPage.clearRuntimeDataTitle')"
+      :description="t('debugPage.clearRuntimeDataDescription')"
+      :impact="t('debugPage.clearRuntimeDataImpact')"
+      tone="danger"
+      :confirm-label="t('debugPage.clearRuntimeDataConfirm')"
+      :cancel-label="t('common.cancel')"
+      :checkbox-label="t('debugPage.clearRuntimeDataCheckbox')"
+      :require-checkbox="true"
+      :loading="clearPending"
+      @confirm="clearRuntimeData"
+    />
   </ConsolePage>
 </template>
 

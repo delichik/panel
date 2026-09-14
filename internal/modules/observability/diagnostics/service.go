@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"panel/internal/modules/tasks"
@@ -26,13 +27,40 @@ type Service struct {
 	databases   []DatabaseSource
 	taskRuntime TaskRuntimeProvider
 	pprof       *PprofServer
+	clearMu     sync.Mutex
+	clearHook   func(context.Context) (ClearRuntimeDataResult, error)
 }
 
-type Snapshot struct {
+type ClearRuntimeDataResult struct {
+	Cleared bool `json:"cleared"`
+}
+
+func (s *Service) SetClearRuntimeDataHook(hook func(context.Context) (ClearRuntimeDataResult, error)) {
+	s.clearHook = hook
+}
+
+func (s *Service) ClearRuntimeData(ctx context.Context) (ClearRuntimeDataResult, error) {
+	s.clearMu.Lock()
+	defer s.clearMu.Unlock()
+	if s.clearHook == nil {
+		return ClearRuntimeDataResult{}, fmt.Errorf("runtime data clearing is unavailable")
+	}
+	return s.clearHook(ctx)
+}
+
+type RuntimeSnapshot struct {
+	CollectedAt time.Time    `json:"collectedAt"`
+	Process     ProcessStats `json:"process"`
+	Memory      MemoryStats  `json:"memory"`
+}
+
+type TaskSnapshot struct {
 	CollectedAt time.Time          `json:"collectedAt"`
-	Process     ProcessStats       `json:"process"`
-	Memory      MemoryStats        `json:"memory"`
 	Tasks       tasks.RuntimeStats `json:"tasks"`
+}
+
+type DatabaseSnapshots struct {
+	CollectedAt time.Time          `json:"collectedAt"`
 	Databases   []DatabaseSnapshot `json:"databases"`
 }
 
@@ -117,7 +145,7 @@ func NewServiceWithTaskRuntime(taskRuntime TaskRuntimeProvider, databases ...Dat
 	return &Service{startedAt: time.Now().UTC(), databases: databases, taskRuntime: taskRuntime, pprof: NewPprofServer(DefaultPprofAddress)}
 }
 
-func (s *Service) Snapshot(ctx context.Context) Snapshot {
+func (s *Service) Runtime() RuntimeSnapshot {
 	now := time.Now().UTC()
 	var memory runtime.MemStats
 	runtime.ReadMemStats(&memory)
@@ -128,7 +156,7 @@ func (s *Service) Snapshot(ctx context.Context) Snapshot {
 		lastGC = &value
 	}
 
-	out := Snapshot{
+	return RuntimeSnapshot{
 		CollectedAt: now,
 		Process: ProcessStats{
 			StartedAt:      s.startedAt,
@@ -160,10 +188,21 @@ func (s *Service) Snapshot(ctx context.Context) Snapshot {
 			GCPauseTotalNs:    memory.PauseTotalNs,
 			LastGCAt:          lastGC,
 		},
-		Databases: make([]DatabaseSnapshot, 0, len(s.databases)),
 	}
+}
+
+func (s *Service) Tasks() TaskSnapshot {
+	out := TaskSnapshot{CollectedAt: time.Now().UTC()}
 	if s.taskRuntime != nil {
 		out.Tasks = s.taskRuntime.TaskRuntime()
+	}
+	return out
+}
+
+func (s *Service) Databases(ctx context.Context) DatabaseSnapshots {
+	out := DatabaseSnapshots{
+		CollectedAt: time.Now().UTC(),
+		Databases:   make([]DatabaseSnapshot, 0, len(s.databases)),
 	}
 	for _, source := range s.databases {
 		out.Databases = append(out.Databases, collectDatabase(ctx, source))

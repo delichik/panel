@@ -63,4 +63,47 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
+// Clear removes the immutable ledger only for the explicitly confirmed Debug
+// maintenance operation. Protection triggers are removed and recreated in the
+// same transaction, so ordinary callers never observe a mutable ledger.
+func Clear(ctx context.Context, tx *sql.Tx) error {
+	for _, name := range []string{
+		"activity_events_no_replace", "activity_evidence_no_replace",
+		"activity_events_no_UPDATE", "activity_events_no_DELETE",
+		"activity_evidence_chunks_no_UPDATE", "activity_evidence_chunks_no_DELETE",
+	} {
+		if _, err := tx.ExecContext(ctx, `DROP TRIGGER IF EXISTS `+name); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM activity_evidence_chunks`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM activity_events`); err != nil {
+		return err
+	}
+	_, _ = tx.ExecContext(ctx, `DELETE FROM sqlite_sequence WHERE name='activity_events'`)
+	statements := []string{
+		`CREATE TRIGGER activity_events_no_replace BEFORE INSERT ON activity_events
+ WHEN EXISTS(SELECT 1 FROM activity_events WHERE event_id=NEW.event_id OR seq=NEW.seq OR
+ (source_id=NEW.source_id AND source_epoch=NEW.source_epoch AND source_stream_id=NEW.source_stream_id AND source_seq=NEW.source_seq))
+ BEGIN SELECT RAISE(ABORT,'activity_append_only'); END`,
+		`CREATE TRIGGER activity_evidence_no_replace BEFORE INSERT ON activity_evidence_chunks
+ WHEN EXISTS(SELECT 1 FROM activity_evidence_chunks WHERE evidence_id=NEW.evidence_id AND chunk_seq=NEW.chunk_seq)
+ OR EXISTS(SELECT 1 FROM activity_events WHERE event_type='evidence.sealed' AND json_extract(data_json,'$.evidenceId')=NEW.evidence_id)
+ BEGIN SELECT RAISE(ABORT,'activity_append_only'); END`,
+	}
+	for _, table := range []string{"activity_events", "activity_evidence_chunks"} {
+		for _, verb := range []string{"UPDATE", "DELETE"} {
+			statements = append(statements, fmt.Sprintf(`CREATE TRIGGER %s_no_%s BEFORE %s ON %s BEGIN SELECT RAISE(ABORT,'activity_append_only'); END`, table, verb, verb, table))
+		}
+	}
+	for _, statement := range statements {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 const Columns = `seq,event_id,event_version,event_type,kind,level,domain,action,operation_id,run_id,execution_id,step_id,parent_step_id,causation_event_id,source_id,source_epoch,source_stream_id,source_seq,occurred_at,recorded_at,actor_kind,actor_id,actor_name,initiator_json,resources_json,trigger,request_id,stream,message_code,message_args_json,text,data_json,content_hash`

@@ -29,7 +29,7 @@
 
 ## 3. HTTP API 基线
 
-当前主 Panel 注册 158 个 `/api` method/path 组合，路由清单 SHA-256 为 `af929361a5a5c059d1c51f8805c5a78ea30a83df028d0a2f818d27d9e422a741`。来源计数如下：
+当前主 Panel 注册 161 个 `/api` method/path 组合，路由清单 SHA-256 为 `b547484fd994c4bd7c2d85ae2840570b12b8fd7ecf07323ca54e1862d0cd05e2`。来源计数如下：
 
 | 注册来源 | 数量 | 验收领域 |
 | --- | ---: | --- |
@@ -41,7 +41,7 @@
 | containers | 17 | 容器与资源 |
 | facilityapps | 19 | 应用与设施应用 |
 | keyassets | 14 | DNS、证书与密钥资产 |
-| diagnostics | 3 | 备份、恢复与诊断 |
+| diagnostics | 6 | 备份、恢复与诊断 |
 | metrics | 1 | 身份、设置与系统；服务器、安全与软件包 |
 | overview | 4 | 身份、设置与系统 |
 | packages | 4 | 服务器、安全与软件包 |
@@ -53,9 +53,9 @@
 
 - `COV-API-001`：路由清单测试失败时必须先确定是哪一个 method/path 改变，再更新消费者、Mock、验收项和期望哈希；不得只替换哈希让测试通过。
 
-- `COV-API-002`：维护导出/恢复的独立最小应用路由不计入上述主 Panel 158 条，但必须由备份恢复文档覆盖其认证、状态、密码、下载、重试、退出和清除 pending 操作。
+- `COV-API-002`：维护导出/恢复的独立最小应用路由不计入上述主 Panel 161 条，但必须由备份恢复文档覆盖其认证、状态、密码、下载、重试、退出和清除 pending 操作。
 
-- `COV-API-003`：158 个 method/path 的逐项映射见 [主 Panel API 路由逐项清单](api-route-inventory.md)；路由清单测试与该表必须同步变化。
+- `COV-API-003`：161 个 method/path 的逐项映射见 [主 Panel API 路由逐项清单](api-route-inventory.md)；路由清单测试与该表必须同步变化。
 
 ## 4. 持久化基线
 

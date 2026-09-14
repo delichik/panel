@@ -271,9 +271,9 @@
 
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
-| UI-DBG-001 | 进入诊断页 | 加载 snapshot 与 pprof 状态；snapshot 默认每 8 秒轮询，可暂停/恢复/手刷，隐藏标签暂停 | 并发/迟到响应不可覆盖新快照 | 顶部显示 live/stale 和 collectedAt |
-| UI-DBG-002 | snapshot 刷新失败 | 有 lastGoodSnapshot 时继续展示并标 stale，同时 toast；无旧值显示失败空态+重试 | 不得清空为“无数据”或用失败快照覆盖 lastGood | 成功恢复后 stale 消失且更新时间前进 |
-| UI-DBG-003 | Runtime tab | 展示 uptime、goroutines、heap、PID、Go version、OS/arch、CPU | 空/未知值使用统一 fallback，不显示 `[object Object]` | 数值与 snapshot 字段一致 |
+| UI-DBG-001 | 进入诊断页 | 并行加载 runtime、tasks、databases 与 pprof 状态；三类诊断默认每 8 秒各自轮询，可暂停/恢复/手刷，隐藏标签暂停 | 各请求独立防重入；并发/迟到响应不可覆盖同类新数据 | 顶部显示聚合 live/stale 和最近 collectedAt，任一区块不阻塞其他区块 |
+| UI-DBG-002 | 任一诊断刷新失败 | 该区块有最后成功数据时继续展示并标 stale，同时 toast；无旧值时仅对应 tab 显示失败空态+重试 | 不得清空其他区块或让单接口失败阻塞其他接口完成 | 失败接口恢复后 stale 消失且更新时间前进 |
+| UI-DBG-003 | Runtime tab | 展示 uptime、goroutines、heap、PID、Go version、OS/arch、CPU | 空/未知值使用统一 fallback，不显示 `[object Object]` | 数值与 runtime 响应字段一致 |
 | UI-DBG-004 | Tasks tab | scalar runtime metrics 与 task definitions 分开；definitions 用可滚动 Table 展示 kind/actions/concurrency/retries/stale/periodic | definitions 数组不得字符串化；无定义有明确空提示 | 任意对象定义都以列呈现 |
 | UI-DBG-005 | Database tab | 展示健康数/总数/used 汇总；每数据库显示大小、used/free、健康/错误和表行数/大小 | 单库错误以 danger 状态保留其他库 | 大表清单在卡片内部滚动 |
 | UI-DBG-006 | 切换 pprof | Switch PUT enabled，期间禁重复；开启后显示本机 `http://<address>/debug/pprof/` 新窗口链接 | GET/PUT 失败仅 toast，不伪改状态；链接带 `rel=noreferrer` | 返回状态决定 Switch 与链接是否出现 |

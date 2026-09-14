@@ -246,6 +246,7 @@ func New(cfg config.Config) (*App, error) {
 		settings:       settingsSvc,
 		keyAssets:      keyAssetSvc,
 	}
+	diagnosticsSvc.SetClearRuntimeDataHook(a.clearRuntimeData)
 	checkCtx, checkCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	checkDone := make(chan struct{})
 	a.checkCancel = checkCancel

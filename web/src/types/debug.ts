@@ -1,4 +1,4 @@
-export interface DebugSnapshot {
+export interface DebugRuntimeSnapshot {
   collectedAt: string;
   process: {
     startedAt: string;
@@ -12,7 +12,15 @@ export interface DebugSnapshot {
     cgoCallCount: number;
   };
   memory: Record<string, number | string | null>;
+}
+
+export interface DebugTaskSnapshot {
+  collectedAt: string;
   tasks: DebugTaskRuntime;
+}
+
+export interface DebugDatabaseSnapshots {
+  collectedAt: string;
   databases: DebugDatabase[];
 }
 
