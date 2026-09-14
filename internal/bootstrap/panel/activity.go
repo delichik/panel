@@ -20,20 +20,27 @@ import (
 	httpx "panel/internal/platform/http"
 	id "panel/internal/platform/identity"
 	"panel/internal/platform/logging"
+	"panel/internal/platform/maintenance"
 )
 
 // systemEventWriter writes synchronously; there is no drop-on-full buffer.
 type systemEventWriter struct {
-	service *activity.Service
-	mu      sync.Mutex
-	cancel  context.CancelFunc
-	done    chan struct{}
-	stop    chan struct{}
-	closing bool
-	writers sync.WaitGroup
+	maintenance maintenance.Gate
+	service     *activity.Service
+	mu          sync.Mutex
+	cancel      context.CancelFunc
+	done        chan struct{}
+	stop        chan struct{}
+	closing     bool
+	writers     sync.WaitGroup
 }
 
 func (w *systemEventWriter) Log(ctx context.Context, in runtimeevents.WriteEventInput) {
+	done, admitted := w.maintenance.Enter()
+	if !admitted {
+		return
+	}
+	defer done()
 	w.mu.Lock()
 	if w.closing {
 		w.mu.Unlock()
@@ -59,6 +66,9 @@ func (w *systemEventWriter) Log(ctx context.Context, in runtimeevents.WriteEvent
 		if err == nil {
 			return
 		}
+		if w.maintenance.Paused() {
+			return
+		}
 		logging.L().Error("Activity persistence unavailable", zap.Error(err))
 		select {
 		case <-ctx.Done():
@@ -81,9 +91,14 @@ func (w *systemEventWriter) Start(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				done, admitted := w.maintenance.Enter()
+				if !admitted {
+					continue
+				}
 				if _, err := w.service.CatchUp(ctx); err != nil && ctx.Err() == nil {
 					logging.L().Error("Activity projection failed", zap.Error(err))
 				}
+				done()
 			}
 		}
 	}()
@@ -109,7 +124,7 @@ func (a *App) activityAuth(next http.Handler) http.Handler {
 		ctx := activitylog.WithReceipt(activitylog.WithActor(r.Context(), activitylog.Actor{Kind: "user", ID: "admin", Name: sess.Username}))
 		receivedID := ""
 		mutation := r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch || r.Method == http.MethodDelete
-		if mutation && a.activity != nil {
+		if mutation && a.activity != nil && ctx.Value(runtimeClearAuditContextKey{}) != true {
 			// Recovery operations that reduce ledger usage must remain available
 			// when normal mutations are blocked by the activity capacity gate.
 			if !strings.HasSuffix(r.URL.Path, "/resolve") && r.URL.Path != "/api/v1/debug/clear-runtime-data" {

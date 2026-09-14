@@ -16,9 +16,11 @@ import (
 	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/i18n"
 	id "panel/internal/platform/identity"
+	"panel/internal/platform/maintenance"
 )
 
 type Service struct {
+	maintenance       maintenance.Gate
 	db                *sql.DB
 	registry          *Registry
 	runningMu         sync.Mutex
@@ -102,6 +104,11 @@ func (s *Service) MustRegister(def Definition) {
 }
 
 func (s *Service) Create(ctx context.Context, in CreateInput) (Task, error) {
+	done, ok := s.maintenance.Enter()
+	if !ok {
+		return Task{}, panelerr.Conflict("runtime_data_maintenance", "Runtime data is being cleared; retry after it finishes")
+	}
+	defer done()
 	return s.create(ctx, in)
 }
 

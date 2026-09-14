@@ -16,6 +16,7 @@ import WorkspacePage from '@/components/templates/WorkspacePage.vue';
 import { useI18n } from '@/i18n';
 import type { DebugDatabase, DebugDatabaseSnapshots, DebugPprofStatus, DebugRuntimeSnapshot, DebugTaskDefinition, DebugTaskSnapshot } from '@/types/debug';
 import { formatDateTime } from '@/utils/datetime';
+import { useRuntimeCleanup } from './useRuntimeCleanup';
 
 const { t } = useI18n();
 const notifyError = useErrorToast();
@@ -39,7 +40,40 @@ let databasesRequestId = 0;
 const pprof = ref<DebugPprofStatus | null>(null);
 const pprofPending = ref(false);
 const clearOpen = ref(false);
-const clearPending = ref(false);
+const {
+  status: clearStatus, checking: clearChecking, submitting: clearSubmitting,
+  running: clearRunning, canStart: canClear, queryFailed: clearQueryFailed,
+  resultMissing: clearResultMissing, refresh: refreshClearStatus, start: startClear,
+} = useRuntimeCleanup({
+  onTerminal(result) {
+    if (result.status === 'succeeded' && result.cleared) notifySuccess(t('debugPage.clearRuntimeDataSucceeded'));
+    else notifyError(t(result.cleared ? 'debugPage.cleanup.resumeFailed' : 'debugPage.clearRuntimeDataFailed'));
+    void loadAll();
+  },
+  onRequestError(error) {
+    notifyError(t('debugPage.cleanup.requestUnconfirmed'), error);
+  },
+});
+const clearStateLabel = computed(() => {
+  if (clearQueryFailed.value || clearResultMissing.value) return t('debugPage.cleanup.unconfirmed');
+  if (!clearStatus.value) return t('debugPage.cleanup.checking');
+  return t(`debugPage.cleanup.status.${clearStatus.value.status}`);
+});
+const clearTone = computed(() => {
+  if (clearQueryFailed.value || clearResultMissing.value || clearRunning.value) return 'warning';
+  if (clearStatus.value?.status === 'failed') return 'danger';
+  if (clearStatus.value?.status === 'succeeded') return 'success';
+  return 'neutral';
+});
+const clearFailureHint = computed(() => {
+  if (clearStatus.value?.cleared) return t('debugPage.cleanup.resumeFailed');
+  if (clearStatus.value?.failedStage === 'stopping_workers') return t('debugPage.cleanup.pauseFailed');
+  return t('debugPage.cleanup.partialFailure');
+});
+function clearStageLabel(stage?: string) {
+  const stages = ['stopping_workers', 'clearing_coordination', 'clearing_logs', 'clearing_metrics', 'compacting', 'resuming_workers', 'completed'];
+  return stage && stages.includes(stage) ? t(`debugPage.cleanup.stage.${stage}`) : t('common.notAvailable');
+}
 
 type TaskMetricRow = { key: string; label: string; value: string };
 type TaskDefinitionRow = {
@@ -161,24 +195,9 @@ async function togglePprof(enabled: boolean) {
 }
 
 async function clearRuntimeData() {
-  if (clearPending.value) return;
-  clearPending.value = true;
-  try {
-    await debugApi.clearRuntimeData();
-    clearOpen.value = false;
-    for (;;) {
-      await new Promise(resolve => window.setTimeout(resolve, 1000));
-      const status = await debugApi.clearRuntimeDataStatus();
-      if (status.status === 'failed') throw new Error(t('debugPage.clearRuntimeDataFailed'));
-      if (status.status === 'succeeded') break;
-    }
-    notifySuccess(t('debugPage.clearRuntimeDataSucceeded'));
-    await loadAll();
-  } catch (err) {
-    notifyError(err instanceof Error ? err.message : t('debugPage.clearRuntimeDataFailed'), err);
-  } finally {
-    clearPending.value = false;
-  }
+  if (!canClear.value) return;
+  await startClear();
+  clearOpen.value = false;
 }
 
 async function loadRuntime() {
@@ -265,7 +284,8 @@ function dbTone(db: DebugDatabase) {
 
 function startPolling() {
   timer = window.setInterval(() => {
-    if (!paused.value && document.visibilityState === 'visible') void loadAll();
+    if (!paused.value && !clearRunning.value && document.visibilityState === 'visible') void loadAll();
+    if (!clearRunning.value && document.visibilityState === 'visible') void refreshClearStatus();
   }, 8000);
 }
 
@@ -280,7 +300,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
 <template>
   <ConsolePage :title="t('routes.debug.title')" :description="t('routes.debug.description')">
     <template #actions>
-      <Button size="sm" :loading="loading" @click="loadAll"><RefreshCcw />{{ t('common.refresh') }}</Button>
+      <Button size="sm" :loading="loading" :disabled="clearRunning" @click="loadAll"><RefreshCcw />{{ t('common.refresh') }}</Button>
       <Button size="sm" :variant="paused ? 'primary' : 'secondary'" @click="paused = !paused">
         <Play v-if="paused" />
         <Pause v-else />
@@ -317,7 +337,23 @@ onBeforeUnmount(() => window.clearInterval(timer));
             <h3 class="text-danger"><Trash2 class="size-4" />{{ t('debugPage.clearRuntimeData') }}</h3>
             <p class="text-sm text-danger">{{ t('debugPage.clearRuntimeDataHint') }}</p>
           </div>
-          <Button variant="danger" :loading="clearPending" @click="clearOpen = true"><Trash2 />{{ t('debugPage.clearRuntimeData') }}</Button>
+          <Button variant="danger" :loading="clearSubmitting" :disabled="!canClear" @click="clearOpen = true"><Trash2 />{{ t('debugPage.clearRuntimeData') }}</Button>
+        </div>
+        <div class="mt-4 grid gap-3 rounded-xl border border-border bg-card p-4 text-sm" aria-live="polite" aria-atomic="true">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div class="flex flex-wrap items-center gap-2"><strong>{{ t('debugPage.cleanup.latest') }}</strong><Badge :tone="clearTone">{{ clearStateLabel }}</Badge></div>
+            <Button size="sm" variant="ghost" :loading="clearChecking" :disabled="clearSubmitting" @click="refreshClearStatus"><RefreshCcw />{{ t('debugPage.cleanup.checkStatus') }}</Button>
+          </div>
+          <dl v-if="clearStatus?.runId" class="grid gap-3 sm:grid-cols-3">
+            <div><dt class="text-muted-foreground">{{ t('debugPage.cleanup.phase') }}</dt><dd>{{ clearStageLabel(clearStatus.failedStage || clearStatus.stage) }}</dd></div>
+            <div><dt class="text-muted-foreground">{{ t('debugPage.cleanup.startedAt') }}</dt><dd>{{ formatDateTime(clearStatus.startedAt) || t('common.notAvailable') }}</dd></div>
+            <div><dt class="text-muted-foreground">{{ t('debugPage.cleanup.finishedAt') }}</dt><dd>{{ formatDateTime(clearStatus.finishedAt) || t('common.notAvailable') }}</dd></div>
+          </dl>
+          <p v-if="clearQueryFailed" role="alert" class="m-0 text-warning">{{ t('debugPage.cleanup.queryFailed') }}</p>
+          <p v-else-if="clearResultMissing" role="alert" class="m-0 text-warning">{{ t('debugPage.cleanup.resultMissing') }}</p>
+          <p v-else-if="clearRunning" class="m-0 text-muted-foreground">{{ t('debugPage.cleanup.runningHint') }}</p>
+          <p v-else-if="clearStatus?.status === 'failed'" role="alert" class="m-0 text-danger">{{ clearFailureHint }}</p>
+          <p v-else-if="clearStatus?.status === 'succeeded'" class="m-0 text-muted-foreground">{{ t('debugPage.cleanup.completedHint') }}</p>
         </div>
       </section>
 
@@ -418,7 +454,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
       :cancel-label="t('common.cancel')"
       :checkbox-label="t('debugPage.clearRuntimeDataCheckbox')"
       :require-checkbox="true"
-      :loading="clearPending"
+      :loading="clearSubmitting"
       @confirm="clearRuntimeData"
     />
   </ConsolePage>

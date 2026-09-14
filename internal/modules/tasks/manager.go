@@ -56,6 +56,11 @@ func (m *Manager) CreateBatch(ctx context.Context, batch CreateBatchInput, trigg
 	if m == nil || m.service == nil {
 		return Task{}, nil, false, panelerr.Validation("task_service_unavailable", "Task service is unavailable")
 	}
+	done, admitted := m.service.maintenance.Enter()
+	if !admitted {
+		return Task{}, nil, false, panelerr.Conflict("runtime_data_maintenance", "Runtime data is being cleared; retry after it finishes")
+	}
+	defer done()
 	inputs := normalizeBatchInputs(batch)
 	if len(inputs) == 0 {
 		return Task{}, nil, false, nil
@@ -204,6 +209,11 @@ func (m *Manager) Run(ctx context.Context, task Task) error {
 	if m == nil || m.service == nil {
 		return panelerr.Validation("task_service_unavailable", "Task service is unavailable")
 	}
+	done, admitted := m.service.maintenance.Enter()
+	if !admitted {
+		return panelerr.Conflict("runtime_data_maintenance", "Runtime data is being cleared; retry after it finishes")
+	}
+	defer done()
 	def, ok := m.service.Registry().Definition(task.Type)
 	if !ok {
 		return panelerr.Validation("task_type_unregistered", "Task type is not registered")
@@ -328,6 +338,11 @@ func (m *Manager) TriggerPeriodicNow(ctx context.Context, taskType string, trigg
 	if m == nil || m.service == nil {
 		return Task{}, false, panelerr.Validation("task_service_unavailable", "Task service is unavailable")
 	}
+	done, admitted := m.service.maintenance.Enter()
+	if !admitted {
+		return Task{}, false, panelerr.Conflict("runtime_data_maintenance", "Runtime data is being cleared; retry after it finishes")
+	}
+	defer done()
 	def, ok := m.service.Registry().Definition(taskType)
 	if !ok {
 		return Task{}, false, panelerr.Validation("task_type_unregistered", "Task type is not registered")

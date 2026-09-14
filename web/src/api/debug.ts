@@ -6,6 +6,11 @@ export interface ClearRuntimeDataStatus {
   running: boolean;
   status: 'idle' | 'running' | 'succeeded' | 'failed';
   errorCode?: string;
+  runId?: string;
+  stage?: string;
+  failedStage?: string;
+  startedAt?: string;
+  finishedAt?: string;
 }
 
 export const debugApi = {
@@ -24,10 +29,10 @@ export const debugApi = {
   setPprof(enabled: boolean) {
     return apiClient.put<DebugPprofStatus>('/debug/pprof', { enabled });
   },
-  clearRuntimeData() {
-    return apiClient.post<ClearRuntimeDataStatus>('/debug/clear-runtime-data', { confirmation: 'CLEAR RUNTIME DATA' });
+  clearRuntimeData(signal?: AbortSignal) {
+    return apiClient.post<ClearRuntimeDataStatus>('/debug/clear-runtime-data', { confirmation: 'CLEAR RUNTIME DATA' }, { signal });
   },
-  clearRuntimeDataStatus() {
-    return apiClient.get<ClearRuntimeDataStatus>('/debug/clear-runtime-data');
+  clearRuntimeDataStatus(signal?: AbortSignal) {
+    return apiClient.get<ClearRuntimeDataStatus>('/debug/clear-runtime-data', { signal });
   },
 };

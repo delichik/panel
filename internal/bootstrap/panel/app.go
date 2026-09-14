@@ -32,6 +32,7 @@ import (
 	"panel/internal/platform/config"
 	"panel/internal/platform/database"
 	"panel/internal/platform/logging"
+	"panel/internal/platform/maintenance"
 	"panel/internal/platform/paneltls"
 	"panel/internal/platform/secrets"
 	"panel/internal/platform/ssh"
@@ -66,6 +67,7 @@ type App struct {
 	diagnostics    *diagnostics.Service
 	checkCancel    context.CancelFunc
 	checkDone      chan struct{}
+	runtimeWriters maintenance.Gate
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -314,7 +316,7 @@ func (a *App) stopBackgroundServices() {
 	}
 }
 func (a *App) Handler() http.Handler {
-	return logging.HTTPMiddleware(a.mux)
+	return logging.HTTPMiddleware(a.runtimeMaintenanceMiddleware(a.mux))
 }
 
 func (a *App) TLSConfig() *tls.Config {

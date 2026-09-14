@@ -119,6 +119,8 @@ var (
 			"pprof_start_failed":                                     "无法启动 pprof 服务",
 			"clear_runtime_data_confirmation_required":               "需要确认后才能清空运行数据",
 			"clear_runtime_data_failed":                              "无法清空运行数据",
+			"clear_runtime_data_resume_failed":                       "运行数据清理后，后台工作未能恢复",
+			"runtime_data_maintenance":                               "正在清理运行数据，请完成后重试",
 			"pprof_stop_failed":                                      "无法停止 pprof 服务",
 			"private_key_invalid":                                    "私钥无法解析",
 			"passwordless_sudo_required":                             "需要免密 sudo",

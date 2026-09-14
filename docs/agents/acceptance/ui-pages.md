@@ -277,6 +277,8 @@
 | UI-DBG-004 | Tasks tab | scalar runtime metrics 与 task definitions 分开；definitions 用可滚动 Table 展示 kind/actions/concurrency/retries/stale/periodic | definitions 数组不得字符串化；无定义有明确空提示 | 任意对象定义都以列呈现 |
 | UI-DBG-005 | Database tab | 展示健康数/总数/used 汇总；每数据库显示大小、used/free、健康/错误和表行数/大小 | 单库错误以 danger 状态保留其他库 | 大表清单在卡片内部滚动 |
 | UI-DBG-006 | 切换 pprof | Switch PUT enabled，期间禁重复；开启后显示本机 `http://<address>/debug/pprof/` 新窗口链接 | GET/PUT 失败仅 toast，不伪改状态；链接带 `rel=noreferrer` | 返回状态决定 Switch 与链接是否出现 |
+| UI-DBG-007 | 清理运行数据 | 首次进入读取清理状态，确认已无在途清理后才启用操作；危险确认说明清理范围、配置保留及后台暂停，并要求勾选；提交后独立展示状态、阶段、开始/结束时间 | 禁重复提交；查询失败保留上次快照并显示“结果待核实”及只读核对入口，不自动重发 POST；失败说明部分批次可能已删除，恢复后台失败单独呈现 | 同一次 runId 的完成才触发完成反馈；成功/失败后重载诊断；完成后说明后台可能立即产生新数据 |
+| UI-DBG-008 | 清理中刷新、离页或隐藏标签 | 返回后 GET 恢复进度，暂停诊断快照刷新不影响清理状态查询；清理中不周期性扫描数据库快照；隐藏标签暂停状态轮询，重新可见立即核对 | 卸载取消本页定时器及在途查询，不取消服务端清理；原任务结果丢失/Panel 重启为待核实，不能无限转圈或伪报成功 | 清理轮询不重入，网络异常退避且提供手动核对；无后台清理时也可手动查询最近结果 |
 
 ## 21. 未找到页面
 

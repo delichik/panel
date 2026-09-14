@@ -52,7 +52,7 @@
 | 登录、账号、运行时设置、概览、系统版本 | [身份、设置与系统](identity-settings-system.md) |
 | 凭据、服务器、Agent、SSH、UFW、Fail2ban、APT | [服务器、安全与软件包](servers-security-packages.md) |
 | DNS、ACME、自签名证书、密钥资产 | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 备份、恢复、维护模式、调试与诊断 | [备份、恢复与诊断](backup-restore-diagnostics.md) |
+| 备份、恢复、维护模式、调试与诊断；清理数据进度/恢复/写入暂停 `DIAG-CLR-001..008`、`UI-DBG-007/008` | [备份、恢复与诊断](backup-restore-diagnostics.md)、[逐页面验收](ui-pages.md) |
 | ORM、数据库模型、迁移与兼容 | [架构、数据与 API](architecture-data-api.md) |
 | 测试入口、构建、容器和发布 | [工程质量与发布](engineering-release.md) |
 | 检查是否遗漏路由、API、表、后台行为或产物 | [项目覆盖基线](coverage-matrix.md) |

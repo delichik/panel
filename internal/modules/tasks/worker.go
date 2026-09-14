@@ -16,13 +16,14 @@ const (
 )
 
 type Worker struct {
-	service     *Service
-	manager     *Manager
-	periodic    *PeriodicRunner
-	lifecycleMu sync.Mutex
-	cancel      context.CancelFunc
-	running     bool
-	wg          sync.WaitGroup
+	service               *Service
+	manager               *Manager
+	periodic              *PeriodicRunner
+	lifecycleMu           sync.Mutex
+	cancel                context.CancelFunc
+	running               bool
+	maintenanceWasRunning bool
+	wg                    sync.WaitGroup
 }
 
 type RuntimeStats struct {

@@ -2,6 +2,7 @@ package diagnostics
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 
 	panelerr "panel/internal/platform/errors"
@@ -62,7 +63,7 @@ func (h *Handler) ClearRuntimeData(w http.ResponseWriter, r *http.Request) {
 	}
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&input); err != nil || input.Confirmation != clearRuntimeDataConfirmation {
+	if err := decoder.Decode(&input); err != nil || input.Confirmation != clearRuntimeDataConfirmation || decoder.Decode(new(any)) != io.EOF {
 		httpx.Error(w, panelerr.Validation("clear_runtime_data_confirmation_required", "Type the required confirmation to clear runtime data"))
 		return
 	}

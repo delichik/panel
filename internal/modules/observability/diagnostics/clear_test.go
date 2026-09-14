@@ -19,7 +19,7 @@ func TestClearRuntimeDataRequiresExactConfirmation(t *testing.T) {
 		return ClearRuntimeDataResult{Cleared: true}, nil
 	})
 	handler := NewHandler(service)
-	for _, body := range []string{`{}`, `{"confirmation":"clear"}`, `{"confirmation":"CLEAR RUNTIME DATA","extra":true}`} {
+	for _, body := range []string{`{}`, `{"confirmation":"clear"}`, `{"confirmation":"CLEAR RUNTIME DATA","extra":true}`, `{"confirmation":"CLEAR RUNTIME DATA"} {"extra":true}`} {
 		recorder := httptest.NewRecorder()
 		handler.ClearRuntimeData(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/debug/clear-runtime-data", bytes.NewBufferString(body)))
 		if recorder.Code != http.StatusUnprocessableEntity {

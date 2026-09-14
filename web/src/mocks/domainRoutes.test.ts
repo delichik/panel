@@ -23,6 +23,26 @@ describe('domain mock routes', () => {
     expect(envelope.data.cards.length).toBeGreaterThan(0);
   });
 
+  it('requires cleanup confirmation and returns progress for the same run', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(100000);
+    try {
+      const rejected = await fetch('/api/v1/debug/clear-runtime-data', { method: 'POST', body: '{}' });
+      expect(rejected.status).toBe(422);
+      const request = { method: 'POST', body: JSON.stringify({ confirmation: 'CLEAR RUNTIME DATA' }) };
+      const accepted = await fetch('/api/v1/debug/clear-runtime-data', request);
+      const initial = (await accepted.json()).data;
+      expect(accepted.status).toBe(202);
+      expect(initial).toMatchObject({ running: true, cleared: false, stage: 'stopping_workers' });
+      const duplicate = await fetch('/api/v1/debug/clear-runtime-data', request);
+      expect((await duplicate.json()).data.runId).toBe(initial.runId);
+      clock.mockReturnValue(107000);
+      const completed = await fetch('/api/v1/debug/clear-runtime-data');
+      expect((await completed.json()).data).toMatchObject({ runId: initial.runId, running: false, cleared: true, status: 'succeeded', stage: 'completed' });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it('keeps runtime and task diagnostics available when database collection fails', async () => {
     setDebugFailure(true);
     const [runtime, tasks, databases] = await Promise.all([

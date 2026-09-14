@@ -1,4 +1,5 @@
 import type { DebugDatabaseSnapshots, DebugPprofStatus, DebugRuntimeSnapshot, DebugTaskSnapshot } from '@/types/debug';
+import type { ClearRuntimeDataStatus } from '@/api/debug';
 
 let failNextSnapshot = false;
 
@@ -51,6 +52,23 @@ export function setDebugPprof(enabled: boolean): DebugPprofStatus {
   return debugPprofStatus();
 }
 
-export function debugClearRuntimeDataStatus() {
-  return { cleared: true, running: false, status: 'succeeded' as const };
+let cleanupStatus: ClearRuntimeDataStatus = { cleared: false, running: false, status: 'idle' };
+let cleanupStarted = 0;
+let cleanupSequence = 0;
+
+export function startDebugClearRuntimeData() {
+  if (debugClearRuntimeDataStatus().running) return { ...cleanupStatus };
+  cleanupStarted = Date.now();
+  cleanupStatus = { cleared: false, running: true, status: 'running', runId: `mock-cleanup-${++cleanupSequence}`, stage: 'stopping_workers', startedAt: new Date(cleanupStarted).toISOString() };
+  return { ...cleanupStatus };
+}
+
+export function debugClearRuntimeDataStatus(): ClearRuntimeDataStatus {
+  if (cleanupStatus.running) {
+    const stages = ['stopping_workers', 'clearing_coordination', 'clearing_logs', 'clearing_metrics', 'compacting', 'resuming_workers'];
+    const step = Math.floor((Date.now() - cleanupStarted) / 1000);
+    if (step < stages.length) cleanupStatus.stage = stages[step];
+    else cleanupStatus = { ...cleanupStatus, cleared: true, running: false, status: 'succeeded', stage: 'completed', finishedAt: new Date().toISOString() };
+  }
+  return { ...cleanupStatus };
 }

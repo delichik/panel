@@ -28,6 +28,7 @@
 - `COV-UI-001`：同一路由内新增或调整字段选择、校验、空态等用户可见行为时，路由数量可以不变，但必须同步更新 `ui-pages.md` 的稳定验收项和对应前端测试。
 
 - 应用部署反馈：既有应用页增加部署规划失败、结果待核实、原因与活动入口，不新增路由；对应 `UI-APP-001/002/004`、`APP-PLAN-001`、`APP-RUN-004`。
+- Debug 既有清理操作增加阶段/时间、刷新恢复、部分失败与结果待核实展示；保留危险勾选确认，不新增路由；对应 `UI-DBG-007/008`。
 
 ## 3. HTTP API 基线
 
@@ -56,6 +57,7 @@
 - `COV-API-001`：路由清单测试失败时必须先确定是哪一个 method/path 改变，再更新消费者、Mock、验收项和期望哈希；不得只替换哈希让测试通过。
 
 - 应用详情、列表摘要、runtime 增加可选 `planningError`（code/message/field/fileName/retryable/operationId/occurredAt/configVersion），列表 runtimeStatus 与 runtime.status 支持 `needs_attention`；对应 `APP-PLAN-001`、`APP-RUN-004`，API method/path 数量不变。
+- 既有 GET/POST `/api/v1/debug/clear-runtime-data` 响应补齐 `runId/stage/failedStage/startedAt/finishedAt`，明确 `cleared` 与终态、并发请求语义；清理期间业务写入返回 `runtime_data_maintenance`，不增加接口；对应 `DIAG-CLR-001/005/006/007`。
 
 - `COV-API-002`：维护导出/恢复的独立最小应用路由不计入上述主 Panel 161 条，但必须由备份恢复文档覆盖其认证、状态、密码、下载、重试、退出和清除 pending 操作。
 
@@ -77,6 +79,7 @@
 - `COV-DATA-003`：AppDB 的 `activity_events/activity_evidence_chunks` 使用专有只追加 schema，不计入 ORM 模型数量；LogDB 的 Activity projection/checkpoint/FTS 是可重建查询索引。原始事实与投影不得交换归属或互相替代。
 
 - `applications.planning_error_json` 保存当前规划诊断，默认空值；随应用进入备份/恢复，旧数据库由 ORM 增列且不修改原有配置。失败与恢复事件继续使用 AppDB 活动日志，不新增表；对应 `APP-PLAN-001`、`ORCH-PLAN-006`。
+- Debug 清理同步清除 `applications.planning_error_json`，保留资源版本和期望/观测事实。清理状态为当前进程状态，会话标记只保存未确认清理的 runId；本轮无数据库 schema 变更，对应 `DIAG-CLR-002/007`。
 
 ## 5. 常驻与周期后台行为
 
@@ -96,6 +99,7 @@
 - `COV-BG-002`：后台触发的远端写操作必须与等价手动操作共享服务端安全门和可追踪记录。
 
 - Agent report collector 对应用规划失败逐应用隔离并继续扫描，自动相同诊断去重，不新增定时任务；对应 `ORCH-PLAN-006`。
+- Debug 清理使用可恢复暂停门拒绝新 writer 并有界等待在途工作，保护节点报告、活动投影、任务收集及编辑会话清理；清理完成或失败都释放暂停门并恢复原运行状态，对应 `DIAG-CLR-006/008`。
 
 ## 6. 构建与交付产物
 
@@ -120,3 +124,4 @@
 - `COV-TEST-004`：应用编辑器的嵌套代理 path 必须覆盖 Vue reactive 既有值回显所需的完整克隆与父草稿隔离；不得把 reactive Proxy 直接交给浏览器深拷贝 API。
 
 - 本轮增加 `planning_outcome_test.go`、`planning_error_migration_test.go`，扩展容器巡检与前端应用模型测试，覆盖 `APP-PLAN-001`、`APP-RUN-004`、`ORCH-PLAN-006`；Vitest 缓存固定在仓库 `tmp/vitest`，遵守 `ENG-TEST-001/003` 的测试入口和中间产物约定。
+- Debug 清理新增状态生命周期、暂停门排空/超时、HTTP 豁免、worker 恢复原状态与资源保留回归；前端 `useRuntimeCleanup.test.ts` 覆盖刷新恢复、查询失败、请求结果丢失、进程重启结果丢失、runId 归属与卸载/隐藏行为，Mock 路由测试覆盖确认值、202、重复请求和阶段终态；对应 `DIAG-CLR-001..008`、`UI-DBG-007/008`。

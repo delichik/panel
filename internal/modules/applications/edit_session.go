@@ -982,6 +982,11 @@ func (s *Service) stopEditSessionCleanup() {
 }
 
 func (s *Service) cleanupEditSessions(now time.Time) {
+	done, admitted := s.editMaintenance.Enter()
+	if !admitted {
+		return
+	}
+	defer done()
 	// A committing workspace is owned by its live lease. Once the lease expires,
 	// cleanup becomes the recovery worker even if no client performs GET.
 	var committing []editSessionCleanupRow

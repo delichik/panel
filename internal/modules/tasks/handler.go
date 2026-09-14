@@ -153,9 +153,16 @@ func (h *Handler) dispatchRunNow(task Task) {
 			log.Printf("task run-now goroutine recovered from panic: %v", recovered)
 		}
 	}()
-	if h == nil || h.runner == nil {
+	if h == nil || h.runner == nil || h.service == nil {
 		return
 	}
+	// Keep asynchronous dispatch and its failure bookkeeping inside the same
+	// maintenance admission, even after the runner releases its own gate.
+	done, admitted := h.service.maintenance.Enter()
+	if !admitted {
+		return
+	}
+	defer done()
 	if err := h.runner.RunNow(context.Background(), task); err != nil {
 		h.failIfUnfinished(context.Background(), task.ID, err)
 	}

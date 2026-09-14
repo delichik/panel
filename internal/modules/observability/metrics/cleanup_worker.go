@@ -13,6 +13,7 @@ type CleanupSettings struct {
 }
 
 type CleanupWorker struct {
+	mu       sync.Mutex
 	service  *Service
 	settings func() CleanupSettings
 	cancel   context.CancelFunc
@@ -24,7 +25,12 @@ func NewCleanupWorker(service *Service, settings func() CleanupSettings) *Cleanu
 }
 
 func (w *CleanupWorker) Start(parent context.Context) {
-	if w == nil || w.service == nil || w.settings == nil || w.cancel != nil {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.service == nil || w.settings == nil || w.cancel != nil {
 		return
 	}
 	ctx, cancel := context.WithCancel(parent)
@@ -37,11 +43,22 @@ func (w *CleanupWorker) Stop() {
 	if w == nil {
 		return
 	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if w.cancel != nil {
 		w.cancel()
 		w.cancel = nil
 	}
 	w.wg.Wait()
+}
+
+func (w *CleanupWorker) Running() bool {
+	if w == nil {
+		return false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.cancel != nil
 }
 
 func (w *CleanupWorker) loop(ctx context.Context) {

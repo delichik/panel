@@ -30,6 +30,7 @@ import (
 	panelerr "panel/internal/platform/errors"
 	httpx "panel/internal/platform/http"
 	id "panel/internal/platform/identity"
+	"panel/internal/platform/maintenance"
 	"panel/internal/platform/templating"
 )
 
@@ -91,6 +92,8 @@ type Service struct {
 	editCleanupStopOnce   sync.Once
 	editCleanupStop       chan struct{}
 	editCleanupDone       chan struct{}
+	editMaintenance       maintenance.Gate
+	maintenanceWasRunning bool
 }
 
 type ApplicationRuntime = Runtime

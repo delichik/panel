@@ -3,7 +3,9 @@ package panel
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"time"
 
 	"panel/internal/modules/observability/diagnostics"
 	"panel/internal/platform/activitylog"
@@ -14,72 +16,147 @@ const runtimeClearBatchSize = 1000
 // clearRuntimeData pauses durable workers so deleted coordination rows cannot
 // be recreated by an in-flight completion. Resource configuration and current
 // desired/observed application state are intentionally retained.
-func (a *App) clearRuntimeData(ctx context.Context) (diagnostics.ClearRuntimeDataResult, error) {
+func (a *App) clearRuntimeData(ctx context.Context) (result diagnostics.ClearRuntimeDataResult, clearErr error) {
 	if a == nil || a.store == nil {
 		return diagnostics.ClearRuntimeDataResult{}, fmt.Errorf("database store is unavailable")
 	}
-	if a.applicationSvc != nil {
-		if err := a.applicationSvc.StopOrchestrator(); err != nil {
-			return diagnostics.ClearRuntimeDataResult{}, err
+	stage := "stopping_workers"
+	report := func(next string) {
+		stage = next
+		diagnostics.ReportClearRuntimeDataProgress(ctx, next, result.Cleared)
+	}
+	var reportsPaused, tasksPaused, appsPaused, metricsPaused, eventsPaused bool
+	// Always release admission, even after a panic or a partially committed
+	// deletion. A failed worker restart is part of the result, never discarded.
+	defer func() {
+		if recover() != nil {
+			clearErr = errors.New("runtime data clearing panicked")
 		}
-		defer func() { _ = a.applicationSvc.StartOrchestrator(context.Background()) }()
+		if clearErr != nil {
+			result.FailedStage = stage
+		}
+		report("resuming_workers")
+		if eventsPaused {
+			a.eventLogs.maintenance.Resume()
+		}
+		if metricsPaused {
+			a.metricsCleanup.Start(context.Background())
+		}
+		if appsPaused {
+			if err := a.applicationSvc.ResumeRuntimeWriters(context.Background()); err != nil {
+				clearErr = errors.Join(clearErr, err)
+				result.Error = "clear_runtime_data_resume_failed"
+				if result.FailedStage == "" {
+					result.FailedStage = "resuming_workers"
+				}
+			}
+		}
+		if tasksPaused {
+			a.tasks.ResumeRuntimeWriters(context.Background())
+		}
+		if reportsPaused {
+			a.agentReports.writers.Resume()
+		}
+		a.runtimeWriters.Resume()
+	}()
+	report(stage)
+	drainCtx, drainCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer drainCancel()
+	if err := a.runtimeWriters.PauseContext(drainCtx); err != nil {
+		return result, err
+	}
+	// Initial Agent probing also writes reports and can still be in progress
+	// when a user clears immediately after Panel startup.
+	if a.checkDone != nil {
+		select {
+		case <-a.checkDone:
+		case <-drainCtx.Done():
+			return result, drainCtx.Err()
+		}
+	}
+	if a.agentReports != nil {
+		reportsPaused = true
+		if err := a.agentReports.writers.PauseContext(drainCtx); err != nil {
+			return result, err
+		}
 	}
 	if a.tasks != nil {
-		a.tasks.Stop()
-		defer a.tasks.Start(context.Background())
+		tasksPaused = true
+		err := a.tasks.PauseRuntimeWriters(drainCtx)
+		if err != nil {
+			return result, err
+		}
+	}
+	if a.applicationSvc != nil {
+		appsPaused = true
+		if err := a.applicationSvc.PauseRuntimeWriters(drainCtx); err != nil {
+			return result, err
+		}
 	}
 	if a.metricsCleanup != nil {
+		metricsPaused = a.metricsCleanup.Running()
 		a.metricsCleanup.Stop()
-		defer a.metricsCleanup.Start(context.Background())
 	}
-
+	if a.eventLogs != nil {
+		eventsPaused = true
+		if err := a.eventLogs.maintenance.PauseContext(drainCtx); err != nil {
+			return result, err
+		}
+	}
+	report("clearing_coordination")
 	if err := clearAppCoordination(ctx, a.store.AppDB()); err != nil {
-		return diagnostics.ClearRuntimeDataResult{}, err
+		return result, err
 	}
 	// Clear the user-visible projections immediately after their source ledger.
 	// The retired coordination database may contain very large legacy tables
 	// and must not delay removal of the activity history.
+	report("clearing_logs")
 	if err := clearNamedTablesBatched(ctx, a.store.LogDB(), []string{
+		"task_logs", "task_steps", "tasks",
 		"runtime_event_details", "runtime_events",
 		"activity_operation_versions", "activity_projection_events", "activity_search",
 	}, runtimeClearBatchSize); err != nil {
-		return diagnostics.ClearRuntimeDataResult{}, err
+		return result, err
 	}
 	if _, err := a.store.LogDB().ExecContext(ctx, `UPDATE activity_projection_checkpoint SET seq=0`); err != nil {
-		return diagnostics.ClearRuntimeDataResult{}, err
+		return result, err
 	}
+	report("clearing_coordination")
 	if err := clearAllUserTablesBatched(ctx, a.store.CoordDB(), runtimeClearBatchSize); err != nil {
-		return diagnostics.ClearRuntimeDataResult{}, err
+		return result, err
 	}
+	report("clearing_metrics")
 	if err := clearNamedTablesBatched(ctx, a.store.MetricsDB(), []string{"metrics_snapshots"}, runtimeClearBatchSize); err != nil {
-		return diagnostics.ClearRuntimeDataResult{}, err
+		return result, err
 	}
+	result.Cleared = true
+	report("compacting")
 	// Logical clearing above uses SQLite's fast whole-table deletion path where
 	// possible. Checkpoint first so the cleared state is durable; VACUUM is best
 	// effort physical compaction and must not turn a successful clear into a
 	// rolled-back or timed-out HTTP operation.
 	for _, db := range []*sql.DB{a.store.AppDB(), a.store.LogDB(), a.store.CoordDB(), a.store.MetricsDB()} {
 		_, _ = db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`)
-		_, _ = db.ExecContext(context.Background(), `VACUUM`)
+		compactCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		_, _ = db.ExecContext(compactCtx, `VACUUM`)
+		cancel()
 	}
-	return diagnostics.ClearRuntimeDataResult{Cleared: true}, nil
+	return result, nil
 }
 
 func clearAppCoordination(ctx context.Context, db *sql.DB) error {
-	for _, table := range []string{"task_steps", "tasks", "jobs", "application_reconcile_states"} {
-		if err := clearTableBatched(ctx, db, table, runtimeClearBatchSize); err != nil {
-			return err
-		}
+	if err := clearNamedTablesBatched(ctx, db, []string{"task_logs", "task_steps", "tasks", "jobs", "application_reconcile_states"}, runtimeClearBatchSize); err != nil {
+		return err
 	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `UPDATE application_instances SET last_reconcile_job_id='',last_error_code='',last_error_class='',last_error_message='',last_error_detail=''`); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE application_instances SET last_reconcile_job_id='',last_error_code='',last_error_class='',last_error_message='',last_error_detail='',last_error='',last_error_at=NULL`); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE applications SET job_id='',last_deployment_id='',last_error=''`); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE applications SET job_id='',last_deployment_id='',last_error='',planning_error_json=''`); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {

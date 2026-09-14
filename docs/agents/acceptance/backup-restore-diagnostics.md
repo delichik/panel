@@ -111,10 +111,16 @@
 
 ## 12. Debug 运行数据清理
 
-- `DIAG-CLR-001`：只有认证用户可在 `/debug` 经危险确认调用 `POST /api/v1/debug/clear-runtime-data`；确认值不精确匹配时必须 422 且不删除任何数据。接受后必须立即返回 202，并由 `GET /api/v1/debug/clear-runtime-data` 查询后台任务状态，客户端断开不得取消清理。
-- `DIAG-CLR-002`：清理必须暂停协调与任务 worker，删除 activity/system logs、metrics、tasks/steps、Jobs、reconcile backoff 及全部协调库记录，并清除资源上的悬空 Job 投影。
+- `DIAG-CLR-001`：只有认证用户可在 `/debug` 经危险确认调用 `POST /api/v1/debug/clear-runtime-data`；确认值不精确匹配时必须 422 且不删除任何数据。接受后必须立即返回 202，含本次 `runId`，并由 `GET /api/v1/debug/clear-runtime-data` 查询后台任务状态；同一清理尚在运行时重复 POST 返回同一 runId，不重复启动，客户端断开不得取消清理。
+- `DIAG-CLR-002`：清理必须暂停协调与任务 worker，删除 activity/system logs、metrics、tasks/steps、Jobs、reconcile backoff 及全部协调库记录，并清除资源上的悬空 Job 投影与 `applications.planning_error_json`；规划诊断历史随活动记录清除，资源配置及 version/generation 不因清理改变。
 - `DIAG-CLR-003`：清理不得删除应用、服务器、凭据、证书、密钥资产、应用修订或期望/观测状态；完成后 worker 必须重启并从当前状态重新收敛。
 - `DIAG-CLR-004`：清理期间必须暂停业务 writer，并以最多 1000 行的短事务分批删除；每批独立提交，任一批失败不得回滚此前已完成批次，也不得用覆盖整个清理过程的长写事务阻塞数据库。完成后应 checkpoint WAL，再以不影响逻辑清理结果的方式尝试 VACUUM 回收文件空间；状态响应只返回阶段和结果，不暴露路径或被删除内容。
+- `DIAG-CLR-005`：POST/GET 共用状态结构 `runId/cleared/running/status/stage/failedStage/startedAt/finishedAt/errorCode`；stage 区分暂停后台、清理协调、日志、指标、空间回收、恢复后台、完成。失败保留实际失败阶段和安全错误码；`cleared=true,status=failed` 表示逻辑清理完成但恢复后台失败，不能显示为全部成功；`cleared=false` 的失败可能已删除部分批次。
+- `DIAG-CLR-006`：清理先拒绝新的业务写入并等待在途 writer 退出，节点报告、事件写入/投影、任务收集及编辑会话清理均不能与删除并发。期间普通资源变更返回 503 `runtime_data_maintenance`，认证与清理状态查询仍可用；清理收尾释放暂停门，恢复此前运行的后台工作，不能因失败永久暂停 writer 或意外启动原本未运行的 worker。
+- `DIAG-CLR-007`：清理状态在当前 Panel 进程中保留，页面重新进入后用 GET 恢复显示；进程重启后返回 idle 不代表之前清理成功。前端为未确认的请求保留最小会话标记，GET/POST 网络错误不能当作清理终态失败，也不能自动重发清理 POST。用户核对后重新清理仍必须再次危险确认。
+- `DIAG-CLR-008`：等待在途 writer 排空必须受超时限制；暂停阶段失败时尚未开始删除，必须释放已经取得的暂停门并提示等待在途工作结束后重试，不得无限等待或带着未排空的 writer 进入删除阶段。
+
+清理入口的首次请求审计及手动任务异步失败收尾也属于在途 writer；首次请求完成审计后才允许开始删除。暂停期间的重复清理 POST 仍需认证，只返回同一运行回执，不向正在清除的活动账本追加重复请求审计。
 
 ## 13. 验收证据
 

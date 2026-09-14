@@ -16,11 +16,13 @@ import (
 	"panel/internal/modules/tasks"
 	"panel/internal/platform/linux"
 	"panel/internal/platform/logging"
+	"panel/internal/platform/maintenance"
 
 	"go.uber.org/zap"
 )
 
 type agentReportCollector struct {
+	writers maintenance.Gate
 	servers interface {
 		List(context.Context) ([]server.Server, error)
 	}
@@ -234,6 +236,11 @@ func (c *agentReportCollector) deleteEntryIfCurrent(entry *agentReportStream) {
 }
 
 func (c *agentReportCollector) markConnected(entry *agentReportStream, at time.Time) {
+	done, ok := c.writers.Enter()
+	if !ok {
+		return
+	}
+	defer done()
 	if at.IsZero() {
 		at = time.Now().UTC()
 	}
@@ -254,6 +261,11 @@ func (c *agentReportCollector) markConnected(entry *agentReportStream, at time.T
 }
 
 func (c *agentReportCollector) markDisconnected(entry *agentReportStream, msg string) {
+	done, ok := c.writers.Enter()
+	if !ok {
+		return
+	}
+	defer done()
 	wasConnected := false
 	last := entry.lastMessageAt
 	c.mu.Lock()
@@ -293,7 +305,7 @@ func (c *agentReportCollector) logStreamStatus(entry *agentReportStream, connect
 		}
 	}
 	c.logs.Log(context.Background(), runtimeevents.WriteEventInput{
- ResourceID: entry.serverID, ResourceName: entry.serverName,
+		ResourceID: entry.serverID, ResourceName: entry.serverName,
 		EventType:    eventType,
 		Category:     runtimeevents.CategorySystem,
 		Severity:     severity,
@@ -396,6 +408,11 @@ func (c *agentReportCollector) savePackageUpdates(ctx context.Context, serverID 
 }
 
 func (c *agentReportCollector) handleReport(ctx context.Context, serverID string, report agentclient.AgentReport) error {
+	done, ok := c.writers.Enter()
+	if !ok {
+		return nil
+	}
+	defer done()
 	if report.SampleAt.IsZero() {
 		report.SampleAt = time.Now().UTC().Truncate(time.Second)
 	}
