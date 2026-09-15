@@ -2,40 +2,112 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
-	"log"
+	"flag"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"panel/internal/app"
-	"panel/internal/config"
+	panelbootstrap "panel/internal/bootstrap/panel"
+	"panel/internal/modules/backups"
+	"panel/internal/platform/buildinfo"
+	"panel/internal/platform/config"
+	"panel/internal/platform/logging"
+	"panel/internal/platform/paneltls"
+
+	"go.uber.org/zap"
 )
 
+type maintenanceApplication interface {
+	ListenAndServeTLS(address string) error
+}
+
+type tlsApplication interface {
+	TLSConfig() *tls.Config
+}
+
 func main() {
+	maintenanceMode := flag.String("maintenance-mode", backups.MaintenanceModeNormal, "startup maintenance mode")
+	initRestartURL := flag.String("init-restart-url", "", "local panel_init restart URL")
+	initRestartToken := flag.String("init-restart-token", "", "local panel_init restart token")
+	flag.Parse()
+	if *initRestartURL != "" {
+		_ = os.Setenv(backups.InitRestartURLEnv, *initRestartURL)
+	}
+	if *initRestartToken != "" {
+		_ = os.Setenv(backups.InitRestartTokenEnv, *initRestartToken)
+	}
+
+	logger := logging.L()
+	defer logging.Sync()
+
+	logger.Info("panel starting",
+		zap.String("version", buildinfo.NormalizedVersion()),
+		zap.String("channel", buildinfo.NormalizedChannel()),
+		zap.String("repository", buildinfo.Repository),
+		zap.String("commit", buildinfo.Commit))
+
 	cfg, err := config.Load(os.Getenv("PANEL_CONFIG"))
 	if err != nil {
-		log.Fatalf("load config: %v", err)
+		logger.Fatal("load config failed", zap.Error(err))
 	}
 
-	application, err := app.New(cfg)
+	var application interface {
+		Handler() http.Handler
+		Close() error
+	}
+	if backups.RestoreRecoveryRequired(cfg.DataRoot) || *maintenanceMode == backups.MaintenanceModeRestore && backups.PendingRestoreExists(cfg.DataRoot) {
+		logger.Warn("pending restore detected; starting restore mode")
+		application, err = backups.NewRestoreApp(cfg)
+	} else if *maintenanceMode == backups.MaintenanceModeExport && backups.PendingExportExists(cfg.DataRoot) {
+		logger.Warn("pending backup export detected; starting backup export mode")
+		application, err = backups.NewExportApp(cfg)
+	} else {
+		if *maintenanceMode != "" && *maintenanceMode != backups.MaintenanceModeNormal {
+			logger.Warn("maintenance mode requested but no matching pending work exists; starting normal mode", zap.String("mode", *maintenanceMode))
+		}
+		application, err = panelbootstrap.New(cfg)
+	}
 	if err != nil {
-		log.Fatalf("initialize app: %v", err)
+		logger.Fatal("initialize app failed", zap.Error(err))
 	}
-	defer application.Close()
+	defer func() {
+		if err := application.Close(); err != nil {
+			logger.Error("close application failed", zap.Error(err))
+		}
+	}()
 
+	// WriteTimeout is intentionally left unset: long-running responses such as
+	// task logs, diagnostics streams and downloads must not be cut off by the
+	// HTTP server. IdleTimeout keeps dead keep-alive connections from piling
+	// up, and MaxHeaderBytes bounds request header memory.
 	server := &http.Server{
 		Addr:              cfg.ListenAddress,
 		Handler:           application.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
+	if configured, ok := application.(tlsApplication); ok {
+		server.TLSConfig = configured.TLSConfig()
+	} else {
+		server.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			panelCertificate, err := paneltls.FixedCertificate(cfg.DataRoot, "")
+			return &panelCertificate, err
+		}}
+	}
+	serve := func() error { return server.ListenAndServeTLS("", "") }
+	if isolated, ok := application.(maintenanceApplication); ok {
+		serve = func() error { return isolated.ListenAndServeTLS(cfg.ListenAddress) }
 	}
 
 	errCh := make(chan error, 1)
 	go func() {
-		log.Printf("panel listening on http://%s", cfg.ListenAddress)
-		errCh <- server.ListenAndServe()
+		logger.Info("panel listening", zap.String("address", cfg.ListenAddress), zap.String("url", "https://"+cfg.ListenAddress))
+		errCh <- serve()
 	}()
 
 	stop := make(chan os.Signal, 1)
@@ -43,16 +115,19 @@ func main() {
 
 	select {
 	case sig := <-stop:
-		log.Printf("received %s, shutting down", sig)
+		logger.Info("shutdown signal received", zap.String("signal", sig.String()))
 	case err := <-errCh:
 		if !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("server error: %v", err)
+			logger.Fatal("server failed", zap.Error(err))
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := server.Shutdown(ctx); err != nil {
-		log.Printf("shutdown error: %v", err)
+	if _, ok := application.(maintenanceApplication); !ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			logger.Error("server shutdown failed", zap.Error(err))
+		}
 	}
+	logger.Info("panel shutdown complete")
 }

@@ -4,14 +4,15 @@ on:
   push:
     branches:
       - main
+      - dev
 
 permissions:
   contents: write
   packages: write
 
 concurrency:
-  group: docker-release-main
-  cancel-in-progress: false
+  group: docker-release-${{ github.ref_name }}
+  cancel-in-progress: ${{ github.ref_name == 'dev' }}
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}
@@ -21,6 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
+      channel: ${{ steps.version.outputs.channel }}
 
     steps:
       - name: Check out source
@@ -28,7 +30,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Generate next version
+      - name: Generate version
         id: version
         shell: bash
         run: |
@@ -50,21 +52,32 @@ jobs:
             fi
           done < <(git tag --list "v${major}.${minor}.*" | grep -E "^v${major}\.${minor}\.[0-9]+$" || true)
 
-          patch=$((max_patch + 1))
-          version="v${major}.${minor}.${patch}"
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            patch=$((max_patch + 1))
+            version="v${major}.${minor}.${patch}"
+            channel="release"
 
-          if git rev-parse --verify --quiet "refs/tags/${version}" >/dev/null; then
-            echo "Version ${version} already exists."
-            exit 1
+            if git rev-parse --verify --quiet "refs/tags/${version}" >/dev/null; then
+              echo "Version ${version} already exists."
+              exit 1
+            fi
+
+            git tag "$version" "$GITHUB_SHA"
+            git push origin "refs/tags/${version}"
+          else
+            patch="$max_patch"
+            if [ "$patch" -lt 0 ]; then
+              patch=0
+            fi
+            version="v${major}.${minor}.${patch}.$(date -u +%Y%m%d%H%M%S)"
+            channel="dev"
           fi
 
-          git tag "$version" "$GITHUB_SHA"
-          git push origin "refs/tags/${version}"
-
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "channel=${channel}" >> "$GITHUB_OUTPUT"
           echo "Generated version ${version}."
 
-  build-amd64:
+  build-web:
     runs-on: ubuntu-24.04
     needs: generate-version
 
@@ -72,65 +85,232 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
 
-      - name: Compute image metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=${{ needs.generate-version.outputs.version }}
-            type=raw,value=latest
-            type=sha
+      - name: Install frontend dependencies
+        run: npm --prefix web ci
 
-      - name: Build and push amd64 image by digest
-        id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          platforms: linux/amd64
-          outputs: type=image,name=${{ env.IMAGE_NAME }},name-canonical=true,push-by-digest=true,push=true
-          cache-from: type=gha,scope=linux-amd64
-          cache-to: type=gha,mode=max,scope=linux-amd64
-          build-args: |
-            PANEL_VERSION=${{ needs.generate-version.outputs.version }}
-            PANEL_REPOSITORY=${{ github.repository }}
-            PANEL_COMMIT=${{ github.sha }}
-          labels: ${{ steps.meta.outputs.labels }}
+      - name: Build frontend bundle
+        run: npm --prefix web run build
 
-      - name: Export image digest
-        shell: bash
-        run: |
-          mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
-
-      - name: Upload image digest
+      - name: Upload frontend bundle
         uses: actions/upload-artifact@v4
         with:
-          name: digests-linux-amd64
-          path: /tmp/digests/*
+          name: web-dist
+          path: web/dist
           if-no-files-found: error
           retention-days: 1
 
-  build-arm64:
-    runs-on: ubuntu-24.04-arm
+  prepare-go-cache:
+    runs-on: ubuntu-24.04
     needs: generate-version
 
     steps:
       - name: Check out source
         uses: actions/checkout@v4
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download Go modules
+        run: go mod download
+
+  build-agent-bundle:
+    runs-on: ubuntu-24.04
+    needs:
+      - generate-version
+      - prepare-go-cache
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build agent bundle
+        shell: bash
+        env:
+          PANEL_VERSION: ${{ needs.generate-version.outputs.version }}
+          PANEL_CHANNEL: ${{ needs.generate-version.outputs.channel }}
+          PANEL_REPOSITORY: ${{ github.repository }}
+          PANEL_COMMIT: ${{ github.sha }}
+        run: |
+          set -euxo pipefail
+          go run ./cmd/generate-agent-contract-hash
+
+          verify_machine() {
+            binary="$1"
+            arch="$2"
+            machine="$(od -An -tx1 -j18 -N2 "${binary}" | tr -d ' \n')"
+            case "${arch}/${machine}" in
+              amd64/3e00|arm64/b700) ;;
+              *) echo "compiled ${binary} ELF machine ${machine} does not match GOARCH=${arch}"; exit 1 ;;
+            esac
+          }
+
+          ldflags="-s -w -X panel/internal/platform/buildinfo.Version=${PANEL_VERSION} -X panel/internal/platform/buildinfo.Channel=${PANEL_CHANNEL} -X panel/internal/platform/buildinfo.Repository=${PANEL_REPOSITORY} -X panel/internal/platform/buildinfo.Commit=${PANEL_COMMIT}"
+          mkdir -p /tmp/release-artifacts/panel-agents
+          for platform in linux/amd64 linux/arm64; do
+            agent_os="${platform%/*}"
+            agent_arch="${platform#*/}"
+            agent_dir="/tmp/release-artifacts/panel-agents/${agent_os}-${agent_arch}"
+            mkdir -p "${agent_dir}"
+            CGO_ENABLED=0 GOOS="${agent_os}" GOARCH="${agent_arch}" go build -trimpath \
+              -ldflags="${ldflags}" \
+              -o "${agent_dir}/panel-agent" ./cmd/panel-agent
+            verify_machine "${agent_dir}/panel-agent" "${agent_arch}"
+          done
+
+      - name: Upload agent bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: panel-agents
+          path: /tmp/release-artifacts/panel-agents
+          if-no-files-found: error
+          retention-days: 1
+
+  build-target-binary:
+    runs-on: ubuntu-24.04
+    needs:
+      - generate-version
+      - prepare-go-cache
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target_os: linux
+            target_arch: amd64
+            artifact_platform: linux-amd64
+          - target_os: linux
+            target_arch: arm64
+            artifact_platform: linux-arm64
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build panel binaries for ${{ matrix.target_os }}/${{ matrix.target_arch }}
+        shell: bash
+        env:
+          PANEL_VERSION: ${{ needs.generate-version.outputs.version }}
+          PANEL_CHANNEL: ${{ needs.generate-version.outputs.channel }}
+          PANEL_REPOSITORY: ${{ github.repository }}
+          PANEL_COMMIT: ${{ github.sha }}
+          TARGET_OS: ${{ matrix.target_os }}
+          TARGET_ARCH: ${{ matrix.target_arch }}
+          ARTIFACT_PLATFORM: ${{ matrix.artifact_platform }}
+        run: |
+          set -euxo pipefail
+          go run ./cmd/generate-agent-contract-hash
+
+          verify_machine() {
+            binary="$1"
+            arch="$2"
+            machine="$(od -An -tx1 -j18 -N2 "${binary}" | tr -d ' \n')"
+            case "${arch}/${machine}" in
+              amd64/3e00|arm64/b700) ;;
+              *) echo "compiled ${binary} ELF machine ${machine} does not match GOARCH=${arch}"; exit 1 ;;
+            esac
+          }
+
+          ldflags="-s -w -X panel/internal/platform/buildinfo.Version=${PANEL_VERSION} -X panel/internal/platform/buildinfo.Channel=${PANEL_CHANNEL} -X panel/internal/platform/buildinfo.Repository=${PANEL_REPOSITORY} -X panel/internal/platform/buildinfo.Commit=${PANEL_COMMIT}"
+          panel_output_dir="/tmp/release-artifacts/panel/${ARTIFACT_PLATFORM}"
+          panel_init_output_dir="/tmp/release-artifacts/panel-init/${ARTIFACT_PLATFORM}"
+          mkdir -p "${panel_output_dir}" "${panel_init_output_dir}"
+          CGO_ENABLED=0 GOOS="${TARGET_OS}" GOARCH="${TARGET_ARCH}" go build -trimpath \
+            -ldflags="${ldflags}" \
+            -o "${panel_output_dir}/panel" ./cmd/panel
+          verify_machine "${panel_output_dir}/panel" "${TARGET_ARCH}"
+
+          CGO_ENABLED=0 GOOS="${TARGET_OS}" GOARCH="${TARGET_ARCH}" go build -trimpath \
+            -ldflags="${ldflags}" \
+            -o "${panel_init_output_dir}/panel-init" ./cmd/panel-init
+          verify_machine "${panel_init_output_dir}/panel-init" "${TARGET_ARCH}"
+
+      - name: Upload panel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: panel-${{ matrix.artifact_platform }}
+          path: /tmp/release-artifacts/panel/${{ matrix.artifact_platform }}/panel
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload panel-init artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: panel-init-${{ matrix.artifact_platform }}
+          path: /tmp/release-artifacts/panel-init/${{ matrix.artifact_platform }}/panel-init
+          if-no-files-found: error
+          retention-days: 1
+
+  package-image:
+    needs:
+      - generate-version
+      - build-web
+      - build-agent-bundle
+      - build-target-binary
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            artifact_platform: linux-amd64
+            runner: ubuntu-24.04
+            cache_scope: package-linux-amd64
+            digest_name: digests-linux-amd64
+          - platform: linux/arm64
+            artifact_platform: linux-arm64
+            runner: ubuntu-24.04-arm
+            cache_scope: package-linux-arm64
+            digest_name: digests-linux-arm64
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Download frontend bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: release-artifacts/web-dist
+
+      - name: Download agent bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: panel-agents
+          path: release-artifacts/panel-agents
+
+      - name: Download panel binary
+        uses: actions/download-artifact@v4
+        with:
+          name: panel-${{ matrix.artifact_platform }}
+          path: release-artifacts/panel/${{ matrix.artifact_platform }}
+
+      - name: Download panel-init binary
+        uses: actions/download-artifact@v4
+        with:
+          name: panel-init-${{ matrix.artifact_platform }}
+          path: release-artifacts/panel-init/${{ matrix.artifact_platform }}
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -147,24 +327,22 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=${{ needs.generate-version.outputs.version }}
-            type=raw,value=latest
-            type=sha
+            type=raw,value=${{ needs.generate-version.outputs.version }},enable=${{ github.ref_name == 'main' }}
+            type=raw,value=latest,enable=${{ github.ref_name == 'main' }}
+            type=sha,enable=${{ github.ref_name == 'main' }}
+            type=raw,value=dev,enable=${{ github.ref_name == 'dev' }}
 
-      - name: Build and push arm64 image by digest
+      - name: Build and push ${{ matrix.platform }} image by digest
         id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/arm64
+          target: runtime-from-artifacts
+          platforms: ${{ matrix.platform }}
           outputs: type=image,name=${{ env.IMAGE_NAME }},name-canonical=true,push-by-digest=true,push=true
-          cache-from: type=gha,scope=linux-arm64
-          cache-to: type=gha,mode=max,scope=linux-arm64
-          build-args: |
-            PANEL_VERSION=${{ needs.generate-version.outputs.version }}
-            PANEL_REPOSITORY=${{ github.repository }}
-            PANEL_COMMIT=${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.cache_scope }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.cache_scope }}
           labels: ${{ steps.meta.outputs.labels }}
 
       - name: Export image digest
@@ -177,7 +355,7 @@ jobs:
       - name: Upload image digest
         uses: actions/upload-artifact@v4
         with:
-          name: digests-linux-arm64
+          name: ${{ matrix.digest_name }}
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
@@ -186,8 +364,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs:
       - generate-version
-      - build-amd64
-      - build-arm64
+      - package-image
     permissions:
       contents: write
       packages: write
@@ -216,9 +393,10 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=${{ needs.generate-version.outputs.version }}
-            type=raw,value=latest
-            type=sha
+            type=raw,value=${{ needs.generate-version.outputs.version }},enable=${{ github.ref_name == 'main' }}
+            type=raw,value=latest,enable=${{ github.ref_name == 'main' }}
+            type=sha,enable=${{ github.ref_name == 'main' }}
+            type=raw,value=dev,enable=${{ github.ref_name == 'dev' }}
 
       - name: Create multi-arch manifest
         working-directory: /tmp/digests
@@ -228,15 +406,88 @@ jobs:
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf '${{ env.IMAGE_NAME }}@sha256:%s ' *)
 
-      - name: Inspect published image
+      - name: Inspect published release image
+        if: github.ref_name == 'main'
         shell: bash
         run: docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:${{ needs.generate-version.outputs.version }}
 
       - name: Inspect published latest image
+        if: github.ref_name == 'main'
         shell: bash
         run: docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:latest
 
+      - name: Inspect published dev image
+        if: github.ref_name == 'dev'
+        shell: bash
+        run: docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:dev
+
+      - name: Delete old dev package versions
+        if: github.ref_name == 'dev'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_OWNER: ${{ github.repository_owner }}
+          PACKAGE_NAME: ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+
+          package_name_encoded="$(jq -rn --arg value "${PACKAGE_NAME}" '$value | @uri')"
+
+          org_endpoint="/orgs/${PACKAGE_OWNER}/packages/container/${package_name_encoded}/versions"
+          user_endpoint="/users/${PACKAGE_OWNER}/packages/container/${package_name_encoded}/versions"
+
+          versions_file="$(mktemp)"
+          endpoint=""
+
+          if gh api --paginate "${org_endpoint}" > "${versions_file}" 2>/tmp/ghcr-cleanup-error; then
+            endpoint="${org_endpoint}"
+          elif gh api --paginate "${user_endpoint}" > "${versions_file}"; then
+            endpoint="${user_endpoint}"
+          else
+            cat /tmp/ghcr-cleanup-error >&2 || true
+            echo "Failed to list GHCR package versions for ${PACKAGE_OWNER}/${PACKAGE_NAME}."
+            exit 1
+          fi
+
+          cutoff="$(date -u -d '24 hours ago' '+%Y-%m-%dT%H:%M:%SZ')"
+
+          echo "Keep package versions updated after: ${cutoff}"
+
+          mapfile -t delete_ids < <(
+            jq -sr --arg cutoff "${cutoff}" '
+              add
+              | .[]
+              | (.metadata.container.tags // []) as $tags
+              | (.updated_at // .created_at // "") as $time
+              | select(
+                  # 保留带 tag 的版本
+                  (
+                    ($tags | index("dev"))
+                    or ($tags | index("latest"))
+                    or ($tags | any(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")))
+                  )
+                  | not
+                )
+              | select(
+                  # 只删除超过 24 小时的旧版本
+                  $time < $cutoff
+                )
+              | .id
+            ' "${versions_file}"
+          )
+
+          if [ "${#delete_ids[@]}" -eq 0 ]; then
+            echo "No old GHCR package versions to delete."
+            exit 0
+          fi
+
+          for version_id in "${delete_ids[@]}"; do
+            echo "Deleting GHCR package version ${version_id}."
+            gh api --method DELETE "${endpoint}/${version_id}"
+          done
+    
       - name: Create GitHub release
+        if: github.ref_name == 'main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.generate-version.outputs.version }}

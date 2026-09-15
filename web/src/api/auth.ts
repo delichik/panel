@@ -1,48 +1,33 @@
 import { apiClient } from './client';
 
-export interface LoginRequest {
-  username: string;
-  password: string;
-}
-
-export interface LoginResponse {
-  authenticated: boolean;
-  token: string;
-  username: string;
-  passwordChangeRequired: boolean;
-}
-
-export interface SessionResponse {
+export interface AuthSession {
   authenticated: boolean;
   token?: string;
   username?: string;
   passwordChangeRequired?: boolean;
 }
 
-export interface AccountUpdateRequest {
+export interface AccountUpdateInput {
   currentPassword: string;
   username: string;
-  newPassword: string;
-}
-
-export interface JwtSecretUpdateRequest {
-  jwtSecret: string;
+  newPassword?: string;
 }
 
 export const authApi = {
-  login(input: LoginRequest) {
-    return apiClient.post<LoginResponse>('/auth/login', input);
+  login(username: string, password: string) {
+    return apiClient.post<AuthSession>('/auth/login', { username, password }, { skipAuth: true });
   },
   logout() {
-    return apiClient.post<SessionResponse>('/auth/logout');
+    return apiClient.post<AuthSession>('/auth/logout');
   },
   session() {
-    return apiClient.get<SessionResponse>('/auth/session');
+    return apiClient.get<AuthSession>('/auth/session');
   },
-  updateAccount(input: AccountUpdateRequest) {
-    return apiClient.post<LoginResponse>('/auth/account', input);
+  updateAccount(input: AccountUpdateInput) {
+    return apiClient.post<AuthSession>('/auth/account', input);
   },
-  updateJwtSecret(input: JwtSecretUpdateRequest) {
-    return apiClient.post<LoginResponse>('/auth/jwt-secret', input);
+  updateJwtSecret(jwtSecret: string) {
+    return apiClient.post<AuthSession>('/auth/jwt-secret', { jwtSecret });
   },
 };
+

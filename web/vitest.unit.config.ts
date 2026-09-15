@@ -1,0 +1,15 @@
+import { fileURLToPath, URL } from 'node:url';
+import vue from '@vitejs/plugin-vue';
+import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  cacheDir: fileURLToPath(new URL('../tmp/vitest', import.meta.url)),
+  plugins: [vue()],
+  resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
+  test: {
+    name: 'unit',
+    environment: 'node',
+    globals: true,
+    include: ['src/**/*.test.ts'],
+  },
+});

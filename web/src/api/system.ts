@@ -1,13 +1,18 @@
-import { apiClient, type ApiClient } from './client';
-import type { SystemVersionDto } from '@/types/api';
+import { apiClient } from './client';
 
-export function createSystemApi(client: ApiClient = apiClient) {
-  return {
-    version() {
-      return client.get<SystemVersionDto>('/system/version');
-    },
-  };
+export interface VersionInfo {
+  version: string;
+  channel: string;
+  commit?: string;
+  repository?: string;
+  latestVersion?: string;
+  updateAvailable: boolean;
+  checkedAt?: string;
 }
 
-export const systemApi = createSystemApi();
+export const systemApi = {
+  version() {
+    return apiClient.get<VersionInfo>('/system/version');
+  },
+};
 
