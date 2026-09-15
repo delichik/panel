@@ -14,6 +14,8 @@
 
 ## 使用要求
 
+应用容器日志的实例选择与弹窗交互见 [interaction-patterns.md](interaction-patterns.md) 当前接入记录。
+
 日志页采用 [interaction-patterns.md](interaction-patterns.md) 的只读时间线与手动游标分页，不使用共享定时刷新或统计/新数据提示。
 
 设施逐节点诊断、失败运行日志和按需代理错误样本的反馈规则见 [interaction-model.md](interaction-model.md)。

@@ -28,6 +28,7 @@ import TemplateVariableInput from '@/components/patterns/TemplateVariableInput.v
 import type { TemplateVariableOption } from '@/components/patterns/templateVariable';
 import StorageShareFacility from './StorageShareFacility.vue';
 import FacilityDiagnostics from './FacilityDiagnostics.vue';
+import ApplicationLogsDialog from './ApplicationLogsDialog.vue';
 import AssetFileManager from '@/components/patterns/AssetFileManager.vue';
 import type { AssetFileAdapter, AssetFileItem } from '@/components/patterns/assetFileManager';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
@@ -142,8 +143,6 @@ const error = ref('');
 const actionError = ref('');
 const pending = ref('');
 const logsOpen = ref(false);
-const logsText = ref('');
-const logsLoading = ref(false);
 const confirmOpen = ref(false);
 const confirmKind = ref<'delete' | 'stop'>('delete');
 const confirmTarget = ref('');
@@ -929,21 +928,6 @@ function taskParams(result: unknown) {
   const record = result as { taskId?: string; operationId?: string; deploymentId?: string; evalId?: string };
   const taskId = record?.operationId || record?.taskId || record?.deploymentId || record?.evalId;
   return taskId ? { taskId } : null;
-}
-
-async function showLogs(app: ApplicationDto) {
-  logsOpen.value = true;
-  logsText.value = '';
-  logsLoading.value = true;
-  try {
-    logsText.value = (await applicationsApi.logs(app.id, { tail: 240 })).logs;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : t('applicationsPage.logsFailed');
-    notifyError(message, err);
-    logsText.value = t('applicationsPage.logsFailed');
-  } finally {
-    logsLoading.value = false;
-  }
 }
 
 function ask(kind: typeof confirmKind.value, target: string) {
@@ -1935,7 +1919,7 @@ onBeforeUnmount(() => {
                   <div class="mt-3 grid gap-2">
                     <Button :disabled="!selectedApplication.imageUpdateAvailable" :loading="pending === 'image-update'" @click="runOperation('image-update', () => applicationsApi.updateImage(selectedApplication.id), 'applicationsPage.imageUpdateAccepted', 'applicationsPage.imageUpdateAcceptedWithoutId')"><UploadCloud />{{ t('applicationsPage.updateImage') }}</Button>
                     <Button @click="openApplicationActivity()"><ClipboardList />{{ t('activity.relatedLogs') }}</Button>
-                    <Button :loading="logsLoading" @click="showLogs(selectedApplication)"><History />{{ t('applicationsPage.logs') }}</Button>
+                    <Button @click="logsOpen = true"><History />{{ t('applicationsPage.logs') }}</Button>
                     <Button variant="danger" @click="ask('delete', selectedApplication.id)"><Trash2 />{{ t('common.delete') }}</Button>
                   </div>
                 </section>
@@ -2324,12 +2308,7 @@ onBeforeUnmount(() => {
     </EditorPage>
   </ConsolePage>
 
-  <Dialog v-model:open="logsOpen" :title="t('applicationsPage.logs')" :close-label="t('common.close')">
-    <div class="relative">
-      <pre class="max-h-[520px] overflow-auto whitespace-pre-wrap rounded-xl border border-border bg-muted p-3 text-xs text-foreground">{{ logsText }}</pre>
-      <LoadingOverlay v-if="logsLoading" :label="t('applicationsPage.logsLoading')" />
-    </div>
-  </Dialog>
+  <ApplicationLogsDialog v-model:open="logsOpen" :application-id="selectedApplication.id" :application-name="selectedApplication.name" />
 
   <Dialog v-model:open="dialogOpen" :title="t(`applicationsPage.dialog.${dialogKind}`)" :close-label="t('common.close')">
     <div v-if="dialogKind === 'env'" class="grid gap-3">

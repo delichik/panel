@@ -42,6 +42,8 @@
 
 ## 当前接入记录
 
+- `web/src/views/applications/ApplicationLogsDialog.vue`：业务容器日志弹窗复用 Dialog/Select/Button/LoadingOverlay；按服务器与容器展示实例，日志在固定弹窗正文内滚动，切换/关闭取消旧请求，不使用活动日志替代容器输出。
+
 - `web/src/views/applications/index.vue`：应用搜索、状态、应用/设施连续纵向配置流、部署/网关/源站服务器多选、持久化数据下载/恢复，以及应用文件和设施静态资产共用的 `AssetFileManager` 已接入统一 primitives/patterns。 未保存修改的离开/取消保护已接入 `ConfirmDialog`。
 - `web/src/views/security/index.vue` 与 `web/src/views/resources/index.vue`：服务器上下文选择已接入 `ServerContextSelector` 及其加载骨架，页面不得再在同一上下文区域叠加 Select 下拉。
 

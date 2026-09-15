@@ -495,7 +495,9 @@ const logLines: Record<string, string[]> = {
   ],
 };
 
-export function appLogs(id: string): LogResult {
+export function appLogs(id: string, instanceId: string): LogResult {
+  const instance = runtimes[id]?.instances.find(item => (item.instanceId || item.id) === instanceId);
+  if (!instance) throw new Error('Application instance was not found.');
   if (id === 'app-worker') throw new Error('Runtime log stream is temporarily unavailable.');
   const lines = logLines[id] ?? [
     `[info] ${id} runtime attached`,
@@ -503,8 +505,8 @@ export function appLogs(id: string): LogResult {
     '[debug] metrics scrape completed',
   ];
   return {
-    instanceId: `inst-${id.replace(/^app-/, '')}`,
-    containerName: `panel-${id.replace(/^app-/, '')}`,
+    instanceId,
+    containerName: instance.containerName,
     type: 'stdout',
     logs: lines.join('\n'),
   };

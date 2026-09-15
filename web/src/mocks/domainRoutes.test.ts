@@ -188,10 +188,20 @@ describe('domain mock routes', () => {
     expect(runtime.status).toBe(200);
     expect(runtimeEnvelope.data.instances.length).toBeGreaterThan(0);
 
-    const logs = await fetch('/api/v1/applications/app-worker/logs');
+    const missingInstance = await fetch('/api/v1/applications/app-worker/logs');
+    expect(missingInstance.status).toBe(422);
+    const logs = await fetch('/api/v1/applications/app-worker/logs?instanceId=inst-worker');
     const logsEnvelope = await logs.json();
     expect(logs.status).toBe(503);
     expect(logsEnvelope.error.code).toBe('application_logs_unavailable');
+  });
+
+  it('returns logs for the selected application instance', async () => {
+    const response = await fetch('/api/v1/applications/app-storefront/logs?instanceId=inst-api&tail=240');
+    const envelope = await response.json();
+    expect(response.status).toBe(200);
+    expect(envelope.data).toMatchObject({ instanceId: 'inst-api', containerName: 'panel-storefront' });
+    expect((await fetch('/api/v1/applications/app-storefront/logs?instanceId=inst-worker')).status).toBe(404);
   });
 
   it('runs durable application edit session validation and conflict commit', async () => {

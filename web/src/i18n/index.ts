@@ -704,7 +704,7 @@ export const messages: Record<Locale, Messages> = {
     'applicationsPage.noRoutesHint': 'Add reverse proxy rules in the editor when the workload should be exposed through the gateway.',
     'applicationsPage.operations': 'Operations',
     'applicationsPage.updateImage': 'Update image',
-    'applicationsPage.logs': 'Logs',
+    'applicationsPage.logs': 'Container logs',
     'applicationsPage.logsLoading': 'Loading logs...',
     'applicationsPage.logsFailed': 'Unable to load logs.',
     'applicationsPage.persistentData': 'Persistent data',
@@ -1715,7 +1715,7 @@ export const messages: Record<Locale, Messages> = {
     'applicationsPage.noRoutesHint': '需要通过网关暴露工作负载时，在编辑器中添加反向代理规则。',
     'applicationsPage.operations': '操作',
     'applicationsPage.updateImage': '更新镜像',
-    'applicationsPage.logs': '日志',
+    'applicationsPage.logs': '容器日志',
     'applicationsPage.logsLoading': '正在加载日志...',
     'applicationsPage.logsFailed': '无法加载日志。',
     'applicationsPage.persistentData': '持久化数据',
@@ -3466,4 +3466,29 @@ Object.assign(messages['zh-CN'], {
   "facilityDiagnostics.upstream_timeout.hint": "调整超时前，请先检查目标服务的响应时间、负载与网络连通性。",
   "facilityDiagnostics.proxy_request_error.title": "代理记录了未分类错误",
   "facilityDiagnostics.proxy_request_error.hint": "日志样本包含无法可靠分类的代理错误。请查看此节点设施容器的日志以获取完整上下文。",
+});
+
+Object.assign(messages.en, {
+  "applicationLogs.instance": "Server / container",
+  "applicationLogs.chooseInstance": "Choose a container",
+  "applicationLogs.chooseHint": "Select a server and container to view its logs.",
+  "applicationLogs.noContainer": "No container",
+  "applicationLogs.noInstances": "No containers with available logs. Stopped containers remain selectable until removed.",
+  "applicationLogs.empty": "This container has no log output.",
+  "applicationLogs.instancesLoading": "Loading application instances…",
+  "applicationLogs.instancesFailed": "Unable to load application instances.",
+  "applicationLogs.reloadInstances": "Refresh instances",
+  "applicationLogs.instanceMismatch": "The returned logs belong to a different instance. Refresh and try again.",
+});
+Object.assign(messages['zh-CN'], {
+  "applicationLogs.instance": "服务器 / 容器",
+  "applicationLogs.chooseInstance": "选择要查看的容器",
+  "applicationLogs.chooseHint": "请选择服务器与容器，查看对应日志。",
+  "applicationLogs.noContainer": "尚无容器",
+  "applicationLogs.noInstances": "暂无可查看日志的容器。已停止的容器在被删除前仍可选择。",
+  "applicationLogs.empty": "此容器暂无日志输出。",
+  "applicationLogs.instancesLoading": "正在加载应用实例…",
+  "applicationLogs.instancesFailed": "无法加载应用实例。",
+  "applicationLogs.reloadInstances": "刷新实例列表",
+  "applicationLogs.instanceMismatch": "返回的日志与所选实例不一致，请刷新后重试。",
 });

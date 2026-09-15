@@ -91,12 +91,12 @@ export const applicationsApi = {
   runtime(applicationId: string, options?: ApiRequestOptions) {
     return apiClient.get<ApplicationRuntime>(`/applications/${id(applicationId)}/runtime`, options);
   },
-  logs(applicationId: string, params: { instanceId?: string; type?: string; tail?: number } = {}) {
+  logs(applicationId: string, params: { instanceId: string; type?: string; tail?: number }, options?: ApiRequestOptions) {
     const query = new URLSearchParams();
     Object.entries(params).forEach(([name, value]) => {
       if (value !== undefined && value !== '') query.set(name, String(value));
     });
-    return apiClient.get<LogResult>(`/applications/${id(applicationId)}/logs${query.size ? `?${query}` : ''}`);
+    return apiClient.get<LogResult>(`/applications/${id(applicationId)}/logs${query.size ? `?${query}` : ''}`, options);
   },
   downloadPersistentData(applicationId: string, serverId: string): Promise<DownloadResult> {
     const query = new URLSearchParams({ serverId });

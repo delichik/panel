@@ -319,10 +319,10 @@
 
 - **前置**：runtime 实例有后端保存的 container_name。
 - **动作**：`GET /applications/{id}/logs?instanceId=&tail=`。
-- **结果**：后端按 instanceId 解析容器名并读取日志；tail 限制在 1..10000（缺省使用安全默认）。
+- **结果**：后端按 instanceId 解析容器名并读取日志；tail 限制在 1..10000（缺省使用安全默认）。应用页容器日志弹窗先读取该应用实例，用服务器名与容器名区分目标；多个可读实例由用户选择，单个自动选择，日志请求必须携带所选 instanceId。
 - **失败**：客户端传 containerName 不得成为授权/定位依据；跨应用 instance 或无容器返回稳定错误。
-- **不变量**：日志展示属于 runtime 实例，不依赖 allocation/task 投影。
-- **验证**：handler/service logs tests。
+- **不变量**：日志展示属于 runtime 实例，不依赖 allocation/task 投影。停止/失败但仍存在的容器可查看；missing/purged/deleted 或尚无容器的 pending 实例不可读取。切换实例/应用、关闭弹窗或离页取消旧请求并丢弃迟到响应；无实例、空日志与读取失败分开展示；仅手动刷新，不定时轮询。
+- **验证**：handler/service logs tests，`ApplicationLogsDialog.test.ts` 的多/单实例、已退出容器、无实例、读取重试、切换/关闭竞态及 Mock instanceId 范围测试。
 
 ### APP-RUN-004 执行结果不确定的独立呈现
 

@@ -611,8 +611,12 @@ export function installMockApi() {
     }
     const appLogsMatch = url.pathname.match(/^\/api\/v1\/applications\/([^/]+)\/logs$/);
     if (appLogsMatch) {
+      const instanceId = url.searchParams.get('instanceId') ?? '';
+      if (!instanceId) return error('runtime_instance_required', 'Runtime instance is required', 422);
+      const appId = decodeURIComponent(appLogsMatch[1]);
+      if (!appRuntime(appId)?.instances.some(item => (item.instanceId || item.id) === instanceId)) return error('not_found', 'Application instance was not found.', 404);
       try {
-        return json(appLogs(decodeURIComponent(appLogsMatch[1])));
+        return json(appLogs(appId, instanceId));
       } catch (err) {
         return error('application_logs_unavailable', err instanceof Error ? err.message : 'Logs are unavailable.', 503);
       }
