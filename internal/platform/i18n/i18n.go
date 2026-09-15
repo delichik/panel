@@ -17,6 +17,7 @@ var (
 
 	codeTranslations = map[string]map[string]string{
 		LocaleSimplifiedChinese: {
+			"facility_diagnostics_unavailable":                       "设施诊断暂不可用",
 			"package_maintenance_in_progress":                        "该服务器上已有软件包维护正在进行",
 			"login_rate_limited":                                     "登录尝试过于频繁，请稍后再试",
 			"request_body_too_large":                                 "请求体超过 10 MiB 上限",

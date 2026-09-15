@@ -725,6 +725,12 @@ export function installMockApi() {
     }
 
     if (url.pathname === '/api/v1/facility-apps/reverse-proxy' && method(init) === 'GET') return json(mockFacility);
+    if (url.pathname === '/api/v1/facility-apps/reverse-proxy/diagnostics' && method(init) === 'GET') {
+      const serverId = url.searchParams.get('serverId') ?? '';
+      if (!serverId || [...url.searchParams.keys()].length !== 1) return json({ error: { code: 'server_required', message: 'Server is required' } }, 422);
+      if (!mockFacility.deploymentServers.includes(serverId)) return json({ error: { code: 'not_found', message: 'Facility instance not found' } }, 404);
+      return json({ serverId, checkedAt: new Date().toISOString(), status: 'sampled', issues: [], truncated: false });
+    }
     if (url.pathname === '/api/v1/facility-apps/reverse-proxy/reconcile' && method(init) === 'POST') return json({ config: mockFacility }, 202);
     if (url.pathname === '/api/v1/facility-apps/storage-share' && method(init) === 'GET') return json(mockStorageShare);
     if (url.pathname === '/api/v1/facility-apps/storage-share' && method(init) === 'PUT') {

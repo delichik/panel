@@ -731,24 +731,22 @@ func (r *LocalRuntime) Reconcile(ctx context.Context, req agentcontract.RuntimeR
 	if err != nil {
 		return fail("inspect_failed", "docker_unavailable", err)
 	}
-	verify := func() (agentcontract.RuntimeReconcileResponse, error) {
+	verify := func(containerID string, started bool) (agentcontract.RuntimeReconcileResponse, error) {
 		var result agentcontract.RuntimeReconcileResponse
+		var status appruntime.InstanceStatus
 		err := recorder.do("verify_running", func(stepctx context.Context) error {
 			var err error
-			result, err = r.reconcileStatusResponse(stepctx, req, spec, nil)
-			if err != nil {
-				return err
-			}
-			if result.ObservedState != appruntime.StatusRunning {
-				return fmt.Errorf("container did not reach running state")
-			}
-			return nil
+			status, err = r.verifyContainerStartup(stepctx, req, spec, containerID, !started)
+			result = reconcileStatusResponse(req, status)
+			return err
 		})
 		if err != nil {
 			result.ErrorCode = "container_not_running"
 			result.ErrorClass = "container_start_failed"
 			result.ErrorMessage = containerNotRunningMessage(result, err)
 			result.ErrorDetail = containerExitDiagnostic(result)
+			// Keep the summary small; attach the run-scoped log only to detail.
+			result.ErrorDetail += r.startupFailureLogs(ctx, status, containerID, spec)
 			result.Retryable = true
 		}
 		if err == nil {
@@ -772,7 +770,7 @@ func (r *LocalRuntime) Reconcile(ctx context.Context, req agentcontract.RuntimeR
 					return fail("start_container_failed", "container_start_failed", err)
 				}
 			}
-			return verify()
+			return verify(inspect.ID, !inspect.State.Running)
 		}
 		if err := recorder.do("replace_stop", func(stepctx context.Context) error {
 			err := r.client.stopContainer(stepctx, spec.ContainerName, 10)
@@ -807,23 +805,19 @@ func (r *LocalRuntime) Reconcile(ctx context.Context, req agentcontract.RuntimeR
 	if err := recorder.do("start_container", func(stepctx context.Context) error { return r.client.startContainer(stepctx, containerID) }); err != nil {
 		return fail("start_container_failed", "container_start_failed", err)
 	}
-	return verify()
+	return verify(containerID, true)
 }
 
-func (r *LocalRuntime) reconcileStatusResponse(ctx context.Context, req agentcontract.RuntimeReconcileRequest, spec appruntime.Spec, steps []agentcontract.RuntimeReconcileStep) (agentcontract.RuntimeReconcileResponse, error) {
-	status, err := r.Status(ctx, req.InstanceID, spec.ContainerName, req.ServerID)
-	if err != nil {
-		return agentcontract.RuntimeReconcileResponse{ErrorCode: "verification_failed", ErrorClass: "runtime", ErrorMessage: err.Error(), Retryable: true, Steps: steps}, err
-	}
-	if len(steps) > 0 {
-		steps[len(steps)-1].Status = "succeeded"
+func reconcileStatusResponse(req agentcontract.RuntimeReconcileRequest, status appruntime.InstanceStatus) agentcontract.RuntimeReconcileResponse {
+	if status.ObservedAt.IsZero() {
+		return agentcontract.RuntimeReconcileResponse{}
 	}
 	return agentcontract.RuntimeReconcileResponse{
 		ObservedState: status.Status, ContainerName: status.ContainerName, ContainerID: status.ContainerID,
 		ObservedGeneration: req.DesiredGeneration, ObservedSpecHash: req.DesiredSpecHash,
-		ObservedImageDigest: imageDigestFromReference(status.Image), ObservedAt: status.ObservedAt, Steps: steps,
+		ObservedImageDigest: imageDigestFromReference(status.Image), ObservedAt: status.ObservedAt,
 		ErrorDetail: containerStatusDiagnostic(status),
-	}, nil
+	}
 }
 
 const maxContainerDiagnosticRunes = 4096

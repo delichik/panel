@@ -7,6 +7,7 @@ import type {
   FacilityEditPreviewResult,
   FacilityEditSession,
   ReverseProxyConfig,
+	ProxyDiagnostics,
   ReverseProxySaveInput,
   StorageShareConfig,
   StorageShareReconcileResult,
@@ -43,6 +44,9 @@ export const storageShareFacilityApi = {
 };
 
 export const reverseProxyFacilityApi = {
+	getDiagnostics(serverId: string, options?: ApiRequestOptions) {
+		return apiClient.get<ProxyDiagnostics>(`/facility-apps/reverse-proxy/diagnostics?serverId=${id(serverId)}`, options);
+	},
   getConfig(options?: ApiRequestOptions) {
     return apiClient.get<ReverseProxyConfig>('/facility-apps/reverse-proxy', options);
   },

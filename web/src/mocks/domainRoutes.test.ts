@@ -23,6 +23,17 @@ describe('domain mock routes', () => {
     expect(envelope.data.cards.length).toBeGreaterThan(0);
   });
 
+  it('scopes on-demand facility diagnostics to an existing gateway', async () => {
+    const config = await (await fetch('/api/v1/facility-apps/reverse-proxy')).json();
+    const serverId = config.data.deploymentServers[0];
+    const response = await fetch(`/api/v1/facility-apps/reverse-proxy/diagnostics?serverId=${serverId}`);
+    const result = await response.json();
+    expect(response.status).toBe(200);
+    expect(result.data).toMatchObject({ serverId, status: 'sampled', issues: [], truncated: false });
+    expect((await fetch('/api/v1/facility-apps/reverse-proxy/diagnostics')).status).toBe(422);
+    expect((await fetch('/api/v1/facility-apps/reverse-proxy/diagnostics?serverId=unrelated')).status).toBe(404);
+  });
+
   it('requires cleanup confirmation and returns progress for the same run', async () => {
     const clock = vi.spyOn(Date, 'now').mockReturnValue(100000);
     try {

@@ -47,7 +47,7 @@
 | 全局导航、慢网路由反馈、会话、布局、通用交互 | [界面外壳与交互约定](ui-shell-and-conventions.md) |
 | 任一具体页面、页面首次加载或用户操作 | [逐页面验收](ui-pages.md) |
 | 应用、挂载来源、应用文件、修订、部署、节点工作区布局、设施应用、存储共享；规划失败 `APP-PLAN-001`、结果待核实 `APP-RUN-004` | [应用与设施应用](applications-and-facilities.md) |
-| desired/observed、协调 Job、统一追加活动日志、任务、运行事件；规划失败隔离 `ORCH-PLAN-006` | [协调、任务与运行事件](orchestration-and-tasks.md) |
+| desired/observed、协调 Job、统一追加活动日志、任务、运行事件；规划失败隔离 `ORCH-PLAN-006`、启动稳定观察 `ORCH-CTRL-007` | [协调、任务与运行事件](orchestration-and-tasks.md) |
 | 容器、镜像、网络、卷、资源缓存与操作队列 | [容器与资源](containers-and-resources.md) |
 | 登录、账号、运行时设置、概览、系统版本 | [身份、设置与系统](identity-settings-system.md) |
 | 凭据、服务器、Agent、SSH、UFW、Fail2ban、APT | [服务器、安全与软件包](servers-security-packages.md) |
@@ -60,6 +60,8 @@
 | 核对当前实现尚未达到的合同，或修改触及实现/合同不一致 | [已知实现与验收差距](known-gaps.md) |
 
 ## 5. 变更影响矩阵
+
+失败运行日志与有界降级见 [ORCH-CTRL-008](orchestration-and-tasks.md)；设施逐节点部署、按需请求错误诊断见 [FAC-RP-012/013](applications-and-facilities.md)。
 
 修改下列对象时，至少检查对应消费者：
 

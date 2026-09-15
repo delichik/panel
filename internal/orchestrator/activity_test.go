@@ -2,11 +2,79 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
 	"panel/internal/platform/activitylog"
 )
+
+// ORCH-ACT-003 / ORCH-RETRY-002: a forced startup that fails must keep its
+// durable retry budget and deadline when ordinary reports arrive afterward.
+func TestAutomaticScanPreservesForcedJob(t *testing.T) {
+	for _, state := range []string{JobPending, JobRunning, JobFailedRetryable} {
+		t.Run(state, func(t *testing.T) {
+			db := newOrchestratorTestDB(t)
+			if _, err := db.Exec(`INSERT INTO applications(id,name) VALUES('app','service')`); err != nil {
+				t.Fatal(err)
+			}
+			planner := NewPlanner(NewStore(db))
+			ctx := context.Background()
+			in := PlanInput{ApplicationID: "app", ServerID: "server", InstanceID: "app-server", IntentID: "forced", Action: ActionApply, DesiredState: DesiredRunning, DesiredGeneration: 1, DesiredSpecHash: "hash", ForceNonce: 42}
+			first, err := planner.Plan(ctx, in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec(`UPDATE jobs SET state=?,attempts=3,next_run_at='2099-01-01T00:00:00Z',error_code='container_not_running',error_message='exitCode=1' WHERE id=?`, state, first.Job.ID); err != nil {
+				t.Fatal(err)
+			}
+			in.Automatic, in.ForceNonce, in.IntentID = true, 0, "scan-0"
+			var beforeEvents int
+			if err := db.QueryRow(`SELECT count(*) FROM activity_events`).Scan(&beforeEvents); err != nil {
+				t.Fatal(err)
+			}
+			var original Job
+			for i := 0; i < 5; i++ {
+				in.IntentID = fmt.Sprintf("scan-%d", i)
+				merged, err := planner.Plan(ctx, in)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !merged.Merged || merged.Job.ID != first.Job.ID || merged.Job.IntentID != "forced" || merged.Job.ForceNonce != 42 || merged.Job.Attempts != 3 || merged.Job.ErrorCode != "container_not_running" || merged.Job.NextRunAt == nil || merged.Job.NextRunAt.Year() != 2099 {
+					t.Fatalf("automatic scan changed forced retry: %#v", merged)
+				}
+				if i == 0 {
+					original = merged.Job
+				} else if !reflect.DeepEqual(original, merged.Job) {
+					t.Fatal("repeated scan mutated active Job")
+				}
+			}
+			var afterEvents int
+			if err := db.QueryRow(`SELECT count(*) FROM activity_events`).Scan(&afterEvents); err != nil {
+				t.Fatal(err)
+			}
+			if afterEvents != beforeEvents {
+				t.Fatalf("automatic scans added %d events", afterEvents-beforeEvents)
+			}
+			// An explicit newer force intent must still be accepted and logged.
+			in.ForceNonce, in.IntentID = 43, "new-force"
+			forced, err := planner.Plan(ctx, in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if forced.Job.ForceNonce != 43 {
+				t.Fatal("new force request was swallowed")
+			}
+			if err := db.QueryRow(`SELECT count(*) FROM activity_events WHERE operation_id='new-force'`).Scan(&afterEvents); err != nil {
+				t.Fatal(err)
+			}
+			if afterEvents == 0 {
+				t.Fatal("new force request was not recorded")
+			}
+		})
+	}
+}
 
 func TestPlannerSupersessionKeepsOriginalRequestSnapshot(t *testing.T) {
 	db := newOrchestratorTestDB(t)

@@ -312,7 +312,7 @@
 - **动作**：GET runtime，必要时主动查询 Agent status。
 - **结果**：默认以 AppDB observed 快照派生 status/stage；主动结果也经 ObservationWriter CAS 写回；返回 serverId/serverName、generation、容器身份、`lastError` 和 observedAt。存在 active Job 时返回其真实 pending/running/failed_retryable 状态；没有 active Job 且最新 Job 为 failed 时继续返回 operationId、stage、attempt、nextRunAt 和结构化错误。
 - **失败**：Docker not found 映射 `missing` 而非 stopped；Agent 不兼容/不可达不回退 SSH；终态部署错误不得因 active 查询为空而从 runtime 响应消失；容器启动后退出的结构化错误必须保留有界脱敏的状态、exit code 与 Docker State.Error，供 Job/runtime 投影具体根因。
-- **不变量**：handler/业务服务不得直接覆盖 observed；无容器的 pending/failed Job 不提供日志入口。
+- **不变量**：handler/业务服务不得直接覆盖 observed；无容器的 pending/failed Job 不提供日志入口。apply 启动成功必须经过 `ORCH-CTRL-007` 的稳定观察；短时退出即使退出码为 0，也必须展示部署失败/退避，而非以瞬间 running 表示部署完成。
 - **验证**：runtime cache/refresh/missing、retryable schedule、terminal failure projection tests。
 
 ### APP-RUN-002 实例日志
@@ -489,6 +489,24 @@
 - **失败**：服务器列表读取失败使任务失败且域名保留 pending，不得按“无服务器”误删；无 IPv4/IPv6 的域名 skipped 并带提示。
 - **不变量**：anyAccess 关闭目标=origins，开启目标=全局 gateways；活跃任务期间新增 pending 不得因旧 params 遗漏。
 - **验证**：dns sync all-current/merge-pending/server-error/status tests。
+
+### FAC-RP-012 设施逐节点部署诊断
+
+- **前置**：多个网关节点分别成功、重试、失败、结果待核实或无 Job。
+- **动作**：GET 设施配置。
+- **结果**：`deployments` 分别返回节点身份、容器 observed 状态/时间、优先活跃否则最新 Job 的 operationId、状态、阶段、attempt、nextRunAt 和错误码/类/摘要/详情。另一节点较晚成功不能掩盖失败；容器与部署结果独立显示，移除节点后未完成的清理失败须保留。
+- **失败**：无 Job 显示无结果；配置/同步 lastError 独立说明来源；DNS 提供商同步与容器内名称解析错误保持区分。
+- **不变量**：常规读取只查询本地投影，不远端读日志，不新增表或 schema；无 Job 节点不能因列表顺序遮住其他节点进行中的操作。
+- **验证**：`TestFacilityDeploymentDiagnosticsKeepsEachNodesFailure`、`TestFacilityPendingOperationNotHiddenByNodeWithoutJob`、`FacilityDiagnostics.test.ts`。
+
+### FAC-RP-013 按需代理请求错误诊断
+
+- **前置**：管理员选择已有设施实例节点。
+- **动作**：显式 GET `/api/v1/facility-apps/reverse-proxy/diagnostics?serverId=`，只接受唯一 serverId，不允许客户端指定容器/地址。
+- **结果**：兼容 Agent 按设施容器 ID 读取最多 200 行日志。后端仅对标准 Nginx error 前缀及错误正文分类，返回稳定 code、节点、域名、上游、计数和可用日志本地时间；前端按码解释名称解析/TLS/连接/超时或未知错误及下一步。同 code/域名/上游合并，最多 20 项，标记截断。
+- **失败**：无实例拒绝；不兼容/离线/容器缺失/5秒超时为 unavailable；空样本不能宣称所有路由健康。未知错误不臆造根因，TLS 建议不得关闭校验；access log 和请求/UA 文本不能伪造错误。
+- **不变量**：仅人工点击，无轮询/自动重试/持久化/活动追加，不修改 Job、观测或退避。尾样本不保证固定时间覆盖，历史错误不等于当前仍故障。保留分析输入最多128 KiB；证据限长，移除请求 URL/query、客户端地址和上游用户信息。配置变化/离页取消并丢弃迟到结果。
+- **验证**：分类、去重、未知回退、请求隐私、范围拒绝测试；前端按需调用、双语解释和取消测试。
 
 ## 8. 存储共享设施
 

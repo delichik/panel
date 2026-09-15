@@ -32,17 +32,18 @@
 
 ## 3. HTTP API 基线
 
-当前逐项清单记录 162 个 `/api` method/path 组合，路由清单 SHA-256 为 `5505ce557efc24f297296dfc239768468c35d127c34a8431256ceea691f82465`。来源计数如下：
+当前逐项清单记录 171 个 `/api` method/path 组合，路由清单 SHA-256 为 `0ef652491919bc2e3e73a07a4992308102564065d16410cdc285393090db1ab2`。本次新增设施诊断 1 条，并同步此前路由测试已覆盖的 Activity/执行查询清单。来源计数如下：
 
 | 注册来源 | 数量 | 验收领域 |
 | --- | ---: | --- |
 | bootstrap auth | 5 | 身份、设置与系统 |
-| applications | 28 | 应用与设施应用；协调、任务与运行事件 |
+| activity | 9 | 协调、任务与运行事件 |
+| applications | 26 | 应用与设施应用；协调、任务与运行事件 |
 | backups | 3 | 备份、恢复与诊断 |
 | certificates/certs | 11 | DNS、证书与密钥资产 |
 | certificates/dns | 9 | DNS、证书与密钥资产 |
 | containers | 17 | 容器与资源 |
-| facilityapps | 19 | 应用与设施应用 |
+| facilityapps | 20 | 应用与设施应用 |
 | keyassets | 14 | DNS、证书与密钥资产 |
 | diagnostics | 7 | 备份、恢复与诊断 |
 | metrics | 1 | 身份、设置与系统；服务器、安全与软件包 |
@@ -52,16 +53,18 @@
 | servers | 23 | 服务器、安全与软件包 |
 | settings | 5 | 身份、设置与系统 |
 | systeminfo | 1 | 身份、设置与系统 |
-| tasks | 6 | 协调、任务与运行事件 |
+| tasks | 7 | 协调、任务与运行事件 |
 
 - `COV-API-001`：路由清单测试失败时必须先确定是哪一个 method/path 改变，再更新消费者、Mock、验收项和期望哈希；不得只替换哈希让测试通过。
 
 - 应用详情、列表摘要、runtime 增加可选 `planningError`（code/message/field/fileName/retryable/operationId/occurredAt/configVersion），列表 runtimeStatus 与 runtime.status 支持 `needs_attention`；对应 `APP-PLAN-001`、`APP-RUN-004`，API method/path 数量不变。
 - 既有 GET/POST `/api/v1/debug/clear-runtime-data` 响应补齐 `runId/stage/failedStage/startedAt/finishedAt`，明确 `cleared` 与终态、并发请求语义；清理期间业务写入返回 `runtime_data_maintenance`，不增加接口；对应 `DIAG-CLR-001/005/006/007`。
 
-- `COV-API-002`：维护导出/恢复的独立最小应用路由不计入上述主 Panel 161 条，但必须由备份恢复文档覆盖其认证、状态、密码、下载、重试、退出和清除 pending 操作。
+- `COV-API-002`：维护导出/恢复的独立最小应用路由不计入上述主 Panel 171 条，但必须由备份恢复文档覆盖其认证、状态、密码、下载、重试、退出和清除 pending 操作。
 
-- `COV-API-003`：161 个 method/path 的逐项映射见 [主 Panel API 路由逐项清单](api-route-inventory.md)；路由清单测试与该表必须同步变化。
+- `COV-API-003`：171 个 method/path 的逐项映射见 [主 Panel API 路由逐项清单](api-route-inventory.md)；路由清单测试与该表必须同步变化。
+
+- 新增 GET `/facility-apps/reverse-proxy/diagnostics?serverId=`，配置 DTO 增加逐节点 deployments；对应 `FAC-RP-012/013`、`UI-FAC-012`。失败运行日志复用 errorDetail，按 ID/时间范围限量读取并降级，不新增 Agent RPC 字段、表或后台任务；对应 `ORCH-CTRL-008`。
 
 ## 4. 持久化基线
 
@@ -82,6 +85,8 @@
 - Debug 清理同步清除 `applications.planning_error_json`，保留资源版本和期望/观测事实。清理状态为当前进程状态，会话标记只保存未确认清理的 runId；本轮无数据库 schema 变更，对应 `DIAG-CLR-002/007`。
 
 ## 5. 常驻与周期后台行为
+
+- 应用启动在既有 `verify_running` 阶段验证连续运行 10 秒；短时退出按失败重试，自动巡检保留强制 Job 的退避与诊断。无新增 API、表、用户配置或阶段枚举；对应 `ORCH-CTRL-007`、`ORCH-RETRY-002`，覆盖普通应用和设施应用的 apply 路径。
 
 | 后台行为 | 主要事实/输出 | 验收领域 |
 | --- | --- | --- |

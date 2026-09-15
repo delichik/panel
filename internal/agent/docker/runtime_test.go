@@ -880,8 +880,8 @@ func TestReconcileStartsMatchingExitedContainerBeforeVerify(t *testing.T) {
 	if result.ObservedState != appruntime.StatusRunning {
 		t.Fatalf("observed state = %q, want running; result=%#v", result.ObservedState, result)
 	}
-	if startCalls != 1 || inspectCalls != 2 {
-		t.Fatalf("start calls = %d, inspect calls = %d; want 1 and 2", startCalls, inspectCalls)
+	if startCalls != 1 || inspectCalls < 3 {
+		t.Fatalf("start calls = %d, inspect calls = %d; want one start and repeated verification", startCalls, inspectCalls)
 	}
 	startIndex, verifyIndex := -1, -1
 	for i, step := range result.Steps {
@@ -901,6 +901,8 @@ func TestReconcileReportsBoundedExitedContainerDiagnostic(t *testing.T) {
 	longDockerError := "token=top-secret " + strings.Repeat("process failed ", 500)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/containers/container-1/logs":
+			_, _ = io.WriteString(w, "container startup failed\n")
 		case r.Method == http.MethodGet && r.URL.Path == "/containers/panel-web/json":
 			w.Header().Set("Content-Type", "application/json")
 			body := map[string]any{
@@ -930,7 +932,7 @@ func TestReconcileReportsBoundedExitedContainerDiagnostic(t *testing.T) {
 	if result.ErrorCode != "container_not_running" || !strings.Contains(result.ErrorDetail, "status=failed") || !strings.Contains(result.ErrorDetail, "exitCode=255") || !strings.Contains(result.ErrorDetail, "dockerError=") {
 		t.Fatalf("result did not retain exit diagnostics: %#v", result)
 	}
-	if len([]rune(result.ErrorDetail)) > maxContainerDiagnosticRunes+1 {
+	if len([]rune(result.ErrorDetail)) > maxContainerDiagnosticRunes+startupLogRunes+100 {
 		t.Fatalf("diagnostic runes = %d, want bounded", len([]rune(result.ErrorDetail)))
 	}
 	if strings.Contains(result.ErrorDetail, "top-secret") || !strings.Contains(result.ErrorDetail, "token=[REDACTED]") {

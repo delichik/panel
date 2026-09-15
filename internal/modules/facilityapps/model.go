@@ -50,6 +50,7 @@ type DNSSyncState struct {
 }
 
 type ReverseProxyConfig struct {
+	Deployments       []FacilityDeployment                         `json:"deployments"`
 	ID                string                                       `json:"id"`
 	Version           int                                          `json:"version"`
 	DeploymentServers []string                                     `json:"deploymentServers"`

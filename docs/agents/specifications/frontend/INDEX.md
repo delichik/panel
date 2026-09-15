@@ -14,6 +14,8 @@
 
 ## 使用要求
 
+设施逐节点诊断、失败运行日志和按需代理错误样本的反馈规则见 [interaction-model.md](interaction-model.md)。
+
 1. 写页面先选模板：Dashboard / List / MasterDetail / Editor / Settings / Workspace。一级对象选择工作台使用 `MasterDetailLayout` 统一双栏几何。阶段占位只允许在页面族接入前短期存在，交付页不得回退成通用 CollectionPage。
 2. 视觉一律经 token：业务代码禁止裸色值、裸尺寸和自造阴影。颜色、状态和控件层级来自 `web/src/styles/main.css` 中的 `--panel-*` / Tailwind theme 变量。
 3. 组件一律经自有 primitives：Button、IconButton、Input、Textarea、Select、Dialog、Dropdown、Tabs、Badge、Table、Toast、Skeleton、EmptyState、Tooltip、Switch 位于 `web/src/components/ui/`。业务页面不得引入 Naive UI 或 Vuetify。

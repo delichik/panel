@@ -262,7 +262,9 @@ func samePlannedWork(job Job, in PlanInput) bool {
 		job.DesiredSpecHash == in.DesiredSpecHash &&
 		job.DesiredRevisionID == in.DesiredRevisionID &&
 		job.RemoveData == in.RemoveData &&
-		job.ForceNonce == in.ForceNonce
+		// An automatic scan without a new force intent must preserve the
+		// existing forced Job, including its retry deadline and diagnostics.
+		(in.ForceNonce == 0 || job.ForceNonce == in.ForceNonce)
 }
 
 func validatePlanInput(in PlanInput) error {

@@ -373,6 +373,7 @@ const runtimes: Record<string, ApplicationRuntime> = {
 };
 
 export let mockFacility: ReverseProxyConfig = {
+  deployments: [{ serverId: 'srv-edge-sgp', serverName: 'Singapore', observedState: 'running', observedAt: now, operation: { id: 'job-facility-sgp', operationId: 'intent-facility-sgp', applicationId: 'facility-reverse-proxy', type: 'apply', status: 'succeeded', generation: 8, createdAt: now, updatedAt: now } }],
   id: 'reverse_proxy',
   version: 8,
   deploymentServers: ['srv-edge-sgp', 'srv-edge-sgp-02', 'srv-api-hkg', 'srv-api-hkg-02', 'srv-edge-lax'],

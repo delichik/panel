@@ -4,6 +4,8 @@
 
 ## 当前状态
 
+新增 `facilityDiagnostics.*` en/zh-CN：节点部署与容器状态区别、配置/同步错误来源、启动失败建议、按需日志样本、DNS/TLS/连接/超时解释与建议；技术详情保留多行脱敏原文。后端新增 `facility_diagnostics_unavailable` 中文翻译。
+
 - Debug 清理新增 `debugPage.cleanup.*` 阶段、时间、状态核对、部分失败及后台恢复失败文案，并完善清理范围与暂停影响说明；en / zh-CN 同步。后端 `runtime_data_maintenance`、`clear_runtime_data_resume_failed` 使用稳定错误码和中文翻译，不返回内部路径/原始异常。
 
 - 应用部署反馈新增 `applicationsPage.status.planning_failed`、`status.result_unknown`、`operationStatus.result_unknown`、`planningFailed`、`planningFile`、`planningField`、`planningFixHint`、`planningRetryHint`、`unknownResultHint`，en / zh-CN 已同步；后端新增 `application_deployment_plan_failed` 通用安全错误翻译，字段/文件名以诊断原值显示。

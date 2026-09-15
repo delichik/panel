@@ -55,6 +55,7 @@ export interface ApplicationRouteSummary {
 }
 
 export interface ReverseProxyConfig {
+	deployments?: FacilityDeployment[];
   id: string;
   version: number;
   deploymentServers: string[];
@@ -70,6 +71,31 @@ export interface ReverseProxyConfig {
   routes: number;
   enabledServers: string[];
   dnsSync?: Record<string, FacilityDnsSyncState>;
+}
+
+export interface FacilityDeployment {
+  serverId: string;
+  serverName: string;
+  observedState: string;
+  observedAt?: string;
+  operation?: LifecycleOperation;
+}
+
+export interface ProxyRequestDiagnostic {
+  code: string;
+  domain?: string;
+  upstream?: string;
+  count: number;
+  lastSeen?: string;
+  evidence?: string;
+}
+
+export interface ProxyDiagnostics {
+  serverId: string;
+  checkedAt: string;
+  status: 'sampled' | 'unavailable';
+  issues: ProxyRequestDiagnostic[];
+  truncated: boolean;
 }
 
 export interface FacilityDnsSyncState {

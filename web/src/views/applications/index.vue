@@ -27,6 +27,7 @@ import ServerContextSelector from '@/components/patterns/ServerContextSelector.v
 import TemplateVariableInput from '@/components/patterns/TemplateVariableInput.vue';
 import type { TemplateVariableOption } from '@/components/patterns/templateVariable';
 import StorageShareFacility from './StorageShareFacility.vue';
+import FacilityDiagnostics from './FacilityDiagnostics.vue';
 import AssetFileManager from '@/components/patterns/AssetFileManager.vue';
 import type { AssetFileAdapter, AssetFileItem } from '@/components/patterns/assetFileManager';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
@@ -1879,7 +1880,7 @@ onBeforeUnmount(() => {
                       <div v-if="currentOperation.error || currentOperation.errorCode || currentOperation.errorDetail" role="alert" class="grid gap-1 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
                         <strong>{{ t('applicationsPage.operationError') }}<span v-if="currentOperation.errorCode"> · {{ currentOperation.errorCode }}</span></strong>
                         <span v-if="currentOperation.error">{{ currentOperation.error }}</span>
-                        <span v-if="currentOperation.errorDetail && currentOperation.errorDetail !== currentOperation.error">{{ currentOperation.errorDetail }}</span>
+                        <details v-if="currentOperation.errorDetail && currentOperation.errorDetail !== currentOperation.error"><summary class="cursor-pointer">{{ t('facilityDiagnostics.technicalDetails') }}</summary><pre class="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words text-xs">{{ currentOperation.errorDetail }}</pre></details>
                       </div>
                     </div>
                     <div v-else-if="!planningError && selectedApplication.lastError" role="alert" class="rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">
@@ -2179,13 +2180,13 @@ onBeforeUnmount(() => {
           </section>
         </div>
       </section>
-      <aside class="grid content-start gap-3 rounded-2xl border border-border bg-card p-5">
+      <aside class="grid min-h-0 content-start gap-3 overflow-y-auto rounded-2xl border border-border bg-card p-5">
         <h3>{{ t('applicationsPage.gatewayDetails') }}</h3>
         <div v-if="facility" class="grid gap-3 text-sm">
           <div><span>{{ t('applicationsPage.lastUpdated') }}</span><strong>{{ formatDateTime(facility.updatedAt) || t('common.never') }}</strong></div>
           <div v-if="facility.operation"><span>{{ t('applicationsPage.currentOperation') }}</span><StatusBadge :status="facility.operation.status" domain="operation" /></div>
           <div v-if="facility.reconcileStopped"><StatusBadge :status="'needs_attention'" domain="operation" :label="t('applicationsPage.status.attention')" /></div>
-          <div v-if="facility.lastError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-danger">{{ facility.lastError }}</div>
+          <FacilityDiagnostics :config="facility" />
         </div>
       </aside>
     </div>

@@ -194,6 +194,24 @@
 - **不变量**：幂等成功不得跳过最终状态观测或 lease fencing。
 - **验证**：Docker start/stop already-requested-state tests，reconcile retry convergence tests。
 
+### ORCH-CTRL-007 启动稳定性验证
+
+- **前置**：apply 新建、替换或重新启动容器，或命中刚启动的同规格运行容器。
+- **动作**：Agent 进入既有 `verify_running` 步骤，每 500ms 采样，观察同一容器进程连续运行至少 10 秒；最后一次成功观测必须发生在窗口结束后。
+- **结果**：观察期内 Job 保持运行中，只有验证通过才返回无错误结果；不因单次 running 提前成功。已有相同容器的有效 StartedAt 证明已运行至少 10 秒时可直接通过；缺失、无效或未来时间戳不能免除观察。
+- **失败**：窗口内退出（含 exitCode=0）、消失、容器 ID 改变、StartedAt 改变、查询失败或取消/超时均不得成功；保留 `container_not_running/container_start_failed`、失败步骤及可用的退出码、起止时间和脱敏 Docker 错误，进入既有有界重试。取消必须及时结束等待，不运行成功后的清理步骤。
+- **不变量**：仅成功观测的时点可写入 observed；观察过程不逐次追加活动事件，仍只有一组 verify_running 步骤开始/结束。单次失败不得被拆成成功 Job 再由漂移生成无限新 Job。10 秒窗口只验证启动存活，不等价于业务健康检查或永久可用保证。
+- **验证**：`TestReconcileRequiresStableStartup` 覆盖新建/重启/近期运行容器、短时退出、正常退出、窗口末端退出、进程重启/替换、查询失败、消失、取消与稳定运行；`TestAutomaticScanPreservesForcedJob` 验证失败后的退避不被自动巡检清除。
+
+### ORCH-CTRL-008 失败运行日志快照与降级
+
+- **前置**：启动验证发现容器退出，Docker 提供有效 StartedAt/FinishedAt 与本次执行一致的不可变容器 ID。
+- **动作**：失败时最多读取一次 stdout/stderr，固定 tail=50、since=StartedAt、until=FinishedAt、follow=false，不按可复用名称抓取。
+- **结果**：日志快照放入已有 errorDetail，失败摘要不复制正文；保留多行，页面折叠展示。读取最多 2 秒、32 KiB 传输、8 KiB 解码和 3072 字符日志；状态诊断仍最多 4096 字符，截断明确标记。
+- **失败**：身份变化或时间范围缺失不读取历史；空日志/不支持/HTTP 失败/损坏帧/超时以 empty/unavailable 降级，不覆盖原退出错误、不改变 retryable、不重试读取；无退出证据的取消或替换不附另一运行日志。
+- **不变量**：附加前脱敏环境值、管理文件内容、凭据赋值、Bearer 与完整/被截断 PEM 私钥；传输截断时丢弃末尾不完整行。读取不创建 Job/task/output 事件，不改变既有 attempts/退避/熔断。
+- **验证**：`TestStartupFailureLogsScopeRedactionAndLimits`、`TestStartupFailureLogsTimeoutDoesNotRetry` 及短时退出/强制 Job 自动复用测试。
+
 ### ORCH-RETRY-001 错误结构和分类
 
 - **前置**：RuntimeReconcile 返回结构化错误或普通 error。
@@ -209,7 +227,7 @@
 - **动作**：Fail。
 - **结果**：进入 failed_retryable，nextRunAt 以 30s 为指数退避基数、上限 1h，并施加 ±20% jitter（结果仍不超过 1h）或尊重不超过 1h 的 RetryAfter；达到 MaxAttempts（默认总尝试10）改 terminal failed、`max_attempts_exceeded/retry_exhausted`，同时保留最后一次真实错误 message 并在 detail 记录原 code/class。
 - **失败**：永久错误不得无限重试；未到上限的 retryable 不得提前 terminal。
-- **不变量**：attempts 包含首次执行。
+- **不变量**：attempts 包含首次执行。同规格自动巡检没有新 force 意图时，必须保留既有强制 Job 的 force nonce、attempts、nextRunAt、intent 和错误；不得把强制部署失败后的首次巡检当成新计划而清除退避。新非零 force 和人工操作仍按既有语义处理。
 - **验证**：controller max-attempts/backoff tests。
 
 ### ORCH-LEASE-003 过期租约恢复

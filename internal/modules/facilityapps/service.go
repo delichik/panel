@@ -42,9 +42,9 @@ const (
 type facilityConfigRow struct {
 	Version                 int
 	DeploymentServerIDsJSON string `orm:"column:deployment_server_ids_json"`
-	DNSSyncJSON string `orm:"column:dns_sync_json"`
-	LastError   string
-	UpdatedAt   string
+	DNSSyncJSON             string `orm:"column:dns_sync_json"`
+	LastError               string
+	UpdatedAt               string
 }
 
 // DNSProxySyncer is the DNS provider surface used by the reverse proxy sync
@@ -207,13 +207,13 @@ func (s *Service) GetReverseProxy(ctx context.Context) (ReverseProxyConfig, erro
 		recordSubqueryError("route_summaries", summaryErr)
 	}
 	cfg.ApplicationRoutes = appRoutes
-	if operation, opErr := s.latestJobOperation(ctx); opErr == nil && operation.ID != "" {
-		cfg.Operation = &operation
-	} else if opErr != nil && !isPanelNotFound(opErr) {
-		// 还没有 Job 记录是正常状态，不记录警告。
-		recordSubqueryError("job_operation", opErr)
-	}
 	cfg.ReconcileStopped = s.proxyReconcileStopped(ctx)
+	if deployments, err := s.deploymentDiagnostics(ctx, cfg.DeploymentServers); err == nil {
+		cfg.Deployments = deployments
+		cfg.Operation = aggregateDeploymentOperation(deployments)
+	} else {
+		recordSubqueryError("deployments", err)
+	}
 	if len(warnings) > 0 {
 		cfg.Warnings = warnings
 		if strings.TrimSpace(cfg.LastError) == "" {
@@ -1837,44 +1837,6 @@ func isPanelNotFound(err error) bool {
 		return pe.Code == "not_found"
 	}
 	return false
-}
-
-// latestJobOperation 从 AppDB jobs 派生入口代理的当前操作投影（部署中/
-// 成功/失败），供设施配置展示入口代理收敛状态使用。不再读取旧 lifecycle 表。
-func (s *Service) latestJobOperation(ctx context.Context) (applications.LifecycleOperation, error) {
-	if s == nil || s.db == nil {
-		return applications.LifecycleOperation{}, panelerr.Validation("application_operation_unavailable", "Application database is unavailable")
-	}
-	var id, action, state, trigger, specHash string
-	var generation int
-	var createdAt, updatedAt time.Time
-	err := s.db.QueryRowContext(ctx, `SELECT id,action,state,trigger_type,desired_generation,desired_spec_hash,created_at,updated_at
-		FROM jobs WHERE application_id=? ORDER BY created_at DESC, id DESC LIMIT 1`, proxyApplicationID).
-		Scan(&id, &action, &state, &trigger, &generation, &specHash, &createdAt, &updatedAt)
-	if err == sql.ErrNoRows {
-		return applications.LifecycleOperation{}, panelerr.NotFound("facility_app_lifecycle_operation")
-	}
-	if err != nil {
-		return applications.LifecycleOperation{}, err
-	}
-	status := "succeeded"
-	switch state {
-	case "pending", "running", "failed_retryable":
-		status = "deploying"
-	case "failed", "cancelled":
-		status = "failed"
-	}
-	return applications.LifecycleOperation{
-		ID:            id,
-		ApplicationID: proxyApplicationID,
-		Type:          action,
-		Status:        status,
-		Generation:    generation,
-		SpecHash:      specHash,
-		Trigger:       trigger,
-		CreatedAt:     createdAt,
-		UpdatedAt:     updatedAt,
-	}, nil
 }
 
 func (cfg ReverseProxyConfig) String() string {
