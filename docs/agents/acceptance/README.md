@@ -61,6 +61,8 @@
 
 ## 5. 变更影响矩阵
 
+日志记录页面的按需读取、无定时刷新和无统计探测行为见 [UI-ACT-002/003](ui-pages.md)。
+
 失败运行日志与有界降级见 [ORCH-CTRL-008](orchestration-and-tasks.md)；设施逐节点部署、按需请求错误诊断见 [FAC-RP-012/013](applications-and-facilities.md)。
 
 修改下列对象时，至少检查对应消费者：

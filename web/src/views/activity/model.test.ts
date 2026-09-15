@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ActivityEvent } from '@/types/activity';
-import { mergeEvents, manualResolution, capacityNotice, eventDisplayMessage, eventMessage } from './model';
+import { mergeEvents, manualResolution, eventDisplayMessage, eventMessage } from './model';
 const event = (eventId: string, seq: number, text = '') => ({ eventId, seq, text } as ActivityEvent);
 // UI-ACT-001: event summaries expose real errors and explain observation rejection semantics.
 describe('activity timeline', () => {
@@ -37,15 +37,5 @@ describe('manual outcome verification', () => {
     expect(manualResolution('succeeded', '  ')).toBeUndefined();
     expect(manualResolution('unknown', 'checked the server')).toBeUndefined();
     expect(manualResolution('failed', '  remote command exited 1; service remains stopped  ')).toEqual({ outcome: 'failed', reason: 'remote command exited 1; service remains stopped' });
-  });
-});
-
-describe('log storage capacity notice', () => {
-  it('shows warning and admission-blocked states without claiming an unknown capacity is safe', () => {
-    expect(capacityNotice()).toBeUndefined();
-    expect(capacityNotice({ state: 'unknown', availableBytes: 0, totalBytes: 0 })).toBeUndefined();
-    expect(capacityNotice({ state: 'ok', availableBytes: 4000, totalBytes: 5000 })).toBeUndefined();
-    expect(capacityNotice({ state: 'warning', availableBytes: 1000, totalBytes: 5000 })).toBe('warning');
-    expect(capacityNotice({ state: 'blocked', availableBytes: 500, totalBytes: 5000 })).toBe('blocked');
   });
 });

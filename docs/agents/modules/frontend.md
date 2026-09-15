@@ -146,9 +146,9 @@
 - MasterDetailLayout 保持标准双栏几何；中等桌面选择对象后切换详情，列表与详情内部独立滚动，窄屏恢复页面滚动。
 - EventTimeline 展示请求、协调决策、步骤、输出与结果，异常默认展开，连续同一步骤输出折叠；原始技术标识折叠显示。筛选异常后可读取未筛选前后文。
 - PaginationBar 的 cursor 模式不显示虚假页码或页数。每批至多 100 条，时间线按快照切换相邻较早/较新批次以限制 DOM，只保留当前最多 100 条事件，历史导航只保存游标字符串而不缓存正文；完整历史可继续翻批或按固定快照导出 JSONL。
-- 自动接收复用 AutoRefreshControl/useAutoRefresh，标签页隐藏暂停，操作结束后仍检查迟到证据；新证据提示后由用户载入，避免调查时重排当前快照。
+- 日志页仅在首次打开和用户操作时读取，保留列表手动刷新与详情“刷新记录”；不接入 AutoRefreshControl/useAutoRefresh，不发起 tail/summary 轮询，不显示统计或新证据提示。
 - 服务器 Agent 卡片当前阶段来自 `/api/v1/executions` 执行控制；历史输出来自 `/activity/events?executionId=...&kind=output`，完整历史跳转统一日志。
-- `/activity/summary.capacity` 为 warning/blocked 时显示容量横幅和可用 MiB；blocked 明确停止接收新变更但仍可查询导出，不增加保留期限设置。自动刷新同步容量状态，并保持当前列表快照不变。
+- 日志页不再为容量横幅调用聚合统计；服务端容量准入和写入失败提示继续生效，日志查询与导出保留。
 - 原始日志页面没有修改、删除、结果覆盖与保留期限设置。指标保留策略仍由指标模块管理。
 - 成功/失败 Toast 通过 `activityPath` 解析本次响应的 operationId、acceptedEventId/eventId、executionId/taskId；不能从普通资源 id 或提示文本推断。带操作入口的 Toast 保留 15 秒，使用 RouterLink 进入对应过程。ApiError 保留错误 envelope 的关联，原 details 不变；执行等待超时/失败也携带原 taskId。
 - `availableCommands` 仅代表当前执行能力。retry/run-now 经确认后提交到 `/executions`；resolve 使用独立人工核对表单，必须选择核对成功/失败并填写依据，明确不是系统自动验证。请求追加人工观察与结果事实，界面不得修改旧时间线或隐藏此前未知状态。

@@ -12,7 +12,6 @@ import { saveBlobDownload } from '@/api/download';
 import EventTimeline from '@/components/activity/EventTimeline.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import PageHeader from '@/components/shell/PageHeader.vue';
-import AutoRefreshControl from '@/components/patterns/AutoRefreshControl.vue';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import DateTimeRangePicker from '@/components/ui/DateTimeRangePicker.vue';
@@ -23,14 +22,13 @@ import SearchInput from '@/components/ui/SearchInput.vue';
 import Select from '@/components/ui/Select.vue';
 import Tabs from '@/components/ui/Tabs.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
-import { useAutoRefresh } from '@/composables/useAutoRefresh';
 import { translateEventSummary, useI18n } from '@/i18n';
-import type { ActivityEvent, ActivityOperation, ActivityOperationDetail, ActivityQuery, ActivitySummary } from '@/types/activity';
+import type { ActivityEvent, ActivityOperation, ActivityOperationDetail, ActivityQuery } from '@/types/activity';
 import { formatDateTime } from '@/utils/datetime';
 import { createLatestRequestGuard } from '@/views/_shared/requestState';
 import { emptyTimelineWindow, replaceTimelineWindow } from './timelineWindow';
 import { initializeActivityList } from './initialLoad';
-import { eventDisplayMessage, eventMessage, eventStream, eventTone, mergeEvents, operationTone, manualResolution, capacityNotice } from './model';
+import { eventDisplayMessage, eventMessage, eventStream, eventTone, mergeEvents, operationTone, manualResolution } from './model';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -57,7 +55,6 @@ async function executeCommand() {
   } catch (err) { notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err); }
   finally { commandLoading.value = false; }
 }
-const autoRefresh = useAutoRefresh();
 const read = (key: string) => typeof route.query[key] === 'string' ? route.query[key] as string : '';
 const view = computed(() => read('view') === 'operations' ? 'operations' : 'events');
 const initialFrom = new Date(Date.now() - 86400000).toISOString();
@@ -72,18 +69,13 @@ const query = computed<ActivityQuery>(() => {
 const range = computed(() => ({ from: read('from') || initialFrom, to: read('to') }));
 const events = ref<ActivityEvent[]>([]);
 const operations = ref<ActivityOperation[]>([]);
-const summary = ref<ActivitySummary | null>(null);
-const capacityState = computed(() => capacityNotice(summary.value?.capacity));
 const loading = ref(false);
 const exporting = ref(false);
 const error = ref('');
 const hasMore = ref(false);
 const nextCursor = ref('');
 const snapshotSeq = ref(0);
-const headSeq = ref(0);
-const projectedThroughSeq = ref(0);
 const indexState = ref('');
-const newerAvailable = ref(false);
 function readCursorTrail(): string[] {
   try { const value: unknown = JSON.parse(read('cursorTrail') || '[]'); return Array.isArray(value) && value.every(item => typeof item === 'string') ? value : []; } catch { return []; }
 }
@@ -97,8 +89,6 @@ const detailError = ref('');
 const timelineWindow = ref(emptyTimelineWindow());
 const timelineHasMore = computed(() => timelineWindow.value.hasMore);
 const timelineSnapshot = ref(0);
-const detailHead = ref(0);
-const detailNewer = ref(false);
 const timelineSearch = ref('');
 const stream = ref('');
 const onlyErrors = ref(false);
@@ -136,13 +126,7 @@ async function load() {
     hasMore.value = page.hasMore;
     nextCursor.value = page.nextCursor || '';
     snapshotSeq.value = page.snapshotSeq;
-    headSeq.value = page.headSeq;
-    projectedThroughSeq.value = page.projectedThroughSeq;
     indexState.value = page.indexState;
-    newerAvailable.value = false;
-    const nextSummary = await activityApi.summary({ ...query.value, snapshotSeq: page.snapshotSeq });
-    if (!listGuard.isCurrent(request)) return;
-    summary.value = nextSummary;
   } catch (err) {
     if (!listGuard.isCurrent(request)) return;
     error.value = err instanceof Error ? err.message : t('common.loadFailed');
@@ -150,6 +134,7 @@ async function load() {
   } finally { if (listGuard.isCurrent(request)) loading.value = false; }
 }
 function refresh() {
+  if (loading.value) return;
   if (read('cursor') || read('snapshotSeq')) updateQuery({ cursor: undefined, snapshotSeq: undefined, cursorTrail: undefined });
   else void load();
 }
@@ -174,7 +159,6 @@ async function loadDetail() {
   contextGuard.invalidate();
   contextLoading.value = false;
   detailError.value = '';
-  detailNewer.value = false;
   timelineSearch.value = '';
   onlyErrors.value = false;
   stream.value = '';
@@ -190,7 +174,6 @@ async function loadDetail() {
         if (!detailGuard.isCurrent(request)) return;
         timeline.value = mergeEvents([event], context.items);
         timelineSnapshot.value = context.snapshotSeq;
-        detailHead.value = context.headSeq;
         timelineWindow.value = emptyTimelineWindow();
         return;
       }
@@ -202,7 +185,6 @@ async function loadDetail() {
     timelineWindow.value = replaceTimelineWindow(emptyTimelineWindow(), { items: result.events, nextCursor: result.nextCursor, hasMore: result.hasMore }, 'initial');
     timeline.value = timelineWindow.value.events;
     timelineSnapshot.value = result.snapshotSeq;
-    detailHead.value = result.headSeq;
     if (selectedEvent.value && !timeline.value.some(item => item.eventId === selectedEvent.value?.eventId)) await showContext(selectedEvent.value);
   } catch (err) {
     if (!detailGuard.isCurrent(request)) return;
@@ -212,6 +194,8 @@ async function loadDetail() {
 }
 async function moreTimeline(direction: 'older' | 'newer' = 'older') {
   if (!detail.value || detailLoading.value || (direction === 'older' ? !timelineHasMore.value : !timelineWindow.value.previousCursors.length)) return;
+  contextGuard.invalidate();
+  contextLoading.value = false;
   const cursor = direction === 'older' ? timelineWindow.value.nextCursor : timelineWindow.value.previousCursors.at(-1) || '';
   const request = detailGuard.begin();
   detailLoading.value = true;
@@ -246,50 +230,23 @@ async function download(operation = false) {
   finally { exporting.value = false; }
 }
 async function evidence(evidenceId: string) { try { saveBlobDownload(await activityApi.evidence(evidenceId)); } catch (err) { notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err); } }
-async function poll() {
-  const selection = selectedId.value;
-  const filterKey = JSON.stringify(query.value);
-  const snapshot = snapshotSeq.value;
-  if (loading.value || detailLoading.value) return;
-  try {
-    const page = await activityApi.tail({ ...query.value, afterSeq: headSeq.value, limit: 1 });
-    if (filterKey !== JSON.stringify(query.value)) return;
-    if (page.items.length) newerAvailable.value = true;
-    headSeq.value = page.headSeq;
-    const currentSummary = await activityApi.summary({ ...query.value, snapshotSeq: snapshot });
-    if (filterKey !== JSON.stringify(query.value) || snapshot !== snapshotSeq.value || loading.value) return;
-    summary.value = currentSummary;
-    const operationId = detail.value?.operation.operationId;
-    if (operationId) {
-      const updates = await activityApi.tail({ operationId, afterSeq: detailHead.value, limit: 1 });
-      if (selection !== selectedId.value) return;
-      if (updates.items.length) detailNewer.value = true;
-      detailHead.value = updates.headSeq;
-    }
-  } catch (err) { notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err); }
-}
 watch(search, value => { clearTimeout(searchTimer); searchTimer = setTimeout(() => changeFilter('q', value), 250); });
 watch(() => read('q'), value => { if (search.value !== value) search.value = value; });
 watch(() => JSON.stringify([view.value, query.value, read('cursor'), read('snapshotSeq')]), () => { void load(); });
-watch(selectedId, () => { if (selectedId.value) void loadDetail(); else { detailGuard.invalidate(); detail.value = null; timeline.value = []; } });
-onMounted(() => { initializeActivityList(Boolean(read('from')), initialFrom, updateQuery, load); if (selectedId.value) void loadDetail(); autoRefresh.start(poll); });
+watch(selectedId, () => { if (selectedId.value) void loadDetail(); else { detailGuard.invalidate(); contextGuard.invalidate(); contextLoading.value = false; detail.value = null; timeline.value = []; } });
+onMounted(() => { initializeActivityList(Boolean(read('from')), initialFrom, updateQuery, load); if (selectedId.value) void loadDetail(); });
 onBeforeUnmount(() => { clearTimeout(searchTimer); listGuard.invalidate(); detailGuard.invalidate(); contextGuard.invalidate(); });
 </script>
 
 <template>
   <div class="grid h-full min-h-0 min-w-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden max-lg:h-auto max-lg:min-h-full max-lg:overflow-visible">
     <PageHeader :title="t('routes.activity.title')" :description="t('activity.description')">
-      <template #actions><AutoRefreshControl :off-label="t('activity.paused')" :short-label="t('activity.every5')" :long-label="t('activity.every10')" :hint-label="t('activity.liveHint')" /><Button :loading="loading" @click="refresh"><RefreshCcw />{{ t('common.refresh') }}</Button><Button :loading="exporting" :disabled="!snapshotSeq" @click="download()"><Download />{{ t('activity.export') }}</Button></template>
+      <template #actions><Button :loading="loading" @click="refresh"><RefreshCcw />{{ t('common.refresh') }}</Button><Button :loading="exporting" :disabled="!snapshotSeq" @click="download()"><Download />{{ t('activity.export') }}</Button></template>
     </PageHeader>
     <div class="grid min-w-0 gap-3 border-b border-border px-6 pb-4 max-sm:px-4">
       <div class="grid min-w-0 gap-3 lg:grid-cols-2"><SearchInput v-model="search" clearable :label="t('common.search')" :placeholder="t('activity.search')" :clear-label="t('common.clearSearch')" /><DateTimeRangePicker :model-value="range" @update:model-value="value => updateQuery({ from: value.from, to: value.to || undefined })" /></div>
       <div class="grid min-w-0 grid-cols-2 gap-3 xl:grid-cols-4"><Select :model-value="read('domain')" :options="domainOptions" :aria-label="t('activity.domain')" @update:model-value="changeFilter('domain', $event)" /><Select :model-value="read('level')" :options="levelOptions" :aria-label="t('activity.level')" @update:model-value="changeFilter('level', $event)" /><Select :model-value="read('trigger')" :options="triggerOptions" :aria-label="t('activity.trigger')" @update:model-value="changeFilter('trigger', $event)" /><SearchInput :model-value="read('resourceId')" :label="t('activity.resource')" :placeholder="t('activity.resource')" @update:model-value="changeFilter('resourceId', $event)" /></div>
-      <div v-if="capacityState" :role="capacityState === 'blocked' ? 'alert' : 'status'" class="rounded-xl border p-3 text-sm" :class="capacityState === 'blocked' ? 'border-danger-border bg-danger-bg text-danger' : 'border-warning-border bg-warning-bg text-warning'">
-        <strong>{{ t(`activity.capacity.${capacityState}`) }}</strong>
-        <p class="m-0 mt-1">{{ t(`activity.capacity.${capacityState}Hint`) }}</p>
-        <p v-if="summary?.capacity && summary.capacity.availableBytes >= 0" class="m-0 mt-1 text-xs">{{ t('activity.capacity.remaining', { size: Math.floor(summary.capacity.availableBytes / 1048576) }) }}</p>
-      </div>
-      <div class="flex flex-wrap items-center gap-2 text-xs text-muted-foreground"><span v-if="read('executionId')">{{ t('activity.executionFilterHint') }}</span><span v-if="summary">{{ t('activity.counts', { total: summary.total, errors: summary.byLevel.error || 0, warnings: summary.byLevel.warning || 0 }) }}</span><Badge v-if="indexState && indexState !== 'ready'" tone="warning">{{ t('activity.indexState', { seq: projectedThroughSeq, head: headSeq }) }}</Badge><Button v-if="newerAvailable" size="sm" @click="refresh">{{ t('activity.newEvents') }}</Button><Button v-if="read('resourceId') || read('executionId')" size="sm" variant="ghost" @click="updateQuery({ resourceId: undefined, resourceType: undefined, executionId: undefined })">{{ t('activity.clearResource') }}</Button></div>
+      <div v-if="read('executionId') || read('resourceId') || (indexState && indexState !== 'ready')" class="flex flex-wrap items-center gap-2 text-xs text-muted-foreground"><span v-if="read('executionId')">{{ t('activity.executionFilterHint') }}</span><Badge v-if="indexState && indexState !== 'ready'" tone="warning">{{ t('activity.indexState') }}</Badge><Button v-if="read('resourceId') || read('executionId')" size="sm" variant="ghost" @click="updateQuery({ resourceId: undefined, resourceType: undefined, executionId: undefined })">{{ t('activity.clearResource') }}</Button></div>
     </div>
     <Tabs class="min-h-0 min-w-0 p-6 max-sm:p-4" :model-value="view" :tabs="[{ value: 'events', label: t('activity.events') }, { value: 'operations', label: t('activity.operations') }]" @update:model-value="updateQuery({ view: $event, operationId: undefined, eventId: undefined })">
       <MasterDetailLayout class="h-full min-h-0 max-lg:h-auto">
@@ -300,7 +257,7 @@ onBeforeUnmount(() => { clearTimeout(searchTimer); listGuard.invalidate(); detai
               <div v-else-if="view === 'events'" class="divide-y divide-border"><button v-for="event in events" :key="event.eventId" type="button" class="motion-list-item block w-full min-w-0 p-3 text-left hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40" :class="read('eventId') === event.eventId ? 'bg-accent' : ''" @click="selectEvent(event)"><span class="flex flex-wrap items-center justify-between gap-2"><time class="text-xs text-muted-foreground">{{ formatDateTime(event.occurredAt) }}</time><Badge :tone="eventTone(event.level)">{{ t(`activity.level.${event.level}`) }}</Badge></span><span class="my-2 block break-words text-sm font-medium [overflow-wrap:anywhere]">{{ message(event) }}</span><span class="block truncate text-xs text-muted-foreground">{{ event.resources?.map(resource => resource.nameSnapshot || resource.resourceId).join(' · ') || t('activity.system') }} · {{ event.actor?.name || event.sourceId }}</span></button></div>
               <div v-else class="divide-y divide-border"><button v-for="operation in operations" :key="operation.operationId" type="button" class="motion-list-item block w-full min-w-0 p-3 text-left hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40" :class="read('operationId') === operation.operationId ? 'bg-accent' : ''" @click="selectOperation(operation.operationId)"><span class="flex flex-wrap items-center justify-between gap-2"><time class="text-xs text-muted-foreground">{{ formatDateTime(operation.updatedAt) }}</time><Badge :tone="operationTone(operation.result)">{{ stateLabel(operation.result || operation.phase) }}</Badge></span><span class="my-2 block break-words text-sm font-medium">{{ translateEventSummary(t, operation.title || operation.action) }}</span><span class="block truncate text-xs text-muted-foreground">{{ operation.resources?.map(resource => resource.nameSnapshot || resource.resourceId).join(' · ') }}</span><span v-if="operation.failureSummary" class="mt-2 block break-words text-xs text-danger">{{ operation.failureSummary }}</span><span class="mt-2 block text-xs text-muted-foreground">{{ operation.actor?.name || operation.actor?.id }} · {{ t('activity.attempts', { count: operation.attemptCount }) }}</span></button></div>
             </div>
-            <PaginationBar mode="cursor" class="px-3" :has-previous="Boolean(read('cursor'))" :has-next="hasMore" :loading="loading" :previous-label="t('common.previous')" :next-label="t('common.next')" :summary-label="t('activity.snapshot', { seq: snapshotSeq })" @previous="previousPage" @next="nextPage" />
+            <PaginationBar mode="cursor" class="px-3" :has-previous="Boolean(read('cursor'))" :has-next="hasMore" :loading="loading" :previous-label="t('common.previous')" :next-label="t('common.next')" @previous="previousPage" @next="nextPage"><template #summary /></PaginationBar>
           </section>
         </template>
         <template #detail>
@@ -309,9 +266,9 @@ onBeforeUnmount(() => { clearTimeout(searchTimer); listGuard.invalidate(); detai
             <div class="relative min-h-0 min-w-0 overflow-y-auto p-4"><LoadingOverlay v-if="(detailLoading && !timeline.length) || contextLoading" :label="t('activity.loading')" /><EmptyState v-if="detailError" :title="t('common.loadFailed')" :description="detailError"><template #actions><Button @click="loadDetail">{{ t('common.retry') }}</Button></template></EmptyState><EmptyState v-else-if="!selectedId" :title="t('activity.select')" :description="t('activity.selectHint')" />
               <div v-else class="grid min-w-0 gap-4">
                 <div v-if="detail" class="grid gap-2"><h3 class="m-0 break-words text-lg font-semibold">{{ translateEventSummary(t, detail.operation.title || detail.operation.action) }}</h3><div class="flex flex-wrap gap-2"><Badge :tone="operationTone(detail.operation.result)">{{ stateLabel(detail.operation.result || detail.operation.phase) }}</Badge><Badge v-if="detail.operation.hadError" tone="warning">{{ t('activity.hadError') }}</Badge><Badge v-if="!detail.operation.evidenceComplete" tone="warning">{{ t('activity.incomplete') }}</Badge></div><p v-if="detail.operation.failureSummary" class="m-0 break-words text-sm text-danger">{{ detail.operation.failureSummary }}</p><p v-if="detail.operation.uncertainty" class="m-0 text-sm text-warning">{{ t('activity.uncertain') }}</p><details v-if="detail.executions.length"><summary class="cursor-pointer text-sm font-medium">{{ t('activity.executions') }}</summary><div v-for="execution in detail.executions" :key="execution.executionId" class="mt-2 rounded-lg border border-border p-3 text-sm"><div class="flex flex-wrap gap-2"><Badge :tone="operationTone(execution.result)">{{ stateLabel(execution.result || execution.phase) }}</Badge><span class="text-xs text-muted-foreground">{{ formatDateTime(execution.startedAt) }}</span></div><div v-for="step in detail.steps.filter(item => item.executionId === execution.executionId)" :key="step.stepId" class="mt-2 flex flex-wrap items-center justify-between gap-2"><span>{{ step.name }}</span><Badge :tone="operationTone(step.result)">{{ stateLabel(step.result || step.phase) }}</Badge></div></div></details><div v-if="detail.relatedOperations.length" class="flex flex-wrap gap-2"><Button v-for="operationId in detail.relatedOperations" :key="operationId" size="sm" @click="selectOperation(operationId)">{{ t('activity.relatedOperation') }}</Button></div></div>
-                <div class="flex flex-wrap items-center gap-2"><Button v-if="detailNewer" size="sm" @click="loadDetail">{{ t('activity.newEvidence') }}</Button><Button v-if="contextMode" size="sm" @click="contextMode = false">{{ t('activity.backTimeline') }}</Button><Button size="sm" :variant="onlyErrors ? 'primary' : 'secondary'" @click="onlyErrors = !onlyErrors">{{ t('activity.warningsErrors') }}</Button><Button size="sm" :loading="detailLoading" @click="loadDetail">{{ t('activity.latestBatch') }}</Button></div>
+                <div class="flex flex-wrap items-center gap-2"><Button v-if="contextMode" size="sm" @click="contextMode = false">{{ t('activity.backTimeline') }}</Button><Button size="sm" :variant="onlyErrors ? 'primary' : 'secondary'" @click="onlyErrors = !onlyErrors">{{ t('activity.warningsErrors') }}</Button><Button size="sm" :loading="detailLoading" @click="loadDetail">{{ t('activity.latestBatch') }}</Button></div>
                 <div class="grid gap-2 md:grid-cols-2"><SearchInput v-model="timelineSearch" :label="t('activity.searchBatch')" :placeholder="t('activity.searchBatch')" /><Select v-model="stream" :options="[{ value: '', label: t('activity.allStreams') }, { value: 'stdout', label: 'stdout' }, { value: 'stderr', label: 'stderr' }]" :aria-label="t('activity.stream')" /></div>
-                <p v-if="contextMode" class="m-0 text-xs text-muted-foreground">{{ t('activity.contextHint') }}</p><EventTimeline :events="timelineVisible" :selected-event-id="contextMode ? contextSelectedId : read('eventId')" @context="showContext" @evidence="evidence" /><p v-if="!detailLoading && !timelineVisible.length" class="text-sm text-muted-foreground">{{ t('activity.noEventsInBatch') }}</p><div v-if="!contextMode" class="flex flex-wrap gap-2"><Button v-if="timelineWindow.previousCursors.length" :loading="detailLoading" @click="moreTimeline('newer')">{{ t('activity.newerBatch') }}</Button><Button v-if="timelineHasMore" :loading="detailLoading" @click="moreTimeline('older')">{{ t('activity.olderBatch') }}</Button></div><p v-if="!detailLoading" class="m-0 text-xs text-muted-foreground">{{ t('activity.batchHint') }}</p>
+                <p v-if="contextMode" class="m-0 text-xs text-muted-foreground">{{ t('activity.contextHint') }}</p><EventTimeline :events="timelineVisible" :selected-event-id="contextMode ? contextSelectedId : read('eventId')" @context="showContext" @evidence="evidence" /><p v-if="!detailLoading && !timelineVisible.length" class="text-sm text-muted-foreground">{{ t('activity.noEventsInBatch') }}</p><div v-if="!contextMode" class="flex flex-wrap gap-2"><Button v-if="timelineWindow.previousCursors.length" :loading="detailLoading" @click="moreTimeline('newer')">{{ t('activity.newerBatch') }}</Button><Button v-if="timelineHasMore" :loading="detailLoading" @click="moreTimeline('older')">{{ t('activity.olderBatch') }}</Button></div>
               </div>
             </div>
           </section>

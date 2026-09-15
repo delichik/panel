@@ -14,6 +14,8 @@
 
 ## 使用要求
 
+日志页采用 [interaction-patterns.md](interaction-patterns.md) 的只读时间线与手动游标分页，不使用共享定时刷新或统计/新数据提示。
+
 设施逐节点诊断、失败运行日志和按需代理错误样本的反馈规则见 [interaction-model.md](interaction-model.md)。
 
 1. 写页面先选模板：Dashboard / List / MasterDetail / Editor / Settings / Workspace。一级对象选择工作台使用 `MasterDetailLayout` 统一双栏几何。阶段占位只允许在页面族接入前短期存在，交付页不得回退成通用 CollectionPage。

@@ -12,6 +12,8 @@
 
 ## 2. 前端路由基线
 
+- 日志 `/activity` 移除定时刷新、summary/tail 探测、条数/新数据/快照编号展示；仅首次和用户操作读取，保留手动刷新、详情与游标分页。对应 `UI-ACT-002/003`，无路由、API、数据库或后台任务变更。
+
 `web/src/router/index.ts` 当前含 46 个 `path` 声明（包含父路由、重定向、开发条件路由和 catch-all）。逐操作标准见 `ui-pages.md`，全局守卫及慢网路由进行中反馈见 `ui-shell-and-conventions.md`。
 
 | 页面族 | 路径/入口 |

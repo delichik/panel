@@ -1,4 +1,4 @@
-import type { ActivityCapacity, ActivityEvent } from '@/types/activity';
+import type { ActivityEvent } from '@/types/activity';
 
 /** Merge transport retries by immutable event identity, preserving receive order. */
 export function mergeEvents(existing: ActivityEvent[], incoming: ActivityEvent[]): ActivityEvent[] {
@@ -65,8 +65,4 @@ export function operationTone(result?: string) {
 export function manualResolution(outcome: string, reason: string): { outcome: 'succeeded' | 'failed'; reason: string } | undefined {
   if ((outcome !== 'succeeded' && outcome !== 'failed') || !reason.trim()) return;
   return { outcome, reason: reason.trim() };
-}
-
-export function capacityNotice(capacity?: ActivityCapacity): 'warning' | 'blocked' | undefined {
-  return capacity?.state === 'warning' || capacity?.state === 'blocked' ? capacity.state : undefined;
 }

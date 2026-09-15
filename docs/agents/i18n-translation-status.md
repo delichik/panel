@@ -4,6 +4,8 @@
 
 ## 当前状态
 
+- 日志页移除定时刷新、条数、新数据、快照编号、批次说明和容量横幅词条，简化描述、索引提示、导出与手动刷新文案；en/zh-CN 同步。其它页面的自动刷新词条保留。
+
 新增 `facilityDiagnostics.*` en/zh-CN：节点部署与容器状态区别、配置/同步错误来源、启动失败建议、按需日志样本、DNS/TLS/连接/超时解释与建议；技术详情保留多行脱敏原文。后端新增 `facility_diagnostics_unavailable` 中文翻译。
 
 - Debug 清理新增 `debugPage.cleanup.*` 阶段、时间、状态核对、部分失败及后台恢复失败文案，并完善清理范围与暂停影响说明；en / zh-CN 同步。后端 `runtime_data_maintenance`、`clear_runtime_data_resume_failed` 使用稳定错误码和中文翻译，不返回内部路径/原始异常。

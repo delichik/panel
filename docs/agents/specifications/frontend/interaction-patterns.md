@@ -45,6 +45,6 @@
 - `web/src/views/applications/index.vue`：应用搜索、状态、应用/设施连续纵向配置流、部署/网关/源站服务器多选、持久化数据下载/恢复，以及应用文件和设施静态资产共用的 `AssetFileManager` 已接入统一 primitives/patterns。 未保存修改的离开/取消保护已接入 `ConfirmDialog`。
 - `web/src/views/security/index.vue` 与 `web/src/views/resources/index.vue`：服务器上下文选择已接入 `ServerContextSelector` 及其加载骨架，页面不得再在同一上下文区域叠加 Select 下拉。
 
-- `web/src/components/activity/EventTimeline.vue`：统一只读事实时间线，同步骤连续输出可折叠，异常和决策展开，技术标识折叠；通过 context/evidence 事件交由页面读取上下文与下载证据。`/activity` 页面同时接入自动刷新与 cursor 分页；正文每次替换为当前 100 条批次，较早/较新导航只保存游标，禁止不断追加 DOM。
+- `web/src/components/activity/EventTimeline.vue`：统一只读事实时间线，同步骤连续输出可折叠，异常和决策展开，技术标识折叠；通过 context/evidence 事件交由页面读取上下文与下载证据。`/activity` 只按需读取，保留手动刷新与 cursor 分页，不接入共享自动刷新，不显示全量计数或新数据提示；正文每次替换为当前 100 条批次，较早/较新导航只保存游标，禁止不断追加 DOM。
 
 - `ActivityLink` 统一从资源或操作进入 `/activity`，接受 operationId/eventId/executionId/resourceType/resourceId；不得再创建独立任务日志或协调历史入口。
