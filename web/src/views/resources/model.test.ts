@@ -15,6 +15,7 @@ import type { ContainerDto, ImageDto } from '@/types/resources';
 const server: ServerDto = {
   id: 'srv-1',
   name: 'edge',
+  kind: 'normal',
   host: '10.0.0.1',
   port: 22,
   credentialId: 'cred-1',
