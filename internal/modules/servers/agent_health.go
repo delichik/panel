@@ -112,7 +112,7 @@ func agentStatusNeedsDeploy(srv Server) bool {
 }
 
 func nonDefaultAgentURLMessage(srv Server) string {
-	return "agent URL must be " + agentDefaultURL(srv.Host) + "; redeployment required"
+	return "agent URL must be " + agentDefaultURLFor(srv) + "; redeployment required"
 }
 
 func agentVersionMismatchMessage(version string) string {

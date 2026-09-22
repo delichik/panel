@@ -40,7 +40,7 @@ func (r *ServerRepository) ListSummaries(ctx context.Context) ([]domain.ServerSu
 	rows, err := r.db.QueryContext(ctx, `SELECT id,name,host,port,credential_id,reachable,sudo_passwordless,privilege_mode,last_checked_at,last_error,updated_at,
 		COALESCE(json_extract(traits,'$."agent.enabled"'),''),COALESCE(json_extract(traits,'$."agent.url"'),''),COALESCE(json_extract(traits,'$."agent.status"'),''),
 		COALESCE(json_extract(traits,'$."sys.ufw_supported"'),''),COALESCE(json_extract(traits,'$."sys.ufw_installed"'),''),
-		COALESCE(host_key_mismatch,0)
+		COALESCE(host_key_mismatch,0),kind
 		FROM servers ORDER BY created_at DESC,id ASC`)
 	if err != nil {
 		return nil, err
@@ -53,7 +53,7 @@ func (r *ServerRepository) ListSummaries(ctx context.Context) ([]domain.ServerSu
 		var lastChecked sql.NullString
 		var updatedAt, agentEnabled, agentURL, agentStatus, ufwSupported, ufwInstalled string
 		var hostKeyMismatch int
-		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &item.CredentialID, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &ufwSupported, &ufwInstalled, &hostKeyMismatch); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &item.CredentialID, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &ufwSupported, &ufwInstalled, &hostKeyMismatch, &item.Kind); err != nil {
 			return nil, err
 		}
 		item.Reachable = reachable == 1
@@ -90,7 +90,7 @@ func (r *ServerRepository) ListSummaryPage(ctx context.Context, page, pageSize i
 	rows, err := r.db.QueryContext(ctx, `SELECT id,name,host,port,credential_id,reachable,sudo_passwordless,privilege_mode,last_checked_at,last_error,updated_at,
 		COALESCE(json_extract(traits,'$."agent.enabled"'),''),COALESCE(json_extract(traits,'$."agent.url"'),''),COALESCE(json_extract(traits,'$."agent.status"'),''),
 		COALESCE(json_extract(traits,'$."sys.ufw_supported"'),''),COALESCE(json_extract(traits,'$."sys.ufw_installed"'),''),
-		COALESCE(host_key_mismatch,0)
+		COALESCE(host_key_mismatch,0),kind
 		FROM servers WHERE `+filter+` ORDER BY created_at DESC,id ASC LIMIT ? OFFSET ?`, listArgs...)
 	if err != nil {
 		return httpx.ListPage[domain.ServerSummary]{}, err
@@ -103,7 +103,7 @@ func (r *ServerRepository) ListSummaryPage(ctx context.Context, page, pageSize i
 		var lastChecked sql.NullString
 		var updatedAt, agentEnabled, agentURL, agentStatus, ufwSupported, ufwInstalled string
 		var hostKeyMismatch int
-		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &item.CredentialID, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &ufwSupported, &ufwInstalled, &hostKeyMismatch); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &item.CredentialID, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &ufwSupported, &ufwInstalled, &hostKeyMismatch, &item.Kind); err != nil {
 			return httpx.ListPage[domain.ServerSummary]{}, err
 		}
 		item.Reachable, item.Sudo.Passwordless = reachable == 1, sudo == 1
@@ -158,8 +158,8 @@ func (r *ServerRepository) Update(ctx context.Context, srv domain.Server) error 
 	if err != nil {
 		return err
 	}
-	result, err := orm.RawExec(ctx, r.db, `UPDATE servers SET name=?,host=?,ipv4=?,ipv6=?,port=?,ssh_username=?,credential_id=?,docker_host=?,traits=?,variables_json=?,notes=?,updated_at=? WHERE id=?`,
-		srv.Name, srv.Host, srv.IPv4, srv.IPv6, srv.Port, srv.SSHUsername, srv.CredentialID, srv.DockerHost, string(traits), string(variables), srv.Notes,
+	result, err := orm.RawExec(ctx, r.db, `UPDATE servers SET name=?,host=?,ipv4=?,ipv6=?,port=?,ssh_username=?,credential_id=?,docker_host=?,kind=?,agent_public_port=?,traits=?,variables_json=?,notes=?,updated_at=? WHERE id=?`,
+		srv.Name, srv.Host, srv.IPv4, srv.IPv6, srv.Port, srv.SSHUsername, srv.CredentialID, srv.DockerHost, srv.Kind, srv.AgentPublicPort, string(traits), string(variables), srv.Notes,
 		srv.UpdatedAt.UTC().Format(time.RFC3339Nano), srv.ID)
 	if err != nil {
 		return err
@@ -193,9 +193,11 @@ func (r *ServerRepository) Delete(ctx context.Context, serverID string) error {
 // scanServer 的默认值与归一化语义（空 privilege_mode -> none 等）。
 func toDomainServer(m models.Server) domain.Server {
 	srv := domain.Server{
-		ID:            m.ID,
-		Name:          m.Name,
-		Host:          m.Host,
+		ID:              m.ID,
+		Name:            m.Name,
+		Kind:            m.Kind,
+		Host:            m.Host,
+		AgentPublicPort: m.AgentPublicPort,
 		IPv4:          m.IPv4,
 		IPv6:          m.IPv6,
 		Port:          m.Port,
@@ -243,7 +245,9 @@ func fromDomainServer(srv domain.Server) *models.Server {
 	return &models.Server{
 		ID:                     srv.ID,
 		Name:                   srv.Name,
+		Kind:                   srv.Kind,
 		Host:                   srv.Host,
+		AgentPublicPort:        srv.AgentPublicPort,
 		IPv4:                   srv.IPv4,
 		IPv6:                   srv.IPv6,
 		Port:                   srv.Port,

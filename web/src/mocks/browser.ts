@@ -26,6 +26,7 @@ import {
 import { getOverviewCardData, getOverviewCards, overviewFromServers, setOverviewCards } from './overview';
 import {
   accepted,
+  addNatPort,
   createCredential,
   createServer,
   deleteCredential,
@@ -33,12 +34,16 @@ import {
   mockCredentials,
   mockServerMetrics,
   mockServers,
+  natPortsFor,
   probeServer,
+  removeNatPort,
   testServer,
   updateCredential,
+  updateNatPort,
   updateServer,
 } from './servers';
 import type { CredentialInput } from '@/types/credentials';
+import type { NatPortMappingSave } from '@/types/servers';
 import type { OverviewCardConfigurationSet } from '@/types/overview';
 import type { ServerSaveInput } from '@/types/servers';
 import {
@@ -269,6 +274,20 @@ export function installMockApi() {
       return series ? json(series) : error('server_not_found', 'Server was not found.', 404);
     }
     const serverMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)$/);
+    const natPortsMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)\/nat-ports$/);
+    const natPortItemMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)\/nat-ports\/([^/]+)$/);
+    if (natPortsMatch && method(init) === 'GET') return json(natPortsFor(decodeURIComponent(natPortsMatch[1])));
+    if (natPortsMatch && method(init) === 'POST') {
+      const created = addNatPort(decodeURIComponent(natPortsMatch[1]), await body<NatPortMappingSave>(init));
+      return created ? json(created, 201) : error('nat_port_server_not_nat', 'NAT port mappings can only be managed on NAT servers.', 422);
+    }
+    if (natPortItemMatch && method(init) === 'PUT') {
+      const saved = updateNatPort(decodeURIComponent(natPortItemMatch[1]), decodeURIComponent(natPortItemMatch[2]), await body<NatPortMappingSave>(init));
+      return saved ? json(saved) : error('nat_port_mapping_not_found', 'NAT port mapping was not found.', 404);
+    }
+    if (natPortItemMatch && method(init) === 'DELETE') {
+      return removeNatPort(decodeURIComponent(natPortItemMatch[1]), decodeURIComponent(natPortItemMatch[2])) ? json(null, 204) : error('nat_port_mapping_not_found', 'NAT port mapping was not found.', 404);
+    }
     if (serverMatch && method(init) === 'GET') {
       const found = mockServers.find((item) => item.id === decodeURIComponent(serverMatch[1]));
       return found ? json(found) : error('server_not_found', 'Server was not found.', 404);

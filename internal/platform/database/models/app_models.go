@@ -31,10 +31,12 @@ func (*Credential) TableConstraints() []string {
 type Server struct {
 	ID                     string         `orm:"primary_key"`
 	Name                   string         `orm:"not_null"`
+	Kind                   string         `orm:"not_null;default:'normal'"`
 	Host                   string         `orm:"not_null"`
 	IPv4                   string         `orm:"not_null;default:'';column:ipv4"`
 	IPv6                   string         `orm:"not_null;default:'';column:ipv6"`
 	Port                   int            `orm:"not_null"`
+	AgentPublicPort        int            `orm:"not_null;default:0;column:agent_public_port"`
 	SSHUsername            string         `orm:"not_null;default:''"`
 	CredentialID           string         `orm:"not_null;references:credentials(id)"`
 	DockerHost             string         `orm:"not_null;default:'unix:///var/run/docker.sock'"`
@@ -61,6 +63,34 @@ type Server struct {
 }
 
 func (*Server) TableName() string { return "servers" }
+
+// NatPortMapping 对应 nat_port_mappings：记录 NAT 服务器上某个应用暴露的
+// 内部宿主端口对应供应商开放的公网端口。公网端口在供应商后台手动开放。
+type NatPortMapping struct {
+	ID         string    `orm:"primary_key"`
+	ServerID   string    `orm:"not_null;references:servers(id);on_delete:CASCADE"`
+	AppID      string    `orm:"not_null;default:''"`
+	HostPort   int       `orm:"not_null"`
+	PublicPort int       `orm:"not_null"`
+	Protocol   string    `orm:"not_null;default:'tcp'"`
+	Label      string    `orm:"not_null;default:''"`
+	Notes      string    `orm:"not_null;default:''"`
+	CreatedAt  time.Time `orm:"not_null"`
+	UpdatedAt  time.Time `orm:"not_null"`
+}
+
+func (*NatPortMapping) TableName() string { return "nat_port_mappings" }
+
+// ExtraIndexDDL 返回 nat_port_mappings 无法用 orm tag 表达的复合 UNIQUE：
+// 同一 NAT 服务器的宿主端口与公网端口各自唯一。
+func (*NatPortMapping) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"nat_port_mappings": {
+			"CREATE UNIQUE INDEX IF NOT EXISTS uq_nat_port_mappings_server_public ON nat_port_mappings(server_id, public_port)",
+			"CREATE UNIQUE INDEX IF NOT EXISTS uq_nat_port_mappings_server_host ON nat_port_mappings(server_id, host_port)",
+		},
+	}
+}
 
 // PackageUpdate 对应 package_updates。
 type PackageUpdate struct {

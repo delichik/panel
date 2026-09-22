@@ -1,5 +1,5 @@
 import { apiClient, type ApiRequestOptions } from './client';
-import type { OperationAccepted, ServerDto, ServerProbeResult, ServerSaveInput } from '@/types/servers';
+import type { NatPortConfig, NatPortMapping, NatPortMappingSave, OperationAccepted, ServerDto, ServerProbeResult, ServerSaveInput } from '@/types/servers';
 import type { ListPage } from '@/types/pagination';
 
 export interface MetricsPoint {
@@ -78,5 +78,17 @@ export const serversApi = {
   },
   installUfw(id: string) {
     return apiClient.post<OperationAccepted>(`/servers/${encodeURIComponent(id)}/ufw/install`);
+  },
+  natPorts(id: string) {
+    return apiClient.get<NatPortConfig>(`/servers/${encodeURIComponent(id)}/nat-ports`);
+  },
+  addNatPort(id: string, input: NatPortMappingSave) {
+    return apiClient.post<NatPortMapping>(`/servers/${encodeURIComponent(id)}/nat-ports`, input);
+  },
+  updateNatPort(id: string, mappingId: string, input: NatPortMappingSave) {
+    return apiClient.put<NatPortMapping>(`/servers/${encodeURIComponent(id)}/nat-ports/${encodeURIComponent(mappingId)}`, input);
+  },
+  deleteNatPort(id: string, mappingId: string) {
+    return apiClient.delete<void>(`/servers/${encodeURIComponent(id)}/nat-ports/${encodeURIComponent(mappingId)}`);
   },
 };

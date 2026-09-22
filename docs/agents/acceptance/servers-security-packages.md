@@ -24,7 +24,12 @@
 - `SRV-SAVE-005`：创建记录成功且 SSH executor 可用时必须创建并立即启动 `server_info_collect` bootstrap 任务，响应携带 `initialTaskId`；任务创建失败必须保留刚建记录并标记不可达/失败态，不得删除用户数据。
 - `SRV-SAVE-006`：首次 bootstrap 只经 SSH探测发行版、结构化架构和非交互特权；初始信息采集失败必须把任务置失败、标记服务器不可达并记录具体错误，记录保留供用户重试、编辑或自行删除；之后 Agent 部署或完整信息刷新失败同样不得删除服务器。
 - `SRV-SAVE-007`：更新必须先保存资源；随后的连通性探测失败只把节点标记不可达并记录错误，不得回滚更新或阻断 DNS 同步触发。
-- `SRV-SAVE-008`：更新改变连接 host 且已配置 Agent 时，必须更新默认 `https://host:9786` endpoint、标记 incompatible、清除节点证书指纹/有效期并要求重部署。
+- `SRV-SAVE-008`：更新改变连接 host 且已配置 Agent 时，必须更新该服务器当前有效的 Agent endpoint、标记 incompatible、清除节点证书指纹/有效期并要求重部署。普通服务器固定为 `https://host:9786`；NAT 服务器使用 `SRV-NAT-002` 配置的对外端口。
+- `SRV-NAT-001`：服务器 `kind` 只允许 `normal|nat`，缺省为 `normal`；创建、更新、详情和列表摘要都必须返回该字段。非法 kind 返回 `server_kind_invalid`，不得保存。
+- `SRV-NAT-002`：`agentPublicPort` 只对 NAT 服务器生效，必须位于 1..65535；普通服务器或非法值保存为 0。NAT Agent 仍在服务器内部监听 9786，但 Panel 生成和校验的 Agent URL 必须使用 `https://host:<agentPublicPort>`。未配置时沿用 9786。
+- `SRV-NAT-003`：NAT 服务器不得成为反向代理全局网关、应用 origin 或 AnyAccess relay；保存网关或校验应用路由时分别返回 `reverse_proxy_server_nat_unsupported`、`reverse_proxy_origin_server_nat_unsupported`。服务器从普通切换为 NAT 时必须移除 `agent.reverse_proxy.enabled`，后续协调不得继续放行 80/443。
+- `SRV-NAT-004`：`GET/POST /servers/{id}/nat-ports` 与 `PUT/DELETE /servers/{id}/nat-ports/{mappingID}` 只允许 NAT 服务器；普通服务器返回 `nat_port_server_not_nat`。映射记录宿主端口、供应商开放的公网端口、协议、应用、标签和备注；两个端口必须位于 1..65535，同一服务器的宿主端口和公网端口各自唯一，冲突返回 `nat_port_host_conflict` 或 `nat_port_public_conflict`。
+- `SRV-NAT-005`：NAT 端口读取必须同时返回只读“需开放端口”清单，至少包含 SSH 端口、有效 Agent 对外端口和全部应用公网端口。Panel 不得探测、申请或实际开放这些端口；删除服务器时映射必须随外键级联删除。
 - `SRV-SAVE-009`：保存 IP 变化或删除服务器时必须异步触发引用该服务器的入口代理 DNS 同步；同步失败不回滚本地保存，且必须可由任务状态诊断。
 - `SRV-DEL-001`：删除服务器是纯本地控制面操作，不连接目标机；目标机失联不得阻止删除。
 - `SRV-DEL-002`：删除必须取消该服务器 queued、scheduled、failed_retryable 和可取消的 running 任务；已取消任务不得被迟到 worker 覆盖终态，正在执行的不可取消软件包升级不得被取消。

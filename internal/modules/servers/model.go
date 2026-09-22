@@ -18,6 +18,18 @@ type UFWAllowRequest = domain.UFWAllowRequest
 type Fail2BanState = domain.Fail2BanState
 type Fail2BanUpdateRequest = domain.Fail2BanUpdateRequest
 type Fail2BanEnableRequest = domain.Fail2BanEnableRequest
+type NatPortMapping = domain.NatPortMapping
+type NatPortMappingSave = domain.NatPortMappingSave
+type NatPortNeedOpen = domain.NatPortNeedOpen
+type NatPortConfig = domain.NatPortConfig
+
+const (
+	ServerKindNormal = domain.ServerKindNormal
+	ServerKindNAT    = domain.ServerKindNAT
+)
+
+// IsValidServerKind reports whether kind is a known server kind.
+func IsValidServerKind(kind string) bool { return domain.IsValidServerKind(kind) }
 type Fail2BanConfig = domain.Fail2BanConfig
 type Fail2BanJail = domain.Fail2BanJail
 type AgentCertificateBundle = domain.AgentCertificateBundle

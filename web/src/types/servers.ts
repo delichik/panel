@@ -26,10 +26,12 @@ export interface ServerPrivilegeState {
 export interface ServerDto {
   id: string;
   name: string;
+  kind: string;
   host: string;
   ipv4?: string;
   ipv6?: string;
   port: number;
+  agentPublicPort?: number;
   sshUsername?: string;
   credentialId: string;
   dockerHost?: string;
@@ -52,9 +54,11 @@ export interface ServerDto {
 
 export interface ServerSaveInput {
   name: string;
+  kind: string;
   ipv4: string;
   ipv6: string;
   port: number;
+  agentPublicPort: number;
   sshUsername: string;
   credentialId: string;
   dockerHost: string;
@@ -85,4 +89,42 @@ export interface ServerReference {
   id: string;
   name: string;
   host: string;
+}
+
+export interface NatPortMapping {
+  id: string;
+  serverId: string;
+  appId: string;
+  appName?: string;
+  hostPort: number;
+  publicPort: number;
+  protocol: string;
+  label: string;
+  notes: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface NatPortMappingSave {
+  appId: string;
+  hostPort: number;
+  publicPort: number;
+  protocol: string;
+  label: string;
+  notes: string;
+}
+
+export interface NatPortNeedOpen {
+  kind: 'ssh' | 'agent' | 'app';
+  port: number;
+  label: string;
+  target?: string;
+}
+
+export interface NatPortConfig {
+  serverId: string;
+  serverHost: string;
+  kind: string;
+  mappings: NatPortMapping[];
+  needOpen: NatPortNeedOpen[];
 }

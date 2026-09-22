@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { AlertTriangle, Cable, KeyRound, PlayCircle, Plus, RefreshCcw, ServerCog, ShieldPlus, Trash2, Wrench } from '@lucide/vue';
+import { AlertTriangle, Cable, KeyRound, Pencil, PlayCircle, Plus, RefreshCcw, ServerCog, ShieldPlus, Trash2, Wrench } from '@lucide/vue';
 import { credentialsApi } from '@/api/credentials';
 import { serversApi, type ServerMetricsRange, type ServerMetricsSeries } from '@/api/servers';
 import { tasksApi } from '@/api/tasks';
@@ -11,11 +11,13 @@ import Button from '@/components/ui/Button.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import Dialog from '@/components/ui/Dialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
+import Input from '@/components/ui/Input.vue';
 import PaginationBar from '@/components/ui/PaginationBar.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
 import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import StatusBadge from '@/components/ui/StatusBadge.vue';
+import Textarea from '@/components/ui/Textarea.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
@@ -24,7 +26,7 @@ import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useAutoRefresh } from '@/composables/useAutoRefresh';
 import { useI18n } from '@/i18n';
 import type { CredentialDto } from '@/types/credentials';
-import type { ServerDto } from '@/types/servers';
+import type { ServerDto, NatPortConfig, NatPortMapping } from '@/types/servers';
 import type { TaskDto, TaskLog } from '@/types/tasks';
 import { agentTone, canInstallUfw, canRunPrivilegedOperation, credentialLabel, serverReachabilityTone } from './model';
 import ServerFormDialog from './ServerFormDialog.vue';
@@ -95,6 +97,20 @@ const metricsRangeOptions = [
   { value: '1d', label: '1d' },
   { value: '7d', label: '7d' },
 ];
+const natConfig = ref<NatPortConfig | null>(null);
+const natLoading = ref(false);
+const natError = ref('');
+const natDialogOpen = ref(false);
+const natEditingId = ref('');
+const natForm = reactive({ appId: '', hostPort: '', publicPort: '', protocol: 'tcp', label: '', notes: '' });
+const natFormError = ref('');
+const natSaving = ref(false);
+let natRequestId = 0;
+const natProtocolOptions = [
+  { value: 'tcp', label: 'tcp' },
+  { value: 'udp', label: 'udp' },
+];
+
 
 const selectedServer = computed(() => serverDetails.value[selectedId.value] ?? servers.value.find((item) => item.id === selectedId.value) ?? null);
 
@@ -143,10 +159,103 @@ watch(selectedId, () => {
   void loadMetrics(true);
   void loadAgentDeployment(true);
   void loadInitialTask(true);
+  void loadNatConfig();
 });
 watch(metricsRange, () => {
   void loadMetrics(true);
 });
+
+async function loadNatConfig() {
+  const id = selectedId.value;
+  const requestId = ++natRequestId;
+  natConfig.value = null;
+  natError.value = '';
+  if (!id || selectedServer.value?.kind !== 'nat') return;
+  natLoading.value = true;
+  try {
+    const cfg = await serversApi.natPorts(id);
+    if (requestId !== natRequestId || selectedId.value !== id) return;
+    natConfig.value = cfg;
+  } catch (err) {
+    if (isAbortError(err)) return;
+    natError.value = err instanceof Error ? err.message : t('serversPage.natLoadFailed');
+  } finally {
+    if (requestId === natRequestId) natLoading.value = false;
+  }
+}
+
+function openNatAdd() {
+  natEditingId.value = '';
+  Object.assign(natForm, { appId: '', hostPort: '', publicPort: '', protocol: 'tcp', label: '', notes: '' });
+  natFormError.value = '';
+  natDialogOpen.value = true;
+}
+
+function openNatEdit(mapping: NatPortMapping) {
+  natEditingId.value = mapping.id;
+  Object.assign(natForm, { appId: mapping.appId, hostPort: String(mapping.hostPort), publicPort: String(mapping.publicPort), protocol: mapping.protocol, label: mapping.label, notes: mapping.notes });
+  natFormError.value = '';
+  natDialogOpen.value = true;
+}
+
+function validateNatForm(): boolean {
+  const hostPort = Number(natForm.hostPort);
+  const publicPort = Number(natForm.publicPort);
+  if (!Number.isInteger(hostPort) || hostPort < 1 || hostPort > 65535) { natFormError.value = t('serversPage.natValidationHostPort'); return false; }
+  if (!Number.isInteger(publicPort) || publicPort < 1 || publicPort > 65535) { natFormError.value = t('serversPage.natValidationPublicPort'); return false; }
+  return true;
+}
+
+async function saveNatPort() {
+  if (!validateNatForm()) return;
+  const id = selectedId.value;
+  if (!id) return;
+  natSaving.value = true;
+  natFormError.value = '';
+  const payload = {
+    appId: natForm.appId.trim(),
+    hostPort: Number(natForm.hostPort),
+    publicPort: Number(natForm.publicPort),
+    protocol: natForm.protocol,
+    label: natForm.label.trim(),
+    notes: natForm.notes.trim(),
+  };
+  try {
+    if (natEditingId.value) {
+      await serversApi.updateNatPort(id, natEditingId.value, payload);
+      notifySuccess(t('serversPage.natUpdated'));
+    } else {
+      await serversApi.addNatPort(id, payload);
+      notifySuccess(t('serversPage.natAdded'));
+    }
+    natDialogOpen.value = false;
+    void loadNatConfig();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : t('serversPage.natSaveFailed');
+    natFormError.value = natErrorMessage(message);
+    notifyError(message, err);
+  } finally {
+    natSaving.value = false;
+  }
+}
+
+async function deleteNatPort(mapping: NatPortMapping) {
+  const id = selectedId.value;
+  if (!id) return;
+  try {
+    await serversApi.deleteNatPort(id, mapping.id);
+    notifySuccess(t('serversPage.natDeleted'));
+    void loadNatConfig();
+  } catch (err) {
+    notifyError(err instanceof Error ? err.message : t('serversPage.natSaveFailed'), err);
+  }
+}
+
+function natErrorMessage(message: string): string {
+  if (message.includes('Public port is already mapped')) return t('serversPage.natPublicConflict');
+  if (message.includes('Host port is already mapped')) return t('serversPage.natHostConflict');
+  return message;
+}
 
 async function loadServerDetail() {
   const id = selectedId.value;
@@ -773,9 +882,63 @@ onBeforeUnmount(() => {
                   <dl class="mt-3 grid grid-cols-2 gap-3 text-sm max-md:grid-cols-1">
                     <div><dt>{{ t('serversPage.host') }}</dt><dd>{{ selectedServer.host }}</dd></div>
                     <div><dt>{{ t('serversPage.port') }}</dt><dd>{{ selectedServer.port }}</dd></div>
+                    <div><dt>{{ t('serversPage.kind') }}</dt><dd>{{ selectedServer.kind === 'nat' ? t('serversPage.kindNat') : t('serversPage.kindNormal') }}</dd></div>
                     <div><dt>{{ t('serversPage.credential') }}</dt><dd>{{ credentialLabel(selectedServer.credentialId, credentials) || t('common.notAvailable') }}</dd></div>
                     <div><dt>{{ t('serversPage.dockerHost') }}</dt><dd>{{ selectedServer.dockerHost || t('common.notAvailable') }}</dd></div>
                   </dl>
+                </section>
+
+                <section v-if="selectedServer.kind === 'nat'" class="rounded-2xl border border-border bg-muted p-4">
+                  <div class="flex flex-wrap items-center justify-between gap-3">
+                    <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.natPorts') }}</h3>
+                    <Button size="sm" variant="secondary" @click="openNatAdd"><Plus />{{ t('serversPage.natAddMapping') }}</Button>
+                  </div>
+                  <p class="mt-1 text-xs text-muted-foreground">{{ t('serversPage.natPortsHint') }}</p>
+
+                  <div class="mt-3 grid gap-2">
+                    <h4 class="m-0 text-xs font-semibold text-foreground">{{ t('serversPage.natNeedOpen') }}</h4>
+                    <p class="m-0 text-xs text-muted-foreground">{{ t('serversPage.natNeedOpenHint') }}</p>
+                    <LoadingOverlay v-if="natLoading && !natConfig" />
+                    <p v-if="natError && !natConfig" class="m-0 text-sm text-danger">{{ natError }}</p>
+                    <div v-else class="flex flex-wrap gap-2">
+                      <span v-for="item in natConfig?.needOpen ?? []" :key="`${item.kind}-${item.port}`" class="inline-flex items-center gap-1 rounded-lg border border-border bg-card px-2 py-1 text-xs">
+                        <span class="text-muted-foreground">{{ item.label }}</span>
+                        <span class="panel-mono font-semibold text-foreground">{{ item.port }}</span>
+                        <span v-if="item.target" class="panel-mono text-muted-foreground">→ {{ item.target }}</span>
+                      </span>
+                    </div>
+                  </div>
+
+                  <div class="mt-3 overflow-x-auto">
+                    <table class="w-full text-left text-sm">
+                      <thead>
+                        <tr class="text-xs text-muted-foreground">
+                          <th class="py-1 pr-2">{{ t('serversPage.natHostPort') }}</th>
+                          <th class="py-1 pr-2">{{ t('serversPage.natPublicPort') }}</th>
+                          <th class="py-1 pr-2">{{ t('serversPage.natApp') }}</th>
+                          <th class="py-1 pr-2">{{ t('serversPage.natLabel') }}</th>
+                          <th class="py-1 pr-2">{{ t('serversPage.natAccess') }}</th>
+                          <th class="py-1" />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="m in natConfig?.mappings ?? []" :key="m.id" class="border-t border-border">
+                          <td class="py-2 pr-2"><span class="panel-mono">{{ m.hostPort }}</span></td>
+                          <td class="py-2 pr-2"><span class="panel-mono">{{ m.publicPort }}/{{ m.protocol }}</span></td>
+                          <td class="py-2 pr-2">{{ m.appName || m.appId || t('common.notAvailable') }}</td>
+                          <td class="py-2 pr-2">{{ m.label }}</td>
+                          <td class="py-2 pr-2"><span class="panel-mono">{{ natConfig?.serverHost }}:{{ m.publicPort }}</span></td>
+                          <td class="py-2 text-right">
+                            <div class="flex justify-end gap-1">
+                              <Button size="sm" variant="ghost" @click="openNatEdit(m)"><Pencil /></Button>
+                              <Button size="sm" variant="ghost" @click="deleteNatPort(m)"><Trash2 /></Button>
+                            </div>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                    <p v-if="(natConfig?.mappings?.length ?? 0) === 0 && !natLoading" class="m-0 mt-2 text-sm text-muted-foreground">{{ t('serversPage.natEmpty') }}</p>
+                  </div>
                 </section>
                 <section class="rounded-2xl border border-border bg-muted p-4">
                   <div class="flex flex-wrap items-center justify-between gap-3">
@@ -881,6 +1044,36 @@ onBeforeUnmount(() => {
       @saved="handleSaved"
       @refresh-credentials="loadCredentials"
     />
+
+    <Dialog v-model:open="natDialogOpen" :title="t(natEditingId ? 'serversPage.natEditMapping' : 'serversPage.natAddMapping')" :close-label="t('common.cancel')">
+      <div class="grid gap-4">
+        <div class="grid gap-1">
+          <label class="grid gap-1 text-sm">{{ t('serversPage.natHostPort') }}<Input id="nat-form-host-port" v-model="natForm.hostPort" type="number" /></label>
+          <p class="m-0 text-xs text-muted-foreground">{{ t('serversPage.natHostPortHint') }}</p>
+        </div>
+        <div class="grid gap-1">
+          <label class="grid gap-1 text-sm">{{ t('serversPage.natPublicPort') }}<Input id="nat-form-public-port" v-model="natForm.publicPort" type="number" /></label>
+          <p class="m-0 text-xs text-muted-foreground">{{ t('serversPage.natPublicPortHint') }}</p>
+        </div>
+        <div class="grid gap-1">
+          <label class="grid gap-1 text-sm">{{ t('serversPage.natProtocol') }}<Select v-model="natForm.protocol" :options="natProtocolOptions" /></label>
+        </div>
+        <div class="grid gap-1">
+          <label class="grid gap-1 text-sm">{{ t('serversPage.natApp') }}<Input v-model="natForm.appId" :placeholder="t('serversPage.natAppIdHint')" /></label>
+        </div>
+        <div class="grid gap-1">
+          <label class="grid gap-1 text-sm">{{ t('serversPage.natLabel') }}<Input v-model="natForm.label" /></label>
+        </div>
+        <div class="grid gap-1">
+          <label class="grid gap-1 text-sm">{{ t('serversPage.natNotes') }}<Textarea v-model="natForm.notes" /></label>
+        </div>
+        <p v-if="natFormError" class="m-0 text-sm text-danger">{{ natFormError }}</p>
+      </div>
+      <template #footer>
+        <Button variant="secondary" @click="natDialogOpen = false">{{ t('common.cancel') }}</Button>
+        <Button variant="primary" :loading="natSaving" :disabled="false" @click="saveNatPort">{{ natEditingId ? t('common.save') : t('common.create') }}</Button>
+      </template>
+    </Dialog>
 
     <Dialog v-model:open="confirmDialog" :title="t('serversPage.deleteServer')" :description="confirmTarget ? t('serversPage.deleteServerDescription', { name: confirmTarget.name }) : ''" :close-label="t('common.close')">
       <div class="flex gap-3 rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">

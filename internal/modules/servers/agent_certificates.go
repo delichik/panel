@@ -19,7 +19,7 @@ func (s *Service) IssueAgentCertificate(ctx context.Context, serverID string) (A
 	if err != nil {
 		return AgentCertificateBundle{}, err
 	}
-	agentURL := agentDefaultURL(srv.Host)
+	agentURL := agentDefaultURLFor(srv)
 	var cert agentsecurity.ServerCertificate
 	var caPEM []byte
 	if s.agentKeys != nil {

@@ -1,5 +1,5 @@
 import type { CredentialDto } from '@/types/credentials';
-import type { OperationAccepted, ServerDto, ServerProbeResult, ServerSaveInput } from '@/types/servers';
+import type { NatPortConfig, NatPortMapping, NatPortMappingSave, NatPortNeedOpen, OperationAccepted, ServerDto, ServerProbeResult, ServerSaveInput } from '@/types/servers';
 import type { ServerMetricsSeries } from '@/api/servers';
 
 export let mockCredentials: CredentialDto[] = [
@@ -204,6 +204,8 @@ export function createServer(input: ServerSaveInput): ServerDto {
   const host = input.ipv4 || input.ipv6;
   const item = {
     ...server(`srv-${Date.now()}`, input.name, host, input.credentialId, true, input.traits ?? {}),
+    kind: input.kind === 'nat' ? 'nat' : 'normal',
+    agentPublicPort: input.kind === 'nat' ? input.agentPublicPort || 0 : 0,
     ipv4: input.ipv4,
     ipv6: input.ipv6,
     port: input.port,
@@ -331,10 +333,12 @@ function server(id: string, name: string, host: string, credentialId: string, re
   return {
     id,
     name,
+    kind: 'normal',
     host,
     ipv4: host.includes(':') ? '' : host,
     ipv6: host.includes(':') ? host : '',
     port: 22,
+    agentPublicPort: 0,
     sshUsername: '',
     credentialId,
     dockerHost: 'unix:///var/run/docker.sock',
@@ -356,4 +360,62 @@ function server(id: string, name: string, host: string, credentialId: string, re
     createdAt: '2026-07-18T08:00:00.000Z',
     updatedAt: '2026-08-01T08:00:00.000Z',
   };
+}
+
+let mockNatPorts: Record<string, NatPortMapping[]> = {};
+
+function mockNatConfigFor(id: string): NatPortConfig | null {
+  const srv = mockServers.find((item) => item.id === id);
+  if (!srv) return null;
+  const mappings = mockNatPorts[id] ?? [];
+  const needOpen: NatPortNeedOpen[] = [];
+  if (srv.kind === 'nat') {
+    needOpen.push({ kind: 'ssh', port: srv.port || 22, label: 'SSH' });
+    needOpen.push({ kind: 'agent', port: srv.agentPublicPort || 9786, label: 'Agent' });
+    for (const m of mappings) needOpen.push({ kind: 'app', port: m.publicPort, label: m.label || `${m.appId || 'app'}:${m.hostPort}`, target: `${srv.host}:${m.publicPort}` });
+  }
+  return { serverId: id, serverHost: srv.host, kind: srv.kind, mappings, needOpen };
+}
+
+export function natPortsFor(id: string): NatPortConfig | null {
+  const cfg = mockNatConfigFor(id);
+  return cfg && cfg.kind === 'nat' ? cfg : { serverId: id, serverHost: '', kind: 'normal', mappings: [], needOpen: [] };
+}
+
+export function addNatPort(id: string, input: NatPortMappingSave): NatPortMapping | null {
+  const cfg = mockNatConfigFor(id);
+  if (!cfg || cfg.kind !== 'nat') return null;
+  const now = new Date().toISOString();
+  const mapping: NatPortMapping = {
+    id: `natm-${Date.now()}`,
+    serverId: id,
+    appId: input.appId,
+    appName: input.appId || '',
+    hostPort: input.hostPort,
+    publicPort: input.publicPort,
+    protocol: input.protocol || 'tcp',
+    label: input.label,
+    notes: input.notes,
+    createdAt: now,
+    updatedAt: now,
+  };
+  mockNatPorts[id] = [...(mockNatPorts[id] ?? []), mapping];
+  return mapping;
+}
+
+export function updateNatPort(id: string, mappingId: string, input: NatPortMappingSave): NatPortMapping | null {
+  const list = mockNatPorts[id] ?? [];
+  let saved: NatPortMapping | null = null;
+  mockNatPorts[id] = list.map((m) => {
+    if (m.id !== mappingId) return m;
+    saved = { ...m, ...input, protocol: input.protocol || 'tcp', updatedAt: new Date().toISOString() };
+    return saved;
+  });
+  return saved;
+}
+
+export function removeNatPort(id: string, mappingId: string): boolean {
+  const before = (mockNatPorts[id] ?? []).length;
+  mockNatPorts[id] = (mockNatPorts[id] ?? []).filter((m) => m.id !== mappingId);
+  return mockNatPorts[id].length !== before;
 }

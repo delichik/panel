@@ -39,9 +39,11 @@ const notifySuccess = useSuccessToast();
 
 const form = reactive({
   name: '',
+  kind: 'normal',
   ipv4: '',
   ipv6: '',
   port: '22',
+  agentPublicPort: '',
   sshUsername: '',
   credentialId: '',
   dockerHost: 'unix:///var/run/docker.sock',
@@ -60,11 +62,17 @@ const credentialSaving = ref(false);
 const credentialActionError = ref('');
 
 const credentialOptions = computed(() => props.credentials.map((item) => ({ label: `${item.name} / ${item.username}`, value: item.id })));
+const kindOptions = computed(() => [
+  { value: 'normal', label: t('serversPage.kindNormal') },
+  { value: 'nat', label: t('serversPage.kindNat') },
+]);
 const formPayload = computed<ServerSaveInput>(() => ({
   name: form.name,
+  kind: form.kind,
   ipv4: form.ipv4,
   ipv6: form.ipv6,
   port: Number(form.port),
+  agentPublicPort: form.kind === 'nat' ? Number(form.agentPublicPort) || 0 : 0,
   sshUsername: form.sshUsername,
   credentialId: form.credentialId,
   dockerHost: form.dockerHost,
@@ -122,9 +130,11 @@ watch(() => props.open, (open) => {
   if (props.editing) {
     Object.assign(form, {
       name: props.editing.name,
+      kind: props.editing.kind === 'nat' ? 'nat' : 'normal',
       ipv4: props.editing.ipv4 ?? '',
       ipv6: props.editing.ipv6 ?? '',
       port: String(props.editing.port || 22),
+      agentPublicPort: String(props.editing.agentPublicPort || ''),
       sshUsername: props.editing.sshUsername ?? '',
       credentialId: props.editing.credentialId,
       dockerHost: props.editing.dockerHost || 'unix:///var/run/docker.sock',
@@ -134,9 +144,11 @@ watch(() => props.open, (open) => {
   } else {
     Object.assign(form, {
       name: '',
+      kind: 'normal',
       ipv4: '',
       ipv6: '',
       port: '22',
+      agentPublicPort: '',
       sshUsername: '',
       credentialId: props.credentials[0]?.id ?? '',
       dockerHost: 'unix:///var/run/docker.sock',
@@ -242,6 +254,14 @@ async function saveQuickCredential() {
           <div class="grid gap-1">
             <label class="grid gap-1 text-sm">{{ t('serversPage.name') }}<Input id="server-form-name" v-model="form.name" :invalid="Boolean(validation.name)" /></label>
             <p v-if="validation.name" class="m-0 text-sm text-danger">{{ t(validation.name) }}</p>
+          </div>
+          <div class="grid gap-1">
+            <label class="grid gap-1 text-sm">{{ t('serversPage.kind') }}<Select id="server-form-kind" v-model="form.kind" :options="kindOptions" /></label>
+            <p class="m-0 text-xs text-muted-foreground">{{ t('serversPage.kindHint') }}</p>
+          </div>
+          <div v-if="form.kind === 'nat'" class="grid gap-1">
+            <label class="grid gap-1 text-sm">{{ t('serversPage.agentPublicPort') }}<Input id="server-form-agent-public-port" v-model="form.agentPublicPort" type="number" /></label>
+            <p class="m-0 text-xs text-muted-foreground">{{ t('serversPage.agentPublicPortHint') }}</p>
           </div>
           <div class="grid gap-1">
             <label class="grid gap-1 text-sm">{{ t('serversPage.port') }}<Input id="server-form-port" v-model="form.port" type="number" :invalid="Boolean(validation.port)" /></label>

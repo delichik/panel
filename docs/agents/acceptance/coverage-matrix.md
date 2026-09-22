@@ -65,9 +65,11 @@
 - 应用详情、列表摘要、runtime 增加可选 `planningError`（code/message/field/fileName/retryable/operationId/occurredAt/configVersion），列表 runtimeStatus 与 runtime.status 支持 `needs_attention`；对应 `APP-PLAN-001`、`APP-RUN-004`，API method/path 数量不变。
 - 既有 GET/POST `/api/v1/debug/clear-runtime-data` 响应补齐 `runId/stage/failedStage/startedAt/finishedAt`，明确 `cleared` 与终态、并发请求语义；清理期间业务写入返回 `runtime_data_maintenance`，不增加接口；对应 `DIAG-CLR-001/005/006/007`。
 
-- `COV-API-002`：维护导出/恢复的独立最小应用路由不计入上述主 Panel 171 条，但必须由备份恢复文档覆盖其认证、状态、密码、下载、重试、退出和清除 pending 操作。
+- `COV-API-002`：维护导出/恢复的独立最小应用路由不计入上述主 Panel 175 条，但必须由备份恢复文档覆盖其认证、状态、密码、下载、重试、退出和清除 pending 操作。
 
-- `COV-API-003`：171 个 method/path 的逐项映射见 [主 Panel API 路由逐项清单](api-route-inventory.md)；路由清单测试与该表必须同步变化。
+- `COV-API-003`：175 个 method/path 的逐项映射见 [主 Panel API 路由逐项清单](api-route-inventory.md)；路由清单测试与该表必须同步变化。
+
+- 新增 NAT 服务器端口子资源 `GET/POST /servers/{id}/nat-ports`、`PUT/DELETE /servers/{id}/nat-ports/{mappingID}`，以及 `servers.kind`、`servers.agent_public_port`、`nat_port_mappings`；对应 `SRV-NAT-001..005`。
 
 - 新增 GET `/facility-apps/reverse-proxy/diagnostics?serverId=`，配置 DTO 增加逐节点 deployments；对应 `FAC-RP-012/013`、`UI-FAC-012`。失败运行日志复用 errorDetail，按 ID/时间范围限量读取并降级，不新增 Agent RPC 字段、表或后台任务；对应 `ORCH-CTRL-008`。
 

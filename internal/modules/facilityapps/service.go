@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -245,6 +246,9 @@ func (s *Service) SaveReverseProxy(ctx context.Context, in ReverseProxySaveInput
 	if err != nil {
 		return ReverseProxyConfig{}, err
 	}
+	if err := s.ensureReverseProxyGatewaysNotNAT(ctx, next.DeploymentServers); err != nil {
+		return ReverseProxyConfig{}, err
+	}
 	if err := s.validateRouteConflicts(ctx, next); err != nil {
 		return ReverseProxyConfig{}, err
 	}
@@ -281,7 +285,15 @@ func (s *Service) syncReverseProxyTraits(ctx context.Context, previous, next []s
 		}
 		traits := map[string]string{}
 		_ = json.Unmarshal([]byte(raw), &traits)
-		if _, ok := enabled[serverID]; ok {
+		// NAT servers can never host the reverse proxy; make sure the trait is
+		// removed even if it was set before the server was marked NAT.
+		isNAT, err := s.serverIsNAT(ctx, serverID)
+		if err != nil {
+			return err
+		}
+		if isNAT {
+			delete(traits, reverseProxyEnabledTrait)
+		} else if _, ok := enabled[serverID]; ok {
 			traits[reverseProxyEnabledTrait] = "true"
 		} else {
 			delete(traits, reverseProxyEnabledTrait)
@@ -315,7 +327,7 @@ func (s *Service) ResolveApplicationOrigins(ctx context.Context, applicationID, 
 	if strings.TrimSpace(deploymentMode) == applications.DeploymentModeSelected {
 		origins = intersectStrings(cfg.DeploymentServers, deploymentServers)
 	}
-	return uniqueSorted(origins), nil
+	return s.filterNonNATServers(ctx, origins)
 }
 
 func (s *Service) ValidateApplicationReverseProxy(ctx context.Context, applicationID, deploymentMode string, deploymentServers []string, rules []applications.ReverseProxyRule) error {
@@ -365,6 +377,13 @@ func (s *Service) ValidateApplicationReverseProxy(ctx context.Context, applicati
 			return panelerr.Validation("reverse_proxy_origin_servers_required", "Reverse proxy route requires at least one origin server")
 		}
 		for _, serverID := range origins {
+			isNAT, err := s.serverIsNAT(ctx, serverID)
+			if err != nil {
+				return err
+			}
+			if isNAT {
+				return panelerr.Validation("reverse_proxy_origin_server_nat_unsupported", "NAT servers cannot be reverse proxy origin servers")
+			}
 			if _, ok := validSet[serverID]; !ok {
 				return panelerr.Validation("reverse_proxy_origin_server_invalid", "Origin server must run the application and belong to the global gateway nodes")
 			}
@@ -378,6 +397,53 @@ func (s *Service) ValidateApplicationReverseProxy(ctx context.Context, applicati
 		}
 	}
 	return nil
+}
+
+// serverIsNAT reports whether the given server is a NAT-type server whose
+// external ports must be opened manually on the NAT provider side. It reads the
+// kind straight from the app DB (the same source the servers module writes),
+// so it stays independent of the injected ServerProvider.
+func (s *Service) serverIsNAT(ctx context.Context, serverID string) (bool, error) {
+	var kind string
+	if err := orm.New(s.db).From("servers").Select("kind").Where("id=?", serverID).ScanValue(ctx, &kind); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return kind == server.ServerKindNAT, nil
+}
+
+// ensureReverseProxyGatewaysNotNAT rejects NAT servers from being reverse proxy
+// gateway nodes. A NAT server has no shared 80/443, so it can never host the
+// reverse proxy facility.
+func (s *Service) ensureReverseProxyGatewaysNotNAT(ctx context.Context, serverIDs []string) error {
+	for _, serverID := range serverIDs {
+		isNAT, err := s.serverIsNAT(ctx, serverID)
+		if err != nil {
+			return err
+		}
+		if isNAT {
+			return panelerr.Validation("reverse_proxy_server_nat_unsupported", "NAT servers cannot host the reverse proxy")
+		}
+	}
+	return nil
+}
+
+// filterNonNATServers drops NAT servers from a candidate list so they never
+// become reverse proxy origin/gateway nodes.
+func (s *Service) filterNonNATServers(ctx context.Context, serverIDs []string) ([]string, error) {
+	out := make([]string, 0, len(serverIDs))
+	for _, serverID := range serverIDs {
+		isNAT, err := s.serverIsNAT(ctx, serverID)
+		if err != nil {
+			return nil, err
+		}
+		if !isNAT {
+			out = append(out, serverID)
+		}
+	}
+	return uniqueSorted(out), nil
 }
 
 func validateAnyAccessRelay(anyAccess applications.AnyAccessConfig, gatewaySet map[string]struct{}, origins []string) error {

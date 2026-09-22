@@ -6,13 +6,28 @@ import (
 	"panel/internal/platform/linux"
 )
 
+// ServerKindKind configures how a server exposes its ports. KindNAT marks a
+// server whose external ports are opened manually on the NAT provider side;
+// it cannot host the reverse-proxy facility.
+const (
+	ServerKindNormal = "normal"
+	ServerKindNAT    = "nat"
+)
+
+// IsValidServerKind reports whether kind is a known server kind.
+func IsValidServerKind(kind string) bool {
+	return kind == ServerKindNormal || kind == ServerKindNAT
+}
+
 type Server struct {
 	ID              string            `json:"id"`
 	Name            string            `json:"name"`
+	Kind            string            `json:"kind"`
 	Host            string            `json:"host"`
 	IPv4            string            `json:"ipv4,omitempty"`
 	IPv6            string            `json:"ipv6,omitempty"`
 	Port            int               `json:"port"`
+	AgentPublicPort int               `json:"agentPublicPort,omitempty"`
 	SSHUsername     string            `json:"sshUsername"`
 	CredentialID    string            `json:"credentialId"`
 	DockerHost      string            `json:"dockerHost"`
@@ -36,6 +51,7 @@ type Server struct {
 type ServerSummary struct {
 	ID              string            `json:"id"`
 	Name            string            `json:"name"`
+	Kind            string            `json:"kind"`
 	Host            string            `json:"host"`
 	Port            int               `json:"port"`
 	CredentialID    string            `json:"credentialId"`
@@ -71,9 +87,11 @@ type SaveRequest struct {
 	// Host is rejected on purpose: the connection address is derived from
 	// ipv4/ipv6 so callers cannot supply a free-form hostname anymore.
 	Host         string            `json:"host"`
+	Kind         string            `json:"kind"`
 	IPv4         string            `json:"ipv4"`
 	IPv6         string            `json:"ipv6"`
 	Port         int               `json:"port"`
+	AgentPublicPort int            `json:"agentPublicPort"`
 	SSHUsername  string            `json:"sshUsername"`
 	CredentialID string            `json:"credentialId"`
 	DockerHost   string            `json:"dockerHost"`
@@ -111,6 +129,51 @@ type UFWRule struct {
 	To     string `json:"to"`
 	Action string `json:"action"`
 	From   string `json:"from"`
+}
+
+// NatPortMapping is a single external-port mapping on a NAT server: the NAT
+// provider forwards public_port to the server's internal host_port.
+type NatPortMapping struct {
+	ID         string    `json:"id"`
+	ServerID   string    `json:"serverId"`
+	AppID      string    `json:"appId"`
+	AppName    string    `json:"appName,omitempty"`
+	HostPort   int       `json:"hostPort"`
+	PublicPort int       `json:"publicPort"`
+	Protocol   string    `json:"protocol"`
+	Label      string    `json:"label"`
+	Notes      string    `json:"notes"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
+}
+
+// NatPortMappingSave is the create/update payload for a NAT port mapping.
+type NatPortMappingSave struct {
+	AppID      string `json:"appId"`
+	HostPort   int    `json:"hostPort"`
+	PublicPort int    `json:"publicPort"`
+	Protocol   string `json:"protocol"`
+	Label      string `json:"label"`
+	Notes      string `json:"notes"`
+}
+
+// NatPortNeedOpen is one entry of the ports a NAT server must have opened
+// manually on the provider side. Kind is "ssh", "agent" or "app".
+type NatPortNeedOpen struct {
+	Kind   string `json:"kind"`
+	Port   int    `json:"port"`
+	Label  string `json:"label"`
+	Target string `json:"target,omitempty"`
+}
+
+// NatPortConfig is the full NAT port configuration for one server: the managed
+// mappings plus the read-only reminder of ports that must be opened upstream.
+type NatPortConfig struct {
+	ServerID   string            `json:"serverId"`
+	ServerHost string            `json:"serverHost"`
+	Kind       string            `json:"kind"`
+	Mappings   []NatPortMapping  `json:"mappings"`
+	NeedOpen   []NatPortNeedOpen `json:"needOpen"`
 }
 
 type UFWAllowRequest struct {

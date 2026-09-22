@@ -1579,8 +1579,43 @@ func agentBinaryPathForPlatform(platform string) string {
 	return path.Join(agentBundleRoot, strings.TrimSpace(platform), agentBundleBinaryName)
 }
 
+func agentURLForPort(host string, port int) string {
+	return "https://" + net.JoinHostPort(strings.TrimSpace(host), strconv.Itoa(port))
+}
+
 func agentDefaultURL(host string) string {
-	return "https://" + net.JoinHostPort(strings.TrimSpace(host), strconv.Itoa(defaultAgentPort))
+	return agentURLForPort(host, defaultAgentPort)
+}
+
+// effectiveAgentPortFor returns the external port through which the agent is
+// reached. NAT servers may expose the agent through a provider-opened public
+// port distinct from the internal 9786; normal servers always use the default.
+func effectiveAgentPortFor(kind string, publicPort int) int {
+	if kind == ServerKindNAT && publicPort > 0 {
+		return publicPort
+	}
+	return defaultAgentPort
+}
+
+// normalizeAgentPublicPort keeps the configured external agent port only when
+// it is meaningful (a NAT server) and within the valid port range.
+func normalizeAgentPublicPort(kind string, publicPort int) int {
+	if kind == ServerKindNAT && publicPort > 0 && publicPort <= 65535 {
+		return publicPort
+	}
+	return 0
+}
+
+// agentPublicPort returns the external port the agent is reached on for this
+// server, honoring a NAT server's configured public port.
+func agentPublicPort(srv Server) int {
+	return effectiveAgentPortFor(srv.Kind, srv.AgentPublicPort)
+}
+
+// agentDefaultURLFor returns the canonical agent URL for a server, using the
+// NAT-configured external port when set.
+func agentDefaultURLFor(srv Server) string {
+	return agentURLForPort(srv.Host, agentPublicPort(srv))
 }
 
 func serverHasAgentConfigured(current Server, nextTraits map[string]string) bool {
@@ -1614,7 +1649,7 @@ func configuredAgentURL(srv Server) (string, bool) {
 
 func agentURLMatchesDefault(srv Server) bool {
 	url, ok := configuredAgentURL(srv)
-	return ok && strings.TrimRight(url, "/") == agentDefaultURL(srv.Host)
+	return ok && strings.TrimRight(url, "/") == agentDefaultURLFor(srv)
 }
 
 func isVirtualNetworkInterface(name string) bool {
@@ -1800,6 +1835,9 @@ func validateSave(req SaveRequest) error {
 	}
 	if strings.TrimSpace(normalizeDockerHost(req.DockerHost)) == "" {
 		return panelerr.Validation("server_docker_host_required", "Docker host is required")
+	}
+	if req.Kind != "" && !IsValidServerKind(req.Kind) {
+		return panelerr.Validation("server_kind_invalid", "Server kind must be \"normal\" or \"nat\"")
 	}
 	return nil
 }

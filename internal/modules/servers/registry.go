@@ -24,20 +24,22 @@ func (s *Service) Create(ctx context.Context, req SaveRequest) (Server, error) {
 	}
 	now := time.Now().UTC()
 	srv := Server{
-		ID:           id.New("srv"),
-		Name:         req.Name,
-		Host:         derivedServerHost(req),
-		IPv4:         strings.TrimSpace(req.IPv4),
-		IPv6:         strings.TrimSpace(req.IPv6),
-		Port:         req.Port,
-		SSHUsername:  req.SSHUsername,
-		CredentialID: req.CredentialID,
-		DockerHost:   normalizeDockerHost(req.DockerHost),
-		Traits:       map[string]string{},
-		Variables:    normalizeServerVariables(req.Variables, map[string]string{}),
-		Notes:        req.Notes,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:              id.New("srv"),
+		Name:            req.Name,
+		Kind:            normalizeSaveKind(req.Kind),
+		AgentPublicPort: normalizeAgentPublicPort(req.Kind, req.AgentPublicPort),
+		Host:            derivedServerHost(req),
+		IPv4:            strings.TrimSpace(req.IPv4),
+		IPv6:            strings.TrimSpace(req.IPv6),
+		Port:            req.Port,
+		SSHUsername:     req.SSHUsername,
+		CredentialID:    req.CredentialID,
+		DockerHost:      normalizeDockerHost(req.DockerHost),
+		Traits:          map[string]string{},
+		Variables:       normalizeServerVariables(req.Variables, map[string]string{}),
+		Notes:           req.Notes,
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 	if srv.Traits == nil {
 		srv.Traits = map[string]string{}
@@ -70,14 +72,27 @@ func (s *Service) Update(ctx context.Context, serverID string, req SaveRequest) 
 	nextIPv6 := strings.TrimSpace(req.IPv6)
 	previousIPv4 := strings.TrimSpace(current.IPv4)
 	previousIPv6 := strings.TrimSpace(current.IPv6)
-	if strings.TrimSpace(current.Host) != nextHost && serverHasAgentConfigured(current, current.Traits) {
+	nextKind := normalizeSaveKind(req.Kind)
+	nextAgentPublicPort := normalizeAgentPublicPort(nextKind, req.AgentPublicPort)
+	nextAgentURL := agentURLForPort(nextHost, effectiveAgentPortFor(nextKind, nextAgentPublicPort))
+	hostChanged := strings.TrimSpace(current.Host) != nextHost
+	if hostChanged && serverHasAgentConfigured(current, current.Traits) {
 		current.Traits[agentcontract.TraitEnabled] = "true"
-		current.Traits[agentcontract.TraitURL] = agentDefaultURL(nextHost)
+		current.Traits[agentcontract.TraitURL] = nextAgentURL
 		current.Traits[agentcontract.TraitStatus] = agentcontract.StatusIncompatible
 		current.Traits[agentcontract.TraitLastError] = "server host changed; agent redeployment required"
 		delete(current.Traits, agentcontract.TraitCertificateFingerprint)
 		delete(current.Traits, agentcontract.TraitCertificateNotBefore)
 		delete(current.Traits, agentcontract.TraitCertificateNotAfter)
+	} else if serverHasAgentConfigured(current, current.Traits) &&
+		strings.TrimSpace(current.Traits[agentcontract.TraitURL]) != nextAgentURL {
+		// The agent's reachable URL changed (e.g. a NAT external port was set).
+		// No redeployment is required — the provider maps the public port to the
+		// internal 9786 — but the panel must reconnect to the new endpoint.
+		current.Traits[agentcontract.TraitEnabled] = "true"
+		current.Traits[agentcontract.TraitURL] = nextAgentURL
+		current.Traits[agentcontract.TraitStatus] = agentcontract.StatusIncompatible
+		current.Traits[agentcontract.TraitLastError] = "agent URL changed; reconnecting"
 	}
 	current.Name = req.Name
 	current.Host = nextHost
@@ -87,6 +102,14 @@ func (s *Service) Update(ctx context.Context, serverID string, req SaveRequest) 
 	current.SSHUsername = req.SSHUsername
 	current.CredentialID = req.CredentialID
 	current.DockerHost = normalizeDockerHost(req.DockerHost)
+	if nextKind == ServerKindNAT && current.Kind != ServerKindNAT {
+		// NAT servers cannot host the reverse proxy. Strip the facility
+		// enabled signal so the trait, UFW 80/443 rules and any running proxy
+		// reconcile on this node are retired.
+		delete(current.Traits, reverseProxyEnabledTrait)
+	}
+	current.Kind = nextKind
+	current.AgentPublicPort = nextAgentPublicPort
 	current.Variables = normalizeServerVariables(req.Variables, current.Traits)
 	current.Notes = req.Notes
 	current.UpdatedAt = time.Now().UTC()
@@ -142,6 +165,13 @@ func (s *Service) Delete(ctx context.Context, serverID string) error {
 	}
 	s.notifyDNSSync(ctx, serverID, true)
 	return nil
+}
+
+func normalizeSaveKind(kind string) string {
+	if !IsValidServerKind(kind) {
+		return ServerKindNormal
+	}
+	return kind
 }
 
 func (s *Service) removeServerFromApplicationTargets(ctx context.Context, tx *sql.Tx, serverID string) error {
@@ -246,4 +276,14 @@ func (s *Service) Get(ctx context.Context, serverID string) (Server, error) {
 		return Server{}, err
 	}
 	return s.prepareServerForRead(ctx, srv), nil
+}
+
+// IsNAT reports whether the given server is a NAT-type server (external ports
+// must be opened manually on the NAT provider side).
+func (s *Service) IsNAT(ctx context.Context, serverID string) (bool, error) {
+	srv, err := s.repo.Get(ctx, serverID)
+	if err != nil {
+		return false, err
+	}
+	return srv.Kind == ServerKindNAT, nil
 }
