@@ -27,6 +27,7 @@
 - `ServerMultiPicker`：用于应用部署、设施覆盖节点、批量任务等服务器多选。支持禁用 id 与禁用原因，选中态、禁用态和能力标签保持一致。
 - `AssetFileManager`：用于应用文件和设施静态资产这两类同构的文件工作区。顶部只提供一个上传入口，弹窗内选择文本文件、普通文件或文件夹归档；文本类型显示编辑器，普通文件和归档显示文件选择控件。新建文本资产时下载文件名自动跟随引用名称，仍可单独修改，留空保存时使用引用名称；组件还统一提供文本编辑、替换、下载、删除、错误行展示和并发冲突重载；页面只通过 `AssetFileAdapter` 注入领域 API 和文案。`items[].key` 必须是应用内或设施内唯一的 `name`，不把物理 `id`、`fileKey` 或 `assetKey` 暴露给组件。
 - `TemplateVariableInput`（`web/src/components/patterns/TemplateVariableInput.vue`）：用于支持模板表达式的单行字段；复用 Input 和 Dropdown，在原光标插入表达式或替换当前选区，插入后恢复输入焦点。业务页面负责传入按上下文筛选后的目录项和本地化文案，不得把后端返回的全部变量无差别暴露给不支持相应渲染阶段的字段。
+- `CredentialFormFields`（`web/src/components/patterns/CredentialFormFields.vue`）：SSH 凭据表单字段的共享实现（name/type/username/password 或 privateKey+passphrase，含类型切换、编辑保留 secret、字段级错误），供凭据页与任意需要快捷创建凭据的弹窗复用；凭据校验/负载逻辑在 `web/src/components/patterns/credentialForm.ts`（空输入、校验、secret 裁剪），文案经 `labels` 从页面传入。服务器创建弹窗在无可用凭据时内嵌本组件实现“快捷创建凭据 → 自动选中”，作为死胡同的引导闭环。
 
 ## 自动刷新模式
 

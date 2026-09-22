@@ -4,6 +4,7 @@
 
 ## 当前状态
 
+- 本轮服务器创建/编辑弹窗重构文案：新增 `serversPage.formDescription/editServerDescription/sectionConnection/sectionAdvanced`、`dockerHostHint`、`credentialMissingTitle/Hint`（无凭据引导）、`probeHint/probeAgain/probeStale`（探测与保存解耦并标记过期）、`createdInitializing`（两阶段反馈，替换 `createdWithTask`）、`initialTaskLoadFailed`（初始化任务跟踪）；后端改为初始信息采集失败时保留服务器并标记失败，移除 `initialTaskRolledBack` 与 `dismissNotice` 词条；删除 `serversPage.createdWithTask` 与 `serversPage.validationGeneric` 词条；en / zh-CN 同步。
 - 应用日志入口明确命名“容器日志”，新增 `applicationLogs.*` 服务器/容器选择、无实例、加载、空日志和实例身份不匹配提示；en/zh-CN 同步。
 
 - 日志页移除定时刷新、条数、新数据、快照编号、批次说明和容量横幅词条，简化描述、索引提示、导出与手动刷新文案；en/zh-CN 同步。其它页面的自动刷新词条保留。

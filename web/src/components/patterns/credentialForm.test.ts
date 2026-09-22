@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { secretPayload, validateCredentialInput } from './model';
+import { emptyCredentialInput, secretPayload, validateCredentialInput } from './credentialForm';
 
-describe('credential model', () => {
+describe('credential form model', () => {
   it('keeps secrets out of edit payloads when fields are blank', () => {
     expect(secretPayload({ name: 'deploy', type: 'password', username: 'root', password: '' }, true)).toEqual({
       name: 'deploy',
@@ -19,5 +19,9 @@ describe('credential model', () => {
     expect(validateCredentialInput({ name: 'deploy', type: 'private_key', username: 'root', privateKey: '' }, false)).toMatchObject({
       privateKey: 'credentialsPage.validationPrivateKey',
     });
+  });
+
+  it('starts from an empty password credential', () => {
+    expect(emptyCredentialInput()).toEqual({ name: '', type: 'password', username: '', password: '', privateKey: '', passphrase: '' });
   });
 });

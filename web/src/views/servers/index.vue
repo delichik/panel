@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { AlertTriangle, Cable, KeyRound, PlayCircle, Plus, RefreshCcw, ServerCog, ShieldPlus, Trash2, Wrench } from '@lucide/vue';
 import { credentialsApi } from '@/api/credentials';
@@ -11,13 +11,11 @@ import Button from '@/components/ui/Button.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import Dialog from '@/components/ui/Dialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
-import Input from '@/components/ui/Input.vue';
 import PaginationBar from '@/components/ui/PaginationBar.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
 import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import StatusBadge from '@/components/ui/StatusBadge.vue';
-import Textarea from '@/components/ui/Textarea.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
@@ -26,9 +24,10 @@ import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useAutoRefresh } from '@/composables/useAutoRefresh';
 import { useI18n } from '@/i18n';
 import type { CredentialDto } from '@/types/credentials';
-import type { ServerDto, ServerProbeResult, ServerSaveInput } from '@/types/servers';
+import type { ServerDto } from '@/types/servers';
 import type { TaskDto, TaskLog } from '@/types/tasks';
-import { agentTone, canInstallUfw, canRunPrivilegedOperation, connectionHost, credentialLabel, serverReachabilityTone, validateServerInput } from './model';
+import { agentTone, canInstallUfw, canRunPrivilegedOperation, credentialLabel, serverReachabilityTone } from './model';
+import ServerFormDialog from './ServerFormDialog.vue';
 import { createLatestRequestGuard } from '@/views/_shared/requestState';
 import { formatDateTime } from '@/utils/datetime';
 
@@ -57,8 +56,11 @@ let metricsInFlight = false;
 let metricsAutoRefreshTimer: number | undefined;
 let agentTaskPollTimer: number | undefined;
 let agentTaskInFlight = false;
+let initialTaskPollTimer: number | undefined;
+let initialTaskInFlight = false;
 const listRequests = createLatestRequestGuard();
 const agentTaskRequests = createLatestRequestGuard();
+const initialTaskRequests = createLatestRequestGuard();
 const loading = ref(false);
 const detailLoading = ref(false);
 const error = ref('');
@@ -66,11 +68,8 @@ const credentialError = ref('');
 const actionError = ref('');
 const serverDialog = ref(false);
 const confirmDialog = ref(false);
-const saving = ref(false);
-const probing = ref(false);
 const testing = ref(false);
 const openingEdit = ref(false);
-const probeResult = ref<ServerProbeResult | null>(null);
 const editing = ref<ServerDto | null>(null);
 const confirmTarget = ref<ServerDto | null>(null);
 const confirmOperation = ref<'restart' | 'ufw' | 'trustHostKey' | null>(null);
@@ -86,6 +85,10 @@ const agentTaskLogCursor = ref(0);
 const agentTaskServerId = ref('');
 const agentTaskLoading = ref(false);
 const agentTaskError = ref('');
+const initialTask = ref<TaskDto | null>(null);
+const initialTaskServerId = ref('');
+const initialTaskLoading = ref(false);
+const initialTaskError = ref('');
 const metricsRangeOptions = [
   { value: '1h', label: '1h' },
   { value: '6h', label: '6h' },
@@ -93,33 +96,8 @@ const metricsRangeOptions = [
   { value: '7d', label: '7d' },
 ];
 
-const form = reactive({
-  name: '',
-  ipv4: '',
-  ipv6: '',
-  port: '22',
-  sshUsername: '',
-  credentialId: '',
-  dockerHost: 'unix:///var/run/docker.sock',
-  variables: '',
-  notes: '',
-});
-
 const selectedServer = computed(() => serverDetails.value[selectedId.value] ?? servers.value.find((item) => item.id === selectedId.value) ?? null);
 
-const credentialOptions = computed(() => credentials.value.map((item) => ({ label: `${item.name} / ${item.username}`, value: item.id })));
-const formPayload = computed<ServerSaveInput>(() => ({
-  name: form.name,
-  ipv4: form.ipv4,
-  ipv6: form.ipv6,
-  port: Number(form.port),
-  sshUsername: form.sshUsername,
-  credentialId: form.credentialId,
-  dockerHost: form.dockerHost,
-  variables: parsePairs(form.variables),
-  notes: form.notes,
-}));
-const validation = computed(() => validateServerInput(formPayload.value));
 const latestMetrics = computed(() => {
   const series = metrics.value;
   return {
@@ -132,6 +110,7 @@ const latestMetrics = computed(() => {
 });
 const visibleAgentTaskLogs = computed(() => agentTaskLogs.value.slice(-20));
 const agentTaskActive = computed(() => isActiveTask(agentTask.value));
+const initialTaskActive = computed(() => isActiveTask(initialTask.value));
 
 const metricChartPanels = computed(() => {
   const series = metrics.value;
@@ -163,6 +142,7 @@ watch(selectedId, () => {
   void loadServerDetail();
   void loadMetrics(true);
   void loadAgentDeployment(true);
+  void loadInitialTask(true);
 });
 watch(metricsRange, () => {
   void loadMetrics(true);
@@ -308,18 +288,6 @@ watch(autoRefreshMode, startMetricsAutoRefresh, { immediate: true });
 
 function openCreate() {
   editing.value = null;
-  probeResult.value = null;
-  Object.assign(form, {
-    name: '',
-    ipv4: '',
-    ipv6: '',
-    port: '22',
-    sshUsername: '',
-    credentialId: credentials.value[0]?.id ?? '',
-    dockerHost: 'unix:///var/run/docker.sock',
-    variables: '',
-    notes: '',
-  });
   serverDialog.value = true;
 }
 
@@ -328,20 +296,7 @@ async function openEdit(server: ServerDto) {
   try {
     const detail = serverDetails.value[server.id] ?? await serversApi.get(server.id);
     serverDetails.value = { ...serverDetails.value, [server.id]: detail };
-    server = detail;
-    editing.value = server;
-    probeResult.value = null;
-    Object.assign(form, {
-      name: server.name,
-      ipv4: server.ipv4 ?? '',
-      ipv6: server.ipv6 ?? '',
-      port: String(server.port || 22),
-      sshUsername: server.sshUsername ?? '',
-      credentialId: server.credentialId,
-      dockerHost: server.dockerHost || 'unix:///var/run/docker.sock',
-      variables: stringifyPairs(server.variables),
-      notes: server.notes ?? '',
-    });
+    editing.value = detail;
     serverDialog.value = true;
   } catch (err) {
     notifyError(err instanceof Error ? err.message : t('serversPage.loadFailed'), err);
@@ -350,37 +305,87 @@ async function openEdit(server: ServerDto) {
   }
 }
 
-async function probe() {
-  probing.value = true;
-  probeResult.value = null;
-  actionError.value = '';
+/** 创建/更新成功后的两阶段衔接：创建带 initialTaskId 时立即跟踪初始化任务。 */
+async function handleSaved(saved: ServerDto) {
+  selectedId.value = saved.id;
+  invalidateServerDetail(saved.id);
+  if (!editing.value && saved.initialTaskId) await loadInitialTask(true, saved.initialTaskId);
+  await load();
+}
+
+async function loadInitialTask(reset = false, preferredTaskId = '') {
+  if (reset && initialTaskInFlight) initialTaskRequests.invalidate();
+  else if (!reset && initialTaskInFlight) return;
+  const serverId = selectedId.value;
+  if (!serverId) {
+    clearInitialTask();
+    return;
+  }
+  const requestId = initialTaskRequests.begin();
+  initialTaskInFlight = true;
+  initialTaskLoading.value = true;
+  initialTaskError.value = '';
+  if (reset || initialTaskServerId.value !== serverId) initialTaskServerId.value = serverId;
   try {
-    probeResult.value = await serversApi.probe(formPayload.value);
+    const detail = serverDetails.value[serverId] ?? servers.value.find((item) => item.id === serverId);
+    let taskId = preferredTaskId || detail?.initialTaskId || '';
+    if (!taskId) {
+      const result = await tasksApi.list({ serverId, type: 'server_info_collect', page: 1, pageSize: 1 });
+      if (!initialTaskRequests.isCurrent(requestId) || selectedId.value !== serverId) return;
+      taskId = result.items[0]?.id ?? '';
+    }
+    if (!taskId) {
+      initialTask.value = null;
+      initialTaskServerId.value = serverId;
+      return;
+    }
+    const nextTask = await tasksApi.get(taskId);
+    if (!initialTaskRequests.isCurrent(requestId) || selectedId.value !== serverId) return;
+    const previous = initialTask.value;
+    initialTask.value = nextTask;
+    initialTaskServerId.value = serverId;
+    // 任务进入终态（完成/失败）时刷新详情；服务器记录始终保留，失败态由后端标记
+    // 到 reachable/last_error，详情侧栏据此展示登记失败与原因，供用户重试、编辑或删除。
+    if (previous && isActiveTask(previous) && !isActiveTask(nextTask)) {
+      invalidateServerDetail(serverId);
+    }
   } catch (err) {
-    actionError.value = err instanceof Error ? err.message : t('serversPage.probeFailed');
-    notifyError(err instanceof Error ? err.message : t('serversPage.probeFailed'), err);
+    if (!initialTaskRequests.isCurrent(requestId) || selectedId.value !== serverId) return;
+    initialTaskError.value = err instanceof Error ? err.message : t('serversPage.initialTaskLoadFailed');
   } finally {
-    probing.value = false;
+    if (initialTaskRequests.isCurrent(requestId)) {
+      initialTaskInFlight = false;
+      initialTaskLoading.value = false;
+    }
   }
 }
 
-async function saveServer() {
-  if (Object.keys(validation.value).length) return;
-  saving.value = true;
-  actionError.value = '';
+/** 供创建弹窗内的凭据快捷创建/重试使用，只刷新凭据列表。 */
+async function loadCredentials() {
   try {
-    const saved = editing.value ? await serversApi.update(editing.value.id, formPayload.value) : await serversApi.create(formPayload.value);
-    selectedId.value = saved.id;
-    invalidateServerDetail(saved.id);
-    notifySuccess(saved.initialTaskId ? t('serversPage.createdWithTask', { taskId: saved.initialTaskId }) : t(editing.value ? 'serversPage.updated' : 'serversPage.created'), saved);
-    serverDialog.value = false;
-    await load();
+    credentials.value = await credentialsApi.list();
+    credentialError.value = '';
   } catch (err) {
-    actionError.value = err instanceof Error ? err.message : t('serversPage.saveFailed');
-    notifyError(err instanceof Error ? err.message : t('serversPage.saveFailed'), err);
-  } finally {
-    saving.value = false;
+    credentials.value = [];
+    credentialError.value = err instanceof Error ? err.message : t('serversPage.credentialsLoadFailed');
+    notifyError(err instanceof Error ? err.message : t('serversPage.credentialsLoadFailed'), err);
   }
+}
+
+function startInitialTaskPolling() {
+  window.clearInterval(initialTaskPollTimer);
+  initialTaskPollTimer = window.setInterval(() => {
+    if (document.visibilityState === 'visible' && initialTaskActive.value) void loadInitialTask();
+  }, 2000);
+}
+
+function clearInitialTask() {
+  initialTaskRequests.invalidate();
+  initialTask.value = null;
+  initialTaskServerId.value = '';
+  initialTaskError.value = '';
+  initialTaskLoading.value = false;
+  initialTaskInFlight = false;
 }
 
 async function testConnection(server: ServerDto) {
@@ -612,17 +617,6 @@ function privilegeText(server: ServerDto) {
   return t('serversPage.noPrivilege');
 }
 
-function parsePairs(raw: string) {
-  return Object.fromEntries(raw.split('\n').map((line) => line.trim()).filter(Boolean).map((line) => {
-    const [key, ...rest] = line.split('=');
-    return [key.trim(), rest.join('=').trim()];
-  }).filter(([key]) => key));
-}
-
-function stringifyPairs(value?: Record<string, string>) {
-  return Object.entries(value ?? {}).map(([key, val]) => `${key}=${val}`).join('\n');
-}
-
 function percent(value?: number) {
   return typeof value === 'number' ? `${value.toFixed(1)}%` : t('common.notAvailable');
 }
@@ -654,6 +648,7 @@ function isAbortError(error: unknown) {
 onMounted(async () => {
   await load();
   startAgentTaskPolling();
+  startInitialTaskPolling();
 });
 onBeforeUnmount(() => {
   if (searchTimer) clearTimeout(searchTimer);
@@ -661,7 +656,9 @@ onBeforeUnmount(() => {
   metricsController?.abort();
   stopMetricsAutoRefresh();
   window.clearInterval(agentTaskPollTimer);
+  window.clearInterval(initialTaskPollTimer);
   agentTaskRequests.invalidate();
+  initialTaskRequests.invalidate();
 });
 </script>
 
@@ -816,7 +813,19 @@ onBeforeUnmount(() => {
                   <div class="mt-3 grid gap-2 text-sm text-muted-foreground">
                     <span>{{ t('serversPage.lastChecked') }}: {{ formatDateTime(selectedServer.lastCheckedAt) || t('common.never') }}</span>
                     <span>{{ t('serversPage.updatedAt') }}: {{ formatDateTime(selectedServer.updatedAt) || t('common.never') }}</span>
-                    <span v-if="selectedServer.initialTaskId">{{ t('serversPage.initialTask') }}: {{ selectedServer.initialTaskId }}</span>
+                    <div v-if="selectedServer.initialTaskId" class="grid gap-1">
+                      <div class="flex flex-wrap items-center justify-between gap-2">
+                        <span>{{ t('serversPage.initialTask') }}</span>
+                        <span class="flex items-center gap-2">
+                          <StatusBadge v-if="initialTask" :status="initialTask.status" domain="task" :label="t(`tasksPage.status.${initialTask.status}`)" />
+                          <Button size="sm" variant="ghost" @click="router.push({ path: '/activity', query: { executionId: selectedServer.initialTaskId } })">{{ t('activity.relatedLogs') }}</Button>
+                        </span>
+                      </div>
+                      <span class="panel-mono text-xs">{{ selectedServer.initialTaskId }}</span>
+                      <p v-if="initialTaskLoading && !initialTask" class="m-0 text-xs">{{ t('serversPage.agentTaskLoading') }}</p>
+                      <p v-if="initialTaskError" class="m-0 break-words text-danger">{{ initialTaskError }}</p>
+                      <p v-else-if="initialTask?.error" class="m-0 break-words text-danger">{{ initialTask.error }}</p>
+                    </div>
                   </div>
                 </section>
               </div>
@@ -864,35 +873,14 @@ onBeforeUnmount(() => {
       </template>
     </MasterDetailLayout>
 
-    <Dialog v-model:open="serverDialog" :title="editing ? t('serversPage.editServer') : t('serversPage.createServer')" :description="t('serversPage.formDescription')" :close-label="t('common.close')">
-      <div class="grid gap-4">
-        <div class="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
-          <label class="grid gap-1 text-sm">{{ t('serversPage.name') }}<Input v-model="form.name" :invalid="Boolean(validation.name)" /></label>
-          <label class="grid gap-1 text-sm">{{ t('serversPage.ipv4') }}<Input v-model="form.ipv4" :invalid="Boolean(validation.ipv4)" placeholder="203.0.113.10" /></label>
-          <label class="grid gap-1 text-sm">{{ t('serversPage.ipv6') }}<Input v-model="form.ipv6" :invalid="Boolean(validation.ipv6)" placeholder="2001:db8::10" /></label>
-          <p class="col-span-2 m-0 text-xs text-muted-foreground">{{ t('serversPage.addressHint') }} <span class="panel-mono">{{ connectionHost(form) || t('common.notAvailable') }}</span></p>
-          <label class="grid gap-1 text-sm">{{ t('serversPage.port') }}<Input v-model="form.port" type="number" :invalid="Boolean(validation.port)" /></label>
-          <label class="grid gap-1 text-sm">{{ t('serversPage.credential') }}<Select v-model="form.credentialId" :options="credentialOptions" :placeholder="t('serversPage.selectCredential')" /></label>
-          <label class="col-span-2 grid gap-1 text-sm max-sm:col-span-1">{{ t('serversPage.sshUsername') }}<Input v-model="form.sshUsername" :placeholder="t('serversPage.sshUsernameHint')" /></label>
-          <label class="col-span-2 grid gap-1 text-sm max-sm:col-span-1">{{ t('serversPage.dockerHost') }}<Input v-model="form.dockerHost" :invalid="Boolean(validation.dockerHost)" /></label>
-          <label class="col-span-2 grid gap-1 text-sm max-sm:col-span-1">{{ t('serversPage.variables') }}<Textarea v-model="form.variables" :placeholder="t('serversPage.pairsHint')" class="font-mono" /></label>
-          <label class="col-span-2 grid gap-1 text-sm max-sm:col-span-1">{{ t('serversPage.notes') }}<Textarea v-model="form.notes" /></label>
-        </div>
-        <div v-if="Object.values(validation).length" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">
-          {{ t(Object.values(validation)[0] || 'serversPage.validationGeneric') }}
-        </div>
-        <div v-if="probeResult" class="rounded-xl border border-info-border bg-info-bg p-3 text-sm text-info">
-          {{ probeResult.reachable ? t('serversPage.probeReachable') : t('serversPage.probeUnreachable') }}
-          <span v-if="probeResult.error"> {{ probeResult.error }}</span>
-        </div>
-      </div>
-      <template #footer>
-        <div v-if="actionError" class="mr-auto min-w-0 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ actionError }}</div>
-        <Button variant="secondary" :disabled="Boolean(Object.keys(validation).length)" :loading="probing" @click="probe"><Cable />{{ t('serversPage.probe') }}</Button>
-        <Button variant="secondary" @click="serverDialog = false">{{ t('common.cancel') }}</Button>
-        <Button variant="primary" :loading="saving" :disabled="Boolean(Object.keys(validation).length)" @click="saveServer">{{ editing ? t('common.save') : t('common.create') }}</Button>
-      </template>
-    </Dialog>
+    <ServerFormDialog
+      v-model:open="serverDialog"
+      :editing="editing"
+      :credentials="credentials"
+      :credential-error="credentialError"
+      @saved="handleSaved"
+      @refresh-credentials="loadCredentials"
+    />
 
     <Dialog v-model:open="confirmDialog" :title="t('serversPage.deleteServer')" :description="confirmTarget ? t('serversPage.deleteServerDescription', { name: confirmTarget.name }) : ''" :close-label="t('common.close')">
       <div class="flex gap-3 rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">

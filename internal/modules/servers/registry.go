@@ -48,7 +48,8 @@ func (s *Service) Create(ctx context.Context, req SaveRequest) (Server, error) {
 	if s.exec != nil {
 		task, err := s.EnsureInitialInfoTask(ctx, srv.ID, true)
 		if err != nil {
-			_ = s.repo.Delete(ctx, srv.ID)
+			// 记录一旦写入就不再由系统自动删除；派发失败时保留记录并标记失败态，供用户重试、编辑或自行删除。
+			_ = s.recordReachability(ctx, srv.ID, false, false, "initial server task could not be started: "+err.Error())
 			return Server{}, err
 		}
 		srv.InitialTaskID = task.ID

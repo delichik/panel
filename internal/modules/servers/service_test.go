@@ -1694,7 +1694,7 @@ func TestCreateServerAutomaticallyStartsInitialInfoTask(t *testing.T) {
 	waitTaskFinished(t, taskSvc, task.ID)
 }
 
-func TestCreateServerInitialInfoFailureRollsBackServer(t *testing.T) {
+func TestCreateServerInitialInfoFailureKeepsServerAndMarksFailed(t *testing.T) {
 	svc, taskSvc, _ := testServerService(t, failingConnectivityExec{})
 	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
 	if err != nil {
@@ -1708,8 +1708,17 @@ func TestCreateServerInitialInfoFailureRollsBackServer(t *testing.T) {
 	if task.Status != tasks.StatusFailed {
 		t.Fatalf("expected initial task to fail without retry, got %#v", task)
 	}
-	if _, err := svc.Get(context.Background(), srv.ID); err == nil {
-		t.Fatal("expected created server to be rolled back")
+
+	// 用户创建的服务器不会被系统自动删除：失败后记录保留并标记不可达与具体错误，供用户重试、编辑或自行删除。
+	kept, err := svc.Get(context.Background(), srv.ID)
+	if err != nil {
+		t.Fatalf("server must not be auto-deleted on registration failure: %v", err)
+	}
+	if kept.Reachable {
+		t.Fatal("expected failed registration to mark the server unreachable")
+	}
+	if kept.LastError == "" {
+		t.Fatal("expected failed registration to record the error")
 	}
 }
 

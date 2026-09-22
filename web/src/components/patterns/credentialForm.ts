@@ -1,5 +1,21 @@
 import type { CredentialInput, CredentialType } from '@/types/credentials';
 
+export interface CredentialFormLabels {
+  name: string;
+  type: string;
+  username: string;
+  password: string;
+  privateKey: string;
+  passphrase: string;
+  leaveSecretBlank: string;
+  typeChangedRequiresSecret: string;
+  blankSecretKeepsCurrent: string;
+}
+
+export function emptyCredentialInput(): CredentialInput {
+  return { name: '', type: 'password', username: '', password: '', privateKey: '', passphrase: '' };
+}
+
 export function validateCredentialInput(input: CredentialInput, editing: boolean, typeChanged = false) {
   const errors: Partial<Record<keyof CredentialInput, string>> = {};
   if (!input.name.trim()) errors.name = 'credentialsPage.validationName';

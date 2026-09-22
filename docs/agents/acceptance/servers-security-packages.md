@@ -21,8 +21,8 @@
 - `SRV-SAVE-002`：连接 host 必须由 ipv4 优先、否则 ipv6 派生；旧记录仅有 IP 字面量 host 时读取可回填对应族，非 IP hostname 不得伪造为新合法地址。
 - `SRV-SAVE-003`：dockerHost 缺省展示值为 `unix:///var/run/docker.sock`，保存后必须用于 Agent 环境 `PANEL_AGENT_DOCKER_HOST`；Agent 通过 Docker Engine API 工作，不得改用 Docker CLI。
 - `SRV-SAVE-004`：用户提交的 traits 必须忽略；系统 traits、架构、权限、Agent 和设施标记只由后端探测与协调更新。variables 和 notes按资源字段保存，秘密不得混入。
-- `SRV-SAVE-005`：创建记录成功且 SSH executor 可用时必须创建并立即启动 `server_info_collect` bootstrap 任务，响应携带 `initialTaskId`；任务创建失败必须删除刚建记录。
-- `SRV-SAVE-006`：首次 bootstrap 只经 SSH探测发行版、结构化架构和非交互特权；架构成功落库前失败必须把任务置失败并回滚新服务器；之后 Agent 部署或完整信息刷新失败不得删除服务器。
+- `SRV-SAVE-005`：创建记录成功且 SSH executor 可用时必须创建并立即启动 `server_info_collect` bootstrap 任务，响应携带 `initialTaskId`；任务创建失败必须保留刚建记录并标记不可达/失败态，不得删除用户数据。
+- `SRV-SAVE-006`：首次 bootstrap 只经 SSH探测发行版、结构化架构和非交互特权；初始信息采集失败必须把任务置失败、标记服务器不可达并记录具体错误，记录保留供用户重试、编辑或自行删除；之后 Agent 部署或完整信息刷新失败同样不得删除服务器。
 - `SRV-SAVE-007`：更新必须先保存资源；随后的连通性探测失败只把节点标记不可达并记录错误，不得回滚更新或阻断 DNS 同步触发。
 - `SRV-SAVE-008`：更新改变连接 host 且已配置 Agent 时，必须更新默认 `https://host:9786` endpoint、标记 incompatible、清除节点证书指纹/有效期并要求重部署。
 - `SRV-SAVE-009`：保存 IP 变化或删除服务器时必须异步触发引用该服务器的入口代理 DNS 同步；同步失败不回滚本地保存，且必须可由任务状态诊断。

@@ -57,6 +57,69 @@ export function connectionHost(input: Pick<ServerSaveInput, 'ipv4' | 'ipv6'>) {
   return input.ipv4.trim() || input.ipv6.trim();
 }
 
+export type PairIssueKind = 'missing_separator' | 'empty_key' | 'duplicate_key';
+
+export interface PairIssue {
+  line: number;
+  kind: PairIssueKind;
+  key?: string;
+}
+
+export interface PairsParseResult {
+  pairs: Record<string, string>;
+  issues: PairIssue[];
+}
+
+/** 逐行解析 key=value；缺分隔符和空变量名是阻断错误，重复 key 按 last-wins 保留但记录警告。 */
+export function parsePairs(raw: string): PairsParseResult {
+  const pairs: Record<string, string> = {};
+  const issues: PairIssue[] = [];
+  raw.split('\n').forEach((line, index) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    const lineNumber = index + 1;
+    const separator = trimmed.indexOf('=');
+    if (separator < 0) {
+      issues.push({ line: lineNumber, kind: 'missing_separator' });
+      return;
+    }
+    const key = trimmed.slice(0, separator).trim();
+    if (!key) {
+      issues.push({ line: lineNumber, kind: 'empty_key' });
+      return;
+    }
+    if (key in pairs) issues.push({ line: lineNumber, kind: 'duplicate_key', key });
+    pairs[key] = trimmed.slice(separator + 1).trim();
+  });
+  return { pairs, issues };
+}
+
+export function hasBlockingPairIssues(issues: PairIssue[]) {
+  return issues.some((issue) => issue.kind !== 'duplicate_key');
+}
+
+export function stringifyPairs(value?: Record<string, string>) {
+  return Object.entries(value ?? {}).map(([key, val]) => `${key}=${val}`).join('\n');
+}
+
+export type ServerProbeInput = Pick<ServerSaveInput, 'ipv4' | 'ipv6' | 'port' | 'sshUsername' | 'credentialId'>;
+
+/** 探测只依赖连接字段；名称、Docker Host、变量、备注的错误不得连坐探测按钮。 */
+export function validateProbeInput(input: ServerProbeInput) {
+  const errors: Partial<Record<'ipv4' | 'ipv6' | 'port' | 'credentialId', string>> = {};
+  if (!input.ipv4.trim() && !input.ipv6.trim()) errors.ipv4 = 'serversPage.validationAddressRequired';
+  else if (input.ipv4.trim() && !isIPv4(input.ipv4)) errors.ipv4 = 'serversPage.validationIpv4';
+  if (input.ipv6.trim() && !isIPv6(input.ipv6)) errors.ipv6 = 'serversPage.validationIpv6';
+  if (!input.credentialId.trim()) errors.credentialId = 'serversPage.validationCredential';
+  if (!Number.isFinite(input.port) || input.port < 1 || input.port > 65535) errors.port = 'serversPage.validationPort';
+  return errors;
+}
+
+/** 探测实际使用的连接字段签名；变化即视为旧探测结果过期。 */
+export function connectionSignature(input: ServerProbeInput) {
+  return JSON.stringify([input.ipv4.trim(), input.ipv6.trim(), input.port, input.sshUsername.trim(), input.credentialId]);
+}
+
 export function validateServerInput(input: ServerSaveInput) {
   const errors: Partial<Record<keyof ServerSaveInput, string>> = {};
   if (!input.name.trim()) errors.name = 'serversPage.validationName';

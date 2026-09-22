@@ -58,7 +58,7 @@ export const serversApi = {
   delete(id: string) {
     return apiClient.delete<void>(`/servers/${encodeURIComponent(id)}`);
   },
-  probe(input: ServerSaveInput) {
+  probe(input: Pick<ServerSaveInput, 'ipv4' | 'ipv6' | 'port' | 'sshUsername' | 'credentialId'>) {
     return apiClient.post<ServerProbeResult>('/servers/probe', input);
   },
   test(id: string) {

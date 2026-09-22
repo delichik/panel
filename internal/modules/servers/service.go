@@ -829,9 +829,11 @@ func (s *Service) failConnectivityTask(ctx context.Context, task tasks.Task, srv
 		_ = s.tasks.FailRetryable(ctx, task.ID, err)
 		return
 	}
-	_ = s.tasks.AppendLog(ctx, task.ID, "system", "server creation rolled back because initial information collection failed")
-	if rollbackErr := s.rollbackInitialServer(ctx, srv.ID); rollbackErr != nil {
-		_ = s.tasks.AppendLog(ctx, task.ID, "stderr", "failed to roll back server creation: "+rollbackErr.Error())
+	// 用户创建的服务器不会被系统自动删除；初始信息采集失败只把任务置失败，
+	// 并标记不可达与具体错误，记录保留供用户重试、编辑或自行删除。
+	_ = s.tasks.AppendLog(ctx, task.ID, "system", "server registration failed; the server is kept for retry")
+	if recErr := s.recordReachability(ctx, srv.ID, false, false, "server registration failed: "+err.Error()); recErr != nil {
+		_ = s.tasks.AppendLog(ctx, task.ID, "stderr", "failed to record registration failure: "+recErr.Error())
 	}
 	_ = s.tasks.Fail(ctx, task.ID, err)
 }
@@ -860,10 +862,6 @@ func (s *Service) recordConnectivity(ctx context.Context, serverID string, reach
 		"reachable": reachable, "privilege_mode": mode, "privilege_last_checked_at": now,
 		"last_checked_at": now, "last_error": message, "host_key_mismatch": hostKeyMismatch, "updated_at": now,
 	})
-}
-
-func (s *Service) rollbackInitialServer(ctx context.Context, serverID string) error {
-	return orm.New(s.db).From("servers").Where("id=?", serverID).Delete(ctx)
 }
 
 func (s *Service) runInstallUFW(ctx context.Context, taskID string, srv Server, adapter linux.DistroAdapter) {
