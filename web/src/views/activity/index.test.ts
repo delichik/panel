@@ -34,6 +34,33 @@ async function render(url = '/activity?from=2026-09-14T00:00:00Z') {
 }
 function button(text: string) { return wrapper!.findAll('button').find(item => item.text() === text)!; }
 
+// This vitest jsdom environment does not provide localStorage; stub it like
+// AppShell's test does so the auto-refresh preference can be seeded.
+function createStorage(): Storage {
+  let store = new Map<string, string>();
+  return {
+    get length() {
+      return store.size;
+    },
+    clear() {
+      store = new Map();
+    },
+    getItem(key: string) {
+      return store.has(key) ? store.get(key)! : null;
+    },
+    key(index: number) {
+      return Array.from(store.keys())[index] ?? null;
+    },
+    removeItem(key: string) {
+      store.delete(key);
+    },
+    setItem(key: string, value: string) {
+      store.set(key, String(value));
+    },
+  };
+}
+vi.stubGlobal('localStorage', createStorage());
+
 beforeEach(() => {
   vi.useFakeTimers();
   localStorage.setItem('panel.autoRefresh', '5');
