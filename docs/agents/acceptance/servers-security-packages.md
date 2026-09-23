@@ -35,6 +35,7 @@
 - `SRV-DEL-002`：删除必须取消该服务器 queued、scheduled、failed_retryable 和可取消的 running 任务；已取消任务不得被迟到 worker 覆盖终态，正在执行的不可取消软件包升级不得被取消。
 - `SRV-DEL-003`：同一 AppDB 事务内必须删除服务器、修剪应用 deployment server IDs、递增受影响应用 version并更新时间、移除概览卡片 serverIds；外键级联负责包/镜像缓存、实例和协调状态。
 - `SRV-DEL-004`：AppDB 删除完成后必须清理 MetricsDB 的服务器指标；任一步失败必须返回错误，不得假称完整删除成功；再次删除不存在 ID 返回 404。
+- `SRV-DEL-005`：AppDB 删除完成后应尽力删除该服务器的 Agent 节点证书资产（`agent-server-<serverID>`）；清理失败只记录告警日志，不得把已提交的删除报为失败，残留孤儿资产不得影响后续任何服务器的证书签发。
 
 ## 3. 连通性、特权与主机密钥
 
@@ -66,10 +67,11 @@
 - `AGT-CERT-001`：`POST /servers/{id}/agent/certificate` 只作为高级手动安装兜底返回 CA、节点证书、私钥、监听地址、Agent URL 和 Docker host，不落库；响应必须受认证且不得进入日志或缓存。
 - `AGT-CERT-002`：系统证书列表只展示已有元数据的 Agent CA、Panel client、节点 server证书和 Panel TLS链；系统资产不可通过普通 key asset API下载、导出、删除、重签或作为应用文件。
 - `AGT-CERT-003`：重置 Panel Agent client 保留 CA并热加载共享 gRPC client；重置 Agent CA同时生成 client并为全部已配置服务器排队重部署；重置单节点证书复用节点部署任务。
+- `AGT-CERT-004`：为服务器签发 Agent 证书时，节点证书材料持久化为 `key_assets` 中按 `agent-server-<serverID>` 命名的系统资产；资产名称必须包含稳定 serverID，服务器重名、删除后重建同名服务器或重复签发都不得违反 `key_assets.name` 唯一约束；重新签发必须按 serverID 原地更新同一资产，不产生重复资产。
 - `AGT-RPT-001`：Panel 必须主动拨号打开 mTLS report stream，节点不得保存 Panel callback地址；stream状态仅写 `agent.report.*`，不得降级普通 Agent status。
 - `AGT-RPT-002`：流断开重连采用连续失败 5秒起至5分钟封顶退避；一旦该连接成功交付报告即重置退避，等待退避的连接不得被静默检测循环反复取消。
 - `AGT-RPT-003`：指标、容器、镜像或软件包报告的落库失败只记录日志，不中断流；容器保存失败不得触发应用 reconcile，空容器报告不得清空已有观察。
-- `AGT-RPT-004`：周期样本时间必须 Unix interval对齐；Docker事件触发的 `container_change` 可不对齐。缓存未齐或任一指标超过15秒未成功采样时不提交指标，Panel保留旧值。
+- `AGT-RPT-004`：周期样本时间必须 Unix interval对齐；Docker事件触发的 `container_change` 可不对齐。缓存未齐或任一指标超过15秒未成功采样时不提交指标，Panel保留旧值。网络速率必须是采集窗口内的平均字节数每秒：Agent 按固定节拍读取 `/proc/net/dev` 累计收发字节并在内存累加相邻读数差，上报整点消费累加值除以自上次提交以来读数窗口的实际时长，因此采集间隔为 N 秒时样本反映这 N 秒产生的流量平均值，不得上报单次 1 秒瞬时样本；读数之间计数器回退（网卡重建、计数器回绕）按 0 增量跳过，消费后没有新读数时不产出网络指标（整体保持不提交）。
 
 ## 5. UFW
 
@@ -125,7 +127,7 @@
 ## 9. 验收证据
 
 - `SRV-EVD-001`：路由清单必须覆盖 credentials CRUD、servers CRUD/probe/test/trust/restart/agent、UFW、fail2ban及packages全部路径，且与前端 typed client一致。
-- `SRV-EVD-002`：测试必须证明列表不选择秘密/大字段、编辑空secret保留、主机key变化失败关闭、服务器删除事务清引用，以及删除不依赖远端可达。
+- `SRV-EVD-002`：测试必须证明列表不选择秘密/大字段、编辑空secret保留、主机key变化失败关闭、服务器删除事务清引用、删除时清理节点证书资产，以及删除不依赖远端可达。
 - `SRV-EVD-003`：任务测试必须证明同步executor才结束任务、相同资源重复触发的复用边界、自动部署退避/封禁/手动解封和不可取消升级语义。
 - `SRV-EVD-004`：Agent替身必须验证生产能力不回退SSH、版本/Docker/证书状态转换、report stream空快照保护和失败不致断流；单元测试不得依赖真实SSH、apt、UFW或Docker。
 - `SRV-EVD-005`：CLI测试必须覆盖显式模式门禁、三条apps命令的表格/JSON、Docker host优先级、selector优先级与歧义、退出码及非托管容器隔离；测试使用本地runtime替身，不依赖真实Docker。

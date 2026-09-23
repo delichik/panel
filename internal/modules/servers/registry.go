@@ -158,6 +158,13 @@ func (s *Service) Delete(ctx context.Context, serverID string) error {
 			return err
 		}
 	}
+	if s.agentKeys != nil {
+		// ID-unique asset naming keeps an orphan harmless, so cleanup failure
+		// must not turn an already-committed delete into a reported failure.
+		if err := s.agentKeys.DeleteAgentServerCertificate(ctx, serverID); err != nil {
+			logging.L().Warn("agent server certificate cleanup failed", zap.String("server_id", serverID), zap.Error(err))
+		}
+	}
 	if s.tasks != nil {
 		if _, err := s.tasks.CancelByServer(ctx, serverID, "Task cancelled because the server was removed"); err != nil {
 			return err

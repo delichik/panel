@@ -71,6 +71,31 @@ func (f *fakePanelTLSProvider) ResetPanelTLS(_ context.Context, id string) (task
 	return tasks.Task{ID: "panel-reset-task", ResourceID: id}, nil
 }
 
+type fakeAgentTLSProvider struct {
+	deletedServerIDs []string
+}
+
+func (f *fakeAgentTLSProvider) EnsureAgentTLSAssets(context.Context) (*agentsecurity.TLSAssets, error) {
+	return nil, nil
+}
+
+func (f *fakeAgentTLSProvider) IssueAgentServerCertificate(context.Context, string, string, string) (agentsecurity.ServerCertificate, []byte, error) {
+	return agentsecurity.ServerCertificate{}, nil, nil
+}
+
+func (f *fakeAgentTLSProvider) ResetAgentCA(context.Context) (*agentsecurity.TLSAssets, error) {
+	return nil, nil
+}
+
+func (f *fakeAgentTLSProvider) ResetAgentClientCertificate(context.Context) (*agentsecurity.TLSAssets, error) {
+	return nil, nil
+}
+
+func (f *fakeAgentTLSProvider) DeleteAgentServerCertificate(_ context.Context, serverID string) error {
+	f.deletedServerIDs = append(f.deletedServerIDs, serverID)
+	return nil
+}
+
 func setServerArchitecture(t *testing.T, store *storage.Store, serverID string) {
 	t.Helper()
 	if _, err := store.AppDB().Exec(`UPDATE servers SET architecture_os='linux', architecture_arch='amd64', architecture_machine='x86_64' WHERE id=?`, serverID); err != nil {
@@ -313,6 +338,25 @@ func TestDeleteServerCancelsTasksAndCleansLocalReferences(t *testing.T) {
 	}
 	if strings.Contains(rawCards, srv.ID) || !strings.Contains(rawCards, "srv_other") {
 		t.Fatalf("expected overview card server IDs to be pruned, got %s", rawCards)
+	}
+}
+
+// SRV-DEL-005: deleting a server must also drop its per-server agent
+// certificate asset so key_assets does not accumulate orphans.
+func TestDeleteServerRemovesAgentCertificateAsset(t *testing.T) {
+	svc, _, _ := testServerService(t, nil)
+	provider := &fakeAgentTLSProvider{}
+	svc.agentKeys = provider
+	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.Delete(context.Background(), srv.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.deletedServerIDs) != 1 || provider.deletedServerIDs[0] != srv.ID {
+		t.Fatalf("expected agent certificate cleanup for %s, got %v", srv.ID, provider.deletedServerIDs)
 	}
 }
 

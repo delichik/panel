@@ -73,6 +73,8 @@
 
 - 新增 GET `/facility-apps/reverse-proxy/diagnostics?serverId=`，配置 DTO 增加逐节点 deployments；对应 `FAC-RP-012/013`、`UI-FAC-012`。失败运行日志复用 errorDetail，按 ID/时间范围限量读取并降级，不新增 Agent RPC 字段、表或后台任务；对应 `ORCH-CTRL-008`。
 
+- Agent 节点证书 `key_assets` 资产名称纳入稳定 serverID，服务器删除时尽力清理 `agent-server-<id>` 资产；修复重名/重建服务器部署 Agent 时违反名称唯一约束的 2067 错误。无新增 API、表或后台任务；对应 `AGT-CERT-004`、`SRV-DEL-005`。
+
 ## 4. 持久化基线
 
 当前 ORM 模型有 44 个数据库内表声明；`application_revisions` 在 app 与 log 库分别存在，含义不同。coordination 库当前 0 个业务模型。

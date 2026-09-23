@@ -129,7 +129,7 @@ func (s *Service) upsertAgentServerCertificate(ctx context.Context, serverID, se
 		return err
 	}
 	assetID := agentServerAssetID(serverID)
-	certAsset, err := s.prepareImportedSystemCertificateAsset(ctx, ImportRequest{Type: TypeTLSCertificate, Name: "Agent server certificate - " + strings.TrimSpace(serverName), ParentAssetID: ca.ID, CertificatePEM: string(cert.CertPEM), PrivateKeyPEM: string(cert.KeyPEM)}, assetID)
+	certAsset, err := s.prepareImportedSystemCertificateAsset(ctx, ImportRequest{Type: TypeTLSCertificate, Name: agentServerAssetName(serverID, serverName), ParentAssetID: ca.ID, CertificatePEM: string(cert.CertPEM), PrivateKeyPEM: string(cert.KeyPEM)}, assetID)
 	if err != nil {
 		return err
 	}
@@ -240,6 +240,20 @@ func systemMetadata(role string) map[string]any {
 
 func agentServerAssetID(serverID string) string {
 	return "agent-server-" + strings.TrimSpace(serverID)
+}
+
+// agentServerAssetName embeds the stable server ID because key_assets.name is
+// globally unique while server names are not; two same-named servers (or a
+// re-created server colliding with an orphaned asset) must still issue.
+func agentServerAssetName(serverID, serverName string) string {
+	return "Agent server certificate - " + strings.TrimSpace(serverName) + " (#" + strings.TrimSpace(serverID) + ")"
+}
+
+// DeleteAgentServerCertificate removes the per-server certificate asset when
+// its server is deleted; with ID-unique naming a leftover orphan cannot block
+// later issuance, so callers may treat failures as non-fatal.
+func (s *Service) DeleteAgentServerCertificate(ctx context.Context, serverID string) error {
+	return s.deleteStoredAssetIfExists(ctx, agentServerAssetID(serverID))
 }
 
 func firstNonNil(errs ...error) error {

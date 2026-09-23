@@ -583,6 +583,37 @@ func TestIssueAgentServerCertificateUpsertsSystemAssetWithoutOpeningPublicImport
 	}
 }
 
+// AGT-CERT-004: server names are not unique but key_assets.name is, so issuing
+// for same-named servers must not violate the name constraint.
+func TestIssueAgentServerCertificateAllowsDuplicateServerNames(t *testing.T) {
+	svc, _, closeFn := newTestService(t)
+	defer closeFn()
+	ctx := context.Background()
+
+	if _, err := svc.EnsureAgentTLSAssets(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, serverID := range []string{"server-1", "server-2"} {
+		if _, _, err := svc.IssueAgentServerCertificate(ctx, serverID, "NAT", "192.0.2.10"); err != nil {
+			t.Fatalf("issue for %s failed: %v", serverID, err)
+		}
+	}
+	first, err := svc.Get(ctx, agentServerAssetID("server-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := svc.Get(ctx, agentServerAssetID("server-2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Name == second.Name {
+		t.Fatalf("same-named servers produced identical asset names: %s", first.Name)
+	}
+	if !strings.Contains(first.Name, "(#server-1)") || !strings.Contains(second.Name, "(#server-2)") {
+		t.Fatalf("asset names missing server IDs: %q / %q", first.Name, second.Name)
+	}
+}
+
 func TestEnsureAgentTLSAssetsRecreatesMissingCAAndClientTogether(t *testing.T) {
 	svc, store, closeFn := newTestService(t)
 	defer closeFn()

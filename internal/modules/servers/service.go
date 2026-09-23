@@ -102,6 +102,7 @@ type agentTLSProvider interface {
 	IssueAgentServerCertificate(ctx context.Context, serverID, serverName, host string) (agentsecurity.ServerCertificate, []byte, error)
 	ResetAgentCA(ctx context.Context) (*agentsecurity.TLSAssets, error)
 	ResetAgentClientCertificate(ctx context.Context) (*agentsecurity.TLSAssets, error)
+	DeleteAgentServerCertificate(ctx context.Context, serverID string) error
 }
 
 // panelTLSProvider keeps the system-certificate endpoint independent from the
