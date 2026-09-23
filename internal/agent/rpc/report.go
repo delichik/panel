@@ -38,7 +38,7 @@ type reportCollector interface {
 	CPUUsage(ctx context.Context) (float64, error)
 	MemoryStats(ctx context.Context) (total, used int64, err error)
 	DiskUsage(ctx context.Context) (total, used int64, err error)
-	NetworkRates(ctx context.Context) (rx, tx float64, err error)
+	NetworkTotals(ctx context.Context) (rx, tx int64, err error)
 	SystemStatus(ctx context.Context) (linux.SystemStatus, error)
 	PackageUpdates(ctx context.Context) ([]linux.PackageUpdate, error)
 }
@@ -74,6 +74,13 @@ type reportWatcherSnapshot struct {
 // 每个指标同时记录最近一次成功写入时间：某个指标持续采样失败超过
 // metricFreshnessWindow 后，snapshot 不再返回该缓存，避免冻结的旧值随
 // 不断前进的整点时间伪装成新样本落库。
+//
+// 网络部分保存的是自上次提交以来的字节增量（累加器）而非速率：/proc/net/dev
+// 是累计计数器，采样协程每个节拍读一次并把相邻读数的差累加进来。上报循环在
+// 整点消费累加值并除以读数窗口的实际时长，因此采集间隔是 5 秒时上报的就是
+// 这 5 秒产生的流量平均值，而不是某个 1 秒瞬时样本。读数中途的计数器回退
+// （网卡重建、回绕）按 0 增量跳过；窗口边界取实际读数时间，连续两次消费
+// 之间没有新读数时窗口时长为 0，本次不产出指标。
 const metricFreshnessWindow = 15 * time.Second
 
 type metricCache struct {
@@ -90,9 +97,13 @@ type metricCache struct {
 	diskTotalBytes     int64
 	diskUpdatedAt      time.Time
 	hasDisk            bool
-	networkRxBytesRate float64
-	networkTxBytesRate float64
+	networkLastRx      int64
+	networkLastTx      int64
+	networkWindowStart time.Time
+	networkAccRx       int64
+	networkAccTx       int64
 	networkUpdatedAt   time.Time
+	hasNetworkRaw      bool
 	hasNetwork         bool
 	status             linux.SystemStatus
 	statusUpdatedAt    time.Time
@@ -104,8 +115,8 @@ func (c *metricCache) snapshot() (linux.MetricsSnapshot, bool) {
 }
 
 func (c *metricCache) snapshotAt(now time.Time) (linux.MetricsSnapshot, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if !c.hasCPU || !c.hasMemory || !c.hasDisk || !c.hasNetwork || !c.hasStatus {
 		return linux.MetricsSnapshot{}, false
 	}
@@ -115,14 +126,18 @@ func (c *metricCache) snapshotAt(now time.Time) (linux.MetricsSnapshot, bool) {
 		c.statusUpdatedAt.Before(staleBefore) {
 		return linux.MetricsSnapshot{}, false
 	}
+	rxRate, txRate, ok := c.consumeNetworkLocked()
+	if !ok {
+		return linux.MetricsSnapshot{}, false
+	}
 	return linux.MetricsSnapshot{
 		CPUUsagePercent:    c.cpuUsagePercent,
 		MemoryUsedBytes:    c.memoryUsedBytes,
 		MemoryTotalBytes:   c.memoryTotalBytes,
 		DiskUsedBytes:      c.diskUsedBytes,
 		DiskTotalBytes:     c.diskTotalBytes,
-		NetworkRxBytesRate: c.networkRxBytesRate,
-		NetworkTxBytesRate: c.networkTxBytesRate,
+		NetworkRxBytesRate: rxRate,
+		NetworkTxBytesRate: txRate,
 		Status:             c.status,
 	}, true
 }
@@ -153,13 +168,44 @@ func (c *metricCache) setDisk(total, used int64) {
 	c.mu.Unlock()
 }
 
-func (c *metricCache) setNetwork(rx, tx float64) {
+func (c *metricCache) accumulateNetwork(rx, tx int64) {
+	c.accumulateNetworkAt(rx, tx, time.Now().UTC())
+}
+
+func (c *metricCache) accumulateNetworkAt(rx, tx int64, now time.Time) {
 	c.mu.Lock()
-	c.networkRxBytesRate = rx
-	c.networkTxBytesRate = tx
-	c.networkUpdatedAt = time.Now().UTC()
-	c.hasNetwork = true
-	c.mu.Unlock()
+	defer c.mu.Unlock()
+	if c.hasNetworkRaw {
+		c.networkAccRx += maxInt64(0, rx-c.networkLastRx)
+		c.networkAccTx += maxInt64(0, tx-c.networkLastTx)
+		c.hasNetwork = true
+	} else {
+		c.networkWindowStart = now
+	}
+	c.networkLastRx = rx
+	c.networkLastTx = tx
+	c.networkUpdatedAt = now
+	c.hasNetworkRaw = true
+}
+
+// consumeNetworkLocked 把累加器折算成读数窗口内的平均速率并重置窗口。
+// 窗口时长取最近与最早读数时间的差（networkUpdatedAt 即最近一次成功读数），
+// 因此没有新读数时窗口时长为 0，本次不产出指标，上报循环保持 metrics 为
+// nil 让 Panel 沿用旧值。
+func (c *metricCache) consumeNetworkLocked() (rxRate, txRate float64, ok bool) {
+	if !c.hasNetwork {
+		return 0, 0, false
+	}
+	elapsed := c.networkUpdatedAt.Sub(c.networkWindowStart).Seconds()
+	if elapsed <= 0 {
+		return 0, 0, false
+	}
+	rxRate = float64(c.networkAccRx) / elapsed
+	txRate = float64(c.networkAccTx) / elapsed
+	c.networkWindowStart = c.networkUpdatedAt
+	c.networkAccRx = 0
+	c.networkAccTx = 0
+	return rxRate, txRate, true
 }
 
 func (c *metricCache) setStatus(status linux.SystemStatus) {
@@ -354,9 +400,9 @@ func (h *reportHub) sampleDisk(ctx context.Context) {
 
 func (h *reportHub) sampleNetwork(ctx context.Context) {
 	for {
-		rx, tx, err := h.collector.NetworkRates(ctx)
+		rx, tx, err := h.collector.NetworkTotals(ctx)
 		if err == nil {
-			h.metrics.setNetwork(rx, tx)
+			h.metrics.accumulateNetwork(rx, tx)
 		} else if ctx.Err() == nil {
 			logging.L().Warn("agent network sampling failed", zap.Error(err))
 		}
@@ -801,4 +847,11 @@ func minOptionalTime(a, b time.Time) time.Time {
 		return b
 	}
 	return a
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }

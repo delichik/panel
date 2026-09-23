@@ -125,19 +125,14 @@ func (LocalCollector) CPUUsage(ctx context.Context) (float64, error) {
 	return cpuUsage(firstCPU, secondCPU), nil
 }
 
-func (LocalCollector) NetworkRates(ctx context.Context) (rx, tx float64, err error) {
-	firstNet, err := readNetworkTotals()
+// NetworkTotals 返回除 lo 外所有网卡的累计收发字节数。速率由报告中心基于
+// 相邻读数的时间差计算，这里不做窗口采样。
+func (LocalCollector) NetworkTotals(_ context.Context) (int64, int64, error) {
+	totals, err := readNetworkTotals()
 	if err != nil {
 		return 0, 0, err
 	}
-	if err := sleepContext(ctx, time.Second); err != nil {
-		return 0, 0, err
-	}
-	secondNet, err := readNetworkTotals()
-	if err != nil {
-		return 0, 0, err
-	}
-	return float64(maxInt64(0, secondNet.rx-firstNet.rx)), float64(maxInt64(0, secondNet.tx-firstNet.tx)), nil
+	return totals.rx, totals.tx, nil
 }
 
 func (LocalCollector) MemoryStats(ctx context.Context) (total, used int64, err error) {
