@@ -10,12 +10,12 @@
 - `FileUploadButton`：用于单文件或多文件选择，页面负责执行上传。禁止在业务页裸露不同样式的 `<input type="file">`。
 - `DownloadButton`：用于 blob、归档、证书、密钥等下载动作，页面负责调用 API 并处理 `saveBlobDownload`。
 - `StatusBadge`：集中维护状态到 tone 的映射。支持 `generic`、`server`、`task`、`certificate`、`resource`、`operation` domain；页面只有在确有业务差异时才传入显式 `tone`。
-- `Select`：用于单选下拉。交付形态必须是 Panel 自有 combobox + listbox 浮层，使用 popover 表面、统一 hover/selected/focus/motion 状态和暗色主题 token；不得把浏览器原生 `<option>` 展开菜单作为用户可见交互形态。
-- `Dropdown`：菜单 Teleport 到 `body`，使用 fixed 定位、视口边界收敛和上下碰撞选择，不能留在业务容器内被 `overflow` 裁切；菜单宽度按内容收缩并保持紧凑，禁止 fixed 后按视口宽度拉伸；继续支持方向键、Home/End、Escape 和焦点恢复。
+- `Select`：用于单选下拉。交付形态必须是 Panel 自有 combobox + listbox 浮层，使用 popover 表面、统一 hover/selected/focus/motion 状态和暗色主题 token；不得把浏览器原生 `<option>` 展开菜单作为用户可见交互形态。必须把页面传入的 `aria-label` / `aria-invalid` 等 ARIA 属性绑定到 combobox 控件（组件 `inheritAttrs: false`，不得丢弃），并支持方向键、Home/End、Escape 与 `Tab` 关闭。
+- `Dropdown`：菜单 Teleport 到 `body`，使用 fixed 定位、视口边界收敛和上下碰撞选择，不能留在业务容器内被 `overflow` 裁切；菜单宽度按内容收缩并保持紧凑，禁止 fixed 后按视口宽度拉伸；继续支持方向键、Home/End、Escape 和焦点恢复；`Tab` 离开菜单时必须关闭并同步 `aria-expanded`。
 - `Dialog`：不响应遮罩点击关闭，只能通过关闭按钮、取消操作或 Escape 关闭；普通和 large 尺寸的 body 都必须有可靠的内部纵向滚动，页脚保持在弹窗网格底部；业务正文不能依赖外层页面滚动才能到达。
 - `ToastProvider`：支持可选 `action={label,to}` 路由动作，带动作保留 15 秒；`useSuccessToast(title, receipt)` / `useErrorToast(title, error)` 从本次返回的真实关联生成“查看过程”，禁止用全局最近请求或解析提示文本关联。全局顶部 toast；页面和组件内 catch 到的异常统一以 danger toast 展示，字段校验与结构化诊断仍就地展示。
 - `LoadingOverlay`：用于对话框正文、文本编辑区、卡片或区块等待网络响应时的统一加载覆盖；不得用裸文字代替加载效果。
-- `Table`：用于表格型列表。首次加载且没有旧数据时传入 `loading` 与本地化 `loadingLabel`，由组件渲染表格骨架行；已有数据刷新时保留当前 rows，只让刷新入口或分页入口显示 loading。 表格行由组件统一加 `motion-table-row` 交错入场（`--panel-stagger`，仅首屏/新增行播放）。
+- `Table`：用于表格型列表。首次加载且没有旧数据时传入 `loading` 与本地化 `loadingLabel`，由组件渲染表格骨架行；已有数据刷新时保留当前 rows，只让刷新入口或分页入口显示 loading。 表格行由组件统一加 `motion-table-row` 交错入场（`--panel-stagger`，仅首屏/新增行播放）。表头单元格必须输出 `scope="col"`，sticky 表头保持不透明底色。
 - `CodeEditor`：文本/代码编辑器（CodeMirror）。内置查找/替换面板：`Ctrl/Cmd+F` 打开查找、`Ctrl/Cmd+H` 打开同一面板进入替换、`F3/Shift+F3` 或 `Ctrl/Cmd+G` 下一个/上一个、`Esc` 关闭；全部匹配高亮，支持 正则 / 区分大小写 / 整词 三个开关；只读态自动隐藏替换区；面板文案由组件内 i18n 词条（`codeEditor.*`）随界面语言切换，业务页面无需额外传参。
 
 ## Pattern components
@@ -40,13 +40,17 @@
 4. 上传、下载、确认对话框只负责交互入口；请求、错误摘要、任务入口和两阶段反馈由业务页面按照 [interaction-model.md](interaction-model.md) 实现。
 5. 应用文件与设施静态资产如果具备相同的上传、替换、下载、删除和文本编辑行为，必须复用 `AssetFileManager`，不得在页面内复制另一套文件行和弹窗；领域差异只能放在 adapter/API 中。
 6. 中大屏布局中，`ServerContextSelector`、`AssetFileManager` 必须放在模板提供的内部滚动区域，不得恢复页面级滚动。
+7. 主从工作台的详情上下文切换必须复用 `MasterDetailLayout` 的 `detail-key`（传入当前选中对象标识），页面不得自建第二套详情过渡；同一对象的刷新不传新 key，避免重播。
+8. 紧凑视口（`<xl`）的主从切换必须复用 `MasterDetailLayout` 的单视图能力：页面传 `back-label`（本地化）与 `has-detail`，用 `@back` 清空选中项和对应 query；同时用 `useCompactViewport` 抑制“自动选中首条对象”，让窄屏停在列表/选择器。不得在页面内复制一套 `hidden xl:grid` 切换（activity 的既有实现除外，见其页面合同）。
+9. 页面内分段切换（如证书的域名/自签/密钥）使用带 `aria-current` 的链接或 `Tabs`，不得用一排 `primary` 按钮表达选中态；页面内搜索一律复用 `SearchInput`，不得手写放大镜 + Input 组合。
 
 ## 当前接入记录
 
 - `web/src/views/applications/ApplicationLogsDialog.vue`：业务容器日志弹窗复用 Dialog/Select/Button/LoadingOverlay；按服务器与容器展示实例，日志在固定弹窗正文内滚动，切换/关闭取消旧请求，不使用活动日志替代容器输出。
 
 - `web/src/views/applications/index.vue`：应用搜索、状态、应用/设施连续纵向配置流、部署/网关/源站服务器多选、持久化数据下载/恢复，以及应用文件和设施静态资产共用的 `AssetFileManager` 已接入统一 primitives/patterns。 未保存修改的离开/取消保护已接入 `ConfirmDialog`。
-- `web/src/views/security/index.vue` 与 `web/src/views/resources/index.vue`：服务器上下文选择已接入 `ServerContextSelector` 及其加载骨架，页面不得再在同一上下文区域叠加 Select 下拉。
+- `web/src/views/security/index.vue` 与 `web/src/views/resources/index.vue`：服务器上下文选择已接入 `ServerContextSelector` 及其加载骨架，页面不得再在同一上下文区域叠加 Select 下拉。resources 的软件包搜索、certificates 的模式切换分别复用 `SearchInput` 与带 `aria-current` 的分段链接，不再手写同类控件。
+- `web/src/components/templates/MasterDetailLayout.vue`：servers、credentials、dns、certificates、security、resources、applications、activity 通过 `detail-key` 接入详情进场动效；详情区可选横幅统一放进正文内部滚动区。除 activity（自带列表⇄详情切换）外，上述页面都传入 `back-label`/`has-detail` 接入紧凑视口单视图，并用 `useCompactViewport` 关闭窄屏的“自动选中首条”。
 
 - `web/src/components/activity/EventTimeline.vue`：统一只读事实时间线，同步骤连续输出可折叠，异常和决策展开，技术标识折叠；通过 context/evidence 事件交由页面读取上下文与下载证据。`/activity` 只按需读取，保留手动刷新与 cursor 分页，不接入共享自动刷新，不显示全量计数或新数据提示；正文每次替换为当前 100 条批次，较早/较新导航只保存游标，禁止不断追加 DOM。
 

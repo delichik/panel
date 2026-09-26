@@ -1,4 +1,4 @@
-import type { OverviewCardConfiguration, OverviewCardData, OverviewDto, OverviewMetricsSeries, OverviewCardRange, OverviewServerSummary } from '@/types/overview';
+import type { OverviewCardConfiguration, OverviewCardData, OverviewDto, OverviewMetricPoint, OverviewMetricsSeries, OverviewCardRange, OverviewServerSummary } from '@/types/overview';
 
 export interface OverviewRisk {
   id: string;
@@ -68,33 +68,100 @@ export function createOverviewCard(
   };
 }
 
-/**
- * 多服务器指标按时间戳对齐后聚合（同一时刻取均值），避免按数组下标错位聚合。
- */
-export function aggregateMetricValues(
-  pointsByServer: Array<Array<{ time: string }>>,
-  valueOf: (point: { time: string }) => number,
-): { times: string[]; values: number[] } {
-  const byTime = new Map<string, number[]>();
-  pointsByServer.forEach((points) => points.forEach((point) => {
-    const list = byTime.get(point.time);
-    if (list) list.push(valueOf(point));
-    else byTime.set(point.time, [valueOf(point)]);
-  }));
-  const times = [...byTime.keys()].sort((a, b) => Date.parse(a) - Date.parse(b));
-  return {
-    times,
-    values: times.map((time) => {
-      const list = byTime.get(time) ?? [];
-      return list.length ? list.reduce((sum, value) => sum + value, 0) / list.length : 0;
-    }),
-  };
+export interface OverviewCardChartSeries {
+  id: string;
+  name: string;
+  values: Array<number | null>;
 }
 
+export interface OverviewCardView {
+  labels: string[];
+  series: OverviewCardChartSeries[];
+  latestValue: number | null;
+  peakValue: number | null;
+}
+
+/**
+ * 一次性把卡片原始指标派生成图表与摘要视图。每个服务器先建 time -> value
+ * 映射，再按统一时间轴取值，整体复杂度为 O(总点数 + 服务器数 x 时间点数)，
+ * 避免在渲染期做 O(n²) 的逐点查找。摘要值按时间取跨服务器均值，与旧聚合语义一致。
+ */
+export function deriveCardView(
+  card: OverviewCardConfiguration,
+  data: OverviewCardData | undefined,
+  serverName: (serverId: string) => string,
+): OverviewCardView {
+  const entries = Object.entries(data?.metricsByServer ?? {})
+    .map(([serverId, series]) => ({ serverId, points: metricPoints(card, series) }))
+    .filter((entry) => entry.points.length > 0);
+  const timeSet = new Set<string>();
+  const perServer = entries.map(({ serverId, points }) => {
+    const values = new Map<string, number>();
+    for (const point of points) {
+      values.set(point.time, metricValueOf(card, point));
+      timeSet.add(point.time);
+    }
+    return { serverId, values };
+  });
+  const labels = [...timeSet].sort((a, b) => Date.parse(a) - Date.parse(b));
+  const series = perServer.map(({ serverId, values }) => ({
+    id: serverId,
+    name: serverName(serverId),
+    values: labels.map((time) => values.get(time) ?? null),
+  }));
+  const sums = labels.map(() => 0);
+  const counts = labels.map(() => 0);
+  for (const { values } of perServer) {
+    labels.forEach((time, index) => {
+      const value = values.get(time);
+      if (value === undefined) return;
+      sums[index] += value;
+      counts[index] += 1;
+    });
+  }
+  let latestValue: number | null = null;
+  let peakValue: number | null = null;
+  labels.forEach((_, index) => {
+    if (!counts[index]) return;
+    const average = sums[index] / counts[index];
+    latestValue = average;
+    if (peakValue === null || average > peakValue) peakValue = average;
+  });
+  return { labels, series, latestValue, peakValue };
+}
+
+export function metricPoints(card: OverviewCardConfiguration, series: OverviewMetricsSeries): OverviewMetricPoint[] {
+  if (card.kind === 'cpu') return series.cpu ?? [];
+  if (card.kind === 'memory') return series.memory ?? [];
+  if (card.kind === 'disk') return series.disk ?? [];
+  if (card.kind === 'network') return series.network ?? [];
+  return [];
+}
+
+export function metricValueOf(card: OverviewCardConfiguration, point: OverviewMetricPoint) {
+  if (card.kind === 'cpu') return point.usagePercent ?? 0;
+  if (card.kind === 'memory' || card.kind === 'disk') return percentUsed(point);
+  if (card.kind === 'network') {
+    if (card.networkDirection === 'rx') return point.rxBytesPerSecond ?? 0;
+    if (card.networkDirection === 'tx') return point.txBytesPerSecond ?? 0;
+    return (point.rxBytesPerSecond ?? 0) + (point.txBytesPerSecond ?? 0);
+  }
+  return 0;
+}
+
+function percentUsed(point: OverviewMetricPoint) {
+  return point.totalBytes ? ((point.usedBytes ?? 0) / point.totalBytes) * 100 : 0;
+}
+
+/**
+ * 增量响应返回从 since 所在桶开始的完整桶，因此按时间戳做后缀替换：保留
+ * 早于首个新桶的旧点，再用重算后的桶替换尾部，避免把未满桶的均值追加两次。
+ */
 export function mergeMetricPoints<T extends { time: string }>(existing: T[] | undefined, incoming: T[] | undefined): T[] {
   if (!incoming?.length) return existing ? [...existing] : [];
   if (!existing?.length) return [...incoming];
-  return [...existing, ...incoming];
+  const cutoff = incoming[0].time;
+  return [...existing.filter((point) => point.time < cutoff), ...incoming];
 }
 
 export function mergeMetricSeries(existing: OverviewMetricsSeries | undefined, incoming: OverviewMetricsSeries | undefined): OverviewMetricsSeries {
@@ -112,7 +179,7 @@ export function mergeCardData(existing: OverviewCardData | undefined, delta: Ove
   for (const serverId of serverIds) {
     metricsByServer[serverId] = mergeMetricSeries(existing?.metricsByServer[serverId], delta.metricsByServer[serverId]);
   }
-  return { card: delta.card, metricsByServer };
+  return { card: delta.card, metricsByServer, bucketSeconds: delta.bucketSeconds };
 }
 
 const RANGE_DURATIONS_MS: Record<OverviewCardRange, number> = {

@@ -89,9 +89,10 @@
 - `OBS-OVW-002`：首次 `GET /overview/cards` 必须幂等创建固定default配置；之后读取按原有顺序完整返回，空数组是合法配置。
 - `OBS-OVW-003`：`PUT /overview/cards` 整套原子替换，最多100卡；ID非空且唯一、kind在白名单、width 1..6、height 1..4、range合法、networkDirection为rx/tx/both、serverIds非空项且卡内唯一。
 - `OBS-OVW-004`：验证失败不得覆盖旧卡片JSON；成功后重启仍保持顺序、尺寸、范围和服务器选择。
-- `OBS-OVW-005`：`GET /overview/cards/{id}/data` 对不存在ID返回404；非指标卡返回空metricsByServer；指标卡空serverIds表示全部现存服务器，非空只查询仍存在的选择。
-- `OBS-OVW-006`：合法 `since` 只返回严格更新点，非法RFC3339Nano返回422；多服务器必须批量查询并为无数据服务器保留空Series，不能用0填缺失采样。
-- `OBS-OVW-007`：自动刷新前端必须防重入、页面隐藏/离线/编辑态暂停、切换或卸载丢弃迟到响应；失败静默保留旧数据并下周期重试，不弹误导toast。
+- `OBS-OVW-005`：`GET /overview/cards/{id}/data` 对不存在ID返回404；非指标卡返回空metricsByServer和bucketSeconds=0；指标卡空serverIds表示全部现存服务器，非空只查询仍存在的选择；指标卡只物化该卡kind对应的序列（CPU/内存/磁盘/网络，load不参与概览），其余序列返回空数组。
+- `OBS-OVW-006`：指标卡数据必须服务端降采样：按range和本次查询的服务器数量选择固定时间桶（响应携带bucketSeconds），保证单卡点数有界且与原始采样频率无关；合法 `since` 先向下对齐到桶起点，并返回从该桶开始、完整重算的桶；非法RFC3339Nano返回422；多服务器必须批量查询并为无数据服务器保留空Series，不能用0填缺失采样。
+- `OBS-OVW-007`：自动刷新前端必须防重入、页面隐藏/离线/编辑态暂停、切换或卸载丢弃迟到响应；增量按桶对已有序列做后缀替换，不得把同一未满桶重复追加；`bucketSeconds` 变化时必须整卡重载；失败静默保留旧数据并下周期重试，不弹误导toast。
+- `OBS-OVW-008`：概览卡片的时间轴对齐、跨服务器聚合、最新值与峰值必须在数据落地时派生一次并缓存，渲染期只读缓存；单卡派生复杂度与总点数线性，禁止渲染期做逐点查找（O(n²)）或 `Math.max(...values)` 式参数展开。
 
 ## 10. 诊断快照
 

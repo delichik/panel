@@ -34,6 +34,7 @@ import type { AssetFileAdapter, AssetFileItem } from '@/components/patterns/asse
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import EditorPage from '@/components/templates/EditorPage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
+import { useCompactViewport } from '@/composables/useCompactViewport';
 import { useI18n } from '@/i18n';
 import type { ApplicationDto, ApplicationEditPreviewResult, ApplicationEditSession, ApplicationFile, ApplicationRuntime, ApplicationSummaryDto, Diagnostic, PanelFileDefinition, ReverseProxyRule, TemplateVariableDefinition } from '@/types/applications';
 import type { FacilityEditPreviewResult, FacilityEditSession, FacilityRouteDomain, FacilityRoutePath, ReverseProxyConfig, StaticAsset, StorageShareConfig } from '@/types/facilityApps';
@@ -197,6 +198,8 @@ const isFacilityEditor = computed(() => mode.value === 'facilityConfig' && isRev
 const facilityEditing = ref(false);
 const facilityEditingView = computed(() => (mode.value === 'facilityConfig' && isReverseProxyFacility.value) || facilityEditing.value);
 const currentApplicationSummary = computed(() => applications.value.find((item) => item.id === selectedId.value) ?? null);
+/** 紧凑视口（xl 以下）不自动选中首个应用：窄屏应停在列表，由用户进入详情。 */
+const compactViewport = useCompactViewport();
 const currentApplication = computed(() => selectedId.value ? applicationDetails.value[selectedId.value] ?? null : null);
 const selectedApplication = computed(() => currentApplication.value ?? applicationFromSummary(currentApplicationSummary.value) ?? emptyApplication());
 const persistentServerOptions = computed(() => (selectedApplication.value.persistentServers ?? []).map((serverId) => ({ label: serverDisplayName(serverId), value: serverId })));
@@ -607,6 +610,12 @@ watch(selectedId, async (value) => {
   }
 });
 
+/** 窄屏单视图：返回应用列表并清掉 URL 里的选中项。 */
+function backToApplicationList() {
+  selectedId.value = '';
+  void router.replace({ query: { ...route.query, application: undefined } });
+}
+
 watch(() => selectedApplication.value.persistentServers, (serverIds) => {
   const locations = serverIds ?? [];
   if (!locations.includes(persistentServerId.value)) {
@@ -731,7 +740,7 @@ async function loadApplications(options: { loadSelectedRuntime?: boolean } = {})
     }
     const appIds = new Set(apps.map((item) => item.id));
     applicationDetails.value = Object.fromEntries(Object.entries(applicationDetails.value).filter(([id]) => appIds.has(id)));
-    selectedId.value = apps.some((item) => item.id === selectedId.value) ? selectedId.value : apps[0]?.id ?? '';
+    selectedId.value = apps.some((item) => item.id === selectedId.value) ? selectedId.value : (compactViewport.value ? '' : apps[0]?.id ?? '');
     if (options.loadSelectedRuntime) {
       void loadApplicationDetail(selectedId.value);
       void loadRuntime(selectedId.value);
@@ -1746,13 +1755,13 @@ onBeforeUnmount(() => {
       <Button size="sm" variant="primary" @click="router.push('/applications/apps/create')"><Plus />{{ t('applicationsPage.createApplication') }}</Button>
     </template>
 
-    <MasterDetailLayout class="h-full min-h-[660px]">
+    <MasterDetailLayout class="h-full" :detail-key="selectedId" :has-detail="!!currentApplicationSummary" :back-label="t('common.backToList')" @back="backToApplicationList">
       <template #master>
       <aside class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] rounded-2xl border border-border bg-card">
         <div class="border-b border-border p-4">
           <SearchInput v-model="search" clearable :placeholder="t('applicationsPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
         </div>
-        <div class="motion-stagger min-h-0 overflow-auto p-2">
+        <div class="motion-stagger min-h-0 overflow-auto p-2 max-lg:max-h-[60dvh]">
           <div v-if="loading && !applications.length" class="grid gap-2" aria-hidden="true">
             <div v-for="item in 7" :key="item" class="grid gap-2 rounded-xl border border-border bg-muted p-3">
               <div class="flex items-center justify-between gap-2">
@@ -1812,7 +1821,7 @@ onBeforeUnmount(() => {
           </div>
         </article>
         <EmptyState v-else-if="!currentApplicationSummary" :title="t('applicationsPage.selectApplication')" :description="t('applicationsPage.selectApplicationHint')" />
-        <article v-else class="relative grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
+        <article v-else class="relative grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
           <LoadingOverlay v-if="detailLoading && !applicationDetails[selectedId]" />
           <header class="flex items-start justify-between gap-4 border-b border-border p-5 max-md:grid">
             <div class="min-w-0">
@@ -2029,14 +2038,14 @@ onBeforeUnmount(() => {
             </div>
   
             <div class="app-editor-body">
-              <section class="workspace-panel">
+              <section class="workspace-panel motion-enter">
                 <div class="section-copy"><h3>{{ t('applicationsPage.gatewayNodes') }}</h3><p>{{ t('applicationsPage.gatewayNodesHint') }}</p></div>
                 <div class="server-picker-grid">
                   <ServerMultiPicker v-model="facilityDeploymentServersModel" :servers="serverOptions" :label="t('applicationsPage.gatewayNodes')" />
                 </div>
               </section>
   
-              <section class="workspace-panel">
+              <section class="workspace-panel motion-enter">
                 <div class="section-heading"><div class="section-copy"><h3>{{ t('applicationsPage.domainGroups') }}</h3><p>{{ t('applicationsPage.domainGroupsHint') }}</p></div><Button size="sm" @click="openFacilityDomainDialog()"><Plus />{{ t('applicationsPage.addDomain') }}</Button></div>
                 <EmptyState v-if="!facilityDraft.domains.length" :title="t('applicationsPage.noDomains')" :description="t('applicationsPage.noDomainsHint')" />
                 <div v-for="(domain, domainIndex) in facilityDraft.domains" :key="`${domain.domain}-${domainIndex}`" class="facility-domain-card">
@@ -2075,7 +2084,7 @@ onBeforeUnmount(() => {
                 </div>
               </section>
   
-              <section class="workspace-panel">
+              <section class="workspace-panel motion-enter">
                 <AssetFileManager
                   :items="facilityAssetItems" :adapter="facilityAssetAdapter" :disabled="!facilitySession"
                   :labels="{ title: t('applicationsPage.staticAssets'), hint: t('applicationsPage.assetUploadLimit'), uploadAsset: t('applicationsPage.uploadAsset'), uploadAssetTitle: t('applicationsPage.uploadAssetTitle'), uploadType: t('applicationsPage.uploadType'), uploadTypeText: t('applicationsPage.uploadTypeText'), uploadTypeBinary: t('applicationsPage.uploadTypeBinary'), uploadTypeArchive: t('applicationsPage.uploadTypeArchive'), uploadFile: t('applicationsPage.uploadFile'), uploadArchive: t('applicationsPage.uploadArchive'), operationFailed: t('applicationsPage.operationFailed'), edit: t('common.edit'), replace: t('common.replace'), download: t('common.download'), delete: t('common.delete'), bytes: t('applicationsPage.bytes'), noAssets: t('applicationsPage.noAssets'), noAssetsHint: t('applicationsPage.noAssetsHint'), textTitle: t('applicationsPage.editTextFile'), newTextTitle: t('applicationsPage.newTextFile'), name: t('applicationsPage.assetReferenceName'), nameHint: t('applicationsPage.assetReferenceNameHint'), filename: t('applicationsPage.assetDownloadFilename'), filenameHint: t('applicationsPage.assetDownloadFilenameHint'), language: t('applicationsPage.highlightLanguage'), content: t('applicationsPage.fileContent'), loading: t('applicationsPage.fileLoading'), loadFailed: t('applicationsPage.fileLoadFailed'), cancel: t('common.cancel'), save: t('common.save'), close: t('common.close'), reload: t('applicationsPage.discardTextAndReload'), deleteTitle: t('applicationsPage.confirm.facility-asset-delete.title'), deleteDescription: t('applicationsPage.confirm.facility-asset-delete.description'), confirmDelete: t('common.delete') }"
@@ -2200,7 +2209,7 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="app-editor-body">
-            <section class="workspace-panel">
+            <section class="workspace-panel motion-enter">
               <div class="section-copy"><h3>{{ t('applicationsPage.panelIdentity') }}</h3><p>{{ isCreateMode ? t('applicationsPage.createFastPathHint') : t('applicationsPage.editRuntimeHint') }}</p></div>
               <div class="form-grid">
                 <label class="field">{{ t('common.name') }}<Input v-model="appDraft.name" :invalid="Boolean(appErrors.name)" @input="markAppStructuredDirty" /></label>
@@ -2208,7 +2217,7 @@ onBeforeUnmount(() => {
               </div>
             </section>
 
-            <section class="workspace-panel">
+            <section class="workspace-panel motion-enter">
               <div class="section-copy"><h3>{{ t('applicationsPage.panelRuntimeSource') }}</h3><p>{{ t('applicationsPage.sourceHint') }}</p></div>
               <div class="form-grid">
                 <label class="field wide-field">{{ t('applicationsPage.image') }}<Input v-model="appDraft.image" :invalid="Boolean(appErrors.image)" @input="markAppStructuredDirty" /></label>
@@ -2228,7 +2237,7 @@ onBeforeUnmount(() => {
               </div>
             </section>
 
-            <section class="workspace-panel">
+            <section class="workspace-panel motion-enter">
               <div class="section-heading"><div class="section-copy"><h3>{{ t('applicationsPage.panelNetworking') }}</h3><p>{{ t('applicationsPage.networkingHint') }}</p></div><div class="flex flex-wrap gap-2"><Button size="sm" @click="openPortDialog()"><Plus />{{ t('applicationsPage.addPort') }}</Button><Button size="sm" @click="openProxyDialog()"><Globe2 />{{ t('applicationsPage.addProxyRule') }}</Button></div></div>
               <div class="grid gap-3">
                 <div v-for="(port, index) in appDraft.ports" :key="port.id" class="item-row"><div><strong>{{ port.label || t('applicationsPage.unnamedPort') }}</strong><span>{{ t('applicationsPage.containerPortSummary', { port: port.to }) }} · {{ port.staticPort ? t('applicationsPage.staticPort', { port: port.staticPort }) : t('applicationsPage.dynamicPort') }} · {{ t('applicationsPage.protocolSummary', { protocol: port.protocol.toUpperCase() }) }} · {{ port.openFirewall ? t('applicationsPage.firewallManaged') : t('applicationsPage.firewallUnchanged') }}</span></div><div class="row-actions"><Button size="sm" @click="openPortDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(appDraft.ports, index)">{{ t('common.delete') }}</Button></div></div>
@@ -2237,7 +2246,7 @@ onBeforeUnmount(() => {
               </div>
             </section>
 
-            <section class="workspace-panel">
+            <section class="workspace-panel motion-enter">
               <div class="section-heading"><div class="section-copy"><h3>{{ t('applicationsPage.containerEnv') }}</h3><p>{{ t('applicationsPage.environmentHint') }}</p></div><Button size="sm" @click="openRowDialog()"><Plus />{{ t('common.add') }}</Button></div>
               <div class="grid gap-3">
                 <div v-for="(row, index) in appDraft.env" :key="row.id" class="item-row"><div><strong>{{ row.key }}</strong><span>{{ row.value || t('common.empty') }}</span></div><div class="row-actions"><Button size="sm" @click="openRowDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeRow(index)">{{ t('common.delete') }}</Button></div></div>
@@ -2245,7 +2254,7 @@ onBeforeUnmount(() => {
               </div>
             </section>
 
-            <section class="workspace-panel">
+            <section class="workspace-panel motion-enter">
               <div class="section-heading"><div class="section-copy"><h3>{{ t('applicationsPage.panelStorage') }}</h3><p>{{ t('applicationsPage.storageHint') }}</p></div><Button size="sm" @click="openMountDialog()"><Plus />{{ t('applicationsPage.addMount') }}</Button></div>
               <div class="grid gap-3">
                 <div v-for="(mount, index) in appDraft.mounts" :key="mount.id" class="item-row"><div><strong>{{ t('applicationsPage.mountSummary', { type: mount.type, target: mount.target }) }}</strong><span>{{ mountSourceLabel(mount) }}</span></div><div class="row-actions"><Button size="sm" @click="openMountDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(appDraft.mounts, index)">{{ t('common.delete') }}</Button></div></div>
@@ -2253,7 +2262,7 @@ onBeforeUnmount(() => {
               </div>
             </section>
 
-            <section class="workspace-panel">
+            <section class="workspace-panel motion-enter">
               <div class="section-copy"><h3>{{ t('applicationsPage.panelDeployment') }}</h3><p>{{ t('applicationsPage.deployHint') }}</p></div>
               <label class="field">{{ t('applicationsPage.deploymentMode') }}<Select v-model="appDraft.deploymentMode" :options="[{ label: t('applicationsPage.allServers'), value: 'all' }, { label: t('applicationsPage.selectedServers'), value: 'selected' }]" @change="markAppStructuredDirty" /></label>
               <div v-if="appDraft.deploymentMode === 'selected'" class="server-picker-grid">
@@ -2261,7 +2270,7 @@ onBeforeUnmount(() => {
               </div>
             </section>
 
-            <section class="workspace-panel">
+            <section class="workspace-panel motion-enter">
               <AssetFileManager
                 :items="applicationAssetItems" :adapter="applicationAssetAdapter" :disabled="!editSession" :show-filename="false"
                 :language-options="fileLanguageOptions" :infer-language="inferTemplateLanguage"
@@ -2655,7 +2664,6 @@ strong {
   border-radius: 1rem;
   background: var(--panel-muted);
   padding: 1rem;
-  animation: panel-motion-enter var(--panel-motion-duration-slow) var(--panel-motion-ease-emphasized) both;
 }
 
 .form-grid {
@@ -2712,11 +2720,14 @@ strong {
     transform var(--panel-motion-duration-base) var(--panel-motion-ease-standard);
 }
 
-.item-row:hover {
-  border-color: color-mix(in srgb, var(--panel-border) 92%, transparent);
-  background: color-mix(in srgb, var(--panel-muted) 34%, transparent);
-  transform: translateY(var(--panel-motion-hover-y));
-  box-shadow: var(--panel-motion-shadow-raised);
+/* 触屏没有可靠 hover：与 motion 工具类保持同一策略，避免点击后样式粘住 */
+@media (hover: hover) {
+  .item-row:hover {
+    border-color: color-mix(in srgb, var(--panel-border) 92%, transparent);
+    background: color-mix(in srgb, var(--panel-muted) 34%, transparent);
+    transform: translateY(var(--panel-motion-hover-y));
+    box-shadow: var(--panel-motion-shadow-raised);
+  }
 }
 
 .row-actions {

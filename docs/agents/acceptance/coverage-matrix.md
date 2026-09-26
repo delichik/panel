@@ -31,6 +31,11 @@
 
 - `COV-UI-001`：同一路由内新增或调整字段选择、校验、空态等用户可见行为时，路由数量可以不变，但必须同步更新 `ui-pages.md` 的稳定验收项和对应前端测试。
 
+- 本轮前端外壳/布局/动效优化：主导航抽出 `NavList.vue` 供桌面侧栏与移动抽屉复用（`aria-current` 深层归属、激活条、连续折叠动效、跳转链接），`MasterDetailLayout` 承担高度契约并支持 `detail-key` 详情进场，详情区可选横幅回归内部滚动区，Dialog 锁定背景滚动，Toast 增加图标/堆叠上限/悬停暂停，`useOverlayBehavior` 增加最上层 Escape 兜底；不新增路由、API、数据库表或后台任务，对应 `UI-SHELL-015/039/041/048/052/053/054/055/056/057`。
+- 同轮窄屏适配：顶栏在 `<1024px` 粘性置顶，7 个主从工作台的主列表/服务器选择器在窄屏限高 `60dvh` 并保持内部滚动，使详情在一屏内可及；抽屉关闭按钮与导航行放大到 44px；自有 motion 类的 hover 反馈收进 `@media (hover: hover)`，交互控件加 `touch-action: manipulation`。不新增路由或组件，对应 `UI-SHELL-013`。
+- 同轮窄屏主从单视图：`MasterDetailLayout` 新增 `back-label`/`has-detail`/`back` 单视图能力（`<xl` 一次只显示列表或详情，详情带返回列表操作），7 个主从页面接入并用 `useCompactViewport` 关闭窄屏自动选中首条；activity 保留自带的列表⇄详情切换。新增 `composables/useCompactViewport.ts` 与 `useCompactViewport.test.ts`，对应 `UI-SHELL-019/058`；不新增路由、API 或数据表。
+- 验证证据（2026-09-26/27，WSL Debian / Node 22.23.3 / task 3.53.1）：`task test:web` = 48 个文件 259 项全通过；`task build:web`（`vue-tsc --noEmit && vite build`）退出码 0；构建产物抽查确认新类均已生成，且入场动画只保留 `backwards`（无 `both`）。测试期间修掉 `MasterDetailLayout` 模板前置注释导致的多根问题（会静默丢弃页面传入的 class）与 `views/applications` 自建 `.workspace-panel` 入场动画。
+
 - 应用部署反馈：既有应用页增加部署规划失败、结果待核实、原因与活动入口，不新增路由；对应 `UI-APP-001/002/004`、`APP-PLAN-001`、`APP-RUN-004`。
 - Debug 既有清理操作增加阶段/时间、刷新恢复、部分失败与结果待核实展示；保留危险勾选确认，不新增路由；对应 `UI-DBG-007/008`。
 - 服务器创建/编辑重构：基础/高级分区、无凭据引导与弹窗内快捷创建、探测与保存解耦并标记过期、变量严格校验、创建后初始化任务跟踪与失败保留态，不新增路由；对应 `UI-SRV-003/004/005/011/012/013`，后端初始采集失败改为保留服务器并标记失败，对应 `SRV-SAVE-005/006`。
@@ -63,6 +68,7 @@
 - `COV-API-001`：路由清单测试失败时必须先确定是哪一个 method/path 改变，再更新消费者、Mock、验收项和期望哈希；不得只替换哈希让测试通过。
 
 - 应用详情、列表摘要、runtime 增加可选 `planningError`（code/message/field/fileName/retryable/operationId/occurredAt/configVersion），列表 runtimeStatus 与 runtime.status 支持 `needs_attention`；对应 `APP-PLAN-001`、`APP-RUN-004`，API method/path 数量不变。
+- 概览卡片数据 `GET /api/v1/overview/cards/{cardId}/data` 响应增加 `bucketSeconds`，指标卡只物化对应 kind 的序列并按 range/服务器数量服务端降采样，`since` 改为按桶向下对齐重算；前端改为数据落地时一次性派生视图并按桶后缀替换。不新增 method/path、表或后台任务；对应 `OBS-OVW-005/006/007/008`。
 - 既有 GET/POST `/api/v1/debug/clear-runtime-data` 响应补齐 `runId/stage/failedStage/startedAt/finishedAt`，明确 `cleared` 与终态、并发请求语义；清理期间业务写入返回 `runtime_data_maintenance`，不增加接口；对应 `DIAG-CLR-001/005/006/007`。
 
 - `COV-API-002`：维护导出/恢复的独立最小应用路由不计入上述主 Panel 175 条，但必须由备份恢复文档覆盖其认证、状态、密码、下载、重试、退出和清除 pending 操作。
@@ -130,7 +136,7 @@
 
 ## 7. 自动化覆盖现状
 
-仓库当前基线为 115 个 Go `*_test.go` 文件与 29 个 Web `*.test.ts` 文件。数量不是质量目标，但下降或大规模重命名时必须解释覆盖是否迁移。
+仓库当前基线为 115 个 Go `*_test.go` 文件与 29 个 Web `*.test.ts` 文件（记录于 2026-09-07）。本轮前端外壳/布局优化后 `web/src` 下实有 48 个 `*.test.ts`（新增 `components/shell/NavList.test.ts`、`components/templates/MasterDetailLayout.test.ts`、`composables/useCompactViewport.test.ts`）；Go 侧本轮无改动，Go 数量未在本轮复核。数量不是质量目标，但下降或大规模重命名时必须解释覆盖是否迁移。
 
 - `COV-TEST-001`：关键安全门至少有自动测试：认证、路径安全、非托管资源保护、迁移原子性、lease fencing、秘密脱敏、恢复/导出密码流程。
 - `COV-TEST-002`：关键 UI 状态至少覆盖：会话守卫、顶栏语言持久化及失败回滚、日志页默认范围首次加载、慢网路由进行中反馈及清理、请求竞态、加载/错误/空态、确认弹窗、状态色语义、日期范围和编辑器输入。

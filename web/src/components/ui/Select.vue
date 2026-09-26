@@ -49,6 +49,15 @@ const hiddenSelectAttrs = computed(() => ({
   required: attrs.required === '' || attrs.required === true || attrs.required === 'true' ? true : undefined,
 }));
 
+/**
+ * `inheritAttrs: false` keeps the visual markup clean, but ARIA attributes
+ * passed by pages (aria-label / aria-invalid / aria-describedby) must still
+ * reach the combobox control instead of being dropped.
+ */
+const comboboxAriaAttrs = computed(() => Object.fromEntries(
+  Object.entries(attrs).filter(([key, value]) => key.startsWith('aria-') && value !== undefined && value !== false),
+));
+
 function firstEnabledIndex() {
   return props.options.findIndex((option) => !option.disabled);
 }
@@ -155,6 +164,19 @@ function onKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape' && open.value) {
     event.preventDefault();
     closeList({ restoreFocus: true });
+    return;
+  }
+  if (event.key === 'Home' && open.value) {
+    event.preventDefault();
+    setActiveIndex(0);
+    scrollActiveIntoView();
+    return;
+  }
+  if (event.key === 'End' && open.value) {
+    event.preventDefault();
+    setActiveIndex(props.options.length - 1);
+    scrollActiveIntoView();
+    return;
   }
   if (event.key === 'Tab') closeList();
 }
@@ -221,6 +243,7 @@ onBeforeUnmount(() => {
       ref="button"
       type="button"
       role="combobox"
+      v-bind="comboboxAriaAttrs"
       aria-haspopup="listbox"
       :aria-controls="`${id}-listbox`"
       :aria-expanded="open"

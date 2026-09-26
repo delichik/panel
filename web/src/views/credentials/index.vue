@@ -14,6 +14,7 @@ import Skeleton from '@/components/ui/Skeleton.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
+import { useCompactViewport } from '@/composables/useCompactViewport';
 import { useI18n } from '@/i18n';
 import type { CredentialDetailDto, CredentialDto, CredentialInput, CredentialType } from '@/types/credentials';
 import type { ServerDto } from '@/types/servers';
@@ -55,6 +56,8 @@ const deleteTarget = ref<CredentialDto | null>(null);
 const form = ref<CredentialInput>(emptyCredentialInput());
 
 const selectedCredential = computed(() => credentials.value.find((item) => item.id === selectedId.value) ?? null);
+/** 紧凑视口（xl 以下）不自动选中首条凭据：窄屏应停在列表，由用户进入详情。 */
+const compactViewport = useCompactViewport();
 const references = computed(() => selectedCredential.value ? credentialReferences(selectedCredential.value.id, servers.value) : []);
 const deleteReferences = computed(() => deleteTarget.value ? credentialReferences(deleteTarget.value.id, servers.value) : []);
 const typeChanged = computed(() => Boolean(editing.value && editing.value.type !== form.value.type));
@@ -89,7 +92,9 @@ async function load() {
     if (credentialsResult.status === 'fulfilled') {
       credentials.value = credentialsResult.value.items;
       total.value = credentialsResult.value.total;
-      selectedId.value = selectedId.value && credentialsResult.value.items.some((item) => item.id === selectedId.value) ? selectedId.value : credentialsResult.value.items[0]?.id || '';
+      selectedId.value = selectedId.value && credentialsResult.value.items.some((item) => item.id === selectedId.value)
+        ? selectedId.value
+        : (compactViewport.value ? '' : credentialsResult.value.items[0]?.id || '');
       if (selectedId.value) {
         void loadDetail(selectedId.value);
       } else {
@@ -255,13 +260,13 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
       <Button size="sm" variant="primary" @click="openCreate"><Plus />{{ t('credentialsPage.addCredential') }}</Button>
     </template>
 
-    <MasterDetailLayout class="h-full min-h-[640px]">
+    <MasterDetailLayout class="h-full" :detail-key="selectedId" :has-detail="!!selectedCredential" :back-label="t('common.backToList')" @back="selectedId = ''">
       <template #master>
       <aside class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] rounded-2xl border border-border bg-card">
         <div class="border-b border-border p-4">
           <SearchInput v-model="search" clearable :placeholder="t('credentialsPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
         </div>
-        <div class="motion-stagger min-h-0 overflow-auto p-2">
+        <div class="motion-stagger min-h-0 overflow-auto p-2 max-lg:max-h-[60dvh]">
           <div v-if="loading && !credentials.length" class="grid gap-2">
             <Skeleton v-for="item in 6" :key="item" class="h-20" />
           </div>
@@ -296,7 +301,7 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
       <template #detail>
       <main class="grid min-h-0 min-w-0">
         <EmptyState v-if="!selectedCredential" :title="t('credentialsPage.selectCredential')" :description="t('credentialsPage.selectCredentialHint')" />
-        <article v-else class="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
+        <article v-else class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
           <header class="flex items-start justify-between gap-4 border-b border-border p-5 max-md:grid">
             <div class="min-w-0">
               <div class="flex flex-wrap items-center gap-2">

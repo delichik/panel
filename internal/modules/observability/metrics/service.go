@@ -35,6 +35,26 @@ type Series struct {
 	Load    []LoadPoint   `json:"load"`
 }
 
+// SeriesFields 选择批量查询需要物化的指标序列，避免概览卡片为不使用的序列付出
+// 聚合与序列化成本。
+type SeriesFields struct {
+	CPU     bool
+	Memory  bool
+	Disk    bool
+	Network bool
+	Load    bool
+}
+
+// QueryManyOptions 控制批量指标查询。BucketSeconds 必须大于零：查询按 Unix 纪元
+// 对齐的固定时间桶返回平均值，保证响应点数只与时间范围和服务器数量有关，与原始
+// 采样频率无关。After 非 nil 时先向下对齐到桶起点，使正在累积的桶被完整重算，
+// 供前端按后缀替换。
+type QueryManyOptions struct {
+	After         *time.Time
+	BucketSeconds int
+	Fields        SeriesFields
+}
+
 type CPUPoint struct {
 	Time         time.Time `json:"time"`
 	UsagePercent float64   `json:"usagePercent"`
@@ -111,8 +131,8 @@ func (s *Service) QueryAfter(ctx context.Context, serverID, rng string, after ti
 }
 
 func (s *Service) querySince(ctx context.Context, serverID, rng string, hasAfter bool, after time.Time) (Series, error) {
-	duration := map[string]time.Duration{"1h": time.Hour, "6h": 6 * time.Hour, "1d": 24 * time.Hour, "24h": 24 * time.Hour, "7d": 7 * 24 * time.Hour}[rng]
-	if duration == 0 {
+	duration, ok := RangeDuration(rng)
+	if !ok {
 		return Series{}, panelerr.Validation("range_invalid", "Range must be 1h, 6h, 1d, 24h, or 7d")
 	}
 	query := orm.New(s.db).From("metrics_snapshots").Where("server_id = ?", serverID).And("time >= ?", time.Now().UTC().Add(-duration).Format(time.RFC3339Nano))
@@ -196,46 +216,139 @@ func (s *Service) LatestLoadMany(ctx context.Context, serverIDs []string) (map[s
 	return out, rows.Err()
 }
 
-// QueryMany 批量返回多个服务器的指标序列，避免概览卡片逐服务器 N+1 查询。
-// after 非 nil 时只返回严格晚于该时间的点（与 QueryAfter 语义一致）。
-func (s *Service) QueryMany(ctx context.Context, serverIDs []string, rng string, after *time.Time) (map[string]Series, error) {
-	duration := map[string]time.Duration{"1h": time.Hour, "6h": 6 * time.Hour, "1d": 24 * time.Hour, "24h": 24 * time.Hour, "7d": 7 * 24 * time.Hour}[rng]
-	if duration == 0 {
+// RangeDuration 返回指标查询支持的时间范围时长，供服务端规划降采样桶。
+func RangeDuration(rng string) (time.Duration, bool) {
+	duration, ok := map[string]time.Duration{"1h": time.Hour, "6h": 6 * time.Hour, "1d": 24 * time.Hour, "24h": 24 * time.Hour, "7d": 7 * 24 * time.Hour}[rng]
+	return duration, ok
+}
+
+// QueryMany 批量返回多个服务器的降采样指标序列，避免概览卡片逐服务器 N+1 查询
+// 或整段原始点下发。按 serverID 分块查询；无数据服务器保留空序列。
+func (s *Service) QueryMany(ctx context.Context, serverIDs []string, rng string, opts QueryManyOptions) (map[string]Series, error) {
+	duration, ok := RangeDuration(rng)
+	if !ok {
 		return nil, panelerr.Validation("range_invalid", "Range must be 1h, 6h, 1d, 24h, or 7d")
+	}
+	if opts.BucketSeconds <= 0 {
+		return nil, panelerr.Validation("bucket_seconds_invalid", "Bucket seconds must be positive")
 	}
 	out := map[string]Series{}
 	ids := cleanStringList(serverIDs)
 	if len(ids) == 0 {
 		return out, nil
 	}
-	// 与旧逐服务器查询保持一致：每个请求的服务器都返回条目（无数据时为空序列）。
 	for _, serverID := range ids {
-		out[serverID] = Series{Range: rng, CPU: []CPUPoint{}, Memory: []MemoryPoint{}, Disk: []DiskPoint{}, Network: []NetPoint{}, Load: []LoadPoint{}}
+		out[serverID] = emptySeries(rng)
+	}
+	selects := []string{
+		"server_id",
+		"(CAST(strftime('%s', time) AS INTEGER) / ?) * ? AS bucket",
+	}
+	selectArgs := []any{opts.BucketSeconds, opts.BucketSeconds}
+	if opts.Fields.CPU {
+		selects = append(selects, "AVG(cpu_usage_percent) AS cpu_usage_percent")
+	}
+	if opts.Fields.Memory {
+		selects = append(selects, "CAST(ROUND(AVG(memory_used_bytes)) AS INTEGER) AS memory_used_bytes", "CAST(ROUND(AVG(memory_total_bytes)) AS INTEGER) AS memory_total_bytes")
+	}
+	if opts.Fields.Disk {
+		selects = append(selects, "CAST(ROUND(AVG(disk_used_bytes)) AS INTEGER) AS disk_used_bytes", "CAST(ROUND(AVG(disk_total_bytes)) AS INTEGER) AS disk_total_bytes")
+	}
+	if opts.Fields.Network {
+		selects = append(selects, "AVG(network_rx_bps) AS network_rx_bps", "AVG(network_tx_bps) AS network_tx_bps")
+	}
+	if opts.Fields.Load {
+		selects = append(selects, "AVG(load_1) AS load_1", "AVG(load_5) AS load_5", "AVG(load_15) AS load_15")
 	}
 	since := time.Now().UTC().Add(-duration).Format(time.RFC3339Nano)
 	for _, chunk := range chunkStrings(ids, 200) {
-		query := orm.New(s.db).From("metrics_snapshots").
-			Where("server_id IN ("+inPlaceholders(len(chunk))+")", stringArgs(chunk)...).
-			And("time >= ?", since)
-		if after != nil {
-			query = query.And("time > ?", after.UTC().Truncate(time.Second).Format(time.RFC3339Nano))
+		where := "server_id IN (" + inPlaceholders(len(chunk)) + ") AND time >= ?"
+		args := append([]any{}, selectArgs...)
+		args = append(args, stringArgs(chunk)...)
+		args = append(args, since)
+		if opts.After != nil {
+			where += " AND time >= ?"
+			args = append(args, floorTimeToBucket(*opts.After, opts.BucketSeconds).Format(time.RFC3339Nano))
 		}
-		var rows []models.MetricsSnapshot
-		if err := query.OrderBy("server_id", "time").All(ctx, &rows); err != nil {
+		query := "SELECT " + strings.Join(selects, ", ") + " FROM metrics_snapshots WHERE " + where + " GROUP BY server_id, bucket ORDER BY server_id, bucket"
+		if err := s.scanBucketedSeries(ctx, query, args, out, opts.Fields); err != nil {
 			return nil, err
-		}
-		for _, row := range rows {
-			series := out[row.ServerID]
-			t := row.Time
-			series.CPU = append(series.CPU, CPUPoint{Time: t, UsagePercent: row.CPUUsagePercent})
-			series.Memory = append(series.Memory, MemoryPoint{Time: t, UsedBytes: row.MemoryUsedBytes, TotalBytes: row.MemoryTotalBytes})
-			series.Disk = append(series.Disk, DiskPoint{Time: t, UsedBytes: row.DiskUsedBytes, TotalBytes: row.DiskTotalBytes})
-			series.Network = append(series.Network, NetPoint{Time: t, RxBytesPerSecond: row.NetworkRXBps, TxBytesPerSecond: row.NetworkTXBps})
-			series.Load = append(series.Load, LoadPoint{Time: t, Load1: row.Load1, Load5: row.Load5, Load15: row.Load15})
-			out[row.ServerID] = series
 		}
 	}
 	return out, nil
+}
+
+func (s *Service) scanBucketedSeries(ctx context.Context, query string, args []any, out map[string]Series, fields SeriesFields) error {
+	rows, err := orm.Raw(ctx, s.db, query, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var serverID string
+		var bucket int64
+		dest := []any{&serverID, &bucket}
+		var cpu, rx, tx, load1, load5, load15 float64
+		var memUsed, memTotal, diskUsed, diskTotal int64
+		if fields.CPU {
+			dest = append(dest, &cpu)
+		}
+		if fields.Memory {
+			dest = append(dest, &memUsed, &memTotal)
+		}
+		if fields.Disk {
+			dest = append(dest, &diskUsed, &diskTotal)
+		}
+		if fields.Network {
+			dest = append(dest, &rx, &tx)
+		}
+		if fields.Load {
+			dest = append(dest, &load1, &load5, &load15)
+		}
+		if err := rows.Scan(dest...); err != nil {
+			return err
+		}
+		series, ok := out[serverID]
+		if !ok {
+			continue
+		}
+		at := time.Unix(bucket, 0).UTC()
+		if fields.CPU {
+			series.CPU = append(series.CPU, CPUPoint{Time: at, UsagePercent: cpu})
+		}
+		if fields.Memory {
+			series.Memory = append(series.Memory, MemoryPoint{Time: at, UsedBytes: memUsed, TotalBytes: memTotal})
+		}
+		if fields.Disk {
+			series.Disk = append(series.Disk, DiskPoint{Time: at, UsedBytes: diskUsed, TotalBytes: diskTotal})
+		}
+		if fields.Network {
+			series.Network = append(series.Network, NetPoint{Time: at, RxBytesPerSecond: rx, TxBytesPerSecond: tx})
+		}
+		if fields.Load {
+			series.Load = append(series.Load, LoadPoint{Time: at, Load1: load1, Load5: load5, Load15: load15})
+		}
+		out[serverID] = series
+	}
+	return rows.Err()
+}
+
+func emptySeries(rng string) Series {
+	return Series{Range: rng, CPU: []CPUPoint{}, Memory: []MemoryPoint{}, Disk: []DiskPoint{}, Network: []NetPoint{}, Load: []LoadPoint{}}
+}
+
+// floorTimeToBucket 把时间向下对齐到 Unix 纪元对齐的桶起点。
+func floorTimeToBucket(t time.Time, bucketSeconds int) time.Time {
+	seconds := t.UTC().Unix()
+	if bucketSeconds <= 1 {
+		return time.Unix(seconds, 0).UTC()
+	}
+	bucket := int64(bucketSeconds)
+	remainder := seconds % bucket
+	if remainder < 0 {
+		remainder += bucket
+	}
+	return time.Unix(seconds-remainder, 0).UTC()
 }
 
 func cleanStringList(values []string) []string {

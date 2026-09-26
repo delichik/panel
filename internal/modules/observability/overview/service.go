@@ -69,6 +69,8 @@ type CardConfigurationSet struct {
 type CardData struct {
 	Card            CardConfiguration         `json:"card"`
 	MetricsByServer map[string]metrics.Series `json:"metricsByServer"`
+	// BucketSeconds 是本响应的降采样桶大小；增量刷新据此判断桶网格是否变化。
+	BucketSeconds int `json:"bucketSeconds"`
 }
 
 func NewService(db *sql.DB, servers *server.Service, metrics *metrics.Service, packages *packages.Service) *Service {
@@ -163,10 +165,12 @@ func (s *Service) GetCardData(ctx context.Context, cardID string) (CardData, err
 	return s.GetCardDataSince(ctx, cardID, nil)
 }
 
-// GetCardDataSince returns card data optionally limited to points strictly newer
-// than since. It backs the overview auto-refresh flow: the client appends only
-// the points collected after the last loaded point instead of reloading the
-// whole range. A nil since keeps the original full-range behavior.
+// GetCardDataSince returns card data optionally limited to points at or after the
+// bucket containing since. It backs the overview auto-refresh flow: the client
+// replaces the trailing buckets of its series with the recomputed buckets instead
+// of reloading the whole range. A nil since keeps the full-range behavior.
+// Metric cards are downsampled into fixed time buckets so the response size only
+// depends on the range and server count, never on the raw sampling frequency.
 func (s *Service) GetCardDataSince(ctx context.Context, cardID string, since *time.Time) (CardData, error) {
 	cardID = strings.TrimSpace(cardID)
 	if cardID == "" {
@@ -209,12 +213,74 @@ func (s *Service) GetCardDataSince(ctx context.Context, cardID string, since *ti
 		}
 		serverIDs = append(serverIDs, srv.ID)
 	}
-	byServer, err := s.metrics.QueryMany(ctx, serverIDs, target.Range, since)
+	bucketSeconds := planBucketSeconds(target.Range, len(serverIDs))
+	byServer, err := s.metrics.QueryMany(ctx, serverIDs, target.Range, metrics.QueryManyOptions{
+		After:         since,
+		BucketSeconds: bucketSeconds,
+		Fields:        cardSeriesFields(target.Kind),
+	})
 	if err != nil {
 		return CardData{}, err
 	}
 	out.MetricsByServer = byServer
+	out.BucketSeconds = bucketSeconds
 	return out, nil
+}
+
+const (
+	overviewPointsBudget       = 4000
+	overviewMinPointsPerSeries = 40
+	overviewMaxPointsPerSeries = 360
+)
+
+var overviewBucketSteps = []int{
+	10, 15, 20, 30, 45, 60, 90, 120, 180, 240, 300, 360, 600, 720, 900, 1200,
+	1800, 2400, 3600, 5400, 7200, 10800, 14400, 21600, 28800, 43200, 86400,
+}
+
+// planBucketSeconds 在"每序列可读点数"和"单卡总点数预算"之间取折中：
+// 服务器越多，桶越大，保证单张卡片的响应点数有界。
+func planBucketSeconds(rng string, serverCount int) int {
+	duration, ok := metrics.RangeDuration(rng)
+	if !ok {
+		return 0
+	}
+	if serverCount < 1 {
+		serverCount = 1
+	}
+	targetPoints := overviewPointsBudget / serverCount
+	if targetPoints > overviewMaxPointsPerSeries {
+		targetPoints = overviewMaxPointsPerSeries
+	}
+	if targetPoints < overviewMinPointsPerSeries {
+		targetPoints = overviewMinPointsPerSeries
+	}
+	rangeSeconds := int(duration / time.Second)
+	raw := (rangeSeconds + targetPoints - 1) / targetPoints
+	if raw < 1 {
+		raw = 1
+	}
+	for _, step := range overviewBucketSteps {
+		if step >= raw {
+			return step
+		}
+	}
+	return raw
+}
+
+func cardSeriesFields(kind CardKind) metrics.SeriesFields {
+	switch kind {
+	case CardKindCPU:
+		return metrics.SeriesFields{CPU: true}
+	case CardKindMemory:
+		return metrics.SeriesFields{Memory: true}
+	case CardKindDisk:
+		return metrics.SeriesFields{Disk: true}
+	case CardKindNetwork:
+		return metrics.SeriesFields{Network: true}
+	default:
+		return metrics.SeriesFields{}
+	}
 }
 
 func validateCards(cards []CardConfiguration) error {

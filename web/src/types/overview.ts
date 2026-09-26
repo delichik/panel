@@ -52,4 +52,6 @@ export interface OverviewMetricsSeries {
 export interface OverviewCardData {
   card: OverviewCardConfiguration;
   metricsByServer: Record<string, OverviewMetricsSeries>;
+  /** 服务端降采样桶大小；增量刷新用它判断桶网格是否变化。 */
+  bucketSeconds: number;
 }

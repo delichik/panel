@@ -14,7 +14,8 @@ import { useThemeMode, type ThemeMode, type ThemeScheme } from '@/design/theme';
 import { settingsApi } from '@/api/settings';
 import { useSessionStore } from '@/stores/session';
 import { routeNavigation } from '@/router/navigationState';
-import { activeNavKey, navGroups } from './navModel';
+import { activeNavKey } from './navModel';
+import NavList from './NavList.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -119,49 +120,32 @@ async function signOut() {
 
 <template>
   <div class="shell-grid relative grid min-h-dvh w-full overflow-visible bg-background lg:h-dvh lg:min-h-0 lg:overflow-hidden lg:grid-cols-[var(--shell-nav)_minmax(0,1fr)]" :inert="drawerOpen || undefined" :style="{ '--shell-nav': collapsed ? '76px' : '260px' }">
-    <LoadingOverlay v-if="signingOut" />
+    <a href="#main-content" class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[70] focus:rounded-xl focus:border focus:border-border focus:bg-popover focus:px-3 focus:py-2 focus:text-sm focus:text-popover-foreground focus:shadow-xl">{{ t('layout.skipToContent') }}</a>
+    <LoadingOverlay v-if="signingOut" :label="t('layout.signingOut')" />
     <aside class="hidden min-h-0 flex-col border-r border-border bg-card lg:flex">
-      <div class="flex min-h-16 items-center gap-3 border-b border-border px-4">
+      <div class="flex min-h-16 items-center border-b border-border px-4" :class="collapsed ? 'justify-center' : 'gap-3'">
         <img src="/favicon.svg" class="size-9 shrink-0 rounded-xl" alt="" aria-hidden="true" />
-        <Transition name="fade">
-          <div v-if="!collapsed" class="min-w-0">
-            <strong class="block truncate text-sm font-semibold text-foreground">{{ t('app.name') }}</strong>
-            <span class="block truncate text-xs text-muted-foreground">{{ t('app.subtitle') }}</span>
-          </div>
-        </Transition>
+        <div class="shell-label min-w-0 truncate" :class="collapsed ? 'max-w-0 opacity-0' : 'max-w-[160px] flex-1'">
+          <strong class="block truncate text-sm font-semibold text-foreground">{{ t('app.name') }}</strong>
+          <span class="block truncate text-xs text-muted-foreground">{{ t('app.subtitle') }}</span>
+        </div>
       </div>
-      <nav class="min-h-0 flex-1 overflow-auto px-3 py-3" :aria-label="t('layout.main')">
-        <section v-for="group in navGroups" :key="group.key" class="mb-5 last:mb-0">
-          <Transition name="fade">
-            <div v-if="!collapsed" class="mb-2 px-2 text-[11px] font-semibold uppercase text-muted-foreground">{{ t(group.titleKey) }}</div>
-          </Transition>
-          <div v-if="collapsed && group.key !== navGroups[0]?.key" class="mx-2 my-3 h-px bg-border" />
-          <RouterLink
-            v-for="item in group.items"
-            :key="item.key"
-            :to="item.to"
-            :title="collapsed ? t(item.titleKey) : undefined"
-            :aria-busy="pendingNavKey === item.key ? 'true' : undefined"
-            class="mb-1 flex h-9 items-center rounded-xl px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            :class="[displayedActiveKey === item.key ? 'bg-brand-bg text-brand' : '', collapsed ? 'justify-center px-0' : 'gap-3']"
-          >
-            <LoaderCircle v-if="pendingNavKey === item.key" class="size-4 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-            <component :is="item.icon" v-else class="size-4 shrink-0" aria-hidden="true" />
-            <Transition name="fade">
-              <span v-if="!collapsed" class="truncate">{{ t(item.titleKey) }}</span>
-            </Transition>
-          </RouterLink>
-        </section>
-      </nav>
+      <NavList id="app-navigation" :active-key="displayedActiveKey" :pending-key="pendingNavKey" :collapsed="collapsed" :label="t('layout.main')" />
     </aside>
 
     <main class="grid min-h-dvh min-w-0 grid-rows-[56px_auto] lg:min-h-0 lg:grid-rows-[56px_minmax(0,1fr)]">
-      <header class="relative flex min-w-0 items-center justify-between gap-3 border-b border-border bg-background px-4" :aria-busy="routeNavigation.pending.value ? 'true' : undefined">
+      <header class="relative flex min-w-0 items-center justify-between gap-3 border-b border-border bg-background px-4 max-lg:sticky max-lg:top-0 max-lg:z-40" :aria-busy="routeNavigation.pending.value ? 'true' : undefined">
         <div class="flex min-w-0 items-center gap-2">
           <IconButton class="lg:hidden" :label="t('layout.nav.open')" :aria-expanded="drawerOpen" :aria-controls="drawerId" aria-haspopup="dialog" @click="drawerOpen = true">
             <Menu />
           </IconButton>
-          <IconButton class="hidden lg:inline-grid" :label="t('layout.nav.collapse')" @click="collapsed = !collapsed">
+          <IconButton
+            class="hidden lg:inline-grid"
+            :label="t('layout.nav.collapse')"
+            :aria-expanded="collapsed ? 'false' : 'true'"
+            aria-controls="app-navigation"
+            @click="collapsed = !collapsed"
+          >
             <Transition name="fade" mode="out-in">
               <PanelLeftOpen v-if="collapsed" />
               <PanelLeftClose v-else />
@@ -209,10 +193,10 @@ async function signOut() {
           </Dropdown>
         </div>
         <div v-if="routeNavigation.pending.value" class="absolute inset-x-0 bottom-0 h-0.5 overflow-hidden bg-accent" role="progressbar" :aria-label="navigationLabel">
-          <div class="h-full w-1/2 animate-pulse bg-brand motion-reduce:animate-none" />
+          <div class="motion-progress h-full w-1/3 rounded-full bg-brand" />
         </div>
       </header>
-      <section class="min-h-0 min-w-0 overflow-visible lg:overflow-hidden">
+      <section id="main-content" tabindex="-1" class="min-h-0 min-w-0 overflow-visible lg:overflow-hidden focus:outline-none max-lg:scroll-mt-14">
         <RouterView v-slot="{ Component }">
           <Transition name="route" mode="out-in">
             <!-- 路由组件可能含多个根节点（如 ListPage + Dialog），包一层单一根元素才能做过渡动画；
@@ -247,27 +231,11 @@ async function signOut() {
                   <span class="block truncate text-xs text-muted-foreground">{{ t('app.subtitle') }}</span>
                 </div>
               </div>
-              <IconButton :label="t('common.close')" @click="drawerOpen = false">
+              <IconButton class="max-lg:size-11" :label="t('common.close')" @click="drawerOpen = false">
                 <X />
               </IconButton>
             </div>
-            <nav class="min-h-0 flex-1 overflow-auto px-3 py-3" :aria-label="t('layout.main')">
-              <section v-for="group in navGroups" :key="group.key" class="mb-5 last:mb-0">
-                <div class="mb-2 px-2 text-[11px] font-semibold uppercase text-muted-foreground">{{ t(group.titleKey) }}</div>
-                <RouterLink
-                  v-for="item in group.items"
-                  :key="item.key"
-                  :to="item.to"
-                  :aria-busy="pendingNavKey === item.key ? 'true' : undefined"
-                  class="mb-1 flex h-9 items-center gap-3 rounded-xl px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                  :class="displayedActiveKey === item.key ? 'bg-brand-bg text-brand' : ''"
-                >
-                  <LoaderCircle v-if="pendingNavKey === item.key" class="size-4 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-                  <component :is="item.icon" v-else class="size-4 shrink-0" aria-hidden="true" />
-                  <span class="truncate">{{ t(item.titleKey) }}</span>
-                </RouterLink>
-              </section>
-            </nav>
+            <NavList :active-key="displayedActiveKey" :pending-key="pendingNavKey" :label="t('layout.main')" @navigate="drawerOpen = false" />
           </aside>
         </div>
       </Transition>

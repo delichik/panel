@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { cardHasData, mergeCardData, mergeMetricPoints, overviewRisks, summarizeOverview, trimCardDataToRange } from './model';
-import type { OverviewCardData, OverviewDto } from '@/types/overview';
+import { cardHasData, deriveCardView, mergeCardData, mergeMetricPoints, overviewRisks, summarizeOverview, trimCardDataToRange } from './model';
+import type { OverviewCardConfiguration, OverviewCardData, OverviewDto } from '@/types/overview';
 
 const overview: OverviewDto = {
   servers: [
@@ -8,6 +8,10 @@ const overview: OverviewDto = {
     { id: 'srv-2', name: 'core', host: '10.0.0.2', supported: true, reachable: false, metricsFresh: false, packageUpdateCount: 7 },
   ],
 };
+
+function cpuCard(serverIds: string[] = []): OverviewCardConfiguration {
+  return { id: 'card-cpu', kind: 'cpu', width: 3, height: 2, range: '1h', networkDirection: 'both', serverIds };
+}
 
 describe('overview model', () => {
   it('summarizes health, metric freshness, and package pressure', () => {
@@ -23,7 +27,8 @@ describe('overview model', () => {
 
   it('appends strictly newer points when merging auto-refresh deltas', () => {
     const existing: OverviewCardData = {
-      card: { id: 'card-cpu', kind: 'cpu', width: 3, height: 2, range: '1h', networkDirection: 'both', serverIds: ['srv-1'] },
+      card: cpuCard(['srv-1']),
+      bucketSeconds: 10,
       metricsByServer: {
         'srv-1': { cpu: [{ time: '2026-08-01T08:00:00.000Z', usagePercent: 10 }] },
         'srv-2': { cpu: [{ time: '2026-08-01T08:00:00.000Z', usagePercent: 20 }] },
@@ -31,6 +36,7 @@ describe('overview model', () => {
     };
     const delta: OverviewCardData = {
       card: existing.card,
+      bucketSeconds: 10,
       metricsByServer: {
         'srv-1': { cpu: [{ time: '2026-08-01T08:00:05.000Z', usagePercent: 12 }] },
       },
@@ -41,15 +47,50 @@ describe('overview model', () => {
     expect(merged.metricsByServer['srv-2'].cpu).toHaveLength(1);
   });
 
+  it('replaces trailing buckets when the delta recomputes the open bucket', () => {
+    const existing: OverviewCardData = {
+      card: cpuCard(),
+      bucketSeconds: 300,
+      metricsByServer: {
+        'srv-1': {
+          cpu: [
+            { time: '2026-08-01T08:00:00.000Z', usagePercent: 10 },
+            { time: '2026-08-01T08:05:00.000Z', usagePercent: 20 },
+          ],
+        },
+      },
+    };
+    const delta: OverviewCardData = {
+      card: existing.card,
+      bucketSeconds: 300,
+      metricsByServer: {
+        'srv-1': {
+          cpu: [
+            { time: '2026-08-01T08:05:00.000Z', usagePercent: 25 },
+            { time: '2026-08-01T08:10:00.000Z', usagePercent: 30 },
+          ],
+        },
+      },
+    };
+    const merged = mergeCardData(existing, delta);
+    expect(merged.metricsByServer['srv-1'].cpu?.map((point) => [point.time, point.usagePercent])).toEqual([
+      ['2026-08-01T08:00:00.000Z', 10],
+      ['2026-08-01T08:05:00.000Z', 25],
+      ['2026-08-01T08:10:00.000Z', 30],
+    ]);
+  });
+
   it('keeps existing series untouched when a delta carries no points', () => {
     const existing: OverviewCardData = {
       card: { id: 'card-network', kind: 'network', width: 6, height: 2, range: '1h', networkDirection: 'both', serverIds: [] },
+      bucketSeconds: 30,
       metricsByServer: {
         'srv-1': { network: [{ time: '2026-08-01T08:00:00.000Z', rxBytesPerSecond: 100, txBytesPerSecond: 50 }] },
       },
     };
     const delta: OverviewCardData = {
       card: existing.card,
+      bucketSeconds: 30,
       metricsByServer: { 'srv-1': { network: [] } },
     };
     const merged = mergeCardData(existing, delta);
@@ -59,7 +100,8 @@ describe('overview model', () => {
   it('drops points outside the card range when trimming', () => {
     const now = new Date('2026-08-01T08:00:00.000Z');
     const data: OverviewCardData = {
-      card: { id: 'card-cpu', kind: 'cpu', width: 3, height: 2, range: '1h', networkDirection: 'both', serverIds: [] },
+      card: cpuCard(),
+      bucketSeconds: 10,
       metricsByServer: {
         'srv-1': {
           cpu: [
@@ -77,7 +119,8 @@ describe('overview model', () => {
   it('appends new points while removing an equal amount of expired points', () => {
     const now = new Date('2026-08-01T08:00:05.000Z');
     const existing: OverviewCardData = {
-      card: { id: 'card-cpu', kind: 'cpu', width: 3, height: 2, range: '1h', networkDirection: 'both', serverIds: [] },
+      card: cpuCard(),
+      bucketSeconds: 10,
       metricsByServer: {
         'srv-1': {
           cpu: [
@@ -89,6 +132,7 @@ describe('overview model', () => {
     };
     const delta: OverviewCardData = {
       card: existing.card,
+      bucketSeconds: 10,
       metricsByServer: {
         'srv-1': { cpu: [{ time: '2026-08-01T08:00:05.000Z', usagePercent: 3 }] },
       },
@@ -96,6 +140,7 @@ describe('overview model', () => {
     const merged = trimCardDataToRange(mergeCardData(existing, delta), now);
     expect(merged.metricsByServer['srv-1'].cpu?.map((point) => point.time)).toEqual(['2026-08-01T08:00:00.000Z', '2026-08-01T08:00:05.000Z']);
   });
+
   it('merges point arrays without mutating the input arrays', () => {
     const existing = [{ time: '2026-08-01T08:00:00.000Z', usagePercent: 10 }];
     const incoming = [{ time: '2026-08-01T08:00:05.000Z', usagePercent: 12 }];
@@ -104,8 +149,70 @@ describe('overview model', () => {
     expect(existing).toHaveLength(1);
     expect(incoming).toHaveLength(1);
   });
+
   it('distinguishes empty metric cards from message cards', () => {
     expect(cardHasData({ id: 'cpu', kind: 'cpu', width: 3, height: 2, range: '1h', networkDirection: 'both', serverIds: [] }, undefined)).toBe(false);
     expect(cardHasData({ id: 'pkg', kind: 'packageUpdates', width: 3, height: 2, range: '1d', networkDirection: 'both', serverIds: [] }, undefined)).toBe(true);
+  });
+
+  it('aligns multiple servers on a shared timeline and aggregates summary values', () => {
+    const data: OverviewCardData = {
+      card: cpuCard(),
+      bucketSeconds: 300,
+      metricsByServer: {
+        'srv-1': {
+          cpu: [
+            { time: '2026-08-01T08:00:00.000Z', usagePercent: 10 },
+            { time: '2026-08-01T08:05:00.000Z', usagePercent: 20 },
+          ],
+        },
+        'srv-2': {
+          cpu: [
+            { time: '2026-08-01T08:05:00.000Z', usagePercent: 40 },
+            { time: '2026-08-01T08:10:00.000Z', usagePercent: 60 },
+          ],
+        },
+      },
+    };
+    const view = deriveCardView(data.card, data, (serverId) => `name-${serverId}`);
+    expect(view.labels).toEqual(['2026-08-01T08:00:00.000Z', '2026-08-01T08:05:00.000Z', '2026-08-01T08:10:00.000Z']);
+    expect(view.series).toEqual([
+      { id: 'srv-1', name: 'name-srv-1', values: [10, 20, null] },
+      { id: 'srv-2', name: 'name-srv-2', values: [null, 40, 60] },
+    ]);
+    expect(view.latestValue).toBe(60);
+    expect(view.peakValue).toBe(60);
+  });
+
+  it('derives network values per direction and returns empty views without data', () => {
+    const card: OverviewCardConfiguration = { id: 'card-net', kind: 'network', width: 6, height: 2, range: '1h', networkDirection: 'rx', serverIds: [] };
+    const data: OverviewCardData = {
+      card,
+      bucketSeconds: 10,
+      metricsByServer: {
+        'srv-1': { network: [{ time: '2026-08-01T08:00:00.000Z', rxBytesPerSecond: 100, txBytesPerSecond: 50 }] },
+      },
+    };
+    const view = deriveCardView(card, data, (serverId) => serverId);
+    expect(view.series[0].values).toEqual([100]);
+    expect(deriveCardView(card, undefined, (serverId) => serverId)).toEqual({ labels: [], series: [], latestValue: null, peakValue: null });
+  });
+
+  it('derives large card data without quadratic lookups', () => {
+    const card = cpuCard();
+    const metricsByServer: OverviewCardData['metricsByServer'] = {};
+    for (let server = 0; server < 30; server += 1) {
+      metricsByServer[`srv-${server}`] = {
+        cpu: Array.from({ length: 1200 }, (_, index) => ({
+          time: new Date(Date.UTC(2026, 7, 1, 0, 0, index * 5)).toISOString(),
+          usagePercent: (server + index) % 100,
+        })),
+      };
+    }
+    const view = deriveCardView(card, { card, bucketSeconds: 5, metricsByServer }, (serverId) => serverId);
+    expect(view.labels).toHaveLength(1200);
+    expect(view.series).toHaveLength(30);
+    expect(view.series.every((series) => series.values.length === 1200)).toBe(true);
+    expect(view.latestValue).not.toBeNull();
   });
 });

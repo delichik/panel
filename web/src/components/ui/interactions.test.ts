@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { flushPromises, mount } from '@vue/test-utils';
 import { defineComponent, nextTick, ref } from 'vue';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import Dialog from './Dialog.vue';
 import Dropdown from './Dropdown.vue';
 import DropdownItem from './DropdownItem.vue';
@@ -55,6 +55,38 @@ describe('Dialog', () => {
     await flushPromises();
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(document.activeElement).toBe(trigger);
+    expect(document.body.style.overflow).toBe('');
+  });
+
+  it('closes with Escape even when focus escaped the panel', async () => {
+    const Host = defineComponent({
+      components: { Dialog },
+      setup() {
+        const open = ref(false);
+        return { open };
+      },
+      template: `
+        <button id="trigger" @click="open = true">Open</button>
+        <Dialog v-model:open="open" title="Example" :close-disabled="false">
+          <button id="body-action">Action</button>
+        </Dialog>
+      `,
+    });
+    const wrapper = mount(Host, { attachTo: document.body });
+    await wrapper.get('#trigger').trigger('click');
+    await nextTick();
+
+    // Simulate focus sitting outside the dialog (for example on a disabled
+    // control that was just replaced): the document-level fallback must still
+    // honour Escape for the topmost overlay.
+    const outside = document.createElement('button');
+    document.body.appendChild(outside);
+    outside.focus();
+    outside.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+    expect(document.body.style.overflow).toBe('');
+
+    wrapper.unmount();
   });
 
   it('does not close via Escape or the close button while closeDisabled is set', async () => {
@@ -94,6 +126,44 @@ describe('LoadingOverlay', () => {
 });
 
 describe('Select', () => {
+  it('forwards an accessible name to the combobox control', async () => {
+    const wrapper = mount(Select, {
+      attachTo: document.body,
+      props: {
+        modelValue: 'one',
+        options: [{ label: 'One', value: 'one' }],
+      },
+      attrs: { 'aria-label': 'Domain' },
+    });
+
+    expect(wrapper.get('[role="combobox"]').attributes('aria-label')).toBe('Domain');
+  });
+
+  it('supports Home and End while the listbox is open', async () => {
+    const wrapper = mount(Select, {
+      attachTo: document.body,
+      props: {
+        modelValue: 'one',
+        options: [
+          { label: 'One', value: 'one' },
+          { label: 'Two', value: 'two' },
+          { label: 'Three', value: 'three' },
+        ],
+      },
+    });
+    const button = wrapper.get('[role="combobox"]');
+    await button.trigger('click');
+    await nextTick();
+
+    await button.trigger('keydown', { key: 'End' });
+    await nextTick();
+    expect(button.attributes('aria-activedescendant')).toMatch(/-option-2$/);
+
+    await button.trigger('keydown', { key: 'Home' });
+    await nextTick();
+    expect(button.attributes('aria-activedescendant')).toMatch(/-option-0$/);
+  });
+
   it('teleports and positions the listbox outside clipping containers', async () => {
     const wrapper = mount(Select, {
       attachTo: document.body,
@@ -174,6 +244,23 @@ describe('Dropdown', () => {
 		expect(document.querySelector('[role="menu"]')).not.toBeNull();
 		wrapper.unmount();
 	 });
+  it('closes the menu when Tab moves focus away', async () => {
+    const wrapper = mount(Dropdown, {
+      attachTo: document.body,
+      slots: { trigger: '<button id="tab-trigger">Menu</button>', default: '<DropdownItem>First</DropdownItem>' },
+      global: { components: { DropdownItem } },
+    });
+    await wrapper.get('#tab-trigger').trigger('keydown', { key: 'ArrowDown' });
+    await nextTick();
+    const item = document.querySelector<HTMLElement>('[role="menuitem"]')!;
+
+    item.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+    await nextTick();
+
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    wrapper.unmount();
+  });
+
   it('exposes menu state and supports menu keyboard navigation', async () => {
     const wrapper = mount(Dropdown, {
       attachTo: document.body,

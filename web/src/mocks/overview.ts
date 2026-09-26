@@ -43,43 +43,52 @@ export function setOverviewCards(input: OverviewCardConfigurationSet): OverviewC
 export function getOverviewCardData(cardId: string, servers: ServerDto[], since?: string): OverviewCardData | null {
   const found = overviewCards.find((item) => item.id === cardId);
   if (!found) return null;
+  const kind = found.kind;
+  if (kind !== 'cpu' && kind !== 'memory' && kind !== 'disk' && kind !== 'network') {
+    return { card: { ...found, serverIds: [...found.serverIds] }, metricsByServer: {}, bucketSeconds: 0 };
+  }
   const selected = new Set(found.serverIds);
   const targetServers = servers.filter((server) => selected.size === 0 || selected.has(server.id));
-  const metricsByServer = Object.fromEntries(targetServers.map((server, index) => {
-    const full = series(index);
-    return [server.id, {
-      cpu: after(full.cpu ?? [], since),
-      memory: after(full.memory ?? [], since),
-      disk: after(full.disk ?? [], since),
-      network: after(full.network ?? [], since),
-    }];
-  }));
-  return { card: { ...found, serverIds: [...found.serverIds] }, metricsByServer };
+  const bucketSeconds = mockBucketSeconds(found.range);
+  const metricsByServer = Object.fromEntries(targetServers.map((server, index) => [server.id, mockCardSeries(kind, index, bucketSeconds, since)]));
+  return { card: { ...found, serverIds: [...found.serverIds] }, metricsByServer, bucketSeconds };
 }
 
-function after<T extends { time: string }>(points: T[], since: string | undefined): T[] {
-  if (!since) return points;
-  return points.filter((point) => point.time > since);
+function mockBucketSeconds(range: OverviewCardConfiguration['range']): number {
+  const rangeSeconds: Record<OverviewCardConfiguration['range'], number> = {
+    '1h': 60 * 60,
+    '6h': 6 * 60 * 60,
+    '1d': 24 * 60 * 60,
+    '7d': 7 * 24 * 60 * 60,
+  };
+  return Math.max(10, Math.round(rangeSeconds[range] / 120));
 }
 
-function card(id: string, kind: OverviewCardConfiguration['kind'], range: OverviewCardConfiguration['range'], width: number, height: number): OverviewCardConfiguration {
-  return { id, kind, width, height, range, networkDirection: 'both', serverIds: [] };
-}
-
-function series(seed: number): OverviewMetricsSeries {
-  const end = Date.now();
-  const points = Array.from({ length: 360 }, (_, index) => ({
-    time: new Date(end - (359 - index) * 5 * 1000).toISOString(),
+// 与后端一致：只返回卡片对应的序列，since 先向下对齐到桶起点。
+function mockCardSeries(
+  kind: 'cpu' | 'memory' | 'disk' | 'network',
+  seed: number,
+  bucketSeconds: number,
+  since: string | undefined,
+): OverviewMetricsSeries {
+  const end = Math.floor(Date.now() / 1000 / bucketSeconds) * bucketSeconds;
+  const sinceSeconds = since ? Math.floor(Date.parse(since) / 1000 / bucketSeconds) * bucketSeconds : null;
+  const points = Array.from({ length: 120 }, (_, index) => ({
+    time: new Date((end - (119 - index) * bucketSeconds) * 1000).toISOString(),
     index: index % 24,
-  }));
+  })).filter((point) => sinceSeconds === null || Date.parse(point.time) >= sinceSeconds * 1000);
+  if (kind === 'cpu') return { cpu: points.map((point) => ({ time: point.time, usagePercent: 18 + seed * 12 + point.index * 2 })) };
+  if (kind === 'memory') return { memory: points.map((point) => ({ time: point.time, usedBytes: (2 + seed + point.index / 10) * 1024 ** 3, totalBytes: 8 * 1024 ** 3 })) };
+  if (kind === 'disk') return { disk: points.map((point) => ({ time: point.time, usedBytes: (35 + seed * 8 + point.index) * 1024 ** 3, totalBytes: 100 * 1024 ** 3 })) };
   return {
-    cpu: points.map((point) => ({ time: point.time, usagePercent: 18 + seed * 12 + point.index * 2 })),
-    memory: points.map((point) => ({ time: point.time, usedBytes: (2 + seed + point.index / 10) * 1024 ** 3, totalBytes: 8 * 1024 ** 3 })),
-    disk: points.map((point) => ({ time: point.time, usedBytes: (35 + seed * 8 + point.index) * 1024 ** 3, totalBytes: 100 * 1024 ** 3 })),
     network: points.map((point) => ({
       time: point.time,
       rxBytesPerSecond: (seed + 1) * 1024 * (12 + point.index),
       txBytesPerSecond: (seed + 1) * 1024 * (7 + point.index),
     })),
   };
+}
+
+function card(id: string, kind: OverviewCardConfiguration['kind'], range: OverviewCardConfiguration['range'], width: number, height: number): OverviewCardConfiguration {
+  return { id, kind, width, height, range, networkDirection: 'both', serverIds: [] };
 }

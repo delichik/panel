@@ -24,6 +24,7 @@ import Tabs from '@/components/ui/Tabs.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
+import { useCompactViewport } from '@/composables/useCompactViewport';
 import { useI18n } from '@/i18n';
 import type { DomainCertificateDto, SelfSignedCertificateDto } from '@/types/certificates';
 import type { DnsDomainDto } from '@/types/dns';
@@ -66,10 +67,17 @@ function parsePageQuery(value: unknown) {
 }
 
 const mode = computed(() => route.path.includes('/self-signed') ? 'self' : route.path.includes('/keys') ? 'keys' : 'domains');
+const modeNavItems = [
+  { mode: 'domains', path: '/certificates/domains', titleKey: 'routes.certificates.title' },
+  { mode: 'self', path: '/certificates/self-signed', titleKey: 'routes.selfSigned.title' },
+  { mode: 'keys', path: '/certificates/keys', titleKey: 'routes.keys.title' },
+] as const;
 const title = computed(() => mode.value === 'self' ? t('routes.selfSigned.title') : mode.value === 'keys' ? t('routes.keys.title') : t('routes.certificates.title'));
 const description = computed(() => mode.value === 'self' ? t('routes.selfSigned.description') : mode.value === 'keys' ? t('routes.keys.description') : t('routes.certificates.description'));
 const selectedCert = computed(() => certs.value.find((item) => item.id === selectedId.value) ?? null);
 const selectedSelf = computed(() => selfSigned.value.find((item) => item.id === selectedId.value) ?? null);
+/** 紧凑视口（xl 以下）不自动选中首个对象：窄屏应停在列表，由用户进入详情。 */
+const compactViewport = useCompactViewport();
 const userAssets = computed(() => assets.value.filter((item) => !isSystemManagedAsset(item)));
 const selectedAsset = computed(() => userAssets.value.find((item) => item.id === selectedId.value) ?? null);
 const caAssets = computed(() => userAssets.value.filter((item) => item.type === 'ca_certificate').map((item) => ({ label: item.name, value: item.id })));
@@ -152,7 +160,7 @@ async function load() {
     total.value = nextTotal;
     const visibleAssets = assets.value.filter((item) => !isSystemManagedAsset(item));
     const list = mode.value === 'self' ? selfSigned.value : mode.value === 'keys' ? visibleAssets : certs.value;
-    selectedId.value = list.some((item) => item.id === selectedId.value) ? selectedId.value : list[0]?.id ?? '';
+    selectedId.value = list.some((item) => item.id === selectedId.value) ? selectedId.value : (compactViewport.value ? '' : list[0]?.id ?? '');
     if (firstError) {
       error.value = firstError;
       notifyError(firstError);
@@ -507,20 +515,26 @@ function onFileChange(value: File | File[]) {
       <Button v-else size="sm" variant="primary" @click="openAsset('asset-ssh')"><KeyRound />{{ t('certificatesPage.generateSsh') }}</Button>
     </template>
 
-    <div class="grid h-full min-h-[640px] grid-rows-[auto_minmax(0,1fr)] gap-4">
-      <nav class="flex flex-wrap gap-2 rounded-2xl border border-border bg-card p-2">
-        <Button :variant="mode === 'domains' ? 'primary' : 'ghost'" @click="switchMode('/certificates/domains')">{{ t('routes.certificates.title') }}</Button>
-        <Button :variant="mode === 'self' ? 'primary' : 'ghost'" @click="switchMode('/certificates/self-signed')">{{ t('routes.selfSigned.title') }}</Button>
-        <Button :variant="mode === 'keys' ? 'primary' : 'ghost'" @click="switchMode('/certificates/keys')">{{ t('routes.keys.title') }}</Button>
+    <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4">
+      <nav class="flex flex-wrap gap-1 rounded-xl border border-border bg-muted p-1" :aria-label="t('routes.certificates.title')">
+        <a
+          v-for="item in modeNavItems"
+          :key="item.mode"
+          :href="item.path"
+          :aria-current="mode === item.mode ? 'page' : undefined"
+          class="motion-tab rounded-lg px-3 py-1.5 text-sm font-medium"
+          :class="mode === item.mode ? 'bg-brand-bg text-brand' : 'text-muted-foreground hover:bg-accent hover:text-foreground'"
+          @click.prevent="switchMode(item.path)"
+        >{{ t(item.titleKey) }}</a>
       </nav>
 
-      <MasterDetailLayout class="min-h-0">
+      <MasterDetailLayout :detail-key="selectedId" :has-detail="!!(selectedCert || selectedSelf || selectedAsset)" :back-label="t('common.backToList')" @back="selectedId = ''">
         <template #master>
         <aside class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-2xl border border-border bg-card">
           <div class="border-b border-border p-3">
             <SearchInput v-model="search" clearable :label="t('common.search')" :placeholder="t('certificatesPage.searchPlaceholder')" :clear-label="t('common.clearSearch')" />
           </div>
-          <div class="motion-stagger min-h-0 overflow-auto p-2">
+          <div class="motion-stagger min-h-0 overflow-auto p-2 max-lg:max-h-[60dvh]">
           <div v-if="loading && ((mode === 'domains' && !certs.length) || (mode === 'self' && !selfSigned.length) || (mode === 'keys' && !userAssets.length))" class="grid gap-2">
             <Skeleton v-for="item in 6" :key="item" class="h-16" />
           </div>

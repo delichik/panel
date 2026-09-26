@@ -368,11 +368,14 @@ async function confirmDelete() {
     transform var(--panel-motion-duration-base) var(--panel-motion-ease-standard);
 }
 
-.item-row:hover {
-  border-color: color-mix(in srgb, var(--panel-border) 92%, transparent);
-  background: color-mix(in srgb, var(--panel-muted) 34%, transparent);
-  transform: translateY(var(--panel-motion-hover-y));
-  box-shadow: var(--panel-motion-shadow-raised);
+/* 触屏没有可靠 hover：与 motion 工具类保持同一策略，避免点击后样式粘住 */
+@media (hover: hover) {
+  .item-row:hover {
+    border-color: color-mix(in srgb, var(--panel-border) 92%, transparent);
+    background: color-mix(in srgb, var(--panel-muted) 34%, transparent);
+    transform: translateY(var(--panel-motion-hover-y));
+    box-shadow: var(--panel-motion-shadow-raised);
+  }
 }
 
 .asset-name {

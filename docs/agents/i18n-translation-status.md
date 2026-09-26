@@ -21,6 +21,8 @@
 - 本轮应用持久化数据新增下载节点选择器、全节点永久删除强确认文案，以及下载节点必选/非法与删除确认必需的后端稳定错误翻译；en / zh-CN 已同步。
 
 - 本轮新增顶栏语言持久化等待与回滚词条 `layout.language.saving` / `layout.language.saveFailed`，en / zh-CN 已同步。
+- 本轮外壳可用性优化新增 `layout.skipToContent`（跳到主要内容链接）、`layout.signingOut`（退出登录加载遮罩）与 `common.loading`（共享加载标签，用于 LoadingOverlay 的可访问名称），en / zh-CN 已同步。
+- 本轮窄屏主从单视图新增 `common.backToList`（返回列表，用于 MasterDetailLayout 的紧凑视口返回操作），en / zh-CN 已同步。
 
 - 本轮新增慢网路由切换反馈词条 `layout.navigation.loading`，en / zh-CN 已同步；目标页标题继续复用现有 `routes.*.title` 词条。
 

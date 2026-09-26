@@ -2,7 +2,7 @@
 import ActivityLink from '@/components/activity/ActivityLink.vue';
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Boxes, Database, DownloadCloud, FileText, Package, Play, RefreshCcw, Router, Search, Square, Trash2 } from '@lucide/vue';
+import { Boxes, Database, DownloadCloud, FileText, Package, Play, RefreshCcw, Router, Square, Trash2 } from '@lucide/vue';
 import { containersApi } from '@/api/containers';
 import { waitForTask } from '@/api/taskWait';
 import { packagesApi } from '@/api/packages';
@@ -12,10 +12,12 @@ import Button from '@/components/ui/Button.vue';
 import Dialog from '@/components/ui/Dialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import Input from '@/components/ui/Input.vue';
+import SearchInput from '@/components/ui/SearchInput.vue';
 import ServerContextSelector from '@/components/patterns/ServerContextSelector.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
+import { useCompactViewport } from '@/composables/useCompactViewport';
 import { useI18n } from '@/i18n';
 import type { ServerDto } from '@/types/servers';
 import type { ContainerDto, ImageList, NetworkDto, PackageUpdateList, VolumeDto } from '@/types/resources';
@@ -80,6 +82,8 @@ const confirmTarget = ref<{ kind: 'container' | 'image' | 'image-prune' | 'volum
 const pullForm = reactive({ reference: 'nginx:1.28-alpine' });
 
 const selectedServer = computed(() => servers.value.find((item) => item.id === selectedId.value) ?? null);
+/** 紧凑视口（xl 以下）不自动选中首台服务器：窄屏应停在服务器选择器，由用户进入详情。 */
+const compactViewport = useCompactViewport();
 const serverContextOptions = computed(() => servers.value.map((server) => {
   const packagesReady = canMaintainPackages(server);
   const dockerReady = canUseDockerResources(server);
@@ -130,7 +134,7 @@ async function loadServers() {
     if (requestId !== serversRequestId) return;
     servers.value = nextServers;
     if (!servers.value.some((item) => item.id === selectedId.value)) {
-      selectedId.value = servers.value[0]?.id ?? '';
+      selectedId.value = compactViewport.value ? '' : servers.value[0]?.id ?? '';
       if (!selectedId.value) {
         clearAllResources();
         resourceController?.abort();
@@ -440,7 +444,7 @@ onBeforeUnmount(() => {
       <Button size="sm" :loading="loadingServers || loadingResource || pending === 'refresh'" @click="refreshCurrent"><RefreshCcw />{{ t('common.refresh') }}</Button>
     </template>
 
-    <MasterDetailLayout class="h-full min-h-[640px]">
+    <MasterDetailLayout class="h-full" :detail-key="selectedId" :has-detail="!!selectedServer" :back-label="t('common.backToList')" @back="selectedId = ''">
       <template #master>
       <aside class="grid min-h-0 min-w-0 grid-rows-[auto_auto_minmax(0,1fr)] rounded-2xl border border-border bg-card">
         <div class="border-b border-border p-4">
@@ -457,7 +461,7 @@ onBeforeUnmount(() => {
             <span class="text-muted-foreground">{{ t('resourcesPage.dockerReady') }}</span>
           </div>
         </div>
-        <div class="min-h-0 overflow-auto p-3">
+        <div class="min-h-0 overflow-auto p-3 max-lg:max-h-[60dvh]">
           <ServerContextSelector
             v-model="selectedId"
             :servers="serverContextOptions"
@@ -472,7 +476,7 @@ onBeforeUnmount(() => {
       <template #detail>
       <main class="grid min-h-0 min-w-0">
         <EmptyState v-if="!selectedServer" :title="t('resourcesPage.selectServer')" :description="t('resourcesPage.selectServerHint')" />
-        <article v-else class="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
+        <article v-else class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
           <header class="flex items-start justify-between gap-4 border-b border-border p-5 max-lg:grid">
             <div>
               <div class="flex flex-wrap items-center gap-2">
@@ -488,18 +492,14 @@ onBeforeUnmount(() => {
             </div>
           </header>
 
-          <div v-if="(activeTab === 'packages' && packageBlockReason(selectedServer)) || (activeTab !== 'packages' && dockerBlockReason(selectedServer))" class="grid gap-2 border-b border-border p-4">
-            <div v-if="activeTab === 'packages' && packageBlockReason(selectedServer)" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t(packageBlockReason(selectedServer)) }}</div>
-            <div v-if="activeTab !== 'packages' && dockerBlockReason(selectedServer)" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t(dockerBlockReason(selectedServer)) }}</div>
-          </div>
-
-          <div class="min-h-0 p-5">
-            <section v-if="activeTab === 'packages'" class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] rounded-2xl border border-border bg-muted">
+          <div class="flex min-h-0 flex-col gap-4 p-5">
+            <div v-if="(activeTab === 'packages' && packageBlockReason(selectedServer)) || (activeTab !== 'packages' && dockerBlockReason(selectedServer))" class="grid shrink-0 gap-2">
+              <div v-if="activeTab === 'packages' && packageBlockReason(selectedServer)" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t(packageBlockReason(selectedServer)) }}</div>
+              <div v-if="activeTab !== 'packages' && dockerBlockReason(selectedServer)" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t(dockerBlockReason(selectedServer)) }}</div>
+            </div>
+            <section v-if="activeTab === 'packages'" class="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)_auto] rounded-2xl border border-border bg-muted">
               <div class="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
-                <label class="relative block w-full max-w-sm">
-                  <Search class="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" />
-                  <Input v-model="search" class="pl-9" :placeholder="t('resourcesPage.searchPackages')" />
-                </label>
+                <SearchInput v-model="search" class="w-full max-w-sm" clearable :label="t('common.search')" :placeholder="t('resourcesPage.searchPackages')" :clear-label="t('common.clearSearch')" />
                 <div class="flex flex-wrap gap-2">
                   <Button size="sm" :disabled="!canMaintainPackages(selectedServer)" :loading="pending === 'refresh'" @click="refreshCurrent"><RefreshCcw />{{ t('resourcesPage.refreshMetadata') }}</Button>
                   <Button size="sm" :disabled="!canMaintainPackages(selectedServer) || !packageList?.updates.length" :loading="pending === 'upgrade-all'" @click="upgradeAllPackages"><Package />{{ t('resourcesPage.upgradeAll') }}</Button>
@@ -537,7 +537,7 @@ onBeforeUnmount(() => {
               </footer>
             </section>
 
-            <section v-else-if="activeTab === 'containers'" class="motion-stagger grid h-full min-h-0 grid-cols-3 gap-3 overflow-y-auto overflow-x-hidden max-2xl:grid-cols-2 max-lg:grid-cols-1">
+            <section v-else-if="activeTab === 'containers'" class="motion-stagger grid min-h-0 flex-1 grid-cols-3 gap-3 overflow-y-auto overflow-x-hidden max-2xl:grid-cols-2 max-lg:grid-cols-1">
               <template v-if="loadingResource && !containers.length">
                 <article v-for="item in 6" :key="item" class="grid min-h-[220px] grid-rows-[auto_minmax(0,1fr)_auto] rounded-2xl border border-border bg-muted" aria-hidden="true">
                   <header class="border-b border-border p-4">
@@ -584,7 +584,7 @@ onBeforeUnmount(() => {
               </article>
             </section>
 
-            <section v-else-if="activeTab === 'images'" class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-muted">
+            <section v-else-if="activeTab === 'images'" class="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-muted">
               <div class="flex flex-wrap items-center justify-between gap-2 border-b border-border p-4">
                 <div class="flex items-center gap-2 text-sm text-muted-foreground"><Boxes class="size-4" />{{ formatDateTime(images?.observedAt) || t('common.never') }}</div>
                 <div class="flex flex-wrap gap-2">
@@ -623,7 +623,7 @@ onBeforeUnmount(() => {
               </div>
             </section>
 
-            <section v-else-if="activeTab === 'networks'" class="grid h-full min-h-0 grid-cols-[minmax(0,1fr)_300px] grid-rows-[minmax(0,1fr)] gap-4 max-xl:grid-cols-1">
+            <section v-else-if="activeTab === 'networks'" class="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_300px] grid-rows-[minmax(0,1fr)] gap-4 max-xl:grid-cols-1">
               <div class="motion-stagger min-h-0 overflow-auto rounded-2xl border border-border bg-muted p-3">
                 <div v-if="loadingResource && !networks.length" class="grid gap-2" aria-hidden="true">
                   <article v-for="item in 6" :key="item" class="rounded-xl border border-border p-4">
@@ -659,7 +659,7 @@ onBeforeUnmount(() => {
               </aside>
             </section>
 
-            <section v-else class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-muted">
+            <section v-else class="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-muted">
               <div class="flex flex-wrap items-center justify-between gap-2 border-b border-border p-4">
                 <div class="flex items-center gap-2 text-sm text-muted-foreground"><Database class="size-4" />{{ t('resourcesPage.volumeSafety') }}</div>
                 <Button size="sm" variant="danger" @click="confirm('volume-prune')"><Trash2 />{{ t('resourcesPage.pruneUnusedVolumes') }}</Button>

@@ -208,6 +208,7 @@ var (
 			"storage_share_server_unavailable":                       "无法确定该分区的存储服务器，请重新保存设施配置或重新部署应用",
 			"storage_share_ssh_unavailable":                          "SSH 执行器不可用，无法在存储服务器上安装 NFS",
 			"range_invalid":                                          "时间范围必须为 1h、6h、1d、24h 或 7d",
+			"bucket_seconds_invalid":                                 "指标降采样桶大小必须大于 0",
 			"overview_cards_too_many":                                "概览仪表盘最多只能包含 100 张卡片",
 			"overview_card_id_invalid":                               "概览卡片 ID 不能为空",
 			"overview_card_id_duplicate":                             "概览卡片 ID 不能重复",

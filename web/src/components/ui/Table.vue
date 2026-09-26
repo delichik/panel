@@ -34,7 +34,7 @@ function skeletonClass(rowIndex: number, columnIndex: number, align?: 'left' | '
     <table class="w-full border-collapse text-sm" :class="fixed ? 'table-fixed' : undefined" :aria-busy="loading ? 'true' : undefined" :aria-label="loading && loadingLabel ? loadingLabel : undefined">
       <thead class="sticky top-0 z-10 bg-muted text-xs font-semibold uppercase text-muted-foreground">
           <tr>
-            <th v-for="column in columns" :key="column.key" class="border-b border-border px-3 py-2" :class="[column.align === 'right' ? 'text-right' : 'text-left', column.width, column.nowrap ? 'whitespace-nowrap' : undefined]">
+            <th v-for="column in columns" :key="column.key" scope="col" class="border-b border-border px-3 py-2" :class="[column.align === 'right' ? 'text-right' : 'text-left', column.width, column.nowrap ? 'whitespace-nowrap' : undefined]">
               {{ column.label }}
             </th>
           </tr>

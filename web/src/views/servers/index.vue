@@ -20,6 +20,7 @@ import StatusBadge from '@/components/ui/StatusBadge.vue';
 import Textarea from '@/components/ui/Textarea.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
+import { useCompactViewport } from '@/composables/useCompactViewport';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import AutoRefreshControl from '@/components/patterns/AutoRefreshControl.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
@@ -113,6 +114,8 @@ const natProtocolOptions = [
 
 
 const selectedServer = computed(() => serverDetails.value[selectedId.value] ?? servers.value.find((item) => item.id === selectedId.value) ?? null);
+/** 紧凑视口（xl 以下）不自动选中首条服务器：窄屏应停在列表，由用户进入详情。 */
+const compactViewport = useCompactViewport();
 
 const latestMetrics = computed(() => {
   const series = metrics.value;
@@ -161,6 +164,12 @@ watch(selectedId, () => {
   void loadInitialTask(true);
   void loadNatConfig();
 });
+
+/** 窄屏单视图：返回列表并清掉 URL 里的选中项。 */
+function backToList() {
+  selectedId.value = '';
+  void router.replace({ query: { ...route.query, server: undefined } });
+}
 watch(metricsRange, () => {
   void loadMetrics(true);
 });
@@ -298,7 +307,7 @@ async function load() {
         ? queryServer
         : nextServers.some((item) => item.id === selectedId.value)
           ? selectedId.value
-          : nextServers[0]?.id || '';
+          : (compactViewport.value ? '' : nextServers[0]?.id || '');
     } else {
       error.value = serversResult.reason instanceof Error ? serversResult.reason.message : t('serversPage.loadFailed');
       notifyError(serversResult.reason instanceof Error ? serversResult.reason.message : t('serversPage.loadFailed'));
@@ -778,13 +787,13 @@ onBeforeUnmount(() => {
       <Button size="sm" variant="primary" @click="openCreate"><Plus />{{ t('serversPage.addServer') }}</Button>
     </template>
 
-    <MasterDetailLayout class="h-full min-h-[640px]">
+    <MasterDetailLayout class="h-full" :detail-key="selectedId" :has-detail="!!selectedServer" :back-label="t('common.backToList')" @back="backToList">
       <template #master>
       <aside class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] rounded-2xl border border-border bg-card">
         <div class="border-b border-border p-4">
           <SearchInput v-model="search" clearable :placeholder="t('serversPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
         </div>
-        <div class="motion-stagger min-h-0 overflow-auto p-2">
+        <div class="motion-stagger min-h-0 overflow-auto p-2 max-lg:max-h-[60dvh]">
           <div v-if="loading && !servers.length" class="grid gap-2">
             <Skeleton v-for="item in 6" :key="item" class="h-20" />
           </div>
@@ -843,8 +852,8 @@ onBeforeUnmount(() => {
           </div>
         </article>
         <EmptyState v-else-if="!selectedServer" :title="t('serversPage.selectServer')" :description="t('serversPage.selectServerHint')" />
-        <article v-else class="relative grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
-          <LoadingOverlay v-if="detailLoading && !serverDetails[selectedId]" />
+        <article v-else class="relative grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
+          <LoadingOverlay v-if="detailLoading && !serverDetails[selectedId]" :label="t('common.loading')" />
           <header class="flex items-start justify-between gap-4 border-b border-border p-5 max-md:grid">
             <div class="min-w-0">
               <div class="flex flex-wrap items-center gap-2">
@@ -861,20 +870,20 @@ onBeforeUnmount(() => {
             </div>
           </header>
 
-          <div v-if="selectedServer.hostKeyMismatch || selectedServer.lastError" class="grid gap-2 border-b border-border p-4">
-            <div v-if="selectedServer.hostKeyMismatch" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
-              <div class="flex flex-wrap items-start justify-between gap-3">
-                <div class="grid min-w-0 gap-1">
-                  <strong>{{ t('serversPage.hostKeyMismatchTitle') }}</strong>
-                  <p class="m-0">{{ t('serversPage.hostKeyMismatchDescription') }}</p>
-                </div>
-                <Button size="sm" variant="danger" :loading="pendingOperation === 'trustHostKey'" @click="confirmTrustHostKey(selectedServer)"><KeyRound />{{ t('serversPage.trustHostKey') }}</Button>
-              </div>
-            </div>
-            <div v-if="selectedServer.lastError" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ selectedServer.lastError }}</div>
-          </div>
-
           <div class="min-h-0 overflow-auto p-5">
+            <div v-if="selectedServer.hostKeyMismatch || selectedServer.lastError" class="mb-4 grid gap-2">
+              <div v-if="selectedServer.hostKeyMismatch" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
+                <div class="flex flex-wrap items-start justify-between gap-3">
+                  <div class="grid min-w-0 gap-1">
+                    <strong>{{ t('serversPage.hostKeyMismatchTitle') }}</strong>
+                    <p class="m-0">{{ t('serversPage.hostKeyMismatchDescription') }}</p>
+                  </div>
+                  <Button size="sm" variant="danger" :loading="pendingOperation === 'trustHostKey'" @click="confirmTrustHostKey(selectedServer)"><KeyRound />{{ t('serversPage.trustHostKey') }}</Button>
+                </div>
+              </div>
+              <div v-if="selectedServer.lastError" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ selectedServer.lastError }}</div>
+            </div>
+
             <div class="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_320px]">
               <div class="grid gap-4">
                 <section class="rounded-2xl border border-border bg-muted p-4">

@@ -102,6 +102,12 @@ function onMenuKeydown(event: KeyboardEvent) {
     void setOpen(false, 'trigger');
     return;
   }
+  // Tabbing out of a menu ends the interaction; leaving the menu open with
+  // aria-expanded="true" would misreport the state while focus is elsewhere.
+  if (event.key === 'Tab') {
+    void setOpen(false);
+    return;
+  }
   if (nextIndex !== undefined && items.length) {
     event.preventDefault();
     items[nextIndex]?.focus();

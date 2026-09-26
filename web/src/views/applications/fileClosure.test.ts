@@ -67,7 +67,7 @@ describe('application and facility file closure', () => {
 
   it('renders application and facility configuration as one continuous workspace', () => {
     expect(viewSource).toContain('class="app-editor-body"');
-    expect(viewSource).toContain('class="workspace-panel"');
+    expect(viewSource).toContain('class="workspace-panel motion-enter"');
     expect(viewSource).toContain("t('applicationsPage.editorFlowHint')");
     expect(viewSource).toContain("t('applicationsPage.gatewayEditorFlowHint')");
     expect(viewSource).not.toContain("t('applicationsPage.editorWorkspace')");

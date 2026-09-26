@@ -17,8 +17,8 @@ import ConsolePage from '@/components/templates/ConsolePage.vue';
 import AutoRefreshControl from '@/components/patterns/AutoRefreshControl.vue';
 import { useAutoRefresh } from '@/composables/useAutoRefresh';
 import { useI18n } from '@/i18n';
-import type { OverviewCardConfiguration, OverviewCardData, OverviewCardKind, OverviewCardRange, OverviewDto, OverviewMetricPoint, OverviewMetricsSeries } from '@/types/overview';
-import { aggregateMetricValues, cardHasData, createOverviewCard, defaultOverviewCards, mergeCardData, overviewRisks, summarizeOverview, trimCardDataToRange } from './model';
+import type { OverviewCardConfiguration, OverviewCardData, OverviewCardKind, OverviewCardRange, OverviewDto } from '@/types/overview';
+import { cardHasData, createOverviewCard, defaultOverviewCards, deriveCardView, mergeCardData, overviewRisks, summarizeOverview, trimCardDataToRange, type OverviewCardChartSeries, type OverviewCardView } from './model';
 
 const MetricLineChart = defineAsyncComponent(() => import('./MetricLineChart.vue'));
 
@@ -34,6 +34,9 @@ const cardLoading = ref<Record<string, boolean>>({});
 const cardErrors = ref<Record<string, string>>({});
 const cardValues = ref<Record<string, string>>({});
 const cardData = ref<Record<string, OverviewCardData>>({});
+const cardViews = ref<Record<string, OverviewCardView>>({});
+const emptyChartLabels: string[] = [];
+const emptyChartSeries: OverviewCardChartSeries[] = [];
 let cardRequestSeq = 0;
 const cardRequests = new Map<string, number>();
 const loading = ref(false);
@@ -125,10 +128,7 @@ async function loadCard(cardId: string) {
   cardRequests.set(cardId, requestId);
   if (!card || !persistedCardIds.value.has(cardId) || card.kind === 'packageUpdates' || card.kind === 'containerUpdates' || card.kind === 'placeholder') {
     cardRequests.delete(cardId);
-    const nextData = { ...cardData.value };
-    delete nextData[cardId];
-    cardData.value = nextData;
-    cardValues.value = { ...cardValues.value, [cardId]: derivedCardValue(card) };
+    clearCardData(cardId, card);
     return;
   }
   const cardAtStart = {
@@ -143,9 +143,7 @@ async function loadCard(cardId: string) {
     if (cardRequests.get(cardId) !== requestId) return;
     const currentCard = cards.value.find((item) => item.id === cardId);
     if (!currentCard || !sameCardConfig(currentCard, cardAtStart)) return;
-    cardData.value = { ...cardData.value, [cardId]: data };
-    cardValues.value = { ...cardValues.value, [cardId]: metricValue(card, data) };
-    if (!cardHasData(card, data)) cardErrors.value = { ...cardErrors.value, [cardId]: t('overviewPage.cardEmpty') };
+    applyCardData(card, data);
   } catch (err) {
     if (cardRequests.get(cardId) !== requestId) return;
     const message = err instanceof Error ? err.message : t('overviewPage.cardFailed');
@@ -182,6 +180,7 @@ function removeCard(cardId: string) {
   const nextLoading = { ...cardLoading.value };
   delete nextLoading[cardId];
   cardLoading.value = nextLoading;
+  clearCardData(cardId);
   if (editingCardId.value === cardId) closeCardEditor();
   deleteCardTarget.value = null;
 }
@@ -191,6 +190,7 @@ function resetCards() {
   cards.value = defaultOverviewCards();
   cardErrors.value = {};
   cardData.value = {};
+  cardViews.value = {};
   cardValues.value = Object.fromEntries(cards.value.map((card) => [card.id, derivedCardValue(card)]));
   void Promise.all(cards.value.map((card) => loadCard(card.id)));
 }
@@ -230,6 +230,7 @@ function cancelEdit() {
   cards.value = savedCardsSnapshot.value.map(normalizeCardSize);
   cardErrors.value = {};
   cardData.value = {};
+  cardViews.value = {};
   cardValues.value = Object.fromEntries(cards.value.map((card) => [card.id, derivedCardValue(card)]));
   editMode.value = false;
   closeCardEditor();
@@ -361,22 +362,49 @@ function derivedCardValue(card?: OverviewCardConfiguration) {
   return '-';
 }
 
-function metricValue(card: OverviewCardConfiguration, data: Awaited<ReturnType<typeof overviewApi.getCardData>>) {
-  const latest = metricSeries(card, data).at(-1);
-  if (latest === undefined) return '-';
-  if (card.kind === 'network') return formatBytes(latest);
-  if (card.kind === 'cpu' || card.kind === 'memory' || card.kind === 'disk') return `${Math.round(latest)}%`;
-  return derivedCardValue(card);
+function serverNameById(serverId: string) {
+  return overview.value.servers.find((server) => server.id === serverId)?.name ?? serverId;
+}
+
+function formatMetricValue(card: OverviewCardConfiguration, value: number | null) {
+  if (value === null) return '-';
+  if (card.kind === 'network') return formatBytes(value);
+  return `${Math.round(value)}%`;
+}
+
+function clearCardData(cardId: string, card?: OverviewCardConfiguration) {
+  const nextData = { ...cardData.value };
+  delete nextData[cardId];
+  cardData.value = nextData;
+  const nextViews = { ...cardViews.value };
+  delete nextViews[cardId];
+  cardViews.value = nextViews;
+  cardValues.value = { ...cardValues.value, [cardId]: derivedCardValue(card) };
+}
+
+// 派生视图只在数据落地时计算一次，模板只读缓存，避免渲染期重复对齐与聚合。
+function applyCardData(card: OverviewCardConfiguration, data: OverviewCardData) {
+  const view = deriveCardView(card, data, serverNameById);
+  cardData.value = { ...cardData.value, [card.id]: data };
+  cardViews.value = { ...cardViews.value, [card.id]: view };
+  cardValues.value = { ...cardValues.value, [card.id]: formatMetricValue(card, view.latestValue) };
+  if (cardHasData(card, data)) {
+    if (cardErrors.value[card.id]) {
+      const nextErrors = { ...cardErrors.value };
+      delete nextErrors[card.id];
+      cardErrors.value = nextErrors;
+    }
+  } else {
+    cardErrors.value = { ...cardErrors.value, [card.id]: t('overviewPage.cardEmpty') };
+  }
 }
 
 function cardSecondaryValue(card: OverviewCardConfiguration) {
   const data = cardData.value[card.id];
   if (!data || card.kind === 'packageUpdates' || card.kind === 'containerUpdates') return card.serverIds.length ? t('overviewPage.selectedServers') : t('overviewPage.allServers');
-  const values = metricSeries(card, data);
-  if (!values.length) return t('common.notAvailable');
-  const max = Math.max(...values);
-  if (card.kind === 'network') return t('overviewPage.cardPeakValue', { value: formatBytes(max) });
-  return t('overviewPage.cardPeakValue', { value: `${Math.round(max)}%` });
+  const view = cardViews.value[card.id];
+  if (!view || view.peakValue === null) return t('common.notAvailable');
+  return t('overviewPage.cardPeakValue', { value: formatMetricValue(card, view.peakValue) });
 }
 
 function cardMeta(card: OverviewCardConfiguration) {
@@ -399,66 +427,8 @@ function shouldShowDetail(card: OverviewCardConfiguration) {
   return card.width >= 3 || card.height >= 3;
 }
 
-function metricPoints(card: OverviewCardConfiguration, series: OverviewMetricsSeries): OverviewMetricPoint[] {
-  if (card.kind === 'cpu') return series.cpu ?? [];
-  if (card.kind === 'memory') return series.memory ?? [];
-  if (card.kind === 'disk') return series.disk ?? [];
-  if (card.kind === 'network') return series.network ?? [];
-  return [];
-}
-
-function metricValueOf(card: OverviewCardConfiguration, point: OverviewMetricPoint) {
-  if (card.kind === 'cpu') return point.usagePercent ?? 0;
-  if (card.kind === 'memory' || card.kind === 'disk') return percentUsed(point);
-  if (card.kind === 'network') {
-    if (card.networkDirection === 'rx') return point.rxBytesPerSecond ?? 0;
-    if (card.networkDirection === 'tx') return point.txBytesPerSecond ?? 0;
-    return (point.rxBytesPerSecond ?? 0) + (point.txBytesPerSecond ?? 0);
-  }
-  return 0;
-}
-
-function metricSeries(card: OverviewCardConfiguration, data?: OverviewCardData) {
-  const pointsByServer = Object.values(data?.metricsByServer ?? {}).map((series) => metricPoints(card, series)).filter((points) => points.length > 0);
-  return aggregateMetricValues(pointsByServer, (point) => metricValueOf(card, point)).values;
-}
-
-function cardChartData(card: OverviewCardConfiguration) {
-  const data = cardData.value[card.id];
-  const entries = Object.entries(data?.metricsByServer ?? {});
-  const aligned = entries.map(([serverId, series]) => ({
-    serverId,
-    name: overview.value.servers.find((server) => server.id === serverId)?.name ?? serverId,
-    points: metricPoints(card, series),
-  })).filter((item) => item.points.length > 0);
-  const times = [...new Set(aligned.flatMap((item) => item.points.map((point) => point.time)))].sort((a, b) => Date.parse(a) - Date.parse(b));
-  return {
-    times,
-    series: aligned.map((item) => ({
-      id: item.serverId,
-      name: item.name,
-      values: times.map((time) => {
-        const point = item.points.find((candidate) => candidate.time === time);
-        return point ? metricValueOf(card, point) : null;
-      }),
-    })),
-  };
-}
-
-function cardChartSeries(card: OverviewCardConfiguration) {
-  return cardChartData(card).series;
-}
-
-function cardChartLabels(card: OverviewCardConfiguration) {
-  return cardChartData(card).times;
-}
-
 function cardChartValueKind(card: OverviewCardConfiguration) {
   return card.kind === 'network' ? 'bytes' as const : 'percent' as const;
-}
-
-function percentUsed(point: OverviewMetricPoint) {
-  return point.totalBytes ? ((point.usedBytes ?? 0) / point.totalBytes) * 100 : 0;
 }
 
 function normalizeCardSize(card: OverviewCardConfiguration): OverviewCardConfiguration {
@@ -578,20 +548,21 @@ async function refreshCardDeltas() {
         if (cardRequests.get(card.id) !== requestId) continue;
         const currentCard = cards.value.find((item) => item.id === card.id);
         if (!currentCard || !sameCardConfig(currentCard, cardAtStart)) continue;
-        const merged = mergeCardData(cardData.value[card.id], delta);
+        const existing = cardData.value[card.id];
+        if (!existing) continue;
+        if (delta.bucketSeconds !== existing.bucketSeconds) {
+          // 服务器数量变化会改变桶网格，混用两种粒度会画出错误曲线，整卡重载一次。
+          void loadCard(card.id);
+          continue;
+        }
+        const merged = mergeCardData(existing, delta);
         const trimmed = trimCardDataToRange(merged);
         if (latestPointTime(card, merged) && !latestPointTime(card, trimmed)) {
           // The whole visible window expired without fresh points; reload the range once.
           void loadCard(card.id);
           continue;
         }
-        cardData.value = { ...cardData.value, [card.id]: trimmed };
-        cardValues.value = { ...cardValues.value, [card.id]: metricValue(card, trimmed) };
-        if (cardErrors.value[card.id] && cardHasData(card, trimmed)) {
-          const nextErrors = { ...cardErrors.value };
-          delete nextErrors[card.id];
-          cardErrors.value = nextErrors;
-        }
+        applyCardData(card, trimmed);
       } catch {
         // Keep the existing points and retry on the next tick.
       } finally {
@@ -732,10 +703,10 @@ onBeforeUnmount(() => {
                 <LoadingOverlay v-if="cardLoading[card.id]" :label="t('overviewPage.loadingCard')" />
                 <span v-else-if="cardErrors[card.id]" class="line-clamp-2 text-sm leading-6 text-danger">{{ cardErrors[card.id] }}</span>
                 <template v-else>
-                  <div v-if="shouldShowChart(card) && (cardChartSeries(card).length || cardData[card.id])" class="overview-chart-stage min-h-0 min-w-0">
+                  <div v-if="shouldShowChart(card) && cardViews[card.id]" class="overview-chart-stage min-h-0 min-w-0">
                     <MetricLineChart
-                      :labels="cardChartLabels(card)"
-                      :series="cardChartSeries(card)"
+                      :labels="cardViews[card.id]?.labels ?? emptyChartLabels"
+                      :series="cardViews[card.id]?.series ?? emptyChartSeries"
                       :value-kind="cardChartValueKind(card)"
                     />
                   </div>

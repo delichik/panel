@@ -144,7 +144,7 @@ func TestMetricsCleanupRejectsInvalidRetention(t *testing.T) {
 	}
 }
 
-func TestQueryManyReturnsSeriesPerServer(t *testing.T) {
+func TestQueryManyReturnsBucketedSeriesPerServer(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
 	cfg.DataRoot = filepath.Join(dir, "data")
@@ -159,34 +159,66 @@ func TestQueryManyReturnsSeriesPerServer(t *testing.T) {
 	defer store.Close()
 	svc := NewService(store.MetricsDB(), nil)
 	ctx := context.Background()
-	base := time.Now().UTC().Truncate(time.Second)
-	older := base.Add(-2 * time.Minute)
-	newer := base.Add(-30 * time.Second)
+	base := time.Now().UTC().Truncate(time.Second).Add(-30 * time.Second)
+	bucketStart := time.Unix(base.Unix()/10*10, 0).UTC()
 	for _, snap := range []linux.MetricsSnapshot{
-		{ServerID: "srv_a", Time: older, CPUUsagePercent: 10},
-		{ServerID: "srv_a", Time: newer, CPUUsagePercent: 20},
-		{ServerID: "srv_b", Time: older, CPUUsagePercent: 30},
+		{ServerID: "srv_a", Time: bucketStart, CPUUsagePercent: 10, MemoryUsedBytes: 100, MemoryTotalBytes: 200, NetworkRxBytesRate: 1, NetworkTxBytesRate: 2, Status: linux.SystemStatus{Load1: 0.5}},
+		{ServerID: "srv_a", Time: bucketStart.Add(4 * time.Second), CPUUsagePercent: 20, MemoryUsedBytes: 300, MemoryTotalBytes: 400, NetworkRxBytesRate: 3, NetworkTxBytesRate: 4},
+		{ServerID: "srv_a", Time: bucketStart.Add(10 * time.Second), CPUUsagePercent: 30, MemoryUsedBytes: 500, MemoryTotalBytes: 600},
+		{ServerID: "srv_b", Time: bucketStart, CPUUsagePercent: 40},
 	} {
 		if err := svc.Save(ctx, snap); err != nil {
 			t.Fatal(err)
 		}
 	}
-	byServer, err := svc.QueryMany(ctx, []string{"srv_a", "srv_b"}, "1h", nil)
+	fields := SeriesFields{CPU: true, Memory: true}
+	byServer, err := svc.QueryMany(ctx, []string{"srv_a", "srv_b", "srv_missing"}, "1h", QueryManyOptions{BucketSeconds: 10, Fields: fields})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(byServer["srv_a"].CPU) != 2 || len(byServer["srv_b"].CPU) != 1 {
-		t.Fatalf("unexpected batch series: %#v", byServer)
+	if len(byServer) != 3 {
+		t.Fatalf("server count = %d, want 3 including empty entries", len(byServer))
 	}
-	if byServer["srv_b"].CPU[0].UsagePercent != 30 {
-		t.Fatalf("unexpected srv_b point: %#v", byServer["srv_b"].CPU[0])
+	a := byServer["srv_a"]
+	if len(a.CPU) != 2 {
+		t.Fatalf("srv_a CPU buckets = %d, want 2: %#v", len(a.CPU), a.CPU)
 	}
-	after, err := svc.QueryMany(ctx, []string{"srv_a", "srv_b"}, "1h", &older)
+	if a.CPU[0].UsagePercent != 15 || !a.CPU[0].Time.Equal(bucketStart) || a.CPU[1].UsagePercent != 30 {
+		t.Fatalf("unexpected srv_a CPU buckets: %#v", a.CPU)
+	}
+	if len(a.Memory) != 2 || a.Memory[0].UsedBytes != 200 || a.Memory[0].TotalBytes != 300 || a.Memory[1].UsedBytes != 500 || a.Memory[1].TotalBytes != 600 {
+		t.Fatalf("unexpected srv_a memory buckets: %#v", a.Memory)
+	}
+	if len(a.Disk) != 0 || len(a.Network) != 0 || len(a.Load) != 0 {
+		t.Fatalf("unprojected series must stay empty: %#v", a)
+	}
+	if missing := byServer["srv_missing"]; len(missing.CPU) != 0 || len(missing.Memory) != 0 {
+		t.Fatalf("missing server must keep empty series: %#v", missing)
+	}
+
+	// since 落在桶中间时先向下对齐，正在累积的桶必须被完整重算。
+	midBucket := bucketStart.Add(4 * time.Second)
+	delta, err := svc.QueryMany(ctx, []string{"srv_a"}, "1h", QueryManyOptions{After: &midBucket, BucketSeconds: 10, Fields: SeriesFields{CPU: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(after["srv_a"].CPU) != 1 || after["srv_a"].CPU[0].UsagePercent != 20 || len(after["srv_b"].CPU) != 0 {
-		t.Fatalf("unexpected after-series: %#v", after)
+	if len(delta["srv_a"].CPU) != 2 || delta["srv_a"].CPU[0].UsagePercent != 15 {
+		t.Fatalf("delta from mid-bucket = %#v, want both buckets with the first recomputed", delta["srv_a"].CPU)
+	}
+	nextBucket := bucketStart.Add(10 * time.Second)
+	delta, err = svc.QueryMany(ctx, []string{"srv_a"}, "1h", QueryManyOptions{After: &nextBucket, BucketSeconds: 10, Fields: SeriesFields{CPU: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(delta["srv_a"].CPU) != 1 || delta["srv_a"].CPU[0].UsagePercent != 30 {
+		t.Fatalf("delta from bucket start = %#v, want only the second bucket", delta["srv_a"].CPU)
+	}
+
+	if _, err := svc.QueryMany(ctx, []string{"srv_a"}, "1h", QueryManyOptions{BucketSeconds: 0, Fields: fields}); err == nil {
+		t.Fatal("expected invalid bucket seconds error")
+	}
+	if _, err := svc.QueryMany(ctx, []string{"srv_a"}, "bogus", QueryManyOptions{BucketSeconds: 10, Fields: fields}); err == nil {
+		t.Fatal("expected invalid range error")
 	}
 }
 func TestLatestBatchQueries(t *testing.T) {

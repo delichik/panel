@@ -16,6 +16,7 @@ import ServerContextSelector from '@/components/patterns/ServerContextSelector.v
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
+import { useCompactViewport } from '@/composables/useCompactViewport';
 import { useI18n } from '@/i18n';
 import type { ServerDto } from '@/types/servers';
 import type { Fail2BanJail, Fail2BanState, UfwRule, UfwState } from '@/types/security';
@@ -57,6 +58,8 @@ const yamlDiscardConfirm = ref(false);
 const ruleForm = reactive({ port: '443', protocol: 'tcp', from: 'Anywhere' });
 
 const selectedServer = computed(() => servers.value.find((item) => item.id === selectedId.value) ?? null);
+/** 紧凑视口（xl 以下）不自动选中首台服务器：窄屏应停在服务器选择器，由用户进入详情。 */
+const compactViewport = useCompactViewport();
 const serverContextOptions = computed(() => servers.value.map((server) => {
   const state = serverOptionState(server);
   return {
@@ -120,7 +123,7 @@ async function loadServers() {
     if (requestId !== serversRequestId) return;
     servers.value = nextServers;
     if (!servers.value.some((item) => item.id === selectedId.value)) {
-      selectedId.value = servers.value[0]?.id ?? '';
+      selectedId.value = compactViewport.value ? '' : servers.value[0]?.id ?? '';
       if (!selectedId.value) {
         clearPanelState();
         panelController?.abort();
@@ -319,7 +322,7 @@ onBeforeUnmount(() => {
       <Button size="sm" :loading="loadingServers || loadingPanel" @click="refresh"><RefreshCcw />{{ t('common.refresh') }}</Button>
     </template>
 
-    <MasterDetailLayout class="h-full min-h-[640px]">
+    <MasterDetailLayout class="h-full" :detail-key="selectedId" :has-detail="!!selectedServer" :back-label="t('common.backToList')" @back="selectedId = ''">
       <template #master>
       <aside class="grid min-h-0 min-w-0 grid-rows-[auto_auto_minmax(0,1fr)] rounded-2xl border border-border bg-card">
         <div class="border-b border-border p-4">
@@ -340,7 +343,7 @@ onBeforeUnmount(() => {
             <span class="text-muted-foreground">Agent</span>
           </div>
         </div>
-        <div class="min-h-0 overflow-auto p-3">
+        <div class="min-h-0 overflow-auto p-3 max-lg:max-h-[60dvh]">
           <ServerContextSelector
             v-model="selectedId"
             :servers="serverContextOptions"
@@ -355,7 +358,7 @@ onBeforeUnmount(() => {
       <template #detail>
       <main class="grid min-h-0 min-w-0">
         <EmptyState v-if="!selectedServer" :title="t('securityPage.selectServer')" :description="t('securityPage.selectServerHint')" />
-        <article v-else class="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
+        <article v-else class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
           <header class="flex items-start justify-between gap-4 border-b border-border p-5 max-lg:grid">
             <div>
               <div class="flex flex-wrap items-center gap-2">

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { useRoute } from 'vue-router';
 import { AlertTriangle, DatabaseBackup, KeyRound, RefreshCcw, Save, Shield, UploadCloud } from '@lucide/vue';
 import { keyAssetsApi } from '@/api/keyAssets';
 import { settingsApi } from '@/api/settings';
@@ -27,7 +27,6 @@ import { formatDateTime } from '@/utils/datetime';
 
 const { t, locale, setLocale } = useI18n();
 const route = useRoute();
-const router = useRouter();
 const session = useSessionStore();
 const notifyError = useErrorToast();
 const notifySuccess = useSuccessToast();
@@ -381,12 +380,12 @@ onMounted(load);
       <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
     </template>
 
-    <div class="relative grid h-full min-h-[640px] grid-cols-[260px_minmax(0,1fr)] gap-4 max-lg:grid-cols-1">
-      <aside class="min-h-0 overflow-auto rounded-2xl border border-border bg-card p-2">
-        <button v-for="section in sections" :key="section.key" type="button" class="mb-1 flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm hover:bg-accent" :class="activeSection === section.key ? 'bg-muted text-foreground' : 'text-muted-foreground'" @click="router.push(section.to)">
+    <div class="relative grid h-full min-h-0 grid-cols-[260px_minmax(0,1fr)] gap-4 max-lg:grid-cols-1">
+      <aside class="min-h-0 overflow-auto rounded-2xl border border-border bg-card p-2 max-lg:overflow-visible">
+        <RouterLink v-for="section in sections" :key="section.key" :to="section.to" :aria-current="activeSection === section.key ? 'page' : undefined" class="motion-list-item mb-1 flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm hover:bg-accent" :class="activeSection === section.key ? 'bg-muted text-foreground' : 'text-muted-foreground'">
           {{ section.label }}
           <Badge v-if="section.key === 'backups' && (exportPending || restorePending)" tone="warning">{{ restarting ? t('settingsPage.restarting') : t('settingsPage.pending') }}</Badge>
-        </button>
+        </RouterLink>
       </aside>
       <LoadingOverlay v-if="loading && !runtime" />
       <EmptyState v-else-if="error && !runtime" :title="t('common.loadFailed')" :description="error">

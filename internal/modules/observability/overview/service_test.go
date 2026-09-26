@@ -123,6 +123,12 @@ func TestGetCardDataReturnsMetricsForConfiguredServers(t *testing.T) {
 	if len(series.CPU) != 1 || series.CPU[0].UsagePercent != 42 {
 		t.Fatalf("unexpected cpu series: %#v", series.CPU)
 	}
+	if len(series.Memory) != 0 || len(series.Disk) != 0 || len(series.Network) != 0 || len(series.Load) != 0 {
+		t.Fatalf("metric card must only materialize its own series: %#v", series)
+	}
+	if got.BucketSeconds != 10 {
+		t.Fatalf("bucket seconds = %d, want 10 for one server on 1h", got.BucketSeconds)
+	}
 	if _, ok := got.MetricsByServer[serverIDs[1]]; ok {
 		t.Fatalf("unselected server should not be included")
 	}
@@ -159,7 +165,7 @@ func TestGetCardDataExpandsEmptyServerSelection(t *testing.T) {
 	}
 }
 
-func TestGetCardDataSinceReturnsOnlyNewerPoints(t *testing.T) {
+func TestGetCardDataSinceRecomputesOpenBucket(t *testing.T) {
 	svc, serverIDs, closeStore := newCardDataTestService(t)
 	defer closeStore()
 	if _, err := svc.UpdateCards(context.Background(), CardConfigurationSet{Cards: []CardConfiguration{{
@@ -174,8 +180,8 @@ func TestGetCardDataSinceReturnsOnlyNewerPoints(t *testing.T) {
 		t.Fatalf("update cards: %v", err)
 	}
 
-	// 使用整秒时间，避免 since 按秒截断后与采样点边界竞态。
-	marker := time.Now().UTC().Truncate(time.Second).Add(time.Second)
+	// 使用整秒、且晚于种子数据至少一个桶的时间，保证增量只覆盖 marker 所在桶。
+	marker := time.Now().UTC().Truncate(time.Second).Add(30 * time.Second)
 	for i, serverID := range serverIDs {
 		if err := svc.metrics.Save(context.Background(), linux.MetricsSnapshot{
 			ServerID:        serverID,
@@ -191,10 +197,14 @@ func TestGetCardDataSinceReturnsOnlyNewerPoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get card data since: %v", err)
 	}
+	bucketStart := time.Unix(marker.Unix()/int64(got.BucketSeconds)*int64(got.BucketSeconds), 0).UTC()
 	for i, serverID := range serverIDs {
 		series := got.MetricsByServer[serverID]
 		if len(series.CPU) != 1 || series.CPU[0].UsagePercent != 99+float64(i) {
-			t.Fatalf("server %s delta series = %#v, want only the newer point", serverID, series.CPU)
+			t.Fatalf("server %s delta series = %#v, want the recomputed open bucket", serverID, series.CPU)
+		}
+		if !series.CPU[0].Time.Equal(bucketStart) {
+			t.Fatalf("server %s bucket time = %s, want %s", serverID, series.CPU[0].Time, bucketStart)
 		}
 	}
 
@@ -206,6 +216,72 @@ func TestGetCardDataSinceReturnsOnlyNewerPoints(t *testing.T) {
 		t.Fatalf("full series length = %d, want 2", len(all.MetricsByServer[serverIDs[0]].CPU))
 	}
 }
+
+func TestGetCardDataAveragesSamplesWithinOneBucket(t *testing.T) {
+	svc, serverIDs, closeStore := newCardDataTestService(t)
+	defer closeStore()
+	if _, err := svc.UpdateCards(context.Background(), CardConfigurationSet{Cards: []CardConfiguration{{
+		ID:               "card-cpu",
+		Kind:             CardKindCPU,
+		Width:            3,
+		Height:           2,
+		Range:            "1h",
+		NetworkDirection: "both",
+		ServerIDs:        []string{serverIDs[0]},
+	}}}); err != nil {
+		t.Fatalf("update cards: %v", err)
+	}
+
+	base := time.Now().UTC().Truncate(time.Second).Add(-30 * time.Minute)
+	bucketStart := time.Unix(base.Unix()/10*10, 0).UTC()
+	for _, snap := range []linux.MetricsSnapshot{
+		{ServerID: serverIDs[0], Time: bucketStart, CPUUsagePercent: 10},
+		{ServerID: serverIDs[0], Time: bucketStart.Add(4 * time.Second), CPUUsagePercent: 30},
+	} {
+		if err := svc.metrics.Save(context.Background(), snap); err != nil {
+			t.Fatalf("save metrics: %v", err)
+		}
+	}
+
+	got, err := svc.GetCardData(context.Background(), "card-cpu")
+	if err != nil {
+		t.Fatalf("get card data: %v", err)
+	}
+	if got.BucketSeconds != 10 {
+		t.Fatalf("bucket seconds = %d, want 10", got.BucketSeconds)
+	}
+	for _, point := range got.MetricsByServer[serverIDs[0]].CPU {
+		if point.Time.Equal(bucketStart) {
+			if point.UsagePercent != 20 {
+				t.Fatalf("bucket average = %v, want 20", point.UsagePercent)
+			}
+			return
+		}
+	}
+	t.Fatalf("bucket %s missing from %#v", bucketStart, got.MetricsByServer[serverIDs[0]].CPU)
+}
+
+func TestPlanBucketSecondsKeepsPointCountsBounded(t *testing.T) {
+	tests := []struct {
+		rng     string
+		servers int
+		want    int
+	}{
+		{"1h", 1, 10},
+		{"1h", 100, 90},
+		{"6h", 1, 60},
+		{"1d", 1, 240},
+		{"7d", 1, 1800},
+		{"7d", 100, 21600},
+		{"bogus", 1, 0},
+	}
+	for _, tc := range tests {
+		if got := planBucketSeconds(tc.rng, tc.servers); got != tc.want {
+			t.Fatalf("planBucketSeconds(%q, %d) = %d, want %d", tc.rng, tc.servers, got, tc.want)
+		}
+	}
+}
+
 func TestGetCardDataRejectsUnknownCard(t *testing.T) {
 	svc, _, closeStore := newCardDataTestService(t)
 	defer closeStore()

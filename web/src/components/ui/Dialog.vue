@@ -32,6 +32,9 @@ const { onKeydown } = useOverlayBehavior({
   open: () => props.open,
   containerRef: dialog,
   onClose: close,
+  // A modal dialog must not scroll the page behind it; the lock is
+  // reference-counted so nested dialogs restore it only on the last close.
+  lockScroll: true,
 });
 </script>
 

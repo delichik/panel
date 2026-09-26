@@ -16,6 +16,7 @@ import Skeleton from '@/components/ui/Skeleton.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
+import { useCompactViewport } from '@/composables/useCompactViewport';
 import { useI18n } from '@/i18n';
 import type { DnsDomainDto, DnsRecordDto } from '@/types/dns';
 import { createLatestRequestGuard } from '@/views/_shared/requestState';
@@ -63,6 +64,8 @@ const domainForm = reactive({ name: '', provider: 'cloudflare', apiToken: '' });
 const recordForm = reactive({ type: 'A', name: '@', value: '', ttl: '300', proxied: 'true' });
 
 const selectedDomain = computed(() => domains.value.find((item) => item.id === selectedId.value) ?? null);
+/** 紧凑视口（xl 以下）不自动选中首个域名：窄屏应停在列表，由用户进入详情。 */
+const compactViewport = useCompactViewport();
 const recordTypeOptions = ['A', 'AAAA', 'CNAME', 'TXT', 'MX'].map((value) => ({ label: value, value }));
 const providerOptions = [{ label: 'Cloudflare', value: 'cloudflare' }];
 const booleanOptions = [{ label: t('dnsPage.proxied'), value: 'true' }, { label: t('dnsPage.dnsOnly'), value: 'false' }];
@@ -99,7 +102,8 @@ async function loadDomains() {
     domains.value = result.items;
     totalDomains.value = result.total;
     const queryDomain = String(route.query.domain ?? '');
-    selectedId.value = domains.value.some((item) => item.id === queryDomain) ? queryDomain : selectedId.value || domains.value[0]?.id || '';
+    const fallbackDomain = compactViewport.value ? '' : domains.value[0]?.id || '';
+    selectedId.value = domains.value.some((item) => item.id === queryDomain) ? queryDomain : selectedId.value || fallbackDomain;
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('dnsPage.loadFailed');
     notifyError(err instanceof Error ? err.message : t('dnsPage.loadFailed'), err);
@@ -253,7 +257,7 @@ async function deleteRecord() {
       <Button size="sm" variant="primary" @click="openCreateDomain"><Plus />{{ t('dnsPage.addDomain') }}</Button>
     </template>
 
-    <MasterDetailLayout class="h-full min-h-[640px]">
+    <MasterDetailLayout class="h-full" :detail-key="selectedId" :has-detail="!!selectedDomain" :back-label="t('common.backToList')" @back="selectedId = ''">
       <template #master>
       <aside class="grid min-h-0 min-w-0 grid-rows-[auto_auto_minmax(0,1fr)_auto] rounded-2xl border border-border bg-card">
         <div class="border-b border-border p-4">
@@ -269,7 +273,7 @@ async function deleteRecord() {
             <strong class="mt-1 block text-foreground">{{ totalDomains }}</strong>
           </div>
         </div>
-        <div class="motion-stagger min-h-0 overflow-auto p-2">
+        <div class="motion-stagger min-h-0 overflow-auto p-2 max-lg:max-h-[60dvh]">
           <div v-if="loadingDomains && !domains.length" class="grid gap-2">
             <Skeleton v-for="item in 6" :key="item" class="h-16" />
           </div>
@@ -303,7 +307,7 @@ async function deleteRecord() {
       <template #detail>
       <main class="grid min-h-0 min-w-0">
         <EmptyState v-if="!selectedDomain" :title="t('dnsPage.selectDomain')" :description="t('dnsPage.selectDomainHint')" />
-        <article v-else class="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
+        <article v-else class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
           <header class="flex items-start justify-between gap-4 border-b border-border p-5 max-md:grid">
             <div>
               <div class="flex flex-wrap items-center gap-2">

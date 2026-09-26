@@ -226,6 +226,20 @@ button, input, textarea, select { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; }
 
+/*
+ * 触屏：交互控件去掉移动端双击缩放等待，点击反馈即时；不改动滚动容器与捏合缩放能力。
+ */
+button,
+a[href],
+summary,
+[role='tab'],
+[role='option'],
+[role='menuitem'],
+[role='radio'],
+[role='combobox'] {
+  touch-action: manipulation;
+}
+
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--panel-border-strong); border: 3px solid transparent; border-radius: 999px; background-clip: content-box; }
@@ -260,13 +274,30 @@ button:disabled { cursor: not-allowed; }
   transition-property: background-color, border-color, color, box-shadow, transform;
 }
 
-.motion-control:not(:disabled):hover,
-.motion-icon-control:not(:disabled):hover,
-.motion-tab:not(:disabled):hover,
-.motion-menu-item:not(:disabled):hover,
-.motion-list-item:not(:disabled):hover,
-.motion-card:hover {
-  transform: translateY(var(--panel-motion-hover-y));
+/*
+ * hover 反馈只给真正支持 hover 的指针：触屏上点击后 :hover 会“粘”在元素上，
+ * 导致高亮/抬升残留。Tailwind v4 的 hover: 变体本身已按 (hover: hover) 处理，
+ * 这里补齐自有 motion 工具类的同类保护。
+ */
+@media (hover: hover) {
+  .motion-control:not(:disabled):hover,
+  .motion-icon-control:not(:disabled):hover,
+  .motion-tab:not(:disabled):hover,
+  .motion-menu-item:not(:disabled):hover,
+  .motion-list-item:not(:disabled):hover,
+  .motion-card:hover {
+    transform: translateY(var(--panel-motion-hover-y));
+  }
+
+  .motion-card:hover {
+    box-shadow: var(--panel-motion-shadow-raised);
+  }
+
+  .group:hover .motion-tooltip {
+    opacity: 1;
+    visibility: visible;
+    transform: translate(-50%, 0);
+  }
 }
 
 .motion-control:not(:disabled):active,
@@ -278,25 +309,31 @@ button:disabled { cursor: not-allowed; }
   transform: translateY(0) scale(var(--panel-motion-press-scale));
 }
 
-.motion-card:hover,
+/* 选中态阴影与 hover 无关，触屏下同样保留 */
 .motion-list-item[aria-current='true'],
 .motion-list-item[aria-checked='true'],
 .motion-list-item[aria-pressed='true'] {
   box-shadow: var(--panel-motion-shadow-raised);
 }
 
-.motion-field:focus-visible {
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--panel-ring) 22%, transparent);
-}
+/*
+ * 字段焦点态统一交给 `focus-visible:ring-*` 工具类（与 Button / IconButton 同一套 ring），
+ * 不再用未分层的 box-shadow 覆盖，避免输入框和按钮出现两套焦点视觉。
+ */
 
 .motion-enter {
-  animation: panel-motion-enter var(--panel-motion-duration-slow) var(--panel-motion-ease-emphasized) both;
+  animation: panel-motion-enter var(--panel-motion-duration-slow) var(--panel-motion-ease-emphasized) backwards;
 }
 
+/*
+ * 进场动画使用 backwards 填充：
+ * 动画结束后元素回到自身计算样式，hover 抬升与 :active 按压才不会被
+ * 动画终帧的 `transform: translateY(0)` 永久压制（此前 fill-mode: both 会吃掉所有列表项动效）。
+ */
 .motion-list-item,
 .motion-table-row,
 .motion-reveal {
-  animation: panel-motion-enter var(--panel-motion-duration-slow) var(--panel-motion-ease-emphasized) both;
+  animation: panel-motion-enter var(--panel-motion-duration-slow) var(--panel-motion-ease-emphasized) backwards;
   animation-delay: var(--panel-stagger, 0ms);
 }
 
@@ -332,7 +369,7 @@ button:disabled { cursor: not-allowed; }
     visibility var(--panel-motion-duration-fast) var(--panel-motion-ease-standard);
 }
 
-.group:hover .motion-tooltip,
+/* Tooltip 的 hover 揭示已在上面的 (hover: hover) 区块里，这里只保留键盘焦点揭示 */
 .group:focus-within .motion-tooltip {
   opacity: 1;
   visibility: visible;
@@ -419,10 +456,13 @@ button:disabled { cursor: not-allowed; }
   transition: transform var(--panel-motion-duration-base) var(--panel-motion-ease-standard);
 }
 
-/* 路由内容切换：仅淡入淡出，避免 transform 影响页面内 fixed 元素 */
-.route-enter-active,
-.route-leave-active {
+/* 路由内容切换：仅淡入淡出，避免 transform 影响页面内 fixed 元素。
+   退场走 fast（尽快让位），进场走 base，避免 out-in 模式下等待过久。 */
+.route-enter-active {
   transition: opacity var(--panel-motion-duration-base) var(--panel-motion-ease-standard);
+}
+.route-leave-active {
+  transition: opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-standard);
 }
 .route-enter-from,
 .route-leave-to {
@@ -467,9 +507,41 @@ button:disabled { cursor: not-allowed; }
   opacity: 0;
 }
 
-/* 侧边栏折叠/展开：导航列宽平滑过渡 */
+/* 侧边栏折叠/展开：导航列宽平滑过渡；文字用 max-width + opacity 跟随列宽，收起时不重挂载 DOM */
 .shell-grid {
   transition: grid-template-columns var(--panel-motion-duration-base) var(--panel-motion-ease-standard);
+}
+
+.shell-label {
+  transition:
+    opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-standard),
+    max-width var(--panel-motion-duration-base) var(--panel-motion-ease-standard);
+}
+
+/* 详情区上下文切换：只给新内容做进场（旧内容即时移除），点击反馈不被出场延迟拖慢 */
+.detail-swap-enter-active {
+  transition:
+    opacity var(--panel-motion-duration-base) var(--panel-motion-ease-standard),
+    transform var(--panel-motion-duration-base) var(--panel-motion-ease-emphasized);
+}
+.detail-swap-enter-from {
+  opacity: 0;
+  transform: translateY(2px);
+}
+
+/* 路由加载进度条：不确定进度用平滑往返位移表达，比静态脉冲更接近真实加载反馈 */
+.motion-progress {
+  animation: panel-motion-progress 1.15s var(--panel-motion-ease-standard) infinite;
+}
+
+@keyframes panel-motion-progress {
+  0% { transform: translateX(-110%); }
+  100% { transform: translateX(310%); }
+}
+
+@keyframes panel-motion-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 @keyframes panel-motion-enter {
@@ -481,11 +553,6 @@ button:disabled { cursor: not-allowed; }
     opacity: 1;
     transform: translateY(0);
   }
-}
-
-@keyframes panel-motion-fade {
-  from { opacity: 0; }
-  to { opacity: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -511,6 +578,7 @@ button:disabled { cursor: not-allowed; }
   .motion-enter,
   .motion-reveal,
   .motion-tooltip,
+  .detail-swap-enter-from,
   .dialog-panel,
   .drawer-panel,
   .menu-enter-from,
@@ -526,7 +594,8 @@ button:disabled { cursor: not-allowed; }
     transform: none !important;
   }
 
-  .motion-skeleton {
+  .motion-skeleton,
+  .motion-progress {
     animation: none !important;
   }
 }

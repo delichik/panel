@@ -30,8 +30,8 @@ const classes = computed(() => cn(
 </script>
 
 <template>
-  <button :type="type" :disabled="disabled || loading" :class="classes">
-    <LoaderCircle v-if="loading" class="animate-spin" aria-hidden="true" />
+  <button :type="type" :disabled="disabled || loading" :aria-busy="loading ? 'true' : undefined" :class="classes">
+    <LoaderCircle v-if="loading" class="animate-spin motion-reduce:animate-none" aria-hidden="true" />
     <slot />
   </button>
 </template>
