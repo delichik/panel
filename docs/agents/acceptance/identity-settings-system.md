@@ -44,6 +44,9 @@
 - `SET-RUN-012`：语言更新成功后后端默认 locale必须立即切换；日志级别必须立即更新进程 AtomicLevel；协调追踪必须立即同步全局开关；这些热更新无需重启且重启后从持久值恢复。
 - `SET-RUN-013`：远程命令超时更新成功后，新发起的 SSH 操作必须读取新时长；正在执行的操作不要求被追溯修改。
 - `SET-RUN-014`：指标采集与容器上报间隔更新后，已连接的 Agent report stream 必须接收当前值；不得要求重建服务器记录或写入节点侧 Panel 回调地址。
+- `SET-RUN-015`：运行时设置包含 Agent 投递分组 `agent.downloadBaseUrl`、`agent.downloadVerifyTls`、`agent.transferTimeoutSeconds`（默认空、false、120）。`GET`/`PUT /settings/runtime` 必须返回并接受该分组；省略 `agent` 时保留现值，省略 `transferTimeoutSeconds` 时保留已存值而不是写入 0。空 `downloadBaseUrl` 表示关闭 HTTP 投递，Agent 部署继续只走 SSH 上传。
+- `SET-RUN-016`：`downloadBaseUrl` 必须校验并归一化为不含 path/query/fragment/userinfo 的 `http(s)://host[:port]` 源，并拒绝引号、空白、反斜杠与 shell 元字符（该值会被插值进远端 shell 命令）；`transferTimeoutSeconds` 必须在 60..3600 之间。读写响应必须回显归一化结果（去掉末尾 `/`）。
+- `SET-RUN-017`：Agent 投递设置更新成功后，随后创建的 `server_agent_deploy` 任务必须读取新值，无需重启 Panel。
 
 ## 4. Panel HTTPS 设置与持久化安全
 

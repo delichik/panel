@@ -325,16 +325,15 @@ func (s *Service) runDeployAgent(ctx context.Context, taskID string, srv Server)
 		return
 	}
 	upgrade := agentNeedsBinaryUpgrade(srv)
-	var remoteTmp string
+	var artifact agentBundleArtifact
 	if upgrade {
-		executable, err := s.agentBinaryPath(ctx, srv)
+		resolved, err := s.agentBundleArtifactFor(ctx, srv)
 		if err != nil {
 			s.failAgentDeployTask(ctx, taskID, srv, err)
 			return
 		}
-		remoteTmp = "/tmp/panel-agent-" + taskID
-		_ = s.tasks.Advance(ctx, taskID, "uploading", "uploading panel agent binary")
-		if err := s.exec.Upload(ctx, serverTarget(srv), sshx.UploadSpec{LocalPath: executable, RemotePath: remoteTmp}); err != nil {
+		artifact = resolved
+		if err := s.deliverAgentBundle(ctx, taskID, srv, runner, artifact); err != nil {
 			s.failAgentDeployTask(ctx, taskID, srv, err)
 			return
 		}
@@ -363,7 +362,8 @@ func (s *Service) runDeployAgent(ctx context.Context, taskID string, srv Server)
 	}
 	if upgrade {
 		_ = s.tasks.Advance(ctx, taskID, "starting", "starting panel agent service")
-		if _, err := runner.RunSudoLogged(ctx, agentInstallScript(remoteTmp), agentDeployTimeout); err != nil {
+		install := agentBundleInstallScript(agentRemoteTmpArchivePath(taskID), agentRemoteTmpBinaryPath(taskID), artifact.SHA256)
+		if _, err := runner.RunSudoLogged(ctx, install, agentDeployTimeout); err != nil {
 			s.failAgentDeployTask(ctx, taskID, srv, err)
 			return
 		}
@@ -433,6 +433,39 @@ func (s *Service) runDeployAgent(ctx context.Context, taskID string, srv Server)
 		_ = s.tasks.AppendLog(ctx, taskID, "system", "panel agent deployed, but initial system information collection failed: "+err.Error())
 	}
 	_ = s.tasks.Complete(ctx, taskID, "Panel agent deployed")
+}
+
+// deliverAgentBundle gets the compressed agent bundle onto the target host.
+//
+// The HTTP download is tried first when a download base URL is configured. A
+// reachability failure (no fetcher, cannot connect, HTTP error response) falls
+// back to the SSH upload, which is the pre-existing path and also carries the
+// compressed archive. A truncated transfer, a corrupt archive and a checksum
+// mismatch fail the deployment outright: they mean the bytes themselves are
+// wrong, and silently retrying over a slower transport would hide that.
+func (s *Service) deliverAgentBundle(ctx context.Context, taskID string, srv Server, runner remoteops.Runner, artifact agentBundleArtifact) error {
+	settings := s.agentDelivery()
+	archivePath := agentRemoteTmpArchivePath(taskID)
+	if downloadURL, ok := agentDownloadURL(settings.DownloadBaseURL, artifact); ok {
+		_ = s.tasks.Advance(ctx, taskID, "downloading", "downloading panel agent from "+agentDownloadHost(downloadURL))
+		script := agentBundleFetchScript(downloadURL, archivePath, settings, agentDownloadTargetTimeout(settings.TransferTimeout), artifact.Size*2)
+		result, err := runner.RunSudoLogged(ctx, script, settings.TransferTimeout)
+		if err == nil {
+			return nil
+		}
+		class := agentDeployFailureClassFromResult(result, err)
+		if !class.fallsBackToSSHUpload() {
+			_ = s.tasks.AppendLog(ctx, taskID, "system", "panel agent download failed ("+string(class)+")")
+			return agentDownloadFailureError(class)
+		}
+		_ = s.tasks.AppendLog(ctx, taskID, "system", "agent HTTP download failed ("+string(class)+"); falling back to SSH upload")
+	}
+	_ = s.tasks.Advance(ctx, taskID, "uploading", "uploading panel agent binary")
+	return s.exec.Upload(ctx, serverTarget(srv), sshx.UploadSpec{
+		LocalPath:  artifact.Archive,
+		RemotePath: archivePath,
+		Timeout:    settings.TransferTimeout,
+	})
 }
 
 // agentNeedsBinaryUpgrade reports whether the deploy task must upload a new

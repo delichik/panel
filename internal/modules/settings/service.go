@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net"
 	"net/mail"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -46,6 +47,15 @@ type RuntimePanelSettings struct {
 	TLSCertificateID string `json:"tlsCertificateId"`
 }
 
+// RuntimeAgentSettings configures how the panel-agent bundle reaches a target
+// host. An empty DownloadBaseURL keeps the SSH upload as the only delivery
+// path, which is the behaviour of a Panel that has never opted in.
+type RuntimeAgentSettings struct {
+	DownloadBaseURL        string `json:"downloadBaseUrl"`
+	DownloadVerifyTLS      bool   `json:"downloadVerifyTls"`
+	TransferTimeoutSeconds int    `json:"transferTimeoutSeconds"`
+}
+
 type TLSAssetProvider interface {
 	AssetType(context.Context, string) (string, error)
 	ReadFile(context.Context, string, string) ([]byte, string, error)
@@ -75,6 +85,7 @@ type RuntimeUpdate struct {
 	Branding                         *RuntimeBrandingSettings    `json:"branding"`
 	Certificates                     *RuntimeCertificateSettings `json:"certificates"`
 	Panel                            *RuntimePanelSettings       `json:"panel"`
+	Agent                            *RuntimeAgentSettings       `json:"agent"`
 }
 
 type RuntimeSettings struct {
@@ -94,6 +105,7 @@ type RuntimeSettings struct {
 	Branding                         RuntimeBrandingSettings    `json:"branding"`
 	Certificates                     RuntimeCertificateSettings `json:"certificates"`
 	Panel                            RuntimePanelSettings       `json:"panel"`
+	Agent                            RuntimeAgentSettings       `json:"agent"`
 	JWTSecret                        string                     `json:"-"`
 	JWTSecretConfigured              bool                       `json:"jwtSecretConfigured"`
 }
@@ -111,6 +123,18 @@ const (
 	RuntimeSettingServerVariableDefinitions            = "serverVariables.definitions"
 	RuntimeSettingPanelDomain                          = "panel.domain"
 	RuntimeSettingPanelTLSCertificateID                = "panel.tlsCertificateId"
+	RuntimeSettingAgentDownloadBaseURL                 = "agent.downloadBaseUrl"
+	RuntimeSettingAgentDownloadVerifyTLS               = "agent.downloadVerifyTls"
+	RuntimeSettingAgentTransferTimeoutSeconds          = "agent.transferTimeoutSeconds"
+
+	// DefaultAgentTransferTimeoutSeconds bounds one agent bundle transfer on
+	// both sides. It is deliberately larger than the shared remote command
+	// timeout: a compressed bundle still takes time on a slow international
+	// link, while an unbounded download would let a stuck target hold the task
+	// open forever.
+	DefaultAgentTransferTimeoutSeconds = 120
+	MinAgentTransferTimeoutSeconds     = 60
+	MaxAgentTransferTimeoutSeconds     = 3600
 
 	TokenExpiration10Minutes = "10m"
 	TokenExpiration1Hour     = "1h"
@@ -218,6 +242,22 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 			LoginSubtitle: strings.TrimSpace(input.Branding.LoginSubtitle),
 		}
 	}
+	agentSettings := current.Agent
+	if input.Agent != nil {
+		baseURL, err := normalizeAgentDownloadBaseURL(input.Agent.DownloadBaseURL)
+		if err != nil {
+			return RuntimeSettings{}, err
+		}
+		transferTimeout := input.Agent.TransferTimeoutSeconds
+		if transferTimeout == 0 {
+			transferTimeout = current.Agent.TransferTimeoutSeconds
+		}
+		agentSettings = RuntimeAgentSettings{
+			DownloadBaseURL:        baseURL,
+			DownloadVerifyTLS:      input.Agent.DownloadVerifyTLS,
+			TransferTimeoutSeconds: transferTimeout,
+		}
+	}
 	next := RuntimeSettings{
 		ListenAddress:                    current.ListenAddress,
 		AppDatabase:                      current.AppDatabase,
@@ -235,6 +275,7 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 		Branding:                         brandingSettings,
 		Certificates:                     certSettings,
 		Panel:                            panelSettings,
+		Agent:                            agentSettings,
 		JWTSecret:                        current.JWTSecret,
 		JWTSecretConfigured:              current.JWTSecretConfigured,
 	}
@@ -279,6 +320,7 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 	s.rt.Branding = next.Branding
 	s.rt.Certificates = next.Certificates
 	s.rt.Panel = next.Panel
+	s.rt.Agent = next.Agent
 	out := s.rt
 	s.mu.Unlock()
 	i18n.SetDefaultLocale(out.Language)
@@ -454,6 +496,16 @@ func (s *Service) load(ctx context.Context) error {
 			next.Panel.Domain = value
 		case RuntimeSettingPanelTLSCertificateID:
 			next.Panel.TLSCertificateID = value
+		case RuntimeSettingAgentDownloadBaseURL:
+			if baseURL, err := normalizeAgentDownloadBaseURL(value); err == nil {
+				next.Agent.DownloadBaseURL = baseURL
+			}
+		case RuntimeSettingAgentDownloadVerifyTLS:
+			next.Agent.DownloadVerifyTLS = strings.TrimSpace(value) == "true"
+		case RuntimeSettingAgentTransferTimeoutSeconds:
+			if n, err := strconv.Atoi(value); err == nil {
+				next.Agent.TransferTimeoutSeconds = n
+			}
 		}
 	}
 	if err := validateRuntimeSettings(next); err != nil {
@@ -499,7 +551,10 @@ func defaultRuntimeSettings(cfg config.Config) RuntimeSettings {
 			Email:                      strings.TrimSpace(cfg.Certificates.Email),
 			DNSPropagationDelaySeconds: dnsDelay,
 		},
-		Panel:               RuntimePanelSettings{Domain: "localhost"},
+		Panel: RuntimePanelSettings{Domain: "localhost"},
+		Agent: RuntimeAgentSettings{
+			TransferTimeoutSeconds: DefaultAgentTransferTimeoutSeconds,
+		},
 		JWTSecret:           jwtSecret,
 		JWTSecretConfigured: jwtSecret != "",
 	}
@@ -522,6 +577,9 @@ func runtimeValues(settings RuntimeSettings, includeJWT bool) map[string]string 
 		RuntimeSettingCertificateDNSPropagationDelaySecond: strconv.Itoa(settings.Certificates.DNSPropagationDelaySeconds),
 		RuntimeSettingPanelDomain:                          settings.Panel.Domain,
 		RuntimeSettingPanelTLSCertificateID:                settings.Panel.TLSCertificateID,
+		RuntimeSettingAgentDownloadBaseURL:                 settings.Agent.DownloadBaseURL,
+		RuntimeSettingAgentDownloadVerifyTLS:               strconv.FormatBool(settings.Agent.DownloadVerifyTLS),
+		RuntimeSettingAgentTransferTimeoutSeconds:          strconv.Itoa(settings.Agent.TransferTimeoutSeconds),
 	}
 	if includeJWT {
 		values[RuntimeSettingJWTSecret] = settings.JWTSecret
@@ -573,7 +631,49 @@ func validateRuntimeSettings(settings RuntimeSettings) error {
 	if err := validatePanelDomain(settings.Panel.Domain); err != nil {
 		return err
 	}
+	if err := validateAgentSettings(settings.Agent); err != nil {
+		return err
+	}
 	return ValidateJWTSecret(settings.JWTSecret)
+}
+
+func validateAgentSettings(settings RuntimeAgentSettings) error {
+	if _, err := normalizeAgentDownloadBaseURL(settings.DownloadBaseURL); err != nil {
+		return err
+	}
+	if settings.TransferTimeoutSeconds < MinAgentTransferTimeoutSeconds || settings.TransferTimeoutSeconds > MaxAgentTransferTimeoutSeconds {
+		return panelerr.Validation("invalid_agent_transfer_timeout", "Agent transfer timeout must be between 60 and 3600 seconds")
+	}
+	return nil
+}
+
+// normalizeAgentDownloadBaseURL validates and normalizes the public base URL an
+// agent bundle is downloaded from. An empty value disables HTTP delivery.
+//
+// The value is embedded into a remote shell command, so quotes, whitespace and
+// shell metacharacters are rejected outright rather than escaped: a base URL
+// never legitimately contains them. The value is also restricted to a bare
+// origin, because the Panel appends the artifact path itself and must not let a
+// configured prefix change which path is served.
+func normalizeAgentDownloadBaseURL(value string) (string, error) {
+	trimmed := strings.TrimRight(strings.TrimSpace(value), "/")
+	if trimmed == "" {
+		return "", nil
+	}
+	if strings.ContainsAny(trimmed, " \t\r\n\"'`\\$;&|<>(){}[]*?!") {
+		return "", panelerr.Validation("invalid_agent_download_base_url", "Agent download base URL must not contain whitespace, quotes or shell metacharacters")
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return "", panelerr.Validation("invalid_agent_download_base_url", "Agent download base URL must be a valid http or https origin")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", panelerr.Validation("invalid_agent_download_base_url", "Agent download base URL must use http or https")
+	}
+	if parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", panelerr.Validation("invalid_agent_download_base_url", "Agent download base URL must be a bare origin without a path, query, fragment or credentials")
+	}
+	return parsed.Scheme + "://" + parsed.Host, nil
 }
 
 func (s *Service) validatePanelTLS(settings RuntimeSettings) error {

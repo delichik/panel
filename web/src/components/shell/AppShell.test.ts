@@ -71,6 +71,7 @@ function runtimeSettings(language = 'en'): RuntimeSettings {
     branding: { loginTitle: 'Seamark', loginSubtitle: '' },
     certificates: { email: '', dnsPropagationDelaySeconds: 30 },
     panel: { domain: 'localhost', tlsCertificateId: '' },
+    agent: { downloadBaseUrl: '', downloadVerifyTls: false, transferTimeoutSeconds: 120 },
     jwtSecretConfigured: true,
   };
 }

@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"os"
-	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -71,8 +69,6 @@ const agentRemoteServicePath = "/etc/systemd/system/panel-agent.service"
 // so tests can point it at a temporary directory; it is not configurable.
 var agentBundleRoot = "/app/panel-agents"
 
-const agentBundleBinaryName = "panel-agent"
-
 var reverseProxyTCPPorts = []int{80, 443}
 
 type Service struct {
@@ -86,6 +82,10 @@ type Service struct {
 	panelTLS             panelTLSProvider
 	tasks                *tasks.Service
 	firewallChannelCheck func(context.Context, Server) error
+	// agentDeliverySettings supplies the runtime agent download configuration.
+	// It is nil when no provider is wired, which means HTTP delivery is off and
+	// the deploy task keeps using the SSH upload.
+	agentDeliverySettings func() AgentDeliverySettings
 	// dnsSyncTrigger notifies the reverse proxy facility when server
 	// addresses change so affected proxy domains can resync their records.
 	dnsSyncTrigger func(context.Context, []string) error
@@ -1357,25 +1357,6 @@ WantedBy=multi-user.target
 `
 }
 
-func agentInstallScript(remoteTmp string) string {
-	return strings.Join([]string{
-		"set -eu",
-		`if ! command -v systemctl >/dev/null 2>&1; then`,
-		`  echo "[panel] systemd is required to manage panel-agent" >&2`,
-		`  exit 1`,
-		`fi`,
-		"systemctl stop panel-agent.service >/dev/null 2>&1 || true",
-		`if command -v pkill >/dev/null 2>&1; then`,
-		`  pkill -x panel-agent >/dev/null 2>&1 || true`,
-		`  pkill -f '^/usr/local/bin/panel-agent($| )' >/dev/null 2>&1 || true`,
-		`fi`,
-		"install -m 0755 " + remoteops.ShellQuote(remoteTmp) + " " + remoteops.ShellQuote(agentRemoteBinaryPath),
-		"rm -f " + remoteops.ShellQuote(remoteTmp),
-		remoteops.MustUFWAllowScript(remoteops.UFWRule{Port: defaultAgentPort, Protocol: "tcp"}),
-		agentServiceStartScript(),
-	}, "\n")
-}
-
 // agentRestartScript restarts an already-installed panel-agent without touching
 // the binary on disk. It is used when only configuration changes (certificates
 // or the listen URL) need to be picked up.
@@ -1525,17 +1506,18 @@ func isNotFoundError(err error) bool {
 	return errors.As(err, &pe) && pe.Code == "not_found"
 }
 
-func (s *Service) agentBinaryPath(ctx context.Context, srv Server) (string, error) {
+// agentBundleArtifactFor resolves the compressed agent bundle and its
+// precomputed checksum for the target platform of one server.
+func (s *Service) agentBundleArtifactFor(ctx context.Context, srv Server) (agentBundleArtifact, error) {
 	platform, err := s.agentTargetPlatform(ctx, srv)
 	if err != nil {
-		return "", err
+		return agentBundleArtifact{}, err
 	}
-	binaryPath := agentBinaryPathForPlatform(platform)
-	info, statErr := os.Stat(binaryPath)
-	if statErr == nil && !info.IsDir() {
-		return binaryPath, nil
+	artifact, ok := lookupAgentBundleArtifact(platform)
+	if !ok {
+		return agentBundleArtifact{}, panelerr.Validation("agent_binary_unavailable", "panel-agent binary is unavailable for "+platform)
 	}
-	return "", panelerr.Validation("agent_binary_unavailable", "panel-agent binary is unavailable for "+platform)
+	return artifact, nil
 }
 
 func (s *Service) agentTargetPlatform(ctx context.Context, srv Server) (string, error) {
@@ -1574,10 +1556,6 @@ func normalizeAgentArch(value string) string {
 	default:
 		return ""
 	}
-}
-
-func agentBinaryPathForPlatform(platform string) string {
-	return path.Join(agentBundleRoot, strings.TrimSpace(platform), agentBundleBinaryName)
 }
 
 func agentURLForPort(host string, port int) string {

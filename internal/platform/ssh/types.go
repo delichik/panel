@@ -51,6 +51,10 @@ type CommandResult struct {
 type UploadSpec struct {
 	LocalPath  string
 	RemotePath string
+	// Timeout overrides the shared remote command timeout for this transfer.
+	// Large payloads such as the agent bundle need a longer bound than the
+	// default remote command timeout; zero keeps the shared timeout.
+	Timeout time.Duration
 }
 
 type DownloadSpec struct {

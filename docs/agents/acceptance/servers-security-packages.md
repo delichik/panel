@@ -60,15 +60,26 @@
 - `AGT-AUTO-002`：证书进入 7 天窗口时保持 compatible且不写错误，只静默刷新；系统自动复用任务必须尊重 `next_run_at` 和指数退避，不能借复用绕过。
 - `AGT-AUTO-003`：同一服务器系统自动部署连续失败 2 次必须置 undeployable并停止周期自动尝试；手动部署解除阻止并重置退避基准；失败计数仅在连续 5 次健康检查成功后清零。
 - `AGT-DEP-001`：手动 `POST /servers/{id}/agent/deploy` 必须创建或复用并启动任务，先标记 running再响应；任务 executor必须直到安装、健康检查和终态写入完成才返回。
-- `AGT-DEP-002`：部署必须按持久化的 `architecture.os/arch` 选择固定 `/app/panel-agents/linux-amd64|linux-arm64/panel-agent`；缺架构时先 SSH探测并写回，不支持平台返回 `agent_binary_unavailable`。
-- `AGT-DEP-003`：完整安装上传二进制并写证书/env/systemd；仅证书续期或 URL修复时只重写配置并重启，不重复传输二进制。
+- `AGT-DEP-002`：部署必须按持久化的 `architecture.os/arch` 选择固定 `/app/panel-agents/linux-amd64|linux-arm64/`，并同时要求构建期产出的 `panel-agent.gz` 与 `panel-agent.sha256` 存在且可读；缺架构时先 SSH探测并写回，文件缺失、平台不支持或 sha256 文件不是规范小写十六进制时返回 `agent_binary_unavailable`。Panel 不得在运行时压缩二进制或计算其哈希。
+- `AGT-DEP-003`：完整安装必须先把压缩包投递到目标机（HTTP 下载或 SSH 回退），再执行共用安装段（`gzip -dc` 解压、sha256 校验、停 systemd 与残留进程、安装、启动并等待 `tcp/9786`）；仅证书续期或 URL修复时只重写证书/env/systemd 配置并重启，不重复传输二进制。下载与安装必须是两个独立的远端步骤，避免分类下载失败时重复执行已停过服务的安装逻辑。
 - `AGT-DEP-004`：重启 Agent 前若能力包含 `prepare-restart`，必须最长等待10分钟至 ready；holdon 首次立即记录且最多每15秒记录一次进度；能力缺失、健康/流失败或超时可记录后继续，任务取消必须停止部署。
-- `AGT-DEP-005`：远端部署必须停止 systemd和残留进程，写入 `/etc/panel-agent`、`--srv` service及端口9786，验证文件证书和实际服务证书指纹，失败日志包含 systemctl/journal诊断但不得包含私钥。
+- `AGT-DEP-005`：远端部署必须停止 systemd和残留进程，写入 `/etc/panel-agent`、`--srv` service及端口9786，验证文件证书和实际服务证书指纹，失败日志包含 systemctl/journal诊断但不得包含私钥。两条投递路径都必须校验压缩包解压后的 sha256 与经本次 SSH 调用下发的期望值一致，不匹配必须终止安装。
 - `AGT-CERT-001`：`POST /servers/{id}/agent/certificate` 只作为高级手动安装兜底返回 CA、节点证书、私钥、监听地址、Agent URL 和 Docker host，不落库；响应必须受认证且不得进入日志或缓存。
 - `AGT-CERT-002`：系统证书列表只展示已有元数据的 Agent CA、Panel client、节点 server证书和 Panel TLS链；系统资产不可通过普通 key asset API下载、导出、删除、重签或作为应用文件。
 - `AGT-CERT-003`：重置 Panel Agent client 保留 CA并热加载共享 gRPC client；重置 Agent CA同时生成 client并为全部已配置服务器排队重部署；重置单节点证书复用节点部署任务。
 - `AGT-CERT-004`：为服务器签发 Agent 证书时，节点证书材料持久化为 `key_assets` 中按 `agent-server-<serverID>` 命名的系统资产；资产名称必须包含稳定 serverID，服务器重名、删除后重建同名服务器或重复签发都不得违反 `key_assets.name` 唯一约束；重新签发必须按 serverID 原地更新同一资产，不产生重复资产。
-- `AGT-RPT-001`：Panel 必须主动拨号打开 mTLS report stream，节点不得保存 Panel callback地址；stream状态仅写 `agent.report.*`，不得降级普通 Agent status。
+- `AGT-DL-001`：目标机下载端点固定为 `GET /agent/{version}/{platform}/panel-agent.gz`，注册在主 Panel mux 且位于 `/api` 之外。`{version}` 取 `buildinfo` 版本号；仅当版本号不唯一（本地构建的 `dev`）时才使用内容寻址的 `dev-<sha256前12位>`，其中 sha256 取解压后二进制。`{platform}` 只接受 `linux-amd64`、`linux-arm64`。同一二进制对所有服务器必须产生同一个 URL。`agent.downloadBaseUrl` 为空时部署行为必须与引入本能力之前完全一致（只走 SSH 上传）。
+- `AGT-DL-002`：端点不鉴权，且不得设置 `Set-Cookie`、不得读取或回显会话状态。命中响应必须为 200（Range 请求为 206）并带 `Content-Type: application/gzip`、`Cache-Control: public, max-age=31536000, immutable`、sha256 的强 `ETag`、`Accept-Ranges: bytes`、`X-Content-Type-Options: nosniff`，且不得带 `Content-Encoding`。必须支持 `Range` 请求。
+- `AGT-DL-003`：`{version}` 与当前构建不匹配时必须 404 且带 `Cache-Control: no-store`，不得退化为「服务当前版本」，也不得把请求重写为另一个版本。`/agent/` 前缀下的其他路径必须 404，不得落到 SPA 静态兜底返回 200 HTML。
+- `AGT-DL-004`：目标机安装前必须用同一次 SSH 调用下发的期望 sha256 校验解压后的二进制。**两条投递路径都必须校验**（SSH 回退路径此前没有校验）。校验和不匹配、解压失败或缺少 `gzip`/`sha256sum` 时必须终止安装，不得继续，也不得回退。
+- `AGT-DL-005`：HTTP 下载失败的回退条件严格限定为可达性问题：目标机没有带总时限的 fetcher（curl，或 wget + `timeout`）、DNS 或连接失败、超时、HTTP 4xx/5xx。传输中断或截断、解压失败、哈希不匹配属于数据问题，必须直接失败且任务标记失败，不得回退 SSH 上传。回退时任务日志必须写明分类原因与「falling back to SSH upload」。
+- `AGT-DL-006`：传输必须有界且可配置（`agent.transferTimeoutSeconds`，默认 120 秒，取值范围 60..3600）。Panel 侧与目标机侧都必须限时，且目标机侧限时必须严格短于 Panel 侧，以保证目标机脚本总能正常退出并回报分类原因；Panel 侧超时本身不可分类，不得作为回退依据。
+- `AGT-DL-007`：`agent.downloadVerifyTls` 为 false（默认）时 fetcher 必须带 `-k` / `--no-check-certificate`，为 true 时不得带。关闭校验只影响传输保密性：完整性由 `AGT-DL-004` 的 sha256 锚定保证，因此该默认值不构成完整性降级，但必须在设置页文案中说明。
+- `AGT-DL-008`：下载 URL 与期望 sha256 只能作为一次性命令参数出现，不得写入 `/etc/panel-agent/*`、不得进入服务器 traits、不得落库到任务参数之外的任何持久化位置，也不得出现在 agent 环境文件或 systemd 单元中；部署完成后目标机不得保留任何 Panel 地址。
+- `AGT-DL-009`：镜像产物必须是 `panel-agent.gz` 与 `panel-agent.sha256`（解压后二进制的 sha256），`.gz` 必须用 `gzip -9 -n` 生成以免同一输入产生不同字节。Panel 运行时不得做实时压缩或实时计算哈希。
+- `AGT-DL-010`：端点路径必须固定——`panel-agent.gz` 是注册 pattern 里的字面量而非路径参数；`{version}` 与 `{platform}` 只作为固定表查找键，任何请求数据都不得参与拼接文件系统路径。`..`、编码斜杠、反斜杠与非白名单平台一律不可服务。
+- `AGT-DL-011`：脚本中所有插值必须经 `ShellQuote`；`agent.downloadBaseUrl` 保存时必须拒绝引号、空白、反斜杠与 shell 元字符，并限制为不含 path/query/fragment/userinfo 的 `http(s)://host[:port]` 源。
+- `AGT-RPT-001`：Panel 必须主动拨号打开 mTLS report stream，节点不得保存 Panel callback地址；stream状态仅写 `agent.report.*`，不得降级普通 Agent status。**运行时不变量**：已安装的 Agent 不得假设 Panel 可达，也不得主动连接 Panel。安装期例外仅限一次性的 `AGT-DL-001` 下载：目标机可以用命令参数里的 URL 拉取自己的二进制，连不上时必须按 `AGT-DL-005` 回退 SSH 上传，且不得因此在本机持久化任何 Panel 地址。
 - `AGT-RPT-002`：流断开重连采用连续失败 5秒起至5分钟封顶退避；一旦该连接成功交付报告即重置退避，等待退避的连接不得被静默检测循环反复取消。
 - `AGT-RPT-003`：指标、容器、镜像或软件包报告的落库失败只记录日志，不中断流；容器保存失败不得触发应用 reconcile，空容器报告不得清空已有观察。
 - `AGT-RPT-004`：周期样本时间必须 Unix interval对齐；Docker事件触发的 `container_change` 可不对齐。缓存未齐或任一指标超过15秒未成功采样时不提交指标，Panel保留旧值。网络速率必须是采集窗口内的平均字节数每秒：Agent 按固定节拍读取 `/proc/net/dev` 累计收发字节并在内存累加相邻读数差，上报整点消费累加值除以自上次提交以来读数窗口的实际时长，因此采集间隔为 N 秒时样本反映这 N 秒产生的流量平均值，不得上报单次 1 秒瞬时样本；读数之间计数器回退（网卡重建、计数器回绕）按 0 增量跳过，消费后没有新读数时不产出网络指标（整体保持不提交）。
@@ -130,4 +141,6 @@
 - `SRV-EVD-002`：测试必须证明列表不选择秘密/大字段、编辑空secret保留、主机key变化失败关闭、服务器删除事务清引用、删除时清理节点证书资产，以及删除不依赖远端可达。
 - `SRV-EVD-003`：任务测试必须证明同步executor才结束任务、相同资源重复触发的复用边界、自动部署退避/封禁/手动解封和不可取消升级语义。
 - `SRV-EVD-004`：Agent替身必须验证生产能力不回退SSH、版本/Docker/证书状态转换、report stream空快照保护和失败不致断流；单元测试不得依赖真实SSH、apt、UFW或Docker。
+- `SRV-EVD-005`：Agent 下载端点必须有独立于 `/api` 路由清单的**公开路由清单断言**（literal pattern 集合 + 哈希），且断言必须验证产物名是注册 pattern 的字面量、路由不在 `/api` 之下。端点测试必须覆盖未知版本/平台、`..` 与越权路径不服务、缓存头与 `ETag`、`Range` 返回 206、未命中不设置 `Set-Cookie`。
+- `SRV-EVD-006`：Agent 投递测试必须覆盖：HTTP 下载成功时不上传；连不上、HTTP 4xx/5xx、缺 fetcher 时回退 SSH 上传且上传的是 `.gz`、带传输超时；传输中断时直接失败且不上传；`agent.downloadBaseUrl` 为空时只走 SSH 上传。下载脚本测试必须断言 TLS 开关、目标机侧限时严格短于 Panel 侧、各分类退出码与回退判定表。
 - `SRV-EVD-005`：CLI测试必须覆盖显式模式门禁、三条apps命令的表格/JSON、Docker host优先级、selector优先级与歧义、退出码及非托管容器隔离；测试使用本地runtime替身，不依赖真实Docker。

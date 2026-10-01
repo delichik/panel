@@ -624,6 +624,7 @@ function agentTaskStageLabel(stage: string) {
   const key = ({
     preparing: 'serversPage.agentTaskStagePreparing',
     checking: 'serversPage.agentTaskStageChecking',
+    downloading: 'serversPage.agentTaskStageDownloading',
     uploading: 'serversPage.agentTaskStageUploading',
     configuring: 'serversPage.agentTaskStageConfiguring',
     starting: 'serversPage.agentTaskStageStarting',

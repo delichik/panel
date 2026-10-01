@@ -347,3 +347,106 @@ func TestRuntimeSettingsRejectLongBranding(t *testing.T) {
 		t.Fatal("expected validation error")
 	}
 }
+
+func validAgentRuntimeUpdate(agent *RuntimeAgentSettings) RuntimeUpdate {
+	return RuntimeUpdate{
+		MetricsRetentionDays:             7,
+		MetricsCollectionIntervalSeconds: 60,
+		CleanupSchedule:                  "daily",
+		TokenExpiration:                  DefaultTokenExpiration,
+		Language:                         "en",
+		Agent:                            agent,
+	}
+}
+
+func TestRuntimeSettingsAgentDeliveryDefaultsToDisabled(t *testing.T) {
+	svc := newTestService(t)
+	agent := svc.Runtime().Agent
+	// An empty base URL is what keeps the SSH upload the only delivery path, so
+	// a Panel that never opts in behaves exactly as before.
+	if agent.DownloadBaseURL != "" {
+		t.Fatalf("expected HTTP delivery to be disabled by default, got %q", agent.DownloadBaseURL)
+	}
+	if agent.DownloadVerifyTLS {
+		t.Fatal("expected certificate verification to default to off")
+	}
+	if agent.TransferTimeoutSeconds != DefaultAgentTransferTimeoutSeconds {
+		t.Fatalf("expected the default transfer timeout, got %d", agent.TransferTimeoutSeconds)
+	}
+}
+
+func TestRuntimeSettingsAgentDeliveryPersistsAndNormalizes(t *testing.T) {
+	svc := newTestService(t)
+	updated, err := svc.Update(context.Background(), validAgentRuntimeUpdate(&RuntimeAgentSettings{
+		DownloadBaseURL:        "  https://panel.example.test/  ",
+		DownloadVerifyTLS:      true,
+		TransferTimeoutSeconds: 300,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Agent.DownloadBaseURL != "https://panel.example.test" {
+		t.Fatalf("expected a normalized origin, got %q", updated.Agent.DownloadBaseURL)
+	}
+	if !updated.Agent.DownloadVerifyTLS {
+		t.Fatal("expected certificate verification to be kept")
+	}
+	if updated.Agent.TransferTimeoutSeconds != 300 {
+		t.Fatalf("expected the configured timeout, got %d", updated.Agent.TransferTimeoutSeconds)
+	}
+	if got := svc.Runtime().Agent; got != updated.Agent {
+		t.Fatalf("expected the in-memory settings to match, got %#v", got)
+	}
+
+	// Leaving the timeout unset keeps the stored value instead of clamping it to
+	// zero, which would be a validation error.
+	kept, err := svc.Update(context.Background(), validAgentRuntimeUpdate(&RuntimeAgentSettings{
+		DownloadBaseURL: "https://panel.example.test",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kept.Agent.TransferTimeoutSeconds != 300 {
+		t.Fatalf("expected the previous timeout to be kept, got %d", kept.Agent.TransferTimeoutSeconds)
+	}
+}
+
+func TestRuntimeSettingsRejectInvalidAgentDownloadBaseURL(t *testing.T) {
+	svc := newTestService(t)
+	// Quoting and shell metacharacters are rejected outright because the value
+	// is embedded in a remote shell command, and a path would change which
+	// artifact the Panel serves.
+	for _, baseURL := range []string{
+		"panel.example.test",
+		"ftp://panel.example.test",
+		"https://panel.example.test/prefix",
+		"https://panel.example.test?a=b",
+		"https://panel.example.test#fragment",
+		"https://user:secret@panel.example.test",
+		"https://panel.example.test; rm -rf /",
+		"https://panel.example.test/$(id)",
+		"https://panel.example.test/`id`",
+		"https://panel.example.test/\"x\"",
+		"https://panel.example.test/ x",
+	} {
+		if _, err := svc.Update(context.Background(), validAgentRuntimeUpdate(&RuntimeAgentSettings{DownloadBaseURL: baseURL})); err == nil {
+			t.Fatalf("expected base URL %q to be rejected", baseURL)
+		}
+	}
+}
+
+func TestRuntimeSettingsRejectOutOfRangeAgentTransferTimeout(t *testing.T) {
+	svc := newTestService(t)
+	for _, seconds := range []int{1, MinAgentTransferTimeoutSeconds - 1, MaxAgentTransferTimeoutSeconds + 1} {
+		agent := &RuntimeAgentSettings{TransferTimeoutSeconds: seconds}
+		if _, err := svc.Update(context.Background(), validAgentRuntimeUpdate(agent)); err == nil {
+			t.Fatalf("expected transfer timeout %d to be rejected", seconds)
+		}
+	}
+	for _, seconds := range []int{MinAgentTransferTimeoutSeconds, MaxAgentTransferTimeoutSeconds} {
+		agent := &RuntimeAgentSettings{TransferTimeoutSeconds: seconds}
+		if _, err := svc.Update(context.Background(), validAgentRuntimeUpdate(agent)); err != nil {
+			t.Fatalf("expected transfer timeout %d to be accepted: %v", seconds, err)
+		}
+	}
+}

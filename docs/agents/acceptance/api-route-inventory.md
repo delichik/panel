@@ -6,6 +6,7 @@
 - `API-COV-002`：增加、删除、更名或改 method 时，必须同步修改本清单、`coverage-matrix.md`、路由清单测试、typed client/Mock（如有）及所属领域验收项。
 - `API-COV-003`：同一路径的不同 method 是不同操作，必须分别验证；动态参数名变化也视为合同变化。
 - `API-COV-004`：本清单覆盖主 Panel 路由；备份导出/恢复最小维护应用的额外路由由备份恢复文档独立逐项约束。
+- `API-COV-006`：本清单与 `COV-API-003` 的计数只覆盖 `/api/...` 路由，公开产物路由 `GET /agent/{version}/{platform}/panel-agent.gz` 与 `/agent/` 前缀的 404 兜底不在其中——这是有意为之，不是遗漏。它属于认证之外、由 CDN 缓存的产物面，验收合同见 [服务器、安全与软件包](servers-security-packages.md) 的 `AGT-DL-001..011`，路由清单断言见 `SRV-EVD-005` 与 `internal/bootstrap/panel/routes_manifest_test.go` 中的公开路由清单测试。
 - `API-COV-005`：当前排序后清单的 SHA-256 为 `0ef652491919bc2e3e73a07a4992308102564065d16410cdc285393090db1ab2`；哈希变化必须先审查真实差异，禁止只更新数字。
 
 | # | Method | Path | 验收文档 |

@@ -149,6 +149,14 @@ func New(cfg config.Config) (*App, error) {
 		server.WithAgentTLSProvider(keyAssetSvc),
 		server.WithPanelTLSProvider(keyAssetSvc),
 		server.WithMetricsDB(store.MetricsDB()),
+		server.WithAgentDeliverySettings(func() server.AgentDeliverySettings {
+			runtime := settingsSvc.Runtime()
+			return server.AgentDeliverySettings{
+				DownloadBaseURL: runtime.Agent.DownloadBaseURL,
+				VerifyTLS:       runtime.Agent.DownloadVerifyTLS,
+				TransferTimeout: time.Duration(runtime.Agent.TransferTimeoutSeconds) * time.Second,
+			}
+		}),
 	)
 	applicationSvc := applications.NewServiceWithOptions(store.AppDB(), agentClient, taskSvc, applications.Config{
 		SaveSessionDir: applicationSaveSessionDir(cfg),
@@ -357,6 +365,10 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 	certH.RegisterRoutes(a.mux, authenticated)
 	keyAssetH.RegisterRoutes(a.mux, authenticated)
 	serverH.RegisterRoutes(a.mux, authenticated)
+	// The agent bundle download is intentionally unauthenticated: targets have
+	// no Panel session, and a per-server token would make every server use a
+	// different URL, which would defeat CDN reuse.
+	serverH.RegisterPublicRoutes(a.mux)
 	metricsH.RegisterRoutes(a.mux, authenticated)
 	eventH.RegisterRoutes(a.mux, authenticated)
 	packageH.RegisterRoutes(a.mux, authenticated)

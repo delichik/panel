@@ -1,6 +1,7 @@
 package server
 
 import (
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"crypto/x509"
@@ -1605,21 +1606,38 @@ func TestAgentCertificateTimeErrorDetectedFromMessage(t *testing.T) {
 	}
 }
 
-func TestAgentBinaryPathForPlatformIsFixed(t *testing.T) {
-	cases := map[string]string{
-		"linux-amd64": "/app/panel-agents/linux-amd64/panel-agent",
-		"linux-arm64": "/app/panel-agents/linux-arm64/panel-agent",
+func TestAgentBundlePathForPlatformIsFixed(t *testing.T) {
+	archives := map[string]string{
+		"linux-amd64": "/app/panel-agents/linux-amd64/panel-agent.gz",
+		"linux-arm64": "/app/panel-agents/linux-arm64/panel-agent.gz",
 	}
-	for platform, want := range cases {
-		if got := agentBinaryPathForPlatform(platform); got != want {
-			t.Fatalf("expected %s path %q, got %q", platform, want, got)
+	for platform, want := range archives {
+		if got := agentBundleArchivePathForPlatform(platform); got != want {
+			t.Fatalf("expected %s archive path %q, got %q", platform, want, got)
+		}
+	}
+	checksums := map[string]string{
+		"linux-amd64": "/app/panel-agents/linux-amd64/panel-agent.sha256",
+		"linux-arm64": "/app/panel-agents/linux-arm64/panel-agent.sha256",
+	}
+	for platform, want := range checksums {
+		if got := agentBundleChecksumPathForPlatform(platform); got != want {
+			t.Fatalf("expected %s checksum path %q, got %q", platform, want, got)
 		}
 	}
 }
 
-func TestAgentInstallScriptStopsOldProcessesAndChecksPortOwner(t *testing.T) {
-	script := agentInstallScript("/tmp/panel-agent-task")
+func TestAgentBundleInstallScriptDecompressesVerifiesAndStarts(t *testing.T) {
+	checksum := strings.Repeat("ab", 32)
+	script := agentBundleInstallScript("/tmp/panel-agent-task.gz", "/tmp/panel-agent-task", checksum)
 	for _, want := range []string{
+		`gzip -dc "$archive" > "$binary"`,
+		`sha256sum "$binary"`,
+		checksum,
+		`exit 46`,
+		`exit 47`,
+		`exit 48`,
+		`install -m 0755 "$binary" '/usr/local/bin/panel-agent'`,
 		"systemctl stop panel-agent.service",
 		"pkill -x panel-agent",
 		"pkill -f '^/usr/local/bin/panel-agent($| )'",
@@ -2335,11 +2353,25 @@ func agentHealthWithPrepareRestart(version string) agentcontract.HealthResponse 
 
 type trackingAgentDeployExec struct {
 	agentArchFakeExec
-	uploads int
+	uploads      int
+	uploadSpec   sshx.UploadSpec
+	sudoCommands []string
+	// onSudo optionally scripts the result of one remote sudo command; the
+	// default keeps every command succeeding.
+	onSudo func(command string) (sshx.CommandResult, error)
+}
+
+func (f *trackingAgentDeployExec) ExecSudo(_ context.Context, _ sshx.Target, command sshx.CommandSpec) (sshx.CommandResult, error) {
+	f.sudoCommands = append(f.sudoCommands, command.Command)
+	if f.onSudo != nil {
+		return f.onSudo(command.Command)
+	}
+	return sshx.CommandResult{ExitCode: 0}, nil
 }
 
 func (f *trackingAgentDeployExec) Upload(ctx context.Context, target sshx.Target, spec sshx.UploadSpec) error {
 	f.uploads++
+	f.uploadSpec = spec
 	return nil
 }
 
@@ -2371,13 +2403,34 @@ func newDeployTestService(t *testing.T, traits map[string]string) (*Service, *ta
 	return svc, taskSvc, srv.ID, exec, agent
 }
 
+// writeAgentBundle installs a temporary agent bundle shaped like the one the
+// image build produces: a gzip archive plus the checksum of its uncompressed
+// payload.
 func writeAgentBundle(t *testing.T) {
 	t.Helper()
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "linux-amd64"), 0o755); err != nil {
+	platformDir := filepath.Join(root, "linux-amd64")
+	if err := os.MkdirAll(platformDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "linux-amd64", "panel-agent"), []byte("test binary"), 0o755); err != nil {
+	payload := []byte("test binary")
+	archive := filepath.Join(platformDir, agentBundleArchiveName)
+	file, err := os.Create(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := gzip.NewWriter(file)
+	if _, err := writer.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(payload)
+	if err := os.WriteFile(filepath.Join(platformDir, agentBundleChecksumName), []byte(fmt.Sprintf("%x\n", sum[:])), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	withAgentBundleRoot(t, root)

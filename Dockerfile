@@ -57,6 +57,12 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       -ldflags="${ldflags}" \
       -o "${agent_dir}/panel-agent" ./cmd/panel-agent; \
     verify_machine "${agent_dir}/panel-agent" "${agent_arch}"; \
+    sha256sum "${agent_dir}/panel-agent" | awk '{print $1}' > "${agent_dir}/panel-agent.sha256"; \
+    gzip -9 -n -c "${agent_dir}/panel-agent" > "${agent_dir}/panel-agent.gz"; \
+    rm -f "${agent_dir}/panel-agent"; \
+    test -f "${agent_dir}/panel-agent.gz"; \
+    test ! -e "${agent_dir}/panel-agent"; \
+    test "$(gzip -dc "${agent_dir}/panel-agent.gz" | sha256sum | awk '{print $1}')" = "$(cat "${agent_dir}/panel-agent.sha256")"; \
   done
 
 FROM go-source AS target-binaries-build
@@ -123,7 +129,7 @@ COPY release-artifacts/panel-init/${TARGETOS}-${TARGETARCH}/panel-init /app/pane
 COPY release-artifacts/panel-agents /app/panel-agents
 COPY release-artifacts/web-dist /app/web/dist
 COPY config.example.json /app/config.example.json
-RUN chmod +x /app/panel /app/panel-init /app/panel-agents/*/panel-agent \
+RUN chmod +x /app/panel /app/panel-init \
   && chown -R panel:panel /app
 
 USER panel

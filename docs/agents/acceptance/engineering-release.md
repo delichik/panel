@@ -21,7 +21,7 @@
 ## 3. 本地与容器构建
 
 - `ENG-BUILD-001`：前端生产构建使用锁文件可复现安装；Go 构建使用 `go.mod/go.sum`，不得依赖未声明的本机模块。
-- `ENG-BUILD-002`：生产镜像包含 `/app/panel`、`/app/panel-init`、`/app/web/dist` 和完整 `/app/panel-agents/linux-amd64`、`linux-arm64` bundle。
+- `ENG-BUILD-002`：生产镜像包含 `/app/panel`、`/app/panel-init`、`/app/web/dist` 和完整 `/app/panel-agents/linux-amd64`、`linux-arm64` bundle。每个平台的 bundle 必须是构建期产出的 `panel-agent.gz` 与 `panel-agent.sha256`（解压后二进制的 sha256）；`.gz` 必须用 `gzip -9 -n` 生成，构建期还必须回验「解压后哈希等于 `.sha256` 内容」。镜像内不得保留裸二进制，Panel 运行时不压缩也不计算哈希。
 - `ENG-BUILD-003`：目标镜像的 Panel/panel-init 必须匹配目标 CPU 架构；Agent bundle 同时包含 amd64 与 arm64，并验证 ELF machine，禁止靠文件名假定架构。
 - `ENG-BUILD-004`：Panel、panel-init、Agent 注入相同 version、channel、repository、commit 元数据；前端和后端来自同一源码触发提交。
 - `ENG-BUILD-005`：运行容器使用非 root `panel` 用户，以 `/app/panel-init` 为入口，声明 `/app/data` volume；数据目录必须可由该用户读写。

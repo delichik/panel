@@ -171,6 +171,12 @@ jobs:
               -ldflags="${ldflags}" \
               -o "${agent_dir}/panel-agent" ./cmd/panel-agent
             verify_machine "${agent_dir}/panel-agent" "${agent_arch}"
+            sha256sum "${agent_dir}/panel-agent" | awk '{print $1}' > "${agent_dir}/panel-agent.sha256"
+            gzip -9 -n -c "${agent_dir}/panel-agent" > "${agent_dir}/panel-agent.gz"
+            rm -f "${agent_dir}/panel-agent"
+            test -f "${agent_dir}/panel-agent.gz"
+            test ! -e "${agent_dir}/panel-agent"
+            test "$(gzip -dc "${agent_dir}/panel-agent.gz" | sha256sum | awk '{print $1}')" = "$(cat "${agent_dir}/panel-agent.sha256")"
           done
 
       - name: Upload agent bundle

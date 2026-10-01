@@ -13,6 +13,12 @@ export interface RuntimePanelSettings {
   tlsCertificateId: string;
 }
 
+export interface RuntimeAgentSettings {
+  downloadBaseUrl: string;
+  downloadVerifyTls: boolean;
+  transferTimeoutSeconds: number;
+}
+
 export interface RuntimeSettings {
   listenAddress: string;
   appDatabase: string;
@@ -30,6 +36,7 @@ export interface RuntimeSettings {
   branding: RuntimeBrandingSettings;
   certificates: RuntimeCertificateSettings;
   panel: RuntimePanelSettings;
+  agent: RuntimeAgentSettings;
   jwtSecretConfigured: boolean;
 }
 
@@ -46,6 +53,7 @@ export interface RuntimeUpdate {
   branding?: RuntimeBrandingSettings;
   certificates?: RuntimeCertificateSettings;
   panel?: RuntimePanelSettings;
+  agent?: RuntimeAgentSettings;
 }
 
 export interface ServerVariableDefinition {

@@ -19,6 +19,7 @@ const current: RuntimeSettings = {
   branding: { loginTitle: 'Seamark', loginSubtitle: 'Panel' },
   certificates: { email: 'admin@example.com', dnsPropagationDelaySeconds: 30 },
   panel: { domain: 'panel.example.com', tlsCertificateId: 'tls-1' },
+  agent: { downloadBaseUrl: 'https://panel.example.com', downloadVerifyTls: true, transferTimeoutSeconds: 180 },
   jwtSecretConfigured: true,
 };
 

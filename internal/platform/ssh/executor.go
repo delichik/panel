@@ -88,7 +88,10 @@ func (e *SSHExecutor) Upload(ctx context.Context, target Target, transfer Upload
 	}
 	defer file.Close()
 
-	timeout := e.timeout()
+	timeout := transfer.Timeout
+	if timeout <= 0 {
+		timeout = e.timeout()
+	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	client, err := e.dial(ctx, target)

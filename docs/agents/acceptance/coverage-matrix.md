@@ -81,6 +81,8 @@
 
 - Agent 节点证书 `key_assets` 资产名称纳入稳定 serverID，服务器删除时尽力清理 `agent-server-<id>` 资产；修复重名/重建服务器部署 Agent 时违反名称唯一约束的 2067 错误。无新增 API、表或后台任务；对应 `AGT-CERT-004`、`SRV-DEL-005`。
 
+- Agent 投递增加目标机 HTTP 下载路径：新增公开产物路由 `GET /agent/{version}/{platform}/panel-agent.gz`（`/api` 之外，含 `/agent/` 前缀 404 兜底）、运行时设置 `agent.downloadBaseUrl`、`agent.downloadVerifyTls`、`agent.transferTimeoutSeconds`（`runtime_settings` 既有表，无结构变更）、设置页 `settings/agent` 分区，以及构建产物 `panel-agent.gz` + `panel-agent.sha256`。主 Panel `method/path` 计数仍为 175，公开产物路由单独由 `API-COV-006` 与公开路由清单断言覆盖；对应 `AGT-DL-001..011`、`AGT-DEP-002/003/005`、`AGT-RPT-001`、`SRV-EVD-005/006`、`ENG-BUILD-002`。
+
 ## 4. 持久化基线
 
 当前 ORM 模型有 44 个数据库内表声明；`application_revisions` 在 app 与 log 库分别存在，含义不同。coordination 库当前 0 个业务模型。

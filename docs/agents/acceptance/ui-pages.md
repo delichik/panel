@@ -19,7 +19,7 @@
 | 设施应用 | `/applications/facility-apps`、`/applications/facility-apps/:facilityKind` | `/:facilityKind/config` 为可直达编辑态深链 |
 | DNS / 证书 | `/dns/domains`、`/certificates/domains`、`/certificates/self-signed`、`/certificates/keys` | — |
 | 运行记录 | `/application-operations`、`/system-events` | `/tasks` 为兼容任务中心 |
-| 设置 / 诊断 | `/settings/general`、`security`、`certificates`、`system-certificates`、`system`、`backups` | `/settings` 重定向；`/debug` 隐藏直达 |
+| 设置 / 诊断 | `/settings/general`、`security`、`certificates`、`agent`、`system-certificates`、`system`、`backups` | `/settings` 重定向；`/debug` 隐藏直达 |
 | 未找到 | AppShell 内 catch-all | 保留导航 |
 
 ## 3. 登录与强制改密
@@ -268,6 +268,7 @@
 | UI-SET-007 | 查看 System | 版本、channel、latest、updateAvailable 只读；branding title/subtitle 和 server variables 分别独立保存 | 版本不混入 runtime 保存；变量格式为 `[*]KEY=Name`，空行忽略 | 保存 branding 不提交变量，保存变量不提交 branding |
 | UI-SET-008 | 配置备份导出 | 默认加密；关闭加密显示身份可恢复性警示；加密时密码必填，确认后提交 export 并显示 pending | 不得在此假装归档已可下载；失败不进入 pending | 未满足密码时按钮禁用，成功提示真实 exportId |
 | UI-SET-009 | 选择还原文件 | FileUploadButton 选 `.panel-backup` 后先 preflight，显示 manifest 版本/文件数；用户另勾覆盖确认并再经 danger Dialog 才 confirm restore | 更换文件清旧 preflight；无 preflight/未勾选不能恢复 | 仅最终确认发送 multipart restore，成功显示 pending/restarting |
+| UI-SET-010 | 保存 Agent download（`/settings/agent`） | 编辑下载基址、传输超时与「校验下载 TLS 证书」开关；只合入 agent 分区；超时校验 60..3600 秒，越界就地报错且不发请求 | 基址留空即表示关闭 HTTP 投递，文案必须说明回落到 SSH 上传；校验开关关闭时必须说明完整性仍由 SSH 下发的 sha256 保证 | 保存后重新 hydrate 且只回显归一化基址；保存本分区不得提交其他分区未保存脏值 |
 
 ## 19. 维护 `/maintenance/backup`
 

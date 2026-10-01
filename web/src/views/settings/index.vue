@@ -51,6 +51,10 @@ const exportPending = ref(false);
 const restorePending = ref(false);
 const restarting = ref(false);
 const builtInPanelTLSAssetID = 'panel-tls';
+// Mirrors MinAgentTransferTimeoutSeconds / MaxAgentTransferTimeoutSeconds on the
+// backend so an out-of-range value is caught before the request.
+const agentTransferTimeoutMin = 60;
+const agentTransferTimeoutMax = 3600;
 
 const form = reactive({
   metricsRetentionDays: '14',
@@ -69,6 +73,9 @@ const form = reactive({
   dnsPropagationDelaySeconds: '30',
   panelDomain: 'localhost',
   panelTlsCertificateId: '',
+  agentDownloadBaseUrl: '',
+  agentDownloadVerifyTls: false,
+  agentTransferTimeoutSeconds: '120',
   variablesText: '',
   exportEncrypt: true,
   exportPassword: '',
@@ -80,6 +87,7 @@ const sections = computed(() => [
   { key: 'general', label: t('settingsPage.section.runtime'), to: '/settings/general' },
   { key: 'security', label: t('settingsPage.section.security'), to: '/settings/security' },
   { key: 'certificates', label: t('settingsPage.section.certificates'), to: '/settings/certificates' },
+  { key: 'agent', label: t('settingsPage.section.agent'), to: '/settings/agent' },
   { key: 'system-certificates', label: t('settingsPage.section.systemCertificates'), to: '/settings/system-certificates' },
   { key: 'system', label: t('settingsPage.section.system'), to: '/settings/system' },
   { key: 'backups', label: t('settingsPage.section.backups'), to: '/settings/backups' },
@@ -99,6 +107,10 @@ const fieldErrors = computed<Record<string, string>>(() => {
   });
   if (!Number.isFinite(Number(form.dnsPropagationDelaySeconds)) || Number(form.dnsPropagationDelaySeconds) < 0) {
     errors.dnsPropagationDelaySeconds = 'settingsPage.validationNonNegativeNumber';
+  }
+  const transferTimeout = Number(form.agentTransferTimeoutSeconds);
+  if (!Number.isFinite(transferTimeout) || transferTimeout < agentTransferTimeoutMin || transferTimeout > agentTransferTimeoutMax) {
+    errors.agentTransferTimeoutSeconds = 'settingsPage.validationAgentTransferTimeout';
   }
   return errors;
 });
@@ -169,6 +181,9 @@ function hydrate(settings: RuntimeSettings, variables: ServerVariableDefinition[
     dnsPropagationDelaySeconds: String(settings.certificates.dnsPropagationDelaySeconds),
     panelDomain: settings.panel.domain,
     panelTlsCertificateId: settings.panel.tlsCertificateId || builtInPanelTLSAssetID,
+    agentDownloadBaseUrl: settings.agent.downloadBaseUrl,
+    agentDownloadVerifyTls: settings.agent.downloadVerifyTls,
+    agentTransferTimeoutSeconds: String(settings.agent.transferTimeoutSeconds),
     variablesText: variables.map((item) => `${item.required ? '*' : ''}${item.key}=${item.name}`).join('\n'),
   });
 }
@@ -202,7 +217,7 @@ async function resetSystemCertificate() {
   });
 }
 
-async function saveRuntimeSection(kind: 'runtime' | 'security' | 'certificates' | 'system') {
+async function saveRuntimeSection(kind: 'runtime' | 'security' | 'certificates' | 'agent' | 'system') {
   if (!runtime.value) return;
   if (kind === 'runtime' && !runtimeSectionValid.value) {
     actionError.value = t('settingsPage.validationPositiveNumber');
@@ -214,6 +229,10 @@ async function saveRuntimeSection(kind: 'runtime' | 'security' | 'certificates' 
   }
   if (kind === 'certificates' && fieldErrors.value.dnsPropagationDelaySeconds) {
     actionError.value = t('settingsPage.validationNonNegativeNumber');
+    return;
+  }
+  if (kind === 'agent' && fieldErrors.value.agentTransferTimeoutSeconds) {
+    actionError.value = t('settingsPage.validationAgentTransferTimeout');
     return;
   }
   await run(`save-${kind}`, async () => {
@@ -277,7 +296,7 @@ async function run(name: string, action: () => Promise<void>) {
   }
 }
 
-function buildRuntimeUpdate(kind: 'runtime' | 'security' | 'certificates' | 'system'): RuntimeUpdate {
+function buildRuntimeUpdate(kind: 'runtime' | 'security' | 'certificates' | 'agent' | 'system'): RuntimeUpdate {
   const current = runtime.value!;
   const update: RuntimeUpdate = {
     metricsRetentionDays: current.metricsRetentionDays,
@@ -291,6 +310,7 @@ function buildRuntimeUpdate(kind: 'runtime' | 'security' | 'certificates' | 'sys
     branding: current.branding,
     certificates: current.certificates,
     panel: current.panel,
+    agent: current.agent,
   };
   if (kind === 'runtime') {
     update.metricsRetentionDays = numberField(form.metricsRetentionDays, current.metricsRetentionDays);
@@ -313,6 +333,13 @@ function buildRuntimeUpdate(kind: 'runtime' | 'security' | 'certificates' | 'sys
     update.panel = {
       domain: form.panelDomain.trim().toLowerCase(),
       tlsCertificateId: form.panelTlsCertificateId === builtInPanelTLSAssetID ? '' : form.panelTlsCertificateId,
+    };
+  }
+  if (kind === 'agent') {
+    update.agent = {
+      downloadBaseUrl: form.agentDownloadBaseUrl.trim(),
+      downloadVerifyTls: form.agentDownloadVerifyTls,
+      transferTimeoutSeconds: numberField(form.agentTransferTimeoutSeconds, current.agent.transferTimeoutSeconds),
     };
   }
   if (kind === 'system') {
@@ -441,6 +468,28 @@ onMounted(load);
           <label class="grid gap-1 text-sm">{{ t('settingsPage.certificateEmail') }}<Input v-model="form.certificateEmail" /></label>
           <label class="grid gap-1 text-sm">{{ t('settingsPage.dnsDelay') }}<Input v-model="form.dnsPropagationDelaySeconds" type="number" min="0" :invalid="Boolean(fieldErrors.dnsPropagationDelaySeconds)" /><span v-if="fieldErrors.dnsPropagationDelaySeconds" class="text-xs text-danger">{{ t(fieldErrors.dnsPropagationDelaySeconds) }}</span></label>
           <Button class="w-fit" variant="primary" :disabled="Boolean(fieldErrors.dnsPropagationDelaySeconds)" :loading="pending === 'save-certificates'" @click="saveRuntimeSection('certificates')"><Save />{{ t('settingsPage.saveSection') }}</Button>
+        </section>
+
+        <section v-else-if="activeSection === 'agent'" class="grid gap-4 rounded-2xl border border-border bg-card p-5">
+          <h2>{{ t('settingsPage.section.agent') }}</h2>
+          <p class="m-0 text-sm text-muted-foreground">{{ t('settingsPage.agentDownloadHint') }}</p>
+          <label class="grid gap-1 text-sm">
+            {{ t('settingsPage.agentDownloadBaseUrl') }}
+            <Input v-model="form.agentDownloadBaseUrl" :placeholder="t('settingsPage.agentDownloadBaseUrlPlaceholder')" />
+            <span class="text-xs text-muted-foreground">{{ t('settingsPage.agentDownloadBaseUrlHint') }}</span>
+          </label>
+          <label class="grid gap-1 text-sm">
+            {{ t('settingsPage.agentTransferTimeout') }}
+            <Input v-model="form.agentTransferTimeoutSeconds" type="number" :min="agentTransferTimeoutMin" :max="agentTransferTimeoutMax" :invalid="Boolean(fieldErrors.agentTransferTimeoutSeconds)" />
+            <span v-if="fieldErrors.agentTransferTimeoutSeconds" class="text-xs text-danger">{{ t(fieldErrors.agentTransferTimeoutSeconds) }}</span>
+            <span v-else class="text-xs text-muted-foreground">{{ t('settingsPage.agentTransferTimeoutHint') }}</span>
+          </label>
+          <label class="grid gap-1 text-sm">
+            {{ t('settingsPage.agentDownloadVerifyTls') }}
+            <Switch v-model="form.agentDownloadVerifyTls" :label="t('settingsPage.agentDownloadVerifyTls')" />
+            <span class="text-xs text-muted-foreground">{{ t('settingsPage.agentDownloadVerifyTlsHint') }}</span>
+          </label>
+          <Button class="w-fit" variant="primary" :disabled="Boolean(fieldErrors.agentTransferTimeoutSeconds)" :loading="pending === 'save-agent'" @click="saveRuntimeSection('agent')"><Save />{{ t('settingsPage.saveSection') }}</Button>
         </section>
 
         <section v-else-if="activeSection === 'system-certificates'" class="grid gap-4 rounded-2xl border border-border bg-card p-5">

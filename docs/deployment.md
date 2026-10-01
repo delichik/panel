@@ -178,6 +178,21 @@ ports:
 
 Terminate HTTPS at the reverse proxy and forward requests to `https://127.0.0.1:8443` (trust the Panel self-signed certificate or configure a user certificate). If the reverse proxy runs in another container, connect both containers through a private Docker network instead of using the loopback binding.
 
+## Agent delivery over HTTP
+
+Seamark installs `panel-agent` on every managed server. By default it uploads the compressed bundle over the same SSH connection it already uses, which is slow on long or congested routes. You can instead let each server download the bundle over HTTP, which allows a CDN in front of the Panel to cache it.
+
+Set **Settings → Agent download → Agent download base URL** to the address servers should fetch from, for example `https://panel.example.com`. Then:
+
+- The endpoint is `GET /agent/{version}/{platform}/panel-agent.gz`. It is unauthenticated and served outside `/api`, so CDN rules that bypass caching for API traffic do not apply to it. The URL contains the Panel build version, so it can be cached for a long time and a new build simply uses a new URL.
+- Servers need to reach that address and have `curl` or `wget`, plus `gzip` and `sha256sum`.
+- `Agent transfer timeout` (default 120 seconds) bounds the transfer on both sides. It applies to the download and to the SSH upload, so it also caps how slow a link may be: roughly 0.7 Mbit/s is enough for a compressed bundle, against roughly 8 Mbit/s for the previous uncompressed 30-second transfer.
+- **Verify the download TLS certificate** is off by default so a self-signed Panel certificate works. The expected SHA-256 is delivered to the server over the authenticated SSH channel and checked after decompression, so the binary cannot be substituted either way; turning verification on additionally protects the transfer itself.
+- If a server cannot reach the address (no fetcher, DNS or connection failure, HTTP error), Seamark falls back to the SSH upload. A truncated transfer, a corrupt archive or a checksum mismatch fails the deployment instead of being retried over the slower path.
+- An empty base URL disables HTTP delivery and keeps the previous behaviour.
+
+Note on CDN choice: a free Cloudflare plan usually serves mainland China visitors from overseas edges, so the gain there is limited; a CDN with mainland China edges requires an ICP-filed domain. The origin is always the Panel, fetched on a cache miss.
+
 ## Troubleshooting
 
 ### The container exits or is unhealthy

@@ -4,6 +4,7 @@
 
 ## 当前状态
 
+- 本轮 Agent HTTP 投递新增设置分区文案：`settingsPage.section.agent`、`agentDownloadHint`、`agentDownloadBaseUrl`、`agentDownloadBaseUrlPlaceholder`、`agentDownloadBaseUrlHint`、`agentTransferTimeout`、`agentTransferTimeoutHint`、`agentDownloadVerifyTls`、`agentDownloadVerifyTlsHint`、`saved.agent`、`validationAgentTransferTimeout`；服务器详情 Agent 卡片新增阶段标签 `serversPage.agentTaskStageDownloading`（下载 Agent 二进制，与既有 `agentTaskStageUploading` 并列）；en / zh-CN 同步。后端新增 `agent_download_failed`、`invalid_agent_download_base_url`、`invalid_agent_transfer_timeout` 中文翻译。校验开关文案必须说明关闭只影响传输保密性、完整性仍由 SSH 下发的 sha256 保证。
 - 本轮 NAT 服务器新增 `serversPage.kind*`、`agentPublicPort*` 与 `nat*` 端口映射文案，en / zh-CN 同步；后端新增 `server_kind_invalid`、`nat_port_*`、`reverse_proxy_*_nat_unsupported` 稳定错误码。
 - 本轮服务器创建/编辑弹窗重构文案：新增 `serversPage.formDescription/editServerDescription/sectionConnection/sectionAdvanced`、`dockerHostHint`、`credentialMissingTitle/Hint`（无凭据引导）、`probeHint/probeAgain/probeStale`（探测与保存解耦并标记过期）、`createdInitializing`（两阶段反馈，替换 `createdWithTask`）、`initialTaskLoadFailed`（初始化任务跟踪）；后端改为初始信息采集失败时保留服务器并标记失败，移除 `initialTaskRolledBack` 与 `dismissNotice` 词条；删除 `serversPage.createdWithTask` 与 `serversPage.validationGeneric` 词条；en / zh-CN 同步。
 - 应用日志入口明确命名“容器日志”，新增 `applicationLogs.*` 服务器/容器选择、无实例、加载、空日志和实例身份不匹配提示；en/zh-CN 同步。
