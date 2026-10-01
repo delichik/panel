@@ -131,8 +131,9 @@ const (
 	// both sides. It is deliberately larger than the shared remote command
 	// timeout: a compressed bundle still takes time on a slow international
 	// link, while an unbounded download would let a stuck target hold the task
-	// open forever.
-	DefaultAgentTransferTimeoutSeconds = 120
+	// open forever. The target-side budget is derived from this value, so
+	// raising it is the supported way to serve slower links.
+	DefaultAgentTransferTimeoutSeconds = 300
 	MinAgentTransferTimeoutSeconds     = 60
 	MaxAgentTransferTimeoutSeconds     = 3600
 
