@@ -142,7 +142,8 @@
 - 下载端点只服务启动期固定枚举出的产物：`panel-agent.gz` 是注册 pattern 里的字面量而非路径参数，`{version}` 与 `{platform}` 只作为固定表查找键，任何请求数据都不会参与拼接文件系统路径，未命中一律 404 且不得退化为「服务当前版本」。压缩包 sha256 必须来自构建产物文件，并且只接受规范的小写十六进制，因为它会被插值进远端 shell 脚本；脚本中所有插值必须经 `ShellQuote`，`agent.downloadBaseUrl` 保存时必须拒绝引号、空白与 shell 元字符。
 - agent 二进制的完整性锚点始终是经已认证 SSH 通道下发的期望 sha256：目标机下载后先解压再比对，不匹配必须终止安装。因此 HTTP/CDN/中间人都只能搬运字节、不能替换内容；`agent.downloadVerifyTls` 默认关闭只是不校验传输机密性，不降低完整性。
 - 目标机缺少可用 fetcher 时，投递必须先尝试安装 `curl` 再重试下载一次，而不是直接回退：HTTP 投递的价值就在于不再为慢链路付费，若把「目标机没装 curl」当作终点，最小化镜像上这个能力就等于默认不生效。安装只对受支持发行版执行，复用 `remoteops.APTInstallPrelude` 的非交互 apt 参数，任何失败（到不了软件源、安装无效、超时）都只能导致回退 SSH 上传，不得让部署失败；重试只允许一次。该步骤与下载步骤分离，各有独立超时，且其目标机侧最坏耗时必须严格小于 Panel 侧上限。
-- HTTP 下载失败按分类决定是否回退 SSH 上传：连接失败、HTTP 4xx/5xx、缺少 fetcher（含安装后仍缺失）属于可达性问题，必须回退；传输中断、解压失败、哈希不匹配属于数据问题，必须直接失败而不得用慢路径掩盖。Panel 侧与目标机侧都必须有传输限时，且目标机侧的限时必须严格短于 Panel 侧，否则 Panel 只能看到笼统的远端超时，无法区分「连不上」与「传到一半断了」，回退语义随之失效。
+- HTTP 下载失败按分类决定是否回退 SSH 上传：连接失败、HTTP 4xx/5xx、缺少 fetcher（含安装后仍缺失）属于可达性问题，必须回退；传输中断、解压失败、哈希不匹配属于数据问题，必须直接失败而不得用慢路径掩盖。下载由**有限轮次的续传尝试**完成（curl `-C -`、wget `-c`），因此比单轮预算更慢但可用的链路能跨轮收敛；服务器拒绝 Range 时丢弃残file 整轮重下。**禁止使用 curl `--retry`**：`--max-time` 按次生效，重试会把目标机侧最坏耗时成倍放大到 Panel 侧上限之外，令 Panel 先超时并把失败变成不可分类。Panel 侧与目标机侧都必须限时，目标机侧「轮数 × 单轮 + 轮间延迟」必须严格短于 Panel 侧。
+- 手动重装只能复用**非 running** 的既有任务：`running` 的任务无法重启，返回成功会让界面弹出「已受理」而实际没有任何新执行。因此这种情况下必须返回冲突 `agent_deploy_in_progress` 并带上 taskId 与 stage，`stage=uncertain`（状态同为 running）时指向任务中心。远端步骤超时关闭 SSH 会话后，等待会话 goroutine 必须有界，否则执行器不返回会让任务永远停在 `running`，进而让之后每次手动部署都变成静默无操作。
 - `POST /api/v1/servers/{id}/agent/certificate` 签发目标机 `panel-agent` 的 mTLS server 证书包；响应包含 CA、server certificate、server private key、建议监听地址、agent URL 和 Docker host，只作为高级手动安装兜底，不会落库。
 
 ## Agent 重启就绪检查（PrepareRestart）

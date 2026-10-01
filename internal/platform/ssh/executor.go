@@ -115,7 +115,7 @@ func (e *SSHExecutor) Upload(ctx context.Context, target Target, transfer Upload
 	select {
 	case <-ctx.Done():
 		_ = session.Close()
-		<-errCh
+		awaitSessionDone(errCh)
 		return panelerr.Timeout("Remote upload timed out")
 	case err := <-errCh:
 		if err != nil {
@@ -227,7 +227,7 @@ func (e *SSHExecutor) exec(ctx context.Context, target Target, command CommandSp
 	select {
 	case <-ctx.Done():
 		_ = session.Close()
-		<-errCh
+		awaitSessionDone(errCh)
 		stdoutWriter.Flush()
 		stderrWriter.Flush()
 		result.Stdout = stdout.String()
@@ -324,6 +324,28 @@ func (e *SSHExecutor) timeout() time.Duration {
 		}
 	}
 	return e.defaultTimeout
+}
+
+// sessionCloseGrace bounds how long a timed-out remote step may keep waiting for
+// its session goroutine after the session was closed. Closing a session normally
+// makes session.Run return at once, but a remote process that does not cooperate
+// must never be able to pin the caller forever: an executor that never returns
+// leaves the owning task in running for good, and a task stuck in running makes
+// every later manual retry a silent no-op.
+//
+// It is a var only so tests can shorten it; it is not configurable.
+var sessionCloseGrace = 15 * time.Second
+
+// awaitSessionDone waits for a session goroutine to finish, but not
+// indefinitely. The goroutine is left to end on its own if it outlives the
+// grace period, which is strictly better than blocking the caller.
+func awaitSessionDone(errCh <-chan error) {
+	timer := time.NewTimer(sessionCloseGrace)
+	defer timer.Stop()
+	select {
+	case <-errCh:
+	case <-timer.C:
+	}
 }
 
 func authMethod(c ResolvedCredential) (ssh.AuthMethod, error) {

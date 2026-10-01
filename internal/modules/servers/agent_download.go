@@ -98,11 +98,19 @@ func agentDeployFailureClassFromResult(result sshx.CommandResult, err error) age
 // host. It is a separate step from installation so the Panel can classify a
 // failed fetch and decide about the SSH fallback without re-running an
 // installer that may already have stopped the running agent.
-func agentBundleFetchScript(downloadURL, archivePath string, settings AgentDeliverySettings, targetTimeout time.Duration, maxBytes int64) string {
-	seconds := agentTransferSeconds(targetTimeout)
+//
+// The fetch is a bounded loop of resuming attempts rather than one attempt with
+// curl --retry. curl applies --max-time per attempt, so --retry multiplies the
+// target-side worst case without bound; the loop keeps every attempt inside
+// agentDownloadRoundTimeout and the whole loop inside agentDownloadTargetBudget,
+// while -C - / -c make each attempt continue where the previous one stopped. A
+// link slower than a single round therefore still finishes, and the Panel-side
+// bound is never reached by a script that has not reported a reason.
+func agentBundleFetchScript(downloadURL, archivePath string, settings AgentDeliverySettings, roundTimeout time.Duration, maxBytes int64) string {
+	seconds := agentTransferSeconds(roundTimeout)
 	connectSeconds := agentTransferSeconds(agentDownloadConnectTimeout)
-	if agentDownloadConnectTimeout >= targetTimeout {
-		connectSeconds = strconv.Itoa(int(targetTimeout/time.Second) / 2)
+	if agentDownloadConnectTimeout >= roundTimeout {
+		connectSeconds = strconv.Itoa(int(roundTimeout/time.Second) / 2)
 	}
 	curlTLS := " -k"
 	wgetTLS := " --no-check-certificate"
@@ -110,16 +118,15 @@ func agentBundleFetchScript(downloadURL, archivePath string, settings AgentDeliv
 		curlTLS = ""
 		wgetTLS = ""
 	}
-	// curl bounds itself with --max-time. wget has no total-time option, so it
-	// is only usable together with `timeout`; without a total bound the panel
-	// side would fire first and the failure could not be classified, which is
-	// what decides the SSH fallback.
-	curlCommand := "curl -f -sS -L" + curlTLS + " --retry 3 --retry-delay 2 --connect-timeout " + connectSeconds + " --max-time " + seconds
+	// wget has no total-time option, so it is only usable together with
+	// `timeout`; without a total bound the panel side would fire first and the
+	// failure could not be classified, which is what decides the SSH fallback.
+	curlCommand := "curl -f -sS -L" + curlTLS + " -C - --connect-timeout " + connectSeconds + " --max-time " + seconds
 	if maxBytes > 0 {
 		curlCommand += " --max-filesize " + strconv.FormatInt(maxBytes, 10)
 	}
 	curlCommand += ` -o "$archive" "$url"`
-	wgetCommand := "timeout " + seconds + " wget -q" + wgetTLS + " --tries=1 --timeout=" + connectSeconds + ` -O "$archive" "$url"`
+	wgetCommand := "timeout " + seconds + " wget -q -c" + wgetTLS + " --tries=1 --timeout=" + connectSeconds + ` -O "$archive" "$url"`
 	return strings.Join([]string{
 		"set -u",
 		"url=" + remoteops.ShellQuote(downloadURL),
@@ -133,15 +140,39 @@ func agentBundleFetchScript(downloadURL, archivePath string, settings AgentDeliv
 		`  echo "[panel] panel_agent_download_failed reason=no_bounded_fetcher" >&2`,
 		`  exit ` + strconv.Itoa(agentFetchExitNoFetcher),
 		`fi`,
+		`round=0`,
 		`status=0`,
-		`if [ "$fetcher" = "curl" ]; then`,
-		`  ` + curlCommand + ` || status=$?`,
-		`else`,
-		`  ` + wgetCommand + ` || status=$?`,
-		`fi`,
+		`while [ "$round" -lt ` + strconv.Itoa(agentDownloadRounds) + ` ]; do`,
+		`  round=$((round + 1))`,
+		`  status=0`,
+		`  if [ "$fetcher" = "curl" ]; then`,
+		`    ` + curlCommand + ` || status=$?`,
+		`  else`,
+		`    ` + wgetCommand + ` || status=$?`,
+		`  fi`,
+		`  if [ "$status" -eq 0 ]; then`,
+		`    break`,
+		`  fi`,
+		// 33: the server ignored the range request and refused to resume. Start
+		// over rather than treating a cache that cannot resume as a data error.
+		`  if [ "$status" -eq 33 ]; then`,
+		`    echo "[panel] panel_agent_download_resume_unsupported fetcher=$fetcher" >&2`,
+		`    rm -f "$archive"`,
+		`    status=0`,
+		`    continue`,
+		`  fi`,
+		// Any other failure keeps the partial archive so the next round resumes;
+		// a connection that produced nothing also keeps it empty, which is what
+		// the classification below relies on.
+		`  if [ "$round" -lt ` + strconv.Itoa(agentDownloadRounds) + ` ]; then`,
+		`    echo "[panel] panel_agent_download_retry round=$round fetcher=$fetcher status=$status" >&2`,
+		`    sleep ` + strconv.Itoa(int(agentDownloadRetryDelay/time.Second)),
+		`    continue`,
+		`  fi`,
+		`done`,
 		`if [ "$status" -ne 0 ]; then`,
 		`  if [ -s "$archive" ]; then`,
-		`    echo "[panel] panel_agent_download_failed reason=truncated fetcher=$fetcher status=$status" >&2`,
+		`    echo "[panel] panel_agent_download_failed reason=truncated fetcher=$fetcher status=$status bytes=$(wc -c < "$archive" | tr -d ' ')" >&2`,
 		`    rm -f "$archive"`,
 		`    exit ` + strconv.Itoa(agentFetchExitTruncated),
 		`  fi`,
@@ -164,7 +195,7 @@ func agentBundleFetchScript(downloadURL, archivePath string, settings AgentDeliv
 		`  rm -f "$archive"`,
 		`  exit ` + strconv.Itoa(agentFetchExitTruncated),
 		`fi`,
-		`echo "[panel] panel_agent_download_ok fetcher=$fetcher bytes=$(wc -c < "$archive" | tr -d ' ')" >&2`,
+		`echo "[panel] panel_agent_download_ok fetcher=$fetcher rounds=$round bytes=$(wc -c < "$archive" | tr -d ' ')" >&2`,
 	}, "\n")
 }
 

@@ -52,15 +52,24 @@ var (
 )
 
 const (
-	agentTransferTimeoutDefault = 120 * time.Second
+	agentTransferTimeoutDefault = 300 * time.Second
 	agentTransferTimeoutMin     = 60 * time.Second
 	agentTransferTimeoutMax     = 3600 * time.Second
-	// agentDownloadTargetReserve keeps the target-side fetch limit strictly
+	// agentDownloadTargetReserve keeps the target-side fetch budget strictly
 	// below the Panel-side bound. The fetch script must always get the chance to
 	// exit with a classified reason: if the Panel bound fired first the task
 	// would only see a bare remote timeout and could not tell "cannot connect"
 	// (fall back to the SSH upload) from "truncated mid-transfer" (must not).
-	agentDownloadTargetReserve  = 20 * time.Second
+	agentDownloadTargetReserve = 30 * time.Second
+	// agentDownloadRounds is how many bounded attempts one download may take.
+	// Each attempt resumes the previous one, so a link that is merely slower than
+	// a single round still converges instead of restarting from zero. This is
+	// what replaces curl --retry, which must not be used here: curl applies
+	// --max-time per attempt, so a retry multiplies the target-side worst case
+	// and silently breaks the bound below.
+	agentDownloadRounds     = 3
+	agentDownloadRetryDelay = 2 * time.Second
+	// agentDownloadConnectTimeout is the connect-phase limit of one attempt.
 	agentDownloadConnectTimeout = 15 * time.Second
 )
 
@@ -236,15 +245,29 @@ func agentDownloadURL(baseURL string, artifact agentBundleArtifact) (string, boo
 	return base + agentDownloadPathPrefix + artifact.Version + "/" + artifact.Platform + "/" + agentBundleArchiveName, true
 }
 
-// agentDownloadTargetTimeout is the wall-clock limit handed to the target-side
-// fetcher. It is always strictly shorter than the Panel-side bound so the fetch
-// script can report a classified reason instead of being cut off.
-func agentDownloadTargetTimeout(transferTimeout time.Duration) time.Duration {
-	target := transferTimeout - agentDownloadTargetReserve
-	if target < 10*time.Second {
-		target = 10 * time.Second
+// agentDownloadTargetBudget is the total wall clock the target-side fetch may
+// take. It is strictly shorter than the Panel-side bound so the script always
+// finishes and reports a classified reason.
+func agentDownloadTargetBudget(transferTimeout time.Duration) time.Duration {
+	budget := transferTimeout - agentDownloadTargetReserve
+	if budget < 20*time.Second {
+		budget = 20 * time.Second
 	}
-	return target
+	return budget
+}
+
+// agentDownloadRoundTimeout is the per-attempt limit. The whole point of the
+// budget arithmetic is that rounds x round + the delays between them stays
+// inside agentDownloadTargetBudget, which in turn stays inside the Panel-side
+// bound. curl's --retry cannot be used for this: it grants every retry a fresh
+// --max-time, so the worst case becomes unbounded in practice.
+func agentDownloadRoundTimeout(budget time.Duration) time.Duration {
+	delays := time.Duration(agentDownloadRounds-1) * agentDownloadRetryDelay
+	round := (budget - delays) / agentDownloadRounds
+	if round < 5*time.Second {
+		round = 5 * time.Second
+	}
+	return round
 }
 
 // agentBundleInstallScript verifies the downloaded archive and installs it. It

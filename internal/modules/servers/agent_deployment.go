@@ -184,6 +184,16 @@ func (s *Service) ensureAgentDeployTask(ctx context.Context, serverID, triggered
 		if triggeredBy == "user" {
 			_ = s.tasks.SetTriggeredBy(ctx, task.ID, "user")
 			task.TriggeredBy = "user"
+			// A running task cannot be restarted, and the old code returned it
+			// anyway: the caller reported success, the operator saw an accepted
+			// task, no new log lines and no way to tell whether the click
+			// registered. Say what is actually happening instead. A stage of
+			// uncertain means the previous execution is gone, so the task centre
+			// is the only place that can move it on.
+			if task.Status == tasks.StatusRunning {
+				return tasks.Task{}, panelerr.Conflict("agent_deploy_in_progress",
+					fmt.Sprintf("Agent deployment task %s is still running (stage=%s); resolve or cancel it in the task centre before deploying again", task.ID, task.Stage))
+			}
 		}
 		if run && task.Status != tasks.StatusRunning {
 			if triggeredBy != "user" && !agentAutoDeployTaskDue(task, time.Now()) {
@@ -465,6 +475,12 @@ func (s *Service) deliverAgentBundle(ctx context.Context, taskID string, srv Ser
 			return nil
 		}
 		if !class.fallsBackToSSHUpload() {
+			if class == agentDeployFailureTruncated {
+				// The most common cause is a link slower than the configured
+				// budget, which the operator can fix, so say so instead of
+				// leaving them with a bare failure.
+				_ = s.tasks.AppendLog(ctx, taskID, "system", fmt.Sprintf("the target could not finish the download within %s; raise the agent transfer timeout if this link is slower than that", settings.TransferTimeout))
+			}
 			_ = s.tasks.AppendLog(ctx, taskID, "system", "panel agent download failed ("+string(class)+")")
 			return agentDownloadFailureError(class)
 		}
@@ -478,10 +494,11 @@ func (s *Service) deliverAgentBundle(ctx context.Context, taskID string, srv Ser
 	})
 }
 
-// fetchAgentBundle runs one download attempt and reports how it failed. A nil
-// error means the archive is in place on the target.
+// fetchAgentBundle runs the bounded download loop and reports how it failed. A
+// nil error means the archive is in place on the target.
 func (s *Service) fetchAgentBundle(ctx context.Context, runner remoteops.Runner, downloadURL, archivePath string, settings AgentDeliverySettings, artifact agentBundleArtifact) (agentDeployFailureClass, error) {
-	script := agentBundleFetchScript(downloadURL, archivePath, settings, agentDownloadTargetTimeout(settings.TransferTimeout), artifact.Size*2)
+	budget := agentDownloadTargetBudget(settings.TransferTimeout)
+	script := agentBundleFetchScript(downloadURL, archivePath, settings, agentDownloadRoundTimeout(budget), artifact.Size*2)
 	result, err := runner.RunSudoLogged(ctx, script, settings.TransferTimeout)
 	if err == nil {
 		return "", nil

@@ -182,10 +182,20 @@ func TestAgentTransferTimeoutIsBoundedAndTargetIsShorter(t *testing.T) {
 	}
 	// The target-side fetcher must always give up first, otherwise the panel
 	// would only see a bare remote timeout and could not classify the failure.
-	for _, panelBound := range []time.Duration{60 * time.Second, 120 * time.Second, time.Hour} {
-		target := agentDownloadTargetTimeout(panelBound)
-		if target >= panelBound {
-			t.Fatalf("target timeout %s must be shorter than the panel bound %s", target, panelBound)
+	for _, panelBound := range []time.Duration{60 * time.Second, 120 * time.Second, agentTransferTimeoutDefault, time.Hour} {
+		budget := agentDownloadTargetBudget(panelBound)
+		if budget >= panelBound {
+			t.Fatalf("target budget %s must be shorter than the panel bound %s", budget, panelBound)
+		}
+		// The bound only holds if the whole loop, including the delays between
+		// rounds, fits. Asserting a helper's arithmetic alone is exactly how an
+		// earlier revision shipped with curl --retry quietly multiplying the
+		// worst case past the panel bound: curl grants every retry its own
+		// --max-time, so the script's real cost was never the computed one.
+		worstCase := time.Duration(agentDownloadRounds)*agentDownloadRoundTimeout(budget) +
+			time.Duration(agentDownloadRounds-1)*agentDownloadRetryDelay
+		if worstCase >= panelBound {
+			t.Fatalf("worst case %s (%d rounds plus delays) must stay strictly inside the panel bound %s", worstCase, agentDownloadRounds, panelBound)
 		}
 	}
 }

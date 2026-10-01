@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -120,13 +121,15 @@ func TestAgentBundleHandlerRejectsEverythingElse(t *testing.T) {
 func TestAgentBundleFetchScriptHonoursTLSAndTimeouts(t *testing.T) {
 	archive := "/tmp/panel-agent-task.gz"
 	downloadURL := "https://panel.example.test/agent/v1.4.2/linux-amd64/" + agentBundleArchiveName
+	round := agentDownloadRoundTimeout(agentDownloadTargetBudget(agentTransferTimeoutDefault))
+	roundSeconds := strconv.Itoa(int(round / time.Second))
 
-	insecure := agentBundleFetchScript(downloadURL, archive, testAgentDelivery("https://panel.example.test", false), agentDownloadTargetTimeout(120*time.Second), 2048)
+	insecure := agentBundleFetchScript(downloadURL, archive, testAgentDelivery("https://panel.example.test", false), round, 2048)
 	for _, want := range []string{
 		"https://panel.example.test/agent/v1.4.2/linux-amd64/panel-agent.gz",
-		"curl -f -sS -L -k",
-		"wget -q --no-check-certificate",
-		"--max-time 100",
+		"curl -f -sS -L -k -C -",
+		"wget -q -c --no-check-certificate",
+		"--max-time " + roundSeconds,
 		"--max-filesize 2048",
 		`archive='/tmp/panel-agent-task.gz'`,
 		"exit 42",
@@ -136,7 +139,11 @@ func TestAgentBundleFetchScriptHonoursTLSAndTimeouts(t *testing.T) {
 		`exit "$code"`,
 		"reason=no_bounded_fetcher",
 		"command -v wget >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1",
-		"timeout 100 wget -q --no-check-certificate",
+		// The loop is bounded and every round resumes the previous one.
+		`while [ "$round" -lt ` + strconv.Itoa(agentDownloadRounds) + ` ]; do`,
+		`if [ "$status" -eq 33 ]; then`,
+		"panel_agent_download_retry",
+		"sleep " + strconv.Itoa(int(agentDownloadRetryDelay/time.Second)),
 		"reason=truncated",
 		"curl:22|wget:8) reason=http_status",
 		"curl:18) reason=truncated",
@@ -146,14 +153,20 @@ func TestAgentBundleFetchScriptHonoursTLSAndTimeouts(t *testing.T) {
 			t.Fatalf("expected fetch script to contain %q, got:\n%s", want, insecure)
 		}
 	}
+	// curl's own retry mechanism must not come back: it grants every retry a
+	// fresh --max-time, which is what made the target-side worst case exceed the
+	// panel bound.
+	if strings.Contains(insecure, "--retry") {
+		t.Fatalf("the fetch script must bound its own rounds instead of using curl --retry, got:\n%s", insecure)
+	}
 
-	secure := agentBundleFetchScript(downloadURL, archive, testAgentDelivery("https://panel.example.test", true), agentDownloadTargetTimeout(120*time.Second), 2048)
+	secure := agentBundleFetchScript(downloadURL, archive, testAgentDelivery("https://panel.example.test", true), round, 2048)
 	if strings.Contains(secure, " -k ") || strings.Contains(secure, "--no-check-certificate") {
 		t.Fatalf("expected certificate verification to be kept when enabled, got:\n%s", secure)
 	}
 
 	// Without a known size the cap is omitted rather than sent as zero.
-	uncapped := agentBundleFetchScript(downloadURL, archive, testAgentDelivery("https://panel.example.test", false), agentDownloadTargetTimeout(120*time.Second), 0)
+	uncapped := agentBundleFetchScript(downloadURL, archive, testAgentDelivery("https://panel.example.test", false), round, 0)
 	if strings.Contains(uncapped, "--max-filesize") {
 		t.Fatalf("expected no file size cap, got:\n%s", uncapped)
 	}

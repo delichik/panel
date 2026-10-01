@@ -63,6 +63,36 @@ func TestTrustHostKeyDisabledWhenVerificationDisabled(t *testing.T) {
 	}
 }
 
+// TestAwaitSessionDoneIsBounded guards the case where a timed-out remote step
+// leaves its session goroutine running: the caller must be released anyway,
+// because an executor that never returns pins the owning task in running, and a
+// task stuck in running turns every later manual retry into a silent no-op.
+func TestAwaitSessionDoneIsBounded(t *testing.T) {
+	original := sessionCloseGrace
+	sessionCloseGrace = 20 * time.Millisecond
+	t.Cleanup(func() { sessionCloseGrace = original })
+
+	returned := make(chan struct{})
+	go func() {
+		awaitSessionDone(make(chan error))
+		close(returned)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(10 * time.Second):
+		t.Fatal("awaitSessionDone blocked past the grace period")
+	}
+
+	// A session that finishes on its own must not wait for the grace period.
+	finished := make(chan error, 1)
+	finished <- nil
+	started := time.Now()
+	awaitSessionDone(finished)
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("awaitSessionDone waited %s for a finished session", elapsed)
+	}
+}
+
 func TestTrustHostKeyConnectionFailure(t *testing.T) {
 	knownHosts := filepath.Join(t.TempDir(), "known_hosts")
 	executor := NewSSHExecutorWithOptions(testPasswordResolver(), 2*time.Second, WithKnownHosts(knownHosts))

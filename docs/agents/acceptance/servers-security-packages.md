@@ -59,7 +59,8 @@
 - `AGT-AUTO-001`：无 URL、URL 非默认地址、incompatible、版本不一致、证书过期/未生效/7天内到期或证书时间握手错误时，系统检查必须创建或复用 `server_agent_deploy`；普通 unavailable、连接拒绝、服务器失联或 Docker失败不得触发重装。
 - `AGT-AUTO-002`：证书进入 7 天窗口时保持 compatible且不写错误，只静默刷新；系统自动复用任务必须尊重 `next_run_at` 和指数退避，不能借复用绕过。
 - `AGT-AUTO-003`：同一服务器系统自动部署连续失败 2 次必须置 undeployable并停止周期自动尝试；手动部署解除阻止并重置退避基准；失败计数仅在连续 5 次健康检查成功后清零。
-- `AGT-DEP-001`：手动 `POST /servers/{id}/agent/deploy` 必须创建或复用并启动任务，先标记 running再响应；任务 executor必须直到安装、健康检查和终态写入完成才返回。
+- `AGT-DEP-001`：手动 `POST /servers/{id}/agent/deploy` 必须创建或复用并启动任务，先标记 running再响应；任务 executor必须直到安装、健康检查和终态写入完成才返回。**若复用到的既有 `server_agent_deploy` 任务状态仍为 `running`，必须返回冲突 `agent_deploy_in_progress`（消息含 taskId 与 stage），不得返回成功**：`running` 的任务无法重启，返回成功只会让界面弹出「已受理」而实际什么都没发生（日志不变、没有新执行），操作者无从判断点击是否生效。`stage=uncertain` 的任务状态同样是 `running`，消息必须指向任务中心作为唯一出路。系统自动触发路径不受此约束，仍按退避与复用语义返回任务。
+- `AGT-DEP-006`：远端步骤因超时关闭 SSH 会话后，等待会话 goroutine 必须有界（`sessionCloseGrace`，15 秒）。远端进程不配合时执行器也不得永久阻塞：执行器不返回会让拥有它的任务永远停在 `running`，而 `running` 的任务会让之后每一次手动重新部署都变成静默无操作（见 `AGT-DEP-001`）。
 - `AGT-DEP-002`：部署必须按持久化的 `architecture.os/arch` 选择固定 `/app/panel-agents/linux-amd64|linux-arm64/`，并同时要求构建期产出的 `panel-agent.gz` 与 `panel-agent.sha256` 存在且可读；缺架构时先 SSH探测并写回，文件缺失、平台不支持或 sha256 文件不是规范小写十六进制时返回 `agent_binary_unavailable`。Panel 不得在运行时压缩二进制或计算其哈希。
 - `AGT-DEP-003`：完整安装必须先把压缩包投递到目标机（HTTP 下载或 SSH 回退），再执行共用安装段（`gzip -dc` 解压、sha256 校验、停 systemd 与残留进程、安装、启动并等待 `tcp/9786`）；仅证书续期或 URL修复时只重写证书/env/systemd 配置并重启，不重复传输二进制。下载与安装必须是两个独立的远端步骤，避免分类下载失败时重复执行已停过服务的安装逻辑。
 - `AGT-DEP-004`：重启 Agent 前若能力包含 `prepare-restart`，必须最长等待10分钟至 ready；holdon 首次立即记录且最多每15秒记录一次进度；能力缺失、健康/流失败或超时可记录后继续，任务取消必须停止部署。
@@ -74,7 +75,8 @@
 - `AGT-DL-004`：目标机安装前必须用同一次 SSH 调用下发的期望 sha256 校验解压后的二进制。**两条投递路径都必须校验**（SSH 回退路径此前没有校验）。校验和不匹配、解压失败或缺少 `gzip`/`sha256sum` 时必须终止安装，不得继续，也不得回退。
 - `AGT-DL-005`：HTTP 下载失败的回退条件严格限定为可达性问题：目标机没有带总时限的 fetcher（curl，或 wget + `timeout`）、DNS 或连接失败、超时、HTTP 4xx/5xx。传输中断或截断、解压失败、哈希不匹配属于数据问题，必须直接失败且任务标记失败，不得回退 SSH 上传。回退时任务日志必须写明分类原因与「falling back to SSH upload」。
 - `AGT-DL-012`：目标机没有可用 fetcher 时，部署必须**尝试在该机器上安装 `curl` 并重试下载一次**，不得直接回退——否则每个最小化镜像都会静默失去 HTTP 投递，功能等于默认不生效。约束：只有在已配置下载基址、且发行版受支持（`linux.Supported(server.OS)`）时才安装；安装必须使用固定的非交互 apt 参数（`DEBIAN_FRONTEND=noninteractive`、`-o Dpkg::Options::=--force-confdef`、`--force-confold`、`--no-install-recommends`），并复用 `remoteops.APTInstallPrelude` 以保持参数单一来源。**该步骤的任何失败（apt 到不了软件源、安装无效、超时、传输错误、不支持发行版）都只能导致回退 SSH 上传，绝不能让部署失败。** 该步骤必须与下载步骤分离并各有独立超时；其目标机侧最坏耗时（最多两次 apt 调用）必须严格小于 Panel 侧上限，使脚本总能自行结束并回报。重试只允许一次。
-- `AGT-DL-006`：传输必须有界且可配置（`agent.transferTimeoutSeconds`，默认 120 秒，取值范围 60..3600）。Panel 侧与目标机侧都必须限时，且目标机侧限时必须严格短于 Panel 侧，以保证目标机脚本总能正常退出并回报分类原因；Panel 侧超时本身不可分类，不得作为回退依据。
+- `AGT-DL-006`：传输必须有界且可配置（`agent.transferTimeoutSeconds`，默认 300 秒，取值范围 60..3600）。Panel 侧与目标机侧都必须限时，且**目标机侧整个下载的最坏耗时**必须严格短于 Panel 侧：该最坏耗时等于「轮数 × 单轮上限 + 轮间延迟之和」，验收测试必须按脚本实际生成的参数断言这个乘积，不得只断言某个辅助函数的算术（早期版本正是因此让 `curl --retry` 把最坏耗时放大到 Panel 侧上限之外）。**下载脚本禁止使用 curl `--retry`/`--retry-delay`**：curl 的 `--max-time` 按次生效，每次重试都会重新获得完整时长。Panel 侧超时本身不可分类，不得作为回退依据；该情形一旦发生，失败会退化为不可分类的远端超时。
+- `AGT-DL-013`：下载必须由**有限轮次的续传尝试**完成（curl `-C -`、wget `-c`），每轮受单轮上限约束、轮间有固定延迟，整体仍受 `AGT-DL-006` 的最坏耗时约束。比单轮预算更慢但可用的链路必须能跨轮收敛，而不是每轮从 0 重来。服务器明确拒绝 Range（curl 退出码 33）时必须丢弃残file 并按整轮重新下载，不得当作数据损坏；因此类截断而失败时，任务日志必须提示操作者可以调大传输超时。
 - `AGT-DL-007`：`agent.downloadVerifyTls` 为 false（默认）时 fetcher 必须带 `-k` / `--no-check-certificate`，为 true 时不得带。关闭校验只影响传输保密性：完整性由 `AGT-DL-004` 的 sha256 锚定保证，因此该默认值不构成完整性降级，但必须在设置页文案中说明。
 - `AGT-DL-008`：下载 URL 与期望 sha256 只能作为一次性命令参数出现，不得写入 `/etc/panel-agent/*`、不得进入服务器 traits、不得落库到任务参数之外的任何持久化位置，也不得出现在 agent 环境文件或 systemd 单元中；部署完成后目标机不得保留任何 Panel 地址。
 - `AGT-DL-009`：镜像产物必须是 `panel-agent.gz` 与 `panel-agent.sha256`（解压后二进制的 sha256），`.gz` 必须用 `gzip -9 -n` 生成以免同一输入产生不同字节。Panel 运行时不得做实时压缩或实时计算哈希。
@@ -143,5 +145,5 @@
 - `SRV-EVD-003`：任务测试必须证明同步executor才结束任务、相同资源重复触发的复用边界、自动部署退避/封禁/手动解封和不可取消升级语义。
 - `SRV-EVD-004`：Agent替身必须验证生产能力不回退SSH、版本/Docker/证书状态转换、report stream空快照保护和失败不致断流；单元测试不得依赖真实SSH、apt、UFW或Docker。
 - `SRV-EVD-005`：Agent 下载端点必须有独立于 `/api` 路由清单的**公开路由清单断言**（literal pattern 集合 + 哈希），且断言必须验证产物名是注册 pattern 的字面量、路由不在 `/api` 之下。端点测试必须覆盖未知版本/平台、`..` 与越权路径不服务、缓存头与 `ETag`、`Range` 返回 206、未命中不设置 `Set-Cookie`。
-- `SRV-EVD-006`：Agent 投递测试必须覆盖：HTTP 下载成功时不上传；连不上、HTTP 4xx/5xx 时回退 SSH 上传且上传的是 `.gz`、带传输超时；传输中断时直接失败且不上传；`agent.downloadBaseUrl` 为空时只走 SSH 上传。下载脚本测试必须断言 TLS 开关、目标机侧限时严格短于 Panel 侧、各分类退出码与回退判定表。`AGT-DL-012` 必须单独覆盖四种情形：缺 fetcher 且安装成功 → 重试成功且不上传；安装成功但重试仍缺 fetcher → 回退；安装失败 → 回退；发行版不受支持 → 完全不调用安装且回退。fetcher 安装脚本测试必须断言 apt 参数与非交互设置，并断言其目标机侧最坏耗时严格小于 Panel 侧上限。
+- `SRV-EVD-006`：Agent 投递测试必须覆盖：HTTP 下载成功时不上传；连不上、HTTP 4xx/5xx 时回退 SSH 上传且上传的是 `.gz`、带传输超时；传输中断时直接失败且不上传；`agent.downloadBaseUrl` 为空时只走 SSH 上传。下载脚本测试必须断言 TLS 开关、各分类退出码与回退判定表，并且**按脚本实际参数断言 `AGT-DL-006` 的最坏耗时**（轮数 × 单轮 + 延迟之和 < Panel 侧上限），同时断言脚本**不含** `--retry`、包含续传开关 `-C -` / `-c` 与拒绝 Range 的处理分支。`AGT-DL-012` 必须单独覆盖四种情形：缺 fetcher 且安装成功 → 重试成功且不上传；安装成功但重试仍缺 fetcher → 回退；安装失败 → 回退；发行版不受支持 → 完全不调用安装且回退。fetcher 安装脚本测试必须断言 apt 参数与非交互设置，并断言其目标机侧最坏耗时严格小于 Panel 侧上限。`AGT-DEP-001` 的 `running` 冲突与 `AGT-DEP-006` 的有界等待必须各有单测。
 - `SRV-EVD-005`：CLI测试必须覆盖显式模式门禁、三条apps命令的表格/JSON、Docker host优先级、selector优先级与歧义、退出码及非托管容器隔离；测试使用本地runtime替身，不依赖真实Docker。

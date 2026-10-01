@@ -112,6 +112,7 @@ var (
 			"agent_runtime_unavailable":                              "Agent 运行时客户端不可用",
 			"agent_binary_unavailable":                               "panel-agent 二进制不可用",
 			"agent_download_failed":                                  "panel-agent 下载失败",
+			"agent_deploy_in_progress":                               "已有 Agent 部署任务正在运行；请先在任务中心处理或取消该任务，再重新部署",
 			"invalid_agent_download_base_url":                        "Agent 下载地址必须是不含路径、查询、片段和凭据的 http 或 https 源",
 			"invalid_agent_transfer_timeout":                         "Agent 传输超时必须在 60 到 3600 秒之间",
 			"agent_auto_deploy_blocked":                              "Agent 自动部署已暂停，请修复错误后手动重装 Agent",
