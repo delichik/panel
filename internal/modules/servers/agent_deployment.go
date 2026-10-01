@@ -11,6 +11,7 @@ import (
 	agentsecurity "panel/internal/agent/security"
 	"panel/internal/modules/tasks"
 	panelerr "panel/internal/platform/errors"
+	"panel/internal/platform/linux"
 	"panel/internal/platform/linux/remoteops"
 	"panel/internal/platform/ssh"
 )
@@ -438,22 +439,31 @@ func (s *Service) runDeployAgent(ctx context.Context, taskID string, srv Server)
 // deliverAgentBundle gets the compressed agent bundle onto the target host.
 //
 // The HTTP download is tried first when a download base URL is configured. A
-// reachability failure (no fetcher, cannot connect, HTTP error response) falls
-// back to the SSH upload, which is the pre-existing path and also carries the
-// compressed archive. A truncated transfer, a corrupt archive and a checksum
-// mismatch fail the deployment outright: they mean the bytes themselves are
-// wrong, and silently retrying over a slower transport would hide that.
+// reachability failure falls back to the SSH upload, which is the pre-existing
+// path and also carries the compressed archive. A truncated transfer, a corrupt
+// archive and a checksum mismatch fail the deployment outright: they mean the
+// bytes themselves are wrong, and silently retrying over a slower transport
+// would hide that.
 func (s *Service) deliverAgentBundle(ctx context.Context, taskID string, srv Server, runner remoteops.Runner, artifact agentBundleArtifact) error {
 	settings := s.agentDelivery()
 	archivePath := agentRemoteTmpArchivePath(taskID)
 	if downloadURL, ok := agentDownloadURL(settings.DownloadBaseURL, artifact); ok {
 		_ = s.tasks.Advance(ctx, taskID, "downloading", "downloading panel agent from "+agentDownloadHost(downloadURL))
-		script := agentBundleFetchScript(downloadURL, archivePath, settings, agentDownloadTargetTimeout(settings.TransferTimeout), artifact.Size*2)
-		result, err := runner.RunSudoLogged(ctx, script, settings.TransferTimeout)
+		class, err := s.fetchAgentBundle(ctx, runner, downloadURL, archivePath, settings, artifact)
+		// A target without curl or a bounded wget is worth one repair attempt:
+		// the whole point of the HTTP path is to stop paying for the slow link,
+		// so leaving the feature silently unused on every minimal image would
+		// defeat it. Only the distributions the Panel can drive are touched, and
+		// a failed install falls back exactly like a missing fetcher does.
+		if err != nil && class == agentDeployFailureNoFetcher && linux.Supported(srv.OS) {
+			_ = s.tasks.AppendLog(ctx, taskID, "system", "no usable download tool on the target; installing curl")
+			if s.installAgentFetcher(ctx, runner) {
+				class, err = s.fetchAgentBundle(ctx, runner, downloadURL, archivePath, settings, artifact)
+			}
+		}
 		if err == nil {
 			return nil
 		}
-		class := agentDeployFailureClassFromResult(result, err)
 		if !class.fallsBackToSSHUpload() {
 			_ = s.tasks.AppendLog(ctx, taskID, "system", "panel agent download failed ("+string(class)+")")
 			return agentDownloadFailureError(class)
@@ -466,6 +476,27 @@ func (s *Service) deliverAgentBundle(ctx context.Context, taskID string, srv Ser
 		RemotePath: archivePath,
 		Timeout:    settings.TransferTimeout,
 	})
+}
+
+// fetchAgentBundle runs one download attempt and reports how it failed. A nil
+// error means the archive is in place on the target.
+func (s *Service) fetchAgentBundle(ctx context.Context, runner remoteops.Runner, downloadURL, archivePath string, settings AgentDeliverySettings, artifact agentBundleArtifact) (agentDeployFailureClass, error) {
+	script := agentBundleFetchScript(downloadURL, archivePath, settings, agentDownloadTargetTimeout(settings.TransferTimeout), artifact.Size*2)
+	result, err := runner.RunSudoLogged(ctx, script, settings.TransferTimeout)
+	if err == nil {
+		return "", nil
+	}
+	return agentDeployFailureClassFromResult(result, err), err
+}
+
+// installAgentFetcher installs curl on the target and reports whether the
+// download is worth retrying. The target's own progress and reason lines reach
+// the task log through the remote session, so a failure is diagnosable without
+// failing the deployment: apt may not reach the distribution mirror, and the SSH
+// upload still works.
+func (s *Service) installAgentFetcher(ctx context.Context, runner remoteops.Runner) bool {
+	_, err := runner.RunSudoLogged(ctx, agentFetcherSetupScript(), agentFetcherSetupTimeout)
+	return err == nil
 }
 
 // agentNeedsBinaryUpgrade reports whether the deploy task must upload a new

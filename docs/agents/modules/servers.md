@@ -141,7 +141,8 @@
 - 目标机下载端点固定为 `GET /agent/{version}/{platform}/panel-agent.gz`，注册在 `/api` 之外，以免常见的「`/api/*` 绕缓存」CDN 规则阻挡缓存。`{version}` 取 `buildinfo` 版本号，仅当版本号不唯一（本地构建的 `dev`）时退化为 `dev-<sha256前12位>` 内容寻址；同一二进制对所有服务器是同一个 URL，因此 CDN 缓存可跨服务器复用，升版本自然换 URL，不会命中旧版本。响应必须带 `Cache-Control: public, max-age=31536000, immutable`、基于 sha256 的 `ETag`、`Accept-Ranges: bytes`，且不得设置 `Content-Encoding`（压缩包是按普通文件投递的）或 `Set-Cookie`。该端点不鉴权：目标机没有 Panel 会话，且服务器维度的 token 会让每台服务器使用不同 URL，直接破坏 CDN 复用。
 - 下载端点只服务启动期固定枚举出的产物：`panel-agent.gz` 是注册 pattern 里的字面量而非路径参数，`{version}` 与 `{platform}` 只作为固定表查找键，任何请求数据都不会参与拼接文件系统路径，未命中一律 404 且不得退化为「服务当前版本」。压缩包 sha256 必须来自构建产物文件，并且只接受规范的小写十六进制，因为它会被插值进远端 shell 脚本；脚本中所有插值必须经 `ShellQuote`，`agent.downloadBaseUrl` 保存时必须拒绝引号、空白与 shell 元字符。
 - agent 二进制的完整性锚点始终是经已认证 SSH 通道下发的期望 sha256：目标机下载后先解压再比对，不匹配必须终止安装。因此 HTTP/CDN/中间人都只能搬运字节、不能替换内容；`agent.downloadVerifyTls` 默认关闭只是不校验传输机密性，不降低完整性。
-- HTTP 下载失败按分类决定是否回退 SSH 上传：连接失败、HTTP 4xx/5xx、缺少 fetcher 属于可达性问题，必须回退；传输中断、解压失败、哈希不匹配属于数据问题，必须直接失败而不得用慢路径掩盖。Panel 侧与目标机侧都必须有传输限时，且目标机侧的限时必须严格短于 Panel 侧，否则 Panel 只能看到笼统的远端超时，无法区分「连不上」与「传到一半断了」，回退语义随之失效。
+- 目标机缺少可用 fetcher 时，投递必须先尝试安装 `curl` 再重试下载一次，而不是直接回退：HTTP 投递的价值就在于不再为慢链路付费，若把「目标机没装 curl」当作终点，最小化镜像上这个能力就等于默认不生效。安装只对受支持发行版执行，复用 `remoteops.APTInstallPrelude` 的非交互 apt 参数，任何失败（到不了软件源、安装无效、超时）都只能导致回退 SSH 上传，不得让部署失败；重试只允许一次。该步骤与下载步骤分离，各有独立超时，且其目标机侧最坏耗时必须严格小于 Panel 侧上限。
+- HTTP 下载失败按分类决定是否回退 SSH 上传：连接失败、HTTP 4xx/5xx、缺少 fetcher（含安装后仍缺失）属于可达性问题，必须回退；传输中断、解压失败、哈希不匹配属于数据问题，必须直接失败而不得用慢路径掩盖。Panel 侧与目标机侧都必须有传输限时，且目标机侧的限时必须严格短于 Panel 侧，否则 Panel 只能看到笼统的远端超时，无法区分「连不上」与「传到一半断了」，回退语义随之失效。
 - `POST /api/v1/servers/{id}/agent/certificate` 签发目标机 `panel-agent` 的 mTLS server 证书包；响应包含 CA、server certificate、server private key、建议监听地址、agent URL 和 Docker host，只作为高级手动安装兜底，不会落库。
 
 ## Agent 重启就绪检查（PrepareRestart）

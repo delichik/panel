@@ -168,6 +168,44 @@ func agentBundleFetchScript(downloadURL, archivePath string, settings AgentDeliv
 	}, "\n")
 }
 
+// agentFetcherAPTTimeoutSeconds bounds each apt invocation of the fetcher setup
+// step. The setup runs at most two of them (update, install), so its worst case
+// stays strictly inside agentFetcherSetupTimeout.
+const agentFetcherAPTTimeoutSeconds = 120
+
+// agentFetcherSetupTimeout bounds the best-effort step that makes a download
+// fetcher available on the target. It exists only to choose between two
+// transports, so a timeout or any other failure falls back to the SSH upload
+// instead of failing the deployment.
+const agentFetcherSetupTimeout = 5 * time.Minute
+
+// agentFetcherSetupScript installs curl on a target that has no usable bundle
+// fetcher. It runs only for distributions the Panel knows how to drive, and only
+// after a download attempt already reported agentFetchExitNoFetcher.
+//
+// The step is best effort: every failure path exits non-zero with a reason on
+// stderr and the caller falls back to the SSH upload, so a target that cannot
+// install anything still gets its agent.
+func agentFetcherSetupScript() string {
+	return strings.Join([]string{
+		strings.TrimRight(remoteops.APTInstallPrelude(agentFetcherAPTTimeoutSeconds), "\n"),
+		`echo "[panel] panel_agent_fetcher installing curl" >&2`,
+		`if ! apt_get update; then`,
+		`  echo "[panel] panel_agent_fetcher missing reason=apt_update_failed" >&2`,
+		`  exit 1`,
+		`fi`,
+		`if ! apt_get install -y --no-install-recommends curl; then`,
+		`  echo "[panel] panel_agent_fetcher missing reason=apt_install_failed" >&2`,
+		`  exit 1`,
+		`fi`,
+		`if ! command -v curl >/dev/null 2>&1; then`,
+		`  echo "[panel] panel_agent_fetcher missing reason=install_no_effect" >&2`,
+		`  exit 1`,
+		`fi`,
+		`echo "[panel] panel_agent_fetcher ready fetcher=curl installed=yes" >&2`,
+	}, "\n")
+}
+
 // RegisterPublicRoutes registers the unauthenticated agent bundle download
 // endpoints. Targets have no Panel session, and a per-server token would give
 // every server a different URL, which would defeat CDN reuse. The artifact is

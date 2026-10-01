@@ -10,6 +10,8 @@ import (
 
 	agentcontract "panel/internal/agent/contract"
 	"panel/internal/modules/tasks"
+	"panel/internal/platform/linux"
+	"panel/internal/platform/linux/remoteops"
 	"panel/internal/platform/ssh"
 )
 
@@ -198,6 +200,142 @@ func TestAgentDeployFailureClassDecidesFallback(t *testing.T) {
 	}
 	if got := agentDeployFailureClassFromResult(sshx.CommandResult{TimedOut: true}, errString("timeout")); got != agentDeployFailureTimeout {
 		t.Fatalf("expected a timeout class, got %q", got)
+	}
+}
+
+func TestAgentFetcherSetupScriptStaysInsideItsBound(t *testing.T) {
+	script := agentFetcherSetupScript()
+	for _, want := range []string{
+		"export DEBIAN_FRONTEND=noninteractive",
+		// The apt budget is the shared prelude's, parameterised so this step can
+		// keep its own bound.
+		"panel_timeout 120 apt-get",
+		"-o Dpkg::Options::=--force-confdef",
+		`apt_get update`,
+		`apt_get install -y --no-install-recommends curl`,
+		`if ! command -v curl >/dev/null 2>&1; then`,
+		"reason=apt_update_failed",
+		"reason=apt_install_failed",
+		"reason=install_no_effect",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("expected fetcher setup script to contain %q, got:\n%s", want, script)
+		}
+	}
+
+	// The setup runs at most two apt invocations, and the panel-side bound must
+	// outlast both so the script can finish and report instead of being cut off.
+	targetWorstCase := 2 * agentFetcherAPTTimeoutSeconds * time.Second
+	if agentFetcherSetupTimeout <= targetWorstCase {
+		t.Fatalf("panel bound %s must exceed the target worst case %s", agentFetcherSetupTimeout, targetWorstCase)
+	}
+}
+
+func TestDeliverAgentBundleRepairsMissingFetcher(t *testing.T) {
+	debian := linux.OSRelease{ID: "debian", VersionID: "13"}
+	alpine := linux.OSRelease{ID: "alpine", VersionID: "3.20"}
+
+	cases := []struct {
+		name string
+		srv  Server
+		// fetchExit is the first download attempt; retryExit the one after a
+		// successful fetcher install.
+		fetchExit    int
+		retryExit    int
+		installFails bool
+		wantUploads  int
+		wantInstalls int
+		wantFailed   bool
+	}{
+		{name: "download succeeds", srv: Server{OS: debian}, fetchExit: 0, wantUploads: 0},
+		{
+			name: "missing fetcher is repaired and the download is retried",
+			srv:  Server{OS: debian}, fetchExit: agentFetchExitNoFetcher, retryExit: 0,
+			wantUploads: 0, wantInstalls: 1,
+		},
+		{
+			name: "repaired target that still has no fetcher falls back",
+			srv:  Server{OS: debian}, fetchExit: agentFetchExitNoFetcher, retryExit: agentFetchExitNoFetcher,
+			wantUploads: 1, wantInstalls: 1,
+		},
+		{
+			name: "failed install falls back",
+			srv:  Server{OS: debian}, fetchExit: agentFetchExitNoFetcher, installFails: true,
+			wantUploads: 1, wantInstalls: 1,
+		},
+		{
+			// Only distributions the Panel can drive are touched, so an
+			// unsupported target keeps the previous behaviour.
+			name: "unsupported distribution is never installed on",
+			srv:  Server{OS: alpine}, fetchExit: agentFetchExitNoFetcher,
+			wantUploads: 1, wantInstalls: 0,
+		},
+		{
+			name: "truncated transfer fails without a repair attempt",
+			srv:  Server{OS: debian}, fetchExit: agentFetchExitTruncated,
+			wantUploads: 0, wantInstalls: 0, wantFailed: true,
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			exec := &trackingAgentDeployExec{agentArchFakeExec: agentArchFakeExec{arch: "x86_64"}}
+			svc, _, _ := testServerService(t, exec)
+			svc.agentDeliverySettings = func() AgentDeliverySettings {
+				return testAgentDelivery("https://panel.example.test", false)
+			}
+			attempts := 0
+			exec.onSudo = func(command string) (sshx.CommandResult, error) {
+				switch {
+				case strings.Contains(command, "panel_agent_fetcher installing curl"):
+					if testCase.installFails {
+						return sshx.CommandResult{ExitCode: 1}, errString("remote command failed")
+					}
+					return sshx.CommandResult{ExitCode: 0}, nil
+				case strings.Contains(command, agentDownloadPathPrefix):
+					attempts++
+					code := testCase.fetchExit
+					if attempts > 1 {
+						code = testCase.retryExit
+					}
+					if code == 0 {
+						return sshx.CommandResult{ExitCode: 0}, nil
+					}
+					return sshx.CommandResult{ExitCode: code}, errString("remote command failed")
+				default:
+					return sshx.CommandResult{ExitCode: 0}, nil
+				}
+			}
+
+			srv := testCase.srv
+			srv.ID = "srv_deliver"
+			srv.Host = "127.0.0.1"
+			srv.Port = 22
+			srv.CredentialID = "cred_1"
+			artifact := agentBundleArtifact{
+				Platform: "linux-amd64",
+				Version:  "v1.4.2",
+				SHA256:   strings.Repeat("ab", 32),
+				Archive:  "/app/panel-agents/linux-amd64/" + agentBundleArchiveName,
+				Size:     2048,
+			}
+
+			err := svc.deliverAgentBundle(context.Background(), "task_deliver", srv, remoteops.Runner{Exec: exec}, artifact)
+			if testCase.wantFailed {
+				if err == nil {
+					t.Fatal("expected the delivery to fail")
+				}
+			} else if err != nil {
+				t.Fatalf("unexpected delivery error: %v", err)
+			}
+			if exec.uploads != testCase.wantUploads {
+				t.Fatalf("expected %d uploads, got %d", testCase.wantUploads, exec.uploads)
+			}
+			installs := strings.Count(strings.Join(exec.sudoCommands, "\n"), "panel_agent_fetcher installing curl")
+			if installs != testCase.wantInstalls {
+				t.Fatalf("expected %d fetcher install attempts, got %d", testCase.wantInstalls, installs)
+			}
+		})
 	}
 }
 

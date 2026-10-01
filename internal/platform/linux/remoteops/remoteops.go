@@ -105,7 +105,7 @@ func APTInstallScript(packages []string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return aptScriptPrelude() + commands, nil
+	return APTInstallPrelude(aptInstallTimeoutSeconds) + commands, nil
 }
 
 func MustAPTInstallScript(packages ...string) string {
@@ -381,8 +381,13 @@ func ShellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
-func aptScriptPrelude() string {
-	return `set -eu
+// APTInstallPrelude defines the non-interactive apt helpers every remote package
+// step relies on: DEBIAN_FRONTEND, a bounded panel_timeout, and an apt_get
+// wrapper that keeps existing conffiles. seconds bounds each apt invocation, so
+// a caller whose surrounding remote step has its own bound can keep this step
+// strictly inside it.
+func APTInstallPrelude(seconds int) string {
+	return fmt.Sprintf(`set -eu
 export DEBIAN_FRONTEND=noninteractive
 panel_timeout() {
   seconds="$1"
@@ -394,7 +399,11 @@ panel_timeout() {
   fi
 }
 apt_get() {
-  panel_timeout 900 apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "$@"
+  panel_timeout %d apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "$@"
 }
-`
+`, seconds)
 }
+
+// aptInstallTimeoutSeconds is the budget shared by the long-running package
+// steps that have no tighter bound of their own.
+const aptInstallTimeoutSeconds = 900
