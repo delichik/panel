@@ -65,7 +65,7 @@ func TestAgentURLPrefersTailnetAddressAndKeepsPort(t *testing.T) {
 		want      string
 	}{
 		{name: "ipv4", canonical: "https://203.0.113.10:9786", ipv4: "100.64.0.5", want: "https://100.64.0.5:9786"},
-		{name: "nat public port", canonical: "https://203.0.113.10:8443", ipv4: "100.64.0.5", want: "https://100.64.0.5:8443"},
+		{name: "non default port is preserved", canonical: "https://203.0.113.10:8443", ipv4: "100.64.0.5", want: "https://100.64.0.5:8443"},
 		{name: "ipv6 fallback", canonical: "https://203.0.113.10:9786", ipv6: "fd7a:115c:a1e0::5", want: "https://[fd7a:115c:a1e0::5]:9786"},
 		{name: "non tailnet address is ignored", canonical: "https://203.0.113.10:9786", ipv4: "192.168.1.5", want: "https://203.0.113.10:9786"},
 		{name: "empty address falls back", canonical: "https://203.0.113.10:9786", want: "https://203.0.113.10:9786"},
