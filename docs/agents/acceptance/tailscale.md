@@ -356,14 +356,14 @@
 - **前置条件**：UFW 功能只支持端口/协议/来源三元组规则，不提供按接口放行能力。
 - **成功结果**：Panel 明确不为其创建 `tailscale0` 接口规则；文档与设置/服务器页面必须说明操作者需要在 UFW 激活时自行放行 tailscale 接口，否则 tailnet 流量会被拒绝。
 - **失败结果**：不得把“已安装/已启用 UFW”描述为“tailnet 已放行”，不得静默假设接口规则已存在，也不得为了让 tailnet 连通而放宽 UFW 的既有安全门（管理端口保护、双通道验证）。
-- **边界条件**：UFW 未安装或未启用时该限制不适用；应用端口规则与存储服务器 2049 规则仍按既有语义协调，不因 Tailscale 变化。
+- **边界条件**：UFW 未安装或未启用时该限制不适用；应用端口规则与存储服务器 2049 规则仍按既有语义协调，不因 Tailscale 变化。注意 `AGT-FW-001` 已让 Agent 部署自动接管并启用 UFW，因此这一限制的作用面变大了：新加入的节点在首次部署后即可能处于 active 状态，操作者需要在加入 tailnet 前自行放行 `tailscale0`。
 - **验证点**：文档评审（`docs/deployment.md`、`servers-security-packages.md` 的 UFW 条目引用本项）与人工观察点；自动化测试只需断言“不产生接口规则”。
 
 ### TS-EVD-001 路由清单与前端契约一致性
 
 - **触发入口**：`internal/bootstrap/panel/routes_manifest_test.go` 与 [主 Panel API 路由逐项清单](api-route-inventory.md)。
 - **前置条件**：本次新增两条路由：`POST /api/v1/settings/tailscale/apply`、`POST /api/v1/servers/{id}/tailscale/apply`。
-- **成功结果**：清单计数为 177，SHA-256 为 `da1c54c97b86e8f46b6b157812b17190672156ff280cf1002200c4742dc0364d`；两条路由在清单中分别映射到本文档与相应领域文档；前端 typed client、类型与 Mock 同步。
+- **成功结果**：清单计数为 175，SHA-256 为 `f57a6287ff235634949f6f5fd63a3455bfaaa088ce5ea08562bfeb7a886eda44`（上一轮新增两条 Tailscale 路由，本轮删除了两条手动防火墙路由，`AGT-FW-001..006`）；两条路由在清单中分别映射到本文档与相应领域文档；前端 typed client、类型与 Mock 同步。
 - **失败结果**：不得只更新哈希或计数让测试通过；新增路由缺少验收映射时必须先补合同（`API-COV-001`、`API-COV-002`）。
 - **边界条件**：`GET /api/v1/settings/runtime` 与 `PUT /api/v1/settings/runtime` 的分组扩展不改变 method/path 数量；`POST /api/v1/servers/{id}/tailscale/apply` 与既有 `agent/*` 子资源互不影响。
 - **验证点**：路由清单测试、`api-route-inventory.md`、`coverage-matrix.md` 三者同步。

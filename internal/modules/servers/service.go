@@ -34,10 +34,12 @@ const connectivitySudoTimeout = 8 * time.Second
 const serverInfoTaskType = "server_info_collect"
 const connectivityResourceType = "server"
 const connectivityMaxRetries = 8
-const ufwInstallTaskType = "server_ufw_install"
-const ufwEnableTaskType = "server_ufw_enable"
+
+// ufwInstallTimeout bounds the firewall step that installs UFW, asserts the base
+// rules and enables the policy; ufwManageTimeout bounds a single rule mutation.
 const ufwInstallTimeout = 5 * time.Minute
 const ufwManageTimeout = time.Minute
+
 const fail2banApplyTaskType = "server_fail2ban_apply"
 const fail2banReleaseTaskType = "server_fail2ban_release"
 const restartTaskType = "server_restart"
@@ -314,41 +316,6 @@ func (s *Service) AllowUFW(ctx context.Context, serverID string, req UFWAllowReq
 	return ufwStateFromStatus(srv.ID, true, status), nil
 }
 
-func (s *Service) EnableUFW(ctx context.Context, serverID string) (tasks.Task, error) {
-	srv, err := s.ensureUFWManageable(ctx, serverID)
-	if err != nil {
-		return tasks.Task{}, err
-	}
-	adapter, ok := linux.AdapterFor(srv.OS)
-	if !ok || !adapter.SupportsUFW() {
-		return tasks.Task{}, panelerr.Validation("ufw_not_supported", "UFW is not supported on this distribution")
-	}
-	task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
-		Type:         ufwEnableTaskType,
-		ServerID:     serverID,
-		ResourceType: connectivityResourceType,
-		ResourceID:   serverID,
-		TriggerType:  "user",
-		Summary:      "Enabling UFW",
-		MaxRetries:   0,
-	}, tasks.Trigger{Type: "user", Manual: true})
-	if err != nil {
-		return tasks.Task{}, err
-	}
-	if !created {
-		return task, nil
-	}
-	if err := s.tasks.Start(ctx, task.ID); err != nil {
-		return tasks.Task{}, err
-	}
-	task, err = s.tasks.Get(ctx, task.ID)
-	if err != nil {
-		return tasks.Task{}, err
-	}
-	go s.runEnableUFW(s.tasks.ExecutionContext(task.ID), task.ID, srv, adapter)
-	return task, nil
-}
-
 func (s *Service) DeleteUFWRule(ctx context.Context, serverID string, number int) (UFWState, error) {
 	srv, err := s.ensureUFWManageable(ctx, serverID)
 	if err != nil {
@@ -484,56 +451,6 @@ func validateUFWRuleDeletion(status remoteops.UFWStatus, number int, srv Server)
 		return rule, nil
 	}
 	return remoteops.UFWRuleStatus{}, panelerr.Validation("ufw_rule_target_unknown", "Unable to resolve UFW rule target; refusing deletion")
-}
-
-func (s *Service) InstallUFW(ctx context.Context, serverID string) (tasks.Task, error) {
-	if s.exec == nil {
-		return tasks.Task{}, panelerr.Validation("server_executor_unavailable", "Server connectivity test executor is unavailable")
-	}
-	srv, err := s.Get(ctx, serverID)
-	if err != nil {
-		return tasks.Task{}, err
-	}
-	if !srv.OS.Supported {
-		return tasks.Task{}, panelerr.Validation("server_not_supported", "Server distribution is not supported")
-	}
-	if !srv.Reachable {
-		return tasks.Task{}, panelerr.Validation("server_not_reachable", "Server connectivity has not been confirmed")
-	}
-	if !hasPrivilege(srv) {
-		return tasks.Task{}, panelerr.Validation("privileged_access_required", "Root or passwordless sudo access is required")
-	}
-	adapter, ok := linux.AdapterFor(srv.OS)
-	if !ok {
-		return tasks.Task{}, panelerr.Validation("server_not_supported", "Server distribution is not supported")
-	}
-	if !adapter.SupportsUFW() {
-		return tasks.Task{}, panelerr.Validation("ufw_not_supported", "UFW is not supported on this distribution")
-	}
-	task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
-		Type:         ufwInstallTaskType,
-		ServerID:     serverID,
-		ResourceType: connectivityResourceType,
-		ResourceID:   serverID,
-		TriggerType:  "user",
-		Summary:      "Installing UFW",
-		MaxRetries:   0,
-	}, tasks.Trigger{Type: "user", Manual: true})
-	if err != nil {
-		return tasks.Task{}, err
-	}
-	if !created {
-		return task, nil
-	}
-	if err := s.tasks.Start(ctx, task.ID); err != nil {
-		return tasks.Task{}, err
-	}
-	task, err = s.tasks.Get(ctx, task.ID)
-	if err != nil {
-		return tasks.Task{}, err
-	}
-	go s.runInstallUFW(s.tasks.ExecutionContext(task.ID), task.ID, srv, adapter)
-	return task, nil
 }
 
 func (s *Service) Restart(ctx context.Context, serverID string) (tasks.Task, error) {
@@ -889,147 +806,6 @@ func (s *Service) recordConnectivity(ctx context.Context, serverID string, reach
 		"reachable": reachable, "privilege_mode": mode, "privilege_last_checked_at": now,
 		"last_checked_at": now, "last_error": message, "host_key_mismatch": hostKeyMismatch, "updated_at": now,
 	})
-}
-
-func (s *Service) runInstallUFW(ctx context.Context, taskID string, srv Server, adapter linux.DistroAdapter) {
-	defer s.tasks.FinishExecution(taskID)
-	_ = s.tasks.Start(ctx, taskID)
-	if err := s.verifyFirewallControlChannels(ctx, srv); err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
-		return
-	}
-	if maintenance, baseURL, ok, err := s.agentMaintenance(srv); ok || err != nil {
-		if err != nil {
-			_ = s.tasks.Fail(ctx, taskID, err)
-			return
-		}
-		_ = s.tasks.Advance(ctx, taskID, "installing", "installing UFW through panel agent")
-		rules := []remoteops.UFWRule{{Port: normalizedTCPPort(srv.Port), Protocol: "tcp"}, {Port: agentControlPort(srv), Protocol: "tcp"}}
-		if traitEnabled(srv.Traits[reverseProxyEnabledTrait]) {
-			for _, port := range reverseProxyTCPPorts {
-				rules = append(rules, remoteops.UFWRule{Port: port, Protocol: "tcp"})
-			}
-		}
-		if _, callErr := maintenance.UFWInstall(ctx, baseURL, agentcontract.UFWInstallRequest{Rules: uniqueUFWRules(rules)}); callErr != nil {
-			_ = s.handleAgentCertificateTimeError(ctx, srv, callErr)
-			_ = s.tasks.Fail(ctx, taskID, callErr)
-			return
-		}
-		if err := s.refreshServerTraits(ctx, taskID, srv); err != nil {
-			_ = s.tasks.Fail(ctx, taskID, err)
-			return
-		}
-		if err := s.verifyFirewallControlChannels(ctx, srv); err != nil {
-			_ = s.tasks.Fail(ctx, taskID, err)
-			return
-		}
-		_ = s.tasks.Complete(ctx, taskID, "UFW installed")
-		return
-	}
-	target := serverTarget(srv)
-	_ = s.tasks.Advance(ctx, taskID, "installing", "installing UFW")
-	if _, err := (remoteops.Runner{Exec: s.exec, Target: target, Log: serverTaskLogSink{s.tasks, taskID}}).RunSudoLogged(ctx, ufwInstallScript(adapter, srv), ufwInstallTimeout); err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
-		return
-	}
-
-	_ = s.tasks.Advance(ctx, taskID, "verifying", "refreshing server system traits")
-	osInfo, err := s.detectOS(ctx, srv, target)
-	if err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
-		return
-	}
-	mode, _ := s.detectPrivilege(ctx, target)
-	sysTraits := map[string]string{}
-	if osInfo.Supported {
-		detected, traitsErr := s.detectSystemTraitsForServer(ctx, srv, target)
-		if traitsErr == nil {
-			sysTraits = detected
-		} else {
-			_ = s.tasks.AppendLog(ctx, taskID, "system", "failed to detect system traits: "+traitsErr.Error())
-			if status, statusErr := s.fetchUFWStatusSSH(ctx, srv); statusErr == nil {
-				sysTraits["sys.ufw_installed"] = boolString(status.Installed)
-				sysTraits["sys.ufw_active"] = boolString(status.Active)
-			}
-		}
-	}
-	applyDistroSystemTraits(osInfo, sysTraits)
-	msg := ""
-	if !osInfo.Supported {
-		msg = "unsupported distribution"
-	}
-	if err := s.markCheck(ctx, srv.ID, true, osInfo, mode, sysTraits, msg); err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
-		return
-	}
-	if err := s.verifyFirewallControlChannels(ctx, srv); err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
-		return
-	}
-	_ = s.tasks.Complete(ctx, taskID, "UFW installed")
-}
-
-func (s *Service) runEnableUFW(ctx context.Context, taskID string, srv Server, adapter linux.DistroAdapter) {
-	defer s.tasks.FinishExecution(taskID)
-	if err := s.verifyFirewallControlChannels(ctx, srv); err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
-		return
-	}
-	if maintenance, baseURL, ok, err := s.agentMaintenance(srv); ok || err != nil {
-		if err != nil {
-			_ = s.tasks.Fail(ctx, taskID, err)
-			return
-		}
-		_ = s.tasks.Advance(ctx, taskID, "enabling", "enabling UFW through panel agent")
-		if _, callErr := maintenance.UFWEnable(ctx, baseURL, agentcontract.UFWEnableRequest{SSHPort: normalizedTCPPort(srv.Port), AgentPort: agentControlPort(srv)}); callErr != nil {
-			_ = s.handleAgentCertificateTimeError(ctx, srv, callErr)
-			_ = s.tasks.Fail(ctx, taskID, callErr)
-			return
-		}
-		if err := s.refreshServerTraits(ctx, taskID, srv); err != nil {
-			_ = s.tasks.Fail(ctx, taskID, err)
-			return
-		}
-		if err := s.verifyFirewallControlChannels(ctx, srv); err != nil {
-			_ = s.tasks.Fail(ctx, taskID, err)
-			return
-		}
-		_ = s.tasks.Complete(ctx, taskID, "UFW enabled")
-		return
-	}
-	target := serverTarget(srv)
-	status, err := s.fetchUFWStatusSSH(ctx, srv)
-	if err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
-		return
-	}
-	if !status.Installed {
-		_ = s.tasks.Advance(ctx, taskID, "installing", "installing UFW")
-		if _, err := (remoteops.Runner{Exec: s.exec, Target: target, Log: serverTaskLogSink{s.tasks, taskID}}).RunSudoLogged(ctx, strings.TrimSpace(adapter.UFWInstallScript()), ufwInstallTimeout); err != nil {
-			_ = s.tasks.Fail(ctx, taskID, err)
-			return
-		}
-	}
-	_ = s.tasks.Advance(ctx, taskID, "enabling", "enabling UFW")
-	enableScript, err := remoteops.UFWEnableScript(normalizedTCPPort(srv.Port), agentControlPort(srv))
-	if err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
-		return
-	}
-	if _, err := (remoteops.Runner{Exec: s.exec, Target: target, Log: serverTaskLogSink{s.tasks, taskID}}).RunSudoLogged(ctx, enableScript, ufwManageTimeout); err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
-		return
-	}
-	_ = s.tasks.Advance(ctx, taskID, "verifying", "refreshing server system traits")
-	if err := s.refreshServerTraits(ctx, taskID, srv); err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
-		return
-	}
-	if err := s.verifyFirewallControlChannels(ctx, srv); err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
-		return
-	}
-	_ = s.tasks.Complete(ctx, taskID, "UFW enabled")
 }
 
 func (s *Service) runRestart(ctx context.Context, taskID string, srv Server) {
@@ -1689,17 +1465,6 @@ type serverTaskLogSink struct {
 
 func (s serverTaskLogSink) AppendLog(ctx context.Context, stream, line string) error {
 	return s.tasks.AppendLog(ctx, s.taskID, stream, line)
-}
-
-func ufwInstallScript(adapter linux.DistroAdapter, srv Server) string {
-	command := strings.TrimSpace(adapter.UFWInstallScript())
-	rules := []remoteops.UFWRule{{Port: normalizedTCPPort(srv.Port), Protocol: "tcp"}, {Port: agentControlPort(srv), Protocol: "tcp"}}
-	if traitEnabled(srv.Traits[reverseProxyEnabledTrait]) {
-		for _, port := range reverseProxyTCPPorts {
-			rules = append(rules, remoteops.UFWRule{Port: port, Protocol: "tcp"})
-		}
-	}
-	return command + "\n" + remoteops.MustUFWAllowScript(uniqueUFWRules(rules)...)
 }
 
 func (s *Service) refreshServerTraits(ctx context.Context, taskID string, srv Server) error {

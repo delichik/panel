@@ -91,7 +91,6 @@ import {
   mockAddUfwRule,
   mockDeleteUfwRule,
   mockEnableFail2Ban,
-  mockEnableUfw,
   mockFail2BanState,
   mockReleaseFail2Ban,
   mockSaveFail2Ban,
@@ -300,7 +299,7 @@ export function installMockApi() {
     if (serverMatch && method(init) === 'DELETE') {
       return deleteServer(decodeURIComponent(serverMatch[1])) ? json(null, 200) : error('server_not_found', 'Server was not found.', 404);
     }
-    const serverOperationMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)\/(test|restart|agent\/deploy|ufw\/install)$/);
+    const serverOperationMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)\/(test|restart|agent\/deploy)$/);
     if (serverOperationMatch && method(init) === 'POST') {
       const id = decodeURIComponent(serverOperationMatch[1]);
       const op = serverOperationMatch[2];
@@ -331,11 +330,6 @@ export function installMockApi() {
       } catch (err) {
         return error('server_unreachable', err instanceof Error ? err.message : 'Server is unreachable.', 502);
       }
-    }
-    const ufwEnableMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)\/ufw\/enable$/);
-    if (ufwEnableMatch && method(init) === 'POST') {
-      const ok = mockEnableUfw(decodeURIComponent(ufwEnableMatch[1]));
-      return ok ? json(accepted('server-ufw-enable'), 202) : error('server_not_found', 'Server was not found.', 404);
     }
     const ufwRulesMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)\/ufw\/rules$/);
     if (ufwRulesMatch && method(init) === 'POST') {

@@ -114,6 +114,13 @@ func setServerArchitecture(t *testing.T, store *storage.Store, serverID string) 
 	}
 }
 
+func setServerOS(t *testing.T, store *storage.Store, serverID, osID, versionID string) {
+	t.Helper()
+	if _, err := store.AppDB().Exec(`UPDATE servers SET os_id=?, os_version_id=? WHERE id=?`, osID, versionID, serverID); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func setServerTraits(t *testing.T, store *storage.Store, serverID string, traits map[string]string) {
 	t.Helper()
 	raw, err := json.Marshal(traits)
@@ -462,138 +469,6 @@ func TestInitialCollectionPersistsRootPrivilege(t *testing.T) {
 	}
 }
 
-func TestInstallUFWCreatesTaskAndRefreshesTraits(t *testing.T) {
-	exec := &ufwInstallFakeExec{}
-	svc, taskSvc, _ := testServerService(t, exec)
-	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv = waitServerReady(t, svc, srv.ID)
-
-	task, err := svc.InstallUFW(context.Background(), srv.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	waitTaskFinished(t, taskSvc, task.ID)
-
-	if task.Type != ufwInstallTaskType || task.ResourceType != connectivityResourceType || task.ResourceID != srv.ID {
-		t.Fatalf("unexpected task metadata: %#v", task)
-	}
-	if !strings.Contains(exec.installCommand, "apt_get install -y ufw") ||
-		!strings.Contains(exec.installCommand, "ufw --version") ||
-		!strings.Contains(exec.installCommand, "ufw allow 22/tcp") {
-		t.Fatalf("unexpected install command: %s", exec.installCommand)
-	}
-	assertNoDestructiveUFWCommands(t, exec.installCommand)
-	if exec.installTimeout != ufwInstallTimeout {
-		t.Fatalf("expected install timeout %s, got %s", ufwInstallTimeout, exec.installTimeout)
-	}
-	stored, err := svc.Get(context.Background(), srv.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stored.Traits["sys.ufw_supported"] != "true" || stored.Traits["sys.ufw_installed"] != "true" || stored.Traits["sys.ufw_active"] != "false" {
-		t.Fatalf("expected refreshed UFW traits, got %#v", stored.Traits)
-	}
-}
-
-func TestInstallUFWMarksTaskRunningBeforeWorkerExecutes(t *testing.T) {
-	blockInstall := make(chan struct{})
-	exec := &ufwInstallFakeExec{blockInstall: blockInstall}
-	svc, taskSvc, _ := testServerService(t, exec)
-	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv = waitServerReady(t, svc, srv.ID)
-
-	task, err := svc.InstallUFW(context.Background(), srv.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if task.Status != tasks.StatusRunning || task.StartedAt == nil {
-		t.Fatalf("expected returned task to be running before worker executes, got %#v", task)
-	}
-	stored, err := taskSvc.Get(context.Background(), task.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stored.Status != tasks.StatusRunning || stored.StartedAt == nil {
-		t.Fatalf("expected stored task to be running before worker executes, got %#v", stored)
-	}
-
-	close(blockInstall)
-	waitTaskFinished(t, taskSvc, task.ID)
-}
-
-func TestInstallUFWAllowsConfiguredSSHAndReverseProxyPorts(t *testing.T) {
-	exec := &ufwInstallFakeExec{}
-	svc, taskSvc, store := testServerService(t, exec)
-	srv, err := svc.Create(context.Background(), SaveRequest{
-		Name:         "s",
-		IPv4:         "127.0.0.1",
-		Port:         22022,
-		SSHUsername:  "du",
-		CredentialID: "cred_1",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	setServerTraits(t, store, srv.ID, map[string]string{reverseProxyEnabledTrait: "true"})
-	srv, err = svc.Get(context.Background(), srv.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv = waitServerReady(t, svc, srv.ID)
-
-	task, err := svc.InstallUFW(context.Background(), srv.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	waitTaskFinished(t, taskSvc, task.ID)
-
-	for _, want := range []string{"ufw allow 22022/tcp", "ufw allow 80/tcp", "ufw allow 443/tcp"} {
-		if !strings.Contains(exec.installCommand, want) {
-			t.Fatalf("install command missing %q:\n%s", want, exec.installCommand)
-		}
-	}
-	assertNoDestructiveUFWCommands(t, exec.installCommand)
-}
-
-func TestEnableUFWInstallsWhenMissingAndAllowsSSHBeforeEnable(t *testing.T) {
-	blockEnable := make(chan struct{})
-	exec := &ufwEnableFakeExec{blockEnable: blockEnable}
-	svc, taskSvc, store := testServerService(t, exec)
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_pretty_name,os_supported,reachable,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv_enable','s','127.0.0.1',22022,'du','cred_1','debian','13','Debian GNU/Linux 13',1,1,1,'passwordless_sudo','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
-		t.Fatal(err)
-	}
-
-	task, err := svc.EnableUFW(context.Background(), "srv_enable")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if task.Type != ufwEnableTaskType || task.Status != tasks.StatusRunning || task.StartedAt == nil {
-		t.Fatalf("expected running UFW enable task, got %#v", task)
-	}
-	close(blockEnable)
-	waitTaskFinished(t, taskSvc, task.ID)
-
-	commands := strings.Join(exec.commands, "\n---\n")
-	installIndex := strings.Index(commands, "apt_get install -y ufw")
-	allowIndex := strings.Index(commands, "ufw allow 22022/tcp")
-	enableIndex := strings.Index(commands, "ufw --force enable")
-	if installIndex < 0 || allowIndex < 0 || enableIndex < 0 || installIndex >= allowIndex || allowIndex >= enableIndex {
-		t.Fatalf("expected install, SSH allow, then enable:\n%s", commands)
-	}
-	stored, err := svc.Get(context.Background(), "srv_enable")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stored.Traits["sys.ufw_installed"] != "true" || stored.Traits["sys.ufw_active"] != "true" {
-		t.Fatalf("expected enabled UFW traits, got %#v", stored.Traits)
-	}
-}
 
 func TestRestartCreatesRunningTaskAndSchedulesReboot(t *testing.T) {
 	blockRestart := make(chan struct{})
@@ -2401,6 +2276,10 @@ func newDeployTestService(t *testing.T, traits map[string]string) (*Service, *ta
 	}
 	setServerTraits(t, store, srv.ID, traits)
 	setServerArchitecture(t, store, srv.ID)
+	// Firewall management is a prerequisite of agent deployment and the Panel
+	// only drives UFW, so a deployable fixture needs a supported distribution.
+	// The refusal path for anything else is covered by agent_firewall_test.go.
+	setServerOS(t, store, srv.ID, "debian", "13")
 	assets, err := agentsecurity.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
 	if err != nil {
 		t.Fatal(err)

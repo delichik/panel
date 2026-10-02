@@ -42,8 +42,6 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 				CollectInputs: tasks.NewIntervalCollector(time.Hour, nil, s.CollectServerInfoInputs),
 			},
 		},
-		{Type: ufwInstallTaskType, StaleQueuedAfter: 10 * time.Minute},
-		{Type: ufwEnableTaskType},
 		{Type: fail2banApplyTaskType},
 		{Type: fail2banReleaseTaskType},
 		{Type: restartTaskType},

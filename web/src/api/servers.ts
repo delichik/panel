@@ -80,9 +80,6 @@ export const serversApi = {
   metrics(id: string, range: ServerMetricsRange = '1h', options?: ApiRequestOptions) {
     return apiClient.get<ServerMetricsSeries>(`/servers/${encodeURIComponent(id)}/metrics?range=${encodeURIComponent(range)}`, options);
   },
-  installUfw(id: string) {
-    return apiClient.post<OperationAccepted>(`/servers/${encodeURIComponent(id)}/ufw/install`);
-  },
   natPorts(id: string) {
     return apiClient.get<NatPortConfig>(`/servers/${encodeURIComponent(id)}/nat-ports`);
   },

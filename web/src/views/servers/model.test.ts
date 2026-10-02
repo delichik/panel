@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentTone, canInstallUfw, connectionHost, connectionSignature, credentialReferences, hasBlockingPairIssues, parsePairs, tailscaleObservedStatus, tailscalePreferences, tailscaleStatusKey, tailscaleTone, tailscaleTrait, validateProbeInput, validateServerInput } from './model';
+import { agentTone, connectionHost, connectionSignature, credentialReferences, hasBlockingPairIssues, parsePairs, tailscaleObservedStatus, tailscalePreferences, tailscaleStatusKey, tailscaleTone, tailscaleTrait, validateProbeInput, validateServerInput } from './model';
 import type { ServerDto } from '@/types/servers';
 
 const server: ServerDto = {
@@ -19,9 +19,8 @@ const server: ServerDto = {
 };
 
 describe('server model', () => {
-  it('maps agent and UFW capabilities from real server fields', () => {
+  it('maps agent capabilities from real server fields', () => {
     expect(agentTone(server)).toBe('success');
-    expect(canInstallUfw(server)).toBe(true);
   });
 
   it('computes credential references from server inventory', () => {

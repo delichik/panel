@@ -330,6 +330,14 @@ func (s *Service) runDeployAgent(ctx context.Context, taskID string, srv Server)
 			}
 		}
 	}
+	// The firewall comes first, on both the install and the restart-only path, so
+	// an existing server that predates this prerequisite converges on its next
+	// deployment. Nothing on the node has been touched yet at this point, so a
+	// failure here leaves a working agent exactly as it was.
+	if err := s.ensureAgentFirewall(ctx, taskID, srv, runner); err != nil {
+		s.failAgentDeployTask(ctx, taskID, srv, err)
+		return
+	}
 	bundle, err := s.IssueAgentCertificate(ctx, srv.ID)
 	if err != nil {
 		s.failAgentDeployTask(ctx, taskID, srv, err)

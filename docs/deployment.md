@@ -191,6 +191,17 @@ ports:
 
 Terminate HTTPS at the reverse proxy and forward requests to `https://127.0.0.1:8443` (trust the Panel self-signed certificate or configure a user certificate). If the reverse proxy runs in another container, connect both containers through a private Docker network instead of using the loopback binding.
 
+## Firewall takeover during Agent deployment
+
+Seamark manages the server firewall through **UFW only**, and it now does so automatically as a **prerequisite of Agent deployment**: before anything is installed on a node, it installs UFW when missing, allows the SSH port, the Agent port and (when the reverse proxy facility is used) 80/443, and enables the default-deny policy only after the SSH port is allowed. The manual install and enable actions are gone.
+
+Consequences to plan for:
+
+- A node whose distribution has no UFW adapter cannot receive an Agent at all: deployment fails with `agent_firewall_unsupported`. Supported distributions are the same Debian/Ubuntu range as every other package-managing feature.
+- **Application ports are not part of that base set.** Each application must declare "open firewall" on the port it publishes; ports published without that flag are blocked. Rules an application wrote earlier stay in the UFW configuration even while UFW is inactive, so enabling the policy applies them.
+- **NAT servers are exempt.** Their public ports are mapped by the provider and Seamark must not open them, so it neither installs, allows nor enables UFW there and never fails a deployment over it.
+- Servers added before this behaviour existed are taken over on their next deployment, including certificate renewals.
+- A failed takeover fails the deployment but leaves a working Agent untouched.
 ## Agent delivery over HTTP
 
 Seamark installs `panel-agent` on every managed server. By default it uploads the compressed bundle over the same SSH connection it already uses, which is slow on long or congested routes. You can instead let each server download the bundle over HTTP, which allows a CDN in front of the Panel to cache it.

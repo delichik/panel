@@ -15,7 +15,7 @@
 | GAP-009 | 系统版本类型 | 后端可能返回 `checkError`，前端 `VersionInfo` 未声明 | typed client 声明并在页面安全展示，或服务端合同明确移除 |
 | GAP-010 | 备份旧文档引用 | 旧指引引用已不存在的 `web/src/api/backups.ts` 与 `web/src/types/api.ts` | 旧指引由本规范替代；后续引用只指向实际 maintenance/settings API 与类型 |
 | GAP-011 | Agent report 频率说明 | 旧指引写每秒检查，当前实现为每 5 秒 | 本规范以当前实现/运行时设置为准；增加频率行为测试或统一实现 |
-| GAP-012 | UFW Agent 准入 | 旧 compatible-Agent 准入说明与 `InstallUFW` 仍强制本地 privilege 的实现不同 | 明确唯一产品策略并同步 service、UI capability 与测试 |
+| GAP-012 | ~~UFW Agent 准入~~（已消除） | `InstallUFW` 曾绕过 `ensureUFWManageable` 并强制本地 privilege。手动安装入口已删除，防火墙改为 Agent 部署的自动前提（`AGT-FW-001..006`），该不一致随之消失 | 关闭；保留编号以便追溯 |
 | GAP-013 | 账户更新原子性 | 账户、JWT secret、nonce 通过多次写入更新，缺少跨写入事务，失败可能部分成功 | 使用单事务或等价原子机制满足账户合同失败不变式 |
 | GAP-014 | 未来概览 API | 旧材料出现 `/overview/dashboard` 与 `baseVersion`，当前路由/服务未实现 | 保持不在当前合同；若实现，先新增 API/并发合同和前端消费测试 |
 | GAP-015 | 应用迁移入口 | service 有迁移行为门禁，但主 applications 路由无公开迁移 HTTP 入口 | 保持不可达，或先定义权限、请求、任务、回滚与 UI 合同后新增入口 |

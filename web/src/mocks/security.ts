@@ -91,16 +91,6 @@ export function mockDeleteUfwRule(serverId: string, number: number) {
   return state;
 }
 
-export function mockEnableUfw(serverId: string) {
-  const state = ufwStates[serverId];
-  if (!state) return false;
-  state.installed = true;
-  state.active = true;
-  state.status = 'active';
-  if (!state.rules.length) state.rules = [{ number: 1, to: '22/tcp', action: 'ALLOW IN', from: 'Anywhere' }];
-  return true;
-}
-
 export function mockFail2BanState(serverId: string) {
   if (serverId.includes('dead') || serverId.includes('timeout')) throw new Error('Server connectivity has not been confirmed.');
   if (!fail2banStates[serverId]) fail2banStates[serverId] = defaultFail2BanState(serverId);

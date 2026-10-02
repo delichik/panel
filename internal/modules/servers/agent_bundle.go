@@ -315,7 +315,6 @@ func agentBundleInstallScript(archivePath, binaryPath, expectedSHA256 string) st
 		`install -m 0755 "$binary" ` + remoteops.ShellQuote(agentRemoteBinaryPath),
 		`rm -f "$binary"`,
 		`trap - EXIT`,
-		remoteops.MustUFWAllowScript(remoteops.UFWRule{Port: defaultAgentPort, Protocol: "tcp"}),
 		agentServiceStartScript(),
 	}, "\n")
 }

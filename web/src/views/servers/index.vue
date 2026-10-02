@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { AlertTriangle, Cable, KeyRound, Pencil, PlayCircle, Plus, RefreshCcw, ServerCog, ShieldPlus, Trash2, Wrench } from '@lucide/vue';
+import { AlertTriangle, Cable, KeyRound, Pencil, PlayCircle, Plus, RefreshCcw, ServerCog, Trash2, Wrench } from '@lucide/vue';
 import { credentialsApi } from '@/api/credentials';
 import { serversApi, type ServerMetricsRange, type ServerMetricsSeries } from '@/api/servers';
 import { tasksApi } from '@/api/tasks';
@@ -30,7 +30,7 @@ import { useI18n } from '@/i18n';
 import type { CredentialDto } from '@/types/credentials';
 import type { ServerDto, NatPortConfig, NatPortMapping } from '@/types/servers';
 import type { TaskDto, TaskLog } from '@/types/tasks';
-import { agentTone, canInstallUfw, canRunPrivilegedOperation, credentialLabel, serverReachabilityTone, tailscaleStatusKey, tailscaleTone, tailscaleTrait } from './model';
+import { agentTone, canRunPrivilegedOperation, credentialLabel, serverReachabilityTone, tailscaleStatusKey, tailscaleTone, tailscaleTrait } from './model';
 import ServerFormDialog from './ServerFormDialog.vue';
 import { createLatestRequestGuard } from '@/views/_shared/requestState';
 import { formatDateTime } from '@/utils/datetime';
@@ -76,7 +76,7 @@ const testing = ref(false);
 const openingEdit = ref(false);
 const editing = ref<ServerDto | null>(null);
 const confirmTarget = ref<ServerDto | null>(null);
-const confirmOperation = ref<'restart' | 'ufw' | 'trustHostKey' | null>(null);
+const confirmOperation = ref<'restart' | 'trustHostKey' | null>(null);
 const pendingOperation = ref('');
 const metrics = ref<ServerMetricsSeries | null>(null);
 const metricsServerId = ref('');
@@ -679,11 +679,6 @@ function confirmRestart(server: ServerDto) {
   confirmOperation.value = 'restart';
 }
 
-function confirmInstallUfw(server: ServerDto) {
-  if (!canInstallUfw(server)) return;
-  confirmTarget.value = server;
-  confirmOperation.value = 'ufw';
-}
 function confirmTrustHostKey(server: ServerDto) {
   confirmTarget.value = server;
   confirmOperation.value = 'trustHostKey';
@@ -699,11 +694,6 @@ async function runConfirmedOperation() {
       const accepted = await serversApi.restart(server.id);
       notifySuccess(t('serversPage.restartAccepted', { taskId: accepted.taskId }), accepted);
     }, 'restart');
-  } else if (operation === 'ufw') {
-    await runInline(async () => {
-      const accepted = await serversApi.installUfw(server.id);
-      notifySuccess(t('serversPage.ufwAccepted', { taskId: accepted.taskId }), accepted);
-    }, 'ufw');
   } else {
     await runInline(async () => {
       const trusted = await serversApi.trustHostKey(server.id);
@@ -1070,9 +1060,6 @@ onBeforeUnmount(() => {
                 <section class="rounded-2xl border border-border bg-muted p-4">
                   <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.privilegeAndSecurity') }}</h3>
                   <p class="mt-2 text-sm text-muted-foreground">{{ privilegeText(selectedServer) }}</p>
-                  <Button class="mt-3 w-full" :disabled="!canInstallUfw(selectedServer)" :loading="pendingOperation === 'ufw'" @click="confirmInstallUfw(selectedServer)">
-                    <ShieldPlus />{{ t('serversPage.installUfw') }}
-                  </Button>
                 </section>
               </aside>
             </div>
@@ -1134,9 +1121,9 @@ onBeforeUnmount(() => {
 
     <ConfirmDialog
       :open="Boolean(confirmOperation)"
-      :title="confirmOperation === 'restart' ? t('serversPage.confirmRestartTitle') : confirmOperation === 'ufw' ? t('serversPage.confirmUfwTitle') : t('serversPage.confirmTrustHostKeyTitle')"
-      :description="confirmTarget ? (confirmOperation === 'restart' ? t('serversPage.confirmRestartDescription', { name: confirmTarget.name }) : confirmOperation === 'ufw' ? t('serversPage.confirmUfwDescription', { name: confirmTarget.name }) : t('serversPage.confirmTrustHostKeyDescription', { name: confirmTarget.name })) : ''"
-      :impact="confirmOperation === 'restart' ? t('serversPage.confirmRestartImpact') : confirmOperation === 'ufw' ? t('serversPage.confirmUfwImpact') : t('serversPage.confirmTrustHostKeyImpact')"
+      :title="confirmOperation === 'restart' ? t('serversPage.confirmRestartTitle') : t('serversPage.confirmTrustHostKeyTitle')"
+      :description="confirmTarget ? (confirmOperation === 'restart' ? t('serversPage.confirmRestartDescription', { name: confirmTarget.name }) : t('serversPage.confirmTrustHostKeyDescription', { name: confirmTarget.name })) : ''"
+      :impact="confirmOperation === 'restart' ? t('serversPage.confirmRestartImpact') : t('serversPage.confirmTrustHostKeyImpact')"
       tone="danger"
       :loading="Boolean(pendingOperation)"
       :confirm-label="t('common.confirm')"

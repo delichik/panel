@@ -14,12 +14,6 @@ export const securityApi = {
   deleteUfwRule(serverId: string, number: number) {
     return apiClient.delete<UfwState>(`${serverPath(serverId)}/ufw/rules/${encodeURIComponent(String(number))}`);
   },
-  enableUfw(serverId: string) {
-    return apiClient.post<OperationAccepted>(`${serverPath(serverId)}/ufw/enable`);
-  },
-  installUfw(serverId: string) {
-    return apiClient.post<OperationAccepted>(`${serverPath(serverId)}/ufw/install`);
-  },
   async fail2BanState(serverId: string, options?: ApiRequestOptions) {
     return normalizeFail2BanState(await apiClient.get<Fail2BanState | null>(`${serverPath(serverId)}/fail2ban`, options));
   },

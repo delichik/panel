@@ -17,11 +17,6 @@ export function canRunPrivilegedOperation(server: ServerDto | null) {
   return Boolean(server?.reachable && (server.privilege?.privileged || server.sudo?.passwordless));
 }
 
-export function canInstallUfw(server: ServerDto | null) {
-  if (!server || !canRunPrivilegedOperation(server)) return false;
-  return server.traits?.['sys.ufw_supported'] === 'true' && server.traits?.['sys.ufw_installed'] !== 'true';
-}
-
 /** 节点侧 Tailscale 观测状态取值；来源固定为 traits 的 `tailscale.*`。 */
 export const tailscaleStatuses = ['disabled', 'pending', 'installing', 'running', 'degraded', 'unsupported', 'error'] as const;
 

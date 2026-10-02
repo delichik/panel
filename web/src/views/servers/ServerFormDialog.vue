@@ -330,6 +330,10 @@ async function saveQuickCredential() {
         </div>
       </section>
 
+      <div v-if="!editing" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">
+        {{ t('serversPage.firewallTakeoverNotice') }}
+      </div>
+
       <section class="grid gap-3 border-t border-border pt-3">
         <button type="button" class="flex w-full items-center justify-between gap-2 rounded-xl px-1 py-1 text-left text-sm font-semibold text-foreground hover:bg-accent" :aria-expanded="advancedOpen" @click="advancedOpen = !advancedOpen">
           {{ t('serversPage.sectionAdvanced') }}

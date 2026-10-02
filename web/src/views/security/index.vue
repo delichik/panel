@@ -50,7 +50,7 @@ const yamlDraft = ref('');
 const jailDrafts = ref<Fail2BanJail[]>([]);
 const ruleDialog = ref(false);
 const confirmDialog = ref(false);
-const confirmKind = ref<'enable-ufw' | 'install-ufw' | 'delete-rule' | 'enable-fail2ban' | 'release-fail2ban' | ''>('');
+const confirmKind = ref<'delete-rule' | 'enable-fail2ban' | 'release-fail2ban' | ''>('');
 const targetRule = ref<UfwRule | null>(null);
 const takeoverConfirmed = ref(false);
 const yamlDiscardConfirm = ref(false);
@@ -225,14 +225,6 @@ async function confirmAction() {
   if (!server) return;
   const kind = confirmKind.value;
   await run(kind || 'confirm', async () => {
-    if (kind === 'enable-ufw') {
-      const accepted = await securityApi.enableUfw(server.id);
-      notifySuccess(t('securityPage.taskAccepted', { taskId: accepted.taskId }), accepted);
-    }
-    if (kind === 'install-ufw') {
-      const accepted = await securityApi.installUfw(server.id);
-      notifySuccess(t('securityPage.taskAccepted', { taskId: accepted.taskId }), accepted);
-    }
     if (kind === 'delete-rule' && targetRule.value) {
       ufwState.value = await securityApi.deleteUfwRule(server.id, targetRule.value.number);
       notifySuccess(t('securityPage.ruleDeleted'), ufwState.value);
@@ -297,8 +289,7 @@ async function run(operation: string, action: () => Promise<void>) {
 function confirmTitle() {
   if (confirmKind.value === 'delete-rule') return t('securityPage.deleteRule');
   if (confirmKind.value === 'release-fail2ban') return t('securityPage.releaseFail2Ban');
-  if (confirmKind.value === 'enable-fail2ban') return t('securityPage.enableFail2Ban');
-  return t('securityPage.enableFirewall');
+  return t('securityPage.enableFail2Ban');
 }
 
 function isAbortError(error: unknown) {
@@ -422,15 +413,12 @@ onBeforeUnmount(() => {
                     <div><dt>{{ t('securityPage.installed') }}</dt><dd>{{ ufwState?.installed ? t('state.healthy') : t('state.warning') }}</dd></div>
                     <div><dt>{{ t('securityPage.active') }}</dt><dd>{{ ufwState?.active ? t('state.healthy') : t('state.warning') }}</dd></div>
                   </dl>
+                  <p class="m-0 mt-3 text-xs text-muted-foreground">{{ t('securityPage.managedAutomatically') }}</p>
                 </section>
                 <section class="rounded-2xl border border-warning-border bg-warning-bg p-4 text-sm text-warning">
                   <div class="flex gap-2">
                     <AlertTriangle class="mt-0.5 size-4 shrink-0" />
                     <p class="m-0">{{ t('securityPage.ufwConfirmHint') }}</p>
-                  </div>
-                  <div class="mt-3 grid gap-2">
-                    <Button :disabled="!ufwState?.supported || ufwState?.active" :loading="pending === 'enable-ufw'" @click="ask('enable-ufw')"><ShieldCheck />{{ t('securityPage.enableFirewall') }}</Button>
-                    <Button :disabled="!ufwState?.supported || ufwState?.installed" :loading="pending === 'install-ufw'" @click="ask('install-ufw')"><Shield />{{ t('securityPage.installFirewall') }}</Button>
                   </div>
                 </section>
               </aside>

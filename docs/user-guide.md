@@ -176,7 +176,9 @@ Use **Resources → Packages** to refresh APT updates and run selected or full u
 
 ### Firewall
 
-Use **Security → Firewall** to install or manage UFW. When enabling UFW, Seamark preserves the configured SSH port first. Review every rule before applying it to a remote server.
+Use **Security → Firewall** to read UFW state and manage allow rules. **Installing and enabling UFW is no longer a manual action**: Seamark takes over the server firewall (UFW only) when it deploys the Agent — installing it when missing, allowing the SSH port, the Agent port and 80/443 when the reverse proxy facility is used, and enabling the default-deny policy only after the SSH port is allowed. Review every rule before applying it to a remote server.
+
+Two things to know: **application ports that are not declared as "open firewall" in the Panel will be blocked** (declare them per application through its firewall rule option), and **NAT servers are not taken over** because their public ports are mapped by the provider.
 
 ### Docker resources
 

@@ -43,7 +43,7 @@
 
 ## 3. HTTP API 基线
 
-当前逐项清单记录 177 个 `/api` method/path 组合，路由清单 SHA-256 为 `da1c54c97b86e8f46b6b157812b17190672156ff280cf1002200c4742dc0364d`。本次新增两条 Tailscale 收敛入口，并修正此前清单计数（`servers` 少计 5 条 NAT 端口子资源，来源表与逐项清单不一致）。来源计数如下：
+当前逐项清单记录 175 个 `/api` method/path 组合，路由清单 SHA-256 为 `f57a6287ff235634949f6f5fd63a3455bfaaa088ce5ea08562bfeb7a886eda44`。上一轮新增两条 Tailscale 收敛入口，并修正此前清单计数（`servers` 少计 5 条 NAT 端口子资源，来源表与逐项清单不一致）；本轮删除了两条手动防火墙入口（`POST /servers/{id}/ufw/install`、`POST /servers/{id}/ufw/enable`，见 `AGT-FW-001..006` 与已废弃的 `UFW-API-005`）。来源计数如下：
 
 | 注册来源 | 数量 | 验收领域 |
 | --- | ---: | --- |
@@ -72,13 +72,15 @@
 - 概览卡片数据 `GET /api/v1/overview/cards/{cardId}/data` 响应增加 `bucketSeconds`，指标卡只物化对应 kind 的序列并按 range/服务器数量服务端降采样，`since` 改为按桶向下对齐重算；前端改为数据落地时一次性派生视图并按桶后缀替换。不新增 method/path、表或后台任务；对应 `OBS-OVW-005/006/007/008`。
 - 既有 GET/POST `/api/v1/debug/clear-runtime-data` 响应补齐 `runId/stage/failedStage/startedAt/finishedAt`，明确 `cleared` 与终态、并发请求语义；清理期间业务写入返回 `runtime_data_maintenance`，不增加接口；对应 `DIAG-CLR-001/005/006/007`。
 
-- `COV-API-002`：维护导出/恢复的独立最小应用路由不计入上述主 Panel 177 条，但必须由备份恢复文档覆盖其认证、状态、密码、下载、重试、退出和清除 pending 操作。
+- `COV-API-002`：维护导出/恢复的独立最小应用路由不计入上述主 Panel 175 条，但必须由备份恢复文档覆盖其认证、状态、密码、下载、重试、退出和清除 pending 操作。
 
-- `COV-API-003`：177 个 method/path 的逐项映射见 [主 Panel API 路由逐项清单](api-route-inventory.md)；路由清单测试与该表必须同步变化。
+- `COV-API-003`：175 个 method/path 的逐项映射见 [主 Panel API 路由逐项清单](api-route-inventory.md)；路由清单测试与该表必须同步变化。
 
 - 新增 NAT 服务器端口子资源 `GET/POST /servers/{id}/nat-ports`、`PUT/DELETE /servers/{id}/nat-ports/{mappingID}`，以及 `servers.kind`、`servers.agent_public_port`、`nat_port_mappings`；对应 `SRV-NAT-001..005`。
 
 - 新增两条 Tailscale 收敛入口：`POST /api/v1/settings/tailscale/apply`（重新下发容器期望态并请求 panel-init 收敛，202 加当前容器实际态，未经 panel-init 监管时 `tailscale_container_unavailable`）与 `POST /api/v1/servers/{id}/tailscale/apply`（创建或复用 `server_tailscale_apply` 任务，202 加 taskId）。`GET/PUT /api/v1/settings/runtime` 增加 `tailscale` 分组（只写认证密钥、ACL 标签、容器实际态）；`servers` 由 ORM 增列迁移补齐 `tailscale_enabled`、`tailscale_prefer_agent`、`tailscale_prefer_interconnect` 三列，默认 0；对应 `TS-SET-001..005`、`TS-TASK-001`。
+
+- 防火墙（UFW）改为 Agent 部署的自动前提：新增 `internal/modules/servers/agent_firewall.go`（部署前安装、放行 SSH/Agent/反向代理端口并启用；NAT 服务器豁免；发行版不支持时以 `agent_firewall_unsupported` 拒绝），`runDeployAgent` 在完整安装与仅重启两条分支上都先执行该步骤；**删除** `POST /servers/{id}/ufw/install` 与 `POST /servers/{id}/ufw/enable` 两个路由、对应 handler、`InstallUFW`/`runInstallUFW`/`EnableUFW`/`runEnableUFW`、`server_ufw_install`/`server_ufw_enable` 任务类型，以及 `agent_bundle.go` 中硬编码 9786 的 UFW 行；前端删除安装/接管入口并新增新建服务器时的非阻断接管警示。主 Panel `method/path` 计数 177 → 175（清单与哈希同步）；无数据库结构变更、无新增表、无新增后台任务；对应 `AGT-FW-001..006`、已废弃的 `UFW-API-005`、`UFW-API-006/007`、`SRV-NAT-003/005`、`UI-SRV-010/015`、`UI-SEC-002/004`、`SRV-EVD-007`。
 
 - 新增 GET `/facility-apps/reverse-proxy/diagnostics?serverId=`，配置 DTO 增加逐节点 deployments；对应 `FAC-RP-012/013`、`UI-FAC-012`。失败运行日志复用 errorDetail，按 ID/时间范围限量读取并降级，不新增 Agent RPC 字段、表或后台任务；对应 `ORCH-CTRL-008`。
 
