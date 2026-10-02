@@ -2083,14 +2083,6 @@ func (f *serverFakeAgentClient) PackageUpdates(context.Context, string) ([]linux
 func (f *serverFakeAgentClient) UpgradePackages(context.Context, string, agentcontract.PackageUpgradeRequest) (agentcontract.CommandResponse, error) {
 	return agentcontract.CommandResponse{}, f.err
 }
-func (f *serverFakeAgentClient) UFWInstall(_ context.Context, url string, _ agentcontract.UFWInstallRequest) (remoteops.UFWStatus, error) {
-	f.ufwURL = url
-	return f.ufw, f.err
-}
-func (f *serverFakeAgentClient) UFWEnable(_ context.Context, url string, _ agentcontract.UFWEnableRequest) (remoteops.UFWStatus, error) {
-	f.ufwURL = url
-	return f.ufw, f.err
-}
 func (f *serverFakeAgentClient) UFWAllow(_ context.Context, url string, req agentcontract.UFWAllowRequest) (remoteops.UFWStatus, error) {
 	f.ufwURL = url
 	f.allowedRule = req.Rule

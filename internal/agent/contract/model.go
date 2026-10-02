@@ -81,11 +81,15 @@ type RestartReadinessProgressClient interface {
 	PrepareRestartWithProgress(ctx context.Context, url string, onState func(string)) error
 }
 
+// MaintenanceClient is the panel's view of the agent maintenance RPCs. It is
+// deliberately narrower than the protobuf surface: the agent still serves
+// UFWInstall and UFWEnable (the generated bindings require them), but the panel
+// stopped calling them when installing and enabling the firewall became an
+// automatic part of agent deployment over SSH -- a first install has no agent to
+// call yet.
 type MaintenanceClient interface {
 	PackageUpdates(ctx context.Context, url string) ([]linux.PackageUpdate, error)
 	UpgradePackages(ctx context.Context, url string, req PackageUpgradeRequest) (CommandResponse, error)
-	UFWInstall(ctx context.Context, url string, req UFWInstallRequest) (remoteops.UFWStatus, error)
-	UFWEnable(ctx context.Context, url string, req UFWEnableRequest) (remoteops.UFWStatus, error)
 	UFWAllow(ctx context.Context, url string, req UFWAllowRequest) (remoteops.UFWStatus, error)
 	UFWDelete(ctx context.Context, url string, req UFWDeleteRequest) (remoteops.UFWStatus, error)
 	Fail2BanStatus(ctx context.Context, url string) (Fail2BanStatusResponse, error)

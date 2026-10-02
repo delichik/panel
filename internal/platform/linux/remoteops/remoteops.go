@@ -234,13 +234,6 @@ func MustUFWAllowScript(rules ...UFWRule) string {
 	return script
 }
 
-func UFWDeleteRuleScript(number int) (string, error) {
-	if number <= 0 {
-		return "", panelerr.Validation("ufw_rule_number_invalid", "UFW rule number must be positive")
-	}
-	return "set -eu\nufw --force delete " + strconv.Itoa(number), nil
-}
-
 // UFWSafeDeleteRuleScript re-reads the numbered rule immediately before
 // deletion. It fails closed if the target changed, cannot be parsed, belongs
 // to an application, or resolves to the server SSH port.

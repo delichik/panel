@@ -44,7 +44,7 @@ func newTestService(t *testing.T) *Service {
 		{Type: "metrics_collect", Hidden: true, AllowRunNow: true, AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
 		{Type: "server_connectivity_test", Hidden: true, AllowRunNow: true, AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
 		{Type: "server_info_collect", AllowRunNow: true, AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
-		{Type: "server_ufw_install", AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
+		{Type: "task_fixture_retryable", AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
 		{Type: "server_restart", AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
 		{Type: "certificate_issue", AllowRunNow: true, AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
 	} {
@@ -431,7 +431,7 @@ func TestMissingExecutionPreservesUncertainResult(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
-	tracked, err := svc.Create(ctx, CreateInput{Type: "server_ufw_install", Summary: "installing firewall", Status: StatusRunning})
+	tracked, err := svc.Create(ctx, CreateInput{Type: "task_fixture_retryable", Summary: "installing firewall", Status: StatusRunning})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -601,7 +601,7 @@ func TestExpireStaleQueuedMarksOnlySelectedOldQueuedTasksFailed(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
-	oldWorker, err := svc.Create(ctx, CreateInput{Type: "server_ufw_install", Summary: "installing firewall"})
+	oldWorker, err := svc.Create(ctx, CreateInput{Type: "task_fixture_retryable", Summary: "installing firewall"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -620,7 +620,7 @@ func TestExpireStaleQueuedMarksOnlySelectedOldQueuedTasksFailed(t *testing.T) {
 		}
 	}
 
-	expired, err := svc.ExpireStaleQueued(ctx, now, 10*time.Minute, []string{"server_ufw_install", "server_restart"})
+	expired, err := svc.ExpireStaleQueued(ctx, now, 10*time.Minute, []string{"task_fixture_retryable", "server_restart"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -657,11 +657,11 @@ func TestExpireStaleQueuedKeepsTasksWaitingBehindActiveHead(t *testing.T) {
 	// 队首任务（更早创建、同一并发键）仍在活跃，其后的排队任务即使 age 超过
 	// maxAge 也不能被当作孤儿淘汰——否则一次耗时超过 StaleQueuedAfter 的部署
 	// 会杀掉所有合法排队的后续任务。
-	head, err := svc.Create(ctx, CreateInput{Type: "server_ufw_install", Summary: "installing firewall", ConcurrencyKey: "k1"})
+	head, err := svc.Create(ctx, CreateInput{Type: "task_fixture_retryable", Summary: "installing firewall", ConcurrencyKey: "k1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	waiter, err := svc.Create(ctx, CreateInput{Type: "server_ufw_install", Summary: "waiting behind head", ConcurrencyKey: "k1"})
+	waiter, err := svc.Create(ctx, CreateInput{Type: "task_fixture_retryable", Summary: "waiting behind head", ConcurrencyKey: "k1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -680,7 +680,7 @@ func TestExpireStaleQueuedKeepsTasksWaitingBehindActiveHead(t *testing.T) {
 		}
 	}
 
-	expired, err := svc.ExpireStaleQueued(ctx, now, 5*time.Minute, []string{"server_ufw_install", "server_restart"})
+	expired, err := svc.ExpireStaleQueued(ctx, now, 5*time.Minute, []string{"task_fixture_retryable", "server_restart"})
 	if err != nil {
 		t.Fatal(err)
 	}

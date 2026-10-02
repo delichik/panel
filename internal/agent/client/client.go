@@ -248,24 +248,6 @@ func (c *GRPCClient) PrepareRestartWithProgress(ctx context.Context, endpoint st
 	}
 }
 
-func (c *GRPCClient) UFWInstall(ctx context.Context, endpoint string, req agentcontract.UFWInstallRequest) (remoteops.UFWStatus, error) {
-	rules := make([]*agentpb.UFWRule, 0, len(req.Rules))
-	for _, rule := range req.Rules {
-		rules = append(rules, agentrpc.PBUFWRule(rule))
-	}
-	out, err := callRPC(c, ctx, endpoint, maintenanceTimeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.UFWStatusResponse, error) {
-		return client.UFWInstall(ctx, &agentpb.UFWInstallRequest{Rules: rules})
-	})
-	return agentrpc.GoUFWStatus(out), err
-}
-
-func (c *GRPCClient) UFWEnable(ctx context.Context, endpoint string, req agentcontract.UFWEnableRequest) (remoteops.UFWStatus, error) {
-	out, err := callRPC(c, ctx, endpoint, maintenanceTimeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.UFWStatusResponse, error) {
-		return client.UFWEnable(ctx, &agentpb.UFWEnableRequest{SshPort: int32(req.SSHPort), AgentPort: int32(req.AgentPort)})
-	})
-	return agentrpc.GoUFWStatus(out), err
-}
-
 func (c *GRPCClient) UFWAllow(ctx context.Context, endpoint string, req agentcontract.UFWAllowRequest) (remoteops.UFWStatus, error) {
 	out, err := callRPC(c, ctx, endpoint, maintenanceTimeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.UFWStatusResponse, error) {
 		return client.UFWAllow(ctx, agentrpc.PBUFWAllowRequest(req))
