@@ -469,7 +469,6 @@ func TestInitialCollectionPersistsRootPrivilege(t *testing.T) {
 	}
 }
 
-
 func TestRestartCreatesRunningTaskAndSchedulesReboot(t *testing.T) {
 	blockRestart := make(chan struct{})
 	exec := &restartFakeExec{blockRestart: blockRestart}

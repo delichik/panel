@@ -155,7 +155,6 @@ export function connectionSignature(input: ServerProbeInput) {
 export function validateServerInput(input: ServerSaveInput) {
   const errors: Partial<Record<keyof ServerSaveInput, string>> = {};
   if (!input.name.trim()) errors.name = 'serversPage.validationName';
-  if (input.kind !== 'normal' && input.kind !== 'nat') errors.kind = 'serversPage.validationKind';
   if (!input.ipv4.trim() && !input.ipv6.trim()) errors.ipv4 = 'serversPage.validationAddressRequired';
   if (input.ipv4.trim() && !isIPv4(input.ipv4)) errors.ipv4 = 'serversPage.validationIpv4';
   if (input.ipv6.trim() && !isIPv6(input.ipv6)) errors.ipv6 = 'serversPage.validationIpv6';

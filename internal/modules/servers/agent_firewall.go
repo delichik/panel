@@ -18,10 +18,6 @@ import (
 // ports on is worse than not deploying. That deliberately narrows the supported
 // distributions to the ones with a UFW-capable adapter (Debian, Ubuntu), which
 // is already the range of every other package-managing feature.
-//
-// NAT servers are exempt. Their public ports are mapped by the provider and
-// SRV-NAT-005 forbids the Panel from opening them, so enabling a default-deny
-// firewall there could cut the server off with nothing able to reopen it.
 
 // agentFirewallRules returns the ports that must be open before the agent can be
 // reached from the Panel.
@@ -71,10 +67,6 @@ func agentFirewallScript(adapter linux.DistroAdapter, srv Server, needsInstall, 
 // agent left exactly as it was, so a node with a working agent never loses it
 // because the firewall step could not complete.
 func (s *Service) ensureAgentFirewall(ctx context.Context, taskID string, srv Server, runner remoteops.Runner) error {
-	if srv.Kind == ServerKindNAT {
-		_ = s.tasks.AppendLog(ctx, taskID, "system", "NAT server: firewall management is exempt")
-		return nil
-	}
 	adapter, ok := linux.AdapterFor(srv.OS)
 	if !ok && strings.TrimSpace(srv.OS.ID) == "" {
 		// The distribution has not been recorded yet, which happens when a manual

@@ -24,12 +24,12 @@
 - `SRV-SAVE-005`：创建记录成功且 SSH executor 可用时必须创建并立即启动 `server_info_collect` bootstrap 任务，响应携带 `initialTaskId`；任务创建失败必须保留刚建记录并标记不可达/失败态，不得删除用户数据。
 - `SRV-SAVE-006`：首次 bootstrap 只经 SSH探测发行版、结构化架构和非交互特权；初始信息采集失败必须把任务置失败、标记服务器不可达并记录具体错误，记录保留供用户重试、编辑或自行删除；之后 Agent 部署或完整信息刷新失败同样不得删除服务器。
 - `SRV-SAVE-007`：更新必须先保存资源；随后的连通性探测失败只把节点标记不可达并记录错误，不得回滚更新或阻断 DNS 同步触发。
-- `SRV-SAVE-008`：更新改变连接 host 且已配置 Agent 时，必须更新该服务器当前有效的 Agent endpoint、标记 incompatible、清除节点证书指纹/有效期并要求重部署。普通服务器固定为 `https://host:9786`；NAT 服务器使用 `SRV-NAT-002` 配置的对外端口。
-- `SRV-NAT-001`：服务器 `kind` 只允许 `normal|nat`，缺省为 `normal`；创建、更新、详情和列表摘要都必须返回该字段。非法 kind 返回 `server_kind_invalid`，不得保存。
-- `SRV-NAT-002`：`agentPublicPort` 只对 NAT 服务器生效，必须位于 1..65535；普通服务器或非法值保存为 0。NAT Agent 仍在服务器内部监听 9786，但 Panel 生成和校验的 Agent URL 必须使用 `https://host:<agentPublicPort>`。未配置时沿用 9786。
-- `SRV-NAT-003`：NAT 服务器不得成为反向代理全局网关、应用 origin 或 AnyAccess relay；保存网关或校验应用路由时分别返回 `reverse_proxy_server_nat_unsupported`、`reverse_proxy_origin_server_nat_unsupported`。服务器从普通切换为 NAT 时必须移除 `agent.reverse_proxy.enabled`，后续协调不得继续放行 80/443。NAT 服务器同样豁免 `AGT-FW-001` 的防火墙自动接管。
-- `SRV-NAT-004`：`GET/POST /servers/{id}/nat-ports` 与 `PUT/DELETE /servers/{id}/nat-ports/{mappingID}` 只允许 NAT 服务器；普通服务器返回 `nat_port_server_not_nat`。映射记录宿主端口、供应商开放的公网端口、协议、应用、标签和备注；两个端口必须位于 1..65535，同一服务器的宿主端口和公网端口各自唯一，冲突返回 `nat_port_host_conflict` 或 `nat_port_public_conflict`。
-- `SRV-NAT-005`：NAT 端口读取必须同时返回只读“需开放端口”清单，至少包含 SSH 端口、有效 Agent 对外端口和全部应用公网端口。Panel 不得探测、申请或实际开放这些端口；删除服务器时映射必须随外键级联删除。该禁止是 `AGT-FW-004` 中 NAT 豁免防火墙自动接管的直接理由：在公网端口由服务商映射的节点上启用默认拒绝策略，可能切断服务器且无人能重新打开。
+- `SRV-SAVE-008`：更新改变连接 host 且已配置 Agent 时，必须更新该服务器当前有效的 Agent endpoint、标记 incompatible、清除节点证书指纹/有效期并要求重部署。Agent endpoint 固定为 `https://host:9786`。
+- `SRV-NAT-001`：**已废弃**（NAT 服务器能力已整体移除，无替代项）。服务器不再有 `kind` 字段，也不再有服务器类型选择；`server_kind_invalid` 错误码已删除。
+- `SRV-NAT-002`：**已废弃**。`agentPublicPort` 已移除，Agent endpoint 固定为 `https://host:9786`。
+- `SRV-NAT-003`：**已废弃**。反向代理不再需要拒绝 NAT 网关/源站；`reverse_proxy_server_nat_unsupported` 与 `reverse_proxy_origin_server_nat_unsupported` 错误码、以及切换类型时剥离 `agent.reverse_proxy.enabled` 的逻辑均已删除。
+- `SRV-NAT-004`：**已废弃**。`GET/POST /servers/{id}/nat-ports` 与 `PUT/DELETE /servers/{id}/nat-ports/{mappingID}` 已删除，`nat_port_mappings` 表（含两个复合唯一索引与外键级联）与 `nat_port_*` 错误码一并删除。
+- `SRV-NAT-005`：**已废弃**。面板不再记录任何 NAT 端口映射，因此也不存在“需开放端口”清单。
 - `SRV-SAVE-009`：保存 IP 变化或删除服务器时必须异步触发引用该服务器的入口代理 DNS 同步；同步失败不回滚本地保存，且必须可由任务状态诊断。
 - `SRV-DEL-001`：删除服务器是纯本地控制面操作，不连接目标机；目标机失联不得阻止删除。
 - `SRV-DEL-002`：删除必须取消该服务器 queued、scheduled、failed_retryable 和可取消的 running 任务；已取消任务不得被迟到 worker 覆盖终态，正在执行的不可取消软件包升级不得被取消。
@@ -86,7 +86,6 @@
 - `AGT-FW-001`：防火墙是 Agent 部署的**前提**，必须在触碰节点上任何东西之前执行（签发节点证书之后、二进制投递之前），且**完整安装与仅重启两条分支都要执行**，使本次改动前已加入的存量服务器在下次部署时收敛。任一步失败必须让部署任务失败，且**不得改动已在运行的 Agent**——节点上已有可用 Agent 时，防火墙步骤失败只能让它保持原样。
 - `AGT-FW-002`：Panel 只通过 UFW 管理防火墙。发行版没有 UFW 适配器时必须在部署前以 `agent_firewall_unsupported` 失败：`SRV-SAVE-006` 的受支持发行版范围因此收窄为 Debian/Ubuntu，Agent 不再部署到其他发行版。发行版记录为空（首次信息采集尚未完成就手动部署）时必须先 SSH 探测再判定，不得因空记录直接拒绝。
 - `AGT-FW-003`：放行的基础端口集合固定为 SSH 端口（`normalizedTCPPort(server.Port)`）、Agent 内网监听端口（`agentControlPort`）与反向代理 trait 为真时的 80/443；**基础集合内不得包含应用端口**。应用端口由 Agent 在 `RuntimeReconcile` 中按应用 spec 的 `openFirewall` 声明自行放行（`panel:application:<id>` 规则），UFW 处于 disabled 时规则仍保留，因此先前写入的应用规则会在本次启用时一并生效。声明了宿主端口但 `openFirewall=false` 的应用会被阻断，必须在添加服务器的提示中写明。
-- `AGT-FW-004`：**NAT 服务器豁免**：不安装、不放行、不启用，也不因防火墙失败而阻断部署。理由：其公网端口由服务商映射，`SRV-NAT-005` 禁止 Panel 探测、申请或实际开放这些端口，在 NAT 节点启用默认拒绝策略可能切断服务器且无人能重新打开。
 - `AGT-FW-005`：只有一次 SSH 状态探测确认 UFW 已安装且已启用时才允许跳过远端变更，此时不得下发任何 `ufw --force ...` 或 apt 命令。需要启用时，`ufw --force enable` 之前必须先放行 SSH 端口与 Agent 端口；`UFWEnableScript` 是唯一允许触碰 SSH 端口的实现，该顺序必须有测试断言。防火墙步骤经 **SSH** 而非 Agent RPC 执行：首次安装时 Agent 尚不存在，且「恢复 Agent 自身」是 `AGT-STATE-002` 允许回退 SSH 的唯一例外。
 - `AGT-FW-006`：安装步骤必须复用发行版适配器的固定 apt 参数（`DEBIAN_FRONTEND=noninteractive`、`--force-confdef`、`--force-confold`），并整体受 `ufwInstallTimeout` 约束；重复 `ufw allow` 必须幂等，步骤失败必须可由任务日志中的端口清单与远端输出定位。
 - `AGT-RPT-001`：Panel 必须主动拨号打开 mTLS report stream，节点不得保存 Panel callback地址；stream状态仅写 `agent.report.*`，不得降级普通 Agent status。**运行时不变量**：已安装的 Agent 不得假设 Panel 可达，也不得主动连接 Panel。安装期例外仅限一次性的 `AGT-DL-001` 下载：目标机可以用命令参数里的 URL 拉取自己的二进制，连不上时必须按 `AGT-DL-005` 回退 SSH 上传，且不得因此在本机持久化任何 Panel 地址。
@@ -160,11 +159,11 @@
 
 ## 10. 验收证据
 
-- `SRV-EVD-001`：路由清单必须覆盖 credentials CRUD、servers CRUD/probe/test/trust/restart/agent、nat-ports、tailscale apply、UFW（仅 `GET /ufw` 与规则增删）、fail2ban及packages全部路径，且与前端 typed client一致。
+- `SRV-EVD-001`：路由清单必须覆盖 credentials CRUD、servers CRUD/probe/test/trust/restart/agent、tailscale apply、UFW（仅 `GET /ufw` 与规则增删）、fail2ban及packages全部路径，且与前端 typed client一致。
 - `SRV-EVD-002`：测试必须证明列表不选择秘密/大字段、编辑空secret保留、主机key变化失败关闭、服务器删除事务清引用、删除时清理节点证书资产，以及删除不依赖远端可达。
 - `SRV-EVD-003`：任务测试必须证明同步executor才结束任务、相同资源重复触发的复用边界、自动部署退避/封禁/手动解封和不可取消升级语义。
 - `SRV-EVD-004`：Agent替身必须验证生产能力不回退SSH、版本/Docker/证书状态转换、report stream空快照保护和失败不致断流；单元测试不得依赖真实SSH、apt、UFW或Docker。
-- `SRV-EVD-007`：`AGT-FW-001..006` 必须各有单测：端口集合派生（SSH/Agent/反向代理 trait）、脚本顺序（安装 → 放行 → 启用，且 SSH 先于启用）、已安装且已启用时不下发任何变更、NAT 豁免、不支持发行版拒绝、以及「前提失败时不得上传二进制」的部署顺序断言。
+- `SRV-EVD-007`：`AGT-FW-001..006` 必须各有单测：端口集合派生（SSH/Agent/反向代理 trait）、脚本顺序（安装 → 放行 → 启用，且 SSH 先于启用）、已安装且已启用时不下发任何变更、不支持发行版拒绝、以及「前提失败时不得上传二进制」的部署顺序断言。
 - `SRV-EVD-005`：Agent 下载端点必须有独立于 `/api` 路由清单的**公开路由清单断言**（literal pattern 集合 + 哈希），且断言必须验证产物名是注册 pattern 的字面量、路由不在 `/api` 之下。端点测试必须覆盖未知版本/平台、`..` 与越权路径不服务、缓存头与 `ETag`、`Range` 返回 206、未命中不设置 `Set-Cookie`。
 - `SRV-EVD-006`：Agent 投递测试必须覆盖：HTTP 下载成功时不上传；连不上、HTTP 4xx/5xx 时回退 SSH 上传且上传的是 `.gz`、带传输超时；传输中断时直接失败且不上传；`agent.downloadBaseUrl` 为空时只走 SSH 上传。下载脚本测试必须断言 TLS 开关、各分类退出码与回退判定表，并且**按脚本实际参数断言 `AGT-DL-006` 的最坏耗时**（轮数 × 单轮 + 延迟之和 < Panel 侧上限），同时断言脚本**不含** `--retry`、包含续传开关 `-C -` / `-c` 与拒绝 Range 的处理分支。`AGT-DL-012` 必须单独覆盖四种情形：缺 fetcher 且安装成功 → 重试成功且不上传；安装成功但重试仍缺 fetcher → 回退；安装失败 → 回退；发行版不受支持 → 完全不调用安装且回退。fetcher 安装脚本测试必须断言 apt 参数与非交互设置，并断言其目标机侧最坏耗时严格小于 Panel 侧上限。`AGT-DEP-001` 的 `running` 冲突与 `AGT-DEP-006` 的有界等待必须各有单测。
 - `SRV-EVD-007`：Tailscale 证据必须覆盖：三列意图的保存/读取与“未启用强制清空偏好”、关闭开关清除观测、旧 Agent 缺省上报不清空观测、`server_tailscale_apply` 的创建/复用与缺能力失败、节点证书 SAN 在开启/未开启偏好时的差异、地址解析四条件与互联两端条件；单元测试使用临时目录与替身控制面，不依赖真实 tailnet、真实 `tailscaled` 或宿主 `tun` 模块。详见 `TS-EVD-002`。

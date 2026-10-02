@@ -513,7 +513,7 @@
 - **前置**：网关节点与源站节点都启用 Tailscale 且都已上报有效 tailnet 地址，其中至少一端要求「节点互联优先使用 Tailscale」；域名已保存且源站来自网关集合。
 - **动作**：渲染每节点 Nginx runtime spec 时计算 upstream 地址。
 - **结果**：条件全部满足时上游使用源站的 tailnet 地址；任一条件不满足时保持规范地址。该地址属于实例期望 spec 的一部分，地址变化因此按 `FAC-RP-009` 判定 reload 或 recreate。
-- **失败**：只有一端满足条件时不得改写上游；不得把 tailnet 地址用于 DNS 记录或任何对外发布地址（DNS 联动仍按 `FAC-RP-011` 使用规范地址）；NAT 服务器仍不得成为网关或源站（`SRV-NAT-003`）。
+- **失败**：只有一端满足条件时不得改写上游；不得把 tailnet 地址用于 DNS 记录或任何对外发布地址（DNS 联动仍按 `FAC-RP-011` 使用规范地址）。
 - **不变量**：地址解析是纯计算，不写设施配置、不改变路由归属；关闭开关后渲染结果必须与引入 Tailscale 之前完全一致。
 - **验证**：`TestReverseProxyUpstreamUsesTailnetAddressOnlyWhenBothQualify`；`FAC-RP-008`、`FAC-RP-009` 非回归用例；地址与偏好变化后的重同步见 `TS-ADDR-009`。
 

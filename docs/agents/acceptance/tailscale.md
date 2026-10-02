@@ -327,7 +327,7 @@
 - **前置条件**：网关节点与源站节点满足 `TS-ADDR-005`。
 - **成功结果**：满足条件时上游使用源站的 tailnet 地址；否则保持规范地址，渲染结果与既有 reload/recreate 判定一致。
 - **失败结果**：不得只在网关一侧满足条件时改写上游，也不得把 tailnet 地址用于 DNS 记录或对外发布地址。
-- **边界条件**：源站不属于该域名的 origin 时不受影响；NAT 服务器仍受 `SRV-NAT-003` 限制，不得成为网关或源站；地址变化后按 `TS-ADDR-009` 重新渲染。
+- **边界条件**：源站不属于该域名的 origin 时不受影响；地址变化后按 `TS-ADDR-009` 重新渲染。
 - **验证点**：`interconnect_test.go` 的 `TestReverseProxyUpstreamUsesTailnetAddressOnlyWhenBothQualify`；`FAC-RP-008`、`FAC-RP-009` 非回归用例。
 
 ### TS-ADDR-009 地址或意图变化时主动重同步
@@ -339,14 +339,14 @@
 - **边界条件**：无设施配置时重同步为 no-op；输入服务器集合为空时不做任何事；短时间内多次变化允许合并，但最终状态必须与最后一次观测一致；重启后由后续观测或周期检查恢复。
 - **验证点**：`internal/modules/facilityapps/interconnect_sync_test.go` 的 `TestSyncInterconnectServersResyncsStorageExports` 与“无关节点被跳过”用例。
 
-### TS-ADDR-010 非回归：DNS、NAT 端口与模板变量仍使用公网/规范地址
+### TS-ADDR-010 非回归：DNS 与模板变量仍使用公网/规范地址
 
-- **触发入口**：入口代理 DNS 记录同步、NAT 端口提示清单、应用模板变量 `server.host`/`server.ssh_host` 渲染。
+- **触发入口**：入口代理 DNS 记录同步、应用模板变量 `server.host`/`server.ssh_host` 渲染。
 - **前置条件**：节点满足 tailnet 地址优先的全部条件。
-- **成功结果**：DNS 记录、NAT“需开放端口”提示与模板变量继续使用规范（公网/LAN）地址；tailnet 地址不得出现在公开 DNS 记录或变量渲染结果中。
-- **失败结果**：把 tailnet 地址写入 DNS、NAT 提示或模板变量视为回归；这类地址对外不可路由，会把服务暴露面与可访问性同时破坏。
+- **成功结果**：DNS 记录与模板变量继续使用规范（公网/LAN）地址；tailnet 地址不得出现在公开 DNS 记录或变量渲染结果中。
+- **失败结果**：把 tailnet 地址写入 DNS 或模板变量视为回归；这类地址对外不可路由，会把服务暴露面与可访问性同时破坏。
 - **边界条件**：`agent.url` 本身仍保持规范地址（`TS-ADDR-002`）；SSH 连接地址不改写；关闭开关后这些面必须与引入 Tailscale 之前完全一致。
-- **验证点**：DNS 同步与 NAT 提示的既有测试（`FAC-RP-011`、`SRV-NAT-005`）在 Tailscale 开启状态下继续通过；模板变量用例断言规范地址。
+- **验证点**：DNS 同步的既有测试（`FAC-RP-011`）在 Tailscale 开启状态下继续通过；模板变量用例断言规范地址。
 
 ## 7. 明确限制与验证证据
 

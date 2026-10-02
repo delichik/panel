@@ -11,7 +11,7 @@ func AllModels() []any {
 // 各 edit_sessions）先于引用它们的子表。
 func AppModels() []any {
 	return []any{
-		&Credential{}, &Server{}, &NatPortMapping{}, &PackageUpdate{}, &PackageRefresh{},
+		&Credential{}, &Server{}, &PackageUpdate{}, &PackageRefresh{},
 		&Fail2banConfig{}, &ImageUpdate{}, &ImageRefresh{}, &Application{}, &ApplicationPersistentLocation{},
 		&ApplicationReconcileState{}, &ContainerObservation{}, &DockerResourceSnapshot{},
 		&ApplicationRevisionV3{}, &Job{},

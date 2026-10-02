@@ -35,13 +35,16 @@ func TestAPIRouteManifest(t *testing.T) {
 	// 上一轮新增两条 tailscale 收敛入口：
 	//   POST /api/v1/settings/tailscale/apply
 	//   POST /api/v1/servers/{id}/tailscale/apply
-	// 本轮删除两条手动防火墙入口（改用 Agent 部署时自动接管，见 AGT-FW-*）：
+	// 已删除两条手动防火墙入口（改用 Agent 部署时自动接管，见 AGT-FW-*）：
 	//   POST /api/v1/servers/{id}/ufw/install
 	//   POST /api/v1/servers/{id}/ufw/enable
+	// 并删除了 NAT 服务器能力及其 4 条端口子资源路由（SRV-NAT-* 已废弃）：
+	//   GET/POST /api/v1/servers/{id}/nat-ports
+	//   PUT/DELETE /api/v1/servers/{id}/nat-ports/{mappingID}
 	// 消费者（web/src/api/settings.ts、web/src/api/servers.ts、Mock 与验收条目
 	// TS-*、UFW-API-*）必须与本清单同步变化（COV-API-001）。
-	const wantCount = 175
-	const wantHash = "f57a6287ff235634949f6f5fd63a3455bfaaa088ce5ea08562bfeb7a886eda44"
+	const wantCount = 171
+	const wantHash = "3756d56d2a98836a4e7596d6032004f5948c25a78f82d2623257864a86055511"
 	manifest := strings.Join(patterns, "\n") + "\n"
 	gotHash := fmt.Sprintf("%x", sha256.Sum256([]byte(manifest)))
 	if len(patterns) != wantCount || gotHash != wantHash {

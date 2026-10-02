@@ -42,7 +42,7 @@ func (r *ServerRepository) ListSummaries(ctx context.Context) ([]domain.ServerSu
 		COALESCE(json_extract(traits,'$."agent.enabled"'),''),COALESCE(json_extract(traits,'$."agent.url"'),''),COALESCE(json_extract(traits,'$."agent.status"'),''),
 		COALESCE(json_extract(traits,'$."sys.ufw_supported"'),''),COALESCE(json_extract(traits,'$."sys.ufw_installed"'),''),
 		COALESCE(json_extract(traits,'$."tailscale.status"'),''),
-		COALESCE(host_key_mismatch,0),kind,COALESCE(tailscale_enabled,0)
+		COALESCE(host_key_mismatch,0),COALESCE(tailscale_enabled,0)
 		FROM servers ORDER BY created_at DESC,id ASC`)
 	if err != nil {
 		return nil, err
@@ -55,7 +55,7 @@ func (r *ServerRepository) ListSummaries(ctx context.Context) ([]domain.ServerSu
 		var lastChecked sql.NullString
 		var updatedAt, agentEnabled, agentURL, agentStatus, ufwSupported, ufwInstalled, tailscaleStatus string
 		var hostKeyMismatch, tailscaleEnabled int
-		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &item.CredentialID, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &ufwSupported, &ufwInstalled, &tailscaleStatus, &hostKeyMismatch, &item.Kind, &tailscaleEnabled); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &item.CredentialID, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &ufwSupported, &ufwInstalled, &tailscaleStatus, &hostKeyMismatch, &tailscaleEnabled); err != nil {
 			return nil, err
 		}
 		item.Reachable = reachable == 1
@@ -98,7 +98,7 @@ func (r *ServerRepository) ListSummaryPage(ctx context.Context, page, pageSize i
 		COALESCE(json_extract(traits,'$."agent.enabled"'),''),COALESCE(json_extract(traits,'$."agent.url"'),''),COALESCE(json_extract(traits,'$."agent.status"'),''),
 		COALESCE(json_extract(traits,'$."sys.ufw_supported"'),''),COALESCE(json_extract(traits,'$."sys.ufw_installed"'),''),
 		COALESCE(json_extract(traits,'$."tailscale.status"'),''),
-		COALESCE(host_key_mismatch,0),kind,COALESCE(tailscale_enabled,0)
+		COALESCE(host_key_mismatch,0),COALESCE(tailscale_enabled,0)
 		FROM servers WHERE `+filter+` ORDER BY created_at DESC,id ASC LIMIT ? OFFSET ?`, listArgs...)
 	if err != nil {
 		return httpx.ListPage[domain.ServerSummary]{}, err
@@ -111,7 +111,7 @@ func (r *ServerRepository) ListSummaryPage(ctx context.Context, page, pageSize i
 		var lastChecked sql.NullString
 		var updatedAt, agentEnabled, agentURL, agentStatus, ufwSupported, ufwInstalled, tailscaleStatus string
 		var hostKeyMismatch, tailscaleEnabled int
-		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &item.CredentialID, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &ufwSupported, &ufwInstalled, &tailscaleStatus, &hostKeyMismatch, &item.Kind, &tailscaleEnabled); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &item.CredentialID, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &ufwSupported, &ufwInstalled, &tailscaleStatus, &hostKeyMismatch, &tailscaleEnabled); err != nil {
 			return httpx.ListPage[domain.ServerSummary]{}, err
 		}
 		item.Reachable, item.Sudo.Passwordless = reachable == 1, sudo == 1
@@ -171,8 +171,8 @@ func (r *ServerRepository) Update(ctx context.Context, srv domain.Server) error 
 	if err != nil {
 		return err
 	}
-	result, err := orm.RawExec(ctx, r.db, `UPDATE servers SET name=?,host=?,ipv4=?,ipv6=?,port=?,ssh_username=?,credential_id=?,docker_host=?,kind=?,agent_public_port=?,tailscale_enabled=?,tailscale_prefer_agent=?,tailscale_prefer_interconnect=?,traits=?,variables_json=?,notes=?,updated_at=? WHERE id=?`,
-		srv.Name, srv.Host, srv.IPv4, srv.IPv6, srv.Port, srv.SSHUsername, srv.CredentialID, srv.DockerHost, srv.Kind, srv.AgentPublicPort,
+	result, err := orm.RawExec(ctx, r.db, `UPDATE servers SET name=?,host=?,ipv4=?,ipv6=?,port=?,ssh_username=?,credential_id=?,docker_host=?,tailscale_enabled=?,tailscale_prefer_agent=?,tailscale_prefer_interconnect=?,traits=?,variables_json=?,notes=?,updated_at=? WHERE id=?`,
+		srv.Name, srv.Host, srv.IPv4, srv.IPv6, srv.Port, srv.SSHUsername, srv.CredentialID, srv.DockerHost,
 		boolToInt(srv.TailscaleEnabled), boolToInt(srv.TailscalePreferAgent), boolToInt(srv.TailscalePreferInterconnect),
 		string(traits), string(variables), srv.Notes,
 		srv.UpdatedAt.UTC().Format(time.RFC3339Nano), srv.ID)
@@ -208,11 +208,9 @@ func (r *ServerRepository) Delete(ctx context.Context, serverID string) error {
 // scanServer 的默认值与归一化语义（空 privilege_mode -> none 等）。
 func toDomainServer(m models.Server) domain.Server {
 	srv := domain.Server{
-		ID:              m.ID,
-		Name:            m.Name,
-		Kind:            m.Kind,
-		Host:            m.Host,
-		AgentPublicPort: m.AgentPublicPort,
+		ID:            m.ID,
+		Name:          m.Name,
+		Host:          m.Host,
 		IPv4:          m.IPv4,
 		IPv6:          m.IPv6,
 		Port:          m.Port,
@@ -264,9 +262,7 @@ func fromDomainServer(srv domain.Server) *models.Server {
 	return &models.Server{
 		ID:                     srv.ID,
 		Name:                   srv.Name,
-		Kind:                   srv.Kind,
 		Host:                   srv.Host,
-		AgentPublicPort:        srv.AgentPublicPort,
 		IPv4:                   srv.IPv4,
 		IPv6:                   srv.IPv6,
 		Port:                   srv.Port,

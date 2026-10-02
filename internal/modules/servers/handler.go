@@ -248,49 +248,6 @@ func (h *Handler) InstallFail2Ban(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
 }
 
-func (h *Handler) NatPortConfig(w http.ResponseWriter, r *http.Request) {
-	cfg, err := h.service.NatPortConfig(r.Context(), serverIDFromRequest(r))
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.JSON(w, http.StatusOK, cfg)
-}
-
-func (h *Handler) AddNatPort(w http.ResponseWriter, r *http.Request) {
-	var req NatPortMappingSave
-	if !httpx.Decode(w, r, &req) {
-		return
-	}
-	mapping, err := h.service.AddNatPort(r.Context(), serverIDFromRequest(r), req)
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.JSON(w, http.StatusCreated, mapping)
-}
-
-func (h *Handler) UpdateNatPort(w http.ResponseWriter, r *http.Request) {
-	var req NatPortMappingSave
-	if !httpx.Decode(w, r, &req) {
-		return
-	}
-	mapping, err := h.service.UpdateNatPort(r.Context(), serverIDFromRequest(r), strings.TrimSpace(r.PathValue("mappingID")), req)
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.JSON(w, http.StatusOK, mapping)
-}
-
-func (h *Handler) DeleteNatPort(w http.ResponseWriter, r *http.Request) {
-	if err := h.service.DeleteNatPort(r.Context(), serverIDFromRequest(r), strings.TrimSpace(r.PathValue("mappingID"))); err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
 func serverIDFromRequest(r *http.Request) string {
 	return strings.TrimSpace(r.PathValue("id"))
 }

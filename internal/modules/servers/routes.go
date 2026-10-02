@@ -27,10 +27,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, auth httpx.Middleware) {
 	mux.Handle("POST /api/v1/servers/{id}/fail2ban/enable", auth(http.HandlerFunc(h.EnableFail2Ban)))
 	mux.Handle("POST /api/v1/servers/{id}/fail2ban/release", auth(http.HandlerFunc(h.ReleaseFail2Ban)))
 	mux.Handle("POST /api/v1/servers/{id}/fail2ban/install", auth(http.HandlerFunc(h.InstallFail2Ban)))
-	mux.Handle("GET /api/v1/servers/{id}/nat-ports", auth(http.HandlerFunc(h.NatPortConfig)))
-	mux.Handle("POST /api/v1/servers/{id}/nat-ports", auth(http.HandlerFunc(h.AddNatPort)))
-	mux.Handle("PUT /api/v1/servers/{id}/nat-ports/{mappingID}", auth(http.HandlerFunc(h.UpdateNatPort)))
-	mux.Handle("DELETE /api/v1/servers/{id}/nat-ports/{mappingID}", auth(http.HandlerFunc(h.DeleteNatPort)))
 	mux.Handle("GET /api/v1/key-assets/system", auth(http.HandlerFunc(h.SystemCertificates)))
 	mux.Handle("POST /api/v1/key-assets/system/{id}/reset", auth(http.HandlerFunc(h.ResetSystemCertificate)))
 }

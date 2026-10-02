@@ -120,24 +120,11 @@ func TestAgentFirewallScriptOrdersInstallAllowAndEnable(t *testing.T) {
 	assertNoDestructiveUFWCommands(t, rulesOnly)
 }
 
-// TestEnsureAgentFirewallExemptsAndRefuses covers the two decisions around the
-// prerequisite: NAT servers are exempt because their public ports belong to the
-// provider, and an unsupported distribution is refused rather than silently
-// deployed without a firewall.
-func TestEnsureAgentFirewallExemptsAndRefuses(t *testing.T) {
+// TestEnsureAgentFirewallRefusesUnsupportedDistributions covers the hard
+// prerequisite: a distribution without a UFW adapter is refused rather than
+// silently deployed without a firewall.
+func TestEnsureAgentFirewallRefusesUnsupportedDistributions(t *testing.T) {
 	debian := linux.OSRelease{ID: "debian", VersionID: "13", Supported: true}
-
-	t.Run("NAT servers are exempt", func(t *testing.T) {
-		exec := &ufwInstallFakeExec{}
-		svc, _, _ := testServerService(t, exec)
-		srv := Server{ID: "srv_nat", Host: "10.0.0.1", Port: 22, Kind: ServerKindNAT, OS: debian}
-		if err := svc.ensureAgentFirewall(context.Background(), "task_1", srv, remoteops.Runner{Exec: exec}); err != nil {
-			t.Fatalf("expected the NAT server to be exempt, got %v", err)
-		}
-		if exec.installCommand != "" {
-			t.Fatalf("no firewall command may run on a NAT server, got %q", exec.installCommand)
-		}
-	})
 
 	t.Run("unsupported distributions are refused", func(t *testing.T) {
 		exec := &ufwInstallFakeExec{}

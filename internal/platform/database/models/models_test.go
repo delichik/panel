@@ -26,7 +26,6 @@ var appTables = []string{
 	"storage_share_partitions", "dns_domains",
 	"certificates", "self_signed_certificates", "key_assets", "overview_card_configurations",
 	"runtime_settings", "auth_state", "auth_accounts", "tasks", "task_steps",
-	"nat_port_mappings",
 }
 
 var logTables = []string{

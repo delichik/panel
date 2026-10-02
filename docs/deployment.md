@@ -199,7 +199,6 @@ Consequences to plan for:
 
 - A node whose distribution has no UFW adapter cannot receive an Agent at all: deployment fails with `agent_firewall_unsupported`. Supported distributions are the same Debian/Ubuntu range as every other package-managing feature.
 - **Application ports are not part of that base set.** Each application must declare "open firewall" on the port it publishes; ports published without that flag are blocked. Rules an application wrote earlier stay in the UFW configuration even while UFW is inactive, so enabling the policy applies them.
-- **NAT servers are exempt.** Their public ports are mapped by the provider and Seamark must not open them, so it neither installs, allows nor enables UFW there and never fails a deployment over it.
 - Servers added before this behaviour existed are taken over on their next deployment, including certificate renewals.
 - A failed takeover fails the deployment but leaves a working Agent untouched.
 ## Agent delivery over HTTP
@@ -239,7 +238,7 @@ Limitations:
 
 - Seamark does not manage UFW rules for the `tailscale0` interface. If UFW is active on a node, allow that interface yourself, otherwise traffic arriving over the tailnet is rejected.
 - Nodes that prefer Tailscale for Agent connections need their node certificate to cover the tailnet address. Seamark refreshes it through the existing Agent deployment channel (certificate and configuration only, no binary re-transfer).
-- DNS records, NAT port hints and application template variables keep using the public address; the tailnet addresses are never published there.
+- DNS records and application template variables keep using the public address; the tailnet addresses are never published there.
 
 ## Troubleshooting
 
