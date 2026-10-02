@@ -22,6 +22,43 @@ export function canInstallUfw(server: ServerDto | null) {
   return server.traits?.['sys.ufw_supported'] === 'true' && server.traits?.['sys.ufw_installed'] !== 'true';
 }
 
+/** 节点侧 Tailscale 观测状态取值；来源固定为 traits 的 `tailscale.*`。 */
+export const tailscaleStatuses = ['disabled', 'pending', 'installing', 'running', 'degraded', 'unsupported', 'error'] as const;
+
+export type TailscaleStatus = (typeof tailscaleStatuses)[number];
+
+export type TailscaleTone = 'neutral' | 'success' | 'warning' | 'danger' | 'info';
+
+/** 未上报或取值未知时返回空串：不臆造节点运行状态。 */
+export function tailscaleObservedStatus(server: ServerDto): TailscaleStatus | '' {
+  const raw = server.traits?.['tailscale.status'] ?? '';
+  return (tailscaleStatuses as readonly string[]).includes(raw) ? (raw as TailscaleStatus) : '';
+}
+
+export function tailscaleStatusKey(server: ServerDto) {
+  const status = tailscaleObservedStatus(server);
+  return status ? `serversPage.tailscale.status.${status}` : 'serversPage.tailscale.noStatus';
+}
+
+export function tailscaleTone(server: ServerDto): TailscaleTone {
+  const status = tailscaleObservedStatus(server);
+  if (status === 'running') return 'success';
+  if (status === 'degraded' || status === 'pending' || status === 'installing') return 'warning';
+  if (status === 'error') return 'danger';
+  if (status === 'unsupported') return 'info';
+  return 'neutral';
+}
+
+export function tailscaleTrait(server: ServerDto, key: 'ipv4' | 'ipv6' | 'hostname' | 'lastError' | 'updatedAt') {
+  return server.traits?.[`tailscale.${key}`] ?? '';
+}
+
+/** 未启用 Tailscale 的节点不参与 prefer 分支：开关禁用，提交时固定为 false。 */
+export function tailscalePreferences(input: Pick<ServerSaveInput, 'tailscaleEnabled' | 'tailscalePreferAgent' | 'tailscalePreferInterconnect'>) {
+  if (!input.tailscaleEnabled) return { tailscalePreferAgent: false, tailscalePreferInterconnect: false };
+  return { tailscalePreferAgent: input.tailscalePreferAgent, tailscalePreferInterconnect: input.tailscalePreferInterconnect };
+}
+
 export function credentialReferences(credentialId: string, servers: ServerDto[]) {
   return servers.filter((server) => server.credentialId === credentialId).map((server) => ({ id: server.id, name: server.name, host: server.host }));
 }

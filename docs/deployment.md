@@ -36,11 +36,18 @@ services:
       - "127.0.0.1:8443:8443"
     volumes:
       - panel-data:/app/data
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun
 
 volumes:
   panel-data:
     name: panel-data
 ```
+
+`cap_add` and `devices` are only needed for the optional Tailscale integration; see [Tailscale](#tailscale) below. You can drop them if you do not use it.
 
 Pull the image and start Seamark:
 
@@ -81,8 +88,13 @@ docker run -d \
   --restart unless-stopped \
   -p 127.0.0.1:8443:8443 \
   -v panel-data:/app/data \
+  --cap-add=NET_ADMIN \
+  --cap-add=NET_RAW \
+  --device=/dev/net/tun \
   ghcr.io/delichik/panel:latest
 ```
+
+The three `--cap-add`/`--device` flags are only needed for the optional Tailscale integration; see [Tailscale](#tailscale) below.
 
 Check its status and logs:
 
@@ -102,6 +114,7 @@ All persistent Seamark state is stored under `/app/data`, including:
 - Certificate and key assets.
 - Seamark security settings and generated master keys.
 - Backup and restore working data.
+- Container Tailscale state (node identity, LocalAPI socket and the expected-state file) when the container Tailscale is used.
 
 The examples map `/app/data` to the named volume `panel-data`. Recreating or upgrading the container is safe only when the same volume is reused.
 
@@ -194,6 +207,29 @@ Set **Settings → Agent download → Agent download base URL** to the address s
 
 Note on CDN choice: a free Cloudflare plan usually serves mainland China visitors from overseas edges, so the gain there is limited; a CDN with mainland China edges requires an ICP-filed domain. The origin is always the Panel, fetched on a cache miss.
 
+## Tailscale
+
+Seamark can join the Panel container and the servers it manages to one tailnet, then use tailnet addresses for Panel-to-node and node-to-node connections. Tailscale is **optional**: without the capabilities and device below, everything else keeps working and the feature reports itself as unavailable instead of failing silently.
+
+Container requirements:
+
+- `--cap-add=NET_ADMIN`, `--cap-add=NET_RAW` and `--device=/dev/net/tun`. The Compose examples above use `cap_add` and `devices`; plain `docker run` uses the flags shown in its example.
+- The host must provide the `tun` module (`modprobe tun`, or check with `lsmod | grep tun`). Without it `tailscaled` cannot start in kernel TUN mode.
+- The container runs `panel-init` as PID 1 as root; `panel-init` drops the Panel process to the non-root `panel` user and manages `tailscaled` itself. State and the LocalAPI socket stay under `/app/data/tailscale`.
+
+Configuration:
+
+- Set the Tailscale auth key in **Settings → Tailscale** ([settings page](https://<panel-host>:8443/settings/tailscale)). The key is write-only: after saving it can no longer be read back, only replaced or cleared. Clearing it removes the stored key and stops the container tailscale.
+- ACL tags use the `tag:name` form (lowercase letters, digits and hyphens); they are lowercased, deduplicated and sorted before saving.
+- Per-node switches live in the server form and are displayed on the server detail page: join the tailnet, prefer Tailscale for Agent connections, and prefer Tailscale for node interconnect. The two preference switches only take effect when the node has joined and the Panel container itself is logged in; `agent.url` is never rewritten by them.
+- **Apply / reconnect** in the same settings section only requests reconciliation. The state shown next to it refreshes once the container tailscale reacts.
+
+Limitations:
+
+- Seamark does not manage UFW rules for the `tailscale0` interface. If UFW is active on a node, allow that interface yourself, otherwise traffic arriving over the tailnet is rejected.
+- Nodes that prefer Tailscale for Agent connections need their node certificate to cover the tailnet address. Seamark refreshes it through the existing Agent deployment channel (certificate and configuration only, no binary re-transfer).
+- DNS records, NAT port hints and application template variables keep using the public address; the tailnet addresses are never published there.
+
 ## Troubleshooting
 
 ### The container exits or is unhealthy
@@ -226,6 +262,10 @@ Then open `https://<panel-host>:9080`.
 ### The page is not reachable from another machine
 
 Check the container status, host firewall, cloud security-group rules, and the published host port. If the mapping uses `127.0.0.1`, it is intentionally reachable only from the Seamark host or a local reverse proxy.
+
+### Tailscale shows as unavailable
+
+The settings page says the container tailscale cannot be managed here. Check, in order: the container was started with `--cap-add=NET_ADMIN`, `--cap-add=NET_RAW` and `--device=/dev/net/tun`; the host `tun` module is loaded; the image contains the `tailscale` and `tailscaled` executables. Seamark cannot fix this from inside the container, and the rest of the Panel keeps working; per-node Tailscale intent is still stored.
 
 ### Data disappeared after recreating the container
 

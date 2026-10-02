@@ -155,6 +155,18 @@ export function acceptedAgentDeployment(serverId: string) {
   return taskId;
 }
 
+/** 节点侧 tailscale 协调：受理后登记 server_tailscale_apply 任务，与 Agent 部署一致。 */
+export function acceptedServerTailscaleApply(serverId: string) {
+  const taskId = `task-tailscale-apply-${Date.now()}`;
+  const item = task(taskId, `op-tailscale-apply-${Date.now()}`, 'server_tailscale_apply', 'running', serverId, `Applying tailscale for ${serverId}`, 0, true, false);
+  item.stage = 'installing';
+  mockTasks.unshift(item);
+  mockTaskLogs[taskId] = [
+    { cursor: 1, time: new Date().toISOString(), stream: 'system', line: 'preparing tailscale reconciliation' },
+  ];
+  return taskId;
+}
+
 export function retryTask(taskId: string) {
   const source = mockTasks.find((item) => item.id === taskId);
   if (!source || !source.allowRetry) return null;

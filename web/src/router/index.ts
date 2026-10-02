@@ -55,6 +55,7 @@ export const router = createRouter({
         { path: 'settings/security', component: () => import('@/views/settings/index.vue'), meta: { titleKey: 'routes.settings.title' } },
         { path: 'settings/certificates', component: () => import('@/views/settings/index.vue'), meta: { titleKey: 'routes.settings.title' } },
         { path: 'settings/agent', component: () => import('@/views/settings/index.vue'), meta: { titleKey: 'routes.settings.title' } },
+        { path: 'settings/tailscale', component: () => import('@/views/settings/index.vue'), meta: { titleKey: 'routes.settings.title' } },
         { path: 'settings/system-certificates', component: () => import('@/views/settings/index.vue'), meta: { titleKey: 'routes.settings.title' } },
         { path: 'settings/system', component: () => import('@/views/settings/index.vue'), meta: { titleKey: 'routes.settings.title' } },
         { path: 'settings/backups', component: () => import('@/views/settings/index.vue'), meta: { titleKey: 'routes.settings.title' } },

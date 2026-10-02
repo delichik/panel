@@ -72,6 +72,11 @@ function runtimeSettings(language = 'en'): RuntimeSettings {
     certificates: { email: '', dnsPropagationDelaySeconds: 30 },
     panel: { domain: 'localhost', tlsCertificateId: '' },
     agent: { downloadBaseUrl: '', downloadVerifyTls: false, transferTimeoutSeconds: 120 },
+    tailscale: {
+      authKeyConfigured: true,
+      tags: [],
+      container: { available: false, running: false, loggedIn: false, hostname: '', ipv4: '', ipv6: '', version: '', backendState: '', lastError: '', updatedAt: '' },
+    },
     jwtSecretConfigured: true,
   };
 }

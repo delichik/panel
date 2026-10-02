@@ -4,6 +4,7 @@
 
 ## 当前状态
 
+- 本轮 Tailscale 新增设置分区与服务器侧文案：设置页 `settingsPage.section.tailscale`、`settingsPage.tailscale.hint/authKey/authKeyHint/authKeyPlaceholder/authKeyConfigured/authKeyMissing/clearAuthKey/authKeyCleared/tags/tagsHint/tagsPlaceholder/tagsInvalid/containerTitle/containerHint/available/running/stopped/loggedIn/loggedOut/hostname/ipv4/ipv6/version/backendState/lastError/updatedAt/apply/applyHint/applyAccepted/unavailableTitle/unavailableHint`、清除确认 `settingsPage.confirm.tailscale-auth-key.title` / `.description` 与保存提示 `settingsPage.saved.tailscale`；服务器页 `serversPage.tailscale.title/enabled/enabledHint/preferAgent/preferInterconnect/preferDisabledHint/disabledHint/apply/applyAccepted/noStatus`、状态徽标 `serversPage.tailscale.status.disabled|pending|installing|running|degraded|unsupported|error` 与 `serversPage.tailscale.hostname/ipv4/ipv6/updatedAt/lastError`；en / zh-CN 已同步。文案约束：密钥输入必须说明只写语义（保存后无法读回，只能替换或清除），清除确认必须说明容器 tailscale 会停止而已加入的节点在下一次协调前保持现状，「应用 / 重连」提示必须说明只请求协调、不代表已成功，容器不可用时必须说明需在 Seamark 之外配置 Tailscale。
 - 本轮 Agent HTTP 投递新增设置分区文案：`settingsPage.section.agent`、`agentDownloadHint`、`agentDownloadBaseUrl`、`agentDownloadBaseUrlPlaceholder`、`agentDownloadBaseUrlHint`、`agentTransferTimeout`、`agentTransferTimeoutHint`、`agentDownloadVerifyTls`、`agentDownloadVerifyTlsHint`、`saved.agent`、`validationAgentTransferTimeout`；服务器详情 Agent 卡片新增阶段标签 `serversPage.agentTaskStageDownloading`（下载 Agent 二进制，与既有 `agentTaskStageUploading` 并列）；en / zh-CN 同步。后端新增 `agent_download_failed`、`invalid_agent_download_base_url`、`invalid_agent_transfer_timeout` 中文翻译。校验开关文案必须说明关闭只影响传输保密性、完整性仍由 SSH 下发的 sha256 保证。
 - 本轮 NAT 服务器新增 `serversPage.kind*`、`agentPublicPort*` 与 `nat*` 端口映射文案，en / zh-CN 同步；后端新增 `server_kind_invalid`、`nat_port_*`、`reverse_proxy_*_nat_unsupported` 稳定错误码。
 - 本轮服务器创建/编辑弹窗重构文案：新增 `serversPage.formDescription/editServerDescription/sectionConnection/sectionAdvanced`、`dockerHostHint`、`credentialMissingTitle/Hint`（无凭据引导）、`probeHint/probeAgain/probeStale`（探测与保存解耦并标记过期）、`createdInitializing`（两阶段反馈，替换 `createdWithTask`）、`initialTaskLoadFailed`（初始化任务跟踪）；后端改为初始信息采集失败时保留服务器并标记失败，移除 `initialTaskRolledBack` 与 `dismissNotice` 词条；删除 `serversPage.createdWithTask` 与 `serversPage.validationGeneric` 词条；en / zh-CN 同步。
@@ -51,6 +52,7 @@
   - `remote_timeout` 翻译；
   - agent / ssh 相关错误的前缀翻译。
   - 现状：全部已知 panelerr 错误码均已覆盖。本轮补充 `storage_share_*` 系列错误码（配置校验、分区、挂载、Agent 要求等静态词条 + 带服务器/应用名的前缀词条）与 `range_invalid` 中文文案中的 `24h` 取值；SSH 主机密钥错误（`ssh_host_key_mismatch` / `ssh_host_key_verification_failed`）在执行器侧剥离 x/crypto 的 `ssh: handshake failed:` 包装后再翻译，前缀匹配可命中；已删除无发射点的 `application_reconcile_collector_only` 词条。
+  - Tailscale 稳定错误码已补充简体中文翻译：`invalid_tailscale_auth_key`（密钥必须以 `tskey-` 开头且不含空格）、`invalid_tailscale_tag`（标签必须形如 `tag:name`）、`tailscale_container_unavailable`（Panel 不由 panel-init 监管）、`tailscale_config_write_failed`（写入容器期望态失败）、`tailscale_not_enabled`（需先启用节点 Tailscale）、`tailscale_agent_unsupported`（需升级该节点上的 Agent）、`tailscale_join_failed`（节点未能加入 tailnet）。
 - 任务错误：任务 error 在写入前对 panelerr 错误做 i18n 翻译，避免把当前语言下的文案固化进任务记录。
 - 本轮新增 `key_asset_system_managed` 后端错误码，已补充简体中文翻译；用于阻止普通密钥资产接口修改 Panel/Agent 系统托管资产。
 - 本轮新增 Panel HTTPS 域名、证书选择及内置自签名证书的 en / zh-CN 词条。

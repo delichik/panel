@@ -56,6 +56,7 @@
 - `AGT-STATE-002`：Agent enabled 后读取和写入能力不得回退 SSH；恢复 Agent 本身的部署、证书同步和 bootstrap SSH 是唯一例外。
 - `AGT-STATE-003`：健康检查必须验证 Panel/Agent 构建版本相同、Docker健康且报告的 Docker host 与服务器配置一致；版本不一致为 incompatible，网络/远端/Docker不可用为 unavailable。
 - `AGT-STATE-004`：capabilities 和 gRPC contract hash 不作为通用兼容门槛；具体操作缺少必需 capability 时仅该操作失败或重试，不得因此无条件重装 Agent。
+- `AGT-STATE-005`：周期 Agent 检查由 `server_agent_check` 任务承载（每 5 分钟一轮，按服务器各一个子任务，定义同时声明 `Hidden` 与 `Quiet`）。检查成功只写回服务器 traits（状态、版本、证书、检查时间），其执行事实按 `TASK-REG-003` 记为 `debug`，默认级别筛选下不进入事件与操作视图；检查失败（含证书时间错误导致的自动修复判定）仍记 `error`。降噪不得跳过状态写回、自动部署判定或失败可见性。
 - `AGT-AUTO-001`：无 URL、URL 非默认地址、incompatible、版本不一致、证书过期/未生效/7天内到期或证书时间握手错误时，系统检查必须创建或复用 `server_agent_deploy`；普通 unavailable、连接拒绝、服务器失联或 Docker失败不得触发重装。
 - `AGT-AUTO-002`：证书进入 7 天窗口时保持 compatible且不写错误，只静默刷新；系统自动复用任务必须尊重 `next_run_at` 和指数退避，不能借复用绕过。
 - `AGT-AUTO-003`：同一服务器系统自动部署连续失败 2 次必须置 undeployable并停止周期自动尝试；手动部署解除阻止并重置退避基准；失败计数仅在连续 5 次健康检查成功后清零。
@@ -138,12 +139,25 @@
 - `AGT-CLI-SEC-001`：CLI只能通过本机Docker runtime读取容器和计算既定应用路径，不连接Panel API、不调用Agent gRPC、不写数据库、Docker或应用目录，也不提供start/stop/restart/delete/purge等变更命令。
 - `AGT-CLI-SEC-002`：CLI不得把“任意带相似应用ID的容器”视作Panel资源；托管标签过滤必须先于selector解析，未来新增子命令也必须维持只读与托管资源所有权边界。
 
-## 9. 验收证据
+## 9. 节点 Tailscale
 
-- `SRV-EVD-001`：路由清单必须覆盖 credentials CRUD、servers CRUD/probe/test/trust/restart/agent、UFW、fail2ban及packages全部路径，且与前端 typed client一致。
+本节只固定服务器侧入口与跨模块责任；容器内 tailscaled 生命周期、全局设置、地址优先规则与节点侧 Agent 语义见 [Tailscale](tailscale.md) 的 `TS-*`。
+
+- `SRV-TS-001`：`servers` 的 `tailscale_enabled`、`tailscale_prefer_agent`、`tailscale_prefer_interconnect` 是持久化用户意图，创建、更新与详情必须携带全部三个字段，列表摘要只携带 `tailscaleEnabled`；`tailscale_enabled=false` 时两个偏好列必须被强制写为 false（含关闭启用后一并清零）；旧库由自动 ORM 增列迁移补齐、默认 0，既有服务器数据不得被删除或改写。详见 `TS-NODE-001/002`。
+- `SRV-TS-002`：节点 Tailscale 观测态只由系统写入 `servers.traits` 的 `tailscale.status|ipv4|ipv6|hostname|version|last_error|updated_at`，用户提交的 traits 继续被忽略；写入必须读改写合并，不得清空 `agent.*` 等既有系统 trait；关闭启用开关必须在同一保存事务内清除这些观测键，避免互联与界面继续使用失效地址。详见 `TS-NODE-003/004/005`。
+- `SRV-TS-003`：`POST /servers/{id}/tailscale/apply` 是手动重试与首次加入路径，必须创建或复用 `server_tailscale_apply` 任务、先置 running 再返回 202 与 taskId；未启用返回 `tailscale_not_enabled` 且不创建任务；保存开关成功后的自动排队失败只记录告警，不得回滚已保存的服务器。详见 `TS-TASK-001/002`。
+- `SRV-TS-004`：节点侧收敛必须要求 Agent 能力 `agent.tailscale`：缺少能力时只让该任务失败并返回 `tailscale_agent_unsupported`（提示升级该服务器上的 Agent），不得触发整节点重装、不得回退 SSH，也不得影响同节点其它依赖 Agent 的能力（`AGT-STATE-004`）。节点缺少软件包时允许经 Agent 安装，仍遵守“依赖 Agent 的能力不回退 SSH”的总原则。详见 `TS-TASK-003`、`TS-AGT-002/003`。
+- `SRV-TS-005`：开启 `tailscalePreferAgent`，或已上报的 tailnet 地址发生变化时，节点证书 SAN 集合必须同时覆盖规范 host 与该 tailnet 地址；集合不一致时标记该节点需要证书刷新，并复用既有 Agent 部署通道（只重写证书与配置，不重传二进制，`AGT-DEP-003`）。不得为了连通放宽证书校验、跳过主机名校验或改用明文。详见 `TS-ADDR-004`。
+- `SRV-TS-006`：Panel→Agent 连接地址必须经统一解析：仅当节点启用 Tailscale、要求该偏好、已上报位于 `100.64.0.0/10` 或 `fd7a:115c:a1e0::/48` 的有效地址、且 Panel 容器自身已登录 tailnet 时，才改用 `https://<tailnet 地址>:<agent 端口>`，否则使用 `agent.url` 原值。`agent.url` 不得被改写，因此该开关不触发 `AGT-AUTO-001` 的“URL 非默认地址需要重部署”判定；健康检查、部署、上报流、指标、容器资源、软件包、存储与代理诊断必须共用同一解析。详见 `TS-ADDR-001..003`。
+- `SRV-TS-007`：节点 tailnet 地址出现、变化或消失，或启用/互联偏好意图变化时，必须主动重同步互联设施（排队存储导出协调任务，并在受影响节点确实作为网关或源站参与时重新渲染入口代理设施），不参与的节点不产生多余工作。**明确限制**：UFW 只支持端口/协议/来源规则，Panel 不自动为 `tailscale0` 接口放行，操作者必须在 UFW 激活时自行允许该接口。详见 `TS-ADDR-009`、`TS-LIMIT-001`。
+
+## 10. 验收证据
+
+- `SRV-EVD-001`：路由清单必须覆盖 credentials CRUD、servers CRUD/probe/test/trust/restart/agent、nat-ports、tailscale apply、UFW、fail2ban及packages全部路径，且与前端 typed client一致。
 - `SRV-EVD-002`：测试必须证明列表不选择秘密/大字段、编辑空secret保留、主机key变化失败关闭、服务器删除事务清引用、删除时清理节点证书资产，以及删除不依赖远端可达。
 - `SRV-EVD-003`：任务测试必须证明同步executor才结束任务、相同资源重复触发的复用边界、自动部署退避/封禁/手动解封和不可取消升级语义。
 - `SRV-EVD-004`：Agent替身必须验证生产能力不回退SSH、版本/Docker/证书状态转换、report stream空快照保护和失败不致断流；单元测试不得依赖真实SSH、apt、UFW或Docker。
 - `SRV-EVD-005`：Agent 下载端点必须有独立于 `/api` 路由清单的**公开路由清单断言**（literal pattern 集合 + 哈希），且断言必须验证产物名是注册 pattern 的字面量、路由不在 `/api` 之下。端点测试必须覆盖未知版本/平台、`..` 与越权路径不服务、缓存头与 `ETag`、`Range` 返回 206、未命中不设置 `Set-Cookie`。
 - `SRV-EVD-006`：Agent 投递测试必须覆盖：HTTP 下载成功时不上传；连不上、HTTP 4xx/5xx 时回退 SSH 上传且上传的是 `.gz`、带传输超时；传输中断时直接失败且不上传；`agent.downloadBaseUrl` 为空时只走 SSH 上传。下载脚本测试必须断言 TLS 开关、各分类退出码与回退判定表，并且**按脚本实际参数断言 `AGT-DL-006` 的最坏耗时**（轮数 × 单轮 + 延迟之和 < Panel 侧上限），同时断言脚本**不含** `--retry`、包含续传开关 `-C -` / `-c` 与拒绝 Range 的处理分支。`AGT-DL-012` 必须单独覆盖四种情形：缺 fetcher 且安装成功 → 重试成功且不上传；安装成功但重试仍缺 fetcher → 回退；安装失败 → 回退；发行版不受支持 → 完全不调用安装且回退。fetcher 安装脚本测试必须断言 apt 参数与非交互设置，并断言其目标机侧最坏耗时严格小于 Panel 侧上限。`AGT-DEP-001` 的 `running` 冲突与 `AGT-DEP-006` 的有界等待必须各有单测。
-- `SRV-EVD-005`：CLI测试必须覆盖显式模式门禁、三条apps命令的表格/JSON、Docker host优先级、selector优先级与歧义、退出码及非托管容器隔离；测试使用本地runtime替身，不依赖真实Docker。
+- `SRV-EVD-007`：Tailscale 证据必须覆盖：三列意图的保存/读取与“未启用强制清空偏好”、关闭开关清除观测、旧 Agent 缺省上报不清空观测、`server_tailscale_apply` 的创建/复用与缺能力失败、节点证书 SAN 在开启/未开启偏好时的差异、地址解析四条件与互联两端条件；单元测试使用临时目录与替身控制面，不依赖真实 tailnet、真实 `tailscaled` 或宿主 `tun` 模块。详见 `TS-EVD-002`。
+- `SRV-EVD-008`：CLI测试必须覆盖显式模式门禁、三条apps命令的表格/JSON、Docker host优先级、selector优先级与歧义、退出码及非托管容器隔离；测试使用本地runtime替身，不依赖真实Docker。（本项此前误用 `SRV-EVD-005` 编号，与 Agent 下载端点的公开路由清单断言重号；`SRV-EVD-005` 保持原义不变。）

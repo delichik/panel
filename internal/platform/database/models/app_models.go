@@ -60,6 +60,12 @@ type Server struct {
 	LastError              string    `orm:"not_null;default:''"`
 	CreatedAt              time.Time `orm:"not_null"`
 	UpdatedAt              time.Time `orm:"not_null"`
+
+	// Tailscale 意图列。用户提交的 traits 会被忽略（SRV-SAVE-004），因此
+	// “是否加入 tailnet”与两个地址优先开关必须作为资源字段持久化。
+	TailscaleEnabled            bool `orm:"not_null;default:0;column:tailscale_enabled"`
+	TailscalePreferAgent        bool `orm:"not_null;default:0;column:tailscale_prefer_agent"`
+	TailscalePreferInterconnect bool `orm:"not_null;default:0;column:tailscale_prefer_interconnect"`
 }
 
 func (*Server) TableName() string { return "servers" }

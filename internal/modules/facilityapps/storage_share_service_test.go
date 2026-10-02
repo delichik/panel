@@ -65,9 +65,10 @@ func (f *fakeAppsProvider) ApplicationsUsingStorageShare(context.Context) ([]app
 
 // fakeStorageAgent 同时满足设施服务的 AgentRuntimeClient 与 StorageAgentClient。
 type fakeStorageAgent struct {
-	configureCalls   int
-	configureEnabled []bool
-	configureErr     error
+	configureCalls        int
+	configureEnabled      []bool
+	configureAllowedHosts [][]string
+	configureErr          error
 	ensureCalls      int
 	ensureErr        error
 	archiveErr       error
@@ -83,9 +84,10 @@ func (f *fakeStorageAgent) StorageEnsureDirectory(context.Context, string, strin
 	f.ensureCalls++
 	return f.ensureErr
 }
-func (f *fakeStorageAgent) StorageConfigureExport(_ context.Context, _ string, _ string, _ []string, enabled bool) error {
+func (f *fakeStorageAgent) StorageConfigureExport(_ context.Context, _ string, _ string, allowedHosts []string, enabled bool) error {
 	f.configureCalls++
 	f.configureEnabled = append(f.configureEnabled, enabled)
+	f.configureAllowedHosts = append(f.configureAllowedHosts, append([]string(nil), allowedHosts...))
 	return f.configureErr
 }
 func (f *fakeStorageAgent) StorageArchiveDirectory(_ context.Context, _ string, _ string) ([]byte, string, error) {

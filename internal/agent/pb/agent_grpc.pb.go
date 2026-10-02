@@ -65,6 +65,9 @@ const (
 	AgentService_StorageStatus_FullMethodName            = "/panel.agent.v1.AgentService/StorageStatus"
 	AgentService_StorageMountStatus_FullMethodName       = "/panel.agent.v1.AgentService/StorageMountStatus"
 	AgentService_StorageEnsureDirectory_FullMethodName   = "/panel.agent.v1.AgentService/StorageEnsureDirectory"
+	AgentService_TailscaleStatus_FullMethodName          = "/panel.agent.v1.AgentService/TailscaleStatus"
+	AgentService_TailscaleConfigure_FullMethodName       = "/panel.agent.v1.AgentService/TailscaleConfigure"
+	AgentService_TailscaleDisable_FullMethodName         = "/panel.agent.v1.AgentService/TailscaleDisable"
 )
 
 // AgentServiceClient is the client API for AgentService service.
@@ -117,6 +120,9 @@ type AgentServiceClient interface {
 	StorageStatus(ctx context.Context, in *StorageStatusRequest, opts ...grpc.CallOption) (*StorageStatusResponse, error)
 	StorageMountStatus(ctx context.Context, in *StorageMountStatusRequest, opts ...grpc.CallOption) (*StorageMountStatusResponse, error)
 	StorageEnsureDirectory(ctx context.Context, in *StorageEnsureDirectoryRequest, opts ...grpc.CallOption) (*OKResponse, error)
+	TailscaleStatus(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*TailscaleStatusResponse, error)
+	TailscaleConfigure(ctx context.Context, in *TailscaleConfigureRequest, opts ...grpc.CallOption) (*TailscaleStatusResponse, error)
+	TailscaleDisable(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*TailscaleStatusResponse, error)
 }
 
 type agentServiceClient struct {
@@ -596,6 +602,36 @@ func (c *agentServiceClient) StorageEnsureDirectory(ctx context.Context, in *Sto
 	return out, nil
 }
 
+func (c *agentServiceClient) TailscaleStatus(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*TailscaleStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TailscaleStatusResponse)
+	err := c.cc.Invoke(ctx, AgentService_TailscaleStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentServiceClient) TailscaleConfigure(ctx context.Context, in *TailscaleConfigureRequest, opts ...grpc.CallOption) (*TailscaleStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TailscaleStatusResponse)
+	err := c.cc.Invoke(ctx, AgentService_TailscaleConfigure_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentServiceClient) TailscaleDisable(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*TailscaleStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TailscaleStatusResponse)
+	err := c.cc.Invoke(ctx, AgentService_TailscaleDisable_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentServiceServer is the server API for AgentService service.
 // All implementations must embed UnimplementedAgentServiceServer
 // for forward compatibility.
@@ -646,6 +682,9 @@ type AgentServiceServer interface {
 	StorageStatus(context.Context, *StorageStatusRequest) (*StorageStatusResponse, error)
 	StorageMountStatus(context.Context, *StorageMountStatusRequest) (*StorageMountStatusResponse, error)
 	StorageEnsureDirectory(context.Context, *StorageEnsureDirectoryRequest) (*OKResponse, error)
+	TailscaleStatus(context.Context, *Empty) (*TailscaleStatusResponse, error)
+	TailscaleConfigure(context.Context, *TailscaleConfigureRequest) (*TailscaleStatusResponse, error)
+	TailscaleDisable(context.Context, *Empty) (*TailscaleStatusResponse, error)
 	mustEmbedUnimplementedAgentServiceServer()
 }
 
@@ -793,6 +832,15 @@ func (UnimplementedAgentServiceServer) StorageMountStatus(context.Context, *Stor
 }
 func (UnimplementedAgentServiceServer) StorageEnsureDirectory(context.Context, *StorageEnsureDirectoryRequest) (*OKResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method StorageEnsureDirectory not implemented")
+}
+func (UnimplementedAgentServiceServer) TailscaleStatus(context.Context, *Empty) (*TailscaleStatusResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method TailscaleStatus not implemented")
+}
+func (UnimplementedAgentServiceServer) TailscaleConfigure(context.Context, *TailscaleConfigureRequest) (*TailscaleStatusResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method TailscaleConfigure not implemented")
+}
+func (UnimplementedAgentServiceServer) TailscaleDisable(context.Context, *Empty) (*TailscaleStatusResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method TailscaleDisable not implemented")
 }
 func (UnimplementedAgentServiceServer) mustEmbedUnimplementedAgentServiceServer() {}
 func (UnimplementedAgentServiceServer) testEmbeddedByValue()                      {}
@@ -1636,6 +1684,60 @@ func _AgentService_StorageEnsureDirectory_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentService_TailscaleStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).TailscaleStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_TailscaleStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).TailscaleStatus(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentService_TailscaleConfigure_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TailscaleConfigureRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).TailscaleConfigure(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_TailscaleConfigure_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).TailscaleConfigure(ctx, req.(*TailscaleConfigureRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentService_TailscaleDisable_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).TailscaleDisable(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_TailscaleDisable_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).TailscaleDisable(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentService_ServiceDesc is the grpc.ServiceDesc for AgentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1822,6 +1924,18 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "StorageEnsureDirectory",
 			Handler:    _AgentService_StorageEnsureDirectory_Handler,
+		},
+		{
+			MethodName: "TailscaleStatus",
+			Handler:    _AgentService_TailscaleStatus_Handler,
+		},
+		{
+			MethodName: "TailscaleConfigure",
+			Handler:    _AgentService_TailscaleConfigure_Handler,
+		},
+		{
+			MethodName: "TailscaleDisable",
+			Handler:    _AgentService_TailscaleDisable_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

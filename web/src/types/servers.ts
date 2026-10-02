@@ -42,6 +42,12 @@ export interface ServerDto {
   architecture?: ServerArchitecture;
   sudo?: ServerSudoState;
   privilege?: ServerPrivilegeState;
+  /** 用户意图：该节点是否加入 tailnet。 */
+  tailscaleEnabled: boolean;
+  /** 该节点的 agent 连接是否优先使用 tailscale 地址。 */
+  tailscalePreferAgent: boolean;
+  /** 该节点参与的节点互联是否优先使用 tailscale 地址。 */
+  tailscalePreferInterconnect: boolean;
   reachable: boolean;
   loadAverage?: string;
   lastCheckedAt?: string | null;
@@ -62,6 +68,9 @@ export interface ServerSaveInput {
   sshUsername: string;
   credentialId: string;
   dockerHost: string;
+  tailscaleEnabled: boolean;
+  tailscalePreferAgent: boolean;
+  tailscalePreferInterconnect: boolean;
   traits?: Record<string, string>;
   variables: Record<string, string>;
   notes: string;

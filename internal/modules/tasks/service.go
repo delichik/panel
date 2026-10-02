@@ -141,7 +141,7 @@ func (s *Service) create(ctx context.Context, in CreateInput) (Task, error) {
 			s.registerRunningExecutionLocked(task.ID)
 		}
 	}
-	task, err := createTask(ctx, s.db, in, beforeInsert)
+	task, err := createTask(ctx, s.db, in, def.Quiet, beforeInsert)
 	if err != nil && registeredTaskID != "" {
 		s.unregisterRunningExecutionLocked(registeredTaskID)
 	}
@@ -175,10 +175,10 @@ func (s *Service) createTx(ctx context.Context, tx *sql.Tx, in CreateInput) (Tas
 	if in.Status == StatusRunning {
 		return Task{}, errors.New("running tasks cannot be created inside a transaction")
 	}
-	return createTask(ctx, tx, in, nil)
+	return createTask(ctx, tx, in, def.Quiet, nil)
 }
 
-func createTask(ctx context.Context, exec orm.Executor, in CreateInput, beforeInsert func(Task)) (Task, error) {
+func createTask(ctx context.Context, exec orm.Executor, in CreateInput, quiet bool, beforeInsert func(Task)) (Task, error) {
 	if err := activitylog.CheckAdmission(ctx, exec); err != nil {
 		return Task{}, err
 	}
@@ -248,6 +248,7 @@ func createTask(ctx context.Context, exec orm.Executor, in CreateInput, beforeIn
 		ExecutionMode:       t.ExecutionMode,
 		ConcurrencyKey:      t.ConcurrencyKey,
 		ScheduleKey:         t.ScheduleKey,
+		Quiet:               quiet,
 		ServerID:            t.ServerID,
 		NodeID:              t.NodeID,
 		ResourceType:        t.ResourceType,
@@ -354,6 +355,10 @@ func (s *Service) AppendLog(ctx context.Context, taskID, stream, line string) er
 	level := "info"
 	if stream == "stderr" {
 		level = "error"
+	} else if s.isQuietTaskType(task.Type) {
+		// 内部例行任务（周期健康检查等）的输出属于后台巡检细节：默认级别
+		// 筛选不展示，失败仍以 stderr/error 保留。
+		level = "debug"
 	}
 	_, err = activitylog.Append(ctx, s.db, []activitylog.EventInput{{
 		EventType: "output.chunk", Kind: "output", Level: level, Domain: firstNonEmpty(task.ResourceType, "system"), Action: task.Type,
@@ -834,6 +839,14 @@ func (s *Service) hiddenTaskTypes() []string {
 	return cleanFilterValues(hidden...)
 }
 
+// isQuietTaskType 报告任务类型是否声明为内部例行任务（Definition.Quiet）。
+// 活动日志触发器按任务行上的 quiet 列决定级别，这里只服务于 Go 侧直写的
+// 追加输出（AppendLog），两者必须使用同一份 registry 定义。
+func (s *Service) isQuietTaskType(taskType string) bool {
+	def, ok := s.Registry().Definition(taskType)
+	return ok && def.Quiet
+}
+
 func cleanFilterValues(values ...string) []string {
 	out := []string{}
 	seen := map[string]struct{}{}
@@ -1169,6 +1182,7 @@ type taskRow struct {
 	ExecutionMode       string
 	ConcurrencyKey      string
 	ScheduleKey         string
+	Quiet               bool
 	ServerID            string
 	NodeID              string
 	ResourceType        string

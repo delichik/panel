@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import { AlertTriangle, DatabaseBackup, KeyRound, RefreshCcw, Save, Shield, UploadCloud } from '@lucide/vue';
+import { AlertTriangle, DatabaseBackup, KeyRound, Network, RefreshCcw, Save, Shield, UploadCloud } from '@lucide/vue';
 import { keyAssetsApi } from '@/api/keyAssets';
-import { settingsApi } from '@/api/settings';
+import { runtimeTailscaleUpdate, settingsApi, tailscaleUpdate } from '@/api/settings';
 import { systemApi, type VersionInfo } from '@/api/system';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
@@ -24,6 +24,7 @@ import type { KeyAssetDto, SystemCertificateDto } from '@/types/keyAssets';
 import type { RestorePreflightResponse, RuntimeSettings, RuntimeUpdate, ServerVariableDefinition } from '@/types/settings';
 import { createLatestRequestGuard } from '@/views/_shared/requestState';
 import { formatDateTime } from '@/utils/datetime';
+import { parseTailscaleTags, tailscaleContainerTone, tailscaleFormState } from './tailscale';
 
 const { t, locale, setLocale } = useI18n();
 const route = useRoute();
@@ -43,7 +44,7 @@ const pending = ref('');
 const error = ref('');
 const actionError = ref('');
 const confirmOpen = ref(false);
-const confirmKind = ref<'export' | 'restore' | 'system' | 'system-certificate' | 'jwt-secret'>('export');
+const confirmKind = ref<'export' | 'restore' | 'system' | 'system-certificate' | 'jwt-secret' | 'tailscale-auth-key'>('export');
 const selectedSystemCertificate = ref<SystemCertificateDto | null>(null);
 const preflight = ref<RestorePreflightResponse | null>(null);
 const restoreFile = ref<File | null>(null);
@@ -67,6 +68,8 @@ const form = reactive({
   remoteCommandTimeoutSeconds: '45',
   reconcileTraceEnabled: false,
   jwtSecret: '',
+  tailscaleAuthKey: '',
+  tailscaleTags: '',
   loginTitle: '',
   loginSubtitle: '',
   certificateEmail: '',
@@ -88,6 +91,7 @@ const sections = computed(() => [
   { key: 'security', label: t('settingsPage.section.security'), to: '/settings/security' },
   { key: 'certificates', label: t('settingsPage.section.certificates'), to: '/settings/certificates' },
   { key: 'agent', label: t('settingsPage.section.agent'), to: '/settings/agent' },
+  { key: 'tailscale', label: t('settingsPage.section.tailscale'), to: '/settings/tailscale' },
   { key: 'system-certificates', label: t('settingsPage.section.systemCertificates'), to: '/settings/system-certificates' },
   { key: 'system', label: t('settingsPage.section.system'), to: '/settings/system' },
   { key: 'backups', label: t('settingsPage.section.backups'), to: '/settings/backups' },
@@ -115,6 +119,9 @@ const fieldErrors = computed<Record<string, string>>(() => {
   return errors;
 });
 const runtimeSectionValid = computed(() => !fieldErrors.value.metricsRetentionDays && !fieldErrors.value.metricsCollectionIntervalSeconds && !fieldErrors.value.containerReportIntervalSeconds);
+const tailscaleTagResult = computed(() => parseTailscaleTags(form.tailscaleTags));
+const invalidTailscaleTags = computed(() => tailscaleTagResult.value.invalid);
+const tailscaleContainer = computed(() => runtime.value?.tailscale.container ?? null);
 
 watch(() => route.path, (path) => {
   activeSection.value = sectionFromPath(path);
@@ -184,6 +191,8 @@ function hydrate(settings: RuntimeSettings, variables: ServerVariableDefinition[
     agentDownloadBaseUrl: settings.agent.downloadBaseUrl,
     agentDownloadVerifyTls: settings.agent.downloadVerifyTls,
     agentTransferTimeoutSeconds: String(settings.agent.transferTimeoutSeconds),
+    // 认证密钥只写不读：表单永远以空值开始，服务端响应里没有密钥可回填。
+    ...tailscaleFormState(settings),
     variablesText: variables.map((item) => `${item.required ? '*' : ''}${item.key}=${item.name}`).join('\n'),
   });
 }
@@ -217,7 +226,30 @@ async function resetSystemCertificate() {
   });
 }
 
-async function saveRuntimeSection(kind: 'runtime' | 'security' | 'certificates' | 'agent' | 'system') {
+/** 清空认证密钥是危险操作：只经确认对话框触发，且不携带新的 authKey。 */
+async function confirmClearTailscaleAuthKey() {
+  const current = runtime.value;
+  if (!current) return;
+  await run('clear-tailscale-auth-key', async () => {
+    runtime.value = await settingsApi.updateRuntime(runtimeTailscaleUpdate(current, { clearAuthKey: true }));
+    hydrate(runtime.value, serverVariables.value);
+    confirmOpen.value = false;
+    notifySuccess(t('settingsPage.tailscale.authKeyCleared'), runtime.value);
+  });
+}
+
+/** 202 语义：只表示协调请求已受理，状态以本次返回和后续刷新为准。 */
+async function applyTailscale() {
+  const current = runtime.value;
+  if (!current?.tailscale.container.available) return;
+  await run('apply-tailscale', async () => {
+    const container = await settingsApi.applyTailscale();
+    runtime.value = { ...current, tailscale: { ...current.tailscale, container } };
+    notifySuccess(t('settingsPage.tailscale.applyAccepted'), container);
+  });
+}
+
+async function saveRuntimeSection(kind: 'runtime' | 'security' | 'certificates' | 'agent' | 'system' | 'tailscale') {
   if (!runtime.value) return;
   if (kind === 'runtime' && !runtimeSectionValid.value) {
     actionError.value = t('settingsPage.validationPositiveNumber');
@@ -233,6 +265,10 @@ async function saveRuntimeSection(kind: 'runtime' | 'security' | 'certificates' 
   }
   if (kind === 'agent' && fieldErrors.value.agentTransferTimeoutSeconds) {
     actionError.value = t('settingsPage.validationAgentTransferTimeout');
+    return;
+  }
+  if (kind === 'tailscale' && invalidTailscaleTags.value.length) {
+    actionError.value = t('settingsPage.tailscale.tagsInvalid', { tags: invalidTailscaleTags.value.join(', ') });
     return;
   }
   await run(`save-${kind}`, async () => {
@@ -296,7 +332,7 @@ async function run(name: string, action: () => Promise<void>) {
   }
 }
 
-function buildRuntimeUpdate(kind: 'runtime' | 'security' | 'certificates' | 'agent' | 'system'): RuntimeUpdate {
+function buildRuntimeUpdate(kind: 'runtime' | 'security' | 'certificates' | 'agent' | 'system' | 'tailscale'): RuntimeUpdate {
   const current = runtime.value!;
   const update: RuntimeUpdate = {
     metricsRetentionDays: current.metricsRetentionDays,
@@ -344,6 +380,10 @@ function buildRuntimeUpdate(kind: 'runtime' | 'security' | 'certificates' | 'age
   }
   if (kind === 'system') {
     update.branding = { loginTitle: form.loginTitle, loginSubtitle: form.loginSubtitle };
+  }
+  if (kind === 'tailscale') {
+    // 密钥留空表示保留已存密钥；保存分区不会顺带清除它。
+    update.tailscale = tailscaleUpdate({ authKey: form.tailscaleAuthKey, tags: tailscaleTagResult.value.tags });
   }
   return update;
 }
@@ -395,6 +435,7 @@ function confirmAction() {
   if (confirmKind.value === 'restore') return confirmRestore();
   if (confirmKind.value === 'system-certificate') return resetSystemCertificate();
   if (confirmKind.value === 'jwt-secret') return confirmResetJwtSecret();
+  if (confirmKind.value === 'tailscale-auth-key') return confirmClearTailscaleAuthKey();
   return startBackup();
 }
 
@@ -492,6 +533,64 @@ onMounted(load);
           <Button class="w-fit" variant="primary" :disabled="Boolean(fieldErrors.agentTransferTimeoutSeconds)" :loading="pending === 'save-agent'" @click="saveRuntimeSection('agent')"><Save />{{ t('settingsPage.saveSection') }}</Button>
         </section>
 
+        <section v-else-if="activeSection === 'tailscale'" class="grid gap-4 rounded-2xl border border-border bg-card p-5">
+          <h2>{{ t('settingsPage.section.tailscale') }}</h2>
+          <p class="m-0 text-sm text-muted-foreground">{{ t('settingsPage.tailscale.hint') }}</p>
+          <div v-if="!runtime?.tailscale.authKeyConfigured" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('settingsPage.tailscale.authKeyMissing') }}</div>
+
+          <div class="grid gap-3 rounded-xl border border-border bg-muted p-4">
+            <div class="flex flex-wrap items-center justify-between gap-3 text-sm">
+              <span class="text-muted-foreground">{{ t('settingsPage.tailscale.authKeyConfigured') }}</span>
+              <Badge :tone="runtime?.tailscale.authKeyConfigured ? 'success' : 'warning'">{{ runtime?.tailscale.authKeyConfigured ? t('state.healthy') : t('state.warning') }}</Badge>
+            </div>
+            <label class="grid gap-1 text-sm">
+              {{ t('settingsPage.tailscale.authKey') }}
+              <Input v-model="form.tailscaleAuthKey" type="password" :placeholder="t('settingsPage.tailscale.authKeyPlaceholder')" />
+              <span class="text-xs text-muted-foreground">{{ t('settingsPage.tailscale.authKeyHint') }}</span>
+            </label>
+            <Button class="w-fit" variant="danger" :disabled="!runtime?.tailscale.authKeyConfigured" :loading="pending === 'clear-tailscale-auth-key'" @click="openConfirm('tailscale-auth-key')"><KeyRound />{{ t('settingsPage.tailscale.clearAuthKey') }}</Button>
+          </div>
+
+          <label class="grid gap-1 text-sm">
+            {{ t('settingsPage.tailscale.tags') }}
+            <Input v-model="form.tailscaleTags" :invalid="invalidTailscaleTags.length > 0" :placeholder="t('settingsPage.tailscale.tagsPlaceholder')" />
+            <span v-if="invalidTailscaleTags.length" class="text-xs text-danger">{{ t('settingsPage.tailscale.tagsInvalid', { tags: invalidTailscaleTags.join(', ') }) }}</span>
+            <span v-else class="text-xs text-muted-foreground">{{ t('settingsPage.tailscale.tagsHint') }}</span>
+          </label>
+          <Button class="w-fit" variant="primary" :disabled="invalidTailscaleTags.length > 0" :loading="pending === 'save-tailscale'" @click="saveRuntimeSection('tailscale')"><Save />{{ t('settingsPage.saveSection') }}</Button>
+
+          <div class="grid gap-3 rounded-xl border border-border bg-muted p-4">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div class="min-w-0">
+                <h3>{{ t('settingsPage.tailscale.containerTitle') }}</h3>
+                <p class="m-0 text-xs text-muted-foreground">{{ t('settingsPage.tailscale.containerHint') }}</p>
+              </div>
+              <Button size="sm" variant="secondary" :disabled="!tailscaleContainer?.available" :loading="pending === 'apply-tailscale'" @click="applyTailscale"><Network />{{ t('settingsPage.tailscale.apply') }}</Button>
+            </div>
+            <template v-if="tailscaleContainer?.available">
+              <div class="flex flex-wrap items-center gap-2">
+                <Badge tone="info">{{ t('settingsPage.tailscale.available') }}</Badge>
+                <Badge :tone="tailscaleContainer.running ? 'success' : 'neutral'">{{ tailscaleContainer.running ? t('settingsPage.tailscale.running') : t('settingsPage.tailscale.stopped') }}</Badge>
+                <Badge :tone="tailscaleContainer.loggedIn ? 'success' : 'warning'">{{ tailscaleContainer.loggedIn ? t('settingsPage.tailscale.loggedIn') : t('settingsPage.tailscale.loggedOut') }}</Badge>
+              </div>
+              <div class="grid gap-3 text-sm lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                <div class="min-w-0"><span class="text-muted-foreground">{{ t('settingsPage.tailscale.hostname') }}</span><strong class="block truncate text-foreground">{{ tailscaleContainer.hostname || t('common.notAvailable') }}</strong></div>
+                <div class="min-w-0"><span class="text-muted-foreground">{{ t('settingsPage.tailscale.version') }}</span><strong class="block truncate text-foreground">{{ tailscaleContainer.version || t('common.notAvailable') }}</strong></div>
+                <div class="min-w-0"><span class="text-muted-foreground">{{ t('settingsPage.tailscale.ipv4') }}</span><strong class="block truncate font-mono text-xs text-foreground">{{ tailscaleContainer.ipv4 || t('common.notAvailable') }}</strong></div>
+                <div class="min-w-0"><span class="text-muted-foreground">{{ t('settingsPage.tailscale.ipv6') }}</span><strong class="block truncate font-mono text-xs text-foreground">{{ tailscaleContainer.ipv6 || t('common.notAvailable') }}</strong></div>
+                <div class="min-w-0"><span class="text-muted-foreground">{{ t('settingsPage.tailscale.backendState') }}</span><strong class="block truncate text-foreground">{{ tailscaleContainer.backendState || t('common.notAvailable') }}</strong></div>
+                <div class="min-w-0"><span class="text-muted-foreground">{{ t('settingsPage.tailscale.updatedAt') }}</span><strong class="block text-foreground">{{ formatDateTime(tailscaleContainer.updatedAt, t('common.never')) }}</strong></div>
+              </div>
+              <div v-if="tailscaleContainer.lastError" class="grid gap-1 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
+                <strong>{{ t('settingsPage.tailscale.lastError') }}</strong>
+                <span class="break-words">{{ tailscaleContainer.lastError }}</span>
+              </div>
+              <p class="m-0 text-xs text-muted-foreground">{{ t('settingsPage.tailscale.applyHint') }}</p>
+            </template>
+            <EmptyState v-else :title="t('settingsPage.tailscale.unavailableTitle')" :description="t('settingsPage.tailscale.unavailableHint')" />
+          </div>
+        </section>
+
         <section v-else-if="activeSection === 'system-certificates'" class="grid gap-4 rounded-2xl border border-border bg-card p-5">
           <h2>{{ t('settingsPage.section.systemCertificates') }}</h2>
           <p class="m-0 text-sm text-muted-foreground">{{ t('settingsPage.systemCertificatesHint') }}</p>
@@ -579,7 +678,7 @@ onMounted(load);
       <div class="flex gap-3 rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning"><AlertTriangle class="mt-0.5 size-4 shrink-0" />{{ t('settingsPage.confirmDanger') }}</div>
       <template #footer>
         <Button @click="confirmOpen = false">{{ t('common.cancel') }}</Button>
-        <Button :variant="confirmKind === 'restore' || confirmKind === 'system-certificate' || confirmKind === 'jwt-secret' ? 'danger' : 'primary'" :loading="Boolean(pending)" @click="confirmAction">{{ t('common.apply') }}</Button>
+        <Button :variant="confirmKind === 'restore' || confirmKind === 'system-certificate' || confirmKind === 'jwt-secret' || confirmKind === 'tailscale-auth-key' ? 'danger' : 'primary'" :loading="Boolean(pending)" @click="confirmAction">{{ t('common.apply') }}</Button>
       </template>
     </Dialog>
   </ConsolePage>

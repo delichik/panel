@@ -13,6 +13,7 @@ import (
 	"time"
 
 	agentcontract "panel/internal/agent/contract"
+	agentendpoint "panel/internal/agent/endpoint"
 	"panel/internal/modules/applications"
 	"panel/internal/modules/servers"
 	"panel/internal/modules/tasks"
@@ -1476,7 +1477,10 @@ func (s *Service) readyServer(ctx context.Context, serverID string) (server.Serv
 	if err != nil {
 		return server.Server{}, "", err
 	}
-	baseURL := strings.TrimSpace(srv.Traits[agentcontract.TraitURL])
+	baseURL := agentendpoint.AgentURL(srv.Traits, agentendpoint.Preferences{
+		Enabled: srv.TailscaleEnabled,
+		Prefer:  srv.TailscalePreferAgent,
+	})
 	if baseURL == "" {
 		return server.Server{}, "", panelerr.Validation("agent_required", "Agent is required for Docker resources")
 	}

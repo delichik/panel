@@ -26,6 +26,9 @@ const (
 	TraitCertificateFingerprint = "agent.certificate.fingerprint"
 	TraitCertificateNotBefore   = "agent.certificate.not_before"
 	TraitCertificateNotAfter    = "agent.certificate.not_after"
+	// TraitCertificateHosts 记录最近一次签发给该节点的 SAN 集合，用于发现
+	// 连接地址变化后是否需要重签证书（例如 tailscale 地址首次可用）。
+	TraitCertificateHosts = "agent.certificate.hosts"
 
 	TraitReportStatus        = "agent.report.status"
 	TraitReportLastMessageAt = "agent.report.last_message_at"
@@ -485,6 +488,63 @@ type OKResponse struct {
 
 // CapabilityStorageShare 表示 Agent 支持存储共享设施（NFS 导出/挂载状态等）。
 const CapabilityStorageShare = "agent.storage.share"
+
+// CapabilityTailscale 表示 Agent 支持节点侧 tailscale 管理。缺少该能力的旧
+// Agent 只让 tailscale 操作失败并提示升级，不得因此触发整机重装（AGT-STATE-004）。
+const CapabilityTailscale = "agent.tailscale"
+
+// TraitTailscale* 是 Panel 侧保存的节点 tailscale 观测态。用户提交的 traits
+// 会被忽略，这些键只由 Panel 根据 Agent 回报写入。
+const (
+	TraitTailscaleStatus    = "tailscale.status"
+	TraitTailscaleIPv4      = "tailscale.ipv4"
+	TraitTailscaleIPv6      = "tailscale.ipv6"
+	TraitTailscaleHostname  = "tailscale.hostname"
+	TraitTailscaleVersion   = "tailscale.version"
+	TraitTailscaleLastError = "tailscale.last_error"
+	TraitTailscaleUpdatedAt = "tailscale.updated_at"
+)
+
+// 节点 tailscale 状态取值。disabled 表示用户未启用；pending 表示等待收敛；
+// unsupported 表示节点不满足安装条件；error 表示最近一次操作失败。
+const (
+	TailscaleStatusDisabled    = "disabled"
+	TailscaleStatusPending     = "pending"
+	TailscaleStatusInstalling  = "installing"
+	TailscaleStatusRunning     = "running"
+	TailscaleStatusDegraded    = "degraded"
+	TailscaleStatusUnsupported = "unsupported"
+	TailscaleStatusError       = "error"
+)
+
+// TailscaleStatus 是节点侧 tailscale 的本机事实。
+type TailscaleStatus struct {
+	Installed    bool   `json:"installed"`
+	Running      bool   `json:"running"`
+	LoggedIn     bool   `json:"loggedIn"`
+	Hostname     string `json:"hostname,omitempty"`
+	IPv4         string `json:"ipv4,omitempty"`
+	IPv6         string `json:"ipv6,omitempty"`
+	Version      string `json:"version,omitempty"`
+	BackendState string `json:"backendState,omitempty"`
+	LastError    string `json:"lastError,omitempty"`
+}
+
+// TailscaleConfigureRequest 只在节点尚未登录时使用 AuthKey；已在 tailnet 中的
+// 节点重新下发配置不得要求再次提供密钥。
+type TailscaleConfigureRequest struct {
+	AuthKey  string   `json:"authKey,omitempty"`
+	Tags     []string `json:"tags,omitempty"`
+	Hostname string   `json:"hostname,omitempty"`
+}
+
+// TailscaleClient 是 Panel 侧发起的节点 tailscale 操作。三个方法都返回节点
+// 的最新状态，使调用方无需额外轮询即可写回观测态。
+type TailscaleClient interface {
+	TailscaleStatus(ctx context.Context, url string) (TailscaleStatus, error)
+	TailscaleConfigure(ctx context.Context, url string, req TailscaleConfigureRequest) (TailscaleStatus, error)
+	TailscaleDisable(ctx context.Context, url string) (TailscaleStatus, error)
+}
 
 // StorageExportStatus 是一台存储服务器上 NFS 导出的生效状态。
 type StorageExportStatus struct {

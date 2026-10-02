@@ -27,6 +27,7 @@ import { getOverviewCardData, getOverviewCards, overviewFromServers, setOverview
 import {
   accepted,
   addNatPort,
+  applyServerTailscale,
   createCredential,
   createServer,
   deleteCredential,
@@ -115,7 +116,7 @@ import {
 } from './resources';
 import { acceptedAgentDeployment, completedTask, mockTasks, mockTaskLogs, mockTaskSteps, retryTask, runTaskNow } from './tasks';
 import { mockActivityRoute, resolveMockExecution } from './activity';
-import { confirmRestore, mockRuntimeSettings, mockServerVariables, restorePreflight, saveRuntime, saveServerVariables, startExport } from './settings';
+import { applyContainerTailscale, confirmRestore, mockRuntimeSettings, mockServerVariables, restorePreflight, saveRuntime, saveServerVariables, startExport, type RuntimeUpdatePayload } from './settings';
 import { advanceExport, exportStatus, resetExport, restoreStatus } from './maintenance';
 import { debugClearRuntimeDataStatus, debugDatabases, debugPprofStatus, debugRuntime, debugTasks, setDebugPprof, startDebugClearRuntimeData } from './debug';
 
@@ -315,6 +316,11 @@ export function installMockApi() {
         return json({ taskId: acceptedAgentDeployment(id) }, 202);
       }
       return mockServers.some((item) => item.id === id) ? json(accepted(op.replace('/', '-')), 202) : error('server_not_found', 'Server was not found.', 404);
+    }
+    const serverTailscaleApplyMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)\/tailscale\/apply$/);
+    if (serverTailscaleApplyMatch && method(init) === 'POST') {
+      const acceptedTask = applyServerTailscale(decodeURIComponent(serverTailscaleApplyMatch[1]));
+      return acceptedTask ? json(acceptedTask, 202) : error('server_not_found', 'Server was not found.', 404);
     }
 
     const ufwMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)\/ufw$/);
@@ -889,11 +895,12 @@ export function installMockApi() {
     if (url.pathname === '/api/v1/system/version' && method(init) === 'GET') return json({ version: '0.2.0-dev', channel: 'dev', commit: 'mock', repository: 'mock/panel', latestVersion: '', updateAvailable: false });
     if (url.pathname === '/api/v1/settings/runtime' && method(init) === 'PUT') {
       try {
-        return json(saveRuntime(await body(init)));
+        return json(saveRuntime(await body<RuntimeUpdatePayload>(init)));
       } catch (err) {
         return error('settings_conflict', err instanceof Error ? err.message : 'Settings conflict.', 409);
       }
     }
+    if (url.pathname === '/api/v1/settings/tailscale/apply' && method(init) === 'POST') return json(applyContainerTailscale(), 202);
     if (url.pathname === '/api/v1/settings/server-variables' && method(init) === 'GET') return json(mockServerVariables);
     if (url.pathname === '/api/v1/settings/server-variables' && method(init) === 'PUT') {
       try {

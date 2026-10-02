@@ -15,6 +15,7 @@ import (
 	"time"
 
 	agentcontract "panel/internal/agent/contract"
+	agentendpoint "panel/internal/agent/endpoint"
 	"panel/internal/agent/nfsvol"
 	"panel/internal/modules/applications"
 	appruntime "panel/internal/modules/applications/runtime"
@@ -126,7 +127,10 @@ func storageAgentEndpoint(srv server.Server) (string, bool) {
 	if srv.Traits == nil || strings.TrimSpace(srv.Traits[agentcontract.TraitEnabled]) != "true" {
 		return "", false
 	}
-	u := strings.TrimSpace(srv.Traits[agentcontract.TraitURL])
+	u := agentendpoint.AgentURL(srv.Traits, agentendpoint.Preferences{
+		Enabled: srv.TailscaleEnabled,
+		Prefer:  srv.TailscalePreferAgent,
+	})
 	return u, u != ""
 }
 
@@ -462,7 +466,9 @@ func (s *Service) ResolveStorageShareMounts(ctx context.Context, app application
 			return nil, err
 		}
 		partitionPath := storagePartitionPath(setting.Root, setting.ServerID, srv.ID, app.ID)
-		nfsSource := storageNFSSource(storageServer.Host, partitionPath)
+		// 节点互联地址：两端都启用 tailscale、双方都有有效 tailnet 地址且至少
+		// 一端要求优先时才改用存储节点的 tailnet 地址。
+		nfsSource := storageNFSSource(interconnectPeerHost(storageServer, srv), partitionPath)
 		if err := s.ensureStorageDirectory(ctx, storageServer, partitionPath); err != nil {
 			return nil, err
 		}
@@ -696,6 +702,8 @@ func (s *Service) removeStorageExport(ctx context.Context, setting StorageServer
 }
 
 // storageAllowedHosts 返回允许挂载的服务器主机白名单（Panel 已纳管服务器）。
+// 启用 tailscale 的节点同时登记其 tailnet 地址：改用 tailnet 地址互联后，
+// 存储节点看到的来源地址是挂载方的 tailnet 地址，缺少该条目会被导出策略拒绝。
 func (s *Service) storageAllowedHosts(ctx context.Context) ([]string, error) {
 	servers, err := s.servers.List(ctx)
 	if err != nil {
@@ -704,19 +712,24 @@ func (s *Service) storageAllowedHosts(ctx context.Context) ([]string, error) {
 	out := []string{}
 	seen := map[string]struct{}{}
 	for _, srv := range servers {
-		host := strings.TrimSpace(srv.Host)
-		if host == "" {
-			continue
+		hosts := []string{strings.TrimSpace(srv.Host)}
+		if srv.TailscaleEnabled {
+			hosts = append(hosts, agentendpoint.TailnetAddress(srv.Traits))
 		}
-		spec := storageHostSpec(host)
-		if spec == "" {
-			continue
+		for _, host := range hosts {
+			if host == "" {
+				continue
+			}
+			spec := storageHostSpec(host)
+			if spec == "" {
+				continue
+			}
+			if _, ok := seen[spec]; ok {
+				continue
+			}
+			seen[spec] = struct{}{}
+			out = append(out, spec)
 		}
-		if _, ok := seen[spec]; ok {
-			continue
-		}
-		seen[spec] = struct{}{}
-		out = append(out, spec)
 	}
 	sort.Strings(out)
 	return out, nil
@@ -741,6 +754,23 @@ func storageNFSSource(host, partitionPath string) string {
 		host = "[" + host + "]"
 	}
 	return host + ":" + partitionPath
+}
+
+// interconnectPeerHost 返回节点互联链接应使用的对端主机地址。
+//
+// 生效条件由 endpoint.InterconnectHost 统一约束：链接两端都启用 tailscale、
+// 双方都有有效 tailnet 地址，且至少一端开启“优先使用 tailscale 地址互联”。
+// 任一条不满足时沿用规范地址，保证开关不会把可达链路变成不可达。
+func interconnectPeerHost(peer, local server.Server) string {
+	return agentendpoint.InterconnectHost(peer.Host, interconnectNode(local), interconnectNode(peer))
+}
+
+func interconnectNode(srv server.Server) agentendpoint.Node {
+	return agentendpoint.Node{
+		Enabled: srv.TailscaleEnabled,
+		Prefer:  srv.TailscalePreferInterconnect,
+		Traits:  srv.Traits,
+	}
 }
 
 func storagePartitionDownloadName(partition StoragePartition) string {
@@ -936,7 +966,7 @@ func (s *Service) StorageShareStatus(ctx context.Context) (StorageShareStatus, e
 				addPartition(item)
 				return
 			}
-			source := storageNFSSource(storageServer.Host, partition.Path)
+			source := storageNFSSource(interconnectPeerHost(storageServer, nodeServer), partition.Path)
 			if status, statusErr := agent.StorageMountStatus(statusCtx, baseURL, source, partition.Target); statusErr == nil {
 				item.VolumeExists = status.VolumeExists
 				item.Mounted = status.Mounted
@@ -991,7 +1021,7 @@ func (s *Service) storagePartitionMountActive(ctx context.Context, partition Sto
 	if !ok {
 		return false, "", nil
 	}
-	source := storageNFSSource(storageServer.Host, partition.Path)
+	source := storageNFSSource(interconnectPeerHost(storageServer, nodeServer), partition.Path)
 	status, err := agent.StorageMountStatus(ctx, baseURL, source, partition.Target)
 	if err != nil {
 		return false, "", storageAgentError(err)

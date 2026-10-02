@@ -48,9 +48,15 @@ type TaskContext struct {
 }
 
 type Definition struct {
-	Type              string
-	Summary           string
-	Hidden            bool
+	Type    string
+	Summary string
+	Hidden  bool
+	// Quiet 标记内部例行任务（例如周期 Agent 健康检查）：它的创建与成功流转
+	// 属于后台巡检事实，在活动日志中记为 debug 级，默认级别筛选不会展示；
+	// 失败/可重试/blocked 仍记为 error，保证故障不会被降噪掩盖。
+	// Quiet 只影响活动日志级别，不改变执行、周期、去重或保留语义；
+	// 是否在任务中心可见由 Hidden 单独决定。
+	Quiet             bool
 	AllowRunNow       bool
 	AllowRetry        bool
 	DisallowCancel    bool

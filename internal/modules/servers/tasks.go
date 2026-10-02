@@ -16,8 +16,12 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 	}
 	for _, def := range []tasks.Definition{
 		{
-			Type:              "server_agent_check",
-			Hidden:            true,
+			Type:   "server_agent_check",
+			Hidden: true,
+			// 周期健康检查按服务器每 5 分钟产生一次执行事实；它们是后台巡检
+			// 而不是用户操作，成功流转只进 debug，失败仍进 error，避免活动
+			// 日志被“检查 Agent”刷屏。
+			Quiet:             true,
 			ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed,
 			Execute:           s.RunAgentCheckTask,
 			Periodic: &tasks.Periodic{
@@ -48,6 +52,12 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 			AllowRunNow: true,
 			AllowRetry:  true,
 			Execute:     s.RunAgentDeployTask,
+		},
+		{
+			Type:        tailscaleApplyTaskType,
+			AllowRunNow: true,
+			AllowRetry:  true,
+			Execute:     s.RunTailscaleApplyTask,
 		},
 		{Type: agentCertificateResetTaskType},
 	} {

@@ -157,6 +157,10 @@ func New(cfg config.Config) (*App, error) {
 				TransferTimeout: time.Duration(runtime.Agent.TransferTimeoutSeconds) * time.Second,
 			}
 		}),
+		server.WithTailscaleSettings(func() server.TailscaleSettings {
+			authKey, tags := settingsSvc.TailscaleNodeCredentials()
+			return server.TailscaleSettings{AuthKey: authKey, Tags: tags}
+		}),
 	)
 	applicationSvc := applications.NewServiceWithOptions(store.AppDB(), agentClient, taskSvc, applications.Config{
 		SaveSessionDir: applicationSaveSessionDir(cfg),
@@ -203,6 +207,8 @@ func New(cfg config.Config) (*App, error) {
 		facilityapps.WithSSHExecutor(executor),
 	)
 	serverSvc.SetDNSSyncTrigger(facilitySvc.SyncServersDNSEntries)
+	// 节点 tailnet 地址或互联意图变化后，两个设施内嵌的对端地址必须重算。
+	serverSvc.SetInterconnectTrigger(facilitySvc.SyncInterconnectServers)
 	containerBridge.facility = facilitySvc
 	applicationSvc.SetReverseProxyReconciler(facilitySvc)
 	applicationSvc.SetReverseProxyPolicyProvider(facilitySvc)
@@ -263,6 +269,11 @@ func New(cfg config.Config) (*App, error) {
 	a.checkDone = checkDone
 	go func() {
 		defer close(checkDone)
+		// 容器内 tailscale 的实际态是“是否改用 tailnet 地址”的前置条件，
+		// 因此跟随既有的 Agent 检查周期一起刷新，不额外引入后台循环。
+		if state := settingsSvc.RefreshTailscaleContainer(checkCtx); state.Available && !state.LoggedIn && state.LastError != "" {
+			logging.L().Warn("container tailscale is not ready", zap.String("error", state.LastError))
+		}
 		serverSvc.CheckConfiguredAgents(checkCtx)
 	}()
 	if err := applicationSvc.StartOrchestrator(context.Background()); err != nil {

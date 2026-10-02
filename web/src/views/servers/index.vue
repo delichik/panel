@@ -17,6 +17,7 @@ import SearchInput from '@/components/ui/SearchInput.vue';
 import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import StatusBadge from '@/components/ui/StatusBadge.vue';
+import Switch from '@/components/ui/Switch.vue';
 import Textarea from '@/components/ui/Textarea.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
@@ -29,7 +30,7 @@ import { useI18n } from '@/i18n';
 import type { CredentialDto } from '@/types/credentials';
 import type { ServerDto, NatPortConfig, NatPortMapping } from '@/types/servers';
 import type { TaskDto, TaskLog } from '@/types/tasks';
-import { agentTone, canInstallUfw, canRunPrivilegedOperation, credentialLabel, serverReachabilityTone } from './model';
+import { agentTone, canInstallUfw, canRunPrivilegedOperation, credentialLabel, serverReachabilityTone, tailscaleStatusKey, tailscaleTone, tailscaleTrait } from './model';
 import ServerFormDialog from './ServerFormDialog.vue';
 import { createLatestRequestGuard } from '@/views/_shared/requestState';
 import { formatDateTime } from '@/utils/datetime';
@@ -548,6 +549,15 @@ async function deployAgent(server: ServerDto) {
   }, 'agent');
 }
 
+/** 与 Agent 部署一致的两阶段反馈：只承诺任务已受理，随后刷新列表与详情等待节点上报。 */
+async function applyServerTailscale(server: ServerDto) {
+  await runInline(async () => {
+    const accepted = await serversApi.applyTailscale(server.id);
+    notifySuccess(t('serversPage.tailscale.applyAccepted', { taskId: accepted.taskId }), accepted);
+    await load();
+  }, 'tailscale');
+}
+
 async function loadAgentDeployment(reset = false, preferredTaskId = '') {
   if (!reset && agentTaskInFlight) return;
   const serverId = selectedId.value;
@@ -821,6 +831,7 @@ onBeforeUnmount(() => {
             <span class="truncate text-xs text-muted-foreground">{{ server.host }}:{{ server.port }}</span>
             <div class="flex flex-wrap gap-1.5">
               <Badge :tone="agentTone(server)">{{ agentText(server) }}</Badge>
+              <Badge v-if="server.tailscaleEnabled" :tone="tailscaleTone(server)">{{ t(tailscaleStatusKey(server)) }}</Badge>
               <Badge :tone="canRunPrivilegedOperation(server) ? 'success' : 'warning'">{{ privilegeText(server) }}</Badge>
             </div>
           </button>
@@ -1030,6 +1041,31 @@ onBeforeUnmount(() => {
                     <Button :loading="pendingOperation === 'agent'" @click="deployAgent(selectedServer)"><ServerCog />{{ t('serversPage.deployAgent') }}</Button>
                     <Button :disabled="!canRunPrivilegedOperation(selectedServer)" :loading="pendingOperation === 'restart'" @click="confirmRestart(selectedServer)"><PlayCircle />{{ t('serversPage.restart') }}</Button>
                   </div>
+                </section>
+                <section class="rounded-2xl border border-border bg-muted p-4">
+                  <div class="flex min-w-0 flex-wrap items-center justify-between gap-2">
+                    <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.tailscale.title') }}</h3>
+                    <Badge v-if="selectedServer.tailscaleEnabled" :tone="tailscaleTone(selectedServer)">{{ t(tailscaleStatusKey(selectedServer)) }}</Badge>
+                  </div>
+                  <p v-if="!selectedServer.tailscaleEnabled" class="mt-2 text-sm text-muted-foreground">{{ t('serversPage.tailscale.disabledHint') }}</p>
+                  <template v-else>
+                    <div class="mt-3 grid gap-2 text-sm">
+                      <label class="flex items-center justify-between gap-3">{{ t('serversPage.tailscale.enabled') }}<Switch :model-value="selectedServer.tailscaleEnabled" disabled :label="t('serversPage.tailscale.enabled')" /></label>
+                      <label class="flex items-center justify-between gap-3">{{ t('serversPage.tailscale.preferAgent') }}<Switch :model-value="selectedServer.tailscalePreferAgent" disabled :label="t('serversPage.tailscale.preferAgent')" /></label>
+                      <label class="flex items-center justify-between gap-3">{{ t('serversPage.tailscale.preferInterconnect') }}<Switch :model-value="selectedServer.tailscalePreferInterconnect" disabled :label="t('serversPage.tailscale.preferInterconnect')" /></label>
+                    </div>
+                    <dl class="mt-3 grid grid-cols-2 gap-3 text-sm max-md:grid-cols-1">
+                      <div><dt>{{ t('serversPage.tailscale.hostname') }}</dt><dd>{{ tailscaleTrait(selectedServer, 'hostname') || t('common.notAvailable') }}</dd></div>
+                      <div><dt>{{ t('serversPage.tailscale.updatedAt') }}</dt><dd>{{ formatDateTime(tailscaleTrait(selectedServer, 'updatedAt'), t('common.never')) }}</dd></div>
+                      <div><dt>{{ t('serversPage.tailscale.ipv4') }}</dt><dd>{{ tailscaleTrait(selectedServer, 'ipv4') || t('common.notAvailable') }}</dd></div>
+                      <div><dt>{{ t('serversPage.tailscale.ipv6') }}</dt><dd>{{ tailscaleTrait(selectedServer, 'ipv6') || t('common.notAvailable') }}</dd></div>
+                    </dl>
+                    <p v-if="tailscaleTrait(selectedServer, 'lastError')" class="mt-3 grid gap-1 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
+                      <strong>{{ t('serversPage.tailscale.lastError') }}</strong>
+                      <span class="break-words">{{ tailscaleTrait(selectedServer, 'lastError') }}</span>
+                    </p>
+                  </template>
+                  <Button class="mt-3 w-full" :disabled="!selectedServer.tailscaleEnabled" :loading="pendingOperation === 'tailscale'" @click="applyServerTailscale(selectedServer)"><RefreshCcw />{{ t('serversPage.tailscale.apply') }}</Button>
                 </section>
                 <section class="rounded-2xl border border-border bg-muted p-4">
                   <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.privilegeAndSecurity') }}</h3>

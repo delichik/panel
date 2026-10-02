@@ -54,6 +54,9 @@ service AgentService {
   rpc StorageStatus(StorageStatusRequest) returns (StorageStatusResponse);
   rpc StorageMountStatus(StorageMountStatusRequest) returns (StorageMountStatusResponse);
   rpc StorageEnsureDirectory(StorageEnsureDirectoryRequest) returns (OKResponse);
+  rpc TailscaleStatus(Empty) returns (TailscaleStatusResponse);
+  rpc TailscaleConfigure(TailscaleConfigureRequest) returns (TailscaleStatusResponse);
+  rpc TailscaleDisable(Empty) returns (TailscaleStatusResponse);
 }
 
 service AgentReportService {
@@ -74,6 +77,8 @@ message AgentReport {
   string reason = 4;
   PackageUpdatesResponse package_updates = 5;
   DockerImagesResponse images = 6;
+  // Tailscale 状态为节点本机事实；旧 Agent 不填该字段，Panel 必须按未知处理。
+  TailscaleStatusResponse tailscale = 7;
 }
 
 message AgentReportConfig {
@@ -694,4 +699,26 @@ message ExecutionResolutionRequest {
   string reason = 3;
   string actor_id = 4;
   string actor_name = 5;
+}
+
+// Tailscale 节点侧状态。installed/running/logged_in 是节点本机事实，
+// ipv4/ipv6 只在成功加入 tailnet 后才有值；Panel 不得把它们当作对公网可达地址。
+message TailscaleStatusResponse {
+  bool installed = 1;
+  bool running = 2;
+  bool logged_in = 3;
+  string hostname = 4;
+  string ipv4 = 5;
+  string ipv6 = 6;
+  string version = 7;
+  string backend_state = 8;
+  string last_error = 9;
+}
+
+// TailscaleConfigureRequest 只在节点尚未登录时使用 auth_key；已在 tailnet 中的
+// 节点重新下发配置不得要求再次提供 key。
+message TailscaleConfigureRequest {
+  string auth_key = 1;
+  repeated string tags = 2;
+  string hostname = 3;
 }

@@ -46,6 +46,14 @@ type Server struct {
 	InitialTaskID   string            `json:"initialTaskId,omitempty"`
 	CreatedAt       time.Time         `json:"createdAt"`
 	UpdatedAt       time.Time         `json:"updatedAt"`
+
+	// TailscaleEnabled 是该节点加入 tailnet 的用户意图；
+	// TailscalePreferAgent 决定 Panel 连接该节点时是否优先使用 tailnet 地址；
+	// TailscalePreferInterconnect 决定涉及该节点的互联链接是否优先使用 tailnet
+	// 地址（需要链接两端都启用且有有效地址）。
+	TailscaleEnabled            bool `json:"tailscaleEnabled"`
+	TailscalePreferAgent        bool `json:"tailscalePreferAgent"`
+	TailscalePreferInterconnect bool `json:"tailscalePreferInterconnect"`
 }
 
 type ServerSummary struct {
@@ -63,6 +71,8 @@ type ServerSummary struct {
 	LastError       string            `json:"lastError,omitempty"`
 	HostKeyMismatch bool              `json:"hostKeyMismatch,omitempty"`
 	UpdatedAt       time.Time         `json:"updatedAt"`
+
+	TailscaleEnabled bool `json:"tailscaleEnabled"`
 }
 
 type ArchitectureInfo struct {
@@ -98,6 +108,12 @@ type SaveRequest struct {
 	Traits       map[string]string `json:"traits"`
 	Variables    map[string]string `json:"variables"`
 	Notes        string            `json:"notes"`
+
+	// 三个 tailscale 开关都是用户意图。启用未开启时两个优先开关必须保存为
+	// false：没有 tailnet 身份就无从选择 tailnet 地址。
+	TailscaleEnabled            bool `json:"tailscaleEnabled"`
+	TailscalePreferAgent        bool `json:"tailscalePreferAgent"`
+	TailscalePreferInterconnect bool `json:"tailscalePreferInterconnect"`
 }
 
 type ProbeResult struct {

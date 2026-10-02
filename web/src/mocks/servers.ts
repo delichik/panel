@@ -1,6 +1,7 @@
 import type { CredentialDto } from '@/types/credentials';
 import type { NatPortConfig, NatPortMapping, NatPortMappingSave, NatPortNeedOpen, OperationAccepted, ServerDto, ServerProbeResult, ServerSaveInput } from '@/types/servers';
 import type { ServerMetricsSeries } from '@/api/servers';
+import { acceptedServerTailscaleApply } from './tasks';
 
 export let mockCredentials: CredentialDto[] = [
   { id: 'cred-root-key', name: 'Root deploy key', type: 'private_key', username: 'root', createdAt: '2026-07-20T10:00:00.000Z', updatedAt: '2026-07-20T10:00:00.000Z' },
@@ -21,7 +22,7 @@ export let mockCredentials: CredentialDto[] = [
 ];
 
 export let mockServers: ServerDto[] = [
-  server('srv-edge-sgp', 'edge-sgp-01', '10.8.0.12', 'cred-root-key', true, {
+  withTailscale(server('srv-edge-sgp', 'edge-sgp-01', '10.8.0.12', 'cred-root-key', true, {
     'agent.enabled': 'true',
     'agent.status': 'compatible',
     'agent.version': '0.9.7',
@@ -31,7 +32,13 @@ export let mockServers: ServerDto[] = [
     'sys.memory_total_mb': '16384',
     'sys.disk_total_gb': '240',
     'sys.network_interfaces': 'eth0|inet|10.8.0.12, eth0|inet6|fd00::12',
-  }),
+    'tailscale.status': 'running',
+    'tailscale.hostname': 'edge-sgp-01',
+    'tailscale.ipv4': '100.64.0.11',
+    'tailscale.ipv6': 'fd7a:115c:a1e0::b',
+    'tailscale.lastError': '',
+    'tailscale.updatedAt': '2026-08-01T07:52:00.000Z',
+  }), true, true),
   server('srv-core-fra', 'core-fra-02', '10.12.4.22', 'cred-root-key', true, {
     'agent.enabled': 'true',
     'agent.status': 'unavailable',
@@ -58,7 +65,7 @@ export let mockServers: ServerDto[] = [
     'sys.disk_total_gb': '480',
     'mock.package_updates': '3',
   }),
-  server('srv-api-hkg-02', 'api-hkg-02-canary', '10.22.0.42', 'cred-ci-runner', true, {
+  withTailscale(server('srv-api-hkg-02', 'api-hkg-02-canary', '10.22.0.42', 'cred-ci-runner', true, {
     'agent.enabled': 'true',
     'agent.status': 'compatible',
     'agent.version': '0.9.8-canary',
@@ -68,7 +75,13 @@ export let mockServers: ServerDto[] = [
     'sys.memory_total_mb': '32768',
     'sys.disk_total_gb': '480',
     'mock.package_updates': '1',
-  }),
+    'tailscale.status': 'installing',
+    'tailscale.hostname': 'api-hkg-02-canary',
+    'tailscale.ipv4': '',
+    'tailscale.ipv6': '',
+    'tailscale.lastError': '',
+    'tailscale.updatedAt': '2026-08-01T07:58:00.000Z',
+  }), true, false),
   server('srv-worker-nrt', 'worker-nrt-queue-a', '10.31.4.9', 'cred-ci-runner', true, {
     'agent.enabled': 'true',
     'agent.status': 'compatible',
@@ -78,14 +91,20 @@ export let mockServers: ServerDto[] = [
     'sys.disk_total_gb': '960',
     'mock.package_updates': '22',
   }),
-  server('srv-worker-nrt-02', 'worker-nrt-queue-b', '10.31.4.10', 'cred-ci-runner', true, {
+  withTailscale(server('srv-worker-nrt-02', 'worker-nrt-queue-b', '10.31.4.10', 'cred-ci-runner', true, {
     'agent.enabled': 'true',
     'agent.status': 'unavailable',
     'agent.last_error': 'agent socket refused during rolling restart',
     'sys.ufw_supported': 'true',
     'sys.ufw_installed': 'true',
     'mock.package_updates': '8',
-  }),
+    'tailscale.status': 'error',
+    'tailscale.hostname': 'worker-nrt-queue-b',
+    'tailscale.ipv4': '',
+    'tailscale.ipv6': '',
+    'tailscale.lastError': 'tailscale up failed: backend returned 403 (device approval required)',
+    'tailscale.updatedAt': '2026-08-01T06:40:00.000Z',
+  }), false, false),
   server('srv-db-fra', 'db-fra-primary', '10.12.9.11', 'cred-db-admin', true, {
     'agent.enabled': 'true',
     'agent.status': 'compatible',
@@ -203,7 +222,7 @@ export let mockServers: ServerDto[] = [
 export function createServer(input: ServerSaveInput): ServerDto {
   const host = input.ipv4 || input.ipv6;
   const item = {
-    ...server(`srv-${Date.now()}`, input.name, host, input.credentialId, true, input.traits ?? {}),
+    ...server(`srv-${Date.now()}`, input.name, host, input.credentialId, true, tailscaleTraits(input.traits, input.tailscaleEnabled)),
     kind: input.kind === 'nat' ? 'nat' : 'normal',
     agentPublicPort: input.kind === 'nat' ? input.agentPublicPort || 0 : 0,
     ipv4: input.ipv4,
@@ -211,6 +230,8 @@ export function createServer(input: ServerSaveInput): ServerDto {
     port: input.port,
     sshUsername: input.sshUsername,
     dockerHost: input.dockerHost,
+    tailscaleEnabled: input.tailscaleEnabled,
+    ...tailscalePreferences(input),
     variables: input.variables,
     notes: input.notes,
     initialTaskId: `task-initial-${Date.now()}`,
@@ -223,10 +244,28 @@ export function updateServer(id: string, input: ServerSaveInput): ServerDto | nu
   let saved: ServerDto | null = null;
   mockServers = mockServers.map((item) => {
     if (item.id !== id) return item;
-    saved = { ...item, ...input, host: input.ipv4 || input.ipv6, updatedAt: new Date().toISOString() };
+    saved = {
+      ...item,
+      ...input,
+      host: input.ipv4 || input.ipv6,
+      // 观测状态只由节点上报：意图变化时清掉旧的 tailscale.* 观测值。
+      traits: tailscaleTraits(input.traits ?? item.traits, input.tailscaleEnabled),
+      ...tailscalePreferences(input),
+      updatedAt: new Date().toISOString(),
+    };
     return saved;
   });
   return saved;
+}
+
+/** 受理一次 tailscale 协调：登记 server_tailscale_apply 任务并让观测状态进入中间态。 */
+export function applyServerTailscale(id: string): OperationAccepted | null {
+  const target = mockServers.find((item) => item.id === id);
+  if (!target) return null;
+  if (target.tailscaleEnabled) {
+    target.traits = { ...(target.traits ?? {}), 'tailscale.status': 'installing', 'tailscale.updatedAt': new Date().toISOString() };
+  }
+  return { taskId: acceptedServerTailscaleApply(id) };
 }
 
 export function deleteServer(id: string): boolean {
@@ -246,6 +285,7 @@ export function probeServer(input: ServerSaveInput): ServerProbeResult {
     privilegeMode: input.sshUsername === 'root' ? 'root' : input.sshUsername === 'readonly' ? 'none' : 'passwordless_sudo',
     os: { id: 'debian', versionId: '13', prettyName: 'Debian GNU/Linux 13', supported: !unreachable },
     architecture: { os: 'linux', arch: 'amd64', rawMachine: 'x86_64' },
+    // 探测只验证 SSH 与权限：tailscale 是否可用由协调任务上报，探测结果不做承诺。
     traits: { 'sys.cpu_model': 'Mock vCPU', 'sys.ufw_supported': unreachable ? 'false' : 'true' },
     variables: {},
     error: unreachable ? 'dial tcp: i/o timeout' : '',
@@ -353,6 +393,9 @@ function server(id: string, name: string, host: string, credentialId: string, re
     architecture: { os: 'linux', arch: id.includes('gpu') ? 'amd64' : 'amd64', rawMachine: 'x86_64' },
     sudo: { passwordless: privileged },
     privilege: { mode: privileged ? 'passwordless_sudo' : 'none', privileged },
+    tailscaleEnabled: false,
+    tailscalePreferAgent: false,
+    tailscalePreferInterconnect: false,
     reachable,
     loadAverage: reachable ? `${(0.34 + packageUpdates / 20).toFixed(2)} ${(0.28 + packageUpdates / 25).toFixed(2)} ${(0.24 + packageUpdates / 30).toFixed(2)}` : '',
     lastCheckedAt: reachable ? '2026-08-01T07:58:00.000Z' : '2026-07-31T22:12:00.000Z',
@@ -363,6 +406,27 @@ function server(id: string, name: string, host: string, credentialId: string, re
 }
 
 let mockNatPorts: Record<string, NatPortMapping[]> = {};
+
+/** 种子数据里声明“已加入 tailnet”的节点：意图字段与观测 traits 一起给出。 */
+function withTailscale(item: ServerDto, preferAgent: boolean, preferInterconnect: boolean): ServerDto {
+  return { ...item, tailscaleEnabled: true, tailscalePreferAgent: preferAgent, tailscalePreferInterconnect: preferInterconnect };
+}
+
+/** 未启用 Tailscale 的节点不参与 prefer 分支，提交时固定为 false。 */
+function tailscalePreferences(input: Pick<ServerSaveInput, 'tailscaleEnabled' | 'tailscalePreferAgent' | 'tailscalePreferInterconnect'>) {
+  if (!input.tailscaleEnabled) return { tailscalePreferAgent: false, tailscalePreferInterconnect: false };
+  return { tailscalePreferAgent: input.tailscalePreferAgent, tailscalePreferInterconnect: input.tailscalePreferInterconnect };
+}
+
+/** 意图变化时清掉旧的 `tailscale.*` 观测值，重新等待节点上报。 */
+function tailscaleTraits(traits: Record<string, string> | undefined, enabled: boolean): Record<string, string> {
+  const next: Record<string, string> = {};
+  for (const [key, value] of Object.entries(traits ?? {})) {
+    if (!key.startsWith('tailscale.')) next[key] = value;
+  }
+  if (enabled) next['tailscale.status'] = 'pending';
+  return next;
+}
 
 function mockNatConfigFor(id: string): NatPortConfig | null {
   const srv = mockServers.find((item) => item.id === id);

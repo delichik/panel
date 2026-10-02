@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -57,12 +58,19 @@ func (s *Service) EnsureAgentTLSAssets(ctx context.Context) (*agentsecurity.TLSA
 	return nil, firstNonNil(caErr, clientErr)
 }
 
-func (s *Service) IssueAgentServerCertificate(ctx context.Context, serverID, serverName, host string) (agentsecurity.ServerCertificate, []byte, error) {
+// IssueAgentServerCertificate 为节点签发 Agent 服务端证书。hosts 必须覆盖
+// Panel 可能拨号的全部地址：规范连接地址，以及启用优先时使用的 tailnet 地址。
+// gRPC 客户端按拨号目标校验主机名，缺少任一地址都会让 mTLS 校验失败。
+func (s *Service) IssueAgentServerCertificate(ctx context.Context, serverID, serverName string, hosts []string) (agentsecurity.ServerCertificate, []byte, error) {
 	assets, err := s.EnsureAgentTLSAssets(ctx)
 	if err != nil {
 		return agentsecurity.ServerCertificate{}, nil, err
 	}
-	cert, err := assets.IssueServerCertificate("panel-agent-"+strings.TrimSpace(serverID), []string{host})
+	normalized := normalizeCertificateHosts(hosts)
+	if len(normalized) == 0 {
+		return agentsecurity.ServerCertificate{}, nil, panelerr.Validation("agent_certificate_host_required", "Agent certificate requires at least one host")
+	}
+	cert, err := assets.IssueServerCertificate("panel-agent-"+strings.TrimSpace(serverID), normalized)
 	if err != nil {
 		return agentsecurity.ServerCertificate{}, nil, err
 	}
@@ -70,6 +78,26 @@ func (s *Service) IssueAgentServerCertificate(ctx context.Context, serverID, ser
 		return agentsecurity.ServerCertificate{}, nil, err
 	}
 	return cert, assets.CACertificatePEM(), nil
+}
+
+// normalizeCertificateHosts 裁剪、去重并保持稳定顺序，避免同一组地址因为
+// 顺序或空白差异被判定为不同 SAN 集合而反复重签证书。
+func normalizeCertificateHosts(hosts []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(hosts))
+	for _, host := range hosts {
+		value := strings.TrimSpace(host)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (s *Service) ResetAgentCA(ctx context.Context) (*agentsecurity.TLSAssets, error) {

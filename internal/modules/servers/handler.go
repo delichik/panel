@@ -139,6 +139,17 @@ func (h *Handler) DeployAgent(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
 }
 
+// ApplyTailscale 接受节点 tailscale 收敛请求。2xx 只代表任务已可靠创建或复用，
+// 不代表远端节点已经加入 tailnet。
+func (h *Handler) ApplyTailscale(w http.ResponseWriter, r *http.Request) {
+	task, err := h.service.ApplyTailscale(r.Context(), serverIDFromRequest(r))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
+}
+
 func (h *Handler) SystemCertificates(w http.ResponseWriter, r *http.Request) {
 	items, err := h.service.SystemCertificates(r.Context())
 	if err != nil {

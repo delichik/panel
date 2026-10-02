@@ -20,6 +20,14 @@ func newControlSchemaTestDB(t *testing.T) *sql.DB {
 	for _, statement := range []string{
 		`CREATE TABLE applications(id TEXT PRIMARY KEY,name TEXT NOT NULL DEFAULT '')`,
 		`CREATE TABLE servers(id TEXT PRIMARY KEY,name TEXT NOT NULL DEFAULT '')`,
+		`CREATE TABLE tasks(
+			id TEXT PRIMARY KEY,operation_id TEXT NOT NULL DEFAULT '',type TEXT NOT NULL,parent_task_id TEXT NOT NULL DEFAULT '',child_index INTEGER NOT NULL DEFAULT 0,child_count INTEGER NOT NULL DEFAULT 0,
+			resource_type TEXT NOT NULL DEFAULT '',resource_id TEXT NOT NULL DEFAULT '',server_id TEXT NOT NULL DEFAULT '',node_id TEXT NOT NULL DEFAULT '',
+			trigger_type TEXT NOT NULL DEFAULT '',trigger_resource_type TEXT NOT NULL DEFAULT '',trigger_resource_id TEXT NOT NULL DEFAULT '',trigger_task_id TEXT NOT NULL DEFAULT '',triggered_by TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'queued',stage TEXT NOT NULL DEFAULT '',summary TEXT NOT NULL DEFAULT '',error TEXT NOT NULL DEFAULT '',retry_count INTEGER NOT NULL DEFAULT 0,quiet INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL DEFAULT '')`,
+		`CREATE TABLE task_steps(
+			id TEXT PRIMARY KEY,task_id TEXT NOT NULL,step TEXT NOT NULL,status TEXT NOT NULL,percentage REAL NOT NULL DEFAULT 0,metadata_json TEXT NOT NULL DEFAULT '{}',started_at TEXT,finished_at TEXT,error TEXT NOT NULL DEFAULT '')`,
+		`CREATE TABLE task_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,task_id TEXT NOT NULL,time TEXT NOT NULL,stream TEXT NOT NULL,line TEXT NOT NULL)`,
 		`CREATE TABLE jobs(
 			id TEXT PRIMARY KEY,application_id TEXT NOT NULL,server_id TEXT NOT NULL,instance_id TEXT NOT NULL,
 			action TEXT NOT NULL DEFAULT 'apply',desired_generation INTEGER NOT NULL DEFAULT 0,desired_spec_hash TEXT NOT NULL DEFAULT '',desired_revision_id TEXT NOT NULL DEFAULT '',desired_spec_json TEXT NOT NULL DEFAULT '{}',remove_data INTEGER NOT NULL DEFAULT 0,force_nonce INTEGER NOT NULL DEFAULT 0,
@@ -64,6 +72,70 @@ func TestInstallControlTriggersReplacesLegacyDefinitions(t *testing.T) {
 		}
 		if !strings.Contains(definition, check.contains) || strings.Contains(definition, "BEGIN SELECT 1") {
 			t.Fatalf("trigger %s was not upgraded: %s", check.name, definition)
+		}
+	}
+}
+
+// TestTaskControlFactsUseQuietLevelForInternalRoutine 固定 TASK-REG-003 的
+// Activity 控制触发器语义：quiet 任务（内部例行巡检）的创建、流转、步骤和输出
+// 为 debug，失败与 stderr 仍为 error；非 quiet 任务保持 info。
+func TestTaskControlFactsUseQuietLevelForInternalRoutine(t *testing.T) {
+	db := newControlSchemaTestDB(t)
+	ctx := context.Background()
+	if err := InstallControlTriggers(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range []struct {
+		id    string
+		quiet int
+		want  string
+	}{{"task_quiet", 1, "debug"}, {"task_loud", 0, "info"}} {
+		if _, err := db.Exec(`INSERT INTO tasks(id,operation_id,type,status,summary,quiet,created_at) VALUES(?,?,?,?,?,?,?)`,
+			task.id, "op_"+task.id, "server_agent_check", "queued", "Checking agent", task.quiet, "now"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`UPDATE tasks SET status='running' WHERE id=?`, task.id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`INSERT INTO task_steps(id,task_id,step,status) VALUES(?,?,?,?)`, "step_"+task.id, task.id, "check", "running"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`INSERT INTO task_logs(task_id,time,stream,line) VALUES(?,?,?,?)`, task.id, "now", "system", "line"); err != nil {
+			t.Fatal(err)
+		}
+		for eventType, want := range map[string]string{
+			"operation.requested": task.want,
+			"execution.started":   task.want,
+			"step.started":        task.want,
+			"output.chunk":        task.want,
+		} {
+			var level string
+			if err := db.QueryRow(`SELECT level FROM activity_events WHERE run_id=? AND event_type=?`, task.id, eventType).Scan(&level); err != nil {
+				t.Fatalf("%s %s: %v", task.id, eventType, err)
+			}
+			if level != want {
+				t.Fatalf("%s %s level = %s, want %s", task.id, eventType, level, want)
+			}
+		}
+		if _, err := db.Exec(`INSERT INTO task_logs(task_id,time,stream,line) VALUES(?,?,?,?)`, task.id, "now", "stderr", "boom"); err != nil {
+			t.Fatal(err)
+		}
+		var stderrLevel string
+		if err := db.QueryRow(`SELECT level FROM activity_events WHERE run_id=? AND stream='stderr'`, task.id).Scan(&stderrLevel); err != nil {
+			t.Fatal(err)
+		}
+		if stderrLevel != "error" {
+			t.Fatalf("%s stderr output level = %s, want error", task.id, stderrLevel)
+		}
+		if _, err := db.Exec(`UPDATE tasks SET status='failed',error='unreachable' WHERE id=?`, task.id); err != nil {
+			t.Fatal(err)
+		}
+		var failureLevel string
+		if err := db.QueryRow(`SELECT level FROM activity_events WHERE run_id=? AND event_type='execution.finished'`, task.id).Scan(&failureLevel); err != nil {
+			t.Fatal(err)
+		}
+		if failureLevel != "error" {
+			t.Fatalf("%s failed execution level = %s, want error", task.id, failureLevel)
 		}
 	}
 }

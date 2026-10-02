@@ -38,6 +38,7 @@ type RuntimeStats struct {
 type RuntimeDefinitionStats struct {
 	Type                    string `json:"type"`
 	Hidden                  bool   `json:"hidden"`
+	Quiet                   bool   `json:"quiet"`
 	Executable              bool   `json:"executable"`
 	Periodic                bool   `json:"periodic"`
 	AllowRunNow             bool   `json:"allowRunNow"`
@@ -124,6 +125,7 @@ func (w *Worker) TaskRuntime() RuntimeStats {
 		detail := RuntimeDefinitionStats{
 			Type:                    def.Type,
 			Hidden:                  def.Hidden,
+			Quiet:                   def.Quiet,
 			Executable:              def.Execute != nil,
 			Periodic:                def.Periodic != nil,
 			AllowRunNow:             def.AllowRunNow && def.Execute != nil,

@@ -41,7 +41,8 @@
 - 注册方通过任务定义声明参数校验、执行函数、`BeforeStart`、完成 hook、失败 hook、重试/手动运行能力、并发策略、一次性 worker 排队超时清理能力和周期配置。
 - 业务模块的 `tasks.go` 必须保持声明式：`Execute` 直接绑定接受 `tasks.TaskContext` 的具名方法，`CollectInputs` 直接绑定具名 collector。禁止使用只为转调另一函数而存在的匿名 executor，也禁止在任务定义中内联节流、扫描和批量输入组装等大段逻辑。
 - 多个周期任务共用的时间节流使用 `tasks.NewIntervalCollector`；业务模块仍负责提供实际输入 collector，tasks 框架只管理调用间隔和上次成功产出时间。
-- `Hidden`、`AllowRunNow`、`AllowRetry`、`DisallowCancel`、`DefaultMaxRetries`、`StaleQueuedAfter`、并发策略、executor 和周期配置都属于任务定义的一部分；这些能力随业务模块注册，不由任务中心或任务内部 worker 根据 task type 字符串另行维护。没有注册 `Execute` 的记录型任务不得声明 `AllowRunNow` 或 `AllowRetry`，避免任务中心暴露无法真正执行的手动运行或重试入口。
+- `Hidden`、`Quiet`、`AllowRunNow`、`AllowRetry`、`DisallowCancel`、`DefaultMaxRetries`、`StaleQueuedAfter`、并发策略、executor 和周期配置都属于任务定义的一部分；这些能力随业务模块注册，不由任务中心或任务内部 worker 根据 task type 字符串另行维护。没有注册 `Execute` 的记录型任务不得声明 `AllowRunNow` 或 `AllowRetry`，避免任务中心暴露无法真正执行的手动运行或重试入口。
+- `Quiet` 标记内部例行任务（例如每 5 分钟的 `server_agent_check` Agent 健康检查）。定义声明的 quiet 随任务行持久化，Activity 控制触发器据此把该执行在活动日志中的创建与非失败流转记为 `debug`：默认级别筛选（`info,warning,error`）不再展示这些巡检事实，需要时可用“全部级别”查看。失败、可重试失败和 blocked 仍记为 `error`，任务日志的标准输出同样降为 `debug`、stderr 保持 `error`，因此降噪不会掩盖故障。`Quiet` 只影响活动日志级别，不改变执行、周期、并发、去重、保留策略，也不影响任务中心可见性（由 `Hidden` 单独决定）。
 - 注册方可通过 `DisallowCancel` 声明任务不可取消；不可取消任务不能被 `Cancel` 或 `CancelByServer` 取消，任务 API 返回 `allowCancel=false`，删除服务器也不会终止这类任务。
 - 任务列表、详情、重试和手动运行 API 返回任务时，会根据当前注册定义补充 `allowRunNow` 与 `allowRetry`。前端必须使用这两个响应字段决定操作入口，不得维护 task type 白名单；即使定义误声明能力但没有 executor，API 也必须返回不可操作。
 - 周期任务类型通过 `Periodic.CollectInputs` 收集本轮自动触发需要的参数，并决定是否创建任务实例。返回 `shouldRun=false` 时不创建任务、不执行、不写日志、不进入任务中心；返回 `shouldRun=true` 时交给任务 manager 创建任务。应用协调是例外：collector 只把 report/周期输入交给应用 planner，由 planner 创建或合并 AppDB Job，生产路径不返回 `application_target_*` 输入，也不启动应用部署 executor。手动执行周期任务仍按普通任务语义处理，调用方必须显式传入参数，不会调用 `CollectInputs` 自动补齐。
@@ -57,7 +58,7 @@
 - 操作标题、任务类型、步骤名称和阶段应在前端按稳定的 `type` / `stage` 标识翻译，不直接展示持久化的英文 summary 作为标题。
 - 任务摘要（summary）以后端稳定英文写入存储，任务中心用 `translateTaskSummary` 按当前语言渲染翻译；不要把摘要写入逻辑与展示语言耦合。
 - `tasks.Service` 在内存中维护当前进程的 running execution registry。任务进入 `running` 前必须注册执行对象，进入完成、失败、可重试失败或阻塞等终态后必须注销；显式取消会取消 execution context 并移除 registry 项。
-- Debug 快照会只读导出任务注册定义的稳定诊断字段，包括隐藏、执行器、周期配置、手动运行/重试、默认重试、并发策略和 stale queued 超时；不得导出任务参数、collector 输入或业务数据。
+- Debug 快照会只读导出任务注册定义的稳定诊断字段，包括隐藏、内部例行（quiet）、执行器、周期配置、手动运行/重试、默认重试、并发策略和 stale queued 超时；不得导出任务参数、collector 输入或业务数据。
 - 任务进入 `completed`、`failed`、`failed_retryable`、`blocked` 或 `cancelled` 等终态后，后台 worker 后续的完成/失败/重试写入不得覆盖既有终态；服务器删除会把该服务器的 `queued`、`scheduled`、`failed_retryable` 和 `running` 任务标记为 `cancelled`，避免卡住删除或被调度器继续捡起。
 - `FinishExecution` 只在数据库中的任务状态已经不再是 `running` 时清理内存执行对象；如果终态写库失败导致数据库仍为 `running`，必须保留 execution，避免 orphan 检查误判。
 - Panel 启动时以及 tasks 内部 worker 运行期间每 30 秒检查数据库中的 `running` 任务；如果任务 ID 无法在当前进程 execution registry 中找到，会保留 `running` 并标记 `stage=uncertain`、追加不确定事实；禁止通过重试或取消释放并发域。重复检查不追加重复事实。

@@ -98,7 +98,7 @@
 
 - `DIAG-SNP-001`：只有认证用户可调用 `GET /api/v1/debug/runtime`、`GET /api/v1/debug/tasks` 和 `GET /api/v1/debug/databases`；三类诊断必须独立采集和响应，任一接口变慢或失败不得阻塞另两个接口完成加载；每个响应提供自身采集语义的 `collectedAt`。
 - `DIAG-SNP-002`：runtime 响应的process必须包含启动时间、非负uptime、PID、Go版本、OS/架构、CPU、goroutine和cgo计数；memory必须包含当前/累计/heap/stack/cache/span/GC统计及可选lastGCAt。
-- `DIAG-SNP-003`：tasks响应必须反映worker运行、注册/可执行/周期类型、运行execution数及每个definition的hidden/executable/periodic/run-now/retry/max-retry/concurrency/stale/interval能力，不得含任务参数或日志。
+- `DIAG-SNP-003`：tasks响应必须反映worker运行、注册/可执行/周期类型、运行execution数及每个definition的hidden/quiet/executable/periodic/run-now/retry/max-retry/concurrency/stale/interval能力，不得含任务参数或日志。
 - `DIAG-SNP-004`：databases响应中的每个app/log/metrics数据库必须返回连接池、文件大小、SQLite page/free/used和用户表统计；行数是准确COUNT，表按总大小降序、同大小按名称排序。
 - `DIAG-SNP-005`：dbstat不可用时只设置 `database_table_sizes_unavailable` 并保留健康连接、行数和其他统计；单表COUNT失败只标该表错误，数据库不可用则标安全errorCode而非让整个快照失败。
 - `DIAG-SNP-006`：诊断响应绝不返回数据库路径/DSN、schema SQL、配置值、秘密、业务行、任务参数或绝对敏感文件路径；文件路径只在服务内用于stat。

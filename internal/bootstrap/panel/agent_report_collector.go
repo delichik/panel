@@ -8,6 +8,7 @@ import (
 
 	agentclient "panel/internal/agent/client"
 	agentcontract "panel/internal/agent/contract"
+	agentendpoint "panel/internal/agent/endpoint"
 	"panel/internal/modules/containers"
 	"panel/internal/modules/observability/metrics"
 	"panel/internal/modules/runtimeevents"
@@ -25,6 +26,7 @@ type agentReportCollector struct {
 	writers maintenance.Gate
 	servers interface {
 		List(context.Context) ([]server.Server, error)
+		ApplyTailscaleReport(context.Context, string, agentcontract.TailscaleStatus) error
 	}
 	reportStreams interface {
 		RecordAgentReportStream(context.Context, string, bool, time.Time, string) error
@@ -64,6 +66,7 @@ type agentReportStream struct {
 
 func newAgentReportCollector(serverSvc interface {
 	List(context.Context) ([]server.Server, error)
+	ApplyTailscaleReport(context.Context, string, agentcontract.TailscaleStatus) error
 }, client *agentclient.GRPCClient, settingsSvc *settings.Service, metricsSvc *metrics.Service, containerSvc *containerization.Service, packageSvc interface {
 	SaveReportedUpdates(context.Context, string, []linux.PackageUpdate) error
 }) *agentReportCollector {
@@ -148,7 +151,10 @@ func (c *agentReportCollector) sync(ctx context.Context) {
 }
 
 func (c *agentReportCollector) ensureStream(ctx context.Context, srv server.Server) {
-	endpoint := strings.TrimSpace(srv.Traits[agentcontract.TraitURL])
+	endpoint := agentendpoint.AgentURL(srv.Traits, agentendpoint.Preferences{
+		Enabled: srv.TailscaleEnabled,
+		Prefer:  srv.TailscalePreferAgent,
+	})
 	c.mu.Lock()
 	if current := c.streams[srv.ID]; current != nil {
 		if current.endpoint == endpoint {
@@ -454,6 +460,13 @@ func (c *agentReportCollector) handleReport(ctx context.Context, serverID string
 			if err != nil {
 				logging.L().Warn("agent report reconcile trigger failed", zap.String("server_id", serverID), zap.Error(err))
 			}
+		}
+	}
+	// Tailscale 分支：只有上报明确携带该字段时才写观测态。旧 Agent 不上报，
+	// 因此已有地址不会被空报告清空。
+	if report.HasTailscale && report.Tailscale != nil {
+		if err := c.servers.ApplyTailscaleReport(ctx, serverID, *report.Tailscale); err != nil {
+			logging.L().Warn("agent tailscale report save failed", zap.String("server_id", serverID), zap.Error(err))
 		}
 	}
 	return nil

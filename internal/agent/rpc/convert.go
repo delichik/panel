@@ -228,6 +228,39 @@ func goFail2BanStatus(in *agentpb.Fail2BanStatusResponse) agentcontract.Fail2Ban
 	return agentcontract.Fail2BanStatusResponse{Installed: in.Installed, Active: in.Active, PanelConfigPresent: in.PanelConfigPresent, Jails: append([]string(nil), in.Jails...), Raw: in.Raw}
 }
 
+func pbTailscaleStatus(in agentcontract.TailscaleStatus) *agentpb.TailscaleStatusResponse {
+	return &agentpb.TailscaleStatusResponse{
+		Installed:    in.Installed,
+		Running:      in.Running,
+		LoggedIn:     in.LoggedIn,
+		Hostname:     in.Hostname,
+		Ipv4:         in.IPv4,
+		Ipv6:         in.IPv6,
+		Version:      in.Version,
+		BackendState: in.BackendState,
+		LastError:    in.LastError,
+	}
+}
+
+// GoTailscaleStatus 把节点回报转换为 Panel 侧契约。nil 表示旧 Agent 未上报该
+// 字段，调用方必须按“未知”处理，不得据此清空已有观测。
+func GoTailscaleStatus(in *agentpb.TailscaleStatusResponse) *agentcontract.TailscaleStatus {
+	if in == nil {
+		return nil
+	}
+	return &agentcontract.TailscaleStatus{
+		Installed:    in.Installed,
+		Running:      in.Running,
+		LoggedIn:     in.LoggedIn,
+		Hostname:     in.Hostname,
+		IPv4:         in.Ipv4,
+		IPv6:         in.Ipv6,
+		Version:      in.Version,
+		BackendState: in.BackendState,
+		LastError:    in.LastError,
+	}
+}
+
 func pbSpec(in appruntime.Spec) *agentpb.RuntimeSpec {
 	ports := make([]*agentpb.RuntimePort, 0, len(in.Ports))
 	for _, item := range in.Ports {

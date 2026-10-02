@@ -30,7 +30,7 @@
 
 ## 3. 运行时设置读取与写入
 
-- `SET-RUN-001`：前置为认证用户；`GET /api/v1/settings/runtime` 必须返回监听地址、数据库路径、数据根、指标/事件保留与周期、会话期限、语言、日志级别、远程超时、协调追踪、品牌、证书和 Panel TLS 选择状态，但绝不返回 JWT secret，仅返回 `jwtSecretConfigured`。
+- `SET-RUN-001`：前置为认证用户；`GET /api/v1/settings/runtime` 必须返回监听地址、数据库路径、数据根、指标/事件保留与周期、会话期限、语言、日志级别、远程超时、协调追踪、品牌、证书、Panel TLS 选择状态、Agent 投递分组和 Tailscale 分组（只写密钥状态、标签与容器实际态，见 `SET-RUN-018`），但绝不返回 JWT secret，仅返回 `jwtSecretConfigured`；Tailscale 认证密钥同样绝不返回，仅返回 `authKeyConfigured`。
 - `SET-RUN-002`：前置为未认证用户；仅 `GET /api/v1/settings/public-branding` 可公开，且只返回登录标题和副标题；不得泄露路径、邮箱、证书 ID、保留策略或其他运行时配置。
 - `SET-RUN-003`：前置为旧库缺少设置行；启动必须用配置文件、环境变量和内置默认值幂等补齐空值；已持久化值优先于基础配置，重复启动不得漂移。
 - `SET-RUN-004`：前置为配置 JWT secret 为空或仍是公开默认常量；首次确保默认设置时必须生成随机 32 字节 secret 并持久化；配置显式提供的非默认 secret 必须原样保留。
@@ -47,6 +47,9 @@
 - `SET-RUN-015`：运行时设置包含 Agent 投递分组 `agent.downloadBaseUrl`、`agent.downloadVerifyTls`、`agent.transferTimeoutSeconds`（默认空、false、120）。`GET`/`PUT /settings/runtime` 必须返回并接受该分组；省略 `agent` 时保留现值，省略 `transferTimeoutSeconds` 时保留已存值而不是写入 0。空 `downloadBaseUrl` 表示关闭 HTTP 投递，Agent 部署继续只走 SSH 上传。
 - `SET-RUN-016`：`downloadBaseUrl` 必须校验并归一化为不含 path/query/fragment/userinfo 的 `http(s)://host[:port]` 源，并拒绝引号、空白、反斜杠与 shell 元字符（该值会被插值进远端 shell 命令）；`transferTimeoutSeconds` 必须在 60..3600 之间。读写响应必须回显归一化结果（去掉末尾 `/`）。
 - `SET-RUN-017`：Agent 投递设置更新成功后，随后创建的 `server_agent_deploy` 任务必须读取新值，无需重启 Panel。
+- `SET-RUN-018`：运行时设置包含 Tailscale 分组 `tailscale`。`GET /settings/runtime` 必须返回 `authKeyConfigured`（布尔，永不返回密钥本身或密文）、已归一化的 `tags`，以及容器实际态 `container`（`available`、`running`、`loggedIn`、`hostname`、`ipv4`、`ipv6`、`version`、`backendState`、`lastError`、`updatedAt`）。容器内 tailscale 不可管理时 `available=false`、其余字段为空值/零值并记录日志，不得让整个设置接口失败。详见 `TS-SET-001`。
+- `SET-RUN-019`：`PUT /settings/runtime` 的 `tailscale.authKey` 是只写字段：非空时校验后替换存储值，空或省略保留已存密钥，`clearAuthKey=true` 删除该键并把容器期望态置为关闭；`tailscale.tags` 必须形如 `tag:name`（小写字母、数字、连字符），保存前统一小写、去重并排序（换行编码持久化）。非法密钥返回 `invalid_tailscale_auth_key`，非法标签返回 `invalid_tailscale_tag`，失败时本次请求的 Tailscale 字段与标签都不得写入；密钥不得出现在 API 响应、进程日志、任务参数或运行事件中。详见 `TS-SET-002/003`。
+- `SET-RUN-020`：`POST /api/v1/settings/tailscale/apply` 重新生成 `<dataRoot>/tailscale/config.json` 并请求 panel-init 重新收敛，返回 202 与当前容器实际态；未经 panel-init 监管（例如 `go run ./cmd/panel`）时返回 `tailscale_container_unavailable`，期望态写入失败返回 `tailscale_config_write_failed`。设置持久化与容器收敛是两步：收敛失败只反映在随后读取的 `container.lastError` 中，不得回滚已保存设置，也不得把受理当成本地节点已登录。详见 `TS-SET-004/005`。
 
 ## 4. Panel HTTPS 设置与持久化安全
 
@@ -79,4 +82,4 @@
 - `ID-EVD-001`：除登录、会话和公开品牌外，上述 API 未认证均返回 401；强制改密状态的权限矩阵必须由后端集成测试覆盖。
 - `ID-EVD-002`：账户、nonce、JWT secret和 runtime settings 位于 AppDB；进程重启后账户、设置和主动注销效果必须保持，登录失败计数可重置。
 - `ID-EVD-003`：账户修改、JWT secret 更新和设置更新的失败用例必须验证旧值仍可读取；成功用例必须验证旧 token 失效或继续有效的精确边界。
-- `ID-EVD-004`：路由验收必须覆盖 `POST /auth/login|logout|account|jwt-secret`、`GET /auth/session`、`GET/PUT /settings/runtime`、`GET/PUT /settings/server-variables`、`GET /settings/public-branding` 和 `GET /system/version`，且与路由清单及前端 typed client 一致。
+- `ID-EVD-004`：路由验收必须覆盖 `POST /auth/login|logout|account|jwt-secret`、`GET /auth/session`、`GET/PUT /settings/runtime`（含 `tailscale` 分组）、`POST /settings/tailscale/apply`、`GET/PUT /settings/server-variables`、`GET /settings/public-branding` 和 `GET /system/version`，且与路由清单及前端 typed client 一致。

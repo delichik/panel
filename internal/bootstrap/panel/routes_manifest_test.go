@@ -32,8 +32,13 @@ func TestAPIRouteManifest(t *testing.T) {
 	}
 
 	patterns := routePatterns(t, files)
-	const wantCount = 175
-	const wantHash = "a879ba80170d1beb5ac0e3fd19c20a789cc92425db3c9553989c2bbad6129421"
+	// 本轮新增两条 tailscale 收敛入口：
+	//   POST /api/v1/settings/tailscale/apply
+	//   POST /api/v1/servers/{id}/tailscale/apply
+	// 消费者（web/src/api/settings.ts、web/src/api/servers.ts、Mock 与验收条目
+	// TS-*) 必须与本清单同步变化（COV-API-001）。
+	const wantCount = 177
+	const wantHash = "da1c54c97b86e8f46b6b157812b17190672156ff280cf1002200c4742dc0364d"
 	manifest := strings.Join(patterns, "\n") + "\n"
 	gotHash := fmt.Sprintf("%x", sha256.Sum256([]byte(manifest)))
 	if len(patterns) != wantCount || gotHash != wantHash {

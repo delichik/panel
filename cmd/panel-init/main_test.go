@@ -23,6 +23,7 @@ var (
 	helperMaintenanceMode    = flag.String("maintenance-mode", "", "panel-init helper maintenance mode")
 	helperInitRestartURL     = flag.String("init-restart-url", "", "panel-init helper restart URL")
 	helperInitRestartToken   = flag.String("init-restart-token", "", "panel-init helper restart token")
+	helperInitTailscaleURL   = flag.String("init-tailscale-url", "", "panel-init helper tailscale control URL")
 	restartTokenShapePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 )
 
@@ -61,13 +62,13 @@ func TestRestartModeContractAllowsOnlyMaintenanceModes(t *testing.T) {
 
 func TestPanelInitRestartListenerRequiresValidToken(t *testing.T) {
 	restarts := make(chan string, 1)
-	server, restartURL, err := startRestartListener(restarts, "secret-token")
+	server, urls, err := startControlListener(restarts, "secret-token", nil)
 	if err != nil {
 		t.Fatalf("startRestartListener() error = %v", err)
 	}
 	defer server.Close()
 
-	status := postRestart(t, restartURL, "wrong-token", `{"mode":"restore"}`)
+	status := postRestart(t, urls.Restart, "wrong-token", `{"mode":"restore"}`)
 	if status != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", status, http.StatusUnauthorized)
 	}
@@ -76,13 +77,13 @@ func TestPanelInitRestartListenerRequiresValidToken(t *testing.T) {
 
 func TestPanelInitRestartListenerRejectsMalformedRestartRequest(t *testing.T) {
 	restarts := make(chan string, 1)
-	server, restartURL, err := startRestartListener(restarts, "secret-token")
+	server, urls, err := startControlListener(restarts, "secret-token", nil)
 	if err != nil {
 		t.Fatalf("startRestartListener() error = %v", err)
 	}
 	defer server.Close()
 
-	status := postRestart(t, restartURL, "secret-token", `{`)
+	status := postRestart(t, urls.Restart, "secret-token", `{`)
 	if status != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", status, http.StatusBadRequest)
 	}
@@ -91,13 +92,13 @@ func TestPanelInitRestartListenerRejectsMalformedRestartRequest(t *testing.T) {
 
 func TestPanelInitRestartListenerAcceptsAuthorizedRestartRequest(t *testing.T) {
 	restarts := make(chan string, 1)
-	server, restartURL, err := startRestartListener(restarts, "secret-token")
+	server, urls, err := startControlListener(restarts, "secret-token", nil)
 	if err != nil {
 		t.Fatalf("startRestartListener() error = %v", err)
 	}
 	defer server.Close()
 
-	status := postRestart(t, restartURL, "secret-token", `{"mode":"restore"}`)
+	status := postRestart(t, urls.Restart, "secret-token", `{"mode":"restore"}`)
 	if status != http.StatusAccepted {
 		t.Fatalf("status = %d, want %d", status, http.StatusAccepted)
 	}
@@ -106,13 +107,13 @@ func TestPanelInitRestartListenerAcceptsAuthorizedRestartRequest(t *testing.T) {
 
 func TestPanelInitRestartListenerFallsBackToNormalForInvalidMode(t *testing.T) {
 	restarts := make(chan string, 1)
-	server, restartURL, err := startRestartListener(restarts, "secret-token")
+	server, urls, err := startControlListener(restarts, "secret-token", nil)
 	if err != nil {
 		t.Fatalf("startRestartListener() error = %v", err)
 	}
 	defer server.Close()
 
-	status := postRestart(t, restartURL, "secret-token", `{"mode":"invalid"}`)
+	status := postRestart(t, urls.Restart, "secret-token", `{"mode":"invalid"}`)
 	if status != http.StatusAccepted {
 		t.Fatalf("status = %d, want %d", status, http.StatusAccepted)
 	}
@@ -182,6 +183,7 @@ func TestPanelInitRestartRequestStopsChildAndSwitchesMode(t *testing.T) {
 	t.Setenv("PANEL_INIT_HELPER_RECORD", recordPath)
 
 	restarts := make(chan string, 1)
+	signals := make(chan os.Signal, 1)
 	result := make(chan struct {
 		code int
 		mode string
@@ -189,7 +191,12 @@ func TestPanelInitRestartRequestStopsChildAndSwitchesMode(t *testing.T) {
 	}, 1)
 
 	go func() {
-		code, mode, err := runPanel(os.Args[0], "http://127.0.0.1/restart", "restart-token", backups.MaintenanceModeNormal, restarts)
+		code, mode, err := runPanel(panelLaunch{
+			path:  os.Args[0],
+			urls:  controlURLs{Restart: "http://127.0.0.1/restart", Tailscale: "http://127.0.0.1/tailscale"},
+			token: "restart-token",
+			mode:  backups.MaintenanceModeNormal,
+		}, restarts, signals)
 		result <- struct {
 			code int
 			mode string
@@ -220,6 +227,7 @@ func TestPanelInitRestartRequestStopsChildAndSwitchesMode(t *testing.T) {
 	for _, want := range []string{
 		"mode=" + backups.MaintenanceModeNormal,
 		"restartURL=http://127.0.0.1/restart",
+		"tailscaleURL=http://127.0.0.1/tailscale",
 		"token=restart-token",
 	} {
 		if !strings.Contains(text, want) {
@@ -303,7 +311,7 @@ func waitForFile(t *testing.T, path string) {
 
 func runPanelInitHelper() {
 	if recordPath := os.Getenv("PANEL_INIT_HELPER_RECORD"); recordPath != "" {
-		_ = os.WriteFile(recordPath, []byte(fmt.Sprintf("mode=%s\nrestartURL=%s\ntoken=%s\n", *helperMaintenanceMode, *helperInitRestartURL, *helperInitRestartToken)), 0o644)
+		_ = os.WriteFile(recordPath, []byte(fmt.Sprintf("mode=%s\nrestartURL=%s\ntailscaleURL=%s\ntoken=%s\n", *helperMaintenanceMode, *helperInitRestartURL, *helperInitTailscaleURL, *helperInitRestartToken)), 0o644)
 	}
 	if os.Getenv("PANEL_INIT_HELPER_WAIT") != "1" {
 		os.Exit(0)

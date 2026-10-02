@@ -36,11 +36,18 @@ services:
       - "127.0.0.1:8443:8443"
     volumes:
       - panel-data:/app/data
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun
 
 volumes:
   panel-data:
     name: panel-data
 ```
+
+`cap_add` 与 `devices` 只服务于可选的 Tailscale 集成，详见下文 [Tailscale](#tailscale) 一节；不使用该功能时可以删掉。
 
 拉取镜像并启动 Seamark：
 
@@ -81,8 +88,13 @@ docker run -d \
   --restart unless-stopped \
   -p 127.0.0.1:8443:8443 \
   -v panel-data:/app/data \
+  --cap-add=NET_ADMIN \
+  --cap-add=NET_RAW \
+  --device=/dev/net/tun \
   ghcr.io/delichik/panel:latest
 ```
+
+这三个 `--cap-add`/`--device` 参数只服务于可选的 Tailscale 集成，详见下文 [Tailscale](#tailscale) 一节。
 
 检查状态和日志：
 
@@ -102,6 +114,7 @@ Seamark 的所有持久化状态都保存在 `/app/data` 下，包括：
 - 证书与密钥资产。
 - Seamark 安全设置和自动生成的主密钥。
 - 备份与还原工作数据。
+- 使用容器内 Tailscale 时的节点身份、LocalAPI socket 与期望态配置。
 
 本文示例把 `/app/data` 映射到命名卷 `panel-data`。重新创建或升级容器时，必须继续使用同一个数据卷。
 
@@ -194,6 +207,29 @@ Seamark 会在每台受管服务器上安装 `panel-agent`。默认方式是用�
 
 CDN 选择提示：Cloudflare 免费版通常把中国大陆访客调度到境外边缘，收益有限；带大陆节点的 CDN 需要域名已备案。源站始终是 Panel，缓存未命中时由 CDN 回源。
 
+## Tailscale
+
+Seamark 可以把 Panel 容器与所管理的服务器加入同一个 tailnet，并在 Panel→节点、节点→节点的连接上优先使用 tailnet 地址。Tailscale 是**可选**能力：没有下面的能力与设备时，其余功能照常工作，界面会明确显示该功能不可用，而不是静默失败。
+
+容器要求：
+
+- 需要 `--cap-add=NET_ADMIN`、`--cap-add=NET_RAW` 与 `--device=/dev/net/tun`。上文 Compose 示例使用 `cap_add` 与 `devices`，`docker run` 示例使用对应的命令行参数。
+- 宿主机必须提供 `tun` 模块（`modprobe tun`，或用 `lsmod | grep tun` 检查）。缺少该模块时 `tailscaled` 无法以内核 TUN 模式启动。
+- 容器内 `panel-init` 以 root 作为 PID 1，把 Panel 子进程降权到非 root 的 `panel` 用户，并自行管理 `tailscaled`；状态与 LocalAPI socket 都保存在 `/app/data/tailscale`。
+
+配置方式：
+
+- 在 **设置 → Tailscale**（[设置页](https://<主机>:8443/settings/tailscale)）填写 Tailscale 认证密钥。密钥只写不读：保存后无法再次查看，只能替换或清除；清除会删除已存密钥并停止容器内 tailscale。
+- ACL 标签使用 `tag:name` 形式（仅小写字母、数字和连字符），保存前会统一小写、去重并排序。
+- 逐节点开关位于服务器表单，并在服务器详情页以只读方式展示：加入 tailnet、Agent 连接优先使用 Tailscale、节点互联优先使用 Tailscale。两个偏好开关只有在节点已加入、且 Panel 容器自身已登录 tailnet 时才生效；它们不会改写 `agent.url`。
+- 同一设置分区的「应用 / 重连」只请求协调，是否生效以旁边显示的实际态为准。
+
+限制：
+
+- Seamark 不管理 `tailscale0` 接口的 UFW 规则。节点上 UFW 处于 active 时，需要自行放行该接口，否则来自 tailnet 的流量会被拒绝。
+- 开启「Agent 连接优先使用 Tailscale」的节点，其节点证书需要覆盖 tailnet 地址；Seamark 会复用既有 Agent 部署通道刷新证书（只重写证书与配置，不重传二进制）。
+- DNS 记录、NAT 端口提示与应用模板变量继续使用公网地址，tailnet 地址不会被发布到这些地方。
+
 ## 常见问题
 
 ### 容器退出或状态异常
@@ -226,6 +262,10 @@ ports:
 ### 其他设备无法打开页面
 
 检查容器状态、宿主机防火墙、云安全组和发布的宿主机端口。如果映射使用 `127.0.0.1`，Seamark 将只能从本机或本机反向代理访问。
+
+### Tailscale 显示为不可用
+
+设置页提示当前部署无法管理容器内 tailscale。请依次检查：容器是否以 `--cap-add=NET_ADMIN`、`--cap-add=NET_RAW` 和 `--device=/dev/net/tun` 启动；宿主 `tun` 模块是否已加载；镜像内是否存在 `tailscale` 与 `tailscaled` 可执行文件。Seamark 无法在容器内自行修复该前提，Panel 其余功能继续可用，各节点的 Tailscale 意图仍会保存。
 
 ### 重新创建容器后数据消失
 

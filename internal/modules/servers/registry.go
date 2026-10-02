@@ -40,6 +40,10 @@ func (s *Service) Create(ctx context.Context, req SaveRequest) (Server, error) {
 		Notes:           req.Notes,
 		CreatedAt:       now,
 		UpdatedAt:       now,
+
+		TailscaleEnabled:            req.TailscaleEnabled,
+		TailscalePreferAgent:        req.TailscaleEnabled && req.TailscalePreferAgent,
+		TailscalePreferInterconnect: req.TailscaleEnabled && req.TailscalePreferInterconnect,
 	}
 	if srv.Traits == nil {
 		srv.Traits = map[string]string{}
@@ -76,6 +80,9 @@ func (s *Service) Update(ctx context.Context, serverID string, req SaveRequest) 
 	nextAgentPublicPort := normalizeAgentPublicPort(nextKind, req.AgentPublicPort)
 	nextAgentURL := agentURLForPort(nextHost, effectiveAgentPortFor(nextKind, nextAgentPublicPort))
 	hostChanged := strings.TrimSpace(current.Host) != nextHost
+	previousTailscaleEnabled := current.TailscaleEnabled
+	previousTailscalePreferAgent := current.TailscalePreferAgent
+	previousTailscalePreferInterconnect := current.TailscalePreferInterconnect
 	if hostChanged && serverHasAgentConfigured(current, current.Traits) {
 		current.Traits[agentcontract.TraitEnabled] = "true"
 		current.Traits[agentcontract.TraitURL] = nextAgentURL
@@ -113,6 +120,14 @@ func (s *Service) Update(ctx context.Context, serverID string, req SaveRequest) 
 	current.Variables = normalizeServerVariables(req.Variables, current.Traits)
 	current.Notes = req.Notes
 	current.UpdatedAt = time.Now().UTC()
+	// 未启用 tailscale 的节点不可能拥有 tailnet 地址，因此两个优先开关必须
+	// 一起归零，避免持久化出无法生效的意图。
+	current.TailscaleEnabled = req.TailscaleEnabled
+	current.TailscalePreferAgent = req.TailscaleEnabled && req.TailscalePreferAgent
+	current.TailscalePreferInterconnect = req.TailscaleEnabled && req.TailscalePreferInterconnect
+	if !req.TailscaleEnabled {
+		clearTailscaleTraits(current.Traits)
+	}
 	if err := s.repo.Update(ctx, current); err != nil {
 		return Server{}, err
 	}
@@ -125,7 +140,52 @@ func (s *Service) Update(ctx context.Context, serverID string, req SaveRequest) 
 		}
 	}
 	s.notifyDNSSync(ctx, serverID, previousIPv4 != nextIPv4 || previousIPv6 != nextIPv6)
+	s.reconcileTailscaleIntent(ctx, serverID, req.TailscaleEnabled)
+	s.reconcileAgentCertificateHosts(ctx, serverID, previousTailscalePreferAgent, req.TailscaleEnabled && req.TailscalePreferAgent)
+	// 互联地址选择依赖“启用 + 优先”两个意图：任一变化（含关闭节点后清除观测
+	// 地址）都必须让设施重算内嵌的对端地址。
+	if previousTailscaleEnabled != current.TailscaleEnabled || previousTailscalePreferInterconnect != current.TailscalePreferInterconnect {
+		s.notifyInterconnectChange(ctx, serverID)
+	}
 	return s.Get(ctx, serverID)
+}
+
+// reconcileAgentCertificateHosts 在“优先使用 tailscale 地址连接 agent”开关变化
+// 后校验节点证书的 SAN 集合。启用时需要把 tailnet 地址加入证书，关闭时需要把
+// 它移除；两者都通过既有的 Agent 部署通道完成（仅证书刷新，不重传二进制）。
+func (s *Service) reconcileAgentCertificateHosts(ctx context.Context, serverID string, previousPrefer, nextPrefer bool) {
+	if previousPrefer == nextPrefer {
+		return
+	}
+	srv, err := s.Get(ctx, serverID)
+	if err != nil {
+		return
+	}
+	if strings.TrimSpace(srv.Traits[agentcontract.TraitEnabled]) != "true" {
+		return
+	}
+	if sameStringSet(agentCertificateHosts(srv), splitTraitList(srv.Traits[agentcontract.TraitCertificateHosts])) {
+		return
+	}
+	if err := s.markAgentStatus(ctx, serverID, agentcontract.StatusIncompatible, "", "tailscale agent address preference changed; agent certificate refresh required"); err != nil {
+		logging.L().Warn("mark agent certificate refresh failed", zap.String("server_id", serverID), zap.Error(err))
+	}
+}
+
+// clearTailscaleTraits 在用户关闭 tailscale 时清除观测态：保留过期的 tailnet
+// 地址会让他人（互联地址选择、界面）继续把节点当作 tailnet 成员。
+func clearTailscaleTraits(traits map[string]string) {
+	for _, key := range []string{
+		agentcontract.TraitTailscaleStatus,
+		agentcontract.TraitTailscaleIPv4,
+		agentcontract.TraitTailscaleIPv6,
+		agentcontract.TraitTailscaleHostname,
+		agentcontract.TraitTailscaleVersion,
+		agentcontract.TraitTailscaleLastError,
+		agentcontract.TraitTailscaleUpdatedAt,
+	} {
+		delete(traits, key)
+	}
 }
 
 func (s *Service) Delete(ctx context.Context, serverID string) error {

@@ -19,7 +19,7 @@
 | 设施应用 | `/applications/facility-apps`、`/applications/facility-apps/:facilityKind` | `/:facilityKind/config` 为可直达编辑态深链 |
 | DNS / 证书 | `/dns/domains`、`/certificates/domains`、`/certificates/self-signed`、`/certificates/keys` | — |
 | 运行记录 | `/application-operations`、`/system-events` | `/tasks` 为兼容任务中心 |
-| 设置 / 诊断 | `/settings/general`、`security`、`certificates`、`agent`、`system-certificates`、`system`、`backups` | `/settings` 重定向；`/debug` 隐藏直达 |
+| 设置 / 诊断 | `/settings/general`、`security`、`certificates`、`agent`、`tailscale`、`system-certificates`、`system`、`backups` | `/settings` 重定向；`/debug` 隐藏直达 |
 | 未找到 | AppShell 内 catch-all | 保留导航 |
 
 ## 3. 登录与强制改密
@@ -63,6 +63,8 @@
 | UI-SRV-011 | 填写变量 | 逐行 `key=value`；缺 `=`、空变量名属阻断错误，逐行就地提示并阻止提交；重复 key 保留 last-wins 并显示非阻断警告 | 空行忽略；阻断错误存在时创建/保存禁用 | 每行行号定位对应错误；无写请求直到阻断错误消除 |
 | UI-SRV-012 | 无可用凭据时新建服务器 | 凭据区显示“尚无 SSH 凭据”引导与添加入口，可在弹窗内快捷创建凭据；成功后自动选中新凭据 | 凭据列表加载失败在弹窗内就地显示错误与重试，不影响服务器其余表单 | 快捷创建后凭据即时可用于表单与探测；无需离开当前弹窗 |
 | UI-SRV-013 | 查看新建服务器初始化状态 | 详情侧栏以状态卡展示初始化任务（StatusBadge + 错误 + 活动入口），而非仅纯文本任务 id | 初始化任务加载失败有局部错误；任务失败时服务器保留、标记不可达并在侧栏持久展示原因，供编辑/删除 | 活跃初始化任务刷新，终态与失败原因可经任务状态与活动日志追溯 |
+| UI-SRV-014 | 在服务器表单中配置 Tailscale 意图 | 「将该节点加入 tailnet」与两个偏好开关（Agent 连接、节点互联）；未启用时两个偏好开关禁用并显示说明，提交时未启用的一侧偏好被规范化为 false | 不得在未启用时提交偏好组合；不得只依赖后端强制而在界面保留可点击的无效开关 | 重新打开表单回显与服务端一致的三个开关，保存后详情与列表按服务端返回状态渲染 |
+| UI-SRV-015 | 查看服务器 Tailscale 状态或手动重试 | `tailscaleEnabled` 时列表行与详情区显示状态徽标（`disabled`/`pending`/`installing`/`running`/`degraded`/`unsupported`/`error` 的本地化文案）；详情只读展示三个开关、主机名、IPv4/IPv6、状态更新时间与 `lastError`；「重试 / 应用 Tailscale」提交任务并提示真实 taskId，随后刷新服务器详情 | 未启用时显示未配置说明且重试禁用；从未上报时显示明确空态而不是伪造状态；失败必须显示原因且可重试，不得把“任务已受理”表述为节点已加入 | toast 中的 taskId 可在任务中心定位；徽标与 `tailscale.status` 一致，`lastError` 脱敏后原样展示 |
 
 ## 6. SSH 凭据 `/credentials`
 
@@ -269,6 +271,7 @@
 | UI-SET-008 | 配置备份导出 | 默认加密；关闭加密显示身份可恢复性警示；加密时密码必填，确认后提交 export 并显示 pending | 不得在此假装归档已可下载；失败不进入 pending | 未满足密码时按钮禁用，成功提示真实 exportId |
 | UI-SET-009 | 选择还原文件 | FileUploadButton 选 `.panel-backup` 后先 preflight，显示 manifest 版本/文件数；用户另勾覆盖确认并再经 danger Dialog 才 confirm restore | 更换文件清旧 preflight；无 preflight/未勾选不能恢复 | 仅最终确认发送 multipart restore，成功显示 pending/restarting |
 | UI-SET-010 | 保存 Agent download（`/settings/agent`） | 编辑下载基址、传输超时与「校验下载 TLS 证书」开关；只合入 agent 分区；超时校验 60..3600 秒，越界就地报错且不发请求 | 基址留空即表示关闭 HTTP 投递，文案必须说明回落到 SSH 上传；校验开关关闭时必须说明完整性仍由 SSH 下发的 sha256 保证 | 保存后重新 hydrate 且只回显归一化基址；保存本分区不得提交其他分区未保存脏值 |
+| UI-SET-011 | 打开 `/settings/tailscale`、编辑认证密钥与 ACL 标签，或点击「应用 / 重连」 | 密钥为只写密码输入：留空保存表示保留已存密钥，已配置时显示「认证密钥已配置」徽标、未配置时警示节点无法加入 tailnet；标签按 `tag:name` 本地解析并对非法项就地阻断（错误文案列出具体标签）；保存只合入 `tailscale` 分区并重新 hydrate；「清除认证密钥」须 danger 确认后提交清除；容器状态区展示 available/running/loggedIn、主机名、版本、IPv4/IPv6、backendState、最近应用时间与 `lastError`；`available=false` 时显示不可用空态并禁用「应用 / 重连」 | 存在非法标签时不发请求；清除失败保留当前状态与输入；容器不可用时按钮禁用且不得伪造状态或轮询不存在的接口；「应用」只表示已请求协调，不得表述为 tailscaled 已登录 | 保存后只回显归一化标签与 `authKeyConfigured`（密钥框保持为空）；确认弹窗取消时零请求；不可用时展示需在 Seamark 之外配置的说明而不是错误码堆叠 |
 
 ## 19. 维护 `/maintenance/backup`
 

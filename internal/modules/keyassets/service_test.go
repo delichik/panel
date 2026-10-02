@@ -542,7 +542,7 @@ func TestIssueAgentServerCertificateUpsertsSystemAssetWithoutOpeningPublicImport
 	if _, err := svc.EnsureAgentTLSAssets(ctx); err != nil {
 		t.Fatal(err)
 	}
-	firstCertificate, _, err := svc.IssueAgentServerCertificate(ctx, "server-1", "Primary", "192.0.2.10")
+	firstCertificate, _, err := svc.IssueAgentServerCertificate(ctx, "server-1", "Primary", []string{"192.0.2.10"})
 	if err != nil {
 		t.Fatalf("first server certificate issue failed: %v", err)
 	}
@@ -559,7 +559,7 @@ func TestIssueAgentServerCertificateUpsertsSystemAssetWithoutOpeningPublicImport
 		t.Fatalf("agent server asset = %#v", firstAsset)
 	}
 
-	if _, _, err := svc.IssueAgentServerCertificate(ctx, "server-1", "Primary", "192.0.2.10"); err != nil {
+	if _, _, err := svc.IssueAgentServerCertificate(ctx, "server-1", "Primary", []string{"192.0.2.10"}); err != nil {
 		t.Fatalf("server certificate reissue failed: %v", err)
 	}
 	secondAsset, err := svc.Get(ctx, assetID)
@@ -594,7 +594,7 @@ func TestIssueAgentServerCertificateAllowsDuplicateServerNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, serverID := range []string{"server-1", "server-2"} {
-		if _, _, err := svc.IssueAgentServerCertificate(ctx, serverID, "NAT", "192.0.2.10"); err != nil {
+		if _, _, err := svc.IssueAgentServerCertificate(ctx, serverID, "NAT", []string{"192.0.2.10"}); err != nil {
 			t.Fatalf("issue for %s failed: %v", serverID, err)
 		}
 	}

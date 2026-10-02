@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	agentcontract "panel/internal/agent/contract"
 	agentsystem "panel/internal/agent/system"
 	"panel/internal/platform/linux"
 )
@@ -116,6 +117,12 @@ func (okReportCollector) PackageUpdates(context.Context) ([]linux.PackageUpdate,
 	return nil, nil
 }
 
+// TailscaleStatus 让替身覆盖上报循环里的 tailscale 采集分支；未启用时节点
+// 报告 installed=false，Panel 据此把观测态标记为未安装。
+func (okReportCollector) TailscaleStatus(context.Context) (agentcontract.TailscaleStatus, error) {
+	return agentcontract.TailscaleStatus{Installed: true, Running: true, LoggedIn: true, IPv4: "100.64.0.11"}, nil
+}
+
 func TestReportHubKeepsSchedulingWhenWatchersChurn(t *testing.T) {
 	hub := newReportHub(okReportCollector{}, nil)
 	w := hub.add(reportConfig{serverID: "s1", metricsInterval: 1 * time.Second})
@@ -150,6 +157,9 @@ func (failingReportCollector) SystemStatus(context.Context) (linux.SystemStatus,
 }
 func (failingReportCollector) PackageUpdates(context.Context) ([]linux.PackageUpdate, error) {
 	return nil, errors.New("packages unavailable")
+}
+func (failingReportCollector) TailscaleStatus(context.Context) (agentcontract.TailscaleStatus, error) {
+	return agentcontract.TailscaleStatus{}, errors.New("tailscale unavailable")
 }
 
 func TestCollectAndBroadcastKeepsFailedCollectionsNil(t *testing.T) {

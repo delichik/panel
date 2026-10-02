@@ -19,6 +19,7 @@ import (
 	"time"
 
 	agentcontract "panel/internal/agent/contract"
+	agentendpoint "panel/internal/agent/endpoint"
 	"panel/internal/modules/applications/runtime"
 	"panel/internal/modules/applications/spec"
 	"panel/internal/modules/runtimeevents"
@@ -3257,7 +3258,10 @@ func agentURLFromServer(srv server.Server) (string, bool) {
 	if srv.Traits == nil || strings.TrimSpace(srv.Traits[agentcontract.TraitEnabled]) != "true" {
 		return "", false
 	}
-	u := strings.TrimSpace(srv.Traits[agentcontract.TraitURL])
+	u := agentendpoint.AgentURL(srv.Traits, agentendpoint.Preferences{
+		Enabled: srv.TailscaleEnabled,
+		Prefer:  srv.TailscalePreferAgent,
+	})
 	return u, u != ""
 }
 

@@ -7,6 +7,7 @@ import Button from '@/components/ui/Button.vue';
 import Dialog from '@/components/ui/Dialog.vue';
 import Input from '@/components/ui/Input.vue';
 import Select from '@/components/ui/Select.vue';
+import Switch from '@/components/ui/Switch.vue';
 import Textarea from '@/components/ui/Textarea.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import CredentialFormFields from '@/components/patterns/CredentialFormFields.vue';
@@ -14,7 +15,7 @@ import { emptyCredentialInput, secretPayload, validateCredentialInput, type Cred
 import { useI18n } from '@/i18n';
 import type { CredentialDto, CredentialInput } from '@/types/credentials';
 import type { ServerDto, ServerProbeResult, ServerSaveInput } from '@/types/servers';
-import { connectionSignature, hasBlockingPairIssues, parsePairs, stringifyPairs, validateProbeInput, validateServerInput } from './model';
+import { connectionSignature, hasBlockingPairIssues, parsePairs, stringifyPairs, tailscalePreferences, validateProbeInput, validateServerInput } from './model';
 
 /**
  * 服务器创建/编辑弹窗。探测是独立的连接诊断：只要求地址、端口、凭据有效，
@@ -47,6 +48,9 @@ const form = reactive({
   sshUsername: '',
   credentialId: '',
   dockerHost: 'unix:///var/run/docker.sock',
+  tailscaleEnabled: false,
+  tailscalePreferAgent: false,
+  tailscalePreferInterconnect: false,
   variables: '',
   notes: '',
 });
@@ -66,6 +70,11 @@ const kindOptions = computed(() => [
   { value: 'normal', label: t('serversPage.kindNormal') },
   { value: 'nat', label: t('serversPage.kindNat') },
 ]);
+const tailscalePayload = computed(() => tailscalePreferences({
+  tailscaleEnabled: form.tailscaleEnabled,
+  tailscalePreferAgent: form.tailscalePreferAgent,
+  tailscalePreferInterconnect: form.tailscalePreferInterconnect,
+}));
 const formPayload = computed<ServerSaveInput>(() => ({
   name: form.name,
   kind: form.kind,
@@ -76,6 +85,9 @@ const formPayload = computed<ServerSaveInput>(() => ({
   sshUsername: form.sshUsername,
   credentialId: form.credentialId,
   dockerHost: form.dockerHost,
+  tailscaleEnabled: form.tailscaleEnabled,
+  tailscalePreferAgent: tailscalePayload.value.tailscalePreferAgent,
+  tailscalePreferInterconnect: tailscalePayload.value.tailscalePreferInterconnect,
   variables: parsePairs(form.variables).pairs,
   notes: form.notes,
 }));
@@ -138,6 +150,9 @@ watch(() => props.open, (open) => {
       sshUsername: props.editing.sshUsername ?? '',
       credentialId: props.editing.credentialId,
       dockerHost: props.editing.dockerHost || 'unix:///var/run/docker.sock',
+      tailscaleEnabled: props.editing.tailscaleEnabled,
+      tailscalePreferAgent: props.editing.tailscalePreferAgent,
+      tailscalePreferInterconnect: props.editing.tailscalePreferInterconnect,
       variables: stringifyPairs(props.editing.variables),
       notes: props.editing.notes ?? '',
     });
@@ -152,6 +167,9 @@ watch(() => props.open, (open) => {
       sshUsername: '',
       credentialId: props.credentials[0]?.id ?? '',
       dockerHost: 'unix:///var/run/docker.sock',
+      tailscaleEnabled: false,
+      tailscalePreferAgent: false,
+      tailscalePreferInterconnect: false,
       variables: '',
       notes: '',
     });
@@ -329,6 +347,24 @@ async function saveQuickCredential() {
             <p v-for="issue in pairWarnings" :key="`w${issue.line}`" class="m-0 text-sm text-warning">{{ t('serversPage.variablesWarningDuplicateKey', { line: issue.line, key: issue.key ?? '' }) }}</p>
           </div>
           <label class="grid gap-1 text-sm">{{ t('serversPage.notes') }}<Textarea id="server-form-notes" v-model="form.notes" /></label>
+
+          <div class="grid gap-2 rounded-xl border border-border bg-muted p-3">
+            <h4 class="m-0 text-xs font-semibold text-foreground">{{ t('serversPage.tailscale.title') }}</h4>
+            <label class="flex items-center justify-between gap-3 text-sm">
+              {{ t('serversPage.tailscale.enabled') }}
+              <Switch id="server-form-tailscale-enabled" v-model="form.tailscaleEnabled" :label="t('serversPage.tailscale.enabled')" />
+            </label>
+            <p class="m-0 text-xs text-muted-foreground">{{ t('serversPage.tailscale.enabledHint') }}</p>
+            <label class="flex items-center justify-between gap-3 text-sm">
+              {{ t('serversPage.tailscale.preferAgent') }}
+              <Switch id="server-form-tailscale-prefer-agent" v-model="form.tailscalePreferAgent" :disabled="!form.tailscaleEnabled" :label="t('serversPage.tailscale.preferAgent')" />
+            </label>
+            <label class="flex items-center justify-between gap-3 text-sm">
+              {{ t('serversPage.tailscale.preferInterconnect') }}
+              <Switch id="server-form-tailscale-prefer-interconnect" v-model="form.tailscalePreferInterconnect" :disabled="!form.tailscaleEnabled" :label="t('serversPage.tailscale.preferInterconnect')" />
+            </label>
+            <p v-if="!form.tailscaleEnabled" class="m-0 text-xs text-muted-foreground">{{ t('serversPage.tailscale.preferDisabledHint') }}</p>
+          </div>
         </div>
       </section>
 

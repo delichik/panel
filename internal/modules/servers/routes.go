@@ -18,6 +18,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, auth httpx.Middleware) {
 	mux.Handle("POST /api/v1/servers/{id}/restart", auth(http.HandlerFunc(h.Restart)))
 	mux.Handle("POST /api/v1/servers/{id}/agent/certificate", auth(http.HandlerFunc(h.IssueAgentCertificate)))
 	mux.Handle("POST /api/v1/servers/{id}/agent/deploy", auth(http.HandlerFunc(h.DeployAgent)))
+	mux.Handle("POST /api/v1/servers/{id}/tailscale/apply", auth(http.HandlerFunc(h.ApplyTailscale)))
 	mux.Handle("POST /api/v1/servers/{id}/ufw/install", auth(http.HandlerFunc(h.InstallUFW)))
 	mux.Handle("GET /api/v1/servers/{id}/ufw", auth(http.HandlerFunc(h.UFWState)))
 	mux.Handle("POST /api/v1/servers/{id}/ufw/rules", auth(http.HandlerFunc(h.AllowUFW)))

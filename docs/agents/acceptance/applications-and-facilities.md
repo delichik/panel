@@ -508,6 +508,15 @@
 - **不变量**：仅人工点击，无轮询/自动重试/持久化/活动追加，不修改 Job、观测或退避。尾样本不保证固定时间覆盖，历史错误不等于当前仍故障。保留分析输入最多128 KiB；证据限长，移除请求 URL/query、客户端地址和上游用户信息。配置变化/离页取消并丢弃迟到结果。
 - **验证**：分类、去重、未知回退、请求隐私、范围拒绝测试；前端按需调用、双语解释和取消测试。
 
+### FAC-RP-014 入口代理上游的 tailnet 地址规则
+
+- **前置**：网关节点与源站节点都启用 Tailscale 且都已上报有效 tailnet 地址，其中至少一端要求「节点互联优先使用 Tailscale」；域名已保存且源站来自网关集合。
+- **动作**：渲染每节点 Nginx runtime spec 时计算 upstream 地址。
+- **结果**：条件全部满足时上游使用源站的 tailnet 地址；任一条件不满足时保持规范地址。该地址属于实例期望 spec 的一部分，地址变化因此按 `FAC-RP-009` 判定 reload 或 recreate。
+- **失败**：只有一端满足条件时不得改写上游；不得把 tailnet 地址用于 DNS 记录或任何对外发布地址（DNS 联动仍按 `FAC-RP-011` 使用规范地址）；NAT 服务器仍不得成为网关或源站（`SRV-NAT-003`）。
+- **不变量**：地址解析是纯计算，不写设施配置、不改变路由归属；关闭开关后渲染结果必须与引入 Tailscale 之前完全一致。
+- **验证**：`TestReverseProxyUpstreamUsesTailnetAddressOnlyWhenBothQualify`；`FAC-RP-008`、`FAC-RP-009` 非回归用例；地址与偏好变化后的重同步见 `TS-ADDR-009`。
+
 ## 8. 存储共享设施
 
 ### FAC-STO-001 配置与乐观锁
@@ -581,6 +590,15 @@
 - **失败**：单节点错误写入对应 lastError/detail，不得把整组成功项清空或串行拖到无界。
 - **不变量**：状态只读，不在 GET 隐式修改配置；导出配置读写由 Agent mutex 串行。
 - **验证**：status parallel/partial error/timeout tests。
+
+### FAC-STO-009 挂载源与导出白名单的 tailnet 地址规则
+
+- **前置**：存储服务器与应用节点都启用 Tailscale 且都已上报有效 tailnet 地址（仅 `100.64.0.0/10` 与 `fd7a:115c:a1e0::/48` 计入），其中至少一端要求「节点互联优先使用 Tailscale」；存在 storage_share 挂载或已启用的导出。
+- **动作**：为应用目标节点解析 NFS 挂载 source，并刷新存储节点的导出白名单。
+- **结果**：条件全部满足时挂载 source 使用存储服务器的 tailnet 地址，同时导出白名单登记所有已启用节点的 tailnet 地址，使来自 tailnet 来源的挂载不会被拒绝；任一条件不满足时保持规范地址与既有白名单语义。
+- **失败**：不得只在一端满足条件时改写地址；白名单缺少已启用节点的 tailnet 地址（挂载被拒）视为 `TS-ADDR-007` 回归；地址尚未上报时不得写入空项。
+- **不变量**：与存储共享无关的应用不受影响（`FAC-STO-005`）；节点关闭 Tailscale 后必须从白名单移除；导出配置写入失败仍按 `FAC-STO-004` 的原子回滚语义处理，不得部分生效。
+- **验证**：`TestStorageMountUsesTailnetAddressWhenEndsQualify`、`TestStorageExportWhitelistIncludesTailnetAddresses`；`FAC-STO-003`、`FAC-STO-004` 非回归用例；地址/IP 偏好变化后的重同步见 `TS-ADDR-009`。
 
 ## 9. 用户界面验收边界
 

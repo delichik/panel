@@ -8,15 +8,18 @@ import "time"
 
 // Task 对应 tasks。
 type Task struct {
-	ID                  string         `orm:"primary_key"`
-	OperationID         string         `orm:"not_null;default:''"`
-	Type                string         `orm:"not_null"`
-	ParentTaskID        string         `orm:"not_null;default:''"`
-	ChildIndex          int            `orm:"not_null;default:0"`
-	ChildCount          int            `orm:"not_null;default:0"`
-	ExecutionMode       string         `orm:"not_null;default:''"`
-	ConcurrencyKey      string         `orm:"not_null;default:''"`
-	ScheduleKey         string         `orm:"not_null;default:''"`
+	ID             string `orm:"primary_key"`
+	OperationID    string `orm:"not_null;default:''"`
+	Type           string `orm:"not_null"`
+	ParentTaskID   string `orm:"not_null;default:''"`
+	ChildIndex     int    `orm:"not_null;default:0"`
+	ChildCount     int    `orm:"not_null;default:0"`
+	ExecutionMode  string `orm:"not_null;default:''"`
+	ConcurrencyKey string `orm:"not_null;default:''"`
+	ScheduleKey    string `orm:"not_null;default:''"`
+	// Quiet 由任务定义持久化：内部例行任务的非失败状态流转在活动日志中记为
+	// debug，失败仍记为 error。存量行默认 0（info）。
+	Quiet               bool           `orm:"not_null;default:0"`
 	ServerID            string         `orm:"not_null;default:''"`
 	NodeID              string         `orm:"not_null;default:''"`
 	ResourceType        string         `orm:"not_null;default:''"`

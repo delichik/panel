@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentTone, canInstallUfw, connectionHost, connectionSignature, credentialReferences, hasBlockingPairIssues, parsePairs, validateProbeInput, validateServerInput } from './model';
+import { agentTone, canInstallUfw, connectionHost, connectionSignature, credentialReferences, hasBlockingPairIssues, parsePairs, tailscaleObservedStatus, tailscalePreferences, tailscaleStatusKey, tailscaleTone, tailscaleTrait, validateProbeInput, validateServerInput } from './model';
 import type { ServerDto } from '@/types/servers';
 
 const server: ServerDto = {
@@ -10,6 +10,9 @@ const server: ServerDto = {
   port: 22,
   credentialId: 'cred-1',
   reachable: true,
+  tailscaleEnabled: false,
+  tailscalePreferAgent: false,
+  tailscalePreferInterconnect: false,
   sudo: { passwordless: true },
   privilege: { privileged: true },
   traits: { 'agent.enabled': 'true', 'agent.status': 'compatible', 'sys.ufw_supported': 'true', 'sys.ufw_installed': 'false' },
@@ -26,7 +29,7 @@ describe('server model', () => {
   });
 
   it('validates server forms before API calls', () => {
-    expect(validateServerInput({ name: '', kind: 'normal', agentPublicPort: 0, ipv4: '', ipv6: '', port: 70000, credentialId: '', sshUsername: '', dockerHost: '', traits: {}, variables: {}, notes: '' })).toMatchObject({
+    expect(validateServerInput({ name: '', kind: 'normal', agentPublicPort: 0, ipv4: '', ipv6: '', port: 70000, credentialId: '', sshUsername: '', dockerHost: '', tailscaleEnabled: false, tailscalePreferAgent: false, tailscalePreferInterconnect: false, traits: {}, variables: {}, notes: '' })).toMatchObject({
       name: 'serversPage.validationName',
       ipv4: 'serversPage.validationAddressRequired',
       port: 'serversPage.validationPort',
@@ -36,8 +39,9 @@ describe('server model', () => {
   });
 
   it('validates ipv4 and ipv6 literals and derives the connection host', () => {
-    expect(validateServerInput({ name: 'edge', kind: 'normal', agentPublicPort: 0, ipv4: '999.0.0.1', ipv6: '', port: 22, credentialId: 'cred-1', sshUsername: '', dockerHost: 'unix:///var/run/docker.sock', traits: {}, variables: {}, notes: '' }).ipv4).toBe('serversPage.validationIpv4');
-    expect(validateServerInput({ name: 'edge', kind: 'normal', agentPublicPort: 0, ipv4: '', ipv6: '2001:db8::1', port: 22, credentialId: 'cred-1', sshUsername: '', dockerHost: 'unix:///var/run/docker.sock', traits: {}, variables: {}, notes: '' })).toEqual({});
+    const base = { name: 'edge', kind: 'normal', agentPublicPort: 0, sshUsername: '', traits: {}, variables: {}, notes: '', tailscaleEnabled: false, tailscalePreferAgent: false, tailscalePreferInterconnect: false };
+    expect(validateServerInput({ ...base, ipv4: '999.0.0.1', ipv6: '', port: 22, credentialId: 'cred-1', dockerHost: 'unix:///var/run/docker.sock' }).ipv4).toBe('serversPage.validationIpv4');
+    expect(validateServerInput({ ...base, ipv4: '', ipv6: '2001:db8::1', port: 22, credentialId: 'cred-1', dockerHost: 'unix:///var/run/docker.sock' })).toEqual({});
     expect(connectionHost({ ipv4: '203.0.113.5', ipv6: '2001:db8::5' })).toBe('203.0.113.5');
     expect(connectionHost({ ipv4: '', ipv6: '2001:db8::5' })).toBe('2001:db8::5');
   });
@@ -64,7 +68,8 @@ describe('server model', () => {
     expect(validateProbeInput({ ...base, credentialId: '' })).toEqual({ credentialId: 'serversPage.validationCredential' });
     expect(validateProbeInput({ ...base, port: 0 })).toEqual({ port: 'serversPage.validationPort' });
     // 名称与 Docker Host 错误不影响探测
-    expect(Object.keys(validateServerInput({ ...base, name: '', dockerHost: '', variables: {}, notes: '' }))).toEqual(['name', 'dockerHost']);
+    const full = { ...base, name: '', dockerHost: '', variables: {}, notes: '', tailscaleEnabled: false, tailscalePreferAgent: false, tailscalePreferInterconnect: false };
+    expect(Object.keys(validateServerInput(full))).toEqual(['name', 'dockerHost']);
   });
 
   it('marks probe results stale only when a probed connection field changes', () => {
@@ -74,5 +79,30 @@ describe('server model', () => {
     expect(connectionSignature({ ...base, port: 2222 })).not.toBe(signature);
     expect(connectionSignature({ ...base, credentialId: 'cred-2' })).not.toBe(signature);
     expect(connectionSignature({ ...base, sshUsername: 'ops' })).not.toBe(signature);
+  });
+
+  it('forces the tailscale preferences off when the node does not join the tailnet', () => {
+    expect(tailscalePreferences({ tailscaleEnabled: false, tailscalePreferAgent: true, tailscalePreferInterconnect: true })).toEqual({ tailscalePreferAgent: false, tailscalePreferInterconnect: false });
+    expect(tailscalePreferences({ tailscaleEnabled: true, tailscalePreferAgent: true, tailscalePreferInterconnect: false })).toEqual({ tailscalePreferAgent: true, tailscalePreferInterconnect: false });
+  });
+
+  it('reads the observed tailscale state from traits only and never invents one', () => {
+    expect(tailscaleObservedStatus(server)).toBe('');
+    expect(tailscaleStatusKey(server)).toBe('serversPage.tailscale.noStatus');
+    expect(tailscaleTone(server)).toBe('neutral');
+
+    const running = { ...server, tailscaleEnabled: true, traits: { ...server.traits, 'tailscale.status': 'running', 'tailscale.ipv4': '100.64.0.11', 'tailscale.lastError': '', 'tailscale.updatedAt': '2026-08-01T07:52:00.000Z' } };
+    expect(tailscaleObservedStatus(running)).toBe('running');
+    expect(tailscaleStatusKey(running)).toBe('serversPage.tailscale.status.running');
+    expect(tailscaleTone(running)).toBe('success');
+    expect(tailscaleTrait(running, 'ipv4')).toBe('100.64.0.11');
+    expect(tailscaleTrait(running, 'lastError')).toBe('');
+
+    const unknown = { ...server, tailscaleEnabled: true, traits: { ...server.traits, 'tailscale.status': 'reconciling' } };
+    expect(tailscaleObservedStatus(unknown)).toBe('');
+    expect(tailscaleTone(unknown)).toBe('neutral');
+    expect(tailscaleTone({ ...server, tailscaleEnabled: true, traits: { 'tailscale.status': 'error' } })).toBe('danger');
+    expect(tailscaleTone({ ...server, tailscaleEnabled: true, traits: { 'tailscale.status': 'installing' } })).toBe('warning');
+    expect(tailscaleTone({ ...server, tailscaleEnabled: true, traits: { 'tailscale.status': 'unsupported' } })).toBe('info');
   });
 });

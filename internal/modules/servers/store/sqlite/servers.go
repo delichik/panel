@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	agentcontract "panel/internal/agent/contract"
 	"panel/internal/modules/servers/domain"
 	"panel/internal/platform/database/models"
 	"panel/internal/platform/database/orm"
@@ -40,7 +41,8 @@ func (r *ServerRepository) ListSummaries(ctx context.Context) ([]domain.ServerSu
 	rows, err := r.db.QueryContext(ctx, `SELECT id,name,host,port,credential_id,reachable,sudo_passwordless,privilege_mode,last_checked_at,last_error,updated_at,
 		COALESCE(json_extract(traits,'$."agent.enabled"'),''),COALESCE(json_extract(traits,'$."agent.url"'),''),COALESCE(json_extract(traits,'$."agent.status"'),''),
 		COALESCE(json_extract(traits,'$."sys.ufw_supported"'),''),COALESCE(json_extract(traits,'$."sys.ufw_installed"'),''),
-		COALESCE(host_key_mismatch,0),kind
+		COALESCE(json_extract(traits,'$."tailscale.status"'),''),
+		COALESCE(host_key_mismatch,0),kind,COALESCE(tailscale_enabled,0)
 		FROM servers ORDER BY created_at DESC,id ASC`)
 	if err != nil {
 		return nil, err
@@ -51,17 +53,22 @@ func (r *ServerRepository) ListSummaries(ctx context.Context) ([]domain.ServerSu
 		var item domain.ServerSummary
 		var reachable, sudo int
 		var lastChecked sql.NullString
-		var updatedAt, agentEnabled, agentURL, agentStatus, ufwSupported, ufwInstalled string
-		var hostKeyMismatch int
-		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &item.CredentialID, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &ufwSupported, &ufwInstalled, &hostKeyMismatch, &item.Kind); err != nil {
+		var updatedAt, agentEnabled, agentURL, agentStatus, ufwSupported, ufwInstalled, tailscaleStatus string
+		var hostKeyMismatch, tailscaleEnabled int
+		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &item.CredentialID, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &ufwSupported, &ufwInstalled, &tailscaleStatus, &hostKeyMismatch, &item.Kind, &tailscaleEnabled); err != nil {
 			return nil, err
 		}
 		item.Reachable = reachable == 1
 		item.Sudo.Passwordless = sudo == 1
+		item.TailscaleEnabled = tailscaleEnabled == 1
 		// 列值优先（写入时按类型化错误码判定）；子串仅作为迁移前旧行的回退。
 		item.HostKeyMismatch = hostKeyMismatch == 1 || strings.Contains(item.LastError, "ssh host key mismatch")
 		normalizeSummaryPrivilege(&item)
-		item.Traits = map[string]string{"agent.enabled": agentEnabled, "agent.url": agentURL, "agent.status": agentStatus, "sys.ufw_supported": ufwSupported, "sys.ufw_installed": ufwInstalled}
+		item.Traits = map[string]string{
+			"agent.enabled": agentEnabled, "agent.url": agentURL, "agent.status": agentStatus,
+			"sys.ufw_supported": ufwSupported, "sys.ufw_installed": ufwInstalled,
+			agentcontract.TraitTailscaleStatus: tailscaleStatus,
+		}
 		if lastChecked.Valid {
 			parsed, _ := time.Parse(time.RFC3339Nano, lastChecked.String)
 			if !parsed.IsZero() {
@@ -90,7 +97,8 @@ func (r *ServerRepository) ListSummaryPage(ctx context.Context, page, pageSize i
 	rows, err := r.db.QueryContext(ctx, `SELECT id,name,host,port,credential_id,reachable,sudo_passwordless,privilege_mode,last_checked_at,last_error,updated_at,
 		COALESCE(json_extract(traits,'$."agent.enabled"'),''),COALESCE(json_extract(traits,'$."agent.url"'),''),COALESCE(json_extract(traits,'$."agent.status"'),''),
 		COALESCE(json_extract(traits,'$."sys.ufw_supported"'),''),COALESCE(json_extract(traits,'$."sys.ufw_installed"'),''),
-		COALESCE(host_key_mismatch,0),kind
+		COALESCE(json_extract(traits,'$."tailscale.status"'),''),
+		COALESCE(host_key_mismatch,0),kind,COALESCE(tailscale_enabled,0)
 		FROM servers WHERE `+filter+` ORDER BY created_at DESC,id ASC LIMIT ? OFFSET ?`, listArgs...)
 	if err != nil {
 		return httpx.ListPage[domain.ServerSummary]{}, err
@@ -101,15 +109,20 @@ func (r *ServerRepository) ListSummaryPage(ctx context.Context, page, pageSize i
 		var item domain.ServerSummary
 		var reachable, sudo int
 		var lastChecked sql.NullString
-		var updatedAt, agentEnabled, agentURL, agentStatus, ufwSupported, ufwInstalled string
-		var hostKeyMismatch int
-		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &item.CredentialID, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &ufwSupported, &ufwInstalled, &hostKeyMismatch, &item.Kind); err != nil {
+		var updatedAt, agentEnabled, agentURL, agentStatus, ufwSupported, ufwInstalled, tailscaleStatus string
+		var hostKeyMismatch, tailscaleEnabled int
+		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &item.CredentialID, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &ufwSupported, &ufwInstalled, &tailscaleStatus, &hostKeyMismatch, &item.Kind, &tailscaleEnabled); err != nil {
 			return httpx.ListPage[domain.ServerSummary]{}, err
 		}
 		item.Reachable, item.Sudo.Passwordless = reachable == 1, sudo == 1
+		item.TailscaleEnabled = tailscaleEnabled == 1
 		item.HostKeyMismatch = hostKeyMismatch == 1 || strings.Contains(item.LastError, "ssh host key mismatch")
 		normalizeSummaryPrivilege(&item)
-		item.Traits = map[string]string{"agent.enabled": agentEnabled, "agent.url": agentURL, "agent.status": agentStatus, "sys.ufw_supported": ufwSupported, "sys.ufw_installed": ufwInstalled}
+		item.Traits = map[string]string{
+			"agent.enabled": agentEnabled, "agent.url": agentURL, "agent.status": agentStatus,
+			"sys.ufw_supported": ufwSupported, "sys.ufw_installed": ufwInstalled,
+			agentcontract.TraitTailscaleStatus: tailscaleStatus,
+		}
 		if lastChecked.Valid {
 			parsed, _ := time.Parse(time.RFC3339Nano, lastChecked.String)
 			if !parsed.IsZero() {
@@ -158,8 +171,10 @@ func (r *ServerRepository) Update(ctx context.Context, srv domain.Server) error 
 	if err != nil {
 		return err
 	}
-	result, err := orm.RawExec(ctx, r.db, `UPDATE servers SET name=?,host=?,ipv4=?,ipv6=?,port=?,ssh_username=?,credential_id=?,docker_host=?,kind=?,agent_public_port=?,traits=?,variables_json=?,notes=?,updated_at=? WHERE id=?`,
-		srv.Name, srv.Host, srv.IPv4, srv.IPv6, srv.Port, srv.SSHUsername, srv.CredentialID, srv.DockerHost, srv.Kind, srv.AgentPublicPort, string(traits), string(variables), srv.Notes,
+	result, err := orm.RawExec(ctx, r.db, `UPDATE servers SET name=?,host=?,ipv4=?,ipv6=?,port=?,ssh_username=?,credential_id=?,docker_host=?,kind=?,agent_public_port=?,tailscale_enabled=?,tailscale_prefer_agent=?,tailscale_prefer_interconnect=?,traits=?,variables_json=?,notes=?,updated_at=? WHERE id=?`,
+		srv.Name, srv.Host, srv.IPv4, srv.IPv6, srv.Port, srv.SSHUsername, srv.CredentialID, srv.DockerHost, srv.Kind, srv.AgentPublicPort,
+		boolToInt(srv.TailscaleEnabled), boolToInt(srv.TailscalePreferAgent), boolToInt(srv.TailscalePreferInterconnect),
+		string(traits), string(variables), srv.Notes,
 		srv.UpdatedAt.UTC().Format(time.RFC3339Nano), srv.ID)
 	if err != nil {
 		return err
@@ -217,6 +232,10 @@ func toDomainServer(m models.Server) domain.Server {
 		HostKeyMismatch: m.HostKeyMismatch || strings.Contains(m.LastError, "ssh host key mismatch"),
 		CreatedAt:       m.CreatedAt,
 		UpdatedAt:       m.UpdatedAt,
+
+		TailscaleEnabled:            m.TailscaleEnabled,
+		TailscalePreferAgent:        m.TailscalePreferAgent,
+		TailscalePreferInterconnect: m.TailscalePreferInterconnect,
 	}
 	srv.Privilege = domain.PrivilegeState{Mode: m.PrivilegeMode, LastCheckedAt: m.PrivilegeLastCheckedAt}
 	if srv.Privilege.Mode == "" {
@@ -274,7 +293,19 @@ func fromDomainServer(srv domain.Server) *models.Server {
 		LastError:              srv.LastError,
 		CreatedAt:              srv.CreatedAt,
 		UpdatedAt:              srv.UpdatedAt,
+
+		TailscaleEnabled:            srv.TailscaleEnabled,
+		TailscalePreferAgent:        srv.TailscalePreferAgent,
+		TailscalePreferInterconnect: srv.TailscalePreferInterconnect,
 	}
+}
+
+// boolToInt 把布尔意图写入 SQLite 的 0/1 列，保持与既有布尔列相同的存储形态。
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 // stringMap 保持原 scanServer 的 JSON 容错语义：非法/非字符串值视为空，

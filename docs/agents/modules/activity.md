@@ -28,6 +28,7 @@
 - `activitylog.Append` / `AppendTx` 是 Go 写入口。固定 eventId 重传时同内容返回原回执，不同内容报冲突；源序号身份也不可重复使用。
 - AppendTx 回执只在外层事务提交后有效。HTTP 响应在确认事实存在后附加 operationId/acceptedEventId/acceptedSeq，成功与错误均可关联日志；下载和流式响应不缓冲改写。
 - 任务日志不再截断或删除；完成后仍可接收迟到输出。TaskID 的所有尝试可用 activity executionId 筛选查询。
+- 级别由事实产生方决定：任务定义声明 `Quiet` 时（例如周期 `server_agent_check`），该执行的创建与非失败流转、标准输出记为 `debug`，失败/可重试/blocked 与 stderr 仍为 `error`；页面默认筛选 `info,warning,error` 不展示巡检细节，事实本身、seq 与导出不受级别影响。
 - Agent 输出在源端持久缓冲，Panel 提交原始事件后才 ACK；源流关闭与操作结束是独立事实。缺口检测与补齐必须分别追加事件。
 - 内部系统事件同步耐久写入，不再通过旧可丢弃 BufferedWriter。写入失败可见，不允许满队列或失败批次直接丢弃。
 - 原始证据不会因投影重建删除。事件格式以 eventVersion 扩展，不能覆盖已写历史。

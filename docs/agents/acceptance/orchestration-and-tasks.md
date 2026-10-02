@@ -328,7 +328,7 @@
 
 - **前置**：业务模块声明任务 Definition。
 - **动作**：生产 bootstrap 集中 RegisterTasks。
-- **结果**：type 非空且唯一；定义携带 summary/hidden/capabilities/cancel/retry/concurrency/stale/execute/hooks/periodic；重复注册冲突。
+- **结果**：type 非空且唯一；定义携带 summary/hidden/quiet/capabilities/cancel/retry/concurrency/stale/execute/hooks/periodic；重复注册冲突。
 - **失败**：未注册类型不能创建或执行，不能直接写 tasks 表。
 - **不变量**：tasks 内核不维护业务 type switch；业务 `tasks.go` 使用具名 Execute/collector，禁止大段匿名编排。
 - **验证**：registry/manager unregistered tests、debug snapshot review。
@@ -341,6 +341,15 @@
 - **失败**：前端不得维护 type 白名单；删除服务器也不能取消 DisallowCancel 任务。
 - **不变量**：能力唯一来源为当前 registry definition。
 - **验证**：handler capability/cancel tests。
+
+### TASK-REG-003 内部例行任务的活动日志级别
+
+- **前置**：任务定义声明 `Quiet: true`（例如每 5 分钟的周期 Agent 健康检查），任务行持久化该标记。
+- **动作**：创建、启动、推进、完成该任务并追加标准输出，或让它进入失败/可重试失败/blocked 终态。
+- **结果**：创建事实（`operation.requested`）、成功流转（`execution.started`/`execution.progress`/`execution.finished`）、步骤事实与标准输出事实的级别为 `debug`；失败、可重试失败、blocked 与 stderr 输出仍为 `error`，丢失来源时 `evidence.gap_detected` 仍为 `warning`，因此故障与不确定执行保持默认可见。
+- **失败**：降噪不得实现为“不写事实”或删除既有事实，也不得让 `Quiet` 影响执行、周期、并发、去重和保留；tasks 内核与 Activity 触发器不得按 task type 字符串另立清单。
+- **不变量**：级别唯一来源是注册定义持久化到任务行的 `quiet`；页面默认级别筛选 `info,warning,error` 下巡检事实不出现在事件与操作视图，显式选择 `debug` 或“全部级别”仍可查到同一批不可变事实。
+- **验证**：`TestQuietTaskActivityFactsAreDebugUnlessFailed`、`TestRoutineTaskActivityFactsStayInfo`。
 
 ### TASK-CREATE-001 单任务创建
 

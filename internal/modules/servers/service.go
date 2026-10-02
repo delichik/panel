@@ -14,6 +14,7 @@ import (
 	"time"
 
 	agentcontract "panel/internal/agent/contract"
+	agentendpoint "panel/internal/agent/endpoint"
 	agentsecurity "panel/internal/agent/security"
 	serverdomain "panel/internal/modules/servers/domain"
 	"panel/internal/modules/servers/ports"
@@ -89,6 +90,13 @@ type Service struct {
 	// dnsSyncTrigger notifies the reverse proxy facility when server
 	// addresses change so affected proxy domains can resync their records.
 	dnsSyncTrigger func(context.Context, []string) error
+	// interconnectTrigger notifies the facilities when a node's tailnet address
+	// or interconnect preference changes.
+	interconnectTrigger func(context.Context, []string) error
+	// tailscaleSettings supplies the global Tailscale credentials used when a
+	// node joins the tailnet. It is nil when no provider is wired, which means
+	// nodes cannot join a tailnet and the task reports that explicitly.
+	tailscaleSettings func() TailscaleSettings
 }
 
 // hostKeyTrustExecutor is the narrow capability the server service needs to
@@ -99,7 +107,7 @@ type hostKeyTrustExecutor interface {
 }
 type agentTLSProvider interface {
 	EnsureAgentTLSAssets(ctx context.Context) (*agentsecurity.TLSAssets, error)
-	IssueAgentServerCertificate(ctx context.Context, serverID, serverName, host string) (agentsecurity.ServerCertificate, []byte, error)
+	IssueAgentServerCertificate(ctx context.Context, serverID, serverName string, hosts []string) (agentsecurity.ServerCertificate, []byte, error)
 	ResetAgentCA(ctx context.Context) (*agentsecurity.TLSAssets, error)
 	ResetAgentClientCertificate(ctx context.Context) (*agentsecurity.TLSAssets, error)
 	DeleteAgentServerCertificate(ctx context.Context, serverID string) error
@@ -137,6 +145,24 @@ func WithPanelTLSProvider(provider panelTLSProvider) Option {
 
 func (s *Service) SetDNSSyncTrigger(trigger func(context.Context, []string) error) {
 	s.dnsSyncTrigger = trigger
+}
+
+// SetInterconnectTrigger 注入“节点互联地址已变化”的通知入口。存储共享的挂载
+// 源/导出白名单与反向代理的网关上游都内嵌对端地址，节点 tailnet 地址变化后
+// 必须主动重算，不能只依赖周期性协调。
+func (s *Service) SetInterconnectTrigger(trigger func(context.Context, []string) error) {
+	s.interconnectTrigger = trigger
+}
+
+// notifyInterconnectChange 在地址或优先意图变化后请求设施重新收敛。失败只记
+// 日志：节点自身的 tailscale 状态已经写回，下一次周期性协调仍会兜底。
+func (s *Service) notifyInterconnectChange(ctx context.Context, serverID string) {
+	if s.interconnectTrigger == nil || strings.TrimSpace(serverID) == "" {
+		return
+	}
+	if err := s.interconnectTrigger(ctx, []string{serverID}); err != nil {
+		logging.L().Warn("interconnect resync trigger failed", zap.String("server_id", serverID), zap.Error(err))
+	}
 }
 
 func NewService(db *sql.DB, exec sshx.RemoteExecutor, taskSvc *tasks.Service, opts ...Option) *Service {
@@ -1615,7 +1641,16 @@ func agentURL(srv Server) (string, bool) {
 	if !agentURLMatchesDefault(srv) {
 		return "", false
 	}
-	return url, true
+	// 校验始终针对规范地址（agent.url 本身），实际连接地址再按该节点的
+	// tailscale 意图解析：优先开关不得让节点被判定为“需要重新部署”。
+	effective := agentendpoint.AgentURL(srv.Traits, agentendpoint.Preferences{
+		Enabled: srv.TailscaleEnabled,
+		Prefer:  srv.TailscalePreferAgent,
+	})
+	if effective == "" {
+		return "", false
+	}
+	return effective, true
 }
 
 func configuredAgentURL(srv Server) (string, bool) {

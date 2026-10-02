@@ -60,6 +60,10 @@ type AgentReport struct {
 	Reason         string
 	PackageUpdates []linux.PackageUpdate
 	Images         []agentcontract.DockerImage
+	// Tailscale 只在 HasTailscale 为真时可信；旧 Agent 既不填该字段也不表示
+	// 节点没有启用 tailscale。
+	Tailscale    *agentcontract.TailscaleStatus
+	HasTailscale bool
 }
 
 func NewGRPCClient(tlsAssets *agentsecurity.TLSAssets, timeout time.Duration) (*GRPCClient, error) {
@@ -554,6 +558,60 @@ func (c *GRPCClient) StorageStatus(ctx context.Context, endpoint, root string) (
 	}, nil
 }
 
+// TailscaleStatus 读取节点本机 tailscale 事实。旧 Agent 缺少该能力时返回与
+// AGT-STATE-004 一致的失败，调用方据此提示升级而不是重装节点。
+func (c *GRPCClient) TailscaleStatus(ctx context.Context, endpoint string) (agentcontract.TailscaleStatus, error) {
+	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.TailscaleStatusResponse, error) {
+		return client.TailscaleStatus(ctx, &agentpb.Empty{})
+	})
+	if err != nil {
+		return agentcontract.TailscaleStatus{}, err
+	}
+	return goTailscaleStatus(out), nil
+}
+
+// TailscaleConfigure 以较长超时调用节点：首次启用需要安装软件包并加入 tailnet。
+func (c *GRPCClient) TailscaleConfigure(ctx context.Context, endpoint string, req agentcontract.TailscaleConfigureRequest) (agentcontract.TailscaleStatus, error) {
+	out, err := callRPC(c, ctx, endpoint, maintenanceTimeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.TailscaleStatusResponse, error) {
+		return client.TailscaleConfigure(ctx, &agentpb.TailscaleConfigureRequest{
+			AuthKey:  req.AuthKey,
+			Tags:     append([]string(nil), req.Tags...),
+			Hostname: req.Hostname,
+		})
+	})
+	if err != nil {
+		return agentcontract.TailscaleStatus{}, err
+	}
+	return goTailscaleStatus(out), nil
+}
+
+func (c *GRPCClient) TailscaleDisable(ctx context.Context, endpoint string) (agentcontract.TailscaleStatus, error) {
+	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.TailscaleStatusResponse, error) {
+		return client.TailscaleDisable(ctx, &agentpb.Empty{})
+	})
+	if err != nil {
+		return agentcontract.TailscaleStatus{}, err
+	}
+	return goTailscaleStatus(out), nil
+}
+
+func goTailscaleStatus(in *agentpb.TailscaleStatusResponse) agentcontract.TailscaleStatus {
+	if in == nil {
+		return agentcontract.TailscaleStatus{}
+	}
+	return agentcontract.TailscaleStatus{
+		Installed:    in.Installed,
+		Running:      in.Running,
+		LoggedIn:     in.LoggedIn,
+		Hostname:     in.Hostname,
+		IPv4:         in.Ipv4,
+		IPv6:         in.Ipv6,
+		Version:      in.Version,
+		BackendState: in.BackendState,
+		LastError:    in.LastError,
+	}
+}
+
 func (c *GRPCClient) StorageMountStatus(ctx context.Context, endpoint, source, target string) (agentcontract.StorageMountStatus, error) {
 	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.StorageMountStatusResponse, error) {
 		return client.StorageMountStatus(ctx, &agentpb.StorageMountStatusRequest{Source: source, Target: target})
@@ -646,6 +704,11 @@ func (c *GRPCClient) StreamReports(ctx context.Context, endpoint string, config 
 				report.Images = append(report.Images, agentrpc.GoDockerImage(item))
 			}
 		}
+		// 旧 Agent 不上报该字段：HasTailscale 保持 false，Panel 必须按“未知”
+		// 处理并保留既有观测。
+		if msg.Tailscale != nil {
+			report.HasTailscale = true
+			report.Tailscale = agentrpc.GoTailscaleStatus(msg.Tailscale)		}
 		if handle != nil {
 			if err := handle(ctx, report); err != nil {
 				return err

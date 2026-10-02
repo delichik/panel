@@ -31,6 +31,17 @@ func (h *Handler) UpdateRuntime(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, settings)
 }
 
+// ApplyTailscale 重新下发容器内 tailscale 期望态并返回最新实际态。2xx 只代表
+// panel-init 已接受收敛请求，真实结果以返回的状态对象为准。
+func (h *Handler) ApplyTailscale(w http.ResponseWriter, r *http.Request) {
+	state, err := h.service.ApplyTailscaleContainer(r.Context())
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, state)
+}
+
 func (h *Handler) ServerVariableDefinitions(w http.ResponseWriter, r *http.Request) {
 	defs, err := h.service.ServerVariableDefinitions(r.Context())
 	if err != nil {

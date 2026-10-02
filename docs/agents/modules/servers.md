@@ -6,7 +6,7 @@
 ## List API Contract
 
 - `GET /api/v1/servers` returns `ListPage<ServerSummary>` and accepts only `page`, `pageSize`, and `q`.
-- List rows include only the `credentialId` reference (never credential secret content) and exclude notes, variables, full traits, operating-system detail, and metrics; the only trait signals returned are `agent.enabled`, `agent.url`, `agent.status`, and UFW flags. `GET /api/v1/servers/{id}` owns the complete view.
+- List rows include only the `credentialId` reference (never credential secret content) and exclude notes, variables, full traits, operating-system detail, and metrics; the only trait signals returned are `agent.enabled`, `agent.url`, `agent.status`, and UFW flags. `tailscaleEnabled` is a summary column of its own; the two Tailscale preference switches and the observed `tailscale.*` traits only appear in the full detail. `GET /api/v1/servers/{id}` owns the complete view.
 - `GET /api/v1/credentials` follows the same `ListPage` and strict `page`/`pageSize`/`q` contract and never selects encrypted secret columns.
 
 ## 适用场景
@@ -62,7 +62,7 @@
 - 服务器：`GET/POST /api/v1/servers`，`POST /api/v1/servers/probe`，`PUT/DELETE /api/v1/servers/{id}`
 - Agent 部署：`POST /api/v1/servers/{id}/agent/deploy`，Agent 证书包：`POST /api/v1/servers/{id}/agent/certificate`
 - Agent 与 Panel HTTPS 系统证书：`GET /api/v1/key-assets/system`，重置：`POST /api/v1/key-assets/system/{id}/reset`
-- 服务器操作：同步连通性检查 `POST /api/v1/servers/{id}/test`，信任新主机密钥 `POST /api/v1/servers/{id}/trust-host-key`，任务型重启 `POST /api/v1/servers/{id}/restart`，任务型 UFW 安装 `POST /api/v1/servers/{id}/ufw/install`
+- 服务器操作：同步连通性检查 `POST /api/v1/servers/{id}/test`，信任新主机密钥 `POST /api/v1/servers/{id}/trust-host-key`，任务型重启 `POST /api/v1/servers/{id}/restart`，任务型 UFW 安装 `POST /api/v1/servers/{id}/ufw/install`，任务型 Tailscale 收敛 `POST /api/v1/servers/{id}/tailscale/apply`
 - UFW：`GET /api/v1/servers/{id}/ufw`，`POST /api/v1/servers/{id}/ufw/enable`，`POST /api/v1/servers/{id}/ufw/rules`，`DELETE /api/v1/servers/{id}/ufw/rules/{number}`
 - fail2ban：`GET /api/v1/servers/{id}/fail2ban`，`PUT /api/v1/servers/{id}/fail2ban`，`POST /api/v1/servers/{id}/fail2ban/enable`，`POST /api/v1/servers/{id}/fail2ban/release`，`POST /api/v1/servers/{id}/fail2ban/install`
 - 指标：`GET /api/v1/servers/{id}/metrics?range=1h|6h|1d|7d`（默认 `1h`）。服务器详情指标区默认用折线图展示最近 1 小时数据（CPU、内存、磁盘、网络 RX/TX 四个图表），支持范围选择，页头提供共享自动刷新控件 `AutoRefreshControl`；刷新/切范围时保留旧数据避免闪跳。折线图 tooltip 单位按图表类型区分：CPU/内存/磁盘为百分比，网络为 B/s 自适应速率。
@@ -124,7 +124,7 @@
 - Agent CA、Panel Agent 客户端证书、每台服务器已签发的 Agent 服务端证书，以及 Panel HTTPS 的独立 RSA-2048 `panel-ca`/`panel-tls` 链作为“系统内置”资产展示，底层使用 `metadata.systemManaged=true` 和用途 scope 保存，但不属于用户域 key asset，不能删除、导入、导出、重签、下载或注册为应用内部文件来源，只允许查看和 reset。Agent CA 继续使用 Ed25519 mTLS；Panel HTTPS 不复用 Agent CA。每台服务器的 Agent 服务端证书是安装/重装任务同步到目标机 `/etc/panel-agent` 的部署产物；只有已记录证书指纹和有效期元数据的服务器证书会进入系统证书列表，重置单台服务器证书会复用该服务器的 Agent 部署任务。
 - 重置 Panel Agent 客户端证书时保留 Agent CA，并热加载所有服务共享的 Agent gRPC client；重置 Agent CA 时同时生成新的客户端证书、热加载 gRPC client，并为所有已配置服务器排队重部署 Agent；重置单台服务器证书复用该服务器的 Agent 部署任务。
 - Agent 部署成功后把服务端证书指纹和有效期写入服务器 traits，供服务器 Agent 状态、最后错误和部署任务排查使用；健康检查成功时也会从 TLS 握手中的远端服务端证书刷新这些元数据。
-- 服务器必须启用 agent，通过 traits 记录：`agent.enabled=true` 且 `agent.url=https://host:9786`。该值表示 mTLS gRPC endpoint，沿用 `https://` 形式以兼容既有 trait 和证书部署逻辑，不再表示 HTTP API。Panel 启动后会扫描服务器，调度器也会周期检查已配置 agent；没有配置 agent URL 的服务器会自动创建 `server_agent_deploy` 任务；已配置 agent 但 URL 不是当前默认地址的服务器会标记为 `incompatible` 并自动重装；已配置当前默认 URL 的服务器会执行健康检查，检查结果写入 `agent.status`、`agent.last_checked_at`、`agent.version` 和 `agent.last_error` traits。`agent.version` 必须与当前 Panel 构建版本完全一致，否则标记 `incompatible` 并自动重装；健康检查返回的 `capabilities`、agent gRPC contract hash 和 Docker host 不作为兼容性门槛。连续系统自动部署失败达到上限后进入 `undeployable`。
+- 服务器必须启用 agent，通过 traits 记录：`agent.enabled=true` 且 `agent.url=https://host:9786`。该值表示 mTLS gRPC endpoint，沿用 `https://` 形式以兼容既有 trait 和证书部署逻辑，不再表示 HTTP API。Panel 启动后会扫描服务器，调度器也会周期检查已配置 agent；没有配置 agent URL 的服务器会自动创建 `server_agent_deploy` 任务；已配置 agent 但 URL 不是当前默认地址的服务器会标记为 `incompatible` 并自动重装；已配置当前默认 URL 的服务器会执行健康检查，检查结果写入 `agent.status`、`agent.last_checked_at`、`agent.version` 和 `agent.last_error` traits。`agent.version` 必须与当前 Panel 构建版本完全一致，否则标记 `incompatible` 并自动重装；健康检查返回的 `capabilities`、agent gRPC contract hash 和 Docker host 不作为兼容性门槛。连续系统自动部署失败达到上限后进入 `undeployable`。周期检查以 `server_agent_check` 任务承载：每 5 分钟一轮、每台服务器各一个子任务，定义同时声明 `Hidden` 与 `Quiet`，巡检成功只写回上述 traits，其活动日志事实为 `debug`（失败仍为 `error`），降噪不得跳过状态写回与自动部署判定。
 - Agent 健康检查必须返回 Docker 健康状态和 Docker host；Panel 要求 Docker 正常且 agent 报告的 Docker host 与服务器配置一致。
 - Application 运行时要求 agent 与 Panel 构建版本一致；部署编排在 Panel 侧的 `internal/orchestrator` 完成，AppDB `jobs` 是唯一执行事实来源。生产路径只调用单一 `RuntimeReconcile` RPC，agent 负责按 immutable revision 原子完成托管文件、镜像、容器 inspect/create/start/stop/purge，并返回结构化 observed/error/step 结果，不拥有 lifecycle target 或 task。
 - Agent 当前覆盖健康检查、`/etc/os-release`、系统 traits、metrics snapshot、UFW status、fail2ban status/apply、`RuntimeReconcile`、Docker 容器/日志/镜像/网络/卷资源 API，以及持久化目录打包与恢复。持久化目录恢复先解压到同目录临时目录并校验，再通过 rename 原子交换；失败或取消时删除临时目录并保留原目录，全程响应 context 取消。`RuntimeReconcile` 对 stop/purge 缺失容器幂等成功，对非托管同名容器返回 terminal conflict；apply 会校验 managed labels、写文件、拉取镜像、创建并启动容器后再回读状态。
@@ -145,6 +145,18 @@
 - HTTP 下载失败按分类决定是否回退 SSH 上传：连接失败、HTTP 4xx/5xx、缺少 fetcher（含安装后仍缺失）属于可达性问题，必须回退；传输中断、解压失败、哈希不匹配属于数据问题，必须直接失败而不得用慢路径掩盖。下载由**有限轮次的续传尝试**完成（curl `-C -`、wget `-c`），因此比单轮预算更慢但可用的链路能跨轮收敛；服务器拒绝 Range 时丢弃残file 整轮重下。**禁止使用 curl `--retry`**：`--max-time` 按次生效，重试会把目标机侧最坏耗时成倍放大到 Panel 侧上限之外，令 Panel 先超时并把失败变成不可分类。Panel 侧与目标机侧都必须限时，目标机侧「轮数 × 单轮 + 轮间延迟」必须严格短于 Panel 侧。
 - 手动重装只能复用**非 running** 的既有任务：`running` 的任务无法重启，返回成功会让界面弹出「已受理」而实际没有任何新执行。因此这种情况下必须返回冲突 `agent_deploy_in_progress` 并带上 taskId 与 stage，`stage=uncertain`（状态同为 running）时指向任务中心。远端步骤超时关闭 SSH 会话后，等待会话 goroutine 必须有界，否则执行器不返回会让任务永远停在 `running`，进而让之后每次手动部署都变成静默无操作。
 - `POST /api/v1/servers/{id}/agent/certificate` 签发目标机 `panel-agent` 的 mTLS server 证书包；响应包含 CA、server certificate、server private key、建议监听地址、agent URL 和 Docker host，只作为高级手动安装兜底，不会落库。
+
+## 节点 Tailscale
+
+- `servers` 新增三列持久化用户意图：`tailscale_enabled`、`tailscale_prefer_agent`、`tailscale_prefer_interconnect`，由自动 ORM 增列迁移补齐、默认 0（旧库升级后即为未启用、不偏好）。未启用时两个偏好列被强制写为 false。列表摘要只暴露 `tailscaleEnabled`，详情、创建与更新携带全部三个字段。
+- 节点观测态保存在 `servers.traits` 的 `tailscale.status`（`disabled|pending|installing|running|degraded|unsupported|error`）、`tailscale.ipv4`、`tailscale.ipv6`、`tailscale.hostname`、`tailscale.version`、`tailscale.last_error`、`tailscale.updated_at`。写入是“读改写”合并，不会清空 `agent.*` 等既有系统 trait；用户提交的 traits 继续被忽略。关闭启用开关会在同一保存事务内清除这些观测键。
+- `POST /api/v1/servers/{id}/tailscale/apply` 是手动重试与首次加入入口：创建或复用 `server_tailscale_apply` 任务并返回 taskId，先置 running 再返回；未启用返回 `tailscale_not_enabled`。保存开关成功后由服务端自动排队同一任务。
+- 节点侧收敛必须要求 Agent 能力 `agent.tailscale`；缺少能力的旧 Agent 只让该任务失败并返回 `tailscale_agent_unsupported`（提示升级 Agent），不触发整节点重装、不回退 SSH。旧 Agent 上报中缺少 `AgentReport.tailscale` 字段时，既有观测态保持不变。
+- 节点侧语义位于 `internal/agent/system/tailscale.go`：发行版仓库优先安装 `tailscale`，否则添加供应商 keyring 与 apt 源后安装（不使用远程脚本管道）；通过 systemd 启用并启动 `tailscaled`，仅在节点尚未登录时才用 `TS_AUTHKEY` 加入，并上报本机 tailnet 地址。`TailscaleDisable` 表示断开 tailnet 连接但保留软件包与节点身份，与删除节点语义不同。
+- 连接地址解析位于 `internal/agent/endpoint`：Panel→Agent 仅当节点启用、要求 `tailscalePreferAgent`、已上报位于 `100.64.0.0/10` 或 `fd7a:115c:a1e0::/48` 的地址且 Panel 容器自身已登录 tailnet 时才改用 `https://<tailnet 地址>:<agent 端口>`，否则使用 `agent.url` 原值；`agent.url` 不会被改写，因此不触发“URL 非默认地址需要重部署”的自动重装判定。互联链接（存储挂载源、导出白名单、入口代理上游）只在两端都启用、两端都有有效地址且至少一端要求互联优先时替换。
+- 开启 `tailscalePreferAgent` 或 tailnet 地址变化时，节点证书 SAN 集合必须包含该地址；不一致时标记节点需要证书刷新并复用既有 Agent 部署通道（只重写证书与配置，不重传二进制）。
+- 地址或互联偏好变化会触发互联设施重同步（存储导出协调任务与受影响时的入口代理重新渲染）。**限制**：UFW 只支持端口/协议/来源规则，Panel 不自动放行 `tailscale0` 接口，需要操作者自行配置。
+- 完整合同、边界与验证点见 [Tailscale 验收规范](../acceptance/tailscale.md)。
 
 ## Agent 重启就绪检查（PrepareRestart）
 

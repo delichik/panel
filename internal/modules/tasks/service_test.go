@@ -1169,3 +1169,96 @@ func TestManualRetryChainKeepsLogicalExecutionIdentity(t *testing.T) {
 		}
 	}
 }
+
+// activityLevels 汇总一个执行的 Activity 事实按级别计数，用于断言内部例行
+// 任务的降噪范围。
+func activityLevels(t *testing.T, svc *Service, runID string) map[string]int {
+	t.Helper()
+	rows, err := svc.db.Query(`SELECT level,COUNT(*) FROM activity_events WHERE run_id=? GROUP BY level`, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var level string
+		var count int
+		if err := rows.Scan(&level, &count); err != nil {
+			t.Fatal(err)
+		}
+		out[level] = count
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// TestQuietTaskActivityFactsAreDebugUnlessFailed 固定 TASK-REG-003：内部例行
+// 任务的创建/成功流转/输出为 debug，失败仍为 error。
+func TestQuietTaskActivityFactsAreDebugUnlessFailed(t *testing.T) {
+	svc := newTestService(t)
+	svc.Registry().Replace(Definition{Type: "agent_check", Quiet: true, ConcurrencyPolicy: ConcurrencyParallelAllowed})
+	ctx := context.Background()
+
+	task, err := svc.Create(ctx, CreateInput{Type: "agent_check", Summary: "Checking agent for srv_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var quiet int
+	if err := svc.db.QueryRow(`SELECT quiet FROM tasks WHERE id=?`, task.ID).Scan(&quiet); err != nil {
+		t.Fatal(err)
+	}
+	if quiet != 1 {
+		t.Fatalf("quiet definition must persist quiet=1, got %d", quiet)
+	}
+	if err := svc.Start(ctx, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Advance(ctx, task.ID, "checked", "agent is compatible"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Complete(ctx, task.ID, "Checking agent for srv_1"); err != nil {
+		t.Fatal(err)
+	}
+	levels := activityLevels(t, svc, task.ID)
+	if levels["debug"] < 4 || levels["info"] != 0 {
+		t.Fatalf("routine check facts must stay debug, got %#v", levels)
+	}
+
+	failed, err := svc.Create(ctx, CreateInput{Type: "agent_check", Summary: "Checking agent for srv_2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Start(ctx, failed.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Fail(ctx, failed.ID, errors.New("agent unreachable")); err != nil {
+		t.Fatal(err)
+	}
+	failedLevels := activityLevels(t, svc, failed.ID)
+	if failedLevels["error"] == 0 || failedLevels["info"] != 0 {
+		t.Fatalf("quiet task failure must stay visible as error, got %#v", failedLevels)
+	}
+}
+
+// TestRoutineTaskActivityFactsStayInfo 固定 TASK-REG-003 的反向边界：未声明
+// Quiet 的任务事实保持 info，降噪不得外溢。
+func TestRoutineTaskActivityFactsStayInfo(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	task, err := svc.Create(ctx, CreateInput{Type: "sample_task", Summary: "user visible work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Start(ctx, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Complete(ctx, task.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	levels := activityLevels(t, svc, task.ID)
+	if levels["info"] == 0 || levels["debug"] != 0 {
+		t.Fatalf("non-quiet task facts must stay info, got %#v", levels)
+	}
+}

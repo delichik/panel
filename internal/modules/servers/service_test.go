@@ -74,13 +74,23 @@ func (f *fakePanelTLSProvider) ResetPanelTLS(_ context.Context, id string) (task
 
 type fakeAgentTLSProvider struct {
 	deletedServerIDs []string
+	issuedHosts      []fakeAgentCertificateIssue
+}
+
+// fakeAgentCertificateIssue 记录一次节点证书签发请求的 SAN 集合，供断言
+// tailscale 地址是否被纳入证书。
+type fakeAgentCertificateIssue struct {
+	ServerID   string
+	ServerName string
+	Hosts      []string
 }
 
 func (f *fakeAgentTLSProvider) EnsureAgentTLSAssets(context.Context) (*agentsecurity.TLSAssets, error) {
 	return nil, nil
 }
 
-func (f *fakeAgentTLSProvider) IssueAgentServerCertificate(context.Context, string, string, string) (agentsecurity.ServerCertificate, []byte, error) {
+func (f *fakeAgentTLSProvider) IssueAgentServerCertificate(_ context.Context, serverID, serverName string, hosts []string) (agentsecurity.ServerCertificate, []byte, error) {
+	f.issuedHosts = append(f.issuedHosts, fakeAgentCertificateIssue{ServerID: serverID, ServerName: serverName, Hosts: append([]string(nil), hosts...)})
 	return agentsecurity.ServerCertificate{}, nil, nil
 }
 

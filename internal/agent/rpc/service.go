@@ -89,7 +89,7 @@ func (h *Handler) Health(ctx context.Context, _ *agentpb.Empty) (*agentpb.Health
 	if h.runtime != nil {
 		docker = h.runtime.DockerHealth(ctx)
 	}
-	capabilities := append(append([]string(nil), agentcontract.RequiredCapabilities...), agentcontract.CapabilityPrepareRestart, agentcontract.CapabilityStorageShare)
+	capabilities := append(append([]string(nil), agentcontract.RequiredCapabilities...), agentcontract.CapabilityPrepareRestart, agentcontract.CapabilityStorageShare, agentcontract.CapabilityTailscale)
 	return pbHealth(agentcontract.HealthResponse{Status: "ok", Time: time.Now().UTC().Format(time.RFC3339Nano), Version: agentcontract.Version, Capabilities: capabilities, ContractHash: agentcontract.CurrentHash(), Docker: docker}), nil
 }
 
@@ -535,4 +535,34 @@ func (h *Handler) StorageMountStatus(ctx context.Context, req *agentpb.StorageMo
 		}, nil
 	}
 	return &agentpb.StorageMountStatusResponse{Detail: "nfs volume not found"}, nil
+}
+
+// TailscaleStatus 报告节点本机 tailscale 事实。未安装属于可诊断状态而不是
+// 传输错误，因此这里始终返回结构化结果。
+func (h *Handler) TailscaleStatus(ctx context.Context, _ *agentpb.Empty) (*agentpb.TailscaleStatusResponse, error) {
+	status, err := h.collector.TailscaleStatus(ctx)
+	if err != nil {
+		return nil, remoteError(err)
+	}
+	return pbTailscaleStatus(status), nil
+}
+
+func (h *Handler) TailscaleConfigure(ctx context.Context, req *agentpb.TailscaleConfigureRequest) (*agentpb.TailscaleStatusResponse, error) {
+	status, err := h.collector.TailscaleConfigure(ctx, agentcontract.TailscaleConfigureRequest{
+		AuthKey:  req.AuthKey,
+		Tags:     append([]string(nil), req.Tags...),
+		Hostname: req.Hostname,
+	})
+	if err != nil {
+		return nil, remoteError(err)
+	}
+	return pbTailscaleStatus(status), nil
+}
+
+func (h *Handler) TailscaleDisable(ctx context.Context, _ *agentpb.Empty) (*agentpb.TailscaleStatusResponse, error) {
+	status, err := h.collector.TailscaleDisable(ctx)
+	if err != nil {
+		return nil, remoteError(err)
+	}
+	return pbTailscaleStatus(status), nil
 }

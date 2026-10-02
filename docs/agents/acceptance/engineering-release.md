@@ -17,6 +17,7 @@
 - `ENG-GEN-002`：protobuf 源是 RPC 字段的事实来源；生成文件和根目录兼容副本必须与源一致，手工修改生成文件不得作为合同变更。
 - `ENG-GEN-003`：新增 RPC 字段应保持旧 Agent 的可解析性；破坏性协议变化必须有明确版本拒绝和用户可诊断错误。
 - `ENG-GEN-004`：Agent 的部署兼容检查以 Panel 规定的版本策略为准；Panel 不得向已知不兼容 Agent 发送会导致未知破坏的写操作。
+- `ENG-GEN-005`：Tailscale 相关的 `TailscaleStatus`、`TailscaleConfigure`、`TailscaleDisable` RPC 与 `AgentReport.tailscale` 可选字段必须保持旧 Agent 的可解析性，并随本次修改更新契约 hash；缺省字段不得被解释为“已关闭”，缺少能力只让具体操作失败，不得作为通用兼容门槛。详见 `TS-AGT-001`、`TS-NODE-005`。
 
 ## 3. 本地与容器构建
 
@@ -24,9 +25,10 @@
 - `ENG-BUILD-002`：生产镜像包含 `/app/panel`、`/app/panel-init`、`/app/web/dist` 和完整 `/app/panel-agents/linux-amd64`、`linux-arm64` bundle。每个平台的 bundle 必须是构建期产出的 `panel-agent.gz` 与 `panel-agent.sha256`（解压后二进制的 sha256）；`.gz` 必须用 `gzip -9 -n` 生成，构建期还必须回验「解压后哈希等于 `.sha256` 内容」。镜像内不得保留裸二进制，Panel 运行时不压缩也不计算哈希。
 - `ENG-BUILD-003`：目标镜像的 Panel/panel-init 必须匹配目标 CPU 架构；Agent bundle 同时包含 amd64 与 arm64，并验证 ELF machine，禁止靠文件名假定架构。
 - `ENG-BUILD-004`：Panel、panel-init、Agent 注入相同 version、channel、repository、commit 元数据；前端和后端来自同一源码触发提交。
-- `ENG-BUILD-005`：运行容器使用非 root `panel` 用户，以 `/app/panel-init` 为入口，声明 `/app/data` volume；数据目录必须可由该用户读写。
+- `ENG-BUILD-005`：运行容器以 root 的 `/app/panel-init` 为 PID 1，由它把 Panel 子进程降权到非 root 的 `panel` 用户（`-panel-user`、`PANEL_INIT_PANEL_USER` 可覆盖），容器内 `tailscaled` 由 root 的 panel-init 管理，并声明 `/app/data` volume；数据目录必须对 Panel 子进程可读写，`<dataRoot>/tailscale` 目录必须允许 Panel 写入期望态配置。运行容器需要 `--cap-add=NET_ADMIN`、`--cap-add=NET_RAW` 与 `--device=/dev/net/tun`，宿主需加载 `tun` 模块；缺少任一项时容器仍须正常启动与提供 Panel，但容器内 Tailscale 必须明确报告为不可用（见 `TS-INIT-001`），不得静默失败。该权限模型取代此前“容器整体以非 root panel 用户运行”的表述。
 - `ENG-BUILD-006`：容器服务监听 `0.0.0.0:8443`，只暴露 8443；健康检查访问 `https://127.0.0.1:8443/`，允许内置自签名证书但不得退回 8080。
 - `ENG-BUILD-007`：从源码构建的默认 `runtime` target 与 CI 使用预构建 artifact 的 `runtime-from-artifacts` target 产物布局和运行行为一致。
+- `ENG-BUILD-008`：镜像必须包含 Alpine `tailscale` 包提供的 `tailscale` 与 `tailscaled` 可执行文件，并位于 panel-init 的默认探测路径（`PANEL_INIT_TAILSCALE_PATH`、`PANEL_INIT_TAILSCALED_PATH` 可覆盖，显式置空表示有意关闭容器内 Tailscale 管理）。镜像不得内置 tailnet 认证密钥、已登录的节点身份或状态文件；`panel-init` 不得把认证密钥写入镜像、命令行参数或日志。容器内 tailscaled 生命周期见 `TS-INIT-001..007`。
 
 ## 4. 版本生成
 

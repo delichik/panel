@@ -73,6 +73,10 @@ export const serversApi = {
   deployAgent(id: string) {
     return apiClient.post<OperationAccepted>(`/servers/${encodeURIComponent(id)}/agent/deploy`);
   },
+  /** 创建或复用 server_tailscale_apply 任务；返回的是受理回执，不是执行结果。 */
+  applyTailscale(id: string) {
+    return apiClient.post<OperationAccepted>(`/servers/${encodeURIComponent(id)}/tailscale/apply`);
+  },
   metrics(id: string, range: ServerMetricsRange = '1h', options?: ApiRequestOptions) {
     return apiClient.get<ServerMetricsSeries>(`/servers/${encodeURIComponent(id)}/metrics?range=${encodeURIComponent(range)}`, options);
   },

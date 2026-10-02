@@ -37,6 +37,8 @@ export interface DebugTaskRuntime {
 export interface DebugTaskDefinition {
   type: string;
   hidden: boolean;
+  /** 内部例行任务：其成功活动日志事实为 debug 级（失败仍为 error）。 */
+  quiet: boolean;
   executable: boolean;
   periodic: boolean;
   allowRunNow: boolean;

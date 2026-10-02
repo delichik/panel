@@ -51,6 +51,7 @@
 | 容器、镜像、网络、卷、资源缓存与操作队列 | [容器与资源](containers-and-resources.md) |
 | 登录、账号、运行时设置、概览、系统版本 | [身份、设置与系统](identity-settings-system.md) |
 | 凭据、服务器、Agent、SSH、UFW、Fail2ban、APT | [服务器、安全与软件包](servers-security-packages.md) |
+| Tailscale：容器内 tailscaled 生命周期、全局设置与只写认证密钥、节点加入意图与观测态、节点收敛任务、tailnet 地址优先 | [Tailscale](tailscale.md) |
 | DNS、ACME、自签名证书、密钥资产 | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
 | 备份、恢复、维护模式、调试与诊断；清理数据进度/恢复/写入暂停 `DIAG-CLR-001..008`、`UI-DBG-007/008` | [备份、恢复与诊断](backup-restore-diagnostics.md)、[逐页面验收](ui-pages.md) |
 | ORM、数据库模型、迁移与兼容 | [架构、数据与 API](architecture-data-api.md) |
@@ -75,6 +76,7 @@
 | 状态/错误枚举 | 状态徽标与筛选、重试/禁用按钮、i18n、任务和事件投影、旧数据解析 |
 | 应用期望态或运行态 | orchestrator、Agent contract、容器观察、应用操作记录、任务中心、设施应用协调 |
 | Server/Agent 能力 | 探测、部署、证书、指标、容器、软件包、应用调度、离线降级 |
+| Tailscale 意图、观测地址或容器期望态 | 地址解析优先级与回落、节点证书 SAN、存储导出白名单、入口代理上游、设施重同步、节点收敛任务、设置页与服务器页、容器内 tailscaled 生命周期 |
 | DNS 或证书 | 反向代理、应用内置变量、密钥资产引用、续签任务、删除引用检查 |
 | 数据库模型 | 四库归属、迁移顺序、索引/约束、备份恢复、保留清理、旧版本升级 |
 | 运行时设置 | 启动加载、热更新范围、后台调度器、认证、TLS、前端表单与公开品牌接口 |

@@ -573,6 +573,73 @@ func reverseProxyReconcilePayload(stopServers []string) map[string]any {
 	}
 }
 
+// SyncInterconnectServers 在节点互联地址发生变化后重新收敛受影响的两个设施。
+//
+// 存储共享的挂载源与导出白名单、以及反向代理的网关上游都内嵌了对端地址，
+// 因此节点 tailnet 地址首次可用、变化或失效时必须主动重算，而不是只等下一条
+// 周期性协调。节点集合为空表示没有可判定的变化，直接返回。
+func (s *Service) SyncInterconnectServers(ctx context.Context, serverIDs []string) error {
+	affected := stringSetValues(serverIDs)
+	if len(affected) == 0 {
+		return nil
+	}
+	var firstErr error
+	// 反向代理：只有受影响节点确实参与网关或源站时才重新渲染配置。
+	if cfg, err := s.loadConfig(ctx); err != nil {
+		firstErr = err
+	} else if len(cfg.DeploymentServers) > 0 && s.reverseProxyUsesServers(ctx, cfg, affected) {
+		if err := s.triggerReverseProxyReconcile(ctx, "interconnect", nil); err != nil {
+			firstErr = err
+		}
+	}
+	// 存储共享：白名单包含全部启用 tailscale 的节点地址，任何相关节点的地址
+	// 变化都要重新下发导出配置，因此不区分存储节点与挂载节点。
+	if cfg, err := s.loadStorageConfig(ctx); err != nil {
+		if firstErr == nil {
+			firstErr = err
+		}
+	} else if cfg.Enabled {
+		if _, err := s.ReconcileStorageShareNow(ctx); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+// reverseProxyUsesServers 报告给定节点集合是否参与反向代理设施（网关、设施
+// 域名源站或应用路由源站）。
+func (s *Service) reverseProxyUsesServers(ctx context.Context, cfg ReverseProxyConfig, affected map[string]struct{}) bool {
+	for _, serverID := range cfg.DeploymentServers {
+		if _, ok := affected[serverID]; ok {
+			return true
+		}
+	}
+	for _, domain := range cfg.Domains {
+		for _, serverID := range append(append([]string(nil), domain.OriginServerIDs...), domain.AnyAccess.RelayServerIDs...) {
+			if _, ok := affected[serverID]; ok {
+				return true
+			}
+		}
+	}
+	if s.apps == nil {
+		return false
+	}
+	configs, err := s.apps.ApplicationReverseProxyConfigs(ctx)
+	if err != nil {
+		return false
+	}
+	for _, app := range configs {
+		for _, route := range app.Routes {
+			for _, serverID := range append(append([]string(nil), route.OriginServerIDs...), route.AnyAccess.RelayServerIDs...) {
+				if _, ok := affected[serverID]; ok {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 func routeCount(serverIDs []string, appRoutes []applications.ApplicationReverseProxyConfig) int {
 	routes := routesByServerConfigs(appRoutes, serverIDs)
 	count := 0
@@ -678,7 +745,7 @@ func (s *Service) renderNginxConfig(ctx context.Context, serverID string, cfg Re
 		if len(domain.AnyAccess.RelayServerIDs) > 0 && !containsString(domain.AnyAccess.RelayServerIDs, serverID) {
 			continue
 		}
-		relay, err := s.buildProxyRelay(ctx, domain.Domain, domain.OriginServerIDs, domain.AnyAccess)
+		relay, err := s.buildProxyRelay(ctx, serverID, domain.Domain, domain.OriginServerIDs, domain.AnyAccess)
 		if err != nil {
 			return "", nil, nil, err
 		}
@@ -733,7 +800,7 @@ func (s *Service) renderNginxConfig(ctx context.Context, serverID string, cfg Re
 				continue
 			}
 			if route.AnyAccess.Enabled && (len(route.AnyAccess.RelayServerIDs) == 0 || containsString(route.AnyAccess.RelayServerIDs, serverID)) {
-				relay, err := s.buildProxyRelay(ctx, route.Domain, route.OriginServerIDs, route.AnyAccess)
+				relay, err := s.buildProxyRelay(ctx, serverID, route.Domain, route.OriginServerIDs, route.AnyAccess)
 				if err != nil {
 					return "", nil, nil, err
 				}
@@ -1464,11 +1531,18 @@ func normalizeFacilityRoutePath(site FacilityRoutePath) (FacilityRoutePath, erro
 	return FacilityRoutePath{Path: pathValue, RuleType: ruleType, SourceType: sourceType, AssetName: assetName, RedirectURL: redirectURL, RedirectCode: redirectCode, ProxyURL: proxyURL, ProxySourceMode: proxySourceMode, Options: options}, nil
 }
 
-func (s *Service) buildProxyRelay(ctx context.Context, domain string, originServerIDs []string, anyAccess applications.AnyAccessConfig) (*proxyRelay, error) {
+func (s *Service) buildProxyRelay(ctx context.Context, gatewayServerID, domain string, originServerIDs []string, anyAccess applications.AnyAccessConfig) (*proxyRelay, error) {
 	if s.servers == nil {
 		return nil, panelerr.Validation("facility_domain_server_invalid", "Reverse proxy server provider is unavailable")
 	}
 	relay := &proxyRelay{Name: "panel_domain_" + nginxDomainConfigName(domain), Strategy: anyAccess.Strategy, PrimaryOriginServerID: anyAccess.PrimaryOriginServerID}
+	// 网关节点到源站节点同样属于节点互联：两端都启用 tailscale、双方都有有效
+	// tailnet 地址且至少一端要求优先时才改用源站的 tailnet 地址。
+	var gateway server.Server
+	gatewayKnown := false
+	if local, err := s.servers.Get(ctx, gatewayServerID); err == nil {
+		gateway, gatewayKnown = local, true
+	}
 	for _, serverID := range originServerIDs {
 		srv, err := s.servers.Get(ctx, serverID)
 		if err != nil {
@@ -1477,6 +1551,9 @@ func (s *Service) buildProxyRelay(ctx context.Context, domain string, originServ
 		host := strings.TrimSpace(srv.Host)
 		if host == "" {
 			return nil, panelerr.Validation("facility_domain_server_host_invalid", "Upstream server host is invalid")
+		}
+		if gatewayKnown {
+			host = interconnectPeerHost(srv, gateway)
 		}
 		relay.Servers = append(relay.Servers, proxyRelayServer{ID: serverID, Host: host})
 	}
