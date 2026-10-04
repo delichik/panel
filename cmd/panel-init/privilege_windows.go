@@ -16,5 +16,22 @@ func resolvePanelUser(name string) error {
 	return exec.ErrNotFound
 }
 
+// shouldDropPrivileges 在 Windows 上恒为 false：没有 setuid 语义。
+func shouldDropPrivileges(euid int) bool {
+	_ = euid
+	return false
+}
+
+// privilegeProblem 在 Windows 上没有对应的运行身份要求。
+func privilegeProblem(euid int, panelUser string, resolvedUID int, resolveErr error) error {
+	_, _, _, _ = euid, panelUser, resolvedUID, resolveErr
+	return nil
+}
+
+// ensurePrivileges 在 Windows 上没有对应的运行身份要求。
+func ensurePrivileges(panelUser string, resolveErr error) error {
+	return privilegeProblem(0, panelUser, panelUID, resolveErr)
+}
+
 // applyPanelCredential 在 Windows 上不做任何处理。
 func applyPanelCredential(cmd *exec.Cmd) {}

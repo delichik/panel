@@ -99,12 +99,12 @@
 
 ### TS-INIT-005 控制面与进程权限模型
 
-- **触发入口**：Panel 侧调用 panel-init 控制面 `POST /tailscale/apply`、`GET /tailscale/status`。
-- **前置条件**：控制面与既有重启入口共用同一个 loopback 监听器、随机端口、随机 token 与 `X-Panel-Init-Token` 头；`panel-init` 以 root 运行，Panel 子进程降权到非 root 的 `panel` 用户（可由 `-panel-user` 或 `PANEL_INIT_PANEL_USER` 覆盖）。
+- **触发入口**：Panel 侧调用 panel-init 控制面 `POST /tailscale/apply`、`GET /tailscale/status`；进程启动时校验运行身份。
+- **前置条件**：控制面与既有重启入口共用同一个 loopback 监听器、随机端口、随机 token 与 `X-Panel-Init-Token` 头；`panel-init` 必须以 root 运行（uid 0），Panel 子进程降权到非 root 的 `panel` 用户（可由 `-panel-user` 或 `PANEL_INIT_PANEL_USER` 覆盖）。
 - **成功结果**：Panel 能读取容器实际态并请求重新收敛；tailscaled 以 root 运行、Panel 业务进程以非 root 运行；`panel-init` 通过 `--init-tailscale-url` 把控制面地址传给 Panel 子进程。
 - **失败结果**：token 不匹配的请求必须被拒绝；控制面不得暴露在对外端口、不得注册为 Panel 业务路由；Panel 子进程不得因为非 root 而失去对 `<dataRoot>/tailscale/config.json` 的写入能力。
-- **边界条件**：`-data-root` 缺省取 `$PANEL_DATA_ROOT`、再回退 `/app/data`；控制面地址未下发（例如本地开发直接运行 `cmd/panel`）时，Panel 必须表现为“不支持”而不是轮询一个不存在端口；Panel 子进程退出导致容器重启后控制面必须重新生成 token。
-- **验证点**：`cmd/panel-init/main_test.go` 的参数/环境变量解析与控制面 token 用例；`tailscale_test.go` 的“未经 panel-init 监管”分支。
+- **边界条件（不允许降级）**：`panel-init` 不以 root 运行时必须**拒绝启动**并以非零码退出，错误文本指出原因（内核 TUN 模式与 Panel 子进程降权都需要 root）与修法（去掉 compose 的 `user:`、`docker run --user`，或改用未设置 `USER` 的镜像）；不得以非 root 身份继续运行、也不得静默把 Panel 子进程跑成 root。以 root 运行但解析不到目标用户时同样必须拒绝启动，只有显式传 `-panel-user=""` 才表示“有意让 Panel 子进程与 panel-init 同身份运行”。`-data-root` 缺省取 `$PANEL_DATA_ROOT`、再回退 `/app/data`；控制面地址未下发（例如本地开发直接运行 `cmd/panel`）时，Panel 必须表现为“不支持”而不是轮询一个不存在端口；Panel 子进程退出导致容器重启后控制面必须重新生成 token。
+- **验证点**：`cmd/panel-init/privilege_test.go` 的非 root 拒绝、未解析用户拒绝与显式 `-panel-user=""` 放行用例；`cmd/panel-init/main_test.go` 的参数/环境变量解析与控制面 token 用例；`tailscale_test.go` 的“未经 panel-init 监管”分支。
 
 ### TS-INIT-006 认证密钥只经 `TS_AUTHKEY` 传递并脱敏
 

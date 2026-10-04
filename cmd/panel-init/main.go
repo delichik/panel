@@ -56,8 +56,11 @@ func main() {
 		log.Fatalf("generate restart token failed: %v", err)
 	}
 
-	if err := resolvePanelUser(*panelUser); err != nil {
-		log.Printf("panel child keeps the current user: %v", err)
+	// 运行身份不允许降级：非 root 既不能把 Panel 子进程降权，也不能以内核 TUN
+	// 模式启动容器内 tailscaled。这里直接拒绝启动，避免容器带着一个悄悄失效的
+	// 能力运行。
+	if err := ensurePrivileges(*panelUser, resolvePanelUser(*panelUser)); err != nil {
+		log.Fatalf("%v", err)
 	}
 
 	supervisor := newTailscaleSupervisor(*dataRoot, *tailscalePath, *tailscaledPath, log.Default())

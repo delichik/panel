@@ -225,7 +225,8 @@ Container requirements:
 
 - `--cap-add=NET_ADMIN`, `--cap-add=NET_RAW` and `--device=/dev/net/tun`. The Compose examples above use `cap_add` and `devices`; plain `docker run` uses the flags shown in its example.
 - The host must provide the `tun` module (`modprobe tun`, or check with `lsmod | grep tun`). Without it `tailscaled` cannot start in kernel TUN mode.
-- The container runs `panel-init` as PID 1 as root; `panel-init` drops the Panel process to the non-root `panel` user and manages `tailscaled` itself. State and the LocalAPI socket stay under `/app/data/tailscale`.
+- The container runs `panel-init` as PID 1 **as root**; `panel-init` drops the Panel process to the non-root `panel` user and manages `tailscaled` itself. State and the LocalAPI socket stay under `/app/data/tailscale`.
+- Do **not** force the container to a non-root user (Compose `user:`, `docker run --user`, or an older image with `USER`). `panel-init` then exits immediately with an explanatory error, because it can neither drop the Panel process to the `panel` user nor start `tailscaled` in kernel TUN mode. Running the Panel child as root on purpose requires the explicit `-panel-user=""`.
 
 Configuration:
 

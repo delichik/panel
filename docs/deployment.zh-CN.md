@@ -226,6 +226,7 @@ Seamark 可以把 Panel 容器与所管理的服务器加入同一个 tailnet，
 - 需要 `--cap-add=NET_ADMIN`、`--cap-add=NET_RAW` 与 `--device=/dev/net/tun`。上文 Compose 示例使用 `cap_add` 与 `devices`，`docker run` 示例使用对应的命令行参数。
 - 宿主机必须提供 `tun` 模块（`modprobe tun`，或用 `lsmod | grep tun` 检查）。缺少该模块时 `tailscaled` 无法以内核 TUN 模式启动。
 - 容器内 `panel-init` 以 root 作为 PID 1，把 Panel 子进程降权到非 root 的 `panel` 用户，并自行管理 `tailscaled`；状态与 LocalAPI socket 都保存在 `/app/data/tailscale`。
+- **不要**把容器强制为非 root 用户（compose 的 `user:`、`docker run --user`，或设置了 `USER` 的旧镜像）：此时 `panel-init` 会立即以说明性错误退出，因为它既无法把 Panel 子进程降权到 `panel` 用户，也无法以内核 TUN 模式启动 `tailscaled`。确实需要让 Panel 子进程以 root 运行时，必须显式传 `-panel-user=""`。
 
 配置方式：
 
