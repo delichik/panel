@@ -1,0 +1,850 @@
+package settings
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/tls"
+	"database/sql"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/mail"
+	"net/url"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+	"unicode/utf8"
+
+	"panel/internal/platform/config"
+	"panel/internal/platform/database/models"
+	"panel/internal/platform/database/orm"
+	panelerr "panel/internal/platform/errors"
+	"panel/internal/platform/i18n"
+	"panel/internal/platform/logging"
+	"panel/internal/platform/paneltls"
+	"panel/internal/platform/reconciletrace"
+	"panel/internal/platform/tailscale"
+
+	"go.uber.org/zap"
+)
+
+var serverVariableKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+type RuntimeCertificateSettings struct {
+	Email                      string `json:"email"`
+	DNSPropagationDelaySeconds int    `json:"dnsPropagationDelaySeconds"`
+}
+
+type RuntimeBrandingSettings struct {
+	LoginTitle    string `json:"loginTitle"`
+	LoginSubtitle string `json:"loginSubtitle"`
+}
+
+type RuntimePanelSettings struct {
+	Domain           string `json:"domain"`
+	TLSCertificateID string `json:"tlsCertificateId"`
+}
+
+// RuntimeAgentSettings configures how the panel-agent bundle reaches a target
+// host. An empty DownloadBaseURL keeps the SSH upload as the only delivery
+// path, which is the behaviour of a Panel that has never opted in.
+type RuntimeAgentSettings struct {
+	DownloadBaseURL        string `json:"downloadBaseUrl"`
+	DownloadVerifyTLS      bool   `json:"downloadVerifyTls"`
+	TransferTimeoutSeconds int    `json:"transferTimeoutSeconds"`
+}
+
+type TLSAssetProvider interface {
+	AssetType(context.Context, string) (string, error)
+	ReadFile(context.Context, string, string) ([]byte, string, error)
+	SyncPanelTLS(context.Context, string, string) error
+}
+
+type ServerVariableDefinition struct {
+	Name     string `json:"name"`
+	Key      string `json:"key"`
+	Required bool   `json:"required"`
+}
+
+type ServerVariableDefinitionsUpdate struct {
+	Definitions []ServerVariableDefinition `json:"definitions"`
+}
+
+type RuntimeUpdate struct {
+	MetricsRetentionDays             int                         `json:"metricsRetentionDays"`
+	MetricsCollectionIntervalSeconds int                         `json:"metricsCollectionIntervalSeconds"`
+	ContainerReportIntervalSeconds   int                         `json:"containerReportIntervalSeconds"`
+	CleanupSchedule                  string                      `json:"cleanupSchedule"`
+	TokenExpiration                  string                      `json:"tokenExpiration"`
+	Language                         string                      `json:"language"`
+	LogLevel                         string                      `json:"logLevel"`
+	RemoteCommandTimeoutSeconds      int                         `json:"remoteCommandTimeoutSeconds"`
+	ReconcileTraceEnabled            *bool                       `json:"reconcileTraceEnabled"`
+	Branding                         *RuntimeBrandingSettings    `json:"branding"`
+	Certificates                     *RuntimeCertificateSettings `json:"certificates"`
+	Panel                            *RuntimePanelSettings       `json:"panel"`
+	Agent                            *RuntimeAgentSettings       `json:"agent"`
+	Tailscale                        *RuntimeTailscaleUpdate     `json:"tailscale"`
+}
+
+type RuntimeSettings struct {
+	ListenAddress                    string                     `json:"listenAddress"`
+	AppDatabase                      string                     `json:"appDatabase"`
+	MetricsDatabase                  string                     `json:"metricsDatabase"`
+	DataRoot                         string                     `json:"dataRoot"`
+	MetricsRetentionDays             int                        `json:"metricsRetentionDays"`
+	MetricsCollectionIntervalSeconds int                        `json:"metricsCollectionIntervalSeconds"`
+	ContainerReportIntervalSeconds   int                        `json:"containerReportIntervalSeconds"`
+	CleanupSchedule                  string                     `json:"cleanupSchedule"`
+	TokenExpiration                  string                     `json:"tokenExpiration"`
+	Language                         string                     `json:"language"`
+	LogLevel                         string                     `json:"logLevel"`
+	RemoteCommandTimeoutSeconds      int                        `json:"remoteCommandTimeoutSeconds"`
+	ReconcileTraceEnabled            bool                       `json:"reconcileTraceEnabled"`
+	Branding                         RuntimeBrandingSettings    `json:"branding"`
+	Certificates                     RuntimeCertificateSettings `json:"certificates"`
+	Panel                            RuntimePanelSettings       `json:"panel"`
+	Agent                            RuntimeAgentSettings       `json:"agent"`
+	Tailscale                        RuntimeTailscaleSettings   `json:"tailscale"`
+	JWTSecret                        string                     `json:"-"`
+	JWTSecretConfigured              bool                       `json:"jwtSecretConfigured"`
+}
+
+const (
+	RuntimeSettingTokenExpiration                      = "tokenExpiration"
+	RuntimeSettingLogLevel                             = "log.level"
+	RuntimeSettingJWTSecret                            = "jwtSecret"
+	RuntimeSettingRemoteCommandTimeoutSeconds          = "remoteCommandTimeoutSeconds"
+	RuntimeSettingReconcileTrace                       = "reconcile.trace"
+	RuntimeSettingBrandingLoginTitle                   = "branding.loginTitle"
+	RuntimeSettingBrandingLoginSubtitle                = "branding.loginSubtitle"
+	RuntimeSettingCertificateEmail                     = "certificates.email"
+	RuntimeSettingCertificateDNSPropagationDelaySecond = "certificates.dnsPropagationDelaySeconds"
+	RuntimeSettingServerVariableDefinitions            = "serverVariables.definitions"
+	RuntimeSettingPanelDomain                          = "panel.domain"
+	RuntimeSettingPanelTLSCertificateID                = "panel.tlsCertificateId"
+	RuntimeSettingAgentDownloadBaseURL                 = "agent.downloadBaseUrl"
+	RuntimeSettingAgentDownloadVerifyTLS               = "agent.downloadVerifyTls"
+	RuntimeSettingAgentTransferTimeoutSeconds          = "agent.transferTimeoutSeconds"
+	RuntimeSettingTailscaleAuthKey                     = "tailscale.authKey"
+	RuntimeSettingTailscaleTags                        = "tailscale.tags"
+
+	// DefaultAgentTransferTimeoutSeconds bounds one agent bundle transfer on
+	// both sides. It is deliberately larger than the shared remote command
+	// timeout: a compressed bundle still takes time on a slow international
+	// link, while an unbounded download would let a stuck target hold the task
+	// open forever. The target-side budget is derived from this value, so
+	// raising it is the supported way to serve slower links.
+	DefaultAgentTransferTimeoutSeconds = 300
+	MinAgentTransferTimeoutSeconds     = 60
+	MaxAgentTransferTimeoutSeconds     = 3600
+
+	TokenExpiration10Minutes = "10m"
+	TokenExpiration1Hour     = "1h"
+	TokenExpiration1Day      = "1d"
+	TokenExpiration5Days     = "5d"
+	TokenExpiration30Days    = "30d"
+	TokenExpirationNever     = "never"
+
+	DefaultTokenExpiration = TokenExpiration1Day
+	DefaultJWTSecret       = "change-me-panel-jwt-secret"
+)
+
+type Service struct {
+	db        *sql.DB
+	cfg       config.Config
+	mu        sync.RWMutex
+	rt        RuntimeSettings
+	tlsAssets TLSAssetProvider
+	// tailscaleControl 是 panel-init 的 tailscale 控制面。未经 panel-init 监管
+	// 时它的 Supported 为 false，容器内 tailscale 对外表现为“不可管理”。
+	tailscaleControl tailscale.InitController
+}
+
+type Option func(*Service)
+
+func WithTLSAssetProvider(provider TLSAssetProvider) Option {
+	return func(s *Service) { s.tlsAssets = provider }
+}
+
+// WithTailscaleController 替换容器内 tailscale 控制面，供测试注入替身。
+func WithTailscaleController(controller tailscale.InitController) Option {
+	return func(s *Service) { s.tailscaleControl = controller }
+}
+
+func NewService(db *sql.DB, cfg config.Config, options ...Option) (*Service, error) {
+	s := &Service{db: db, cfg: cfg, rt: defaultRuntimeSettings(cfg), tailscaleControl: tailscale.NewInitController()}
+	for _, option := range options {
+		option(s)
+	}
+	if err := s.ensureDefaultRuntimeSettings(context.Background()); err != nil {
+		return nil, err
+	}
+	if err := s.load(context.Background()); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(s.rt.Panel.TLSCertificateID) != "" {
+		if err := s.syncPanelTLS(context.Background(), s.rt.Panel); err != nil {
+			logging.L().Warn("failed to synchronize Panel TLS certificate", zap.Error(err))
+		}
+	}
+	// 由 Panel 负责生成期望态配置：容器重启后 panel-init 依赖该文件在 Panel
+	// 进程启动前拉起 tailscaled。
+	if err := s.ensureTailscaleConfig(); err != nil {
+		logging.L().Warn("failed to write container tailscale configuration", zap.Error(err))
+	}
+	s.RefreshTailscaleContainer(context.Background())
+	return s, nil
+}
+
+func (s *Service) Runtime() RuntimeSettings {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.rt
+}
+
+func (s *Service) JWTSecret() string {
+	secret := strings.TrimSpace(s.Runtime().JWTSecret)
+	if secret == "" {
+		return DefaultJWTSecret
+	}
+	return secret
+}
+
+func (s *Service) RemoteTimeout() time.Duration {
+	seconds := s.Runtime().RemoteCommandTimeoutSeconds
+	if seconds < 1 {
+		seconds = 30
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func (s *Service) ApplyToConfig(base config.Config) config.Config {
+	rt := s.Runtime()
+	base.RemoteCommandTimeoutSeconds = rt.RemoteCommandTimeoutSeconds
+	base.Certificates.Email = rt.Certificates.Email
+	base.Certificates.DNSPropagationDelaySeconds = rt.Certificates.DNSPropagationDelaySeconds
+	return base
+}
+
+func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSettings, error) {
+	current := s.Runtime()
+	if input.TokenExpiration == "" {
+		input.TokenExpiration = current.TokenExpiration
+	}
+	if input.Language == "" {
+		input.Language = current.Language
+	}
+	if input.LogLevel == "" {
+		input.LogLevel = current.LogLevel
+	}
+	if input.RemoteCommandTimeoutSeconds == 0 {
+		input.RemoteCommandTimeoutSeconds = current.RemoteCommandTimeoutSeconds
+	}
+	if input.ContainerReportIntervalSeconds == 0 {
+		input.ContainerReportIntervalSeconds = current.ContainerReportIntervalSeconds
+	}
+	certSettings := current.Certificates
+	if input.Certificates != nil {
+		certSettings = *input.Certificates
+	}
+	panelSettings := current.Panel
+	if input.Panel != nil {
+		panelSettings = RuntimePanelSettings{Domain: strings.ToLower(strings.TrimSpace(input.Panel.Domain)), TLSCertificateID: strings.TrimSpace(input.Panel.TLSCertificateID)}
+	}
+	brandingSettings := current.Branding
+	if input.Branding != nil {
+		brandingSettings = RuntimeBrandingSettings{
+			LoginTitle:    strings.TrimSpace(input.Branding.LoginTitle),
+			LoginSubtitle: strings.TrimSpace(input.Branding.LoginSubtitle),
+		}
+	}
+	agentSettings := current.Agent
+	if input.Agent != nil {
+		baseURL, err := normalizeAgentDownloadBaseURL(input.Agent.DownloadBaseURL)
+		if err != nil {
+			return RuntimeSettings{}, err
+		}
+		transferTimeout := input.Agent.TransferTimeoutSeconds
+		if transferTimeout == 0 {
+			transferTimeout = current.Agent.TransferTimeoutSeconds
+		}
+		agentSettings = RuntimeAgentSettings{
+			DownloadBaseURL:        baseURL,
+			DownloadVerifyTLS:      input.Agent.DownloadVerifyTLS,
+			TransferTimeoutSeconds: transferTimeout,
+		}
+	}
+	next := RuntimeSettings{
+		ListenAddress:                    current.ListenAddress,
+		AppDatabase:                      current.AppDatabase,
+		MetricsDatabase:                  current.MetricsDatabase,
+		DataRoot:                         current.DataRoot,
+		MetricsRetentionDays:             input.MetricsRetentionDays,
+		MetricsCollectionIntervalSeconds: input.MetricsCollectionIntervalSeconds,
+		ContainerReportIntervalSeconds:   input.ContainerReportIntervalSeconds,
+		CleanupSchedule:                  input.CleanupSchedule,
+		TokenExpiration:                  NormalizeTokenExpiration(input.TokenExpiration),
+		Language:                         i18n.NormalizeLocale(input.Language),
+		LogLevel:                         logging.NormalizeLevel(input.LogLevel),
+		RemoteCommandTimeoutSeconds:      input.RemoteCommandTimeoutSeconds,
+		ReconcileTraceEnabled:            current.ReconcileTraceEnabled,
+		Branding:                         brandingSettings,
+		Certificates:                     certSettings,
+		Panel:                            panelSettings,
+		Agent:                            agentSettings,
+		JWTSecret:                        current.JWTSecret,
+		JWTSecretConfigured:              current.JWTSecretConfigured,
+	}
+	if input.ReconcileTraceEnabled != nil {
+		next.ReconcileTraceEnabled = *input.ReconcileTraceEnabled
+	}
+	if input.Tailscale != nil {
+		if err := s.applyTailscaleUpdate(*input.Tailscale); err != nil {
+			return RuntimeSettings{}, err
+		}
+		current = s.Runtime()
+		next.Tailscale = current.Tailscale
+	}
+	if err := validateRuntimeSettings(next); err != nil {
+		return RuntimeSettings{}, err
+	}
+	if err := s.validatePanelTLS(next); err != nil {
+		return RuntimeSettings{}, err
+	}
+	if input.Panel != nil {
+		if err := paneltls.WithUpdate(func() error {
+			snapshot, err := paneltls.SnapshotFixedPair(s.cfg.DataRoot)
+			if err != nil {
+				return err
+			}
+			if err := s.syncPanelTLS(ctx, next.Panel); err != nil {
+				return errors.Join(err, paneltls.RestoreFixedPair(s.cfg.DataRoot, snapshot))
+			}
+			if err := s.saveValues(ctx, runtimeValues(next, false)); err != nil {
+				return errors.Join(err, paneltls.RestoreFixedPair(s.cfg.DataRoot, snapshot))
+			}
+			return nil
+		}); err != nil {
+			return RuntimeSettings{}, err
+		}
+	} else if err := s.saveValues(ctx, runtimeValues(next, false)); err != nil {
+		return RuntimeSettings{}, err
+	}
+	s.mu.Lock()
+	s.rt.MetricsRetentionDays = next.MetricsRetentionDays
+	s.rt.MetricsCollectionIntervalSeconds = next.MetricsCollectionIntervalSeconds
+	s.rt.ContainerReportIntervalSeconds = next.ContainerReportIntervalSeconds
+	s.rt.CleanupSchedule = next.CleanupSchedule
+	s.rt.TokenExpiration = next.TokenExpiration
+	s.rt.Language = next.Language
+	s.rt.LogLevel = next.LogLevel
+	s.rt.RemoteCommandTimeoutSeconds = next.RemoteCommandTimeoutSeconds
+	s.rt.ReconcileTraceEnabled = next.ReconcileTraceEnabled
+	s.rt.Branding = next.Branding
+	s.rt.Certificates = next.Certificates
+	s.rt.Panel = next.Panel
+	s.rt.Agent = next.Agent
+	s.rt.Tailscale = next.Tailscale
+	out := s.rt
+	s.mu.Unlock()
+	i18n.SetDefaultLocale(out.Language)
+	_ = logging.SetLevel(out.LogLevel)
+	reconciletrace.SetEnabled(out.ReconcileTraceEnabled)
+	if input.Tailscale != nil {
+		// 设置已经持久化，下发容器内 tailscaled 属于独立收敛：失败只反映在
+		// 实际态与 lastError 上，不回滚用户已确认的配置。
+		s.syncTailscaleConfig(ctx)
+		out = s.Runtime()
+	}
+	return out, nil
+}
+
+func (s *Service) syncPanelTLS(ctx context.Context, panel RuntimePanelSettings) error {
+	if s.tlsAssets == nil {
+		return nil
+	}
+	return s.tlsAssets.SyncPanelTLS(ctx, panel.Domain, panel.TLSCertificateID)
+}
+
+func (s *Service) SetJWTSecret(ctx context.Context, secret string) (RuntimeSettings, error) {
+	secret = strings.TrimSpace(secret)
+	if err := ValidateJWTSecret(secret); err != nil {
+		return RuntimeSettings{}, err
+	}
+	if err := s.saveValues(ctx, map[string]string{RuntimeSettingJWTSecret: secret}); err != nil {
+		return RuntimeSettings{}, err
+	}
+	s.mu.Lock()
+	s.rt.JWTSecret = secret
+	s.rt.JWTSecretConfigured = true
+	out := s.rt
+	s.mu.Unlock()
+	return out, nil
+}
+
+func (s *Service) ServerVariableDefinitions(ctx context.Context) ([]ServerVariableDefinition, error) {
+	var raw string
+	err := orm.New(s.db).From("runtime_settings").Where("key = ?", RuntimeSettingServerVariableDefinitions).Select("value").ScanValue(ctx, &raw)
+	if err == sql.ErrNoRows || strings.TrimSpace(raw) == "" {
+		return []ServerVariableDefinition{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var defs []ServerVariableDefinition
+	if err := json.Unmarshal([]byte(raw), &defs); err != nil {
+		return nil, err
+	}
+	return normalizeServerVariableDefinitions(defs)
+}
+
+func (s *Service) UpdateServerVariableDefinitions(ctx context.Context, input ServerVariableDefinitionsUpdate) ([]ServerVariableDefinition, error) {
+	defs, err := normalizeServerVariableDefinitions(input.Definitions)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(defs)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.saveValues(ctx, map[string]string{RuntimeSettingServerVariableDefinitions: string(raw)}); err != nil {
+		return nil, err
+	}
+	return defs, nil
+}
+
+func (s *Service) ensureDefaultRuntimeSettings(ctx context.Context) error {
+	defaults := defaultRuntimeSettings(s.cfg)
+	if !s.hasConfiguredJWTSecret() {
+		secret, err := randomJWTSecret()
+		if err != nil {
+			return err
+		}
+		defaults.JWTSecret = secret
+		defaults.JWTSecretConfigured = true
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for key, value := range runtimeValues(defaults, true) {
+		if key == RuntimeSettingJWTSecret {
+			// 存量安装可能已在 runtime_settings 里固化旧默认密钥（升级前由旧
+			// 代码写入）；检测到默认值就轮换为随机密钥，避免升级后继续用可预测
+			// 的默认密钥签名会话。轮换会使既有会话令牌失效（需重新登录一次），
+			// 属安全修复的预期副作用；轮换后值不再是默认值，后续启动不会重复。
+			if _, err := orm.RawExec(ctx, s.db, `
+				INSERT INTO runtime_settings(key, value, updated_at)
+				VALUES (?, ?, ?)
+				ON CONFLICT(key) DO UPDATE SET
+					value=CASE WHEN runtime_settings.value='' OR runtime_settings.value=? THEN excluded.value ELSE runtime_settings.value END,
+					updated_at=CASE WHEN runtime_settings.value='' OR runtime_settings.value=? THEN excluded.updated_at ELSE runtime_settings.updated_at END
+			`, key, value, now, DefaultJWTSecret, DefaultJWTSecret); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := orm.RawExec(ctx, s.db, `
+			INSERT INTO runtime_settings(key, value, updated_at)
+			VALUES (?, ?, ?)
+			ON CONFLICT(key) DO NOTHING
+		`, key, value, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) saveValues(ctx context.Context, values map[string]string) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	return orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		for key, value := range values {
+			if _, err := orm.RawExec(ctx, tx, `
+				INSERT INTO runtime_settings(key, value, updated_at)
+				VALUES (?, ?, ?)
+				ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+			`, key, value, now); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func (s *Service) load(ctx context.Context) error {
+	var rows []models.RuntimeSetting
+	if err := orm.New(s.db).From("runtime_settings").All(ctx, &rows); err != nil {
+		return err
+	}
+	next := defaultRuntimeSettings(s.cfg)
+	for _, row := range rows {
+		key, value := row.Key, row.Value
+		switch key {
+		case "metricsRetentionDays":
+			if n, err := strconv.Atoi(value); err == nil {
+				next.MetricsRetentionDays = n
+			}
+		case "metricsCollectionIntervalSeconds":
+			if n, err := strconv.Atoi(value); err == nil {
+				next.MetricsCollectionIntervalSeconds = n
+			}
+		case "containerReportIntervalSeconds":
+			if n, err := strconv.Atoi(value); err == nil {
+				next.ContainerReportIntervalSeconds = n
+			}
+		case "cleanupSchedule":
+			next.CleanupSchedule = value
+		case RuntimeSettingTokenExpiration:
+			if tokenExpiration := NormalizeTokenExpiration(value); tokenExpiration != "" {
+				next.TokenExpiration = tokenExpiration
+			}
+		case "language":
+			if locale := i18n.NormalizeLocale(value); locale != "" {
+				next.Language = locale
+			}
+		case RuntimeSettingLogLevel:
+			if level := logging.NormalizeLevel(value); level != "" {
+				next.LogLevel = level
+			}
+		case RuntimeSettingJWTSecret:
+			next.JWTSecret = value
+			next.JWTSecretConfigured = strings.TrimSpace(value) != ""
+		case RuntimeSettingRemoteCommandTimeoutSeconds:
+			if n, err := strconv.Atoi(value); err == nil {
+				next.RemoteCommandTimeoutSeconds = n
+			}
+		case RuntimeSettingReconcileTrace:
+			next.ReconcileTraceEnabled = strings.TrimSpace(value) == "true"
+		case RuntimeSettingBrandingLoginTitle:
+			next.Branding.LoginTitle = value
+		case RuntimeSettingBrandingLoginSubtitle:
+			next.Branding.LoginSubtitle = value
+		case RuntimeSettingCertificateEmail:
+			next.Certificates.Email = value
+		case RuntimeSettingCertificateDNSPropagationDelaySecond:
+			if n, err := strconv.Atoi(value); err == nil {
+				next.Certificates.DNSPropagationDelaySeconds = n
+			}
+		case RuntimeSettingPanelDomain:
+			next.Panel.Domain = value
+		case RuntimeSettingPanelTLSCertificateID:
+			next.Panel.TLSCertificateID = value
+		case RuntimeSettingAgentDownloadBaseURL:
+			if baseURL, err := normalizeAgentDownloadBaseURL(value); err == nil {
+				next.Agent.DownloadBaseURL = baseURL
+			}
+		case RuntimeSettingAgentDownloadVerifyTLS:
+			next.Agent.DownloadVerifyTLS = strings.TrimSpace(value) == "true"
+		case RuntimeSettingAgentTransferTimeoutSeconds:
+			if n, err := strconv.Atoi(value); err == nil {
+				next.Agent.TransferTimeoutSeconds = n
+			}
+		case RuntimeSettingTailscaleAuthKey:
+			next.Tailscale.authKey = strings.TrimSpace(value)
+			next.Tailscale.AuthKeyConfigured = next.Tailscale.authKey != ""
+		case RuntimeSettingTailscaleTags:
+			next.Tailscale.Tags = decodeStringList(value)
+		}
+	}
+	if err := validateRuntimeSettings(next); err != nil {
+		return err
+	}
+	if err := s.validatePanelTLS(next); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.rt = next
+	s.mu.Unlock()
+	i18n.SetDefaultLocale(next.Language)
+	_ = logging.SetLevel(next.LogLevel)
+	reconciletrace.SetEnabled(next.ReconcileTraceEnabled)
+	return nil
+}
+
+func defaultRuntimeSettings(cfg config.Config) RuntimeSettings {
+	jwtSecret := firstNonEmpty(strings.TrimSpace(cfg.JWTSecret), DefaultJWTSecret)
+	remoteTimeout := cfg.RemoteCommandTimeoutSeconds
+	if remoteTimeout < 1 {
+		remoteTimeout = 30
+	}
+	dnsDelay := cfg.Certificates.DNSPropagationDelaySeconds
+	if dnsDelay < 0 {
+		dnsDelay = 30
+	}
+	return RuntimeSettings{
+		ListenAddress:                    cfg.ListenAddress,
+		AppDatabase:                      cfg.AppDatabase,
+		MetricsDatabase:                  cfg.MetricsDatabase,
+		DataRoot:                         cfg.DataRoot,
+		MetricsRetentionDays:             7,
+		MetricsCollectionIntervalSeconds: 60,
+		ContainerReportIntervalSeconds:   30,
+		CleanupSchedule:                  "daily",
+		TokenExpiration:                  DefaultTokenExpiration,
+		Language:                         i18n.DefaultLocale(),
+		LogLevel:                         logging.DefaultLevel,
+		RemoteCommandTimeoutSeconds:      remoteTimeout,
+		Branding:                         RuntimeBrandingSettings{},
+		Certificates: RuntimeCertificateSettings{
+			Email:                      strings.TrimSpace(cfg.Certificates.Email),
+			DNSPropagationDelaySeconds: dnsDelay,
+		},
+		Panel: RuntimePanelSettings{Domain: "localhost"},
+		Agent: RuntimeAgentSettings{
+			TransferTimeoutSeconds: DefaultAgentTransferTimeoutSeconds,
+		},
+		Tailscale: RuntimeTailscaleSettings{
+			Tags:      []string{},
+			Container: RuntimeTailscaleContainerState{},
+		},
+		JWTSecret:           jwtSecret,
+		JWTSecretConfigured: jwtSecret != "",
+	}
+}
+
+func runtimeValues(settings RuntimeSettings, includeJWT bool) map[string]string {
+	values := map[string]string{
+		"metricsRetentionDays":                             strconv.Itoa(settings.MetricsRetentionDays),
+		"metricsCollectionIntervalSeconds":                 strconv.Itoa(settings.MetricsCollectionIntervalSeconds),
+		"containerReportIntervalSeconds":                   strconv.Itoa(settings.ContainerReportIntervalSeconds),
+		"cleanupSchedule":                                  settings.CleanupSchedule,
+		RuntimeSettingTokenExpiration:                      settings.TokenExpiration,
+		"language":                                         settings.Language,
+		RuntimeSettingLogLevel:                             settings.LogLevel,
+		RuntimeSettingRemoteCommandTimeoutSeconds:          strconv.Itoa(settings.RemoteCommandTimeoutSeconds),
+		RuntimeSettingReconcileTrace:                       strconv.FormatBool(settings.ReconcileTraceEnabled),
+		RuntimeSettingBrandingLoginTitle:                   settings.Branding.LoginTitle,
+		RuntimeSettingBrandingLoginSubtitle:                settings.Branding.LoginSubtitle,
+		RuntimeSettingCertificateEmail:                     settings.Certificates.Email,
+		RuntimeSettingCertificateDNSPropagationDelaySecond: strconv.Itoa(settings.Certificates.DNSPropagationDelaySeconds),
+		RuntimeSettingPanelDomain:                          settings.Panel.Domain,
+		RuntimeSettingPanelTLSCertificateID:                settings.Panel.TLSCertificateID,
+		RuntimeSettingAgentDownloadBaseURL:                 settings.Agent.DownloadBaseURL,
+		RuntimeSettingAgentDownloadVerifyTLS:               strconv.FormatBool(settings.Agent.DownloadVerifyTLS),
+		RuntimeSettingAgentTransferTimeoutSeconds:          strconv.Itoa(settings.Agent.TransferTimeoutSeconds),
+		RuntimeSettingTailscaleTags:                        encodeStringList(settings.Tailscale.Tags),
+	}
+	if includeJWT {
+		values[RuntimeSettingJWTSecret] = settings.JWTSecret
+	}
+	return values
+}
+
+func validateRuntimeSettings(settings RuntimeSettings) error {
+	if settings.MetricsRetentionDays < 1 {
+		return panelerr.Validation("invalid_metrics_retention", "Metrics retention must be at least 1 day")
+	}
+	if settings.MetricsCollectionIntervalSeconds < 1 {
+		return panelerr.Validation("invalid_metrics_interval", "Metrics collection interval must be at least 1 second")
+	}
+	if settings.ContainerReportIntervalSeconds < 1 {
+		return panelerr.Validation("invalid_container_report_interval", "Container report interval must be at least 1 second")
+	}
+	switch settings.CleanupSchedule {
+	case "hourly", "daily", "weekly":
+	default:
+		return panelerr.Validation("invalid_cleanup_schedule", "Cleanup schedule must be hourly, daily, or weekly")
+	}
+	if tokenExpiration := NormalizeTokenExpiration(settings.TokenExpiration); tokenExpiration == "" {
+		return panelerr.Validation("invalid_token_expiration", "Token expiration must be 10 minutes, 1 hour, 1 day, 5 days, 30 days, or never")
+	}
+	if strings.TrimSpace(settings.Language) == "" || i18n.NormalizeLocale(settings.Language) == "" {
+		return panelerr.Validation("invalid_language", "Language must be English or Simplified Chinese")
+	}
+	if strings.TrimSpace(settings.LogLevel) == "" || logging.NormalizeLevel(settings.LogLevel) == "" {
+		return panelerr.Validation("invalid_log_level", "Log level must be debug, info, warn, or error")
+	}
+	if settings.RemoteCommandTimeoutSeconds < 1 {
+		return panelerr.Validation("invalid_remote_command_timeout", "Remote command timeout must be at least 1 second")
+	}
+	if utf8.RuneCountInString(settings.Branding.LoginTitle) > 80 {
+		return panelerr.Validation("invalid_branding_login_title", "Login title must be 80 characters or fewer")
+	}
+	if utf8.RuneCountInString(settings.Branding.LoginSubtitle) > 240 {
+		return panelerr.Validation("invalid_branding_login_subtitle", "Login subtitle must be 240 characters or fewer")
+	}
+	if settings.Certificates.DNSPropagationDelaySeconds < 0 {
+		return panelerr.Validation("invalid_certificate_dns_delay", "Certificate DNS propagation delay cannot be negative")
+	}
+	if email := strings.TrimSpace(settings.Certificates.Email); email != "" {
+		if _, err := mail.ParseAddress(email); err != nil {
+			return panelerr.Validation("invalid_certificate_email", "Certificate email must be valid")
+		}
+	}
+	if err := validatePanelDomain(settings.Panel.Domain); err != nil {
+		return err
+	}
+	if err := validateAgentSettings(settings.Agent); err != nil {
+		return err
+	}
+	if _, err := normalizeTailscaleTags(settings.Tailscale.Tags); err != nil {
+		return err
+	}
+	return ValidateJWTSecret(settings.JWTSecret)
+}
+
+func validateAgentSettings(settings RuntimeAgentSettings) error {
+	if _, err := normalizeAgentDownloadBaseURL(settings.DownloadBaseURL); err != nil {
+		return err
+	}
+	if settings.TransferTimeoutSeconds < MinAgentTransferTimeoutSeconds || settings.TransferTimeoutSeconds > MaxAgentTransferTimeoutSeconds {
+		return panelerr.Validation("invalid_agent_transfer_timeout", "Agent transfer timeout must be between 60 and 3600 seconds")
+	}
+	return nil
+}
+
+// normalizeAgentDownloadBaseURL validates and normalizes the public base URL an
+// agent bundle is downloaded from. An empty value disables HTTP delivery.
+//
+// The value is embedded into a remote shell command, so quotes, whitespace and
+// shell metacharacters are rejected outright rather than escaped: a base URL
+// never legitimately contains them. The value is also restricted to a bare
+// origin, because the Panel appends the artifact path itself and must not let a
+// configured prefix change which path is served.
+func normalizeAgentDownloadBaseURL(value string) (string, error) {
+	trimmed := strings.TrimRight(strings.TrimSpace(value), "/")
+	if trimmed == "" {
+		return "", nil
+	}
+	if strings.ContainsAny(trimmed, " \t\r\n\"'`\\$;&|<>(){}[]*?!") {
+		return "", panelerr.Validation("invalid_agent_download_base_url", "Agent download base URL must not contain whitespace, quotes or shell metacharacters")
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return "", panelerr.Validation("invalid_agent_download_base_url", "Agent download base URL must be a valid http or https origin")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", panelerr.Validation("invalid_agent_download_base_url", "Agent download base URL must use http or https")
+	}
+	if parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", panelerr.Validation("invalid_agent_download_base_url", "Agent download base URL must be a bare origin without a path, query, fragment or credentials")
+	}
+	return parsed.Scheme + "://" + parsed.Host, nil
+}
+
+func (s *Service) validatePanelTLS(settings RuntimeSettings) error {
+	if strings.TrimSpace(settings.Panel.TLSCertificateID) == "" {
+		return nil
+	}
+	if s.tlsAssets == nil {
+		return panelerr.Validation("invalid_panel_tls_certificate", "Panel TLS certificate provider is unavailable")
+	}
+	id := strings.TrimSpace(settings.Panel.TLSCertificateID)
+	assetType, err := s.tlsAssets.AssetType(context.Background(), id)
+	if err != nil {
+		return panelerr.Validation("invalid_panel_tls_certificate", "Selected Panel TLS certificate is unavailable")
+	}
+	if assetType != "tls_certificate" {
+		return panelerr.Validation("invalid_panel_tls_certificate", "Selected Panel certificate must be a TLS certificate")
+	}
+	certPEM, _, err := s.tlsAssets.ReadFile(context.Background(), id, "certificate")
+	if err != nil {
+		return panelerr.Validation("invalid_panel_tls_certificate", "Selected Panel TLS certificate cannot be read")
+	}
+	keyPEM, _, err := s.tlsAssets.ReadFile(context.Background(), id, "private_key")
+	if err != nil {
+		return panelerr.Validation("invalid_panel_tls_certificate", "Selected Panel TLS private key cannot be read")
+	}
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil || len(cert.Certificate) == 0 {
+		return panelerr.Validation("invalid_panel_tls_certificate", "Selected Panel TLS certificate and private key do not match")
+	}
+	if err := paneltls.ValidateListenerCertificate(cert, ""); err != nil {
+		return panelerr.Validation("invalid_panel_tls_certificate", err.Error())
+	}
+	return nil
+}
+
+func validatePanelDomain(value string) error {
+	domain := strings.ToLower(strings.TrimSpace(value))
+	if domain == "" || strings.ContainsAny(domain, "/\\?#@ :") || strings.Contains(domain, "..") {
+		return panelerr.Validation("invalid_panel_domain", "Panel domain must be a valid hostname or IP address")
+	}
+	if net.ParseIP(domain) == nil && domain != "localhost" && (!strings.Contains(domain, ".") || len(domain) > 253) {
+		return panelerr.Validation("invalid_panel_domain", "Panel domain must be a valid hostname or IP address")
+	}
+	return nil
+}
+
+func normalizeServerVariableDefinitions(in []ServerVariableDefinition) ([]ServerVariableDefinition, error) {
+	out := make([]ServerVariableDefinition, 0, len(in))
+	seen := map[string]struct{}{}
+	for _, item := range in {
+		name := strings.TrimSpace(item.Name)
+		key := strings.TrimSpace(item.Key)
+		if name == "" {
+			return nil, panelerr.Validation("invalid_server_variable_name", "Server variable display name is required")
+		}
+		if !serverVariableKeyPattern.MatchString(key) {
+			return nil, panelerr.Validation("invalid_server_variable_key", "Server variable key must start with a letter or underscore and contain only letters, digits, or underscores")
+		}
+		if _, ok := seen[key]; ok {
+			return nil, panelerr.Validation("duplicate_server_variable_key", "Server variable key must be unique")
+		}
+		seen[key] = struct{}{}
+		out = append(out, ServerVariableDefinition{Name: name, Key: key, Required: item.Required})
+	}
+	return out, nil
+}
+
+func ValidateJWTSecret(secret string) error {
+	if len(strings.TrimSpace(secret)) < 16 {
+		return panelerr.Validation("invalid_jwt_secret", "JWT secret must be at least 16 characters")
+	}
+	return nil
+}
+
+func NormalizeTokenExpiration(value string) string {
+	switch value {
+	case TokenExpiration10Minutes, TokenExpiration1Hour, TokenExpiration1Day, TokenExpiration5Days, TokenExpiration30Days, TokenExpirationNever:
+		return value
+	default:
+		return ""
+	}
+}
+
+func TokenExpirationDuration(value string) (time.Duration, bool) {
+	switch NormalizeTokenExpiration(value) {
+	case TokenExpiration10Minutes:
+		return 10 * time.Minute, true
+	case TokenExpiration1Hour:
+		return time.Hour, true
+	case TokenExpiration1Day:
+		return 24 * time.Hour, true
+	case TokenExpiration5Days:
+		return 5 * 24 * time.Hour, true
+	case TokenExpiration30Days:
+		return 30 * 24 * time.Hour, true
+	case TokenExpirationNever:
+		return 0, true
+	default:
+		return 0, false
+	}
+}
+
+// hasConfiguredJWTSecret reports whether the JWT secret was explicitly set in
+// the config file or environment rather than left at the public default
+// constant. Explicitly configured secrets are treated as intentional and are
+// preserved; the default constant is randomized on first startup instead.
+func (s *Service) hasConfiguredJWTSecret() bool {
+	secret := strings.TrimSpace(s.cfg.JWTSecret)
+	return secret != "" && secret != DefaultJWTSecret
+}
+
+func randomJWTSecret() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}

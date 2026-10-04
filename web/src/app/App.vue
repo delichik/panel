@@ -1,23 +1,12 @@
 <script setup lang="ts">
-import { watch } from 'vue';
-import { useTheme } from 'vuetify';
-import { isPanelThemeName, persistTheme, syncThemeAttribute } from '@/theme';
+import ToastProvider from '@/components/ui/ToastProvider.vue';
+import { useThemeMode } from '@/design/theme';
 
-const theme = useTheme();
-
-watch(
-  () => theme.global.name.value,
-  (name) => {
-    if (!isPanelThemeName(name)) return;
-    syncThemeAttribute(name);
-    persistTheme(name);
-  },
-  { immediate: true },
-);
+useThemeMode();
 </script>
 
 <template>
-  <v-app>
+  <ToastProvider>
     <RouterView />
-  </v-app>
+  </ToastProvider>
 </template>

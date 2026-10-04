@@ -1,0 +1,31 @@
+package panel
+
+import (
+	"context"
+	"testing"
+
+	"panel/internal/modules/applications"
+)
+
+func TestApplicationCertificateBridgeRejectsUseBeforeInitialization(t *testing.T) {
+	bridge := &applicationCertificateBridge{}
+	if _, err := bridge.RedeployEnabledApplications(context.Background()); err == nil {
+		t.Fatal("expected uninitialized application bridge error")
+	}
+}
+
+func TestApplicationContainerBridgeRejectsUseBeforeInitialization(t *testing.T) {
+	bridge := &applicationContainerBridge{}
+	if err := bridge.Execute(context.Background(), "srv", func(context.Context) error { return nil }); err == nil {
+		t.Fatal("expected uninitialized container bridge error")
+	}
+	if _, err := bridge.List(context.Background()); err == nil {
+		t.Fatal("expected uninitialized application bridge error")
+	}
+	if _, err := bridge.ListForReconcile(context.Background()); err == nil {
+		t.Fatal("expected uninitialized application bridge error")
+	}
+	if _, err := bridge.PlanApplicationDeployment(context.Background(), applications.DeploymentPlanRequest{ApplicationID: "app"}); err == nil {
+		t.Fatal("expected uninitialized application bridge error")
+	}
+}
