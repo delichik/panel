@@ -22,10 +22,10 @@ AppShell
 - 窄屏 `<1024px`：左侧导航变自有抽屉，body 恢复页面级滚动；顶部条在该断点下必须粘性置顶（`sticky top-0`，层级低于抽屉/Dialog/Toast），保证抽屉入口、主题、语言和账户随时可达。
 - 触控尺寸策略：桌面保持 token 密集高度（36px 行高、32/36/40px 控件，满足 WCAG 2.2 AA 的 24px 最小目标）；窄屏抽屉的关闭按钮与导航行必须放大到 44px（`max-lg:size-11` / `max-lg:h-11`），因为它们在手指最容易误触的位置。顶栏全局操作按钮保持 36px——手机宽度下 5 个 44px 按钮会使 360px 视口横向溢出，属于显式取舍而非遗漏。
 - 导航定义在 `web/src/components/shell/navModel.ts`，列表渲染在 `web/src/components/shell/NavList.vue`；桌面侧栏与移动抽屉必须复用同一实现，不得各写一份。新增导航项必须同步 i18n 和模块文档。
-- 侧边导航只放页面族入口，不展开页面内部 tab：例如安全只保留“安全”，资源只保留“资源”，证书只保留“证书”，应用只保留“应用”。`/security/firewall`、`/resources/containers`、`/certificates/keys` 等深链路继续由路由支持并在页面内切换 tab，但不得作为独立侧边菜单项。
+- 侧边导航只放页面族入口，不展开页面内部 tab：例如证书只保留“证书”，应用只保留“应用”，服务器只保留“服务器”。资源与安全不再是导航组，其能力位于服务器详情 tabs；`/certificates/keys` 等深链路继续由路由支持并在页面内切换 tab，但不得作为独立侧边菜单项。
 - 导航项必须显式绑定 `aria-current="page"`（以 `navModel.activeNavKey` 计算归属），使 `/certificates/keys` 这类深层子路径仍能正确标记所属入口；激活项同时显示左侧 2px 品牌色激活条。
 - 折叠时导航文案保留在无障碍树中（`max-width` + `opacity` 渐变 + `overflow-hidden`），不得用 `v-if` 直接删除；折叠按钮暴露 `aria-expanded` 与 `aria-controls`。
-- 全局顶部条只承载当前路由标题、alpha 标识、主题、语言、账户和移动抽屉入口。页面主操作放 PageHeader actions，对象级操作放详情区。
+- 全局顶部条只承载当前路由标题、alpha 标识、主题、语言、账户和移动抽屉入口。页面主操作放 PageHeader actions，对象级操作放对象所在表格的操作列；需要参数面板或逐文件/逐节点/逐步骤的操作保留在覆盖详情内。
 - 窄屏抽屉以 dialog 语义呈现（`role="dialog"` / `aria-modal` / `aria-label`），支持 Escape 关闭、焦点圈定与恢复、背景滚动锁定；打开后焦点自动移入抽屉，关闭后回到触发按钮。
 - 外壳必须提供本地化的“跳到主要内容”链接作为首个可聚焦元素，目标为路由内容区 `#main-content`。
 
@@ -43,19 +43,25 @@ AppShell
 - `Table` 根容器自身承担滚动；页面可通过 `h-*` / `max-h-*` 约束高度，表头在该滚动区内 sticky。
 - 根容器保留圆角和边框，不得在外层限高后再依赖内层百分比高度建立滚动区。
 - 列定义支持可选 `width` / `nowrap`，并可通过 `fixed` 开启 `table-fixed`：需要稳定单行的列（时间、级别、操作）用 `nowrap`，长文本列用 `truncate` 截断，需要悬浮完整内容时配合 `Tooltip`。
+- 单元格插槽按列 key 命名（`#<key>`），表头插槽为 `#head-<key>`（如全选复选框）；`#empty` 插槽在真实无数据时渲染空态，加载失败/筛选为空由页面在表格外先行分支。
+- 行操作列：每行至多一个直接可见入口（「详情」），其余操作使用行内菜单或按钮组；操作列右对齐并 `nowrap`。
+- 当前选中行（覆盖详情打开的对象）通过 `active-key` 标记 `aria-current="true"` 与 muted 表面；表格行本身不可点击。
 
 ## 页面模板
 
 模板位于 `web/src/components/templates/`，只负责结构、间距、滚动和断点折叠，不含业务逻辑。
 
 - `ListPage`：工具栏 + 表格内部滚动 + 固定分页。
-- `MasterDetailLayout`：一级对象选择工作台的轻量双栏几何。默认单列，`xl` 及以上使用 `360px minmax(0, 1fr)`，统一 `gap-4`、两侧 `min-width/min-height: 0` 和横向溢出保护；页面通过 `master` / `detail` named slots 保留自己的边框、背景、padding 与业务滚动。不得通过页面 class 或公共 API 覆盖左栏宽度。settings 分区导航、任务详情内层 `280px` 列表和 AppShell 导航不适用。
+- `TableDetailLayout`：实体工作台（servers/credentials/dns/certificates/applications）的统一形态——列表与覆盖式详情叠放在同一网格单元，详情覆盖整个内容区（含列表页标题栏）。页面提供 `list` / `detail` 两个具名槽；详情打开时列表保持挂载但 `inert` + `aria-hidden`，关闭后滚动位置与筛选不丢；详情只播放一次进场（`detail-swap-*`）。
+  - 高度契约由模板自身承担（`h-full min-h-0`）：页面不得用页面级滚动替代模板或详情正文的内部滚动；详情正文由页面按需选择整体滚动或分区滚动（服务器详情用 `ConsolePage` 的 `body-scroll=false`，资源 tab 各自内部滚动）。
+  - 详情自带 `ConsolePage`/`PageHeader` 标题与本地化返回（`common.backToList`），返回清空选中参数与 tab 参数。
+  - 选中对象不在当前页时（深链），页面按 id 补载详情，不得回落到“无选中”空态。
+- `MasterDetailLayout`：过渡期仅 `activity` 使用（其双栏几何见下）；其他实体工作台不得再接入。
   - 高度契约由模板自身承担（`h-full min-h-0`）：调用方不再需要 `min-h-[600px+]` 之类的魔法高度，也不得用页面级滚动替代内部滚动。
   - 详情区正文统一使用 `grid-rows-[auto_minmax(0,1fr)]`（标题行 + 正文行）。存在可选横幅/告警时，横幅必须放进正文的内部滚动区，不得作为独立 grid 行，否则正文会落到 `auto` 行而失去内部滚动。
   - 传入 `detail-key`（当前选中对象标识）时，详情内容按 key 播放一次进场（`detail-swap-*`，只做进场）；同一对象的刷新不重播，未传 key 的页面保持即时替换。
-  - 窄屏单列时，主列表/上下文选择器必须限高（`max-lg:max-h-[60dvh]`）并保持自身内部滚动，避免长列表把详情推到远超一屏的位置；页面级滚动仍是窄屏的唯一页面滚动方式。
-  - **紧凑视口单视图（`<xl`）**：页面传入本地化的返回文案（`back-label`）即接入单视图——未选中时只渲染列表/选择器，选中后只渲染详情，并在详情上方提供返回操作（`@back` 由页面清空选中项与对应 query）。未传 `back-label` 的页面（如 activity，自带列表⇄详情切换）保持两个面板常驻，模板不得替页面决定。
-  - 接入单视图的页面不得在紧凑视口自动选中第一条对象（否则窄屏首屏直接落到详情、列表需要多一次返回）；判断统一用 `web/src/composables/useCompactViewport.ts`，且 URL 显式携带的选中项（深链）必须保留。
+  - 窄屏单列时，主列表/上下文选择器必须限高（`max-lg:max-h-[60dvh]`）并保持自身内部滚动；页面级滚动仍是窄屏的唯一页面滚动方式。
+  - activity 未传 `back-label`，保持两 pane 常驻并由页面自带列表⇄详情切换；其他页面不得再使用该单视图能力。
 - `EditorPage`：复杂创建/编辑，正文内部滚动，底部固定提交栏。
 - `SettingsPage`：分区短表单，最大宽度收敛，分区独立保存。
 - `WorkspacePage`：诊断、日志、终端等满高工作面。

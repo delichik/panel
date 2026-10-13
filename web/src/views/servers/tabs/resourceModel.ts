@@ -2,15 +2,6 @@ import type { ServerDto } from '@/types/servers';
 import type { ContainerDto, ImageDto, PackageUpdate, VolumeDto } from '@/types/resources';
 
 export type Tone = 'neutral' | 'success' | 'warning' | 'danger' | 'info';
-export type ResourceTab = 'packages' | 'containers' | 'images' | 'networks' | 'volumes';
-
-export function resourceTabFromPath(path: string): ResourceTab {
-  if (path.includes('/containers')) return 'containers';
-  if (path.includes('/images')) return 'images';
-  if (path.includes('/networks')) return 'networks';
-  if (path.includes('/volumes')) return 'volumes';
-  return 'packages';
-}
 
 export function canMaintainPackages(server: ServerDto | null) {
   if (!server) return false;
@@ -66,6 +57,11 @@ export function imageTone(image: ImageDto): Tone {
 
 export function imageLabel(image: ImageDto) {
   return image.reference || image.repoTags?.[0] || image.id.slice(0, 12);
+}
+
+/** 可升级镜像关联的应用 id 去重集合；“升级有更新应用”的 payload 来源。 */
+export function imageUpgradeApplicationIds(images: ImageDto[]) {
+  return Array.from(new Set(images.filter((item) => item.updateAvailable && item.upgradeable).flatMap((item) => item.applicationIds)));
 }
 
 export function volumeTone(volume: VolumeDto): Tone {

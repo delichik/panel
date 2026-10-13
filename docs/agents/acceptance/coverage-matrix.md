@@ -16,14 +16,13 @@
 
 - 日志 `/activity` 移除定时刷新、summary/tail 探测、条数/新数据/快照编号展示；仅首次和用户操作读取，保留手动刷新、详情与游标分页。对应 `UI-ACT-002/003`，无路由、API、数据库或后台任务变更。
 
-`web/src/router/index.ts` 当前含 47 个 `path` 声明（包含父路由、重定向、开发条件路由和 catch-all）。逐操作标准见 `ui-pages.md`，全局守卫及慢网路由进行中反馈见 `ui-shell-and-conventions.md`。
+`web/src/router/index.ts` 当前含 30 条路由 `path:` 声明（含父路由、重定向与 catch-all）。逐操作标准见 `ui-pages.md`，全局守卫及慢网路由进行中反馈见 `ui-shell-and-conventions.md`。
 
 | 页面族 | 路径/入口 |
 | --- | --- |
 | 公开入口 | `/login`、`/maintenance/backup` |
 | 外壳与兜底 | `/`、`/overview`、shell 内 catch-all |
-| 服务器 | `/servers`、`/credentials` |
-| 资源与安全 | `/resources/packages`、`containers`、`images`、`networks`、`volumes`、`firewall`、开发模式 `fail2ban`，以及旧 `/security*` 重定向 |
+| 服务器 / 凭据 | `/servers`、`/credentials`（资源与安全并入服务器详情 tabs，无独立路由） |
 | 应用 | `/applications/apps`、`create`、`:applicationId/edit`、`facility-apps`、`:facilityKind`、`:facilityKind/config` |
 | DNS 与证书 | `/dns/domains`、`/certificates/domains`、`self-signed`、`keys` |
 | 可观测性 | `/activity`（事件/按操作）、`/system-events`、`/tasks`、`/debug` |
@@ -40,6 +39,7 @@
 - Debug 既有清理操作增加阶段/时间、刷新恢复、部分失败与结果待核实展示；保留危险勾选确认，不新增路由；对应 `UI-DBG-007/008`。
 - 服务器创建/编辑重构：基础/高级分区、无凭据引导与弹窗内快捷创建、探测与保存解耦并标记过期、变量严格校验、创建后初始化任务跟踪与失败保留态，不新增路由；对应 `UI-SRV-003/004/005/011/012/013`，后端初始采集失败改为保留服务器并标记失败，对应 `SRV-SAVE-005/006`。
 - Tailscale 收敛：新增 `/settings/tailscale` 设置分区（只写认证密钥、ACL 标签、容器 tailscale 状态与「应用 / 重连」）与服务器侧的加入/偏好开关、状态徽标和手动重试，路由总数由 46 增至 47；对应 `UI-SET-011`、`UI-SRV-014/015`、`TS-SET-*`、`TS-NODE-*`。
+- 表格化 + 覆盖式详情 + 资源/安全并入服务器详情（2026-10-13）：实体工作台（servers/credentials/dns/certificates/applications）由主从卡片列表改为全宽表格 + 行操作区，点击「详情」后覆盖详情并在 URL 保留 `server/credential/domain/selected/application` 与 `page`；新增 `TableDetailLayout.vue` 与 `Table` 的 `active-key`/`#empty`/`#head-<key>` 能力，`Tabs` 增加 `keep-panels`；服务器详情新增 10 个一级 tab（概况/监控/Agent/Tailscale/容器/镜像/网络/存储卷/软件包/防火墙），原 `views/resources`、`views/security` 页面、`ServerContextSelector`、`useCompactViewport` 与 `/resources/*`、`/security/*` 共 11 条路由声明删除（路由声明 41 → 30），资源导航分组移除；`ConfirmDialog` 增加 `confirmDisabled`。不新增 API method/path、数据库表、后台任务或后端行为（API 清单与哈希不变），对应 `UI-SHELL-019/054/055/058/059/060/061/062`、`UI-SRV-001..019`、`UI-CRED-*`、`UI-DNS-*`、`UI-CERT-*`、`UI-APP-001..011`、`UI-SET-006`；`UI-RES-*`、`UI-SEC-*` 全部标注已废弃并指向替代项。
 
 ## 3. HTTP API 基线
 
@@ -153,7 +153,7 @@
 
 ## 7. 自动化覆盖现状
 
-仓库当前基线为 115 个 Go `*_test.go` 文件与 29 个 Web `*.test.ts` 文件（记录于 2026-09-07）。本轮前端外壳/布局优化后 `web/src` 下实有 48 个 `*.test.ts`（新增 `components/shell/NavList.test.ts`、`components/templates/MasterDetailLayout.test.ts`、`composables/useCompactViewport.test.ts`）；Tailscale 一轮复核时仓库（排除 `tmp/`）实有 156 个 Go `*_test.go` 与 `web/src` 下 50 个 `*.test.ts`。数量不是质量目标，但下降或大规模重命名时必须解释覆盖是否迁移。
+仓库当前基线为 115 个 Go `*_test.go` 文件与 29 个 Web `*.test.ts` 文件（记录于 2026-09-07）。Tailscale 一轮复核时 `web/src` 下 50 个 `*.test.ts`；表格化 + 覆盖详情一轮后 `web/src` 下 53 个 `*.test.ts`（删除 `useCompactViewport`/旧资源/安全模型测试，新增 `Table.test.ts`、`TableDetailLayout.test.ts`、`ConsolePage.test.ts`、`views/servers/index.test.ts`、`servers/tabs/*.test.ts`），`task test:web` 实跑 53 个文件 / 293 项通过。数量不是质量目标，但下降或大规模重命名时必须解释覆盖是否迁移。
 
 - `COV-TEST-001`：关键安全门至少有自动测试：认证、路径安全、非托管资源保护、迁移原子性、lease fencing、秘密脱敏、恢复/导出密码流程。
 - `COV-TEST-002`：关键 UI 状态至少覆盖：会话守卫、顶栏语言持久化及失败回滚、日志页默认范围首次加载、慢网路由进行中反馈及清理、请求竞态、加载/错误/空态、确认弹窗、状态色语义、日期范围和编辑器输入。

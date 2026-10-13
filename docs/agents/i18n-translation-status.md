@@ -27,6 +27,8 @@
 - 本轮新增顶栏语言持久化等待与回滚词条 `layout.language.saving` / `layout.language.saveFailed`，en / zh-CN 已同步。
 - 本轮外壳可用性优化新增 `layout.skipToContent`（跳到主要内容链接）、`layout.signingOut`（退出登录加载遮罩）与 `common.loading`（共享加载标签，用于 LoadingOverlay 的可访问名称），en / zh-CN 已同步。
 - 本轮窄屏主从单视图新增 `common.backToList`（返回列表，用于 MasterDetailLayout 的紧凑视口返回操作），en / zh-CN 已同步。
+- 本轮表格化 + 覆盖式详情 + 资源/安全并入服务器详情：新增 `common.details`、`common.moreActions`、`serversPage.tab.*`（10 个一级 tab）、`serversPage.columns.address/privilege`、`resourcesPage.image/ports/size/installedVersion/candidateVersion/source/driver/scope/attachedContainers`、`securityPage.ufw/ruleNumber/action/to`、`credentialsPage.updatedAtColumn`、`dnsPage.staleSnapshot`、`applicationsPage.imageReferenceColumn/updatedAtColumn`；删除无引用词条 `layout.nav.resources`、`resourcesPage.*`（serverContext/dockerReady/packageReady/limited/loadServersFailed/refreshed/managedContainerHint/containersAttached/confirmDangerDescription/confirmDeleteCheckbox/imageReference 等）、`securityPage.*`（serverContext/selectServer/selectServerHint/serverLimited/serverUnreachable/nodes/manageable/serverScopeDescription/ufwRules/ufwPosture/ufwConfirmHint/supported/fail2banRules/fail2banStatus/fail2banDraftHint/detectedJails/noRuntimeJails/panelConfig/loadServersFailed 等）与 `routes.packages|containers|images|networks|volumes|firewall|security|fail2ban.*` 中已无消费者的值；`routes.fail2ban.title` 保留供防火墙 tab 子视图使用；en / zh-CN 同步，并由 `i18n.test.ts` 强制校验。
+- 本轮新增 `common.details`（详情入口）、`common.moreActions`（行内更多操作）与服务器详情 tab 词条，删除资源/安全页遗留词条（详见上一条），en / zh-CN 已同步。
 
 - 本轮新增慢网路由切换反馈词条 `layout.navigation.loading`，en / zh-CN 已同步；目标页标题继续复用现有 `routes.*.title` 词条。
 

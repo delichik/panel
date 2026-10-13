@@ -314,4 +314,26 @@ describe('Tabs', () => {
     expect(tabs[2]?.attributes('aria-selected')).toBe('true');
     expect(document.activeElement).toBe(tabs[2]?.element);
   });
+
+  it('keeps the panel content mounted across switches when keepPanels is set', async () => {
+    const Host = defineComponent({
+      components: { Tabs },
+      setup() {
+        const value = ref('one');
+        const tabs = [
+          { label: 'One', value: 'one' },
+          { label: 'Two', value: 'two' },
+        ];
+        return { value, tabs };
+      },
+      template: '<Tabs v-model="value" :tabs="tabs" keep-panels><div id="panel-content">content</div></Tabs>',
+    });
+    const wrapper = mount(Host, { attachTo: document.body });
+    const before = wrapper.get('#panel-content').element;
+
+    await wrapper.findAll('[role="tab"]')[1]!.trigger('click');
+    await nextTick();
+
+    expect(wrapper.get('#panel-content').element).toBe(before);
+  });
 });

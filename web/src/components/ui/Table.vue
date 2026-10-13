@@ -1,8 +1,13 @@
-<script setup lang="ts" generic="T extends Record<string, unknown>">
-withDefaults(defineProps<{
-  columns: Array<{ key: keyof T & string; label: string; align?: 'left' | 'right'; width?: string; nowrap?: boolean }>;
+<script setup lang="ts" generic="T">
+const props = withDefaults(defineProps<{
+  columns: Array<{ key: string; label: string; align?: 'left' | 'right'; width?: string; nowrap?: boolean }>;
   rows: T[];
-  rowKey?: keyof T & string;
+  rowKey?: string;
+  /**
+   * Identity of the row that is currently open in a covered detail view.
+   * Matching rows get a muted surface and `aria-current="true"`.
+   */
+  activeKey?: string | number | null;
   loading?: boolean;
   loadingRows?: number;
   loadingLabel?: string;
@@ -12,9 +17,28 @@ withDefaults(defineProps<{
   loadingRows: 6,
   loadingLabel: '',
   fixed: false,
+  activeKey: null,
 });
 
+// Cell slots are addressed by column key (`#<key>`), header slots by `#head-<key>`;
+// an open string index keeps page-defined slot names type-checkable.
+defineSlots<Record<string, (props: { row: T; value: unknown }) => unknown>>();
+
 const skeletonWidths = ['w-24', 'w-32', 'w-40', 'w-28', 'w-48'];
+
+function cellValue(row: T, key: string): unknown {
+  return (row as Record<string, unknown>)[key];
+}
+
+function rowId(row: T, index: number): string | number {
+  if (props.rowKey) return String((row as Record<string, unknown>)[props.rowKey]);
+  return index;
+}
+
+function isActive(row: T): boolean {
+  if (!props.rowKey || props.activeKey == null) return false;
+  return String((row as Record<string, unknown>)[props.rowKey]) === String(props.activeKey);
+}
 
 function staggerStyle(index: number): Record<string, string> {
   return { '--panel-stagger': `${Math.min(index, 6) * 20}ms` };
@@ -31,11 +55,12 @@ function skeletonClass(rowIndex: number, columnIndex: number, align?: 'left' | '
 
 <template>
   <div class="min-h-0 overflow-auto rounded-xl border border-border">
-    <table class="w-full border-collapse text-sm" :class="fixed ? 'table-fixed' : undefined" :aria-busy="loading ? 'true' : undefined" :aria-label="loading && loadingLabel ? loadingLabel : undefined">
+    <table class="w-full border-collapse text-sm" :class="fixed ? 'table-fixed' : undefined" :aria-busy="loading ? 'true' : undefined" :aria-label="loadingLabel || undefined">
       <thead class="sticky top-0 z-10 bg-muted text-xs font-semibold uppercase text-muted-foreground">
           <tr>
             <th v-for="column in columns" :key="column.key" scope="col" class="border-b border-border px-3 py-2" :class="[column.align === 'right' ? 'text-right' : 'text-left', column.width, column.nowrap ? 'whitespace-nowrap' : undefined]">
-              {{ column.label }}
+              <slot v-if="$slots[`head-${column.key}`]" :name="`head-${column.key}`" :row="undefined as unknown as T" :value="undefined" />
+              <template v-else>{{ column.label }}</template>
             </th>
           </tr>
       </thead>
@@ -47,11 +72,18 @@ function skeletonClass(rowIndex: number, columnIndex: number, align?: 'left' | '
               </td>
             </tr>
           </template>
-          <tr v-for="(row, index) in rows" v-else :key="rowKey ? String(row[rowKey]) : index" class="motion-table-row hover:bg-accent/60" :style="staggerStyle(index)">
-            <td v-for="column in columns" :key="column.key" class="px-3 py-2 text-foreground/80" :class="[column.align === 'right' ? 'text-right' : 'text-left', column.width, column.nowrap ? 'whitespace-nowrap' : undefined]">
-              <slot :name="column.key" :row="row" :value="row[column.key]">
-                {{ row[column.key] }}
-              </slot>
+          <template v-else-if="rows.length">
+            <tr v-for="(row, index) in rows" :key="rowId(row, index)" class="motion-table-row hover:bg-accent/60" :class="isActive(row) ? 'bg-muted' : undefined" :aria-current="isActive(row) ? 'true' : undefined" :style="staggerStyle(index)">
+              <td v-for="column in columns" :key="column.key" class="px-3 py-2 text-foreground/80" :class="[column.align === 'right' ? 'text-right' : 'text-left', column.width, column.nowrap ? 'whitespace-nowrap' : undefined]">
+                <slot :name="column.key" :row="row" :value="cellValue(row, column.key)">
+                  {{ cellValue(row, column.key) }}
+                </slot>
+              </td>
+            </tr>
+          </template>
+          <tr v-else class="text-muted-foreground">
+            <td :colspan="columns.length" class="px-3 py-3">
+              <slot name="empty" :row="undefined as unknown as T" :value="undefined" />
             </td>
           </tr>
       </tbody>

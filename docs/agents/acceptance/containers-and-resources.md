@@ -39,7 +39,7 @@
 
 - **前置**：report 含 `panel.application.managed=true` 但 application_id 已不存在或属于其它 Panel。
 - **动作**：保存 observation。
-- **结果**：容器观察照常保存用于资源页；跳过带 FK 的 application_reconcile_states 登记并记录限流诊断。
+- **结果**：容器观察照常保存用于服务器详情的容器 tab；跳过带 FK 的 application_reconcile_states 登记并记录限流诊断。
 - **失败**：单个残留容器不得回滚整批服务器 observation。
 - **不变量**：启动迁移清理存量 orphan reconcile state。
 - **验证**：unknown application managed container test。
@@ -231,7 +231,7 @@
 - **动作**：GET networks。
 - **结果**：返回 id/name/driver/scope/created/internal/labels 及共用快照状态。
 - **失败**：不得暴露创建、删除或修改 API/按钮。
-- **不变量**：`panel-apps` 可见但其管理仍归 Agent/Application，不从资源页修改。
+- **不变量**：`panel-apps` 可见但其管理仍归 Agent/Application，不从服务器详情的资源 tab 修改。
 - **验证**：routes/UI actions absence test。
 
 ### NET-REF-001 网络刷新
@@ -466,6 +466,6 @@
 
 - 当前路由没有通用容器 inspect 详情 API；report 摘要也刻意不含 command/created/mounts。前端类型仍包含这些旧完整字段，不能据类型声明要求列表返回或上报这些字段。
 - 容器模块测试名 `TestContainerActionRejectsManagedApplicationContainer` 与实际断言相反：当前合同以实现、模块文档末尾和断言为准——允许直接操作并由协调修复。应后续重命名测试，避免误导。
-- 资源页面的请求竞态、首次空快照和桌面/窄屏滚动缺少完整端到端覆盖，RES-UI 条目仍需人工/组件级验证。
+- 服务器详情资源 tabs（原资源页）的请求竞态、首次空快照和桌面/窄屏滚动缺少完整端到端覆盖，仍需人工/组件级验证（见 `known-gaps.md` GAP-021）。
 - 同步容器 mutation 与 orchestrator/设施 Docker 操作是否在所有路径共享完全同一物理 per-server queue，当前模块说明强制该目标，但代码层由不同所有者组合；修改相关装配前应增加跨模块并发集成测试。
 - Docker network 目前只读；若新增 mutation，必须先定义系统 `panel-apps` 保护、实时使用门禁、确认和队列合同，不能直接复用卷/镜像删除逻辑。

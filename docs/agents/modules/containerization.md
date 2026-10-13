@@ -12,7 +12,7 @@
 
 ## 适用场景
 
-修改 Docker 容器、镜像、网络、卷资源页，设施应用、Application 托管 Label，每服务器容器操作队列，镜像更新检查或容器协调监控时，先读本文档。
+修改 Docker 容器、镜像、网络、卷资源能力（现位于服务器详情的资源 tabs）、设施应用、Application 托管 Label，每服务器容器操作队列，镜像更新检查或容器协调监控时，先读本文档。
 
 ## 关键入口
 
@@ -22,15 +22,15 @@
 - Application 运行时：`internal/modules/applications/service.go`
 - Application 控制面与统一观测写回：`internal/orchestrator/`
 - 周期任务：`internal/modules/containers/tasks.go`，由 `internal/modules/tasks/` 内部 worker 驱动
-- 前端资源页面（v4 阶段 4A）：`web/src/views/resources/index.vue`，纯函数在 `web/src/views/resources/model.ts`，API 在 `web/src/api/containers.ts` 与 `web/src/api/packages.ts`。
+- 前端资源能力（v4 阶段 4A；2026-10-13 起并入服务器详情）：`web/src/views/servers/tabs/ContainersTab.vue`、`ImagesTab.vue`、`NetworksTab.vue`、`VolumesTab.vue`、`PackagesTab.vue`，纯函数在 `web/src/views/servers/tabs/resourceModel.ts`，API 在 `web/src/api/containers.ts` 与 `web/src/api/packages.ts`。
 - 前端设施应用页面：`web/src/views/applications/index.vue` 的 `/applications/facility-apps` 目录、`/:facilityKind` 详情和 `/:facilityKind/config` 配置三层 renderer。
 - 前端 API：`web/src/api/containerization.ts`、`web/src/api/facilityApps.ts`
 
 ## 页面与 API
 
-菜单上容器相关能力拆分为“资源”和“应用”两个一级分组：资源包含软件包、容器、镜像、网络、卷、防火墙，以及 dev-only Fail2Ban；应用包含普通应用和设施应用两个独立入口。容器、镜像、网络、卷使用左侧服务器选择器和右侧内部滚动列表。
+菜单上容器相关能力并入“服务器”与“应用”两个入口：容器、镜像、网络、卷、软件包与防火墙属于服务器详情的资源 tabs；应用包含普通应用和设施应用两个独立入口。服务器详情以覆盖式详情 + 一级 tab 呈现，每个资源 tab 内部滚动并自带工具栏与行操作。
 
-资源页为服务器上下文资源维护台，外层左侧选择服务器、右侧为内部滚动工作区。软件包、容器、镜像、网络和卷是独立路由页面，不使用页内 tabs；可以复用同一个资源上下文，但必须保持不同的信息架构和操作闭环，不得退回同质通用列表。所有控件使用 Panel 自有 primitives，禁止引入 Naive UI / Vuetify。
+容器、镜像、网络、卷与软件包不再是独立路由页面，而是服务器详情的一级 tab（`UI-SRV-017/018`、`UI-SHELL-062`）。每个 tab 保持独立的信息架构与操作闭环，不得退回同质通用列表；服务器上下文由详情固定，不再有独立的服务器选择器。所有控件使用 Panel 自有 primitives，禁止引入 Naive UI / Vuetify。
 
 - 设施应用页面是 `/applications/facility-apps` 独立入口，必须先呈现设施目录；内置“反向代理”与“存储共享”两个设施项。`facilityKind=reverse-proxy` 的只读详情展示路由与部署状态；独立配置页保存 Nginx 镜像、全局网关节点、Panel 入口、域名策略、Path 规则和静态资产草稿。指定的全局网关节点即视为开启反向代理能力。`facilityKind=storage-share` 由独立组件 `web/src/views/applications/StorageShareFacility.vue` 渲染健康、分区与设置，详见下文“存储共享设施”。
 - 容器支持查询、查看日志、启动、停止、重启、删除；日志入口与其他行操作使用带图标的小型操作，托管 Application 容器的直接停止、重启和删除入口必须禁用并提示改走 Application 生命周期。

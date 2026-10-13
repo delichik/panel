@@ -30,9 +30,11 @@ describe('new frontend foundation', () => {
   it('does not route every page through the retired collection shell', () => {
     expect(routerSource).not.toContain('CollectionPage');
     expect(routerSource).toContain('@/views/servers/index.vue');
-    expect(routerSource).toContain('@/views/security/index.vue');
-    expect(routerSource).toContain('@/views/resources/index.vue');
     expect(routerSource).toContain('@/views/applications/index.vue');
+    // 资源与安全页并入服务器详情 tabs 后，旧独立路由必须保持删除状态。
+    expect(routerSource).not.toContain('views/resources/index.vue');
+    expect(routerSource).not.toContain('views/security/index.vue');
+    expect(routerSource).not.toContain('/resources/');
   });
 });
 

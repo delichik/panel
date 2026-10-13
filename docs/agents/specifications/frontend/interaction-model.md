@@ -11,7 +11,7 @@
 - 每个作用域（页面、详情区、对话框、表格行）至多一个主操作（primary 按钮）。
 - 危险操作（删除、停用、重置）使用 `error` 语义，不与主操作并列展示，且必须经确认对话框。
 - 批量操作栏只在存在选中项时出现，无选中即消失。
-- 对象级操作放在对象所在的详情区/行尾；页面级主操作放 PageHeader actions；次要操作收进更多菜单。
+- 对象级操作放在对象所在表格的行操作区；页面级主操作放 PageHeader actions；次要操作收进更多菜单；需要参数面板或逐文件/逐节点上下文的操作保留在覆盖详情内。
 
 **反例**
 
@@ -89,7 +89,7 @@
 - 整页首次加载用自有 Skeleton，按页面结构铺设，不用裸 spinner 居中。
 - 局部加载（切换选中对象、刷新单个区块）保留在当前区域内：显示该区域骨架或 loading，**不影响页面其余部分**。
 - 已有内容后的刷新保留原内容 + 局部 loading 指示，不清空重闪。
-- 切换上下文（换服务器、换对象）立即清空旧数据并显示加载态，忽略迟到响应；主从工作台的详情区按选中对象 key 播放一次进场（`MasterDetailLayout` 的 `detail-key`），同一对象的刷新不重播。
+- 切换上下文（换服务器、换对象）立即清空旧数据并显示加载态，忽略迟到响应；覆盖式详情打开时按选中对象 key 播放一次进场（`TableDetailLayout` 的 `detail-swap`），同一对象的刷新不重播；关闭详情不播放拖沓退场并保留列表滚动位置。
 - 文本区域、对话框正文和卡片等需要等待接口响应的位置统一使用 `LoadingOverlay`；任何网络请求等待都必须在对应作用域内给出加载反馈，不允许只显示文字或无反馈。
 - 数据列表在骨架/加载态就绪后统一以进场动效填充内容：列表容器加 `motion-stagger`、行/卡片加 `motion-reveal`（表格行用 `motion-table-row`、可交互项用 `motion-list-item`），效果与系统事件列表一致；仅首屏/新增项播放，已有内容刷新不重放。
 
@@ -107,6 +107,6 @@
 - 对话框采用固定 header/footer 与唯一可滚动 body，打开后移动焦点、圈定 Tab、支持 Escape 关闭并恢复触发点焦点；不因点击遮罩关闭，只能通过关闭按钮、取消操作或 Escape 关闭。打开期间锁定背景滚动；嵌套浮层用引用计数，最后一个关闭时才恢复。
 - 多个浮层同时打开时只有最上层响应文档级 Escape 与焦点模型，下层不得被连带关闭；焦点意外离开面板时最上层仍须可 Escape 关闭（`useOverlayBehavior` 的文档级兜底）。
 - 对话框、菜单、抽屉、Toast 的进入与退出动画成对实现（`dialog-*` / `menu-*` / `drawer-*` / `toast-stack-*`，见 [visual-tokens.md](visual-tokens.md)），动画不得改变焦点时序与键盘模型。
-- 对话框与移动端侧边抽屉共享 `web/src/composables/useOverlayBehavior.ts` 的焦点圈定、Escape 关闭与焦点恢复逻辑；抽屉另以 dialog 语义呈现并锁定背景滚动。
+- 对话框与移动端侧边抽屉共享 `web/src/composables/useOverlayBehavior.ts` 的焦点圈定、Escape 关闭与焦点恢复逻辑；抽屉另以 dialog 语义呈现并锁定背景滚动。覆盖式详情复用同一 composable 的 Escape 栈与焦点归还，但不锁背景滚动、不做对话框语义。
 - Select 等可能出现在滚动容器中的浮层传送至顶层并按触发控件定位，避免被容器裁切；Select 必须把页面传入的 `aria-label`/`aria-invalid` 落到 combobox 控件上。
 - `menu` / `tablist` 等 ARIA 角色必须同步实现对应方向键、Home/End、Escape（适用时）与焦点模型；Dropdown 在 Tab 离开时必须关闭并同步 `aria-expanded`，不得留下“已展开”的假状态；Tabs 在中窄屏允许标签栏横向滚动。

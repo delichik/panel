@@ -4,6 +4,13 @@ import { computed, nextTick, useId } from 'vue';
 const props = defineProps<{
   modelValue: string;
   tabs: Array<{ label: string; value: string; disabled?: boolean }>;
+  /**
+   * Keep the panel content mounted when the active tab changes. Used by pages
+   * that own per-tab visibility (v-show) and rely on the tab panel not being
+   * destroyed, for example covered server details that lazily mount tabs once
+   * and preserve their scroll/selection state across switches.
+   */
+  keepPanels?: boolean;
 }>();
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>();
 const id = useId();
@@ -56,11 +63,14 @@ function onKeydown(event: KeyboardEvent, value: string) {
       </button>
     </div>
     <div :id="`${id}-tabpanel`" class="min-h-0 pt-4" role="tabpanel" :aria-labelledby="tabId(modelValue)" tabindex="0">
-      <Transition name="tab-panel" mode="out-in">
+      <Transition v-if="!keepPanels" name="tab-panel" mode="out-in">
         <div :key="modelValue" class="h-full min-h-0">
           <slot />
         </div>
       </Transition>
+      <div v-else class="h-full min-h-0">
+        <slot />
+      </div>
     </div>
   </div>
 </template>

@@ -37,24 +37,23 @@
 
 ## 前端入口
 
-- 服务器页面位于 `web/src/views/servers/index.vue`，SSH 凭据独立页面位于 `web/src/views/credentials/index.vue`；分别通过 `/servers` 与 `/credentials` 进入，不共享页面内 tab。
-- 节点 tab（MasterDetailLayout：搜索 + 列表 + 分页 / 四区详情）：`web/src/views/servers/ServersNodesView.vue`、`ServerDetail.vue`。
+- 服务器页面位于 `web/src/views/servers/index.vue`（列表表格 + 覆盖式详情 + `tabs/` 资源与安全能力），SSH 凭据独立页面位于 `web/src/views/credentials/index.vue`；分别通过 `/servers` 与 `/credentials` 进入，不共享页面内 tab。
+- 服务器列表为表格 + 覆盖式详情：搜索/分页/选中与 `tab` 同步 URL；行操作提供详情/编辑/测试连接/删除，Agent 部署与重启在 Agent tab，Tailscale 应用在 Tailscale tab。
 - 服务器添加/编辑由 `web/src/views/servers/index.vue` 内的表单对话框承载（含 `POST /servers/probe`）；凭据添加/编辑由 `web/src/views/credentials/index.vue` 内的表单对话框承载。凭据按 password/private_key 类型裁剪字段，编辑时 secret 留空 = 不更新；私钥类型使用 large Dialog 和共享 plain CodeMirror，password 类型仍使用普通输入与默认 Dialog。
-- 凭据页面：`web/src/views/credentials/index.vue`（MasterDetailLayout：搜索 + 列表 + 分页 / 详情）；列表引用计数、详情引用列表与删除前引用预检都基于已加载服务器摘要中的 `credentialId` 客户端匹配，后端 409 `credential_in_use` 兜底；详情展示密钥摘要（私钥的算法、长度、SHA256 指纹与密钥注释/名称）和引用服务器列表，不再展示“密钥策略”卡片。
+- 凭据页面：`web/src/views/credentials/index.vue`（表格 + 覆盖式详情）；列表引用计数、详情引用列表与删除前引用预检都基于已加载服务器摘要中的 `credentialId` 客户端匹配，后端 409 `credential_in_use` 兜底；详情展示密钥摘要（私钥的算法、长度、SHA256 指纹与密钥注释/名称）和引用服务器列表，不再展示“密钥策略”卡片。
 - 纯函数逻辑：`serverTraits.ts`（traits/网卡解析、Agent/UFW 状态判定）、`serverProbe.ts`（probe 结果映射）、`serverInitPolling.ts`（创建后初始化轮询状态机）、`credentialReferences`（引用预检，位于 `web/src/views/servers/model.ts`）、`useTaskMessage.ts`（任务反馈 + "查看任务"跳转）。
-- 防火墙与 Fail2Ban 页面（v4 阶段 4A）：`web/src/views/security/index.vue`；`/resources/firewall` 与 dev-only `/resources/fail2ban` 共享服务器选择器和 URL `server` query，但作为资源菜单下的独立页面呈现，不使用页内 tabs。旧 `/security/*` 只保留重定向。UFW 右侧为规则/状态矩阵、添加规则、删除规则与「安装与启用由 Agent 部署自动完成」的说明（不再有启用/安装入口）；Fail2Ban 右侧为托管状态、检测到的 jail、预设、可视草稿、使用共享 CodeMirror 的 YAML 高级模式、保存草稿、应用/安装/释放接管确认。YAML 编辑仅更新草稿，仍需显式保存或启用，不自动格式化；纯函数和 `parseSimpleJailsFromYaml` 边界保持在 `web/src/views/security/model.ts`。
-- 软件包页（v4 阶段 4A）：软件包维护位于独立路由 `/resources/packages`，由 `web/src/views/resources/index.vue` 按当前资源页面渲染；支持服务器选择、客户端搜索、刷新 metadata、升级已选/全部和 root/免密 sudo 准入阻断。纯函数在 `web/src/views/resources/model.ts`。
-- 概览页面（v4）：`web/src/views/overview/index.vue`；概览卡片布局使用 6 列整数网格，卡片配置中的 `width`/`height` 分别对应 1x1 方格跨度，宽度上限 6、高度上限 4；浏览态只展示指标内容，编辑态支持带实时顺序预览的拖动重排、拖拽缩放、添加/删除和单卡属性编辑。卡片可通过 `serverIds` 选择一台或多台服务器，空数组表示全部服务器；卡片元信息显示服务器数量，多服务器指标通过 ECharts 独立 series 和悬停 tooltip 标识服务器与数值，tooltip 挂到 body 并使用 Panel popover token，不能受卡片 `overflow` 裁切；`networkDirection` 只在网络卡片编辑时展示。多服务器折线图中，某台服务器在某个桶缺失数据时按空缺（gap）渲染，不填充 0，避免出现虚假的“真实值/0”锯齿。图表数据由后端按卡片 kind 只返回对应序列并降采样为固定时间桶，前端在数据落地时一次性派生 `{labels, series, latestValue, peakValue}` 缓存（`web/src/views/overview/model.ts` 的 `deriveCardView`），渲染期只读缓存，单卡派生复杂度与总点数线性，不做逐点查找或参数展开求最大值。保存时继续通过 `PUT /api/v1/overview/cards` 持久化有序卡片配置；容器、镜像、网络、卷等资源页面由 `web/src/views/resources/index.vue` 承载独立路由页面。
+- 防火墙与 Fail2Ban（v4 阶段 4A；2026-10-13 起并入服务器详情）：`web/src/views/servers/tabs/FirewallTab.vue`，URL 使用 `server` + `tab=firewall`（子视图 `subtab=fail2ban`，仅 dev）。规则/状态区提供 UFW 放行规则增删与「安装与启用由 Agent 部署自动完成」说明（不再有启用/安装入口）；Fail2Ban 提供托管状态、检测到的 jail、预设、可视草稿、使用共享 CodeMirror 的 YAML 高级模式、保存草稿、应用/安装/释放接管确认。YAML 编辑仅更新草稿，仍需显式保存或启用，不自动格式化；纯函数和 `parseSimpleJailsFromYaml` 边界位于 `web/src/views/servers/tabs/securityModel.ts`。
+- 软件包能力（v4 阶段 4A；2026-10-13 起并入服务器详情）：位于 `web/src/views/servers/tabs/PackagesTab.vue`（`tab=packages`）；支持客户端搜索、刷新 metadata、升级已选/全部和 root/免密 sudo 准入阻断。纯函数在 `web/src/views/servers/tabs/resourceModel.ts`。
+- 概览页面（v4）：`web/src/views/overview/index.vue`；概览卡片布局使用 6 列整数网格，卡片配置中的 `width`/`height` 分别对应 1x1 方格跨度，宽度上限 6、高度上限 4；浏览态只展示指标内容，编辑态支持带实时顺序预览的拖动重排、拖拽缩放、添加/删除和单卡属性编辑。卡片可通过 `serverIds` 选择一台或多台服务器，空数组表示全部服务器；卡片元信息显示服务器数量，多服务器指标通过 ECharts 独立 series 和悬停 tooltip 标识服务器与数值，tooltip 挂到 body 并使用 Panel popover token，不能受卡片 `overflow` 裁切；`networkDirection` 只在网络卡片编辑时展示。多服务器折线图中，某台服务器在某个桶缺失数据时按空缺（gap）渲染，不填充 0，避免出现虚假的“真实值/0”锯齿。图表数据由后端按卡片 kind 只返回对应序列并降采样为固定时间桶，前端在数据落地时一次性派生 `{labels, series, latestValue, peakValue}` 缓存（`web/src/views/overview/model.ts` 的 `deriveCardView`），渲染期只读缓存，单卡派生复杂度与总点数线性，不做逐点查找或参数展开求最大值。保存时继续通过 `PUT /api/v1/overview/cards` 持久化有序卡片配置；容器、镜像、网络、卷等资源能力位于 `web/src/views/servers/tabs/` 的服务器详情 tabs。
 - 概览折线图自动刷新：页头刷新按钮旁提供共享自动刷新控件 `AutoRefreshControl`（见前端规范「自动刷新模式」，设置全局共享、默认 5 秒），开启后只对 CPU/内存/磁盘/网络折线卡片生效。轮询防重入、标签页不可见暂停；进入编辑态时停止自动刷新，保存成功后恢复并整卡重载，卡片加载中跳过本轮；每次请求 `GET /api/v1/overview/cards/{cardId}/data?since=<RFC3339Nano>` 只拉取 `since` 所在桶及其后重算的降采样桶，前端按桶对现有序列做后缀替换（丢弃不早于首个新桶的旧点再追加），并按卡片时间范围滑动清理旧桶（例如 1d 卡片始终只保留最近一天），不重新加载整段范围。响应携带 `bucketSeconds`，与现有数据不一致时整卡重载，避免混用两种桶网格。`since` 缺省时返回整段范围；非法时间戳返回 422；后端把 `since` 向下对齐到桶起点后再比较，避免 SQLite 文本时间精度问题。 自动刷新失败时静默保留旧数据并下个周期重试，不弹 toast。
 - API：`web/src/api/servers.ts`、`web/src/api/security.ts`、`web/src/api/packages.ts`、`web/src/api/containers.ts`、`web/src/api/overview.ts`
 - 类型：`web/src/types/api.ts`
 
 ## 前端布局约定
 
-- 节点 tab 使用 MasterDetailLayout 模板：左列固定 280px，搜索为客户端过滤（name/host）并同步进 URL query `q`，初始化中的服务器显示"初始化中"进度态；右列详情分头部（可达性 + 操作组 + 错误横幅，`agent.last_error` 优先）与状态 / 系统 / 运行时 / 访问四区。
-- 凭据页使用 MasterDetailLayout 模板：左列搜索为客户端过滤（name/username），分页固定底部并同步进 URL query `page`；右列详情展示密钥摘要与服务器引用，选择凭据时按需加载 `GET /api/v1/credentials/{id}`。
-- 创建服务器保存成功即关对话框：新记录插入列表顶部，前端轮询 `initialTaskId`（1.5s × 90 上限）到终态；成功刷新数据，失败显示原因与"服务器记录已回滚"提示。
-- 任务类操作（Agent 部署 / 重启 / UFW 安装）反馈只承诺任务已提交；可通过系统导航中的任务中心 `/tasks` 查看完整任务状态和日志，服务器详情 Agent 卡片继续提供当前服务器的就地诊断。
+- 服务器与凭据页均使用 `TableDetailLayout`：表格在自身容器内滚动并保留搜索/分页/选中于 URL；覆盖详情覆盖整个内容区并在内部滚动，凭据详情按需加载 `GET /api/v1/credentials/{id}`。
+- 创建服务器保存成功即关对话框：新记录加入列表并打开其覆盖详情，前端以概况 tab 跟踪 `initialTaskId` 到终态；成功刷新数据，失败在服务器记录上保留不可达原因。
+- 任务类操作（Agent 部署 / 重启 / 防火墙规则变更）反馈只承诺任务已提交；可通过统一日志 `/activity` 查看完整任务状态和日志，服务器详情 Agent 卡片继续提供当前服务器的就地诊断。
 
 ## API 范围
 

@@ -15,7 +15,7 @@
 - `Dialog`：不响应遮罩点击关闭，只能通过关闭按钮、取消操作或 Escape 关闭；普通和 large 尺寸的 body 都必须有可靠的内部纵向滚动，页脚保持在弹窗网格底部；业务正文不能依赖外层页面滚动才能到达。
 - `ToastProvider`：支持可选 `action={label,to}` 路由动作，带动作保留 15 秒；`useSuccessToast(title, receipt)` / `useErrorToast(title, error)` 从本次返回的真实关联生成“查看过程”，禁止用全局最近请求或解析提示文本关联。全局顶部 toast；页面和组件内 catch 到的异常统一以 danger toast 展示，字段校验与结构化诊断仍就地展示。
 - `LoadingOverlay`：用于对话框正文、文本编辑区、卡片或区块等待网络响应时的统一加载覆盖；不得用裸文字代替加载效果。
-- `Table`：用于表格型列表。首次加载且没有旧数据时传入 `loading` 与本地化 `loadingLabel`，由组件渲染表格骨架行；已有数据刷新时保留当前 rows，只让刷新入口或分页入口显示 loading。 表格行由组件统一加 `motion-table-row` 交错入场（`--panel-stagger`，仅首屏/新增行播放）。表头单元格必须输出 `scope="col"`，sticky 表头保持不透明底色。
+- `Table`：用于表格型列表。首次加载且没有旧数据时传入 `loading` 与本地化 `loadingLabel`，由组件渲染表格骨架行；已有数据刷新时保留当前 rows，只让刷新入口或分页入口显示 loading。表格行由组件统一加 `motion-table-row` 交错入场（`--panel-stagger`，仅首屏/新增行播放）。表头单元格必须输出 `scope="col"`，sticky 表头保持不透明底色。单元格插槽按列 key 命名（`#<key>`），表头插槽 `#head-<key>`（如全选复选框），`#empty` 插槽负责真实无数据空态；行操作列每行至多一个直接入口（「详情」）加行内菜单；`active-key` 标记覆盖详情当前对象（`aria-current` + muted 表面），表格行本身不可点击。
 - `CodeEditor`：文本/代码编辑器（CodeMirror）。内置查找/替换面板：`Ctrl/Cmd+F` 打开查找、`Ctrl/Cmd+H` 打开同一面板进入替换、`F3/Shift+F3` 或 `Ctrl/Cmd+G` 下一个/上一个、`Esc` 关闭；全部匹配高亮，支持 正则 / 区分大小写 / 整词 三个开关；只读态自动隐藏替换区；面板文案由组件内 i18n 词条（`codeEditor.*`）随界面语言切换，业务页面无需额外传参。
 
 ## Pattern components
@@ -23,8 +23,7 @@
 - `DateTimeRangePicker`（`web/src/components/ui/DateTimeRangePicker.vue`）：时间范围选择器。触发器样式与 Select/Input 一致（h-9、同边框/圆角/背景），点开是左右联动的双月历（支持跨月/跨年）：先点开始日期、再点结束日期，仅高亮起止之间的日期并带 hover 预览；开始/结束的 时:分:秒 用 `TimeSegmentInput`（无弹层的纯数字输入框）设置在同一行；带最近 24 小时/7 天/30 天快捷预设和应用/取消；无弹层套弹层。值以 ISO `{ from, to }` 双向绑定。
 - `TimeSegmentInput`（`web/src/components/ui/TimeSegmentInput.vue`）：两位数数字输入框。无弹层、无滚动条，直接输入数字、键盘上下键或滚轮微调，失焦自动补零；用于时分秒等数字段。
 
-- `ServerContextSelector`：用于安全、资源、调试等单服务器上下文页面，是单一服务器选择器。组件只呈现服务器列表/卡片选择，不再叠加 Select 下拉；卡片负责展示 capability badge、状态和不可用原因；首次加载时传入 `loading` 显示服务器卡片骨架。
-- `ServerMultiPicker`：用于应用部署、设施覆盖节点、批量任务等服务器多选。支持禁用 id 与禁用原因，选中态、禁用态和能力标签保持一致。
+- `ServerMultiPicker`：用于应用部署、设施覆盖节点、批量任务等服务器多选。支持禁用 id 与禁用原因，选中态、禁用态和能力标签保持一致。原 `ServerContextSelector` 已随资源/安全页并入服务器详情而删除，不得再新增单服务器上下文选择器；单服务器操作一律通过该服务器的详情 tabs 进入。
 - `AssetFileManager`：用于应用文件和设施静态资产这两类同构的文件工作区。顶部只提供一个上传入口，弹窗内选择文本文件、普通文件或文件夹归档；文本类型显示编辑器，普通文件和归档显示文件选择控件。新建文本资产时下载文件名自动跟随引用名称，仍可单独修改，留空保存时使用引用名称；组件还统一提供文本编辑、替换、下载、删除、错误行展示和并发冲突重载；页面只通过 `AssetFileAdapter` 注入领域 API 和文案。`items[].key` 必须是应用内或设施内唯一的 `name`，不把物理 `id`、`fileKey` 或 `assetKey` 暴露给组件。
 - `TemplateVariableInput`（`web/src/components/patterns/TemplateVariableInput.vue`）：用于支持模板表达式的单行字段；复用 Input 和 Dropdown，在原光标插入表达式或替换当前选区，插入后恢复输入焦点。业务页面负责传入按上下文筛选后的目录项和本地化文案，不得把后端返回的全部变量无差别暴露给不支持相应渲染阶段的字段。
 - `CredentialFormFields`（`web/src/components/patterns/CredentialFormFields.vue`）：SSH 凭据表单字段的共享实现（name/type/username/password 或 privateKey+passphrase，含类型切换、编辑保留 secret、字段级错误），供凭据页与任意需要快捷创建凭据的弹窗复用；凭据校验/负载逻辑在 `web/src/components/patterns/credentialForm.ts`（空输入、校验、secret 裁剪），文案经 `labels` 从页面传入。服务器创建弹窗在无可用凭据时内嵌本组件实现“快捷创建凭据 → 自动选中”，作为死胡同的引导闭环。
@@ -39,18 +38,18 @@
 3. `StatusBadge` 的 tone map 是默认规则；业务状态显示文案仍由页面翻译或格式化后传入 `label`。
 4. 上传、下载、确认对话框只负责交互入口；请求、错误摘要、任务入口和两阶段反馈由业务页面按照 [interaction-model.md](interaction-model.md) 实现。
 5. 应用文件与设施静态资产如果具备相同的上传、替换、下载、删除和文本编辑行为，必须复用 `AssetFileManager`，不得在页面内复制另一套文件行和弹窗；领域差异只能放在 adapter/API 中。
-6. 中大屏布局中，`ServerContextSelector`、`AssetFileManager` 必须放在模板提供的内部滚动区域，不得恢复页面级滚动。
-7. 主从工作台的详情上下文切换必须复用 `MasterDetailLayout` 的 `detail-key`（传入当前选中对象标识），页面不得自建第二套详情过渡；同一对象的刷新不传新 key，避免重播。
-8. 紧凑视口（`<xl`）的主从切换必须复用 `MasterDetailLayout` 的单视图能力：页面传 `back-label`（本地化）与 `has-detail`，用 `@back` 清空选中项和对应 query；同时用 `useCompactViewport` 抑制“自动选中首条对象”，让窄屏停在列表/选择器。不得在页面内复制一套 `hidden xl:grid` 切换（activity 的既有实现除外，见其页面合同）。
+6. 中大屏布局中，表格与覆盖式详情必须各自在模板提供的内部滚动区域内完成滚动，不得恢复页面级滚动；宽表格允许在表格容器内横向滚动。
+7. 实体工作台（servers/credentials/dns/certificates/applications）的列表与详情切换必须复用 `TableDetailLayout`：列表保持挂载（`inert` + `aria-hidden`），详情的选中参数与 tab 参数进 URL，打开详情 `push` 历史、关闭 `replace` 清参数；页面不得自建第二套切换壳。
+8. `activity` 过渡期继续使用 `MasterDetailLayout` 双栏与页面自带的列表⇄详情切换；其他页面不得再接入 `MasterDetailLayout` 单视图，也不得新增“紧凑视口自动选中首条”逻辑。
 9. 页面内分段切换（如证书的域名/自签/密钥）使用带 `aria-current` 的链接或 `Tabs`，不得用一排 `primary` 按钮表达选中态；页面内搜索一律复用 `SearchInput`，不得手写放大镜 + Input 组合。
 
 ## 当前接入记录
 
 - `web/src/views/applications/ApplicationLogsDialog.vue`：业务容器日志弹窗复用 Dialog/Select/Button/LoadingOverlay；按服务器与容器展示实例，日志在固定弹窗正文内滚动，切换/关闭取消旧请求，不使用活动日志替代容器输出。
 
-- `web/src/views/applications/index.vue`：应用搜索、状态、应用/设施连续纵向配置流、部署/网关/源站服务器多选、持久化数据下载/恢复，以及应用文件和设施静态资产共用的 `AssetFileManager` 已接入统一 primitives/patterns。 未保存修改的离开/取消保护已接入 `ConfirmDialog`。
-- `web/src/views/security/index.vue` 与 `web/src/views/resources/index.vue`：服务器上下文选择已接入 `ServerContextSelector` 及其加载骨架，页面不得再在同一上下文区域叠加 Select 下拉。resources 的软件包搜索、certificates 的模式切换分别复用 `SearchInput` 与带 `aria-current` 的分段链接，不再手写同类控件。
-- `web/src/components/templates/MasterDetailLayout.vue`：servers、credentials、dns、certificates、security、resources、applications、activity 通过 `detail-key` 接入详情进场动效；详情区可选横幅统一放进正文内部滚动区。除 activity（自带列表⇄详情切换）外，上述页面都传入 `back-label`/`has-detail` 接入紧凑视口单视图，并用 `useCompactViewport` 关闭窄屏的“自动选中首条”。
+- `web/src/views/applications/index.vue`：应用搜索、状态、应用/设施连续纵向配置流、部署/网关/源站服务器多选、持久化数据下载/恢复，以及应用文件和设施静态资产共用的 `AssetFileManager` 已接入统一 primitives/patterns。 未保存修改的离开/取消保护已接入 `ConfirmDialog`。应用列表为表格 + 覆盖式详情，行操作区承载 详情/编辑/同步/停用/更新镜像/日志/删除，详情内保留 runtime/routes/files tabs 与持久化数据上下文面板。
+- `web/src/views/servers/index.vue` 与 `tabs/`：服务器列表为表格 + 覆盖式详情；详情一级 tab 覆盖资源/安全能力（容器、镜像、网络、存储卷、软件包、防火墙），tab 懒加载并在详情存活期内缓存；资源页与安全页的独立实现已删除。
+- `web/src/components/templates/TableDetailLayout.vue`：servers、credentials、dns、certificates、applications 通过 `detail-swap` 接入覆盖式详情进场；列表在详情打开时 `inert` + `aria-hidden`，关闭后保留滚动位置与筛选。`activity` 继续使用 `MasterDetailLayout` 双栏，不受影响。
 
 - `web/src/components/activity/EventTimeline.vue`：统一只读事实时间线，同步骤连续输出可折叠，异常和决策展开，技术标识折叠；通过 context/evidence 事件交由页面读取上下文与下载证据。`/activity` 只按需读取，保留手动刷新与 cursor 分页，不接入共享自动刷新，不显示全量计数或新数据提示；正文每次替换为当前 100 条批次，较早/较新导航只保存游标，禁止不断追加 DOM。
 

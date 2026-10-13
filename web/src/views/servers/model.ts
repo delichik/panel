@@ -1,6 +1,27 @@
 import type { ServerDto, ServerSaveInput } from '@/types/servers';
 import type { CredentialDto } from '@/types/credentials';
 
+/**
+ * 服务器详情的一级 tab。资源页与安全页并入服务器详情后，tab 取值同时是 URL
+ * `tab` query 的合法集合；未知取值一律回落到 overview。
+ */
+export const serverDetailTabs = ['overview', 'metrics', 'agent', 'tailscale', 'containers', 'images', 'networks', 'volumes', 'packages', 'firewall'] as const;
+
+export type ServerDetailTab = (typeof serverDetailTabs)[number];
+
+export function normalizeServerDetailTab(value: unknown): ServerDetailTab {
+  const raw = String(value ?? '');
+  return (serverDetailTabs as readonly string[]).includes(raw) ? (raw as ServerDetailTab) : 'overview';
+}
+
+/** 防火墙 tab 内部的 UFW / Fail2Ban 分段（Fail2Ban 仅 dev 构建可见）。 */
+export type FirewallView = 'ufw' | 'fail2ban';
+
+export function normalizeFirewallView(value: unknown): FirewallView {
+  return String(value ?? '') === 'fail2ban' ? 'fail2ban' : 'ufw';
+}
+
+
 export function agentTone(server: ServerDto): 'success' | 'warning' | 'danger' | 'neutral' {
   const status = server.traits?.['agent.status'];
   if (server.traits?.['agent.enabled'] !== 'true') return 'neutral';
@@ -11,6 +32,22 @@ export function agentTone(server: ServerDto): 'success' | 'warning' | 'danger' |
 
 export function serverReachabilityTone(server: ServerDto): 'success' | 'danger' {
   return server.reachable ? 'success' : 'danger';
+}
+
+/** Agent 能力的用户可见状态文案 key；列表行与 Agent tab 共用。 */
+export function agentStatusKey(server: ServerDto) {
+  const status = server.traits?.['agent.status'];
+  if (status === 'compatible') return 'serversPage.agentCompatible';
+  if (status === 'unavailable') return 'serversPage.agentUnavailable';
+  if (status === 'undeployable') return 'serversPage.agentUndeployable';
+  return server.traits?.['agent.enabled'] === 'true' ? 'serversPage.agentIncompatible' : 'serversPage.agentNotInstalled';
+}
+
+/** 特权能力文案 key；列表行与概况 tab 共用。 */
+export function privilegeStatusKey(server: ServerDto) {
+  if (server.privilege?.privileged) return 'serversPage.privileged';
+  if (server.sudo?.passwordless) return 'serversPage.passwordlessSudo';
+  return 'serversPage.noPrivilege';
 }
 
 export function canRunPrivilegedOperation(server: ServerDto | null) {

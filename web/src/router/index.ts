@@ -1,5 +1,4 @@
 import { createRouter, createWebHistory } from 'vue-router';
-import type { RouteLocationGeneric } from 'vue-router';
 import { setUnauthorizedHandler } from '@/api/client';
 import { useSessionStore } from '@/stores/session';
 import { installRouteNavigationFeedback } from './navigationState';
@@ -7,13 +6,6 @@ import { installRouteNavigationFeedback } from './navigationState';
 // Route components are lazy-loaded so each page family ships as its own async
 // chunk; the initial bundle only carries the shell (AppShell is the single
 // eager layout component) plus shared vendor chunks.
-const fail2BanRoute = import.meta.env.DEV
-  ? { path: 'resources/fail2ban', component: () => import('@/views/security/index.vue'), meta: { titleKey: 'routes.fail2ban.title' } }
-  : { path: 'resources/fail2ban', redirect: (to: RouteLocationGeneric) => ({ path: '/resources/firewall', query: to.query }) };
-
-const redirectToFirewall = (to: RouteLocationGeneric) => ({ path: '/resources/firewall', query: to.query });
-const redirectToFail2Ban = (to: RouteLocationGeneric) => ({ path: import.meta.env.DEV ? '/resources/fail2ban' : '/resources/firewall', query: to.query });
-
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
@@ -27,17 +19,6 @@ export const router = createRouter({
         { path: 'overview', component: () => import('@/views/overview/index.vue'), meta: { titleKey: 'routes.overview.title' } },
         { path: 'servers', component: () => import('@/views/servers/index.vue'), meta: { titleKey: 'routes.servers.title' } },
         { path: 'credentials', component: () => import('@/views/credentials/index.vue'), meta: { titleKey: 'routes.credentials.title' } },
-        { path: 'security', redirect: redirectToFirewall },
-        { path: 'security/firewall', redirect: redirectToFirewall },
-        { path: 'security/fail2ban', redirect: redirectToFail2Ban },
-        { path: 'resources', redirect: '/resources/packages' },
-        { path: 'resources/packages', component: () => import('@/views/resources/index.vue'), meta: { titleKey: 'routes.packages.title' } },
-        { path: 'resources/containers', component: () => import('@/views/resources/index.vue'), meta: { titleKey: 'routes.containers.title' } },
-        { path: 'resources/images', component: () => import('@/views/resources/index.vue'), meta: { titleKey: 'routes.images.title' } },
-        { path: 'resources/networks', component: () => import('@/views/resources/index.vue'), meta: { titleKey: 'routes.networks.title' } },
-        { path: 'resources/volumes', component: () => import('@/views/resources/index.vue'), meta: { titleKey: 'routes.volumes.title' } },
-        { path: 'resources/firewall', component: () => import('@/views/security/index.vue'), meta: { titleKey: 'routes.firewall.title' } },
-        fail2BanRoute,
         { path: 'applications', redirect: '/applications/apps' },
         { path: 'applications/apps', component: () => import('@/views/applications/index.vue'), meta: { titleKey: 'routes.applications.title' } },
         { path: 'applications/apps/create', component: () => import('@/views/applications/index.vue'), meta: { titleKey: 'routes.applications.title' } },

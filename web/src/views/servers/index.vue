@@ -1,137 +1,189 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { AlertTriangle, Cable, KeyRound, PlayCircle, Plus, RefreshCcw, ServerCog, Trash2, Wrench } from '@lucide/vue';
+import { Cable, Eye, MoreHorizontal, Plus, RefreshCcw, Trash2, Wrench } from '@lucide/vue';
 import { credentialsApi } from '@/api/credentials';
-import { serversApi, type ServerMetricsRange, type ServerMetricsSeries } from '@/api/servers';
-import { tasksApi } from '@/api/tasks';
-import { activityApi } from '@/api/activity';
+import { serversApi } from '@/api/servers';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
-import Dialog from '@/components/ui/Dialog.vue';
+import Dropdown from '@/components/ui/Dropdown.vue';
+import DropdownItem from '@/components/ui/DropdownItem.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
+import IconButton from '@/components/ui/IconButton.vue';
 import PaginationBar from '@/components/ui/PaginationBar.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
-import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
-import StatusBadge from '@/components/ui/StatusBadge.vue';
-import Switch from '@/components/ui/Switch.vue';
-import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
+import Table from '@/components/ui/Table.vue';
+import Tabs from '@/components/ui/Tabs.vue';
+import Tooltip from '@/components/ui/Tooltip.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
-import { useCompactViewport } from '@/composables/useCompactViewport';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
-import AutoRefreshControl from '@/components/patterns/AutoRefreshControl.vue';
-import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
-import { useAutoRefresh } from '@/composables/useAutoRefresh';
+import TableDetailLayout from '@/components/templates/TableDetailLayout.vue';
+import { useOverlayBehavior } from '@/composables/useOverlayBehavior';
 import { useI18n } from '@/i18n';
 import type { CredentialDto } from '@/types/credentials';
 import type { ServerDto } from '@/types/servers';
-import type { TaskDto, TaskLog } from '@/types/tasks';
-import { agentTone, canRunPrivilegedOperation, credentialLabel, serverReachabilityTone, tailscaleStatusKey, tailscaleTone, tailscaleTrait } from './model';
-import ServerFormDialog from './ServerFormDialog.vue';
-import { createLatestRequestGuard } from '@/views/_shared/requestState';
 import { formatDateTime } from '@/utils/datetime';
+import { createLatestRequestGuard, isAbortError, normalizePage } from '@/views/_shared/requestState';
+import ServerFormDialog from './ServerFormDialog.vue';
+import AgentTab from './tabs/AgentTab.vue';
+import ContainersTab from './tabs/ContainersTab.vue';
+import FirewallTab from './tabs/FirewallTab.vue';
+import ImagesTab from './tabs/ImagesTab.vue';
+import MetricsTab from './tabs/MetricsTab.vue';
+import NetworksTab from './tabs/NetworksTab.vue';
+import OverviewTab from './tabs/OverviewTab.vue';
+import PackagesTab from './tabs/PackagesTab.vue';
+import TailscaleTab from './tabs/TailscaleTab.vue';
+import VolumesTab from './tabs/VolumesTab.vue';
+import {
+  agentStatusKey,
+  agentTone,
+  normalizeFirewallView,
+  normalizeServerDetailTab,
+  privilegeStatusKey,
+  serverDetailTabs,
+  serverReachabilityTone,
+  tailscaleStatusKey,
+  tailscaleTone,
+  type FirewallView,
+  type ServerDetailTab,
+} from './model';
 
 const { t } = useI18n();
-const MetricLineChart = defineAsyncComponent(() => import('@/views/overview/MetricLineChart.vue'));
 const route = useRoute();
 const router = useRouter();
 const notifyError = useErrorToast();
 const notifySuccess = useSuccessToast();
-const { mode: autoRefreshMode, enabled: autoRefreshEnabled, intervalMs: autoRefreshIntervalMs } = useAutoRefresh();
+const isDev = import.meta.env.DEV;
 
+const pageSize = 50;
 const servers = ref<ServerDto[]>([]);
 const serverDetails = ref<Record<string, ServerDto>>({});
 const credentials = ref<CredentialDto[]>([]);
-const selectedId = ref('');
+const selectedId = ref(String(route.query.server ?? ''));
+const selectedTab = ref<ServerDetailTab>(normalizeServerDetailTab(route.query.tab));
+const firewallView = ref<FirewallView>(isDev ? normalizeFirewallView(route.query.subtab) : 'ufw');
 const search = ref(String(route.query.search ?? ''));
-const page = ref(1);
-const pageSize = 50;
+const page = ref(normalizePage(route.query.page));
 const totalServers = ref(0);
-let searchTimer: ReturnType<typeof setTimeout> | null = null;
-let detailController: AbortController | null = null;
-let metricsController: AbortController | null = null;
-let detailRequestId = 0;
-let metricsRequestId = 0;
-let metricsInFlight = false;
-let metricsAutoRefreshTimer: number | undefined;
-let agentTaskPollTimer: number | undefined;
-let agentTaskInFlight = false;
-let initialTaskPollTimer: number | undefined;
-let initialTaskInFlight = false;
-const listRequests = createLatestRequestGuard();
-const agentTaskRequests = createLatestRequestGuard();
-const initialTaskRequests = createLatestRequestGuard();
 const loading = ref(false);
 const detailLoading = ref(false);
 const error = ref('');
 const credentialError = ref('');
-const actionError = ref('');
 const serverDialog = ref(false);
-const confirmDialog = ref(false);
-const testing = ref(false);
-const openingEdit = ref(false);
 const editing = ref<ServerDto | null>(null);
 const confirmTarget = ref<ServerDto | null>(null);
-const confirmOperation = ref<'restart' | 'trustHostKey' | null>(null);
-const pendingOperation = ref('');
-const metrics = ref<ServerMetricsSeries | null>(null);
-const metricsServerId = ref('');
-const metricsLoading = ref(false);
-const metricsError = ref('');
-const metricsRange = ref<ServerMetricsRange>('1h');
-const agentTask = ref<TaskDto | null>(null);
-const agentTaskLogs = ref<TaskLog[]>([]);
-const agentTaskLogCursor = ref(0);
-const agentTaskServerId = ref('');
-const agentTaskLoading = ref(false);
-const agentTaskError = ref('');
-const initialTask = ref<TaskDto | null>(null);
-const initialTaskServerId = ref('');
-const initialTaskLoading = ref(false);
-const initialTaskError = ref('');
-const metricsRangeOptions = [
-  { value: '1h', label: '1h' },
-  { value: '6h', label: '6h' },
-  { value: '1d', label: '1d' },
-  { value: '7d', label: '7d' },
-];
+const deleting = ref(false);
+const rowBusy = ref<{ id: string; kind: 'test' | 'edit' } | null>(null);
+const detailRoot = ref<HTMLElement | null>(null);
 
+const visited = reactive<Record<ServerDetailTab, boolean>>(Object.fromEntries(serverDetailTabs.map((tab) => [tab, false])) as Record<ServerDetailTab, boolean>);
+let searchTimer: ReturnType<typeof setTimeout> | undefined;
+let detailController: AbortController | null = null;
+const listGuard = createLatestRequestGuard();
+let detailRequestId = 0;
 
 const selectedServer = computed(() => serverDetails.value[selectedId.value] ?? servers.value.find((item) => item.id === selectedId.value) ?? null);
-/** 紧凑视口（xl 以下）不自动选中首条服务器：窄屏应停在列表，由用户进入详情。 */
-const compactViewport = useCompactViewport();
-
-const latestMetrics = computed(() => {
-  const series = metrics.value;
-  return {
-    cpu: series?.cpu.at(-1),
-    memory: series?.memory.at(-1),
-    disk: series?.disk.at(-1),
-    network: series?.network.at(-1),
-    load: series?.load.at(-1),
-  };
+const detailOpen = computed(() => Boolean(selectedId.value));
+const activeTab = computed<ServerDetailTab>({
+  get: () => selectedTab.value,
+  set: (value) => selectTab(value),
 });
-const visibleAgentTaskLogs = computed(() => agentTaskLogs.value.slice(-20));
-const agentTaskActive = computed(() => isActiveTask(agentTask.value));
-const initialTaskActive = computed(() => isActiveTask(initialTask.value));
+const tabItems = computed(() => serverDetailTabs.map((tab) => ({ value: tab, label: t(`serversPage.tab.${tab}`) })));
+const detailTitle = computed(() => selectedServer.value?.name ?? t('common.loading'));
+const detailDescription = computed(() => selectedServer.value ? `${selectedServer.value.host}:${selectedServer.value.port} / ${selectedServer.value.os?.prettyName || t('common.notAvailable')}` : '');
 
-const metricChartPanels = computed(() => {
-  const series = metrics.value;
-  if (!series) return [];
-  const serverName = selectedServer.value?.name ?? '';
-  const single = (values: number[]) => [{ id: selectedId.value, name: serverName, values }];
-  const percentValues = (points: Array<{ usedBytes?: number; totalBytes?: number }>) => points.map((point) => (point.totalBytes ? ((point.usedBytes ?? 0) / point.totalBytes) * 100 : 0));
-  return [
-    { key: 'cpu', label: 'CPU', current: percent(latestMetrics.value.cpu?.usagePercent), valueKind: 'percent' as const, labels: series.cpu.map((point) => point.time), series: single(series.cpu.map((point) => point.usagePercent)) },
-    { key: 'memory', label: t('serversPage.memory'), current: `${bytes(latestMetrics.value.memory?.usedBytes)} / ${bytes(latestMetrics.value.memory?.totalBytes)}`, valueKind: 'percent' as const, labels: series.memory.map((point) => point.time), series: single(percentValues(series.memory)) },
-    { key: 'disk', label: t('serversPage.disk'), current: `${bytes(latestMetrics.value.disk?.usedBytes)} / ${bytes(latestMetrics.value.disk?.totalBytes)}`, valueKind: 'percent' as const, labels: series.disk.map((point) => point.time), series: single(percentValues(series.disk)) },
-    { key: 'network', label: t('serversPage.network'), current: `${bytesPerSecond(latestMetrics.value.network?.rxBytesPerSecond)} / ${bytesPerSecond(latestMetrics.value.network?.txBytesPerSecond)}`, valueKind: 'bytes' as const, labels: series.network.map((point) => point.time), series: [
-      { id: `${selectedId.value}-rx`, name: t('serversPage.networkRx'), values: series.network.map((point) => point.rxBytesPerSecond ?? 0) },
-      { id: `${selectedId.value}-tx`, name: t('serversPage.networkTx'), values: series.network.map((point) => point.txBytesPerSecond ?? 0) },
-    ] },
-  ];
+// 覆盖式详情不是弹窗，但复用浮层键盘模型：Escape 关闭、焦点归还触发按钮、
+// 与内层 Dialog/Dropdown 组成 LIFO 栈（内层优先）；详情是页面级视图，不锁背景滚动。
+const { onKeydown: onDetailKeydown } = useOverlayBehavior({
+  open: () => detailOpen.value,
+  containerRef: detailRoot,
+  onClose: closeDetail,
+  lockScroll: false,
+});
+
+const columns = computed(() => [
+  { key: 'name', label: t('common.name') },
+  { key: 'address', label: t('serversPage.columns.address') },
+  { key: 'status', label: t('common.status'), nowrap: true },
+  { key: 'agent', label: t('serversPage.agent'), nowrap: true },
+  { key: 'privilege', label: t('serversPage.columns.privilege'), nowrap: true },
+  { key: 'tailscale', label: t('serversPage.tailscale.title'), nowrap: true },
+  { key: 'lastChecked', label: t('serversPage.lastChecked'), nowrap: true },
+  { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
+]);
+
+function statusText(server: ServerDto) {
+  return server.reachable ? t('serversPage.reachable') : t('serversPage.unreachable');
+}
+
+function agentText(server: ServerDto) {
+  return t(agentStatusKey(server));
+}
+
+function privilegeText(server: ServerDto) {
+  return t(privilegeStatusKey(server));
+}
+
+function detailQuery(serverId = selectedId.value) {
+  return {
+    ...route.query,
+    server: serverId || undefined,
+    tab: selectedTab.value === 'overview' ? undefined : selectedTab.value,
+    subtab: selectedTab.value === 'firewall' && firewallView.value === 'fail2ban' ? 'fail2ban' : undefined,
+  };
+}
+
+function openDetail(server: ServerDto) {
+  if (selectedId.value !== server.id) {
+    selectedId.value = server.id;
+    selectedTab.value = 'overview';
+    resetVisited();
+  }
+  if (route.query.server !== server.id) void router.push({ query: detailQuery(server.id) });
+}
+
+function closeDetail() {
+  if (!detailOpen.value) return;
+  selectedId.value = '';
+  void router.replace({ query: { ...route.query, server: undefined, tab: undefined, subtab: undefined } });
+}
+
+function selectTab(value: ServerDetailTab) {
+  selectedTab.value = value;
+  if (selectedId.value && route.query.tab !== (value === 'overview' ? undefined : value)) void router.replace({ query: detailQuery() });
+}
+
+function selectFirewallView(value: FirewallView) {
+  firewallView.value = value;
+  if (selectedId.value && route.query.subtab !== (value === 'fail2ban' ? 'fail2ban' : undefined)) void router.replace({ query: detailQuery() });
+}
+
+function resetVisited() {
+  serverDetailTabs.forEach((tab) => { visited[tab] = false; });
+  visited[selectedTab.value] = true;
+}
+
+watch(activeTab, (tab) => { visited[tab] = true; });
+watch(selectedId, () => { resetVisited(); }, { immediate: true });
+
+watch(() => route.query.server, (value) => {
+  const next = String(value ?? '');
+  if (next !== selectedId.value) selectedId.value = next;
+});
+watch(() => route.query.tab, (value) => {
+  const next = normalizeServerDetailTab(value);
+  if (next !== selectedTab.value) selectedTab.value = next;
+});
+watch(() => route.query.subtab, (value) => {
+  const next = isDev ? normalizeFirewallView(value) : 'ufw';
+  if (next !== firewallView.value) firewallView.value = next;
+});
+watch(() => route.query.page, (value) => {
+  const next = normalizePage(value);
+  if (next !== page.value) page.value = next;
 });
 
 watch(search, (value) => {
@@ -142,22 +194,11 @@ watch(search, (value) => {
     else void loadServers();
   }, 250);
 });
-watch(page, () => { void loadServers(); });
-watch(selectedId, () => {
-  void loadServerDetail();
-  void loadMetrics(true);
-  void loadAgentDeployment(true);
-  void loadInitialTask(true);
+watch(page, (value) => {
+  void router.replace({ query: { ...route.query, page: value > 1 ? String(value) : undefined } });
+  void loadServers();
 });
-
-/** 窄屏单视图：返回列表并清掉 URL 里的选中项。 */
-function backToList() {
-  selectedId.value = '';
-  void router.replace({ query: { ...route.query, server: undefined } });
-}
-watch(metricsRange, () => {
-  void loadMetrics(true);
-});
+watch(selectedId, () => { void loadServerDetail(); }, { immediate: true });
 
 async function loadServerDetail() {
   const id = selectedId.value;
@@ -176,384 +217,10 @@ async function loadServerDetail() {
     serverDetails.value = { ...serverDetails.value, [id]: detail };
   } catch (err) {
     if (isAbortError(err)) return;
-    actionError.value = err instanceof Error ? err.message : t('serversPage.loadFailed');
-    notifyError(err instanceof Error ? err.message : t('serversPage.loadFailed'), err);
+    if (requestId === detailRequestId) notifyError(err instanceof Error ? err.message : t('serversPage.loadFailed'), err);
   } finally {
     if (requestId === detailRequestId) detailLoading.value = false;
   }
-}
-
-async function load() {
-  const requestId = listRequests.begin();
-  loading.value = true;
-  error.value = '';
-  credentialError.value = '';
-  try {
-    const [serversResult, credentialsResult] = await Promise.allSettled([serversApi.listPage({ page: page.value, pageSize, q: search.value.trim() || undefined }), credentialsApi.list()]);
-    if (!listRequests.isCurrent(requestId)) return;
-    if (serversResult.status === 'fulfilled') {
-      const nextServers = serversResult.value.items;
-      totalServers.value = serversResult.value.total;
-      servers.value = nextServers;
-      const queryServer = String(route.query.server ?? '');
-      selectedId.value = nextServers.some((item) => item.id === queryServer)
-        ? queryServer
-        : nextServers.some((item) => item.id === selectedId.value)
-          ? selectedId.value
-          : (compactViewport.value ? '' : nextServers[0]?.id || '');
-    } else {
-      error.value = serversResult.reason instanceof Error ? serversResult.reason.message : t('serversPage.loadFailed');
-      notifyError(serversResult.reason instanceof Error ? serversResult.reason.message : t('serversPage.loadFailed'));
-    }
-    const detailId = selectedId.value;
-    if (detailId && serverDetails.value[detailId]) {
-      const nextDetails = { ...serverDetails.value };
-      delete nextDetails[detailId];
-      serverDetails.value = nextDetails;
-      void loadServerDetail();
-    }
-    if (credentialsResult.status === 'fulfilled') {
-      credentials.value = credentialsResult.value;
-    } else {
-      credentials.value = [];
-      credentialError.value = credentialsResult.reason instanceof Error ? credentialsResult.reason.message : t('serversPage.credentialsLoadFailed');
-      notifyError(credentialsResult.reason instanceof Error ? credentialsResult.reason.message : t('serversPage.credentialsLoadFailed'));
-    }
-  } finally {
-    if (listRequests.isCurrent(requestId)) loading.value = false;
-  }
-}
-
-async function loadServers() {
-  const requestId = listRequests.begin();
-  loading.value = true;
-  error.value = '';
-  try {
-    const result = await serversApi.listPage({ page: page.value, pageSize, q: search.value.trim() || undefined });
-    if (!listRequests.isCurrent(requestId)) return;
-    servers.value = result.items;
-    totalServers.value = result.total;
-    selectedId.value = result.items.some((item) => item.id === selectedId.value) ? selectedId.value : result.items[0]?.id ?? '';
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : t('serversPage.loadFailed');
-    notifyError(err instanceof Error ? err.message : t('serversPage.loadFailed'), err);
-  } finally {
-    if (listRequests.isCurrent(requestId)) loading.value = false;
-  }
-}
-
-async function loadMetrics(force = false) {
-  // 自动轮询期间已有在途请求时跳过本轮，避免自伤 abort；仅切换范围/服务器或手动刷新时强制中止旧请求。
-  if (!force && metricsInFlight) return;
-  if (force) metricsController?.abort();
-  const requestId = ++metricsRequestId;
-  const id = selectedId.value;
-  metricsError.value = '';
-  // 切换服务器时立即清空旧数据；同服务器刷新保留旧数据，避免闪跳
-  if (metricsServerId.value !== id) {
-    metrics.value = null;
-    metricsServerId.value = '';
-  }
-  if (!id) {
-    metricsLoading.value = false;
-    metricsInFlight = false;
-    return;
-  }
-  const controller = new AbortController();
-  metricsController = controller;
-  metricsLoading.value = true;
-  metricsInFlight = true;
-  try {
-    const next = await serversApi.metrics(id, metricsRange.value, { signal: controller.signal });
-    if (requestId !== metricsRequestId || selectedId.value !== id) return;
-    metrics.value = next;
-    metricsServerId.value = id;
-  } catch (err) {
-    if (isAbortError(err)) return;
-    metricsError.value = err instanceof Error ? err.message : t('serversPage.metricsFailed');
-    notifyError(err instanceof Error ? err.message : t('serversPage.metricsFailed'), err);
-  } finally {
-    if (requestId === metricsRequestId) {
-      metricsLoading.value = false;
-      metricsInFlight = false;
-    }
-  }
-}
-
-function startMetricsAutoRefresh() {
-  stopMetricsAutoRefresh();
-  if (!autoRefreshEnabled.value) return;
-  metricsAutoRefreshTimer = window.setInterval(() => {
-    if (document.visibilityState === 'visible') void loadMetrics();
-  }, autoRefreshIntervalMs.value);
-}
-
-function stopMetricsAutoRefresh() {
-  if (metricsAutoRefreshTimer !== undefined) {
-    window.clearInterval(metricsAutoRefreshTimer);
-    metricsAutoRefreshTimer = undefined;
-  }
-}
-
-watch(autoRefreshMode, startMetricsAutoRefresh, { immediate: true });
-
-function openCreate() {
-  editing.value = null;
-  serverDialog.value = true;
-}
-
-async function openEdit(server: ServerDto) {
-  openingEdit.value = true;
-  try {
-    const detail = serverDetails.value[server.id] ?? await serversApi.get(server.id);
-    serverDetails.value = { ...serverDetails.value, [server.id]: detail };
-    editing.value = detail;
-    serverDialog.value = true;
-  } catch (err) {
-    notifyError(err instanceof Error ? err.message : t('serversPage.loadFailed'), err);
-  } finally {
-    openingEdit.value = false;
-  }
-}
-
-/** 创建/更新成功后的两阶段衔接：创建带 initialTaskId 时立即跟踪初始化任务。 */
-async function handleSaved(saved: ServerDto) {
-  selectedId.value = saved.id;
-  invalidateServerDetail(saved.id);
-  if (!editing.value && saved.initialTaskId) await loadInitialTask(true, saved.initialTaskId);
-  await load();
-}
-
-async function loadInitialTask(reset = false, preferredTaskId = '') {
-  if (reset && initialTaskInFlight) initialTaskRequests.invalidate();
-  else if (!reset && initialTaskInFlight) return;
-  const serverId = selectedId.value;
-  if (!serverId) {
-    clearInitialTask();
-    return;
-  }
-  const requestId = initialTaskRequests.begin();
-  initialTaskInFlight = true;
-  initialTaskLoading.value = true;
-  initialTaskError.value = '';
-  if (reset || initialTaskServerId.value !== serverId) initialTaskServerId.value = serverId;
-  try {
-    const detail = serverDetails.value[serverId] ?? servers.value.find((item) => item.id === serverId);
-    let taskId = preferredTaskId || detail?.initialTaskId || '';
-    if (!taskId) {
-      const result = await tasksApi.list({ serverId, type: 'server_info_collect', page: 1, pageSize: 1 });
-      if (!initialTaskRequests.isCurrent(requestId) || selectedId.value !== serverId) return;
-      taskId = result.items[0]?.id ?? '';
-    }
-    if (!taskId) {
-      initialTask.value = null;
-      initialTaskServerId.value = serverId;
-      return;
-    }
-    const nextTask = await tasksApi.get(taskId);
-    if (!initialTaskRequests.isCurrent(requestId) || selectedId.value !== serverId) return;
-    const previous = initialTask.value;
-    initialTask.value = nextTask;
-    initialTaskServerId.value = serverId;
-    // 任务进入终态（完成/失败）时刷新详情；服务器记录始终保留，失败态由后端标记
-    // 到 reachable/last_error，详情侧栏据此展示登记失败与原因，供用户重试、编辑或删除。
-    if (previous && isActiveTask(previous) && !isActiveTask(nextTask)) {
-      invalidateServerDetail(serverId);
-    }
-  } catch (err) {
-    if (!initialTaskRequests.isCurrent(requestId) || selectedId.value !== serverId) return;
-    initialTaskError.value = err instanceof Error ? err.message : t('serversPage.initialTaskLoadFailed');
-  } finally {
-    if (initialTaskRequests.isCurrent(requestId)) {
-      initialTaskInFlight = false;
-      initialTaskLoading.value = false;
-    }
-  }
-}
-
-/** 供创建弹窗内的凭据快捷创建/重试使用，只刷新凭据列表。 */
-async function loadCredentials() {
-  try {
-    credentials.value = await credentialsApi.list();
-    credentialError.value = '';
-  } catch (err) {
-    credentials.value = [];
-    credentialError.value = err instanceof Error ? err.message : t('serversPage.credentialsLoadFailed');
-    notifyError(err instanceof Error ? err.message : t('serversPage.credentialsLoadFailed'), err);
-  }
-}
-
-function startInitialTaskPolling() {
-  window.clearInterval(initialTaskPollTimer);
-  initialTaskPollTimer = window.setInterval(() => {
-    if (document.visibilityState === 'visible' && initialTaskActive.value) void loadInitialTask();
-  }, 2000);
-}
-
-function clearInitialTask() {
-  initialTaskRequests.invalidate();
-  initialTask.value = null;
-  initialTaskServerId.value = '';
-  initialTaskError.value = '';
-  initialTaskLoading.value = false;
-  initialTaskInFlight = false;
-}
-
-async function testConnection(server: ServerDto) {
-  testing.value = true;
-  try {
-    await runInline(async () => {
-      const tested = await serversApi.test(server.id);
-      invalidateServerDetail(tested.id);
-      notifySuccess(t('serversPage.testSucceeded', { name: tested.name }), tested);
-      await load();
-    });
-  } finally {
-    testing.value = false;
-  }
-}
-
-function confirmDelete(server: ServerDto) {
-  confirmTarget.value = server;
-  confirmDialog.value = true;
-}
-
-async function deleteSelected() {
-  const target = confirmTarget.value;
-  if (!target) return;
-  await runInline(async () => {
-    const result = await serversApi.delete(target.id);
-    const nextDetails = { ...serverDetails.value };
-    delete nextDetails[target.id];
-    serverDetails.value = nextDetails;
-    notifySuccess(t('serversPage.deleted', { name: target.name }), result);
-    confirmDialog.value = false;
-    selectedId.value = '';
-    await load();
-  });
-}
-
-async function deployAgent(server: ServerDto) {
-  await runInline(async () => {
-    const accepted = await serversApi.deployAgent(server.id);
-    notifySuccess(t('serversPage.agentTaskAccepted', { taskId: accepted.taskId }), accepted);
-    await loadAgentDeployment(true, accepted.taskId);
-  }, 'agent');
-}
-
-/** 与 Agent 部署一致的两阶段反馈：只承诺任务已受理，随后刷新列表与详情等待节点上报。 */
-async function applyServerTailscale(server: ServerDto) {
-  await runInline(async () => {
-    const accepted = await serversApi.applyTailscale(server.id);
-    notifySuccess(t('serversPage.tailscale.applyAccepted', { taskId: accepted.taskId }), accepted);
-    await load();
-  }, 'tailscale');
-}
-
-async function loadAgentDeployment(reset = false, preferredTaskId = '') {
-  if (!reset && agentTaskInFlight) return;
-  const serverId = selectedId.value;
-  if (!serverId) {
-    clearAgentDeployment();
-    return;
-  }
-  const requestId = agentTaskRequests.begin();
-  agentTaskInFlight = true;
-  agentTaskLoading.value = true;
-  agentTaskError.value = '';
-  if (reset || agentTaskServerId.value !== serverId) {
-    agentTask.value = null;
-    agentTaskLogs.value = [];
-    agentTaskLogCursor.value = 0;
-    agentTaskServerId.value = serverId;
-  }
-  try {
-    let nextTask: TaskDto | null;
-    if (preferredTaskId) {
-      nextTask = await tasksApi.get(preferredTaskId);
-    } else if (agentTask.value?.id && agentTaskServerId.value === serverId) {
-      nextTask = await tasksApi.get(agentTask.value.id);
-    } else {
-      const result = await tasksApi.list({ serverId, type: 'server_agent_deploy', page: 1, pageSize: 1 });
-      nextTask = result.items[0] ?? null;
-    }
-    if (!agentTaskRequests.isCurrent(requestId) || selectedId.value !== serverId) return;
-    if (!nextTask) {
-      agentTask.value = null;
-      agentTaskLogs.value = [];
-      agentTaskLogCursor.value = 0;
-      return;
-    }
-    const previousWasActive = isActiveTask(agentTask.value);
-    const taskChanged = agentTask.value?.id !== nextTask.id;
-    agentTask.value = nextTask;
-    if (taskChanged) {
-      agentTaskLogs.value = [];
-      agentTaskLogCursor.value = 0;
-    }
-    const nextLogs = await activityApi.events({ executionId: nextTask.id, kind: 'output', limit: 20 });
-    if (!agentTaskRequests.isCurrent(requestId) || selectedId.value !== serverId) return;
-    agentTaskLogs.value = [...nextLogs.items].sort((left, right) => left.seq - right.seq).map(event => ({ cursor: event.seq, time: event.occurredAt, stream: event.stream || 'stdout', line: event.text || '' }));
-    agentTaskLogCursor.value = nextLogs.headSeq;
-    if (previousWasActive && !isActiveTask(nextTask)) invalidateServerDetail(serverId);
-  } catch (err) {
-    if (!agentTaskRequests.isCurrent(requestId) || selectedId.value !== serverId) return;
-    agentTaskError.value = err instanceof Error ? err.message : t('serversPage.agentTaskLoadFailed');
-  } finally {
-    if (agentTaskRequests.isCurrent(requestId)) {
-      agentTaskInFlight = false;
-      agentTaskLoading.value = false;
-    }
-  }
-}
-
-function clearAgentDeployment() {
-  agentTaskRequests.invalidate();
-  agentTask.value = null;
-  agentTaskLogs.value = [];
-  agentTaskLogCursor.value = 0;
-  agentTaskServerId.value = '';
-  agentTaskError.value = '';
-  agentTaskLoading.value = false;
-  agentTaskInFlight = false;
-}
-
-function isActiveTask(task: TaskDto | null) {
-  return Boolean(task && ['queued', 'scheduled', 'running', 'failed_retryable'].includes(task.status));
-}
-
-function agentTaskStageLabel(stage: string) {
-  const key = ({
-    preparing: 'serversPage.agentTaskStagePreparing',
-    checking: 'serversPage.agentTaskStageChecking',
-    downloading: 'serversPage.agentTaskStageDownloading',
-    uploading: 'serversPage.agentTaskStageUploading',
-    configuring: 'serversPage.agentTaskStageConfiguring',
-    starting: 'serversPage.agentTaskStageStarting',
-    restarting: 'serversPage.agentTaskStageRestarting',
-    collecting: 'serversPage.agentTaskStageCollecting',
-    completed: 'serversPage.agentTaskStageCompleted',
-  } as Record<string, string>)[stage];
-  return key ? t(key) : stage || t('common.notAvailable');
-}
-
-function formatAgentTaskLog(line: string) {
-  if (line === 'waiting for agent restart readiness') return t('serversPage.agentTaskLogWaitingReadiness');
-  if (line === 'agent restart readiness confirmed (state=ready)') return t('serversPage.agentTaskLogReadinessConfirmed');
-  const restartDelay = line.match(/^agent requested a restart delay \(state=holdon; (.+) elapsed\); the protocol did not provide a reason$/);
-  if (restartDelay) return t('serversPage.agentTaskLogRestartDelay', { elapsed: restartDelay[1] });
-  const maintenanceWait = line.match(/^panel agent is still running package maintenance; waiting to restart \((.+) elapsed\)$/);
-  if (maintenanceWait) return t('serversPage.agentTaskLogRestartDelay', { elapsed: maintenanceWait[1] });
-  const readinessTimeout = line.match(/^agent restart readiness wait timed out after (.+); deployment will continue$/);
-  if (readinessTimeout) return t('serversPage.agentTaskLogReadinessTimeout', { timeout: readinessTimeout[1] });
-  return line;
-}
-
-function startAgentTaskPolling() {
-  window.clearInterval(agentTaskPollTimer);
-  agentTaskPollTimer = window.setInterval(() => {
-    if (document.visibilityState === 'visible' && Boolean(agentTask.value)) void loadAgentDeployment();
-  }, 2000);
 }
 
 function invalidateServerDetail(id?: string) {
@@ -565,398 +232,278 @@ function invalidateServerDetail(id?: string) {
   if (target === selectedId.value) void loadServerDetail();
 }
 
-function confirmRestart(server: ServerDto) {
-  if (!canRunPrivilegedOperation(server)) return;
-  confirmTarget.value = server;
-  confirmOperation.value = 'restart';
-}
-
-function confirmTrustHostKey(server: ServerDto) {
-  confirmTarget.value = server;
-  confirmOperation.value = 'trustHostKey';
-}
-
-async function runConfirmedOperation() {
-  const server = confirmTarget.value;
-  const operation = confirmOperation.value;
-  if (!server || !operation) return;
-  confirmOperation.value = null;
-  if (operation === 'restart') {
-    await runInline(async () => {
-      const accepted = await serversApi.restart(server.id);
-      notifySuccess(t('serversPage.restartAccepted', { taskId: accepted.taskId }), accepted);
-    }, 'restart');
-  } else {
-    await runInline(async () => {
-      const trusted = await serversApi.trustHostKey(server.id);
-      invalidateServerDetail(trusted.id);
-      notifySuccess(t('serversPage.trustHostKeySucceeded', { name: trusted.name }), trusted);
-      await load();
-    }, 'trustHostKey');
-  }
-  confirmTarget.value = null;
-}
-
-async function runInline(action: () => Promise<void>, operation = 'default') {
-  pendingOperation.value = operation;
-  actionError.value = '';
+async function load() {
+  const requestId = listGuard.begin();
+  loading.value = true;
+  error.value = '';
+  credentialError.value = '';
   try {
-    await action();
+    const [serversResult, credentialsResult] = await Promise.allSettled([
+      serversApi.listPage({ page: page.value, pageSize, q: search.value.trim() || undefined }),
+      credentialsApi.list(),
+    ]);
+    if (!listGuard.isCurrent(requestId)) return;
+    if (serversResult.status === 'fulfilled') {
+      servers.value = serversResult.value.items;
+      totalServers.value = serversResult.value.total;
+      const queryServer = String(route.query.server ?? '');
+      if (!queryServer && selectedId.value && !serversResult.value.items.some((item) => item.id === selectedId.value)) {
+        selectedId.value = '';
+      }
+    } else {
+      error.value = serversResult.reason instanceof Error ? serversResult.reason.message : t('serversPage.loadFailed');
+      notifyError(serversResult.reason instanceof Error ? serversResult.reason.message : t('serversPage.loadFailed'));
+    }
+    if (credentialsResult.status === 'fulfilled') {
+      credentials.value = credentialsResult.value;
+    } else {
+      credentials.value = [];
+      credentialError.value = credentialsResult.reason instanceof Error ? credentialsResult.reason.message : t('serversPage.credentialsLoadFailed');
+      notifyError(credentialsResult.reason instanceof Error ? credentialsResult.reason.message : t('serversPage.credentialsLoadFailed'));
+    }
+    if (selectedId.value) invalidateServerDetail(selectedId.value);
+  } finally {
+    if (listGuard.isCurrent(requestId)) loading.value = false;
+  }
+}
+
+async function loadServers() {
+  const requestId = listGuard.begin();
+  loading.value = true;
+  error.value = '';
+  try {
+    const result = await serversApi.listPage({ page: page.value, pageSize, q: search.value.trim() || undefined });
+    if (!listGuard.isCurrent(requestId)) return;
+    servers.value = result.items;
+    totalServers.value = result.total;
+    // 翻页/搜索后选中项不在当前页时收起详情，避免覆盖一个已不在列表中的对象。
+    if (selectedId.value && !result.items.some((item) => item.id === selectedId.value)) {
+      selectedId.value = '';
+      void router.replace({ query: { ...route.query, server: undefined, tab: undefined, subtab: undefined } });
+    }
   } catch (err) {
-    actionError.value = err instanceof Error ? err.message : t('common.operationFailed');
+    if (isAbortError(err)) return;
+    error.value = err instanceof Error ? err.message : t('serversPage.loadFailed');
+    notifyError(err instanceof Error ? err.message : t('serversPage.loadFailed'), err);
+  } finally {
+    if (listGuard.isCurrent(requestId)) loading.value = false;
+  }
+}
+
+async function testConnection(server: ServerDto) {
+  if (rowBusy.value) return;
+  rowBusy.value = { id: server.id, kind: 'test' };
+  try {
+    const tested = await serversApi.test(server.id);
+    invalidateServerDetail(tested.id);
+    notifySuccess(t('serversPage.testSucceeded', { name: tested.name }), tested);
+    await load();
+  } catch (err) {
     notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
   } finally {
-    pendingOperation.value = '';
+    rowBusy.value = null;
   }
 }
 
-function statusText(server: ServerDto) {
-  return server.reachable ? t('serversPage.reachable') : t('serversPage.unreachable');
-}
-
-function agentText(server: ServerDto) {
-  const status = server.traits?.['agent.status'];
-  if (status === 'compatible') return t('serversPage.agentCompatible');
-  if (status === 'unavailable') return t('serversPage.agentUnavailable');
-  if (status === 'undeployable') return t('serversPage.agentUndeployable');
-  return server.traits?.['agent.enabled'] === 'true' ? t('serversPage.agentIncompatible') : t('serversPage.agentNotInstalled');
-}
-
-function privilegeText(server: ServerDto) {
-  if (server.privilege?.privileged) return t('serversPage.privileged');
-  if (server.sudo?.passwordless) return t('serversPage.passwordlessSudo');
-  return t('serversPage.noPrivilege');
-}
-
-function percent(value?: number) {
-  return typeof value === 'number' ? `${value.toFixed(1)}%` : t('common.notAvailable');
-}
-
-function bytes(value?: number) {
-  if (typeof value !== 'number') return t('common.notAvailable');
-  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GiB`;
-  if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MiB`;
-  return `${value} B`;
-}
-
-function bytesPerSecond(value?: number) {
-  if (typeof value !== 'number') return t('common.notAvailable');
-  if (!value) return '0 B/s';
-  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s', 'TB/s'];
-  let unitIndex = 0;
-  let scaled = value;
-  while (scaled >= 1024 && unitIndex < units.length - 1) {
-    scaled /= 1024;
-    unitIndex += 1;
+async function openEdit(server: ServerDto) {
+  if (rowBusy.value) return;
+  rowBusy.value = { id: server.id, kind: 'edit' };
+  try {
+    const detail = serverDetails.value[server.id] ?? await serversApi.get(server.id);
+    serverDetails.value = { ...serverDetails.value, [server.id]: detail };
+    editing.value = detail;
+    serverDialog.value = true;
+  } catch (err) {
+    notifyError(err instanceof Error ? err.message : t('serversPage.loadFailed'), err);
+  } finally {
+    rowBusy.value = null;
   }
-  return `${scaled >= 100 ? scaled.toFixed(0) : scaled.toFixed(1)} ${units[unitIndex]}`;
 }
 
-function isAbortError(error: unknown) {
-  return Boolean(error && typeof error === 'object' && 'code' in error && (error as { code?: string }).code === 'request_aborted');
+function openCreate() {
+  editing.value = null;
+  serverDialog.value = true;
 }
 
-onMounted(async () => {
+async function handleSaved(saved: ServerDto) {
+  selectedId.value = saved.id;
+  selectedTab.value = 'overview';
+  invalidateServerDetail(saved.id);
+  await router.push({ query: { ...route.query, server: saved.id, tab: undefined, subtab: undefined } });
   await load();
-  startAgentTaskPolling();
-  startInitialTaskPolling();
+}
+
+async function loadCredentials() {
+  try {
+    credentials.value = await credentialsApi.list();
+    credentialError.value = '';
+  } catch (err) {
+    credentials.value = [];
+    credentialError.value = err instanceof Error ? err.message : t('serversPage.credentialsLoadFailed');
+    notifyError(err instanceof Error ? err.message : t('serversPage.credentialsLoadFailed'), err);
+  }
+}
+
+async function deleteSelected() {
+  const target = confirmTarget.value;
+  if (!target) return;
+  deleting.value = true;
+  try {
+    const result = await serversApi.delete(target.id);
+    const next = { ...serverDetails.value };
+    delete next[target.id];
+    serverDetails.value = next;
+    notifySuccess(t('serversPage.deleted', { name: target.name }), result);
+    confirmTarget.value = null;
+    closeDetail();
+    await load();
+  } catch (err) {
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
+  } finally {
+    deleting.value = false;
+  }
+}
+
+function refreshDetail() {
+  invalidateServerDetail();
+  void load();
+}
+
+onMounted(() => {
+  void load();
 });
 onBeforeUnmount(() => {
   if (searchTimer) clearTimeout(searchTimer);
   detailController?.abort();
-  metricsController?.abort();
-  stopMetricsAutoRefresh();
-  window.clearInterval(agentTaskPollTimer);
-  window.clearInterval(initialTaskPollTimer);
-  agentTaskRequests.invalidate();
-  initialTaskRequests.invalidate();
+  listGuard.invalidate();
 });
 </script>
 
 <template>
-  <ConsolePage :title="t('routes.servers.title')" :description="t('routes.servers.description')">
-    <template #actions>
-      <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
-      <Button size="sm" variant="primary" @click="openCreate"><Plus />{{ t('serversPage.addServer') }}</Button>
-    </template>
+  <TableDetailLayout class="h-full" :has-detail="detailOpen">
+    <template #list>
+      <ConsolePage :title="t('routes.servers.title')" :description="t('routes.servers.description')">
+        <template #actions>
+          <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
+          <Button size="sm" variant="primary" @click="openCreate"><Plus />{{ t('serversPage.addServer') }}</Button>
+        </template>
 
-    <MasterDetailLayout class="h-full" :detail-key="selectedId" :has-detail="!!selectedServer" :back-label="t('common.backToList')" @back="backToList">
-      <template #master>
-      <aside class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] rounded-2xl border border-border bg-card">
-        <div class="border-b border-border p-4">
+        <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-4 rounded-2xl border border-border bg-card p-4">
           <SearchInput v-model="search" clearable :placeholder="t('serversPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
-        </div>
-        <div class="motion-stagger min-h-0 overflow-auto p-2 max-lg:max-h-[60dvh]">
-          <div v-if="loading && !servers.length" class="grid gap-2">
-            <Skeleton v-for="item in 6" :key="item" class="h-20" />
-          </div>
-          <EmptyState v-else-if="error && !servers.length" :title="t('common.loadFailed')" :description="error">
+
+          <EmptyState v-if="error && !servers.length" class="self-start" :title="t('common.loadFailed')" :description="error">
             <template #actions>
               <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
             </template>
           </EmptyState>
-          <EmptyState v-else-if="!servers.length" :title="t('serversPage.noServers')" :description="t('serversPage.noServersHint')" />
-          <button
-            v-for="server in servers"
+
+          <Table
             v-else
-            :key="server.id"
-            type="button"
-            class="motion-list-item mb-2 grid w-full gap-2 rounded-xl border p-3 text-left hover:bg-accent"
-            :class="selectedId === server.id ? 'border-border-strong bg-muted' : 'border-transparent bg-transparent'"
-            :aria-current="selectedId === server.id ? 'true' : undefined"
-            @click="selectedId = server.id; router.replace({ query: { ...route.query, server: server.id } })"
+            class="max-lg:max-h-[60dvh]"
+            :columns="columns"
+            :rows="servers"
+            row-key="id"
+            :active-key="selectedId"
+            :loading="loading && !servers.length"
+            :loading-label="t('common.loading')"
           >
-            <div class="flex items-center justify-between gap-2">
-              <strong class="truncate text-sm text-foreground">{{ server.name }}</strong>
-              <Badge :tone="serverReachabilityTone(server)">{{ statusText(server) }}</Badge>
-            </div>
-            <span class="truncate text-xs text-muted-foreground">{{ server.host }}:{{ server.port }}</span>
-            <div class="flex flex-wrap gap-1.5">
-              <Badge :tone="agentTone(server)">{{ agentText(server) }}</Badge>
-              <Badge v-if="server.tailscaleEnabled" :tone="tailscaleTone(server)">{{ t(tailscaleStatusKey(server)) }}</Badge>
-              <Badge :tone="canRunPrivilegedOperation(server) ? 'success' : 'warning'">{{ privilegeText(server) }}</Badge>
-            </div>
-          </button>
+            <template #name="{ row }">
+              <strong class="block max-w-[14rem] truncate text-foreground">{{ row.name }}</strong>
+            </template>
+            <template #address="{ row }">
+              <Tooltip :text="`${row.host}:${row.port}`" trigger-class="max-w-[16rem]">
+                <span class="panel-mono truncate text-xs text-muted-foreground">{{ row.host }}:{{ row.port }}</span>
+              </Tooltip>
+            </template>
+            <template #status="{ row }">
+              <Badge :tone="serverReachabilityTone(row)">{{ statusText(row) }}</Badge>
+            </template>
+            <template #agent="{ row }">
+              <Badge :tone="agentTone(row)">{{ agentText(row) }}</Badge>
+            </template>
+            <template #privilege="{ row }">
+              <Badge :tone="row.privilege?.privileged || row.sudo?.passwordless ? 'success' : 'warning'">{{ privilegeText(row) }}</Badge>
+            </template>
+            <template #tailscale="{ row }">
+              <Badge v-if="row.tailscaleEnabled" :tone="tailscaleTone(row)">{{ t(tailscaleStatusKey(row)) }}</Badge>
+              <span v-else class="text-muted-foreground">{{ t('common.notAvailable') }}</span>
+            </template>
+            <template #lastChecked="{ row }">
+              <span class="text-muted-foreground">{{ formatDateTime(row.lastCheckedAt, t('common.never')) }}</span>
+            </template>
+            <template #actions="{ row }">
+              <div class="flex items-center justify-end gap-1">
+                <Button size="sm" variant="secondary" @click="openDetail(row)"><Eye />{{ t('common.details') }}</Button>
+                <Dropdown align="right">
+                  <template #trigger>
+                    <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
+                  </template>
+                  <DropdownItem :disabled="rowBusy?.id === row.id" @click="openEdit(row)"><Wrench />{{ t('common.edit') }}</DropdownItem>
+                  <DropdownItem :disabled="rowBusy?.id === row.id" @click="testConnection(row)"><Cable />{{ t('serversPage.testConnection') }}</DropdownItem>
+                  <DropdownItem tone="danger" @click="confirmTarget = row"><Trash2 />{{ t('common.delete') }}</DropdownItem>
+                </Dropdown>
+              </div>
+            </template>
+            <template #empty>
+              <EmptyState :title="t('serversPage.noServers')" :description="t('serversPage.noServersHint')" />
+            </template>
+          </Table>
+
+          <PaginationBar v-model:page="page" :page-size="pageSize" :total="totalServers" :loading="loading" :previous-label="t('common.previous')" :next-label="t('common.next')" />
         </div>
-        <PaginationBar v-model:page="page" class="px-3" :page-size="pageSize" :total="totalServers" :loading="loading" :previous-label="t('common.previous')" :next-label="t('common.next')" />
-      </aside>
-      </template>
+      </ConsolePage>
+    </template>
 
-      <template #detail>
-      <main class="grid min-h-0 min-w-0">
-        <article v-if="loading && !servers.length" class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
-          <header class="border-b border-border p-5">
+    <template #detail>
+      <ConsolePage :title="detailTitle" :description="detailDescription" :back-label="t('common.backToList')" :body-scroll="false" @back="closeDetail">
+        <div ref="detailRoot" data-testid="server-detail" class="h-full min-h-0" tabindex="-1" @keydown="onDetailKeydown">
+          <div v-if="!selectedServer" class="grid content-start gap-4">
             <Skeleton class="h-7 w-48" />
-            <Skeleton class="mt-3 h-4 w-72 max-w-full" />
-          </header>
-          <div class="min-h-0 overflow-auto p-5">
-            <div class="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_320px]">
-              <div class="grid gap-4">
-                <section v-for="item in 3" :key="item" class="rounded-2xl border border-border bg-muted p-4">
-                  <Skeleton class="h-4 w-32" />
-                  <div class="mt-4 grid grid-cols-2 gap-3 max-md:grid-cols-1">
-                    <Skeleton v-for="line in 4" :key="line" class="h-10" />
-                  </div>
-                </section>
-              </div>
-              <aside class="grid content-start gap-3">
-                <Skeleton v-for="item in 2" :key="item" class="h-36" />
-              </aside>
+            <Skeleton class="h-4 w-72 max-w-full" />
+            <div class="mt-4 grid gap-3 xl:grid-cols-2">
+              <Skeleton v-for="item in 4" :key="item" class="h-40" />
             </div>
           </div>
-        </article>
-        <EmptyState v-else-if="!selectedServer" :title="t('serversPage.selectServer')" :description="t('serversPage.selectServerHint')" />
-        <article v-else class="relative grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
-          <LoadingOverlay v-if="detailLoading && !serverDetails[selectedId]" :label="t('common.loading')" />
-          <header class="flex items-start justify-between gap-4 border-b border-border p-5 max-md:grid">
-            <div class="min-w-0">
-              <div class="flex flex-wrap items-center gap-2">
-                <h2 class="m-0 truncate text-xl font-semibold text-foreground">{{ selectedServer.name }}</h2>
-                <Badge :tone="serverReachabilityTone(selectedServer)">{{ statusText(selectedServer) }}</Badge>
-                <Badge :tone="agentTone(selectedServer)">{{ agentText(selectedServer) }}</Badge>
-              </div>
-              <p class="m-0 mt-1 text-sm text-muted-foreground">{{ selectedServer.host }}:{{ selectedServer.port }} / {{ selectedServer.os?.prettyName || t('common.notAvailable') }}</p>
+          <Tabs v-else v-model="activeTab" class="h-full min-h-0" :tabs="tabItems" keep-panels>
+            <div :key="selectedId" class="h-full min-h-0">
+              <OverviewTab v-if="visited.overview" v-show="activeTab === 'overview'" :active="activeTab === 'overview'" :server="selectedServer" :credentials="credentials" @refresh="refreshDetail" />
+              <MetricsTab v-if="visited.metrics" v-show="activeTab === 'metrics'" :active="activeTab === 'metrics'" :server="selectedServer" />
+              <AgentTab v-if="visited.agent" v-show="activeTab === 'agent'" :active="activeTab === 'agent'" :server="selectedServer" />
+              <TailscaleTab v-if="visited.tailscale" v-show="activeTab === 'tailscale'" :server="selectedServer" @refresh="refreshDetail" />
+              <ContainersTab v-if="visited.containers" v-show="activeTab === 'containers'" :server="selectedServer" />
+              <ImagesTab v-if="visited.images" v-show="activeTab === 'images'" :server="selectedServer" />
+              <NetworksTab v-if="visited.networks" v-show="activeTab === 'networks'" :server="selectedServer" />
+              <VolumesTab v-if="visited.volumes" v-show="activeTab === 'volumes'" :server="selectedServer" />
+              <PackagesTab v-if="visited.packages" v-show="activeTab === 'packages'" :server="selectedServer" />
+              <FirewallTab v-if="visited.firewall" v-show="activeTab === 'firewall'" :server="selectedServer" :view="firewallView" @update:view="selectFirewallView" />
             </div>
-            <div class="flex flex-wrap justify-end gap-2">
-              <Button size="sm" :loading="testing" @click="testConnection(selectedServer)"><Cable />{{ t('serversPage.testConnection') }}</Button>
-              <Button size="sm" :loading="openingEdit" @click="openEdit(selectedServer)"><Wrench />{{ t('common.edit') }}</Button>
-              <Button size="sm" variant="danger" @click="confirmDelete(selectedServer)"><Trash2 />{{ t('common.delete') }}</Button>
-            </div>
-          </header>
+          </Tabs>
+        </div>
+      </ConsolePage>
+    </template>
+  </TableDetailLayout>
 
-          <div class="min-h-0 overflow-auto p-5">
-            <div v-if="selectedServer.hostKeyMismatch || selectedServer.lastError" class="mb-4 grid gap-2">
-              <div v-if="selectedServer.hostKeyMismatch" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
-                <div class="flex flex-wrap items-start justify-between gap-3">
-                  <div class="grid min-w-0 gap-1">
-                    <strong>{{ t('serversPage.hostKeyMismatchTitle') }}</strong>
-                    <p class="m-0">{{ t('serversPage.hostKeyMismatchDescription') }}</p>
-                  </div>
-                  <Button size="sm" variant="danger" :loading="pendingOperation === 'trustHostKey'" @click="confirmTrustHostKey(selectedServer)"><KeyRound />{{ t('serversPage.trustHostKey') }}</Button>
-                </div>
-              </div>
-              <div v-if="selectedServer.lastError" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ selectedServer.lastError }}</div>
-            </div>
+  <ServerFormDialog
+    v-model:open="serverDialog"
+    :editing="editing"
+    :credentials="credentials"
+    :credential-error="credentialError"
+    @saved="handleSaved"
+    @refresh-credentials="loadCredentials"
+  />
 
-            <div class="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_320px]">
-              <div class="grid gap-4">
-                <section class="rounded-2xl border border-border bg-muted p-4">
-                  <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.connection') }}</h3>
-                  <dl class="mt-3 grid grid-cols-2 gap-3 text-sm max-md:grid-cols-1">
-                    <div><dt>{{ t('serversPage.host') }}</dt><dd>{{ selectedServer.host }}</dd></div>
-                    <div><dt>{{ t('serversPage.port') }}</dt><dd>{{ selectedServer.port }}</dd></div>
-                    <div><dt>{{ t('serversPage.credential') }}</dt><dd>{{ credentialLabel(selectedServer.credentialId, credentials) || t('common.notAvailable') }}</dd></div>
-                    <div><dt>{{ t('serversPage.dockerHost') }}</dt><dd>{{ selectedServer.dockerHost || t('common.notAvailable') }}</dd></div>
-                  </dl>
-                </section>
-
-                <section class="rounded-2xl border border-border bg-muted p-4">
-                  <div class="flex flex-wrap items-center justify-between gap-3">
-                    <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.metrics') }}</h3>
-                    <div class="flex flex-wrap items-center gap-2">
-                      <Select v-model="metricsRange" :options="metricsRangeOptions" class="w-24" />
-                      <AutoRefreshControl
-                        :off-label="t('autoRefresh.off')"
-                        :short-label="t('autoRefresh.5s')"
-                        :long-label="t('autoRefresh.10s')"
-                        :hint-label="t('autoRefresh.hint')"
-                      />
-                      <Button size="sm" variant="ghost" :loading="metricsLoading" @click="loadMetrics(true)"><RefreshCcw />{{ t('common.refresh') }}</Button>
-                    </div>
-                  </div>
-                  <LoadingOverlay v-if="metricsLoading && !metrics" />
-                  <p v-else-if="metricsError && !metrics" class="mt-3 text-sm text-danger">{{ metricsError }}</p>
-                  <template v-else-if="metrics">
-
-                    <div class="mt-4 grid gap-3 xl:grid-cols-2">
-                      <div v-for="panel in metricChartPanels" :key="panel.key" class="rounded-xl border border-border bg-card p-3">
-                        <div class="flex items-center justify-between gap-3">
-                          <span class="text-xs font-medium text-muted-foreground">{{ panel.label }}</span>
-                          <span class="truncate text-sm font-semibold text-foreground">{{ panel.current }}</span>
-                        </div>
-                        <div class="mt-2 h-28 min-w-0">
-                          <MetricLineChart :labels="panel.labels" :series="panel.series" :value-kind="panel.valueKind" />
-                        </div>
-                      </div>
-                    </div>
-                  </template>
-                </section>
-                <section class="rounded-2xl border border-border bg-muted p-4">
-                  <div class="flex flex-wrap items-center justify-between gap-2"><h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.recentOperations') }}</h3><Button size="sm" variant="ghost" @click="router.push({ path: '/activity', query: { resourceType: 'server', resourceId: selectedServer.id } })">{{ t('activity.relatedLogs') }}</Button></div>
-                  <div class="mt-3 grid gap-2 text-sm text-muted-foreground">
-                    <span>{{ t('serversPage.lastChecked') }}: {{ formatDateTime(selectedServer.lastCheckedAt) || t('common.never') }}</span>
-                    <span>{{ t('serversPage.updatedAt') }}: {{ formatDateTime(selectedServer.updatedAt) || t('common.never') }}</span>
-                    <div v-if="selectedServer.initialTaskId" class="grid gap-1">
-                      <div class="flex flex-wrap items-center justify-between gap-2">
-                        <span>{{ t('serversPage.initialTask') }}</span>
-                        <span class="flex items-center gap-2">
-                          <StatusBadge v-if="initialTask" :status="initialTask.status" domain="task" :label="t(`tasksPage.status.${initialTask.status}`)" />
-                          <Button size="sm" variant="ghost" @click="router.push({ path: '/activity', query: { executionId: selectedServer.initialTaskId } })">{{ t('activity.relatedLogs') }}</Button>
-                        </span>
-                      </div>
-                      <span class="panel-mono text-xs">{{ selectedServer.initialTaskId }}</span>
-                      <p v-if="initialTaskLoading && !initialTask" class="m-0 text-xs">{{ t('serversPage.agentTaskLoading') }}</p>
-                      <p v-if="initialTaskError" class="m-0 break-words text-danger">{{ initialTaskError }}</p>
-                      <p v-else-if="initialTask?.error" class="m-0 break-words text-danger">{{ initialTask.error }}</p>
-                    </div>
-                  </div>
-                </section>
-              </div>
-              <aside class="grid content-start gap-3">
-                <section class="relative rounded-2xl border border-border bg-muted p-4">
-                  <div class="flex min-w-0 flex-wrap items-center justify-between gap-2">
-                    <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.agent') }}</h3>
-                    <StatusBadge v-if="agentTask" :status="agentTask.status" domain="task" :label="t(`tasksPage.status.${agentTask.status}`)" />
-                  </div>
-                  <p class="mt-2 text-sm text-muted-foreground">{{ agentText(selectedServer) }}</p>
-                  <LoadingOverlay v-if="agentTaskLoading && !agentTask" :label="t('serversPage.agentTaskLoading')" />
-                  <div v-if="agentTask" class="mt-3 grid min-w-0 gap-2 rounded-xl border border-border bg-card p-3 text-xs">
-                    <div class="flex min-w-0 flex-wrap items-center justify-between gap-2">
-                      <strong class="text-foreground">{{ t('serversPage.agentTaskCurrentStage') }}</strong>
-                      <span class="text-muted-foreground">{{ agentTaskStageLabel(agentTask.stage) }}</span>
-                    </div>
-                    <p v-if="agentTask.error" class="m-0 break-words text-danger">{{ agentTask.error }}</p>
-                    <div class="grid min-w-0 gap-1">
-                      <div class="flex flex-wrap items-center justify-between gap-2"><strong class="text-foreground">{{ t('serversPage.agentTaskRecentLogs') }}</strong><Button size="sm" variant="ghost" @click="router.push({ path: '/activity', query: { executionId: agentTask.id } })">{{ t('activity.relatedLogs') }}</Button></div>
-                      <pre aria-live="polite" class="m-0 max-h-48 min-w-0 overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words rounded-lg bg-muted p-2 text-[11px] text-muted-foreground [overflow-wrap:anywhere]">{{ visibleAgentTaskLogs.map((line) => `[${line.stream}] ${formatAgentTaskLog(line.line)}`).join('\n') || t('serversPage.agentTaskNoLogs') }}</pre>
-                    </div>
-                  </div>
-                  <div v-if="agentTaskError" class="mt-3 grid gap-2 rounded-xl border border-danger-border bg-danger-bg p-3 text-xs text-danger">
-                    <span class="break-words">{{ agentTaskError }}</span>
-                    <Button size="sm" variant="secondary" :loading="agentTaskLoading" @click="loadAgentDeployment(true)"><RefreshCcw />{{ t('common.retry') }}</Button>
-                  </div>
-                  <p v-else-if="!agentTask && !agentTaskLoading" class="mt-3 text-xs text-muted-foreground">{{ t('serversPage.agentTaskNoHistory') }}</p>
-                  <div class="mt-3 grid gap-2">
-                    <Button :loading="pendingOperation === 'agent'" @click="deployAgent(selectedServer)"><ServerCog />{{ t('serversPage.deployAgent') }}</Button>
-                    <Button :disabled="!canRunPrivilegedOperation(selectedServer)" :loading="pendingOperation === 'restart'" @click="confirmRestart(selectedServer)"><PlayCircle />{{ t('serversPage.restart') }}</Button>
-                  </div>
-                </section>
-                <section class="rounded-2xl border border-border bg-muted p-4">
-                  <div class="flex min-w-0 flex-wrap items-center justify-between gap-2">
-                    <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.tailscale.title') }}</h3>
-                    <Badge v-if="selectedServer.tailscaleEnabled" :tone="tailscaleTone(selectedServer)">{{ t(tailscaleStatusKey(selectedServer)) }}</Badge>
-                  </div>
-                  <p v-if="!selectedServer.tailscaleEnabled" class="mt-2 text-sm text-muted-foreground">{{ t('serversPage.tailscale.disabledHint') }}</p>
-                  <template v-else>
-                    <div class="mt-3 grid gap-2 text-sm">
-                      <label class="flex items-center justify-between gap-3">{{ t('serversPage.tailscale.enabled') }}<Switch :model-value="selectedServer.tailscaleEnabled" disabled :label="t('serversPage.tailscale.enabled')" /></label>
-                      <label class="flex items-center justify-between gap-3">{{ t('serversPage.tailscale.preferAgent') }}<Switch :model-value="selectedServer.tailscalePreferAgent" disabled :label="t('serversPage.tailscale.preferAgent')" /></label>
-                      <label class="flex items-center justify-between gap-3">{{ t('serversPage.tailscale.preferInterconnect') }}<Switch :model-value="selectedServer.tailscalePreferInterconnect" disabled :label="t('serversPage.tailscale.preferInterconnect')" /></label>
-                    </div>
-                    <dl class="mt-3 grid grid-cols-2 gap-3 text-sm max-md:grid-cols-1">
-                      <div><dt>{{ t('serversPage.tailscale.hostname') }}</dt><dd>{{ tailscaleTrait(selectedServer, 'hostname') || t('common.notAvailable') }}</dd></div>
-                      <div><dt>{{ t('serversPage.tailscale.updatedAt') }}</dt><dd>{{ formatDateTime(tailscaleTrait(selectedServer, 'updatedAt'), t('common.never')) }}</dd></div>
-                      <div><dt>{{ t('serversPage.tailscale.ipv4') }}</dt><dd>{{ tailscaleTrait(selectedServer, 'ipv4') || t('common.notAvailable') }}</dd></div>
-                      <div><dt>{{ t('serversPage.tailscale.ipv6') }}</dt><dd>{{ tailscaleTrait(selectedServer, 'ipv6') || t('common.notAvailable') }}</dd></div>
-                    </dl>
-                    <p v-if="tailscaleTrait(selectedServer, 'lastError')" class="mt-3 grid gap-1 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
-                      <strong>{{ t('serversPage.tailscale.lastError') }}</strong>
-                      <span class="break-words">{{ tailscaleTrait(selectedServer, 'lastError') }}</span>
-                    </p>
-                  </template>
-                  <Button class="mt-3 w-full" :disabled="!selectedServer.tailscaleEnabled" :loading="pendingOperation === 'tailscale'" @click="applyServerTailscale(selectedServer)"><RefreshCcw />{{ t('serversPage.tailscale.apply') }}</Button>
-                </section>
-                <section class="rounded-2xl border border-border bg-muted p-4">
-                  <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.privilegeAndSecurity') }}</h3>
-                  <p class="mt-2 text-sm text-muted-foreground">{{ privilegeText(selectedServer) }}</p>
-                </section>
-              </aside>
-            </div>
-          </div>
-        </article>
-      </main>
-      </template>
-    </MasterDetailLayout>
-
-    <ServerFormDialog
-      v-model:open="serverDialog"
-      :editing="editing"
-      :credentials="credentials"
-      :credential-error="credentialError"
-      @saved="handleSaved"
-      @refresh-credentials="loadCredentials"
-    />
-
-    <Dialog v-model:open="confirmDialog" :title="t('serversPage.deleteServer')" :description="confirmTarget ? t('serversPage.deleteServerDescription', { name: confirmTarget.name }) : ''" :close-label="t('common.close')">
-      <div class="flex gap-3 rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">
-        <AlertTriangle class="size-4 shrink-0" />
-        <span>{{ t('serversPage.deleteServerImpact') }}</span>
-      </div>
-      <template #footer>
-        <Button variant="secondary" @click="confirmDialog = false">{{ t('common.cancel') }}</Button>
-        <Button variant="danger" :loading="pendingOperation === 'default'" @click="deleteSelected">{{ t('common.delete') }}</Button>
-      </template>
-    </Dialog>
-
-    <ConfirmDialog
-      :open="Boolean(confirmOperation)"
-      :title="confirmOperation === 'restart' ? t('serversPage.confirmRestartTitle') : t('serversPage.confirmTrustHostKeyTitle')"
-      :description="confirmTarget ? (confirmOperation === 'restart' ? t('serversPage.confirmRestartDescription', { name: confirmTarget.name }) : t('serversPage.confirmTrustHostKeyDescription', { name: confirmTarget.name })) : ''"
-      :impact="confirmOperation === 'restart' ? t('serversPage.confirmRestartImpact') : t('serversPage.confirmTrustHostKeyImpact')"
-      tone="danger"
-      :loading="Boolean(pendingOperation)"
-      :confirm-label="t('common.confirm')"
-      :cancel-label="t('common.cancel')"
-      :require-checkbox="confirmOperation === 'trustHostKey'"
-      :checkbox-label="confirmOperation === 'trustHostKey' ? t('serversPage.trustHostKeyCheckbox') : t('serversPage.confirmCheckbox')"
-      @update:open="(value) => { if (!value) confirmOperation = null }"
-      @confirm="runConfirmedOperation"
-      @cancel="confirmOperation = null"
-    />
-  </ConsolePage>
+  <ConfirmDialog
+    :open="Boolean(confirmTarget)"
+    :title="t('serversPage.deleteServer')"
+    :description="confirmTarget ? t('serversPage.deleteServerDescription', { name: confirmTarget.name }) : ''"
+    :impact="t('serversPage.deleteServerImpact')"
+    tone="danger"
+    :loading="deleting"
+    :confirm-label="t('common.delete')"
+    :cancel-label="t('common.cancel')"
+    :checkbox-label="t('serversPage.confirmCheckbox')"
+    @update:open="(value) => { if (!value) confirmTarget = null; }"
+    @confirm="deleteSelected"
+    @cancel="confirmTarget = null"
+  />
 </template>
-
-<style scoped>
-dt {
-  margin: 0 0 4px;
-  color: var(--panel-text-muted);
-  font-size: 12px;
-}
-
-dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-  color: var(--panel-text);
-  font-weight: 600;
-}
-</style>

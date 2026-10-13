@@ -15,9 +15,9 @@
 - Searchable master lists send `q` to the backend and reset to page 1 when the query changes.
 - Async resource and DNS refresh actions wait for task completion and then reload the local snapshot. GET lists are never implicit refresh commands.
 - 主列表页（servers、credentials、applications、dns、certificates、activity）加载失败时在列表区显示错误空态（common.loadFailed + 错误详情 + 重试按钮），不得把加载失败伪装成“暂无数据”。
-- 资源页（packages/containers/images/networks/volumes）与安全页（UFW/fail2ban）的区块加载失败同样用 error/actionError 进入错误空态而不是“暂无数据”；DNS 记录区的 recordsError 必须在记录表格内渲染错误 + 重试，不能是死状态。
+- 资源与安全能力（packages/containers/images/networks/volumes 与 UFW/fail2ban）自 2026-10-13 起位于服务器详情 tabs；对应 tab 的加载失败同样进入错误空态而不是“暂无数据”；DNS 记录区的 recordsError 必须在记录表格内渲染错误 + 重试，不能是死状态。
 - 证书页（domains/self-signed/keys）的 page、选中项、搜索词同步 URL query，初始化从 URL 恢复，搜索词通过 q 传给后端列表接口；密钥资产批量导入是独立入口（asset-preflight 对话框 + FileUploadButton），存在冲突时执行前必须经显式危险确认（requiresDangerConfirm），不能直接以 confirmDanger=true 执行。
-- servers/credentials 主从工作台的搜索、分页与选中项同步到 URL query，并在刷新/回退时恢复；任务中心详情（steps/logs）加载失败显示错误 + 重试，与“无步骤/无日志”空态分离。
+- 实体工作台（servers/credentials/applications/dns/certificates）的搜索、分页、选中项与详情 tab 同步到 URL query，并在刷新/回退时恢复；表格 + 覆盖式详情由 `TableDetailLayout` 承担，打开详情创建历史、关闭清参数（`UI-SHELL-059/060`）。任务中心详情（steps/logs）加载失败显示错误 + 重试，与“无步骤/无日志”空态分离。
 - 服务器重启、重置 JWT secret、清除待处理还原等危险操作必须经 danger 确认对话框并说明影响范围（UFW 安装与启用已不再是手动操作，见 `AGT-FW-001..006`）；维护页在 applying 阶段隐藏“清除待处理还原”按钮。
 - 概览页多服务器指标按时间戳对齐后聚合（不按数组下标）；进入编辑态提供取消/放弃按钮与路由离开保护；卡片删除需确认；containerUpdates 卡片当前展示“指标陈旧主机”计数（数据源未提供容器更新计数）。多服务器折线中某服务器缺失的时间点渲染为空缺（gap），不填充 0。
 - 设置页保存语言时同步前端 i18n locale（setLocale + localStorage panel.locale），并同步 `<html lang>`（setLocale 与 index.html 首帧内联脚本都会写 documentElement.lang，保证 Chrome 翻译提示/屏幕阅读器识别正确语言）；数字字段带 min/范围就地校验；关闭加密导出显示身份可恢复性警示；还原文件选择使用 FileUploadButton。
@@ -38,7 +38,7 @@
 - 自有 UI primitives：`web/src/components/ui/`
 - 外壳与导航：`web/src/components/shell/`；AppShell 一级菜单顺序为「概览 → 资产 → 应用 → 资源 → 设置」，定义在 `web/src/components/shell/navModel.ts`。
 - 页面模板：`web/src/components/templates/`
-- 一级对象选择工作台统一使用 `web/src/components/templates/MasterDetailLayout.vue`：`xl` 及以上左侧选择区固定 `360px`，较窄宽度折叠为单列；组件只负责双栏几何和溢出保护，业务页面继续负责面板视觉与内部滚动。当前接入 servers、credentials、applications、certificates、dns、tasks、security、resources；settings 导航、tasks 内层列表和 AppShell 导航保持各自布局。
+- 实体工作台统一使用 `web/src/components/templates/TableDetailLayout.vue`（表格 + 覆盖式详情）：列表全宽表格，行操作列打开详情；`activity` 过渡期继续使用 `MasterDetailLayout`。组件只负责几何、可见性与进场，业务页面继续负责面板视觉与内部滚动。当前接入 servers（含资源/安全 tabs）、credentials、applications、dns、certificates；settings 导航、tasks 内层列表和 AppShell 导航保持各自布局。
 - 路由：`web/src/router/index.ts`
 - API client：`web/src/api/client.ts`
 - Session 基座：`web/src/stores/session.ts`
@@ -53,8 +53,8 @@
 - 等待网络接口响应的加载效果统一使用 `web/src/components/ui/LoadingOverlay.vue` 或既有骨架/按钮 loading；文本加载位置不得只显示文字。
 - 所有异步数据列表统一为「骨架/加载态 → 内容交错填充」：加载期按页面结构显示 Skeleton（`Table` 自带表格骨架行），数据就绪后经 `motion-stagger` + `motion-reveal` / `motion-table-row` 播放逐项进场动效（与 activity 列表一致）；已有内容刷新不重放。
 - 列表、详情、轮询等异步加载必须使用 `createLatestRequestGuard` 或 AbortController 丢弃过期响应；轮询必须防重入、标签页不可见时暂停轮询，刷新按钮应覆盖其对应面板的全部数据源。
-- 新增或替换跨页面同类交互时，优先复用 `web/src/components/ui/` 的 SearchInput、PaginationBar、ConfirmDialog、FileUploadButton、DownloadButton、StatusBadge，以及 `web/src/components/patterns/` 的 ServerContextSelector、ServerMultiPicker、AutoRefreshControl、AssetFileManager；适用边界见 `docs/agents/specifications/frontend/interaction-patterns.md`。
-- `web/src/views/applications/index.vue`、`web/src/views/tasks/index.vue`、`web/src/views/security/index.vue` 与 `web/src/views/resources/index.vue` 已开始接入统一 patterns：搜索使用 `SearchInput`，任务分页使用 `PaginationBar`，任务/应用状态使用 `StatusBadge`，应用/设施服务器多选使用 `ServerMultiPicker`，安全/资源服务器上下文使用单一 `ServerContextSelector`，持久化与文件内容操作使用 `DownloadButton` / `FileUploadButton`。应用和设施编辑器采用同一连续纵向瀑布流：所有配置区在一个编辑正文中按业务顺序展开，正文独立滚动，右侧保留摘要；不得恢复分区切换、分页卡片或隐藏其他配置区的交互。后续页面修改不得在 `ServerContextSelector` 上方叠加服务器 Select 下拉。
+- 新增或替换跨页面同类交互时，优先复用 `web/src/components/ui/` 的 Table、TableDetailLayout、SearchInput、PaginationBar、ConfirmDialog、FileUploadButton、DownloadButton、StatusBadge，以及 `web/src/components/patterns/` 的 ServerMultiPicker、AutoRefreshControl、AssetFileManager；适用边界见 `docs/agents/specifications/frontend/interaction-patterns.md`。
+- `web/src/views/applications/index.vue`、`web/src/views/servers/index.vue`（含 `tabs/`）等页面已接入统一 patterns：搜索使用 `SearchInput`，列表使用 `Table` + 覆盖式详情，行操作使用 `Dropdown`/`IconButton`，任务/应用状态使用 `StatusBadge`，应用/设施服务器多选使用 `ServerMultiPicker`，持久化与文件内容操作使用 `DownloadButton` / `FileUploadButton`。应用和设施编辑器采用同一连续纵向瀑布流：所有配置区在一个编辑正文中按业务顺序展开，正文独立滚动，右侧保留摘要；不得恢复分区切换、分页卡片或隐藏其他配置区的交互。单服务器上下文选择器（原 `ServerContextSelector`）已删除，服务器操作一律经服务器详情 tabs 进入。
 - 图标统一使用 `@lucide/vue`。
 - 构建链路：路由组件全部懒加载（`component: () => import(...)`），每个页面族独立 chunk，初始包只含 AppShell 外壳与共享依赖；`web/vite.config.ts` 通过 `build.rollupOptions.output.manualChunks` 固定拆分 `vue-vendor`（vue/vue-router/pinia）、`code-editor`（@codemirror/*）、`echarts`、`yaml` 等大依赖块，保持各 chunk 低于 500 kB 警告阈值。新增页面族路由必须继续使用懒加载，不得恢复静态组件导入。
 - 主题支持 `system` / `light` / `dark` 明暗模式，以及 `lighthouse`（灯塔，默认）/ `ocean`（蔚蓝）两套配色方案，分别通过 `data-theme` / `data-scheme` 和 CSS 变量运行；配色偏好保存在 localStorage `panel.theme.scheme`。
@@ -69,10 +69,8 @@
 每个页面族必须有独立入口目录，不得作为参数挂到同一个通用页面：
 
 - `web/src/views/overview/`
-- `web/src/views/servers/`
+- `web/src/views/servers/`（含 `tabs/` 资源与安全能力）
 - `web/src/views/credentials/`
-- `web/src/views/security/`
-- `web/src/views/resources/`
 - `web/src/views/applications/`
 - `web/src/views/dns/`
 - `web/src/views/certificates/`
@@ -97,18 +95,18 @@
 `web/src/views/overview/`、`web/src/views/servers/`、`web/src/views/credentials/` 已替换阶段占位：
 
 - 概览页是独立 Dashboard：左侧健康、容量、任务、安全摘要和可配置卡片；右侧 sticky 风险队列与快捷入口。正式 API 使用 `/api/v1/overview`、`/api/v1/overview/cards`、`/api/v1/overview/cards/{cardId}/data`；卡片区域是 6 列整数网格，`width`/`height` 表示 1x1 方格跨度（宽度 1-6，高度 1-4），卡片尺寸决定展示密度：小卡显示核心数字，中大卡显示趋势摘要或折线图。指标卡数据必须由服务端按卡片 kind 投影并按 range/服务器数量降采样为固定时间桶（响应带 `bucketSeconds`），前端在数据落地时一次性派生图表与摘要缓存，渲染期不得重复对齐、聚合或使用参数展开求最大值，保证大服务器量和大时间范围下页面不卡死。指标卡元信息必须显示实际服务器数量；多服务器指标不得只展示无来源的聚合单线，图表按服务器绘制独立折线，并在鼠标悬停时通过 tooltip 显示时间、服务器名和对应数值。图表 tooltip 必须挂到页面级浮层而非限制在卡片内部，并使用 Panel popover token，避免被卡片滚动或 `overflow` 裁切。页面操作使用“编辑”进入布局编辑模式，编辑时允许拖动重排（经过目标卡片时实时更新顺序预览）、拖拽缩放、添加/删除卡片，并通过单卡编辑按钮调整类型、尺寸、时间范围和服务器范围；网络方向只在网络卡片中出现。服务器多选写入 `serverIds`，空数组表示全部服务器。退出编辑时统一保存布局。单卡失败留在卡片内，不在普通浏览态提供“查看/重试”等对象操作。布局上禁止用横向滚动兜底，卡片跨列必须受容器宽度保护，右侧栏必须在可用空间内收缩或在较窄宽度换到下方。
-- 服务器页是运维主从工作台：`GET /api/v1/servers` 只加载列表摘要；选择或编辑服务器时通过 `GET /api/v1/servers/{id}` 按需加载完整详情。列表行展示 reachability、Agent 和权限信号；详情区展示连接、Agent、最新指标、最近操作，并接入创建、编辑、探测、测试连接、删除、重启、Agent 部署、UFW 安装。其他正式 API 使用 `/api/v1/servers/probe`、`/api/v1/servers/{id}/test`、`/restart`、`/agent/deploy`、`/agent/certificate`、`/metrics`、`/ufw/install`；指标展示使用 `/metrics` 返回的最新采样，不要求服务器列表携带指标详情。
+- 服务器页是运维工作台：列表为表格（`GET /api/v1/servers` 摘要 + 行操作），点击「详情」覆盖列表；选择或编辑服务器时通过 `GET /api/v1/servers/{id}` 按需加载完整详情。详情一级 tab 覆盖连接、指标、Agent、Tailscale 与资源/安全能力，并接入创建、编辑、探测、测试连接、删除、重启、Agent 部署与防火墙规则维护。其他正式 API 使用 `/api/v1/servers/probe`、`/api/v1/servers/{id}/test`、`/restart`、`/agent/deploy`、`/agent/certificate`、`/metrics`、`/ufw`；指标展示使用 `/metrics` 返回的最新采样，不要求服务器列表携带指标详情。
 - 服务器添加/编辑表单填写 `ipv4`/`ipv6`（至少一个，必须是 IP 字面量），连接地址由后端派生并只读展示，不再提供直接填写 host 的输入。
 - SSH 凭据页是独立 vault：支持密码/私钥创建编辑、secret 留空不更新、删除前引用影响、引用服务器测试。后端当前没有独立凭据测试或引用预检接口，前端用 `/api/v1/servers` 计算引用影响，并仅在存在引用服务器时通过 `/api/v1/servers/{id}/test` 测试；无引用时测试入口禁用。
 - Mock 模式覆盖同名正式路径，包含正常、空、错误、冲突、长文本、不可达服务器、只读凭据、Agent 不同状态和十几台服务器的规模化样本；未实现路径继续返回 `mock_route_not_found`。
 - `ApiClient` 已补充 204 No Content 支持，以匹配服务器/凭据 DELETE 真实响应。
 
-### 阶段 4A：安全 + 资源
+### 阶段 4A：安全 + 资源（2026-10-13 并入服务器详情）
 
-`web/src/views/security/` 与 `web/src/views/resources/` 已替换阶段占位：
+`web/src/views/security/` 与 `web/src/views/resources/` 已随服务器详情 tabs 落地而删除：
 
-- 防火墙与 Fail2Ban 归入“资源”一级菜单。`/resources/firewall` 使用 UFW 规则/状态矩阵与「安装与启用由 Agent 部署自动完成」说明，不再提供安装/启用入口；`/resources/fail2ban` 仅 dev 构建可直达和展示，非 dev 访问会跳回 `/resources/firewall`。旧 `/security/*` 只保留重定向。正式 API 使用 `/api/v1/servers/{id}/ufw`、`/ufw/rules`、`/ufw/enable`、`/ufw/install`、`/fail2ban`、`/fail2ban/enable`、`/fail2ban/release`、`/fail2ban/install`。
-- 资源页是服务器上下文资源维护台：软件包、容器、镜像、网络、卷是 `/resources/packages|containers|images|networks|volumes` 独立路由页面，不使用页内 tabs。容器、镜像、网络、卷 GET 只读本地快照；镜像、网络、卷刷新按钮分别提交 `/images/refresh`、`/networks/refresh`、`/volumes/refresh` 异步任务，不得通过重复 GET 隐式访问节点。网络和卷首次打开且尚无本地快照时，前端会自动提交一次对应刷新任务，避免首屏把“尚未刷新”误报成“服务器未上报”。镜像应用升级接 `/api/v1/images/upgrade-selected|upgrade-all`。镜像标签需兼容 Docker 悬空镜像 `repoTags` 为 `null` 的情况，回退到 `reference` 或镜像 ID。容器页对应用托管容器直接开放 start/stop/restart/delete，并展示“由应用托管，协调可能自动恢复”提示；卡片操作行换行时不得溢出隐藏。软件包升级批量操作只在存在选中项时出现（无选中时隐藏“升级已选”按钮与已选计数），符合“无选中即消失”的批量操作约定。
+- 防火墙与 Fail2Ban 成为服务器详情的一级 tab（内部分段 UFW / Fail2Ban，Fail2Ban 仅 dev 可见）。UFW 提供规则/状态与「安装与启用由 Agent 部署自动完成」说明，不再提供安装/启用入口。API 使用 `/api/v1/servers/{id}/ufw`、`/ufw/rules`、`/fail2ban`、`/fail2ban/enable`、`/fail2ban/release`、`/fail2ban/install`。
+- 软件包、容器、镜像、网络、卷是服务器详情的资源 tabs，不再使用独立路由。容器、镜像、网络、卷 GET 只读本地快照；镜像、网络、卷刷新按钮分别提交 `/images/refresh`、`/networks/refresh`、`/volumes/refresh` 异步任务，不得通过重复 GET 隐式访问节点。网络和存储卷首次打开且尚无本地快照时，前端会自动提交一次对应刷新任务，避免首屏把“尚未刷新”误报成“服务器未上报”。镜像应用升级接 `/api/v1/images/upgrade-selected|upgrade-all`。镜像标签需兼容 Docker 悬空镜像 `repoTags` 为 `null` 的情况，回退到 `reference` 或镜像 ID。容器页对应用托管容器直接开放 start/stop/restart/delete，并展示“由应用托管，协调可能自动恢复”提示。软件包升级批量操作只在存在选中项时出现（无选中时隐藏“升级已选”按钮与已选计数），符合“无选中即消失”的批量操作约定。
 - 网络资源当前后端只提供列表接口，页面只读展示拓扑并禁用删除，不使用 Mock 伪装不存在的能力。
 - Mock 模式覆盖同名正式路径，包含正常、空、错误、权限不足、Agent 不兼容、不可达、长日志和危险确认状态；未实现路径继续返回 `mock_route_not_found`。
 
@@ -143,7 +141,7 @@
 
 - 默认事件视图与按操作视图读取同一不可变日志；系统事件不要求 operationId。事件列表按接收顺序分页，操作列表由后端聚合，不在前端拼接当前页事件。
 - 筛选、视图、cursor、snapshotSeq、operationId/eventId/executionId 进入 URL；资源入口携带 resourceType/resourceId。请求使用迟到响应隔离；切换详情立即清空原对象内容。
-- MasterDetailLayout 保持标准双栏几何；中等桌面选择对象后切换详情，列表与详情内部独立滚动，窄屏恢复页面滚动。
+- `TableDetailLayout` 保持表格 + 覆盖详情几何：列表在自身容器内滚动，覆盖详情覆盖整个内容区并在内部滚动；窄屏表格允许容器内横滚并恢复页面级滚动。
 - EventTimeline 展示请求、协调决策、步骤、输出与结果，异常默认展开，连续同一步骤输出折叠；原始技术标识折叠显示。筛选异常后可读取未筛选前后文。
 - PaginationBar 的 cursor 模式不显示虚假页码或页数。每批至多 100 条，时间线按快照切换相邻较早/较新批次以限制 DOM，只保留当前最多 100 条事件，历史导航只保存游标字符串而不缓存正文；完整历史可继续翻批或按固定快照导出 JSONL。
 - 日志页仅在首次打开和用户操作时读取，保留列表手动刷新与详情“刷新记录”；不接入 AutoRefreshControl/useAutoRefresh，不发起 tail/summary 轮询，不显示统计或新证据提示。
@@ -157,7 +155,7 @@
 
 `web/src/views/dns/` 与 `web/src/views/certificates/` 已替换阶段占位：
 
-- DNS 页是域名主从工作台：左侧域名/Provider 状态与搜索，右侧 Cloudflare 凭据说明、域名编辑/删除、记录同步、新增/编辑/删除记录和 Provider 错误区块。正式 API 使用 `/api/v1/dns/domains` 与 `/api/v1/dns/domains/{id}/records`。
+- DNS 页是域名表格 + 覆盖式详情：表格列显示域名/Provider 状态与更新时间，详情内提供 Cloudflare 凭据说明、域名编辑/删除、记录同步、记录表格的新增/编辑/删除与 Provider 错误区块。正式 API 使用 `/api/v1/dns/domains` 与 `/api/v1/dns/domains/{id}/records`。
 - 域名证书页位于 `/certificates/domains`：展示 ACME 证书覆盖域名、签发任务入口、续签、删除、到期和失败状态。正式 API 使用 `/api/v1/certificates` 与 `/api/v1/certificates/{id}/renew`。
 - 自签证书页位于 `/certificates/self-signed`：管理用户 CA/leaf，支持生成 CA、生成 leaf、重签/重生成和删除。正式 API 使用 `/api/v1/self-signed-cas`、`/api/v1/self-signed-certificates`、`/api/v1/self-signed-certificates/{id}/renew`。
 - 密钥资产页位于 `/certificates/keys`：管理 CA/TLS/SSH key asset，支持生成、单资产导入、导出、下载、批量导入预检/执行、TLS 重签、SSH 重生成和删除。`GET /api/v1/key-assets` 和自签证书列表使用不含证书/私钥密文、public key 正文、metadata 与引用明细的摘要查询；引用安全校验在删除等定向操作中执行，不允许列表扫描全部应用 YAML 或反向代理配置。单资产文件与导出归档下载使用 blob 下载，不经 JSON `ApiClient`。

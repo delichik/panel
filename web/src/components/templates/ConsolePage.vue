@@ -1,7 +1,17 @@
 <script setup lang="ts">
 import PageHeader from '@/components/shell/PageHeader.vue';
 
-defineProps<{ title: string; description?: string; backLabel?: string }>();
+const props = withDefaults(defineProps<{
+  title: string;
+  description?: string;
+  backLabel?: string;
+  /**
+   * Scroll the body internally (default). Pages that manage their own region
+   * scrolling (for example a tabbed covered detail with tables) pass false and
+   * keep every panel's scrolling inside its own content area.
+   */
+  bodyScroll?: boolean;
+}>(), { bodyScroll: true });
 const emit = defineEmits<{ back: [] }>();
 </script>
 
@@ -11,7 +21,7 @@ const emit = defineEmits<{ back: [] }>();
       <template v-if="$slots.actions" #actions><slot name="actions" /></template>
       <template v-if="$slots.breadcrumb" #breadcrumb><slot name="breadcrumb" /></template>
     </PageHeader>
-    <div class="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-6 max-lg:overflow-visible max-sm:p-4">
+    <div class="min-h-0 min-w-0 p-6 max-lg:overflow-visible max-sm:p-4" :class="bodyScroll ? 'overflow-y-auto overflow-x-hidden' : 'overflow-hidden'">
       <slot />
     </div>
   </div>

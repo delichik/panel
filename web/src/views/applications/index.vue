@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
-import { AlertTriangle, ClipboardList, Globe2, HardDrive, History, Plus, RefreshCcw, Rocket, Save, Square, Trash2, UploadCloud, Wrench } from '@lucide/vue';
+import { AlertTriangle, ClipboardList, Eye, Globe2, HardDrive, History, MoreHorizontal, Plus, RefreshCcw, Rocket, Save, Square, Trash2, UploadCloud, Wrench } from '@lucide/vue';
 import { applicationsApi } from '@/api/applications';
 import { serversApi } from '@/api/servers';
 import { saveBlobDownload } from '@/api/download';
@@ -11,19 +11,22 @@ import Button from '@/components/ui/Button.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import Dialog from '@/components/ui/Dialog.vue';
 import DownloadButton from '@/components/ui/DownloadButton.vue';
+import Dropdown from '@/components/ui/Dropdown.vue';
+import DropdownItem from '@/components/ui/DropdownItem.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import FileUploadButton from '@/components/ui/FileUploadButton.vue';
+import IconButton from '@/components/ui/IconButton.vue';
 import Input from '@/components/ui/Input.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
 import PaginationBar from '@/components/ui/PaginationBar.vue';
 import Select from '@/components/ui/Select.vue';
 import StatusBadge from '@/components/ui/StatusBadge.vue';
 import Switch from '@/components/ui/Switch.vue';
+import Table from '@/components/ui/Table.vue';
 import Tabs from '@/components/ui/Tabs.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import { useErrorToast, useSuccessToast, useToast } from '@/components/ui/toast';
 import ServerMultiPicker from '@/components/patterns/ServerMultiPicker.vue';
-import ServerContextSelector from '@/components/patterns/ServerContextSelector.vue';
 import TemplateVariableInput from '@/components/patterns/TemplateVariableInput.vue';
 import type { TemplateVariableOption } from '@/components/patterns/templateVariable';
 import StorageShareFacility from './StorageShareFacility.vue';
@@ -33,8 +36,8 @@ import AssetFileManager from '@/components/patterns/AssetFileManager.vue';
 import type { AssetFileAdapter, AssetFileItem } from '@/components/patterns/assetFileManager';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import EditorPage from '@/components/templates/EditorPage.vue';
-import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
-import { useCompactViewport } from '@/composables/useCompactViewport';
+import TableDetailLayout from '@/components/templates/TableDetailLayout.vue';
+import ActivityLink from '@/components/activity/ActivityLink.vue';
 import { useI18n } from '@/i18n';
 import type { ApplicationDto, ApplicationEditPreviewResult, ApplicationEditSession, ApplicationFile, ApplicationRuntime, ApplicationSummaryDto, Diagnostic, PanelFileDefinition, ReverseProxyRule, TemplateVariableDefinition } from '@/types/applications';
 import type { FacilityEditPreviewResult, FacilityEditSession, FacilityRouteDomain, FacilityRoutePath, ReverseProxyConfig, StaticAsset, StorageShareConfig } from '@/types/facilityApps';
@@ -87,6 +90,7 @@ import {
 } from './model';
 import { inferTemplateLanguage, type TemplateLanguage } from './templateLanguage';
 import { archiveName } from './archivePath';
+import { normalizePage } from '@/views/_shared/requestState';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -128,7 +132,7 @@ const storageShareLabelBySource = ref<Record<string, string>>({});
 const storageShareConfig = ref<StorageShareConfig | null>(null);
 const selectedId = ref(String(route.query.application ?? ''));
 const search = ref(String(route.query.search ?? ''));
-const page = ref(1);
+const page = ref(normalizePage(route.query.page));
 const pageSize = 50;
 const totalApplications = ref(0);
 const loading = ref(false);
@@ -143,7 +147,9 @@ const facilities = [
 const error = ref('');
 const actionError = ref('');
 const pending = ref('');
+const rowPendingId = ref('');
 const logsOpen = ref(false);
+const logsTargetId = ref('');
 const confirmOpen = ref(false);
 const confirmKind = ref<'delete' | 'stop'>('delete');
 const confirmTarget = ref('');
@@ -198,8 +204,6 @@ const isFacilityEditor = computed(() => mode.value === 'facilityConfig' && isRev
 const facilityEditing = ref(false);
 const facilityEditingView = computed(() => (mode.value === 'facilityConfig' && isReverseProxyFacility.value) || facilityEditing.value);
 const currentApplicationSummary = computed(() => applications.value.find((item) => item.id === selectedId.value) ?? null);
-/** 紧凑视口（xl 以下）不自动选中首个应用：窄屏应停在列表，由用户进入详情。 */
-const compactViewport = useCompactViewport();
 const currentApplication = computed(() => selectedId.value ? applicationDetails.value[selectedId.value] ?? null : null);
 const selectedApplication = computed(() => currentApplication.value ?? applicationFromSummary(currentApplicationSummary.value) ?? emptyApplication());
 const persistentServerOptions = computed(() => (selectedApplication.value.persistentServers ?? []).map((serverId) => ({ label: serverDisplayName(serverId), value: serverId })));
@@ -217,6 +221,22 @@ const facilityDiff = computed(() => diffFacility(facility.value, facilityDraft))
 const hasBlockingAppDiagnostics = computed(() => hasBlockingDiagnostic(diagnostics.value));
 const hasBlockingFacilityDiagnostics = computed(() => hasBlockingDiagnostic(facilityDiagnostics.value));
 const appRows = computed(() => applications.value.map((app) => ({ app, routes: routeSummary(applicationDetails.value[app.id] ?? emptyApplication()), summary: runtimeSummary(runtimes.value[app.id]) })));
+const detailOpen = computed(() => Boolean(selectedId.value));
+const applicationColumns = computed(() => [
+  { key: 'name', label: t('common.name') },
+  { key: 'status', label: t('common.status'), nowrap: true },
+  { key: 'image', label: t('applicationsPage.imageReferenceColumn'), nowrap: true },
+  { key: 'instances', label: t('applicationsPage.instances'), nowrap: true },
+  { key: 'imageUpdate', label: t('applicationsPage.imageUpdate'), nowrap: true },
+  { key: 'updatedAt', label: t('applicationsPage.updatedAtColumn'), nowrap: true },
+  { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
+]);
+const logsApplication = computed(() => {
+  const target = logsTargetId.value ? applications.value.find((item) => item.id === logsTargetId.value) : null;
+  return target ?? currentApplicationSummary.value;
+});
+const confirmApplication = computed(() => confirmTarget.value ? applications.value.find((item) => item.id === confirmTarget.value) ?? null : null);
+const confirmHasPersistentData = computed(() => confirmTarget.value ? Boolean(applicationDetails.value[confirmTarget.value]?.hasPersistentData) : false);
 const facilityConfigSummary = computed(() => ({
   gateways: facility.value?.deploymentServers.length ?? 0,
   routes: facility.value?.routes ?? 0,
@@ -597,21 +617,32 @@ watch(search, (value) => {
   }, 250);
 });
 
-watch(page, () => {
+watch(page, (value) => {
+  void router.replace({ query: { ...route.query, page: value > 1 ? String(value) : undefined } });
   if (mode.value === 'apps') void loadApplications({ loadSelectedRuntime: true });
+});
+
+watch(() => route.query.application, (value) => {
+  const next = String(value ?? '');
+  if (next !== selectedId.value) selectedId.value = next;
 });
 
 watch(selectedId, async (value) => {
 	persistentServerId.value = '';
   if (value) {
-    await router.replace({ query: { ...route.query, application: value } });
     void loadApplicationDetail(value);
     await loadRuntime(value);
   }
 });
 
-/** 窄屏单视图：返回应用列表并清掉 URL 里的选中项。 */
+function openApplicationDetail(app: ApplicationSummaryDto) {
+  selectedId.value = app.id;
+  void router.push({ query: { ...route.query, application: app.id } });
+}
+
+/** 关闭覆盖详情并清掉 URL 里的选中项。 */
 function backToApplicationList() {
+  if (!selectedId.value) return;
   selectedId.value = '';
   void router.replace({ query: { ...route.query, application: undefined } });
 }
@@ -740,7 +771,9 @@ async function loadApplications(options: { loadSelectedRuntime?: boolean } = {})
     }
     const appIds = new Set(apps.map((item) => item.id));
     applicationDetails.value = Object.fromEntries(Object.entries(applicationDetails.value).filter(([id]) => appIds.has(id)));
-    selectedId.value = apps.some((item) => item.id === selectedId.value) ? selectedId.value : (compactViewport.value ? '' : apps[0]?.id ?? '');
+    if (!route.query.application && selectedId.value && !apps.some((item) => item.id === selectedId.value)) {
+      selectedId.value = '';
+    }
     if (options.loadSelectedRuntime) {
       void loadApplicationDetail(selectedId.value);
       void loadRuntime(selectedId.value);
@@ -945,11 +978,44 @@ function ask(kind: typeof confirmKind.value, target: string) {
   confirmOpen.value = true;
 }
 
+/** 行内删除：先补载完整详情以确认是否存在持久化数据，再进入危险确认。 */
+async function askDelete(app: ApplicationSummaryDto) {
+  if (rowPendingId.value) return;
+  if (!applicationDetails.value[app.id]) {
+    rowPendingId.value = app.id;
+    try {
+      const detail = await applicationsApi.get(app.id);
+      applicationDetails.value = { ...applicationDetails.value, [app.id]: detail };
+    } catch (err) {
+      notifyError(err instanceof Error ? err.message : t('applicationsPage.loadFailed'), err);
+      return;
+    } finally {
+      rowPendingId.value = '';
+    }
+  }
+  ask('delete', app.id);
+}
+
+function openLogsFor(app: ApplicationSummaryDto) {
+  logsTargetId.value = app.id;
+  logsOpen.value = true;
+}
+
+async function updateImageFor(app: ApplicationSummaryDto) {
+  await runOperation('image-update', () => applicationsApi.updateImage(app.id), 'applicationsPage.imageUpdateAccepted', 'applicationsPage.imageUpdateAcceptedWithoutId');
+}
+
+async function deployFor(app: ApplicationSummaryDto) {
+  await runOperation('deploy', () => applicationsApi.deploy(app.id), 'applicationsPage.deployAccepted', 'applicationsPage.deployAcceptedWithoutId', 'applicationsPage.deployNoChange');
+}
+
 async function confirmAction() {
-  const app = selectedApplication.value;
-  if (!currentApplicationSummary.value) return;
+  const app = confirmApplication.value;
+  if (!app) return;
+  const hasPersistentData = Boolean(applicationDetails.value[app.id]?.hasPersistentData);
   if (confirmKind.value === 'delete') {
-    await runOperation('delete', () => applicationsApi.delete(app.id, Boolean(app.hasPersistentData)), 'applicationsPage.deleted');
+    await runOperation('delete', () => applicationsApi.delete(app.id, hasPersistentData), 'applicationsPage.deleted');
+    if (selectedId.value === app.id) backToApplicationList();
   } else {
     await runOperation('stop', () => applicationsApi.stop(app.id), 'applicationsPage.stopAccepted', 'applicationsPage.stopAcceptedWithoutId');
   }
@@ -1749,98 +1815,94 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <ConsolePage v-if="mode === 'apps'" :title="t('routes.applications.title')" :description="t('routes.applications.description')">
-    <template #actions>
-      <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
-      <Button size="sm" variant="primary" @click="router.push('/applications/apps/create')"><Plus />{{ t('applicationsPage.createApplication') }}</Button>
-    </template>
+  <TableDetailLayout v-if="mode === 'apps'" class="h-full" :has-detail="detailOpen">
+    <template #list>
+      <ConsolePage :title="t('routes.applications.title')" :description="t('routes.applications.description')">
+        <template #actions>
+          <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
+          <Button size="sm" variant="primary" @click="router.push('/applications/apps/create')"><Plus />{{ t('applicationsPage.createApplication') }}</Button>
+        </template>
 
-    <MasterDetailLayout class="h-full" :detail-key="selectedId" :has-detail="!!currentApplicationSummary" :back-label="t('common.backToList')" @back="backToApplicationList">
-      <template #master>
-      <aside class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] rounded-2xl border border-border bg-card">
-        <div class="border-b border-border p-4">
+        <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-4 rounded-2xl border border-border bg-card p-4">
           <SearchInput v-model="search" clearable :placeholder="t('applicationsPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
-        </div>
-        <div class="motion-stagger min-h-0 overflow-auto p-2 max-lg:max-h-[60dvh]">
-          <div v-if="loading && !applications.length" class="grid gap-2" aria-hidden="true">
-            <div v-for="item in 7" :key="item" class="grid gap-2 rounded-xl border border-border bg-muted p-3">
-              <div class="flex items-center justify-between gap-2">
-                <div class="motion-skeleton h-4 w-36 rounded bg-muted animate-pulse" />
-                <div class="motion-skeleton h-6 w-20 rounded-full bg-muted animate-pulse" />
-              </div>
-              <div class="motion-skeleton h-3 w-56 max-w-full rounded bg-muted animate-pulse" />
-              <div class="flex gap-1.5">
-                <div class="motion-skeleton h-5 w-20 rounded-full bg-muted animate-pulse" />
-                <div class="motion-skeleton h-5 w-24 rounded-full bg-muted animate-pulse" />
-              </div>
-            </div>
-          </div>
-          <EmptyState v-else-if="error && !appRows.length" :title="t('common.loadFailed')" :description="error">
+          <EmptyState v-if="error && !appRows.length" class="self-start" :title="t('common.loadFailed')" :description="error">
             <template #actions>
               <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
             </template>
           </EmptyState>
-          <EmptyState v-else-if="!appRows.length" :title="t('applicationsPage.emptyApplications')" :description="t('applicationsPage.emptyApplicationsHint')" />
-          <button v-for="row in appRows" v-else :key="row.app.id" type="button" class="motion-list-item mb-2 grid w-full gap-2 rounded-xl border p-3 text-left transition-colors hover:bg-accent" :class="selectedId === row.app.id ? 'border-border-strong bg-muted' : 'border-transparent bg-transparent'" @click="selectedId = row.app.id">
-            <div class="flex items-center justify-between gap-2">
-              <strong class="truncate text-sm text-foreground">{{ row.app.name }}</strong>
-              <StatusBadge :status="applicationStatus(row.app, runtimes[row.app.id])" :tone="statusTone(applicationStatus(row.app, runtimes[row.app.id]))" :label="t(`applicationsPage.status.${applicationStatus(row.app, runtimes[row.app.id])}`)" />
-            </div>
-            <span v-if="!loading && !(rowImageLoading[row.app.id] && !rowImageReference(row.app))" class="truncate text-xs text-muted-foreground">{{ rowImageReference(row.app) || row.app.jobId }}</span>
-            <div v-else class="motion-skeleton h-3 w-56 max-w-full rounded bg-muted animate-pulse" aria-hidden="true" />
-            <div class="flex flex-wrap gap-1.5">
-              <Badge v-if="!loading" tone="info">{{ t('applicationsPage.instancesCount', { count: row.app.instanceCount ?? row.summary.total }) }}</Badge>
-              <div v-else class="motion-skeleton h-5 w-16 rounded-full bg-muted animate-pulse" aria-hidden="true" />
-              <Badge :tone="row.app.imageUpdateAvailable ? 'warning' : 'neutral'">{{ row.app.imageUpdateAvailable ? t('applicationsPage.imageUpdate') : t('applicationsPage.imageCurrent') }}</Badge>
-            </div>
-          </button>
-        </div>
-        <PaginationBar v-model:page="page" class="px-3" :page-size="pageSize" :total="totalApplications" :loading="loading" :previous-label="t('common.previous')" :next-label="t('common.next')" />
-      </aside>
-      </template>
 
-      <template #detail>
-      <main class="grid min-h-0 min-w-0">
-        <article v-if="loading && !applications.length" class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
-          <header class="border-b border-border p-5">
-            <div class="motion-skeleton h-7 w-48 rounded bg-muted animate-pulse" />
-            <div class="motion-skeleton mt-3 h-4 w-80 max-w-full rounded bg-muted animate-pulse" />
-          </header>
-          <div class="min-h-0 overflow-auto p-5">
-            <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
-              <div class="grid gap-4">
-                <div class="grid grid-cols-3 gap-3 max-md:grid-cols-1">
-                  <div v-for="item in 3" :key="item" class="motion-skeleton h-24 rounded-2xl bg-muted animate-pulse" />
-                </div>
-                <div class="motion-skeleton h-72 rounded-2xl bg-muted animate-pulse" />
+          <Table
+            v-else
+            class="max-lg:max-h-[60dvh]"
+            :columns="applicationColumns"
+            :rows="appRows"
+            row-key="id"
+            :active-key="selectedId"
+            :loading="loading && !applications.length"
+            :loading-label="t('common.loading')"
+          >
+            <template #name="{ row }">
+              <strong class="block max-w-[16rem] truncate text-foreground">{{ row.app.name }}</strong>
+            </template>
+            <template #status="{ row }">
+              <StatusBadge :status="applicationStatus(row.app, runtimes[row.app.id])" :tone="statusTone(applicationStatus(row.app, runtimes[row.app.id]))" :label="t(`applicationsPage.status.${applicationStatus(row.app, runtimes[row.app.id])}`)" />
+            </template>
+            <template #image="{ row }">
+              <span v-if="!loading && !(rowImageLoading[row.app.id] && !rowImageReference(row.app))" class="block max-w-[18rem] truncate text-muted-foreground">{{ rowImageReference(row.app) || row.app.jobId }}</span>
+              <div v-else class="motion-skeleton h-3 w-40 rounded bg-muted animate-pulse" aria-hidden="true" />
+            </template>
+            <template #instances="{ row }">
+              <Badge tone="info">{{ t('applicationsPage.instancesCount', { count: row.app.instanceCount ?? row.summary.total }) }}</Badge>
+            </template>
+            <template #imageUpdate="{ row }">
+              <Badge :tone="row.app.imageUpdateAvailable ? 'warning' : 'neutral'">{{ row.app.imageUpdateAvailable ? t('applicationsPage.imageUpdate') : t('applicationsPage.imageCurrent') }}</Badge>
+            </template>
+            <template #updatedAt="{ row }">
+              <span class="text-muted-foreground">{{ formatDateTime(row.app.updatedAt, t('common.never')) }}</span>
+            </template>
+            <template #actions="{ row }">
+              <div class="flex items-center justify-end gap-1">
+                <Button size="sm" variant="secondary" @click="openApplicationDetail(row.app)"><Eye />{{ t('common.details') }}</Button>
+                <Dropdown align="right">
+                  <template #trigger>
+                    <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
+                  </template>
+                  <DropdownItem @click="router.push(`/applications/apps/${encodeURIComponent(row.app.id)}/edit`)"><Wrench />{{ t('common.edit') }}</DropdownItem>
+                  <DropdownItem :disabled="pending === 'deploy'" @click="deployFor(row.app)"><Rocket />{{ t('applicationsPage.sync') }}</DropdownItem>
+                  <DropdownItem :disabled="!row.app.enabled" @click="ask('stop', row.app.id)"><Square />{{ t('applicationsPage.disable') }}</DropdownItem>
+                  <DropdownItem :disabled="!row.app.imageUpdateAvailable || pending === 'image-update'" @click="updateImageFor(row.app)"><UploadCloud />{{ t('applicationsPage.updateImage') }}</DropdownItem>
+                  <DropdownItem @click="openLogsFor(row.app)"><History />{{ t('applicationsPage.logs') }}</DropdownItem>
+                  <DropdownItem tone="danger" :disabled="rowPendingId === row.app.id" @click="askDelete(row.app)"><Trash2 />{{ t('common.delete') }}</DropdownItem>
+                </Dropdown>
               </div>
-              <aside class="grid content-start gap-3">
-                <div v-for="item in 2" :key="item" class="motion-skeleton h-44 rounded-2xl bg-muted animate-pulse" />
-              </aside>
-            </div>
+            </template>
+            <template #empty>
+              <EmptyState :title="t('applicationsPage.emptyApplications')" :description="t('applicationsPage.emptyApplicationsHint')" />
+            </template>
+          </Table>
+
+          <PaginationBar v-model:page="page" :page-size="pageSize" :total="totalApplications" :loading="loading" :previous-label="t('common.previous')" :next-label="t('common.next')" />
+        </div>
+      </ConsolePage>
+    </template>
+
+    <template #detail>
+      <ConsolePage :title="selectedApplication.name" :description="selectedApplication.imageReference || selectedApplication.jobId" :back-label="t('common.backToList')" @back="backToApplicationList">
+        <div v-if="!currentApplicationSummary && !currentApplication" class="grid gap-4">
+          <div class="motion-skeleton h-7 w-48 rounded bg-muted animate-pulse" />
+          <div class="motion-skeleton h-4 w-80 max-w-full rounded bg-muted animate-pulse" />
+          <div class="grid grid-cols-3 gap-3 max-md:grid-cols-1">
+            <div v-for="item in 3" :key="item" class="motion-skeleton h-24 rounded-2xl bg-muted animate-pulse" />
           </div>
-        </article>
-        <EmptyState v-else-if="!currentApplicationSummary" :title="t('applicationsPage.selectApplication')" :description="t('applicationsPage.selectApplicationHint')" />
-        <article v-else class="relative grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
+          <div class="motion-skeleton h-72 rounded-2xl bg-muted animate-pulse" />
+        </div>
+        <article v-else class="relative grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
           <LoadingOverlay v-if="detailLoading && !applicationDetails[selectedId]" />
-          <header class="flex items-start justify-between gap-4 border-b border-border p-5 max-md:grid">
-            <div class="min-w-0">
-              <div class="flex flex-wrap items-center gap-2">
-                <h2 class="m-0 truncate text-xl font-semibold text-foreground">{{ selectedApplication.name }}</h2>
-                <StatusBadge :status="appStatus" :tone="statusTone(appStatus)" :label="t(`applicationsPage.status.${appStatus}`)" />
-                <Badge :tone="selectedApplication.imageUpdateAvailable ? 'warning' : 'neutral'">{{ selectedApplication.imageUpdateAvailable ? t('applicationsPage.imageUpdate') : t('applicationsPage.imageCurrent') }}</Badge>
-              </div>
-              <p class="m-0 mt-1 text-sm text-muted-foreground">{{ selectedApplication.imageReference || selectedApplication.jobId }}</p>
+          <div class="min-w-0">
+            <div class="mb-3 flex flex-wrap items-center gap-2">
+              <StatusBadge :status="appStatus" :tone="statusTone(appStatus)" :label="t(`applicationsPage.status.${appStatus}`)" />
+              <Badge :tone="selectedApplication.imageUpdateAvailable ? 'warning' : 'neutral'">{{ selectedApplication.imageUpdateAvailable ? t('applicationsPage.imageUpdate') : t('applicationsPage.imageCurrent') }}</Badge>
             </div>
-            <div class="flex flex-wrap gap-2">
-              <Button @click="router.push(`/applications/apps/${encodeURIComponent(selectedApplication.id)}/edit`)"><Wrench />{{ t('common.edit') }}</Button>
-              <Button :loading="pending === 'deploy'" @click="runOperation('deploy', () => applicationsApi.deploy(selectedApplication.id), 'applicationsPage.deployAccepted', 'applicationsPage.deployAcceptedWithoutId', 'applicationsPage.deployNoChange')"><Rocket />{{ t('applicationsPage.sync') }}</Button>
-              <Button variant="danger" :disabled="!selectedApplication.enabled" @click="ask('stop', selectedApplication.id)"><Square />{{ t('applicationsPage.disable') }}</Button>
-            </div>
-          </header>
-          <div class="min-h-0 overflow-auto p-5">
-            <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
-              <div class="min-w-0">
                 <Tabs v-model="appTab" :tabs="[{ label: t('applicationsPage.runtime'), value: 'runtime' }, { label: t('applicationsPage.routes'), value: 'routes' }, { label: t('applicationsPage.files'), value: 'files' }]">
                   <section v-if="appTab === 'runtime'" class="grid gap-4">
                     <div class="grid grid-cols-3 gap-3 max-md:grid-cols-1">
@@ -1926,10 +1988,7 @@ onBeforeUnmount(() => {
                 <section class="rounded-2xl border border-border bg-muted p-4">
                   <h3>{{ t('applicationsPage.operations') }}</h3>
                   <div class="mt-3 grid gap-2">
-                    <Button :disabled="!selectedApplication.imageUpdateAvailable" :loading="pending === 'image-update'" @click="runOperation('image-update', () => applicationsApi.updateImage(selectedApplication.id), 'applicationsPage.imageUpdateAccepted', 'applicationsPage.imageUpdateAcceptedWithoutId')"><UploadCloud />{{ t('applicationsPage.updateImage') }}</Button>
-                    <Button @click="openApplicationActivity()"><ClipboardList />{{ t('activity.relatedLogs') }}</Button>
-                    <Button @click="logsOpen = true"><History />{{ t('applicationsPage.logs') }}</Button>
-                    <Button variant="danger" @click="ask('delete', selectedApplication.id)"><Trash2 />{{ t('common.delete') }}</Button>
+                    <ActivityLink resource-type="application" :resource-id="selectedApplication.id" />
                   </div>
                 </section>
                 <section class="rounded-2xl border border-border bg-muted p-4">
@@ -1945,13 +2004,10 @@ onBeforeUnmount(() => {
                   </div>
                 </section>
               </aside>
-            </div>
-          </div>
         </article>
-      </main>
-      </template>
-    </MasterDetailLayout>
-  </ConsolePage>
+      </ConsolePage>
+    </template>
+  </TableDetailLayout>
 
   <ConsolePage v-else-if="mode === 'facilityCatalog'" :title="t('routes.facilityApps.title')" :description="t('routes.facilityApps.description')">
     <template #actions>
@@ -2317,7 +2373,7 @@ onBeforeUnmount(() => {
     </EditorPage>
   </ConsolePage>
 
-  <ApplicationLogsDialog v-model:open="logsOpen" :application-id="selectedApplication.id" :application-name="selectedApplication.name" />
+  <ApplicationLogsDialog v-model:open="logsOpen" :application-id="logsApplication?.id ?? ''" :application-name="logsApplication?.name ?? ''" />
 
   <Dialog v-model:open="dialogOpen" :title="t(`applicationsPage.dialog.${dialogKind}`)" :close-label="t('common.close')">
     <div v-if="dialogKind === 'env'" class="grid gap-3">
@@ -2489,7 +2545,7 @@ onBeforeUnmount(() => {
   </Dialog>
 
   <ConfirmDialog
-    v-if="confirmKind === 'delete' && selectedApplication.hasPersistentData"
+    v-if="confirmKind === 'delete' && confirmHasPersistentData"
     :open="confirmOpen"
     :title="t('applicationsPage.confirm.deletePersistent.title')"
     :impact="t('applicationsPage.confirm.deletePersistent.impact')"
@@ -2502,13 +2558,20 @@ onBeforeUnmount(() => {
     @update:open="(open: boolean) => { confirmOpen = open }"
   />
 
-  <Dialog v-else v-model:open="confirmOpen" :title="t(`applicationsPage.confirm.${confirmKind}.title`)" :description="t(`applicationsPage.confirm.${confirmKind}.description`)" :close-label="t('common.close')">
-    <div class="flex gap-3 rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning"><AlertTriangle class="size-4 shrink-0" />{{ t('applicationsPage.confirmImpact') }}</div>
-    <template #footer>
-      <Button variant="secondary" @click="confirmOpen = false">{{ t('common.cancel') }}</Button>
-            <Button variant="danger" :loading="Boolean(pending)" @click="confirmAction">{{ t('common.confirm') }}</Button>
-    </template>
-  </Dialog>
+  <ConfirmDialog
+    v-else
+    :open="confirmOpen"
+    :title="t(`applicationsPage.confirm.${confirmKind}.title`)"
+    :description="t(`applicationsPage.confirm.${confirmKind}.description`)"
+    :impact="t('applicationsPage.confirmImpact')"
+    tone="danger"
+    :loading="Boolean(pending)"
+    :confirm-label="t('common.confirm')"
+    :cancel-label="t('common.cancel')"
+    :checkbox-label="t('serversPage.confirmCheckbox')"
+    @confirm="confirmAction"
+    @update:open="(open: boolean) => { confirmOpen = open }"
+  />
 
   <ConfirmDialog
     :open="restoreConfirmOpen"

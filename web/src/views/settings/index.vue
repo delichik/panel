@@ -13,6 +13,7 @@ import FileUploadButton from '@/components/ui/FileUploadButton.vue';
 import Input from '@/components/ui/Input.vue';
 import Select from '@/components/ui/Select.vue';
 import Switch from '@/components/ui/Switch.vue';
+import Table from '@/components/ui/Table.vue';
 import Textarea from '@/components/ui/Textarea.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
@@ -36,6 +37,14 @@ const runtime = ref<RuntimeSettings | null>(null);
 const version = ref<VersionInfo | null>(null);
 const serverVariables = ref<ServerVariableDefinition[]>([]);
 const systemCertificates = ref<SystemCertificateDto[]>([]);
+const systemCertificateColumns = computed(() => [
+  { key: 'name', label: t('common.name') },
+  { key: 'type', label: t('common.type'), nowrap: true },
+  { key: 'status', label: t('common.status'), nowrap: true },
+  { key: 'fingerprint', label: t('settingsPage.systemCertificateFingerprint') },
+  { key: 'expiresAt', label: t('settingsPage.systemCertificateNotAfter'), nowrap: true },
+  { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
+]);
 const tlsCertificates = ref<KeyAssetDto[]>([]);
 const activeSection = ref(sectionFromPath(route.path));
 const loading = ref(false);
@@ -595,38 +604,32 @@ onMounted(load);
           <h2>{{ t('settingsPage.section.systemCertificates') }}</h2>
           <p class="m-0 text-sm text-muted-foreground">{{ t('settingsPage.systemCertificatesHint') }}</p>
           <EmptyState v-if="!systemCertificates.length" :title="t('settingsPage.systemCertificatesEmpty')" :description="t('settingsPage.systemCertificatesEmptyHint')" />
-          <div v-else class="grid gap-3 motion-stagger">
-            <article v-for="cert in systemCertificates" :key="cert.id" class="motion-reveal grid gap-3 rounded-xl border border-border bg-muted p-4">
-              <div class="flex min-w-0 flex-wrap items-start justify-between gap-3">
-                <div class="min-w-0">
-                  <h3 class="truncate">{{ cert.name }}</h3>
-                  <p class="m-0 truncate text-xs text-muted-foreground">{{ cert.commonName || cert.id }}</p>
-                </div>
-                <div class="flex flex-wrap items-center gap-2">
-                  <Badge tone="info">{{ certificateType(cert.type) }}</Badge>
-                  <Badge :tone="certificateTone(cert.status)">{{ certificateStatus(cert.status) }}</Badge>
-                </div>
-              </div>
-              <div class="grid gap-3 text-sm lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_minmax(0,1fr)]">
-                <div class="min-w-0">
-                  <span class="text-muted-foreground">{{ t('settingsPage.systemCertificateFingerprint') }}</span>
-                  <strong class="block truncate font-mono text-xs text-foreground">{{ cert.fingerprint || t('common.notAvailable') }}</strong>
-                </div>
-                <div>
-                  <span class="text-muted-foreground">{{ t('settingsPage.systemCertificateNotBefore') }}</span>
-                  <strong class="block text-foreground">{{ formatDateTime(cert.notBefore, t('common.notAvailable')) }}</strong>
-                </div>
-                <div>
-                  <span class="text-muted-foreground">{{ t('settingsPage.systemCertificateNotAfter') }}</span>
-                  <strong class="block text-foreground">{{ formatDateTime(cert.notAfter, t('common.notAvailable')) }}</strong>
-                </div>
-              </div>
-              <div class="flex flex-wrap items-center justify-between gap-3">
-                <span class="text-xs text-muted-foreground">{{ cert.serverName ? t('settingsPage.systemCertificateServer', { server: cert.serverName }) : t('settingsPage.systemCertificateBuiltIn') }}</span>
-                <Button class="w-fit" :disabled="!cert.canReset" :loading="pending === `system-certificate-${cert.id}`" @click="openSystemCertificateConfirm(cert)"><KeyRound />{{ t('settingsPage.systemCertificateReset') }}</Button>
-              </div>
-            </article>
-          </div>
+          <Table
+            v-else
+            :columns="systemCertificateColumns"
+            :rows="systemCertificates"
+            row-key="id"
+          >
+            <template #name="{ row }">
+              <strong class="block max-w-[18rem] truncate text-foreground">{{ row.name }}</strong>
+              <span class="block max-w-[18rem] truncate text-xs text-muted-foreground">{{ row.serverName ? t('settingsPage.systemCertificateServer', { server: row.serverName }) : t('settingsPage.systemCertificateBuiltIn') }}</span>
+            </template>
+            <template #type="{ row }">
+              <Badge tone="info">{{ certificateType(row.type) }}</Badge>
+            </template>
+            <template #status="{ row }">
+              <Badge :tone="certificateTone(row.status)">{{ certificateStatus(row.status) }}</Badge>
+            </template>
+            <template #fingerprint="{ row }">
+              <span class="panel-mono block max-w-[18rem] truncate text-xs text-muted-foreground">{{ row.fingerprint || t('common.notAvailable') }}</span>
+            </template>
+            <template #expiresAt="{ row }">
+              <span class="text-muted-foreground">{{ formatDateTime(row.notAfter, t('common.notAvailable')) }}</span>
+            </template>
+            <template #actions="{ row }">
+              <Button class="w-fit" :disabled="!row.canReset" :loading="pending === `system-certificate-${row.id}`" @click="openSystemCertificateConfirm(row)"><KeyRound />{{ t('settingsPage.systemCertificateReset') }}</Button>
+            </template>
+          </Table>
         </section>
 
         <section v-else-if="activeSection === 'system'" class="grid gap-4 rounded-2xl border border-border bg-card p-5">

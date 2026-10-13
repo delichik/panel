@@ -13,6 +13,8 @@ const props = withDefaults(defineProps<{
   confirmLabel: string;
   cancelLabel: string;
   loading?: boolean;
+  /** Blocks confirmation for callers that gate the action (for example references still exist). */
+  confirmDisabled?: boolean;
   requireCheckbox?: boolean;
   checkboxLabel: string;
 }>(), {
@@ -26,7 +28,7 @@ const emit = defineEmits<{
 }>();
 
 const checked = ref(false);
-const canConfirm = computed(() => !props.loading && (!props.requireCheckbox || checked.value));
+const canConfirm = computed(() => !props.loading && !props.confirmDisabled && (!props.requireCheckbox || checked.value));
 const confirmVariant = computed(() => props.tone === 'danger' ? 'danger' : 'primary');
 const iconToneClass = computed(() => {
   if (props.tone === 'danger') return 'border-danger-border bg-danger-bg text-danger';

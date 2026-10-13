@@ -5,10 +5,10 @@ import {
   containerActionDisabled,
   filterPackages,
   imageLabel,
+  imageUpgradeApplicationIds,
   packageBlockReason,
-  resourceTabFromPath,
   selectedPackageNames,
-} from './model';
+} from './resourceModel';
 import type { ServerDto } from '@/types/servers';
 import type { ContainerDto, ImageDto } from '@/types/resources';
 
@@ -43,12 +43,11 @@ const container: ContainerDto = {
   managed: false,
 };
 
-describe('resources model', () => {
-  it('maps URL paths to resource tabs', () => {
-    expect(resourceTabFromPath('/resources/images')).toBe('images');
-    expect(resourceTabFromPath('/resources')).toBe('packages');
-  });
+function image(overrides: Partial<ImageDto>): ImageDto {
+  return { id: 'sha256:abcdef123456', repoTags: [], repoDigests: [], created: 0, size: 0, containers: 0, reference: '', checkable: false, updateAvailable: false, inUse: false, applicationIds: [], upgradeable: false, ...overrides };
+}
 
+describe('server resource tabs model', () => {
   it('separates package privilege from Docker Agent readiness', () => {
     expect(canMaintainPackages(server)).toBe(true);
     expect(canUseDockerResources(server)).toBe(true);
@@ -75,12 +74,20 @@ describe('resources model', () => {
   });
 
   it('labels images without relying on mock-only summaries', () => {
-    const image: ImageDto = { id: 'sha256:abcdef123456', repoTags: [], repoDigests: [], created: 0, size: 0, containers: 0, reference: '', checkable: false, updateAvailable: false, inUse: false, applicationIds: [], upgradeable: false };
-    expect(imageLabel(image)).toBe('sha256:abcde');
+    expect(imageLabel(image({ id: 'sha256:abcdef123456' }))).toBe('sha256:abcde');
   });
 
   it('labels untagged images when Docker reports null repoTags', () => {
-    const image: ImageDto = { id: 'sha256:abcdef123456', repoTags: null, repoDigests: [], created: 0, size: 0, containers: 0, reference: '', checkable: false, updateAvailable: false, inUse: false, applicationIds: [], upgradeable: false };
-    expect(imageLabel(image)).toBe('sha256:abcde');
+    expect(imageLabel(image({ repoTags: null }))).toBe('sha256:abcde');
+  });
+
+  it('deduplicates upgradeable application ids for the image upgrade action', () => {
+    const images = [
+      image({ updateAvailable: true, upgradeable: true, applicationIds: ['app-1', 'app-2'] }),
+      image({ updateAvailable: true, upgradeable: true, applicationIds: ['app-2', 'app-3'] }),
+      image({ updateAvailable: true, upgradeable: false, applicationIds: ['app-9'] }),
+      image({ updateAvailable: false, upgradeable: true, applicationIds: ['app-9'] }),
+    ];
+    expect(imageUpgradeApplicationIds(images)).toEqual(['app-1', 'app-2', 'app-3']);
   });
 });

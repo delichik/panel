@@ -1,20 +1,13 @@
 import {
   AppWindow,
   CircleGauge,
-  Database,
   FolderKanban,
   Globe,
-  HardDrive,
-  Image,
   KeyRound,
-  Network,
-  Package,
   RadioTower,
   Server,
   Settings,
-  Shield,
   ShieldCheck,
-  ShieldPlus,
 } from '@lucide/vue';
 import type { Component } from 'vue';
 
@@ -49,19 +42,6 @@ export const navGroups: NavGroup[] = [
     items: [
       { key: 'applications', titleKey: 'routes.applications.title', to: '/applications/apps', icon: AppWindow },
       { key: 'facility-apps', titleKey: 'routes.facilityApps.title', to: '/applications/facility-apps', icon: FolderKanban },
-    ],
-  },
-  {
-    key: 'resources',
-    titleKey: 'layout.nav.resources',
-    items: [
-      { key: 'packages', titleKey: 'routes.packages.title', to: '/resources/packages', icon: Package },
-      { key: 'containers', titleKey: 'routes.containers.title', to: '/resources/containers', icon: Database },
-      { key: 'images', titleKey: 'routes.images.title', to: '/resources/images', icon: Image },
-      { key: 'networks', titleKey: 'routes.networks.title', to: '/resources/networks', icon: Network },
-      { key: 'volumes', titleKey: 'routes.volumes.title', to: '/resources/volumes', icon: HardDrive },
-      { key: 'firewall', titleKey: 'routes.firewall.title', to: '/resources/firewall', icon: Shield },
-      ...(import.meta.env.DEV ? [{ key: 'fail2ban', titleKey: 'routes.fail2ban.title', to: '/resources/fail2ban', icon: ShieldPlus }] : []),
     ],
   },
   {

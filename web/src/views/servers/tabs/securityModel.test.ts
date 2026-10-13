@@ -1,28 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { fail2BanPreset, fail2BanTone, hasAdvancedJailConfig, jailsToYaml, parseSimpleJailsFromYaml, serverOptionState, ufwTone, validateUfwRule } from './model';
-import type { ServerDto } from '@/types/servers';
+import { fail2BanPreset, fail2BanTone, hasAdvancedJailConfig, jailsToYaml, parseSimpleJailsFromYaml, ufwTone, validateUfwRule } from './securityModel';
 
-const server: ServerDto = {
-  id: 'srv-1',
-  name: 'edge',
-  host: '10.0.0.1',
-  port: 22,
-  credentialId: 'cred-1',
-  reachable: true,
-  tailscaleEnabled: false,
-  tailscalePreferAgent: false,
-  tailscalePreferInterconnect: false,
-  sudo: { passwordless: true },
-  privilege: { privileged: true, mode: 'passwordless_sudo' },
-  traits: { 'agent.status': 'compatible', 'agent.url': 'https://10.0.0.1:9786' },
-};
-
-describe('security model', () => {
-  it('allows security management through compatible Agent or privilege', () => {
-    expect(serverOptionState(server)).toMatchObject({ agentReady: true, privileged: true, canManageSecurity: true });
-    expect(serverOptionState({ ...server, reachable: false }).canManageSecurity).toBe(false);
-  });
-
+describe('server firewall tab model', () => {
   it('maps firewall and fail2ban state to semantic tones', () => {
     expect(ufwTone({ serverId: 'srv-1', supported: true, installed: true, active: true, status: 'active', rules: [] })).toBe('success');
     expect(ufwTone({ serverId: 'srv-1', supported: true, installed: false, active: false, status: 'inactive', rules: [] })).toBe('warning');

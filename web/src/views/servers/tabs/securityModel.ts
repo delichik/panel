@@ -1,19 +1,7 @@
 import YAML from 'yaml';
-import type { ServerDto } from '@/types/servers';
 import type { Fail2BanJail, Fail2BanState, UfwAllowInput, UfwState } from '@/types/security';
 
 export type Tone = 'neutral' | 'success' | 'warning' | 'danger' | 'info';
-
-export function serverOptionState(server: ServerDto) {
-  const agentReady = server.traits?.['agent.status'] === 'compatible' && Boolean(server.traits?.['agent.url']);
-  const privileged = Boolean(server.privilege?.privileged || server.sudo?.passwordless || server.privilege?.mode === 'root' || server.privilege?.mode === 'passwordless_sudo');
-  return {
-    agentReady,
-    privileged,
-    reachable: server.reachable,
-    canManageSecurity: server.reachable && (agentReady || privileged),
-  };
-}
 
 export function ufwTone(state: UfwState | null): Tone {
   if (!state) return 'neutral';

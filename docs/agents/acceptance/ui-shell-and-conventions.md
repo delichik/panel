@@ -21,21 +21,21 @@
 | UI-SHELL-007 | `redirect` query 被用于登录/改密后的跳转 | 仅接受以单个 `/` 开头的站内路径 | 非字符串、非 `/` 开头或 `//` 开头值一律回退 `/overview` | 构造外站或协议相对 redirect 无法跳出应用 |
 | UI-SHELL-008 | 应用启动或懒加载路由 chunk | 所有页面族路由懒加载；chunk 网络/旧哈希失败时用 sessionStorage 标志最多整页重试一次，成功导航后清标志 | 永久缺失 chunk 不得无限刷新；其他路由异常不得被误判为 chunk 错误 | 初始包不静态打入页面族；模拟 chunk 错误只刷新一次 |
 | UI-SHELL-009 | Vue/Mock/session 等 bootstrap 抛出未处理错误 | 在根节点显示可见的启动失败标题与刷新提示 | 错误兜底不得依赖已经失败的组件树或 i18n | 即使应用未挂载，页面仍有可读错误而非空白屏 |
-| UI-SHELL-010 | 访问 `/`、旧安全入口、资源/应用/设置父入口 | `/`→`/overview`；`/security[/firewall]`→`/resources/firewall`；`/resources`→packages；`/applications`→apps；`/settings`→general，并保留兼容重定向中原 query | 非 dev 的 Fail2Ban 路由必须回到 firewall；dev 才可直达 Fail2Ban | 每个别名最终落到唯一规范路径，刷新和分享链接结果一致 |
+| UI-SHELL-010 | 访问 `/`、应用/设置父入口 | `/`→`/overview`；`/applications`→`/applications/apps`；`/settings`→`/settings/general`，并保留兼容重定向中原 query | 资源与安全页已并入服务器详情 tabs：`/resources/*` 与 `/security/*` 不再提供重定向，访问落入 404；非 dev 构建不得暴露 Fail2Ban 入口 | 每个别名最终落到唯一规范路径，刷新和分享链接结果一致 |
 | UI-SHELL-011 | 访问 AppShell 下不存在的路径 | 保留全局导航并显示本地化 404 空态和“返回概览”操作 | 不得跳出外壳、白屏或伪装成 `/overview` 成功 | 404 页面标题、说明和返回按钮可见，按钮到 `/overview` |
 
 ## 3. AppShell、导航与布局
 
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
-| UI-SHELL-012 | 认证用户进入控制台，宽度 `>=1024px` | AppShell 高度等于动态视口；导航、56px 顶栏和路由内容区固定；页面级禁止纵向/横向滚动，滚动限于列表、表格、详情、日志、编辑正文 | 页面内容不得撑开 body；长文本不得以整页横滚兜底 | body 尺寸不超过视口，至少一个明确内部区域承担滚动 |
-| UI-SHELL-013 | 宽度 `<1024px` | 桌面侧栏隐藏，移动抽屉入口出现；顶部条粘性置顶且层级低于抽屉/Dialog/Toast，保证导航与全局操作随时可达；RouteContent 与页面模板解除桌面裁切，双栏折叠单栏并允许页面级滚动；主从工作台的主列表/上下文选择器限高（约 60dvh）并保持内部滚动，详情不被长列表推到很远；抽屉关闭按钮与导航行按触屏尺寸放大到 44px | 关键操作、弹窗 footer、下拉菜单不得因视口高度或 overflow 不可达；嵌套滚动区域必须能自然回链到页面滚动；放大触屏目标不得让顶栏在 360px 视口横向溢出 | 断点两侧无内容裁切；窄屏可滚到全部字段和操作，滚动中仍能打开导航；抽屉内导航行实测高度 ≥44px |
-| UI-SHELL-014 | 渲染主导航 | 分组及顺序固定为概览；资产（服务器、SSH 凭据、证书、DNS）；应用（应用、设施应用、协调记录）；资源（包、容器、镜像、网络、卷、防火墙，dev 再含 Fail2Ban）；设置（系统事件、设置） | `/tasks`、`/debug` 和页面内子分区是兼容深链，不得加入主菜单 | 导航项、标题和目标与 `navModel` 一致；当前页面族正确高亮 |
+| UI-SHELL-012 | 认证用户进入控制台，宽度 `>=1024px` | AppShell 高度等于动态视口；导航、56px 顶栏和路由内容区固定；页面级禁止纵向/横向滚动，滚动限于列表、表格、详情、日志、编辑正文 | 页面内容不得撑开 body；长文本不得以整页横滚兜底；覆盖式详情由详情正文承担内部滚动，宽表格在自身容器内横向滚动 | body 尺寸不超过视口，至少一个明确内部区域承担滚动 |
+| UI-SHELL-013 | 宽度 `<1024px` | 桌面侧栏隐藏，移动抽屉入口出现；顶部条粘性置顶且层级低于抽屉/Dialog/Toast，保证导航与全局操作随时可达；RouteContent 与页面模板解除桌面裁切，允许页面级滚动；表格列表容器限高（约 60dvh）并保持内部滚动，宽表格允许横向滚动，详情不被长列表推到很远；抽屉关闭按钮与导航行按触屏尺寸放大到 44px | 关键操作、弹窗 footer、下拉菜单不得因视口高度或 overflow 不可达；嵌套滚动区域必须能自然回链到页面滚动；放大触屏目标不得让顶栏在 360px 视口横向溢出 | 断点两侧无内容裁切；窄屏可滚到全部字段和操作，滚动中仍能打开导航；抽屉内导航行实测高度 ≥44px |
+| UI-SHELL-014 | 渲染主导航 | 分组及顺序固定为概览；资产（服务器、SSH 凭据、证书、DNS）；应用（应用、设施应用、协调记录）；设置（活动、设置）。资源与安全不再是独立导航组，其能力并入服务器详情 tabs | `/tasks`、`/debug`、`/resources/*`、`/security/*` 和页面内子分区不得加入主菜单 | 导航项、标题和目标与 `navModel` 一致；当前页面族正确高亮 |
 | UI-SHELL-015 | 桌面用户折叠/展开导航 | 侧栏宽度在 260px/76px 切换；折叠态隐藏文案并用 title/可访问名称保留含义；偏好存 `panel.nav.collapsed` | 折叠不得改变页面路由或丢失当前高亮；文案随列宽渐变而不是瞬时重挂载；折叠按钮暴露 `aria-expanded`/`aria-controls` | 刷新后保持折叠偏好，键盘和鼠标均可切换 |
 | UI-SHELL-016 | 窄屏打开移动导航 | 抽屉使用 `role=dialog`、`aria-modal=true` 和本地化名称；打开后焦点进入抽屉、Tab 圈定、背景锁滚动且不可交互 | Escape、可见关闭按钮、点击遮罩、选择导航项均应关闭；跨入 1024px 自动关闭 | 关闭后焦点回到触发按钮，body overflow 恢复；组件测试覆盖上述路径 |
 | UI-SHELL-017 | 路由变化 | 顶栏标题从 `route.meta.titleKey` 翻译；路由内容按 path 淡入淡出，query 变化不重挂载页面 | `meta` 不得写用户可见硬编码标题；多根页面不得触发 Transition 警告 | 同一路径改筛选不丢组件状态，换路径才重挂载；标题随语言切换 |
 | UI-SHELL-018 | 页面需要标题、返回或操作 | 使用 PageHeader/ConsolePage 语义：返回目标由页面明确指定，不用历史栈兜底；同一作用域至多一个 primary，危险操作不与保存同色 | 中窄屏标题和 actions 必须堆叠/换行，不得裁切 | 返回落到约定父页；所有关键按钮在 1024px 附近仍可见 |
-| UI-SHELL-019 | 一级对象选择工作台 | 使用统一 MasterDetail 几何：默认单列，`xl` 起左 360px、右侧弹性；两栏均 `min-width/min-height:0` 并由业务区内部滚动；紧凑视口（`<xl`）下接入单视图的页面一次只显示列表或详情，并在详情提供返回列表操作 | 不得页面私改左栏宽度；接入单视图的页面不得在紧凑视口自动选中首条对象；未接入的页面（如 activity）保持双栏常驻；设置导航、任务内层 280px 执行列表和 shell 侧栏例外 | servers/credentials/applications/certificates/dns/security/resources 均保持一致主从几何与窄屏单视图行为 |
+| UI-SHELL-019 | 实体工作台列表与详情 | 一级对象工作台（servers/credentials/dns/certificates/applications）统一为「表格 + 覆盖式详情」：列表为全宽表格，点击行内「详情」后详情覆盖整个内容区并自带返回操作；列表保持挂载但不可交互，返回后滚动位置与筛选状态不丢 | 不得恢复 xl 常驻双栏几何；不得在窄屏自动选中首条对象；`activity` 过渡期继续使用 `MasterDetailLayout` 双栏（见 UI-SHELL-054/058）；设置导航、任务内层 280px 执行列表和 shell 侧栏例外 | servers/credentials/dns/certificates/applications 均保持同一覆盖式详情几何与返回语义 |
 
 ## 4. 主题、语言与展示格式
 
@@ -90,11 +90,15 @@
 | UI-SHELL-051 | 用户触发跨路径导航，新页面路由代码块或守卫尚未完成 | 在导航解析开始时立即高亮目标主导航项并显示进行中图标；顶栏显示本地化的“正在打开”目标标题和可访问进度指示 | 导航成功、取消、守卫拒绝或路由代码块加载失败时必须清除进行中状态；动效降级不得隐去状态文本 | 慢速解析期间旧页面可保留，但点击后立即可见目标高亮、图标、标题与 `aria-busy`/progressbar；完成或失败后均无残留加载态 |
 | UI-SHELL-052 | 渲染主导航（桌面侧栏或移动抽屉） | 桌面与抽屉复用同一导航实现，分组、图标、进行中指示和激活样式一致；当前页族在深层子路径上仍以 `aria-current="page"` 标记并显示左侧激活条 | 两个入口不得各自漂移出不同标签/状态；折叠态文案仍留在无障碍树中 | 组件测试断言深链归属项带 `aria-current`、折叠标签仍是可读名称、点击发出导航事件 |
 | UI-SHELL-053 | 键盘用户进入控制台 | 外壳首个可聚焦元素是本地化“跳到主要内容”链接，激活后把焦点移动到路由内容区 | 链接在未激活时不得占据视觉空间或进入其他焦点圈定逻辑 | 首次 Tab 出现跳转链接，激活后焦点进入 `#main-content` |
-| UI-SHELL-054 | 一级对象工作台页面渲染主从布局 | `MasterDetailLayout` 自己承担 `h-full`/`min-h-0` 高度契约；详情区用 `grid-rows-[auto_minmax(0,1fr)]`（有可选横幅时横幅必须放进内部滚动区），页面不得再靠 `min-h-[600px+]` 撑高来换取滚动 | 详情区在无横幅时也必须由正文承担内部滚动；桌面不得因此产生页面级滚动 | 无横幅/有横幅两种形态下详情正文都能独立滚动，body 不出现滚动条 |
-| UI-SHELL-055 | 用户在主从列表中切换选中对象 | 详情内容按选中对象 key 播放一次进场（淡入 + 轻微位移），旧内容即时移除；同一对象的刷新不重播 | 不得让出场动画延迟点击反馈；不得在刷新时清空已有详情正文 | 连续切换对象时每次都有进场、无出场等待；同对象轮询刷新无重播 |
+| UI-SHELL-054 | activity 双栏工作台渲染主从布局 | `MasterDetailLayout` 自己承担 `h-full`/`min-h-0` 高度契约；详情区用 `grid-rows-[auto_minmax(0,1fr)]`（有可选横幅时横幅必须放进内部滚动区），页面不得再靠 `min-h-[600px+]` 撑高来换取滚动 | 详情区在无横幅时也必须由正文承担内部滚动；桌面不得因此产生页面级滚动 | 无横幅/有横幅两种形态下详情正文都能独立滚动，body 不出现滚动条 |
+| UI-SHELL-055 | 用户打开、切换或关闭覆盖式详情 | 详情按选中对象 key 播放一次进场（`detail-swap-*` 仅进场）；关闭详情不播放拖沓退场，列表即时恢复且保留原滚动位置；同一对象刷新不重播 | 不得让出场动画延迟返回反馈；不得在刷新时清空详情正文；不得在打开/关闭详情时重置列表筛选、搜索或分页 | 连续打开不同对象每次都有进场；同对象数据刷新无重播；关闭后列表位置与筛选不变 |
 | UI-SHELL-056 | 产生成功/异常 toast | 顶部 toast 带语义图标；可见堆叠有上限，超出时淘汰最旧一条；悬停或焦点进入时暂停自动消失，移出后按剩余时间继续；组件卸载清理全部计时器；桌面堆叠位于 56px 顶栏之下 | 暂停不得把剩余时间重置为完整时长；淘汰/关闭都必须清理计时器与 DOM | toast 组件测试覆盖自身关联动作；手动悬停 5 秒后 toast 仍按剩余时间消失 |
 | UI-SHELL-057 | 多个浮层同时打开或焦点离开浮层面板 | 只有最上层浮层响应文档级 Escape；下层浮层不得被连带关闭；焦点在面板外时最上层浮层仍可 Escape 关闭 | 关闭后仍按 UI-SHELL-039/016 恢复焦点与背景滚动 | `useOverlayBehavior` 测试覆盖 LIFO 背景锁与面板外 Escape |
-| UI-SHELL-058 | 紧凑视口（`<xl`）打开主从工作台 | 接入单视图后：未选中只显示列表/选择器（详情不渲染），选中后只显示详情并在其上方给出本地化返回操作；返回清空选中项与对应 query；详情进场动画保留 | 未传返回文案的页面不得被模板强制单视图；窄屏无选中时不显示“请选择对象”空态（该空态只在 `xl` 以上与列表并排出现）；深链 `?selected=`/`?server=` 必须直接进入详情 | 组件测试断言窄屏下两个面板的互斥隐藏、返回按钮文案与 `back` 事件；页面加载在紧凑视口不自动选中首条对象 |
+| UI-SHELL-058 | 紧凑视口（`<xl`）打开 activity 双栏工作台 | `activity` 保留 `MasterDetailLayout` 双栏常驻形态并自带列表⇄详情切换，页面负责窄屏互斥显示与返回语义 | 其他实体工作台不得再接入 `MasterDetailLayout` 单视图（改用覆盖式详情）；未传返回文案的页面不得被模板强制单视图 | 组件测试断言双栏常驻与页内切换；实体工作台组件测试断言覆盖式详情 |
+| UI-SHELL-059 | 列表页点击「详情」打开覆盖式详情 | 详情覆盖整个内容区（含列表页标题栏），同页不换路由；选中参数进入 URL query（`server/credential/domain/selected/application`）并在刷新、分享、前进/后退时恢复；打开详情创建一条历史，浏览器 Back 等同关闭详情；页内返回清空选中与 tab 参数 | 详情打开时列表必须保持挂载但 `inert` + `aria-hidden`，不得可聚焦、不得响应点击；非法/过期选中参数规范化或回落到列表；选中对象不在当前页时按需单独补载详情 | URL 与页面显示一致；关闭后列表滚动位置、筛选、搜索、分页保持不变 |
+| UI-SHELL-060 | 覆盖式详情打开与关闭的键盘与焦点 | 打开时焦点进入详情（返回按钮或详情容器），Escape 关闭且与内层 Dialog/Dropdown 组成 LIFO（内层优先）；关闭后焦点归还触发行「详情」按钮；返回按钮使用本地化 `common.backToList` | 覆盖式详情不得锁背景滚动；Escape 不得穿透关闭内层浮层；触发元素已移除时焦点回落到可聚焦的页面标题 | 键盘可完成打开→操作→返回；关闭后焦点为触发按钮 |
+| UI-SHELL-061 | 表格列表行操作区 | 每行操作列提供至多一个直接可见入口（「详情」）与其余操作的行内菜单/按钮组；危险操作必须确认（高风险勾选）；单个操作按（行, 操作）记录 loading 并只禁用该行该项 | 表格行本身不可点击（仅操作列打开详情），不得依赖整行点击；禁用项必须给出原因或可访问名称；行级操作失败不得清空表格其余行 | 组件测试覆盖菜单、确认、禁用与逐行 loading |
+| UI-SHELL-062 | 服务器详情 tabs | 一级 tab 固定为 概况/监控/Agent/Tailscale/容器/镜像/网络/存储卷/软件包/防火墙；tab 首次激活才请求并在详情存活期内缓存；切换服务器或关闭详情清空旧服务器数据并忽略迟到响应；网络/存储卷首次打开且无快照时自动刷新；监控轮询仅在详情打开且该 tab 激活时运行；防火墙内 UFW/Fail2Ban 子视图选择进 URL（Fail2Ban 仅 dev） | 不得用页面级滚动承载 tab 内容；切 tab 不得清空该服务器已加载的快照；能力不足在对应 tab 内给阻断原因而不是隐藏 tab | tab 切换无重复请求；切换服务器无上一服务器数据；深链 `?server=&tab=` 直达对应 tab |
 
 ## 8. 覆盖来源
 
@@ -102,13 +106,13 @@
 - 外壳与响应式：`web/src/components/shell/AppShell.vue`、`NavList.vue`、`navModel.ts`、页面模板、`web/src/styles/main.css`。
 - 主题与 i18n：`web/src/design/theme.ts`、`web/index.html`、`web/src/i18n/index.ts`、`docs/agents/i18n-guide.md`。
 - 交互 primitives/patterns：`web/src/components/ui/`、`web/src/components/patterns/`、`web/src/composables/useOverlayBehavior.ts`、`useAutoRefresh.ts`。
-- 自动化证据：`client.test.ts`、`AppShell.test.ts`、`NavList.test.ts`、`MasterDetailLayout.test.ts`、`useCompactViewport.test.ts`、`interactions.test.ts`、`layout-i18n.test.ts`、`main.test.ts`、`theme.test.ts`、`i18n.test.ts`、`datetime.test.ts`、`useOverlayBehavior.test.ts`、`AssetFileManager.test.ts`。
+- 表格与覆盖式详情：`web/src/components/ui/Table.vue`、`web/src/components/templates/TableDetailLayout.vue`、`web/src/views/servers/tabs/`。
+- 自动化证据：`client.test.ts`、`AppShell.test.ts`、`NavList.test.ts`、`MasterDetailLayout.test.ts`、`Table.test.ts`、`TableDetailLayout.test.ts`、`ConsolePage.test.ts`、`views/servers/index.test.ts`、`views/servers/tabs/*.test.ts`、`interactions.test.ts`、`layout-i18n.test.ts`、`main.test.ts`、`theme.test.ts`、`i18n.test.ts`、`datetime.test.ts`、`useOverlayBehavior.test.ts`、`AssetFileManager.test.ts`。
 
 ## 9. 当前已知缺口（不得降级为设计）
 
 1. 现有前端自动化以单元/组件测试为主，规范所要求的页面族 Playwright e2e、axe 和多断点视觉回归尚未系统恢复，因此 UI-SHELL-035、038、047、050 的页面级证据不足。
-2. 若干业务页仍使用普通 `Dialog` 手写危险确认，而不是统一 `ConfirmDialog`；影响说明和高风险勾选并非每处齐全，应按 UI-SHELL-040 收敛。
-3. 启动失败兜底发生在 i18n 初始化不可用阶段，目前只有英文；这是 bootstrap 灾难兜底例外，不可复制到正常页面文案。
-4. AppShell 移动抽屉当前且已有测试固定为“点击遮罩关闭”，普通 Dialog 则明确不响应遮罩；后续不得把两种浮层语义混用。
-5. 部分列表页的 URL 同步实现不完整，具体列在 `ui-pages.md`；验收以 UI-SHELL-035 为统一目标。
-6. `AssetFileManager.vue` 与 `views/applications/index.vue` 仍各保留一份 `.item-row` 局部动效 CSS（过渡与 hover 已按触屏策略加 `@media (hover: hover)` 保护，但仍是 `motion-list-item` 的重复实现）；后续应收敛为共享工具类，避免两处漂移。
+2. 启动失败兜底发生在 i18n 初始化不可用阶段，目前只有英文；这是 bootstrap 灾难兜底例外，不可复制到正常页面文案。
+3. AppShell 移动抽屉当前且已有测试固定为“点击遮罩关闭”，普通 Dialog 则明确不响应遮罩；后续不得把两种浮层语义混用。
+4. `AssetFileManager.vue` 与 `views/applications/index.vue` 仍各保留一份 `.item-row` 局部动效 CSS（过渡与 hover 已按触屏策略加 `@media (hover: hover)` 保护，但仍是 `motion-list-item` 的重复实现）；后续应收敛为共享工具类，避免两处漂移。
+5. 覆盖式详情的浏览器前进/后退恢复与跨页深链（选中对象不在当前页）依赖组件测试，尚未有页面级 e2e 证据。

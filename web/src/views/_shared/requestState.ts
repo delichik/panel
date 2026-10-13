@@ -19,3 +19,8 @@ export function createLatestRequestGuard() {
     },
   };
 }
+
+/** Aborted requests are expected control flow and must never surface as business errors. */
+export function isAbortError(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && 'code' in error && (error as { code?: string }).code === 'request_aborted');
+}

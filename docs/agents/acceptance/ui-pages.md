@@ -14,7 +14,7 @@
 | 维护 | `/maintenance/backup` | 独立 shell、独立维护 token |
 | 概览 | `/overview` | `/` 重定向至此 |
 | 服务器 / 凭据 | `/servers`、`/credentials` | — |
-| 资源与安全 | `/resources/packages`、`containers`、`images`、`networks`、`volumes`、`firewall` | `/resources`、`/security/*` 重定向；`/resources/fail2ban` 仅 dev 可用 |
+| 服务器 / 凭据 | `/servers`、`/credentials` | 资源与安全已并入服务器详情 tabs；`/resources/*`、`/security/*` 已删除并落入 404 |
 | 应用 | `/applications/apps`、`/applications/apps/create`、`/applications/apps/:applicationId/edit` | `/applications` 重定向 |
 | 设施应用 | `/applications/facility-apps`、`/applications/facility-apps/:facilityKind` | `/:facilityKind/config` 为可直达编辑态深链 |
 | DNS / 证书 | `/dns/domains`、`/certificates/domains`、`/certificates/self-signed`、`/certificates/keys` | — |
@@ -44,17 +44,17 @@
 | UI-OVR-007 | 打开单卡编辑器 | 可改类型、宽高、range、服务器范围；网络卡额外显示 rx/tx/both；空 serverIds 表示全部服务器 | 类型改变需归一默认尺寸；非网络卡不得保留可见网络方向控件 | 关闭弹窗保留当前编辑草稿，最终统一由仪表盘保存提交 |
 | UI-OVR-008 | 保存或取消编辑 | 保存一次提交完整可见卡片配置，成功退出编辑并整卡重载；取消恢复进入前快照 | 保存失败留在编辑态、显示 toast/错误；保存中防重复 | 后端返回配置成为新基线，失败时用户改动未丢失 |
 | UI-OVR-009 | 编辑中点击其他路由 | 弹出放弃确认；取消留在原页，确认恢复旧快照后再跳转 | 不得静默丢改动；仅打开卡片编辑器也视为需保护 | 两条确认分支的 URL 与卡片数据均正确 |
-| UI-OVR-010 | 风险队列或快捷入口 | 风险项跳到自身明确目标；快捷入口分别到 servers、credentials、packages、application-operations | 无风险显示健康空提示，不生成不可点击假项 | 每个按钮目标与文案匹配，较窄宽度不溢出 |
+| UI-OVR-010 | 风险队列或快捷入口 | 风险项跳到自身明确目标；快捷入口分别到 servers、credentials、servers（软件包 tab）、activity | 无风险显示健康空提示，不生成不可点击假项 | 每个按钮目标与文案匹配，较窄宽度不溢出 |
 
 ## 5. 服务器 `/servers`
 
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
-| UI-SRV-001 | 打开列表、搜索、翻页或选择服务器 | 服务端 `page/pageSize/q` 查询；URL 恢复 search/page/server；行展示可达性、Agent、权限；选择后按需 GET 完整详情 | 列表失败显示重试而非空态；切换选择时取消/忽略旧详情 | 分享 URL 恢复相同页和服务器，不会显示上一服务器的迟到详情 |
-| UI-SRV-002 | 查看服务器详情 | 展示连接地址、端口、凭据、Docker host、OS、最新指标、最近检查/更新时间、Agent 和安全能力 | 凭据列表失败只影响凭据显示/表单并 toast，不得抹掉服务器列表 | 摘要先可见，完整详情加载有局部 overlay |
+| UI-SRV-001 | 打开列表、搜索、翻页或选择服务器 | 服务端 `page/pageSize/q` 查询；URL 恢复 search/page/server/tab；表格列展示名称、地址、可达性、Agent、权限、Tailscale、最近检查；点击行内「详情」按需 GET 完整详情并覆盖列表 | 列表失败显示重试而非空态；切换服务器时取消/忽略旧详情并清空旧 tab 数据；无选中时不自动打开详情 | 分享 URL 恢复相同页、服务器与 tab；不会显示上一服务器的迟到详情 |
+| UI-SRV-002 | 查看服务器详情 | 覆盖式详情展示连接地址、端口、凭据、Docker host、OS、权限与安全、最近检查/更新时间、初始化任务与资源 tabs | 凭据列表失败只影响凭据显示/表单并 toast，不得抹掉服务器列表；选中服务器不在当前页时按 id 单独补载 | 详情先显示已加载字段，完整详情加载有局部覆盖 |
 | UI-SRV-003 | 新建/编辑服务器 | 表单含 name、IPv4、IPv6、port、credential、SSH username、Docker host、变量、notes；至少一个地址且为 IP 字面量，port 1–65535，name/credential/dockerHost 必填；基础连接（名称/地址/端口/凭据/SSH 用户名）与高级配置（Docker host/变量/备注）分区，创建时高级区默认折叠、编辑时展开 | host 只读由 IPv4 优先、否则 IPv6 派生；无效字段在字段下方就地显示本地化错误，底部摘要列出全部错误并点击聚焦对应字段 | 无效字段有本地化提示且无写请求；编辑需以完整详情填充；任何字段错误都可通过摘要定位 |
 | UI-SRV-004 | 点击“探测” | 用当前未保存表单调 probe 并在基础连接区显示 reachable/error/OS/架构/特权；探测请求只发送连接字段（地址、端口、凭据、SSH 用户名） | 探测闸门只受地址/端口/凭据约束，名称与 Docker host 错误不得连坐禁用探测；连接字段变化后旧结果标记过期（灰化）提示重新探测；探测失败保留输入并非保存、不产生服务器记录 | probe 请求不含名称/Docker host/变量，结果与输入对应；创建/探测按钮可用性互不影响 |
-| UI-SRV-005 | 提交服务器表单 | 创建/更新成功关闭弹窗、选中新对象、失效详情缓存并重载列表；创建返回 initialTaskId 时 toast 与详情侧栏只表达“服务器已登记、初始化任务已启动”，并跟踪该任务 | 提交中防重复；API 失败保持弹窗及输入；初始化任务失败时服务器记录保留（不自动删除）、标记不可达与原因，详情侧栏任务状态卡展示失败与错误，用户可编辑/删除 | 成功 toast 不早于服务端确认；活跃初始化任务每 2 秒刷新状态，失败态可经任务状态、服务器详情与活动日志追溯 |
+| UI-SRV-005 | 提交服务器表单 | 创建/更新成功关闭弹窗、打开新对象覆盖详情、失效详情缓存并重载列表；创建返回 initialTaskId 时 toast 与概况 tab 只表达“服务器已登记、初始化任务已启动”，并跟踪该任务 | 提交中防重复；API 失败保持弹窗及输入；初始化任务失败时服务器记录保留（不自动删除）、标记不可达与原因，概况 tab 任务状态卡展示失败与错误，用户可编辑/删除 | 成功 toast 不早于服务端确认；活跃初始化任务每 2 秒刷新状态，失败态可经任务状态、服务器详情与活动日志追溯 |
 | UI-SRV-006 | 点击测试连接 | 调用所选服务器 test，成功刷新该详情和列表并提示服务器名 | 失败保留页面，不能伪造 reachable | 仅目标服务器状态改变，按钮 loading 覆盖请求期 |
 | UI-SRV-007 | 删除服务器 | 先显示对象名与影响说明的 danger 确认；成功清详情缓存、清选择并重载 | 失败不关闭确认/不移除行 | 取消零请求；成功后 URL 不再选中已删除 ID |
 | UI-SRV-008 | 指标卡首次加载、换 range、手刷或自动刷 | 默认 range=1h，支持 1h/6h/1d/7d；展示 CPU、内存、磁盘、网络 rx/tx 图和当前值 | 同服务器刷新保留旧图；换服务器清旧图；自动刷防重入且隐藏页暂停 | range 请求合法，失败只影响指标卡并保留可用旧数据 |
@@ -63,67 +63,74 @@
 | UI-SRV-015 | 打开新建服务器表单（非编辑） | 在连接区之后显示**非阻断**警示横幅：面板将在部署 Agent 时接管该机防火墙（仅 UFW）——缺失时安装、放行 SSH/Agent 端口与反向代理 80/443、启用默认拒绝策略；未声明「开放防火墙」的应用端口会被阻断 | 横幅不得出现在编辑态；不得新增勾选项、弹窗或确认步骤 | 横幅不影响 `canSave`，不得因其存在而阻止提交或发出额外请求 |
 | UI-SRV-011 | 填写变量 | 逐行 `key=value`；缺 `=`、空变量名属阻断错误，逐行就地提示并阻止提交；重复 key 保留 last-wins 并显示非阻断警告 | 空行忽略；阻断错误存在时创建/保存禁用 | 每行行号定位对应错误；无写请求直到阻断错误消除 |
 | UI-SRV-012 | 无可用凭据时新建服务器 | 凭据区显示“尚无 SSH 凭据”引导与添加入口，可在弹窗内快捷创建凭据；成功后自动选中新凭据 | 凭据列表加载失败在弹窗内就地显示错误与重试，不影响服务器其余表单 | 快捷创建后凭据即时可用于表单与探测；无需离开当前弹窗 |
-| UI-SRV-013 | 查看新建服务器初始化状态 | 详情侧栏以状态卡展示初始化任务（StatusBadge + 错误 + 活动入口），而非仅纯文本任务 id | 初始化任务加载失败有局部错误；任务失败时服务器保留、标记不可达并在侧栏持久展示原因，供编辑/删除 | 活跃初始化任务刷新，终态与失败原因可经任务状态与活动日志追溯 |
+| UI-SRV-013 | 查看新建服务器初始化状态 | 概况 tab 以状态卡展示初始化任务（StatusBadge + 错误 + 活动入口），而非仅纯文本任务 id | 初始化任务加载失败有局部错误；任务失败时服务器保留、标记不可达并在状态卡持久展示原因，供编辑/删除 | 活跃初始化任务刷新，终态与失败原因可经任务状态与活动日志追溯 |
 | UI-SRV-014 | 在服务器表单中配置 Tailscale 意图 | 「将该节点加入 tailnet」与两个偏好开关（Agent 连接、节点互联）；未启用时两个偏好开关禁用并显示说明，提交时未启用的一侧偏好被规范化为 false | 不得在未启用时提交偏好组合；不得只依赖后端强制而在界面保留可点击的无效开关 | 重新打开表单回显与服务端一致的三个开关，保存后详情与列表按服务端返回状态渲染 |
-| UI-SRV-015 | 查看服务器 Tailscale 状态或手动重试 | `tailscaleEnabled` 时列表行与详情区显示状态徽标（`disabled`/`pending`/`installing`/`running`/`degraded`/`unsupported`/`error` 的本地化文案）；详情只读展示三个开关、主机名、IPv4/IPv6、状态更新时间与 `lastError`；「重试 / 应用 Tailscale」提交任务并提示真实 taskId，随后刷新服务器详情 | 未启用时显示未配置说明且重试禁用；从未上报时显示明确空态而不是伪造状态；失败必须显示原因且可重试，不得把“任务已受理”表述为节点已加入 | toast 中的 taskId 可在任务中心定位；徽标与 `tailscale.status` 一致，`lastError` 脱敏后原样展示 |
+| UI-SRV-016 | 查看服务器 Tailscale 状态或手动重试 | `tailscaleEnabled` 时列表行与 Tailscale tab 显示状态徽标（`disabled`/`pending`/`installing`/`running`/`degraded`/`unsupported`/`error` 的本地化文案）；Tailscale tab 只读展示三个开关、主机名、IPv4/IPv6、状态更新时间与 `lastError`；「重试 / 应用 Tailscale」提交任务并提示真实 taskId，随后刷新服务器详情 | 未启用时显示未配置说明且重试禁用；从未上报时显示明确空态而不是伪造状态；失败必须显示原因且可重试，不得把“任务已受理”表述为节点已加入 | toast 中的 taskId 可在任务中心定位；徽标与 `tailscale.status` 一致，`lastError` 脱敏后原样展示 |
+| UI-SRV-017 | 在服务器详情切换资源 tabs | 详情一级 tab 固定为 概况/监控/Agent/Tailscale/容器/镜像/网络/存储卷/软件包/防火墙；tab 首次激活才请求并在详情存活期内缓存，切换服务器或关闭详情清空旧数据；`tab` 进 URL，深链直达；监控轮询只在详情打开且该 tab 激活时运行；防火墙内 UFW/Fail2Ban 子视图选择进 URL，Fail2Ban 仅 dev 可见 | 切 tab 不得清空已加载快照或重复请求；能力不足在对应 tab 内给出阻断原因；不得用页面级滚动承载 tab 内容 | tab 切换无闪烁且状态保留；深链 `?server=&tab=` 恢复对应 tab；非 dev 无 Fail2Ban 子视图 |
+| UI-SRV-018 | 查看/操作资源表格 | 容器/镜像/网络/存储卷/软件包在各自 tab 内以表格展示；容器行操作：日志、启动/停止/重启/删除（确认 + 托管提示）；镜像：拉取、升级应用、清理未使用、删除（in-use 禁删、危险确认强制勾选）；网络只读且删除禁用；存储卷：清理未使用、删除（in-use 禁删、确认强制勾选）；软件包：勾选只对当前快照，批量栏仅在有选中时出现，升级全部先 danger 确认；网络/存储卷首次打开且无快照时自动提交刷新任务 | 根据状态/能力禁用无效动作；操作按钮按（行, 操作）单独 loading；失败保留快照并 toast；不得把失败当作空列表 | 表格列包含名称/关键状态；请求 payload 与选中项一致；取消确认零请求；成功后重载当前 tab |
+| UI-SRV-019 | 在防火墙 tab 维护 UFW / Fail2Ban | UFW 展示 supported/installed/active/default policy 与规则号/action/to/from，提供新增 allow rule 与删除规则（确认、受保护端口/受管规则由后端拒绝），并展示「安装与启用由 Agent 部署自动完成」说明；Fail2Ban 可在 visual 与 YAML 间切换，提供 preset、jail 删除、保存草稿、安装、启用/接管确认、释放（danger 确认）；保存草稿仅在 YAML 变化时启用 | 页面不得出现 UFW 安装/启用入口；未勾选接管不提交；保存不等于启用；失败保留草稿/输入 | 规则增删使用返回值重建列表；toast 只承诺任务接受并含真实 taskId；visual 往返可解析 |
 
 ## 6. SSH 凭据 `/credentials`
 
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
-| UI-CRED-001 | 列表搜索、翻页、选择 | 服务端分页/q；URL 恢复 search/page/credential；列表显示类型、用户名和引用数，选择后按需加载 key summary | 列表/详情错误分别显示重试；服务器列表失败不得泄露或伪造引用 | 选择变化只展示对应详情，私钥材料正文从不出现在详情 |
-| UI-CRED-002 | 新建密码凭据 | name、username、password 必填；成功后选中新凭据并刷新 | 密码不得出现在列表、toast 或日志 | 空 secret 无请求，保存后仅显示元数据 |
+| UI-CRED-001 | 列表搜索、翻页、选择 | 服务端分页/q；URL 恢复 search/page/credential；表格显示名称、类型、用户名、引用数和更新时间；点击「详情」覆盖列表并按需加载 key summary | 列表/详情错误分别显示重试；服务器列表失败不得泄露或伪造引用；详情打开时列表保持挂载但不可交互 | 选择变化只展示对应详情，私钥材料正文从不出现在详情 |
+| UI-CRED-002 | 新建密码凭据 | name、username、password 必填；成功后打开新凭据覆盖详情并刷新列表 | 密码不得出现在列表、toast 或日志 | 空 secret 无请求，保存后仅显示元数据 |
 | UI-CRED-003 | 新建私钥凭据 | name、username、private key 必填，passphrase 可选；large 弹窗用 CodeEditor | 无效/空私钥不提交；密钥正文不回显到详情 | 成功后详情仅展示 comment/algorithm/bits/fingerprint |
 | UI-CRED-004 | 编辑凭据 | 预填非 secret 字段；类型未变时 secret 留空表示保留；类型切换必须重新提供新类型 secret，并清旧 secret 输入 | 不得以空字符串覆盖现有 secret；passphrase 仅非空才发送 | API payload 单测证明编辑空 secret 字段被省略 |
 | UI-CRED-005 | 测试凭据 | 只有存在引用服务器才启用；弹窗列出引用服务器并选目标，实际调用该服务器 test | 无独立凭据 test 接口；无引用不能打开/发送请求 | 成功提示目标服务器名并关闭，失败保留选择以重试 |
-| UI-CRED-006 | 删除凭据 | 确认弹窗列出引用影响；存在引用时禁用删除并引导先解除 | 前端引用计算与后端冲突任一都应阻止删除 | 无引用成功后刷新；有引用时点击不会发 DELETE |
+| UI-CRED-006 | 删除凭据 | 确认弹窗列出引用影响（本地化 impact 文本含引用服务器列表）；存在引用时禁用确认按钮并引导先解除；确认期间锁定重复提交 | 前端引用计算与后端冲突任一都应阻止删除 | 无引用成功后刷新并关闭详情；有引用时点击不会发 DELETE |
 
-## 7. 资源页面通用与 `/resources/*`
+## 7. 资源页面（已废弃，能力并入服务器详情 tabs）
 
-| 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
-| --- | --- | --- | --- | --- |
-| UI-RES-001 | 打开 packages/containers/images/networks/volumes | 左侧唯一 ServerContextSelector；URL 恢复 server，行展示 APT/Docker 能力和不可用原因；路由 path 决定资源种类 | 不可达服务器不可选；换服务器/路由立即清旧资源并忽略迟到响应 | 不出现额外服务器下拉，资源始终属于当前 server/path |
-| UI-RES-002 | 资源 GET 失败或能力不足 | 对应区块显示 load failed、详情和重试；能力不足显示明确 block reason | 不得把失败/未上报当作空列表 | 重试仅请求当前资源；其他页面区块不受影响 |
-| UI-RES-003 | packages 搜索与勾选 | 搜索过滤 package/name/version/description 等可空字段；勾选状态只对应当前快照 | 切服务器/重载清选择；无选中隐藏“升级已选”和计数 | 首个勾选后批量栏出现，清空后消失 |
-| UI-RES-004 | 刷新包元数据 | 提交 refresh 任务，显示真实 taskId，等待最多约 90 秒完成后 GET 新快照 | 等待失败/超时显示错误且可再刷；不得用 GET 冒充 refresh | 请求顺序为 POST→任务轮询→GET |
-| UI-RES-005 | 升级已选/全部包 | 已选直接提交选中包任务；全部升级先 danger 确认影响 | 无权限/空列表/空选择禁用；接受不等于升级完成 | 请求 payload 与选中名一致，toast 显示真实 taskId |
-| UI-RES-006 | 查看容器 | 卡片显示名称、镜像、状态、端口及应用托管提示；操作行可换行不裁切 | 应用托管容器仍允许直接动作，但提示协调可能恢复 | 长名称/窄宽度下按钮仍可达 |
-| UI-RES-007 | 容器 start/stop/restart/delete | start 可直接执行；stop/restart/delete 先确认，托管容器确认增加协调影响；delete 强制勾选 | 根据状态/能力禁用无效动作；请求期单项 loading | 操作成功刷新快照；取消确认零请求 |
-| UI-RES-008 | 打开容器日志 | 读取最近 500 行，在可滚动 Dialog `pre` 中展示 | 失败只 toast，不打开伪空日志；长行换行且无页面横滚 | 日志对应容器名，关闭后返回原滚动位置 |
-| UI-RES-009 | 镜像刷新/拉取 | 刷新提交任务并等待完成后重载；拉取弹窗要求非空 reference，成功关闭并重载 | 悬空镜像 repoTags=null 用 reference 或 ID 展示 | 任务刷新不靠重复 GET，拉取空值零请求 |
-| UI-RES-010 | 镜像升级应用 | “升级有更新应用”仅提交可升级镜像关联 applicationIds 去重集合；“升级全部应用”走 all 接口 | 选中集合为空禁用；接受只提示 taskId | payload 不含重复/不可升级 ID |
-| UI-RES-011 | 删除镜像或清理未使用镜像 | 均 danger 确认且强制勾选；in-use 单镜像禁删 | 失败保留快照并 toast | 成功后当前镜像不再出现；取消无请求 |
-| UI-RES-012 | 首次打开 networks 且快照 stale、无 observedAt | 自动提交一次 refresh 任务、等待并重新 GET；手刷同闭环 | 同 server/tab 防重复自动刷新；网络只读，删除始终禁用 | 初始“未刷新”不会误显示成真空态；无网络 DELETE 请求 |
-| UI-RES-013 | 首次打开/刷新 volumes | stale 且无 observedAt 时自动任务刷新；手刷等待完成后重载 | 同 server/tab 防重复；空快照与失败分离 | taskId 可追踪，刷新后 observed 数据出现 |
-| UI-RES-014 | 删除卷或清理未使用卷 | danger 确认且强制勾选；in-use 卷禁删 | 失败不从 UI 乐观移除 | 成功后重载；确认影响说明可见 |
+> `web/src/views/resources` 与 `/resources/*` 路由、资源导航分组已删除；下列编号保留以供追踪，其可观察能力改由服务器详情的资源 tabs 承接：tab 框架与缓存见 `UI-SRV-017`（全局约定 `UI-SHELL-062`），资源表格与行操作见 `UI-SRV-018`。原条目中的分页/筛选/空错态/两阶段等待等要求继续以对应新条目与全局约定为准。
 
-## 8. 防火墙与 Fail2Ban
+| 原编号 | 原能力 | 替代 |
+| --- | --- | --- |
+| UI-RES-001 | 资源页服务器上下文选择 | UI-SRV-017（服务器由详情上下文固定） |
+| UI-RES-002 | 资源 GET 失败或能力不足 | UI-SRV-018（能力阻断与失败重试） |
+| UI-RES-003 | packages 搜索与勾选 | UI-SRV-018（勾选只对当前快照，批量栏约定不变） |
+| UI-RES-004 | 刷新包元数据 | UI-SRV-018（POST→任务轮询→GET） |
+| UI-RES-005 | 升级已选/全部包 | UI-SRV-018（全部升级 danger 确认） |
+| UI-RES-006 | 查看容器 | UI-SRV-018（容器表格列与托管提示） |
+| UI-RES-007 | 容器 start/stop/restart/delete | UI-SRV-018（确认、托管影响、逐项 loading） |
+| UI-RES-008 | 打开容器日志 | UI-SRV-018（Dialog 内 500 行） |
+| UI-RES-009 | 镜像刷新/拉取 | UI-SRV-018 |
+| UI-RES-010 | 镜像升级应用 | UI-SRV-018（applicationIds 去重集合） |
+| UI-RES-011 | 删除镜像或清理未使用镜像 | UI-SRV-018（danger + 强制勾选） |
+| UI-RES-012 | 网络首次打开自动刷新且只读 | UI-SRV-018（网络表格只读、删除禁用） |
+| UI-RES-013 | 存储卷首次打开/刷新 | UI-SRV-018（stale 且无快照自动刷新） |
+| UI-RES-014 | 删除卷或清理未使用卷 | UI-SRV-018（danger + 强制勾选） |
 
-| 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
-| --- | --- | --- | --- | --- |
-| UI-SEC-001 | 打开 firewall/fail2ban 或换服务器 | 使用唯一 ServerContextSelector 和 URL server；加载当前服务器对应安全面板 | 切换时清旧状态、取消旧请求；不可达服务器显示原因 | 面板数据、标题与 route/server 同步 |
-| UI-SEC-002 | 查看 UFW | 展示 supported/installed/active/default policy 与规则号、action、to、from；初始骨架、空态、失败态分离；并展示「安装与启用由 Agent 部署自动完成」的说明 | unsupported 时禁新增规则；页面**不得**再出现启用或安装入口（`UFW-API-007`） | 状态徽标与接口字段一致，且页面不再依赖 `sys.ufw_installed`/`sys.ufw_supported` 决定任何按钮可用性 |
-| UI-SEC-003 | 新增 UFW allow rule | 弹窗含 port、TCP/UDP、from；校验端口与来源后提交并使用返回的新 UFW state | 无效表单不请求；失败保留弹窗和输入 | 成功关闭、规则立即出现并 toast |
-| UI-SEC-004 | 删除规则 | 先显示影响确认；删除直接更新返回 state | 受保护端口（SSH/Agent）与应用受管规则不可删除 | 只对当前服务器/规则号发送一次请求；取消零请求 |
-| UI-SEC-005 | 非 dev 访问 Fail2Ban | 路由回到 firewall 且保留 query；dev 显示完整编辑页 | production 导航也不得出现 Fail2Ban | 构建环境切换时行为稳定 |
-| UI-SEC-006 | 查看/编辑 Fail2Ban | 可在 visual 与 YAML 间切换；visual 提供 ssh/nginx-auth/recidive preset、jail 删除，任一变化同步 YAML | YAML 含 visual 无法表达的高级配置时，切 visual 必须警告放弃；取消回 YAML | 确认后才发生降级转换，preset 往返仍可解析 |
-| UI-SEC-007 | 保存 Fail2Ban 草稿 | 仅有 YAML 变化才启用；保存 configYaml，成功以返回 state 重新建立草稿基线 | 失败保留草稿；保存不等于启用服务 | 成功 dirty 消失，运行时 jail 与草稿配置分开显示 |
-| UI-SEC-008 | 安装、启用/接管、释放 Fail2Ban | 安装提交任务；启用先确认，若已安装但非 Panel 托管则必须勾选接管；释放为 danger 确认 | 已安装禁安装、非托管禁释放；未勾接管不提交 | toast 只承诺任务接受并含真实 taskId，随后重载面板 |
+## 8. 防火墙与 Fail2Ban（已废弃，能力并入服务器详情「防火墙」tab）
+
+> `/resources/firewall`、`/resources/fail2ban` 与 `/security/*` 路由已删除；防火墙能力成为服务器详情的一级 tab（内含 UFW / Fail2Ban 子视图，Fail2Ban 仅 dev 可见）。下列编号保留以供追踪，替代项为 `UI-SRV-019`。
+
+| 原编号 | 原能力 | 替代 |
+| --- | --- | --- |
+| UI-SEC-001 | 打开 firewall/fail2ban 或换服务器 | UI-SRV-017（服务器由详情上下文固定） |
+| UI-SEC-002 | 查看 UFW | UI-SRV-019（不得出现安装/启用入口） |
+| UI-SEC-003 | 新增 UFW allow rule | UI-SRV-019 |
+| UI-SEC-004 | 删除规则 | UI-SRV-019（受保护端口/受管规则由后端拒绝） |
+| UI-SEC-005 | 非 dev 访问 Fail2Ban | UI-SRV-017（Fail2Ban 子视图仅 dev） |
+| UI-SEC-006 | 查看/编辑 Fail2Ban | UI-SRV-019（visual/YAML 切换与高级配置警告） |
+| UI-SEC-007 | 保存 Fail2Ban 草稿 | UI-SRV-019（仅有变化才启用） |
+| UI-SEC-008 | 安装、启用/接管、释放 Fail2Ban | UI-SRV-019（接管勾选、danger 确认、真实 taskId） |
 
 ## 9. 应用列表、详情与运行操作
 
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
-| UI-APP-001 | `/applications/apps` 搜索、翻页、选择 | 服务端分页/q；URL 恢复 search/page/application；列表显示状态、镜像引用、实例数和镜像更新；规划失败显示“部署被阻塞”，uncertainty 显示“结果待核实” | summary 缺 imageReference 时仅按行补详情并显示骨架；失败不得把整表清空为假空态；不能将运行实例存在解释为最新部署成功 | 行级补载互不阻塞，选中项完整详情/runtime/files 按需请求；状态按 `APP-PLAN-001`、`APP-RUN-004` 派生 |
+| UI-APP-001 | `/applications/apps` 搜索、翻页、选择 | 服务端分页/q；URL 恢复 search/page/application；表格显示名称、状态、镜像引用、实例数、镜像更新与更新时间；点击「详情」覆盖列表；规划失败显示“部署被阻塞”，uncertainty 显示“结果待核实” | summary 缺 imageReference 时仅按行补详情并在该行显示骨架；失败不得把整表清空为假空态；不能将运行实例存在解释为最新部署成功 | 行级补载互不阻塞，选中项完整详情/runtime/files 按需请求；状态按 `APP-PLAN-001`、`APP-RUN-004` 派生 |
 | UI-APP-002 | 查看 Runtime tab | 显示实例总数/运行/失败及每服务器实例、容器和 `lastError`；当前 Job 显示真实状态、步骤、attempt、nextRunAt、错误码/消息/详情与 operation 深链；独立显示规划失败原因、可用字段/文件名、修复或重试说明及活动入口；uncertainty 明确提示结果待核实 | runtime 失败 toast 且局部可重试/刷新；换应用清旧 runtime；终态 failed 不得消失；无 Job 的规划失败也必须显示，不能覆盖实际实例状态 | 实例/Job 状态文本与徽标一致；active 或当前规划错误基线 3 秒有界轮询，按 nextRunAt 对齐，隐藏暂停，最多 24 次或 2 分钟；新 runtime 无规划错误时清除旧 DTO 告警 |
 | UI-APP-003 | 查看 Routes/Files tab | Routes 显示域名、目标端口、来源服务器名和 paths；Files 只列已提交文件并支持 blob 下载 | 无路由/文件有专属空态；服务器名未知才回退 ID | 文件名和下载名符合 kind/contentType，下载带 auth |
-| UI-APP-004 | 点击同步/部署 | 提交人工 deploy；实际规划时显示真实 operationId/deploymentId 并刷新，`noChange=true` 时明确提示已是期望状态 | 不得被自动退避静默吞掉，不得把 no-change 或请求接受宣称为部署完成；失败后也重载列表/详情/runtime，使持久化规划诊断立即可见 | toast 与实际响应字段一致，operation 深链可恢复后续状态；修正后计划成功或已满足期望时清当前告警、保留失败历史 |
-| UI-APP-005 | 停用应用 | enabled 时可点，先 danger 确认后调用 stop；成功只提示请求接受并刷新 | 已停用禁用；失败保持应用状态 | 取消无请求，成功后状态来自重载而非前端假改 |
-| UI-APP-006 | 检查并更新镜像 | 仅 `imageUpdateAvailable` 时启用；提交 update 并按两阶段反馈 | 无更新时不请求 | 返回 ID 的 toast 正确，刷新后徽标由后端决定 |
-| UI-APP-007 | 点击“容器日志” | 立即打开 Dialog 并加载该应用实例；按服务器名/容器名选择目标，单个可读实例自动加载，多个等待选择；请求携带 instanceId、tail=240，正文内部滚动并支持手动刷新/刷新实例列表 | 已退出但存在的容器仍可选；无实例、不可读、空日志和读取失败分开；失败 toast 加就地重试；切换实例/应用/关闭时取消旧请求且迟到结果不串日志 | 只请求选中实例，不通过任务或协调记录代替容器日志；不定时轮询，长日志不撑开页面 |
+| UI-APP-004 | 点击行内同步/部署 | 提交人工 deploy；实际规划时显示真实 operationId/deploymentId 并刷新，`noChange=true` 时明确提示已是期望状态 | 不得被自动退避静默吞掉，不得把 no-change 或请求接受宣称为部署完成；失败后也重载列表/详情/runtime，使持久化规划诊断立即可见 | toast 与实际响应字段一致，operation 深链可恢复后续状态；修正后计划成功或已满足期望时清当前告警、保留失败历史 |
+| UI-APP-005 | 行内停用应用 | enabled 时可点，先 danger 确认后调用 stop；成功只提示请求接受并刷新 | 已停用禁用；失败保持应用状态 | 取消无请求，成功后状态来自重载而非前端假改 |
+| UI-APP-006 | 行内检查并更新镜像 | 仅 `imageUpdateAvailable` 时启用；提交 update 并按两阶段反馈 | 无更新时不请求 | 返回 ID 的 toast 正确，刷新后徽标由后端决定 |
+| UI-APP-007 | 点击行内“容器日志” | 打开 Dialog 并加载该应用实例；按服务器名/容器名选择目标，单个可读实例自动加载，多个等待选择；请求携带 instanceId、tail=240，正文内部滚动并支持手动刷新/刷新实例列表 | 已退出但存在的容器仍可选；无实例、不可读、空日志和读取失败分开；失败 toast 加就地重试；切换实例/应用/关闭时取消旧请求且迟到结果不串日志 | 只请求选中实例，不通过任务或协调记录代替容器日志；不定时轮询，长日志不撑开页面 |
 | UI-APP-008 | 打开协调记录 | 携带 `view=operations` 与当前 application resource filter 跳 `/activity`；已有 operationId 时直接打开本次时间线 | 不从全局相邻事件猜测因果，不直接展示原始 ID 作为用户标题 | 目标页面筛选与当前应用对应，本次部署入口定位同一 operation |
-| UI-APP-009 | 删除应用 | 普通应用显示影响说明并 danger 确认；存在持久化配置/历史位置时使用 danger 强制勾选确认，明确说明将永久删除所有已记录节点的数据，并向后端传确认参数 | 取消零请求；未确认或清理失败不移除对象 | 持久化删除只有勾选后发出，成功后重载列表且已删除应用不再选中 |
-| UI-APP-010 | 下载持久化数据 | 展示历史数据节点选择器；单节点自动选择，多节点要求用户选择，携带 serverId 走授权 blob 下载 | 无记录位置或未选择节点时禁用；下载失败不生成损坏文件 | 未 apply 与已移除部署节点的数据均可按节点下载，按钮有单独 loading |
+| UI-APP-009 | 行内删除应用 | 普通应用显示影响说明并 danger 确认；存在持久化配置/历史位置时先补载完整详情，使用 danger 强制勾选确认，明确说明将永久删除所有已记录节点的数据，并向后端传确认参数 | 取消零请求；未确认或清理失败不移除对象；补载详情失败不进入确认 | 持久化删除只有勾选后发出，成功后重载列表并关闭覆盖详情 |
+| UI-APP-010 | 下载持久化数据（详情上下文面板） | 展示历史数据节点选择器；单节点自动选择，多节点要求用户选择，携带 serverId 走授权 blob 下载 | 无记录位置或未选择节点时禁用；下载失败不生成损坏文件 | 未 apply 与已移除部署节点的数据均可按节点下载，按钮有单独 loading |
 | UI-APP-011 | 选择 zip 恢复持久化数据 | 文件选择后必须经 danger+强制勾选确认，再 multipart restore | 取消选择/确认不上传；没有 persistentPath 禁用 | 仅确认后发一笔请求，反馈只承诺已接受 |
 
 ### UI-ACT-001 Activity 事件与操作可读性
@@ -205,9 +212,9 @@
 
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
-| UI-DNS-001 | 搜索、翻页、选择域名 | 服务端分页/q；URL 恢复 search/page/domain；列表显示 Cloudflare provider 状态与更新时间 | 列表失败与空域名分离；切域名立即清旧记录并 abort | 分享 URL 恢复相同域名与页码，迟到记录不串域名 |
-| UI-DNS-002 | 新建/编辑域名 | provider 固定 Cloudflare；新建必须 name+API token；编辑 token 留空保持当前 | token 永不回显/出现在列表；错误保持弹窗 | payload 编辑空 token 时省略，成功选中新域名 |
-| UI-DNS-003 | 加载记录 | 仅当前域名请求，表格显示 A/AAAA/CNAME/TXT/MX、name、content、TTL、操作 | provider/记录失败在表格内显示错误+重试，并使该域名状态 danger；真实空列表用 no records | 错误、加载、空、内容四态互斥 |
+| UI-DNS-001 | 搜索、翻页、选择域名 | 服务端分页/q；URL 恢复 search/page/domain；表格显示域名、provider 状态与更新时间；点击「详情」覆盖列表并加载记录 | 列表失败与空域名分离；切域名立即清旧记录并 abort；详情打开时列表保持挂载但不可交互 | 分享 URL 恢复相同域名与页码，迟到记录不串域名 |
+| UI-DNS-002 | 新建/编辑域名 | provider 固定 Cloudflare；新建必须 name+API token；编辑 token 留空保持当前 | token 永不回显/出现在列表；错误保持弹窗 | payload 编辑空 token 时省略，成功打开新域名覆盖详情 |
+| UI-DNS-003 | 加载记录 | 仅当前域名请求，详情内表格显示 A/AAAA/CNAME/TXT/MX、name、content、TTL、操作；标题栏展示快照时间与 stale 标记 | provider/记录失败在记录区显示错误+重试，并使该域名状态 danger；真实空列表用 no records；`lastRefreshError` 就地展示 | 错误、加载、空、内容四态互斥；行内操作只影响当前域名 |
 | UI-DNS-004 | 同步记录 | POST refresh，显示 taskId，等待任务完成后重新 GET 当前域名 | 等待中切域名时旧结果不得覆盖；超时/失败保留错误重试 | 请求顺序正确且按钮只锁当前记录区 |
 | UI-DNS-005 | 新增/编辑记录 | type、name、content、TTL、proxy mode；name 统一归一，空 TTL 回退 300，content 必填 | 非代理支持由后端校验；失败保留弹窗/记录表 | 成功关闭并重载当前域名记录 |
 | UI-DNS-006 | 删除记录或域名 | 分别显示目标和影响说明的 danger 确认；成功只刷新对应作用域 | 域名引用冲突由后端明确显示，不得乐观删除 | 取消零请求；域名删除成功清 selection |
@@ -216,15 +223,15 @@
 
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
-| UI-CERT-001 | 切换 domains/self-signed/keys、搜索、翻页、选择 | path 决定模式；page/search/selected 同步 URL；对应服务端列表使用 q，分页固定底部 | 切模式清 selection/page；列表错误与空态分离 | 三个深链刷新可恢复模式、查询与选中项 |
-| UI-CERT-002 | 查看域名证书 | 显示覆盖域名、issuer、状态、到期、lastError 与是否签发中 | failed 优先 danger，再区分 expired/expiring | 徽标与 model 测试一致 |
+| UI-CERT-001 | 切换 domains/self-signed/keys、搜索、翻页、选择 | path 决定模式；page/search/selected 同步 URL；对应服务端列表使用 q，分页固定底部；列表为表格（domains：名称/覆盖域名/状态/到期；self：名称/类型/commonName/到期；keys：名称/类型/算法/指纹/到期），点击「详情」覆盖列表 | 切模式清 selection/page；列表错误与空态分离；能力不足的行操作禁用 | 三个深链刷新可恢复模式、查询与选中项；覆盖详情保留列表滚动与筛选 |
+| UI-CERT-002 | 查看域名证书 | 覆盖详情显示覆盖域名、issuer、状态、到期、lastError 与是否签发中 | failed 优先 danger，再区分 expired/expiring | 徽标与 model 测试一致 |
 | UI-CERT-003 | 签发或调整重签 | 选择已管理 DNS 域名，配置名称、根域、通配符、子域前缀并实时预览覆盖；重签预填已有覆盖 | name/domain 必填；去重/清空子域；只提示任务创建不宣称签发完成 | POST/PUT payload 的 prefixes 与预览一致，返回证书被选中 |
 | UI-CERT-004 | 立即续签或删除域名证书 | renew 提交后台任务并提示接受；delete 先 danger 确认 | 请求失败保留详情；签发中操作由后端拒绝时明确显示 | 成功重载状态，取消删除零请求 |
 | UI-CERT-005 | 生成自签 CA | name/commonName 必填，years 数值化并默认 5 | 非法值由后端错误明确反馈 | 成功选中新 CA 并刷新 |
 | UI-CERT-006 | 生成 self-signed leaf | 选择 CA，填写 name/commonName、DNS names、IP addresses、days（默认 90） | name/commonName 必填；无 CA/非法 SAN 不得伪成功 | 成功详情显示 kind/fingerprint/expiry/SAN |
 | UI-CERT-007 | 重签或删除自签资产 | 重签调用 renew 并选返回 ID；删除先确认 | 引用/父子冲突保留对象并 toast | 成功重载，状态与新到期时间一致 |
 | UI-CERT-008 | 打开密钥资产页 | 过滤系统托管资产，仅列用户 CA/TLS/SSH；详情显示算法、fingerprint、reference/child count、expiry 与允许动作 | 系统资产只在设置的系统证书分区；列表不得包含私钥、公钥正文或 metadata | `canDelete/canReissue/canRegenerate/downloadKinds` 控制按钮 |
-| UI-CERT-009 | 生成 CA/TLS/SSH | CA/TLS 填 name/commonName/algorithm/RSA size/validity，TLS 另选 parent CA 与 SAN；SSH 填 name/algorithm/RSA size/comment | 生成入口只属于 keys 工作台；必填 name，其他错误显式返回 | 成功选择新 asset，不在 UI 展示私钥正文 |
+| UI-CERT-009 | 生成 CA/TLS/SSH | keys 模式页头提供生成 SSH/生成 CA/生成 TLS 入口，CA/TLS 填 name/commonName/algorithm/RSA size/validity，TLS 另选 parent CA 与 SAN；SSH 填 name/algorithm/RSA size/comment | 生成入口只属于 keys 模式（表格页头）；domains/self-signed 页头不得出现；必填 name，其他错误显式返回 | 成功打开新 asset 覆盖详情，不在 UI 展示私钥正文 |
 | UI-CERT-010 | 单资产导入 | 选择 type/name/parent/算法；SSH 只编辑私钥材料，CA/TLS 用 tabs 分别编辑私钥和证书，默认打开私钥 | 导入失败在 Dialog 内保留结构化错误和材料；不得把 secret 写 toast | tabs/CodeEditor 可键盘操作，成功关闭并选中新资产 |
 | UI-CERT-011 | 重签/重生成/删除资产 | SSH 用 regenerate，证书用 reissue；根据 capability 禁用；delete 先 danger 确认并由后端做引用安全检查 | 引用中/有子资产时删除失败不移除行 | 有 taskId 才显示，成功后重载能力与 fingerprint |
 | UI-CERT-012 | 下载单资产材料 | 仅渲染 downloadKinds，逐项 blob 下载 | 失败不生成文件；不得经 JSON ApiClient 解析二进制 | 文件种类/名称与服务端 Content-Disposition 对应 |
@@ -267,7 +274,7 @@
 | UI-SET-003 | 保存 Security | token expiration 从固定值选，remote timeout >=1；只合入安全字段 | 失败不覆盖 runtime 基线 | 请求中仅安全差异变化 |
 | UI-SET-004 | 重置 JWT secret | secret trim 后至少 16 字符，先 danger 确认；成功更新 session、清输入并标记 configured | 短值就地错误；失败保持输入并防止登出假象 | 未确认无请求，成功后新 token/session 生效 |
 | UI-SET-005 | 保存 Certificates/Panel HTTPS | 编辑 Panel domain、TLS 资产、ACME email、DNS delay>=0；TLS 选择来自 `/key-assets/tls`，内置 `panel-tls` 保存为空 ID | TLS 列表不得按域名/SAN过滤，不含 Agent 专用证书；domain trim+小写 | 请求仅合入 certificates/panel 分区，成功重新 hydrate |
-| UI-SET-006 | 查看/重置系统证书 | 展示 Panel Agent CA/client 和服务器 Agent server cert 的 type/status/fingerprint/有效期/归属；仅 canReset 可点，先 danger 确认后提交任务 | 不得通过普通 key asset API 修改；不可重置项禁用 | toast 显示真实 taskId，列表后续刷新反映状态 |
+| UI-SET-006 | 查看/重置系统证书 | 以表格展示 Panel Agent CA/client 和服务器 Agent server cert 的名称/归属、type/status/fingerprint/有效期；仅 canReset 行可点，先 danger 确认后提交任务 | 不得通过普通 key asset API 修改；不可重置项禁用 | toast 显示真实 taskId，列表后续刷新反映状态 |
 | UI-SET-007 | 查看 System | 版本、channel、latest、updateAvailable 只读；branding title/subtitle 和 server variables 分别独立保存 | 版本不混入 runtime 保存；变量格式为 `[*]KEY=Name`，空行忽略 | 保存 branding 不提交变量，保存变量不提交 branding |
 | UI-SET-008 | 配置备份导出 | 默认加密；关闭加密显示身份可恢复性警示；加密时密码必填，确认后提交 export 并显示 pending | 不得在此假装归档已可下载；失败不进入 pending | 未满足密码时按钮禁用，成功提示真实 exportId |
 | UI-SET-009 | 选择还原文件 | FileUploadButton 选 `.panel-backup` 后先 preflight，显示 manifest 版本/文件数；用户另勾覆盖确认并再经 danger Dialog 才 confirm restore | 更换文件清旧 preflight；无 preflight/未勾选不能恢复 | 仅最终确认发送 multipart restore，成功显示 pending/restarting |
@@ -308,19 +315,16 @@
 ## 22. 覆盖来源
 
 - 全部路由：`web/src/router/index.ts`。
-- 页面实现：`web/src/views/auth`、`overview`、`servers`、`credentials`、`resources`、`security`、`applications`、`dns`、`certificates`、`application-operations`、`system-events`、`tasks`、`settings`、`maintenance`、`debug`。
+- 页面实现：`web/src/views/auth`、`overview`、`servers`（含 `tabs/` 资源与安全 tab）、`credentials`、`applications`、`dns`、`certificates`、`activity`、`settings`、`maintenance`、`debug`。
 - 操作/API：`web/src/api/*.ts`；DTO 与 capability：`web/src/types/*.ts`。
-- 字段校验和派生状态：各页面族 `model.ts`、`assetImportEditor.ts`、`templateLanguage.ts`、`archivePath.ts`。
-- 共享交互：`web/src/components/ui`、`patterns/AssetFileManager.vue`、`ServerContextSelector.vue`、`ServerMultiPicker.vue`、`AutoRefreshControl.vue`。
-- 自动化证据：页面 model 测试、API client/API 模块测试、`domainRoutes.test.ts` Mock 集成样本，以及共享组件/布局/i18n/主题测试。
+- 字段校验和派生状态：各页面族 `model.ts`、`servers/tabs/resourceModel.ts`、`servers/tabs/securityModel.ts`、`assetImportEditor.ts`、`templateLanguage.ts`、`archivePath.ts`。
+- 共享交互：`web/src/components/ui`（含 `Table.vue`）、`web/src/components/templates/TableDetailLayout.vue`、`patterns/AssetFileManager.vue`、`ServerMultiPicker.vue`、`AutoRefreshControl.vue`。
+- 自动化证据：页面 model 测试、API client/API 模块测试、`domainRoutes.test.ts` Mock 集成样本、`Table.test.ts`、`TableDetailLayout.test.ts`、`servers/index.test.ts`、`servers/tabs/*.test.ts`，以及共享组件/布局/i18n/主题测试。
 
 ## 23. 当前实现与自动化缺口（不得作为放宽验收的依据）
 
-1. servers、applications、dns 当前页码没有完整地从 URL 初始化并同步；部分选择变化也依赖按钮内手写 query。应按 UI-SRV-001、UI-APP-001、UI-DNS-001 统一恢复。
-2. applications 编辑器 footer 的取消仍调用 `router.back()`；这会受进入历史影响，与 UI-APP-023 的明确返回目标冲突。
-3. application detail/runtime/files 加载失败目前主要用 toast，缺少 UI-APP-002/003 所要求的详情作用域错误空态和重试。
-4. certificates 顶部条件渲染目前会在 domains/self-signed 模式出现“生成 SSH”入口；正确契约是 UI-CERT-009：生成密钥资产只属于 keys 工作台。
-5. 多个页面危险动作仍由普通 Dialog 承载，未全部使用带统一 impact/checkbox/loading 锁的 ConfirmDialog；需要按对应条目补齐。
-6. 除共享组件和纯逻辑外，当前缺少覆盖上述完整页面链路的 Playwright e2e、axe 与多断点视觉回归。尤其 URL 恢复、脏状态离开、后台任务两阶段、上传下载和维护 token 隔离缺少浏览器级证据。
-7. DNS、applications、certificates、settings 等复杂页面的表单校验仍有大量依赖后端返回，当前只对部分必填/数值做本地约束；验收需同时验证本地阻止与服务端结构化错误不丢失。
-8. `/tasks` 和 `/debug` 为兼容/隐藏入口，仍必须维持可用与可访问，但不应重新加入主导航。
+1. applications 编辑器 footer 的取消仍调用 `router.back()`；这会受进入历史影响，与 UI-APP-023 的明确返回目标冲突。
+2. application detail/runtime/files 加载失败目前主要用 toast，缺少 UI-APP-002/003 所要求的详情作用域错误空态和重试。
+3. 除共享组件和纯逻辑外，当前缺少覆盖上述完整页面链路的 Playwright e2e、axe 与多断点视觉回归。尤其 URL 恢复、脏状态离开、后台任务两阶段、上传下载和维护 token 隔离缺少浏览器级证据；覆盖式详情的前进/后退与跨页深链也依赖组件测试。
+4. DNS、applications、certificates、settings 等复杂页面的表单校验仍有大量依赖后端返回，当前只对部分必填/数值做本地约束；验收需同时验证本地阻止与服务端结构化错误不丢失。
+5. `/tasks` 和 `/debug` 为兼容/隐藏入口，仍必须维持可用与可访问，但不应重新加入主导航。
