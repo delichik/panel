@@ -27,7 +27,10 @@ func TestControlPlaneContractPins(t *testing.T) {
 	if backups.InitRestartPath != "/restart" {
 		t.Fatalf("restart path = %q", backups.InitRestartPath)
 	}
-	if tailscale.InitApplyPath != "/apply" || tailscale.InitStatusPath != "/status" {
-		t.Fatalf("tailscale control paths = %q %q", tailscale.InitApplyPath, tailscale.InitStatusPath)
+	if tailscale.InitPathPrefix+tailscale.InitApplyPath != "/tailscale/apply" {
+		t.Fatalf("tailscale apply route = %q", tailscale.InitPathPrefix+tailscale.InitApplyPath)
+	}
+	if tailscale.InitPathPrefix+tailscale.InitStatusPath != "/tailscale/status" {
+		t.Fatalf("tailscale status route = %q", tailscale.InitPathPrefix+tailscale.InitStatusPath)
 	}
 }

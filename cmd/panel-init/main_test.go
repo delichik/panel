@@ -20,6 +20,7 @@ import (
 
 	"panel/internal/modules/backups"
 	"panel/internal/platform/panelsupervision"
+	"panel/internal/platform/tailscale"
 )
 
 var (
@@ -157,6 +158,30 @@ func TestPanelInitControlListenerReplacesStaleSocket(t *testing.T) {
 		if info, err := os.Stat(socketPath); err != nil || info.Mode()&os.ModeSocket == 0 {
 			t.Fatalf("control socket was not recreated as a socket: %v", err)
 		}
+	}
+}
+
+// TS-INIT-005：tailscale 控制路由必须与 Panel 侧客户端使用的路径一致；路由
+// 漂移会以 404 的形式让容器实际态在界面上变成“不可用”并掩盖真实原因。
+func TestPanelInitControlListenerServesTailscaleStatus(t *testing.T) {
+	socketPath := newTestControlSocket(t)
+	restarts := make(chan string, 1)
+	server, err := startControlListener(socketPath, restarts, "secret-token", nil)
+	if err != nil {
+		t.Fatalf("startControlListener() error = %v", err)
+	}
+	defer server.Close()
+
+	status, body := getControl(t, socketPath, tailscale.InitPathPrefix+tailscale.InitStatusPath, "secret-token")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+	if !strings.Contains(body, "\"available\"") {
+		t.Fatalf("status body = %q, want a tailscale status payload", body)
+	}
+
+	if status, _ := getControl(t, socketPath, tailscale.InitPathPrefix+tailscale.InitStatusPath, "wrong-token"); status != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status = %d, want %d", status, http.StatusUnauthorized)
 	}
 }
 
@@ -302,6 +327,33 @@ func postRestart(t *testing.T, socketPath, token, body string) int {
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return resp.StatusCode
+}
+
+func getControl(t *testing.T, socketPath, path, token string) (int, string) {
+	t.Helper()
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				var dialer net.Dialer
+				return dialer.DialContext(ctx, "unix", socketPath)
+			},
+		},
+	}
+	req, err := http.NewRequest(http.MethodGet, "http://panel-init"+path, nil)
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	if token != "" {
+		req.Header.Set(panelsupervision.ControlTokenHeader, token)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s via %s error = %v", path, socketPath, err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(raw)
 }
 
 func assertRestart(t *testing.T, restarts <-chan string, want string) {

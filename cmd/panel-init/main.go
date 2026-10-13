@@ -149,7 +149,7 @@ func startControlListener(socketPath string, restarts chan<- string, token strin
 		}
 		w.WriteHeader(http.StatusAccepted)
 	})
-	mux.HandleFunc("POST /tailscale"+tailscale.InitApplyPath, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST "+tailscale.InitPathPrefix+tailscale.InitApplyPath, func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get(panelsupervision.ControlTokenHeader) != token {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -159,7 +159,7 @@ func startControlListener(socketPath string, restarts chan<- string, token strin
 		w.WriteHeader(http.StatusAccepted)
 		writeTailscaleStatus(w, supervisor.Status())
 	})
-	mux.HandleFunc("GET /tailscale"+tailscale.InitStatusPath, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET "+tailscale.InitPathPrefix+tailscale.InitStatusPath, func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get(panelsupervision.ControlTokenHeader) != token {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return

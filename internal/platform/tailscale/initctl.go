@@ -14,6 +14,8 @@ import (
 )
 
 const (
+	// InitPathPrefix 是容器内 tailscale 控制面在共享控制面上的路由前缀。
+	InitPathPrefix = "/tailscale"
 	// InitApplyPath 触发 panel-init 重新读取期望态配置并收敛 tailscaled。
 	InitApplyPath = "/apply"
 	// InitStatusPath 返回容器内 tailscale 的当前实际态。
@@ -68,11 +70,11 @@ func (c *initController) Supported() bool {
 }
 
 func (c *initController) Apply(ctx context.Context) (Status, error) {
-	return c.request(ctx, http.MethodPost, InitApplyPath)
+	return c.request(ctx, http.MethodPost, InitPathPrefix+InitApplyPath)
 }
 
 func (c *initController) Status(ctx context.Context) (Status, error) {
-	return c.request(ctx, http.MethodGet, InitStatusPath)
+	return c.request(ctx, http.MethodGet, InitPathPrefix+InitStatusPath)
 }
 
 func (c *initController) request(ctx context.Context, method, path string) (Status, error) {

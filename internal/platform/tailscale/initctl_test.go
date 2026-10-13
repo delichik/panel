@@ -49,7 +49,7 @@ func TestInitControllerAuthorizesAndDecodesStatus(t *testing.T) {
 	socketPath := newControlSocketServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotHeader = r.Header.Get(panelsupervision.ControlTokenHeader)
 		gotMethod = r.Method
-		if r.URL.Path != InitApplyPath {
+		if r.URL.Path != InitPathPrefix+InitApplyPath {
 			http.Error(w, "unexpected path", http.StatusNotFound)
 			return
 		}
@@ -101,6 +101,9 @@ func TestInitEnvironmentNamesStayStable(t *testing.T) {
 	}
 	if panelsupervision.ControlTokenHeader != "X-Panel-Init-Token" {
 		t.Fatalf("ControlTokenHeader = %q", panelsupervision.ControlTokenHeader)
+	}
+	if InitPathPrefix != "/tailscale" {
+		t.Fatalf("InitPathPrefix = %q", InitPathPrefix)
 	}
 	if InitApplyPath != "/apply" || InitStatusPath != "/status" {
 		t.Fatalf("control paths = %q %q", InitApplyPath, InitStatusPath)
