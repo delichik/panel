@@ -21,7 +21,7 @@ describe('overview model', () => {
   it('builds a risk queue with navigation targets', () => {
     expect(overviewRisks(overview.servers)).toEqual([
       { id: 'srv-2:reach', tone: 'danger', title: 'core', description: 'overviewPage.riskUnreachable', to: '/servers?server=srv-2' },
-      { id: 'srv-2:packages', tone: 'info', title: 'core', description: 'overviewPage.riskPackages', to: '/resources/packages' },
+      { id: 'srv-2:packages', tone: 'info', title: 'core', description: 'overviewPage.riskPackages', to: '/servers?server=srv-2&tab=packages' },
     ]);
   });
 

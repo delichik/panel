@@ -48,7 +48,7 @@ async function check(serverId: string) {
       <p class="m-0">{{ t('facilityDiagnostics.configErrorHint') }}</p>
       <pre class="m-0 max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs">{{ config.lastError }}</pre>
     </div>
-    <article v-for="node in config.deployments ?? []" :key="node.serverId" class="grid min-w-0 gap-2 rounded-xl border border-border p-3">
+    <article v-for="node in config.deployments ?? []" :key="node.serverId" class="grid min-w-0 gap-2 border-t border-border pt-3 first:border-t-0 first:pt-0">
       <strong>{{ node.serverName || node.serverId }}</strong>
       <div class="flex flex-wrap items-center gap-2">
         <span>{{ t('facilityDiagnostics.containerState') }}</span>

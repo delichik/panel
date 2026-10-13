@@ -311,6 +311,7 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
           <Table
             v-else
             class="max-lg:max-h-[60dvh]"
+            :framed="false"
             :columns="columns"
             :rows="credentials"
             row-key="id"

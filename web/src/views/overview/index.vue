@@ -635,7 +635,7 @@ onBeforeUnmount(() => {
           </article>
         </section>
 
-        <section class="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-card p-4">
+        <section class="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden">
           <div v-if="loading && cards.length === 0" class="grid min-w-0 gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(240px,100%),1fr))]">
             <Skeleton v-for="item in 6" :key="item" class="h-40" />
           </div>
@@ -689,7 +689,7 @@ onBeforeUnmount(() => {
               </div>
               <div class="flex items-start justify-between gap-3">
                 <div class="flex min-w-0 items-center gap-3">
-                  <span class="grid size-9 place-items-center rounded-xl border border-border bg-muted text-muted-foreground">
+                  <span class="grid size-9 place-items-center rounded-lg bg-muted text-muted-foreground">
                     <component :is="cardIcon(card.kind)" class="size-4" aria-hidden="true" />
                   </span>
                   <div class="min-w-0">
@@ -755,7 +755,7 @@ onBeforeUnmount(() => {
             <div class="mt-3 grid min-w-0 grid-cols-2 gap-2">
               <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/servers')"><Server class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.servers.title') }}</span></Button>
               <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/credentials')"><ShieldCheck class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.credentials.title') }}</span></Button>
-              <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/resources/packages')"><Boxes class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.packages.title') }}</span></Button>
+              <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/servers')"><Boxes class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.packages.title') }}</span></Button>
               <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/activity')"><Activity class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.activity.title') }}</span></Button>
             </div>
           </section>

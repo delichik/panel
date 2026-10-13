@@ -12,12 +12,19 @@ const props = withDefaults(defineProps<{
   loadingRows?: number;
   loadingLabel?: string;
   fixed?: boolean;
+  /**
+   * Render the table as its own framed card (border + radius). Set false when
+   * the table is embedded in a card that already owns the frame, so the region
+   * keeps a single card layer.
+   */
+  framed?: boolean;
 }>(), {
   loading: false,
   loadingRows: 6,
   loadingLabel: '',
   fixed: false,
   activeKey: null,
+  framed: true,
 });
 
 // Cell slots are addressed by column key (`#<key>`), header slots by `#head-<key>`;
@@ -54,7 +61,7 @@ function skeletonClass(rowIndex: number, columnIndex: number, align?: 'left' | '
 </script>
 
 <template>
-  <div class="min-h-0 overflow-auto rounded-xl border border-border">
+  <div class="min-h-0 overflow-auto" :class="framed ? 'rounded-xl border border-border' : undefined">
     <table class="w-full border-collapse text-sm" :class="fixed ? 'table-fixed' : undefined" :aria-busy="loading ? 'true' : undefined" :aria-label="loadingLabel || undefined">
       <thead class="sticky top-0 z-10 bg-muted text-xs font-semibold uppercase text-muted-foreground">
           <tr>

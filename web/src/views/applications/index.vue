@@ -1846,6 +1846,7 @@ onBeforeUnmount(() => {
           <Table
             v-else
             class="max-lg:max-h-[60dvh]"
+            :framed="false"
             :columns="applicationColumns"
             :rows="appRows"
             row-key="id"
@@ -2036,7 +2037,7 @@ onBeforeUnmount(() => {
           :key="item.kind"
           class="motion-list-item grid gap-5 rounded-2xl border border-border bg-card p-5 lg:grid-cols-[auto_minmax(0,1fr)_auto]"
         >
-          <div class="grid size-14 shrink-0 place-items-center rounded-2xl border border-border bg-muted/40 text-foreground">
+          <div class="grid size-14 shrink-0 place-items-center rounded-xl bg-muted/40 text-foreground">
             <component :is="item.icon" class="size-6" aria-hidden="true" />
           </div>
           <div class="min-w-0">
@@ -2197,7 +2198,7 @@ onBeforeUnmount(() => {
       <StorageShareFacility :mode="mode" :servers="servers" />
     </template>
     <div v-else class="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-      <section class="rounded-2xl border border-border bg-card p-5">
+      <section class="min-w-0">
         <EmptyState v-if="!currentFacilitySummary" :title="t('applicationsPage.facilityUnavailable')" :description="t('applicationsPage.facilityUnavailableDescription', { kind: facilityKind })" />
         <div v-else-if="loading && !facility" class="relative grid min-h-64 place-items-center">
           <LoadingOverlay />
@@ -2212,7 +2213,7 @@ onBeforeUnmount(() => {
           <section class="rounded-2xl border border-border bg-muted p-4">
             <h3>{{ t('applicationsPage.routeSummaries') }}</h3>
             <div class="mt-3 grid gap-2 motion-stagger">
-              <div v-for="summary in facility.routeSummaries" :key="`${summary.domain}-${summary.path}-${summary.source}`" class="motion-reveal grid gap-1 rounded-xl border border-border p-3 text-sm">
+              <div v-for="summary in facility.routeSummaries" :key="`${summary.domain}-${summary.path}-${summary.source}`" class="motion-reveal grid gap-1 border-t border-border pt-3 text-sm first:border-t-0 first:pt-0">
                 <div class="flex items-center justify-between"><strong>{{ summary.domain }}{{ summary.path }}</strong><StatusBadge :status="summary.httpsStatus" :tone="summary.httpsStatus === 'disabled' ? 'warning' : 'success'" /></div>
                 <span class="text-muted-foreground">{{ summary.source }} / {{ summary.serverIds.map((id) => serverDisplayName(id)).join(', ') }}</span>
               </div>
@@ -2222,7 +2223,7 @@ onBeforeUnmount(() => {
           <section class="rounded-2xl border border-border bg-muted p-4">
             <h3>{{ t('applicationsPage.dnsSyncTitle') }}</h3>
             <div class="mt-3 grid gap-2 motion-stagger">
-              <div v-for="domain in facility.domains" :key="`dns-${domain.domain}`" class="motion-reveal flex items-center justify-between gap-3 rounded-xl border border-border p-3 text-sm">
+              <div v-for="domain in facility.domains" :key="`dns-${domain.domain}`" class="motion-reveal flex items-center justify-between gap-3 border-t border-border pt-3 text-sm first:border-t-0 first:pt-0">
                 <strong>{{ domain.domain }}</strong>
                 <Badge :tone="facilityDnsTone(facilityDnsStatus(domain.domain))" :title="facilityDnsError(domain.domain) || undefined">{{ t(`applicationsPage.dnsSync.${facilityDnsStatus(domain.domain) || 'unknown'}`) }}</Badge>
               </div>
@@ -2679,9 +2680,6 @@ strong {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--panel-border);
-  border-radius: 1rem;
-  background: var(--panel-surface);
 }
 
 .app-editor-header {
@@ -2760,9 +2758,7 @@ strong {
   justify-content: space-between;
   gap: 0.75rem;
   min-width: 0;
-  border: 1px solid var(--panel-border);
-  border-radius: 0.75rem;
-  padding: 0.75rem;
+  padding: 0.25rem 0;
   color: var(--panel-text);
   font-size: 0.875rem;
 }
@@ -2829,10 +2825,8 @@ strong {
   display: grid;
   gap: 0.875rem;
   min-width: 0;
-  border: 1px solid var(--panel-border);
-  border-radius: 0.875rem;
-  background: var(--panel-surface);
-  padding: 0.875rem;
+  border-top: 1px dashed var(--panel-border);
+  padding-top: 0.875rem;
 }
 
 .facility-domain-header {
@@ -2874,10 +2868,8 @@ strong {
   gap: 0.5rem 0.75rem;
   align-items: center;
   min-width: 0;
-  border: 1px solid var(--panel-border);
-  border-radius: 0.75rem;
-  background: var(--panel-surface);
-  padding: 0.625rem 0.75rem;
+  border-top: 1px dashed var(--panel-border);
+  padding-top: 0.625rem;
 }
 
 .facility-path-target {

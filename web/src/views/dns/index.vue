@@ -321,6 +321,7 @@ watch(page, (value) => {
           <Table
             v-else
             class="max-lg:max-h-[60dvh]"
+            :framed="false"
             :columns="domainColumns"
             :rows="domains"
             row-key="id"

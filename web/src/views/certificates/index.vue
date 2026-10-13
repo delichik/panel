@@ -638,6 +638,7 @@ function onFileChange(value: File | File[]) {
             <Table
               v-else-if="mode === 'domains'"
               class="max-lg:max-h-[60dvh]"
+              :framed="false"
               :columns="domainColumns"
               :rows="certs"
               row-key="id"
@@ -678,6 +679,7 @@ function onFileChange(value: File | File[]) {
             <Table
               v-else-if="mode === 'self'"
               class="max-lg:max-h-[60dvh]"
+              :framed="false"
               :columns="selfColumns"
               :rows="selfSigned"
               row-key="id"
@@ -718,6 +720,7 @@ function onFileChange(value: File | File[]) {
             <Table
               v-else
               class="max-lg:max-h-[60dvh]"
+              :framed="false"
               :columns="assetColumns"
               :rows="userAssets"
               row-key="id"

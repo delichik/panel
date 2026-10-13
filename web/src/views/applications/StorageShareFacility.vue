@@ -438,10 +438,10 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <div class="rounded-xl border border-border bg-muted/35 p-3"><strong class="block text-lg">{{ config?.servers.length ?? 0 }}</strong><span class="text-xs text-muted-foreground">{{ t('applicationsPage.storageShareServers') }}</span></div>
-          <div class="rounded-xl border border-border bg-muted/35 p-3"><strong class="block text-lg">{{ liveExports }}/{{ status?.servers.length ?? 0 }}</strong><span class="text-xs text-muted-foreground">{{ t('applicationsPage.storageShareLiveExports') }}</span></div>
-          <div class="rounded-xl border border-border bg-muted/35 p-3"><strong class="block text-lg">{{ config?.partitions.length ?? 0 }}</strong><span class="text-xs text-muted-foreground">{{ t('applicationsPage.storageSharePartitions') }}</span></div>
-          <div class="rounded-xl border border-border bg-muted/35 p-3"><strong class="block text-lg">{{ healthyPartitions }}/{{ config?.partitions.length ?? 0 }}</strong><span class="text-xs text-muted-foreground">{{ t('applicationsPage.storageShareHealthyMounts') }}</span></div>
+          <div class="rounded-lg bg-muted/35 p-3"><strong class="block text-lg">{{ config?.servers.length ?? 0 }}</strong><span class="text-xs text-muted-foreground">{{ t('applicationsPage.storageShareServers') }}</span></div>
+          <div class="rounded-lg bg-muted/35 p-3"><strong class="block text-lg">{{ liveExports }}/{{ status?.servers.length ?? 0 }}</strong><span class="text-xs text-muted-foreground">{{ t('applicationsPage.storageShareLiveExports') }}</span></div>
+          <div class="rounded-lg bg-muted/35 p-3"><strong class="block text-lg">{{ config?.partitions.length ?? 0 }}</strong><span class="text-xs text-muted-foreground">{{ t('applicationsPage.storageSharePartitions') }}</span></div>
+          <div class="rounded-lg bg-muted/35 p-3"><strong class="block text-lg">{{ healthyPartitions }}/{{ config?.partitions.length ?? 0 }}</strong><span class="text-xs text-muted-foreground">{{ t('applicationsPage.storageShareHealthyMounts') }}</span></div>
         </div>
       </section>
 
@@ -544,7 +544,7 @@ onBeforeUnmount(() => {
               <p class="m-0 mt-1 text-sm leading-6 text-muted-foreground">{{ t('applicationsPage.storageShareServerRootHint') }}</p>
             </div>
             <div class="grid gap-3">
-              <div v-for="(item, index) in form.servers" :key="index" class="grid gap-3 rounded-xl border border-border p-4">
+              <div v-for="(item, index) in form.servers" :key="index" class="grid gap-3 border-t border-border pt-4 first:border-t-0 first:pt-0">
                 <div class="flex items-center justify-between gap-2">
                   <strong class="text-sm">{{ t('applicationsPage.storageShareServerItem', { index: index + 1 }) }}</strong>
                   <Button size="sm" variant="danger" :disabled="form.servers.length <= 1" @click="removeServerRow(index)"><Trash2 />{{ t('common.delete') }}</Button>
@@ -575,7 +575,7 @@ onBeforeUnmount(() => {
               <p class="m-0 mt-1 text-sm leading-6 text-muted-foreground">{{ t('applicationsPage.storageShareStateHint') }}</p>
             </div>
             <div class="grid gap-2">
-              <div v-for="server in status?.servers ?? []" :key="server.serverId" class="grid gap-2 rounded-xl border border-border p-3 text-sm">
+              <div v-for="server in status?.servers ?? []" :key="server.serverId" class="grid gap-2 border-t border-border pt-3 text-sm first:border-t-0 first:pt-0">
                 <div class="flex min-w-0 items-center justify-between gap-2">
                   <strong class="truncate">{{ serverName(server.serverId) }}</strong>
                   <StatusBadge

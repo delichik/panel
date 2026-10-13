@@ -496,7 +496,7 @@ onMounted(load);
             <label class="grid gap-1 text-sm">{{ t('settingsPage.tokenExpiration') }}<Select v-model="form.tokenExpiration" :options="tokenOptions" /></label>
             <label class="grid gap-1 text-sm">{{ t('settingsPage.remoteTimeout') }}<Input v-model="form.remoteCommandTimeoutSeconds" type="number" min="1" :invalid="Boolean(fieldErrors.remoteCommandTimeoutSeconds)" /><span v-if="fieldErrors.remoteCommandTimeoutSeconds" class="text-xs text-danger">{{ t(fieldErrors.remoteCommandTimeoutSeconds) }}</span></label>
           </div>
-          <div class="grid gap-3 rounded-xl border border-border bg-muted p-4">
+          <div class="grid gap-3 border-t border-border pt-4">
             <div class="flex flex-wrap items-center justify-between gap-3 text-sm">
               <span class="text-muted-foreground">{{ t('settingsPage.jwtSecretConfigured') }}</span>
               <Badge :tone="runtime?.jwtSecretConfigured ? 'success' : 'warning'">{{ runtime?.jwtSecretConfigured ? t('state.healthy') : t('state.warning') }}</Badge>
@@ -509,7 +509,7 @@ onMounted(load);
 
         <section v-else-if="activeSection === 'certificates'" class="grid gap-4 rounded-2xl border border-border bg-card p-5">
           <h2>{{ t('settingsPage.section.certificates') }}</h2>
-          <div class="grid gap-3 rounded-xl border border-border bg-muted p-4">
+          <div class="grid gap-3 border-t border-border pt-4">
             <h3>{{ t('settingsPage.panelHttps') }}</h3>
             <label class="grid gap-1 text-sm">{{ t('settingsPage.panelDomain') }}<Input v-model="form.panelDomain" /></label>
             <label class="grid gap-1 text-sm">{{ t('settingsPage.panelTlsCertificate') }}<Select v-model="form.panelTlsCertificateId" :options="panelTlsOptions" /></label>
@@ -547,7 +547,7 @@ onMounted(load);
           <p class="m-0 text-sm text-muted-foreground">{{ t('settingsPage.tailscale.hint') }}</p>
           <div v-if="!runtime?.tailscale.authKeyConfigured" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('settingsPage.tailscale.authKeyMissing') }}</div>
 
-          <div class="grid gap-3 rounded-xl border border-border bg-muted p-4">
+          <div class="grid gap-3 border-t border-border pt-4">
             <div class="flex flex-wrap items-center justify-between gap-3 text-sm">
               <span class="text-muted-foreground">{{ t('settingsPage.tailscale.authKeyConfigured') }}</span>
               <Badge :tone="runtime?.tailscale.authKeyConfigured ? 'success' : 'warning'">{{ runtime?.tailscale.authKeyConfigured ? t('state.healthy') : t('state.warning') }}</Badge>
@@ -568,7 +568,7 @@ onMounted(load);
           </label>
           <Button class="w-fit" variant="primary" :disabled="invalidTailscaleTags.length > 0" :loading="pending === 'save-tailscale'" @click="saveRuntimeSection('tailscale')"><Save />{{ t('settingsPage.saveSection') }}</Button>
 
-          <div class="grid gap-3 rounded-xl border border-border bg-muted p-4">
+          <div class="grid gap-3 border-t border-border pt-4">
             <div class="flex flex-wrap items-center justify-between gap-3">
               <div class="min-w-0">
                 <h3>{{ t('settingsPage.tailscale.containerTitle') }}</h3>
@@ -606,6 +606,7 @@ onMounted(load);
           <EmptyState v-if="!systemCertificates.length" :title="t('settingsPage.systemCertificatesEmpty')" :description="t('settingsPage.systemCertificatesEmptyHint')" />
           <Table
             v-else
+            :framed="false"
             :columns="systemCertificateColumns"
             :rows="systemCertificates"
             row-key="id"
@@ -634,7 +635,7 @@ onMounted(load);
 
         <section v-else-if="activeSection === 'system'" class="grid gap-4 rounded-2xl border border-border bg-card p-5">
           <h2>{{ t('settingsPage.section.system') }}</h2>
-          <div class="grid gap-3 rounded-xl border border-border bg-muted p-4 text-sm">
+          <div class="grid gap-3 border-t border-border pt-4 text-sm">
             <div class="grid grid-cols-2 gap-3 max-md:grid-cols-1">
               <div><span class="text-muted-foreground">{{ t('settingsPage.panelVersion') }}</span><strong class="block text-foreground">{{ version?.version || t('common.notAvailable') }}</strong></div>
               <div><span class="text-muted-foreground">{{ t('settingsPage.releaseChannel') }}</span><strong class="block text-foreground">{{ version?.channel || t('common.notAvailable') }}</strong></div>
@@ -653,19 +654,19 @@ onMounted(load);
         <section v-else class="grid gap-4 rounded-2xl border border-border bg-card p-5">
           <h2>{{ t('settingsPage.section.backups') }}</h2>
           <div class="grid gap-4 xl:grid-cols-2">
-            <section class="grid gap-3 rounded-xl border border-border p-4">
+            <section class="grid gap-3 border-t border-border pt-4">
               <h3>{{ t('settingsPage.backupExport') }}</h3>
               <label class="flex items-center justify-between gap-3 text-sm">{{ t('settingsPage.encryptExport') }}<Switch v-model="form.exportEncrypt" :label="t('settingsPage.encryptExport')" /></label>
               <div v-if="!form.exportEncrypt" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('settingsPage.unencryptedExportWarning') }}</div>
               <label class="grid gap-1 text-sm">{{ t('settingsPage.backupPassword') }}<Input v-model="form.exportPassword" type="password" :invalid="Boolean(form.exportEncrypt && !form.exportPassword.trim())" /><span v-if="form.exportEncrypt && !form.exportPassword.trim()" class="text-xs text-danger">{{ t('settingsPage.backupPasswordRequired') }}</span></label>
               <Button variant="primary" :disabled="Boolean(form.exportEncrypt && !form.exportPassword.trim())" :loading="pending === 'export'" @click="openConfirm('export')"><DatabaseBackup />{{ t('settingsPage.startExport') }}</Button>
             </section>
-            <section class="grid gap-3 rounded-xl border border-border p-4">
+            <section class="grid gap-3 border-t border-border pt-4">
               <h3>{{ t('settingsPage.restore') }}</h3>
               <label class="grid gap-1 text-sm">{{ t('settingsPage.backupPassword') }}<Input v-model="form.restorePassword" type="password" /></label>
               <div class="relative grid gap-3">
                 <FileUploadButton accept=".panel-backup,application/octet-stream" :loading="pending === 'preflight'" :label="restoreFile ? restoreFile.name : t('settingsPage.selectRestoreFile')" @change="handleRestoreFile" />
-                <div v-if="preflight" class="rounded-xl border border-border p-3 text-sm">{{ t('settingsPage.restoreManifest', { version: preflight.manifest.panelVersion, count: preflight.manifest.files.length }) }}</div>
+                <div v-if="preflight" class="rounded-lg bg-muted p-3 text-sm">{{ t('settingsPage.restoreManifest', { version: preflight.manifest.panelVersion, count: preflight.manifest.files.length }) }}</div>
                 <LoadingOverlay v-if="pending === 'preflight'" />
               </div>
               <label class="flex items-start gap-2 rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning"><input v-model="form.restoreConfirm" class="mt-1" type="checkbox" />{{ t('settingsPage.confirmRestoreOverwrite') }}</label>

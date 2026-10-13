@@ -66,4 +66,15 @@ describe('Table', () => {
     expect(wrapper.get('table').attributes('aria-label')).toBe('Loading table');
     expect(wrapper.findAll('tbody tr')).toHaveLength(2);
   });
+
+  it('drops its own frame when embedded in a card that already owns one', () => {
+    const framed = mount(Table, { props: { columns, rows: [{ name: 'alpha' }] } });
+    expect(framed.classes()).toContain('rounded-xl');
+    expect(framed.classes()).toContain('border');
+
+    const unframed = mount(Table, { props: { columns, rows: [{ name: 'alpha' }], framed: false } });
+    expect(unframed.classes()).toContain('overflow-auto');
+    expect(unframed.classes()).not.toContain('rounded-xl');
+    expect(unframed.classes()).not.toContain('border');
+  });
 });

@@ -4,12 +4,14 @@ import { RefreshCcw } from '@lucide/vue';
 import { serversApi, type ServerMetricsRange, type ServerMetricsSeries } from '@/api/servers';
 import AutoRefreshControl from '@/components/patterns/AutoRefreshControl.vue';
 import Button from '@/components/ui/Button.vue';
+import EmptyState from '@/components/ui/EmptyState.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import Select from '@/components/ui/Select.vue';
 import { useErrorToast } from '@/components/ui/toast';
 import { useAutoRefresh } from '@/composables/useAutoRefresh';
 import { useI18n } from '@/i18n';
 import type { ServerDto } from '@/types/servers';
+import { formatDateTime } from '@/utils/datetime';
 import { createLatestRequestGuard, isAbortError } from '@/views/_shared/requestState';
 
 const props = defineProps<{ server: ServerDto; active: boolean }>();
@@ -41,7 +43,14 @@ const latest = computed(() => {
     memory: series?.memory.at(-1),
     disk: series?.disk.at(-1),
     network: series?.network.at(-1),
+    time: series?.cpu.at(-1)?.time ?? series?.memory.at(-1)?.time ?? '',
   };
+});
+
+/** 有采样点才渲染图表区；空数组视为尚未收到指标。 */
+const hasSamples = computed(() => {
+  const series = metrics.value;
+  return Boolean(series && (series.cpu.length || series.memory.length || series.disk.length || series.network.length));
 });
 
 const panels = computed(() => {
@@ -135,27 +144,31 @@ function bytesPerSecond(value?: number) {
 
 <template>
   <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4">
-    <div class="flex flex-wrap items-center justify-end gap-2">
-      <Select v-model="range" :options="rangeOptions" class="w-24" />
-      <AutoRefreshControl
-        :off-label="t('autoRefresh.off')"
-        :short-label="t('autoRefresh.5s')"
-        :long-label="t('autoRefresh.10s')"
-        :hint-label="t('autoRefresh.hint')"
-      />
-      <Button size="sm" variant="ghost" :loading="loading" @click="load(true)"><RefreshCcw />{{ t('common.refresh') }}</Button>
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <span class="text-xs text-muted-foreground">{{ t('serversPage.metricsSampledAt') }}: {{ formatDateTime(latest.time, t('common.never')) }}</span>
+      <div class="flex flex-wrap items-center gap-2">
+        <Select v-model="range" :options="rangeOptions" class="w-24" />
+        <AutoRefreshControl
+          :off-label="t('autoRefresh.off')"
+          :short-label="t('autoRefresh.5s')"
+          :long-label="t('autoRefresh.10s')"
+          :hint-label="t('autoRefresh.hint')"
+        />
+        <Button size="sm" variant="ghost" :loading="loading" @click="load(true)"><RefreshCcw />{{ t('common.refresh') }}</Button>
+      </div>
     </div>
 
     <div class="relative min-h-0 overflow-y-auto">
       <LoadingOverlay v-if="loading && !metrics" :label="t('common.loading')" />
       <p v-else-if="error && !metrics" class="m-0 text-sm text-danger">{{ error }}</p>
-      <div v-else-if="metrics" class="grid gap-3 xl:grid-cols-2">
-        <div v-for="panel in panels" :key="panel.key" class="rounded-xl border border-border bg-muted p-3">
+      <EmptyState v-else-if="metrics && !hasSamples" :title="t('serversPage.noMetrics')" :description="t('serversPage.noMetricsHint')" />
+      <div v-else-if="metrics" class="grid gap-4 xl:grid-cols-2">
+        <div v-for="panel in panels" :key="panel.key" class="grid min-h-[240px] grid-rows-[auto_minmax(0,1fr)] rounded-xl border border-border bg-muted p-3">
           <div class="flex items-center justify-between gap-3">
             <span class="text-xs font-medium text-muted-foreground">{{ panel.label }}</span>
             <span class="truncate text-sm font-semibold text-foreground">{{ panel.current }}</span>
           </div>
-          <div class="mt-2 h-28 min-w-0">
+          <div class="mt-2 min-h-0">
             <MetricLineChart :labels="panel.labels" :series="panel.series" :value-kind="panel.valueKind" />
           </div>
         </div>

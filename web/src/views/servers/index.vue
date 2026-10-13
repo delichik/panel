@@ -400,6 +400,7 @@ onBeforeUnmount(() => {
           <Table
             v-else
             class="max-lg:max-h-[60dvh]"
+            :framed="false"
             :columns="columns"
             :rows="servers"
             row-key="id"

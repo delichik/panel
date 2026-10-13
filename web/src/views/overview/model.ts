@@ -28,7 +28,7 @@ export function overviewRisks(servers: OverviewServerSummary[]): OverviewRisk[] 
       risks.push({ id: `${server.id}:metrics`, tone: 'warning', title: server.name, description: 'overviewPage.riskMetricsStale', to: `/servers?server=${server.id}` });
     }
     if (server.packageUpdateCount > 0) {
-      risks.push({ id: `${server.id}:packages`, tone: 'info', title: server.name, description: 'overviewPage.riskPackages', to: '/resources/packages' });
+      risks.push({ id: `${server.id}:packages`, tone: 'info', title: server.name, description: 'overviewPage.riskPackages', to: `/servers?server=${encodeURIComponent(server.id)}&tab=packages` });
     }
   }
   return risks.slice(0, 8);
