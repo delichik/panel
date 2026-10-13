@@ -54,7 +54,7 @@ func agentDockerScript(needsInstall bool) (string, error) {
 			return "", err
 		}
 		lines = append(lines, strings.TrimSpace(remoteops.APTInstallPrelude(agentDockerAPTTimeoutSeconds)+commands))
-		lines = append(lines, `echo "[panel] panel_agent_docker installed package=`+agentDockerPackageName)
+		lines = append(lines, fmt.Sprintf(`echo "[panel] panel_agent_docker installed package=%s"`, agentDockerPackageName))
 	}
 	lines = append(lines,
 		`echo "[panel] panel_agent_docker starting the docker service"`,

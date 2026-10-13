@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,11 @@ func TestAgentDockerScriptInstallsOnlyWhenMissing(t *testing.T) {
 			t.Fatalf("expected %q in:\n%s", want, install)
 		}
 	}
+	// The package echo line must close its quote: an unterminated quote makes
+	// bash fail at EOF after apt has already installed the package.
+	if !strings.Contains(install, `installed package=docker.io"`) {
+		t.Fatalf("expected the package echo line to be closed:\n%s", install)
+	}
 	// The step is additive: it never restarts a running daemon and never
 	// deletes anything.
 	for _, forbidden := range []string{"systemctl restart docker", "rm -", "docker rm"} {
@@ -39,6 +45,35 @@ func TestAgentDockerScriptInstallsOnlyWhenMissing(t *testing.T) {
 	}
 	if !strings.Contains(reuse, "systemctl enable --now docker") {
 		t.Fatalf("expected the service assertion:\n%s", reuse)
+	}
+}
+
+// TestAgentDockerScriptsAreValidShell runs every generated script through
+// `bash -n` when a shell is available, so a quoting regression fails in a
+// unit test instead of on a live deployment after apt already ran.
+func TestAgentDockerScriptsAreValidShell(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash is not available")
+	}
+	install, err := agentDockerScript(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reuse, err := agentDockerScript(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, script := range map[string]string{
+		"probe":   remoteops.DockerStatusScript(),
+		"install": install,
+		"reuse":   reuse,
+	} {
+		cmd := exec.Command(bash, "-n")
+		cmd.Stdin = strings.NewReader(script)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s script failed bash -n: %v\n%s\n--- script ---\n%s", name, err, out, script)
+		}
 	}
 }
 
