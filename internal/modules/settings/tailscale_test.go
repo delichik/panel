@@ -142,6 +142,72 @@ func TestRuntimeSettingsKeepExistingTailscaleAuthKey(t *testing.T) {
 	}
 }
 
+// TestRuntimeSettingsPreserveTailscaleOnUnrelatedUpdate 验证省略 tailscale
+// 分组的更新（例如只保存 Agent 投递地址）必须保留标签、密钥状态与容器实际
+// 态。此前的实现会把内存与持久化中的标签清空，响应出现 `tags=null`，设置页
+// 在保存后重新水合时随之崩溃。
+func TestRuntimeSettingsPreserveTailscaleOnUnrelatedUpdate(t *testing.T) {
+	controller := &fakeTailscaleController{
+		supported: true,
+		status:    tailscale.Status{Available: true, Running: true, LoggedIn: true, Hostname: "seamark-panel"},
+	}
+	svc := newTailscaleTestService(t, controller)
+	ctx := context.Background()
+	base := RuntimeUpdate{
+		MetricsRetentionDays:             7,
+		MetricsCollectionIntervalSeconds: 60,
+		ContainerReportIntervalSeconds:   30,
+		CleanupSchedule:                  "daily",
+		TokenExpiration:                  "1d",
+		Language:                         "en",
+		LogLevel:                         "info",
+		RemoteCommandTimeoutSeconds:      30,
+	}
+	first := base
+	first.Tailscale = &RuntimeTailscaleUpdate{AuthKey: "tskey-auth-secret", Tags: []string{"tag:infra"}}
+	if _, err := svc.Update(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+
+	second := base
+	second.Agent = &RuntimeAgentSettings{DownloadBaseURL: "https://panel.example.test", TransferTimeoutSeconds: 300}
+	updated, err := svc.Update(ctx, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.Tailscale.Tags) != 1 || updated.Tailscale.Tags[0] != "tag:infra" {
+		t.Fatalf("omitting the tailscale group must keep its tags, got %#v", updated.Tailscale.Tags)
+	}
+	if !updated.Tailscale.AuthKeyConfigured {
+		t.Fatal("omitting the tailscale group must keep authKeyConfigured")
+	}
+	if !updated.Tailscale.Container.Running {
+		t.Fatalf("omitting the tailscale group must keep the container state, got %#v", updated.Tailscale.Container)
+	}
+	if tags := svc.Runtime().Tailscale.Tags; len(tags) != 1 || tags[0] != "tag:infra" {
+		t.Fatalf("runtime cache tags = %#v", tags)
+	}
+	// 响应里 tags 必须是数组：nil 会被序列化成 null 并击穿设置页的重新水合。
+	raw, err := json.Marshal(updated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"tags":null`) {
+		t.Fatalf("runtime settings must not expose tags=null: %s", raw)
+	}
+	// 持久化同样不得被清空：重启后标签与密钥都恢复到设置值。
+	reloaded, err := NewService(svc.db, svc.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tags := reloaded.Runtime().Tailscale.Tags; len(tags) != 1 || tags[0] != "tag:infra" {
+		t.Fatalf("persisted tags = %#v", tags)
+	}
+	if key, _ := reloaded.TailscaleNodeCredentials(); key != "tskey-auth-secret" {
+		t.Fatalf("persisted auth key = %q", key)
+	}
+}
+
 func TestRuntimeSettingsRejectInvalidTailscaleInput(t *testing.T) {
 	base := RuntimeUpdate{
 		MetricsRetentionDays:             7,

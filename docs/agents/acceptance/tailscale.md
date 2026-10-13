@@ -38,8 +38,8 @@
 - **前置条件**：认证用户；提交换行、逗号或空格分隔的标签输入，或已归一化的数组。
 - **成功结果**：每项裁剪后小写化、去重、排序，写入 `runtime_settings` 键 `tailscale.tags`（换行编码）；读写响应回显归一化结果，后续节点加入使用同一集合。
 - **失败结果**：任一项不符合 `tag:name`（只允许小写字母、数字和连字符，且首尾必须是字母或数字）返回 `invalid_tailscale_tag`，整套标签不写入，且本次请求的其它字段也不得写入。
-- **边界条件**：空数组或空串表示明确清空；大小写不同视为同一标签只保留一份；含合法与非法混合项时整体拒绝，不得静默丢弃非法项后再保存；数量上限超限同样拒绝。
-- **验证点**：`internal/platform/tailscale/tailscale_test.go` 的 `NormalizeTags`/`ValidateTag` 用例，以及 `tailscale_test.go` 的 PUT 拒绝用例；前端 `web/src/views/settings/tailscale.test.ts` 覆盖本地解析与阻断。
+- **边界条件**：空数组或空串表示明确清空；整个 `tailscale` 分组省略时（例如只保存 Agent 或运行时分区的请求）标签、密钥配置状态与容器实际态必须保持现值，不得被解释为清空，响应中的 `tags` 必须是数组而不是 `null`；大小写不同视为同一标签只保留一份；含合法与非法混合项时整体拒绝，不得静默丢弃非法项后再保存；数量上限超限同样拒绝。
+- **验证点**：`internal/platform/tailscale/tailscale_test.go` 的 `NormalizeTags`/`ValidateTag` 用例，`tailscale_test.go` 的 PUT 拒绝用例与 `TestRuntimeSettingsPreserveTailscaleOnUnrelatedUpdate`（省略分组时保留标签、密钥状态、容器态与持久化值）；前端 `web/src/views/settings/tailscale.test.ts` 覆盖本地解析与阻断。
 
 ### TS-SET-004 设置先持久化，容器收敛失败不回流
 

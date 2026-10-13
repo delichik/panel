@@ -48,7 +48,7 @@
 - `SET-RUN-016`：`downloadBaseUrl` 必须校验并归一化为不含 path/query/fragment/userinfo 的 `http(s)://host[:port]` 源，并拒绝引号、空白、反斜杠与 shell 元字符（该值会被插值进远端 shell 命令）；`transferTimeoutSeconds` 必须在 60..3600 之间。读写响应必须回显归一化结果（去掉末尾 `/`）。
 - `SET-RUN-017`：Agent 投递设置更新成功后，随后创建的 `server_agent_deploy` 任务必须读取新值，无需重启 Panel。
 - `SET-RUN-018`：运行时设置包含 Tailscale 分组 `tailscale`。`GET /settings/runtime` 必须返回 `authKeyConfigured`（布尔，永不返回密钥本身或密文）、已归一化的 `tags`，以及容器实际态 `container`（`available`、`running`、`loggedIn`、`hostname`、`ipv4`、`ipv6`、`version`、`backendState`、`lastError`、`updatedAt`）。容器内 tailscale 不可管理时 `available=false`、其余字段为空值/零值并记录日志，不得让整个设置接口失败。详见 `TS-SET-001`。
-- `SET-RUN-019`：`PUT /settings/runtime` 的 `tailscale.authKey` 是只写字段：非空时校验后替换存储值，空或省略保留已存密钥，`clearAuthKey=true` 删除该键并把容器期望态置为关闭；`tailscale.tags` 必须形如 `tag:name`（小写字母、数字、连字符），保存前统一小写、去重并排序（换行编码持久化）。非法密钥返回 `invalid_tailscale_auth_key`，非法标签返回 `invalid_tailscale_tag`，失败时本次请求的 Tailscale 字段与标签都不得写入；密钥不得出现在 API 响应、进程日志、任务参数或运行事件中。详见 `TS-SET-002/003`。
+- `SET-RUN-019`：`PUT /settings/runtime` 的 `tailscale.authKey` 是只写字段：非空时校验后替换存储值，空或省略保留已存密钥，`clearAuthKey=true` 删除该键并把容器期望态置为关闭；`tailscale.tags` 必须形如 `tag:name`（小写字母、数字、连字符），保存前统一小写、去重并排序（换行编码持久化）。非法密钥返回 `invalid_tailscale_auth_key`，非法标签返回 `invalid_tailscale_tag`，失败时本次请求的 Tailscale 字段与标签都不得写入；整个 `tailscale` 分组省略时保留现值（标签、密钥状态与容器实际态），保存其它分区不得清空 Tailscale 配置；密钥不得出现在 API 响应、进程日志、任务参数或运行事件中。详见 `TS-SET-002/003`。
 - `SET-RUN-020`：`POST /api/v1/settings/tailscale/apply` 重新生成 `<dataRoot>/tailscale/config.json` 并请求 panel-init 重新收敛，返回 202 与当前容器实际态；未经 panel-init 监管（例如 `go run ./cmd/panel`）时返回 `tailscale_container_unavailable`，期望态写入失败返回 `tailscale_config_write_failed`。设置持久化与容器收敛是两步：收敛失败只反映在随后读取的 `container.lastError` 中，不得回滚已保存设置，也不得把受理当成本地节点已登录。详见 `TS-SET-004/005`。
 
 ## 4. Panel HTTPS 设置与持久化安全

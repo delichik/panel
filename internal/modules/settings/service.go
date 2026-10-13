@@ -296,8 +296,12 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 		Certificates:                     certSettings,
 		Panel:                            panelSettings,
 		Agent:                            agentSettings,
-		JWTSecret:                        current.JWTSecret,
-		JWTSecretConfigured:              current.JWTSecretConfigured,
+		// Tailscale 分组与 Agent 分组一样遵循“缺省即保持”：请求省略该分组时
+		// 必须保留标签、密钥状态与容器实际态。漏掉这一行会把它清零，既清空
+		// 持久化的标签，也让响应出现 tags=null。
+		Tailscale:           current.Tailscale,
+		JWTSecret:           current.JWTSecret,
+		JWTSecretConfigured: current.JWTSecretConfigured,
 	}
 	if input.ReconcileTraceEnabled != nil {
 		next.ReconcileTraceEnabled = *input.ReconcileTraceEnabled
