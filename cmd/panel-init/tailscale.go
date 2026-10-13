@@ -26,6 +26,10 @@ const (
 	tailscaleStopGrace = 5 * time.Second
 )
 
+// tailscaleUpTimeout 限制 tailscale up 的执行时间：交互式登录或控制面不可达时
+// 必须尽快失败，绝不能阻塞收敛循环；测试可以缩短该值。
+var tailscaleUpTimeout = 60 * time.Second
+
 // tailscaleSupervisor 独占管理容器内 tailscaled 进程与登录状态。
 //
 // 它是 panel-init 中唯一读写 tailscale 期望态与实际态的组件：Panel 只通过
@@ -182,8 +186,12 @@ func (s *tailscaleSupervisor) reconcile(ctx context.Context) {
 	s.publish(status)
 }
 
-// ensureLogin 只在节点尚未进入 Running 时执行 tailscale up。认证密钥通过
-// TS_AUTHKEY 环境变量传递，绝不进入命令行参数，避免出现在容器内进程列表里。
+// ensureLogin 只在节点尚未进入 Running 时执行 tailscale up。
+//
+// 认证密钥写入仅 root 可读（0600）的临时文件，并以 --auth-key=file:<path>
+// 引用：`tailscale` CLI 不读取 TS_AUTHKEY 环境变量，而把密钥放进命令行会让它
+// 出现在进程列表里。命令结束后立即删除临时文件；执行必须有界，交互式登录或
+// 控制面不可达不得阻塞收敛循环。
 func (s *tailscaleSupervisor) ensureLogin(ctx context.Context, cfg tailscale.Config, status tailscale.Status) error {
 	switch status.BackendState {
 	case "NeedsMachineAuth":
@@ -195,23 +203,62 @@ func (s *tailscaleSupervisor) ensureLogin(ctx context.Context, cfg tailscale.Con
 	if cfg.AuthKey == "" && status.BackendState == "NeedsLogin" {
 		return errors.New("tailscale auth key is required to join the tailnet")
 	}
+	keyPath, err := writeAuthKeyFile(cfg.AuthKey)
+	if err != nil {
+		return err
+	}
+	if keyPath != "" {
+		defer func() { _ = os.Remove(keyPath) }()
+	}
 	args := []string{"--socket=" + tailscale.SocketPath(s.dataRoot), "up", "--accept-dns=false", "--hostname=" + cfg.Hostname}
 	if len(cfg.Tags) > 0 {
 		args = append(args, "--advertise-tags="+strings.Join(cfg.Tags, ","))
 	}
-	cmd := exec.CommandContext(ctx, s.binTS, args...)
-	cmd.Env = os.Environ()
-	if cfg.AuthKey != "" {
-		cmd.Env = append(cmd.Env, "TS_AUTHKEY="+cfg.AuthKey)
+	if keyPath != "" {
+		args = append(args, "--auth-key=file:"+keyPath)
 	}
+	callCtx, cancel := context.WithTimeout(ctx, tailscaleUpTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(callCtx, s.binTS, args...)
+	cmd.Env = os.Environ()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("tailscale up failed: %s", s.redact(strings.TrimSpace(string(output)), cfg.AuthKey))
+		if errors.Is(callCtx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("tailscale up timed out after %s; it may be waiting for interactive authentication", tailscaleUpTimeout)
+		}
+		text := s.redact(strings.TrimSpace(string(output)), cfg.AuthKey)
+		if text == "" {
+			return fmt.Errorf("tailscale up failed: %v", err)
+		}
+		return fmt.Errorf("tailscale up failed: %s", text)
 	}
 	if text := strings.TrimSpace(string(output)); text != "" {
 		s.logger.Printf("tailscale up: %s", s.redact(text, cfg.AuthKey))
 	}
 	return nil
+}
+
+// writeAuthKeyFile 把认证密钥写入仅 root 可读（0600）的临时文件并返回路径；
+// 密钥为空时返回空路径。调用方必须在命令结束后删除该文件。
+func writeAuthKeyFile(authKey string) (string, error) {
+	if authKey == "" {
+		return "", nil
+	}
+	file, err := os.CreateTemp("", "panel-init-authkey-*")
+	if err != nil {
+		return "", fmt.Errorf("create tailscale auth key file: %v", err)
+	}
+	path := file.Name()
+	if _, err := file.WriteString(authKey); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return "", fmt.Errorf("write tailscale auth key file: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", fmt.Errorf("close tailscale auth key file: %v", err)
+	}
+	return path, nil
 }
 
 // probe 通过 LocalAPI 读取节点状态，并只接受 tailnet 网段内的自身地址。

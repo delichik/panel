@@ -106,14 +106,14 @@
 - **边界条件（不允许降级）**：`panel-init` 不以 root 运行时必须**拒绝启动**并以非零码退出，错误文本指出原因（内核 TUN 模式与 Panel 子进程降权都需要 root）与修法（去掉 compose 的 `user:`、`docker run --user`，或改用未设置 `USER` 的镜像）；不得以非 root 身份继续运行、也不得静默把 Panel 子进程跑成 root。以 root 运行但解析不到目标用户时同样必须拒绝启动，只有显式传 `-panel-user=""` 才表示“有意让 Panel 子进程与 panel-init 同身份运行”。`-data-root` 缺省取 `$PANEL_DATA_ROOT`、再回退 `/app/data`；控制面 socket 路径未下发（例如本地开发直接运行 `cmd/panel`）时，Panel 必须表现为“不支持”而不是轮询一个不存在的 socket；容器异常退出遗留的 socket 文件必须在下次启动时先清理再绑定；Panel 子进程退出导致容器重启后控制面必须重新生成 token。
 - **验证点**：`cmd/panel-init/privilege_test.go` 的非 root 拒绝、未解析用户拒绝与显式 `-panel-user=""` 放行用例；`cmd/panel-init/main_test.go` 的参数/环境变量解析、控制面 token 与遗留 socket 清理用例；`tailscale_test.go` 的“未经 panel-init 监管”分支；`internal/platform/panelsupervision` 的监督参数往返用例（`Args` → `Register` → 解析）；`internal/platform/tailscale/compat_test.go` 的控制面线格式固定用例；镜像构建冒烟以同一参数集运行 Panel 二进制（`ENG-BUILD-009`）。
 
-### TS-INIT-006 认证密钥只经 `TS_AUTHKEY` 传递并脱敏
+### TS-INIT-006 认证密钥只经私有临时文件引用并脱敏
 
 - **触发入口**：`panel-init` 执行 `tailscale up`；节点侧 Agent 执行加入。
 - **前置条件**：期望态中包含认证密钥，或节点侧 Agent 收到 `TailscaleConfigure` 请求。
-- **成功结果**：密钥仅通过 `TS_AUTHKEY` 环境变量传递；命令参数列表、任务参数以外的持久化位置、进程日志与错误输出中都不出现密钥，错误输出中的密钥被替换为固定占位符。
+- **成功结果**：密钥由 `panel-init` 写入仅 root 可读（0600）的临时文件，并以 `--auth-key=file:<path>` 引用传递给 `tailscale up`（CLI 不读取 `TS_AUTHKEY` 环境变量，把密钥放进参数会让它进入进程列表）；文件在命令结束后立即删除。命令参数列表、进程列表、任务参数以外的持久化位置、进程日志与错误输出中都不出现密钥，错误输出中的密钥被替换为固定占位符。
 - **失败结果**：任何把密钥拼进命令行参数、写入 `/etc/panel-agent/*`、服务器 traits、运行事件或日志的实现都视为安全回归；脱敏失败时宁可截断输出也不得原文外泄（`GOV-DOD-009`）。
-- **边界条件**：密钥为空时不得向 `up` 传递空 `TS_AUTHKEY`；节点已登录后重新下发配置不需要密钥；远端输出中同时包含其它敏感文本时仍必须完成密钥替换。
-- **验证点**：`cmd/panel-init/tailscale_test.go` 断言密钥经环境变量而不是参数传递；`internal/agent/system/tailscale.go` 的 `redactSecret` 单测覆盖。
+- **边界条件**：密钥为空时不得创建临时文件，也不得向 `up` 传递 `--auth-key`；`tailscale up` 必须有超时，交互式认证或控制面不可达不得无限阻塞收敛循环（超时按失败写入 `lastError`）；节点已登录后重新下发配置不需要密钥；远端输出中同时包含其它敏感文本时仍必须完成密钥替换。
+- **验证点**：`cmd/panel-init/tailscale_test.go` 断言密钥经 `--auth-key=file:` 引用、文件权限为 `0600`、命令结束后文件被删除且密钥原文不进入参数列表；登录超时用例断言收敛循环不被阻塞；`internal/agent/system/tailscale.go` 的 `redactSecret` 单测覆盖。
 
 ### TS-INIT-007 自愈与 Panel 就绪门
 

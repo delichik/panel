@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -27,8 +29,10 @@ trap 'exit 0' INT TERM
 while true; do sleep 0.2; done
 `
 
-// fakeTailscaleScript 模拟 tailscale CLI：未登录时报告 NeedsLogin，只有带上
-// TS_AUTHKEY 的 up 才会写入登录标记，从而让测试能验证密钥经环境变量传递。
+// fakeTailscaleScript 模拟 tailscale CLI：未登录时报告 NeedsLogin；up 只接受
+// --auth-key=file:<path>（与真实 CLI 一致，不读取 TS_AUTHKEY 环境变量），读取
+// 文件内容作为密钥并写入登录标记，同时把参数、密钥文件路径与权限记录到
+// FAKE_TS_RECORD，供测试断言密钥没有进入参数列表且文件权限为 0600。
 const fakeTailscaleScript = `#!/bin/sh
 command=""
 for arg in "$@"; do
@@ -45,9 +49,30 @@ case "$command" in
     fi
     ;;
   up)
-    if [ -z "$TS_AUTHKEY" ]; then
-      echo "no auth key" >&2
+    if [ -n "$FAKE_TS_UP_SLEEP" ]; then
+      sleep "$FAKE_TS_UP_SLEEP" >/dev/null 2>&1 </dev/null
+    fi
+    keypath=""
+    for arg in "$@"; do
+      case "$arg" in
+        --auth-key=file:*) keypath="${arg#--auth-key=file:}" ;;
+      esac
+    done
+    if [ -z "$keypath" ] || [ ! -f "$keypath" ]; then
+      echo "no auth key file" >&2
       exit 1
+    fi
+    key=$(cat "$keypath")
+    case "$*" in
+      *"$key"*) echo "auth key leaked into arguments" >&2; exit 1 ;;
+    esac
+    if [ -n "$FAKE_TS_RECORD" ]; then
+      {
+        echo "args=$*"
+        echo "keyfile=$keypath"
+        echo "keymode=$(ls -ld "$keypath" | cut -c1-10)"
+        echo "keylength=${#key}"
+      } >> "$FAKE_TS_RECORD"
     fi
     : > "$FAKE_TS_MARKER"
     echo "logged in"
@@ -146,12 +171,87 @@ func TestTailscaleSupervisorStartsDaemonAndReportsTailnetAddresses(t *testing.T)
 	}
 	if marker := os.Getenv("FAKE_TS_MARKER"); marker != "" {
 		if _, err := os.Stat(marker); err != nil {
-			t.Fatalf("expected the auth key to be delivered through TS_AUTHKEY: %v", err)
+			t.Fatalf("expected the login to complete via the auth key file: %v", err)
 		}
 	}
 	supervisor.Stop()
 	if status := supervisor.Status(); status.Running {
 		t.Fatalf("stopping the supervisor must stop tailscaled: %#v", status)
+	}
+}
+
+// TS-INIT-006：认证密钥必须经仅 root 可读的 0600 临时文件与 --auth-key=file:
+// 引用传递给 tailscale up，不进入命令行参数；命令结束后文件必须被删除。
+func TestTailscaleSupervisorDeliversAuthKeyThroughPrivateFile(t *testing.T) {
+	skipWithoutPOSIXShell(t)
+	root, binaries := newFakeTailscaleEnvironment(t)
+	recordPath := filepath.Join(root, "up-record")
+	t.Setenv("FAKE_TS_RECORD", recordPath)
+	const authKey = "tskey-auth-test-key"
+	if err := tailscale.WriteConfig(root, tailscale.Config{Enabled: true, AuthKey: authKey}); err != nil {
+		t.Fatal(err)
+	}
+
+	supervisor := newTailscaleSupervisor(root, binaries.ts, binaries.daemon, log.New(os.Stderr, "", 0))
+	supervisor.reconcile(context.Background())
+	if status := supervisor.Status(); !status.Running || !status.LoggedIn {
+		t.Fatalf("status = %#v", status)
+	}
+	supervisor.Stop()
+
+	record, err := os.ReadFile(recordPath)
+	if err != nil {
+		t.Fatalf("read up record: %v", err)
+	}
+	fields := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(record)), "\n") {
+		if name, value, ok := strings.Cut(line, "="); ok {
+			fields[name] = value
+		}
+	}
+	if !strings.Contains(fields["args"], "--auth-key=file:") {
+		t.Fatalf("up args = %q, want an --auth-key=file: reference", fields["args"])
+	}
+	if strings.Contains(fields["args"], authKey) {
+		t.Fatalf("auth key leaked into up args: %q", fields["args"])
+	}
+	if fields["keymode"] != "-rw-------" {
+		t.Fatalf("auth key file mode = %q, want -rw-------", fields["keymode"])
+	}
+	if fields["keylength"] != fmt.Sprint(len(authKey)) {
+		t.Fatalf("auth key length = %q, want %d", fields["keylength"], len(authKey))
+	}
+	if path := fields["keyfile"]; path == "" {
+		t.Fatal("up record is missing the auth key file path")
+	} else if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("auth key file %q must be removed after up (stat err = %v)", path, err)
+	}
+}
+
+// TS-INIT-006：登录必须有界；tailscale up 挂起（例如等待交互式认证）时不得
+// 无限阻塞收敛循环，必须按超时失败并写入 lastError。
+func TestTailscaleSupervisorLoginTimesOut(t *testing.T) {
+	skipWithoutPOSIXShell(t)
+	root, binaries := newFakeTailscaleEnvironment(t)
+	t.Setenv("FAKE_TS_UP_SLEEP", "5")
+	if err := tailscale.WriteConfig(root, tailscale.Config{Enabled: true, AuthKey: "tskey-auth-test"}); err != nil {
+		t.Fatal(err)
+	}
+	originalTimeout := tailscaleUpTimeout
+	tailscaleUpTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { tailscaleUpTimeout = originalTimeout })
+
+	supervisor := newTailscaleSupervisor(root, binaries.ts, binaries.daemon, log.New(os.Stderr, "", 0))
+	start := time.Now()
+	supervisor.reconcile(context.Background())
+	elapsed := time.Since(start)
+	status := supervisor.Status()
+	supervisor.Stop()
+	if !strings.Contains(status.LastError, "timed out") {
+		t.Fatalf("last error = %q, want a timeout error", status.LastError)
+	}
+	if elapsed > 3*time.Second {
+		t.Fatalf("reconcile took %s, want it bounded by the up timeout", elapsed)
 	}
 }
 
