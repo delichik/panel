@@ -16,6 +16,7 @@ import (
 	"panel/internal/platform/buildinfo"
 	"panel/internal/platform/config"
 	"panel/internal/platform/logging"
+	"panel/internal/platform/panelsupervision"
 	"panel/internal/platform/paneltls"
 
 	"go.uber.org/zap"
@@ -30,15 +31,15 @@ type tlsApplication interface {
 }
 
 func main() {
-	maintenanceMode := flag.String("maintenance-mode", backups.MaintenanceModeNormal, "startup maintenance mode")
-	initRestartURL := flag.String("init-restart-url", "", "local panel_init restart URL")
-	initRestartToken := flag.String("init-restart-token", "", "local panel_init restart token")
+	// 监督参数合同与 panel-init 共用 panelsupervision，两侧必须成对（TS-INIT-005）。
+	supervision := panelsupervision.Config{MaintenanceMode: backups.MaintenanceModeNormal}
+	panelsupervision.Register(flag.CommandLine, &supervision)
 	flag.Parse()
-	if *initRestartURL != "" {
-		_ = os.Setenv(backups.InitRestartURLEnv, *initRestartURL)
+	if supervision.ControlSocket != "" {
+		_ = os.Setenv(panelsupervision.ControlSocketEnv, supervision.ControlSocket)
 	}
-	if *initRestartToken != "" {
-		_ = os.Setenv(backups.InitRestartTokenEnv, *initRestartToken)
+	if supervision.ControlToken != "" {
+		_ = os.Setenv(panelsupervision.ControlTokenEnv, supervision.ControlToken)
 	}
 
 	logger := logging.L()
@@ -59,15 +60,15 @@ func main() {
 		Handler() http.Handler
 		Close() error
 	}
-	if backups.RestoreRecoveryRequired(cfg.DataRoot) || *maintenanceMode == backups.MaintenanceModeRestore && backups.PendingRestoreExists(cfg.DataRoot) {
+	if backups.RestoreRecoveryRequired(cfg.DataRoot) || supervision.MaintenanceMode == backups.MaintenanceModeRestore && backups.PendingRestoreExists(cfg.DataRoot) {
 		logger.Warn("pending restore detected; starting restore mode")
 		application, err = backups.NewRestoreApp(cfg)
-	} else if *maintenanceMode == backups.MaintenanceModeExport && backups.PendingExportExists(cfg.DataRoot) {
+	} else if supervision.MaintenanceMode == backups.MaintenanceModeExport && backups.PendingExportExists(cfg.DataRoot) {
 		logger.Warn("pending backup export detected; starting backup export mode")
 		application, err = backups.NewExportApp(cfg)
 	} else {
-		if *maintenanceMode != "" && *maintenanceMode != backups.MaintenanceModeNormal {
-			logger.Warn("maintenance mode requested but no matching pending work exists; starting normal mode", zap.String("mode", *maintenanceMode))
+		if supervision.MaintenanceMode != "" && supervision.MaintenanceMode != backups.MaintenanceModeNormal {
+			logger.Warn("maintenance mode requested but no matching pending work exists; starting normal mode", zap.String("mode", supervision.MaintenanceMode))
 		}
 		application, err = panelbootstrap.New(cfg)
 	}

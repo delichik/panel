@@ -136,6 +136,15 @@ COPY config.example.json /app/config.example.json
 RUN chmod +x /app/panel /app/panel-init \
   && chown -R panel:panel /app
 
+# TS-INIT-005 / ENG-BUILD-009：panel-init 会把 --maintenance-mode、--init-control-socket、
+# --init-control-token 原样传给 panel 子进程；任一参数未被 panel 注册都会让容器启动
+# 即退出。构建期用 --help 只验证参数解析，不启动服务。
+RUN /app/panel \
+      --maintenance-mode normal \
+      --init-control-socket /tmp/panel-control.sock \
+      --init-control-token smoke \
+      --help >/dev/null 2>&1
+
 # panel-init 是 PID 1 且以 root 运行：它需要启动需要 CAP_NET_ADMIN 的 tailscaled，
 # 并把 Panel 子进程降权到 panel 用户运行（cmd/panel-init/privilege_unix.go）。
 # Panel 服务本身仍然是非 root 进程。
@@ -147,6 +156,13 @@ COPY --from=target-binaries-build /out/panel-init /app/panel-init
 COPY --from=agent-bundle-build /out/panel-agents /app/panel-agents
 COPY --from=web-build /src/web/dist /app/web/dist
 COPY config.example.json /app/config.example.json
+
+# 与 runtime-from-artifacts 一致：构建期校验 panel 接受全部监督参数（TS-INIT-005 / ENG-BUILD-009）。
+RUN /app/panel \
+      --maintenance-mode normal \
+      --init-control-socket /tmp/panel-control.sock \
+      --init-control-token smoke \
+      --help >/dev/null 2>&1
 
 # 与 runtime-from-artifacts 相同：panel-init 以 root 运行并自行降权 Panel 子进程。
 ENTRYPOINT ["/app/panel-init"]

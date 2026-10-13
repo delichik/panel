@@ -6,7 +6,7 @@
 
 - `BKP-API-001`：认证用户调用 `POST /api/v1/backups/export` 时，后端只以0700目录、0600临时文件、fsync和rename原子写入 pending export；不得在正常业务进程checkpoint、复制数据库或归档dataRoot。
 - `BKP-API-002`：pending仅保存exportId、createdAt和encrypt标志；加密密码不得写入pending、数据库、任务、日志或响应。
-- `BKP-API-003`：pending写入成功后，仅当panel_init重启URL和token均有效才请求 `backup_export`；返回202包含exportId与真实restartSupported，独立运行panel时不得退出或伪称可重启。
+- `BKP-API-003`：pending写入成功后，仅当panel_init控制面socket和token均有效才请求 `backup_export`；返回202包含exportId与真实restartSupported，独立运行panel时不得退出或伪称可重启。
 - `BKP-API-004`：pending文件自身不得触发维护模式；只有子进程明确收到 `--maintenance-mode backup_export` 且pending存在时才启动ExportApp。
 - `BKP-API-005`：默认全量包必须覆盖dataRoot及app/log/metrics数据库、主密钥和恢复身份所需元数据，并兼容读取旧 `databases/tasks.db`；新增持久化真源必须同步进入manifest/归档合同。
 - `BKP-API-006`：归档必须排除tmp下backups、backup-export-pending、restore-pending、restore-pending.previous、restore-staging、maintenance、key-assets和key-asset-exports，防止临时私密材料或旧恢复介质复活。

@@ -6,21 +6,14 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"panel/internal/platform/panelsupervision"
 )
 
 const (
-	// InitURLEnv 是 panel-init 传给 Panel 子进程的 tailscale 控制面基地址。
-	// 未设置表示当前进程不由 panel-init 监管（开发模式直接运行 panel）。
-	InitURLEnv = "PANEL_INIT_TAILSCALE_URL"
-	// InitTokenEnv 是 panel-init 生成的本次进程控制令牌。
-	InitTokenEnv = "PANEL_INIT_RESTART_TOKEN"
-	// InitTokenHeader 是控制面鉴权头，必须与既有的 panel-init 重启接口一致。
-	InitTokenHeader = "X-Panel-Init-Token"
-
 	// InitApplyPath 触发 panel-init 重新读取期望态配置并收敛 tailscaled。
 	InitApplyPath = "/apply"
 	// InitStatusPath 返回容器内 tailscale 的当前实际态。
@@ -56,28 +49,22 @@ type InitController interface {
 }
 
 type initController struct {
-	baseURL string
-	token   string
-	client  *http.Client
+	control *panelsupervision.ControlClient
 }
 
-// NewInitController 根据运行环境构造控制面客户端。环境变量缺失时返回一个
-// Supported 为 false 的客户端，调用方必须据此对外表达“不可用”，不得静默假装成功。
+// NewInitController 根据运行环境构造控制面客户端。控制面 socket 环境变量缺失时
+// 返回一个 Supported 为 false 的客户端，调用方必须据此对外表达“不可用”，不得
+// 静默假装成功。
 func NewInitController() InitController {
-	return &initController{
-		baseURL: strings.TrimRight(strings.TrimSpace(os.Getenv(InitURLEnv)), "/"),
-		token:   strings.TrimSpace(os.Getenv(InitTokenEnv)),
-		client: &http.Client{
-			Timeout: InitRequestTimeout,
-			CheckRedirect: func(*http.Request, []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		},
+	control, ok := panelsupervision.NewControlClient(InitRequestTimeout)
+	if !ok {
+		return &initController{}
 	}
+	return &initController{control: control}
 }
 
 func (c *initController) Supported() bool {
-	return c != nil && c.baseURL != "" && c.token != "" && c.client != nil
+	return c != nil && c.control != nil
 }
 
 func (c *initController) Apply(ctx context.Context) (Status, error) {
@@ -96,15 +83,7 @@ func (c *initController) request(ctx context.Context, method, path string) (Stat
 	if method == http.MethodPost {
 		body = strings.NewReader("{}")
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
-	if err != nil {
-		return Status{}, err
-	}
-	if method == http.MethodPost {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	req.Header.Set(InitTokenHeader, c.token)
-	resp, err := c.client.Do(req)
+	resp, err := c.control.Do(ctx, method, path, body)
 	if err != nil {
 		return Status{}, err
 	}

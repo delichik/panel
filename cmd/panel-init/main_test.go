@@ -2,10 +2,12 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,20 +19,22 @@ import (
 	"time"
 
 	"panel/internal/modules/backups"
+	"panel/internal/platform/panelsupervision"
 )
 
 var (
-	helperMaintenanceMode    = flag.String("maintenance-mode", "", "panel-init helper maintenance mode")
-	helperInitRestartURL     = flag.String("init-restart-url", "", "panel-init helper restart URL")
-	helperInitRestartToken   = flag.String("init-restart-token", "", "panel-init helper restart token")
-	helperInitTailscaleURL   = flag.String("init-tailscale-url", "", "panel-init helper tailscale control URL")
-	restartTokenShapePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+	controlTokenShapePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+
+	// helperSupervision 由替身进程按 panel-init 下发的命令行解析填充。flag 合同
+	// 与真实 Panel 共用 panelsupervision（TS-INIT-005），替身不再手工镜像参数。
+	helperSupervision panelsupervision.Config
 )
 
 func TestMain(m *testing.M) {
 	if os.Getenv("PANEL_INIT_HELPER_PROCESS") == "1" {
 		// The test helper runs before testing.Main parses flags, so parse the
 		// supervisor-supplied arguments before reading the flag values.
+		panelsupervision.Register(flag.CommandLine, &helperSupervision)
 		flag.Parse()
 		runPanelInitHelper()
 		return
@@ -60,15 +64,23 @@ func TestRestartModeContractAllowsOnlyMaintenanceModes(t *testing.T) {
 	}
 }
 
+// newTestControlSocket 为控制面用例返回一个临时 socket 路径：真实部署的 socket
+// 位于持久卷的固定路径上，测试必须各自使用独立路径避免互相干扰。
+func newTestControlSocket(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), "panel-control.sock")
+}
+
 func TestPanelInitRestartListenerRequiresValidToken(t *testing.T) {
+	socketPath := newTestControlSocket(t)
 	restarts := make(chan string, 1)
-	server, urls, err := startControlListener(restarts, "secret-token", nil)
+	server, err := startControlListener(socketPath, restarts, "secret-token", nil)
 	if err != nil {
-		t.Fatalf("startRestartListener() error = %v", err)
+		t.Fatalf("startControlListener() error = %v", err)
 	}
 	defer server.Close()
 
-	status := postRestart(t, urls.Restart, "wrong-token", `{"mode":"restore"}`)
+	status := postRestart(t, socketPath, "wrong-token", `{"mode":"restore"}`)
 	if status != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", status, http.StatusUnauthorized)
 	}
@@ -76,14 +88,15 @@ func TestPanelInitRestartListenerRequiresValidToken(t *testing.T) {
 }
 
 func TestPanelInitRestartListenerRejectsMalformedRestartRequest(t *testing.T) {
+	socketPath := newTestControlSocket(t)
 	restarts := make(chan string, 1)
-	server, urls, err := startControlListener(restarts, "secret-token", nil)
+	server, err := startControlListener(socketPath, restarts, "secret-token", nil)
 	if err != nil {
-		t.Fatalf("startRestartListener() error = %v", err)
+		t.Fatalf("startControlListener() error = %v", err)
 	}
 	defer server.Close()
 
-	status := postRestart(t, urls.Restart, "secret-token", `{`)
+	status := postRestart(t, socketPath, "secret-token", `{`)
 	if status != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", status, http.StatusBadRequest)
 	}
@@ -91,14 +104,15 @@ func TestPanelInitRestartListenerRejectsMalformedRestartRequest(t *testing.T) {
 }
 
 func TestPanelInitRestartListenerAcceptsAuthorizedRestartRequest(t *testing.T) {
+	socketPath := newTestControlSocket(t)
 	restarts := make(chan string, 1)
-	server, urls, err := startControlListener(restarts, "secret-token", nil)
+	server, err := startControlListener(socketPath, restarts, "secret-token", nil)
 	if err != nil {
-		t.Fatalf("startRestartListener() error = %v", err)
+		t.Fatalf("startControlListener() error = %v", err)
 	}
 	defer server.Close()
 
-	status := postRestart(t, urls.Restart, "secret-token", `{"mode":"restore"}`)
+	status := postRestart(t, socketPath, "secret-token", `{"mode":"restore"}`)
 	if status != http.StatusAccepted {
 		t.Fatalf("status = %d, want %d", status, http.StatusAccepted)
 	}
@@ -106,18 +120,44 @@ func TestPanelInitRestartListenerAcceptsAuthorizedRestartRequest(t *testing.T) {
 }
 
 func TestPanelInitRestartListenerFallsBackToNormalForInvalidMode(t *testing.T) {
+	socketPath := newTestControlSocket(t)
 	restarts := make(chan string, 1)
-	server, urls, err := startControlListener(restarts, "secret-token", nil)
+	server, err := startControlListener(socketPath, restarts, "secret-token", nil)
 	if err != nil {
-		t.Fatalf("startRestartListener() error = %v", err)
+		t.Fatalf("startControlListener() error = %v", err)
 	}
 	defer server.Close()
 
-	status := postRestart(t, urls.Restart, "secret-token", `{"mode":"invalid"}`)
+	status := postRestart(t, socketPath, "secret-token", `{"mode":"invalid"}`)
 	if status != http.StatusAccepted {
 		t.Fatalf("status = %d, want %d", status, http.StatusAccepted)
 	}
 	assertRestart(t, restarts, backups.MaintenanceModeNormal)
+}
+
+// TS-INIT-005：控制面 socket 位于持久卷，容器异常退出会留下同路径的 socket
+// 文件；启动必须先清理再绑定，否则控制面在容器重启后永久不可用。
+func TestPanelInitControlListenerReplacesStaleSocket(t *testing.T) {
+	socketPath := newTestControlSocket(t)
+	if err := os.WriteFile(socketPath, []byte("stale"), 0o600); err != nil {
+		t.Fatalf("write stale socket file: %v", err)
+	}
+	restarts := make(chan string, 1)
+	server, err := startControlListener(socketPath, restarts, "secret-token", nil)
+	if err != nil {
+		t.Fatalf("startControlListener() error = %v", err)
+	}
+	defer server.Close()
+
+	if status := postRestart(t, socketPath, "secret-token", `{"mode":"restore"}`); status != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d", status, http.StatusAccepted)
+	}
+	assertRestart(t, restarts, backups.MaintenanceModeRestore)
+	if runtime.GOOS != "windows" {
+		if info, err := os.Stat(socketPath); err != nil || info.Mode()&os.ModeSocket == 0 {
+			t.Fatalf("control socket was not recreated as a socket: %v", err)
+		}
+	}
 }
 
 func TestPanelInitPanelPathCanBeOverriddenByEnvironment(t *testing.T) {
@@ -147,14 +187,14 @@ func TestPanelInitPanelPathDefaultsNextToSupervisorExecutable(t *testing.T) {
 	}
 }
 
-func TestPanelInitRestartTokenIsURLSafeRandomSecret(t *testing.T) {
+func TestPanelInitControlTokenIsURLSafeRandomSecret(t *testing.T) {
 	seen := make(map[string]struct{})
 	for i := 0; i < 8; i++ {
-		token, err := randomRestartToken()
+		token, err := randomControlToken()
 		if err != nil {
-			t.Fatalf("randomRestartToken() error = %v", err)
+			t.Fatalf("randomControlToken() error = %v", err)
 		}
-		if !restartTokenShapePattern.MatchString(token) {
+		if !controlTokenShapePattern.MatchString(token) {
 			t.Fatalf("token %q does not match expected URL-safe raw base64 shape", token)
 		}
 		raw, err := base64.RawURLEncoding.DecodeString(token)
@@ -190,12 +230,13 @@ func TestPanelInitRestartRequestStopsChildAndSwitchesMode(t *testing.T) {
 		err  error
 	}, 1)
 
+	controlSocket := filepath.Join(helperDir, "panel-control.sock")
 	go func() {
 		code, mode, err := runPanel(panelLaunch{
-			path:  os.Args[0],
-			urls:  controlURLs{Restart: "http://127.0.0.1/restart", Tailscale: "http://127.0.0.1/tailscale"},
-			token: "restart-token",
-			mode:  backups.MaintenanceModeNormal,
+			path:   os.Args[0],
+			socket: controlSocket,
+			token:  "control-token",
+			mode:   backups.MaintenanceModeNormal,
 		}, restarts, signals)
 		result <- struct {
 			code int
@@ -226,9 +267,8 @@ func TestPanelInitRestartRequestStopsChildAndSwitchesMode(t *testing.T) {
 	text := string(record)
 	for _, want := range []string{
 		"mode=" + backups.MaintenanceModeNormal,
-		"restartURL=http://127.0.0.1/restart",
-		"tailscaleURL=http://127.0.0.1/tailscale",
-		"token=restart-token",
+		"socket=" + controlSocket,
+		"token=control-token",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("helper record missing %q:\n%s", want, text)
@@ -236,20 +276,28 @@ func TestPanelInitRestartRequestStopsChildAndSwitchesMode(t *testing.T) {
 	}
 }
 
-func postRestart(t *testing.T, restartURL, token, body string) int {
+func postRestart(t *testing.T, socketPath, token, body string) int {
 	t.Helper()
 
-	req, err := http.NewRequest(http.MethodPost, restartURL, bytes.NewBufferString(body))
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				var dialer net.Dialer
+				return dialer.DialContext(ctx, "unix", socketPath)
+			},
+		},
+	}
+	req, err := http.NewRequest(http.MethodPost, "http://panel-init"+backups.InitRestartPath, bytes.NewBufferString(body))
 	if err != nil {
 		t.Fatalf("NewRequest() error = %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if token != "" {
-		req.Header.Set(backups.InitRestartTokenHeader, token)
+		req.Header.Set(panelsupervision.ControlTokenHeader, token)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
-		t.Fatalf("POST %s error = %v", restartURL, err)
+		t.Fatalf("POST via %s error = %v", socketPath, err)
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, resp.Body)
@@ -311,7 +359,7 @@ func waitForFile(t *testing.T, path string) {
 
 func runPanelInitHelper() {
 	if recordPath := os.Getenv("PANEL_INIT_HELPER_RECORD"); recordPath != "" {
-		_ = os.WriteFile(recordPath, []byte(fmt.Sprintf("mode=%s\nrestartURL=%s\ntailscaleURL=%s\ntoken=%s\n", *helperMaintenanceMode, *helperInitRestartURL, *helperInitTailscaleURL, *helperInitRestartToken)), 0o644)
+		_ = os.WriteFile(recordPath, []byte(fmt.Sprintf("mode=%s\nsocket=%s\ntoken=%s\n", helperSupervision.MaintenanceMode, helperSupervision.ControlSocket, helperSupervision.ControlToken)), 0o644)
 	}
 	if os.Getenv("PANEL_INIT_HELPER_WAIT") != "1" {
 		os.Exit(0)

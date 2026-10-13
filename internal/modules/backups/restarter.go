@@ -2,19 +2,21 @@ package backups
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
-	"os"
 	"time"
+
+	"panel/internal/platform/panelsupervision"
 )
 
 var errRestartRejected = errors.New("panel_init restart request rejected")
 
 const (
-	InitRestartURLEnv      = "PANEL_INIT_RESTART_URL"
-	InitRestartTokenEnv    = "PANEL_INIT_RESTART_TOKEN"
-	InitRestartTokenHeader = "X-Panel-Init-Token"
+	// InitRestartPath 是 panel-init 控制面上维护重启入口的路径。
+	InitRestartPath = "/restart"
+
 	MaintenanceModeNormal  = "normal"
 	MaintenanceModeExport  = "backup_export"
 	MaintenanceModeRestore = "restore"
@@ -31,10 +33,8 @@ func (noopRestarter) Supported() bool         { return false }
 func (noopRestarter) RestartSoon(mode string) {}
 
 type initRestarter struct {
-	delay  time.Duration
-	url    string
-	token  string
-	client *http.Client
+	delay   time.Duration
+	control *panelsupervision.ControlClient
 }
 
 type restartRequest struct {
@@ -42,23 +42,20 @@ type restartRequest struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
+// NewPanelInitRestarter 构造通过控制面 socket 联系 panel-init 的重启客户端。
+// socket 路径与令牌来自 panel-init 下发的环境变量；任一缺失表示 Panel 未被监管，
+// 重启入口按“不支持”处理，独立运行 panel 时不得进入维护逻辑。
 func NewPanelInitRestarter(dataRoot string) Restarter {
 	_ = dataRoot
-	return initRestarter{
-		delay: 800 * time.Millisecond,
-		url:   os.Getenv(InitRestartURLEnv),
-		token: os.Getenv(InitRestartTokenEnv),
-		client: &http.Client{
-			Timeout: 2 * time.Second,
-			CheckRedirect: func(*http.Request, []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		},
+	control, ok := panelsupervision.NewControlClient(2 * time.Second)
+	if !ok {
+		return noopRestarter{}
 	}
+	return initRestarter{delay: 800 * time.Millisecond, control: control}
 }
 
 func (r initRestarter) Supported() bool {
-	return r.url != "" && r.token != "" && r.client != nil
+	return r.control != nil
 }
 
 func (r initRestarter) RestartSoon(mode string) {
@@ -86,13 +83,7 @@ func (r initRestarter) requestRestart(mode string) error {
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest(http.MethodPost, r.url, bytes.NewReader(raw))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(InitRestartTokenHeader, r.token)
-	resp, err := r.client.Do(req)
+	resp, err := r.control.Do(context.Background(), http.MethodPost, InitRestartPath, bytes.NewReader(raw))
 	if err != nil {
 		return err
 	}

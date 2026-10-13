@@ -29,6 +29,7 @@
 - `ENG-BUILD-006`：容器服务监听 `0.0.0.0:8443`，只暴露 8443；健康检查访问 `https://127.0.0.1:8443/`，允许内置自签名证书但不得退回 8080。
 - `ENG-BUILD-007`：从源码构建的默认 `runtime` target 与 CI 使用预构建 artifact 的 `runtime-from-artifacts` target 产物布局和运行行为一致。
 - `ENG-BUILD-008`：镜像必须包含 Alpine `tailscale` 包提供的 `tailscale` 与 `tailscaled` 可执行文件，并位于 panel-init 的默认探测路径（`PANEL_INIT_TAILSCALE_PATH`、`PANEL_INIT_TAILSCALED_PATH` 可覆盖，显式置空表示有意关闭容器内 Tailscale 管理）。镜像不得内置 tailnet 认证密钥、已登录的节点身份或状态文件；`panel-init` 不得把认证密钥写入镜像、命令行参数或日志。容器内 tailscaled 生命周期见 `TS-INIT-001..007`。
+- `ENG-BUILD-009`：镜像构建必须用 `panel-init` 下发的完整监督参数集（`--maintenance-mode`、`--init-control-socket`、`--init-control-token`，附加 `--help` 只触发参数解析）对目标架构 Panel 二进制执行冒烟；任一参数未被接受时构建必须失败，不得产出镜像。源码构建的 `runtime` 与 CI 的 `runtime-from-artifacts` 两个 target 必须一致执行，见 `TS-INIT-005`。
 
 ## 4. 版本生成
 

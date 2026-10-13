@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"panel/internal/modules/backups"
+	"panel/internal/platform/panelsupervision"
 	"panel/internal/platform/tailscale"
 )
 
@@ -27,19 +29,12 @@ type restartRequest struct {
 	Mode string `json:"mode"`
 }
 
-// controlURLs 是 panel-init 交给 Panel 子进程的控制面基地址。两者指向同一
-// loopback 监听器；独立运行 panel（不经 panel-init）时两者皆为空。
-type controlURLs struct {
-	Restart   string
-	Tailscale string
-}
-
 // panelLaunch 是一次 Panel 子进程启动所需的全部参数。
 type panelLaunch struct {
-	path  string
-	urls  controlURLs
-	token string
-	mode  string
+	path   string
+	socket string
+	token  string
+	mode   string
 }
 
 func main() {
@@ -51,9 +46,9 @@ func main() {
 	flag.Parse()
 
 	restarts := make(chan string, 1)
-	token, err := randomRestartToken()
+	token, err := randomControlToken()
 	if err != nil {
-		log.Fatalf("generate restart token failed: %v", err)
+		log.Fatalf("generate control token failed: %v", err)
 	}
 
 	// 运行身份不允许降级：非 root 既不能把 Panel 子进程降权，也不能以内核 TUN
@@ -70,14 +65,19 @@ func main() {
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)
 
-	server, urls, err := startControlListener(restarts, token, supervisor)
+	socketPath := panelsupervision.ControlSocketPath(*dataRoot)
+	server, err := startControlListener(socketPath, restarts, token, supervisor)
 	if err != nil {
 		supervisor.Stop()
 		log.Fatalf("start control listener failed: %v", err)
 	}
-	defer server.Close()
+	log.Printf("control socket listening on %s", socketPath)
+	defer func() {
+		_ = server.Close()
+		_ = os.Remove(socketPath)
+	}()
 
-	launch := panelLaunch{path: *panelPath, urls: urls, token: token}
+	launch := panelLaunch{path: *panelPath, socket: socketPath, token: token}
 	mode := backups.MaintenanceModeNormal
 	for {
 		next := launch
@@ -85,32 +85,55 @@ func main() {
 		code, restartMode, err := runPanel(next, restarts, signals)
 		if err != nil {
 			log.Printf("panel failed: %v", err)
-			shutdown(supervisor, 1)
+			shutdown(supervisor, socketPath, 1)
 		}
 		if restartMode == "" {
-			shutdown(supervisor, code)
+			shutdown(supervisor, socketPath, code)
 		}
 		mode = restartMode
 	}
 }
 
-// shutdown 在结束进程前显式停止受管子进程。os.Exit 不会执行 defer，因此这里
-// 必须自行收敛 tailscaled，避免把子进程留给容器运行时强制清理。
-func shutdown(supervisor *tailscaleSupervisor, code int) {
+// shutdown 在结束进程前显式停止受管子进程并清理控制面 socket。os.Exit 不会执行
+// defer，因此这里必须自行收敛 tailscaled，避免把子进程留给容器运行时强制清理；
+// socket 文件也一并删除，避免在持久卷上留下无人监听的死 socket。
+func shutdown(supervisor *tailscaleSupervisor, socketPath string, code int) {
 	supervisor.Stop()
+	_ = os.Remove(socketPath)
 	os.Exit(code)
 }
 
-// startControlListener 在同一 loopback 监听器上同时提供维护重启与 tailscale
-// 控制面。两条路径共用同一个进程令牌，且只监听 127.0.0.1。
-func startControlListener(restarts chan<- string, token string, supervisor *tailscaleSupervisor) (*http.Server, controlURLs, error) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return nil, controlURLs{}, err
+// startControlListener 在同一 Unix domain socket 上同时提供维护重启与 tailscale
+// 控制面。两条路径共用同一个进程令牌；socket 固定位于持久卷的 <dataRoot>/run/
+// 下，只允许 root 与降权后的 Panel 进程访问，进程不监听任何 TCP 端口。
+func startControlListener(socketPath string, restarts chan<- string, token string, supervisor *tailscaleSupervisor) (*http.Server, error) {
+	dir := filepath.Dir(socketPath)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return nil, fmt.Errorf("prepare control socket directory: %w", err)
 	}
+	// 上一次容器运行可能在持久卷上留下同路径的 socket 文件，残留会让 Listen
+	// 直接失败：先清理再绑定。
+	if err := os.Remove(socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("remove stale control socket: %w", err)
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		return nil, err
+	}
+	// 控制面唯一的使用者是降权后的 Panel 子进程：目录对 panel 组开放 r-x，
+	// socket 对 panel 组开放 rw，其他用户无权访问。
+	_ = os.Chmod(dir, 0o750)
+	_ = os.Chmod(socketPath, 0o660)
+	if panelGID >= 0 {
+		_ = os.Chown(dir, -1, panelGID)
+		if err := os.Chown(socketPath, -1, panelGID); err != nil {
+			log.Printf("chown control socket failed: %v", err)
+		}
+	}
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /restart", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get(tailscale.InitTokenHeader) != token {
+	mux.HandleFunc("POST "+backups.InitRestartPath, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(panelsupervision.ControlTokenHeader) != token {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -127,7 +150,7 @@ func startControlListener(restarts chan<- string, token string, supervisor *tail
 		w.WriteHeader(http.StatusAccepted)
 	})
 	mux.HandleFunc("POST /tailscale"+tailscale.InitApplyPath, func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get(tailscale.InitTokenHeader) != token {
+		if r.Header.Get(panelsupervision.ControlTokenHeader) != token {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -137,7 +160,7 @@ func startControlListener(restarts chan<- string, token string, supervisor *tail
 		writeTailscaleStatus(w, supervisor.Status())
 	})
 	mux.HandleFunc("GET /tailscale"+tailscale.InitStatusPath, func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get(tailscale.InitTokenHeader) != token {
+		if r.Header.Get(panelsupervision.ControlTokenHeader) != token {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -152,11 +175,7 @@ func startControlListener(restarts chan<- string, token string, supervisor *tail
 			log.Printf("control listener failed: %v", err)
 		}
 	}()
-	base := "http://" + listener.Addr().String()
-	return server, controlURLs{
-		Restart:   base + "/restart",
-		Tailscale: base + "/tailscale",
-	}, nil
+	return server, nil
 }
 
 func writeTailscaleStatus(w http.ResponseWriter, status tailscale.Status) {
@@ -170,14 +189,11 @@ func runPanel(launch panelLaunch, restarts <-chan string, signals <-chan os.Sign
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	args := []string{
-		"--maintenance-mode", launch.mode,
-		"--init-restart-url", launch.urls.Restart,
-		"--init-restart-token", launch.token,
-	}
-	if launch.urls.Tailscale != "" {
-		args = append(args, "--init-tailscale-url", launch.urls.Tailscale)
-	}
+	args := panelsupervision.Args(panelsupervision.Config{
+		MaintenanceMode: launch.mode,
+		ControlSocket:   launch.socket,
+		ControlToken:    launch.token,
+	})
 	cmd := exec.CommandContext(ctx, launch.path, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -242,7 +258,7 @@ func runPanel(launch panelLaunch, restarts <-chan string, signals <-chan os.Sign
 	}
 }
 
-func randomRestartToken() (string, error) {
+func randomControlToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", err

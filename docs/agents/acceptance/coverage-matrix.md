@@ -142,7 +142,7 @@
 | --- | --- |
 | Web bundle | 懒加载页面 chunk、指纹化静态资源、生产 API client |
 | `panel` | HTTPS API、静态托管、全部主模块和后台服务 |
-| `panel-init` | 容器启动/维护恢复所需初始化行为；以 root 作为 PID 1、把 panel 子进程降权到非 root 用户，并拥有容器内 tailscaled 生命周期（期望态 `config.json`、LocalAPI/状态目录、loopback 控制面、SIGTERM/SIGINT 关停顺序） |
+| `panel-init` | 容器启动/维护恢复所需初始化行为；以 root 作为 PID 1、把 panel 子进程降权到非 root 用户，并拥有容器内 tailscaled 生命周期（期望态 `config.json`、LocalAPI/状态目录、`<dataRoot>/run/panel-control.sock` Unix socket 控制面、SIGTERM/SIGINT 关停顺序） |
 | `panel-agent` amd64/arm64 | 同一 RPC contract 与版本元数据、Docker/系统能力、无 server 子层的节点应用工作区及旧布局升级 |
 | linux/amd64 image | amd64 Panel/init + 两架构 Agent bundle + Web + 容器内 `tailscale` 运行前提（Alpine `tailscale` 包与 `panel-init` 默认可执行文件路径） |
 | linux/arm64 image | arm64 Panel/init + 两架构 Agent bundle + Web + 容器内 `tailscale` 运行前提（Alpine `tailscale` 包与 `panel-init` 默认可执行文件路径） |
@@ -159,5 +159,5 @@
 - `COV-TEST-004`：应用编辑器的嵌套代理 path 必须覆盖 Vue reactive 既有值回显所需的完整克隆与父草稿隔离；不得把 reactive Proxy 直接交给浏览器深拷贝 API。
 
 - 本轮增加 `planning_outcome_test.go`、`planning_error_migration_test.go`，扩展容器巡检与前端应用模型测试，覆盖 `APP-PLAN-001`、`APP-RUN-004`、`ORCH-PLAN-006`；Vitest 缓存固定在仓库 `tmp/vitest`，遵守 `ENG-TEST-001/003` 的测试入口和中间产物约定。
-- Tailscale 本轮新增 Go 测试 `internal/platform/tailscale/tailscale_test.go`、`internal/modules/settings/tailscale_test.go`、`internal/modules/servers/tailscale_report_test.go`、`internal/modules/facilityapps/interconnect_test.go`、`interconnect_sync_test.go`、`cmd/panel-init/tailscale_test.go`，并扩展 `internal/agent/endpoint/endpoint_test.go` 与 `cmd/panel-init/main_test.go`；前端新增 `web/src/views/settings/tailscale.test.ts`、`tailscaleSection.test.ts`（`web/src` 下 `*.test.ts` 由 48 增至 50）。真实 tailscaled、真实 tailnet 与宿主 `tun` 前提属于人工观察点，单元测试只使用替身控制面与临时目录；对应 `TS-EVD-001/002`、`TS-INIT-001..007`。
+- Tailscale 本轮新增 Go 测试 `internal/platform/tailscale/tailscale_test.go`、`internal/modules/settings/tailscale_test.go`、`internal/modules/servers/tailscale_report_test.go`、`internal/modules/facilityapps/interconnect_test.go`、`interconnect_sync_test.go`、`cmd/panel-init/tailscale_test.go`，并扩展 `internal/agent/endpoint/endpoint_test.go` 与 `cmd/panel-init/main_test.go`；前端新增 `web/src/views/settings/tailscale.test.ts`、`tailscaleSection.test.ts`（`web/src` 下 `*.test.ts` 由 48 增至 50）。回归修复新增 `internal/platform/panelsupervision` 的监督参数合同用例与镜像构建冒烟（`TS-INIT-005`、`ENG-BUILD-009`）；panel-init 控制面由 loopback TCP 端口改为 `<dataRoot>/run/panel-control.sock` Unix domain socket（重启与 tailscale 共用，`TS-INIT-005`、`BKP-API-003`）。真实 tailscaled、真实 tailnet 与宿主 `tun` 前提属于人工观察点，单元测试只使用替身控制面与临时目录；对应 `TS-EVD-001/002`、`TS-INIT-001..007`。
 - Debug 清理新增状态生命周期、暂停门排空/超时、HTTP 豁免、worker 恢复原状态与资源保留回归；前端 `useRuntimeCleanup.test.ts` 覆盖刷新恢复、查询失败、请求结果丢失、进程重启结果丢失、runId 归属与卸载/隐藏行为，Mock 路由测试覆盖确认值、202、重复请求和阶段终态；对应 `DIAG-CLR-001..008`、`UI-DBG-007/008`。
