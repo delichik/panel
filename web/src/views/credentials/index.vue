@@ -336,12 +336,12 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
             <template #actions="{ row }">
               <div class="flex items-center justify-end gap-1">
                 <Button size="sm" variant="secondary" @click="openDetail(row)"><Eye />{{ t('common.details') }}</Button>
+                <Button size="sm" variant="ghost" @click="openEdit(row)"><Wrench />{{ t('common.edit') }}</Button>
+                <Button size="sm" variant="ghost" :disabled="credentialReferences(row.id, servers).length === 0" @click="openTest(row)"><Cable />{{ t('credentialsPage.test') }}</Button>
                 <Dropdown align="right">
                   <template #trigger>
                     <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
                   </template>
-                  <DropdownItem @click="openEdit(row)"><Wrench />{{ t('common.edit') }}</DropdownItem>
-                  <DropdownItem :disabled="credentialReferences(row.id, servers).length === 0" @click="openTest(row)"><Cable />{{ t('credentialsPage.test') }}</DropdownItem>
                   <DropdownItem tone="danger" @click="askDelete(row)"><Trash2 />{{ t('common.delete') }}</DropdownItem>
                 </Dropdown>
               </div>

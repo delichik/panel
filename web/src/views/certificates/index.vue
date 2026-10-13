@@ -345,6 +345,33 @@ async function reissueAsset(asset: KeyAssetDto) {
   });
 }
 
+/**
+ * 行内高频操作（续签/重签/重生成）的单项 loading：只锁定当前行按钮，
+ * 不全表转圈（`saving` 仍用于对话框与详情内的操作）。
+ */
+const rowPending = ref('');
+async function runRowAction(key: string, action: () => Promise<void>) {
+  if (rowPending.value) return;
+  rowPending.value = key;
+  try {
+    await action();
+  } finally {
+    rowPending.value = '';
+  }
+}
+
+function renewDomainRow(cert: DomainCertificateDto) {
+  return runRowAction(`domains:${cert.id}`, () => renewCertificate(cert));
+}
+
+function renewSelfRow(cert: SelfSignedCertificateDto) {
+  return runRowAction(`self:${cert.id}`, () => renewSelf(cert));
+}
+
+function reissueAssetRow(asset: KeyAssetDto) {
+  return runRowAction(`keys:${asset.id}`, () => reissueAsset(asset));
+}
+
 function openExport(asset?: KeyAssetDto) {
   exportTargetId.value = asset?.id ?? selectedAsset.value?.id ?? '';
   assetForm.password = '';
@@ -633,12 +660,12 @@ function onFileChange(value: File | File[]) {
               <template #actions="{ row }">
                 <div class="flex items-center justify-end gap-1">
                   <Button size="sm" variant="secondary" @click="openDetail(row.id)"><Eye />{{ t('common.details') }}</Button>
+                  <Button size="sm" variant="ghost" :loading="rowPending === `domains:${row.id}`" :disabled="Boolean(rowPending)" @click="renewDomainRow(row)"><RotateCcw />{{ t('certificatesPage.renew') }}</Button>
                   <Dropdown align="right">
                     <template #trigger>
                       <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
                     </template>
                     <DropdownItem @click="openReissue(row)"><Wrench />{{ t('certificatesPage.adjustReissue') }}</DropdownItem>
-                    <DropdownItem :disabled="saving" @click="renewCertificate(row)"><RotateCcw />{{ t('certificatesPage.renew') }}</DropdownItem>
                     <DropdownItem tone="danger" @click="askDelete('domains', row.id, row.name)"><Trash2 />{{ t('common.delete') }}</DropdownItem>
                   </Dropdown>
                 </div>
@@ -673,12 +700,12 @@ function onFileChange(value: File | File[]) {
               <template #actions="{ row }">
                 <div class="flex items-center justify-end gap-1">
                   <Button size="sm" variant="secondary" @click="openDetail(row.id)"><Eye />{{ t('common.details') }}</Button>
+                  <Button size="sm" variant="ghost" :loading="rowPending === `self:${row.id}`" :disabled="Boolean(rowPending)" @click="renewSelfRow(row)"><RotateCcw />{{ t('certificatesPage.reissue') }}</Button>
                   <Dropdown align="right">
                     <template #trigger>
                       <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
                     </template>
                     <DropdownItem @click="openSelf('self-leaf')"><Plus />{{ t('certificatesPage.generateLeaf') }}</DropdownItem>
-                    <DropdownItem :disabled="saving" @click="renewSelf(row)"><RotateCcw />{{ t('certificatesPage.reissue') }}</DropdownItem>
                     <DropdownItem tone="danger" @click="askDelete('self', row.id, row.name)"><Trash2 />{{ t('common.delete') }}</DropdownItem>
                   </Dropdown>
                 </div>
@@ -716,13 +743,13 @@ function onFileChange(value: File | File[]) {
               <template #actions="{ row }">
                 <div class="flex items-center justify-end gap-1">
                   <Button size="sm" variant="secondary" @click="openDetail(row.id)"><Eye />{{ t('common.details') }}</Button>
+                  <Button size="sm" variant="ghost" :disabled="(!row.canReissue && !row.canRegenerate) || Boolean(rowPending)" :loading="rowPending === `keys:${row.id}`" @click="reissueAssetRow(row)"><RotateCcw />{{ row.type === 'ssh_key_pair' ? t('certificatesPage.regenerate') : t('certificatesPage.reissue') }}</Button>
+                  <Button size="sm" variant="ghost" @click="openExport(row)"><FileArchive />{{ t('certificatesPage.exportAsset') }}</Button>
                   <Dropdown align="right">
                     <template #trigger>
                       <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
                     </template>
                     <DropdownItem @click="openAsset('asset-import')"><KeyRound />{{ t('certificatesPage.importAsset') }}</DropdownItem>
-                    <DropdownItem @click="openExport(row)"><FileArchive />{{ t('certificatesPage.exportAsset') }}</DropdownItem>
-                    <DropdownItem :disabled="!row.canReissue && !row.canRegenerate" @click="reissueAsset(row)"><RotateCcw />{{ row.type === 'ssh_key_pair' ? t('certificatesPage.regenerate') : t('certificatesPage.reissue') }}</DropdownItem>
                     <DropdownItem tone="danger" :disabled="!row.canDelete" @click="askDelete('keys', row.id, row.name, row.canDelete)"><Trash2 />{{ t('common.delete') }}</DropdownItem>
                   </Dropdown>
                 </div>

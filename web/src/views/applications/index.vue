@@ -1001,12 +1001,24 @@ function openLogsFor(app: ApplicationSummaryDto) {
   logsOpen.value = true;
 }
 
+/** 行内高频操作的单项 loading：只锁定当前行按钮，不与 `pending` 的对话框操作互相转圈。 */
+const rowActionKey = ref('');
+async function runRowOperation(key: string, action: () => Promise<void>) {
+  if (rowActionKey.value) return;
+  rowActionKey.value = key;
+  try {
+    await action();
+  } finally {
+    rowActionKey.value = '';
+  }
+}
+
 async function updateImageFor(app: ApplicationSummaryDto) {
-  await runOperation('image-update', () => applicationsApi.updateImage(app.id), 'applicationsPage.imageUpdateAccepted', 'applicationsPage.imageUpdateAcceptedWithoutId');
+  await runRowOperation(`image:${app.id}`, () => runOperation('image-update', () => applicationsApi.updateImage(app.id), 'applicationsPage.imageUpdateAccepted', 'applicationsPage.imageUpdateAcceptedWithoutId'));
 }
 
 async function deployFor(app: ApplicationSummaryDto) {
-  await runOperation('deploy', () => applicationsApi.deploy(app.id), 'applicationsPage.deployAccepted', 'applicationsPage.deployAcceptedWithoutId', 'applicationsPage.deployNoChange');
+  await runRowOperation(`deploy:${app.id}`, () => runOperation('deploy', () => applicationsApi.deploy(app.id), 'applicationsPage.deployAccepted', 'applicationsPage.deployAcceptedWithoutId', 'applicationsPage.deployNoChange'));
 }
 
 async function confirmAction() {
@@ -1863,14 +1875,14 @@ onBeforeUnmount(() => {
             <template #actions="{ row }">
               <div class="flex items-center justify-end gap-1">
                 <Button size="sm" variant="secondary" @click="openApplicationDetail(row.app)"><Eye />{{ t('common.details') }}</Button>
+                <Button size="sm" variant="ghost" @click="router.push(`/applications/apps/${encodeURIComponent(row.app.id)}/edit`)"><Wrench />{{ t('common.edit') }}</Button>
+                <Button size="sm" variant="ghost" :loading="rowActionKey === `deploy:${row.app.id}`" :disabled="Boolean(rowActionKey)" @click="deployFor(row.app)"><Rocket />{{ t('applicationsPage.sync') }}</Button>
                 <Dropdown align="right">
                   <template #trigger>
                     <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
                   </template>
-                  <DropdownItem @click="router.push(`/applications/apps/${encodeURIComponent(row.app.id)}/edit`)"><Wrench />{{ t('common.edit') }}</DropdownItem>
-                  <DropdownItem :disabled="pending === 'deploy'" @click="deployFor(row.app)"><Rocket />{{ t('applicationsPage.sync') }}</DropdownItem>
                   <DropdownItem :disabled="!row.app.enabled" @click="ask('stop', row.app.id)"><Square />{{ t('applicationsPage.disable') }}</DropdownItem>
-                  <DropdownItem :disabled="!row.app.imageUpdateAvailable || pending === 'image-update'" @click="updateImageFor(row.app)"><UploadCloud />{{ t('applicationsPage.updateImage') }}</DropdownItem>
+                  <DropdownItem :disabled="!row.app.imageUpdateAvailable || Boolean(rowActionKey)" @click="updateImageFor(row.app)"><UploadCloud />{{ t('applicationsPage.updateImage') }}</DropdownItem>
                   <DropdownItem @click="openLogsFor(row.app)"><History />{{ t('applicationsPage.logs') }}</DropdownItem>
                   <DropdownItem tone="danger" :disabled="rowPendingId === row.app.id" @click="askDelete(row.app)"><Trash2 />{{ t('common.delete') }}</DropdownItem>
                 </Dropdown>

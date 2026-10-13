@@ -179,14 +179,14 @@ onBeforeUnmount(() => listController?.abort());
       </template>
       <template #actions="{ row }">
         <div class="flex items-center justify-end gap-1">
+          <Button size="sm" variant="ghost" :disabled="blocked || Boolean(containerActionDisabled(row, 'start'))" :loading="pending === `start-${row.id}`" @click="start(row)"><Play />{{ t('resourcesPage.start') }}</Button>
+          <Button size="sm" variant="ghost" :disabled="blocked || Boolean(containerActionDisabled(row, 'stop'))" :loading="pending === `stop-${row.id}`" @click="ask(row, 'stop')"><Square />{{ t('resourcesPage.stop') }}</Button>
+          <Button size="sm" variant="ghost" :disabled="blocked || Boolean(containerActionDisabled(row, 'restart'))" :loading="pending === `restart-${row.id}`" @click="ask(row, 'restart')"><RefreshCcw />{{ t('resourcesPage.restart') }}</Button>
           <Button size="sm" variant="ghost" :disabled="blocked" :loading="pending === `logs-${row.id}`" @click="openLogs(row)"><FileText />{{ t('resourcesPage.logs') }}</Button>
           <Dropdown align="right">
             <template #trigger>
               <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
             </template>
-            <DropdownItem :disabled="blocked || Boolean(containerActionDisabled(row, 'start'))" @click="start(row)"><Play />{{ t('resourcesPage.start') }}</DropdownItem>
-            <DropdownItem :disabled="blocked || Boolean(containerActionDisabled(row, 'stop'))" @click="ask(row, 'stop')"><Square />{{ t('resourcesPage.stop') }}</DropdownItem>
-            <DropdownItem :disabled="blocked || Boolean(containerActionDisabled(row, 'restart'))" @click="ask(row, 'restart')"><RefreshCcw />{{ t('resourcesPage.restart') }}</DropdownItem>
             <DropdownItem tone="danger" :disabled="blocked || Boolean(containerActionDisabled(row, 'delete'))" @click="ask(row, 'delete')"><Trash2 />{{ t('common.delete') }}</DropdownItem>
           </Dropdown>
         </div>
