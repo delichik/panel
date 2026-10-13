@@ -13,7 +13,7 @@ Seamark 是一个 alpha 阶段的 Linux 服务器运维面板，适合管理小�
 - 采集 CPU、内存、磁盘、网络、运行时间、内核和负载等概览指标。
 - 刷新 APT 可升级软件包，并执行选择性升级或整机升级。
 - 在支持的系统上安装 UFW。
-- 使用 mTLS 为服务器部署 panel-agent，并配置 Docker host。
+- 使用 mTLS 为服务器部署 panel-agent，并在默认本机 Docker Host 缺失时自动安装与启用 Docker。
 - 检查 agent 兼容性、Docker 健康状态和应用运行时状态。
 - 通过 panel-agent 调用 Docker Engine API 部署 Docker 应用。
 - 通过只读的 panel-agent CLI（`panel-agent --cli apps list|inspect|where`）在节点上查看 Panel 管理的容器信息。

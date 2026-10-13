@@ -201,6 +201,15 @@ Consequences to plan for:
 - **Application ports are not part of that base set.** Each application must declare "open firewall" on the port it publishes; ports published without that flag are blocked. Rules an application wrote earlier stay in the UFW configuration even while UFW is inactive, so enabling the policy applies them.
 - Servers added before this behaviour existed are taken over on their next deployment, including certificate renewals.
 - A failed takeover fails the deployment but leaves a working Agent untouched.
+
+## Container runtime provisioning
+
+The container runtime is provisioned in the same deployment, right after the firewall and before any agent file is written. When the server uses the default local Docker host (`unix:///var/run/docker.sock`) and Docker is missing or not running, Seamark installs `docker.io` from the distribution packages, enables the service and waits until the API socket answers.
+
+- Docker is only provisioned for the default local socket. A custom Docker host (`tcp://...` or another socket) is operator-managed: Seamark never installs a local runtime behind an endpoint you point elsewhere.
+- The step is additive and idempotent: an installed daemon is never reinstalled, a running daemon is never restarted, and no Docker resource is ever removed.
+- If the runtime cannot be installed or does not become ready in time, the deployment fails with `agent_docker_failed` and leaves a working Agent untouched. The task log names the failing phase (package install, service start or readiness wait).
+
 ## Agent delivery over HTTP
 
 Seamark installs `panel-agent` on every managed server. By default it uploads the compressed bundle over the same SSH connection it already uses, which is slow on long or congested routes. You can instead let each server download the bundle over HTTP, which allows a CDN in front of the Panel to cache it.

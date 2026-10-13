@@ -82,6 +82,8 @@
 
 - 防火墙（UFW）改为 Agent 部署的自动前提：新增 `internal/modules/servers/agent_firewall.go`（部署前安装、放行 SSH/Agent/反向代理端口并启用；发行版不支持时以 `agent_firewall_unsupported` 拒绝），`runDeployAgent` 在完整安装与仅重启两条分支上都先执行该步骤；**删除** `POST /servers/{id}/ufw/install` 与 `POST /servers/{id}/ufw/enable` 两个路由、对应 handler、`InstallUFW`/`runInstallUFW`/`EnableUFW`/`runEnableUFW`、`server_ufw_install`/`server_ufw_enable` 任务类型，以及 `agent_bundle.go` 中硬编码 9786 的 UFW 行；前端删除安装/接管入口并新增新建服务器时的非阻断接管警示。主 Panel `method/path` 计数 177 → 175（清单与哈希同步）；无数据库结构变更、无新增表、无新增后台任务；对应 `AGT-FW-001..006`、已废弃的 `UFW-API-005`、`UFW-API-006/007`、`UI-SRV-010/015`、`UI-SEC-002/004`、`SRV-EVD-007`。（后续轮次又整体移除了 NAT 服务器能力，本条目中曾提到的 NAT 豁免随之删除。）
 
+- Docker 成为 Agent 部署的第二个环境前提：新增 `internal/modules/servers/agent_docker.go`（默认本机 socket 下探测缺失则安装 `docker.io`、启用服务并在固定窗口内等待就绪；自定义 Docker host 完全跳过；失败以 `agent_docker_failed` 结束），`runDeployAgent` 在防火墙步骤之后、签发与投递之前对完整安装与仅重启两条分支执行；`remoteops` 新增 `DockerStatusScript`/`ParseDockerStatus`，后端新增 `agent_docker_failed` 中文翻译。无新增路由、数据库结构、表或后台任务；主 Panel `method/path` 计数不变。对应 `AGT-DKR-001..004`。
+
 - 新增 GET `/facility-apps/reverse-proxy/diagnostics?serverId=`，配置 DTO 增加逐节点 deployments；对应 `FAC-RP-012/013`、`UI-FAC-012`。失败运行日志复用 errorDetail，按 ID/时间范围限量读取并降级，不新增 Agent RPC 字段、表或后台任务；对应 `ORCH-CTRL-008`。
 
 - Agent 节点证书 `key_assets` 资产名称纳入稳定 serverID，服务器删除时尽力清理 `agent-server-<id>` 资产；修复重名/重建服务器部署 Agent 时违反名称唯一约束的 2067 错误。无新增 API、表或后台任务；对应 `AGT-CERT-004`、`SRV-DEL-005`。

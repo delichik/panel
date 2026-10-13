@@ -47,6 +47,16 @@ type UFWRuleStatus struct {
 	From   string
 }
 
+// DockerStatus is the container-runtime state one deployment prerequisite
+// probes before it changes anything on the node. Ready means the Docker Engine
+// API answers on the default local socket. The zero value means "no runtime".
+type DockerStatus struct {
+	Installed bool
+	Active    bool
+	Ready     bool
+	Raw       string
+}
+
 var (
 	packageNamePattern = regexp.MustCompile(`^[A-Za-z0-9+_.:-]+$`)
 	fileModePattern    = regexp.MustCompile(`^[0-7]{3,4}$`)
@@ -164,6 +174,37 @@ echo "panel_ufw_installed=true"
 ufw status verbose || true
 echo "panel_ufw_numbered_begin"
 ufw status numbered || true`
+}
+
+// DockerStatusScript probes the default local Docker endpoint without changing
+// anything. The CLI is only used to interrogate the API when it exists, so a
+// node that ships the socket without the CLI still reports ready.
+func DockerStatusScript() string {
+	return `if command -v dockerd >/dev/null 2>&1 || [ -S /var/run/docker.sock ]; then
+  echo "panel_docker_installed=true"
+else
+  echo "panel_docker_installed=false"
+fi
+if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet docker 2>/dev/null; then
+  echo "panel_docker_active=true"
+else
+  echo "panel_docker_active=false"
+fi
+ready=false
+if [ -S /var/run/docker.sock ]; then
+  if command -v docker >/dev/null 2>&1; then
+    if docker info >/dev/null 2>&1; then
+      ready=true
+    fi
+  else
+    ready=true
+  fi
+fi
+if [ "$ready" = "true" ]; then
+  echo "panel_docker_ready=true"
+else
+  echo "panel_docker_ready=false"
+fi`
 }
 
 func RestartScript() string {
@@ -326,6 +367,30 @@ func ParseUFWStatus(out string) UFWStatus {
 		}
 		if rule, ok := parseUFWRuleLine(line); ok {
 			status.Rules = append(status.Rules, rule)
+		}
+	}
+	return status
+}
+
+// ParseDockerStatus reads the key=value lines DockerStatusScript emits. Any
+// missing or unparsable answer degrades to the zero value, which callers treat
+// as "the runtime is not usable" and let the provisioning step decide.
+func ParseDockerStatus(out string) DockerStatus {
+	status := DockerStatus{Raw: out}
+	for _, raw := range strings.Split(out, "\n") {
+		switch strings.TrimSpace(raw) {
+		case "panel_docker_installed=true":
+			status.Installed = true
+		case "panel_docker_installed=false":
+			status.Installed = false
+		case "panel_docker_active=true":
+			status.Active = true
+		case "panel_docker_active=false":
+			status.Active = false
+		case "panel_docker_ready=true":
+			status.Ready = true
+		case "panel_docker_ready=false":
+			status.Ready = false
 		}
 	}
 	return status

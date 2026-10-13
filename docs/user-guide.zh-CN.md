@@ -21,7 +21,7 @@ Seamark 不需要把目标服务器的 Docker Socket 挂载到 Seamark 容器。
 - 系统是项目 README 列出的 Debian 或 Ubuntu 版本。
 - Seamark 主机能够访问目标服务器的 SSH 地址和端口。
 - SSH 账号是 `root`，或者具备免密 `sudo`。
-- 部署容器应用前，目标服务器已经安装并运行 Docker。
+- Docker：使用默认本机 socket（`unix:///var/run/docker.sock`）时，Seamark 会在 Agent 部署时自动安装并启动 Docker；自定义 Docker Host 由你自行提供，不会被自动安装。
 - Agent 安装后，Seamark 主机能够访问目标服务器的 `9786/tcp`。
 - 目标服务器能够访问应用使用的容器镜像仓库。
 
@@ -87,7 +87,7 @@ Seamark 支持：
 Agent 安装后会作为目标服务器上的服务运行，并监听 TCP `9786`。如果 Agent 无法恢复正常，请检查：
 
 - 目标服务器防火墙和云安全规则允许 Seamark 主机访问 `9786/tcp`。
-- 目标服务器上的 Docker 正在运行。
+- 目标服务器上的 Docker 已安装并运行（配置为默认本机 socket 时，重新安装 Agent 会自动补齐）。
 - Docker Host 配置正确。
 - SSH 账号仍具有所需权限。
 - **任务中心**中的操作详情和日志。
@@ -222,7 +222,7 @@ Seamark 当前通过 Cloudflare 管理 DNS 记录，并使用 ACME DNS-01 验证
 | 默认账号无法登录 | 使用首次登录时设置的新密码。还原或替换数据卷后，实际使用的账号数据库也会变化。 |
 | 新增服务器保存后消失 | 首次 SSH/初始化操作失败。查看任务中心，然后修正地址、端口、凭据、系统版本或特权设置后重新添加。 |
 | Agent 不可用 | 确认 Seamark 到目标服务器的 `9786/tcp` 连通、目标防火墙、Docker 状态和服务器地址配置。 |
-| Docker 状态异常 | 启动目标服务器上的 Docker，并检查 Docker Host；默认通常为 `unix:///var/run/docker.sock`。 |
+| Docker 状态异常 | 配置为默认本机 socket 时，重新安装 Agent 会自动安装并启动 Docker；自定义 Docker Host 时请自行启动并检查端点。 |
 | 应用部署长期等待或失败 | 打开应用运行目标和任务日志，检查 Agent、镜像仓库、镜像名、端口冲突、文件、挂载和容器输出。 |
 | 应用运行但无法访问 | 检查目标主机端口、UFW/云防火墙、DNS 记录和反向代理入口状态。 |
 | 证书签发失败 | 检查 Cloudflare Token 权限、Zone 名称、DNS 传播、ACME 邮箱和任务阶段诊断。 |

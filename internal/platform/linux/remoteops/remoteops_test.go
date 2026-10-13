@@ -18,6 +18,27 @@ func TestAPTInstallScriptValidatesPackages(t *testing.T) {
 	}
 }
 
+func TestParseDockerStatus(t *testing.T) {
+	ready := ParseDockerStatus("panel_docker_installed=true\npanel_docker_active=true\npanel_docker_ready=true\n")
+	if !ready.Installed || !ready.Active || !ready.Ready {
+		t.Fatalf("status = %#v", ready)
+	}
+	missing := ParseDockerStatus("panel_docker_installed=false\npanel_docker_active=false\npanel_docker_ready=false\n")
+	if missing.Installed || missing.Active || missing.Ready {
+		t.Fatalf("status = %#v", missing)
+	}
+	partial := ParseDockerStatus("panel_docker_installed=true\npanel_docker_active=false\n")
+	if !partial.Installed || partial.Active || partial.Ready {
+		t.Fatalf("status = %#v", partial)
+	}
+	// Missing or unparsable output degrades to "no runtime" so the
+	// provisioning step decides instead of trusting a broken probe.
+	empty := ParseDockerStatus("")
+	if empty.Installed || empty.Active || empty.Ready {
+		t.Fatalf("status = %#v", empty)
+	}
+}
+
 func TestUFWAllowScriptBuildsPortRules(t *testing.T) {
 	script, err := UFWAllowScript([]UFWRule{
 		{Port: 22, Protocol: "tcp"},

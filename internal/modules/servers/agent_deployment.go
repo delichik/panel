@@ -338,6 +338,14 @@ func (s *Service) runDeployAgent(ctx context.Context, taskID string, srv Server)
 		s.failAgentDeployTask(ctx, taskID, srv, err)
 		return
 	}
+	// The container runtime is the second environment prerequisite. The agent
+	// reports Docker health and a node without a usable runtime can never reach
+	// the compatible state, so a missing Docker is provided here too, again on
+	// both paths and before anything on the node is touched.
+	if err := s.ensureAgentDocker(ctx, taskID, srv, runner); err != nil {
+		s.failAgentDeployTask(ctx, taskID, srv, err)
+		return
+	}
 	bundle, err := s.IssueAgentCertificate(ctx, srv.ID)
 	if err != nil {
 		s.failAgentDeployTask(ctx, taskID, srv, err)

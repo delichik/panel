@@ -13,7 +13,7 @@ The project is built for people who run their own servers and for humans sharing
 - Collect overview metrics for CPU, memory, disk, network, uptime, kernel, and load.
 - Refresh APT package updates and run selected or full upgrades.
 - Install UFW where supported.
-- Deploy panel-agent to servers with mTLS and a configured Docker host.
+- Deploy panel-agent to servers with mTLS, installing and starting Docker from the distribution packages when the default local socket is missing.
 - Check agent compatibility, Docker health, and runtime status.
 - Deploy Docker-based applications through panel-agent using Docker Engine API.
 - Inspect Panel-managed containers from a node with the read-only panel-agent CLI (`panel-agent --cli apps list|inspect|where`).

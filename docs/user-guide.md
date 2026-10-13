@@ -21,7 +21,7 @@ Before adding a server, confirm that it meets these requirements:
 - It runs one of the Debian or Ubuntu versions listed in the project README.
 - The Seamark host can reach its SSH address and port.
 - The selected SSH account is `root` or has passwordless `sudo`.
-- Docker is installed and running before you deploy container applications.
+- Docker: with the default local socket (`unix:///var/run/docker.sock`), Seamark installs and starts Docker from the distribution packages during Agent deployment. A custom Docker host is operator-provided and is never installed automatically.
 - The Seamark host can reach TCP port `9786` on the target server after the agent is installed.
 - The target server can reach the container registries used by your applications.
 
@@ -87,7 +87,7 @@ Open the new server's details and wait for the initial operations to finish. Bef
 Agent installation creates a service on the target server and listens on TCP port `9786`. If the agent cannot become healthy, check:
 
 - The target firewall and cloud security rules allow the Seamark host to reach `9786/tcp`.
-- Docker is running on the target server.
+- Docker is installed and running on the target server; a reinstall provisions it when the default local socket is configured.
 - The configured Docker host is correct.
 - The SSH account still has the required privileges.
 - The operation details and logs in **Task Center**.
@@ -222,7 +222,7 @@ Follow the [deployment upgrade instructions](deployment.md#upgrade-panel):
 | The default login no longer works | Use the password set during the mandatory first-login change. Restoring or replacing the data volume also changes which account database is active. |
 | A new server disappears after saving | The initial SSH/bootstrap operation failed. Check Task Center, then correct the host, port, credential, supported OS, or privilege setup and add it again. |
 | Agent is unavailable | Confirm Seamark-to-server access on `9786/tcp`, target firewall rules, Docker health, and the server's configured host address. |
-| Docker is unhealthy | Start Docker on the target server and verify the configured Docker host, normally `unix:///var/run/docker.sock`. |
+| Docker is unhealthy | Reinstall the agent to let Seamark install and start Docker when the default local socket is configured; with a custom Docker host, start Docker yourself and verify the endpoint. |
 | Application deployment stays pending or fails | Open the application runtime target and its task logs. Check agent health, registry access, image name, port conflicts, files, mounts, and container output. |
 | The application runs but cannot be reached | Check the target host port, UFW/cloud firewall, DNS record, and reverse-proxy gateway status. |
 | Certificate issuance fails | Verify the Cloudflare token permissions, zone name, DNS propagation, ACME email, and task-stage diagnostics. |

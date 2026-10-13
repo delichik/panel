@@ -88,6 +88,10 @@
 - `AGT-FW-003`：放行的基础端口集合固定为 SSH 端口（`normalizedTCPPort(server.Port)`）、Agent 内网监听端口（`agentControlPort`）与反向代理 trait 为真时的 80/443；**基础集合内不得包含应用端口**。应用端口由 Agent 在 `RuntimeReconcile` 中按应用 spec 的 `openFirewall` 声明自行放行（`panel:application:<id>` 规则），UFW 处于 disabled 时规则仍保留，因此先前写入的应用规则会在本次启用时一并生效。声明了宿主端口但 `openFirewall=false` 的应用会被阻断，必须在添加服务器的提示中写明。
 - `AGT-FW-005`：只有一次 SSH 状态探测确认 UFW 已安装且已启用时才允许跳过远端变更，此时不得下发任何 `ufw --force ...` 或 apt 命令。需要启用时，`ufw --force enable` 之前必须先放行 SSH 端口与 Agent 端口；`UFWEnableScript` 是唯一允许触碰 SSH 端口的实现，该顺序必须有测试断言。防火墙步骤经 **SSH** 而非 Agent RPC 执行：首次安装时 Agent 尚不存在，且「恢复 Agent 自身」是 `AGT-STATE-002` 允许回退 SSH 的唯一例外。
 - `AGT-FW-006`：安装步骤必须复用发行版适配器的固定 apt 参数（`DEBIAN_FRONTEND=noninteractive`、`--force-confdef`、`--force-confold`），并整体受 `ufwInstallTimeout` 约束；重复 `ufw allow` 必须幂等，步骤失败必须可由任务日志中的端口清单与远端输出定位。
+- `AGT-DKR-001`：Docker 是 Agent 部署的第二个环境前提，在防火墙步骤之后、签发节点证书与投递二进制之前执行，**完整安装与仅重启两条分支都要执行**，使存量服务器在下次部署时收敛。任一步失败必须让部署任务失败，且不得改动已在运行的 Agent。
+- `AGT-DKR-002`：自动安装只针对默认本机端点。仅当 `normalizeDockerHost(server.dockerHost)` 等于 `unix:///var/run/docker.sock` 时允许安装/启动本机 Docker；自定义端点（`tcp://...` 或其他 socket）视为操作者自管，步骤必须完全跳过且不得报错。
+- `AGT-DKR-003`：步骤必须先用一次 SSH 状态探测（安装、服务、API 就绪）决定动作；已安装、已启用且 API 就绪时不得下发任何 apt/systemctl 变更。缺失时用 `remoteops.APTInstallPrelude` 的固定非交互 apt 参数安装 `docker.io`，未启用时 `systemctl enable --now docker`，随后在固定窗口内等待 `/var/run/docker.sock` 与 `docker.service` 就绪。**禁止**重启一个已在运行的 daemon，禁止删除任何 Docker 资源；步骤幂等，重复执行不得重装已安装的运行时。
+- `AGT-DKR-004`：目标机侧最坏耗时（两次 apt 调用上限 + 就绪等待窗口）必须严格小于 Panel 侧 `agentDockerInstallTimeout`（10 分钟），且必须有测试按实际常量断言该不等式；失败以 `agent_docker_failed` 结束，任务日志必须保留安装、启动或等待阶段的原因行。发行版范围由 `AGT-FW-002` 保证，与防火墙一致为 Debian/Ubuntu 范围；自动部署触发条件不变（`AGT-AUTO-001`），常规 Docker 故障不触发重装。
 - `AGT-RPT-001`：Panel 必须主动拨号打开 mTLS report stream，节点不得保存 Panel callback地址；stream状态仅写 `agent.report.*`，不得降级普通 Agent status。**运行时不变量**：已安装的 Agent 不得假设 Panel 可达，也不得主动连接 Panel。安装期例外仅限一次性的 `AGT-DL-001` 下载：目标机可以用命令参数里的 URL 拉取自己的二进制，连不上时必须按 `AGT-DL-005` 回退 SSH 上传，且不得因此在本机持久化任何 Panel 地址。
 - `AGT-RPT-002`：流断开重连采用连续失败 5秒起至5分钟封顶退避；一旦该连接成功交付报告即重置退避，等待退避的连接不得被静默检测循环反复取消。
 - `AGT-RPT-003`：指标、容器、镜像或软件包报告的落库失败只记录日志，不中断流；容器保存失败不得触发应用 reconcile，空容器报告不得清空已有观察。
