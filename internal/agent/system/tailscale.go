@@ -39,8 +39,10 @@ func (LocalCollector) TailscaleStatus(ctx context.Context) (agentcontract.Tailsc
 
 // TailscaleConfigure 保证节点已安装 tailscale 并加入 tailnet。
 //
-// 认证密钥只在节点尚未登录时使用，并通过 TS_AUTHKEY 环境变量传递：它既不会
-// 出现在命令行参数（可能被本机其他用户通过进程列表读到），也不会写入磁盘。
+// 认证密钥只在节点尚未登录时使用：它被写入仅 root 可读（0600）的临时文件后以
+// --auth-key=file:<path> 引用（tailscale CLI 不读取 TS_AUTHKEY 环境变量），既
+// 不会出现在命令行参数（可能被本机其他用户通过进程列表读到），也不会写入磁盘
+// 的持久位置；命令结束后临时文件立即删除。
 func (LocalCollector) TailscaleConfigure(ctx context.Context, req agentcontract.TailscaleConfigureRequest) (agentcontract.TailscaleStatus, error) {
 	tags, err := tailscale.NormalizeTags(req.Tags)
 	if err != nil {
@@ -139,8 +141,10 @@ func ensureTailscaledRunning(ctx context.Context) error {
 	return nil
 }
 
-// tailscaleUp 执行首次加入或重新加入。密钥只经环境变量传递，并在错误文本中
-// 被脱敏，保证任务日志不包含秘密。
+// tailscaleUp 执行首次加入或重新加入。密钥写入仅 root 可读（0600）的临时文件
+// 后以 --auth-key=file:<path> 引用：tailscale CLI 不读取 TS_AUTHKEY 环境变量，
+// 而把密钥放进命令行会让它出现在进程列表里。命令结束后临时文件立即删除，错误
+// 文本中的密钥被脱敏，保证任务日志不包含秘密。
 func tailscaleUp(ctx context.Context, authKey string, tags []string, hostname string) error {
 	args := []string{"up"}
 	if len(tags) > 0 {
@@ -149,15 +153,42 @@ func tailscaleUp(ctx context.Context, authKey string, tags []string, hostname st
 	if hostname != "" {
 		args = append(args, "--hostname="+hostname)
 	}
-	env := []string{}
-	if key := strings.TrimSpace(authKey); key != "" {
-		env = append(env, "TS_AUTHKEY="+key)
+	keyPath, err := writeAuthKeyFile(authKey)
+	if err != nil {
+		return err
 	}
-	output, err := runCommandWithEnv(ctx, tailscaleCommandTimeout, env, "tailscale", args...)
+	if keyPath != "" {
+		defer func() { _ = os.Remove(keyPath) }()
+		args = append(args, "--auth-key=file:"+keyPath)
+	}
+	output, err := runCommand(ctx, tailscaleCommandTimeout, "tailscale", args...)
 	if err != nil {
 		return fmt.Errorf("tailscale up failed: %s", redactSecret(strings.TrimSpace(output), authKey))
 	}
 	return nil
+}
+
+// writeAuthKeyFile 把认证密钥写入仅 root 可读（0600）的临时文件并返回路径；
+// 密钥为空时返回空路径。调用方必须在命令结束后删除该文件。
+func writeAuthKeyFile(authKey string) (string, error) {
+	if authKey = strings.TrimSpace(authKey); authKey == "" {
+		return "", nil
+	}
+	file, err := os.CreateTemp("", "panel-agent-authkey-*")
+	if err != nil {
+		return "", fmt.Errorf("create tailscale auth key file: %w", err)
+	}
+	path := file.Name()
+	if _, err := file.WriteString(authKey); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return "", fmt.Errorf("write tailscale auth key file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", fmt.Errorf("close tailscale auth key file: %w", err)
+	}
+	return path, nil
 }
 
 // waitForTailscaleLogin 轮询到后端进入 Running 或明确需要管理员批准为止，
@@ -273,16 +304,6 @@ func readOSReleaseIdentity() (string, string) {
 		}
 	}
 	return distro, codename
-}
-
-// runCommandWithEnv 在附加环境变量的前提下执行命令并返回合并输出。
-func runCommandWithEnv(ctx context.Context, timeout time.Duration, env []string, name string, args ...string) (string, error) {
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	cmd := exec.CommandContext(runCtx, name, args...)
-	cmd.Env = append(os.Environ(), env...)
-	out, err := cmd.CombinedOutput()
-	return string(out), err
 }
 
 // tailscaleDiagnostic 把命令错误裁剪成适合写入观测态的稳定文本。

@@ -110,10 +110,10 @@
 
 - **触发入口**：`panel-init` 执行 `tailscale up`；节点侧 Agent 执行加入。
 - **前置条件**：期望态中包含认证密钥，或节点侧 Agent 收到 `TailscaleConfigure` 请求。
-- **成功结果**：密钥由 `panel-init` 写入仅 root 可读（0600）的临时文件，并以 `--auth-key=file:<path>` 引用传递给 `tailscale up`（CLI 不读取 `TS_AUTHKEY` 环境变量，把密钥放进参数会让它进入进程列表）；文件在命令结束后立即删除。命令参数列表、进程列表、任务参数以外的持久化位置、进程日志与错误输出中都不出现密钥，错误输出中的密钥被替换为固定占位符。
+- **成功结果**：容器侧 `panel-init` 与节点侧 Agent 都必须把密钥写入仅 root 可读（0600）的临时文件，并以 `--auth-key=file:<path>` 引用传递给 `tailscale up`（CLI 不读取 `TS_AUTHKEY` 环境变量，把密钥放进参数会让它进入进程列表）；文件在命令结束后立即删除。命令参数列表、进程列表、任务参数以外的持久化位置、进程日志与错误输出中都不出现密钥，错误输出中的密钥被替换为固定占位符。
 - **失败结果**：任何把密钥拼进命令行参数、写入 `/etc/panel-agent/*`、服务器 traits、运行事件或日志的实现都视为安全回归；脱敏失败时宁可截断输出也不得原文外泄（`GOV-DOD-009`）。
 - **边界条件**：密钥为空时不得创建临时文件，也不得向 `up` 传递 `--auth-key`；`tailscale up` 必须有超时，交互式认证或控制面不可达不得无限阻塞收敛循环（超时按失败写入 `lastError`）；节点已登录后重新下发配置不需要密钥；远端输出中同时包含其它敏感文本时仍必须完成密钥替换。
-- **验证点**：`cmd/panel-init/tailscale_test.go` 断言密钥经 `--auth-key=file:` 引用、文件权限为 `0600`、命令结束后文件被删除且密钥原文不进入参数列表；登录超时用例断言收敛循环不被阻塞；`internal/agent/system/tailscale.go` 的 `redactSecret` 单测覆盖。
+- **验证点**：`cmd/panel-init/tailscale_test.go` 断言容器侧密钥经 `--auth-key=file:` 引用、文件权限为 `0600`、命令结束后文件被删除且密钥原文不进入参数列表；登录超时用例断言收敛循环不被阻塞；`internal/agent/system/tailscale_test.go` 断言节点侧同一机制、空密钥不创建文件与错误脱敏。
 
 ### TS-INIT-007 自愈与 Panel 就绪门
 
@@ -233,10 +233,10 @@
 
 - **触发入口**：`TailscaleConfigure`（Panel 已启用该节点）。
 - **前置条件**：软件包已安装；节点可能已登录 tailnet。
-- **成功结果**：通过 systemd 启用并启动 `tailscaled`；节点尚未登录时才使用 `TS_AUTHKEY`（经环境变量）执行加入，并带上全局 ACL 标签；等待后端进入 Running（有界等待），随后返回本机 tailnet 地址、主机名与版本。
+- **成功结果**：通过 systemd 启用并启动 `tailscaled`；节点尚未登录时才执行加入：密钥写入仅 root 可读（0600）的临时文件并以 `--auth-key=file:<path>` 引用（CLI 不读取 `TS_AUTHKEY`），命令结束后立即删除；加入带上全局 ACL 标签，等待后端进入 Running（有界等待），随后返回本机 tailnet 地址、主机名与版本。
 - **失败结果**：服务无法启用、加入失败或等待超时必须返回结构化失败；不得把“已安装但未登录”报告为成功，也不得在失败时删除状态文件。
 - **边界条件**：已登录节点不携带密钥也能成功；需要管理员批准的状态必须返回稳定原因而不是超时泛化错误；重复启用幂等；无 systemd 的环境按不支持处理。
-- **验证点**：`internal/agent/system/tailscale.go` 的登录等待与幂等用例；Panel 侧 `TS-TASK-004` 联合验证。
+- **验证点**：`internal/agent/system/tailscale_test.go` 的密钥文件传递、空密钥与错误脱敏用例；登录等待与幂等用例；Panel 侧 `TS-TASK-004` 联合验证。
 
 ### TS-AGT-004 “关闭”是断连而非删除
 
