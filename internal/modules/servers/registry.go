@@ -128,7 +128,7 @@ func (s *Service) Update(ctx context.Context, serverID string, req SaveRequest) 
 		}
 	}
 	s.notifyDNSSync(ctx, serverID, previousIPv4 != nextIPv4 || previousIPv6 != nextIPv6)
-	s.reconcileTailscaleIntent(ctx, serverID, req.TailscaleEnabled)
+	s.reconcileTailscaleIntent(ctx, serverID, previousTailscaleEnabled, req.TailscaleEnabled)
 	s.reconcileAgentCertificateHosts(ctx, serverID, previousTailscalePreferAgent, req.TailscaleEnabled && req.TailscalePreferAgent)
 	// 互联地址选择依赖“启用 + 优先”两个意图：任一变化（含关闭节点后清除观测
 	// 地址）都必须让设施重算内嵌的对端地址。

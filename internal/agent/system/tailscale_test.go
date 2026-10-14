@@ -121,6 +121,9 @@ func TestTailscaleUpDeliversAuthKeyThroughPrivateFile(t *testing.T) {
 	if !strings.Contains(fields["args"], "--advertise-tags=tag:infra") {
 		t.Fatalf("up args = %q, want the ACL tag", fields["args"])
 	}
+	if !strings.Contains(fields["args"], "--accept-dns=false") || !strings.Contains(fields["args"], "--accept-routes=false") {
+		t.Fatalf("up args = %q, want --accept-dns=false --accept-routes=false", fields["args"])
+	}
 	if fields["keymode"] != "-rw-------" {
 		t.Fatalf("auth key file mode = %q, want -rw-------", fields["keymode"])
 	}
@@ -172,5 +175,67 @@ func TestWriteAuthKeyFileEmptyKey(t *testing.T) {
 	path, err := writeAuthKeyFile("   ")
 	if err != nil || path != "" {
 		t.Fatalf("writeAuthKeyFile(blank) = %q, %v; want empty path and no error", path, err)
+	}
+}
+
+// TS-AGT-004：关闭必须 logout 离开 tailnet，再 systemctl disable --now；不得只 down 保留身份。
+func TestTailscaleDisableLogsOutAndStopsDaemon(t *testing.T) {
+	skipWithoutPOSIXShell(t)
+	dir := t.TempDir()
+	recordPath := filepath.Join(dir, "disable-record")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_DISABLE_RECORD"
+case "$1" in
+  logout)
+    exit 0
+    ;;
+  status)
+    echo '{"BackendState":"NeedsLogin","Version":"1.80.0"}'
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`
+	systemctl := `#!/bin/sh
+printf 'systemctl %s\n' "$*" >> "$FAKE_DISABLE_RECORD"
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(dir, "tailscale"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "systemctl"), []byte(systemctl), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FAKE_DISABLE_RECORD", recordPath)
+
+	status, err := (LocalCollector{}).TailscaleDisable(context.Background())
+	if err != nil {
+		t.Fatalf("TailscaleDisable() error = %v", err)
+	}
+	if !status.Installed {
+		t.Fatalf("status = %#v, want installed after disable", status)
+	}
+	record, err := os.ReadFile(recordPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(record)
+	if !strings.Contains(text, "logout") {
+		t.Fatalf("disable record = %q, want tailscale logout", text)
+	}
+	if strings.Contains(text, "\ndown\n") || strings.HasPrefix(text, "down\n") {
+		t.Fatalf("disable must logout rather than only down: %q", text)
+	}
+	if !strings.Contains(text, "systemctl enable --now "+tailscaleServiceName) {
+		t.Fatalf("disable record = %q, want systemctl enable --now before logout", text)
+	}
+	if !strings.Contains(text, "systemctl disable --now "+tailscaleServiceName) {
+		t.Fatalf("disable record = %q, want systemctl disable --now %s", text, tailscaleServiceName)
+	}
+	if strings.Contains(text, "accept-dns") || strings.Contains(text, "accept-routes") || strings.Contains(text, " set ") {
+		t.Fatalf("disable must not rewrite preferences: %q", text)
 	}
 }

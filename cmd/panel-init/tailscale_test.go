@@ -37,7 +37,7 @@ const fakeTailscaleScript = `#!/bin/sh
 command=""
 for arg in "$@"; do
   case "$arg" in
-    status|up) command="$arg" ;;
+    status|up|logout) command="$arg" ;;
   esac
 done
 case "$command" in
@@ -76,6 +76,13 @@ case "$command" in
     fi
     : > "$FAKE_TS_MARKER"
     echo "logged in"
+    ;;
+  logout)
+    if [ -n "$FAKE_TS_RECORD" ]; then
+      echo "logout=1" >> "$FAKE_TS_RECORD"
+    fi
+    rm -f "$FAKE_TS_MARKER"
+    echo "logged out"
     ;;
   *)
     echo "unsupported command" >&2
@@ -212,6 +219,9 @@ func TestTailscaleSupervisorDeliversAuthKeyThroughPrivateFile(t *testing.T) {
 	if !strings.Contains(fields["args"], "--auth-key=file:") {
 		t.Fatalf("up args = %q, want an --auth-key=file: reference", fields["args"])
 	}
+	if !strings.Contains(fields["args"], "--accept-dns=false") || !strings.Contains(fields["args"], "--accept-routes=false") {
+		t.Fatalf("up args = %q, want --accept-dns=false --accept-routes=false", fields["args"])
+	}
 	if strings.Contains(fields["args"], authKey) {
 		t.Fatalf("auth key leaked into up args: %q", fields["args"])
 	}
@@ -258,6 +268,8 @@ func TestTailscaleSupervisorLoginTimesOut(t *testing.T) {
 func TestTailscaleSupervisorStopsProcessWhenDisabled(t *testing.T) {
 	skipWithoutPOSIXShell(t)
 	root, binaries := newFakeTailscaleEnvironment(t)
+	recordPath := filepath.Join(root, "disable-record")
+	t.Setenv("FAKE_TS_RECORD", recordPath)
 	if err := tailscale.WriteConfig(root, tailscale.Config{Enabled: true, AuthKey: "tskey-auth-test"}); err != nil {
 		t.Fatal(err)
 	}
@@ -273,6 +285,18 @@ func TestTailscaleSupervisorStopsProcessWhenDisabled(t *testing.T) {
 	status := supervisor.Status()
 	if status.Running || status.LoggedIn {
 		t.Fatalf("disabled config must stop tailscaled: %#v", status)
+	}
+	record, err := os.ReadFile(recordPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(record), "logout=1") {
+		t.Fatalf("disable must logout from the tailnet before stopping: %q", record)
+	}
+	if marker := os.Getenv("FAKE_TS_MARKER"); marker != "" {
+		if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("logout must clear the login marker (stat err = %v)", err)
+		}
 	}
 	supervisor.Stop()
 }

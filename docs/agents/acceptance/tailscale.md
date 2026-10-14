@@ -74,10 +74,10 @@
 
 - **触发入口**：容器首次启动，或 `<dataRoot>/tailscale/config.json` 首次由 Panel 写入 `enabled=true`。
 - **前置条件**：`panel-init` 以 root 运行并持有期望态配置的读取权限；Panel 进程可写该配置。
-- **成功结果**：`panel-init` 读取期望态后启动 `tailscaled`（状态文件与 LocalAPI socket 位于 `<dataRoot>/tailscale/`），等待 socket 就绪，再执行 `tailscale up --hostname=seamark-panel --accept-dns=false`；节点以固定主机名 `seamark-panel` 加入 tailnet，容器实际态随即可由 `GET /settings/runtime` 读到。
+- **成功结果**：`panel-init` 读取期望态后启动 `tailscaled`（状态文件与 LocalAPI socket 位于 `<dataRoot>/tailscale/`），等待 socket 就绪，再执行 `tailscale up --hostname=seamark-panel --accept-dns=false --accept-routes=false`；节点以固定主机名 `seamark-panel` 加入 tailnet，容器实际态随即可由 `GET /settings/runtime` 读到。不得接受 MagicDNS 或他人广播的子网路由。
 - **失败结果**：tailscaled 启动失败、socket 等待超时或加入失败时，实际态写为不可用/错误并记录 `lastError`，不得反复重启整个容器，也不得让期望态文件被改写成“成功”。
-- **边界条件**：期望态为 `enabled=false` 或缺少认证密钥时不得尝试加入；已存在状态文件时按已登录处理不重复加入；写入期望态的进程与读取进程分属不同用户（Panel 非 root、`panel-init` root），目录属主必须允许 Panel 写入。
-- **验证点**：`cmd/panel-init/tailscale_test.go` 覆盖读取配置、启动、socket 等待与 `up` 参数；`internal/platform/tailscale/tailscale_test.go` 覆盖配置读写与 `0640` 权限。
+- **边界条件**：期望态为 `enabled=false` 或缺少认证密钥时不得尝试加入，且若此前已登录必须先 `tailscale logout` 再停止进程（不得只停进程而让节点仍留在 tailnet）；已存在状态文件且期望态仍启用时按已登录处理不重复加入；写入期望态的进程与读取进程分属不同用户（Panel 非 root、`panel-init` root），目录属主必须允许 Panel 写入。
+- **验证点**：`cmd/panel-init/tailscale_test.go` 覆盖读取配置、启动、socket 等待、`up` 参数与“关闭期望态时 logout”；`internal/platform/tailscale/tailscale_test.go` 覆盖配置读写与 `0640` 权限。
 
 ### TS-INIT-003 重启与节点身份存活
 
@@ -156,11 +156,11 @@
 ### TS-NODE-004 关闭开关清除观测态
 
 - **触发入口**：更新服务器时把 `tailscaleEnabled` 置为 false。
-- **前置条件**：该节点已有 `tailscale.*` 观测态（状态、地址、主机名、错误或时间中的任意一项）。
-- **成功结果**：保存在同一事务内清除这些观测键，详情与列表不再显示过期地址或状态；随后按 `TS-TASK-002` 排队一次收敛，让节点真正退出 tailnet。
-- **失败结果**：不得因为收敛失败而恢复或保留已清除的观测键；不得把清除误解为“删除节点身份”（节点侧只断连，见 `TS-AGT-004`）。
-- **边界条件**：重复关闭幂等；节点从未上报过观测态时不得创建空观测；清除后再次启用必须能重新收敛并重新写入观测。
-- **验证点**：`tailscale_report_test.go` 的清除用例；`registry.go` 保存路径在同一事务内清除的断言。
+- **前置条件**：该节点保存前 `tailscaleEnabled=true`（观测态可有可无；保存同事务会按本条清除观测）。
+- **成功结果**：保存在同一事务内清除这些观测键，详情与列表不再显示过期地址或状态；随后按 `TS-TASK-002` 排队一次收敛，让节点真正执行 `TailscaleDisable`（`logout` 离开 tailnet 并停用 `tailscaled`）。排队门禁必须依据保存前的启用意图，不得因观测键已清除而跳过远端注销。
+- **失败结果**：不得因为收敛失败而恢复或保留已清除的观测键；不得只清 Panel 侧配置/观测却让节点仍留在 tailnet 或让 `tailscaled` 继续运行（见 `TS-AGT-004`）。
+- **边界条件**：重复关闭幂等（保存前已是 false 时不得再排队远端停用）；节点从未上报过观测态但曾经启用过时仍必须排队注销；清除后再次启用必须重新用认证密钥加入并重新写入观测。
+- **验证点**：`tailscale_report_test.go` 覆盖“关闭后即使观测已清仍排队 `server_tailscale_apply`”与“从未启用不排队”；`registry.go` 保存路径在同一事务内清除的断言。
 
 ### TS-NODE-005 旧 Agent 报告缺少 tailscale 字段不得清除观测
 
@@ -185,11 +185,11 @@
 ### TS-TASK-002 保存开关自动排队收敛
 
 - **触发入口**：创建或更新服务器保存成功后，由服务端自动排队。
-- **前置条件**：保存请求改变了 `tailscaleEnabled`，或在该节点已启用时改变了偏好开关。
-- **成功结果**：保存先成功落库，随后自动创建/复用 `server_tailscale_apply` 任务；用户在详情页看到状态从 `pending` 过渡到实际上报状态。
-- **失败结果**：排队失败只记录告警，不影响保存结果本身；不得把保存回滚成失败，也不得让用户以为节点已加入。
-- **边界条件**：节点尚未具备可用 Agent 时先标记为 `pending`，由 Agent 就绪后的状态收敛再次触发，不得在无 Agent 时反复排队失败任务；保存未改变任何 Tailscale 字段时不得产生多余任务。
-- **验证点**：`registry.go` 保存路径的排队断言；`tailscale_report_test.go` 覆盖无 Agent 时的 `pending` 行为。
+- **前置条件**：保存请求把 `tailscaleEnabled` 从 false→true，或从 true→false，或在该节点已启用时改变了偏好开关。
+- **成功结果**：保存先成功落库，随后自动创建/复用 `server_tailscale_apply` 任务；启用路径用户在详情页看到状态从 `pending` 过渡到实际上报状态；关闭路径任务执行 `TailscaleDisable`，从 tailnet 注销节点并停用 daemon。
+- **失败结果**：排队失败只记录告警，不影响保存结果本身；不得把保存回滚成失败，也不得让用户以为节点已加入或已从 tailnet 移除。
+- **边界条件**：节点尚未具备可用 Agent 时，启用先标记为 `pending`，由 Agent 就绪后的状态收敛再次触发，不得在无 Agent 时反复排队失败任务；关闭路径即使观测态已清也必须排队（见 `TS-NODE-004`）；保存前已是关闭且本次仍关闭时不得产生多余任务。
+- **验证点**：`registry.go` 保存路径的排队断言；`tailscale_report_test.go` 覆盖无 Agent 时的 `pending` 与关闭排队分支。
 
 ### TS-TASK-003 缺少 `agent.tailscale` 能力只失败该操作
 
@@ -233,19 +233,19 @@
 
 - **触发入口**：`TailscaleConfigure`（Panel 已启用该节点）。
 - **前置条件**：软件包已安装；节点可能已登录 tailnet。
-- **成功结果**：通过 systemd 启用并启动 `tailscaled`；节点尚未登录时才执行加入：密钥写入仅 root 可读（0600）的临时文件并以 `--auth-key=file:<path>` 引用（CLI 不读取 `TS_AUTHKEY`），命令结束后立即删除；加入带上全局 ACL 标签，等待后端进入 Running（有界等待），随后返回本机 tailnet 地址、主机名与版本。
+- **成功结果**：通过 systemd 启用并启动 `tailscaled`；节点尚未登录时才执行加入：密钥写入仅 root 可读（0600）的临时文件并以 `--auth-key=file:<path>` 引用（CLI 不读取 `TS_AUTHKEY`），命令结束后立即删除；`tailscale up` 必须带 `--accept-dns=false --accept-routes=false`（不得接管本机 DNS / 接受他人子网路由），并带上全局 ACL 标签，等待后端进入 Running（有界等待），随后返回本机 tailnet 地址、主机名与版本。已登录节点不重复 `up`，但必须执行 `tailscale set --accept-dns=false --accept-routes=false` 收敛旧会话残留偏好。
 - **失败结果**：服务无法启用、加入失败或等待超时必须返回结构化失败；不得把“已安装但未登录”报告为成功，也不得在失败时删除状态文件。
-- **边界条件**：已登录节点不携带密钥也能成功；需要管理员批准的状态必须返回稳定原因而不是超时泛化错误；重复启用幂等；无 systemd 的环境按不支持处理。
-- **验证点**：`internal/agent/system/tailscale_test.go` 的密钥文件传递、空密钥与错误脱敏用例；登录等待与幂等用例；Panel 侧 `TS-TASK-004` 联合验证。
+- **边界条件**：已登录节点不携带密钥也能成功；需要管理员批准的状态必须返回稳定原因而不是超时泛化错误；重复启用幂等；无 systemd 的环境按不支持处理；不得省略或改为 `true` 的 accept-dns/accept-routes。
+- **验证点**：`internal/agent/system/tailscale_test.go` 的密钥文件传递、空密钥、`accept-dns=false`/`accept-routes=false` 与错误脱敏用例；登录等待与幂等用例；Panel 侧 `TS-TASK-004` 联合验证。
 
-### TS-AGT-004 “关闭”是断连而非删除
+### TS-AGT-004 “关闭”是从 tailnet 移除，而非仅断连或卸载
 
 - **触发入口**：`TailscaleDisable`（Panel 关闭节点开关或清除全局密钥后收敛）。
 - **前置条件**：节点已安装并可能已登录 tailnet。
-- **成功结果**：节点断开 tailnet 连接，保留已安装软件包与节点身份（状态文件不删除），因此再次启用无需重新申请节点密钥；返回实际态。
-- **失败结果**：失败必须显式返回并写入观测态；不得用“删除软件包/清空状态”的方式实现关闭（与删除节点的语义必须可区分，`GOV-DOD-010`）。
-- **边界条件**：未安装或未登录时关闭是幂等的成功；关闭后上报的地址必须从观测态消失，从而不再参与地址优先替换；再次启用按 `TS-AGT-003` 走加入路径。
-- **验证点**：`internal/agent/system/tailscale.go` 的关闭用例；`TS-NODE-004` 与 `TS-ADDR-*` 的联合断言。
+- **成功结果**：先保证 `tailscaled` 可运行 LocalAPI，再执行 `tailscale logout` 从控制面注销并清除本机登录态，随后 `systemctl disable --now tailscaled` 停用 daemon；保留已安装软件包（不卸载），但**不**保留可复用的节点登录身份——再次启用必须重新用认证密钥加入。关闭不得通过改写 `accept-dns`/`accept-routes` 或仅 `down` 来“假装离开 tailnet”。
+- **失败结果**：失败必须显式返回并写入观测态；不得用“删除软件包”的方式实现关闭（与删除服务器节点的语义必须可区分，`GOV-DOD-010`）；不得只停进程却让设备仍留在 tailnet 列表。
+- **边界条件**：未安装时关闭是幂等的成功；`logout` 需要 daemon 时可临时 `enable --now` 再注销并停用；关闭后上报的地址必须从观测态消失，从而不再参与地址优先替换；再次启用按 `TS-AGT-003` 走完整加入路径。
+- **验证点**：`internal/agent/system/tailscale.go` 的关闭用例（logout + systemd disable --now）；`TS-NODE-004` 与 `TS-ADDR-*` 的联合断言。
 
 ### TS-AGT-005 节点侧秘密处理与上报范围
 

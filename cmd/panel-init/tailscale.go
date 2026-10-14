@@ -155,7 +155,7 @@ func (s *tailscaleSupervisor) reconcile(ctx context.Context) {
 	s.mu.Unlock()
 
 	if !cfg.Enabled {
-		s.stopProcess(ctx)
+		s.logoutAndStop(ctx)
 		s.publish(tailscale.Status{Available: true})
 		return
 	}
@@ -210,7 +210,7 @@ func (s *tailscaleSupervisor) ensureLogin(ctx context.Context, cfg tailscale.Con
 	if keyPath != "" {
 		defer func() { _ = os.Remove(keyPath) }()
 	}
-	args := []string{"--socket=" + tailscale.SocketPath(s.dataRoot), "up", "--accept-dns=false", "--hostname=" + cfg.Hostname}
+	args := []string{"--socket=" + tailscale.SocketPath(s.dataRoot), "up", "--accept-dns=false", "--accept-routes=false", "--hostname=" + cfg.Hostname}
 	if len(cfg.Tags) > 0 {
 		args = append(args, "--advertise-tags="+strings.Join(cfg.Tags, ","))
 	}
@@ -318,8 +318,24 @@ func (s *tailscaleSupervisor) ensureProcess(ctx context.Context) error {
 	return s.waitForSocket(ctx)
 }
 
-// stopProcess 结束 tailscaled。节点身份保存在状态文件中，因此停止进程不会
-// 让节点退出 tailnet。
+// logoutAndStop 在关闭期望态时先从 tailnet 注销本节点，再停止进程。
+// 仅 stop 会保留状态文件中的登录身份，节点仍会出现在 tailnet 设备列表中。
+func (s *tailscaleSupervisor) logoutAndStop(ctx context.Context) {
+	if s.binTS != "" && s.binDaemon != "" {
+		if err := s.ensureProcess(ctx); err == nil {
+			callCtx, cancel := context.WithTimeout(ctx, tailscaleCommandTimeout)
+			cmd := exec.CommandContext(callCtx, s.binTS, "--socket="+tailscale.SocketPath(s.dataRoot), "logout")
+			output, err := cmd.CombinedOutput()
+			cancel()
+			if err != nil {
+				s.logger.Printf("tailscale logout failed: %v (%s)", err, strings.TrimSpace(string(output)))
+			}
+		}
+	}
+	s.stopProcess(ctx)
+}
+
+// stopProcess 结束 tailscaled。调用方若需要离开 tailnet，必须先 logout。
 func (s *tailscaleSupervisor) stopProcess(ctx context.Context) {
 	s.mu.Lock()
 	cmd := s.process

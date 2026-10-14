@@ -65,9 +65,12 @@ func (LocalCollector) TailscaleConfigure(ctx context.Context, req agentcontract.
 		return agentcontract.TailscaleStatus{}, err
 	}
 	if status.LoggedIn {
-		// 已加入 tailnet 的节点不重复执行 up：那会重写节点偏好并可能打断
-		// 现有连接，而地址与主机名无需变更。
-		return status, nil
+		// 已加入的节点不重复执行 up（避免打断连接），但仍强制关闭 DNS/子网
+		// 路由接受，防止旧会话残留 accept-dns/accept-routes=true。
+		if err := ensureTailscaleNetworkPrefs(ctx); err != nil {
+			return agentcontract.TailscaleStatus{}, err
+		}
+		return readTailscaleStatus(ctx)
 	}
 	if strings.TrimSpace(req.AuthKey) == "" && status.BackendState == tailscale.BackendStateNeedsLogin {
 		return status, errors.New("tailscale auth key is required to join the tailnet")
@@ -78,13 +81,23 @@ func (LocalCollector) TailscaleConfigure(ctx context.Context, req agentcontract.
 	return waitForTailscaleLogin(ctx)
 }
 
-// TailscaleDisable 让节点退出 tailnet 连接，但保留已安装的软件包与节点身份，
-// 使再次启用无需重新申请节点密钥（禁用与删除是两种不同的语义）。
+// TailscaleDisable 从 tailnet 移除本节点并停用本机 tailscaled。
+//
+// 关闭语义是“清配置 + logout 离开 tailnet”，不是仅 down：logout 会清除本机登录
+// 态并从控制面注销节点；再次启用必须重新用认证密钥加入。软件包保留（禁用 ≠
+// 卸载）。不改写 accept-dns/accept-routes 等偏好来假装停用。
 func (LocalCollector) TailscaleDisable(ctx context.Context) (agentcontract.TailscaleStatus, error) {
 	if _, err := exec.LookPath("tailscale"); err != nil {
 		return agentcontract.TailscaleStatus{Installed: false}, nil
 	}
-	if _, err := runCommand(ctx, tailscaleCommandTimeout, "tailscale", "down"); err != nil {
+	// logout 需要 LocalAPI：先确保 daemon 在跑，再注销，最后停用单元。
+	if err := ensureTailscaledRunning(ctx); err != nil {
+		return agentcontract.TailscaleStatus{}, err
+	}
+	if _, err := runCommand(ctx, tailscaleCommandTimeout, "tailscale", "logout"); err != nil {
+		return agentcontract.TailscaleStatus{}, fmt.Errorf("tailscale logout: %w", err)
+	}
+	if err := stopTailscaled(ctx); err != nil {
 		return agentcontract.TailscaleStatus{}, err
 	}
 	return readTailscaleStatus(ctx)
@@ -141,12 +154,35 @@ func ensureTailscaledRunning(ctx context.Context) error {
 	return nil
 }
 
+// stopTailscaled 停用并停止本机 tailscaled，避免“已关闭意图”后 daemon 仍在运行。
+// 无 systemd 时返回错误：节点侧与启用路径一样要求 systemd。
+func stopTailscaled(ctx context.Context) error {
+	if _, err := exec.LookPath("systemctl"); err != nil {
+		return errors.New("systemd is required to manage tailscaled on this node")
+	}
+	if _, err := runCommand(ctx, tailscaleCommandTimeout, "systemctl", "disable", "--now", tailscaleServiceName); err != nil {
+		return fmt.Errorf("stop tailscaled: %w", err)
+	}
+	return nil
+}
+
+// ensureTailscaleNetworkPrefs 在已登录节点上强制关闭 MagicDNS 与子网路由接受。
+// 关闭意图本身走 TailscaleDisable，不依赖改偏好；这里只保证启用态不会接管本机网络。
+func ensureTailscaleNetworkPrefs(ctx context.Context) error {
+	if _, err := runCommand(ctx, tailscaleCommandTimeout, "tailscale", "set", "--accept-dns=false", "--accept-routes=false"); err != nil {
+		return fmt.Errorf("disable tailscale dns/routes acceptance: %w", err)
+	}
+	return nil
+}
+
 // tailscaleUp 执行首次加入或重新加入。密钥写入仅 root 可读（0600）的临时文件
 // 后以 --auth-key=file:<path> 引用：tailscale CLI 不读取 TS_AUTHKEY 环境变量，
 // 而把密钥放进命令行会让它出现在进程列表里。命令结束后临时文件立即删除，错误
 // 文本中的密钥被脱敏，保证任务日志不包含秘密。
+//
+// 明确关闭 MagicDNS / 子网路由接受：不得覆盖本机 DNS 与路由表偏好。
 func tailscaleUp(ctx context.Context, authKey string, tags []string, hostname string) error {
-	args := []string{"up"}
+	args := []string{"up", "--accept-dns=false", "--accept-routes=false"}
 	if len(tags) > 0 {
 		args = append(args, "--advertise-tags="+strings.Join(tags, ","))
 	}

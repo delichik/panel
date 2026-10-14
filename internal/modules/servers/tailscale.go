@@ -110,9 +110,8 @@ func (s *Service) runTailscaleApply(ctx context.Context, taskID, serverID string
 	_ = s.tasks.Advance(ctx, taskID, "applying", "applying tailscale configuration on the node")
 
 	if !srv.TailscaleEnabled {
-		// 关闭意图：让节点退出 tailnet 连接但保留软件包与节点身份，
-		// 使再次启用无需重新申请节点密钥。
-		_ = s.tasks.Advance(ctx, taskID, "disabling", "disconnecting the node from the tailnet")
+		// 关闭意图：logout 离开 tailnet 并停用 systemd；再次启用需重新用密钥加入。
+		_ = s.tasks.Advance(ctx, taskID, "disabling", "removing the node from the tailnet")
 		status, err := client.TailscaleDisable(ctx, endpoint)
 		if err != nil {
 			return s.failTailscaleApply(ctx, taskID, serverID, err)
@@ -172,7 +171,10 @@ func (s *Service) tailscaleConfig() TailscaleSettings {
 
 // reconcileTailscaleIntent 在用户保存节点开关后立即收敛一次。任务失败只记录
 // 状态，不影响保存结果本身。
-func (s *Service) reconcileTailscaleIntent(ctx context.Context, serverID string, enabled bool) {
+//
+// previouslyEnabled 必须来自保存前的意图：关闭时观测态已在同一事务按
+// TS-NODE-004 清除，不能再用 isTailscaleObserved 决定是否排队断连。
+func (s *Service) reconcileTailscaleIntent(ctx context.Context, serverID string, previouslyEnabled, enabled bool) {
 	if s.tasks == nil {
 		return
 	}
@@ -186,8 +188,12 @@ func (s *Service) reconcileTailscaleIntent(ctx context.Context, serverID string,
 		_ = s.markTailscalePending(ctx, srv.ID)
 		return
 	}
-	if !enabled && !isTailscaleObserved(srv) {
-		return
+	if !enabled {
+		// 关闭意图：排队 TailscaleDisable（logout 离开 tailnet + 停用 systemd）。
+		// 从未启用过则无需远端副作用。
+		if !previouslyEnabled {
+			return
+		}
 	}
 	if _, err := s.ensureTailscaleApplyTask(ctx, srv, "system", true); err != nil {
 		logging.L().Warn("queue tailscale apply failed", zap.String("server_id", serverID), zap.Error(err))
@@ -378,16 +384,3 @@ func sameStringSet(left, right []string) bool {
 	return true
 }
 
-// isTailscaleObserved 报告该节点是否已有 tailscale 观测态。
-func isTailscaleObserved(srv Server) bool {
-	for _, key := range []string{
-		agentcontract.TraitTailscaleStatus,
-		agentcontract.TraitTailscaleIPv4,
-		agentcontract.TraitTailscaleIPv6,
-	} {
-		if strings.TrimSpace(srv.Traits[key]) != "" {
-			return true
-		}
-	}
-	return false
-}

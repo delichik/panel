@@ -7,6 +7,7 @@ import (
 
 	agentcontract "panel/internal/agent/contract"
 	agentsecurity "panel/internal/agent/security"
+	"panel/internal/modules/tasks"
 )
 
 func createTailscaleServer(t *testing.T, svc *Service) Server {
@@ -62,6 +63,85 @@ func TestUpdateForcesPreferenceOffWhenTailscaleDisabled(t *testing.T) {
 	}
 	if updated.TailscaleEnabled || updated.TailscalePreferAgent || updated.TailscalePreferInterconnect {
 		t.Fatalf("disabling tailscale must clear both preferences: %#v", updated)
+	}
+}
+
+// TS-NODE-004：关闭开关后观测态已在同事务清除，仍必须按“曾经启用”排队远端停用，
+// 不得因 isTailscaleObserved=false 而跳过。
+func TestUpdateDisableQueuesTailscaleApplyAfterClearingTraits(t *testing.T) {
+	svc, taskSvc, store := testServerService(t, nil)
+	srv := createTailscaleServer(t, svc)
+	traits := `{"tailscale.status":"running","tailscale.ipv4":"100.64.0.7"}`
+	if _, err := store.AppDB().Exec(`UPDATE servers SET traits=? WHERE id=?`, traits, srv.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := svc.Update(context.Background(), srv.ID, SaveRequest{
+		Name:             "node-a",
+		IPv4:             "203.0.113.10",
+		Port:             22,
+		SSHUsername:      "du",
+		CredentialID:     "cred_1",
+		DockerHost:       agentcontract.DefaultDockerHost,
+		TailscaleEnabled: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Traits[agentcontract.TraitTailscaleStatus] != "" || updated.Traits[agentcontract.TraitTailscaleIPv4] != "" {
+		t.Fatalf("traits must be cleared on disable: %#v", updated.Traits)
+	}
+
+	page, err := taskSvc.List(context.Background(), tasks.ListFilter{
+		Type:            tailscaleApplyTaskType,
+		ServerID:        srv.ID,
+		IncludeInternal: true,
+		Limit:           10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total == 0 {
+		t.Fatal("disabling a previously-enabled node must queue server_tailscale_apply even after traits are cleared")
+	}
+}
+
+func TestUpdateDisableDoesNotQueueWhenNeverEnabled(t *testing.T) {
+	svc, taskSvc, _ := testServerService(t, nil)
+	srv, err := svc.Create(context.Background(), SaveRequest{
+		Name:             "node-b",
+		IPv4:             "203.0.113.11",
+		Port:             22,
+		SSHUsername:      "du",
+		CredentialID:     "cred_1",
+		DockerHost:       agentcontract.DefaultDockerHost,
+		TailscaleEnabled: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Update(context.Background(), srv.ID, SaveRequest{
+		Name:             "node-b",
+		IPv4:             "203.0.113.11",
+		Port:             22,
+		SSHUsername:      "du",
+		CredentialID:     "cred_1",
+		DockerHost:       agentcontract.DefaultDockerHost,
+		TailscaleEnabled: false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := taskSvc.List(context.Background(), tasks.ListFilter{
+		Type:            tailscaleApplyTaskType,
+		ServerID:        srv.ID,
+		IncludeInternal: true,
+		Limit:           10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 0 {
+		t.Fatalf("never-enabled disable must not queue apply tasks, got %d", page.Total)
 	}
 }
 
