@@ -139,16 +139,18 @@ describe('servers page table and covered detail', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]!.text()).toContain('edge-1');
     expect(rows[0]!.text()).toContain('10.0.0.1:22');
-    // 详情入口在行操作区，行内不再自动打开详情。
-    expect(rows[0]!.find('button').text()).toContain('Details');
+    // 名称列与操作列「详情」均可打开覆盖式详情；整行不可点。
+    const buttons = rows[0]!.findAll('button');
+    expect(buttons.find((button) => button.text() === 'edge-1')?.attributes('aria-label')).toBe('Open details for edge-1');
+    expect(buttons.some((button) => button.text().includes('Details'))).toBe(true);
     expect(wrapper.find('[data-testid="server-detail"]').exists()).toBe(false);
   });
 
   it('covers the table with the detail view and syncs the URL', async () => {
     const { wrapper, router } = await mountPage();
 
-    const detailButton = wrapper.findAll('tbody tr').at(0)!.findAll('button').find((button) => button.text().includes('Details'))!;
-    await detailButton.trigger('click');
+    const nameButton = wrapper.findAll('tbody tr').at(0)!.findAll('button').find((button) => button.text() === 'edge-1')!;
+    await nameButton.trigger('click');
     await flushPromises();
 
     expect(router.currentRoute.value.query.server).toBe('srv-1');

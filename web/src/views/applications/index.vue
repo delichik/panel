@@ -34,6 +34,7 @@ import FacilityCatalog from './FacilityCatalog.vue';
 import FacilityDiagnostics from './FacilityDiagnostics.vue';
 import ApplicationLogsDialog from './ApplicationLogsDialog.vue';
 import AssetFileManager from '@/components/patterns/AssetFileManager.vue';
+import TableDetailName from '@/components/patterns/TableDetailName.vue';
 import type { AssetFileAdapter, AssetFileItem } from '@/components/patterns/assetFileManager';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import ListPage from '@/components/templates/ListPage.vue';
@@ -1928,7 +1929,7 @@ onBeforeUnmount(() => {
             :loading-label="t('common.loading')"
           >
             <template #name="{ row }">
-              <strong class="block max-w-[16rem] truncate text-foreground">{{ row.app.name }}</strong>
+              <TableDetailName class="max-w-[16rem]" :name="row.app.name" :label="t('common.openDetails', { name: row.app.name })" @click="openApplicationDetail(row.app)" />
             </template>
             <template #status="{ row }">
               <StatusBadge :status="applicationStatus(row.app, runtimes[row.app.id])" :tone="statusTone(applicationStatus(row.app, runtimes[row.app.id]))" :label="t(`applicationsPage.status.${applicationStatus(row.app, runtimes[row.app.id])}`)" />

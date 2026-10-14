@@ -18,6 +18,7 @@ import SearchInput from '@/components/ui/SearchInput.vue';
 import Select from '@/components/ui/Select.vue';
 import Table from '@/components/ui/Table.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
+import TableDetailName from '@/components/patterns/TableDetailName.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import ListPage from '@/components/templates/ListPage.vue';
 import TableDetailLayout from '@/components/templates/TableDetailLayout.vue';
@@ -360,7 +361,7 @@ watch(page, (value) => {
             :loading-label="t('common.loading')"
           >
             <template #name="{ row }">
-              <strong class="block max-w-[18rem] truncate text-foreground">{{ row.name }}</strong>
+              <TableDetailName class="max-w-[18rem]" :name="row.name" :label="t('common.openDetails', { name: row.name })" @click="openDetail(row)" />
             </template>
             <template #provider="{ row }">
               <Badge :tone="domainTone(row, providerErrorDomainId)">{{ row.provider }}</Badge>

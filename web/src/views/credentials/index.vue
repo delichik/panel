@@ -21,6 +21,7 @@ import ConsolePage from '@/components/templates/ConsolePage.vue';
 import ListPage from '@/components/templates/ListPage.vue';
 import TableDetailLayout from '@/components/templates/TableDetailLayout.vue';
 import CredentialFormFields from '@/components/patterns/CredentialFormFields.vue';
+import TableDetailName from '@/components/patterns/TableDetailName.vue';
 import { emptyCredentialInput, secretPayload, validateCredentialInput, type CredentialFormLabels } from '@/components/patterns/credentialForm';
 import { useI18n } from '@/i18n';
 import type { CredentialDetailDto, CredentialDto, CredentialInput, CredentialType } from '@/types/credentials';
@@ -322,7 +323,7 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
             :loading-label="t('common.loading')"
           >
             <template #name="{ row }">
-              <strong class="block max-w-[16rem] truncate text-foreground">{{ row.name }}</strong>
+              <TableDetailName class="max-w-[16rem]" :name="row.name" :label="t('common.openDetails', { name: row.name })" @click="openDetail(row)" />
             </template>
             <template #type="{ row }">
               <Badge :tone="typeTone(row.type)">{{ typeLabel(row.type) }}</Badge>

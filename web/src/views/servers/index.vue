@@ -18,6 +18,7 @@ import Table from '@/components/ui/Table.vue';
 import Tabs from '@/components/ui/Tabs.vue';
 import Tooltip from '@/components/ui/Tooltip.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
+import TableDetailName from '@/components/patterns/TableDetailName.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import ListPage from '@/components/templates/ListPage.vue';
 import TableDetailLayout from '@/components/templates/TableDetailLayout.vue';
@@ -418,7 +419,7 @@ onBeforeUnmount(() => {
             :loading-label="t('common.loading')"
           >
             <template #name="{ row }">
-              <strong class="block max-w-[14rem] truncate text-foreground">{{ row.name }}</strong>
+              <TableDetailName class="max-w-[14rem]" :name="row.name" :label="t('common.openDetails', { name: row.name })" @click="openDetail(row)" />
             </template>
             <template #address="{ row }">
               <Tooltip :text="`${row.host}:${row.port}`" trigger-class="max-w-[16rem]">

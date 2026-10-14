@@ -47,7 +47,8 @@ AppShell
 - 列定义支持可选 `width` / `nowrap`，并可通过 `fixed` 开启 `table-fixed`：需要稳定单行的列（时间、级别、操作）用 `nowrap`，长文本列用 `truncate` 截断，需要悬浮完整内容时配合 `Tooltip`。
 - 单元格插槽按列 key 命名（`#<key>`），表头插槽为 `#head-<key>`（如全选复选框）；`#empty` 插槽在真实无数据时渲染空态，加载失败/筛选为空由页面在表格外先行分支。
 - 行操作列：每行固定「详情」入口；高频操作直接平铺为行内按钮（如编辑、测试连接、续签、同步、容器生命周期），低频/危险操作收进行内「更多」菜单；操作列右对齐并 `nowrap`。
-- 当前选中行（覆盖详情打开的对象）通过 `active-key` 标记 `aria-current="true"` 与 muted 表面；表格行本身不可点击。
+- 名称列：实体列表用 `TableDetailName` 打开覆盖式详情（与「详情」按钮同语义）；须有本地化 `aria-label`（`common.openDetails`）。
+- 当前选中行（覆盖详情打开的对象）通过 `active-key` 标记 `aria-current="true"` 与 muted 表面；表格行本身不可点击，不得把整行绑成点击区。
 
 ## 页面模板
 

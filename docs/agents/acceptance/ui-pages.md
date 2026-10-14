@@ -50,7 +50,7 @@
 
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
-| UI-SRV-001 | 打开列表、搜索、翻页或选择服务器 | 服务端 `page/pageSize/q` 查询；URL 恢复 search/page/server/tab；表格列展示名称、地址、可达性、Agent、权限、Tailscale、最近检查；点击行内「详情」按需 GET 完整详情并覆盖列表 | 列表失败显示重试而非空态；切换服务器时取消/忽略旧详情并清空旧 tab 数据；无选中时不自动打开详情 | 分享 URL 恢复相同页、服务器与 tab；不会显示上一服务器的迟到详情 |
+| UI-SRV-001 | 打开列表、搜索、翻页或选择服务器 | 服务端 `page/pageSize/q` 查询；URL 恢复 search/page/server/tab；表格列展示名称、地址、可达性、Agent、权限、Tailscale、最近检查；点击行内「详情」或名称列按需 GET 完整详情并覆盖列表 | 列表失败显示重试而非空态；切换服务器时取消/忽略旧详情并清空旧 tab 数据；无选中时不自动打开详情；不得依赖整行点击 | 分享 URL 恢复相同页、服务器与 tab；不会显示上一服务器的迟到详情 |
 | UI-SRV-002 | 查看服务器详情 | 覆盖式详情展示连接地址、端口、凭据、Docker host、OS、权限与安全、最近检查/更新时间、初始化任务与资源 tabs | 凭据列表失败只影响凭据显示/表单并 toast，不得抹掉服务器列表；选中服务器不在当前页时按 id 单独补载 | 详情先显示已加载字段，完整详情加载有局部覆盖 |
 | UI-SRV-003 | 新建/编辑服务器 | 表单含 name、IPv4、IPv6、port、credential、SSH username、Docker host、变量、notes；至少一个地址且为 IP 字面量，port 1–65535，name/credential/dockerHost 必填；基础连接（名称/地址/端口/凭据/SSH 用户名）与高级配置（Docker host/变量/备注）分区，创建时高级区默认折叠、编辑时展开 | host 只读由 IPv4 优先、否则 IPv6 派生；无效字段在字段下方就地显示本地化错误，底部摘要列出全部错误并点击聚焦对应字段 | 无效字段有本地化提示且无写请求；编辑需以完整详情填充；任何字段错误都可通过摘要定位 |
 | UI-SRV-004 | 点击“探测” | 用当前未保存表单调 probe 并在基础连接区显示 reachable/error/OS/架构/特权；探测请求只发送连接字段（地址、端口、凭据、SSH 用户名） | 探测闸门只受地址/端口/凭据约束，名称与 Docker host 错误不得连坐禁用探测；连接字段变化后旧结果标记过期（灰化）提示重新探测；探测失败保留输入并非保存、不产生服务器记录 | probe 请求不含名称/Docker host/变量，结果与输入对应；创建/探测按钮可用性互不影响 |
@@ -74,7 +74,7 @@
 
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
-| UI-CRED-001 | 列表搜索、翻页、选择 | 服务端分页/q；URL 恢复 search/page/credential；表格显示名称、类型、用户名、引用数和更新时间；点击「详情」覆盖列表并按需加载 key summary | 列表/详情错误分别显示重试；服务器列表失败不得泄露或伪造引用；详情打开时列表保持挂载但不可交互 | 选择变化只展示对应详情，私钥材料正文从不出现在详情 |
+| UI-CRED-001 | 列表搜索、翻页、选择 | 服务端分页/q；URL 恢复 search/page/credential；表格显示名称、类型、用户名、引用数和更新时间；点击「详情」或名称列覆盖列表并按需加载 key summary | 列表/详情错误分别显示重试；服务器列表失败不得泄露或伪造引用；详情打开时列表保持挂载但不可交互；不得依赖整行点击 | 选择变化只展示对应详情，私钥材料正文从不出现在详情 |
 | UI-CRED-002 | 新建密码凭据 | name、username、password 必填；成功后打开新凭据覆盖详情并刷新列表 | 密码不得出现在列表、toast 或日志 | 空 secret 无请求，保存后仅显示元数据 |
 | UI-CRED-003 | 新建私钥凭据 | name、username、private key 必填，passphrase 可选；large 弹窗用 CodeEditor | 无效/空私钥不提交；密钥正文不回显到详情 | 成功后详情仅展示 comment/algorithm/bits/fingerprint |
 | UI-CRED-004 | 编辑凭据 | 预填非 secret 字段；类型未变时 secret 留空表示保留；类型切换必须重新提供新类型 secret，并清旧 secret 输入 | 不得以空字符串覆盖现有 secret；passphrase 仅非空才发送 | API payload 单测证明编辑空 secret 字段被省略 |
@@ -121,7 +121,7 @@
 
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
-| UI-APP-001 | `/applications/apps` 搜索、翻页、选择 | 服务端分页/q；URL 恢复 search/page/application；表格显示名称、状态、镜像引用、实例数、镜像更新与更新时间；点击「详情」覆盖列表；规划失败显示“部署被阻塞”，uncertainty 显示“结果待核实” | summary 缺 imageReference 时仅按行补详情并在该行显示骨架；失败不得把整表清空为假空态；不能将运行实例存在解释为最新部署成功 | 行级补载互不阻塞，选中项完整详情/runtime/files 按需请求；状态按 `APP-PLAN-001`、`APP-RUN-004` 派生 |
+| UI-APP-001 | `/applications/apps` 搜索、翻页、选择 | 服务端分页/q；URL 恢复 search/page/application；表格显示名称、状态、镜像引用、实例数、镜像更新与更新时间；点击「详情」或名称列覆盖列表；规划失败显示“部署被阻塞”，uncertainty 显示“结果待核实” | summary 缺 imageReference 时仅按行补详情并在该行显示骨架；失败不得把整表清空为假空态；不能将运行实例存在解释为最新部署成功；不得依赖整行点击 | 行级补载互不阻塞，选中项完整详情/runtime/files 按需请求；状态按 `APP-PLAN-001`、`APP-RUN-004` 派生 |
 | UI-APP-002 | 查看 Runtime tab | 显示实例总数/运行/失败及每服务器实例、容器和 `lastError`；当前 Job 显示真实状态、步骤、attempt、nextRunAt、错误码/消息/详情与 operation 深链；独立显示规划失败原因、可用字段/文件名、修复或重试说明及活动入口；uncertainty 明确提示结果待核实 | runtime 失败 toast 且详情内 EmptyState 可重试；详情/files 加载失败用 `detailError` EmptyState 重试，不得只 toast 后空白；换应用清旧 runtime/错误；终态 failed 不得消失；无 Job 的规划失败也必须显示，不能覆盖实际实例状态 | 实例/Job 状态文本与徽标一致；active 或当前规划错误基线 3 秒有界轮询，按 nextRunAt 对齐，隐藏暂停，最多 24 次或 2 分钟；新 runtime 无规划错误时清除旧 DTO 告警；`tab` 查询与 runtime/routes/files 双向同步 |
 | UI-APP-003 | 查看 Routes/Files tab | Routes 显示域名、目标端口、来源服务器名和 paths；Files 只列已提交文件并支持 blob 下载；URL `tab=routes|files` 可深链恢复 | 无路由/文件有专属空态；详情/files 失败走详情作用域错误重试；服务器名未知才回退 ID；关闭详情清 `tab` | 文件名和下载名符合 kind/contentType，下载带 auth |
 | UI-APP-004 | 点击行内同步/部署 | 提交人工 deploy；实际规划时显示真实 operationId/deploymentId 并刷新，`noChange=true` 时明确提示已是期望状态 | 不得被自动退避静默吞掉，不得把 no-change 或请求接受宣称为部署完成；失败后也重载列表/详情/runtime，使持久化规划诊断立即可见 | toast 与实际响应字段一致，operation 深链可恢复后续状态；修正后计划成功或已满足期望时清当前告警、保留失败历史 |
@@ -223,7 +223,7 @@
 
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
-| UI-DNS-001 | 搜索、翻页、选择域名 | 服务端分页/q；URL 恢复 search/page/domain；表格显示域名、provider 状态与更新时间；点击「详情」覆盖列表并加载记录 | 列表失败与空域名分离；切域名立即清旧记录并 abort；详情打开时列表保持挂载但不可交互 | 分享 URL 恢复相同域名与页码，迟到记录不串域名 |
+| UI-DNS-001 | 搜索、翻页、选择域名 | 服务端分页/q；URL 恢复 search/page/domain；表格显示域名、provider 状态与更新时间；点击「详情」或名称列覆盖列表并加载记录 | 列表失败与空域名分离；切域名立即清旧记录并 abort；详情打开时列表保持挂载但不可交互；不得依赖整行点击 | 分享 URL 恢复相同域名与页码，迟到记录不串域名 |
 | UI-DNS-002 | 新建/编辑域名 | provider 固定 Cloudflare；新建必须 name+API token；编辑 token 留空保持当前；本地校验非空与基本域名形状，无效时字段错误并禁用保存 | token 永不回显/出现在列表；本地失败不请求；服务端错误保持弹窗 | payload 编辑空 token 时省略，成功打开新域名覆盖详情 |
 | UI-DNS-003 | 加载记录 | 仅当前域名请求，详情内表格显示 A/AAAA/CNAME/TXT/MX、name、content、TTL、操作；标题栏展示快照时间与 stale 标记 | provider/记录失败在记录区显示错误+重试，并使该域名状态 danger；真实空列表用 no records；`lastRefreshError` 就地展示 | 错误、加载、空、内容四态互斥；行内操作只影响当前域名 |
 | UI-DNS-004 | 同步记录 | POST refresh，显示 taskId，等待任务完成后重新 GET 当前域名 | 等待中切域名时旧结果不得覆盖；超时/失败保留错误重试 | 请求顺序正确且按钮只锁当前记录区 |
@@ -234,7 +234,7 @@
 
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
-| UI-CERT-001 | 切换 domains/self-signed/keys、搜索、翻页、选择 | path 决定模式；page/search/selected 同步 URL；对应服务端列表使用 q，分页固定底部；列表为表格（domains：名称/覆盖域名/状态/到期；self：名称/类型/commonName/到期；keys：名称/类型/算法/指纹/到期），点击「详情」覆盖列表 | 切模式清 selection/page；列表错误与空态分离；能力不足的行操作禁用 | 三个深链刷新可恢复模式、查询与选中项；覆盖详情保留列表滚动与筛选 |
+| UI-CERT-001 | 切换 domains/self-signed/keys、搜索、翻页、选择 | path 决定模式；page/search/selected 同步 URL；对应服务端列表使用 q，分页固定底部；列表为表格（domains：名称/覆盖域名/状态/到期；self：名称/类型/commonName/到期；keys：名称/类型/算法/指纹/到期），点击「详情」或名称列覆盖列表 | 切模式清 selection/page；列表错误与空态分离；能力不足的行操作禁用；不得依赖整行点击 | 三个深链刷新可恢复模式、查询与选中项；覆盖详情保留列表滚动与筛选 |
 | UI-CERT-002 | 查看域名证书 | 覆盖详情显示覆盖域名、issuer、状态、到期、lastError 与是否签发中 | failed 优先 danger，再区分 expired/expiring | 徽标与 model 测试一致 |
 | UI-CERT-003 | 签发或调整重签 | 选择已管理 DNS 域名，配置名称、根域、通配符、子域前缀并实时预览覆盖；重签预填已有覆盖 | name/domain/覆盖域名本地必填校验并禁用无效保存；去重/清空子域；只提示任务创建不宣称签发完成；服务端错误保留 | POST/PUT payload 的 prefixes 与预览一致，返回证书被选中 |
 | UI-CERT-004 | 立即续签或删除域名证书 | renew 提交后台任务并提示接受；delete 先 danger 确认 | 请求失败保留详情；签发中操作由后端拒绝时明确显示 | 成功重载状态，取消删除零请求 |

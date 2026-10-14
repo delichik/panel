@@ -25,6 +25,7 @@ import Switch from '@/components/ui/Switch.vue';
 import Table from '@/components/ui/Table.vue';
 import Tabs from '@/components/ui/Tabs.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
+import TableDetailName from '@/components/patterns/TableDetailName.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import ListPage from '@/components/templates/ListPage.vue';
 import TableDetailLayout from '@/components/templates/TableDetailLayout.vue';
@@ -716,7 +717,7 @@ function onFileChange(value: File | File[]) {
               :loading-label="t('common.loading')"
             >
               <template #name="{ row }">
-                <strong class="block max-w-[16rem] truncate text-foreground">{{ row.name }}</strong>
+                <TableDetailName class="max-w-[16rem]" :name="row.name" :label="t('common.openDetails', { name: row.name })" @click="openDetail(row.id)" />
               </template>
               <template #coverage="{ row }">
                 <span class="block max-w-[20rem] truncate text-muted-foreground">{{ row.domains.join(', ') }}</span>
@@ -760,7 +761,7 @@ function onFileChange(value: File | File[]) {
               :loading-label="t('common.loading')"
             >
               <template #name="{ row }">
-                <strong class="block max-w-[16rem] truncate text-foreground">{{ row.name }}</strong>
+                <TableDetailName class="max-w-[16rem]" :name="row.name" :label="t('common.openDetails', { name: row.name })" @click="openDetail(row.id)" />
               </template>
               <template #kind="{ row }">
                 <Badge :tone="selfSignedTone(row)">{{ selfSignedKindLabel(row.kind) }}</Badge>
@@ -804,7 +805,7 @@ function onFileChange(value: File | File[]) {
               :loading-label="t('common.loading')"
             >
               <template #name="{ row }">
-                <strong class="block max-w-[16rem] truncate text-foreground">{{ row.name }}</strong>
+                <TableDetailName class="max-w-[16rem]" :name="row.name" :label="t('common.openDetails', { name: row.name })" @click="openDetail(row.id)" />
               </template>
               <template #type="{ row }">
                 <Badge :tone="assetTone(row)">{{ assetTypeLabel(row.type) }}</Badge>
