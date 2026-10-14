@@ -22,8 +22,8 @@ const classes = computed(() => cn(
   props.size === 'md' && 'h-9 px-3.5',
   props.size === 'lg' && 'h-10 px-4',
   props.variant === 'primary' && 'border-primary bg-primary text-primary-foreground hover:bg-primary/85',
-  props.variant === 'secondary' && 'border-border bg-card text-foreground/70 hover:bg-accent hover:text-foreground',
-  props.variant === 'ghost' && 'border-transparent bg-transparent text-foreground/60 hover:bg-accent hover:text-foreground',
+  props.variant === 'secondary' && 'border-border bg-card text-secondary-foreground hover:bg-accent hover:text-foreground',
+  props.variant === 'ghost' && 'border-transparent bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground',
   props.variant === 'danger' && 'border-danger-border bg-danger-bg text-danger hover:border-danger-border hover:bg-danger-bg/80',
   attrs.class as string,
 ));

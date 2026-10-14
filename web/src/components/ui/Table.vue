@@ -63,9 +63,9 @@ function skeletonClass(rowIndex: number, columnIndex: number, align?: 'left' | '
 <template>
   <div class="min-h-0 overflow-auto" :class="framed ? 'rounded-xl border border-border' : undefined">
     <table class="w-full border-collapse text-sm" :class="fixed ? 'table-fixed' : undefined" :aria-busy="loading ? 'true' : undefined" :aria-label="loadingLabel || undefined">
-      <thead class="sticky top-0 z-10 bg-muted text-xs font-semibold uppercase text-muted-foreground">
+      <thead class="sticky top-0 z-10 bg-muted text-xs font-medium text-muted-foreground">
           <tr>
-            <th v-for="column in columns" :key="column.key" scope="col" class="border-b border-border px-3 py-2" :class="[column.align === 'right' ? 'text-right' : 'text-left', column.width, column.nowrap ? 'whitespace-nowrap' : undefined]">
+            <th v-for="column in columns" :key="column.key" scope="col" class="border-b border-border px-3 py-2.5" :class="[column.align === 'right' ? 'text-right' : 'text-left', column.width, column.nowrap ? 'whitespace-nowrap' : undefined]">
               <slot v-if="$slots[`head-${column.key}`]" :name="`head-${column.key}`" :row="undefined as unknown as T" :value="undefined" />
               <template v-else>{{ column.label }}</template>
             </th>
@@ -81,7 +81,7 @@ function skeletonClass(rowIndex: number, columnIndex: number, align?: 'left' | '
           </template>
           <template v-else-if="rows.length">
             <tr v-for="(row, index) in rows" :key="rowId(row, index)" class="motion-table-row hover:bg-accent/60" :class="isActive(row) ? 'bg-muted' : undefined" :aria-current="isActive(row) ? 'true' : undefined" :style="staggerStyle(index)">
-              <td v-for="column in columns" :key="column.key" class="px-3 py-2 text-foreground/80" :class="[column.align === 'right' ? 'text-right' : 'text-left', column.width, column.nowrap ? 'whitespace-nowrap' : undefined]">
+              <td v-for="column in columns" :key="column.key" class="px-3 py-2.5 text-foreground" :class="[column.align === 'right' ? 'text-right' : 'text-left', column.width, column.nowrap ? 'whitespace-nowrap' : undefined]">
                 <slot :name="column.key" :row="row" :value="cellValue(row, column.key)">
                   {{ cellValue(row, column.key) }}
                 </slot>
@@ -89,7 +89,7 @@ function skeletonClass(rowIndex: number, columnIndex: number, align?: 'left' | '
             </tr>
           </template>
           <tr v-else class="text-muted-foreground">
-            <td :colspan="columns.length" class="px-3 py-3">
+            <td :colspan="columns.length" class="px-3 py-2">
               <slot name="empty" :row="undefined as unknown as T" :value="undefined" />
             </td>
           </tr>

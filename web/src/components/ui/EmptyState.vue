@@ -1,13 +1,33 @@
 <script setup lang="ts">
 import { Inbox } from '@lucide/vue';
+import { computed } from 'vue';
+import { cn } from './cn';
 
-defineProps<{ title: string; description?: string }>();
+const props = withDefaults(defineProps<{
+  title: string;
+  description?: string;
+  /** page = dashed panel; inset = light in-table/filter empty; plain = text only */
+  variant?: 'page' | 'inset' | 'plain';
+}>(), {
+  variant: 'page',
+});
+
+const rootClass = computed(() => cn(
+  'grid place-items-center text-center',
+  props.variant === 'page' && 'min-h-48 rounded-xl border border-dashed border-border bg-muted/20 p-8',
+  props.variant === 'inset' && 'min-h-32 px-4 py-8',
+  props.variant === 'plain' && 'min-h-24 px-2 py-6',
+));
 </script>
 
 <template>
-  <div class="grid min-h-48 place-items-center rounded-xl border border-dashed border-border bg-muted/30 p-8 text-center">
+  <div :class="rootClass">
     <div class="grid max-w-sm gap-2 justify-items-center">
-      <div class="grid size-10 place-items-center rounded-xl border border-border bg-muted text-muted-foreground">
+      <div
+        v-if="variant !== 'plain'"
+        class="grid size-10 place-items-center rounded-lg border border-border bg-muted text-muted-foreground"
+        :class="variant === 'inset' ? 'size-9 rounded-lg' : undefined"
+      >
         <Inbox class="size-5" aria-hidden="true" />
       </div>
       <h3 class="m-0 text-sm font-semibold text-foreground">{{ title }}</h3>

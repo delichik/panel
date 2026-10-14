@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { assetTone, certificateState, certificateTone } from './model';
+import {
+  assetTone,
+  certificateState,
+  certificateTone,
+  validateIssueCertificateForm,
+  validateKeyAssetForm,
+  validateSelfSignedForm,
+} from './model';
 import type { DomainCertificateDto } from '@/types/certificates';
 import type { KeyAssetDto } from '@/types/keyAssets';
 
@@ -58,5 +65,25 @@ describe('certificate page model', () => {
 
   it('keeps referenced key assets in warning state', () => {
     expect(assetTone({ ...baseAsset, canDelete: false, referenceCount: 1 })).toBe('warning');
+  });
+
+  it('validates issue, self-signed, and key asset required fields locally', () => {
+    expect(validateIssueCertificateForm({ name: '', domainId: '', coverage: [] })).toEqual({
+      name: 'certificatesPage.validationNameRequired',
+      domainId: 'certificatesPage.validationDomainRequired',
+      coverage: 'certificatesPage.validationCoverageRequired',
+    });
+    expect(validateIssueCertificateForm({ name: 'web', domainId: 'd1', coverage: ['example.com'] })).toEqual({});
+    expect(validateSelfSignedForm({ name: '', commonName: '', requireCa: true, caId: '' })).toEqual({
+      name: 'certificatesPage.validationNameRequired',
+      commonName: 'certificatesPage.validationCommonNameRequired',
+      caId: 'certificatesPage.validationCaRequired',
+    });
+    expect(validateKeyAssetForm({ name: 'ssh', requireCommonName: false })).toEqual({});
+    expect(validateKeyAssetForm({ name: '', commonName: '', requireCommonName: true, requireParent: true, parentAssetId: '' })).toEqual({
+      name: 'certificatesPage.validationNameRequired',
+      commonName: 'certificatesPage.validationCommonNameRequired',
+      parentAssetId: 'certificatesPage.validationCaRequired',
+    });
   });
 });

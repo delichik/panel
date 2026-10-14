@@ -172,6 +172,13 @@ describe('settings tailscale section', () => {
     // 对话框已打开但尚未确认：此时不得发出任何写请求。
     expect(settingsApi.updateRuntime).not.toHaveBeenCalled();
 
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    const checkbox = dialog!.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    expect(checkbox).not.toBeNull();
+    checkbox!.click();
+    await flushPromises();
+
     confirmDialogButton('Apply').click();
     await flushPromises();
 

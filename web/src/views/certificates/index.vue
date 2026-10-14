@@ -26,13 +26,23 @@ import Table from '@/components/ui/Table.vue';
 import Tabs from '@/components/ui/Tabs.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
+import ListPage from '@/components/templates/ListPage.vue';
 import TableDetailLayout from '@/components/templates/TableDetailLayout.vue';
 import { useI18n } from '@/i18n';
 import type { DomainCertificateDto, SelfSignedCertificateDto } from '@/types/certificates';
 import type { DnsDomainDto } from '@/types/dns';
 import type { ImportPreflightDto, KeyAssetDto, KeyAssetType } from '@/types/keyAssets';
 import { assetImportHasCertificate, initialAssetImportMaterialTab, type AssetImportMaterialTab } from './assetImportEditor';
-import { assetTone, certificateState, certificateTone, selfSignedTone } from './model';
+import {
+  assetTone,
+  certificateState,
+  certificateTone,
+  selfSignedTone,
+  validateIssueCertificateForm,
+  validateKeyAssetForm,
+  validateSelfSignedForm,
+  type FieldErrors,
+} from './model';
 import { createLatestRequestGuard, isAbortError } from '@/views/_shared/requestState';
 import { formatDateTime } from '@/utils/datetime';
 
@@ -70,11 +80,16 @@ function parsePageQuery(value: unknown) {
 }
 
 const mode = computed(() => route.path.includes('/self-signed') ? 'self' : route.path.includes('/keys') ? 'keys' : 'domains');
-const modeNavItems = [
-  { mode: 'domains', path: '/certificates/domains', titleKey: 'routes.certificates.title' },
-  { mode: 'self', path: '/certificates/self-signed', titleKey: 'routes.selfSigned.title' },
-  { mode: 'keys', path: '/certificates/keys', titleKey: 'routes.keys.title' },
-] as const;
+const modePaths = {
+  domains: '/certificates/domains',
+  self: '/certificates/self-signed',
+  keys: '/certificates/keys',
+} as const;
+const modeTabs = computed(() => [
+  { value: 'domains', label: t('routes.certificates.title') },
+  { value: 'self', label: t('routes.selfSigned.title') },
+  { value: 'keys', label: t('routes.keys.title') },
+]);
 const title = computed(() => mode.value === 'self' ? t('routes.selfSigned.title') : mode.value === 'keys' ? t('routes.keys.title') : t('routes.certificates.title'));
 const description = computed(() => mode.value === 'self' ? t('routes.selfSigned.description') : mode.value === 'keys' ? t('routes.keys.description') : t('routes.certificates.description'));
 const selectedCert = computed(() => certs.value.find((item) => item.id === selectedId.value) ?? null);
@@ -95,10 +110,40 @@ const detailDescription = computed(() => {
 const issueForm = reactive({ name: '', domainId: '', includeRoot: true, includeWildcard: false, subdomains: [''] });
 const selfForm = reactive({ name: '', caId: '', commonName: '', dnsNames: [''], ipAddresses: [''], years: '5', days: '90' });
 const assetForm = reactive({ type: 'ssh_key_pair' as KeyAssetType, name: '', parentAssetId: '', commonName: '', dnsNames: [''], ipAddresses: [''], algorithm: 'ed25519', keySize: '2048', validityDays: '365', comment: '', certificatePem: '', privateKeyPem: '', publicKey: '', password: '' });
+const issueFormErrors = reactive<FieldErrors>({});
+const selfFormErrors = reactive<FieldErrors>({});
+const assetFormErrors = reactive<FieldErrors>({});
 const assetImportMaterialTab = ref<AssetImportMaterialTab>(initialAssetImportMaterialTab());
 const importFile = ref<File | null>(null);
 const selectedIssueDomainName = computed(() => domains.value.find((item) => item.id === issueForm.domainId)?.name ?? '');
 const issueCoverage = computed(() => issuePrefixes().map((prefix) => prefixToDomain(prefix, selectedIssueDomainName.value)).filter(Boolean));
+const issueFormValid = computed(() => Object.keys(validateIssueCertificateForm({
+  name: issueForm.name,
+  domainId: issueForm.domainId,
+  coverage: selectedIssueDomainName.value ? issueCoverage.value : [],
+})).length === 0);
+const selfFormValid = computed(() => Object.keys(validateSelfSignedForm({
+  name: selfForm.name,
+  commonName: selfForm.commonName,
+  caId: selfForm.caId,
+  requireCa: dialog.value === 'self-leaf',
+})).length === 0);
+const assetFormValid = computed(() => Object.keys(validateKeyAssetForm({
+  name: assetForm.name,
+  commonName: assetForm.commonName,
+  requireCommonName: dialog.value === 'asset-ca' || dialog.value === 'asset-tls' || (dialog.value === 'asset-import' && assetForm.type !== 'ssh_key_pair'),
+  parentAssetId: assetForm.parentAssetId,
+  requireParent: dialog.value === 'asset-tls' || (dialog.value === 'asset-import' && assetForm.type === 'tls_certificate'),
+})).length === 0);
+
+function clearFieldErrors(target: FieldErrors) {
+  Object.keys(target).forEach((key) => { delete target[key]; });
+}
+
+function assignFieldErrors(target: FieldErrors, next: FieldErrors) {
+  clearFieldErrors(target);
+  Object.assign(target, next);
+}
 
 const algorithmOptions = [{ label: 'ed25519', value: 'ed25519' }, { label: 'rsa', value: 'rsa' }];
 const assetTypeOptions = [
@@ -218,7 +263,9 @@ async function load() {
   }
 }
 
-function switchMode(path: string) {
+function switchMode(nextMode: string) {
+  const path = modePaths[nextMode as keyof typeof modePaths];
+  if (!path) return;
   listRequests.invalidate();
   selectedId.value = '';
   page.value = 1;
@@ -244,10 +291,17 @@ function openReissue(cert: DomainCertificateDto) {
 }
 
 async function issueCertificate() {
+  const localErrors = validateIssueCertificateForm({
+    name: issueForm.name,
+    domainId: issueForm.domainId,
+    coverage: selectedIssueDomainName.value ? issueCoverage.value : [],
+  });
+  assignFieldErrors(issueFormErrors, localErrors);
+  if (Object.keys(localErrors).length) return;
   saving.value = true;
   try {
     const prefixes = issuePrefixes();
-    const input = { name: issueForm.name, domainId: issueForm.domainId, prefixes: prefixes.length ? prefixes : ['@'] };
+    const input = { name: issueForm.name.trim(), domainId: issueForm.domainId, prefixes: prefixes.length ? prefixes : ['@'] };
     const result = editingCertificateId.value ? await certificatesApi.reissue(editingCertificateId.value, input) : await certificatesApi.issue(input);
     notifySuccess(result.taskId ? t('certificatesPage.issueTask', { taskId: result.taskId }) : t('certificatesPage.issued'), result);
     selectedId.value = result.certificate.id;
@@ -273,15 +327,24 @@ async function renewCertificate(cert: DomainCertificateDto) {
 
 function openSelf(kind: 'self-ca' | 'self-leaf') {
   Object.assign(selfForm, { name: '', caId: selfCas.value[0]?.value ?? '', commonName: '', dnsNames: [''], ipAddresses: [''], years: '5', days: '90' });
+  clearFieldErrors(selfFormErrors);
   dialog.value = kind;
 }
 
 async function saveSelf() {
+  const localErrors = validateSelfSignedForm({
+    name: selfForm.name,
+    commonName: selfForm.commonName,
+    caId: selfForm.caId,
+    requireCa: dialog.value === 'self-leaf',
+  });
+  assignFieldErrors(selfFormErrors, localErrors);
+  if (Object.keys(localErrors).length) return;
   saving.value = true;
   try {
     const saved = dialog.value === 'self-ca'
-      ? await certificatesApi.createSelfSignedCa({ name: selfForm.name, commonName: selfForm.commonName, years: Number(selfForm.years) || 5 })
-      : await certificatesApi.createSelfSignedLeaf({ name: selfForm.name, caId: selfForm.caId, commonName: selfForm.commonName, dnsNames: cleanEntries(selfForm.dnsNames), ipAddresses: cleanEntries(selfForm.ipAddresses), days: Number(selfForm.days) || 90 });
+      ? await certificatesApi.createSelfSignedCa({ name: selfForm.name.trim(), commonName: selfForm.commonName.trim(), years: Number(selfForm.years) || 5 })
+      : await certificatesApi.createSelfSignedLeaf({ name: selfForm.name.trim(), caId: selfForm.caId, commonName: selfForm.commonName.trim(), dnsNames: cleanEntries(selfForm.dnsNames), ipAddresses: cleanEntries(selfForm.ipAddresses), days: Number(selfForm.days) || 90 });
     selectedId.value = saved.id;
     notifySuccess(t('certificatesPage.selfSaved'), saved);
     dialog.value = '';
@@ -309,12 +372,22 @@ function openAsset(next: typeof dialog.value) {
   importPlan.value = null;
   importFile.value = null;
   assetActionError.value = '';
+  clearFieldErrors(assetFormErrors);
   assetImportMaterialTab.value = initialAssetImportMaterialTab();
   dialog.value = next;
 }
 
 async function saveAsset() {
   const assetDialog = dialog.value;
+  const localErrors = validateKeyAssetForm({
+    name: assetForm.name,
+    commonName: assetForm.commonName,
+    requireCommonName: assetDialog === 'asset-ca' || assetDialog === 'asset-tls' || (assetDialog === 'asset-import' && assetForm.type !== 'ssh_key_pair'),
+    parentAssetId: assetForm.parentAssetId,
+    requireParent: assetDialog === 'asset-tls' || (assetDialog === 'asset-import' && assetForm.type === 'tls_certificate'),
+  });
+  assignFieldErrors(assetFormErrors, localErrors);
+  if (Object.keys(localErrors).length) return;
   if (assetDialog === 'asset-import') assetActionError.value = '';
   saving.value = true;
   try {
@@ -456,6 +529,7 @@ function resetIssueForm(cert?: DomainCertificateDto) {
   });
   if (!issueForm.subdomains.length) issueForm.subdomains = [''];
   editingCertificateId.value = cert?.id ?? '';
+  clearFieldErrors(issueFormErrors);
 }
 
 function normalizeDomainCertificate(cert: DomainCertificateDto): DomainCertificateDto {
@@ -613,23 +687,19 @@ function onFileChange(value: File | File[]) {
           </template>
         </template>
 
-        <div class="grid h-full min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] gap-4">
-          <nav class="flex flex-wrap gap-1 rounded-xl border border-border bg-muted p-1" :aria-label="t('routes.certificates.title')">
-            <a
-              v-for="item in modeNavItems"
-              :key="item.mode"
-              :href="item.path"
-              :aria-current="mode === item.mode ? 'page' : undefined"
-              class="motion-tab rounded-lg px-3 py-1.5 text-sm font-medium"
-              :class="mode === item.mode ? 'bg-brand-bg text-brand' : 'text-muted-foreground hover:bg-accent hover:text-foreground'"
-              @click.prevent="switchMode(item.path)"
-            >{{ t(item.titleKey) }}</a>
-          </nav>
+        <Tabs
+          class="h-full min-h-0"
+          :model-value="mode"
+          :tabs="modeTabs"
+          keep-panels
+          @update:model-value="switchMode"
+        >
+          <ListPage>
+            <template #toolbar>
+              <SearchInput v-model="search" clearable :label="t('common.search')" :placeholder="t('certificatesPage.searchPlaceholder')" :clear-label="t('common.clearSearch')" />
+            </template>
 
-          <div class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-4 rounded-2xl border border-border bg-card p-4">
-            <SearchInput v-model="search" clearable :label="t('common.search')" :placeholder="t('certificatesPage.searchPlaceholder')" :clear-label="t('common.clearSearch')" />
-
-            <EmptyState v-if="error && ((mode === 'domains' && !certs.length) || (mode === 'self' && !selfSigned.length) || (mode === 'keys' && !userAssets.length))" class="self-start" :title="t('common.loadFailed')" :description="error">
+            <EmptyState v-if="error && ((mode === 'domains' && !certs.length) || (mode === 'self' && !selfSigned.length) || (mode === 'keys' && !userAssets.length))" variant="page" :title="t('common.loadFailed')" :description="error">
               <template #actions>
                 <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
               </template>
@@ -637,8 +707,7 @@ function onFileChange(value: File | File[]) {
 
             <Table
               v-else-if="mode === 'domains'"
-              class="max-lg:max-h-[60dvh]"
-              :framed="false"
+              class="h-full max-lg:max-h-[60dvh]"
               :columns="domainColumns"
               :rows="certs"
               row-key="id"
@@ -672,14 +741,17 @@ function onFileChange(value: File | File[]) {
                 </div>
               </template>
               <template #empty>
-                <EmptyState :title="t('certificatesPage.noCertificates')" :description="t('certificatesPage.noCertificatesHint')" />
+                <EmptyState
+                  variant="inset"
+                  :title="search ? t('common.filterEmpty') : t('certificatesPage.noCertificates')"
+                  :description="search ? t('common.filterEmptyHint') : t('certificatesPage.noCertificatesHint')"
+                />
               </template>
             </Table>
 
             <Table
               v-else-if="mode === 'self'"
-              class="max-lg:max-h-[60dvh]"
-              :framed="false"
+              class="h-full max-lg:max-h-[60dvh]"
               :columns="selfColumns"
               :rows="selfSigned"
               row-key="id"
@@ -713,14 +785,17 @@ function onFileChange(value: File | File[]) {
                 </div>
               </template>
               <template #empty>
-                <EmptyState :title="t('certificatesPage.noSelf')" :description="t('certificatesPage.noSelfHint')" />
+                <EmptyState
+                  variant="inset"
+                  :title="search ? t('common.filterEmpty') : t('certificatesPage.noSelf')"
+                  :description="search ? t('common.filterEmptyHint') : t('certificatesPage.noSelfHint')"
+                />
               </template>
             </Table>
 
             <Table
               v-else
-              class="max-lg:max-h-[60dvh]"
-              :framed="false"
+              class="h-full max-lg:max-h-[60dvh]"
               :columns="assetColumns"
               :rows="userAssets"
               row-key="id"
@@ -758,13 +833,19 @@ function onFileChange(value: File | File[]) {
                 </div>
               </template>
               <template #empty>
-                <EmptyState :title="t('certificatesPage.noAssets')" :description="t('certificatesPage.noAssetsHint')" />
+                <EmptyState
+                  variant="inset"
+                  :title="search ? t('common.filterEmpty') : t('certificatesPage.noAssets')"
+                  :description="search ? t('common.filterEmptyHint') : t('certificatesPage.noAssetsHint')"
+                />
               </template>
             </Table>
 
-            <PaginationBar :page="page" :page-size="pageSize" :total="total" :loading="loading" :previous-label="t('common.previous')" :next-label="t('common.next')" @update:page="changePage" />
-          </div>
-        </div>
+            <template #pagination>
+              <PaginationBar :page="page" :page-size="pageSize" :total="total" :loading="loading" :previous-label="t('common.previous')" :next-label="t('common.next')" @update:page="changePage" />
+            </template>
+          </ListPage>
+        </Tabs>
       </ConsolePage>
     </template>
 
@@ -815,8 +896,16 @@ function onFileChange(value: File | File[]) {
 
   <Dialog :open="dialog === 'issue'" :title="editingCertificateId ? t('certificatesPage.adjustReissue') : t('certificatesPage.issue')" :close-label="t('common.close')" @update:open="(open: boolean) => { if (!open) dialog = '' }">
     <div class="grid gap-4">
-      <label class="grid gap-1 text-sm">{{ t('common.name') }}<Input v-model="issueForm.name" /></label>
-      <label class="grid gap-1 text-sm">{{ t('routes.dns.title') }}<Select v-model="issueForm.domainId" :options="domainOptions" /></label>
+      <label class="grid gap-1 text-sm">
+        {{ t('common.name') }}
+        <Input v-model="issueForm.name" :invalid="Boolean(issueFormErrors.name)" @input="delete issueFormErrors.name" />
+        <span v-if="issueFormErrors.name" class="text-xs text-danger">{{ t(issueFormErrors.name) }}</span>
+      </label>
+      <label class="grid gap-1 text-sm">
+        {{ t('routes.dns.title') }}
+        <Select v-model="issueForm.domainId" :options="domainOptions" />
+        <span v-if="issueFormErrors.domainId" class="text-xs text-danger">{{ t(issueFormErrors.domainId) }}</span>
+      </label>
       <section class="grid gap-3 rounded-xl border border-border p-3">
         <label class="flex items-center justify-between gap-3 text-sm">{{ t('certificatesPage.rootDomain') }}<Switch v-model="issueForm.includeRoot" :label="t('certificatesPage.rootDomain')" /></label>
         <label class="flex items-center justify-between gap-3 text-sm">{{ t('certificatesPage.wildcardDomain') }}<Switch v-model="issueForm.includeWildcard" :label="t('certificatesPage.wildcardDomain')" /></label>
@@ -828,27 +917,60 @@ function onFileChange(value: File | File[]) {
           </div>
           <Button size="sm" @click="addEntry(issueForm.subdomains)"><Plus />{{ t('certificatesPage.addSubdomain') }}</Button>
         </div>
+        <span v-if="issueFormErrors.coverage" class="text-xs text-danger">{{ t(issueFormErrors.coverage) }}</span>
       </section>
       <section class="rounded-xl border border-border bg-muted p-3">
         <div class="text-sm font-medium">{{ t('certificatesPage.coveragePreview') }}</div>
         <div class="mt-2 flex flex-wrap gap-2"><Badge v-for="domain in issueCoverage" :key="domain" tone="info">{{ domain }}</Badge></div>
       </section>
     </div>
-    <template #footer><Button @click="dialog = ''">{{ t('common.cancel') }}</Button><Button variant="primary" :loading="saving" :disabled="!issueForm.name || !issueForm.domainId" @click="issueCertificate">{{ editingCertificateId ? t('certificatesPage.adjustReissue') : t('certificatesPage.issue') }}</Button></template>
+    <template #footer><Button @click="dialog = ''">{{ t('common.cancel') }}</Button><Button variant="primary" :loading="saving" :disabled="!issueFormValid" @click="issueCertificate">{{ editingCertificateId ? t('certificatesPage.adjustReissue') : t('certificatesPage.issue') }}</Button></template>
   </Dialog>
 
   <Dialog :open="dialog === 'self-ca' || dialog === 'self-leaf'" :title="dialog === 'self-ca' ? t('certificatesPage.generateCa') : t('certificatesPage.generateLeaf')" :close-label="t('common.close')" @update:open="(open: boolean) => { if (!open) dialog = '' }">
-    <div class="grid gap-3"><label class="grid gap-1 text-sm">{{ t('common.name') }}<Input v-model="selfForm.name" /></label><label v-if="dialog === 'self-leaf'" class="grid gap-1 text-sm">{{ t('certificatesPage.kindCa') }}<Select v-model="selfForm.caId" :options="selfCas" /></label><label class="grid gap-1 text-sm">{{ t('certificatesPage.commonName') }}<Input v-model="selfForm.commonName" /></label><div v-if="dialog === 'self-leaf'" class="grid gap-2"><div class="text-sm font-medium">{{ t('certificatesPage.dnsNames') }}</div><div v-for="(_, index) in selfForm.dnsNames" :key="index" class="grid grid-cols-[minmax(0,1fr)_auto] gap-2"><Input v-model="selfForm.dnsNames[index]" /><Button size="sm" variant="ghost" @click="removeEntry(selfForm.dnsNames, index)"><Trash2 />{{ t('common.delete') }}</Button></div><Button size="sm" @click="addEntry(selfForm.dnsNames)"><Plus />{{ t('certificatesPage.addDnsName') }}</Button></div><div v-if="dialog === 'self-leaf'" class="grid gap-2"><div class="text-sm font-medium">{{ t('certificatesPage.ipAddresses') }}</div><div v-for="(_, index) in selfForm.ipAddresses" :key="index" class="grid grid-cols-[minmax(0,1fr)_auto] gap-2"><Input v-model="selfForm.ipAddresses[index]" /><Button size="sm" variant="ghost" @click="removeEntry(selfForm.ipAddresses, index)"><Trash2 />{{ t('common.delete') }}</Button></div><Button size="sm" @click="addEntry(selfForm.ipAddresses)"><Plus />{{ t('certificatesPage.addIpAddress') }}</Button></div><label v-if="dialog === 'self-ca'" class="grid gap-1 text-sm">{{ t('certificatesPage.years') }}<Input v-model="selfForm.years" type="number" /></label><label v-else class="grid gap-1 text-sm">{{ t('certificatesPage.days') }}<Input v-model="selfForm.days" type="number" /></label></div>
-    <template #footer><Button @click="dialog = ''">{{ t('common.cancel') }}</Button><Button variant="primary" :loading="saving" :disabled="!selfForm.name || !selfForm.commonName" @click="saveSelf">{{ t('common.create') }}</Button></template>
+    <div class="grid gap-3">
+      <label class="grid gap-1 text-sm">
+        {{ t('common.name') }}
+        <Input v-model="selfForm.name" :invalid="Boolean(selfFormErrors.name)" @input="delete selfFormErrors.name" />
+        <span v-if="selfFormErrors.name" class="text-xs text-danger">{{ t(selfFormErrors.name) }}</span>
+      </label>
+      <label v-if="dialog === 'self-leaf'" class="grid gap-1 text-sm">
+        {{ t('certificatesPage.kindCa') }}
+        <Select v-model="selfForm.caId" :options="selfCas" />
+        <span v-if="selfFormErrors.caId" class="text-xs text-danger">{{ t(selfFormErrors.caId) }}</span>
+      </label>
+      <label class="grid gap-1 text-sm">
+        {{ t('certificatesPage.commonName') }}
+        <Input v-model="selfForm.commonName" :invalid="Boolean(selfFormErrors.commonName)" @input="delete selfFormErrors.commonName" />
+        <span v-if="selfFormErrors.commonName" class="text-xs text-danger">{{ t(selfFormErrors.commonName) }}</span>
+      </label>
+      <div v-if="dialog === 'self-leaf'" class="grid gap-2"><div class="text-sm font-medium">{{ t('certificatesPage.dnsNames') }}</div><div v-for="(_, index) in selfForm.dnsNames" :key="index" class="grid grid-cols-[minmax(0,1fr)_auto] gap-2"><Input v-model="selfForm.dnsNames[index]" /><Button size="sm" variant="ghost" @click="removeEntry(selfForm.dnsNames, index)"><Trash2 />{{ t('common.delete') }}</Button></div><Button size="sm" @click="addEntry(selfForm.dnsNames)"><Plus />{{ t('certificatesPage.addDnsName') }}</Button></div>
+      <div v-if="dialog === 'self-leaf'" class="grid gap-2"><div class="text-sm font-medium">{{ t('certificatesPage.ipAddresses') }}</div><div v-for="(_, index) in selfForm.ipAddresses" :key="index" class="grid grid-cols-[minmax(0,1fr)_auto] gap-2"><Input v-model="selfForm.ipAddresses[index]" /><Button size="sm" variant="ghost" @click="removeEntry(selfForm.ipAddresses, index)"><Trash2 />{{ t('common.delete') }}</Button></div><Button size="sm" @click="addEntry(selfForm.ipAddresses)"><Plus />{{ t('certificatesPage.addIpAddress') }}</Button></div>
+      <label v-if="dialog === 'self-ca'" class="grid gap-1 text-sm">{{ t('certificatesPage.years') }}<Input v-model="selfForm.years" type="number" /></label>
+      <label v-else class="grid gap-1 text-sm">{{ t('certificatesPage.days') }}<Input v-model="selfForm.days" type="number" /></label>
+    </div>
+    <template #footer><Button @click="dialog = ''">{{ t('common.cancel') }}</Button><Button variant="primary" :loading="saving" :disabled="!selfFormValid" @click="saveSelf">{{ t('common.create') }}</Button></template>
   </Dialog>
 
   <Dialog :open="dialog.startsWith('asset-') && !['asset-export','asset-preflight'].includes(dialog)" :size="dialog === 'asset-import' ? 'large' : 'default'" :title="t('certificatesPage.assetForm')" :close-label="t('common.close')" @update:open="(open: boolean) => { if (!open) dialog = '' }">
     <div class="grid gap-3" :class="dialog === 'asset-import' ? 'h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] grid-cols-[minmax(0,1fr)]' : ''">
       <div :class="dialog === 'asset-import' ? 'grid gap-3 md:grid-cols-2' : 'contents'">
         <label v-if="dialog === 'asset-import'" class="grid gap-1 text-sm">{{ t('common.type') }}<Select v-model="assetForm.type" :options="assetTypeOptions" /></label>
-        <label class="grid gap-1 text-sm">{{ t('common.name') }}<Input v-model="assetForm.name" /></label>
-        <label v-if="dialog === 'asset-tls' || (dialog === 'asset-import' && assetForm.type === 'tls_certificate')" class="grid gap-1 text-sm">{{ t('certificatesPage.kindCa') }}<Select v-model="assetForm.parentAssetId" :options="caAssets" /></label>
-        <label v-if="dialog !== 'asset-ssh'" class="grid gap-1 text-sm">{{ t('certificatesPage.commonName') }}<Input v-model="assetForm.commonName" /></label>
+        <label class="grid gap-1 text-sm">
+          {{ t('common.name') }}
+          <Input v-model="assetForm.name" :invalid="Boolean(assetFormErrors.name)" @input="delete assetFormErrors.name" />
+          <span v-if="assetFormErrors.name" class="text-xs text-danger">{{ t(assetFormErrors.name) }}</span>
+        </label>
+        <label v-if="dialog === 'asset-tls' || (dialog === 'asset-import' && assetForm.type === 'tls_certificate')" class="grid gap-1 text-sm">
+          {{ t('certificatesPage.kindCa') }}
+          <Select v-model="assetForm.parentAssetId" :options="caAssets" />
+          <span v-if="assetFormErrors.parentAssetId" class="text-xs text-danger">{{ t(assetFormErrors.parentAssetId) }}</span>
+        </label>
+        <label v-if="dialog !== 'asset-ssh'" class="grid gap-1 text-sm">
+          {{ t('certificatesPage.commonName') }}
+          <Input v-model="assetForm.commonName" :invalid="Boolean(assetFormErrors.commonName)" @input="delete assetFormErrors.commonName" />
+          <span v-if="assetFormErrors.commonName" class="text-xs text-danger">{{ t(assetFormErrors.commonName) }}</span>
+        </label>
         <label class="grid gap-1 text-sm">{{ t('certificatesPage.algorithm') }}<Select v-model="assetForm.algorithm" :options="algorithmOptions" /></label>
         <label v-if="assetForm.algorithm === 'rsa'" class="grid gap-1 text-sm">{{ t('certificatesPage.keySize') }}<Input v-model="assetForm.keySize" type="number" /></label>
       </div>
@@ -879,7 +1001,7 @@ function onFileChange(value: File | File[]) {
         <Button size="sm" @click="addEntry(assetForm.ipAddresses)"><Plus />{{ t('certificatesPage.addIpAddress') }}</Button>
       </div>
     </div>
-    <template #footer><Button @click="dialog = ''">{{ t('common.cancel') }}</Button><Button variant="primary" :loading="saving" :disabled="!assetForm.name" @click="saveAsset">{{ t('common.save') }}</Button></template>
+    <template #footer><Button @click="dialog = ''">{{ t('common.cancel') }}</Button><Button variant="primary" :loading="saving" :disabled="!assetFormValid" @click="saveAsset">{{ t('common.save') }}</Button></template>
   </Dialog>
 
   <Dialog :open="dialog === 'asset-export'" :title="t('certificatesPage.exportAsset')" :close-label="t('common.close')" @update:open="(open: boolean) => { if (!open) dialog = '' }">

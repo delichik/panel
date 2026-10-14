@@ -185,7 +185,7 @@ describe('AppShell mobile nav drawer', () => {
     const pendingLink = wrapper.get('aside nav a[href="/servers"]');
     expect(pendingLink.attributes('aria-busy')).toBe('true');
     expect(pendingLink.classes()).toContain('text-brand');
-    expect(wrapper.get('header h1').text()).toBe('Opening Servers…');
+    expect(wrapper.get('header p[aria-live="polite"]').text()).toBe('Opening Servers…');
     expect(wrapper.get('header [role="progressbar"]').attributes('aria-label')).toBe('Opening Servers…');
 
     finishRouteNavigation();

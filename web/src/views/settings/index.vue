@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import { AlertTriangle, DatabaseBackup, KeyRound, Network, RefreshCcw, Save, Shield, UploadCloud } from '@lucide/vue';
+import { DatabaseBackup, KeyRound, Network, RefreshCcw, Save, Shield, UploadCloud } from '@lucide/vue';
 import { keyAssetsApi } from '@/api/keyAssets';
 import { runtimeTailscaleUpdate, settingsApi, tailscaleUpdate } from '@/api/settings';
 import { systemApi, type VersionInfo } from '@/api/system';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
-import Dialog from '@/components/ui/Dialog.vue';
+import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import FileUploadButton from '@/components/ui/FileUploadButton.vue';
 import Input from '@/components/ui/Input.vue';
@@ -430,6 +430,13 @@ function sectionFromPath(path: string) {
   return path.split('/').filter(Boolean).at(-1) || 'general';
 }
 
+const confirmIsDanger = computed(() => (
+  confirmKind.value === 'restore'
+  || confirmKind.value === 'system-certificate'
+  || confirmKind.value === 'jwt-secret'
+  || confirmKind.value === 'tailscale-auth-key'
+));
+
 function openConfirm(kind: typeof confirmKind.value) {
   confirmKind.value = kind;
   confirmOpen.value = true;
@@ -446,6 +453,12 @@ function confirmAction() {
   if (confirmKind.value === 'jwt-secret') return confirmResetJwtSecret();
   if (confirmKind.value === 'tailscale-auth-key') return confirmClearTailscaleAuthKey();
   return startBackup();
+}
+
+function handleConfirmOpenChange(open: boolean) {
+  if (!open && pending.value) return;
+  confirmOpen.value = open;
+  if (!open) selectedSystemCertificate.value = null;
 }
 
 onMounted(load);
@@ -476,7 +489,7 @@ onMounted(load);
           <div v-if="actionError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ actionError }}</div>
         </section>
 
-        <section v-if="activeSection === 'general'" class="grid gap-4 rounded-2xl border border-border bg-card p-5">
+        <section v-if="activeSection === 'general'" class="grid gap-4 rounded-2xl border border-border bg-card p-4">
           <h2>{{ t('settingsPage.section.runtime') }}</h2>
           <div class="grid grid-cols-2 gap-3 max-md:grid-cols-1">
             <label class="grid gap-1 text-sm">{{ t('settingsPage.metricsRetention') }}<Input v-model="form.metricsRetentionDays" type="number" min="1" :invalid="Boolean(fieldErrors.metricsRetentionDays)" /><span v-if="fieldErrors.metricsRetentionDays" class="text-xs text-danger">{{ t(fieldErrors.metricsRetentionDays) }}</span></label>
@@ -490,7 +503,7 @@ onMounted(load);
           <Button class="w-fit" variant="primary" :disabled="!runtimeSectionValid" :loading="pending === 'save-runtime'" @click="saveRuntimeSection('runtime')"><Save />{{ t('settingsPage.saveSection') }}</Button>
         </section>
 
-        <section v-else-if="activeSection === 'security'" class="grid gap-4 rounded-2xl border border-border bg-card p-5">
+        <section v-else-if="activeSection === 'security'" class="grid gap-4 rounded-2xl border border-border bg-card p-4">
           <h2>{{ t('settingsPage.section.security') }}</h2>
           <div class="grid grid-cols-2 gap-3 max-md:grid-cols-1">
             <label class="grid gap-1 text-sm">{{ t('settingsPage.tokenExpiration') }}<Select v-model="form.tokenExpiration" :options="tokenOptions" /></label>
@@ -507,7 +520,7 @@ onMounted(load);
           <Button class="w-fit" variant="primary" :disabled="Boolean(fieldErrors.remoteCommandTimeoutSeconds)" :loading="pending === 'save-security'" @click="saveRuntimeSection('security')"><Shield />{{ t('settingsPage.saveSection') }}</Button>
         </section>
 
-        <section v-else-if="activeSection === 'certificates'" class="grid gap-4 rounded-2xl border border-border bg-card p-5">
+        <section v-else-if="activeSection === 'certificates'" class="grid gap-4 rounded-2xl border border-border bg-card p-4">
           <h2>{{ t('settingsPage.section.certificates') }}</h2>
           <div class="grid gap-3 border-t border-border pt-4">
             <h3>{{ t('settingsPage.panelHttps') }}</h3>
@@ -520,7 +533,7 @@ onMounted(load);
           <Button class="w-fit" variant="primary" :disabled="Boolean(fieldErrors.dnsPropagationDelaySeconds)" :loading="pending === 'save-certificates'" @click="saveRuntimeSection('certificates')"><Save />{{ t('settingsPage.saveSection') }}</Button>
         </section>
 
-        <section v-else-if="activeSection === 'agent'" class="grid gap-4 rounded-2xl border border-border bg-card p-5">
+        <section v-else-if="activeSection === 'agent'" class="grid gap-4 rounded-2xl border border-border bg-card p-4">
           <h2>{{ t('settingsPage.section.agent') }}</h2>
           <p class="m-0 text-sm text-muted-foreground">{{ t('settingsPage.agentDownloadHint') }}</p>
           <label class="grid gap-1 text-sm">
@@ -542,7 +555,7 @@ onMounted(load);
           <Button class="w-fit" variant="primary" :disabled="Boolean(fieldErrors.agentTransferTimeoutSeconds)" :loading="pending === 'save-agent'" @click="saveRuntimeSection('agent')"><Save />{{ t('settingsPage.saveSection') }}</Button>
         </section>
 
-        <section v-else-if="activeSection === 'tailscale'" class="grid gap-4 rounded-2xl border border-border bg-card p-5">
+        <section v-else-if="activeSection === 'tailscale'" class="grid gap-4 rounded-2xl border border-border bg-card p-4">
           <h2>{{ t('settingsPage.section.tailscale') }}</h2>
           <p class="m-0 text-sm text-muted-foreground">{{ t('settingsPage.tailscale.hint') }}</p>
           <div v-if="!runtime?.tailscale.authKeyConfigured" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('settingsPage.tailscale.authKeyMissing') }}</div>
@@ -600,7 +613,7 @@ onMounted(load);
           </div>
         </section>
 
-        <section v-else-if="activeSection === 'system-certificates'" class="grid gap-4 rounded-2xl border border-border bg-card p-5">
+        <section v-else-if="activeSection === 'system-certificates'" class="grid gap-4 rounded-2xl border border-border bg-card p-4">
           <h2>{{ t('settingsPage.section.systemCertificates') }}</h2>
           <p class="m-0 text-sm text-muted-foreground">{{ t('settingsPage.systemCertificatesHint') }}</p>
           <EmptyState v-if="!systemCertificates.length" :title="t('settingsPage.systemCertificatesEmpty')" :description="t('settingsPage.systemCertificatesEmptyHint')" />
@@ -633,7 +646,7 @@ onMounted(load);
           </Table>
         </section>
 
-        <section v-else-if="activeSection === 'system'" class="grid gap-4 rounded-2xl border border-border bg-card p-5">
+        <section v-else-if="activeSection === 'system'" class="grid gap-4 rounded-2xl border border-border bg-card p-4">
           <h2>{{ t('settingsPage.section.system') }}</h2>
           <div class="grid gap-3 border-t border-border pt-4 text-sm">
             <div class="grid grid-cols-2 gap-3 max-md:grid-cols-1">
@@ -651,7 +664,7 @@ onMounted(load);
           <div class="flex flex-wrap gap-2"><Button :loading="pending === 'save-system'" variant="primary" @click="saveRuntimeSection('system')"><Save />{{ t('settingsPage.saveBranding') }}</Button><Button :loading="pending === 'save-variables'" @click="saveVariables"><Save />{{ t('settingsPage.saveVariables') }}</Button></div>
         </section>
 
-        <section v-else class="grid gap-4 rounded-2xl border border-border bg-card p-5">
+        <section v-else class="grid gap-4 rounded-2xl border border-border bg-card p-4">
           <h2>{{ t('settingsPage.section.backups') }}</h2>
           <div class="grid gap-4 xl:grid-cols-2">
             <section class="grid gap-3 border-t border-border pt-4">
@@ -678,13 +691,20 @@ onMounted(load);
       </SettingsPage>
     </div>
 
-    <Dialog v-model:open="confirmOpen" :title="t(`settingsPage.confirm.${confirmKind}.title`)" :description="t(`settingsPage.confirm.${confirmKind}.description`)" :close-label="t('common.close')">
-      <div class="flex gap-3 rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning"><AlertTriangle class="mt-0.5 size-4 shrink-0" />{{ t('settingsPage.confirmDanger') }}</div>
-      <template #footer>
-        <Button @click="confirmOpen = false">{{ t('common.cancel') }}</Button>
-        <Button :variant="confirmKind === 'restore' || confirmKind === 'system-certificate' || confirmKind === 'jwt-secret' || confirmKind === 'tailscale-auth-key' ? 'danger' : 'primary'" :loading="Boolean(pending)" @click="confirmAction">{{ t('common.apply') }}</Button>
-      </template>
-    </Dialog>
+    <ConfirmDialog
+      :open="confirmOpen"
+      :title="t(`settingsPage.confirm.${confirmKind}.title`)"
+      :description="t(`settingsPage.confirm.${confirmKind}.description`)"
+      :impact="t('settingsPage.confirmDanger')"
+      :tone="confirmIsDanger ? 'danger' : 'warning'"
+      :loading="Boolean(pending)"
+      :require-checkbox="confirmIsDanger"
+      :checkbox-label="t('serversPage.confirmCheckbox')"
+      :confirm-label="t('common.apply')"
+      :cancel-label="t('common.cancel')"
+      @update:open="handleConfirmOpenChange"
+      @confirm="confirmAction"
+    />
   </ConsolePage>
 </template>
 

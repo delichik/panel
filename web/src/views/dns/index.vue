@@ -19,12 +19,13 @@ import Select from '@/components/ui/Select.vue';
 import Table from '@/components/ui/Table.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
+import ListPage from '@/components/templates/ListPage.vue';
 import TableDetailLayout from '@/components/templates/TableDetailLayout.vue';
 import { useI18n } from '@/i18n';
 import type { DnsDomainDto, DnsRecordDto } from '@/types/dns';
 import { createLatestRequestGuard, isAbortError, normalizePage } from '@/views/_shared/requestState';
 import { formatDateTime } from '@/utils/datetime';
-import { domainTone, normalizeRecordName } from './model';
+import { domainTone, normalizeRecordName, validateDnsDomainForm, validateDnsRecordForm, type FieldErrors } from './model';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -70,6 +71,14 @@ const recordDeleteTarget = ref<DnsRecordDto | null>(null);
 
 const domainForm = reactive({ name: '', provider: 'cloudflare', apiToken: '' });
 const recordForm = reactive({ type: 'A', name: '@', value: '', ttl: '300', proxied: 'true' });
+const domainFormErrors = reactive<FieldErrors>({});
+const recordFormErrors = reactive<FieldErrors>({});
+const domainFormValid = computed(() => {
+  const errors = validateDnsDomainForm(domainForm);
+  const tokenOk = Boolean(editingDomain.value) || Boolean(domainForm.apiToken.trim());
+  return Object.keys(errors).length === 0 && tokenOk;
+});
+const recordFormValid = computed(() => Object.keys(validateDnsRecordForm(recordForm)).length === 0);
 
 const selectedDomain = computed(() => domains.value.find((item) => item.id === selectedId.value) ?? null);
 const detailOpen = computed(() => Boolean(selectedId.value));
@@ -194,23 +203,37 @@ async function syncRecords(domain: DnsDomainDto) {
   }
 }
 
+function clearDomainFormErrors() {
+  Object.keys(domainFormErrors).forEach((key) => { delete domainFormErrors[key]; });
+}
+
+function clearRecordFormErrors() {
+  Object.keys(recordFormErrors).forEach((key) => { delete recordFormErrors[key]; });
+}
+
 function openCreateDomain() {
   editingDomain.value = null;
   Object.assign(domainForm, { name: '', provider: 'cloudflare', apiToken: '' });
+  clearDomainFormErrors();
   domainDialog.value = true;
 }
 
 function openEditDomain(domain: DnsDomainDto) {
   editingDomain.value = domain;
   Object.assign(domainForm, { name: domain.name, provider: 'cloudflare', apiToken: '' });
+  clearDomainFormErrors();
   domainDialog.value = true;
 }
 
 async function saveDomain() {
+  const localErrors = validateDnsDomainForm(domainForm);
+  Object.keys(domainFormErrors).forEach((key) => { delete domainFormErrors[key]; });
+  Object.assign(domainFormErrors, localErrors);
+  if (Object.keys(localErrors).length || (!editingDomain.value && !domainForm.apiToken.trim())) return;
   saving.value = true;
   error.value = '';
   try {
-    const input = { name: domainForm.name, provider: 'cloudflare' as const, apiToken: domainForm.apiToken || undefined };
+    const input = { name: domainForm.name.trim(), provider: 'cloudflare' as const, apiToken: domainForm.apiToken || undefined };
     const saved = editingDomain.value ? await dnsApi.updateDomain(editingDomain.value.id, input) : await dnsApi.createDomain(input);
     selectedId.value = saved.id;
     notifySuccess(t(editingDomain.value ? 'dnsPage.domainUpdated' : 'dnsPage.domainCreated'), saved);
@@ -228,21 +251,27 @@ async function saveDomain() {
 function openCreateRecord() {
   editingRecord.value = null;
   Object.assign(recordForm, { type: 'A', name: '@', value: '', ttl: '300', proxied: 'true' });
+  clearRecordFormErrors();
   recordDialog.value = true;
 }
 
 function openEditRecord(record: DnsRecordDto) {
   editingRecord.value = record;
   Object.assign(recordForm, { type: record.type, name: record.name, value: record.value, ttl: String(record.ttl), proxied: record.proxied ? 'true' : 'false' });
+  clearRecordFormErrors();
   recordDialog.value = true;
 }
 
 async function saveRecord() {
   if (!selectedDomain.value) return;
+  const localErrors = validateDnsRecordForm(recordForm);
+  Object.keys(recordFormErrors).forEach((key) => { delete recordFormErrors[key]; });
+  Object.assign(recordFormErrors, localErrors);
+  if (Object.keys(localErrors).length) return;
   saving.value = true;
   recordsError.value = '';
   try {
-    const input = { type: recordForm.type, name: normalizeRecordName(recordForm.name), value: recordForm.value, ttl: Number(recordForm.ttl) || 300, proxied: recordForm.proxied === 'true' };
+    const input = { type: recordForm.type, name: normalizeRecordName(recordForm.name), value: recordForm.value.trim(), ttl: Number(recordForm.ttl) || 300, proxied: recordForm.proxied === 'true' };
     const result = editingRecord.value ? await dnsApi.updateRecord(selectedDomain.value.id, editingRecord.value.id, input) : await dnsApi.createRecord(selectedDomain.value.id, input);
     notifySuccess(t(editingRecord.value ? 'dnsPage.recordUpdated' : 'dnsPage.recordCreated'), result);
     recordDialog.value = false;
@@ -309,10 +338,12 @@ watch(page, (value) => {
           <Button size="sm" variant="primary" @click="openCreateDomain"><Plus />{{ t('dnsPage.addDomain') }}</Button>
         </template>
 
-        <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-4 rounded-2xl border border-border bg-card p-4">
-          <SearchInput v-model="search" clearable :placeholder="t('dnsPage.searchDomains')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
+        <ListPage>
+          <template #toolbar>
+            <SearchInput v-model="search" clearable :placeholder="t('dnsPage.searchDomains')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
+          </template>
 
-          <EmptyState v-if="error && !domains.length" class="self-start" :title="t('common.loadFailed')" :description="error">
+          <EmptyState v-if="error && !domains.length" variant="page" :title="t('common.loadFailed')" :description="error">
             <template #actions>
               <Button size="sm" :loading="loadingDomains" @click="loadDomains"><RefreshCcw />{{ t('common.retry') }}</Button>
             </template>
@@ -320,8 +351,7 @@ watch(page, (value) => {
 
           <Table
             v-else
-            class="max-lg:max-h-[60dvh]"
-            :framed="false"
+            class="h-full max-lg:max-h-[60dvh]"
             :columns="domainColumns"
             :rows="domains"
             row-key="id"
@@ -352,17 +382,23 @@ watch(page, (value) => {
               </div>
             </template>
             <template #empty>
-              <EmptyState :title="t('dnsPage.noDomains')" :description="t('dnsPage.noDomainsHint')" />
+              <EmptyState
+                variant="inset"
+                :title="search ? t('common.filterEmpty') : t('dnsPage.noDomains')"
+                :description="search ? t('common.filterEmptyHint') : t('dnsPage.noDomainsHint')"
+              />
             </template>
           </Table>
 
-          <PaginationBar v-model:page="page" :page-size="pageSize" :total="totalDomains" :loading="loadingDomains" :previous-label="t('common.previous')" :next-label="t('common.next')" />
-        </div>
+          <template #pagination>
+            <PaginationBar v-model:page="page" :page-size="pageSize" :total="totalDomains" :loading="loadingDomains" :previous-label="t('common.previous')" :next-label="t('common.next')" />
+          </template>
+        </ListPage>
       </ConsolePage>
     </template>
 
     <template #detail>
-      <ConsolePage :title="selectedDomain?.name ?? t('common.loading')" :description="t('dnsPage.cloudflareNoAccount')" :back-label="t('common.backToList')" :body-scroll="false" @back="closeDetail">
+      <ConsolePage :title="selectedDomain?.name ?? t('common.loading')" :description="t('dnsPage.recordsHint')" :back-label="t('common.backToList')" :body-scroll="false" @back="closeDetail">
         <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4">
           <div class="flex flex-wrap items-start justify-between gap-3">
             <div class="min-w-0">
@@ -424,27 +460,43 @@ watch(page, (value) => {
 
   <Dialog v-model:open="domainDialog" :title="editingDomain ? t('dnsPage.editDomain') : t('dnsPage.addDomain')" :description="t('dnsPage.domainFormHint')" :close-label="t('common.close')">
     <div class="grid gap-3">
-      <label class="grid gap-1 text-sm">{{ t('common.name') }}<Input v-model="domainForm.name" /></label>
+      <label class="grid gap-1 text-sm">
+        {{ t('common.name') }}
+        <Input v-model="domainForm.name" :invalid="Boolean(domainFormErrors.name)" @input="delete domainFormErrors.name" />
+        <span v-if="domainFormErrors.name" class="text-xs text-danger">{{ t(domainFormErrors.name) }}</span>
+      </label>
       <label class="grid gap-1 text-sm">{{ t('dnsPage.provider') }}<Select v-model="domainForm.provider" :options="providerOptions" /></label>
       <label class="grid gap-1 text-sm">{{ t('dnsPage.apiToken') }}<Input v-model="domainForm.apiToken" type="password" :placeholder="editingDomain ? t('dnsPage.blankTokenKeepsCurrent') : ''" /></label>
     </div>
     <template #footer>
       <Button @click="domainDialog = false">{{ t('common.cancel') }}</Button>
-      <Button variant="primary" :loading="saving" :disabled="!domainForm.name || (!editingDomain && !domainForm.apiToken)" @click="saveDomain">{{ t('common.save') }}</Button>
+      <Button variant="primary" :loading="saving" :disabled="!domainFormValid" @click="saveDomain">{{ t('common.save') }}</Button>
     </template>
   </Dialog>
 
   <Dialog v-model:open="recordDialog" :title="editingRecord ? t('dnsPage.editRecord') : t('dnsPage.addRecord')" :close-label="t('common.close')">
     <div class="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
-      <label class="grid gap-1 text-sm">{{ t('common.type') }}<Select v-model="recordForm.type" :options="recordTypeOptions" /></label>
-      <label class="grid gap-1 text-sm">{{ t('common.name') }}<Input v-model="recordForm.name" /></label>
-      <label class="col-span-2 grid gap-1 text-sm max-sm:col-span-1">{{ t('dnsPage.content') }}<Input v-model="recordForm.value" /></label>
+      <label class="grid gap-1 text-sm">
+        {{ t('common.type') }}
+        <Select v-model="recordForm.type" :options="recordTypeOptions" />
+        <span v-if="recordFormErrors.type" class="text-xs text-danger">{{ t(recordFormErrors.type) }}</span>
+      </label>
+      <label class="grid gap-1 text-sm">
+        {{ t('common.name') }}
+        <Input v-model="recordForm.name" :invalid="Boolean(recordFormErrors.name)" @input="delete recordFormErrors.name" />
+        <span v-if="recordFormErrors.name" class="text-xs text-danger">{{ t(recordFormErrors.name) }}</span>
+      </label>
+      <label class="col-span-2 grid gap-1 text-sm max-sm:col-span-1">
+        {{ t('dnsPage.content') }}
+        <Input v-model="recordForm.value" :invalid="Boolean(recordFormErrors.value)" @input="delete recordFormErrors.value" />
+        <span v-if="recordFormErrors.value" class="text-xs text-danger">{{ t(recordFormErrors.value) }}</span>
+      </label>
       <label class="grid gap-1 text-sm">TTL<Input v-model="recordForm.ttl" type="number" /></label>
       <label class="grid gap-1 text-sm">{{ t('dnsPage.proxyMode') }}<Select v-model="recordForm.proxied" :options="booleanOptions" /></label>
     </div>
     <template #footer>
       <Button @click="recordDialog = false">{{ t('common.cancel') }}</Button>
-      <Button variant="primary" :loading="saving" :disabled="!recordForm.value" @click="saveRecord">{{ t('common.save') }}</Button>
+      <Button variant="primary" :loading="saving" :disabled="!recordFormValid" @click="saveRecord">{{ t('common.save') }}</Button>
     </template>
   </Dialog>
 

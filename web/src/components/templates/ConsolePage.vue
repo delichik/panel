@@ -21,7 +21,7 @@ const emit = defineEmits<{ back: [] }>();
       <template v-if="$slots.actions" #actions><slot name="actions" /></template>
       <template v-if="$slots.breadcrumb" #breadcrumb><slot name="breadcrumb" /></template>
     </PageHeader>
-    <div class="min-h-0 min-w-0 p-6 max-lg:overflow-visible max-sm:p-4" :class="bodyScroll ? 'overflow-y-auto overflow-x-hidden' : 'overflow-hidden'">
+    <div class="min-h-0 min-w-0 p-4 max-lg:overflow-visible max-sm:p-3" :class="bodyScroll ? 'overflow-y-auto overflow-x-hidden' : 'overflow-hidden'">
       <slot />
     </div>
   </div>

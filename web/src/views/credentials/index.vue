@@ -18,6 +18,7 @@ import Skeleton from '@/components/ui/Skeleton.vue';
 import Table from '@/components/ui/Table.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
+import ListPage from '@/components/templates/ListPage.vue';
 import TableDetailLayout from '@/components/templates/TableDetailLayout.vue';
 import CredentialFormFields from '@/components/patterns/CredentialFormFields.vue';
 import { emptyCredentialInput, secretPayload, validateCredentialInput, type CredentialFormLabels } from '@/components/patterns/credentialForm';
@@ -299,10 +300,12 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
           <Button size="sm" variant="primary" @click="openCreate"><Plus />{{ t('credentialsPage.addCredential') }}</Button>
         </template>
 
-        <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-4 rounded-2xl border border-border bg-card p-4">
-          <SearchInput v-model="search" clearable :placeholder="t('credentialsPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
+        <ListPage>
+          <template #toolbar>
+            <SearchInput v-model="search" clearable :placeholder="t('credentialsPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
+          </template>
 
-          <EmptyState v-if="error && !credentials.length" class="self-start" :title="t('common.loadFailed')" :description="error">
+          <EmptyState v-if="error && !credentials.length" variant="page" :title="t('common.loadFailed')" :description="error">
             <template #actions>
               <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
             </template>
@@ -310,8 +313,7 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
 
           <Table
             v-else
-            class="max-lg:max-h-[60dvh]"
-            :framed="false"
+            class="h-full max-lg:max-h-[60dvh]"
             :columns="columns"
             :rows="credentials"
             row-key="id"
@@ -348,12 +350,18 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
               </div>
             </template>
             <template #empty>
-              <EmptyState :title="t('credentialsPage.noCredentials')" :description="t('credentialsPage.noCredentialsHint')" />
+              <EmptyState
+                variant="inset"
+                :title="search ? t('common.filterEmpty') : t('credentialsPage.noCredentials')"
+                :description="search ? t('common.filterEmptyHint') : t('credentialsPage.noCredentialsHint')"
+              />
             </template>
           </Table>
 
-          <PaginationBar v-model:page="page" :page-size="pageSize" :total="total" :loading="loading" :previous-label="t('common.previous')" :next-label="t('common.next')" />
-        </div>
+          <template #pagination>
+            <PaginationBar v-model:page="page" :page-size="pageSize" :total="total" :loading="loading" :previous-label="t('common.previous')" :next-label="t('common.next')" />
+          </template>
+        </ListPage>
       </ConsolePage>
     </template>
 

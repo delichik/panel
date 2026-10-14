@@ -100,7 +100,7 @@ const stackClasses = 'fixed right-4 top-4 z-[60] grid w-[min(360px,calc(100vw-32
       <section
         v-for="toast in toasts"
         :key="toast.id"
-        class="rounded-2xl border bg-popover p-4 text-sm text-popover-foreground shadow-xl"
+        class="panel-shadow-overlay rounded-2xl border bg-popover p-4 text-sm text-popover-foreground"
         :class="{
           'border-success-border': toast.tone === 'success',
           'border-warning-border': toast.tone === 'warning',

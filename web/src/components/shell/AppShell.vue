@@ -151,7 +151,7 @@ async function signOut() {
               <PanelLeftClose v-else />
             </Transition>
           </IconButton>
-          <h1 class="truncate text-base font-semibold text-foreground">{{ navigationLabel }}</h1>
+          <p class="m-0 truncate text-sm font-medium text-muted-foreground" aria-live="polite">{{ navigationLabel }}</p>
           <Badge>{{ t('layout.alpha') }}</Badge>
         </div>
         <div class="flex items-center gap-1">

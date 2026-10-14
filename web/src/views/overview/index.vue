@@ -613,22 +613,22 @@ onBeforeUnmount(() => {
     <div class="overview-layout grid h-full min-h-0 min-w-0 gap-4 overflow-hidden max-xl:overflow-x-hidden max-xl:overflow-y-auto">
       <main class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] gap-4">
         <section class="grid min-w-0 gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(180px,100%),1fr))]">
-          <article class="motion-card rounded-2xl border border-border bg-card p-4">
+          <article class="rounded-2xl border border-border bg-card p-4">
             <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.healthSummary') }}</span>
             <strong class="mt-2 block text-2xl text-foreground">{{ summary.reachable }}/{{ summary.total }}</strong>
             <p class="m-0 mt-1 text-xs text-muted-foreground">{{ t('overviewPage.reachableHosts') }}</p>
           </article>
-          <article class="motion-card rounded-2xl border border-border bg-card p-4">
+          <article class="rounded-2xl border border-border bg-card p-4">
             <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.capacitySummary') }}</span>
             <strong class="mt-2 block text-2xl text-foreground">{{ summary.fresh }}/{{ summary.total }}</strong>
             <p class="m-0 mt-1 text-xs text-muted-foreground">{{ t('overviewPage.freshMetrics') }}</p>
           </article>
-          <article class="motion-card rounded-2xl border border-border bg-card p-4">
+          <article class="rounded-2xl border border-border bg-card p-4">
             <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.taskSummary') }}</span>
             <strong class="mt-2 block text-2xl text-foreground">{{ summary.updates }}</strong>
             <p class="m-0 mt-1 text-xs text-muted-foreground">{{ t('overviewPage.pendingUpdates') }}</p>
           </article>
-          <article class="motion-card rounded-2xl border border-border bg-card p-4">
+          <article class="rounded-2xl border border-border bg-card p-4">
             <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.securitySummary') }}</span>
             <strong class="mt-2 block text-2xl text-foreground">{{ summary.supported }}/{{ summary.total }}</strong>
             <p class="m-0 mt-1 text-xs text-muted-foreground">{{ t('overviewPage.supportedHosts') }}</p>
@@ -662,10 +662,10 @@ onBeforeUnmount(() => {
             <article
               v-for="card in cards"
               :key="card.id"
-              class="motion-card motion-reveal overview-card relative grid min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-muted p-4"
+              class="motion-reveal overview-card relative grid min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-card p-4"
               :class="[
                 card.kind === 'placeholder' ? 'border-dashed bg-muted/30' : '',
-                editMode ? 'cursor-move ring-1 ring-primary/20' : '',
+                editMode ? 'motion-card cursor-move ring-1 ring-primary/20' : '',
                 draggingCardId === card.id ? 'opacity-45' : '',
                 dragPreviewTargetId === card.id && draggingCardId !== card.id ? 'border-primary ring-2 ring-primary/30' : '',
               ]"
@@ -738,8 +738,8 @@ onBeforeUnmount(() => {
               <h2 class="m-0 text-sm font-semibold text-foreground">{{ t('overviewPage.riskQueue') }}</h2>
               <Badge :tone="risks.some((item) => item.tone === 'danger') ? 'danger' : risks.length ? 'warning' : 'success'">{{ risks.length }}</Badge>
             </div>
-            <div v-if="risks.length" class="grid gap-2 motion-stagger">
-              <button v-for="risk in risks" :key="risk.id" type="button" class="motion-list-item grid min-w-0 rounded-xl border border-border bg-muted p-3 text-left hover:bg-accent" @click="router.push(risk.to)">
+            <div v-if="risks.length" class="motion-stagger divide-y divide-border">
+              <button v-for="risk in risks" :key="risk.id" type="button" class="motion-list-item grid min-w-0 py-3 text-left first:pt-0 last:pb-0 hover:bg-accent/60" @click="router.push(risk.to)">
                 <div class="flex min-w-0 items-center justify-between gap-2">
                   <strong class="truncate text-sm text-foreground">{{ risk.title }}</strong>
                   <Badge class="shrink-0" :tone="risk.tone">{{ t(`overviewPage.risk.${risk.tone}`) }}</Badge>

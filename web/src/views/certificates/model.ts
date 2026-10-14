@@ -1,6 +1,42 @@
 import type { DomainCertificateDto, SelfSignedCertificateDto } from '@/types/certificates';
 import type { KeyAssetDto } from '@/types/keyAssets';
 
+export type FieldErrors = Record<string, string>;
+
+export function validateIssueCertificateForm(input: {
+  name: string;
+  domainId: string;
+  coverage: string[];
+}): FieldErrors {
+  const errors: FieldErrors = {};
+  if (!input.name.trim()) errors.name = 'certificatesPage.validationNameRequired';
+  if (!input.domainId.trim()) errors.domainId = 'certificatesPage.validationDomainRequired';
+  if (!input.coverage.some((item) => item.trim())) errors.coverage = 'certificatesPage.validationCoverageRequired';
+  return errors;
+}
+
+export function validateSelfSignedForm(input: { name: string; commonName: string; caId?: string; requireCa?: boolean }): FieldErrors {
+  const errors: FieldErrors = {};
+  if (!input.name.trim()) errors.name = 'certificatesPage.validationNameRequired';
+  if (!input.commonName.trim()) errors.commonName = 'certificatesPage.validationCommonNameRequired';
+  if (input.requireCa && !(input.caId ?? '').trim()) errors.caId = 'certificatesPage.validationCaRequired';
+  return errors;
+}
+
+export function validateKeyAssetForm(input: {
+  name: string;
+  commonName?: string;
+  requireCommonName?: boolean;
+  parentAssetId?: string;
+  requireParent?: boolean;
+}): FieldErrors {
+  const errors: FieldErrors = {};
+  if (!input.name.trim()) errors.name = 'certificatesPage.validationNameRequired';
+  if (input.requireCommonName && !(input.commonName ?? '').trim()) errors.commonName = 'certificatesPage.validationCommonNameRequired';
+  if (input.requireParent && !(input.parentAssetId ?? '').trim()) errors.parentAssetId = 'certificatesPage.validationCaRequired';
+  return errors;
+}
+
 export function certificateTone(certificate: DomainCertificateDto) {
   if (certificate.status === 'failed') return 'danger';
   if (certificate.status === 'pending' || certificate.status === 'issuing') return 'info';

@@ -19,6 +19,7 @@ import Tabs from '@/components/ui/Tabs.vue';
 import Tooltip from '@/components/ui/Tooltip.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
+import ListPage from '@/components/templates/ListPage.vue';
 import TableDetailLayout from '@/components/templates/TableDetailLayout.vue';
 import { useOverlayBehavior } from '@/composables/useOverlayBehavior';
 import { useI18n } from '@/i18n';
@@ -70,6 +71,7 @@ const page = ref(normalizePage(route.query.page));
 const totalServers = ref(0);
 const loading = ref(false);
 const detailLoading = ref(false);
+const detailError = ref('');
 const error = ref('');
 const credentialError = ref('');
 const serverDialog = ref(false);
@@ -204,6 +206,7 @@ async function loadServerDetail() {
   const id = selectedId.value;
   detailController?.abort();
   const requestId = ++detailRequestId;
+  detailError.value = '';
   if (!id || serverDetails.value[id]) {
     detailLoading.value = false;
     return;
@@ -215,9 +218,14 @@ async function loadServerDetail() {
     const detail = await serversApi.get(id, { signal: controller.signal });
     if (requestId !== detailRequestId || selectedId.value !== id) return;
     serverDetails.value = { ...serverDetails.value, [id]: detail };
+    detailError.value = '';
   } catch (err) {
     if (isAbortError(err)) return;
-    if (requestId === detailRequestId) notifyError(err instanceof Error ? err.message : t('serversPage.loadFailed'), err);
+    if (requestId === detailRequestId) {
+      const message = err instanceof Error ? err.message : t('serversPage.loadFailed');
+      detailError.value = message;
+      notifyError(message, err);
+    }
   } finally {
     if (requestId === detailRequestId) detailLoading.value = false;
   }
@@ -388,10 +396,12 @@ onBeforeUnmount(() => {
           <Button size="sm" variant="primary" @click="openCreate"><Plus />{{ t('serversPage.addServer') }}</Button>
         </template>
 
-        <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-4 rounded-2xl border border-border bg-card p-4">
-          <SearchInput v-model="search" clearable :placeholder="t('serversPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
+        <ListPage>
+          <template #toolbar>
+            <SearchInput v-model="search" clearable :placeholder="t('serversPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
+          </template>
 
-          <EmptyState v-if="error && !servers.length" class="self-start" :title="t('common.loadFailed')" :description="error">
+          <EmptyState v-if="error && !servers.length" variant="page" :title="t('common.loadFailed')" :description="error">
             <template #actions>
               <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
             </template>
@@ -399,8 +409,7 @@ onBeforeUnmount(() => {
 
           <Table
             v-else
-            class="max-lg:max-h-[60dvh]"
-            :framed="false"
+            class="h-full max-lg:max-h-[60dvh]"
             :columns="columns"
             :rows="servers"
             row-key="id"
@@ -446,19 +455,30 @@ onBeforeUnmount(() => {
               </div>
             </template>
             <template #empty>
-              <EmptyState :title="t('serversPage.noServers')" :description="t('serversPage.noServersHint')" />
+              <EmptyState
+                variant="inset"
+                :title="search ? t('common.filterEmpty') : t('serversPage.noServers')"
+                :description="search ? t('common.filterEmptyHint') : t('serversPage.noServersHint')"
+              />
             </template>
           </Table>
 
-          <PaginationBar v-model:page="page" :page-size="pageSize" :total="totalServers" :loading="loading" :previous-label="t('common.previous')" :next-label="t('common.next')" />
-        </div>
+          <template #pagination>
+            <PaginationBar v-model:page="page" :page-size="pageSize" :total="totalServers" :loading="loading" :previous-label="t('common.previous')" :next-label="t('common.next')" />
+          </template>
+        </ListPage>
       </ConsolePage>
     </template>
 
     <template #detail>
       <ConsolePage :title="detailTitle" :description="detailDescription" :back-label="t('common.backToList')" :body-scroll="false" @back="closeDetail">
         <div ref="detailRoot" data-testid="server-detail" class="h-full min-h-0" tabindex="-1" @keydown="onDetailKeydown">
-          <div v-if="!selectedServer" class="grid content-start gap-4">
+          <EmptyState v-if="detailError && !serverDetails[selectedId]" variant="page" :title="t('common.loadFailed')" :description="detailError">
+            <template #actions>
+              <Button size="sm" :loading="detailLoading" @click="invalidateServerDetail()"><RefreshCcw />{{ t('common.retry') }}</Button>
+            </template>
+          </EmptyState>
+          <div v-else-if="!selectedServer" class="grid content-start gap-4">
             <Skeleton class="h-7 w-48" />
             <Skeleton class="h-4 w-72 max-w-full" />
             <div class="mt-4 grid gap-3 xl:grid-cols-2">

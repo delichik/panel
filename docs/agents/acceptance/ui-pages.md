@@ -122,8 +122,8 @@
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
 | UI-APP-001 | `/applications/apps` 搜索、翻页、选择 | 服务端分页/q；URL 恢复 search/page/application；表格显示名称、状态、镜像引用、实例数、镜像更新与更新时间；点击「详情」覆盖列表；规划失败显示“部署被阻塞”，uncertainty 显示“结果待核实” | summary 缺 imageReference 时仅按行补详情并在该行显示骨架；失败不得把整表清空为假空态；不能将运行实例存在解释为最新部署成功 | 行级补载互不阻塞，选中项完整详情/runtime/files 按需请求；状态按 `APP-PLAN-001`、`APP-RUN-004` 派生 |
-| UI-APP-002 | 查看 Runtime tab | 显示实例总数/运行/失败及每服务器实例、容器和 `lastError`；当前 Job 显示真实状态、步骤、attempt、nextRunAt、错误码/消息/详情与 operation 深链；独立显示规划失败原因、可用字段/文件名、修复或重试说明及活动入口；uncertainty 明确提示结果待核实 | runtime 失败 toast 且局部可重试/刷新；换应用清旧 runtime；终态 failed 不得消失；无 Job 的规划失败也必须显示，不能覆盖实际实例状态 | 实例/Job 状态文本与徽标一致；active 或当前规划错误基线 3 秒有界轮询，按 nextRunAt 对齐，隐藏暂停，最多 24 次或 2 分钟；新 runtime 无规划错误时清除旧 DTO 告警 |
-| UI-APP-003 | 查看 Routes/Files tab | Routes 显示域名、目标端口、来源服务器名和 paths；Files 只列已提交文件并支持 blob 下载 | 无路由/文件有专属空态；服务器名未知才回退 ID | 文件名和下载名符合 kind/contentType，下载带 auth |
+| UI-APP-002 | 查看 Runtime tab | 显示实例总数/运行/失败及每服务器实例、容器和 `lastError`；当前 Job 显示真实状态、步骤、attempt、nextRunAt、错误码/消息/详情与 operation 深链；独立显示规划失败原因、可用字段/文件名、修复或重试说明及活动入口；uncertainty 明确提示结果待核实 | runtime 失败 toast 且详情内 EmptyState 可重试；详情/files 加载失败用 `detailError` EmptyState 重试，不得只 toast 后空白；换应用清旧 runtime/错误；终态 failed 不得消失；无 Job 的规划失败也必须显示，不能覆盖实际实例状态 | 实例/Job 状态文本与徽标一致；active 或当前规划错误基线 3 秒有界轮询，按 nextRunAt 对齐，隐藏暂停，最多 24 次或 2 分钟；新 runtime 无规划错误时清除旧 DTO 告警；`tab` 查询与 runtime/routes/files 双向同步 |
+| UI-APP-003 | 查看 Routes/Files tab | Routes 显示域名、目标端口、来源服务器名和 paths；Files 只列已提交文件并支持 blob 下载；URL `tab=routes|files` 可深链恢复 | 无路由/文件有专属空态；详情/files 失败走详情作用域错误重试；服务器名未知才回退 ID；关闭详情清 `tab` | 文件名和下载名符合 kind/contentType，下载带 auth |
 | UI-APP-004 | 点击行内同步/部署 | 提交人工 deploy；实际规划时显示真实 operationId/deploymentId 并刷新，`noChange=true` 时明确提示已是期望状态 | 不得被自动退避静默吞掉，不得把 no-change 或请求接受宣称为部署完成；失败后也重载列表/详情/runtime，使持久化规划诊断立即可见 | toast 与实际响应字段一致，operation 深链可恢复后续状态；修正后计划成功或已满足期望时清当前告警、保留失败历史 |
 | UI-APP-005 | 行内停用应用 | enabled 时可点，先 danger 确认后调用 stop；成功只提示请求接受并刷新 | 已停用禁用；失败保持应用状态 | 取消无请求，成功后状态来自重载而非前端假改 |
 | UI-APP-006 | 行内检查并更新镜像 | 仅 `imageUpdateAvailable` 时启用；提交 update 并按两阶段反馈 | 无更新时不请求 | 返回 ID 的 toast 正确，刷新后徽标由后端决定 |
@@ -175,7 +175,7 @@
 | UI-APP-020 | 管理应用文件 | 统一 AssetFileManager 单入口选择文本/普通文件/文件夹归档；文本可编辑，binary/archive 仅替换/下载/删除 | 文件名拒绝 `/`、`\\`、`..`、控制字符；替换必须保留原 name；并发冲突提供 reload | 所有动作走 session revision，成功更新 session 文件列表并标脏 |
 | UI-APP-021 | 点击 Preview | 先本地校验，再 PATCH 当前 draft，再调用 session preview，展示 diagnostics/diff | 任一 error diagnostic 阻止 commit；修改草稿自动清掉旧 diagnostics | 请求 revision 单调，诊断显示 field/message/detail |
 | UI-APP-022 | 点击 Commit | 自动执行同一 preview 流程，只有无 blocking diagnostics 才 commit；保存期间整编辑器阻塞且不可离开 | commit 冲突/失败保留会话并 toast；不重复提交 | 成功按 applyRequested 区分提示，选中新应用回列表 |
-| UI-APP-023 | 取消、返回、路由跳转或关页 | 任意脏字段/文件触发放弃确认和 beforeunload；明确放弃后才离开；保存中拒绝离开 | 返回目标必须明确为 apps 列表，不依赖不稳定历史栈 | 取消确认保留草稿；确认后 session 状态被放弃/页面离开 |
+| UI-APP-023 | 取消、返回、路由跳转或关页 | 任意脏字段/文件触发放弃确认和 beforeunload；明确放弃后才离开；保存中拒绝离开；footer 取消与页头返回均明确 `push` 到 `/applications/apps`（编辑时带 `application` 选中） | 返回目标必须明确为 apps 列表，不得使用 `router.back()` 或不稳定历史栈 | 取消确认保留草稿；确认后 session 状态被放弃/页面离开 |
 
 ## 11. 设施目录与入口代理
 
@@ -213,10 +213,10 @@
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
 | UI-DNS-001 | 搜索、翻页、选择域名 | 服务端分页/q；URL 恢复 search/page/domain；表格显示域名、provider 状态与更新时间；点击「详情」覆盖列表并加载记录 | 列表失败与空域名分离；切域名立即清旧记录并 abort；详情打开时列表保持挂载但不可交互 | 分享 URL 恢复相同域名与页码，迟到记录不串域名 |
-| UI-DNS-002 | 新建/编辑域名 | provider 固定 Cloudflare；新建必须 name+API token；编辑 token 留空保持当前 | token 永不回显/出现在列表；错误保持弹窗 | payload 编辑空 token 时省略，成功打开新域名覆盖详情 |
+| UI-DNS-002 | 新建/编辑域名 | provider 固定 Cloudflare；新建必须 name+API token；编辑 token 留空保持当前；本地校验非空与基本域名形状，无效时字段错误并禁用保存 | token 永不回显/出现在列表；本地失败不请求；服务端错误保持弹窗 | payload 编辑空 token 时省略，成功打开新域名覆盖详情 |
 | UI-DNS-003 | 加载记录 | 仅当前域名请求，详情内表格显示 A/AAAA/CNAME/TXT/MX、name、content、TTL、操作；标题栏展示快照时间与 stale 标记 | provider/记录失败在记录区显示错误+重试，并使该域名状态 danger；真实空列表用 no records；`lastRefreshError` 就地展示 | 错误、加载、空、内容四态互斥；行内操作只影响当前域名 |
 | UI-DNS-004 | 同步记录 | POST refresh，显示 taskId，等待任务完成后重新 GET 当前域名 | 等待中切域名时旧结果不得覆盖；超时/失败保留错误重试 | 请求顺序正确且按钮只锁当前记录区 |
-| UI-DNS-005 | 新增/编辑记录 | type、name、content、TTL、proxy mode；name 统一归一，空 TTL 回退 300，content 必填 | 非代理支持由后端校验；失败保留弹窗/记录表 | 成功关闭并重载当前域名记录 |
+| UI-DNS-005 | 新增/编辑记录 | type、name、content、TTL、proxy mode；name 统一归一，空 TTL 回退 300；type/name/content 本地必填校验，无效时字段错误并禁用保存 | 本地失败不请求；非代理支持由后端校验；服务端失败保留弹窗/记录表 | 成功关闭并重载当前域名记录 |
 | UI-DNS-006 | 删除记录或域名 | 分别显示目标和影响说明的 danger 确认；成功只刷新对应作用域 | 域名引用冲突由后端明确显示，不得乐观删除 | 取消零请求；域名删除成功清 selection |
 
 ## 14. 证书、自签证书与密钥资产
@@ -225,13 +225,13 @@
 | --- | --- | --- | --- | --- |
 | UI-CERT-001 | 切换 domains/self-signed/keys、搜索、翻页、选择 | path 决定模式；page/search/selected 同步 URL；对应服务端列表使用 q，分页固定底部；列表为表格（domains：名称/覆盖域名/状态/到期；self：名称/类型/commonName/到期；keys：名称/类型/算法/指纹/到期），点击「详情」覆盖列表 | 切模式清 selection/page；列表错误与空态分离；能力不足的行操作禁用 | 三个深链刷新可恢复模式、查询与选中项；覆盖详情保留列表滚动与筛选 |
 | UI-CERT-002 | 查看域名证书 | 覆盖详情显示覆盖域名、issuer、状态、到期、lastError 与是否签发中 | failed 优先 danger，再区分 expired/expiring | 徽标与 model 测试一致 |
-| UI-CERT-003 | 签发或调整重签 | 选择已管理 DNS 域名，配置名称、根域、通配符、子域前缀并实时预览覆盖；重签预填已有覆盖 | name/domain 必填；去重/清空子域；只提示任务创建不宣称签发完成 | POST/PUT payload 的 prefixes 与预览一致，返回证书被选中 |
+| UI-CERT-003 | 签发或调整重签 | 选择已管理 DNS 域名，配置名称、根域、通配符、子域前缀并实时预览覆盖；重签预填已有覆盖 | name/domain/覆盖域名本地必填校验并禁用无效保存；去重/清空子域；只提示任务创建不宣称签发完成；服务端错误保留 | POST/PUT payload 的 prefixes 与预览一致，返回证书被选中 |
 | UI-CERT-004 | 立即续签或删除域名证书 | renew 提交后台任务并提示接受；delete 先 danger 确认 | 请求失败保留详情；签发中操作由后端拒绝时明确显示 | 成功重载状态，取消删除零请求 |
-| UI-CERT-005 | 生成自签 CA | name/commonName 必填，years 数值化并默认 5 | 非法值由后端错误明确反馈 | 成功选中新 CA 并刷新 |
-| UI-CERT-006 | 生成 self-signed leaf | 选择 CA，填写 name/commonName、DNS names、IP addresses、days（默认 90） | name/commonName 必填；无 CA/非法 SAN 不得伪成功 | 成功详情显示 kind/fingerprint/expiry/SAN |
+| UI-CERT-005 | 生成自签 CA | name/commonName 必填，years 数值化并默认 5；本地字段错误并禁用无效保存 | 本地失败不请求；非法数值等由后端错误明确反馈 | 成功选中新 CA 并刷新 |
+| UI-CERT-006 | 生成 self-signed leaf | 选择 CA，填写 name/commonName、DNS names、IP addresses、days（默认 90） | name/commonName/CA 本地必填；无 CA/非法 SAN 不得伪成功；服务端错误保留 | 成功详情显示 kind/fingerprint/expiry/SAN |
 | UI-CERT-007 | 重签或删除自签资产 | 重签调用 renew 并选返回 ID；删除先确认 | 引用/父子冲突保留对象并 toast | 成功重载，状态与新到期时间一致 |
 | UI-CERT-008 | 打开密钥资产页 | 过滤系统托管资产，仅列用户 CA/TLS/SSH；详情显示算法、fingerprint、reference/child count、expiry 与允许动作 | 系统资产只在设置的系统证书分区；列表不得包含私钥、公钥正文或 metadata | `canDelete/canReissue/canRegenerate/downloadKinds` 控制按钮 |
-| UI-CERT-009 | 生成 CA/TLS/SSH | keys 模式页头提供生成 SSH/生成 CA/生成 TLS 入口，CA/TLS 填 name/commonName/algorithm/RSA size/validity，TLS 另选 parent CA 与 SAN；SSH 填 name/algorithm/RSA size/comment | 生成入口只属于 keys 模式（表格页头）；domains/self-signed 页头不得出现；必填 name，其他错误显式返回 | 成功打开新 asset 覆盖详情，不在 UI 展示私钥正文 |
+| UI-CERT-009 | 生成 CA/TLS/SSH | keys 模式页头提供生成 SSH/生成 CA/生成 TLS 入口，CA/TLS 填 name/commonName/algorithm/RSA size/validity，TLS 另选 parent CA 与 SAN；SSH 填 name/algorithm/RSA size/comment | 生成入口只属于 keys 模式（表格页头）；domains/self-signed 页头不得出现；本地必填 name（及 CA/TLS 的 commonName/parent），无效禁用保存；其他错误显式返回 | 成功打开新 asset 覆盖详情，不在 UI 展示私钥正文 |
 | UI-CERT-010 | 单资产导入 | 选择 type/name/parent/算法；SSH 只编辑私钥材料，CA/TLS 用 tabs 分别编辑私钥和证书，默认打开私钥 | 导入失败在 Dialog 内保留结构化错误和材料；不得把 secret 写 toast | tabs/CodeEditor 可键盘操作，成功关闭并选中新资产 |
 | UI-CERT-011 | 重签/重生成/删除资产 | SSH 用 regenerate，证书用 reissue；根据 capability 禁用；delete 先 danger 确认并由后端做引用安全检查 | 引用中/有子资产时删除失败不移除行 | 有 taskId 才显示，成功后重载能力与 fingerprint |
 | UI-CERT-012 | 下载单资产材料 | 仅渲染 downloadKinds，逐项 blob 下载 | 失败不生成文件；不得经 JSON ApiClient 解析二进制 | 文件种类/名称与服务端 Content-Disposition 对应 |
@@ -276,8 +276,8 @@
 | UI-SET-005 | 保存 Certificates/Panel HTTPS | 编辑 Panel domain、TLS 资产、ACME email、DNS delay>=0；TLS 选择来自 `/key-assets/tls`，内置 `panel-tls` 保存为空 ID | TLS 列表不得按域名/SAN过滤，不含 Agent 专用证书；domain trim+小写 | 请求仅合入 certificates/panel 分区，成功重新 hydrate |
 | UI-SET-006 | 查看/重置系统证书 | 以表格展示 Panel Agent CA/client 和服务器 Agent server cert 的名称/归属、type/status/fingerprint/有效期；仅 canReset 行可点，先 danger 确认后提交任务 | 不得通过普通 key asset API 修改；不可重置项禁用 | toast 显示真实 taskId，列表后续刷新反映状态 |
 | UI-SET-007 | 查看 System | 版本、channel、latest、updateAvailable 只读；branding title/subtitle 和 server variables 分别独立保存 | 版本不混入 runtime 保存；变量格式为 `[*]KEY=Name`，空行忽略 | 保存 branding 不提交变量，保存变量不提交 branding |
-| UI-SET-008 | 配置备份导出 | 默认加密；关闭加密显示身份可恢复性警示；加密时密码必填，确认后提交 export 并显示 pending | 不得在此假装归档已可下载；失败不进入 pending | 未满足密码时按钮禁用，成功提示真实 exportId |
-| UI-SET-009 | 选择还原文件 | FileUploadButton 选 `.panel-backup` 后先 preflight，显示 manifest 版本/文件数；用户另勾覆盖确认并再经 danger Dialog 才 confirm restore | 更换文件清旧 preflight；无 preflight/未勾选不能恢复 | 仅最终确认发送 multipart restore，成功显示 pending/restarting |
+| UI-SET-008 | 配置备份导出 | 默认加密；关闭加密显示身份可恢复性警示；加密时密码必填，经统一 `ConfirmDialog`（impact + loading 锁）确认后提交 export 并显示 pending | 不得在此假装归档已可下载；失败不进入 pending | 未满足密码时按钮禁用，成功提示真实 exportId |
+| UI-SET-009 | 选择还原文件 | FileUploadButton 选 `.panel-backup` 后先 preflight，显示 manifest 版本/文件数；用户另勾覆盖确认并再经 danger `ConfirmDialog`（impact + 强制勾选 + loading 锁）才 confirm restore | 更换文件清旧 preflight；无 preflight/未勾选不能恢复；确认中拒绝关闭 | 仅最终确认发送 multipart restore，成功显示 pending/restarting |
 | UI-SET-010 | 保存 Agent download（`/settings/agent`） | 编辑下载基址、传输超时与「校验下载 TLS 证书」开关；只合入 agent 分区；超时校验 60..3600 秒，越界就地报错且不发请求 | 基址留空即表示关闭 HTTP 投递，文案必须说明回落到 SSH 上传；校验开关关闭时必须说明完整性仍由 SSH 下发的 sha256 保证 | 保存后重新 hydrate 且只回显归一化基址；保存本分区不得提交其他分区未保存脏值 |
 | UI-SET-011 | 打开 `/settings/tailscale`、编辑认证密钥与 ACL 标签，或点击「应用 / 重连」 | 密钥为只写密码输入：留空保存表示保留已存密钥，已配置时显示「认证密钥已配置」徽标、未配置时警示节点无法加入 tailnet；标签按 `tag:name` 本地解析并对非法项就地阻断（错误文案列出具体标签）；保存只合入 `tailscale` 分区并重新 hydrate；「清除认证密钥」须 danger 确认后提交清除；容器状态区展示 available/running/loggedIn、主机名、版本、IPv4/IPv6、backendState、最近应用时间与 `lastError`；`available=false` 时显示不可用空态并禁用「应用 / 重连」 | 存在非法标签时不发请求；清除失败保留当前状态与输入；容器不可用时按钮禁用且不得伪造状态或轮询不存在的接口；「应用」只表示已请求协调，不得表述为 tailscaled 已登录 | 保存后只回显归一化标签与 `authKeyConfigured`（密钥框保持为空）；确认弹窗取消时零请求；不可用时展示需在 Seamark 之外配置的说明而不是错误码堆叠 |
 
@@ -323,8 +323,8 @@
 
 ## 23. 当前实现与自动化缺口（不得作为放宽验收的依据）
 
-1. applications 编辑器 footer 的取消仍调用 `router.back()`；这会受进入历史影响，与 UI-APP-023 的明确返回目标冲突。
-2. application detail/runtime/files 加载失败目前主要用 toast，缺少 UI-APP-002/003 所要求的详情作用域错误空态和重试。
+1. ~~applications 编辑器 footer 取消调用 `router.back()`~~：已改为明确返回 `/applications/apps`（见 GAP-003 / UI-APP-023）。
+2. ~~application detail/runtime/files 加载失败仅 toast~~：已补详情作用域 EmptyState 与重试（见 GAP-004 / UI-APP-002/003）。
 3. 除共享组件和纯逻辑外，当前缺少覆盖上述完整页面链路的 Playwright e2e、axe 与多断点视觉回归。尤其 URL 恢复、脏状态离开、后台任务两阶段、上传下载和维护 token 隔离缺少浏览器级证据；覆盖式详情的前进/后退与跨页深链也依赖组件测试。
-4. DNS、applications、certificates、settings 等复杂页面的表单校验仍有大量依赖后端返回，当前只对部分必填/数值做本地约束；验收需同时验证本地阻止与服务端结构化错误不丢失。
+4. DNS 与 certificates 高频表单已补轻量本地校验；applications 编辑器与 settings 仍有更多输入依赖后端返回（见 GAP-027）；验收需同时验证本地阻止与服务端结构化错误不丢失。
 5. `/tasks` 和 `/debug` 为兼容/隐藏入口，仍必须维持可用与可访问，但不应重新加入主导航。

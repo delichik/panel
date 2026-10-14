@@ -160,8 +160,12 @@ function bytesPerSecond(value?: number) {
 
     <div class="relative min-h-0 overflow-y-auto">
       <LoadingOverlay v-if="loading && !metrics" :label="t('common.loading')" />
-      <p v-else-if="error && !metrics" class="m-0 text-sm text-danger">{{ error }}</p>
-      <EmptyState v-else-if="metrics && !hasSamples" :title="t('serversPage.noMetrics')" :description="t('serversPage.noMetricsHint')" />
+      <EmptyState v-else-if="error && !metrics" variant="page" :title="t('common.loadFailed')" :description="error">
+        <template #actions>
+          <Button size="sm" :loading="loading" @click="load(true)"><RefreshCcw />{{ t('common.retry') }}</Button>
+        </template>
+      </EmptyState>
+      <EmptyState v-else-if="metrics && !hasSamples" variant="inset" :title="t('serversPage.noMetrics')" :description="t('serversPage.noMetricsHint')" />
       <div v-else-if="metrics" class="grid gap-4 xl:grid-cols-2">
         <div v-for="panel in panels" :key="panel.key" class="grid min-h-[240px] grid-rows-[auto_minmax(0,1fr)] rounded-xl border border-border bg-muted p-3">
           <div class="flex items-center justify-between gap-3">

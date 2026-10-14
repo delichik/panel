@@ -32,9 +32,9 @@ function message(event: ActivityEvent) {
 </script>
 
 <template>
-  <ol class="m-0 grid min-w-0 list-none gap-3 p-0" :aria-label="t('activity.timeline')">
-    <li v-for="group in groups" :key="group.key" class="min-w-0 rounded-xl border border-border bg-card" :class="group.events.some(event => event.eventId === selectedEventId) ? 'ring-2 ring-ring/40' : ''">
-      <details v-if="group.output" :open="group.events.some(event => event.level === 'error' || event.eventId === selectedEventId)" class="min-w-0 p-3">
+  <ol class="m-0 grid min-w-0 list-none divide-y divide-border p-0" :aria-label="t('activity.timeline')">
+    <li v-for="group in groups" :key="group.key" class="min-w-0 py-3 first:pt-0 last:pb-0" :class="group.events.some(event => event.eventId === selectedEventId) ? 'rounded-lg bg-accent/50 px-2 -mx-2' : ''">
+      <details v-if="group.output" :open="group.events.some(event => event.level === 'error' || event.eventId === selectedEventId)" class="min-w-0">
         <summary class="cursor-pointer text-sm font-medium">{{ t('activity.outputCount', { count: group.events.length }) }}</summary>
         <div class="mt-3 grid min-w-0 gap-2">
           <div v-for="event in group.events" :key="event.eventId" class="min-w-0">
@@ -43,7 +43,7 @@ function message(event: ActivityEvent) {
           </div>
         </div>
       </details>
-      <div v-else v-for="event in group.events" :key="event.eventId" class="min-w-0 p-3">
+      <div v-else v-for="event in group.events" :key="event.eventId" class="min-w-0">
         <div class="flex flex-wrap items-center gap-2 text-xs text-muted-foreground"><time :datetime="event.occurredAt">{{ formatDateTime(event.occurredAt) }}</time><Badge :tone="eventTone(event.level)">{{ t(`activity.level.${event.level}`) }}</Badge><span>{{ event.actor?.name || event.actor?.id || event.sourceId }}</span></div>
         <p class="my-2 whitespace-pre-wrap break-words text-sm [overflow-wrap:anywhere]">{{ message(event) }}</p>
         <div class="flex flex-wrap gap-1"><Badge v-for="resource in event.resources" :key="`${resource.resourceType}:${resource.resourceId}:${resource.role}`">{{ resource.nameSnapshot || resource.resourceId }}<span v-if="resource.revisionId"> · {{ resource.revisionId }}</span></Badge></div>
