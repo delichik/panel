@@ -2,16 +2,36 @@ import type { ServerDto, ServerSaveInput } from '@/types/servers';
 import type { CredentialDto } from '@/types/credentials';
 
 /**
- * 服务器详情的一级 tab。资源页与安全页并入服务器详情后，tab 取值同时是 URL
- * `tab` query 的合法集合；未知取值一律回落到 overview。
+ * 服务器详情的一级 tab。Docker 资源合并为 `resources`，再用 URL `subtab`
+ * 区分 containers/images/networks/volumes；旧一级 tab 名仍作深链别名。
+ * 未知取值一律回落到 overview。
  */
-export const serverDetailTabs = ['overview', 'metrics', 'agent', 'tailscale', 'containers', 'images', 'networks', 'volumes', 'packages', 'firewall'] as const;
+export const serverDetailTabs = ['overview', 'metrics', 'agent', 'tailscale', 'resources', 'packages', 'firewall'] as const;
 
 export type ServerDetailTab = (typeof serverDetailTabs)[number];
 
+/** Docker 资源在 Resources 一级 tab 内的分段；也是旧 `tab=containers|…` 别名的目标。 */
+export const serverResourceSubtabs = ['containers', 'images', 'networks', 'volumes'] as const;
+
+export type ServerResourceSubtab = (typeof serverResourceSubtabs)[number];
+
+const legacyResourceTabSet = new Set<string>(serverResourceSubtabs);
+
+export function isLegacyResourceTab(value: unknown): value is ServerResourceSubtab {
+  return legacyResourceTabSet.has(String(value ?? ''));
+}
+
 export function normalizeServerDetailTab(value: unknown): ServerDetailTab {
   const raw = String(value ?? '');
+  if (isLegacyResourceTab(raw)) return 'resources';
   return (serverDetailTabs as readonly string[]).includes(raw) ? (raw as ServerDetailTab) : 'overview';
+}
+
+export function normalizeServerResourceSubtab(value: unknown, legacyTab?: unknown): ServerResourceSubtab {
+  const fromSubtab = String(value ?? '');
+  if ((serverResourceSubtabs as readonly string[]).includes(fromSubtab)) return fromSubtab as ServerResourceSubtab;
+  if (isLegacyResourceTab(legacyTab)) return legacyTab;
+  return 'containers';
 }
 
 /** 防火墙 tab 内部的 UFW / Fail2Ban 分段（Fail2Ban 仅 dev 构建可见）。 */

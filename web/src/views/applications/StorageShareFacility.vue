@@ -382,13 +382,11 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <Skeleton class="h-10 w-fit rounded-xl" />
-      <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <div class="grid gap-4">
-          <div v-for="item in 2" :key="item" class="rounded-2xl border border-border bg-card p-4">
-            <Skeleton class="h-5 w-32 max-w-full" />
-            <Skeleton class="mt-3 h-4 w-full" />
-            <Skeleton class="mt-2 h-4 w-2/3" />
-          </div>
+      <div class="grid gap-4">
+        <div v-for="item in 2" :key="item" class="rounded-2xl border border-border bg-card p-4">
+          <Skeleton class="h-5 w-32 max-w-full" />
+          <Skeleton class="mt-3 h-4 w-full" />
+          <Skeleton class="mt-2 h-4 w-2/3" />
         </div>
         <div class="grid content-start gap-3 rounded-2xl border border-border bg-card p-5">
           <Skeleton class="h-5 w-28 max-w-full" />
@@ -451,7 +449,7 @@ onBeforeUnmount(() => {
         { value: 'settings', label: t('applicationsPage.storageShareTabSettings') },
       ]" @update:model-value="selectView($event)">
         <!-- 运行健康 -->
-        <div v-if="activeView === 'health'" class="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div v-if="activeView === 'health'" class="grid gap-4">
           <div class="grid content-start gap-4 motion-stagger">
             <article v-for="server in status?.servers ?? []" :key="server.serverId" class="motion-reveal grid min-w-0 gap-3 rounded-2xl border border-border bg-card p-4">
               <div class="flex flex-wrap items-center justify-between gap-3">
@@ -478,7 +476,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <aside class="grid content-start gap-3 rounded-2xl border border-border bg-card p-5">
+          <section class="grid content-start gap-3 border-t border-border pt-4">
             <div>
               <h3 class="m-0 text-base font-semibold">{{ t('applicationsPage.storageShareAssociatedAppsTitle') }}</h3>
               <p class="m-0 mt-1 text-sm text-muted-foreground">{{ t('applicationsPage.storageShareAssociationsHint', { count: config?.references?.length ?? 0 }) }}</p>
@@ -490,7 +488,7 @@ onBeforeUnmount(() => {
               </li>
             </ul>
             <EmptyState v-if="!(config?.references?.length)" :title="t('applicationsPage.storageShareNoAssociatedApps')" :description="t('applicationsPage.storageShareNoPartitionsHint')" />
-          </aside>
+          </section>
         </div>
 
         <!-- 分区资产 -->
@@ -537,7 +535,7 @@ onBeforeUnmount(() => {
         </div>
 
         <!-- 设置 -->
-        <div v-else class="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div v-else class="grid gap-4">
           <section class="grid min-w-0 gap-4 rounded-2xl border border-border bg-card p-5">
             <div>
               <h3 class="m-0 text-base font-semibold">{{ t('applicationsPage.storageShareConfigTitle') }}</h3>
@@ -569,7 +567,7 @@ onBeforeUnmount(() => {
             </div>
           </section>
 
-          <aside class="grid content-start gap-3 rounded-2xl border border-border bg-card p-5">
+          <section class="grid content-start gap-3 border-t border-border pt-4">
             <div>
               <h3 class="m-0 text-base font-semibold">{{ t('applicationsPage.storageShareStateTitle') }}</h3>
               <p class="m-0 mt-1 text-sm leading-6 text-muted-foreground">{{ t('applicationsPage.storageShareStateHint') }}</p>
@@ -592,7 +590,7 @@ onBeforeUnmount(() => {
             <div class="border-t border-border pt-3">
               <Button size="sm" variant="ghost" @click="leaveSettings">{{ t('applicationsPage.storageShareBackToDetail') }}</Button>
             </div>
-          </aside>
+          </section>
         </div>
       </Tabs>
 

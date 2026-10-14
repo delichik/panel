@@ -1,17 +1,19 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-import { AlertTriangle, FileCode2, LockKeyhole, Plus, RefreshCcw, Save, ShieldCheck, ShieldOff, Trash2, UnlockKeyhole } from '@lucide/vue';
+import { AlertTriangle, FileCode2, LockKeyhole, MoreHorizontal, Plus, RefreshCcw, Save, ShieldCheck, Trash2, UnlockKeyhole } from '@lucide/vue';
 import { securityApi } from '@/api/security';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import CodeEditor from '@/components/ui/CodeEditor.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import Dialog from '@/components/ui/Dialog.vue';
+import Dropdown from '@/components/ui/Dropdown.vue';
+import DropdownItem from '@/components/ui/DropdownItem.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
+import IconButton from '@/components/ui/IconButton.vue';
 import Input from '@/components/ui/Input.vue';
 import Select from '@/components/ui/Select.vue';
 import Table from '@/components/ui/Table.vue';
-import Tabs from '@/components/ui/Tabs.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import type { Fail2BanJail, Fail2BanState, UfwRule, UfwState } from '@/types/security';
@@ -239,7 +241,20 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4">
-    <Tabs :model-value="view" :tabs="subTabs" @update:model-value="(value) => emit('update:view', value as FirewallView)" />
+    <div v-if="subTabs.length > 1" class="inline-flex w-fit max-w-full overflow-x-auto rounded-xl border border-border bg-muted p-1" role="tablist" :aria-label="t('serversPage.tab.firewall')">
+      <button
+        v-for="tab in subTabs"
+        :key="tab.value"
+        type="button"
+        role="tab"
+        class="motion-tab h-8 rounded-lg px-3 text-sm font-medium text-muted-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 aria-selected:bg-brand-bg aria-selected:text-brand"
+        :aria-selected="view === tab.value"
+        :tabindex="view === tab.value ? 0 : -1"
+        @click="emit('update:view', tab.value as FirewallView)"
+      >
+        {{ tab.label }}
+      </button>
+    </div>
 
     <div v-show="view === 'ufw'" class="grid h-full min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] gap-3">
       <div class="flex flex-wrap items-center justify-between gap-2">
@@ -298,11 +313,16 @@ onBeforeUnmount(() => {
           <span>{{ t('securityPage.active') }}: {{ fail2banState?.active ? t('state.healthy') : t('state.warning') }}</span>
           <span>{{ t('securityPage.updatedAt') }}: {{ formatDateTime(fail2banState?.updatedAt) || t('common.never') }}</span>
         </div>
-        <div class="flex flex-wrap gap-2">
-          <Button size="sm" :disabled="!fail2banState?.installed" :loading="pending === 'install-fail2ban'" @click="installFail2Ban"><LockKeyhole />{{ t('securityPage.installFail2Ban') }}</Button>
-          <Button size="sm" :loading="pending === 'enable-fail2ban'" @click="confirmTarget = { kind: 'enable-fail2ban' }"><ShieldCheck />{{ t('securityPage.enableFail2Ban') }}</Button>
-          <Button size="sm" variant="danger" :disabled="!fail2banState?.managed" :loading="pending === 'release-fail2ban'" @click="confirmTarget = { kind: 'release-fail2ban' }"><UnlockKeyhole />{{ t('securityPage.releaseFail2Ban') }}</Button>
+        <div class="flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="primary" :loading="pending === 'enable-fail2ban'" @click="confirmTarget = { kind: 'enable-fail2ban' }"><ShieldCheck />{{ t('securityPage.enableFail2Ban') }}</Button>
           <Button size="sm" :loading="fail2banLoading" @click="loadFail2Ban"><RefreshCcw />{{ t('common.refresh') }}</Button>
+          <Dropdown align="right">
+            <template #trigger>
+              <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
+            </template>
+            <DropdownItem :disabled="!fail2banState?.installed" @click="installFail2Ban"><LockKeyhole />{{ t('securityPage.installFail2Ban') }}</DropdownItem>
+            <DropdownItem tone="danger" :disabled="!fail2banState?.managed" @click="confirmTarget = { kind: 'release-fail2ban' }"><UnlockKeyhole />{{ t('securityPage.releaseFail2Ban') }}</DropdownItem>
+          </Dropdown>
         </div>
       </div>
 

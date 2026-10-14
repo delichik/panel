@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentTone, connectionHost, connectionSignature, credentialReferences, hasBlockingPairIssues, parsePairs, tailscaleObservedStatus, tailscalePreferences, tailscaleStatusKey, tailscaleTone, tailscaleTrait, validateProbeInput, validateServerInput } from './model';
+import { agentTone, connectionHost, connectionSignature, credentialReferences, hasBlockingPairIssues, isLegacyResourceTab, normalizeServerDetailTab, normalizeServerResourceSubtab, parsePairs, serverDetailTabs, tailscaleObservedStatus, tailscalePreferences, tailscaleStatusKey, tailscaleTone, tailscaleTrait, validateProbeInput, validateServerInput } from './model';
 import type { ServerDto } from '@/types/servers';
 
 const server: ServerDto = {
@@ -18,6 +18,20 @@ const server: ServerDto = {
 };
 
 describe('server model', () => {
+  it('keeps primary detail tabs compact and aliases legacy docker tabs to resources', () => {
+    expect(serverDetailTabs).toEqual(['overview', 'metrics', 'agent', 'tailscale', 'resources', 'packages', 'firewall']);
+    expect(normalizeServerDetailTab('resources')).toBe('resources');
+    expect(normalizeServerDetailTab('containers')).toBe('resources');
+    expect(normalizeServerDetailTab('images')).toBe('resources');
+    expect(normalizeServerDetailTab('networks')).toBe('resources');
+    expect(normalizeServerDetailTab('volumes')).toBe('resources');
+    expect(normalizeServerDetailTab('unknown')).toBe('overview');
+    expect(isLegacyResourceTab('containers')).toBe(true);
+    expect(normalizeServerResourceSubtab(undefined, 'images')).toBe('images');
+    expect(normalizeServerResourceSubtab('volumes')).toBe('volumes');
+    expect(normalizeServerResourceSubtab(undefined)).toBe('containers');
+  });
+
   it('maps agent capabilities from real server fields', () => {
     expect(agentTone(server)).toBe('success');
   });

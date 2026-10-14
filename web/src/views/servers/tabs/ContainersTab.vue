@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { FileText, ListTree, MoreHorizontal, Play, RefreshCcw, Square, Trash2 } from '@lucide/vue';
+import { FileText, MoreHorizontal, Play, RefreshCcw, Square, Trash2 } from '@lucide/vue';
 import { containersApi } from '@/api/containers';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
@@ -143,8 +143,7 @@ onBeforeUnmount(() => listController?.abort());
   <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4">
     <div class="grid gap-3">
       <div v-if="blocked" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('resourcesPage.blockAgent') }}</div>
-      <div class="flex flex-wrap items-center justify-between gap-2">
-        <p class="m-0 flex items-center gap-2 text-sm text-muted-foreground"><ListTree class="size-4" />{{ t('serversPage.tab.containers') }}</p>
+      <div class="flex flex-wrap items-center justify-end gap-2">
         <Button size="sm" :loading="loading" :disabled="blocked" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
       </div>
     </div>
@@ -179,14 +178,14 @@ onBeforeUnmount(() => listController?.abort());
       </template>
       <template #actions="{ row }">
         <div class="flex items-center justify-end gap-1">
-          <Button size="sm" variant="ghost" :disabled="blocked || Boolean(containerActionDisabled(row, 'start'))" :loading="pending === `start-${row.id}`" @click="start(row)"><Play />{{ t('resourcesPage.start') }}</Button>
-          <Button size="sm" variant="ghost" :disabled="blocked || Boolean(containerActionDisabled(row, 'stop'))" :loading="pending === `stop-${row.id}`" @click="ask(row, 'stop')"><Square />{{ t('resourcesPage.stop') }}</Button>
-          <Button size="sm" variant="ghost" :disabled="blocked || Boolean(containerActionDisabled(row, 'restart'))" :loading="pending === `restart-${row.id}`" @click="ask(row, 'restart')"><RefreshCcw />{{ t('resourcesPage.restart') }}</Button>
-          <Button size="sm" variant="ghost" :disabled="blocked" :loading="pending === `logs-${row.id}`" @click="openLogs(row)"><FileText />{{ t('resourcesPage.logs') }}</Button>
+          <IconButton size="sm" :label="t('resourcesPage.start')" :disabled="blocked || Boolean(containerActionDisabled(row, 'start')) || pending === `start-${row.id}`" @click="start(row)"><Play /></IconButton>
+          <IconButton size="sm" :label="t('resourcesPage.logs')" :disabled="blocked || pending === `logs-${row.id}`" @click="openLogs(row)"><FileText /></IconButton>
           <Dropdown align="right">
             <template #trigger>
               <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
             </template>
+            <DropdownItem :disabled="blocked || Boolean(containerActionDisabled(row, 'stop'))" @click="ask(row, 'stop')"><Square />{{ t('resourcesPage.stop') }}</DropdownItem>
+            <DropdownItem :disabled="blocked || Boolean(containerActionDisabled(row, 'restart'))" @click="ask(row, 'restart')"><RefreshCcw />{{ t('resourcesPage.restart') }}</DropdownItem>
             <DropdownItem tone="danger" :disabled="blocked || Boolean(containerActionDisabled(row, 'delete'))" @click="ask(row, 'delete')"><Trash2 />{{ t('common.delete') }}</DropdownItem>
           </Dropdown>
         </div>

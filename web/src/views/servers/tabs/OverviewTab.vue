@@ -125,55 +125,53 @@ onBeforeUnmount(() => {
       <div v-if="server.lastError" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ server.lastError }}</div>
     </div>
 
-    <div class="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_320px]">
-      <div class="grid content-start gap-4">
-        <section class="rounded-2xl border border-border bg-muted p-4">
-          <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.connection') }}</h3>
-          <dl class="mt-3 grid grid-cols-2 gap-3 text-sm max-md:grid-cols-1">
-            <div><dt>{{ t('serversPage.host') }}</dt><dd>{{ server.host }}</dd></div>
-            <div><dt>{{ t('serversPage.port') }}</dt><dd>{{ server.port }}</dd></div>
-            <div><dt>{{ t('serversPage.credential') }}</dt><dd>{{ credentialName || t('common.notAvailable') }}</dd></div>
-            <div><dt>{{ t('serversPage.dockerHost') }}</dt><dd>{{ server.dockerHost || t('common.notAvailable') }}</dd></div>
-            <div><dt>{{ t('serversPage.ipv4') }}</dt><dd>{{ server.ipv4 || t('common.notAvailable') }}</dd></div>
-            <div><dt>{{ t('serversPage.ipv6') }}</dt><dd>{{ server.ipv6 || t('common.notAvailable') }}</dd></div>
-          </dl>
-        </section>
-
-        <section class="rounded-2xl border border-border bg-muted p-4">
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.recentOperations') }}</h3>
-            <ActivityLink resource-type="server" :resource-id="server.id" />
-          </div>
-          <div class="mt-3 grid gap-2 text-sm text-muted-foreground">
-            <span>{{ t('serversPage.lastChecked') }}: {{ formatDateTime(server.lastCheckedAt) || t('common.never') }}</span>
-            <span>{{ t('serversPage.updatedAt') }}: {{ formatDateTime(server.updatedAt) || t('common.never') }}</span>
-            <div v-if="initialTask || server.initialTaskId" class="grid gap-1">
-              <div class="flex flex-wrap items-center justify-between gap-2">
-                <span>{{ t('serversPage.initialTask') }}</span>
-                <span class="flex items-center gap-2">
-                  <StatusBadge v-if="initialTask" :status="initialTask.status" domain="task" :label="t(`tasksPage.status.${initialTask.status}`)" />
-                  <ActivityLink v-if="server.initialTaskId" :execution-id="server.initialTaskId" />
-                </span>
-              </div>
-              <span class="panel-mono text-xs">{{ server.initialTaskId }}</span>
-              <p v-if="initialTaskLoading && !initialTask" class="m-0 text-xs">{{ t('serversPage.agentTaskLoading') }}</p>
-              <p v-if="initialTaskError" class="m-0 break-words text-danger">{{ initialTaskError }}</p>
-              <p v-else-if="initialTask?.error" class="m-0 break-words text-danger">{{ initialTask.error }}</p>
-            </div>
-          </div>
-        </section>
-      </div>
-
-      <aside class="grid content-start gap-3">
-        <section class="rounded-2xl border border-border bg-muted p-4">
+    <div class="grid content-start gap-6">
+      <section class="grid gap-3 border-b border-border pb-5">
+        <div class="flex flex-wrap items-center justify-between gap-2">
           <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.privilegeAndSecurity') }}</h3>
-          <div class="mt-3 flex flex-wrap gap-2">
+          <div class="flex flex-wrap gap-2">
             <Badge :tone="serverReachabilityTone(server)">{{ server.reachable ? t('serversPage.reachable') : t('serversPage.unreachable') }}</Badge>
             <Badge :tone="canRunPrivilegedOperation(server) ? 'success' : 'warning'">{{ canRunPrivilegedOperation(server) ? t('serversPage.privileged') : t('serversPage.noPrivilege') }}</Badge>
           </div>
-          <p class="m-0 mt-3 text-xs text-muted-foreground">{{ server.os?.prettyName || t('common.notAvailable') }} · {{ server.architecture || t('common.notAvailable') }}</p>
-        </section>
-      </aside>
+        </div>
+        <p class="m-0 text-sm text-muted-foreground">{{ server.os?.prettyName || t('common.notAvailable') }} · {{ server.architecture || t('common.notAvailable') }}</p>
+      </section>
+
+      <section class="grid gap-3 border-b border-border pb-5">
+        <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.connection') }}</h3>
+        <dl class="grid grid-cols-2 gap-3 text-sm max-md:grid-cols-1">
+          <div><dt>{{ t('serversPage.host') }}</dt><dd>{{ server.host }}</dd></div>
+          <div><dt>{{ t('serversPage.port') }}</dt><dd>{{ server.port }}</dd></div>
+          <div><dt>{{ t('serversPage.credential') }}</dt><dd>{{ credentialName || t('common.notAvailable') }}</dd></div>
+          <div><dt>{{ t('serversPage.dockerHost') }}</dt><dd>{{ server.dockerHost || t('common.notAvailable') }}</dd></div>
+          <div><dt>{{ t('serversPage.ipv4') }}</dt><dd>{{ server.ipv4 || t('common.notAvailable') }}</dd></div>
+          <div><dt>{{ t('serversPage.ipv6') }}</dt><dd>{{ server.ipv6 || t('common.notAvailable') }}</dd></div>
+        </dl>
+      </section>
+
+      <section class="grid gap-3">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.recentOperations') }}</h3>
+          <ActivityLink resource-type="server" :resource-id="server.id" />
+        </div>
+        <div class="grid gap-2 text-sm text-muted-foreground">
+          <span>{{ t('serversPage.lastChecked') }}: {{ formatDateTime(server.lastCheckedAt) || t('common.never') }}</span>
+          <span>{{ t('serversPage.updatedAt') }}: {{ formatDateTime(server.updatedAt) || t('common.never') }}</span>
+          <div v-if="initialTask || server.initialTaskId" class="grid gap-1">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <span>{{ t('serversPage.initialTask') }}</span>
+              <span class="flex items-center gap-2">
+                <StatusBadge v-if="initialTask" :status="initialTask.status" domain="task" :label="t(`tasksPage.status.${initialTask.status}`)" />
+                <ActivityLink v-if="server.initialTaskId" :execution-id="server.initialTaskId" />
+              </span>
+            </div>
+            <span class="panel-mono text-xs">{{ server.initialTaskId }}</span>
+            <p v-if="initialTaskLoading && !initialTask" class="m-0 text-xs">{{ t('serversPage.agentTaskLoading') }}</p>
+            <p v-if="initialTaskError" class="m-0 break-words text-danger">{{ initialTaskError }}</p>
+            <p v-else-if="initialTask?.error" class="m-0 break-words text-danger">{{ initialTask.error }}</p>
+          </div>
+        </div>
+      </section>
     </div>
 
     <ConfirmDialog

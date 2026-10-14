@@ -59,6 +59,7 @@ AppShell
   - 高度契约由模板自身承担（`h-full min-h-0`）：页面不得用页面级滚动替代模板或详情正文的内部滚动；详情正文由页面按需选择整体滚动或分区滚动（服务器详情用 `ConsolePage` 的 `body-scroll=false`，资源 tab 各自内部滚动）。
   - 详情自带 `ConsolePage`/`PageHeader` 标题与本地化返回（`common.backToList`），返回清空选中参数与 tab 参数。
   - 选中对象不在当前页时（深链），页面按 id 补载详情，不得回落到“无选中”空态。
+  - **内容区信息架构**：同一任务面的信息纵向叠在同一页/同一 tab（KPI + 列表 + 相关元数据）；**不同关注点**才用 `Tabs`（例：反向代理 `routes` vs `nodes`；服务器 Docker 资源用一级 `resources` + URL `subtab`）。禁止详情里「主栏正文 + 右侧无关信息栏」常驻左右分栏；禁止为短摘要硬拆 tab。例外：设置页左侧分区导航、表单内「输入 + 删除」双列控件、Metrics 图表网格（同属监控）。
 - `MasterDetailLayout`：遗留模板，保留组件测试与高度契约；**操作 `/operations`、任务 `/tasks`、日志 `/logs` 与其它实体工作台一律使用 `TableDetailLayout`**，不得再接入本模板交付页。
   - 高度契约由模板自身承担（`h-full min-h-0`）：调用方不再需要 `min-h-[600px+]` 之类的魔法高度，也不得用页面级滚动替代内部滚动。
   - 详情区正文统一使用 `grid-rows-[auto_minmax(0,1fr)]`（标题行 + 正文行）。存在可选横幅/告警时，横幅必须放进正文的内部滚动区，不得作为独立 grid 行，否则正文会落到 `auto` 行而失去内部滚动。

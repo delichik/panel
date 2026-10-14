@@ -852,20 +852,20 @@ function onFileChange(value: File | File[]) {
 
     <template #detail>
       <ConsolePage :title="detailTitle" :description="detailDescription" :back-label="t('common.backToList')" @back="closeDetail">
-        <article v-if="mode === 'domains' && selectedCert" class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <section class="rounded-2xl border border-border bg-muted p-4">
+        <article v-if="mode === 'domains' && selectedCert" class="grid gap-6">
+          <section class="grid gap-3 border-b border-border pb-5">
             <div class="flex flex-wrap items-center justify-between gap-2">
               <h3 class="m-0 text-sm font-semibold">{{ t('certificatesPage.coverage') }}</h3>
               <ActivityLink resource-type="certificate" :resource-id="selectedCert.id" />
             </div>
-            <div class="mt-3 flex flex-wrap gap-2"><Badge v-for="domain in selectedCert.domains" :key="domain" tone="info">{{ domain }}</Badge></div>
-            <p v-if="selectedCert.lastError" class="mt-4 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ selectedCert.lastError }}</p>
+            <div class="flex flex-wrap gap-2"><Badge v-for="domain in selectedCert.domains" :key="domain" tone="info">{{ domain }}</Badge></div>
+            <p v-if="selectedCert.lastError" class="m-0 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ selectedCert.lastError }}</p>
           </section>
-          <aside class="grid content-start gap-3">
-            <div class="rounded-2xl border border-border bg-muted p-4 text-sm"><div class="text-muted-foreground">{{ t('common.status') }}</div><strong>{{ t(certificateState(selectedCert)) }}</strong></div>
-            <div class="rounded-2xl border border-border bg-muted p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.expiresAt') }}</div><strong>{{ formatDateTime(selectedCert.notAfter) || t('common.notAvailable') }}</strong></div>
-            <div class="rounded-2xl border border-border bg-muted p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.taskEntry') }}</div><ActivityLink resource-type="certificate" :resource-id="selectedCert.id" /></div>
-          </aside>
+          <section class="grid gap-3 text-sm sm:grid-cols-3">
+            <div><div class="text-muted-foreground">{{ t('common.status') }}</div><strong>{{ t(certificateState(selectedCert)) }}</strong></div>
+            <div><div class="text-muted-foreground">{{ t('certificatesPage.expiresAt') }}</div><strong>{{ formatDateTime(selectedCert.notAfter) || t('common.notAvailable') }}</strong></div>
+            <div><div class="text-muted-foreground">{{ t('certificatesPage.taskEntry') }}</div><ActivityLink resource-type="certificate" :resource-id="selectedCert.id" /></div>
+          </section>
         </article>
 
         <article v-else-if="mode === 'self' && selectedSelf" class="grid gap-3 md:grid-cols-2">
@@ -876,20 +876,20 @@ function onFileChange(value: File | File[]) {
           <div class="rounded-2xl border border-border bg-muted p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.dnsNames') }}</div><strong>{{ displayEntries(selectedSelf.dnsNames) }}</strong></div>
         </article>
 
-        <article v-else-if="mode === 'keys' && selectedAsset" class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <section class="grid content-start gap-3 md:grid-cols-2">
-            <div class="rounded-2xl border border-border bg-muted p-4 text-sm md:col-span-2"><div class="flex flex-wrap items-center justify-between gap-2"><span class="text-muted-foreground">{{ t('common.status') }}</span><ActivityLink resource-type="key_asset" :resource-id="selectedAsset.id" /></div></div>
-            <div class="rounded-2xl border border-border bg-muted p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.fingerprint') }}</div><strong class="break-all">{{ selectedAsset.fingerprint }}</strong></div>
-            <div class="rounded-2xl border border-border bg-muted p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.references') }}</div><strong>{{ selectedAsset.referenceCount }}</strong></div>
-            <div class="rounded-2xl border border-border bg-muted p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.children') }}</div><strong>{{ selectedAsset.childCount }}</strong></div>
-            <div class="rounded-2xl border border-border bg-muted p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.expiresAt') }}</div><strong>{{ formatDateTime(selectedAsset.notAfter) || t('common.notAvailable') }}</strong></div>
+        <article v-else-if="mode === 'keys' && selectedAsset" class="grid gap-6">
+          <section class="grid content-start gap-3 border-b border-border pb-5 md:grid-cols-2">
+            <div class="text-sm md:col-span-2"><div class="flex flex-wrap items-center justify-between gap-2"><span class="text-muted-foreground">{{ t('common.status') }}</span><ActivityLink resource-type="key_asset" :resource-id="selectedAsset.id" /></div></div>
+            <div class="text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.fingerprint') }}</div><strong class="break-all">{{ selectedAsset.fingerprint }}</strong></div>
+            <div class="text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.references') }}</div><strong>{{ selectedAsset.referenceCount }}</strong></div>
+            <div class="text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.children') }}</div><strong>{{ selectedAsset.childCount }}</strong></div>
+            <div class="text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.expiresAt') }}</div><strong>{{ formatDateTime(selectedAsset.notAfter) || t('common.notAvailable') }}</strong></div>
           </section>
-          <aside class="rounded-2xl border border-border bg-muted p-4">
+          <section class="grid gap-3">
             <h3 class="m-0 text-sm font-semibold">{{ t('certificatesPage.downloads') }}</h3>
-            <div class="mt-3 grid gap-2">
+            <div class="flex flex-wrap gap-2">
               <Button v-for="kind in selectedAsset.downloadKinds" :key="kind" size="sm" :loading="saving" @click="downloadAssetFile(selectedAsset, kind)"><Download />{{ fileKindLabel(kind) }}</Button>
             </div>
-          </aside>
+          </section>
         </article>
       </ConsolePage>
     </template>

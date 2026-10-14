@@ -4,6 +4,7 @@
 
 ## 当前状态
 
+- 本轮内容区去分栏：新增 `applicationsPage.facilityTabRoutes` / `facilityTabNodes`、`serversPage.tab.resources`；en / zh-CN 已同步（既有 containers/images/networks/volumes 词条复用为资源 subtab 标签）。
 - 本轮操作/任务/日志三分路由新增 `routes.operations.*`、`routes.logs.*`、`intentRecords.*`、`operationsPage.empty*`、`systemTasksPage.empty*`、`logsPage.*`，并改写 `routes.tasks.*` 为系统意图列表；en / zh-CN 已同步。
 - 本轮列表名称列可打开详情：新增 `common.openDetails`（`TableDetailName` 可访问名称）；en / zh-CN 已同步。
 - 本轮 Phase 3 视觉抛光新增 `activity.loadErrorHint`（列表/详情加载失败 EmptyState 用恢复提示，错误详情只走 toast，避免双重通知）；en / zh-CN 已同步。

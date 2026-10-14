@@ -368,10 +368,10 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
 
     <template #detail>
       <ConsolePage :title="detailTitle" :description="selectedCredential?.username || ''" :back-label="t('common.backToList')" @back="closeDetail">
-        <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <section class="rounded-2xl border border-border bg-muted p-4">
-            <h3 class="flex items-center gap-2 text-sm font-semibold text-foreground"><KeyRound class="size-4 text-muted-foreground" />{{ t('credentialsPage.keySummary') }}</h3>
-            <div v-if="detailLoading" class="mt-4 grid gap-2">
+        <div class="grid gap-6">
+          <section class="grid gap-3 border-b border-border pb-5">
+            <h3 class="m-0 flex items-center gap-2 text-sm font-semibold text-foreground"><KeyRound class="size-4 text-muted-foreground" />{{ t('credentialsPage.keySummary') }}</h3>
+            <div v-if="detailLoading" class="grid gap-2">
               <Skeleton v-for="item in 3" :key="item" class="h-10" />
             </div>
             <EmptyState v-else-if="detailError" :title="t('common.loadFailed')" :description="detailError">
@@ -379,7 +379,7 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
                 <Button size="sm" :loading="detailLoading" @click="loadDetail(selectedId)"><RefreshCcw />{{ t('common.retry') }}</Button>
               </template>
             </EmptyState>
-            <div v-else-if="selectedCredential?.type === 'private_key' && credentialDetail?.keySummary" class="mt-4 grid gap-2 text-sm">
+            <div v-else-if="selectedCredential?.type === 'private_key' && credentialDetail?.keySummary" class="grid gap-2 text-sm">
               <div class="flex items-center justify-between gap-3 rounded-xl border border-border p-3">
                 <span class="text-muted-foreground">{{ t('credentialsPage.keyName') }}</span>
                 <strong class="truncate text-foreground">{{ credentialDetail.keySummary.comment || selectedCredential.name }}</strong>
@@ -393,19 +393,19 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
                 <strong class="break-all text-right text-foreground">{{ credentialDetail.keySummary.fingerprint }}</strong>
               </div>
             </div>
-            <p v-else-if="selectedCredential?.type === 'private_key'" class="m-0 mt-4 text-sm text-muted-foreground">{{ t('credentialsPage.keySummaryUnavailable') }}</p>
-            <p v-else-if="selectedCredential" class="m-0 mt-4 text-sm text-muted-foreground">{{ t('credentialsPage.passwordCredentialSummary', { username: selectedCredential.username }) }}</p>
+            <p v-else-if="selectedCredential?.type === 'private_key'" class="m-0 text-sm text-muted-foreground">{{ t('credentialsPage.keySummaryUnavailable') }}</p>
+            <p v-else-if="selectedCredential" class="m-0 text-sm text-muted-foreground">{{ t('credentialsPage.passwordCredentialSummary', { username: selectedCredential.username }) }}</p>
           </section>
-          <aside class="rounded-2xl border border-border bg-muted p-4">
+          <section class="grid gap-3">
             <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('credentialsPage.references') }}</h3>
-            <div v-if="references.length" class="mt-3 grid gap-2">
+            <div v-if="references.length" class="grid gap-2">
               <div v-for="ref in references" :key="ref.id" class="rounded-xl border border-border p-3">
                 <strong class="block truncate text-sm text-foreground">{{ ref.name }}</strong>
                 <span class="text-xs text-muted-foreground">{{ ref.host }}</span>
               </div>
             </div>
-            <p v-else class="m-0 mt-3 text-sm text-muted-foreground">{{ t('credentialsPage.noReferences') }}</p>
-          </aside>
+            <p v-else class="m-0 text-sm text-muted-foreground">{{ t('credentialsPage.noReferences') }}</p>
+          </section>
         </div>
       </ConsolePage>
     </template>

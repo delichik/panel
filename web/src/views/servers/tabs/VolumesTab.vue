@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { Database, RefreshCcw, Trash2 } from '@lucide/vue';
+import { RefreshCcw, Trash2 } from '@lucide/vue';
 import { containersApi } from '@/api/containers';
 import { waitForTask } from '@/api/taskWait';
 import Badge from '@/components/ui/Badge.vue';
@@ -151,7 +151,7 @@ onBeforeUnmount(() => {
     <div class="grid gap-3">
       <div v-if="blocked" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('resourcesPage.blockAgent') }}</div>
       <div class="flex flex-wrap items-center justify-between gap-2">
-        <p class="m-0 flex items-center gap-2 text-sm text-muted-foreground"><Database class="size-4" />{{ t('resourcesPage.volumeSafety') }}</p>
+        <p class="m-0 text-sm text-muted-foreground">{{ t('resourcesPage.volumeSafety') }}</p>
         <div class="flex flex-wrap items-center gap-2">
           <span class="text-xs text-muted-foreground">{{ formatDateTime(observedAt) || t('common.never') }}</span>
           <Button size="sm" variant="danger" :disabled="blocked" @click="confirmTarget = { kind: 'prune' }"><Trash2 />{{ t('resourcesPage.pruneUnusedVolumes') }}</Button>

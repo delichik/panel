@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { Boxes, DownloadCloud, RefreshCcw, Trash2 } from '@lucide/vue';
+import { DownloadCloud, MoreHorizontal, RefreshCcw, Trash2 } from '@lucide/vue';
 import { containersApi } from '@/api/containers';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import Dialog from '@/components/ui/Dialog.vue';
+import Dropdown from '@/components/ui/Dropdown.vue';
+import DropdownItem from '@/components/ui/DropdownItem.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
+import IconButton from '@/components/ui/IconButton.vue';
 import Input from '@/components/ui/Input.vue';
 import Table from '@/components/ui/Table.vue';
 import Tooltip from '@/components/ui/Tooltip.vue';
@@ -138,13 +141,18 @@ onBeforeUnmount(() => listController?.abort());
     <div class="grid gap-3">
       <div v-if="blocked" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('resourcesPage.blockAgent') }}</div>
       <div class="flex flex-wrap items-center justify-between gap-2">
-        <p class="m-0 flex items-center gap-2 text-sm text-muted-foreground"><Boxes class="size-4" />{{ formatDateTime(images?.observedAt) || t('common.never') }}</p>
-        <div class="flex flex-wrap gap-2">
+        <span class="text-xs text-muted-foreground">{{ formatDateTime(images?.observedAt) || t('common.never') }}</span>
+        <div class="flex flex-wrap items-center gap-2">
           <Button size="sm" variant="primary" :disabled="blocked" @click="pullDialog = true"><DownloadCloud />{{ t('resourcesPage.pullImage') }}</Button>
-          <Button size="sm" :disabled="blocked || !upgradeIds.length" :loading="pending === 'upgrade-selected'" @click="upgrade(true)">{{ t('resourcesPage.upgradeApplications') }}</Button>
-          <Button size="sm" :disabled="blocked" :loading="pending === 'upgrade-all'" @click="upgrade(false)">{{ t('resourcesPage.upgradeAllApplications') }}</Button>
-          <Button size="sm" variant="danger" :disabled="blocked" @click="askPrune"><Trash2 />{{ t('resourcesPage.pruneUnused') }}</Button>
           <Button size="sm" :loading="loading" :disabled="blocked" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
+          <Dropdown align="right">
+            <template #trigger>
+              <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
+            </template>
+            <DropdownItem :disabled="blocked || !upgradeIds.length" @click="upgrade(true)">{{ t('resourcesPage.upgradeApplications') }}</DropdownItem>
+            <DropdownItem :disabled="blocked" @click="upgrade(false)">{{ t('resourcesPage.upgradeAllApplications') }}</DropdownItem>
+            <DropdownItem tone="danger" :disabled="blocked" @click="askPrune"><Trash2 />{{ t('resourcesPage.pruneUnused') }}</DropdownItem>
+          </Dropdown>
         </div>
       </div>
     </div>

@@ -165,16 +165,36 @@ const discardDialogOpen = ref(false);
 let pendingLeaveTarget: string | null = null;
 let pendingFacilityCancel = false;
 let allowLeave = false;
-type AppDetailTab = 'runtime' | 'routes' | 'files';
+type AppDetailTab = 'runtime' | 'routes' | 'files' | 'data';
+type FacilityDetailTab = 'routes' | 'nodes';
 function normalizeAppDetailTab(value: unknown): AppDetailTab {
-  if (value === 'routes' || value === 'files') return value;
+  if (value === 'routes' || value === 'files' || value === 'data') return value;
   return 'runtime';
 }
+function normalizeFacilityDetailTab(value: unknown): FacilityDetailTab {
+  if (value === 'nodes') return 'nodes';
+  return 'routes';
+}
 const appTab = ref<AppDetailTab>(normalizeAppDetailTab(route.query.tab));
+const facilityTab = ref<FacilityDetailTab>(normalizeFacilityDetailTab(route.query.tab));
 const activeAppTab = computed({
   get: () => appTab.value,
   set: (value: AppDetailTab) => selectAppTab(value),
 });
+const activeFacilityTab = computed({
+  get: () => facilityTab.value,
+  set: (value: FacilityDetailTab) => selectFacilityTab(value),
+});
+const appDetailTabs = computed(() => [
+  { label: t('applicationsPage.runtime'), value: 'runtime' },
+  { label: t('applicationsPage.routes'), value: 'routes' },
+  { label: t('applicationsPage.files'), value: 'files' },
+  { label: t('applicationsPage.persistentData'), value: 'data' },
+]);
+const facilityDetailTabs = computed(() => [
+  { label: t('applicationsPage.facilityTabRoutes'), value: 'routes' },
+  { label: t('applicationsPage.facilityTabNodes'), value: 'nodes' },
+]);
 const fileActionErrors = ref<Record<string, string>>({});
 const fileActionPending = ref('');
 const assetActionErrors = ref<Record<string, string>>({});
@@ -642,8 +662,15 @@ watch(() => route.query.application, (value) => {
 });
 
 watch(() => route.query.tab, (value) => {
-  const next = normalizeAppDetailTab(value);
-  if (next !== appTab.value) appTab.value = next;
+  if (mode.value === 'apps') {
+    const next = normalizeAppDetailTab(value);
+    if (next !== appTab.value) appTab.value = next;
+    return;
+  }
+  if (mode.value === 'facilityDetail' || (mode.value === 'facilityConfig' && !facilityEditingView.value && isReverseProxyFacility.value)) {
+    const next = normalizeFacilityDetailTab(value);
+    if (next !== facilityTab.value) facilityTab.value = next;
+  }
 });
 
 watch(selectedId, async (value) => {
@@ -664,10 +691,25 @@ function applicationDetailQuery(applicationId = selectedId.value) {
   };
 }
 
+function facilityDetailQuery(tab = facilityTab.value) {
+  return {
+    ...route.query,
+    tab: tab === 'routes' ? undefined : tab,
+  };
+}
+
 function selectAppTab(value: AppDetailTab) {
   appTab.value = value;
   if (selectedId.value && route.query.tab !== (value === 'runtime' ? undefined : value)) {
     void router.replace({ query: applicationDetailQuery() });
+  }
+}
+
+function selectFacilityTab(value: FacilityDetailTab) {
+  facilityTab.value = value;
+  const expected = value === 'routes' ? undefined : value;
+  if (route.query.tab !== expected) {
+    void router.replace({ query: facilityDetailQuery(value) });
   }
 }
 
@@ -1981,6 +2023,9 @@ onBeforeUnmount(() => {
 
     <template #detail>
       <ConsolePage :title="selectedApplication.name" :description="selectedApplication.imageReference || selectedApplication.jobId" :back-label="t('common.backToList')" @back="backToApplicationList">
+        <template #actions>
+          <ActivityLink resource-type="application" :resource-id="selectedApplication.id" />
+        </template>
         <EmptyState v-if="detailError" :title="t('common.loadFailed')" :description="detailError">
           <template #actions>
             <Button size="sm" :loading="detailLoading" @click="retryApplicationDetail"><RefreshCcw />{{ t('common.retry') }}</Button>
@@ -1994,121 +2039,113 @@ onBeforeUnmount(() => {
           </div>
           <div class="motion-skeleton h-72 rounded-2xl bg-muted animate-pulse" />
         </div>
-        <article v-else class="relative grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <article v-else class="relative grid min-w-0 gap-4">
           <LoadingOverlay v-if="detailLoading && !applicationDetails[selectedId]" />
-          <div class="min-w-0">
-            <div class="mb-3 flex flex-wrap items-center gap-2">
-              <StatusBadge :status="appStatus" :tone="statusTone(appStatus)" :label="t(`applicationsPage.status.${appStatus}`)" />
-              <Badge :tone="selectedApplication.imageUpdateAvailable ? 'warning' : 'neutral'">{{ selectedApplication.imageUpdateAvailable ? t('applicationsPage.imageUpdate') : t('applicationsPage.imageCurrent') }}</Badge>
-            </div>
-                <Tabs v-model="activeAppTab" :tabs="[{ label: t('applicationsPage.runtime'), value: 'runtime' }, { label: t('applicationsPage.routes'), value: 'routes' }, { label: t('applicationsPage.files'), value: 'files' }]">
-                  <section v-if="appTab === 'runtime'" class="grid gap-4">
-                    <EmptyState v-if="runtimeError" :title="t('common.loadFailed')" :description="runtimeError">
-                      <template #actions>
-                        <Button size="sm" :loading="runtimeLoading" @click="retryApplicationRuntime"><RefreshCcw />{{ t('common.retry') }}</Button>
-                      </template>
-                    </EmptyState>
-                    <template v-else>
-                    <div class="grid grid-cols-3 gap-3 max-md:grid-cols-1">
-                      <div class="rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.instances') }}</span><strong>{{ runtimeSummary(currentRuntime).total }}</strong></div>
-                      <div class="rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.running') }}</span><strong>{{ runtimeSummary(currentRuntime).running }}</strong></div>
-                      <div class="rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.failed') }}</span><strong>{{ runtimeSummary(currentRuntime).failed }}</strong></div>
+          <div class="flex flex-wrap items-center gap-2">
+            <StatusBadge :status="appStatus" :tone="statusTone(appStatus)" :label="t(`applicationsPage.status.${appStatus}`)" />
+            <Badge :tone="selectedApplication.imageUpdateAvailable ? 'warning' : 'neutral'">{{ selectedApplication.imageUpdateAvailable ? t('applicationsPage.imageUpdate') : t('applicationsPage.imageCurrent') }}</Badge>
+          </div>
+          <Tabs v-model="activeAppTab" :tabs="appDetailTabs">
+            <section v-if="appTab === 'runtime'" class="grid gap-4">
+              <EmptyState v-if="runtimeError" :title="t('common.loadFailed')" :description="runtimeError">
+                <template #actions>
+                  <Button size="sm" :loading="runtimeLoading" @click="retryApplicationRuntime"><RefreshCcw />{{ t('common.retry') }}</Button>
+                </template>
+              </EmptyState>
+              <template v-else>
+                <div class="grid grid-cols-3 gap-3 max-md:grid-cols-1">
+                  <div class="rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.instances') }}</span><strong>{{ runtimeSummary(currentRuntime).total }}</strong></div>
+                  <div class="rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.running') }}</span><strong>{{ runtimeSummary(currentRuntime).running }}</strong></div>
+                  <div class="rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.failed') }}</span><strong>{{ runtimeSummary(currentRuntime).failed }}</strong></div>
+                </div>
+                <div v-if="planningError" role="alert" class="grid gap-2 rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <strong>{{ t('applicationsPage.planningFailed') }}</strong>
+                    <Button size="sm" variant="ghost" @click="openApplicationActivity(planningError.operationId)"><ClipboardList />{{ t('applicationsPage.viewOperation') }}</Button>
+                  </div>
+                  <span class="whitespace-pre-wrap break-words">{{ planningError.message }}</span>
+                  <span v-if="planningError.fileName" class="break-words">{{ t('applicationsPage.planningFile') }}: {{ planningError.fileName }}</span>
+                  <span v-if="planningError.field">{{ t('applicationsPage.planningField') }}: {{ planningError.field }}</span>
+                  <span>{{ t(planningError.retryable ? 'applicationsPage.planningRetryHint' : 'applicationsPage.planningFixHint') }}</span>
+                </div>
+                <div v-if="currentOperation" class="grid gap-3 rounded-2xl border border-border bg-muted p-4">
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <h3 class="m-0">{{ t('applicationsPage.currentDeployment') }}</h3>
+                    <Button v-if="currentOperation.operationId" size="sm" variant="ghost" @click="openApplicationActivity(currentOperation.operationId)"><ClipboardList />{{ t('applicationsPage.viewOperation') }}</Button>
+                  </div>
+                  <div class="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
+                    <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationPhase') }}</span><StatusBadge :status="currentOperationStatus" domain="operation" :tone="currentOperationStatus === 'result_unknown' ? 'warning' : undefined" :label="operationStatusLabel(currentOperationStatus)" /></div>
+                    <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationStage') }}</span><strong>{{ operationStageLabel(currentOperation.stage || '') }}</strong></div>
+                    <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationAttempt') }}</span><strong>{{ currentOperation.attempt ?? t('common.notAvailable') }}</strong></div>
+                    <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationNextRetry') }}</span><strong>{{ currentOperation.nextRunAt ? formatDateTime(currentOperation.nextRunAt) : t('common.notAvailable') }}</strong></div>
+                  </div>
+                  <p v-if="currentOperationStatus === 'result_unknown'" class="m-0 text-sm text-warning">{{ t('applicationsPage.unknownResultHint') }}</p>
+                  <div v-if="currentOperation.error || currentOperation.errorCode || currentOperation.errorDetail" role="alert" class="grid gap-1 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
+                    <strong>{{ t('applicationsPage.operationError') }}<span v-if="currentOperation.errorCode"> · {{ currentOperation.errorCode }}</span></strong>
+                    <span v-if="currentOperation.error">{{ currentOperation.error }}</span>
+                    <details v-if="currentOperation.errorDetail && currentOperation.errorDetail !== currentOperation.error"><summary class="cursor-pointer">{{ t('facilityDiagnostics.technicalDetails') }}</summary><pre class="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words text-xs">{{ currentOperation.errorDetail }}</pre></details>
+                  </div>
+                </div>
+                <div v-else-if="!planningError && selectedApplication.lastError" role="alert" class="rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">
+                  <strong>{{ t('applicationsPage.operationError') }}</strong>
+                  <p class="m-0 mt-1 whitespace-pre-wrap break-words">{{ selectedApplication.lastError }}</p>
+                </div>
+                <div class="rounded-2xl border border-border bg-muted p-4">
+                  <h3>{{ t('applicationsPage.nodeInstances') }}</h3>
+                  <div v-if="currentRuntime?.instances?.length" class="mt-3 grid gap-2">
+                    <div v-for="instance in currentRuntime.instances" :key="instance.instanceId || instance.id" class="grid gap-1 rounded-xl border border-border p-3 text-sm">
+                      <div class="flex items-center justify-between gap-2"><strong>{{ instance.serverName || instance.serverId || instance.instanceId }}</strong><StatusBadge :status="instance.status || instance.state || 'unknown'" :tone="statusTone(instance.status || instance.state || 'unknown')" :label="instanceStatusLabel(instance.status || instance.state || '')" /></div>
+                      <span class="text-muted-foreground">{{ instance.containerName || instance.containerId || t('common.notAvailable') }}</span>
+                      <span v-if="instance.lastError" class="text-danger">{{ instance.lastError }}</span>
                     </div>
-                    <div v-if="planningError" role="alert" class="grid gap-2 rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">
-                      <div class="flex flex-wrap items-center justify-between gap-2">
-                        <strong>{{ t('applicationsPage.planningFailed') }}</strong>
-                        <Button size="sm" variant="ghost" @click="openApplicationActivity(planningError.operationId)"><ClipboardList />{{ t('applicationsPage.viewOperation') }}</Button>
+                  </div>
+                  <div v-else-if="runtimeLoading" class="mt-3 grid gap-2" aria-hidden="true">
+                    <div v-for="item in 4" :key="item" class="grid gap-2 rounded-xl border border-border p-3">
+                      <div class="flex items-center justify-between gap-2">
+                        <div class="motion-skeleton h-4 w-36 rounded bg-muted animate-pulse" />
+                        <div class="motion-skeleton h-6 w-20 rounded-full bg-muted animate-pulse" />
                       </div>
-                      <span class="whitespace-pre-wrap break-words">{{ planningError.message }}</span>
-                      <span v-if="planningError.fileName" class="break-words">{{ t('applicationsPage.planningFile') }}: {{ planningError.fileName }}</span>
-                      <span v-if="planningError.field">{{ t('applicationsPage.planningField') }}: {{ planningError.field }}</span>
-                      <span>{{ t(planningError.retryable ? 'applicationsPage.planningRetryHint' : 'applicationsPage.planningFixHint') }}</span>
+                      <div class="motion-skeleton h-3 w-56 max-w-full rounded bg-muted animate-pulse" />
                     </div>
-                    <div v-if="currentOperation" class="grid gap-3 rounded-2xl border border-border bg-muted p-4">
-                      <div class="flex flex-wrap items-center justify-between gap-2">
-                        <h3 class="m-0">{{ t('applicationsPage.currentDeployment') }}</h3>
-                        <Button v-if="currentOperation.operationId" size="sm" variant="ghost" @click="openApplicationActivity(currentOperation.operationId)"><ClipboardList />{{ t('applicationsPage.viewOperation') }}</Button>
-                      </div>
-                      <div class="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
-                        <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationPhase') }}</span><StatusBadge :status="currentOperationStatus" domain="operation" :tone="currentOperationStatus === 'result_unknown' ? 'warning' : undefined" :label="operationStatusLabel(currentOperationStatus)" /></div>
-                        <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationStage') }}</span><strong>{{ operationStageLabel(currentOperation.stage || '') }}</strong></div>
-                        <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationAttempt') }}</span><strong>{{ currentOperation.attempt ?? t('common.notAvailable') }}</strong></div>
-                        <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationNextRetry') }}</span><strong>{{ currentOperation.nextRunAt ? formatDateTime(currentOperation.nextRunAt) : t('common.notAvailable') }}</strong></div>
-                      </div>
-                      <p v-if="currentOperationStatus === 'result_unknown'" class="m-0 text-sm text-warning">{{ t('applicationsPage.unknownResultHint') }}</p>
-                      <div v-if="currentOperation.error || currentOperation.errorCode || currentOperation.errorDetail" role="alert" class="grid gap-1 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
-                        <strong>{{ t('applicationsPage.operationError') }}<span v-if="currentOperation.errorCode"> · {{ currentOperation.errorCode }}</span></strong>
-                        <span v-if="currentOperation.error">{{ currentOperation.error }}</span>
-                        <details v-if="currentOperation.errorDetail && currentOperation.errorDetail !== currentOperation.error"><summary class="cursor-pointer">{{ t('facilityDiagnostics.technicalDetails') }}</summary><pre class="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words text-xs">{{ currentOperation.errorDetail }}</pre></details>
-                      </div>
-                    </div>
-                    <div v-else-if="!planningError && selectedApplication.lastError" role="alert" class="rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">
-                      <strong>{{ t('applicationsPage.operationError') }}</strong>
-                      <p class="m-0 mt-1 whitespace-pre-wrap break-words">{{ selectedApplication.lastError }}</p>
-                    </div>
-                    <div class="rounded-2xl border border-border bg-muted p-4">
-                      <h3>{{ t('applicationsPage.nodeInstances') }}</h3>
-                      <div v-if="currentRuntime?.instances?.length" class="mt-3 grid gap-2">
-                        <div v-for="instance in currentRuntime.instances" :key="instance.instanceId || instance.id" class="grid gap-1 rounded-xl border border-border p-3 text-sm">
-                          <div class="flex items-center justify-between gap-2"><strong>{{ instance.serverName || instance.serverId || instance.instanceId }}</strong><StatusBadge :status="instance.status || instance.state || 'unknown'" :tone="statusTone(instance.status || instance.state || 'unknown')" :label="instanceStatusLabel(instance.status || instance.state || '')" /></div>
-                          <span class="text-muted-foreground">{{ instance.containerName || instance.containerId || t('common.notAvailable') }}</span>
-                          <span v-if="instance.lastError" class="text-danger">{{ instance.lastError }}</span>
-                        </div>
-                      </div>
-                      <div v-else-if="runtimeLoading" class="mt-3 grid gap-2" aria-hidden="true">
-                        <div v-for="item in 4" :key="item" class="grid gap-2 rounded-xl border border-border p-3">
-                          <div class="flex items-center justify-between gap-2">
-                            <div class="motion-skeleton h-4 w-36 rounded bg-muted animate-pulse" />
-                            <div class="motion-skeleton h-6 w-20 rounded-full bg-muted animate-pulse" />
-                          </div>
-                          <div class="motion-skeleton h-3 w-56 max-w-full rounded bg-muted animate-pulse" />
-                        </div>
-                      </div>
-                      <EmptyState v-else :title="t('applicationsPage.noRuntime')" :description="t('applicationsPage.noRuntimeHint')" />
-                    </div>
-                    </template>
-                  </section>
-                  <section v-else-if="appTab === 'routes'" class="grid gap-3 motion-stagger">
-                    <div v-for="rule in selectedApplication.reverseProxy" :key="rule.domain" class="motion-reveal rounded-2xl border border-border bg-muted p-4">
-                      <div class="flex items-center justify-between gap-2"><strong>{{ rule.domain }}</strong><Badge tone="info">{{ rule.targetPort }}</Badge></div>
-                      <p class="text-sm text-muted-foreground">{{ t('applicationsPage.originServers', { count: rule.originServerIds.length }) }} · {{ rule.originServerIds.map((id) => serverDisplayName(id)).join(', ') || t('common.notAvailable') }}</p>
-                      <div class="mt-2 flex flex-wrap gap-2"><Badge v-for="path in rule.paths" :key="path.path" tone="neutral">{{ path.path }}</Badge></div>
-                    </div>
-                    <EmptyState v-if="!selectedApplication.reverseProxy.length" :title="t('applicationsPage.noRoutes')" :description="t('applicationsPage.noRoutesHint')" />
-                  </section>
-                  <section v-else class="rounded-2xl border border-border bg-muted p-4">
-                    <div class="grid gap-3 motion-stagger">
-                      <div v-for="file in applicationFiles[selectedApplication.id] || []" :key="file.name" class="item-row motion-reveal">
-                        <div><strong>{{ file.name }}</strong><span>{{ file.size }} {{ t('applicationsPage.bytes') }}</span></div>
-                        <div class="row-actions">
-                          <DownloadButton size="sm" :loading="fileActionPending === `committed:${file.name}`" :label="t('common.download')" @click="downloadCommittedApplicationFile(file)" />
-                        </div>
-                      </div>
-                      <EmptyState v-if="!(applicationFiles[selectedApplication.id] || []).length" :title="t('applicationsPage.noFiles')" :description="t('applicationsPage.noCommittedFilesHint')" />
-                    </div>
-                  </section>
-                </Tabs>
+                  </div>
+                  <EmptyState v-else :title="t('applicationsPage.noRuntime')" :description="t('applicationsPage.noRuntimeHint')" />
+                </div>
+              </template>
+            </section>
+            <section v-else-if="appTab === 'routes'" class="grid gap-3 motion-stagger">
+              <div v-for="rule in selectedApplication.reverseProxy" :key="rule.domain" class="motion-reveal rounded-2xl border border-border bg-muted p-4">
+                <div class="flex items-center justify-between gap-2"><strong>{{ rule.domain }}</strong><Badge tone="info">{{ rule.targetPort }}</Badge></div>
+                <p class="text-sm text-muted-foreground">{{ t('applicationsPage.originServers', { count: rule.originServerIds.length }) }} · {{ rule.originServerIds.map((id) => serverDisplayName(id)).join(', ') || t('common.notAvailable') }}</p>
+                <div class="mt-2 flex flex-wrap gap-2"><Badge v-for="path in rule.paths" :key="path.path" tone="neutral">{{ path.path }}</Badge></div>
               </div>
-              <aside class="grid content-start gap-3">
-                <section class="rounded-2xl border border-border bg-muted p-4">
-                  <h3>{{ t('applicationsPage.operations') }}</h3>
-                  <div class="mt-3 grid gap-2">
-                    <ActivityLink resource-type="application" :resource-id="selectedApplication.id" />
+              <EmptyState v-if="!selectedApplication.reverseProxy.length" :title="t('applicationsPage.noRoutes')" :description="t('applicationsPage.noRoutesHint')" />
+            </section>
+            <section v-else-if="appTab === 'files'" class="rounded-2xl border border-border bg-muted p-4">
+              <div class="grid gap-3 motion-stagger">
+                <div v-for="file in applicationFiles[selectedApplication.id] || []" :key="file.name" class="item-row motion-reveal">
+                  <div><strong>{{ file.name }}</strong><span>{{ file.size }} {{ t('applicationsPage.bytes') }}</span></div>
+                  <div class="row-actions">
+                    <DownloadButton size="sm" :loading="fileActionPending === `committed:${file.name}`" :label="t('common.download')" @click="downloadCommittedApplicationFile(file)" />
                   </div>
-                </section>
-                <section class="rounded-2xl border border-border bg-muted p-4">
-                  <h3>{{ t('applicationsPage.persistentData') }}</h3>
-                  <p class="text-sm text-muted-foreground">{{ selectedApplication.hasPersistentData ? t('applicationsPage.persistentDataHint') : t('applicationsPage.persistentDataUnavailable') }}</p>
-                  <div v-if="persistentServerOptions.length" class="mt-3 grid gap-1.5">
-                    <span class="text-xs text-muted-foreground">{{ t('applicationsPage.persistentDataNode') }}</span>
-                    <Select v-model="persistentServerId" :options="persistentServerOptions" :placeholder="t('applicationsPage.selectPersistentDataNode')" />
-                  </div>
-                  <div class="mt-3 flex flex-wrap gap-2">
-                    <DownloadButton size="sm" :disabled="!persistentServerId" :loading="pending === 'persistent-download'" :label="t('applicationsPage.downloadPersistentData')" @click="downloadPersistentData(selectedApplication)" />
-                    <FileUploadButton size="sm" accept=".zip,application/zip" :disabled="!selectedApplication.persistentPath" :loading="pending === 'persistent-restore'" :label="t('applicationsPage.restorePersistentData')" @change="restorePersistentData" />
-                  </div>
-                </section>
-              </aside>
+                </div>
+                <EmptyState v-if="!(applicationFiles[selectedApplication.id] || []).length" :title="t('applicationsPage.noFiles')" :description="t('applicationsPage.noCommittedFilesHint')" />
+              </div>
+            </section>
+            <section v-else class="grid gap-4 rounded-2xl border border-border bg-muted p-4">
+              <div>
+                <h3 class="m-0">{{ t('applicationsPage.persistentData') }}</h3>
+                <p class="mt-2 text-sm text-muted-foreground">{{ selectedApplication.hasPersistentData ? t('applicationsPage.persistentDataHint') : t('applicationsPage.persistentDataUnavailable') }}</p>
+              </div>
+              <div v-if="persistentServerOptions.length" class="grid gap-1.5">
+                <span class="text-xs text-muted-foreground">{{ t('applicationsPage.persistentDataNode') }}</span>
+                <Select v-model="persistentServerId" :options="persistentServerOptions" :placeholder="t('applicationsPage.selectPersistentDataNode')" />
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <DownloadButton size="sm" :disabled="!persistentServerId" :loading="pending === 'persistent-download'" :label="t('applicationsPage.downloadPersistentData')" @click="downloadPersistentData(selectedApplication)" />
+                <FileUploadButton size="sm" accept=".zip,application/zip" :disabled="!selectedApplication.persistentPath" :loading="pending === 'persistent-restore'" :label="t('applicationsPage.restorePersistentData')" @change="restorePersistentData" />
+              </div>
+            </section>
+          </Tabs>
         </article>
       </ConsolePage>
     </template>
@@ -2212,28 +2249,26 @@ onBeforeUnmount(() => {
                   :labels="{ title: t('applicationsPage.staticAssets'), hint: t('applicationsPage.assetUploadLimit'), uploadAsset: t('applicationsPage.uploadAsset'), uploadAssetTitle: t('applicationsPage.uploadAssetTitle'), uploadType: t('applicationsPage.uploadType'), uploadTypeText: t('applicationsPage.uploadTypeText'), uploadTypeBinary: t('applicationsPage.uploadTypeBinary'), uploadTypeArchive: t('applicationsPage.uploadTypeArchive'), uploadFile: t('applicationsPage.uploadFile'), uploadArchive: t('applicationsPage.uploadArchive'), operationFailed: t('applicationsPage.operationFailed'), edit: t('common.edit'), replace: t('common.replace'), download: t('common.download'), delete: t('common.delete'), bytes: t('applicationsPage.bytes'), noAssets: t('applicationsPage.noAssets'), noAssetsHint: t('applicationsPage.noAssetsHint'), textTitle: t('applicationsPage.editTextFile'), newTextTitle: t('applicationsPage.newTextFile'), name: t('applicationsPage.assetReferenceName'), nameHint: t('applicationsPage.assetReferenceNameHint'), filename: t('applicationsPage.assetDownloadFilename'), filenameHint: t('applicationsPage.assetDownloadFilenameHint'), language: t('applicationsPage.highlightLanguage'), content: t('applicationsPage.fileContent'), loading: t('applicationsPage.fileLoading'), loadFailed: t('applicationsPage.fileLoadFailed'), cancel: t('common.cancel'), save: t('common.save'), close: t('common.close'), reload: t('applicationsPage.discardTextAndReload'), deleteTitle: t('applicationsPage.confirm.facility-asset-delete.title'), deleteDescription: t('applicationsPage.confirm.facility-asset-delete.description'), confirmDelete: t('common.delete') }"
                 />
               </section>
+
+              <section class="workspace-panel motion-enter">
+                <div class="section-copy"><h3>{{ t('applicationsPage.gatewayChangeSummary') }}</h3></div>
+                <div class="grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-5">
+                  <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.gatewayNodes') }}</span><strong>{{ facilityDraft.deploymentServers.length }}</strong></div>
+                  <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.domainGroups') }}</span><strong>{{ facilityDraft.domains.length }}</strong></div>
+                  <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.previewAdded') }}</span><strong>{{ facilityDiff.added }}</strong></div>
+                  <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.previewChanged') }}</span><strong>{{ facilityDiff.changed }}</strong></div>
+                  <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.previewRemoved') }}</span><strong>{{ facilityDiff.removed }}</strong></div>
+                </div>
+              </section>
+              <section class="workspace-panel motion-enter">
+                <div class="section-copy"><h3>{{ t('applicationsPage.diagnostics') }}</h3></div>
+                <div class="grid gap-2">
+                  <div v-for="item in facilityDiagnostics" :key="`${item.code}-${item.field}`" class="rounded-xl border p-3 text-sm" :class="item.severity === 'error' ? 'border-danger-border bg-danger-bg text-danger' : 'border-warning-border bg-warning-bg text-warning'">{{ item.field ? `${item.field}: ` : '' }}{{ item.message }}{{ diagnosticDetailText(item) }}</div>
+                  <p v-if="!facilityDiagnostics.length" class="m-0 text-sm text-muted-foreground">{{ t('applicationsPage.noDiagnostics') }}</p>
+                </div>
+              </section>
             </div>
           </section>
-  
-          <aside class="app-editor-summary">
-            <section class="rounded-2xl border border-border bg-card p-4">
-              <h3>{{ t('applicationsPage.gatewayChangeSummary') }}</h3>
-              <div class="mt-3 grid gap-2 text-sm">
-                <div><span>{{ t('applicationsPage.gatewayNodes') }}</span><strong>{{ facilityDraft.deploymentServers.length }}</strong></div>
-                <div><span>{{ t('applicationsPage.domainGroups') }}</span><strong>{{ facilityDraft.domains.length }}</strong></div>
-                <div><span>{{ t('applicationsPage.previewAdded') }}</span><strong>{{ facilityDiff.added }}</strong></div>
-                <div><span>{{ t('applicationsPage.previewChanged') }}</span><strong>{{ facilityDiff.changed }}</strong></div>
-                <div><span>{{ t('applicationsPage.previewRemoved') }}</span><strong>{{ facilityDiff.removed }}</strong></div>
-              </div>
-            </section>
-            <section class="rounded-2xl border border-border bg-card p-4">
-              <h3>{{ t('applicationsPage.diagnostics') }}</h3>
-              <div class="mt-3 grid gap-2">
-                <div v-for="item in facilityDiagnostics" :key="`${item.code}-${item.field}`" class="rounded-xl border p-3 text-sm" :class="item.severity === 'error' ? 'border-danger-border bg-danger-bg text-danger' : 'border-warning-border bg-warning-bg text-warning'">{{ item.field ? `${item.field}: ` : '' }}{{ item.message }}{{ diagnosticDetailText(item) }}</div>
-                <p v-if="!facilityDiagnostics.length" class="m-0 text-sm text-muted-foreground">{{ t('applicationsPage.noDiagnostics') }}</p>
-              </div>
-            </section>
-          </aside>
         </div>
         <template #footer>
           <div class="flex flex-wrap items-center justify-between gap-3">
@@ -2250,60 +2285,61 @@ onBeforeUnmount(() => {
     <template v-else-if="isStorageShareFacility">
       <StorageShareFacility :mode="mode" :servers="servers" />
     </template>
-    <div v-else class="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-      <section class="min-w-0">
-        <EmptyState v-if="!currentFacilitySummary" :title="t('applicationsPage.facilityUnavailable')" :description="t('applicationsPage.facilityUnavailableDescription', { kind: facilityKind })" />
-        <div v-else-if="loading && !facility" class="relative grid min-h-64 place-items-center">
-          <LoadingOverlay />
-        </div>
-        <div v-else-if="facility" class="overflow-hidden rounded-2xl border border-border bg-card">
-          <div class="grid grid-cols-4 gap-0 divide-x divide-border max-lg:grid-cols-2 max-lg:divide-x-0 max-lg:divide-y max-sm:grid-cols-1">
-            <div class="p-4"><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.gatewayNodes') }}</span><strong class="mt-1 block text-xl text-foreground">{{ facilityConfigSummary.gateways }}</strong></div>
-            <div class="p-4"><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.gatewayRoutes') }}</span><strong class="mt-1 block text-xl text-foreground">{{ facilityConfigSummary.routes }}</strong></div>
-            <div class="p-4"><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.staticAssets') }}</span><strong class="mt-1 block text-xl text-foreground">{{ facilityConfigSummary.assets }}</strong></div>
-            <div class="p-4"><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.applicationRoutes') }}</span><strong class="mt-1 block text-xl text-foreground">{{ facilityConfigSummary.appRoutes }}</strong></div>
+    <div v-else class="grid min-w-0 gap-4">
+      <EmptyState v-if="!currentFacilitySummary" :title="t('applicationsPage.facilityUnavailable')" :description="t('applicationsPage.facilityUnavailableDescription', { kind: facilityKind })" />
+      <div v-else-if="loading && !facility" class="relative grid min-h-64 place-items-center">
+        <LoadingOverlay />
+      </div>
+      <Tabs v-else-if="facility" v-model="activeFacilityTab" :tabs="facilityDetailTabs">
+        <section v-if="facilityTab === 'routes'" class="grid gap-4">
+          <div class="overflow-hidden rounded-2xl border border-border bg-card">
+            <div class="grid grid-cols-4 gap-0 divide-x divide-border max-lg:grid-cols-2 max-lg:divide-x-0 max-lg:divide-y max-sm:grid-cols-1">
+              <div class="p-4"><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.gatewayNodes') }}</span><strong class="mt-1 block text-xl text-foreground">{{ facilityConfigSummary.gateways }}</strong></div>
+              <div class="p-4"><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.gatewayRoutes') }}</span><strong class="mt-1 block text-xl text-foreground">{{ facilityConfigSummary.routes }}</strong></div>
+              <div class="p-4"><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.staticAssets') }}</span><strong class="mt-1 block text-xl text-foreground">{{ facilityConfigSummary.assets }}</strong></div>
+              <div class="p-4"><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.applicationRoutes') }}</span><strong class="mt-1 block text-xl text-foreground">{{ facilityConfigSummary.appRoutes }}</strong></div>
+            </div>
+            <section class="border-t border-border p-4">
+              <h3 class="m-0 text-sm font-semibold">{{ t('applicationsPage.routeSummaries') }}</h3>
+              <div class="mt-3 grid gap-2 motion-stagger">
+                <div v-for="summary in facility.routeSummaries" :key="`${summary.domain}-${summary.path}-${summary.source}`" class="motion-reveal grid gap-1 border-t border-border pt-3 text-sm first:border-t-0 first:pt-0">
+                  <div class="flex items-center justify-between"><strong>{{ summary.domain }}{{ summary.path }}</strong><StatusBadge :status="summary.httpsStatus" :tone="summary.httpsStatus === 'disabled' ? 'warning' : 'success'" /></div>
+                  <span class="text-muted-foreground">{{ summary.source }} / {{ summary.serverIds.map((id) => serverDisplayName(id)).join(', ') }}</span>
+                </div>
+                <EmptyState v-if="!facility.routeSummaries.length" :title="t('applicationsPage.noGatewayRoutes')" :description="t('applicationsPage.noGatewayRoutesHint')" />
+              </div>
+            </section>
+            <section class="border-t border-border p-4">
+              <h3 class="m-0 text-sm font-semibold">{{ t('applicationsPage.dnsSyncTitle') }}</h3>
+              <div class="mt-3 grid gap-2 motion-stagger">
+                <div v-for="domain in facility.domains" :key="`dns-${domain.domain}`" class="motion-reveal flex items-center justify-between gap-3 border-t border-border pt-3 text-sm first:border-t-0 first:pt-0">
+                  <strong>{{ domain.domain }}</strong>
+                  <Badge :tone="facilityDnsTone(facilityDnsStatus(domain.domain))" :title="facilityDnsError(domain.domain) || undefined">{{ t(`applicationsPage.dnsSync.${facilityDnsStatus(domain.domain) || 'unknown'}`) }}</Badge>
+                </div>
+                <EmptyState v-if="!facility.domains.length" :title="t('applicationsPage.noDomains')" :description="t('applicationsPage.noDomainsHint')" />
+              </div>
+            </section>
+            <section class="border-t border-border p-4">
+              <h3 class="m-0 text-sm font-semibold">{{ t('applicationsPage.staticAssets') }}</h3>
+              <div class="mt-3 grid gap-2 motion-stagger">
+                <div v-for="asset in facility.staticAssets" :key="asset.name" class="item-row motion-reveal">
+                  <div><strong>{{ asset.name }}</strong><span>{{ asset.filename }} · {{ asset.size }} {{ t('applicationsPage.bytes') }}</span></div>
+                  <DownloadButton size="sm" :loading="assetActionPending === `committed:${asset.name}`" :label="t('common.download')" @click="downloadCommittedFacilityAsset(asset)" />
+                </div>
+                <EmptyState v-if="!facility.staticAssets.length" :title="t('applicationsPage.noAssets')" :description="t('applicationsPage.noAssetsHint')" />
+              </div>
+            </section>
           </div>
-          <section class="border-t border-border p-4">
-            <h3 class="m-0 text-sm font-semibold">{{ t('applicationsPage.routeSummaries') }}</h3>
-            <div class="mt-3 grid gap-2 motion-stagger">
-              <div v-for="summary in facility.routeSummaries" :key="`${summary.domain}-${summary.path}-${summary.source}`" class="motion-reveal grid gap-1 border-t border-border pt-3 text-sm first:border-t-0 first:pt-0">
-                <div class="flex items-center justify-between"><strong>{{ summary.domain }}{{ summary.path }}</strong><StatusBadge :status="summary.httpsStatus" :tone="summary.httpsStatus === 'disabled' ? 'warning' : 'success'" /></div>
-                <span class="text-muted-foreground">{{ summary.source }} / {{ summary.serverIds.map((id) => serverDisplayName(id)).join(', ') }}</span>
-              </div>
-              <EmptyState v-if="!facility.routeSummaries.length" :title="t('applicationsPage.noGatewayRoutes')" :description="t('applicationsPage.noGatewayRoutesHint')" />
-            </div>
-          </section>
-          <section class="border-t border-border p-4">
-            <h3 class="m-0 text-sm font-semibold">{{ t('applicationsPage.dnsSyncTitle') }}</h3>
-            <div class="mt-3 grid gap-2 motion-stagger">
-              <div v-for="domain in facility.domains" :key="`dns-${domain.domain}`" class="motion-reveal flex items-center justify-between gap-3 border-t border-border pt-3 text-sm first:border-t-0 first:pt-0">
-                <strong>{{ domain.domain }}</strong>
-                <Badge :tone="facilityDnsTone(facilityDnsStatus(domain.domain))" :title="facilityDnsError(domain.domain) || undefined">{{ t(`applicationsPage.dnsSync.${facilityDnsStatus(domain.domain) || 'unknown'}`) }}</Badge>
-              </div>
-              <EmptyState v-if="!facility.domains.length" :title="t('applicationsPage.noDomains')" :description="t('applicationsPage.noDomainsHint')" />
-            </div>
-          </section>
-          <section class="border-t border-border p-4">
-            <h3 class="m-0 text-sm font-semibold">{{ t('applicationsPage.staticAssets') }}</h3>
-            <div class="mt-3 grid gap-2 motion-stagger">
-              <div v-for="asset in facility.staticAssets" :key="asset.name" class="item-row motion-reveal">
-                <div><strong>{{ asset.name }}</strong><span>{{ asset.filename }} · {{ asset.size }} {{ t('applicationsPage.bytes') }}</span></div>
-                <DownloadButton size="sm" :loading="assetActionPending === `committed:${asset.name}`" :label="t('common.download')" @click="downloadCommittedFacilityAsset(asset)" />
-              </div>
-              <EmptyState v-if="!facility.staticAssets.length" :title="t('applicationsPage.noAssets')" :description="t('applicationsPage.noAssetsHint')" />
-            </div>
-          </section>
-        </div>
-      </section>
-      <aside class="grid min-h-0 content-start gap-3 overflow-y-auto rounded-2xl border border-border bg-card p-4">
-        <h3>{{ t('applicationsPage.gatewayDetails') }}</h3>
-        <div v-if="facility" class="grid gap-3 text-sm">
-          <div><span>{{ t('applicationsPage.lastUpdated') }}</span><strong>{{ formatDateTime(facility.updatedAt) || t('common.never') }}</strong></div>
-          <div v-if="facility.operation"><span>{{ t('applicationsPage.currentOperation') }}</span><StatusBadge :status="facility.operation.status" domain="operation" /></div>
-          <div v-if="facility.reconcileStopped"><StatusBadge :status="'needs_attention'" domain="operation" :label="t('applicationsPage.status.attention')" /></div>
+        </section>
+        <section v-else class="grid gap-4">
+          <div class="grid gap-3 border-b border-border pb-4 text-sm sm:grid-cols-2">
+            <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.lastUpdated') }}</span><strong>{{ formatDateTime(facility.updatedAt) || t('common.never') }}</strong></div>
+            <div v-if="facility.operation"><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.currentOperation') }}</span><StatusBadge :status="facility.operation.status" domain="operation" /></div>
+            <div v-if="facility.reconcileStopped"><StatusBadge :status="'needs_attention'" domain="operation" :label="t('applicationsPage.status.attention')" /></div>
+          </div>
           <FacilityDiagnostics :config="facility" />
-        </div>
-      </aside>
+        </section>
+      </Tabs>
     </div>
   </ConsolePage>
 

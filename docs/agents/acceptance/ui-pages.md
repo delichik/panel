@@ -50,7 +50,7 @@
 
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
-| UI-SRV-001 | 打开列表、搜索、翻页或选择服务器 | 服务端 `page/pageSize/q` 查询；URL 恢复 search/page/server/tab；表格列展示名称、地址、可达性、Agent、权限、Tailscale、最近检查；点击行内「详情」或名称列按需 GET 完整详情并覆盖列表 | 列表失败显示重试而非空态；切换服务器时取消/忽略旧详情并清空旧 tab 数据；无选中时不自动打开详情；不得依赖整行点击 | 分享 URL 恢复相同页、服务器与 tab；不会显示上一服务器的迟到详情 |
+| UI-SRV-001 | 打开列表、搜索、翻页或选择服务器 | 服务端 `page/pageSize/q` 查询；URL 恢复 search/page/server/tab/subtab；表格列展示名称、地址、可达性、最近检查（Agent/权限/Tailscale 进 Overview，不常驻列表）；行操作保留「详情」+ 至多 1 个高频（测试连接），编辑/删除进 More；点击「详情」或名称列按需 GET 完整详情并覆盖列表 | 列表失败显示重试而非空态；切换服务器时取消/忽略旧详情并清空旧 tab 数据；无选中时不自动打开详情；不得依赖整行点击 | 分享 URL 恢复相同页、服务器与 tab/subtab；不会显示上一服务器的迟到详情 |
 | UI-SRV-002 | 查看服务器详情 | 覆盖式详情展示连接地址、端口、凭据、Docker host、OS、权限与安全、最近检查/更新时间、初始化任务与资源 tabs | 凭据列表失败只影响凭据显示/表单并 toast，不得抹掉服务器列表；选中服务器不在当前页时按 id 单独补载 | 详情先显示已加载字段，完整详情加载有局部覆盖 |
 | UI-SRV-003 | 新建/编辑服务器 | 表单含 name、IPv4、IPv6、port、credential、SSH username、Docker host、变量、notes；至少一个地址且为 IP 字面量，port 1–65535，name/credential/dockerHost 必填；基础连接（名称/地址/端口/凭据/SSH 用户名）与高级配置（Docker host/变量/备注）分区，创建时高级区默认折叠、编辑时展开 | host 只读由 IPv4 优先、否则 IPv6 派生；无效字段在字段下方就地显示本地化错误，底部摘要列出全部错误并点击聚焦对应字段 | 无效字段有本地化提示且无写请求；编辑需以完整详情填充；任何字段错误都可通过摘要定位 |
 | UI-SRV-004 | 点击“探测” | 用当前未保存表单调 probe 并在基础连接区显示 reachable/error/OS/架构/特权；探测请求只发送连接字段（地址、端口、凭据、SSH 用户名） | 探测闸门只受地址/端口/凭据约束，名称与 Docker host 错误不得连坐禁用探测；连接字段变化后旧结果标记过期（灰化）提示重新探测；探测失败保留输入并非保存、不产生服务器记录 | probe 请求不含名称/Docker host/变量，结果与输入对应；创建/探测按钮可用性互不影响 |
@@ -65,16 +65,16 @@
 | UI-SRV-012 | 无可用凭据时新建服务器 | 凭据区显示“尚无 SSH 凭据”引导与添加入口，可在弹窗内快捷创建凭据；成功后自动选中新凭据 | 凭据列表加载失败在弹窗内就地显示错误与重试，不影响服务器其余表单 | 快捷创建后凭据即时可用于表单与探测；无需离开当前弹窗 |
 | UI-SRV-013 | 查看新建服务器初始化状态 | 概况 tab 以状态卡展示初始化任务（StatusBadge + 错误 + 活动入口），而非仅纯文本任务 id | 初始化任务加载失败有局部错误；任务失败时服务器保留、标记不可达并在状态卡持久展示原因，供编辑/删除 | 活跃初始化任务刷新，终态与失败原因可经任务状态与活动日志追溯 |
 | UI-SRV-014 | 在服务器表单中配置 Tailscale 意图 | 「将该节点加入 tailnet」与两个偏好开关（Agent 连接、节点互联）；未启用时两个偏好开关禁用并显示说明，提交时未启用的一侧偏好被规范化为 false | 不得在未启用时提交偏好组合；不得只依赖后端强制而在界面保留可点击的无效开关 | 重新打开表单回显与服务端一致的三个开关，保存后详情与列表按服务端返回状态渲染 |
-| UI-SRV-016 | 查看服务器 Tailscale 状态或手动重试 | `tailscaleEnabled` 时列表行与 Tailscale tab 显示状态徽标（`disabled`/`pending`/`installing`/`running`/`degraded`/`unsupported`/`error` 的本地化文案）；Tailscale tab 只读展示三个开关、主机名、IPv4/IPv6、状态更新时间与 `lastError`；「重试 / 应用 Tailscale」提交任务并提示真实 taskId，随后刷新服务器详情 | 未启用时显示未配置说明且重试禁用；从未上报时显示明确空态而不是伪造状态；失败必须显示原因且可重试，不得把“任务已受理”表述为节点已加入 | toast 中的 taskId 可在任务中心定位；徽标与 `tailscale.status` 一致，`lastError` 脱敏后原样展示 |
-| UI-SRV-017 | 在服务器详情切换资源 tabs | 详情一级 tab 固定为 概况/监控/Agent/Tailscale/容器/镜像/网络/存储卷/软件包/防火墙；tab 首次激活才请求并在详情存活期内缓存，切换服务器或关闭详情清空旧数据；`tab` 进 URL，深链直达；监控轮询只在详情打开且该 tab 激活时运行；防火墙内 UFW/Fail2Ban 子视图选择进 URL，Fail2Ban 仅 dev 可见 | 切 tab 不得清空已加载快照或重复请求；能力不足在对应 tab 内给出阻断原因；不得用页面级滚动承载 tab 内容 | tab 切换无闪烁且状态保留；深链 `?server=&tab=` 恢复对应 tab；非 dev 无 Fail2Ban 子视图 |
-| UI-SRV-018 | 查看/操作资源表格 | 容器/镜像/网络/存储卷/软件包在各自 tab 内以表格展示；容器行操作：日志、启动/停止/重启/删除（确认 + 托管提示）；镜像：拉取、升级应用、清理未使用、删除（in-use 禁删、危险确认强制勾选）；网络只读且删除禁用；存储卷：清理未使用、删除（in-use 禁删、确认强制勾选）；软件包：勾选只对当前快照，批量栏仅在有选中时出现，升级全部先 danger 确认；网络/存储卷首次打开且无快照时自动提交刷新任务 | 根据状态/能力禁用无效动作；操作按钮按（行, 操作）单独 loading；失败保留快照并 toast；不得把失败当作空列表 | 表格列包含名称/关键状态；请求 payload 与选中项一致；取消确认零请求；成功后重载当前 tab |
-| UI-SRV-019 | 在防火墙 tab 维护 UFW / Fail2Ban | UFW 展示 supported/installed/active/default policy 与规则号/action/to/from，提供新增 allow rule 与删除规则（确认、受保护端口/受管规则由后端拒绝），并展示「安装与启用由 Agent 部署自动完成」说明；Fail2Ban 可在 visual 与 YAML 间切换，提供 preset、jail 删除、保存草稿、安装、启用/接管确认、释放（danger 确认）；保存草稿仅在 YAML 变化时启用 | 页面不得出现 UFW 安装/启用入口；未勾选接管不提交；保存不等于启用；失败保留草稿/输入 | 规则增删使用返回值重建列表；toast 只承诺任务接受并含真实 taskId；visual 往返可解析 |
+| UI-SRV-016 | 查看服务器 Tailscale 状态或手动重试 | `tailscaleEnabled` 时 Overview 身份条与 Tailscale tab 显示状态徽标（`disabled`/`pending`/`installing`/`running`/`degraded`/`unsupported`/`error` 的本地化文案）；列表不再常驻 Tailscale 列；Tailscale tab 单列只读展示三个开关、主机名、IPv4/IPv6、状态更新时间与 `lastError`；「应用 Tailscale」位于详情页头 actions，提交任务并提示真实 taskId，随后刷新服务器详情 | 未启用时显示未配置说明且页头应用按钮禁用；从未上报时显示明确空态而不是伪造状态；失败必须显示原因且可重试，不得把“任务已受理”表述为节点已加入 | toast 中的 taskId 可在任务中心定位；徽标与 `tailscale.status` 一致，`lastError` 脱敏后原样展示 |
+| UI-SRV-017 | 在服务器详情切换 tabs | 详情一级 tab 固定为 概况/监控/Agent/Tailscale/**资源**/软件包/防火墙；Docker 的容器/镜像/网络/存储卷合并进「资源」并用 URL `subtab`（`containers`/`images`/`networks`/`volumes`，默认 containers）切换；旧 `tab=containers|images|networks|volumes` 作兼容别名映射到 `tab=resources&subtab=…`；一级/资源 subtab 首次激活才请求并在详情存活期内缓存，切换服务器或关闭详情清空旧数据；监控轮询只在详情打开且该 tab 激活时运行；防火墙内 UFW/Fail2Ban 用分段控件（非嵌套 Tabs），选择进 URL `subtab`，Fail2Ban 仅 dev 可见 | 切 tab/subtab 不得清空已加载快照或重复请求；能力不足在对应面板内给出阻断原因；不得用页面级滚动承载 tab 内容；Overview/Tailscale/Agent 单列展示，禁止无关 aside | tab 切换无闪烁且状态保留；深链 `?server=&tab=resources&subtab=images` 与旧 `?tab=images` 均恢复对应面板；非 dev 无 Fail2Ban 子视图 |
+| UI-SRV-018 | 查看/操作资源表格 | 容器/镜像/网络/存储卷在资源 subtab、软件包在一级 tab 内以表格展示；子页去掉重复「左侧标题复述 tab 名」；镜像/Fail2Ban 工具栏收敛为**一个主操作 + Refresh，其余进 More**；容器行操作收紧为图标主操作（启动/日志）+ 溢出（停止/重启/删除，确认 + 托管提示）；镜像：拉取、升级应用、清理未使用、删除（in-use 禁删、危险确认强制勾选）；网络只读且删除禁用；存储卷：清理未使用、删除（in-use 禁删、确认强制勾选）；软件包：勾选只对当前快照，批量栏仅在有选中时出现，升级全部先 danger 确认；网络/存储卷首次打开且无快照时自动提交刷新任务 | 根据状态/能力禁用无效动作；操作按钮按（行, 操作）单独 loading；失败保留快照并 toast；不得把失败当作空列表 | 表格列包含名称/关键状态；请求 payload 与选中项一致；取消确认零请求；成功后重载当前面板 |
+| UI-SRV-019 | 在防火墙 tab 维护 UFW / Fail2Ban | UFW 展示 supported/installed/active/default policy 与规则号/action/to/from，提供新增 allow rule 与删除规则（确认、受保护端口/受管规则由后端拒绝），并展示「安装与启用由 Agent 部署自动完成」说明；Fail2Ban 可在 visual 与 YAML 间切换，提供 preset、jail 删除、保存草稿、安装、启用/接管确认、释放（danger 确认）；保存草稿仅在 YAML 变化时启用；UFW/Fail2Ban 切换用分段控件而非嵌套一级 Tabs | 页面不得出现 UFW 安装/启用入口；未勾选接管不提交；保存不等于启用；失败保留草稿/输入 | 规则增删使用返回值重建列表；toast 只承诺任务接受并含真实 taskId；visual 往返可解析 |
 
 ## 6. SSH 凭据 `/credentials`
 
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
-| UI-CRED-001 | 列表搜索、翻页、选择 | 服务端分页/q；URL 恢复 search/page/credential；表格显示名称、类型、用户名、引用数和更新时间；点击「详情」或名称列覆盖列表并按需加载 key summary | 列表/详情错误分别显示重试；服务器列表失败不得泄露或伪造引用；详情打开时列表保持挂载但不可交互；不得依赖整行点击 | 选择变化只展示对应详情，私钥材料正文从不出现在详情 |
+| UI-CRED-001 | 列表搜索、翻页、选择 | 服务端分页/q；URL 恢复 search/page/credential；表格显示名称、类型、用户名、引用数和更新时间；点击「详情」或名称列覆盖列表并按需加载 key summary；详情单列纵向分节（密钥摘要 + 引用），不得短侧栏左右分栏 | 列表/详情错误分别显示重试；服务器列表失败不得泄露或伪造引用；详情打开时列表保持挂载但不可交互；不得依赖整行点击 | 选择变化只展示对应详情，私钥材料正文从不出现在详情 |
 | UI-CRED-002 | 新建密码凭据 | name、username、password 必填；成功后打开新凭据覆盖详情并刷新列表 | 密码不得出现在列表、toast 或日志 | 空 secret 无请求，保存后仅显示元数据 |
 | UI-CRED-003 | 新建私钥凭据 | name、username、private key 必填，passphrase 可选；large 弹窗用 CodeEditor | 无效/空私钥不提交；密钥正文不回显到详情 | 成功后详情仅展示 comment/algorithm/bits/fingerprint |
 | UI-CRED-004 | 编辑凭据 | 预填非 secret 字段；类型未变时 secret 留空表示保留；类型切换必须重新提供新类型 secret，并清旧 secret 输入 | 不得以空字符串覆盖现有 secret；passphrase 仅非空才发送 | API payload 单测证明编辑空 secret 字段被省略 |
@@ -122,8 +122,8 @@
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
 | UI-APP-001 | `/applications/apps` 搜索、翻页、选择 | 服务端分页/q；URL 恢复 search/page/application；表格显示名称、状态、镜像引用、实例数、镜像更新与更新时间；点击「详情」或名称列覆盖列表；规划失败显示“部署被阻塞”，uncertainty 显示“结果待核实” | summary 缺 imageReference 时仅按行补详情并在该行显示骨架；失败不得把整表清空为假空态；不能将运行实例存在解释为最新部署成功；不得依赖整行点击 | 行级补载互不阻塞，选中项完整详情/runtime/files 按需请求；状态按 `APP-PLAN-001`、`APP-RUN-004` 派生 |
-| UI-APP-002 | 查看 Runtime tab | 显示实例总数/运行/失败及每服务器实例、容器和 `lastError`；当前 Job 显示真实状态、步骤、attempt、nextRunAt、错误码/消息/详情与 operation 深链；独立显示规划失败原因、可用字段/文件名、修复或重试说明及活动入口；uncertainty 明确提示结果待核实 | runtime 失败 toast 且详情内 EmptyState 可重试；详情/files 加载失败用 `detailError` EmptyState 重试，不得只 toast 后空白；换应用清旧 runtime/错误；终态 failed 不得消失；无 Job 的规划失败也必须显示，不能覆盖实际实例状态 | 实例/Job 状态文本与徽标一致；active 或当前规划错误基线 3 秒有界轮询，按 nextRunAt 对齐，隐藏暂停，最多 24 次或 2 分钟；新 runtime 无规划错误时清除旧 DTO 告警；`tab` 查询与 runtime/routes/files 双向同步 |
-| UI-APP-003 | 查看 Routes/Files tab | Routes 显示域名、目标端口、来源服务器名和 paths；Files 只列已提交文件并支持 blob 下载；URL `tab=routes|files` 可深链恢复 | 无路由/文件有专属空态；详情/files 失败走详情作用域错误重试；服务器名未知才回退 ID；关闭详情清 `tab` | 文件名和下载名符合 kind/contentType，下载带 auth |
+| UI-APP-002 | 查看 Runtime tab | 显示实例总数/运行/失败及每服务器实例、容器和 `lastError`；当前 Job 显示真实状态、步骤、attempt、nextRunAt、错误码/消息/详情与 operation 深链；独立显示规划失败原因、可用字段/文件名、修复或重试说明及活动入口；uncertainty 明确提示结果待核实；详情单列，`ActivityLink` 在页头 actions，不得常驻右侧 aside | runtime 失败 toast 且详情内 EmptyState 可重试；详情/files 加载失败用 `detailError` EmptyState 重试，不得只 toast 后空白；换应用清旧 runtime/错误；终态 failed 不得消失；无 Job 的规划失败也必须显示，不能覆盖实际实例状态 | 实例/Job 状态文本与徽标一致；active 或当前规划错误基线 3 秒有界轮询，按 nextRunAt 对齐，隐藏暂停，最多 24 次或 2 分钟；新 runtime 无规划错误时清除旧 DTO 告警；`tab` 查询与 runtime/routes/files/data 双向同步 |
+| UI-APP-003 | 查看 Routes/Files/Data tab | Routes 显示域名、目标端口、来源服务器名和 paths；Files 只列已提交文件并支持 blob 下载；Data tab 承载持久化数据节点选择与下载/恢复；URL `tab=routes|files|data` 可深链恢复（缺省 runtime） | 无路由/文件有专属空态；详情/files 失败走详情作用域错误重试；服务器名未知才回退 ID；关闭详情清 `tab` | 文件名和下载名符合 kind/contentType，下载带 auth |
 | UI-APP-004 | 点击行内同步/部署 | 提交人工 deploy；实际规划时显示真实 operationId/deploymentId 并刷新，`noChange=true` 时明确提示已是期望状态 | 不得被自动退避静默吞掉，不得把 no-change 或请求接受宣称为部署完成；失败后也重载列表/详情/runtime，使持久化规划诊断立即可见 | toast 与实际响应字段一致，operation 深链可恢复后续状态；修正后计划成功或已满足期望时清当前告警、保留失败历史 |
 | UI-APP-005 | 行内停用应用 | enabled 时可点，先 danger 确认后调用 stop；成功只提示请求接受并刷新 | 已停用禁用；失败保持应用状态 | 取消无请求，成功后状态来自重载而非前端假改 |
 | UI-APP-006 | 行内检查并更新镜像 | 仅 `imageUpdateAvailable` 时启用；提交 update 并按两阶段反馈 | 无更新时不请求 | 返回 ID 的 toast 正确，刷新后徽标由后端决定 |
@@ -194,7 +194,7 @@
 | --- | --- | --- | --- | --- |
 | UI-FAC-001 | 打开设施目录 | 固定展示 reverse-proxy 与 storage-share 卡片、类别/可用状态、异步统计；管理进入对应详情 | 不调用不存在的设施 list API；统计加载用骨架 | reverse-proxy 显示路由/节点/资产，storage-share 显示分区/服务器/根目录数 |
 | UI-FAC-002 | 目录点击“协调/同步” | reverse proxy 调 reconcile；storage share 仅 enabled 时可调；反馈遵守两阶段 | 未配置 storage share 禁用；无 ID 不显示假 ID | 当前卡片独立 loading，完成后目录重载 |
-| UI-FAC-003 | 查看 reverse-proxy 详情 | 展示网关/路由/资产/应用路由统计、route summaries、DNS 同步、静态资产下载、当前 operation/reconcileStopped/lastError | 未知 facilityKind 显示不可用空态；加载失败可重试 | 用户可见服务器使用名称，未知才回退 ID |
+| UI-FAC-003 | 查看 reverse-proxy 详情 | 单列 + Tabs：`routes`（默认）纵向叠放 KPI、route summaries、DNS 同步、静态资产下载；`nodes` 展示 operation/reconcileStopped 与 `FacilityDiagnostics`；`tab` 进 URL；禁止主栏+右侧诊断常驻左右分栏 | 未知 facilityKind 显示不可用空态；加载失败可重试 | 用户可见服务器使用名称，未知才回退 ID；深链 `?tab=nodes` 直达节点状态 |
 | UI-FAC-004 | DNS 同步为 pending | 非编辑态、可见标签每约 3 秒重载设施直至不 pending | 编辑中停止轮询；离开清 timer | 状态从 pending 更新且不覆盖编辑草稿 |
 | UI-FAC-005 | 进入入口代理编辑 | 详情页就地展开，config 深链也可直达；先创建 durable session，再显示连续流：网关、域名/路由、静态资产 | 会话失败显示重试；编辑中隐藏详情 reconcile/refresh 操作 | 两个入口得到同一草稿与提交行为 |
 | UI-FAC-006 | 修改网关服务器 | 仅从服务器选择；移除网关时自动剪除各域名 origin/primary/relay，并以 warning 告知数量 | 不得留下指向非网关服务器的引用 | payload 中所有关联服务器均属于 deploymentServers |

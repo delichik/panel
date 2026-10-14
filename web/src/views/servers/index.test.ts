@@ -169,11 +169,29 @@ describe('servers page table and covered detail', () => {
     await flushPromises();
 
     expect(containers).not.toHaveBeenCalled();
-    const containersTab = wrapper.findAll('[role="tab"]').find((tab) => tab.text() === 'Containers')!;
-    await containersTab.trigger('click');
+    const resourcesTab = wrapper.findAll('[role="tab"]').find((tab) => tab.text() === 'Resources')!;
+    await resourcesTab.trigger('click');
     await flushPromises();
 
     expect(containers).toHaveBeenCalledWith('srv-1', expect.anything());
     expect(wrapper.text()).toContain('No containers');
+    expect(wrapper.findAll('[role="tab"]').some((tab) => tab.text() === 'Images')).toBe(true);
+  });
+
+  it('maps legacy resource tab query aliases onto resources + subtab', async () => {
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/servers', component: ServersPage }] });
+    await router.push({ path: '/servers', query: { server: 'srv-1', tab: 'images' } });
+    await router.isReady();
+    const wrapper = mount(ServersPage, {
+      global: {
+        plugins: [router],
+        provide: { [toastKey as symbol]: { push: vi.fn(), remove: vi.fn() } },
+      },
+      attachTo: document.body,
+    });
+    await flushPromises();
+
+    expect(wrapper.findAll('[role="tab"]').find((tab) => tab.text() === 'Resources')?.attributes('aria-selected')).toBe('true');
+    expect(wrapper.findAll('[role="tab"]').find((tab) => tab.text() === 'Images')?.attributes('aria-selected')).toBe('true');
   });
 });

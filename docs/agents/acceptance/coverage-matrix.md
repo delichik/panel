@@ -35,6 +35,7 @@
 - 同轮窄屏主从单视图：`MasterDetailLayout` 新增 `back-label`/`has-detail`/`back` 单视图能力（`<xl` 一次只显示列表或详情，详情带返回列表操作），7 个主从页面接入并用 `useCompactViewport` 关闭窄屏自动选中首条；activity 保留自带的列表⇄详情切换。新增 `composables/useCompactViewport.ts` 与 `useCompactViewport.test.ts`，对应 `UI-SHELL-019/058`；不新增路由、API 或数据表。
 - 验证证据（2026-09-26/27，WSL Debian / Node 22.23.3 / task 3.53.1）：`task test:web` = 48 个文件 259 项全通过；`task build:web`（`vue-tsc --noEmit && vite build`）退出码 0；构建产物抽查确认新类均已生成，且入场动画只保留 `backwards`（无 `both`）。测试期间修掉 `MasterDetailLayout` 模板前置注释导致的多根问题（会静默丢弃页面传入的 class）与 `views/applications` 自建 `.workspace-panel` 入场动画。
 
+- 内容区去分栏与服务器详情打磨：反向代理设施 `routes`/`nodes` Tabs、应用详情 `data` tab 与页头 ActivityLink、StorageShare/凭据/证书详情改为纵向叠放；服务器一级 tab 合并 Docker 为 `resources`+`subtab`（旧 tab 名兼容）、列表瘦列与工具栏收敛。不新增路由/API/表；对应 `UI-FAC-003`、`UI-APP-002/003`、`UI-SRV-016/017/018/019`、`UI-CRED-001`。
 - 应用部署反馈：既有应用页增加部署规划失败、结果待核实、原因与活动入口，不新增路由；对应 `UI-APP-001/002/004`、`APP-PLAN-001`、`APP-RUN-004`。
 - Debug 既有清理操作增加阶段/时间、刷新恢复、部分失败与结果待核实展示；保留危险勾选确认，不新增路由；对应 `UI-DBG-007/008`。
 - 服务器创建/编辑重构：基础/高级分区、无凭据引导与弹窗内快捷创建、探测与保存解耦并标记过期、变量严格校验、创建后初始化任务跟踪与失败保留态，不新增路由；对应 `UI-SRV-003/004/005/011/012/013`，后端初始采集失败改为保留服务器并标记失败，对应 `SRV-SAVE-005/006`。
