@@ -382,12 +382,38 @@ func (s *Service) SetJWTSecret(ctx context.Context, secret string) (RuntimeSetti
 	if err := s.saveValues(ctx, map[string]string{RuntimeSettingJWTSecret: secret}); err != nil {
 		return RuntimeSettings{}, err
 	}
+	return s.ApplyJWTSecret(secret), nil
+}
+
+// PersistJWTSecretTx writes the JWT secret into an existing AppDB transaction.
+// Callers must invoke ApplyJWTSecret only after the transaction commits.
+func (s *Service) PersistJWTSecretTx(ctx context.Context, tx *sql.Tx, secret string) error {
+	secret = strings.TrimSpace(secret)
+	if err := ValidateJWTSecret(secret); err != nil {
+		return err
+	}
+	if tx == nil {
+		return errors.New("jwt secret transaction is required")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := orm.RawExec(ctx, tx, `
+		INSERT INTO runtime_settings(key, value, updated_at)
+		VALUES (?, ?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+	`, RuntimeSettingJWTSecret, secret, now)
+	return err
+}
+
+// ApplyJWTSecret updates the in-memory runtime snapshot after a committed JWT
+// secret write (standalone or as part of an atomic account update).
+func (s *Service) ApplyJWTSecret(secret string) RuntimeSettings {
+	secret = strings.TrimSpace(secret)
 	s.mu.Lock()
 	s.rt.JWTSecret = secret
 	s.rt.JWTSecretConfigured = true
 	out := s.rt
 	s.mu.Unlock()
-	return out, nil
+	return out
 }
 
 func (s *Service) ServerVariableDefinitions(ctx context.Context) ([]ServerVariableDefinition, error) {

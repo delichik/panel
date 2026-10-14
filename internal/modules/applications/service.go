@@ -2290,7 +2290,12 @@ func (s *Service) PlanApplicationDeployment(ctx context.Context, req DeploymentP
 		if recordErr := s.recordPlanningOutcome(recordCtx, app, req, err); recordErr != nil {
 			log.Printf("application %s planning failure could not be recorded", app.ID)
 		}
-		return DeploymentPlanResult{}, err
+		// Earlier planning batches may already have persisted Jobs. Wake the
+		// controller for those jobs and surface their IDs to the caller.
+		if len(result.JobIDs) > 0 || len(result.CreatedJobIDs) > 0 {
+			s.enqueueDeploymentPlanResult(result)
+		}
+		return result, err
 	}
 	if result.planningValidated || len(result.JobIDs) > 0 {
 		if recordErr := s.recordPlanningOutcome(recordCtx, app, req, nil); recordErr != nil {
@@ -2373,30 +2378,30 @@ func (s *Service) planApplicationDeploymentV3(ctx context.Context, req Deploymen
 		}
 		result, err = s.planOrchestratorTargets(ctx, app, serverIDsFromTargets(targets), controlplane.ActionApply, controlplane.DesiredRunning, controlplane.Revision{}, baseSpec, files, req, triggerType)
 		if err != nil {
-			return DeploymentPlanResult{}, err
+			return result, err
 		}
 		result.planningValidated = validated
 	}
 
 	removedTargets, err := s.reconcileRemovedTargets(ctx, app)
 	if err != nil {
-		return DeploymentPlanResult{}, err
+		return result, err
 	}
 	removedResult, err := s.planOrchestratorTargets(ctx, app, removedTargets, controlplane.ActionPurge, controlplane.DesiredPurged, controlplane.Revision{}, appruntime.Spec{}, nil, req, triggerType)
-	if err != nil {
-		return DeploymentPlanResult{}, err
-	}
 	result = mergeDeploymentPlanResults(result, removedResult)
+	if err != nil {
+		return result, err
+	}
 	if len(req.StopServers) > 0 {
 		action, desired := controlplane.ActionStop, controlplane.DesiredStopped
 		if req.Purge {
 			action, desired = controlplane.ActionPurge, controlplane.DesiredPurged
 		}
 		stopResult, err := s.planOrchestratorTargets(ctx, app, uniqueStringItems(req.StopServers), action, desired, controlplane.Revision{}, appruntime.Spec{}, nil, req, triggerType)
-		if err != nil {
-			return DeploymentPlanResult{}, err
-		}
 		result = mergeDeploymentPlanResults(result, stopResult)
+		if err != nil {
+			return result, err
+		}
 	}
 	return result, nil
 }

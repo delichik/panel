@@ -119,6 +119,15 @@ func (f *fakeStorageAgent) DockerContainerAction(context.Context, string, string
 	return nil
 }
 
+type recordingOperationQueue struct {
+	serverIDs []string
+}
+
+func (q *recordingOperationQueue) Execute(ctx context.Context, serverID string, run func(context.Context) error) error {
+	q.serverIDs = append(q.serverIDs, serverID)
+	return run(ctx)
+}
+
 func newStorageShareTestService(t *testing.T) (*Service, *fakeServerProvider, *fakeAppsProvider, *fakeStorageAgent, *storage.Store) {
 	t.Helper()
 	dir := t.TempDir()
@@ -146,6 +155,19 @@ func newStorageShareTestService(t *testing.T) (*Service, *fakeServerProvider, *f
 	ssh := &fakeSSHExecutor{}
 	svc := NewService(store.AppDB(), agent, servers, apps, WithSSHExecutor(ssh), WithDataRoot(cfg.DataRoot))
 	return svc, servers, apps, agent, store
+}
+
+func TestStorageExportConfigureUsesSharedOperationQueue(t *testing.T) {
+	svc, _, _, _, _ := newStorageShareTestService(t)
+	queue := &recordingOperationQueue{}
+	svc.queue = queue
+	ctx := context.Background()
+	if _, err := svc.SaveStorageShare(ctx, StorageShareSaveInput{Servers: []StorageServerSetting{{ServerID: "srv-a", Root: "/srv/panel-storage"}}}); err != nil {
+		t.Fatalf("save storage share: %v", err)
+	}
+	if len(queue.serverIDs) != 1 || queue.serverIDs[0] != "srv-a" {
+		t.Fatalf("storage export configure must enter shared per-server queue, got %#v", queue.serverIDs)
+	}
 }
 
 func TestStorageShareSaveAndResolveMounts(t *testing.T) {
@@ -274,6 +296,36 @@ func TestStorageShareUninstallGatedByUsage(t *testing.T) {
 	}
 	if cfg.Enabled {
 		t.Fatal("storage share should be disabled after uninstall")
+	}
+}
+
+// TestStorageShareUninstallFailsClosedWhenMountStatusUnavailable FAC-STO-004：
+// 挂载检查 Agent 失败时必须拒绝卸载，不得当作“未挂载”继续。
+func TestStorageShareUninstallFailsClosedWhenMountStatusUnavailable(t *testing.T) {
+	svc, _, _, agent, _ := newStorageShareTestService(t)
+	ctx := context.Background()
+	if _, err := svc.SaveStorageShare(ctx, StorageShareSaveInput{Servers: []StorageServerSetting{{ServerID: "srv-a", Root: "/srv/panel-storage"}}}); err != nil {
+		t.Fatalf("save storage share: %v", err)
+	}
+	if _, err := svc.ResolveStorageShareMounts(ctx,
+		applications.Application{ID: "app-1", Name: "app-1"},
+		server.Server{ID: "srv-b", Name: "app-node-b"},
+		[]appruntime.Mount{{Type: "storage_share", Source: "storage-share:srv-a", Target: "/data"}},
+	); err != nil {
+		t.Fatalf("resolve mounts: %v", err)
+	}
+	agent.mountStatusErr = errors.New("agent unreachable")
+	if _, err := svc.DeleteStorageShare(ctx); err == nil {
+		t.Fatal("expected uninstall to fail closed when mount status cannot be verified")
+	} else if !strings.Contains(err.Error(), "unable to verify") && !strings.Contains(err.Error(), "storage_share_mount_status_unavailable") {
+		t.Fatalf("unexpected uninstall error: %v", err)
+	}
+	cfg, err := svc.GetStorageShare(ctx)
+	if err != nil {
+		t.Fatalf("get storage share: %v", err)
+	}
+	if !cfg.Enabled {
+		t.Fatal("storage share must remain enabled after blocked uninstall")
 	}
 }
 

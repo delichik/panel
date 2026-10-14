@@ -128,6 +128,7 @@ func (s *Service) UpdateAccount(ctx context.Context, input AccountUpdate) (Sessi
 		return Session{}, panelerr.Validation("admin_password_change_required", "Password must be changed before continuing")
 	}
 	nextHash := account.PasswordHash
+	var nextSecret string
 	if passwordChanging {
 		if len(input.NewPassword) < minPasswordLength {
 			return Session{}, panelerr.Validation("admin_password_too_short", "Password must be at least 8 characters")
@@ -140,24 +141,33 @@ func (s *Service) UpdateAccount(ctx context.Context, input AccountUpdate) (Sessi
 			return Session{}, err
 		}
 		nextHash = string(rawHash)
+		nextSecret, err = randomJWTSecret()
+		if err != nil {
+			return Session{}, err
+		}
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if err := orm.New(s.db).From("auth_accounts").Where("id = ?", adminAccountID).UpdateColumns(ctx, map[string]any{
-		"username": username, "password_hash": nextHash, "password_change_required": 0, "updated_at": now,
+	// ID-ACC-011 / GAP-013: username, password hash, JWT secret, and nonce must
+	// commit together so a mid-update failure cannot leave a new password with
+	// old sessions still valid.
+	if err := orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		if err := orm.New(tx).From("auth_accounts").Where("id = ?", adminAccountID).UpdateColumns(ctx, map[string]any{
+			"username": username, "password_hash": nextHash, "password_change_required": 0, "updated_at": now,
+		}); err != nil {
+			return err
+		}
+		if !passwordChanging {
+			return nil
+		}
+		if err := s.runtime.PersistJWTSecretTx(ctx, tx, nextSecret); err != nil {
+			return err
+		}
+		return s.rotateTokenNonceTx(ctx, tx)
 	}); err != nil {
 		return Session{}, err
 	}
 	if passwordChanging {
-		secret, err := randomJWTSecret()
-		if err != nil {
-			return Session{}, err
-		}
-		if _, err := s.runtime.SetJWTSecret(ctx, secret); err != nil {
-			return Session{}, err
-		}
-		if err := s.rotateTokenNonce(ctx); err != nil {
-			return Session{}, err
-		}
+		s.runtime.ApplyJWTSecret(nextSecret)
 	}
 	account.Username = username
 	account.PasswordHash = nextHash
@@ -166,12 +176,19 @@ func (s *Service) UpdateAccount(ctx context.Context, input AccountUpdate) (Sessi
 }
 
 func (s *Service) UpdateJWTSecret(ctx context.Context, secret string) (Session, error) {
-	if _, err := s.runtime.SetJWTSecret(ctx, secret); err != nil {
+	secret = strings.TrimSpace(secret)
+	if err := settings.ValidateJWTSecret(secret); err != nil {
 		return Session{}, err
 	}
-	if err := s.rotateTokenNonce(ctx); err != nil {
+	if err := orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		if err := s.runtime.PersistJWTSecretTx(ctx, tx, secret); err != nil {
+			return err
+		}
+		return s.rotateTokenNonceTx(ctx, tx)
+	}); err != nil {
 		return Session{}, err
 	}
+	s.runtime.ApplyJWTSecret(secret)
 	account, err := s.currentAdminAccount(ctx)
 	if err != nil {
 		return Session{}, err
@@ -307,12 +324,18 @@ func (s *Service) currentTokenNonce(ctx context.Context) (string, error) {
 }
 
 func (s *Service) rotateTokenNonce(ctx context.Context) error {
+	return orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		return s.rotateTokenNonceTx(ctx, tx)
+	})
+}
+
+func (s *Service) rotateTokenNonceTx(ctx context.Context, tx *sql.Tx) error {
 	nonce, err := randomTokenNonce()
 	if err != nil {
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err = orm.RawExec(ctx, s.db, `
+	_, err = orm.RawExec(ctx, tx, `
 		INSERT INTO auth_state(key, value, updated_at)
 		VALUES (?, ?, ?)
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at

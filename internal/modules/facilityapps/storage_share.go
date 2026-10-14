@@ -320,7 +320,8 @@ func (s *Service) DeleteStorageShare(ctx context.Context) (StorageShareConfig, e
 		for _, partition := range partitions {
 			active, _, mountErr := s.storagePartitionMountActive(ctx, partition)
 			if mountErr != nil {
-				continue
+				// Fail closed: an unreachable agent must not be treated as "unmounted".
+				return StorageShareConfig{}, panelerr.Conflict("storage_share_mount_status_unavailable", "unable to verify storage share mounts; resolve agent connectivity before uninstalling")
 			}
 			if active {
 				return StorageShareConfig{}, panelerr.Conflict("storage_share_in_use", "storage share is still mounted by running applications; stop or remove the mounts first")
@@ -583,9 +584,8 @@ func (s *Service) DeleteStoragePartition(ctx context.Context, partitionID string
 func (s *Service) getStoragePartition(ctx context.Context, partitionID string) (StoragePartition, error) {
 	var row StoragePartition
 	var createdAt, updatedAt string
-	err := orm.New(s.db).From("storage_share_partitions").
-		Select("id", "application_id", "application_name", "server_id", "server_name", "storage_server_id", "storage_server_name", "path", "target", "volume_name", "created_at", "updated_at").
-		Where("id=?", partitionID).First(ctx, &row)
+	err := s.db.QueryRowContext(ctx, `SELECT id,application_id,application_name,server_id,server_name,storage_server_id,storage_server_name,path,target,volume_name,created_at,updated_at FROM storage_share_partitions WHERE id=?`, partitionID).
+		Scan(&row.ID, &row.ApplicationID, &row.ApplicationName, &row.ServerID, &row.ServerName, &row.StorageServerID, &row.StorageServerName, &row.Path, &row.Target, &row.VolumeName, &createdAt, &updatedAt)
 	if err == sql.ErrNoRows {
 		return StoragePartition{}, panelerr.NotFound("storage_share_partition")
 	}
@@ -657,10 +657,12 @@ func (s *Service) reconcileStorageServer(ctx context.Context, setting StorageSer
 	if err != nil {
 		return err
 	}
-	if err := agent.StorageConfigureExport(ctx, baseURL, setting.Root, hosts, true); err != nil {
-		return fmt.Errorf("configure storage export on %s: %w", setting.ServerID, storageAgentError(err))
-	}
-	return nil
+	return s.executeOnServer(ctx, setting.ServerID, func(runCtx context.Context) error {
+		if err := agent.StorageConfigureExport(runCtx, baseURL, setting.Root, hosts, true); err != nil {
+			return fmt.Errorf("configure storage export on %s: %w", setting.ServerID, storageAgentError(err))
+		}
+		return nil
+	})
 }
 
 // installNFSServer 通过 SSH 在存储服务器上安装并启用 nfs-kernel-server
@@ -698,7 +700,9 @@ func (s *Service) removeStorageExport(ctx context.Context, setting StorageServer
 	if !ok {
 		return panelerr.Validation("agent_required", "Agent is required for storage share operations")
 	}
-	return storageAgentError(agent.StorageConfigureExport(ctx, baseURL, setting.Root, nil, false))
+	return s.executeOnServer(ctx, setting.ServerID, func(runCtx context.Context) error {
+		return storageAgentError(agent.StorageConfigureExport(runCtx, baseURL, setting.Root, nil, false))
+	})
 }
 
 // storageAllowedHosts 返回允许挂载的服务器主机白名单（Panel 已纳管服务器）。

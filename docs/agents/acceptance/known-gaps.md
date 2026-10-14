@@ -23,7 +23,7 @@
 | GAP-017 | 旧 lifecycle 类型 | 应用 runtime/前端类型仍带 lifecycle 命名，但旧 CoordDB lifecycle 表和 dispatcher 已删除 | 逐步移除兼容命名；任何期间均不得恢复第二事实源 |
 | GAP-018 | 容器完整详情 | 无通用 inspect API，report 摘要不含 command/created/mounts，但前端资源类型仍残留完整字段 | 清理旧字段，或新增独立受限 inspect 合同与按需 API，不扩大列表上报 |
 | GAP-019 | 容器测试命名 | `TestContainerActionRejectsManagedApplicationContainer` 名称与断言相反，易误导维护者 | 重命名以表达“允许直接动作、由协调修复”，保留行为断言 |
-| GAP-020 | ~~Docker 操作物理队列~~（已关闭） | ~~普通容器、orchestrator、设施应用由不同所有者组合，缺少证明所有写路径共享同一 per-server 物理队列的集成测试~~ | 应用 `RuntimeReconcile`/legacy apply·stop 与设施存储 export 配置均经 `containers.Service.Execute` 同物理 per-server 队列；Agent 侧 Docker 写 RPC 另有进程内互斥。验证：`TestRuntimeReconcileUsesSharedContainerOperationQueue`、`TestExecuteSerializesOperationsPerServer`、`RES-QUEUE-001/004` |
+| GAP-020 | ~~Docker 操作物理队列~~（已关闭） | ~~普通容器、orchestrator、设施应用由不同所有者组合，缺少证明所有写路径共享同一 per-server 物理队列的集成测试~~ | 应用 `RuntimeReconcile`/legacy apply·stop 与设施存储 export 配置均经 `containers.Service.Execute` 同物理 per-server 队列；Agent 侧 Docker 写 RPC（含 persistent archive/restore）另有进程内互斥；入队后取消须等待 job 结束。验证：`TestRuntimeReconcileUsesSharedContainerOperationQueue`、`TestStorageExportConfigureUsesSharedOperationQueue`、`TestExecuteWaitsForAcceptedJobAfterCallerCancel`、`TestExecuteSerializesOperationsPerServer`、`RES-QUEUE-001/004` |
 | GAP-021 | 服务器资源 tabs 回归 | 首次空快照、请求竞态、桌面/窄屏滚动与 tab 切换缺少浏览器级 E2E（原资源页缺口并入服务器详情后仍存在） | 补服务器资源 tabs 的浏览器测试与三档桌面/一档窄屏布局证据，关联 `UI-SRV-017/018` |
 | GAP-022 | Docker network 写操作 | network 当前只读，尚无系统网络保护和实时使用门禁合同 | 继续只读；若新增 mutation，先定义 `panel-apps` 保护、确认、队列和使用中拒绝 |
 | GAP-023 | 多实例任务调度 | 通用任务队首缓存只适用于单 Panel 进程，共享 SQLite 多实例下没有 claim/fencing 一致性 | 保持单实例部署边界，或先实现数据库级 claim/lease/fencing |

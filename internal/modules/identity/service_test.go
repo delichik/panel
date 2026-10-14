@@ -123,6 +123,10 @@ func TestUpdateAccountClearsPasswordChangeAndRotatesJWTSecret(t *testing.T) {
 		t.Fatalf("login: %v", err)
 	}
 	oldSecret := svc.runtime.JWTSecret()
+	oldNonce, err := svc.currentTokenNonce(ctx)
+	if err != nil {
+		t.Fatalf("current nonce: %v", err)
+	}
 	updated, err := svc.UpdateAccount(ctx, AccountUpdate{
 		CurrentPassword: "admin",
 		Username:        "root",
@@ -137,11 +141,48 @@ func TestUpdateAccountClearsPasswordChangeAndRotatesJWTSecret(t *testing.T) {
 	if svc.runtime.JWTSecret() == oldSecret {
 		t.Fatal("password change should rotate jwt secret")
 	}
+	newNonce, err := svc.currentTokenNonce(ctx)
+	if err != nil {
+		t.Fatalf("nonce after update: %v", err)
+	}
+	if newNonce == "" || newNonce == oldNonce {
+		t.Fatal("password change should rotate token nonce in the same commit")
+	}
 	if _, ok := svc.Validate(ctx, first.Token); ok {
 		t.Fatal("token signed with previous secret should not validate")
 	}
 	if _, ok := svc.Validate(ctx, updated.Token); !ok {
 		t.Fatal("new token should validate")
+	}
+}
+
+func TestUpdateJWTSecretRotatesNonceAtomically(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	first, err := svc.Login(ctx, "admin", "admin")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	oldNonce, err := svc.currentTokenNonce(ctx)
+	if err != nil {
+		t.Fatalf("current nonce: %v", err)
+	}
+	updated, err := svc.UpdateJWTSecret(ctx, "replacement-jwt-secret-32b")
+	if err != nil {
+		t.Fatalf("update jwt secret: %v", err)
+	}
+	newNonce, err := svc.currentTokenNonce(ctx)
+	if err != nil {
+		t.Fatalf("nonce after jwt update: %v", err)
+	}
+	if newNonce == "" || newNonce == oldNonce {
+		t.Fatal("jwt secret update must rotate nonce in the same transaction")
+	}
+	if _, ok := svc.Validate(ctx, first.Token); ok {
+		t.Fatal("old token must be invalidated")
+	}
+	if _, ok := svc.Validate(ctx, updated.Token); !ok {
+		t.Fatal("new session token must validate")
 	}
 }
 

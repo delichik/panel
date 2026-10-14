@@ -88,10 +88,19 @@
 
 - **前置**：同/不同 serverId 同时提交容器、镜像、卷写操作。
 - **动作**：Service.Execute 入队。
-- **结果**：同 server 所有普通 Docker 写严格串行；不同 server 可并行；调用方等待自己的动作完成/失败。
+- **结果**：同 server 所有普通 Docker 写严格串行；不同 server 可并行；调用方等待自己的动作完成/失败。入队成功后即使调用方 context 取消，Execute 仍必须等到该 job 结束再返回，并把同一 caller context 传给 `run`（便于超时/取消中止 Agent RPC）；禁止“提前返回 + Background 继续写共享结果”的竞态。
 - **失败**：同节点不得因资源类型不同绕开队列并发修改 Docker。
 - **不变量**：Application Controller 拥有自己的 durable app/server Job 边界，但底层设施/普通资源的节点操作仍不得与共享队列产生未定义并发。
-- **验证**：serialize same server/concurrent different servers tests。
+- **验证**：serialize same server/concurrent different servers tests；cancel-after-accept wait test。
+
+### RES-QUEUE-004 跨模块共享物理队列
+
+- **前置**：同一 serverId 上同时存在普通容器/镜像/卷 mutation、应用或设施 `RuntimeReconcile`（含 legacy apply/stop），以及设施存储 export 配置写入。
+- **动作**：各路径提交写操作。
+- **结果**：上述路径必须进入同一 `containers.Service.Execute` per-server 物理队列；同 server 严格串行，跨 server 可并行。
+- **失败**：不得再通过已注入却未使用的队列钩子绕开；Agent 进程内另对 Docker 写 RPC 互斥，作为第二道串行门。
+- **不变量**：只读列表/日志/status 可不入队；规划（只写 AppDB Job）不入队。
+- **验证**：`TestRuntimeReconcileUsesSharedContainerOperationQueue`、`TestStorageExportConfigureUsesSharedOperationQueue`、`TestExecuteWaitsForAcceptedJobAfterCallerCancel`、`TestExecuteSerializesOperationsPerServer`；关闭 `GAP-020`。
 
 ### RES-QUEUE-002 panic 隔离
 
@@ -467,5 +476,4 @@
 - 当前路由没有通用容器 inspect 详情 API；report 摘要也刻意不含 command/created/mounts。前端类型仍包含这些旧完整字段，不能据类型声明要求列表返回或上报这些字段。
 - 容器模块测试名 `TestContainerActionRejectsManagedApplicationContainer` 与实际断言相反：当前合同以实现、模块文档末尾和断言为准——允许直接操作并由协调修复。应后续重命名测试，避免误导。
 - 服务器详情资源 tabs（原资源页）的请求竞态、首次空快照和桌面/窄屏滚动缺少完整端到端覆盖，仍需人工/组件级验证（见 `known-gaps.md` GAP-021）。
-- 同步容器 mutation 与 orchestrator/设施 Docker 操作是否在所有路径共享完全同一物理 per-server queue，当前模块说明强制该目标，但代码层由不同所有者组合；修改相关装配前应增加跨模块并发集成测试。
 - Docker network 目前只读；若新增 mutation，必须先定义系统 `panel-apps` 保护、实时使用门禁、确认和队列合同，不能直接复用卷/镜像删除逻辑。

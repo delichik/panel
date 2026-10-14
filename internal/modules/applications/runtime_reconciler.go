@@ -89,12 +89,16 @@ func (r *serviceRuntimeReconciler) Reconcile(ctx context.Context, req controlpla
 				return firewallChannelFailure("firewall_channel_preflight_failed", nil, err), nil
 			}
 		}
-		response, callErr := r.callTracked(runCtx, endpoint, req, client, agentcontract.RuntimeReconcileRequest{
-			OperationID: req.OperationID, RunID: req.RunID,
-			JobID: req.JobID, ExecutionID: req.ExecutionID, ApplicationID: req.ApplicationID, InstanceID: req.InstanceID,
-			ServerID: req.ServerID, Action: req.Action, DesiredGeneration: req.DesiredGeneration, DesiredSpecHash: req.DesiredSpecHash,
-			DesiredRevisionID: req.DesiredRevisionID, Spec: spec, RemoveData: req.RemoveData, PreviousContainerName: req.PreviousContainerName,
-			SSHPort: sshPort, AgentPort: agentPort,
+		// Share the per-server Docker write queue with ordinary container/image/volume
+		// mutations so facility/app reconcile cannot race UI-driven Docker ops.
+		response, callErr := r.withServerQueue(runCtx, req.ServerID, func(queuedCtx context.Context) (controlplane.ReconcileResponse, error) {
+			return r.callTracked(queuedCtx, endpoint, req, client, agentcontract.RuntimeReconcileRequest{
+				OperationID: req.OperationID, RunID: req.RunID,
+				JobID: req.JobID, ExecutionID: req.ExecutionID, ApplicationID: req.ApplicationID, InstanceID: req.InstanceID,
+				ServerID: req.ServerID, Action: req.Action, DesiredGeneration: req.DesiredGeneration, DesiredSpecHash: req.DesiredSpecHash,
+				DesiredRevisionID: req.DesiredRevisionID, Spec: spec, RemoveData: req.RemoveData, PreviousContainerName: req.PreviousContainerName,
+				SSHPort: sshPort, AgentPort: agentPort,
+			})
 		})
 		var postflightErr error
 		if checksChannels {
@@ -111,12 +115,36 @@ func (r *serviceRuntimeReconciler) Reconcile(ctx context.Context, req controlpla
 
 	switch req.Action {
 	case controlplane.ActionApply:
-		return r.apply(runCtx, endpoint, req)
+		return r.withServerQueue(runCtx, req.ServerID, func(queuedCtx context.Context) (controlplane.ReconcileResponse, error) {
+			return r.apply(queuedCtx, endpoint, req)
+		})
 	case controlplane.ActionStop, controlplane.ActionPurge:
-		return r.stop(runCtx, endpoint, req)
+		return r.withServerQueue(runCtx, req.ServerID, func(queuedCtx context.Context) (controlplane.ReconcileResponse, error) {
+			return r.stop(queuedCtx, endpoint, req)
+		})
 	default:
 		return controlplane.ReconcileResponse{ErrorCode: "invalid_action", ErrorClass: "configuration", ErrorMessage: "unsupported runtime action", Retryable: false}, nil
 	}
+}
+
+// withServerQueue serializes Docker-mutating reconcile work through the shared
+// per-server queue when one is injected. Tests and degraded wiring without a
+// queue keep the direct path.
+func (r *serviceRuntimeReconciler) withServerQueue(ctx context.Context, serverID string, run func(context.Context) (controlplane.ReconcileResponse, error)) (controlplane.ReconcileResponse, error) {
+	if r == nil || r.service == nil || r.service.operationQueue == nil {
+		return run(ctx)
+	}
+	var (
+		resp controlplane.ReconcileResponse
+		runErr error
+	)
+	if err := r.service.operationQueue.Execute(ctx, serverID, func(runCtx context.Context) error {
+		resp, runErr = run(runCtx)
+		return runErr
+	}); err != nil && runErr == nil {
+		return resp, err
+	}
+	return resp, runErr
 }
 
 func (r *serviceRuntimeReconciler) apply(ctx context.Context, endpoint string, req controlplane.ReconcileRequestRPC) (controlplane.ReconcileResponse, error) {

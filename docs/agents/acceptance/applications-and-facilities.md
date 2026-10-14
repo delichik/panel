@@ -247,7 +247,7 @@
 - **前置**：已存在的应用经手动同步或后台漂移巡检进入 Planner，配置、文件引用、目标或依赖检查失败，可能尚无任何 Job。
 - **动作**：记录本次规划结果，并读取应用详情、列表摘要或 runtime。
 - **结果**：三种响应均提供可选 `planningError`，包含稳定错误码、脱敏原因、可用的字段/文件名、是否可重试、发生时间、配置 version 和独立 operationId；手动同步失败后页面立即重载，错误在 Toast 消失及刷新后仍可查询，并可进入对应活动记录。
-- **失败**：未知内部错误仅返回通用安全原因；不得暴露配置内容、令牌或内部路径。单个应用规划失败不得中止其它应用的后台巡检。显式同步可能已启用应用，但不得把规划失败解释为远端部署已接受或完成。
+- **失败**：未知内部错误仅返回通用安全原因；不得暴露配置内容、令牌或内部路径。单个应用规划失败不得中止其它应用的后台巡检。显式同步可能已启用应用，但不得把规划失败解释为远端部署已接受或完成。多阶段规划（apply / 移除目标 purge / 显式 stop）若前序批次已持久化 Job、后序批次失败：必须唤醒 Controller 执行已落库 Job，并仍记录 `planningError`；不得假装“规划失败=零副作用”。Deploy/Restart 等同步 API 在返回 error 时可不带回 `DeploymentID`——客户端应以重载后的应用 `planningError` 与 Job/runtime 为准，而不是依赖错误响应里的部署 ID。
 - **不变量**：诊断与容器 observed 状态分离，不伪造 Job/execution。诊断更新与失败活动事件在同一事务提交，不修改用户 version、generation 或 updatedAt；同配置同原因的自动重复失败去重，人工重试保留独立记录。旧 version 的结果不能覆盖新配置的诊断。
 - **恢复与升级**：成功创建/合并计划或校验通过且目标均已满足时清除当前错误，保留历史失败；因停止自动协调或无匹配目标而跳过不能清错。现存数据库新增 `applications.planning_error_json`，默认空值并保留既有应用数据；本项不放宽文件名规则。
 - **验证**：`planning_outcome_test.go` 覆盖无 Job、人工同步、去重、恢复、跳过、脱敏及旧 version；数据库升级测试与容器巡检隔离测试。
@@ -551,9 +551,9 @@
 - **前置**：配置移除节点或 DELETE facility。
 - **动作**：保存移除/卸载。
 - **结果**：保存移除前先关闭该节点 export，失败则阻止保存；整体卸载先做引用和挂载门禁，再尽力清理 exports/UFW。
-- **失败**：AppSpec 仍引用或运行容器仍挂载 NFS 卷时拒绝；整体卸载远端清理失败时配置仍删除、partition history/data 保留并在返回 lastError 呈现。
-- **不变量**：单节点“保存移除失败阻断”与整体“卸载清理失败不阻断”的语义不得混用。
-- **验证**：removed-server cleanup、usage gate、cleanup-failure uninstall tests。
+- **失败**：AppSpec 仍引用或运行容器仍挂载 NFS 卷时拒绝；挂载状态查询失败（Agent 不可达等）必须 fail-closed 拒绝卸载（`storage_share_mount_status_unavailable`），不得当作未挂载继续；整体卸载远端清理失败时配置仍删除、partition history/data 保留并在返回 lastError 呈现。
+- **不变量**：单节点“保存移除失败阻断”与整体“卸载清理失败不阻断”的语义不得混用；挂载门禁失败与清理失败不得混用。
+- **验证**：removed-server cleanup、usage gate、mount-status-unavailable fail-closed、cleanup-failure uninstall tests。
 
 ### FAC-STO-005 storage_share 解析与分区身份
 

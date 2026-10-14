@@ -14,7 +14,7 @@
 - `ID-ACC-008`：前置为初始密码尚未修改；访问普通受保护 API 必须返回 403 `password_change_required`；仅会话查询、登出和账户修改可在该状态继续，不能只依靠前端路由守卫限制。
 - `ID-ACC-009`：前置为强制改密状态；提交账户修改但不提供新密码时，必须返回 `admin_password_change_required`，用户名和强制改密状态不得发生部分更新。
 - `ID-ACC-010`：前置为账户修改请求；当前密码错误返回认证失败，空白用户名返回 `admin_username_required`，新密码少于 8 字符返回 `admin_password_too_short`，新密码与旧密码相同返回 `admin_password_unchanged`；任一失败不得改变账户或会话密钥。
-- `ID-ACC-011`：前置为当前密码正确且输入有效；`POST /api/v1/auth/account` 必须原子保存裁剪后的用户名；提供新密码时保存新的 bcrypt 哈希、清除强制改密、随机更换 JWT secret、轮换 token nonce，并返回新的有效会话。
+- `ID-ACC-011`：前置为当前密码正确且输入有效；`POST /api/v1/auth/account` 必须原子保存裁剪后的用户名；提供新密码时在同一 AppDB 事务内保存新的 bcrypt 哈希、清除强制改密、随机更换 JWT secret、轮换 token nonce，事务成功后再更新内存 JWT 快照并返回新的有效会话；任一写失败必须整笔回滚，不得出现“密码已改但旧会话仍有效”。
 - `ID-ACC-012`：前置为仅修改用户名且不在强制改密状态；更新必须保留原密码和 JWT secret，返回能以新用户名表示当前账户的有效会话。
 
 ## 2. Token、会话与权限边界
@@ -24,7 +24,7 @@
 - `ID-SES-003`：前置为有效 token；会话查询必须返回当前数据库中的管理员用户名和强制改密状态，而不是只信任 token 内旧用户名。
 - `ID-SES-004`：前置为有效 token；`POST /api/v1/auth/logout` 必须轮换持久化 nonce，使此前签发的全部普通运行态 token 立即失效，并返回 `authenticated=false`；重复登出需认证且不得恢复旧 token。
 - `ID-SES-005`：前置为 token expiration 设置为 `10m`、`1h`、`1d`、`5d` 或 `30d`；新 token 的过期时间必须按对应时长签发并在到期后拒绝；设置为 `never` 时 token 可无 `exp`，但仍受 nonce 和 JWT secret 撤销。
-- `ID-SES-006`：前置为认证用户提交至少 16 字符的新 secret；`POST /api/v1/auth/jwt-secret` 必须先持久化 secret，再轮换 nonce并返回新会话；旧 token 必须失效，响应不得回显 secret。
+- `ID-SES-006`：前置为认证用户提交至少 16 字符的新 secret；`POST /api/v1/auth/jwt-secret` 必须在同一 AppDB 事务内持久化 secret 并轮换 nonce，提交成功后再更新内存快照并返回新会话；旧 token 必须失效，响应不得回显 secret。
 - `ID-SES-007`：前置为 secret 少于 16 字符或仅空白；更新必须返回 `invalid_jwt_secret`，旧 secret、nonce和现有会话必须保持可用。
 - `ID-SES-008`：普通运行态 token、备份导出维护 token、恢复维护 token 三种上下文必须互不通用；任何跨上下文使用均不得获得业务或维护权限。
 

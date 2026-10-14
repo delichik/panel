@@ -127,6 +127,72 @@ func TestExecuteSerializesOperationsPerServer(t *testing.T) {
 	}
 }
 
+func TestExecuteWaitsForAcceptedJobAfterCallerCancel(t *testing.T) {
+	svc := &Service{queues: map[string]*serverQueue{}}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var shared atomic.Int32
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- svc.Execute(ctx, "server-1", func(context.Context) error {
+			close(started)
+			<-release
+			shared.Store(42)
+			return nil
+		})
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("job did not start")
+	}
+	cancel()
+	// Give a cancelled waiter time to return early (the bug we fixed).
+	time.Sleep(30 * time.Millisecond)
+	close(release)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("accepted job must finish and return its result, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Execute returned early without waiting for accepted job")
+	}
+	if shared.Load() != 42 {
+		t.Fatal("Execute must not return before run completes (result capture race)")
+	}
+}
+
+func TestExecutePropagatesCallerContextIntoRun(t *testing.T) {
+	svc := &Service{queues: map[string]*serverQueue{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- svc.Execute(ctx, "server-1", func(runCtx context.Context) error {
+			close(started)
+			<-runCtx.Done()
+			return runCtx.Err()
+		})
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("job did not start")
+	}
+	cancel()
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled from run, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Execute did not observe cancelled run context")
+	}
+}
+
 func TestExecuteAllowsDifferentServersToRunConcurrently(t *testing.T) {
 	svc := &Service{queues: map[string]*serverQueue{}}
 	entered := make(chan string, 2)

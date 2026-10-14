@@ -81,6 +81,29 @@ func trackedTransport(t *testing.T) (*serviceRuntimeReconciler, *activityTranspo
 	return &serviceRuntimeReconciler{service: svc}, client, req, session
 }
 
+type recordingOperationQueue struct {
+	serverIDs []string
+}
+
+func (q *recordingOperationQueue) Execute(ctx context.Context, serverID string, run func(context.Context) error) error {
+	q.serverIDs = append(q.serverIDs, serverID)
+	return run(ctx)
+}
+
+func TestRuntimeReconcileUsesSharedContainerOperationQueue(t *testing.T) {
+	r, client, req, session := trackedTransport(t)
+	queue := &recordingOperationQueue{}
+	r.service.operationQueue = queue
+	client.finishOnReconcile = session
+	req.Action = "stop"
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if len(queue.serverIDs) != 1 || queue.serverIDs[0] != req.ServerID {
+		t.Fatalf("reconcile must enter shared per-server queue, got %#v", queue.serverIDs)
+	}
+}
+
 func TestRuntimeReconcilePropagatesNormalizedSSHPort(t *testing.T) {
 	r, client, req, session := trackedTransport(t)
 	r.service.servers.(*fakeServerProvider).items[req.ServerID] = func() server.Server {

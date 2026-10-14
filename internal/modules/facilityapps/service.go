@@ -114,6 +114,16 @@ func WithContainerOperationQueue(queue ContainerOperationQueue) Option {
 	return func(s *Service) { s.queue = queue }
 }
 
+// executeOnServer serializes node-mutating agent work through the shared
+// per-server Docker/resource queue when one is injected (same physical queue as
+// containers.Service.Execute and application RuntimeReconcile).
+func (s *Service) executeOnServer(ctx context.Context, serverID string, run func(context.Context) error) error {
+	if s == nil || s.queue == nil || strings.TrimSpace(serverID) == "" {
+		return run(ctx)
+	}
+	return s.queue.Execute(ctx, serverID, run)
+}
+
 func WithDataRoot(dataRoot string) Option {
 	return func(s *Service) { s.dataRoot = dataRoot }
 }

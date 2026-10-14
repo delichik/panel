@@ -36,6 +36,15 @@ type Handler struct {
 	eventStore       *executionevents.Store
 	eventErr         error
 	eventDir         string
+	// dockerWriteMu serializes Docker-mutating RPCs on this agent so concurrent
+	// Panel workers (UI queue + reconcile) cannot interleave engine mutations.
+	dockerWriteMu sync.Mutex
+}
+
+func (h *Handler) withDockerWrite(fn func() error) error {
+	h.dockerWriteMu.Lock()
+	defer h.dockerWriteMu.Unlock()
+	return fn()
 }
 
 type runtimeFirewall interface {
@@ -195,12 +204,17 @@ func (h *Handler) DockerContainerAction(ctx context.Context, req *agentpb.Docker
 	}
 	var err error
 	switch req.Action {
-	case "start":
-		err = h.runtime.ContainerStart(ctx, req.Id)
-	case "stop":
-		err = h.runtime.ContainerStop(ctx, req.Id)
-	case "restart":
-		err = h.runtime.ContainerRestart(ctx, req.Id)
+	case "start", "stop", "restart":
+		err = h.withDockerWrite(func() error {
+			switch req.Action {
+			case "start":
+				return h.runtime.ContainerStart(ctx, req.Id)
+			case "stop":
+				return h.runtime.ContainerStop(ctx, req.Id)
+			default:
+				return h.runtime.ContainerRestart(ctx, req.Id)
+			}
+		})
 	default:
 		return nil, status.Error(codes.InvalidArgument, "unsupported container action")
 	}
@@ -211,7 +225,11 @@ func (h *Handler) DockerContainerDelete(ctx context.Context, req *agentpb.Docker
 	if err := h.requireRuntime(); err != nil {
 		return nil, err
 	}
-	err := h.runtime.ContainerDelete(ctx, req.Id)
+	var err error
+	_ = h.withDockerWrite(func() error {
+		err = h.runtime.ContainerDelete(ctx, req.Id)
+		return err
+	})
 	return &agentpb.OKResponse{Ok: err == nil}, remoteError(err)
 }
 
@@ -231,7 +249,11 @@ func (h *Handler) DockerImagePull(ctx context.Context, req *agentpb.DockerImageP
 	if err := h.requireRuntime(); err != nil {
 		return nil, err
 	}
-	err := h.runtime.PullImage(ctx, req.Reference)
+	var err error
+	_ = h.withDockerWrite(func() error {
+		err = h.runtime.PullImage(ctx, req.Reference)
+		return err
+	})
 	return &agentpb.OKResponse{Ok: err == nil}, remoteError(err)
 }
 
@@ -239,7 +261,11 @@ func (h *Handler) DockerImageDelete(ctx context.Context, req *agentpb.DockerImag
 	if err := h.requireRuntime(); err != nil {
 		return nil, err
 	}
-	err := h.runtime.DeleteImage(ctx, req.Id)
+	var err error
+	_ = h.withDockerWrite(func() error {
+		err = h.runtime.DeleteImage(ctx, req.Id)
+		return err
+	})
 	return &agentpb.OKResponse{Ok: err == nil}, remoteError(err)
 }
 
@@ -271,7 +297,11 @@ func (h *Handler) DockerVolumeDelete(ctx context.Context, req *agentpb.DockerVol
 	if err := h.requireRuntime(); err != nil {
 		return nil, err
 	}
-	err := h.runtime.DeleteVolume(ctx, req.Name)
+	var err error
+	_ = h.withDockerWrite(func() error {
+		err = h.runtime.DeleteVolume(ctx, req.Name)
+		return err
+	})
 	return &agentpb.OKResponse{Ok: err == nil}, remoteError(err)
 }
 
@@ -279,7 +309,11 @@ func (h *Handler) RuntimeWriteFiles(ctx context.Context, req *agentpb.RuntimeWri
 	if err := h.requireRuntime(); err != nil {
 		return nil, err
 	}
-	err := h.runtime.WriteManagedFiles(ctx, goSpec(req.Spec))
+	var err error
+	_ = h.withDockerWrite(func() error {
+		err = h.runtime.WriteManagedFiles(ctx, goSpec(req.Spec))
+		return err
+	})
 	return &agentpb.OKResponse{Ok: err == nil}, remoteError(err)
 }
 
@@ -304,7 +338,12 @@ func (h *Handler) RuntimeReconcile(ctx context.Context, req *agentpb.RuntimeReco
 	}
 	defer session.Abandon()
 	runCtx := agentcontract.WithExecutionEventSink(ctx, session)
-	result, runErr := h.reconcileRuntimeAndFirewall(runCtx, input)
+	var result agentcontract.RuntimeReconcileResponse
+	var runErr error
+	_ = h.withDockerWrite(func() error {
+		result, runErr = h.reconcileRuntimeAndFirewall(runCtx, input)
+		return runErr
+	})
 	result.ErrorMessage = session.Redact(result.ErrorMessage)
 	result.ErrorDetail = session.Redact(result.ErrorDetail)
 	for i := range result.Steps {
@@ -404,11 +443,16 @@ func (h *Handler) RuntimeReload(ctx context.Context, req *agentpb.RuntimeReloadR
 	if err := h.requireRuntime(); err != nil {
 		return nil, err
 	}
-	result, err := h.runtime.Reload(ctx, agentcontract.RuntimeReloadRequest{
-		Spec:            goSpec(req.Spec),
-		ContainerName:   req.ContainerName,
-		ValidateCommand: append([]string(nil), req.ValidateCommand...),
-		ReloadCommand:   append([]string(nil), req.ReloadCommand...),
+	var result agentcontract.RuntimeReloadResponse
+	var err error
+	_ = h.withDockerWrite(func() error {
+		result, err = h.runtime.Reload(ctx, agentcontract.RuntimeReloadRequest{
+			Spec:            goSpec(req.Spec),
+			ContainerName:   req.ContainerName,
+			ValidateCommand: append([]string(nil), req.ValidateCommand...),
+			ReloadCommand:   append([]string(nil), req.ReloadCommand...),
+		})
+		return err
 	})
 	return &agentpb.RuntimeReloadResponse{
 		Reloaded: result.Reloaded,
@@ -423,7 +467,12 @@ func (h *Handler) RuntimeCreateContainer(ctx context.Context, req *agentpb.Runti
 	if err := h.requireRuntime(); err != nil {
 		return nil, err
 	}
-	id, err := h.runtime.CreateContainer(ctx, goSpec(req.Spec))
+	var id string
+	var err error
+	_ = h.withDockerWrite(func() error {
+		id, err = h.runtime.CreateContainer(ctx, goSpec(req.Spec))
+		return err
+	})
 	return &agentpb.RuntimeCreateContainerResponse{ContainerId: id}, remoteError(err)
 }
 
@@ -431,7 +480,12 @@ func (h *Handler) RuntimeStop(ctx context.Context, req *agentpb.RuntimeStopReque
 	if err := h.requireRuntime(); err != nil {
 		return nil, err
 	}
-	result, err := h.runtime.Stop(ctx, agentcontract.RuntimeStopRequest{ApplicationID: req.ApplicationId, InstanceID: req.InstanceId, ContainerName: req.ContainerName, Purge: req.Purge, RemoveApplicationData: req.RemoveApplicationData})
+	var result agentcontract.RuntimeInstanceResponse
+	var err error
+	_ = h.withDockerWrite(func() error {
+		result, err = h.runtime.Stop(ctx, agentcontract.RuntimeStopRequest{ApplicationID: req.ApplicationId, InstanceID: req.InstanceId, ContainerName: req.ContainerName, Purge: req.Purge, RemoveApplicationData: req.RemoveApplicationData})
+		return err
+	})
 	return pbRuntimeInstance(result), remoteError(err)
 }
 
@@ -439,7 +493,12 @@ func (h *Handler) RuntimeRestart(ctx context.Context, req *agentpb.RuntimeRestar
 	if err := h.requireRuntime(); err != nil {
 		return nil, err
 	}
-	result, err := h.runtime.Restart(ctx, agentcontract.RuntimeRestartRequest{InstanceID: req.InstanceId, ContainerName: req.ContainerName})
+	var result agentcontract.RuntimeInstanceResponse
+	var err error
+	_ = h.withDockerWrite(func() error {
+		result, err = h.runtime.Restart(ctx, agentcontract.RuntimeRestartRequest{InstanceID: req.InstanceId, ContainerName: req.ContainerName})
+		return err
+	})
 	return pbRuntimeInstance(result), remoteError(err)
 }
 
@@ -463,7 +522,12 @@ func (h *Handler) RuntimePersistentArchive(ctx context.Context, req *agentpb.Run
 	if err := h.requireRuntime(); err != nil {
 		return nil, err
 	}
-	content, err := h.runtime.PersistentArchive(ctx, req.ApplicationId)
+	var content []byte
+	var err error
+	_ = h.withDockerWrite(func() error {
+		content, err = h.runtime.PersistentArchive(ctx, req.ApplicationId)
+		return err
+	})
 	return &agentpb.RuntimePersistentArchiveResponse{ApplicationId: req.ApplicationId, Filename: req.ApplicationId + "-persistent.zip", Content: content}, remoteError(err)
 }
 
@@ -471,7 +535,11 @@ func (h *Handler) RuntimePersistentRestore(ctx context.Context, req *agentpb.Run
 	if err := h.requireRuntime(); err != nil {
 		return nil, err
 	}
-	err := h.runtime.RestorePersistentArchive(ctx, req.ApplicationId, req.Content)
+	var err error
+	_ = h.withDockerWrite(func() error {
+		err = h.runtime.RestorePersistentArchive(ctx, req.ApplicationId, req.Content)
+		return err
+	})
 	return &agentpb.RuntimePersistentRestoreResponse{ApplicationId: req.ApplicationId, Restored: err == nil}, remoteError(err)
 }
 

@@ -1225,18 +1225,19 @@ func (s *Service) UpgradeApplications(ctx context.Context, applicationIDs []stri
 func (s *Service) Execute(ctx context.Context, serverID string, run func(context.Context) error) error {
 	result := make(chan error, 1)
 	select {
-	case s.queue(serverID).jobs <- queueJob{run: func(runCtx context.Context) error {
-		return run(runCtx)
+	case s.queue(serverID).jobs <- queueJob{run: func(context.Context) error {
+		// Use the caller's context so lease/HTTP cancellation can abort the
+		// agent RPC. The queue worker itself stays on Background.
+		return run(ctx)
 	}, result: result}:
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	select {
-	case err := <-result:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	// Once accepted, always wait for completion. Returning early on caller
+	// cancel while the worker still runs `run` races any results captured
+	// inside `run` (e.g. reconcile responses) and leaves Docker mutations
+	// without a synchronized outcome.
+	return <-result
 }
 
 func (s *Service) queue(serverID string) *serverQueue {
