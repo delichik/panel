@@ -16,7 +16,7 @@ func NewHandler(service *Service) *Handler { return &Handler{service} }
 func queryFilter(r *http.Request) (Filter, error) {
 	q := r.URL.Query()
 	allowed := map[string]bool{}
-	for _, k := range []string{"q", "domain", "action", "kind", "level", "trigger", "actorId", "resourceType", "resourceId", "operationId", "executionId", "stepId", "phase", "result", "attention", "hadError", "origin", "from", "to", "cursor", "limit", "snapshotSeq", "afterSeq", "minSeq", "scope", "before", "after"} {
+	for _, k := range []string{"q", "domain", "action", "kind", "level", "trigger", "actorId", "resourceType", "resourceId", "operationId", "executionId", "stepId", "phase", "result", "attention", "hadError", "origin", "detail", "from", "to", "cursor", "limit", "snapshotSeq", "afterSeq", "minSeq", "scope", "before", "after"} {
 		allowed[k] = true
 	}
 	for k, values := range q {
@@ -115,7 +115,14 @@ func (h *Handler) Operation(w http.ResponseWriter, r *http.Request) {
 		respond(w, nil, panelerr.BadRequest("activity_sequence_invalid", "Invalid minSeq"))
 		return
 	}
-	v, e := h.service.Operation(r.Context(), r.PathValue("id"), f.SnapshotSeq, int64(min))
+	detail := r.URL.Query().Get("detail")
+	if detail != "" && detail != "summary" && detail != "full" {
+		respond(w, nil, panelerr.BadRequest("activity_detail_invalid", "detail must be summary or full"))
+		return
+	}
+	// Product diagnose UI defaults to summary; full keeps events/executions/steps for tooling.
+	light := detail != "full"
+	v, e := h.service.Operation(r.Context(), r.PathValue("id"), f.SnapshotSeq, int64(min), light)
 	respond(w, v, e)
 }
 func (h *Handler) Context(w http.ResponseWriter, r *http.Request) {

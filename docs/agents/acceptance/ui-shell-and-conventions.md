@@ -35,7 +35,7 @@
 | UI-SHELL-016 | 窄屏打开移动导航 | 抽屉使用 `role=dialog`、`aria-modal=true` 和本地化名称；打开后焦点进入抽屉、Tab 圈定、背景锁滚动且不可交互 | Escape、可见关闭按钮、点击遮罩、选择导航项均应关闭；跨入 1024px 自动关闭 | 关闭后焦点回到触发按钮，body overflow 恢复；组件测试覆盖上述路径 |
 | UI-SHELL-017 | 路由变化 | 顶栏显示从 `route.meta.titleKey` 翻译的**次级上下文标签**（非页面主标题）；路由内容按 path 淡入淡出，query 变化不重挂载页面 | `meta` 不得写用户可见硬编码标题；多根页面不得触发 Transition 警告 | 同一路径改筛选不丢组件状态，换路径才重挂载；顶栏标签与 PageHeader 主标题随语言切换 |
 | UI-SHELL-018 | 页面需要标题、返回或操作 | 使用 PageHeader/ConsolePage 语义：PageHeader 为唯一主标题；返回目标由页面明确指定，不用历史栈兜底；同一作用域至多一个 primary，危险操作不与保存同色；实体列表在 ConsolePage 内使用 ListPage，不得再套第二层卡片外框 | 中窄屏标题和 actions 必须堆叠/换行，不得裁切 | 返回落到约定父页；所有关键按钮在 1024px 附近仍可见；列表仅为单一边框层 |
-| UI-SHELL-019 | 实体工作台列表与详情 | 一级对象工作台（servers/credentials/dns/certificates/applications/operations/tasks/logs）统一为「表格 + 覆盖式详情」：列表为全宽表格，点击行内「详情」后详情覆盖整个内容区并自带返回操作；列表保持挂载但不可交互，返回后滚动位置与筛选状态不丢 | 不得恢复 xl 常驻双栏几何；不得在窄屏自动选中首条对象；不得再为日志族恢复 `MasterDetailLayout` 双栏；设置导航与 shell 侧栏例外 | 上述工作台均保持同一覆盖式详情几何与返回语义 |
+| UI-SHELL-019 | 实体工作台列表与详情 | 一级对象工作台（servers/credentials/dns/certificates/applications/operations/tasks）统一为「表格 + 覆盖式详情」：列表为全宽表格，点击行内「详情」后详情覆盖整个内容区并自带返回操作；列表保持挂载但不可交互，返回后滚动位置与筛选状态不丢。`/logs` 为表格列表 + Dialog 看单条 | 不得恢复 xl 常驻双栏几何；不得在窄屏自动选中首条对象；不得再为日志恢复时间线/覆盖详情/`MasterDetailLayout`；设置导航与 shell 侧栏例外 | 实体工作台保持覆盖式详情；日志页 Dialog 展示单条正文 |
 
 ## 4. 主题、语言与展示格式
 

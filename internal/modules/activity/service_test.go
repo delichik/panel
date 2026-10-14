@@ -125,11 +125,11 @@ func TestHistoricalResultsAndProjectionRebuild(t *testing.T) {
 		t.Fatalf("projection %+v", before)
 	}
 	appendEvent("second", "verification.finished", "succeeded")
-	old, err := s.Operation(ctx, "op", before.SnapshotSeq, 0)
+	old, err := s.Operation(ctx, "op", before.SnapshotSeq, 0, false)
 	if err != nil || old.Operation.Result != "failed" {
 		t.Fatalf("historical result changed: %+v %v", old, err)
 	}
-	current, err := s.Operation(ctx, "op", 0, 0)
+	current, err := s.Operation(ctx, "op", 0, 0, false)
 	if err != nil || current.Operation.Result != "succeeded" {
 		t.Fatalf("current %+v %v", current, err)
 	}
@@ -138,7 +138,7 @@ func TestHistoricalResultsAndProjectionRebuild(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	rebuilt, err := s.Operation(ctx, "op", 0, 0)
+	rebuilt, err := s.Operation(ctx, "op", 0, 0, false)
 	if err != nil || rebuilt.Operation.Result != current.Operation.Result || rebuilt.Operation.EventCount != current.Operation.EventCount {
 		t.Fatalf("rebuild %+v %v", rebuilt, err)
 	}
@@ -176,7 +176,7 @@ func TestMultiServerResultsDoNotCollapseByApplication(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	detail, err := s.Operation(ctx, "deploy", 0, 0)
+	detail, err := s.Operation(ctx, "deploy", 0, 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestCompletedExecutionWaitsForSourceEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	detail, err := s.Operation(ctx, "op", 0, 0)
+	detail, err := s.Operation(ctx, "op", 0, 0, false)
 	if err != nil || detail.Operation.EvidenceComplete {
 		t.Fatalf("premature complete evidence: %+v %v", detail, err)
 	}
@@ -199,7 +199,7 @@ func TestCompletedExecutionWaitsForSourceEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	detail, err = s.Operation(ctx, "op", 0, 0)
+	detail, err = s.Operation(ctx, "op", 0, 0, false)
 	if err != nil || !detail.Operation.EvidenceComplete {
 		t.Fatalf("stream close missing: %+v %v", detail, err)
 	}
@@ -263,17 +263,17 @@ func TestIndependentTasksAndQueuedRetryProjection(t *testing.T) {
 	}
 	add("a", "exec-a", "task-a", "ended", "failed")
 	add("b", "exec-b", "task-b", "ended", "succeeded")
-	detail, err := s.Operation(ctx, "op", 0, 0)
+	detail, err := s.Operation(ctx, "op", 0, 0, false)
 	if err != nil || detail.Operation.Result != "partial" {
 		t.Fatalf("independent tasks collapsed: %+v %v", detail.Operation, err)
 	}
 	add("retry", "exec-c", "task-a", "queued", "")
-	detail, err = s.Operation(ctx, "op", 0, 0)
+	detail, err = s.Operation(ctx, "op", 0, 0, false)
 	if err != nil || detail.Operation.Phase == "ended" {
 		t.Fatalf("queued retry hidden: %+v %v", detail.Operation, err)
 	}
 	add("recovered", "exec-c", "task-a", "ended", "succeeded")
-	detail, err = s.Operation(ctx, "op", 0, 0)
+	detail, err = s.Operation(ctx, "op", 0, 0, false)
 	if err != nil || detail.Operation.Result != "succeeded" {
 		t.Fatalf("old failure overrides recovery: %+v %v", detail.Operation, err)
 	}
@@ -353,7 +353,7 @@ func TestFailureSummaryUsesStructuredJobErrorInsteadOfTriggerReason(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	detail, err := s.Operation(ctx, "intent-one", 0, 0)
+	detail, err := s.Operation(ctx, "intent-one", 0, 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -402,9 +402,32 @@ func TestQueuedAggregateDoesNotReportSuccessBeforeChildren(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	detail, err := s.Operation(ctx, "batch", 0, 0)
+	detail, err := s.Operation(ctx, "batch", 0, 0, false)
 	if err != nil || detail.Operation.Phase != "queued" || detail.Operation.Result != "" {
 		t.Fatalf("premature batch success %+v %v", detail.Operation, err)
+	}
+}
+
+func TestOperationSummaryOmitsEventTree(t *testing.T) {
+	s := testActivity(t)
+	ctx := context.Background()
+	_, err := s.Append(ctx, []EventInput{
+		{EventID: "req", EventType: "operation.requested", OperationID: "op-light", Trigger: "user", Actor: Actor{Kind: "user", ID: "admin"}, Text: "Deploy"},
+		{EventID: "out", EventType: "output.chunk", Kind: "output", OperationID: "op-light", Level: "error", Text: "boom"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	light, err := s.Operation(ctx, "op-light", 0, 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if light.Operation.OperationID != "op-light" || len(light.Events) != 0 || len(light.Executions) != 0 || len(light.Steps) != 0 {
+		t.Fatalf("summary detail leaked tree: %+v", light)
+	}
+	full, err := s.Operation(ctx, "op-light", 0, 0, false)
+	if err != nil || len(full.Events) == 0 {
+		t.Fatalf("full detail missing events: %+v %v", full, err)
 	}
 }
 

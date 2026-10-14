@@ -13,7 +13,7 @@
 - `Select`：用于单选下拉。交付形态必须是 Panel 自有 combobox + listbox 浮层，使用 popover 表面、统一 hover/selected/focus/motion 状态和暗色主题 token；不得把浏览器原生 `<option>` 展开菜单作为用户可见交互形态。必须把页面传入的 `aria-label` / `aria-invalid` 等 ARIA 属性绑定到 combobox 控件（组件 `inheritAttrs: false`，不得丢弃），并支持方向键、Home/End、Escape 与 `Tab` 关闭。
 - `Dropdown`：菜单 Teleport 到 `body`，使用 fixed 定位、视口边界收敛和上下碰撞选择，不能留在业务容器内被 `overflow` 裁切；菜单宽度按内容收缩并保持紧凑，禁止 fixed 后按视口宽度拉伸；继续支持方向键、Home/End、Escape 和焦点恢复；`Tab` 离开菜单时必须关闭并同步 `aria-expanded`。
 - `Dialog`：不响应遮罩点击关闭，只能通过关闭按钮、取消操作或 Escape 关闭；普通和 large 尺寸的 body 都必须有可靠的内部纵向滚动，页脚保持在弹窗网格底部；业务正文不能依赖外层页面滚动才能到达。
-- `ToastProvider`：支持可选 `action={label,to}` 路由动作，带动作保留 15 秒；`useSuccessToast(title, receipt)` / `useErrorToast(title, error)` 从本次返回的真实关联生成“查看过程”，禁止用全局最近请求或解析提示文本关联。全局顶部 toast；页面和组件内 catch 到的异常统一以 danger toast 展示，字段校验与结构化诊断仍就地展示。
+- `ToastProvider`：支持可选 `action={label,to}` 路由动作，带动作保留 15 秒；`useSuccessToast(title, receipt)` / `useErrorToast(title, error)` 从本次返回的真实关联生成「查看日志」（默认 `/logs?...&level=warning,error`），禁止用全局最近请求或解析提示文本关联。全局顶部 toast；页面和组件内 catch 到的异常统一以 danger toast 展示，字段校验与结构化诊断仍就地展示。
 - `LoadingOverlay`：用于对话框正文、文本编辑区、卡片或区块等待网络响应时的统一加载覆盖；不得用裸文字代替加载效果。
 - `Table`：用于表格型列表。首次加载且没有旧数据时传入 `loading` 与本地化 `loadingLabel`，由组件渲染表格骨架行；已有数据刷新时保留当前 rows，只让刷新入口或分页入口显示 loading。表格行由组件统一加 `motion-table-row` 交错入场（`--panel-stagger`，仅首屏/新增行播放）。表头单元格必须输出 `scope="col"`，sticky 表头保持不透明底色。表格嵌入已有边框的卡片时传 `framed=false`，由卡片承担边框（同一区域只保留一层卡片框）。单元格插槽按列 key 命名（`#<key>`），表头插槽 `#head-<key>`（如全选复选框），`#empty` 插槽负责真实无数据空态；行操作列每行固定「详情」入口，高频操作直接平铺为行内按钮，只有低频/危险操作收进行内「更多」菜单；`active-key` 标记覆盖详情当前对象（`aria-current` + muted 表面），表格行本身不可点击。
 - `TableDetailName`（`web/src/components/patterns/TableDetailName.vue`）：实体工作台名称列的详情入口；点击打开与操作列「详情」相同的覆盖式详情；必须传入本地化 `label`（`common.openDetails`）；不得用整行 click 替代。
@@ -41,7 +41,7 @@
 5. 应用文件与设施静态资产如果具备相同的上传、替换、下载、删除和文本编辑行为，必须复用 `AssetFileManager`，不得在页面内复制另一套文件行和弹窗；领域差异只能放在 adapter/API 中。
 6. 中大屏布局中，表格与覆盖式详情必须各自在模板提供的内部滚动区域内完成滚动，不得恢复页面级滚动；宽表格允许在表格容器内横向滚动。
 7. 实体工作台（servers/credentials/dns/certificates/applications）的列表与详情切换必须复用 `TableDetailLayout`：列表保持挂载（`inert` + `aria-hidden`），详情的选中参数与 tab 参数进 URL，打开详情 `push` 历史、关闭 `replace` 清参数；页面不得自建第二套切换壳。
-8. 操作/任务/日志与其它实体工作台使用 `TableDetailLayout`；不得再接入 `MasterDetailLayout` 交付页，也不得新增“紧凑视口自动选中首条”逻辑。
+8. 操作/任务与其它实体工作台使用 `TableDetailLayout`；日志使用 `ListPage` + Dialog；不得再接入 `MasterDetailLayout` 交付页，也不得新增“紧凑视口自动选中首条”逻辑。
 9. 页面内分段切换（如证书的域名/自签/密钥）使用带 `aria-current` 的链接或 `Tabs`，不得用一排 `primary` 按钮表达选中态；页面内搜索一律复用 `SearchInput`，不得手写放大镜 + Input 组合。
 
 ## 当前接入记录
@@ -50,8 +50,8 @@
 
 - `web/src/views/applications/index.vue`：应用搜索、状态、应用/设施连续纵向配置流、部署/网关/源站服务器多选、持久化数据下载/恢复，以及应用文件和设施静态资产共用的 `AssetFileManager` 已接入统一 primitives/patterns。 未保存修改的离开/取消保护已接入 `ConfirmDialog`。应用列表为表格 + 覆盖式详情，行操作区承载 详情/编辑/同步/停用/更新镜像/日志/删除，详情内保留 runtime/routes/files tabs 与持久化数据上下文面板。
 - `web/src/views/servers/index.vue` 与 `tabs/`：服务器列表为表格 + 覆盖式详情；详情一级 tab 覆盖资源/安全能力（容器、镜像、网络、存储卷、软件包、防火墙），tab 懒加载并在详情存活期内缓存；资源页与安全页的独立实现已删除。
-- `web/src/components/templates/TableDetailLayout.vue`：servers、credentials、dns、certificates、applications、operations、tasks、logs 通过 `detail-swap` 接入覆盖式详情进场；列表在详情打开时 `inert` + `aria-hidden`，关闭后保留滚动位置与筛选。
+- `web/src/components/templates/TableDetailLayout.vue`：servers、credentials、dns、certificates、applications、operations、tasks 通过 `detail-swap` 接入覆盖式详情进场；列表在详情打开时 `inert` + `aria-hidden`，关闭后保留滚动位置与筛选。`/logs` 使用 `ListPage` + Dialog，不走覆盖式详情。
 
-- `web/src/components/activity/EventTimeline.vue`：统一只读事实时间线，同步骤连续输出可折叠，异常和决策展开，技术标识折叠；通过 context/evidence 事件交由页面读取上下文与下载证据。`/logs` 只按需读取，保留手动刷新与 cursor 分页，不接入共享自动刷新，不显示全量计数或新数据提示；正文每次替换为当前 100 条批次，较早/较新导航只保存游标，禁止不断追加 DOM。
+- 产品 UI 不得再使用 EventTimeline / context / evidence。日志页只按需读取 events 列表，默认 `level=warning,error`，手动刷新与 cursor 分页。
 
-- `ActivityLink` 与 Toast 过程入口统一进入 `/logs`；应用协调入口进入 `/tasks`；用户意图列表为 `/operations`。接受 operationId/eventId/executionId/resourceType/resourceId。
+- `ActivityLink` 与 Toast 统一进入 `/logs?...&level=warning,error`；应用/设施协调入口进入 `/tasks`；用户意图列表为 `/operations`。

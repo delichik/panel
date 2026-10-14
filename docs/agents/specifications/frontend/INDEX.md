@@ -7,7 +7,7 @@
 | 范围 | 文档 | 主要源码 |
 | --- | --- | --- |
 | 色彩、字体、圆角、阴影、间距、控件高度、断点与主题运行时 | [visual-tokens.md](visual-tokens.md) | `web/src/styles/main.css`、`web/src/design/theme.ts`（CSS 变量为真源） |
-| AppShell、NavList、PageHeader、页面模板（TableDetailLayout/覆盖式详情为实体与操作/任务/日志标准壳；MasterDetailLayout 仅遗留、ListPage 为列表标准壳等）的使用边界与反例 | [layout-system.md](layout-system.md) | `web/src/components/shell/`、`web/src/components/templates/` |
+| AppShell、NavList、PageHeader、页面模板（TableDetailLayout/覆盖式详情为实体与操作/任务标准壳；日志为 ListPage+Dialog；MasterDetailLayout 仅遗留等）的使用边界与反例 | [layout-system.md](layout-system.md) | `web/src/components/shell/`、`web/src/components/templates/` |
 | 操作分级、列表查询进 URL、编辑脏状态、异步两阶段与规划失败/结果待核实反馈、后台清理状态恢复、反馈分层、加载骨架屏、浮层与键盘焦点模型、覆盖式详情开合与焦点归还 | [interaction-model.md](interaction-model.md) | 页面族目录、`web/src/components/ui/`、`web/src/composables/useOverlayBehavior.ts` |
 | 搜索、游标分页、只读事件时间线、Toast 操作深链、人工结果核对、确认、上传下载、状态、服务器选择、主从列表、表格行操作与名称列打开覆盖式详情、连续配置流、应用文件与设施资产管理 | [interaction-patterns.md](interaction-patterns.md) | `web/src/components/ui/`、`web/src/components/patterns/`（含 `TableDetailName`） |
 | 测试命令、单测组织、e2e/a11y 重建约定、Mock 体系 | [testing.md](testing.md) | `web/vitest.unit.config.ts`、`web/src/mocks/`、Taskfile |
@@ -16,13 +16,13 @@
 
 应用容器日志的实例选择与弹窗交互见 [interaction-patterns.md](interaction-patterns.md) 当前接入记录。
 
-日志页采用 [interaction-patterns.md](interaction-patterns.md) 的只读时间线与手动游标分页，不使用共享定时刷新或统计/新数据提示。
+操作/任务/日志三分：意图页用覆盖式详情；日志页用 ListPage + Dialog、默认 warning/error、手动游标分页；不使用共享定时刷新或统计横幅。
 
 设施逐节点诊断、失败运行日志和按需代理错误样本的反馈规则见 [interaction-model.md](interaction-model.md)。
 
-1. 写页面先选模板：Dashboard / List / Editor / Settings / Workspace，实体工作台与操作/任务/日志列表与详情统一使用 `TableDetailLayout`（表格 + 覆盖式详情）。`MasterDetailLayout` 不得再接入新交付页；阶段占位只允许在页面族接入前短期存在，交付页不得回退成通用 CollectionPage。
+1. 写页面先选模板：Dashboard / List / Editor / Settings / Workspace。实体工作台与操作/任务使用 `TableDetailLayout`；日志 `/logs` 使用 `ListPage` + Dialog。`MasterDetailLayout` 不得再接入新交付页。
 2. 视觉一律经 token：业务代码禁止裸色值、裸尺寸和自造阴影。颜色、状态和控件层级来自 `web/src/styles/main.css` 中的 `--panel-*` / Tailwind theme 变量。
 3. 组件一律经自有 primitives：Button、IconButton、Input、Textarea、Select、Dialog、Dropdown、Tabs、Badge、Table、Toast、Skeleton、EmptyState、Tooltip、Switch 位于 `web/src/components/ui/`。业务页面不得引入 Naive UI 或 Vuetify。
-4. 页面族必须独立：overview、servers、credentials、security、resources、applications、dns、certificates、activity、settings、auth、maintenance、debug 都有独立入口目录。可以复用模板和 primitives，但内容结构、操作闭环和 API 模块必须按业务任务设计。
+4. 页面族必须独立：overview、servers、credentials、applications、dns、certificates、operations、tasks、logs、settings、auth、maintenance、debug。资源/安全并入服务器详情；旧 activity 双视图不得恢复。
 5. 新增或修改用户可见文案遵守 `docs/agents/i18n-guide.md`。
 6. 新增可跨页面复用的组件或模式时，新增或更新规范并维护本索引。

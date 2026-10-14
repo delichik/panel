@@ -345,7 +345,10 @@ func (s *Service) Operations(ctx context.Context, f Filter) (Page[Operation], er
 	}
 	return out, err
 }
-func (s *Service) Operation(ctx context.Context, id string, snapshot, minSeq int64) (Detail, error) {
+// Operation returns one intent projection.
+// When light is true, only the operation summary and availableCommands are returned
+// (no events/executions/steps tree). Product UI uses light=true for diagnose flow.
+func (s *Service) Operation(ctx context.Context, id string, snapshot, minSeq int64, light bool) (Detail, error) {
 	f := Filter{OperationID: id, SnapshotSeq: snapshot, Limit: 100}
 	c, head, mark, err := s.bounds(ctx, f)
 	out := Detail{Events: []Event{}, Executions: []Execution{}, Steps: []Step{}, RelatedOperations: []string{}, AvailableCommands: []Command{}, SnapshotSeq: c.Snapshot, HeadSeq: head}
@@ -368,17 +371,27 @@ func (s *Service) Operation(ctx context.Context, id string, snapshot, minSeq int
 		return out, err
 	}
 	out.Operation = state.Operation
+	executions := make([]Execution, 0, len(state.Executions))
 	for _, ex := range state.Executions {
-		out.Executions = append(out.Executions, ex)
+		executions = append(executions, ex)
 	}
-	sort.Slice(out.Executions, func(i, j int) bool { return out.Executions[i].ExecutionID < out.Executions[j].ExecutionID })
+	sort.Slice(executions, func(i, j int) bool { return executions[i].ExecutionID < executions[j].ExecutionID })
+	if s.Commands != nil {
+		out.AvailableCommands = s.Commands(ctx, executions)
+	}
+	if light {
+		ops := []Operation{out.Operation}
+		if err = s.refreshOperationMetrics(ctx, ops, c.Snapshot); err != nil {
+			return out, err
+		}
+		out.Operation = ops[0]
+		return out, nil
+	}
+	out.Executions = executions
 	for _, st := range state.Steps {
 		out.Steps = append(out.Steps, st)
 	}
 	sort.Slice(out.Steps, func(i, j int) bool { return out.Steps[i].StepID < out.Steps[j].StepID })
-	if s.Commands != nil {
-		out.AvailableCommands = s.Commands(ctx, out.Executions)
-	}
 	out.RelatedOperations = state.Related
 	f.SnapshotSeq = c.Snapshot
 	p, err := s.Events(ctx, f)

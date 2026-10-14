@@ -35,7 +35,7 @@
 - 设施应用 API：`web/src/api/facilityApps.ts`
 - 类型：`web/src/types/applications.ts`、`web/src/types/facilityApps.ts`
 - Mock：`web/src/mocks/applications.ts`，由 `web/src/mocks/browser.ts` 挂载同名正式路径。
-- 日志入口：应用详情跳转 `/activity?view=operations&resourceType=application&resourceId=<id>`；本次部署有 `operationId` 时优先深链到该操作。历史按不可变事件读取，不从当前 jobs 或 instance observed 反推。
+- 协调/任务入口：应用详情跳转 `/tasks?resourceType=application&resourceId=<id>`；有 `operationId` 时打开该系统任务。排障日志经「查看日志」进入 `/logs?...&level=warning,error`。历史按不可变事件读取，不从当前 jobs 或 instance observed 反推。
 
 ## API 范围
 
@@ -148,7 +148,7 @@
 - 应用编辑器的可视化挂载区在页面正文只展示挂载摘要列表：类型、来源、容器路径、只读状态以及编辑/删除动作。新增或编辑挂载必须打开对话框承载完整字段，包含 Docker 只读挂载开关，以及按类型可用的节点文件权限字段：`file` / `panel_file` / `persistent` 支持 `uid`、`gid`，`file` 支持“可执行”开关，`persistent` 支持任意 `mode`，`panel_file` 不显示 mode。
 - 普通应用创建和编辑都使用隐藏独立页。文件区只提供一个上传入口，弹窗内选择文本文件、普通文件或上传文件夹压缩包；用户不填写 kind 或 MIME。文本类型进入代码编辑器，普通文件和归档类型显示文件选择控件；已存在的文本文件编辑仍复用同一弹窗，binary/archive 只有替换、下载、删除，不得出现文本编辑入口。替换保留原 `name`，操作中的 pending 和错误显示在对应文件行或上传弹窗内。
 - 设施编辑会话删除静态资产时，服务端必须先检查当前 draft route 对 `assetName` 的引用；仍被引用时应在 revision、资产记录和 blob 均未变化前拒绝，前端把错误显示在对应资产行。
-- 普通应用编辑页使用 `/api/v1/application-edit-sessions` durable 会话：进入时查询可恢复编辑，首次修改后懒创建会话；修改和文件操作串行携带 revision。保存主流程为本地校验 → 服务端检查 → 预览变更 → 保存并应用，提交期间禁用离开和重复提交；成功只表示配置已保存并请求应用，部署完成仍通过统一日志页（`/activity`）和运行时区观察。
+- 普通应用编辑页使用 `/api/v1/application-edit-sessions` durable 会话：进入时查询可恢复编辑，首次修改后懒创建会话；修改和文件操作串行携带 revision。保存主流程为本地校验 → 服务端检查 → 预览变更 → 保存并应用，提交期间禁用离开和重复提交；成功只表示配置已保存并请求应用，部署完成仍通过 `/tasks`、`/logs` 与运行时区观察。
 - v3 编辑页有路由离开和浏览器关闭保护；离开默认保留可恢复草稿，取消按钮会显式 discard 当前会话后返回列表。
 - `mounts` / `volumes` 属于 appspec YAML；应用编辑器只提供表单编辑，挂载通过结构化挂载区编辑，表单生成 YAML 时保留未覆盖的规格字段。应用文件模板是应用级文件内容，不属于 appspec YAML，不能混入应用规格。
 - 应用文件名校验拒绝 `/`、`\`、`..` 和控制字符，长度上限 255，避免 zip-slip 与“能保存无法下载”的死数据。

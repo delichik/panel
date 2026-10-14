@@ -12,11 +12,13 @@ const id = encodeURIComponent;
 export const activityApi = {
   events: (params: ActivityQuery = {}, options?: ApiRequestOptions) => apiClient.get<ActivityPage<ActivityEvent>>(`/activity/events${activityQuery(params)}`, options),
   event: (eventId: string, options?: ApiRequestOptions) => apiClient.get<ActivityEvent>(`/activity/events/${id(eventId)}`, options),
-  context: (eventId: string, params: ActivityQuery = {}) => apiClient.get<ActivityContext>(`/activity/events/${id(eventId)}/context${activityQuery(params)}`),
   operations: (params: ActivityQuery = {}) => apiClient.get<ActivityPage<ActivityOperation>>(`/activity/operations${activityQuery(params)}`),
-  operation: (operationId: string, params: ActivityQuery = {}) => apiClient.get<ActivityOperationDetail>(`/activity/operations/${id(operationId)}${activityQuery(params)}`),
+  /** Product diagnose UI defaults to detail=summary (no events/executions/steps tree). Pass detail:'full' only for tooling. */
+  operation: (operationId: string, params: ActivityQuery = {}) => apiClient.get<ActivityOperationDetail>(`/activity/operations/${id(operationId)}${activityQuery({ ...params, detail: params.detail === 'full' ? 'full' : 'summary' })}`),
+  export: (params: ActivityQuery = {}) => fetchBlob(`/api/v1/activity/export${activityQuery(params)}`, { fallbackFilename: 'activity.jsonl' }),
+  /** Non-product helpers retained for tooling/tests; product pages must not call these. */
+  context: (eventId: string, params: ActivityQuery = {}) => apiClient.get<ActivityContext>(`/activity/events/${id(eventId)}/context${activityQuery(params)}`),
   tail: (params: ActivityQuery = {}) => apiClient.get<ActivityPage<ActivityEvent>>(`/activity/tail${activityQuery(params)}`),
   summary: (params: ActivityQuery = {}) => apiClient.get<ActivitySummary>(`/activity/summary${activityQuery(params)}`),
-  export: (params: ActivityQuery = {}) => fetchBlob(`/api/v1/activity/export${activityQuery(params)}`, { fallbackFilename: 'activity.jsonl' }),
   evidence: (evidenceId: string) => fetchBlob(`/api/v1/activity/evidence/${id(evidenceId)}`, { fallbackFilename: 'evidence.bin' }),
 };

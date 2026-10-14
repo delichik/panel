@@ -14,7 +14,7 @@
 
 - 应用详情的容器日志增加实例选择、单实例自动加载、手动刷新及请求取消；既有 logs API 必传 instanceId，未新增路由/API/数据库字段。对应 `APP-RUN-002`、`UI-APP-007`。
 
-- 日志 `/activity` 拆为 `/operations`（用户意图）、`/tasks`（系统意图）、`/logs`（过程）；`/activity` 兼容重定向。operations 查询新增 `origin=user|system`。对应 `UI-ACT-001..004`，无新表。
+- 日志 `/activity` 拆为 `/operations`（用户意图）、`/tasks`（系统意图）、`/logs`（简单列表+Dialog）；`/activity` 兼容重定向。operations 查询新增 `origin=user|system`；产品详情默认 `detail=summary`。对应 `UI-ACT-001..004`，无新表；前端证据含 `IntentRecordsPage.test.ts`、`logs/index.test.ts`、`activityRedirect`/`activityReference`。
 
 `web/src/router/index.ts` 当前含 30 条路由 `path:` 声明（含父路由、重定向与 catch-all）。逐操作标准见 `ui-pages.md`，全局守卫及慢网路由进行中反馈见 `ui-shell-and-conventions.md`。
 
@@ -32,7 +32,7 @@
 
 - 本轮前端外壳/布局/动效优化：主导航抽出 `NavList.vue` 供桌面侧栏与移动抽屉复用（`aria-current` 深层归属、激活条、连续折叠动效、跳转链接），`MasterDetailLayout` 承担高度契约并支持 `detail-key` 详情进场，详情区可选横幅回归内部滚动区，Dialog 锁定背景滚动，Toast 增加图标/堆叠上限/悬停暂停，`useOverlayBehavior` 增加最上层 Escape 兜底；不新增路由、API、数据库表或后台任务，对应 `UI-SHELL-015/039/041/048/052/053/054/055/056/057`。
 - 同轮窄屏适配：顶栏在 `<1024px` 粘性置顶，7 个主从工作台的主列表/服务器选择器在窄屏限高 `60dvh` 并保持内部滚动，使详情在一屏内可及；抽屉关闭按钮与导航行放大到 44px；自有 motion 类的 hover 反馈收进 `@media (hover: hover)`，交互控件加 `touch-action: manipulation`。不新增路由或组件，对应 `UI-SHELL-013`。
-- 同轮窄屏主从单视图：`MasterDetailLayout` 新增 `back-label`/`has-detail`/`back` 单视图能力（`<xl` 一次只显示列表或详情，详情带返回列表操作），7 个主从页面接入并用 `useCompactViewport` 关闭窄屏自动选中首条；activity 保留自带的列表⇄详情切换。新增 `composables/useCompactViewport.ts` 与 `useCompactViewport.test.ts`，对应 `UI-SHELL-019/058`；不新增路由、API 或数据表。
+- 同轮窄屏主从单视图曾为 `MasterDetailLayout` 过渡能力；当前实体与操作/任务统一覆盖式详情，日志为 ListPage+Dialog，不再保留 activity 双栏切换。对应 `UI-SHELL-019/058`。
 - 验证证据（2026-09-26/27，WSL Debian / Node 22.23.3 / task 3.53.1）：`task test:web` = 48 个文件 259 项全通过；`task build:web`（`vue-tsc --noEmit && vite build`）退出码 0；构建产物抽查确认新类均已生成，且入场动画只保留 `backwards`（无 `both`）。测试期间修掉 `MasterDetailLayout` 模板前置注释导致的多根问题（会静默丢弃页面传入的 class）与 `views/applications` 自建 `.workspace-panel` 入场动画。
 
 - 内容区去分栏与服务器详情打磨：反向代理设施 `routes`/`nodes` Tabs、应用详情 `data` tab 与页头 ActivityLink、StorageShare/凭据/证书详情改为纵向叠放；服务器一级 tab 合并 Docker 为 `resources`+`subtab`（旧 tab 名兼容）、列表瘦列与工具栏收敛。不新增路由/API/表；对应 `UI-FAC-003`、`UI-APP-002/003`、`UI-SRV-016/017/018/019`、`UI-CRED-001`。

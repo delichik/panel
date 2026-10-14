@@ -10,8 +10,11 @@ export function activityPath(value: unknown, depth = 0): string | undefined {
   if (operationId) query.set('operationId', operationId);
   else if (eventId) query.set('eventId', eventId);
   else if (executionId) query.set('executionId', executionId);
-  // Toast / receipt "view process" always opens process logs, not the intent list.
-  if (query.size) return `/logs?${query}`;
+  // Toast / receipt opens diagnostic log lines for the correlated intent/execution.
+  if (query.size) {
+    if (!query.has('level')) query.set('level', 'warning,error');
+    return `/logs?${query}`;
+  }
   for (const key of ['activity', 'details', 'data', 'result']) {
     const nested = activityPath(record[key], depth + 1);
     if (nested) return nested;

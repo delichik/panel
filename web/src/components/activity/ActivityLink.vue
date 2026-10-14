@@ -13,7 +13,8 @@ function open() {
     executionId: props.executionId,
     resourceType: props.resourceType,
     resourceId: props.resourceId,
+    level: 'warning,error',
   }));
 }
 </script>
-<template><Button size="sm" variant="ghost" @click="open">{{ t('activity.relatedLogs') }}</Button></template>
+<template><Button size="sm" variant="ghost" @click="open">{{ t('intentRecords.viewLogs') }}</Button></template>

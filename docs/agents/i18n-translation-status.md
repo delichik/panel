@@ -5,6 +5,9 @@
 ## 当前状态
 
 - 本轮内容区去分栏：新增 `applicationsPage.facilityTabRoutes` / `facilityTabNodes`、`serversPage.tab.resources`；en / zh-CN 已同步（既有 containers/images/networks/volumes 词条复用为资源 subtab 标签）。
+- 本轮设计自洽：意图 `detail=summary`、删死 Activity 双视图/EventTimeline、ActivityLink/Toast 统一「查看日志」+诊断等级、应用/设施协调入口统一「查看系统任务」、新增 `intentRecords.resourceFilterHint`、`applicationsPage.viewTasks`；en / zh-CN 已同步。
+- 本轮排障精简：意图详情去掉执行树，主按钮「查看日志」默认跳 `level=warning,error`；日志默认诊断等级；Dialog 分开展示 errorCode/error/detail。新增 `intentRecords.viewLogs/noFailureSummary/diagnoseHint`、`logsPage.filter.diagnoseLevels/errorCode/error/detail`；en / zh-CN 已同步。
+- 本轮日志页收成简单列表+Dialog，新增 `logsPage.source`、`logsPage.detailTitle`、`logsPage.operationFilterHint`，并改写 `routes.logs.description`；en / zh-CN 已同步。
 - 本轮操作/任务/日志三分路由新增 `routes.operations.*`、`routes.logs.*`、`intentRecords.*`、`operationsPage.empty*`、`systemTasksPage.empty*`、`logsPage.*`，并改写 `routes.tasks.*` 为系统意图列表；en / zh-CN 已同步。
 - 本轮列表名称列可打开详情：新增 `common.openDetails`（`TableDetailName` 可访问名称）；en / zh-CN 已同步。
 - 本轮 Phase 3 视觉抛光新增 `activity.loadErrorHint`（列表/详情加载失败 EmptyState 用恢复提示，错误详情只走 toast，避免双重通知）；en / zh-CN 已同步。
@@ -41,7 +44,7 @@
 - 本轮应用端口映射新增 TCP/UDP 协议、Panel 防火墙管理开关、固定端口约束和规则状态摘要词条，en / zh-CN 已同步；后端补充端口协议、UFW 未安装、SSH/Agent 管理端口保护、双通道连通性门禁和受管规则冲突等稳定错误翻译。
 
 - 统一日志新增容量 warning/blocked 横幅与可用空间词条，明确容量持续增长和停止接收新变更时仍可查询导出，en / zh-CN 已同步。
-- 统一日志补充 Toast“查看过程”和人工核对执行结果的双语文案；人工核对明确标注人为判断并要求依据，不将其表述为系统自动验证。
+- Toast / ActivityLink 统一「查看日志」；人工核对执行结果双语文案明确标注人为判断并要求依据，不将其表述为系统自动验证。
 - 统一日志页面新增 `activity.*` 与 `routes.activity.title`，en / zh-CN 同步；请求、生命周期及状态显示按稳定词条渲染，原始远端输出保留原文。旧日志保留天数设置退出界面。
 
 - 本轮应用代理 Path 移除旧 `webSocket` 布尔兼容字段与重复开关，只保留 `applicationsPage.webSocketMode` 的 auto/on/off 选择器；删除 `applicationsPage.webSocket` 词条，en / zh-CN 已同步。

@@ -115,8 +115,14 @@ function openDetail(operationId: string) {
 function closeDetail() {
   updateQuery({ operationId: undefined }, false);
 }
-function openLogs(operationId: string) {
-  void router.push(logsPath({ operationId, from: read('from') || undefined, to: read('to') || undefined }));
+function openLogs(operationId: string, diagnose = true) {
+  void router.push(logsPath({
+    operationId,
+    // Jump into diagnostic lines first; the logs page can widen the level filter.
+    level: diagnose ? 'warning,error' : undefined,
+    from: read('from') || undefined,
+    to: read('to') || undefined,
+  }));
 }
 
 async function load() {
@@ -270,6 +276,12 @@ onBeforeUnmount(() => {
                 <Button size="sm" :variant="read('phase') ? 'primary' : 'ghost'" @click="updateQuery({ phase: 'running', attention: undefined })">{{ t('activity.running') }}</Button>
                 <Badge v-if="indexState && indexState !== 'ready'" tone="warning">{{ t('activity.indexState') }}</Badge>
               </div>
+              <div v-if="read('resourceId') || read('resourceType')" class="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <span>{{ t('intentRecords.resourceFilterHint') }}</span>
+                <Badge v-if="read('resourceType')" tone="neutral">{{ read('resourceType') }}</Badge>
+                <Badge v-if="read('resourceId')" tone="neutral">{{ read('resourceId') }}</Badge>
+                <Button size="sm" variant="ghost" @click="updateQuery({ resourceId: undefined, resourceType: undefined })">{{ t('activity.clearResource') }}</Button>
+              </div>
             </div>
           </template>
 
@@ -302,7 +314,7 @@ onBeforeUnmount(() => {
             <template #actions="{ row }">
               <div class="flex items-center justify-end gap-1">
                 <Button size="sm" variant="secondary" @click="openDetail(row.operationId)"><Eye />{{ t('common.details') }}</Button>
-                <Button size="sm" variant="ghost" @click="openLogs(row.operationId)">{{ t('intentRecords.viewProcess') }}</Button>
+                <Button size="sm" variant="ghost" @click="openLogs(row.operationId)">{{ t('intentRecords.viewLogs') }}</Button>
               </div>
             </template>
             <template #empty>
@@ -343,7 +355,7 @@ onBeforeUnmount(() => {
           >
             {{ t(command.kind === 'resolve' ? 'activity.resolve' : command.kind === 'retry' ? 'common.retry' : 'common.runNow') }}
           </Button>
-          <Button v-if="detail" size="sm" variant="secondary" @click="openLogs(detail.operation.operationId)">{{ t('intentRecords.viewProcess') }}</Button>
+          <Button v-if="detail" size="sm" variant="primary" @click="openLogs(detail.operation.operationId)">{{ t('intentRecords.viewLogs') }}</Button>
         </template>
 
         <EmptyState v-if="detailError" :title="t('common.loadFailed')" :description="detailError">
@@ -352,34 +364,18 @@ onBeforeUnmount(() => {
         <div v-else-if="detail" class="grid min-w-0 gap-4">
           <div class="flex flex-wrap gap-2">
             <Badge :tone="operationTone(detail.operation.result)">{{ stateLabel(detail.operation.result || detail.operation.phase) }}</Badge>
-            <Badge v-if="detail.operation.hadError" tone="warning">{{ t('activity.hadError') }}</Badge>
-            <Badge v-if="!detail.operation.evidenceComplete" tone="warning">{{ t('activity.incomplete') }}</Badge>
+            <Badge v-if="detail.operation.hadError" tone="danger">{{ t('activity.hadError') }}</Badge>
+            <Badge v-if="detail.operation.uncertainty" tone="warning">{{ t('activity.uncertain') }}</Badge>
           </div>
-          <p v-if="detail.operation.failureSummary" class="m-0 break-words text-sm text-danger">{{ detail.operation.failureSummary }}</p>
-          <p v-if="detail.operation.uncertainty" class="m-0 text-sm text-warning">{{ t('activity.uncertain') }}</p>
+          <p v-if="detail.operation.failureSummary" class="m-0 break-words rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ detail.operation.failureSummary }}</p>
+          <p v-else class="m-0 text-sm text-muted-foreground">{{ t('intentRecords.noFailureSummary') }}</p>
           <dl class="grid gap-2 text-sm sm:grid-cols-2">
             <div><dt class="text-muted-foreground">{{ t('intentRecords.resources') }}</dt><dd>{{ resourceLabel(detail.operation) }}</dd></div>
             <div><dt class="text-muted-foreground">{{ t('intentRecords.actor') }}</dt><dd>{{ detail.operation.actor?.name || detail.operation.actor?.id || t('activity.system') }}</dd></div>
             <div><dt class="text-muted-foreground">{{ t('intentRecords.time') }}</dt><dd>{{ formatDateTime(detail.operation.updatedAt) }}</dd></div>
             <div><dt class="text-muted-foreground">{{ t('intentRecords.attempts') }}</dt><dd>{{ detail.operation.attemptCount }}</dd></div>
           </dl>
-          <details v-if="detail.executions.length" class="rounded-xl border border-border p-3">
-            <summary class="cursor-pointer text-sm font-medium">{{ t('activity.executions') }}</summary>
-            <div v-for="execution in detail.executions" :key="execution.executionId" class="mt-2 rounded-lg bg-muted p-3 text-sm">
-              <div class="flex flex-wrap gap-2">
-                <Badge :tone="operationTone(execution.result)">{{ stateLabel(execution.result || execution.phase) }}</Badge>
-                <span class="text-xs text-muted-foreground">{{ formatDateTime(execution.startedAt) }}</span>
-              </div>
-              <div
-                v-for="step in detail.steps.filter(item => item.executionId === execution.executionId)"
-                :key="step.stepId"
-                class="mt-2 flex flex-wrap items-center justify-between gap-2"
-              >
-                <span>{{ step.name }}</span>
-                <Badge :tone="operationTone(step.result)">{{ stateLabel(step.result || step.phase) }}</Badge>
-              </div>
-            </div>
-          </details>
+          <p class="m-0 text-sm text-muted-foreground">{{ t('intentRecords.diagnoseHint') }}</p>
         </div>
       </ConsolePage>
     </template>

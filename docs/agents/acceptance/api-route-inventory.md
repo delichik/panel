@@ -35,7 +35,7 @@
 | 22 | `GET` | `/api/v1/activity/evidence/{id}` | [协调、任务与运行事件](orchestration-and-tasks.md) |
 | 23 | `GET` | `/api/v1/activity/export` | [协调、任务与运行事件](orchestration-and-tasks.md) |
 | 24 | `GET` | `/api/v1/activity/operations` | [协调、任务与运行事件](orchestration-and-tasks.md)；可选 `origin=user\|system` 分流用户操作与系统任务列表 |
-| 25 | `GET` | `/api/v1/activity/operations/{id}` | [协调、任务与运行事件](orchestration-and-tasks.md) |
+| 25 | `GET` | `/api/v1/activity/operations/{id}` | [协调、任务与运行事件](orchestration-and-tasks.md)；`detail=summary`（默认产品）只返回摘要+commands，`detail=full` 含事件树 |
 | 26 | `GET` | `/api/v1/activity/summary` | [协调、任务与运行事件](orchestration-and-tasks.md) |
 | 27 | `GET` | `/api/v1/activity/tail` | [协调、任务与运行事件](orchestration-and-tasks.md) |
 | 28 | `GET` | `/api/v1/application-edit-sessions/{id}/files/{name}` | [应用与设施应用](applications-and-facilities.md) |

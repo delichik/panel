@@ -35,7 +35,7 @@ export function useErrorToast() {
   const { t } = useI18n();
   return (title: string, reference?: unknown) => {
     const to = activityPath(reference);
-    toast.push({ title, tone: 'danger', action: to ? { label: t('activity.viewProcess'), to } : undefined });
+    toast.push({ title, tone: 'danger', action: to ? { label: t('intentRecords.viewLogs'), to } : undefined });
   };
 }
 
@@ -44,6 +44,6 @@ export function useSuccessToast() {
   const { t } = useI18n();
   return (title: string, reference?: unknown) => {
     const to = activityPath(reference);
-    toast.push({ title, tone: 'success', action: to ? { label: t('activity.viewProcess'), to } : undefined });
+    toast.push({ title, tone: 'success', action: to ? { label: t('intentRecords.viewLogs'), to } : undefined });
   };
 }

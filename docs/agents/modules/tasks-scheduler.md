@@ -122,7 +122,7 @@
 
 ## 统一日志事实
 
-- 产品只从 `/activity` 查看事件或按操作聚合；任务状态、协调决策、步骤和输出属于同一份日志。`/tasks` 不再注册为历史 API。
+- 产品从 `/operations`（用户意图）、`/tasks`（系统意图）、`/logs`（诊断日志行）查看历史；事实仍写入统一 activity 存储。前端 `/tasks` 是系统意图列表，不是旧轮询任务中心。
 - `tasks` / `task_steps` 使用 AppDB，保存内部执行控制状态。`internal/platform/activitylog/control_schema.go` 在创建、领取、阶段、结果、取消、重试和步骤变更的同一 SQL 事务中追加事实；事实写入失败时控制变更必须回滚。
 - `AppendLog` 直接调用 `activitylog.Append`，输出保存为 `output.chunk`。禁止按日志条数裁剪、长行截断、历史过期删除；`CleanupRetained` 不执行删除。`Logs` 从统一事件读取，每页 200 条，任务终态不影响读取迟到输出。
 - 执行 ID 为任务 ID 加尝试编号；同名步骤按尝试编号隔离。步骤开始时间只在实际开始时记录，直接完成的步骤不得伪造开始时间。

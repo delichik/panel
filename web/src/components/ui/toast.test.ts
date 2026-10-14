@@ -20,7 +20,7 @@ describe('toast process actions', () => {
     const wrapper = mount(Host, { attachTo: document.body, global: { plugins: [router] } });
     await wrapper.get('#send').trigger('click');
     const links = [...document.querySelectorAll<HTMLAnchorElement>('a')];
-    expect(links.map(link => link.getAttribute('href'))).toEqual(['/logs?operationId=op-one', '/logs?executionId=task-two']);
+    expect(links.map(link => link.getAttribute('href'))).toEqual(['/logs?operationId=op-one&level=warning%2Cerror', '/logs?executionId=task-two&level=warning%2Cerror']);
     await vi.advanceTimersByTimeAsync(4500);
     expect(document.querySelectorAll('a')).toHaveLength(2);
     links[1]!.click();

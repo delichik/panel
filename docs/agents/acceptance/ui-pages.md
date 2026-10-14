@@ -128,46 +128,48 @@
 | UI-APP-005 | 行内停用应用 | enabled 时可点，先 danger 确认后调用 stop；成功只提示请求接受并刷新 | 已停用禁用；失败保持应用状态 | 取消无请求，成功后状态来自重载而非前端假改 |
 | UI-APP-006 | 行内检查并更新镜像 | 仅 `imageUpdateAvailable` 时启用；提交 update 并按两阶段反馈 | 无更新时不请求 | 返回 ID 的 toast 正确，刷新后徽标由后端决定 |
 | UI-APP-007 | 点击行内“容器日志” | 打开 Dialog 并加载该应用实例；按服务器名/容器名选择目标，单个可读实例自动加载，多个等待选择；请求携带 instanceId、tail=240，正文内部滚动并支持手动刷新/刷新实例列表 | 已退出但存在的容器仍可选；无实例、不可读、空日志和读取失败分开；失败 toast 加就地重试；切换实例/应用/关闭时取消旧请求且迟到结果不串日志 | 只请求选中实例，不通过任务或协调记录代替容器日志；不定时轮询，长日志不撑开页面 |
-| UI-APP-008 | 打开协调记录 | 携带当前 application / facility resource filter 跳 `/tasks`；已有 operationId 时打开该系统任务详情；过程输出经「查看过程」进 `/logs` | 不从全局相邻事件猜测因果，不直接展示原始 ID 作为用户标题 | 目标页面筛选与当前应用对应，本次部署入口定位同一 operation |
+| UI-APP-008 | 打开协调记录 | 携带当前 application / facility resource filter 跳 `/tasks`；已有 operationId 时打开该系统任务详情；诊断输出经「查看日志」进 `/logs`（默认 `level=warning,error`） | 不从全局相邻事件猜测因果，不直接展示原始 ID 作为用户标题 | 目标页面筛选与当前应用对应，本次部署入口定位同一 operation |
 | UI-APP-009 | 行内删除应用 | 普通应用显示影响说明并 danger 确认；存在持久化配置/历史位置时先补载完整详情，使用 danger 强制勾选确认，明确说明将永久删除所有已记录节点的数据，并向后端传确认参数 | 取消零请求；未确认或清理失败不移除对象；补载详情失败不进入确认 | 持久化删除只有勾选后发出，成功后重载列表并关闭覆盖详情 |
 | UI-APP-010 | 下载持久化数据（详情上下文面板） | 展示历史数据节点选择器；单节点自动选择，多节点要求用户选择，携带 serverId 走授权 blob 下载 | 无记录位置或未选择节点时禁用；下载失败不生成损坏文件 | 未 apply 与已移除部署节点的数据均可按节点下载，按钮有单独 loading |
 | UI-APP-011 | 选择 zip 恢复持久化数据 | 文件选择后必须经 danger+强制勾选确认，再 multipart restore | 取消选择/确认不上传；没有 persistentPath 禁用 | 仅确认后发一笔请求，反馈只承诺已接受 |
 
-### UI-ACT-001 操作、任务与日志职责分离
+### UI-ACT-001 操作、任务与日志：精简且利于排障
 
 - **前置**：认证用户进入 `/operations`、`/tasks` 或 `/logs`；旧 `/activity` 仅作兼容重定向。
-- **动作**：浏览用户操作、系统任务或过程日志；从意图详情打开关联过程；复制摘要。
-- **结果**：
-  - `/operations` 仅列出用户触发意图（`origin=user`）；`/tasks` 仅列出自动协调/定时等系统意图（`origin=system`）；二者同构：时间、标题、资源、结果、失败摘要，详情提供「查看过程」进入 `/logs`。
-  - `/logs` 展示运行过程事实；错误优先显示 errorCode/error/detail；观测拒绝按稳定 reason 显示人类可读说明；完整事件 JSON 只在技术信息中折叠。
-  - Toast / `ActivityLink` 的过程入口指向 `/logs`；应用协调入口指向 `/tasks`。
-- **失败**：不得仅显示 eventType 或 trigger reason 掩盖真实错误；不得把用户操作与系统任务混在同一主列表；不同 resource/operation 的相邻事件不得被表现为同一因果链。
-- **不变量**：原始输出和已脱敏技术证据不翻译、不改写；三类页面不得恢复为 `/activity` 双投影 tab。
-- **验证**：activity model/timeline、origin 分流、activityRedirect、operation/tasks/logs deep-link tests。
+- **动作**：看「谁发起了什么」、看失败摘要、跳到日志定位原因。
+- **结果**（排障路径必须短）：
+  1. `/operations` = 用户意图；`/tasks` = 系统意图（协调/定时等）。列表同构：时间、标题、资源、结果、失败摘要。
+  2. 意图详情只保留状态、失败摘要、资源/执行者/时间/尝试次数，以及「查看日志」；不得展示 executions/steps 树、时间线、上下文或证据下载。
+  3. 「查看日志」与 Toast/`ActivityLink` 进入 `/logs`，默认带 `level=warning,error`（及可选 `operationId`/`executionId`），先看能定位问题的行；用户可放宽等级。
+  4. `/logs` 仅简单列表（时间、等级、来源、消息）+ Dialog 看单条正文；有结构化错误时 Dialog 分开展示 errorCode/error/detail。不得做时间线、上下文、证据、技术 JSON 或覆盖式详情。
+  5. 应用协调入口进 `/tasks`。
+- **失败**：不得用 eventType/trigger reason 冒充失败原因；不得把用户操作与系统任务混在同一主列表。
+- **不变量**：原始输出不翻译、不改写；产品 UI 不得恢复 `/activity` 双投影或日志关联工作台。存储仍可共用追加事实，但产品面必须按上述三职责呈现。
+- **验证**：origin 分流、activityRedirect、`IntentRecordsPage`（summary 详情 + View logs）、intent→logs 深链带 warning/error、logs 列表+Dialog 测试。
 
 ### UI-ACT-002 日志与意图列表首次加载
 
 - **前置**：认证用户进入 `/operations`、`/tasks` 或 `/logs`，URL 可能带完整查询条件，也可能缺少 `from`。
 - **动作**：页面首次挂载。
-- **结果**：必须立即按 URL 条件请求对应列表；缺少 `from` 时使用最近 24 小时并把该时间写回 URL，不请求全量摘要统计。意图列表请求必须带正确 `origin`。
+- **结果**：必须立即按 URL 条件请求对应列表；缺少 `from` 时使用最近 24 小时并把该时间写回 URL，不请求全量摘要统计。意图列表请求必须带正确 `origin`。`/logs` 缺省 `level` 时使用 `warning,error`。
 - **失败**：默认时间写回不得替代、延迟或重复首次列表请求；失败保留错误空态、toast 和重试入口。
 - **不变量**：首次列表加载不依赖定时器，不启动 tail/summary 轮询。
-- **验证**：logs/intent initial-load 覆盖无 `from` 和显式范围。
+- **验证**：logs/intent initial-load 覆盖无 `from`、默认诊断等级和显式范围。
 
 ### UI-ACT-003 日志与意图只按需刷新
 
 - **前置**：用户浏览日志或意图详情，可能保留其它页面的全局自动刷新设置。
 - **动作**：首次进入、手动刷新、修改查询条件、选择对象或翻页。
-- **结果**：仅这些动作读取对应列表/详情/上下文；不提供定时刷新开关，不读取或探测新数据，不显示总条数、错误/警告计数、新数据提示或快照编号。索引未就绪时可使用现有列表元数据简短提示，不额外请求。
-- **失败**：查询失败仍显示错误与手动重试；旧筛选、旧选择和旧上下文响应不得覆盖当前结果。没有自动错误重试或页面重新可见时的隐式轮询。
-- **不变量**：列表和详情保持快照游标分页及有界 DOM；手动刷新/导出继续使用既有快照语义。页面不调用 summary/tail；不为容量横幅保留统计查询，后端容量准入和结构化写入错误不受影响。共享自动刷新仍可供其它页面使用。
-- **验证**：`views/logs/index.test.ts` 覆盖首屏一次请求、空闲一分钟零追加请求、手动列表/详情刷新、游标翻页及迟到结果隔离。
+- **结果**：仅这些动作读取对应列表；日志详情 Dialog 只展示已加载行或按 eventId 单次补载，不拉上下文/证据。不提供定时刷新开关，不读取或探测新数据，不显示总条数、错误/警告计数、新数据提示或快照编号。索引未就绪时可使用现有列表元数据简短提示，不额外请求。
+- **失败**：查询失败仍显示错误与手动重试；旧筛选响应不得覆盖当前结果。没有自动错误重试或页面重新可见时的隐式轮询。
+- **不变量**：列表保持快照游标分页；手动刷新/导出继续使用既有快照语义。页面不调用 summary/tail/operation 详情树；不为容量横幅保留统计查询。共享自动刷新仍可供其它页面使用。
+- **验证**：`views/logs/index.test.ts` 覆盖首屏一次请求、空闲一分钟零追加请求、游标翻页、迟到结果隔离与详情 Dialog。
 
 ### UI-ACT-004 `/activity` 兼容重定向
 
 - **前置**：旧书签或深链打开 `/activity`，可能带 `view`、`operationId`、`eventId` 等 query。
 - **动作**：路由解析。
-- **结果**：`view=operations` 重定向到 `/tasks` 并保留相关筛选/选中参数；其余（含 `view=events` 或缺省）重定向到 `/logs` 并保留参数。
+- **结果**：`view=operations` 重定向到 `/tasks`（历史语义是协调意图，不是用户 `/operations`）并保留筛选/选中参数；其余（含 `view=events` 或缺省）重定向到 `/logs`；若带 operationId/executionId/eventId 且无 level，补上 `level=warning,error`。
 - **失败**：不得落到空白页或仍渲染旧双 tab Activity 页。
 - **验证**：`activityRedirect` 单测。
 
@@ -309,7 +311,7 @@
 ## 20. 覆盖来源
 
 - 全部路由：`web/src/router/index.ts`。
-- 页面实现：`web/src/views/auth`、`overview`、`servers`（含 `tabs/` 资源与安全 tab）、`credentials`、`applications`、`dns`、`certificates`、`operations`、`tasks`、`logs`（共享 `activity` 模型）、`settings`、`maintenance`、`debug`。
+- 页面实现：`web/src/views/auth`、`overview`、`servers`（含 `tabs/` 资源与安全 tab）、`credentials`、`applications`、`dns`、`certificates`、`operations`、`tasks`、`logs`（共享 `activity/model` 与 `IntentRecordsPage`）、`settings`、`maintenance`、`debug`。不得再保留可路由的 Activity 双视图页。
 - 操作/API：`web/src/api/*.ts`；DTO 与 capability：`web/src/types/*.ts`。
 - 字段校验和派生状态：各页面族 `model.ts`、`servers/tabs/resourceModel.ts`、`servers/tabs/securityModel.ts`、`assetImportEditor.ts`、`templateLanguage.ts`、`archivePath.ts`。
 - 共享交互：`web/src/components/ui`（含 `Table.vue`）、`web/src/components/templates/TableDetailLayout.vue`、`patterns/AssetFileManager.vue`、`ServerMultiPicker.vue`、`AutoRefreshControl.vue`。

@@ -1820,7 +1820,7 @@ function operationStageLabel(stage: string) {
   return label === key ? stage : label;
 }
 
-function openApplicationActivity(operationId = '') {
+function openApplicationTasks(operationId = '') {
   void router.push({
     path: '/tasks',
     query: {
@@ -1831,7 +1831,7 @@ function openApplicationActivity(operationId = '') {
   });
 }
 
-function openFacilityActivity() {
+function openFacilityTasks() {
   void router.push({ path: '/tasks', query: { resourceType: 'facility_app', resourceId: facilityKind.value } });
 }
 
@@ -2061,7 +2061,7 @@ onBeforeUnmount(() => {
                 <div v-if="planningError" role="alert" class="grid gap-2 rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">
                   <div class="flex flex-wrap items-center justify-between gap-2">
                     <strong>{{ t('applicationsPage.planningFailed') }}</strong>
-                    <Button size="sm" variant="ghost" @click="openApplicationActivity(planningError.operationId)"><ClipboardList />{{ t('applicationsPage.viewOperation') }}</Button>
+                    <Button size="sm" variant="ghost" @click="openApplicationTasks(planningError.operationId)"><ClipboardList />{{ t('applicationsPage.viewOperation') }}</Button>
                   </div>
                   <span class="whitespace-pre-wrap break-words">{{ planningError.message }}</span>
                   <span v-if="planningError.fileName" class="break-words">{{ t('applicationsPage.planningFile') }}: {{ planningError.fileName }}</span>
@@ -2071,7 +2071,7 @@ onBeforeUnmount(() => {
                 <div v-if="currentOperation" class="grid gap-3 rounded-2xl border border-border bg-muted p-4">
                   <div class="flex flex-wrap items-center justify-between gap-2">
                     <h3 class="m-0">{{ t('applicationsPage.currentDeployment') }}</h3>
-                    <Button v-if="currentOperation.operationId" size="sm" variant="ghost" @click="openApplicationActivity(currentOperation.operationId)"><ClipboardList />{{ t('applicationsPage.viewOperation') }}</Button>
+                    <Button v-if="currentOperation.operationId" size="sm" variant="ghost" @click="openApplicationTasks(currentOperation.operationId)"><ClipboardList />{{ t('applicationsPage.viewOperation') }}</Button>
                   </div>
                   <div class="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
                     <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationPhase') }}</span><StatusBadge :status="currentOperationStatus" domain="operation" :tone="currentOperationStatus === 'result_unknown' ? 'warning' : undefined" :label="operationStatusLabel(currentOperationStatus)" /></div>
@@ -2170,7 +2170,7 @@ onBeforeUnmount(() => {
     <template #actions>
       <template v-if="!facilityEditingView">
         <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
-        <Button v-if="currentFacilitySummary" size="sm" variant="ghost" @click="openFacilityActivity"><ClipboardList />{{ t('activity.relatedLogs') }}</Button><Button v-if="currentFacilitySummary && isReverseProxyFacility" size="sm" @click="runOperation(`facility-reconcile-${facilityKind}`, () => reverseProxyFacilityApi.reconcile(), 'applicationsPage.gatewayReconcileAccepted', 'applicationsPage.gatewayReconcileAcceptedWithoutId')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
+        <Button v-if="currentFacilitySummary" size="sm" variant="ghost" @click="openFacilityTasks"><ClipboardList />{{ t('applicationsPage.viewTasks') }}</Button><Button v-if="currentFacilitySummary && isReverseProxyFacility" size="sm" @click="runOperation(`facility-reconcile-${facilityKind}`, () => reverseProxyFacilityApi.reconcile(), 'applicationsPage.gatewayReconcileAccepted', 'applicationsPage.gatewayReconcileAcceptedWithoutId')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
         <Button v-if="currentFacilitySummary && isReverseProxyFacility" size="sm" variant="primary" @click="startInPlaceFacilityEdit"><Wrench />{{ t('common.edit') }}</Button>
       </template>
     </template>
