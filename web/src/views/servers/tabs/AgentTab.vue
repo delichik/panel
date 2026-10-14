@@ -14,7 +14,7 @@ import { useI18n } from '@/i18n';
 import type { ServerDto } from '@/types/servers';
 import type { TaskDto, TaskLog } from '@/types/tasks';
 import { createLatestRequestGuard, isAbortError } from '@/views/_shared/requestState';
-import { agentStatusKey, canRunPrivilegedOperation } from '../model';
+import { canRunPrivilegedOperation, serverSummaryStatusKey } from '../model';
 
 const props = defineProps<{ server: ServerDto; active: boolean }>();
 const { t } = useI18n();
@@ -156,7 +156,7 @@ onBeforeUnmount(() => {
   <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4">
     <div class="flex flex-wrap items-center justify-between gap-2">
       <div class="flex flex-wrap items-center gap-2">
-        <span class="text-sm text-muted-foreground">{{ t(agentStatusKey(server)) }}</span>
+        <span class="text-sm text-muted-foreground">{{ t(serverSummaryStatusKey(server)) }}</span>
         <StatusBadge v-if="agentTask" :status="agentTask.status" domain="task" :label="t(`tasksPage.status.${agentTask.status}`)" />
       </div>
       <div class="flex flex-wrap gap-2">

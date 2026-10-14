@@ -15,7 +15,7 @@ import type { ServerDto } from '@/types/servers';
 import type { TaskDto } from '@/types/tasks';
 import { formatDateTime } from '@/utils/datetime';
 import { createLatestRequestGuard, isAbortError } from '@/views/_shared/requestState';
-import { canRunPrivilegedOperation, credentialLabel, serverReachabilityTone } from '../model';
+import { credentialLabel, privilegeStatusKey, serverSummaryStatusKey, serverSummaryTone } from '../model';
 
 const props = defineProps<{ server: ServerDto; credentials: CredentialDto[]; active: boolean }>();
 const emit = defineEmits<{ refresh: [] }>();
@@ -129,12 +129,9 @@ onBeforeUnmount(() => {
       <section class="grid gap-3 border-b border-border pb-5">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.privilegeAndSecurity') }}</h3>
-          <div class="flex flex-wrap gap-2">
-            <Badge :tone="serverReachabilityTone(server)">{{ server.reachable ? t('serversPage.reachable') : t('serversPage.unreachable') }}</Badge>
-            <Badge :tone="canRunPrivilegedOperation(server) ? 'success' : 'warning'">{{ canRunPrivilegedOperation(server) ? t('serversPage.privileged') : t('serversPage.noPrivilege') }}</Badge>
-          </div>
+          <Badge :tone="serverSummaryTone(server)">{{ t(serverSummaryStatusKey(server)) }}</Badge>
         </div>
-        <p class="m-0 text-sm text-muted-foreground">{{ server.os?.prettyName || t('common.notAvailable') }} · {{ server.architecture || t('common.notAvailable') }}</p>
+        <p class="m-0 text-sm text-muted-foreground">{{ server.os?.prettyName || t('common.notAvailable') }} · {{ server.architecture || t('common.notAvailable') }} · {{ t(privilegeStatusKey(server)) }}</p>
       </section>
 
       <section class="grid gap-3 border-b border-border pb-5">

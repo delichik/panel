@@ -45,8 +45,9 @@ import {
   normalizeServerDetailTab,
   normalizeServerResourceSubtab,
   serverDetailTabs,
-  serverReachabilityTone,
   serverResourceSubtabs,
+  serverSummaryStatusKey,
+  serverSummaryTone,
   type FirewallView,
   type ServerDetailTab,
   type ServerResourceSubtab,
@@ -123,7 +124,7 @@ const columns = computed(() => [
 ]);
 
 function statusText(server: ServerDto) {
-  return server.reachable ? t('serversPage.reachable') : t('serversPage.unreachable');
+  return t(serverSummaryStatusKey(server));
 }
 
 function detailSubtabQuery() {
@@ -475,7 +476,7 @@ onBeforeUnmount(() => {
               </Tooltip>
             </template>
             <template #status="{ row }">
-              <Badge :tone="serverReachabilityTone(row)">{{ statusText(row) }}</Badge>
+              <Badge :tone="serverSummaryTone(row)">{{ statusText(row) }}</Badge>
             </template>
             <template #lastChecked="{ row }">
               <span class="text-muted-foreground">{{ formatDateTime(row.lastCheckedAt, t('common.never')) }}</span>

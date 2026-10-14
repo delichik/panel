@@ -54,7 +54,48 @@ export function serverReachabilityTone(server: ServerDto): 'success' | 'danger' 
   return server.reachable ? 'success' : 'danger';
 }
 
-/** Agent 能力的用户可见状态文案 key；列表行与 Agent tab 共用。 */
+/**
+ * 列表/概况对外只暴露这一枚综合状态，避免「可达」掩盖 Agent 受阻等更严重问题。
+ * 优先级：不可达 → 主机密钥不匹配 → Agent 受阻/不可用/不匹配/未安装 → 正常。
+ */
+export type ServerSummaryKind =
+  | 'unreachable'
+  | 'hostKeyMismatch'
+  | 'agentBlocked'
+  | 'agentUnavailable'
+  | 'agentMismatch'
+  | 'agentNotInstalled'
+  | 'ready';
+
+export function serverSummaryKind(server: ServerDto): ServerSummaryKind {
+  if (!server.reachable) return 'unreachable';
+  if (server.hostKeyMismatch) return 'hostKeyMismatch';
+  const enabled = server.traits?.['agent.enabled'] === 'true';
+  const status = server.traits?.['agent.status'];
+  if (status === 'undeployable') return 'agentBlocked';
+  if (status === 'unavailable') return 'agentUnavailable';
+  if (status === 'compatible' && enabled) return 'ready';
+  if (enabled || status === 'incompatible') return 'agentMismatch';
+  return 'agentNotInstalled';
+}
+
+export function serverSummaryStatusKey(server: ServerDto) {
+  return `serversPage.summary.${serverSummaryKind(server)}` as const;
+}
+
+export function serverSummaryTone(server: ServerDto): 'success' | 'warning' | 'danger' {
+  switch (serverSummaryKind(server)) {
+    case 'ready':
+      return 'success';
+    case 'agentMismatch':
+    case 'agentNotInstalled':
+      return 'warning';
+    default:
+      return 'danger';
+  }
+}
+
+/** Agent 能力的用户可见状态文案 key；Agent tab 任务区旁的细粒度标签仍可复用。 */
 export function agentStatusKey(server: ServerDto) {
   const status = server.traits?.['agent.status'];
   if (status === 'compatible') return 'serversPage.agentCompatible';

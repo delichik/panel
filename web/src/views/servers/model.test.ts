@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentTone, connectionHost, connectionSignature, credentialReferences, hasBlockingPairIssues, isLegacyResourceTab, normalizeServerDetailTab, normalizeServerResourceSubtab, parsePairs, serverDetailTabs, tailscaleObservedStatus, tailscalePreferences, tailscaleStatusKey, tailscaleTone, tailscaleTrait, validateProbeInput, validateServerInput } from './model';
+import { agentTone, connectionHost, connectionSignature, credentialReferences, hasBlockingPairIssues, isLegacyResourceTab, normalizeServerDetailTab, normalizeServerResourceSubtab, parsePairs, serverDetailTabs, serverSummaryKind, serverSummaryStatusKey, serverSummaryTone, tailscaleObservedStatus, tailscalePreferences, tailscaleStatusKey, tailscaleTone, tailscaleTrait, validateProbeInput, validateServerInput } from './model';
 import type { ServerDto } from '@/types/servers';
 
 const server: ServerDto = {
@@ -34,6 +34,28 @@ describe('server model', () => {
 
   it('maps agent capabilities from real server fields', () => {
     expect(agentTone(server)).toBe('success');
+  });
+
+  it('summarizes one user-facing server status with agent problems outranking mere reachability', () => {
+    expect(serverSummaryKind(server)).toBe('ready');
+    expect(serverSummaryStatusKey(server)).toBe('serversPage.summary.ready');
+    expect(serverSummaryTone(server)).toBe('success');
+
+    expect(serverSummaryKind({ ...server, reachable: false })).toBe('unreachable');
+    expect(serverSummaryTone({ ...server, reachable: false })).toBe('danger');
+
+    expect(serverSummaryKind({ ...server, hostKeyMismatch: true })).toBe('hostKeyMismatch');
+
+    const blocked = { ...server, traits: { ...server.traits, 'agent.status': 'undeployable' } };
+    expect(serverSummaryKind(blocked)).toBe('agentBlocked');
+    expect(serverSummaryTone(blocked)).toBe('danger');
+    // Reachable alone must not read as healthy when Agent cannot run.
+    expect(serverSummaryKind(blocked)).not.toBe('ready');
+
+    expect(serverSummaryKind({ ...server, traits: { ...server.traits, 'agent.status': 'unavailable' } })).toBe('agentUnavailable');
+    expect(serverSummaryKind({ ...server, traits: { ...server.traits, 'agent.status': 'incompatible' } })).toBe('agentMismatch');
+    expect(serverSummaryKind({ ...server, traits: { 'agent.enabled': 'false' } })).toBe('agentNotInstalled');
+    expect(serverSummaryTone({ ...server, traits: { 'agent.enabled': 'false' } })).toBe('warning');
   });
 
   it('computes credential references from server inventory', () => {
