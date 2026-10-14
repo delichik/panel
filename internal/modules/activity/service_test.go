@@ -407,3 +407,23 @@ func TestQueuedAggregateDoesNotReportSuccessBeforeChildren(t *testing.T) {
 		t.Fatalf("premature batch success %+v %v", detail.Operation, err)
 	}
 }
+
+func TestOperationsOriginSplitsUserAndSystemIntents(t *testing.T) {
+	s := testActivity(t)
+	ctx := context.Background()
+	_, err := s.Append(ctx, []EventInput{
+		{EventID: "user-op", EventType: "operation.requested", OperationID: "op-user", Trigger: "user", Actor: Actor{Kind: "user", ID: "admin", Name: "admin"}, Text: "Deploy app"},
+		{EventID: "sys-op", EventType: "operation.requested", OperationID: "op-sys", Trigger: "reconcile", Actor: Actor{Kind: "system"}, Text: "Reconcile app"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	users, err := s.Operations(ctx, Filter{Origin: "user"})
+	if err != nil || len(users.Items) != 1 || users.Items[0].OperationID != "op-user" {
+		t.Fatalf("user origin: %+v %v", users, err)
+	}
+	system, err := s.Operations(ctx, Filter{Origin: "system"})
+	if err != nil || len(system.Items) != 1 || system.Items[0].OperationID != "op-sys" {
+		t.Fatalf("system origin: %+v %v", system, err)
+	}
+}

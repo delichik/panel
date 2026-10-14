@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router';
+import { resolveActivityRedirect } from '@/api/activityRedirect';
 import { setUnauthorizedHandler } from '@/api/client';
 import { useSessionStore } from '@/stores/session';
 import { installRouteNavigationFeedback } from './navigationState';
@@ -30,7 +31,10 @@ export const router = createRouter({
         { path: 'certificates/domains', component: () => import('@/views/certificates/index.vue'), meta: { titleKey: 'routes.certificates.title' } },
         { path: 'certificates/self-signed', component: () => import('@/views/certificates/index.vue'), meta: { titleKey: 'routes.certificates.title' } },
         { path: 'certificates/keys', component: () => import('@/views/certificates/index.vue'), meta: { titleKey: 'routes.certificates.title' } },
-        { path: 'activity', component: () => import('@/views/activity/index.vue'), meta: { titleKey: 'routes.activity.title' } },
+        { path: 'operations', component: () => import('@/views/operations/index.vue'), meta: { titleKey: 'routes.operations.title' } },
+        { path: 'tasks', component: () => import('@/views/tasks/index.vue'), meta: { titleKey: 'routes.tasks.title' } },
+        { path: 'logs', component: () => import('@/views/logs/index.vue'), meta: { titleKey: 'routes.logs.title' } },
+        { path: 'activity', redirect: (to) => resolveActivityRedirect(to.query) },
         { path: 'settings', redirect: '/settings/general' },
         { path: 'settings/general', component: () => import('@/views/settings/index.vue'), meta: { titleKey: 'routes.settings.title' } },
         { path: 'settings/security', component: () => import('@/views/settings/index.vue'), meta: { titleKey: 'routes.settings.title' } },

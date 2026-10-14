@@ -34,7 +34,7 @@
 | 21 | `GET` | `/api/v1/activity/events/{id}/context` | [协调、任务与运行事件](orchestration-and-tasks.md) |
 | 22 | `GET` | `/api/v1/activity/evidence/{id}` | [协调、任务与运行事件](orchestration-and-tasks.md) |
 | 23 | `GET` | `/api/v1/activity/export` | [协调、任务与运行事件](orchestration-and-tasks.md) |
-| 24 | `GET` | `/api/v1/activity/operations` | [协调、任务与运行事件](orchestration-and-tasks.md) |
+| 24 | `GET` | `/api/v1/activity/operations` | [协调、任务与运行事件](orchestration-and-tasks.md)；可选 `origin=user\|system` 分流用户操作与系统任务列表 |
 | 25 | `GET` | `/api/v1/activity/operations/{id}` | [协调、任务与运行事件](orchestration-and-tasks.md) |
 | 26 | `GET` | `/api/v1/activity/summary` | [协调、任务与运行事件](orchestration-and-tasks.md) |
 | 27 | `GET` | `/api/v1/activity/tail` | [协调、任务与运行事件](orchestration-and-tasks.md) |

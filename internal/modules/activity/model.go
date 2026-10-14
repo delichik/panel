@@ -15,6 +15,8 @@ type Filter struct {
 	Q, Domain, Action, Kind, Level, Trigger, ActorID           string
 	ResourceType, ResourceID, OperationID, ExecutionID, StepID string
 	Phase, Result, Attention, HadError                         string
+	// Origin splits intent lists: "user" = operator actions, "system" = reconcile/schedule/startup/etc.
+	Origin                                                     string
 	From, To                                                   *time.Time
 	Cursor                                                     string
 	Limit                                                      int

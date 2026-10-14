@@ -1779,9 +1779,8 @@ function operationStageLabel(stage: string) {
 
 function openApplicationActivity(operationId = '') {
   void router.push({
-    path: '/activity',
+    path: '/tasks',
     query: {
-      view: 'operations',
       operationId: operationId || undefined,
       resourceType: 'application',
       resourceId: selectedApplication.value.id,
@@ -1790,7 +1789,7 @@ function openApplicationActivity(operationId = '') {
 }
 
 function openFacilityActivity() {
-  void router.push({ path: '/activity', query: { view: 'operations', resourceType: 'facility_app', resourceId: facilityKind.value } });
+  void router.push({ path: '/tasks', query: { resourceType: 'facility_app', resourceId: facilityKind.value } });
 }
 
 // 诊断详情（domain/path/assetName 等）只放在 details 里，页面必须展示出来，

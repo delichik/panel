@@ -1,9 +1,11 @@
 import {
   AppWindow,
   CircleGauge,
+  ClipboardList,
   FolderKanban,
   Globe,
   KeyRound,
+  ListTodo,
   RadioTower,
   Server,
   Settings,
@@ -48,7 +50,9 @@ export const navGroups: NavGroup[] = [
     key: 'system',
     titleKey: 'layout.nav.settings',
     items: [
-      { key: 'activity', titleKey: 'routes.activity.title', to: '/activity', icon: RadioTower },
+      { key: 'operations', titleKey: 'routes.operations.title', to: '/operations', icon: ClipboardList },
+      { key: 'tasks', titleKey: 'routes.tasks.title', to: '/tasks', icon: ListTodo },
+      { key: 'logs', titleKey: 'routes.logs.title', to: '/logs', icon: RadioTower },
       { key: 'settings', titleKey: 'routes.settings.title', to: '/settings/general', icon: Settings },
     ],
   },

@@ -53,17 +53,16 @@ AppShell
 
 模板位于 `web/src/components/templates/`，只负责结构、间距、滚动和断点折叠，不含业务逻辑。
 
-- `ListPage`：实体列表工作台的标准列表壳——`toolbar` + 表格滚动区 + `pagination`；**不得**再包一层 `rounded-2xl border bg-card` 外框。表格默认 `framed=true` 承担唯一边框层。servers / credentials / dns / certificates / applications 列表必须使用本模板。
+- `ListPage`：实体列表工作台的标准列表壳——`toolbar` + 表格滚动区 + `pagination`；**不得**再包一层 `rounded-2xl border bg-card` 外框。表格默认 `framed=true` 承担唯一边框层。servers / credentials / dns / certificates / applications / operations / tasks / logs 列表必须使用本模板。
 - `TableDetailLayout`：实体工作台（servers/credentials/dns/certificates/applications）的统一形态——列表与覆盖式详情叠放在同一网格单元，详情覆盖整个内容区（含列表页标题栏）。页面提供 `list` / `detail` 两个具名槽；详情打开时列表保持挂载但 `inert` + `aria-hidden`，关闭后滚动位置与筛选不丢；详情只播放一次进场（`detail-swap-*`）。
   - 高度契约由模板自身承担（`h-full min-h-0`）：页面不得用页面级滚动替代模板或详情正文的内部滚动；详情正文由页面按需选择整体滚动或分区滚动（服务器详情用 `ConsolePage` 的 `body-scroll=false`，资源 tab 各自内部滚动）。
   - 详情自带 `ConsolePage`/`PageHeader` 标题与本地化返回（`common.backToList`），返回清空选中参数与 tab 参数。
   - 选中对象不在当前页时（深链），页面按 id 补载详情，不得回落到“无选中”空态。
-- `MasterDetailLayout`：过渡期仅 `activity` 使用（其双栏几何见下）；其他实体工作台不得再接入。
+- `MasterDetailLayout`：遗留模板，保留组件测试与高度契约；**操作 `/operations`、任务 `/tasks`、日志 `/logs` 与其它实体工作台一律使用 `TableDetailLayout`**，不得再接入本模板交付页。
   - 高度契约由模板自身承担（`h-full min-h-0`）：调用方不再需要 `min-h-[600px+]` 之类的魔法高度，也不得用页面级滚动替代内部滚动。
   - 详情区正文统一使用 `grid-rows-[auto_minmax(0,1fr)]`（标题行 + 正文行）。存在可选横幅/告警时，横幅必须放进正文的内部滚动区，不得作为独立 grid 行，否则正文会落到 `auto` 行而失去内部滚动。
   - 传入 `detail-key`（当前选中对象标识）时，详情内容按 key 播放一次进场（`detail-swap-*`，只做进场）；同一对象的刷新不重播，未传 key 的页面保持即时替换。
   - 窄屏单列时，主列表/上下文选择器必须限高（`max-lg:max-h-[60dvh]`）并保持自身内部滚动；页面级滚动仍是窄屏的唯一页面滚动方式。
-  - activity 未传 `back-label`，保持两 pane 常驻并由页面自带列表⇄详情切换；其他页面不得再使用该单视图能力。
 - `EditorPage`：复杂创建/编辑，正文内部滚动，底部固定提交栏。
 - `SettingsPage`：分区短表单，最大宽度收敛，分区独立保存。嵌在 `ConsolePage` 内时**不得**再叠一层大 padding（由 `ConsolePage` 正文 `p-4` 承担）；分区面板保持单层 `bg-card` + `p-4`，侧栏可单独保留一层边框。
 - `WorkspacePage`：诊断、日志、终端等满高工作面。

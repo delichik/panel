@@ -10,9 +10,34 @@ export function activityPath(value: unknown, depth = 0): string | undefined {
   if (operationId) query.set('operationId', operationId);
   else if (eventId) query.set('eventId', eventId);
   else if (executionId) query.set('executionId', executionId);
-  if (query.size) return `/activity?${query}`;
+  // Toast / receipt "view process" always opens process logs, not the intent list.
+  if (query.size) return `/logs?${query}`;
   for (const key of ['activity', 'details', 'data', 'result']) {
     const nested = activityPath(record[key], depth + 1);
     if (nested) return nested;
   }
+}
+
+export function logsPath(query: Record<string, string | undefined>): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value) params.set(key, value);
+  }
+  return params.size ? `/logs?${params}` : '/logs';
+}
+
+export function operationsPath(query: Record<string, string | undefined> = {}): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value) params.set(key, value);
+  }
+  return params.size ? `/operations?${params}` : '/operations';
+}
+
+export function tasksPath(query: Record<string, string | undefined> = {}): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value) params.set(key, value);
+  }
+  return params.size ? `/tasks?${params}` : '/tasks';
 }

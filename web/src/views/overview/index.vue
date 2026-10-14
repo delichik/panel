@@ -756,7 +756,7 @@ onBeforeUnmount(() => {
               <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/servers')"><Server class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.servers.title') }}</span></Button>
               <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/credentials')"><ShieldCheck class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.credentials.title') }}</span></Button>
               <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/servers')"><Boxes class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.packages.title') }}</span></Button>
-              <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/activity')"><Activity class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.activity.title') }}</span></Button>
+              <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/logs')"><Activity class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.logs.title') }}</span></Button>
             </div>
           </section>
         </div>

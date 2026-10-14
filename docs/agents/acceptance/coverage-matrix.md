@@ -14,7 +14,7 @@
 
 - 应用详情的容器日志增加实例选择、单实例自动加载、手动刷新及请求取消；既有 logs API 必传 instanceId，未新增路由/API/数据库字段。对应 `APP-RUN-002`、`UI-APP-007`。
 
-- 日志 `/activity` 移除定时刷新、summary/tail 探测、条数/新数据/快照编号展示；仅首次和用户操作读取，保留手动刷新、详情与游标分页。对应 `UI-ACT-002/003`，无路由、API、数据库或后台任务变更。
+- 日志 `/activity` 拆为 `/operations`（用户意图）、`/tasks`（系统意图）、`/logs`（过程）；`/activity` 兼容重定向。operations 查询新增 `origin=user|system`。对应 `UI-ACT-001..004`，无新表。
 
 `web/src/router/index.ts` 当前含 30 条路由 `path:` 声明（含父路由、重定向与 catch-all）。逐操作标准见 `ui-pages.md`，全局守卫及慢网路由进行中反馈见 `ui-shell-and-conventions.md`。
 
@@ -25,7 +25,7 @@
 | 服务器 / 凭据 | `/servers`、`/credentials`（资源与安全并入服务器详情 tabs，无独立路由） |
 | 应用 | `/applications/apps`、`create`、`:applicationId/edit`、`facility-apps`、`:facilityKind`、`:facilityKind/config` |
 | DNS 与证书 | `/dns/domains`、`/certificates/domains`、`self-signed`、`keys` |
-| 可观测性 | `/activity`（事件/按操作）、`/system-events`、`/tasks`、`/debug` |
+| 可观测性 | `/operations`、`/tasks`、`/logs`（`/activity` 重定向）、`/debug` |
 | 设置 | `/settings/general`、`security`、`certificates`、`agent`、`tailscale`、`system-certificates`、`system`、`backups`，以及 `/settings` 重定向 |
 
 - `COV-UI-001`：同一路由内新增或调整字段选择、校验、空态等用户可见行为时，路由数量可以不变，但必须同步更新 `ui-pages.md` 的稳定验收项和对应前端测试。

@@ -2,7 +2,7 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { createMemoryHistory, createRouter, type Router } from 'vue-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import ActivityPage from './index.vue';
+import LogsPage from './index.vue';
 import { activityApi } from '@/api/activity';
 import { toastKey } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
@@ -14,18 +14,18 @@ const operation: ActivityOperationDetail = { operation: { operationId: 'op-1', d
 let wrapper: VueWrapper | undefined;
 let router: Router;
 
-async function render(url = '/activity?from=2026-09-14T00:00:00Z') {
-  router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/activity', component: ActivityPage }] });
+async function render(url = '/logs?from=2026-09-14T00:00:00Z') {
+  router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/logs', component: LogsPage }] });
   await router.push(url);
   await router.isReady();
-  wrapper = mount(ActivityPage, { global: {
+  wrapper = mount(LogsPage, { global: {
     plugins: [router], provide: { [toastKey as symbol]: { push: vi.fn() } },
     stubs: {
-      PageHeader: { template: '<header><slot name="actions" /></header>' },
-      MasterDetailLayout: { template: '<main><slot name="master" /><slot name="detail" /></main>' },
-      Tabs: { template: '<div><slot /></div>' },
+      ConsolePage: { template: '<section><header><slot name="actions" /></header><slot /></section>' },
+      TableDetailLayout: { template: '<main><slot name="list" /><slot name="detail" /></main>' },
+      ListPage: { template: '<div><slot name="toolbar" /><slot /><slot name="pagination" /></div>' },
+      Table: { props: ['rows'], template: '<div><div v-for="row in rows" :key="row.eventId">{{ row.text }}</div><slot name="empty" /></div>' },
       DateTimeRangePicker: true, Select: true, SearchInput: true,
-      ConfirmDialog: true, Dialog: true,
       EventTimeline: { name: 'EventTimeline', props: ['events'], emits: ['context'], template: '<div><span v-for="event in events" :key="event.eventId">{{ event.text }}</span></div>' },
     },
   } });
@@ -34,29 +34,15 @@ async function render(url = '/activity?from=2026-09-14T00:00:00Z') {
 }
 function button(text: string) { return wrapper!.findAll('button').find(item => item.text() === text)!; }
 
-// This vitest jsdom environment does not provide localStorage; stub it like
-// AppShell's test does so the auto-refresh preference can be seeded.
 function createStorage(): Storage {
   let store = new Map<string, string>();
   return {
-    get length() {
-      return store.size;
-    },
-    clear() {
-      store = new Map();
-    },
-    getItem(key: string) {
-      return store.has(key) ? store.get(key)! : null;
-    },
-    key(index: number) {
-      return Array.from(store.keys())[index] ?? null;
-    },
-    removeItem(key: string) {
-      store.delete(key);
-    },
-    setItem(key: string, value: string) {
-      store.set(key, String(value));
-    },
+    get length() { return store.size; },
+    clear() { store = new Map(); },
+    getItem(key: string) { return store.has(key) ? store.get(key)! : null; },
+    key(index: number) { return Array.from(store.keys())[index] ?? null; },
+    removeItem(key: string) { store.delete(key); },
+    setItem(key: string, value: string) { store.set(key, String(value)); },
   };
 }
 vi.stubGlobal('localStorage', createStorage());
@@ -74,9 +60,9 @@ beforeEach(() => {
 afterEach(() => { wrapper?.unmount(); wrapper = undefined; vi.useRealTimers(); vi.restoreAllMocks(); });
 
 // UI-ACT-002/003: no timers, new-data probing or aggregate requests while idle.
-describe('activity manual loading', () => {
+describe('logs manual loading', () => {
   it('loads once with a default range and stays idle until manual refresh', async () => {
-    const view = await render('/activity');
+    const view = await render('/logs');
     expect(activityApi.events).toHaveBeenCalledTimes(1);
     expect(router.currentRoute.value.query.from).toBeTruthy();
     await vi.advanceTimersByTimeAsync(60_000);
@@ -91,7 +77,7 @@ describe('activity manual loading', () => {
   });
 
   it('keeps cursor pagination and manual detail refresh without probing selected operations', async () => {
-    await render('/activity?from=2026-09-14T00:00:00Z&operationId=op-1');
+    await render('/logs?from=2026-09-14T00:00:00Z&operationId=op-1');
     expect(activityApi.operation).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(activityApi.tail).not.toHaveBeenCalled();
@@ -121,7 +107,7 @@ describe('activity manual loading', () => {
   it('discards pending context when the user moves to another timeline batch', async () => {
     let finish!: (value: Page<ActivityEvent>) => void;
     vi.spyOn(activityApi, 'context').mockImplementation(() => new Promise(resolve => { finish = resolve; }));
-    await render('/activity?from=2026-09-14T00:00:00Z&operationId=op-1');
+    await render('/logs?from=2026-09-14T00:00:00Z&operationId=op-1');
     wrapper!.findComponent({ name: 'EventTimeline' }).vm.$emit('context', event('detail-first'));
     await flushPromises();
     vi.mocked(activityApi.events).mockResolvedValueOnce(page('older-result'));

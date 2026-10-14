@@ -294,6 +294,15 @@ func (s *Service) Operations(ctx context.Context, f Filter) (Page[Operation], er
 			}
 		}
 	}
+	// User actions vs system intents (reconcile/schedule/startup/dependency): classify on the
+	// projected operation body so list pages stay paginated and do not mix origins.
+	userOrigin := `(ifnull(json_extract(v.body_json,'$.trigger'),'')='user' OR ifnull(json_extract(v.body_json,'$.actor.kind'),'')='user')`
+	switch f.Origin {
+	case "user":
+		query += " AND " + userOrigin
+	case "system":
+		query += " AND NOT " + userOrigin
+	}
 	countQuery := "SELECT COUNT(*) FROM (" + query + ")"
 	countArgs := append([]any{}, a...)
 	if c.After > 0 {

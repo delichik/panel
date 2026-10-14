@@ -4,6 +4,7 @@
 
 ## 当前状态
 
+- 本轮操作/任务/日志三分路由新增 `routes.operations.*`、`routes.logs.*`、`intentRecords.*`、`operationsPage.empty*`、`systemTasksPage.empty*`、`logsPage.*`，并改写 `routes.tasks.*` 为系统意图列表；en / zh-CN 已同步。
 - 本轮 Phase 3 视觉抛光新增 `activity.loadErrorHint`（列表/详情加载失败 EmptyState 用恢复提示，错误详情只走 toast，避免双重通知）；en / zh-CN 已同步。
 - 本轮 Phase 2 交互补齐新增 DNS/证书本地校验词条：`dnsPage.validationNameRequired/validationNameInvalid/validationTypeRequired/validationRecordNameRequired/validationContentRequired`，`certificatesPage.validationNameRequired/validationDomainRequired/validationCoverageRequired/validationCommonNameRequired/validationCaRequired`；en / zh-CN 已同步。
 - 本轮 Docker 成为 Agent 部署的自动前提：目标机使用默认本机 Docker socket 且运行时缺失时，部署自动安装 `docker.io`、启用服务并等待就绪；自定义 Docker host 完全跳过，失败以 `agent_docker_failed` 结束。**不新增前端词条**（任务阶段复用 `preparing`，远端输出为自由文本）；后端新增 `agent_docker_failed` 中文翻译，en / zh-CN 界面无需同步新键。

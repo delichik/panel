@@ -64,7 +64,7 @@
 
 应用页“容器日志”的实例选择、手动读取及请求隔离见 [APP-RUN-002](applications-and-facilities.md) 和 [UI-APP-007](ui-pages.md)。
 
-日志记录页面的按需读取、无定时刷新和无统计探测行为见 [UI-ACT-002/003](ui-pages.md)。
+操作/任务/日志三分路由、按需读取与 `/activity` 重定向见 [UI-ACT-001..004](ui-pages.md)。
 
 失败运行日志与有界降级见 [ORCH-CTRL-008](orchestration-and-tasks.md)；设施逐节点部署、按需请求错误诊断见 [FAC-RP-012/013](applications-and-facilities.md)。
 

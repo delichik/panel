@@ -10,7 +10,7 @@
 - 查询及可重建投影：`internal/modules/activity/`。
 - 装配、认证上下文与响应回执：`internal/bootstrap/panel/activity.go`、`app.go`。
 - Agent 持久事件协议：[agent-execution-events.md](agent-execution-events.md)。
-- 界面、API、类型、Mock：`web/src/views/activity/`、`web/src/api/activity.ts`、`web/src/types/activity.ts`、`web/src/mocks/activity.ts`。
+- 界面、API、类型、Mock：`web/src/views/operations/`、`web/src/views/tasks/`、`web/src/views/logs/`（共享逻辑在 `web/src/views/activity/` 与 `web/src/views/_shared/IntentRecordsPage.vue`）、`web/src/api/activity.ts`、`web/src/types/activity.ts`、`web/src/mocks/activity.ts`。
 
 ## 持久化约束
 
@@ -47,17 +47,19 @@
 
 `/api/v1/activity` 提供 events、单事件/context、operations/详情、tail、summary、export、evidence。日志命名空间没有用户写入、修改或删除接口。
 
-- 默认事件视图，按操作是同一事实的聚合视图，统一详情显示时间线和证据。
+- 前端三分路由：`/operations`（用户意图）、`/tasks`（系统意图）、`/logs`（运行过程）。旧 `/activity` 仅兼容重定向。
+- `GET /activity/operations?origin=user|system` 按投影 body 的 trigger/actor.kind 分流；前端不得从混合列表客户端过滤冒充分页。
+- `/logs` 读取 events/详情时间线；操作与任务同构列表+覆盖详情，通过「查看过程」带 `operationId` 进入日志。
 - LogDB 保存事件索引、FTS搜索及版本化操作投影；checkpoint 与投影在一个事务提交。
 - 按固定 snapshotSeq 和游标分页，返回 headSeq/projectedThroughSeq/hasMore。后端按操作分页，前端不得从当前页事件拼分组。
 - 事件每批默认100、最多500；全局搜索支持短文本和正文索引，筛选输入必须绑定参数。
 - timeline 增量读取不因完成事件停止；Agent stream.closed 前不宣告远端证据完整。
-- 业务页面使用 ActivityLink 和 Toast action 进入日志；错误响应仍保留真实关联标识。
-- 应用资源入口默认进入按操作视图，本次操作有真实 `operationId` 时直接打开对应时间线，不能让用户从全局事件接收顺序猜测因果关系。
+- 业务页面使用 ActivityLink 和 Toast action 进入 `/logs`；错误响应仍保留真实关联标识。
+- 应用协调入口进入 `/tasks`，有真实 `operationId` 时打开该系统任务；过程不得从全局事件接收顺序猜测因果关系。
 - 操作投影的失败摘要只从结构化 `data.error`、`data.detail`、`data.errorCode` 依次取值，不使用 trigger reason 或普通 `text` 冒充失败原因；这三个结构化错误字段同时进入 FTS，允许按真实错误和稳定错误码搜索。投影 schema 版本变化会重建 LogDB 可重建索引，不改写 AppDB 原始事实。
 - 预期的无 Job 陈旧/重复观测不写 `observation.rejected` warning；真正的 durable Job lease/fencing/实例异常拒绝必须携带关联操作、资源、明确 reason 与新旧观测诊断。
-- 复用 v4 ConsolePage/MasterDetailLayout/primitives，桌面滚动限制在正文，窄屏恢复自然布局。
-- 原 `/tasks`、`/system-events`、`/application-operations` 历史路由退出使用。`/executions` 只负责当前执行控制与允许的命令，不是另一个日志入口。
+- 复用 v4 ConsolePage/TableDetailLayout/primitives，桌面滚动限制在正文，窄屏恢复自然布局。
+- 原合并 Activity 双 tab、`/system-events`、旧轮询任务中心退出使用。`/executions` 只负责当前执行控制与允许的命令，不是另一个日志入口。
 
 ## 验证
 

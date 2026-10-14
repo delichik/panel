@@ -40,7 +40,7 @@
 5. 应用文件与设施静态资产如果具备相同的上传、替换、下载、删除和文本编辑行为，必须复用 `AssetFileManager`，不得在页面内复制另一套文件行和弹窗；领域差异只能放在 adapter/API 中。
 6. 中大屏布局中，表格与覆盖式详情必须各自在模板提供的内部滚动区域内完成滚动，不得恢复页面级滚动；宽表格允许在表格容器内横向滚动。
 7. 实体工作台（servers/credentials/dns/certificates/applications）的列表与详情切换必须复用 `TableDetailLayout`：列表保持挂载（`inert` + `aria-hidden`），详情的选中参数与 tab 参数进 URL，打开详情 `push` 历史、关闭 `replace` 清参数；页面不得自建第二套切换壳。
-8. `activity` 过渡期继续使用 `MasterDetailLayout` 双栏与页面自带的列表⇄详情切换；其他页面不得再接入 `MasterDetailLayout` 单视图，也不得新增“紧凑视口自动选中首条”逻辑。
+8. 操作/任务/日志与其它实体工作台使用 `TableDetailLayout`；不得再接入 `MasterDetailLayout` 交付页，也不得新增“紧凑视口自动选中首条”逻辑。
 9. 页面内分段切换（如证书的域名/自签/密钥）使用带 `aria-current` 的链接或 `Tabs`，不得用一排 `primary` 按钮表达选中态；页面内搜索一律复用 `SearchInput`，不得手写放大镜 + Input 组合。
 
 ## 当前接入记录
@@ -49,8 +49,8 @@
 
 - `web/src/views/applications/index.vue`：应用搜索、状态、应用/设施连续纵向配置流、部署/网关/源站服务器多选、持久化数据下载/恢复，以及应用文件和设施静态资产共用的 `AssetFileManager` 已接入统一 primitives/patterns。 未保存修改的离开/取消保护已接入 `ConfirmDialog`。应用列表为表格 + 覆盖式详情，行操作区承载 详情/编辑/同步/停用/更新镜像/日志/删除，详情内保留 runtime/routes/files tabs 与持久化数据上下文面板。
 - `web/src/views/servers/index.vue` 与 `tabs/`：服务器列表为表格 + 覆盖式详情；详情一级 tab 覆盖资源/安全能力（容器、镜像、网络、存储卷、软件包、防火墙），tab 懒加载并在详情存活期内缓存；资源页与安全页的独立实现已删除。
-- `web/src/components/templates/TableDetailLayout.vue`：servers、credentials、dns、certificates、applications 通过 `detail-swap` 接入覆盖式详情进场；列表在详情打开时 `inert` + `aria-hidden`，关闭后保留滚动位置与筛选。`activity` 继续使用 `MasterDetailLayout` 双栏，不受影响。
+- `web/src/components/templates/TableDetailLayout.vue`：servers、credentials、dns、certificates、applications、operations、tasks、logs 通过 `detail-swap` 接入覆盖式详情进场；列表在详情打开时 `inert` + `aria-hidden`，关闭后保留滚动位置与筛选。
 
-- `web/src/components/activity/EventTimeline.vue`：统一只读事实时间线，同步骤连续输出可折叠，异常和决策展开，技术标识折叠；通过 context/evidence 事件交由页面读取上下文与下载证据。`/activity` 只按需读取，保留手动刷新与 cursor 分页，不接入共享自动刷新，不显示全量计数或新数据提示；正文每次替换为当前 100 条批次，较早/较新导航只保存游标，禁止不断追加 DOM。
+- `web/src/components/activity/EventTimeline.vue`：统一只读事实时间线，同步骤连续输出可折叠，异常和决策展开，技术标识折叠；通过 context/evidence 事件交由页面读取上下文与下载证据。`/logs` 只按需读取，保留手动刷新与 cursor 分页，不接入共享自动刷新，不显示全量计数或新数据提示；正文每次替换为当前 100 条批次，较早/较新导航只保存游标，禁止不断追加 DOM。
 
-- `ActivityLink` 统一从资源或操作进入 `/activity`，接受 operationId/eventId/executionId/resourceType/resourceId；不得再创建独立任务日志或协调历史入口。
+- `ActivityLink` 与 Toast 过程入口统一进入 `/logs`；应用协调入口进入 `/tasks`；用户意图列表为 `/operations`。接受 operationId/eventId/executionId/resourceType/resourceId。

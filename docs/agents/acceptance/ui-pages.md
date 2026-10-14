@@ -18,7 +18,7 @@
 | 应用 | `/applications/apps`、`/applications/apps/create`、`/applications/apps/:applicationId/edit` | `/applications` 重定向 |
 | 设施应用 | `/applications/facility-apps`、`/applications/facility-apps/:facilityKind` | `/:facilityKind/config` 为可直达编辑态深链 |
 | DNS / 证书 | `/dns/domains`、`/certificates/domains`、`/certificates/self-signed`、`/certificates/keys` | — |
-| 运行记录 | `/application-operations`、`/system-events` | `/tasks` 为兼容任务中心 |
+| 操作 / 任务 / 日志 | `/operations`、`/tasks`、`/logs` | `/activity` 兼容重定向到上述三者 |
 | 设置 / 诊断 | `/settings/general`、`security`、`certificates`、`agent`、`tailscale`、`system-certificates`、`system`、`backups` | `/settings` 重定向；`/debug` 隐藏直达 |
 | 未找到 | AppShell 内 catch-all | 保留导航 |
 
@@ -44,7 +44,7 @@
 | UI-OVR-007 | 打开单卡编辑器 | 可改类型、宽高、range、服务器范围；网络卡额外显示 rx/tx/both；空 serverIds 表示全部服务器 | 类型改变需归一默认尺寸；非网络卡不得保留可见网络方向控件 | 关闭弹窗保留当前编辑草稿，最终统一由仪表盘保存提交 |
 | UI-OVR-008 | 保存或取消编辑 | 保存一次提交完整可见卡片配置，成功退出编辑并整卡重载；取消恢复进入前快照 | 保存失败留在编辑态、显示 toast/错误；保存中防重复 | 后端返回配置成为新基线，失败时用户改动未丢失 |
 | UI-OVR-009 | 编辑中点击其他路由 | 弹出放弃确认；取消留在原页，确认恢复旧快照后再跳转 | 不得静默丢改动；仅打开卡片编辑器也视为需保护 | 两条确认分支的 URL 与卡片数据均正确 |
-| UI-OVR-010 | 风险队列或快捷入口 | 风险项跳到自身明确目标；快捷入口分别到 servers、credentials、servers（软件包 tab）、activity | 无风险显示健康空提示，不生成不可点击假项 | 每个按钮目标与文案匹配，较窄宽度不溢出 |
+| UI-OVR-010 | 风险队列或快捷入口 | 风险项跳到自身明确目标；快捷入口分别到 servers、credentials、servers（软件包 tab）、logs | 无风险显示健康空提示，不生成不可点击假项 | 每个按钮目标与文案匹配，较窄宽度不溢出 |
 
 ## 5. 服务器 `/servers`
 
@@ -128,37 +128,48 @@
 | UI-APP-005 | 行内停用应用 | enabled 时可点，先 danger 确认后调用 stop；成功只提示请求接受并刷新 | 已停用禁用；失败保持应用状态 | 取消无请求，成功后状态来自重载而非前端假改 |
 | UI-APP-006 | 行内检查并更新镜像 | 仅 `imageUpdateAvailable` 时启用；提交 update 并按两阶段反馈 | 无更新时不请求 | 返回 ID 的 toast 正确，刷新后徽标由后端决定 |
 | UI-APP-007 | 点击行内“容器日志” | 打开 Dialog 并加载该应用实例；按服务器名/容器名选择目标，单个可读实例自动加载，多个等待选择；请求携带 instanceId、tail=240，正文内部滚动并支持手动刷新/刷新实例列表 | 已退出但存在的容器仍可选；无实例、不可读、空日志和读取失败分开；失败 toast 加就地重试；切换实例/应用/关闭时取消旧请求且迟到结果不串日志 | 只请求选中实例，不通过任务或协调记录代替容器日志；不定时轮询，长日志不撑开页面 |
-| UI-APP-008 | 打开协调记录 | 携带 `view=operations` 与当前 application resource filter 跳 `/activity`；已有 operationId 时直接打开本次时间线 | 不从全局相邻事件猜测因果，不直接展示原始 ID 作为用户标题 | 目标页面筛选与当前应用对应，本次部署入口定位同一 operation |
+| UI-APP-008 | 打开协调记录 | 携带当前 application / facility resource filter 跳 `/tasks`；已有 operationId 时打开该系统任务详情；过程输出经「查看过程」进 `/logs` | 不从全局相邻事件猜测因果，不直接展示原始 ID 作为用户标题 | 目标页面筛选与当前应用对应，本次部署入口定位同一 operation |
 | UI-APP-009 | 行内删除应用 | 普通应用显示影响说明并 danger 确认；存在持久化配置/历史位置时先补载完整详情，使用 danger 强制勾选确认，明确说明将永久删除所有已记录节点的数据，并向后端传确认参数 | 取消零请求；未确认或清理失败不移除对象；补载详情失败不进入确认 | 持久化删除只有勾选后发出，成功后重载列表并关闭覆盖详情 |
 | UI-APP-010 | 下载持久化数据（详情上下文面板） | 展示历史数据节点选择器；单节点自动选择，多节点要求用户选择，携带 serverId 走授权 blob 下载 | 无记录位置或未选择节点时禁用；下载失败不生成损坏文件 | 未 apply 与已移除部署节点的数据均可按节点下载，按钮有单独 loading |
 | UI-APP-011 | 选择 zip 恢复持久化数据 | 文件选择后必须经 danger+强制勾选确认，再 multipart restore | 取消选择/确认不上传；没有 persistentPath 禁用 | 仅确认后发一笔请求，反馈只承诺已接受 |
 
-### UI-ACT-001 Activity 事件与操作可读性
+### UI-ACT-001 操作、任务与日志职责分离
 
-- **前置**：`/activity` 同时包含部署 operation、普通事件、结构化错误及观测拒绝。
-- **动作**：浏览事件/按操作视图、打开时间线或复制摘要。
-- **结果**：错误优先显示 errorCode/error/detail；观测拒绝按稳定 reason 显示人类可读说明；复制内容与可见摘要一致，完整事件 JSON 只在技术信息中折叠展示。
-- **失败**：不得仅显示 eventType 或 trigger reason 掩盖真实错误；不同 resource/operation 的相邻事件不得被表现为同一因果链。
-- **不变量**：原始输出和已脱敏技术证据不翻译、不改写；应用入口默认按 operation 查看。
-- **验证**：activity model/timeline、operation deep-link tests。
+- **前置**：认证用户进入 `/operations`、`/tasks` 或 `/logs`；旧 `/activity` 仅作兼容重定向。
+- **动作**：浏览用户操作、系统任务或过程日志；从意图详情打开关联过程；复制摘要。
+- **结果**：
+  - `/operations` 仅列出用户触发意图（`origin=user`）；`/tasks` 仅列出自动协调/定时等系统意图（`origin=system`）；二者同构：时间、标题、资源、结果、失败摘要，详情提供「查看过程」进入 `/logs`。
+  - `/logs` 展示运行过程事实；错误优先显示 errorCode/error/detail；观测拒绝按稳定 reason 显示人类可读说明；完整事件 JSON 只在技术信息中折叠。
+  - Toast / `ActivityLink` 的过程入口指向 `/logs`；应用协调入口指向 `/tasks`。
+- **失败**：不得仅显示 eventType 或 trigger reason 掩盖真实错误；不得把用户操作与系统任务混在同一主列表；不同 resource/operation 的相邻事件不得被表现为同一因果链。
+- **不变量**：原始输出和已脱敏技术证据不翻译、不改写；三类页面不得恢复为 `/activity` 双投影 tab。
+- **验证**：activity model/timeline、origin 分流、activityRedirect、operation/tasks/logs deep-link tests。
 
-### UI-ACT-002 Activity 首次加载
+### UI-ACT-002 日志与意图列表首次加载
 
-- **前置**：认证用户进入 `/activity`，URL 可能带完整查询条件，也可能缺少 `from`。
-- **动作**：Activity 页面首次挂载。
-- **结果**：必须立即按 URL 条件请求当前事件/操作视图的列表；缺少 `from` 时使用最近 24 小时并把该时间写回 URL，不请求全量摘要统计。
+- **前置**：认证用户进入 `/operations`、`/tasks` 或 `/logs`，URL 可能带完整查询条件，也可能缺少 `from`。
+- **动作**：页面首次挂载。
+- **结果**：必须立即按 URL 条件请求对应列表；缺少 `from` 时使用最近 24 小时并把该时间写回 URL，不请求全量摘要统计。意图列表请求必须带正确 `origin`。
 - **失败**：默认时间写回不得替代、延迟或重复首次列表请求；失败保留错误空态、toast 和重试入口。
 - **不变量**：首次列表加载不依赖定时器，不启动 tail/summary 轮询。
-- **验证**：activity initial-load 组件/逻辑测试覆盖无 `from` 和显式范围。
+- **验证**：logs/intent initial-load 覆盖无 `from` 和显式范围。
 
-### UI-ACT-003 日志只按需刷新
+### UI-ACT-003 日志与意图只按需刷新
 
-- **前置**：用户浏览日志或选中操作详情，可能保留其它页面的全局自动刷新设置。
+- **前置**：用户浏览日志或意图详情，可能保留其它页面的全局自动刷新设置。
 - **动作**：首次进入、手动刷新、修改查询条件、选择对象或翻页。
 - **结果**：仅这些动作读取对应列表/详情/上下文；不提供定时刷新开关，不读取或探测新数据，不显示总条数、错误/警告计数、新数据提示或快照编号。索引未就绪时可使用现有列表元数据简短提示，不额外请求。
 - **失败**：查询失败仍显示错误与手动重试；旧筛选、旧选择和旧上下文响应不得覆盖当前结果。没有自动错误重试或页面重新可见时的隐式轮询。
 - **不变量**：列表和详情保持快照游标分页及有界 DOM；手动刷新/导出继续使用既有快照语义。页面不调用 summary/tail；不为容量横幅保留统计查询，后端容量准入和结构化写入错误不受影响。共享自动刷新仍可供其它页面使用。
-- **验证**：`views/activity/index.test.ts` 覆盖首屏一次请求、空闲一分钟零追加请求、手动列表/详情刷新、游标翻页及迟到结果隔离。
+- **验证**：`views/logs/index.test.ts` 覆盖首屏一次请求、空闲一分钟零追加请求、手动列表/详情刷新、游标翻页及迟到结果隔离。
+
+### UI-ACT-004 `/activity` 兼容重定向
+
+- **前置**：旧书签或深链打开 `/activity`，可能带 `view`、`operationId`、`eventId` 等 query。
+- **动作**：路由解析。
+- **结果**：`view=operations` 重定向到 `/tasks` 并保留相关筛选/选中参数；其余（含 `view=events` 或缺省）重定向到 `/logs` 并保留参数。
+- **失败**：不得落到空白页或仍渲染旧双 tab Activity 页。
+- **验证**：`activityRedirect` 单测。
 
 ## 10. 应用创建/编辑器
 
@@ -238,34 +249,17 @@
 | UI-CERT-013 | 导出资产归档 | 默认导出所选 asset，无选择则所有用户资产；密码必填，先创建 export task 再下载结果 | 系统托管资产不得进入集合；任务/下载失败明确 toast | 请求 assetIds 正确，下载归档可打开 |
 | UI-CERT-014 | 批量导入 | 选择支持归档+密码，先 multipart preflight；显示冲突数/ready；无危险冲突可执行，`requiresDangerConfirm` 时必须 danger+强制勾选后 overwrite | 改文件清旧 plan；未 preflight 不出现执行；不得预先 `confirmDanger=true` | 危险执行 payload 仅确认后带确认标志，成功提示真实 taskId |
 
-## 15. 协调记录 `/application-operations`
+## 15. 操作 `/operations` 与任务 `/tasks`
 
-| 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
-| --- | --- | --- | --- | --- |
-| UI-OPS-001 | 搜索应用 ID、筛 status/source、翻页 | 250ms 防抖，服务端过滤，URL 恢复 applicationId/status/source/page/operationId；筛选或翻页清旧详情/抽屉 | 空筛选结果与加载失败分离 | 分享 URL 恢复同一列表和可用详情 |
-| UI-OPS-002 | 浏览列表 | 每条显示应用/设施名、action、状态、目标服务器或成功/失败进度、failure summary、来源、时间 | facility-reverse-proxy 显示“入口代理设施”；用户可见标题不得展示原始 operation/application/srv ID | 有 serverName 时绝不回退 ID，长错误截断但详情可见 |
-| UI-OPS-003 | 选记录 | GET 完整详情；显示开始/结束、目标结果、失败目标错误码/消息/详情和每服务器 desired/actual/generation/stage/retry | operationId 不在当前页时显示专属提示并可清除；详情失败可重试 | 切记录清旧详情，迟到响应不覆盖新记录 |
-| UI-OPS-004 | 查看不一致目标的步骤日志 | 右侧抽屉显示各 stage 的开始时间、耗时、状态、翻译 stage 名与 detail；一致目标不显示日志按钮 | 无 stages 有空态；自由技术 detail 原样显示 | Escape/显式关闭、焦点圈定/恢复、背景锁滚动；遮罩点击不关闭 |
+已并入 `UI-ACT-001..004`：用户操作与系统任务分路由、同构列表+覆盖详情，过程统一走 `/logs`。下列编号保留为已废弃，不得再实现独立旧页。
 
-## 16. 系统事件 `/system-events`
+| 编号 | 状态 |
+| --- | --- |
+| UI-OPS-001..004 | 已废弃：原 `/application-operations`；由 `/tasks` + `/logs` 替代 |
+| UI-EVT-001..003 | 已废弃：原 `/system-events`；由 `/logs` 替代 |
+| UI-TASK-001..005 | 已废弃：原轮询任务中心；由 `/tasks`（系统意图）+ `/logs`（过程）替代，且不得恢复定时轮询 |
 
-| 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
-| --- | --- | --- | --- | --- |
-| UI-EVT-001 | 设置 eventType、severity、时间范围、page | URL 恢复全部条件；条件变化页码回 1；默认最近 24h；服务端分页过滤 | 非法 page 回 1，错误清当前失败结果并提供重试 | query 与请求参数一致，清筛选移除相应 query |
-| UI-EVT-002 | 选择时间范围 | 双月历选择 from/to，支持时分秒、最近 24h/7d/30d、应用/取消 | 未应用不改列表；from/to 不完整不得发无效范围 | ISO 值进入 URL 和 API，取消保持原值 |
-| UI-EVT-003 | 查看事件表 | sticky 表头显示本地时间、severity、翻译 event type、翻译 summary、source；长摘要 Tooltip 查看完整 | 无结果区分有筛选/无筛选；失败显示重试 | 未知类型/摘要回退原文，分页固定底部 |
-
-## 17. 兼容任务中心 `/tasks`
-
-| 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
-| --- | --- | --- | --- | --- |
-| UI-TASK-001 | 搜索、状态筛选、翻页、选择 operation/task | 搜索透传后端 q 并跨页匹配；状态含 running/queued/scheduled/failed/failed_retryable/blocked/cancelled/completed；URL 恢复全部状态 | 查询变化页码回 1，列表失败有重试 | 返回/刷新保持同一 operation/task；用户标题不直接显示原始 ID |
-| UI-TASK-002 | 自动轮询 | 默认每 5 秒静默刷新列表；可暂停/恢复，隐藏标签暂停，防重入 | 静默刷新保留当前内容和选择，不整页 skeleton | 暂停后无周期请求，恢复后继续 |
-| UI-TASK-003 | 查看操作组和执行项 | operation 聚合优先显示 running/failed 状态；每 task 以 summary 为标题、type 为副标题；切 task 清 steps/logs/cursor | 无选择显示引导；迟到详情不串 task | 状态映射覆盖所有 TaskStatus，中文摘要按当前 locale 翻译 |
-| UI-TASK-004 | 查看 steps/logs/error | 并行读取 steps 与增量 logs；steps 显示百分比/状态/错误，日志内部换行滚动，error 单独 tab | 加载失败与“无步骤/无日志/无错误”分离并可重试 | 重新选 task 从 cursor=0，静默更新同 task 可增量追加 |
-| UI-TASK-005 | 立即运行或重试 | 仅后端 `allowRunNow/allowRetry` 时显示；请求成功提示新 taskId 并刷新组 | 失败不改变旧 task 状态 | 每个按钮只有自身 loading，零权限时入口不存在 |
-
-## 18. 设置 `/settings/*`
+## 16. 设置 `/settings/*`
 
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
@@ -281,7 +275,7 @@
 | UI-SET-010 | 保存 Agent download（`/settings/agent`） | 编辑下载基址、传输超时与「校验下载 TLS 证书」开关；只合入 agent 分区；超时校验 60..3600 秒，越界就地报错且不发请求 | 基址留空即表示关闭 HTTP 投递，文案必须说明回落到 SSH 上传；校验开关关闭时必须说明完整性仍由 SSH 下发的 sha256 保证 | 保存后重新 hydrate 且只回显归一化基址；保存本分区不得提交其他分区未保存脏值 |
 | UI-SET-011 | 打开 `/settings/tailscale`、编辑认证密钥与 ACL 标签，或点击「应用 / 重连」 | 密钥为只写密码输入：留空保存表示保留已存密钥，已配置时显示「认证密钥已配置」徽标、未配置时警示节点无法加入 tailnet；标签按 `tag:name` 本地解析并对非法项就地阻断（错误文案列出具体标签）；保存只合入 `tailscale` 分区并重新 hydrate；「清除认证密钥」须 danger 确认后提交清除；容器状态区展示 available/running/loggedIn、主机名、版本、IPv4/IPv6、backendState、最近应用时间与 `lastError`；`available=false` 时显示不可用空态并禁用「应用 / 重连」 | 存在非法标签时不发请求；清除失败保留当前状态与输入；容器不可用时按钮禁用且不得伪造状态或轮询不存在的接口；「应用」只表示已请求协调，不得表述为 tailscaled 已登录 | 保存后只回显归一化标签与 `authKeyConfigured`（密钥框保持为空）；确认弹窗取消时零请求；不可用时展示需在 Seamark 之外配置的说明而不是错误码堆叠 |
 
-## 19. 维护 `/maintenance/backup`
+## 17. 维护 `/maintenance/backup`
 
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
@@ -293,7 +287,7 @@
 | UI-MAINT-006 | 下载完成的 export | 仅 canDownload 显示，用当前 export token 进行授权 blob 下载 | 401 退出维护登录；失败不生成文件 | 文件名/内容来自响应，普通 auth header 不混入 |
 | UI-MAINT-007 | 退出维护登录 | 停止轮询、清当前模式 token和状态，回维护登录表单 | logout API 失败也应完成本地清理 | 后续 status 请求不再发送旧 token |
 
-## 20. 诊断 `/debug`
+## 18. 诊断 `/debug`
 
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
@@ -306,22 +300,22 @@
 | UI-DBG-007 | 清理运行数据 | 首次进入读取清理状态，确认已无在途清理后才启用操作；危险确认说明清理范围、配置保留及后台暂停，并要求勾选；提交后独立展示状态、阶段、开始/结束时间 | 禁重复提交；查询失败保留上次快照并显示“结果待核实”及只读核对入口，不自动重发 POST；失败说明部分批次可能已删除，恢复后台失败单独呈现 | 同一次 runId 的完成才触发完成反馈；成功/失败后重载诊断；完成后说明后台可能立即产生新数据 |
 | UI-DBG-008 | 清理中刷新、离页或隐藏标签 | 返回后 GET 恢复进度，暂停诊断快照刷新不影响清理状态查询；清理中不周期性扫描数据库快照；隐藏标签暂停状态轮询，重新可见立即核对 | 卸载取消本页定时器及在途查询，不取消服务端清理；原任务结果丢失/Panel 重启为待核实，不能无限转圈或伪报成功 | 清理轮询不重入，网络异常退避且提供手动核对；无后台清理时也可手动查询最近结果 |
 
-## 21. 未找到页面
+## 19. 未找到页面
 
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
 | UI-404-001 | 认证用户进入未知 AppShell 路径 | 显示本地化标题、说明、空态和 primary“返回概览” | 不静默改 URL、不白屏、不丢导航 | 点击后到 `/overview`，顶栏标题为 notFound titleKey |
 
-## 22. 覆盖来源
+## 20. 覆盖来源
 
 - 全部路由：`web/src/router/index.ts`。
-- 页面实现：`web/src/views/auth`、`overview`、`servers`（含 `tabs/` 资源与安全 tab）、`credentials`、`applications`、`dns`、`certificates`、`activity`、`settings`、`maintenance`、`debug`。
+- 页面实现：`web/src/views/auth`、`overview`、`servers`（含 `tabs/` 资源与安全 tab）、`credentials`、`applications`、`dns`、`certificates`、`operations`、`tasks`、`logs`（共享 `activity` 模型）、`settings`、`maintenance`、`debug`。
 - 操作/API：`web/src/api/*.ts`；DTO 与 capability：`web/src/types/*.ts`。
 - 字段校验和派生状态：各页面族 `model.ts`、`servers/tabs/resourceModel.ts`、`servers/tabs/securityModel.ts`、`assetImportEditor.ts`、`templateLanguage.ts`、`archivePath.ts`。
 - 共享交互：`web/src/components/ui`（含 `Table.vue`）、`web/src/components/templates/TableDetailLayout.vue`、`patterns/AssetFileManager.vue`、`ServerMultiPicker.vue`、`AutoRefreshControl.vue`。
 - 自动化证据：页面 model 测试、API client/API 模块测试、`domainRoutes.test.ts` Mock 集成样本、`Table.test.ts`、`TableDetailLayout.test.ts`、`servers/index.test.ts`、`servers/tabs/*.test.ts`，以及共享组件/布局/i18n/主题测试。
 
-## 23. 当前实现与自动化缺口（不得作为放宽验收的依据）
+## 21. 当前实现与自动化缺口（不得作为放宽验收的依据）
 
 1. ~~applications 编辑器 footer 取消调用 `router.back()`~~：已改为明确返回 `/applications/apps`（见 GAP-003 / UI-APP-023）。
 2. ~~application detail/runtime/files 加载失败仅 toast~~：已补详情作用域 EmptyState 与重试（见 GAP-004 / UI-APP-002/003）。

@@ -16,7 +16,7 @@ func NewHandler(service *Service) *Handler { return &Handler{service} }
 func queryFilter(r *http.Request) (Filter, error) {
 	q := r.URL.Query()
 	allowed := map[string]bool{}
-	for _, k := range []string{"q", "domain", "action", "kind", "level", "trigger", "actorId", "resourceType", "resourceId", "operationId", "executionId", "stepId", "phase", "result", "attention", "hadError", "from", "to", "cursor", "limit", "snapshotSeq", "afterSeq", "minSeq", "scope", "before", "after"} {
+	for _, k := range []string{"q", "domain", "action", "kind", "level", "trigger", "actorId", "resourceType", "resourceId", "operationId", "executionId", "stepId", "phase", "result", "attention", "hadError", "origin", "from", "to", "cursor", "limit", "snapshotSeq", "afterSeq", "minSeq", "scope", "before", "after"} {
 		allowed[k] = true
 	}
 	for k, values := range q {
@@ -24,7 +24,10 @@ func queryFilter(r *http.Request) (Filter, error) {
 			return Filter{}, panelerr.BadRequest("activity_query_invalid", "Unknown or repeated activity query parameter: "+k)
 		}
 	}
-	f := Filter{Q: q.Get("q"), Domain: q.Get("domain"), Action: q.Get("action"), Kind: q.Get("kind"), Level: q.Get("level"), Trigger: q.Get("trigger"), ActorID: q.Get("actorId"), ResourceType: q.Get("resourceType"), ResourceID: q.Get("resourceId"), OperationID: q.Get("operationId"), ExecutionID: q.Get("executionId"), StepID: q.Get("stepId"), Phase: q.Get("phase"), Result: q.Get("result"), Attention: q.Get("attention"), HadError: q.Get("hadError"), Cursor: q.Get("cursor")}
+	f := Filter{Q: q.Get("q"), Domain: q.Get("domain"), Action: q.Get("action"), Kind: q.Get("kind"), Level: q.Get("level"), Trigger: q.Get("trigger"), ActorID: q.Get("actorId"), ResourceType: q.Get("resourceType"), ResourceID: q.Get("resourceId"), OperationID: q.Get("operationId"), ExecutionID: q.Get("executionId"), StepID: q.Get("stepId"), Phase: q.Get("phase"), Result: q.Get("result"), Attention: q.Get("attention"), HadError: q.Get("hadError"), Origin: q.Get("origin"), Cursor: q.Get("cursor")}
+	if f.Origin != "" && f.Origin != "user" && f.Origin != "system" {
+		return Filter{}, panelerr.BadRequest("activity_origin_invalid", "origin must be user or system")
+	}
 	var err error
 	f.Limit, err = parseInt(q.Get("limit"), 100)
 	if err != nil || f.Limit < 1 || f.Limit > 500 {
