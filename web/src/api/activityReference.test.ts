@@ -1,0 +1,17 @@
+import { describe, expect, it } from 'vitest';
+import { ApiError } from './client';
+import { activityPath } from './activityReference';
+describe('activity deep links', () => {
+  it('prefers the complete operation and encodes untrusted IDs as query values', () => {
+    expect(activityPath({ operationId: 'op/x & y', taskId: 'task-1' })).toBe('/logs?operationId=op%2Fx+%26+y&level=warning%2Cerror');
+    expect(activityPath({ taskId: 'task-1' })).toBe('/logs?executionId=task-1&level=warning%2Cerror');
+    expect(activityPath({ acceptedEventId: 'event-1' })).toBe('/logs?eventId=event-1&level=warning%2Cerror');
+  });
+  it('preserves failure and polling-timeout links while rejecting resource IDs and free text', () => {
+    expect(activityPath(new ApiError('timeout', 408, 'execution_wait_timeout', { taskId: 'task-1' }))).toBe('/logs?executionId=task-1&level=warning%2Cerror');
+    expect(activityPath({ id: 'resource-1' })).toBeUndefined();
+    expect(activityPath('task-1')).toBeUndefined();
+    const cycle: { details?: unknown } = {}; cycle.details = cycle;
+    expect(activityPath(cycle)).toBeUndefined();
+  });
+});
