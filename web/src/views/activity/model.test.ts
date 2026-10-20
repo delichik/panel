@@ -30,6 +30,17 @@ describe('activity timeline', () => {
     const translate = (key: string, params?: Record<string, string | number>) => `${key}:${params?.instance ?? ''}`;
     expect(eventDisplayMessage(item, translate)).toBe('activity.observationRejected.staleOrOwnershipLost:facility-reverse-proxy-srv-1');
   });
+
+  // SRV-DEL-009: an application disabled by a node removal must explain itself.
+  it('explains an application disabled because its deployment node was removed', () => {
+    const item = {
+      ...event('disabled', 24, 'Application disabled because it lost its last deployment node'),
+      eventType: 'application.disabled',
+      data: { applicationId: 'app_1', serverId: 'srv_1', reason: 'server_removed' },
+    } as ActivityEvent;
+    const translate = (key: string, params?: Record<string, string | number>) => `${key}:${params?.application ?? ''}:${params?.server ?? ''}`;
+    expect(eventDisplayMessage(item, translate)).toBe('activity.applicationDisabled:app_1:srv_1');
+  });
 });
 
 describe('manual outcome verification', () => {

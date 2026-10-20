@@ -35,6 +35,12 @@ export function eventDisplayMessage(
 ) {
   const error = errorMessage(event);
   if (error) return error;
+  if (event.eventType === 'application.disabled') {
+    return t('activity.applicationDisabled', {
+      application: dataString(event, 'applicationId') || t('activity.system'),
+      server: dataString(event, 'serverId') || t('common.notAvailable'),
+    });
+  }
   if (event.eventType !== 'observation.rejected') return eventMessage(event);
 
   const instance = dataString(event, 'instanceId') || t('activity.system');

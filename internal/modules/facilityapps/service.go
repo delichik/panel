@@ -311,6 +311,35 @@ func (s *Service) ReconcileReverseProxy(ctx context.Context) error {
 	return s.triggerReverseProxyReconcile(ctx, "application_change", nil)
 }
 
+// ReconcileAfterServerRemoved 在节点被删除后重新收敛入口代理与存储共享。
+//
+// 节点删除事务已经修剪了持久化的网关、源站、存储节点和分区记录，本方法负责
+// 让运行态跟上：入口代理伪应用要按新的网关列表重新计算启用状态与部署目标，
+// 入口代理的 nginx 配置要在剩余网关上重新渲染，存储共享要重新下发导出配置。
+//
+// 这里不传 stopServers：被删除的节点已经不存在，编排器无法再为它创建停止
+// Job，硬传会让协调因为外键约束失败。
+func (s *Service) ReconcileAfterServerRemoved(ctx context.Context, serverID string) error {
+	var firstErr error
+	if err := s.triggerReverseProxyReconcile(ctx, "server_removed", nil); err != nil {
+		firstErr = err
+	}
+	cfg, err := s.loadStorageConfig(ctx)
+	if err != nil {
+		if firstErr == nil {
+			firstErr = err
+		}
+		return firstErr
+	}
+	if !cfg.Enabled {
+		return firstErr
+	}
+	if _, err := s.ReconcileStorageShareNow(ctx); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	return firstErr
+}
+
 // ResolveApplicationOrigins returns the origin servers that may serve an
 // application reverse-proxy route: every node that both deploys the
 // application and belongs to the global gateway nodes. Application routes no

@@ -183,10 +183,9 @@ func (s *Service) Delete(ctx context.Context, serverID string) error {
 		}
 	}
 	if err := orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		if err := s.removeServerFromApplicationTargets(ctx, tx, serverID); err != nil {
-			return err
-		}
-		if err := s.removeServerFromOverviewCards(ctx, tx, serverID); err != nil {
+		// 引用修剪必须与删除同事务：留下悬空引用会让应用删除、设施渲染等后续
+		// 操作永久失败，而 jobs 的 RESTRICT 外键会直接让删除本身失败。
+		if err := s.cleanupServerReferences(ctx, tx, serverID); err != nil {
 			return err
 		}
 		res, err := orm.RawExec(ctx, tx, `DELETE FROM servers WHERE id=?`, serverID)
@@ -200,6 +199,12 @@ func (s *Service) Delete(ctx context.Context, serverID string) error {
 		return nil
 	}); err != nil {
 		return err
+	}
+	if s.serverReferenceReconciler != nil {
+		// 引用已随删除事务修剪，设施侧只需重新渲染，避免继续使用旧配置。
+		if err := s.serverReferenceReconciler.ReconcileAfterServerRemoved(ctx, serverID); err != nil {
+			logging.L().Warn("server reference reconcile failed", zap.String("server_id", serverID), zap.Error(err))
+		}
 	}
 	if s.metricsDB != nil {
 		if err := orm.New(s.metricsDB).From("metrics_snapshots").Where("server_id=?", serverID).Delete(ctx); err != nil {
@@ -222,16 +227,22 @@ func (s *Service) Delete(ctx context.Context, serverID string) error {
 	return nil
 }
 
-func (s *Service) removeServerFromApplicationTargets(ctx context.Context, tx *sql.Tx, serverID string) error {
+// removeServerFromApplicationTargets 修剪应用的部署节点，并返回显式把该节点
+// 列为部署目标的应用。
+//
+// 修剪部署节点属于应用配置变化，必须在同一删除事务中递增对应应用的 version
+// 和配置 updated_at。
+func (s *Service) removeServerFromApplicationTargets(ctx context.Context, tx *sql.Tx, serverID string) ([]string, error) {
 	var rows []models.Application
 	if err := orm.New(tx).From("applications").Where("deployment_server_ids_json<>?", "").All(ctx, &rows); err != nil {
-		return err
+		return nil, err
 	}
 	type update struct {
 		id  string
 		raw string
 	}
 	updates := []update{}
+	affected := []string{}
 	for _, app := range rows {
 		next, changed := removeString(app.DeploymentServerIDsJSON, serverID)
 		if !changed {
@@ -239,16 +250,17 @@ func (s *Service) removeServerFromApplicationTargets(ctx context.Context, tx *sq
 		}
 		encoded, err := json.Marshal(next)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		updates = append(updates, update{id: app.ID, raw: string(encoded)})
+		affected = append(affected, app.ID)
 	}
 	for _, item := range updates {
 		if _, err := orm.RawExec(ctx, tx, `UPDATE applications SET version=version+1,deployment_server_ids_json=?,updated_at=? WHERE id=?`, item.raw, time.Now().UTC().Format(time.RFC3339Nano), item.id); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return affected, nil
 }
 
 func (s *Service) removeServerFromOverviewCards(ctx context.Context, tx *sql.Tx, serverID string) error {

@@ -36,6 +36,10 @@
 - `SRV-DEL-003`：同一 AppDB 事务内必须删除服务器、修剪应用 deployment server IDs、递增受影响应用 version并更新时间、移除概览卡片 serverIds；外键级联负责包/镜像缓存、实例和协调状态。
 - `SRV-DEL-004`：AppDB 删除完成后必须清理 MetricsDB 的服务器指标；任一步失败必须返回错误，不得假称完整删除成功；再次删除不存在 ID 返回 404。
 - `SRV-DEL-005`：AppDB 删除完成后应尽力删除该服务器的 Agent 节点证书资产（`agent-server-<serverID>`）；清理失败只记录告警日志，不得把已提交的删除报为失败，残留孤儿资产不得影响后续任何服务器的证书签发。
+- `SRV-DEL-006`：删除服务器必须在同一事务内终结并删除该服务器的全部协调 Job。`jobs.server_id` 对 `servers(id)` 是 RESTRICT 外键，任何存活的 Job 行（包括永不清理的终态 Job）都会让删除失败，且失败必须表现为可识别的错误而不是未分类的 500 `internal_error`。活跃 Job（`pending`、`running`、`failed_retryable`）必须先置为 `cancelled` 并释放租约与冲突域锁，使活动日志留下一条取消结果；被删除 Job 对应的 `applications.job_id` 必须清空，不得留下悬空引用。删除不得因为目标机失联或存在 Job 历史而拒绝。
+- `SRV-DEL-007`：同一事务内必须清理没有外键保护、却会让后续操作永久失败的服务器引用：删除该服务器在 `application_persistent_locations` 的记录（否则应用删除会因取不到节点而永远失败）、修剪入口代理设施的全局网关列表（`facility_app_configs.deployment_server_ids_json` 并递增 `version`）、修剪入口代理路由的源站与 AnyAccess 中继节点（`reverse_proxy_routes`）、修剪存储共享的存储节点（`storage_share_configs.servers_json`）并删除相关分区（`storage_share_partitions`）。修剪后源站为空的路由必须整条删除，不得留下没有后端的 upstream。
+- `SRV-DEL-008`：服务器删除提交后，入口代理与存储共享必须按修剪后的配置重新收敛：重新渲染 nginx 配置、按剩余网关重算入口代理伪应用的启用状态与部署目标、重新下发存储导出。收敛失败只记录告警，不得把已提交的删除报为失败；也不得为已删除的节点创建协调 Job。
+- `SRV-DEL-009`：因节点删除而失去全部部署目标的应用必须由系统自动停用，不得停留在“需要选择部署节点”的校验错误上。判定规则：`selected` 模式修剪后部署节点为空；`all` 模式面板内已无其他节点。只处理确实把被删节点当作部署目标的应用（显式列出该节点，或在该节点上仍有实例）。停用必须递增应用 `version` 与 `updated_at`，并在统一活动日志留下 `application.disabled` 事件（含被删节点与应用 ID）。停用后编排器按停用语义收敛该应用，用户重新选定节点并启用后恢复。仍有其他部署目标的应用不得被停用。
 
 ## 3. 连通性、特权与主机密钥
 
@@ -164,7 +168,7 @@
 ## 10. 验收证据
 
 - `SRV-EVD-001`：路由清单必须覆盖 credentials CRUD、servers CRUD/probe/test/trust/restart/agent、tailscale apply、UFW（仅 `GET /ufw` 与规则增删）、fail2ban及packages全部路径，且与前端 typed client一致。
-- `SRV-EVD-002`：测试必须证明列表不选择秘密/大字段、编辑空secret保留、主机key变化失败关闭、服务器删除事务清引用、删除时清理节点证书资产，以及删除不依赖远端可达。
+- `SRV-EVD-002`：测试必须证明列表不选择秘密/大字段、编辑空secret保留、主机key变化失败关闭、服务器删除事务清引用、删除时清理节点证书资产，以及删除不依赖远端可达。删除事务的引用清理必须覆盖协调 Job、持久位置、入口代理网关与源站、存储共享节点与分区，并证明存在协调 Job 时删除仍然成功；必须证明失去最后一个部署目标的应用被自动停用、仍有其他节点的应用保持启用，并留下 `application.disabled` 活动事件。
 - `SRV-EVD-003`：任务测试必须证明同步executor才结束任务、相同资源重复触发的复用边界、自动部署退避/封禁/手动解封和不可取消升级语义。
 - `SRV-EVD-004`：Agent替身必须验证生产能力不回退SSH、版本/Docker/证书状态转换、report stream空快照保护和失败不致断流；单元测试不得依赖真实SSH、apt、UFW或Docker。
 - `SRV-EVD-007`：`AGT-FW-001..006` 必须各有单测：端口集合派生（SSH/Agent/反向代理 trait）、脚本顺序（安装 → 放行 → 启用，且 SSH 先于启用）、已安装且已启用时不下发任何变更、不支持发行版拒绝、以及「前提失败时不得上传二进制」的部署顺序断言。

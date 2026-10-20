@@ -378,6 +378,273 @@ func TestDeleteServerRemovesAgentCertificateAsset(t *testing.T) {
 	}
 }
 
+// SRV-DEL-006: deleting a server must clear every local reference to it, and
+// the coordination jobs that block the delete must be finalized first.
+func TestDeleteServerClearsJobAndFacilityReferences(t *testing.T) {
+	svc, _, store := testServerService(t, nil)
+	ctx := context.Background()
+	srv, err := svc.Create(ctx, SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,deployment_mode,deployment_server_ids_json,generation,job_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		"app_1", "app", 1, "name: app\nimage: nginx\n", "selected", `["`+srv.ID+`"]`, 1, "job_active", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	// jobs.server_id references servers(id) with ON DELETE RESTRICT, so any
+	// surviving job row makes the delete impossible.
+	for _, job := range []struct{ id, state string }{{"job_active", "pending"}, {"job_done", "succeeded"}} {
+		if _, err := store.AppDB().Exec(`INSERT INTO jobs(id,application_id,server_id,state,created_at,updated_at) VALUES(?,?,?,?,?,?)`,
+			job.id, "app_1", srv.ID, job.state, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO application_persistent_locations(application_id,server_id,created_at) VALUES(?,?,?)`,
+		"app_1", srv.ID, "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,dns_sync_json,last_error,updated_at) VALUES(?,?,?,?,?,?)`,
+		"reverse_proxy", 1, `["`+srv.ID+`","srv_keep"]`, "{}", "", "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO reverse_proxy_routes(domain,app_id,origin_server_ids,any_access_json,target_port,paths_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`,
+		"shared.example.test", "facility-reverse-proxy", `["`+srv.ID+`","srv_keep"]`, `{"enabled":true,"relayServerIds":["`+srv.ID+`"]}`, 0, "[]", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO reverse_proxy_routes(domain,app_id,origin_server_ids,any_access_json,target_port,paths_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`,
+		"dead.example.test", "facility-reverse-proxy", `["`+srv.ID+`"]`, "{}", 0, "[]", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO storage_share_configs(id,version,servers_json,last_error,updated_at) VALUES(?,?,?,?,?)`,
+		"storage-share", 1, `[{"serverId":"`+srv.ID+`","root":"/srv"},{"serverId":"srv_keep","root":"/keep"}]`, "", "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	for _, part := range []struct{ id, server, storage string }{
+		{"part_app", "srv_keep", srv.ID},
+		{"part_storage", srv.ID, "srv_keep"},
+	} {
+		if _, err := store.AppDB().Exec(`INSERT INTO storage_share_partitions(id,application_id,application_name,server_id,server_name,storage_server_id,storage_server_name,path,target,volume_name,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+			part.id, "app_1", "app", part.server, "n", part.storage, "n", "/data", "t", "v", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := svc.Delete(ctx, srv.ID); err != nil {
+		t.Fatalf("delete server with coordination jobs must succeed, got %v", err)
+	}
+
+	var jobCount int
+	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM jobs WHERE server_id=?`, srv.ID).Scan(&jobCount); err != nil {
+		t.Fatal(err)
+	}
+	if jobCount != 0 {
+		t.Fatalf("expected coordination jobs to be removed, got %d", jobCount)
+	}
+	var appJobID string
+	if err := store.AppDB().QueryRow(`SELECT job_id FROM applications WHERE id='app_1'`).Scan(&appJobID); err != nil {
+		t.Fatal(err)
+	}
+	if appJobID != "" {
+		t.Fatalf("expected dangling application job reference to be cleared, got %q", appJobID)
+	}
+	var locationCount int
+	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM application_persistent_locations WHERE server_id=?`, srv.ID).Scan(&locationCount); err != nil {
+		t.Fatal(err)
+	}
+	if locationCount != 0 {
+		t.Fatalf("expected persistent locations to be removed, got %d", locationCount)
+	}
+	var gateways string
+	var gatewayVersion int
+	if err := store.AppDB().QueryRow(`SELECT deployment_server_ids_json,version FROM facility_app_configs WHERE id='reverse_proxy'`).Scan(&gateways, &gatewayVersion); err != nil {
+		t.Fatal(err)
+	}
+	if gateways != `["srv_keep"]` {
+		t.Fatalf("expected facility gateway list to be pruned, got %s", gateways)
+	}
+	if gatewayVersion != 2 {
+		t.Fatalf("expected facility gateway version to increment, got %d", gatewayVersion)
+	}
+	var origins string
+	var relay string
+	if err := store.AppDB().QueryRow(`SELECT origin_server_ids,any_access_json FROM reverse_proxy_routes WHERE domain='shared.example.test'`).Scan(&origins, &relay); err != nil {
+		t.Fatal(err)
+	}
+	if origins != `["srv_keep"]` {
+		t.Fatalf("expected route origins to be pruned, got %s", origins)
+	}
+	if strings.Contains(relay, srv.ID) {
+		t.Fatalf("expected any-access relay servers to be pruned, got %s", relay)
+	}
+	var deadRouteCount int
+	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM reverse_proxy_routes WHERE domain='dead.example.test'`).Scan(&deadRouteCount); err != nil {
+		t.Fatal(err)
+	}
+	if deadRouteCount != 0 {
+		t.Fatal("expected route without any origin to be removed")
+	}
+	var storageServers string
+	if err := store.AppDB().QueryRow(`SELECT servers_json FROM storage_share_configs WHERE id='storage-share'`).Scan(&storageServers); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(storageServers, srv.ID) || !strings.Contains(storageServers, "srv_keep") {
+		t.Fatalf("expected storage share servers to be pruned, got %s", storageServers)
+	}
+	var partitionCount int
+	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM storage_share_partitions WHERE server_id=? OR storage_server_id=?`, srv.ID, srv.ID).Scan(&partitionCount); err != nil {
+		t.Fatal(err)
+	}
+	if partitionCount != 0 {
+		t.Fatalf("expected storage share partitions to be removed, got %d", partitionCount)
+	}
+}
+
+// SRV-DEL-009: an application that loses its last deployment node must be
+// disabled automatically instead of staying enabled with an invalid target.
+func TestDeleteServerDisablesApplicationWithoutDeploymentTarget(t *testing.T) {
+	svc, _, store := testServerService(t, nil)
+	ctx := context.Background()
+	srv, err := svc.Create(ctx, SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := svc.Create(ctx, SaveRequest{Name: "other", IPv4: "127.0.0.2", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// app_only targets the removed node exclusively.
+	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,deployment_mode,deployment_server_ids_json,generation,job_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		"app_only", "only", 1, "name: only\nimage: nginx\n", "selected", `["`+srv.ID+`"]`, 1, "job_only", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	// app_shared keeps another deployment node and must stay enabled.
+	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,deployment_mode,deployment_server_ids_json,generation,job_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		"app_shared", "shared", 1, "name: shared\nimage: nginx\n", "selected", `["`+srv.ID+`","`+other.ID+`"]`, 1, "job_shared", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	// app_all deploys to every node and still has another node left.
+	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,deployment_mode,deployment_server_ids_json,generation,job_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		"app_all", "all", 1, "name: all\nimage: nginx\n", "all", "[]", 1, "job_all", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO application_instances(id,application_id,server_id,container_name,desired_state,desired_generation,desired_spec_hash,desired_spec_json,status,runtime_spec_json,last_deployed_generation,last_error,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"app_all-"+srv.ID, "app_all", srv.ID, "panel-app-all", "running", 1, "hash", "{}", "running", "{}", 1, "", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.Delete(ctx, srv.ID); err != nil {
+		t.Fatalf("delete server must succeed, got %v", err)
+	}
+
+	enabled := map[string]bool{}
+	rows, err := store.AppDB().Query(`SELECT id,enabled FROM applications WHERE id IN ('app_only','app_shared','app_all')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var value int
+		if err := rows.Scan(&id, &value); err != nil {
+			t.Fatal(err)
+		}
+		enabled[id] = value == 1
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if enabled["app_only"] {
+		t.Fatal("expected the application without any deployment node to be disabled")
+	}
+	if !enabled["app_shared"] {
+		t.Fatal("expected the application with a remaining deployment node to stay enabled")
+	}
+	if !enabled["app_all"] {
+		t.Fatal("expected the all-mode application to stay enabled while another node exists")
+	}
+	// The system-initiated disable must be traceable in the activity log.
+	var disabledEvents int
+	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM activity_events WHERE event_type='application.disabled' AND json_extract(data_json,'$.serverId')=? AND json_extract(data_json,'$.applicationId')='app_only'`, srv.ID).Scan(&disabledEvents); err != nil {
+		t.Fatal(err)
+	}
+	if disabledEvents != 1 {
+		t.Fatalf("expected one activity event for the disabled application, got %d", disabledEvents)
+	}
+}
+
+// SRV-DEL-009: an all-mode application must be disabled once no node is left.
+func TestDeleteServerDisablesAllModeApplicationWithoutAnyNode(t *testing.T) {
+	svc, _, store := testServerService(t, nil)
+	ctx := context.Background()
+	srv, err := svc.Create(ctx, SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,deployment_mode,deployment_server_ids_json,generation,job_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		"app_all", "all", 1, "name: all\nimage: nginx\n", "all", "[]", 1, "job_all", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO application_instances(id,application_id,server_id,container_name,desired_state,desired_generation,desired_spec_hash,desired_spec_json,status,runtime_spec_json,last_deployed_generation,last_error,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"app_all-"+srv.ID, "app_all", srv.ID, "panel-app-all", "running", 1, "hash", "{}", "running", "{}", 1, "", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.Delete(ctx, srv.ID); err != nil {
+		t.Fatalf("delete server must succeed, got %v", err)
+	}
+	var enabled int
+	if err := store.AppDB().QueryRow(`SELECT enabled FROM applications WHERE id='app_all'`).Scan(&enabled); err != nil {
+		t.Fatal(err)
+	}
+	if enabled != 0 {
+		t.Fatal("expected the all-mode application to be disabled once no node is left")
+	}
+}
+
+// SRV-DEL-007: deleting a server must not leave the coordination job history
+// blocking later application deletion.
+func TestDeleteServerKeepsApplicationDeletable(t *testing.T) {
+	svc, _, store := testServerService(t, nil)
+	ctx := context.Background()
+	srv, err := svc.Create(ctx, SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,deployment_mode,deployment_server_ids_json,generation,job_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		"app_1", "app", 1, "name: app\nimage: nginx\n", "selected", `["`+srv.ID+`"]`, 1, "job_1", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO jobs(id,application_id,server_id,state,created_at,updated_at) VALUES(?,?,?,?,?,?)`,
+		"job_1", "app_1", srv.ID, "succeeded", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO application_persistent_locations(application_id,server_id,created_at) VALUES(?,?,?)`,
+		"app_1", srv.ID, "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.Delete(ctx, srv.ID); err != nil {
+		t.Fatalf("delete server must succeed, got %v", err)
+	}
+
+	// The application must no longer reference the removed node, otherwise
+	// deleting the application fails on the unknown persistent location.
+	var targets string
+	if err := store.AppDB().QueryRow(`SELECT deployment_server_ids_json FROM applications WHERE id='app_1'`).Scan(&targets); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(targets, srv.ID) {
+		t.Fatalf("expected application targets to be pruned, got %s", targets)
+	}
+	var locations int
+	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM application_persistent_locations WHERE application_id='app_1'`).Scan(&locations); err != nil {
+		t.Fatal(err)
+	}
+	if locations != 0 {
+		t.Fatalf("expected application to keep no persistent location, got %d", locations)
+	}
+}
+
 func TestConnectivityUsesBoundedSudoTimeoutAndCompletes(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()

@@ -99,6 +99,18 @@ type Service struct {
 	// node joins the tailnet. It is nil when no provider is wired, which means
 	// nodes cannot join a tailnet and the task reports that explicitly.
 	tailscaleSettings func() TailscaleSettings
+	// serverReferenceReconciler 由持有服务器引用的模块实现：服务器删除提交后
+	// 重新收敛本模块保存的引用，避免继续渲染指向已不存在节点的配置。
+	serverReferenceReconciler ServerReferenceReconciler
+}
+
+// ServerReferenceReconciler 由在自身配置内嵌服务器 ID 的模块实现。
+//
+// 服务器删除事务已经修剪了持久化的引用，模块仍需重新渲染运行态配置（入口代理
+// 的 nginx 配置、存储共享的导出配置等），否则运行态会继续指向已删除的节点。
+type ServerReferenceReconciler interface {
+	// ReconcileAfterServerRemoved 在服务器删除提交后重新收敛本模块的引用。
+	ReconcileAfterServerRemoved(ctx context.Context, serverID string) error
 }
 
 // hostKeyTrustExecutor is the narrow capability the server service needs to
@@ -154,6 +166,12 @@ func (s *Service) SetDNSSyncTrigger(trigger func(context.Context, []string) erro
 // 必须主动重算，不能只依赖周期性协调。
 func (s *Service) SetInterconnectTrigger(trigger func(context.Context, []string) error) {
 	s.interconnectTrigger = trigger
+}
+
+// SetServerReferenceReconciler 注入“节点已删除”的收敛入口。删除事务已经修剪
+// 了持久化引用，模块仍需重新渲染运行态配置。
+func (s *Service) SetServerReferenceReconciler(reconciler ServerReferenceReconciler) {
+	s.serverReferenceReconciler = reconciler
 }
 
 // notifyInterconnectChange 在地址或优先意图变化后请求设施重新收敛。失败只记

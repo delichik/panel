@@ -86,6 +86,17 @@
 - `GET /api/v1/servers` 只返回服务器摘要：身份、地址、可达状态以及列表展示所需的 Agent/UFW/权限信号；不得读取完整 traits、variables、notes、凭据 secret 内容、Docker 配置、完整 OS/架构或逐服务器指标；仅返回 `credentialId` 引用 ID 供凭据页解析引用。`GET /api/v1/servers/{id}` 按需返回完整详情，前端选择或编辑服务器时使用详情接口。服务器列表、详情、新增和更新持久化通过 `internal/modules/servers/ports` 中的 `ServerRepository`；SQLite 实现在 `store/sqlite`。跨应用目标和概览配置的服务器删除事务暂由服务器用例协调，迁移时必须保持现有原子性。
 - `service.go` 保留服务器运维与探测流程；服务器资源 CRUD 放在 `registry.go`，Agent 部署和健康检查分别放在 `agent_deployment.go` 与 `agent_health.go`，Agent 部署前的防火墙前提放在 `agent_firewall.go`，fail2ban 配置放在 `fail2ban.go`，新增代码不要重新揉回主 service 文件。
 - 删除服务器是本地控制面操作，不连接目标机，也不得因为服务器失联而失败。删除时必须取消该服务器所有 `queued`、`scheduled`、`failed_retryable` 和 `running` 任务，已取消任务不得被后台 worker 后续覆盖为成功或失败；同时清理指标库中的该服务器指标、应用 `deployment_server_ids_json` 中的服务器 ID、概览卡片 `serverIds` 引用，并依赖应用数据库外键级联删除包缓存、镜像缓存、应用实例和协调状态。修剪应用部署节点属于应用配置变化，必须在同一删除事务中递增对应应用的 `version` 和配置 `updated_at`。
+- 服务器删除事务还必须清理没有外键保护、却会让后续操作永久失败的引用（实现见 `internal/modules/servers/deletecleanup.go`）：
+  - **协调 Job**：`jobs.server_id` 对 `servers(id)` 是 RESTRICT 外键，终态 Job 永不被清理，因此任何承载过部署的节点都删不掉。删除前先把活跃 Job（`pending`/`running`/`failed_retryable`）置为 `cancelled`（释放租约与冲突域锁，活动日志留下一条取消结果），再删除该服务器的全部 Job 行，并清空指向这些 Job 的 `applications.job_id`。**不得**为已删除的节点创建协调 Job。
+  - **应用持久位置**：`application_persistent_locations` 没有指向 `servers` 的外键，悬空记录会让应用删除流程因取不到节点而永远失败，因此必须随服务器一并删除。
+  - **入口代理**：`facility_app_configs.deployment_server_ids_json`（全局网关，并递增 `version`）与 `reverse_proxy_routes.origin_server_ids` / `any_access_json`（源站与 AnyAccess 中继节点）必须修剪；源站被清空的路由整条删除，避免渲染出没有后端的 upstream。
+  - **存储共享**：`storage_share_configs.servers_json`（存储节点）必须修剪，`storage_share_partitions` 中引用该节点的分区必须删除，否则存储共享卸载会被悬空分区卡住。
+- 因节点删除而失去全部部署目标的应用必须**自动停用**（`enabled=0`），而不是停留在 `application_deployment_servers_required` 校验错误上：
+  - `selected` 模式：修剪后的部署节点列表为空；
+  - `all` 模式：面板内已无其他节点（该模式按现存节点部署）。
+  - 只处理确实把被删节点当作部署目标的应用：显式列出该节点，或在该节点上仍有 `application_instances` 记录（实例随节点级联删除）。仍有其他部署目标的应用保持启用。
+  - 停用会递增应用 `version` 与 `updated_at`，并在统一活动日志写入 `application.disabled` 事件（`data` 含 `reason=server_removed`、`serverId`、`applicationId`）。停用后编排器按停用语义收敛该应用；用户重新选定节点并启用后恢复。
+- 上述引用在删除事务提交后，入口代理与存储共享按修剪后的配置重新收敛（重新渲染 nginx 配置、按剩余网关重算入口代理伪应用的启用状态与部署目标、重新下发存储导出）。收敛失败只记告警，不把已提交的删除报为失败。收敛通过 `servers.ServerReferenceReconciler` 注入，装配层把设施服务接到该入口。
 - 服务器创建/编辑必须配置 `dockerHost`，默认值为 `unix:///var/run/docker.sock`。该值会写入 agent systemd 环境文件的 `PANEL_AGENT_DOCKER_HOST`，agent 使用 Docker Engine API 与 Docker 通信，不调用 Docker CLI。
 - 服务器连接地址由 `ipv4`/`ipv6` 派生，不再允许直接提交 `host`：创建/编辑时两个字段至少填写一个且必须是合法 IP 字面量，`ipv4` 优先作为连接地址。读取服务器时若 `ipv4`/`ipv6` 均为空且 `host` 是 IP 字面量，会自动从 `host` 派生（`SplitAddress`），因此旧服务器编辑表单可回显地址，入口代理 DNS 同步也会使用派生后的地址；仅当 `host` 不是 IP 字面量时才保持跳过并标记提示。
 - 服务器保存 `ipv4`/`ipv6` 或删除服务器时，会通过装配层桥接触发引用该服务器的入口代理域名 DNS 同步；同步为异步任务，失败不阻断服务器保存。编辑服务器先落库，保存后的连通性探测失败只把服务器标记为不可达并记录日志，不返回错误、不阻断保存与 DNS 同步。

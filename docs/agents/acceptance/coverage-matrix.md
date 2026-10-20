@@ -92,6 +92,8 @@
 
 - Agent 投递增加目标机 HTTP 下载路径：新增公开产物路由 `GET /agent/{version}/{platform}/panel-agent.gz`（`/api` 之外，含 `/agent/` 前缀 404 兜底）、运行时设置 `agent.downloadBaseUrl`、`agent.downloadVerifyTls`、`agent.transferTimeoutSeconds`（`runtime_settings` 既有表，无结构变更）、设置页 `settings/agent` 分区，以及构建产物 `panel-agent.gz` + `panel-agent.sha256`。主 Panel `method/path` 计数不因该能力变化，公开产物路由单独由 `API-COV-006` 与公开路由清单断言覆盖；对应 `AGT-DL-001..011`、`AGT-DEP-002/003/005`、`AGT-RPT-001`、`SRV-EVD-005/006`、`ENG-BUILD-002`。
 
+- 修复服务器删除被 `jobs.server_id` 的 RESTRICT 外键阻塞的问题：删除事务现在先终结并删除该服务器的全部协调 Job（活跃 Job 置 `cancelled` 并释放租约，清空 `applications.job_id`），并一并清理 `application_persistent_locations`、`facility_app_configs.deployment_server_ids_json`、`reverse_proxy_routes.origin_server_ids`/`any_access_json`、`storage_share_configs.servers_json` 与 `storage_share_partitions`。因删除而失去全部部署目标的应用由系统自动停用（`enabled=0`，活动日志写 `application.disabled`）。删除提交后入口代理与存储共享按修剪后的配置重新收敛（新增 `servers.ServerReferenceReconciler` 注入点，装配层接入设施服务）。前端新增 `activity.applicationDisabled` 词条（en / zh-CN）渲染该停用事件。无新增 API、表、列或后台任务；主 Panel `method/path` 计数不变；对应 `SRV-DEL-006/007/008/009`、`SRV-EVD-002`。
+
 ## 4. 持久化基线
 
 当前 ORM 模型有 43 个数据库内表声明；`application_revisions` 在 app 与 log 库分别存在，含义不同。coordination 库当前 0 个业务模型。

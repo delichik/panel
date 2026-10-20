@@ -209,6 +209,8 @@ func New(cfg config.Config) (*App, error) {
 	serverSvc.SetDNSSyncTrigger(facilitySvc.SyncServersDNSEntries)
 	// 节点 tailnet 地址或互联意图变化后，两个设施内嵌的对端地址必须重算。
 	serverSvc.SetInterconnectTrigger(facilitySvc.SyncInterconnectServers)
+	// 节点删除后入口代理与存储共享必须按修剪后的配置重新渲染。
+	serverSvc.SetServerReferenceReconciler(facilitySvc)
 	containerBridge.facility = facilitySvc
 	applicationSvc.SetReverseProxyReconciler(facilitySvc)
 	applicationSvc.SetReverseProxyPolicyProvider(facilitySvc)
