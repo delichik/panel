@@ -70,6 +70,7 @@
 - 任务错误：任务 error 在写入前对 panelerr 错误做 i18n 翻译，避免把当前语言下的文案固化进任务记录。
 - 本轮新增 `key_asset_system_managed` 后端错误码，已补充简体中文翻译；用于阻止普通密钥资产接口修改 Panel/Agent 系统托管资产。
 - 本轮新增 Panel HTTPS 域名、证书选择及内置自签名证书的 en / zh-CN 词条。
+- 本轮入口代理 DNS 区新增来源标注、重试与覆盖接管词条（`applicationsPage.dnsSyncSource.*`、`dnsSyncRetry*`、`dnsSyncTakeover*`、`confirm.dnsTakeover.*`），en / zh-CN 已同步；后端新增 `facility_dns_sync_unavailable`、`facility_dns_sync_domains_required`、`facility_dns_takeover_confirmation_required` 错误码中文翻译。
 - 前端摘要词典（`taskSummaryTranslations`）：新增 "Syncing storage share exports"、"Collecting initial server information"、"Refreshing volumes/networks"、"Volumes/Networks refreshed"、"Image updates refreshed"、"Syncing application <name>" 前缀与 "Running <type> batch" 前缀；删除已无发射点的 "Collecting scheduled metrics" / "Collecting metrics for " 词条。`translateEventSummary` 在事件词典未命中时回退到任务摘要词典，任务类事件摘要（续签证书、刷新软件包等）在 zh-CN 下不再显示英文。
 
 ## 已知剩余未翻译项

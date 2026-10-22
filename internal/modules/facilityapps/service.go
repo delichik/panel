@@ -267,8 +267,10 @@ func (s *Service) SaveReverseProxy(ctx context.Context, in ReverseProxySaveInput
 	if err := s.triggerReverseProxyReconcile(ctx, "facility_app", removedServers(previous.DeploymentServers, next.DeploymentServers)); err != nil {
 		_ = s.setLastError(ctx, err.Error())
 	}
+	previous = s.attachApplicationRoutes(ctx, previous)
+	next = s.attachApplicationRoutes(ctx, next)
 	if affected := dnsSyncDomainsOnSave(previous, next); len(affected) > 0 {
-		if _, err := s.triggerDNSSync(ctx, affected, "facility_app"); err != nil {
+		if _, err := s.triggerDNSSync(ctx, affected, "facility_app", false); err != nil {
 			_ = s.setLastError(ctx, err.Error())
 		}
 	}
@@ -790,6 +792,9 @@ func (s *Service) renderNginxConfig(ctx context.Context, serverID string, cfg Re
 		host := hosts[domain]
 		cert := bestCertificate(domain, certificates)
 		appendCertificateFiles(cert, &files, certFiles)
+		if host.Relay != nil && cert != nil {
+			appendRelayTrustFiles(cert, &files, certFiles)
+		}
 		var domainConfig strings.Builder
 		if host.Relay != nil {
 			writeRelayUpstream(&domainConfig, host.Relay, cert != nil)
@@ -1155,7 +1160,8 @@ func writeRelayLocation(b *strings.Builder, domain string, relay *proxyRelay, ce
 	if cert != nil {
 		b.WriteString("            proxy_ssl_server_name on;\n")
 		b.WriteString("            proxy_ssl_name " + domain + ";\n")
-		b.WriteString("            proxy_ssl_trusted_certificate " + certPath(cert.ID, "certificate") + ";\n")
+		// Use a CA trust store — never the leaf used for ssl_certificate.
+		b.WriteString("            proxy_ssl_trusted_certificate " + relayTrustedCertificatePath(cert) + ";\n")
 		b.WriteString("            proxy_ssl_verify on;\n")
 		b.WriteString("            proxy_ssl_verify_depth 4;\n")
 	}
@@ -1796,6 +1802,33 @@ func appendCertificateFiles(cert *proxycert.Certificate, files *[]appruntime.Man
 		appruntime.ManagedFile{Path: certFileSource(cert.ID, "certificate"), Content: []byte(cert.CertificatePEM), Mode: "0644"},
 		appruntime.ManagedFile{Path: certFileSource(cert.ID, "private-key"), Content: []byte(cert.PrivateKeyPEM), Mode: "0600"},
 	)
+}
+
+func appendRelayTrustFiles(cert *proxycert.Certificate, files *[]appruntime.ManagedFile, seen map[string]struct{}) {
+	if cert == nil {
+		return
+	}
+	if isSelfSignedProxyCertificate(cert) {
+		trustKey := cert.ID + ":trusted"
+		if _, ok := seen[trustKey]; !ok {
+			seen[trustKey] = struct{}{}
+			*files = append(*files, appruntime.ManagedFile{
+				Path:    certFileSource(cert.ID, "trusted"),
+				Content: relayTrustCertificatePEM(cert),
+				Mode:    "0644",
+			})
+		}
+		return
+	}
+	if _, ok := seen[proxyCABundleSource]; ok {
+		return
+	}
+	seen[proxyCABundleSource] = struct{}{}
+	*files = append(*files, appruntime.ManagedFile{
+		Path:    proxyCABundleSource,
+		Content: append([]byte(nil), proxyPublicCABundle...),
+		Mode:    "0644",
+	})
 }
 
 func certFileSource(certID, kind string) string {

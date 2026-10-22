@@ -458,10 +458,10 @@
 
 - **前置**：域名可能匹配域名证书、自签用户域证书或无证书。
 - **动作**：构建每节点 Nginx runtime spec。
-- **结果**：固定镜像 `nginx:1.28-alpine`；主配置目录只读挂载 `/etc/panel-nginx`，证书独立 `/etc/panel-certs`；域名证书优先，其次匹配自签，无匹配仅生成 80；UI HTTPS 摘要与渲染共用匹配逻辑。
+- **结果**：固定镜像 `nginx:1.28-alpine`；主配置目录只读挂载 `/etc/panel-nginx`，证书独立 `/etc/panel-certs`；域名证书优先，其次匹配自签，无匹配仅生成 80；UI HTTPS 摘要与渲染共用匹配逻辑。AnyAccess 中继回源 HTTPS 时保持 `proxy_ssl_verify on`，`proxy_ssl_trusted_certificate` 使用 Panel 分发的公共 CA 包（`/etc/panel-certs/_ca_bundle/ca-certificates.crt`），不得把站点 `certificate.pem`（leaf/链）当作信任锚；自签证书中继改用该证书独立的 `trusted.pem`（链内 CA 或自签叶）。公共 CA 包只下发到实际承担中继的节点。
 - **失败**：不得覆盖镜像 `/etc/nginx` 或单文件 bind 主配置；静态内容由 managed files 只读分发，用户看不到内部 mount target。
-- **不变量**：主配置显式 `nginx -c /etc/panel-nginx/nginx.conf` 并保留镜像 mime.types；文件父目录 0755、上传文件 0644。
-- **验证**：proxy spec mounts/TLS summary/static serving tests。
+- **不变量**：主配置显式 `nginx -c /etc/panel-nginx/nginx.conf` 并保留镜像 mime.types；文件父目录 0755、上传文件 0644；中继 TLS 校验不得关闭。
+- **验证**：proxy spec mounts/TLS summary/static serving tests；`TestRenderAnyAccessRelayTLSUsesPublicCABundleNotLeaf`。
 
 ### FAC-RP-009 reload 与 recreate 判定
 
@@ -483,12 +483,12 @@
 
 ### FAC-RP-011 DNS 联动
 
-- **前置**：设施保存新增、修改、保留或删除域名，DNS zone 与服务器地址可能不完整。
-- **动作**：触发 `dns_proxy_records_sync`。
-- **结果**：全部当前域名及需清理旧域名进入 pending；任务读取并合并数据库中所有 pending；只在期望 A/AAAA 与实际不同时增删改；每域名持久化 pending/synced/failed/skipped。
-- **失败**：服务器列表读取失败使任务失败且域名保留 pending，不得按“无服务器”误删；无 IPv4/IPv6 的域名 skipped 并带提示。
-- **不变量**：anyAccess 关闭目标=origins，开启目标=全局 gateways；活跃任务期间新增 pending 不得因旧 params 遗漏。
-- **验证**：dns sync all-current/merge-pending/server-error/status tests。
+- **前置**：设施保存新增、修改、保留或删除域名，或应用反向代理路由变更/删除，DNS zone 与服务器地址可能不完整。
+- **动作**：触发 `dns_proxy_records_sync`；手动重试/接管走 `POST /api/v1/facility-apps/reverse-proxy/dns-sync`。
+- **结果**：全部当前设施域名与应用反向代理域名及需清理旧域名进入 pending；任务读取并合并数据库中所有 pending（接管请求除外）；只在期望 A/AAAA 与实际不同时增删改；每域名持久化 pending/synced/failed/skipped。
+- **失败**：服务器列表读取失败使任务失败且域名保留 pending，不得按“无服务器”误删；无 IPv4/IPv6 的域名 skipped 并带提示；接管缺少确认返回校验错误。
+- **不变量**：anyAccess 关闭目标=origins，开启目标=全局 gateways；活跃任务期间新增 pending 不得因旧 params 遗漏；应用域名与设施域名共用同一同步状态与托管 comment。
+- **验证**：dns sync all-current/merge-pending/application-domain/server-error/status/takeover tests。
 
 ### FAC-RP-012 设施逐节点部署诊断
 

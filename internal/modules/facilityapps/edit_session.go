@@ -580,8 +580,10 @@ func (s *Service) CommitFacilityEditSession(ctx context.Context, sessionID, idem
 		result.ApplyRequested = false
 		result.Diagnostics = append(result.Diagnostics, applications.Diagnostic{Code: "facility_apply_request_failed", Severity: "warning", Message: i18n.Translate("facility_apply_request_failed", "Configuration was committed, but applying it could not be requested"), Details: map[string]any{"error": err.Error()}})
 	}
+	previous = s.attachApplicationRoutes(ctx, previous)
+	config = s.attachApplicationRoutes(ctx, config)
 	if affected := dnsSyncDomainsOnSave(previous, config); len(affected) > 0 {
-		if _, err := s.triggerDNSSync(ctx, affected, "facility_app"); err != nil {
+		if _, err := s.triggerDNSSync(ctx, affected, "facility_app", false); err != nil {
 			result.Diagnostics = append(result.Diagnostics, applications.Diagnostic{Code: "facility_dns_sync_failed", Severity: "warning", Message: i18n.Translate("facility_dns_sync_failed", "Configuration was committed, but requesting the DNS record sync failed"), Details: map[string]any{"error": err.Error()}})
 		} else if refreshed, loadErr := s.GetReverseProxy(ctx); loadErr == nil {
 			result.Config = refreshed
@@ -1107,7 +1109,7 @@ func (s *Service) recoverFacilityEditRecord(ctx context.Context, record facility
 		result.Diagnostics = append(result.Diagnostics, applications.Diagnostic{Code: "facility_apply_request_failed", Severity: "warning", Message: i18n.Translate("facility_apply_request_failed", "Configuration was recovered, but applying it could not be requested"), Details: map[string]any{"error": err.Error()}})
 	}
 	if pending := s.pendingDNSDomains(ctx); len(pending) > 0 {
-		if _, err := s.triggerDNSSync(ctx, pending, "facility_recovery"); err != nil {
+		if _, err := s.triggerDNSSync(ctx, pending, "facility_recovery", false); err != nil {
 			result.Diagnostics = append(result.Diagnostics, applications.Diagnostic{Code: "facility_dns_sync_failed", Severity: "warning", Message: i18n.Translate("facility_dns_sync_failed", "Configuration was recovered, but requesting the DNS record sync failed"), Details: map[string]any{"error": err.Error()}})
 		}
 	}

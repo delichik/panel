@@ -53,6 +53,13 @@ export const reverseProxyFacilityApi = {
   reconcile() {
     return apiClient.post<{ config: ReverseProxyConfig }>('/facility-apps/reverse-proxy/reconcile');
   },
+  syncDNS(input: { domains?: string[]; takeover?: boolean; confirmTakeover?: boolean }) {
+    return apiClient.post<{ taskId: string }>('/facility-apps/reverse-proxy/dns-sync', {
+      domains: input.domains ?? [],
+      takeover: Boolean(input.takeover),
+      confirmTakeover: Boolean(input.confirmTakeover),
+    });
+  },
   beginEdit(draft?: ReverseProxySaveInput) {
     return apiClient.post<FacilityEditSession>('/facility-apps/reverse-proxy/edit-sessions', {
       clientDraftKey: 'facility:reverse-proxy',

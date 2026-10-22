@@ -15,12 +15,26 @@ import (
 	"panel/internal/modules/servers"
 	"panel/internal/modules/tasks"
 	"panel/internal/platform/database/orm"
+	panelerr "panel/internal/platform/errors"
 )
 
 const dnsSyncTTL = 120
 
 type dnsSyncParams struct {
-	Domains []string `json:"domains"`
+	Domains  []string `json:"domains"`
+	Takeover bool     `json:"takeover,omitempty"`
+}
+
+// DNSSyncRequest is the body for POST .../reverse-proxy/dns-sync.
+type DNSSyncRequest struct {
+	Domains         []string `json:"domains"`
+	Takeover        bool     `json:"takeover"`
+	ConfirmTakeover bool     `json:"confirmTakeover"`
+}
+
+// DNSSyncResult is returned when a DNS sync task is accepted.
+type DNSSyncResult struct {
+	TaskID string `json:"taskId"`
 }
 
 // affectedFacilityDomains returns the domains whose DNS-relevant
@@ -59,10 +73,10 @@ func affectedFacilityDomains(previous, next ReverseProxyConfig) []string {
 }
 
 // dnsSyncDomainsOnSave returns every domain that must be checked when the
-// reverse proxy config is saved: all currently configured domains, the Panel
-// entry domain, and any domains removed from the previous config. Unchanged
-// domains are included for verification but SyncProxyRecords only writes
-// when their managed records differ from the desired set.
+// reverse proxy config is saved: all currently configured facility and
+// application domains, plus any domains removed from the previous config.
+// Unchanged domains are included for verification but SyncProxyRecords only
+// writes when their managed records differ from the desired set.
 func dnsSyncDomainsOnSave(previous, next ReverseProxyConfig) []string {
 	names := map[string]struct{}{}
 	for _, domain := range next.Domains {
@@ -72,6 +86,16 @@ func dnsSyncDomainsOnSave(previous, next ReverseProxyConfig) []string {
 	}
 	for _, name := range affectedFacilityDomains(previous, next) {
 		names[name] = struct{}{}
+	}
+	for _, name := range applicationDNSDomainNames(next.ApplicationRoutes) {
+		names[name] = struct{}{}
+	}
+	prevApp := applicationDNSDomainSet(previous.ApplicationRoutes)
+	nextApp := applicationDNSDomainSet(next.ApplicationRoutes)
+	for name := range prevApp {
+		if _, ok := nextApp[name]; !ok {
+			names[name] = struct{}{}
+		}
 	}
 	out := make([]string, 0, len(names))
 	for name := range names {
@@ -100,6 +124,90 @@ func domainDNSServers(cfg ReverseProxyConfig, domain FacilityRouteDomain) []stri
 	return domain.OriginServerIDs
 }
 
+func applicationDNSDomainNames(routes []applications.ApplicationReverseProxyConfig) []string {
+	set := applicationDNSDomainSet(routes)
+	out := make([]string, 0, len(set))
+	for name := range set {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func applicationDNSDomainSet(routes []applications.ApplicationReverseProxyConfig) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, app := range routes {
+		for _, route := range app.Routes {
+			if name := normalizeDNSName(route.Domain); name != "" {
+				out[name] = struct{}{}
+			}
+		}
+	}
+	return out
+}
+
+func applicationRouteAsDNSDomain(route applications.ReverseProxyRoute) FacilityRouteDomain {
+	return FacilityRouteDomain{
+		Domain:          route.Domain,
+		OriginServerIDs: append([]string(nil), route.OriginServerIDs...),
+		AnyAccess:       route.AnyAccess,
+	}
+}
+
+// proxyDNSDomainEntries merges facility-owned domains with application reverse
+// proxy domains. Facility entries win when the same name appears in both.
+func proxyDNSDomainEntries(cfg ReverseProxyConfig) map[string]FacilityRouteDomain {
+	domainEntries := map[string]FacilityRouteDomain{}
+	for _, domain := range cfg.Domains {
+		if name := normalizeDNSName(domain.Domain); name != "" {
+			domainEntries[name] = domain
+		}
+	}
+	for _, app := range cfg.ApplicationRoutes {
+		for _, route := range app.Routes {
+			name := normalizeDNSName(route.Domain)
+			if name == "" {
+				continue
+			}
+			if _, exists := domainEntries[name]; exists {
+				continue
+			}
+			domainEntries[name] = applicationRouteAsDNSDomain(route)
+		}
+	}
+	return domainEntries
+}
+
+func (s *Service) attachApplicationRoutes(ctx context.Context, cfg ReverseProxyConfig) ReverseProxyConfig {
+	if s.apps == nil {
+		return cfg
+	}
+	routes, err := s.apps.ApplicationReverseProxyConfigs(ctx)
+	if err != nil {
+		return cfg
+	}
+	cfg.ApplicationRoutes = routes
+	return cfg
+}
+
+func (s *Service) currentProxyDNSDomains(ctx context.Context) ([]string, error) {
+	cfg, err := s.loadConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	cfg = s.attachApplicationRoutes(ctx, cfg)
+	names := map[string]struct{}{}
+	for name := range proxyDNSDomainEntries(cfg) {
+		names[name] = struct{}{}
+	}
+	out := make([]string, 0, len(names))
+	for name := range names {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 // SyncServersDNSEntries enqueues a DNS sync for every proxy domain that uses
 // one of the given servers. It is wired as the server-side change trigger.
 func (s *Service) SyncServersDNSEntries(ctx context.Context, serverIDs []string) error {
@@ -110,15 +218,16 @@ func (s *Service) SyncServersDNSEntries(ctx context.Context, serverIDs []string)
 	if err != nil {
 		return err
 	}
+	cfg = s.attachApplicationRoutes(ctx, cfg)
 	changed := map[string]struct{}{}
 	for _, id := range serverIDs {
 		changed[id] = struct{}{}
 	}
 	affected := map[string]struct{}{}
-	for _, domain := range cfg.Domains {
+	for name, domain := range proxyDNSDomainEntries(cfg) {
 		for _, id := range domainDNSServers(cfg, domain) {
 			if _, ok := changed[id]; ok {
-				affected[normalizeDNSName(domain.Domain)] = struct{}{}
+				affected[name] = struct{}{}
 				break
 			}
 		}
@@ -130,11 +239,55 @@ func (s *Service) SyncServersDNSEntries(ctx context.Context, serverIDs []string)
 	for name := range affected {
 		domains = append(domains, name)
 	}
-	_, err = s.triggerDNSSync(ctx, domains, "server_change")
+	_, err = s.triggerDNSSync(ctx, domains, "server_change", false)
 	return err
 }
 
-func (s *Service) triggerDNSSync(ctx context.Context, domains []string, triggerType string) (string, error) {
+// SyncApplicationProxyDNSEntries enqueues DNS sync for application reverse
+// proxy domain changes. It is wired from the applications module.
+func (s *Service) SyncApplicationProxyDNSEntries(ctx context.Context, domains []string) error {
+	if s.dns == nil || s.tasks == nil {
+		return nil
+	}
+	domains = uniqueSorted(domains)
+	if len(domains) == 0 {
+		return nil
+	}
+	_, err := s.triggerDNSSync(ctx, domains, "application_change", false)
+	return err
+}
+
+// RequestDNSSync accepts a manual retry or takeover sync from the facility UI.
+func (s *Service) RequestDNSSync(ctx context.Context, req DNSSyncRequest) (DNSSyncResult, error) {
+	if s.dns == nil || s.tasks == nil {
+		return DNSSyncResult{}, panelerr.Validation("facility_dns_sync_unavailable", "DNS sync is not available")
+	}
+	if req.Takeover && !req.ConfirmTakeover {
+		return DNSSyncResult{}, panelerr.Validation("facility_dns_takeover_confirmation_required", "Confirm takeover before overwriting existing DNS records")
+	}
+	domains := uniqueSorted(req.Domains)
+	if len(domains) == 0 {
+		var err error
+		domains, err = s.currentProxyDNSDomains(ctx)
+		if err != nil {
+			return DNSSyncResult{}, err
+		}
+	}
+	if len(domains) == 0 {
+		return DNSSyncResult{}, panelerr.Validation("facility_dns_sync_domains_required", "No reverse proxy domains are configured")
+	}
+	triggerType := "manual"
+	if req.Takeover {
+		triggerType = "takeover"
+	}
+	taskID, err := s.triggerDNSSync(ctx, domains, triggerType, req.Takeover)
+	if err != nil {
+		return DNSSyncResult{}, err
+	}
+	return DNSSyncResult{TaskID: taskID}, nil
+}
+
+func (s *Service) triggerDNSSync(ctx context.Context, domains []string, triggerType string, takeover bool) (string, error) {
 	if s.dns == nil || s.tasks == nil {
 		return "", nil
 	}
@@ -150,7 +303,7 @@ func (s *Service) triggerDNSSync(ctx context.Context, domains []string, triggerT
 	if err := s.setDNSSyncStates(ctx, states, nil); err != nil {
 		return "", err
 	}
-	raw, _ := json.Marshal(dnsSyncParams{Domains: domains})
+	raw, _ := json.Marshal(dnsSyncParams{Domains: domains, Takeover: takeover})
 	task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
 		Type:         dnsSyncTaskType,
 		ResourceType: "facility_app",
@@ -171,7 +324,7 @@ func (s *Service) triggerDNSSync(ctx context.Context, domains []string, triggerT
 	go func() {
 		runCtx := s.tasks.ExecutionContext(task.ID)
 		defer s.tasks.FinishExecution(task.ID)
-		if err := s.runDNSSync(runCtx, domains); err != nil {
+		if err := s.runDNSSync(runCtx, domains, takeover); err != nil {
 			_ = s.tasks.Fail(runCtx, task.ID, err)
 			return
 		}
@@ -187,23 +340,29 @@ func (s *Service) RunDNSSyncTask(tc tasks.TaskContext) error {
 	}
 	var params dnsSyncParams
 	_ = json.Unmarshal([]byte(tc.Task.ParamsJSON), &params)
-	if err := s.runDNSSync(tc.Context, params.Domains); err != nil {
+	if err := s.runDNSSync(tc.Context, params.Domains, params.Takeover); err != nil {
 		return err
 	}
 	return s.tasks.Complete(tc.Context, tc.Task.ID, "DNS records synced")
 }
 
-func (s *Service) runDNSSync(ctx context.Context, domains []string) error {
+func (s *Service) runDNSSync(ctx context.Context, domains []string, takeover bool) error {
 	if s.dns == nil {
 		return nil
 	}
-	// 回收机制：执行时合并所有当前 pending 域名，避免同 key 活跃任务存在时
+	// 回收机制：普通同步执行时合并所有当前 pending 域名，避免同 key 活跃任务存在时
 	// 新触发标记的 pending 域名被现有任务 params 遗漏而长期停留在 pending。
-	domains = uniqueSorted(append(append([]string(nil), domains...), s.pendingDNSDomains(ctx)...))
+	// takeover 只处理显式请求的域名，避免把普通 pending 一并强制覆盖。
+	if !takeover {
+		domains = uniqueSorted(append(append([]string(nil), domains...), s.pendingDNSDomains(ctx)...))
+	} else {
+		domains = uniqueSorted(domains)
+	}
 	cfg, err := s.loadConfig(ctx)
 	if err != nil {
 		return err
 	}
+	cfg = s.attachApplicationRoutes(ctx, cfg)
 	servers := map[string]server.Server{}
 	if s.servers != nil {
 		list, err := s.servers.List(ctx)
@@ -225,10 +384,7 @@ func (s *Service) runDNSSync(ctx context.Context, domains []string) error {
 		zoneNames = append(zoneNames, normalizeDNSName(zone.Name))
 	}
 
-	domainEntries := map[string]FacilityRouteDomain{}
-	for _, domain := range cfg.Domains {
-		domainEntries[normalizeDNSName(domain.Domain)] = domain
-	}
+	domainEntries := proxyDNSDomainEntries(cfg)
 	states := map[string]DNSSyncState{}
 	removals := []string{}
 	type zoneSync struct {
@@ -254,7 +410,7 @@ func (s *Service) runDNSSync(ctx context.Context, domains []string) error {
 				}
 				entry := byZone[zone]
 				if entry == nil {
-					entry = &zoneSync{target: dns.ProxyRecordTarget{Zone: zone}}
+					entry = &zoneSync{target: dns.ProxyRecordTarget{Zone: zone, Takeover: takeover}}
 					byZone[zone] = entry
 				}
 				entry.domains = append(entry.domains, name)
@@ -273,7 +429,7 @@ func (s *Service) runDNSSync(ctx context.Context, domains []string) error {
 			}
 			entry := byZone[zone]
 			if entry == nil {
-				entry = &zoneSync{target: dns.ProxyRecordTarget{Zone: zone}}
+				entry = &zoneSync{target: dns.ProxyRecordTarget{Zone: zone, Takeover: takeover}}
 				byZone[zone] = entry
 			}
 			entry.domains = append(entry.domains, name)
@@ -288,7 +444,7 @@ func (s *Service) runDNSSync(ctx context.Context, domains []string) error {
 		}
 		entry := byZone[zone]
 		if entry == nil {
-			entry = &zoneSync{target: dns.ProxyRecordTarget{Zone: zone}}
+			entry = &zoneSync{target: dns.ProxyRecordTarget{Zone: zone, Takeover: takeover}}
 			byZone[zone] = entry
 		}
 		entry.domains = append(entry.domains, name)

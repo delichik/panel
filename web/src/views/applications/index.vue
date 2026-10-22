@@ -304,6 +304,70 @@ function facilityDnsTone(state: string): 'success' | 'warning' | 'danger' | 'neu
   if (state === 'pending' || state === 'skipped') return 'warning';
   return 'neutral';
 }
+type FacilityDnsDomainRow = { domain: string; source: 'facility' | 'application' };
+const facilityDnsDomains = computed<FacilityDnsDomainRow[]>(() => {
+  const rows: FacilityDnsDomainRow[] = [];
+  const seen = new Set<string>();
+  for (const domain of facility.value?.domains ?? []) {
+    const name = domain.domain.trim().toLowerCase();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    rows.push({ domain: name, source: 'facility' });
+  }
+  for (const app of facility.value?.applicationRoutes ?? []) {
+    for (const route of app.routes ?? []) {
+      const name = String(route.domain || '').trim().toLowerCase();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      rows.push({ domain: name, source: 'application' });
+    }
+  }
+  return rows;
+});
+const dnsSyncPendingDomain = ref('');
+const dnsTakeoverDomain = ref('');
+const dnsTakeoverOpen = ref(false);
+function facilityDnsNeedsAction(domain: string) {
+  const state = facilityDnsStatus(domain);
+  return state === 'failed' || state === 'skipped' || state === 'unknown' || state === '';
+}
+function facilityDnsConflict(domain: string) {
+  const error = facilityDnsError(domain).toLowerCase();
+  return error.includes('cname') || error.includes('conflict') || error.includes('already exists');
+}
+async function retryFacilityDns(domain: string) {
+  if (dnsSyncPendingDomain.value) return;
+  dnsSyncPendingDomain.value = domain;
+  try {
+    const result = await reverseProxyFacilityApi.syncDNS({ domains: [domain], takeover: false });
+    notifySuccess(t('applicationsPage.dnsSyncRetryAccepted', { taskId: result.taskId }), result);
+    await loadFacilityData();
+  } catch (err) {
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
+  } finally {
+    dnsSyncPendingDomain.value = '';
+  }
+}
+function askFacilityDnsTakeover(domain: string) {
+  dnsTakeoverDomain.value = domain;
+  dnsTakeoverOpen.value = true;
+}
+async function confirmFacilityDnsTakeover() {
+  const domain = dnsTakeoverDomain.value;
+  if (!domain || dnsSyncPendingDomain.value) return;
+  dnsSyncPendingDomain.value = domain;
+  dnsTakeoverOpen.value = false;
+  try {
+    const result = await reverseProxyFacilityApi.syncDNS({ domains: [domain], takeover: true, confirmTakeover: true });
+    notifySuccess(t('applicationsPage.dnsSyncTakeoverAccepted', { taskId: result.taskId }), result);
+    await loadFacilityData();
+  } catch (err) {
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
+  } finally {
+    dnsSyncPendingDomain.value = '';
+    dnsTakeoverDomain.value = '';
+  }
+}
 const serverOptions = computed(() => {
   const byId = new Map(servers.value.map((server) => [server.id, server]));
   return servers.value.map((item) => {
@@ -2311,12 +2375,36 @@ onBeforeUnmount(() => {
             </section>
             <section class="border-t border-border p-4">
               <h3 class="m-0 text-sm font-semibold">{{ t('applicationsPage.dnsSyncTitle') }}</h3>
-              <div class="mt-3 grid gap-2 motion-stagger">
-                <div v-for="domain in facility.domains" :key="`dns-${domain.domain}`" class="motion-reveal flex items-center justify-between gap-3 border-t border-border pt-3 text-sm first:border-t-0 first:pt-0">
-                  <strong>{{ domain.domain }}</strong>
-                  <Badge :tone="facilityDnsTone(facilityDnsStatus(domain.domain))" :title="facilityDnsError(domain.domain) || undefined">{{ t(`applicationsPage.dnsSync.${facilityDnsStatus(domain.domain) || 'unknown'}`) }}</Badge>
+              <div class="mt-3 grid gap-3 motion-stagger">
+                <div v-for="row in facilityDnsDomains" :key="`dns-${row.domain}`" class="motion-reveal grid gap-2 border-t border-border pt-3 text-sm first:border-t-0 first:pt-0">
+                  <div class="flex flex-wrap items-center justify-between gap-3">
+                    <div class="grid gap-1">
+                      <strong>{{ row.domain }}</strong>
+                      <span class="text-xs text-muted-foreground">{{ t(`applicationsPage.dnsSyncSource.${row.source}`) }}</span>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2">
+                      <Badge :tone="facilityDnsTone(facilityDnsStatus(row.domain))" :title="facilityDnsError(row.domain) || undefined">{{ t(`applicationsPage.dnsSync.${facilityDnsStatus(row.domain) || 'unknown'}`) }}</Badge>
+                      <Button
+                        v-if="facilityDnsNeedsAction(row.domain)"
+                        size="sm"
+                        variant="secondary"
+                        :loading="dnsSyncPendingDomain === row.domain"
+                        :disabled="Boolean(dnsSyncPendingDomain) && dnsSyncPendingDomain !== row.domain"
+                        @click="retryFacilityDns(row.domain)"
+                      >{{ t('applicationsPage.dnsSyncRetry') }}</Button>
+                      <Button
+                        v-if="facilityDnsStatus(row.domain) === 'failed' || facilityDnsConflict(row.domain)"
+                        size="sm"
+                        variant="danger"
+                        :loading="dnsSyncPendingDomain === row.domain"
+                        :disabled="Boolean(dnsSyncPendingDomain) && dnsSyncPendingDomain !== row.domain"
+                        @click="askFacilityDnsTakeover(row.domain)"
+                      >{{ t('applicationsPage.dnsSyncTakeover') }}</Button>
+                    </div>
+                  </div>
+                  <p v-if="facilityDnsError(row.domain)" class="m-0 text-xs text-danger">{{ facilityDnsError(row.domain) }}</p>
                 </div>
-                <EmptyState v-if="!facility.domains.length" :title="t('applicationsPage.noDomains')" :description="t('applicationsPage.noDomainsHint')" />
+                <EmptyState v-if="!facilityDnsDomains.length" :title="t('applicationsPage.noDomains')" :description="t('applicationsPage.noDomainsHint')" />
               </div>
             </section>
             <section class="border-t border-border p-4">
@@ -2686,6 +2774,21 @@ onBeforeUnmount(() => {
     :checkbox-label="t('applicationsPage.restorePersistentDataCheckbox')"
     @confirm="confirmRestorePersistentData"
     @update:open="(open: boolean) => { if (!open) restoreConfirmOpen = false }"
+  />
+
+  <ConfirmDialog
+    :open="dnsTakeoverOpen"
+    :title="t('applicationsPage.confirm.dnsTakeover.title')"
+    :description="t('applicationsPage.confirm.dnsTakeover.description', { domain: dnsTakeoverDomain })"
+    :impact="t('applicationsPage.confirm.dnsTakeover.impact', { domain: dnsTakeoverDomain })"
+    tone="danger"
+    :loading="Boolean(dnsSyncPendingDomain)"
+    :confirm-label="t('applicationsPage.dnsSyncTakeover')"
+    :cancel-label="t('common.cancel')"
+    :require-checkbox="true"
+    :checkbox-label="t('applicationsPage.confirm.dnsTakeover.checkbox')"
+    @confirm="confirmFacilityDnsTakeover"
+    @update:open="(open: boolean) => { if (!open) { dnsTakeoverOpen = false; dnsTakeoverDomain = ''; } }"
   />
 
   <ConfirmDialog

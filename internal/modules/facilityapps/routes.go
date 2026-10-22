@@ -10,6 +10,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, auth httpx.Middleware) {
 	mux.Handle("GET /api/v1/facility-apps/reverse-proxy", auth(http.HandlerFunc(h.ReverseProxy)))
 	mux.Handle("GET /api/v1/facility-apps/reverse-proxy/diagnostics", auth(http.HandlerFunc(h.ReverseProxyDiagnostics)))
 	mux.Handle("POST /api/v1/facility-apps/reverse-proxy/reconcile", auth(http.HandlerFunc(h.ReconcileReverseProxy)))
+	mux.Handle("POST /api/v1/facility-apps/reverse-proxy/dns-sync", auth(http.HandlerFunc(h.SyncReverseProxyDNS)))
 	mux.Handle("POST /api/v1/facility-apps/reverse-proxy/edit-sessions", auth(http.HandlerFunc(h.BeginFacilityEditSession)))
 	mux.Handle("PATCH /api/v1/facility-apps/reverse-proxy/edit-sessions/{id}/draft", auth(http.HandlerFunc(h.PatchFacilityEditSession)))
 	mux.Handle("PUT /api/v1/facility-apps/reverse-proxy/edit-sessions/{id}/assets/{assetName}", auth(http.HandlerFunc(h.PutFacilityEditAsset)))

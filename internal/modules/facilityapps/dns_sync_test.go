@@ -84,6 +84,30 @@ func TestDNSSyncDomainsOnSaveIncludesEveryCurrentDomain(t *testing.T) {
 	}
 }
 
+func TestDNSSyncDomainsOnSaveIncludesApplicationRoutes(t *testing.T) {
+	previous := ReverseProxyConfig{
+		ApplicationRoutes: []applications.ApplicationReverseProxyConfig{{
+			Routes: []applications.ReverseProxyRoute{{Domain: "old-app.example.test", OriginServerIDs: []string{"srv-a"}}},
+		}},
+	}
+	next := ReverseProxyConfig{
+		Domains: []FacilityRouteDomain{{Domain: "facility.example.test", OriginServerIDs: []string{"srv-a"}}},
+		ApplicationRoutes: []applications.ApplicationReverseProxyConfig{{
+			Routes: []applications.ReverseProxyRoute{{Domain: "user-app.example.test", OriginServerIDs: []string{"srv-b"}}},
+		}},
+	}
+	got := dnsSyncDomainsOnSave(previous, next)
+	want := []string{"facility.example.test", "old-app.example.test", "user-app.example.test"}
+	if len(got) != len(want) {
+		t.Fatalf("domains = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("domains = %#v, want %#v", got, want)
+		}
+	}
+}
+
 func TestDomainDNSServersUsesAnyAccessDeploymentServers(t *testing.T) {
 	cfg := ReverseProxyConfig{DeploymentServers: []string{"srv-a", "srv-b"}}
 	domain := FacilityRouteDomain{OriginServerIDs: []string{"srv-a"}}
@@ -146,7 +170,7 @@ func TestRunDNSSyncPersistsPerDomainStatus(t *testing.T) {
 	if err := svc.saveConfig(ctx, config); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.runDNSSync(ctx, []string{"app.example.test"}); err != nil {
+	if err := svc.runDNSSync(ctx, []string{"app.example.test"}, false); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := svc.loadConfig(ctx)
@@ -161,7 +185,7 @@ func TestRunDNSSyncPersistsPerDomainStatus(t *testing.T) {
 	}
 
 	syncer.err = errors.New("provider failed")
-	if err := svc.runDNSSync(ctx, []string{"app.example.test"}); err == nil {
+	if err := svc.runDNSSync(ctx, []string{"app.example.test"}, false); err == nil {
 		t.Fatal("expected provider failure")
 	}
 	loaded, _ = svc.loadConfig(ctx)
@@ -198,7 +222,7 @@ func TestRunDNSSyncSkipsServersWithoutAddresses(t *testing.T) {
 	if err := svc.saveConfig(context.Background(), config); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.runDNSSync(context.Background(), []string{"app.example.test"}); err != nil {
+	if err := svc.runDNSSync(context.Background(), []string{"app.example.test"}, false); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := svc.loadConfig(context.Background())
@@ -248,7 +272,7 @@ func TestRunDNSSyncFailsWhenServerListErrors(t *testing.T) {
 	if err := svc.setDNSSyncStates(ctx, map[string]DNSSyncState{"app.example.test": {State: DNSSyncPending, UpdatedAt: now}}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.runDNSSync(ctx, []string{"app.example.test"}); err == nil {
+	if err := svc.runDNSSync(ctx, []string{"app.example.test"}, false); err == nil {
 		t.Fatal("expected server list error to fail the sync")
 	}
 	loaded, err := svc.loadConfig(ctx)
@@ -299,7 +323,7 @@ func TestRunDNSSyncMergesPendingDomains(t *testing.T) {
 	if err := svc.setDNSSyncStates(ctx, map[string]DNSSyncState{"extra.example.test": {State: DNSSyncPending, UpdatedAt: now}}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.runDNSSync(ctx, []string{"app.example.test"}); err != nil {
+	if err := svc.runDNSSync(ctx, []string{"app.example.test"}, false); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := svc.loadConfig(ctx)
@@ -317,5 +341,57 @@ func TestRunDNSSyncMergesPendingDomains(t *testing.T) {
 	}
 	if !names["app.example.test"] || !names["extra.example.test"] {
 		t.Fatalf("sync targets must include both domains, got %#v", syncer.targets)
+	}
+}
+
+type facilityTestAppsWithRoutes struct {
+	routes []applications.ApplicationReverseProxyConfig
+}
+
+func (p facilityTestAppsWithRoutes) ApplicationReverseProxyConfigs(context.Context) ([]applications.ApplicationReverseProxyConfig, error) {
+	return p.routes, nil
+}
+
+func TestRunDNSSyncIncludesApplicationDomains(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	apps := facilityTestAppsWithRoutes{routes: []applications.ApplicationReverseProxyConfig{{
+		ApplicationID: "app-1",
+		Routes:        []applications.ReverseProxyRoute{{Domain: "user.example.test", OriginServerIDs: []string{"srv-a"}}},
+	}}}
+	svc := NewService(store.AppDB(), nil, facilityTestServers{items: map[string]server.Server{
+		"srv-a": {ID: "srv-a", IPv4: "203.0.113.10"},
+	}}, apps, WithDataRoot(cfg.DataRoot))
+	syncer := &fakeDNSProxySyncer{
+		zones:   []dns.Domain{{Name: "example.test"}},
+		results: []dns.ProxyZoneResult{{Zone: "example.test"}},
+	}
+	svc.dns = syncer
+	ctx := context.Background()
+	if err := svc.saveConfig(ctx, ReverseProxyConfig{DeploymentServers: []string{"srv-a"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.runDNSSync(ctx, []string{"user.example.test"}, false); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := svc.loadConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.DNSSync["user.example.test"].State != DNSSyncSynced {
+		t.Fatalf("application domain dns sync = %#v", loaded.DNSSync)
+	}
+	if len(syncer.targets) != 1 || len(syncer.targets[0].Records) != 1 || syncer.targets[0].Records[0].Value != "203.0.113.10" {
+		t.Fatalf("targets = %#v", syncer.targets)
 	}
 }

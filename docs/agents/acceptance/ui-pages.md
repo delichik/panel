@@ -196,8 +196,9 @@
 | --- | --- | --- | --- | --- |
 | UI-FAC-001 | 打开设施目录 | 固定展示 reverse-proxy 与 storage-share 卡片、类别/可用状态、异步统计；管理进入对应详情 | 不调用不存在的设施 list API；统计加载用骨架 | reverse-proxy 显示路由/节点/资产，storage-share 显示分区/服务器/根目录数 |
 | UI-FAC-002 | 目录点击“协调/同步” | reverse proxy 调 reconcile；storage share 仅 enabled 时可调；反馈遵守两阶段 | 未配置 storage share 禁用；无 ID 不显示假 ID | 当前卡片独立 loading，完成后目录重载 |
-| UI-FAC-003 | 查看 reverse-proxy 详情 | 单列 + Tabs：`routes`（默认）纵向叠放 KPI、route summaries、DNS 同步、静态资产下载；`nodes` 展示 operation/reconcileStopped 与 `FacilityDiagnostics`；`tab` 进 URL；禁止主栏+右侧诊断常驻左右分栏 | 未知 facilityKind 显示不可用空态；加载失败可重试 | 用户可见服务器使用名称，未知才回退 ID；深链 `?tab=nodes` 直达节点状态 |
+| UI-FAC-003 | 查看 reverse-proxy 详情 | 单列 + Tabs：`routes`（默认）纵向叠放 KPI、route summaries、DNS 同步、静态资产下载；`nodes` 展示 operation/reconcileStopped 与 `FacilityDiagnostics`；`tab` 进 URL；禁止主栏+右侧诊断常驻左右分栏；DNS 区列出设施域名与应用反向代理域名并标注来源 | 未知 facilityKind 显示不可用空态；加载失败可重试 | 用户可见服务器使用名称，未知才回退 ID；深链 `?tab=nodes` 直达节点状态；应用域名不得从 DNS 区遗漏 |
 | UI-FAC-004 | DNS 同步为 pending | 非编辑态、可见标签每约 3 秒重载设施直至不 pending | 编辑中停止轮询；离开清 timer | 状态从 pending 更新且不覆盖编辑草稿 |
+| UI-FAC-013 | DNS 失败/跳过重试与覆盖接管 | 失败/跳过/未同步显示错误与「重试 DNS」；失败（或冲突类错误）提供「覆盖已有记录」，经危险确认后调用 `POST .../dns-sync`（`takeover`+`confirmTakeover`） | 未确认不得接管；请求中只锁当前域名操作 | 成功提示含 taskId 并刷新 DNS 状态 |
 | UI-FAC-005 | 进入入口代理编辑 | 详情页就地展开，config 深链也可直达；先创建 durable session，再显示连续流：网关、域名/路由、静态资产 | 会话失败显示重试；编辑中隐藏详情 reconcile/refresh 操作 | 两个入口得到同一草稿与提交行为 |
 | UI-FAC-006 | 修改网关服务器 | 仅从服务器选择；移除网关时自动剪除各域名 origin/primary/relay，并以 warning 告知数量 | 不得留下指向非网关服务器的引用 | payload 中所有关联服务器均属于 deploymentServers |
 | UI-FAC-007 | 新增/编辑域名 | 校验合法、非重复域名且至少一台 origin；origin 只能从网关选；可配置 AnyAccess relay/策略/主源 | primary 必须属于 origin，指定 relay 只能来自可用网关 | 错误字段就地显示且弹窗不关闭；成功才标脏 |

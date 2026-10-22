@@ -45,7 +45,7 @@
 
 ## 3. HTTP API 基线
 
-当前逐项清单记录 171 个 `/api` method/path 组合，路由清单 SHA-256 为 `3756d56d2a98836a4e7596d6032004f5948c25a78f82d2623257864a86055511`。上一轮新增两条 Tailscale 收敛入口，并修正此前清单计数（`servers` 少计 5 条 NAT 端口子资源，来源表与逐项清单不一致）；此前删除了两条手动防火墙入口（`POST /servers/{id}/ufw/install`、`POST /servers/{id}/ufw/enable`，见 `AGT-FW-001..006` 与已废弃的 `UFW-API-005`），随后整体移除了 NAT 服务器能力及其 4 条端口子资源路由（`SRV-NAT-*` 已废弃）。来源计数如下：
+当前逐项清单记录 172 个 `/api/v1` method/path 组合，路由清单 SHA-256 为 `62dd180de12eea5072f4881dde7264a45e64d92e14566f51ea008ffe872ac907`（本轮新增 `POST /api/v1/facility-apps/reverse-proxy/dns-sync`，对应 `DNS-SYNC-003/005`、`FAC-RP-011`、`UI-FAC-013`）。上一轮新增两条 Tailscale 收敛入口，并修正此前清单计数（`servers` 少计 5 条 NAT 端口子资源，来源表与逐项清单不一致）；此前删除了两条手动防火墙入口（`POST /servers/{id}/ufw/install`、`POST /servers/{id}/ufw/enable`，见 `AGT-FW-001..006` 与已废弃的 `UFW-API-005`），随后整体移除了 NAT 服务器能力及其 4 条端口子资源路由（`SRV-NAT-*` 已废弃）。来源计数如下：
 
 | 注册来源 | 数量 | 验收领域 |
 | --- | ---: | --- |
@@ -56,7 +56,7 @@
 | certificates/certs | 11 | DNS、证书与密钥资产 |
 | certificates/dns | 9 | DNS、证书与密钥资产 |
 | containers | 17 | 容器与资源 |
-| facilityapps | 20 | 应用与设施应用 |
+| facilityapps | 21 | 应用与设施应用 |
 | keyassets | 14 | DNS、证书与密钥资产 |
 | diagnostics | 7 | 备份、恢复与诊断 |
 | metrics | 1 | 身份、设置与系统；服务器、安全与软件包 |
@@ -74,7 +74,7 @@
 - 概览卡片数据 `GET /api/v1/overview/cards/{cardId}/data` 响应增加 `bucketSeconds`，指标卡只物化对应 kind 的序列并按 range/服务器数量服务端降采样，`since` 改为按桶向下对齐重算；前端改为数据落地时一次性派生视图并按桶后缀替换。不新增 method/path、表或后台任务；对应 `OBS-OVW-005/006/007/008`。
 - 既有 GET/POST `/api/v1/debug/clear-runtime-data` 响应补齐 `runId/stage/failedStage/startedAt/finishedAt`，明确 `cleared` 与终态、并发请求语义；清理期间业务写入返回 `runtime_data_maintenance`，不增加接口；对应 `DIAG-CLR-001/005/006/007`。
 
-- `COV-API-002`：维护导出/恢复的独立最小应用路由不计入上述主 Panel 171 条，但必须由备份恢复文档覆盖其认证、状态、密码、下载、重试、退出和清除 pending 操作。
+- `COV-API-002`：维护导出/恢复的独立最小应用路由不计入上述主 Panel 172 条，但必须由备份恢复文档覆盖其认证、状态、密码、下载、重试、退出和清除 pending 操作。
 
 - `COV-API-003`：171 个 method/path 的逐项映射见 [主 Panel API 路由逐项清单](api-route-inventory.md)；路由清单测试与该表必须同步变化。
 

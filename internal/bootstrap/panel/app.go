@@ -214,6 +214,7 @@ func New(cfg config.Config) (*App, error) {
 	containerBridge.facility = facilitySvc
 	applicationSvc.SetReverseProxyReconciler(facilitySvc)
 	applicationSvc.SetReverseProxyPolicyProvider(facilitySvc)
+	applicationSvc.SetDNSSyncTrigger(facilitySvc.SyncApplicationProxyDNSEntries)
 	applicationSvc.SetFacilityRuntimeProvider(facilitySvc)
 	applicationSvc.SetStorageShareResolver(facilitySvc)
 	internalFileRegistry.Register("certificate", certSvc)

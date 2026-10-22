@@ -81,6 +81,7 @@ type Service struct {
 	internalFiles         InternalFileProvider
 	proxyReconciler       ReverseProxyReconciler
 	proxyPolicy           ReverseProxyPolicyProvider
+	dnsSyncTrigger        func(context.Context, []string) error
 	reconcileTrigger      ApplicationReconcileTrigger
 	imageResolver         ImageDigestResolver
 	operationQueue        ContainerOperationQueue
@@ -235,6 +236,49 @@ func (s *Service) SetReverseProxyReconciler(reconciler ReverseProxyReconciler) {
 
 func (s *Service) SetReverseProxyPolicyProvider(provider ReverseProxyPolicyProvider) {
 	s.proxyPolicy = provider
+}
+
+// SetDNSSyncTrigger wires reverse-proxy DNS sync for application route changes.
+func (s *Service) SetDNSSyncTrigger(trigger func(context.Context, []string) error) {
+	s.dnsSyncTrigger = trigger
+}
+
+func reverseProxyDNSDomainNames(rules []ReverseProxyRule) []string {
+	names := map[string]struct{}{}
+	for _, rule := range rules {
+		name := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(rule.Domain), "."))
+		if name != "" {
+			names[name] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(names))
+	for name := range names {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (s *Service) notifyProxyDNSSync(ctx context.Context, previous, next []ReverseProxyRule) {
+	if s == nil || s.dnsSyncTrigger == nil {
+		return
+	}
+	names := map[string]struct{}{}
+	for _, name := range reverseProxyDNSDomainNames(previous) {
+		names[name] = struct{}{}
+	}
+	for _, name := range reverseProxyDNSDomainNames(next) {
+		names[name] = struct{}{}
+	}
+	if len(names) == 0 {
+		return
+	}
+	domains := make([]string, 0, len(names))
+	for name := range names {
+		domains = append(domains, name)
+	}
+	sort.Strings(domains)
+	_ = s.dnsSyncTrigger(ctx, domains)
 }
 
 func (s *Service) SetApplicationReconcileTrigger(trigger ApplicationReconcileTrigger) {
@@ -646,6 +690,7 @@ func (s *Service) createWithFilesID(ctx context.Context, appID string, in SaveIn
 			return Application{}, applicationSaveError(err)
 		}
 		s.insertRevisionBestEffort(ctx, app, prepared.job)
+		s.notifyProxyDNSSync(ctx, nil, app.ReverseProxy)
 		if app.Enabled {
 			if err := s.triggerApplicationReconcile(ctx, app, prepared.job, "application_save", "Syncing application "+app.Name); err != nil {
 				return Application{}, err
@@ -659,6 +704,7 @@ func (s *Service) createWithFilesID(ctx context.Context, appID string, in SaveIn
 	if err := s.commitApplicationState(ctx, app, files, prepared.job, true, true); err != nil {
 		return Application{}, applicationSaveError(err)
 	}
+	s.notifyProxyDNSSync(ctx, nil, app.ReverseProxy)
 	if app.Enabled {
 		if err := s.triggerApplicationReconcile(ctx, app, prepared.job, "application_save", "Syncing application "+app.Name); err != nil {
 			return Application{}, err
@@ -760,6 +806,7 @@ func (s *Service) updateWithFilesVersioned(ctx context.Context, appID string, ex
 			if err := s.updateApplicationWithRoutes(ctx, app); err != nil {
 				return Application{}, applicationSaveError(err)
 			}
+			s.notifyProxyDNSSync(ctx, current.ReverseProxy, app.ReverseProxy)
 		} else if err := s.updateApplicationDerived(ctx, app); err != nil {
 			return Application{}, err
 		}
@@ -779,6 +826,9 @@ func (s *Service) updateWithFilesVersioned(ctx context.Context, appID string, ex
 	}
 	if err := s.commitApplicationStateVersioned(ctx, app, files, prepared.job, false, prepared.hash != current.SpecHash, expectedVersion, enforceVersion, configurationChanged); err != nil {
 		return Application{}, applicationSaveError(err)
+	}
+	if configurationChanged {
+		s.notifyProxyDNSSync(ctx, current.ReverseProxy, app.ReverseProxy)
 	}
 	if shouldDeploy || shouldStop {
 		if err := s.triggerApplicationReconcile(ctx, app, prepared.job, "application_save", "Syncing application "+app.Name); err != nil {
@@ -834,12 +884,14 @@ func (s *Service) Delete(ctx context.Context, appID string, confirmPersistentDat
 			return err
 		}
 	}
+	previousRoutes := append([]ReverseProxyRule(nil), app.ReverseProxy...)
 	app.Enabled = false
 	app.DeletionRequested = true
 	app.UpdatedAt = time.Now().UTC()
 	if err := s.updateApplicationLifecycleFlags(ctx, app.ID, false, true); err != nil {
 		return err
 	}
+	s.notifyProxyDNSSync(ctx, previousRoutes, nil)
 	if instances, err := s.runtimeInstances(ctx, app.ID); err != nil {
 		return err
 	} else if len(instances) == 0 && len(persistentServers) == 0 {

@@ -12,9 +12,10 @@ const ProxyManagedRecordComment = "panel:reverse-proxy"
 
 // ProxyRecordTarget is one managed zone and the desired records Panel owns.
 type ProxyRecordTarget struct {
-	Zone    string
-	Names   []string
-	Records []RecordInput
+	Zone     string
+	Names    []string
+	Records  []RecordInput
+	Takeover bool
 }
 
 // ProxyZoneResult summarizes the mutations applied to one zone.
@@ -76,6 +77,16 @@ func (s *Service) syncProxyZone(ctx context.Context, target ProxyRecordTarget) (
 			desiredByKey[key] = prepared
 			desired = append(desired, prepared)
 		}
+	}
+
+	if target.Takeover {
+		remaining, deleted, takeoverErr := deleteUnmanagedHostConflicts(ctx, provider, domain.Name, existing, managedNames)
+		if takeoverErr != nil {
+			result.Error = takeoverErr.Error()
+			return result, takeoverErr
+		}
+		existing = remaining
+		result.Deleted += deleted
 	}
 
 	managed := map[string][]Record{}
@@ -158,6 +169,35 @@ func (s *Service) syncProxyZone(ctx context.Context, target ProxyRecordTarget) (
 		return result, err
 	}
 	return result, nil
+}
+
+// deleteUnmanagedHostConflicts removes non-Panel A/AAAA/CNAME records on the
+// managed hostnames so Panel can write its reverse-proxy records. TXT/MX and
+// other types are left untouched. Only records whose comment is not
+// ProxyManagedRecordComment are deleted.
+func deleteUnmanagedHostConflicts(ctx context.Context, provider Provider, zone string, existing []Record, managedNames map[string]struct{}) ([]Record, int, error) {
+	remaining := make([]Record, 0, len(existing))
+	deleted := 0
+	for _, record := range existing {
+		fullName := proxyFullName(zone, record.Name)
+		if _, managed := managedNames[fullName]; !managed {
+			remaining = append(remaining, record)
+			continue
+		}
+		if record.Comment == ProxyManagedRecordComment {
+			remaining = append(remaining, record)
+			continue
+		}
+		if !cnameHostConflictType(record.Type) {
+			remaining = append(remaining, record)
+			continue
+		}
+		if err := provider.DeleteRecord(ctx, zone, record.ID); err != nil {
+			return existing, deleted, err
+		}
+		deleted++
+	}
+	return remaining, deleted, nil
 }
 
 func proxyTypeNameKey(zone string, record RecordInput) string {

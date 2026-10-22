@@ -736,6 +736,11 @@ export function installMockApi() {
       return json({ serverId, checkedAt: new Date().toISOString(), status: 'sampled', issues: [], truncated: false });
     }
     if (url.pathname === '/api/v1/facility-apps/reverse-proxy/reconcile' && method(init) === 'POST') return json({ config: mockFacility }, 202);
+    if (url.pathname === '/api/v1/facility-apps/reverse-proxy/dns-sync' && method(init) === 'POST') {
+      const input = init?.body ? await new Response(init.body).json() as { domains?: string[]; takeover?: boolean; confirmTakeover?: boolean } : {};
+      if (input.takeover && !input.confirmTakeover) return json({ error: { code: 'facility_dns_takeover_confirmation_required', message: 'Confirm takeover before overwriting existing DNS records' } }, 422);
+      return json({ taskId: 'mock-dns-sync' }, 202);
+    }
     if (url.pathname === '/api/v1/facility-apps/storage-share' && method(init) === 'GET') return json(mockStorageShare);
     if (url.pathname === '/api/v1/facility-apps/storage-share' && method(init) === 'PUT') {
       const input = init?.body ? await new Response(init.body).json() as { servers?: Array<{ serverId?: string; root?: string }> } : {};

@@ -26,10 +26,11 @@
 
 ## 3. 入口代理 DNS 同步
 
-- `DNS-SYNC-001`：同步必须按zone独立收敛A/AAAA期望记录，仅管理 `comment=panel:reverse-proxy` 的记录；用户自建记录永不改写或删除。
+- `DNS-SYNC-001`：默认同步必须按zone独立收敛A/AAAA期望记录，仅管理 `comment=panel:reverse-proxy` 的记录；用户自建记录不得改写或删除。显式接管见 `DNS-SYNC-005`。
 - `DNS-SYNC-002`：自动记录从服务器IPv4/IPv6生成，TTL固定120、proxied=false；某zone遇到用户CNAME冲突时只标记该zone失败，不删除冲突记录且不阻断其他zone。
-- `DNS-SYNC-003`：同步失败不得回滚入口代理或服务器配置；每个域结果必须保存到DNS同步状态并可通过 `dns_proxy_records_sync` 重试。
+- `DNS-SYNC-003`：同步失败不得回滚入口代理或服务器配置；每个域结果必须保存到DNS同步状态，并可通过任务 `dns_proxy_records_sync` 或 `POST /api/v1/facility-apps/reverse-proxy/dns-sync` 重试。
 - `DNS-SYNC-004`：同一zone再次同步相同期望集合必须幂等，不得重复创建；移除的托管目标只能删除Panel标记记录。
+- `DNS-SYNC-005`：`POST .../dns-sync` 在 `takeover=true` 时必须同时提供 `confirmTakeover=true`，否则拒绝；确认后仅删除目标主机名上非托管的 A/AAAA/CNAME，再写入 `panel:reverse-proxy` 托管记录；不得删除 TXT/MX 等无关类型，也不得把普通 pending 域名一并强制接管。
 
 ## 4. ACME 域名证书
 

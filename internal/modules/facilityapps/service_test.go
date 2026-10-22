@@ -168,6 +168,66 @@ func TestRenderApplicationAnyAccessUsesOriginAndRelay(t *testing.T) {
 	}
 }
 
+func TestRenderAnyAccessRelayTLSUsesPublicCABundleNotLeaf(t *testing.T) {
+	svc := &Service{servers: facilityTestServers{items: map[string]server.Server{
+		"srv-origin": {ID: "srv-origin", Host: "10.0.0.51"},
+		"srv-relay":  {ID: "srv-relay", Host: "10.0.0.52"},
+	}}}
+	route := applications.ReverseProxyRoute{
+		Domain: "app.example.test", TargetContainer: "panel-app-1", TargetPort: 8080,
+		OriginServerIDs: []string{"srv-origin"},
+		AnyAccess:       applications.AnyAccessConfig{Enabled: true, Strategy: applications.AnyAccessStrategyRoundRobin},
+		Paths:           []applications.ReverseProxyPath{{Path: "/"}},
+	}
+	app := applications.ApplicationReverseProxyConfig{ApplicationID: "app-1", ApplicationName: "app", Routes: []applications.ReverseProxyRoute{route}}
+	cfg := ReverseProxyConfig{DeploymentServers: []string{"srv-origin", "srv-relay"}}
+	certificates := []proxycert.Certificate{{
+		ID:             "app-cert",
+		Source:         "domain_certificate",
+		Domains:        []string{"app.example.test"},
+		CertificatePEM: "leaf-and-chain",
+		PrivateKeyPEM:  "private-key",
+	}}
+	_, _, relayFiles, err := svc.renderNginxConfig(context.Background(), "srv-relay", cfg, []applications.ApplicationReverseProxyConfig{app}, certificates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay := managedConfigText(relayFiles)
+	for _, want := range []string{
+		"server 10.0.0.51:443 max_fails=3 fail_timeout=30s;",
+		"proxy_pass https://panel_domain_app.example.test;",
+		"proxy_ssl_trusted_certificate /etc/panel-certs/_ca_bundle/ca-certificates.crt;",
+		"proxy_ssl_verify on;",
+		"proxy_ssl_name app.example.test;",
+	} {
+		if !strings.Contains(relay, want) {
+			t.Fatalf("relay TLS config missing %q:\n%s", want, relay)
+		}
+	}
+	if strings.Contains(relay, "proxy_ssl_trusted_certificate /etc/panel-certs/app-cert/certificate.pem;") {
+		t.Fatalf("relay must not trust the leaf certificate file:\n%s", relay)
+	}
+	foundBundle := false
+	for _, file := range relayFiles {
+		if file.Path == proxyCABundleSource && len(file.Content) > 0 {
+			foundBundle = true
+			break
+		}
+	}
+	if !foundBundle {
+		t.Fatalf("relay managed files missing public CA bundle %q", proxyCABundleSource)
+	}
+	_, _, originFiles, err := svc.renderNginxConfig(context.Background(), "srv-origin", cfg, []applications.ApplicationReverseProxyConfig{app}, certificates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range originFiles {
+		if file.Path == proxyCABundleSource {
+			t.Fatalf("origin node must not receive relay CA bundle")
+		}
+	}
+}
+
 func TestRenderNginxConfigHonorsSpecifiedRelayServers(t *testing.T) {
 	svc := &Service{servers: facilityTestServers{items: map[string]server.Server{
 		"srv-origin":  {ID: "srv-origin", Host: "10.0.0.31"},

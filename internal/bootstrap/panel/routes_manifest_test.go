@@ -43,8 +43,8 @@ func TestAPIRouteManifest(t *testing.T) {
 	//   PUT/DELETE /api/v1/servers/{id}/nat-ports/{mappingID}
 	// 消费者（web/src/api/settings.ts、web/src/api/servers.ts、Mock 与验收条目
 	// TS-*、UFW-API-*）必须与本清单同步变化（COV-API-001）。
-	const wantCount = 171
-	const wantHash = "3756d56d2a98836a4e7596d6032004f5948c25a78f82d2623257864a86055511"
+	const wantCount = 172
+	const wantHash = "62dd180de12eea5072f4881dde7264a45e64d92e14566f51ea008ffe872ac907"
 	manifest := strings.Join(patterns, "\n") + "\n"
 	gotHash := fmt.Sprintf("%x", sha256.Sum256([]byte(manifest)))
 	if len(patterns) != wantCount || gotHash != wantHash {

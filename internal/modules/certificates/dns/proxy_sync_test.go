@@ -14,7 +14,9 @@ type statefulFakeProvider struct {
 }
 
 func (p *statefulFakeProvider) ListRecords(ctx context.Context, zone string) ([]Record, error) {
-	return p.records, nil
+	out := make([]Record, len(p.records))
+	copy(out, p.records)
+	return out, nil
 }
 
 func (p *statefulFakeProvider) CreateRecord(ctx context.Context, zone string, record RecordInput) (Record, error) {
@@ -138,6 +140,54 @@ func TestSyncProxyRecordsDetectsUserCNAMEConflict(t *testing.T) {
 	}
 	if len(results) != 1 || results[0].Error == "" {
 		t.Fatalf("results = %#v", results)
+	}
+}
+
+func TestSyncProxyRecordsTakeoverDeletesUnmanagedConflicts(t *testing.T) {
+	provider := &statefulFakeProvider{records: []Record{
+		{ID: "user_cname", Name: "app.example.com", Type: "CNAME", Value: "target.example.com", TTL: 300},
+		{ID: "user_a", Name: "app.example.com", Type: "A", Value: "198.51.100.9", TTL: 300},
+		{ID: "keep_txt", Name: "app.example.com", Type: "TXT", Value: "v=spf1", TTL: 300},
+		{ID: "other", Name: "other.example.com", Type: "A", Value: "203.0.113.6", TTL: 120},
+	}}
+	svc := newProxySyncService(t, provider)
+
+	proxied := false
+	results, err := svc.SyncProxyRecords(context.Background(), []ProxyRecordTarget{{
+		Zone:     "example.com",
+		Names:    []string{"app.example.com"},
+		Takeover: true,
+		Records: []RecordInput{
+			{Name: "app", Type: "A", Value: "203.0.113.10", TTL: 120, Proxied: &proxied, Comment: ProxyManagedRecordComment},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Created != 1 || results[0].Deleted < 2 {
+		t.Fatalf("results = %#v", results)
+	}
+	byID := map[string]Record{}
+	for _, record := range provider.records {
+		byID[record.ID] = record
+	}
+	if _, ok := byID["user_cname"]; ok {
+		t.Fatalf("user CNAME should be removed on takeover: %#v", provider.records)
+	}
+	if _, ok := byID["user_a"]; ok {
+		t.Fatalf("user A should be removed on takeover: %#v", provider.records)
+	}
+	if byID["keep_txt"].Value != "v=spf1" || byID["other"].Value != "203.0.113.6" {
+		t.Fatalf("unrelated records must stay: %#v", provider.records)
+	}
+	foundManaged := false
+	for _, record := range provider.records {
+		if record.Comment == ProxyManagedRecordComment && record.Value == "203.0.113.10" {
+			foundManaged = true
+		}
+	}
+	if !foundManaged {
+		t.Fatalf("managed record missing after takeover: %#v", provider.records)
 	}
 }
 

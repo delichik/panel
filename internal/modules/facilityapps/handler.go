@@ -14,6 +14,7 @@ import (
 type service interface {
 	GetReverseProxy(ctx context.Context) (ReverseProxyConfig, error)
 	ReconcileReverseProxyNow(ctx context.Context) (ReconcileResult, error)
+	RequestDNSSync(ctx context.Context, req DNSSyncRequest) (DNSSyncResult, error)
 	BeginFacilityEditSession(context.Context, BeginFacilityEditSessionInput) (FacilityEditSession, error)
 	PatchFacilityEditSession(context.Context, string, PatchFacilityEditSessionInput) (FacilityEditSession, error)
 	PutFacilityEditAsset(context.Context, string, string, string, FacilityEditAssetInput) (FacilityEditSession, error)
@@ -184,4 +185,17 @@ func (h *Handler) ReconcileReverseProxy(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) SyncReverseProxyDNS(w http.ResponseWriter, r *http.Request) {
+	var in DNSSyncRequest
+	if !httpx.Decode(w, r, &in) {
+		return
+	}
+	result, err := h.service.RequestDNSSync(r.Context(), in)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, result)
 }
