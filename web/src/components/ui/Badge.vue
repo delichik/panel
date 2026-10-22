@@ -5,7 +5,7 @@ import { cn } from './cn';
 const props = withDefaults(defineProps<{ tone?: 'neutral' | 'success' | 'warning' | 'danger' | 'info' }>(), { tone: 'neutral' });
 const attrs = useAttrs();
 const classes = computed(() => cn(
-  'inline-flex h-5 items-center rounded-md border px-1.5 text-[11px] font-medium leading-none',
+  'inline-flex h-6 items-center rounded-md border px-2 text-[12px] font-semibold leading-none tracking-wide',
   props.tone === 'neutral' && 'border-neutral-border bg-neutral-bg text-neutral',
   props.tone === 'success' && 'border-success-border bg-success-bg text-success',
   props.tone === 'warning' && 'border-warning-border bg-warning-bg text-warning',

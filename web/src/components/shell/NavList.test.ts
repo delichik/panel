@@ -44,8 +44,9 @@ describe('NavList', () => {
     const pending = wrapper.get('a[href="/servers"]');
 
     expect(pending.attributes('aria-busy')).toBe('true');
-    expect(pending.classes()).toContain('text-brand');
-    expect(wrapper.get('a[href="/overview"]').classes()).not.toContain('text-brand');
+    expect(pending.classes()).toContain('bg-primary');
+    expect(pending.classes()).toContain('text-primary-foreground');
+    expect(wrapper.get('a[href="/overview"]').classes()).not.toContain('bg-primary');
   });
 
   it('keeps collapsed labels in the DOM so the accessible name survives', async () => {

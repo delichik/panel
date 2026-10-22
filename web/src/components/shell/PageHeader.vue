@@ -7,7 +7,7 @@ const emit = defineEmits<{ back: [] }>();
 </script>
 
 <template>
-  <header class="flex shrink-0 items-start justify-between gap-4 border-b border-border px-4 py-3 max-lg:flex-col max-sm:px-3">
+  <header class="flex shrink-0 items-center justify-between gap-4 border-b border-border px-4 py-3 max-lg:flex-col max-lg:items-stretch max-sm:px-3">
     <div class="min-w-0">
       <slot name="breadcrumb" />
       <div class="flex items-start gap-2">
@@ -15,8 +15,8 @@ const emit = defineEmits<{ back: [] }>();
           <ArrowLeft />
         </IconButton>
         <div class="min-w-0">
-          <h1 class="m-0 text-lg font-semibold leading-7 text-foreground">{{ title }}</h1>
-          <p v-if="description" class="m-0 mt-0.5 max-w-3xl text-sm leading-5 text-muted-foreground">{{ description }}</p>
+          <h1 class="m-0 text-lg font-semibold tracking-tight leading-6 text-foreground">{{ title }}</h1>
+          <p v-if="description" class="m-0 mt-0.5 max-w-3xl text-sm leading-5 text-secondary-foreground">{{ description }}</p>
         </div>
       </div>
     </div>

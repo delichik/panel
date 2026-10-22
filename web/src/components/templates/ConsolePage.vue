@@ -16,7 +16,7 @@ const emit = defineEmits<{ back: [] }>();
 </script>
 
 <template>
-  <div class="grid h-full min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] max-lg:block max-lg:min-h-[calc(100dvh-56px)]">
+  <div class="grid h-full min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] max-lg:block max-lg:min-h-[calc(100dvh-52px)]">
     <PageHeader :title="title" :description="description" :back-label="backLabel" @back="emit('back')">
       <template v-if="$slots.actions" #actions><slot name="actions" /></template>
       <template v-if="$slots.breadcrumb" #breadcrumb><slot name="breadcrumb" /></template>

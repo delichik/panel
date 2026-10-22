@@ -23,7 +23,7 @@ describe('new frontend foundation', () => {
   it('keeps desktop shell scrolling constrained to internal regions', () => {
     expect(mainStyles).toMatch(/body\s*\{[^}]*overflow:\s*hidden;/s);
     expect(shellSource).toContain('lg:h-dvh lg:min-h-0 lg:overflow-hidden');
-    expect(shellSource).toContain('lg:grid-rows-[56px_minmax(0,1fr)]');
+    expect(shellSource).toContain('lg:grid-rows-[52px_minmax(0,1fr)]');
     expect(shellSource).toContain('overflow-hidden');
   });
 

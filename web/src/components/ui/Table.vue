@@ -61,9 +61,9 @@ function skeletonClass(rowIndex: number, columnIndex: number, align?: 'left' | '
 </script>
 
 <template>
-  <div class="min-h-0 overflow-auto" :class="framed ? 'rounded-xl border border-border' : undefined">
+  <div class="min-h-0 overflow-auto" :class="framed ? 'rounded-xl border border-border bg-card' : undefined">
     <table class="w-full border-collapse text-sm" :class="fixed ? 'table-fixed' : undefined" :aria-busy="loading ? 'true' : undefined" :aria-label="loadingLabel || undefined">
-      <thead class="sticky top-0 z-10 bg-muted text-xs font-medium text-muted-foreground">
+      <thead class="sticky top-0 z-10 bg-muted text-xs font-semibold uppercase tracking-wide text-secondary-foreground">
           <tr>
             <th v-for="column in columns" :key="column.key" scope="col" class="border-b border-border px-3 py-2.5" :class="[column.align === 'right' ? 'text-right' : 'text-left', column.width, column.nowrap ? 'whitespace-nowrap' : undefined]">
               <slot v-if="$slots[`head-${column.key}`]" :name="`head-${column.key}`" :row="undefined as unknown as T" :value="undefined" />
@@ -80,7 +80,7 @@ function skeletonClass(rowIndex: number, columnIndex: number, align?: 'left' | '
             </tr>
           </template>
           <template v-else-if="rows.length">
-            <tr v-for="(row, index) in rows" :key="rowId(row, index)" class="motion-table-row hover:bg-accent/60" :class="isActive(row) ? 'bg-muted' : undefined" :aria-current="isActive(row) ? 'true' : undefined" :style="staggerStyle(index)">
+            <tr v-for="(row, index) in rows" :key="rowId(row, index)" class="motion-table-row hover:bg-accent" :class="isActive(row) ? 'bg-muted' : undefined" :aria-current="isActive(row) ? 'true' : undefined" :style="staggerStyle(index)">
               <td v-for="column in columns" :key="column.key" class="px-3 py-2.5 text-foreground" :class="[column.align === 'right' ? 'text-right' : 'text-left', column.width, column.nowrap ? 'whitespace-nowrap' : undefined]">
                 <slot :name="column.key" :row="row" :value="cellValue(row, column.key)">
                   {{ cellValue(row, column.key) }}

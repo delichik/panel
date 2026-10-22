@@ -34,9 +34,9 @@ const triggerText = computed(() => {
 });
 
 const buttonClasses = computed(() => [
-  'motion-field flex h-9 w-full min-w-0 items-center justify-between gap-2 rounded-xl border border-input bg-card px-3 text-left text-sm text-foreground transition-colors',
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-offset-2 focus-visible:ring-offset-card',
-  open.value && 'border-border-strong bg-popover shadow-[var(--panel-motion-shadow-raised)]',
+  'motion-field flex h-9 w-full min-w-0 items-center justify-between gap-2 rounded-xl border border-input bg-card px-3 text-left text-sm text-foreground shadow-sm transition-[background-color,border-color,box-shadow]',
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:ring-offset-2 focus-visible:ring-offset-card',
+  open.value && 'border-border-strong bg-popover panel-shadow-overlay',
 ]);
 
 

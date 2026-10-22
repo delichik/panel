@@ -32,9 +32,8 @@
 
 - 前端入口：`web/src/main.ts`
 - 根组件：`web/src/app/App.vue`
-- 全局样式与 Tailwind token：`web/src/styles/main.css`
+- 全局样式与 Tailwind token：`web/src/styles/main.css`（`--panel-*` 为真源；`@theme` 桥接 Tailwind 色名，含 `border-strong` / `secondary-foreground`）
 - 主题运行时：`web/src/design/theme.ts`
-- 组件 token 辅助：`web/src/design/tokens.ts`
 - 自有 UI primitives：`web/src/components/ui/`
 - 外壳与导航：`web/src/components/shell/`；AppShell 一级菜单顺序为「概览 → 资产 → 应用 → 资源 → 设置」，定义在 `web/src/components/shell/navModel.ts`。
 - 页面模板：`web/src/components/templates/`
@@ -57,7 +56,7 @@
 - `web/src/views/applications/index.vue`、`web/src/views/servers/index.vue`（含 `tabs/`）等页面已接入统一 patterns：搜索使用 `SearchInput`，列表使用 `Table` + 覆盖式详情，行操作使用 `Dropdown`/`IconButton`，任务/应用状态使用 `StatusBadge`，应用/设施服务器多选使用 `ServerMultiPicker`，持久化与文件内容操作使用 `DownloadButton` / `FileUploadButton`。应用和设施编辑器采用同一连续纵向瀑布流：所有配置区在一个编辑正文中按业务顺序展开，正文独立滚动，右侧保留摘要；不得恢复分区切换、分页卡片或隐藏其他配置区的交互。单服务器上下文选择器（原 `ServerContextSelector`）已删除，服务器操作一律经服务器详情 tabs 进入。
 - 图标统一使用 `@lucide/vue`。
 - 构建链路：路由组件全部懒加载（`component: () => import(...)`），每个页面族独立 chunk，初始包只含 AppShell 外壳与共享依赖；`web/vite.config.ts` 通过 `build.rollupOptions.output.manualChunks` 固定拆分 `vue-vendor`（vue/vue-router/pinia）、`code-editor`（@codemirror/*）、`echarts`、`yaml` 等大依赖块，保持各 chunk 低于 500 kB 警告阈值。新增页面族路由必须继续使用懒加载，不得恢复静态组件导入。
-- 主题支持 `system` / `light` / `dark` 明暗模式，以及 `lighthouse`（灯塔，默认）/ `ocean`（蔚蓝）两套配色方案，分别通过 `data-theme` / `data-scheme` 和 CSS 变量运行；配色偏好保存在 localStorage `panel.theme.scheme`。
+- 主题支持 `system` / `light` / `dark` 明暗模式，以及 `lighthouse`（灯塔，默认）/ `ocean`（蔚蓝）两套配色方案，分别通过 `data-theme` / `data-scheme` 和 CSS 变量运行；配色偏好保存在 localStorage `panel.theme.scheme`。灯塔浅色为中性冷灰底；primary/brand 与 success 色相可区分；motion 经 `--panel-motion-*`（含 hover 轻微上移与更明显入场位移）。
 - 首次加载的启动遮罩（web/index.html 内联 boot-screen）在首帧渲染前按 panel.theme.mode、panel.theme.scheme 与 prefers-color-scheme 应用主题与配色，避免深色模式先闪白屏；内联色值与各方案 --panel-bg / --panel-border-strong / --panel-primary 保持一致。
 - 中大屏 AppShell 必须填满视口并禁止页面级滚动；滚动限制在模板正文、表格、详情、日志或编辑正文内部。
 - 窄屏 AppShell 侧边抽屉以 dialog 语义呈现（`role="dialog"` / `aria-modal` / `aria-label`），复用 `web/src/composables/useOverlayBehavior.ts` 的焦点圈定、Escape 关闭与焦点恢复，提供可见关闭按钮，锁定背景滚动并把背景置为 inert；跨入 `lg`（1024px）断点时自动关闭。
@@ -94,7 +93,7 @@
 
 `web/src/views/overview/`、`web/src/views/servers/`、`web/src/views/credentials/` 已替换阶段占位：
 
-- 概览页是独立 Dashboard：左侧健康、容量、任务、安全摘要和可配置卡片；右侧 sticky 风险队列与快捷入口。正式 API 使用 `/api/v1/overview`、`/api/v1/overview/cards`、`/api/v1/overview/cards/{cardId}/data`；卡片区域是 6 列整数网格，`width`/`height` 表示 1x1 方格跨度（宽度 1-6，高度 1-4），卡片尺寸决定展示密度：小卡显示核心数字，中大卡显示趋势摘要或折线图。指标卡数据必须由服务端按卡片 kind 投影并按 range/服务器数量降采样为固定时间桶（响应带 `bucketSeconds`），前端在数据落地时一次性派生图表与摘要缓存，渲染期不得重复对齐、聚合或使用参数展开求最大值，保证大服务器量和大时间范围下页面不卡死。指标卡元信息必须显示实际服务器数量；多服务器指标不得只展示无来源的聚合单线，图表按服务器绘制独立折线，并在鼠标悬停时通过 tooltip 显示时间、服务器名和对应数值。图表 tooltip 必须挂到页面级浮层而非限制在卡片内部，并使用 Panel popover token，避免被卡片滚动或 `overflow` 裁切。页面操作使用“编辑”进入布局编辑模式，编辑时允许拖动重排（经过目标卡片时实时更新顺序预览）、拖拽缩放、添加/删除卡片，并通过单卡编辑按钮调整类型、尺寸、时间范围和服务器范围；网络方向只在网络卡片中出现。服务器多选写入 `serverIds`，空数组表示全部服务器。退出编辑时统一保存布局。单卡失败留在卡片内，不在普通浏览态提供“查看/重试”等对象操作。布局上禁止用横向滚动兜底，卡片跨列必须受容器宽度保护，右侧栏必须在可用空间内收缩或在较窄宽度换到下方。
+- 概览页是独立 Dashboard：顶部**单条 status band**合并健康/容量/任务/安全四项摘要（不再四张同质 KPI 卡）；中部为可配置指标网格；右侧 sticky 风险队列（左侧严重度色轨）与扁平快捷入口列表。正式 API 使用 `/api/v1/overview`、`/api/v1/overview/cards`、`/api/v1/overview/cards/{cardId}/data`；卡片区域是 6 列整数网格，`width`/`height` 表示 1x1 方格跨度（宽度 1-6，高度 1-4），卡片尺寸决定展示密度：小卡显示核心数字，中大卡显示趋势摘要或折线图。指标卡 chrome 为顶部分隔标题行 + 图表/数字主视觉（无灰底图标方块）。指标卡数据必须由服务端按卡片 kind 投影并按 range/服务器数量降采样为固定时间桶（响应带 `bucketSeconds`），前端在数据落地时一次性派生图表与摘要缓存，渲染期不得重复对齐、聚合或使用参数展开求最大值，保证大服务器量和大时间范围下页面不卡死。指标卡元信息必须显示实际服务器数量；多服务器指标不得只展示无来源的聚合单线，图表按服务器绘制独立折线，并在鼠标悬停时通过 tooltip 显示时间、服务器名和对应数值。图表 tooltip 必须挂到页面级浮层而非限制在卡片内部，并使用 Panel popover token，避免被卡片滚动或 `overflow` 裁切。页面操作使用“编辑”进入布局编辑模式，编辑时允许拖动重排（经过目标卡片时实时更新顺序预览）、拖拽缩放、添加/删除卡片，并通过单卡编辑按钮调整类型、尺寸、时间范围和服务器范围；网络方向只在网络卡片中出现。服务器多选写入 `serverIds`，空数组表示全部服务器。退出编辑时统一保存布局。单卡失败留在卡片内，不在普通浏览态提供“查看/重试”等对象操作。布局上禁止用横向滚动兜底，卡片跨列必须受容器宽度保护，右侧栏必须在可用空间内收缩或在较窄宽度换到下方。
 - 服务器页是运维工作台：列表为表格（`GET /api/v1/servers` 摘要 + 行操作），点击「详情」覆盖列表；选择或编辑服务器时通过 `GET /api/v1/servers/{id}` 按需加载完整详情。详情一级 tab 覆盖连接、指标、Agent、Tailscale 与资源/安全能力，并接入创建、编辑、探测、测试连接、删除、重启、Agent 部署与防火墙规则维护。其他正式 API 使用 `/api/v1/servers/probe`、`/api/v1/servers/{id}/test`、`/restart`、`/agent/deploy`、`/agent/certificate`、`/metrics`、`/ufw`；指标展示使用 `/metrics` 返回的最新采样，不要求服务器列表携带指标详情。
 - 服务器添加/编辑表单填写 `ipv4`/`ipv6`（至少一个，必须是 IP 字面量），连接地址由后端派生并只读展示，不再提供直接填写 host 的输入。
 - SSH 凭据页是独立 vault：支持密码/私钥创建编辑、secret 留空不更新、删除前引用影响、引用服务器测试。后端当前没有独立凭据测试或引用预检接口，前端用 `/api/v1/servers` 计算引用影响，并仅在存在引用服务器时通过 `/api/v1/servers/{id}/test` 测试；无引用时测试入口禁用。

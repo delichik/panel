@@ -102,15 +102,15 @@ async function updateAccount() {
 
 <template>
   <main class="grid min-h-dvh place-items-center bg-background p-6 pb-24">
-    <section class="w-full max-w-[420px] rounded-2xl border border-border bg-card p-6 shadow-2xl shadow-black/[0.04]">
+    <section class="panel-shadow-overlay w-full max-w-[420px] rounded-2xl border border-border-strong bg-card p-6">
       <div class="mb-6 flex items-center gap-3">
-        <img src="/favicon.svg" class="size-10 rounded-xl" alt="" aria-hidden="true" />
+        <img src="/favicon.svg" class="size-10 rounded-xl border border-border" alt="" aria-hidden="true" />
         <div>
-          <strong class="block text-sm font-semibold text-foreground">{{ title }}</strong>
-          <span class="block text-xs text-muted-foreground">{{ subtitle }}</span>
+          <strong class="block text-sm font-semibold tracking-tight text-foreground">{{ title }}</strong>
+          <span class="block text-xs text-secondary-foreground">{{ subtitle }}</span>
         </div>
       </div>
-      <h1 class="m-0 text-xl font-semibold text-foreground">{{ pageTitle }}</h1>
+      <h1 class="m-0 text-xl font-semibold tracking-tight text-foreground">{{ pageTitle }}</h1>
       <p v-if="changingPassword" class="m-0 mt-2 text-sm text-muted-foreground">{{ t('auth.passwordChangeRequired') }}</p>
       <form v-if="!changingPassword" class="mt-6 grid gap-4" @submit.prevent="submit">
         <label class="grid gap-1.5 text-sm font-medium text-foreground">

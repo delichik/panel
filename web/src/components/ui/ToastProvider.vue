@@ -102,10 +102,10 @@ const stackClasses = 'fixed right-4 top-4 z-[60] grid w-[min(360px,calc(100vw-32
         :key="toast.id"
         class="panel-shadow-overlay rounded-2xl border bg-popover p-4 text-sm text-popover-foreground"
         :class="{
-          'border-success-border': toast.tone === 'success',
-          'border-warning-border': toast.tone === 'warning',
-          'border-danger-border': toast.tone === 'danger',
-          'border-info-border': toast.tone === 'info',
+          'border-success-border bg-success-bg/40': toast.tone === 'success',
+          'border-warning-border bg-warning-bg/40': toast.tone === 'warning',
+          'border-danger-border bg-danger-bg/40': toast.tone === 'danger',
+          'border-info-border bg-info-bg/40': toast.tone === 'info',
         }"
         :role="toast.tone === 'danger' ? 'alert' : 'status'"
         @mouseenter="pause(toast.id)"

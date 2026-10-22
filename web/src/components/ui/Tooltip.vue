@@ -5,7 +5,7 @@ withDefaults(defineProps<{ text: string; triggerClass?: string }>(), { triggerCl
 <template>
   <span class="group relative inline-flex" :class="triggerClass">
     <slot />
-    <span class="motion-tooltip pointer-events-none absolute bottom-full left-1/2 z-40 mb-2 whitespace-nowrap rounded-lg border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-lg">
+    <span class="motion-tooltip panel-shadow-overlay pointer-events-none absolute bottom-full left-1/2 z-40 mb-2 whitespace-nowrap rounded-lg border border-border-strong bg-popover px-2.5 py-1 text-xs font-medium text-popover-foreground">
       {{ text }}
     </span>
   </span>

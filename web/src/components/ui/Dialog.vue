@@ -42,11 +42,11 @@ const { onKeydown } = useOverlayBehavior({
   <Teleport to="body">
     <Transition name="dialog">
       <div v-if="open" class="fixed inset-0 z-50 grid place-items-center bg-overlay p-4" role="presentation">
-        <section ref="dialog" class="dialog-panel panel-shadow-overlay grid w-full grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-2xl border border-border bg-popover text-popover-foreground" :class="size === 'large' ? 'h-[min(820px,calc(100dvh-32px))] max-w-5xl' : 'max-h-[min(720px,calc(100dvh-32px))] max-w-lg'" role="dialog" aria-modal="true" :aria-labelledby="titleId" :aria-describedby="description ? descriptionId : undefined" tabindex="-1" @keydown="onKeydown">
+        <section ref="dialog" class="dialog-panel panel-shadow-overlay grid w-full grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-2xl border border-border-strong bg-popover text-popover-foreground" :class="size === 'large' ? 'h-[min(820px,calc(100dvh-32px))] max-w-5xl' : 'max-h-[min(720px,calc(100dvh-32px))] max-w-lg'" role="dialog" aria-modal="true" :aria-labelledby="titleId" :aria-describedby="description ? descriptionId : undefined" tabindex="-1" @keydown="onKeydown">
           <header class="flex min-h-0 items-start justify-between gap-4 border-b border-border px-5 py-4">
             <div class="min-w-0">
-              <h2 :id="titleId" class="m-0 text-base font-semibold text-foreground">{{ title }}</h2>
-              <p v-if="description" :id="descriptionId" class="m-0 mt-1 text-sm leading-6 text-muted-foreground">{{ description }}</p>
+              <h2 :id="titleId" class="m-0 text-lg font-semibold tracking-tight text-foreground">{{ title }}</h2>
+              <p v-if="description" :id="descriptionId" class="m-0 mt-1 text-sm leading-6 text-secondary-foreground">{{ description }}</p>
             </div>
             <IconButton :label="closeLabel || t('common.close')" size="sm" :disabled="closeDisabled" @click="close">
               <X />

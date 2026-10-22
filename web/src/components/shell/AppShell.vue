@@ -120,41 +120,44 @@ async function signOut() {
 
 <template>
   <div class="shell-grid relative grid min-h-dvh w-full overflow-visible bg-background lg:h-dvh lg:min-h-0 lg:overflow-hidden lg:grid-cols-[var(--shell-nav)_minmax(0,1fr)]" :inert="drawerOpen || undefined" :style="{ '--shell-nav': collapsed ? '76px' : '260px' }">
-    <a href="#main-content" class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[70] focus:rounded-xl focus:border focus:border-border focus:bg-popover focus:px-3 focus:py-2 focus:text-sm focus:text-popover-foreground focus:shadow-xl">{{ t('layout.skipToContent') }}</a>
+    <a href="#main-content" class="panel-shadow-overlay sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[70] focus:rounded-xl focus:border focus:border-border-strong focus:bg-popover focus:px-3 focus:py-2 focus:text-sm focus:text-popover-foreground">{{ t('layout.skipToContent') }}</a>
     <LoadingOverlay v-if="signingOut" :label="t('layout.signingOut')" />
-    <aside class="hidden min-h-0 flex-col border-r border-border bg-card lg:flex">
-      <div class="flex min-h-16 items-center border-b border-border px-4" :class="collapsed ? 'justify-center' : 'gap-3'">
-        <img src="/favicon.svg" class="size-9 shrink-0 rounded-xl" alt="" aria-hidden="true" />
-        <div class="shell-label min-w-0 truncate" :class="collapsed ? 'max-w-0 opacity-0' : 'max-w-[160px] flex-1'">
-          <strong class="block truncate text-sm font-semibold text-foreground">{{ t('app.name') }}</strong>
-          <span class="block truncate text-xs text-muted-foreground">{{ t('app.subtitle') }}</span>
+    <aside class="shell-aside relative hidden min-h-0 flex-col border-r border-border lg:flex">
+      <span class="pointer-events-none absolute inset-y-0 left-0 w-[3px] bg-brand" aria-hidden="true" />
+      <div class="flex h-[52px] shrink-0 items-center border-b border-border px-3" :class="collapsed ? 'justify-center' : 'gap-2.5'">
+        <img src="/favicon.svg" class="size-8 shrink-0 rounded-lg border border-border bg-card" alt="" aria-hidden="true" />
+        <div class="shell-label min-w-0 truncate" :class="collapsed ? 'max-w-0 opacity-0' : 'max-w-[128px] flex-1'">
+          <strong class="block truncate text-sm font-semibold tracking-tight text-foreground">{{ t('app.name') }}</strong>
+          <span class="block truncate text-[11px] leading-4 text-secondary-foreground">{{ t('app.subtitle') }}</span>
         </div>
+        <IconButton
+          class="hidden shrink-0 lg:inline-grid"
+          :class="collapsed ? undefined : 'ml-auto'"
+          size="sm"
+          :label="t('layout.nav.collapse')"
+          :aria-expanded="collapsed ? 'false' : 'true'"
+          aria-controls="app-navigation"
+          @click="collapsed = !collapsed"
+        >
+          <Transition name="fade" mode="out-in">
+            <PanelLeftOpen v-if="collapsed" />
+            <PanelLeftClose v-else />
+          </Transition>
+        </IconButton>
       </div>
       <NavList id="app-navigation" :active-key="displayedActiveKey" :pending-key="pendingNavKey" :collapsed="collapsed" :label="t('layout.main')" />
     </aside>
 
-    <main class="grid min-h-dvh min-w-0 grid-rows-[56px_auto] lg:min-h-0 lg:grid-rows-[56px_minmax(0,1fr)]">
-      <header class="relative flex min-w-0 items-center justify-between gap-3 border-b border-border bg-background px-4 max-lg:sticky max-lg:top-0 max-lg:z-40" :aria-busy="routeNavigation.pending.value ? 'true' : undefined">
+    <main class="grid min-h-dvh min-w-0 grid-rows-[52px_auto] lg:min-h-0 lg:grid-rows-[52px_minmax(0,1fr)]">
+      <header class="relative flex h-[52px] min-w-0 items-center justify-between gap-3 border-b border-border bg-background px-4 max-lg:sticky max-lg:top-0 max-lg:z-40" :aria-busy="routeNavigation.pending.value ? 'true' : undefined">
         <div class="flex min-w-0 items-center gap-2">
           <IconButton class="lg:hidden" :label="t('layout.nav.open')" :aria-expanded="drawerOpen" :aria-controls="drawerId" aria-haspopup="dialog" @click="drawerOpen = true">
             <Menu />
           </IconButton>
-          <IconButton
-            class="hidden lg:inline-grid"
-            :label="t('layout.nav.collapse')"
-            :aria-expanded="collapsed ? 'false' : 'true'"
-            aria-controls="app-navigation"
-            @click="collapsed = !collapsed"
-          >
-            <Transition name="fade" mode="out-in">
-              <PanelLeftOpen v-if="collapsed" />
-              <PanelLeftClose v-else />
-            </Transition>
-          </IconButton>
-          <p class="m-0 truncate text-sm font-medium text-muted-foreground" aria-live="polite">{{ navigationLabel }}</p>
-          <Badge>{{ t('layout.alpha') }}</Badge>
+          <p class="m-0 truncate text-sm text-muted-foreground" aria-live="polite">{{ navigationLabel }}</p>
+          <Badge class="font-medium">{{ t('layout.alpha') }}</Badge>
         </div>
-        <div class="flex items-center gap-1">
+        <div class="flex items-center gap-0.5 rounded-xl border border-border bg-card/90 p-0.5 shadow-sm">
           <Dropdown>
             <template #trigger>
               <IconButton :label="t('layout.theme')">
@@ -220,15 +223,16 @@ async function signOut() {
             aria-modal="true"
             :aria-label="t('layout.main')"
             tabindex="-1"
-            class="drawer-panel flex h-full w-[292px] max-w-[86vw] flex-col border-r border-border bg-card"
+            class="drawer-panel shell-aside flex h-full w-[292px] max-w-[86vw] flex-col border-r border-border"
             @keydown="onDrawerKeydown"
           >
-            <div class="flex min-h-16 items-center justify-between gap-3 border-b border-border px-4">
-              <div class="flex min-w-0 items-center gap-3">
-                <img src="/favicon.svg" class="size-9 rounded-xl" alt="" aria-hidden="true" />
+            <div class="relative flex h-[52px] items-center justify-between gap-3 border-b border-border px-4">
+              <span class="pointer-events-none absolute inset-y-0 left-0 w-[3px] bg-brand" aria-hidden="true" />
+              <div class="flex min-w-0 items-center gap-2.5">
+                <img src="/favicon.svg" class="size-8 rounded-lg border border-border bg-card" alt="" aria-hidden="true" />
                 <div class="min-w-0">
-                  <strong class="block truncate text-sm font-semibold text-foreground">{{ t('app.name') }}</strong>
-                  <span class="block truncate text-xs text-muted-foreground">{{ t('app.subtitle') }}</span>
+                  <strong class="block truncate text-sm font-semibold tracking-tight text-foreground">{{ t('app.name') }}</strong>
+                  <span class="block truncate text-[11px] leading-4 text-secondary-foreground">{{ t('app.subtitle') }}</span>
                 </div>
               </div>
               <IconButton class="max-lg:size-11" :label="t('common.close')" @click="drawerOpen = false">
@@ -242,3 +246,9 @@ async function signOut() {
     </Teleport>
   </div>
 </template>
+
+<style scoped>
+.shell-aside {
+  background: var(--panel-surface-raised);
+}
+</style>

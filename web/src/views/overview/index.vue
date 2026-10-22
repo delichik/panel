@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRouter } from 'vue-router';
-import { Activity, AlertTriangle, BarChart3, Boxes, Check, Grip, Gauge, Pencil, Plus, RefreshCcw, ShieldCheck, Server, Trash2 } from '@lucide/vue';
+import { Activity, AlertTriangle, BarChart3, Boxes, Check, ChevronRight, Grip, Gauge, Pencil, Plus, RefreshCcw, ShieldCheck, Server, Trash2 } from '@lucide/vue';
 import { overviewApi } from '@/api/overview';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
@@ -610,29 +610,32 @@ onBeforeUnmount(() => {
       </Button>
     </template>
 
-    <div class="overview-layout grid h-full min-h-0 min-w-0 gap-4 overflow-hidden max-xl:overflow-x-hidden max-xl:overflow-y-auto">
-      <main class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] gap-4">
-        <section class="grid min-w-0 gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(180px,100%),1fr))]">
-          <article class="rounded-2xl border border-border bg-card p-4">
-            <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.healthSummary') }}</span>
-            <strong class="mt-2 block text-2xl text-foreground">{{ summary.reachable }}/{{ summary.total }}</strong>
-            <p class="m-0 mt-1 text-xs text-muted-foreground">{{ t('overviewPage.reachableHosts') }}</p>
-          </article>
-          <article class="rounded-2xl border border-border bg-card p-4">
-            <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.capacitySummary') }}</span>
-            <strong class="mt-2 block text-2xl text-foreground">{{ summary.fresh }}/{{ summary.total }}</strong>
-            <p class="m-0 mt-1 text-xs text-muted-foreground">{{ t('overviewPage.freshMetrics') }}</p>
-          </article>
-          <article class="rounded-2xl border border-border bg-card p-4">
-            <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.taskSummary') }}</span>
-            <strong class="mt-2 block text-2xl text-foreground">{{ summary.updates }}</strong>
-            <p class="m-0 mt-1 text-xs text-muted-foreground">{{ t('overviewPage.pendingUpdates') }}</p>
-          </article>
-          <article class="rounded-2xl border border-border bg-card p-4">
-            <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.securitySummary') }}</span>
-            <strong class="mt-2 block text-2xl text-foreground">{{ summary.supported }}/{{ summary.total }}</strong>
-            <p class="m-0 mt-1 text-xs text-muted-foreground">{{ t('overviewPage.supportedHosts') }}</p>
-          </article>
+    <div class="overview-layout grid h-full min-h-0 min-w-0 gap-3 overflow-hidden max-xl:overflow-x-hidden max-xl:overflow-y-auto">
+      <main class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] gap-3">
+        <section class="overview-status-band relative min-w-0 overflow-hidden rounded-xl border border-border bg-card" :aria-label="t('routes.overview.title')">
+          <span class="pointer-events-none absolute inset-x-0 top-0 z-[1] h-0.5 bg-brand" aria-hidden="true" />
+          <div class="overview-status-grid grid min-w-0">
+            <div class="min-w-0 px-4 py-3">
+              <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.healthSummary') }}</span>
+              <strong class="mt-1 block text-[1.625rem] font-semibold leading-none tracking-tight text-foreground">{{ summary.reachable }}/{{ summary.total }}</strong>
+              <p class="m-0 mt-1.5 text-xs leading-4 text-secondary-foreground">{{ t('overviewPage.reachableHosts') }}</p>
+            </div>
+            <div class="min-w-0 px-4 py-3">
+              <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.capacitySummary') }}</span>
+              <strong class="mt-1 block text-[1.625rem] font-semibold leading-none tracking-tight text-foreground">{{ summary.fresh }}/{{ summary.total }}</strong>
+              <p class="m-0 mt-1.5 text-xs leading-4 text-secondary-foreground">{{ t('overviewPage.freshMetrics') }}</p>
+            </div>
+            <div class="min-w-0 px-4 py-3">
+              <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.taskSummary') }}</span>
+              <strong class="mt-1 block text-[1.625rem] font-semibold leading-none tracking-tight text-foreground">{{ summary.updates }}</strong>
+              <p class="m-0 mt-1.5 text-xs leading-4 text-secondary-foreground">{{ t('overviewPage.pendingUpdates') }}</p>
+            </div>
+            <div class="min-w-0 px-4 py-3">
+              <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.securitySummary') }}</span>
+              <strong class="mt-1 block text-[1.625rem] font-semibold leading-none tracking-tight text-foreground">{{ summary.supported }}/{{ summary.total }}</strong>
+              <p class="m-0 mt-1.5 text-xs leading-4 text-secondary-foreground">{{ t('overviewPage.supportedHosts') }}</p>
+            </div>
+          </div>
         </section>
 
         <section class="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden">
@@ -662,7 +665,7 @@ onBeforeUnmount(() => {
             <article
               v-for="card in cards"
               :key="card.id"
-              class="motion-reveal overview-card relative grid min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-card p-4"
+              class="motion-reveal overview-card relative grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-border bg-card"
               :class="[
                 card.kind === 'placeholder' ? 'border-dashed bg-muted/30' : '',
                 editMode ? 'motion-card cursor-move ring-1 ring-primary/20' : '',
@@ -676,7 +679,7 @@ onBeforeUnmount(() => {
               @dragover="onCardDragOver(card.id, $event)"
               @drop.prevent="onCardDrop"
             >
-              <div v-if="editMode" class="absolute right-3 top-3 z-10 flex items-center gap-1 rounded-xl border border-border bg-popover/95 p-1 shadow-sm">
+              <div v-if="editMode" class="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-xl border border-border bg-popover/95 p-1 shadow-sm">
                 <button type="button" class="grid size-7 place-items-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground" :title="t('overviewPage.moveCard')">
                   <Grip class="size-4" aria-hidden="true" />
                 </button>
@@ -687,19 +690,17 @@ onBeforeUnmount(() => {
                   <Trash2 class="size-4" aria-hidden="true" />
                 </button>
               </div>
-              <div class="flex items-start justify-between gap-3">
-                <div class="flex min-w-0 items-center gap-3">
-                  <span class="grid size-9 place-items-center rounded-lg bg-muted text-muted-foreground">
-                    <component :is="cardIcon(card.kind)" class="size-4" aria-hidden="true" />
-                  </span>
-                  <div class="min-w-0">
-                    <h3 class="m-0 truncate text-sm font-semibold text-foreground">{{ cardTitle(card) }}</h3>
-                    <p class="m-0 mt-1 text-xs text-muted-foreground">{{ cardMeta(card) }}</p>
-                  </div>
+              <div class="flex min-h-10 items-center justify-between gap-3 border-b border-border px-3.5 py-2">
+                <div class="min-w-0">
+                  <h3 class="m-0 flex min-w-0 items-center gap-1.5 truncate text-sm font-semibold text-foreground">
+                    <component :is="cardIcon(card.kind)" class="size-3.5 shrink-0 text-secondary-foreground" aria-hidden="true" />
+                    <span class="truncate">{{ cardTitle(card) }}</span>
+                  </h3>
+                  <p class="m-0 truncate text-[11px] leading-4 text-muted-foreground">{{ cardMeta(card) }}</p>
                 </div>
-                <Badge v-if="!editMode" :tone="cardTone(card)">{{ cardErrors[card.id] ? t('overviewPage.partial') : t('overviewPage.live') }}</Badge>
+                <Badge v-if="!editMode" class="shrink-0" :tone="cardTone(card)">{{ cardErrors[card.id] ? t('overviewPage.partial') : t('overviewPage.live') }}</Badge>
               </div>
-              <div class="overview-card-body relative grid min-h-0 gap-3 overflow-hidden" :class="shouldShowChart(card) ? 'is-chart-primary' : 'is-value-primary'">
+              <div class="overview-card-body relative grid min-h-0 gap-1.5 overflow-hidden px-3.5 py-2.5" :class="shouldShowChart(card) ? 'is-chart-primary' : 'is-value-primary'">
                 <LoadingOverlay v-if="cardLoading[card.id]" :label="t('overviewPage.loadingCard')" />
                 <span v-else-if="cardErrors[card.id]" class="line-clamp-2 text-sm leading-6 text-danger">{{ cardErrors[card.id] }}</span>
                 <template v-else>
@@ -711,9 +712,9 @@ onBeforeUnmount(() => {
                     />
                   </div>
                   <div class="overview-card-value min-w-0" :class="shouldShowChart(card) ? 'is-supporting' : 'is-primary'">
-                    <span v-if="shouldShowChart(card)" class="text-xs font-medium uppercase text-muted-foreground">{{ t('overviewPage.live') }}</span>
-                    <strong class="block truncate text-foreground" :class="shouldShowChart(card) ? 'text-lg' : card.width <= 1 ? 'text-2xl' : 'text-3xl'">{{ cardValues[card.id] || derivedCardValue(card) }}</strong>
-                    <span v-if="shouldShowDetail(card) || (isMetricCard(card) && shouldShowChart(card))" class="block truncate text-xs text-muted-foreground">{{ cardSecondaryValue(card) }}</span>
+                    <span v-if="shouldShowChart(card)" class="text-[11px] font-medium text-muted-foreground">{{ t('overviewPage.live') }}</span>
+                    <strong class="block truncate tracking-tight text-foreground" :class="shouldShowChart(card) ? 'text-base' : card.width <= 1 ? 'text-2xl' : 'text-[1.75rem] leading-none'">{{ cardValues[card.id] || derivedCardValue(card) }}</strong>
+                    <span v-if="shouldShowDetail(card) || (isMetricCard(card) && shouldShowChart(card))" class="block truncate text-xs text-secondary-foreground">{{ cardSecondaryValue(card) }}</span>
                   </div>
                 </template>
               </div>
@@ -731,35 +732,68 @@ onBeforeUnmount(() => {
         </section>
       </main>
 
-      <aside class="min-h-0 min-w-0 overflow-y-auto xl:sticky xl:top-0">
-        <div class="grid content-start gap-4">
-          <section class="min-w-0 rounded-2xl border border-border bg-card p-4">
-            <div class="mb-3 flex items-center justify-between">
-              <h2 class="m-0 text-sm font-semibold text-foreground">{{ t('overviewPage.riskQueue') }}</h2>
-              <Badge :tone="risks.some((item) => item.tone === 'danger') ? 'danger' : risks.length ? 'warning' : 'success'">{{ risks.length }}</Badge>
-            </div>
-            <div v-if="risks.length" class="motion-stagger divide-y divide-border">
-              <button v-for="risk in risks" :key="risk.id" type="button" class="motion-list-item grid min-w-0 py-3 text-left first:pt-0 last:pb-0 hover:bg-accent/60" @click="router.push(risk.to)">
-                <div class="flex min-w-0 items-center justify-between gap-2">
-                  <strong class="truncate text-sm text-foreground">{{ risk.title }}</strong>
-                  <Badge class="shrink-0" :tone="risk.tone">{{ t(`overviewPage.risk.${risk.tone}`) }}</Badge>
-                </div>
-                <span class="mt-1 min-w-0 break-words text-xs leading-5 text-muted-foreground">{{ t(risk.description) }}</span>
-              </button>
-            </div>
-            <p v-else class="m-0 text-sm text-muted-foreground">{{ t('overviewPage.noRisks') }}</p>
-          </section>
+      <aside class="flex min-h-0 min-w-0 flex-col gap-3 overflow-hidden max-xl:overflow-visible">
+        <section class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-card max-xl:flex-none">
+          <div class="flex shrink-0 items-center justify-between border-b border-border px-3.5 py-2">
+            <h2 class="m-0 text-sm font-semibold text-foreground">{{ t('overviewPage.riskQueue') }}</h2>
+            <Badge :tone="risks.some((item) => item.tone === 'danger') ? 'danger' : risks.length ? 'warning' : 'success'">{{ risks.length }}</Badge>
+          </div>
+          <div v-if="risks.length" class="motion-stagger min-h-0 flex-1 overflow-y-auto divide-y divide-border">
+            <button
+              v-for="risk in risks"
+              :key="risk.id"
+              type="button"
+              class="motion-list-item relative grid min-w-0 gap-0.5 py-2.5 pl-3.5 pr-3 text-left hover:bg-accent"
+              @click="router.push(risk.to)"
+            >
+              <span
+                class="absolute inset-y-1.5 left-0 w-[3px] rounded-r-full"
+                :class="{
+                  'bg-danger': risk.tone === 'danger',
+                  'bg-warning': risk.tone === 'warning',
+                  'bg-info': risk.tone === 'info',
+                  'bg-success': risk.tone === 'success',
+                  'bg-neutral': risk.tone === 'neutral' || !risk.tone,
+                }"
+                aria-hidden="true"
+              />
+              <div class="flex min-w-0 items-center justify-between gap-2">
+                <strong class="truncate text-sm font-medium text-foreground">{{ risk.title }}</strong>
+                <Badge class="shrink-0" :tone="risk.tone">{{ t(`overviewPage.risk.${risk.tone}`) }}</Badge>
+              </div>
+              <span class="line-clamp-2 min-w-0 text-xs leading-4 text-secondary-foreground">{{ t(risk.description) }}</span>
+            </button>
+          </div>
+          <p v-else class="m-0 px-3.5 py-3 text-sm text-secondary-foreground">{{ t('overviewPage.noRisks') }}</p>
+        </section>
 
-          <section class="min-w-0 rounded-2xl border border-border bg-card p-4">
+        <section class="shrink-0 overflow-hidden rounded-xl border border-border bg-card">
+          <div class="border-b border-border px-3.5 py-2">
             <h2 class="m-0 text-sm font-semibold text-foreground">{{ t('overviewPage.quickEntry') }}</h2>
-            <div class="mt-3 grid min-w-0 grid-cols-2 gap-2">
-              <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/servers')"><Server class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.servers.title') }}</span></Button>
-              <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/credentials')"><ShieldCheck class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.credentials.title') }}</span></Button>
-              <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/servers')"><Boxes class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.packages.title') }}</span></Button>
-              <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/logs')"><Activity class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.logs.title') }}</span></Button>
-            </div>
-          </section>
-        </div>
+          </div>
+          <div class="grid divide-y divide-border">
+            <button type="button" class="motion-list-item flex min-w-0 items-center gap-2 px-3.5 py-2 text-left text-sm text-foreground hover:bg-accent" @click="router.push('/servers')">
+              <Server class="size-3.5 shrink-0 text-secondary-foreground" aria-hidden="true" />
+              <span class="min-w-0 flex-1 truncate">{{ t('routes.servers.title') }}</span>
+              <ChevronRight class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+            </button>
+            <button type="button" class="motion-list-item flex min-w-0 items-center gap-2 px-3.5 py-2 text-left text-sm text-foreground hover:bg-accent" @click="router.push('/credentials')">
+              <ShieldCheck class="size-3.5 shrink-0 text-secondary-foreground" aria-hidden="true" />
+              <span class="min-w-0 flex-1 truncate">{{ t('routes.credentials.title') }}</span>
+              <ChevronRight class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+            </button>
+            <button type="button" class="motion-list-item flex min-w-0 items-center gap-2 px-3.5 py-2 text-left text-sm text-foreground hover:bg-accent" @click="router.push('/servers')">
+              <Boxes class="size-3.5 shrink-0 text-secondary-foreground" aria-hidden="true" />
+              <span class="min-w-0 flex-1 truncate">{{ t('routes.packages.title') }}</span>
+              <ChevronRight class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+            </button>
+            <button type="button" class="motion-list-item flex min-w-0 items-center gap-2 px-3.5 py-2 text-left text-sm text-foreground hover:bg-accent" @click="router.push('/logs')">
+              <Activity class="size-3.5 shrink-0 text-secondary-foreground" aria-hidden="true" />
+              <span class="min-w-0 flex-1 truncate">{{ t('routes.logs.title') }}</span>
+              <ChevronRight class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+            </button>
+          </div>
+        </section>
       </aside>
     </div>
 
@@ -833,6 +867,47 @@ onBeforeUnmount(() => {
 <style scoped>
 .overview-layout {
   grid-template-columns: minmax(0, 1fr);
+}
+
+.overview-status-grid {
+  grid-template-columns: 1fr;
+}
+
+.overview-status-grid > * + * {
+  border-top: 1px solid var(--panel-border);
+}
+
+@media (min-width: 640px) {
+  .overview-status-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .overview-status-grid > * {
+    border-top: none;
+  }
+
+  .overview-status-grid > *:nth-child(odd) {
+    border-right: 1px solid var(--panel-border);
+  }
+
+  .overview-status-grid > *:nth-child(n + 3) {
+    border-top: 1px solid var(--panel-border);
+  }
+}
+
+@media (min-width: 1280px) {
+  .overview-status-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .overview-status-grid > * {
+    border-top: none !important;
+    border-right: 1px solid var(--panel-border);
+  }
+
+  .overview-status-grid > *:last-child {
+    border-right: none;
+  }
 }
 
 .overview-card-grid {

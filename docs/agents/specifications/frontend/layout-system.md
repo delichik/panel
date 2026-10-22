@@ -4,12 +4,12 @@
 
 ```
 AppShell
-├── Sidebar（桌面常驻，260px / 折叠 76px）
-│   ├── 品牌区（折叠时文案随列宽渐隐）
+├── Sidebar（桌面常驻，260px / 折叠 76px；独立 chrome 面，与内容区明显分层）
+│   ├── 品牌区（左侧品牌色竖条 + 折叠按钮；折叠时文案随列宽渐隐）
 │   └── NavList（桌面侧栏与移动抽屉共用的导航实现）
 └── Main
     ├── 跳过链接（首个可聚焦元素，指向 #main-content）
-    ├── GlobalHeader（56px）
+    ├── GlobalHeader（约 52px 细工具条）
     └── RouteContent（overflow: hidden）
         └── PageHeader + 页面模板内部滚动区
 ```
@@ -23,10 +23,10 @@ AppShell
 - 触控尺寸策略：桌面保持 token 密集高度（36px 行高、32/36/40px 控件，满足 WCAG 2.2 AA 的 24px 最小目标）；窄屏抽屉的关闭按钮与导航行必须放大到 44px（`max-lg:size-11` / `max-lg:h-11`），因为它们在手指最容易误触的位置。顶栏全局操作按钮保持 36px——手机宽度下 5 个 44px 按钮会使 360px 视口横向溢出，属于显式取舍而非遗漏。
 - 导航定义在 `web/src/components/shell/navModel.ts`，列表渲染在 `web/src/components/shell/NavList.vue`；桌面侧栏与移动抽屉必须复用同一实现，不得各写一份。新增导航项必须同步 i18n 和模块文档。
 - 侧边导航只放页面族入口，不展开页面内部 tab：例如证书只保留“证书”，应用只保留“应用”，服务器只保留“服务器”。资源与安全不再是导航组，其能力位于服务器详情 tabs；`/certificates/keys` 等深链路继续由路由支持并在页面内切换 tab，但不得作为独立侧边菜单项。
-- 导航项必须显式绑定 `aria-current="page"`（以 `navModel.activeNavKey` 计算归属），使 `/certificates/keys` 这类深层子路径仍能正确标记所属入口；激活项同时显示左侧 2px 品牌色激活条。
-- 折叠时导航文案保留在无障碍树中（`max-width` + `opacity` 渐变 + `overflow-hidden`），不得用 `v-if` 直接删除；折叠按钮暴露 `aria-expanded` 与 `aria-controls`。
-- 全局顶部条只承载当前路由标题、alpha 标识、主题、语言、账户和移动抽屉入口。页面主操作放 PageHeader actions，对象级操作放对象所在表格的操作列；需要参数面板或逐文件/逐节点/逐步骤的操作保留在覆盖详情内。
-- 窄屏抽屉以 dialog 语义呈现（`role="dialog"` / `aria-modal` / `aria-label`），支持 Escape 关闭、焦点圈定与恢复、背景滚动锁定；打开后焦点自动移入抽屉，关闭后回到触发按钮。
+- 导航项必须显式绑定 `aria-current="page"`（以 `navModel.activeNavKey` 计算归属），使 `/certificates/keys` 这类深层子路径仍能正确标记所属入口；**激活项使用实心 primary 填充 + primary-foreground 文字**（不再使用淡 tint + 细轨）。
+- 折叠时导航文案保留在无障碍树中（`max-width` + `opacity` 渐变 + `overflow-hidden`），不得用 `v-if` 直接删除；折叠按钮位于品牌区并暴露 `aria-expanded` 与 `aria-controls`。
+- 全局顶部条为细工具条：左侧仅窄屏菜单入口、路由短标签（muted）与 alpha；右侧主题/配色/语言/账户收成 `rounded-xl border bg-card` 工具簇。页面主操作放 PageHeader actions，对象级操作放对象所在表格的操作列；需要参数面板或逐文件/逐节点/逐步骤的操作保留在覆盖详情内。
+- 窄屏抽屉以 dialog 语义呈现（`role="dialog"` / `aria-modal` / `aria-label`），支持 Escape 关闭、焦点圈定与恢复、背景滚动锁定；打开后焦点自动移入抽屉，关闭后回到触发按钮；抽屉品牌区与桌面侧栏同一视觉语言。
 - 外壳必须提供本地化的“跳到主要内容”链接作为首个可聚焦元素，目标为路由内容区 `#main-content`。
 
 ## PageHeader
@@ -34,7 +34,7 @@ AppShell
 - 源码：`web/src/components/shell/PageHeader.vue`。
 - 统一结构：标题（`h1`）、说明、可选 back（返回上一级）、可选 actions、可选 breadcrumb。
 - **页面主标题以 PageHeader 为唯一主标题**；AppShell 顶栏只显示路由上下文短标签（次级 `text-muted`），不得再与 PageHeader 并列成两个同级大标题。
-- 间距节奏：header `px-4 py-3`；`ConsolePage` 正文默认 `p-4`（窄屏 `p-3`）。不得再叠一层大 padding 的装饰卡片包住整个列表。
+- 间距节奏：header `px-4 pt-4 pb-3`，标题与 actions 底对齐；`ConsolePage` 正文默认 `p-4`（窄屏 `p-3`）。不得再叠一层大 padding 的装饰卡片包住整个列表。
 - 需要返回上一级时传入 `backLabel` 并监听 `back` 事件，返回按钮渲染在标题左侧；返回目标由页面决定（如详情返回列表、编辑器返回详情），不得用 `router.back()` 兜底。
 - actions 区主操作至多一个，其余操作用次要按钮或 Dropdown。
 - 中窄屏下标题区与 actions 区上下堆叠，actions 可换行，不得裁切关键操作。

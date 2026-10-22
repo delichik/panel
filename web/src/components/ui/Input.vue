@@ -8,7 +8,7 @@ defineEmits<{ 'update:modelValue': [value: string] }>();
 
 const attrs = useAttrs();
 const classes = computed(() => cn(
-  'motion-field h-9 w-full rounded-xl border bg-card px-3 text-sm text-foreground transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-offset-2 focus-visible:ring-offset-card disabled:cursor-not-allowed disabled:opacity-45',
+  'motion-field h-9 w-full rounded-xl border bg-card px-3 text-sm text-foreground shadow-sm transition-[background-color,border-color,box-shadow] placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:ring-offset-2 focus-visible:ring-offset-card disabled:cursor-not-allowed disabled:opacity-45',
   attrs.class as string,
 ));
 </script>
