@@ -3,51 +3,29 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { createMemoryHistory, createRouter, type Router } from 'vue-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import IntentRecordsPage from './IntentRecordsPage.vue';
-import { activityApi } from '@/api/activity';
+import { logContextsApi } from '@/api/logContexts';
 import { toastKey } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
-import type { ActivityOperation, ActivityOperationDetail, ActivityPage as Page } from '@/types/activity';
+import type { LogContext, LogContextPage as Page } from '@/types/logContexts';
 
-const operation = (id: string): ActivityOperation => ({
-  operationId: id,
-  domain: 'application',
+const context = (id: string): LogContext => ({
+  streamId: id,
+  module: 'applications',
+  origin: 'user',
+  operationId: 'op-1',
   title: id,
-  action: 'deploy',
-  phase: 'finished',
+  summary: 'boom',
   result: 'failed',
-  failureSummary: 'boom',
-  attemptCount: 1,
   hadError: true,
-  uncertainty: false,
-  evidenceComplete: true,
-  attention: true,
-  createdAt: '2026-09-15T00:00:00Z',
+  startedAt: '2026-09-15T00:00:00Z',
   updatedAt: '2026-09-15T00:00:00Z',
-  firstSeq: 1,
-  lastSeq: 1,
-  eventCount: 1,
+  finishedAt: '2026-09-15T00:00:00Z',
   resources: [{ resourceType: 'application', resourceId: 'app-1', nameSnapshot: 'App' }],
   actor: { kind: 'user', id: 'admin', name: 'admin' },
 });
 
-const detail = (id: string): ActivityOperationDetail => ({
-  operation: operation(id),
-  events: [],
-  executions: [],
-  steps: [],
-  relatedOperations: [],
-  availableCommands: [],
-  snapshotSeq: 10,
-  headSeq: 10,
-  hasMore: false,
-});
-
-const page = (id = 'op-1'): Page<ActivityOperation> => ({
-  items: [operation(id)],
-  snapshotSeq: 10,
-  headSeq: 10,
-  projectedThroughSeq: 10,
-  indexState: 'ready',
+const page = (id = 'stream-1'): Page => ({
+  items: [context(id)],
   hasMore: false,
   nextCursor: '',
 });
@@ -90,13 +68,10 @@ async function render(origin: 'user' | 'system', url: string) {
         },
         Table: {
           props: ['rows'],
-          template: '<div><div v-for="row in rows" :key="row.operationId">{{ row.title }}</div><slot name="actions" :row="rows[0]" /><slot name="empty" /></div>',
+          template: '<div><div v-for="row in rows" :key="row.streamId">{{ row.title }}</div><slot name="actions" :row="rows[0]" /><slot name="empty" /></div>',
         },
         DateTimeRangePicker: true,
-        Select: true,
         SearchInput: true,
-        Dialog: true,
-        ConfirmDialog: true,
       },
     },
   });
@@ -123,11 +98,8 @@ vi.stubGlobal('localStorage', createStorage());
 
 beforeEach(() => {
   useI18n().setLocale('en');
-  vi.spyOn(activityApi, 'operations').mockResolvedValue(page());
-  vi.spyOn(activityApi, 'operation').mockResolvedValue(detail('op-1'));
-  vi.spyOn(activityApi, 'events').mockRejectedValue(new Error('Unexpected events'));
-  vi.spyOn(activityApi, 'tail').mockRejectedValue(new Error('Unexpected polling'));
-  vi.spyOn(activityApi, 'summary').mockRejectedValue(new Error('Unexpected aggregation'));
+  vi.spyOn(logContextsApi, 'list').mockResolvedValue(page());
+  vi.spyOn(logContextsApi, 'get').mockResolvedValue(context('stream-1'));
 });
 afterEach(() => {
   wrapper?.unmount();
@@ -137,33 +109,26 @@ afterEach(() => {
 
 describe('IntentRecordsPage diagnose contract', () => {
   it('loads user operations with origin=user and opens a light detail', async () => {
-    await render('user', '/operations?from=2026-09-14T00:00:00Z&operationId=op-1');
-    expect(activityApi.operations).toHaveBeenCalledWith(expect.objectContaining({ origin: 'user' }));
-    expect(activityApi.operation).toHaveBeenCalledWith('op-1', expect.anything());
-    const [calledId, calledParams] = vi.mocked(activityApi.operation).mock.calls[0]!;
-    expect(calledId).toBe('op-1');
-    // activityApi.operation always merges detail=summary for product UI.
-    expect(JSON.stringify(calledParams ?? {})).not.toContain('"full"');
+    await render('user', '/operations?from=2026-09-14T00:00:00Z&streamId=stream-1');
+    expect(logContextsApi.list).toHaveBeenCalledWith(expect.objectContaining({ origin: 'user' }));
     expect(wrapper!.find('[data-testid="detail"]').exists()).toBe(true);
     expect(wrapper!.text()).toContain('boom');
     expect(wrapper!.text()).toContain('View logs');
     expect(wrapper!.text()).not.toMatch(/Executions|Steps|Evidence|View context|Timeline/);
-    expect(activityApi.events).not.toHaveBeenCalled();
-    expect(activityApi.tail).not.toHaveBeenCalled();
-    expect(activityApi.summary).not.toHaveBeenCalled();
   });
 
   it('loads system tasks with origin=system', async () => {
     await render('system', '/tasks?from=2026-09-14T00:00:00Z');
-    expect(activityApi.operations).toHaveBeenCalledWith(expect.objectContaining({ origin: 'system' }));
+    expect(logContextsApi.list).toHaveBeenCalledWith(expect.objectContaining({ origin: 'system' }));
   });
 
   it('jumps to diagnostic logs with warning,error for the selected intent', async () => {
-    await render('user', '/operations?from=2026-09-14T00:00:00Z&operationId=op-1');
+    await render('user', '/operations?from=2026-09-14T00:00:00Z&streamId=stream-1');
     await button('View logs').trigger('click');
     await flushPromises();
     expect(router.currentRoute.value.path).toBe('/logs');
     expect(router.currentRoute.value.query).toMatchObject({
+      streamId: 'stream-1',
       operationId: 'op-1',
       level: 'warning,error',
     });

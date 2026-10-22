@@ -32,6 +32,8 @@ func (s *Service) Append(ctx context.Context, events []EventInput) (Receipt, err
 func (s *Service) AppendTx(ctx context.Context, tx *sql.Tx, events []EventInput) (Receipt, error) {
 	return activitylog.AppendTx(ctx, tx, events)
 }
+// Init ensures legacy projection schema exists for read compatibility but does
+// not require projecting new activity_events (product facts use unified logging).
 func (s *Service) Init(ctx context.Context) error {
 	for _, q := range []string{
 		`CREATE TABLE IF NOT EXISTS activity_projection_events(seq INTEGER PRIMARY KEY,event_id TEXT NOT NULL UNIQUE,operation_id TEXT NOT NULL,execution_id TEXT NOT NULL,step_id TEXT NOT NULL,domain TEXT NOT NULL,action TEXT NOT NULL,kind TEXT NOT NULL,level TEXT NOT NULL,trigger_type TEXT NOT NULL,actor_id TEXT NOT NULL,recorded_at TEXT NOT NULL,text TEXT NOT NULL,resources_json TEXT NOT NULL,body_json TEXT NOT NULL)`,
@@ -46,23 +48,6 @@ func (s *Service) Init(ctx context.Context) error {
 			return err
 		}
 	}
-	var version int
-	if err := s.index.QueryRowContext(ctx, `SELECT version FROM activity_projection_checkpoint WHERE id=1`).Scan(&version); err != nil {
-		return err
-	}
-	if version != 4 {
-		tx, err := s.index.BeginTx(ctx, nil)
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback()
-		for _, q := range []string{`DELETE FROM activity_projection_events`, `DELETE FROM activity_operation_versions`, `DELETE FROM activity_search`, `UPDATE activity_projection_checkpoint SET seq=0,version=4 WHERE id=1`} {
-			if _, err = tx.ExecContext(ctx, q); err != nil {
-				return err
-			}
-		}
-		return tx.Commit()
-	}
 	return nil
 }
 func (s *Service) Head(ctx context.Context) (int64, error) {
@@ -70,57 +55,15 @@ func (s *Service) Head(ctx context.Context) (int64, error) {
 	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(seq),0) FROM activity_events`).Scan(&n)
 	return n, err
 }
+
+// CatchUp no longer projects activity_events into the query index. Product
+// facts are written via platform/logging + log_contexts.
 func (s *Service) CatchUp(ctx context.Context) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var watermark int64
 	if err := s.index.QueryRowContext(ctx, `SELECT seq FROM activity_projection_checkpoint WHERE id=1`).Scan(&watermark); err != nil {
 		return 0, err
-	}
-	head, err := s.Head(ctx)
-	if err != nil {
-		return watermark, err
-	}
-	// Bound each pass; callers receive the committed projection waterline.
-	for pass := 0; pass < 20 && watermark < head; pass++ {
-		rows, err := s.db.QueryContext(ctx, `SELECT `+activitylog.Columns+` FROM activity_events WHERE seq>? AND seq<=? ORDER BY seq LIMIT 500`, watermark, head)
-		if err != nil {
-			return watermark, err
-		}
-		batch := []Event{}
-		for rows.Next() {
-			e, err := activitylog.Scan(rows)
-			if err != nil {
-				rows.Close()
-				return watermark, err
-			}
-			batch = append(batch, e)
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return watermark, err
-		}
-		if len(batch) == 0 {
-			break
-		}
-		tx, err := s.index.BeginTx(ctx, nil)
-		if err != nil {
-			return watermark, err
-		}
-		if err = s.projectBatch(ctx, tx, batch); err != nil {
-			tx.Rollback()
-			return watermark, err
-		}
-		next := batch[len(batch)-1].Seq
-		if _, err = tx.ExecContext(ctx, `UPDATE activity_projection_checkpoint SET seq=? WHERE id=1`, next); err != nil {
-			tx.Rollback()
-			return watermark, err
-		}
-		if err = tx.Commit(); err != nil {
-			return watermark, err
-		}
-		watermark = next
 	}
 	return watermark, nil
 }

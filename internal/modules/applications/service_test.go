@@ -152,12 +152,12 @@ func TestDeployBypassesAutomaticReconcileBackoff(t *testing.T) {
 	if result.NoChange || result.DeploymentID == "" {
 		t.Fatalf("manual deploy must plan despite automatic backoff, got %#v", result)
 	}
-	var requests int
-	if err := svc.db.QueryRow(`SELECT COUNT(*) FROM activity_events WHERE operation_id<>'' AND event_type='operation.requested' AND trigger='application_sync' AND json_extract(data_json,'$.applicationId')=?`, app.ID).Scan(&requests); err != nil {
+	var jobs int
+	if err := svc.db.QueryRow(`SELECT COUNT(*) FROM jobs WHERE application_id=?`, app.ID).Scan(&jobs); err != nil {
 		t.Fatal(err)
 	}
-	if requests == 0 {
-		t.Fatal("manual deploy was silently skipped instead of creating a traceable intent")
+	if jobs == 0 {
+		t.Fatal("manual deploy was silently skipped instead of creating a job")
 	}
 }
 

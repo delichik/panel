@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { PlayCircle, RefreshCcw, ServerCog } from '@lucide/vue';
-import { activityApi } from '@/api/activity';
 import { serversApi } from '@/api/servers';
 import { tasksApi } from '@/api/tasks';
 import ActivityLink from '@/components/activity/ActivityLink.vue';
@@ -67,9 +66,9 @@ async function load(reset = false, preferredTaskId = '') {
     }
     if (agentTask.value?.id !== nextTask.id) logs.value = [];
     agentTask.value = nextTask;
-    const nextLogs = await activityApi.events({ executionId: nextTask.id, kind: 'output', limit: 20 });
+    const nextLogs = await tasksApi.logs(nextTask.id);
     if (!agentTaskGuard.isCurrent(requestId)) return;
-    logs.value = [...nextLogs.items].sort((left, right) => left.seq - right.seq).map((event) => ({ cursor: event.seq, time: event.occurredAt, stream: event.stream || 'stdout', line: event.text || '' }));
+    logs.value = nextLogs.logs.slice(-20);
   } catch (err) {
     if (isAbortError(err)) return;
     if (!agentTaskGuard.isCurrent(requestId)) return;

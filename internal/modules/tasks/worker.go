@@ -2,11 +2,14 @@ package tasks
 
 import (
 	"context"
-	"log"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"panel/internal/platform/logging"
+
+	"go.uber.org/zap"
 )
 
 const (
@@ -18,7 +21,6 @@ const (
 type Worker struct {
 	service               *Service
 	manager               *Manager
-	periodic              *PeriodicRunner
 	lifecycleMu           sync.Mutex
 	cancel                context.CancelFunc
 	running               bool
@@ -46,14 +48,12 @@ type RuntimeDefinitionStats struct {
 	DefaultMaxRetries       int    `json:"defaultMaxRetries"`
 	ConcurrencyPolicy       string `json:"concurrencyPolicy"`
 	StaleQueuedAfterSeconds int64  `json:"staleQueuedAfterSeconds"`
-	PeriodicIntervalSeconds int64  `json:"periodicIntervalSeconds"`
 }
 
 func NewWorker(service *Service) *Worker {
 	return &Worker{
-		service:  service,
-		manager:  NewManager(service),
-		periodic: NewPeriodicRunner(service),
+		service: service,
+		manager: NewManager(service),
 	}
 }
 
@@ -69,7 +69,6 @@ func (w *Worker) Start(parent context.Context) {
 	ctx, cancel := context.WithCancel(parent)
 	w.cancel = cancel
 	w.running = true
-	w.periodic.Start(ctx)
 	w.wg.Add(3)
 	go w.queueLoop(ctx)
 	go w.staleQueuedLoop(ctx)
@@ -90,9 +89,6 @@ func (w *Worker) Stop() {
 	w.running = false
 	w.lifecycleMu.Unlock()
 	cancel()
-	if w.periodic != nil {
-		w.periodic.Wait()
-	}
 	w.wg.Wait()
 }
 
@@ -119,25 +115,21 @@ func (w *Worker) TaskRuntime() RuntimeStats {
 		if def.Execute != nil {
 			stats.ExecutableTypes++
 		}
-		if def.Periodic != nil {
+		if def.Periodic != nil && def.Periodic.CollectInputs != nil {
 			stats.PeriodicTypes++
 		}
-		detail := RuntimeDefinitionStats{
+		stats.Definitions = append(stats.Definitions, RuntimeDefinitionStats{
 			Type:                    def.Type,
 			Hidden:                  def.Hidden,
 			Quiet:                   def.Quiet,
 			Executable:              def.Execute != nil,
-			Periodic:                def.Periodic != nil,
+			Periodic:                def.Periodic != nil && def.Periodic.CollectInputs != nil,
 			AllowRunNow:             def.AllowRunNow && def.Execute != nil,
 			AllowRetry:              def.AllowRetry && def.Execute != nil,
 			DefaultMaxRetries:       def.DefaultMaxRetries,
 			ConcurrencyPolicy:       def.ConcurrencyPolicy,
 			StaleQueuedAfterSeconds: int64(def.StaleQueuedAfter.Seconds()),
-		}
-		if def.Periodic != nil {
-			detail.PeriodicIntervalSeconds = int64(def.Periodic.Interval.Seconds())
-		}
-		stats.Definitions = append(stats.Definitions, detail)
+		})
 	}
 	return stats
 }
@@ -169,11 +161,12 @@ func (w *Worker) queueLoop(ctx context.Context) {
 }
 
 func (w *Worker) runDueTasks(ctx context.Context) {
+	ctx = logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "tasks"})
 	// 单次轮询内发生 panic 时只记录日志并退出本轮，避免整个 worker goroutine
 	// 崩溃后任务队列无人驱动。
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			log.Printf("task worker due-task loop recovered from panic: %v", recovered)
+			logging.From(ctx).Error("task worker due-task loop recovered from panic", zap.Any("panic", recovered))
 		}
 	}()
 	for _, task := range w.dueTasks(ctx) {
@@ -184,7 +177,7 @@ func (w *Worker) runDueTasks(ctx context.Context) {
 			continue
 		}
 		if err := w.RunNow(ctx, task); err != nil {
-			log.Printf("task worker run task %s: %v", task.ID, err)
+			logging.From(ctx).Warn("task worker run task failed", zap.String("task_id", task.ID), zap.Error(err))
 		}
 	}
 }
@@ -229,7 +222,7 @@ func (w *Worker) dueTasks(ctx context.Context) []Task {
 		for _, status := range []string{StatusQueued, StatusScheduled, StatusFailedRetryable} {
 			result, err := w.service.List(ctx, ListFilter{Type: taskType, Status: status, Limit: 50, IncludeInternal: true, SortOldestFirst: true})
 			if err != nil {
-				log.Printf("task worker list %s/%s: %v", taskType, status, err)
+				logging.From(ctx).Warn("task worker list failed", zap.String("task_type", taskType), zap.String("status", status), zap.Error(err))
 				continue
 			}
 			for _, task := range result.Items {
@@ -266,6 +259,7 @@ func (w *Worker) staleQueuedLoop(ctx context.Context) {
 }
 
 func (w *Worker) expireStaleQueued(ctx context.Context) {
+	ctx = logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "tasks"})
 	byTimeout := map[time.Duration][]string{}
 	for _, taskType := range w.service.Registry().Types() {
 		def, ok := w.service.Registry().Definition(taskType)
@@ -277,11 +271,11 @@ func (w *Worker) expireStaleQueued(ctx context.Context) {
 	for timeout, taskTypes := range byTimeout {
 		expired, err := w.service.ExpireStaleQueued(ctx, time.Now().UTC(), timeout, taskTypes)
 		if err != nil {
-			log.Printf("task stale-queued cleanup: %v", err)
+			logging.From(ctx).Warn("task stale-queued cleanup failed", zap.Error(err))
 			continue
 		}
 		if expired > 0 {
-			log.Printf("task stale-queued cleanup marked %d task(s) failed", expired)
+			logging.From(ctx).Info("task stale-queued cleanup marked tasks failed", zap.Int("expired", expired))
 		}
 	}
 }
@@ -302,12 +296,13 @@ func (w *Worker) orphanLoop(ctx context.Context) {
 }
 
 func (w *Worker) failOrphanedRunning(ctx context.Context) {
+	ctx = logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "tasks"})
 	failed, err := w.service.FailRunningWithoutExecution(ctx, time.Now().UTC())
 	if err != nil {
-		log.Printf("task running execution check: %v", err)
+		logging.From(ctx).Warn("task running execution check failed", zap.Error(err))
 		return
 	}
 	if failed > 0 {
-		log.Printf("task running execution check marked %d orphaned task(s) awaiting verification", failed)
+		logging.From(ctx).Info("task running execution check marked orphaned tasks awaiting verification", zap.Int("failed", failed))
 	}
 }

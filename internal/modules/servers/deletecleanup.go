@@ -8,9 +8,12 @@ import (
 	"strings"
 	"time"
 
-	"panel/internal/platform/activitylog"
+	"go.uber.org/zap"
+
 	"panel/internal/platform/database/models"
 	"panel/internal/platform/database/orm"
+	"panel/internal/platform/logcontexts"
+	"panel/internal/platform/logging"
 )
 
 // deploymentModeSelected 与 applications 模块的部署模式取值保持一致。servers
@@ -126,22 +129,28 @@ func disableApplicationsWithoutDeploymentTarget(ctx context.Context, tx *sql.Tx,
 		if _, err := orm.RawExec(ctx, tx, `UPDATE applications SET enabled=0,version=version+1,updated_at=? WHERE id=?`, now, id); err != nil {
 			return err
 		}
-		// 停用是系统代替操作者做出的决定，必须在统一活动日志里留痕。
-		if _, err := activitylog.AppendTx(ctx, tx, []activitylog.EventInput{{
-			EventType: "application.disabled",
-			Kind:      "lifecycle",
-			Domain:    "application",
-			Action:    "disable",
-			Trigger:   "server_removed",
-			Resources: []activitylog.Resource{
-				{Type: "application", ID: id, Name: name, Role: "target"},
-				{Type: "server", ID: serverID, Role: "executor"},
-			},
-			Text: "Application disabled because it lost its last deployment node",
-			Data: map[string]any{"reason": "server_removed", "serverId": serverID, "applicationId": id, "deploymentMode": mode},
-		}}); err != nil {
-			return err
-		}
+		// 停用是系统代替操作者做出的决定，必须经统一日志留痕。
+		logCtx := logging.Ensure(ctx, logging.Context{Module: "servers"})
+		msg := "Application disabled because it lost its last deployment node"
+		logging.From(logCtx).Warn(msg,
+			zap.String("eventType", "application.disabled"),
+			zap.String("action", "disable"),
+			zap.String("trigger", "server_removed"),
+			zap.String("reason", "server_removed"),
+			zap.String("serverId", serverID),
+			zap.String("applicationId", id),
+			zap.String("deploymentMode", mode),
+			zap.String("applicationName", name),
+		)
+		_ = logging.RecordContext(logCtx, logging.ContextMeta{
+			Origin:  logcontexts.OriginSystem,
+			Title:   "application.disabled",
+			Summary: msg,
+			ResourcesJSON: logging.MarshalResourcesJSON([]map[string]string{
+				{"resourceType": "application", "resourceId": id, "name": name, "role": "target"},
+				{"resourceType": "server", "resourceId": serverID, "role": "executor"},
+			}),
+		})
 	}
 	return nil
 }

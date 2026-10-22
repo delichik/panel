@@ -12,7 +12,8 @@ import (
 	"panel/internal/agent/executionevents"
 	server "panel/internal/modules/servers"
 	control "panel/internal/orchestrator"
-	"panel/internal/platform/activitylog"
+	"panel/internal/platform/logcontexts"
+	"panel/internal/platform/logging"
 )
 
 type activityTransportClient struct {
@@ -34,11 +35,12 @@ func (c *activityTransportClient) ReadExecutionEvents(ctx context.Context, _ str
 	return page, err
 }
 func (c *activityTransportClient) AckExecutionEvents(ctx context.Context, _ string, req contract.ExecutionEventsAck) error {
-	var count int64
-	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM activity_events WHERE source_id=? AND source_epoch=? AND source_stream_id=? AND source_seq<=?`, "agent:"+c.serverID, req.SourceEpoch, req.SourceStreamID, req.ThroughSourceSeq).Scan(&count); err != nil {
+	store := logcontexts.NewStore(c.db)
+	rec, err := store.Get(ctx, req.ExecutionID)
+	if err != nil {
 		return err
 	}
-	if count != req.ThroughSourceSeq {
+	if rec.LastSourceSeq < req.ThroughSourceSeq {
 		return errors.New("ACK preceded durable contiguous receipt")
 	}
 	c.ackCount++
@@ -70,8 +72,21 @@ func trackedTransport(t *testing.T) (*serviceRuntimeReconciler, *activityTranspo
 	req := control.ReconcileRequestRPC{OperationID: "original-operation", RunID: "original-run", JobID: "job", ExecutionID: "execution", ApplicationID: "app", InstanceID: "instance", ServerID: "srv-a", Action: "apply", DesiredGeneration: 7, DesiredSpecHash: "hash"}
 	client := &activityTransportClient{fakeRuntimeClient: base, spool: spool, db: svc.db, serverID: req.ServerID}
 	svc.runtimeClient = client
-	_, err = activitylog.Append(context.Background(), svc.db, []activitylog.EventInput{{EventType: "execution.started", OperationID: req.OperationID, RunID: req.RunID, ExecutionID: req.ExecutionID, SourceID: "panel", SourceStreamID: "control", Actor: activitylog.Actor{Kind: "controller"}, Initiator: activitylog.Actor{Kind: "user", ID: "operator", Name: "Original operator"}, Resources: []activitylog.Resource{{Type: "application", ID: req.ApplicationID, Name: "Original app name", Generation: 7}}, Data: map[string]any{}}})
-	if err != nil {
+	logging.SetContextStore(logcontexts.NewStore(svc.db))
+	t.Cleanup(func() { logging.SetContextStore(nil) })
+	seedCtx := logging.With(context.Background(), logging.Context{
+		StreamID: req.ExecutionID, Module: "agent-evidence", OperationID: req.OperationID, ExecutionID: req.ExecutionID, RequestID: req.RunID,
+	})
+	if err = logging.RecordContext(seedCtx, logging.ContextMeta{
+		Origin:        logcontexts.OriginProcess,
+		Title:         req.Action,
+		Summary:       "execution.started",
+		ActorJSON:     logging.MarshalActorJSON(map[string]string{"kind": "user", "id": "operator", "name": "Original operator"}),
+		ResourcesJSON: logging.MarshalResourcesJSON([]map[string]any{{"resourceType": "application", "resourceId": req.ApplicationID, "nameSnapshot": "Original app name", "generation": 7}}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = logcontexts.NewStore(svc.db).SetLastSourceSeq(seedCtx, req.ExecutionID, 0); err != nil {
 		t.Fatal(err)
 	}
 	session, _, err := spool.Begin(context.Background(), contract.RuntimeReconcileRequest{OperationID: req.OperationID, RunID: req.RunID, JobID: req.JobID, ExecutionID: req.ExecutionID, ApplicationID: req.ApplicationID, InstanceID: req.InstanceID, ServerID: req.ServerID, Action: req.Action, DesiredGeneration: req.DesiredGeneration, DesiredSpecHash: req.DesiredSpecHash})
@@ -238,24 +253,16 @@ func TestActivityTransportPreservesOriginalIdentityAndDrainsClosedStream(t *test
 	if client.ackCount < 4 {
 		t.Fatalf("expected paginated durable ACKs, got %d", client.ackCount)
 	}
-	rows, err := client.db.QueryContext(ctx, `SELECT operation_id,run_id,resources_json,initiator_json FROM activity_events WHERE source_id='agent:srv-a'`)
+	rec, err := logcontexts.NewStore(client.db).Get(ctx, req.ExecutionID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var op, run, resources, actor string
-		if err = rows.Scan(&op, &run, &resources, &actor); err != nil {
-			t.Fatal(err)
-		}
-		if op != "original-operation" || run != "original-run" || !strings.Contains(resources, "Original app name") || !strings.Contains(actor, "Original operator") {
-			t.Fatalf("history changed: %s %s %s %s", op, run, resources, actor)
-		}
+	if rec.OperationID != "original-operation" || !strings.Contains(rec.ResourcesJSON, "Original app name") || !strings.Contains(rec.ActorJSON, "Original operator") {
+		t.Fatalf("history changed: %#v", rec)
 	}
-	if err = rows.Err(); err != nil {
-		t.Fatal(err)
+	if rec.LastSourceSeq != end {
+		t.Fatalf("last_source_seq=%d want %d", rec.LastSourceSeq, end)
 	}
-	rows.Close()
 	if replayEnd, err := r.collectExecutionEvents(ctx, "", req); err != nil || replayEnd != end {
 		t.Fatalf("ACKed stream replay: %d %v", replayEnd, err)
 	}
@@ -273,9 +280,12 @@ func TestActivityTransportRejectsWrongExecutionAssociationBeforeACK(t *testing.T
 	if client.ackCount != 0 {
 		t.Fatal("invalid event was ACKed")
 	}
-	var count int
-	if err := client.db.QueryRow(`SELECT COUNT(*) FROM activity_events WHERE source_id='agent:srv-a'`).Scan(&count); err != nil || count != 0 {
-		t.Fatalf("invalid event committed: %d %v", count, err)
+	rec, err := logcontexts.NewStore(client.db).Get(context.Background(), req.ExecutionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.FinishedAt != "" || rec.LastSourceSeq != 0 {
+		t.Fatalf("invalid event committed into log_contexts: %#v", rec)
 	}
 }
 
@@ -308,10 +318,6 @@ func TestActivityTransportRecordsAndResolvesMissingEvidence(t *testing.T) {
 	if _, err := r.collectExecutionEvents(ctx, "", req); err == nil {
 		t.Fatal("repeated missing source records were ignored")
 	}
-	var gaps int
-	if err := client.db.QueryRow(`SELECT COUNT(*) FROM activity_events WHERE event_type='evidence.gap_detected'`).Scan(&gaps); err != nil || gaps != 1 {
-		t.Fatalf("gap must persist once: %d %v", gaps, err)
-	}
 	if client.ackCount != 0 {
 		t.Fatal("gap acknowledged before receipt")
 	}
@@ -319,9 +325,9 @@ func TestActivityTransportRecordsAndResolvesMissingEvidence(t *testing.T) {
 	if end, err := r.collectExecutionEvents(ctx, "", req); err != nil || end == 0 {
 		t.Fatalf("retransmit: %d %v", end, err)
 	}
-	var resolved int
-	if err := client.db.QueryRow(`SELECT COUNT(*) FROM activity_events WHERE event_type='evidence.gap_resolved' AND causation_event_id<>''`).Scan(&resolved); err != nil || resolved != 1 {
-		t.Fatalf("missing resolution fact: %d %v", resolved, err)
+	rec, err := logcontexts.NewStore(client.db).Get(ctx, req.ExecutionID)
+	if err != nil || rec.LastSourceSeq == 0 || rec.FinishedAt == "" {
+		t.Fatalf("expected closed evidence context: %#v %v", rec, err)
 	}
 }
 

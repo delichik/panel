@@ -3,14 +3,14 @@ export function activityPath(value: unknown, depth = 0): string | undefined {
   if (!value || typeof value !== 'object' || depth > 3) return;
   const record = value as Record<string, unknown>;
   const string = (key: string) => typeof record[key] === 'string' && record[key] ? record[key] as string : undefined;
+  const streamId = string('streamId');
   const operationId = string('operationId');
-  const eventId = string('acceptedEventId') || string('eventId');
   const executionId = string('executionId') || string('taskId') || string('initialTaskId');
   const query = new URLSearchParams();
-  if (operationId) query.set('operationId', operationId);
-  else if (eventId) query.set('eventId', eventId);
+  if (streamId) query.set('streamId', streamId);
+  else if (operationId) query.set('operationId', operationId);
   else if (executionId) query.set('executionId', executionId);
-  // Toast / receipt opens diagnostic log lines for the correlated intent/execution.
+  // Toast / receipt opens diagnostic log contexts / lines for the correlated intent/execution.
   if (query.size) {
     if (!query.has('level')) query.set('level', 'warning,error');
     return `/logs?${query}`;

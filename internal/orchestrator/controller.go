@@ -272,7 +272,7 @@ func (c *Controller) logControllerError(stage, jobID string, err error) {
 		}
 	}
 	c.mu.Unlock()
-	logging.L().Error("orchestrator controller operation failed",
+	logging.From(logging.Background("orchestrator")).Error("orchestrator controller operation failed",
 		zap.String("component", "orchestrator_controller"),
 		zap.String("stage", stage),
 		zap.String("owner", c.config.Owner),
@@ -288,6 +288,7 @@ func (c *Controller) releaseKey(key string) {
 }
 
 func (c *Controller) process(ctx context.Context, jobID string) error {
+	ctx = logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "orchestrator"})
 	existing, getErr := c.store.GetJob(ctx, jobID)
 	if getErr == nil && existing.State == JobRunning && existing.ErrorClass == "uncertainty" {
 		return c.resolveUncertain(ctx, existing)
@@ -296,7 +297,7 @@ func (c *Controller) process(ctx context.Context, jobID string) error {
 	if err != nil || !claimed {
 		return err
 	}
-	traceJobEvent("job_claimed", job)
+	traceJobEvent(ctx, "job_claimed", job)
 	if strings.TrimSpace(job.DesiredRevisionID) == "" && job.Action == ActionApply {
 		return c.fail(ctx, job, ReconcileResponse{ErrorCode: "invalid_revision", ErrorClass: "configuration", ErrorMessage: "job has no immutable revision", Retryable: false})
 	}
@@ -315,7 +316,7 @@ func (c *Controller) process(ctx context.Context, jobID string) error {
 	leaseCtx, stopLease := context.WithCancel(ctx)
 	defer stopLease()
 	go c.renewLease(leaseCtx, job)
-	traceJobEvent("agent_reconcile_started", job)
+	traceJobEvent(ctx, "agent_reconcile_started", job)
 	response, runErr := c.runtime.Reconcile(ctx, rpc)
 	if runErr != nil {
 		// A structured business failure is a known outcome and follows the normal
@@ -333,7 +334,7 @@ func (c *Controller) process(ctx context.Context, jobID string) error {
 
 func (c *Controller) acceptResponse(ctx context.Context, job Job, response ReconcileResponse) error {
 
-	traceJobEvent("agent_reconcile_finished", job,
+	traceJobEvent(ctx, "agent_reconcile_finished", job,
 		zap.String("observed_state", response.ObservedState),
 		zap.String("error_code", response.ErrorCode),
 		zap.Bool("retryable", response.Retryable))
@@ -349,10 +350,10 @@ func (c *Controller) acceptResponse(ctx context.Context, job Job, response Recon
 			return c.fail(ctx, job, ReconcileResponse{ErrorCode: "observation_write_failed", ErrorClass: "storage", ErrorMessage: err.Error(), Retryable: true})
 		}
 		if !written.Accepted {
-			traceJobEvent("observation_discarded_stale", job, zap.String("observed_state", response.ObservedState))
+			traceJobEvent(ctx, "observation_discarded_stale", job, zap.String("observed_state", response.ObservedState))
 			return ErrOwnershipLost
 		}
-		traceJobEvent("observation_accepted", job, zap.String("observed_state", response.ObservedState))
+		traceJobEvent(ctx, "observation_accepted", job, zap.String("observed_state", response.ObservedState))
 	}
 	changed, err := c.store.DesiredChanged(ctx, job)
 	if err != nil {
@@ -364,7 +365,7 @@ func (c *Controller) acceptResponse(ctx context.Context, job Job, response Recon
 			return err
 		}
 		if !ok {
-			traceJobEvent("lease_lost", job, zap.String("reason", "requeue_desired_changed"))
+			traceJobEvent(ctx, "lease_lost", job, zap.String("reason", "requeue_desired_changed"))
 			return ErrOwnershipLost
 		}
 		return nil
@@ -374,10 +375,10 @@ func (c *Controller) acceptResponse(ctx context.Context, job Job, response Recon
 		return err
 	}
 	if !ok {
-		traceJobEvent("lease_lost", job, zap.String("reason", "succeed_fencing"))
+		traceJobEvent(ctx, "lease_lost", job, zap.String("reason", "succeed_fencing"))
 		return ErrOwnershipLost
 	}
-	traceJobEvent("job_succeeded", job, zap.String("observed_state", response.ObservedState))
+	traceJobEvent(ctx, "job_succeeded", job, zap.String("observed_state", response.ObservedState))
 	if c.config.OnSucceeded != nil {
 		c.config.OnSucceeded(ctx, job, response)
 	}
@@ -450,18 +451,18 @@ func (c *Controller) fail(ctx context.Context, job Job, response ReconcileRespon
 		return err
 	}
 	if !ok {
-		traceJobEvent("lease_lost", job, zap.String("reason", "fail_fencing"))
+		traceJobEvent(ctx, "lease_lost", job, zap.String("reason", "fail_fencing"))
 		return ErrOwnershipLost
 	}
 	if c.config.OnFailed != nil {
 		c.config.OnFailed(ctx, job, response)
 	}
 	if response.Retryable {
-		traceJobEvent("job_retry_scheduled", job,
+		traceJobEvent(ctx, "job_retry_scheduled", job,
 			zap.String("error_code", response.ErrorCode),
 			zap.String("error_class", response.ErrorClass))
 	} else {
-		traceJobEvent("job_failed", job,
+		traceJobEvent(ctx, "job_failed", job,
 			zap.String("error_code", response.ErrorCode),
 			zap.String("error_class", response.ErrorClass))
 	}

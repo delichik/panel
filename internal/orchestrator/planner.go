@@ -10,6 +10,8 @@ import (
 
 	"panel/internal/platform/activitylog"
 	id "panel/internal/platform/identity"
+	"panel/internal/platform/logcontexts"
+	"panel/internal/platform/logging"
 
 	"go.uber.org/zap"
 )
@@ -158,7 +160,7 @@ func (p *Planner) planTx(ctx context.Context, tx *sql.Tx, in PlanInput) (PlanRes
 		if existing, found, err := scanExistingJob(ctx, tx, in.ApplicationID, in.IdempotencyKey); err != nil {
 			return PlanResult{}, err
 		} else if found {
-			traceJobEvent("job_merged", existing, zap.String("reason", "idempotency_key_replay"))
+			traceJobEvent(ctx, "job_merged", existing, zap.String("reason", "idempotency_key_replay"))
 			return PlanResult{Job: existing, Merged: true}, nil
 		}
 	}
@@ -220,7 +222,7 @@ func (p *Planner) planTx(ctx context.Context, tx *sql.Tx, in PlanInput) (PlanRes
 			if err != nil {
 				return PlanResult{}, err
 			}
-			traceJobEvent("job_merged", active, zap.String("reason", "active_pending_or_retryable_reused"))
+			traceJobEvent(ctx, "job_merged", active, zap.String("reason", "active_pending_or_retryable_reused"))
 		} else if active.State == JobRunning && in.ForceNonce > active.ForceNonce {
 			// Keep the in-flight execution fenced by its original snapshot, but
 			// leave the newer force intent on the same conflict-domain row. The
@@ -230,7 +232,7 @@ func (p *Planner) planTx(ctx context.Context, tx *sql.Tx, in PlanInput) (PlanRes
 				return PlanResult{}, err
 			}
 			active.ForceNonce = in.ForceNonce
-			traceJobEvent("job_merged", active, zap.String("reason", "running_force_nonce_bumped"))
+			traceJobEvent(ctx, "job_merged", active, zap.String("reason", "running_force_nonce_bumped"))
 		}
 		return PlanResult{Job: active, Merged: true}, nil
 	}
@@ -251,7 +253,7 @@ func (p *Planner) planTx(ctx context.Context, tx *sql.Tx, in PlanInput) (PlanRes
 		job.TriggerType, job.TriggerResourceType, job.TriggerResourceID, job.Reason, job.IdempotencyKey, "", "[]", "", "", "", "", now, nil, nil, now); err != nil {
 		return PlanResult{}, err
 	}
-	traceJobEvent("job_created", job, zap.String("reason", "no_active_job"))
+	traceJobEvent(ctx, "job_created", job, zap.String("reason", "no_active_job"))
 	return PlanResult{Job: job, Created: true}, nil
 }
 
@@ -343,16 +345,37 @@ func appendRunningIntent(ctx context.Context, tx *sql.Tx, active Job, in PlanInp
 		_ = tx.QueryRowContext(ctx, "SELECT name FROM "+table+" WHERE id=?", resources[i].ID).Scan(&resources[i].Name)
 	}
 
-	relation := activitylog.EventInput{EventType: "execution.linked", Kind: "relation", Domain: "application", Action: in.Action, OperationID: in.IntentID, ExecutionID: active.ExecutionID, Resources: resources, Data: map[string]any{"jobId": active.ID, "relatedOperationId": active.IntentID, "phase": "waiting"}}
+	eventType := "execution.linked"
+	operationID := in.IntentID
+	phase := "waiting"
+	result := ""
+	related := active.IntentID
 	if active.DesiredGeneration != in.DesiredGeneration || active.DesiredRevisionID != in.DesiredRevisionID || active.Action != in.Action || active.ForceNonce != in.ForceNonce {
-		relation.EventType = "intent.superseded"
-		relation.OperationID = active.IntentID
-		relation.Data["relatedOperationId"] = in.IntentID
-		relation.Data["phase"] = "ended"
-		relation.Data["result"] = "superseded"
+		eventType = "intent.superseded"
+		operationID = active.IntentID
+		phase = "ended"
+		result = "superseded"
+		related = in.IntentID
 	}
-	_, err := activitylog.AppendTx(ctx, tx, []activitylog.EventInput{relation})
-	return err
+	logCtx := logging.Ensure(ctx, logging.Context{Module: "orchestrator", OperationID: operationID, ExecutionID: active.ExecutionID})
+	logging.From(logCtx).Info(eventType,
+		zap.String("eventType", eventType),
+		zap.String("action", in.Action),
+		zap.String("jobId", active.ID),
+		zap.String("relatedOperationId", related),
+		zap.String("phase", phase),
+		zap.String("result", result),
+		zap.String("applicationId", in.ApplicationID),
+		zap.String("serverId", in.ServerID),
+	)
+	_ = logging.RecordContext(logCtx, logging.ContextMeta{
+		Origin:        logcontexts.OriginProcess,
+		Title:         eventType,
+		Summary:       eventType,
+		Result:        result,
+		ResourcesJSON: logging.MarshalResourcesJSON(resources),
+	})
+	return nil
 }
 
 func appendPlanRequest(ctx context.Context, tx *sql.Tx, in PlanInput) error {
@@ -368,6 +391,29 @@ func appendPlanRequest(ctx context.Context, tx *sql.Tx, in PlanInput) error {
 	if actor.Kind == "" {
 		actor = activitylog.Actor{Kind: "controller", ID: "application"}
 	}
-	_, err := activitylog.AppendTx(ctx, tx, []activitylog.EventInput{{EventType: "operation.requested", Kind: "request", Domain: "application", Action: in.Action, OperationID: in.IntentID, RunID: in.IntentID, Trigger: in.TriggerType, Actor: actor, Initiator: actor, Resources: resources, Text: in.Reason, Data: map[string]any{"applicationId": in.ApplicationID, "serverId": in.ServerID, "desiredGeneration": in.DesiredGeneration, "desiredRevisionId": in.DesiredRevisionID, "phase": "queued"}}})
-	return err
+	logCtx := logging.Ensure(ctx, logging.Context{Module: "orchestrator", OperationID: in.IntentID})
+	msg := in.Reason
+	if msg == "" {
+		msg = "operation.requested"
+	}
+	logging.From(logCtx).Info(msg,
+		zap.String("eventType", "operation.requested"),
+		zap.String("action", in.Action),
+		zap.String("trigger", in.TriggerType),
+		zap.String("applicationId", in.ApplicationID),
+		zap.String("serverId", in.ServerID),
+		zap.Int("desiredGeneration", in.DesiredGeneration),
+		zap.String("desiredRevisionId", in.DesiredRevisionID),
+		zap.String("phase", "queued"),
+		zap.String("actorKind", actor.Kind),
+		zap.String("actorId", actor.ID),
+	)
+	_ = logging.RecordContext(logCtx, logging.ContextMeta{
+		Origin:        logcontexts.OriginProcess,
+		Title:         "operation.requested",
+		Summary:       msg,
+		ActorJSON:     logging.MarshalActorJSON(map[string]string{"kind": actor.Kind, "id": actor.ID, "name": actor.Name}),
+		ResourcesJSON: logging.MarshalResourcesJSON(resources),
+	})
+	return nil
 }

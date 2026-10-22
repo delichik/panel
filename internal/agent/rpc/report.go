@@ -358,12 +358,13 @@ func (h *reportHub) runMetricsSamplers(ctx context.Context) {
 }
 
 func (h *reportHub) sampleCPU(ctx context.Context) {
+	ctx = logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "agent"})
 	for {
 		value, err := h.collector.CPUUsage(ctx)
 		if err == nil {
 			h.metrics.setCPU(value)
 		} else if ctx.Err() == nil {
-			logging.L().Warn("agent CPU sampling failed", zap.Error(err))
+			logging.From(ctx).Warn("agent CPU sampling failed", zap.Error(err))
 		}
 		if !waitSamplerTick(ctx) {
 			return
@@ -372,12 +373,13 @@ func (h *reportHub) sampleCPU(ctx context.Context) {
 }
 
 func (h *reportHub) sampleMemory(ctx context.Context) {
+	ctx = logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "agent"})
 	for {
 		total, used, err := h.collector.MemoryStats(ctx)
 		if err == nil {
 			h.metrics.setMemory(total, used)
 		} else if ctx.Err() == nil {
-			logging.L().Warn("agent memory sampling failed", zap.Error(err))
+			logging.From(ctx).Warn("agent memory sampling failed", zap.Error(err))
 		}
 		if !waitSamplerTick(ctx) {
 			return
@@ -386,12 +388,13 @@ func (h *reportHub) sampleMemory(ctx context.Context) {
 }
 
 func (h *reportHub) sampleDisk(ctx context.Context) {
+	ctx = logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "agent"})
 	for {
 		total, used, err := h.collector.DiskUsage(ctx)
 		if err == nil {
 			h.metrics.setDisk(total, used)
 		} else if ctx.Err() == nil {
-			logging.L().Warn("agent disk sampling failed", zap.Error(err))
+			logging.From(ctx).Warn("agent disk sampling failed", zap.Error(err))
 		}
 		if !waitSamplerTick(ctx) {
 			return
@@ -400,12 +403,13 @@ func (h *reportHub) sampleDisk(ctx context.Context) {
 }
 
 func (h *reportHub) sampleNetwork(ctx context.Context) {
+	ctx = logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "agent"})
 	for {
 		rx, tx, err := h.collector.NetworkTotals(ctx)
 		if err == nil {
 			h.metrics.accumulateNetwork(rx, tx)
 		} else if ctx.Err() == nil {
-			logging.L().Warn("agent network sampling failed", zap.Error(err))
+			logging.From(ctx).Warn("agent network sampling failed", zap.Error(err))
 		}
 		if !waitSamplerTick(ctx) {
 			return
@@ -414,12 +418,13 @@ func (h *reportHub) sampleNetwork(ctx context.Context) {
 }
 
 func (h *reportHub) sampleStatus(ctx context.Context) {
+	ctx = logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "agent"})
 	for {
 		status, err := h.collector.SystemStatus(ctx)
 		if err == nil {
 			h.metrics.setStatus(status)
 		} else if ctx.Err() == nil {
-			logging.L().Warn("agent status sampling failed", zap.Error(err))
+			logging.From(ctx).Warn("agent status sampling failed", zap.Error(err))
 		}
 		if !waitSamplerTick(ctx) {
 			return
@@ -484,6 +489,7 @@ func (h *reportHub) snapshot() []reportWatcherSnapshot {
 }
 
 func (h *reportHub) watchContainerEvents(ctx context.Context) {
+	ctx = logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "agent"})
 	if h.runtime == nil {
 		return
 	}
@@ -506,7 +512,7 @@ func (h *reportHub) watchContainerEvents(ctx context.Context) {
 					continue
 				}
 				if err != nil && ctx.Err() == nil {
-					logging.L().Warn("agent report container event watch failed", zap.Error(err))
+					logging.From(ctx).Warn("agent report container event watch failed", zap.Error(err))
 				}
 			}
 		}
@@ -527,6 +533,7 @@ const (
 )
 
 func (h *reportHub) watchImageEvents(ctx context.Context) {
+	ctx = logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "agent"})
 	if h.runtime == nil {
 		return
 	}
@@ -554,7 +561,7 @@ func (h *reportHub) watchImageEvents(ctx context.Context) {
 					continue
 				}
 				if err != nil && ctx.Err() == nil {
-					logging.L().Warn("agent report image event watch failed", zap.Error(err))
+					logging.From(ctx).Warn("agent report image event watch failed", zap.Error(err))
 				}
 			}
 		}
@@ -604,11 +611,16 @@ func (h *reportHub) watchPackageEvents(ctx context.Context) {
 }
 
 func (h *reportHub) pushImages(ctx context.Context, reason string) {
+	if _, ok := logging.Lookup(ctx); ok {
+		ctx = logging.With(ctx, logging.Context{Module: "agent"})
+	} else {
+		ctx = logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "agent"})
+	}
 	pushCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	items, err := h.runtime.Images(pushCtx)
 	if err != nil {
-		logging.L().Warn("agent report image push failed", zap.Error(err))
+		logging.From(ctx).Warn("agent report image push failed", zap.Error(err))
 		return
 	}
 	out := make([]*agentpb.DockerImage, 0, len(items))
@@ -623,11 +635,16 @@ func (h *reportHub) pushImages(ctx context.Context, reason string) {
 }
 
 func (h *reportHub) pushPackageUpdates(ctx context.Context) {
+	if _, ok := logging.Lookup(ctx); ok {
+		ctx = logging.With(ctx, logging.Context{Module: "agent"})
+	} else {
+		ctx = logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "agent"})
+	}
 	pushCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
 	items, err := h.collector.PackageUpdates(pushCtx)
 	if err != nil {
-		logging.L().Warn("agent report package push failed", zap.Error(err))
+		logging.From(ctx).Warn("agent report package push failed", zap.Error(err))
 		return
 	}
 	h.broadcastReport(&agentpb.AgentReport{
@@ -680,7 +697,7 @@ func (h *reportHub) collectAndBroadcast(sampleAt time.Time, forceContainers bool
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), reportCollectionTimeout)
+	ctx, cancel := context.WithTimeout(logging.Background("agent"), reportCollectionTimeout)
 	defer cancel()
 	var metrics *agentpb.MetricsSnapshotResponse
 	if collectMetrics {
@@ -709,7 +726,7 @@ func (h *reportHub) collectAndBroadcast(sampleAt time.Time, forceContainers bool
 		} else {
 			// Keep the field nil so the panel never clears the last known
 			// container snapshot on a transient collection failure.
-			logging.L().Warn("agent report container collection failed", zap.Error(err))
+			logging.From(ctx).Warn("agent report container collection failed", zap.Error(err))
 		}
 	}
 
@@ -720,7 +737,7 @@ func (h *reportHub) collectAndBroadcast(sampleAt time.Time, forceContainers bool
 		if status, err := h.collector.TailscaleStatus(ctx); err == nil {
 			tailscale = pbTailscaleStatus(status)
 		} else {
-			logging.L().Warn("agent report tailscale collection failed", zap.Error(err))
+			logging.From(ctx).Warn("agent report tailscale collection failed", zap.Error(err))
 		}
 	}
 

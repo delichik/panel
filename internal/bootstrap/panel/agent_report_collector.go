@@ -126,9 +126,10 @@ func (c *agentReportCollector) run(ctx context.Context) {
 }
 
 func (c *agentReportCollector) sync(ctx context.Context) {
+	ctx = logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "agent-report"})
 	servers, err := c.servers.List(ctx)
 	if err != nil {
-		logging.L().Warn("agent report sync failed", zap.Error(err))
+		logging.From(ctx).Warn("agent report sync failed", zap.Error(err))
 		return
 	}
 	wanted := map[string]server.Server{}
@@ -209,7 +210,7 @@ func (c *agentReportCollector) auditSilentStreams() {
 	for _, item := range disconnected {
 		entry := item.entry
 		msg := "agent report stream timed out after " + timeout.String()
-		logging.L().Warn("agent report stream timed out", zap.String("server_id", entry.serverID), zap.Duration("timeout", timeout))
+		logging.From(logging.Background("agent-report")).Warn("agent report stream timed out", zap.String("server_id", entry.serverID), zap.Duration("timeout", timeout))
 		c.recordReportStream(context.Background(), entry.serverID, false, entry.lastMessageAt, msg)
 		if item.wasConnected {
 			c.logStreamStatus(entry, false, msg)
@@ -327,11 +328,18 @@ func (c *agentReportCollector) recordReportStream(ctx context.Context, serverID 
 		return
 	}
 	if err := c.reportStreams.RecordAgentReportStream(ctx, serverID, connected, lastMessageAt, msg); err != nil {
-		logging.L().Warn("failed to record agent report stream status", zap.String("server_id", serverID), zap.Error(err))
+		logCtx := ctx
+		if _, ok := logging.Lookup(ctx); !ok {
+			logCtx = logging.Background("agent-report")
+		} else {
+			logCtx = logging.With(ctx, logging.Context{Module: "agent-report"})
+		}
+		logging.From(logCtx).Warn("failed to record agent report stream status", zap.String("server_id", serverID), zap.Error(err))
 	}
 }
 
 func (c *agentReportCollector) runServerStream(ctx context.Context, srv server.Server, entry *agentReportStream) {
+	ctx = logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "agent-report"})
 	backoff := 5 * time.Second
 	var wait time.Duration
 	for ctx.Err() == nil {
@@ -363,7 +371,7 @@ func (c *agentReportCollector) runServerStream(ctx context.Context, srv server.S
 		// 本次连接曾经收到过上报说明链路本身是通的，断流只是瞬时故障，重连
 		// 退避必须重置回 5s；只有连续失败才逐次翻倍，否则一次偶发断流会让
 		// 后续每次重连越等越久（5s→…→5min 封顶）。
-		logging.L().Warn("agent report stream failed", zap.String("server_id", srv.ID), zap.Error(err))
+		logging.From(ctx).Warn("agent report stream failed", zap.String("server_id", srv.ID), zap.Error(err))
 		c.markDisconnected(entry, err.Error())
 		wait, backoff = reconnectBackoff(delivered, backoff)
 		select {
@@ -398,7 +406,7 @@ func (c *agentReportCollector) saveReportedImages(ctx context.Context, serverID 
 		return nil
 	}
 	if err := c.images.SaveReportedImages(ctx, serverID, images); err != nil {
-		logging.L().Warn("agent image report save failed", zap.String("server_id", serverID), zap.Error(err))
+		logging.From(ctx).Warn("agent image report save failed", zap.String("server_id", serverID), zap.Error(err))
 	}
 	return nil
 }
@@ -408,7 +416,7 @@ func (c *agentReportCollector) savePackageUpdates(ctx context.Context, serverID 
 		return nil
 	}
 	if err := c.packages.SaveReportedUpdates(ctx, serverID, updates); err != nil {
-		logging.L().Warn("agent package report save failed", zap.String("server_id", serverID), zap.Error(err))
+		logging.From(ctx).Warn("agent package report save failed", zap.String("server_id", serverID), zap.Error(err))
 	}
 	return nil
 }
@@ -433,13 +441,13 @@ func (c *agentReportCollector) handleReport(ctx context.Context, serverID string
 		if sampleAligned(report.SampleAt, rt.MetricsCollectionIntervalSeconds) {
 			if err := c.metrics.SaveReported(ctx, serverID, report.SampleAt, *report.Metrics); err != nil {
 				// 与包/镜像推送路径一致：落库失败只记录日志，不中断上报流。
-				logging.L().Warn("agent metrics report save failed", zap.String("server_id", serverID), zap.Error(err))
+				logging.From(ctx).Warn("agent metrics report save failed", zap.String("server_id", serverID), zap.Error(err))
 			}
 		} else {
 			// agent 按发送时的间隔计算整点、Panel 按收到时的间隔校验；
 			// 设置项在上报在途时变更会让样本落在新间隔之外，这里记录日志便于排查，
 			// 但同样不中断上报流。
-			logging.L().Debug("agent metrics report skipped: sample not aligned to collection interval",
+			logging.From(ctx).Debug("agent metrics report skipped: sample not aligned to collection interval",
 				zap.String("server_id", serverID),
 				zap.Time("sample_at", report.SampleAt),
 				zap.Int("interval_seconds", rt.MetricsCollectionIntervalSeconds))
@@ -451,14 +459,14 @@ func (c *agentReportCollector) handleReport(ctx context.Context, serverID string
 		if err := c.containers.SaveReportedContainers(ctx, serverID, report.SampleAt, report.Containers); err != nil {
 			// 与指标分支一致：容器观察落库失败只记录日志，不中断上报流，
 			// 否则一次瞬时错误会让指标采集随整条流一起断掉并触发重连退避。
-			logging.L().Warn("agent container report save failed", zap.String("server_id", serverID), zap.Error(err))
+			logging.From(ctx).Warn("agent container report save failed", zap.String("server_id", serverID), zap.Error(err))
 		} else {
 			_, _, err := c.containers.TriggerApplicationReconcile(context.Background(), tasks.PeriodicTrigger{
 				Type: "agent_report", TriggerResourceType: "server", TriggerResourceID: serverID,
 				Payload: containerization.ApplicationReconcileTrigger{ServerIDs: []string{serverID}, Reason: firstNonEmpty(report.Reason, "agent_report")},
 			})
 			if err != nil {
-				logging.L().Warn("agent report reconcile trigger failed", zap.String("server_id", serverID), zap.Error(err))
+				logging.From(ctx).Warn("agent report reconcile trigger failed", zap.String("server_id", serverID), zap.Error(err))
 			}
 		}
 	}
@@ -466,7 +474,7 @@ func (c *agentReportCollector) handleReport(ctx context.Context, serverID string
 	// 因此已有地址不会被空报告清空。
 	if report.HasTailscale && report.Tailscale != nil {
 		if err := c.servers.ApplyTailscaleReport(ctx, serverID, *report.Tailscale); err != nil {
-			logging.L().Warn("agent tailscale report save failed", zap.String("server_id", serverID), zap.Error(err))
+			logging.From(ctx).Warn("agent tailscale report save failed", zap.String("server_id", serverID), zap.Error(err))
 		}
 	}
 	return nil

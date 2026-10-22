@@ -192,7 +192,6 @@ func TestWorkerTaskRuntimeSummarizesRegistryAndExecutions(t *testing.T) {
 		Type:    "periodic_runtime",
 		Execute: func(TaskContext) error { return nil },
 		Periodic: &Periodic{
-			Interval: time.Minute,
 			CollectInputs: func(context.Context, PeriodicTrigger) (CreateBatchInput, bool, error) {
 				return CreateBatchInput{}, false, nil
 			},
@@ -221,7 +220,7 @@ func TestWorkerTaskRuntimeSummarizesRegistryAndExecutions(t *testing.T) {
 			break
 		}
 	}
-	if !periodic.Executable || !periodic.Periodic || periodic.PeriodicIntervalSeconds != 60 ||
+	if !periodic.Executable || !periodic.Periodic ||
 		periodic.ConcurrencyPolicy != ConcurrencyResourceExclusive {
 		t.Fatalf("unexpected periodic definition stats: %#v", periodic)
 	}

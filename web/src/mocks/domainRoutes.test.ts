@@ -176,10 +176,10 @@ describe('domain mock routes', () => {
     expect(certsEnvelope.data.total).toBeGreaterThanOrEqual(10);
     expect(certsEnvelope.data.items.some((cert: { status: string }) => cert.status === 'renewing')).toBe(true);
 
-    const events = await fetch('/api/v1/activity/events?limit=20');
-    const eventsEnvelope = await events.json();
-    expect(eventsEnvelope.data.total).toBeGreaterThan(40);
-    expect(eventsEnvelope.data.items.length).toBe(20);
+    const contexts = await fetch('/api/v1/log-contexts?limit=20');
+    const contextsEnvelope = await contexts.json();
+    expect(contexts.status).toBe(200);
+    expect(contextsEnvelope.data.items.length).toBeGreaterThan(0);
   });
   it('serves resource and security data for expanded demo servers', async () => {
     const ufw = await fetch('/api/v1/servers/srv-api-hkg/ufw');

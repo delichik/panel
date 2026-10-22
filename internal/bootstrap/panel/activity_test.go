@@ -14,6 +14,7 @@ import (
 	"panel/internal/modules/activity"
 	"panel/internal/modules/runtimeevents"
 	"panel/internal/platform/activitylog"
+	"panel/internal/platform/logging"
 )
 
 func testActivityService(t *testing.T) *activity.Service {
@@ -32,38 +33,30 @@ func testActivityService(t *testing.T) *activity.Service {
 	}
 	return service
 }
-func TestActivityResponseLinksOnlyCommittedFacts(t *testing.T) {
+func TestActivityResponseLinksStreamReceipt(t *testing.T) {
 	service := testActivityService(t)
-	ctx := activitylog.WithReceipt(context.Background())
-	receipt, err := service.Append(ctx, []activity.EventInput{{EventID: "accepted", EventType: "operation.requested", OperationID: "op"}})
-	if err != nil {
+	ctx := activitylog.WithReceipt(logging.Ensure(context.Background(), logging.Context{Module: "http"}))
+	streamID := "stream-op"
+	if c, ok := logging.Lookup(ctx); ok {
+		streamID = c.StreamID
+	}
+	activitylog.RecordReceipt(ctx, streamID, streamID, 0)
+
+	recorder := httptest.NewRecorder()
+	response := &activityResponse{ResponseWriter: recorder}
+	response.Header().Set("Content-Type", "application/json")
+	response.WriteHeader(202)
+	_, _ = response.Write([]byte(`{"data":{"resourceId":"app"}}`))
+	response.finish(ctx, service)
+	var body map[string]map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	for _, committed := range []bool{true, false} {
-		recorder := httptest.NewRecorder()
-		response := &activityResponse{ResponseWriter: recorder}
-		response.Header().Set("Content-Type", "application/json")
-		response.WriteHeader(202)
-		_, _ = response.Write([]byte(`{"data":{"resourceId":"app"}}`))
-		eventID := "accepted"
-		if !committed {
-			eventID = "not-committed"
-		}
-		activitylog.RecordReceipt(ctx, "op", eventID, receipt.HeadSeq)
-		response.finish(ctx, service)
-		var body map[string]map[string]any
-		if err = json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
-			t.Fatal(err)
-		}
-		if committed && body["data"]["operationId"] != "op" {
-			t.Fatal("missing committed receipt")
-		}
-		if !committed && body["data"]["operationId"] != nil {
-			t.Fatal("uncommitted fact leaked into response")
-		}
+	if body["data"]["operationId"] != streamID {
+		t.Fatalf("missing stream receipt: %#v", body["data"])
 	}
 }
-func TestSystemEventWriterStopsFailedBackgroundRetry(t *testing.T) {
+func TestSystemEventWriterStopsWithoutBlocking(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +74,7 @@ func TestSystemEventWriterStopsFailedBackgroundRetry(t *testing.T) {
 	select {
 	case <-stopped:
 	case <-time.After(time.Second):
-		t.Fatal("writer stop blocked on retry")
+		t.Fatal("writer stop blocked")
 	}
 	select {
 	case <-finished:

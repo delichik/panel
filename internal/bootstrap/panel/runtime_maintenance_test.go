@@ -26,7 +26,7 @@ func TestRuntimeMaintenanceExemptsClearAndReadOnlyDiagnostics(t *testing.T) {
 		{http.MethodGet, "/api/v1/debug/databases", 204},
 		{http.MethodPost, "/api/v1/applications", 503},
 		{http.MethodDelete, "/api/v1/servers/example", 503},
-		{http.MethodGet, "/api/v1/activity/operations", 503},
+		{http.MethodGet, "/api/v1/log-contexts", 503},
 	} {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest(test.method, test.path, nil))

@@ -109,7 +109,8 @@ import {
   mockVolumes,
 } from './resources';
 import { acceptedAgentDeployment, completedTask, mockTasks, mockTaskLogs, mockTaskSteps, retryTask, runTaskNow } from './tasks';
-import { mockActivityRoute, resolveMockExecution } from './activity';
+import { resolveMockExecution } from './activity';
+import { mockLogContextsRoute } from './logContexts';
 import { applyContainerTailscale, confirmRestore, mockRuntimeSettings, mockServerVariables, restorePreflight, saveRuntime, saveServerVariables, startExport, type RuntimeUpdatePayload } from './settings';
 import { advanceExport, exportStatus, resetExport, restoreStatus } from './maintenance';
 import { debugClearRuntimeDataStatus, debugDatabases, debugPprofStatus, debugRuntime, debugTasks, setDebugPprof, startDebugClearRuntimeData } from './debug';
@@ -825,8 +826,8 @@ export function installMockApi() {
       }
     }
 
-    const activityResponse = mockActivityRoute(url, method(init));
-    if (activityResponse) return activityResponse;
+    const logContextsResponse = mockLogContextsRoute(url, method(init));
+    if (logContextsResponse) return logContextsResponse;
 
     if (url.pathname === '/api/v1/executions' && method(init) === 'GET') {
       const status = url.searchParams.get('status') || '';

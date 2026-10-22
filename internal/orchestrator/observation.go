@@ -4,9 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"panel/internal/platform/activitylog"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
+
+	"panel/internal/platform/activitylog"
+	"panel/internal/platform/logcontexts"
+	"panel/internal/platform/logging"
 )
 
 type ObservationWriter struct {
@@ -74,19 +79,22 @@ func (w *ObservationWriter) Write(ctx context.Context, in Observation) (WriteRes
 			if rejectErr != nil {
 				return WriteResult{}, rejectErr
 			}
-			_, err = activitylog.AppendTx(ctx, tx, []activitylog.EventInput{{
-				EventType:   "observation.rejected",
-				Kind:        "observation",
-				Level:       "warning",
-				Domain:      "application",
+			logCtx := logging.Ensure(ctx, logging.Context{
+				Module:      "orchestrator",
 				OperationID: rejection.operationID,
 				ExecutionID: rejection.executionID,
-				Resources:   rejection.resources,
-				Data:        rejection.data,
-			}})
-			if err != nil {
-				return WriteResult{}, err
-			}
+			})
+			logging.From(logCtx).Warn("observation.rejected",
+				zap.String("eventType", "observation.rejected"),
+				zap.Any("data", rejection.data),
+			)
+			_ = logging.RecordContext(logCtx, logging.ContextMeta{
+				Origin:        logcontexts.OriginProcess,
+				Title:         "observation.rejected",
+				Summary:       "observation.rejected",
+				HadError:      true,
+				ResourcesJSON: logging.MarshalResourcesJSON(rejection.resources),
+			})
 		}
 	}
 	if err := tx.Commit(); err != nil {

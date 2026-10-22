@@ -42,7 +42,11 @@ func main() {
 		_ = os.Setenv(panelsupervision.ControlTokenEnv, supervision.ControlToken)
 	}
 
-	logger := logging.L()
+	bootCtx := logging.With(context.Background(), logging.Context{
+		StreamID: logging.NewStreamID(),
+		Module:   "panel",
+	})
+	logger := logging.From(bootCtx)
 	defer logging.Sync()
 
 	logger.Info("panel starting",
@@ -77,7 +81,10 @@ func main() {
 	}
 	defer func() {
 		if err := application.Close(); err != nil {
-			logger.Error("close application failed", zap.Error(err))
+			logging.From(logging.With(context.Background(), logging.Context{
+				StreamID: logging.NewStreamID(),
+				Module:   "panel",
+			})).Error("close application failed", zap.Error(err))
 		}
 	}()
 
@@ -107,7 +114,11 @@ func main() {
 
 	errCh := make(chan error, 1)
 	go func() {
-		logger.Info("panel listening", zap.String("address", cfg.ListenAddress), zap.String("url", "https://"+cfg.ListenAddress))
+		listenCtx := logging.With(context.Background(), logging.Context{
+			StreamID: logging.NewStreamID(),
+			Module:   "panel",
+		})
+		logging.From(listenCtx).Info("panel listening", zap.String("address", cfg.ListenAddress), zap.String("url", "https://"+cfg.ListenAddress))
 		errCh <- serve()
 	}()
 
@@ -123,12 +134,17 @@ func main() {
 		}
 	}
 
+	shutdownCtx := logging.With(context.Background(), logging.Context{
+		StreamID: logging.NewStreamID(),
+		Module:   "panel",
+	})
+	shutdownLog := logging.From(shutdownCtx)
 	if _, ok := application.(maintenanceApplication); !ok {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(shutdownCtx, 10*time.Second)
 		defer cancel()
 		if err := server.Shutdown(ctx); err != nil {
-			logger.Error("server shutdown failed", zap.Error(err))
+			shutdownLog.Error("server shutdown failed", zap.Error(err))
 		}
 	}
-	logger.Info("panel shutdown complete")
+	shutdownLog.Info("panel shutdown complete")
 }

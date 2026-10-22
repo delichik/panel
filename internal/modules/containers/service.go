@@ -404,7 +404,7 @@ func (s *Service) warnUnknownManagedContainer(serverID, appID, instanceID string
 			}
 		}
 	}
-	logging.L().Warn("managed container references unknown application; reconcile state registration skipped",
+	logging.From(logging.Background("containers")).Warn("managed container references unknown application; reconcile state registration skipped",
 		zap.String("server_id", serverID),
 		zap.String("application_id", appID),
 		zap.String("instance_id", instanceID))
@@ -864,6 +864,7 @@ func (s *Service) RunImageRefreshTask(tc tasks.TaskContext) error {
 }
 
 func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string, trigger tasks.PeriodicTrigger) ([]tasks.CreateInput, error) {
+	ctx = logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "containers"})
 	if s.apps == nil || s.tasks == nil {
 		return nil, nil
 	}
@@ -897,7 +898,7 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string
 		}
 		containers, _, err := s.reportedContainers(ctx, srv.ID)
 		if err != nil {
-			logging.L().Warn("failed to read reported containers for reconcile scan", zap.String("server_id", srv.ID), zap.Error(err))
+			logging.From(ctx).Warn("failed to read reported containers for reconcile scan", zap.String("server_id", srv.ID), zap.Error(err))
 			continue
 		}
 		observed := map[string]agentcontract.DockerContainer{}
@@ -941,7 +942,7 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string
 				driftReason = "managed_files"
 			}
 			if driftReason != "" {
-				reconciletrace.Trace("drift",
+				reconciletrace.Trace(ctx, "drift",
 					zap.String("trigger", triggerType),
 					zap.String("application_id", app.ID),
 					zap.String("server_id", srv.ID),
@@ -964,7 +965,7 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string
 			continue
 		}
 		if len(observation.driftedServerIDs) == 0 {
-			reconciletrace.Trace("healthy", zap.String("application_id", appID))
+			reconciletrace.Trace(ctx, "healthy", zap.String("application_id", appID))
 			_ = s.recordApplicationReconcileHealthy(ctx, appID)
 			continue
 		}
@@ -974,13 +975,13 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string
 			return nil, err
 		}
 		if !bypassBackoff && nextRunAt != nil && nextRunAt.After(time.Now().UTC()) {
-			reconciletrace.Trace("backoff",
+			reconciletrace.Trace(ctx, "backoff",
 				zap.String("application_id", appID),
 				zap.Strings("server_ids", observation.driftedServerIDs),
 				zap.String("next_run_at", nextRunAt.UTC().Format(time.RFC3339)))
 			continue
 		}
-		reconciletrace.Trace("plan_requested",
+		reconciletrace.Trace(ctx, "plan_requested",
 			zap.String("trigger", triggerType),
 			zap.String("application_id", appID),
 			zap.Strings("server_ids", observation.driftedServerIDs),
@@ -992,15 +993,15 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string
 			TriggerType:          triggerType,
 		})
 		if err != nil {
-			reconciletrace.Trace("plan_failed",
+			reconciletrace.Trace(ctx, "plan_failed",
 				zap.String("application_id", appID),
 				zap.Error(err))
 			// The application planner persists its own failure. One invalid
 			// application must not prevent healthy applications from converging.
-			logging.L().Warn("application deployment planning failed", zap.String("application_id", appID))
+			logging.From(ctx).Warn("application deployment planning failed", zap.String("application_id", appID))
 			continue
 		}
-		reconciletrace.Trace("plan_result",
+		reconciletrace.Trace(ctx, "plan_result",
 			zap.String("application_id", appID),
 			zap.Strings("job_ids", result.JobIDs),
 			zap.Strings("created_job_ids", result.CreatedJobIDs))
@@ -1254,7 +1255,7 @@ func (s *Service) queue(serverID string) *serverQueue {
 
 func (s *Service) runQueue(q *serverQueue) {
 	for job := range q.jobs {
-		ctx := context.Background()
+		ctx := logging.Background("containers")
 		err := s.runQueueJob(ctx, job)
 		if job.result != nil {
 			job.result <- err
@@ -1267,7 +1268,7 @@ func (s *Service) runQueue(q *serverQueue) {
 func (s *Service) runQueueJob(ctx context.Context, job queueJob) (err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			logging.L().Error("container queue job panicked", zap.Any("panic", recovered), zap.Stack("stack"))
+			logging.From(ctx).Error("container queue job panicked", zap.Any("panic", recovered), zap.Stack("stack"))
 			err = fmt.Errorf("container queue job panicked: %v", recovered)
 		}
 	}()

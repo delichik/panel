@@ -3,13 +3,19 @@ import { useRouter } from 'vue-router';
 import { logsPath } from '@/api/activityReference';
 import Button from '@/components/ui/Button.vue';
 import { useI18n } from '@/i18n';
-const props = defineProps<{ operationId?: string; eventId?: string; executionId?: string; resourceType?: string; resourceId?: string }>();
+const props = defineProps<{
+  streamId?: string;
+  operationId?: string;
+  executionId?: string;
+  resourceType?: string;
+  resourceId?: string;
+}>();
 const router = useRouter();
 const { t } = useI18n();
 function open() {
   void router.push(logsPath({
+    streamId: props.streamId,
     operationId: props.operationId,
-    eventId: props.eventId,
     executionId: props.executionId,
     resourceType: props.resourceType,
     resourceId: props.resourceId,

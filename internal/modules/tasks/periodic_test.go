@@ -6,36 +6,11 @@ import (
 	"time"
 )
 
-func TestIntervalCollectorThrottlesAndAdvancesAfterWork(t *testing.T) {
-	runs := 0
-	collector := NewIntervalCollector(20*time.Millisecond, nil, func(context.Context) (CreateBatchInput, bool, error) {
-		runs++
-		return CreateBatchInput{Type: "periodic_test"}, true, nil
-	})
-	if _, shouldRun, err := collector(context.Background(), PeriodicTrigger{Type: "scheduler"}); err != nil || shouldRun {
-		t.Fatalf("first call should be throttled, shouldRun=%v err=%v", shouldRun, err)
-	}
-	time.Sleep(25 * time.Millisecond)
-	if _, shouldRun, err := collector(context.Background(), PeriodicTrigger{Type: "scheduler"}); err != nil || !shouldRun {
-		t.Fatalf("due call should run, shouldRun=%v err=%v", shouldRun, err)
-	}
-	if _, shouldRun, err := collector(context.Background(), PeriodicTrigger{Type: "scheduler"}); err != nil || shouldRun {
-		t.Fatalf("immediate next call should be throttled, shouldRun=%v err=%v", shouldRun, err)
-	}
-	if _, shouldRun, err := collector(context.Background(), PeriodicTrigger{Type: "manual"}); err != nil || !shouldRun {
-		t.Fatalf("manual trigger should bypass interval throttle, shouldRun=%v err=%v", shouldRun, err)
-	}
-	if runs != 2 {
-		t.Fatalf("collector ran %d times, want 2", runs)
-	}
-}
-
-func TestPeriodicRunnerCollectInputsFalseSkipsTaskRecord(t *testing.T) {
+func TestTriggerSchedulerOnceSkipsWhenCollectInputsFalse(t *testing.T) {
 	svc := newTestService(t)
 	def := Definition{
 		Type: "periodic_skip",
 		Periodic: &Periodic{
-			Interval: time.Minute,
 			CollectInputs: func(context.Context, PeriodicTrigger) (CreateBatchInput, bool, error) {
 				return CreateBatchInput{}, false, nil
 			},
@@ -46,9 +21,10 @@ func TestPeriodicRunnerCollectInputsFalseSkipsTaskRecord(t *testing.T) {
 		},
 	}
 	svc.MustRegister(def)
-	runner := NewPeriodicRunner(svc)
 
-	runner.run(context.Background(), def)
+	if _, created, err := TriggerSchedulerOnce(context.Background(), svc, def.Type); err != nil || created {
+		t.Fatalf("expected skip, created=%v err=%v", created, err)
+	}
 
 	result, err := svc.List(context.Background(), ListFilter{Types: []string{"periodic_skip"}, IncludeInternal: true})
 	if err != nil {
@@ -59,13 +35,12 @@ func TestPeriodicRunnerCollectInputsFalseSkipsTaskRecord(t *testing.T) {
 	}
 }
 
-func TestPeriodicRunnerRunsCollectorOnlyDefinition(t *testing.T) {
+func TestTriggerSchedulerOnceRunsCollectorOnlyDefinition(t *testing.T) {
 	svc := newTestService(t)
 	collectorRuns := 0
 	def := Definition{
 		Type: "periodic_collector_only",
 		Periodic: &Periodic{
-			Interval: time.Minute,
 			CollectInputs: func(context.Context, PeriodicTrigger) (CreateBatchInput, bool, error) {
 				collectorRuns++
 				return CreateBatchInput{}, false, nil
@@ -73,10 +48,10 @@ func TestPeriodicRunnerRunsCollectorOnlyDefinition(t *testing.T) {
 		},
 	}
 	svc.MustRegister(def)
-	runner := NewPeriodicRunner(svc)
 
-	runner.run(context.Background(), def)
-
+	if _, _, err := TriggerSchedulerOnce(context.Background(), svc, def.Type); err != nil {
+		t.Fatal(err)
+	}
 	if collectorRuns != 1 {
 		t.Fatalf("collector ran %d times, want 1", collectorRuns)
 	}
@@ -89,13 +64,12 @@ func TestPeriodicRunnerRunsCollectorOnlyDefinition(t *testing.T) {
 	}
 }
 
-func TestPeriodicRunnerCollectInputsCreatesSingleTaskInstance(t *testing.T) {
+func TestTriggerSchedulerOnceCreatesSingleTaskInstance(t *testing.T) {
 	svc := newTestService(t)
 	ran := make(chan struct{}, 1)
 	def := Definition{
 		Type: "periodic_run",
 		Periodic: &Periodic{
-			Interval: time.Minute,
 			CollectInputs: func(context.Context, PeriodicTrigger) (CreateBatchInput, bool, error) {
 				return CreateBatchInput{
 					Type:        "periodic_run",
@@ -120,9 +94,10 @@ func TestPeriodicRunnerCollectInputsCreatesSingleTaskInstance(t *testing.T) {
 		},
 	}
 	svc.MustRegister(def)
-	runner := NewPeriodicRunner(svc)
 
-	runner.run(context.Background(), def)
+	if _, created, err := TriggerSchedulerOnce(context.Background(), svc, def.Type); err != nil || !created {
+		t.Fatalf("expected created task, created=%v err=%v", created, err)
+	}
 
 	select {
 	case <-ran:

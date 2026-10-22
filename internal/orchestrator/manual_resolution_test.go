@@ -53,7 +53,7 @@ func TestManualResolutionFencesVersionAndConcurrentDeclarations(t *testing.T) {
 	if err := db.QueryRow(`SELECT count(*) FROM activity_events WHERE execution_id=? AND event_type='execution.verified'`, job.ExecutionID).Scan(&records); err != nil {
 		t.Fatal(err)
 	}
-	if records != 1 {
-		t.Fatalf("multiple manual outcomes: %d", records)
+	if records != 0 {
+		t.Fatalf("execution.verified must not write activity_events, got %d", records)
 	}
 }

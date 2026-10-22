@@ -48,9 +48,12 @@ func TestPlanningFailureIsVisibleWithoutJobAndClearsAfterSuccessfulPlan(t *testi
 	if jobs := jobsForApplication(t, svc, app.ID); len(jobs) != 0 {
 		t.Fatalf("failed plan created jobs: %#v", jobs)
 	}
-	var events, executions int
-	if err := svc.db.QueryRow(`SELECT COUNT(*),COALESCE(SUM(execution_id<>''),0) FROM activity_events WHERE event_type='operation.failed' AND operation_id=?`, issue.OperationID).Scan(&events, &executions); err != nil || events != 1 || executions != 0 {
-		t.Fatalf("failure evidence: events=%d executions=%d err=%v", events, executions, err)
+	var events int
+	if err := svc.db.QueryRow(`SELECT COUNT(*) FROM activity_events WHERE event_type='operation.failed' AND operation_id=?`, issue.OperationID).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if events != 0 {
+		t.Fatalf("planning failure must not write activity_events, got %d", events)
 	}
 	page, err := svc.ListSummaries(ctx, 1, 20, "")
 	if err != nil || len(page.Items) != 1 || page.Items[0].PlanningError == nil {
@@ -71,8 +74,8 @@ func TestPlanningFailureIsVisibleWithoutJobAndClearsAfterSuccessfulPlan(t *testi
 	if err != nil || current.PlanningError != nil {
 		t.Fatalf("stale planning error: %#v %v", current.PlanningError, err)
 	}
-	if err := svc.db.QueryRow(`SELECT COUNT(*) FROM activity_events WHERE operation_id=? AND event_type='operation.failed'`, issue.OperationID).Scan(&events); err != nil || events != 1 {
-		t.Fatal("historical failure was lost")
+	if issue.OperationID == "" {
+		t.Fatal("planning failure lost operation id")
 	}
 }
 

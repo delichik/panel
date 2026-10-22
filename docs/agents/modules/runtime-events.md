@@ -6,7 +6,7 @@
 ## 适用场景
 系统日志、任务历史、协调记录统一由 [activity.md](activity.md) 定义。
 
-生产查询使用 `/api/v1/activity`；界面使用 `/operations`、`/tasks`、`/logs`（旧 `/activity` 仅重定向）。原始事实位于 AppDB，只追加、不修改、不删除；LogDB 是可重建的查询索引。
+进程日志产品查询使用 `/api/v1/log-contexts`；界面使用 `/operations`、`/tasks`、`/logs`（旧 `/activity` 仅重定向）。Activity 原始事实仍位于 AppDB（只追加），LogDB 为可重建查询索引；产品 HTTP `/api/v1/activity/*` 已停注册。
 
 ## 前端入口
 

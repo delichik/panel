@@ -12,6 +12,11 @@ import (
 	id "panel/internal/platform/identity"
 )
 
+const (
+	imageRefreshInterval         = 30 * time.Minute
+	applicationReconcileInterval = 5 * time.Second
+)
+
 func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 	if taskSvc == nil {
 		return
@@ -22,8 +27,9 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 			AllowRetry: true,
 			Execute:    s.RunImageRefreshTask,
 			Periodic: &tasks.Periodic{
-				Interval:      30 * time.Minute,
-				CollectInputs: tasks.NewIntervalCollector(30*time.Minute, nil, s.CollectImageRefreshInputs),
+				CollectInputs: func(ctx context.Context, _ tasks.PeriodicTrigger) (tasks.CreateBatchInput, bool, error) {
+					return s.CollectImageRefreshInputs(ctx)
+				},
 			},
 		},
 		{
@@ -37,7 +43,6 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 			ConcurrencyPolicy: tasks.ConcurrencyCustomKey,
 			ConcurrencyKey:    applicationReconcileConcurrencyKey,
 			Periodic: &tasks.Periodic{
-				Interval:      5 * time.Second,
 				CollectInputs: s.CollectApplicationReconcileInputs,
 			},
 		},
@@ -60,6 +65,15 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 	} {
 		taskSvc.MustRegister(def)
 	}
+}
+
+// StartPeriodic starts module-owned scheduler loops for image refresh and application reconcile.
+func (s *Service) StartPeriodic(ctx context.Context, taskSvc *tasks.Service) {
+	if s == nil || taskSvc == nil {
+		return
+	}
+	tasks.StartSchedulerLoop(ctx, taskSvc, TaskImageRefresh, imageRefreshInterval, "containers")
+	tasks.StartSchedulerLoop(ctx, taskSvc, TaskApplicationReconcile, applicationReconcileInterval, "containers")
 }
 
 type ApplicationReconcileTrigger struct {

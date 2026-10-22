@@ -8,6 +8,8 @@ import (
 	id "panel/internal/platform/identity"
 )
 
+const certificateRenewInterval = 30 * time.Minute
+
 func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 	if taskSvc == nil {
 		return
@@ -32,13 +34,22 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 			ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed,
 			Execute:           s.RenewTask,
 			Periodic: &tasks.Periodic{
-				Interval:      30 * time.Minute,
-				CollectInputs: tasks.NewIntervalCollector(30*time.Minute, nil, s.CollectRenewInputs),
+				CollectInputs: func(ctx context.Context, _ tasks.PeriodicTrigger) (tasks.CreateBatchInput, bool, error) {
+					return s.CollectRenewInputs(ctx)
+				},
 			},
 		},
 	} {
 		taskSvc.MustRegister(def)
 	}
+}
+
+// StartPeriodic starts the module-owned certificate renew scheduler loop.
+func (s *Service) StartPeriodic(ctx context.Context, taskSvc *tasks.Service) {
+	if s == nil || taskSvc == nil {
+		return
+	}
+	tasks.StartSchedulerLoop(ctx, taskSvc, TaskTypeRenew, certificateRenewInterval, "certificates")
 }
 
 func (s *Service) CollectRenewInputs(ctx context.Context) (tasks.CreateBatchInput, bool, error) {

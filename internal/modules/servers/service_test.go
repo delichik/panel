@@ -26,6 +26,8 @@ import (
 	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/linux"
 	"panel/internal/platform/linux/remoteops"
+	"panel/internal/platform/logcontexts"
+	"panel/internal/platform/logging"
 	"panel/internal/platform/secrets"
 	"panel/internal/platform/ssh"
 )
@@ -562,13 +564,13 @@ func TestDeleteServerDisablesApplicationWithoutDeploymentTarget(t *testing.T) {
 	if !enabled["app_all"] {
 		t.Fatal("expected the all-mode application to stay enabled while another node exists")
 	}
-	// The system-initiated disable must be traceable in the activity log.
+	// System-initiated disable is recorded via unified logging, not activity_events.
 	var disabledEvents int
-	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM activity_events WHERE event_type='application.disabled' AND json_extract(data_json,'$.serverId')=? AND json_extract(data_json,'$.applicationId')='app_only'`, srv.ID).Scan(&disabledEvents); err != nil {
+	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM activity_events WHERE event_type='application.disabled'`).Scan(&disabledEvents); err != nil {
 		t.Fatal(err)
 	}
-	if disabledEvents != 1 {
-		t.Fatalf("expected one activity event for the disabled application, got %d", disabledEvents)
+	if disabledEvents != 0 {
+		t.Fatalf("application.disabled must not write activity_events, got %d", disabledEvents)
 	}
 }
 
@@ -658,6 +660,11 @@ func TestConnectivityUsesBoundedSudoTimeoutAndCompletes(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
+	if err := logging.Configure(cfg.DataRoot); err != nil {
+		t.Fatal(err)
+	}
+	logging.SetContextStore(logcontexts.NewStore(store.AppDB()))
+	t.Cleanup(func() { logging.SetContextStore(nil) })
 
 	credSvc := newServerTestCredentialService(t, store, cfg)
 	cred, err := credSvc.Create(context.Background(), credential.CreateRequest{Name: "c", Type: credential.TypePassword, Username: "du", Password: "secret"})
@@ -2422,6 +2429,11 @@ func testServerService(t *testing.T, exec sshx.RemoteExecutor) (*Service, *tasks
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
+	if err := logging.Configure(cfg.DataRoot); err != nil {
+		t.Fatal(err)
+	}
+	logging.SetContextStore(logcontexts.NewStore(store.AppDB()))
+	t.Cleanup(func() { logging.SetContextStore(nil) })
 	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}

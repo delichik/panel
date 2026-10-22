@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"reflect"
-	"strings"
 	"testing"
 
 	"panel/internal/platform/activitylog"
@@ -30,10 +29,6 @@ func TestAutomaticScanPreservesForcedJob(t *testing.T) {
 				t.Fatal(err)
 			}
 			in.Automatic, in.ForceNonce, in.IntentID = true, 0, "scan-0"
-			var beforeEvents int
-			if err := db.QueryRow(`SELECT count(*) FROM activity_events`).Scan(&beforeEvents); err != nil {
-				t.Fatal(err)
-			}
 			var original Job
 			for i := 0; i < 5; i++ {
 				in.IntentID = fmt.Sprintf("scan-%d", i)
@@ -50,14 +45,6 @@ func TestAutomaticScanPreservesForcedJob(t *testing.T) {
 					t.Fatal("repeated scan mutated active Job")
 				}
 			}
-			var afterEvents int
-			if err := db.QueryRow(`SELECT count(*) FROM activity_events`).Scan(&afterEvents); err != nil {
-				t.Fatal(err)
-			}
-			if afterEvents != beforeEvents {
-				t.Fatalf("automatic scans added %d events", afterEvents-beforeEvents)
-			}
-			// An explicit newer force intent must still be accepted and logged.
 			in.ForceNonce, in.IntentID = 43, "new-force"
 			forced, err := planner.Plan(ctx, in)
 			if err != nil {
@@ -66,11 +53,12 @@ func TestAutomaticScanPreservesForcedJob(t *testing.T) {
 			if forced.Job.ForceNonce != 43 {
 				t.Fatal("new force request was swallowed")
 			}
-			if err := db.QueryRow(`SELECT count(*) FROM activity_events WHERE operation_id='new-force'`).Scan(&afterEvents); err != nil {
+			var events int
+			if err := db.QueryRow(`SELECT count(*) FROM activity_events`).Scan(&events); err != nil {
 				t.Fatal(err)
 			}
-			if afterEvents == 0 {
-				t.Fatal("new force request was not recorded")
+			if events != 0 {
+				t.Fatalf("planner must not write activity_events, got %d", events)
 			}
 		})
 	}
@@ -87,13 +75,6 @@ func TestPlannerSupersessionKeepsOriginalRequestSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var original string
-	if err := db.QueryRow(`SELECT resources_json FROM activity_events WHERE operation_id='intent-1' AND event_type='operation.requested'`).Scan(&original); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(original, "original name") {
-		t.Fatalf("missing name snapshot: %s", original)
-	}
 	if _, err := db.Exec(`UPDATE applications SET name='renamed' WHERE id='app'`); err != nil {
 		t.Fatal(err)
 	}
@@ -104,26 +85,15 @@ func TestPlannerSupersessionKeepsOriginalRequestSnapshot(t *testing.T) {
 	if first.Job.ID != second.Job.ID || !second.Merged {
 		t.Fatal("test must exercise mutable control job merge")
 	}
-	var retained string
-	var relations int
-	if err := db.QueryRow(`SELECT resources_json FROM activity_events WHERE operation_id='intent-1' AND event_type='operation.requested'`).Scan(&retained); err != nil {
+	if second.Job.IntentID != "intent-2" {
+		t.Fatalf("merged job intent = %s, want intent-2", second.Job.IntentID)
+	}
+	var events int
+	if err := db.QueryRow(`SELECT count(*) FROM activity_events`).Scan(&events); err != nil {
 		t.Fatal(err)
 	}
-	if original != retained {
-		t.Fatal("historical resource snapshot changed")
-	}
-	if err := db.QueryRow(`SELECT count(*) FROM activity_events WHERE operation_id='intent-1' AND event_type='intent.superseded' AND json_extract(data_json,'$.relatedOperationId')='intent-2'`).Scan(&relations); err != nil {
-		t.Fatal(err)
-	}
-	if relations != 1 {
-		t.Fatalf("missing immutable supersession: %d", relations)
-	}
-	var initiator string
-	if err := db.QueryRow(`SELECT actor_id FROM activity_events WHERE operation_id='intent-2' AND event_type='operation.requested'`).Scan(&initiator); err != nil {
-		t.Fatal(err)
-	}
-	if initiator != "admin" {
-		t.Fatalf("request lost authenticated actor: %q", initiator)
+	if events != 0 {
+		t.Fatalf("planner must not write activity_events, got %d", events)
 	}
 }
 
@@ -151,12 +121,9 @@ func TestEquivalentIntentReceivesSharedExecutionResult(t *testing.T) {
 	if _, err := store.Succeed(ctx, job, ReconcileResponse{ObservedState: "stopped"}); err != nil {
 		t.Fatal(err)
 	}
-	var n int
-	if err := db.QueryRow(`SELECT count(*) FROM activity_events WHERE operation_id='first' AND event_type='execution.shared_result' AND json_extract(data_json,'$.result')='succeeded'`).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	if n != 1 {
-		t.Fatalf("shared intent must reach a durable result, got %d", n)
+	got, err := store.GetJob(ctx, planned.Job.ID)
+	if err != nil || got.State != JobSucceeded {
+		t.Fatalf("shared execution result: %#v %v", got, err)
 	}
 }
 

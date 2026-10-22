@@ -10,6 +10,11 @@ import (
 	id "panel/internal/platform/identity"
 )
 
+const (
+	serverAgentCheckInterval  = 5 * time.Minute
+	serverInfoCollectInterval = time.Hour
+)
+
 func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 	if taskSvc == nil {
 		return
@@ -25,7 +30,6 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 			ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed,
 			Execute:           s.RunAgentCheckTask,
 			Periodic: &tasks.Periodic{
-				Interval:      5 * time.Minute,
 				CollectInputs: s.CollectAgentCheckInputs,
 			},
 		},
@@ -38,8 +42,9 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 			ConcurrencyKey:    serverInfoConcurrencyKey,
 			Execute:           s.RunServerInfoTask,
 			Periodic: &tasks.Periodic{
-				Interval:      time.Minute,
-				CollectInputs: tasks.NewIntervalCollector(time.Hour, nil, s.CollectServerInfoInputs),
+				CollectInputs: func(ctx context.Context, _ tasks.PeriodicTrigger) (tasks.CreateBatchInput, bool, error) {
+					return s.CollectServerInfoInputs(ctx)
+				},
 			},
 		},
 		{Type: fail2banApplyTaskType},
@@ -65,6 +70,15 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 		}
 		taskSvc.MustRegister(def)
 	}
+}
+
+// StartPeriodic starts module-owned scheduler loops for agent check and info collect.
+func (s *Service) StartPeriodic(ctx context.Context, taskSvc *tasks.Service) {
+	if s == nil || taskSvc == nil {
+		return
+	}
+	tasks.StartSchedulerLoop(ctx, taskSvc, "server_agent_check", serverAgentCheckInterval, "servers")
+	tasks.StartSchedulerLoop(ctx, taskSvc, serverInfoTaskType, serverInfoCollectInterval, "servers")
 }
 
 func (s *Service) CollectServerInfoInputs(ctx context.Context) (tasks.CreateBatchInput, bool, error) {

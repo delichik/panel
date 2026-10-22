@@ -22,12 +22,11 @@ func (fakeTaskRuntimeProvider) TaskRuntime() tasks.RuntimeStats {
 		PeriodicTypes:     3,
 		RunningExecutions: 2,
 		Definitions: []tasks.RuntimeDefinitionStats{{
-			Type:                    "metrics_collect",
-			Hidden:                  true,
-			Executable:              true,
-			Periodic:                true,
-			ConcurrencyPolicy:       tasks.ConcurrencyParallelAllowed,
-			PeriodicIntervalSeconds: 5,
+			Type:              "metrics_collect",
+			Hidden:            true,
+			Executable:        true,
+			Periodic:          true,
+			ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed,
 		}},
 	}
 }

@@ -1,6 +1,8 @@
 package orchestrator
 
 import (
+	"context"
+
 	"panel/internal/platform/reconciletrace"
 
 	"go.uber.org/zap"
@@ -10,7 +12,7 @@ import (
 // 默认关闭（reconciletrace.SetEnabled(false) 时零开销返回），仅在运行时
 // 设置 reconcile.trace 开启后才输出，用于定位 claim、RuntimeReconcile、
 // 观测写回、Job 终态与租约恢复等控制面事件。
-func traceJobEvent(event string, job Job, extra ...zap.Field) {
+func traceJobEvent(ctx context.Context, event string, job Job, extra ...zap.Field) {
 	fields := []zap.Field{
 		zap.String("job_id", job.ID),
 		zap.String("application_id", job.ApplicationID),
@@ -22,5 +24,5 @@ func traceJobEvent(event string, job Job, extra ...zap.Field) {
 		zap.String("execution_id", job.ExecutionID),
 	}
 	fields = append(fields, extra...)
-	reconciletrace.Trace(event, fields...)
+	reconciletrace.Trace(ctx, event, fields...)
 }

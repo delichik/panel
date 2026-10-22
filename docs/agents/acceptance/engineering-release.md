@@ -11,6 +11,19 @@
 - `ENG-TEST-005`：修复回归必须增加最小稳定测试，覆盖触发条件和错误结果；不得只断言内部函数被调用。
 - `ENG-TEST-006`：外部网络、SSH、Docker 或时钟相关测试必须使用可控替身或明确的集成 harness，单元测试不得依赖开发者机器状态。
 
+## 1.1 Panel 进程日志
+
+- `ENG-LOG-001`：Panel 进程（`cmd/panel` 与 `internal/**` 中由其加载的路径）的全部诊断打印必须经 `internal/platform/logging` 统一工具包；禁止 `log.Print*`、裸 `zap.L()` 或已移除的无 context `logging.L()`。
+- `ENG-LOG-002`：每条进程日志必须带可追溯 context：必填 `streamId` 与 `module`（分类），以及等级；JSON 字段至少含 `ts`、`level`、`module`、`streamId`、`msg`。缺 stream/module 的调用不得写入业务 sink（discard + 内部计数）。
+- `ENG-LOG-003`：日志流由入口创建并向下传递：HTTP 中间件每请求一流；worker/模块周期 loop 每 tick 一流；`Manager.Run`/启动关闭各自建流；子调用只 `From(ctx)` 或 `With` 改 module/关联字段，不得在叶子发明无来源 stream。
+- `ENG-LOG-004`：输出目的地由代码内 module×level 路由表决定（`file`/`stdout`/`stderr`/`discard`），不是运行时 UI 配置；默认路由为 JSONL 文件 sink + stdout 镜像。全局 `log.level` 仍只控制最低等级门槛。产品/过程事实与进程诊断统一经本工具包写入 JSONL + `log_contexts`；不得再向 `activity_events` 追加新产品事实。控制面 `activity_*` 触发器安装为 DROP 空操作；`activitylog.CheckAdmission` 不再因 activity 容量阻断变更。
+- `ENG-LOG-005`：验证点覆盖 logging 单测（中间件 stream、无效 context discard、字段存在、JSONL 写入）、以及后端编译下无残留 `logging.L()`/`log.Printf` 于 Panel 路径。
+- `ENG-LOG-006`：启动装配在打开 AppDB 后必须调用 `logging.Configure(dataRoot)`（创建 `<dataRoot>/logs`）并 `logging.SetContextStore` 注入 AppDB 实现；文件 sink 按 UTC 日写入 `panel-YYYYMMDD.jsonl`（一行一个 JSON 对象）。
+- `ENG-LOG-007`：有效 context 的每次日志写入必须 upsert AppDB `log_contexts`（按 `stream_id`），并可通过 `logcontexts.ReadLines` 按 `streamId` 回读近期 JSONL；`logging.From(ctx)` API 保持不变。
+- `ENG-LOG-008`：产品 HTTP 读接口为认证后的 `/api/v1/log-contexts`（列表，查询 `origin`/`operationId`/`executionId`/`module`/`from`/`to`/`hadError`/`limit`/`cursor`）、`/api/v1/log-contexts/{streamId}`、`/api/v1/log-contexts/{streamId}/lines`（查询 `level`/`limit`/`after`）与可选 `/api/v1/log-contexts/export`（NDJSON）。DTO 使用 camelCase：`streamId`/`module`/`origin`/`operationId`/`executionId`/`requestId`/`title`/`summary`/`result`/`hadError`/`startedAt`/`updatedAt`/`finishedAt`；行页为 `{ items, nextCursor, hasMore }`，行对象至少含 `ts`/`level`/`module`/`streamId`/`msg`。实现位于 `internal/modules/logcontexts`，底层复用 `platform/logcontexts` 与 `<dataRoot>/logs`。原 `/api/v1/activity/*` 产品读路由不再注册；新产品/过程事实不得写入 `activity_events`。验证：handler 单测（temp DB + temp log dir）与路由清单哈希。
+- `LOG-CTX-001`：AppDB 仅允许一张业务日志关联表 `log_contexts`（按 `stream_id`）；日志正文只在 JSONL 文件，禁止再引入 evidence/projection/FTS 作为日志真源。
+- `LOG-CTX-002`：任务输出 `AppendLog` 写入统一 JSONL，streamId 稳定为 `task-log:<taskId>`；`GET` 任务日志 API 按该 streamId 读文件行，不得再查 `activity_events`。
+
 ## 2. 生成代码与 Agent 合同
 
 - `ENG-GEN-001`：Panel、panel-init 和所有架构的 panel-agent 构建前必须生成并校验同一 gRPC contract hash。

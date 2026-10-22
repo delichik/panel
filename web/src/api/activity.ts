@@ -1,5 +1,13 @@
-import { apiClient, fetchBlob, type ApiRequestOptions } from './client';
-import type { ActivityContext, ActivityEvent, ActivityOperation, ActivityOperationDetail, ActivityPage, ActivityQuery, ActivitySummary } from '@/types/activity';
+/**
+ * @deprecated Product HTTP `/api/v1/activity/*` is no longer registered.
+ * Use `logContextsApi` from `@/api/logContexts` for process / intent log streams.
+ * `ActivityReceipt` types remain in `@/types/activity` for command acceptances.
+ */
+import type { ActivityQuery } from '@/types/activity';
+
+const retired = (name: string): never => {
+  throw new Error(`activityApi.${name} is retired; use logContextsApi from @/api/logContexts`);
+};
 
 export function activityQuery(params: ActivityQuery = {}) {
   const query = new URLSearchParams();
@@ -8,17 +16,15 @@ export function activityQuery(params: ActivityQuery = {}) {
   }
   return query.size ? `?${query}` : '';
 }
-const id = encodeURIComponent;
+
 export const activityApi = {
-  events: (params: ActivityQuery = {}, options?: ApiRequestOptions) => apiClient.get<ActivityPage<ActivityEvent>>(`/activity/events${activityQuery(params)}`, options),
-  event: (eventId: string, options?: ApiRequestOptions) => apiClient.get<ActivityEvent>(`/activity/events/${id(eventId)}`, options),
-  operations: (params: ActivityQuery = {}) => apiClient.get<ActivityPage<ActivityOperation>>(`/activity/operations${activityQuery(params)}`),
-  /** Product diagnose UI defaults to detail=summary (no events/executions/steps tree). Pass detail:'full' only for tooling. */
-  operation: (operationId: string, params: ActivityQuery = {}) => apiClient.get<ActivityOperationDetail>(`/activity/operations/${id(operationId)}${activityQuery({ ...params, detail: params.detail === 'full' ? 'full' : 'summary' })}`),
-  export: (params: ActivityQuery = {}) => fetchBlob(`/api/v1/activity/export${activityQuery(params)}`, { fallbackFilename: 'activity.jsonl' }),
-  /** Non-product helpers retained for tooling/tests; product pages must not call these. */
-  context: (eventId: string, params: ActivityQuery = {}) => apiClient.get<ActivityContext>(`/activity/events/${id(eventId)}/context${activityQuery(params)}`),
-  tail: (params: ActivityQuery = {}) => apiClient.get<ActivityPage<ActivityEvent>>(`/activity/tail${activityQuery(params)}`),
-  summary: (params: ActivityQuery = {}) => apiClient.get<ActivitySummary>(`/activity/summary${activityQuery(params)}`),
-  evidence: (evidenceId: string) => fetchBlob(`/api/v1/activity/evidence/${id(evidenceId)}`, { fallbackFilename: 'evidence.bin' }),
+  events: () => retired('events'),
+  event: () => retired('event'),
+  operations: () => retired('operations'),
+  operation: () => retired('operation'),
+  export: () => retired('export'),
+  context: () => retired('context'),
+  tail: () => retired('tail'),
+  summary: () => retired('summary'),
+  evidence: () => retired('evidence'),
 };

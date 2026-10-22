@@ -70,7 +70,8 @@ type Definition struct {
 }
 
 type Periodic struct {
-	Interval      time.Duration
+	// CollectInputs decides whether a periodic/manual trigger should create tasks.
+	// Cadence is owned by each module's SchedulerLoop, not by this struct.
 	CollectInputs func(context.Context, PeriodicTrigger) (CreateBatchInput, bool, error)
 }
 

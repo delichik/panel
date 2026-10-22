@@ -20,6 +20,8 @@ import (
 	"panel/internal/modules/tasks"
 	"panel/internal/platform/config"
 	storage "panel/internal/platform/database"
+	"panel/internal/platform/logcontexts"
+	"panel/internal/platform/logging"
 	"panel/internal/platform/secrets"
 )
 
@@ -382,6 +384,11 @@ func newTestService(t *testing.T) (*Service, *fakeProvider, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := logging.Configure(cfg.DataRoot); err != nil {
+		t.Fatal(err)
+	}
+	logging.SetContextStore(logcontexts.NewStore(store.AppDB()))
+	t.Cleanup(func() { logging.SetContextStore(nil) })
 	if _, err := store.AppDB().Exec(`INSERT INTO dns_domains(id,name,provider,provider_config_json,provider_secret_ciphertext,created_at,updated_at) VALUES('dnsdom_1','example.com','cloudflare','{}','','now','now')`); err != nil {
 		t.Fatal(err)
 	}

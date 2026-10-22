@@ -8,6 +8,8 @@ import (
 	"panel/internal/agent/executionevents"
 	control "panel/internal/orchestrator"
 	"panel/internal/platform/activitylog"
+	"panel/internal/platform/logcontexts"
+	"panel/internal/platform/logging"
 )
 
 type manualTransportClient struct {
@@ -54,6 +56,8 @@ func TestManualJobResolutionPreservesHumanEvidenceWithoutFabricatedObservation(t
 	}
 	client := &manualTransportClient{activityTransportClient: &activityTransportClient{fakeRuntimeClient: base, spool: spool, db: svc.db, serverID: job.ServerID}}
 	svc.runtimeClient = client
+	logging.SetContextStore(logcontexts.NewStore(svc.db))
+	t.Cleanup(func() { logging.SetContextStore(nil) })
 	if _, err := svc.ResolveExecutionManually(ctx, job.ExecutionID, "succeeded", "checked remote process"); err == nil {
 		t.Fatal("unauthenticated declaration accepted")
 	}
@@ -78,17 +82,12 @@ func TestManualJobResolutionPreservesHumanEvidenceWithoutFabricatedObservation(t
 	if observedState != "unknown" {
 		t.Fatalf("manual declaration fabricated runtime observation: %s", observedState)
 	}
-	var manual, unknown, closed int
-	for _, item := range []struct {
-		event string
-		count *int
-	}{{"execution.verified", &manual}, {"uncertainty.detected", &unknown}, {"stream.closed", &closed}} {
-		if err := svc.db.QueryRow(`SELECT count(*) FROM activity_events WHERE execution_id=? AND event_type=?`, job.ExecutionID, item.event).Scan(item.count); err != nil {
-			t.Fatal(err)
-		}
+	var activityRows int
+	if err := svc.db.QueryRow(`SELECT count(*) FROM activity_events WHERE execution_id=?`, job.ExecutionID).Scan(&activityRows); err != nil {
+		t.Fatal(err)
 	}
-	if manual != 1 || unknown < 1 || closed != 1 {
-		t.Fatalf("evidence not retained: manual=%d unknown=%d closed=%d", manual, unknown, closed)
+	if activityRows != 0 {
+		t.Fatalf("manual resolution must not write activity_events, got %d", activityRows)
 	}
 	if _, err := svc.ResolveExecutionManually(userCtx, job.ExecutionID, "failed", "different declaration"); err == nil {
 		t.Fatal("terminal declaration was overwritten")

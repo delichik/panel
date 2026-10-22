@@ -489,12 +489,17 @@ func (r *LocalRuntime) ContainerRestart(ctx context.Context, id string) error {
 }
 
 func (r *LocalRuntime) ContainerDelete(ctx context.Context, id string) error {
+	if _, ok := logging.Lookup(ctx); ok {
+		ctx = logging.With(ctx, logging.Context{Module: "agent"})
+	} else {
+		ctx = logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "agent"})
+	}
 	// 记录删除目标：先 inspect 拿到实际容器 ID 与归属（是否面板托管），
 	// NotFound 视为已删除。删除是协调收敛的关键步骤，日志里必须能看到
 	// "删的是哪个容器、结果如何"。
 	if inspect, err := r.client.inspectContainer(ctx, id); err == nil {
 		labels := inspect.Config.Labels
-		logging.L().Debug("removing container",
+		logging.From(ctx).Debug("removing container",
 			zap.String("container_name", id),
 			zap.String("container_id", inspect.ID),
 			zap.String("status", inspect.State.Status),
@@ -504,18 +509,18 @@ func (r *LocalRuntime) ContainerDelete(ctx context.Context, id string) error {
 			zap.String("generation", labels["panel.application.generation"]),
 			zap.String("spec_hash", labels["panel.application.spec.hash"]))
 	} else if !isDockerNotFound(err) {
-		logging.L().Debug("container inspect before delete failed", zap.String("container_name", id), zap.Error(err))
+		logging.From(ctx).Debug("container inspect before delete failed", zap.String("container_name", id), zap.Error(err))
 	}
 	err := r.client.removeContainer(ctx, id, true)
 	if isDockerNotFound(err) {
-		logging.L().Debug("container delete skipped: not found", zap.String("container_name", id))
+		logging.From(ctx).Debug("container delete skipped: not found", zap.String("container_name", id))
 		return nil
 	}
 	if err != nil {
-		logging.L().Error("container delete failed", zap.String("container_name", id), zap.Error(err))
+		logging.From(ctx).Error("container delete failed", zap.String("container_name", id), zap.Error(err))
 		return err
 	}
-	logging.L().Info("container deleted", zap.String("container_name", id))
+	logging.From(ctx).Info("container deleted", zap.String("container_name", id))
 	return nil
 }
 
@@ -590,6 +595,11 @@ func (r *LocalRuntime) Reload(ctx context.Context, req agentcontract.RuntimeRelo
 }
 
 func (r *LocalRuntime) CreateContainer(ctx context.Context, spec appruntime.Spec) (string, error) {
+	if _, ok := logging.Lookup(ctx); ok {
+		ctx = logging.With(ctx, logging.Context{Module: "agent"})
+	} else {
+		ctx = logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "agent"})
+	}
 	if r == nil || r.client == nil {
 		return "", errors.New("runtime is not configured")
 	}
@@ -631,7 +641,7 @@ func (r *LocalRuntime) CreateContainer(ctx context.Context, spec appruntime.Spec
 	if err != nil {
 		return "", err
 	}
-	logging.L().Info("container created",
+	logging.From(ctx).Info("container created",
 		zap.String("container_name", spec.ContainerName),
 		zap.String("container_id", id),
 		zap.String("instance_id", spec.InstanceID),
@@ -926,7 +936,7 @@ func (r *LocalRuntime) logContainerConflict(containerName string, conflictErr er
 				zap.String("occupant_spec_hash", labels["panel.application.spec.hash"]))
 		}
 	}
-	logging.L().Warn("container name conflict; removing occupant before retry", fields...)
+	logging.From(logging.Background("agent")).Warn("container name conflict; removing occupant before retry", fields...)
 }
 
 // conflictingContainerID 从 Docker 的 create 冲突错误文本中提取占用容器的

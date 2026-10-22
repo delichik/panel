@@ -223,10 +223,10 @@ func (a *ExportApp) markDownloaded(exportID string) {
 	if err := os.WriteFile(tmp, []byte(now.Format(time.RFC3339Nano)), 0o600); err == nil {
 		if err := os.Rename(tmp, path); err != nil {
 			_ = os.Remove(tmp)
-			logging.L().Warn("failed to persist backup download marker", zap.Error(err))
+			logging.From(logging.Background("backups")).Warn("failed to persist backup download marker", zap.Error(err))
 		}
 	} else {
-		logging.L().Warn("failed to persist backup download marker", zap.Error(err))
+		logging.From(logging.Background("backups")).Warn("failed to persist backup download marker", zap.Error(err))
 	}
 }
 

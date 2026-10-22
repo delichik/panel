@@ -9,45 +9,70 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	agentcontract "panel/internal/agent/contract"
 	controlplane "panel/internal/orchestrator"
 	"panel/internal/platform/activitylog"
+	"panel/internal/platform/logcontexts"
+	"panel/internal/platform/logging"
 )
 
 // collectExecutionEvents returns a nonzero final source sequence only after the
-// complete closed stream has committed. Source identity is bound to the trusted
-// server/execution, never accepted as an arbitrary producer from the Agent.
+// complete closed stream has committed to the JSONL file + log_contexts.
+// Source identity is bound to the trusted server/execution.
 func (r *serviceRuntimeReconciler) collectExecutionEvents(ctx context.Context, endpoint string, req controlplane.ReconcileRequestRPC) (int64, error) {
 	client, ok := r.service.runtimeClient.(agentcontract.ExecutionEventsClient)
 	if !ok {
 		return 0, errors.New("agent does not support durable execution events")
 	}
-	sourceID := "agent:" + req.ServerID
+	ctxStore := logcontexts.NewStore(r.service.db)
 	var after int64
 	var epoch, stream string
-	err := r.service.db.QueryRowContext(ctx, `SELECT source_seq,source_epoch,source_stream_id FROM activity_events WHERE source_id=? AND execution_id=? ORDER BY source_seq DESC LIMIT 1`, sourceID, req.ExecutionID).Scan(&after, &epoch, &stream)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return 0, err
-	}
-	resources := []activitylog.Resource{{Type: "application", ID: req.ApplicationID, Role: "subject", RevisionID: req.DesiredRevisionID, Generation: req.DesiredGeneration}, {Type: "server", ID: req.ServerID, Role: "target"}}
-	// Preserve the execution's original names/initiator. Do not look up current
-	// resource records while ingesting late events after rename/deletion.
-	initiator := activitylog.Actor{}
-	action := req.Action
-	trigger := ""
-	operationID, runID := req.OperationID, req.RunID
-	var resourceJSON, initiatorJSON string
-	err = r.service.db.QueryRowContext(ctx, `SELECT resources_json,initiator_json,action,trigger,operation_id,run_id FROM activity_events WHERE execution_id=? ORDER BY seq LIMIT 1`, req.ExecutionID).Scan(&resourceJSON, &initiatorJSON, &action, &trigger, &operationID, &runID)
-	if err == nil {
-		if err = json.Unmarshal([]byte(resourceJSON), &resources); err != nil {
-			return 0, err
-		}
-		if err = json.Unmarshal([]byte(initiatorJSON), &initiator); err != nil {
-			return 0, err
+	if rec, err := ctxStore.Get(ctx, req.ExecutionID); err == nil {
+		after = rec.LastSourceSeq
+		if rec.FinishedAt != "" && after > 0 {
+			return after, nil
 		}
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return 0, err
 	}
+	resources := []activitylog.Resource{{Type: "application", ID: req.ApplicationID, Role: "subject", RevisionID: req.DesiredRevisionID, Generation: req.DesiredGeneration}, {Type: "server", ID: req.ServerID, Role: "target"}}
+	initiator := activitylog.Actor{}
+	action := req.Action
+	trigger := ""
+	operationID, runID := req.OperationID, req.RunID
+	if existing, err := ctxStore.Get(ctx, req.ExecutionID); err == nil {
+		if existing.OperationID != "" {
+			operationID = existing.OperationID
+		}
+		if existing.RequestID != "" {
+			runID = existing.RequestID
+		}
+		if existing.ActorJSON != "" {
+			_ = json.Unmarshal([]byte(existing.ActorJSON), &initiator)
+		}
+		if existing.ResourcesJSON != "" {
+			_ = json.Unmarshal([]byte(existing.ResourcesJSON), &resources)
+		}
+		if existing.Title != "" {
+			action = firstNonEmpty(action, existing.Title)
+		}
+	}
+	logCtx := logging.Ensure(ctx, logging.Context{
+		StreamID:    req.ExecutionID,
+		Module:      "agent-evidence",
+		OperationID: operationID,
+		ExecutionID: req.ExecutionID,
+		RequestID:   runID,
+	})
+	_ = logging.RecordContext(logCtx, logging.ContextMeta{
+		Origin:        logcontexts.OriginProcess,
+		Title:         action,
+		Summary:       "execution evidence",
+		ActorJSON:     logging.MarshalActorJSON(map[string]string{"kind": initiator.Kind, "id": initiator.ID, "name": initiator.Name}),
+		ResourcesJSON: logging.MarshalResourcesJSON(resources),
+	})
 	for {
 		page, err := client.ReadExecutionEvents(ctx, endpoint, agentcontract.ExecutionEventsRequest{ExecutionID: req.ExecutionID, SourceEpoch: epoch, SourceStreamID: stream, AfterSourceSeq: after, Limit: 100})
 		if err != nil {
@@ -61,7 +86,7 @@ func (r *serviceRuntimeReconciler) collectExecutionEvents(ctx context.Context, e
 			return 0, errors.New("invalid execution stream watermark")
 		}
 		if page.AckedThroughSeq > after {
-			if err := r.recordExecutionGap(ctx, req, operationID, runID, resources, page.SourceEpoch, after+1, page.AckedThroughSeq); err != nil {
+			if err := r.recordExecutionGap(logCtx, req, operationID, resources, page.SourceEpoch, after+1, page.AckedThroughSeq); err != nil {
 				return 0, err
 			}
 			return 0, fmt.Errorf("execution evidence gap: source acknowledged through %d, panel has %d", page.AckedThroughSeq, after)
@@ -69,20 +94,27 @@ func (r *serviceRuntimeReconciler) collectExecutionEvents(ctx context.Context, e
 		if len(page.Events) > 100 {
 			return 0, errors.New("agent event batch exceeds requested limit")
 		}
-		batch := make([]activitylog.EventInput, 0, len(page.Events))
+		closed := false
 		for _, remote := range page.Events {
-			if remote.EventID == "" || remote.ExecutionID != req.ExecutionID || remote.OperationID != operationID || remote.RunID != runID || remote.SourceSeq != after+int64(len(batch))+1 || remote.SourceSeq > page.HeadSeq || remote.OccurredAt.IsZero() {
-				return 0, errors.New("execution event identity or sequence mismatch")
+			wantSeq := after + 1
+			switch {
+			case remote.EventID == "":
+				return 0, fmt.Errorf("execution event identity or sequence mismatch: empty event id (wantSeq=%d)", wantSeq)
+			case remote.ExecutionID != req.ExecutionID:
+				return 0, fmt.Errorf("execution event identity or sequence mismatch: executionId got %q want %q", remote.ExecutionID, req.ExecutionID)
+			case remote.OperationID != operationID:
+				return 0, fmt.Errorf("execution event identity or sequence mismatch: operationId got %q want %q", remote.OperationID, operationID)
+			case remote.RunID != runID:
+				return 0, fmt.Errorf("execution event identity or sequence mismatch: runId got %q want %q", remote.RunID, runID)
+			case remote.SourceSeq != wantSeq:
+				return 0, fmt.Errorf("execution event identity or sequence mismatch: sourceSeq got %d want %d", remote.SourceSeq, wantSeq)
+			case remote.SourceSeq > page.HeadSeq:
+				return 0, fmt.Errorf("execution event identity or sequence mismatch: sourceSeq %d > head %d", remote.SourceSeq, page.HeadSeq)
+			case remote.OccurredAt.IsZero():
+				return 0, fmt.Errorf("execution event identity or sequence mismatch: zero occurredAt at sourceSeq=%d", remote.SourceSeq)
 			}
-			kind := "lifecycle"
 			switch remote.EventType {
-			case "execution.started", "execution.finished", "step.started", "step.finished", "stream.closed":
-			case "output.chunk":
-				kind = "output"
-			case "uncertainty.detected":
-				kind = "integrity"
-			case "verification.finished", "execution.manually_verified":
-				kind = "observation"
+			case "execution.started", "execution.finished", "step.started", "step.finished", "stream.closed", "output.chunk", "uncertainty.detected", "verification.finished", "execution.manually_verified":
 			default:
 				return 0, fmt.Errorf("unsupported execution event type %q", remote.EventType)
 			}
@@ -103,38 +135,49 @@ func (r *serviceRuntimeReconciler) collectExecutionEvents(ctx context.Context, e
 				if !valid || end != float64(remote.SourceSeq) || page.EndSeq != remote.SourceSeq {
 					return 0, errors.New("stream closure does not match final source sequence")
 				}
+				closed = true
 			}
-			data["step"] = remote.StepName
-			data["status"] = remote.Status
-			data["jobId"] = req.JobID
-			// Retain the source's own persistent identity as evidence; SourceID remains
-			// the authenticated Panel server identity for authorization and indexing.
-			data["agentSourceId"] = page.SourceID
-			level := "info"
-			if remote.Status == "failed" || remote.Stream == "stderr" {
-				level = "error"
-			} else if remote.Status == "unknown" {
-				level = "warning"
+			fields := []zap.Field{
+				zap.String("eventType", remote.EventType),
+				zap.String("eventId", remote.EventID),
+				zap.Int64("sourceSeq", remote.SourceSeq),
+				zap.String("sourceEpoch", epoch),
+				zap.String("stream", remote.Stream),
+				zap.String("stepId", remote.StepID),
+				zap.String("stepName", remote.StepName),
+				zap.String("status", remote.Status),
+				zap.String("jobId", req.JobID),
+				zap.String("agentSourceId", page.SourceID),
+				zap.String("action", action),
+				zap.String("trigger", trigger),
+				zap.Time("occurredAt", remote.OccurredAt),
 			}
-			batch = append(batch, activitylog.EventInput{EventID: sourceID + ":" + remote.EventID, EventType: remote.EventType, EventVersion: 1, Kind: kind, Level: level, Domain: "application", Action: action, OperationID: operationID, RunID: runID, ExecutionID: req.ExecutionID, StepID: remote.StepID, SourceID: sourceID, SourceEpoch: epoch, SourceStreamID: stream, SourceSeq: remote.SourceSeq, OccurredAt: remote.OccurredAt, Actor: activitylog.Actor{Kind: "agent", ID: req.ServerID}, Initiator: initiator, Trigger: trigger, Resources: resources, Stream: remote.Stream, Text: remote.Text, Data: data})
-		}
-		if len(batch) > 0 {
-			if _, err = activitylog.Append(ctx, r.service.db, batch); err != nil {
+			msg := remote.Text
+			if msg == "" {
+				msg = remote.EventType
+			}
+			logger := logging.From(logCtx)
+			switch {
+			case remote.Status == "failed" || remote.Stream == "stderr":
+				logger.Error(msg, fields...)
+			case remote.Status == "unknown" || remote.EventType == "uncertainty.detected":
+				logger.Warn(msg, fields...)
+			default:
+				logger.Info(msg, fields...)
+			}
+			if err = ctxStore.SetLastSourceSeq(logCtx, req.ExecutionID, remote.SourceSeq); err != nil {
 				return 0, err
 			}
-			after = page.Events[len(page.Events)-1].SourceSeq
+			after = remote.SourceSeq
 		}
 		if after > 0 {
-			if err = r.resolveExecutionGaps(ctx, req, operationID, runID, resources, epoch, after); err != nil {
-				return 0, err
-			}
 			if err = client.AckExecutionEvents(ctx, endpoint, agentcontract.ExecutionEventsAck{ExecutionID: req.ExecutionID, SourceID: page.SourceID, SourceEpoch: epoch, SourceStreamID: stream, ThroughSourceSeq: after}); err != nil {
 				return 0, err
 			}
 		}
 		if after < page.HeadSeq {
-			if len(batch) == 0 || !page.HasMore {
-				if err := r.recordExecutionGap(ctx, req, operationID, runID, resources, epoch, after+1, page.HeadSeq); err != nil {
+			if len(page.Events) == 0 || !page.HasMore {
+				if err := r.recordExecutionGap(logCtx, req, operationID, resources, epoch, after+1, page.HeadSeq); err != nil {
 					return 0, err
 				}
 				return 0, errors.New("agent omitted execution events before its head sequence")
@@ -145,20 +188,22 @@ func (r *serviceRuntimeReconciler) collectExecutionEvents(ctx context.Context, e
 			return 0, errors.New("agent requested another page beyond its head sequence")
 		}
 		if page.EndSeq > 0 {
-			// A later no-op poll may see only ACKed rows; verify the immutable closure
-			// already exists rather than trusting a claimed endSeq from the transport.
-			var closed int
-			if err = r.service.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM activity_events WHERE source_id=? AND source_epoch=? AND source_stream_id=? AND source_seq=? AND event_type='stream.closed'`, sourceID, epoch, stream, page.EndSeq).Scan(&closed); err != nil {
+			if !closed {
+				rec, getErr := ctxStore.Get(logCtx, req.ExecutionID)
+				if getErr != nil || rec.FinishedAt == "" || rec.LastSourceSeq != page.EndSeq {
+					return 0, errors.New("execution stream has no durable closing event")
+				}
+			} else if err = ctxStore.UpdateFinished(logCtx, req.ExecutionID, "closed", false); err != nil {
 				return 0, err
-			}
-			if closed != 1 {
-				return 0, errors.New("execution stream has no durable closing event")
+			} else if err = ctxStore.SetLastSourceSeq(logCtx, req.ExecutionID, page.EndSeq); err != nil {
+				return 0, err
 			}
 			return page.EndSeq, nil
 		}
 		return 0, nil
 	}
 }
+
 func (r *serviceRuntimeReconciler) ResolveExecution(ctx context.Context, req controlplane.ReconcileRequestRPC) (controlplane.ReconcileResponse, bool, error) {
 	client, ok := r.service.runtimeClient.(agentcontract.ExecutionEventsClient)
 	if !ok {
@@ -241,66 +286,27 @@ func (r *serviceRuntimeReconciler) callTracked(ctx context.Context, endpoint str
 	return reconcileResponseFromAgent(response), callErr
 }
 
-// A gap is itself an immutable fact, not merely an error that disappears from
-// the next controller poll. Repeated detection does not overwrite its time.
-func (r *serviceRuntimeReconciler) recordExecutionGap(ctx context.Context, req controlplane.ReconcileRequestRPC, operationID, runID string, resources []activitylog.Resource, epoch string, from, to int64) error {
-	eventID := fmt.Sprintf("agent-gap:%s:%s:%s:%d:%d", req.ServerID, req.ExecutionID, epoch, from, to)
-	var present int
-	if err := r.service.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM activity_events WHERE event_id=?`, eventID).Scan(&present); err != nil {
-		return err
-	}
-	if present > 0 {
-		return nil
-	}
-	_, err := activitylog.Append(ctx, r.service.db, []activitylog.EventInput{{EventID: eventID, EventType: "evidence.gap_detected", Kind: "integrity", Level: "warning", Domain: "application", OperationID: operationID, RunID: runID, ExecutionID: req.ExecutionID, SourceID: "panel", SourceStreamID: "integrity:" + req.ExecutionID, Actor: activitylog.Actor{Kind: "controller", ID: "application"}, Resources: resources, Text: "Execution evidence has a source sequence gap and requires retransmission", Data: map[string]any{"sourceId": "agent:" + req.ServerID, "sourceEpoch": epoch, "sourceStreamId": req.ExecutionID, "fromSourceSeq": from, "toSourceSeq": to}}})
-	return err
-}
-
-func (r *serviceRuntimeReconciler) resolveExecutionGaps(ctx context.Context, req controlplane.ReconcileRequestRPC, operationID, runID string, resources []activitylog.Resource, epoch string, after int64) error {
-	rows, err := r.service.db.QueryContext(ctx, `SELECT g.event_id,g.data_json FROM activity_events g WHERE g.execution_id=? AND g.event_type='evidence.gap_detected' AND NOT EXISTS(SELECT 1 FROM activity_events resolved WHERE resolved.event_type='evidence.gap_resolved' AND resolved.causation_event_id=g.event_id)`, req.ExecutionID)
-	if err != nil {
-		return err
-	}
-	type gap struct {
-		id       string
-		from, to int64
-	}
-	var gaps []gap
-	for rows.Next() {
-		var id, raw string
-		if err = rows.Scan(&id, &raw); err != nil {
-			rows.Close()
-			return err
-		}
-		var data struct {
-			Epoch string `json:"sourceEpoch"`
-			From  int64  `json:"fromSourceSeq"`
-			To    int64  `json:"toSourceSeq"`
-		}
-		if err = json.Unmarshal([]byte(raw), &data); err != nil {
-			rows.Close()
-			return err
-		}
-		if data.Epoch == epoch && data.From > 0 && data.To >= data.From && data.To <= after {
-			gaps = append(gaps, gap{id, data.From, data.To})
-		}
-	}
-	if err = rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	rows.Close()
-	for _, g := range gaps {
-		var count int64
-		if err = r.service.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM activity_events WHERE source_id=? AND source_epoch=? AND source_stream_id=? AND source_seq BETWEEN ? AND ?`, "agent:"+req.ServerID, epoch, req.ExecutionID, g.from, g.to).Scan(&count); err != nil {
-			return err
-		}
-		if count != g.to-g.from+1 {
-			continue
-		}
-		if _, err = activitylog.Append(ctx, r.service.db, []activitylog.EventInput{{EventID: "resolved:" + g.id, EventType: "evidence.gap_resolved", CausationEventID: g.id, Kind: "integrity", Level: "info", Domain: "application", OperationID: operationID, RunID: runID, ExecutionID: req.ExecutionID, SourceID: "panel", SourceStreamID: "integrity:" + req.ExecutionID, Actor: activitylog.Actor{Kind: "controller", ID: "application"}, Resources: resources, Text: "Missing execution evidence has been durably received", Data: map[string]any{"sourceEpoch": epoch, "fromSourceSeq": g.from, "toSourceSeq": g.to}}}); err != nil {
-			return err
-		}
-	}
+func (r *serviceRuntimeReconciler) recordExecutionGap(ctx context.Context, req controlplane.ReconcileRequestRPC, operationID string, resources []activitylog.Resource, epoch string, from, to int64) error {
+	logCtx := logging.Ensure(ctx, logging.Context{
+		StreamID:    req.ExecutionID,
+		Module:      "agent-evidence",
+		OperationID: operationID,
+		ExecutionID: req.ExecutionID,
+	})
+	logging.From(logCtx).Warn("Execution evidence has a source sequence gap and requires retransmission",
+		zap.String("eventType", "evidence.gap_detected"),
+		zap.String("sourceId", "agent:"+req.ServerID),
+		zap.String("sourceEpoch", epoch),
+		zap.String("sourceStreamId", req.ExecutionID),
+		zap.Int64("fromSourceSeq", from),
+		zap.Int64("toSourceSeq", to),
+	)
+	_ = logging.RecordContext(logCtx, logging.ContextMeta{
+		Origin:        logcontexts.OriginProcess,
+		Title:         "evidence.gap_detected",
+		Summary:       "Execution evidence has a source sequence gap and requires retransmission",
+		HadError:      true,
+		ResourcesJSON: logging.MarshalResourcesJSON(resources),
+	})
 	return nil
 }

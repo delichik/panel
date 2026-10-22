@@ -20,6 +20,7 @@ import (
 	"panel/internal/modules/facilityapps"
 	"panel/internal/modules/identity"
 	"panel/internal/modules/keyassets"
+	modlogcontexts "panel/internal/modules/logcontexts"
 	"panel/internal/modules/observability/diagnostics"
 	"panel/internal/modules/observability/metrics"
 	"panel/internal/modules/observability/overview"
@@ -31,6 +32,7 @@ import (
 	"panel/internal/modules/tasks"
 	"panel/internal/platform/config"
 	"panel/internal/platform/database"
+	"panel/internal/platform/logcontexts"
 	"panel/internal/platform/logging"
 	"panel/internal/platform/maintenance"
 	"panel/internal/platform/paneltls"
@@ -67,6 +69,7 @@ type App struct {
 	diagnostics    *diagnostics.Service
 	checkCancel    context.CancelFunc
 	checkDone      chan struct{}
+	periodicCancel context.CancelFunc
 	runtimeWriters maintenance.Gate
 }
 
@@ -78,6 +81,11 @@ func New(cfg config.Config) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := logging.Configure(cfg.DataRoot); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	logging.SetContextStore(logcontexts.NewStore(store.AppDB()))
 	secretStore, err := secretstore.Open(cfg, store.AppDB())
 	if err != nil {
 		_ = store.Close()
@@ -124,7 +132,8 @@ func New(cfg config.Config) (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	logging.L().Info("runtime settings loaded", zap.String("log_level", settingsSvc.Runtime().LogLevel))
+	initCtx := logging.Background("panel")
+	logging.From(initCtx).Info("runtime settings loaded", zap.String("log_level", settingsSvc.Runtime().LogLevel))
 	authSvc, err := auth.NewService(store.AppDB(), cfg, settingsSvc)
 	if err != nil {
 		_ = store.Close()
@@ -275,7 +284,7 @@ func New(cfg config.Config) (*App, error) {
 		// 容器内 tailscale 的实际态是“是否改用 tailnet 地址”的前置条件，
 		// 因此跟随既有的 Agent 检查周期一起刷新，不额外引入后台循环。
 		if state := settingsSvc.RefreshTailscaleContainer(checkCtx); state.Available && !state.LoggedIn && state.LastError != "" {
-			logging.L().Warn("container tailscale is not ready", zap.String("error", state.LastError))
+			logging.From(logging.With(checkCtx, logging.Context{StreamID: logging.NewStreamID(), Module: "panel"})).Warn("container tailscale is not ready", zap.String("error", state.LastError))
 		}
 		serverSvc.CheckConfiguredAgents(checkCtx)
 	}()
@@ -287,14 +296,22 @@ func New(cfg config.Config) (*App, error) {
 		return nil, err
 	}
 	taskWorker.Start(context.Background())
+	periodicCtx, periodicCancel := context.WithCancel(context.Background())
+	a.periodicCancel = periodicCancel
+	serverSvc.StartPeriodic(periodicCtx, taskSvc)
+	containerSvc.StartPeriodic(periodicCtx, taskSvc)
+	packageSvc.StartPeriodic(periodicCtx, taskSvc)
+	certSvc.StartPeriodic(periodicCtx, taskSvc)
+	keyAssetSvc.StartPeriodic(periodicCtx, taskSvc)
 	metricsCleanup.Start(context.Background())
 	eventWriter.Start(context.Background())
 	reportCollector.Start(context.Background())
-	logging.L().Info("background services started")
+	logging.From(initCtx).Info("background services started")
 	taskHandler := tasks.NewHandler(taskSvc, taskWorker)
 	taskHandler.SetExternalResolver(applicationSvc.ResolveExecutionManually)
-	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), taskHandler, metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), activity.NewHandler(activitySvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), facilityapps.NewHandler(facilitySvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc), backups.NewHandler(backupSvc))
-	logging.L().Info("application initialized")
+	logContextsSvc := modlogcontexts.NewService(store.AppDB(), filepath.Join(cfg.DataRoot, "logs"))
+	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), taskHandler, metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), modlogcontexts.NewHandler(logContextsSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), facilityapps.NewHandler(facilitySvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc), backups.NewHandler(backupSvc))
+	logging.From(initCtx).Info("application initialized")
 	return a, nil
 }
 
@@ -315,6 +332,10 @@ func (a *App) Close() error {
 // order. Every Stop/Close is nil-safe and idempotent, so it can be reused for
 // both startup failure cleanup and normal shutdown.
 func (a *App) stopBackgroundServices() {
+	if a.periodicCancel != nil {
+		a.periodicCancel()
+		a.periodicCancel = nil
+	}
 	if a.applicationSvc != nil {
 		_ = a.applicationSvc.StopOrchestrator()
 	}
@@ -364,7 +385,7 @@ func applicationSaveSessionDir(cfg config.Config) string {
 	return filepath.Join(cfg.DataRoot, "tmp", "application-save-sessions")
 }
 
-func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, eventH *activity.Handler, applicationH *applications.Handler, containerH *containerization.Handler, facilityH *facilityapps.Handler, overviewH *overview.Handler, settingsH *settings.Handler, systemH *systeminfo.Handler, diagnosticsH *diagnostics.Handler, backupH *backups.Handler) {
+func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, logContextsH *modlogcontexts.Handler, applicationH *applications.Handler, containerH *containerization.Handler, facilityH *facilityapps.Handler, overviewH *overview.Handler, settingsH *settings.Handler, systemH *systeminfo.Handler, diagnosticsH *diagnostics.Handler, backupH *backups.Handler) {
 	a.mux.HandleFunc("POST /api/v1/auth/login", authH.Login)
 	a.mux.Handle("POST /api/v1/auth/logout", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.Logout)))
 	a.mux.Handle("POST /api/v1/auth/account", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.UpdateAccount)))
@@ -384,7 +405,10 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 	// different URL, which would defeat CDN reuse.
 	serverH.RegisterPublicRoutes(a.mux)
 	metricsH.RegisterRoutes(a.mux, authenticated)
-	eventH.RegisterRoutes(a.mux, authenticated)
+	// Product /api/v1/activity/* routes are no longer registered; process log
+	// streams are served by /api/v1/log-contexts. Activity Service remains for
+	// append/audit middleware and internal projections.
+	logContextsH.RegisterRoutes(a.mux, authenticated)
 	packageH.RegisterRoutes(a.mux, authenticated)
 	containerH.RegisterRoutes(a.mux, authenticated)
 	facilityH.RegisterRoutes(a.mux, authenticated)

@@ -4,6 +4,7 @@
 
 ## 当前状态
 
+- 本轮前端改走 `/api/v1/log-contexts`：新增 `logsPage.streamFilterHint/search/operationId/executionId/module/empty/emptyHint/linesEmpty/linesEmptyHint`，并改写 `routes.logs.description` 与 `logsPage.operationFilterHint`；en / zh-CN 已同步。
 - 本轮服务器删除联动停用应用：新增 `activity.applicationDisabled`（节点删除导致应用失去最后一个部署节点而被系统停用；说明需要重新选择部署节点并启用后恢复）；en / zh-CN 已同步。后端在删除事务内写入 `application.disabled` 活动事件（`data` 含 `reason=server_removed`、`serverId`、`applicationId`），前端按事件类型渲染该词条。
 - 本轮服务器列表/概况改为单一综合状态徽标：新增 `serversPage.summary.ready|unreachable|hostKeyMismatch|agentBlocked|agentUnavailable|agentMismatch|agentNotInstalled`；en / zh-CN 已同步。探测结果仍复用既有 `reachable`/`unreachable` 词条。
 - 本轮内容区去分栏：新增 `applicationsPage.facilityTabRoutes` / `facilityTabNodes`、`serversPage.tab.resources`；en / zh-CN 已同步（既有 containers/images/networks/volumes 词条复用为资源 subtab 标签）。

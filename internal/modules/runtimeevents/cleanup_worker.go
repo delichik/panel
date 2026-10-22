@@ -2,8 +2,11 @@ package runtimeevents
 
 import (
 	"context"
-	"log"
 	"time"
+
+	"panel/internal/platform/logging"
+
+	"go.uber.org/zap"
 )
 
 type CleanupSettings struct {
@@ -51,14 +54,15 @@ func (w *CleanupWorker) loop(ctx context.Context) {
 			if time.Since(lastRun) < cleanupInterval(settings.Schedule) {
 				continue
 			}
-			result, err := w.service.Cleanup(ctx, settings.RetentionDays)
+			tickCtx := logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "runtimeevents"})
+			result, err := w.service.Cleanup(tickCtx, settings.RetentionDays)
 			if err != nil {
-				log.Printf("runtime event cleanup failed: %v", err)
+				logging.From(tickCtx).Warn("runtime event cleanup failed", zap.Error(err))
 				continue
 			}
 			lastRun = time.Now()
 			if result.EventsDeleted > 0 {
-				log.Printf("runtime event cleanup deleted_events=%d", result.EventsDeleted)
+				logging.From(tickCtx).Info("runtime event cleanup deleted events", zap.Int("deleted_events", result.EventsDeleted))
 			}
 		}
 	}

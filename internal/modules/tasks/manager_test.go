@@ -6,7 +6,6 @@ import (
 	"reflect"
 	"sync"
 	"testing"
-	"time"
 )
 
 func TestCreateRejectsUnregisteredTaskType(t *testing.T) {
@@ -92,7 +91,6 @@ func TestManagerTriggerPeriodicNowPassesPayloadToCollector(t *testing.T) {
 		ConcurrencyPolicy: ConcurrencyParallelAllowed,
 		Execute:           func(TaskContext) error { return nil },
 		Periodic: &Periodic{
-			Interval: time.Minute,
 			CollectInputs: func(_ context.Context, trigger PeriodicTrigger) (CreateBatchInput, bool, error) {
 				gotPayload = trigger.Payload
 				return CreateBatchInput{

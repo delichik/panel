@@ -140,9 +140,10 @@
 - **结果**（排障路径必须短）：
   1. `/operations` = 用户意图；`/tasks` = 系统意图（协调/定时等）。列表同构：时间、标题、资源、结果、失败摘要。
   2. 意图详情只保留状态、失败摘要、资源/执行者/时间/尝试次数，以及「查看日志」；不得展示 executions/steps 树、时间线、上下文或证据下载。
-  3. 「查看日志」与 Toast/`ActivityLink` 进入 `/logs`，默认带 `level=warning,error`（及可选 `operationId`/`executionId`），先看能定位问题的行；用户可放宽等级。
-  4. `/logs` 仅简单列表（时间、等级、来源、消息）+ Dialog 看单条正文；有结构化错误时 Dialog 分开展示 errorCode/error/detail。不得做时间线、上下文、证据、技术 JSON 或覆盖式详情。
+  3. 「查看日志」与 Toast/`ActivityLink` 进入 `/logs`，默认带 `level=warning,error`（及可选 `streamId`/`operationId`/`executionId`），先看能定位问题的行；用户可放宽等级。
+  4. `/logs` 列表展示 log contexts（时间、状态、来源、标题），Dialog 按 `streamId` 加载 `/api/v1/log-contexts/{streamId}/lines`（默认 warning,error）；有结构化错误时分开展示 errorCode/error/detail。不得做时间线、证据下载、技术 JSON 或覆盖式详情。
   5. 应用协调入口进 `/tasks`。
+  6. 产品读 API 为 `/api/v1/log-contexts*`；`/operations`/`/tasks` 分别请求 `origin=user|system`；不得再调用已停注册的 `/api/v1/activity/*`。
 - **失败**：不得用 eventType/trigger reason 冒充失败原因；不得把用户操作与系统任务混在同一主列表。
 - **不变量**：原始输出不翻译、不改写；产品 UI 不得恢复 `/activity` 双投影或日志关联工作台。存储仍可共用追加事实，但产品面必须按上述三职责呈现。
 - **验证**：origin 分流、activityRedirect、`IntentRecordsPage`（summary 详情 + View logs）、intent→logs 深链带 warning/error、logs 列表+Dialog 测试。
@@ -151,18 +152,18 @@
 
 - **前置**：认证用户进入 `/operations`、`/tasks` 或 `/logs`，URL 可能带完整查询条件，也可能缺少 `from`。
 - **动作**：页面首次挂载。
-- **结果**：必须立即按 URL 条件请求对应列表；缺少 `from` 时使用最近 24 小时并把该时间写回 URL，不请求全量摘要统计。意图列表请求必须带正确 `origin`。`/logs` 缺省 `level` 时使用 `warning,error`。
+- **结果**：必须立即按 URL 条件请求对应 log-contexts 列表；缺少 `from` 时使用最近 24 小时并把该时间写回 URL。意图列表请求必须带正确 `origin`。打开日志 Dialog 时缺省 `level` 使用 `warning,error`。
 - **失败**：默认时间写回不得替代、延迟或重复首次列表请求；失败保留错误空态、toast 和重试入口。
-- **不变量**：首次列表加载不依赖定时器，不启动 tail/summary 轮询。
+- **不变量**：首次列表加载不依赖定时器，不启动轮询。
 - **验证**：logs/intent initial-load 覆盖无 `from`、默认诊断等级和显式范围。
 
 ### UI-ACT-003 日志与意图只按需刷新
 
 - **前置**：用户浏览日志或意图详情，可能保留其它页面的全局自动刷新设置。
 - **动作**：首次进入、手动刷新、修改查询条件、选择对象或翻页。
-- **结果**：仅这些动作读取对应列表；日志详情 Dialog 只展示已加载行或按 eventId 单次补载，不拉上下文/证据。不提供定时刷新开关，不读取或探测新数据，不显示总条数、错误/警告计数、新数据提示或快照编号。索引未就绪时可使用现有列表元数据简短提示，不额外请求。
+- **结果**：仅这些动作读取对应 log-contexts 列表；日志详情 Dialog 按 streamId 单次加载 lines，不拉证据包。不提供定时刷新开关，不读取或探测新数据，不显示总条数、错误/警告计数或新数据提示。
 - **失败**：查询失败仍显示错误与手动重试；旧筛选响应不得覆盖当前结果。没有自动错误重试或页面重新可见时的隐式轮询。
-- **不变量**：列表保持快照游标分页；手动刷新/导出继续使用既有快照语义。页面不调用 summary/tail/operation 详情树；不为容量横幅保留统计查询。共享自动刷新仍可供其它页面使用。
+- **不变量**：列表保持 cursor 分页；手动刷新/导出走 `/log-contexts/export`。页面不调用已停用的 activity summary/tail/operation 详情树。共享自动刷新仍可供其它页面使用。
 - **验证**：`views/logs/index.test.ts` 覆盖首屏一次请求、空闲一分钟零追加请求、游标翻页、迟到结果隔离与详情 Dialog。
 
 ### UI-ACT-004 `/activity` 兼容重定向
@@ -297,7 +298,7 @@
 | UI-DBG-001 | 进入诊断页 | 并行加载 runtime、tasks、databases 与 pprof 状态；三类诊断默认每 8 秒各自轮询，可暂停/恢复/手刷，隐藏标签暂停 | 各请求独立防重入；并发/迟到响应不可覆盖同类新数据 | 顶部显示聚合 live/stale 和最近 collectedAt，任一区块不阻塞其他区块 |
 | UI-DBG-002 | 任一诊断刷新失败 | 该区块有最后成功数据时继续展示并标 stale，同时 toast；无旧值时仅对应 tab 显示失败空态+重试 | 不得清空其他区块或让单接口失败阻塞其他接口完成 | 失败接口恢复后 stale 消失且更新时间前进 |
 | UI-DBG-003 | Runtime tab | 展示 uptime、goroutines、heap、PID、Go version、OS/arch、CPU | 空/未知值使用统一 fallback，不显示 `[object Object]` | 数值与 runtime 响应字段一致 |
-| UI-DBG-004 | Tasks tab | scalar runtime metrics 与 task definitions 分开；definitions 用可滚动 Table 展示 kind/actions/concurrency/retries/stale/periodic | definitions 数组不得字符串化；无定义有明确空提示 | 任意对象定义都以列呈现 |
+| UI-DBG-004 | Tasks tab | scalar runtime metrics 与 task definitions 分开；definitions 用可滚动 Table 展示 kind/actions/concurrency/retries/stale（无 periodic interval 列） | definitions 数组不得字符串化；无定义有明确空提示 | 任意对象定义都以列呈现 |
 | UI-DBG-005 | Database tab | 展示健康数/总数/used 汇总；每数据库显示大小、used/free、健康/错误和表行数/大小 | 单库错误以 danger 状态保留其他库 | 大表清单在卡片内部滚动 |
 | UI-DBG-006 | 切换 pprof | Switch PUT enabled，期间禁重复；开启后显示本机 `http://<address>/debug/pprof/` 新窗口链接 | GET/PUT 失败仅 toast，不伪改状态；链接带 `rel=noreferrer` | 返回状态决定 Switch 与链接是否出现 |
 | UI-DBG-007 | 清理运行数据 | 首次进入读取清理状态，确认已无在途清理后才启用操作；危险确认说明清理范围、配置保留及后台暂停，并要求勾选；提交后独立展示状态、阶段、开始/结束时间 | 禁重复提交；查询失败保留上次快照并显示“结果待核实”及只读核对入口，不自动重发 POST；失败说明部分批次可能已删除，恢复后台失败单独呈现 | 同一次 runId 的完成才触发完成反馈；成功/失败后重载诊断；完成后说明后台可能立即产生新数据 |

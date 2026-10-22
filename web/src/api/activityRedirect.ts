@@ -8,7 +8,7 @@ function one(value: LocationQueryValue | LocationQueryValue[]): string | undefin
 const passthrough = [
   'q', 'domain', 'level', 'trigger', 'resourceType', 'resourceId', 'executionId',
   'action', 'phase', 'result', 'attention', 'actorId', 'kind', 'stepId', 'from', 'to',
-  'operationId', 'eventId', 'cursor', 'snapshotSeq', 'cursorTrail',
+  'operationId', 'eventId', 'streamId', 'module', 'hadError', 'cursor', 'cursorTrail',
 ] as const;
 
 /**
@@ -26,7 +26,7 @@ export function resolveActivityRedirect(query: LocationQuery): { path: string; q
   if (view === 'operations') {
     return { path: '/tasks', query: next };
   }
-  if (!next.level && (next.operationId || next.executionId || next.eventId)) {
+  if (!next.level && (next.operationId || next.executionId || next.streamId || next.eventId)) {
     next.level = 'warning,error';
   }
   return { path: '/logs', query: next };

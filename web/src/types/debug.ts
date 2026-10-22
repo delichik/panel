@@ -46,7 +46,6 @@ export interface DebugTaskDefinition {
   defaultMaxRetries: number;
   concurrencyPolicy: string;
   staleQueuedAfterSeconds: number;
-  periodicIntervalSeconds: number;
 }
 
 export interface DebugDatabase {

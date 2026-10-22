@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"path/filepath"
 
-	panelerr "panel/internal/platform/errors"
+	"panel/internal/platform/logging"
 )
 
 const MinimumFreeBytes uint64 = 1 << 30
@@ -21,6 +21,13 @@ type capacityQuery interface {
 }
 
 func Capacity(ctx context.Context, db capacityQuery) (CapacityStatus, error) {
+	if dir := logging.LogDir(); dir != "" {
+		available, total, err := filesystemCapacity(dir)
+		if err != nil {
+			return CapacityStatus{State: "unknown"}, nil
+		}
+		return classifyCapacity(available, total), nil
+	}
 	rows, err := db.QueryContext(ctx, `PRAGMA database_list`)
 	if err != nil {
 		return CapacityStatus{State: "unknown"}, err
@@ -61,14 +68,8 @@ func classifyCapacity(available, total uint64) CapacityStatus {
 	return out
 }
 
-// Admission protects space for in-flight evidence. It is not a retention policy.
-func CheckAdmission(ctx context.Context, db capacityQuery) error {
-	status, err := Capacity(ctx, db)
-	if err != nil {
-		return err
-	}
-	if status.State == "blocked" {
-		return panelerr.New(503, "activity_capacity_exhausted", "New changes are paused because the audit store has less than 1 GiB free; expand storage before retrying")
-	}
+// CheckAdmission no longer blocks mutations on activity_events capacity.
+// Product facts go to the JSONL log directory; capacity is advisory via Capacity.
+func CheckAdmission(context.Context, capacityQuery) error {
 	return nil
 }

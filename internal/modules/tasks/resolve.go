@@ -10,10 +10,14 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"panel/internal/platform/activitylog"
 	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	httpx "panel/internal/platform/http"
+	"panel/internal/platform/logcontexts"
+	"panel/internal/platform/logging"
 )
 
 // ResolveUncertain records an authenticated human's verification. It does not
@@ -49,10 +53,29 @@ func (s *Service) ResolveUncertain(ctx context.Context, taskID, outcome, reason 
 		result = "succeeded"
 	}
 	reason = activitylog.Redact(reason)
-	_, err = activitylog.AppendTx(ctx, tx, []activitylog.EventInput{{EventType: "execution.verified", Kind: "observation", Domain: firstNonEmpty(row.ResourceType, "system"), Action: row.Type, OperationID: row.OperationID, RunID: row.ID, Actor: actor, Initiator: actor, Text: reason, Data: map[string]any{"taskId": row.ID, "verificationSource": "manual", "outcome": result, "reason": reason}}})
-	if err != nil {
-		return Task{}, err
-	}
+	logCtx := logging.Ensure(ctx, logging.Context{
+		Module:      "tasks",
+		OperationID: row.OperationID,
+		ExecutionID: row.ID,
+	})
+	logging.From(logCtx).Info(reason,
+		zap.String("eventType", "execution.verified"),
+		zap.String("domain", firstNonEmpty(row.ResourceType, "system")),
+		zap.String("action", row.Type),
+		zap.String("taskId", row.ID),
+		zap.String("outcome", result),
+		zap.String("verificationSource", "manual"),
+		zap.String("actorId", actor.ID),
+	)
+	_ = logging.RecordContext(logCtx, logging.ContextMeta{
+		Origin:   logcontexts.OriginUser,
+		Title:    "execution.verified",
+		Summary:  reason,
+		Result:   result,
+		HadError: result == "failed",
+		Finished: true,
+		ActorJSON: logging.MarshalActorJSON(map[string]string{"kind": actor.Kind, "id": actor.ID, "name": actor.Name}),
+	})
 	resultSQL, err := tx.ExecContext(ctx, `UPDATE tasks SET status=?,stage='verified',error=CASE WHEN ?='completed' THEN '' ELSE ? END,finished_at=?,next_run_at=NULL WHERE id=? AND status='running' AND stage='uncertain'`, status, status, reason, time.Now().UTC().Format(time.RFC3339Nano), taskID)
 	if err != nil {
 		return Task{}, err

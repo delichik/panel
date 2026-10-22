@@ -7,8 +7,12 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"panel/internal/platform/activitylog"
 	panelerr "panel/internal/platform/errors"
+	"panel/internal/platform/logcontexts"
+	"panel/internal/platform/logging"
 )
 
 func (s *Store) GetJobByExecutionID(ctx context.Context, executionID string) (Job, error) {
@@ -44,10 +48,25 @@ func (s *Store) ResolveUncertainManually(ctx context.Context, job Job, outcome, 
 	}
 	reason = activitylog.Redact(reason)
 	resources := []activitylog.Resource{{Type: "application", ID: job.ApplicationID, Role: "subject", RevisionID: job.DesiredRevisionID, Generation: job.DesiredGeneration}, {Type: "server", ID: job.ServerID, Role: "target"}}
-	_, err = activitylog.AppendTx(ctx, tx, []activitylog.EventInput{{EventType: "execution.verified", Kind: "observation", Domain: "application", Action: job.Action, OperationID: job.IntentID, RunID: job.IntentID, ExecutionID: job.ExecutionID, Actor: actor, Resources: resources, Text: reason, Data: map[string]any{"jobId": job.ID, "logicalExecutionId": job.ID, "verificationSource": "manual", "outcome": outcome, "reason": reason}}})
-	if err != nil {
-		return false, err
-	}
+	logCtx := logging.Ensure(ctx, logging.Context{Module: "orchestrator", OperationID: job.IntentID, ExecutionID: job.ExecutionID})
+	logging.From(logCtx).Info(reason,
+		zap.String("eventType", "execution.verified"),
+		zap.String("action", job.Action),
+		zap.String("jobId", job.ID),
+		zap.String("outcome", outcome),
+		zap.String("verificationSource", "manual"),
+		zap.String("actorId", actor.ID),
+	)
+	_ = logging.RecordContext(logCtx, logging.ContextMeta{
+		Origin:        logcontexts.OriginUser,
+		Title:         "execution.verified",
+		Summary:       reason,
+		Result:        outcome,
+		HadError:      outcome == "failed",
+		Finished:      true,
+		ActorJSON:     logging.MarshalActorJSON(map[string]string{"kind": actor.Kind, "id": actor.ID, "name": actor.Name}),
+		ResourcesJSON: logging.MarshalResourcesJSON(resources),
+	})
 	message := ""
 	code := ""
 	class := ""

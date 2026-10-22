@@ -332,7 +332,7 @@ func (s *Service) DeleteStorageShare(ctx context.Context) (StorageShareConfig, e
 	if cfg.Enabled {
 		for _, item := range cfg.Servers {
 			if err := s.removeStorageExport(ctx, item); err != nil {
-				logging.L().Warn("storage share uninstall remote cleanup failed", zap.String("server_id", item.ServerID), zap.Error(err))
+				logging.From(logging.With(ctx, logging.Context{Module: "facilityapps"})).Warn("storage share uninstall remote cleanup failed", zap.String("server_id", item.ServerID), zap.Error(err))
 				if cleanupErr == nil {
 					cleanupErr = err
 				}

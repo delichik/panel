@@ -124,7 +124,7 @@ func (s *Service) Update(ctx context.Context, serverID string, req SaveRequest) 
 		// marks the server unreachable (TestConnectivity records that) and must
 		// not fail the update or skip the DNS sync below.
 		if _, err := s.TestConnectivity(ctx, serverID); err != nil {
-			logging.L().Warn("server update connectivity probe failed", zap.String("server_id", serverID), zap.Error(err))
+			logging.From(ctx).Warn("server update connectivity probe failed", zap.String("server_id", serverID), zap.Error(err))
 		}
 	}
 	s.notifyDNSSync(ctx, serverID, previousIPv4 != nextIPv4 || previousIPv6 != nextIPv6)
@@ -156,7 +156,7 @@ func (s *Service) reconcileAgentCertificateHosts(ctx context.Context, serverID s
 		return
 	}
 	if err := s.markAgentStatus(ctx, serverID, agentcontract.StatusIncompatible, "", "tailscale agent address preference changed; agent certificate refresh required"); err != nil {
-		logging.L().Warn("mark agent certificate refresh failed", zap.String("server_id", serverID), zap.Error(err))
+		logging.From(ctx).Warn("mark agent certificate refresh failed", zap.String("server_id", serverID), zap.Error(err))
 	}
 }
 
@@ -203,7 +203,7 @@ func (s *Service) Delete(ctx context.Context, serverID string) error {
 	if s.serverReferenceReconciler != nil {
 		// 引用已随删除事务修剪，设施侧只需重新渲染，避免继续使用旧配置。
 		if err := s.serverReferenceReconciler.ReconcileAfterServerRemoved(ctx, serverID); err != nil {
-			logging.L().Warn("server reference reconcile failed", zap.String("server_id", serverID), zap.Error(err))
+			logging.From(ctx).Warn("server reference reconcile failed", zap.String("server_id", serverID), zap.Error(err))
 		}
 	}
 	if s.metricsDB != nil {
@@ -215,7 +215,7 @@ func (s *Service) Delete(ctx context.Context, serverID string) error {
 		// ID-unique asset naming keeps an orphan harmless, so cleanup failure
 		// must not turn an already-committed delete into a reported failure.
 		if err := s.agentKeys.DeleteAgentServerCertificate(ctx, serverID); err != nil {
-			logging.L().Warn("agent server certificate cleanup failed", zap.String("server_id", serverID), zap.Error(err))
+			logging.From(ctx).Warn("agent server certificate cleanup failed", zap.String("server_id", serverID), zap.Error(err))
 		}
 	}
 	if s.tasks != nil {

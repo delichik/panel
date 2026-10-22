@@ -2,13 +2,15 @@ package tasks
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
 
 	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/http"
+	"panel/internal/platform/logging"
+
+	"go.uber.org/zap"
 )
 
 type RunNowRunner interface {
@@ -148,9 +150,10 @@ func (h *Handler) RunNow(w http.ResponseWriter, r *http.Request) {
 // 执行失败且任务仍处于非终态时标记失败；执行边界内的 panic 由
 // Worker/Manager 的 recover 转换，这里只做最后的兜底。
 func (h *Handler) dispatchRunNow(task Task) {
+	ctx := logging.Background("tasks")
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			log.Printf("task run-now goroutine recovered from panic: %v", recovered)
+			logging.From(ctx).Error("task run-now goroutine recovered from panic", zap.Any("panic", recovered))
 		}
 	}()
 	if h == nil || h.runner == nil || h.service == nil {
@@ -163,8 +166,8 @@ func (h *Handler) dispatchRunNow(task Task) {
 		return
 	}
 	defer done()
-	if err := h.runner.RunNow(context.Background(), task); err != nil {
-		h.failIfUnfinished(context.Background(), task.ID, err)
+	if err := h.runner.RunNow(ctx, task); err != nil {
+		h.failIfUnfinished(ctx, task.ID, err)
 	}
 }
 

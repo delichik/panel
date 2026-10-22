@@ -104,7 +104,7 @@ func migrateLegacyLogDatabasePath(logPath string) error {
 			} else if statErr == nil {
 				// The target already has a WAL/SHM sidecar; keeping the legacy
 				// sidecar around is safer than overwriting an active log.db WAL.
-				logging.L().Warn("legacy tasks.db sidecar not renamed because target already exists", zap.String("sidecar", newSidecar))
+				logging.From(logging.Background("database")).Warn("legacy tasks.db sidecar not renamed because target already exists", zap.String("sidecar", newSidecar))
 			} else {
 				return statErr
 			}

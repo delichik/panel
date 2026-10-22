@@ -181,7 +181,7 @@ func (s *Service) notifyInterconnectChange(ctx context.Context, serverID string)
 		return
 	}
 	if err := s.interconnectTrigger(ctx, []string{serverID}); err != nil {
-		logging.L().Warn("interconnect resync trigger failed", zap.String("server_id", serverID), zap.Error(err))
+		logging.From(ctx).Warn("interconnect resync trigger failed", zap.String("server_id", serverID), zap.Error(err))
 	}
 }
 
@@ -198,7 +198,7 @@ func (s *Service) notifyDNSSync(ctx context.Context, serverID string, changed bo
 		return
 	}
 	if err := s.dnsSyncTrigger(ctx, []string{serverID}); err != nil {
-		logging.L().Warn("reverse proxy DNS sync trigger failed", zap.String("server_id", serverID), zap.Error(err))
+		logging.From(ctx).Warn("reverse proxy DNS sync trigger failed", zap.String("server_id", serverID), zap.Error(err))
 	}
 }
 

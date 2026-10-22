@@ -15,46 +15,11 @@ const DefaultLevel = "info"
 
 var atomicLevel = zap.NewAtomicLevelAt(zap.InfoLevel)
 
-func init() {
-	logger, err := newLogger()
-	if err != nil {
-		panic(err)
-	}
-	zap.ReplaceGlobals(logger)
-}
-
-func newLogger() (*zap.Logger, error) {
-	cfg := zap.Config{
-		Level:             atomicLevel,
-		Development:       false,
-		Encoding:          "json",
-		OutputPaths:       []string{"stdout"},
-		ErrorOutputPaths:  []string{"stdout"},
-		DisableCaller:     false,
-		DisableStacktrace: false,
-		EncoderConfig: zapcore.EncoderConfig{
-			TimeKey:        "ts",
-			LevelKey:       "level",
-			NameKey:        "logger",
-			CallerKey:      "caller",
-			MessageKey:     "msg",
-			StacktraceKey:  "stacktrace",
-			LineEnding:     zapcore.DefaultLineEnding,
-			EncodeLevel:    zapcore.LowercaseLevelEncoder,
-			EncodeTime:     zapcore.ISO8601TimeEncoder,
-			EncodeDuration: zapcore.MillisDurationEncoder,
-			EncodeCaller:   zapcore.ShortCallerEncoder,
-		},
-	}
-	return cfg.Build(zap.AddStacktrace(zapcore.ErrorLevel))
-}
-
-func L() *zap.Logger {
-	return zap.L()
-}
-
+// Sync flushes buffered log entries.
 func Sync() {
-	_ = L().Sync()
+	_ = stdoutLogger.Sync()
+	_ = stderrLogger.Sync()
+	syncFileSink()
 }
 
 func Level() string {
@@ -100,9 +65,16 @@ func zapLevel(value string) (zapcore.Level, bool) {
 	}
 }
 
+// HTTPMiddleware creates a per-request log stream and records completion.
 func HTTPMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		startedAt := time.Now()
+		ctx := With(r.Context(), Context{
+			StreamID:  NewStreamID(),
+			Module:    "http",
+			RequestID: r.Header.Get("X-Request-Id"),
+		})
+		r = r.WithContext(ctx)
 		recorder := &responseRecorder{ResponseWriter: w}
 		next.ServeHTTP(recorder, r)
 
@@ -119,13 +91,14 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 			zap.String("remote_addr", clientAddress(r)),
 			zap.String("user_agent", r.UserAgent()),
 		}
+		logger := From(ctx)
 		switch {
 		case status >= http.StatusInternalServerError:
-			L().Error("http request completed", fields...)
+			logger.Error("http request completed", fields...)
 		case status >= http.StatusBadRequest:
-			L().Warn("http request completed", fields...)
+			logger.Warn("http request completed", fields...)
 		default:
-			L().Debug("http request completed", fields...)
+			logger.Debug("http request completed", fields...)
 		}
 	})
 }

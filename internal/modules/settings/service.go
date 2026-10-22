@@ -188,13 +188,13 @@ func NewService(db *sql.DB, cfg config.Config, options ...Option) (*Service, err
 	}
 	if strings.TrimSpace(s.rt.Panel.TLSCertificateID) != "" {
 		if err := s.syncPanelTLS(context.Background(), s.rt.Panel); err != nil {
-			logging.L().Warn("failed to synchronize Panel TLS certificate", zap.Error(err))
+			logging.From(logging.Background("settings")).Warn("failed to synchronize Panel TLS certificate", zap.Error(err))
 		}
 	}
 	// 由 Panel 负责生成期望态配置：容器重启后 panel-init 依赖该文件在 Panel
 	// 进程启动前拉起 tailscaled。
 	if err := s.ensureTailscaleConfig(); err != nil {
-		logging.L().Warn("failed to write container tailscale configuration", zap.Error(err))
+		logging.From(logging.Background("settings")).Warn("failed to write container tailscale configuration", zap.Error(err))
 	}
 	s.RefreshTailscaleContainer(context.Background())
 	return s, nil

@@ -83,7 +83,6 @@ type TaskDefinitionRow = {
   concurrencyPolicy: string;
   defaultMaxRetries: number;
   staleQueuedAfter: string;
-  periodicInterval: string;
 };
 
 const taskMetricOrder = ['workerRunning', 'registeredTypes', 'executableTypes', 'periodicTypes', 'runningExecutions'];
@@ -107,7 +106,6 @@ const taskDefinitionColumns = computed<Array<{ key: keyof TaskDefinitionRow & st
   { key: 'concurrencyPolicy', label: t('debugPage.concurrencyPolicy') },
   { key: 'defaultMaxRetries', label: t('debugPage.maxRetries'), align: 'right' },
   { key: 'staleQueuedAfter', label: t('debugPage.staleQueuedAfter'), align: 'right' },
-  { key: 'periodicInterval', label: t('debugPage.periodicInterval'), align: 'right' },
 ]);
 const taskMetricRows = computed<TaskMetricRow[]>(() => {
   const tasks = taskSnapshot.value?.tasks;
@@ -124,7 +122,6 @@ const taskDefinitionRows = computed<TaskDefinitionRow[]>(() => (taskSnapshot.val
   concurrencyPolicy: definition.concurrencyPolicy || t('common.notAvailable'),
   defaultMaxRetries: definition.defaultMaxRetries,
   staleQueuedAfter: formatSeconds(definition.staleQueuedAfterSeconds),
-  periodicInterval: definition.periodic ? formatSeconds(definition.periodicIntervalSeconds) : t('common.notAvailable'),
 })));
 const pprofUrl = computed(() => (pprof.value?.enabled && pprof.value?.address) ? `http://${pprof.value.address}/debug/pprof/` : null);
 

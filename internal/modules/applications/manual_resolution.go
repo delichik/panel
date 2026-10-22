@@ -6,8 +6,12 @@ import (
 
 	agentcontract "panel/internal/agent/contract"
 	controlplane "panel/internal/orchestrator"
+	"go.uber.org/zap"
+
 	"panel/internal/platform/activitylog"
 	panelerr "panel/internal/platform/errors"
+	"panel/internal/platform/logcontexts"
+	"panel/internal/platform/logging"
 )
 
 // ResolveExecutionManually accepts an authenticated declaration only for the
@@ -47,10 +51,22 @@ func (s *Service) ResolveExecutionManually(ctx context.Context, executionID, out
 	}
 	// This is a request to verify, not an already verified outcome. If the RPC
 	// or event transfer fails, the Job remains unknown and cannot be reissued.
-	_, err = activitylog.Append(ctx, s.db, []activitylog.EventInput{{EventType: "verification.requested", Kind: "request", Domain: "application", Action: job.Action, OperationID: job.IntentID, RunID: job.IntentID, ExecutionID: job.ExecutionID, Actor: actor, Text: reason, Data: map[string]any{"jobId": job.ID, "verificationSource": "manual", "declaredOutcome": outcome, "phase": "waiting", "uncertainty": true}}})
-	if err != nil {
-		return nil, err
-	}
+	logCtx := logging.Ensure(ctx, logging.Context{Module: "applications", OperationID: job.IntentID, ExecutionID: job.ExecutionID})
+	logging.From(logCtx).Info(reason,
+		zap.String("eventType", "verification.requested"),
+		zap.String("action", job.Action),
+		zap.String("jobId", job.ID),
+		zap.String("declaredOutcome", outcome),
+		zap.String("verificationSource", "manual"),
+		zap.Bool("uncertainty", true),
+		zap.String("actorId", actor.ID),
+	)
+	_ = logging.RecordContext(logCtx, logging.ContextMeta{
+		Origin:   logcontexts.OriginUser,
+		Title:    "verification.requested",
+		Summary:  reason,
+		ActorJSON: logging.MarshalActorJSON(map[string]string{"kind": actor.Kind, "id": actor.ID, "name": actor.Name}),
+	})
 	result, err := client.ResolveExecution(ctx, endpoint, agentcontract.ExecutionResolution{ExecutionID: executionID, Outcome: outcome, Reason: reason, ActorID: actor.ID, ActorName: actor.Name})
 	if err != nil {
 		return nil, err
@@ -100,10 +116,10 @@ func applyManualResult(ctx context.Context, store *controlplane.Store, job contr
 		return err
 	}
 	var n int
-	if queryErr := store.DB().QueryRowContext(ctx, `SELECT count(*) FROM activity_events WHERE execution_id=? AND event_type='execution.verified' AND actor_id=? AND json_extract(data_json,'$.verificationSource')='manual' AND json_extract(data_json,'$.outcome')=? AND json_extract(data_json,'$.reason')=?`, job.ExecutionID, actor.ID, outcome, result.VerificationReason).Scan(&n); queryErr != nil {
+	if queryErr := store.DB().QueryRowContext(ctx, `SELECT count(*) FROM log_contexts WHERE execution_id=? AND result=?`, job.ExecutionID, outcome).Scan(&n); queryErr != nil {
 		return queryErr
 	}
-	if n == 1 {
+	if n >= 1 {
 		return nil
 	}
 	return err

@@ -116,16 +116,16 @@ func serveFacilityAssetDownload(w http.ResponseWriter, r *http.Request, asset Fa
 		rel, _ := filepath.Rel(asset.Root, filePath)
 		entry, createErr := zw.Create(filepath.ToSlash(rel))
 		if createErr != nil {
-			logging.L().Warn("facility asset zip entry create failed", zap.String("file", filePath), zap.Error(createErr))
+			logging.From(logging.With(r.Context(), logging.Context{Module: "facilityapps"})).Warn("facility asset zip entry create failed", zap.String("file", filePath), zap.Error(createErr))
 			return
 		}
 		if _, copyErr := io.Copy(entry, handles[i]); copyErr != nil {
-			logging.L().Warn("facility asset zip copy failed", zap.String("file", filePath), zap.Error(copyErr))
+			logging.From(logging.With(r.Context(), logging.Context{Module: "facilityapps"})).Warn("facility asset zip copy failed", zap.String("file", filePath), zap.Error(copyErr))
 			return
 		}
 	}
 	if err := zw.Close(); err != nil {
-		logging.L().Warn("facility asset zip close failed", zap.String("root", asset.Root), zap.Error(err))
+		logging.From(logging.With(r.Context(), logging.Context{Module: "facilityapps"})).Warn("facility asset zip close failed", zap.String("root", asset.Root), zap.Error(err))
 	}
 }
 

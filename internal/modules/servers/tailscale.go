@@ -196,7 +196,7 @@ func (s *Service) reconcileTailscaleIntent(ctx context.Context, serverID string,
 		}
 	}
 	if _, err := s.ensureTailscaleApplyTask(ctx, srv, "system", true); err != nil {
-		logging.L().Warn("queue tailscale apply failed", zap.String("server_id", serverID), zap.Error(err))
+		logging.From(ctx).Warn("queue tailscale apply failed", zap.String("server_id", serverID), zap.Error(err))
 	}
 }
 

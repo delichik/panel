@@ -16,14 +16,12 @@ import (
 	auth "panel/internal/modules/identity"
 	"panel/internal/modules/runtimeevents"
 	"panel/internal/platform/activitylog"
-	panelerr "panel/internal/platform/errors"
-	httpx "panel/internal/platform/http"
-	id "panel/internal/platform/identity"
+	"panel/internal/platform/logcontexts"
 	"panel/internal/platform/logging"
 	"panel/internal/platform/maintenance"
 )
 
-// systemEventWriter writes synchronously; there is no drop-on-full buffer.
+// systemEventWriter writes system observations via unified logging.
 type systemEventWriter struct {
 	maintenance maintenance.Gate
 	service     *activity.Service
@@ -49,36 +47,41 @@ func (w *systemEventWriter) Log(ctx context.Context, in runtimeevents.WriteEvent
 	if w.stop == nil {
 		w.stop = make(chan struct{})
 	}
-	stop := w.stop
 	w.writers.Add(1)
 	w.mu.Unlock()
 	defer w.writers.Done()
-	eventID := in.ID
-	if eventID == "" {
-		eventID = id.New("evt")
+
+	streamID := logging.NewStreamID()
+	ctx = logging.With(ctx, logging.Context{StreamID: streamID, Module: "system"})
+	fields := []zap.Field{
+		zap.String("eventType", in.EventType),
+		zap.String("source", in.Source),
+		zap.String("sourceModule", in.SourceModule),
+		zap.String("severity", in.Severity),
 	}
-	event := activity.EventInput{EventID: eventID, EventType: in.EventType, Kind: "observation", Domain: "system", Level: in.Severity, SourceID: in.Source, SourceStreamID: in.SourceModule, Text: in.Summary, OccurredAt: in.OccurredAt, Data: map[string]any{}, Actor: activity.Actor{Kind: "system", ID: in.Source}}
 	if in.ResourceID != "" {
-		event.Resources = []activity.Resource{{Type: "server", ID: in.ResourceID, Name: in.ResourceName, Role: "target"}}
+		fields = append(fields, zap.String("resourceId", in.ResourceID), zap.String("resourceName", in.ResourceName))
 	}
-	for {
-		_, err := w.service.Append(ctx, []activity.EventInput{event})
-		if err == nil {
-			return
-		}
-		if w.maintenance.Paused() {
-			return
-		}
-		logging.L().Error("Activity persistence unavailable", zap.Error(err))
-		select {
-		case <-ctx.Done():
-			return
-		case <-stop:
-			return
-		case <-time.After(time.Second):
-		}
+	msg := in.Summary
+	if msg == "" {
+		msg = in.EventType
 	}
+	logger := logging.From(ctx)
+	switch strings.ToLower(in.Severity) {
+	case "error":
+		logger.Error(msg, fields...)
+	case "warning", "warn":
+		logger.Warn(msg, fields...)
+	default:
+		logger.Info(msg, fields...)
+	}
+	_ = logging.RecordContext(ctx, logging.ContextMeta{
+		Origin:  logcontexts.OriginSystem,
+		Title:   in.EventType,
+		Summary: msg,
+	})
 }
+
 func (w *systemEventWriter) Start(ctx context.Context) {
 	ctx, w.cancel = context.WithCancel(ctx)
 	w.done = make(chan struct{})
@@ -91,12 +94,10 @@ func (w *systemEventWriter) Start(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				// Projection catch-up retired; keep tick for maintenance gate liveness.
 				done, admitted := w.maintenance.Enter()
 				if !admitted {
 					continue
-				}
-				if _, err := w.service.CatchUp(ctx); err != nil && ctx.Err() == nil {
-					logging.L().Error("Activity projection failed", zap.Error(err))
 				}
 				done()
 			}
@@ -121,26 +122,36 @@ func (w *systemEventWriter) Stop() {
 func (a *App) activityAuth(next http.Handler) http.Handler {
 	return a.auth.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sess := auth.FromContext(r.Context())
+		streamID := logging.NewStreamID()
+		if existing, ok := logging.Lookup(r.Context()); ok && existing.StreamID != "" {
+			streamID = existing.StreamID
+		}
 		ctx := activitylog.WithReceipt(activitylog.WithActor(r.Context(), activitylog.Actor{Kind: "user", ID: "admin", Name: sess.Username}))
-		receivedID := ""
+		ctx = logging.With(ctx, logging.Context{
+			StreamID:  streamID,
+			Module:    "http",
+			RequestID: streamID,
+		})
 		mutation := r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch || r.Method == http.MethodDelete
-		if mutation && a.activity != nil && ctx.Value(runtimeClearAuditContextKey{}) != true {
-			// Recovery operations that reduce ledger usage must remain available
-			// when normal mutations are blocked by the activity capacity gate.
-			if !strings.HasSuffix(r.URL.Path, "/resolve") && r.URL.Path != "/api/v1/debug/clear-runtime-data" {
-				if err := activitylog.CheckAdmission(ctx, a.store.AppDB()); err != nil {
-					httpx.Error(w, err)
-					return
-				}
-			}
-			receivedID = id.New("evt")
-			receipt, err := a.activity.Append(ctx, []activity.EventInput{{EventID: receivedID, EventType: "request.received", Kind: "request", Domain: requestDomain(r), Action: r.Pattern, SourceStreamID: "http", RequestID: receivedID, Actor: activitylog.ActorFromContext(ctx), Text: r.Method + " " + r.URL.Path, Data: map[string]any{"method": r.Method, "route": r.Pattern}}})
-			if err != nil {
-				httpx.Error(w, panelerr.New(http.StatusServiceUnavailable, "activity_write_unavailable", "The operation was not started because its audit record could not be saved"))
-				return
-			}
-			_ = receipt
+		receivedID := ""
+		if mutation && ctx.Value(runtimeClearAuditContextKey{}) != true {
+			receivedID = streamID
+			logging.From(ctx).Info("http request received",
+				zap.String("method", r.Method),
+				zap.String("path", r.URL.Path),
+				zap.String("route", r.Pattern),
+				zap.String("domain", requestDomain(r)),
+				zap.String("eventType", "request.received"),
+			)
+			_ = logging.RecordContext(ctx, logging.ContextMeta{
+				Origin:    logcontexts.OriginUser,
+				Title:     r.Method + " " + r.URL.Path,
+				Summary:   "request received",
+				ActorJSON: logging.MarshalActorJSON(map[string]string{"kind": "user", "id": "admin", "name": sess.Username}),
+			})
+			activitylog.RecordReceipt(ctx, streamID, receivedID, 0)
 			ctx = activitylog.WithCause(ctx, receivedID)
+			w.Header().Set("X-Operation-Id", streamID)
 		}
 		capture := &activityResponse{ResponseWriter: w}
 		next.ServeHTTP(capture, r.WithContext(ctx))
@@ -235,28 +246,28 @@ func (w *activityResponse) Flush() {
 		f.Flush()
 	}
 }
-func (w *activityResponse) finish(ctx context.Context, service *activity.Service) {
+func (w *activityResponse) finish(ctx context.Context, _ *activity.Service) {
 	if w.streaming {
 		return
 	}
 	body := w.buffer.Bytes()
 	operationID, eventID, seq := activitylog.ReceiptFromContext(ctx)
-	if service != nil && eventID != "" {
-		if _, err := service.GetEvent(context.WithoutCancel(ctx), eventID); err == nil {
-			var envelope map[string]any
-			if json.Unmarshal(body, &envelope) == nil {
-				key := "data"
-				if w.status >= 400 {
-					key = "error"
-				}
-				if value, ok := envelope[key].(map[string]any); ok {
+	if eventID != "" {
+		var envelope map[string]any
+		if json.Unmarshal(body, &envelope) == nil {
+			key := "data"
+			if w.status >= 400 {
+				key = "error"
+			}
+			if value, ok := envelope[key].(map[string]any); ok {
+				if operationID != "" {
 					value["operationId"] = operationID
-					value["acceptedEventId"] = eventID
-					value["acceptedSeq"] = seq
-					if b, err := json.Marshal(envelope); err == nil {
-						body = b
-						w.Header().Del("Content-Length")
-					}
+				}
+				value["acceptedEventId"] = eventID
+				value["acceptedSeq"] = seq
+				if b, err := json.Marshal(envelope); err == nil {
+					body = b
+					w.Header().Del("Content-Length")
 				}
 			}
 		}
@@ -287,63 +298,45 @@ func requestDomain(r *http.Request) string {
 	}
 }
 func (a *App) finishRequest(ctx context.Context, r *http.Request, w *activityResponse, receivedID string) {
-	operationID, eventID, _ := activitylog.ReceiptFromContext(ctx)
-	if eventID != "" {
-		if _, err := a.activity.GetEvent(context.WithoutCancel(ctx), eventID); err != nil {
-			operationID = ""
+	operationID, _, _ := activitylog.ReceiptFromContext(ctx)
+	if operationID == "" {
+		if logCtx, ok := logging.Lookup(ctx); ok {
+			operationID = logCtx.StreamID
 		}
 	}
-	if operationID == "" && !w.streaming {
-		var envelope map[string]any
-		if json.Unmarshal(w.buffer.Bytes(), &envelope) == nil {
-			key := "data"
-			if w.status >= 400 {
-				key = "error"
-			}
-			if value, ok := envelope[key].(map[string]any); ok {
-				if id, ok := value["operationId"].(string); ok && id != "" {
-					if event, err := a.activity.OperationReceipt(context.WithoutCancel(ctx), id); err == nil {
-						operationID = id
-						eventID = event.EventID
-						activitylog.RecordReceipt(ctx, id, event.EventID, event.Seq)
-					}
-				}
-			}
-		}
-	}
-	independent := operationID == ""
-	if independent {
-		operationID = id.New("op")
+	if operationID == "" {
+		operationID = receivedID
 	}
 	status := w.status
 	if status == 0 {
 		status = http.StatusOK
 	}
-	data := map[string]any{"method": r.Method, "route": r.Pattern, "httpStatus": status}
-	eventType := "request.finished"
-	level := "info"
+	fields := []zap.Field{
+		zap.String("method", r.Method),
+		zap.String("path", r.URL.Path),
+		zap.String("route", r.Pattern),
+		zap.Int("httpStatus", status),
+		zap.String("domain", requestDomain(r)),
+		zap.String("causationId", receivedID),
+		zap.String("eventType", "request.finished"),
+	}
+	logger := logging.From(ctx)
+	result := "succeeded"
+	hadError := false
 	if status >= 400 {
-		level = "error"
+		hadError = true
+		result = "failed"
+		logger.Error("http request finished", fields...)
+	} else {
+		logger.Info("http request finished", fields...)
 	}
-	if independent {
-		eventType = "operation.finished"
-		data["phase"] = "ended"
-		data["result"] = "succeeded"
-		if status >= 400 {
-			data["result"] = "failed"
-		}
-	}
-	receipt, err := a.activity.Append(context.WithoutCancel(ctx), []activity.EventInput{{EventType: eventType, Kind: "request", Level: level, Domain: requestDomain(r), Action: r.Pattern, OperationID: operationID, CausationEventID: receivedID, RequestID: receivedID, SourceStreamID: "http", Actor: activitylog.ActorFromContext(ctx), Text: r.Method + " " + r.URL.Path, Data: data}})
-	if err != nil {
-		logging.L().Error("Business response could not be durably recorded", zap.String("request_event_id", receivedID), zap.Error(err))
-		if !w.streaming {
-			w.buffer.Reset()
-			w.status = 0
-			httpx.Error(w, panelerr.WithDetails(panelerr.New(http.StatusServiceUnavailable, "activity_result_unrecorded", "The operation may have completed, but its result could not be recorded; verify the resource before retrying"), map[string]any{"eventId": receivedID}))
-		}
-		return
-	}
-	if independent && len(receipt.Events) > 0 {
-		activitylog.RecordReceipt(ctx, operationID, receipt.Events[0].EventID, receipt.Events[0].Seq)
-	}
+	_ = logging.RecordContext(ctx, logging.ContextMeta{
+		Origin:   logcontexts.OriginUser,
+		Title:    r.Method + " " + r.URL.Path,
+		Summary:  "request finished",
+		Result:   result,
+		HadError: hadError,
+		Finished: true,
+	})
+	activitylog.RecordReceipt(ctx, operationID, receivedID, 0)
 }

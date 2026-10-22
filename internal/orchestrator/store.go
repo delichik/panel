@@ -142,7 +142,7 @@ func (s *Store) Requeue(ctx context.Context, job Job, reason string) (bool, erro
 		}
 		affected, updateErr := result.RowsAffected()
 		if affected == 1 {
-			traceJobEvent("job_superseded", job, zap.String("reason", "purge_finalizer_removed_instance"))
+			traceJobEvent(ctx, "job_superseded", job, zap.String("reason", "purge_finalizer_removed_instance"))
 		}
 		return affected == 1, updateErr
 	}
@@ -157,7 +157,7 @@ func (s *Store) Requeue(ctx context.Context, job Job, reason string) (bool, erro
 	}
 	affected, err := result.RowsAffected()
 	if affected == 1 {
-		traceJobEvent("job_superseded", job, zap.String("reason", reason), zap.String("new_action", action))
+		traceJobEvent(ctx, "job_superseded", job, zap.String("reason", reason), zap.String("new_action", action))
 	}
 	return affected == 1, err
 }

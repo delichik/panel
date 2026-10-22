@@ -1,11 +1,14 @@
 package keyassets
 
 import (
+	"context"
 	"strings"
 	"time"
 
 	"panel/internal/modules/tasks"
 )
+
+const panelTLSReconcileInterval = 30 * time.Minute
 
 // keyAssetConcurrencyKey serializes operations per key asset: reissue,
 // regenerate and export on the same asset share one key. Bulk operations
@@ -34,7 +37,6 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 			},
 			Execute: s.RunPanelTLSReconcileTask,
 			Periodic: &tasks.Periodic{
-				Interval:      30 * time.Minute,
 				CollectInputs: s.CollectPanelTLSInputs,
 			},
 		},
@@ -45,4 +47,12 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 	} {
 		taskSvc.MustRegister(def)
 	}
+}
+
+// StartPeriodic starts the module-owned panel TLS reconcile scheduler loop.
+func (s *Service) StartPeriodic(ctx context.Context, taskSvc *tasks.Service) {
+	if s == nil || taskSvc == nil {
+		return
+	}
+	tasks.StartSchedulerLoop(ctx, taskSvc, TaskTypePanelTLSReconcile, panelTLSReconcileInterval, "keyassets")
 }

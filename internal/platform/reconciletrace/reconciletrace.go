@@ -9,6 +9,7 @@
 package reconciletrace
 
 import (
+	"context"
 	"sync/atomic"
 
 	"panel/internal/platform/logging"
@@ -33,12 +34,20 @@ func Enabled() bool {
 // event 是事件名（如 drift_detected、plan_result、target_claimed、
 // deploy_step_failed），fields 是事件字段（统一带上 app_id/server_id/
 // target_id/operation_id 等用于串联一次协调）。
-func Trace(event string, fields ...zap.Field) {
+// ctx 应携带调用方 stream；若为空则新建 reconcile 模块 stream。
+func Trace(ctx context.Context, event string, fields ...zap.Field) {
 	if !enabled.Load() {
 		return
+	}
+	if ctx == nil {
+		ctx = logging.Background("reconcile")
+	} else if _, ok := logging.Lookup(ctx); ok {
+		ctx = logging.With(ctx, logging.Context{Module: "reconcile"})
+	} else {
+		ctx = logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "reconcile"})
 	}
 	all := make([]zap.Field, 0, len(fields)+2)
 	all = append(all, zap.String("trace", "reconcile"), zap.String("event", event))
 	all = append(all, fields...)
-	logging.L().Info("reconcile trace", all...)
+	logging.From(ctx).Info("reconcile trace", all...)
 }

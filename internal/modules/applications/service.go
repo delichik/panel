@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -31,8 +30,11 @@ import (
 	panelerr "panel/internal/platform/errors"
 	httpx "panel/internal/platform/http"
 	id "panel/internal/platform/identity"
+	"panel/internal/platform/logging"
 	"panel/internal/platform/maintenance"
 	"panel/internal/platform/templating"
+
+	"go.uber.org/zap"
 )
 
 type Config struct {
@@ -318,14 +320,14 @@ func (s *Service) onOrchestratorJobSucceeded(ctx context.Context, job controlpla
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 	defer cancel()
 	if _, err := orm.RawExec(cleanupCtx, s.db, `DELETE FROM application_instances WHERE id=? AND desired_state='purged'`, job.InstanceID); err != nil {
-		log.Printf("application purge projection cleanup failed app_id=%s instance_id=%s: %v", job.ApplicationID, job.InstanceID, err)
+		logging.From(logging.With(cleanupCtx, logging.Context{Module: "applications"})).Warn("application purge projection cleanup failed", zap.String("app_id", job.ApplicationID), zap.String("instance_id", job.InstanceID), zap.Error(err))
 		return
 	}
 	if _, err := orm.RawExec(cleanupCtx, s.db, `DELETE FROM application_reconcile_states WHERE instance_id=?`, job.InstanceID); err != nil {
-		log.Printf("application reconcile state cleanup failed app_id=%s instance_id=%s: %v", job.ApplicationID, job.InstanceID, err)
+		logging.From(logging.With(cleanupCtx, logging.Context{Module: "applications"})).Warn("application reconcile state cleanup failed", zap.String("app_id", job.ApplicationID), zap.String("instance_id", job.InstanceID), zap.Error(err))
 	}
 	if err := s.deleteApplicationIfRuntimeGone(cleanupCtx, job.ApplicationID); err != nil && !isNotFound(err) {
-		log.Printf("application purge finalization failed app_id=%s: %v", job.ApplicationID, err)
+		logging.From(logging.With(cleanupCtx, logging.Context{Module: "applications"})).Warn("application purge finalization failed", zap.String("app_id", job.ApplicationID), zap.Error(err))
 	}
 }
 
@@ -340,7 +342,7 @@ func (s *Service) onOrchestratorJobFailed(ctx context.Context, job controlplane.
 		return
 	}
 	if err := s.recordApplicationReconcileFailure(ctx, job.ApplicationID); err != nil {
-		log.Printf("application reconcile failure recording failed app_id=%s: %v", job.ApplicationID, err)
+		logging.From(logging.With(ctx, logging.Context{Module: "applications"})).Warn("application reconcile failure recording failed", zap.String("app_id", job.ApplicationID), zap.Error(err))
 	}
 }
 
@@ -850,7 +852,7 @@ func (s *Service) refreshReferencesAfterRename(ctx context.Context, before, afte
 		// The source rename is already committed at this point. Keep the save
 		// result truthful and leave dependency refresh retryable through the
 		// regular application refresh path instead of reporting a rollback.
-		log.Printf("application reference refresh failed source_app_id=%s: %v", after.ID, err)
+		logging.From(logging.With(ctx, logging.Context{Module: "applications"})).Warn("application reference refresh failed", zap.String("source_app_id", after.ID), zap.Error(err))
 	}
 }
 
@@ -2230,7 +2232,7 @@ func (s *Service) insertRevision(ctx context.Context, app Application, job appru
 
 func (s *Service) insertRevisionBestEffort(ctx context.Context, app Application, job appruntime.Spec) {
 	if err := s.insertRevision(ctx, app, job); err != nil {
-		log.Printf("application revision record failed app_id=%s generation=%d: %v", app.ID, app.Generation, err)
+		logging.From(logging.With(ctx, logging.Context{Module: "applications"})).Warn("application revision record failed", zap.String("app_id", app.ID), zap.Int("generation", app.Generation), zap.Error(err))
 	}
 }
 func insertRevisionWithExec(ctx context.Context, exec orm.Executor, app Application, job appruntime.Spec) error {
@@ -2340,7 +2342,7 @@ func (s *Service) PlanApplicationDeployment(ctx context.Context, req DeploymentP
 	defer cancel()
 	if err != nil {
 		if recordErr := s.recordPlanningOutcome(recordCtx, app, req, err); recordErr != nil {
-			log.Printf("application %s planning failure could not be recorded", app.ID)
+			logging.From(logging.With(recordCtx, logging.Context{Module: "applications"})).Warn("application planning failure could not be recorded", zap.String("app_id", app.ID))
 		}
 		// Earlier planning batches may already have persisted Jobs. Wake the
 		// controller for those jobs and surface their IDs to the caller.
@@ -2351,7 +2353,7 @@ func (s *Service) PlanApplicationDeployment(ctx context.Context, req DeploymentP
 	}
 	if result.planningValidated || len(result.JobIDs) > 0 {
 		if recordErr := s.recordPlanningOutcome(recordCtx, app, req, nil); recordErr != nil {
-			log.Printf("application %s planning recovery could not be recorded", app.ID)
+			logging.From(logging.With(recordCtx, logging.Context{Module: "applications"})).Warn("application planning recovery could not be recorded", zap.String("app_id", app.ID))
 		}
 	}
 	s.enqueueDeploymentPlanResult(result)

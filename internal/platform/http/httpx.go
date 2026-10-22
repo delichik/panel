@@ -56,10 +56,12 @@ func Error(w http.ResponseWriter, err error) {
 		message = i18n.Translate(code, message)
 	}
 	logFields := []zap.Field{zap.Int("status", status), zap.String("code", code), zap.Error(err)}
+	// Error has no request handle; open a short-lived http module stream.
+	logger := logging.From(logging.Background("http"))
 	if status >= http.StatusInternalServerError {
-		logging.L().Error("api error response", logFields...)
+		logger.Error("api error response", logFields...)
 	} else {
-		logging.L().Debug("api error response", logFields...)
+		logger.Debug("api error response", logFields...)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

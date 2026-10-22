@@ -43,8 +43,11 @@ func TestAPIRouteManifest(t *testing.T) {
 	//   PUT/DELETE /api/v1/servers/{id}/nat-ports/{mappingID}
 	// 消费者（web/src/api/settings.ts、web/src/api/servers.ts、Mock 与验收条目
 	// TS-*、UFW-API-*）必须与本清单同步变化（COV-API-001）。
-	const wantCount = 172
-	const wantHash = "62dd180de12eea5072f4881dde7264a45e64d92e14566f51ea008ffe872ac907"
+	// Replaced 9 /api/v1/activity/* product routes with 4 /api/v1/log-contexts*
+	// routes (process log stream index + JSONL lines). Activity Service remains
+	// for append/audit; see ENG-LOG-008 and api-route-inventory.md.
+	const wantCount = 167
+	const wantHash = "d91fb50dfbb055013e6fb1bd3288bef3193916ee7039edb655f54c05bd14a175"
 	manifest := strings.Join(patterns, "\n") + "\n"
 	gotHash := fmt.Sprintf("%x", sha256.Sum256([]byte(manifest)))
 	if len(patterns) != wantCount || gotHash != wantHash {

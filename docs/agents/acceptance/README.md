@@ -55,7 +55,7 @@
 | DNS、ACME、自签名证书、密钥资产 | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
 | 备份、恢复、维护模式、调试与诊断；清理数据进度/恢复/写入暂停 `DIAG-CLR-001..008`、`UI-DBG-007/008` | [备份、恢复与诊断](backup-restore-diagnostics.md)、[逐页面验收](ui-pages.md) |
 | ORM、数据库模型、迁移与兼容 | [架构、数据与 API](architecture-data-api.md) |
-| 测试入口、构建、容器和发布 | [工程质量与发布](engineering-release.md) |
+| 测试入口、构建、容器和发布；Panel 进程日志工具包 `ENG-LOG-001..008`（含 `/api/v1/log-contexts`） | [工程质量与发布](engineering-release.md) |
 | 检查是否遗漏路由、API、表、后台行为或产物 | [项目覆盖基线](coverage-matrix.md) |
 | 逐项核对全部主 Panel HTTP method/path | [API 路由逐项清单](api-route-inventory.md) |
 | 核对当前实现尚未达到的合同，或修改触及实现/合同不一致 | [已知实现与验收差距](known-gaps.md) |

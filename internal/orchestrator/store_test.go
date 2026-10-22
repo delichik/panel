@@ -3,12 +3,12 @@ package orchestrator
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
-	"panel/internal/platform/activitylog"
 	"testing"
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"panel/internal/platform/activitylog"
 )
 
 func newOrchestratorTestDB(t *testing.T) *sql.DB {
@@ -153,28 +153,12 @@ func TestObservationWriterUsesSequenceAndLeaseFencing(t *testing.T) {
 	if err != nil || wrong.Accepted {
 		t.Fatalf("wrong lease observation = %#v, %v", wrong, err)
 	}
-	var dataRaw, resourcesRaw string
-	if err := db.QueryRow(`SELECT data_json,resources_json FROM activity_events WHERE event_type='observation.rejected' ORDER BY seq DESC LIMIT 1`).Scan(&dataRaw, &resourcesRaw); err != nil {
+	var rejected int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM activity_events WHERE event_type='observation.rejected'`).Scan(&rejected); err != nil {
 		t.Fatal(err)
 	}
-	var data map[string]any
-	var resources []activitylog.Resource
-	if err := json.Unmarshal([]byte(dataRaw), &data); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal([]byte(resourcesRaw), &resources); err != nil {
-		t.Fatal(err)
-	}
-	if data["reason"] != "lease_lost" {
-		t.Fatalf("rejection reason = %#v, want lease_lost", data["reason"])
-	}
-	if len(resources) != 2 || resources[0].Type != "application" || resources[0].ID != "app-1" || resources[1].Type != "server" || resources[1].ID != "srv-1" {
-		t.Fatalf("rejection resources = %#v", resources)
-	}
-	incoming, _ := data["incoming"].(map[string]any)
-	current, _ := data["current"].(map[string]any)
-	if incoming["source"] != "reconcile" || current["jobState"] != JobRunning || current["leaseMatches"] != false {
-		t.Fatalf("rejection diagnostics missing: incoming=%#v current=%#v", incoming, current)
+	if rejected != 0 {
+		t.Fatalf("observation.rejected must not write activity_events, got %d", rejected)
 	}
 	owned, err := writer.Write(ctx, Observation{InstanceID: "inst-1", Source: "reconcile", ObservedAt: time.Unix(4, 0).UTC(), ObservedState: ObservedRunning, JobID: job.ID, LeaseToken: job.LeaseToken})
 	if err != nil || !owned.Accepted {
@@ -201,16 +185,12 @@ func TestObservationWriterExplainsMissingInstanceForDurableJob(t *testing.T) {
 	if err != nil || result.Accepted {
 		t.Fatalf("missing instance observation = %#v, %v", result, err)
 	}
-	var dataRaw string
-	if err := db.QueryRow(`SELECT data_json FROM activity_events WHERE event_type='observation.rejected' ORDER BY seq DESC LIMIT 1`).Scan(&dataRaw); err != nil {
+	var rejected int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM activity_events WHERE event_type='observation.rejected'`).Scan(&rejected); err != nil {
 		t.Fatal(err)
 	}
-	var data map[string]any
-	if err := json.Unmarshal([]byte(dataRaw), &data); err != nil {
-		t.Fatal(err)
-	}
-	if data["reason"] != "instance_missing" {
-		t.Fatalf("rejection reason = %#v, want instance_missing", data["reason"])
+	if rejected != 0 {
+		t.Fatalf("observation.rejected must not write activity_events, got %d", rejected)
 	}
 }
 

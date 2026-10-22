@@ -317,8 +317,8 @@
 
 - **前置**：同一 Job 可能保留任意数量的历史 linked intent，或数据库中已安装旧版本 Activity control trigger。
 - **动作**：Job claim、retry、uncertainty 等中间状态转换，写入相同 reconcile observation，或新版本启动并安装 control trigger。
-- **结果**：中间 Job 转换只追加当前执行的常数数量事实，不向历史 intent 写 `execution.shared_result`；共享结果只在 Job 进入 terminal state 时传播；事实字段完全相同的 reconcile observation 不追加事件；安装过程在一个事务内替换本模块拥有的同名旧 trigger。
-- **失败**：不得因历史 linked intent 数量使一次 claim/retry 产生线性事件扇出，也不得用 `CREATE TRIGGER IF NOT EXISTS` 静默保留旧可执行定义；trigger 替换失败必须整体回滚。
+- **结果**：产品/过程事实经统一日志（JSONL + `log_contexts`）记录，不得再 INSERT `activity_events`；`InstallControlTriggers` 仅 DROP 既有 `activity_*` 控制触发器且不得失败；中间 Job 转换不得因历史 linked intent 数量产生线性扇出。
+- **失败**：trigger 清理失败必须整体回滚；不得重新安装会写入 `activity_events` 的控制触发器。
 - **不变量**：既有 Activity 事实不可修改或删除；真实 observed state/generation/spec/container/image/error 变化仍各追加一条 observation；终态共享结果仍可追溯到原 linked intent。
 - **验证**：legacy trigger replacement、high-cardinality linked-intent intermediate transition O(1)、identical/changed reconcile observation tests。
 
@@ -505,12 +505,12 @@
 
 ### TASK-PER-001 周期 collector 决策
 
-- **前置**：Definition.Periodic 指定 interval/CollectInputs。
-- **动作**：首个 interval tick 或 TriggerPeriodicNow。
+- **前置**：Definition.Periodic 仅指定 CollectInputs；各模块通过 `StartPeriodic`/`StartSchedulerLoop` 自管 cadence。
+- **动作**：模块 scheduler 首个 interval tick 或 TriggerPeriodicNow。
 - **结果**：`shouldRun=false` 不创建 task/log；true 将 collector 输出交 Manager；启动后首轮延迟至第一个 tick，不在重启瞬间齐发。
 - **失败**：Execute 不得重新扫描本轮资源列表；collector-only definition 可无 Execute。
-- **不变量**：多个周期任务共用 NewIntervalCollector 节流，只有成功产出推进其时间。
-- **验证**：periodic false/collector-only/interval tests。
+- **不变量**：周期间隔由模块 SchedulerLoop 拥有，不再挂在 Periodic.Interval / NewIntervalCollector；Panel 关闭时取消共享 periodic context。
+- **验证**：periodic false/collector-only/scheduler-loop tests。
 
 ### TASK-PER-002 立即触发 payload
 

@@ -7,10 +7,14 @@ import (
 	"errors"
 	"time"
 
+	"go.uber.org/zap"
+
 	"panel/internal/platform/activitylog"
 	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/i18n"
 	id "panel/internal/platform/identity"
+	"panel/internal/platform/logcontexts"
+	"panel/internal/platform/logging"
 )
 
 // DeploymentPlanningError is independent of container state and execution Jobs:
@@ -99,20 +103,55 @@ func (s *Service) recordPlanningOutcome(ctx context.Context, app Application, re
 	if actor.Kind == "" {
 		actor = activitylog.Actor{Kind: "controller", ID: "application"}
 	}
-	event := activitylog.EventInput{
-		Domain: "application", Action: "apply", Kind: "lifecycle", Actor: actor,
-		Trigger: firstNonEmpty(req.TriggerType, "system"), SourceID: "panel",
-		Resources: []activitylog.Resource{{Type: "application", ID: app.ID, Name: app.Name, Generation: app.Generation}},
+	resources := []activitylog.Resource{{Type: "application", ID: app.ID, Name: app.Name, Generation: app.Generation}}
+	operationID := old.OperationID
+	eventType := "deployment.planning_recovered"
+	hadError := false
+	fields := []zap.Field{
+		zap.String("action", "apply"),
+		zap.String("trigger", firstNonEmpty(req.TriggerType, "system")),
+		zap.String("stage", "planning"),
+		zap.Int("configVersion", app.Version),
+		zap.String("applicationId", app.ID),
 	}
+	msg := eventType
 	if planErr != nil {
-		event.EventType, event.Level, event.OperationID = "operation.failed", "error", issue.OperationID
-		event.Data = map[string]any{"phase": "ended", "result": "failed", "stage": "planning", "errorCode": issue.Code, "error": issue.Message, "field": issue.Field, "fileName": issue.FileName, "retryable": issue.Retryable, "configVersion": app.Version}
+		operationID = issue.OperationID
+		eventType = "operation.failed"
+		hadError = true
+		msg = issue.Message
+		if msg == "" {
+			msg = eventType
+		}
+		fields = append(fields,
+			zap.String("phase", "ended"),
+			zap.String("result", "failed"),
+			zap.String("errorCode", issue.Code),
+			zap.String("field", issue.Field),
+			zap.String("fileName", issue.FileName),
+			zap.Bool("retryable", issue.Retryable),
+		)
+	}
+	fields = append(fields, zap.String("eventType", eventType))
+	logCtx := logging.Ensure(ctx, logging.Context{Module: "applications", OperationID: operationID})
+	if hadError {
+		logging.From(logCtx).Error(msg, fields...)
 	} else {
-		event.EventType, event.Level, event.OperationID = "deployment.planning_recovered", "info", old.OperationID
-		event.Data = map[string]any{"stage": "planning", "configVersion": app.Version}
+		logging.From(logCtx).Info(msg, fields...)
 	}
-	if _, err := activitylog.AppendTx(ctx, tx, []activitylog.EventInput{event}); err != nil {
-		return err
+	result := ""
+	if hadError {
+		result = "failed"
 	}
+	_ = logging.RecordContext(logCtx, logging.ContextMeta{
+		Origin:        logcontexts.OriginProcess,
+		Title:         eventType,
+		Summary:       msg,
+		Result:        result,
+		HadError:      hadError,
+		Finished:      hadError,
+		ActorJSON:     logging.MarshalActorJSON(map[string]string{"kind": actor.Kind, "id": actor.ID, "name": actor.Name}),
+		ResourcesJSON: logging.MarshalResourcesJSON(resources),
+	})
 	return tx.Commit()
 }

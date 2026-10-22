@@ -10,6 +10,8 @@ import (
 	id "panel/internal/platform/identity"
 )
 
+const packageRefreshInterval = 30 * time.Minute
+
 func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 	if taskSvc == nil {
 		return
@@ -21,8 +23,9 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 		AllowRetry:  true,
 		Execute:     s.RunRefreshTask,
 		Periodic: &tasks.Periodic{
-			Interval:      30 * time.Minute,
-			CollectInputs: tasks.NewIntervalCollector(30*time.Minute, nil, s.CollectScheduledPackageRefreshInputs),
+			CollectInputs: func(ctx context.Context, _ tasks.PeriodicTrigger) (tasks.CreateBatchInput, bool, error) {
+				return s.CollectScheduledPackageRefreshInputs(ctx)
+			},
 		},
 	})
 	taskSvc.MustRegister(tasks.Definition{
@@ -44,6 +47,15 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 		Execute:           s.RunUpgradeAllTask,
 	})
 }
+
+// StartPeriodic starts the module-owned package refresh scheduler loop.
+func (s *Service) StartPeriodic(ctx context.Context, taskSvc *tasks.Service) {
+	if s == nil || taskSvc == nil {
+		return
+	}
+	tasks.StartSchedulerLoop(ctx, taskSvc, "package_refresh", packageRefreshInterval, "packages")
+}
+
 
 func (s *Service) CollectScheduledPackageRefreshInputs(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
 	if s == nil || s.servers == nil {

@@ -2,93 +2,66 @@ package tasks
 
 import (
 	"context"
-	"log"
 	"sync"
 	"time"
+
+	"panel/internal/platform/logging"
+
+	"go.uber.org/zap"
 )
 
-type PeriodicRunner struct {
-	manager *Manager
-	wg      sync.WaitGroup
+// SchedulerLoop owns one goroutine that periodically triggers a registered
+// periodic task type via Manager.TriggerPeriodicNow. Interval lives in the
+// calling module, not on Definition.Periodic.
+type SchedulerLoop struct {
+	service  *Service
+	taskType string
+	interval time.Duration
+	module   string
+	wg       sync.WaitGroup
 }
 
-func NewIntervalCollector(defaultInterval time.Duration, intervalProvider func() time.Duration, collect func(context.Context) (CreateBatchInput, bool, error)) func(context.Context, PeriodicTrigger) (CreateBatchInput, bool, error) {
-	var mu sync.Mutex
-	lastRun := time.Now()
-	return func(ctx context.Context, trigger PeriodicTrigger) (CreateBatchInput, bool, error) {
-		mu.Lock()
-		defer mu.Unlock()
-		interval := defaultInterval
-		if intervalProvider != nil {
-			if configured := intervalProvider(); configured > 0 {
-				interval = configured
-			}
-		}
-		if isSchedulerPeriodicTrigger(trigger) && time.Since(lastRun) < interval {
-			return CreateBatchInput{}, false, nil
-		}
-		batch, shouldRun, err := collect(ctx)
-		if err == nil && shouldRun {
-			lastRun = time.Now()
-		}
-		return batch, shouldRun, err
+// StartSchedulerLoop starts a delayed-first-tick loop for taskType.
+// The first trigger waits one full interval (thundering-herd guard on restart).
+func StartSchedulerLoop(ctx context.Context, service *Service, taskType string, interval time.Duration, module string) *SchedulerLoop {
+	if service == nil || interval <= 0 || taskType == "" {
+		return nil
 	}
+	loop := &SchedulerLoop{service: service, taskType: taskType, interval: interval, module: module}
+	loop.wg.Add(1)
+	go func() {
+		defer loop.wg.Done()
+		loop.run(ctx)
+	}()
+	return loop
 }
 
-func NewPeriodicRunner(service *Service) *PeriodicRunner {
-	return &PeriodicRunner{manager: NewManager(service)}
-}
-
-func (r *PeriodicRunner) Start(ctx context.Context) {
-	if r == nil || r.manager == nil || r.manager.service == nil {
+func (l *SchedulerLoop) Wait() {
+	if l == nil {
 		return
 	}
-	for _, taskType := range r.manager.service.Registry().Types() {
-		def, ok := r.manager.service.Registry().Definition(taskType)
-		if !ok || def.Periodic == nil || def.Periodic.Interval <= 0 {
-			continue
-		}
-		r.wg.Add(1)
-		go func(def Definition) {
-			defer r.wg.Done()
-			r.loop(ctx, def)
-		}(def)
-	}
+	l.wg.Wait()
 }
 
-func (r *PeriodicRunner) Wait() {
-	if r == nil {
-		return
-	}
-	r.wg.Wait()
-}
-
-func (r *PeriodicRunner) loop(ctx context.Context, def Definition) {
-	ticker := time.NewTicker(def.Periodic.Interval)
+func (l *SchedulerLoop) run(ctx context.Context) {
+	ticker := time.NewTicker(l.interval)
 	defer ticker.Stop()
-	// 首 tick 前不立即执行，避免 Panel 重启瞬间所有周期任务同时触发（惊群）；
-	// 各周期类型首个执行统一推迟到第一个 interval 之后。
+	manager := NewManager(l.service)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			r.run(ctx, def)
+			tickCtx := logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: l.module})
+			_, _, err := manager.TriggerPeriodicNow(tickCtx, l.taskType, PeriodicTrigger{Type: "scheduler"})
+			if err != nil {
+				logging.From(tickCtx).Warn("periodic task trigger failed", zap.String("task_type", l.taskType), zap.Error(err))
+			}
 		}
 	}
 }
 
-func (r *PeriodicRunner) run(ctx context.Context, def Definition) {
-	if def.Periodic == nil || def.Periodic.CollectInputs == nil {
-		return
-	}
-	_, _, err := r.manager.TriggerPeriodicNow(ctx, def.Type, PeriodicTrigger{Type: "scheduler"})
-	if err != nil {
-		log.Printf("periodic task %s trigger: %v", def.Type, err)
-		return
-	}
-}
-
-func isSchedulerPeriodicTrigger(trigger PeriodicTrigger) bool {
-	return trigger.Type == "" || trigger.Type == "scheduler"
+// TriggerSchedulerOnce runs one scheduler trigger (tests / manual harness).
+func TriggerSchedulerOnce(ctx context.Context, service *Service, taskType string) (Task, bool, error) {
+	return NewManager(service).TriggerPeriodicNow(ctx, taskType, PeriodicTrigger{Type: "scheduler"})
 }

@@ -2,9 +2,12 @@ package metrics
 
 import (
 	"context"
-	"log"
 	"sync"
 	"time"
+
+	"panel/internal/platform/logging"
+
+	"go.uber.org/zap"
 )
 
 type CleanupSettings struct {
@@ -76,12 +79,13 @@ func (w *CleanupWorker) loop(ctx context.Context) {
 				continue
 			}
 			lastRun = time.Now()
-			deleted, err := w.service.Cleanup(ctx, settings.RetentionDays)
+			tickCtx := logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "metrics"})
+			deleted, err := w.service.Cleanup(tickCtx, settings.RetentionDays)
 			if err != nil {
-				log.Printf("metrics cleanup: %v", err)
+				logging.From(tickCtx).Warn("metrics cleanup failed", zap.Error(err))
 				continue
 			}
-			log.Printf("metrics cleanup deleted %d rows", deleted)
+			logging.From(tickCtx).Info("metrics cleanup deleted rows", zap.Int64("deleted", deleted))
 		}
 	}
 }

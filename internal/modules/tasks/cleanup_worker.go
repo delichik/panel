@@ -2,9 +2,12 @@ package tasks
 
 import (
 	"context"
-	"log"
 	"sync"
 	"time"
+
+	"panel/internal/platform/logging"
+
+	"go.uber.org/zap"
 )
 
 // defaultTaskRetention is how long terminal task history (tasks, task_steps,
@@ -61,12 +64,13 @@ func (w *CleanupWorker) loop(ctx context.Context) {
 }
 
 func (w *CleanupWorker) run(ctx context.Context) {
+	ctx = logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "tasks"})
 	deleted, err := w.service.CleanupRetained(ctx, defaultTaskRetention)
 	if err != nil {
-		log.Printf("task retention cleanup: %v", err)
+		logging.From(ctx).Warn("task retention cleanup failed", zap.Error(err))
 		return
 	}
 	if deleted > 0 {
-		log.Printf("task retention cleanup deleted %d old task(s)", deleted)
+		logging.From(ctx).Info("task retention cleanup deleted old tasks", zap.Int64("deleted", deleted))
 	}
 }

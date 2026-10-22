@@ -43,25 +43,13 @@ func TestManualVerificationPreservesUncertaintyAndReleasesQueue(t *testing.T) {
 	if resolved.Status != StatusCompleted {
 		t.Fatalf("unexpected resolved status: %s", resolved.Status)
 	}
-	var uncertain, manual int
-	if err := svc.db.QueryRow(`SELECT count(*) FROM activity_events WHERE operation_id=? AND event_type='uncertainty.detected'`, task.OperationID).Scan(&uncertain); err != nil {
+	// Product facts go to unified logging; activity_events must not receive verification rows.
+	var manual int
+	if err := svc.db.QueryRow(`SELECT count(*) FROM activity_events WHERE operation_id=? AND event_type='execution.verified'`, task.OperationID).Scan(&manual); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.db.QueryRow(`SELECT count(*) FROM activity_events WHERE operation_id=? AND event_type='execution.verified' AND json_extract(data_json,'$.verificationSource')='manual' AND actor_id='admin'`, task.OperationID).Scan(&manual); err != nil {
-		t.Fatal(err)
-	}
-	var gaps, resolvedGaps int
-	if err := svc.db.QueryRow(`SELECT count(*) FROM activity_events WHERE operation_id=? AND event_type='evidence.gap_detected' AND json_extract(data_json,'$.reason')='source_process_lost'`, task.OperationID).Scan(&gaps); err != nil {
-		t.Fatal(err)
-	}
-	if err := svc.db.QueryRow(`SELECT count(*) FROM activity_events WHERE operation_id=? AND event_type='evidence.gap_resolved'`, task.OperationID).Scan(&resolvedGaps); err != nil {
-		t.Fatal(err)
-	}
-	if gaps != 1 || resolvedGaps != 0 {
-		t.Fatalf("manual result falsely repaired output gap: gaps=%d resolved=%d", gaps, resolvedGaps)
-	}
-	if uncertain != 1 || manual != 1 {
-		t.Fatalf("history changed: uncertainty=%d manual=%d", uncertain, manual)
+	if manual != 0 {
+		t.Fatalf("execution.verified still written to activity_events: %d", manual)
 	}
 	if _, err := svc.ResolveUncertain(actorCtx, task.ID, "failed", "changed my mind"); err == nil {
 		t.Fatal("verification overwrote a completed fact")

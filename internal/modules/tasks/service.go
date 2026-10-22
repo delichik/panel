@@ -10,12 +10,16 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"panel/internal/modules/runtimeevents"
 	"panel/internal/platform/activitylog"
 	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/i18n"
 	id "panel/internal/platform/identity"
+	"panel/internal/platform/logcontexts"
+	"panel/internal/platform/logging"
 	"panel/internal/platform/maintenance"
 )
 
@@ -278,17 +282,9 @@ func createTask(ctx context.Context, exec orm.Executor, in CreateInput, quiet bo
 	return t, err
 }
 
-func recordTaskReceipt(ctx context.Context, exec orm.Executor, task Task) error {
-	var eventID string
-	var seq int64
-	err := exec.QueryRowContext(ctx, `SELECT event_id,seq FROM activity_events WHERE operation_id=? AND run_id=? AND event_type IN ('operation.requested','retry.requested') ORDER BY seq DESC LIMIT 1`, task.OperationID, task.ID).Scan(&eventID, &seq)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	activitylog.RecordReceipt(ctx, task.OperationID, eventID, seq)
+func recordTaskReceipt(ctx context.Context, _ orm.Executor, task Task) error {
+	// Control triggers no longer write activity_events; correlate via operation id.
+	activitylog.RecordReceipt(ctx, task.OperationID, task.ID, 0)
 	return nil
 }
 
@@ -347,27 +343,45 @@ func (s *Service) Advance(ctx context.Context, taskID, stage, message string) er
 
 // AppendLog accepts the complete redacted output. Retention and line-length
 // limits must never turn an accepted execution fact into missing evidence.
+func taskLogStreamID(taskID string) string {
+	return "task-log:" + strings.TrimSpace(taskID)
+}
+
 func (s *Service) AppendLog(ctx context.Context, taskID, stream, line string) error {
 	task, err := s.Get(ctx, taskID)
 	if err != nil {
 		return err
 	}
-	level := "info"
-	if stream == "stderr" {
-		level = "error"
-	} else if s.isQuietTaskType(task.Type) {
-		// 内部例行任务（周期健康检查等）的输出属于后台巡检细节：默认级别
-		// 筛选不展示，失败仍以 stderr/error 保留。
-		level = "debug"
+	executionID := task.ID + ":attempt:" + fmt.Sprint(task.RetryCount)
+	ctx = logging.Ensure(ctx, logging.Context{
+		StreamID:    taskLogStreamID(task.ID),
+		Module:      "tasks",
+		OperationID: task.OperationID,
+		ExecutionID: executionID,
+	})
+	text := Redact(line)
+	fields := []zap.Field{
+		zap.String("eventType", "output.chunk"),
+		zap.String("stream", stream),
+		zap.String("taskId", task.ID),
+		zap.String("action", task.Type),
+		zap.String("domain", firstNonEmpty(task.ResourceType, "system")),
 	}
-	_, err = activitylog.Append(ctx, s.db, []activitylog.EventInput{{
-		EventType: "output.chunk", Kind: "output", Level: level, Domain: firstNonEmpty(task.ResourceType, "system"), Action: task.Type,
-		OperationID: task.OperationID, RunID: task.ID, ExecutionID: task.ID + ":attempt:" + fmt.Sprint(task.RetryCount),
-		SourceStreamID: task.ID, Stream: stream, Text: Redact(line),
-		Resources: []activitylog.Resource{{Type: task.ResourceType, ID: task.ResourceID, Role: "target"}},
-		Data:      map[string]any{"taskId": task.ID},
-	}})
-	return err
+	logger := logging.From(ctx)
+	switch {
+	case stream == "stderr":
+		logger.Error(text, fields...)
+	case s.isQuietTaskType(task.Type):
+		logger.Debug(text, fields...)
+	default:
+		logger.Info(text, fields...)
+	}
+	_ = logging.RecordContext(ctx, logging.ContextMeta{
+		Origin:  logcontexts.OriginProcess,
+		Title:   task.Type,
+		Summary: text,
+	})
+	return nil
 }
 
 func (s *Service) Complete(ctx context.Context, taskID, summary string) error {
@@ -1030,26 +1044,40 @@ func (s *Service) ExpireStaleQueued(ctx context.Context, now time.Time, maxAge t
 }
 
 func (s *Service) Logs(ctx context.Context, taskID string, after int64) ([]Log, int64, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT seq,occurred_at,stream,text FROM activity_events WHERE event_type='output.chunk' AND json_extract(data_json,'$.taskId')=? AND seq>? ORDER BY seq LIMIT 200`, taskID, after)
+	_ = ctx
+	dir := logging.LogDir()
+	if dir == "" {
+		return nil, after, nil
+	}
+	if after < 0 {
+		after = 0
+	}
+	records, err := logcontexts.ReadLines(dir, taskLogStreamID(taskID), logcontexts.LineFilter{
+		Limit: 200,
+		After: int(after),
+	})
 	if err != nil {
 		return nil, after, err
 	}
-	defer rows.Close()
-	logs := []Log{}
+	logs := make([]Log, 0, len(records))
 	next := after
-	for rows.Next() {
-		var l Log
-		var stamp string
-		if err := rows.Scan(&l.Cursor, &stamp, &l.Stream, &l.Line); err != nil {
-			return nil, after, err
+	for i, rec := range records {
+		cursor := after + int64(i) + 1
+		l := Log{Cursor: cursor, Stream: "stdout", Line: fmt.Sprint(rec["msg"])}
+		if stream, ok := rec["stream"].(string); ok && stream != "" {
+			l.Stream = stream
 		}
-		if l.Time, err = time.Parse(time.RFC3339Nano, stamp); err != nil {
-			return nil, after, err
+		if ts, ok := rec["ts"].(string); ok {
+			if parsed, parseErr := time.Parse(time.RFC3339Nano, ts); parseErr == nil {
+				l.Time = parsed
+			} else if parsed, parseErr := time.Parse(time.RFC3339, ts); parseErr == nil {
+				l.Time = parsed
+			}
 		}
 		logs = append(logs, l)
-		next = l.Cursor
+		next = cursor
 	}
-	return logs, next, rows.Err()
+	return logs, next, nil
 }
 
 func (s *Service) UpsertStep(ctx context.Context, taskID string, in StepInput) (Step, error) {

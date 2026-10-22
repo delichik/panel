@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +12,9 @@ import (
 	"panel/internal/modules/runtimeevents"
 	panelerr "panel/internal/platform/errors"
 	id "panel/internal/platform/identity"
+	"panel/internal/platform/logging"
+
+	"go.uber.org/zap"
 )
 
 // defaultQueueTurnWait 是并发队列轮次的等待上限。超过后任务留在原状态，
@@ -482,7 +484,7 @@ func (m *Manager) runRecover(ctx context.Context, task Task) (err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err = fmt.Errorf("task %s panicked: %v", task.ID, recovered)
-			log.Printf("task worker recovered from panic while running task %s: %v", task.ID, recovered)
+			logging.From(logging.With(ctx, logging.Context{Module: "tasks"})).Error("task worker recovered from panic while running task", zap.String("task_id", task.ID), zap.Any("panic", recovered))
 			if m != nil && m.service != nil {
 				_ = m.service.Fail(ctx, task.ID, err)
 			}
@@ -500,7 +502,7 @@ func sendErrNonBlocking(errs chan<- error, err error) {
 	select {
 	case errs <- err:
 	default:
-		log.Printf("task worker dropped child error because the error channel is full: %v", err)
+		logging.From(logging.Background("tasks")).Warn("task worker dropped child error because the error channel is full", zap.Error(err))
 	}
 }
 

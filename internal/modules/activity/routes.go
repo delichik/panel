@@ -2,14 +2,12 @@ package activity
 
 import "net/http"
 
+// RegisterRoutes previously mounted /api/v1/activity/* product routes.
+// Those endpoints are retired; process log streams are served by
+// /api/v1/log-contexts (see internal/modules/logcontexts). The Activity
+// Service remains for append/audit and internal projection use.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, auth func(http.Handler) http.Handler) {
-	mux.Handle("GET /api/v1/activity/events", auth(http.HandlerFunc(h.Events)))
-	mux.Handle("GET /api/v1/activity/events/{id}", auth(http.HandlerFunc(h.Event)))
-	mux.Handle("GET /api/v1/activity/events/{id}/context", auth(http.HandlerFunc(h.Context)))
-	mux.Handle("GET /api/v1/activity/operations", auth(http.HandlerFunc(h.Operations)))
-	mux.Handle("GET /api/v1/activity/operations/{id}", auth(http.HandlerFunc(h.Operation)))
-	mux.Handle("GET /api/v1/activity/tail", auth(http.HandlerFunc(h.Tail)))
-	mux.Handle("GET /api/v1/activity/summary", auth(http.HandlerFunc(h.Summary)))
-	mux.Handle("GET /api/v1/activity/export", auth(http.HandlerFunc(h.Export)))
-	mux.Handle("GET /api/v1/activity/evidence/{id}", auth(http.HandlerFunc(h.Evidence)))
+	_ = mux
+	_ = auth
+	_ = h
 }

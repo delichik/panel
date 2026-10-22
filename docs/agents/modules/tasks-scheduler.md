@@ -40,7 +40,7 @@
 - 所有任务类型必须提前注册后才能创建或执行。业务模块通过任务 manager 创建任务；未注册类型必须返回校验错误，不能直接写入任务表。应用 `jobs` 不属于任务类型，必须由 `internal/orchestrator.Planner` 创建，不能借任务 manager 或直接写 `tasks` 表替代。
 - 注册方通过任务定义声明参数校验、执行函数、`BeforeStart`、完成 hook、失败 hook、重试/手动运行能力、并发策略、一次性 worker 排队超时清理能力和周期配置。
 - 业务模块的 `tasks.go` 必须保持声明式：`Execute` 直接绑定接受 `tasks.TaskContext` 的具名方法，`CollectInputs` 直接绑定具名 collector。禁止使用只为转调另一函数而存在的匿名 executor，也禁止在任务定义中内联节流、扫描和批量输入组装等大段逻辑。
-- 多个周期任务共用的时间节流使用 `tasks.NewIntervalCollector`；业务模块仍负责提供实际输入 collector，tasks 框架只管理调用间隔和上次成功产出时间。
+- 周期 cadence 由各业务模块的 `StartPeriodic`/`tasks.StartSchedulerLoop` 拥有；`Periodic` 只保留 `CollectInputs`。Panel 启动时用可取消 context 调用各模块 `StartPeriodic`，关闭时取消该 context。
 - `Hidden`、`Quiet`、`AllowRunNow`、`AllowRetry`、`DisallowCancel`、`DefaultMaxRetries`、`StaleQueuedAfter`、并发策略、executor 和周期配置都属于任务定义的一部分；这些能力随业务模块注册，不由任务中心或任务内部 worker 根据 task type 字符串另行维护。没有注册 `Execute` 的记录型任务不得声明 `AllowRunNow` 或 `AllowRetry`，避免任务中心暴露无法真正执行的手动运行或重试入口。
 - `Quiet` 标记内部例行任务（例如每 5 分钟的 `server_agent_check` Agent 健康检查）。定义声明的 quiet 随任务行持久化，Activity 控制触发器据此把该执行在活动日志中的创建与非失败流转记为 `debug`：默认级别筛选（`info,warning,error`）不再展示这些巡检事实，需要时可用“全部级别”查看。失败、可重试失败和 blocked 仍记为 `error`，任务日志的标准输出同样降为 `debug`、stderr 保持 `error`，因此降噪不会掩盖故障。`Quiet` 只影响活动日志级别，不改变执行、周期、并发、去重、保留策略，也不影响任务中心可见性（由 `Hidden` 单独决定）。
 - 注册方可通过 `DisallowCancel` 声明任务不可取消；不可取消任务不能被 `Cancel` 或 `CancelByServer` 取消，任务 API 返回 `allowCancel=false`，删除服务器也不会终止这类任务。
@@ -58,7 +58,7 @@
 - 操作标题、任务类型、步骤名称和阶段应在前端按稳定的 `type` / `stage` 标识翻译，不直接展示持久化的英文 summary 作为标题。
 - 任务摘要（summary）以后端稳定英文写入存储，任务中心用 `translateTaskSummary` 按当前语言渲染翻译；不要把摘要写入逻辑与展示语言耦合。
 - `tasks.Service` 在内存中维护当前进程的 running execution registry。任务进入 `running` 前必须注册执行对象，进入完成、失败、可重试失败或阻塞等终态后必须注销；显式取消会取消 execution context 并移除 registry 项。
-- Debug 快照会只读导出任务注册定义的稳定诊断字段，包括隐藏、内部例行（quiet）、执行器、周期配置、手动运行/重试、默认重试、并发策略和 stale queued 超时；不得导出任务参数、collector 输入或业务数据。
+- Debug 快照会只读导出任务注册定义的稳定诊断字段，包括隐藏、内部例行（quiet）、执行器、是否周期、手动运行/重试、默认重试、并发策略和 stale queued 超时；不导出 periodic interval、任务参数、collector 输入或业务数据。
 - 任务进入 `completed`、`failed`、`failed_retryable`、`blocked` 或 `cancelled` 等终态后，后台 worker 后续的完成/失败/重试写入不得覆盖既有终态；服务器删除会把该服务器的 `queued`、`scheduled`、`failed_retryable` 和 `running` 任务标记为 `cancelled`，避免卡住删除或被调度器继续捡起。
 - `FinishExecution` 只在数据库中的任务状态已经不再是 `running` 时清理内存执行对象；如果终态写库失败导致数据库仍为 `running`，必须保留 execution，避免 orphan 检查误判。
 - Panel 启动时以及 tasks 内部 worker 运行期间每 30 秒检查数据库中的 `running` 任务；如果任务 ID 无法在当前进程 execution registry 中找到，会保留 `running` 并标记 `stage=uncertain`、追加不确定事实；禁止通过重试或取消释放并发域。重复检查不追加重复事实。
@@ -66,7 +66,7 @@
 - `server_agent_deploy` 自动触发失败达到上限后不得继续自动排队或启动新任务；任务中心和服务器详情仍允许用户手动重试。服务器详情 Agent 卡片通过 `serverId + server_agent_deploy` 查询恢复最近任务，并增量读取 `/executions/{id}/logs`；重启就绪流返回 `holdon` 时，部署任务按 15 秒节流记录 Agent 请求延迟重启的原始状态和已等待时长，不在协议未提供原因时推断为软件包维护。
 - 由内存 goroutine 直接执行、无法跨进程恢复的一次性 worker 任务，如果需要清理遗留 `queued`/`scheduled` 状态，必须在任务定义中设置 `StaleQueuedAfter`；tasks 内部 worker 只扫描注册表中声明了该能力的任务类型，并在超时后标记为失败提示用户重试。过期清理同时覆盖 `queued` 与 `scheduled` 两种状态，避免旧版本遗留或等待轮次超时的任务锚点永久占住并发键。
 - 长耗时后台操作应写入任务日志，并尽量拆出步骤，方便任务中心展示进度。
-- tasks 内部 worker 负责驱动注册的周期任务、唤醒到期队列任务、清理 stale queued 状态和检查 orphan running 状态。它不是独立业务模块，不注册任何特殊任务，也不通过业务 task type 字符串维护 executor 或 run-now/retry switch。
+- tasks 内部 worker 负责唤醒到期队列任务、清理 stale queued 状态和检查 orphan running 状态；周期 tick 由各模块 SchedulerLoop 驱动。它不是独立业务模块，不注册任何特殊任务，也不通过业务 task type 字符串维护 executor 或 run-now/retry switch。
 - tasks 内部 worker 每 30 秒扫描一次 `queued`、`scheduled` 和到期 `failed_retryable` 任务作为兜底唤醒；队列唤醒、stale queued 清理和 orphan 检查统一为 30 秒一次，业务模块如果已经有自己的即时 dispatcher，仍应在创建任务后主动启动执行，不能依赖轮询满足低延迟契约。到期扫描每类任务只取最早的一批（`created_at ASC`，`Limit 50`），避免旧任务被新任务挤掉而饿死。
 - 证书续签、镜像刷新和软件包刷新的周期采集统一为 30 分钟一次；`application_reconcile` 保持 5 秒采集频率以满足容器变化即时性。
 - 全量备份导出不在正常业务运行期执行。设置页只写 pending export 并提示重启；下一次启动进入备份导出维护模式，此时正常 tasks worker 与周期驱动尚未启动，导出进度本身不依赖任务系统。
@@ -127,7 +127,7 @@
 - `AppendLog` 直接调用 `activitylog.Append`，输出保存为 `output.chunk`。禁止按日志条数裁剪、长行截断、历史过期删除；`CleanupRetained` 不执行删除。`Logs` 从统一事件读取，每页 200 条，任务终态不影响读取迟到输出。
 - 执行 ID 为任务 ID 加尝试编号；同名步骤按尝试编号隔离。步骤开始时间只在实际开始时记录，直接完成的步骤不得伪造开始时间。
 - 原始事件只追加；`tasks` 与 `task_steps` 的可变状态不能作为历史证据。参数和任意 metadata 不复制进日志，摘要、错误和输出入库前使用统一 `activitylog.Redact`。
-- `/api/v1/executions` 下的读接口服务当前执行控制及既有业务组件；重试和立即运行仍通过注册能力检查。完整历史使用 `/api/v1/activity`，不能在任务 HTTP handler 重建协调历史。
+- `/api/v1/executions` 下的读接口服务当前执行控制及既有业务组件；重试和立即运行仍通过注册能力检查。进程日志使用 `/api/v1/log-contexts`；不得在任务 HTTP handler 重建协调历史。
 
 ## Application Deployment Coordination
 

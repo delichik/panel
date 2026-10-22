@@ -191,7 +191,7 @@ func (s *Service) GetReverseProxy(ctx context.Context) (ReverseProxyConfig, erro
 		if err == nil {
 			return
 		}
-		logging.L().Warn("facility reverse proxy subquery failed", zap.String("component", component), zap.Error(err))
+		logging.From(logging.With(ctx, logging.Context{Module: "facilityapps"})).Warn("facility reverse proxy subquery failed", zap.String("component", component), zap.Error(err))
 		warnings = append(warnings, component+": "+err.Error())
 	}
 	// 一次取回全部 Application 反向代理配置，在 routeCount / routeSummaries /

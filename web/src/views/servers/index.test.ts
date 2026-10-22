@@ -41,11 +41,7 @@ vi.mock('@/api/tasks', () => ({
   tasksApi: {
     list: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 1 }),
     get: vi.fn(),
-  },
-}));
-vi.mock('@/api/activity', () => ({
-  activityApi: {
-    events: vi.fn().mockResolvedValue({ items: [], nextCursor: '', hasMore: false, snapshotSeq: '', headSeq: 0, projectedThroughSeq: 0, indexState: 'ready' }),
+    logs: vi.fn().mockResolvedValue({ nextCursor: 0, logs: [] }),
   },
 }));
 vi.mock('@/api/containers', () => ({

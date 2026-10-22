@@ -47,8 +47,8 @@
 
 | 数据库 | 规范归属 | 禁止事项 |
 | --- | --- | --- |
-| app | 配置、资源、应用 desired/observed、不可变协调 revision、Job、只追加 Activity 原始事实/证据、凭据元数据、设置、认证状态 | 不存高容量任务输出或指标时间序列 |
-| log | 可重建 Activity 查询投影/FTS、兼容 Task/step/log、应用修订历史投影、运行事件及详情、密钥导出审计 | 不作为应用协调或原始 Activity 事实来源 |
+| app | 配置、资源、应用 desired/observed、不可变协调 revision、Job、遗留 `activity_events` schema（不再接受新产品事实）、凭据元数据、设置、认证状态、进程日志流索引 `log_contexts` | 不存高容量任务输出或指标时间序列；JSONL 正文在 `<dataRoot>/logs`，不进本库 |
+| log | 遗留可重建 Activity 查询投影/FTS（不再投影新事实）、兼容 Task/step/log、应用修订历史投影、运行事件及详情、密钥导出审计 | 不作为应用协调或新产品/过程事实来源 |
 | coordination | 当前不注册业务模型，保留路径只为兼容和备份拓扑 | 不重新引入旧 lifecycle 表作为第二事实源 |
 | metrics | 指标快照时间序列 | 不存资源配置或身份数据 |
 
