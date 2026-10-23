@@ -7,10 +7,12 @@
 - 默认语言：`en`
 - 第二语言：`zh-CN`
 - 前端翻译入口：`web/src/i18n/index.ts`
-- 前端运行时语言同步：`web/src/stores/settings.ts`
-- 后端翻译入口：`internal/i18n/i18n.go`
-- 后端运行时语言设置：`internal/settings/service.go`
+- 前端运行时语言同步：`web/src/i18n/index.ts`
+- 后端翻译入口：`internal/platform/i18n/i18n.go`
+- 后端运行时语言设置：`internal/modules/settings/service.go`
 - 语言设置来源：`/api/v1/settings/runtime`
+- 前端运行时默认语言：`web/src/i18n/index.ts` 的 `state.locale` 缺省为 `en`（与默认语言约定一致），localStorage 已有值时保持用户选择。
+- en/zh-CN 词条 key 集合必须完全一致，由 `web/src/i18n/i18n.test.ts` 强制校验（含 en 不得残留中文值、词条非空）。
 
 ## 适用范围
 
@@ -47,12 +49,15 @@ import { useI18n } from '@/i18n';
 const { t } = useI18n();
 ```
 
+语言切换（`setLocale`）必须保持 `<html lang>` 属性与当前语言同步：`setLocale` 内部与 `web/index.html` 的首帧内联脚本都会写 `document.documentElement.lang`（值为 `en` 或 `zh-CN`），否则浏览器翻译提示、屏幕阅读器与搜索引擎会一直把页面当成默认语言（英文）处理。不要在业务代码里自行设置该属性，统一由 i18n 模块负责。
+
 需要格式化日期、时间、任务状态等时，优先使用 i18n 提供的辅助函数：
 
 - `formatDateTime`
 - `formatTime`
-- `translateTaskStatus`
-- `translateCleanupSchedule`
+- `translateRuntimeEventType`
+- `translateTaskSummary`
+- `translateEventSummary`
 
 ### 3. 路由元信息使用 key，不直接写文案
 
@@ -132,9 +137,9 @@ if locale == "zh-CN" {
 
 语言切换应集中在：
 
-- `internal/settings/service.go`
-- `internal/i18n/i18n.go`
-- `internal/httpx/httpx.go`
+- `internal/modules/settings/service.go`
+- `internal/platform/i18n/i18n.go`
+- `internal/platform/http/httpx.go`
 
 ### 3. 新增影响语言体验的运行时配置时，必须评估是否进入 settings
 
@@ -144,17 +149,21 @@ if locale == "zh-CN" {
 - `RuntimeUpdate`
 - `/api/v1/settings/runtime`
 
+### 4. 摘要存储与任务错误翻译
+
+- 任务摘要 / 运行时事件摘要以后端稳定英文存储、前端渲染翻译为原则；不要把摘要写入逻辑与展示语言耦合（任务中心用 `translateTaskSummary`、系统事件页用 `translateEventSummary` 渲染）。
+- 任务 error 对 panelerr 错误在写入前翻译，避免把当前语言下的文案固化进任务记录。
+
 ## 修改流程
 
 处理新增或迁移文案时，按下面顺序执行：
 
 1. 确认文案属于哪个功能域
-2. 在 `web/src/i18n/index.ts` 或 `internal/i18n/i18n.go` 增加词条
+2. 在 `web/src/i18n/index.ts` 或 `internal/platform/i18n/i18n.go` 增加词条
 3. 将调用方改为使用 key / 翻译函数
 4. 如果涉及持久化结构，确认没有把展示文案写入存储
 5. 如果涉及系统级语言行为，确认 settings 接口与默认值是否需要同步
-6. 更新 `docs/i18n-translation-status.md`
-7. 执行相关 `task build:*` / `task test:*`
+6. 执行相关 `task build:*` / `task test:*`
 
 ## 暂不建议做的事
 

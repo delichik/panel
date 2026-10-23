@@ -1,0 +1,102 @@
+package metrics
+
+import (
+	"context"
+	"sync"
+	"time"
+
+	"panel/internal/platform/logging"
+
+	"go.uber.org/zap"
+)
+
+type CleanupSettings struct {
+	RetentionDays int
+	Schedule      string
+}
+
+type CleanupWorker struct {
+	mu       sync.Mutex
+	service  *Service
+	settings func() CleanupSettings
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+}
+
+func NewCleanupWorker(service *Service, settings func() CleanupSettings) *CleanupWorker {
+	return &CleanupWorker{service: service, settings: settings}
+}
+
+func (w *CleanupWorker) Start(parent context.Context) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.service == nil || w.settings == nil || w.cancel != nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(parent)
+	w.cancel = cancel
+	w.wg.Add(1)
+	go w.loop(ctx)
+}
+
+func (w *CleanupWorker) Stop() {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.cancel != nil {
+		w.cancel()
+		w.cancel = nil
+	}
+	w.wg.Wait()
+}
+
+func (w *CleanupWorker) Running() bool {
+	if w == nil {
+		return false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.cancel != nil
+}
+
+func (w *CleanupWorker) loop(ctx context.Context) {
+	defer w.wg.Done()
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	lastRun := time.Now()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			settings := w.settings()
+			if time.Since(lastRun) < cleanupInterval(settings.Schedule) {
+				continue
+			}
+			lastRun = time.Now()
+			tickCtx := logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "metrics"})
+			deleted, err := w.service.Cleanup(tickCtx, settings.RetentionDays)
+			if err != nil {
+				logging.From(tickCtx).Warn("metrics cleanup failed", zap.Error(err))
+				continue
+			}
+			logging.From(tickCtx).Info("metrics cleanup deleted rows", zap.Int64("deleted", deleted))
+		}
+	}
+}
+
+func cleanupInterval(schedule string) time.Duration {
+	switch schedule {
+	case "hourly":
+		return time.Hour
+	case "weekly":
+		return 7 * 24 * time.Hour
+	default:
+		return 24 * time.Hour
+	}
+}

@@ -1,91 +1,107 @@
 import { createRouter, createWebHistory } from 'vue-router';
-import { useAuthStore } from '@/stores/auth';
-import { useSettingsStore } from '@/stores/settings';
-import AppLayout from '@/layouts/AppLayout.vue';
-import ChangePasswordPage from '@/views/auth/change-password/index.vue';
-import LoginPage from '@/views/auth/login/index.vue';
-import OverviewPage from '@/views/overview/index.vue';
-import ServerNodePage from '@/views/servers/node/index.vue';
-import ServerCredentialsPage from '@/views/servers/credentials/index.vue';
-import PackageUpdatesPage from '@/views/servers/packages/index.vue';
-import FirewallPage from '@/views/servers/firewall/index.vue';
-import ApplicationsPage from '@/views/runtime/applications/index.vue';
-import CertificatesPage from '@/views/certificates/domains/index.vue';
-import BuiltinCertificatesPage from '@/views/certificates/builtin/index.vue';
-import KeyAssetsPage from '@/views/certificates/key-assets/index.vue';
-import DomainsPage from '@/views/dns/domains/index.vue';
-import NomadNodesPage from '@/views/runtime/nomad/nodes/index.vue';
-import NomadSetupPage from '@/views/runtime/nomad/setup/index.vue';
-import TaskCenterPage from '@/views/tasks/index.vue';
-import SettingsGeneralPage from '@/views/settings/general/index.vue';
-import SettingsSecurityPage from '@/views/settings/security/index.vue';
-import SettingsNomadPage from '@/views/settings/nomad/index.vue';
-import SettingsCertificatesPage from '@/views/settings/certificates/index.vue';
-import SettingsSystemPage from '@/views/settings/system/index.vue';
+import { resolveActivityRedirect } from '@/api/activityRedirect';
+import { setUnauthorizedHandler } from '@/api/client';
+import { useSessionStore } from '@/stores/session';
+import { installRouteNavigationFeedback } from './navigationState';
 
+// Route components are lazy-loaded so each page family ships as its own async
+// chunk; the initial bundle only carries the shell (AppShell is the single
+// eager layout component) plus shared vendor chunks.
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: '/login', name: 'login', component: LoginPage, meta: { public: true } },
-    { path: '/change-password', name: 'change-password', component: ChangePasswordPage, meta: { requiresAuth: true, allowPasswordChange: true } },
+    { path: '/login', component: () => import('@/views/auth/LoginPage.vue'), meta: { titleKey: 'routes.login.title', public: true } },
+    { path: '/maintenance/backup', component: () => import('@/views/maintenance/index.vue'), meta: { titleKey: 'routes.maintenance.title', public: true } },
     {
       path: '/',
-      component: AppLayout,
-      meta: { requiresAuth: true },
+      component: () => import('@/components/shell/AppShell.vue'),
       children: [
         { path: '', redirect: '/overview' },
-        { path: 'overview', name: 'overview', component: OverviewPage, meta: { titleKey: 'routes.overview.title' } },
-        { path: 'servers', name: 'servers', component: ServerNodePage, meta: { titleKey: 'routes.servers.title' } },
-        { path: 'credentials', name: 'credentials', component: ServerCredentialsPage, meta: { titleKey: 'routes.credentials.title' } },
-        { path: 'servers/firewall', name: 'server-firewall', component: FirewallPage, meta: { titleKey: 'routes.firewall.title' } },
-        { path: 'servers/packages', name: 'system-packages', component: PackageUpdatesPage, meta: { titleKey: 'routes.systemPackages.title' } },
-        { path: 'packages', redirect: '/servers/packages' },
-        { path: 'applications', name: 'applications', component: ApplicationsPage, meta: { titleKey: 'routes.applications.title' } },
-        { path: 'dns/domains', name: 'dns-domains', component: DomainsPage, meta: { titleKey: 'routes.domains.title' } },
-        { path: 'dns/certificates', redirect: '/certificates/domains' },
-        { path: 'certificates', redirect: '/certificates/domains' },
-        { path: 'certificates/builtin', name: 'certificates-builtin', component: BuiltinCertificatesPage, meta: { titleKey: 'routes.builtinCertificates.title' } },
-        { path: 'certificates/domains', name: 'certificates-domains', component: CertificatesPage, meta: { titleKey: 'routes.certificates.title' } },
-        { path: 'certificates/key-assets', name: 'certificates-key-assets', component: KeyAssetsPage, meta: { titleKey: 'routes.keyAssets.title' } },
-        { path: 'certificates/self-signed', redirect: '/certificates/key-assets' },
-        { path: 'nomad/setup', name: 'nomad-setup', component: NomadSetupPage, meta: { titleKey: 'routes.nomadSetup.title' } },
-        { path: 'nomad/nodes', name: 'nomad-nodes', component: NomadNodesPage, meta: { titleKey: 'routes.nomadNodes.title' } },
-        { path: 'tasks', name: 'tasks', component: TaskCenterPage, meta: { titleKey: 'routes.tasks.title' } },
+        { path: 'overview', component: () => import('@/views/overview/index.vue'), meta: { titleKey: 'routes.overview.title' } },
+        { path: 'servers', component: () => import('@/views/servers/index.vue'), meta: { titleKey: 'routes.servers.title' } },
+        { path: 'credentials', component: () => import('@/views/credentials/index.vue'), meta: { titleKey: 'routes.credentials.title' } },
+        { path: 'applications', redirect: '/applications/apps' },
+        { path: 'applications/apps', component: () => import('@/views/applications/index.vue'), meta: { titleKey: 'routes.applications.title' } },
+        { path: 'applications/apps/create', component: () => import('@/views/applications/index.vue'), meta: { titleKey: 'routes.applications.title' } },
+        { path: 'applications/apps/:applicationId/edit', component: () => import('@/views/applications/index.vue'), meta: { titleKey: 'routes.applications.title' } },
+        { path: 'applications/facility-apps', component: () => import('@/views/applications/index.vue'), meta: { titleKey: 'routes.facilityApps.title' } },
+        { path: 'applications/facility-apps/:facilityKind/config', component: () => import('@/views/applications/index.vue'), meta: { titleKey: 'routes.facilityApps.title' } },
+        { path: 'applications/facility-apps/:facilityKind', component: () => import('@/views/applications/index.vue'), meta: { titleKey: 'routes.facilityApps.title' } },
+        { path: 'dns/domains', component: () => import('@/views/dns/index.vue'), meta: { titleKey: 'routes.dns.title' } },
+        { path: 'certificates/domains', component: () => import('@/views/certificates/index.vue'), meta: { titleKey: 'routes.certificates.title' } },
+        { path: 'certificates/self-signed', component: () => import('@/views/certificates/index.vue'), meta: { titleKey: 'routes.certificates.title' } },
+        { path: 'certificates/keys', component: () => import('@/views/certificates/index.vue'), meta: { titleKey: 'routes.certificates.title' } },
+        { path: 'operations', component: () => import('@/views/operations/index.vue'), meta: { titleKey: 'routes.operations.title' } },
+        { path: 'tasks', component: () => import('@/views/tasks/index.vue'), meta: { titleKey: 'routes.tasks.title' } },
+        { path: 'logs', component: () => import('@/views/logs/index.vue'), meta: { titleKey: 'routes.logs.title' } },
+        { path: 'activity', redirect: (to) => resolveActivityRedirect(to.query) },
         { path: 'settings', redirect: '/settings/general' },
-        { path: 'settings/general', name: 'settings-general', component: SettingsGeneralPage, meta: { titleKey: 'routes.settingsGeneral.title', settingsCategory: 'general' } },
-        { path: 'settings/security', name: 'settings-security', component: SettingsSecurityPage, meta: { titleKey: 'routes.settingsSecurity.title', settingsCategory: 'security' } },
-        { path: 'settings/nomad', name: 'settings-nomad', component: SettingsNomadPage, meta: { titleKey: 'routes.settingsNomad.title', settingsCategory: 'nomad' } },
-        { path: 'settings/certificates', name: 'settings-certificates', component: SettingsCertificatesPage, meta: { titleKey: 'routes.settingsCertificates.title', settingsCategory: 'certificates' } },
-        { path: 'settings/system', name: 'settings-system', component: SettingsSystemPage, meta: { titleKey: 'routes.settingsSystem.title', settingsCategory: 'system' } },
+        { path: 'settings/general', component: () => import('@/views/settings/index.vue'), meta: { titleKey: 'routes.settings.title' } },
+        { path: 'settings/security', component: () => import('@/views/settings/index.vue'), meta: { titleKey: 'routes.settings.title' } },
+        { path: 'settings/certificates', component: () => import('@/views/settings/index.vue'), meta: { titleKey: 'routes.settings.title' } },
+        { path: 'settings/agent', component: () => import('@/views/settings/index.vue'), meta: { titleKey: 'routes.settings.title' } },
+        { path: 'settings/tailscale', component: () => import('@/views/settings/index.vue'), meta: { titleKey: 'routes.settings.title' } },
+        { path: 'settings/system-certificates', component: () => import('@/views/settings/index.vue'), meta: { titleKey: 'routes.settings.title' } },
+        { path: 'settings/system', component: () => import('@/views/settings/index.vue'), meta: { titleKey: 'routes.settings.title' } },
+        { path: 'settings/backups', component: () => import('@/views/settings/index.vue'), meta: { titleKey: 'routes.settings.title' } },
+        { path: 'debug', component: () => import('@/views/debug/index.vue'), meta: { titleKey: 'routes.debug.title' } },
+        // Catch-all inside the shell so unknown paths keep the app navigation.
+        { path: ':pathMatch(.*)*', component: () => import('@/components/templates/NotFoundPage.vue'), meta: { titleKey: 'routes.notFound.title' } },
       ],
     },
   ],
 });
 
-router.beforeEach(async (to) => {
-  const auth = useAuthStore();
-  const settings = useSettingsStore();
-  if (!auth.checked) {
-    await auth.restoreSession();
+installRouteNavigationFeedback(router);
+
+function redirectToLogin() {
+  const session = useSessionStore();
+  session.onUnauthorized();
+  const current = router.currentRoute.value;
+  if (current.path !== '/login') {
+    const redirect = current.fullPath;
+    void router.push({ path: '/login', query: { redirect } }).catch(() => {
+      // The navigation may race with bootstrap; the router guard performs the
+      // same redirect when the session is not authenticated.
+    });
   }
-  if (auth.authenticated && !auth.passwordChangeRequired) {
-    try {
-      await settings.loadRuntime();
-    } catch {
-      // The settings page surfaces runtime load errors explicitly.
+}
+
+setUnauthorizedHandler(redirectToLogin);
+
+// Lazy route chunks can fail to load at runtime (network hiccup, stale hashed
+// bundles after a redeploy). Without a handler the navigation rejects and the
+// page area stays blank. Retry once with a full reload; the guard flag is
+// cleared on every successful navigation so a later genuine failure gets its
+// own retry instead of looping forever on a permanently missing chunk.
+router.onError((error) => {
+  const message = String(error?.message ?? error);
+  if (/Failed to fetch dynamically imported module|Importing a module script failed|ChunkLoadError/.test(message)) {
+    if (!globalThis.sessionStorage?.getItem('router.chunkRetry')) {
+      globalThis.sessionStorage?.setItem('router.chunkRetry', '1');
+      window.location.reload();
     }
   }
-  if (to.meta.public && auth.authenticated) {
-    return auth.passwordChangeRequired ? '/change-password' : '/overview';
+});
+
+router.afterEach(() => {
+  globalThis.sessionStorage?.removeItem('router.chunkRetry');
+});
+
+router.beforeEach(async (to) => {
+  const session = useSessionStore();
+  if (!session.ready) await session.restore();
+  if (to.meta.public) {
+    if (to.path === '/login' && session.authenticated && !session.passwordChangeRequired) return '/overview';
+    return true;
   }
-  if (!to.meta.public && !auth.authenticated) {
+  if (!session.authenticated) {
+    // A stored token that could not be verified during restore (for example a
+    // transient network error) is kept and allowed through optimistically; a
+    // real 401 later clears the session and redirects to login.
+    if (session.token) return true;
     return { path: '/login', query: { redirect: to.fullPath } };
   }
-  if (auth.authenticated && auth.passwordChangeRequired && !to.meta.allowPasswordChange) {
-    return { path: '/change-password', query: { redirect: to.fullPath } };
-  }
-  if (to.name === 'change-password' && auth.authenticated && !auth.passwordChangeRequired) {
-    return '/overview';
-  }
+  if (session.passwordChangeRequired) return { path: '/login', query: { redirect: to.fullPath } };
   return true;
 });
