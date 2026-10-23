@@ -752,8 +752,6 @@ onBeforeUnmount(() => {
                   'bg-danger': risk.tone === 'danger',
                   'bg-warning': risk.tone === 'warning',
                   'bg-info': risk.tone === 'info',
-                  'bg-success': risk.tone === 'success',
-                  'bg-neutral': risk.tone === 'neutral' || !risk.tone,
                 }"
                 aria-hidden="true"
               />
