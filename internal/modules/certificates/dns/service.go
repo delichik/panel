@@ -215,23 +215,8 @@ func (s *Service) RefreshRecords(ctx context.Context, domainID string) (tasks.Ta
 	if _, err := s.GetDomain(ctx, domainID); err != nil {
 		return tasks.Task{}, err
 	}
-	task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{Type: "dns_records_refresh", ResourceType: "dns_domain", ResourceID: domainID, TriggerType: "user", Summary: "Refreshing DNS records"}, tasks.Trigger{Type: "user"})
-	if err != nil || !created {
-		return task, err
-	}
-	if err := s.tasks.Start(ctx, task.ID); err != nil {
-		return tasks.Task{}, err
-	}
-	go func() {
-		runCtx := s.tasks.ExecutionContext(task.ID)
-		defer s.tasks.FinishExecution(task.ID)
-		if err := s.refreshRecords(runCtx, domainID); err != nil {
-			_ = s.tasks.Fail(runCtx, task.ID, err)
-			return
-		}
-		_ = s.tasks.Complete(runCtx, task.ID, "DNS records refreshed")
-	}()
-	return task, nil
+	task, _, err := tasks.NewManager(s.tasks).CreateAndRun(ctx, tasks.CreateInput{Type: "dns_records_refresh", ResourceType: "dns_domain", ResourceID: domainID, TriggerType: "user", Summary: "Refreshing DNS records"}, tasks.Trigger{Type: "user"})
+	return task, err
 }
 
 func (s *Service) RunRecordsRefreshTask(tc tasks.TaskContext) error {

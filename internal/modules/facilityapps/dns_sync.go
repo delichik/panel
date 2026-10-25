@@ -304,7 +304,7 @@ func (s *Service) triggerDNSSync(ctx context.Context, domains []string, triggerT
 		return "", err
 	}
 	raw, _ := json.Marshal(dnsSyncParams{Domains: domains, Takeover: takeover})
-	task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
+	task, created, err := tasks.NewManager(s.tasks).CreateAndRun(ctx, tasks.CreateInput{
 		Type:         dnsSyncTaskType,
 		ResourceType: "facility_app",
 		ResourceID:   ReverseProxyID,
@@ -315,21 +315,7 @@ func (s *Service) triggerDNSSync(ctx context.Context, domains []string, triggerT
 	if err != nil {
 		return "", err
 	}
-	if !created {
-		return task.ID, nil
-	}
-	if err := s.tasks.Start(ctx, task.ID); err != nil {
-		return task.ID, err
-	}
-	go func() {
-		runCtx := s.tasks.ExecutionContext(task.ID)
-		defer s.tasks.FinishExecution(task.ID)
-		if err := s.runDNSSync(runCtx, domains, takeover); err != nil {
-			_ = s.tasks.Fail(runCtx, task.ID, err)
-			return
-		}
-		_ = s.tasks.Complete(runCtx, task.ID, "DNS records synced")
-	}()
+	_ = created
 	return task.ID, nil
 }
 

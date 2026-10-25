@@ -62,7 +62,7 @@
 - 任务进入 `completed`、`failed`、`failed_retryable`、`blocked` 或 `cancelled` 等终态后，后台 worker 后续的完成/失败/重试写入不得覆盖既有终态；服务器删除会把该服务器的 `queued`、`scheduled`、`failed_retryable` 和 `running` 任务标记为 `cancelled`，避免卡住删除或被调度器继续捡起。
 - `FinishExecution` 只在数据库中的任务状态已经不再是 `running` 时清理内存执行对象；如果终态写库失败导致数据库仍为 `running`，必须保留 execution，避免 orphan 检查误判。
 - Panel 启动时以及 tasks 内部 worker 运行期间每 30 秒检查数据库中的 `running` 任务；如果任务 ID 无法在当前进程 execution registry 中找到，会保留 `running` 并标记 `stage=uncertain`、追加不确定事实；禁止通过重试或取消释放并发域。重复检查不追加重复事实。
-- 由内存 goroutine 直接执行、无法跨进程恢复的一次性 worker 任务，例如服务器重启、UFW 安装/启用、fail2ban 应用，必须在 API 返回前先标记为 `running`。`server_agent_deploy` 虽然也由内存 goroutine 执行，但必须接入调度器 `run-now` / `retry`，用于恢复旧的排队部署任务并重新同步 agent 证书。
+- 已注册 `Execute` 的变更任务（含 `server_restart`、`server_agent_deploy`、fail2ban、package/image refresh、DNS sync）必须经 `tasks.Manager.CreateAndRun` 或 `Create` 后 `Manager.Run` 分派，禁止 `Start` + 手写 `go runX` 绕过 executor；进程重启后由注册表恢复 queued/running。手动 `server_agent_deploy`（`AGT-DEP-001`）在返回前应等到 `running`。
 - `server_agent_deploy` 自动触发失败达到上限后不得继续自动排队或启动新任务；任务中心和服务器详情仍允许用户手动重试。服务器详情 Agent 卡片通过 `serverId + server_agent_deploy` 查询恢复最近任务，并增量读取 `/executions/{id}/logs`；重启就绪流返回 `holdon` 时，部署任务按 15 秒节流记录 Agent 请求延迟重启的原始状态和已等待时长，不在协议未提供原因时推断为软件包维护。
 - 由内存 goroutine 直接执行、无法跨进程恢复的一次性 worker 任务，如果需要清理遗留 `queued`/`scheduled` 状态，必须在任务定义中设置 `StaleQueuedAfter`；tasks 内部 worker 只扫描注册表中声明了该能力的任务类型，并在超时后标记为失败提示用户重试。过期清理同时覆盖 `queued` 与 `scheduled` 两种状态，避免旧版本遗留或等待轮次超时的任务锚点永久占住并发键。
 - 长耗时后台操作应写入任务日志，并尽量拆出步骤，方便任务中心展示进度。

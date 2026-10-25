@@ -380,14 +380,15 @@ func (s *Service) ReconcileStorageShareNow(ctx context.Context) (StorageShareRec
 	if len(cfg.Servers) > 0 {
 		serverID = cfg.Servers[0].ServerID
 	}
-	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+	task, _, err := tasks.NewManager(s.tasks).CreateAndRun(ctx, tasks.CreateInput{
 		Type:         storageReconcileTaskType,
 		Summary:      "Syncing storage share exports",
 		ServerID:     serverID,
 		ResourceType: "facility",
 		ResourceID:   StorageShareID,
 		ParamsJSON:   "{}",
-	})
+		TriggerType:  "user",
+	}, tasks.Trigger{Type: "user", Manual: true})
 	if err != nil {
 		_ = s.setStorageLastError(ctx, err.Error())
 		return StorageShareReconcileResult{}, err
@@ -1034,18 +1035,33 @@ func (s *Service) storagePartitionMountActive(ctx context.Context, partition Sto
 	return status.Mounted, status.Detail, nil
 }
 
-// storageReconcileLoop 周期同步存储导出，确保白名单随服务器增删自动刷新。
+// storageReconcileLoop 周期排队 storage_share_reconcile，经注册 Execute 收敛导出白名单。
 func (s *Service) storageReconcileLoop() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 	for range ticker.C {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-		cfg, err := s.loadStorageConfig(ctx)
-		if err == nil && cfg.Enabled {
-			if err := s.reconcileStorageServers(ctx, cfg); err != nil {
-				_ = s.setStorageLastError(ctx, err.Error())
-			}
+		if s.tasks == nil {
+			continue
 		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		cfg, err := s.loadStorageConfig(ctx)
+		if err != nil || !cfg.Enabled {
+			cancel()
+			continue
+		}
+		serverID := ""
+		if len(cfg.Servers) > 0 {
+			serverID = cfg.Servers[0].ServerID
+		}
+		_, _, _ = tasks.NewManager(s.tasks).CreateAndRun(ctx, tasks.CreateInput{
+			Type:         storageReconcileTaskType,
+			Summary:      "Syncing storage share exports",
+			ServerID:     serverID,
+			ResourceType: "facility",
+			ResourceID:   StorageShareID,
+			ParamsJSON:   "{}",
+			TriggerType:  "scheduler",
+		}, tasks.Trigger{Type: "scheduler", Periodic: true})
 		cancel()
 	}
 }
