@@ -486,7 +486,7 @@
 - **前置**：设施保存新增、修改、保留或删除域名，或应用反向代理路由变更/删除，DNS zone 与服务器地址可能不完整。
 - **动作**：触发 `dns_proxy_records_sync`；手动重试/接管走 `POST /api/v1/facility-apps/reverse-proxy/dns-sync`。
 - **结果**：全部当前设施域名与应用反向代理域名及需清理旧域名进入 pending；任务读取并合并数据库中所有 pending（接管请求除外）；只在期望 A/AAAA 与实际不同时增删改；每域名持久化 pending/synced/failed/skipped。
-- **失败**：服务器列表读取失败使任务失败且域名保留 pending，不得按“无服务器”误删；无 IPv4/IPv6 的域名 skipped 并带提示；接管缺少确认返回校验错误。
+- **失败**：服务器列表读取失败或 `servers` 依赖未装配使任务失败且域名保留 pending，不得按“无服务器”误删；无 IPv4/IPv6 的域名 skipped 并带提示；接管缺少确认返回校验错误。
 - **不变量**：anyAccess 关闭目标=origins，开启目标=全局 gateways；活跃任务期间新增 pending 不得因旧 params 遗漏；应用域名与设施域名共用同一同步状态与托管 comment。
 - **验证**：dns sync all-current/merge-pending/application-domain/server-error/status/takeover tests。
 

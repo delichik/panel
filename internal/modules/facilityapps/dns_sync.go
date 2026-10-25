@@ -364,16 +364,19 @@ func (s *Service) runDNSSync(ctx context.Context, domains []string, takeover boo
 	}
 	cfg = s.attachApplicationRoutes(ctx, cfg)
 	servers := map[string]server.Server{}
-	if s.servers != nil {
-		list, err := s.servers.List(ctx)
-		if err != nil {
-			// 服务器列表读取失败时直接失败，绝不能把“读不到服务器”当成
-			// “没有服务器”而进入无服务器清理分支，导致误删 DNS 记录。
-			return err
-		}
-		for _, srv := range list {
-			servers[srv.ID] = srv
-		}
+	if s.servers == nil {
+		// Mis-wiring must fail closed like List errors: an empty map would treat
+		// every domain as having no online servers and delete managed DNS.
+		return panelerr.Validation("facility_servers_unavailable", "Server registry is unavailable for DNS sync")
+	}
+	list, err := s.servers.List(ctx)
+	if err != nil {
+		// 服务器列表读取失败时直接失败，绝不能把“读不到服务器”当成
+		// “没有服务器”而进入无服务器清理分支，导致误删 DNS 记录。
+		return err
+	}
+	for _, srv := range list {
+		servers[srv.ID] = srv
 	}
 	zones, err := s.dns.ListDomains(ctx)
 	if err != nil {
