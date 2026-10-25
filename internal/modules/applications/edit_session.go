@@ -824,7 +824,7 @@ func (s *Service) persistedEditCommitResult(ctx context.Context, record editSess
 	if applyErr != nil {
 		diagnostics = append(diagnostics, Diagnostic{Code: "application_apply_request_failed", Severity: "warning", Message: i18n.Translate("application_apply_request_failed", "Configuration was committed, but applying it could not be requested"), Details: map[string]any{"error": applyErr.Error()}})
 	}
-	return EditCommitResult{Application: app, ResourceVersion: applicationResourceVersion(app), ApplyRequested: record.Draft.Enabled, Diagnostics: diagnostics}, true
+	return EditCommitResult{Application: app, ResourceVersion: applicationResourceVersion(app), ApplyRequested: record.Draft.Enabled && applyErr == nil, Diagnostics: diagnostics}, true
 }
 
 func (s *Service) applicationMatchesEditDraft(ctx context.Context, app Application, draft SaveInput, files []ApplicationFile) bool {

@@ -623,7 +623,7 @@ func TestApplicationEditSessionCommitSeparatesPersistedConfigFromApplyFailure(t 
 			if err != nil {
 				t.Fatal(err)
 			}
-			if result.Application.ID == "" || len(result.Diagnostics) == 0 || result.Diagnostics[0].Code != "application_apply_request_failed" {
+			if result.Application.ID == "" || result.ApplyRequested || len(result.Diagnostics) == 0 || result.Diagnostics[0].Code != "application_apply_request_failed" {
 				t.Fatalf("result = %#v", result)
 			}
 			stored, err := svc.GetEditSession(ctx, "admin", session.ID)
