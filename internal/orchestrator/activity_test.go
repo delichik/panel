@@ -50,8 +50,8 @@ func TestAutomaticScanPreservesForcedJob(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if forced.Job.ForceNonce != 43 {
-				t.Fatal("new force request was swallowed")
+			if forced.Job.ForceNonce != 43 || forced.Job.IntentID != "new-force" {
+				t.Fatalf("new force request was swallowed: %#v", forced.Job)
 			}
 			var events int
 			if err := db.QueryRow(`SELECT count(*) FROM activity_events`).Scan(&events); err != nil {

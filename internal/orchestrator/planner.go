@@ -223,16 +223,21 @@ func (p *Planner) planTx(ctx context.Context, tx *sql.Tx, in PlanInput) (PlanRes
 				return PlanResult{}, err
 			}
 			traceJobEvent(ctx, "job_merged", active, zap.String("reason", "active_pending_or_retryable_reused"))
-		} else if active.State == JobRunning && in.ForceNonce > active.ForceNonce {
-			// Keep the in-flight execution fenced by its original snapshot, but
-			// leave the newer force intent on the same conflict-domain row. The
-			// worker will observe the nonce mismatch after its RPC and requeue
-			// the current desired state instead of losing a restart request.
-			if _, err := tx.ExecContext(ctx, `UPDATE jobs SET force_nonce=?,updated_at=? WHERE id=? AND state='running'`, in.ForceNonce, now, active.ID); err != nil {
+		} else if active.State == JobRunning && (in.ForceNonce > active.ForceNonce || active.IntentID != in.IntentID) {
+			// Keep the in-flight execution fenced by its original snapshot/lease,
+			// but adopt the newer intent (and force nonce) on the same conflict-
+			// domain row so Requeue/ORCH-REC-001 do not depend on activity_events.
+			// The worker observes nonce/desired mismatch after its RPC and requeues.
+			forceNonce := active.ForceNonce
+			if in.ForceNonce > forceNonce {
+				forceNonce = in.ForceNonce
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE jobs SET intent_id=?,force_nonce=?,updated_at=? WHERE id=? AND state='running'`, in.IntentID, forceNonce, now, active.ID); err != nil {
 				return PlanResult{}, err
 			}
-			active.ForceNonce = in.ForceNonce
-			traceJobEvent(ctx, "job_merged", active, zap.String("reason", "running_force_nonce_bumped"))
+			active.IntentID = in.IntentID
+			active.ForceNonce = forceNonce
+			traceJobEvent(ctx, "job_merged", active, zap.String("reason", "running_intent_adopted"))
 		}
 		return PlanResult{Job: active, Merged: true}, nil
 	}

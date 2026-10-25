@@ -180,10 +180,10 @@
 
 - **前置**：RPC 期间 Instance desired/revision/spec/force nonce 改变。
 - **动作**：旧 RPC 返回成功。
-- **结果**：旧 observation 仍仅在旧 lease 合法时记录，Job 随即 Requeue 为 pending，刷新到当前 Instance desired，stage=`superseded`、errorClass=`superseded`、清 lease/nextRun。
+- **结果**：旧 observation 仍仅在旧 lease 合法时记录，Job 随即 Requeue 为 pending，刷新到当前 Instance desired，stage=`superseded`、errorClass=`superseded`、清 lease/nextRun；Planner 在 running 期间已把更新的 intent/force 写到同 Job 行，Requeue 不得再查 `activity_events` 回填 intent。
 - **失败**：旧结果不得把 Job 标 succeeded 或覆盖最新 desired。
-- **不变量**：purge finalizer 已删 Instance 时可将旧 purge 直接幂等 succeed；apply/stop 缺 Instance 仍视为 desired changed。
-- **验证**：desired-change and purge finalizer tests。
+- **不变量**：purge finalizer 已删 Instance 时可将旧 purge 直接幂等 succeed；apply/stop 缺 Instance 仍视为 desired changed；intent 归属以 jobs.intent_id 为准（ORCH-REC-001），不依赖已退役的 activity_events 控制事实。
+- **验证**：desired-change、running intent adoption 与 purge finalizer tests。
 
 ### ORCH-CTRL-006 容器状态转换幂等
 

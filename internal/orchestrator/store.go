@@ -150,7 +150,11 @@ func (s *Store) Requeue(ctx context.Context, job Job, reason string) (bool, erro
 		return false, err
 	}
 	action := actionForDesired(desiredState)
-	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET state='pending',intent_id=COALESCE((SELECT operation_id FROM activity_events WHERE event_type='operation.requested' AND json_extract(data_json,'$.applicationId')=jobs.application_id AND json_extract(data_json,'$.serverId')=jobs.server_id ORDER BY seq DESC LIMIT 1),intent_id),action=?,desired_generation=?,desired_spec_hash=?,desired_revision_id=?,desired_spec_json=?,remove_data=?,force_nonce=?,lease_owner='',lease_token='',lease_expires_at=NULL,next_run_at=NULL,last_stage='superseded',error_code='desired_changed',error_class='superseded',error_message=?,error_detail='desired state changed while runtime call was in flight',finished_at=NULL,updated_at=? WHERE id=? AND state='running' AND lease_owner=? AND lease_token=?`,
+	// Keep the durable intent_id already adopted by Planner while the job was
+	// running. Do not probe activity_events: ORCH-ACT-003 retired that ledger
+	// for control facts, so a subquery would always miss and leave stale
+	// associations after supersede (ORCH-REC-001 / ORCH-CTRL-005).
+	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET state='pending',action=?,desired_generation=?,desired_spec_hash=?,desired_revision_id=?,desired_spec_json=?,remove_data=?,force_nonce=?,lease_owner='',lease_token='',lease_expires_at=NULL,next_run_at=NULL,last_stage='superseded',error_code='desired_changed',error_class='superseded',error_message=?,error_detail='desired state changed while runtime call was in flight',finished_at=NULL,updated_at=? WHERE id=? AND state='running' AND lease_owner=? AND lease_token=?`,
 		action, desiredGeneration, desiredSpecHash, desiredRevisionID, desiredSpecJSON, boolInt(removeData), forceNonce, reason, now, job.ID, job.LeaseOwner, job.LeaseToken)
 	if err != nil {
 		return false, err
