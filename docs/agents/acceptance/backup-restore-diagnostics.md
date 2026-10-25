@@ -80,7 +80,7 @@
 - `OBS-MET-002`：指标成功保存后可标记服务器可达；保存失败不得伪标可达或中断report stream。
 - `OBS-MET-003`：`GET /servers/{id}/metrics` 默认1h，只接受 `1h|6h|1d|24h|7d`（前端公开子集可更窄）；非法range返回 `range_invalid`，存在但无数据返回所有序列为空数组。
 - `OBS-MET-004`：查询结果按时间升序，CPU/内存/磁盘/网络/load各序列共享样本时间语义；增量查询只返回严格晚于按秒对齐since的点。
-- `OBS-MET-005`：清理worker按runtime retention和hourly/daily/weekly周期独立运行，不属于tasks worker；retention小于1必须拒绝且不删除任何行。
+- `OBS-MET-005`：清理worker按runtime retention和hourly/daily/weekly周期独立运行，不属于 event executor worker；retention小于1必须拒绝且不删除任何行。
 - `OBS-MET-006`：服务器删除必须删除其全部指标；其他服务器指标和MetricsDB结构保持不变。
 
 ## 9. 概览与卡片配置
@@ -96,9 +96,9 @@
 
 ## 10. 诊断快照
 
-- `DIAG-SNP-001`：只有认证用户可调用 `GET /api/v1/debug/runtime`、`GET /api/v1/debug/tasks` 和 `GET /api/v1/debug/databases`；三类诊断必须独立采集和响应，任一接口变慢或失败不得阻塞另两个接口完成加载；每个响应提供自身采集语义的 `collectedAt`。
+- `DIAG-SNP-001`：只有认证用户可调用 `GET /api/v1/debug/runtime`、`GET /api/v1/debug/tasks`（event executor 注册/运行快照，路径名保留兼容）和 `GET /api/v1/debug/databases`；三类诊断必须独立采集和响应，任一接口变慢或失败不得阻塞另两个接口完成加载；每个响应提供自身采集语义的 `collectedAt`。
 - `DIAG-SNP-002`：runtime 响应的process必须包含启动时间、非负uptime、PID、Go版本、OS/架构、CPU、goroutine和cgo计数；memory必须包含当前/累计/heap/stack/cache/span/GC统计及可选lastGCAt。
-- `DIAG-SNP-003`：tasks响应必须反映worker运行、注册/可执行/周期类型、运行execution数及每个definition的hidden/quiet/executable/periodic/run-now/retry/max-retry/concurrency/stale能力，不得含任务参数、日志或 periodic interval。
+- `DIAG-SNP-003`：`debug/tasks` 响应必须反映 event executor worker 运行、注册/可执行/周期类型、运行 execution 数及每个 definition 的 hidden/quiet/executable/periodic/run-now/retry/max-retry/concurrency/stale 能力，不得含 run 参数、JSONL 日志或 periodic interval。
 - `DIAG-SNP-004`：databases响应中的每个app/log/metrics数据库必须返回连接池、文件大小、SQLite page/free/used和用户表统计；行数是准确COUNT，表按总大小降序、同大小按名称排序。
 - `DIAG-SNP-005`：dbstat不可用时只设置 `database_table_sizes_unavailable` 并保留健康连接、行数和其他统计；单表COUNT失败只标该表错误，数据库不可用则标安全errorCode而非让整个快照失败。
 - `DIAG-SNP-006`：诊断响应绝不返回数据库路径/DSN、schema SQL、配置值、秘密、业务行、任务参数或绝对敏感文件路径；文件路径只在服务内用于stat。
@@ -113,7 +113,7 @@
 ## 12. Debug 运行数据清理
 
 - `DIAG-CLR-001`：只有认证用户可在 `/debug` 经危险确认调用 `POST /api/v1/debug/clear-runtime-data`；确认值不精确匹配时必须 422 且不删除任何数据。接受后必须立即返回 202，含本次 `runId`，并由 `GET /api/v1/debug/clear-runtime-data` 查询后台任务状态；同一清理尚在运行时重复 POST 返回同一 runId，不重复启动，客户端断开不得取消清理。
-- `DIAG-CLR-002`：清理必须暂停协调与任务 worker，删除 activity/system logs、metrics、tasks/steps、Jobs、reconcile backoff 及全部协调库记录，并清除资源上的悬空 Job 投影与 `applications.planning_error_json`；规划诊断历史随活动记录清除，资源配置及 version/generation 不因清理改变。
+- `DIAG-CLR-002`：清理必须暂停协调与 event executor worker，删除 activity/system logs、metrics、`event_runs`/`event_run_steps`、AppDB `events` 进程行与关联 JSONL、Jobs、reconcile backoff 及全部协调库记录，并清除资源上的悬空 Job 投影与 `applications.planning_error_json`；规划诊断历史随进程事件清除，资源配置及 version/generation 不因清理改变。
 - `DIAG-CLR-003`：清理不得删除应用、服务器、凭据、证书、密钥资产、应用修订或期望/观测状态；完成后 worker 必须重启并从当前状态重新收敛。
 - `DIAG-CLR-004`：清理期间必须暂停业务 writer，并以最多 1000 行的短事务分批删除；每批独立提交，任一批失败不得回滚此前已完成批次，也不得用覆盖整个清理过程的长写事务阻塞数据库。完成后应 checkpoint WAL，再以不影响逻辑清理结果的方式尝试 VACUUM 回收文件空间；状态响应只返回阶段和结果，不暴露路径或被删除内容。
 - `DIAG-CLR-005`：POST/GET 共用状态结构 `runId/cleared/running/status/stage/failedStage/startedAt/finishedAt/errorCode`；stage 区分暂停后台、清理协调、日志、指标、空间回收、恢复后台、完成。失败保留实际失败阶段和安全错误码；`cleared=true,status=failed` 表示逻辑清理完成但恢复后台失败，不能显示为全部成功；`cleared=false` 的失败可能已删除部分批次。

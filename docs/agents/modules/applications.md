@@ -230,7 +230,7 @@
 
 ## 统一操作日志
 
-- `/api/v1/application-operations` 列表和详情路由退役；进程日志通过 `/api/v1/log-contexts`（可按 `operationId` 过滤）；Activity 事实仍写入 AppDB，产品 HTTP `/api/v1/activity/*` 已停注册。
+- `/api/v1/application-operations` 列表和详情路由退役；进程行与 JSONL 通过 `/api/v1/events*`（可按 `operationId` 过滤）与 `/api/v1/logs?eventId=`；产品 HTTP `/api/v1/activity/*` 已停注册。
 - Planner 新增、合并和替代请求均追加事件。正在运行的 Job 仍保留原执行快照，新请求分别追加 `operation.requested` 和 `execution.linked` / `intent.superseded`；重新规划时引用最新请求意图。
 - AppDB 控制触发器将领取、执行结果、错误、步骤摘要和已接受观测写成不可变事实；历史名称、修订、generation、容器状态来自发生时快照。Job 后续更新、成功或删除不会改变旧事实。
 - ObservationWriter 对带 durable Job 的租约、围栏或实例异常拒绝追加 `observation.rejected`，reason 区分 `lease_lost`、`instance_missing`、`job_missing`、`instance_fencing_mismatch` 与 `stale_observation`，并携带应用/服务器资源及 incoming/current 诊断。无 Job 的 Agent report 陈旧或重复 CAS miss 是预期缓存竞争，不进入用户 warning；证据入库失败不能伪装为已经接受。

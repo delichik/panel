@@ -16,7 +16,7 @@ import (
 	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	httpx "panel/internal/platform/http"
-	"panel/internal/platform/logcontexts"
+	"panel/internal/platform/events"
 	"panel/internal/platform/logging"
 )
 
@@ -37,7 +37,7 @@ func (s *Service) ResolveUncertain(ctx context.Context, taskID, outcome, reason 
 	}
 	defer tx.Rollback()
 	var row taskRow
-	if err := orm.New(tx).From("tasks").Where("id = ?", taskID).First(ctx, &row); err != nil {
+	if err := orm.New(tx).From("event_runs").Where("id = ?", taskID).First(ctx, &row); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Task{}, panelerr.NotFound("execution")
 		}
@@ -68,7 +68,7 @@ func (s *Service) ResolveUncertain(ctx context.Context, taskID, outcome, reason 
 		zap.String("actorId", actor.ID),
 	)
 	_ = logging.RecordContext(logCtx, logging.ContextMeta{
-		Origin:   logcontexts.OriginUser,
+		Origin:   events.OriginUser,
 		Title:    "execution.verified",
 		Summary:  reason,
 		Result:   result,
@@ -76,7 +76,7 @@ func (s *Service) ResolveUncertain(ctx context.Context, taskID, outcome, reason 
 		Finished: true,
 		ActorJSON: logging.MarshalActorJSON(map[string]string{"kind": actor.Kind, "id": actor.ID, "name": actor.Name}),
 	})
-	resultSQL, err := tx.ExecContext(ctx, `UPDATE tasks SET status=?,stage='verified',error=CASE WHEN ?='completed' THEN '' ELSE ? END,finished_at=?,next_run_at=NULL WHERE id=? AND status='running' AND stage='uncertain'`, status, status, reason, time.Now().UTC().Format(time.RFC3339Nano), taskID)
+	resultSQL, err := tx.ExecContext(ctx, `UPDATE event_runs SET status=?,stage='verified',error=CASE WHEN ?='completed' THEN '' ELSE ? END,finished_at=?,next_run_at=NULL WHERE id=? AND status='running' AND stage='uncertain'`, status, status, reason, time.Now().UTC().Format(time.RFC3339Nano), taskID)
 	if err != nil {
 		return Task{}, err
 	}

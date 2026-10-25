@@ -40,7 +40,7 @@ type RuntimeSnapshot struct {
 
 type TaskSnapshot struct {
 	CollectedAt time.Time          `json:"collectedAt"`
-	Tasks       tasks.RuntimeStats `json:"tasks"`
+	Tasks       tasks.RuntimeStats `json:"eventRuntime"`
 }
 
 type DatabaseSnapshots struct {

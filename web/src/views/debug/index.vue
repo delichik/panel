@@ -85,7 +85,7 @@ type TaskDefinitionRow = {
   staleQueuedAfter: string;
 };
 
-const taskMetricOrder = ['workerRunning', 'registeredTypes', 'executableTypes', 'periodicTypes', 'runningExecutions'];
+const taskMetricOrder = ['eventRunnerRunning', 'registeredEventTypes', 'executableEventTypes', 'periodicEventTypes', 'runningEventExecutions', 'workerRunning', 'registeredTypes', 'executableTypes', 'periodicTypes', 'runningExecutions'];
 const loading = computed(() => runtimeLoading.value || tasksLoading.value || databasesLoading.value);
 const stale = computed(() => Boolean(runtimeError.value || tasksError.value || databasesError.value));
 const collectedAt = computed(() => {
@@ -107,22 +107,30 @@ const taskDefinitionColumns = computed<Array<{ key: keyof TaskDefinitionRow & st
   { key: 'defaultMaxRetries', label: t('debugPage.maxRetries'), align: 'right' },
   { key: 'staleQueuedAfter', label: t('debugPage.staleQueuedAfter'), align: 'right' },
 ]);
+function eventRuntimeSnapshot() {
+  return taskSnapshot.value?.eventRuntime ?? taskSnapshot.value?.tasks;
+}
+
 const taskMetricRows = computed<TaskMetricRow[]>(() => {
-  const tasks = taskSnapshot.value?.tasks;
+  const tasks = eventRuntimeSnapshot();
   if (!tasks) return [];
-  const entries = Object.entries(tasks).filter((entry): entry is [string, string | number | boolean | null | undefined] => entry[0] !== 'definitions' && isScalarDiagnosticValue(entry[1]));
+  const entries = Object.entries(tasks).filter((entry): entry is [string, string | number | boolean | null | undefined] => entry[0] !== 'definitions' && entry[0] !== 'eventDefinitions' && isScalarDiagnosticValue(entry[1]));
   return entries
     .sort(([left], [right]) => taskMetricSortIndex(left) - taskMetricSortIndex(right) || left.localeCompare(right))
     .map(([key, value]) => ({ key, label: taskMetricLabel(key), value: formatDiagnosticValue(value) }));
 });
-const taskDefinitionRows = computed<TaskDefinitionRow[]>(() => (taskSnapshot.value?.tasks.definitions ?? []).map((definition) => ({
-  type: definition.type,
-  kind: formatTaskKind(definition),
-  actions: formatTaskActions(definition),
-  concurrencyPolicy: definition.concurrencyPolicy || t('common.notAvailable'),
-  defaultMaxRetries: definition.defaultMaxRetries,
-  staleQueuedAfter: formatSeconds(definition.staleQueuedAfterSeconds),
-})));
+const taskDefinitionRows = computed<TaskDefinitionRow[]>(() => {
+  const runtime = eventRuntimeSnapshot();
+  const definitions = runtime?.eventDefinitions ?? runtime?.definitions ?? [];
+  return definitions.map((definition) => ({
+    type: definition.type,
+    kind: formatTaskKind(definition),
+    actions: formatTaskActions(definition),
+    concurrencyPolicy: definition.concurrencyPolicy || t('common.notAvailable'),
+    defaultMaxRetries: definition.defaultMaxRetries,
+    staleQueuedAfter: formatSeconds(definition.staleQueuedAfterSeconds),
+  }));
+});
 const pprofUrl = computed(() => (pprof.value?.enabled && pprof.value?.address) ? `http://${pprof.value.address}/debug/pprof/` : null);
 
 const databaseTotals = computed(() => {

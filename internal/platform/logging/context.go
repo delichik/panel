@@ -10,9 +10,11 @@ import (
 
 type contextKey struct{}
 
-// Context carries a required log stream and module for aggregation.
+// Context carries a required event id and module for aggregation.
+// StreamID is accepted as a deprecated alias for EventID during migration.
 type Context struct {
-	StreamID    string
+	EventID     string
+	StreamID    string // deprecated: prefer EventID; normalized() syncs both
 	Module      string
 	OperationID string
 	ExecutionID string
@@ -20,11 +22,22 @@ type Context struct {
 }
 
 func (c Context) valid() bool {
-	return strings.TrimSpace(c.StreamID) != "" && strings.TrimSpace(c.Module) != ""
+	id := strings.TrimSpace(c.EventID)
+	if id == "" {
+		id = strings.TrimSpace(c.StreamID)
+	}
+	return id != "" && strings.TrimSpace(c.Module) != ""
 }
 
 func (c Context) normalized() Context {
+	c.EventID = strings.TrimSpace(c.EventID)
 	c.StreamID = strings.TrimSpace(c.StreamID)
+	if c.EventID == "" {
+		c.EventID = c.StreamID
+	}
+	if c.StreamID == "" {
+		c.StreamID = c.EventID
+	}
 	c.Module = strings.TrimSpace(c.Module)
 	c.OperationID = strings.TrimSpace(c.OperationID)
 	c.ExecutionID = strings.TrimSpace(c.ExecutionID)
@@ -32,14 +45,17 @@ func (c Context) normalized() Context {
 	return c
 }
 
-// NewStreamID returns a unique stream identifier.
-func NewStreamID() string {
+// NewEventID returns a unique event identifier.
+func NewEventID() string {
 	var buf [8]byte
 	if _, err := rand.Read(buf[:]); err != nil {
-		return "stream-fallback"
+		return "event-fallback"
 	}
-	return "stream-" + hex.EncodeToString(buf[:])
+	return "event-" + hex.EncodeToString(buf[:])
 }
+
+// NewStreamID is a deprecated alias for NewEventID.
+func NewStreamID() string { return NewEventID() }
 
 // With attaches logging Context to ctx. Empty StreamID/Module are rejected by From.
 func With(ctx context.Context, logCtx Context) context.Context {
@@ -51,11 +67,16 @@ func With(ctx context.Context, logCtx Context) context.Context {
 	return context.WithValue(ctx, contextKey{}, merged)
 }
 
-// Merge keeps the parent StreamID unless the child explicitly sets a new one.
+// Merge keeps the parent EventID unless the child explicitly sets a new one.
 func mergeContext(base, overlay Context) Context {
 	out := base
-	if overlay.StreamID != "" {
-		out.StreamID = overlay.StreamID
+	if overlay.EventID != "" || overlay.StreamID != "" {
+		id := overlay.EventID
+		if id == "" {
+			id = overlay.StreamID
+		}
+		out.EventID = id
+		out.StreamID = id
 	}
 	if overlay.Module != "" {
 		out.Module = overlay.Module
@@ -116,23 +137,30 @@ func Background(module string) context.Context {
 	})
 }
 
-// Ensure attaches a valid stream when missing, and overlays module/ids when set.
+// Ensure attaches a valid event id when missing, and overlays module/ids when set.
 func Ensure(ctx context.Context, logCtx Context) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	existing, ok := Lookup(ctx)
 	if !ok {
-		if strings.TrimSpace(logCtx.StreamID) == "" {
-			logCtx.StreamID = NewStreamID()
+		logCtx = logCtx.normalized()
+		if logCtx.EventID == "" {
+			logCtx.EventID = NewEventID()
+			logCtx.StreamID = logCtx.EventID
 		}
 		if strings.TrimSpace(logCtx.Module) == "" {
 			logCtx.Module = "process"
 		}
 		return With(ctx, logCtx)
 	}
-	if logCtx.StreamID == "" {
-		logCtx.StreamID = existing.StreamID
+	logCtx = logCtx.normalized()
+	if logCtx.EventID == "" {
+		logCtx.EventID = existing.EventID
+		if logCtx.EventID == "" {
+			logCtx.EventID = existing.StreamID
+		}
+		logCtx.StreamID = logCtx.EventID
 	}
 	if logCtx.Module == "" {
 		logCtx.Module = existing.Module

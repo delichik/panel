@@ -1,23 +1,16 @@
-import { apiClient, fetchBlob, type ApiRequestOptions } from './client';
-import type { LogContext, LogContextLinesPage, LogContextPage, LogContextQuery } from '@/types/logContexts';
+import { eventsApi, eventsQuery } from './events';
+import type { Event, EventPage, EventQuery, LogLinesPage } from '@/types/events';
 
-export function logContextsQuery(params: LogContextQuery = {}) {
-  const query = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined && value !== '') query.set(key, String(value));
-  }
-  return query.size ? `?${query}` : '';
-}
+/** @deprecated Use eventsApi from @/api/events */
+export const logContextsQuery = eventsQuery;
 
-const id = encodeURIComponent;
-
+/** @deprecated Use eventsApi from @/api/events */
 export const logContextsApi = {
-  list: (params: LogContextQuery = {}, options?: ApiRequestOptions) =>
-    apiClient.get<LogContextPage>(`/log-contexts${logContextsQuery(params)}`, options),
-  get: (streamId: string, options?: ApiRequestOptions) =>
-    apiClient.get<LogContext>(`/log-contexts/${id(streamId)}`, options),
-  lines: (streamId: string, params: LogContextQuery = {}, options?: ApiRequestOptions) =>
-    apiClient.get<LogContextLinesPage>(`/log-contexts/${id(streamId)}/lines${logContextsQuery(params)}`, options),
-  export: (params: LogContextQuery = {}) =>
-    fetchBlob(`/api/v1/log-contexts/export${logContextsQuery(params)}`, { fallbackFilename: 'log-contexts.jsonl' }),
+  list: (params: EventQuery = {}, options?: Parameters<typeof eventsApi.list>[1]) =>
+    eventsApi.list(params, options) as Promise<EventPage>,
+  get: (streamId: string, options?: Parameters<typeof eventsApi.get>[1]) =>
+    eventsApi.get(streamId, options) as Promise<Event>,
+  lines: (streamId: string, params: EventQuery = {}, options?: Parameters<typeof eventsApi.logs>[2]) =>
+    eventsApi.logs(streamId, params, options) as Promise<LogLinesPage>,
+  export: eventsApi.export,
 };

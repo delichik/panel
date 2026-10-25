@@ -106,7 +106,7 @@ func (h *Handler) Retry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.canRetry(old) {
-		httpx.Error(w, panelerr.Validation("task_retry_unsupported", "This task type cannot be retried from the task center"))
+		httpx.Error(w, panelerr.Validation("task_retry_unsupported", "This event type cannot be retried from the Events page"))
 		return
 	}
 	task, err := h.service.Retry(r.Context(), old.ID)
@@ -131,7 +131,7 @@ func (h *Handler) RunNow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.canRunNow(current) {
-		httpx.Error(w, panelerr.Validation("task_run_now_unsupported", "This task type cannot be run from the task center"))
+		httpx.Error(w, panelerr.Validation("task_run_now_unsupported", "This event type cannot be run from the Events page"))
 		return
 	}
 	task, err := h.service.RunNow(r.Context(), current.ID)

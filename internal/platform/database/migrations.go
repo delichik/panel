@@ -135,7 +135,124 @@ func preAppMigrationSteps() []orm.Step {
 		{ID: "migrate_reverse_proxy_routes_table", Run: func(ctx context.Context, tx *sql.Tx) error {
 			return migrateReverseProxyRoutesTableOn(ctx, tx)
 		}},
+		{ID: "rename_log_contexts_to_events", Run: func(ctx context.Context, tx *sql.Tx) error {
+			return renameLogContextsToEventsOn(ctx, tx)
+		}},
+		{ID: "rename_tasks_to_event_runs", Run: func(ctx context.Context, tx *sql.Tx) error {
+			return renameTasksToEventRunsOn(ctx, tx)
+		}},
 	}
+}
+
+func tableExistsOn(ctx context.Context, q migrationExecutor, name string) (bool, error) {
+	var n int
+	err := q.QueryRowContext(ctx, `SELECT COUNT(1) FROM sqlite_master WHERE type='table' AND name=?`, name).Scan(&n)
+	return n > 0, err
+}
+
+func renameLogContextsToEventsOn(ctx context.Context, q migrationExecutor) error {
+	hasLegacy, err := tableExistsOn(ctx, q, "log_contexts")
+	if err != nil || !hasLegacy {
+		return err
+	}
+	hasEvents, err := tableExistsOn(ctx, q, "events")
+	if err != nil {
+		return err
+	}
+	if hasEvents {
+		if _, err := q.ExecContext(ctx, `DROP TABLE IF EXISTS log_contexts`); err != nil {
+			return err
+		}
+		return nil
+	}
+	if _, err := q.ExecContext(ctx, `ALTER TABLE log_contexts RENAME TO events`); err != nil {
+		return err
+	}
+	// stream_id → id
+	cols, err := tableColumnsOn(ctx, q, "events")
+	if err != nil {
+		return err
+	}
+	if cols["stream_id"] && !cols["id"] {
+		if _, err := q.ExecContext(ctx, `ALTER TABLE events RENAME COLUMN stream_id TO id`); err != nil {
+			return err
+		}
+	}
+	if cols["result"] && !cols["state"] {
+		if _, err := q.ExecContext(ctx, `ALTER TABLE events RENAME COLUMN result TO state`); err != nil {
+			return err
+		}
+		if _, err := q.ExecContext(ctx, `UPDATE events SET state='running' WHERE TRIM(COALESCE(state,''))='' AND TRIM(COALESCE(finished_at,''))=''`); err != nil {
+			return err
+		}
+	}
+	if !cols["level"] {
+		if _, err := q.ExecContext(ctx, `ALTER TABLE events ADD COLUMN level TEXT NOT NULL DEFAULT 'info'`); err != nil {
+			return err
+		}
+		if _, err := q.ExecContext(ctx, `UPDATE events SET level='error' WHERE had_error!=0`); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func renameTasksToEventRunsOn(ctx context.Context, q migrationExecutor) error {
+	hasTasks, err := tableExistsOn(ctx, q, "tasks")
+	if err != nil {
+		return err
+	}
+	if hasTasks {
+		hasRuns, err := tableExistsOn(ctx, q, "event_runs")
+		if err != nil {
+			return err
+		}
+		if !hasRuns {
+			if _, err := q.ExecContext(ctx, `ALTER TABLE tasks RENAME TO event_runs`); err != nil {
+				return err
+			}
+		} else if _, err := q.ExecContext(ctx, `DROP TABLE IF EXISTS tasks`); err != nil {
+			return err
+		}
+	}
+	hasSteps, err := tableExistsOn(ctx, q, "task_steps")
+	if err != nil {
+		return err
+	}
+	if hasSteps {
+		hasRunSteps, err := tableExistsOn(ctx, q, "event_run_steps")
+		if err != nil {
+			return err
+		}
+		if !hasRunSteps {
+			if _, err := q.ExecContext(ctx, `ALTER TABLE task_steps RENAME TO event_run_steps`); err != nil {
+				return err
+			}
+		} else if _, err := q.ExecContext(ctx, `DROP TABLE IF EXISTS task_steps`); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func tableColumnsOn(ctx context.Context, q migrationExecutor, table string) (map[string]bool, error) {
+	rows, err := q.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return nil, err
+		}
+		out[name] = true
+	}
+	return out, rows.Err()
 }
 func appMigrationSteps() []orm.Step {
 	return []orm.Step{

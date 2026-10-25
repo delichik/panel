@@ -16,7 +16,9 @@ export interface DebugRuntimeSnapshot {
 
 export interface DebugTaskSnapshot {
   collectedAt: string;
-  tasks: DebugTaskRuntime;
+  /** Event executor runtime stats (legacy key `tasks` may still appear in old mocks). */
+  eventRuntime?: DebugTaskRuntime;
+  tasks?: DebugTaskRuntime;
 }
 
 export interface DebugDatabaseSnapshots {
@@ -25,6 +27,13 @@ export interface DebugDatabaseSnapshots {
 }
 
 export interface DebugTaskRuntime {
+  eventRunnerRunning?: boolean;
+  registeredEventTypes?: number;
+  executableEventTypes?: number;
+  periodicEventTypes?: number;
+  runningEventExecutions?: number;
+  eventDefinitions?: DebugTaskDefinition[];
+  /** @deprecated legacy diagnostic keys */
   workerRunning?: boolean;
   registeredTypes?: number;
   executableTypes?: number;

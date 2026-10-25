@@ -8,7 +8,7 @@
 - 服务器登记、Agent 状态机、能力门禁与任务语义见 [服务器、安全与软件包](servers-security-packages.md) 的 `SRV-*`、`AGT-*`。
 - 存储共享与入口网关的地址、导出白名单与上游渲染见 [应用与设施应用](applications-and-facilities.md) 的 `FAC-STO-*`、`FAC-RP-*`。
 - 页面操作与两阶段反馈见 [逐页面验收](ui-pages.md) 的 `UI-SET-*`、`UI-SRV-*`。
-- 任务中心、运行事件与系统核实中语义见 [协调、任务与运行事件](orchestration-and-tasks.md)。
+- Event executor（`/executions`）、进程事件（`/events`）与系统核实语义见 [协调、任务与运行事件](orchestration-and-tasks.md)。
 
 每个条目都按触发入口、前置条件、成功结果、失败结果、边界条件和验证点六项书写；只写“支持 Tailscale”不构成验收。
 
@@ -177,9 +177,9 @@
 
 - **触发入口**：`POST /api/v1/servers/{id}/tailscale/apply`（详情页「重试 / 应用 Tailscale」）。
 - **前置条件**：服务器存在且 `tailscaleEnabled=true`；可能存在进行中的同类任务。
-- **成功结果**：创建或复用 `server_tailscale_apply` 任务，响应 202 与 `taskId`，任务先进入 `running` 再返回；任务执行体经 Agent 安装/加入或断连并写回观测态；任务在任务中心可见并可追踪。
+- **成功结果**：创建或复用 `server_tailscale_apply` run，响应 202 与 `taskId`，run 先进入 `running` 再返回；执行体经 Agent 安装/加入或断连并写回观测态；run 经 `/executions` 或 toast 中的 taskId 可追踪。
 - **失败结果**：`tailscaleEnabled=false` 时返回 `tailscale_not_enabled`，不得创建任务；服务器不存在返回 not-found；任务执行失败必须写失败终态并保留结构化错误。
-- **边界条件**：这是手动重试与首次加入路径，重复点击允许复用而非并发创建；已有 `running` 任务时不得返回“已受理”却什么都不做（与 `AGT-DEP-001` 同类语义）；Panel 重启后仍可从任务中心重试/立即运行。
+- **边界条件**：这是手动重试与首次加入路径，重复点击允许复用而非并发创建；已有 `running` run 时不得返回“已受理”却什么都不做（与 `AGT-DEP-001` 同类语义）；Panel 重启后仍可从 `/executions` 重试/立即运行。
 - **验证点**：`internal/modules/servers/tailscale.go` 的任务创建/复用分支测试；路由清单包含该路径（`TS-EVD-001`）。
 
 ### TS-TASK-002 保存开关自动排队收敛

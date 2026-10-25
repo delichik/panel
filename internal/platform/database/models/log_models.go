@@ -6,7 +6,7 @@ import "time"
 // internal/platform/database/migrations.go 的 task 段 CREATE TABLE 逐一对应；
 // 复合/部分索引与 CHECK 约束无法用 orm tag 表达，见 models_test.go 与模块文档。
 
-// Task 对应 tasks。
+// Task 对应 event_runs（控制面事件执行记录；产品称事件执行，非独立「任务中心」）。
 type Task struct {
 	ID             string `orm:"primary_key"`
 	OperationID    string `orm:"not_null;default:''"`
@@ -44,24 +44,24 @@ type Task struct {
 	FinishedAt          *time.Time
 }
 
-func (*Task) TableName() string { return "tasks" }
+func (*Task) TableName() string { return "event_runs" }
 
-// ExtraIndexDDL 返回 tasks 表无法用 orm tag 表达的复合索引。
+// ExtraIndexDDL 返回 event_runs 表无法用 orm tag 表达的复合索引。
 func (*Task) ExtraIndexDDL() map[string][]string {
 	return map[string][]string{
-		"tasks": {
-			"CREATE INDEX IF NOT EXISTS idx_tasks_type_status ON tasks(type, status)",
-			"CREATE INDEX IF NOT EXISTS idx_tasks_concurrency_status_created ON tasks(concurrency_key, status, created_at)",
-			"CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_task_id, child_index)",
-			"CREATE INDEX IF NOT EXISTS idx_tasks_status_next_run ON tasks(status, next_run_at)",
+		"event_runs": {
+			"CREATE INDEX IF NOT EXISTS idx_event_runs_type_status ON event_runs(type, status)",
+			"CREATE INDEX IF NOT EXISTS idx_event_runs_concurrency_status_created ON event_runs(concurrency_key, status, created_at)",
+			"CREATE INDEX IF NOT EXISTS idx_event_runs_parent ON event_runs(parent_task_id, child_index)",
+			"CREATE INDEX IF NOT EXISTS idx_event_runs_status_next_run ON event_runs(status, next_run_at)",
 		},
 	}
 }
 
-// TaskStep 对应 task_steps。
+// TaskStep 对应 event_run_steps（列名仍用 task_id，与执行器领域类型 Task.ID 对齐）。
 type TaskStep struct {
 	ID           string         `orm:"primary_key"`
-	TaskID       string         `orm:"not_null;references:tasks(id);on_delete:CASCADE"`
+	TaskID       string         `orm:"not_null;references:event_runs(id);on_delete:CASCADE"`
 	Step         string         `orm:"not_null"`
 	Status       string         `orm:"not_null"`
 	Percentage   float64        `orm:"not_null;default:0"`
@@ -71,13 +71,13 @@ type TaskStep struct {
 	Error        string `orm:"not_null;default:''"`
 }
 
-func (*TaskStep) TableName() string { return "task_steps" }
+func (*TaskStep) TableName() string { return "event_run_steps" }
 
-// ExtraIndexDDL 返回 task_steps 表无法用 orm tag 表达的复合 UNIQUE。
+// ExtraIndexDDL 返回 event_run_steps 表无法用 orm tag 表达的复合 UNIQUE。
 func (*TaskStep) ExtraIndexDDL() map[string][]string {
 	return map[string][]string{
-		"task_steps": {
-			"CREATE UNIQUE INDEX IF NOT EXISTS uq_task_steps_task_step ON task_steps(task_id, step)",
+		"event_run_steps": {
+			"CREATE UNIQUE INDEX IF NOT EXISTS uq_event_run_steps_run_step ON event_run_steps(task_id, step)",
 		},
 	}
 }

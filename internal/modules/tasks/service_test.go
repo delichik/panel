@@ -17,7 +17,7 @@ import (
 	storage "panel/internal/platform/database"
 	panelerr "panel/internal/platform/errors"
 	httpx "panel/internal/platform/http"
-	"panel/internal/platform/logcontexts"
+	"panel/internal/platform/events"
 	"panel/internal/platform/logging"
 )
 
@@ -39,7 +39,7 @@ func newTestService(t *testing.T) *Service {
 		t.Fatal(err)
 	}
 	t.Cleanup(logging.CloseFileSinkForTest)
-	logging.SetContextStore(logcontexts.NewStore(store.AppDB()))
+	logging.SetContextStore(events.NewStore(store.AppDB()))
 	t.Cleanup(func() { logging.SetContextStore(nil) })
 	svc := NewService(store.AppDB())
 	for _, def := range []Definition{
@@ -354,10 +354,10 @@ func TestListOrdersNewestTasksFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.db.ExecContext(ctx, `UPDATE tasks SET created_at=? WHERE id=?`, time.Now().UTC().Add(-2*time.Hour).Format(time.RFC3339Nano), oldTask.ID); err != nil {
+	if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET created_at=? WHERE id=?`, time.Now().UTC().Add(-2*time.Hour).Format(time.RFC3339Nano), oldTask.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.db.ExecContext(ctx, `UPDATE tasks SET created_at=? WHERE id=?`, time.Now().UTC().Format(time.RFC3339Nano), newTask.ID); err != nil {
+	if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET created_at=? WHERE id=?`, time.Now().UTC().Format(time.RFC3339Nano), newTask.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -447,7 +447,7 @@ func TestMissingExecutionPreservesUncertainResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.db.ExecContext(ctx, `UPDATE tasks SET status=?,started_at=? WHERE id=?`, StatusRunning, now.Format(time.RFC3339Nano), untracked.ID); err != nil {
+	if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET status=?,started_at=? WHERE id=?`, StatusRunning, now.Format(time.RFC3339Nano), untracked.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -618,7 +618,7 @@ func TestFinishExecutionClearsNonRunningDatabaseTask(t *testing.T) {
 	if err := svc.Start(ctx, task.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.db.ExecContext(ctx, `UPDATE tasks SET status=? WHERE id=?`, StatusFailed, task.ID); err != nil {
+	if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET status=? WHERE id=?`, StatusFailed, task.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -647,7 +647,7 @@ func TestExpireStaleQueuedMarksOnlySelectedOldQueuedTasksFailed(t *testing.T) {
 	}
 	old := now.Add(-30 * time.Minute).Format(time.RFC3339Nano)
 	for _, taskID := range []string{oldWorker.ID, oldScheduled.ID} {
-		if _, err := svc.db.ExecContext(ctx, `UPDATE tasks SET created_at=? WHERE id=?`, old, taskID); err != nil {
+		if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET created_at=? WHERE id=?`, old, taskID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -703,11 +703,11 @@ func TestExpireStaleQueuedKeepsTasksWaitingBehindActiveHead(t *testing.T) {
 	}
 	old := now.Add(-10 * time.Minute).Format(time.RFC3339Nano)
 	older := now.Add(-20 * time.Minute).Format(time.RFC3339Nano)
-	if _, err := svc.db.ExecContext(ctx, `UPDATE tasks SET created_at=?, status='running' WHERE id=?`, older, head.ID); err != nil {
+	if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET created_at=?, status='running' WHERE id=?`, older, head.ID); err != nil {
 		t.Fatal(err)
 	}
 	for _, taskID := range []string{waiter.ID, orphan.ID} {
-		if _, err := svc.db.ExecContext(ctx, `UPDATE tasks SET created_at=? WHERE id=?`, old, taskID); err != nil {
+		if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET created_at=? WHERE id=?`, old, taskID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -805,7 +805,7 @@ func TestCleanupRetainedPreservesHistory(t *testing.T) {
 	if err := svc.AppendLog(ctx, old.ID, "stdout", "old log line"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.db.ExecContext(ctx, `UPDATE tasks SET finished_at=? WHERE id=?`, time.Now().UTC().Add(-48*time.Hour).Format(time.RFC3339Nano), old.ID); err != nil {
+	if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET finished_at=? WHERE id=?`, time.Now().UTC().Add(-48*time.Hour).Format(time.RFC3339Nano), old.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -813,7 +813,7 @@ func TestCleanupRetainedPreservesHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.db.ExecContext(ctx, `UPDATE tasks SET finished_at=? WHERE id=?`, time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano), recent.ID); err != nil {
+	if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET finished_at=? WHERE id=?`, time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano), recent.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -844,7 +844,7 @@ func TestExpireStaleQueuedFailsOldScheduledTasks(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := now.Add(-30 * time.Minute).Format(time.RFC3339Nano)
-	if _, err := svc.db.ExecContext(ctx, `UPDATE tasks SET created_at=? WHERE id=?`, old, task.ID); err != nil {
+	if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET created_at=? WHERE id=?`, old, task.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1022,7 +1022,7 @@ func TestExpireStaleQueuedKeepsFutureScheduledTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)
-	if _, err := svc.db.Exec(`UPDATE tasks SET created_at=? WHERE id=?`, old, task.ID); err != nil {
+	if _, err := svc.db.Exec(`UPDATE event_runs SET created_at=? WHERE id=?`, old, task.ID); err != nil {
 		t.Fatal(err)
 	}
 	expired, err := svc.ExpireStaleQueued(ctx, time.Now().UTC(), time.Minute, []string{"stale_scheduled"})
@@ -1040,7 +1040,7 @@ func TestExpireStaleQueuedKeepsFutureScheduledTask(t *testing.T) {
 		t.Fatalf("expected scheduled, got %#v", got)
 	}
 	past := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339Nano)
-	if _, err := svc.db.Exec(`UPDATE tasks SET next_run_at=? WHERE id=?`, past, task.ID); err != nil {
+	if _, err := svc.db.Exec(`UPDATE event_runs SET next_run_at=? WHERE id=?`, past, task.ID); err != nil {
 		t.Fatal(err)
 	}
 	expired, err = svc.ExpireStaleQueued(ctx, time.Now().UTC(), time.Minute, []string{"stale_scheduled"})
@@ -1185,7 +1185,7 @@ func TestQuietTaskActivityFactsAreDebugUnlessFailed(t *testing.T) {
 		t.Fatal(err)
 	}
 	var quiet int
-	if err := svc.db.QueryRow(`SELECT quiet FROM tasks WHERE id=?`, task.ID).Scan(&quiet); err != nil {
+	if err := svc.db.QueryRow(`SELECT quiet FROM event_runs WHERE id=?`, task.ID).Scan(&quiet); err != nil {
 		t.Fatal(err)
 	}
 	if quiet != 1 {

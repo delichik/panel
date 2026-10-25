@@ -64,12 +64,16 @@ func writeFileLine(level zapcore.Level, msg string, logCtx Context, fields []zap
 	if err != nil || f == nil {
 		return
 	}
+	eventID := logCtx.EventID
+	if eventID == "" {
+		eventID = logCtx.StreamID
+	}
 	obj := map[string]any{
-		"ts":       time.Now().UTC().Format(time.RFC3339Nano),
-		"level":    level.String(),
-		"module":   logCtx.Module,
-		"streamId": logCtx.StreamID,
-		"msg":      msg,
+		"ts":      time.Now().UTC().Format(time.RFC3339Nano),
+		"level":   level.String(),
+		"module":  logCtx.Module,
+		"eventId": eventID,
+		"msg":     msg,
 	}
 	if logCtx.OperationID != "" {
 		obj["operationId"] = logCtx.OperationID
@@ -139,7 +143,7 @@ func flattenFields(obj map[string]any, fields []zap.Field) {
 	enc := zapcore.NewMapObjectEncoder()
 	for _, f := range fields {
 		switch f.Key {
-		case "streamId", "module", "operationId", "executionId", "requestId", "ts", "level", "msg":
+		case "streamId", "eventId", "module", "operationId", "executionId", "requestId", "ts", "level", "msg":
 			// Already set from context / required keys; skip duplicates from Logger.fields.
 			continue
 		}

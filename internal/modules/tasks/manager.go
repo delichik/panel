@@ -258,7 +258,7 @@ func (m *Manager) Run(ctx context.Context, task Task) error {
 	err = def.Execute(TaskContext{Context: runCtx, Task: task, Service: m.service})
 	if err != nil {
 		latest, latestErr := m.service.Get(ctx, task.ID)
-		if latestErr == nil && isTerminalStatus(latest.Status) {
+		if latestErr == nil && (isTerminalStatus(latest.Status) || latest.Status == StatusFailedRetryable) {
 			return nil
 		}
 		if def.OnFailure != nil {
@@ -270,7 +270,8 @@ func (m *Manager) Run(ctx context.Context, task Task) error {
 		return m.service.Fail(ctx, task.ID, err)
 	}
 	latest, latestErr := m.service.Get(ctx, task.ID)
-	if latestErr == nil && isTerminalStatus(latest.Status) {
+	// Execute may have already settled the run (complete/fail/retryable/block/cancel).
+	if latestErr == nil && (isTerminalStatus(latest.Status) || latest.Status == StatusFailedRetryable) {
 		return nil
 	}
 	summary := task.Summary

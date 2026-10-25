@@ -7,12 +7,14 @@ import (
 	"time"
 )
 
-// ContextMeta is optional stream metadata upserted into log_contexts.
+// ContextMeta is optional event metadata upserted into events.
 type ContextMeta struct {
 	Origin        string
 	Title         string
 	Summary       string
-	Result        string
+	State         string
+	Result        string // deprecated alias for State
+	Level         string
 	HadError      bool
 	ActorJSON     string
 	ResourcesJSON string
@@ -20,8 +22,8 @@ type ContextMeta struct {
 	Finished      bool
 }
 
-// RecordContext upserts log_contexts for the stream on ctx using meta fields.
-// Missing stream/module or store is a no-op.
+// RecordContext upserts events for the event on ctx using meta fields.
+// Missing event/module or store is a no-op.
 func RecordContext(ctx context.Context, meta ContextMeta) error {
 	logCtx, ok := Lookup(ctx)
 	if !ok {
@@ -35,9 +37,17 @@ func RecordContext(ctx context.Context, meta ContextMeta) error {
 	if origin == "" {
 		origin = "process"
 	}
+	state := strings.TrimSpace(meta.State)
+	if state == "" {
+		state = strings.TrimSpace(meta.Result)
+	}
+	eventID := logCtx.EventID
+	if eventID == "" {
+		eventID = logCtx.StreamID
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	rec := ContextRecord{
-		StreamID:      logCtx.StreamID,
+		EventID:       eventID,
 		Module:        logCtx.Module,
 		Origin:        origin,
 		OperationID:   logCtx.OperationID,
@@ -45,7 +55,8 @@ func RecordContext(ctx context.Context, meta ContextMeta) error {
 		RequestID:     logCtx.RequestID,
 		Title:         meta.Title,
 		Summary:       meta.Summary,
-		Result:        meta.Result,
+		State:         state,
+		Level:         meta.Level,
 		HadError:      meta.HadError,
 		ActorJSON:     meta.ActorJSON,
 		ResourcesJSON: meta.ResourcesJSON,
@@ -55,11 +66,18 @@ func RecordContext(ctx context.Context, meta ContextMeta) error {
 	}
 	if meta.Finished {
 		rec.FinishedAt = now
+		if rec.State == "" {
+			if meta.HadError {
+				rec.State = "failed"
+			} else {
+				rec.State = "succeeded"
+			}
+		}
 	}
 	return store.Upsert(ctx, rec)
 }
 
-// MarshalActorJSON encodes an actor map for log_contexts.actor_json.
+// MarshalActorJSON encodes an actor map for events.actor_json.
 func MarshalActorJSON(actor map[string]string) string {
 	if len(actor) == 0 {
 		return ""
@@ -71,7 +89,7 @@ func MarshalActorJSON(actor map[string]string) string {
 	return string(b)
 }
 
-// MarshalResourcesJSON encodes resources for log_contexts.resources_json.
+// MarshalResourcesJSON encodes resources for events.resources_json.
 func MarshalResourcesJSON(resources any) string {
 	if resources == nil {
 		return ""

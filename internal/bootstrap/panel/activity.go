@@ -16,7 +16,7 @@ import (
 	auth "panel/internal/modules/identity"
 	"panel/internal/modules/runtimeevents"
 	"panel/internal/platform/activitylog"
-	"panel/internal/platform/logcontexts"
+	"panel/internal/platform/events"
 	"panel/internal/platform/logging"
 	"panel/internal/platform/maintenance"
 )
@@ -76,7 +76,7 @@ func (w *systemEventWriter) Log(ctx context.Context, in runtimeevents.WriteEvent
 		logger.Info(msg, fields...)
 	}
 	_ = logging.RecordContext(ctx, logging.ContextMeta{
-		Origin:  logcontexts.OriginSystem,
+		Origin:  events.OriginSystem,
 		Title:   in.EventType,
 		Summary: msg,
 	})
@@ -144,7 +144,7 @@ func (a *App) activityAuth(next http.Handler) http.Handler {
 				zap.String("eventType", "request.received"),
 			)
 			_ = logging.RecordContext(ctx, logging.ContextMeta{
-				Origin:    logcontexts.OriginUser,
+				Origin:    events.OriginUser,
 				Title:     r.Method + " " + r.URL.Path,
 				Summary:   "request received",
 				ActorJSON: logging.MarshalActorJSON(map[string]string{"kind": "user", "id": "admin", "name": sess.Username}),
@@ -331,7 +331,7 @@ func (a *App) finishRequest(ctx context.Context, r *http.Request, w *activityRes
 		logger.Info("http request finished", fields...)
 	}
 	_ = logging.RecordContext(ctx, logging.ContextMeta{
-		Origin:   logcontexts.OriginUser,
+		Origin:   events.OriginUser,
 		Title:    r.Method + " " + r.URL.Path,
 		Summary:  "request finished",
 		Result:   result,

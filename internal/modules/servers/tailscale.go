@@ -19,7 +19,7 @@ import (
 // tailnet、写回观测态或按用户意图退出 tailnet。
 const tailscaleApplyTaskType = "server_tailscale_apply"
 
-// tailscaleResourceType 是任务中心展示用的资源类型。
+// tailscaleResourceType 是事件列表展示用的资源类型。
 const tailscaleResourceType = "server"
 
 // TailscaleSettings 是节点侧加入 tailnet 所需的全局配置，由设置模块提供。

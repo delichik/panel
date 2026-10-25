@@ -18,12 +18,12 @@ func newControlSchemaTestDB(t *testing.T) *sql.DB {
 	for _, statement := range []string{
 		`CREATE TABLE applications(id TEXT PRIMARY KEY,name TEXT NOT NULL DEFAULT '')`,
 		`CREATE TABLE servers(id TEXT PRIMARY KEY,name TEXT NOT NULL DEFAULT '')`,
-		`CREATE TABLE tasks(
+		`CREATE TABLE event_runs(
 			id TEXT PRIMARY KEY,operation_id TEXT NOT NULL DEFAULT '',type TEXT NOT NULL,parent_task_id TEXT NOT NULL DEFAULT '',child_index INTEGER NOT NULL DEFAULT 0,child_count INTEGER NOT NULL DEFAULT 0,
 			resource_type TEXT NOT NULL DEFAULT '',resource_id TEXT NOT NULL DEFAULT '',server_id TEXT NOT NULL DEFAULT '',node_id TEXT NOT NULL DEFAULT '',
 			trigger_type TEXT NOT NULL DEFAULT '',trigger_resource_type TEXT NOT NULL DEFAULT '',trigger_resource_id TEXT NOT NULL DEFAULT '',trigger_task_id TEXT NOT NULL DEFAULT '',triggered_by TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'queued',stage TEXT NOT NULL DEFAULT '',summary TEXT NOT NULL DEFAULT '',error TEXT NOT NULL DEFAULT '',retry_count INTEGER NOT NULL DEFAULT 0,quiet INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL DEFAULT '')`,
-		`CREATE TABLE task_steps(
+		`CREATE TABLE event_run_steps(
 			id TEXT PRIMARY KEY,task_id TEXT NOT NULL,step TEXT NOT NULL,status TEXT NOT NULL,percentage REAL NOT NULL DEFAULT 0,metadata_json TEXT NOT NULL DEFAULT '{}',started_at TEXT,finished_at TEXT,error TEXT NOT NULL DEFAULT '')`,
 		`CREATE TABLE task_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,task_id TEXT NOT NULL,time TEXT NOT NULL,stream TEXT NOT NULL,line TEXT NOT NULL)`,
 		`CREATE TABLE jobs(
@@ -55,7 +55,7 @@ func TestInstallControlTriggersDropsLegacyDefinitions(t *testing.T) {
 	if _, err := db.Exec(`CREATE TRIGGER activity_observation AFTER UPDATE ON application_instances BEGIN SELECT 1; END`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`CREATE TRIGGER activity_task_requested AFTER INSERT ON tasks BEGIN SELECT 1; END`); err != nil {
+	if _, err := db.Exec(`CREATE TRIGGER activity_task_requested AFTER INSERT ON event_runs BEGIN SELECT 1; END`); err != nil {
 		t.Fatal(err)
 	}
 	if err := InstallControlTriggers(context.Background(), db); err != nil {
@@ -87,11 +87,11 @@ func TestControlTriggersNoLongerWriteActivityEvents(t *testing.T) {
 	if err := InstallControlTriggers(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO tasks(id,operation_id,type,status,summary,quiet,created_at) VALUES(?,?,?,?,?,?,?)`,
+	if _, err := db.Exec(`INSERT INTO event_runs(id,operation_id,type,status,summary,quiet,created_at) VALUES(?,?,?,?,?,?,?)`,
 		"task1", "op1", "server_agent_check", "queued", "Checking agent", 0, "now"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`UPDATE tasks SET status='running' WHERE id=?`, "task1"); err != nil {
+	if _, err := db.Exec(`UPDATE event_runs SET status='running' WHERE id=?`, "task1"); err != nil {
 		t.Fatal(err)
 	}
 	var count int

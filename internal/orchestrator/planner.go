@@ -10,7 +10,7 @@ import (
 
 	"panel/internal/platform/activitylog"
 	id "panel/internal/platform/identity"
-	"panel/internal/platform/logcontexts"
+	"panel/internal/platform/events"
 	"panel/internal/platform/logging"
 
 	"go.uber.org/zap"
@@ -374,7 +374,7 @@ func appendRunningIntent(ctx context.Context, tx *sql.Tx, active Job, in PlanInp
 		zap.String("serverId", in.ServerID),
 	)
 	_ = logging.RecordContext(logCtx, logging.ContextMeta{
-		Origin:        logcontexts.OriginProcess,
+		Origin:        events.OriginProcess,
 		Title:         eventType,
 		Summary:       eventType,
 		Result:        result,
@@ -414,7 +414,7 @@ func appendPlanRequest(ctx context.Context, tx *sql.Tx, in PlanInput) error {
 		zap.String("actorId", actor.ID),
 	)
 	_ = logging.RecordContext(logCtx, logging.ContextMeta{
-		Origin:        logcontexts.OriginProcess,
+		Origin:        events.OriginProcess,
 		Title:         "operation.requested",
 		Summary:       msg,
 		ActorJSON:     logging.MarshalActorJSON(map[string]string{"kind": actor.Kind, "id": actor.ID, "name": actor.Name}),

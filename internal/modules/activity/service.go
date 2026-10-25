@@ -57,7 +57,7 @@ func (s *Service) Head(ctx context.Context) (int64, error) {
 }
 
 // CatchUp no longer projects activity_events into the query index. Product
-// facts are written via platform/logging + log_contexts.
+// facts are written via platform/logging + events.
 func (s *Service) CatchUp(ctx context.Context) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

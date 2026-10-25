@@ -10,7 +10,7 @@ import (
 
 	"panel/internal/platform/activitylog"
 	panelerr "panel/internal/platform/errors"
-	"panel/internal/platform/logcontexts"
+	"panel/internal/platform/events"
 	"panel/internal/platform/logging"
 )
 
@@ -62,7 +62,7 @@ func (s *Service) ResolveExecutionManually(ctx context.Context, executionID, out
 		zap.String("actorId", actor.ID),
 	)
 	_ = logging.RecordContext(logCtx, logging.ContextMeta{
-		Origin:   logcontexts.OriginUser,
+		Origin:   events.OriginUser,
 		Title:    "verification.requested",
 		Summary:  reason,
 		ActorJSON: logging.MarshalActorJSON(map[string]string{"kind": actor.Kind, "id": actor.ID, "name": actor.Name}),
@@ -119,7 +119,7 @@ func (s *Service) applyManualResult(ctx context.Context, store *controlplane.Sto
 		return err
 	}
 	var n int
-	if queryErr := store.DB().QueryRowContext(ctx, `SELECT count(*) FROM log_contexts WHERE execution_id=? AND result=?`, job.ExecutionID, outcome).Scan(&n); queryErr != nil {
+	if queryErr := store.DB().QueryRowContext(ctx, `SELECT count(*) FROM events WHERE execution_id=? AND state=?`, job.ExecutionID, outcome).Scan(&n); queryErr != nil {
 		return queryErr
 	}
 	if n >= 1 {

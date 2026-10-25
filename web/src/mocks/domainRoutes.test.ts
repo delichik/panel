@@ -176,7 +176,7 @@ describe('domain mock routes', () => {
     expect(certsEnvelope.data.total).toBeGreaterThanOrEqual(10);
     expect(certsEnvelope.data.items.some((cert: { status: string }) => cert.status === 'renewing')).toBe(true);
 
-    const contexts = await fetch('/api/v1/log-contexts?limit=20');
+    const contexts = await fetch('/api/v1/events?limit=20');
     const contextsEnvelope = await contexts.json();
     expect(contexts.status).toBe(200);
     expect(contextsEnvelope.data.items.length).toBeGreaterThan(0);

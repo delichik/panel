@@ -31,7 +31,7 @@
 - 指标采集：`internal/modules/observability/metrics/`
 - 概览聚合：`internal/modules/observability/overview/`
 - 软件包维护：`internal/modules/packages/`
-- 周期任务触发：各业务模块 `tasks.go` 注册周期输入，由 `internal/modules/tasks/` 内部 worker 驱动
+- 周期任务触发：各业务模块 `tasks.go` 注册周期输入，由 event executor worker 驱动
 - 任务记录：`internal/modules/tasks/`
 - 路由注册：`internal/modules/servers/routes.go`、`internal/modules/servers/credential/routes.go`
 
@@ -53,7 +53,7 @@
 
 - 服务器与凭据页均使用 `TableDetailLayout`：表格在自身容器内滚动并保留搜索/分页/选中于 URL；覆盖详情覆盖整个内容区并在内部滚动，凭据详情按需加载 `GET /api/v1/credentials/{id}`。
 - 创建服务器保存成功即关对话框：新记录加入列表并打开其覆盖详情，前端以概况 tab 跟踪 `initialTaskId` 到终态；成功刷新数据，失败在服务器记录上保留不可达原因。
-- 任务类操作（Agent 部署 / 重启 / 防火墙规则变更）反馈只承诺任务已提交；可通过 `/tasks` 看系统意图、`/logs` 看诊断日志行，服务器详情 Agent 卡片继续提供当前服务器的就地诊断。
+- 任务类操作（Agent 部署 / 重启 / 防火墙规则变更）反馈只承诺 execution 已提交；可通过 `/events` 看进程行、`/logs` 看 JSONL 行，服务器详情 Agent 卡片继续提供当前服务器的就地诊断。
 
 ## API 范围
 
@@ -79,7 +79,7 @@
 - `GET /api/v1/credentials/{id}` 对私钥类型凭据按需解密并返回非敏感密钥摘要（算法、位长、SHA256 指纹、密钥注释/名称），密码类型不返回摘要；摘要解析失败时仅省略摘要字段，任何响应都不返回秘密内容。
 - SSH 执行器 `internal/platform/ssh` 默认开启主机密钥 TOFU：首次连接把目标机公钥按 `host:port` 身份记录到 known_hosts 文件并持久化，后续连接校验公钥；指纹不匹配拒绝连接并返回 `ssh_host_key_mismatch` 错误（BadGateway）。known_hosts 默认位于 `<dataRoot>/known_hosts`（`PANEL_DATA_ROOT` 未设置时回退 `data`），可用 `WithKnownHosts` 指定路径；涉及 SSH 的测试应提供临时目录。`HostKeyMismatch` 标志由服务器记录的类型化判定（`ssh_host_key_mismatch` 错误码）持久化，不再依赖错误消息文本子串。
 - 主机密钥不一致时，服务器读取层（`Server`/`ServerSummary`）根据 `lastError` 是否包含稳定特征 `ssh host key mismatch` 暴露 `hostKeyMismatch`（JSON `hostKeyMismatch`，`omitempty`），List 与 Get 一致返回。`POST /api/v1/servers/{id}/trust-host-key` 是管理员显式信任流程：Service 先取服务器并按 `TestConnectivity` 相同方式构造 Target，调用执行器 `TrustHostKey` 建立一次性 SSH 连接（HostKeyCallback 只捕获公钥并接受连接，不校验 known_hosts），认证成功后以 `net.JoinHostPort(host, port)` 身份调用 `knownHosts.Replace` 覆盖记录；随后复用 `TestConnectivity` 刷新可达性并清空旧 `lastError`，成功返回更新后的服务器 JSON。known_hosts 未启用时返回 Validation `host_key_verification_disabled`；连接失败返回 `ssh_connection_failed`，其中 SSH 握手阶段出现 EOF/重置/超时也视为连接失败；凭据被拒绝才返回 `ssh_auth_failed`；known_hosts 写入失败返回 `ssh_host_key_verification_failed`。前端在详情错误/状态区对 `hostKeyMismatch === true` 展示显著安全提示（说明可能是主机重装或中间人攻击），并提供“信任新主机密钥”按钮：`ConfirmDialog`（danger + requireCheckbox）确认后调用 `trustHostKey`，成功后 toast 并失效详情缓存重拉（`invalidateServerDetail` + `load`），失败显示错误。
-- 创建初始化、Agent 部署、重启、UFW 安装为任务型操作：前端只展示已提交/进行中，不承诺请求返回时已完成；任务中心 `/tasks` 是基础设施任务的完整诊断入口，业务页面可继续使用后端返回的稳定任务引用提供就地状态与日志。
+- 创建初始化、Agent 部署、重启、UFW 安装为任务型操作：前端只展示已提交/进行中，不承诺请求返回时已完成；`/executions` 与 `/events`/`/logs` 是基础设施操作的诊断入口，业务页面可继续使用后端返回的稳定 taskId 提供就地状态与日志。
 - 本阶段验证仅限 `task test:web:unit` 与 `task build:web`。
 
 - `servers` 和 `credentials` 在应用数据库，指标快照在指标数据库。
@@ -113,8 +113,8 @@
 - 服务器架构信息使用结构化 `architecture.os`、`architecture.arch` 和 `architecture.rawMachine`，数据库列为 `architecture_os`、`architecture_arch`、`architecture_machine`。Agent 部署选包优先读取结构化架构字段；字段缺失时通过 SSH `uname -m` 探测目标节点并写回结构化字段。
 - bootstrap 成功后按现有受限自动部署状态机创建 Agent 部署任务。Agent 部署或完整系统信息刷新失败不得删除节点；系统自动部署失败按 `agent.auto_deploy_failures` 和 `agent.auto_deploy_last_failure_at` 做指数退避，连续失败 2 次后标记 `agent.status=undeployable` 和 `agent.auto_deploy_blocked=true`，周期检查停止自动部署。用户手动部署会解除阻止并重置自动退避时间基准，部署及兼容性检查成功后恢复为 `compatible`；自动部署失败计数必须等 Agent 健康检查连续 5 次正常后才清空。
 - 完整系统信息由兼容 Agent 读取并交给 `internal/platform/linux/` 解析支持的 Debian/Ubuntu 版本；Agent 内部直接读取 `/etc/os-release`、`/proc`、`/sys`、网络接口和 `statfs`，不再使用系统信息 bash 脚本。如果已启用 agent，读取必须要求 `agent.status=compatible` 并走 agent，不允许在 agent 未就绪、异常、不可部署或客户端缺失时回落 SSH。
-- 服务器列表和详情读取不得创建连通性或系统信息后台任务。`POST /api/v1/servers/{id}/test` 是同步普通函数，只验证 SSH 并更新可达状态与特权模式，不进入任务中心。周期可达状态以 agent 指标上报流为准：上报成功标记可达，实际采集失败标记不可达。
-- `server_info_collect` 首次 bootstrap 在创建服务器后立即运行；后续完整系统信息 refresh 固定每小时一次且只走兼容 Agent。refresh 失败只能使任务失败或可重试，不得回滚或删除已有服务器。任务中心、周期 worker 和 retry/run-now 通过注册 executor 执行时必须同步跑到任务终态，不能只启动后台 goroutine 后返回成功；创建服务器等需要快速返回任务 ID 的入口可使用模块内后台启动 helper。
+- 服务器列表和详情读取不得创建连通性或系统信息后台任务。`POST /api/v1/servers/{id}/test` 是同步普通函数，只验证 SSH 并更新可达状态与特权模式，不创建 execution run。周期可达状态以 agent 指标上报流为准：上报成功标记可达，实际采集失败标记不可达。
+- `server_info_collect` 首次 bootstrap 在创建服务器后立即运行；后续完整系统信息 refresh 固定每小时一次且只走兼容 Agent。refresh 失败只能使任务失败或可重试，不得回滚或删除已有服务器。Event executor、周期 worker 和 retry/run-now 通过注册 executor 执行时必须同步跑到任务终态，不能只启动后台 goroutine 后返回成功；创建服务器等需要快速返回任务 ID 的入口可使用模块内后台启动 helper。
 - 系统探测写入 `sys.*` traits；网卡采集要求 `/sys/class/net/{name}/device` 存在，并过滤 Docker、veth、bridge、CNI、隧道和 overlay 等常见虚拟接口。
 - Agent 写入 `sys.cpu_model` 时优先使用 `/proc/cpuinfo` 的 `model name` 或 `hardware`；`processor` 仅在不是纯数字 CPU 编号时作为兜底，避免把 `processor: 0` 展示成 CPU 型号。
 - SSH 密码、私钥和私钥口令统一封装到 `credentials.secret_ciphertext`，并通过 `internal/platform/secrets` 加密；不得通过 API 响应或任务日志返回秘密内容。
@@ -127,7 +127,7 @@
 - 周期性指标采集依赖 agent 上报流，只对 `agent.enabled=true`、存在 `agent.url` 且 `agent.status=compatible` 的服务器采集并标记可达；不再因旧 `reachable=false` 跳过，以便恢复成功时重新标记可达。指标快照除 CPU、内存、磁盘和网络外，结构化保存 Linux 标准的 1、5、15 分钟负载 `load1`、`load5`、`load15`。
 - 指标历史清理由 `internal/modules/observability/metrics/cleanup_worker.go` 自主管理，按运行时设置中的保留天数和清理周期执行，不属于 tasks 内部 worker。
 - `POST /api/v1/servers/{id}/ufw/install` 与 `POST /api/v1/servers/{id}/ufw/enable` **已删除**（`UFW-API-005` 已废弃）：防火墙不再由用户安装或接管，而是 Agent 部署的自动前提，见下文防火墙前提条目。防火墙页只保留 `GET /ufw` 状态读取与规则增删。
-- `POST /api/v1/servers/{id}/restart` 要求服务器可达且已确认 root 或免密 sudo 特权能力，返回 `server_restart` 任务；前端必须二次确认并保留任务中心入口。
+- `POST /api/v1/servers/{id}/restart` 要求服务器可达且已确认 root 或免密 sudo 特权能力，返回 `server_restart` 任务；前端必须二次确认并保留 `/executions` 或 toast taskId 入口。
 
 ## Panel Agent
 
@@ -149,7 +149,7 @@
 - UFW 写操作必须保护服务器当前 SSH 端口：普通新增、普通删除与应用自动规则都在 Panel 和 Agent 两层拒绝该端口；只有防火墙自动接管流程在 `ufw --force enable` 前确保 SSH `ALLOW` 是内部例外。普通删除必须先解析当前编号对应的精确端口并在执行前重新读取校验，无法解析时拒绝；带 `panel:application:<applicationId>` 稳定 comment 的应用受管规则不能从普通 UFW 删除入口移除。Agent 内 UFW mutation 串行执行，避免规则编号及配置并发漂移。
 - 新增服务器完成首次信息采集且确认 root 或免密 sudo 特权能力后，会按自动部署修复判断创建 `server_agent_deploy` 任务安装 agent；后续 Agent 健康检查只在 agent 未配置、版本不一致、证书需要修复时自动部署，`agent.status=compatible` 且版本正常时不得重装，普通 `unavailable` 网络/远端错误和 Docker 不可用不得触发重装。
 - Panel 启动检查或周期检查发现服务器未配置 agent URL、agent URL 不是当前默认地址、`agent.status=incompatible`、agent 版本与 Panel 不一致、证书过期/尚未生效/距过期不足 7 天，或健康检查因 mTLS server 证书时间错误失败时，必须自动创建或复用 `server_agent_deploy` 任务安装/修复 agent；证书进入 7 天续期窗口时保持 `agent.status=compatible` 且不写错误提示，只静默刷新部署；缺少能力、agent gRPC contract hash 不一致和 Docker host 不一致不单独触发重装；单纯 `agent.status=unavailable`、网络超时、连接拒绝、服务器失联或 Docker 不可用不得触发自动重装。安装/重装任务负责把当前 Panel 签发的 CA、服务端证书和私钥同步到目标机 `/etc/panel-agent`，默认监听 `tcp/9786`，重启前必须停止 systemd 服务并清理残留 `panel-agent` 进程，写入后必须校验远端 `server.pem` 确实是新签发证书，启动失败必须输出 `systemctl status` 和 `journalctl -u panel-agent.service` 诊断，启动后必须等待 `tcp/9786` 进入监听状态，并校验实际吐出的服务端证书指纹匹配新证书；部署证书包的 `agent.url` 必须使用当前服务器 `host` 生成；如果服务器 `host` 被修改，Agent URL 和证书元数据必须失效并要求重部署。如果已有排队或可重试的 `server_agent_deploy` 任务，手动部署、CA 重置、版本不一致、证书修复和服务器 host 变更触发的重装必须复用并立即启动该任务；系统自动触发复用任务时必须尊重任务 `next_run_at` 和自动部署退避时间，不得绕过指数退避立即重跑。同一服务器系统自动触发的 agent 部署失败达到 2 次后必须标记 `agent.status=undeployable` 并停止自动尝试；`undeployable` 状态不得由周期检查继续部署，失败计数只有在后续 Agent 健康检查连续 5 次正常后清空。
-- `POST /api/v1/servers/{id}/agent/deploy` 是手动兜底入口，返回并启动 `server_agent_deploy` 任务；任务中心重试或立即运行也支持该任务类型。该任务的注册 executor 必须同步执行安装、健康检查和终态写入，避免任务中心在远端部署完成前显示 completed；HTTP 创建入口如果需要快速返回，只能在任务已标记 running 后由模块内 helper 后台执行。未安装时前端显示安装按钮，已安装但异常时显示重装按钮。服务器详情页只显示一条紧凑的服务器错误提示，优先展示 `agent.last_error`，不再在访问信息区重复渲染第二条 Agent 错误横幅；Agent 卡片通过现有 tasks 查询和日志 API 恢复该服务器最近一次部署任务，展示本地化状态/阶段、错误与最近日志，并在运行期间每 2 秒增量刷新，切换服务器或卸载页面时必须丢弃迟到响应。
+- `POST /api/v1/servers/{id}/agent/deploy` 是手动兜底入口，返回并启动 `server_agent_deploy` 任务；`/executions` 重试或立即运行也支持该任务类型。该任务的注册 executor 必须同步执行安装、健康检查和终态写入，避免 execution 在远端部署完成前显示 completed；HTTP 创建入口如果需要快速返回，只能在任务已标记 running 后由模块内 helper 后台执行。未安装时前端显示安装按钮，已安装但异常时显示重装按钮。服务器详情页只显示一条紧凑的服务器错误提示，优先展示 `agent.last_error`，不再在访问信息区重复渲染第二条 Agent 错误横幅；Agent 卡片通过现有 tasks 查询和日志 API 恢复该服务器最近一次部署任务，展示本地化状态/阶段、错误与最近日志，并在运行期间每 2 秒增量刷新，切换服务器或卸载页面时必须丢弃迟到响应。
 - agent 部署任务把独立 `panel-agent` 压缩包投递到目标机，再以 `/usr/local/bin/panel-agent --srv` 的 systemd 服务运行；任务会写入 mTLS 证书、`PANEL_AGENT_DOCKER_HOST` 和 `/etc/systemd/system/panel-agent.service`，启动后回写 `agent.enabled=true`、`agent.url`，并以最多 10 次、每次 1 秒的健康轮询替代固定 sleep 检查兼容性。二进制投递有两条路径：HTTP 下载（目标机主动从下载端点拉取，便于 CDN 边缘缓存复用）与 SSH 上传回退；两条路径传输的都是同一个 `.gz` 压缩包，SSH 回退也因此在同样时限下能覆盖更慢的链路。
 - Panel 固定从 `/app/panel-agents/<goos>-<goarch>/` 读取 agent bundle，读取的是构建期产出的 `panel-agent.gz` 与 `panel-agent.sha256`（解压后二进制的 sha256），并根据目标服务器结构化 `architecture.os`/`architecture.arch` 选择 `linux-amd64` 或 `linux-arm64`；结构化架构缺失时先探测目标节点并持久化结果。该位置不可通过配置或环境变量修改；发布镜像会把随 Panel 构建的 agent bundle 复制到 `/app/panel-agents`，Panel 运行时不做压缩也不计算哈希，缺失任一个文件即视为 `agent_binary_unavailable`。
 - 目标机下载端点固定为 `GET /agent/{version}/{platform}/panel-agent.gz`，注册在 `/api` 之外，以免常见的「`/api/*` 绕缓存」CDN 规则阻挡缓存。`{version}` 取 `buildinfo` 版本号，仅当版本号不唯一（本地构建的 `dev`）时退化为 `dev-<sha256前12位>` 内容寻址；同一二进制对所有服务器是同一个 URL，因此 CDN 缓存可跨服务器复用，升版本自然换 URL，不会命中旧版本。响应必须带 `Cache-Control: public, max-age=31536000, immutable`、基于 sha256 的 `ETag`、`Accept-Ranges: bytes`，且不得设置 `Content-Encoding`（压缩包是按普通文件投递的）或 `Set-Cookie`。该端点不鉴权：目标机没有 Panel 会话，且服务器维度的 token 会让每台服务器使用不同 URL，直接破坏 CDN 复用。
@@ -157,7 +157,7 @@
 - agent 二进制的完整性锚点始终是经已认证 SSH 通道下发的期望 sha256：目标机下载后先解压再比对，不匹配必须终止安装。因此 HTTP/CDN/中间人都只能搬运字节、不能替换内容；`agent.downloadVerifyTls` 默认关闭只是不校验传输机密性，不降低完整性。
 - 目标机缺少可用 fetcher 时，投递必须先尝试安装 `curl` 再重试下载一次，而不是直接回退：HTTP 投递的价值就在于不再为慢链路付费，若把「目标机没装 curl」当作终点，最小化镜像上这个能力就等于默认不生效。安装只对受支持发行版执行，复用 `remoteops.APTInstallPrelude` 的非交互 apt 参数，任何失败（到不了软件源、安装无效、超时）都只能导致回退 SSH 上传，不得让部署失败；重试只允许一次。该步骤与下载步骤分离，各有独立超时，且其目标机侧最坏耗时必须严格小于 Panel 侧上限。
 - HTTP 下载失败按分类决定是否回退 SSH 上传：连接失败、HTTP 4xx/5xx、缺少 fetcher（含安装后仍缺失）属于可达性问题，必须回退；传输中断、解压失败、哈希不匹配属于数据问题，必须直接失败而不得用慢路径掩盖。下载由**有限轮次的续传尝试**完成（curl `-C -`、wget `-c`），因此比单轮预算更慢但可用的链路能跨轮收敛；服务器拒绝 Range 时丢弃残file 整轮重下。**禁止使用 curl `--retry`**：`--max-time` 按次生效，重试会把目标机侧最坏耗时成倍放大到 Panel 侧上限之外，令 Panel 先超时并把失败变成不可分类。Panel 侧与目标机侧都必须限时，目标机侧「轮数 × 单轮 + 轮间延迟」必须严格短于 Panel 侧。
-- 手动重装只能复用**非 running** 的既有任务：`running` 的任务无法重启，返回成功会让界面弹出「已受理」而实际没有任何新执行。因此这种情况下必须返回冲突 `agent_deploy_in_progress` 并带上 taskId 与 stage，`stage=uncertain`（状态同为 running）时指向任务中心。远端步骤超时关闭 SSH 会话后，等待会话 goroutine 必须有界，否则执行器不返回会让任务永远停在 `running`，进而让之后每次手动部署都变成静默无操作。
+- 手动重装只能复用**非 running** 的既有任务：`running` 的任务无法重启，返回成功会让界面弹出「已受理」而实际没有任何新执行。因此这种情况下必须返回冲突 `agent_deploy_in_progress` 并带上 taskId 与 stage，`stage=uncertain`（状态同为 running）时指向 `/executions`（消息含 taskId）。远端步骤超时关闭 SSH 会话后，等待会话 goroutine 必须有界，否则执行器不返回会让任务永远停在 `running`，进而让之后每次手动部署都变成静默无操作。
 - `POST /api/v1/servers/{id}/agent/certificate` 签发目标机 `panel-agent` 的 mTLS server 证书包；响应包含 CA、server certificate、server private key、建议监听地址、agent URL 和 Docker host，只作为高级手动安装兜底，不会落库。
 
 ## 节点 Tailscale

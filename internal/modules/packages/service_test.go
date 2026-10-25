@@ -122,7 +122,7 @@ func TestRefreshRecordsTask(t *testing.T) {
 	waitForPackageRefresh(t, svc, "srv")
 
 	var count int
-	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM tasks WHERE type='package_refresh'`).Scan(&count); err != nil {
+	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM event_runs WHERE type='package_refresh'`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 {
@@ -519,7 +519,7 @@ func TestEnsurePackageAllowedRequiresCompatibleAgentWhenWired(t *testing.T) {
 		t.Fatal("expected agent_required when production agent is wired without compatible URL")
 	}
 	var count int
-	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM tasks`).Scan(&count); err != nil {
+	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM event_runs`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 0 {
@@ -583,7 +583,7 @@ func TestUpgradeSelectedRejectsInvalidPackageNamesBeforeCreatingTask(t *testing.
 		t.Fatal("expected invalid package name to be rejected")
 	}
 	var count int
-	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM tasks WHERE type='package_upgrade_selected'`).Scan(&count); err != nil {
+	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM event_runs WHERE type='package_upgrade_selected'`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 0 {

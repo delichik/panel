@@ -12,7 +12,7 @@ import (
 
 	"panel/internal/platform/database/models"
 	"panel/internal/platform/database/orm"
-	"panel/internal/platform/logcontexts"
+	"panel/internal/platform/events"
 	"panel/internal/platform/logging"
 )
 
@@ -143,7 +143,7 @@ func disableApplicationsWithoutDeploymentTarget(ctx context.Context, tx *sql.Tx,
 			zap.String("applicationName", name),
 		)
 		_ = logging.RecordContext(logCtx, logging.ContextMeta{
-			Origin:  logcontexts.OriginSystem,
+			Origin:  events.OriginSystem,
 			Title:   "application.disabled",
 			Summary: msg,
 			ResourcesJSON: logging.MarshalResourcesJSON([]map[string]string{

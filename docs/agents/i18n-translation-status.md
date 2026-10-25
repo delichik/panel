@@ -4,8 +4,9 @@
 
 ## 当前状态
 
+- 本轮 events+logs 产品重命名：主导航与文案以 `/events`（进程行：state/module/level）与 `/logs`（JSONL：level+eventId）为准；新增 `routes.events.*`、`eventsPage.*`，改写 `routes.logs.description` 与 `logsPage.eventId/pickEvent*`；移除「任务中心」「log-contexts 流」等产品名；Debug 页签 `debugPage.tasks` 改为「Events runtime / 事件运行时」（对应 event executor 快照，API 路径仍为 `/debug/tasks`）；en / zh-CN 已同步。
 - 本轮设置页版本检查：新增 `settingsPage.versionCheckError` / `versionCheckErrorDetail`（展示后端 `checkError`）；en / zh-CN 已同步。
-- 本轮前端改走 `/api/v1/log-contexts`：新增 `logsPage.streamFilterHint/search/operationId/executionId/module/empty/emptyHint/linesEmpty/linesEmptyHint`，并改写 `routes.logs.description` 与 `logsPage.operationFilterHint`；en / zh-CN 已同步。
+- ~~本轮前端改走 `/api/v1/log-contexts`~~：**已由 `/api/v1/events*` 与 `/api/v1/logs?eventId=` 替代**（legacy `log-contexts` 仅兼容）；`logsPage.eventId*`、`eventsPage.*` 取代 stream 中心文案；en / zh-CN 已同步。
 - 本轮服务器删除联动停用应用：新增 `activity.applicationDisabled`（节点删除导致应用失去最后一个部署节点而被系统停用；说明需要重新选择部署节点并启用后恢复）；en / zh-CN 已同步。后端在删除事务内写入 `application.disabled` 活动事件（`data` 含 `reason=server_removed`、`serverId`、`applicationId`），前端按事件类型渲染该词条。
 - 本轮服务器列表/概况改为单一综合状态徽标：新增 `serversPage.summary.ready|unreachable|hostKeyMismatch|agentBlocked|agentUnavailable|agentMismatch|agentNotInstalled`；en / zh-CN 已同步。探测结果仍复用既有 `reachable`/`unreachable` 词条。
 - 本轮内容区去分栏：新增 `applicationsPage.facilityTabRoutes` / `facilityTabNodes`、`serversPage.tab.resources`；en / zh-CN 已同步（既有 containers/images/networks/volumes 词条复用为资源 subtab 标签）。
@@ -61,7 +62,7 @@
 - 前端词条：en / zh-CN key 集合一致，由 `web/src/i18n/i18n.test.ts` 强制校验（含 en 不得残留中文值、词条非空）。本轮移除应用反向代理对话框中的只读“源服务器”摘要展示及对应 `applicationsPage.proxyOriginHint` 词条；`applicationsPage.originServers` 与 `proxyOriginEmptyHint` 保留（设施域名选择器、路由摘要与主备优先级仍在使用），en / zh-CN 已同步。本轮新增存储共享设施与共享存储挂载相关词条；应用代理规则新增源站优先级（`applicationsPage.originPriority`、`originPriorityHint`、`moveUp`、`moveDown`）词条，en / zh-CN 已同步。
 - 本轮为共享编辑器 `CodeEditor` 新增查找/替换面板词条（`codeEditor.*`，en / zh-CN 已同步）；面板文案（查找、替换、下一个/上一个、全部、区分大小写、正则、整词、关闭及替换播报）随界面语言切换。
 - 前端语言逻辑：`web/src/i18n/index.ts`（`state.locale` + `setLocale`）。
-- 前端辅助函数：`translateRuntimeEventType`、`translateTaskSummary`、`translateEventSummary`；后两者用于把后端英文任务摘要 / 运行时事件摘要按当前语言渲染翻译，任务中心与系统事件页使用。
+- 前端辅助函数：`translateRuntimeEventType`、`translateTaskSummary`、`translateEventSummary`；后两者用于把后端英文 execution 摘要 / 运行时事件摘要按当前语言渲染翻译，服务器 Agent 卡片与 `/events` 列表使用。
 - 本轮新增 `api.*` 前缀错误文案 key，供前端错误展示使用。
 - 后端错误码翻译（`internal/platform/i18n/i18n.go`）本轮补齐：
   - 大量缺失错误码的中文词条；

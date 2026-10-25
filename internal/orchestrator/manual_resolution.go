@@ -11,7 +11,7 @@ import (
 
 	"panel/internal/platform/activitylog"
 	panelerr "panel/internal/platform/errors"
-	"panel/internal/platform/logcontexts"
+	"panel/internal/platform/events"
 	"panel/internal/platform/logging"
 )
 
@@ -58,7 +58,7 @@ func (s *Store) ResolveUncertainManually(ctx context.Context, job Job, outcome, 
 		zap.String("actorId", actor.ID),
 	)
 	_ = logging.RecordContext(logCtx, logging.ContextMeta{
-		Origin:        logcontexts.OriginUser,
+		Origin:        events.OriginUser,
 		Title:         "execution.verified",
 		Summary:       reason,
 		Result:        outcome,

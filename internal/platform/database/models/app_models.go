@@ -177,7 +177,7 @@ func (*ApplicationRevisionV3) ExtraIndexDDL() map[string][]string {
 }
 
 // Job 对应应用/服务器冲突域当前唯一的协调工作。
-// 任务中心的 task 行是兼容投影，不能替代本表作为部署事实来源。
+// event_runs 行是兼容投影，不能替代本表作为部署事实来源。
 type Job struct {
 	ID                  string         `orm:"primary_key"`
 	ApplicationID       string         `orm:"not_null;references:applications(id);on_delete:RESTRICT"`

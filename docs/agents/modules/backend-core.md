@@ -60,7 +60,7 @@
 - Debug 页面还提供 pprof 开关：`GET /api/v1/debug/pprof` 返回当前启用状态与监听地址，`PUT /api/v1/debug/pprof`（请求体 `{"enabled": true|false}`）启停 pprof 服务。pprof 固定只监听 `127.0.0.1:6060`，不经过认证中间件、也不暴露在 Panel 对外端口；进程退出或关闭时自动停止。端口被占用时返回 `pprof_start_failed`，停服失败返回 `pprof_stop_failed`。
 - 全量备份与还原由 `internal/modules/backups` 提供。正常运行期的备份导出只写 pending export 并通过 `panel_init` 本地监听请求进入维护模式；真正归档在 `--maintenance-mode backup_export` 的下一次子进程启动早期由 `ExportApp` 执行。普通 pending 本身仍不能触发维护逻辑，必须收到匹配的 maintenance mode；但已创建的 restore transaction state 表示覆盖事务可能未收敛，任何冷启动都必须优先进入 restore recovery，state 检查权限/I/O 错误时必须拒绝 normal 启动。维护模式不装配正常业务模块或后台 worker。export 与 restore 使用互相隔离、也不接受普通 JWT 的进程内维护 session。restore pending 固化当前管理员 bcrypt 验证材料，使维护登录不依赖可能损坏的 `app.db`；旧 pending 只能回退到显式非默认配置凭据，安装默认 `admin/admin` 必须拒绝。恢复介质在 apply 前移动到 DataRoot 同级事务目录，DataRoot 和外置数据库通过持久 stage/swap/rollback 状态切换；未完成 rollback 时禁止 clear 和 normal restart。备份导出完成后提供下载并要求重启回 normal；恢复完整提交后才清理事务并请求 normal restart。
 - 运行时设置从数据库读取，并以配置文件、环境变量和内置默认值作为基础。登录页自定义标题和说明分别使用 `branding.loginTitle`、`branding.loginSubtitle` 键持久化；进程日志等级使用 `log.level` 键持久化，默认 `info`，更新 `/api/v1/settings/runtime` 后立即调整 zap `AtomicLevel`；协调追踪使用 `reconcile.trace` 键持久化（默认关闭，更新后立即同步 `internal/platform/reconciletrace` 开关），开启后协调/部署全链路输出结构化追踪日志，事件与字段见 containerization.md 的协调追踪小节；旧数据库启动时由默认设置写入流程自动补齐空值。
-- 后端进程日志统一使用 `internal/platform/logging`：调用必须带 `streamId`+`module` 的 context（`logging.With`/`From`），等级与模块由代码内 sink 路由决定，默认写入 `<dataRoot>/logs/panel-YYYYMMDD.jsonl` 并镜像 stdout；有效写入 upsert AppDB `log_contexts`（实现见 `internal/platform/logcontexts`）。产品读 API 为 `/api/v1/log-contexts*`（`internal/modules/logcontexts`）。禁止无 context 打印。启动、关闭、后台服务和 HTTP 请求日志保持英文消息，不进入多语言翻译；成功和重定向 HTTP 完成日志使用 debug，4xx 使用 warn，5xx 使用 error。验收见 `ENG-LOG-001..008`。
+- 后端进程日志统一使用 `internal/platform/logging`：调用必须带 `eventId`（或兼容 `streamId`）+`module` 的 context（`logging.With`/`From`），等级与模块由代码内 sink 路由决定，默认写入 `<dataRoot>/logs/panel-YYYYMMDD.jsonl` 并镜像 stdout；有效写入 upsert AppDB `events`（`internal/modules/events`）。产品读 API 为 `/api/v1/events*`、`/api/v1/logs?eventId=`（legacy `/api/v1/log-contexts*`）。禁止无 context 打印。启动、关闭、后台服务和 HTTP 请求日志保持英文消息，不进入多语言翻译；成功和重定向 HTTP 完成日志使用 debug，4xx 使用 warn，5xx 使用 error。验收见 `ENG-LOG-001..007` 与 `ENG-EVT-001`。
 - 概览仪表盘卡片布局通过 `overview_card_configurations` 保存在应用数据库；当前单管理员模型使用固定 `default` 记录，整套有序卡片配置以稳定值 JSON 原子替换。
 - Docker 镜像更新缓存使用 `image_updates`、`image_refreshes`，Application 的 planner/Job 运行状态使用 `jobs`，实例 desired/observed 使用 `application_instances`，兼容性退避状态使用 `application_reconcile_states`；fail2ban 的 Panel 草稿 YAML 与接管开关使用 `fail2ban_configs` 按服务器保存；Docker 实时资源清单不复制到数据库。
 - 后端对外错误响应需要走 `platform/errors`、`platform/http` 和 `platform/i18n`，不要在 handler 中散落用户可见错误文案。
@@ -72,7 +72,7 @@
 
 ## 数据库约定
 
-- 应用业务数据、不可变 `application_revisions`、应用 `application_instances` 和部署 `jobs` 在 `Store.AppDB()`；任务中心的 task、任务步骤/日志、旧 revision 兼容副本和密钥资产导出记录在 `Store.LogDB()`；指标数据在 `Store.MetricsDB()`。协调库 `Store.CoordDB()` 不再注册任何模型，旧 `application_lifecycle_operations` / `application_lifecycle_targets` / `application_target_stages` 三张表已随迁移 DROP 删除。新的部署事实来源不得写入 LogDB task；启动迁移会把旧 LogDB revision 行复制到 AppDB，旧 LogDB 表仍可供兼容诊断读取。
+- 应用业务数据、不可变 `application_revisions`、应用 `application_instances`、部署 `jobs`、AppDB `events`/`event_runs`/`event_run_steps` 在 `Store.AppDB()`；LogDB 保留运行事件、兼容 revision 投影与密钥资产导出审计；指标数据在 `Store.MetricsDB()`。协调库 `Store.CoordDB()` 不再注册任何模型，旧 lifecycle 表已 DROP。新的部署事实来源不得写入 LogDB execution 表；启动迁移会把旧 `tasks`/`task_steps`/`log_contexts` 行迁移到 AppDB 新表名。
 - 数据库路径配置包括 `appDatabase`、`logDatabase`、`metricsDatabase`，环境变量分别是 `PANEL_APP_DATABASE`、`PANEL_LOG_DATABASE`、`PANEL_METRICS_DATABASE`，三者必须指向不同文件。旧 `taskDatabase` 配置、`PANEL_TASK_DATABASE` 环境变量和默认 `data/db/tasks.db` 文件仅作为升级兼容入口，启动时会迁移到 `data/db/log.db`。
 - SQLite 连接由 `internal/platform/database` 统一配置为 WAL、5 秒 busy timeout 和小连接池；普通路径与 `file:` DSN 都必须保留这些默认 pragma，除非用户显式覆盖。
 - 当前处于 alpha 但已有使用者，修改表结构必须考虑旧版本迁移。
@@ -103,7 +103,7 @@
 ## 统一日志装配与设置
 
 - Activity 事实 Writer 与控制触发器位于 `internal/platform/activitylog/`；查询投影仍在 `internal/modules/activity/`（Service 保留，产品 HTTP `/api/v1/activity/*` 已停注册）。原始事实保存在 AppDB，任务执行控制与协调关键事实在同一事务提交；LogDB 用于可重建的查询数据。
-- 进程日志流查询使用 `/api/v1/log-contexts`。任务执行命令使用 `/api/v1/executions`，不提供编辑或删除日志的接口。
+- 进程/诊断日志读 API 使用 `/api/v1/events*` 与 `/api/v1/logs?eventId=`。Event executor 控制面使用 `/api/v1/executions`，不提供编辑或删除 JSONL 的接口。
 - `runtimeEventRetentionDays`、`runtimeEventDetailRetentionDays`、`runtimeEventCleanupSchedule` 已从 runtime settings 的模型、默认值、读取、保存与校验移除，不再创建历史清理 worker。日志只追加且不自动过期；指标数据的 `metricsRetentionDays` / `cleanupSchedule` 继续独立生效。
 - `activity_redact` / `activity_redact_json` / `activity_hash` 在 SQLite 驱动打开连接前全局注册；控制触发器对字符串与结构化快照使用同一脱敏规则，并为控制业务载荷保存 SHA-256 散列。
 

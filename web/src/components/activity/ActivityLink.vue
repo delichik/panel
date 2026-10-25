@@ -4,6 +4,7 @@ import { logsPath } from '@/api/activityReference';
 import Button from '@/components/ui/Button.vue';
 import { useI18n } from '@/i18n';
 const props = defineProps<{
+  eventId?: string;
   streamId?: string;
   operationId?: string;
   executionId?: string;
@@ -14,7 +15,7 @@ const router = useRouter();
 const { t } = useI18n();
 function open() {
   void router.push(logsPath({
-    streamId: props.streamId,
+    eventId: props.eventId || props.streamId,
     operationId: props.operationId,
     executionId: props.executionId,
     resourceType: props.resourceType,

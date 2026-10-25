@@ -119,7 +119,7 @@ func (a *App) clearRuntimeData(ctx context.Context) (result diagnostics.ClearRun
 	// and must not delay removal of the activity history.
 	report("clearing_logs")
 	if err := clearNamedTablesBatched(ctx, a.store.LogDB(), []string{
-		"task_logs", "task_steps", "tasks",
+		"task_logs", "event_run_steps", "event_runs",
 		"runtime_event_details", "runtime_events",
 		"activity_operation_versions", "activity_projection_events", "activity_search",
 	}, runtimeClearBatchSize); err != nil {
@@ -152,7 +152,7 @@ func (a *App) clearRuntimeData(ctx context.Context) (result diagnostics.ClearRun
 }
 
 func clearAppCoordination(ctx context.Context, db *sql.DB) error {
-	if err := clearNamedTablesBatched(ctx, db, []string{"task_logs", "task_steps", "tasks", "jobs", "application_reconcile_states"}, runtimeClearBatchSize); err != nil {
+	if err := clearNamedTablesBatched(ctx, db, []string{"task_logs", "event_run_steps", "event_runs", "jobs", "application_reconcile_states"}, runtimeClearBatchSize); err != nil {
 		return err
 	}
 	tx, err := db.BeginTx(ctx, nil)

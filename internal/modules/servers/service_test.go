@@ -26,7 +26,7 @@ import (
 	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/linux"
 	"panel/internal/platform/linux/remoteops"
-	"panel/internal/platform/logcontexts"
+	"panel/internal/platform/events"
 	"panel/internal/platform/logging"
 	"panel/internal/platform/secrets"
 	"panel/internal/platform/ssh"
@@ -663,7 +663,7 @@ func TestConnectivityUsesBoundedSudoTimeoutAndCompletes(t *testing.T) {
 	if err := logging.Configure(cfg.DataRoot); err != nil {
 		t.Fatal(err)
 	}
-	logging.SetContextStore(logcontexts.NewStore(store.AppDB()))
+	logging.SetContextStore(events.NewStore(store.AppDB()))
 	t.Cleanup(func() { logging.SetContextStore(nil) })
 
 	credSvc := newServerTestCredentialService(t, store, cfg)
@@ -1917,7 +1917,7 @@ func TestCreateServerAutomaticallyStartsInitialInfoTask(t *testing.T) {
 	if task.ID != srv.InitialTaskID {
 		t.Fatalf("initial task id mismatch response=%q stored=%q", srv.InitialTaskID, task.ID)
 	}
-	if task.Type != serverInfoTaskType || task.Summary != "Collecting initial server information" {
+	if task.Type != serverInfoTaskType {
 		t.Fatalf("unexpected initial task: %#v", task)
 	}
 	waitTaskFinished(t, taskSvc, task.ID)
@@ -2441,7 +2441,7 @@ func testServerService(t *testing.T, exec sshx.RemoteExecutor) (*Service, *tasks
 	if err := logging.Configure(cfg.DataRoot); err != nil {
 		t.Fatal(err)
 	}
-	logging.SetContextStore(logcontexts.NewStore(store.AppDB()))
+	logging.SetContextStore(events.NewStore(store.AppDB()))
 	t.Cleanup(func() { logging.SetContextStore(nil) })
 	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)

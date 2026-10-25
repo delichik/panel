@@ -6,7 +6,7 @@
 
 每条稳定编号由**前置、动作、结果、失败、不变量、验证**组成。结果或不变量不满足即为回归。禁止因重排复用编号；失效条目应标注废弃并保留编号。
 
-三类事实必须保持隔离：AppDB `application_instances + application_revisions + jobs` 是应用部署事实；LogDB `tasks + task_steps + task_logs` 是通用任务执行记录；runtime events 是可丢弃的简明系统日志。任何一类不得推断、回滚或覆盖另一类事实。
+三类事实必须保持隔离：AppDB `application_instances + application_revisions + jobs` 是应用部署事实；AppDB `event_runs + event_run_steps` 是 event executor 执行控制记录（HTTP 仍暴露为 `/api/v1/executions*`）；AppDB `events` + JSONL 是进程/诊断日志（state 在 `events` 行，JSONL 仅 level+eventId）；LogDB `runtime_events` 是可丢弃的简明系统日志。任何一类不得推断、回滚或覆盖另一类事实。
 
 ## 2. Desired / Observed 控制面
 
@@ -335,7 +335,7 @@
 
 - **前置**：同一 Job 可能保留任意数量的历史 linked intent，或数据库中已安装旧版本 Activity control trigger。
 - **动作**：Job claim、retry、uncertainty 等中间状态转换，写入相同 reconcile observation，或新版本启动并安装 control trigger。
-- **结果**：产品/过程事实经统一日志（JSONL + `log_contexts`）记录，不得再 INSERT `activity_events`；`InstallControlTriggers` 仅 DROP 既有 `activity_*` 控制触发器且不得失败；中间 Job 转换不得因历史 linked intent 数量产生线性扇出。
+- **结果**：产品/过程事实经统一日志（JSONL + AppDB `events` 进程行）记录，不得再 INSERT `activity_events`；`InstallControlTriggers` 仅 DROP 既有 `activity_*` 控制触发器且不得失败；中间 Job 转换不得因历史 linked intent 数量产生线性扇出。
 - **失败**：trigger 清理失败必须整体回滚；不得重新安装会写入 `activity_events` 的控制触发器。
 - **不变量**：既有 Activity 事实不可修改或删除；真实 observed state/generation/spec/container/image/error 变化仍各追加一条 observation；终态共享结果仍可追溯到原 linked intent。
 - **验证**：legacy trigger replacement、high-cardinality linked-intent intermediate transition O(1)、identical/changed reconcile observation tests。
@@ -347,7 +347,7 @@
 - **前置**：业务模块声明任务 Definition。
 - **动作**：生产 bootstrap 集中 RegisterTasks。
 - **结果**：type 非空且唯一；定义携带 summary/hidden/quiet/capabilities/cancel/retry/concurrency/stale/execute/hooks/periodic；重复注册冲突。
-- **失败**：未注册类型不能创建或执行，不能直接写 tasks 表。
+- **失败**：未注册类型不能创建或执行，不能直接写 `event_runs` 表。
 - **不变量**：tasks 内核不维护业务 type switch；业务 `tasks.go` 使用具名 Execute/collector，禁止大段匿名编排。
 - **验证**：registry/manager unregistered tests、debug snapshot review。
 
@@ -475,7 +475,7 @@
 ### TASK-LOG-001 增量日志
 
 - **前置**：任务存在且未阻止追加。
-- **动作**：AppendLog 与 `GET /tasks/{id}/logs?after=`。
+- **动作**：AppendLog 与 `GET /api/v1/executions/{id}/logs?after=`。
 - **结果**：每条有单调 cursor/time/stream/line；API 仅返回 cursor 后日志和 nextCursor；长操作持续输出可读进度。
 - **失败**：已终态任务的误导性 Fail 不追加失败行；不存在 task 返回稳定错误。
 - **不变量**：每任务最多1000条，超出滚动删最旧；单行最多8192字符并截断。
@@ -495,8 +495,8 @@
 ### TASK-MAN-001 run-now 权限与异步响应
 
 - **前置**：任务定义有 Execute+AllowRunNow，任务处于可运行状态。
-- **动作**：POST `/tasks/{id}/run-now`。
-- **结果**：立即 202 返回装饰后的 task snapshot，后台经 Worker.RunNow→Manager.Run 执行完整 lifecycle。
+- **动作**：POST `/api/v1/executions/{id}/run-now`。
+- **结果**：立即 202 返回装饰后的 execution snapshot，后台经 event executor `Worker.RunNow`→`Manager.Run` 执行完整 lifecycle。
 - **失败**：无 executor/能力或状态不合法返回稳定错误；后台启动失败且任务仍非终态时标 failed。
 - **不变量**：HTTP 不同步占用到长任务结束；不得直接调用 Definition.Execute。
 - **验证**：handler run-now dispatch/reject tests。
@@ -504,7 +504,7 @@
 ### TASK-MAN-002 retry 克隆语义
 
 - **前置**：failed/failed_retryable 且 definition Execute+AllowRetry，未超过限制。
-- **动作**：POST `/tasks/{id}/retry`。
+- **动作**：POST `/api/v1/executions/{id}/retry`。
 - **结果**：创建新 task 并立即异步执行；保留 params_json、必要 metadata、schedule/execution context、资源和 trigger 定位；关联 triggerTaskId/triggeredBy。
 - **失败**：非失败状态、不支持或超限拒绝；启动前错误把新 task 标 failed，不留永久 queued。
 - **不变量**：不自动复用旧 parent/batch 归属，避免挂到已结束操作。
@@ -513,10 +513,10 @@
 ### TASK-MAN-003 前端能力与刷新
 
 - **前置**：任务列表/详情返回 allowRunNow/allowRetry/allowCancel。
-- **动作**：任务中心呈现操作并执行。
+- **动作**：需要 run-now/retry 的页面（如服务器 Agent 卡片、密钥资产）按 API 能力呈现操作并执行；进程/诊断历史走 `/events` 与 `/logs`。
 - **结果**：仅按响应字段展示；操作后主动刷新；无后台自动轮询（若恢复必须用户可控）。
-- **失败**：旧请求/旧任务日志不得覆盖当前筛选、选择或 cursor。
-- **不变量**：`/tasks` 仅兼容入口，不成为新应用协调记录入口。
+- **失败**：旧请求/旧 execution 日志不得覆盖当前筛选、选择或 cursor。
+- **不变量**：`/operations`、`/tasks` 仅兼容重定向到 `/events`，不成为新应用协调记录入口。
 - **验证**：task model/API stale-response tests。
 
 ## 10. 周期调度与 worker 恢复
@@ -551,7 +551,7 @@
 ### TASK-WORK-001 due 队列兜底
 
 - **前置**：存在 queued/scheduled/到期 failed_retryable 且 definition 有 Execute。
-- **动作**：worker 每30秒扫描。
+- **动作**：event executor worker 每30秒扫描。
 - **结果**：每类按 created ASC 最早50条，且仅并发队首经 Manager.Run；业务即时 dispatcher 仍应创建后主动启动以满足低延迟。
 - **失败**：不得创建/持久化 `task_queue_drain` 或直接 Execute。
 - **不变量**：未来 nextRunAt 不被提前运行。
@@ -560,7 +560,7 @@
 ### TASK-WORK-002 stale queued 清理
 
 - **前置**：definition 声明 StaleQueuedAfter，存在旧 queued/scheduled。
-- **动作**：worker 每30秒 ExpireStaleQueued。
+- **动作**：event executor worker 每30秒 ExpireStaleQueued。
 - **结果**：仅选定 task types、created 超时且 nextRunAt 已到/空的真正孤儿标 failed；scheduled 也覆盖。
 - **失败**：未来调度不清理；同 key 有更早 queued/scheduled/running/retryable 时后项是合法等待，不得清理。
 - **不变量**：未声明 StaleQueuedAfter 的类型不参与。
@@ -579,7 +579,7 @@
 
 - **前置**：terminal tasks finishedAt 超过24小时，包含 steps/logs；同时 AppDB 有 active Jobs/Instances。
 - **动作**：CleanupWorker 每小时分批清理。
-- **结果**：只删除过期 tasks/steps/logs；活跃/未到期任务保留。
+- **结果**：只删除过期 `event_runs`/`event_run_steps` 及关联 JSONL 引用；活跃/未到期 run 保留。
 - **失败**：不得删除 AppDB application revision/job/instance 或协调记录事实。
 - **不变量**：tasks `(status,next_run_at)` 索引支持扫描；失败/可重试/blocked/cancelled/completed 均属 terminal 历史。
 - **验证**：CleanupRetained tests 与 AppDB row count 断言。
@@ -589,7 +589,7 @@
 ### TASK-LIST-001 参数校验和搜索
 
 - **前置**：任务覆盖多状态/type/server/operation。
-- **动作**：GET `/tasks` 携带 camelCase filters、重复 status/type、q、分页。
+- **动作**：GET `/api/v1/executions` 携带 camelCase filters、重复 status/type、q、分页。
 - **结果**：q 在 DB 对 id/summary/type/error LIKE 跨页过滤并转义 `%_\`；多值筛选取集合；返回 `items/total/page/pageSize` 且空 items 为 `[]`。
 - **失败**：未知参数、limit、snake_case、非法页码/时间返回400。
 - **不变量**：HTTP 使用 ListSummaries，不加载 params_json/metadata_json 或 deployment projection；内部恢复才可用完整 List。
@@ -685,6 +685,6 @@
 
 - 多进程共享 SQLite 下通用任务 `FirstActiveByConcurrencyKey` 缓存不提供一致性；当前合同只承认单进程优化，若引入多实例部署必须增加数据库级任务 claim/fencing 设计。
 - runtime events 的满缓冲丢弃计数/可观测告警、批量失败重试策略当前未形成稳定对外合同；不得把日志必达作为验收前提。
-- 任务中心为兼容页面且没有后台自动轮询；其响应竞态、窄屏和无障碍行为仍缺少完整端到端覆盖。
+- `/events` 与 `/logs` 没有后台自动轮询；其响应竞态、窄屏和无障碍行为仍缺少完整端到端覆盖。
 - `runtimeEventDetailRetentionDays` 和 `runtime_event_details` 是无效兼容遗留；在迁移明确删除前，不得重新赋予业务含义。
 - application runtime DTO 仍保留 lifecycle 命名兼容类型，但旧 CoordDB 表、dispatcher、deployment projection 已删除；后续改动不得据此恢复旧路径。

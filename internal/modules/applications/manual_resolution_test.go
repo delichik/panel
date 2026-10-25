@@ -8,7 +8,7 @@ import (
 	"panel/internal/agent/executionevents"
 	control "panel/internal/orchestrator"
 	"panel/internal/platform/activitylog"
-	"panel/internal/platform/logcontexts"
+	"panel/internal/platform/events"
 	"panel/internal/platform/logging"
 )
 
@@ -56,7 +56,7 @@ func TestManualJobResolutionPreservesHumanEvidenceWithoutFabricatedObservation(t
 	}
 	client := &manualTransportClient{activityTransportClient: &activityTransportClient{fakeRuntimeClient: base, spool: spool, db: svc.db, serverID: job.ServerID}}
 	svc.runtimeClient = client
-	logging.SetContextStore(logcontexts.NewStore(svc.db))
+	logging.SetContextStore(events.NewStore(svc.db))
 	t.Cleanup(func() { logging.SetContextStore(nil) })
 	if _, err := svc.ResolveExecutionManually(ctx, job.ExecutionID, "succeeded", "checked remote process"); err == nil {
 		t.Fatal("unauthenticated declaration accepted")
@@ -143,7 +143,7 @@ func TestManualPurgeSuccessRunsFinalizer(t *testing.T) {
 	}
 	client := &manualTransportClient{activityTransportClient: &activityTransportClient{fakeRuntimeClient: base, spool: spool, db: svc.db, serverID: job.ServerID}}
 	svc.runtimeClient = client
-	logging.SetContextStore(logcontexts.NewStore(svc.db))
+	logging.SetContextStore(events.NewStore(svc.db))
 	t.Cleanup(func() { logging.SetContextStore(nil) })
 	userCtx := activitylog.WithActor(ctx, activitylog.Actor{Kind: "user", ID: "admin", Name: "operator"})
 	if _, err := svc.ResolveExecutionManually(userCtx, job.ExecutionID, "succeeded", "confirmed remote purge completed"); err != nil {

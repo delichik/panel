@@ -5,9 +5,9 @@ import (
 	"sync/atomic"
 )
 
-// ContextRecord is the row shape upserted into log_contexts on each valid log write.
+// ContextRecord is the row shape upserted into events on each valid log write.
 type ContextRecord struct {
-	StreamID      string
+	EventID       string
 	Module        string
 	Origin        string
 	OperationID   string
@@ -15,7 +15,8 @@ type ContextRecord struct {
 	RequestID     string
 	Title         string
 	Summary       string
-	Result        string
+	State         string
+	Level         string
 	HadError      bool
 	ActorJSON     string
 	ResourcesJSON string
@@ -26,11 +27,11 @@ type ContextRecord struct {
 	FinishedAt    string
 }
 
-// ContextStore persists stream metadata for unified file+ctx logging.
-// Implementation lives under platform/logcontexts; set via SetContextStore at bootstrap.
+// ContextStore persists event metadata for unified file+event logging.
+// Implementation lives under platform/events; set via SetContextStore at bootstrap.
 type ContextStore interface {
 	Upsert(ctx context.Context, row ContextRecord) error
-	Touch(ctx context.Context, streamID string, level string, msg string) error
+	Touch(ctx context.Context, eventID string, level string, msg string) error
 }
 
 type contextStoreBox struct {
@@ -39,7 +40,7 @@ type contextStoreBox struct {
 
 var contextStore atomic.Pointer[contextStoreBox]
 
-// SetContextStore registers the AppDB-backed context store (may be nil to clear).
+// SetContextStore registers the AppDB-backed event store (may be nil to clear).
 func SetContextStore(store ContextStore) {
 	contextStore.Store(&contextStoreBox{store: store})
 }

@@ -150,7 +150,7 @@ func TestWorkerExpiresRegisteredStaleQueuedTypes(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)
-	if _, err := svc.db.Exec(`UPDATE tasks SET created_at=? WHERE id=?`, old, task.ID); err != nil {
+	if _, err := svc.db.Exec(`UPDATE event_runs SET created_at=? WHERE id=?`, old, task.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -171,7 +171,7 @@ func TestWorkerPreservesUncertainOrphanedTasks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.db.Exec(`UPDATE tasks SET status=? WHERE id=?`, StatusRunning, task.ID); err != nil {
+	if _, err := svc.db.Exec(`UPDATE event_runs SET status=? WHERE id=?`, StatusRunning, task.ID); err != nil {
 		t.Fatal(err)
 	}
 

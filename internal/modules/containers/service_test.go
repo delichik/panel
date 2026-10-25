@@ -240,7 +240,7 @@ func TestContainerActionRunsSynchronouslyWithoutRefreshTask(t *testing.T) {
 		t.Fatalf("expected synchronous container action before return, got %#v", actions)
 	}
 	var operationTasks int
-	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM tasks`).Scan(&operationTasks); err != nil {
+	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM event_runs`).Scan(&operationTasks); err != nil {
 		t.Fatal(err)
 	}
 	if operationTasks != 0 {

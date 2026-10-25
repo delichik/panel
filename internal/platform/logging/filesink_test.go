@@ -32,7 +32,7 @@ func TestFileSinkWritesJSONL(t *testing.T) {
 	if err := json.Unmarshal(raw[:len(raw)-1], &obj); err != nil {
 		t.Fatalf("unmarshal: %v data=%q", err, raw)
 	}
-	for _, key := range []string{"ts", "level", "module", "streamId", "msg"} {
+	for _, key := range []string{"ts", "level", "module", "eventId", "msg"} {
 		if obj[key] == nil || obj[key] == "" {
 			t.Fatalf("missing %s: %#v", key, obj)
 		}

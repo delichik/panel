@@ -14,19 +14,19 @@ import (
 	agentcontract "panel/internal/agent/contract"
 	controlplane "panel/internal/orchestrator"
 	"panel/internal/platform/activitylog"
-	"panel/internal/platform/logcontexts"
+	"panel/internal/platform/events"
 	"panel/internal/platform/logging"
 )
 
 // collectExecutionEvents returns a nonzero final source sequence only after the
-// complete closed stream has committed to the JSONL file + log_contexts.
+// complete closed stream has committed to the JSONL file + events index.
 // Source identity is bound to the trusted server/execution.
 func (r *serviceRuntimeReconciler) collectExecutionEvents(ctx context.Context, endpoint string, req controlplane.ReconcileRequestRPC) (int64, error) {
 	client, ok := r.service.runtimeClient.(agentcontract.ExecutionEventsClient)
 	if !ok {
 		return 0, errors.New("agent does not support durable execution events")
 	}
-	ctxStore := logcontexts.NewStore(r.service.db)
+	ctxStore := events.NewStore(r.service.db)
 	var after int64
 	var epoch, stream string
 	if rec, err := ctxStore.Get(ctx, req.ExecutionID); err == nil {
@@ -67,7 +67,7 @@ func (r *serviceRuntimeReconciler) collectExecutionEvents(ctx context.Context, e
 		RequestID:   runID,
 	})
 	_ = logging.RecordContext(logCtx, logging.ContextMeta{
-		Origin:        logcontexts.OriginProcess,
+		Origin:        events.OriginProcess,
 		Title:         action,
 		Summary:       "execution evidence",
 		ActorJSON:     logging.MarshalActorJSON(map[string]string{"kind": initiator.Kind, "id": initiator.ID, "name": initiator.Name}),
@@ -304,7 +304,7 @@ func (r *serviceRuntimeReconciler) recordExecutionGap(ctx context.Context, req c
 		zap.Int64("toSourceSeq", to),
 	)
 	_ = logging.RecordContext(logCtx, logging.ContextMeta{
-		Origin:        logcontexts.OriginProcess,
+		Origin:        events.OriginProcess,
 		Title:         "evidence.gap_detected",
 		Summary:       "Execution evidence has a source sequence gap and requires retransmission",
 		HadError:      true,

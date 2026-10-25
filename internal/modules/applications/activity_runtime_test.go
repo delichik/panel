@@ -12,7 +12,7 @@ import (
 	"panel/internal/agent/executionevents"
 	server "panel/internal/modules/servers"
 	control "panel/internal/orchestrator"
-	"panel/internal/platform/logcontexts"
+	"panel/internal/platform/events"
 	"panel/internal/platform/logging"
 )
 
@@ -35,7 +35,7 @@ func (c *activityTransportClient) ReadExecutionEvents(ctx context.Context, _ str
 	return page, err
 }
 func (c *activityTransportClient) AckExecutionEvents(ctx context.Context, _ string, req contract.ExecutionEventsAck) error {
-	store := logcontexts.NewStore(c.db)
+	store := events.NewStore(c.db)
 	rec, err := store.Get(ctx, req.ExecutionID)
 	if err != nil {
 		return err
@@ -72,13 +72,13 @@ func trackedTransport(t *testing.T) (*serviceRuntimeReconciler, *activityTranspo
 	req := control.ReconcileRequestRPC{OperationID: "original-operation", RunID: "original-run", JobID: "job", ExecutionID: "execution", ApplicationID: "app", InstanceID: "instance", ServerID: "srv-a", Action: "apply", DesiredGeneration: 7, DesiredSpecHash: "hash"}
 	client := &activityTransportClient{fakeRuntimeClient: base, spool: spool, db: svc.db, serverID: req.ServerID}
 	svc.runtimeClient = client
-	logging.SetContextStore(logcontexts.NewStore(svc.db))
+	logging.SetContextStore(events.NewStore(svc.db))
 	t.Cleanup(func() { logging.SetContextStore(nil) })
 	seedCtx := logging.With(context.Background(), logging.Context{
 		StreamID: req.ExecutionID, Module: "agent-evidence", OperationID: req.OperationID, ExecutionID: req.ExecutionID, RequestID: req.RunID,
 	})
 	if err = logging.RecordContext(seedCtx, logging.ContextMeta{
-		Origin:        logcontexts.OriginProcess,
+		Origin:        events.OriginProcess,
 		Title:         req.Action,
 		Summary:       "execution.started",
 		ActorJSON:     logging.MarshalActorJSON(map[string]string{"kind": "user", "id": "operator", "name": "Original operator"}),
@@ -86,7 +86,7 @@ func trackedTransport(t *testing.T) (*serviceRuntimeReconciler, *activityTranspo
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err = logcontexts.NewStore(svc.db).SetLastSourceSeq(seedCtx, req.ExecutionID, 0); err != nil {
+	if err = events.NewStore(svc.db).SetLastSourceSeq(seedCtx, req.ExecutionID, 0); err != nil {
 		t.Fatal(err)
 	}
 	session, _, err := spool.Begin(context.Background(), contract.RuntimeReconcileRequest{OperationID: req.OperationID, RunID: req.RunID, JobID: req.JobID, ExecutionID: req.ExecutionID, ApplicationID: req.ApplicationID, InstanceID: req.InstanceID, ServerID: req.ServerID, Action: req.Action, DesiredGeneration: req.DesiredGeneration, DesiredSpecHash: req.DesiredSpecHash})
@@ -274,7 +274,7 @@ func TestActivityTransportPreservesOriginalIdentityAndDrainsClosedStream(t *test
 	if client.ackCount < 4 {
 		t.Fatalf("expected paginated durable ACKs, got %d", client.ackCount)
 	}
-	rec, err := logcontexts.NewStore(client.db).Get(ctx, req.ExecutionID)
+	rec, err := events.NewStore(client.db).Get(ctx, req.ExecutionID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,12 +301,12 @@ func TestActivityTransportRejectsWrongExecutionAssociationBeforeACK(t *testing.T
 	if client.ackCount != 0 {
 		t.Fatal("invalid event was ACKed")
 	}
-	rec, err := logcontexts.NewStore(client.db).Get(context.Background(), req.ExecutionID)
+	rec, err := events.NewStore(client.db).Get(context.Background(), req.ExecutionID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rec.FinishedAt != "" || rec.LastSourceSeq != 0 {
-		t.Fatalf("invalid event committed into log_contexts: %#v", rec)
+		t.Fatalf("invalid event committed into events: %#v", rec)
 	}
 }
 
@@ -346,7 +346,7 @@ func TestActivityTransportRecordsAndResolvesMissingEvidence(t *testing.T) {
 	if end, err := r.collectExecutionEvents(ctx, "", req); err != nil || end == 0 {
 		t.Fatalf("retransmit: %d %v", end, err)
 	}
-	rec, err := logcontexts.NewStore(client.db).Get(ctx, req.ExecutionID)
+	rec, err := events.NewStore(client.db).Get(ctx, req.ExecutionID)
 	if err != nil || rec.LastSourceSeq == 0 || rec.FinishedAt == "" {
 		t.Fatalf("expected closed evidence context: %#v %v", rec, err)
 	}

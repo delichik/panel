@@ -1,4 +1,4 @@
-package models_test
+﻿package models_test
 
 import (
 	"context"
@@ -25,8 +25,8 @@ var appTables = []string{
 	"facility_edit_session_assets", "facility_edit_session_operations", "storage_share_configs",
 	"storage_share_partitions", "dns_domains",
 	"certificates", "self_signed_certificates", "key_assets", "overview_card_configurations",
-	"runtime_settings", "auth_state", "auth_accounts", "tasks", "task_steps",
-	"log_contexts",
+	"runtime_settings", "auth_state", "auth_accounts", "event_runs", "event_run_steps",
+	"events",
 }
 
 var logTables = []string{

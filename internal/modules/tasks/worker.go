@@ -28,13 +28,14 @@ type Worker struct {
 	wg                    sync.WaitGroup
 }
 
+// RuntimeStats is the event-runner diagnostics snapshot (product: event executor).
 type RuntimeStats struct {
-	WorkerRunning     bool                     `json:"workerRunning"`
-	RegisteredTypes   int                      `json:"registeredTypes"`
-	ExecutableTypes   int                      `json:"executableTypes"`
-	PeriodicTypes     int                      `json:"periodicTypes"`
-	RunningExecutions int                      `json:"runningExecutions"`
-	Definitions       []RuntimeDefinitionStats `json:"definitions"`
+	WorkerRunning     bool                     `json:"eventRunnerRunning"`
+	RegisteredTypes   int                      `json:"registeredEventTypes"`
+	ExecutableTypes   int                      `json:"executableEventTypes"`
+	PeriodicTypes     int                      `json:"periodicEventTypes"`
+	RunningExecutions int                      `json:"runningEventExecutions"`
+	Definitions       []RuntimeDefinitionStats `json:"eventDefinitions"`
 }
 
 type RuntimeDefinitionStats struct {
@@ -92,6 +93,12 @@ func (w *Worker) Stop() {
 	w.wg.Wait()
 }
 
+// EventRuntime returns event-executor registration and run counts for diagnostics.
+func (w *Worker) EventRuntime() RuntimeStats {
+	return w.TaskRuntime()
+}
+
+// TaskRuntime is kept as a compatibility alias for EventRuntime.
 func (w *Worker) TaskRuntime() RuntimeStats {
 	if w == nil || w.service == nil {
 		return RuntimeStats{}
@@ -142,6 +149,12 @@ func (w *Worker) RunNow(ctx context.Context, task Task) error {
 		return nil
 	}
 	defer w.service.FinishExecution(task.ID)
+	ctx = logging.With(ctx, logging.Context{
+		EventID:     eventRunLogID(task.ID),
+		Module:      "event-runner",
+		OperationID: task.OperationID,
+		ExecutionID: task.ID,
+	})
 	return w.manager.runRecover(ctx, task)
 }
 
@@ -161,12 +174,12 @@ func (w *Worker) queueLoop(ctx context.Context) {
 }
 
 func (w *Worker) runDueTasks(ctx context.Context) {
-	ctx = logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "tasks"})
-	// 单次轮询内发生 panic 时只记录日志并退出本轮，避免整个 worker goroutine
-	// 崩溃后任务队列无人驱动。
+	ctx = logging.With(ctx, logging.Context{EventID: logging.NewEventID(), Module: "event-runner"})
+	// 单次轮询内发生 panic 时只记录日志并退出本轮，避免整个事件执行器 goroutine
+	// 崩溃后事件队列无人驱动。
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			logging.From(ctx).Error("task worker due-task loop recovered from panic", zap.Any("panic", recovered))
+			logging.From(ctx).Error("event runner due-run loop recovered from panic", zap.Any("panic", recovered))
 		}
 	}()
 	for _, task := range w.dueTasks(ctx) {
@@ -177,7 +190,7 @@ func (w *Worker) runDueTasks(ctx context.Context) {
 			continue
 		}
 		if err := w.RunNow(ctx, task); err != nil {
-			logging.From(ctx).Warn("task worker run task failed", zap.String("task_id", task.ID), zap.Error(err))
+			logging.From(ctx).Warn("event runner run failed", zap.String("eventId", task.ID), zap.Error(err))
 		}
 	}
 }
@@ -259,7 +272,7 @@ func (w *Worker) staleQueuedLoop(ctx context.Context) {
 }
 
 func (w *Worker) expireStaleQueued(ctx context.Context) {
-	ctx = logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "tasks"})
+	ctx = logging.With(ctx, logging.Context{EventID: logging.NewEventID(), Module: "event-runner"})
 	byTimeout := map[time.Duration][]string{}
 	for _, taskType := range w.service.Registry().Types() {
 		def, ok := w.service.Registry().Definition(taskType)
@@ -296,7 +309,7 @@ func (w *Worker) orphanLoop(ctx context.Context) {
 }
 
 func (w *Worker) failOrphanedRunning(ctx context.Context) {
-	ctx = logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "tasks"})
+	ctx = logging.With(ctx, logging.Context{EventID: logging.NewEventID(), Module: "event-runner"})
 	now := time.Now().UTC()
 	failed, err := w.service.FailRunningWithoutExecution(ctx, now)
 	if err != nil {

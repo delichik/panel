@@ -1886,7 +1886,7 @@ function operationStageLabel(stage: string) {
 
 function openApplicationTasks(operationId = '') {
   void router.push({
-    path: '/tasks',
+    path: '/events',
     query: {
       operationId: operationId || undefined,
       resourceType: 'application',
@@ -1896,7 +1896,7 @@ function openApplicationTasks(operationId = '') {
 }
 
 function openFacilityTasks() {
-  void router.push({ path: '/tasks', query: { resourceType: 'facility_app', resourceId: facilityKind.value } });
+  void router.push({ path: '/events', query: { resourceType: 'facility_app', resourceId: facilityKind.value } });
 }
 
 // 诊断详情（domain/path/assetName 等）只放在 details 里，页面必须展示出来，

@@ -18,7 +18,7 @@
 | 应用 | `/applications/apps`、`/applications/apps/create`、`/applications/apps/:applicationId/edit` | `/applications` 重定向 |
 | 设施应用 | `/applications/facility-apps`、`/applications/facility-apps/:facilityKind` | `/:facilityKind/config` 为可直达编辑态深链 |
 | DNS / 证书 | `/dns/domains`、`/certificates/domains`、`/certificates/self-signed`、`/certificates/keys` | — |
-| 操作 / 任务 / 日志 | `/operations`、`/tasks`、`/logs` | `/activity` 兼容重定向到上述三者 |
+| 进程事件 / 诊断日志 | `/events`、`/logs` | `/operations`、`/tasks`、`/activity` 兼容重定向 |
 | 设置 / 诊断 | `/settings/general`、`security`、`certificates`、`agent`、`tailscale`、`system-certificates`、`system`、`backups` | `/settings` 重定向；`/debug` 隐藏直达 |
 | 未找到 | AppShell 内 catch-all | 保留导航 |
 
@@ -65,7 +65,7 @@
 | UI-SRV-012 | 无可用凭据时新建服务器 | 凭据区显示“尚无 SSH 凭据”引导与添加入口，可在弹窗内快捷创建凭据；成功后自动选中新凭据 | 凭据列表加载失败在弹窗内就地显示错误与重试，不影响服务器其余表单 | 快捷创建后凭据即时可用于表单与探测；无需离开当前弹窗 |
 | UI-SRV-013 | 查看新建服务器初始化状态 | 概况 tab 以状态卡展示初始化任务（StatusBadge + 错误 + 活动入口），而非仅纯文本任务 id | 初始化任务加载失败有局部错误；任务失败时服务器保留、标记不可达并在状态卡持久展示原因，供编辑/删除 | 活跃初始化任务刷新，终态与失败原因可经任务状态与活动日志追溯 |
 | UI-SRV-014 | 在服务器表单中配置 Tailscale 意图 | 「将该节点加入 tailnet」与两个偏好开关（Agent 连接、节点互联）；未启用时两个偏好开关禁用并显示说明，提交时未启用的一侧偏好被规范化为 false | 不得在未启用时提交偏好组合；不得只依赖后端强制而在界面保留可点击的无效开关 | 重新打开表单回显与服务端一致的三个开关，保存后详情与列表按服务端返回状态渲染 |
-| UI-SRV-016 | 查看服务器 Tailscale 状态或手动重试 | `tailscaleEnabled` 时 Overview 身份条与 Tailscale tab 显示状态徽标（`disabled`/`pending`/`installing`/`running`/`degraded`/`unsupported`/`error` 的本地化文案）；列表不再常驻 Tailscale 列；Tailscale tab 单列只读展示三个开关、主机名、IPv4/IPv6、状态更新时间与 `lastError`；「应用 Tailscale」位于详情页头 actions，提交任务并提示真实 taskId，随后刷新服务器详情 | 未启用时显示未配置说明且页头应用按钮禁用；从未上报时显示明确空态而不是伪造状态；失败必须显示原因且可重试，不得把“任务已受理”表述为节点已加入 | toast 中的 taskId 可在任务中心定位；徽标与 `tailscale.status` 一致，`lastError` 脱敏后原样展示 |
+| UI-SRV-016 | 查看服务器 Tailscale 状态或手动重试 | `tailscaleEnabled` 时 Overview 身份条与 Tailscale tab 显示状态徽标（`disabled`/`pending`/`installing`/`running`/`degraded`/`unsupported`/`error` 的本地化文案）；列表不再常驻 Tailscale 列；Tailscale tab 单列只读展示三个开关、主机名、IPv4/IPv6、状态更新时间与 `lastError`；「应用 Tailscale」位于详情页头 actions，提交任务并提示真实 taskId，随后刷新服务器详情 | 未启用时显示未配置说明且页头应用按钮禁用；从未上报时显示明确空态而不是伪造状态；失败必须显示原因且可重试，不得把“任务已受理”表述为节点已加入 | toast 中的 taskId 可在 `/executions` 或 `/events` 定位；徽标与 `tailscale.status` 一致，`lastError` 脱敏后原样展示 |
 | UI-SRV-017 | 在服务器详情切换 tabs | 详情一级 tab 固定为 概况/监控/Agent/Tailscale/**资源**/软件包/防火墙；Docker 的容器/镜像/网络/存储卷合并进「资源」并用 URL `subtab`（`containers`/`images`/`networks`/`volumes`，默认 containers）切换；旧 `tab=containers|images|networks|volumes` 作兼容别名映射到 `tab=resources&subtab=…`；一级/资源 subtab 首次激活才请求并在详情存活期内缓存，切换服务器或关闭详情清空旧数据；监控轮询只在详情打开且该 tab 激活时运行；防火墙内 UFW/Fail2Ban 用分段控件（非嵌套 Tabs），选择进 URL `subtab`，Fail2Ban 仅 dev 可见 | 切 tab/subtab 不得清空已加载快照或重复请求；能力不足在对应面板内给出阻断原因；不得用页面级滚动承载 tab 内容；Overview/Tailscale/Agent 单列展示，禁止无关 aside | tab 切换无闪烁且状态保留；深链 `?server=&tab=resources&subtab=images` 与旧 `?tab=images` 均恢复对应面板；非 dev 无 Fail2Ban 子视图 |
 | UI-SRV-018 | 查看/操作资源表格 | 容器/镜像/网络/存储卷在资源 subtab、软件包在一级 tab 内以表格展示；子页去掉重复「左侧标题复述 tab 名」；镜像/Fail2Ban 工具栏收敛为**一个主操作 + Refresh，其余进 More**；容器行操作收紧为图标主操作（启动/日志）+ 溢出（停止/重启/删除，确认 + 托管提示）；镜像：拉取、升级应用、清理未使用、删除（in-use 禁删、危险确认强制勾选）；网络只读且删除禁用；存储卷：清理未使用、删除（in-use 禁删、确认强制勾选）；软件包：勾选只对当前快照，批量栏仅在有选中时出现，升级全部先 danger 确认；网络/存储卷首次打开且无快照时自动提交刷新任务 | 根据状态/能力禁用无效动作；操作按钮按（行, 操作）单独 loading；失败保留快照并 toast；不得把失败当作空列表 | 表格列包含名称/关键状态；请求 payload 与选中项一致；取消确认零请求；成功后重载当前面板 |
 | UI-SRV-019 | 在防火墙 tab 维护 UFW / Fail2Ban | UFW 展示 supported/installed/active/default policy 与规则号/action/to/from，提供新增 allow rule 与删除规则（确认、受保护端口/受管规则由后端拒绝），并展示「安装与启用由 Agent 部署自动完成」说明；Fail2Ban 可在 visual 与 YAML 间切换，提供 preset、jail 删除、保存草稿、安装、启用/接管确认、释放（danger 确认）；保存草稿仅在 YAML 变化时启用；UFW/Fail2Ban 切换用分段控件而非嵌套一级 Tabs | 页面不得出现 UFW 安装/启用入口；未勾选接管不提交；保存不等于启用；失败保留草稿/输入 | 规则增删使用返回值重建列表；toast 只承诺任务接受并含真实 taskId；visual 往返可解析 |
@@ -128,51 +128,67 @@
 | UI-APP-005 | 行内停用应用 | enabled 时可点，先 danger 确认后调用 stop；成功只提示请求接受并刷新 | 已停用禁用；失败保持应用状态 | 取消无请求，成功后状态来自重载而非前端假改 |
 | UI-APP-006 | 行内检查并更新镜像 | 仅 `imageUpdateAvailable` 时启用；提交 update 并按两阶段反馈 | 无更新时不请求 | 返回 ID 的 toast 正确，刷新后徽标由后端决定 |
 | UI-APP-007 | 点击行内“容器日志” | 打开 Dialog 并加载该应用实例；按服务器名/容器名选择目标，单个可读实例自动加载，多个等待选择；请求携带 instanceId、tail=240，正文内部滚动并支持手动刷新/刷新实例列表 | 已退出但存在的容器仍可选；无实例、不可读、空日志和读取失败分开；失败 toast 加就地重试；切换实例/应用/关闭时取消旧请求且迟到结果不串日志 | 只请求选中实例，不通过任务或协调记录代替容器日志；不定时轮询，长日志不撑开页面 |
-| UI-APP-008 | 打开协调记录 | 携带当前 application / facility resource filter 跳 `/tasks`；已有 operationId 时打开该系统任务详情；诊断输出经「查看日志」进 `/logs`（默认 `level=warning,error`） | 不从全局相邻事件猜测因果，不直接展示原始 ID 作为用户标题 | 目标页面筛选与当前应用对应，本次部署入口定位同一 operation |
+| UI-APP-008 | 打开协调记录 | 携带当前 application / facility resource filter 跳 `/events`；已有 operationId 时打开对应事件详情；诊断输出经「查看日志」进 `/logs?eventId=`（默认 `level=warning,error`） | 不从全局相邻事件猜测因果，不直接展示原始 ID 作为用户标题 | 目标页面筛选与当前应用对应，本次部署入口定位同一 operation |
 | UI-APP-009 | 行内删除应用 | 普通应用显示影响说明并 danger 确认；存在持久化配置/历史位置时先补载完整详情，使用 danger 强制勾选确认，明确说明将永久删除所有已记录节点的数据，并向后端传确认参数 | 取消零请求；未确认或清理失败不移除对象；补载详情失败不进入确认 | 持久化删除只有勾选后发出，成功后重载列表并关闭覆盖详情 |
 | UI-APP-010 | 下载持久化数据（详情上下文面板） | 展示历史数据节点选择器；单节点自动选择，多节点要求用户选择，携带 serverId 走授权 blob 下载 | 无记录位置或未选择节点时禁用；下载失败不生成损坏文件 | 未 apply 与已移除部署节点的数据均可按节点下载，按钮有单独 loading |
 | UI-APP-011 | 选择 zip 恢复持久化数据 | 文件选择后必须经 danger+强制勾选确认，再 multipart restore | 取消选择/确认不上传；没有 persistentPath 禁用 | 仅确认后发一笔请求，反馈只承诺已接受 |
 
-### UI-ACT-001 操作、任务与日志：精简且利于排障
+### UI-EVT-004 进程事件 `/events`：精简且利于排障
 
-- **前置**：认证用户进入 `/operations`、`/tasks` 或 `/logs`；旧 `/activity` 仅作兼容重定向。
-- **动作**：看「谁发起了什么」、看失败摘要、跳到日志定位原因。
+- **前置**：认证用户进入 `/events`；旧 `/operations`、`/tasks` 重定向到 `/events`（保留 query）；`/activity` 按 `UI-EVT-007` 分流。
+- **动作**：看 AppDB 进程行（state/module/level）、失败摘要、跳到 JSONL 日志定位原因。
 - **结果**（排障路径必须短）：
-  1. `/operations` = 用户意图；`/tasks` = 系统意图（协调/定时等）。列表同构：时间、标题、资源、结果、失败摘要。
-  2. 意图详情只保留状态、失败摘要、资源/执行者/时间/尝试次数，以及「查看日志」；不得展示 executions/steps 树、时间线、上下文或证据下载。
-  3. 「查看日志」与 Toast/`ActivityLink` 进入 `/logs`，默认带 `level=warning,error`（及可选 `streamId`/`operationId`/`executionId`），先看能定位问题的行；用户可放宽等级。
-  4. `/logs` 列表展示 log contexts（时间、状态、来源、标题），Dialog 按 `streamId` 加载 `/api/v1/log-contexts/{streamId}/lines`（默认 warning,error）；有结构化错误时分开展示 errorCode/error/detail。不得做时间线、证据下载、技术 JSON 或覆盖式详情。
-  5. 应用协调入口进 `/tasks`。
-  6. 产品读 API 为 `/api/v1/log-contexts*`；`/operations`/`/tasks` 分别请求 `origin=user|system`；不得再调用已停注册的 `/api/v1/activity/*`。
-- **失败**：不得用 eventType/trigger reason 冒充失败原因；不得把用户操作与系统任务混在同一主列表。
-- **不变量**：原始输出不翻译、不改写；产品 UI 不得恢复 `/activity` 双投影或日志关联工作台。存储仍可共用追加事实，但产品面必须按上述三职责呈现。
-- **验证**：origin 分流、activityRedirect、`IntentRecordsPage`（summary 详情 + View logs）、intent→logs 深链带 warning/error、logs 列表+Dialog 测试。
+  1. 列表展示时间、模块、级别、标题、状态（`state`）；详情保留状态、失败摘要、模块/来源/时间/关联 ID，以及「查看日志」；不得展示 event executor 的 steps 树、时间线、上下文或证据下载。
+  2. 「查看日志」与带 `eventId` 的 Toast/`ActivityLink` 进入 `/logs?eventId=`，默认带 `level=warning,error`；仅有 `operationId`/`executionId` 时先在 `/events` 解析或筛选。
+  3. 应用协调入口进 `/events`。
+  4. 产品读 API 为 `/api/v1/events*`（legacy `/api/v1/log-contexts*` 仍可用）；不得再调用已停注册的 `/api/v1/activity/*`。
+- **失败**：不得用 trigger reason 冒充失败摘要。
+- **不变量**：原始 JSONL 输出不翻译、不改写；不得恢复 `/activity` 双投影或日志关联工作台。
+- **验证**：`activityRedirect`、`IntentRecordsPage`（events 列表 + View logs）、eventId→logs 深链。
 
-### UI-ACT-002 日志与意图列表首次加载
+> `UI-ACT-001` 已废弃，由 `UI-EVT-004` 与 `UI-LOG-001` 替代。
 
-- **前置**：认证用户进入 `/operations`、`/tasks` 或 `/logs`，URL 可能带完整查询条件，也可能缺少 `from`。
+### UI-LOG-001 诊断日志 `/logs`：JSONL 行
+
+- **前置**：认证用户进入 `/logs` 或经 `/events` 深链；旧 `/activity` 带 `eventId`/`streamId` 重定向到此。
+- **动作**：按 eventId 与 level 筛选 JSONL 行。
+- **结果**：列表展示时间、级别、eventId、msg（无 state）；有结构化错误时分开展示 errorCode/error/detail。不得做时间线、证据下载、技术 JSON 或覆盖式详情。产品读 API 为 `/api/v1/logs?eventId=` 或 `/api/v1/events/{eventId}/logs`。
+- **失败**：缺 eventId 时展示选择事件空态，不得伪造行数据。
+- **验证**：`views/logs/index.test.ts`、logs API client 测试。
+
+> `UI-ACT-001` 日志部分已废弃，由本条目替代。
+
+### UI-EVT-005 与 UI-LOG-002 列表首次加载
+
+- **前置**：认证用户进入 `/events` 或 `/logs`，URL 可能带完整查询条件，也可能缺少 `from`（events）或 `eventId`（logs）。
 - **动作**：页面首次挂载。
-- **结果**：必须立即按 URL 条件请求对应 log-contexts 列表；缺少 `from` 时使用最近 24 小时并把该时间写回 URL。意图列表请求必须带正确 `origin`。打开日志 Dialog 时缺省 `level` 使用 `warning,error`。
+- **结果**：`/events` 缺少 `from` 时使用最近 24 小时并写回 URL；`/logs` 缺 `eventId` 时展示选择事件空态；有 `eventId` 时缺省 `level` 使用 `warning,error`。
 - **失败**：默认时间写回不得替代、延迟或重复首次列表请求；失败保留错误空态、toast 和重试入口。
 - **不变量**：首次列表加载不依赖定时器，不启动轮询。
-- **验证**：logs/intent initial-load 覆盖无 `from`、默认诊断等级和显式范围。
+- **验证**：logs/events initial-load 覆盖无 `from`、默认诊断等级和显式范围。
 
-### UI-ACT-003 日志与意图只按需刷新
+> `UI-ACT-002` 已废弃，由 `UI-EVT-005` / `UI-LOG-002` 替代。
 
-- **前置**：用户浏览日志或意图详情，可能保留其它页面的全局自动刷新设置。
+### UI-EVT-006 与 UI-LOG-003 只按需刷新
+
+- **前置**：用户浏览进程事件或日志行，可能保留其它页面的全局自动刷新设置。
 - **动作**：首次进入、手动刷新、修改查询条件、选择对象或翻页。
-- **结果**：仅这些动作读取对应 log-contexts 列表；日志详情 Dialog 按 streamId 单次加载 lines，不拉证据包。不提供定时刷新开关，不读取或探测新数据，不显示总条数、错误/警告计数或新数据提示。
+- **结果**：仅这些动作读取对应 events 或 logs API；不提供定时刷新开关，不读取或探测新数据，不显示总条数、错误/警告计数或新数据提示。
 - **失败**：查询失败仍显示错误与手动重试；旧筛选响应不得覆盖当前结果。没有自动错误重试或页面重新可见时的隐式轮询。
-- **不变量**：列表保持 cursor 分页；手动刷新/导出走 `/log-contexts/export`。页面不调用已停用的 activity summary/tail/operation 详情树。共享自动刷新仍可供其它页面使用。
-- **验证**：`views/logs/index.test.ts` 覆盖首屏一次请求、空闲一分钟零追加请求、游标翻页、迟到结果隔离与详情 Dialog。
+- **不变量**：列表保持 cursor/after 分页；events 手动刷新/导出走 `/api/v1/events/export`。页面不调用已停用的 activity summary/tail/operation 详情树。
+- **验证**：`views/logs/index.test.ts`、`IntentRecordsPage.test.ts` 覆盖首屏一次请求、游标翻页与迟到结果隔离。
 
-### UI-ACT-004 `/activity` 兼容重定向
+> `UI-ACT-003` 已废弃，由 `UI-EVT-006` / `UI-LOG-003` 替代。
 
-- **前置**：旧书签或深链打开 `/activity`，可能带 `view`、`operationId`、`eventId` 等 query。
+### UI-EVT-007 `/activity` 与旧路由兼容重定向
+
+- **前置**：旧书签或深链打开 `/activity`、`/operations` 或 `/tasks`，可能带 `view`、`operationId`、`eventId` 等 query。
 - **动作**：路由解析。
-- **结果**：`view=operations` 重定向到 `/tasks`（历史语义是协调意图，不是用户 `/operations`）并保留筛选/选中参数；其余（含 `view=events` 或缺省）重定向到 `/logs`；若带 operationId/executionId/eventId 且无 level，补上 `level=warning,error`。
+- **结果**：`/operations`、`/tasks` 重定向到 `/events` 并保留筛选/选中参数；`/activity` 中 `view=operations` 等同；带 `eventId`（或 legacy `streamId`）重定向到 `/logs` 并补 `level=warning,error`；仅 `operationId`/`executionId` 时重定向到 `/events`；其余缺省重定向到 `/logs`。
 - **失败**：不得落到空白页或仍渲染旧双 tab Activity 页。
 - **验证**：`activityRedirect` 单测。
+
+> `UI-ACT-004` 已废弃，由本条目替代。
 
 ## 10. 应用创建/编辑器
 
@@ -253,15 +269,16 @@
 | UI-CERT-013 | 导出资产归档 | 默认导出所选 asset，无选择则所有用户资产；密码必填，先创建 export task 再下载结果 | 系统托管资产不得进入集合；任务/下载失败明确 toast | 请求 assetIds 正确，下载归档可打开 |
 | UI-CERT-014 | 批量导入 | 选择支持归档+密码，先 multipart preflight；显示冲突数/ready；无危险冲突可执行，`requiresDangerConfirm` 时必须 danger+强制勾选后 overwrite | 改文件清旧 plan；未 preflight 不出现执行；不得预先 `confirmDanger=true` | 危险执行 payload 仅确认后带确认标志，成功提示真实 taskId |
 
-## 15. 操作 `/operations` 与任务 `/tasks`
+## 15. 已废弃的可观测性路由
 
-已并入 `UI-ACT-001..004`：用户操作与系统任务分路由、同构列表+覆盖详情，过程统一走 `/logs`。下列编号保留为已废弃，不得再实现独立旧页。
+进程事件与诊断日志以 `UI-EVT-004..007`、`UI-LOG-001..003` 为准；下列编号保留为已废弃，不得再实现独立旧页。
 
 | 编号 | 状态 |
 | --- | --- |
-| UI-OPS-001..004 | 已废弃：原 `/application-operations`；由 `/tasks` + `/logs` 替代 |
-| UI-EVT-001..003 | 已废弃：原 `/system-events`；由 `/logs` 替代 |
-| UI-TASK-001..005 | 已废弃：原轮询任务中心；由 `/tasks`（系统意图）+ `/logs`（过程）替代，且不得恢复定时轮询 |
+| UI-ACT-001..004 | 已废弃：由 `UI-EVT-004..007` + `UI-LOG-001..003` 替代 |
+| UI-OPS-001..004 | 已废弃：原 `/application-operations`；由 `/events` + `/logs` 替代 |
+| UI-EVT-001..003 | 已废弃：原 `/system-events`；由 `/events` + `/logs` 替代 |
+| UI-TASK-001..005 | 已废弃：原轮询任务中心；由 `/events` + `/logs` 替代，且不得恢复定时轮询 |
 
 ## 16. 设置 `/settings/*`
 
@@ -295,10 +312,10 @@
 
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
-| UI-DBG-001 | 进入诊断页 | 并行加载 runtime、tasks、databases 与 pprof 状态；三类诊断默认每 8 秒各自轮询，可暂停/恢复/手刷，隐藏标签暂停 | 各请求独立防重入；并发/迟到响应不可覆盖同类新数据 | 顶部显示聚合 live/stale 和最近 collectedAt，任一区块不阻塞其他区块 |
+| UI-DBG-001 | 进入诊断页 | 并行加载 runtime、event executor 快照（`GET /api/v1/debug/tasks`）、databases 与 pprof 状态；三类诊断默认每 8 秒各自轮询，可暂停/恢复/手刷，隐藏标签暂停 | 各请求独立防重入；并发/迟到响应不可覆盖同类新数据 | 顶部显示聚合 live/stale 和最近 collectedAt，任一区块不阻塞其他区块 |
 | UI-DBG-002 | 任一诊断刷新失败 | 该区块有最后成功数据时继续展示并标 stale，同时 toast；无旧值时仅对应 tab 显示失败空态+重试 | 不得清空其他区块或让单接口失败阻塞其他接口完成 | 失败接口恢复后 stale 消失且更新时间前进 |
 | UI-DBG-003 | Runtime tab | 展示 uptime、goroutines、heap、PID、Go version、OS/arch、CPU | 空/未知值使用统一 fallback，不显示 `[object Object]` | 数值与 runtime 响应字段一致 |
-| UI-DBG-004 | Tasks tab | scalar runtime metrics 与 task definitions 分开；definitions 用可滚动 Table 展示 kind/actions/concurrency/retries/stale（无 periodic interval 列） | definitions 数组不得字符串化；无定义有明确空提示 | 任意对象定义都以列呈现 |
+| UI-DBG-004 | Events runtime tab | scalar runtime metrics 与 event executor 注册定义分开；definitions 用可滚动 Table 展示 kind/actions/concurrency/retries/stale（无 periodic interval 列） | definitions 数组不得字符串化；无定义有明确空提示 | 任意对象定义都以列呈现 |
 | UI-DBG-005 | Database tab | 展示健康数/总数/used 汇总；每数据库显示大小、used/free、健康/错误和表行数/大小 | 单库错误以 danger 状态保留其他库 | 大表清单在卡片内部滚动 |
 | UI-DBG-006 | 切换 pprof | Switch PUT enabled，期间禁重复；开启后显示本机 `http://<address>/debug/pprof/` 新窗口链接 | GET/PUT 失败仅 toast，不伪改状态；链接带 `rel=noreferrer` | 返回状态决定 Switch 与链接是否出现 |
 | UI-DBG-007 | 清理运行数据 | 首次进入读取清理状态，确认已无在途清理后才启用操作；危险确认说明清理范围、配置保留及后台暂停，并要求勾选；提交后独立展示状态、阶段、开始/结束时间 | 禁重复提交；查询失败保留上次快照并显示“系统确认中”，继续退避 GET，不自动重发 POST；失败说明部分批次可能已删除，恢复后台失败单独呈现 | 同一次 runId 的完成才触发完成反馈；成功/失败后重载诊断；完成后说明后台可能立即产生新数据 |
@@ -313,7 +330,7 @@
 ## 20. 覆盖来源
 
 - 全部路由：`web/src/router/index.ts`。
-- 页面实现：`web/src/views/auth`、`overview`、`servers`（含 `tabs/` 资源与安全 tab）、`credentials`、`applications`、`dns`、`certificates`、`operations`、`tasks`、`logs`（共享 `activity/model` 与 `IntentRecordsPage`）、`settings`、`maintenance`、`debug`。不得再保留可路由的 Activity 双视图页。
+- 页面实现：`web/src/views/auth`、`overview`、`servers`（含 `tabs/` 资源与安全 tab）、`credentials`、`applications`、`dns`、`certificates`、`events`、`logs`（`events` 列表复用 `IntentRecordsPage`；`/operations`、`/tasks` 仅重定向）、`settings`、`maintenance`、`debug`。不得再保留可路由的 Activity 双视图页。
 - 操作/API：`web/src/api/*.ts`；DTO 与 capability：`web/src/types/*.ts`。
 - 字段校验和派生状态：各页面族 `model.ts`、`servers/tabs/resourceModel.ts`、`servers/tabs/securityModel.ts`、`assetImportEditor.ts`、`templateLanguage.ts`、`archivePath.ts`。
 - 共享交互：`web/src/components/ui`（含 `Table.vue`）、`web/src/components/templates/TableDetailLayout.vue`、`patterns/AssetFileManager.vue`、`ServerMultiPicker.vue`、`AutoRefreshControl.vue`。
@@ -325,4 +342,4 @@
 2. ~~application detail/runtime/files 加载失败仅 toast~~：已补详情作用域 EmptyState 与重试（见 GAP-004 / UI-APP-002/003）。
 3. 除共享组件和纯逻辑外，当前缺少覆盖上述完整页面链路的 Playwright e2e、axe 与多断点视觉回归。尤其 URL 恢复、脏状态离开、后台任务两阶段、上传下载和维护 token 隔离缺少浏览器级证据；覆盖式详情的前进/后退与跨页深链也依赖组件测试。
 4. DNS 与 certificates 高频表单已补轻量本地校验；applications 编辑器与 settings 仍有更多输入依赖后端返回（见 GAP-027）；验收需同时验证本地阻止与服务端结构化错误不丢失。
-5. `/tasks` 和 `/debug` 为兼容/隐藏入口，仍必须维持可用与可访问，但不应重新加入主导航。
+5. `/operations`、`/tasks` 与 `/debug` 为兼容/隐藏入口，仍必须维持可用与可访问，但不应重新加入主导航。

@@ -44,7 +44,9 @@ func (a *App) runtimeMaintenanceMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		mutation := r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions
-		projectionRead := strings.HasPrefix(r.URL.Path, "/api/v1/log-contexts")
+		projectionRead := strings.HasPrefix(r.URL.Path, "/api/v1/events") ||
+			strings.HasPrefix(r.URL.Path, "/api/v1/logs") ||
+			strings.HasPrefix(r.URL.Path, "/api/v1/log-contexts")
 		authSession := r.URL.Path == "/api/v1/auth/login" || r.URL.Path == "/api/v1/auth/logout"
 		if authSession || r.URL.Path == "/api/v1/debug/clear-runtime-data" || (!mutation && !projectionRead) {
 			next.ServeHTTP(w, r)

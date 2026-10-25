@@ -49,7 +49,7 @@
 - `SSH-TOFU-004`：管理员调用 `POST /servers/{id}/trust-host-key` 时必须先进行明确危险确认；后端只在 TCP、SSH握手和凭据认证成功后替换该身份的 key，再复用连通性测试清除旧错误并返回更新服务器。
 - `SSH-TOFU-005`：显式信任时网络/握手失败返回 `ssh_connection_failed`，凭据拒绝才返回 `ssh_auth_failed`，未启用 known_hosts 返回 `host_key_verification_disabled`；失败不得改写已有 key。
 - `SSH-OPS-001`：`POST /servers/probe` 只对表单输入进行实时 SSH预检并返回 reachability、root/passwordless sudo、OS、架构和 traits，不得写服务器或创建任务。
-- `SSH-OPS-002`：`POST /servers/{id}/test` 必须同步验证 SSH并持久化可达性与 privilege mode，不进入任务中心；失败也必须记录不可达、类型化 host-key 标志和安全摘要。
+- `SSH-OPS-002`：`POST /servers/{id}/test` 必须同步验证 SSH并持久化可达性与 privilege mode，不创建 execution run；失败也必须记录不可达、类型化 host-key 标志和安全摘要。
 - `SSH-OPS-003`：特权状态固定为 `root|passwordless_sudo|none`；UID 0 为 root，非 root 仅 `sudo -n` 成功才为 passwordless_sudo，派生 privileged 与时间必须一致。
 - `SSH-OPS-004`：远程命令、连接和上传必须受运行时 timeout 或操作专用 timeout 控制；超时返回稳定 timeout错误，命令退出非零返回 `remote_command_failed`，不得把 stdout/stderr 中秘密写入对外错误。
 - `SSH-OPS-005`：特权命令仅 root 直跑，其他允许路径使用非交互 sudo；软件包名、UFW 参数和远程路径必须经过白名单/结构化参数验证，禁止用户输入直接拼 shell。
@@ -65,7 +65,7 @@
 - `AGT-AUTO-001`：无 URL、URL 非默认地址、incompatible、版本不一致、证书过期/未生效/7天内到期或证书时间握手错误时，系统检查必须创建或复用 `server_agent_deploy`；普通 unavailable、连接拒绝、服务器失联或 Docker失败不得触发重装。
 - `AGT-AUTO-002`：证书进入 7 天窗口时保持 compatible且不写错误，只静默刷新；系统自动复用任务必须尊重 `next_run_at` 和指数退避，不能借复用绕过。
 - `AGT-AUTO-003`：同一服务器系统自动部署连续失败 2 次必须置 undeployable并停止周期自动尝试；手动部署解除阻止并重置退避基准；失败计数仅在连续 5 次健康检查成功后清零。
-- `AGT-DEP-001`：手动 `POST /servers/{id}/agent/deploy` 必须创建或复用并启动任务，先标记 running再响应；任务 executor必须直到安装、健康检查和终态写入完成才返回。**若复用到的既有 `server_agent_deploy` 任务状态仍为 `running`，必须返回冲突 `agent_deploy_in_progress`（消息含 taskId 与 stage），不得返回成功**：`running` 的任务无法重启，返回成功只会让界面弹出「已受理」而实际什么都没发生（日志不变、没有新执行），操作者无从判断点击是否生效。`stage=uncertain` 的任务状态同样是 `running`，消息必须指向任务中心作为唯一出路。系统自动触发路径不受此约束，仍按退避与复用语义返回任务。
+- `AGT-DEP-001`：手动 `POST /servers/{id}/agent/deploy` 必须创建或复用并启动任务，先标记 running再响应；任务 executor必须直到安装、健康检查和终态写入完成才返回。**若复用到的既有 `server_agent_deploy` 任务状态仍为 `running`，必须返回冲突 `agent_deploy_in_progress`（消息含 taskId 与 stage），不得返回成功**：`running` 的任务无法重启，返回成功只会让界面弹出「已受理」而实际什么都没发生（日志不变、没有新执行），操作者无从判断点击是否生效。`stage=uncertain` 的任务状态同样是 `running`，消息必须指向 `/executions`（或 toast 中的 taskId）作为唯一出路。系统自动触发路径不受此约束，仍按退避与复用语义返回任务。
 - `AGT-DEP-006`：远端步骤因超时关闭 SSH 会话后，等待会话 goroutine 必须有界（`sessionCloseGrace`，15 秒）。远端进程不配合时执行器也不得永久阻塞：执行器不返回会让拥有它的任务永远停在 `running`，而 `running` 的任务会让之后每一次手动重新部署都变成静默无操作（见 `AGT-DEP-001`）。
 - `AGT-DEP-002`：部署必须按持久化的 `architecture.os/arch` 选择固定 `/app/panel-agents/linux-amd64|linux-arm64/`，并同时要求构建期产出的 `panel-agent.gz` 与 `panel-agent.sha256` 存在且可读；缺架构时先 SSH探测并写回，文件缺失、平台不支持或 sha256 文件不是规范小写十六进制时返回 `agent_binary_unavailable`。Panel 不得在运行时压缩二进制或计算其哈希。
 - `AGT-DEP-003`：完整安装必须先把压缩包投递到目标机（HTTP 下载或 SSH 回退），再执行共用安装段（`gzip -dc` 解压、sha256 校验、停 systemd 与残留进程、安装、启动并等待 `tcp/9786`）；仅证书续期或 URL修复时只重写证书/env/systemd 配置并重启，不重复传输二进制。下载与安装必须是两个独立的远端步骤，避免分类下载失败时重复执行已停过服务的安装逻辑。

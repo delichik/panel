@@ -14,7 +14,7 @@ func TestManualVerificationPreservesUncertaintyAndReleasesQueue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.db.Exec(`UPDATE tasks SET status='running' WHERE id=?`, task.ID); err != nil {
+	if _, err := svc.db.Exec(`UPDATE event_runs SET status='running' WHERE id=?`, task.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.FailRunningWithoutExecution(ctx, time.Now()); err != nil {

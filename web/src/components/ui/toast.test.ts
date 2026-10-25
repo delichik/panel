@@ -15,12 +15,12 @@ describe('toast process actions', () => {
     useI18n().setLocale('en');
     const Sender = defineComponent({ setup() { const success = useSuccessToast(); const error = useErrorToast(); return { send() { success('Accepted', { operationId: 'op-one' }); error('Remote failure', new ApiError('failed', 409, 'failed', { taskId: 'task-two' })); } }; }, template: '<button id="send" @click="send">Send</button>' });
     const Host = defineComponent({ components: { ToastProvider, Sender }, template: '<ToastProvider><Sender /></ToastProvider>' });
-    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: Sender }, { path: '/logs', component: { template: '<div />' } }] });
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: Sender }, { path: '/events', component: { template: '<div />' } }, { path: '/logs', component: { template: '<div />' } }] });
     await router.push('/');
     const wrapper = mount(Host, { attachTo: document.body, global: { plugins: [router] } });
     await wrapper.get('#send').trigger('click');
     const links = [...document.querySelectorAll<HTMLAnchorElement>('a')];
-    expect(links.map(link => link.getAttribute('href'))).toEqual(['/logs?operationId=op-one&level=warning%2Cerror', '/logs?executionId=task-two&level=warning%2Cerror']);
+    expect(links.map(link => link.getAttribute('href'))).toEqual(['/events?operationId=op-one', '/events?executionId=task-two']);
     await vi.advanceTimersByTimeAsync(4500);
     expect(document.querySelectorAll('a')).toHaveLength(2);
     links[1]!.click();

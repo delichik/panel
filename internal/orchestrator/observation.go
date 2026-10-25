@@ -10,7 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"panel/internal/platform/activitylog"
-	"panel/internal/platform/logcontexts"
+	"panel/internal/platform/events"
 	"panel/internal/platform/logging"
 )
 
@@ -89,7 +89,7 @@ func (w *ObservationWriter) Write(ctx context.Context, in Observation) (WriteRes
 				zap.Any("data", rejection.data),
 			)
 			_ = logging.RecordContext(logCtx, logging.ContextMeta{
-				Origin:        logcontexts.OriginProcess,
+				Origin:        events.OriginProcess,
 				Title:         "observation.rejected",
 				Summary:       "observation.rejected",
 				HadError:      true,

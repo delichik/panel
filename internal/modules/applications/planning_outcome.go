@@ -13,7 +13,7 @@ import (
 	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/i18n"
 	id "panel/internal/platform/identity"
-	"panel/internal/platform/logcontexts"
+	"panel/internal/platform/events"
 	"panel/internal/platform/logging"
 )
 
@@ -144,7 +144,7 @@ func (s *Service) recordPlanningOutcome(ctx context.Context, app Application, re
 		result = "failed"
 	}
 	_ = logging.RecordContext(logCtx, logging.ContextMeta{
-		Origin:        logcontexts.OriginProcess,
+		Origin:        events.OriginProcess,
 		Title:         eventType,
 		Summary:       msg,
 		Result:        result,

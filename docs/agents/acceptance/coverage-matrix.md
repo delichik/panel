@@ -14,7 +14,7 @@
 
 - 应用详情的容器日志增加实例选择、单实例自动加载、手动刷新及请求取消；既有 logs API 必传 instanceId，未新增路由/API/数据库字段。对应 `APP-RUN-002`、`UI-APP-007`。
 
-- 日志 `/activity` 拆为 `/operations`（用户意图）、`/tasks`（系统意图）、`/logs`（log-contexts 列表+Dialog lines）；`/activity` 兼容重定向。产品读走 `/api/v1/log-contexts*`（`origin=user|system` 分流意图）。对应 `UI-ACT-001..004` + `ENG-LOG-008`；前端证据含 `IntentRecordsPage.test.ts`、`logs/index.test.ts`、`logContexts` API/mock、`activityRedirect`/`activityReference`。
+- 可观测性 `/activity` 与旧 `/operations`、`/tasks` 收敛为 `/events`（AppDB 进程行：state/module/level）+ `/logs`（JSONL 行：level+eventId，无 state）；旧路由兼容重定向。产品读走 `/api/v1/events*` 与 `/api/v1/logs?eventId=`（legacy `/api/v1/log-contexts*` 仍可用）。对应 `UI-EVT-004..007`、`UI-LOG-001..003` 与 `ENG-EVT-001`（`UI-ACT-*`、`ENG-LOG-008`、`LOG-CTX-*` 已废弃）；前端证据含 `IntentRecordsPage.test.ts`、`logs/index.test.ts`、`events`/`logs` API/mock、`activityRedirect`/`activityReference`。
 
 `web/src/router/index.ts` 当前含 30 条路由 `path:` 声明（含父路由、重定向与 catch-all）。逐操作标准见 `ui-pages.md`，全局守卫及慢网路由进行中反馈见 `ui-shell-and-conventions.md`。
 
@@ -25,7 +25,7 @@
 | 服务器 / 凭据 | `/servers`、`/credentials`（资源与安全并入服务器详情 tabs，无独立路由） |
 | 应用 | `/applications/apps`、`create`、`:applicationId/edit`、`facility-apps`、`:facilityKind`、`:facilityKind/config` |
 | DNS 与证书 | `/dns/domains`、`/certificates/domains`、`self-signed`、`keys` |
-| 可观测性 | `/operations`、`/tasks`、`/logs`（`/activity` 重定向）、`/debug` |
+| 可观测性 | `/events`、`/logs`（`/operations`/`/tasks`/`/activity` 重定向）、`/debug` |
 | 设置 | `/settings/general`、`security`、`certificates`、`agent`、`tailscale`、`system-certificates`、`system`、`backups`，以及 `/settings` 重定向 |
 
 - `COV-UI-001`：同一路由内新增或调整字段选择、校验、空态等用户可见行为时，路由数量可以不变，但必须同步更新 `ui-pages.md` 的稳定验收项和对应前端测试。
@@ -46,12 +46,12 @@
 
 ## 3. HTTP API 基线
 
-当前逐项清单记录 167 个 `/api/v1` method/path 组合，路由清单 SHA-256 为 `d91fb50dfbb055013e6fb1bd3288bef3193916ee7039edb655f54c05bd14a175`（本轮：停用 9 条 `/api/v1/activity/*` 产品读路由，新增 4 条 `/api/v1/log-contexts*`，对应 `ENG-LOG-008`；净减 5）。此前新增 `POST /api/v1/facility-apps/reverse-proxy/dns-sync`，对应 `DNS-SYNC-003/005`、`FAC-RP-011`、`UI-FAC-013`。来源计数如下：
+主 Panel `/api/v1` method/path 组合数与路由清单 SHA-256 以 `internal/bootstrap/panel/routes_manifest_test.go` 中 `TestAPIRouteManifest` 的 `wantCount` / `wantHash` 为准（events/logs 重命名后须重跑测试并更新期望值；本文不硬编码哈希）。本轮新增产品读路由 `/api/v1/events*`（含 export、`{eventId}/logs|lines`）与 `/api/v1/logs`，保留 legacy `/api/v1/log-contexts*` 别名，对应 `ENG-EVT-001`。来源计数如下（注册模块名，非产品表名）：
 
 | 注册来源 | 数量 | 验收领域 |
 | --- | ---: | --- |
 | bootstrap auth | 5 | 身份、设置与系统 |
-| logcontexts | 4 | 工程质量与发布（`ENG-LOG-008`） |
+| events | 10 | 工程质量与发布（`ENG-EVT-001`；含 6 条主路由 + 4 条 legacy `log-contexts` 别名，路由解析去重后计入清单） |
 | applications | 26 | 应用与设施应用；协调、任务与运行事件 |
 | backups | 3 | 备份、恢复与诊断 |
 | certificates/certs | 11 | DNS、证书与密钥资产 |
@@ -67,7 +67,7 @@
 | servers | 24 | 服务器、安全与软件包 |
 | settings | 6 | 身份、设置与系统 |
 | systeminfo | 1 | 身份、设置与系统 |
-| tasks | 7 | 协调、任务与运行事件 |
+| tasks（HTTP：`/executions`；AppDB：`event_runs`/`event_run_steps`） | 7 | 协调、任务与运行事件 |
 
 - `COV-API-001`：路由清单测试失败时必须先确定是哪一个 method/path 改变，再更新消费者、Mock、验收项和期望哈希；不得只替换哈希让测试通过。
 
@@ -77,7 +77,7 @@
 
 - `COV-API-002`：维护导出/恢复的独立最小应用路由不计入上述主 Panel 167 条，但必须由备份恢复文档覆盖其认证、状态、密码、下载、重试、退出和清除 pending 操作。
 
-- `COV-API-003`：167 个 method/path 的逐项映射见 [主 Panel API 路由逐项清单](api-route-inventory.md)；路由清单测试与该表必须同步变化。
+- `COV-API-003`：method/path 逐项映射见 [主 Panel API 路由逐项清单](api-route-inventory.md)；条目数须与 `routes_manifest_test` 一致，表格与测试必须同步变化。
 
 - ~~新增 NAT 服务器端口子资源 `GET/POST /servers/{id}/nat-ports`、`PUT/DELETE /servers/{id}/nat-ports/{mappingID}`，以及 `servers.kind`、`servers.agent_public_port`、`nat_port_mappings`~~：**该能力已整体移除**（`SRV-NAT-001..005` 全部标为已废弃）。破坏性 ORM 同步会 drop `nat_port_mappings` 表与 `servers.kind`、`servers.agent_public_port` 两列（表/列均由模型清单驱动，无需手写 DDL）。
 
@@ -103,21 +103,21 @@
 
 | 数据库 | 在管表 |
 | --- | --- |
-| app | `credentials`、`servers`、`package_updates`、`package_refreshes`、`fail2ban_configs`、`image_updates`、`image_refreshes`、`applications`、`application_persistent_locations`、`application_reconcile_states`、`container_observations`、`docker_resource_snapshots`、`application_revisions`、`jobs`、`dns_domains`、`dns_record_snapshots`、`application_edit_sessions`、`application_edit_session_files`、`application_edit_session_operations`、`application_files`、`application_instances`、`facility_app_configs`、`facility_static_assets`、`reverse_proxy_routes`、`facility_edit_sessions`、`facility_edit_session_assets`、`facility_edit_session_operations`、`storage_share_configs`、`storage_share_partitions`、`certificates`、`self_signed_certificates`、`key_assets`、`overview_card_configurations`、`runtime_settings`、`auth_state`、`auth_accounts`、`tasks`、`task_steps`、`log_contexts` |
+| app | `credentials`、`servers`、`package_updates`、`package_refreshes`、`fail2ban_configs`、`image_updates`、`image_refreshes`、`applications`、`application_persistent_locations`、`application_reconcile_states`、`container_observations`、`docker_resource_snapshots`、`application_revisions`、`jobs`、`dns_domains`、`dns_record_snapshots`、`application_edit_sessions`、`application_edit_session_files`、`application_edit_session_operations`、`application_files`、`application_instances`、`facility_app_configs`、`facility_static_assets`、`reverse_proxy_routes`、`facility_edit_sessions`、`facility_edit_session_assets`、`facility_edit_session_operations`、`storage_share_configs`、`storage_share_partitions`、`certificates`、`self_signed_certificates`、`key_assets`、`overview_card_configurations`、`runtime_settings`、`auth_state`、`auth_accounts`、`events`、`event_runs`、`event_run_steps` |
 | log | `application_revisions`、`runtime_events`、`runtime_event_details`、`key_asset_exports` |
 | coordination | 无业务表 |
 | metrics | `metrics_snapshots` |
 
 - `COV-DATA-001`：新增表必须列入正确数据库；同名跨库表必须分别说明用途、备份和迁移，不得按表名误连。
 - `COV-DATA-002`：删除表必须同时处理模型、迁移、索引、外键、服务查询、备份恢复和旧版本升级；仅从 `AllModels` 移除不构成安全删除。
-- `COV-DATA-003`：AppDB 遗留 `activity_events/activity_evidence_chunks` 仍为专有只追加 schema（不计入 ORM 模型数量），但新产品/过程事实改走 JSONL + `log_contexts`；LogDB 的 Activity projection/checkpoint/FTS 保留为遗留只读索引，启动不再投影新事实。
+- `COV-DATA-003`：AppDB 遗留 `activity_events/activity_evidence_chunks` 仍为专有只追加 schema（不计入 ORM 模型数量），但新产品/过程事实改走 JSONL + AppDB `events`（进程行索引）；LogDB 的 Activity projection/checkpoint/FTS 保留为遗留只读索引，启动不再投影新事实。
 
 - `applications.planning_error_json` 保存当前规划诊断，默认空值；随应用进入备份/恢复，旧数据库由 ORM 增列且不修改原有配置。失败与恢复事件继续使用 AppDB 活动日志，不新增表；对应 `APP-PLAN-001`、`ORCH-PLAN-006`。
 - Debug 清理同步清除 `applications.planning_error_json`，保留资源版本和期望/观测事实。清理状态为当前进程状态，会话标记只保存未确认清理的 runId；本轮无数据库 schema 变更，对应 `DIAG-CLR-002/007`。
 
 - Tailscale 不新增数据库表：`servers` 由 ORM 自动增列 `tailscale_enabled`、`tailscale_prefer_agent`、`tailscale_prefer_interconnect`（默认 0，旧库升级后即为未启用、不偏好），节点观测态保存在既有 `servers.traits` 的 `tailscale.*` 键；全局设置使用既有 `runtime_settings` 的新键 `tailscale.authKey`、`tailscale.tags`（换行编码，密钥不参与任何读取响应）；对应 `TS-NODE-001..005`、`TS-SET-001..003`。
 
-- 内部例行任务的日志降噪不新增表：既有 `tasks` 表由 ORM 自动增列 `quiet`（`NOT NULL DEFAULT 0`，旧库升级后存量任务与未知类型保持 info），创建任务时由注册定义写入，Activity 控制触发器按 `NEW.quiet` 决定 `debug`/`info`；对应 `TASK-REG-003`。
+- 内部例行 event run 的日志降噪不新增表：AppDB `event_runs` 由 ORM 自动增列 `quiet`（`NOT NULL DEFAULT 0`，自旧 `tasks` 迁移后存量行保持 info），创建 run 时由注册定义写入；对应 `TASK-REG-003`。
 
 ## 5. 常驻与周期后台行为
 
@@ -126,7 +126,7 @@
 | 后台行为 | 主要事实/输出 | 验收领域 |
 | --- | --- | --- |
 | 应用 orchestrator scanner/worker | app 库 Job、Instance desired/observed、revision、事件 | 协调、任务与运行事件 |
-| 通用任务 worker（queue/stale/orphan） | Task 执行与恢复；**不含**周期 ticker | 协调、任务与运行事件及各触发域 |
+| Event executor worker（queue/stale/orphan） | `event_runs` 执行与恢复；**不含**周期 ticker | 协调、任务与运行事件及各触发域 |
 | 模块自有周期 SchedulerLoop | `StartPeriodic`：agent 检查、信息采集、镜像/包刷新、证书续签、Panel TLS、应用 reconcile 等；经 `TriggerPeriodicNow`/`CollectInputs` 入任务框架 | 相应领域与 `TASK-PER-001` |
 | Task 清理 | 任务保留策略 | 协调、任务与运行事件 |
 | metrics 清理 | metrics 快照保留策略 | 身份、设置与系统 |
@@ -140,8 +140,8 @@
 
 - Agent report collector 对应用规划失败逐应用隔离并继续扫描，自动相同诊断去重，不新增定时任务；对应 `ORCH-PLAN-006`。
 - Tailscale 新增任务类型 `server_tailscale_apply`，由通用任务 worker 执行：保存节点开关后自动排队，手动 apply 创建或复用，缺少 `agent.tailscale` 能力只失败该任务而不触发整节点重装；不新增 ticker/cron，对应 `TS-TASK-001..004`。
-- 周期 Agent 检查（`server_agent_check`）由 servers 模块 `StartPeriodic` 自有 loop（5 分钟）驱动，经 `CollectInputs`/`TriggerPeriodicNow` 入任务框架；成功巡检活动日志为 `debug`（`Quiet`），失败仍为 `error`：不经 tasks Worker 中央 PeriodicRunner；对应 `AGT-STATE-005`、`TASK-REG-003`、`TASK-PER-001`。
-- Panel 进程日志统一经 `platform/logging`（`streamId`+`module`+等级，默认 JSONL 文件 + stdout，AppDB `log_contexts` 索引）；产品读 API 为 `/api/v1/log-contexts*`；对应 `ENG-LOG-001..008`。
+- 周期 Agent 检查（`server_agent_check`）由 servers 模块 `StartPeriodic` 自有 loop（5 分钟）驱动，经 `CollectInputs`/`TriggerPeriodicNow` 入 event executor 框架；成功巡检 JSONL 为 `debug`（`Quiet`），失败仍为 `error`：不经 event executor 中央 PeriodicRunner；对应 `AGT-STATE-005`、`TASK-REG-003`、`TASK-PER-001`。
+- Panel 进程日志统一经 `platform/logging`（context 带 `eventId`+`module`+等级，默认 JSONL 文件 + stdout，AppDB `events` 索引）；产品读 API 为 `/api/v1/events*` 与 `/api/v1/logs?eventId=`；对应 `ENG-LOG-001..007` 与 `ENG-EVT-001`。
 - 进程日志文件落在 `<dataRoot>/logs/panel-YYYYMMDD.jsonl`（随 dataRoot 进入全量备份）；对应 `ENG-LOG-006`、`BKP-API-005`。
 - 容器内 tailscale 自愈复用既有启动/30 秒 Agent 检查周期刷新实际态并在需要时触发收敛，不新增 ticker/cron；失败只更新容器实际态与 `lastError`，绝不终止或阻塞 Panel，对应 `TS-INIT-007`。
 - 节点 tailnet 地址出现、变化、消失或互联偏好意图变化时按需重同步互联设施：排队存储导出协调任务，并在受影响节点确实作为网关或源站参与时重新渲染入口代理设施，无设施配置时为 no-op；对应 `TS-ADDR-009`、`FAC-STO-009`、`FAC-RP-014`。

@@ -151,7 +151,7 @@ if locale == "zh-CN" {
 
 ### 4. 摘要存储与任务错误翻译
 
-- 任务摘要 / 运行时事件摘要以后端稳定英文存储、前端渲染翻译为原则；不要把摘要写入逻辑与展示语言耦合（任务中心用 `translateTaskSummary`、系统事件页用 `translateEventSummary` 渲染）。
+- Execution 摘要 / 运行时事件摘要以后端稳定英文存储、前端渲染翻译为原则；不要把摘要写入逻辑与展示语言耦合（Agent 卡片与 execution 列表用 `translateTaskSummary`，`/events` 用 `translateEventSummary` 渲染）。
 - 任务 error 对 panelerr 错误在写入前翻译，避免把当前语言下的文案固化进任务记录。
 
 ## 修改流程

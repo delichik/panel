@@ -55,7 +55,7 @@
 | DNS、ACME、自签名证书、密钥资产 | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
 | 备份、恢复、维护模式、调试与诊断；清理数据进度/恢复/写入暂停 `DIAG-CLR-001..008`、`UI-DBG-007/008` | [备份、恢复与诊断](backup-restore-diagnostics.md)、[逐页面验收](ui-pages.md) |
 | ORM、数据库模型、迁移与兼容 | [架构、数据与 API](architecture-data-api.md) |
-| 测试入口、构建、容器和发布；Panel 进程日志工具包 `ENG-LOG-001..008`（含 `/api/v1/log-contexts`） | [工程质量与发布](engineering-release.md) |
+| 测试入口、构建、容器和发布；Panel 进程日志 `ENG-LOG-001..007` 与产品读 API `ENG-EVT-001`（`/api/v1/events*`、`/api/v1/logs`；legacy `/api/v1/log-contexts*`） | [工程质量与发布](engineering-release.md) |
 | 检查是否遗漏路由、API、表、后台行为或产物 | [项目覆盖基线](coverage-matrix.md) |
 | 逐项核对全部主 Panel HTTP method/path | [API 路由逐项清单](api-route-inventory.md) |
 | 核对当前实现尚未达到的合同，或修改触及实现/合同不一致 | [已知实现与验收差距](known-gaps.md) |
@@ -64,7 +64,7 @@
 
 应用页“容器日志”的实例选择、手动读取及请求隔离见 [APP-RUN-002](applications-and-facilities.md) 和 [UI-APP-007](ui-pages.md)。
 
-操作/任务/日志三分路由、按需读取与 `/activity` 重定向见 [UI-ACT-001..004](ui-pages.md)。
+进程事件 `/events`、诊断日志 `/logs`、按需读取与 `/activity`/`/operations`/`/tasks` 重定向见 [UI-EVT-004..007](ui-pages.md)、[UI-LOG-001..003](ui-pages.md)（`UI-ACT-*` 已废弃）。
 
 失败运行日志与有界降级见 [ORCH-CTRL-008](orchestration-and-tasks.md)；设施逐节点部署、按需请求错误诊断见 [FAC-RP-012/013](applications-and-facilities.md)。
 
@@ -74,7 +74,7 @@
 | --- | --- |
 | API 路径、方法、请求或响应 | `web/src/api`、`web/src/types`、Mock、页面、路由清单测试、对应域验收项 |
 | 状态/错误枚举 | 状态徽标与筛选、重试/禁用按钮、i18n、任务和事件投影、旧数据解析 |
-| 应用期望态或运行态 | orchestrator、Agent contract、容器观察、应用操作记录、任务中心、设施应用协调 |
+| 应用期望态或运行态 | orchestrator、Agent contract、容器观察、应用操作记录、`/events` 进程行、设施应用协调 |
 | Server/Agent 能力 | 探测、部署、证书、指标、容器、软件包、应用调度、离线降级 |
 | Tailscale 意图、观测地址或容器期望态 | 地址解析优先级与回落、节点证书 SAN、存储导出白名单、入口代理上游、设施重同步、节点收敛任务、设置页与服务器页、容器内 tailscaled 生命周期 |
 | DNS 或证书 | 反向代理、应用内置变量、密钥资产引用、续签任务、删除引用检查 |

@@ -44,8 +44,8 @@ func TestHTTPMiddlewareLogsSuccessfulRequestsAtDebug(t *testing.T) {
 	if entries[0].ContextMap()["module"] != "http" {
 		t.Fatalf("module = %#v", entries[0].ContextMap()["module"])
 	}
-	if entries[0].ContextMap()["streamId"] == nil || entries[0].ContextMap()["streamId"] == "" {
-		t.Fatalf("missing streamId: %#v", entries[0].ContextMap())
+	if entries[0].ContextMap()["eventId"] == nil || entries[0].ContextMap()["eventId"] == "" {
+		t.Fatalf("missing eventId: %#v", entries[0].ContextMap())
 	}
 }
 

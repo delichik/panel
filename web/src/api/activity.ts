@@ -1,12 +1,12 @@
 /**
  * @deprecated Product HTTP `/api/v1/activity/*` is no longer registered.
- * Use `logContextsApi` from `@/api/logContexts` for process / intent log streams.
+ * Use `eventsApi` from `@/api/events` and `logsApi` from `@/api/logs` for process events and log lines.
  * `ActivityReceipt` types remain in `@/types/activity` for command acceptances.
  */
 import type { ActivityQuery } from '@/types/activity';
 
 const retired = (name: string): never => {
-  throw new Error(`activityApi.${name} is retired; use logContextsApi from @/api/logContexts`);
+  throw new Error(`activityApi.${name} is retired; use eventsApi from @/api/events`);
 };
 
 export function activityQuery(params: ActivityQuery = {}) {

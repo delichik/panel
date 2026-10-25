@@ -62,8 +62,12 @@ type Logger struct {
 
 func (l *Logger) fields(extra ...zap.Field) []zap.Field {
 	fields := make([]zap.Field, 0, 6+len(extra))
+	eventID := l.ctx.EventID
+	if eventID == "" {
+		eventID = l.ctx.StreamID
+	}
 	fields = append(fields,
-		zap.String("streamId", l.ctx.StreamID),
+		zap.String("eventId", eventID),
 		zap.String("module", l.ctx.Module),
 	)
 	if l.ctx.OperationID != "" {
@@ -115,8 +119,12 @@ func (l *Logger) persistContext(level zapcore.Level, msg string) {
 	if len(summary) > 512 {
 		summary = summary[:512]
 	}
+	eventID := l.ctx.EventID
+	if eventID == "" {
+		eventID = l.ctx.StreamID
+	}
 	_ = store.Upsert(goCtx, ContextRecord{
-		StreamID:    l.ctx.StreamID,
+		EventID:     eventID,
 		Module:      l.ctx.Module,
 		Origin:      "process",
 		OperationID: l.ctx.OperationID,
@@ -124,6 +132,7 @@ func (l *Logger) persistContext(level zapcore.Level, msg string) {
 		RequestID:   l.ctx.RequestID,
 		LogFile:     CurrentLogFileName(),
 		HadError:    level >= zapcore.ErrorLevel,
+		Level:       level.String(),
 		Summary:     summary,
 	})
 }
