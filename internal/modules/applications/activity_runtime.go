@@ -248,9 +248,11 @@ func (r *serviceRuntimeReconciler) ResolveExecution(ctx context.Context, req con
 		if err != nil {
 			return controlplane.ReconcileResponse{}, false, err
 		}
-		err = applyManualResult(ctx, store, job, *result.Result)
+		err = r.service.applyManualResult(ctx, store, job, *result.Result)
 		// A human declaration deliberately does not flow through acceptResponse,
 		// which would otherwise write fabricated automatic Instance observations.
+		// applyManualResult still invokes OnSucceeded/OnFailed hooks so purge
+		// finalizers and reconcile-failure accounting cannot be skipped.
 		return controlplane.ReconcileResponse{}, false, err
 	}
 	return reconcileResponseFromAgent(*result.Result), true, nil

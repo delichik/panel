@@ -86,7 +86,7 @@ func (s *Service) ResolveExecutionManually(ctx context.Context, executionID, out
 	if endSeq == 0 || endSeq != result.EndSeq {
 		return nil, panelerr.Conflict("execution_resolution_unconfirmed", "The Agent did not confirm the same manual declaration")
 	}
-	if err := applyManualResult(ctx, store, job, *result.Result); err != nil {
+	if err := s.applyManualResult(ctx, store, job, *result.Result); err != nil {
 		return nil, err
 	}
 	return map[string]any{"operationId": job.IntentID, "executionId": job.ExecutionID, "result": outcome, "verificationSource": "manual"}, nil
@@ -101,11 +101,14 @@ func manualOutcome(result agentcontract.RuntimeReconcileResponse) string {
 	}
 	return "succeeded"
 }
-func applyManualResult(ctx context.Context, store *controlplane.Store, job controlplane.Job, result agentcontract.RuntimeReconcileResponse) error {
+func (s *Service) applyManualResult(ctx context.Context, store *controlplane.Store, job controlplane.Job, result agentcontract.RuntimeReconcileResponse) error {
 	actor := activitylog.Actor{Kind: "user", ID: result.VerifiedBy, Name: result.VerifiedByName}
 	outcome := manualOutcome(result)
-	_, err := store.ResolveUncertainManually(ctx, job, outcome, result.VerificationReason, actor)
+	committed, err := store.ResolveUncertainManually(ctx, job, outcome, result.VerificationReason, actor)
 	if err == nil {
+		if committed {
+			s.finalizeManualResolution(ctx, job, outcome)
+		}
 		return nil
 	}
 	// The recovery poll may have committed the identical declaration while the
@@ -120,7 +123,25 @@ func applyManualResult(ctx context.Context, store *controlplane.Store, job contr
 		return queryErr
 	}
 	if n >= 1 {
+		// Peer path already committed and finalized; do not re-run OnFailed
+		// accounting. Purge DELETE is only needed once from the committer.
 		return nil
 	}
 	return err
+}
+
+// finalizeManualResolution runs the same AppDB hooks as automatic convergence
+// after a human declaration. It must not invent Instance observations; purge
+// finalizers only delete rows that already have desired_state=purged.
+func (s *Service) finalizeManualResolution(ctx context.Context, job controlplane.Job, outcome string) {
+	if s == nil {
+		return
+	}
+	resp := controlplane.ReconcileResponse{}
+	switch outcome {
+	case "succeeded":
+		s.onOrchestratorJobSucceeded(ctx, job, resp)
+	case "failed":
+		s.onOrchestratorJobFailed(ctx, job, resp)
+	}
 }

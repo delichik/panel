@@ -96,3 +96,64 @@ func TestManualJobResolutionPreservesHumanEvidenceWithoutFabricatedObservation(t
 		t.Fatal("terminal execution invoked Agent twice")
 	}
 }
+
+func TestManualPurgeSuccessRunsFinalizer(t *testing.T) {
+	svc, base, _, closeService := newTestService(t)
+	defer closeService()
+	ctx := context.Background()
+	app, err := svc.Create(ctx, SaveInput{Name: "purge-manual", Enabled: true, SpecYAML: "name: purge-manual\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Delete(ctx, app.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	store := control.NewStore(svc.db)
+	purgeJobID := ""
+	for _, row := range jobsForApplication(t, svc, app.ID) {
+		if row.Action == "purge" && row.ServerID == "srv-a" && row.State != control.JobSucceeded && row.State != control.JobFailed {
+			purgeJobID = row.ID
+			break
+		}
+	}
+	if purgeJobID == "" {
+		t.Fatal("expected active purge job for srv-a")
+	}
+	job, claimed, err := store.Claim(ctx, purgeJobID, "worker", 0)
+	if err != nil || !claimed {
+		t.Fatalf("claim=%v err=%v", claimed, err)
+	}
+	spool, err := executionevents.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spool.Close()
+	session, _, err := spool.Begin(ctx, contract.RuntimeReconcileRequest{
+		ExecutionID: job.ExecutionID, OperationID: job.IntentID, RunID: job.IntentID, JobID: job.ID,
+		ApplicationID: job.ApplicationID, ServerID: job.ServerID, InstanceID: job.InstanceID, Action: job.Action,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Finish(ctx, contract.RuntimeReconcileResponse{}, context.Canceled); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkUncertain(ctx, job, "transport lost"); err != nil {
+		t.Fatal(err)
+	}
+	client := &manualTransportClient{activityTransportClient: &activityTransportClient{fakeRuntimeClient: base, spool: spool, db: svc.db, serverID: job.ServerID}}
+	svc.runtimeClient = client
+	logging.SetContextStore(logcontexts.NewStore(svc.db))
+	t.Cleanup(func() { logging.SetContextStore(nil) })
+	userCtx := activitylog.WithActor(ctx, activitylog.Actor{Kind: "user", ID: "admin", Name: "operator"})
+	if _, err := svc.ResolveExecutionManually(userCtx, job.ExecutionID, "succeeded", "confirmed remote purge completed"); err != nil {
+		t.Fatal(err)
+	}
+	var instanceCount int
+	if err := svc.db.QueryRow(`SELECT count(*) FROM application_instances WHERE id=?`, job.InstanceID).Scan(&instanceCount); err != nil {
+		t.Fatal(err)
+	}
+	if instanceCount != 0 {
+		t.Fatalf("manual purge success must delete purged instance, count=%d", instanceCount)
+	}
+}

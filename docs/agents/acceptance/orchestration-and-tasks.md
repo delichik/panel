@@ -212,6 +212,15 @@
 - **不变量**：附加前脱敏环境值、管理文件内容、凭据赋值、Bearer 与完整/被截断 PEM 私钥；传输截断时丢弃末尾不完整行。读取不创建 Job/task/output 事件，不改变既有 attempts/退避/熔断。
 - **验证**：`TestStartupFailureLogsScopeRedactionAndLimits`、`TestStartupFailureLogsTimeoutDoesNotRetry` 及短时退出/强制 Job 自动复用测试。
 
+### ORCH-CTRL-009 人工核实后的成功/失败钩子
+
+- **前置**：Job 处于 `running + uncertainty`，认证用户经 Agent 确认同一 execution 的 succeeded/failed 声明（HTTP 核实或恢复轮询读到 `verificationSource=manual`）。
+- **动作**：写入人工核实终态（不经 `acceptResponse` 自动观测写回）。
+- **结果**：Job 进入 succeeded/failed 并保留人工证据后，必须调用与自动收敛相同的 `OnSucceeded`/`OnFailed` 钩子；purge 成功须删除 `desired_state=purged` 的 Instance 并在无残留实例时物理删除已 `deletion_requested` 的应用。
+- **失败**：Agent 未确认同一声明时保持 uncertainty；不得用人工声明伪造 `observed_state`。
+- **不变量**：人工路径故意跳过 observation CAS，但不得跳过 purge finalizer 或失败计数钩子；重复提交相同声明必须幂等，不得重复累加失败计数。
+- **验证**：manual resolution preserves unknown observation、manual purge success finalizer、idempotent re-declaration tests。
+
 ### ORCH-RETRY-001 错误结构和分类
 
 - **前置**：RuntimeReconcile 返回结构化错误或普通 error。
