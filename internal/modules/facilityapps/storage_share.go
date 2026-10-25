@@ -1019,11 +1019,12 @@ func (s *Service) storagePartitionMountActive(ctx context.Context, partition Sto
 	}
 	agent, ok := s.storageAgent()
 	if !ok {
-		return false, "", nil
+		// Fail closed: missing agent capability must not look like "unmounted".
+		return false, "", panelerr.Conflict("storage_share_mount_status_unavailable", "unable to verify storage share mounts; storage agent is unavailable")
 	}
 	baseURL, ok := storageAgentEndpoint(nodeServer)
 	if !ok {
-		return false, "", nil
+		return false, "", panelerr.Conflict("storage_share_mount_status_unavailable", "unable to verify storage share mounts; agent endpoint is unavailable")
 	}
 	source := storageNFSSource(interconnectPeerHost(storageServer, nodeServer), partition.Path)
 	status, err := agent.StorageMountStatus(ctx, baseURL, source, partition.Target)

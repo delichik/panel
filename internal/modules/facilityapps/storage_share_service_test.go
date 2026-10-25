@@ -299,6 +299,29 @@ func TestStorageShareUninstallGatedByUsage(t *testing.T) {
 	}
 }
 
+// TestStorageShareUninstallFailsClosedWhenStorageAgentMissing FAC-STO-004：
+// 未注入 storage agent 时不得把挂载状态当成“未挂载”。
+func TestStorageShareUninstallFailsClosedWhenStorageAgentMissing(t *testing.T) {
+	svc, _, _, _, _ := newStorageShareTestService(t)
+	ctx := context.Background()
+	if _, err := svc.SaveStorageShare(ctx, StorageShareSaveInput{Servers: []StorageServerSetting{{ServerID: "srv-a", Root: "/srv/panel-storage"}}}); err != nil {
+		t.Fatalf("save storage share: %v", err)
+	}
+	if _, err := svc.ResolveStorageShareMounts(ctx,
+		applications.Application{ID: "app-1", Name: "app-1"},
+		server.Server{ID: "srv-b", Name: "app-node-b"},
+		[]appruntime.Mount{{Type: "storage_share", Source: "storage-share:srv-a", Target: "/data"}},
+	); err != nil {
+		t.Fatalf("resolve mounts: %v", err)
+	}
+	svc.agent = nil
+	if _, err := svc.DeleteStorageShare(ctx); err == nil {
+		t.Fatal("expected uninstall to fail closed when storage agent is missing")
+	} else if !strings.Contains(err.Error(), "unable to verify") && !strings.Contains(err.Error(), "storage_share_mount_status_unavailable") {
+		t.Fatalf("unexpected uninstall error: %v", err)
+	}
+}
+
 // TestStorageShareUninstallFailsClosedWhenMountStatusUnavailable FAC-STO-004：
 // 挂载检查 Agent 失败时必须拒绝卸载，不得当作“未挂载”继续。
 func TestStorageShareUninstallFailsClosedWhenMountStatusUnavailable(t *testing.T) {
