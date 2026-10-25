@@ -1139,6 +1139,73 @@ func TestDeleteApplicationPurgesRuntimeData(t *testing.T) {
 	}
 }
 
+func TestListForReconcileIncludesDeletionRequested(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Delete(ctx, app.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := svc.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range listed {
+		if item.ID == app.ID {
+			t.Fatalf("ordinary list must hide deletion_requested app, got %#v", listed)
+		}
+	}
+	reconcileApps, err := svc.ListForReconcile(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, item := range reconcileApps {
+		if item.ID == app.ID {
+			found = true
+			if !item.DeletionRequested || item.Enabled {
+				t.Fatalf("reconcile list app = %#v", item)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("ListForReconcile must include deletion_requested app, got %#v", reconcileApps)
+	}
+}
+
+func TestDeletePlansPurgeWithoutReconcileTrigger(t *testing.T) {
+	svc, runtime, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.SetApplicationReconcileTrigger(nil)
+	if err := svc.Delete(ctx, app.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	jobs := jobsForApplication(t, svc, app.ID)
+	purgeJobs := 0
+	for _, job := range jobs {
+		if job.Action == "purge" && job.RemoveData {
+			purgeJobs++
+		}
+	}
+	if purgeJobs != 2 {
+		t.Fatalf("delete must plan purge Jobs without reconcile trigger, jobs = %#v", jobs)
+	}
+	if len(runtime.stops) != 0 {
+		t.Fatalf("delete must not call agent runtime directly, stops = %#v", runtime.stops)
+	}
+}
+
 func TestRuntimeRefreshesInstanceStatuses(t *testing.T) {
 	svc, runtime, _, closeStore := newTestService(t)
 	defer closeStore()

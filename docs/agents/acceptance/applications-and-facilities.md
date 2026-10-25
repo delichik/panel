@@ -274,10 +274,10 @@
 
 - **前置**：应用存在当前实例、首次部署前恢复的数据，或曾在已移除部署节点上保留持久数据。
 - **动作**：`DELETE /applications/{id}`；存在持久化配置或已记录位置时必须显式传入持久数据删除确认。
-- **结果**：确认通过后才置 `deletion_requested=1` 并隐藏列表；对当前实例与 `application_persistent_locations` 历史节点并集规划 desired=purged、action=purge/removeData=true。即使当前零实例，也必须先为历史节点建立清理 Job；全部节点 observed=missing 后清理终态 Job 并物理删除应用，位置记录随应用级联删除。
-- **失败**：未确认、历史节点无法解析或 purge 失败时保留应用/实例和位置记录供重试；不得提前置 deletion_requested，也不得通过 FK cascade 绕过 active Job。
-- **不变量**：普通移除部署节点只删除 managed workspace 并永久保留位置记录与 persistent；jobs→applications 为 RESTRICT；应用停止、移除节点与删除应用的数据语义不得混淆。
-- **验证**：confirmation-before-mutation、zero-instance historical-node purge、multi-node delete finalizer full-chain integration tests。
+- **结果**：确认通过后才置 `deletion_requested=1` 并隐藏普通列表；同一请求内同步规划 desired=purged、action=purge/removeData=true（覆盖当前实例与 `application_persistent_locations` 历史节点并集）。即使当前零实例，也必须先为历史节点建立清理 Job；全部节点 observed=missing 后清理终态 Job 并物理删除应用，位置记录随应用级联删除。
+- **失败**：未确认、历史节点无法解析或规划/purge 失败时保留 `deletion_requested=1` 与应用/实例/位置记录供重试，不得回滚删除意图；不得在确认前置 deletion_requested，也不得通过 FK cascade 绕过 active Job。
+- **不变量**：普通列表排除 `deletion_requested=1`，但协调用 `ListForReconcile` 必须包含待删应用，周期巡检须继续为其规划 purge；普通移除部署节点只删除 managed workspace 并永久保留位置记录与 persistent；jobs→applications 为 RESTRICT；应用停止、移除节点与删除应用的数据语义不得混淆。
+- **验证**：confirmation-before-mutation、zero-instance historical-node purge、multi-node delete finalizer full-chain integration、ListForReconcile includes deletion_requested、delete planning failure retains retry path tests。
 
 ### APP-LIFE-007 持久数据导出与恢复
 

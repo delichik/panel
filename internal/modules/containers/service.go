@@ -888,6 +888,38 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string
 	for _, app := range apps {
 		appByID[app.ID] = app
 	}
+	// Pending deletes are excluded from the operator list but must keep converging
+	// even when no desired=running drift is observed (e.g. only persistent locations).
+	for _, app := range apps {
+		if !app.DeletionRequested {
+			continue
+		}
+		if len(wantedApps) > 0 && !wantedApps[app.ID] {
+			continue
+		}
+		reconciletrace.Trace(ctx, "plan_requested",
+			zap.String("trigger", triggerType),
+			zap.String("application_id", app.ID),
+			zap.String("reason", "deletion_requested"))
+		result, err := s.apps.PlanApplicationDeployment(ctx, applications.DeploymentPlanRequest{
+			ApplicationID: app.ID,
+			Purge:         true,
+			Force:         true,
+			TriggerType:   triggerType,
+			Reason:        "deletion_requested",
+		})
+		if err != nil {
+			reconciletrace.Trace(ctx, "plan_failed",
+				zap.String("application_id", app.ID),
+				zap.Error(err))
+			logging.From(ctx).Warn("application deletion planning failed", zap.String("application_id", app.ID))
+			continue
+		}
+		reconciletrace.Trace(ctx, "plan_result",
+			zap.String("application_id", app.ID),
+			zap.Strings("job_ids", result.JobIDs),
+			zap.Strings("created_job_ids", result.CreatedJobIDs))
+	}
 	observations := map[string]reconcileObservation{}
 	for _, srv := range servers {
 		if len(wantedServers) > 0 && !wantedServers[srv.ID] {

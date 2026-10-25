@@ -578,8 +578,11 @@ func (s *Service) ListWithRuntime(ctx context.Context) ([]Application, error) {
 }
 
 func (s *Service) ListForReconcile(ctx context.Context) ([]Application, error) {
+	// Include deletion_requested apps so periodic reconcile can finish purge
+	// finalizers after a failed or interrupted delete trigger (APP-LIFE-006).
+	// Ordinary List/ListPage keep hiding them from operators.
 	var rows []models.Application
-	if err := orm.New(s.db).From("applications").Where("deletion_requested=0").OrderBy("kind ASC", "name ASC").All(ctx, &rows); err != nil {
+	if err := orm.New(s.db).From("applications").OrderBy("kind ASC", "name ASC").All(ctx, &rows); err != nil {
 		return nil, err
 	}
 	routesByApp, err := s.loadReverseProxyRoutesByApp(ctx)
@@ -902,11 +905,18 @@ func (s *Service) Delete(ctx context.Context, appID string, confirmPersistentDat
 		}
 		return s.reconcileReverseProxy(ctx)
 	}
-	if err := s.triggerApplicationReconcileWithPayload(ctx, app.ID, "application_delete", map[string]any{
-		"applicationIds": []string{app.ID},
-		"force":          true,
-		"purge":          true,
-		"reason":         "application_delete",
+	// Plan purge Jobs durably in this request (same pattern as Deploy/Restart).
+	// Flags are not rolled back on failure; ListForReconcile still surfaces the
+	// app so a later periodic pass can finish the finalizer.
+	if _, err := s.PlanApplicationDeployment(ctx, DeploymentPlanRequest{
+		ApplicationID:       app.ID,
+		Force:               true,
+		Purge:               true,
+		Manual:              true,
+		TriggerType:         "application_delete",
+		TriggerResourceType: "application",
+		TriggerResourceID:   app.ID,
+		Reason:              "application_delete",
 	}); err != nil {
 		return err
 	}
