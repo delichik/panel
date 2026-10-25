@@ -8,6 +8,7 @@ export interface VersionInfo {
   latestVersion?: string;
   updateAvailable: boolean;
   checkedAt?: string;
+  checkError?: string;
 }
 
 export const systemApi = {

@@ -653,8 +653,9 @@ onMounted(load);
               <div><span class="text-muted-foreground">{{ t('settingsPage.panelVersion') }}</span><strong class="block text-foreground">{{ version?.version || t('common.notAvailable') }}</strong></div>
               <div><span class="text-muted-foreground">{{ t('settingsPage.releaseChannel') }}</span><strong class="block text-foreground">{{ version?.channel || t('common.notAvailable') }}</strong></div>
               <div><span class="text-muted-foreground">{{ t('settingsPage.latestVersion') }}</span><strong class="block text-foreground">{{ version?.latestVersion || t('common.notAvailable') }}</strong></div>
-              <div><span class="text-muted-foreground">{{ t('settingsPage.updateStatus') }}</span><Badge :tone="version?.updateAvailable ? 'warning' : 'success'">{{ version?.updateAvailable ? t('settingsPage.updateAvailable') : t('settingsPage.upToDate') }}</Badge></div>
+              <div><span class="text-muted-foreground">{{ t('settingsPage.updateStatus') }}</span><Badge :tone="version?.checkError ? 'danger' : version?.updateAvailable ? 'warning' : 'success'">{{ version?.checkError ? t('settingsPage.versionCheckError') : version?.updateAvailable ? t('settingsPage.updateAvailable') : t('settingsPage.upToDate') }}</Badge></div>
             </div>
+            <p v-if="version?.checkError" class="text-sm text-danger">{{ t('settingsPage.versionCheckErrorDetail', { error: version.checkError }) }}</p>
           </div>
           <div class="grid grid-cols-2 gap-3 max-md:grid-cols-1">
             <label class="grid gap-1 text-sm">{{ t('settingsPage.loginTitle') }}<Input v-model="form.loginTitle" /></label>
