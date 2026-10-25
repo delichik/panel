@@ -125,7 +125,15 @@ func (h *Handler) PackageUpdates(ctx context.Context, _ *agentpb.Empty) (*agentp
 func (h *Handler) UpgradePackages(ctx context.Context, req *agentpb.PackageUpgradeRequest) (*agentpb.CommandResponse, error) {
 	h.upgrades.begin()
 	defer h.upgrades.end()
-	output, err := h.collector.UpgradePackages(ctx, agentcontract.PackageUpgradeRequest{Names: append([]string(nil), req.Names...), All: req.All})
+	// Hold the Docker write lock for the whole apt window so upgrading
+	// docker-ce/containerd cannot interleave with RuntimeReconcile mutations
+	// (PKG-API-007 / agent-local dockerWriteMu).
+	var output string
+	err := h.withDockerWrite(func() error {
+		var upgradeErr error
+		output, upgradeErr = h.collector.UpgradePackages(ctx, agentcontract.PackageUpgradeRequest{Names: append([]string(nil), req.Names...), All: req.All})
+		return upgradeErr
+	})
 	return &agentpb.CommandResponse{Output: output}, remoteError(err)
 }
 
@@ -387,14 +395,23 @@ func (h *Handler) reconcileRuntimeAndFirewall(ctx context.Context, input agentco
 		return firewallReconcileFailure("runtime", errors.New("runtime is not configured"))
 	}
 	desired := applicationFirewallRules(input.Spec)
+	ensured := false
 	if input.Action == "apply" {
 		if err := manager.EnsureApplicationRules(ctx, input.ApplicationID, input.SSHPort, input.AgentPort, desired); err != nil {
 			return firewallReconcileFailure("ensure_firewall", err)
 		}
+		ensured = true
 	}
 
 	result, runErr := reconcile(ctx, input)
 	if runErr != nil || result.ErrorCode != "" {
+		if ensured {
+			// Fail closed: do not leave newly ensured ports open after a failed
+			// apply. Retry will Ensure again before the next reconcile attempt.
+			if cleanErr := manager.CleanupApplicationRules(ctx, input.ApplicationID, input.SSHPort, input.AgentPort, nil); cleanErr != nil && result.ErrorCode == "" {
+				return mergeFirewallFailure(result, "cleanup_firewall", cleanErr)
+			}
+		}
 		return result, runErr
 	}
 	switch input.Action {

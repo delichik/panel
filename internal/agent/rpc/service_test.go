@@ -77,7 +77,7 @@ func TestReconcileRuntimeAndFirewallOrdering(t *testing.T) {
 		want       []string
 	}{
 		{name: "apply", action: "apply", want: []string{"ensure", "runtime", "cleanup"}},
-		{name: "apply runtime failure", action: "apply", runtimeErr: errors.New("docker failed"), want: []string{"ensure", "runtime"}},
+		{name: "apply runtime failure", action: "apply", runtimeErr: errors.New("docker failed"), want: []string{"ensure", "runtime", "cleanup"}},
 		{name: "stop", action: "stop", want: []string{"runtime", "cleanup"}},
 		{name: "purge", action: "purge", want: []string{"runtime", "cleanup"}},
 	} {
