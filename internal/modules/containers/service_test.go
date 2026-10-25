@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -844,6 +845,22 @@ func TestContainerLogsClampsTail(t *testing.T) {
 	}
 	if fakeAgent.logTail != 10000 {
 		t.Fatalf("tail = %d, want 10000", fakeAgent.logTail)
+	}
+}
+
+func TestReadyServerRequiresReachable(t *testing.T) {
+	svc, _, _, _ := newContainerizationTestService(t)
+	svc.servers = fakeServerProvider{server.Server{
+		ID:        "server-1",
+		Reachable: false,
+		Traits: map[string]string{
+			agentcontract.TraitURL:    "http://agent",
+			agentcontract.TraitStatus: agentcontract.StatusCompatible,
+		},
+	}}
+	_, err := svc.ContainerLogs(context.Background(), "server-1", "container-1", 100)
+	if err == nil || !strings.Contains(err.Error(), "connectivity has not been confirmed") {
+		t.Fatalf("expected server_not_reachable, got %v", err)
 	}
 }
 

@@ -1510,6 +1510,9 @@ func (s *Service) readyServer(ctx context.Context, serverID string) (server.Serv
 	if err != nil {
 		return server.Server{}, "", err
 	}
+	if !srv.Reachable {
+		return server.Server{}, "", panelerr.Validation("server_not_reachable", "Server connectivity has not been confirmed")
+	}
 	baseURL := agentendpoint.AgentURL(srv.Traits, agentendpoint.Preferences{
 		Enabled: srv.TailscaleEnabled,
 		Prefer:  srv.TailscalePreferAgent,
