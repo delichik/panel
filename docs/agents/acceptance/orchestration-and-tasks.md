@@ -243,10 +243,10 @@
 
 - **前置**：running Job lease 已过期。
 - **动作**：RecoverExpiredLeases。
-- **结果**：未开始 stage 的恢复 pending；已有 stage 的恢复 failed_retryable 并按 attempts 退避，记录 `lease_lost/ownership`；清 owner/token/expiry。
-- **失败**：更新必须再次以过期状态谓词 fence 已续租/重领 Job。
-- **不变量**：逐 Job 计算 retry delay，不能批量使用同一错误 attempts。
-- **验证**：lease expiry replay/stale snapshot tests。
+- **结果**：不得仅凭过期把 Job 改回 pending/failed_retryable 或清空 lease token；必须 `MarkUncertain`（保持 `running` + 原 execution/lease token，清 `lease_expires_at`），等待经认证的 Agent 对原 execution 给出可验证结果（与 ORCH-LEASE-004 一致）。
+- **失败**：MarkUncertain 必须以 `state=running` 且原 `lease_token` 谓词 fence，不得覆盖已续租/重领或已终态 Job。
+- **不变量**：过期 alone 不能证明远端副作用是否完成；盲目重放写操作禁止。
+- **验证**：lease expiry → uncertainty、stale snapshot 与 missing-evidence 重试测试。
 
 ### ORCH-LEASE-004 不确定执行缺失证据
 
