@@ -79,7 +79,8 @@ func TestSyncProxyRecordsCreatesAndDeletesOnlyManagedRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 1 || results[0].Created != 1 || results[0].Updated != 1 || results[0].Deleted != 0 {
+	// Value changes replace by create+delete (keyed by type|name|value); AAAA is new.
+	if len(results) != 1 || results[0].Created != 2 || results[0].Updated != 0 || results[0].Deleted != 1 {
 		t.Fatalf("results = %#v", results)
 	}
 	byID := map[string]Record{}
@@ -89,8 +90,20 @@ func TestSyncProxyRecordsCreatesAndDeletesOnlyManagedRecords(t *testing.T) {
 	if byID["user_record"].Value != "198.51.100.9" || byID["other_managed"].Value != "203.0.113.6" {
 		t.Fatalf("untouched records were modified: %#v", provider.records)
 	}
-	if byID["managed_old"].Value != "203.0.113.10" {
-		t.Fatalf("managed record was not updated: %#v", provider.records)
+	if _, ok := byID["managed_old"]; ok {
+		t.Fatalf("replaced managed A should be deleted: %#v", provider.records)
+	}
+	foundNewA, foundAAAA := false, false
+	for _, record := range provider.records {
+		if record.Type == "A" && record.Value == "203.0.113.10" && record.Comment == ProxyManagedRecordComment {
+			foundNewA = true
+		}
+		if record.Type == "AAAA" && record.Value == "2001:db8::10" {
+			foundAAAA = true
+		}
+	}
+	if !foundNewA || !foundAAAA {
+		t.Fatalf("expected new managed A and AAAA: %#v", provider.records)
 	}
 }
 
@@ -110,11 +123,51 @@ func TestSyncProxyRecordsUpdatesValueAndCleansRemovedNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if results[0].Updated != 1 || results[0].Deleted != 1 {
+	if results[0].Created != 1 || results[0].Deleted != 2 {
 		t.Fatalf("results = %#v", results)
 	}
 	if len(provider.records) != 1 || provider.records[0].Value != "203.0.113.10" {
 		t.Fatalf("records after sync = %#v", provider.records)
+	}
+}
+
+func TestSyncProxyRecordsKeepsMultipleARecordsForSameHost(t *testing.T) {
+	provider := &statefulFakeProvider{records: []Record{
+		{ID: "a1", Name: "app.example.com", Type: "A", Value: "203.0.113.5", TTL: 120, Comment: ProxyManagedRecordComment},
+		{ID: "a2", Name: "app.example.com", Type: "A", Value: "203.0.113.6", TTL: 120, Comment: ProxyManagedRecordComment},
+	}}
+	svc := newProxySyncService(t, provider)
+
+	proxied := false
+	target := ProxyRecordTarget{
+		Zone:  "example.com",
+		Names: []string{"app.example.com"},
+		Records: []RecordInput{
+			{Name: "app", Type: "A", Value: "203.0.113.5", TTL: 120, Proxied: &proxied, Comment: ProxyManagedRecordComment},
+			{Name: "app", Type: "A", Value: "203.0.113.6", TTL: 120, Proxied: &proxied, Comment: ProxyManagedRecordComment},
+		},
+	}
+	results, err := svc.SyncProxyRecords(context.Background(), []ProxyRecordTarget{target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if results[0].Created != 0 || results[0].Updated != 0 || results[0].Deleted != 0 || results[0].Unchanged != 2 {
+		t.Fatalf("first sync results = %#v", results)
+	}
+	results, err = svc.SyncProxyRecords(context.Background(), []ProxyRecordTarget{target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if results[0].Created != 0 || results[0].Deleted != 0 || results[0].Unchanged != 2 {
+		t.Fatalf("idempotent sync results = %#v", results)
+	}
+	target.Records = target.Records[:1]
+	results, err = svc.SyncProxyRecords(context.Background(), []ProxyRecordTarget{target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if results[0].Deleted != 1 || len(provider.records) != 1 || provider.records[0].Value != "203.0.113.5" {
+		t.Fatalf("after removing one A: results=%#v records=%#v", results, provider.records)
 	}
 }
 

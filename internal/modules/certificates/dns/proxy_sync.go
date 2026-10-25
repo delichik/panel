@@ -72,7 +72,8 @@ func (s *Service) syncProxyZone(ctx context.Context, target ProxyRecordTarget) (
 			result.Error = err.Error()
 			return result, err
 		}
-		key := proxyTypeNameKey(domain.Name, prepared)
+		// Key includes value so multi-server A/AAAA for the same host are kept.
+		key := proxyRecordKey(domain.Name, prepared)
 		if _, exists := desiredByKey[key]; !exists {
 			desiredByKey[key] = prepared
 			desired = append(desired, prepared)
@@ -97,36 +98,18 @@ func (s *Service) syncProxyZone(ctx context.Context, target ProxyRecordTarget) (
 		if _, ok := managedNames[proxyFullName(domain.Name, record.Name)]; !ok {
 			continue
 		}
-		key := proxyTypeNameKey(domain.Name, RecordInput{Name: record.Name, Type: record.Type})
+		key := proxyRecordKey(domain.Name, RecordInput{Name: record.Name, Type: record.Type, Value: record.Value})
 		managed[key] = append(managed[key], record)
 	}
 
 	for _, record := range desired {
-		key := proxyTypeNameKey(domain.Name, record)
+		key := proxyRecordKey(domain.Name, record)
 		matches := managed[key]
 		if len(matches) > 0 {
-			equalIndex := -1
-			sameValueIndex := -1
-			for i, candidate := range matches {
-				if strings.EqualFold(strings.TrimSpace(candidate.Value), strings.TrimSpace(record.Value)) {
-					sameValueIndex = i
-					if recordEqual(record, candidate) {
-						equalIndex = i
-						break
-					}
-				}
-			}
-			matchIndex := equalIndex
-			if matchIndex < 0 {
-				matchIndex = sameValueIndex
-			}
-			if equalIndex >= 0 {
+			match := matches[0]
+			if recordEqual(record, match) {
 				result.Unchanged++
 			} else {
-				if matchIndex < 0 {
-					matchIndex = 0
-				}
-				match := matches[matchIndex]
 				updated, updateErr := provider.UpdateRecord(ctx, domain.Name, match.ID, record)
 				if updateErr != nil {
 					result.Error = updateErr.Error()
@@ -135,7 +118,7 @@ func (s *Service) syncProxyZone(ctx context.Context, target ProxyRecordTarget) (
 				_ = updated
 				result.Updated++
 			}
-			managed[key] = append(matches[:matchIndex], matches[matchIndex+1:]...)
+			managed[key] = matches[1:]
 			if len(managed[key]) == 0 {
 				delete(managed, key)
 			}
@@ -202,6 +185,13 @@ func deleteUnmanagedHostConflicts(ctx context.Context, provider Provider, zone s
 
 func proxyTypeNameKey(zone string, record RecordInput) string {
 	return strings.ToUpper(strings.TrimSpace(record.Type)) + "|" + proxyFullName(zone, record.Name)
+}
+
+// proxyRecordKey identifies one managed reverse-proxy DNS record. Value is part
+// of the key so multiple A/AAAA addresses on the same hostname converge
+// independently (DNS-SYNC-002/004).
+func proxyRecordKey(zone string, record RecordInput) string {
+	return proxyTypeNameKey(zone, record) + "|" + strings.ToLower(strings.TrimSpace(record.Value))
 }
 
 func proxyFullName(zone, name string) string {
