@@ -55,28 +55,30 @@ type assetReferenceDTO struct {
 }
 
 type assetSummaryDTO struct {
-	ID             string     `json:"id"`
-	Type           string     `json:"type"`
-	Name           string     `json:"name"`
-	ParentAssetID  string     `json:"parentAssetId,omitempty"`
-	Algorithm      string     `json:"algorithm,omitempty"`
-	KeySize        int        `json:"keySize,omitempty"`
-	CommonName     string     `json:"commonName,omitempty"`
-	DNSNames       []string   `json:"dnsNames"`
-	IPAddresses    []string   `json:"ipAddresses"`
-	Fingerprint    string     `json:"fingerprint"`
-	NotBefore      *time.Time `json:"notBefore,omitempty"`
-	NotAfter       *time.Time `json:"notAfter,omitempty"`
-	HasCertificate bool       `json:"hasCertificate"`
-	HasPrivateKey  bool       `json:"hasPrivateKey"`
-	HasPublicKey   bool       `json:"hasPublicKey"`
-	DownloadKinds  []string   `json:"downloadKinds"`
-	ChildCount     int        `json:"childCount"`
-	CanReissue     bool       `json:"canReissue"`
-	CanRegenerate  bool       `json:"canRegenerate"`
-	CanDelete      bool       `json:"canDelete"`
-	CreatedAt      time.Time  `json:"createdAt"`
-	UpdatedAt      time.Time  `json:"updatedAt"`
+	ID             string              `json:"id"`
+	Type           string              `json:"type"`
+	Name           string              `json:"name"`
+	ParentAssetID  string              `json:"parentAssetId,omitempty"`
+	Algorithm      string              `json:"algorithm,omitempty"`
+	KeySize        int                 `json:"keySize,omitempty"`
+	CommonName     string              `json:"commonName,omitempty"`
+	DNSNames       []string            `json:"dnsNames"`
+	IPAddresses    []string            `json:"ipAddresses"`
+	Fingerprint    string              `json:"fingerprint"`
+	NotBefore      *time.Time          `json:"notBefore,omitempty"`
+	NotAfter       *time.Time          `json:"notAfter,omitempty"`
+	HasCertificate bool                `json:"hasCertificate"`
+	HasPrivateKey  bool                `json:"hasPrivateKey"`
+	HasPublicKey   bool                `json:"hasPublicKey"`
+	DownloadKinds  []string            `json:"downloadKinds"`
+	ChildCount     int                 `json:"childCount"`
+	ReferenceCount int                 `json:"referenceCount"`
+	References     []assetReferenceDTO `json:"references"`
+	CanReissue     bool                `json:"canReissue"`
+	CanRegenerate  bool                `json:"canRegenerate"`
+	CanDelete      bool                `json:"canDelete"`
+	CreatedAt      time.Time           `json:"createdAt"`
+	UpdatedAt      time.Time           `json:"updatedAt"`
 }
 
 type assetDetailDTO struct {
@@ -384,6 +386,7 @@ func writeMutation(w http.ResponseWriter, status int, asset Asset, taskID, opera
 }
 
 func toAssetSummaryDTO(asset Asset) assetSummaryDTO {
+	references := referencesForAsset(asset)
 	return assetSummaryDTO{
 		ID:             asset.ID,
 		Type:           asset.Type,
@@ -402,6 +405,8 @@ func toAssetSummaryDTO(asset Asset) assetSummaryDTO {
 		HasPublicKey:   strings.TrimSpace(asset.PublicKey) != "",
 		DownloadKinds:  append([]string(nil), asset.FileKinds...),
 		ChildCount:     asset.ChildCount,
+		ReferenceCount: len(references),
+		References:     references,
 		CanReissue:     asset.CanReissue,
 		CanRegenerate:  asset.CanRegenerate,
 		CanDelete:      !asset.InUse && !asset.HasChildren,

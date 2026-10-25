@@ -10,9 +10,9 @@
 | GAP-004 | 页面错误态 | ~~应用详情/runtime/files 加载失败主要用 toast~~（已关闭） | 详情加载失败设 `detailError` + toast + EmptyState 重试；runtime 失败设 `runtimeError` + toast + Runtime tab 内 EmptyState 重试（`UI-APP-002/003`）；页面级 e2e 仍归入 GAP-001 |
 | GAP-005 | 证书页面入口 | ~~domains/self-signed 模式可能显示“生成 SSH”入口~~（已关闭） | 表格化一轮已修复：生成 SSH/CA/TLS 入口只出现在 keys 模式页头（`UI-CERT-009`），列表结构测试可覆盖 |
 | GAP-006 | 危险确认 | ~~settings 导出/恢复/重置确认仍为手写 Dialog~~（已关闭） | settings 已迁移到统一 `ConfirmDialog`（impact、危险项 `requireCheckbox`、loading 锁）；各主列表页此前已统一；新增危险动作不得再手写 |
-| GAP-007 | 前端/后端证书类型 | `web/src/types/certificates.ts` 仍声明后端明确不输出的 `certificatePath/privateKeyPath` | 删除旧字段或形成安全且实际存在的新 API 合同，并更新测试 |
-| GAP-008 | 密钥资产详情类型 | 前端要求 references/referenceCount，后端 detail DTO 未输出 | 前后端选择同一合同并覆盖被引用资产删除门禁测试 |
-| GAP-009 | 系统版本类型 | 后端可能返回 `checkError`，前端 `VersionInfo` 未声明 | typed client 声明并在页面安全展示，或服务端合同明确移除 |
+| GAP-007 | ~~前端/后端证书类型~~（已关闭） | ~~`web/src/types/certificates.ts` 仍声明后端明确不输出的 `certificatePath/privateKeyPath`~~ | 前端类型与 mocks 已删除路径字段；后端 DTO 保持 `json:"-"`，不向客户端暴露私钥路径 |
+| GAP-008 | ~~密钥资产详情类型~~（已关闭） | ~~前端要求 references/referenceCount，后端 detail DTO 未输出~~ | `assetSummaryDTO`/`detail` 输出 `referenceCount` 与 `references`；列表与详情合同对齐，删除门禁仍由 `canDelete`/`InUse` 驱动 |
+| GAP-009 | ~~系统版本类型~~（已关闭） | ~~后端可能返回 `checkError`，前端 `VersionInfo` 未声明~~ | typed client 声明 `checkError`；设置页系统段安全展示检查失败 |
 | GAP-010 | 备份旧文档引用 | 旧指引引用已不存在的 `web/src/api/backups.ts` 与 `web/src/types/api.ts` | 旧指引由本规范替代；后续引用只指向实际 maintenance/settings API 与类型 |
 | GAP-011 | Agent report 频率说明 | 旧指引写每秒检查，当前实现为每 5 秒 | 本规范以当前实现/运行时设置为准；增加频率行为测试或统一实现 |
 | GAP-012 | ~~UFW Agent 准入~~（已消除） | `InstallUFW` 曾绕过 `ensureUFWManageable` 并强制本地 privilege。手动安装入口已删除，防火墙改为 Agent 部署的自动前提（`AGT-FW-001..006`），该不一致随之消失 | 关闭；保留编号以便追溯 |
@@ -22,7 +22,7 @@
 | GAP-016 | 设施编辑增强 | heartbeat、全局草稿配额、warning 确认、专用结构化恢复日志暂缓 | 不得假设存在；分别完成持久化/并发/API/UI 验收后启用 |
 | GAP-017 | 旧 lifecycle 类型 | 应用 runtime/前端类型仍带 lifecycle 命名，但旧 CoordDB lifecycle 表和 dispatcher 已删除 | 逐步移除兼容命名；任何期间均不得恢复第二事实源 |
 | GAP-018 | 容器完整详情 | 无通用 inspect API，report 摘要不含 command/created/mounts，但前端资源类型仍残留完整字段 | 清理旧字段，或新增独立受限 inspect 合同与按需 API，不扩大列表上报 |
-| GAP-019 | 容器测试命名 | `TestContainerActionRejectsManagedApplicationContainer` 名称与断言相反，易误导维护者 | 重命名以表达“允许直接动作、由协调修复”，保留行为断言 |
+| GAP-019 | ~~容器测试命名~~（已关闭） | ~~`TestContainerActionRejectsManagedApplicationContainer` 名称与断言相反~~ | 已重命名为 `TestContainerActionAllowsManagedApplicationContainer`，断言仍为允许直接动作并由协调修复 |
 | GAP-020 | ~~Docker 操作物理队列~~（已关闭） | ~~普通容器、orchestrator、设施应用由不同所有者组合，缺少证明所有写路径共享同一 per-server 物理队列的集成测试~~ | 应用 `RuntimeReconcile`/legacy apply·stop 与设施存储 export 配置均经 `containers.Service.Execute` 同物理 per-server 队列；Agent 侧 Docker 写 RPC（含 persistent archive/restore）另有进程内互斥；入队后取消须等待 job 结束。验证：`TestRuntimeReconcileUsesSharedContainerOperationQueue`、`TestStorageExportConfigureUsesSharedOperationQueue`、`TestExecuteWaitsForAcceptedJobAfterCallerCancel`、`TestExecuteSerializesOperationsPerServer`、`RES-QUEUE-001/004` |
 | GAP-021 | 服务器资源 tabs 回归 | 首次空快照、请求竞态、桌面/窄屏滚动与 tab 切换缺少浏览器级 E2E（原资源页缺口并入服务器详情后仍存在） | 补服务器资源 tabs 的浏览器测试与三档桌面/一档窄屏布局证据，关联 `UI-SRV-017/018` |
 | GAP-022 | Docker network 写操作 | network 当前只读，尚无系统网络保护和实时使用门禁合同 | 继续只读；若新增 mutation，先定义 `panel-apps` 保护、确认、队列和使用中拒绝 |
