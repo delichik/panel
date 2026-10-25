@@ -95,6 +95,18 @@ func addFile(zw *zip.Writer, path, name string, manifest *Manifest, seen map[str
 		return nil
 	}
 	seen[name] = struct{}{}
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		// Skip symlinks and special files so backups cannot escape DataRoot
+		// by following links (BKP-API-005 / archive path safety).
+		return nil
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -103,13 +115,6 @@ func addFile(zw *zip.Writer, path, name string, manifest *Manifest, seen map[str
 		return err
 	}
 	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return err
-	}
-	if !info.Mode().IsRegular() {
-		return nil
-	}
 	hasher := sha256.New()
 	header, err := zip.FileInfoHeader(info)
 	if err != nil {
@@ -167,19 +172,44 @@ func readManifest(raw []byte, password string) (Manifest, []byte, error) {
 	return Manifest{}, nil, errArchiveInvalid
 }
 
-func extractArchive(plain []byte, target string) error {
+func extractArchive(plain []byte, target string, manifest Manifest) error {
+	expected := make(map[string]ManifestFile, len(manifest.Files))
+	for _, item := range manifest.Files {
+		path := filepath.ToSlash(filepath.Clean(item.Path))
+		if !safeArchivePath(path) {
+			return errArchiveInvalid
+		}
+		if _, dup := expected[path]; dup {
+			return errArchiveInvalid
+		}
+		expected[path] = ManifestFile{Path: path, Size: item.Size, SHA256: strings.ToLower(strings.TrimSpace(item.SHA256))}
+	}
 	zr, err := zip.NewReader(bytes.NewReader(plain), int64(len(plain)))
 	if err != nil {
 		return errArchiveInvalid
 	}
+	seen := make(map[string]struct{}, len(expected))
 	for _, file := range zr.File {
 		if file.Name == manifestName {
 			continue
 		}
-		if !safeArchivePath(file.Name) {
+		info := file.FileInfo()
+		if info.IsDir() {
+			continue
+		}
+		name := filepath.ToSlash(filepath.Clean(file.Name))
+		if !safeArchivePath(name) {
 			return errArchiveInvalid
 		}
-		out := filepath.Join(target, filepath.FromSlash(file.Name))
+		item, ok := expected[name]
+		if !ok {
+			return errArchiveInvalid
+		}
+		if _, dup := seen[name]; dup {
+			return errArchiveInvalid
+		}
+		seen[name] = struct{}{}
+		out := filepath.Join(target, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(out), 0700); err != nil {
 			return err
 		}
@@ -187,16 +217,19 @@ func extractArchive(plain []byte, target string) error {
 		if err != nil {
 			return err
 		}
-		err = writeExtractedFile(out, rc, file.Mode())
+		err = writeExtractedFileVerified(out, rc, file.Mode(), item)
 		_ = rc.Close()
 		if err != nil {
 			return err
 		}
 	}
+	if len(seen) != len(expected) {
+		return errArchiveInvalid
+	}
 	return nil
 }
 
-func writeExtractedFile(path string, r io.Reader, mode os.FileMode) error {
+func writeExtractedFileVerified(path string, r io.Reader, mode os.FileMode, expected ManifestFile) error {
 	if mode == 0 {
 		mode = 0600
 	}
@@ -205,8 +238,16 @@ func writeExtractedFile(path string, r io.Reader, mode os.FileMode) error {
 		return err
 	}
 	defer f.Close()
-	_, err = io.Copy(f, r)
-	return err
+	hasher := sha256.New()
+	n, err := io.Copy(io.MultiWriter(f, hasher), r)
+	if err != nil {
+		return err
+	}
+	sum := hex.EncodeToString(hasher.Sum(nil))
+	if n != expected.Size || !strings.EqualFold(sum, expected.SHA256) {
+		return errArchiveInvalid
+	}
+	return nil
 }
 
 func safeArchivePath(path string) bool {

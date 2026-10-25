@@ -26,7 +26,7 @@
 
 ## 3. 归档格式与加密安全
 
-- `BKP-ARC-001`：manifest必须含formatVersion、panelVersion、UTC createdAt、encrypted、includes，以及每个相对文件的size与SHA-256；恢复前必须逐项核对。
+- `BKP-ARC-001`：manifest必须含formatVersion、panelVersion、UTC createdAt、encrypted、includes，以及每个相对文件的size与SHA-256；恢复解包时必须流式逐项核对 size/SHA-256，拒绝多余、重复或缺失成员；符号链接不得跟随写入归档。
 - `BKP-ARC-002`：归档路径必须拒绝绝对路径、`..`穿越、重复/歧义目标和指向归档根外的路径；验证失败不得写入目标dataRoot。
 - `BKP-ARC-003`：加密头的salt、nonce、ciphertext uint32长度必须同时受剩余输入上限校验；伪造超长段应立即失败，不得按声明值分配巨量内存。
 - `BKP-ARC-004`：写入任何超过uint32范围的段必须返回错误而非截断；底层写错误必须向上返回，不能产出看似成功的归档。
@@ -66,7 +66,7 @@
 - `RST-TXN-001`：真正覆盖前必须完成解密、解包、manifest/hash/path验证；任何预备失败都不得移动或清空当前dataRoot/外置数据库。
 - `RST-TXN-002`：apply前必须把archive、marker和认证快照移动到dataRoot同级 `.<name>-restore-transaction/media`；protected media是retry/rollback唯一可信介质且优先于后来普通pending。
 - `RST-TXN-003`：state.json必须持久记录prepared、applying、各目标backup_planned/backup_moved/swapped、rolling_back/rollback_renaming/rolled_back和committed；每次破坏性rename前先落盘下一可恢复意图。
-- `RST-TXN-004`：dataRoot的stage/backup位于其同级；配置在dataRoot外的数据库必须在各自目标同目录stage/backup，确保只使用同文件系统rename而非跨卷非原子移动。
+- `RST-TXN-004`：dataRoot的stage/backup位于其同级；配置在dataRoot外的数据库必须在各自目标同目录stage/backup，确保只使用同文件系统rename而非跨卷非原子移动；外置 SQLite 主文件换入前后必须清除目标路径旁的 `-wal`/`-shm`/`-journal`，避免旧 WAL 接到新库。
 - `RST-TXN-005`：任一目标apply失败必须逆序rollback所有已动目标；新创建但尚未完成state flush的目标也要清理，原数据必须恢复。
 - `RST-TXN-006`：`rollback_renaming`恢复必须识别“rename已成功但状态未落盘”，无需停机期全量hash即可继续；重复冷启动应收敛而非反复交换。
 - `RST-TXN-007`：成功rollback保留protected media并允许retry/clear；backup缺失、state损坏或rollback失败进入阻断状态，禁止retry、clear和normal重启。

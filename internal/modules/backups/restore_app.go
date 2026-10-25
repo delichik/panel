@@ -320,7 +320,7 @@ func (a *RestoreApp) apply(ctx context.Context, password string) {
 		a.fail("restore_archive_unavailable", "Unable to read pending backup archive", true)
 		return
 	}
-	_, plain, err := readManifest(raw, password)
+	manifest, plain, err := readManifest(raw, password)
 	if err != nil {
 		if errors.Is(err, errPasswordRequired) {
 			a.set(PhasePassword, 10, "", "", false)
@@ -339,7 +339,7 @@ func (a *RestoreApp) apply(ctx context.Context, password string) {
 		return
 	}
 	defer os.RemoveAll(staging)
-	if err := extractArchive(plain, staging); err != nil {
+	if err := extractArchive(plain, staging, manifest); err != nil {
 		a.fail("restore_extract_failed", "Unable to extract backup archive", false)
 		return
 	}

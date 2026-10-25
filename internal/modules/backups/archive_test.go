@@ -48,6 +48,53 @@ func TestBackupArchiveRoundTrip(t *testing.T) {
 	if got.PanelVersion != "test" || len(plain) == 0 {
 		t.Fatalf("unexpected manifest: %+v", got)
 	}
+	staging := filepath.Join(dir, "staging")
+	if err := extractArchive(plain, staging, got); err != nil {
+		t.Fatalf("extract with verification: %v", err)
+	}
+}
+
+func TestExtractArchiveRejectsTamperedMemberHash(t *testing.T) {
+	dir := t.TempDir()
+	dataRoot := filepath.Join(dir, "data")
+	if err := os.MkdirAll(dataRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dataRoot, "note.txt"), []byte("hello"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	raw, manifest, err := buildArchive(ArchiveConfig{DataRoot: dataRoot, PanelVersion: "test"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Files) == 0 {
+		t.Fatal("expected archived files")
+	}
+	manifest.Files[0].SHA256 = strings.Repeat("0", 64)
+	if err := extractArchive(raw, filepath.Join(dir, "staging"), manifest); err == nil {
+		t.Fatal("expected hash mismatch to fail extract")
+	}
+}
+
+func TestClearSQLiteSidecarsRemovesWAL(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "app.db")
+	if err := os.WriteFile(dbPath, []byte("db"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	wal := dbPath + "-wal"
+	if err := os.WriteFile(wal, []byte("wal"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(dbPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := clearSQLiteSidecars(dbPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(wal); !os.IsNotExist(err) {
+		t.Fatalf("wal should be removed, err=%v", err)
+	}
 }
 
 func TestEncryptedBackupArchiveRequiresPassword(t *testing.T) {

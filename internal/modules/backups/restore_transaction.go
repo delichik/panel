@@ -254,10 +254,19 @@ func applyRestoreTransaction(dataRoot string, state restoreTransactionState, hoo
 		if err := writeRestoreTransactionState(dataRoot, state); err != nil {
 			return handleRestoreApplyError(dataRoot, state, err)
 		}
+		// External SQLite targets keep -wal/-shm next to the original filename
+		// after the main file is renamed away. Clear them before installing the
+		// staged DB so an old WAL cannot attach to the restored main file.
+		if err := clearSQLiteSidecars(target.TargetPath); err != nil {
+			return handleRestoreApplyError(dataRoot, state, err)
+		}
 		if err := os.MkdirAll(filepath.Dir(target.TargetPath), 0700); err != nil {
 			return handleRestoreApplyError(dataRoot, state, err)
 		}
 		if err := os.Rename(target.StagedPath, target.TargetPath); err != nil {
+			return handleRestoreApplyError(dataRoot, state, err)
+		}
+		if err := clearSQLiteSidecars(target.TargetPath); err != nil {
 			return handleRestoreApplyError(dataRoot, state, err)
 		}
 		if err := syncDirectory(filepath.Dir(target.TargetPath)); err != nil {
@@ -491,4 +500,29 @@ func firstExistingPath(paths []string) string {
 func pathExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// clearSQLiteSidecars removes -wal/-shm/-journal next to a database file path.
+// Directory targets (dataRoot swaps) are ignored. Missing main file is OK: after
+// renaming the DB away, sidecars keep the original basename and must still go.
+func clearSQLiteSidecars(dbPath string) error {
+	if strings.TrimSpace(dbPath) == "" {
+		return nil
+	}
+	info, err := os.Lstat(dbPath)
+	switch {
+	case err == nil && info.IsDir():
+		return nil
+	case err == nil, errors.Is(err, os.ErrNotExist):
+		// continue
+	default:
+		return err
+	}
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		sidecar := dbPath + suffix
+		if removeErr := os.Remove(sidecar); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return removeErr
+		}
+	}
+	return nil
 }
