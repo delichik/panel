@@ -990,6 +990,40 @@ func TestStopAppCallsRuntimeAndDisablesApp(t *testing.T) {
 	}
 }
 
+func TestStopPlansWithoutReconcileTrigger(t *testing.T) {
+	svc, runtime, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.SetApplicationReconcileTrigger(nil)
+	if _, err := svc.Stop(ctx, app.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	stopped, err := svc.Get(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stopped.Enabled {
+		t.Fatalf("app should be disabled: %#v", stopped)
+	}
+	stopJobs := 0
+	for _, job := range jobsForApplication(t, svc, app.ID) {
+		if job.Action == "stop" {
+			stopJobs++
+		}
+	}
+	if stopJobs != 2 {
+		t.Fatalf("stop must plan Jobs without reconcile trigger, jobs = %#v", jobsForApplication(t, svc, app.ID))
+	}
+	if len(runtime.stops) != 0 {
+		t.Fatalf("stop must not call agent runtime directly, stops = %#v", runtime.stops)
+	}
+}
+
 func TestStopAppWrapsReverseProxyReconcileFailure(t *testing.T) {
 	svc, _, _, closeStore := newTestService(t)
 	defer closeStore()

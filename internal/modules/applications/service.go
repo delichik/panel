@@ -1362,21 +1362,26 @@ func (s *Service) Stop(ctx context.Context, appID string, purge bool) (Operation
 	if err := s.updateApplicationLifecycleFlags(ctx, app.ID, false, false); err != nil {
 		return OperationResult{}, err
 	}
-	payload := map[string]any{
-		"applicationIds": []string{app.ID},
-		"force":          true,
-		"reason":         "application_stop",
-	}
-	if purge {
-		payload["purge"] = true
-	}
-	if err := s.triggerApplicationReconcileWithPayload(ctx, app.ID, "application_stop", payload); err != nil {
+	// Plan stop/purge Jobs in this request (same pattern as Deploy/Restart/Delete).
+	// enabled=false is not rolled back on planning failure; periodic drift still
+	// sees desired=running instances on disabled apps and reconverges.
+	plan, err := s.PlanApplicationDeployment(ctx, DeploymentPlanRequest{
+		ApplicationID:       app.ID,
+		Force:               true,
+		Purge:               purge,
+		Manual:              true,
+		TriggerType:         "application_stop",
+		TriggerResourceType: "application",
+		TriggerResourceID:   app.ID,
+		Reason:              "application_stop",
+	})
+	if err != nil {
 		return OperationResult{}, err
 	}
 	if err := s.reconcileReverseProxy(ctx); err != nil {
 		return OperationResult{}, err
 	}
-	return OperationResult{Application: app}, nil
+	return OperationResult{DeploymentID: firstString(plan.JobIDs), Application: app}, nil
 }
 
 func (s *Service) RunStopTask(tc tasks.TaskContext) error {

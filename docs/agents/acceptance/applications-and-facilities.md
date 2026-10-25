@@ -256,10 +256,10 @@
 
 - **前置**：应用存在一个或多个实例。
 - **动作**：`POST /applications/{id}/stop` 或重放 `application_stop`。
-- **结果**：只更新必要生命周期列为 disabled、递增用户 version，并为现有实例 desired=stopped/action=stop；stop 删除容器释放端口和名称，但保留 managed files 与 persistent 数据。
-- **失败**：协调触发失败按配置已变更/应用请求失败分离呈现；不得回滚为 enabled 或同步直连 Agent。
-- **不变量**：旧整行快照不得覆盖并发派生字段/用户编辑；任务 executor 只规划且最终完成自身任务。
-- **验证**：stop CAS/concurrent derived fields/task replay tests。
+- **结果**：只更新必要生命周期列为 disabled、递增用户 version；同一请求内同步规划现有实例 desired=stopped/action=stop（`purge=true` 时为 purged/purge）；stop 删除容器释放端口和名称，但保留 managed files 与 persistent 数据。
+- **失败**：规划失败按配置已变更/应用请求失败分离呈现；不得回滚为 enabled 或同步直连 Agent。
+- **不变量**：旧整行快照不得覆盖并发派生字段/用户编辑；任务 executor 只规划且最终完成自身任务；`enabled=0` 且仍有 `desired=running` 实例时，周期漂移扫描必须继续为其规划 stop，不得因禁用而跳过。
+- **验证**：stop CAS/concurrent derived fields/task replay、stop plans without reconcile trigger、disabled desired-running drift reconverge tests。
 
 ### APP-LIFE-005 重启
 

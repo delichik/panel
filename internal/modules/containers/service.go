@@ -956,7 +956,9 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string
 				continue
 			}
 			app, ok := appByID[item.ApplicationID]
-			if !ok || !app.Enabled || !applicationWantsServer(app, srv.ID) {
+			// Disabled apps must still reconverge when instances remain
+			// desired=running (stop planning failed after enabled=false).
+			if !ok || app.DeletionRequested || !applicationWantsServer(app, srv.ID) {
 				continue
 			}
 			container, found := observed[item.ID]
