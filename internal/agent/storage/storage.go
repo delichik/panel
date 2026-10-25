@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	agentfirewall "panel/internal/agent/firewall"
 )
 
 // exportsMu 串行化导出配置读写，避免并发覆盖 /etc/exports。
@@ -274,12 +276,14 @@ func ensureNFSPortsAllowed(ctx context.Context) error {
 	if _, err := exec.LookPath("ufw"); err != nil {
 		return nil
 	}
-	for _, spec := range []string{"2049/tcp", "2049/udp"} {
-		if _, err := exec.CommandContext(ctx, "ufw", "allow", spec).CombinedOutput(); err != nil {
-			return fmt.Errorf("allow nfs port %s: %w", spec, err)
+	return agentfirewall.WithMutationLock(func() error {
+		for _, spec := range []string{"2049/tcp", "2049/udp"} {
+			if _, err := exec.CommandContext(ctx, "ufw", "allow", spec).CombinedOutput(); err != nil {
+				return fmt.Errorf("allow nfs port %s: %w", spec, err)
+			}
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // removeNFSPortRules 尽力移除 NFS 端口放行规则。规则不存在时 ufw delete 会
@@ -288,17 +292,19 @@ func removeNFSPortRules(ctx context.Context) error {
 	if _, err := exec.LookPath("ufw"); err != nil {
 		return nil
 	}
-	for _, spec := range []string{"2049/tcp", "2049/udp"} {
-		out, err := exec.CommandContext(ctx, "ufw", "delete", "allow", spec).CombinedOutput()
-		if err != nil {
-			msg := strings.ToLower(string(out))
-			if strings.Contains(msg, "invalid update") || strings.Contains(msg, "couldn't") {
-				continue
+	return agentfirewall.WithMutationLock(func() error {
+		for _, spec := range []string{"2049/tcp", "2049/udp"} {
+			out, err := exec.CommandContext(ctx, "ufw", "delete", "allow", spec).CombinedOutput()
+			if err != nil {
+				msg := strings.ToLower(string(out))
+				if strings.Contains(msg, "invalid update") || strings.Contains(msg, "couldn't") {
+					continue
+				}
+				return fmt.Errorf("remove nfs port rule %s: %w: %s", spec, err, strings.TrimSpace(string(out)))
 			}
-			return fmt.Errorf("remove nfs port rule %s: %w: %s", spec, err, strings.TrimSpace(string(out)))
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 func cleanHosts(hosts []string) []string {
