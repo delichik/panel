@@ -805,12 +805,18 @@ func (s *Service) RefreshImages(ctx context.Context, serverID, triggerType, oper
 		s.clearRefreshing(serverID)
 		return task, nil
 	}
-	if err := s.tasks.Start(ctx, task.ID); err != nil {
-		s.clearRefreshing(serverID)
-		return tasks.Task{}, err
-	}
-	go s.runImageRefresh(s.tasks.ExecutionContext(task.ID), task, serverID)
+	s.dispatchRegisteredTask(task)
 	return task, nil
+}
+
+func (s *Service) dispatchRegisteredTask(task tasks.Task) {
+	if s == nil || s.tasks == nil || strings.TrimSpace(task.ID) == "" {
+		return
+	}
+	go func() {
+		defer s.tasks.FinishExecution(task.ID)
+		_ = tasks.NewManager(s.tasks).Run(context.Background(), task)
+	}()
 }
 
 // SaveReportedImages persists image snapshots pushed by the agent after image
@@ -851,14 +857,10 @@ func (s *Service) RunImageRefreshTask(tc tasks.TaskContext) error {
 	if serverID == "" {
 		return panelerr.Validation("server_required", "Server is required")
 	}
-	if !s.markRefreshing(serverID) {
+	if !s.isRefreshing(serverID) && !s.markRefreshing(serverID) {
 		return nil
 	}
-	if err := s.tasks.Start(ctx, task.ID); err != nil {
-		s.clearRefreshing(serverID)
-		return err
-	}
-	s.runImageRefresh(s.tasks.ExecutionContext(task.ID), task, serverID)
+	s.runImageRefresh(ctx, task, serverID)
 	return nil
 }
 
@@ -1242,17 +1244,16 @@ func (s *Service) UpgradeApplications(ctx context.Context, applicationIDs []stri
 	if len(applicationIDs) == 0 {
 		return tasks.Task{}, panelerr.Validation("applications_required", "At least one application is required")
 	}
-	task, _, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
+	task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
 		Type: taskType, ResourceType: "applications", ResourceID: strings.Join(applicationIDs, ","),
 		TriggerType: "user", Summary: "Updating application images",
 	}, tasks.Trigger{Type: "user", Manual: true})
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	if err := s.tasks.Start(ctx, task.ID); err != nil {
-		return tasks.Task{}, err
+	if created {
+		s.dispatchRegisteredTask(task)
 	}
-	go s.runApplicationUpdates(task, applicationIDs)
 	return task, nil
 }
 
