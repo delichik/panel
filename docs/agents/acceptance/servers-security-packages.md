@@ -118,8 +118,8 @@
 - `F2B-API-003`：`PUT /fail2ban` 只解析、规范化并保存 Panel YAML草稿，不写目标机、不自动启用；保存成功后返回状态。
 - `F2B-VAL-001`：YAML必须拒绝未知字段、空 jail集合、非法/重复 jail名、负 maxretry、含换行的标量与非法 option key/value；失败不得覆盖旧草稿。
 - `F2B-API-004`：启用时可使用请求 YAML或已存草稿；远端已安装但尚未接管时必须要求 `confirmTakeover=true`，否则返回 `fail2ban_takeover_confirmation_required`。
-- `F2B-API-005`：apply必须由 `server_fail2ban_apply` 任务经 Agent写 `/etc/fail2ban/jail.d/panel.local`，远端配置测试通过并reload/restart成功后才把 managed置true；失败保留原 managed状态。
-- `F2B-API-006`：release必须使用独立 `server_fail2ban_release` 任务，仅删除 Panel生成配置并在成功后置 managed=false；不得删除、导入或恢复用户自建配置。
+- `F2B-API-005`：apply必须由 `server_fail2ban_apply` 任务经 Agent写 `/etc/fail2ban/jail.d/panel.local`，远端配置测试通过并reload/restart成功后才把 managed置true；失败保留原 managed状态；任务必须注册 Execute，并把规范化 YAML 持久化到 ParamsJSON，以便进程重启后可从 queued/running 恢复。
+- `F2B-API-006`：release必须使用独立 `server_fail2ban_release` 任务（注册 Execute），仅删除 Panel生成配置并在成功后置 managed=false；不得删除、导入或恢复用户自建配置。
 - `F2B-API-007`：install等价于经确认的 apply并可安装缺失软件；apply与release的任务去重域必须分离，重复同操作可复用但相反操作不得误复用。
 
 ## 7. APT 软件包

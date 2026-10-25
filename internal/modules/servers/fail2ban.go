@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -87,7 +88,8 @@ func (s *Service) EnableFail2Ban(ctx context.Context, serverID string, req Fail2
 	if state.Installed && !state.Managed && !req.ConfirmTakeover {
 		return tasks.Task{}, panelerr.Validation("fail2ban_takeover_confirmation_required", "Taking over an installed fail2ban service requires confirmation")
 	}
-	return s.createFail2BanApplyTask(ctx, serverID, config, normalizedYAML, "Applying fail2ban protection rules")
+	_ = config
+	return s.createFail2BanApplyTask(ctx, serverID, normalizedYAML, "Applying fail2ban protection rules")
 }
 
 func (s *Service) InstallFail2Ban(ctx context.Context, serverID string) (tasks.Task, error) {
@@ -98,43 +100,32 @@ func (s *Service) ReleaseFail2Ban(ctx context.Context, serverID string) (tasks.T
 	return s.createFail2BanReleaseTask(ctx, serverID, "Releasing fail2ban management")
 }
 
-func (s *Service) createFail2BanApplyTask(ctx context.Context, serverID string, config Fail2BanConfig, configYAML, summary string) (tasks.Task, error) {
-	srv, err := s.ensureFail2BanManageable(ctx, serverID)
+func (s *Service) createFail2BanApplyTask(ctx context.Context, serverID, configYAML, summary string) (tasks.Task, error) {
+	if _, err := s.ensureFail2BanManageable(ctx, serverID); err != nil {
+		return tasks.Task{}, err
+	}
+	params, err := json.Marshal(map[string]string{"configYAML": configYAML})
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
+	task, _, err := tasks.NewManager(s.tasks).CreateAndRun(ctx, tasks.CreateInput{
 		Type:         fail2banApplyTaskType,
 		ServerID:     serverID,
 		ResourceType: connectivityResourceType,
 		ResourceID:   serverID,
 		TriggerType:  "user",
 		Summary:      summary,
+		ParamsJSON:   string(params),
 		MaxRetries:   0,
 	}, tasks.Trigger{Type: "user", Manual: true})
-	if err != nil {
-		return tasks.Task{}, err
-	}
-	if !created {
-		return task, nil
-	}
-	if err := s.tasks.Start(ctx, task.ID); err != nil {
-		return tasks.Task{}, err
-	}
-	task, err = s.tasks.Get(ctx, task.ID)
-	if err != nil {
-		return tasks.Task{}, err
-	}
-	go s.runApplyFail2Ban(s.tasks.ExecutionContext(task.ID), task.ID, srv, config, configYAML)
-	return task, nil
+	return task, err
 }
 
 func (s *Service) createFail2BanReleaseTask(ctx context.Context, serverID string, summary string) (tasks.Task, error) {
-	srv, err := s.ensureFail2BanManageable(ctx, serverID)
-	if err != nil {
+	if _, err := s.ensureFail2BanManageable(ctx, serverID); err != nil {
 		return tasks.Task{}, err
 	}
-	task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
+	task, _, err := tasks.NewManager(s.tasks).CreateAndRun(ctx, tasks.CreateInput{
 		Type:         fail2banReleaseTaskType,
 		ServerID:     serverID,
 		ResourceType: connectivityResourceType,
@@ -143,21 +134,69 @@ func (s *Service) createFail2BanReleaseTask(ctx context.Context, serverID string
 		Summary:      summary,
 		MaxRetries:   0,
 	}, tasks.Trigger{Type: "user", Manual: true})
+	return task, err
+}
+
+// RunFail2BanApplyTask recovers server_fail2ban_apply after restart via registered Execute.
+func (s *Service) RunFail2BanApplyTask(tc tasks.TaskContext) error {
+	ctx, task := tc.Context, tc.Task
+	serverID := firstNonEmpty(task.ServerID, task.ResourceID)
+	srv, err := s.ensureFail2BanManageable(ctx, serverID)
 	if err != nil {
-		return tasks.Task{}, err
+		if isNotFoundError(err) && s.tasks != nil {
+			_ = s.tasks.Cancel(ctx, task.ID, "Task cancelled because the server was removed")
+		}
+		return err
 	}
-	if !created {
-		return task, nil
-	}
-	if err := s.tasks.Start(ctx, task.ID); err != nil {
-		return tasks.Task{}, err
-	}
-	task, err = s.tasks.Get(ctx, task.ID)
+	configYAML, config, err := fail2BanApplyParams(task)
 	if err != nil {
-		return tasks.Task{}, err
+		return err
 	}
-	go s.runReleaseFail2Ban(s.tasks.ExecutionContext(task.ID), task.ID, srv)
-	return task, nil
+	if task.Status != tasks.StatusRunning {
+		if err := s.tasks.Start(ctx, task.ID); err != nil {
+			return err
+		}
+	}
+	s.runApplyFail2Ban(ctx, task.ID, srv, config, configYAML)
+	return nil
+}
+
+// RunFail2BanReleaseTask recovers server_fail2ban_release after restart via registered Execute.
+func (s *Service) RunFail2BanReleaseTask(tc tasks.TaskContext) error {
+	ctx, task := tc.Context, tc.Task
+	serverID := firstNonEmpty(task.ServerID, task.ResourceID)
+	srv, err := s.ensureFail2BanManageable(ctx, serverID)
+	if err != nil {
+		if isNotFoundError(err) && s.tasks != nil {
+			_ = s.tasks.Cancel(ctx, task.ID, "Task cancelled because the server was removed")
+		}
+		return err
+	}
+	if task.Status != tasks.StatusRunning {
+		if err := s.tasks.Start(ctx, task.ID); err != nil {
+			return err
+		}
+	}
+	s.runReleaseFail2Ban(ctx, task.ID, srv)
+	return nil
+}
+
+func fail2BanApplyParams(task tasks.Task) (string, Fail2BanConfig, error) {
+	raw := strings.TrimSpace(task.ParamsJSON)
+	if raw == "" || raw == "{}" {
+		return "", Fail2BanConfig{}, panelerr.Validation("fail2ban_config_required", "fail2ban configuration is required")
+	}
+	var payload struct {
+		ConfigYAML string `json:"configYAML"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return "", Fail2BanConfig{}, err
+	}
+	config, normalized, err := parseFail2BanYAML(payload.ConfigYAML)
+	if err != nil {
+		return "", Fail2BanConfig{}, err
+	}
+	return normalized, config, nil
 }
 
 func (s *Service) runApplyFail2Ban(ctx context.Context, taskID string, srv Server, config Fail2BanConfig, configYAML string) {

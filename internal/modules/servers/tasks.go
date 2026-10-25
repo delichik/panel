@@ -47,8 +47,14 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 				},
 			},
 		},
-		{Type: fail2banApplyTaskType},
-		{Type: fail2banReleaseTaskType},
+		{
+			Type:    fail2banApplyTaskType,
+			Execute: s.RunFail2BanApplyTask,
+		},
+		{
+			Type:    fail2banReleaseTaskType,
+			Execute: s.RunFail2BanReleaseTask,
+		},
 		{Type: restartTaskType},
 		{
 			Type:        agentDeployTaskType,
