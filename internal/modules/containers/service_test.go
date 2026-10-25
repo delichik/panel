@@ -248,7 +248,9 @@ func TestContainerActionRunsSynchronouslyWithoutRefreshTask(t *testing.T) {
 	}
 }
 
-func TestContainerActionRejectsManagedApplicationContainer(t *testing.T) {
+// TestContainerActionAllowsManagedApplicationContainer documents CTR-ACT-001 /
+// CROSS-APP-001: managed containers may be mutated directly; reconcile repairs drift.
+func TestContainerActionAllowsManagedApplicationContainer(t *testing.T) {
 	svc, _, fakeAgent, store := newContainerizationTestService(t)
 	if _, err := store.AppDB().Exec(`
 		INSERT INTO credentials(id,name,type,username,created_at,updated_at)
