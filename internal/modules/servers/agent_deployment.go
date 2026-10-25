@@ -320,6 +320,9 @@ func (s *Service) runDeployAgent(ctx context.Context, taskID string, srv Server)
 		}
 		if err := s.prepareAgentRestartWithProgress(ctx, srv, onState); err != nil {
 			if ctx.Err() != nil {
+				// AGT-DEP-001/006: cancel during readiness must leave a terminal
+				// task state; a stuck running deploy blocks every manual redeploy.
+				s.failAgentDeployTask(context.WithoutCancel(ctx), taskID, srv, ctx.Err())
 				return
 			}
 			if errors.Is(err, context.DeadlineExceeded) {
