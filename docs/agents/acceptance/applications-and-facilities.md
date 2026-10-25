@@ -551,9 +551,9 @@
 - **前置**：配置移除节点或 DELETE facility。
 - **动作**：保存移除/卸载。
 - **结果**：保存移除前先关闭该节点 export，失败则阻止保存；整体卸载先做引用和挂载门禁，再尽力清理 exports/UFW。
-- **失败**：AppSpec 仍引用或运行容器仍挂载 NFS 卷时拒绝；挂载状态查询失败（Agent 不可达等）必须 fail-closed 拒绝卸载（`storage_share_mount_status_unavailable`），不得当作未挂载继续；整体卸载远端清理失败时配置仍删除、partition history/data 保留并在返回 lastError 呈现。
-- **不变量**：单节点“保存移除失败阻断”与整体“卸载清理失败不阻断”的语义不得混用；挂载门禁失败与清理失败不得混用。
-- **验证**：removed-server cleanup、usage gate、mount-status-unavailable fail-closed、cleanup-failure uninstall tests。
+- **失败**：AppSpec 仍引用或运行容器仍挂载 NFS 卷时拒绝；挂载状态查询失败（Agent 不可达、未注入 storage agent、无 endpoint 等）必须 fail-closed 拒绝卸载（`storage_share_mount_status_unavailable`），不得当作未挂载继续；整体卸载远端清理失败时**配置仍保留且 Enabled**，把错误写入 lastError 供重试，partition history/data 保留。
+- **不变量**：单节点“保存移除失败阻断”与整体“卸载清理失败保留配置可重试”的语义不得混用；挂载门禁失败与清理失败不得混用。
+- **验证**：removed-server cleanup、usage gate、mount-status-unavailable fail-closed、missing-agent fail-closed、cleanup-failure retains config tests。
 
 ### FAC-STO-005 storage_share 解析与分区身份
 
