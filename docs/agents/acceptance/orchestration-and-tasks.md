@@ -200,8 +200,8 @@
 - **动作**：Agent 进入既有 `verify_running` 步骤，每 500ms 采样，观察同一容器进程连续运行至少 10 秒；最后一次成功观测必须发生在窗口结束后。
 - **结果**：观察期内 Job 保持运行中，只有验证通过才返回无错误结果；不因单次 running 提前成功。已有相同容器的有效 StartedAt 证明已运行至少 10 秒时可直接通过；缺失、无效或未来时间戳不能免除观察。
 - **失败**：窗口内退出（含 exitCode=0）、消失、容器 ID 改变、StartedAt 改变、查询失败或取消/超时均不得成功；保留 `container_not_running/container_start_failed`、失败步骤及可用的退出码、起止时间和脱敏 Docker 错误，进入既有有界重试。取消必须及时结束等待，不运行成功后的清理步骤。
-- **不变量**：仅成功观测的时点可写入 observed；观察过程不逐次追加活动事件，仍只有一组 verify_running 步骤开始/结束。单次失败不得被拆成成功 Job 再由漂移生成无限新 Job。10 秒窗口只验证启动存活，不等价于业务健康检查或永久可用保证。
-- **验证**：`TestReconcileRequiresStableStartup` 覆盖新建/重启/近期运行容器、短时退出、正常退出、窗口末端退出、进程重启/替换、查询失败、消失、取消与稳定运行；`TestAutomaticScanPreservesForcedJob` 验证失败后的退避不被自动巡检清除。
+- **不变量**：仅成功观测的时点可写入 observed；观察过程不逐次追加活动事件，仍只有一组 verify_running 步骤开始/结束。单次失败不得被拆成成功 Job 再由漂移生成无限新 Job。10 秒窗口只验证启动存活，不等价于业务健康检查或永久可用保证。Panel 侧无 `AgentRuntimeReconcileClient` 时不得走 primitive apply（单次 `RuntimeStatus`）宣称成功，必须返回 `agent_capability_missing` 可重试失败。
+- **验证**：`TestReconcileRequiresStableStartup` 覆盖新建/重启/近期运行容器、短时退出、正常退出、窗口末端退出、进程重启/替换、查询失败、消失、取消与稳定运行；`TestAutomaticScanPreservesForcedJob` 验证失败后的退避不被自动巡检清除；`TestRuntimeReconcileRejectsPrimitiveApplyWithoutReconcileClient` 覆盖降级拒绝。
 
 ### ORCH-CTRL-008 失败运行日志快照与降级
 

@@ -145,6 +145,25 @@ func TestRuntimeReconcilePropagatesNormalizedSSHPort(t *testing.T) {
 	}
 }
 
+func TestRuntimeReconcileRejectsPrimitiveApplyWithoutReconcileClient(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	r := &serviceRuntimeReconciler{service: svc}
+	req := control.ReconcileRequestRPC{
+		OperationID: "op", RunID: "run", JobID: "job", ExecutionID: "exec",
+		ApplicationID: "app", InstanceID: "instance", ServerID: "srv-a",
+		Action: control.ActionApply, DesiredGeneration: 1, DesiredSpecHash: "hash",
+		RenderedRuntimeSpec: []byte(`{"applicationId":"app","instanceId":"instance","containerName":"panel-app","image":"nginx"}`),
+	}
+	result, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ErrorCode != "agent_capability_missing" || !result.Retryable {
+		t.Fatalf("primitive apply must be refused for ORCH-CTRL-007, got %#v", result)
+	}
+}
+
 func TestRuntimeReconcileRejectsReservedSSHHostPortBeforeAgentCall(t *testing.T) {
 	r, client, req, _ := trackedTransport(t)
 	r.service.servers.(*fakeServerProvider).items[req.ServerID] = func() server.Server {

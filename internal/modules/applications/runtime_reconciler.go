@@ -115,9 +115,13 @@ func (r *serviceRuntimeReconciler) Reconcile(ctx context.Context, req controlpla
 
 	switch req.Action {
 	case controlplane.ActionApply:
-		return r.withServerQueue(runCtx, req.ServerID, func(queuedCtx context.Context) (controlplane.ReconcileResponse, error) {
-			return r.apply(queuedCtx, endpoint, req)
-		})
+		// ORCH-CTRL-007: the primitive apply path only sampled RuntimeStatus once
+		// and could mark crash-loop starts succeeded. Production apply must go
+		// through Agent RuntimeReconcile (10s stable verify). Refuse degrade apply.
+		return controlplane.ReconcileResponse{
+			ErrorCode: "agent_capability_missing", ErrorClass: "agent_unavailable",
+			ErrorMessage: "runtime reconcile client is required for apply startup verification", Retryable: true,
+		}, nil
 	case controlplane.ActionStop, controlplane.ActionPurge:
 		return r.withServerQueue(runCtx, req.ServerID, func(queuedCtx context.Context) (controlplane.ReconcileResponse, error) {
 			return r.stop(queuedCtx, endpoint, req)
