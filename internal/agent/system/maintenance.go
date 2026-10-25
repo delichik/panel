@@ -14,6 +14,7 @@ import (
 
 	agentcontract "panel/internal/agent/contract"
 	agentfirewall "panel/internal/agent/firewall"
+	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/linux"
 	"panel/internal/platform/linux/remoteops"
 )
@@ -40,12 +41,12 @@ func (LocalCollector) UpgradePackages(ctx context.Context, req agentcontract.Pac
 		args = append(args, "dist-upgrade", "-y")
 	} else {
 		if len(req.Names) == 0 {
-			return "", errors.New("at least one package is required")
+			return "", panelerr.Validation("packages_required", "At least one package is required")
 		}
 		args = append(args, "install", "-y", "--only-upgrade")
 		for _, name := range req.Names {
 			if !packageNamePattern.MatchString(name) {
-				return "", errors.New("package name contains invalid characters")
+				return "", panelerr.Validation("package_name_invalid", "Package name contains invalid characters")
 			}
 			args = append(args, name)
 		}

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,9 @@ import (
 	"panel/internal/platform/linux"
 	"panel/internal/platform/ssh"
 )
+
+// Matches apt/remoteops package name whitelist (PKG-API-005).
+var packageNamePattern = regexp.MustCompile(`^[A-Za-z0-9+_.:-]+$`)
 
 type Service struct {
 	db         *sql.DB
@@ -206,8 +210,9 @@ func (s *Service) UpgradeSelected(ctx context.Context, serverID string, names []
 	if _, err := s.adapterFor(srv); err != nil {
 		return tasks.Task{}, err
 	}
-	if len(names) == 0 {
-		return tasks.Task{}, panelerr.Validation("packages_required", "At least one package is required")
+	names, err = normalizeUpgradeNames(names)
+	if err != nil {
+		return tasks.Task{}, err
 	}
 	params, err := json.Marshal(map[string]any{"names": names})
 	if err != nil {
@@ -405,16 +410,25 @@ func upgradeNames(task tasks.Task) ([]string, error) {
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
 		return nil, err
 	}
-	names := []string{}
-	for _, name := range payload.Names {
-		if strings.TrimSpace(name) != "" {
-			names = append(names, name)
+	return normalizeUpgradeNames(payload.Names)
+}
+
+func normalizeUpgradeNames(names []string) ([]string, error) {
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
 		}
+		if !packageNamePattern.MatchString(name) {
+			return nil, panelerr.Validation("package_name_invalid", "Package name contains invalid characters")
+		}
+		out = append(out, name)
 	}
-	if len(names) == 0 {
+	if len(out) == 0 {
 		return nil, panelerr.Validation("packages_required", "At least one package is required")
 	}
-	return names, nil
+	return out, nil
 }
 
 func (s *Service) listUpgradeable(ctx context.Context, srv server.Server, adapter packageAdapter) ([]linux.PackageUpdate, error) {

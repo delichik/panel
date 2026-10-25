@@ -489,3 +489,46 @@ func TestUpgradeQueuedTaskRecoversAfterRestart(t *testing.T) {
 		t.Fatalf("expected queued upgrade task to recover and complete, got %#v", got)
 	}
 }
+
+func TestUpgradeSelectedRejectsInvalidPackageNamesBeforeCreatingTask(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','du','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv','s','h',22,'du','cred','debian','12',1,1,'passwordless_sudo','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	taskSvc := tasks.NewService(store.AppDB())
+	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
+	svc := NewService(store.AppDB(), serverSvc, nil, taskSvc)
+	registerPackageTestTasks(taskSvc, svc)
+	svc.adapter = fakePackageAdapter{}
+
+	_, err = svc.UpgradeSelected(ctx, "srv", []string{"openssl; rm -rf /"})
+	if err == nil {
+		t.Fatal("expected invalid package name to be rejected")
+	}
+	var count int
+	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM tasks WHERE type='package_upgrade_selected'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("invalid names must not create a task, got %d", count)
+	}
+	_, err = svc.UpgradeSelected(ctx, "srv", []string{"  ", ""})
+	if err == nil {
+		t.Fatal("expected empty names to be rejected")
+	}
+}
