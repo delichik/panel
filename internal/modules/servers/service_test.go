@@ -799,11 +799,12 @@ func TestUFWStateAllowAndDeleteRule(t *testing.T) {
 	exec := &ufwManageFakeExec{}
 	svc := newServerServiceForTest(store, exec, taskSvc)
 
-	if _, err := svc.UFWState(context.Background(), "srv_1"); err == nil {
-		t.Fatal("expected agent-required UFW status failure")
+	state, err := svc.UFWState(context.Background(), "srv_1")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(exec.commands) != 0 {
-		t.Fatalf("expected no SSH UFW status fallback, got %#v", exec.commands)
+	if !state.Installed || !state.Active || len(exec.commands) == 0 {
+		t.Fatalf("without Agent, UFW status must use privileged SSH: state=%#v commands=%#v", state, exec.commands)
 	}
 	before := len(exec.commands)
 	if _, err := svc.AllowUFW(context.Background(), "srv_1", UFWAllowRequest{Port: 22, Protocol: "tcp"}); err == nil {

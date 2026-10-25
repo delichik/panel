@@ -539,21 +539,22 @@ func (s *Service) ensureUFWManageable(ctx context.Context, serverID string) (Ser
 }
 
 func (s *Service) fetchUFWStatus(ctx context.Context, srv Server) (remoteops.UFWStatus, error) {
-	baseURL, ok := agentURL(srv)
-	if !ok {
-		return remoteops.UFWStatus{}, panelerr.Validation("agent_required", "Agent is required for UFW status")
+	if hasCompatibleAgent(srv) {
+		baseURL, ok := agentURL(srv)
+		if !ok {
+			return remoteops.UFWStatus{}, panelerr.Validation("agent_required", "Agent is required for UFW status")
+		}
+		if s.agent == nil {
+			return remoteops.UFWStatus{}, panelerr.Validation("agent_runtime_unavailable", "Agent runtime client is unavailable")
+		}
+		status, err := s.agent.UFWStatus(ctx, baseURL)
+		if err != nil {
+			_ = s.handleAgentCertificateTimeError(ctx, srv, err)
+		}
+		return status, err
 	}
-	if srv.Traits[agentcontract.TraitStatus] != agentcontract.StatusCompatible {
-		return remoteops.UFWStatus{}, panelerr.Validation("agent_incompatible", "Agent is not compatible with UFW status")
-	}
-	if s.agent == nil {
-		return remoteops.UFWStatus{}, panelerr.Validation("agent_runtime_unavailable", "Agent runtime client is unavailable")
-	}
-	status, err := s.agent.UFWStatus(ctx, baseURL)
-	if err != nil {
-		_ = s.handleAgentCertificateTimeError(ctx, srv, err)
-	}
-	return status, err
+	// UFW-API-001: without a compatible Agent, privileged SSH is the status path.
+	return s.fetchUFWStatusSSH(ctx, srv)
 }
 
 func (s *Service) fetchUFWStatusSSH(ctx context.Context, srv Server) (remoteops.UFWStatus, error) {
@@ -856,10 +857,13 @@ func (s *Service) agentMaintenance(srv Server) (agentcontract.MaintenanceClient,
 		if configured {
 			return nil, "", true, panelerr.Validation("agent_runtime_unavailable", "Agent runtime client is unavailable")
 		}
+		// No Agent URL: callers with privilege may fall back to SSH (UFW-API-001).
 		return nil, "", false, nil
 	}
 	if !configured {
-		return nil, "", true, panelerr.Validation("agent_required", "Agent is required for server maintenance")
+		// Compatible Agent is not configured; do not invent agent_required so
+		// privileged SSH paths (AllowUFW / DeleteUFWRule) remain reachable.
+		return nil, "", false, nil
 	}
 	if srv.Traits[agentcontract.TraitStatus] != agentcontract.StatusCompatible {
 		return nil, "", true, panelerr.Validation("agent_incompatible", "Agent is not compatible with server maintenance")
