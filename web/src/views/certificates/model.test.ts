@@ -18,8 +18,6 @@ const baseCert: DomainCertificateDto = {
   prefix: '',
   scope: 'single',
   domains: ['example.com'],
-  certificatePath: '',
-  privateKeyPath: '',
   issuer: 'letsencrypt',
   status: 'issued',
   autoRenew: true,

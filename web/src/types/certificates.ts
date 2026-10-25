@@ -10,8 +10,6 @@ export interface DomainCertificateDto {
   prefix: string;
   scope: CertificateScope | string;
   domains: string[];
-  certificatePath: string;
-  privateKeyPath: string;
   issuer: string;
   status: CertificateStatus | string;
   lastError?: string;
