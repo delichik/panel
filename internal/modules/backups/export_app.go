@@ -6,9 +6,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -200,14 +202,30 @@ func (a *ExportApp) downloadAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := filepath.Join(a.cfg.DataRoot, "tmp", "backups", status.ExportID+".panel-backup")
-	if _, err := os.Stat(path); err != nil {
+	info, err := os.Stat(path)
+	if err != nil {
 		httpx.Error(w, panelerr.NotFound("backup export"))
 		return
 	}
-	a.markDownloaded(status.ExportID)
 	w.Header().Set("Content-Disposition", `attachment; filename="panel-`+filepath.Base(path)+`"`)
 	w.Header().Set("Content-Type", "application/octet-stream")
-	http.ServeFile(w, r, path)
+	// HEAD/Range can be issued by browsers or proxies before a full fetch.
+	// Only a complete non-Range GET body may unlock exit/cleanup (BKP-MNT-008/009).
+	if r.Method == http.MethodHead || strings.TrimSpace(r.Header.Get("Range")) != "" {
+		http.ServeFile(w, r, path)
+		return
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		httpx.Error(w, panelerr.NotFound("backup export"))
+		return
+	}
+	defer f.Close()
+	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+	n, copyErr := io.Copy(w, f)
+	if copyErr == nil && n == info.Size() {
+		a.markDownloaded(status.ExportID)
+	}
 }
 
 // markDownloaded 记录归档已下载：内存标记之外再写一个持久化 marker 文件，

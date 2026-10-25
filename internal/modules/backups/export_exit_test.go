@@ -46,13 +46,33 @@ func TestExportExitRefusesUntilArchiveDownloaded(t *testing.T) {
 		t.Fatalf("refused exit must not restart, calls=%d", restarter.calls)
 	}
 
-	// Download marks the archive as fetched.
+	// Range/HEAD must not unlock exit.
+	rangeRec := httptest.NewRecorder()
+	rangeReq := httptest.NewRequest(http.MethodGet, "/api/v1/backups/export/"+exportID+"/download", nil)
+	rangeReq.SetPathValue("id", exportID)
+	rangeReq.Header.Set("Range", "bytes=0-3")
+	app.downloadAPI(rangeRec, rangeReq)
+	if app.downloadConfirmed() {
+		t.Fatal("Range download must not mark archive as downloaded")
+	}
+	headRec := httptest.NewRecorder()
+	headReq := httptest.NewRequest(http.MethodHead, "/api/v1/backups/export/"+exportID+"/download", nil)
+	headReq.SetPathValue("id", exportID)
+	app.downloadAPI(headRec, headReq)
+	if app.downloadConfirmed() {
+		t.Fatal("HEAD download must not mark archive as downloaded")
+	}
+
+	// Full GET marks the archive as fetched.
 	dlRec := httptest.NewRecorder()
 	dlReq := httptest.NewRequest(http.MethodGet, "/api/v1/backups/export/"+exportID+"/download", nil)
 	dlReq.SetPathValue("id", exportID)
 	app.downloadAPI(dlRec, dlReq)
 	if dlRec.Code != http.StatusOK {
 		t.Fatalf("download status = %d, want 200", dlRec.Code)
+	}
+	if !app.downloadConfirmed() {
+		t.Fatal("full GET must mark archive as downloaded")
 	}
 
 	// Exit now succeeds and removes the archive.

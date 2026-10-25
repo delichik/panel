@@ -20,8 +20,8 @@
 - `BKP-MNT-005`：正式导出开始后必须依次对app/log/metrics执行WAL checkpoint并关闭连接，再归档稳定文件；任何阶段失败进入failed并返回安全摘要。
 - `BKP-MNT-006`：状态必须包含schemaVersion=1、严格递增revision、mode/typed phase、0..100 progress、时间、manifest、download/restart字段、capabilities、retryable、pollAfterMs及结构化errorDetail；不得包含路径、秘密或业务内容。
 - `BKP-MNT-007`：执行中phase为checkpointing/archiving/encrypting时pollAfterMs为750且不可重复start；终态按精确phase开放download/exit能力，UI不得从旧字符串猜测能力。
-- `BKP-MNT-008`：下载只允许completed、downloadAvailable且URL中的exportId精确匹配；成功响应即在服务端记录已下载，不把downloadedAt暴露到状态。
-- `BKP-MNT-009`：completed但从未记录下载时exit必须返回409并保留归档和pending；已下载后exit清理临时文件并请求normal重启，清理失败不得发送重启信号。
+- `BKP-MNT-008`：下载只允许completed、downloadAvailable且URL中的exportId精确匹配；仅在完整非 Range GET 响应体成功发送完毕后记录已下载；HEAD 与 Range 可返回内容但不得确认下载；不把downloadedAt暴露到状态。
+- `BKP-MNT-009`：completed但从未记录下载时exit必须返回409并保留归档和pending；已完整下载后exit清理临时文件并请求normal重启，清理失败不得发送重启信号。
 - `BKP-MNT-010`：failed状态允许exit清理但不得把失败归档展示为可下载成功；restart不支持时必须明确要求外部重启而非退出当前进程。
 
 ## 3. 归档格式与加密安全
