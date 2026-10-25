@@ -108,8 +108,7 @@ func (s *Service) refresh(ctx context.Context, serverID string, triggerType stri
 	if err != nil {
 		return RefreshResult{}, err
 	}
-	adapter, err := s.adapterFor(srv)
-	if err != nil {
+	if _, err := s.adapterFor(srv); err != nil {
 		return RefreshResult{}, err
 	}
 	if s.tasks == nil {
@@ -137,17 +136,31 @@ func (s *Service) refresh(ctx context.Context, serverID string, triggerType stri
 	}
 	if !created {
 		s.clearRefreshing(serverID)
-		if task.Status != tasks.StatusRunning && s.markRefreshing(serverID) {
-			if err := s.startRefreshTask(ctx, task, srv, adapter); err != nil {
+		if task.Status != tasks.StatusRunning {
+			if !s.markRefreshing(serverID) {
+				return RefreshResult{ServerID: serverID, Refreshing: true, TaskID: task.ID}, nil
+			}
+			task, err = s.tasks.RunNow(ctx, task.ID)
+			if err != nil {
+				s.clearRefreshing(serverID)
 				return RefreshResult{}, err
 			}
+			s.dispatchRegisteredTask(task)
 		}
 		return RefreshResult{ServerID: serverID, Refreshing: true, TaskID: task.ID}, nil
 	}
-	if err := s.startRefreshTask(ctx, task, srv, adapter); err != nil {
-		return RefreshResult{}, err
-	}
+	s.dispatchRegisteredTask(task)
 	return RefreshResult{ServerID: serverID, Refreshing: true, TaskID: task.ID}, nil
+}
+
+func (s *Service) dispatchRegisteredTask(task tasks.Task) {
+	if s == nil || s.tasks == nil || strings.TrimSpace(task.ID) == "" {
+		return
+	}
+	go func() {
+		defer s.tasks.FinishExecution(task.ID)
+		_ = tasks.NewManager(s.tasks).Run(context.Background(), task)
+	}()
 }
 
 func (s *Service) RunRefreshTask(tc tasks.TaskContext) error {
@@ -167,38 +180,14 @@ func (s *Service) RunRefreshTask(tc tasks.TaskContext) error {
 	if err != nil {
 		return err
 	}
-	if task.Status == tasks.StatusRunning && s.tasks.HasRunningExecution(task.ID) {
-		return nil
-	}
-	if !s.markRefreshing(serverID) {
+	// refresh() may already hold the in-process lock; claim it when recovering via Execute alone.
+	if !s.isRefreshing(serverID) && !s.markRefreshing(serverID) {
+		if s.tasks.HasRunningExecution(task.ID) {
+			return nil
+		}
 		return panelerr.Conflict("package_maintenance_in_progress", "Package refresh is already running for this server")
 	}
-	if task.Status != tasks.StatusRunning {
-		if err := s.tasks.Start(ctx, task.ID); err != nil {
-			s.clearRefreshing(srv.ID)
-			return err
-		}
-	}
-	if !s.tasks.HasRunningExecution(task.ID) {
-		if err := s.tasks.Start(ctx, task.ID); err != nil {
-			s.clearRefreshing(srv.ID)
-			return err
-		}
-	}
-	if !s.tasks.HasRunningExecution(task.ID) {
-		s.clearRefreshing(srv.ID)
-		return panelerr.Conflict("task_not_running", "Task is not running")
-	}
-	s.runRefreshTask(s.tasks.ExecutionContext(task.ID), task, srv, adapter)
-	return nil
-}
-
-func (s *Service) startRefreshTask(ctx context.Context, task tasks.Task, srv server.Server, adapter packageAdapter) error {
-	if err := s.tasks.Start(ctx, task.ID); err != nil {
-		s.clearRefreshing(srv.ID)
-		return err
-	}
-	go s.runRefreshTask(s.tasks.ExecutionContext(task.ID), task, srv, adapter)
+	s.runRefreshTask(ctx, task, srv, adapter)
 	return nil
 }
 
