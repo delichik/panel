@@ -241,9 +241,10 @@
 
 应用服务停止时，StopOrchestrator 同时停止并等待编辑会话清理 worker，避免数据库关闭后后台继续创建目录或清理文件。
 
-### 人工核对未知执行
+### 未知执行的自动核实与破局
 
-- 统一 `/api/v1/executions/{executionId}/resolve` 在查不到内部 task 时通过回调派发到应用模块，任务框架不依赖应用模块。
-- 当前认证用户必须提供 `outcome=succeeded|failed` 和核对理由。Panel 只接受仍属于该 execution ID / revision / lease 的 unknown Job，先向相同服务器 Agent 提交人工声明；Agent 持久释放对应 execution fence 后补传完整闭流，Panel 再以同事务追加人工核对事实并终结 Job。
+- 主路径由 orchestrator 轮询 Agent 执行结果（finished、只读 verify、认证 missing）。证据窗口耗尽后终态失败，不要求用户声明成败。
+- 统一 `/api/v1/executions/{executionId}/resolve` 仍作为破局 API：查不到内部 task 时通过回调派发到应用模块，任务框架不依赖应用模块。
+- 破局时当前认证用户必须提供 `outcome=succeeded|failed` 和核对理由。Panel 只接受仍属于该 execution ID / revision / lease 的 unknown Job，先向相同服务器 Agent 提交人工声明；Agent 持久释放对应 execution fence 后补传完整闭流，Panel 再以同事务追加人工核对事实并终结 Job。
 - 人工声明不更新 instance observed，不把声明时间或结果伪装为 Docker 实测状态。RPC 结果丢失后，后台通过持久 Agent Result 识别 `verificationSource=manual`，沿相同人工终结路径恢复。
 - 原不确定、失败与输出缺口事件全部保留；并发声明只有同一当前执行版本能提交，后续不同声明不能修改原结果。

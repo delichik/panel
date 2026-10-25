@@ -297,12 +297,21 @@ func (w *Worker) orphanLoop(ctx context.Context) {
 
 func (w *Worker) failOrphanedRunning(ctx context.Context) {
 	ctx = logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "tasks"})
-	failed, err := w.service.FailRunningWithoutExecution(ctx, time.Now().UTC())
+	now := time.Now().UTC()
+	failed, err := w.service.FailRunningWithoutExecution(ctx, now)
 	if err != nil {
 		logging.From(ctx).Warn("task running execution check failed", zap.Error(err))
 		return
 	}
 	if failed > 0 {
-		logging.From(ctx).Info("task running execution check marked orphaned tasks awaiting verification", zap.Int("failed", failed))
+		logging.From(ctx).Info("task running execution check marked orphaned tasks for automatic verification", zap.Int("failed", failed))
+	}
+	expired, err := w.service.FailUncertainPastEvidenceWindow(ctx, now)
+	if err != nil {
+		logging.From(ctx).Warn("task uncertain evidence window check failed", zap.Error(err))
+		return
+	}
+	if expired > 0 {
+		logging.From(ctx).Info("task uncertain evidence window marked orphaned tasks failed", zap.Int("failed", expired))
 	}
 }

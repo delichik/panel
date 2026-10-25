@@ -38,6 +38,7 @@ func newTestService(t *testing.T) *Service {
 	if err := logging.Configure(cfg.DataRoot); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(logging.CloseFileSinkForTest)
 	logging.SetContextStore(logcontexts.NewStore(store.AppDB()))
 	t.Cleanup(func() { logging.SetContextStore(nil) })
 	svc := NewService(store.AppDB())
@@ -468,8 +469,32 @@ func TestMissingExecutionPreservesUncertainResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotUntracked.Status != StatusRunning || gotUntracked.Stage != "uncertain" || gotUntracked.FinishedAt != nil || !strings.Contains(gotUntracked.Error, "requires verification") {
+	if gotUntracked.Status != StatusRunning || gotUntracked.Stage != "uncertain" || gotUntracked.FinishedAt != nil || !strings.Contains(gotUntracked.Error, "automatic execution evidence") {
 		t.Fatalf("expected untracked task to retain uncertainty, got %#v", gotUntracked)
+	}
+	if gotUntracked.NextRunAt == nil || gotUntracked.NextRunAt.Before(now.Add(29*time.Minute)) {
+		t.Fatalf("expected evidence deadline about 30m ahead, got %#v", gotUntracked.NextRunAt)
+	}
+	still, err := svc.FailUncertainPastEvidenceWindow(ctx, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if still != 0 {
+		t.Fatalf("evidence window must not expire immediately, got %d", still)
+	}
+	expired, err := svc.FailUncertainPastEvidenceWindow(ctx, now.Add(31*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired != 1 {
+		t.Fatalf("expected uncertain task to fail after evidence window, got %d", expired)
+	}
+	gotExpired, err := svc.Get(ctx, untracked.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotExpired.Status != StatusFailed || gotExpired.Stage != "orphan_execution_timeout" || !strings.Contains(gotExpired.Error, "verification window") {
+		t.Fatalf("expected orphan timeout failure, got %#v", gotExpired)
 	}
 }
 

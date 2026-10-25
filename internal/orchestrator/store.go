@@ -283,7 +283,7 @@ func (s *Store) RecoverExpiredLeases(ctx context.Context) error {
 	for _, job := range expired {
 		// Preserve the execution token and running conflict-domain lock. Expiry
 		// alone cannot establish whether the remote side effect has completed.
-		if err := s.MarkUncertain(ctx, job, "orchestrator lease expired; remote result requires verification"); err != nil {
+		if err := s.MarkUncertain(ctx, job, "orchestrator lease expired; awaiting automatic execution evidence"); err != nil {
 			return err
 		}
 	}
@@ -291,7 +291,7 @@ func (s *Store) RecoverExpiredLeases(ctx context.Context) error {
 }
 
 func (s *Store) MarkUncertain(ctx context.Context, job Job, reason string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE jobs SET error_code='execution_result_unknown',error_class='uncertainty',error_message=?,error_detail='Remote execution is awaiting verification',lease_expires_at=NULL,next_run_at=NULL,updated_at=? WHERE id=? AND state='running' AND lease_token=?`, activitylog.Redact(reason), s.now().UTC().Format(time.RFC3339Nano), job.ID, job.LeaseToken)
+	_, err := s.db.ExecContext(ctx, `UPDATE jobs SET error_code='execution_result_unknown',error_class='uncertainty',error_message=?,error_detail='Remote execution is awaiting automatic verification',lease_expires_at=NULL,next_run_at=NULL,updated_at=? WHERE id=? AND state='running' AND lease_token=?`, activitylog.Redact(reason), s.now().UTC().Format(time.RFC3339Nano), job.ID, job.LeaseToken)
 	return err
 }
 

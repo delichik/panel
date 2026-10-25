@@ -55,6 +55,10 @@ var terminalStatuses = []string{StatusCompleted, StatusFailed, StatusBlocked, St
 const (
 	baseTaskRetryDelay = 30 * time.Second
 	maxTaskRetryDelay  = 10 * time.Minute
+	// defaultUncertaintyEvidenceWindow matches orchestrator ORCH-LEASE-005:
+	// orphan running tasks stay uncertain only until evidence can reasonably
+	// arrive, then fail so the concurrency key is released.
+	defaultUncertaintyEvidenceWindow = 30 * time.Minute
 )
 
 type ListResult struct {
@@ -915,13 +919,14 @@ func (s *Service) FailRunningWithoutExecution(ctx context.Context, now time.Time
 	}
 
 	failed := 0
-	const message = "No active execution exists in this Panel process; the remote result requires verification"
+	const message = "No active execution exists in this Panel process; waiting for automatic execution evidence"
+	deadline := now.UTC().Add(defaultUncertaintyEvidenceWindow).Format(time.RFC3339Nano)
 	for _, taskID := range taskIDs {
 		if _, ok := s.runningExecutions[taskID]; ok {
 			continue
 		}
-		res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET stage='uncertain', error=?, next_run_at=NULL, finished_at=NULL WHERE id=? AND status=? AND stage<>'uncertain'`,
-			message, taskID, StatusRunning)
+		res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET stage='uncertain', error=?, next_run_at=?, finished_at=NULL WHERE id=? AND status=? AND stage<>'uncertain'`,
+			message, deadline, taskID, StatusRunning)
 		if err != nil {
 			return failed, err
 		}
@@ -932,6 +937,47 @@ func (s *Service) FailRunningWithoutExecution(ctx context.Context, now time.Time
 	}
 	if failed > 0 {
 		s.invalidateAllFirstActiveKeys()
+	}
+	return failed, nil
+}
+
+func (s *Service) FailUncertainPastEvidenceWindow(ctx context.Context, now time.Time) (int, error) {
+	now = now.UTC()
+	deadline := now.Format(time.RFC3339Nano)
+	startedBefore := now.Add(-defaultUncertaintyEvidenceWindow).Format(time.RFC3339Nano)
+	const message = "Execution evidence could not be obtained within the verification window"
+	taskIDs := []string{}
+	if err := orm.New(s.db).From("tasks").
+		Where("status = ?", StatusRunning).
+		And("stage = ?", "uncertain").
+		And("(next_run_at <> '' AND next_run_at <= ?) OR ((next_run_at IS NULL OR next_run_at = '') AND COALESCE(started_at, created_at) <= ?)", deadline, startedBefore).
+		Pluck(ctx, "id", &taskIDs); err != nil {
+		return 0, err
+	}
+	if len(taskIDs) == 0 {
+		return 0, nil
+	}
+	failed := 0
+	finishedAt := now.Format(time.RFC3339Nano)
+	for _, taskID := range taskIDs {
+		task, getErr := s.Get(ctx, taskID)
+		res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET status=?, stage=?, error=?, next_run_at=NULL, finished_at=? WHERE id=? AND status=? AND stage='uncertain'`,
+			StatusFailed, "orphan_execution_timeout", message, finishedAt, taskID, StatusRunning)
+		if err != nil {
+			return failed, err
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return failed, err
+		}
+		if affected == 1 {
+			failed++
+			if getErr == nil {
+				s.invalidateFirstActiveByKey(task.ConcurrencyKey)
+			} else {
+				s.invalidateAllFirstActiveKeys()
+			}
+		}
 	}
 	return failed, nil
 }
@@ -1146,7 +1192,7 @@ func (s *Service) Retry(ctx context.Context, taskID string) (Task, error) {
 		return Task{}, err
 	}
 	if old.Stage == "uncertain" {
-		return Task{}, panelerr.Conflict("execution_result_unverified", "Verify the execution result before retrying")
+		return Task{}, panelerr.Conflict("execution_result_unverified", "Automatic verification is still in progress; retry after it finishes or times out")
 	}
 	def, ok := s.Registry().Definition(old.Type)
 	if !ok || !def.AllowRetry || def.Execute == nil {

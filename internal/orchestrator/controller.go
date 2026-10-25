@@ -19,6 +19,12 @@ import (
 // cannot retry forever.
 const defaultMaxJobAttempts = 10
 
+// defaultUncertaintyEvidenceWindow is how long a Job may stay running+uncertainty
+// while the controller polls Agent evidence. After the window, the Job fails
+// terminal with execution_evidence_unreachable so the conflict domain is freed.
+// Never auto-succeed without Agent proof.
+const defaultUncertaintyEvidenceWindow = 30 * time.Minute
+
 // controllerDiagnosticInterval prevents a persistent database/runtime fault
 // from producing one identical process log on every 250 ms scan.
 const controllerDiagnosticInterval = 30 * time.Second
@@ -43,8 +49,12 @@ type ControllerConfig struct {
 	// Job transitions to terminal failed with error_code=max_attempts_exceeded.
 	// Zero uses defaultMaxJobAttempts.
 	MaxAttempts int
-	OnSucceeded func(context.Context, Job, ReconcileResponse)
-	OnFailed    func(context.Context, Job, ReconcileResponse)
+	// UncertaintyEvidenceWindow caps how long a Job may remain running with
+	// error_class=uncertainty while Agent evidence is unavailable or incomplete.
+	// Zero uses defaultUncertaintyEvidenceWindow. Tests may shorten it.
+	UncertaintyEvidenceWindow time.Duration
+	OnSucceeded               func(context.Context, Job, ReconcileResponse)
+	OnFailed                  func(context.Context, Job, ReconcileResponse)
 }
 
 type Controller struct {
@@ -82,6 +92,9 @@ func NewController(store *Store, runtime RuntimeReconciler, cfg ControllerConfig
 	}
 	if cfg.MaxAttempts <= 0 {
 		cfg.MaxAttempts = defaultMaxJobAttempts
+	}
+	if cfg.UncertaintyEvidenceWindow <= 0 {
+		cfg.UncertaintyEvidenceWindow = defaultUncertaintyEvidenceWindow
 	}
 	if strings.TrimSpace(cfg.Owner) == "" {
 		cfg.Owner = "orchestrator-worker"
@@ -387,15 +400,45 @@ func (c *Controller) acceptResponse(ctx context.Context, job Job, response Recon
 
 func (c *Controller) resolveUncertain(ctx context.Context, job Job) error {
 	resolver, ok := c.runtime.(ExecutionResultResolver)
-	if !ok {
+	if ok {
+		rpc := ReconcileRequestRPC{OperationID: job.IntentID, RunID: job.IntentID, JobID: job.ID, ExecutionID: job.ExecutionID, ApplicationID: job.ApplicationID, InstanceID: job.InstanceID, ServerID: job.ServerID, Action: job.Action, DesiredGeneration: job.DesiredGeneration, DesiredSpecHash: job.DesiredSpecHash, DesiredRevisionID: job.DesiredRevisionID}
+		response, finished, err := resolver.ResolveExecution(ctx, rpc)
+		if finished {
+			return c.acceptResponse(ctx, job, response)
+		}
+		if !c.uncertaintyEvidenceExpired(job) {
+			return err
+		}
+		// Evidence window elapsed with no trustworthy result: terminal fail, never succeed.
+		return c.fail(ctx, job, ReconcileResponse{
+			ErrorCode:    "execution_evidence_unreachable",
+			ErrorClass:   "evidence",
+			ErrorMessage: "execution evidence could not be obtained within the verification window",
+			ErrorDetail:  "agent result stayed unavailable or incomplete; remote side effects were not auto-confirmed",
+			Retryable:    false,
+		})
+	}
+	if !c.uncertaintyEvidenceExpired(job) {
 		return nil
 	}
-	rpc := ReconcileRequestRPC{OperationID: job.IntentID, RunID: job.IntentID, JobID: job.ID, ExecutionID: job.ExecutionID, ApplicationID: job.ApplicationID, InstanceID: job.InstanceID, ServerID: job.ServerID, Action: job.Action, DesiredGeneration: job.DesiredGeneration, DesiredSpecHash: job.DesiredSpecHash, DesiredRevisionID: job.DesiredRevisionID}
-	response, finished, err := resolver.ResolveExecution(ctx, rpc)
-	if err != nil || !finished {
-		return err
+	return c.fail(ctx, job, ReconcileResponse{
+		ErrorCode:    "execution_evidence_unreachable",
+		ErrorClass:   "evidence",
+		ErrorMessage: "execution evidence could not be obtained within the verification window",
+		ErrorDetail:  "no execution result resolver is available; remote side effects were not auto-confirmed",
+		Retryable:    false,
+	})
+}
+
+func (c *Controller) uncertaintyEvidenceExpired(job Job) bool {
+	if job.UpdatedAt.IsZero() {
+		return false
 	}
-	return c.acceptResponse(ctx, job, response)
+	window := c.config.UncertaintyEvidenceWindow
+	if window <= 0 {
+		window = defaultUncertaintyEvidenceWindow
+	}
+	return c.store.now().UTC().Sub(job.UpdatedAt.UTC()) >= window
 }
 
 func (c *Controller) renewLease(ctx context.Context, job Job) {

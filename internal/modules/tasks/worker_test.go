@@ -181,8 +181,8 @@ func TestWorkerPreservesUncertainOrphanedTasks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != StatusRunning || got.Stage != "uncertain" || !strings.Contains(got.Error, "requires verification") {
-		t.Fatalf("expected orphaned task to await verification, got %#v", got)
+	if got.Status != StatusRunning || got.Stage != "uncertain" || !strings.Contains(got.Error, "automatic execution evidence") {
+		t.Fatalf("expected orphaned task to await automatic verification, got %#v", got)
 	}
 }
 

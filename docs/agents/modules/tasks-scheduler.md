@@ -28,7 +28,7 @@
 - `GET /api/v1/executions/{id}/steps`
 - `POST /api/v1/executions/{id}/retry`
 - `POST /api/v1/executions/{id}/run-now`
-- `POST /api/v1/executions/{id}/resolve`：仅当前认证用户可人工核对，必须提供 outcome=succeeded/failed 和非空 reason；写入 verificationSource=manual 的独立事实，原不确定事实保留。
+- `POST /api/v1/executions/{id}/resolve`：破局 API，仅当前认证用户可人工核对，必须提供 outcome=succeeded/failed 和非空 reason；写入 verificationSource=manual 的独立事实，原不确定事实保留。产品主路径是自动核实与证据窗口超时失败，前端不提供人工 resolve 主操作。
 
 ## 数据与行为约定
 
@@ -143,6 +143,6 @@
 
 ### 不确定执行与容量门禁
 
-- 源执行进程消失时首次进入 `uncertain`，同时追加 `evidence.gap_detected`，gapId 使用 task ID 与尝试编号。已提交输出保留，未提交输出明确无法核实；人工结果核对不会追加虚假的 `gap_resolved`。
-- 创建任务及领取新执行前检查统一日志容量门禁；在途证据写入与人工核对不被容量准入策略阻断。
+- 源执行进程消失时首次进入 `uncertain`，同时追加 `evidence.gap_detected`，gapId 使用 task ID 与尝试编号。已提交输出保留，未提交输出明确无法核实；人工破局核对不会追加虚假的 `gap_resolved`。证据窗口耗尽后任务自动失败并释放并发键。
+- 创建任务及领取新执行前检查统一日志容量门禁；在途证据写入与人工破局核对不被容量准入策略阻断。
 - `/executions/{id}/resolve` 支持受注入回调控制的外部协调执行，框架不直接依赖业务模块；注册方负责对应远端 execution fence、版本核对及证据写入。

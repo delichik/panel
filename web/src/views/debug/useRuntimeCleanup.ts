@@ -40,7 +40,7 @@ export function useRuntimeCleanup(options: {
 
   function schedule(delay: number) {
     stopTimer();
-    if (disposed || document.visibilityState === 'hidden' || consecutiveFailures >= 3) return;
+    if (disposed || document.visibilityState === 'hidden') return;
     pollTimer = setTimeout(() => { void refresh(); }, delay);
   }
 
@@ -86,10 +86,11 @@ export function useRuntimeCleanup(options: {
     } catch {
       if (disposed) return;
       // A failed status request says nothing about whether the server cleared
-      // data. Keep the last snapshot and offer a read-only status retry.
+      // data. Keep the last snapshot and keep GET polling with backoff.
       queryFailed.value = true;
       consecutiveFailures++;
-      schedule(retryDelay);
+      const backoff = Math.min(retryDelay * 2 ** Math.max(consecutiveFailures - 1, 0), 30_000);
+      schedule(backoff);
     } finally {
       if (!disposed) checking.value = false;
     }

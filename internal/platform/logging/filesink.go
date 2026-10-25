@@ -129,6 +129,12 @@ func closeFileSinkForTest() {
 	logDir = ""
 }
 
+// CloseFileSinkForTest releases the JSONL file handle so TempDir cleanup can
+// delete the log on Windows. Safe to call when no sink is open.
+func CloseFileSinkForTest() {
+	closeFileSinkForTest()
+}
+
 func flattenFields(obj map[string]any, fields []zap.Field) {
 	enc := zapcore.NewMapObjectEncoder()
 	for _, f := range fields {

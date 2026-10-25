@@ -48,7 +48,8 @@
 - 本轮应用端口映射新增 TCP/UDP 协议、Panel 防火墙管理开关、固定端口约束和规则状态摘要词条，en / zh-CN 已同步；后端补充端口协议、UFW 未安装、SSH/Agent 管理端口保护、双通道连通性门禁和受管规则冲突等稳定错误翻译。
 
 - 统一日志新增容量 warning/blocked 横幅与可用空间词条，明确容量持续增长和停止接收新变更时仍可查询导出，en / zh-CN 已同步。
-- Toast / ActivityLink 统一「查看日志」；人工核对执行结果双语文案明确标注人为判断并要求依据，不将其表述为系统自动验证。
+- Toast / ActivityLink 统一「查看日志」。
+- 本轮 uncertainty 改为系统自动核实：改写 `applicationsPage.status.result_unknown` / `operationStatus.result_unknown` / `unknownResultHint` 与 `debugPage.cleanup.checkStatus/unconfirmed/queryFailed/requestUnconfirmed/resultMissing/partialFailure`；不再引导用户声明远端成败。en / zh-CN 已同步。人工 resolve 词条 `activity.resolve*` 仅保留给破局 API/mock，不作为产品主路径。
 - 统一日志页面新增 `activity.*` 与 `routes.activity.title`，en / zh-CN 同步；请求、生命周期及状态显示按稳定词条渲染，原始远端输出保留原文。旧日志保留天数设置退出界面。
 
 - 本轮应用代理 Path 移除旧 `webSocket` 布尔兼容字段与重复开关，只保留 `applicationsPage.webSocketMode` 的 auto/on/off 选择器；删除 `applicationsPage.webSocket` 词条，en / zh-CN 已同步。

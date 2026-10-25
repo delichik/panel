@@ -271,3 +271,56 @@ func TestUncertainExecutionIsResolvedWithoutRepeatingSideEffect(t *testing.T) {
 		t.Fatalf("unexpected post-resolution job: %#v", after)
 	}
 }
+
+// ORCH-LEASE-005: uncertainty without Agent evidence fails terminal after the evidence window.
+func TestUncertainExecutionFailsWhenEvidenceWindowExpires(t *testing.T) {
+	db := newOrchestratorTestDB(t)
+	insertOrchestratorTestRows(t, db)
+	if _, err := db.Exec(`UPDATE jobs SET action='stop',desired_revision_id='' WHERE id='job-1'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE application_instances SET desired_state='stopped',desired_revision_id='' WHERE id='inst-1'`); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &uncertainReconciler{}
+	store := NewStore(db)
+	ctrl := NewController(store, runtime, ControllerConfig{UncertaintyEvidenceWindow: time.Minute})
+	ctx := context.Background()
+	if err := ctrl.process(ctx, "job-1"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.GetJob(ctx, "job-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.State != JobRunning || before.ErrorClass != "uncertainty" {
+		t.Fatalf("missing uncertainty: %#v", before)
+	}
+	if err := ctrl.process(ctx, "job-1"); err != nil {
+		t.Fatal(err)
+	}
+	still, err := store.GetJob(ctx, "job-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if still.State != JobRunning || still.ErrorClass != "uncertainty" {
+		t.Fatalf("evidence window must keep uncertainty: %#v", still)
+	}
+	past := time.Now().UTC().Add(-2 * time.Minute).Format(time.RFC3339Nano)
+	if _, err := db.Exec(`UPDATE jobs SET updated_at=? WHERE id='job-1'`, past); err != nil {
+		t.Fatal(err)
+	}
+	if err := ctrl.process(ctx, "job-1"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.GetJob(ctx, "job-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.State != JobFailed || after.ErrorCode != "execution_evidence_unreachable" || after.ErrorClass != "evidence" {
+		t.Fatalf("expected terminal evidence failure, got %#v", after)
+	}
+	if runtime.calls != 1 {
+		t.Fatalf("evidence timeout must not repeat reconcile side effects: calls=%d", runtime.calls)
+	}
+}

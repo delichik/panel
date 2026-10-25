@@ -65,7 +65,7 @@ describe('application editor model', () => {
     expect(applicationStatus(snapshot, runtime)).toBe('deployed');
   });
 
-  it('distinguishes an unconfirmed execution from normal deployment while continuing to poll', () => {
+  it('distinguishes automatic result verification from normal deployment while continuing to poll', () => {
     const runtime = { applicationId: app.id, runtimeId: 'runtime-1', status: 'deploying', instances: [], observedAt: '', operation: { id: 'job-1', applicationId: app.id, type: 'apply', status: 'running', errorClass: 'uncertainty', generation: 1, createdAt: '', updatedAt: '' } };
     expect(applicationStatus(app, runtime)).toBe('result_unknown');
     expect(applicationStatus({ ...app, runtimeStatus: 'needs_attention' })).toBe('result_unknown');

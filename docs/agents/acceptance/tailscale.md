@@ -8,7 +8,7 @@
 - 服务器登记、Agent 状态机、能力门禁与任务语义见 [服务器、安全与软件包](servers-security-packages.md) 的 `SRV-*`、`AGT-*`。
 - 存储共享与入口网关的地址、导出白名单与上游渲染见 [应用与设施应用](applications-and-facilities.md) 的 `FAC-STO-*`、`FAC-RP-*`。
 - 页面操作与两阶段反馈见 [逐页面验收](ui-pages.md) 的 `UI-SET-*`、`UI-SRV-*`。
-- 任务中心、运行事件与结果待核实语义见 [协调、任务与运行事件](orchestration-and-tasks.md)。
+- 任务中心、运行事件与系统核实中语义见 [协调、任务与运行事件](orchestration-and-tasks.md)。
 
 每个条目都按触发入口、前置条件、成功结果、失败结果、边界条件和验证点六项书写；只写“支持 Tailscale”不构成验收。
 

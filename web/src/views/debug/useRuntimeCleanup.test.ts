@@ -49,6 +49,20 @@ describe('Debug runtime cleanup (UI-DBG-007, DIAG-CLR-005)', () => {
     expect(query).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps GET polling after repeated status failures without resubmitting POST', async () => {
+    const query = vi.spyOn(debugApi, 'clearRuntimeDataStatus').mockRejectedValue(new Error('offline'));
+    const post = vi.spyOn(debugApi, 'clearRuntimeData');
+    mountCleanup();
+    await flushPromises();
+    expect(cleanup.queryFailed.value).toBe(true);
+    await vi.advanceTimersByTimeAsync(5000);
+    await vi.advanceTimersByTimeAsync(10000);
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(query.mock.calls.length).toBeGreaterThanOrEqual(4);
+    expect(post).not.toHaveBeenCalled();
+    expect(cleanup.canStart.value).toBe(false);
+  });
+
   it('preserves running state on query errors and retries only status reads', async () => {
     vi.spyOn(debugApi, 'clearRuntimeDataStatus').mockResolvedValueOnce(active).mockRejectedValueOnce(new Error('offline')).mockResolvedValue(complete);
     const post = vi.spyOn(debugApi, 'clearRuntimeData');

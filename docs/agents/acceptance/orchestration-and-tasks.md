@@ -214,11 +214,11 @@
 
 ### ORCH-CTRL-009 人工核实后的成功/失败钩子
 
-- **前置**：Job 处于 `running + uncertainty`，认证用户经 Agent 确认同一 execution 的 succeeded/failed 声明（HTTP 核实或恢复轮询读到 `verificationSource=manual`）。
+- **前置**：Job 处于 `running + uncertainty`，且走破局路径：认证用户经 Agent 确认同一 execution 的 succeeded/failed 声明（HTTP `POST /api/v1/executions/{id}/resolve` 或恢复轮询读到 `verificationSource=manual`）。产品主路径是自动核实与 `ORCH-LEASE-005` 超时失败，人工声明不是必需步骤。
 - **动作**：写入人工核实终态（不经 `acceptResponse` 自动观测写回）。
-- **结果**：Job 进入 succeeded/failed 并保留人工证据后，必须调用与自动收敛相同的 `OnSucceeded`/`OnFailed` 钩子；purge 成功须删除 `desired_state=purged` 的 Instance 并在无残留实例时物理删除已 `deletion_requested` 的应用。
-- **失败**：Agent 未确认同一声明时保持 uncertainty；不得用人工声明伪造 `observed_state`。
-- **不变量**：人工路径故意跳过 observation CAS，但不得跳过 purge finalizer 或失败计数钩子；重复提交相同声明必须幂等，不得重复累加失败计数。
+- **结果**：Job 进入 succeeded/failed 并保留人工证据后，必须调用与自动收敛相同的 `OnSucceeded`/`OnFailed` 钩子；purge 成功须删除 `desired_state=purged` 的 Instance 并在无残留实例时物理删除已 `deletion_requested` 的应用。自动终态失败同样必须调用 `OnFailed`。
+- **失败**：Agent 未确认同一声明时保持 uncertainty（仍受 `ORCH-LEASE-005` 窗口约束）；不得用人工声明伪造 `observed_state`。
+- **不变量**：人工路径故意跳过 observation CAS，但不得跳过 purge finalizer 或失败计数钩子；重复提交相同声明必须幂等，不得重复累加失败计数。前端不得把人工 resolve 做成主操作。
 - **验证**：manual resolution preserves unknown observation、manual purge success finalizer、idempotent re-declaration tests。
 
 ### ORCH-RETRY-001 错误结构和分类
@@ -253,9 +253,18 @@
 - **前置**：Job 处于 `running + uncertainty`，并且通过认证的 Agent 明确返回该 execution `missing`。
 - **动作**：Controller 恢复原 execution。
 - **结果**：以 `execution_evidence_missing/evidence` 进入有上限的正常重试，释放旧 execution fence，下次 claim 使用新 execution identity。
-- **失败**：Agent 不可达、超时或响应无法验证时仍必须保持 uncertainty，不得盲目重复远端写操作。
+- **失败**：Agent 不可达、超时或响应无法验证时仍必须保持 uncertainty，不得盲目重复远端写操作；持续无法取得证据时由 `ORCH-LEASE-005` 终态失败。
 - **不变量**：missing 重放仍受 MaxAttempts、幂等资源标签和 conflict-domain 唯一性约束。
 - **验证**：authenticated missing result bounded-retry test，unreachable Agent remains uncertain test。
+
+### ORCH-LEASE-005 不确定执行证据窗口
+
+- **前置**：Job 处于 `running + uncertainty`，Controller 每次扫描调用 `resolveUncertain`。
+- **动作**：向认证 Agent 轮询同一 execution 的结果（finished 事件流、只读 `VerifyExecution` 匹配、或 `ORCH-LEASE-004` 的 missing）。
+- **结果**：窗口内（默认自进入 uncertainty 的 `updated_at` 起 30 分钟）无可信证据时保持 uncertainty 并继续轮询。窗口耗尽仍无 `finished`/verify 匹配/`missing` 时，经现有 `fail()` 写入终态 `failed`，`error_code=execution_evidence_unreachable`，`error_class=evidence`，`retryable=false`，并调用 `OnFailed`。
+- **失败**：不得在无 Agent 证据时自动 succeed 或伪造 `observed_state`。传输错误本身不得提前终态失败。
+- **不变量**：窗口只释放冲突域，不证明远端副作用未发生；用户可用既有同步/部署在失败后重新规划。人工 resolve 仍可作为破局 API，但不是窗口内的必经步骤。
+- **验证**：`TestUncertainExecutionFailsWhenEvidenceWindowExpires`、窗口内保持 uncertainty 的既有 resolve 测试。
 
 ### ORCH-DRIFT-001 漂移来源与修复范围
 
@@ -560,11 +569,11 @@
 ### TASK-WORK-003 orphan running 恢复
 
 - **前置**：数据库 running task，当前进程 execution registry 可能有/无。
-- **动作**：启动及每30秒 FailRunningWithoutExecution。
-- **结果**：无 registry 的 running 标记为 `stage=uncertain`（status 仍为 running），占用原并发键直至人工 `ResolveUncertain`；仍被追踪的保持 running。不得把无证据的远端写操作直接标 failed 后放行同键新任务。
-- **失败**：Cancel/Complete/Fail 均拒绝 uncertain；唯一出路是人工核实。远端不可取消维护任务是否继续由业务定义决定，但本地不得永久假“正常 running”。
-- **不变量**：一次性内存 worker 在 API 返回前必须先标 running；uncertain 必须出现在 `FirstActiveByConcurrencyKey` 队首直到核实。
-- **验证**：orphan worker/registry tests、`TestFirstActiveByConcurrencyKeyRetainsUncertainExecution`。
+- **动作**：启动及每30秒 FailRunningWithoutExecution；并对已 uncertain 且超过证据窗口的任务 FailUncertainPastEvidenceWindow。
+- **结果**：无 registry 的 running 标记为 `stage=uncertain`（status 仍为 running），`next_run_at` 记为证据截止（默认 30 分钟）；仍被追踪的保持 running。窗口内占用原并发键，不得把刚丢失进程内执行的远端写操作直接标 failed。窗口耗尽后自动 `status=failed`、`stage=orphan_execution_timeout` 并释放并发键。人工 `ResolveUncertain` 仅作破局，不是唯一出路。
+- **失败**：Cancel/Complete/Fail 在窗口内仍拒绝 uncertain。远端不可取消维护任务是否继续由业务定义决定，但本地不得永久假“正常 running”。
+- **不变量**：一次性内存 worker 在 API 返回前必须先标 running；uncertain 必须出现在 `FirstActiveByConcurrencyKey` 队首直到自动超时失败或破局核实。
+- **验证**：orphan worker/registry tests、`TestMissingExecutionPreservesUncertainResult`、`TestFirstActiveByConcurrencyKeyRetainsUncertainExecution`。
 
 ### TASK-CLEAN-001 历史保留
 

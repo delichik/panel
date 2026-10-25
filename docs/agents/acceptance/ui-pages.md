@@ -121,8 +121,8 @@
 
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
-| UI-APP-001 | `/applications/apps` 搜索、翻页、选择 | 服务端分页/q；URL 恢复 search/page/application；表格显示名称、状态、镜像引用、实例数、镜像更新与更新时间；点击「详情」或名称列覆盖列表；规划失败显示“部署被阻塞”，uncertainty 显示“结果待核实” | summary 缺 imageReference 时仅按行补详情并在该行显示骨架；失败不得把整表清空为假空态；不能将运行实例存在解释为最新部署成功；不得依赖整行点击 | 行级补载互不阻塞，选中项完整详情/runtime/files 按需请求；状态按 `APP-PLAN-001`、`APP-RUN-004` 派生 |
-| UI-APP-002 | 查看 Runtime tab | 显示实例总数/运行/失败及每服务器实例、容器和 `lastError`；当前 Job 显示真实状态、步骤、attempt、nextRunAt、错误码/消息/详情与 operation 深链；独立显示规划失败原因、可用字段/文件名、修复或重试说明及活动入口；uncertainty 明确提示结果待核实；详情单列，`ActivityLink` 在页头 actions，不得常驻右侧 aside | runtime 失败 toast 且详情内 EmptyState 可重试；详情/files 加载失败用 `detailError` EmptyState 重试，不得只 toast 后空白；换应用清旧 runtime/错误；终态 failed 不得消失；无 Job 的规划失败也必须显示，不能覆盖实际实例状态 | 实例/Job 状态文本与徽标一致；active 或当前规划错误基线 3 秒有界轮询，按 nextRunAt 对齐，隐藏暂停，最多 24 次或 2 分钟；新 runtime 无规划错误时清除旧 DTO 告警；`tab` 查询与 runtime/routes/files/data 双向同步 |
+| UI-APP-001 | `/applications/apps` 搜索、翻页、选择 | 服务端分页/q；URL 恢复 search/page/application；表格显示名称、状态、镜像引用、实例数、镜像更新与更新时间；点击「详情」或名称列覆盖列表；规划失败显示“部署被阻塞”，uncertainty 显示“系统核实中” | summary 缺 imageReference 时仅按行补详情并在该行显示骨架；失败不得把整表清空为假空态；不能将运行实例存在解释为最新部署成功；不得依赖整行点击 | 行级补载互不阻塞，选中项完整详情/runtime/files 按需请求；状态按 `APP-PLAN-001`、`APP-RUN-004` 派生 |
+| UI-APP-002 | 查看 Runtime tab | 显示实例总数/运行/失败及每服务器实例、容器和 `lastError`；当前 Job 显示真实状态、步骤、attempt、nextRunAt、错误码/消息/详情与 operation 深链；独立显示规划失败原因、可用字段/文件名、修复或重试说明及活动入口；uncertainty 明确提示系统正在向节点核实，不得引导用户声明成败；详情单列，`ActivityLink` 在页头 actions，不得常驻右侧 aside | runtime 失败 toast 且详情内 EmptyState 可重试；详情/files 加载失败用 `detailError` EmptyState 重试，不得只 toast 后空白；换应用清旧 runtime/错误；终态 failed 不得消失；无 Job 的规划失败也必须显示，不能覆盖实际实例状态 | 实例/Job 状态文本与徽标一致；active 或当前规划错误基线 3 秒有界轮询，按 nextRunAt 对齐，隐藏暂停，最多 24 次或 2 分钟；新 runtime 无规划错误时清除旧 DTO 告警；`tab` 查询与 runtime/routes/files/data 双向同步 |
 | UI-APP-003 | 查看 Routes/Files/Data tab | Routes 显示域名、目标端口、来源服务器名和 paths；Files 只列已提交文件并支持 blob 下载；Data tab 承载持久化数据节点选择与下载/恢复；URL `tab=routes|files|data` 可深链恢复（缺省 runtime） | 无路由/文件有专属空态；详情/files 失败走详情作用域错误重试；服务器名未知才回退 ID；关闭详情清 `tab` | 文件名和下载名符合 kind/contentType，下载带 auth |
 | UI-APP-004 | 点击行内同步/部署 | 提交人工 deploy；实际规划时显示真实 operationId/deploymentId 并刷新，`noChange=true` 时明确提示已是期望状态 | 不得被自动退避静默吞掉，不得把 no-change 或请求接受宣称为部署完成；失败后也重载列表/详情/runtime，使持久化规划诊断立即可见 | toast 与实际响应字段一致，operation 深链可恢复后续状态；修正后计划成功或已满足期望时清当前告警、保留失败历史 |
 | UI-APP-005 | 行内停用应用 | enabled 时可点，先 danger 确认后调用 stop；成功只提示请求接受并刷新 | 已停用禁用；失败保持应用状态 | 取消无请求，成功后状态来自重载而非前端假改 |
@@ -301,8 +301,8 @@
 | UI-DBG-004 | Tasks tab | scalar runtime metrics 与 task definitions 分开；definitions 用可滚动 Table 展示 kind/actions/concurrency/retries/stale（无 periodic interval 列） | definitions 数组不得字符串化；无定义有明确空提示 | 任意对象定义都以列呈现 |
 | UI-DBG-005 | Database tab | 展示健康数/总数/used 汇总；每数据库显示大小、used/free、健康/错误和表行数/大小 | 单库错误以 danger 状态保留其他库 | 大表清单在卡片内部滚动 |
 | UI-DBG-006 | 切换 pprof | Switch PUT enabled，期间禁重复；开启后显示本机 `http://<address>/debug/pprof/` 新窗口链接 | GET/PUT 失败仅 toast，不伪改状态；链接带 `rel=noreferrer` | 返回状态决定 Switch 与链接是否出现 |
-| UI-DBG-007 | 清理运行数据 | 首次进入读取清理状态，确认已无在途清理后才启用操作；危险确认说明清理范围、配置保留及后台暂停，并要求勾选；提交后独立展示状态、阶段、开始/结束时间 | 禁重复提交；查询失败保留上次快照并显示“结果待核实”及只读核对入口，不自动重发 POST；失败说明部分批次可能已删除，恢复后台失败单独呈现 | 同一次 runId 的完成才触发完成反馈；成功/失败后重载诊断；完成后说明后台可能立即产生新数据 |
-| UI-DBG-008 | 清理中刷新、离页或隐藏标签 | 返回后 GET 恢复进度，暂停诊断快照刷新不影响清理状态查询；清理中不周期性扫描数据库快照；隐藏标签暂停状态轮询，重新可见立即核对 | 卸载取消本页定时器及在途查询，不取消服务端清理；原任务结果丢失/Panel 重启为待核实，不能无限转圈或伪报成功 | 清理轮询不重入，网络异常退避且提供手动核对；无后台清理时也可手动查询最近结果 |
+| UI-DBG-007 | 清理运行数据 | 首次进入读取清理状态，确认已无在途清理后才启用操作；危险确认说明清理范围、配置保留及后台暂停，并要求勾选；提交后独立展示状态、阶段、开始/结束时间 | 禁重复提交；查询失败保留上次快照并显示“系统确认中”，继续退避 GET，不自动重发 POST；失败说明部分批次可能已删除，恢复后台失败单独呈现 | 同一次 runId 的完成才触发完成反馈；成功/失败后重载诊断；完成后说明后台可能立即产生新数据 |
+| UI-DBG-008 | 清理中刷新、离页或隐藏标签 | 返回后 GET 恢复进度，暂停诊断快照刷新不影响清理状态查询；清理中不周期性扫描数据库快照；隐藏标签暂停状态轮询，重新可见立即 GET | 卸载取消本页定时器及在途查询，不取消服务端清理；原任务结果丢失/Panel 重启为未确认，不能无限转圈或伪报成功 | 清理轮询不重入，网络异常退避后继续 GET；手动刷新可选但非必经；无后台清理时也可查询最近结果 |
 
 ## 19. 未找到页面
 
