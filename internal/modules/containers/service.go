@@ -189,9 +189,8 @@ type containerObservationRow struct {
 }
 
 func (s *Service) Containers(ctx context.Context, serverID string) (SnapshotList[ContainerSummary], error) {
-	if _, _, err := s.readyServer(ctx, serverID); err != nil {
-		return SnapshotList[ContainerSummary]{}, err
-	}
+	// RES-SNAP-001: GET reads only the local AppDB snapshot. Agent readiness is
+	// enforced on refresh/mutation paths, not on list reads.
 	items, observedAt, err := s.reportedContainerSummaries(ctx, serverID)
 	if err != nil {
 		return SnapshotList[ContainerSummary]{}, err
@@ -1461,9 +1460,7 @@ func (s *Service) replaceResourceSnapshot(ctx context.Context, serverID, resourc
 }
 
 func (s *Service) resourceSnapshot(ctx context.Context, serverID, resourceType string, out any) (*time.Time, error) {
-	if _, _, err := s.readyServer(ctx, serverID); err != nil {
-		return nil, err
-	}
+	// RES-SNAP-001: local snapshot GET must succeed even when Agent is offline.
 	var row dockerResourceSnapshotRow
 	err := orm.New(s.db).From("docker_resource_snapshots").Select("items_json", "observed_at").
 		Where("server_id = ?", serverID).And("resource_type = ?", resourceType).

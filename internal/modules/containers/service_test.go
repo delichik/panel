@@ -847,6 +847,59 @@ func TestContainerLogsClampsTail(t *testing.T) {
 	}
 }
 
+func TestResourceSnapshotGETDoesNotRequireAgent(t *testing.T) {
+	// RES-SNAP-001: offline Agent must not block local snapshot GETs.
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	taskSvc := tasks.NewService(store.AppDB())
+	svc := NewService(store.AppDB(), fakeServerProvider{server.Server{
+		ID: "server-1",
+		Traits: map[string]string{
+			agentcontract.TraitStatus: agentcontract.StatusIncompatible,
+		},
+	}}, &fakeContainerizationAgent{}, taskSvc)
+	insertReconcileServerRow(t, store)
+	ctx := context.Background()
+	saveReportedContainers(t, svc, "server-1", []agentcontract.DockerContainer{{
+		ID: "container-1", Names: []string{"web"}, Image: "nginx", ImageID: "sha256:1", State: "running",
+	}})
+	if err := svc.replaceResourceSnapshot(ctx, "server-1", "images", []agentcontract.DockerImage{{ID: "sha256:1", RepoTags: []string{"nginx:latest"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.replaceResourceSnapshot(ctx, "server-1", "networks", []agentcontract.DockerNetwork{{ID: "net-1", Name: "bridge"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.replaceResourceSnapshot(ctx, "server-1", "volumes", []agentcontract.DockerVolume{{Name: "data"}}); err != nil {
+		t.Fatal(err)
+	}
+	containers, err := svc.Containers(ctx, "server-1")
+	if err != nil || len(containers.Items) != 1 {
+		t.Fatalf("Containers = %#v err=%v", containers, err)
+	}
+	images, err := svc.Images(ctx, "server-1")
+	if err != nil || len(images.Items) != 1 {
+		t.Fatalf("Images = %#v err=%v", images, err)
+	}
+	networks, err := svc.Networks(ctx, "server-1")
+	if err != nil || len(networks.Items) != 1 {
+		t.Fatalf("Networks = %#v err=%v", networks, err)
+	}
+	volumes, err := svc.Volumes(ctx, "server-1")
+	if err != nil || len(volumes.Items) != 1 {
+		t.Fatalf("Volumes = %#v err=%v", volumes, err)
+	}
+}
+
 func TestImagesMarkInUseFromReportedContainerImageIDs(t *testing.T) {
 	svc, _, _, store := newContainerizationTestService(t)
 	ctx := context.Background()
