@@ -561,10 +561,10 @@
 
 - **前置**：数据库 running task，当前进程 execution registry 可能有/无。
 - **动作**：启动及每30秒 FailRunningWithoutExecution。
-- **结果**：无 registry 的 running 立即 failed/orphaned；仍被追踪的保持 running。
-- **失败**：远端不可取消维护任务是否继续由业务定义决定，但本地记录不得永久假 running。
-- **不变量**：一次性内存 worker 在 API 返回前必须先标 running。
-- **验证**：orphan worker/registry tests。
+- **结果**：无 registry 的 running 标记为 `stage=uncertain`（status 仍为 running），占用原并发键直至人工 `ResolveUncertain`；仍被追踪的保持 running。不得把无证据的远端写操作直接标 failed 后放行同键新任务。
+- **失败**：Cancel/Complete/Fail 均拒绝 uncertain；唯一出路是人工核实。远端不可取消维护任务是否继续由业务定义决定，但本地不得永久假“正常 running”。
+- **不变量**：一次性内存 worker 在 API 返回前必须先标 running；uncertain 必须出现在 `FirstActiveByConcurrencyKey` 队首直到核实。
+- **验证**：orphan worker/registry tests、`TestFirstActiveByConcurrencyKeyRetainsUncertainExecution`。
 
 ### TASK-CLEAN-001 历史保留
 

@@ -60,36 +60,43 @@ func (a *App) clearRuntimeData(ctx context.Context) (result diagnostics.ClearRun
 		a.runtimeWriters.Resume()
 	}()
 	report(stage)
-	drainCtx, drainCancel := context.WithTimeout(ctx, 30*time.Second)
-	defer drainCancel()
-	if err := a.runtimeWriters.PauseContext(drainCtx); err != nil {
+	// Each pause/drain stage gets its own budget so earlier waits cannot starve
+	// later gates (DIAG-CLR-008).
+	pauseStage := func(fn func(context.Context) error) error {
+		drainCtx, drainCancel := context.WithTimeout(ctx, 30*time.Second)
+		defer drainCancel()
+		return fn(drainCtx)
+	}
+	if err := pauseStage(a.runtimeWriters.PauseContext); err != nil {
 		return result, err
 	}
 	// Initial Agent probing also writes reports and can still be in progress
 	// when a user clears immediately after Panel startup.
 	if a.checkDone != nil {
+		waitCtx, waitCancel := context.WithTimeout(ctx, 30*time.Second)
 		select {
 		case <-a.checkDone:
-		case <-drainCtx.Done():
-			return result, drainCtx.Err()
+			waitCancel()
+		case <-waitCtx.Done():
+			waitCancel()
+			return result, waitCtx.Err()
 		}
 	}
 	if a.agentReports != nil {
 		reportsPaused = true
-		if err := a.agentReports.writers.PauseContext(drainCtx); err != nil {
+		if err := pauseStage(a.agentReports.writers.PauseContext); err != nil {
 			return result, err
 		}
 	}
 	if a.tasks != nil {
 		tasksPaused = true
-		err := a.tasks.PauseRuntimeWriters(drainCtx)
-		if err != nil {
+		if err := pauseStage(a.tasks.PauseRuntimeWriters); err != nil {
 			return result, err
 		}
 	}
 	if a.applicationSvc != nil {
 		appsPaused = true
-		if err := a.applicationSvc.PauseRuntimeWriters(drainCtx); err != nil {
+		if err := pauseStage(a.applicationSvc.PauseRuntimeWriters); err != nil {
 			return result, err
 		}
 	}
@@ -99,7 +106,7 @@ func (a *App) clearRuntimeData(ctx context.Context) (result diagnostics.ClearRun
 	}
 	if a.eventLogs != nil {
 		eventsPaused = true
-		if err := a.eventLogs.maintenance.PauseContext(drainCtx); err != nil {
+		if err := pauseStage(a.eventLogs.maintenance.PauseContext); err != nil {
 			return result, err
 		}
 	}

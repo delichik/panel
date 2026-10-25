@@ -38,11 +38,24 @@ func (g *Gate) Pause() {
 	_ = g.PauseContext(context.Background())
 }
 
-// PauseContext leaves admission paused on timeout. The caller must resume it
-// when abandoning maintenance; already admitted work is never interrupted.
-func (g *Gate) PauseContext(ctx context.Context) error {
+// BeginPause rejects new Enter calls immediately without waiting for in-flight
+// work. Callers that still hold an Enter token must release it, then WaitDrained.
+func (g *Gate) BeginPause() {
 	g.mu.Lock()
+	defer g.mu.Unlock()
 	g.paused = true
+	if g.active == 0 {
+		return
+	}
+	if g.drained == nil {
+		g.drained = make(chan struct{})
+	}
+}
+
+// WaitDrained blocks until every Enter token released after BeginPause/Pause.
+// On timeout the gate stays paused; the caller must Resume when abandoning.
+func (g *Gate) WaitDrained(ctx context.Context) error {
+	g.mu.Lock()
 	if g.active == 0 {
 		g.mu.Unlock()
 		return nil
@@ -58,6 +71,13 @@ func (g *Gate) PauseContext(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// PauseContext leaves admission paused on timeout. The caller must resume it
+// when abandoning maintenance; already admitted work is never interrupted.
+func (g *Gate) PauseContext(ctx context.Context) error {
+	g.BeginPause()
+	return g.WaitDrained(ctx)
 }
 
 func (g *Gate) Resume() {

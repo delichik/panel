@@ -4,9 +4,13 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	panelerr "panel/internal/platform/errors"
 	httpx "panel/internal/platform/http"
+	"panel/internal/platform/logging"
+
+	"go.uber.org/zap"
 )
 
 type runtimeClearAuditContextKey struct{}
@@ -20,12 +24,23 @@ func (a *App) runtimeMaintenanceMiddleware(next http.Handler) http.Handler {
 			// Repeated requests during cleanup only read the same run receipt;
 			// they must remain available without adding audit rows mid-delete.
 			done, admitted := a.runtimeWriters.Enter()
-			if admitted {
-				defer done()
-			} else {
+			if !admitted {
 				r = r.WithContext(context.WithValue(r.Context(), runtimeClearAuditContextKey{}, true))
+				next.ServeHTTP(w, r)
+				return
 			}
 			next.ServeHTTP(w, r)
+			// Reject new writers before releasing this request's Enter token so
+			// there is no window between 202 and clearRuntimeData's PauseContext
+			// where ordinary mutations could still write (DIAG-CLR-006).
+			a.runtimeWriters.BeginPause()
+			done()
+			drainCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := a.runtimeWriters.WaitDrained(drainCtx); err != nil {
+				a.runtimeWriters.Resume()
+				logging.From(logging.Background("panel")).Warn("clear-runtime-data writer drain timed out after accept", zap.Error(err))
+			}
 			return
 		}
 		mutation := r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions
