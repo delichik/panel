@@ -78,8 +78,7 @@ func NewHarness(t *testing.T) *Harness {
 		Region:         "global",
 		Datacenter:     "dc1",
 		SaveSessionDir: filepath.Join(dir, "sessions"),
-	}, applications.WithLogDB(store.LogDB()), applications.WithCoordDB(store.CoordDB()),
-		applications.WithServerProvider(prov), applications.WithApplicationReconcileTrigger(trigger))
+	}, applications.WithServerProvider(prov), applications.WithApplicationReconcileTrigger(trigger))
 	trigger.appSvc = appSvc
 	appSvc.RegisterTasks(taskSvc)
 	h := &Harness{T: t, Store: store, AppSvc: appSvc, TaskSvc: taskSvc, Agent: agent, servers: prov, ctx: ctx, cancel: cancel}

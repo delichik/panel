@@ -1904,50 +1904,11 @@ func routeSummary(domain, pathValue, source string, serverIDs []string, certific
 	return summary
 }
 
-type lifecycleScanner interface {
-	Scan(dest ...any) error
-}
-
-func scanLifecycleTarget(row lifecycleScanner) (applications.LifecycleTarget, error) {
-	var target applications.LifecycleTarget
-	var created, updated string
-	var nextRunAt, leaseExpiresAt, started, finished sql.NullString
-	if err := row.Scan(&target.ID, &target.OperationID, &target.ApplicationID, &target.ServerID, &target.ServerName, &target.Action, &target.State, &target.Status, &target.TargetKey, &target.DesiredState, &target.DesiredGeneration, &target.DesiredSpecHash, &target.Priority, &target.Attempt, &nextRunAt, &target.LeaseOwner, &leaseExpiresAt, &target.ClaimedTaskID, &target.InstanceID, &target.ContainerName, &target.ContainerID, &target.Stage, &target.Error, &target.ErrorCode, &target.ErrorMessage, &target.ErrorDetail, &created, &started, &finished, &updated); err != nil {
-		return applications.LifecycleTarget{}, err
-	}
-	target.NextRunAt = parseOptionalTime(nextRunAt)
-	target.LeaseExpiresAt = parseOptionalTime(leaseExpiresAt)
-	target.CreatedAt = parseTime(created)
-	target.StartedAt = parseOptionalTime(started)
-	target.FinishedAt = parseOptionalTime(finished)
-	target.UpdatedAt = parseTime(updated)
-	return target, nil
-}
-
-func parseOptionalTime(value sql.NullString) *time.Time {
-	if !value.Valid || strings.TrimSpace(value.String) == "" {
-		return nil
-	}
-	parsed := parseTime(value.String)
-	if parsed.IsZero() {
-		return nil
-	}
-	return &parsed
-}
-
 func boolInt(value bool) int {
 	if value {
 		return 1
 	}
 	return 0
-}
-
-func lifecycleTargetID(operationID, serverID string) string {
-	return operationID + "-" + strings.TrimSpace(serverID)
-}
-
-func lifecycleTargetKey(appID, serverID string) string {
-	return "application:" + strings.TrimSpace(appID) + ":server:" + strings.TrimSpace(serverID)
 }
 
 func facilityConfigHash(cfg ReverseProxyConfig) string {

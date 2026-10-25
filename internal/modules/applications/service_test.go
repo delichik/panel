@@ -1897,7 +1897,7 @@ func newTestService(t *testing.T) (*Service, *fakeRuntimeClient, *fakeServerProv
 		Region:         "global",
 		Datacenter:     "dc1",
 		SaveSessionDir: filepath.Join(dir, "sessions"),
-	}, WithLogDB(store.LogDB()), WithCoordDB(store.CoordDB()))
+	})
 	svc.RegisterTasks(taskSvc)
 	svc.SetServerProvider(servers)
 	svc.SetApplicationReconcileTrigger(&fakeApplicationReconcileTrigger{svc: svc, tasks: taskSvc})

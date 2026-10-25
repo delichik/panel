@@ -3,7 +3,6 @@ package applications
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -69,66 +68,58 @@ func (r *serviceRuntimeReconciler) Reconcile(ctx context.Context, req controlpla
 		}
 	}
 
+	client, ok := r.service.runtimeClient.(AgentRuntimeReconcileClient)
+	if !ok {
+		// ORCH-CTRL-007: without AgentRuntimeReconcileClient there is no 10s
+		// stable verify path. Refuse every action (including stop/purge)
+		// instead of an asymmetric primitive degrade that could still mutate Docker.
+		return controlplane.ReconcileResponse{
+			ErrorCode: "agent_capability_missing", ErrorClass: "agent_unavailable",
+			ErrorMessage: "runtime reconcile client is required for runtime actions", Retryable: true,
+		}, nil
+	}
+
 	// A runtime call must finish before the default three-minute lease expires.
 	runCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	if client, ok := r.service.runtimeClient.(AgentRuntimeReconcileClient); ok {
-		spec, err := runtimeSpecForRequest(req)
-		if err != nil {
-			return failureResponse("invalid_spec", "invalid_spec", false, nil, err)
-		}
-		sshPort := normalizedRuntimeSSHPort(serverRecord.Port)
-		agentPort := normalizedRuntimeAgentPort(endpoint)
-		if code, err := validateRuntimeFirewallPorts(spec, sshPort, agentPort); err != nil {
-			return controlplane.ReconcileResponse{ErrorCode: code, ErrorClass: "configuration", ErrorMessage: err.Error(), Retryable: false}, nil
-		}
-		checker, checksChannels := r.service.servers.(firewallControlChannelChecker)
-		if checksChannels {
-			if err := checker.VerifyFirewallControlChannels(runCtx, req.ServerID); err != nil {
-				return firewallChannelFailure("firewall_channel_preflight_failed", nil, err), nil
-			}
-		}
-		// Share the per-server Docker write queue with ordinary container/image/volume
-		// mutations so facility/app reconcile cannot race UI-driven Docker ops.
-		response, callErr := r.withServerQueue(runCtx, req.ServerID, func(queuedCtx context.Context) (controlplane.ReconcileResponse, error) {
-			return r.callTracked(queuedCtx, endpoint, req, client, agentcontract.RuntimeReconcileRequest{
-				OperationID: req.OperationID, RunID: req.RunID,
-				JobID: req.JobID, ExecutionID: req.ExecutionID, ApplicationID: req.ApplicationID, InstanceID: req.InstanceID,
-				ServerID: req.ServerID, Action: req.Action, DesiredGeneration: req.DesiredGeneration, DesiredSpecHash: req.DesiredSpecHash,
-				DesiredRevisionID: req.DesiredRevisionID, Spec: spec, RemoveData: req.RemoveData, PreviousContainerName: req.PreviousContainerName,
-				SSHPort: sshPort, AgentPort: agentPort,
-			})
-		})
-		var postflightErr error
-		if checksChannels {
-			postflightErr = checker.VerifyFirewallControlChannels(context.WithoutCancel(ctx), req.ServerID)
-		}
-		if callErr != nil || response.ErrorCode != "" {
-			return response, callErr
-		}
-		if postflightErr != nil {
-			return firewallChannelFailure("firewall_channel_postflight_failed", response.Steps, postflightErr), nil
-		}
-		return response, nil
+	spec, err := runtimeSpecForRequest(req)
+	if err != nil {
+		return failureResponse("invalid_spec", "invalid_spec", false, nil, err)
 	}
-
-	switch req.Action {
-	case controlplane.ActionApply:
-		// ORCH-CTRL-007: the primitive apply path only sampled RuntimeStatus once
-		// and could mark crash-loop starts succeeded. Production apply must go
-		// through Agent RuntimeReconcile (10s stable verify). Refuse degrade apply.
-		return controlplane.ReconcileResponse{
-			ErrorCode: "agent_capability_missing", ErrorClass: "agent_unavailable",
-			ErrorMessage: "runtime reconcile client is required for apply startup verification", Retryable: true,
-		}, nil
-	case controlplane.ActionStop, controlplane.ActionPurge:
-		return r.withServerQueue(runCtx, req.ServerID, func(queuedCtx context.Context) (controlplane.ReconcileResponse, error) {
-			return r.stop(queuedCtx, endpoint, req)
-		})
-	default:
-		return controlplane.ReconcileResponse{ErrorCode: "invalid_action", ErrorClass: "configuration", ErrorMessage: "unsupported runtime action", Retryable: false}, nil
+	sshPort := normalizedRuntimeSSHPort(serverRecord.Port)
+	agentPort := normalizedRuntimeAgentPort(endpoint)
+	if code, err := validateRuntimeFirewallPorts(spec, sshPort, agentPort); err != nil {
+		return controlplane.ReconcileResponse{ErrorCode: code, ErrorClass: "configuration", ErrorMessage: err.Error(), Retryable: false}, nil
 	}
+	checker, checksChannels := r.service.servers.(firewallControlChannelChecker)
+	if checksChannels {
+		if err := checker.VerifyFirewallControlChannels(runCtx, req.ServerID); err != nil {
+			return firewallChannelFailure("firewall_channel_preflight_failed", nil, err), nil
+		}
+	}
+	// Share the per-server Docker write queue with ordinary container/image/volume
+	// mutations so facility/app reconcile cannot race UI-driven Docker ops.
+	response, callErr := r.withServerQueue(runCtx, req.ServerID, func(queuedCtx context.Context) (controlplane.ReconcileResponse, error) {
+		return r.callTracked(queuedCtx, endpoint, req, client, agentcontract.RuntimeReconcileRequest{
+			OperationID: req.OperationID, RunID: req.RunID,
+			JobID: req.JobID, ExecutionID: req.ExecutionID, ApplicationID: req.ApplicationID, InstanceID: req.InstanceID,
+			ServerID: req.ServerID, Action: req.Action, DesiredGeneration: req.DesiredGeneration, DesiredSpecHash: req.DesiredSpecHash,
+			DesiredRevisionID: req.DesiredRevisionID, Spec: spec, RemoveData: req.RemoveData, PreviousContainerName: req.PreviousContainerName,
+			SSHPort: sshPort, AgentPort: agentPort,
+		})
+	})
+	var postflightErr error
+	if checksChannels {
+		postflightErr = checker.VerifyFirewallControlChannels(context.WithoutCancel(ctx), req.ServerID)
+	}
+	if callErr != nil || response.ErrorCode != "" {
+		return response, callErr
+	}
+	if postflightErr != nil {
+		return firewallChannelFailure("firewall_channel_postflight_failed", response.Steps, postflightErr), nil
+	}
+	return response, nil
 }
 
 // withServerQueue serializes Docker-mutating reconcile work through the shared
@@ -149,57 +140,6 @@ func (r *serviceRuntimeReconciler) withServerQueue(ctx context.Context, serverID
 		return resp, err
 	}
 	return resp, runErr
-}
-
-func (r *serviceRuntimeReconciler) apply(ctx context.Context, endpoint string, req controlplane.ReconcileRequestRPC) (controlplane.ReconcileResponse, error) {
-	spec, err := runtimeSpecForRequest(req)
-	if err != nil {
-		return failureResponse("invalid_spec", "invalid_spec", false, nil, err)
-	}
-
-	if spec.ApplicationID != req.ApplicationID || spec.InstanceID != req.InstanceID {
-		return controlplane.ReconcileResponse{ErrorCode: "invalid_spec_identity", ErrorClass: "invalid_spec", ErrorMessage: "runtime spec identity does not match job", Retryable: false}, nil
-	}
-
-	steps := []controlplane.Step{{Name: "write_files", Status: "running"}}
-	if err := r.service.runtimeClient.RuntimeWriteFiles(ctx, endpoint, agentcontract.RuntimeWriteFilesRequest{Spec: spec}); err != nil {
-		return failureResponse("write_files_failed", classifyRuntimeError(ctx, err), true, steps, err)
-	}
-	steps[0].Status = "succeeded"
-
-	steps = append(steps, controlplane.Step{Name: "create_container", Status: "running"})
-	created, err := r.service.runtimeClient.RuntimeCreateContainer(ctx, endpoint, agentcontract.RuntimeCreateContainerRequest{ServerID: req.ServerID, Spec: spec})
-	if err != nil {
-		return failureResponse("create_container_failed", classifyRuntimeError(ctx, err), true, steps, err)
-	}
-	steps[len(steps)-1].Status = "succeeded"
-
-	steps = append(steps, controlplane.Step{Name: "verify_running", Status: "running"})
-	status, err := r.service.runtimeClient.RuntimeStatus(ctx, endpoint, req.InstanceID, spec.ContainerName)
-	if err != nil {
-		return failureResponse("verification_failed", classifyRuntimeError(ctx, err), true, steps, err)
-	}
-	if status.Status != appruntime.StatusRunning {
-		err := fmt.Errorf("container status is %s", firstNonEmpty(status.Status, "unknown"))
-		return failureResponse("container_not_running", "container_start_failed", true, steps, err)
-	}
-	steps[len(steps)-1].Status = "succeeded"
-
-	containerID := firstNonEmpty(status.ContainerID, created.ContainerID)
-	imageDigest := ""
-	if strings.Contains(status.Image, "@sha256:") {
-		imageDigest = status.Image[strings.Index(status.Image, "@sha256:")+1:]
-	}
-	return controlplane.ReconcileResponse{
-		ObservedState:       controlplane.ObservedRunning,
-		ContainerName:       firstNonEmpty(status.ContainerName, spec.ContainerName),
-		ContainerID:         containerID,
-		ObservedGeneration:  req.DesiredGeneration,
-		ObservedSpecHash:    req.DesiredSpecHash,
-		ObservedImageDigest: imageDigest,
-		ObservedAt:          status.ObservedAt,
-		Steps:               steps,
-	}, nil
 }
 
 func validateRuntimeFirewallPorts(spec appruntime.Spec, sshPort, agentPort int) (string, error) {
@@ -296,50 +236,12 @@ func reconcileResponseFromAgent(in agentcontract.RuntimeReconcileResponse) contr
 	}
 }
 
-func (r *serviceRuntimeReconciler) stop(ctx context.Context, endpoint string, req controlplane.ReconcileRequestRPC) (controlplane.ReconcileResponse, error) {
-	result, err := r.service.runtimeClient.RuntimeStop(ctx, endpoint, agentcontract.RuntimeStopRequest{
-		ApplicationID:         req.ApplicationID,
-		InstanceID:            req.InstanceID,
-		ContainerName:         req.PreviousContainerName,
-		Purge:                 req.Action == controlplane.ActionPurge,
-		RemoveApplicationData: req.RemoveData,
-	})
-	if err != nil {
-		return failureResponse("stop_failed", classifyRuntimeError(ctx, err), true, []controlplane.Step{{Name: req.Action, Status: "failed"}}, err)
-	}
-	state := controlplane.ObservedStopped
-	if req.Action == controlplane.ActionPurge {
-		state = controlplane.ObservedMissing
-	}
-	if result.Error != "" {
-		return failureResponse("stop_failed", "runtime", true, []controlplane.Step{{Name: req.Action, Status: "failed"}}, errors.New(result.Error))
-	}
-	return controlplane.ReconcileResponse{
-		ObservedState:      state,
-		ContainerName:      result.ContainerName,
-		ContainerID:        result.ContainerID,
-		ObservedGeneration: 0,
-		ObservedAt:         result.ObservedAt,
-		Steps:              []controlplane.Step{{Name: req.Action, Status: "succeeded"}},
-	}, nil
-}
-
 func failureResponse(code, class string, retryable bool, steps []controlplane.Step, err error) (controlplane.ReconcileResponse, error) {
 	message := "runtime reconcile failed"
 	if err != nil && strings.TrimSpace(err.Error()) != "" {
 		message = err.Error()
 	}
 	return controlplane.ReconcileResponse{ErrorCode: code, ErrorClass: class, ErrorMessage: message, Retryable: retryable, Steps: steps}, err
-}
-
-func classifyRuntimeError(ctx context.Context, err error) string {
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
-		return "timeout"
-	}
-	if errors.Is(ctx.Err(), context.Canceled) || errors.Is(err, context.Canceled) {
-		return "agent_unavailable"
-	}
-	return "runtime"
 }
 
 func runtimeContainerNameByInstance(instanceID string) string {

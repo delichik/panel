@@ -69,8 +69,6 @@ type AgentErrorHandler interface {
 
 type Service struct {
 	db                    *sql.DB
-	logDB                 *sql.DB
-	coordDB               *sql.DB
 	runtimeClient         AgentRuntimeClient
 	servers               ServerProvider
 	agentErrors           AgentErrorHandler
@@ -101,8 +99,6 @@ type Service struct {
 }
 
 type ApplicationRuntime = Runtime
-
-var errLifecycleTargetLeaseLost = errors.New("application lifecycle target lease lost")
 
 type LogInput struct {
 	InstanceID string `json:"instanceId"`
@@ -209,23 +205,6 @@ func WithContainerOperationQueue(queue ContainerOperationQueue) Option {
 
 func WithApplicationReconcileTrigger(trigger ApplicationReconcileTrigger) Option {
 	return func(s *Service) { s.reconcileTrigger = trigger }
-}
-
-func WithLogDB(db *sql.DB) Option {
-	return func(s *Service) {
-		if db != nil {
-			s.logDB = db
-		}
-	}
-}
-
-// WithCoordDB 注入协调库（lifecycle 操作/目标/步骤日志）。
-func WithCoordDB(db *sql.DB) Option {
-	return func(s *Service) {
-		if db != nil {
-			s.coordDB = db
-		}
-	}
 }
 
 func WithRuntimeEvents(events runtimeevents.EventWriter) Option {
@@ -344,16 +323,6 @@ func (s *Service) onOrchestratorJobFailed(ctx context.Context, job controlplane.
 	if err := s.recordApplicationReconcileFailure(ctx, job.ApplicationID); err != nil {
 		logging.From(logging.With(ctx, logging.Context{Module: "applications"})).Warn("application reconcile failure recording failed", zap.String("app_id", job.ApplicationID), zap.Error(err))
 	}
-}
-
-func (s *Service) lifecycleDB() *sql.DB {
-	if s.coordDB != nil {
-		return s.coordDB
-	}
-	if s.logDB != nil {
-		return s.logDB
-	}
-	return s.db
 }
 
 func (s *Service) revisionDB() *sql.DB {
@@ -1970,13 +1939,6 @@ func (s *Service) templateData(ctx context.Context, app Application, files []App
 	}
 	return data, nil
 }
-
-// FailStaleTargetTaskAnchors 取消仍处于 queued/scheduled/failed_retryable、
-// 但其生命周期目标已不存在、已终态或不再由该任务持有的目标任务锚点。
-// 这类幽灵锚点不会自行结束，会永久占住服务器的部署并发键，必须定期清理。
-
-// lifecycleHeartbeatResult 决定心跳错误与运行错误的优先级：租约丢失是所有权交接信号，
-// 无论 run 返回什么普通错误都必须优先返回 errLifecycleTargetLeaseLost。
 
 func (s *Service) loadReverseProxyRoutes(ctx context.Context, appID string) ([]ReverseProxyRule, error) {
 	var rows []models.ReverseProxyRoute

@@ -178,8 +178,6 @@ func New(cfg config.Config) (*App, error) {
 		applications.WithBuiltinVariableResolver(variableRegistry),
 		applications.WithInternalFileProvider(internalFileRegistry),
 		applications.WithContainerOperationQueue(containerBridge),
-		applications.WithLogDB(store.LogDB()),
-		applications.WithCoordDB(store.CoordDB()),
 		applications.WithRuntimeEvents(eventWriter),
 	)
 	certBridge.apps = applicationSvc

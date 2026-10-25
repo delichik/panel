@@ -20,7 +20,7 @@
 | GAP-014 | 未来概览 API | 旧材料出现 `/overview/dashboard` 与 `baseVersion`，当前路由/服务未实现 | 保持不在当前合同；若实现，先新增 API/并发合同和前端消费测试 |
 | GAP-015 | 应用迁移入口 | service 有迁移行为门禁，但主 applications 路由无公开迁移 HTTP 入口 | 保持不可达，或先定义权限、请求、任务、回滚与 UI 合同后新增入口 |
 | GAP-016 | 设施编辑增强 | heartbeat、全局草稿配额、warning 确认、专用结构化恢复日志暂缓 | 不得假设存在；分别完成持久化/并发/API/UI 验收后启用 |
-| GAP-017 | 旧 lifecycle 类型 | 应用 runtime/前端类型仍带 lifecycle 命名，但旧 CoordDB lifecycle 表和 dispatcher 已删除 | 逐步移除兼容命名；任何期间均不得恢复第二事实源 |
+| GAP-017 | 旧 lifecycle 类型 | 应用 runtime/前端类型仍带 lifecycle 命名（`LifecycleOperation`/`LifecycleTarget` 作 Job 派生 DTO），旧 CoordDB lifecycle 表、dispatcher、以及 applications 上无用的 `WithLogDB`/`WithCoordDB`/`lifecycleDB` 注入已删除 | 逐步移除兼容命名；任何期间均不得恢复第二事实源 |
 | GAP-018 | 容器完整详情 | 无通用 inspect API，report 摘要不含 command/created/mounts，但前端资源类型仍残留完整字段 | 清理旧字段，或新增独立受限 inspect 合同与按需 API，不扩大列表上报 |
 | GAP-019 | ~~容器测试命名~~（已关闭） | ~~`TestContainerActionRejectsManagedApplicationContainer` 名称与断言相反~~ | 已重命名为 `TestContainerActionAllowsManagedApplicationContainer`，断言仍为允许直接动作并由协调修复 |
 | GAP-020 | ~~Docker 操作物理队列~~（已关闭） | ~~普通容器、orchestrator、设施应用由不同所有者组合，缺少证明所有写路径共享同一 per-server 物理队列的集成测试~~ | 应用 `RuntimeReconcile`/legacy apply·stop 与设施存储 export 配置均经 `containers.Service.Execute` 同物理 per-server 队列；Agent 侧 Docker 写 RPC（含 persistent archive/restore）另有进程内互斥；入队后取消须等待 job 结束。验证：`TestRuntimeReconcileUsesSharedContainerOperationQueue`、`TestStorageExportConfigureUsesSharedOperationQueue`、`TestExecuteWaitsForAcceptedJobAfterCallerCancel`、`TestExecuteSerializesOperationsPerServer`、`RES-QUEUE-001/004` |
