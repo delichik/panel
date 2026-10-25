@@ -10,12 +10,14 @@ import (
 	"testing"
 	"time"
 
+	agentcontract "panel/internal/agent/contract"
 	"panel/internal/modules/servers"
 	"panel/internal/modules/servers/credential"
 	"panel/internal/modules/tasks"
 	"panel/internal/platform/config"
 	storage "panel/internal/platform/database"
 	"panel/internal/platform/linux"
+	"panel/internal/platform/linux/remoteops"
 	"panel/internal/platform/secrets"
 	"panel/internal/platform/ssh"
 )
@@ -489,6 +491,66 @@ func TestUpgradeQueuedTaskRecoversAfterRestart(t *testing.T) {
 		t.Fatalf("expected queued upgrade task to recover and complete, got %#v", got)
 	}
 }
+
+func TestEnsurePackageAllowedRequiresCompatibleAgentWhenWired(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','du','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv','s','h',22,'du','cred','debian','12',1,1,'passwordless_sudo','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	taskSvc := tasks.NewService(store.AppDB())
+	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
+	svc := NewService(store.AppDB(), serverSvc, nil, taskSvc)
+	svc.agent = fakePackageAgent{}
+	if _, err := svc.ensurePackageAllowed(context.Background(), "srv", true); err == nil {
+		t.Fatal("expected agent_required when production agent is wired without compatible URL")
+	}
+	var count int
+	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM tasks`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("gate failure must not create tasks, got %d", count)
+	}
+}
+
+type fakePackageAgent struct{}
+
+func (fakePackageAgent) PackageUpdates(context.Context, string) ([]linux.PackageUpdate, error) {
+	return nil, nil
+}
+func (fakePackageAgent) UpgradePackages(context.Context, string, agentcontract.PackageUpgradeRequest) (agentcontract.CommandResponse, error) {
+	return agentcontract.CommandResponse{}, nil
+}
+func (fakePackageAgent) UFWAllow(context.Context, string, agentcontract.UFWAllowRequest) (remoteops.UFWStatus, error) {
+	return remoteops.UFWStatus{}, nil
+}
+func (fakePackageAgent) UFWDelete(context.Context, string, agentcontract.UFWDeleteRequest) (remoteops.UFWStatus, error) {
+	return remoteops.UFWStatus{}, nil
+}
+func (fakePackageAgent) Fail2BanStatus(context.Context, string) (agentcontract.Fail2BanStatusResponse, error) {
+	return agentcontract.Fail2BanStatusResponse{}, nil
+}
+func (fakePackageAgent) ApplyFail2Ban(context.Context, string, agentcontract.Fail2BanApplyRequest) (agentcontract.Fail2BanStatusResponse, error) {
+	return agentcontract.Fail2BanStatusResponse{}, nil
+}
+func (fakePackageAgent) ReleaseFail2Ban(context.Context, string) (agentcontract.Fail2BanStatusResponse, error) {
+	return agentcontract.Fail2BanStatusResponse{}, nil
+}
+func (fakePackageAgent) RestartSystem(context.Context, string) error { return nil }
 
 func TestUpgradeSelectedRejectsInvalidPackageNamesBeforeCreatingTask(t *testing.T) {
 	dir := t.TempDir()

@@ -263,6 +263,15 @@ func (s *Service) ensurePackageAllowed(ctx context.Context, serverID string, req
 	if !srv.OS.Supported {
 		return server.Server{}, panelerr.Validation("server_not_supported", "Server distribution is not supported")
 	}
+	// PKG-API-002: production (Agent client wired) must refuse before creating a
+	// task when the node has no compatible Agent; tests may leave agent nil and
+	// exercise the SSH adapter path.
+	if s.agent != nil {
+		if _, err := packageAgentURL(srv); err != nil {
+			return server.Server{}, err
+		}
+		return srv, nil
+	}
 	if requireSudo && !srv.Privilege.Privileged && srv.Privilege.Mode != sshx.PrivilegeModeRoot &&
 		srv.Privilege.Mode != sshx.PrivilegeModeSudo && !srv.Sudo.Passwordless {
 		return server.Server{}, panelerr.Validation("privileged_access_required", "Root or passwordless sudo access is required")
