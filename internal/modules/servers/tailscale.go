@@ -69,20 +69,10 @@ func (s *Service) ensureTailscaleApplyTask(ctx context.Context, srv Server, trig
 		}
 	}
 	if run {
-		if err := s.startTailscaleApplyTask(task, srv); err != nil {
-			return tasks.Task{}, err
-		}
+		s.dispatchRegisteredTask(task)
 		task, _ = s.tasks.Get(ctx, task.ID)
 	}
 	return task, nil
-}
-
-func (s *Service) startTailscaleApplyTask(task tasks.Task, srv Server) error {
-	if err := s.tasks.Start(context.Background(), task.ID); err != nil {
-		return err
-	}
-	go s.runTailscaleApply(s.tasks.ExecutionContext(task.ID), task.ID, srv.ID)
-	return nil
 }
 
 // RunTailscaleApplyTask 是任务执行体。

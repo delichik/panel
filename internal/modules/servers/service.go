@@ -689,8 +689,7 @@ func (s *Service) ensureServerInfoTask(ctx context.Context, serverID string, run
 	if s.exec == nil {
 		return tasks.Task{}, panelerr.Validation("server_executor_unavailable", "Server connectivity test executor is unavailable")
 	}
-	srv, err := s.Get(ctx, serverID)
-	if err != nil {
+	if _, err := s.Get(ctx, serverID); err != nil {
 		return tasks.Task{}, err
 	}
 	task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
@@ -712,25 +711,16 @@ func (s *Service) ensureServerInfoTask(ctx context.Context, serverID string, run
 			if err != nil {
 				return tasks.Task{}, err
 			}
-			s.startServerInfoTask(task, srv)
+			s.dispatchRegisteredTask(task)
+			return s.awaitTaskRunning(ctx, task.ID, 2*time.Second)
 		}
 		return task, nil
 	}
 	if runNow {
-		s.startServerInfoTask(task, srv)
+		s.dispatchRegisteredTask(task)
+		return s.awaitTaskRunning(ctx, task.ID, 2*time.Second)
 	}
 	return task, nil
-}
-
-func (s *Service) startServerInfoTask(task tasks.Task, srv Server) {
-	if err := s.tasks.Start(context.Background(), task.ID); err != nil {
-		return
-	}
-	go func() {
-		taskCtx, cancel := context.WithTimeout(s.tasks.ExecutionContext(task.ID), 45*time.Second)
-		defer cancel()
-		s.runServerInfoTask(taskCtx, task, srv)
-	}()
 }
 
 func (s *Service) runServerInfoTask(ctx context.Context, task tasks.Task, srv Server) {

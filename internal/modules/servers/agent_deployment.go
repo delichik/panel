@@ -203,28 +203,23 @@ func (s *Service) ensureAgentDeployTask(ctx context.Context, serverID, triggered
 			if err != nil {
 				return tasks.Task{}, err
 			}
-			if err := s.startAgentDeployTask(task, srv); err != nil {
-				return tasks.Task{}, err
+			s.dispatchRegisteredTask(task)
+			if triggeredBy == "user" {
+				return s.awaitTaskRunning(ctx, task.ID, 2*time.Second)
 			}
 			task, _ = s.tasks.Get(ctx, task.ID)
 		}
 		return task, nil
 	}
 	if run {
-		if err := s.startAgentDeployTask(task, srv); err != nil {
-			return tasks.Task{}, err
+		s.dispatchRegisteredTask(task)
+		// AGT-DEP-001: manual deploy must observe running before the HTTP response.
+		if triggeredBy == "user" {
+			return s.awaitTaskRunning(ctx, task.ID, 2*time.Second)
 		}
 		task, _ = s.tasks.Get(ctx, task.ID)
 	}
 	return task, nil
-}
-
-func (s *Service) startAgentDeployTask(task tasks.Task, srv Server) error {
-	if err := s.tasks.Start(context.Background(), task.ID); err != nil {
-		return err
-	}
-	go s.runDeployAgent(s.tasks.ExecutionContext(task.ID), task.ID, srv)
-	return nil
 }
 
 func (s *Service) agentAutoDeployNeeded(ctx context.Context, srv Server, now time.Time) (bool, error) {

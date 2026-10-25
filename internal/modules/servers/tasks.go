@@ -7,6 +7,7 @@ import (
 
 	agentcontract "panel/internal/agent/contract"
 	"panel/internal/modules/tasks"
+	panelerr "panel/internal/platform/errors"
 	id "panel/internal/platform/identity"
 )
 
@@ -14,6 +15,44 @@ const (
 	serverAgentCheckInterval  = 5 * time.Minute
 	serverInfoCollectInterval = time.Hour
 )
+
+// dispatchRegisteredTask runs a queued/started task through Manager.Run so the
+// registered Execute path owns panic recovery and completion. Callers that must
+// return StatusRunning (AGT-DEP-001) should awaitTaskRunning after dispatch.
+func (s *Service) dispatchRegisteredTask(task tasks.Task) {
+	if s == nil || s.tasks == nil || strings.TrimSpace(task.ID) == "" {
+		return
+	}
+	go func() {
+		defer s.tasks.FinishExecution(task.ID)
+		_ = tasks.NewManager(s.tasks).Run(context.Background(), task)
+	}()
+}
+
+func (s *Service) awaitTaskRunning(ctx context.Context, taskID string, timeout time.Duration) (tasks.Task, error) {
+	if s == nil || s.tasks == nil {
+		return tasks.Task{}, panelerr.Validation("task_service_unavailable", "Task service is unavailable")
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		task, err := s.tasks.Get(ctx, taskID)
+		if err != nil {
+			return task, err
+		}
+		switch task.Status {
+		case tasks.StatusRunning, tasks.StatusCompleted, tasks.StatusFailed, tasks.StatusFailedRetryable, tasks.StatusBlocked, tasks.StatusCancelled:
+			return task, nil
+		}
+		if time.Now().After(deadline) {
+			return task, nil
+		}
+		select {
+		case <-ctx.Done():
+			return task, ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
 
 func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 	if taskSvc == nil {
