@@ -435,6 +435,7 @@ func (s *Service) runRenewTask(ctx context.Context, task tasks.Task) error {
 	cert.AssetID = assetID
 	cert.NotBefore, cert.NotAfter = certificateValidity(bundle.CertificatePEM)
 	cert.NextRenewAt = nextRenewAt(cert.NotAfter)
+	cert.Status = StatusIssued
 	cert.LastError = ""
 	cert.UpdatedAt = time.Now().UTC()
 	if err := s.updateRenewal(ctx, cert); err != nil {
@@ -789,8 +790,13 @@ func (s *Service) insert(ctx context.Context, cert Certificate) error {
 }
 
 func (s *Service) updateRenewal(ctx context.Context, cert Certificate) error {
+	status := cert.Status
+	if strings.TrimSpace(status) == "" {
+		status = StatusIssued
+	}
 	return orm.New(s.db).From("certificates").Where("id = ?", cert.ID).UpdateColumns(ctx, map[string]any{
 		"asset_id":      cert.AssetID,
+		"status":        status,
 		"not_before":    formatOptionalTime(cert.NotBefore),
 		"not_after":     formatOptionalTime(cert.NotAfter),
 		"next_renew_at": formatOptionalTime(cert.NextRenewAt),

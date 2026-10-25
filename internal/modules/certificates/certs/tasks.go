@@ -2,6 +2,7 @@ package certs
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"panel/internal/modules/tasks"
@@ -14,24 +15,38 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 	if taskSvc == nil {
 		return
 	}
+	certificateLifecycleKey := func(in tasks.CreateInput) string {
+		certID := strings.TrimSpace(in.ResourceID)
+		if certID == "" {
+			return ""
+		}
+		// Share one exclusive domain across issue/reissue/renew so concurrent
+		// ACME flows cannot overwrite the same certificate/asset (CRT-ACME-010).
+		return "certificate:" + certID
+	}
 	for _, def := range []tasks.Definition{
 		{
-			Type:        TaskTypeIssue,
-			AllowRunNow: true,
-			AllowRetry:  true,
-			Execute:     s.RunIssueTask,
+			Type:              TaskTypeIssue,
+			AllowRunNow:       true,
+			AllowRetry:        true,
+			ConcurrencyPolicy: tasks.ConcurrencyResourceExclusive,
+			ConcurrencyKey:    certificateLifecycleKey,
+			Execute:           s.RunIssueTask,
 		},
 		{
-			Type:        TaskTypeReissue,
-			AllowRunNow: true,
-			AllowRetry:  true,
-			Execute:     s.RunIssueTask,
+			Type:              TaskTypeReissue,
+			AllowRunNow:       true,
+			AllowRetry:        true,
+			ConcurrencyPolicy: tasks.ConcurrencyResourceExclusive,
+			ConcurrencyKey:    certificateLifecycleKey,
+			Execute:           s.RunIssueTask,
 		},
 		{
 			Type:              TaskTypeRenew,
 			Summary:           "Renewing due certificates",
 			AllowRetry:        true,
-			ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed,
+			ConcurrencyPolicy: tasks.ConcurrencyResourceExclusive,
+			ConcurrencyKey:    certificateLifecycleKey,
 			Execute:           s.RenewTask,
 			Periodic: &tasks.Periodic{
 				CollectInputs: func(ctx context.Context, _ tasks.PeriodicTrigger) (tasks.CreateBatchInput, bool, error) {

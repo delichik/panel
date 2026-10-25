@@ -43,8 +43,8 @@
 - `CRT-ACME-007`：首次签发失败置status=failed并保存lastError；重新签发失败只更新lastError且保留上一份issued材料与可用状态，不得先破坏旧证书。
 - `CRT-ACME-008`：ACME使用DNS-01；challenge创建后无论授权、finalize、取消或超时都必须尝试清理。账户私钥跨签发复用，账户已存在时通过GetReg恢复而不是报失败。
 - `CRT-ACME-009`：签发/重签/续签必须把账号、订单、challenge、等待、清理和finalize阶段写入任务步骤/metadata，日志不得包含token、账户私钥或证书私钥。
-- `CRT-ACME-010`：手动renew必须有存在的证书并创建 `certificate_renew`；30分钟周期仅为autoRenew、nextRenewAt已到的证书创建共享operation批次，同一证书重复执行需由任务去重保护。
-- `CRT-ACME-011`：续签成功才替换ACME资产并更新生命周期；任何失败保留旧材料并写lastError。随后普通应用刷新与反向代理证书协调必须分别尝试，一个失败不能阻止另一个尝试。
+- `CRT-ACME-010`：手动renew必须有存在的证书并创建 `certificate_renew`；30分钟周期仅为autoRenew、nextRenewAt已到的证书创建共享operation批次；同一证书的 issue/reissue/renew 必须共用排他并发键，不得并行互相覆盖。
+- `CRT-ACME-011`：续签成功才替换ACME资产并更新生命周期（含 `status=issued`、有效期、nextRenewAt，并清 lastError）；任何失败保留旧材料并写lastError。随后普通应用刷新与反向代理证书协调必须分别尝试，一个失败不能阻止另一个尝试。
 - `CRT-ACME-012`：仅issued证书进入内部文件目录，source稳定为 `certificate:<id>:certificate|private_key`；未签发、失败或不存在证书不可读取。
 - `CRT-ACME-013`：删除前必须检查应用文件和反向代理引用；在用返回409 `certificate_in_use`。未引用时先删除其ACME资产再删生命周期记录，普通key-assets API不可代管该资产。
 - `CRT-ACME-014`：旧certificate/private_key path只用于启动迁移；迁移成功后材料进入key_assets并清理旧文件，新签发不得再写路径。
