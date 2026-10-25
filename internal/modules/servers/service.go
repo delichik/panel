@@ -485,7 +485,7 @@ func (s *Service) Restart(ctx context.Context, serverID string) (tasks.Task, err
 	if !hasPrivilege(srv) {
 		return tasks.Task{}, panelerr.Validation("privileged_access_required", "Root or passwordless sudo access is required")
 	}
-	task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
+	task, _, err := tasks.NewManager(s.tasks).CreateAndRun(ctx, tasks.CreateInput{
 		Type:         restartTaskType,
 		ServerID:     serverID,
 		ResourceType: connectivityResourceType,
@@ -494,21 +494,36 @@ func (s *Service) Restart(ctx context.Context, serverID string) (tasks.Task, err
 		Summary:      "Restarting server",
 		MaxRetries:   0,
 	}, tasks.Trigger{Type: "user", Manual: true})
+	return task, err
+}
+
+// RunRestartTask recovers server_restart after process restart via registered Execute.
+func (s *Service) RunRestartTask(tc tasks.TaskContext) error {
+	ctx, task := tc.Context, tc.Task
+	if s.exec == nil {
+		return panelerr.Validation("server_executor_unavailable", "Server executor is unavailable")
+	}
+	serverID := firstNonEmpty(task.ServerID, task.ResourceID)
+	srv, err := s.Get(ctx, serverID)
 	if err != nil {
-		return tasks.Task{}, err
+		if isNotFoundError(err) && s.tasks != nil {
+			_ = s.tasks.Cancel(ctx, task.ID, "Task cancelled because the server was removed")
+		}
+		return err
 	}
-	if !created {
-		return task, nil
+	if !srv.Reachable {
+		return panelerr.Validation("server_not_reachable", "Server connectivity has not been confirmed")
 	}
-	if err := s.tasks.Start(ctx, task.ID); err != nil {
-		return tasks.Task{}, err
+	if !hasPrivilege(srv) {
+		return panelerr.Validation("privileged_access_required", "Root or passwordless sudo access is required")
 	}
-	task, err = s.tasks.Get(ctx, task.ID)
-	if err != nil {
-		return tasks.Task{}, err
+	if task.Status != tasks.StatusRunning {
+		if err := s.tasks.Start(ctx, task.ID); err != nil {
+			return err
+		}
 	}
-	go s.runRestart(s.tasks.ExecutionContext(task.ID), task.ID, srv)
-	return task, nil
+	s.runRestart(ctx, task.ID, srv)
+	return nil
 }
 
 func (s *Service) ensureUFWManageable(ctx context.Context, serverID string) (Server, error) {

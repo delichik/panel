@@ -53,6 +53,7 @@
 - `SSH-OPS-003`：特权状态固定为 `root|passwordless_sudo|none`；UID 0 为 root，非 root 仅 `sudo -n` 成功才为 passwordless_sudo，派生 privileged 与时间必须一致。
 - `SSH-OPS-004`：远程命令、连接和上传必须受运行时 timeout 或操作专用 timeout 控制；超时返回稳定 timeout错误，命令退出非零返回 `remote_command_failed`，不得把 stdout/stderr 中秘密写入对外错误。
 - `SSH-OPS-005`：特权命令仅 root 直跑，其他允许路径使用非交互 sudo；软件包名、UFW 参数和远程路径必须经过白名单/结构化参数验证，禁止用户输入直接拼 shell。
+- `SSH-OPS-006`：`POST /servers/{id}/restart` 必须经 `server_restart` 任务执行；任务须注册 Execute 并由 `CreateAndRun` 启动，以便 Panel 进程重启后可从 queued/running 恢复。节点须已确认可达且具备 root/免密 sudo；优先经兼容 Agent 的 `RestartSystem`，否则经特权 SSH 下发重启脚本。
 
 ## 4. 系统探测与 Agent 状态机
 
@@ -72,7 +73,7 @@
 - `AGT-DEP-005`：远端部署必须停止 systemd和残留进程，写入 `/etc/panel-agent`、`--srv` service及端口9786，验证文件证书和实际服务证书指纹，失败日志包含 systemctl/journal诊断但不得包含私钥。两条投递路径都必须校验压缩包解压后的 sha256 与经本次 SSH 调用下发的期望值一致，不匹配必须终止安装。
 - `AGT-CERT-001`：`POST /servers/{id}/agent/certificate` 只作为高级手动安装兜底返回 CA、节点证书、私钥、监听地址、Agent URL 和 Docker host，不落库；响应必须受认证且不得进入日志或缓存。
 - `AGT-CERT-002`：系统证书列表只展示已有元数据的 Agent CA、Panel client、节点 server证书和 Panel TLS链；系统资产不可通过普通 key asset API下载、导出、删除、重签或作为应用文件。
-- `AGT-CERT-003`：重置 Panel Agent client 保留 CA并热加载共享 gRPC client；重置 Agent CA同时生成 client并为全部已配置服务器排队重部署；重置单节点证书复用节点部署任务。
+- `AGT-CERT-003`：重置 Panel Agent client 保留 CA并热加载共享 gRPC client；重置 Agent CA同时生成 client并为全部已配置服务器排队重部署；重置单节点证书复用节点部署任务。`agent-ca`/`agent-panel-client` 重置必须走注册了 Execute 的 `agent_certificate_reset` 任务（`CreateAndRun`，`ResourceID` 为证书 ID），以便进程重启后可恢复。
 - `AGT-CERT-004`：为服务器签发 Agent 证书时，节点证书材料持久化为 `key_assets` 中按 `agent-server-<serverID>` 命名的系统资产；资产名称必须包含稳定 serverID，服务器重名、删除后重建同名服务器或重复签发都不得违反 `key_assets.name` 唯一约束；重新签发必须按 serverID 原地更新同一资产，不产生重复资产。
 - `AGT-DL-001`：目标机下载端点固定为 `GET /agent/{version}/{platform}/panel-agent.gz`，注册在主 Panel mux 且位于 `/api` 之外。`{version}` 取 `buildinfo` 版本号；仅当版本号不唯一（本地构建的 `dev`）时才使用内容寻址的 `dev-<sha256前12位>`，其中 sha256 取解压后二进制。`{platform}` 只接受 `linux-amd64`、`linux-arm64`。同一二进制对所有服务器必须产生同一个 URL。`agent.downloadBaseUrl` 为空时部署行为必须与引入本能力之前完全一致（只走 SSH 上传）。
 - `AGT-DL-002`：端点不鉴权，且不得设置 `Set-Cookie`、不得读取或回显会话状态。命中响应必须为 200（Range 请求为 206）并带 `Content-Type: application/gzip`、`Cache-Control: public, max-age=31536000, immutable`、sha256 的强 `ETag`、`Accept-Ranges: bytes`、`X-Content-Type-Options: nosniff`，且不得带 `Content-Encoding`。必须支持 `Range` 请求。

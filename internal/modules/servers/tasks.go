@@ -55,7 +55,10 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 			Type:    fail2banReleaseTaskType,
 			Execute: s.RunFail2BanReleaseTask,
 		},
-		{Type: restartTaskType},
+		{
+			Type:    restartTaskType,
+			Execute: s.RunRestartTask,
+		},
 		{
 			Type:        agentDeployTaskType,
 			AllowRunNow: true,
@@ -68,7 +71,10 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 			AllowRetry:  true,
 			Execute:     s.RunTailscaleApplyTask,
 		},
-		{Type: agentCertificateResetTaskType},
+		{
+			Type:    agentCertificateResetTaskType,
+			Execute: s.RunSystemCertificateResetTask,
+		},
 	} {
 		if _, exists := taskSvc.Registry().Definition(def.Type); exists {
 			taskSvc.Registry().Replace(def)

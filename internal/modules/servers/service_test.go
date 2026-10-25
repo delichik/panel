@@ -755,15 +755,23 @@ func TestRestartCreatesRunningTaskAndSchedulesReboot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if task.Type != restartTaskType || task.Status != tasks.StatusRunning || task.StartedAt == nil {
-		t.Fatalf("expected running restart task, got %#v", task)
+	if task.Type != restartTaskType {
+		t.Fatalf("expected restart task type, got %#v", task)
 	}
-	stored, err := taskSvc.Get(context.Background(), task.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stored.Status != tasks.StatusRunning {
-		t.Fatalf("expected stored restart task to be running, got %#v", stored)
+	// CreateAndRun returns before Execute claims/starts; wait until running or done.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		stored, getErr := taskSvc.Get(context.Background(), task.ID)
+		if getErr != nil {
+			t.Fatal(getErr)
+		}
+		if stored.Status == tasks.StatusRunning || stored.Status == tasks.StatusCompleted || stored.Status == tasks.StatusFailed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("restart task never left queued: %#v", stored)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 
 	close(blockRestart)

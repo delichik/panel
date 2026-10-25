@@ -98,22 +98,15 @@ func (s *Service) ResetSystemCertificate(ctx context.Context, certificateID stri
 		}
 		return s.panelTLS.ResetPanelTLS(ctx, certificateID)
 	case "agent-ca", "agent-panel-client":
-		task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
+		task, _, err := tasks.NewManager(s.tasks).CreateAndRun(ctx, tasks.CreateInput{
 			Type:         agentCertificateResetTaskType,
 			ResourceType: agentCertificateResourceType,
 			ResourceID:   certificateID,
+			TriggerType:  "user",
 			TriggeredBy:  "user",
 			Summary:      "Resetting system-managed agent certificate",
-			Status:       tasks.StatusRunning,
 		}, tasks.Trigger{Type: "user", Manual: true})
-		if err != nil {
-			return tasks.Task{}, err
-		}
-		if !created {
-			return task, nil
-		}
-		go s.runSystemCertificateReset(context.Background(), task.ID, certificateID)
-		return task, nil
+		return task, err
 	default:
 		const prefix = "agent-server:"
 		if !strings.HasPrefix(certificateID, prefix) || strings.TrimSpace(strings.TrimPrefix(certificateID, prefix)) == "" {
@@ -121,6 +114,24 @@ func (s *Service) ResetSystemCertificate(ctx context.Context, certificateID stri
 		}
 		return s.ensureAgentDeployTask(ctx, strings.TrimPrefix(certificateID, prefix), "user", true)
 	}
+}
+
+// RunSystemCertificateResetTask recovers agent_certificate_reset after process restart.
+func (s *Service) RunSystemCertificateResetTask(tc tasks.TaskContext) error {
+	ctx, task := tc.Context, tc.Task
+	certificateID := strings.TrimSpace(task.ResourceID)
+	switch certificateID {
+	case "agent-ca", "agent-panel-client":
+	default:
+		return panelerr.NotFound("system certificate")
+	}
+	if task.Status != tasks.StatusRunning {
+		if err := s.tasks.Start(ctx, task.ID); err != nil {
+			return err
+		}
+	}
+	s.runSystemCertificateReset(ctx, task.ID, certificateID)
+	return nil
 }
 
 func (s *Service) runSystemCertificateReset(ctx context.Context, taskID, certificateID string) {
