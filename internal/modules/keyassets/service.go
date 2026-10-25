@@ -383,8 +383,12 @@ func (s *Service) ListSummaries(ctx context.Context) ([]Asset, error) {
 	if err != nil {
 		return nil, err
 	}
+	references, err := s.assetReferences(ctx)
+	if err != nil {
+		return nil, err
+	}
 	for i := range assets {
-		assets[i] = decorateAsset(assets[i], nil, counts[assets[i].ID])
+		assets[i] = decorateAsset(assets[i], references[assets[i].ID], counts[assets[i].ID])
 	}
 	return assets, nil
 }
@@ -533,8 +537,14 @@ func (s *Service) listSummaryPage(ctx context.Context, page, pageSize int, query
 		if err := countRows.Err(); err != nil {
 			return httpx.ListPage[Asset]{}, err
 		}
+		// KAS-LIST-001: list summaries omit reference objects, but InUse /
+		// referenceCount / canDelete still require the same citation map as List/Get.
+		references, err := s.assetReferences(ctx)
+		if err != nil {
+			return httpx.ListPage[Asset]{}, err
+		}
 		for i := range items {
-			items[i] = decorateAsset(items[i], nil, counts[items[i].ID])
+			items[i] = decorateAsset(items[i], references[items[i].ID], counts[items[i].ID])
 		}
 	}
 	return httpx.ListPage[Asset]{Items: items, Total: total, Page: page, PageSize: pageSize}, nil

@@ -406,18 +406,22 @@ func toAssetSummaryDTO(asset Asset) assetSummaryDTO {
 		DownloadKinds:  append([]string(nil), asset.FileKinds...),
 		ChildCount:     asset.ChildCount,
 		ReferenceCount: len(references),
-		References:     references,
-		CanReissue:     asset.CanReissue,
-		CanRegenerate:  asset.CanRegenerate,
-		CanDelete:      !asset.InUse && !asset.HasChildren,
-		CreatedAt:      asset.CreatedAt,
-		UpdatedAt:      asset.UpdatedAt,
+		// KAS-LIST-001: list/summary responses keep an empty references array;
+		// detail fills the objects via toAssetDetailDTO (KAS-LIST-002).
+		References:    []assetReferenceDTO{},
+		CanReissue:    asset.CanReissue,
+		CanRegenerate: asset.CanRegenerate,
+		CanDelete:     !asset.InUse && !asset.HasChildren,
+		CreatedAt:     asset.CreatedAt,
+		UpdatedAt:     asset.UpdatedAt,
 	}
 }
 
 func toAssetDetailDTO(asset Asset) assetDetailDTO {
+	summary := toAssetSummaryDTO(asset)
+	summary.References = referencesForAsset(asset)
 	return assetDetailDTO{
-		assetSummaryDTO: toAssetSummaryDTO(asset),
+		assetSummaryDTO: summary,
 		Metadata:        asset.Metadata,
 	}
 }

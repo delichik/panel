@@ -59,8 +59,8 @@
 
 ## 6. 统一密钥资产列表与创建
 
-- `KAS-LIST-001`：`GET /key-assets` 返回稳定分页摘要，搜索仅匹配名称、commonName或fingerprint；摘要不查私钥密文、证书密文、metadata、引用详情，并将数组字段规范为非nil空数组。
-- `KAS-LIST-002`：`GET /key-assets/{id}` 才可返回非秘密metadata、引用、childCount、可操作性和文件kind；任何响应不得包含私钥密文或明文。
+- `KAS-LIST-001`：`GET /key-assets` 返回稳定分页摘要，搜索仅匹配名称、commonName或fingerprint；摘要不查私钥密文、证书密文、metadata，也不嵌入引用对象（`references` 恒为非 nil 空数组）；但必须计算 `referenceCount`/`canDelete`（与 `InUse`/子证书门禁一致），数组字段规范为非nil空数组。
+- `KAS-LIST-002`：`GET /key-assets/{id}` 才可返回非秘密metadata、完整 `references`、childCount、可操作性和文件kind；任何响应不得包含私钥密文或明文。
 - `KAS-LIST-003`：普通列表/详情/下载/导出/删除对ACME资产统一返回不存在；systemManaged资产从普通列表排除，变更操作返回 `key_asset_system_managed`或专用接口语义。
 - `KAS-LIST-004`：`GET /key-assets/tls` 返回所有证书/私钥完整且通过Panel监听兼容性验证的TLS资产，包括用户、ACME和内置panel-tls，排除agent_tls；不传域名、不按SAN筛选，非法资产静默不列入。
 - `KAS-CRT-001`：创建CA和TLS必须验证名称、commonName、算法与keySize；RSA仅2048/3072/4096，ECDSA仅256，Ed25519按无位数语义；私钥始终加密保存。

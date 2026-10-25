@@ -377,6 +377,26 @@ func TestListReportsExactPanelFileAndReverseProxyReferences(t *testing.T) {
 	if byID[ca.ID].ChildCount != 1 {
 		t.Fatalf("CA child count = %d", byID[ca.ID].ChildCount)
 	}
+
+	// KAS-LIST-001: summary page must still gate delete via InUse even though it
+	// does not embed reference objects in the HTTP DTO.
+	page, err := svc.ListSummaryPage(ctx, 1, 50, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	summaryByID := map[string]Asset{}
+	for _, asset := range page.Items {
+		summaryByID[asset.ID] = asset
+	}
+	for _, id := range []string{sshAsset.ID, tlsAsset.ID} {
+		asset, ok := summaryByID[id]
+		if !ok {
+			t.Fatalf("summary page missing asset %s", id)
+		}
+		if !asset.InUse || len(asset.References) != 1 {
+			t.Fatalf("summary InUse/references for %s = %#v", id, asset)
+		}
+	}
 }
 
 func readPanelFileForTest(ctx context.Context, svc *Service, source string) ([]byte, error) {

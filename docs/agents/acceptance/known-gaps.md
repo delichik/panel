@@ -11,7 +11,7 @@
 | GAP-005 | 证书页面入口 | ~~domains/self-signed 模式可能显示“生成 SSH”入口~~（已关闭） | 表格化一轮已修复：生成 SSH/CA/TLS 入口只出现在 keys 模式页头（`UI-CERT-009`），列表结构测试可覆盖 |
 | GAP-006 | 危险确认 | ~~settings 导出/恢复/重置确认仍为手写 Dialog~~（已关闭） | settings 已迁移到统一 `ConfirmDialog`（impact、危险项 `requireCheckbox`、loading 锁）；各主列表页此前已统一；新增危险动作不得再手写 |
 | GAP-007 | ~~前端/后端证书类型~~（已关闭） | ~~`web/src/types/certificates.ts` 仍声明后端明确不输出的 `certificatePath/privateKeyPath`~~ | 前端类型与 mocks 已删除路径字段；后端 DTO 保持 `json:"-"`，不向客户端暴露私钥路径 |
-| GAP-008 | ~~密钥资产详情类型~~（已关闭） | ~~前端要求 references/referenceCount，后端 detail DTO 未输出~~ | `assetSummaryDTO`/`detail` 输出 `referenceCount` 与 `references`；列表与详情合同对齐，删除门禁仍由 `canDelete`/`InUse` 驱动 |
+| GAP-008 | ~~密钥资产详情类型~~（已关闭） | ~~前端要求 references/referenceCount，后端 detail DTO 未输出~~ | detail 输出完整 `references`+`referenceCount`；列表摘要只输出 `referenceCount`/`canDelete`（`references` 为空数组，见 `KAS-LIST-001/002`），删除门禁由 `canDelete`/`InUse` 驱动 |
 | GAP-009 | ~~系统版本类型~~（已关闭） | ~~后端可能返回 `checkError`，前端 `VersionInfo` 未声明~~ | typed client 声明 `checkError`；设置页系统段安全展示检查失败 |
 | GAP-010 | 备份旧文档引用 | 旧指引引用已不存在的 `web/src/api/backups.ts` 与 `web/src/types/api.ts` | 旧指引由本规范替代；后续引用只指向实际 maintenance/settings API 与类型 |
 | GAP-011 | Agent report 频率说明 | 旧指引写每秒检查，当前实现为每 5 秒 | 本规范以当前实现/运行时设置为准；增加频率行为测试或统一实现 |
