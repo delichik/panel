@@ -89,7 +89,7 @@
 - `AGT-DL-011`：脚本中所有插值必须经 `ShellQuote`；`agent.downloadBaseUrl` 保存时必须拒绝引号、空白、反斜杠与 shell 元字符，并限制为不含 path/query/fragment/userinfo 的 `http(s)://host[:port]` 源。
 - `AGT-FW-001`：防火墙是 Agent 部署的**前提**，必须在触碰节点上任何东西之前执行（签发节点证书之后、二进制投递之前），且**完整安装与仅重启两条分支都要执行**，使本次改动前已加入的存量服务器在下次部署时收敛。任一步失败必须让部署任务失败，且**不得改动已在运行的 Agent**——节点上已有可用 Agent 时，防火墙步骤失败只能让它保持原样。
 - `AGT-FW-002`：Panel 只通过 UFW 管理防火墙。发行版没有 UFW 适配器时必须在部署前以 `agent_firewall_unsupported` 失败：`SRV-SAVE-006` 的受支持发行版范围因此收窄为 Debian/Ubuntu，Agent 不再部署到其他发行版。发行版记录为空（首次信息采集尚未完成就手动部署）时必须先 SSH 探测再判定，不得因空记录直接拒绝。
-- `AGT-FW-003`：放行的基础端口集合固定为 SSH 端口（`normalizedTCPPort(server.Port)`）、Agent 内网监听端口（`agentControlPort`）与反向代理 trait 为真时的 80/443；**基础集合内不得包含应用端口**。应用端口由 Agent 在 `RuntimeReconcile` 中按应用 spec 的 `openFirewall` 声明自行放行（`panel:application:<id>` 规则），UFW 处于 disabled 时规则仍保留，因此先前写入的应用规则会在本次启用时一并生效。声明了宿主端口但 `openFirewall=false` 的应用会被阻断，必须在添加服务器的提示中写明。
+- `AGT-FW-003`：放行的基础端口集合固定为 SSH 端口（`normalizedTCPPort(server.Port)`）、Agent 内网监听端口（`agentControlPort`）与反向代理 trait 为真时的 80/443；**基础集合内不得包含应用端口**。应用端口由 Agent 在 `RuntimeReconcile` 中按应用 spec 的 `openFirewall` 声明自行放行（`panel:application:<id>` 规则），UFW 处于 disabled 时规则仍保留，因此先前写入的应用规则会在本次启用时一并生效；`apply` 在 Ensure 之后若 reconcile 失败，必须 fail-closed 清理该应用已 ensure 的规则，不得长期残留新开端口。声明了宿主端口但 `openFirewall=false` 的应用会被阻断，必须在添加服务器的提示中写明。
 - `AGT-FW-005`：只有一次 SSH 状态探测确认 UFW 已安装且已启用时才允许跳过远端变更，此时不得下发任何 `ufw --force ...` 或 apt 命令。需要启用时，`ufw --force enable` 之前必须先放行 SSH 端口与 Agent 端口；`UFWEnableScript` 是唯一允许触碰 SSH 端口的实现，该顺序必须有测试断言。防火墙步骤经 **SSH** 而非 Agent RPC 执行：首次安装时 Agent 尚不存在，且「恢复 Agent 自身」是 `AGT-STATE-002` 允许回退 SSH 的唯一例外。
 - `AGT-FW-006`：安装步骤必须复用发行版适配器的固定 apt 参数（`DEBIAN_FRONTEND=noninteractive`、`--force-confdef`、`--force-confold`），并整体受 `ufwInstallTimeout` 约束；重复 `ufw allow` 必须幂等，步骤失败必须可由任务日志中的端口清单与远端输出定位。
 - `AGT-DKR-001`：Docker 是 Agent 部署的第二个环境前提，在防火墙步骤之后、签发节点证书与投递二进制之前执行，**完整安装与仅重启两条分支都要执行**，使存量服务器在下次部署时收敛。任一步失败必须让部署任务失败，且不得改动已在运行的 Agent。
@@ -115,7 +115,7 @@
 
 - `F2B-API-001`：状态读取必须要求受支持、可达和特权节点；有兼容 Agent 时合并远端 installed/active/panelConfigPresent/jails/raw 与 AppDB 草稿、managed和更新时间。
 - `F2B-API-002`：没有保存记录时必须返回稳定默认 jail草稿且 `managed=false`；远端不可查询时不得伪造 installed/active成功状态。
-- `F2B-API-003`：`PUT /fail2ban` 只解析、规范化并保存 Panel YAML草稿，不写目标机、不自动启用；保存成功后返回状态。
+- `F2B-API-003`：`PUT /fail2ban` 只解析、规范化并保存 Panel YAML草稿，不写目标机、不自动启用；保存前必须通过与状态读取相同的服务器存在/可达/特权门禁，成功后返回状态。
 - `F2B-VAL-001`：YAML必须拒绝未知字段、空 jail集合、非法/重复 jail名、负 maxretry、含换行的标量与非法 option key/value；失败不得覆盖旧草稿。
 - `F2B-API-004`：启用时可使用请求 YAML或已存草稿；远端已安装但尚未接管时必须要求 `confirmTakeover=true`，否则返回 `fail2ban_takeover_confirmation_required`。
 - `F2B-API-005`：apply必须由 `server_fail2ban_apply` 任务经 Agent写 `/etc/fail2ban/jail.d/panel.local`，远端配置测试通过并reload/restart成功后才把 managed置true；失败保留原 managed状态；任务必须注册 Execute，并把规范化 YAML 持久化到 ParamsJSON，以便进程重启后可从 queued/running 恢复。

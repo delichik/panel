@@ -57,6 +57,9 @@ func (s *Service) Fail2BanState(ctx context.Context, serverID string) (Fail2BanS
 }
 
 func (s *Service) SaveFail2Ban(ctx context.Context, serverID string, req Fail2BanUpdateRequest) (Fail2BanState, error) {
+	if _, err := s.ensureFail2BanManageable(ctx, serverID); err != nil {
+		return Fail2BanState{}, err
+	}
 	config, normalizedYAML, err := parseFail2BanYAML(req.ConfigYAML)
 	if err != nil {
 		return Fail2BanState{}, err
