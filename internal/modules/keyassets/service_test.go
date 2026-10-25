@@ -886,12 +886,17 @@ func TestImportPreflightRejectsOverwriteOfACMEAsset(t *testing.T) {
 	defer closeFn()
 	ctx := context.Background()
 
+	ca, err := svc.CreateCA(ctx, CreateCARequest{Name: "ACME Stand-in CA", CommonName: "acme-ca.example.test", Algorithm: AlgorithmRSA, KeySize: 2048})
+	if err != nil {
+		t.Fatal(err)
+	}
 	existing, err := svc.CreateTLS(ctx, CreateTLSRequest{
-		Name:       "Existing ACME",
-		CommonName: "acme.example.test",
-		DNSNames:   []string{"acme.example.test"},
-		Algorithm:  AlgorithmRSA,
-		KeySize:    2048,
+		Name:          "Existing ACME",
+		ParentAssetID: ca.ID,
+		CommonName:    "acme.example.test",
+		DNSNames:      []string{"acme.example.test"},
+		Algorithm:     AlgorithmRSA,
+		KeySize:       2048,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -915,11 +920,17 @@ func TestImportPreflightRejectsOverwriteOfACMEAsset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.PreflightImport(ctx, ImportPreflightRequest{
+	err = nil
+	_, err = svc.PreflightImport(ctx, ImportPreflightRequest{
 		ArchiveBase64: base64.StdEncoding.EncodeToString(raw),
 		Password:      "correct horse battery staple",
-	}); err == nil {
+	})
+	if err == nil {
 		t.Fatal("expected preflight to reject overwriting an ACME-managed asset")
+	}
+	var pe *panelerr.Error
+	if !errors.As(err, &pe) || pe.Code != "key_asset_system_managed" {
+		t.Fatalf("expected key_asset_system_managed, got %v", err)
 	}
 }
 
