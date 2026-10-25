@@ -881,6 +881,48 @@ func TestDownloadExportRejectsPathOutsideExportDir(t *testing.T) {
 	}
 }
 
+func TestImportPreflightRejectsOverwriteOfACMEAsset(t *testing.T) {
+	svc, store, closeFn := newTestService(t)
+	defer closeFn()
+	ctx := context.Background()
+
+	existing, err := svc.CreateTLS(ctx, CreateTLSRequest{
+		Name:       "Existing ACME",
+		CommonName: "acme.example.test",
+		DNSNames:   []string{"acme.example.test"},
+		Algorithm:  AlgorithmRSA,
+		KeySize:    2048,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().ExecContext(ctx, `UPDATE key_assets SET metadata_json=? WHERE id=?`, `{"origin":"acme"}`, existing.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKeyPEM, err := marshalPrivateKeyPEM(privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := encryptArchive("correct horse battery staple", archivePayload{
+		Assets: []archiveAsset{{
+			ID: existing.ID, Type: TypeSSHKeyPair, Name: "replacement", Algorithm: AlgorithmEd25519, PrivateKeyPEM: string(privateKeyPEM),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.PreflightImport(ctx, ImportPreflightRequest{
+		ArchiveBase64: base64.StdEncoding.EncodeToString(raw),
+		Password:      "correct horse battery staple",
+	}); err == nil {
+		t.Fatal("expected preflight to reject overwriting an ACME-managed asset")
+	}
+}
+
 func TestImportPlanFilesPersistExpiryAndCleanup(t *testing.T) {
 	svc, _, closeFn := newTestService(t)
 	defer closeFn()

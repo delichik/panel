@@ -1378,7 +1378,7 @@ func (s *Service) PreflightImport(ctx context.Context, in ImportPreflightRequest
 		stored.UpdatedAt = now
 		assets = append(assets, stored)
 		if existingByID, err := s.getStoredAsset(ctx, item.ID); err == nil {
-			if isSystemManagedAsset(existingByID.Asset) {
+			if isSystemManagedAsset(existingByID.Asset) || isACMEAsset(existingByID.Asset) {
 				return ImportPreflightResult{}, systemAssetMutationError()
 			}
 			conflicts = append(conflicts, ImportConflict{IncomingID: item.ID, IncomingName: item.Name, ExistingID: existingByID.ID, ExistingName: existingByID.Name, ConflictByID: true})
@@ -1388,7 +1388,7 @@ func (s *Service) PreflightImport(ctx context.Context, in ImportPreflightRequest
 		}
 		existingByName, err := s.getStoredAssetByName(ctx, item.Name)
 		if err == nil && existingByName.ID != item.ID {
-			if isSystemManagedAsset(existingByName.Asset) {
+			if isSystemManagedAsset(existingByName.Asset) || isACMEAsset(existingByName.Asset) {
 				return ImportPreflightResult{}, systemAssetMutationError()
 			}
 			conflicts = append(conflicts, ImportConflict{IncomingID: item.ID, IncomingName: item.Name, ExistingID: existingByName.ID, ExistingName: existingByName.Name, ConflictByName: true})
@@ -1521,7 +1521,7 @@ func (s *Service) ExecuteImport(ctx context.Context, planID string, in ImportExe
 				}
 				if strategy == "overwrite_existing" {
 					if existing, err := s.getStoredAssetTx(ctx, tx, asset.ID); err == nil {
-						if isSystemManagedAsset(existing.Asset) {
+						if isSystemManagedAsset(existing.Asset) || isACMEAsset(existing.Asset) {
 							return systemAssetMutationError()
 						}
 						asset.CreatedAt = existing.CreatedAt
