@@ -396,3 +396,46 @@ func TestManagerRemoteFenceExecuteOwnsSettlement(t *testing.T) {
 		t.Fatalf("expected execute-owned error to remain, got %#v", got)
 	}
 }
+
+func TestManagerRemoteFenceClaimDoesNotMutateStatusOrLease(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	sawQueued := false
+	svc.MustRegister(Definition{
+		Type:           "deploy_remote_fence",
+		RecoveryPolicy: RecoveryRemoteFence,
+		Execute: func(tc TaskContext) error {
+			var status, leaseToken string
+			var retryCount int
+			if err := tc.Service.db.QueryRowContext(tc.Context,
+				`SELECT status, COALESCE(lease_token,''), retry_count FROM event_runs WHERE id=?`, tc.Task.ID,
+			).Scan(&status, &leaseToken, &retryCount); err != nil {
+				return err
+			}
+			if status != StatusQueued || leaseToken != "" || retryCount != 0 {
+				t.Fatalf("remote-fence claim must leave Store.Claim ownership intact, got status=%s lease=%q retry=%d", status, leaseToken, retryCount)
+			}
+			sawQueued = true
+			return nil
+		},
+	})
+	manager := NewManager(svc)
+	task, created, err := manager.Create(ctx, CreateInput{Type: "deploy_remote_fence", Summary: "deploy"}, Trigger{Manual: true})
+	if err != nil || !created {
+		t.Fatalf("create: task=%#v created=%v err=%v", task, created, err)
+	}
+	if err := manager.Run(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	if !sawQueued {
+		t.Fatal("Execute did not observe pre-Claim queued state")
+	}
+	got, err := svc.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No-op Execute + remote-fence: Manager must not Complete a still-queued row.
+	if got.Status != StatusQueued {
+		t.Fatalf("no-op remote-fence Execute must not be Completed by Manager, got %#v", got)
+	}
+}

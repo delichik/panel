@@ -298,3 +298,22 @@ func TestEnsureRevisionAndPlanBatchIsAtomic(t *testing.T) {
 		t.Fatalf("atomic planner rows = revisions:%d jobs:%d", revisionCount, jobCount)
 	}
 }
+
+func TestActiveAppServerUniqueIndexRejectsSecondQueuedDeploy(t *testing.T) {
+	db := newOrchestratorTestDB(t)
+	insertOrchestratorTestRows(t, db)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := db.Exec(`INSERT INTO event_runs(id,operation_id,type,status,application_id,server_id,node_id,resource_type,resource_id,instance_id,action,desired_generation,desired_spec_hash,desired_revision_id,desired_spec_json,created_at,updated_at)
+		VALUES('job-2','job-2','application_deploy','queued','app-1','srv-1','srv-1','application','app-1','inst-1','apply',1,'hash-1','rev-1','{"image":"one"}',?,?)`, now, now)
+	if err == nil {
+		t.Fatal("expected unique index to reject second active application_deploy for same app+server")
+	}
+	// Terminal + one active is allowed.
+	if _, err := db.Exec(`UPDATE event_runs SET status='completed', finished_at=? WHERE id='job-1'`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO event_runs(id,operation_id,type,status,application_id,server_id,node_id,resource_type,resource_id,instance_id,action,desired_generation,desired_spec_hash,desired_revision_id,desired_spec_json,created_at,updated_at)
+		VALUES('job-2','job-2','application_deploy','queued','app-1','srv-1','srv-1','application','app-1','inst-1','apply',1,'hash-1','rev-1','{"image":"one"}',?,?)`, now, now); err != nil {
+		t.Fatalf("terminal + new active must be allowed: %v", err)
+	}
+}

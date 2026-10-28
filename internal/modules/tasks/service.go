@@ -1012,6 +1012,13 @@ func (s *Service) FailUncertainPastEvidenceWindow(ctx context.Context, now time.
 	finishedAt := now.Format(time.RFC3339Nano)
 	for _, taskID := range taskIDs {
 		task, getErr := s.Get(ctx, taskID)
+		if getErr == nil {
+			if def, ok := s.Registry().Definition(task.Type); ok && normalizeRecoveryPolicy(def.RecoveryPolicy) == RecoveryRemoteFence {
+				// Deploy remote-fence evidence is owned by ORCH-LEASE-*; the
+				// local uncertain window must not terminal-fail those rows.
+				continue
+			}
+		}
 		res, err := orm.RawExec(ctx, s.db, `UPDATE event_runs SET status=?, stage=?, error=?, next_run_at=NULL, finished_at=? WHERE id=? AND status=? AND stage='uncertain'`,
 			StatusFailed, "orphan_execution_timeout", message, finishedAt, taskID, StatusRunning)
 		if err != nil {

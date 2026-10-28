@@ -70,6 +70,64 @@ func TestExternalScanWakeForwardsToUnifiedWorker(t *testing.T) {
 	}
 }
 
+func TestJobRunnerDispatchesInsteadOfDirectRunJob(t *testing.T) {
+	db := newOrchestratorTestDB(t)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.Exec(`INSERT INTO applications(id,deletion_requested) VALUES('app-1',0)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO application_instances(id,application_id,server_id,container_name,desired_state,desired_generation,desired_spec_hash,desired_revision_id,desired_spec_json,created_at,updated_at)
+		VALUES('inst-1','app-1','srv-1','panel-app','running',1,'hash-1','','{}',?,?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO event_runs(id,operation_id,type,status,application_id,server_id,node_id,resource_type,resource_id,instance_id,action,desired_generation,desired_spec_hash,desired_revision_id,desired_spec_json,created_at,updated_at)
+		VALUES('job-1','job-1','application_deploy','queued','app-1','srv-1','srv-1','application','app-1','inst-1','stop',1,'hash-1','','{}',?,?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	var runnerCalls atomic.Int64
+	var reconcileCalls atomic.Int64
+	ctrl := NewController(NewStore(db), &countingReconciler{calls: &reconcileCalls}, ControllerConfig{
+		Owner:        "test",
+		ScanInterval: 10 * time.Millisecond,
+		WorkerCount:  1,
+		LeaseTTL:     time.Minute,
+	})
+	ctrl.SetExternalScan(func() {})
+	ctrl.SetJobRunner(func(ctx context.Context, jobID string) error {
+		runnerCalls.Add(1)
+		return ctrl.RunJob(ctx, jobID)
+	})
+	if err := ctrl.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ctrl.Stop() }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for runnerCalls.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("JobRunner was never invoked for due deploy run")
+		}
+		_ = ctrl.Poll(context.Background())
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := runnerCalls.Load(); got < 1 {
+		t.Fatalf("JobRunner calls = %d, want >= 1", got)
+	}
+	if got := reconcileCalls.Load(); got < 1 {
+		t.Fatalf("reconcile via JobRunner→RunJob calls = %d, want >= 1", got)
+	}
+}
+
+type countingReconciler struct {
+	calls *atomic.Int64
+}
+
+func (c *countingReconciler) Reconcile(context.Context, ReconcileRequestRPC) (ReconcileResponse, error) {
+	c.calls.Add(1)
+	return ReconcileResponse{ObservedState: "stopped", ObservedGeneration: 1, ObservedSpecHash: "hash-1"}, nil
+}
+
 // ORCH-CTRL-001/002: persistent controller errors are structured and rate limited.
 func TestControllerDiagnosticsAreStructuredAndRateLimited(t *testing.T) {
 	core, logs := observer.New(zap.ErrorLevel)

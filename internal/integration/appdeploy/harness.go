@@ -81,15 +81,21 @@ func NewHarness(t *testing.T) *Harness {
 	}, applications.WithServerProvider(prov), applications.WithApplicationReconcileTrigger(trigger))
 	trigger.appSvc = appSvc
 	appSvc.RegisterTasks(taskSvc)
+	// Production RunEngine wiring: unified worker owns deploy due/wake and
+	// Manager.Run → Execute → RunJob (ENG-RUN-001 / GAP-030).
+	worker := tasks.NewWorker(taskSvc)
+	appSvc.BindRunEngineWorker(worker)
 	h := &Harness{T: t, Store: store, AppSvc: appSvc, TaskSvc: taskSvc, Agent: agent, servers: prov, ctx: ctx, cancel: cancel}
 	t.Cleanup(func() {
 		cancel()
+		worker.Stop()
 		_ = appSvc.StopOrchestrator()
 		_ = store.Close()
 	})
 	if err := appSvc.StartOrchestrator(ctx); err != nil {
 		t.Fatal(err)
 	}
+	worker.Start(ctx)
 	return h
 }
 
@@ -260,6 +266,17 @@ func (h *Harness) WaitJobAction(appID, serverID, action string, states ...string
 // Jobs 返回应用的全部 Job（按 server 排序）。
 func (h *Harness) Jobs(appID string) []JobRow {
 	return h.queryJobs("application_id=?", appID)
+}
+
+// RunCounters returns attempts/retry_count/lease_token/status for one event_runs row.
+func (h *Harness) RunCounters(jobID string) (attempts, retryCount int, leaseToken, status string) {
+	h.T.Helper()
+	if err := h.Store.AppDB().QueryRowContext(h.ctx,
+		`SELECT attempts, retry_count, COALESCE(lease_token,''), status FROM event_runs WHERE id=?`, jobID,
+	).Scan(&attempts, &retryCount, &leaseToken, &status); err != nil {
+		h.T.Fatalf("run counters %s: %v", jobID, err)
+	}
+	return attempts, retryCount, leaseToken, status
 }
 
 // JobForServer 返回指定 app+server 的 Job；不存在则失败。

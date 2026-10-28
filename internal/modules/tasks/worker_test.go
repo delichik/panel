@@ -79,6 +79,53 @@ func TestWorkerRunsDueTaskWithoutCreatingInternalTaskRecord(t *testing.T) {
 	}
 }
 
+func TestDueTasksSkipsRemoteFenceDeployRuns(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	genericRan := false
+	svc.MustRegister(Definition{
+		Type: "due_generic",
+		Execute: func(TaskContext) error {
+			genericRan = true
+			return nil
+		},
+	})
+	svc.MustRegister(Definition{
+		Type:           "application_deploy",
+		Hidden:         true,
+		RecoveryPolicy: RecoveryRemoteFence,
+		Execute: func(TaskContext) error {
+			t.Fatal("generic due loop must not Execute remote-fence deploy runs")
+			return nil
+		},
+	})
+	deploy, err := svc.Create(ctx, CreateInput{Type: "application_deploy", Summary: "deploy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	generic, err := svc.Create(ctx, CreateInput{Type: "due_generic", Summary: "generic"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	NewWorker(svc).runDueTasks(ctx)
+
+	gotDeploy, err := svc.Get(ctx, deploy.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotDeploy.Status != StatusQueued {
+		t.Fatalf("remote-fence deploy must stay queued for deployLoop, got %#v", gotDeploy)
+	}
+	gotGeneric, err := svc.Get(ctx, generic.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !genericRan || gotGeneric.Status != StatusCompleted {
+		t.Fatalf("generic due task should still run, ran=%v task=%#v", genericRan, gotGeneric)
+	}
+}
+
 func TestWorkerLeavesFutureRetryTaskQueued(t *testing.T) {
 	svc := newTestService(t)
 	svc.MustRegister(Definition{

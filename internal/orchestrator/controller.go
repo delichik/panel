@@ -181,6 +181,21 @@ func (c *Controller) getJobRunner() JobRunner {
 	return c.jobRunner
 }
 
+// JobRunnerConfigured reports whether unified Manager.Execute dispatch is wired.
+func (c *Controller) JobRunnerConfigured() bool {
+	return c.getJobRunner() != nil
+}
+
+// ExternalScanConfigured reports whether due/wake ticking is owned externally.
+func (c *Controller) ExternalScanConfigured() bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.externalScan
+}
+
 // ScanInterval is the deploy due-scan cadence (default 250ms).
 func (c *Controller) ScanInterval() time.Duration {
 	if c == nil {

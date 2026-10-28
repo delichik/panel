@@ -506,6 +506,10 @@ func TestRemoteFenceOrphanSkipsLocalUncertainMark(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	const fence = "lease_keep_me"
+	if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET lease_token=?, execution_id='exec_keep', stage='' WHERE id=?`, fence, task.ID); err != nil {
+		t.Fatal(err)
+	}
 	svc.runningMu.Lock()
 	delete(svc.runningExecutions, task.ID)
 	svc.runningMu.Unlock()
@@ -523,6 +527,44 @@ func TestRemoteFenceOrphanSkipsLocalUncertainMark(t *testing.T) {
 	}
 	if got.Status != StatusRunning || got.Stage == "uncertain" {
 		t.Fatalf("expected running without local uncertain stage, got %#v", got)
+	}
+	var leaseToken, stage string
+	if err := svc.db.QueryRowContext(ctx, `SELECT COALESCE(lease_token,''), COALESCE(stage,'') FROM event_runs WHERE id=?`, task.ID).Scan(&leaseToken, &stage); err != nil {
+		t.Fatal(err)
+	}
+	if leaseToken != fence {
+		t.Fatalf("orphan hold must keep lease_token, got %q want %q", leaseToken, fence)
+	}
+	if stage == "uncertain" {
+		t.Fatal("remote-fence orphan must not write stage=uncertain")
+	}
+}
+
+func TestFailUncertainPastEvidenceWindowSkipsRemoteFence(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	svc.MustRegister(Definition{Type: "deploy_remote_fence", RecoveryPolicy: RecoveryRemoteFence})
+	task, err := svc.Create(ctx, CreateInput{Type: "deploy_remote_fence", Summary: "deploy", Status: StatusRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339Nano)
+	if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET stage='uncertain', next_run_at=?, lease_token='lease_x' WHERE id=?`, past, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	expired, err := svc.FailUncertainPastEvidenceWindow(ctx, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired != 0 {
+		t.Fatalf("remote-fence must not be failed by local uncertain window, got %d", expired)
+	}
+	var status, leaseToken string
+	if err := svc.db.QueryRowContext(ctx, `SELECT status, COALESCE(lease_token,'') FROM event_runs WHERE id=?`, task.ID).Scan(&status, &leaseToken); err != nil {
+		t.Fatal(err)
+	}
+	if status != StatusRunning || leaseToken != "lease_x" {
+		t.Fatalf("expected running+lease retained, status=%s lease=%s", status, leaseToken)
 	}
 }
 

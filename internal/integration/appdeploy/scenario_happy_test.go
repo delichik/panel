@@ -2,6 +2,8 @@ package appdeploy
 
 import (
 	"testing"
+
+	"panel/internal/modules/tasks"
 )
 
 // 剧本：保存启用应用 → 两台服务器各生成 apply Job → agent 按请求收敛为
@@ -27,6 +29,42 @@ func TestScenarioHappyPathDeployConverges(t *testing.T) {
 	}
 	if got := h.Agent.RecordCount(app.ID, "srv-b", "apply"); got != 1 {
 		t.Fatalf("apply calls on srv-b = %d, want 1", got)
+	}
+}
+
+// ENG-RUN-001 / GAP-030: harness binds the unified Worker so claim goes
+// Manager.Run → application_deploy Execute → RunJob → Store.Claim.
+func TestScenarioUnifiedRunEngineDispatchClaimsViaManager(t *testing.T) {
+	h := NewHarness(t)
+	h.AddServer("srv-a")
+
+	def, ok := h.TaskSvc.Registry().Definition("application_deploy")
+	if !ok || def.Execute == nil {
+		t.Fatal("application_deploy must register Execute for unified claim path")
+	}
+	if def.RecoveryPolicy != tasks.RecoveryRemoteFence {
+		t.Fatalf("application_deploy recovery = %q, want remote_fence", def.RecoveryPolicy)
+	}
+
+	app := h.CreateApp("web", true, "name: web\nimage: nginx\n")
+	job := h.WaitJobState(app.ID, "srv-a", "succeeded")
+	h.WaitInstanceObserved(app.ID, "srv-a", "running")
+
+	attempts, retryCount, leaseToken, status := h.RunCounters(job.ID)
+	if status != "completed" {
+		t.Fatalf("status = %q, want completed", status)
+	}
+	if attempts < 1 {
+		t.Fatalf("attempts = %d, want >= 1 after Store.Claim", attempts)
+	}
+	if retryCount != 0 {
+		t.Fatalf("retry_count = %d, want 0 on deploy runs (ENG-RUN-005)", retryCount)
+	}
+	if leaseToken != "" {
+		t.Fatalf("terminal deploy must clear lease_token, got %q", leaseToken)
+	}
+	if got := h.Agent.RecordCount(app.ID, "srv-a", "apply"); got != 1 {
+		t.Fatalf("apply calls = %d, want 1 via JobRunner path", got)
 	}
 }
 
