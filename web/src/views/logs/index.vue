@@ -35,6 +35,7 @@ const hasMore = ref(false);
 const nextAfter = ref('');
 const linesGuard = createLatestRequestGuard();
 let resolveTimer: ReturnType<typeof setTimeout> | undefined;
+let levelBootstrapped = false;
 
 const levelOptions = computed(() => [
   { value: '', label: t('logsPage.filter.diagnoseLevels') },
@@ -86,29 +87,25 @@ async function resolveEventIdFromCorrelation() {
       updateQuery({ eventId: match.id, streamId: undefined }, true);
     }
   } catch {
-    // Leave the page in pick-an-event state when correlation lookup fails.
+    // Fall through to global load when correlation lookup fails.
   }
 }
 
 async function loadLines() {
-  if (!eventId.value) {
-    lines.value = [];
-    eventMeta.value = null;
-    error.value = '';
-    return;
-  }
   const request = linesGuard.begin();
   loading.value = true;
   error.value = '';
   try {
     const [page, meta] = await Promise.all([
       logsApi.list({
-        eventId: eventId.value,
+        eventId: eventId.value || undefined,
         level: lineLevel.value,
         limit: 200,
         after: read('after') || undefined,
       }),
-      eventMeta.value?.id === eventId.value ? Promise.resolve(eventMeta.value) : eventsApi.get(eventId.value).catch(() => null),
+      eventId.value
+        ? (eventMeta.value?.id === eventId.value ? Promise.resolve(eventMeta.value) : eventsApi.get(eventId.value).catch(() => null))
+        : Promise.resolve(null),
     ]);
     if (!linesGuard.isCurrent(request)) return;
     lines.value = page.items;
@@ -139,6 +136,11 @@ function refresh() {
 function openEvents() {
   void router.push({ path: '/events', query: { from: read('from') || undefined } });
 }
+function filterByEvent(id: string) {
+  const value = id.trim();
+  if (!value) return;
+  updateQuery({ eventId: value, streamId: undefined });
+}
 
 watch(eventId, () => {
   if (!eventId.value && (read('operationId') || read('executionId'))) {
@@ -149,12 +151,21 @@ watch(eventId, () => {
   void loadLines();
 });
 watch(lineLevel, () => {
-  if (eventId.value) updateQuery({}, true);
+  if (!levelBootstrapped) {
+    levelBootstrapped = true;
+    return;
+  }
+  updateQuery({}, true);
 });
 watch(() => read('after'), () => {
-  if (eventId.value) void loadLines();
+  void loadLines();
 });
 onMounted(() => {
+  if (!read('level')) {
+    updateQuery({ level: 'warning,error' }, false);
+  } else {
+    levelBootstrapped = true;
+  }
   if (!eventId.value && (read('operationId') || read('executionId'))) {
     void resolveEventIdFromCorrelation();
   } else {
@@ -171,7 +182,7 @@ onBeforeUnmount(() => {
   <ConsolePage class="h-full" :title="t('routes.logs.title')" :description="t('routes.logs.description')">
     <template #actions>
       <Button size="sm" variant="ghost" @click="openEvents">{{ t('eventsPage.openEvents') }}</Button>
-      <Button size="sm" :loading="loading" :disabled="!eventId" @click="refresh"><RefreshCcw />{{ t('common.refresh') }}</Button>
+      <Button size="sm" :loading="loading" @click="refresh"><RefreshCcw />{{ t('common.refresh') }}</Button>
     </template>
 
     <ListPage>
@@ -181,7 +192,7 @@ onBeforeUnmount(() => {
             <SearchInput
               :model-value="eventId"
               :label="t('logsPage.eventId')"
-              :placeholder="t('logsPage.eventId')"
+              :placeholder="t('logsPage.eventIdOptional')"
               @update:model-value="changeFilter('eventId', $event)"
             />
             <Select :model-value="read('level')" :options="levelOptions" :aria-label="t('activity.level')" @update:model-value="changeFilter('level', $event)" />
@@ -203,15 +214,7 @@ onBeforeUnmount(() => {
         </div>
       </template>
 
-      <EmptyState
-        v-if="!eventId"
-        variant="page"
-        :title="t('logsPage.pickEventTitle')"
-        :description="t('logsPage.pickEventHint')"
-      >
-        <template #actions><Button size="sm" @click="openEvents">{{ t('eventsPage.openEvents') }}</Button></template>
-      </EmptyState>
-      <EmptyState v-else-if="error && !lines.length" variant="page" :title="t('common.loadFailed')" :description="error">
+      <EmptyState v-if="error && !lines.length" variant="page" :title="t('common.loadFailed')" :description="error">
         <template #actions><Button size="sm" :loading="loading" @click="loadLines"><RefreshCcw />{{ t('common.retry') }}</Button></template>
       </EmptyState>
       <Table
@@ -229,7 +232,14 @@ onBeforeUnmount(() => {
           <Badge v-if="row.level" :tone="eventTone(String(row.level))">{{ levelLabel(String(row.level)) }}</Badge>
         </template>
         <template #eventId="{ row }">
-          <span class="font-mono text-xs text-muted-foreground">{{ row.eventId || eventId }}</span>
+          <button
+            v-if="row.eventId || eventId"
+            type="button"
+            class="font-mono text-xs text-muted-foreground underline-offset-2 hover:underline"
+            @click="filterByEvent(String(row.eventId || eventId))"
+          >
+            {{ row.eventId || eventId }}
+          </button>
         </template>
         <template #msg="{ row }">
           <div class="grid min-w-0 gap-2">
@@ -248,7 +258,6 @@ onBeforeUnmount(() => {
 
       <template #pagination>
         <PaginationBar
-          v-if="eventId"
           mode="cursor"
           :has-previous="Boolean(read('after'))"
           :has-next="hasMore"

@@ -4,7 +4,8 @@
 
 ## 当前状态
 
-- 本轮 events+logs 产品重命名：主导航与文案以 `/events`（进程行：state/module/level）与 `/logs`（JSONL：level+eventId）为准；新增 `routes.events.*`、`eventsPage.*`，改写 `routes.logs.description` 与 `logsPage.eventId/pickEvent*`；移除「任务中心」「log-contexts 流」等产品名；Debug 页签 `debugPage.tasks` 改为「Events runtime / 事件运行时」（对应 event executor 快照，API 路径仍为 `/debug/tasks`）；en / zh-CN 已同步。
+- 本轮 `/logs` 改为全局可读：`eventId` 可选筛选；新增 `logsPage.eventIdOptional`，改写 `routes.logs.description`；en / zh-CN 已同步。
+- 本轮 events+logs 产品重命名：主导航与文案以 `/events`（进程行：state/module/level）与 `/logs`（JSONL：level+可选 eventId）为准；新增 `routes.events.*`、`eventsPage.*`，改写 `routes.logs.description` 与 `logsPage.eventId/pickEvent*`；移除「任务中心」「log-contexts 流」等产品名；Debug 页签 `debugPage.tasks` 改为「Events runtime / 事件运行时」（对应 event executor 快照，API 路径仍为 `/debug/tasks`）；en / zh-CN 已同步。
 - 本轮设置页版本检查：新增 `settingsPage.versionCheckError` / `versionCheckErrorDetail`（展示后端 `checkError`）；en / zh-CN 已同步。
 - ~~本轮前端改走 `/api/v1/log-contexts`~~：**已由 `/api/v1/events*` 与 `/api/v1/logs?eventId=` 替代**（legacy `log-contexts` 仅兼容）；`logsPage.eventId*`、`eventsPage.*` 取代 stream 中心文案；en / zh-CN 已同步。
 - 本轮服务器删除联动停用应用：新增 `activity.applicationDisabled`（节点删除导致应用失去最后一个部署节点而被系统停用；说明需要重新选择部署节点并启用后恢复）；en / zh-CN 已同步。后端在删除事务内写入 `application.disabled` 活动事件（`data` 含 `reason=server_removed`、`serverId`、`applicationId`），前端按事件类型渲染该词条。

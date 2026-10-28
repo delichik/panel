@@ -190,4 +190,12 @@ func TestReadLinesFiltersByID(t *testing.T) {
 	if got[0]["msg"] != "one" || got[1]["msg"] != "two" {
 		t.Fatalf("msgs = %#v %#v", got[0]["msg"], got[1]["msg"])
 	}
+
+	global, err := events.ReadLines(dir, "", events.LineFilter{Limit: 10, Level: "info"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(global) != 2 {
+		t.Fatalf("global info lines = %d %#v", len(global), global)
+	}
 }

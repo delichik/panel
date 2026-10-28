@@ -203,11 +203,12 @@ func logsQuery(r *http.Request) (LinesFilter, error) {
 			return LinesFilter{}, panelerr.BadRequest("logs_query_invalid", "Unknown or repeated logs query parameter: "+k)
 		}
 	}
-	eventID := strings.TrimSpace(q.Get("eventId"))
-	if eventID == "" {
-		return LinesFilter{}, panelerr.BadRequest("logs_event_id_required", "eventId is required")
+	// eventId is optional: empty means a global JSONL scan (newest files first).
+	f := LinesFilter{
+		EventID: strings.TrimSpace(q.Get("eventId")),
+		Level:   strings.TrimSpace(q.Get("level")),
+		After:   q.Get("after"),
 	}
-	f := LinesFilter{EventID: eventID, Level: strings.TrimSpace(q.Get("level")), After: q.Get("after")}
 	limit, err := parseInt(q.Get("limit"), 200)
 	if err != nil || limit < 1 || limit > 2000 {
 		return f, panelerr.BadRequest("logs_limit_invalid", "limit must be between 1 and 2000")

@@ -33,7 +33,7 @@ const eventMeta: Event = {
 let wrapper: VueWrapper | undefined;
 let router: Router;
 
-async function render(url = '/logs?eventId=first&from=2026-09-14T00:00:00Z') {
+async function render(url = '/logs?eventId=first&from=2026-09-14T00:00:00Z&level=warning,error') {
   router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/logs', component: LogsPage }] });
   await router.push(url);
   await router.isReady();
@@ -82,14 +82,18 @@ describe('logs line list', () => {
     expect(logsApi.list).toHaveBeenCalledTimes(2);
   });
 
-  it('prompts to pick an event when eventId is missing', async () => {
-    const view = await render('/logs');
-    expect(view.text()).toContain('Choose an event');
-    expect(logsApi.list).not.toHaveBeenCalled();
+  it('loads global lines when eventId is missing', async () => {
+    const view = await render('/logs?level=warning,error');
+    expect(logsApi.list).toHaveBeenCalled();
+    const args = vi.mocked(logsApi.list).mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(args.level).toBe('warning,error');
+    expect(args.eventId).toBeUndefined();
+    expect(view.text()).toContain('first');
+    expect(view.text()).not.toContain('Choose an event');
   });
 
   it('resolves operationId to eventId before loading lines', async () => {
-    await render('/logs?operationId=op-demo-deploy');
+    await render('/logs?operationId=op-demo-deploy&level=warning,error');
     await flushPromises();
     expect(eventsApi.list).toHaveBeenCalledWith(expect.objectContaining({ operationId: 'op-demo-deploy' }));
     expect(logsApi.list).toHaveBeenCalledWith(expect.objectContaining({ eventId: 'first' }));

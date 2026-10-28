@@ -151,9 +151,9 @@
 ### UI-LOG-001 诊断日志 `/logs`：JSONL 行
 
 - **前置**：认证用户进入 `/logs` 或经 `/events` 深链；旧 `/activity` 带 `eventId`/`streamId` 重定向到此。
-- **动作**：按 eventId 与 level 筛选 JSONL 行。
-- **结果**：列表展示时间、级别、eventId、msg（无 state）；有结构化错误时分开展示 errorCode/error/detail。不得做时间线、证据下载、技术 JSON 或覆盖式详情。产品读 API 为 `/api/v1/logs?eventId=` 或 `/api/v1/events/{eventId}/logs`。
-- **失败**：缺 eventId 时展示选择事件空态，不得伪造行数据。
+- **动作**：按 level 与可选 eventId 筛选 JSONL 行。
+- **结果**：默认全局扫描近期 `panel-*.jsonl`（优先新文件）；列表展示时间、级别、eventId、msg（无 state）；有结构化错误时分开展示 errorCode/error/detail。`eventId` 仅作可选筛选，不是进入页面的前置条件。不得做时间线、证据下载、技术 JSON 或覆盖式详情。产品读 API 为 `/api/v1/logs`（`eventId` 可选）或 `/api/v1/events/{eventId}/logs`。
+- **失败**：无匹配行时展示空态；查询失败保留错误与重试。不得伪造行数据。
 - **验证**：`views/logs/index.test.ts`、logs API client 测试。
 
 > `UI-ACT-001` 日志部分已废弃，由本条目替代。
@@ -162,7 +162,7 @@
 
 - **前置**：认证用户进入 `/events` 或 `/logs`，URL 可能带完整查询条件，也可能缺少 `from`（events）或 `eventId`（logs）。
 - **动作**：页面首次挂载。
-- **结果**：`/events` 缺少 `from` 时使用最近 24 小时并写回 URL；`/logs` 缺 `eventId` 时展示选择事件空态；有 `eventId` 时缺省 `level` 使用 `warning,error`。
+- **结果**：`/events` 缺少 `from` 时使用最近 24 小时并写回 URL；`/logs` 缺省 `level` 使用 `warning,error`（可写回 URL），无 `eventId` 时直接加载全局日志行。
 - **失败**：默认时间写回不得替代、延迟或重复首次列表请求；失败保留错误空态、toast 和重试入口。
 - **不变量**：首次列表加载不依赖定时器，不启动轮询。
 - **验证**：logs/events initial-load 覆盖无 `from`、默认诊断等级和显式范围。

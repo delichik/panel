@@ -112,7 +112,10 @@ function pageOf<T>(all: T[], params: URLSearchParams, limitDefault: number): { i
 
 function filterLines(eventId: string, params: URLSearchParams): LogLine[] {
   const levels = (params.get('level') || '').split(',').map((item) => item.trim()).filter(Boolean);
-  return (mockLinesByEvent[eventId] || []).filter((line) => !levels.length || levels.includes(String(line.level || '')));
+  const source = eventId
+    ? (mockLinesByEvent[eventId] || [])
+    : Object.values(mockLinesByEvent).flat();
+  return source.filter((line) => !levels.length || levels.includes(String(line.level || '')));
 }
 
 function jsonResponse(data: unknown) {
@@ -140,8 +143,10 @@ function eventExportResponse(params: URLSearchParams) {
   });
 }
 
-function eventLinesResponse(eventId: string, params: URLSearchParams) {
-  if (!mockEvents.some((item) => item.id === eventId)) return failResponse('event_not_found', 404);
+function eventLinesResponse(eventId: string, params: URLSearchParams, requireEvent = true) {
+  if (eventId && requireEvent && !mockEvents.some((item) => item.id === eventId)) {
+    return failResponse('event_not_found', 404);
+  }
   const page = pageOf(filterLines(eventId, params), params, 200);
   return jsonResponse({ items: page.items, nextCursor: page.nextCursor, hasMore: page.hasMore } satisfies LogLinesPage);
 }
@@ -175,8 +180,7 @@ export function mockEventsRoute(url: URL, method: string): Response | undefined 
   }
   if (url.pathname === '/api/v1/logs' || url.pathname === '/api/v1/logs/') {
     const eventId = decodeURIComponent(params.get('eventId') || '');
-    if (!eventId) return failResponse('logs_event_id_required', 400);
-    return eventLinesResponse(eventId, params);
+    return eventLinesResponse(eventId, params, false);
   }
 
   const eventLogsMatch = url.pathname.match(/^\/api\/v1\/events\/([^/]+)\/(?:logs|lines)$/);

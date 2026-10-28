@@ -102,17 +102,17 @@ func (s *Service) Lines(ctx context.Context, eventID string, filter LinesFilter)
 	if eventID == "" {
 		eventID = strings.TrimSpace(filter.EventID)
 	}
-	if eventID == "" {
-		return LinesPage{}, panelerr.BadRequest("events_id_invalid", "eventId is required")
-	}
-	if _, err := s.store.Get(ctx, eventID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			// Global /logs may query by eventId before an events row exists; still allow file scan.
-			if strings.TrimSpace(filter.EventID) == "" {
-				return LinesPage{}, panelerr.NotFound("event")
+	requireEventRow := strings.TrimSpace(filter.EventID) == "" && eventID != ""
+	if eventID != "" {
+		if _, err := s.store.Get(ctx, eventID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				// /events/{id}/logs requires a known events row; /logs?eventId= may scan JSONL alone.
+				if requireEventRow {
+					return LinesPage{}, panelerr.NotFound("event")
+				}
+			} else {
+				return LinesPage{}, err
 			}
-		} else {
-			return LinesPage{}, err
 		}
 	}
 	after, err := parseCursorOffset(filter.After)

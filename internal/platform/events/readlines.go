@@ -9,11 +9,13 @@ import (
 	"strings"
 )
 
-// ReadLines scans recent panel-*.jsonl files under logDir and returns records
-// whose eventId (or legacy streamId) matches. Newest files are preferred.
+// ReadLines scans recent panel-*.jsonl files under logDir.
+// When eventID is non-empty, only lines with matching eventId/streamId are kept.
+// When eventID is empty, all lines matching the level filter are returned (global scan).
+// Newest files are preferred.
 func ReadLines(logDir, eventID string, filter LineFilter) ([]map[string]any, error) {
 	eventID = strings.TrimSpace(eventID)
-	if eventID == "" || strings.TrimSpace(logDir) == "" {
+	if strings.TrimSpace(logDir) == "" {
 		return nil, nil
 	}
 	entries, err := os.ReadDir(logDir)
@@ -87,12 +89,14 @@ func readMatchingLines(path, eventID string, remaining int, level string) ([]map
 		if err := json.Unmarshal([]byte(line), &obj); err != nil {
 			continue
 		}
-		id, _ := obj["eventId"].(string)
-		if id == "" {
-			id, _ = obj["streamId"].(string)
-		}
-		if id != eventID {
-			continue
+		if eventID != "" {
+			id, _ := obj["eventId"].(string)
+			if id == "" {
+				id, _ = obj["streamId"].(string)
+			}
+			if id != eventID {
+				continue
+			}
 		}
 		if level != "" {
 			lv, _ := obj["level"].(string)

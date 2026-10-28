@@ -17,7 +17,12 @@ beforeEach(() => {
 });
 
 describe('logs API', () => {
-  it('requires eventId on the logs namespace', async () => {
+  it('lists global logs without eventId', async () => {
+    await logsApi.list({ level: 'error' });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/v1/logs?level=error');
+  });
+
+  it('filters by eventId when provided', async () => {
     await logsApi.list({ eventId: 'evt-1', level: 'error' });
     expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/v1/logs?eventId=evt-1&level=error');
   });

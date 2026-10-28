@@ -10,6 +10,7 @@ export function logsQuery(params: LogsQuery = {}) {
 }
 
 export const logsApi = {
-  list: (params: LogsQuery & { eventId: string }, options?: ApiRequestOptions) =>
+  /** eventId is optional: omit for a global JSONL scan. */
+  list: (params: LogsQuery = {}, options?: ApiRequestOptions) =>
     apiClient.get<LogLinesPage>(`/logs${logsQuery(params)}`, options),
 };
