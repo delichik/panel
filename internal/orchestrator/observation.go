@@ -54,7 +54,7 @@ func (w *ObservationWriter) Write(ctx context.Context, in Observation) (WriteRes
 		in.ObservedGeneration, in.ObservedGeneration, status, in.Source, desiredSpecJSON, desiredSpecJSON, state, in.LastErrorMessage, observedAt.Format(time.RFC3339Nano), in.InstanceID,
 		in.Sequence, in.Sequence, in.Sequence, observedAt.Format(time.RFC3339Nano), in.Sequence, in.Source}
 	if strings.TrimSpace(in.JobID) != "" {
-		query += ` AND EXISTS (SELECT 1 FROM jobs WHERE jobs.id=? AND jobs.state='running' AND jobs.lease_token=?)`
+		query += ` AND EXISTS (SELECT 1 FROM event_runs WHERE event_runs.type='application_deploy' AND event_runs.id=? AND event_runs.status='running' AND event_runs.lease_token=?)`
 		queryArgs = append(queryArgs, in.JobID, in.LeaseToken)
 	}
 	tx, err := w.db.BeginTx(ctx, nil)
@@ -129,7 +129,7 @@ func (w *ObservationWriter) describeRejection(ctx context.Context, tx *sql.Tx, i
 	}
 
 	var job currentJob
-	jobErr := tx.QueryRowContext(ctx, `SELECT application_id,server_id,instance_id,state,lease_owner,lease_token,intent_id,execution_id,desired_revision_id,desired_generation FROM jobs WHERE id=?`, in.JobID).
+	jobErr := tx.QueryRowContext(ctx, `SELECT application_id,server_id,instance_id,CASE status WHEN 'queued' THEN 'pending' WHEN 'completed' THEN 'succeeded' ELSE status END,lease_owner,lease_token,intent_id,execution_id,desired_revision_id,desired_generation FROM event_runs WHERE type='application_deploy' AND id=?`, in.JobID).
 		Scan(&job.applicationID, &job.serverID, &job.instanceID, &job.state, &job.leaseOwner, &job.leaseToken, &job.operationID, &job.executionID, &job.revisionID, &job.desiredGeneration)
 	if jobErr != nil && !errors.Is(jobErr, sql.ErrNoRows) {
 		return observationRejection{}, jobErr

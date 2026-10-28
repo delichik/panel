@@ -57,6 +57,11 @@ type ControllerConfig struct {
 	OnFailed                  func(context.Context, Job, ReconcileResponse)
 }
 
+// JobRunner executes one deploy Run ID through the unified Manager.Execute
+// path. When set (production BindRunEngineWorker), workerLoop calls this
+// instead of RunJob directly so claim goes Manager → Execute → Store.Claim.
+type JobRunner func(ctx context.Context, jobID string) error
+
 type Controller struct {
 	store        *Store
 	planner      *Planner
@@ -70,6 +75,12 @@ type Controller struct {
 	mu           sync.Mutex
 	keys         map[string]struct{}
 	diagnostics  map[string]time.Time
+	// externalScan means the unified RunEngine worker owns the due/wake ticker
+	// (ENG-RUN-001). The process pool still serializes per app:server; when
+	// jobRunner is set, each item goes Manager.Run → Execute → RunJob.
+	externalScan bool
+	externalWake func()
+	jobRunner    JobRunner
 }
 
 type queuedJob struct {
@@ -118,12 +129,76 @@ func (c *Controller) Running() bool {
 }
 
 func (c *Controller) Wake() {
-	if c != nil {
-		select {
-		case c.wake <- struct{}{}:
-		default:
-		}
+	if c == nil {
+		return
 	}
+	c.mu.Lock()
+	external := c.externalScan
+	wakeFn := c.externalWake
+	c.mu.Unlock()
+	if external {
+		if wakeFn != nil {
+			wakeFn()
+		}
+		return
+	}
+	select {
+	case c.wake <- struct{}{}:
+	default:
+	}
+}
+
+// SetExternalScan hands due/wake ticking to the unified RunEngine worker while
+// this Controller keeps the per-app:server queue. Pass nil wake to clear.
+// Safe to call before Start.
+func (c *Controller) SetExternalScan(wake func()) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.externalScan = wake != nil
+	c.externalWake = wake
+}
+
+// SetJobRunner wires the unified Manager.Execute dispatch for queued deploy
+// Runs. Pass nil to fall back to direct RunJob (tests/harnesses).
+func (c *Controller) SetJobRunner(run JobRunner) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.jobRunner = run
+}
+
+func (c *Controller) getJobRunner() JobRunner {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.jobRunner
+}
+
+// ScanInterval is the deploy due-scan cadence (default 250ms).
+func (c *Controller) ScanInterval() time.Duration {
+	if c == nil {
+		return 250 * time.Millisecond
+	}
+	if c.config.ScanInterval > 0 {
+		return c.config.ScanInterval
+	}
+	return 250 * time.Millisecond
+}
+
+// Poll recovers expired leases and enqueues due/uncertain Jobs. Used by the
+// unified worker when externalScan is enabled; also safe for tests.
+func (c *Controller) Poll(ctx context.Context) error {
+	if c == nil || c.store == nil {
+		return ErrStoreUnavailable
+	}
+	return c.enqueueDue(ctx)
 }
 
 func (c *Controller) Start(parent context.Context) error {
@@ -143,14 +218,22 @@ func (c *Controller) Start(parent context.Context) error {
 	}
 	ctx, cancel := context.WithCancel(parent)
 	c.cancel = cancel
-	c.wg.Add(1)
-	go c.scanLoop(ctx)
+	external := c.externalScan
+	if !external {
+		c.wg.Add(1)
+		go c.scanLoop(ctx)
+	}
 	for i := 0; i < c.config.WorkerCount; i++ {
 		c.wg.Add(1)
 		go c.workerLoop(ctx)
 	}
 	c.mu.Unlock()
-	c.Wake()
+	if external {
+		// Immediate drain; subsequent polls come from the unified worker.
+		_ = c.enqueueDue(ctx)
+	} else {
+		c.Wake()
+	}
 	return nil
 }
 
@@ -244,7 +327,13 @@ func (c *Controller) workerLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case item := <-c.queue:
-			if err := c.process(ctx, item.id); err != nil && ctx.Err() == nil {
+			var err error
+			if runner := c.getJobRunner(); runner != nil {
+				err = runner(ctx, item.id)
+			} else {
+				err = c.RunJob(ctx, item.id)
+			}
+			if err != nil && ctx.Err() == nil {
 				c.logControllerError("process_job", item.id, err)
 			}
 			c.releaseKey(item.key)
@@ -298,6 +387,19 @@ func (c *Controller) releaseKey(key string) {
 	c.mu.Lock()
 	delete(c.keys, key)
 	c.mu.Unlock()
+}
+
+// RunJob executes one Job through Store.Claim and RuntimeReconcile.
+// Production dispatch reaches here via Manager.Run → Definition.Execute
+// (ENG-RUN-001). Tests may call RunJob directly.
+func (c *Controller) RunJob(ctx context.Context, jobID string) error {
+	if c == nil || c.store == nil {
+		return ErrStoreUnavailable
+	}
+	if _, err := c.store.GetJob(ctx, jobID); err != nil {
+		return err
+	}
+	return c.process(ctx, jobID)
 }
 
 func (c *Controller) process(ctx context.Context, jobID string) error {

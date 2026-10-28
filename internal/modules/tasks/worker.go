@@ -18,9 +18,42 @@ const (
 	defaultOrphanCheckInterval = 30 * time.Second
 )
 
+// DeployScheduler is the deploy due/wake side of RunEngine (ENG-RUN-001).
+// The unified worker owns ticking; when a JobRunner is wired, claim/Execute
+// goes through Manager.Run → Definition.Execute → Controller.RunJob.
+type DeployScheduler interface {
+	Poll(context.Context) error
+	ScanInterval() time.Duration
+	SetExternalScan(wake func())
+}
+
+// Service returns the underlying task service (for BindRunEngineWorker wiring).
+func (w *Worker) Service() *Service {
+	if w == nil {
+		return nil
+	}
+	return w.service
+}
+
+// RunDeployJob loads one application_deploy row and runs it through Manager.Run
+// (Execute → Controller.RunJob / Store.Claim). Used when the Controller pool
+// dispatches via JobRunner instead of calling RunJob directly.
+func (w *Worker) RunDeployJob(ctx context.Context, jobID string) error {
+	if w == nil || w.service == nil || w.manager == nil {
+		return ErrExecutorUnavailable()
+	}
+	task, err := w.service.Get(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	return w.RunNow(ctx, task)
+}
+
 type Worker struct {
 	service               *Service
 	manager               *Manager
+	deploy                DeployScheduler
+	deployWake            chan struct{}
 	lifecycleMu           sync.Mutex
 	cancel                context.CancelFunc
 	running               bool
@@ -47,14 +80,44 @@ type RuntimeDefinitionStats struct {
 	AllowRunNow             bool   `json:"allowRunNow"`
 	AllowRetry              bool   `json:"allowRetry"`
 	DefaultMaxRetries       int    `json:"defaultMaxRetries"`
+	RecoveryPolicy          string `json:"recoveryPolicy"`
 	ConcurrencyPolicy       string `json:"concurrencyPolicy"`
 	StaleQueuedAfterSeconds int64  `json:"staleQueuedAfterSeconds"`
 }
 
 func NewWorker(service *Service) *Worker {
 	return &Worker{
-		service: service,
-		manager: NewManager(service),
+		service:    service,
+		manager:    NewManager(service),
+		deployWake: make(chan struct{}, 1),
+	}
+}
+
+// AttachDeploy registers the jobs-side scheduler so this Worker owns deploy
+// due/wake scanning. Call before Start (and before the scheduler's Start so
+// SetExternalScan disables its internal scanLoop).
+func (w *Worker) AttachDeploy(deploy DeployScheduler) {
+	if w == nil {
+		return
+	}
+	w.lifecycleMu.Lock()
+	defer w.lifecycleMu.Unlock()
+	if w.deploy != nil {
+		w.deploy.SetExternalScan(nil)
+	}
+	w.deploy = deploy
+	if deploy != nil {
+		deploy.SetExternalScan(w.signalDeployWake)
+	}
+}
+
+func (w *Worker) signalDeployWake() {
+	if w == nil {
+		return
+	}
+	select {
+	case w.deployWake <- struct{}{}:
+	default:
 	}
 }
 
@@ -70,10 +133,17 @@ func (w *Worker) Start(parent context.Context) {
 	ctx, cancel := context.WithCancel(parent)
 	w.cancel = cancel
 	w.running = true
-	w.wg.Add(3)
+	loops := 3
+	if w.deploy != nil {
+		loops++
+	}
+	w.wg.Add(loops)
 	go w.queueLoop(ctx)
 	go w.staleQueuedLoop(ctx)
 	go w.orphanLoop(ctx)
+	if w.deploy != nil {
+		go w.deployLoop(ctx)
+	}
 }
 
 func (w *Worker) Stop() {
@@ -134,6 +204,7 @@ func (w *Worker) TaskRuntime() RuntimeStats {
 			AllowRunNow:             def.AllowRunNow && def.Execute != nil,
 			AllowRetry:              def.AllowRetry && def.Execute != nil,
 			DefaultMaxRetries:       def.DefaultMaxRetries,
+			RecoveryPolicy:          normalizeRecoveryPolicy(def.RecoveryPolicy),
 			ConcurrencyPolicy:       def.ConcurrencyPolicy,
 			StaleQueuedAfterSeconds: int64(def.StaleQueuedAfter.Seconds()),
 		})
@@ -232,6 +303,12 @@ func (w *Worker) dueTasks(ctx context.Context) []Task {
 		if !ok || def.Execute == nil {
 			continue
 		}
+		// Remote-fence deploy Runs keep the dedicated ~250ms deployLoop
+		// (lease recover + uncertain resolve). Generic 30s due must not
+		// double-dispatch them (ENG-RUN-001).
+		if normalizeRecoveryPolicy(def.RecoveryPolicy) == RecoveryRemoteFence {
+			continue
+		}
 		for _, status := range []string{StatusQueued, StatusScheduled, StatusFailedRetryable} {
 			result, err := w.service.List(ctx, ListFilter{Type: taskType, Status: status, Limit: 50, IncludeInternal: true, SortOldestFirst: true})
 			if err != nil {
@@ -304,6 +381,33 @@ func (w *Worker) orphanLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			w.failOrphanedRunning(ctx)
+		}
+	}
+}
+
+func (w *Worker) deployLoop(ctx context.Context) {
+	defer w.wg.Done()
+	w.lifecycleMu.Lock()
+	deploy := w.deploy
+	w.lifecycleMu.Unlock()
+	if deploy == nil {
+		return
+	}
+	interval := deploy.ScanInterval()
+	if interval <= 0 {
+		interval = 250 * time.Millisecond
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		if err := deploy.Poll(ctx); err != nil && ctx.Err() == nil {
+			logging.From(ctx).Warn("deploy run due scan failed", zap.Error(err))
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-w.deployWake:
+		case <-ticker.C:
 		}
 	}
 }

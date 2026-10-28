@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import ActivityLink from '@/components/activity/ActivityLink.vue';
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { Download, Eye, FileArchive, KeyRound, MoreHorizontal, Plus, RefreshCcw, RotateCcw, Trash2, Wrench } from '@lucide/vue';
 import { certificatesApi } from '@/api/certificates';
+import { waitForTask } from '@/api/taskWait';
 import { dnsApi } from '@/api/dns';
 import { keyAssetsApi } from '@/api/keyAssets';
 import { saveBlobDownload } from '@/api/download';
@@ -74,6 +75,8 @@ let searchTimer: ReturnType<typeof setTimeout> | undefined;
 const importConfirmOpen = ref(false);
 const exportTargetId = ref('');
 const deleteTarget = ref<{ kind: 'domains' | 'self' | 'keys'; id: string; name: string } | null>(null);
+let taskWaitController = new AbortController();
+onBeforeUnmount(() => taskWaitController.abort());
 
 function parsePageQuery(value: unknown) {
   const parsed = Number(value);
@@ -321,6 +324,7 @@ async function issueCertificate() {
 async function renewCertificate(cert: DomainCertificateDto) {
   await run(async () => {
     const result = await certificatesApi.renew(cert.id);
+    if (result.taskId) await waitForTask(result.taskId, 90_000, taskWaitController.signal);
     notifySuccess(t('certificatesPage.renewAccepted'), result);
     await load();
   });
@@ -414,6 +418,7 @@ async function saveAsset() {
 async function reissueAsset(asset: KeyAssetDto) {
   await run(async () => {
     const result = asset.type === 'ssh_key_pair' ? await keyAssetsApi.regenerate(asset.id) : await keyAssetsApi.reissue(asset.id);
+    if (result.taskId) await waitForTask(result.taskId, 90_000, taskWaitController.signal);
     notifySuccess(result.taskId ? t('certificatesPage.assetTask', { taskId: result.taskId }) : t('certificatesPage.assetSaved'), result);
     await load();
   });
@@ -455,6 +460,7 @@ function openExport(asset?: KeyAssetDto) {
 async function createExport() {
   await run(async () => {
     const result = await keyAssetsApi.createExport({ assetIds: exportTargetId.value ? [exportTargetId.value] : userAssets.value.map((item) => item.id), password: assetForm.password });
+    if (result.taskId) await waitForTask(result.taskId, 90_000, taskWaitController.signal);
     notifySuccess(t('certificatesPage.exportTask', { taskId: result.taskId }), result);
     saveBlobDownload(await keyAssetsApi.downloadExport(result.taskId));
     dialog.value = '';
@@ -478,6 +484,7 @@ async function executeImport(confirmDanger = false) {
   if (!importPlan.value) return;
   await run(async () => {
     const result = await keyAssetsApi.executeImport(importPlan.value!.planId, { strategy: 'overwrite', confirmOverwriteInUse: confirmDanger, confirmDangerousOverwrite: confirmDanger, resolutions: [] });
+    if (result.taskId) await waitForTask(result.taskId, 90_000, taskWaitController.signal);
     notifySuccess(t('certificatesPage.importTask', { taskId: result.taskId }), result);
     dialog.value = '';
     importConfirmOpen.value = false;

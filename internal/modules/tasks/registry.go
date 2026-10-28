@@ -27,6 +27,14 @@ const (
 	ExecutionModeParallel = "parallel"
 )
 
+// Recovery policy selects how the RunEngine treats orphaned/expired running work
+// (ENG-RUN recovery). Deploy Jobs use remote-fence via the job store; generic
+// event_runs use local-timeout (in-process execution registry + evidence window).
+const (
+	RecoveryLocalTimeout = "local_timeout"
+	RecoveryRemoteFence  = "remote_fence"
+)
+
 type Trigger struct {
 	Type     string
 	Manual   bool
@@ -65,6 +73,11 @@ type Definition struct {
 	DisallowCancel    bool
 	DefaultMaxRetries int
 	StaleQueuedAfter  time.Duration
+	// RecoveryPolicy is RecoveryLocalTimeout (default) or RecoveryRemoteFence.
+	// Local-timeout orphans go uncertain then fail without replaying remote work.
+	// Remote-fence must keep lease/token and await Agent evidence (deploy path);
+	// those types must not be failed by the local orphan loop.
+	RecoveryPolicy    string
 	ConcurrencyPolicy string
 	ConcurrencyKey    func(CreateInput) string
 	Execute           func(TaskContext) error
@@ -94,6 +107,7 @@ func (r *Registry) Register(def Definition) error {
 	if def.ConcurrencyPolicy == "" {
 		def.ConcurrencyPolicy = ConcurrencyResourceExclusive
 	}
+	def.RecoveryPolicy = normalizeRecoveryPolicy(def.RecoveryPolicy)
 	if def.AllowRetry && def.Execute != nil && def.DefaultMaxRetries <= 0 {
 		def.DefaultMaxRetries = DefaultMaxTaskRetries
 	}
@@ -121,6 +135,7 @@ func (r *Registry) Replace(def Definition) {
 	if def.ConcurrencyPolicy == "" {
 		def.ConcurrencyPolicy = ConcurrencyResourceExclusive
 	}
+	def.RecoveryPolicy = normalizeRecoveryPolicy(def.RecoveryPolicy)
 	if def.AllowRetry && def.Execute != nil && def.DefaultMaxRetries <= 0 {
 		def.DefaultMaxRetries = DefaultMaxTaskRetries
 	}
@@ -128,6 +143,15 @@ func (r *Registry) Replace(def Definition) {
 		r.defs = map[string]Definition{}
 	}
 	r.defs[def.Type] = def
+}
+
+func normalizeRecoveryPolicy(policy string) string {
+	switch strings.TrimSpace(policy) {
+	case RecoveryRemoteFence:
+		return RecoveryRemoteFence
+	default:
+		return RecoveryLocalTimeout
+	}
 }
 
 func (r *Registry) Definition(taskType string) (Definition, bool) {

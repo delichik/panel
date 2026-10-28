@@ -12,7 +12,7 @@
 
 ## 适用场景
 
-修改 Docker 容器、镜像、网络、卷资源能力（现位于服务器详情的资源 tabs）、设施应用、Application 托管 Label，每服务器容器操作队列，镜像更新检查或容器协调监控时，先读本文档。
+修改 Docker 容器、镜像、网络、卷资源能力（现位于服务器详情的资源 tabs）、设施应用、Application 托管 Label，每服务器容器操作队列，镜像更新检查或容器漂移协调时，先读本文档。
 
 ## 关键入口
 
@@ -116,7 +116,7 @@ Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并
 - 普通容器、镜像、卷页面发起的写操作进入队列同步执行，不创建操作任务；API 在 Agent 操作完成或失败后返回。
 - 镜像拉取是长耗时操作，Panel 到 agent 以及 agent 到 Docker Engine 的 pull 请求超时均为 15 分钟；未显式写 tag 的镜像引用按 Docker CLI 语义拉取 `latest`，agent 调 Docker Engine API 时必须显式传递 `tag=latest`；其它 Docker 查询、容器动作和卷动作保持常规短超时。
 - Application 部署、停止、重启和清理由 `internal/orchestrator.Controller` 统一拥有同一服务器的 Job 执行边界；应用服务只通过 planner 写 desired/revision/Job，不在容器模块或任务 executor 中直接调用 Agent runtime。Agent 只实现 `RuntimeReconcile` 幂等 ensure，Panel 侧仍保留普通资源 API 的服务器队列。
-- 设施应用保存和手动同步不直接执行远端 Docker 操作；它们通过 `TriggerPeriodicNow(application_reconcile)` 触发指定应用协调，设施模块只提供校验和 per-server runtime spec provider。`facility-reverse-proxy` 的部署同样写 AppDB Instance/Job，不能新建 lifecycle target 或 `application_target_*` 任务。
+- 设施应用保存和手动同步不直接执行远端 Docker 操作；它们通过 `TriggerApplicationReconcile` 直接请求 Planner（5 秒周期仍由 `application_reconcile` CollectInputs 钩子走同一规划函数）。设施模块只提供校验和 per-server runtime spec provider。`facility-reverse-proxy` 的部署同样写 AppDB Instance/Job，不能新建 lifecycle target、`application_reconcile_batch` 或 `application_target_*` 任务。
 - 刷新任务按任务类型、服务器和资源复用活跃任务；Agent 操作按目标状态幂等。
 - 容器、镜像、网络、卷的 GET 列表只读取本地快照，不得同步调用 Agent。容器使用 `container_observations`；镜像、网络和卷使用 `docker_resource_snapshots`。镜像、网络、卷刷新分别通过 `image_refresh`、`network_refresh`、`volume_refresh` 任务访问 Agent 并原子替换快照；首次尚无快照时 GET 返回空集合。刷新任务遇到 agent mTLS server 证书过期或尚未生效时，必须交给服务器模块标记 Agent 状态并按受限自动重装策略处理。
 - 镜像和卷的“删除未使用”是 Panel 侧同步批量操作，通过现有 Agent 单项删除接口逐项执行；执行瞬间仍在使用的资源会跳过，删除失败会使当前请求失败。

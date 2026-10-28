@@ -257,17 +257,17 @@
 | UI-CERT-001 | 切换 domains/self-signed/keys、搜索、翻页、选择 | path 决定模式；page/search/selected 同步 URL；对应服务端列表使用 q，分页固定底部；列表为表格（domains：名称/覆盖域名/状态/到期；self：名称/类型/commonName/到期；keys：名称/类型/算法/指纹/到期），点击「详情」或名称列覆盖列表 | 切模式清 selection/page；列表错误与空态分离；能力不足的行操作禁用；不得依赖整行点击 | 三个深链刷新可恢复模式、查询与选中项；覆盖详情保留列表滚动与筛选 |
 | UI-CERT-002 | 查看域名证书 | 覆盖详情显示覆盖域名、issuer、状态、到期、lastError 与是否签发中 | failed 优先 danger，再区分 expired/expiring | 徽标与 model 测试一致 |
 | UI-CERT-003 | 签发或调整重签 | 选择已管理 DNS 域名，配置名称、根域、通配符、子域前缀并实时预览覆盖；重签预填已有覆盖 | name/domain/覆盖域名本地必填校验并禁用无效保存；去重/清空子域；只提示任务创建不宣称签发完成；服务端错误保留 | POST/PUT payload 的 prefixes 与预览一致，返回证书被选中 |
-| UI-CERT-004 | 立即续签或删除域名证书 | renew 提交后台任务并提示接受；delete 先 danger 确认 | 请求失败保留详情；签发中操作由后端拒绝时明确显示 | 成功重载状态，取消删除零请求 |
+| UI-CERT-004 | 立即续签或删除域名证书 | renew 返回 202 与 taskId，页面用 `waitForTask` 等到终态再提示接受并重载；delete 先 danger 确认 | 请求失败或任务失败保留详情；签发中操作由后端拒绝时明确显示 | 任务成功后重载状态，取消删除零请求 |
 | UI-CERT-005 | 生成自签 CA | name/commonName 必填，years 数值化并默认 5；本地字段错误并禁用无效保存 | 本地失败不请求；非法数值等由后端错误明确反馈 | 成功选中新 CA 并刷新 |
 | UI-CERT-006 | 生成 self-signed leaf | 选择 CA，填写 name/commonName、DNS names、IP addresses、days（默认 90） | name/commonName/CA 本地必填；无 CA/非法 SAN 不得伪成功；服务端错误保留 | 成功详情显示 kind/fingerprint/expiry/SAN |
 | UI-CERT-007 | 重签或删除自签资产 | 重签调用 renew 并选返回 ID；删除先确认 | 引用/父子冲突保留对象并 toast | 成功重载，状态与新到期时间一致 |
 | UI-CERT-008 | 打开密钥资产页 | 过滤系统托管资产，仅列用户 CA/TLS/SSH；详情显示算法、fingerprint、reference/child count、expiry 与允许动作 | 系统资产只在设置的系统证书分区；列表不得包含私钥、公钥正文或 metadata | `canDelete/canReissue/canRegenerate/downloadKinds` 控制按钮 |
 | UI-CERT-009 | 生成 CA/TLS/SSH | keys 模式页头提供生成 SSH/生成 CA/生成 TLS 入口，CA/TLS 填 name/commonName/algorithm/RSA size/validity，TLS 另选 parent CA 与 SAN；SSH 填 name/algorithm/RSA size/comment | 生成入口只属于 keys 模式（表格页头）；domains/self-signed 页头不得出现；本地必填 name（及 CA/TLS 的 commonName/parent），无效禁用保存；其他错误显式返回 | 成功打开新 asset 覆盖详情，不在 UI 展示私钥正文 |
 | UI-CERT-010 | 单资产导入 | 选择 type/name/parent/算法；SSH 只编辑私钥材料，CA/TLS 用 tabs 分别编辑私钥和证书，默认打开私钥 | 导入失败在 Dialog 内保留结构化错误和材料；不得把 secret 写 toast | tabs/CodeEditor 可键盘操作，成功关闭并选中新资产 |
-| UI-CERT-011 | 重签/重生成/删除资产 | SSH 用 regenerate，证书用 reissue；根据 capability 禁用；delete 先 danger 确认并由后端做引用安全检查 | 引用中/有子资产时删除失败不移除行 | 有 taskId 才显示，成功后重载能力与 fingerprint |
+| UI-CERT-011 | 重签/重生成/删除资产 | SSH 用 regenerate，证书用 reissue；202 只表示已排队，页面 `waitForTask` 后再重载；根据 capability 禁用；delete 先 danger 确认并由后端做引用安全检查 | 引用中/有子资产时删除失败不移除行；任务失败不把旧材料显示成已更新 | 有 taskId 才显示，任务成功后重载能力与 fingerprint |
 | UI-CERT-012 | 下载单资产材料 | 仅渲染 downloadKinds，逐项 blob 下载 | 失败不生成文件；不得经 JSON ApiClient 解析二进制 | 文件种类/名称与服务端 Content-Disposition 对应 |
-| UI-CERT-013 | 导出资产归档 | 默认导出所选 asset，无选择则所有用户资产；密码必填，先创建 export task 再下载结果 | 系统托管资产不得进入集合；任务/下载失败明确 toast | 请求 assetIds 正确，下载归档可打开 |
-| UI-CERT-014 | 批量导入 | 选择支持归档+密码，先 multipart preflight；显示冲突数/ready；无危险冲突可执行，`requiresDangerConfirm` 时必须 danger+强制勾选后 overwrite | 改文件清旧 plan；未 preflight 不出现执行；不得预先 `confirmDanger=true` | 危险执行 payload 仅确认后带确认标志，成功提示真实 taskId |
+| UI-CERT-013 | 导出资产归档 | 默认导出所选 asset，无选择则所有用户资产；密码必填，创建 export task 后 `waitForTask` 到 completed 再下载 | 系统托管资产不得进入集合；任务未完成不得下载；任务/下载失败明确 toast | 请求 assetIds 正确，下载归档可打开 |
+| UI-CERT-014 | 批量导入 | 选择支持归档+密码，先 multipart preflight；显示冲突数/ready；无危险冲突可执行，`requiresDangerConfirm` 时必须 danger+强制勾选后 overwrite；执行返回 202 后 `waitForTask` 再重载 | 改文件清旧 plan；未 preflight 不出现执行；不得预先 `confirmDanger=true` | 危险执行 payload 仅确认后带确认标志，任务成功后提示真实 taskId |
 
 ## 15. 已废弃的可观测性路由
 

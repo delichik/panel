@@ -14,7 +14,7 @@ func AppModels() []any {
 		&Credential{}, &Server{}, &PackageUpdate{}, &PackageRefresh{},
 		&Fail2banConfig{}, &ImageUpdate{}, &ImageRefresh{}, &Application{}, &ApplicationPersistentLocation{},
 		&ApplicationReconcileState{}, &ContainerObservation{}, &DockerResourceSnapshot{},
-		&ApplicationRevisionV3{}, &Job{},
+		&ApplicationRevisionV3{},
 		&DNSDomain{}, &DNSRecordSnapshot{}, &ApplicationEditSession{},
 		&ApplicationEditSessionFile{}, &ApplicationEditSessionOperation{},
 		&ApplicationFile{}, &ApplicationInstance{}, &FacilityAppConfig{},

@@ -25,7 +25,7 @@ func TestAutomaticScanPreservesForcedJob(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := db.Exec(`UPDATE jobs SET state=?,attempts=3,next_run_at='2099-01-01T00:00:00Z',error_code='container_not_running',error_message='exitCode=1' WHERE id=?`, state, first.Job.ID); err != nil {
+			if _, err := db.Exec(`UPDATE event_runs SET status=?,attempts=3,next_run_at='2099-01-01T00:00:00Z',error_code='container_not_running',error_message='exitCode=1' WHERE type='application_deploy' AND id=?`, statusForJobState(state), first.Job.ID); err != nil {
 				t.Fatal(err)
 			}
 			in.Automatic, in.ForceNonce, in.IntentID = true, 0, "scan-0"
@@ -139,7 +139,7 @@ func TestAutomaticEquivalentPlanPreservesRetryBackoffAndDoesNotAppendIntent(t *t
 		t.Fatal(err)
 	}
 	nextRun := "2026-09-14T03:00:00Z"
-	if _, err := db.Exec(`UPDATE jobs SET state='failed_retryable',attempts=9,next_run_at=?,error_code='start_failed' WHERE id=?`, nextRun, first.Job.ID); err != nil {
+	if _, err := db.Exec(`UPDATE event_runs SET status='failed_retryable',attempts=9,next_run_at=?,error_code='start_failed' WHERE type='application_deploy' AND id=?`, nextRun, first.Job.ID); err != nil {
 		t.Fatal(err)
 	}
 	in.IntentID = "duplicate"
@@ -152,7 +152,7 @@ func TestAutomaticEquivalentPlanPreservesRetryBackoffAndDoesNotAppendIntent(t *t
 	}
 	var attempts, duplicateEvents int
 	var state, gotNextRun, errorCode string
-	if err := db.QueryRow(`SELECT state,attempts,next_run_at,error_code FROM jobs WHERE id=?`, first.Job.ID).Scan(&state, &attempts, &gotNextRun, &errorCode); err != nil {
+	if err := db.QueryRow(`SELECT `+jobStateSQL+`,attempts,next_run_at,error_code FROM event_runs WHERE type='application_deploy' AND id=?`, first.Job.ID).Scan(&state, &attempts, &gotNextRun, &errorCode); err != nil {
 		t.Fatal(err)
 	}
 	if state != JobFailedRetryable || attempts != 9 || gotNextRun != nextRun || errorCode != "start_failed" {

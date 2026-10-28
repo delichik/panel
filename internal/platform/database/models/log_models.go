@@ -42,6 +42,33 @@ type Task struct {
 	CreatedAt           time.Time `orm:"not_null"`
 	StartedAt           *time.Time
 	FinishedAt          *time.Time
+	// Deploy columns (GAP-030 / ENG-RUN-001 Phase B): application_deploy rows
+	// formerly lived in jobs. Generic event_runs leave these at defaults.
+	ApplicationID     string         `orm:"not_null;default:''"`
+	InstanceID        string         `orm:"not_null;default:''"`
+	Action            string         `orm:"not_null;default:''"`
+	DesiredGeneration int            `orm:"not_null;default:0"`
+	DesiredSpecHash   string         `orm:"not_null;default:''"`
+	DesiredRevisionID string         `orm:"not_null;default:''"`
+	DesiredSpecJSON   map[string]any `orm:"json;not_null;default:'{}'"`
+	RemoveData        bool           `orm:"not_null;default:0"`
+	ForceNonce        int64          `orm:"not_null;default:0"`
+	Priority          int            `orm:"not_null;default:0"`
+	Attempts          int            `orm:"not_null;default:0"`
+	LeaseOwner        string         `orm:"not_null;default:''"`
+	LeaseToken        string         `orm:"not_null;default:''"`
+	LeaseExpiresAt    *time.Time
+	ExecutionID       string           `orm:"not_null;default:''"`
+	IntentID          string           `orm:"not_null;default:''"`
+	Reason            string           `orm:"not_null;default:''"`
+	IdempotencyKey    string           `orm:"not_null;default:''"`
+	LastStage         string           `orm:"not_null;default:''"`
+	LastStepsJSON     []map[string]any `orm:"json;not_null;default:'[]'"`
+	ErrorCode         string           `orm:"not_null;default:''"`
+	ErrorClass        string           `orm:"not_null;default:''"`
+	ErrorMessage      string           `orm:"not_null;default:''"`
+	ErrorDetail       string           `orm:"not_null;default:''"`
+	UpdatedAt         *time.Time
 }
 
 func (*Task) TableName() string { return "event_runs" }
@@ -54,6 +81,10 @@ func (*Task) ExtraIndexDDL() map[string][]string {
 			"CREATE INDEX IF NOT EXISTS idx_event_runs_concurrency_status_created ON event_runs(concurrency_key, status, created_at)",
 			"CREATE INDEX IF NOT EXISTS idx_event_runs_parent ON event_runs(parent_task_id, child_index)",
 			"CREATE INDEX IF NOT EXISTS idx_event_runs_status_next_run ON event_runs(status, next_run_at)",
+			"CREATE UNIQUE INDEX IF NOT EXISTS uq_event_runs_active_app_server ON event_runs(application_id, server_id) WHERE type = 'application_deploy' AND status IN ('queued','running','failed_retryable')",
+			"CREATE UNIQUE INDEX IF NOT EXISTS uq_event_runs_deploy_idempotency ON event_runs(application_id, idempotency_key) WHERE type = 'application_deploy' AND idempotency_key <> ''",
+			"CREATE INDEX IF NOT EXISTS idx_event_runs_deploy_due ON event_runs(status, next_run_at, priority, created_at) WHERE type = 'application_deploy'",
+			"CREATE INDEX IF NOT EXISTS idx_event_runs_deploy_intent ON event_runs(intent_id, created_at) WHERE type = 'application_deploy' AND intent_id <> ''",
 		},
 	}
 }

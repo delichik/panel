@@ -498,6 +498,34 @@ func TestMissingExecutionPreservesUncertainResult(t *testing.T) {
 	}
 }
 
+func TestRemoteFenceOrphanSkipsLocalUncertainMark(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	svc.MustRegister(Definition{Type: "deploy_remote_fence", RecoveryPolicy: RecoveryRemoteFence, AllowRetry: true})
+	task, err := svc.Create(ctx, CreateInput{Type: "deploy_remote_fence", Summary: "deploy", Status: StatusRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.runningMu.Lock()
+	delete(svc.runningExecutions, task.ID)
+	svc.runningMu.Unlock()
+
+	failed, err := svc.FailRunningWithoutExecution(ctx, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed != 0 {
+		t.Fatalf("remote-fence runs must not be marked uncertain by local orphan loop, got %d", failed)
+	}
+	got, err := svc.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusRunning || got.Stage == "uncertain" {
+		t.Fatalf("expected running without local uncertain stage, got %#v", got)
+	}
+}
+
 func TestRunningExecutionLifecycleFollowsTaskStatus(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
@@ -794,15 +822,13 @@ func TestTaskOperationTriggerMetadataAndSteps(t *testing.T) {
 	}
 }
 
-func TestCleanupRetainedPreservesHistory(t *testing.T) {
+func TestCleanupRetainedDeletesOldGenericButKeepsDeploy(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
+	svc.MustRegister(Definition{Type: "application_deploy", Hidden: true, RecoveryPolicy: RecoveryRemoteFence})
 
 	old, err := svc.Create(ctx, CreateInput{Type: "test", Summary: "old completed", Status: StatusCompleted})
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := svc.AppendLog(ctx, old.ID, "stdout", "old log line"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET finished_at=? WHERE id=?`, time.Now().UTC().Add(-48*time.Hour).Format(time.RFC3339Nano), old.ID); err != nil {
@@ -817,18 +843,29 @@ func TestCleanupRetainedPreservesHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	deploy, err := svc.Create(ctx, CreateInput{Type: "application_deploy", Summary: "old deploy", Status: StatusCompleted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET finished_at=? WHERE id=?`, time.Now().UTC().Add(-48*time.Hour).Format(time.RFC3339Nano), deploy.ID); err != nil {
+		t.Fatal(err)
+	}
+
 	deleted, err := svc.CleanupRetained(ctx, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("cleanup failed: %v", err)
 	}
-	if deleted != 0 {
-		t.Fatalf("expected no task to be deleted, got %d", deleted)
+	if deleted != 1 {
+		t.Fatalf("expected 1 generic terminal run deleted, got %d", deleted)
 	}
-	if _, err := svc.Get(ctx, old.ID); err != nil {
-		t.Fatal("expected old task to remain")
+	if _, err := svc.Get(ctx, old.ID); err == nil {
+		t.Fatal("expected old generic run to be deleted")
 	}
 	if _, err := svc.Get(ctx, recent.ID); err != nil {
-		t.Fatalf("expected recent task to remain, got %v", err)
+		t.Fatalf("expected recent generic run to remain: %v", err)
+	}
+	if _, err := svc.Get(ctx, deploy.ID); err != nil {
+		t.Fatalf("expected deploy run to remain (ENG-RET-001): %v", err)
 	}
 }
 

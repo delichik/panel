@@ -33,6 +33,7 @@
 | GAP-027 | 复杂表单本地验证 | DNS 域名/记录与证书签发/自签/密钥资产表单已补轻量本地校验（必填与基本域名形状、字段错误、无效时禁用保存）；applications 编辑器与 settings 数值校验仍有更多输入依赖服务端 | 继续为剩余高频/安全关键输入增加本地阻止，同时完整保留服务端结构化错误 |
 | GAP-028 | 启动灾难兜底语言 | i18n 初始化失败前的启动兜底只有英文 | 保持仅灾难兜底例外；不得复制到正常页面，有可行初始化方案时补多语言 |
 | GAP-029 | 失联节点的应用清理 | 服务器被删除时其应用实例记录随外键级联清除，节点已不存在时该节点上的容器与持久数据无法再被回收；协调 Job 行也随删除一并清除，部署历史只保留在活动日志中 | 明确"删除失联节点等于放弃该节点上的运行态与数据"的产品语义，并让受影响应用自动停用、回到可重新选定部署目标的状态（`SRV-DEL-006/007/009`）；若要求可回收的离线节点清理，需先定义离线节点的回收通道 |
+| GAP-030 | RunEngine 表合并（Phase B） | **已关闭**：部署 Run 在 `event_runs`（`type='application_deploy'`）；生产分派为 `Manager.Run` → Execute → `Controller.RunJob` → `Store.Claim`。due/wake 由统一 `tasks.Worker`（部署约 250ms）；Controller 池仅 per-app:server 串行。诊断 Event 不在合并范围。合同：`ENG-RUN-001..005`、`ENG-RET-001`、`TASK-DISPATCH-001..003` | 已关闭。若回归双 claim 池、日志覆盖 fence、或 Manager 对 remote-fence uncertain 行 Complete/Fail，重新打开 |
 
 ## 缺口处理规则
 

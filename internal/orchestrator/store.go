@@ -52,7 +52,23 @@ type jobRow struct {
 	StartedAt, FinishedAt                                                                 sql.NullString
 }
 
-const jobColumns = `id,application_id,server_id,instance_id,action,desired_generation,desired_spec_hash,desired_revision_id,desired_spec_json,remove_data,force_nonce,state,priority,attempts,next_run_at,lease_owner,lease_token,lease_expires_at,execution_id,intent_id,trigger_type,trigger_resource_type,trigger_resource_id,reason,idempotency_key,last_stage,last_steps_json,error_code,error_class,error_message,error_detail,created_at,started_at,finished_at,updated_at`
+// jobStateSQL maps event_runs.status back to the Job.State vocabulary.
+const jobStateSQL = `CASE status WHEN 'queued' THEN 'pending' WHEN 'completed' THEN 'succeeded' ELSE status END`
+
+const jobColumns = `id,application_id,server_id,instance_id,action,desired_generation,desired_spec_hash,desired_revision_id,desired_spec_json,remove_data,force_nonce,` + jobStateSQL + `,priority,attempts,next_run_at,lease_owner,lease_token,lease_expires_at,execution_id,intent_id,trigger_type,trigger_resource_type,trigger_resource_id,reason,idempotency_key,last_stage,last_steps_json,error_code,error_class,error_message,error_detail,created_at,started_at,finished_at,updated_at`
+
+const deployRunType = "application_deploy"
+
+func statusForJobState(state string) string {
+	switch state {
+	case JobPending:
+		return "queued"
+	case JobSucceeded:
+		return "completed"
+	default:
+		return state
+	}
+}
 
 func scanJob(scanner interface{ Scan(...any) error }) (Job, error) {
 	var r jobRow
@@ -92,7 +108,7 @@ func jobFromRow(r jobRow) Job {
 }
 
 func (s *Store) GetJob(ctx context.Context, jobID string) (Job, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE id=?`, strings.TrimSpace(jobID))
+	row := s.db.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM event_runs WHERE type=? AND id=?`, deployRunType, strings.TrimSpace(jobID))
 	return scanJob(row)
 }
 
@@ -118,7 +134,7 @@ func (s *Store) DesiredChanged(ctx context.Context, job Job) (bool, error) {
 	}
 	wantState := desiredForAction(job.Action)
 	var currentForceNonce int64
-	if err := s.db.QueryRowContext(ctx, `SELECT force_nonce FROM jobs WHERE id=?`, job.ID).Scan(&currentForceNonce); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT force_nonce FROM event_runs WHERE type=? AND id=?`, deployRunType, job.ID).Scan(&currentForceNonce); err != nil {
 		return false, err
 	}
 	return desiredState != wantState || generation != job.DesiredGeneration || strings.TrimSpace(specHash) != strings.TrimSpace(job.DesiredSpecHash) || strings.TrimSpace(revisionID) != strings.TrimSpace(job.DesiredRevisionID) || !sameJSON(desiredSpecJSON, job.DesiredSpecJSON) || currentForceNonce != job.ForceNonce, nil
@@ -131,12 +147,12 @@ func (s *Store) Requeue(ctx context.Context, job Job, reason string) (bool, erro
 	var removeData bool
 	var forceNonce int64
 	err := s.db.QueryRowContext(ctx, `SELECT i.desired_state,i.desired_generation,i.desired_spec_hash,i.desired_revision_id,i.desired_spec_json,CASE WHEN i.desired_state='purged' AND a.deletion_requested=1 THEN 1 ELSE 0 END,j.force_nonce
-		FROM application_instances i JOIN applications a ON a.id=i.application_id JOIN jobs j ON j.id=? WHERE i.id=?`, job.ID, job.InstanceID).
+		FROM application_instances i JOIN applications a ON a.id=i.application_id JOIN event_runs j ON j.type=? AND j.id=? WHERE i.id=?`, deployRunType, job.ID, job.InstanceID).
 		Scan(&desiredState, &desiredGeneration, &desiredSpecHash, &desiredRevisionID, &desiredSpecJSON, &removeData, &forceNonce)
 	if errors.Is(err, sql.ErrNoRows) && job.Action == ActionPurge {
 		// The purge finalizer may have removed the desired row after the
 		// remote call. There is no next runtime action to enqueue.
-		result, updateErr := s.db.ExecContext(ctx, `UPDATE jobs SET state='succeeded',lease_owner='',lease_token='',lease_expires_at=NULL,last_stage='purged',error_code='',error_class='',error_message='',error_detail='',finished_at=?,updated_at=? WHERE id=? AND state='running' AND lease_owner=? AND lease_token=?`, now, now, job.ID, job.LeaseOwner, job.LeaseToken)
+		result, updateErr := s.db.ExecContext(ctx, `UPDATE event_runs SET status='completed',stage='purged',percentage=100,error='',lease_owner='',lease_token='',lease_expires_at=NULL,last_stage='purged',error_code='',error_class='',error_message='',error_detail='',finished_at=?,updated_at=? WHERE type=? AND id=? AND status='running' AND lease_owner=? AND lease_token=?`, now, now, deployRunType, job.ID, job.LeaseOwner, job.LeaseToken)
 		if updateErr != nil {
 			return false, updateErr
 		}
@@ -154,8 +170,8 @@ func (s *Store) Requeue(ctx context.Context, job Job, reason string) (bool, erro
 	// running. Do not probe activity_events: ORCH-ACT-003 retired that ledger
 	// for control facts, so a subquery would always miss and leave stale
 	// associations after supersede (ORCH-REC-001 / ORCH-CTRL-005).
-	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET state='pending',action=?,desired_generation=?,desired_spec_hash=?,desired_revision_id=?,desired_spec_json=?,remove_data=?,force_nonce=?,lease_owner='',lease_token='',lease_expires_at=NULL,next_run_at=NULL,last_stage='superseded',error_code='desired_changed',error_class='superseded',error_message=?,error_detail='desired state changed while runtime call was in flight',finished_at=NULL,updated_at=? WHERE id=? AND state='running' AND lease_owner=? AND lease_token=?`,
-		action, desiredGeneration, desiredSpecHash, desiredRevisionID, desiredSpecJSON, boolInt(removeData), forceNonce, reason, now, job.ID, job.LeaseOwner, job.LeaseToken)
+	result, err := s.db.ExecContext(ctx, `UPDATE event_runs SET status='queued',stage='superseded',action=?,desired_generation=?,desired_spec_hash=?,desired_revision_id=?,desired_spec_json=?,remove_data=?,force_nonce=?,lease_owner='',lease_token='',lease_expires_at=NULL,next_run_at=NULL,last_stage='superseded',error=?,error_code='desired_changed',error_class='superseded',error_message=?,error_detail='desired state changed while runtime call was in flight',finished_at=NULL,updated_at=? WHERE type=? AND id=? AND status='running' AND lease_owner=? AND lease_token=?`,
+		action, desiredGeneration, desiredSpecHash, desiredRevisionID, desiredSpecJSON, boolInt(removeData), forceNonce, reason, reason, now, deployRunType, job.ID, job.LeaseOwner, job.LeaseToken)
 	if err != nil {
 		return false, err
 	}
@@ -187,9 +203,9 @@ func (s *Store) ListDue(ctx context.Context, limit int) ([]Job, error) {
 		limit = 128
 	}
 	now := s.now().UTC().Format(time.RFC3339Nano)
-	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+` FROM jobs
-		WHERE state IN ('pending','failed_retryable') AND (next_run_at IS NULL OR next_run_at='' OR next_run_at<=?)
-		ORDER BY priority DESC, created_at ASC, id ASC LIMIT ?`, now, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+` FROM event_runs
+		WHERE type=? AND status IN ('queued','failed_retryable') AND (next_run_at IS NULL OR next_run_at='' OR next_run_at<=?)
+		ORDER BY priority DESC, created_at ASC, id ASC LIMIT ?`, deployRunType, now, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -212,10 +228,10 @@ func (s *Store) Claim(ctx context.Context, jobID, owner string, leaseTTL time.Du
 	}
 	token := id.New("lease")
 	executionID := id.New("exec")
-	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET state='running',lease_owner=?,lease_token=?,lease_expires_at=?,execution_id=?,attempts=attempts+1,started_at=COALESCE(started_at,?),updated_at=?
-		WHERE id=? AND state IN ('pending','failed_retryable') AND (next_run_at IS NULL OR next_run_at='' OR next_run_at<=?)`,
+	result, err := s.db.ExecContext(ctx, `UPDATE event_runs SET status='running',lease_owner=?,lease_token=?,lease_expires_at=?,execution_id=?,attempts=attempts+1,started_at=COALESCE(started_at,?),updated_at=?
+		WHERE type=? AND id=? AND status IN ('queued','failed_retryable') AND (next_run_at IS NULL OR next_run_at='' OR next_run_at<=?)`,
 		owner, token, now.Add(leaseTTL).Format(time.RFC3339Nano), executionID,
-		now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), jobID, now.Format(time.RFC3339Nano))
+		now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), deployRunType, jobID, now.Format(time.RFC3339Nano))
 	if err != nil {
 		return Job{}, false, err
 	}
@@ -232,8 +248,8 @@ func (s *Store) Renew(ctx context.Context, job Job, leaseTTL time.Duration) (boo
 		leaseTTL = 3 * time.Minute
 	}
 	now := s.now().UTC()
-	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET lease_expires_at=?,updated_at=? WHERE id=? AND state='running' AND error_class<>'uncertainty' AND lease_owner=? AND lease_token=?`,
-		now.Add(leaseTTL).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), job.ID, job.LeaseOwner, job.LeaseToken)
+	result, err := s.db.ExecContext(ctx, `UPDATE event_runs SET lease_expires_at=?,updated_at=? WHERE type=? AND id=? AND status='running' AND error_class<>'uncertainty' AND lease_owner=? AND lease_token=?`,
+		now.Add(leaseTTL).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), deployRunType, job.ID, job.LeaseOwner, job.LeaseToken)
 	if err != nil {
 		return false, err
 	}
@@ -245,8 +261,12 @@ func (s *Store) Succeed(ctx context.Context, job Job, response ReconcileResponse
 	now := s.now().UTC()
 	response = redactResponse(response)
 	steps, _ := json.Marshal(response.Steps)
-	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET state='succeeded',lease_owner='',lease_token='',lease_expires_at=NULL,last_stage=?,last_steps_json=?,error_code='',error_class='',error_message='',error_detail='',finished_at=?,updated_at=? WHERE id=? AND state='running' AND lease_owner=? AND lease_token=?`,
-		lastStep(response.Steps), string(steps), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), job.ID, job.LeaseOwner, job.LeaseToken)
+	stageName := lastStep(response.Steps)
+	if stageName == "" {
+		stageName = "completed"
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE event_runs SET status='completed',stage=?,percentage=100,error='',lease_owner='',lease_token='',lease_expires_at=NULL,last_stage=?,last_steps_json=?,error_code='',error_class='',error_message='',error_detail='',finished_at=?,updated_at=? WHERE type=? AND id=? AND status='running' AND lease_owner=? AND lease_token=?`,
+		stageName, stageName, string(steps), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), deployRunType, job.ID, job.LeaseOwner, job.LeaseToken)
 	if err != nil {
 		return false, err
 	}
@@ -264,9 +284,14 @@ func (s *Store) Fail(ctx context.Context, job Job, response ReconcileResponse) (
 	}
 	response = redactResponse(response)
 	steps, _ := json.Marshal(response.Steps)
-	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET state=?,lease_owner='',lease_token='',lease_expires_at=NULL,last_stage=?,last_steps_json=?,error_code=?,error_class=?,error_message=?,error_detail=?,next_run_at=?,finished_at=CASE WHEN ?='failed' THEN ? ELSE NULL END,updated_at=? WHERE id=? AND state='running' AND lease_owner=? AND lease_token=?`,
-		state, lastStep(response.Steps), string(steps), response.ErrorCode, response.ErrorClass, response.ErrorMessage, response.ErrorDetail,
-		nextRun, state, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), job.ID, job.LeaseOwner, job.LeaseToken)
+	status := statusForJobState(state)
+	stageName := lastStep(response.Steps)
+	if stageName == "" && status == "failed" {
+		stageName = "failed"
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE event_runs SET status=?,lease_owner='',lease_token='',lease_expires_at=NULL,stage=?,last_stage=?,last_steps_json=?,error=?,error_code=?,error_class=?,error_message=?,error_detail=?,next_run_at=?,finished_at=CASE WHEN ?='failed' THEN ? ELSE NULL END,updated_at=? WHERE type=? AND id=? AND status='running' AND lease_owner=? AND lease_token=?`,
+		status, stageName, stageName, string(steps), response.ErrorMessage, response.ErrorCode, response.ErrorClass, response.ErrorMessage, response.ErrorDetail,
+		nextRun, status, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), deployRunType, job.ID, job.LeaseOwner, job.LeaseToken)
 	if err != nil {
 		return false, err
 	}
@@ -291,12 +316,13 @@ func (s *Store) RecoverExpiredLeases(ctx context.Context) error {
 }
 
 func (s *Store) MarkUncertain(ctx context.Context, job Job, reason string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE jobs SET error_code='execution_result_unknown',error_class='uncertainty',error_message=?,error_detail='Remote execution is awaiting automatic verification',lease_expires_at=NULL,next_run_at=NULL,updated_at=? WHERE id=? AND state='running' AND lease_token=?`, activitylog.Redact(reason), s.now().UTC().Format(time.RFC3339Nano), job.ID, job.LeaseToken)
+	message := activitylog.Redact(reason)
+	_, err := s.db.ExecContext(ctx, `UPDATE event_runs SET error_code='execution_result_unknown',error_class='uncertainty',error_message=?,error=?,error_detail='Remote execution is awaiting automatic verification',lease_expires_at=NULL,next_run_at=NULL,updated_at=? WHERE type=? AND id=? AND status='running' AND lease_token=?`, message, message, s.now().UTC().Format(time.RFC3339Nano), deployRunType, job.ID, job.LeaseToken)
 	return err
 }
 
 func (s *Store) ListUncertain(ctx context.Context, limit int) ([]Job, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE state='running' AND error_class='uncertainty' ORDER BY updated_at LIMIT ?`, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+` FROM event_runs WHERE type=? AND status='running' AND error_class='uncertainty' ORDER BY updated_at LIMIT ?`, deployRunType, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -322,8 +348,8 @@ func redactResponse(response ReconcileResponse) ReconcileResponse {
 }
 
 func (s *Store) listRunningJobsWithExpiredLeases(ctx context.Context, now time.Time) ([]Job, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+` FROM jobs
-		WHERE state='running' AND lease_expires_at IS NOT NULL AND lease_expires_at<>'' AND lease_expires_at<=?`, now.Format(time.RFC3339Nano))
+	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+` FROM event_runs
+		WHERE type=? AND status='running' AND lease_expires_at IS NOT NULL AND lease_expires_at<>'' AND lease_expires_at<=?`, deployRunType, now.Format(time.RFC3339Nano))
 	if err != nil {
 		return nil, err
 	}
@@ -341,7 +367,7 @@ func (s *Store) listRunningJobsWithExpiredLeases(ctx context.Context, now time.T
 
 func (s *Store) Owned(ctx context.Context, job Job) (bool, error) {
 	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE id=? AND state='running' AND lease_owner=? AND lease_token=?`, job.ID, job.LeaseOwner, job.LeaseToken).Scan(&n)
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM event_runs WHERE type=? AND id=? AND status='running' AND lease_owner=? AND lease_token=?`, deployRunType, job.ID, job.LeaseOwner, job.LeaseToken).Scan(&n)
 	return n == 1, err
 }
 

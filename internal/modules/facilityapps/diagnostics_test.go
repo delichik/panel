@@ -77,12 +77,12 @@ func TestFacilityDeploymentDiagnosticsKeepsEachNodesFailure(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		state, code := "succeeded", ""
+		status, code := "completed", ""
 		if serverID == "failed-node" {
-			state, code = "failed_retryable", "container_not_running"
+			status, code = "failed_retryable", "container_not_running"
 			firstID = result.Job.ID
 		}
-		if _, err := svc.db.Exec(`UPDATE jobs SET state=?,error_code=?,error_message='startup failed',error_detail='exitCode=1',attempts=2,next_run_at=? WHERE id=?`, state, code, time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano), result.Job.ID); err != nil {
+		if _, err := svc.db.Exec(`UPDATE event_runs SET status=?,error_code=?,error_message='startup failed',error='startup failed',error_detail='exitCode=1',attempts=2,next_run_at=? WHERE type='application_deploy' AND id=?`, status, code, time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano), result.Job.ID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -129,7 +129,7 @@ func TestFacilityDeploymentDiagnosticsKeepsEachNodesFailure(t *testing.T) {
 	if _, err := svc.db.Exec(`UPDATE application_instances SET desired_state='purged' WHERE server_id='failed-node'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.db.Exec(`UPDATE jobs SET state='failed' WHERE id=?`, firstID); err != nil {
+	if _, err := svc.db.Exec(`UPDATE event_runs SET status='failed',stage='failed' WHERE type='application_deploy' AND id=?`, firstID); err != nil {
 		t.Fatal(err)
 	}
 	remaining, err := svc.deploymentDiagnostics(ctx, []string{"successful-node"})

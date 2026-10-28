@@ -2,7 +2,11 @@ package certs
 
 import (
 	"context"
+	"strings"
+	"time"
+
 	"panel/internal/modules/keyassets"
+	"panel/internal/modules/tasks"
 	panelerr "panel/internal/platform/errors"
 	httpx "panel/internal/platform/http"
 )
@@ -74,7 +78,56 @@ func (s *Service) RenewSelfSignedLeaf(ctx context.Context, certID string) (SelfS
 	if err != nil {
 		return SelfSignedCertificate{}, err
 	}
-	return mapSelfSigned(result.Asset, "leaf"), nil
+	if err := s.waitKeyAssetTask(ctx, result.TaskID); err != nil {
+		return SelfSignedCertificate{}, err
+	}
+	asset, err := s.keyAssets.Get(ctx, certID)
+	if err != nil {
+		return SelfSignedCertificate{}, err
+	}
+	return mapSelfSigned(asset, "leaf"), nil
+}
+
+// waitKeyAssetTask blocks until the registered executor finishes. Self-signed
+// renew stays a synchronous 200 that returns the new certificate; the key-asset
+// reissue HTTP API itself stays 202 and returns the pre-task snapshot.
+func (s *Service) waitKeyAssetTask(ctx context.Context, taskID string) error {
+	if s == nil || s.tasks == nil || strings.TrimSpace(taskID) == "" {
+		return panelerr.Validation("task_service_unavailable", "Task service is unavailable")
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		task, err := s.tasks.Get(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		switch task.Status {
+		case tasks.StatusCompleted:
+			return nil
+		case tasks.StatusFailed, tasks.StatusFailedRetryable, tasks.StatusBlocked, tasks.StatusCancelled:
+			msg := strings.TrimSpace(task.Error)
+			if msg == "" {
+				msg = "Self-signed certificate renewal did not complete"
+			}
+			return panelerr.BadGateway("key_asset_reissue_failed", msg)
+		}
+		if !time.Now().Before(deadline) {
+			return panelerr.BadGateway("key_asset_reissue_failed", "Self-signed certificate renewal did not finish in time")
+		}
+		timer := time.NewTimer(15 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func (s *Service) DeleteSelfSigned(ctx context.Context, certID string) error {

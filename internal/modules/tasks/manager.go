@@ -256,6 +256,12 @@ func (m *Manager) Run(ctx context.Context, task Task) error {
 		}
 	}
 	err = def.Execute(TaskContext{Context: runCtx, Task: task, Service: m.service})
+	if normalizeRecoveryPolicy(def.RecoveryPolicy) == RecoveryRemoteFence {
+		// Deploy Execute (Controller.RunJob / Store.Claim) owns every status
+		// transition, including uncertain hold and retryable backoff. Manager
+		// must not Complete/Fail around a still-running remote-fence row.
+		return err
+	}
 	if err != nil {
 		latest, latestErr := m.service.Get(ctx, task.ID)
 		if latestErr == nil && (isTerminalStatus(latest.Status) || latest.Status == StatusFailedRetryable) {

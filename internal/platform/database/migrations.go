@@ -141,6 +141,9 @@ func preAppMigrationSteps() []orm.Step {
 		{ID: "rename_tasks_to_event_runs", Run: func(ctx context.Context, tx *sql.Tx) error {
 			return renameTasksToEventRunsOn(ctx, tx)
 		}},
+		{ID: "merge_jobs_into_event_runs", Run: func(ctx context.Context, tx *sql.Tx) error {
+			return mergeJobsIntoEventRunsOn(ctx, tx)
+		}},
 	}
 }
 
@@ -235,6 +238,119 @@ func renameTasksToEventRunsOn(ctx context.Context, q migrationExecutor) error {
 	return nil
 }
 
+// mergeJobsIntoEventRunsOn copies legacy AppDB jobs into event_runs before
+// the destructive schema sync drops the jobs model. The jobs table is left
+// in place; AutoMigrate removes it only after this step commits. Fresh
+// databases have no jobs table and no-op. Diagnostic events are not touched.
+func mergeJobsIntoEventRunsOn(ctx context.Context, q migrationExecutor) error {
+	hasJobs, err := tableExistsOn(ctx, q, "jobs")
+	if err != nil || !hasJobs {
+		return err
+	}
+	hasRuns, err := tableExistsOn(ctx, q, "event_runs")
+	if err != nil {
+		return err
+	}
+	if !hasRuns {
+		return fmt.Errorf("merge_jobs_into_event_runs: jobs exists but event_runs is missing")
+	}
+	if err := ensureColumnsOn(ctx, q, "event_runs", deployEventRunColumns()); err != nil {
+		return err
+	}
+	_, err = q.ExecContext(ctx, mergeJobsIntoEventRunsSQL)
+	return err
+}
+
+func deployEventRunColumns() map[string]string {
+	return map[string]string{
+		"application_id":      "TEXT NOT NULL DEFAULT ''",
+		"instance_id":         "TEXT NOT NULL DEFAULT ''",
+		"action":              "TEXT NOT NULL DEFAULT ''",
+		"desired_generation":  "INTEGER NOT NULL DEFAULT 0",
+		"desired_spec_hash":   "TEXT NOT NULL DEFAULT ''",
+		"desired_revision_id": "TEXT NOT NULL DEFAULT ''",
+		"desired_spec_json":   "TEXT NOT NULL DEFAULT '{}'",
+		"remove_data":         "INTEGER NOT NULL DEFAULT 0",
+		"force_nonce":         "INTEGER NOT NULL DEFAULT 0",
+		"priority":            "INTEGER NOT NULL DEFAULT 0",
+		"attempts":            "INTEGER NOT NULL DEFAULT 0",
+		"lease_owner":         "TEXT NOT NULL DEFAULT ''",
+		"lease_token":         "TEXT NOT NULL DEFAULT ''",
+		"lease_expires_at":    "TEXT",
+		"execution_id":        "TEXT NOT NULL DEFAULT ''",
+		"intent_id":           "TEXT NOT NULL DEFAULT ''",
+		"reason":              "TEXT NOT NULL DEFAULT ''",
+		"idempotency_key":     "TEXT NOT NULL DEFAULT ''",
+		"last_stage":          "TEXT NOT NULL DEFAULT ''",
+		"last_steps_json":     "TEXT NOT NULL DEFAULT '[]'",
+		"error_code":          "TEXT NOT NULL DEFAULT ''",
+		"error_class":         "TEXT NOT NULL DEFAULT ''",
+		"error_message":       "TEXT NOT NULL DEFAULT ''",
+		"error_detail":        "TEXT NOT NULL DEFAULT ''",
+		"updated_at":          "TEXT",
+	}
+}
+
+const mergeJobsIntoEventRunsSQL = `
+INSERT INTO event_runs (
+  id, operation_id, type, parent_task_id, child_index, child_count,
+  execution_mode, concurrency_key, schedule_key, quiet,
+  server_id, node_id, resource_type, resource_id,
+  trigger_type, trigger_resource_type, trigger_resource_id,
+  trigger_task_id, triggered_by, params_json, metadata_json,
+  status, stage, percentage, summary, error,
+  retry_count, max_retries, next_run_at, created_at, started_at, finished_at,
+  application_id, instance_id, action,
+  desired_generation, desired_spec_hash, desired_revision_id, desired_spec_json,
+  remove_data, force_nonce, priority, attempts,
+  lease_owner, lease_token, lease_expires_at, execution_id, intent_id,
+  reason, idempotency_key, last_stage, last_steps_json,
+  error_code, error_class, error_message, error_detail, updated_at
+)
+SELECT
+  j.id,
+  CASE WHEN TRIM(j.intent_id) <> '' THEN j.intent_id ELSE j.id END,
+  'application_deploy', '', 0, 0,
+  'single', '', '', 0,
+  j.server_id, j.server_id, 'application', j.application_id,
+  j.trigger_type, j.trigger_resource_type, j.trigger_resource_id,
+  '', '', '{}', '{}',
+  CASE j.state
+    WHEN 'pending' THEN 'queued'
+    WHEN 'running' THEN 'running'
+    WHEN 'failed_retryable' THEN 'failed_retryable'
+    WHEN 'succeeded' THEN 'completed'
+    WHEN 'failed' THEN 'failed'
+    WHEN 'cancelled' THEN 'cancelled'
+    ELSE 'failed' END,
+  CASE
+    WHEN j.state = 'succeeded' AND TRIM(COALESCE(j.last_stage,'')) = '' THEN 'completed'
+    WHEN j.state = 'failed' AND TRIM(COALESCE(j.last_stage,'')) = '' THEN 'failed'
+    WHEN j.state = 'cancelled' AND TRIM(COALESCE(j.last_stage,'')) = '' THEN 'cancelled'
+    ELSE COALESCE(j.last_stage, '') END,
+  CASE WHEN j.state = 'succeeded' THEN 100 ELSE NULL END,
+  j.reason,
+  j.error_message,
+  0, 0,
+  NULLIF(TRIM(j.next_run_at), ''),
+  j.created_at,
+  NULLIF(TRIM(j.started_at), ''),
+  NULLIF(TRIM(j.finished_at), ''),
+  j.application_id, j.instance_id, j.action,
+  j.desired_generation, j.desired_spec_hash, j.desired_revision_id,
+  COALESCE(NULLIF(TRIM(j.desired_spec_json), ''), '{}'),
+  j.remove_data, j.force_nonce, j.priority, j.attempts,
+  j.lease_owner, j.lease_token,
+  NULLIF(TRIM(j.lease_expires_at), ''),
+  j.execution_id, j.intent_id,
+  j.reason, j.idempotency_key, j.last_stage,
+  COALESCE(NULLIF(TRIM(j.last_steps_json), ''), '[]'),
+  j.error_code, j.error_class, j.error_message, j.error_detail,
+  COALESCE(NULLIF(TRIM(j.updated_at), ''), j.created_at)
+FROM jobs j
+WHERE NOT EXISTS (SELECT 1 FROM event_runs e WHERE e.id = j.id);
+`
+
 func tableColumnsOn(ctx context.Context, q migrationExecutor, table string) (map[string]bool, error) {
 	rows, err := q.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
 	if err != nil {
@@ -278,6 +394,9 @@ func appMigrationSteps() []orm.Step {
 		{ID: "purge_orphan_application_reconcile_states", Run: func(ctx context.Context, tx *sql.Tx) error {
 			return purgeOrphanApplicationReconcileStatesOn(ctx, tx)
 		}},
+		{ID: "cancel_application_reconcile_monitoring_shells", Run: func(ctx context.Context, tx *sql.Tx) error {
+			return cancelApplicationReconcileMonitoringShellsOn(ctx, tx)
+		}},
 		{ID: "remove_application_network_mode_and_proxy_target_type", Run: func(ctx context.Context, tx *sql.Tx) error {
 			return removeDeprecatedApplicationNetworkingOn(ctx, tx)
 		}},
@@ -308,19 +427,47 @@ func backfillApplicationPersistentLocationsOn(ctx context.Context, q migrationEx
 		   AND (application_id IN (` + persistentApps + `)
 		     OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(desired_spec_json) THEN desired_spec_json ELSE '{}' END, '$.mounts') WHERE json_extract(value, '$.type')='persistent')
 		     OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(runtime_spec_json) THEN runtime_spec_json ELSE '{}' END, '$.mounts') WHERE json_extract(value, '$.type')='persistent'))`,
-		`INSERT OR IGNORE INTO application_persistent_locations(application_id,server_id,created_at)
-		 SELECT application_id, server_id, COALESCE(NULLIF(created_at,''), strftime('%Y-%m-%dT%H:%M:%SZ','now'))
-		 FROM jobs
-		 WHERE trim(server_id) <> '' AND application_id IN (SELECT id FROM applications)
-		   AND (application_id IN (` + persistentApps + `)
-		     OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(desired_spec_json) THEN desired_spec_json ELSE '{}' END, '$.mounts') WHERE json_extract(value, '$.type')='persistent'))`,
 	}
 	for _, statement := range statements {
 		if _, err := q.ExecContext(ctx, statement); err != nil {
 			return err
 		}
 	}
-	return nil
+	hasJobs, err := tableExistsOn(ctx, q, "jobs")
+	if err != nil {
+		return err
+	}
+	if hasJobs {
+		if _, err := q.ExecContext(ctx, `INSERT OR IGNORE INTO application_persistent_locations(application_id,server_id,created_at)
+		 SELECT application_id, server_id, COALESCE(NULLIF(created_at,''), strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+		 FROM jobs
+		 WHERE trim(server_id) <> '' AND application_id IN (SELECT id FROM applications)
+		   AND (application_id IN (`+persistentApps+`)
+		     OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(desired_spec_json) THEN desired_spec_json ELSE '{}' END, '$.mounts') WHERE json_extract(value, '$.type')='persistent'))`); err != nil {
+			return err
+		}
+	}
+	hasRuns, err := tableExistsOn(ctx, q, "event_runs")
+	if err != nil {
+		return err
+	}
+	if !hasRuns {
+		return nil
+	}
+	columns, err := tableColumnsOn(ctx, q, "event_runs")
+	if err != nil {
+		return err
+	}
+	if !columns["application_id"] || !columns["server_id"] || !columns["desired_spec_json"] || !columns["type"] {
+		return nil
+	}
+	_, err = q.ExecContext(ctx, `INSERT OR IGNORE INTO application_persistent_locations(application_id,server_id,created_at)
+		 SELECT application_id, server_id, COALESCE(NULLIF(created_at,''), strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+		 FROM event_runs
+		 WHERE type='application_deploy' AND trim(server_id) <> '' AND application_id IN (SELECT id FROM applications)
+		   AND (application_id IN (`+persistentApps+`)
+		     OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(desired_spec_json) THEN desired_spec_json ELSE '{}' END, '$.mounts') WHERE json_extract(value, '$.type')='persistent'))`)
+	return err
 }
 
 // purgeOrphanApplicationReconcileStatesOn 删除 application_reconcile_states 中
@@ -331,6 +478,23 @@ func backfillApplicationPersistentLocationsOn(ctx context.Context, q migrationEx
 func purgeOrphanApplicationReconcileStatesOn(ctx context.Context, q migrationExecutor) error {
 	_, err := q.ExecContext(ctx, `DELETE FROM application_reconcile_states
 		WHERE application_id NOT IN (SELECT id FROM applications)`)
+	return err
+}
+
+// cancelApplicationReconcileMonitoringShellsOn retires leftover event runs
+// created when application reconcile was a noop batch. Jobs are not touched.
+func cancelApplicationReconcileMonitoringShellsOn(ctx context.Context, q migrationExecutor) error {
+	ok, err := tableExistsOn(ctx, q, "event_runs")
+	if err != nil || !ok {
+		return err
+	}
+	_, err = q.ExecContext(ctx, `UPDATE event_runs
+		SET status='cancelled', stage='cancelled',
+		    error='application reconcile no longer creates event runs',
+		    next_run_at=NULL,
+		    finished_at=COALESCE(NULLIF(finished_at, ''), strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+		WHERE type IN ('application_reconcile', 'application_reconcile_batch')
+		  AND status IN ('queued', 'scheduled', 'running', 'failed_retryable')`)
 	return err
 }
 
@@ -377,6 +541,7 @@ func removeDeprecatedApplicationNetworkingOn(ctx context.Context, q migrationExe
 		column string
 	}{
 		{table: "jobs", column: "desired_spec_json"},
+		{table: "event_runs", column: "desired_spec_json"},
 		{table: "application_instances", column: "desired_spec_json"},
 		{table: "application_instances", column: "runtime_spec_json"},
 		{table: "application_revisions", column: "rendered_runtime_spec"},

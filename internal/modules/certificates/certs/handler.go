@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"panel/internal/modules/tasks"
 	"panel/internal/platform/http"
 )
 
@@ -15,7 +16,7 @@ type certificateService interface {
 	Issue(ctx context.Context, in IssueRequest) (IssueResult, error)
 	Reissue(ctx context.Context, certID string, in IssueRequest) (IssueResult, error)
 	Delete(ctx context.Context, certID string) error
-	Renew(ctx context.Context, certID string) error
+	Renew(ctx context.Context, certID string) (tasks.Task, error)
 	ListSelfSignedPage(ctx context.Context, page, pageSize int, query string) (httpx.ListPage[SelfSignedCertificate], error)
 	CreateSelfSignedCA(ctx context.Context, in SelfSignedCARequest) (SelfSignedCertificate, error)
 	CreateSelfSignedLeaf(ctx context.Context, in SelfSignedLeafRequest) (SelfSignedCertificate, error)
@@ -24,11 +25,12 @@ type certificateService interface {
 }
 
 func (h *Handler) Renew(w http.ResponseWriter, r *http.Request) {
-	if err := h.service.Renew(r.Context(), certificateIDFromRequest(r)); err != nil {
+	task, err := h.service.Renew(r.Context(), certificateIDFromRequest(r))
+	if err != nil {
 		httpx.Error(w, err)
 		return
 	}
-	httpx.JSON(w, http.StatusAccepted, map[string]any{"renewed": true})
+	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID, "renewed": false})
 }
 
 func (h *Handler) ListSelfSigned(w http.ResponseWriter, r *http.Request) {

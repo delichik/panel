@@ -884,56 +884,77 @@ func (s *Service) ReissueTLS(ctx context.Context, assetID string) (ReissueResult
 	if err != nil {
 		return ReissueResult{}, err
 	}
-	if isSystemManagedAsset(stored.Asset) {
-		return ReissueResult{}, systemAssetMutationError()
-	}
-	if isACMEAsset(stored.Asset) {
-		return ReissueResult{}, panelerr.NotFound("key asset")
-	}
-	if stored.Type != TypeTLSCertificate {
-		return ReissueResult{}, panelerr.Validation("key_asset_type_invalid", "Only TLS certificates can be reissued")
-	}
-	if strings.TrimSpace(stored.ParentAssetID) == "" {
-		return ReissueResult{}, panelerr.Validation("key_asset_ca_required", "Standalone TLS certificates cannot be reissued without a CA")
-	}
-	taskID, fail, complete, err := s.beginAssetTask(ctx, TaskTypeTLSReissue, stored.ID, "Reissuing TLS certificate "+stored.Name)
-	if err != nil {
+	if err := validateTLSReissueAsset(stored); err != nil {
 		return ReissueResult{}, err
 	}
 	parent, err := s.getStoredAsset(ctx, stored.ParentAssetID)
 	if err != nil {
-		_ = fail(err)
 		return ReissueResult{}, err
 	}
 	if isSystemManagedAsset(parent.Asset) {
-		err := systemAssetMutationError()
-		_ = fail(err)
+		return ReissueResult{}, systemAssetMutationError()
+	}
+	asset, err := s.Get(ctx, stored.ID)
+	if err != nil {
 		return ReissueResult{}, err
+	}
+	task, err := s.queueAssetTask(ctx, TaskTypeTLSReissue, stored.ID, "Reissuing TLS certificate "+stored.Name, "")
+	if err != nil {
+		return ReissueResult{}, err
+	}
+	return ReissueResult{Asset: asset, TaskID: task.ID}, nil
+}
+
+func validateTLSReissueAsset(stored storedAsset) error {
+	if isSystemManagedAsset(stored.Asset) {
+		return systemAssetMutationError()
+	}
+	if isACMEAsset(stored.Asset) {
+		return panelerr.NotFound("key asset")
+	}
+	if stored.Type != TypeTLSCertificate {
+		return panelerr.Validation("key_asset_type_invalid", "Only TLS certificates can be reissued")
+	}
+	if strings.TrimSpace(stored.ParentAssetID) == "" {
+		return panelerr.Validation("key_asset_ca_required", "Standalone TLS certificates cannot be reissued without a CA")
+	}
+	return nil
+}
+
+func (s *Service) executeTLSReissue(ctx context.Context, assetID string) (string, error) {
+	stored, err := s.getStoredAsset(ctx, assetID)
+	if err != nil {
+		return "", err
+	}
+	if err := validateTLSReissueAsset(stored); err != nil {
+		return "", err
+	}
+	parent, err := s.getStoredAsset(ctx, stored.ParentAssetID)
+	if err != nil {
+		return "", err
+	}
+	if isSystemManagedAsset(parent.Asset) {
+		return "", systemAssetMutationError()
 	}
 	parentCert, err := parent.certificate()
 	if err != nil {
-		_ = fail(err)
-		return ReissueResult{}, err
+		return "", err
 	}
 	parentPrivateKey, err := s.decryptPrivateKey(parent)
 	if err != nil {
-		_ = fail(err)
-		return ReissueResult{}, err
+		return "", err
 	}
 	key, err := generateKeyMaterial(stored.Algorithm, stored.KeySize)
 	if err != nil {
-		_ = fail(err)
-		return ReissueResult{}, err
+		return "", err
 	}
 	privateKeyPEM, err := marshalPrivateKeyPEM(key.private)
 	if err != nil {
-		_ = fail(err)
-		return ReissueResult{}, err
+		return "", err
 	}
 	_, ips, err := parseIPs(stored.IPAddresses)
 	if err != nil {
-		_ = fail(err)
-		return ReissueResult{}, err
+		return "", err
 	}
 	duration := stored.NotAfter.Sub(stored.NotBefore)
 	if duration <= 0 {
@@ -941,23 +962,19 @@ func (s *Service) ReissueTLS(ctx context.Context, assetID string) (ReissueResult
 	}
 	template, err := newCertificateTemplate(stored.CommonName, time.Now().UTC().Add(-time.Hour), time.Now().UTC().Add(duration), false, stored.DNSNames, ips)
 	if err != nil {
-		_ = fail(err)
-		return ReissueResult{}, err
+		return "", err
 	}
 	certificatePEM, err := generateCertificate(template, parentCert, key.public, parentPrivateKey)
 	if err != nil {
-		_ = fail(err)
-		return ReissueResult{}, err
+		return "", err
 	}
 	cert, normalizedCertPEM, err := parseCertificatePEM(string(certificatePEM))
 	if err != nil {
-		_ = fail(err)
-		return ReissueResult{}, err
+		return "", err
 	}
 	publicKeyPEM, err := marshalPublicKeyPEM(key.public)
 	if err != nil {
-		_ = fail(err)
-		return ReissueResult{}, err
+		return "", err
 	}
 	stored.PublicKey = string(publicKeyPEM)
 	stored.Fingerprint = certificateFingerprint(cert)
@@ -967,18 +984,12 @@ func (s *Service) ReissueTLS(ctx context.Context, assetID string) (ReissueResult
 	stored.certificateText = string(normalizedCertPEM)
 	stored.privateKeyCiphertext = string(privateKeyPEM)
 	if err := s.updateAsset(ctx, stored); err != nil {
-		_ = fail(err)
-		return ReissueResult{}, err
+		return "", err
 	}
 	if err := s.refreshApplications(ctx); err != nil {
-		_ = fail(err)
-		return ReissueResult{}, err
+		return "", err
 	}
-	if err := complete("Reissued TLS certificate " + stored.Name); err != nil {
-		return ReissueResult{}, err
-	}
-	asset, err := s.Get(ctx, stored.ID)
-	return ReissueResult{Asset: asset, TaskID: taskID}, err
+	return "Reissued TLS certificate " + stored.Name, nil
 }
 
 func (s *Service) RegenerateSSH(ctx context.Context, assetID string) (RegenerateResult, error) {
@@ -986,53 +997,65 @@ func (s *Service) RegenerateSSH(ctx context.Context, assetID string) (Regenerate
 	if err != nil {
 		return RegenerateResult{}, err
 	}
-	if isSystemManagedAsset(stored.Asset) {
-		return RegenerateResult{}, systemAssetMutationError()
+	if err := validateSSHRegenerateAsset(stored); err != nil {
+		return RegenerateResult{}, err
 	}
-	if stored.Type != TypeSSHKeyPair {
-		return RegenerateResult{}, panelerr.Validation("key_asset_type_invalid", "Only SSH key pairs can be regenerated")
-	}
-	taskID, fail, complete, err := s.beginAssetTask(ctx, TaskTypeSSHRegenerate, stored.ID, "Regenerating SSH key pair "+stored.Name)
+	asset, err := s.Get(ctx, stored.ID)
 	if err != nil {
 		return RegenerateResult{}, err
+	}
+	task, err := s.queueAssetTask(ctx, TaskTypeSSHRegenerate, stored.ID, "Regenerating SSH key pair "+stored.Name, "")
+	if err != nil {
+		return RegenerateResult{}, err
+	}
+	return RegenerateResult{Asset: asset, TaskID: task.ID}, nil
+}
+
+func validateSSHRegenerateAsset(stored storedAsset) error {
+	if isSystemManagedAsset(stored.Asset) {
+		return systemAssetMutationError()
+	}
+	if stored.Type != TypeSSHKeyPair {
+		return panelerr.Validation("key_asset_type_invalid", "Only SSH key pairs can be regenerated")
+	}
+	return nil
+}
+
+func (s *Service) executeSSHRegenerate(ctx context.Context, assetID string) (string, error) {
+	stored, err := s.getStoredAsset(ctx, assetID)
+	if err != nil {
+		return "", err
+	}
+	if err := validateSSHRegenerateAsset(stored); err != nil {
+		return "", err
 	}
 	key, err := generateKeyMaterial(stored.Algorithm, stored.KeySize)
 	if err != nil {
-		_ = fail(err)
-		return RegenerateResult{}, err
+		return "", err
 	}
 	privateKeyPEM, err := marshalPrivateKeyPEM(key.private)
 	if err != nil {
-		_ = fail(err)
-		return RegenerateResult{}, err
+		return "", err
 	}
 	material, err := buildSSHMaterial(key, privateKeyPEM, "")
 	if err != nil {
-		_ = fail(err)
-		return RegenerateResult{}, err
+		return "", err
 	}
 	sshPublic, _, _, _, err := ssh.ParseAuthorizedKey([]byte(material.publicKeyText))
 	if err != nil {
-		_ = fail(err)
-		return RegenerateResult{}, err
+		return "", err
 	}
 	stored.PublicKey = strings.TrimSpace(material.publicKeyText)
 	stored.Fingerprint = sshFingerprint(sshPublic)
 	stored.UpdatedAt = time.Now().UTC()
 	stored.privateKeyCiphertext = string(material.privateKeyPEM)
 	if err := s.updateAsset(ctx, stored); err != nil {
-		_ = fail(err)
-		return RegenerateResult{}, err
+		return "", err
 	}
 	if err := s.refreshApplications(ctx); err != nil {
-		_ = fail(err)
-		return RegenerateResult{}, err
+		return "", err
 	}
-	if err := complete("Regenerated SSH key pair " + stored.Name); err != nil {
-		return RegenerateResult{}, err
-	}
-	asset, err := s.Get(ctx, stored.ID)
-	return RegenerateResult{Asset: asset, TaskID: taskID}, err
+	return "Regenerated SSH key pair " + stored.Name, nil
 }
 
 func (s *Service) ReadFile(ctx context.Context, assetID, kind string) ([]byte, string, error) {
@@ -1144,17 +1167,46 @@ func (s *Service) ReverseProxyCertificates(ctx context.Context) ([]proxycert.Cer
 	return out, rows.Err()
 }
 
+const (
+	exportPasswordAssetID = "key_asset_export"
+	exportPasswordField   = "archive_password"
+)
+
+type exportTaskParams struct {
+	AssetIDs           []string `json:"assetIds"`
+	PasswordCiphertext string   `json:"passwordCiphertext"`
+}
+
 func (s *Service) CreateExport(ctx context.Context, in ExportRequest) (ExportResult, error) {
 	if strings.TrimSpace(in.Password) == "" || len(in.Password) < 12 {
 		return ExportResult{}, panelerr.Validation("key_asset_archive_password_invalid", "Archive password is invalid")
 	}
-	taskID, fail, complete, err := s.beginAssetTask(ctx, TaskTypeExport, "", "Exporting key assets")
+	assetIDs, err := s.prepareExportAssetIDs(ctx, in.AssetIDs)
 	if err != nil {
 		return ExportResult{}, err
 	}
-	payload := archivePayload{Assets: []archiveAsset{}}
+	if s.secrets == nil {
+		return ExportResult{}, panelerr.Validation("task_service_unavailable", "Key asset secret store is unavailable")
+	}
+	ciphertext, err := s.secrets.Encrypt(exportPasswordAssetID, exportPasswordAssetID, exportPasswordField, []byte(in.Password))
+	if err != nil {
+		return ExportResult{}, err
+	}
+	params, err := json.Marshal(exportTaskParams{AssetIDs: assetIDs, PasswordCiphertext: ciphertext})
+	if err != nil {
+		return ExportResult{}, err
+	}
+	task, err := s.queueAssetTask(ctx, TaskTypeExport, "", "Exporting key assets", string(params))
+	if err != nil {
+		return ExportResult{}, err
+	}
+	return ExportResult{TaskID: task.ID}, nil
+}
+
+func (s *Service) prepareExportAssetIDs(ctx context.Context, ids []string) ([]string, error) {
 	seen := map[string]struct{}{}
-	for _, assetID := range in.AssetIDs {
+	out := make([]string, 0, len(ids))
+	for _, assetID := range ids {
 		assetID = strings.TrimSpace(assetID)
 		if assetID == "" {
 			continue
@@ -1165,23 +1217,35 @@ func (s *Service) CreateExport(ctx context.Context, in ExportRequest) (ExportRes
 		seen[assetID] = struct{}{}
 		stored, err := s.getStoredAsset(ctx, assetID)
 		if err != nil {
-			_ = fail(err)
-			return ExportResult{}, err
+			return nil, err
 		}
 		if isSystemManagedAsset(stored.Asset) {
-			err := systemAssetMutationError()
-			_ = fail(err)
-			return ExportResult{}, err
+			return nil, systemAssetMutationError()
 		}
 		if isACMEAsset(stored.Asset) {
-			err := panelerr.NotFound("key asset")
-			_ = fail(err)
-			return ExportResult{}, err
+			return nil, panelerr.NotFound("key asset")
+		}
+		out = append(out, assetID)
+	}
+	return out, nil
+}
+
+func (s *Service) executeExport(ctx context.Context, taskID string, assetIDs []string, password string) error {
+	payload := archivePayload{Assets: []archiveAsset{}}
+	for _, assetID := range assetIDs {
+		stored, err := s.getStoredAsset(ctx, assetID)
+		if err != nil {
+			return err
+		}
+		if isSystemManagedAsset(stored.Asset) {
+			return systemAssetMutationError()
+		}
+		if isACMEAsset(stored.Asset) {
+			return panelerr.NotFound("key asset")
 		}
 		privateKeyPEM, err := s.decryptPrivateKeyPEM(stored)
 		if err != nil {
-			_ = fail(err)
-			return ExportResult{}, err
+			return err
 		}
 		payload.Assets = append(payload.Assets, archiveAsset{
 			ID:             stored.ID,
@@ -1200,33 +1264,24 @@ func (s *Service) CreateExport(ctx context.Context, in ExportRequest) (ExportRes
 		})
 	}
 	sort.Slice(payload.Assets, func(i, j int) bool { return payload.Assets[i].ID < payload.Assets[j].ID })
-	archiveBytes, err := encryptArchive(in.Password, payload)
+	archiveBytes, err := encryptArchive(password, payload)
 	if err != nil {
-		_ = fail(err)
-		return ExportResult{}, err
+		return err
 	}
 	if err := os.MkdirAll(s.exportDir, 0o700); err != nil {
-		_ = fail(err)
-		return ExportResult{}, err
+		return err
 	}
 	filename := taskID + ".panel-key-assets"
 	filePath := filepath.Join(s.exportDir, filename)
 	if err := os.WriteFile(filePath, archiveBytes, 0o600); err != nil {
-		_ = fail(err)
-		return ExportResult{}, err
+		return err
 	}
 	now := time.Now().UTC()
 	expiresAt := now.Add(30 * time.Minute)
-	if _, err := orm.RawExec(ctx, s.exportDB(), `INSERT INTO key_asset_exports(task_id,filename,file_path,expires_at,created_at,updated_at) VALUES(?,?,?,?,?,?)
+	_, err = orm.RawExec(ctx, s.exportDB(), `INSERT INTO key_asset_exports(task_id,filename,file_path,expires_at,created_at,updated_at) VALUES(?,?,?,?,?,?)
 		ON CONFLICT(task_id) DO UPDATE SET filename=excluded.filename,file_path=excluded.file_path,expires_at=excluded.expires_at,updated_at=excluded.updated_at`,
-		taskID, filename, filePath, formatTime(expiresAt), formatTime(now), formatTime(now)); err != nil {
-		_ = fail(err)
-		return ExportResult{}, err
-	}
-	if err := complete("Exported key assets"); err != nil {
-		return ExportResult{}, err
-	}
-	return ExportResult{TaskID: taskID}, nil
+		taskID, filename, filePath, formatTime(expiresAt), formatTime(now), formatTime(now))
+	return err
 }
 
 func (s *Service) DownloadExport(ctx context.Context, taskID string) ([]byte, string, error) {
@@ -1448,52 +1503,82 @@ func (s *Service) PreflightImport(ctx context.Context, in ImportPreflightRequest
 	}, nil
 }
 
+type importTaskParams struct {
+	PlanID                    string `json:"planId"`
+	Strategy                  string `json:"strategy"`
+	ConfirmOverwriteInUse     bool   `json:"confirmOverwriteInUse"`
+	ConfirmDangerousOverwrite bool   `json:"confirmDangerousOverwrite"`
+}
+
 func (s *Service) ExecuteImport(ctx context.Context, planID string, in ImportExecuteRequest) (ImportExecuteResult, error) {
 	plan, err := s.getImportPlan(planID)
 	if err != nil {
 		return ImportExecuteResult{}, err
 	}
-	taskID, fail, complete, err := s.beginAssetTask(ctx, TaskTypeImport, "", "Importing key assets")
+	strategy, err := normalizeImportStrategy(in.Strategy)
 	if err != nil {
 		return ImportExecuteResult{}, err
 	}
-	strategy := strings.TrimSpace(in.Strategy)
+	if err := s.validateImportExecute(ctx, plan, strategy, in); err != nil {
+		return ImportExecuteResult{}, err
+	}
+	params, err := json.Marshal(importTaskParams{
+		PlanID:                    plan.ID,
+		Strategy:                  strategy,
+		ConfirmOverwriteInUse:     in.ConfirmOverwriteInUse,
+		ConfirmDangerousOverwrite: in.ConfirmDangerousOverwrite,
+	})
+	if err != nil {
+		return ImportExecuteResult{}, err
+	}
+	task, err := s.queueAssetTask(ctx, TaskTypeImport, "", "Importing key assets", string(params))
+	if err != nil {
+		return ImportExecuteResult{}, err
+	}
+	return ImportExecuteResult{TaskID: task.ID}, nil
+}
+
+func normalizeImportStrategy(strategy string) (string, error) {
+	strategy = strings.TrimSpace(strategy)
 	if strategy == "" {
 		strategy = "skip_existing"
 	}
 	if strategy != "skip_existing" && strategy != "generate_new_id" && strategy != "overwrite_existing" {
-		_ = fail(panelerr.Validation("key_asset_import_conflict", "Import conflict strategy is invalid"))
-		return ImportExecuteResult{}, panelerr.Validation("key_asset_import_conflict", "Import conflict strategy is invalid")
+		return "", panelerr.Validation("key_asset_import_conflict", "Import conflict strategy is invalid")
 	}
+	return strategy, nil
+}
+
+func (s *Service) validateImportExecute(ctx context.Context, plan *importPlan, strategy string, in ImportExecuteRequest) error {
 	if strategy == "overwrite_existing" {
 		for _, conflict := range plan.Conflicts {
 			if conflict.ConflictByName && conflict.ExistingID != conflict.IncomingID {
-				err := panelerr.Validation("key_asset_import_conflict", "Name conflicts with a different asset and cannot be overwritten automatically")
-				_ = fail(err)
-				return ImportExecuteResult{}, err
+				return panelerr.Validation("key_asset_import_conflict", "Name conflicts with a different asset and cannot be overwritten automatically")
 			}
 		}
 		for _, assetID := range dedupeStrings(planOverwriteTargets(plan.Conflicts)) {
 			used, err := s.assetInUse(ctx, assetID)
 			if err != nil {
-				_ = fail(err)
-				return ImportExecuteResult{}, err
+				return err
 			}
 			if used && !in.ConfirmOverwriteInUse && !in.ConfirmDangerousOverwrite {
-				err := panelerr.Validation("key_asset_import_confirmation_required", "Overwrite confirmation is required for in-use key assets")
-				_ = fail(err)
-				return ImportExecuteResult{}, err
+				return panelerr.Validation("key_asset_import_confirmation_required", "Overwrite confirmation is required for in-use key assets")
 			}
 		}
 	}
-	assets := cloneStoredAssets(plan.Assets)
-	for _, asset := range assets {
+	for _, asset := range plan.Assets {
 		if isSystemManagedAsset(asset.Asset) {
-			err := systemAssetMutationError()
-			_ = fail(err)
-			return ImportExecuteResult{}, err
+			return systemAssetMutationError()
 		}
 	}
+	return nil
+}
+
+func (s *Service) executeImportPlan(ctx context.Context, plan *importPlan, strategy string, in ImportExecuteRequest) error {
+	if err := s.validateImportExecute(ctx, plan, strategy, in); err != nil {
+		return err
+	}
+	assets := cloneStoredAssets(plan.Assets)
 	skipped := 0
 	idMap := map[string]string{}
 	for i := range assets {
@@ -1555,7 +1640,7 @@ func (s *Service) ExecuteImport(ctx context.Context, planID string, in ImportExe
 			return nil
 		})
 	}
-	err = paneltls.WithUpdate(func() error {
+	err := paneltls.WithUpdate(func() error {
 		panelDomain, panelAssetID, err := s.panelTLSSelection(ctx)
 		if err != nil {
 			return err
@@ -1585,53 +1670,15 @@ func (s *Service) ExecuteImport(ctx context.Context, planID string, in ImportExe
 		return commitImport()
 	})
 	if err != nil {
-		_ = fail(err)
-		return ImportExecuteResult{}, err
+		return err
 	}
 	if err := s.refreshApplications(ctx); err != nil {
-		_ = fail(err)
-		return ImportExecuteResult{}, err
+		return err
 	}
-	s.forgetImportPlan(planID)
-	if err := complete("Imported key assets"); err != nil {
-		return ImportExecuteResult{}, err
-	}
+	s.forgetImportPlan(plan.ID)
 	_ = imported
 	_ = skipped
-	return ImportExecuteResult{TaskID: taskID}, nil
-}
-
-func (s *Service) beginAssetTask(ctx context.Context, taskType, resourceID, summary string) (string, func(error) error, func(string) error, error) {
-	if s.tasks == nil {
-		return "", func(error) error { return nil }, func(string) error { return nil }, nil
-	}
-	task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
-		Type:         taskType,
-		ResourceType: "key_asset",
-		ResourceID:   resourceID,
-		Status:       tasks.StatusRunning,
-		Summary:      summary,
-	}, tasks.Trigger{Type: "user", Manual: true})
-	if err != nil {
-		return "", nil, nil, err
-	}
-	if !created {
-		// An active task with the same concurrency key already exists (same
-		// asset or a global export). Key asset operations run inline in the
-		// request goroutine, so reject the duplicate instead of letting two
-		// writers race on the same asset.
-		return "", nil, nil, panelerr.Conflict("key_asset_operation_in_progress", "Another operation on the same key asset is already in progress")
-	}
-	taskID := task.ID
-	fail := func(err error) error {
-		defer s.tasks.FinishExecution(taskID)
-		return s.tasks.Fail(ctx, taskID, err)
-	}
-	complete := func(message string) error {
-		defer s.tasks.FinishExecution(taskID)
-		return s.tasks.Complete(ctx, taskID, message)
-	}
-	return taskID, fail, complete, nil
+	return nil
 }
 
 func (s *Service) refreshApplications(ctx context.Context) error {

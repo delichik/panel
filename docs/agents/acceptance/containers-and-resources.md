@@ -247,7 +247,7 @@
 
 - **前置**：Agent ready。
 - **动作**：POST networks/refresh。
-- **结果**：202 创建/复用 network_refresh，executor 读取 Agent networks 后原子替换 `docker_resource_snapshots(kind=networks)`。
+- **结果**：202 创建/复用 network_refresh，经 `Create` 后 `Manager.Run` 调用已注册 executor 读取 Agent networks，再原子替换 `docker_resource_snapshots(kind=networks)`。不得 `Start` 后手写 goroutine。
 - **失败**：刷新失败旧快照保留，任务失败可 retry，GET 返回 lastRefreshError。
 - **不变量**：首次无快照自动刷新只提交一次。
 - **验证**：refresh task/atomic replacement/old snapshot preservation tests。
@@ -285,7 +285,7 @@
 
 - **前置**：Agent ready，可能有活跃 volume_refresh。
 - **动作**：POST refresh 或首次自动触发。
-- **结果**：202 创建/复用任务，读取 Agent volumes 后原子替换 snapshot；任务可 retry。
+- **结果**：202 创建/复用任务，经 `Create` 后 `Manager.Run` 调用已注册 executor 读取 Agent volumes 并原子替换 snapshot；任务可 retry。不得 `Start` 后手写 goroutine。
 - **失败**：失败保留旧快照并通过 lastRefreshError 展示。
 - **不变量**：refresh task 的 server/resource concurrency key 保证同节点同类型复用。
 - **验证**：task registration/reuse/replace tests。
@@ -398,7 +398,7 @@
 - **前置**：反向代理设施配置保存/手动同步。
 - **动作**：触发协调。
 - **结果**：设施模块提供 per-server spec/update plan；应用 Planner/Controller 执行隐藏 AppDB Instance/Job；runtime 使用 panel-apps、80/443 和 managed Nginx files。
-- **失败**：设施保存不直接 Docker、不创建 `application_target_*` task；入口网关自身成功不得再次触发自身形成循环。
+- **失败**：设施保存不直接 Docker、不创建 `application_target_*` task，也不创建 `application_reconcile_batch` event run；入口网关自身成功不得再次触发自身形成循环。
 - **不变量**：普通应用成功可触发入口网关协调以立即获取新路由。
 - **验证**：facility plan/no-loop tests。
 

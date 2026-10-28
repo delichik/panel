@@ -175,7 +175,7 @@ func activityCommands(service *tasks.Service, db *sql.DB) func(context.Context, 
 			task, err := service.Get(ctx, taskID)
 			if err != nil {
 				var count int
-				if db != nil && db.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE execution_id=? AND state='running' AND error_class='uncertainty'`, execution.ExecutionID).Scan(&count) == nil && count > 0 {
+				if db != nil && db.QueryRowContext(ctx, `SELECT COUNT(*) FROM event_runs WHERE type='application_deploy' AND execution_id=? AND status='running' AND error_class='uncertainty'`, execution.ExecutionID).Scan(&count) == nil && count > 0 {
 					out = append(out, activity.Command{Kind: "resolve", ExecutionID: execution.ExecutionID})
 				}
 				continue

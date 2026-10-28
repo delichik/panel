@@ -319,6 +319,34 @@ func TestPanelSystemAssetsAreNotUserMutableOrProxyCertificates(t *testing.T) {
 	}
 }
 
+func TestResetPanelTLSRunsRegisteredExecutor(t *testing.T) {
+	svc, store, closeFn := newTestService(t)
+	defer closeFn()
+	ctx := context.Background()
+	if err := setPanelTLSSelection(ctx, store, "panel.example.test", ""); err != nil {
+		t.Fatal(err)
+	}
+	before, err := svc.EnsurePanelTLSAssets(ctx, "panel.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := svc.ResetPanelTLS(ctx, SystemPanelTLSAssetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Type != TaskTypePanelTLSReconcile || task.ID == "" {
+		t.Fatalf("reset task = %#v", task)
+	}
+	waitKeyAssetTask(t, svc, task.ID)
+	after, err := svc.Get(ctx, SystemPanelTLSAssetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Fingerprint == "" || after.Fingerprint == before.Fingerprint {
+		t.Fatalf("expected regenerated panel tls fingerprint, before %q after %q", before.Fingerprint, after.Fingerprint)
+	}
+}
+
 func TestPanelTLSReconcileUsesExistingTaskMechanism(t *testing.T) {
 	svc, store, closeFn := newTestService(t)
 	defer closeFn()

@@ -92,6 +92,9 @@ type PlanInput struct {
 	IdempotencyKey      string
 }
 
+// Job is the deploy Run domain type. Rows are stored in event_runs with
+// type=application_deploy. State keeps pending/succeeded; the table uses
+// queued/completed. attempts is the deploy claim count and is not retry_count.
 type Job struct {
 	ID                  string
 	ApplicationID       string

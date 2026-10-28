@@ -2,11 +2,76 @@
 
 ## 1. 范围与判定
 
-本文约束应用 desired/observed 控制面、Planner/Controller/Job/lease/retry/drift、通用任务/步骤/日志/手动运行/周期/恢复/清理，以及系统日志（runtime events）。它是变更验收合同，不是实现教程。
+本文约束应用 desired/observed 控制面、Planner/Controller/Job/lease/retry/drift、通用任务/步骤/日志/手动运行/周期/恢复/清理、系统日志（runtime events），以及 Run 与诊断 Event 的 Phase A 边界。它是变更验收合同，不是实现教程。
 
 每条稳定编号由**前置、动作、结果、失败、不变量、验证**组成。结果或不变量不满足即为回归。禁止因重排复用编号；失效条目应标注废弃并保留编号。
 
-三类事实必须保持隔离：AppDB `application_instances + application_revisions + jobs` 是应用部署事实；AppDB `event_runs + event_run_steps` 是 event executor 执行控制记录（HTTP 仍暴露为 `/api/v1/executions*`）；AppDB `events` + JSONL 是进程/诊断日志（state 在 `events` 行，JSONL 仅 level+eventId）；LogDB `runtime_events` 是可丢弃的简明系统日志。任何一类不得推断、回滚或覆盖另一类事实。
+Run 与 Event 不得合并，desired/observed 也不得并入其中。Run 是可领取的工作，存在 AppDB `event_runs` + `event_run_steps`。部署 Run 是 `type='application_deploy'` 的行；通用任务是其余类型。Event 是诊断索引：AppDB `events` 进程行（state 在行上，含 module/level）加 JSONL 正文（仅 level+eventId）。desired/observed 是 `application_instances` + `application_revisions`：Run 只记录为收敛它们而领取的工作，不得推断、回滚或覆盖期望态与观测态。LogDB `runtime_events` 仍是可丢弃的简明系统日志，与 Run、Event、desired/observed 都隔离。任何一类不得推断、回滚或覆盖另一类。
+
+Run HTTP 面是 `/api/v1/executions*`；诊断读面是 `/api/v1/events*` 与 `/api/v1/logs`（`UI-EVT-004` 不变）。`application_deploy` 为 Hidden，不出现在公开执行列表。存储与 claim/Execute 路径均已统一（`GAP-030` 已关）。条款见下文 `ENG-RUN-001..005` 与 `ENG-RET-001`。
+
+## 1.1 RunEngine
+
+本段约束 Run 与诊断 Event 的边界。它不替换现有 `ORCH-*` / `TASK-*` 条目；那些编号继续约束可观察结果。叙事冲突时以本段的隔离、写者、恢复类、尝试次数和保留类为准，并只在对应旧条目上加指向，不改号。
+
+### ENG-RUN-001 单一 RunEngine（存储与 claim/Execute 已统一）
+
+- **前置**：可领取工作同时存在于部署协调与通用任务。
+- **动作**：部署 Run 收进 `event_runs`；生产路径经同一 Manager.Execute 分派。诊断 Event 不参与。
+- **结果**：部署 Run 与通用 Run 共用 AppDB `event_runs`（步骤在 `event_run_steps`；部署步骤事实仍在 `last_steps_json`）。部署行 `type='application_deploy'`，定义带 `Execute` 与 `RecoveryRemoteFence`。Go 领域类型仍是 `orchestrator.Job`，状态词在扫描/写入边界映射：`queued`↔`pending`，`completed`↔`succeeded`。存量 `jobs` 由迁移 `merge_jobs_into_event_runs` 拷入；ORM 不再注册该表。**due/wake 由统一 `tasks.Worker` 拥有**（部署约 250ms + Wake；通用约 30s；通用 due 跳过 remote-fence 类型以免双派发）。生产分派：`Manager.Run` → `application_deploy` Execute → `Controller.RunJob` → `Store.Claim`/lease renew/RuntimeReconcile。Controller 进程池只做 per-app:server 串行与队列深度；**不再有绕过 Manager 的第二套 claim**。两侧都必须满足 `ENG-RUN-002..005` 与 `ENG-RET-001`。
+- **失败**：不得把诊断表 `events` 并入 Run；不得让日志 upsert 覆盖 lease、status 或 fence `execution_id`；不得把部署 `attempts` 写成 `retry_count`；不确定时不得清空 `lease_token`；不得新增第三套 due 扫描环；绑定统一 Worker 后不得再跑并行的 Controller `scanLoop`；Manager 不得对仍 `running`（含 uncertainty）的 remote-fence 行做 Complete/Fail。
+- **不变量**：Run 的 HTTP 面仍只有 `/api/v1/executions*`，且 `application_deploy` 经 Hidden 不出现在公开列表。未绑定 `JobRunner` 的测试/harness 仍可直接 `RunJob`。`attempts` 与 `retry_count` 保持两种计数（`ENG-RUN-005`）。remote-fence 的进程内 claim 只登记 running execution，不抢写 status/lease。
+- **验证**：迁移后 schema 见到 `event_runs`/`event_run_steps`；Panel 在 orphan 循环之前注册 `application_deploy`（`RecoveryRemoteFence`）；`RegisterTasks`/`BindRunEngineWorker` 挂上 Execute 与 JobRunner；orchestrator/applications/tasks 相关测试通过。
+
+### ENG-RUN-002 Run 不是 Event
+
+- **前置**：同一次执行既留下可领取 Run，也留下诊断索引与 JSONL。
+- **动作**：写入，或经 API/页面读取任一侧。
+- **结果**：Run 只表示可 claim 的工作（`event_runs`，部署行为 `type='application_deploy'`）。Event 只是诊断索引：AppDB `events` 加 JSONL。`/api/v1/executions*` 服务 Run，其中包括按 execution 读取 JSONL 行（`TASK-LOG-001`）。`/api/v1/events*` 与 `/api/v1/logs` 只服务诊断。页面 `/events` 与 `/logs` 保持 `UI-EVT-004` 与 `UI-LOG-001`，不展示 executor 步骤树。
+- **失败**：不得把 `events` 行当作队列领取；不得用 Event 的 state 推进、回滚或完成 Run；不得用 Run 的 status 改写诊断索引，使之变成另一套控制面。
+- **不变量**：desired/observed（Instance + revision）独立于 Run 与 Event。Run 日志 API 可以指向 JSONL，这不构成两类事实合并。
+- **验证**：执行 API 与 events/logs API 的读者分离；`UI-EVT-004` 仍拒绝在进程事件页展示步骤树。
+
+### ENG-RUN-003 日志写者隔离
+
+- **前置**：Run 已有 lease（owner/token/expiry）、执行状态，以及 fence `execution_id`（部署行在 `event_runs.execution_id`）。同时日志路径在 upsert 诊断行。
+- **动作**：logging upsert：追加 JSONL，和/或对 AppDB `events` 做冲突更新。
+- **结果**：该写者只改诊断字段（级别、摘要、诊断 state、日志文件指针、诊断行上的关联 id 与时间）。它不得 UPDATE `event_runs` 的 lease、执行 status、attempts/retry_count，也不得改写 Run 上的 fence `execution_id`。
+- **失败**：日志携带的 `execution_id` 即使非空，也不得替换 Run 上已绑定的 fence；不得用诊断 upsert 把 running 改成终态或清空 `lease_token`。诊断行 `events.execution_id` 可以按关联规则更新，该列不是 Run fence。
+- **不变量**：lease、执行状态与 fence 只由 claim、heartbeat、succeed/fail/requeue、uncertainty/hold 与显式取消等执行写者修改，并且必须带原 fence 谓词（部署侧见 `ORCH-LEASE-*`）。日志写失败不得改变 Run 结果（与 `TASK-LOG-002` 一致）。
+- **验证**：诊断 upsert 并发之后，`lease_token`、Run 状态与部署行 `event_runs.execution_id` 保持不变。
+
+### ENG-RUN-004 Definition 恢复策略与 hold
+
+- **前置**：Definition 属于 remote-fence 或 local-timeout；本地执行丢失或部署租约过期。
+- **动作**：按 Definition 的恢复类处理，不把两套超时合成一种。
+- **结果**：
+  - **remote-fence**（部署 Run / `event_runs.type='application_deploy'`）：丢失本地 worker 或租约过期不得直接再 claim。进入 hold：不领取，保持 `running` 与原 fence，**不得因 hold 清空 `lease_token`**，也不得把 `stage` 写成 `uncertain`。之后仍按 `ORCH-LEASE-003..005` 向认证 Agent 取同一 execution 的证据。只有经认证的 `missing` 才按 `ORCH-LEASE-004` 释放旧 fence。此 hold 不是 Agent 重启就绪流里的 `holdon`（`AGT-DEP-004`）。启动 orphan 循环之前必须已经注册该类型。
+  - **local-timeout**（其余 `event_runs`）：允许本地超时。进程内 execution registry 没有该 run 时按 `TASK-WORK-003` 进入 uncertain，证据窗口耗尽后终态失败并释放并发键。不得把这套本地超时套到仍应等待远端证据的部署 Run。
+- **失败**：不得用清空 `lease_token` 表示 hold 或 uncertain；不得让通用任务的 local-timeout 重新领取一个 remote-fence Job。
+- **不变量**：`reconcile_stopped` 仍是应用级熔断（`application_reconcile_states`，`ORCH-DRIFT-002`）。它不是 Run 状态，不得实现成 hold，也不得靠清空 `lease_token` 达成。
+- **验证**：部署租约过期用例仍保留 token；通用 orphan 用例仍走本地超时；应用熔断用例不改 Job lease。
+
+### ENG-RUN-005 按种类计算尝试次数
+
+- **前置**：部署 Job 与通用任务各自重试。
+- **动作**：计数并在达到该种类上限后终止。统一存储之后才允许换算，不允许提前覆盖数字。
+- **结果**：部署 claim 的 `attempts` 含首次执行，上限默认 10（`ORCH-RETRY-002`）。通用任务的 `max_retries` 是首次执行之后的重试次数；AllowRetry 且有 Execute、又未声明上限时默认 3（`TASK-REG-002`、`TASK-RUN-005`）。同一张 `event_runs` 上两列仍然分开：部署行递增 `attempts` 且 `retry_count` 保持 0；通用行递增 `retry_count`，不把部署上限换算进 `max_retries`。`max_attempts = max_retries + 1` 只描述通用任务（默认 3 次重试等于 4 次总尝试），不覆盖部署的 10 次总 claim。
+- **失败**：不得把部署的 10 次总尝试写成 `retry_count` 或 `max_retries=10`，也不得把任务默认 3 次重试当成 3 次总 claim。达上限后的终止码与终态仍按各类既有条目。
+- **不变量**：手动 retry 另起新 Run（`TASK-MAN-002`），不增加旧行的自动 attempts/retry。
+- **验证**：Job max-attempts 测试与任务 retry-state 测试仍按各自语义通过；换算只在统一存储之后生效。
+
+### ENG-RET-001 三类保留
+
+- **前置**：诊断 Event、终态通用 Run、部署 Run 同时存在。
+- **动作**：按年龄清理、保留或删除其中任一类。
+- **结果**：三类各有保留策略，禁止用一条 TTL 或一条 DELETE 同时覆盖：
+  1. **诊断事件**：AppDB `events` + JSONL。不是可领取 Run。清理本类不得删除 `event_runs` 或 desired/observed。
+  2. **终态通用 Run**：仅终态且 `type<>'application_deploy'` 的 `event_runs`/`event_run_steps`。时限只由 `TASK-CLEAN-001` 约束（`finishedAt` 超过 24 小时）。活跃或未到期 Run 不属于本类。
+  3. **部署 Run**：`event_runs` 中 `type='application_deploy'` 的行及其租约与 `last_steps_json`。不套用通用 Run 的 24 小时删除；移除只走既有协调删除、服务器删除或显式数据清理。
+- **失败**：不得为了统一保留，把诊断索引、终态通用 Run 和部署 Run 合成一次过期扫描。LogDB `runtime_events` 仍单独遵守 `EVENT-CLEAN-001`，不并入这三类。
+- **不变量**：删掉一类的过期行不得变成另一类的状态转换。不新增共享保留设置项。
+- **验证**：`TestCleanupRetainedDeletesOldGenericButKeepsDeploy`：终态通用 Run 超 24h 删除，同龄 `application_deploy` 与未到期通用 Run 保留；诊断 `events` 不由该 cleaner 删除。
 
 ## 2. Desired / Observed 控制面
 
@@ -71,7 +136,7 @@
 - **前置**：同一 app/server 无 active Job。
 - **动作**：Plan。
 - **结果**：创建 pending Job，保存 action、desired snapshot、priority、intent/trigger/reason/idempotency 和空 lease/error/steps。
-- **失败**：partial unique index `uq_jobs_active_app_server` 必须阻止 pending/running/failed_retryable 并存。
+- **失败**：partial unique index `uq_event_runs_active_app_server` 必须阻止同一应用/服务器上 queued/running/failed_retryable 的 `application_deploy` 行并存。
 - **不变量**：Job 是该冲突域唯一 durable 工作；tasks 并发键不是替代品。
 - **验证**：store constraint/concurrent plan tests。
 
@@ -182,7 +247,7 @@
 - **动作**：旧 RPC 返回成功。
 - **结果**：旧 observation 仍仅在旧 lease 合法时记录，Job 随即 Requeue 为 pending，刷新到当前 Instance desired，stage=`superseded`、errorClass=`superseded`、清 lease/nextRun；Planner 在 running 期间已把更新的 intent/force 写到同 Job 行，Requeue 不得再查 `activity_events` 回填 intent。
 - **失败**：旧结果不得把 Job 标 succeeded 或覆盖最新 desired。
-- **不变量**：purge finalizer 已删 Instance 时可将旧 purge 直接幂等 succeed；apply/stop 缺 Instance 仍视为 desired changed；intent 归属以 jobs.intent_id 为准（ORCH-REC-001），不依赖已退役的 activity_events 控制事实。
+- **不变量**：purge finalizer 已删 Instance 时可将旧 purge 直接幂等 succeed；apply/stop 缺 Instance 仍视为 desired changed；intent 归属以部署行 `event_runs.intent_id` 为准（ORCH-REC-001），不依赖已退役的 activity_events 控制事实。
 - **验证**：desired-change、running intent adoption 与 purge finalizer tests。
 
 ### ORCH-CTRL-006 容器状态转换幂等
@@ -236,7 +301,7 @@
 - **动作**：Fail。
 - **结果**：进入 failed_retryable，nextRunAt 以 30s 为指数退避基数、上限 1h，并施加 ±20% jitter（结果仍不超过 1h）或尊重不超过 1h 的 RetryAfter；达到 MaxAttempts（默认总尝试10）改 terminal failed、`max_attempts_exceeded/retry_exhausted`，同时保留最后一次真实错误 message 并在 detail 记录原 code/class。
 - **失败**：永久错误不得无限重试；未到上限的 retryable 不得提前 terminal。
-- **不变量**：attempts 包含首次执行。同规格自动巡检没有新 force 意图时，必须保留既有强制 Job 的 force nonce、attempts、nextRunAt、intent 和错误；不得把强制部署失败后的首次巡检当成新计划而清除退避。新非零 force 和人工操作仍按既有语义处理。
+- **不变量**：attempts 包含首次执行，上限属于部署 Run 这一类（`ENG-RUN-005`），不得改写成通用任务的 `max_retries`。同规格自动巡检没有新 force 意图时，必须保留既有强制 Job 的 force nonce、attempts、nextRunAt、intent 和错误；不得把强制部署失败后的首次巡检当成新计划而清除退避。新非零 force 和人工操作仍按既有语义处理。
 - **验证**：controller max-attempts/backoff tests。
 
 ### ORCH-LEASE-003 过期租约恢复
@@ -245,7 +310,7 @@
 - **动作**：RecoverExpiredLeases。
 - **结果**：不得仅凭过期把 Job 改回 pending/failed_retryable 或清空 lease token；必须 `MarkUncertain`（保持 `running` + 原 execution/lease token，清 `lease_expires_at`），等待经认证的 Agent 对原 execution 给出可验证结果（与 ORCH-LEASE-004 一致）。
 - **失败**：MarkUncertain 必须以 `state=running` 且原 `lease_token` 谓词 fence，不得覆盖已续租/重领或已终态 Job。
-- **不变量**：过期 alone 不能证明远端副作用是否完成；盲目重放写操作禁止。
+- **不变量**：过期 alone 不能证明远端副作用是否完成；盲目重放写操作禁止。本条是部署 Run 的 remote-fence：过期后 hold（不领取、不清 `lease_token`）。通用任务的本地超时见 `TASK-WORK-003` 与 `ENG-RUN-004`。
 - **验证**：lease expiry → uncertainty、stale snapshot 与 missing-evidence 重试测试。
 
 ### ORCH-LEASE-004 不确定执行缺失证据
@@ -269,9 +334,9 @@
 ### ORCH-DRIFT-001 漂移来源与修复范围
 
 - **前置**：Agent report cache 显示 missing/stopped/failed、generation/hash 或 managed-file manifest 漂移。
-- **动作**：5 秒 application_reconcile collector。
-- **结果**：只把明确 drift 的 app/server 交给 Planner 创建/复用 Job；健康目标保持不动。
-- **失败**：collector 不直接访问远端、不创建 `application_target_*` 任务、不以日志推断漂移。
+- **动作**：5 秒 `application_reconcile` collector 直接请求 Planner。
+- **结果**：只把明确 drift 的 app/server 交给 Planner 创建/复用 Job；健康目标保持不动。该轮不写 `event_runs`。
+- **失败**：collector 不直接访问远端、不创建 `application_reconcile_batch` 监控壳或 `application_target_*` 任务、不以日志推断漂移。
 - **不变量**：nil 容器快照不表示空；明确空 full snapshot 才可清空观测。
 - **验证**：container drift/missing/nil-vs-empty tests。
 
@@ -281,7 +346,7 @@
 - **动作**：OnFailed/健康记录/显式人工操作。
 - **结果**：每次 retryable/terminal Job 失败累计 `application_reconcile_states` 并设置指数 backoff；达到10置 reconcile_stopped；自动扫描停止，人工同步/部署/重启清零；连续5次健康观测才清失败。
 - **失败**：reconcile_stopped 不得改变应用 config updated_at；report drift 可绕过 next_run_at 只修明确节点，但不得等同 force 全量重部署。
-- **不变量**：此表只保存应用级熔断，不能代替 Job attempts/nextRunAt。
+- **不变量**：此表只保存应用级熔断，不能代替 Job attempts/nextRunAt。`reconcile_stopped` 保持应用级，不是 Run 的 hold，也不得靠清空 `lease_token` 实现（`ENG-RUN-004`）。
 - **验证**：backoff/stopped/healthy streak tests。
 
 ### ORCH-TRACE-001 协调追踪
@@ -347,7 +412,7 @@
 - **前置**：业务模块声明任务 Definition。
 - **动作**：生产 bootstrap 集中 RegisterTasks。
 - **结果**：type 非空且唯一；定义携带 summary/hidden/quiet/capabilities/cancel/retry/concurrency/stale/execute/hooks/periodic；重复注册冲突。
-- **失败**：未注册类型不能创建或执行，不能直接写 `event_runs` 表。
+- **失败**：未注册类型不能创建或执行，不能直接写 `event_runs` 表。可领取行的分派入口见 `TASK-DISPATCH-001..003`。
 - **不变量**：tasks 内核不维护业务 type switch；业务 `tasks.go` 使用具名 Execute/collector，禁止大段匿名编排。
 - **验证**：registry/manager unregistered tests、debug snapshot review。
 
@@ -386,6 +451,33 @@
 - **失败**：父 type 不得覆盖混合子 type；调用方不得把禁止并行任务硬拆 goroutine。
 - **不变量**：应用部署目标例外使用 AppDB Jobs，不创建 application target children。
 - **验证**：batch/mixed type/force parent tests。
+
+### TASK-DISPATCH-001 已注册 Execute 的变更必须经 Manager 分派
+
+- **前置**：任务定义注册了 `Execute`，调用方要执行变更（含 `server_restart`、`server_agent_deploy`、fail2ban、package/image refresh、DNS sync，以及此后新增的同类变更）。
+- **动作**：创建并启动该次执行。
+- **结果**：必须 `tasks.Manager.CreateAndRun`，或 `Create` 之后在同一分派路径调用 `Manager.Run`。进程重启后 queued/running 仍由注册表与 event executor worker 恢复。手动 `server_agent_deploy` 在返回前等到 `running` 的要求仍见 `AGT-DEP-001`。
+- **失败**：禁止 `Service.Start` 加手写 goroutine 绕过 executor；禁止业务或 HTTP 代码直接调用 `Definition.Execute`。
+- **不变量**：部署 Run 不经 `CreateAndRun` 入队：Planner 写入 `event_runs`（`type='application_deploy'`），再经 deploy due → Manager.Run → Execute → `RunJob`/`Store.Claim`（`ORCH-PLAN-001`、`ORCH-LEASE-001`、`ENG-RUN-001`）。通用 due 循环跳过 `Execute == nil` 与 `RecoveryRemoteFence`。
+- **验证**：分派路径评审与既有 recovery/run-now 测试；新增变更任务没有旁路 goroutine。
+
+### TASK-DISPATCH-002 禁止无可执行定义的可领取行
+
+- **前置**：生产代码要在 `event_runs` 留下一行。
+- **动作**：创建 Run。
+- **结果**：可被通用 worker 领取的状态（queued、scheduled、failed_retryable、running）必须对应已注册且带 `Execute` 的定义。未注册类型创建失败，且不得直接写通用 `event_runs`（`TASK-REG-001`）。没有 `Execute` 的记录型定义可以留下不可领取的记录，但不得进入通用 due claim，也不得声明 AllowRunNow/AllowRetry（`TASK-REG-002`）。`application_deploy` 在生产路径必须已注册 `Execute`（`RecoveryRemoteFence`），由 deploy due + Manager 领取，见不变量。
+- **失败**：直接插入可被通用 worker 领取的行，或为无 Execute 的通用类型写入 queued/running，验收失败。
+- **不变量**：`shouldRun=false` 的 collector 不创建行（`TASK-PER-001`）。`application_deploy` 由 Planner 写入；启动早期可暂无 Execute（仅挡 orphan），`RegisterTasks`/`BindRunEngineWorker` 必须补上 Execute；通用 due 因 remote-fence 跳过它，deployLoop 负责领取。
+- **验证**：unregistered/create 测试；无 Execute 定义的列表能力仍为不可 run/retry。
+
+### TASK-DISPATCH-003 需要本次执行时不得只落行
+
+- **前置**：调用方要求这一次变更现在开始，而不是只留下待领取记录。
+- **动作**：创建。
+- **结果**：使用 `CreateAndRun`，或 `Create` 后立即 `Manager.Run`。不得只 `Create` 后指望 30 秒 due scan 满足低延迟（`TASK-WORK-001` 的扫描只是兜底）。`CreateAndRun` 在进入执行前失败时，不得留下永久 queued 且没有后续 Run 的行：启动前错误把该行标 failed，或不要提交可领取行（与 `TASK-MAN-002` 相同，不留永久 queued）。
+- **失败**：`Execute` 返回 nil 只表示本次执行已结束或已由 executor 写入终态；不得启动未注册 goroutine 后返回 nil（`TASK-RUN-002`）。
+- **不变量**：batch 使用 `CreateBatchAndRun` 或等价的创建后 `Run`。记录型任务，以及 collector-only 且 `shouldRun=false` 的路径，不适用本条。
+- **验证**：CreateAndRun 失败路径不留下可领取孤儿；即时 dispatcher 不依赖 worker 周期。
 
 ### TASK-CONC-001 并发策略
 
@@ -449,7 +541,7 @@
 - **动作**：FailRetryable/Block。
 - **结果**：分别进入对应终态，保存 error、retryCount/maxRetries/nextRunAt 或阻断原因；到期 retryable 可再 claim。
 - **失败**：达到任务定义 max retries 后不得继续自动运行。
-- **不变量**：通用任务 retry 次数定义为首次执行后的重试数，与 Job 总 attempts 语义不同。
+- **不变量**：通用任务 retry 次数定义为首次执行后的重试数，与 Job 总 attempts 语义不同。两类计数的分界，以及统一存储后的 `max_attempts = max_retries + 1`，见 `ENG-RUN-005`；本条数字语义不变。
 - **验证**：service retry-state tests。
 
 ### TASK-CANCEL-001 显式取消与服务器删除
@@ -541,12 +633,12 @@
 
 ### TASK-PER-003 应用协调 collector 特例
 
-- **前置**：`application_reconcile` 周期/显式触发。
-- **动作**：CollectInputs。
-- **结果**：生产路径调用应用 Planner 创建/合并 AppDB Jobs；若仅规划或无输入则不创建 task record。
-- **失败**：不得注册部署 Execute、暴露 run-now/retry 或返回 `application_target_apply/stop/purge`。
-- **不变量**：generic Manager 不能在 planner 失败时创建替代 target task。
-- **验证**：collector-only/no task inputs tests。
+- **前置**：5 秒 SchedulerLoop 触发 `application_reconcile`，或业务调用 `TriggerApplicationReconcile`（可带 Manual、force、applicationIds、serverIds、stopServers、purge）。
+- **动作**：CollectInputs 与显式入口都直接调用应用 Planner。
+- **结果**：只创建或合并部署 Run（`event_runs.type='application_deploy'`）。仅规划或没有需要规划的目标时不经 Manager 创建通用 event run。`application_reconcile` 可以保留为无 Execute 的周期 CollectInputs 钩子，以兼容 `StartSchedulerLoop`；它不是可领取 Run，不暴露 run-now/retry。`application_reconcile_batch` 的 noop Execute 已移除，生产路径不得 `CreateBatch` 该类型。
+- **失败**：不得注册会执行 Docker 的 Execute，不得返回 `application_target_apply/stop/purge`，不得在 planner 失败时由 generic Manager 补一条替代 target task。Manual 绕过应用级退避但仍做满足态过滤；force 绕过退避和满足态过滤；普通 scheduler 与非人工、非强制显式协调尊重 `reconcile_next_run_at`；`container_change` 只对已确认 drift 的节点绕过退避。
+- **不变量**：Planner 是唯一部署入队路径（`ORCH-PLAN-001`），写入 `application_deploy` 行，不移除 orchestrator Controller。存量非终态 `application_reconcile` / `application_reconcile_batch` event run 由启动迁移 `cancel_application_reconcile_monitoring_shells` 取消，且不得改写 `application_deploy` 行。
+- **验证**：collector-only/no task inputs tests；`TestApplicationReconcileCollectorDoesNotCreateEventRuns`；`TestCancelApplicationReconcileMonitoringShells`。
 
 ### TASK-WORK-001 due 队列兜底
 
@@ -572,7 +664,7 @@
 - **动作**：启动及每30秒 FailRunningWithoutExecution；并对已 uncertain 且超过证据窗口的任务 FailUncertainPastEvidenceWindow。
 - **结果**：无 registry 的 running 标记为 `stage=uncertain`（status 仍为 running），`next_run_at` 记为证据截止（默认 30 分钟）；仍被追踪的保持 running。窗口内占用原并发键，不得把刚丢失进程内执行的远端写操作直接标 failed。窗口耗尽后自动 `status=failed`、`stage=orphan_execution_timeout` 并释放并发键。人工 `ResolveUncertain` 仅作破局，不是唯一出路。
 - **失败**：Cancel/Complete/Fail 在窗口内仍拒绝 uncertain。远端不可取消维护任务是否继续由业务定义决定，但本地不得永久假“正常 running”。
-- **不变量**：一次性内存 worker 在 API 返回前必须先标 running；uncertain 必须出现在 `FirstActiveByConcurrencyKey` 队首直到自动超时失败或破局核实。
+- **不变量**：一次性内存 worker 在 API 返回前必须先标 running；uncertain 必须出现在 `FirstActiveByConcurrencyKey` 队首直到自动超时失败或破局核实。本条是通用任务的 local-timeout（`ENG-RUN-004`），不得套用到部署 Job 的 remote-fence。
 - **验证**：orphan worker/registry tests、`TestMissingExecutionPreservesUncertainResult`、`TestFirstActiveByConcurrencyKeyRetainsUncertainExecution`。
 
 ### TASK-CLEAN-001 历史保留
@@ -581,7 +673,7 @@
 - **动作**：CleanupWorker 每小时分批清理。
 - **结果**：只删除过期 `event_runs`/`event_run_steps` 及关联 JSONL 引用；活跃/未到期 run 保留。
 - **失败**：不得删除 AppDB application revision/job/instance 或协调记录事实。
-- **不变量**：tasks `(status,next_run_at)` 索引支持扫描；失败/可重试/blocked/cancelled/completed 均属 terminal 历史。
+- **不变量**：tasks `(status,next_run_at)` 索引支持扫描；失败/可重试/blocked/cancelled/completed 均属 terminal 历史。本条只约束终态通用 Run 这一保留类；诊断事件与部署 Run 不得套用此时限（`ENG-RET-001`）。
 - **验证**：CleanupRetained tests 与 AppDB row count 断言。
 
 ## 11. 任务列表与兼容 UI
@@ -683,6 +775,7 @@
 
 已知缺口：
 
+- Run 存储与 claim/Execute 已统一到 `event_runs` + Manager（`ENG-RUN-001`；`GAP-030` 已关）。诊断 Event（AppDB `events` + JSONL）不参与合并。
 - 多进程共享 SQLite 下通用任务 `FirstActiveByConcurrencyKey` 缓存不提供一致性；当前合同只承认单进程优化，若引入多实例部署必须增加数据库级任务 claim/fencing 设计。
 - runtime events 的满缓冲丢弃计数/可观测告警、批量失败重试策略当前未形成稳定对外合同；不得把日志必达作为验收前提。
 - `/events` 与 `/logs` 没有后台自动轮询；其响应竞态、窄屏和无障碍行为仍缺少完整端到端覆盖。

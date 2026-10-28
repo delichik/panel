@@ -1004,6 +1004,51 @@ func TestTriggerApplicationReconcileUsesPeriodicPayload(t *testing.T) {
 	}
 }
 
+func TestApplicationReconcileCollectorDoesNotCreateEventRuns(t *testing.T) {
+	svc, taskSvc, _, store := newContainerizationTestService(t)
+	if _, ok := taskSvc.Registry().Definition("application_reconcile_batch"); ok {
+		t.Fatal("application_reconcile_batch must not be registered")
+	}
+	def, ok := taskSvc.Registry().Definition(TaskApplicationReconcile)
+	if !ok || def.Execute != nil || def.Periodic == nil || def.Periodic.CollectInputs == nil {
+		t.Fatalf("application_reconcile must stay collector-only without Execute, ok=%v def=%+v", ok, def)
+	}
+	updater := &fakeApplicationUpdater{apps: []applications.Application{{
+		ID: "app-1", Name: "web", Enabled: true, Generation: 1, SpecHash: "hash-1",
+	}}}
+	svc.apps = updater
+	batch, shouldRun, err := svc.CollectApplicationReconcileInputs(context.Background(), tasks.PeriodicTrigger{Type: "scheduler"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shouldRun || batch.Type != "" || len(batch.Inputs) != 0 {
+		t.Fatalf("collector must not request an event run, shouldRun=%v batch=%#v", shouldRun, batch)
+	}
+	task, created, err := tasks.NewManager(taskSvc).TriggerPeriodicNow(context.Background(), TaskApplicationReconcile, tasks.PeriodicTrigger{
+		Type: "manual",
+		Payload: ApplicationReconcileTrigger{
+			ApplicationIDs: []string{"app-1"},
+			Force:          true,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created || task.ID != "" {
+		t.Fatalf("periodic trigger created an event run: created=%v task=%#v", created, task)
+	}
+	if len(updater.plans) != 1 || updater.plans[0].ApplicationID != "app-1" || !updater.plans[0].Force {
+		t.Fatalf("periodic hook plan = %#v", updater.plans)
+	}
+	var runs int
+	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM event_runs WHERE type IN ('application_reconcile','application_reconcile_batch')`).Scan(&runs); err != nil {
+		t.Fatal(err)
+	}
+	if runs != 0 {
+		t.Fatalf("reconcile event runs = %d, want 0", runs)
+	}
+}
+
 func newContainerizationTestService(t *testing.T) (*Service, *tasks.Service, *fakeContainerizationAgent, *storage.Store) {
 	t.Helper()
 	dir := t.TempDir()

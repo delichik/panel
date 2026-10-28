@@ -270,6 +270,22 @@ func (s *Service) SetFacilityRuntimeProvider(provider FacilityRuntimeProvider) {
 	s.facilityRuntime = provider
 }
 
+// BindRunEngineWorker attaches the jobs Controller to the unified RunEngine
+// worker so deploy due/wake scanning is owned there, and wires JobRunner so
+// claim/Execute goes Manager.Run → Execute → RunJob (ENG-RUN-001 / GAP-030).
+// Call before StartOrchestrator. Integration harnesses that only start the
+// orchestrator keep the Controller's internal scanLoop and direct RunJob.
+func (s *Service) BindRunEngineWorker(worker *tasks.Worker) {
+	if s == nil || worker == nil || s.orchestrator == nil {
+		return
+	}
+	s.bindDeployExecute(worker.Service())
+	worker.AttachDeploy(s.orchestrator)
+	s.orchestrator.SetJobRunner(func(ctx context.Context, jobID string) error {
+		return worker.RunDeployJob(ctx, jobID)
+	})
+}
+
 // StartOrchestrator starts the durable AppDB job controller. Runtime
 // mutations planned by application triggers are executed by this controller.
 func (s *Service) StartOrchestrator(ctx context.Context) error {
@@ -493,8 +509,8 @@ func (s *Service) ListSummaries(ctx context.Context, page, pageSize int, query s
 	// 中，failed_retryable 表示失败重试；不再读取旧 lifecycle 表。
 	activeJobStates := make(map[string]string, len(summaries))
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(pageIDs)), ",")
-	jobRows, err := s.db.QueryContext(ctx, `SELECT application_id,state,error_class FROM jobs
-		WHERE application_id IN (`+placeholders+`) AND state IN ('pending','running','failed_retryable')`, pageIDs...)
+	jobRows, err := s.db.QueryContext(ctx, `SELECT application_id,CASE status WHEN 'queued' THEN 'pending' WHEN 'completed' THEN 'succeeded' ELSE status END,error_class FROM event_runs
+		WHERE type='application_deploy' AND application_id IN (`+placeholders+`) AND status IN ('queued','running','failed_retryable')`, pageIDs...)
 	if err != nil {
 		return httpx.ListPage[ApplicationSummary]{}, err
 	}
@@ -1457,15 +1473,15 @@ func (s *Service) jobDerivedRuntimeStatus(ctx context.Context, app Application, 
 	if s == nil || s.db == nil {
 		return base, nil
 	}
-	var rows []models.Job
-	if err := orm.New(s.db).From("jobs").
-		Where("application_id=?", app.ID).And("state IN (?,?,?)", controlplane.JobPending, controlplane.JobRunning, controlplane.JobFailedRetryable).
+	var rows []models.Task
+	if err := orm.New(s.db).From("event_runs").
+		Where("type=?", "application_deploy").And("application_id=?", app.ID).And("status IN (?,?,?)", "queued", controlplane.JobRunning, controlplane.JobFailedRetryable).
 		OrderBy("updated_at DESC", "id ASC").All(ctx, &rows); err != nil {
 		return base, nil
 	}
 	if len(rows) == 0 {
-		if err := orm.New(s.db).From("jobs").Where("application_id=?", app.ID).
-			OrderBy("updated_at DESC", "id ASC").Limit(1).All(ctx, &rows); err != nil || len(rows) == 0 || rows[0].State != controlplane.JobFailed {
+		if err := orm.New(s.db).From("event_runs").Where("type=?", "application_deploy").And("application_id=?", app.ID).
+			OrderBy("updated_at DESC", "id ASC").Limit(1).All(ctx, &rows); err != nil || len(rows) == 0 || deployStatusToJobState(rows[0].Status) != controlplane.JobFailed {
 			return base, nil
 		}
 	}
@@ -1479,21 +1495,25 @@ func (s *Service) jobDerivedRuntimeStatus(ctx context.Context, app Application, 
 		}
 	}
 	for _, row := range rows {
-		if status != "needs_attention" && row.State == controlplane.JobFailedRetryable {
+		if status != "needs_attention" && deployStatusToJobState(row.Status) == controlplane.JobFailedRetryable {
 			status = appruntime.StatusFailed
 			selected = row
 			break
 		}
 	}
-	if selected.State == controlplane.JobFailed {
+	if deployStatusToJobState(selected.Status) == controlplane.JobFailed {
 		status = appruntime.StatusFailed
+	}
+	updatedAt := selected.CreatedAt
+	if selected.UpdatedAt != nil {
+		updatedAt = selected.UpdatedAt.UTC()
 	}
 	operation := LifecycleOperation{
 		ID:            selected.ID,
 		OperationID:   selected.IntentID,
 		ApplicationID: app.ID,
 		Type:          selected.Action,
-		Status:        selected.State,
+		Status:        deployStatusToJobState(selected.Status),
 		Generation:    selected.DesiredGeneration,
 		SpecHash:      selected.DesiredSpecHash,
 		Trigger:       selected.TriggerType,
@@ -1505,7 +1525,7 @@ func (s *Service) jobDerivedRuntimeStatus(ctx context.Context, app Application, 
 		ErrorClass:    selected.ErrorClass,
 		ErrorDetail:   selected.ErrorDetail,
 		CreatedAt:     selected.CreatedAt,
-		UpdatedAt:     selected.UpdatedAt,
+		UpdatedAt:     updatedAt,
 	}
 	return status, &operation
 }
@@ -3015,10 +3035,16 @@ func (s *Service) deleteApplicationIfRuntimeGone(ctx context.Context, appID stri
 	if len(instances) > 0 {
 		return nil
 	}
-	// 先清理本应用的终态 Job：jobs 对 applications 使用 RESTRICT 外键（设计上
-	// 不允许级联删除 Job），不清理会导致删除 finalizer 无法物理删除应用。
-	if _, err := orm.RawExec(ctx, s.db, `DELETE FROM jobs WHERE application_id=? AND state IN ('succeeded','failed','cancelled')`, appID); err != nil {
+	// 终态部署行不再引用应用。活跃行仍占冲突域，此时不物理删除应用。
+	if _, err := orm.RawExec(ctx, s.db, `DELETE FROM event_runs WHERE type='application_deploy' AND application_id=? AND status IN ('completed','failed','cancelled')`, appID); err != nil {
 		return err
+	}
+	var active int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM event_runs WHERE type='application_deploy' AND application_id=? AND status IN ('queued','running','failed_retryable')`, appID).Scan(&active); err != nil {
+		return err
+	}
+	if active > 0 {
+		return nil
 	}
 	if err := orm.New(s.db).From("applications").Where("id=?", appID).And("deletion_requested=1").Delete(ctx); err != nil {
 		return err

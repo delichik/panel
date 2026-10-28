@@ -111,7 +111,7 @@ func TestManualPurgeSuccessRunsFinalizer(t *testing.T) {
 	store := control.NewStore(svc.db)
 	purgeJobID := ""
 	for _, row := range jobsForApplication(t, svc, app.ID) {
-		if row.Action == "purge" && row.ServerID == "srv-a" && row.State != control.JobSucceeded && row.State != control.JobFailed {
+		if row.Action == "purge" && row.ServerID == "srv-a" && row.Status != "completed" && row.Status != "failed" {
 			purgeJobID = row.ID
 			break
 		}

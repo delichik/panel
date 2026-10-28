@@ -39,16 +39,12 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 		},
 		{Type: TaskNetworkRefresh, AllowRetry: true, Execute: s.RunNetworkRefreshTask},
 		{
-			Type:              TaskApplicationReconcile,
-			ConcurrencyPolicy: tasks.ConcurrencyCustomKey,
-			ConcurrencyKey:    applicationReconcileConcurrencyKey,
+			// Collector-only hook for StartSchedulerLoop. CollectInputs plans Jobs
+			// and returns no event-run inputs. There is no Execute.
+			Type: TaskApplicationReconcile,
 			Periodic: &tasks.Periodic{
 				CollectInputs: s.CollectApplicationReconcileInputs,
 			},
-		},
-		{
-			Type:    TaskApplicationReconcileBatch,
-			Execute: func(tasks.TaskContext) error { return nil },
 		},
 		{
 			Type:              TaskImageUpgradeMany,
@@ -120,27 +116,10 @@ func (s *Service) RunApplicationImageUpgradeTask(tc tasks.TaskContext) error {
 }
 
 func (s *Service) CollectApplicationReconcileInputs(ctx context.Context, trigger tasks.PeriodicTrigger) (tasks.CreateBatchInput, bool, error) {
-	inputs, err := s.CollectApplicationReconcileTasks(ctx, "", trigger)
-	if err != nil || len(inputs) == 0 {
+	if _, err := s.CollectApplicationReconcileTasks(ctx, "", trigger); err != nil {
 		return tasks.CreateBatchInput{}, false, err
 	}
-	triggerType := firstNonEmpty(trigger.Type, "scheduler")
-	return tasks.CreateBatchInput{
-		Type:          TaskApplicationReconcileBatch,
-		TriggerType:   triggerType,
-		Summary:       "Monitoring application containers",
-		ExecutionMode: tasks.ExecutionModeSerial,
-		ForceParent:   true,
-		Inputs:        inputs,
-	}, true, nil
-}
-
-func applicationReconcileConcurrencyKey(in tasks.CreateInput) string {
-	appID := firstNonEmpty(in.ResourceID, in.TriggerResourceID, in.ServerID, in.NodeID)
-	if appID == "" {
-		return ""
-	}
-	return "application:lifecycle:" + appID
+	return tasks.CreateBatchInput{}, false, nil
 }
 
 func applicationReconcileTriggerPayload(trigger tasks.PeriodicTrigger) ApplicationReconcileTrigger {

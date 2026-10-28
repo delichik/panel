@@ -213,9 +213,9 @@ func (p *Planner) planTx(ctx context.Context, tx *sql.Tx, in PlanInput) (PlanRes
 			}
 		}
 		if active.State == JobPending || active.State == JobFailedRetryable {
-			if _, err := tx.ExecContext(ctx, `UPDATE jobs SET instance_id=?,action=?,desired_generation=?,desired_spec_hash=?,desired_revision_id=?,desired_spec_json=?,remove_data=?,force_nonce=?,priority=?,next_run_at=NULL,intent_id=?,trigger_type=?,trigger_resource_type=?,trigger_resource_id=?,reason=?,error_code='',error_class='',error_message='',error_detail='',finished_at=NULL,updated_at=? WHERE id=? AND state IN ('pending','failed_retryable')`,
+			if _, err := tx.ExecContext(ctx, `UPDATE event_runs SET instance_id=?,action=?,desired_generation=?,desired_spec_hash=?,desired_revision_id=?,desired_spec_json=?,remove_data=?,force_nonce=?,priority=?,next_run_at=NULL,intent_id=?,operation_id=CASE WHEN TRIM(?)<>'' THEN ? ELSE id END,trigger_type=?,trigger_resource_type=?,trigger_resource_id=?,reason=?,summary=?,error='',error_code='',error_class='',error_message='',error_detail='',finished_at=NULL,updated_at=? WHERE type=? AND id=? AND status IN ('queued','failed_retryable')`,
 				in.InstanceID, in.Action, in.DesiredGeneration, in.DesiredSpecHash, in.DesiredRevisionID, string(in.DesiredSpecJSON), boolInt(in.RemoveData), in.ForceNonce,
-				in.Priority, in.IntentID, in.TriggerType, in.TriggerResourceType, in.TriggerResourceID, in.Reason, now, active.ID); err != nil {
+				in.Priority, in.IntentID, in.IntentID, in.IntentID, in.TriggerType, in.TriggerResourceType, in.TriggerResourceID, in.Reason, in.Reason, now, deployRunType, active.ID); err != nil {
 				return PlanResult{}, err
 			}
 			active, err = scanJobTx(ctx, tx, active.ID)
@@ -232,7 +232,7 @@ func (p *Planner) planTx(ctx context.Context, tx *sql.Tx, in PlanInput) (PlanRes
 			if in.ForceNonce > forceNonce {
 				forceNonce = in.ForceNonce
 			}
-			if _, err := tx.ExecContext(ctx, `UPDATE jobs SET intent_id=?,force_nonce=?,updated_at=? WHERE id=? AND state='running'`, in.IntentID, forceNonce, now, active.ID); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE event_runs SET intent_id=?,operation_id=CASE WHEN TRIM(?)<>'' THEN ? ELSE id END,force_nonce=?,updated_at=? WHERE type=? AND id=? AND status='running'`, in.IntentID, in.IntentID, in.IntentID, forceNonce, now, deployRunType, active.ID); err != nil {
 				return PlanResult{}, err
 			}
 			active.IntentID = in.IntentID
@@ -246,16 +246,44 @@ func (p *Planner) planTx(ctx context.Context, tx *sql.Tx, in PlanInput) (PlanRes
 		DesiredSpecJSON: in.DesiredSpecJSON, RemoveData: in.RemoveData, ForceNonce: in.ForceNonce, State: JobPending, Priority: in.Priority,
 		IntentID: in.IntentID, TriggerType: in.TriggerType, TriggerResourceType: in.TriggerResourceType, TriggerResourceID: in.TriggerResourceID,
 		Reason: in.Reason, IdempotencyKey: in.IdempotencyKey, CreatedAt: p.store.now().UTC(), UpdatedAt: p.store.now().UTC()}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO jobs(id,application_id,server_id,instance_id,action,desired_generation,desired_spec_hash,desired_revision_id,desired_spec_json,remove_data,force_nonce,state,priority,attempts,next_run_at,lease_owner,lease_token,lease_expires_at,execution_id,intent_id,trigger_type,trigger_resource_type,trigger_resource_id,reason,idempotency_key,last_stage,last_steps_json,error_code,error_class,error_message,error_detail,created_at,started_at,finished_at,updated_at)
-		VALUES(
-			?,?,?,?,?,?,?,?,?, ?,
-			?,?,?,?,?,?,?,?,?, ?,
-			?,?,?,?,?,?,?,?,?, ?,
-			?,?,?,?,?
-		)`,
-		job.ID, job.ApplicationID, job.ServerID, job.InstanceID, job.Action, job.DesiredGeneration, job.DesiredSpecHash, job.DesiredRevisionID,
-		string(job.DesiredSpecJSON), boolInt(job.RemoveData), job.ForceNonce, job.State, job.Priority, 0, nil, "", "", nil, "", job.IntentID,
-		job.TriggerType, job.TriggerResourceType, job.TriggerResourceID, job.Reason, job.IdempotencyKey, "", "[]", "", "", "", "", now, nil, nil, now); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO event_runs (
+		id, operation_id, type, parent_task_id, child_index, child_count,
+		execution_mode, concurrency_key, schedule_key, quiet,
+		server_id, node_id, resource_type, resource_id,
+		trigger_type, trigger_resource_type, trigger_resource_id,
+		trigger_task_id, triggered_by, params_json, metadata_json,
+		status, stage, percentage, summary, error,
+		retry_count, max_retries, next_run_at, created_at, started_at, finished_at,
+		application_id, instance_id, action,
+		desired_generation, desired_spec_hash, desired_revision_id, desired_spec_json,
+		remove_data, force_nonce, priority, attempts,
+		lease_owner, lease_token, lease_expires_at, execution_id, intent_id,
+		reason, idempotency_key, last_stage, last_steps_json,
+		error_code, error_class, error_message, error_detail, updated_at
+	) VALUES (
+		?, CASE WHEN TRIM(?) <> '' THEN ? ELSE ? END, 'application_deploy', '', 0, 0,
+		'single', ?, '', 0,
+		?, ?, 'application', ?,
+		?, ?, ?,
+		'', '', '{}', '{}',
+		'queued', '', NULL, ?, '',
+		0, 0, NULL, ?, NULL, NULL,
+		?, ?, ?,
+		?, ?, ?, ?,
+		?, ?, ?, 0,
+		'', '', NULL, '', ?,
+		?, ?, '', '[]',
+		'', '', '', '', ?
+	)`,
+		job.ID, job.IntentID, job.IntentID, job.ID,
+		deployConcurrencyKey(job.ApplicationID, job.ServerID),
+		job.ServerID, job.ServerID, job.ApplicationID,
+		job.TriggerType, job.TriggerResourceType, job.TriggerResourceID,
+		job.Reason, now,
+		job.ApplicationID, job.InstanceID, job.Action,
+		job.DesiredGeneration, job.DesiredSpecHash, job.DesiredRevisionID, string(job.DesiredSpecJSON),
+		boolInt(job.RemoveData), job.ForceNonce, job.Priority,
+		job.IntentID, job.Reason, job.IdempotencyKey, now); err != nil {
 		return PlanResult{}, err
 	}
 	traceJobEvent(ctx, "job_created", job, zap.String("reason", "no_active_job"))
@@ -311,8 +339,14 @@ func boolInt(value bool) int {
 	return 0
 }
 
+// deployConcurrencyKey scopes one active deploy Run per application+server
+// for Manager queue visibility; the partial unique index remains the hard lock.
+func deployConcurrencyKey(applicationID, serverID string) string {
+	return "application_deploy:" + strings.TrimSpace(applicationID) + ":" + strings.TrimSpace(serverID)
+}
+
 func scanActiveJob(ctx context.Context, tx *sql.Tx, appID, serverID string) (Job, bool, error) {
-	return scanJobPredicate(ctx, tx, `application_id=? AND server_id=? AND state IN ('pending','running','failed_retryable')`, appID, serverID)
+	return scanJobPredicate(ctx, tx, `application_id=? AND server_id=? AND status IN ('queued','running','failed_retryable')`, appID, serverID)
 }
 
 func scanExistingJob(ctx context.Context, tx *sql.Tx, appID, key string) (Job, bool, error) {
@@ -320,7 +354,7 @@ func scanExistingJob(ctx context.Context, tx *sql.Tx, appID, key string) (Job, b
 }
 
 func scanJobPredicate(ctx context.Context, tx *sql.Tx, predicate string, args ...any) (Job, bool, error) {
-	row := tx.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE `+predicate+` ORDER BY created_at DESC,id DESC LIMIT 1`, args...)
+	row := tx.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM event_runs WHERE type=? AND `+predicate+` ORDER BY created_at DESC,id DESC LIMIT 1`, append([]any{deployRunType}, args...)...)
 	job, err := scanJob(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, false, nil
@@ -329,7 +363,7 @@ func scanJobPredicate(ctx context.Context, tx *sql.Tx, predicate string, args ..
 }
 
 func scanJobTx(ctx context.Context, tx *sql.Tx, jobID string) (Job, error) {
-	return scanJob(tx.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE id=?`, jobID))
+	return scanJob(tx.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM event_runs WHERE type=? AND id=?`, deployRunType, jobID))
 }
 
 var ErrStoreUnavailable = errors.New("orchestrator store unavailable")

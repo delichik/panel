@@ -155,22 +155,20 @@ func disableApplicationsWithoutDeploymentTarget(ctx context.Context, tx *sql.Tx,
 	return nil
 }
 
-// cancelAndDeleteServerJobs 终结并删除引用该服务器的协调 Job。
+// cancelAndDeleteServerJobs 终结并删除引用该服务器的部署 Run。
 //
-// jobs.server_id 对 servers 使用 RESTRICT 外键，是服务器删除唯一的硬阻塞点：
-// 终态 Job 永不被清理，任何曾经承载过部署的节点都无法删除。先把活跃 Job 置为
-// cancelled，让活动日志记录一次取消结果并释放冲突域锁，再删除全部 Job 行。
+// 活跃 application_deploy 行占着 (application_id, server_id) 冲突域。先把它们
+// 置为 cancelled 并释放租约，再删除该服务器的全部部署行。通用 event run 不动。
 func cancelAndDeleteServerJobs(ctx context.Context, tx *sql.Tx, serverID string) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := orm.RawExec(ctx, tx, `UPDATE jobs SET state='cancelled',lease_owner='',lease_token='',lease_expires_at=NULL,next_run_at=NULL,finished_at=?,updated_at=?,error_code='server_removed',error_class='cancelled',error_message='Server was removed',error_detail='' WHERE server_id=? AND state IN ('pending','running','failed_retryable')`,
+	if _, err := orm.RawExec(ctx, tx, `UPDATE event_runs SET status='cancelled',stage='cancelled',lease_owner='',lease_token='',lease_expires_at=NULL,next_run_at=NULL,finished_at=?,updated_at=?,error_code='server_removed',error_class='cancelled',error_message='Server was removed',error='',error_detail='' WHERE type='application_deploy' AND server_id=? AND status IN ('queued','running','failed_retryable')`,
 		now, now, serverID); err != nil {
 		return err
 	}
-	// applications.job_id 指向被删除的 Job 会留下悬空引用。
-	if _, err := orm.RawExec(ctx, tx, `UPDATE applications SET job_id='' WHERE job_id IN (SELECT id FROM jobs WHERE server_id=?)`, serverID); err != nil {
+	if _, err := orm.RawExec(ctx, tx, `UPDATE applications SET job_id='' WHERE job_id IN (SELECT id FROM event_runs WHERE type='application_deploy' AND server_id=?)`, serverID); err != nil {
 		return err
 	}
-	_, err := orm.RawExec(ctx, tx, `DELETE FROM jobs WHERE server_id=?`, serverID)
+	_, err := orm.RawExec(ctx, tx, `DELETE FROM event_runs WHERE type='application_deploy' AND server_id=?`, serverID)
 	return err
 }
 

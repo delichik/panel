@@ -454,7 +454,7 @@ export function installMockApi() {
       return result ? json(result, 202) : error('certificate_not_found', 'Certificate was not found.', 404);
     }
     if (certOperationMatch && method(init) === 'POST' && url.pathname.endsWith('/renew')) {
-      return renewCertificate(decodeURIComponent(certOperationMatch[1])) ? json({ renewed: true }, 202) : error('certificate_not_found', 'Certificate was not found.', 404);
+      return renewCertificate(decodeURIComponent(certOperationMatch[1])) ? json({ taskId: completedTask('certificate-renew'), renewed: false }, 202) : error('certificate_not_found', 'Certificate was not found.', 404);
     }
     if (certOperationMatch && method(init) === 'DELETE') {
       return deleteCertificate(decodeURIComponent(certOperationMatch[1])) ? json(null) : error('certificate_not_found', 'Certificate was not found.', 404);
@@ -482,7 +482,7 @@ export function installMockApi() {
     if (url.pathname === '/api/v1/key-assets/tls' && method(init) === 'POST') return json(createAsset(await body(init), 'tls_certificate'), 201);
     if (url.pathname === '/api/v1/key-assets/ssh/generate' && method(init) === 'POST') return json(createAsset(await body(init), 'ssh_key_pair'), 201);
     if (url.pathname === '/api/v1/key-assets/import' && method(init) === 'POST') return json(createAsset(await body(init)), 201);
-    if (url.pathname === '/api/v1/key-assets/exports' && method(init) === 'POST') return json({ taskId: `task-export-${Date.now()}` }, 202);
+    if (url.pathname === '/api/v1/key-assets/exports' && method(init) === 'POST') return json({ taskId: completedTask('key-asset-export') }, 202);
     if (url.pathname === '/api/v1/key-assets/system' && method(init) === 'GET') return json(systemCertificates());
     const systemCertificateResetMatch = url.pathname.match(/^\/api\/v1\/key-assets\/system\/(.+)\/reset$/);
     if (systemCertificateResetMatch && method(init) === 'POST') {
@@ -523,7 +523,7 @@ export function installMockApi() {
     if (importExecuteMatch && method(init) === 'POST') {
       const input = await body<{ confirmDangerousOverwrite?: boolean }>(init);
       if (!input.confirmDangerousOverwrite) return error('key_asset_import_confirmation_required', 'Overwrite confirmation is required for in-use key assets.', 409);
-      return json({ taskId: `task-import-${Date.now()}`, operationId: 'key_asset_import' }, 202);
+      return json({ taskId: completedTask('key-asset-import'), operationId: 'key_asset_import' }, 202);
     }
     const assetMatch = url.pathname.match(/^\/api\/v1\/key-assets\/([^/]+)$/);
     if (assetMatch && method(init) === 'GET') {

@@ -316,8 +316,13 @@ func TestRenewFailureRecordsLastErrorAndTask(t *testing.T) {
 	waitCertificateTaskTerminal(t, svc.tasks, result.TaskID)
 	fake.err = errors.New("renew failed")
 
-	if err := svc.Renew(ctx, result.Certificate.ID); err == nil {
-		t.Fatal("expected renewal error")
+	renewed, err := svc.Renew(ctx, result.Certificate.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished := waitCertificateTaskTerminal(t, svc.tasks, renewed.ID)
+	if finished.Status != tasks.StatusFailed || !strings.Contains(finished.Error, "renew failed") {
+		t.Fatalf("expected failed renewal task, got %#v", finished)
 	}
 	cert, err := svc.Get(ctx, result.Certificate.ID)
 	if err != nil {
@@ -387,6 +392,7 @@ func newTestService(t *testing.T) (*Service, *fakeProvider, func()) {
 	if err := logging.Configure(cfg.DataRoot); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(logging.CloseFileSinkForTest)
 	logging.SetContextStore(events.NewStore(store.AppDB()))
 	t.Cleanup(func() { logging.SetContextStore(nil) })
 	if _, err := store.AppDB().Exec(`INSERT INTO dns_domains(id,name,provider,provider_config_json,provider_secret_ciphertext,created_at,updated_at) VALUES('dnsdom_1','example.com','cloudflare','{}','','now','now')`); err != nil {

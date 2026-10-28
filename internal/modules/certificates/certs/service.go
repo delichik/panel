@@ -58,6 +58,7 @@ type keyAssetProvider interface {
 	CreateCA(ctx context.Context, in keyassets.CreateCARequest) (keyassets.Asset, error)
 	CreateTLS(ctx context.Context, in keyassets.CreateTLSRequest) (keyassets.Asset, error)
 	ReissueTLS(ctx context.Context, assetID string) (keyassets.ReissueResult, error)
+	Get(ctx context.Context, assetID string) (keyassets.Asset, error)
 	Delete(ctx context.Context, assetID string) error
 	ReverseProxyCertificates(ctx context.Context) ([]proxycert.Certificate, error)
 }
@@ -372,16 +373,23 @@ func (s *Service) RenewTask(tc tasks.TaskContext) error {
 	return s.runRenewTask(tc.Context, tc.Task)
 }
 
-func (s *Service) Renew(ctx context.Context, certID string) error {
+func (s *Service) Renew(ctx context.Context, certID string) (tasks.Task, error) {
 	cert, err := s.Get(ctx, certID)
 	if err != nil {
-		return err
+		return tasks.Task{}, err
 	}
-	taskID, err := s.recordTask(ctx, TaskTypeRenew, cert, tasks.StatusRunning, "Renewing certificate for "+cert.Domain)
-	if err != nil {
-		return err
+	if s.tasks == nil {
+		return tasks.Task{}, panelerr.Validation("task_service_unavailable", "Task service is unavailable")
 	}
-	return s.runRenewTask(ctx, tasks.Task{ID: taskID, Type: TaskTypeRenew, ResourceType: "certificate", ResourceID: cert.ID})
+	task, _, err := tasks.NewManager(s.tasks).CreateAndRun(ctx, tasks.CreateInput{
+		Type:         TaskTypeRenew,
+		ResourceType: "certificate",
+		ResourceID:   cert.ID,
+		TriggerType:  "user",
+		MetadataJSON: certTaskMetadataJSON(cert),
+		Summary:      "Renewing certificate for " + cert.Domain,
+	}, tasks.Trigger{Type: "user", Manual: true})
+	return task, err
 }
 
 func (s *Service) runRenewTask(ctx context.Context, task tasks.Task) error {
@@ -906,24 +914,6 @@ func acmeProgressMetadata(event ACMEProgress) string {
 		return "{}"
 	}
 	return string(data)
-}
-
-func (s *Service) recordTask(ctx context.Context, taskType string, cert Certificate, status string, summary string) (string, error) {
-	if s.tasks == nil {
-		return "", nil
-	}
-	task, _, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
-		Type:         taskType,
-		ResourceType: "certificate",
-		ResourceID:   cert.ID,
-		Status:       status,
-		MetadataJSON: certTaskMetadataJSON(cert),
-		Summary:      summary,
-	}, tasks.Trigger{Type: "system"})
-	if err != nil {
-		return "", err
-	}
-	return task.ID, nil
 }
 
 func (s *Service) recordAndRunTask(ctx context.Context, taskType string, cert Certificate, summary string) (string, error) {

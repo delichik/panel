@@ -278,6 +278,52 @@ func TestSQLiteDSNPreservesExplicitJournalMode(t *testing.T) {
 	}
 }
 
+func TestCancelApplicationReconcileMonitoringShells(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	store, err := Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	db := store.AppDB()
+	if _, err := db.Exec(`INSERT INTO event_runs(id,type,status,created_at) VALUES
+		('shell-queued','application_reconcile_batch','queued','2026-01-01T00:00:00Z'),
+		('shell-running','application_reconcile','running','2026-01-01T00:00:00Z'),
+		('shell-done','application_reconcile_batch','completed','2026-01-01T00:00:00Z'),
+		('other','image_refresh','queued','2026-01-01T00:00:00Z'),
+		('deploy-active','application_deploy','queued','2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := cancelApplicationReconcileMonitoringShellsOn(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	var status, stage, errText, finished string
+	if err := db.QueryRow(`SELECT status, stage, error, finished_at FROM event_runs WHERE id='shell-queued'`).Scan(&status, &stage, &errText, &finished); err != nil {
+		t.Fatal(err)
+	}
+	if status != "cancelled" || stage != "cancelled" || finished == "" || errText == "" {
+		t.Fatalf("queued shell = status=%s stage=%s error=%s finished=%s", status, stage, errText, finished)
+	}
+	if err := db.QueryRow(`SELECT status FROM event_runs WHERE id='shell-running'`).Scan(&status); err != nil || status != "cancelled" {
+		t.Fatalf("running shell status=%s err=%v", status, err)
+	}
+	if err := db.QueryRow(`SELECT status FROM event_runs WHERE id='shell-done'`).Scan(&status); err != nil || status != "completed" {
+		t.Fatalf("terminal shell status=%s err=%v", status, err)
+	}
+	if err := db.QueryRow(`SELECT status FROM event_runs WHERE id='other'`).Scan(&status); err != nil || status != "queued" {
+		t.Fatalf("unrelated run status=%s err=%v", status, err)
+	}
+	if err := db.QueryRow(`SELECT status FROM event_runs WHERE id='deploy-active'`).Scan(&status); err != nil || status != "queued" {
+		t.Fatalf("deploy run status=%s err=%v", status, err)
+	}
+}
+
 func TestFreshSchemaUsesApplicationTables(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -293,7 +339,7 @@ func TestFreshSchemaUsesApplicationTables(t *testing.T) {
 	}
 	defer store.Close()
 
-	for _, table := range []string{"applications", "application_files", "auth_state", "overview_card_configurations", "image_updates", "image_refreshes", "application_reconcile_states", "application_revisions", "jobs", "event_runs", "event_run_steps", "activity_events", "activity_evidence_chunks"} {
+	for _, table := range []string{"applications", "application_files", "auth_state", "overview_card_configurations", "image_updates", "image_refreshes", "application_reconcile_states", "application_revisions", "event_runs", "event_run_steps", "activity_events", "activity_evidence_chunks"} {
 		if !tableExists(t, store.AppDB(), table) {
 			t.Fatalf("expected table %q to exist", table)
 		}
@@ -1024,6 +1070,7 @@ func TestRemoveDeprecatedApplicationNetworkingOnClearsLegacySnapshots(t *testing
 		`CREATE TABLE application_revisions (id TEXT PRIMARY KEY, spec_yaml TEXT NOT NULL, rendered_runtime_spec TEXT NOT NULL, job_json TEXT NOT NULL)`,
 		`CREATE TABLE application_edit_sessions (id TEXT PRIMARY KEY, draft_json TEXT NOT NULL, commit_result_json TEXT NOT NULL, conflict_json TEXT NOT NULL)`,
 		`CREATE TABLE jobs (id TEXT PRIMARY KEY, desired_spec_json TEXT NOT NULL)`,
+		`CREATE TABLE event_runs (id TEXT PRIMARY KEY, type TEXT NOT NULL DEFAULT 'application_deploy', desired_spec_json TEXT NOT NULL)`,
 		`CREATE TABLE application_instances (id TEXT PRIMARY KEY, desired_spec_json TEXT NOT NULL, runtime_spec_json TEXT NOT NULL)`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
@@ -1047,6 +1094,9 @@ func TestRemoveDeprecatedApplicationNetworkingOnClearsLegacySnapshots(t *testing
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO jobs(id,desired_spec_json) VALUES(?,?)`, "job-1", legacyRuntime); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO event_runs(id,type,desired_spec_json) VALUES(?,?,?)`, "run-1", "application_deploy", legacyRuntime); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO application_instances(id,desired_spec_json,runtime_spec_json) VALUES(?,?,?)`, "instance-1", legacyRuntime, legacyRuntime); err != nil {
@@ -1074,6 +1124,7 @@ func TestRemoveDeprecatedApplicationNetworkingOnClearsLegacySnapshots(t *testing
 		`SELECT commit_result_json FROM application_edit_sessions WHERE id='session-1'`,
 		`SELECT conflict_json FROM application_edit_sessions WHERE id='session-1'`,
 		`SELECT desired_spec_json FROM jobs WHERE id='job-1'`,
+		`SELECT desired_spec_json FROM event_runs WHERE id='run-1'`,
 		`SELECT desired_spec_json FROM application_instances WHERE id='instance-1'`,
 		`SELECT runtime_spec_json FROM application_instances WHERE id='instance-1'`,
 	}
@@ -1098,6 +1149,7 @@ func TestBackfillApplicationPersistentLocationsOn(t *testing.T) {
 		`CREATE TABLE applications (id TEXT PRIMARY KEY, spec_yaml TEXT NOT NULL, deployment_server_ids_json TEXT NOT NULL, created_at TEXT NOT NULL)`,
 		`CREATE TABLE application_instances (application_id TEXT NOT NULL, server_id TEXT NOT NULL, desired_spec_json TEXT NOT NULL, runtime_spec_json TEXT NOT NULL, created_at TEXT NOT NULL)`,
 		`CREATE TABLE jobs (application_id TEXT NOT NULL, server_id TEXT NOT NULL, desired_spec_json TEXT NOT NULL, created_at TEXT NOT NULL)`,
+		`CREATE TABLE event_runs (application_id TEXT NOT NULL, server_id TEXT NOT NULL, desired_spec_json TEXT NOT NULL, created_at TEXT NOT NULL, type TEXT NOT NULL)`,
 		`CREATE TABLE application_persistent_locations (application_id TEXT NOT NULL, server_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(application_id,server_id))`,
 		`INSERT INTO applications VALUES ('persistent','name: db\nmounts:\n  - type: persistent\n','["srv-current"]','2026-01-01T00:00:00Z')`,
 		`INSERT INTO applications VALUES ('stateless','name: web\nimage: nginx\n','["srv-ignore"]','2026-01-01T00:00:00Z')`,
@@ -1105,6 +1157,9 @@ func TestBackfillApplicationPersistentLocationsOn(t *testing.T) {
 		`INSERT INTO jobs VALUES ('persistent','srv-job','{}','2026-01-03T00:00:00Z')`,
 		`INSERT INTO jobs VALUES ('stateless','srv-historical','{"mounts":[{"type":"persistent"}]}','2026-01-03T00:00:00Z')`,
 		`INSERT INTO jobs VALUES ('stateless','srv-ignore-job','{}','2026-01-03T00:00:00Z')`,
+		`INSERT INTO event_runs VALUES ('persistent','srv-run','{}','2026-01-04T00:00:00Z','application_deploy')`,
+		`INSERT INTO event_runs VALUES ('stateless','srv-run-hist','{"mounts":[{"type":"persistent"}]}','2026-01-04T00:00:00Z','application_deploy')`,
+		`INSERT INTO event_runs VALUES ('stateless','srv-generic','{}','2026-01-04T00:00:00Z','image_refresh')`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatal(err)
@@ -1134,7 +1189,117 @@ func TestBackfillApplicationPersistentLocationsOn(t *testing.T) {
 		}
 		got = append(got, serverID)
 	}
-	if strings.Join(got, ",") != "srv-current,srv-historical,srv-instance,srv-job" {
+	if strings.Join(got, ",") != "srv-current,srv-historical,srv-instance,srv-job,srv-run,srv-run-hist" {
 		t.Fatalf("backfilled servers = %#v", got)
+	}
+}
+
+func TestMergeJobsIntoEventRunsMapsStatusAndIsIdempotent(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, statement := range []string{
+		`CREATE TABLE event_runs (
+			id TEXT PRIMARY KEY,
+			operation_id TEXT NOT NULL DEFAULT '',
+			type TEXT NOT NULL,
+			parent_task_id TEXT NOT NULL DEFAULT '',
+			child_index INTEGER NOT NULL DEFAULT 0,
+			child_count INTEGER NOT NULL DEFAULT 0,
+			execution_mode TEXT NOT NULL DEFAULT '',
+			concurrency_key TEXT NOT NULL DEFAULT '',
+			schedule_key TEXT NOT NULL DEFAULT '',
+			quiet INTEGER NOT NULL DEFAULT 0,
+			server_id TEXT NOT NULL DEFAULT '',
+			node_id TEXT NOT NULL DEFAULT '',
+			resource_type TEXT NOT NULL DEFAULT '',
+			resource_id TEXT NOT NULL DEFAULT '',
+			trigger_type TEXT NOT NULL DEFAULT '',
+			trigger_resource_type TEXT NOT NULL DEFAULT '',
+			trigger_resource_id TEXT NOT NULL DEFAULT '',
+			trigger_task_id TEXT NOT NULL DEFAULT '',
+			triggered_by TEXT NOT NULL DEFAULT '',
+			params_json TEXT NOT NULL DEFAULT '{}',
+			metadata_json TEXT NOT NULL DEFAULT '{}',
+			status TEXT NOT NULL,
+			stage TEXT NOT NULL DEFAULT '',
+			percentage REAL,
+			summary TEXT NOT NULL DEFAULT '',
+			error TEXT NOT NULL DEFAULT '',
+			retry_count INTEGER NOT NULL DEFAULT 0,
+			max_retries INTEGER NOT NULL DEFAULT 0,
+			next_run_at TEXT,
+			created_at TEXT NOT NULL,
+			started_at TEXT,
+			finished_at TEXT
+		)`,
+		`CREATE TABLE jobs (
+			id TEXT PRIMARY KEY, application_id TEXT NOT NULL, server_id TEXT NOT NULL, instance_id TEXT NOT NULL DEFAULT '',
+			action TEXT NOT NULL DEFAULT 'apply', desired_generation INTEGER NOT NULL DEFAULT 0, desired_spec_hash TEXT NOT NULL DEFAULT '',
+			desired_revision_id TEXT NOT NULL DEFAULT '', desired_spec_json TEXT NOT NULL DEFAULT '{}',
+			remove_data INTEGER NOT NULL DEFAULT 0, force_nonce INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL,
+			priority INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0, next_run_at TEXT,
+			lease_owner TEXT NOT NULL DEFAULT '', lease_token TEXT NOT NULL DEFAULT '', lease_expires_at TEXT,
+			execution_id TEXT NOT NULL DEFAULT '', intent_id TEXT NOT NULL DEFAULT '', trigger_type TEXT NOT NULL DEFAULT '',
+			trigger_resource_type TEXT NOT NULL DEFAULT '', trigger_resource_id TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '',
+			idempotency_key TEXT NOT NULL DEFAULT '', last_stage TEXT NOT NULL DEFAULT '', last_steps_json TEXT NOT NULL DEFAULT '[]',
+			error_code TEXT NOT NULL DEFAULT '', error_class TEXT NOT NULL DEFAULT '', error_message TEXT NOT NULL DEFAULT '',
+			error_detail TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, updated_at TEXT NOT NULL
+		)`,
+		`INSERT INTO jobs(id,application_id,server_id,instance_id,action,state,attempts,lease_token,execution_id,error_class,intent_id,reason,created_at,updated_at)
+		 VALUES('job-pending','app','srv','inst','apply','pending',0,'','','','intent-1','because','2026-01-01T00:00:00Z','')`,
+		`INSERT INTO jobs(id,application_id,server_id,state,last_stage,attempts,lease_token,execution_id,error_class,created_at,updated_at)
+		 VALUES('job-ok','app','srv','succeeded','',2,'tok','fence','','2026-01-02T00:00:00Z','2026-01-02T00:00:01Z')`,
+		`INSERT INTO jobs(id,application_id,server_id,state,last_stage,attempts,lease_token,execution_id,error_class,created_at,updated_at)
+		 VALUES('job-hold','app','srv2','running','reconcile',1,'keep-token','fence-2','uncertainty','2026-01-03T00:00:00Z','2026-01-03T00:00:00Z')`,
+		`INSERT INTO event_runs(id,type,status,created_at) VALUES('job-ok','image_refresh','queued','2026-01-01T00:00:00Z')`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := mergeJobsIntoEventRunsOn(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	var status, stage, lease string
+	var attempts, retryCount int
+	var updated string
+	if err := db.QueryRow(`SELECT status,stage,attempts,retry_count,updated_at FROM event_runs WHERE id='job-pending'`).Scan(&status, &stage, &attempts, &retryCount, &updated); err != nil {
+		t.Fatal(err)
+	}
+	if status != "queued" || stage != "" || attempts != 0 || retryCount != 0 || updated != "2026-01-01T00:00:00Z" {
+		t.Fatalf("pending copy = status=%s stage=%s attempts=%d retry=%d updated=%s", status, stage, attempts, retryCount, updated)
+	}
+	var keptType string
+	if err := db.QueryRow(`SELECT type,status FROM event_runs WHERE id='job-ok'`).Scan(&keptType, &status); err != nil {
+		t.Fatal(err)
+	}
+	if keptType != "image_refresh" || status != "queued" {
+		t.Fatalf("existing id overwritten: type=%s status=%s", keptType, status)
+	}
+	if err := db.QueryRow(`SELECT status,stage,lease_token,attempts,retry_count FROM event_runs WHERE id='job-hold'`).Scan(&status, &stage, &lease, &attempts, &retryCount); err != nil {
+		t.Fatal(err)
+	}
+	if status != "running" || stage == "uncertain" || lease != "keep-token" || attempts != 1 || retryCount != 0 {
+		t.Fatalf("hold copy = status=%s stage=%s lease=%s attempts=%d retry=%d", status, stage, lease, attempts, retryCount)
+	}
+	if err := mergeJobsIntoEventRunsOn(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	var copied int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM event_runs WHERE type='application_deploy'`).Scan(&copied); err != nil {
+		t.Fatal(err)
+	}
+	if copied != 2 {
+		t.Fatalf("deploy rows = %d, want 2 after idempotent rerun", copied)
+	}
+	var jobsLeft int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM jobs`).Scan(&jobsLeft); err != nil {
+		t.Fatal(err)
+	}
+	if jobsLeft != 3 {
+		t.Fatalf("jobs rows = %d, want table kept", jobsLeft)
 	}
 }

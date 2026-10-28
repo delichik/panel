@@ -164,13 +164,15 @@ func TestOverwriteImportAllowsSelectedPanelCertificateOutsideDomain(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.ExecuteImport(ctx, preflight.PlanID, ImportExecuteRequest{
+	imported, err := svc.ExecuteImport(ctx, preflight.PlanID, ImportExecuteRequest{
 		Strategy:                  "overwrite_existing",
 		ConfirmOverwriteInUse:     true,
 		ConfirmDangerousOverwrite: true,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("expected selected Panel certificate overwrite to succeed: %v", err)
 	}
+	waitKeyAssetTask(t, svc, imported.TaskID)
 	currentCertificate, err := os.ReadFile(filepath.Join(svc.cfg.DataRoot, "tls", "panel.crt"))
 	if err != nil {
 		t.Fatal(err)
@@ -218,6 +220,11 @@ func TestReissueSelectedPanelCertificateSynchronizesFixedPair(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	waitKeyAssetTask(t, svc, result.TaskID)
+	updated, err := svc.Get(ctx, asset.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	fixedCertificate, err := tls.LoadX509KeyPair(
 		filepath.Join(svc.cfg.DataRoot, "tls", "panel.crt"),
 		filepath.Join(svc.cfg.DataRoot, "tls", "panel.key"),
@@ -232,8 +239,8 @@ func TestReissueSelectedPanelCertificateSynchronizesFixedPair(t *testing.T) {
 	if leaf.VerifyHostname("panel.example.test") != nil {
 		t.Fatalf("reissued fixed certificate does not cover Panel domain: %v", leaf.VerifyHostname("panel.example.test"))
 	}
-	if certificateFingerprint(leaf) != result.Asset.Fingerprint {
-		t.Fatalf("fixed certificate fingerprint = %q, want %q", certificateFingerprint(leaf), result.Asset.Fingerprint)
+	if certificateFingerprint(leaf) != updated.Fingerprint {
+		t.Fatalf("fixed certificate fingerprint = %q, want %q", certificateFingerprint(leaf), updated.Fingerprint)
 	}
 	if fixedCertificate.PrivateKey == nil {
 		t.Fatal("fixed Panel private key is empty")
@@ -421,6 +428,7 @@ func TestImportRejectsEncryptedPrivateKeyAndSupportsArchiveFlows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	waitKeyAssetTask(t, svc, exported.TaskID)
 	archiveBytes, _, err := svc.DownloadExport(ctx, exported.TaskID)
 	if err != nil {
 		t.Fatal(err)
@@ -429,9 +437,11 @@ func TestImportRejectsEncryptedPrivateKeyAndSupportsArchiveFlows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.ExecuteImport(ctx, preflight.PlanID, ImportExecuteRequest{Strategy: "skip_existing"}); err != nil {
+	skipped, err := svc.ExecuteImport(ctx, preflight.PlanID, ImportExecuteRequest{Strategy: "skip_existing"})
+	if err != nil {
 		t.Fatal(err)
 	}
+	waitKeyAssetTask(t, svc, skipped.TaskID)
 	preflight, err = svc.PreflightImport(ctx, ImportPreflightRequest{ArchiveBase64: encodeBase64(archiveBytes), Password: "very-secret-12"})
 	if err != nil {
 		t.Fatal(err)
@@ -443,6 +453,7 @@ func TestImportRejectsEncryptedPrivateKeyAndSupportsArchiveFlows(t *testing.T) {
 	if result.TaskID == "" {
 		t.Fatalf("expected task id, got %#v", result)
 	}
+	waitKeyAssetTask(t, svc, result.TaskID)
 	items, err := svc.List(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -720,6 +731,7 @@ func TestExportRecordsUseLogDBAndExpiredCleanupRemovesFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	waitKeyAssetTask(t, svc, exported.TaskID)
 
 	var filePath string
 	if err := store.LogDB().QueryRow(`SELECT file_path FROM key_asset_exports WHERE task_id=?`, exported.TaskID).Scan(&filePath); err != nil {
@@ -749,6 +761,30 @@ func TestExportRecordsUseLogDBAndExpiredCleanupRemovesFile(t *testing.T) {
 	if _, err := os.Stat(filePath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected export file removed, stat err=%v", err)
 	}
+}
+
+func waitKeyAssetTask(t *testing.T, svc *Service, taskID string) tasks.Task {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		task, err := svc.tasks.Get(context.Background(), taskID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch task.Status {
+		case tasks.StatusCompleted:
+			return task
+		case tasks.StatusFailed, tasks.StatusFailedRetryable, tasks.StatusBlocked, tasks.StatusCancelled:
+			t.Fatalf("task %s ended %s: %s", taskID, task.Status, task.Error)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	task, err := svc.tasks.Get(context.Background(), taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Fatalf("task %s did not finish: %#v", taskID, task)
+	return tasks.Task{}
 }
 
 func newTestService(t *testing.T) (*Service, *storage.Store, func()) {
@@ -855,25 +891,33 @@ func testPublicKeyPEM(t *testing.T, privateKeyPEM string) string {
 	return string(publicKeyPEM)
 }
 
-func TestBeginAssetTaskRejectsConcurrentSameResourceOperation(t *testing.T) {
+func TestReissueRejectsConcurrentSameResourceOperation(t *testing.T) {
 	svc, _, closeFn := newTestService(t)
 	defer closeFn()
 	ctx := context.Background()
 
-	taskID, fail, _, err := svc.beginAssetTask(ctx, TaskTypeTLSReissue, "asset-1", "first reissue")
+	ca, err := svc.CreateCA(ctx, CreateCARequest{Name: "Root", CommonName: "root.internal"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if taskID == "" {
-		t.Fatal("expected a task id")
+	asset, err := svc.CreateTLS(ctx, CreateTLSRequest{Name: "Web", ParentAssetID: ca.ID, CommonName: "web.internal", DNSNames: []string{"web.internal"}})
+	if err != nil {
+		t.Fatal(err)
 	}
-	// A second operation on the same asset must be rejected while the first
-	// task is still running (reissue and regenerate share the resource key).
-	_, _, _, err = svc.beginAssetTask(ctx, TaskTypeSSHRegenerate, "asset-1", "second regenerate")
-	if err == nil {
-		t.Fatal("expected concurrent same-resource operation to be rejected")
+	if _, _, err := tasks.NewManager(svc.tasks).Create(ctx, tasks.CreateInput{
+		Type:         TaskTypeTLSReissue,
+		ResourceType: "key_asset",
+		ResourceID:   asset.ID,
+		Status:       tasks.StatusRunning,
+		Summary:      "first reissue",
+	}, tasks.Trigger{Type: "user", Manual: true}); err != nil {
+		t.Fatal(err)
 	}
-	_ = fail(panelerr.Validation("test", "test"))
+	_, err = svc.ReissueTLS(ctx, asset.ID)
+	var typed *panelerr.Error
+	if !errors.As(err, &typed) || typed.Code != "key_asset_operation_in_progress" {
+		t.Fatalf("expected in-progress conflict, got %v", err)
+	}
 }
 
 func TestDownloadExportRejectsPathOutsideExportDir(t *testing.T) {
@@ -889,6 +933,7 @@ func TestDownloadExportRejectsPathOutsideExportDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	waitKeyAssetTask(t, svc, exported.TaskID)
 	outside := filepath.Join(t.TempDir(), "evil.panel")
 	if err := os.WriteFile(outside, []byte("secret"), 0600); err != nil {
 		t.Fatal(err)

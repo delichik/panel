@@ -152,6 +152,8 @@ func (a *App) clearRuntimeData(ctx context.Context) (result diagnostics.ClearRun
 }
 
 func clearAppCoordination(ctx context.Context, db *sql.DB) error {
+	// jobs stays in the list so a database that still has the legacy table is
+	// cleared. Deploy rows now live in event_runs and are removed with it.
 	if err := clearNamedTablesBatched(ctx, db, []string{"task_logs", "event_run_steps", "event_runs", "jobs", "application_reconcile_states"}, runtimeClearBatchSize); err != nil {
 		return err
 	}

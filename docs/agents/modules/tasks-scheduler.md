@@ -1,7 +1,7 @@
 # Event executor（执行控制与调度）
 
 > [!WARNING]
-> 本文是非规范的历史实现说明，已由 [协调、任务与运行事件验收合同](../acceptance/orchestration-and-tasks.md) 替代。后续改动以稳定验收编号为准。
+> 本文是非规范的历史实现说明，已由 [协调、任务与运行事件验收合同](../acceptance/orchestration-and-tasks.md) 替代。后续改动以稳定验收编号为准。Run 与诊断 Event 的 Phase A 边界见 `ENG-RUN-001..005` 与 `ENG-RET-001`。已注册 Execute 的变更必须 `CreateAndRun`（或 `Create` 后立刻 `Manager.Run`），不得留下没有 Execute 的可领取行，见 `TASK-DISPATCH-001..003`。
 
 ## List Query Contract
 
@@ -37,7 +37,7 @@
 - 单目标动作使用 `tasks.Manager.Create` 或封装入口创建单个任务；多目标或多变量动作使用 `tasks.Manager.CreateBatch` / `CreateBatchAndRun` 创建父任务和子任务，子任务可以使用各自注册任务类型，但必须共享同一 `operation_id`，并把每个目标自己的变量写入对应 `CreateInput`。
 - 注册方负责通过任务定义、并发策略和业务封装入口约束该任务类型是否允许异步/并行执行：允许并行时批量输入可使用 `ExecutionModeParallel`，否则必须使用 `ExecutionModeSerial` 或单任务执行。调用方不得绕开注册定义，把不允许并行的任务强行拆成并行 goroutine；普通 `Execute` 返回 `nil` 表示该任务执行已完成或已由 executor 写入终态，不能只启动后台 goroutine 后返回成功，否则 manager 会按成功自动完成任务。后续如果新增显式异步能力字段，也必须由注册方声明并同步执行列表（`/api/v1/executions`）展示。
 - `internal/modules/tasks` 只提供任务框架能力，不维护业务任务类型清单、业务 executor 或业务周期输入。业务任务类型必须由拥有该任务的业务模块在自己的 `RegisterTasks` 入口注册；生产装配由 `internal/bootstrap/panel/app.go` 的集中任务注册阶段统一调用各模块入口。
-- 所有任务类型必须提前注册后才能创建或执行。业务模块通过任务 manager 创建任务；未注册类型必须返回校验错误，不能直接写入任务表。应用 `jobs` 不属于任务类型，必须由 `internal/orchestrator.Planner` 创建，不能借任务 manager 或直接写 `tasks` 表替代。
+- 所有任务类型必须提前注册后才能创建或执行。业务模块通过任务 manager 创建任务；未注册类型必须返回校验错误，不能直接写入 `event_runs`。应用 `jobs` 与 `event_runs` 同属可领取 Run，但 Phase A 仍是两套存储：`jobs` 不是通用任务类型，必须由 `internal/orchestrator.Planner` 创建，不能借任务 manager 或写入 `event_runs` 来替代（`ENG-RUN-001`、`TASK-DISPATCH-002`）。诊断 Event（AppDB `events` + JSONL）不是 Run（`ENG-RUN-002`）。
 - 注册方通过任务定义声明参数校验、执行函数、`BeforeStart`、完成 hook、失败 hook、重试/手动运行能力、并发策略、一次性 worker 排队超时清理能力和周期配置。
 - 业务模块的 `tasks.go` 必须保持声明式：`Execute` 直接绑定接受 `tasks.TaskContext` 的具名方法，`CollectInputs` 直接绑定具名 collector。禁止使用只为转调另一函数而存在的匿名 executor，也禁止在任务定义中内联节流、扫描和批量输入组装等大段逻辑。
 - 周期 cadence 由各业务模块的 `StartPeriodic`/`tasks.StartSchedulerLoop` 拥有；`Periodic` 只保留 `CollectInputs`。Panel 启动时用可取消 context 调用各模块 `StartPeriodic`，关闭时取消该 context。
@@ -62,7 +62,7 @@
 - 任务进入 `completed`、`failed`、`failed_retryable`、`blocked` 或 `cancelled` 等终态后，后台 worker 后续的完成/失败/重试写入不得覆盖既有终态；服务器删除会把该服务器的 `queued`、`scheduled`、`failed_retryable` 和 `running` 任务标记为 `cancelled`，避免卡住删除或被调度器继续捡起。
 - `FinishExecution` 只在数据库中的任务状态已经不再是 `running` 时清理内存执行对象；如果终态写库失败导致数据库仍为 `running`，必须保留 execution，避免 orphan 检查误判。
 - Panel 启动时以及 tasks 内部 worker 运行期间每 30 秒检查数据库中的 `running` 任务；如果任务 ID 无法在当前进程 execution registry 中找到，会保留 `running` 并标记 `stage=uncertain`、追加不确定事实；禁止通过重试或取消释放并发域。重复检查不追加重复事实。
-- 已注册 `Execute` 的变更任务（含 `server_restart`、`server_agent_deploy`、fail2ban、package/image refresh、DNS sync）必须经 `tasks.Manager.CreateAndRun` 或 `Create` 后 `Manager.Run` 分派，禁止 `Start` + 手写 `go runX` 绕过 executor；进程重启后由注册表恢复 queued/running。手动 `server_agent_deploy`（`AGT-DEP-001`）在返回前应等到 `running`。
+- 已注册 `Execute` 的变更任务（含 `server_restart`、`server_agent_deploy`、fail2ban、package/image refresh、DNS sync）必须经 `tasks.Manager.CreateAndRun` 或 `Create` 后 `Manager.Run` 分派，禁止 `Start` + 手写 `go runX` 绕过 executor，也禁止只创建可领取行而不进入本次执行（`TASK-DISPATCH-001..003`）；进程重启后由注册表恢复 queued/running。手动 `server_agent_deploy`（`AGT-DEP-001`）在返回前应等到 `running`。部署 Job 不走这条入口。
 - `server_agent_deploy` 自动触发失败达到上限后不得继续自动排队或启动新任务；执行列表（`/api/v1/executions`）和服务器详情仍允许用户手动重试。服务器详情 Agent 卡片通过 `serverId + server_agent_deploy` 查询恢复最近任务，并增量读取 `/executions/{id}/logs`；重启就绪流返回 `holdon` 时，部署任务按 15 秒节流记录 Agent 请求延迟重启的原始状态和已等待时长，不在协议未提供原因时推断为软件包维护。
 - 由内存 goroutine 直接执行、无法跨进程恢复的一次性 worker 任务，如果需要清理遗留 `queued`/`scheduled` 状态，必须在任务定义中设置 `StaleQueuedAfter`；tasks 内部 worker 只扫描注册表中声明了该能力的任务类型，并在超时后标记为失败提示用户重试。过期清理同时覆盖 `queued` 与 `scheduled` 两种状态，避免旧版本遗留或等待轮次超时的任务锚点永久占住并发键。
 - 长耗时后台操作应写入任务日志，并尽量拆出步骤，方便执行列表（`/api/v1/executions`）展示进度。
@@ -87,9 +87,9 @@
 ## 跨模块依赖
 
 - 服务器测试、重启、UFW、fail2ban、agent 部署和软件包维护依赖本模块记录任务；其中没有 executor 的一次性 worker 或记录型任务只保留任务记录，不暴露执行列表（`/api/v1/executions`）重试。fail2ban 的接管/应用和取消接管共用 `server_fail2ban_apply` 一次性 worker 任务，保存草稿不创建任务。
-- 应用同步、停止、清理、重启和镜像更新可以由本模块记录用户操作/周期触发任务；保存、停用、删除等入口只写 desired state 并触发 `application_reconcile`，应用 planner 在 AppDB 创建或合并 Job。生产路径不创建 `application_target_batch` 或 `application_target_apply|stop|purge`，也不把任务并发队列当作应用部署事实；同一 app/server 的串行与 fencing 由 orchestrator Job lease 负责。
+- 应用同步、停止、清理、重启和镜像更新可以记录用户操作任务（如 `application_refresh` / `application_image_update`）。这些 executor 只写 desired state 并调用 `TriggerApplicationReconcile`。保存、停用、删除等入口同样只写 desired state 并请求 Planner。生产路径不创建 `application_reconcile_batch`、`application_target_batch` 或 `application_target_apply|stop|purge`，也不把任务并发队列当作应用部署事实；同一 app/server 的串行与 fencing 由 orchestrator Job lease 负责。
 - 容器启动、停止、重启、删除，镜像拉取、删除、删除未使用，以及卷删除、删除未使用由容器化模块同步串行执行，不再创建操作任务；容器状态由 Agent report stream 更新缓存，镜像和卷操作成功后会立即创建 `image_refresh` 或 `volume_refresh` 刷新任务。
-- 手动镜像刷新、Application 镜像升级和 Application 协调恢复仍依赖本模块记录任务；同服务器 Docker 写操作由容器化模块串行执行。
+- 手动镜像刷新和 Application 镜像升级仍依赖本模块记录任务。应用协调恢复只请求 Planner，不落 event run。同服务器 Docker 写操作由容器化模块串行执行。
 - 服务器详情的网络/存储卷 tab 首次打开且本地尚无快照时，前端会提交一次 `network_refresh` 或 `volume_refresh` 任务；刷新任务按任务类型、服务器和资源复用活跃任务。
 - 证书签发、续签、密钥资产重新签发、SSH 密钥重新生成和导入依赖本模块记录任务；ACME 签发/续签任务会记录 `acme_*` 阶段和对应步骤 metadata。新建证书签发在任务持久化后由证书模块主动调用 manager 启动，正常路径不依赖 worker 的周期扫描；worker 仍负责重启恢复和兜底唤醒。
 - `server_info_collect` 的首次 bootstrap 输入在服务器创建后立即执行，失败时允许回滚尚未完成初始化的服务器；普通 refresh 输入固定每小时收集一次完整系统信息，失败只记录为可重试任务，绝不能删除服务器。周期 refresh 仅为存在兼容 Agent 的服务器创建。该任务的注册 executor 必须同步执行到任务终态；业务 API 需要快速返回时只能在创建并标记 running 后使用模块内显式后台启动 helper。
@@ -99,8 +99,8 @@
 
 ## 密钥资产任务
 
-- `key_asset_tls_reissue`、`key_asset_ssh_regenerate`、`key_asset_export`、`key_asset_import` 记录密钥资产操作；当前这些记录型任务不注册 executor，因此不暴露执行列表（`/api/v1/executions`）手动运行或重试。
-- `panel_tls_reconcile` 是隐藏的系统任务，复用同一 worker 和周期触发机制，每 30 分钟检查 `panel-ca`/`panel-tls` 的完整性、域名 SAN、有效期和 RSA 链；叶子证书距离过期 30 天内、缺失或损坏时自动重建并同步固定监听缓存。用户从系统证书页 reset 时复用该任务类型；自定义 `panel.tlsCertificateId` 保持优先，不会被静默替换。
+- `key_asset_tls_reissue`、`key_asset_ssh_regenerate`、`key_asset_export`、`key_asset_import` 注册 Execute，由 `CreateAndRun` 执行。它们不声明 `AllowRunNow`/`AllowRetry`，执行列表不提供手动运行或重试。导出密码只以 secret store 密文进入任务参数。
+- `panel_tls_reconcile` 是隐藏的系统任务，复用同一 worker 和周期触发机制，每 30 分钟检查 `panel-ca`/`panel-tls` 的完整性、域名 SAN、有效期和 RSA 链；叶子证书距离过期 30 天内、缺失或损坏时自动重建并同步固定监听缓存。用户从系统证书页 reset 时复用该任务类型，并以 `reset=true` 走同一 Execute（`CreateAndRun`）；自定义 `panel.tlsCertificateId` 保持优先，不会被静默替换。
 - 重新签发、重新生成和导入任务会触发已启用应用重新部署，任务终态必须注销 execution。
 - 导出任务完成后通过 `/api/v1/key-assets/exports/{taskId}/download` 下载短期加密归档。
 
@@ -111,7 +111,7 @@
 
 ## 文档更新触发
 
-新增任务类型、注册字段、并发策略、一次性 worker 排队超时清理能力、周期输入收集规则、状态、步骤结构、日志语义、调度项、手动运行行为或任务筛选字段时，必须更新本文档。
+新增任务类型、注册字段、并发策略、一次性 worker 排队超时清理能力、周期输入收集规则、状态、步骤结构、日志语义、调度项、手动运行行为或任务筛选字段时，必须更新本文档。Run 与 Event 的边界、`CreateAndRun` 分派和保留类以 `ENG-RUN-*`、`ENG-RET-001`、`TASK-DISPATCH-*` 为准，不得只改本文。
  
 ## Active Agent Reporting
 
@@ -122,16 +122,17 @@
 
 ## 进程事件、JSONL 与 event executor
 
-- 产品从 `/events`（AppDB 进程行：state/module/level）与 `/logs`（JSONL 行：level+eventId）查看历史；旧 `/operations`、`/tasks`、`/activity` 仅重定向。
-- `event_runs` / `event_run_steps` 在 AppDB，保存 event executor 控制状态；HTTP 仍暴露为 `/api/v1/executions*`。
-- `AppendLog` 写入统一 JSONL（带 `eventId`），并 upsert AppDB `events` 进程行；execution 日志 API 读 JSONL 行。每 run 日志条数上限见验收 `TASK-LOG-001`。
+- Run 是可领取的工作。Phase A 仍分两套存储：`jobs` 与 `event_runs` / `event_run_steps`。Event 是诊断索引，不是 Run：`/events` 读 AppDB `events`（state/module/level），`/logs` 读 JSONL（level+eventId）。二者不得合并（`ENG-RUN-002`）。旧 `/operations`、`/tasks`、`/activity` 仅重定向；`UI-EVT-004` 不变。
+- `event_runs` / `event_run_steps` 在 AppDB，保存通用 Run 的执行控制。HTTP Run 面是 `/api/v1/executions*`，部署 Job 与通用 Run 都从这里读；部署 claim 仍在 orchestrator，不经本模块 `CreateAndRun`（`ENG-RUN-001`）。
+- `AppendLog` 写入统一 JSONL（带 `eventId`），并 upsert AppDB `events` 进程行；execution 日志 API 读 JSONL 行。该 upsert 不得改写 Run 的 lease、执行状态或 fence `execution_id`（`ENG-RUN-003`）。每 run 日志条数上限见验收 `TASK-LOG-001`。
 - 步骤 metadata 存于 `event_run_steps`；应用 Job steps 存于 Job，不得双写为部署事实。
-- `/api/v1/executions` 服务执行控制；进程/诊断读走 `/api/v1/events*` 与 `/api/v1/logs?eventId=`（legacy `/api/v1/log-contexts*`）；不得在 execution HTTP handler 重建协调历史。
+- `/api/v1/executions` 服务 Run；进程/诊断读走 `/api/v1/events*` 与 `/api/v1/logs?eventId=`（legacy `/api/v1/log-contexts*`）。不得在 execution HTTP handler 重建协调历史。
+- 保留分三类，不得共用一条 TTL：诊断事件、终态通用 Run、部署 Run（`ENG-RET-001`）。部署恢复是 remote-fence（hold = 不领取，且不清 `lease_token`）；通用任务是 local-timeout（`ENG-RUN-004`）。`reconcile_stopped` 仍是应用级熔断。尝试次数按种类计算：Job claim 上限默认 10，通用任务 `max_retries` 默认 3；统一后 `max_attempts = max_retries + 1`（`ENG-RUN-005`）。
 
 ## Application Deployment Coordination
 
-- Application reconciliation collectors return no target task inputs in production. `application_reconcile` 是 collector-only 周期入口，不暴露执行列表（`/api/v1/executions`） run-now/retry，也不注册应用部署 executor；显式协调由业务入口携带 `PeriodicTrigger` payload 触发 collector/planner，planner 只写 AppDB desired/revision/Job。
-- collector-only 周期任务允许没有 `Execute`；tasks periodic runner 和 `TriggerPeriodicNow` 仍必须调用其 `CollectInputs`。如果 collector 返回 `shouldRun=false`，不创建任务记录；如果返回需要创建的输入，返回的 batch 或 child task type 必须指向已注册 executor 的任务类型，不能把 collector-only 类型本身作为可执行任务。
+- Application reconciliation does not create event runs. `application_reconcile` 只作为 `StartSchedulerLoop` 的 collector-only 周期钩子保留：无 Execute，不暴露执行列表（`/api/v1/executions`） run-now/retry。CollectInputs 与 `TriggerApplicationReconcile` 都直接调用 Planner，只写 AppDB desired/revision/Job，并返回空输入（`shouldRun=false`）。已删除 `application_reconcile_batch` 的 noop Execute；生产路径不得 `CreateBatch` 该类型。
+- collector-only 周期任务允许没有 `Execute`；tasks periodic runner 和 `TriggerPeriodicNow` 仍必须调用其 `CollectInputs`。如果 collector 返回 `shouldRun=false`，不创建任务记录；如果返回需要创建的输入，返回的 batch 或 child task type 必须指向已注册 executor 的任务类型，不能把 collector-only 类型本身作为可执行任务。应用协调属于前一种：只规划，不返回可执行输入。
 - `ConcurrencyResourceQueue` and `ConcurrencyResourceExclusive` honor a registered `ConcurrencyKey` callback when one is provided, then fall back to the default `type/resource` key. Business modules that need target-level serialization must declare the callback in their task definition.
 - Application Job execution does not use `ConcurrencyResourceQueue` or a task dispatcher. `orchestrator.Controller` scans `jobs`, claims one active app/server Job, maintains lease heartbeat, calls Agent `RuntimeReconcile`, writes observations with the lease token, and requeues when desired changed. `uq_jobs_active_app_server` and DB due scan provide cross-process correctness; wake is only a latency optimization.
 - `application_restart` is a replayable planning task, not a direct runtime restart executor. It triggers planner apply and completes after a Job is created or merged; remote mutation happens only in the orchestrator controller.

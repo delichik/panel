@@ -47,7 +47,7 @@
 | 全局导航、慢网路由反馈、会话、布局、通用交互 | [界面外壳与交互约定](ui-shell-and-conventions.md) |
 | 任一具体页面、页面首次加载或用户操作 | [逐页面验收](ui-pages.md) |
 | 应用、挂载来源、应用文件、修订、部署、节点工作区布局、设施应用、存储共享；规划失败 `APP-PLAN-001`、系统核实中 `APP-RUN-004` | [应用与设施应用](applications-and-facilities.md) |
-| desired/observed、协调 Job、统一追加活动日志、任务、运行事件；规划失败隔离 `ORCH-PLAN-006`、启动稳定观察 `ORCH-CTRL-007` | [协调、任务与运行事件](orchestration-and-tasks.md) |
+| desired/observed、协调 Job、统一追加活动日志、任务、运行事件；规划失败隔离 `ORCH-PLAN-006`、启动稳定观察 `ORCH-CTRL-007`；RunEngine Phase A `ENG-RUN-001..005`、`ENG-RET-001`、`TASK-DISPATCH-001..003` | [协调、任务与运行事件](orchestration-and-tasks.md) |
 | 容器、镜像、网络、卷、资源缓存与操作队列 | [容器与资源](containers-and-resources.md) |
 | 登录、账号、运行时设置、概览、系统版本 | [身份、设置与系统](identity-settings-system.md) |
 | 凭据、服务器、Agent、SSH、UFW、Fail2ban、APT | [服务器、安全与软件包](servers-security-packages.md) |

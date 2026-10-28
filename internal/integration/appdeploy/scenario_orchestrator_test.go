@@ -159,7 +159,7 @@ func TestScenarioLeaseExpiryRecoveryVerifiesDurableResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	past := time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano)
-	if _, err = o.store.AppDB().Exec(`UPDATE jobs SET last_stage='reconcile_started',lease_expires_at=? WHERE id=?`, past, job.ID); err != nil {
+	if _, err = o.store.AppDB().Exec(`UPDATE event_runs SET last_stage='reconcile_started',lease_expires_at=? WHERE id=?`, past, job.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err = o.db.RecoverExpiredLeases(context.Background()); err != nil {
@@ -198,7 +198,7 @@ func TestScenarioLeaseExpiryWithoutResultRetainsFence(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("claim: %v %v", ok, err)
 	}
-	if _, err = o.store.AppDB().Exec(`UPDATE jobs SET lease_expires_at=? WHERE id=?`, time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano), job.ID); err != nil {
+	if _, err = o.store.AppDB().Exec(`UPDATE event_runs SET lease_expires_at=? WHERE id=?`, time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano), job.ID); err != nil {
 		t.Fatal(err)
 	}
 	ctrl := o.startController(2*time.Second, "worker-b")
@@ -261,7 +261,7 @@ func TestScenarioStaleTokenWritebackRejected(t *testing.T) {
 		t.Fatalf("claim failed ok=%v err=%v", ok, err)
 	}
 	// 模拟另一个 worker 接管：直接改写 lease_token（旧 worker 仍持有旧 token）。
-	if _, err := o.store.AppDB().Exec(`UPDATE jobs SET lease_token=? WHERE id=?`, "new-token", job.ID); err != nil {
+	if _, err := o.store.AppDB().Exec(`UPDATE event_runs SET lease_token=? WHERE id=?`, "new-token", job.ID); err != nil {
 		t.Fatal(err)
 	}
 	ok, err = o.db.Succeed(context.Background(), claimed, controlplane.ReconcileResponse{ObservedState: "running"})

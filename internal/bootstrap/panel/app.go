@@ -139,6 +139,7 @@ func New(cfg config.Config) (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
+	applications.RegisterDeployRunDefinition(taskSvc)
 	if _, err := taskSvc.FailRunningWithoutExecution(context.Background(), time.Now().UTC()); err != nil {
 		_ = store.Close()
 		return nil, err
@@ -286,6 +287,9 @@ func New(cfg config.Config) (*App, error) {
 		}
 		serverSvc.CheckConfiguredAgents(checkCtx)
 	}()
+	// RunEngine: unified worker owns deploy due/wake; claim/Execute goes
+	// Manager.Run → application_deploy Execute → Controller.RunJob (ENG-RUN-001).
+	applicationSvc.BindRunEngineWorker(taskWorker)
 	if err := applicationSvc.StartOrchestrator(context.Background()); err != nil {
 		checkCancel()
 		<-checkDone

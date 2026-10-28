@@ -486,7 +486,7 @@ export function mutateAsset(id: string, operation: 'reissue' | 'regenerate') {
   const asset = mockKeyAssets.find((item) => item.id === id);
   if (!asset) return null;
   asset.updatedAt = now;
-  return { asset, taskId: `task-${operation}-${Date.now()}` };
+  return { asset, taskId: completedTask(`key-asset-${operation}`) };
 }
 
 export function deleteAsset(id: string) {

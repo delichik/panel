@@ -69,7 +69,7 @@
   - not-found 错误的精确翻译（英文 fallback 以 " not found" 结尾时也有兜底翻译）；
   - `remote_timeout` 翻译；
   - agent / ssh 相关错误的前缀翻译。
-  - 现状：全部已知 panelerr 错误码均已覆盖。本轮补充 `storage_share_*` 系列错误码（配置校验、分区、挂载、Agent 要求等静态词条 + 带服务器/应用名的前缀词条）与 `range_invalid` 中文文案中的 `24h` 取值；SSH 主机密钥错误（`ssh_host_key_mismatch` / `ssh_host_key_verification_failed`）在执行器侧剥离 x/crypto 的 `ssh: handshake failed:` 包装后再翻译，前缀匹配可命中；已删除无发射点的 `application_reconcile_collector_only` 词条。
+  - 现状：全部已知 panelerr 错误码均已覆盖。本轮补充 `storage_share_*` 系列错误码（配置校验、分区、挂载、Agent 要求等静态词条 + 带服务器/应用名的前缀词条）与 `range_invalid` 中文文案中的 `24h` 取值；SSH 主机密钥错误（`ssh_host_key_mismatch` / `ssh_host_key_verification_failed`）在执行器侧剥离 x/crypto 的 `ssh: handshake failed:` 包装后再翻译，前缀匹配可命中；已删除无发射点的 `application_reconcile_collector_only` 词条。应用协调不再写入摘要 “Monitoring application containers”；`taskSummaryTranslations` 仍保留该中英对照，供历史 event run 展示。
   - Tailscale 稳定错误码已补充简体中文翻译：`invalid_tailscale_auth_key`（密钥必须以 `tskey-` 开头且不含空格）、`invalid_tailscale_tag`（标签必须形如 `tag:name`）、`tailscale_container_unavailable`（Panel 不由 panel-init 监管）、`tailscale_config_write_failed`（写入容器期望态失败）、`tailscale_not_enabled`（需先启用节点 Tailscale）、`tailscale_agent_unsupported`（需升级该节点上的 Agent）、`tailscale_join_failed`（节点未能加入 tailnet）。
 - 任务错误：任务 error 在写入前对 panelerr 错误做 i18n 翻译，避免把当前语言下的文案固化进任务记录。
 - 本轮新增 `key_asset_system_managed` 后端错误码，已补充简体中文翻译；用于阻止普通密钥资产接口修改 Panel/Agent 系统托管资产。

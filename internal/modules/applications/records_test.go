@@ -22,10 +22,10 @@ func insertOperationRecordApplication(t *testing.T, svc *Service, ctx context.Co
 
 func insertOperationRecordJob(t *testing.T, svc *Service, ctx context.Context, appID string, intentID string, createdAt time.Time) {
 	t.Helper()
-	if _, err := svc.db.ExecContext(ctx, `INSERT INTO jobs(id,application_id,server_id,instance_id,action,state,intent_id,trigger_type,trigger_resource_type,trigger_resource_id,reason,desired_spec_json,last_steps_json,created_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		"job-"+appID, appID, "srv-a", "instance-"+appID, "apply", "pending", intentID,
-		"manual", "application", appID, "test", "{}", "[]", formatTime(createdAt), formatTime(createdAt)); err != nil {
+	if _, err := svc.db.ExecContext(ctx, `INSERT INTO event_runs(id,type,status,application_id,server_id,instance_id,action,intent_id,operation_id,trigger_type,trigger_resource_type,trigger_resource_id,reason,summary,desired_spec_json,last_steps_json,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"job-"+appID, "application_deploy", "queued", appID, "srv-a", "instance-"+appID, "apply", intentID, intentID,
+		"manual", "application", appID, "test", "test", "{}", "[]", formatTime(createdAt), formatTime(createdAt)); err != nil {
 		t.Fatalf("insert job %s: %v", appID, err)
 	}
 }
@@ -83,10 +83,10 @@ func TestOperationRecordsTolerateLegacyEmptyTimeColumns(t *testing.T) {
 	insertOperationRecordApplication(t, svc, ctx, "legacy-app", ApplicationKindUser, base)
 	// 模拟旧版本 orchestrator 把 jobs 可空时间列写成空串 ''（而非 NULL）的
 	// 存量数据；记录列表/详情必须能正常扫描，不能报 orm: cannot parse time。
-	if _, err := svc.db.ExecContext(ctx, `INSERT INTO jobs(id,application_id,server_id,instance_id,action,state,intent_id,trigger_type,trigger_resource_type,trigger_resource_id,reason,desired_spec_json,last_steps_json,next_run_at,lease_expires_at,started_at,finished_at,created_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		"legacy-job", "legacy-app", "srv-a", "inst-legacy", "apply", "pending", "intent-legacy",
-		"manual", "application", "legacy-app", "test", "{}", "[]", "", "", "", "", formatTime(base), formatTime(base)); err != nil {
+	if _, err := svc.db.ExecContext(ctx, `INSERT INTO event_runs(id,type,status,application_id,server_id,instance_id,action,intent_id,operation_id,trigger_type,trigger_resource_type,trigger_resource_id,reason,summary,desired_spec_json,last_steps_json,next_run_at,lease_expires_at,started_at,finished_at,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"legacy-job", "application_deploy", "queued", "legacy-app", "srv-a", "inst-legacy", "apply", "intent-legacy", "intent-legacy",
+		"manual", "application", "legacy-app", "test", "test", "{}", "[]", "", "", "", "", formatTime(base), formatTime(base)); err != nil {
 		t.Fatalf("insert legacy job with '' time columns: %v", err)
 	}
 

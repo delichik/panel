@@ -113,7 +113,7 @@ func TestSatisfiedPlanClearsDiagnosticButSkippedPlanDoesNot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.db.Exec(`UPDATE jobs SET state='succeeded',finished_at=updated_at WHERE application_id=?`, app.ID); err != nil {
+	if _, err := svc.db.Exec(`UPDATE event_runs SET status='completed',percentage=100,finished_at=updated_at WHERE type='application_deploy' AND application_id=?`, app.ID); err != nil {
 		t.Fatal(err)
 	}
 	for serverID := range servers.items {
@@ -184,7 +184,7 @@ func TestUncertainJobIsVisibleInRuntimeAndApplicationList(t *testing.T) {
 	if len(jobs) == 0 {
 		t.Fatal("no jobs")
 	}
-	if _, err := svc.db.Exec(`UPDATE jobs SET state='running',error_class='uncertainty',error_code='execution_result_unknown',error_message='Result not confirmed' WHERE id=?`, jobs[0].ID); err != nil {
+	if _, err := svc.db.Exec(`UPDATE event_runs SET status='running',error_class='uncertainty',error_code='execution_result_unknown',error_message='Result not confirmed',error='Result not confirmed' WHERE type='application_deploy' AND id=?`, jobs[0].ID); err != nil {
 		t.Fatal(err)
 	}
 	runtime, err := svc.Runtime(ctx, app.ID)

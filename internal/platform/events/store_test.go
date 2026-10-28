@@ -30,6 +30,76 @@ func openAppStore(t *testing.T) *database.Store {
 	return store
 }
 
+func TestLoggingUpsertDoesNotMutateJobsOrEventRuns(t *testing.T) {
+	dbStore := openAppStore(t)
+	db := dbStore.AppDB()
+	ctx := context.Background()
+	store := events.NewStore(db)
+
+	const sharedID = "evt-shared-id"
+	ts := "2026-01-01T00:00:00Z"
+	if _, err := db.ExecContext(ctx, `INSERT INTO event_runs(id, type, status, stage, summary, created_at, quiet)
+		VALUES (?, 'server_restart', 'running', '', 'work', ?, 0)`, sharedID, ts); err != nil {
+		t.Fatalf("insert event_runs: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO event_runs(
+		id, type, status, application_id, server_id, action, attempts, lease_token, execution_id, created_at, updated_at
+	) VALUES (?, 'application_deploy', 'running', 'app-1', 'srv-1', 'apply', 1, 'lease-token', 'fence-exec', ?, ?)`,
+		"job-"+sharedID, ts, ts); err != nil {
+		t.Fatalf("insert deploy run: %v", err)
+	}
+
+	if err := store.Upsert(ctx, logging.ContextRecord{
+		EventID:     sharedID,
+		Module:      "test",
+		ExecutionID: "log-correlation-not-fence",
+		Summary:     "log line",
+		State:       "running",
+	}); err != nil {
+		t.Fatalf("upsert events: %v", err)
+	}
+
+	var runStatus, runStage string
+	if err := db.QueryRowContext(ctx, `SELECT status, stage FROM event_runs WHERE id=?`, sharedID).Scan(&runStatus, &runStage); err != nil {
+		t.Fatalf("read event_runs: %v", err)
+	}
+	if runStatus != "running" || runStage != "" {
+		t.Fatalf("event_runs mutated by logging upsert: status=%q stage=%q", runStatus, runStage)
+	}
+	var jobState, lease, fence string
+	if err := db.QueryRowContext(ctx, `SELECT status, lease_token, execution_id FROM event_runs WHERE id=?`, "job-"+sharedID).Scan(&jobState, &lease, &fence); err != nil {
+		t.Fatalf("read deploy run: %v", err)
+	}
+	if jobState != "running" || lease != "lease-token" || fence != "fence-exec" {
+		t.Fatalf("deploy fence mutated by logging upsert: state=%q lease=%q fence=%q", jobState, lease, fence)
+	}
+}
+
+func TestFinishedDiagnosticStateNotReopenedByLogUpsert(t *testing.T) {
+	dbStore := openAppStore(t)
+	store := events.NewStore(dbStore.AppDB())
+	ctx := context.Background()
+	if err := store.Upsert(ctx, logging.ContextRecord{EventID: "fin-1", Module: "test", Summary: "start"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateFinished(ctx, "fin-1", "done", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Upsert(ctx, logging.ContextRecord{EventID: "fin-1", Module: "test", Summary: "late log", State: "running"}); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := store.Get(ctx, "fin-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.State != "done" || rec.FinishedAt == "" {
+		t.Fatalf("finished diagnostic reopened: %#v", rec)
+	}
+	if rec.Summary != "late log" {
+		t.Fatalf("summary should still update: %#v", rec)
+	}
+}
+
 func TestContextStoreUpsertAndTouch(t *testing.T) {
 	dbStore := openAppStore(t)
 	store := events.NewStore(dbStore.AppDB())

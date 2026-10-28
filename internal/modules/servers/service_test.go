@@ -393,11 +393,9 @@ func TestDeleteServerClearsJobAndFacilityReferences(t *testing.T) {
 		"app_1", "app", 1, "name: app\nimage: nginx\n", "selected", `["`+srv.ID+`"]`, 1, "job_active", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
-	// jobs.server_id references servers(id) with ON DELETE RESTRICT, so any
-	// surviving job row makes the delete impossible.
-	for _, job := range []struct{ id, state string }{{"job_active", "pending"}, {"job_done", "succeeded"}} {
-		if _, err := store.AppDB().Exec(`INSERT INTO jobs(id,application_id,server_id,state,created_at,updated_at) VALUES(?,?,?,?,?,?)`,
-			job.id, "app_1", srv.ID, job.state, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
+	for _, job := range []struct{ id, status string }{{"job_active", "queued"}, {"job_done", "completed"}} {
+		if _, err := store.AppDB().Exec(`INSERT INTO event_runs(id,type,status,application_id,server_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`,
+			job.id, "application_deploy", job.status, "app_1", srv.ID, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -436,7 +434,7 @@ func TestDeleteServerClearsJobAndFacilityReferences(t *testing.T) {
 	}
 
 	var jobCount int
-	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM jobs WHERE server_id=?`, srv.ID).Scan(&jobCount); err != nil {
+	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM event_runs WHERE type='application_deploy' AND server_id=?`, srv.ID).Scan(&jobCount); err != nil {
 		t.Fatal(err)
 	}
 	if jobCount != 0 {
@@ -616,8 +614,8 @@ func TestDeleteServerKeepsApplicationDeletable(t *testing.T) {
 		"app_1", "app", 1, "name: app\nimage: nginx\n", "selected", `["`+srv.ID+`"]`, 1, "job_1", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AppDB().Exec(`INSERT INTO jobs(id,application_id,server_id,state,created_at,updated_at) VALUES(?,?,?,?,?,?)`,
-		"job_1", "app_1", srv.ID, "succeeded", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO event_runs(id,type,status,application_id,server_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`,
+		"job_1", "application_deploy", "completed", "app_1", srv.ID, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.AppDB().Exec(`INSERT INTO application_persistent_locations(application_id,server_id,created_at) VALUES(?,?,?)`,

@@ -37,18 +37,64 @@ func newOrchestratorTestDB(t *testing.T) *sql.DB {
 			last_error_detail TEXT NOT NULL DEFAULT '', last_error_at TEXT, last_error TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 		)`,
-		`CREATE TABLE jobs (
-			id TEXT PRIMARY KEY, application_id TEXT NOT NULL, server_id TEXT NOT NULL, instance_id TEXT NOT NULL,
-			action TEXT NOT NULL, desired_generation INTEGER NOT NULL DEFAULT 0, desired_spec_hash TEXT NOT NULL DEFAULT '',
-			desired_revision_id TEXT NOT NULL DEFAULT '', desired_spec_json TEXT NOT NULL DEFAULT '{}',
-			remove_data INTEGER NOT NULL DEFAULT 0, force_nonce INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL,
-			priority INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0, next_run_at TEXT,
-			lease_owner TEXT NOT NULL DEFAULT '', lease_token TEXT NOT NULL DEFAULT '', lease_expires_at TEXT,
-			execution_id TEXT NOT NULL DEFAULT '', intent_id TEXT NOT NULL DEFAULT '', trigger_type TEXT NOT NULL DEFAULT '',
-			trigger_resource_type TEXT NOT NULL DEFAULT '', trigger_resource_id TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '',
-			idempotency_key TEXT NOT NULL DEFAULT '', last_stage TEXT NOT NULL DEFAULT '', last_steps_json TEXT NOT NULL DEFAULT '[]',
-			error_code TEXT NOT NULL DEFAULT '', error_class TEXT NOT NULL DEFAULT '', error_message TEXT NOT NULL DEFAULT '',
-			error_detail TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, updated_at TEXT NOT NULL
+		`CREATE TABLE event_runs (
+			id TEXT PRIMARY KEY,
+			operation_id TEXT NOT NULL DEFAULT '',
+			type TEXT NOT NULL,
+			parent_task_id TEXT NOT NULL DEFAULT '',
+			child_index INTEGER NOT NULL DEFAULT 0,
+			child_count INTEGER NOT NULL DEFAULT 0,
+			execution_mode TEXT NOT NULL DEFAULT '',
+			concurrency_key TEXT NOT NULL DEFAULT '',
+			schedule_key TEXT NOT NULL DEFAULT '',
+			quiet INTEGER NOT NULL DEFAULT 0,
+			server_id TEXT NOT NULL DEFAULT '',
+			node_id TEXT NOT NULL DEFAULT '',
+			resource_type TEXT NOT NULL DEFAULT '',
+			resource_id TEXT NOT NULL DEFAULT '',
+			trigger_type TEXT NOT NULL DEFAULT '',
+			trigger_resource_type TEXT NOT NULL DEFAULT '',
+			trigger_resource_id TEXT NOT NULL DEFAULT '',
+			trigger_task_id TEXT NOT NULL DEFAULT '',
+			triggered_by TEXT NOT NULL DEFAULT '',
+			params_json TEXT NOT NULL DEFAULT '{}',
+			metadata_json TEXT NOT NULL DEFAULT '{}',
+			status TEXT NOT NULL,
+			stage TEXT NOT NULL DEFAULT '',
+			percentage REAL,
+			summary TEXT NOT NULL DEFAULT '',
+			error TEXT NOT NULL DEFAULT '',
+			retry_count INTEGER NOT NULL DEFAULT 0,
+			max_retries INTEGER NOT NULL DEFAULT 0,
+			next_run_at TEXT,
+			created_at TEXT NOT NULL,
+			started_at TEXT,
+			finished_at TEXT,
+			application_id TEXT NOT NULL DEFAULT '',
+			instance_id TEXT NOT NULL DEFAULT '',
+			action TEXT NOT NULL DEFAULT '',
+			desired_generation INTEGER NOT NULL DEFAULT 0,
+			desired_spec_hash TEXT NOT NULL DEFAULT '',
+			desired_revision_id TEXT NOT NULL DEFAULT '',
+			desired_spec_json TEXT NOT NULL DEFAULT '{}',
+			remove_data INTEGER NOT NULL DEFAULT 0,
+			force_nonce INTEGER NOT NULL DEFAULT 0,
+			priority INTEGER NOT NULL DEFAULT 0,
+			attempts INTEGER NOT NULL DEFAULT 0,
+			lease_owner TEXT NOT NULL DEFAULT '',
+			lease_token TEXT NOT NULL DEFAULT '',
+			lease_expires_at TEXT,
+			execution_id TEXT NOT NULL DEFAULT '',
+			intent_id TEXT NOT NULL DEFAULT '',
+			reason TEXT NOT NULL DEFAULT '',
+			idempotency_key TEXT NOT NULL DEFAULT '',
+			last_stage TEXT NOT NULL DEFAULT '',
+			last_steps_json TEXT NOT NULL DEFAULT '[]',
+			error_code TEXT NOT NULL DEFAULT '',
+			error_class TEXT NOT NULL DEFAULT '',
+			error_message TEXT NOT NULL DEFAULT '',
+			error_detail TEXT NOT NULL DEFAULT '',
+			updated_at TEXT
 		)`,
 	}
 	for _, statement := range statements {
@@ -62,6 +108,10 @@ func newOrchestratorTestDB(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`CREATE UNIQUE INDEX uq_test_application_revisions_app_generation ON application_revisions(application_id,generation)`); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX uq_event_runs_active_app_server ON event_runs(application_id, server_id) WHERE type = 'application_deploy' AND status IN ('queued','running','failed_retryable')`); err != nil {
 		db.Close()
 		t.Fatal(err)
 	}
@@ -87,8 +137,8 @@ func insertOrchestratorTestRows(t *testing.T, db *sql.DB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = db.Exec(`INSERT INTO jobs(id,application_id,server_id,instance_id,action,desired_generation,desired_spec_hash,desired_revision_id,desired_spec_json,state,created_at,updated_at)
-		VALUES('job-1','app-1','srv-1','inst-1','apply',1,'hash-1','rev-1','{"image":"one"}','pending',?,?)`, now, now)
+	_, err = db.Exec(`INSERT INTO event_runs(id,operation_id,type,status,application_id,server_id,node_id,resource_type,resource_id,instance_id,action,desired_generation,desired_spec_hash,desired_revision_id,desired_spec_json,created_at,updated_at)
+		VALUES('job-1','job-1','application_deploy','queued','app-1','srv-1','srv-1','application','app-1','inst-1','apply',1,'hash-1','rev-1','{"image":"one"}',?,?)`, now, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +260,7 @@ func TestPlannerUpdatesDesiredAndMergesPendingJob(t *testing.T) {
 		t.Fatalf("planner did not merge active pending job: %#v", result)
 	}
 	var desiredState, action string
-	if err := db.QueryRow(`SELECT i.desired_state,j.action FROM application_instances i JOIN jobs j ON j.id=? WHERE i.id=?`, result.Job.ID, "inst-1").Scan(&desiredState, &action); err != nil {
+	if err := db.QueryRow(`SELECT i.desired_state,j.action FROM application_instances i JOIN event_runs j ON j.type='application_deploy' AND j.id=? WHERE i.id=?`, result.Job.ID, "inst-1").Scan(&desiredState, &action); err != nil {
 		t.Fatal(err)
 	}
 	if desiredState != DesiredStopped || action != ActionStop {
@@ -241,7 +291,7 @@ func TestEnsureRevisionAndPlanBatchIsAtomic(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM application_revisions WHERE application_id='app-1'`).Scan(&revisionCount); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM jobs WHERE application_id='app-1'`).Scan(&jobCount); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM event_runs WHERE type='application_deploy' AND application_id='app-1'`).Scan(&jobCount); err != nil {
 		t.Fatal(err)
 	}
 	if revisionCount != 1 || jobCount != 1 {

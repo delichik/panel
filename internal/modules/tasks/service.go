@@ -298,7 +298,27 @@ func (s *Service) Start(ctx context.Context, taskID string) error {
 }
 
 func (s *Service) claimExecution(ctx context.Context, taskID string) (bool, error) {
+	task, err := s.Get(ctx, taskID)
+	if err != nil {
+		return false, err
+	}
+	if def, ok := s.Registry().Definition(task.Type); ok && normalizeRecoveryPolicy(def.RecoveryPolicy) == RecoveryRemoteFence {
+		// Remote-fence deploy Runs: Store.Claim owns status/lease/attempts.
+		// Manager only takes the in-process execution lock so orphan checks
+		// see a live worker without racing the lease fence (ENG-RUN-001).
+		return s.claimRemoteFenceExecution(taskID)
+	}
 	return s.startExecution(ctx, taskID)
+}
+
+func (s *Service) claimRemoteFenceExecution(taskID string) (bool, error) {
+	s.runningMu.Lock()
+	defer s.runningMu.Unlock()
+	if _, exists := s.runningExecutions[taskID]; exists {
+		return false, nil
+	}
+	s.registerRunningExecutionLocked(taskID)
+	return true, nil
 }
 
 func (s *Service) startExecution(ctx context.Context, taskID string) (bool, error) {
@@ -667,10 +687,33 @@ func (s *Service) SetTriggeredBy(ctx context.Context, taskID, triggeredBy string
 		UpdateColumns(ctx, map[string]any{"triggered_by": triggeredBy})
 }
 
-// CleanupRetained is retained for internal callers during the control-plane
-// transition. Audit evidence and its execution context are never age-deleted.
+// CleanupRetained deletes terminal generic Runs older than retention
+// (TASK-CLEAN-001 / ENG-RET-001 class 2). It never deletes application_deploy
+// rows (class 3), active/non-terminal rows, or diagnostic AppDB events.
 func (s *Service) CleanupRetained(ctx context.Context, retention time.Duration) (int64, error) {
-	return 0, nil
+	if s == nil || s.db == nil || retention <= 0 {
+		return 0, nil
+	}
+	cutoff := time.Now().UTC().Add(-retention).Format(time.RFC3339Nano)
+	args := append([]any{}, stringArgs(terminalStatuses)...)
+	args = append(args, cutoff)
+	res, err := orm.RawExec(ctx, s.db, `
+DELETE FROM event_runs
+WHERE type <> 'application_deploy'
+  AND status IN (`+placeholders(len(terminalStatuses))+`)
+  AND finished_at IS NOT NULL AND finished_at <> ''
+  AND finished_at < ?`, args...)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if n > 0 {
+		s.invalidateAllFirstActiveKeys()
+	}
+	return n, nil
 }
 
 func (s *Service) Get(ctx context.Context, taskID string) (Task, error) {
@@ -924,6 +967,14 @@ func (s *Service) FailRunningWithoutExecution(ctx context.Context, now time.Time
 	for _, taskID := range taskIDs {
 		if _, ok := s.runningExecutions[taskID]; ok {
 			continue
+		}
+		task, getErr := s.Get(ctx, taskID)
+		if getErr == nil {
+			if def, ok := s.Registry().Definition(task.Type); ok && normalizeRecoveryPolicy(def.RecoveryPolicy) == RecoveryRemoteFence {
+				// Deploy-style remote-fence recovery keeps lease/token and awaits
+				// Agent evidence; the local orphan loop must not mark uncertain.
+				continue
+			}
 		}
 		res, err := orm.RawExec(ctx, s.db, `UPDATE event_runs SET stage='uncertain', error=?, next_run_at=?, finished_at=NULL WHERE id=? AND status=? AND stage<>'uncertain'`,
 			message, deadline, taskID, StatusRunning)

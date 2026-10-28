@@ -43,7 +43,7 @@
 - `CRT-ACME-007`：首次签发失败置status=failed并保存lastError；重新签发失败只更新lastError且保留上一份issued材料与可用状态，不得先破坏旧证书。
 - `CRT-ACME-008`：ACME使用DNS-01；challenge创建后无论授权、finalize、取消或超时都必须尝试清理。账户私钥跨签发复用，账户已存在时通过GetReg恢复而不是报失败。
 - `CRT-ACME-009`：签发/重签/续签必须把账号、订单、challenge、等待、清理和finalize阶段写入任务步骤/metadata，日志不得包含token、账户私钥或证书私钥。
-- `CRT-ACME-010`：手动renew必须有存在的证书并创建 `certificate_renew`；30分钟周期仅为autoRenew、nextRenewAt已到的证书创建共享operation批次；同一证书的 issue/reissue/renew 必须共用排他并发键，不得并行互相覆盖。
+- `CRT-ACME-010`：手动renew必须有存在的证书并创建 `certificate_renew`；`POST /certificates/{id}/renew` 返回 202 与 `taskId`，`renewed` 为 false，经已注册 `RenewTask` 的 `CreateAndRun` 异步执行，不得在 HTTP 内同步跑完 ACME。30分钟周期仅为autoRenew、nextRenewAt已到的证书创建共享operation批次；同一证书的 issue/reissue/renew 必须共用排他并发键，不得并行互相覆盖。已有活跃生命周期任务时复用该任务。
 - `CRT-ACME-011`：续签成功才替换ACME资产并更新生命周期（含 `status=issued`、有效期、nextRenewAt，并清 lastError）；任何失败保留旧材料并写lastError。随后普通应用刷新与反向代理证书协调必须分别尝试，一个失败不能阻止另一个尝试。
 - `CRT-ACME-012`：仅issued证书进入内部文件目录，source稳定为 `certificate:<id>:certificate|private_key`；未签发、失败或不存在证书不可读取。
 - `CRT-ACME-013`：删除前必须检查应用文件和反向代理引用；在用返回409 `certificate_in_use`。未引用时先删除其ACME资产再删生命周期记录，普通key-assets API不可代管该资产。
@@ -54,7 +54,7 @@
 - `CRT-SELF-001`：`GET /self-signed-certificates` 只分页返回用户CA/TLS摘要，排除systemManaged、agent_tls、panel_tls和ACME；列表不得含私钥、metadata、文件路径和引用详情。
 - `CRT-SELF-002`：创建CA必须要求名称、commonName、有效期和受支持算法/位数；成功生成可签发CA证书与加密私钥，失败不得留下孤立行。
 - `CRT-SELF-003`：创建leaf必须引用用户CA、至少提供一个有效DNS/IP身份并有正有效期；证书必须由该CA签名，父子关系、指纹和有效期一致持久化。
-- `CRT-SELF-004`：续期只允许有父CA的leaf，保留身份与相对有效期语义并生成新key/cert；成功后刷新引用应用，失败保留旧材料。
+- `CRT-SELF-004`：续期只允许有父CA的leaf，保留身份与相对有效期语义并生成新key/cert。HTTP 仍同步返回 200 与新证书：服务通过已注册的 `key_asset_tls_reissue` Execute（`CreateAndRun`）执行，任务成功后再读取资产。失败保留旧材料并返回错误，成功后刷新引用应用。
 - `CRT-SELF-005`：删除沿用key asset安全规则：有子证书的CA返回 `key_asset_ca_has_children`，存在应用/代理引用返回 `key_asset_in_use`，系统或ACME资产不能从该工作流删除。
 
 ## 6. 统一密钥资产列表与创建
@@ -73,20 +73,20 @@
 
 - `KAS-FILE-001`：下载只允许资产类型声明的kind；证书、公钥用0644语义，私钥用0600语义；私钥HTTP响应必须禁用缓存并使用安全basename文件名。
 - `KAS-FILE-002`：统一下载分发必须正确区分 `/key-assets/{id}/files/{kind}` 与 `/key-assets/exports/{taskId}/download`；未知三段路径返回JSON/HTTP 404，不得触发ServeMux冲突或HTML回退。
-- `KAS-MUT-001`：TLS reissue只允许有父CA的用户TLS；SSH regenerate只允许用户SSH key；同一资产已有操作时返回409 `key_asset_operation_in_progress`。
-- `KAS-MUT-002`：reissue/regenerate必须先生成并验证新材料，再原子替换并刷新引用应用；失败保留旧材料，任务不得标completed。
+- `KAS-MUT-001`：TLS reissue只允许有父CA的用户TLS；SSH regenerate只允许用户SSH key。校验通过后 `POST .../reissue|regenerate` 返回 202 与 `taskId`（响应里的 asset 是受理时快照）。工作由已注册 Execute 经 `CreateAndRun` 执行；同一资产已有操作时返回409 `key_asset_operation_in_progress`。新材料在任务完成后才可读。
+- `KAS-MUT-002`：reissue/regenerate必须先生成并验证新材料，再原子替换并刷新引用应用；失败保留旧材料，任务不得标completed。进程重启后 queued/running 由注册 executor 恢复。
 - `KAS-DEL-001`：删除CA前无子项、删除任意资产前无引用；失败返回稳定409且保留资产。删除不存在返回404；成功后内部文件目录不可再解析。
 
 ## 8. 批量导出与导入
 
-- `KAS-EXP-001`：导出必须要求至少12字符密码；assetIds裁剪去重，任一ID不存在、为ACME或systemManaged时整体失败，不生成可下载归档。
-- `KAS-EXP-002`：归档必须认证加密并包含所选资产及父关系/材料；文件保存于受控export目录、0600权限，LogDB记录taskId、文件、30分钟expiresAt，任务完成后才可下载。
+- `KAS-EXP-001`：导出必须要求至少12字符密码；assetIds裁剪去重，任一ID不存在、为ACME或systemManaged时在创建任务前整体失败，不生成可下载归档。
+- `KAS-EXP-002`：`POST /key-assets/exports` 返回 202 与 `taskId`，归档由已注册 `key_asset_export` executor 异步生成。归档必须认证加密并包含所选资产及父关系/材料；文件保存于受控export目录、0600权限，LogDB记录taskId、文件、30分钟expiresAt，任务完成后才可下载。归档密码不得以明文写入任务参数、日志或响应；任务参数只保存 secret store 密文。
 - `KAS-EXP-003`：下载必须验证任务类型和completed状态、记录未过期、路径仍在export目录且文件存在；任一失败统一不存在，过期时删除记录和文件。
 - `KAS-IMP-003`：preflight multipart必须有归档和密码；解密前验证格式、KDF、salt/nonce/ciphertext和认证标签，密码错误或篡改不得产生plan。
 - `KAS-IMP-004`：preflight必须解析全部资产、父关系、ID/名称冲突、standalone TLS与在用覆盖风险，生成30分钟内存plan和0600最小元数据文件；不得把解密材料返回前端。
-- `KAS-IMP-005`：execute仅接受有效未过期plan和 `skip_existing|generate_new_id|overwrite_existing`；名称指向不同ID的冲突不可自动覆盖，在用覆盖必须有显式危险确认。
+- `KAS-IMP-005`：execute仅接受有效未过期plan和 `skip_existing|generate_new_id|overwrite_existing`；非法策略、名称指向不同ID的冲突、缺少在用覆盖确认必须在创建任务前拒绝。合法请求返回 202 与 `taskId`，导入由已注册 `key_asset_import` executor 执行。
 - `KAS-IMP-006`：generate_new_id必须重映射冲突ID及包内父子关系并生成不冲突名称；skip不得破坏其他待导入依赖；overwrite不得覆盖system/ACME资产。
-- `KAS-IMP-007`：导入执行必须以任务记录结果，成功后消费plan并刷新引用方；同一已消费/过期plan重放不得重复导入。
+- `KAS-IMP-007`：导入执行必须以任务记录结果，成功后消费plan并刷新引用方；同一已消费/过期plan重放不得重复导入。plan 资产仍只在内存中，进程在 executor 完成前重启时任务失败，不得把解密材料写入磁盘以便重放。
 
 ## 9. 系统资产、主密钥与验收证据
 
@@ -94,7 +94,7 @@
 - `KAS-SYS-002`：环境与文件主密钥同时存在但不一致、格式错误，或数据库已有任一key asset/DNS/SSH密文而密钥缺失时，Panel必须拒绝启动，不得生成新key覆盖。
 - `KAS-SYS-003`：密文必须使用XChaCha20-Poly1305且把asset ID、类型、字段作为associated data；把密文复制到另一资产/字段必须解密失败。
 - `KAS-SYS-004`：内置Agent CA/client/节点证书与Panel CA/TLS必须带systemManaged和明确systemScope；普通工作流不可变更，只能由 `GET /key-assets/system` 查看并由 `POST .../{id}/reset`创建任务。
-- `KAS-SYS-005`：Panel CA/TLS为独立RSA-2048链，不复用Ed25519 Agent CA；缺失或失效时按各自scope重建，重置级联行为必须符合服务器合同。
+- `KAS-SYS-005`：Panel CA/TLS为独立RSA-2048链，不复用Ed25519 Agent CA；缺失或失效时按各自scope重建，重置级联行为必须符合服务器合同。`panel-ca`/`panel-tls` 重置必须 `CreateAndRun` 已注册 Execute 的 `panel_tls_reconcile`（参数 `reset=true`，`ResourceID` 为证书 ID），不得另起 goroutine；自定义 `panel.tlsCertificateId` 保持优先。
 - `DNS-EVD-001`：测试必须覆盖列表不触网/不解密、域保存前provider验证、记录快照纯本地、同类型upsert、CNAME冲突、跨zone隔离和用户记录保护。
 - `CRT-EVD-001`：测试必须覆盖签发/重签/续签成功与失败保旧材料、challenge清理、账户复用、删除引用保护和自动续签输入收集。
 - `KAS-EVD-001`：测试必须覆盖普通/ACME/system可见性矩阵、主密钥fail-closed、私钥不泄漏、文件kind/cache、归档篡改/过期/路径逃逸、导入冲突策略及同资产互斥。

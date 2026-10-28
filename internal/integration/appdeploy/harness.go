@@ -180,7 +180,7 @@ type JobRow struct {
 	UpdatedAt         time.Time
 }
 
-const jobSelect = "SELECT id,application_id,server_id,instance_id,action,state,intent_id,trigger_type,error_code,error_class,error_message,error_detail,desired_generation,attempts,remove_data,next_run_at,created_at,updated_at FROM jobs"
+const jobSelect = "SELECT id,application_id,server_id,instance_id,action,CASE status WHEN 'queued' THEN 'pending' WHEN 'completed' THEN 'succeeded' ELSE status END,intent_id,trigger_type,error_code,error_class,error_message,error_detail,desired_generation,attempts,remove_data,next_run_at,created_at,updated_at FROM event_runs"
 
 func scanJobRows(rows interface{ Scan(...any) error }) (JobRow, error) {
 	var j JobRow
@@ -204,7 +204,7 @@ func scanJobRows(rows interface{ Scan(...any) error }) (JobRow, error) {
 
 func (h *Harness) queryJobs(where string, args ...any) []JobRow {
 	h.T.Helper()
-	rows, err := h.Store.AppDB().QueryContext(h.ctx, jobSelect+" WHERE "+where, args...)
+	rows, err := h.Store.AppDB().QueryContext(h.ctx, jobSelect+" WHERE type='application_deploy' AND "+where, args...)
 	if err != nil {
 		h.T.Fatal(err)
 	}
@@ -296,7 +296,7 @@ func (h *Harness) WaitNoActiveJob(appID, serverID string) {
 	h.T.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if len(h.queryJobs("application_id=? AND server_id=? AND state IN ('pending','running','failed_retryable')", appID, serverID)) == 0 {
+		if len(h.queryJobs("application_id=? AND server_id=? AND status IN ('queued','running','failed_retryable')", appID, serverID)) == 0 {
 			return
 		}
 		time.Sleep(15 * time.Millisecond)

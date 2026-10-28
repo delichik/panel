@@ -28,11 +28,11 @@ type FacilityDeployment struct {
 // Local projections only: opening or polling configuration never fetches logs.
 func (s *Service) deploymentDiagnostics(ctx context.Context, configured []string) ([]FacilityDeployment, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT i.server_id,COALESCE(s.name,''),i.observed_state,i.observed_at,
- COALESCE(j.id,''),COALESCE(j.intent_id,''),COALESCE(j.state,''),COALESCE(j.last_stage,''),COALESCE(j.attempts,0),j.next_run_at,
+ COALESCE(j.id,''),COALESCE(j.intent_id,''),COALESCE(CASE j.status WHEN 'queued' THEN 'pending' WHEN 'completed' THEN 'succeeded' ELSE j.status END,''),COALESCE(j.last_stage,''),COALESCE(j.attempts,0),j.next_run_at,
  COALESCE(j.error_code,''),COALESCE(j.error_class,''),COALESCE(j.error_message,''),COALESCE(j.error_detail,''),j.created_at,j.updated_at,
  COALESCE(j.action,''),COALESCE(j.desired_generation,0),COALESCE(j.desired_spec_hash,''),COALESCE(j.trigger_type,'')
  FROM application_instances i LEFT JOIN servers s ON s.id=i.server_id
- LEFT JOIN jobs j ON j.id=(SELECT x.id FROM jobs x WHERE x.application_id=i.application_id AND x.server_id=i.server_id ORDER BY CASE WHEN x.state IN ('pending','running','failed_retryable') THEN 0 ELSE 1 END,x.created_at DESC,x.id DESC LIMIT 1)
+ LEFT JOIN event_runs j ON j.id=(SELECT x.id FROM event_runs x WHERE x.type='application_deploy' AND x.application_id=i.application_id AND x.server_id=i.server_id ORDER BY CASE WHEN x.status IN ('queued','running','failed_retryable') THEN 0 ELSE 1 END,x.created_at DESC,x.id DESC LIMIT 1)
  WHERE i.application_id=? ORDER BY i.server_id`, proxyApplicationID)
 	if err != nil {
 		return nil, err

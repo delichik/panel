@@ -27,10 +27,10 @@ import (
 	panelerr "panel/internal/platform/errors"
 )
 
-func jobsForApplication(t *testing.T, svc *Service, appID string) []models.Job {
+func jobsForApplication(t *testing.T, svc *Service, appID string) []models.Task {
 	t.Helper()
-	var jobs []models.Job
-	if err := orm.New(svc.db).From("jobs").Where("application_id=?", appID).All(context.Background(), &jobs); err != nil {
+	var jobs []models.Task
+	if err := orm.New(svc.db).From("event_runs").Where("type=?", "application_deploy").And("application_id=?", appID).All(context.Background(), &jobs); err != nil {
 		t.Fatal(err)
 	}
 	return jobs
@@ -136,7 +136,7 @@ func TestDeployBypassesAutomaticReconcileBackoff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.db.Exec(`UPDATE jobs SET state='succeeded',finished_at=updated_at WHERE application_id=?`, app.ID); err != nil {
+	if _, err := svc.db.Exec(`UPDATE event_runs SET status='completed',stage=CASE WHEN TRIM(COALESCE(last_stage,''))='' THEN 'completed' ELSE last_stage END,percentage=100,finished_at=updated_at WHERE type='application_deploy' AND application_id=?`, app.ID); err != nil {
 		t.Fatal(err)
 	}
 	nextRunAt := time.Now().UTC().Add(10 * time.Minute).Format(time.RFC3339Nano)
@@ -153,7 +153,7 @@ func TestDeployBypassesAutomaticReconcileBackoff(t *testing.T) {
 		t.Fatalf("manual deploy must plan despite automatic backoff, got %#v", result)
 	}
 	var jobs int
-	if err := svc.db.QueryRow(`SELECT COUNT(*) FROM jobs WHERE application_id=?`, app.ID).Scan(&jobs); err != nil {
+	if err := svc.db.QueryRow(`SELECT COUNT(*) FROM event_runs WHERE type='application_deploy' AND application_id=?`, app.ID).Scan(&jobs); err != nil {
 		t.Fatal(err)
 	}
 	if jobs == 0 {
@@ -171,7 +171,7 @@ func TestDeployReportsNoChangeWhenAllTargetsAreSatisfied(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.db.Exec(`UPDATE jobs SET state='succeeded',finished_at=updated_at WHERE application_id=?`, app.ID); err != nil {
+	if _, err := svc.db.Exec(`UPDATE event_runs SET status='completed',stage=CASE WHEN TRIM(COALESCE(last_stage,''))='' THEN 'completed' ELSE last_stage END,percentage=100,finished_at=updated_at WHERE type='application_deploy' AND application_id=?`, app.ID); err != nil {
 		t.Fatal(err)
 	}
 	for serverID := range servers.items {
@@ -1252,7 +1252,7 @@ func TestRuntimeRefreshesInstanceStatuses(t *testing.T) {
 	// This test exercises refreshed instance aggregation, not an in-flight
 	// deployment. Finish the planner-only fixture Jobs so they do not correctly
 	// keep the runtime in deploying state.
-	if _, err := svc.db.Exec(`UPDATE jobs SET state='succeeded',finished_at=updated_at WHERE application_id=?`, app.ID); err != nil {
+	if _, err := svc.db.Exec(`UPDATE event_runs SET status='completed',stage=CASE WHEN TRIM(COALESCE(last_stage,''))='' THEN 'completed' ELSE last_stage END,percentage=100,finished_at=updated_at WHERE type='application_deploy' AND application_id=?`, app.ID); err != nil {
 		t.Fatal(err)
 	}
 	instanceID := app.ID + "-srv-a"
@@ -1292,12 +1292,12 @@ func TestRuntimeExposesLatestTerminalJobFailure(t *testing.T) {
 	if len(jobs) == 0 {
 		t.Fatal("expected planned jobs")
 	}
-	if _, err := svc.db.Exec(`UPDATE jobs SET state='succeeded',finished_at=?,updated_at=? WHERE application_id=?`,
+	if _, err := svc.db.Exec(`UPDATE event_runs SET status='completed',percentage=100,finished_at=?,updated_at=? WHERE type='application_deploy' AND application_id=?`,
 		time.Now().UTC().Add(-time.Minute).Format(time.RFC3339Nano), time.Now().UTC().Add(-time.Minute).Format(time.RFC3339Nano), app.ID); err != nil {
 		t.Fatal(err)
 	}
 	failedAt := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := svc.db.Exec(`UPDATE jobs SET state='failed',attempts=3,last_stage='start_container',error_code='container_start_failed',error_class='runtime',error_message='container exited immediately',error_detail='exit code 1',next_run_at=NULL,finished_at=?,updated_at=? WHERE id=?`, failedAt, failedAt, jobs[0].ID); err != nil {
+	if _, err := svc.db.Exec(`UPDATE event_runs SET status='failed',stage='start_container',attempts=3,last_stage='start_container',error_code='container_start_failed',error_class='runtime',error_message='container exited immediately',error='container exited immediately',error_detail='exit code 1',next_run_at=NULL,finished_at=?,updated_at=? WHERE type='application_deploy' AND id=?`, failedAt, failedAt, jobs[0].ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1328,11 +1328,11 @@ func TestRuntimeExposesRetryableJobStateAndSchedule(t *testing.T) {
 	if len(jobs) == 0 {
 		t.Fatal("expected planned jobs")
 	}
-	if _, err := svc.db.Exec(`UPDATE jobs SET state='succeeded',finished_at=updated_at WHERE application_id=?`, app.ID); err != nil {
+	if _, err := svc.db.Exec(`UPDATE event_runs SET status='completed',stage=CASE WHEN TRIM(COALESCE(last_stage,''))='' THEN 'completed' ELSE last_stage END,percentage=100,finished_at=updated_at WHERE type='application_deploy' AND application_id=?`, app.ID); err != nil {
 		t.Fatal(err)
 	}
 	nextRunAt := time.Now().UTC().Add(30 * time.Second).Truncate(time.Millisecond)
-	if _, err := svc.db.Exec(`UPDATE jobs SET state='failed_retryable',attempts=2,error_code='agent_unavailable',error_class='agent',error_message='agent connection failed',next_run_at=?,updated_at=? WHERE id=?`,
+	if _, err := svc.db.Exec(`UPDATE event_runs SET status='failed_retryable',attempts=2,error_code='agent_unavailable',error_class='agent',error_message='agent connection failed',error='agent connection failed',next_run_at=?,updated_at=? WHERE type='application_deploy' AND id=?`,
 		nextRunAt.Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano), jobs[0].ID); err != nil {
 		t.Fatal(err)
 	}
@@ -1832,7 +1832,7 @@ func TestGetApplicationOperationRecordHandlesEmptyStageTimes(t *testing.T) {
 		t.Fatal("expected planned jobs")
 	}
 	// 未结束的步骤：last_steps_json 里的步骤不带时间字段。
-	if _, err := svc.db.Exec(`UPDATE jobs SET last_steps_json=? WHERE id=?`,
+	if _, err := svc.db.Exec(`UPDATE event_runs SET last_steps_json=? WHERE type='application_deploy' AND id=?`,
 		`[{"name":"write_files","status":"running","detail":"detail"}]`, jobs[0].ID); err != nil {
 		t.Fatal(err)
 	}

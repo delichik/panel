@@ -34,6 +34,42 @@ func (*structuredErrorReconciler) Reconcile(context.Context, ReconcileRequestRPC
 	}, errors.New("agent connection refused")
 }
 
+func TestRunJobMissingStoreReturnsError(t *testing.T) {
+	ctrl := NewController(nil, nil, ControllerConfig{Owner: "test-owner"})
+	err := ctrl.RunJob(context.Background(), "missing-job")
+	if err == nil {
+		t.Fatal("expected error for unavailable store")
+	}
+}
+
+func TestRunJobMissingJobReturnsError(t *testing.T) {
+	db := newOrchestratorTestDB(t)
+	ctrl := NewController(NewStore(db), nil, ControllerConfig{Owner: "test-owner"})
+	err := ctrl.RunJob(context.Background(), "missing-job")
+	if err == nil {
+		t.Fatal("RunJob(missing job) returned nil, want error")
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("RunJob(missing job) error = %v, want sql.ErrNoRows", err)
+	}
+}
+
+func TestExternalScanWakeForwardsToUnifiedWorker(t *testing.T) {
+	ctrl := NewController(nil, nil, ControllerConfig{Owner: "test-owner"})
+	var wakes atomic.Int64
+	ctrl.SetExternalScan(func() { wakes.Add(1) })
+	ctrl.Wake()
+	ctrl.Wake()
+	if got := wakes.Load(); got != 2 {
+		t.Fatalf("expected external wake callbacks, got %d", got)
+	}
+	ctrl.SetExternalScan(nil)
+	ctrl.Wake() // internal wake chan; must not panic
+	if got := wakes.Load(); got != 2 {
+		t.Fatalf("cleared external wake must not fire, got %d", got)
+	}
+}
+
 // ORCH-CTRL-001/002: persistent controller errors are structured and rate limited.
 func TestControllerDiagnosticsAreStructuredAndRateLimited(t *testing.T) {
 	core, logs := observer.New(zap.ErrorLevel)
@@ -78,8 +114,8 @@ func TestControllerRetryTerminatesAfterMaxAttempts(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A stop job needs no revision lookup, so the fake reconciler is reached.
-	if _, err := db.Exec(`INSERT INTO jobs(id,application_id,server_id,instance_id,action,desired_generation,desired_spec_hash,desired_revision_id,desired_spec_json,state,created_at,updated_at)
-		VALUES('job-1','app-1','srv-1','inst-1','stop',1,'hash-1','','{}','pending',?,?)`, now, now); err != nil {
+	if _, err := db.Exec(`INSERT INTO event_runs(id,operation_id,type,status,application_id,server_id,node_id,resource_type,resource_id,instance_id,action,desired_generation,desired_spec_hash,desired_revision_id,desired_spec_json,created_at,updated_at)
+		VALUES('job-1','job-1','application_deploy','queued','app-1','srv-1','srv-1','application','app-1','inst-1','stop',1,'hash-1','','{}',?,?)`, now, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -103,7 +139,7 @@ func TestControllerRetryTerminatesAfterMaxAttempts(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		var state, code, message, detail string
-		if err := db.QueryRow(`SELECT state,error_code,error_message,error_detail FROM jobs WHERE id='job-1'`).Scan(&state, &code, &message, &detail); err != nil {
+		if err := db.QueryRow(`SELECT `+jobStateSQL+`,error_code,error_message,error_detail FROM event_runs WHERE type='application_deploy' AND id='job-1'`).Scan(&state, &code, &message, &detail); err != nil {
 			t.Fatal(err)
 		}
 		if state == JobFailed {
@@ -140,7 +176,7 @@ func TestControllerRetryTerminatesAfterMaxAttempts(t *testing.T) {
 func TestStructuredReconcileErrorUsesRetryPolicyInsteadOfUncertainty(t *testing.T) {
 	db := newOrchestratorTestDB(t)
 	insertOrchestratorTestRows(t, db)
-	if _, err := db.Exec(`UPDATE jobs SET action='stop',desired_revision_id='' WHERE id='job-1'`); err != nil {
+	if _, err := db.Exec(`UPDATE event_runs SET action='stop',desired_revision_id='' WHERE id='job-1'`); err != nil {
 		t.Fatal(err)
 	}
 	store := NewStore(db)
@@ -167,8 +203,8 @@ func TestControllerRetryableFailureStaysRetryableBelowMaxAttempts(t *testing.T) 
 		VALUES('inst-1','app-1','srv-1','panel-app','running',1,'hash-1','','{"image":"one"}',?,?)`, now, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO jobs(id,application_id,server_id,instance_id,action,desired_generation,desired_spec_hash,desired_revision_id,desired_spec_json,state,created_at,updated_at)
-		VALUES('job-1','app-1','srv-1','inst-1','stop',1,'hash-1','','{}','pending',?,?)`, now, now); err != nil {
+	if _, err := db.Exec(`INSERT INTO event_runs(id,operation_id,type,status,application_id,server_id,node_id,resource_type,resource_id,instance_id,action,desired_generation,desired_spec_hash,desired_revision_id,desired_spec_json,created_at,updated_at)
+		VALUES('job-1','job-1','application_deploy','queued','app-1','srv-1','srv-1','application','app-1','inst-1','stop',1,'hash-1','','{}',?,?)`, now, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -191,7 +227,7 @@ func TestControllerRetryableFailureStaysRetryableBelowMaxAttempts(t *testing.T) 
 	for {
 		var state string
 		var nextRun sql.NullString
-		if err := db.QueryRow(`SELECT state,next_run_at FROM jobs WHERE id='job-1'`).Scan(&state, &nextRun); err != nil {
+		if err := db.QueryRow(`SELECT `+jobStateSQL+`,next_run_at FROM event_runs WHERE type='application_deploy' AND id='job-1'`).Scan(&state, &nextRun); err != nil {
 			t.Fatal(err)
 		}
 		if state == JobFailedRetryable {
@@ -230,7 +266,7 @@ func (r *uncertainReconciler) ResolveExecution(context.Context, ReconcileRequest
 func TestUncertainExecutionIsResolvedWithoutRepeatingSideEffect(t *testing.T) {
 	db := newOrchestratorTestDB(t)
 	insertOrchestratorTestRows(t, db)
-	if _, err := db.Exec(`UPDATE jobs SET action='stop',desired_revision_id='' WHERE id='job-1'`); err != nil {
+	if _, err := db.Exec(`UPDATE event_runs SET action='stop',desired_revision_id='' WHERE id='job-1'`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`UPDATE application_instances SET desired_state='stopped',desired_revision_id='' WHERE id='inst-1'`); err != nil {
@@ -276,7 +312,7 @@ func TestUncertainExecutionIsResolvedWithoutRepeatingSideEffect(t *testing.T) {
 func TestUncertainExecutionFailsWhenEvidenceWindowExpires(t *testing.T) {
 	db := newOrchestratorTestDB(t)
 	insertOrchestratorTestRows(t, db)
-	if _, err := db.Exec(`UPDATE jobs SET action='stop',desired_revision_id='' WHERE id='job-1'`); err != nil {
+	if _, err := db.Exec(`UPDATE event_runs SET action='stop',desired_revision_id='' WHERE id='job-1'`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`UPDATE application_instances SET desired_state='stopped',desired_revision_id='' WHERE id='inst-1'`); err != nil {
@@ -307,7 +343,7 @@ func TestUncertainExecutionFailsWhenEvidenceWindowExpires(t *testing.T) {
 		t.Fatalf("evidence window must keep uncertainty: %#v", still)
 	}
 	past := time.Now().UTC().Add(-2 * time.Minute).Format(time.RFC3339Nano)
-	if _, err := db.Exec(`UPDATE jobs SET updated_at=? WHERE id='job-1'`, past); err != nil {
+	if _, err := db.Exec(`UPDATE event_runs SET updated_at=? WHERE id='job-1'`, past); err != nil {
 		t.Fatal(err)
 	}
 	if err := ctrl.process(ctx, "job-1"); err != nil {

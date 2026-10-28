@@ -28,13 +28,12 @@ import (
 )
 
 const (
-	TaskImageRefresh              = "image_refresh"
-	TaskImageUpgradeMany          = "application_image_upgrade_selected"
-	TaskImageUpgradeAll           = "application_image_upgrade_all"
-	TaskVolumeRefresh             = "volume_refresh"
-	TaskNetworkRefresh            = "network_refresh"
-	TaskApplicationReconcile      = "application_reconcile"
-	TaskApplicationReconcileBatch = "application_reconcile_batch"
+	TaskImageRefresh         = "image_refresh"
+	TaskImageUpgradeMany     = "application_image_upgrade_selected"
+	TaskImageUpgradeAll      = "application_image_upgrade_all"
+	TaskVolumeRefresh        = "volume_refresh"
+	TaskNetworkRefresh       = "network_refresh"
+	TaskApplicationReconcile = "application_reconcile"
 )
 
 const (
@@ -766,23 +765,11 @@ func (s *Service) DeleteUnusedVolumes(ctx context.Context, serverID string) (Ope
 }
 
 func (s *Service) RefreshVolumes(ctx context.Context, serverID, triggerType, operationID string) (tasks.Task, error) {
-	return s.startSimpleResourceRefresh(ctx, serverID, TaskVolumeRefresh, triggerType, operationID, "Refreshing volumes", "Volumes refreshed", func(runCtx context.Context, baseURL string) error {
-		items, err := s.agent.DockerVolumes(runCtx, baseURL)
-		if err != nil {
-			return err
-		}
-		return s.replaceResourceSnapshot(runCtx, serverID, "volumes", items)
-	})
+	return s.startSimpleResourceRefresh(ctx, serverID, TaskVolumeRefresh, triggerType, operationID, "Refreshing volumes")
 }
 
 func (s *Service) RefreshNetworks(ctx context.Context, serverID, triggerType, operationID string) (tasks.Task, error) {
-	return s.startSimpleResourceRefresh(ctx, serverID, TaskNetworkRefresh, triggerType, operationID, "Refreshing networks", "Networks refreshed", func(runCtx context.Context, baseURL string) error {
-		items, err := s.agent.DockerNetworks(runCtx, baseURL)
-		if err != nil {
-			return err
-		}
-		return s.replaceResourceSnapshot(runCtx, serverID, "networks", items)
-	})
+	return s.startSimpleResourceRefresh(ctx, serverID, TaskNetworkRefresh, triggerType, operationID, "Refreshing networks")
 }
 
 func (s *Service) RefreshImages(ctx context.Context, serverID, triggerType, operationID string) (tasks.Task, error) {
@@ -829,26 +816,19 @@ func (s *Service) SaveReportedImages(ctx context.Context, serverID string, items
 	return s.replaceResourceSnapshot(ctx, serverID, "images", items)
 }
 
+// TriggerApplicationReconcile plans AppDB Jobs directly. It does not create
+// application_reconcile or application_reconcile_batch event runs.
 func (s *Service) TriggerApplicationReconcile(ctx context.Context, trigger tasks.PeriodicTrigger) (tasks.Task, bool, error) {
-	if s.tasks == nil {
-		return tasks.Task{}, false, panelerr.Validation("task_service_unavailable", "Task service is unavailable")
+	if s == nil {
+		return tasks.Task{}, false, panelerr.Validation("application_reconciler_unavailable", "Application reconciler is unavailable")
 	}
 	if trigger.Type == "" {
 		trigger.Type = "manual"
 	}
-	batch, shouldRun, err := s.CollectApplicationReconcileInputs(ctx, trigger)
-	if err != nil || !shouldRun {
+	if _, err := s.CollectApplicationReconcileTasks(ctx, "", trigger); err != nil {
 		return tasks.Task{}, false, err
 	}
-	if batch.Type == "" {
-		batch.Type = TaskApplicationReconcile
-	}
-	if batch.TriggerType == "" {
-		batch.TriggerType = trigger.Type
-	}
-	manager := tasks.NewManager(s.tasks)
-	task, created, err := manager.CreateBatchAndRun(ctx, batch, tasks.Trigger{Type: batch.TriggerType, Manual: trigger.Manual, Periodic: true})
-	return task, created, err
+	return tasks.Task{}, false, nil
 }
 
 func (s *Service) RunImageRefreshTask(tc tasks.TaskContext) error {
@@ -864,9 +844,11 @@ func (s *Service) RunImageRefreshTask(tc tasks.TaskContext) error {
 	return nil
 }
 
+// CollectApplicationReconcileTasks plans drifted or explicitly requested
+// applications. The returned slice is always empty: planning is not an event run.
 func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string, trigger tasks.PeriodicTrigger) ([]tasks.CreateInput, error) {
 	ctx = logging.With(ctx, logging.Context{StreamID: logging.NewStreamID(), Module: "containers"})
-	if s.apps == nil || s.tasks == nil {
+	if s == nil || s.apps == nil {
 		return nil, nil
 	}
 	explicit := applicationReconcileTriggerPayload(trigger)
@@ -1331,7 +1313,7 @@ func (s *Service) refreshOperationResult(ctx context.Context, serverID, resource
 	return OperationResult{RefreshTaskID: task.ID}, nil
 }
 
-func (s *Service) startSimpleResourceRefresh(ctx context.Context, serverID, taskType, triggerType, operationID, summary, completedSummary string, refresh func(context.Context, string) error) (tasks.Task, error) {
+func (s *Service) startSimpleResourceRefresh(ctx context.Context, serverID, taskType, triggerType, operationID, summary string) (tasks.Task, error) {
 	if s.tasks == nil {
 		return tasks.Task{}, panelerr.Validation("task_service_unavailable", "Task service is unavailable")
 	}
@@ -1343,13 +1325,9 @@ func (s *Service) startSimpleResourceRefresh(ctx context.Context, serverID, task
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	if !created {
-		return task, nil
+	if created {
+		s.dispatchRegisteredTask(task)
 	}
-	if err := s.tasks.Start(ctx, task.ID); err != nil {
-		return tasks.Task{}, err
-	}
-	go s.runSimpleResourceRefresh(s.tasks.ExecutionContext(task.ID), task, serverID, completedSummary, refresh)
 	return task, nil
 }
 

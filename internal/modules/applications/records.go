@@ -12,9 +12,9 @@ import (
 	"time"
 )
 
-// 协调记录：记录页列表/详情直接聚合 AppDB jobs（按 intent_id 分组），不再
-// 读取旧 lifecycle 表。一个 intent（一次触发）对应一条协调记录，一个
-// application/server Job 对应一个目标。
+// 协调记录：记录页列表/详情直接聚合 AppDB event_runs 中的
+// application_deploy 行（按 intent_id 分组）。一个 intent（一次触发）对应
+// 一条协调记录，一个 application/server 部署 Run 对应一个目标。
 
 type OperationRecordFilter struct {
 	ApplicationID string
@@ -196,9 +196,20 @@ func (s *Service) GetApplicationOperationRecord(ctx context.Context, operationID
 	return OperationRecordDetail{}, panelerr.NotFound("application_operation")
 }
 
-// operationGroups 按 intent_id 聚合 AppDB jobs，并按过滤条件排序分页。
+func deployStatusToJobState(status string) string {
+	switch status {
+	case "queued":
+		return controlplane.JobPending
+	case "completed":
+		return controlplane.JobSucceeded
+	default:
+		return status
+	}
+}
+
+// operationGroups 按 intent_id 聚合部署 Run，并按过滤条件排序分页。
 func (s *Service) operationGroups(ctx context.Context, filter OperationRecordFilter) ([]operationGroup, error) {
-	query := orm.New(s.db).From("jobs")
+	query := orm.New(s.db).From("event_runs").Where("type=?", "application_deploy")
 	// 设施应用不属于面向普通用户的协调记录；这里在 SQL 侧同时排除全部
 	// facility 类型与保留 identity，避免详情接口通过子查询遗漏后再暴露。
 	query = query.Where(
@@ -218,7 +229,7 @@ func (s *Service) operationGroups(ctx context.Context, filter OperationRecordFil
 	if filter.To != nil {
 		query = query.Where("created_at <= ?", formatTime(filter.To.UTC()))
 	}
-	rows := []models.Job{}
+	rows := []models.Task{}
 	if err := query.OrderBy("created_at DESC", "id DESC").All(ctx, &rows); err != nil {
 		return nil, err
 	}
@@ -231,11 +242,11 @@ func (s *Service) operationGroups(ctx context.Context, filter OperationRecordFil
 		}
 		key := intent + "\x00" + m.ApplicationID
 		if idx, ok := index[key]; ok {
-			groups[idx].Jobs = append(groups[idx].Jobs, jobRecordRowFromModel(m))
+			groups[idx].Jobs = append(groups[idx].Jobs, jobRecordRowFromTask(m))
 			continue
 		}
 		index[key] = len(groups)
-		groups = append(groups, operationGroup{IntentID: intent, ApplicationID: m.ApplicationID, Jobs: []jobRecordRow{jobRecordRowFromModel(m)}})
+		groups = append(groups, operationGroup{IntentID: intent, ApplicationID: m.ApplicationID, Jobs: []jobRecordRow{jobRecordRowFromTask(m)}})
 	}
 	// 最新操作在前；同一 intent 内按服务器聚合。
 	sort.SliceStable(groups, func(i, j int) bool {
@@ -244,14 +255,18 @@ func (s *Service) operationGroups(ctx context.Context, filter OperationRecordFil
 	return groups, nil
 }
 
-func jobRecordRowFromModel(m models.Job) jobRecordRow {
+func jobRecordRowFromTask(m models.Task) jobRecordRow {
+	updated := m.CreatedAt
+	if m.UpdatedAt != nil {
+		updated = m.UpdatedAt.UTC()
+	}
 	return jobRecordRow{
 		ID:                m.ID,
 		ApplicationID:     m.ApplicationID,
 		ServerID:          m.ServerID,
 		InstanceID:        m.InstanceID,
 		Action:            m.Action,
-		State:             m.State,
+		State:             deployStatusToJobState(m.Status),
 		Attempt:           m.Attempts,
 		NextRunAt:         m.NextRunAt,
 		IntentID:          m.IntentID,
@@ -268,7 +283,7 @@ func jobRecordRowFromModel(m models.Job) jobRecordRow {
 		CreatedAt:         m.CreatedAt,
 		StartedAt:         m.StartedAt,
 		FinishedAt:        m.FinishedAt,
-		UpdatedAt:         m.UpdatedAt,
+		UpdatedAt:         updated,
 	}
 }
 

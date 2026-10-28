@@ -176,60 +176,6 @@ func (*ApplicationRevisionV3) ExtraIndexDDL() map[string][]string {
 	}
 }
 
-// Job 对应应用/服务器冲突域当前唯一的协调工作。
-// event_runs 行是兼容投影，不能替代本表作为部署事实来源。
-type Job struct {
-	ID                  string         `orm:"primary_key"`
-	ApplicationID       string         `orm:"not_null;references:applications(id);on_delete:RESTRICT"`
-	ServerID            string         `orm:"not_null;references:servers(id);on_delete:RESTRICT"`
-	InstanceID          string         `orm:"not_null;default:''"`
-	Action              string         `orm:"not_null;default:'apply'"`
-	DesiredGeneration   int            `orm:"not_null;default:0"`
-	DesiredSpecHash     string         `orm:"not_null;default:''"`
-	DesiredRevisionID   string         `orm:"not_null;default:''"`
-	DesiredSpecJSON     map[string]any `orm:"json;not_null;default:'{}'"`
-	RemoveData          bool           `orm:"not_null;default:0"`
-	ForceNonce          int64          `orm:"not_null;default:0"`
-	State               string         `orm:"not_null;default:'pending'"`
-	Priority            int            `orm:"not_null;default:0"`
-	Attempts            int            `orm:"not_null;default:0"`
-	NextRunAt           *time.Time
-	LeaseOwner          string `orm:"not_null;default:''"`
-	LeaseToken          string `orm:"not_null;default:''"`
-	LeaseExpiresAt      *time.Time
-	ExecutionID         string           `orm:"not_null;default:''"`
-	IntentID            string           `orm:"not_null;default:''"`
-	TriggerType         string           `orm:"not_null;default:''"`
-	TriggerResourceType string           `orm:"not_null;default:''"`
-	TriggerResourceID   string           `orm:"not_null;default:''"`
-	Reason              string           `orm:"not_null;default:''"`
-	IdempotencyKey      string           `orm:"not_null;default:''"`
-	LastStage           string           `orm:"not_null;default:''"`
-	LastStepsJSON       []map[string]any `orm:"json;not_null;default:'[]'"`
-	ErrorCode           string           `orm:"not_null;default:''"`
-	ErrorClass          string           `orm:"not_null;default:''"`
-	ErrorMessage        string           `orm:"not_null;default:''"`
-	ErrorDetail         string           `orm:"not_null;default:''"`
-	CreatedAt           time.Time        `orm:"not_null"`
-	StartedAt           *time.Time
-	FinishedAt          *time.Time
-	UpdatedAt           time.Time `orm:"not_null"`
-}
-
-func (*Job) TableName() string { return "jobs" }
-
-// ExtraIndexDDL 返回 jobs 的活跃冲突域、到期扫描和 intent 查询索引。
-func (*Job) ExtraIndexDDL() map[string][]string {
-	return map[string][]string{
-		"jobs": {
-			"CREATE UNIQUE INDEX IF NOT EXISTS uq_jobs_active_app_server ON jobs(application_id, server_id) WHERE state IN ('pending','running','failed_retryable')",
-			"CREATE UNIQUE INDEX IF NOT EXISTS uq_jobs_idempotency ON jobs(application_id, idempotency_key) WHERE idempotency_key <> ''",
-			"CREATE INDEX IF NOT EXISTS idx_jobs_due ON jobs(state, next_run_at, priority, created_at)",
-			"CREATE INDEX IF NOT EXISTS idx_jobs_intent ON jobs(intent_id, created_at)",
-		},
-	}
-}
-
 // ContainerObservation 对应 container_observations。
 type ContainerObservation struct {
 	ServerID      string         `orm:"primary_key;not_null;references:servers(id);on_delete:CASCADE"`

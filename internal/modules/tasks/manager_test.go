@@ -362,3 +362,37 @@ func TestManagerRunParentTreatsCompletedChildrenAsAlreadyDone(t *testing.T) {
 		t.Fatalf("completed children should not run again, ran=%d", ran)
 	}
 }
+
+func TestManagerRemoteFenceExecuteOwnsSettlement(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	svc.MustRegister(Definition{
+		Type:           "deploy_remote_fence",
+		RecoveryPolicy: RecoveryRemoteFence,
+		Execute: func(tc TaskContext) error {
+			// Simulate Store.Claim + MarkUncertain: leave running without
+			// Manager Complete/Fail rewriting the row.
+			_, err := tc.Service.db.ExecContext(tc.Context, `UPDATE event_runs SET status=?, error_class='uncertainty', error_code='execution_result_unknown', error=? WHERE id=?`,
+				StatusRunning, "awaiting evidence", tc.Task.ID)
+			return err
+		},
+	})
+	manager := NewManager(svc)
+	task, created, err := manager.Create(ctx, CreateInput{Type: "deploy_remote_fence", Summary: "deploy"}, Trigger{Manual: true})
+	if err != nil || !created {
+		t.Fatalf("create: task=%#v created=%v err=%v", task, created, err)
+	}
+	if err := manager.Run(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusRunning {
+		t.Fatalf("Manager must not Complete/Fail a remote-fence run left running, got %#v", got)
+	}
+	if got.Error != "awaiting evidence" {
+		t.Fatalf("expected execute-owned error to remain, got %#v", got)
+	}
+}

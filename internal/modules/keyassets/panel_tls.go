@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
+	"encoding/json"
 	"net"
 	"strings"
 	"time"
@@ -446,25 +447,40 @@ func (s *Service) ResetPanelTLS(ctx context.Context, assetID string) (tasks.Task
 	if s.tasks == nil {
 		return tasks.Task{}, panelerr.Validation("task_service_unavailable", "Task service is unavailable")
 	}
-	manager := tasks.NewManager(s.tasks)
-	task, created, err := manager.Create(ctx, tasks.CreateInput{
+	params, err := json.Marshal(map[string]any{"reset": true})
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	task, _, err := tasks.NewManager(s.tasks).CreateAndRun(ctx, tasks.CreateInput{
 		Type:         TaskTypePanelTLSReconcile,
 		ResourceType: "key_asset",
 		ResourceID:   assetID,
+		TriggerType:  "user",
 		TriggeredBy:  "user",
 		Summary:      "Resetting system-managed Panel TLS certificate",
-		Status:       tasks.StatusRunning,
+		ParamsJSON:   string(params),
 	}, tasks.Trigger{Type: "user", Manual: true})
-	if err != nil || !created {
-		return task, err
-	}
-	go s.runPanelTLSReset(context.Background(), task.ID, assetID)
-	return task, nil
+	return task, err
 }
 
-func (s *Service) runPanelTLSReset(ctx context.Context, taskID, assetID string) {
-	defer s.tasks.FinishExecution(taskID)
-	_ = s.tasks.Advance(ctx, taskID, "regenerating", "regenerating system-managed Panel TLS certificate")
+func panelTLSResetRequested(task tasks.Task) bool {
+	var params struct {
+		Reset bool `json:"reset"`
+	}
+	if strings.TrimSpace(task.ParamsJSON) == "" {
+		return false
+	}
+	if err := json.Unmarshal([]byte(task.ParamsJSON), &params); err != nil {
+		return false
+	}
+	return params.Reset
+}
+
+func (s *Service) runPanelTLSReset(ctx context.Context, taskID, assetID string) error {
+	if s.tasks != nil && taskID != "" {
+		defer s.tasks.FinishExecution(taskID)
+		_ = s.tasks.Advance(ctx, taskID, "regenerating", "regenerating system-managed Panel TLS certificate")
+	}
 	err := paneltls.WithUpdate(func() error {
 		if assetID == SystemPanelCAAssetID {
 			if err := s.deletePanelSystemAssets(ctx); err != nil {
@@ -490,14 +506,24 @@ func (s *Service) runPanelTLSReset(ctx context.Context, taskID, assetID string) 
 		return nil
 	})
 	if err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
-		return
+		if s.tasks != nil && taskID != "" {
+			_ = s.tasks.Fail(ctx, taskID, err)
+		}
+		return err
 	}
-	_ = s.tasks.Complete(ctx, taskID, "System-managed Panel TLS certificate reset")
+	if s.tasks != nil && taskID != "" {
+		return s.tasks.Complete(ctx, taskID, "System-managed Panel TLS certificate reset")
+	}
+	return nil
 }
 
 // RunPanelTLSReconcileTask is the executor used by the existing task worker.
+// A user reset reuses this type so it shares the panel TLS concurrency key,
+// and is distinguished by params {"reset":true}.
 func (s *Service) RunPanelTLSReconcileTask(tc tasks.TaskContext) error {
+	if panelTLSResetRequested(tc.Task) {
+		return s.runPanelTLSReset(tc.Context, tc.Task.ID, strings.TrimSpace(firstNonEmpty(tc.Task.ResourceID, tc.Task.TriggerResourceID)))
+	}
 	domain, _, err := s.panelTLSSelection(tc.Context)
 	if err != nil {
 		return err

@@ -21,7 +21,11 @@ func NewStore(db *sql.DB) *Store {
 
 var _ logging.ContextStore = (*Store)(nil)
 
-// Upsert inserts or merges an event row by id.
+// Upsert inserts or merges a diagnostic events row by id (ENG-RUN-003).
+// It only writes the AppDB `events` index — never `jobs` / `event_runs` lease,
+// status, attempts, or fence execution_id. events.execution_id is a correlation
+// pointer only, not the Run fence. Once a diagnostic row has finished_at set,
+// later log upserts must not reopen state to the default "running".
 func (s *Store) Upsert(ctx context.Context, row logging.ContextRecord) error {
 	if s == nil || s.db == nil {
 		return nil
@@ -69,7 +73,11 @@ ON CONFLICT(id) DO UPDATE SET
 	request_id=CASE WHEN excluded.request_id != '' THEN excluded.request_id ELSE events.request_id END,
 	title=CASE WHEN excluded.title != '' THEN excluded.title ELSE events.title END,
 	summary=CASE WHEN excluded.summary != '' THEN excluded.summary ELSE events.summary END,
-	state=CASE WHEN excluded.state != '' THEN excluded.state ELSE events.state END,
+	state=CASE
+		WHEN events.finished_at IS NOT NULL AND events.finished_at != '' THEN events.state
+		WHEN excluded.state != '' THEN excluded.state
+		ELSE events.state
+	END,
 	had_error=CASE WHEN excluded.had_error != 0 THEN 1 ELSE events.had_error END,
 	actor_json=CASE WHEN excluded.actor_json != '' THEN excluded.actor_json ELSE events.actor_json END,
 	resources_json=CASE WHEN excluded.resources_json != '' THEN excluded.resources_json ELSE events.resources_json END,
