@@ -36,9 +36,10 @@
 - 验证证据（2026-09-26/27，WSL Debian / Node 22.23.3 / task 3.53.1）：`task test:web` = 48 个文件 259 项全通过；`task build:web`（`vue-tsc --noEmit && vite build`）退出码 0；构建产物抽查确认新类均已生成，且入场动画只保留 `backwards`（无 `both`）。测试期间修掉 `MasterDetailLayout` 模板前置注释导致的多根问题（会静默丢弃页面传入的 class）与 `views/applications` 自建 `.workspace-panel` 入场动画。
 
 - 内容区去分栏与服务器详情打磨：反向代理设施 `routes`/`nodes` Tabs、应用详情 `data` tab 与页头 ActivityLink、StorageShare/凭据/证书详情改为纵向叠放；服务器一级 tab 合并 Docker 为 `resources`+`subtab`（旧 tab 名兼容）、列表瘦列与工具栏收敛。不新增路由/API/表；对应 `UI-FAC-003`、`UI-APP-002/003`、`UI-SRV-016/017/018/019`、`UI-CRED-001`。
-- 应用部署反馈：既有应用页增加部署规划失败、系统核实中、原因与活动入口，不新增路由；对应 `UI-APP-001/002/004`、`APP-PLAN-001`、`APP-RUN-004`。
+- 应用部署反馈：既有应用页增加部署规划失败、monitor 无进度时的系统核实中、有进度时的真实阶段、原因与活动入口，不新增路由；对应 `UI-APP-001/002/004`、`APP-PLAN-001`、`APP-RUN-004`。
 - Debug 既有清理操作增加阶段/时间、刷新恢复、部分失败与系统确认中展示；保留危险勾选确认，不新增路由；对应 `UI-DBG-007/008`。
-- 执行结果 uncertainty 由系统自动核实，证据窗口耗尽后终态 `execution_evidence_unreachable`；人工 resolve 仅为破局 API。对应 `ORCH-LEASE-005`、`ORCH-CTRL-009`、`TASK-WORK-003`、`APP-RUN-004`。
+- 部署 remote-fence monitor：传输/lease 超时进入 `uncertainty`+`execution_monitoring`，投影 Agent step 报告；无进度才「系统核实中」，有进度为普通收敛；证据窗口耗尽终态 `execution_evidence_unreachable`；人工 resolve 仅为破局 API。对应 `ORCH-LEASE-003..005`、`ORCH-RETRY-001`、`ORCH-CTRL-009`、`TASK-WORK-003`、`APP-RUN-004`。
+- 派活窗口（默认 15s）后 worker 释放、monitor 独占结算，对应 `ORCH-CTRL-010`。
 - 服务器创建/编辑重构：基础/高级分区、无凭据引导与弹窗内快捷创建、探测与保存解耦并标记过期、变量严格校验、创建后初始化任务跟踪与失败保留态，不新增路由；对应 `UI-SRV-003/004/005/011/012/013`，后端初始采集失败改为保留服务器并标记失败，对应 `SRV-SAVE-005/006`。
 - Tailscale 收敛：新增 `/settings/tailscale` 设置分区（只写认证密钥、ACL 标签、容器 tailscale 状态与「应用 / 重连」）与服务器侧的加入/偏好开关、状态徽标和手动重试，路由总数由 46 增至 47；对应 `UI-SET-011`、`UI-SRV-014/015`、`TS-SET-*`、`TS-NODE-*`。
 - Tailscale 关闭与 DNS/路由偏好（2026-10-14）：节点/容器 `tailscale up` 固定 `--accept-dns=false --accept-routes=false`；关闭意图按保存前启用态排队 `TailscaleDisable`（`tailscale logout` 离开 tailnet + `systemctl disable --now`；容器侧关闭期望态同样先 logout 再停进程），不得因同事务已清观测而跳过远端注销，不得仅 `down`/停进程而让设备仍留在 tailnet；对应 `TS-NODE-004`、`TS-AGT-003/004`、`TS-INIT-002`。

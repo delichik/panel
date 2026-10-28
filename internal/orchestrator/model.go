@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -137,6 +138,59 @@ type Step struct {
 	Name   string `json:"name"`
 	Status string `json:"status"`
 	Detail string `json:"detail,omitempty"`
+}
+
+// Deploy progress stages projected from Agent execution step events. When a
+// running+uncertainty Job has one of these as LastStage, UI treats it as normal
+// converging progress rather than result_unknown attention.
+var deployProgressStages = map[string]struct{}{
+	"write_files":               {},
+	"ensure_image":              {},
+	"inspect_container":         {},
+	"create_container":          {},
+	"start_container":           {},
+	"verify_running":            {},
+	"replace_stop":              {},
+	"replace_remove":            {},
+	"cleanup_legacy_workspace":  {},
+	"stop":                      {},
+	"purge":                     {},
+	"apply":                     {},
+}
+
+// IsDeployProgressStage reports whether stage is an in-flight Agent ensure step.
+func IsDeployProgressStage(stage string) bool {
+	_, ok := deployProgressStages[strings.TrimSpace(stage)]
+	return ok
+}
+
+// UncertaintyNeedsAttention is true when monitor-mode fencing has no projected
+// progress yet (or evidence is exhausted). Fresh step stages mean normal deploy.
+func UncertaintyNeedsAttention(errorClass, lastStage string) bool {
+	if strings.TrimSpace(errorClass) != "uncertainty" {
+		return false
+	}
+	return !IsDeployProgressStage(lastStage)
+}
+
+// ApplyReadyToSucceed enforces ORCH-CTRL-007 when a verify_running step is in
+// the trail: apply must not succeed until that step succeeded. Empty trails or
+// stubs without verify_running (scripted agents / observation-only) stay allowed.
+func ApplyReadyToSucceed(action string, steps []Step) bool {
+	if action != ActionApply || len(steps) == 0 {
+		return true
+	}
+	sawVerify := false
+	for _, step := range steps {
+		if step.Name != "verify_running" {
+			continue
+		}
+		sawVerify = true
+		if step.Status == "succeeded" {
+			return true
+		}
+	}
+	return !sawVerify
 }
 
 type ReconcileRequestRPC struct {

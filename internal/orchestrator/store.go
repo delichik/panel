@@ -315,9 +315,38 @@ func (s *Store) RecoverExpiredLeases(ctx context.Context) error {
 	return nil
 }
 
+// UpdateProgress persists incremental Agent step projection onto a running Job
+// without changing lease, status, or fence identity. Used while RPC is in
+// flight and while monitor-mode (error_class=uncertainty) polls evidence.
+func (s *Store) UpdateProgress(ctx context.Context, job Job, stage string, steps []Step) (bool, error) {
+	stage = strings.TrimSpace(stage)
+	if stage == "" {
+		stage = lastStep(steps)
+	}
+	if stage == "" && len(steps) == 0 {
+		return false, nil
+	}
+	payload, err := json.Marshal(redactSteps(steps))
+	if err != nil {
+		return false, err
+	}
+	now := s.now().UTC().Format(time.RFC3339Nano)
+	result, err := s.db.ExecContext(ctx, `UPDATE event_runs SET stage=?,last_stage=?,last_steps_json=?,updated_at=? WHERE type=? AND id=? AND status='running' AND lease_token=?`,
+		stage, stage, string(payload), now, deployRunType, job.ID, job.LeaseToken)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected == 1, err
+}
+
+// MarkUncertain enters remote-fence monitor mode: Job stays running with the
+// original execution_id/lease_token so Claim cannot double-apply. Transport loss
+// alone is not a user-facing deployment failure; ExecutionMonitor continues to
+// project steps and settle from durable Agent evidence.
 func (s *Store) MarkUncertain(ctx context.Context, job Job, reason string) error {
 	message := activitylog.Redact(reason)
-	_, err := s.db.ExecContext(ctx, `UPDATE event_runs SET error_code='execution_result_unknown',error_class='uncertainty',error_message=?,error=?,error_detail='Remote execution is awaiting automatic verification',lease_expires_at=NULL,next_run_at=NULL,updated_at=? WHERE type=? AND id=? AND status='running' AND lease_token=?`, message, message, s.now().UTC().Format(time.RFC3339Nano), deployRunType, job.ID, job.LeaseToken)
+	_, err := s.db.ExecContext(ctx, `UPDATE event_runs SET error_code='execution_monitoring',error_class='uncertainty',error_message=?,error=?,error_detail='Remote execution progress is being monitored from Agent reports',lease_expires_at=NULL,next_run_at=NULL,updated_at=? WHERE type=? AND id=? AND status='running' AND lease_token=?`, message, message, s.now().UTC().Format(time.RFC3339Nano), deployRunType, job.ID, job.LeaseToken)
 	return err
 }
 
@@ -341,10 +370,20 @@ func (s *Store) ListUncertain(ctx context.Context, limit int) ([]Job, error) {
 func redactResponse(response ReconcileResponse) ReconcileResponse {
 	response.ErrorMessage = activitylog.Redact(response.ErrorMessage)
 	response.ErrorDetail = activitylog.Redact(response.ErrorDetail)
-	for i := range response.Steps {
-		response.Steps[i].Detail = activitylog.Redact(response.Steps[i].Detail)
-	}
+	response.Steps = redactSteps(response.Steps)
 	return response
+}
+
+func redactSteps(steps []Step) []Step {
+	if len(steps) == 0 {
+		return steps
+	}
+	out := make([]Step, len(steps))
+	copy(out, steps)
+	for i := range out {
+		out[i].Detail = activitylog.Redact(out[i].Detail)
+	}
+	return out
 }
 
 func (s *Store) listRunningJobsWithExpiredLeases(ctx context.Context, now time.Time) ([]Job, error) {

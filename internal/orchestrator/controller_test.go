@@ -366,6 +366,81 @@ func TestUncertainExecutionIsResolvedWithoutRepeatingSideEffect(t *testing.T) {
 	}
 }
 
+type slowReconciler struct {
+	started chan struct{}
+	release chan struct{}
+	calls   int
+}
+
+func (r *slowReconciler) Reconcile(ctx context.Context, _ ReconcileRequestRPC) (ReconcileResponse, error) {
+	r.calls++
+	close(r.started)
+	select {
+	case <-r.release:
+		return ReconcileResponse{ObservedState: "stopped", ObservedGeneration: 1, ObservedSpecHash: "hash-1"}, nil
+	case <-ctx.Done():
+		// WithoutCancel parent ignores cancel; still honor if ever cancelled.
+		return ReconcileResponse{}, ctx.Err()
+	}
+}
+
+func (r *slowReconciler) ResolveExecution(context.Context, ReconcileRequestRPC) (ReconcileResponse, bool, error) {
+	return ReconcileResponse{ObservedState: "stopped", ObservedGeneration: 1, ObservedSpecHash: "hash-1"}, true, nil
+}
+
+func TestDispatchWaitReleasesWorkerIntoMonitorWithoutSecondKick(t *testing.T) {
+	db := newOrchestratorTestDB(t)
+	insertOrchestratorTestRows(t, db)
+	if _, err := db.Exec(`UPDATE event_runs SET action='stop',desired_revision_id='' WHERE id='job-1'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE application_instances SET desired_state='stopped',desired_revision_id='' WHERE id='inst-1'`); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &slowReconciler{started: make(chan struct{}), release: make(chan struct{})}
+	store := NewStore(db)
+	ctrl := NewController(store, runtime, ControllerConfig{DispatchWait: 30 * time.Millisecond})
+	ctx := context.Background()
+	done := make(chan error, 1)
+	go func() { done <- ctrl.process(ctx, "job-1") }()
+	select {
+	case <-runtime.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reconcile was not started")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker did not release after dispatch wait")
+	}
+	job, err := store.GetJob(ctx, "job-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.State != JobRunning || job.ErrorClass != "uncertainty" || job.ErrorCode != "execution_monitoring" {
+		t.Fatalf("expected monitor after dispatch: %#v", job)
+	}
+	if _, claimed, err := store.Claim(ctx, "job-1", "other", time.Minute); err != nil || claimed {
+		t.Fatalf("dispatch monitor must keep fence: %v %v", claimed, err)
+	}
+	close(runtime.release)
+	// Allow background RPC to finish; settlement stays on ResolveExecution.
+	time.Sleep(20 * time.Millisecond)
+	if err := ctrl.process(ctx, "job-1"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.GetJob(ctx, "job-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.State != JobSucceeded || runtime.calls != 1 {
+		t.Fatalf("monitor settle failed or re-kicked: job=%#v calls=%d", after, runtime.calls)
+	}
+}
+
 // ORCH-LEASE-005: uncertainty without Agent evidence fails terminal after the evidence window.
 func TestUncertainExecutionFailsWhenEvidenceWindowExpires(t *testing.T) {
 	db := newOrchestratorTestDB(t)

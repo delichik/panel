@@ -25,6 +25,11 @@ const defaultMaxJobAttempts = 10
 // Never auto-succeed without Agent proof.
 const defaultUncertaintyEvidenceWindow = 30 * time.Minute
 
+// defaultDispatchWait is how long a worker waits for RuntimeReconcile to finish
+// synchronously before releasing into monitor mode. Agent work continues; Panel
+// settles from durable execution reports (phase-6 dispatch-only).
+const defaultDispatchWait = 15 * time.Second
+
 // controllerDiagnosticInterval prevents a persistent database/runtime fault
 // from producing one identical process log on every 250 ms scan.
 const controllerDiagnosticInterval = 30 * time.Second
@@ -53,8 +58,12 @@ type ControllerConfig struct {
 	// error_class=uncertainty while Agent evidence is unavailable or incomplete.
 	// Zero uses defaultUncertaintyEvidenceWindow. Tests may shorten it.
 	UncertaintyEvidenceWindow time.Duration
-	OnSucceeded               func(context.Context, Job, ReconcileResponse)
-	OnFailed                  func(context.Context, Job, ReconcileResponse)
+	// DispatchWait caps how long process() blocks on RuntimeReconcile before
+	// entering monitor mode so the worker can release. Zero uses
+	// defaultDispatchWait. Negative disables dispatch-only (wait until RPC ends).
+	DispatchWait time.Duration
+	OnSucceeded  func(context.Context, Job, ReconcileResponse)
+	OnFailed     func(context.Context, Job, ReconcileResponse)
 }
 
 // JobRunner executes one deploy Run ID through the unified Manager.Execute
@@ -474,19 +483,70 @@ func (c *Controller) process(ctx context.Context, jobID string) error {
 	defer stopLease()
 	go c.renewLease(leaseCtx, job)
 	traceJobEvent(ctx, "agent_reconcile_started", job)
-	response, runErr := c.runtime.Reconcile(ctx, rpc)
+	response, runErr, handedToMonitor := c.dispatchReconcile(ctx, job, rpc)
+	if handedToMonitor {
+		return nil
+	}
 	if runErr != nil {
 		// A structured business failure is a known outcome and follows the normal
-		// retry policy. Uncertainty is reserved for calls with no trustworthy
-		// result, such as a transport loss after a possible remote side effect.
+		// retry policy. Monitor mode (uncertainty fence) is reserved for calls with
+		// no trustworthy terminal result, such as transport loss after a possible
+		// remote side effect — progress continues via Agent step reports.
 		if response.ErrorCode != "" || response.ErrorMessage != "" {
 			return c.fail(ctx, job, response)
 		}
-		// A transport error is not proof of remote failure. Keep the conflict row
-		// owned and resolve the same execution identity before allowing new work.
+		if len(response.Steps) > 0 {
+			_, _ = c.store.UpdateProgress(context.WithoutCancel(ctx), job, lastStep(response.Steps), response.Steps)
+		}
+		// Keep the conflict row owned and resolve the same execution identity
+		// before allowing new work (ENG-RUN-004 remote-fence).
 		return c.store.MarkUncertain(context.WithoutCancel(ctx), job, runErr.Error())
 	}
 	return c.acceptResponse(ctx, job, response)
+}
+
+type reconcileOutcome struct {
+	response ReconcileResponse
+	err      error
+}
+
+// dispatchReconcile runs RuntimeReconcile with an optional dispatch window.
+// If the RPC does not finish in time, the Job enters monitor mode and the
+// worker returns; late RPC results are discarded because Agent durable
+// evidence is settled by resolveUncertain.
+func (c *Controller) dispatchReconcile(ctx context.Context, job Job, rpc ReconcileRequestRPC) (ReconcileResponse, error, bool) {
+	wait := c.config.DispatchWait
+	if wait == 0 {
+		wait = defaultDispatchWait
+	}
+	if wait < 0 {
+		response, err := c.runtime.Reconcile(ctx, rpc)
+		return response, err, false
+	}
+	outcomes := make(chan reconcileOutcome, 1)
+	go func() {
+		// Detach from the worker's wait so Agent-side work can finish and
+		// persist evidence after monitor mode takes over.
+		resp, err := c.runtime.Reconcile(context.WithoutCancel(ctx), rpc)
+		outcomes <- reconcileOutcome{response: resp, err: err}
+	}()
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		go func() { <-outcomes }()
+		return ReconcileResponse{}, ctx.Err(), false
+	case outcome := <-outcomes:
+		return outcome.response, outcome.err, false
+	case <-timer.C:
+		// Drain the in-flight RPC without settling here; monitor owns completion.
+		go func() { <-outcomes }()
+		traceJobEvent(ctx, "agent_reconcile_dispatched", job, zap.Duration("dispatch_wait", wait))
+		if err := c.store.MarkUncertain(context.WithoutCancel(ctx), job, "remote execution dispatched; awaiting Agent progress reports"); err != nil {
+			return ReconcileResponse{}, err, false
+		}
+		return ReconcileResponse{}, nil, true
+	}
 }
 
 func (c *Controller) acceptResponse(ctx context.Context, job Job, response ReconcileResponse) error {
@@ -497,6 +557,14 @@ func (c *Controller) acceptResponse(ctx context.Context, job Job, response Recon
 		zap.Bool("retryable", response.Retryable))
 	if response.ErrorMessage != "" || response.ErrorCode != "" {
 		return c.fail(ctx, job, response)
+	}
+	if !ApplyReadyToSucceed(job.Action, response.Steps) {
+		// ORCH-CTRL-007: do not succeed apply before verify_running evidence.
+		// Keep fencing and wait for monitor/resolve to obtain a complete trail.
+		if len(response.Steps) > 0 {
+			_, _ = c.store.UpdateProgress(ctx, job, lastStep(response.Steps), response.Steps)
+		}
+		return c.store.MarkUncertain(ctx, job, "apply is awaiting verify_running evidence")
 	}
 	if response.ObservedAt.IsZero() {
 		response.ObservedAt = time.Now().UTC()

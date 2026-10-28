@@ -290,10 +290,10 @@ Run HTTP 面是 `/api/v1/executions*`；诊断读面是 `/api/v1/events*` 与 `/
 
 - **前置**：RuntimeReconcile 返回结构化错误或普通 error。
 - **动作**：Controller fail。
-- **结果**：保存 error_code/class/message/detail、last steps/stage；Reconciler 同时返回结构化失败和实现 error 时以结构化结果进入正常重试，只有未返回可信结果的传输中断才标记 uncertainty。
+- **结果**：保存 error_code/class/message/detail、last steps/stage；Reconciler 同时返回结构化失败和实现 error 时以结构化结果进入正常重试；只有未返回可信终态的传输中断才进入 monitor mode（`error_class=uncertainty` / `error_code=execution_monitoring`），并继续投影 Agent 步骤，不得把传输超时写成用户部署失败。
 - **失败**：不得把原始 Docker/Agent 诊断压成仅一条翻译文案或 secret/full env/file content。
-- **不变量**：任务表不得反写 Job 错误或状态。
-- **验证**：error propagation/trace redaction tests。
+- **不变量**：任务表不得反写 Job 错误或状态；有步骤轨迹的 apply 须满足 `ORCH-CTRL-007` 才可 Succeed。
+- **验证**：error propagation/trace redaction tests、monitor progress projection tests。
 
 ### ORCH-RETRY-002 backoff 与终止
 
@@ -304,32 +304,41 @@ Run HTTP 面是 `/api/v1/executions*`；诊断读面是 `/api/v1/events*` 与 `/
 - **不变量**：attempts 包含首次执行，上限属于部署 Run 这一类（`ENG-RUN-005`），不得改写成通用任务的 `max_retries`。同规格自动巡检没有新 force 意图时，必须保留既有强制 Job 的 force nonce、attempts、nextRunAt、intent 和错误；不得把强制部署失败后的首次巡检当成新计划而清除退避。新非零 force 和人工操作仍按既有语义处理。
 - **验证**：controller max-attempts/backoff tests。
 
-### ORCH-LEASE-003 过期租约恢复
+### ORCH-CTRL-010 派活窗口后由 monitor 独占结算
+
+- **前置**：Controller 已 Claim 部署 Job，并调用 Agent `RuntimeReconcile`。
+- **动作**：worker 在 `DispatchWait`（默认 15s；测试可缩短；负值表示一直等到 RPC 结束）内等待同步结果。
+- **结果**：窗口内拿到可信终态则按 `acceptResponse`/`fail` 结算；超时则 `MarkUncertain`（`execution_monitoring`）并释放 worker，后台 RPC 结果不直接 settle，由 `resolveUncertain` 消费同一 execution 的 durable 证据。
+- **失败**：不得因派活窗口超时二次 Claim 或再次 kick ensure；不得清空 `lease_token`。
+- **不变量**：与 `ORCH-LEASE-003..005` 同一 remote-fence；进度投影仍写入 `last_stage`/`last_steps_json`。
+- **验证**：`TestDispatchWaitReleasesWorkerIntoMonitorWithoutSecondKick`。
+
+### ORCH-LEASE-003 过期租约恢复（monitor mode）
 
 - **前置**：running Job lease 已过期。
 - **动作**：RecoverExpiredLeases。
-- **结果**：不得仅凭过期把 Job 改回 pending/failed_retryable 或清空 lease token；必须 `MarkUncertain`（保持 `running` + 原 execution/lease token，清 `lease_expires_at`），等待经认证的 Agent 对原 execution 给出可验证结果（与 ORCH-LEASE-004 一致）。
+- **结果**：不得仅凭过期把 Job 改回 pending/failed_retryable 或清空 lease token；必须进入 monitor mode（`MarkUncertain`：保持 `running` + 原 execution/lease token，清 `lease_expires_at`，`error_class=uncertainty`，`error_code=execution_monitoring`），继续拉取同一 execution 的 Agent 步骤报告并投影到 `last_stage`/`last_steps_json`，再按 ORCH-LEASE-004/005 结算。
 - **失败**：MarkUncertain 必须以 `state=running` 且原 `lease_token` 谓词 fence，不得覆盖已续租/重领或已终态 Job。
-- **不变量**：过期 alone 不能证明远端副作用是否完成；盲目重放写操作禁止。本条是部署 Run 的 remote-fence：过期后 hold（不领取、不清 `lease_token`）。通用任务的本地超时见 `TASK-WORK-003` 与 `ENG-RUN-004`。
-- **验证**：lease expiry → uncertainty、stale snapshot 与 missing-evidence 重试测试。
+- **不变量**：过期 alone 不能证明远端副作用是否完成；盲目重放写操作禁止。本条是部署 Run 的 remote-fence：过期后 hold（不领取、不清 `lease_token`）。传输/lease 超时不是用户可见的部署失败；有投影步骤时 UI 按正常收敛展示阶段。通用任务的本地超时见 `TASK-WORK-003` 与 `ENG-RUN-004`。
+- **验证**：lease expiry → monitor、step projection、stale snapshot 与 missing-evidence 重试测试。
 
 ### ORCH-LEASE-004 不确定执行缺失证据
 
-- **前置**：Job 处于 `running + uncertainty`，并且通过认证的 Agent 明确返回该 execution `missing`。
+- **前置**：Job 处于 `running + uncertainty`（monitor mode），并且通过认证的 Agent 明确返回该 execution `missing`。
 - **动作**：Controller 恢复原 execution。
-- **结果**：以 `execution_evidence_missing/evidence` 进入有上限的正常重试，释放旧 execution fence，下次 claim 使用新 execution identity。
-- **失败**：Agent 不可达、超时或响应无法验证时仍必须保持 uncertainty，不得盲目重复远端写操作；持续无法取得证据时由 `ORCH-LEASE-005` 终态失败。
-- **不变量**：missing 重放仍受 MaxAttempts、幂等资源标签和 conflict-domain 唯一性约束。
+- **结果**：以 `execution_evidence_missing/evidence` 进入有上限的正常重试，释放旧 execution fence，下次 claim 使用新 execution identity（再派幂等 ensure）。
+- **失败**：Agent 不可达、超时或响应无法验证时仍必须保持 monitor fence，不得盲目重复远端写操作；持续无法取得证据时由 `ORCH-LEASE-005` 终态失败。
+- **不变量**：missing 重放仍受 MaxAttempts、幂等资源标签和 conflict-domain 唯一性约束；Agent 仍有进行中 ensure 时禁止再 kick。
 - **验证**：authenticated missing result bounded-retry test，unreachable Agent remains uncertain test。
 
 ### ORCH-LEASE-005 不确定执行证据窗口
 
-- **前置**：Job 处于 `running + uncertainty`，Controller 每次扫描调用 `resolveUncertain`。
+- **前置**：Job 处于 `running + uncertainty`，Controller 每次扫描调用 `resolveUncertain`（并投影 step 进度）。
 - **动作**：向认证 Agent 轮询同一 execution 的结果（finished 事件流、只读 `VerifyExecution` 匹配、或 `ORCH-LEASE-004` 的 missing）。
-- **结果**：窗口内（默认自进入 uncertainty 的 `updated_at` 起 30 分钟）无可信证据时保持 uncertainty 并继续轮询。窗口耗尽仍无 `finished`/verify 匹配/`missing` 时，经现有 `fail()` 写入终态 `failed`，`error_code=execution_evidence_unreachable`，`error_class=evidence`，`retryable=false`，并调用 `OnFailed`。
-- **失败**：不得在无 Agent 证据时自动 succeed 或伪造 `observed_state`。传输错误本身不得提前终态失败。
+- **结果**：窗口内（默认自进入 uncertainty 的 `updated_at` 起 30 分钟）无可信终态证据时保持 monitor 并继续轮询/投影步骤。窗口耗尽仍无 `finished`/verify 匹配/`missing` 时，经现有 `fail()` 写入终态 `failed`，`error_code=execution_evidence_unreachable`，`error_class=evidence`，`retryable=false`，并调用 `OnFailed`。有新鲜 `last_stage` 进度时不得因传输中断单独标为「系统核实中」注意力态。
+- **失败**：不得在无 Agent 证据时自动 succeed 或伪造 `observed_state`；有步骤轨迹的 apply 在 `verify_running` 成功前不得 Succeed（`ORCH-CTRL-007`）。传输错误本身不得提前终态失败。
 - **不变量**：窗口只释放冲突域，不证明远端副作用未发生；用户可用既有同步/部署在失败后重新规划。人工 resolve 仍可作为破局 API，但不是窗口内的必经步骤。
-- **验证**：`TestUncertainExecutionFailsWhenEvidenceWindowExpires`、窗口内保持 uncertainty 的既有 resolve 测试。
+- **验证**：`TestUncertainExecutionFailsWhenEvidenceWindowExpires`、`TestCollectExecutionProgressProjectsStepsOntoRunningJob`、窗口内保持 uncertainty 的既有 resolve 测试。
 
 ### ORCH-DRIFT-001 漂移来源与修复范围
 

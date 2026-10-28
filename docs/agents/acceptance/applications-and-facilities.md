@@ -324,14 +324,16 @@
 - **不变量**：日志展示属于 runtime 实例，不依赖 allocation/task 投影。停止/失败但仍存在的容器可查看；missing/purged/deleted 或尚无容器的 pending 实例不可读取。切换实例/应用、关闭弹窗或离页取消旧请求并丢弃迟到响应；无实例、空日志与读取失败分开展示；仅手动刷新，不定时轮询。
 - **验证**：handler/service logs tests，`ApplicationLogsDialog.test.ts` 的多/单实例、已退出容器、无实例、读取重试、切换/关闭竞态及 Mock instanceId 范围测试。
 
-### APP-RUN-004 执行结果不确定的独立呈现
+### APP-RUN-004 执行 monitor / 无进度注意力态
 
-- **前置**：应用活跃 Job 携带 `error_class=uncertainty`。
+- **前置**：应用活跃 Job 携带 `error_class=uncertainty`（remote-fence monitor mode）。
 - **动作**：读取列表摘要/runtime 或查看应用当前部署。
-- **结果**：应用聚合状态为 `needs_attention`，当前操作优先选取结果不确定的 Job；界面显示“系统核实中”、原因和任务/日志入口，并继续独立显示实例实际运行状态。文案必须说明 Panel 正在向节点自动核实，不得引导用户声明成败。
-- **失败**：不得把不确定结果显示为普通“部署中”、成功或确定失败；不能用等待时间推测结果。证据窗口耗尽后 Job 按 `ORCH-LEASE-005` 终态失败，界面改为普通失败并可同步/重试。
-- **不变量**：该展示投影不修改底层 Job state、lease 或远端证据；原有有界轮询与自动核实仍适用。不得要求用户经 UI 提交人工 resolve。
-- **验证**：后端 runtime/list 不确定状态测试、前端状态与轮询模型测试。
+- **结果**：
+  - 已投影 Agent 进度阶段（如 `ensure_image` / `verify_running`）：聚合与操作为普通 `deploying`/`running`，展示真实 `last_stage`，不得显示“系统核实中”。
+  - 尚无投影进度：聚合为 `needs_attention`，显示“系统核实中”与任务/日志入口；继续独立显示实例实际运行状态；文案说明 Panel 正在向节点收取执行报告，不得引导用户声明成败。
+- **失败**：不得把无进度的 monitor fence 显示为成功或确定失败；不能用等待时间推测结果。证据窗口耗尽后 Job 按 `ORCH-LEASE-005` 终态失败，界面改为普通失败并可同步/重试。不得把 `execution_monitoring` 传输原因渲染成部署失败危险告警。
+- **不变量**：展示投影不修改底层 Job state、lease 或远端证据；有界轮询与自动核实仍适用。不得要求用户经 UI 提交人工 resolve。
+- **验证**：`TestUncertainJobIsVisibleInRuntimeAndApplicationList`、`TestMonitoringJobWithProgressStageShowsDeploying`、前端 `model.test.ts` 进度/注意力区分。
 
 ### APP-IMG-001 镜像检查聚合
 

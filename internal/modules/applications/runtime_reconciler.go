@@ -79,7 +79,8 @@ func (r *serviceRuntimeReconciler) Reconcile(ctx context.Context, req controlpla
 		}, nil
 	}
 
-	// A runtime call must finish before the default three-minute lease expires.
+	// Bound the synchronous RPC wait; longer Agent work (image pull / verify)
+	// continues under monitor mode after transport deadline via step reports.
 	runCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 

@@ -73,6 +73,10 @@ describe('application editor model', () => {
     expect(statusTone('result_unknown')).toBe('warning');
     expect(shouldPollApplicationRuntime(runtime)).toBe(true);
     expect(applicationStatus(app, { ...runtime, operation: { ...runtime.operation, errorClass: '' } })).toBe('deploying');
+    // Monitor mode with projected Agent steps is normal converging, not attention.
+    const monitoring = { ...runtime, operation: { ...runtime.operation, stage: 'ensure_image', errorCode: 'execution_monitoring' } };
+    expect(applicationStatus(app, monitoring)).toBe('deploying');
+    expect(applicationOperationStatus(monitoring)).toBe('running');
   });
 
   it('offers application files by stable name and preserves a missing legacy reference', () => {

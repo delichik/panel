@@ -12,6 +12,7 @@ import (
 	agentcontract "panel/internal/agent/contract"
 	agentendpoint "panel/internal/agent/endpoint"
 	"panel/internal/modules/applications"
+	controlplane "panel/internal/orchestrator"
 	"panel/internal/platform/activitylog"
 	panelerr "panel/internal/platform/errors"
 	httpx "panel/internal/platform/http"
@@ -80,7 +81,7 @@ func deploymentPriority(op *applications.LifecycleOperation) int {
 	if op == nil {
 		return 4
 	}
-	if op.ErrorClass == "uncertainty" {
+	if controlplane.UncertaintyNeedsAttention(op.ErrorClass, op.Stage) {
 		return 7
 	}
 	switch op.Status {
@@ -108,9 +109,9 @@ func aggregateDeploymentOperation(deployments []FacilityDeployment) *application
 		return nil
 	}
 	copy := *selected
-	if copy.ErrorClass == "uncertainty" {
+	if controlplane.UncertaintyNeedsAttention(copy.ErrorClass, copy.Stage) {
 		copy.Status = "needs_attention"
-	} else if copy.Status == "pending" || copy.Status == "running" {
+	} else if copy.Status == "pending" || copy.Status == "running" || (copy.ErrorClass == "uncertainty" && controlplane.IsDeployProgressStage(copy.Stage)) {
 		copy.Status = "deploying"
 	}
 	return &copy

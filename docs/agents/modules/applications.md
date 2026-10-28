@@ -234,8 +234,9 @@
 - Planner 新增、合并和替代请求均追加事件。正在运行的 Job 仍保留原执行快照，新请求分别追加 `operation.requested` 和 `execution.linked` / `intent.superseded`；重新规划时引用最新请求意图。
 - AppDB 控制触发器将领取、执行结果、错误、步骤摘要和已接受观测写成不可变事实；历史名称、修订、generation、容器状态来自发生时快照。Job 后续更新、成功或删除不会改变旧事实。
 - ObservationWriter 对带 durable Job 的租约、围栏或实例异常拒绝追加 `observation.rejected`，reason 区分 `lease_lost`、`instance_missing`、`job_missing`、`instance_fencing_mismatch` 与 `stale_observation`，并携带应用/服务器资源及 incoming/current 诊断。无 Job 的 Agent report 陈旧或重复 CAS miss 是预期缓存竞争，不进入用户 warning；证据入库失败不能伪装为已经接受。
-- RPC 返回错误或租约到期时保存 `uncertainty.detected`；Job 保持 `running` 冲突锁，`error_class=uncertainty`，租约到期时间为空。不能凭超时重做远端副作用。
-- Controller 通过可选 `ExecutionResultResolver.ResolveExecution` 按原 execution ID 核对结果；只有明确完成才应用结果或安排已知失败的重试，无法确认则继续等待。核对不会调用第二次 Reconcile。
+- RPC 传输中断或租约到期时进入 monitor mode：Job 保持 `running` 冲突锁，`error_class=uncertainty`，`error_code=execution_monitoring`，租约到期时间为空；继续拉取同一 execution 的 durable step 事件并增量写入 `last_stage`/`last_steps_json`。不能凭超时重做远端副作用；有投影步骤时 UI 按普通部署进度展示，无步骤时才显示“系统核实中”。
+- Controller 在默认 15s 派活窗口内等待同步 `RuntimeReconcile`；超时则释放 worker 进入同一 monitor fence，由 `ResolveExecution` 独占结算（`ORCH-CTRL-010`），后台 RPC 回包不直接 succeed/fail。
+- Controller 通过可选 `ExecutionResultResolver.ResolveExecution` 按原 execution ID 核对结果（并投影进度）；只有明确完成（含 apply 的 `verify_running` 成功）才应用结果或安排已知失败的重试，无法确认则继续等待。核对不会在 Agent 仍持有该 execution 时调用第二次 Reconcile；仅认证 `missing` 后才有界再派活。
 - 队列/租约/实例当前状态仍允许修改；日志事实和封存证据只追加，不属于 Job finalizer 的清理范围。
 - Agent 执行事件协议、统一日志 API 与界面见对应 Agent / activity 模块指引。
 

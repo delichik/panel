@@ -170,8 +170,8 @@ func TestPlanningOutcomeRedactsSecretsAndDoesNotOverwriteNewerConfiguration(t *t
 	}
 }
 
-// APP-RUN-004: uncertainty remains running for fencing, but must not be
-// presented as ordinary deployment progress by either list or runtime APIs.
+// APP-RUN-004: uncertainty without projected Agent steps remains running for
+// fencing and is presented as needs_attention, not ordinary deploying.
 func TestUncertainJobIsVisibleInRuntimeAndApplicationList(t *testing.T) {
 	svc, _, _, closeStore := newTestService(t)
 	defer closeStore()
@@ -184,7 +184,7 @@ func TestUncertainJobIsVisibleInRuntimeAndApplicationList(t *testing.T) {
 	if len(jobs) == 0 {
 		t.Fatal("no jobs")
 	}
-	if _, err := svc.db.Exec(`UPDATE event_runs SET status='running',error_class='uncertainty',error_code='execution_result_unknown',error_message='Result not confirmed',error='Result not confirmed' WHERE type='application_deploy' AND id=?`, jobs[0].ID); err != nil {
+	if _, err := svc.db.Exec(`UPDATE event_runs SET status='running',error_class='uncertainty',error_code='execution_monitoring',error_message='Result not confirmed',error='Result not confirmed',last_stage='' WHERE type='application_deploy' AND id=?`, jobs[0].ID); err != nil {
 		t.Fatal(err)
 	}
 	runtime, err := svc.Runtime(ctx, app.ID)
@@ -194,5 +194,31 @@ func TestUncertainJobIsVisibleInRuntimeAndApplicationList(t *testing.T) {
 	page, err := svc.ListSummaries(ctx, 1, 20, "")
 	if err != nil || page.Items[0].RuntimeStatus != "needs_attention" {
 		t.Fatalf("list hides uncertainty: %#v %v", page, err)
+	}
+}
+
+// Monitor mode with projected Agent steps is normal converging, not attention.
+func TestMonitoringJobWithProgressStageShowsDeploying(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs := jobsForApplication(t, svc, app.ID)
+	if len(jobs) == 0 {
+		t.Fatal("no jobs")
+	}
+	if _, err := svc.db.Exec(`UPDATE event_runs SET status='running',error_class='uncertainty',error_code='execution_monitoring',error_message='context deadline exceeded',error='context deadline exceeded',last_stage='ensure_image',stage='ensure_image' WHERE type='application_deploy' AND id=?`, jobs[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := svc.Runtime(ctx, app.ID)
+	if err != nil || runtime.Status != "deploying" || runtime.Operation == nil || runtime.Operation.Stage != "ensure_image" {
+		t.Fatalf("monitor progress not deploying: %#v %v", runtime, err)
+	}
+	page, err := svc.ListSummaries(ctx, 1, 20, "")
+	if err != nil || page.Items[0].RuntimeStatus != "deploying" {
+		t.Fatalf("list should show deploying for monitor progress: %#v %v", page, err)
 	}
 }

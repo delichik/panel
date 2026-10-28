@@ -2144,7 +2144,7 @@ onBeforeUnmount(() => {
                     <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationNextRetry') }}</span><strong>{{ currentOperation.nextRunAt ? formatDateTime(currentOperation.nextRunAt) : t('common.notAvailable') }}</strong></div>
                   </div>
                   <p v-if="currentOperationStatus === 'result_unknown'" class="m-0 text-sm text-warning">{{ t('applicationsPage.unknownResultHint') }}</p>
-                  <div v-if="currentOperation.error || currentOperation.errorCode || currentOperation.errorDetail" role="alert" class="grid gap-1 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
+                  <div v-if="currentOperationStatus !== 'result_unknown' && currentOperation.errorCode !== 'execution_monitoring' && (currentOperation.error || currentOperation.errorCode || currentOperation.errorDetail)" role="alert" class="grid gap-1 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
                     <strong>{{ t('applicationsPage.operationError') }}<span v-if="currentOperation.errorCode"> · {{ currentOperation.errorCode }}</span></strong>
                     <span v-if="currentOperation.error">{{ currentOperation.error }}</span>
                     <details v-if="currentOperation.errorDetail && currentOperation.errorDetail !== currentOperation.error"><summary class="cursor-pointer">{{ t('facilityDiagnostics.technicalDetails') }}</summary><pre class="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words text-xs">{{ currentOperation.errorDetail }}</pre></details>

@@ -360,3 +360,35 @@ func TestTrackedCallDoesNotTreatUnclosedOutputAsComplete(t *testing.T) {
 		t.Fatalf("unclosed evidence accepted: %v", err)
 	}
 }
+
+func TestCollectExecutionProgressProjectsStepsOntoRunningJob(t *testing.T) {
+	ctx := context.Background()
+	r, _, req, session := trackedTransport(t)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := r.service.db.ExecContext(ctx, `INSERT INTO event_runs(id,type,status,application_id,server_id,instance_id,action,execution_id,lease_token,lease_owner,desired_spec_json,last_steps_json,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		req.JobID, "application_deploy", "running", req.ApplicationID, req.ServerID, req.InstanceID, "apply",
+		req.ExecutionID, "lease-progress", "owner", "{}", "[]", now, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Append(ctx, contract.ExecutionEvent{EventType: "step.started", StepID: "s1", StepName: "ensure_image", Status: "running"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Append(ctx, contract.ExecutionEvent{EventType: "step.finished", StepID: "s1", StepName: "ensure_image", Status: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	progress, err := r.collectExecutionProgress(ctx, "", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if progress.EndSeq != 0 || progress.Stage != "ensure_image" || len(progress.Steps) != 1 || progress.Steps[0].Status != "succeeded" {
+		t.Fatalf("progress = %#v", progress)
+	}
+	job, err := control.NewStore(r.service.db).GetJob(ctx, req.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.LastStage != "ensure_image" || len(job.LastSteps) != 1 || job.LastSteps[0].Status != "succeeded" {
+		t.Fatalf("job progress not persisted: %#v", job)
+	}
+}

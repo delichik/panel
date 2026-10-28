@@ -509,19 +509,19 @@ func (s *Service) ListSummaries(ctx context.Context, page, pageSize int, query s
 	// 中，failed_retryable 表示失败重试；不再读取旧 lifecycle 表。
 	activeJobStates := make(map[string]string, len(summaries))
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(pageIDs)), ",")
-	jobRows, err := s.db.QueryContext(ctx, `SELECT application_id,CASE status WHEN 'queued' THEN 'pending' WHEN 'completed' THEN 'succeeded' ELSE status END,error_class FROM event_runs
+	jobRows, err := s.db.QueryContext(ctx, `SELECT application_id,CASE status WHEN 'queued' THEN 'pending' WHEN 'completed' THEN 'succeeded' ELSE status END,error_class,last_stage FROM event_runs
 		WHERE type='application_deploy' AND application_id IN (`+placeholders+`) AND status IN ('queued','running','failed_retryable')`, pageIDs...)
 	if err != nil {
 		return httpx.ListPage[ApplicationSummary]{}, err
 	}
 	defer jobRows.Close()
 	for jobRows.Next() {
-		var appID, state, errorClass string
-		if err := jobRows.Scan(&appID, &state, &errorClass); err != nil {
+		var appID, state, errorClass, lastStage string
+		if err := jobRows.Scan(&appID, &state, &errorClass, &lastStage); err != nil {
 			return httpx.ListPage[ApplicationSummary]{}, err
 		}
 		if _, ok := byID[appID]; ok {
-			if errorClass == "uncertainty" {
+			if controlplane.UncertaintyNeedsAttention(errorClass, lastStage) {
 				activeJobStates[appID] = "needs_attention"
 			} else if activeJobStates[appID] == "needs_attention" {
 				continue
@@ -1488,10 +1488,21 @@ func (s *Service) jobDerivedRuntimeStatus(ctx context.Context, app Application, 
 	status := appruntime.StatusDeploying
 	selected := rows[0]
 	for _, row := range rows {
-		if row.ErrorClass == "uncertainty" {
+		if controlplane.UncertaintyNeedsAttention(row.ErrorClass, row.LastStage) {
 			selected = row
 			status = "needs_attention"
 			break
+		}
+	}
+	// Monitor mode with projected Agent steps stays deploying; prefer that Job
+	// so the UI can show last_stage (ensure_image / verify_running / …).
+	if status != "needs_attention" {
+		for _, row := range rows {
+			if row.ErrorClass == "uncertainty" && controlplane.IsDeployProgressStage(row.LastStage) {
+				selected = row
+				status = appruntime.StatusDeploying
+				break
+			}
 		}
 	}
 	for _, row := range rows {

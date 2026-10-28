@@ -18,13 +18,26 @@ import (
 	"panel/internal/platform/logging"
 )
 
+type executionProgress struct {
+	EndSeq int64
+	Steps  []controlplane.Step
+	Stage  string
+}
+
 // collectExecutionEvents returns a nonzero final source sequence only after the
 // complete closed stream has committed to the JSONL file + events index.
 // Source identity is bound to the trusted server/execution.
 func (r *serviceRuntimeReconciler) collectExecutionEvents(ctx context.Context, endpoint string, req controlplane.ReconcileRequestRPC) (int64, error) {
+	progress, err := r.collectExecutionProgress(ctx, endpoint, req)
+	return progress.EndSeq, err
+}
+
+// collectExecutionProgress pulls durable Agent step events, projects them onto
+// the running Job (last_stage / last_steps_json), and returns stream watermarks.
+func (r *serviceRuntimeReconciler) collectExecutionProgress(ctx context.Context, endpoint string, req controlplane.ReconcileRequestRPC) (executionProgress, error) {
 	client, ok := r.service.runtimeClient.(agentcontract.ExecutionEventsClient)
 	if !ok {
-		return 0, errors.New("agent does not support durable execution events")
+		return executionProgress{}, errors.New("agent does not support durable execution events")
 	}
 	ctxStore := events.NewStore(r.service.db)
 	var after int64
@@ -32,10 +45,10 @@ func (r *serviceRuntimeReconciler) collectExecutionEvents(ctx context.Context, e
 	if rec, err := ctxStore.Get(ctx, req.ExecutionID); err == nil {
 		after = rec.LastSourceSeq
 		if rec.FinishedAt != "" && after > 0 {
-			return after, nil
+			return executionProgress{EndSeq: after}, nil
 		}
 	} else if !errors.Is(err, sql.ErrNoRows) {
-		return 0, err
+		return executionProgress{}, err
 	}
 	resources := []activitylog.Resource{{Type: "application", ID: req.ApplicationID, Role: "subject", RevisionID: req.DesiredRevisionID, Generation: req.DesiredGeneration}, {Type: "server", ID: req.ServerID, Role: "target"}}
 	initiator := activitylog.Actor{}
@@ -73,69 +86,98 @@ func (r *serviceRuntimeReconciler) collectExecutionEvents(ctx context.Context, e
 		ActorJSON:     logging.MarshalActorJSON(map[string]string{"kind": initiator.Kind, "id": initiator.ID, "name": initiator.Name}),
 		ResourcesJSON: logging.MarshalResourcesJSON(resources),
 	})
+	stepsByID := map[string]controlplane.Step{}
+	stepOrder := make([]string, 0, 8)
+	sawStep := false
 	for {
 		page, err := client.ReadExecutionEvents(ctx, endpoint, agentcontract.ExecutionEventsRequest{ExecutionID: req.ExecutionID, SourceEpoch: epoch, SourceStreamID: stream, AfterSourceSeq: after, Limit: 100})
 		if err != nil {
-			return 0, err
+			return executionProgress{}, err
 		}
 		if page.SourceID == "" || page.SourceEpoch == "" || page.SourceStreamID != req.ExecutionID || (epoch != "" && epoch != page.SourceEpoch) || (stream != "" && stream != page.SourceStreamID) {
-			return 0, errors.New("agent returned a different execution source")
+			return executionProgress{}, errors.New("agent returned a different execution source")
 		}
 		epoch, stream = page.SourceEpoch, page.SourceStreamID
 		if page.HeadSeq < after || page.EndSeq < 0 || page.EndSeq > page.HeadSeq || (page.EndSeq > 0 && page.EndSeq != page.HeadSeq) {
-			return 0, errors.New("invalid execution stream watermark")
+			return executionProgress{}, errors.New("invalid execution stream watermark")
 		}
 		if page.AckedThroughSeq > after {
 			if err := r.recordExecutionGap(logCtx, req, operationID, resources, page.SourceEpoch, after+1, page.AckedThroughSeq); err != nil {
-				return 0, err
+				return executionProgress{}, err
 			}
-			return 0, fmt.Errorf("execution evidence gap: source acknowledged through %d, panel has %d", page.AckedThroughSeq, after)
+			return executionProgress{}, fmt.Errorf("execution evidence gap: source acknowledged through %d, panel has %d", page.AckedThroughSeq, after)
 		}
 		if len(page.Events) > 100 {
-			return 0, errors.New("agent event batch exceeds requested limit")
+			return executionProgress{}, errors.New("agent event batch exceeds requested limit")
 		}
 		closed := false
 		for _, remote := range page.Events {
 			wantSeq := after + 1
 			switch {
 			case remote.EventID == "":
-				return 0, fmt.Errorf("execution event identity or sequence mismatch: empty event id (wantSeq=%d)", wantSeq)
+				return executionProgress{}, fmt.Errorf("execution event identity or sequence mismatch: empty event id (wantSeq=%d)", wantSeq)
 			case remote.ExecutionID != req.ExecutionID:
-				return 0, fmt.Errorf("execution event identity or sequence mismatch: executionId got %q want %q", remote.ExecutionID, req.ExecutionID)
+				return executionProgress{}, fmt.Errorf("execution event identity or sequence mismatch: executionId got %q want %q", remote.ExecutionID, req.ExecutionID)
 			case remote.OperationID != operationID:
-				return 0, fmt.Errorf("execution event identity or sequence mismatch: operationId got %q want %q", remote.OperationID, operationID)
+				return executionProgress{}, fmt.Errorf("execution event identity or sequence mismatch: operationId got %q want %q", remote.OperationID, operationID)
 			case remote.RunID != runID:
-				return 0, fmt.Errorf("execution event identity or sequence mismatch: runId got %q want %q", remote.RunID, runID)
+				return executionProgress{}, fmt.Errorf("execution event identity or sequence mismatch: runId got %q want %q", remote.RunID, runID)
 			case remote.SourceSeq != wantSeq:
-				return 0, fmt.Errorf("execution event identity or sequence mismatch: sourceSeq got %d want %d", remote.SourceSeq, wantSeq)
+				return executionProgress{}, fmt.Errorf("execution event identity or sequence mismatch: sourceSeq got %d want %d", remote.SourceSeq, wantSeq)
 			case remote.SourceSeq > page.HeadSeq:
-				return 0, fmt.Errorf("execution event identity or sequence mismatch: sourceSeq %d > head %d", remote.SourceSeq, page.HeadSeq)
+				return executionProgress{}, fmt.Errorf("execution event identity or sequence mismatch: sourceSeq %d > head %d", remote.SourceSeq, page.HeadSeq)
 			case remote.OccurredAt.IsZero():
-				return 0, fmt.Errorf("execution event identity or sequence mismatch: zero occurredAt at sourceSeq=%d", remote.SourceSeq)
+				return executionProgress{}, fmt.Errorf("execution event identity or sequence mismatch: zero occurredAt at sourceSeq=%d", remote.SourceSeq)
 			}
 			switch remote.EventType {
 			case "execution.started", "execution.finished", "step.started", "step.finished", "stream.closed", "output.chunk", "uncertainty.detected", "verification.finished", "execution.manually_verified":
 			default:
-				return 0, fmt.Errorf("unsupported execution event type %q", remote.EventType)
+				return executionProgress{}, fmt.Errorf("unsupported execution event type %q", remote.EventType)
 			}
 			if strings.HasPrefix(remote.EventType, "step.") && remote.StepID == "" {
-				return 0, errors.New("execution step has no identity")
+				return executionProgress{}, errors.New("execution step has no identity")
 			}
 			data := map[string]any{}
 			if remote.DataJSON != "" {
 				if err = json.Unmarshal([]byte(remote.DataJSON), &data); err != nil {
-					return 0, err
+					return executionProgress{}, err
 				}
 				if data == nil {
-					return 0, errors.New("execution event data must be an object")
+					return executionProgress{}, errors.New("execution event data must be an object")
 				}
 			}
 			if remote.EventType == "stream.closed" {
 				end, valid := data["endSeq"].(float64)
 				if !valid || end != float64(remote.SourceSeq) || page.EndSeq != remote.SourceSeq {
-					return 0, errors.New("stream closure does not match final source sequence")
+					return executionProgress{}, errors.New("stream closure does not match final source sequence")
 				}
 				closed = true
+			}
+			if remote.EventType == "step.started" || remote.EventType == "step.finished" {
+				sawStep = true
+				name := strings.TrimSpace(remote.StepName)
+				if name == "" {
+					name = remote.StepID
+				}
+				status := strings.TrimSpace(remote.Status)
+				if status == "" && remote.EventType == "step.started" {
+					status = "running"
+				}
+				step := controlplane.Step{Name: name, Status: status, Detail: remote.Text}
+				if existing, ok := stepsByID[remote.StepID]; ok {
+					if step.Name == "" {
+						step.Name = existing.Name
+					}
+					if step.Detail == "" {
+						step.Detail = existing.Detail
+					}
+					if remote.EventType == "step.started" && existing.Status != "" && existing.Status != "running" {
+						step.Status = existing.Status
+					}
+				} else {
+					stepOrder = append(stepOrder, remote.StepID)
+				}
+				stepsByID[remote.StepID] = step
 			}
 			fields := []zap.Field{
 				zap.String("eventType", remote.EventType),
@@ -166,42 +208,111 @@ func (r *serviceRuntimeReconciler) collectExecutionEvents(ctx context.Context, e
 				logger.Info(msg, fields...)
 			}
 			if err = ctxStore.SetLastSourceSeq(logCtx, req.ExecutionID, remote.SourceSeq); err != nil {
-				return 0, err
+				return executionProgress{}, err
 			}
 			after = remote.SourceSeq
 		}
 		if after > 0 {
 			if err = client.AckExecutionEvents(ctx, endpoint, agentcontract.ExecutionEventsAck{ExecutionID: req.ExecutionID, SourceID: page.SourceID, SourceEpoch: epoch, SourceStreamID: stream, ThroughSourceSeq: after}); err != nil {
-				return 0, err
+				return executionProgress{}, err
 			}
 		}
 		if after < page.HeadSeq {
 			if len(page.Events) == 0 || !page.HasMore {
 				if err := r.recordExecutionGap(logCtx, req, operationID, resources, epoch, after+1, page.HeadSeq); err != nil {
-					return 0, err
+					return executionProgress{}, err
 				}
-				return 0, errors.New("agent omitted execution events before its head sequence")
+				return executionProgress{}, errors.New("agent omitted execution events before its head sequence")
 			}
 			continue
 		}
 		if page.HasMore {
-			return 0, errors.New("agent requested another page beyond its head sequence")
+			return executionProgress{}, errors.New("agent requested another page beyond its head sequence")
+		}
+		progress := executionProgress{Steps: stepsFromOrder(stepOrder, stepsByID), Stage: ""}
+		if len(progress.Steps) > 0 {
+			progress.Stage = progress.Steps[len(progress.Steps)-1].Name
+		}
+		if sawStep {
+			r.persistJobProgress(ctx, req, progress)
 		}
 		if page.EndSeq > 0 {
 			if !closed {
 				rec, getErr := ctxStore.Get(logCtx, req.ExecutionID)
 				if getErr != nil || rec.FinishedAt == "" || rec.LastSourceSeq != page.EndSeq {
-					return 0, errors.New("execution stream has no durable closing event")
+					return executionProgress{}, errors.New("execution stream has no durable closing event")
 				}
 			} else if err = ctxStore.UpdateFinished(logCtx, req.ExecutionID, "closed", false); err != nil {
-				return 0, err
+				return executionProgress{}, err
 			} else if err = ctxStore.SetLastSourceSeq(logCtx, req.ExecutionID, page.EndSeq); err != nil {
-				return 0, err
+				return executionProgress{}, err
 			}
-			return page.EndSeq, nil
+			progress.EndSeq = page.EndSeq
+			return progress, nil
 		}
-		return 0, nil
+		return progress, nil
 	}
+}
+
+func stepsFromOrder(order []string, byID map[string]controlplane.Step) []controlplane.Step {
+	if len(order) == 0 {
+		return nil
+	}
+	out := make([]controlplane.Step, 0, len(order))
+	for _, id := range order {
+		if step, ok := byID[id]; ok {
+			out = append(out, step)
+		}
+	}
+	return out
+}
+
+func (r *serviceRuntimeReconciler) persistJobProgress(ctx context.Context, req controlplane.ReconcileRequestRPC, progress executionProgress) {
+	if r == nil || r.service == nil || r.service.db == nil || strings.TrimSpace(req.JobID) == "" {
+		return
+	}
+	if len(progress.Steps) == 0 && strings.TrimSpace(progress.Stage) == "" {
+		return
+	}
+	store := controlplane.NewStore(r.service.db)
+	job, err := store.GetJob(ctx, req.JobID)
+	if err != nil || job.State != controlplane.JobRunning || job.LeaseToken == "" {
+		return
+	}
+	if job.ExecutionID != "" && req.ExecutionID != "" && job.ExecutionID != req.ExecutionID {
+		return
+	}
+	merged := mergeProjectedSteps(job.LastSteps, progress.Steps)
+	stage := progress.Stage
+	if stage == "" && len(merged) > 0 {
+		stage = merged[len(merged)-1].Name
+	}
+	_, _ = store.UpdateProgress(ctx, job, stage, merged)
+}
+
+// mergeProjectedSteps appends or updates steps from a new event page onto the
+// Job's already-projected trail (collect starts after the last acked seq).
+func mergeProjectedSteps(existing, incoming []controlplane.Step) []controlplane.Step {
+	if len(incoming) == 0 {
+		return existing
+	}
+	if len(existing) == 0 {
+		return incoming
+	}
+	out := append([]controlplane.Step(nil), existing...)
+	indexByName := map[string]int{}
+	for i, step := range out {
+		indexByName[step.Name] = i
+	}
+	for _, step := range incoming {
+		if i, ok := indexByName[step.Name]; ok {
+			out[i] = step
+			continue
+		}
+		indexByName[step.Name] = len(out)
+		out = append(out, step)
+	}
+	return out
 }
 
 func (r *serviceRuntimeReconciler) ResolveExecution(ctx context.Context, req controlplane.ReconcileRequestRPC) (controlplane.ReconcileResponse, bool, error) {
@@ -235,11 +346,11 @@ func (r *serviceRuntimeReconciler) ResolveExecution(ctx context.Context, req con
 			Retryable:    true,
 		}, true, nil
 	}
-	var endSeq int64
-	if endSeq, err = r.collectExecutionEvents(ctx, endpoint, req); err != nil {
+	progress, err := r.collectExecutionProgress(ctx, endpoint, req)
+	if err != nil {
 		return controlplane.ReconcileResponse{}, false, err
 	}
-	if result.State != "finished" || result.Result == nil || endSeq == 0 || result.EndSeq != endSeq {
+	if result.State != "finished" || result.Result == nil || progress.EndSeq == 0 || result.EndSeq != progress.EndSeq {
 		return controlplane.ReconcileResponse{}, false, nil
 	}
 	if result.Result.VerificationSource == "manual" {
@@ -271,7 +382,7 @@ func (r *serviceRuntimeReconciler) callTracked(ctx context.Context, endpoint str
 			case <-runCtx.Done():
 				return
 			case <-ticker.C:
-				_, _ = r.collectExecutionEvents(runCtx, endpoint, req)
+				_, _ = r.collectExecutionProgress(runCtx, endpoint, req)
 			}
 		}
 	}()
@@ -280,12 +391,26 @@ func (r *serviceRuntimeReconciler) callTracked(ctx context.Context, endpoint str
 	<-done
 	collectCtx, collectCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 	defer collectCancel()
-	if endSeq, err := r.collectExecutionEvents(collectCtx, endpoint, req); err != nil {
-		return reconcileResponseFromAgent(response), fmt.Errorf("execution evidence was not confirmed: %w", err)
-	} else if endSeq == 0 && callErr == nil {
-		return reconcileResponseFromAgent(response), errors.New("execution output stream is not closed")
+	progress, err := r.collectExecutionProgress(collectCtx, endpoint, req)
+	if err != nil {
+		out := reconcileResponseFromAgent(response)
+		if len(progress.Steps) > 0 {
+			out.Steps = progress.Steps
+		}
+		return out, fmt.Errorf("execution evidence was not confirmed: %w", err)
 	}
-	return reconcileResponseFromAgent(response), callErr
+	if progress.EndSeq == 0 && callErr == nil {
+		out := reconcileResponseFromAgent(response)
+		if len(progress.Steps) > 0 {
+			out.Steps = progress.Steps
+		}
+		return out, errors.New("execution output stream is not closed")
+	}
+	out := reconcileResponseFromAgent(response)
+	if len(out.Steps) == 0 && len(progress.Steps) > 0 {
+		out.Steps = progress.Steps
+	}
+	return out, callErr
 }
 
 func (r *serviceRuntimeReconciler) recordExecutionGap(ctx context.Context, req controlplane.ReconcileRequestRPC, operationID string, resources []activitylog.Resource, epoch string, from, to int64) error {

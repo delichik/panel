@@ -116,15 +116,41 @@ export function routeMode(path: string, params: Record<string, unknown>): AppMod
   return 'apps';
 }
 
+/** Agent ensure steps projected onto Job.lastStage while deploy is in flight. */
+const DEPLOY_PROGRESS_STAGES = new Set([
+  'write_files',
+  'ensure_image',
+  'inspect_container',
+  'create_container',
+  'start_container',
+  'verify_running',
+  'replace_stop',
+  'replace_remove',
+  'cleanup_legacy_workspace',
+  'stop',
+  'purge',
+  'apply',
+]);
+
+export function isDeployProgressStage(stage?: string | null) {
+  return !!stage && DEPLOY_PROGRESS_STAGES.has(stage.trim());
+}
+
+/** Monitor-mode fence without projected steps still needs attention; with steps it is normal converging. */
+export function uncertaintyNeedsAttention(errorClass?: string | null, lastStage?: string | null) {
+  return errorClass === 'uncertainty' && !isDeployProgressStage(lastStage);
+}
+
 export function applicationStatus(app: ApplicationDto | ApplicationSummaryDto, runtime?: ApplicationRuntime | null) {
   const status = runtime?.status || app.runtimeStatus;
   const operationStatus = runtime?.operation?.status;
   if (applicationPlanningError(app, runtime)) return 'planning_failed';
   if (!app.enabled) return 'disabled';
   if (app.reconcileStopped) return 'attention';
-  if (status === 'needs_attention' || runtime?.operation?.errorClass === 'uncertainty') return 'result_unknown';
+  if (status === 'needs_attention' || uncertaintyNeedsAttention(runtime?.operation?.errorClass, runtime?.operation?.stage)) return 'result_unknown';
   if (operationStatus === 'failed_retryable') return 'failed_retryable';
   if (['deploying', 'pending', 'queued', 'running', 'waiting'].includes(operationStatus || '')) return 'deploying';
+  if (runtime?.operation?.errorClass === 'uncertainty' && isDeployProgressStage(runtime.operation.stage)) return 'deploying';
   if (operationStatus === 'failed' || operationStatus === 'failure') return 'failed';
   if (status === 'deploying' || status === 'pending') return 'deploying';
   if (status === 'failed_retryable') return 'failed_retryable';
@@ -139,7 +165,11 @@ export function applicationPlanningError(app: ApplicationDto | ApplicationSummar
 }
 
 export function applicationOperationStatus(runtime?: ApplicationRuntime | null) {
-  return runtime?.operation?.errorClass === 'uncertainty' ? 'result_unknown' : runtime?.operation?.status || '';
+  if (uncertaintyNeedsAttention(runtime?.operation?.errorClass, runtime?.operation?.stage)) return 'result_unknown';
+  if (runtime?.operation?.errorClass === 'uncertainty' && isDeployProgressStage(runtime.operation?.stage)) {
+    return runtime.operation?.status || 'running';
+  }
+  return runtime?.operation?.status || '';
 }
 
 export function statusTone(status: string) {
