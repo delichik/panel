@@ -957,7 +957,12 @@ func (s *Service) FailRunningWithoutExecution(ctx context.Context, now time.Time
 	s.runningMu.Lock()
 	defer s.runningMu.Unlock()
 	taskIDs := []string{}
-	if err := orm.New(s.db).From("event_runs").Where("status = ?", StatusRunning).And("stage <> ?", "uncertain").Pluck(ctx, "id", &taskIDs); err != nil {
+	// Exclude remote-fence types in SQL (ENG-RUN-004 / TASK-WORK-003). Load-then-
+	// skip still scans every deploy hold/monitor row each orphan tick and burned
+	// ~50%+ CPU on large event_runs histories.
+	q := orm.New(s.db).From("event_runs").Where("status = ?", StatusRunning).And("stage <> ?", "uncertain")
+	q = q.AndNotIn("type", s.Registry().TypesWithRecovery(RecoveryRemoteFence))
+	if err := q.Pluck(ctx, "id", &taskIDs); err != nil {
 		return 0, err
 	}
 
@@ -967,14 +972,6 @@ func (s *Service) FailRunningWithoutExecution(ctx context.Context, now time.Time
 	for _, taskID := range taskIDs {
 		if _, ok := s.runningExecutions[taskID]; ok {
 			continue
-		}
-		task, getErr := s.Get(ctx, taskID)
-		if getErr == nil {
-			if def, ok := s.Registry().Definition(task.Type); ok && normalizeRecoveryPolicy(def.RecoveryPolicy) == RecoveryRemoteFence {
-				// Deploy-style remote-fence recovery keeps lease/token and awaits
-				// Agent evidence; the local orphan loop must not mark uncertain.
-				continue
-			}
 		}
 		res, err := orm.RawExec(ctx, s.db, `UPDATE event_runs SET stage='uncertain', error=?, next_run_at=?, finished_at=NULL WHERE id=? AND status=? AND stage<>'uncertain'`,
 			message, deadline, taskID, StatusRunning)
@@ -998,11 +995,15 @@ func (s *Service) FailUncertainPastEvidenceWindow(ctx context.Context, now time.
 	startedBefore := now.Add(-defaultUncertaintyEvidenceWindow).Format(time.RFC3339Nano)
 	const message = "Execution evidence could not be obtained within the verification window"
 	taskIDs := []string{}
-	if err := orm.New(s.db).From("event_runs").
+	// Deploy uncertainty is owned by ORCH-LEASE-*; exclude remote-fence types at
+	// query time so stale application_deploy monitor rows are not Get()'d every 30s.
+	q := orm.New(s.db).From("event_runs").
 		Where("status = ?", StatusRunning).
 		And("stage = ?", "uncertain").
-		And("(next_run_at <> '' AND next_run_at <= ?) OR ((next_run_at IS NULL OR next_run_at = '') AND COALESCE(started_at, created_at) <= ?)", deadline, startedBefore).
-		Pluck(ctx, "id", &taskIDs); err != nil {
+		// Parenthesize the OR so later AND type NOT IN (...) applies to both branches.
+		And("((next_run_at <> '' AND next_run_at <= ?) OR ((next_run_at IS NULL OR next_run_at = '') AND COALESCE(started_at, created_at) <= ?))", deadline, startedBefore)
+	q = q.AndNotIn("type", s.Registry().TypesWithRecovery(RecoveryRemoteFence))
+	if err := q.Pluck(ctx, "id", &taskIDs); err != nil {
 		return 0, err
 	}
 	if len(taskIDs) == 0 {
@@ -1012,13 +1013,6 @@ func (s *Service) FailUncertainPastEvidenceWindow(ctx context.Context, now time.
 	finishedAt := now.Format(time.RFC3339Nano)
 	for _, taskID := range taskIDs {
 		task, getErr := s.Get(ctx, taskID)
-		if getErr == nil {
-			if def, ok := s.Registry().Definition(task.Type); ok && normalizeRecoveryPolicy(def.RecoveryPolicy) == RecoveryRemoteFence {
-				// Deploy remote-fence evidence is owned by ORCH-LEASE-*; the
-				// local uncertain window must not terminal-fail those rows.
-				continue
-			}
-		}
 		res, err := orm.RawExec(ctx, s.db, `UPDATE event_runs SET status=?, stage=?, error=?, next_run_at=NULL, finished_at=? WHERE id=? AND status=? AND stage='uncertain'`,
 			StatusFailed, "orphan_execution_timeout", message, finishedAt, taskID, StatusRunning)
 		if err != nil {

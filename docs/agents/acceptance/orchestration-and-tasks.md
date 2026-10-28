@@ -673,8 +673,8 @@ Run HTTP 面是 `/api/v1/executions*`；诊断读面是 `/api/v1/events*` 与 `/
 - **动作**：启动及每30秒 FailRunningWithoutExecution；并对已 uncertain 且超过证据窗口的任务 FailUncertainPastEvidenceWindow。
 - **结果**：无 registry 的 running 标记为 `stage=uncertain`（status 仍为 running），`next_run_at` 记为证据截止（默认 30 分钟）；仍被追踪的保持 running。窗口内占用原并发键，不得把刚丢失进程内执行的远端写操作直接标 failed。窗口耗尽后自动 `status=failed`、`stage=orphan_execution_timeout` 并释放并发键。人工 `ResolveUncertain` 仅作破局，不是唯一出路。
 - **失败**：Cancel/Complete/Fail 在窗口内仍拒绝 uncertain。远端不可取消维护任务是否继续由业务定义决定，但本地不得永久假“正常 running”。
-- **不变量**：一次性内存 worker 在 API 返回前必须先标 running；uncertain 必须出现在 `FirstActiveByConcurrencyKey` 队首直到自动超时失败或破局核实。本条是通用任务的 local-timeout（`ENG-RUN-004`），不得套用到部署 Job 的 remote-fence。
-- **验证**：orphan worker/registry tests、`TestMissingExecutionPreservesUncertainResult`、`TestFirstActiveByConcurrencyKeyRetainsUncertainExecution`。
+- **不变量**：一次性内存 worker 在 API 返回前必须先标 running；uncertain 必须出现在 `FirstActiveByConcurrencyKey` 队首直到自动超时失败或破局核实。本条是通用任务的 local-timeout（`ENG-RUN-004`），不得套用到部署 Job 的 remote-fence。orphan 扫描必须在查询层排除 `RecoveryRemoteFence` 类型（不得先加载全部 running/uncertain 再逐条跳过），否则历史部署 monitor/hold 行会每 30s 把 AppDB 打满 CPU。
+- **验证**：orphan worker/registry tests、`TestMissingExecutionPreservesUncertainResult`、`TestFirstActiveByConcurrencyKeyRetainsUncertainExecution`、`TestFailUncertainPastEvidenceWindowSkipsRemoteFence`、`TestRemoteFenceOrphanSkipsLocalUncertainMark`。
 
 ### TASK-CLEAN-001 历史保留
 

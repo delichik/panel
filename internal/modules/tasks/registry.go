@@ -170,6 +170,22 @@ func (r *Registry) Types() []string {
 	return out
 }
 
+// TypesWithRecovery returns registered types whose RecoveryPolicy matches policy
+// after normalization (unknown/empty → local_timeout).
+func (r *Registry) TypesWithRecovery(policy string) []string {
+	want := normalizeRecoveryPolicy(policy)
+	if r == nil {
+		return nil
+	}
+	out := make([]string, 0)
+	for taskType, def := range r.defs {
+		if normalizeRecoveryPolicy(def.RecoveryPolicy) == want {
+			out = append(out, taskType)
+		}
+	}
+	return out
+}
+
 func ConcurrencyKeyFor(def Definition, in CreateInput) string {
 	if strings.TrimSpace(in.ConcurrencyKey) != "" {
 		return strings.TrimSpace(in.ConcurrencyKey)

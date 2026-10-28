@@ -568,6 +568,53 @@ func TestFailUncertainPastEvidenceWindowSkipsRemoteFence(t *testing.T) {
 	}
 }
 
+func TestFailUncertainPastEvidenceWindowExcludesRemoteFenceAtQuery(t *testing.T) {
+	// Regression: load-then-skip on thousands of deploy uncertain rows saturated CPU
+	// (FailUncertainPastEvidenceWindow ~85% in production pprof). Query must exclude
+	// remote-fence types so only local-timeout rows are loaded.
+	svc := newTestService(t)
+	ctx := context.Background()
+	svc.MustRegister(Definition{Type: "deploy_remote_fence", RecoveryPolicy: RecoveryRemoteFence})
+	past := time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339Nano)
+	for i := 0; i < 40; i++ {
+		task, err := svc.Create(ctx, CreateInput{Type: "deploy_remote_fence", Summary: "deploy", Status: StatusRunning})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET stage='uncertain', next_run_at=? WHERE id=?`, past, task.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	local, err := svc.Create(ctx, CreateInput{Type: "test", Summary: "local", Status: StatusRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET stage='uncertain', next_run_at=? WHERE id=?`, past, local.ID); err != nil {
+		t.Fatal(err)
+	}
+	expired, err := svc.FailUncertainPastEvidenceWindow(ctx, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired != 1 {
+		t.Fatalf("expected only the local-timeout row to expire, got %d", expired)
+	}
+	var deployRunning int
+	if err := svc.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM event_runs WHERE type='deploy_remote_fence' AND status=? AND stage='uncertain'`, StatusRunning).Scan(&deployRunning); err != nil {
+		t.Fatal(err)
+	}
+	if deployRunning != 40 {
+		t.Fatalf("remote-fence uncertain rows must remain untouched, got %d", deployRunning)
+	}
+	gotLocal, err := svc.Get(ctx, local.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotLocal.Status != StatusFailed || gotLocal.Stage != "orphan_execution_timeout" {
+		t.Fatalf("local-timeout row should fail, got %#v", gotLocal)
+	}
+}
+
 func TestRunningExecutionLifecycleFollowsTaskStatus(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
