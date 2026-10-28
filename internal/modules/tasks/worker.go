@@ -22,9 +22,30 @@ const (
 // The unified worker owns ticking; when a JobRunner is wired, claim/Execute
 // goes through Manager.Run → Definition.Execute → Controller.RunJob.
 type DeployScheduler interface {
-	Poll(context.Context) error
+	// Poll recovers leases and enqueues due/uncertain deploy Runs.
+	// workFound is true when at least one candidate was handed to the pool.
+	Poll(context.Context) (workFound bool, err error)
 	ScanInterval() time.Duration
 	SetExternalScan(wake func())
+}
+
+// defaultIdleDeployScanInterval stretches empty-queue polling so idle Panel
+// does not hit AppDB every active ScanInterval (ENG-RUN-001). Wake and any
+// non-empty Poll snap back to the active cadence. Test harnesses that set
+// ScanInterval below 250ms keep a 1:1 idle cadence so tests stay fast.
+const defaultIdleDeployScanInterval = 2 * time.Second
+
+func idleDeployScanInterval(active time.Duration) time.Duration {
+	if active <= 0 {
+		active = 250 * time.Millisecond
+	}
+	if active < 250*time.Millisecond {
+		return active
+	}
+	if defaultIdleDeployScanInterval < active {
+		return active
+	}
+	return defaultIdleDeployScanInterval
 }
 
 // Service returns the underlying task service (for BindRunEngineWorker wiring).
@@ -393,20 +414,35 @@ func (w *Worker) deployLoop(ctx context.Context) {
 	if deploy == nil {
 		return
 	}
-	interval := deploy.ScanInterval()
-	if interval <= 0 {
-		interval = 250 * time.Millisecond
+	active := deploy.ScanInterval()
+	if active <= 0 {
+		active = 250 * time.Millisecond
 	}
+	idle := idleDeployScanInterval(active)
+	interval := active
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		if err := deploy.Poll(ctx); err != nil && ctx.Err() == nil {
+		workFound, err := deploy.Poll(ctx)
+		if err != nil && ctx.Err() == nil {
 			logging.From(ctx).Warn("deploy run due scan failed", zap.Error(err))
+		}
+		next := idle
+		if workFound {
+			next = active
+		}
+		if next != interval {
+			ticker.Reset(next)
+			interval = next
 		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-w.deployWake:
+			if interval != active {
+				ticker.Reset(active)
+				interval = active
+			}
 		case <-ticker.C:
 		}
 	}

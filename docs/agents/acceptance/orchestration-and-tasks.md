@@ -18,7 +18,7 @@ Run HTTP 面是 `/api/v1/executions*`；诊断读面是 `/api/v1/events*` 与 `/
 
 - **前置**：可领取工作同时存在于部署协调与通用任务。
 - **动作**：部署 Run 收进 `event_runs`；生产路径经同一 Manager.Execute 分派。诊断 Event 不参与。
-- **结果**：部署 Run 与通用 Run 共用 AppDB `event_runs`（步骤在 `event_run_steps`；部署步骤事实仍在 `last_steps_json`）。部署行 `type='application_deploy'`，定义带 `Execute` 与 `RecoveryRemoteFence`。Go 领域类型仍是 `orchestrator.Job`，状态词在扫描/写入边界映射：`queued`↔`pending`，`completed`↔`succeeded`。存量 `jobs` 由迁移 `merge_jobs_into_event_runs` 拷入；ORM 不再注册该表。**due/wake 由统一 `tasks.Worker` 拥有**（部署约 250ms + Wake；通用约 30s；通用 due 跳过 remote-fence 类型以免双派发）。生产分派：`Manager.Run` → `application_deploy` Execute → `Controller.RunJob` → `Store.Claim`/lease renew/RuntimeReconcile。Controller 进程池只做 per-app:server 串行与队列深度；**不再有绕过 Manager 的第二套 claim**。两侧都必须满足 `ENG-RUN-002..005` 与 `ENG-RET-001`。
+- **结果**：部署 Run 与通用 Run 共用 AppDB `event_runs`（步骤在 `event_run_steps`；部署步骤事实仍在 `last_steps_json`）。部署行 `type='application_deploy'`，定义带 `Execute` 与 `RecoveryRemoteFence`。Go 领域类型仍是 `orchestrator.Job`，状态词在扫描/写入边界映射：`queued`↔`pending`，`completed`↔`succeeded`。存量 `jobs` 由迁移 `merge_jobs_into_event_runs` 拷入；ORM 不再注册该表。**due/wake 由统一 `tasks.Worker` 拥有**（部署活跃约 250ms + Wake；空队列空闲扫描约 2s 以降低空载 CPU；通用约 30s；通用 due 跳过 remote-fence 类型以免双派发）。生产分派：`Manager.Run` → `application_deploy` Execute → `Controller.RunJob` → `Store.Claim`/lease renew/RuntimeReconcile。Controller 进程池只做 per-app:server 串行与队列深度；**不再有绕过 Manager 的第二套 claim**。两侧都必须满足 `ENG-RUN-002..005` 与 `ENG-RET-001`。
 - **失败**：不得把诊断表 `events` 并入 Run；不得让日志 upsert 覆盖 lease、status 或 fence `execution_id`；不得把部署 `attempts` 写成 `retry_count`；不确定时不得清空 `lease_token`；不得新增第三套 due 扫描环；绑定统一 Worker 后不得再跑并行的 Controller `scanLoop`；Manager 不得对仍 `running`（含 uncertainty）的 remote-fence 行做 Complete/Fail。
 - **不变量**：Run 的 HTTP 面仍只有 `/api/v1/executions*`，且 `application_deploy` 经 Hidden 不出现在公开列表。未绑定 `JobRunner` 的测试/harness 仍可直接 `RunJob`。`attempts` 与 `retry_count` 保持两种计数（`ENG-RUN-005`）。remote-fence 的进程内 claim 只登记 running execution，不抢写 status/lease。
 - **验证**：迁移后 schema 见到 `event_runs`/`event_run_steps`；Panel 在 orphan 循环之前注册 `application_deploy`（`RecoveryRemoteFence`）；`RegisterTasks`/`BindRunEngineWorker` 挂上 Execute 与 JobRunner；orchestrator/applications/tasks 相关测试通过。
@@ -191,10 +191,10 @@ Run HTTP 面是 `/api/v1/executions*`；诊断读面是 `/api/v1/events*` 与 `/
 
 - **前置**：Store 可用，存在 pending、到期 retryable 或过期 running leases。
 - **动作**：Controller Start/Wake/定时 scan。
-- **结果**：启动先 RecoverExpiredLeases；扫描按 priority DESC、created/id ASC 取到期工作；wake 仅降低延迟，丢失后 scan 仍收敛。
+- **结果**：启动先 RecoverExpiredLeases；扫描按 priority DESC、created/id ASC 取到期工作；wake 仅降低延迟，丢失后 scan 仍收敛。空队列时扫描可退避到约 2s；一旦有 due/uncertain 或 Wake，立即回到活跃 scan（默认 250ms）。
 - **失败**：Store 不可用或 schema 无效则启动失败，不得运行半配置 worker；扫描、Job 查询和处理错误必须输出按 stage/job 限频的结构化进程诊断，不得每 250ms 刷屏或静默吞掉。
-- **不变量**：Start 幂等；默认 worker=8、scan=250ms、lease=3m、队列至少 worker×2（除非显式合法配置）。
-- **验证**：controller start/recovery/order tests。
+- **不变量**：Start 幂等；默认 worker=8、活跃 scan=250ms、空闲 scan≈2s、lease=3m、队列至少 worker×2（除非显式合法配置）。Wake 不得被空闲退避吞掉。
+- **验证**：controller start/recovery/order tests；idleDeployScanInterval / empty-queue backoff。
 
 ### ORCH-CTRL-002 进程内冲突域队列
 

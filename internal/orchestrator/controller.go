@@ -209,11 +209,13 @@ func (c *Controller) ScanInterval() time.Duration {
 
 // Poll recovers expired leases and enqueues due/uncertain Jobs. Used by the
 // unified worker when externalScan is enabled; also safe for tests.
-func (c *Controller) Poll(ctx context.Context) error {
+// workFound is true when at least one candidate was handed to the process pool.
+func (c *Controller) Poll(ctx context.Context) (bool, error) {
 	if c == nil || c.store == nil {
-		return ErrStoreUnavailable
+		return false, ErrStoreUnavailable
 	}
-	return c.enqueueDue(ctx)
+	n, err := c.enqueueDue(ctx)
+	return n > 0, err
 }
 
 func (c *Controller) Start(parent context.Context) error {
@@ -245,7 +247,7 @@ func (c *Controller) Start(parent context.Context) error {
 	c.mu.Unlock()
 	if external {
 		// Immediate drain; subsequent polls come from the unified worker.
-		_ = c.enqueueDue(ctx)
+		_, _ = c.enqueueDue(ctx)
 	} else {
 		c.Wake()
 	}
@@ -268,40 +270,65 @@ func (c *Controller) Stop() error {
 
 func (c *Controller) scanLoop(ctx context.Context) {
 	defer c.wg.Done()
-	ticker := time.NewTicker(c.config.ScanInterval)
+	active := c.config.ScanInterval
+	if active <= 0 {
+		active = 250 * time.Millisecond
+	}
+	idle := active
+	if active >= 250*time.Millisecond {
+		idle = 2 * time.Second
+		if idle < active {
+			idle = active
+		}
+	}
+	interval := active
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		if err := c.enqueueDue(ctx); err != nil && ctx.Err() == nil {
+		n, err := c.enqueueDue(ctx)
+		if err != nil && ctx.Err() == nil {
 			c.logControllerError("enqueue_due", "", err)
+		}
+		next := idle
+		if n > 0 {
+			next = active
+		}
+		if next != interval {
+			ticker.Reset(next)
+			interval = next
 		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-c.wake:
+			if interval != active {
+				ticker.Reset(active)
+				interval = active
+			}
 		case <-ticker.C:
 		}
 	}
 }
 
-func (c *Controller) enqueueDue(ctx context.Context) error {
+func (c *Controller) enqueueDue(ctx context.Context) (int, error) {
 	if err := c.store.RecoverExpiredLeases(ctx); err != nil {
-		return err
+		return 0, err
 	}
 	uncertain, err := c.store.ListUncertain(ctx, c.config.QueueSize)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	for _, job := range uncertain {
 		c.processAsync(ctx, job.ID)
 	}
 	jobs, err := c.store.ListDue(ctx, c.config.QueueSize)
 	if err != nil {
-		return err
+		return len(uncertain), err
 	}
 	for _, job := range jobs {
 		c.processAsync(ctx, job.ID)
 	}
-	return nil
+	return len(uncertain) + len(jobs), nil
 }
 
 func (c *Controller) processAsync(ctx context.Context, jobID string) {

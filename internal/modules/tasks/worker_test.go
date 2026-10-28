@@ -79,6 +79,18 @@ func TestWorkerRunsDueTaskWithoutCreatingInternalTaskRecord(t *testing.T) {
 	}
 }
 
+func TestIdleDeployScanIntervalBacksOffOnlyForProductionCadence(t *testing.T) {
+	if got := idleDeployScanInterval(250 * time.Millisecond); got != 2*time.Second {
+		t.Fatalf("250ms active idle = %v, want 2s", got)
+	}
+	if got := idleDeployScanInterval(10 * time.Millisecond); got != 10*time.Millisecond {
+		t.Fatalf("test cadence must not stretch idle, got %v", got)
+	}
+	if got := idleDeployScanInterval(3 * time.Second); got != 3*time.Second {
+		t.Fatalf("active above idle floor must keep active, got %v", got)
+	}
+}
+
 func TestDueTasksSkipsRemoteFenceDeployRuns(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()

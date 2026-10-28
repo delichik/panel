@@ -108,7 +108,7 @@ func TestJobRunnerDispatchesInsteadOfDirectRunJob(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatal("JobRunner was never invoked for due deploy run")
 		}
-		_ = ctrl.Poll(context.Background())
+		_, _ = ctrl.Poll(context.Background())
 		time.Sleep(10 * time.Millisecond)
 	}
 	if got := runnerCalls.Load(); got < 1 {
