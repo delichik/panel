@@ -93,6 +93,20 @@ import {
 } from './model';
 import { inferTemplateLanguage, type TemplateLanguage } from './templateLanguage';
 import { archiveName } from './archivePath';
+import {
+  deleteLocalAsset,
+  emptyLocalAssetState,
+  findPendingFile,
+  findPendingText,
+  localAssetNames,
+  localAssetsAreDirty,
+  planLocalAssetFlush,
+  resetLocalAssetState,
+  upsertLocalAsset,
+  visibleLocalAssets,
+  type LocalAssetBaseline,
+  type LocalAssetState,
+} from './localAssets';
 import { normalizePage } from '@/views/_shared/requestState';
 
 const { t } = useI18n();
@@ -201,10 +215,14 @@ const assetActionErrors = ref<Record<string, string>>({});
 const assetActionPending = ref('');
 const diagnostics = ref<Diagnostic[]>([]);
 const preview = ref<ApplicationEditPreviewResult | null>(null);
+/** Temporary save-pipeline session only; null while the user is editing locally. */
 const editSession = ref<ApplicationEditSession | null>(null);
 const facilitySession = ref<FacilityEditSession | null>(null);
 const facilityPreview = ref<FacilityEditPreviewResult | null>(null);
 const facilityDiagnostics = ref<Diagnostic[]>([]);
+const appLocalAssets = reactive<LocalAssetState>(emptyLocalAssetState());
+const facilityLocalAssets = reactive<LocalAssetState>(emptyLocalAssetState());
+const editorReady = ref(false);
 const isDirty = ref(false);
 const saveStage = ref<SaveStage>('idle');
 const dialogOpen = ref(false);
@@ -252,8 +270,6 @@ const appErrors = computed(() => validateApplicationDraft(appDraft));
 const facilityErrors = computed(() => validateFacilityDraft(facilityDraft));
 const appDiff = computed(() => diffApplications(mode.value === 'edit' ? currentApplication.value : null, appDraft));
 const facilityDiff = computed(() => diffFacility(facility.value, facilityDraft));
-const hasBlockingAppDiagnostics = computed(() => hasBlockingDiagnostic(diagnostics.value));
-const hasBlockingFacilityDiagnostics = computed(() => hasBlockingDiagnostic(facilityDiagnostics.value));
 const appRows = computed(() => applications.value.map((app) => ({ app, routes: routeSummary(applicationDetails.value[app.id] ?? emptyApplication()), summary: runtimeSummary(runtimes.value[app.id]) })));
 const detailOpen = computed(() => Boolean(selectedId.value));
 const applicationColumns = computed(() => [
@@ -399,26 +415,18 @@ function serverDeployBlockReason(server: ServerDto) {
   if (!server.reachable) return t('resourcesPage.blockUnreachable');
   return t('resourcesPage.blockAgent');
 }
-// 编辑器资产选项只来自编辑会话：beginEdit 已把全部已提交资产复制进会话，
-// 会话内删除的资产会立即从选择器消失，避免把路由引用指向已删除资产
-// （此前混入 facility.staticAssets 会让被删资产仍可选，保存时触发
-// facility_static_asset_referenced_after_delete 且无法定位）。
-const assetOptions = computed(() => (facilitySession.value?.assets ?? []).map((asset) => ({ value: asset.name, label: `${asset.name} / ${asset.filename}` })));
+// 路由资产选项来自本地可见列表（已提交基线 ⊕ pending），删除会立刻从选择器消失。
+const assetOptions = computed(() => visibleLocalAssets(facilityLocalAssets).map((asset) => ({
+  value: asset.name,
+  label: `${asset.name} / ${asset.filename || asset.name}`,
+})));
 const fileLanguageOptions = computed(() => (['plain', 'yaml', 'json', 'shell', 'nginx', 'properties', 'dockerfile'] as TemplateLanguage[]).map((value) => ({
   value,
   label: t(`applicationsPage.templateLanguage.${value}`),
 })));
-const applicationAssetItems = computed<AssetFileItem[]>(() => (editSession.value?.files ?? []).map((file) => ({
-  key: file.name,
-  name: file.name,
-  filename: file.kind === 'archive' ? file.contentType : file.name.split('/').at(-1) || file.name,
-  kind: file.kind === 'template' ? 'text' : file.kind === 'archive' ? 'archive' : 'binary',
-  size: file.size,
-  sha256: file.sha256,
-  editable: file.kind === 'template',
-})));
+const applicationAssetItems = computed<AssetFileItem[]>(() => visibleLocalAssets(appLocalAssets));
 const applicationFileMountOptions = computed(() => makeApplicationFileMountOptions(
-  editSession.value?.files ?? [],
+  localAssetNames(appLocalAssets).map((name) => ({ name })),
   mountDraft.type === 'file' ? mountDraft.source : '',
   (name) => t('applicationsPage.applicationFileMountMissing', { name }),
 ));
@@ -442,20 +450,15 @@ const panelFileMountOptions = computed(() => makePanelFileMountOptions(
 const panelFileMountSourceValid = computed(() => mountDraft.type !== 'panel_file'
   || panelFileMountOptions.value.some((option) => option.value === mountDraft.source.trim() && !option.disabled));
 const panelFileLabelBySource = computed(() => new Map(panelFiles.value.map((file) => [file.source, panelFileLabel(file)])));
-const facilityAssetItems = computed<AssetFileItem[]>(() => (facilitySession.value?.assets ?? []).map((asset) => ({
-  key: asset.name,
-  name: asset.name,
-  filename: asset.filename,
-  kind: asset.contentMode === 'text' ? 'text' : asset.kind === 'uploaded_bundle' ? 'archive' : 'binary',
-  size: asset.size,
-  sha256: asset.sha256,
-  editable: asset.contentMode === 'text',
-})));
+const facilityAssetItems = computed<AssetFileItem[]>(() => visibleLocalAssets(facilityLocalAssets));
 const mountTypeOptions = computed(() => ['persistent', 'volume', 'host', 'file', 'panel_file', 'storage_share'].map((value) => ({ label: t(`applicationsPage.mountType.${value}`), value })));
 const portProtocolOptions = computed(() => (['tcp', 'udp'] as const).map((value) => ({ label: value.toUpperCase(), value })));
 const routeTypeOptions = computed(() => ['static', 'redirect', 'proxy_pass'].map((value) => ({ label: t(`applicationsPage.routeType.${value}`), value })));
 const sourceTypeOptions = computed(() => ['uploaded_file', 'uploaded_bundle'].map((value) => ({ label: t(`applicationsPage.sourceType.${value}`), value })));
-const saving = computed(() => pending.value === 'preview' || pending.value === 'commit');
+const saving = computed(() => pending.value === 'commit');
+const editorDirty = computed(() => isDirty.value
+  || localAssetsAreDirty(appLocalAssets)
+  || localAssetsAreDirty(facilityLocalAssets));
 const proxyAnyAccessModel = computed({
   get: () => Boolean(proxyDraft.anyAccess.enabled),
   set: (value: boolean) => { proxyDraft.anyAccess.enabled = value; },
@@ -560,57 +563,87 @@ const proxyAutoOriginIds = computed(() => {
   return deployed.filter((id) => gateways.has(id));
 });
 
+function applicationFileBaseline(files: ApplicationFile[]): LocalAssetBaseline[] {
+  return files.map((file) => ({
+    key: file.name,
+    name: file.name,
+    filename: file.kind === 'archive' ? file.contentType : file.name.split('/').at(-1) || file.name,
+    kind: file.kind === 'template' ? 'text' : file.kind === 'archive' ? 'archive' : 'binary',
+    size: file.size,
+    sha256: file.sha256,
+    editable: file.kind === 'template',
+  }));
+}
+
+function facilityAssetBaseline(assets: StaticAsset[]): LocalAssetBaseline[] {
+  return assets.map((asset) => ({
+    key: asset.name,
+    name: asset.name,
+    filename: asset.filename,
+    kind: asset.contentMode === 'text' ? 'text' : asset.kind === 'uploaded_bundle' ? 'archive' : 'binary',
+    size: asset.size,
+    sha256: asset.sha256,
+    editable: asset.contentMode === 'text',
+  }));
+}
+
 const applicationAssetAdapter: AssetFileAdapter = {
   async upload({ file, kind }) {
-    if (!editSession.value) return;
-    if (kind === 'archive') {
-      editSession.value = await applicationsApi.uploadEditSessionArchive(editSession.value.id, editSession.value.revision, {
-        file,
-        name: archiveName(file.name),
-        kind: 'archive',
-      });
-    } else {
-      editSession.value = await applicationsApi.uploadEditSessionFile(editSession.value.id, file.name, editSession.value.revision, { file, name: file.name });
-    }
+    const name = kind === 'archive' ? archiveName(file.name) : file.name;
+    const nameError = validateFileName(name);
+    if (nameError) throw new Error(t(nameError));
+    upsertLocalAsset(appLocalAssets, {
+      type: 'upsert', key: name, name, filename: file.name, kind, file, size: file.size,
+    });
     markDirty();
   },
   async replace(item, { file, kind }) {
-    if (!editSession.value) return;
-    const source = editSession.value.files.find((entry) => entry.name === item.key);
-    if (!source) throw new Error(t('applicationsPage.fileLoadFailed'));
-    if (kind === 'archive') {
-      editSession.value = await applicationsApi.uploadEditSessionArchive(editSession.value.id, editSession.value.revision, {
-        file,
-        name: source.name,
-        kind: 'archive',
-      });
-    } else {
-      editSession.value = await applicationsApi.uploadEditSessionFile(editSession.value.id, source.name, editSession.value.revision, { file, name: source.name });
-    }
+    upsertLocalAsset(appLocalAssets, {
+      type: 'upsert', key: item.key, name: item.name, filename: file.name, kind, file, size: file.size,
+    });
     markDirty();
   },
   async download(item) {
-    if (!editSession.value) return;
-    const source = editSession.value.files.find((entry) => entry.name === item.key);
-    if (!source) throw new Error(t('applicationsPage.fileLoadFailed'));
-    saveBlobDownload(await applicationsApi.downloadEditSessionFile(editSession.value.id, source.name, applicationFileDownloadName(source)));
+    const pendingFile = findPendingFile(appLocalAssets, item.key);
+    if (pendingFile) {
+      saveBlobDownload({ blob: pendingFile, filename: item.filename || item.name });
+      return;
+    }
+    const pendingText = findPendingText(appLocalAssets, item.key);
+    if (pendingText !== undefined) {
+      saveBlobDownload({ blob: new Blob([pendingText], { type: 'text/plain;charset=utf-8' }), filename: item.filename || item.name });
+      return;
+    }
+    const appId = String(route.params.applicationId ?? '');
+    if (!appId) throw new Error(t('applicationsPage.fileLoadFailed'));
+    saveBlobDownload(await applicationsApi.downloadFile(appId, item.key, item.filename || item.name));
   },
   async delete(item) {
-    if (!editSession.value) return;
-    editSession.value = await applicationsApi.deleteEditSessionFile(editSession.value.id, item.key, editSession.value.revision);
+    deleteLocalAsset(appLocalAssets, item.key);
     markDirty();
   },
   async loadText(item) {
-    if (!editSession.value) throw new Error(t('applicationsPage.fileLoadFailed'));
-    const source = editSession.value.files.find((entry) => entry.name === item.key);
-    const loaded = await applicationsApi.getEditSessionFile(editSession.value.id, item.key);
-    return { content: decodeBase64Utf8(loaded.contentBase64), name: source?.name ?? loaded.name, language: inferTemplateLanguage(source?.name ?? loaded.name, loaded.contentType) };
+    const pendingText = findPendingText(appLocalAssets, item.key);
+    if (pendingText !== undefined) {
+      return { content: pendingText, name: item.name, language: inferTemplateLanguage(item.name) };
+    }
+    const appId = String(route.params.applicationId ?? '');
+    if (!appId) throw new Error(t('applicationsPage.fileLoadFailed'));
+    const downloaded = await applicationsApi.downloadFile(appId, item.key, item.filename || item.name);
+    const content = await downloaded.blob.text();
+    return { content, name: item.name, language: inferTemplateLanguage(item.name) };
   },
   async saveText({ key: fileName, name, content }) {
-    if (!editSession.value) return;
     const nameError = validateFileName(name);
     if (nameError) throw new Error(t(nameError));
-    editSession.value = await applicationsApi.putEditSessionFile(editSession.value.id, fileName, editSession.value.revision, { name, contentBase64: encodeBase64Utf8(content) });
+    upsertLocalAsset(appLocalAssets, {
+      type: 'upsert',
+      key: fileName,
+      name,
+      kind: 'text',
+      textContent: content,
+      size: new Blob([content]).size,
+    });
     markDirty();
   },
   reload: reloadApplicationEditor,
@@ -618,52 +651,58 @@ const applicationAssetAdapter: AssetFileAdapter = {
 
 const facilityAssetAdapter: AssetFileAdapter = {
   async upload({ file, kind }) {
-    if (!facilitySession.value) return;
     const name = file.name.replace(/\.[^.]+$/, '') || file.name;
-    facilitySession.value = await reverseProxyFacilityApi.putEditAsset(facilitySession.value.id, name, facilitySession.value.revision, {
-      file,
-      name,
-      kind: kind === 'archive' ? 'uploaded_bundle' : 'uploaded_file',
-      contentMode: 'binary',
+    const nameError = validateFileName(name);
+    if (nameError) throw new Error(t(nameError));
+    upsertLocalAsset(facilityLocalAssets, {
+      type: 'upsert', key: name, name, filename: file.name, kind, file, size: file.size,
     });
     markDirty();
   },
   async replace(item, { file, kind }) {
-    if (!facilitySession.value) return;
-    const source = facilitySession.value.assets.find((entry) => entry.name === item.key);
-    if (!source) throw new Error(t('applicationsPage.fileLoadFailed'));
-    facilitySession.value = await reverseProxyFacilityApi.putEditAsset(facilitySession.value.id, source.name, facilitySession.value.revision, {
-      file,
-      name: source.name,
-      kind: kind === 'archive' ? 'uploaded_bundle' : 'uploaded_file',
-      contentMode: 'binary',
+    upsertLocalAsset(facilityLocalAssets, {
+      type: 'upsert', key: item.key, name: item.name, filename: file.name, kind, file, size: file.size,
     });
     markDirty();
   },
   async download(item) {
-    if (!facilitySession.value) return;
-    const source = facilitySession.value.assets.find((entry) => entry.name === item.key);
-    if (!source) throw new Error(t('applicationsPage.fileLoadFailed'));
-    saveBlobDownload(await reverseProxyFacilityApi.downloadEditAsset(facilitySession.value.id, item.key, source.filename));
+    const pendingFile = findPendingFile(facilityLocalAssets, item.key);
+    if (pendingFile) {
+      saveBlobDownload({ blob: pendingFile, filename: item.filename || item.name });
+      return;
+    }
+    const pendingText = findPendingText(facilityLocalAssets, item.key);
+    if (pendingText !== undefined) {
+      saveBlobDownload({ blob: new Blob([pendingText], { type: 'text/plain;charset=utf-8' }), filename: item.filename || item.name });
+      return;
+    }
+    saveBlobDownload(await reverseProxyFacilityApi.downloadStaticAsset(item.key, item.filename || item.name));
   },
   async delete(item) {
-    if (!facilitySession.value) return;
-    facilitySession.value = await reverseProxyFacilityApi.deleteEditAsset(facilitySession.value.id, item.key, facilitySession.value.revision);
+    deleteLocalAsset(facilityLocalAssets, item.key);
     markDirty();
   },
   async loadText(item) {
-    if (!facilitySession.value) throw new Error(t('applicationsPage.fileLoadFailed'));
-    const source = facilitySession.value.assets.find((entry) => entry.name === item.key);
-    if (!source) throw new Error(t('applicationsPage.fileLoadFailed'));
-    const result = await reverseProxyFacilityApi.downloadEditAsset(facilitySession.value.id, source.name, source.filename);
-    return { content: await result.blob.text(), name: source.name, filename: source.filename, language: 'plain' as const };
+    const pendingText = findPendingText(facilityLocalAssets, item.key);
+    if (pendingText !== undefined) {
+      return { content: pendingText, name: item.name, filename: item.filename, language: 'plain' as const };
+    }
+    const result = await reverseProxyFacilityApi.downloadStaticAsset(item.key, item.filename || item.name);
+    return { content: await result.blob.text(), name: item.name, filename: item.filename, language: 'plain' as const };
   },
   async saveText({ key: assetName, name, filename, content }) {
-    if (!facilitySession.value || !filename) return;
-    const nameError = validateFileName(name) ?? validateFileName(filename);
+    const nameError = validateFileName(name) ?? (filename ? validateFileName(filename) : null);
     if (nameError) throw new Error(t(nameError));
-    const file = new File([content], filename, { type: 'text/plain;charset=utf-8' });
-    facilitySession.value = await reverseProxyFacilityApi.putEditAsset(facilitySession.value.id, assetName, facilitySession.value.revision, { file, name: name || filename, kind: 'uploaded_file', contentMode: 'text' });
+    const resolvedFilename = filename || name;
+    upsertLocalAsset(facilityLocalAssets, {
+      type: 'upsert',
+      key: assetName,
+      name: name || resolvedFilename,
+      filename: resolvedFilename,
+      kind: 'text',
+      textContent: content,
+      size: new Blob([content]).size,
+    });
     markDirty();
   },
   reload: reloadFacilityEditor,
@@ -824,6 +863,11 @@ watch(() => route.path, async () => {
   cancelEditorQuery();
   actionError.value = '';
   facilityEditing.value = false;
+  editorReady.value = false;
+  editSession.value = null;
+  facilitySession.value = null;
+  resetLocalAssetState(appLocalAssets, []);
+  resetLocalAssetState(facilityLocalAssets, []);
   isDirty.value = false;
   dialogOpen.value = false;
   await load();
@@ -833,7 +877,7 @@ watch(() => route.path, async () => {
 
 onBeforeRouteLeave((to) => {
   if (saving.value) return false;
-  if (allowLeave || !isDirty.value) return true;
+  if (allowLeave || !editorDirty.value) return true;
   pendingFacilityCancel = false;
   pendingLeaveTarget = to.fullPath;
   discardDialogOpen.value = true;
@@ -841,7 +885,7 @@ onBeforeRouteLeave((to) => {
 });
 
 function handleBeforeUnload(event: BeforeUnloadEvent) {
-  if (!isDirty.value && !saving.value) return;
+  if (!editorDirty.value && !saving.value) return;
   event.preventDefault();
   event.returnValue = '';
 }
@@ -1253,6 +1297,8 @@ async function startApplicationEditorCore() {
   const controller = new AbortController();
   editorQueryController = controller;
   const modeAtStart = mode.value;
+  editorReady.value = false;
+  actionError.value = '';
   await ensureApplicationsLoaded();
   await ensureFacilityLoaded();
   try {
@@ -1266,50 +1312,75 @@ async function startApplicationEditorCore() {
   }
   if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || String(route.params.applicationId ?? '') !== appId) return;
   let app: ApplicationDto | null = null;
-  if (appId) {
-    selectedId.value = appId;
-    app = applicationDetails.value[appId] ?? await applicationsApi.get(appId, { signal: controller.signal });
-    if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || String(route.params.applicationId ?? '') !== appId) return;
-    applicationDetails.value = { ...applicationDetails.value, [appId]: app };
-  }
-  Object.assign(appDraft, draftFromApplication(app));
-  diagnostics.value = [];
-  preview.value = null;
-  editSession.value = null;
-  isDirty.value = false;
+  let files: ApplicationFile[] = [];
   try {
-    editSession.value = await applicationsApi.beginEditSession(appId || undefined, saveInputFromDraft(appDraft));
-    if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || String(route.params.applicationId ?? '') !== appId) return;
-    Object.assign(appDraft, draftFromApplication({ ...(app ?? emptyApplication()), ...editSession.value.draft }));
+    if (appId) {
+      selectedId.value = appId;
+      app = applicationDetails.value[appId] ?? await applicationsApi.get(appId, { signal: controller.signal });
+      if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || String(route.params.applicationId ?? '') !== appId) return;
+      applicationDetails.value = { ...applicationDetails.value, [appId]: app };
+      files = await applicationsApi.listFiles(appId, { signal: controller.signal });
+      if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || String(route.params.applicationId ?? '') !== appId) return;
+      applicationFiles.value = { ...applicationFiles.value, [appId]: files };
+    }
+    Object.assign(appDraft, draftFromApplication(app));
+    resetLocalAssetState(appLocalAssets, applicationFileBaseline(files));
+    diagnostics.value = [];
+    preview.value = null;
+    editSession.value = null;
+    isDirty.value = false;
+    editorReady.value = true;
   } catch (err) {
     if (isAbortError(err)) return;
     const message = err instanceof Error ? err.message : t('applicationsPage.editorStartFailed');
     actionError.value = message;
+    editorReady.value = false;
     notifyError(message, err);
   }
 }
 
-async function patchApplicationDraft() {
-  if (!editSession.value || Object.keys(appErrors.value).length) return;
-  await runEditorAction(async () => {
-    editSession.value = await applicationsApi.patchEditSession(editSession.value!.id, editSession.value!.revision, saveInputFromDraft(appDraft));
-    preview.value = null;
-    isDirty.value = false;
-  });
+async function discardApplicationSaveSession() {
+  const session = editSession.value;
+  editSession.value = null;
+  preview.value = null;
+  if (!session) return;
+  try {
+    await applicationsApi.discardEditSession(session.id);
+  } catch {
+    // TTL cleanup is the safety net for abandoned mid-save sessions.
+  }
 }
 
-async function previewApplication() {
-  const localErrorKeys = Object.keys(appErrors.value);
-  if (localErrorKeys.length) {
-    actionError.value = t(appErrors.value[localErrorKeys[0]]);
-    return;
-  }
-  await patchApplicationDraft();
+async function flushApplicationLocalAssets() {
   if (!editSession.value) return;
-  await runEditorAction(async () => {
-    preview.value = await applicationsApi.previewEditSession(editSession.value!.id, editSession.value!.revision);
-    diagnostics.value = preview.value.diagnostics ?? [];
-  }, 'preview');
+  const plan = planLocalAssetFlush(appLocalAssets);
+  for (const key of plan.deletes) {
+    editSession.value = await applicationsApi.deleteEditSessionFile(editSession.value.id, key, editSession.value.revision);
+  }
+  for (const item of plan.upserts) {
+    if (item.kind === 'text') {
+      const content = item.textContent ?? '';
+      editSession.value = await applicationsApi.putEditSessionFile(editSession.value.id, item.key, editSession.value.revision, {
+        name: item.name,
+        contentBase64: encodeBase64Utf8(content),
+      });
+      continue;
+    }
+    const file = item.file;
+    if (!file) throw new Error(t('applicationsPage.fileLoadFailed'));
+    if (item.kind === 'archive') {
+      editSession.value = await applicationsApi.uploadEditSessionArchive(editSession.value.id, editSession.value.revision, {
+        file,
+        name: item.name,
+        kind: 'archive',
+      });
+    } else {
+      editSession.value = await applicationsApi.uploadEditSessionFile(editSession.value.id, item.key, editSession.value.revision, {
+        file,
+        name: item.name,
+      });
+    }
+  }
 }
 
 async function commitApplication() {
@@ -1318,18 +1389,40 @@ async function commitApplication() {
     actionError.value = t(appErrors.value[localErrorKeys[0]]);
     return;
   }
-  await previewApplication();
-  if (!editSession.value || !preview.value) return;
-  if (hasBlockingAppDiagnostics.value) {
-    notify.push({ title: t('applicationsPage.validationFound'), tone: 'warning' });
-    return;
-  }
+  const appId = String(route.params.applicationId ?? '');
   await runEditorAction(async () => {
-    const result = await applicationsApi.commitEditSession(editSession.value!, preview.value!);
-    notifySuccess(result.applyRequested ? t('applicationsPage.committedAndApplied') : t('applicationsPage.committed'), result);
-    isDirty.value = false;
-    await router.push({ path: '/applications/apps', query: { application: result.application.id } });
-    await load();
+    let succeeded = false;
+    try {
+      editSession.value = await applicationsApi.beginEditSession(
+        appId || undefined,
+        appId ? undefined : saveInputFromDraft(appDraft),
+      );
+      editSession.value = await applicationsApi.patchEditSession(
+        editSession.value.id,
+        editSession.value.revision,
+        saveInputFromDraft(appDraft),
+      );
+      await flushApplicationLocalAssets();
+      if (!editSession.value) return;
+      preview.value = await applicationsApi.previewEditSession(editSession.value.id, editSession.value.revision);
+      diagnostics.value = preview.value.diagnostics ?? [];
+      if (hasBlockingDiagnostic(diagnostics.value)) {
+        notify.push({ title: t('applicationsPage.validationFound'), tone: 'warning' });
+        return;
+      }
+      const result = await applicationsApi.commitEditSession(editSession.value, preview.value);
+      succeeded = true;
+      editSession.value = null;
+      preview.value = null;
+      resetLocalAssetState(appLocalAssets, []);
+      notifySuccess(result.applyRequested ? t('applicationsPage.committedAndApplied') : t('applicationsPage.committed'), result);
+      isDirty.value = false;
+      editorReady.value = false;
+      await router.push({ path: '/applications/apps', query: { application: result.application.id } });
+      await load();
+    } finally {
+      if (!succeeded) await discardApplicationSaveSession();
+    }
   }, 'commit');
 }
 
@@ -1345,28 +1438,25 @@ async function startFacilityEditor() {
 async function startFacilityEditorCore() {
   editorQueryController?.abort();
   const requestId = ++editorQueryRequestId;
-  const controller = new AbortController();
-  editorQueryController = controller;
+  editorQueryController = new AbortController();
   const modeAtStart = mode.value;
   const kindAtStart = facilityKind.value;
-  await ensureFacilityLoaded();
+  editorReady.value = false;
+  actionError.value = '';
+  await loadFacilityData();
   if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || facilityKind.value !== kindAtStart) return;
   if (!isReverseProxyFacility.value) return;
-  Object.assign(facilityDraft, facilityDraftFromConfig(facility.value));
+  if (!facility.value) {
+    actionError.value = error.value || t('applicationsPage.editorStartFailed');
+    return;
+  }
   facilityDiagnostics.value = [];
   facilityPreview.value = null;
   facilitySession.value = null;
   isDirty.value = false;
-  try {
-    facilitySession.value = await reverseProxyFacilityApi.beginEdit(facilitySaveInputFromDraft(facilityDraft));
-    if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || facilityKind.value !== kindAtStart) return;
-    Object.assign(facilityDraft, facilityDraftFromConfig({ ...(facility.value ?? emptyFacility()), deploymentServers: facilitySession.value.draft.deploymentServers, domains: facilitySession.value.draft.domains }));
-  } catch (err) {
-    if (isAbortError(err)) return;
-    const message = err instanceof Error ? err.message : t('applicationsPage.editorStartFailed');
-    actionError.value = message;
-    notifyError(message, err);
-  }
+  Object.assign(facilityDraft, facilityDraftFromConfig(facility.value));
+  resetLocalAssetState(facilityLocalAssets, facilityAssetBaseline(facility.value.staticAssets ?? []));
+  editorReady.value = true;
 }
 
 async function startInPlaceFacilityEdit() {
@@ -1377,7 +1467,7 @@ async function startInPlaceFacilityEdit() {
 }
 
 function cancelFacilityEdit() {
-  if (!isDirty.value) {
+  if (!editorDirty.value) {
     performCancelFacilityEdit();
     return;
   }
@@ -1390,6 +1480,8 @@ function performCancelFacilityEdit() {
   facilitySession.value = null;
   facilityPreview.value = null;
   facilityDiagnostics.value = [];
+  resetLocalAssetState(facilityLocalAssets, []);
+  editorReady.value = false;
   actionError.value = '';
   isDirty.value = false;
   if (mode.value === 'facilityConfig') {
@@ -1437,10 +1529,8 @@ function goBackFromFacilityPage() {
 
 async function reloadApplicationEditor() {
   pending.value = 'editor-reload';
-  const currentSession = editSession.value;
   try {
-    if (currentSession) await applicationsApi.discardEditSession(currentSession.id);
-    editSession.value = null;
+    await discardApplicationSaveSession();
     actionError.value = '';
     await startApplicationEditor();
   } catch (err) {
@@ -1452,12 +1542,9 @@ async function reloadApplicationEditor() {
 
 async function reloadFacilityEditor() {
   pending.value = 'editor-reload';
-  const currentSession = facilitySession.value;
   try {
-    if (currentSession) await reverseProxyFacilityApi.discardEdit(currentSession.id);
-    facilitySession.value = null;
+    await discardFacilitySaveSession();
     actionError.value = '';
-    await loadFacilityData();
     await startFacilityEditor();
   } catch (err) {
     notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
@@ -1466,27 +1553,47 @@ async function reloadFacilityEditor() {
   }
 }
 
-async function patchFacilityDraft() {
-  if (!facilitySession.value || Object.keys(facilityErrors.value).length) return;
-  await runEditorAction(async () => {
-    facilitySession.value = await reverseProxyFacilityApi.patchEdit(facilitySession.value!.id, facilitySession.value!.revision, facilitySession.value!.baseResourceVersion.value, facilitySaveInputFromDraft(facilityDraft));
-    facilityPreview.value = null;
-    isDirty.value = false;
-  });
+async function discardFacilitySaveSession() {
+  const session = facilitySession.value;
+  facilitySession.value = null;
+  facilityPreview.value = null;
+  if (!session) return;
+  try {
+    await reverseProxyFacilityApi.discardEdit(session.id);
+  } catch {
+    // TTL cleanup covers abandoned mid-save sessions.
+  }
 }
 
-async function previewFacilityConfig() {
-  const localErrorKeys = Object.keys(facilityErrors.value);
-  if (localErrorKeys.length) {
-    actionError.value = t(facilityErrors.value[localErrorKeys[0]]);
-    return;
-  }
-  await patchFacilityDraft();
+async function flushFacilityLocalAssets() {
   if (!facilitySession.value) return;
-  await runEditorAction(async () => {
-    facilityPreview.value = await reverseProxyFacilityApi.previewEdit(facilitySession.value!.id, facilitySession.value!.revision);
-    facilityDiagnostics.value = facilityPreview.value.diagnostics ?? [];
-  }, 'preview');
+  const plan = planLocalAssetFlush(facilityLocalAssets);
+  for (const key of plan.deletes) {
+    facilitySession.value = await reverseProxyFacilityApi.deleteEditAsset(
+      facilitySession.value.id,
+      key,
+      facilitySession.value.revision,
+    );
+  }
+  for (const item of plan.upserts) {
+    const filename = item.filename || item.name;
+    const file = item.file
+      ?? (item.textContent !== undefined
+        ? new File([item.textContent], filename, { type: 'text/plain;charset=utf-8' })
+        : null);
+    if (!file) throw new Error(t('applicationsPage.fileLoadFailed'));
+    facilitySession.value = await reverseProxyFacilityApi.putEditAsset(
+      facilitySession.value.id,
+      item.key,
+      facilitySession.value.revision,
+      {
+        file,
+        name: item.name,
+        kind: item.kind === 'archive' ? 'uploaded_bundle' : 'uploaded_file',
+        contentMode: item.kind === 'text' ? 'text' : 'binary',
+      },
+    );
+  }
 }
 
 async function commitFacilityConfig() {
@@ -1495,23 +1602,45 @@ async function commitFacilityConfig() {
     actionError.value = t(facilityErrors.value[localErrorKeys[0]]);
     return;
   }
-  await previewFacilityConfig();
-  if (!facilitySession.value || !facilityPreview.value) return;
-  if (hasBlockingFacilityDiagnostics.value) {
-    notify.push({ title: t('applicationsPage.validationFound'), tone: 'warning' });
-    return;
-  }
   await runEditorAction(async () => {
-    const result = await reverseProxyFacilityApi.commitEdit(facilitySession.value!, facilityPreview.value!);
-    facility.value = result.config;
-    notifySuccess(result.applyRequested ? t('applicationsPage.gatewayCommittedAndApplied') : t('applicationsPage.gatewayCommitted'), result);
-    isDirty.value = false;
-    if (mode.value === 'facilityConfig') {
-      await router.replace(`/applications/facility-apps/${facilityKind.value}`);
+    let succeeded = false;
+    try {
+      facilitySession.value = await reverseProxyFacilityApi.beginEdit();
+      facilitySession.value = await reverseProxyFacilityApi.patchEdit(
+        facilitySession.value.id,
+        facilitySession.value.revision,
+        facilitySession.value.baseResourceVersion.value,
+        facilitySaveInputFromDraft(facilityDraft),
+      );
+      await flushFacilityLocalAssets();
+      if (!facilitySession.value) return;
+      facilityPreview.value = await reverseProxyFacilityApi.previewEdit(
+        facilitySession.value.id,
+        facilitySession.value.revision,
+      );
+      facilityDiagnostics.value = facilityPreview.value.diagnostics ?? [];
+      if (hasBlockingDiagnostic(facilityDiagnostics.value)) {
+        notify.push({ title: t('applicationsPage.validationFound'), tone: 'warning' });
+        return;
+      }
+      const result = await reverseProxyFacilityApi.commitEdit(facilitySession.value, facilityPreview.value);
+      succeeded = true;
+      facility.value = result.config;
+      facilitySession.value = null;
+      facilityPreview.value = null;
+      facilityDiagnostics.value = [];
+      resetLocalAssetState(facilityLocalAssets, facilityAssetBaseline(result.config.staticAssets ?? []));
+      notifySuccess(result.applyRequested ? t('applicationsPage.gatewayCommittedAndApplied') : t('applicationsPage.gatewayCommitted'), result);
+      isDirty.value = false;
+      editorReady.value = false;
+      if (mode.value === 'facilityConfig') {
+        await router.replace(`/applications/facility-apps/${facilityKind.value}`);
+      } else {
+        facilityEditing.value = false;
+      }
       await load();
-    } else {
-      facilityEditing.value = false;
-      await load();
+    } finally {
+      if (!succeeded) await discardFacilitySaveSession();
     }
   }, 'commit');
 }
@@ -1804,11 +1933,6 @@ function removeAt<T>(items: T[], index: number, domain: 'app' | 'facility' = 'ap
   items.splice(index, 1);
   if (domain === 'app') markAppStructuredDirty();
   else markDirty();
-}
-
-function decodeBase64Utf8(value: string) {
-  const bytes = Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
-  return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
 }
 
 function encodeBase64Utf8(value: string) {
@@ -2240,7 +2364,7 @@ onBeforeUnmount(() => {
     </template>
     <template v-if="facilityEditingView">
       <EditorPage>
-        <div v-if="!facilitySession" class="relative grid min-h-64 place-items-center">
+        <div v-if="!editorReady" class="relative grid min-h-64 place-items-center">
           <LoadingOverlay v-if="editorLoading || !actionError" />
           <div v-else class="grid max-w-md justify-items-center gap-3 text-center">
             <AlertTriangle class="size-6 text-danger" aria-hidden="true" />
@@ -2249,11 +2373,11 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div v-if="saving" class="mb-4 rounded-xl border border-info-border bg-info-bg p-3 text-sm text-info">{{ t(`applicationsPage.saveStage.${saveStage}`) }}</div>
-        <div v-if="facilitySession && actionError" class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
+        <div v-if="editorReady && actionError" class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
           <span class="text-danger">{{ actionError }}</span>
           <Button size="sm" :loading="pending === 'editor-reload'" @click="reloadFacilityEditor">{{ t('applicationsPage.reloadFacilityDraft') }}</Button>
         </div>
-        <div v-if="facilitySession" class="relative app-editor-layout">
+        <div v-if="editorReady" class="relative app-editor-layout">
           <LoadingOverlay v-if="saving" :label="t(`applicationsPage.saveStage.${saveStage}`)" />
           <section class="app-editor-shell">
             <div class="app-editor-header">
@@ -2309,7 +2433,7 @@ onBeforeUnmount(() => {
   
               <section class="workspace-panel motion-enter">
                 <AssetFileManager
-                  :items="facilityAssetItems" :adapter="facilityAssetAdapter" :disabled="!facilitySession"
+                  :items="facilityAssetItems" :adapter="facilityAssetAdapter" :disabled="!editorReady || saving"
                   :labels="{ title: t('applicationsPage.staticAssets'), hint: t('applicationsPage.assetUploadLimit'), uploadAsset: t('applicationsPage.uploadAsset'), uploadAssetTitle: t('applicationsPage.uploadAssetTitle'), uploadType: t('applicationsPage.uploadType'), uploadTypeText: t('applicationsPage.uploadTypeText'), uploadTypeBinary: t('applicationsPage.uploadTypeBinary'), uploadTypeArchive: t('applicationsPage.uploadTypeArchive'), uploadFile: t('applicationsPage.uploadFile'), uploadArchive: t('applicationsPage.uploadArchive'), operationFailed: t('applicationsPage.operationFailed'), edit: t('common.edit'), replace: t('common.replace'), download: t('common.download'), delete: t('common.delete'), bytes: t('applicationsPage.bytes'), noAssets: t('applicationsPage.noAssets'), noAssetsHint: t('applicationsPage.noAssetsHint'), textTitle: t('applicationsPage.editTextFile'), newTextTitle: t('applicationsPage.newTextFile'), name: t('applicationsPage.assetReferenceName'), nameHint: t('applicationsPage.assetReferenceNameHint'), filename: t('applicationsPage.assetDownloadFilename'), filenameHint: t('applicationsPage.assetDownloadFilenameHint'), language: t('applicationsPage.highlightLanguage'), content: t('applicationsPage.fileContent'), loading: t('applicationsPage.fileLoading'), loadFailed: t('applicationsPage.fileLoadFailed'), cancel: t('common.cancel'), save: t('common.save'), close: t('common.close'), reload: t('applicationsPage.discardTextAndReload'), deleteTitle: t('applicationsPage.confirm.facility-asset-delete.title'), deleteDescription: t('applicationsPage.confirm.facility-asset-delete.description'), confirmDelete: t('common.delete') }"
                 />
               </section>
@@ -2336,11 +2460,10 @@ onBeforeUnmount(() => {
         </div>
         <template #footer>
           <div class="flex flex-wrap items-center justify-between gap-3">
-            <div class="text-sm text-muted-foreground">{{ isDirty ? t('applicationsPage.unsavedChanges') : t('applicationsPage.readyToCommit') }}</div>
+            <div class="text-sm text-muted-foreground">{{ editorDirty ? t('applicationsPage.unsavedChanges') : t('applicationsPage.readyToCommit') }}</div>
             <div class="flex flex-wrap gap-2">
               <Button variant="secondary" :disabled="saving" @click="cancelFacilityEdit">{{ t('common.cancel') }}</Button>
-              <Button variant="secondary" :loading="pending === 'preview'" :disabled="!facilitySession || saving" @click="previewFacilityConfig">{{ t('applicationsPage.preview') }}</Button>
-              <Button variant="primary" :loading="pending === 'commit'" :disabled="!facilitySession || saving" @click="commitFacilityConfig"><Save />{{ t('applicationsPage.commit') }}</Button>
+              <Button variant="primary" :loading="pending === 'commit'" :disabled="!editorReady || saving" @click="commitFacilityConfig"><Save />{{ t('applicationsPage.commit') }}</Button>
             </div>
           </div>
         </template>
@@ -2433,7 +2556,7 @@ onBeforeUnmount(() => {
 
   <ConsolePage v-else-if="isAppEditor" :back-label="t('common.back')" @back="leaveApplicationEditor" :title="isCreateMode ? t('applicationsPage.createApplication') : t('applicationsPage.applicationEditor')" :description="t('applicationsPage.applicationEditorDescription')">
     <EditorPage>
-      <div v-if="!editSession" class="relative grid min-h-64 place-items-center">
+      <div v-if="!editorReady" class="relative grid min-h-64 place-items-center">
         <LoadingOverlay v-if="editorLoading || !actionError" />
         <div v-else class="grid max-w-md justify-items-center gap-3 text-center">
           <AlertTriangle class="size-6 text-danger" aria-hidden="true" />
@@ -2442,10 +2565,10 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div v-if="saving" class="mb-4 rounded-xl border border-info-border bg-info-bg p-3 text-sm text-info">{{ t(`applicationsPage.saveStage.${saveStage}`) }}</div>
-      <div v-if="editSession && actionError" class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
+      <div v-if="editorReady && actionError" class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
         <span class="text-danger">{{ actionError }}</span>
       </div>
-      <div v-if="editSession" class="relative app-editor-layout">
+      <div v-if="editorReady" class="relative app-editor-layout">
         <LoadingOverlay v-if="saving" :label="t(`applicationsPage.saveStage.${saveStage}`)" />
         <section class="app-editor-shell">
           <div class="app-editor-header">
@@ -2518,7 +2641,7 @@ onBeforeUnmount(() => {
 
             <section class="workspace-panel motion-enter">
               <AssetFileManager
-                :items="applicationAssetItems" :adapter="applicationAssetAdapter" :disabled="!editSession" :show-filename="false"
+                :items="applicationAssetItems" :adapter="applicationAssetAdapter" :disabled="!editorReady || saving" :show-filename="false"
                 :language-options="fileLanguageOptions" :infer-language="inferTemplateLanguage"
                 :labels="{ title: t('applicationsPage.panelFilesAssets'), hint: t('applicationsPage.filesHint'), uploadAsset: t('applicationsPage.uploadAsset'), uploadAssetTitle: t('applicationsPage.uploadAssetTitle'), uploadType: t('applicationsPage.uploadType'), uploadTypeText: t('applicationsPage.uploadTypeText'), uploadTypeBinary: t('applicationsPage.uploadTypeBinary'), uploadTypeArchive: t('applicationsPage.uploadTypeArchive'), uploadFile: t('applicationsPage.uploadFile'), uploadArchive: t('applicationsPage.uploadFolderArchive'), operationFailed: t('applicationsPage.operationFailed'), edit: t('common.edit'), replace: t('common.replace'), download: t('common.download'), delete: t('common.delete'), bytes: t('applicationsPage.bytes'), noAssets: t('applicationsPage.noFiles'), noAssetsHint: t('applicationsPage.noFilesHint'), textTitle: t('applicationsPage.editTextFile'), newTextTitle: t('applicationsPage.newTextFile'), name: t('applicationsPage.fileName'), filename: t('applicationsPage.assetDownloadFilename'), language: t('applicationsPage.highlightLanguage'), content: t('applicationsPage.fileContent'), loading: t('applicationsPage.fileLoading'), loadFailed: t('applicationsPage.fileLoadFailed'), cancel: t('common.cancel'), save: t('common.save'), close: t('common.close'), reload: t('applicationsPage.discardTextAndReload'), deleteTitle: t('applicationsPage.confirm.file-delete.title'), deleteDescription: t('applicationsPage.confirm.file-delete.description'), confirmDelete: t('common.delete') }"
               />
@@ -2536,7 +2659,7 @@ onBeforeUnmount(() => {
               <div><span>{{ t('applicationsPage.mounts') }}</span><strong>{{ appDraft.mounts.length }}</strong></div>
               <div><span>{{ t('applicationsPage.previewAdded') }}</span><strong>{{ appDiff.added }}</strong></div>
               <div><span>{{ t('applicationsPage.previewChanged') }}</span><strong>{{ appDiff.changed }}</strong></div>
-              <Badge :tone="isDirty ? 'warning' : 'success'">{{ isDirty ? t('applicationsPage.dirty') : t('applicationsPage.clean') }}</Badge>
+              <Badge :tone="editorDirty ? 'warning' : 'success'">{{ editorDirty ? t('applicationsPage.dirty') : t('applicationsPage.clean') }}</Badge>
             </div>
           </section>
           <section class="rounded-2xl border border-border bg-card p-4">
@@ -2552,11 +2675,10 @@ onBeforeUnmount(() => {
 
       <template #footer>
         <div class="flex flex-wrap items-center justify-between gap-3">
-          <div class="text-sm text-muted-foreground">{{ isDirty ? t('applicationsPage.unsavedChanges') : t('applicationsPage.readyToCommit') }}</div>
+          <div class="text-sm text-muted-foreground">{{ editorDirty ? t('applicationsPage.unsavedChanges') : t('applicationsPage.readyToCommit') }}</div>
           <div class="flex flex-wrap gap-2">
             <Button variant="secondary" :disabled="saving" @click="leaveApplicationEditor">{{ t('common.cancel') }}</Button>
-            <Button variant="secondary" :loading="pending === 'preview'" :disabled="!editSession || saving" @click="previewApplication()">{{ t('applicationsPage.preview') }}</Button>
-            <Button variant="primary" :loading="pending === 'commit'" :disabled="!editSession || saving" @click="commitApplication()"><Save />{{ t('applicationsPage.commit') }}</Button>
+            <Button variant="primary" :loading="pending === 'commit'" :disabled="!editorReady || saving" @click="commitApplication()"><Save />{{ t('applicationsPage.commit') }}</Button>
           </div>
         </div>
       </template>
@@ -2590,7 +2712,7 @@ onBeforeUnmount(() => {
     <div v-else-if="dialogKind === 'mount'" class="grid gap-3">
       <label class="field">{{ t('common.type') }}<Select v-model="mountDraft.type" :options="mountTypeOptions" /></label>
       <label class="field">{{ t('applicationsPage.source') }}<Select v-if="mountDraft.type === 'file'" v-model="mountDraft.source" :options="applicationFileMountOptions" :placeholder="t('applicationsPage.applicationFileMountSourcePlaceholder')" /><Select v-else-if="mountDraft.type === 'panel_file'" v-model="mountDraft.source" :options="panelFileMountOptions" :placeholder="t('applicationsPage.panelFileMountSourcePlaceholder')" /><Select v-else-if="mountDraft.type === 'storage_share'" v-model="mountDraft.source" :options="storageShareOptions" :placeholder="t('applicationsPage.storageShareMountSourcePlaceholder')" :disabled="!storageShareAvailable" /><Input v-else v-model="mountDraft.source" /></label>
-      <p v-if="mountDraft.type === 'file' && !editSession?.files.length" class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.applicationFileMountEmpty') }}</p>
+      <p v-if="mountDraft.type === 'file' && !applicationAssetItems.length" class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.applicationFileMountEmpty') }}</p>
       <p v-else-if="mountDraft.type === 'file' && mountDraft.source && !applicationFileMountSourceValid" class="m-0 text-xs text-danger">{{ t('applicationsPage.applicationFileMountMissing', { name: mountDraft.source }) }}</p>
       <p v-if="mountDraft.type === 'panel_file' && !panelFiles.length" class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.panelFileMountEmpty') }}</p>
       <p v-else-if="mountDraft.type === 'panel_file' && mountDraft.source && !panelFileMountSourceValid" class="m-0 text-xs text-danger">{{ t('applicationsPage.panelFileMountMissing', { source: mountDraft.source }) }}</p>

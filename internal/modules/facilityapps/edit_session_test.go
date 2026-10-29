@@ -407,6 +407,88 @@ func TestFacilityEditTextAssetCommitAndReopenPreservesMode(t *testing.T) {
 	}
 }
 
+// TestFacilityEditAssetOnlyCommitPreservesRedirectURL 回归：已提交的 301 目的地址
+// 不得因为「无 draft 开启会话 → 只改文本资产 → commit」而被陈旧客户端草稿回滚。
+func TestFacilityEditAssetOnlyCommitPreservesRedirectURL(t *testing.T) {
+	svc, _, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	const committedURL = "https://new-target.example.test/landing"
+	const staleURL = "https://old-target.example.test/landing"
+	if _, err := svc.SaveReverseProxy(ctx, ReverseProxySaveInput{
+		DeploymentServers: []string{"srv-a"},
+		Domains: []FacilityRouteDomain{{
+			Domain: "gateway.example.test", OriginServerIDs: []string{"srv-a"},
+			Paths: []FacilityRoutePath{{Path: "/go", RuleType: StaticRuleRedirect, RedirectURL: committedURL, RedirectCode: 301}},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := facilityEditRedirectURL(session.Draft); got != committedURL {
+		t.Fatalf("begin without draft redirectUrl=%q, want %q", got, committedURL)
+	}
+	stale := ReverseProxySaveInput{
+		DeploymentServers: []string{"srv-a"},
+		Domains: []FacilityRouteDomain{{
+			Domain: "gateway.example.test", OriginServerIDs: []string{"srv-a"},
+			Paths: []FacilityRoutePath{{Path: "/go", RuleType: StaticRuleRedirect, RedirectURL: staleURL, RedirectCode: 301}},
+		}},
+	}
+	staleSession, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{Draft: &stale})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := facilityEditRedirectURL(staleSession.Draft); got != staleURL {
+		t.Fatalf("explicit stale draft redirectUrl=%q, want %q", got, staleURL)
+	}
+	session, err = svc.PutFacilityEditAsset(ctx, session.ID, "asset-site", "put-site", FacilityEditAssetInput{
+		Revision: session.Revision, ClientOperationID: "put-site", Name: "site", Kind: StaticSourceUploadedFile,
+		ContentMode: "text", FileName: "index.html", Content: []byte("<html>ok</html>"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := svc.PreviewFacilityEditSession(ctx, session.ID, session.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.CommitFacilityEditSession(ctx, session.ID, "commit-asset-only", CommitFacilityEditSessionInput{
+		Revision: session.Revision, BaseResourceVersion: session.BaseResourceVersion.Value, PreviewToken: preview.Token.Value,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := facilityConfigRedirectURL(result.Config); got != committedURL {
+		t.Fatalf("after asset-only commit redirectUrl=%q, want %q", got, committedURL)
+	}
+}
+
+func facilityEditRedirectURL(draft ReverseProxySaveInput) string {
+	for _, domain := range draft.Domains {
+		for _, path := range domain.Paths {
+			if path.RuleType == StaticRuleRedirect {
+				return path.RedirectURL
+			}
+		}
+	}
+	return ""
+}
+
+func facilityConfigRedirectURL(cfg ReverseProxyConfig) string {
+	for _, domain := range cfg.Domains {
+		for _, path := range domain.Paths {
+			if path.RuleType == StaticRuleRedirect {
+				return path.RedirectURL
+			}
+		}
+	}
+	return ""
+}
+
 func TestFacilityAssetDownloadsResolveCommittedSourceAndReplacementBlob(t *testing.T) {
 	svc, _, closeStore := newFacilityEditTestService(t)
 	defer closeStore()

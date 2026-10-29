@@ -194,18 +194,18 @@
 
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
-| UI-APP-012 | 进入 create 或 `:applicationId/edit` | 先加载必要应用/设施数据并创建 durable edit session；会话就绪前不渲染可编辑表单，preview/commit 禁用 | 会话失败就地显示错误和重试，不允许编辑未加载草稿 | 成功后表单来自 session.draft；重试可丢弃旧 session 重建 |
+| UI-APP-012 | 进入 create 或 `:applicationId/edit` | 只加载必要应用/设施/文件清单到本地草稿；**不**创建 edit-session；加载完成前不渲染可编辑表单，保存禁用 | 已提交定义/清单加载失败就地显示错误和重试 | 成功后表单与文件列表来自本地快照；重试重新拉取已提交数据并清空 pending |
 | UI-APP-013 | 编辑连续配置流 | 依次完整展开：身份、运行源、网络访问、容器环境、存储与挂载、部署目标、应用文件；网络、环境、存储必须为同级独立面板并各自提供操作与空态；正文内部滚动、右侧摘要 sticky/下移 | 不得把环境变量与挂载混入同一面板，不得恢复 YAML 源码模式、分页卡片或分区隐藏；窄屏单列无横滚 | 所有区块在同一编辑正文可连续到达，网络、环境、存储的标题和内容边界可独立辨认 |
-| UI-APP-014 | 编辑基本/运行字段 | name、enabled、image、CPU、memory、命令参数数组、privileged 任一变化标脏并清过期预览/诊断 | CPU/memory 非数字、name/image 等必填错误阻止 preview/commit；命令新增项默认空 | 右侧 diff/dirty 立即更新，序列化保留未被 UI 覆盖的 spec 字段 |
+| UI-APP-014 | 编辑基本/运行字段 | name、enabled、image、CPU、memory、命令参数数组、privileged 任一变化标脏并清过期诊断 | CPU/memory 非数字、name/image 等必填错误阻止保存；命令新增项默认空 | 右侧 diff/dirty 立即更新，序列化保留未被 UI 覆盖的 spec 字段 |
 | UI-APP-015 | 新增/编辑环境变量或端口 | 弹窗草稿与主草稿隔离，保存才写入；env 含 key/value，value 可从目录在当前光标/选区插入当前应用或其它应用容器占位符；port 含 label/container/host port | 目录失败只禁用插入能力，不阻止手工编辑；取消不得污染主草稿；删除/保存均标脏 | model 测试证明 dialog draft 独立，插入测试覆盖光标与替换选区，列表摘要更新 |
-| UI-APP-016 | 新增/编辑挂载 | 支持 persistent/volume/host/file/panel_file/storage_share，含 source/target/mode/readOnly；file 仅从当前编辑会话的应用文件 name 下拉选择，storage_share 从已启用设施服务器选来源 | 应用文件为空时提示先上传；旧 file 引用已不存在时保留原值并标记失效、禁止再次保存；storage share 未配置显示配置入口且无来源不能保存；该类型不显示 mode | file 与 storage_share 保存后 source 均使用稳定值而非展示文案，取消无改变 |
-| UI-APP-017 | 新增/编辑应用反向代理 | 配置 domain、targetPort、paths、AnyAccess；来源服务器由部署目标与网关自动推导，只读，不允许手填 | primary_backup 无来源优先级时报错/阻止提交；domain/port/path 无效阻止最终 preview | 保存生成规范小写域名、数值端口和稳定 originPriority |
+| UI-APP-016 | 新增/编辑挂载 | 支持 persistent/volume/host/file/panel_file/storage_share，含 source/target/mode/readOnly；file 仅从**本地可见**应用文件 name 下拉选择（已提交∪pending−删除），storage_share 从已启用设施服务器选来源 | 应用文件为空时提示先添加；旧 file 引用已不存在时保留原值并标记失效、禁止再次保存；storage share 未配置显示配置入口且无来源不能保存；该类型不显示 mode | file 与 storage_share 保存后 source 均使用稳定值而非展示文案，取消无改变 |
+| UI-APP-017 | 新增/编辑应用反向代理 | 配置 domain、targetPort、paths、AnyAccess；来源服务器由部署目标与网关自动推导，只读，不允许手填 | primary_backup 无来源优先级时报错/阻止提交；domain/port/path 无效阻止最终保存 | 保存生成规范小写域名、数值端口和稳定 originPriority |
 | UI-APP-018 | 配置 AnyAccess | 可选全部/指定 relay 网关、round_robin/ip_hash/primary_backup；主备通过上下移动明确优先顺序 | relay 只能选网关且不能与 origin 重合；移除部署/网关后无效项被清理 | payload 仅在启用且选择指定时包含 relayServerIds |
 | UI-APP-019 | 新增或编辑代理 path | 打开既有 path 时必须完整回显 path、gzip、请求体上限、连接/读/写超时、buffering、WebSocket mode、自定义请求/响应头；WebSocket 只提供 auto/on/off 单一选择器，编辑副本与父规则隔离 | 数值非负；空 header 行过滤；payload 不得出现旧 `webSocket` 布尔字段；不得直接用浏览器深拷贝 API 复制 Vue reactive Proxy；取消子弹窗返回代理弹窗且不写主草稿 | 选择 auto/on/off 后 payload 仅含 `options.webSocketMode`；保存回父弹窗后 path 摘要可见，最终保存才标主草稿脏 |
-| UI-APP-020 | 管理应用文件 | 统一 AssetFileManager 单入口选择文本/普通文件/文件夹归档；文本可编辑，binary/archive 仅替换/下载/删除 | 文件名拒绝 `/`、`\\`、`..`、控制字符；替换必须保留原 name；并发冲突提供 reload | 所有动作走 session revision，成功更新 session 文件列表并标脏 |
-| UI-APP-021 | 点击 Preview | 先本地校验，再 PATCH 当前 draft，再调用 session preview，展示 diagnostics/diff | 任一 error diagnostic 阻止 commit；修改草稿自动清掉旧 diagnostics | 请求 revision 单调，诊断显示 field/message/detail |
-| UI-APP-022 | 点击 Commit | 自动执行同一 preview 流程，只有无 blocking diagnostics 才 commit；保存期间整编辑器阻塞且不可离开 | commit 冲突/失败保留会话并 toast；不重复提交 | 成功按 applyRequested 区分提示，选中新应用回列表 |
-| UI-APP-023 | 取消、返回、路由跳转或关页 | 任意脏字段/文件触发放弃确认和 beforeunload；明确放弃后才离开；保存中拒绝离开；footer 取消与页头返回均明确 `push` 到 `/applications/apps`（编辑时带 `application` 选中） | 返回目标必须明确为 apps 列表，不得使用 `router.back()` 或不稳定历史栈 | 取消确认保留草稿；确认后 session 状态被放弃/页面离开 |
+| UI-APP-020 | 管理应用文件 | 统一 AssetFileManager；文本/普通/归档变更写入**本地 pending**；文本「保存」只更新 pending；下载已提交文件走正式 content API，pending 文本从内存读 | 文件名拒绝 `/`、`\\`、`..`、控制字符；替换必须保留原 name；编辑期不得调用 session 文件 API | 列表=已提交基线⊕pending；页面保存时才 flush |
+| UI-APP-021 | （已并入保存）原 Preview | 不再提供独立 Preview 主按钮 | — | 诊断由保存流水线在 preview 步展示 |
+| UI-APP-022 | 点击保存 | 本地校验→begin（编辑无客户端草稿/创建带初始草稿）→patch→flush pending 文件→preview→无 blocking diagnostic 才 commit→清理会话；保存期间整编辑器阻塞且不可离开 | 冲突/失败 discard 临时会话、保留本地草稿并 toast；不重复提交 | 成功按 applyRequested 区分提示，选中新应用回列表 |
+| UI-APP-023 | 取消、返回、路由跳转或关页 | 任意脏字段/本地 pending 触发放弃确认和 beforeunload；明确放弃后才离开；保存中拒绝离开；footer 取消与页头返回均明确 `push` 到 `/applications/apps`（编辑时带 `application` 选中） | 返回目标必须明确为 apps 列表，不得使用 `router.back()` 或不稳定历史栈 | 确认后丢弃本地草稿；无进入时创建的 session 需 discard |
 
 ## 11. 设施目录与入口代理
 
@@ -216,13 +216,13 @@
 | UI-FAC-003 | 查看 reverse-proxy 详情 | 单列 + Tabs：`routes`（默认）纵向叠放 KPI、route summaries、DNS 同步、静态资产下载；`nodes` 展示 operation/reconcileStopped 与 `FacilityDiagnostics`；`tab` 进 URL；禁止主栏+右侧诊断常驻左右分栏；DNS 区列出设施域名与应用反向代理域名并标注来源 | 未知 facilityKind 显示不可用空态；加载失败可重试 | 用户可见服务器使用名称，未知才回退 ID；深链 `?tab=nodes` 直达节点状态；应用域名不得从 DNS 区遗漏 |
 | UI-FAC-004 | DNS 同步为 pending | 非编辑态、可见标签每约 3 秒重载设施直至不 pending | 编辑中停止轮询；离开清 timer | 状态从 pending 更新且不覆盖编辑草稿 |
 | UI-FAC-013 | DNS 失败/跳过重试与覆盖接管 | 失败/跳过/未同步显示错误与「重试 DNS」；失败（或冲突类错误）提供「覆盖已有记录」，经危险确认后调用 `POST .../dns-sync`（`takeover`+`confirmTakeover`） | 未确认不得接管；请求中只锁当前域名操作 | 成功提示含 taskId 并刷新 DNS 状态 |
-| UI-FAC-005 | 进入入口代理编辑 | 详情页就地展开，config 深链也可直达；先创建 durable session，再显示连续流：网关、域名/路由、静态资产 | 会话失败显示重试；编辑中隐藏详情 reconcile/refresh 操作 | 两个入口得到同一草稿与提交行为 |
+| UI-FAC-005 | 进入入口代理编辑 | 详情页就地展开，config 深链也可直达；进入前重新拉取已提交配置到本地草稿与资产基线；**不**创建 edit-session；显示连续流：网关、域名/路由、静态资产 | 配置加载失败显示重试；编辑中隐藏详情 reconcile/refresh；不得用陈旧内存快照作为保存时的服务端播种源 | 两个入口同一本地编辑与保存行为 |
 | UI-FAC-006 | 修改网关服务器 | 仅从服务器选择；移除网关时自动剪除各域名 origin/primary/relay，并以 warning 告知数量 | 不得留下指向非网关服务器的引用 | payload 中所有关联服务器均属于 deploymentServers |
 | UI-FAC-007 | 新增/编辑域名 | 校验合法、非重复域名且至少一台 origin；origin 只能从网关选；可配置 AnyAccess relay/策略/主源 | primary 必须属于 origin，指定 relay 只能来自可用网关 | 错误字段就地显示且弹窗不关闭；成功才标脏 |
-| UI-FAC-008 | 新增/编辑设施 path | path 必须以 `/` 开头；static 要选 session asset；redirect 要合法 URL 与 301/302/307/308；proxy_pass 要 http(s) URL并可配 source mode | 各 ruleType 只发送相关字段；非法值就地阻止保存 | model 测试覆盖空/非法 path、redirect、proxy 和缺 asset |
+| UI-FAC-008 | 新增/编辑设施 path | path 必须以 `/` 开头；static 要选**本地可见** asset；redirect 要合法 URL 与 301/302/307/308；proxy_pass 要 http(s) URL并可配 source mode | 各 ruleType 只发送相关字段；非法值就地阻止保存 | model 测试覆盖空/非法 path、redirect、proxy 和缺 asset |
 | UI-FAC-009 | 配置设施 path 高级项 | 支持 gzip、请求体、超时、buffering、WebSocket、自定义请求/响应头；redirect 仅保留适用项 | 数值非负，空 header 过滤 | clone/编辑往返不丢 proxy_pass 和 options |
-| UI-FAC-010 | 管理静态资产 | 复用 AssetFileManager；文本资产才可编辑；新文本下载名默认跟引用名且可分开改；路由引用用 asset.name | binary/archive 即使扩展名像文本也不可编辑；替换保留 name | 会话下载/正式下载路径正确，删除被引用资产由服务端诊断/冲突阻止 |
-| UI-FAC-011 | Preview/Commit/取消设施编辑 | 本地校验→patch→preview→无 blocking diagnostic 才 commit；变更摘要按域名和网关服务器实际对象互斥归类为新增、修改、删除，同一变化不得重复计数；成功回详情并刷新；取消脏草稿先确认 | 冲突提供放弃本地并重载正式配置；保存中整页阻塞；仅默认字段规范化、域名面板顺序或服务器选择顺序变化不得产生假修改 | applyRequested 决定提示，详情展示后端返回配置；diff model 测试覆盖新增、删除、同名内容修改、等量替换和未变更基线 |
+| UI-FAC-010 | 管理静态资产 | 复用 AssetFileManager；变更写入本地 pending；文本「保存」只更新 pending；新文本下载名默认跟引用名且可分开改；路由引用用 asset.name；已提交资产下载走正式 static content | binary/archive 即使扩展名像文本也不可编辑；替换保留 name；编辑期不得调用 session asset API | 列表=已提交⊕pending；页面保存时 flush；删除仍被引用由保存时服务端诊断阻止 |
+| UI-FAC-011 | 保存/取消设施编辑 | 唯一主操作「保存」：本地校验→begin（无客户端草稿）→patch→flush pending 资产→preview→无 blocking diagnostic 才 commit→清理会话；变更摘要按域名和网关服务器实际对象互斥归类；成功必须退出编辑并回到详情并刷新；取消脏草稿先确认；无独立 Preview 主按钮 | 冲突 discard 临时会话并保留本地；保存中整页阻塞；仅默认字段规范化、域名面板顺序或服务器选择顺序变化不得产生假修改；仅改静态文本不得回滚已提交 redirectUrl | applyRequested 决定提示；diff model 测试覆盖新增、删除、同名内容修改、等量替换和未变更基线 |
 
 `UI-FAC-012`：入口代理按节点显示容器观测与部署结果、失败阶段、下次重试及活动入口；错误带原因与处理提示，技术诊断/本次运行日志放入内部可滚动折叠区。按需代理检查显示样本限制、节点/域名/上游、分类解释与下一步；空样本不表示全部路由健康，旧配置/离页响应不得覆盖当前结果。
 
@@ -233,7 +233,7 @@
 | UI-STO-001 | 打开 storage-share 详情 | 加载配置和状态，显示 enabled/lastError、服务器数、live exports、分区及健康挂载；每 15 秒刷新状态 | 未启用不请求 status；状态失败保留配置且状态 unknown | 隐藏/卸载时停止 timer，手刷重载配置+状态 |
 | UI-STO-002 | 切换健康/分区/设置 | 健康列每服务器 Agent/root/NFS/export 与关联应用；分区列来源、节点、路径、target、volume、mount 状态；设置走 `/config` 深链 | 从脏设置切 tab 必须先确认离开 | 返回详情后恢复用户请求的详情 tab |
 | UI-STO-003 | 编辑服务器与 root | 至少一行有效 server+绝对 root；禁止重复 server、空格、`..`、`//`、尾 `/`；启用后已保存 server 的 root 只读 | 至少保留一行；新增行默认 `/opt/panel-shared-storage` | 错误逐行显示，无效配置无 PUT |
-| UI-STO-004 | 保存设置 | 仅提交有效行、trim root 和当前 version；成功重建基线并加载状态 | 并发/version 冲突保留草稿；返回 lastError 额外 danger toast | dirty 消失，取消按钮恢复服务端配置 |
+| UI-STO-004 | 保存设置 | 仅提交有效行、trim root 和当前 version；成功后退出设置页并回到 storage-share 详情 | 并发/version 冲突保留草稿且留在设置页；返回 lastError 额外 danger toast | dirty 清除后导航到详情；失败不离开设置页 |
 | UI-STO-005 | 离开脏设置或关闭页 | 路由离开与 beforeunload 均保护；取消保留草稿，确认才导航 | 保存中也不得静默离开 | 三种入口（tab、返回、外部路由）行为一致 |
 | UI-STO-006 | 点击同步导出 | 仅 enabled 时提交 reconcile，提示任务已接受并刷新 status | 禁用态不请求；不得宣称全部导出已生效 | 后续状态由 status 接口决定 |
 | UI-STO-007 | 卸载设施 | 先确认影响；有引用应用时阻止并列出“去应用编辑解除”入口；无引用才允许 DELETE | 卸载保留历史分区数据；失败不清配置 | 成功 enabled=false、status 清空，引用存在时零 DELETE |

@@ -111,7 +111,9 @@ export const applicationsApi = {
     return apiClient.post<ApplicationEditSession>('/application-edit-sessions', {
       applicationId,
       clientDraftKey: applicationId ? `application:${applicationId}` : 'application:create',
-      draft,
+      // Create needs an initial draft; edit sessions must seed from the server
+      // application so a stale client snapshot cannot overwrite newer fields.
+      ...(draft ? { draft } : {}),
     });
   },
   patchEditSession(sessionId: string, revision: number, draft: ApplicationSaveInput) {

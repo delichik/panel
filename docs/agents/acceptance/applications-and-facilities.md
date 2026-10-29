@@ -112,16 +112,18 @@
 - **边界**：容器名只在引用应用与目标应用部署到同一服务器并加入 `panel-apps` 网络时可作为 Docker DNS 目标；停止或删除目标不等同于改名联动。
 - **验证**：变量目录路由、缺失目标渲染错误，以及目标改名后引用应用 generation/spec/Job 环境变量更新测试。
 
-## 4. 应用文件与持久编辑会话
+## 4. 应用文件与保存时临时编辑会话
+
+编辑会话不是跨设备/跨停留的用户草稿。对用户只有本地编辑与一次「保存」；会话仅在保存流水线内创建，用于大文件落盘、revision CAS、preview token 与失败清理。
 
 ### APP-EDIT-001 会话创建与所有权
 
-- **前置**：管理员创建应用或编辑既有应用，可存在可恢复草稿。
-- **动作**：`POST /api/v1/application-edit-sessions`。
-- **结果**：201 返回 durable session、稳定 `baseResourceVersion(value,updatedAt)`、revision、draft、files、idle/absolute expiry；所有权绑定稳定单管理员主体。
-- **失败**：资源不存在或会话状态不可恢复时返回稳定错误。
-- **不变量**：修改管理员显示用户名不得隐藏/孤立会话；base timestamp 永远是开始时快照，不被当前应用时间替换；新建资源使用预留 create ID 防重复创建。
-- **验证**：edit-session ownership/base-version/recovery 测试。
+- **前置**：管理员在创建/编辑页完成本地编辑后点击保存；保存流水线调用 `POST /api/v1/application-edit-sessions`。
+- **动作**：创建会话。编辑已有应用时请求不得携带客户端草稿（服务端以已提交定义为准）；创建应用可带初始草稿。
+- **结果**：201 返回短生命周期 session、稳定 `baseResourceVersion(value,updatedAt)`、revision、draft、files、idle/absolute expiry；所有权绑定稳定单管理员主体。
+- **失败**：资源不存在或会话状态不可恢复时返回稳定错误；保存失败须 discard 会话并保留用户本地草稿以便重试。
+- **不变量**：会话不是用户可恢复的跨设备草稿；修改管理员显示用户名不得隐藏/孤立会话；base timestamp 永远是开始时快照；新建资源使用预留 create ID 防重复创建；idle/absolute TTL 仅作保存中断兜底。
+- **验证**：edit-session ownership/base-version/recovery 测试；编辑 begin 无 draft 时 draft 与 Get 一致。
 
 ### APP-EDIT-002 草稿 mutation 的 revision CAS
 
@@ -206,12 +208,12 @@
 
 ### APP-EDIT-007 前端事务编辑闭环
 
-- **前置**：进入隐藏的创建/编辑页。
-- **动作**：编辑结构化字段、文件、复杂对话框并保存/取消/离开。
-- **结果**：流程固定为本地校验→patch→服务端 validate→preview diff→commit；提交期间禁止重复提交和离开；复杂项取消不污染主草稿；成功只表示配置保存并已请求协调。
-- **失败**：load 失败时禁止保存；取消按钮显式 discard，会话未保存离开使用统一 ConfirmDialog 保护。
-- **不变量**：部署完成只能从协调记录/runtime 观察，不能把 commit 200 解释为运行完成。
-- **验证**：editor model/dialog isolation/dirty guard tests。
+- **前置**：进入隐藏的创建/编辑页；进入时只加载已提交定义与文件清单到本地，不创建 edit-session。
+- **动作**：纯本地编辑结构化字段、文件（pending 队列）与复杂对话框；用户唯一主操作是「保存」。
+- **结果**：保存流水线固定为本地校验→begin→patch 本地草稿→flush 文件 pending→preview→无 blocking diagnostic 才 commit→清理会话；提交期间禁止重复提交和离开；复杂项取消不污染主草稿；成功只表示配置保存并已请求协调，并退出编辑页回到应用列表（选中该应用）。无独立 Preview 主按钮；诊断在保存失败时展示。
+- **失败**：已提交定义 load 失败时禁止保存；保存任一步失败 discard 临时会话并保留本地草稿；取消/离开丢弃本地状态，使用统一 ConfirmDialog 保护脏编辑。
+- **不变量**：部署完成只能从协调记录/runtime 观察，不能把 commit 200 解释为运行完成；编辑期文件操作不得提前打 session mutation API。
+- **验证**：editor model/dialog isolation/dirty guard、local pending flush order 测试。
 
 ## 5. 应用生命周期、修订与运行能力
 
@@ -404,21 +406,21 @@
 
 ### FAC-RP-002 编辑会话创建与期限
 
-- **前置**：稳定管理员主体请求编辑；可有未结束会话。
-- **动作**：POST facility edit-session。
-- **结果**：返回 draft/assets/revision/baseResourceVersion；idle TTL 24h、absolute TTL 7d，mutation/validate/preview 延长 idle。
-- **失败**：GET 只检查状态不得延长 TTL；过期 session mutation 不得复活。
-- **不变量**：既有资产只引用 source_asset_id 和 metadata，不复制正文。
-- **验证**：TTL/mutation deadline/source fallback tests。
+- **前置**：稳定管理员主体在入口网关编辑页完成本地编辑后点击保存。
+- **动作**：保存流水线 POST facility edit-session；请求体省略 `draft`（由服务端已提交 config 播种）。
+- **结果**：会话草稿等于当前已提交 config（含 redirectUrl 等路由字段）；返回 draft/assets/revision/baseResourceVersion；idle TTL 24h、absolute TTL 7d 仅作保存中断兜底，mutation/validate/preview 延长 idle。
+- **失败**：GET 只检查状态不得延长 TTL；过期 session mutation 不得复活；保存失败须 discard 并保留本地草稿。
+- **不变量**：会话不是跨设备用户草稿；面板进入编辑不得创建会话、不得发送客户端草稿；既有资产只引用 source_asset_id 和 metadata，不复制正文。
+- **验证**：TTL/mutation deadline/source fallback tests；无 draft begin 后 domains 与 GetReverseProxy 一致。
 
 ### FAC-RP-003 设施资产身份与模式
 
-- **前置**：会话上传 text/binary 的 uploaded_file 或 binary uploaded_bundle。
-- **动作**：按设施内唯一 assetName PUT/替换/下载/删除。
-- **结果**：text 为≤1 MiB 的合法 UTF-8（允许空）；bundle 只能 binary；kind/contentMode 对同名资产不可变；未替换资产下载回退正式 source。
+- **前置**：保存流水线已创建会话；本地 pending 含 text/binary uploaded_file 或 binary uploaded_bundle。
+- **动作**：flush 时按设施内唯一 assetName PUT/替换/下载/删除。
+- **结果**：text 为≤1 MiB 的合法 UTF-8（允许空）；bundle 只能 binary；kind/contentMode 对同名资产不可变；未替换资产下载回退正式 source；仅改资产再 commit 不得回滚未改动的 redirect/proxy 等路由字段。
 - **失败**：转换 kind/mode、重复 name、损坏上传或删除仍被 static route 引用的资产在 mutation 前拒绝。
-- **不变量**：失败不改变 blob/metadata/route/revision；物理 asset ID/key 不属于公开契约。
-- **验证**：asset mode/identity/reference/download tests。
+- **不变量**：失败不改变 blob/metadata/route/revision；物理 asset ID/key 不属于公开契约；编辑期资产操作只写本地 pending。
+- **验证**：asset mode/identity/reference/download tests；asset-only commit 保留 redirectUrl。
 
 ### FAC-RP-004 草稿 rebase 与提交互斥
 

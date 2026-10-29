@@ -198,7 +198,8 @@ async function save() {
     resetDraft();
     notifySuccess(t('applicationsPage.storageShareConfigSaved'), config.value);
     if (config.value.lastError) notifyError(`${t('applicationsPage.storageShareLastError')}: ${config.value.lastError}`);
-    await loadStatus();
+    allowLeave = true;
+    await router.replace('/applications/facility-apps/storage-share');
   } catch (err) {
     notifyError(errorText(err), err);
   } finally {

@@ -63,7 +63,10 @@ export const reverseProxyFacilityApi = {
   beginEdit(draft?: ReverseProxySaveInput) {
     return apiClient.post<FacilityEditSession>('/facility-apps/reverse-proxy/edit-sessions', {
       clientDraftKey: 'facility:reverse-proxy',
-      draft,
+      // Omit draft so the server seeds from the committed config. Sending a
+      // stale client snapshot would silently overwrite newer route fields
+      // (e.g. redirectUrl) on the next asset-only commit.
+      ...(draft ? { draft } : {}),
     });
   },
   patchEdit(sessionId: string, revision: number, baseResourceVersion: string, draft: ReverseProxySaveInput) {
