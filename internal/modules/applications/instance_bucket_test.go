@@ -41,9 +41,14 @@ func TestClassifyInstanceBucket(t *testing.T) {
 			want: InstanceBucketAbnormal,
 		},
 		{
-			name: "stop converged omitted",
+			name: "stop converged omitted while disabled",
 			in:   instanceClassifyInput{DesiredState: appruntime.DesiredStopped, ObservedStatus: appruntime.StatusMissing},
 			want: InstanceBucketOmitted,
+		},
+		{
+			name: "stop converged abnormal while enabled",
+			in:   instanceClassifyInput{DesiredState: appruntime.DesiredStopped, ObservedStatus: appruntime.StatusStopped, ApplicationEnabled: true},
+			want: InstanceBucketAbnormal,
 		},
 		{
 			name: "stop stuck running abnormal",

@@ -135,6 +135,177 @@ func TestDeployEnablesDisabledApplicationWithVersionCAS(t *testing.T) {
 	}
 }
 
+// APP-READ-001 / APP-RUN-001: re-enable after a converged stop must surface nodes
+// as deploying/abnormal, not leave stop-converged rows omitted from the buckets.
+func TestReenableAfterStopMarksNodesAbnormalOrDeploying(t *testing.T) {
+	svc, _, servers, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Stop(ctx, app.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.Exec(`UPDATE event_runs SET status='completed',stage='completed',percentage=100,finished_at=updated_at WHERE type='application_deploy' AND application_id=?`, app.ID); err != nil {
+		t.Fatal(err)
+	}
+	for serverID := range servers.items {
+		if _, err := svc.db.Exec(`UPDATE application_instances SET desired_state=?,status=?,observed_state=?,observed_source='agent',last_error='' WHERE id=?`,
+			appruntime.DesiredStopped, appruntime.StatusStopped, appruntime.StatusStopped, runtimeInstanceID(app.ID, serverID)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	beforePage, err := svc.ListSummaries(ctx, 1, 50, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(beforePage.Items) != 1 {
+		t.Fatalf("summaries before re-enable = %#v", beforePage.Items)
+	}
+	before := beforePage.Items[0]
+	if before.HealthyInstanceCount+before.AbnormalInstanceCount+before.DeployingInstanceCount != 0 {
+		t.Fatalf("converged stop should omit buckets, got healthy=%d abnormal=%d deploying=%d", before.HealthyInstanceCount, before.AbnormalInstanceCount, before.DeployingInstanceCount)
+	}
+
+	result, err := svc.Deploy(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.NoChange {
+		t.Fatal("re-enable deploy must plan work against stopped nodes")
+	}
+
+	page, err := svc.ListSummaries(ctx, 1, 50, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := page.Items[0]
+	rt, err := svc.Runtime(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible := summary.AbnormalInstanceCount + summary.DeployingInstanceCount
+	if visible == 0 {
+		t.Fatalf("re-enabled app must mark nodes abnormal/deploying; summary=%#v runtime buckets healthy=%d abnormal=%d deploying=%d instances=%#v",
+			summary, rt.HealthyInstanceCount, rt.AbnormalInstanceCount, rt.DeployingInstanceCount, rt.Instances)
+	}
+	if rt.AbnormalInstanceCount+rt.DeployingInstanceCount == 0 {
+		t.Fatalf("runtime must mark nodes abnormal/deploying after re-enable, got healthy=%d abnormal=%d deploying=%d",
+			rt.HealthyInstanceCount, rt.AbnormalInstanceCount, rt.DeployingInstanceCount)
+	}
+}
+
+// APP-READ-001: if enable persists before apply planning finishes (or plan
+// fails), stop-converged rows on an enabled app must still count as abnormal.
+func TestEnabledAppWithStaleStopDesiredCountsAbnormal(t *testing.T) {
+	svc, _, servers, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Stop(ctx, app.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.Exec(`UPDATE event_runs SET status='completed',stage='completed',percentage=100,finished_at=updated_at WHERE type='application_deploy' AND application_id=?`, app.ID); err != nil {
+		t.Fatal(err)
+	}
+	for serverID := range servers.items {
+		if _, err := svc.db.Exec(`UPDATE application_instances SET desired_state=?,status=?,observed_state=?,observed_source='agent',last_error='' WHERE id=?`,
+			appruntime.DesiredStopped, appruntime.StatusStopped, appruntime.StatusStopped, runtimeInstanceID(app.ID, serverID)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Persist enable without planning (split state after enable-before-plan).
+	if _, err := svc.db.Exec(`UPDATE applications SET enabled=1,version=version+1,updated_at=? WHERE id=?`, time.Now().UTC().Format(time.RFC3339Nano), app.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := svc.ListSummaries(ctx, 1, 50, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := page.Items[0]
+	if !summary.Enabled {
+		t.Fatal("expected enabled summary")
+	}
+	if summary.AbnormalInstanceCount != len(servers.items) {
+		t.Fatalf("enabled+stale stop desired must count abnormal, got %#v", summary)
+	}
+	rt, err := svc.Runtime(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.AbnormalInstanceCount != len(servers.items) {
+		t.Fatalf("runtime must count abnormal for enabled+stale stop, got healthy=%d abnormal=%d deploying=%d",
+			rt.HealthyInstanceCount, rt.AbnormalInstanceCount, rt.DeployingInstanceCount)
+	}
+}
+
+// APP-LIFE-001: enabling a disabled app via save must plan desired=running so
+// stop-converged nodes leave the omitted bucket.
+func TestUpdateEnableAfterStopMarksNodesAbnormalOrDeploying(t *testing.T) {
+	svc, _, servers, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Stop(ctx, app.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.Exec(`UPDATE event_runs SET status='completed',stage='completed',percentage=100,finished_at=updated_at WHERE type='application_deploy' AND application_id=?`, app.ID); err != nil {
+		t.Fatal(err)
+	}
+	for serverID := range servers.items {
+		if _, err := svc.db.Exec(`UPDATE application_instances SET desired_state=?,status=?,observed_state=?,observed_source='agent',last_error='' WHERE id=?`,
+			appruntime.DesiredStopped, appruntime.StatusStopped, appruntime.StatusStopped, runtimeInstanceID(app.ID, serverID)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	app, err = svc.Get(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app.Enabled {
+		t.Fatal("expected app disabled after stop")
+	}
+
+	updated, err := svc.Update(ctx, app.ID, SaveInput{
+		Name:              app.Name,
+		Enabled:           true,
+		SpecYAML:          app.SpecYAML,
+		DeploymentMode:    app.DeploymentMode,
+		DeploymentServers: app.DeploymentServers,
+		ReverseProxy:      app.ReverseProxy,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated.Enabled {
+		t.Fatal("update must persist enabled=true")
+	}
+
+	page, err := svc.ListSummaries(ctx, 1, 50, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := page.Items[0]
+	if summary.AbnormalInstanceCount+summary.DeployingInstanceCount == 0 {
+		var desired, status string
+		_ = svc.db.QueryRow(`SELECT desired_state,status FROM application_instances WHERE application_id=? LIMIT 1`, app.ID).Scan(&desired, &status)
+		t.Fatalf("enabling via save must mark nodes abnormal/deploying; summary=%#v desired=%s status=%s", summary, desired, status)
+	}
+}
+
 // APP-LIFE-003: an explicit deploy is manual work and cannot be swallowed by automatic backoff.
 func TestDeployBypassesAutomaticReconcileBackoff(t *testing.T) {
 	svc, _, _, closeStore := newTestService(t)

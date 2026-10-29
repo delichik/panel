@@ -536,6 +536,10 @@ func (s *Service) ListSummaries(ctx context.Context, page, pageSize int, query s
 			bucketCounts[m.ApplicationID] = &InstanceBucketCounts{}
 		}
 		_, hasJob := activeServers[m.ApplicationID][strings.TrimSpace(m.ServerID)]
+		appEnabled := false
+		if idx, ok := byID[m.ApplicationID]; ok {
+			appEnabled = summaries[idx].Enabled
+		}
 		accumulateBucket(bucketCounts[m.ApplicationID], classifyInstanceBucket(instanceClassifyInput{
 			DesiredState:       m.DesiredState,
 			ObservedStatus:     status,
@@ -544,6 +548,7 @@ func (s *Service) ListSummaries(ctx context.Context, page, pageSize int, query s
 			DesiredSpecHash:    m.DesiredSpecHash,
 			ObservedSpecHash:   m.ObservedSpecHash,
 			HasActiveJob:       hasJob,
+			ApplicationEnabled: appEnabled,
 		}))
 	}
 
@@ -1486,6 +1491,7 @@ func (s *Service) Runtime(ctx context.Context, appID string) (ApplicationRuntime
 			DesiredSpecHash:    m.DesiredSpecHash,
 			ObservedSpecHash:   m.ObservedSpecHash,
 			HasActiveJob:       op != nil && isActiveDeployJobStatus(op.Status),
+			ApplicationEnabled: app.Enabled,
 		}))
 	}
 	out.HealthyInstanceCount = counts.Healthy

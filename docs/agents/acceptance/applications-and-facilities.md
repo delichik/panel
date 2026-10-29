@@ -14,10 +14,10 @@
 
 - **前置**：存在多页普通应用、隐藏设施应用、删除中应用和若干实例/Job。
 - **动作**：调用 `GET /api/v1/applications?page=&pageSize=&q=`。
-- **结果**：返回分页 `items/total/page/pageSize`；单项只含摘要所需字段：`enabled`、`instanceCount`、节点三态计数 `healthyInstanceCount`/`abnormalInstanceCount`/`deployingInstanceCount`、可选 `planningError`/`reconcileStopped`、镜像更新与 `updatedAt`。三计数与实例/活跃 Job 由当前页 ID 的本地批量查询按 `(application_id, server_id)` 归类；三者之和可以小于 `instanceCount`（收敛完成的 stop/purge 节点可省略）。兼容字段 `runtimeStatus` 仅为观测 rollup，不得再写入应用级 `needs_attention`/`deploying` 作为列表主状态。
+- **结果**：返回分页 `items/total/page/pageSize`；单项只含摘要所需字段：`enabled`、`instanceCount`、节点三态计数 `healthyInstanceCount`/`abnormalInstanceCount`/`deployingInstanceCount`、可选 `planningError`/`reconcileStopped`、镜像更新与 `updatedAt`。三计数与实例/活跃 Job 由当前页 ID 的本地批量查询按 `(application_id, server_id)` 归类；三者之和可以小于 `instanceCount`（**仅禁用应用**上已收敛的 stop/purge 节点可省略）。已启用应用若实例仍为 `desired=stopped` 且观测已收敛（stopped/missing），必须计入 `abnormalInstanceCount`，不得因 stop 收敛而省略——覆盖“启用已写入但 apply 规划尚未翻转 desired / 规划失败”的半状态。兼容字段 `runtimeStatus` 仅为观测 rollup，不得再写入应用级 `needs_attention`/`deploying` 作为列表主状态。
 - **失败**：未知参数、非法页码或分页值返回 400；不得默许 `limit` 或 snake_case 别名。
 - **不变量**：列表不得解析 AppSpec/YAML、读取完整配置 JSON、访问 Agent/Registry、逐应用读取详情或 runtime；普通列表必须排除 `kind=facility_application` 和 `deletion_requested=1`。应用主状态语义是启停，不是聚合运行态。
-- **验证**：路由契约测试、固定查询次数/假 Agent 零调用测试、跨页 `q` 测试、三计数分类测试。
+- **验证**：路由契约测试、固定查询次数/假 Agent 零调用测试、跨页 `q` 测试、三计数分类测试（含启用+stale stop desired→异常）。
 
 ### APP-READ-002 应用详情完整性
 
@@ -312,10 +312,10 @@
 
 - **前置**：Instance 具有 desired/observed，可能存在按 server 的 active Job。
 - **动作**：GET runtime，必要时主动查询 Agent status。
-- **结果**：默认以 AppDB observed 快照派生实例观测；主动结果也经 ObservationWriter CAS 写回；返回 serverId/serverName、generation、容器身份、`lastError`、observedAt，以及应用级三态计数。每个实例旁挂该 server 的 `operation`（活跃 `queued`/`running`/`failed_retryable`，或无活跃时该 server 最新终态 `failed`）：含 status、stage、attempt、nextRunAt、operationId 与结构化错误。应用级 `status`/`operation` 若仍返回，仅为兼容观测 rollup / 最差节点回声，UI 主路径不得依赖。
+- **结果**：默认以 AppDB observed 快照派生实例观测；主动结果也经 ObservationWriter CAS 写回；返回 serverId/serverName、generation、容器身份、`lastError`、observedAt，以及应用级三态计数（与 `APP-READ-001` 同一归类：已启用且 `desired=stopped` 收敛计入异常；活跃 Job 计入部署中）。每个实例旁挂该 server 的 `operation`（活跃 `queued`/`running`/`failed_retryable`，或无活跃时该 server 最新终态 `failed`）：含 status、stage、attempt、nextRunAt、operationId 与结构化错误。应用级 `status`/`operation` 若仍返回，仅为兼容观测 rollup / 最差节点回声，UI 主路径不得依赖。
 - **失败**：Docker not found 映射 `missing` 而非 stopped；Agent 不兼容/不可达不回退 SSH；终态部署错误不得因 active 查询为空而从**该节点** runtime 投影消失；容器启动后退出的结构化错误必须保留有界脱敏的状态、exit code 与 Docker State.Error。
 - **不变量**：handler/业务服务不得直接覆盖 observed；无容器的 pending/failed Job 不提供日志入口。apply 启动成功必须经过 `ORCH-CTRL-007` 的稳定观察；短时退出即使退出码为 0，也必须展示部署失败/退避，而非以瞬间 running 表示部署完成。协调单位是节点上的应用。
-- **验证**：runtime cache/refresh/missing、retryable schedule、per-server terminal failure projection tests。
+- **验证**：runtime cache/refresh/missing、retryable schedule、per-server terminal failure projection、启用+stale stop desired 三计数测试。
 
 ### APP-RUN-002 实例日志
 

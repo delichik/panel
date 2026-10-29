@@ -38,6 +38,7 @@
 - 内容区去分栏与服务器详情打磨：反向代理设施 `routes`/`nodes` Tabs、应用详情 `data` tab 与页头 ActivityLink、StorageShare/凭据/证书详情改为纵向叠放；服务器一级 tab 合并 Docker 为 `resources`+`subtab`（旧 tab 名兼容）、列表瘦列与工具栏收敛。不新增路由/API/表；对应 `UI-FAC-003`、`UI-APP-002/003`、`UI-SRV-016/017/018/019`、`UI-CRED-001`。
 - 应用部署反馈：既有应用页增加部署规划失败、monitor 无进度时的系统核实中、有进度时的真实阶段、原因与活动入口，不新增路由；对应 `UI-APP-001/002/004`、`APP-PLAN-001`、`APP-RUN-004`。
 - 应用状态改为节点三态计数（2026-10-29）：应用主徽标仅启停；列表/详情展示 `healthyInstanceCount`/`abnormalInstanceCount`/`deployingInstanceCount`；部署阶段与「系统核实中」挂在 Runtime 节点 `operation`；去掉应用级 `needs_attention` 主状态与单一「当前部署」块；`planningError`/`reconcileStopped` 为独立告警。不新增路由/表；摘要字段加法兼容。对应 `APP-READ-001`、`APP-RUN-001/004`、`APP-UI-002`、`UI-APP-001/002`。
+- 启用禁用应用后节点三态（2026-10-29）：`classifyInstanceBucket` 对 stop 收敛的省略仅适用于 `enabled=false`；`enabled=true` 且实例仍 `desired=stopped`+观测 stopped/missing 时计入异常（覆盖启用先落库、apply 规划未翻转 desired 或规划失败的半状态）。对应 `APP-READ-001`、`APP-RUN-001`。
 - Debug 既有清理操作增加阶段/时间、刷新恢复、部分失败与系统确认中展示；保留危险勾选确认，不新增路由；对应 `UI-DBG-007/008`。
 - 部署 remote-fence monitor：传输/lease 超时进入 `uncertainty`+`execution_monitoring`，投影 Agent step 报告；无进度才「系统核实中」，有进度为普通收敛；证据窗口耗尽终态 `execution_evidence_unreachable`；人工 resolve 仅为破局 API。对应 `ORCH-LEASE-003..005`、`ORCH-RETRY-001`、`ORCH-CTRL-009`、`TASK-WORK-003`、`APP-RUN-004`。
 - 派活窗口（默认 15s）后 worker 释放、monitor 独占结算，对应 `ORCH-CTRL-010`。

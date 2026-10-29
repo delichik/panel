@@ -15,8 +15,9 @@ const (
 )
 
 // InstanceBucketCounts holds app-level node bucket tallies. The three displayed
-// buckets may sum to less than InstanceCount when stop/purge targets have
-// already converged (omitted).
+// buckets may sum to less than InstanceCount when a disabled application's
+// stop/purge targets have already converged (omitted). Enabled apps never omit
+// stop-converged rows — those count as abnormal until desired flips to running.
 type InstanceBucketCounts struct {
 	Healthy   int `json:"healthyInstanceCount"`
 	Abnormal  int `json:"abnormalInstanceCount"`
@@ -31,6 +32,7 @@ type instanceClassifyInput struct {
 	DesiredSpecHash    string
 	ObservedSpecHash   string
 	HasActiveJob       bool
+	ApplicationEnabled bool
 }
 
 func classifyInstanceBucket(in instanceClassifyInput) string {
@@ -54,6 +56,13 @@ func classifyInstanceBucket(in instanceClassifyInput) string {
 		return InstanceBucketAbnormal
 	case appruntime.DesiredStopped:
 		if observed == appruntime.StatusStopped || observed == appruntime.StatusMissing {
+			// Converged stop is invisible only while the application stays
+			// disabled. Once re-enabled (or still enabled with a stale stop
+			// desired), the node must surface as abnormal until apply plan
+			// flips desired to running.
+			if in.ApplicationEnabled {
+				return InstanceBucketAbnormal
+			}
 			return InstanceBucketOmitted
 		}
 		return InstanceBucketAbnormal
