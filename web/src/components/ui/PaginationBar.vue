@@ -59,7 +59,11 @@ const showSummaryRegion = computed(() => hasCustomSummarySlot.value || showDefau
 const resolvedSummary = computed(() => {
   if (props.summaryLabel) return props.summaryLabel;
   if (!totalKnown.value) return '';
-  return t('pagination.summary', { start: start.value, end: end.value, total: props.total });
+  return t('pagination.summary', {
+    start: start.value,
+    end: end.value,
+    total: props.total as number,
+  });
 });
 
 function goPrevious() {
