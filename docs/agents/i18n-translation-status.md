@@ -4,6 +4,7 @@
 
 ## 当前状态
 
+- 本轮应用节点三态：新增 `applicationsPage.nodeHealthColumn` / `nodeBucket.healthy|abnormal|deploying` / `nodeBucketHealthyLabel|AbnormalLabel|DeployingLabel` / `reconcileStoppedHint`；en / zh-CN 已同步。
 - 本轮编辑会话改为保存时临时管道：改写 `applicationsPage.applicationEditorDescription` / `gatewayEditorDescription` / `saveStage.commit` / `emptyApplicationsHint` / `editorStartFailed` / `confirm.file-delete.description` / `confirm.facility-asset-delete.description`（进入编辑纯本地、保存时才创建会话）；en / zh-CN 已同步。
 - 本轮 `/logs` 改为全局可读：`eventId` 可选筛选；新增 `logsPage.eventIdOptional`，改写 `routes.logs.description`；en / zh-CN 已同步。
 - 本轮 events+logs 产品重命名：主导航与文案以 `/events`（进程行：state/module/level）与 `/logs`（JSONL：level+可选 eventId）为准；新增 `routes.events.*`、`eventsPage.*`，改写 `routes.logs.description` 与 `logsPage.eventId/pickEvent*`；移除「任务中心」「log-contexts 流」等产品名；Debug 页签 `debugPage.tasks` 改为「Events runtime / 事件运行时」（对应 event executor 快照，API 路径仍为 `/debug/tasks`）；en / zh-CN 已同步。

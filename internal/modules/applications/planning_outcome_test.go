@@ -170,8 +170,8 @@ func TestPlanningOutcomeRedactsSecretsAndDoesNotOverwriteNewerConfiguration(t *t
 	}
 }
 
-// APP-RUN-004: uncertainty without projected Agent steps remains running for
-// fencing and is presented as needs_attention, not ordinary deploying.
+// APP-RUN-004: uncertainty without projected Agent steps counts as deploying on
+// the affected node and must not become an app-level needs_attention badge.
 func TestUncertainJobIsVisibleInRuntimeAndApplicationList(t *testing.T) {
 	svc, _, _, closeStore := newTestService(t)
 	defer closeStore()
@@ -188,16 +188,32 @@ func TestUncertainJobIsVisibleInRuntimeAndApplicationList(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime, err := svc.Runtime(ctx, app.ID)
-	if err != nil || runtime.Status != "needs_attention" || runtime.Operation == nil || runtime.Operation.ErrorClass != "uncertainty" || runtime.Operation.Status != "running" {
-		t.Fatalf("uncertainty hidden: %#v %v", runtime, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.DeployingInstanceCount < 1 {
+		t.Fatalf("uncertainty node should count as deploying: %#v", runtime)
+	}
+	found := false
+	for _, inst := range runtime.Instances {
+		if inst.Operation != nil && inst.Operation.ErrorClass == "uncertainty" && inst.Operation.Status == "running" && inst.Operation.Stage == "" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("uncertainty not projected onto node operation: %#v", runtime)
 	}
 	page, err := svc.ListSummaries(ctx, 1, 20, "")
-	if err != nil || page.Items[0].RuntimeStatus != "needs_attention" {
-		t.Fatalf("list hides uncertainty: %#v %v", page, err)
+	if err != nil || page.Items[0].DeployingInstanceCount < 1 {
+		t.Fatalf("list should count uncertainty as deploying: %#v %v", page, err)
+	}
+	if page.Items[0].RuntimeStatus == "needs_attention" {
+		t.Fatalf("list must not use needs_attention as app status: %#v", page.Items[0])
 	}
 }
 
-// Monitor mode with projected Agent steps is normal converging, not attention.
+// Monitor mode with projected Agent steps stays deploying on the node with last_stage.
 func TestMonitoringJobWithProgressStageShowsDeploying(t *testing.T) {
 	svc, _, _, closeStore := newTestService(t)
 	defer closeStore()
@@ -214,11 +230,24 @@ func TestMonitoringJobWithProgressStageShowsDeploying(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime, err := svc.Runtime(ctx, app.ID)
-	if err != nil || runtime.Status != "deploying" || runtime.Operation == nil || runtime.Operation.Stage != "ensure_image" {
-		t.Fatalf("monitor progress not deploying: %#v %v", runtime, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.DeployingInstanceCount < 1 {
+		t.Fatalf("monitor progress should count as deploying: %#v", runtime)
+	}
+	found := false
+	for _, inst := range runtime.Instances {
+		if inst.Operation != nil && inst.Operation.Stage == "ensure_image" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("monitor progress stage missing on node: %#v", runtime)
 	}
 	page, err := svc.ListSummaries(ctx, 1, 20, "")
-	if err != nil || page.Items[0].RuntimeStatus != "deploying" {
-		t.Fatalf("list should show deploying for monitor progress: %#v %v", page, err)
+	if err != nil || page.Items[0].DeployingInstanceCount < 1 {
+		t.Fatalf("list should count monitor progress as deploying: %#v %v", page, err)
 	}
 }

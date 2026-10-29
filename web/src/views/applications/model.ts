@@ -141,23 +141,27 @@ export function uncertaintyNeedsAttention(errorClass?: string | null, lastStage?
   return errorClass === 'uncertainty' && !isDeployProgressStage(lastStage);
 }
 
-export function applicationStatus(app: ApplicationDto | ApplicationSummaryDto, runtime?: ApplicationRuntime | null) {
-  const status = runtime?.status || app.runtimeStatus;
-  const operationStatus = runtime?.operation?.status;
-  if (applicationPlanningError(app, runtime)) return 'planning_failed';
-  if (!app.enabled) return 'disabled';
-  if (app.reconcileStopped) return 'attention';
-  if (status === 'needs_attention' || uncertaintyNeedsAttention(runtime?.operation?.errorClass, runtime?.operation?.stage)) return 'result_unknown';
-  if (operationStatus === 'failed_retryable') return 'failed_retryable';
-  if (['deploying', 'pending', 'queued', 'running', 'waiting'].includes(operationStatus || '')) return 'deploying';
-  if (runtime?.operation?.errorClass === 'uncertainty' && isDeployProgressStage(runtime.operation.stage)) return 'deploying';
-  if (operationStatus === 'failed' || operationStatus === 'failure') return 'failed';
-  if (status === 'deploying' || status === 'pending') return 'deploying';
-  if (status === 'failed_retryable') return 'failed_retryable';
-  if (status === 'failed' || app.lastError) return 'failed';
-  if (status === 'partially_deployed') return 'partial';
-  if (status === 'deployed' || status === 'running') return 'deployed';
-  return app.enabled ? 'enabled' : 'unknown';
+export function applicationStatus(app: ApplicationDto | ApplicationSummaryDto, _runtime?: ApplicationRuntime | null) {
+  // Application primary badge is enable/disable only. Node health and deploy
+  // stages live in bucket counts and per-instance operation projections.
+  return app.enabled ? 'enabled' : 'disabled';
+}
+
+export function applicationNodeCounts(app: ApplicationDto | ApplicationSummaryDto, runtime?: ApplicationRuntime | null) {
+  return {
+    healthy: runtime?.healthyInstanceCount ?? (app as ApplicationSummaryDto).healthyInstanceCount ?? 0,
+    abnormal: runtime?.abnormalInstanceCount ?? (app as ApplicationSummaryDto).abnormalInstanceCount ?? 0,
+    deploying: runtime?.deployingInstanceCount ?? (app as ApplicationSummaryDto).deployingInstanceCount ?? 0,
+  };
+}
+
+export function instanceOperationStatus(instance?: { operation?: ApplicationRuntime['operation'] | null; status?: string; state?: string } | null) {
+  const operation = instance?.operation;
+  if (uncertaintyNeedsAttention(operation?.errorClass, operation?.stage)) return 'result_unknown';
+  if (operation?.errorClass === 'uncertainty' && isDeployProgressStage(operation.stage)) {
+    return operation.status || 'running';
+  }
+  return operation?.status || '';
 }
 
 export function applicationPlanningError(app: ApplicationDto | ApplicationSummaryDto, runtime?: ApplicationRuntime | null) {
@@ -181,19 +185,24 @@ export function statusTone(status: string) {
   return 'neutral';
 }
 
+const activeJobStatuses = new Set(['deploying', 'pending', 'queued', 'running', 'waiting', 'failed_retryable']);
+
 export function shouldPollApplicationRuntime(runtime?: ApplicationRuntime | null) {
-  const active = new Set(['deploying', 'pending', 'queued', 'running', 'waiting', 'failed_retryable']);
   if (!runtime) return false;
   if (runtime.planningError) return true;
-  return runtime.operation?.status ? active.has(runtime.operation.status) : active.has(runtime.status);
+  return (runtime.instances ?? []).some((instance) => activeJobStatuses.has(instance.operation?.status || ''));
 }
 
 export function applicationRuntimePollDelay(runtime: ApplicationRuntime, now = Date.now()) {
   const baseDelay = 3000;
-  if (runtime.operation?.status !== 'failed_retryable' || !runtime.operation.nextRunAt) return baseDelay;
-  const nextRunAt = Date.parse(runtime.operation.nextRunAt);
-  if (!Number.isFinite(nextRunAt)) return baseDelay;
-  return Math.min(30000, Math.max(baseDelay, nextRunAt - now + 250));
+  let soonest = Number.POSITIVE_INFINITY;
+  for (const instance of runtime.instances ?? []) {
+    if (instance.operation?.status !== 'failed_retryable' || !instance.operation.nextRunAt) continue;
+    const nextRunAt = Date.parse(instance.operation.nextRunAt);
+    if (Number.isFinite(nextRunAt) && nextRunAt < soonest) soonest = nextRunAt;
+  }
+  if (!Number.isFinite(soonest)) return baseDelay;
+  return Math.min(30000, Math.max(baseDelay, soonest - now + 250));
 }
 
 export function draftFromApplication(app?: ApplicationDto | null): ApplicationDraftUi {
@@ -396,11 +405,15 @@ export function routeSummary(app: ApplicationDto) {
 }
 
 export function runtimeSummary(runtime?: ApplicationRuntime | null) {
-  if (!runtime) return { total: 0, failed: 0, running: 0 };
+  const counts = applicationNodeCounts({ id: '', name: '', enabled: true, jobId: '', namespace: '', imageUpdateAvailable: false, updatedAt: '' }, runtime);
   return {
-    total: runtime.instances.length,
-    failed: runtime.instances.filter((item) => item.status === 'failed' || item.state === 'failed').length,
-    running: runtime.instances.filter((item) => ['running', 'ready', 'deployed'].includes(String(item.status || item.state))).length,
+    total: runtime?.instances?.length ?? 0,
+    healthy: counts.healthy,
+    abnormal: counts.abnormal,
+    deploying: counts.deploying,
+    // Legacy aliases kept for transitional call sites.
+    failed: counts.abnormal,
+    running: counts.healthy,
   };
 }
 

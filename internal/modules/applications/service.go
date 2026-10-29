@@ -492,10 +492,39 @@ func (s *Service) ListSummaries(ctx context.Context, page, pageSize int, query s
 	}
 	statuses := make(map[string][]appruntime.InstanceStatus, len(summaries))
 	instanceCounts := make(map[string]int, len(summaries))
+	bucketCounts := make(map[string]*InstanceBucketCounts, len(summaries))
+	activeServers := make(map[string]map[string]struct{}, len(summaries))
 	var instanceRows []models.ApplicationInstance
-	if err := orm.New(s.db).From("application_instances").Select("application_id", "status", "observed_state", "observed_source").AndIn("application_id", pageIDs).All(ctx, &instanceRows); err != nil {
+	if err := orm.New(s.db).From("application_instances").
+		Select("application_id", "server_id", "desired_state", "desired_generation", "desired_spec_hash", "status", "observed_state", "observed_source", "observed_generation", "observed_spec_hash").
+		AndIn("application_id", pageIDs).All(ctx, &instanceRows); err != nil {
 		return httpx.ListPage[ApplicationSummary]{}, err
 	}
+
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(pageIDs)), ",")
+	jobRows, err := s.db.QueryContext(ctx, `SELECT application_id, server_id FROM event_runs
+		WHERE type='application_deploy' AND application_id IN (`+placeholders+`) AND status IN ('queued','running','failed_retryable')`, pageIDs...)
+	if err != nil {
+		return httpx.ListPage[ApplicationSummary]{}, err
+	}
+	defer jobRows.Close()
+	for jobRows.Next() {
+		var appID, serverID string
+		if err := jobRows.Scan(&appID, &serverID); err != nil {
+			return httpx.ListPage[ApplicationSummary]{}, err
+		}
+		if _, ok := byID[appID]; !ok {
+			continue
+		}
+		if activeServers[appID] == nil {
+			activeServers[appID] = map[string]struct{}{}
+		}
+		activeServers[appID][strings.TrimSpace(serverID)] = struct{}{}
+	}
+	if err := jobRows.Err(); err != nil {
+		return httpx.ListPage[ApplicationSummary]{}, err
+	}
+
 	for _, m := range instanceRows {
 		status := m.Status
 		if strings.TrimSpace(m.ObservedSource) != "" && strings.TrimSpace(m.ObservedState) != "" {
@@ -503,46 +532,30 @@ func (s *Service) ListSummaries(ctx context.Context, page, pageSize int, query s
 		}
 		statuses[m.ApplicationID] = append(statuses[m.ApplicationID], appruntime.InstanceStatus{Status: status})
 		instanceCounts[m.ApplicationID]++
-	}
-
-	// 列表摘要只读 AppDB 实例观测与活跃 Job：pending/running Job 表示部署
-	// 中，failed_retryable 表示失败重试；不再读取旧 lifecycle 表。
-	activeJobStates := make(map[string]string, len(summaries))
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(pageIDs)), ",")
-	jobRows, err := s.db.QueryContext(ctx, `SELECT application_id,CASE status WHEN 'queued' THEN 'pending' WHEN 'completed' THEN 'succeeded' ELSE status END,error_class,last_stage FROM event_runs
-		WHERE type='application_deploy' AND application_id IN (`+placeholders+`) AND status IN ('queued','running','failed_retryable')`, pageIDs...)
-	if err != nil {
-		return httpx.ListPage[ApplicationSummary]{}, err
-	}
-	defer jobRows.Close()
-	for jobRows.Next() {
-		var appID, state, errorClass, lastStage string
-		if err := jobRows.Scan(&appID, &state, &errorClass, &lastStage); err != nil {
-			return httpx.ListPage[ApplicationSummary]{}, err
+		if bucketCounts[m.ApplicationID] == nil {
+			bucketCounts[m.ApplicationID] = &InstanceBucketCounts{}
 		}
-		if _, ok := byID[appID]; ok {
-			if controlplane.UncertaintyNeedsAttention(errorClass, lastStage) {
-				activeJobStates[appID] = "needs_attention"
-			} else if activeJobStates[appID] == "needs_attention" {
-				continue
-			} else if state == "failed_retryable" {
-				activeJobStates[appID] = "failed"
-			} else if activeJobStates[appID] != "failed" {
-				activeJobStates[appID] = "deploying"
-			}
-		}
-	}
-	if err := jobRows.Err(); err != nil {
-		return httpx.ListPage[ApplicationSummary]{}, err
+		_, hasJob := activeServers[m.ApplicationID][strings.TrimSpace(m.ServerID)]
+		accumulateBucket(bucketCounts[m.ApplicationID], classifyInstanceBucket(instanceClassifyInput{
+			DesiredState:       m.DesiredState,
+			ObservedStatus:     status,
+			DesiredGeneration:  m.DesiredGeneration,
+			ObservedGeneration: m.ObservedGeneration,
+			DesiredSpecHash:    m.DesiredSpecHash,
+			ObservedSpecHash:   m.ObservedSpecHash,
+			HasActiveJob:       hasJob,
+		}))
 	}
 
 	for i := range summaries {
-		status := aggregateRuntimeStatus(summaries[i].Enabled, statuses[summaries[i].ID])
-		if jobStatus := activeJobStates[summaries[i].ID]; jobStatus != "" {
-			status = jobStatus
-		}
-		summaries[i].RuntimeStatus = status
+		// runtimeStatus remains an observed-only compatibility rollup; UI ignores it for the primary badge.
+		summaries[i].RuntimeStatus = aggregateRuntimeStatus(summaries[i].Enabled, statuses[summaries[i].ID])
 		summaries[i].InstanceCount = instanceCounts[summaries[i].ID]
+		if counts := bucketCounts[summaries[i].ID]; counts != nil {
+			summaries[i].HealthyInstanceCount = counts.Healthy
+			summaries[i].AbnormalInstanceCount = counts.Abnormal
+			summaries[i].DeployingInstanceCount = counts.Deploying
+		}
 	}
 	return httpx.ListPage[ApplicationSummary]{Items: summaries, Total: total, Page: page, PageSize: pageSize}, nil
 }
@@ -1444,101 +1457,143 @@ func (s *Service) Runtime(ctx context.Context, appID string) (ApplicationRuntime
 		Status:        appruntime.StatusStopped,
 		ObservedAt:    time.Now().UTC(),
 	}
-	instances, err := s.runtimeInstances(ctx, app.ID)
+	var rows []models.ApplicationInstance
+	if err := orm.New(s.db).From("application_instances").Where("application_id=?", app.ID).OrderBy("server_id ASC").All(ctx, &rows); err != nil {
+		return ApplicationRuntime{}, err
+	}
+	instances := make([]appruntime.Instance, 0, len(rows))
+	for _, m := range rows {
+		instances = append(instances, toRuntimeInstance(m))
+	}
+	statuses := s.refreshInstanceStatuses(ctx, instances)
+	opsByServer, err := s.instanceOperationsByServer(ctx, app.ID)
 	if err != nil {
 		return ApplicationRuntime{}, err
 	}
-	out.Instances = s.refreshInstanceStatuses(ctx, instances)
-	out.Status, out.Operation = s.jobDerivedRuntimeStatus(ctx, app, out.Instances)
+	counts := InstanceBucketCounts{}
+	out.Instances = make([]RuntimeInstance, 0, len(rows))
+	observedOnly := make([]appruntime.InstanceStatus, 0, len(rows))
+	for i, m := range rows {
+		status := statuses[i]
+		op := opsByServer[strings.TrimSpace(m.ServerID)]
+		out.Instances = append(out.Instances, RuntimeInstance{InstanceStatus: status, Operation: op})
+		observedOnly = append(observedOnly, status)
+		accumulateBucket(&counts, classifyInstanceBucket(instanceClassifyInput{
+			DesiredState:       m.DesiredState,
+			ObservedStatus:     status.Status,
+			DesiredGeneration:  m.DesiredGeneration,
+			ObservedGeneration: m.ObservedGeneration,
+			DesiredSpecHash:    m.DesiredSpecHash,
+			ObservedSpecHash:   m.ObservedSpecHash,
+			HasActiveJob:       op != nil && isActiveDeployJobStatus(op.Status),
+		}))
+	}
+	out.HealthyInstanceCount = counts.Healthy
+	out.AbnormalInstanceCount = counts.Abnormal
+	out.DeployingInstanceCount = counts.Deploying
+	out.Status = aggregateRuntimeStatus(app.Enabled, observedOnly)
+	// Deprecated app-level operation: worst/current active node echo for compatibility.
+	out.Operation = firstActiveOrFailedOperation(out.Instances)
 	return out, nil
 }
 
 func (s *Service) withRuntimeSummary(ctx context.Context, app Application) (Application, error) {
-	instances, err := s.runtimeInstances(ctx, app.ID)
+	runtime, err := s.Runtime(ctx, app.ID)
 	if err != nil {
 		return Application{}, err
 	}
-	statuses := s.cachedInstanceStatuses(ctx, instances)
-	status, _ := s.jobDerivedRuntimeStatus(ctx, app, statuses)
-	app.RuntimeStatus = status
+	app.RuntimeStatus = runtime.Status
+	app.PlanningError = runtime.PlanningError
 	return app, nil
 }
 
-// jobDerivedRuntimeStatus 从 AppDB 实例观测与活跃 Job 派生运行时状态与
-// 当前操作投影：存在 pending/running Job 表示部署中，failed_retryable
-// 表示失败重试；没有 active Job 时仍返回最新的终态失败，确保用户能看见
-// 部署为什么停止。成功终态继续由实例观测聚合，不再读取旧 lifecycle 表。
-func (s *Service) jobDerivedRuntimeStatus(ctx context.Context, app Application, instanceStatuses []appruntime.InstanceStatus) (string, *LifecycleOperation) {
-	base := aggregateRuntimeStatus(app.Enabled, instanceStatuses)
-	if s == nil || s.db == nil {
-		return base, nil
-	}
-	var rows []models.Task
-	if err := orm.New(s.db).From("event_runs").
-		Where("type=?", "application_deploy").And("application_id=?", app.ID).And("status IN (?,?,?)", "queued", controlplane.JobRunning, controlplane.JobFailedRetryable).
-		OrderBy("updated_at DESC", "id ASC").All(ctx, &rows); err != nil {
-		return base, nil
-	}
-	if len(rows) == 0 {
-		if err := orm.New(s.db).From("event_runs").Where("type=?", "application_deploy").And("application_id=?", app.ID).
-			OrderBy("updated_at DESC", "id ASC").Limit(1).All(ctx, &rows); err != nil || len(rows) == 0 || deployStatusToJobState(rows[0].Status) != controlplane.JobFailed {
-			return base, nil
+func firstActiveOrFailedOperation(instances []RuntimeInstance) *LifecycleOperation {
+	var failed *LifecycleOperation
+	for i := range instances {
+		op := instances[i].Operation
+		if op == nil {
+			continue
+		}
+		if isActiveDeployJobStatus(op.Status) {
+			return op
+		}
+		if deployStatusToJobState(op.Status) == controlplane.JobFailed && failed == nil {
+			failed = op
 		}
 	}
-	status := appruntime.StatusDeploying
-	selected := rows[0]
-	for _, row := range rows {
-		if controlplane.UncertaintyNeedsAttention(row.ErrorClass, row.LastStage) {
-			selected = row
-			status = "needs_attention"
-			break
-		}
+	return failed
+}
+
+func lifecycleOperationFromTask(appID string, row models.Task) LifecycleOperation {
+	updatedAt := row.CreatedAt
+	if row.UpdatedAt != nil {
+		updatedAt = row.UpdatedAt.UTC()
 	}
-	// Monitor mode with projected Agent steps stays deploying; prefer that Job
-	// so the UI can show last_stage (ensure_image / verify_running / …).
-	if status != "needs_attention" {
-		for _, row := range rows {
-			if row.ErrorClass == "uncertainty" && controlplane.IsDeployProgressStage(row.LastStage) {
-				selected = row
-				status = appruntime.StatusDeploying
-				break
-			}
-		}
-	}
-	for _, row := range rows {
-		if status != "needs_attention" && deployStatusToJobState(row.Status) == controlplane.JobFailedRetryable {
-			status = appruntime.StatusFailed
-			selected = row
-			break
-		}
-	}
-	if deployStatusToJobState(selected.Status) == controlplane.JobFailed {
-		status = appruntime.StatusFailed
-	}
-	updatedAt := selected.CreatedAt
-	if selected.UpdatedAt != nil {
-		updatedAt = selected.UpdatedAt.UTC()
-	}
-	operation := LifecycleOperation{
-		ID:            selected.ID,
-		OperationID:   selected.IntentID,
-		ApplicationID: app.ID,
-		Type:          selected.Action,
-		Status:        deployStatusToJobState(selected.Status),
-		Generation:    selected.DesiredGeneration,
-		SpecHash:      selected.DesiredSpecHash,
-		Trigger:       selected.TriggerType,
-		Stage:         selected.LastStage,
-		Attempt:       selected.Attempts,
-		NextRunAt:     selected.NextRunAt,
-		Error:         selected.ErrorMessage,
-		ErrorCode:     selected.ErrorCode,
-		ErrorClass:    selected.ErrorClass,
-		ErrorDetail:   selected.ErrorDetail,
-		CreatedAt:     selected.CreatedAt,
+	return LifecycleOperation{
+		ID:            row.ID,
+		OperationID:   row.IntentID,
+		ApplicationID: appID,
+		Type:          row.Action,
+		Status:        deployStatusToJobState(row.Status),
+		Generation:    row.DesiredGeneration,
+		SpecHash:      row.DesiredSpecHash,
+		Trigger:       row.TriggerType,
+		Stage:         row.LastStage,
+		Attempt:       row.Attempts,
+		NextRunAt:     row.NextRunAt,
+		Error:         row.ErrorMessage,
+		ErrorCode:     row.ErrorCode,
+		ErrorClass:    row.ErrorClass,
+		ErrorDetail:   row.ErrorDetail,
+		CreatedAt:     row.CreatedAt,
 		UpdatedAt:     updatedAt,
 	}
-	return status, &operation
+}
+
+// instanceOperationsByServer loads the active deploy job per server, falling
+// back to that server's latest terminal failed job when none are active.
+func (s *Service) instanceOperationsByServer(ctx context.Context, appID string) (map[string]*LifecycleOperation, error) {
+	out := map[string]*LifecycleOperation{}
+	if s == nil || s.db == nil {
+		return out, nil
+	}
+	var active []models.Task
+	if err := orm.New(s.db).From("event_runs").
+		Where("type=?", "application_deploy").And("application_id=?", appID).
+		And("status IN (?,?,?)", "queued", controlplane.JobRunning, controlplane.JobFailedRetryable).
+		OrderBy("updated_at DESC", "id ASC").All(ctx, &active); err != nil {
+		return nil, err
+	}
+	for _, row := range active {
+		serverID := strings.TrimSpace(row.ServerID)
+		if serverID == "" {
+			continue
+		}
+		if _, exists := out[serverID]; exists {
+			continue
+		}
+		op := lifecycleOperationFromTask(appID, row)
+		out[serverID] = &op
+	}
+	var failed []models.Task
+	if err := orm.New(s.db).From("event_runs").
+		Where("type=?", "application_deploy").And("application_id=?", appID).
+		And("status=?", controlplane.JobFailed).
+		OrderBy("updated_at DESC", "id ASC").All(ctx, &failed); err != nil {
+		return nil, err
+	}
+	for _, row := range failed {
+		serverID := strings.TrimSpace(row.ServerID)
+		if serverID == "" {
+			continue
+		}
+		if _, exists := out[serverID]; exists {
+			continue
+		}
+		op := lifecycleOperationFromTask(appID, row)
+		out[serverID] = &op
+	}
+	return out, nil
 }
 
 func parseApplicationTime(value string) time.Time {

@@ -36,6 +36,15 @@ func jobsForApplication(t *testing.T, svc *Service, appID string) []models.Task 
 	return jobs
 }
 
+func instanceOperationForServer(runtime Runtime, serverID string) *LifecycleOperation {
+	for _, inst := range runtime.Instances {
+		if inst.ServerID == serverID {
+			return inst.Operation
+		}
+	}
+	return nil
+}
+
 func applyJobSpecsForApplication(t *testing.T, svc *Service, appID string) []map[string]any {
 	t.Helper()
 	jobs := jobsForApplication(t, svc, appID)
@@ -1278,7 +1287,7 @@ func TestRuntimeRefreshesInstanceStatuses(t *testing.T) {
 	}
 }
 
-// APP-RUN-001: the latest terminal Job failure remains visible through runtime.
+// APP-RUN-001: the latest terminal Job failure remains visible on the node operation.
 func TestRuntimeExposesLatestTerminalJobFailure(t *testing.T) {
 	svc, _, _, closeStore := newTestService(t)
 	defer closeStore()
@@ -1305,16 +1314,19 @@ func TestRuntimeExposesLatestTerminalJobFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != appruntime.StatusFailed || result.Operation == nil {
-		t.Fatalf("terminal deployment failure should remain visible, got %#v", result)
+	operation := instanceOperationForServer(result, jobs[0].ServerID)
+	if operation == nil {
+		t.Fatalf("terminal deployment failure should remain visible on node, got %#v", result)
 	}
-	operation := result.Operation
 	if operation.Status != controlplane.JobFailed || operation.OperationID == "" || operation.Stage != "start_container" || operation.Attempt != 3 || operation.ErrorCode != "container_start_failed" || operation.Error != "container exited immediately" || operation.ErrorDetail != "exit code 1" {
 		t.Fatalf("runtime operation lost structured failure: %#v", operation)
 	}
+	if result.AbnormalInstanceCount < 1 {
+		t.Fatalf("terminal failure should count as abnormal, got %#v", result)
+	}
 }
 
-// APP-RUN-001: retry state and schedule are part of the runtime operation contract.
+// APP-RUN-001: retry state and schedule are part of the per-node operation contract.
 func TestRuntimeExposesRetryableJobStateAndSchedule(t *testing.T) {
 	svc, _, _, closeStore := newTestService(t)
 	defer closeStore()
@@ -1341,12 +1353,16 @@ func TestRuntimeExposesRetryableJobStateAndSchedule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != appruntime.StatusFailed || result.Operation == nil || result.Operation.Status != controlplane.JobFailedRetryable || result.Operation.NextRunAt == nil || !result.Operation.NextRunAt.Equal(nextRunAt) {
+	operation := instanceOperationForServer(result, jobs[0].ServerID)
+	if operation == nil || operation.Status != controlplane.JobFailedRetryable || operation.NextRunAt == nil || !operation.NextRunAt.Equal(nextRunAt) {
 		t.Fatalf("retryable deployment state should remain visible with its schedule, got %#v", result)
+	}
+	if result.DeployingInstanceCount < 1 {
+		t.Fatalf("retryable job should count as deploying, got %#v", result)
 	}
 }
 
-func TestListWithRuntimeUsesCachedRuntimeStatus(t *testing.T) {
+func TestListSummariesUsesCachedInstanceBucketsWithoutAgent(t *testing.T) {
 	svc, runtime, _, closeStore := newTestService(t)
 	defer closeStore()
 	ctx := context.Background()
@@ -1364,21 +1380,22 @@ func TestListWithRuntimeUsesCachedRuntimeStatus(t *testing.T) {
 		statusCalls++
 	}
 
-	apps, err := svc.ListWithRuntime(ctx)
+	page, err := svc.ListSummaries(ctx, 1, 50, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(apps) != 1 {
-		t.Fatalf("apps = %#v", apps)
+	if len(page.Items) != 1 {
+		t.Fatalf("summaries = %#v", page)
 	}
-	// 新控制面：ListWithRuntime 只读 DB 缓存（实例行 + 活跃 Job），不做远端
-	// 调用；因此摘要状态是 DB 派生值，而不会是 fake runtime.statuses 里的
-	// running——这正好证明没有走远端。
-	if apps[0].RuntimeStatus == appruntime.StatusRunning {
-		t.Fatalf("runtime status should come from cached AppDB state, got %#v", apps[0])
-	}
+	// APP-READ-001: list summaries join local instances + active jobs only.
 	if statusCalls != 0 {
-		t.Fatalf("list runtime summary made %d remote status calls", statusCalls)
+		t.Fatalf("list summaries made %d remote status calls", statusCalls)
+	}
+	if page.Items[0].InstanceCount < 1 {
+		t.Fatalf("list summary should include cached instances, got %#v", page.Items[0])
+	}
+	if page.Items[0].HealthyInstanceCount+page.Items[0].AbnormalInstanceCount+page.Items[0].DeployingInstanceCount < 1 {
+		t.Fatalf("list summary should include node bucket counts, got %#v", page.Items[0])
 	}
 }
 

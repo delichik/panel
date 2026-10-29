@@ -73,19 +73,22 @@ type Application struct {
 }
 
 type ApplicationSummary struct {
-	ID                   string                   `json:"id"`
-	Name                 string                   `json:"name"`
-	Enabled              bool                     `json:"enabled"`
-	ReconcileStopped     bool                     `json:"reconcileStopped,omitempty"`
-	ImageReference       string                   `json:"imageReference,omitempty"`
-	InstanceCount        int                      `json:"instanceCount"`
-	JobID                string                   `json:"jobId"`
-	Namespace            string                   `json:"namespace"`
-	RuntimeStatus        string                   `json:"runtimeStatus,omitempty"`
-	ImageUpdateAvailable bool                     `json:"imageUpdateAvailable"`
-	LastError            string                   `json:"lastError,omitempty"`
-	PlanningError        *DeploymentPlanningError `json:"planningError,omitempty"`
-	UpdatedAt            time.Time                `json:"updatedAt"`
+	ID                     string                   `json:"id"`
+	Name                   string                   `json:"name"`
+	Enabled                bool                     `json:"enabled"`
+	ReconcileStopped       bool                     `json:"reconcileStopped,omitempty"`
+	ImageReference         string                   `json:"imageReference,omitempty"`
+	InstanceCount          int                      `json:"instanceCount"`
+	HealthyInstanceCount   int                      `json:"healthyInstanceCount"`
+	AbnormalInstanceCount  int                      `json:"abnormalInstanceCount"`
+	DeployingInstanceCount int                      `json:"deployingInstanceCount"`
+	JobID                  string                   `json:"jobId"`
+	Namespace              string                   `json:"namespace"`
+	RuntimeStatus          string                   `json:"runtimeStatus,omitempty"`
+	ImageUpdateAvailable   bool                     `json:"imageUpdateAvailable"`
+	LastError              string                   `json:"lastError,omitempty"`
+	PlanningError          *DeploymentPlanningError `json:"planningError,omitempty"`
+	UpdatedAt              time.Time                `json:"updatedAt"`
 }
 
 type ImageUpdateTarget struct {
@@ -339,13 +342,24 @@ type ApplicationRevision struct {
 }
 
 type Runtime struct {
-	ApplicationID string                      `json:"applicationId"`
-	RuntimeID     string                      `json:"runtimeId"`
-	Status        string                      `json:"status"`
-	Operation     *LifecycleOperation         `json:"operation,omitempty"`
-	PlanningError *DeploymentPlanningError    `json:"planningError,omitempty"`
-	Instances     []appruntime.InstanceStatus `json:"instances"`
-	ObservedAt    time.Time                   `json:"observedAt"`
+	ApplicationID          string                   `json:"applicationId"`
+	RuntimeID              string                   `json:"runtimeId"`
+	Status                 string                   `json:"status"`
+	Operation              *LifecycleOperation      `json:"operation,omitempty"`
+	PlanningError          *DeploymentPlanningError `json:"planningError,omitempty"`
+	HealthyInstanceCount   int                      `json:"healthyInstanceCount"`
+	AbnormalInstanceCount  int                      `json:"abnormalInstanceCount"`
+	DeployingInstanceCount int                      `json:"deployingInstanceCount"`
+	Instances              []RuntimeInstance        `json:"instances"`
+	ObservedAt             time.Time                `json:"observedAt"`
+}
+
+// RuntimeInstance is the panel runtime projection for one app↔server node.
+// Observed container fields come from appruntime.InstanceStatus; Job stage and
+// errors hang on Operation so Agent RuntimeStatusResponse stays unchanged.
+type RuntimeInstance struct {
+	appruntime.InstanceStatus
+	Operation *LifecycleOperation `json:"operation,omitempty"`
 }
 
 type LifecycleOperation struct {

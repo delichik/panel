@@ -105,6 +105,9 @@ export interface ApplicationSummaryDto {
   reconcileStopped?: boolean;
   imageReference?: string;
   instanceCount?: number;
+  healthyInstanceCount?: number;
+  abnormalInstanceCount?: number;
+  deployingInstanceCount?: number;
   jobId: string;
   namespace: string;
   runtimeStatus?: string;
@@ -232,11 +235,13 @@ export interface ApplicationRuntimeInstance {
   serverName?: string;
   state?: string;
   status?: string;
+  stage?: string;
   image?: string;
   desiredGeneration?: number;
   observedGeneration?: number;
   updatedAt?: string;
   lastError?: string;
+  operation?: LifecycleOperation;
 }
 
 export interface LifecycleTarget {
@@ -279,6 +284,9 @@ export interface ApplicationRuntime {
   runtimeId: string;
   status: string;
   operation?: LifecycleOperation;
+  healthyInstanceCount?: number;
+  abnormalInstanceCount?: number;
+  deployingInstanceCount?: number;
   instances: ApplicationRuntimeInstance[];
   observedAt: string;
 }

@@ -14,10 +14,10 @@
 
 - **前置**：存在多页普通应用、隐藏设施应用、删除中应用和若干实例/Job。
 - **动作**：调用 `GET /api/v1/applications?page=&pageSize=&q=`。
-- **结果**：返回分页 `items/total/page/pageSize`；单项只含摘要所需字段，`instanceCount`、运行态、活跃 Job 错误和镜像更新状态由当前页 ID 的本地批量查询聚合。
+- **结果**：返回分页 `items/total/page/pageSize`；单项只含摘要所需字段：`enabled`、`instanceCount`、节点三态计数 `healthyInstanceCount`/`abnormalInstanceCount`/`deployingInstanceCount`、可选 `planningError`/`reconcileStopped`、镜像更新与 `updatedAt`。三计数与实例/活跃 Job 由当前页 ID 的本地批量查询按 `(application_id, server_id)` 归类；三者之和可以小于 `instanceCount`（收敛完成的 stop/purge 节点可省略）。兼容字段 `runtimeStatus` 仅为观测 rollup，不得再写入应用级 `needs_attention`/`deploying` 作为列表主状态。
 - **失败**：未知参数、非法页码或分页值返回 400；不得默许 `limit` 或 snake_case 别名。
-- **不变量**：列表不得解析 AppSpec/YAML、读取完整配置 JSON、访问 Agent/Registry、逐应用读取详情或 runtime；普通列表必须排除 `kind=facility_application` 和 `deletion_requested=1`。
-- **验证**：路由契约测试、固定查询次数/假 Agent 零调用测试、跨页 `q` 测试。
+- **不变量**：列表不得解析 AppSpec/YAML、读取完整配置 JSON、访问 Agent/Registry、逐应用读取详情或 runtime；普通列表必须排除 `kind=facility_application` 和 `deletion_requested=1`。应用主状态语义是启停，不是聚合运行态。
+- **验证**：路由契约测试、固定查询次数/假 Agent 零调用测试、跨页 `q` 测试、三计数分类测试。
 
 ### APP-READ-002 应用详情完整性
 
@@ -310,12 +310,12 @@
 
 ### APP-RUN-001 runtime 状态与刷新写回
 
-- **前置**：Instance 具有 desired/observed，可能存在 active Job。
+- **前置**：Instance 具有 desired/observed，可能存在按 server 的 active Job。
 - **动作**：GET runtime，必要时主动查询 Agent status。
-- **结果**：默认以 AppDB observed 快照派生 status/stage；主动结果也经 ObservationWriter CAS 写回；返回 serverId/serverName、generation、容器身份、`lastError` 和 observedAt。存在 active Job 时返回其真实 pending/running/failed_retryable 状态；没有 active Job 且最新 Job 为 failed 时继续返回 operationId、stage、attempt、nextRunAt 和结构化错误。
-- **失败**：Docker not found 映射 `missing` 而非 stopped；Agent 不兼容/不可达不回退 SSH；终态部署错误不得因 active 查询为空而从 runtime 响应消失；容器启动后退出的结构化错误必须保留有界脱敏的状态、exit code 与 Docker State.Error，供 Job/runtime 投影具体根因。
-- **不变量**：handler/业务服务不得直接覆盖 observed；无容器的 pending/failed Job 不提供日志入口。apply 启动成功必须经过 `ORCH-CTRL-007` 的稳定观察；短时退出即使退出码为 0，也必须展示部署失败/退避，而非以瞬间 running 表示部署完成。
-- **验证**：runtime cache/refresh/missing、retryable schedule、terminal failure projection tests。
+- **结果**：默认以 AppDB observed 快照派生实例观测；主动结果也经 ObservationWriter CAS 写回；返回 serverId/serverName、generation、容器身份、`lastError`、observedAt，以及应用级三态计数。每个实例旁挂该 server 的 `operation`（活跃 `queued`/`running`/`failed_retryable`，或无活跃时该 server 最新终态 `failed`）：含 status、stage、attempt、nextRunAt、operationId 与结构化错误。应用级 `status`/`operation` 若仍返回，仅为兼容观测 rollup / 最差节点回声，UI 主路径不得依赖。
+- **失败**：Docker not found 映射 `missing` 而非 stopped；Agent 不兼容/不可达不回退 SSH；终态部署错误不得因 active 查询为空而从**该节点** runtime 投影消失；容器启动后退出的结构化错误必须保留有界脱敏的状态、exit code 与 Docker State.Error。
+- **不变量**：handler/业务服务不得直接覆盖 observed；无容器的 pending/failed Job 不提供日志入口。apply 启动成功必须经过 `ORCH-CTRL-007` 的稳定观察；短时退出即使退出码为 0，也必须展示部署失败/退避，而非以瞬间 running 表示部署完成。协调单位是节点上的应用。
+- **验证**：runtime cache/refresh/missing、retryable schedule、per-server terminal failure projection tests。
 
 ### APP-RUN-002 实例日志
 
@@ -328,14 +328,15 @@
 
 ### APP-RUN-004 执行 monitor / 无进度注意力态
 
-- **前置**：应用活跃 Job 携带 `error_class=uncertainty`（remote-fence monitor mode）。
-- **动作**：读取列表摘要/runtime 或查看应用当前部署。
+- **前置**：某节点活跃 Job 携带 `error_class=uncertainty`（remote-fence monitor mode）。
+- **动作**：读取列表摘要/runtime 或查看应用详情节点列表。
 - **结果**：
-  - 已投影 Agent 进度阶段（如 `ensure_image` / `verify_running`）：聚合与操作为普通 `deploying`/`running`，展示真实 `last_stage`，不得显示“系统核实中”。
-  - 尚无投影进度：聚合为 `needs_attention`，显示“系统核实中”与任务/日志入口；继续独立显示实例实际运行状态；文案说明 Panel 正在向节点收取执行报告，不得引导用户声明成败。
-- **失败**：不得把无进度的 monitor fence 显示为成功或确定失败；不能用等待时间推测结果。证据窗口耗尽后 Job 按 `ORCH-LEASE-005` 终态失败，界面改为普通失败并可同步/重试。不得把 `execution_monitoring` 传输原因渲染成部署失败危险告警。
-- **不变量**：展示投影不修改底层 Job state、lease 或远端证据；有界轮询与自动核实仍适用。不得要求用户经 UI 提交人工 resolve。
-- **验证**：`TestUncertainJobIsVisibleInRuntimeAndApplicationList`、`TestMonitoringJobWithProgressStageShowsDeploying`、前端 `model.test.ts` 进度/注意力区分。
+  - 该节点计入应用级 **部署中** 计数；不得把应用主状态写成 `needs_attention` 或在列表主徽标显示“系统核实中”。
+  - 已投影 Agent 进度阶段（如 `ensure_image` / `verify_running`）：该节点行展示真实 `last_stage`，不得显示“系统核实中”。
+  - 尚无投影进度：该节点行显示“系统核实中”与任务/日志入口，并继续显示该节点观测态；文案说明 Panel 正在向该节点收取执行报告，不得引导用户声明成败。
+- **失败**：不得把无进度的 monitor fence 显示为成功或确定失败；不能用等待时间推测结果。证据窗口耗尽后 Job 按 `ORCH-LEASE-005` 终态失败，该节点改为 **异常** 并可同步/重试。不得把 `execution_monitoring` 传输原因渲染成部署失败危险告警。
+- **不变量**：展示投影不修改底层 Job state、lease 或远端证据；有界轮询（任一节点活跃 Job）与自动核实仍适用。不得要求用户经 UI 提交人工 resolve。
+- **验证**：节点 uncertainty/进度投影测试、三计数把 monitor 计为部署中、前端节点行文案测试。
 
 ### APP-IMG-001 镜像检查聚合
 
@@ -619,9 +620,9 @@
 
 - **前置**：列表/详情/runtime/设施 API 可独立慢或失败。
 - **动作**：进入页面、切换选择、执行操作。
-- **结果**：当前页列表摘要先加载；选中详情/runtime 按需异步；骨架不以 0/jobId 冒充数据；当前部署就地显示真实状态、步骤、尝试次数、下次重试和结构化错误，并可按 operationId 深链；设施直达 URL 先加载目录再判断 kind。
+- **结果**：当前页列表摘要先加载；选中详情/runtime 按需异步；骨架不以 0/jobId 冒充数据；应用主徽标仅启停，旁挂健康/异常/部署中三计数；节点列表就地显示各节点观测态、Job 阶段或“系统核实中”、尝试次数、下次重试和结构化错误，并可按 operationId 深链；规划失败与 reconcile_stopped 以独立告警展示；设施直达 URL 先加载目录再判断 kind。
 - **失败**：旧请求响应不得覆盖新选择；普通应用入口不得预拉设施或多应用 runtime；实例错误不得读取不存在的 `error` 字段而丢失后端 `lastError`。
-- **不变量**：危险删除/批量操作必须标准确认；部署请求完成与运行收敛状态分开展示。
+- **不变量**：危险删除/批量操作必须标准确认；部署请求完成与节点收敛状态分开展示；有界轮询以任一节点活跃 Job 为谓词。
 - **验证**：API call-count、race/stale-response、status/error contract、bounded polling model tests。
 
 ## 10. 覆盖来源与已知缺口

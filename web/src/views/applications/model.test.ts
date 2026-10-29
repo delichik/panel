@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { reactive } from 'vue';
 import {
   applicationFileMountOptions,
+  applicationNodeCounts,
   applicationRuntimePollDelay,
   applicationStatus,
   applicationPlanningError,
-  applicationOperationStatus,
   cloneFacilityDomains,
   cloneFacilityPath,
   cloneProxyPath,
@@ -15,6 +15,7 @@ import {
   draftFromApplication,
   facilityDraftFromConfig,
   facilitySaveInputFromDraft,
+  instanceOperationStatus,
   makeFacilityDomain,
   makeFacilityPath,
   makeKeyValueRow,
@@ -53,30 +54,34 @@ const app = {
 } satisfies ApplicationDto;
 
 describe('application editor model', () => {
-  it('shows planning failure separately from a running container and clears it from a fresh runtime response', () => {
+  it('keeps application primary status as enable/disable while planning errors stay separate', () => {
     const planningError = { code: 'application_file_name_invalid', message: 'Invalid file name', retryable: false, operationId: 'plan-1', occurredAt: '', configVersion: 1 };
     const snapshot = { ...app, runtimeStatus: 'running', planningError };
-    expect(applicationStatus(snapshot)).toBe('planning_failed');
+    expect(applicationStatus(snapshot)).toBe('enabled');
     expect(statusTone('planning_failed')).toBe('danger');
-    const runtime = { applicationId: app.id, runtimeId: 'runtime-1', status: 'running', instances: [], observedAt: '' };
-    expect(applicationStatus(snapshot, { ...runtime, planningError })).toBe('planning_failed');
-    expect(shouldPollApplicationRuntime({ ...runtime, planningError })).toBe(true);
-    expect(applicationPlanningError(snapshot, runtime)).toBeUndefined();
-    expect(applicationStatus(snapshot, runtime)).toBe('deployed');
+    const runtime = { applicationId: app.id, runtimeId: 'runtime-1', status: 'running', instances: [], observedAt: '', planningError };
+    expect(shouldPollApplicationRuntime(runtime)).toBe(true);
+    expect(applicationPlanningError(snapshot, { ...runtime, planningError: undefined })).toBeUndefined();
+    expect(applicationStatus({ ...app, enabled: false })).toBe('disabled');
   });
 
-  it('distinguishes automatic result verification from normal deployment while continuing to poll', () => {
-    const runtime = { applicationId: app.id, runtimeId: 'runtime-1', status: 'deploying', instances: [], observedAt: '', operation: { id: 'job-1', applicationId: app.id, type: 'apply', status: 'running', errorClass: 'uncertainty', generation: 1, createdAt: '', updatedAt: '' } };
-    expect(applicationStatus(app, runtime)).toBe('result_unknown');
-    expect(applicationStatus({ ...app, runtimeStatus: 'needs_attention' })).toBe('result_unknown');
-    expect(applicationOperationStatus(runtime)).toBe('result_unknown');
+  it('surfaces automatic result verification on node operations without changing app primary status', () => {
+    const operation = { id: 'job-1', applicationId: app.id, type: 'apply', status: 'running', errorClass: 'uncertainty', generation: 1, createdAt: '', updatedAt: '' };
+    const runtime = {
+      applicationId: app.id,
+      runtimeId: 'runtime-1',
+      status: 'deploying',
+      instances: [{ instanceId: 'inst-1', serverId: 'srv-1', status: 'pending', operation }],
+      observedAt: '',
+      deployingInstanceCount: 1,
+    };
+    expect(applicationStatus(app, runtime)).toBe('enabled');
+    expect(instanceOperationStatus(runtime.instances[0])).toBe('result_unknown');
     expect(statusTone('result_unknown')).toBe('warning');
     expect(shouldPollApplicationRuntime(runtime)).toBe(true);
-    expect(applicationStatus(app, { ...runtime, operation: { ...runtime.operation, errorClass: '' } })).toBe('deploying');
-    // Monitor mode with projected Agent steps is normal converging, not attention.
-    const monitoring = { ...runtime, operation: { ...runtime.operation, stage: 'ensure_image', errorCode: 'execution_monitoring' } };
-    expect(applicationStatus(app, monitoring)).toBe('deploying');
-    expect(applicationOperationStatus(monitoring)).toBe('running');
+    expect(instanceOperationStatus({ operation: { ...operation, errorClass: '' } })).toBe('running');
+    const monitoring = { operation: { ...operation, stage: 'ensure_image', errorCode: 'execution_monitoring' } };
+    expect(instanceOperationStatus(monitoring)).toBe('running');
   });
 
   it('offers application files by stable name and preserves a missing legacy reference', () => {
@@ -102,30 +107,70 @@ describe('application editor model', () => {
     ]);
   });
 
-  it('marks stopped reconciliation as needing attention', () => {
-    expect(applicationStatus({ ...app, reconcileStopped: true })).toBe('attention');
+  it('keeps reconcile-stopped apps enabled in the primary badge', () => {
+    expect(applicationStatus({ ...app, reconcileStopped: true })).toBe('enabled');
     expect(statusTone('attention')).toBe('warning');
-    expect(applicationStatus({ ...app, reconcileStopped: false })).toBe('enabled');
+    expect(applicationStatus({ ...app, reconcileStopped: false, enabled: false })).toBe('disabled');
   });
 
-  // UI-APP-002: runtime polling follows durable Job state and stops at terminal outcomes.
-  it('keeps retryable deployment failures visible and polls only active runtime states', () => {
-    const runtime = { applicationId: 'app-1', runtimeId: 'runtime-1', status: 'failed_retryable', instances: [], observedAt: '' };
-    expect(applicationStatus(app, runtime)).toBe('failed_retryable');
-    expect(statusTone('failed_retryable')).toBe('warning');
-    expect(shouldPollApplicationRuntime(runtime)).toBe(true);
-    expect(shouldPollApplicationRuntime({ ...runtime, status: 'deployed' })).toBe(false);
-    expect(shouldPollApplicationRuntime({ ...runtime, status: 'deployed', operation: { id: 'job-1', applicationId: 'app-1', type: 'apply', status: 'running', generation: 2, createdAt: '', updatedAt: '' } })).toBe(true);
-    expect(shouldPollApplicationRuntime({ ...runtime, status: 'deploying', operation: { id: 'job-1', applicationId: 'app-1', type: 'apply', status: 'succeeded', generation: 2, createdAt: '', updatedAt: '' } })).toBe(false);
+  // UI-APP-002: runtime polling follows any active per-node job.
+  it('polls while any instance operation is active and ignores app-level operation alone', () => {
+    const idle = { applicationId: 'app-1', runtimeId: 'runtime-1', status: 'failed_retryable', instances: [], observedAt: '' };
+    expect(applicationStatus(app, idle)).toBe('enabled');
+    expect(shouldPollApplicationRuntime(idle)).toBe(false);
+    expect(shouldPollApplicationRuntime({
+      ...idle,
+      status: 'deployed',
+      operation: { id: 'job-1', applicationId: 'app-1', type: 'apply', status: 'running', generation: 2, createdAt: '', updatedAt: '' },
+    })).toBe(false);
+    expect(shouldPollApplicationRuntime({
+      ...idle,
+      status: 'deployed',
+      instances: [{ instanceId: 'inst-1', serverId: 'srv-1', status: 'pending', operation: { id: 'job-1', applicationId: 'app-1', type: 'apply', status: 'running', generation: 2, createdAt: '', updatedAt: '' } }],
+    })).toBe(true);
+    expect(shouldPollApplicationRuntime({
+      ...idle,
+      status: 'deploying',
+      instances: [{ instanceId: 'inst-1', serverId: 'srv-1', status: 'running', operation: { id: 'job-1', applicationId: 'app-1', type: 'apply', status: 'succeeded', generation: 2, createdAt: '', updatedAt: '' } }],
+    })).toBe(false);
   });
 
-  it('backs off runtime polling until the next retry without exceeding 30 seconds', () => {
+  it('backs off runtime polling until the earliest instance retry without exceeding 30 seconds', () => {
     const runtime = {
-      applicationId: 'app-1', runtimeId: 'runtime-1', status: 'failed_retryable', instances: [], observedAt: '',
-      operation: { id: 'job-1', applicationId: 'app-1', type: 'apply', status: 'failed_retryable', generation: 2, nextRunAt: '2026-09-11T00:00:20.000Z', createdAt: '', updatedAt: '' },
+      applicationId: 'app-1',
+      runtimeId: 'runtime-1',
+      status: 'failed_retryable',
+      observedAt: '',
+      instances: [{
+        instanceId: 'inst-1',
+        serverId: 'srv-1',
+        status: 'failed',
+        operation: { id: 'job-1', applicationId: 'app-1', type: 'apply', status: 'failed_retryable', generation: 2, nextRunAt: '2026-09-11T00:00:20.000Z', createdAt: '', updatedAt: '' },
+      }],
     };
     expect(applicationRuntimePollDelay(runtime, Date.parse('2026-09-11T00:00:00.000Z'))).toBe(20250);
-    expect(applicationRuntimePollDelay({ ...runtime, operation: { ...runtime.operation, nextRunAt: '2026-09-11T00:02:00.000Z' } }, Date.parse('2026-09-11T00:00:00.000Z'))).toBe(30000);
+    expect(applicationRuntimePollDelay({
+      ...runtime,
+      instances: [{
+        ...runtime.instances[0],
+        operation: { ...runtime.instances[0].operation!, nextRunAt: '2026-09-11T00:02:00.000Z' },
+      }],
+    }, Date.parse('2026-09-11T00:00:00.000Z'))).toBe(30000);
+  });
+
+  it('prefers runtime node counts over summary fields when both are present', () => {
+    const summary = { ...app, healthyInstanceCount: 1, abnormalInstanceCount: 2, deployingInstanceCount: 3 };
+    expect(applicationNodeCounts(summary)).toEqual({ healthy: 1, abnormal: 2, deploying: 3 });
+    expect(applicationNodeCounts(summary, {
+      applicationId: app.id,
+      runtimeId: 'runtime-1',
+      status: 'running',
+      observedAt: '',
+      instances: [],
+      healthyInstanceCount: 4,
+      abnormalInstanceCount: 0,
+      deployingInstanceCount: 1,
+    })).toEqual({ healthy: 4, abnormal: 0, deploying: 1 });
   });
 
   it('builds save input from structured editor draft without storing display text', () => {

@@ -49,10 +49,13 @@ import { formatDateTime } from '@/utils/datetime';
 import {
   applicationFileMountOptions as makeApplicationFileMountOptions,
   applicationRuntimePollDelay,
+  applicationNodeCounts,
   applicationPlanningError,
-  applicationOperationStatus,
   applicationStatus,
   cloneFacilityDomains,
+  instanceOperationStatus,
+  isDeployProgressStage,
+  uncertaintyNeedsAttention,
   cloneFacilityPath,
   cloneProxyPath,
   cloneProxyRules,
@@ -73,7 +76,6 @@ import {
   panelFileMountOptions as makePanelFileMountOptions,
   routeMode,
   routeSummary,
-  runtimeSummary,
   saveInputFromDraft,
   shouldPollApplicationRuntime,
   statusTone,
@@ -260,23 +262,26 @@ const currentApplication = computed(() => selectedId.value ? applicationDetails.
 const selectedApplication = computed(() => currentApplication.value ?? applicationFromSummary(currentApplicationSummary.value) ?? emptyApplication());
 const persistentServerOptions = computed(() => (selectedApplication.value.persistentServers ?? []).map((serverId) => ({ label: serverDisplayName(serverId), value: serverId })));
 const currentRuntime = computed(() => selectedId.value ? runtimes.value[selectedId.value] : null);
-const currentOperation = computed(() => currentRuntime.value?.operation);
 const planningError = computed(() => applicationPlanningError(selectedApplication.value, currentRuntime.value));
-const currentOperationStatus = computed(() => applicationOperationStatus(currentRuntime.value));
 const appStatus = computed(() => currentApplicationSummary.value ? applicationStatus(selectedApplication.value, currentRuntime.value) : 'unknown');
+const selectedNodeCounts = computed(() => applicationNodeCounts(selectedApplication.value, currentRuntime.value));
 const appDraft = reactive<ApplicationDraftUi>(draftFromApplication());
 const facilityDraft = reactive<FacilityDraftUi>(facilityDraftFromConfig());
 const appErrors = computed(() => validateApplicationDraft(appDraft));
 const facilityErrors = computed(() => validateFacilityDraft(facilityDraft));
 const appDiff = computed(() => diffApplications(mode.value === 'edit' ? currentApplication.value : null, appDraft));
 const facilityDiff = computed(() => diffFacility(facility.value, facilityDraft));
-const appRows = computed(() => applications.value.map((app) => ({ app, routes: routeSummary(applicationDetails.value[app.id] ?? emptyApplication()), summary: runtimeSummary(runtimes.value[app.id]) })));
+const appRows = computed(() => applications.value.map((app) => ({
+  app,
+  routes: routeSummary(applicationDetails.value[app.id] ?? emptyApplication()),
+  counts: applicationNodeCounts(app, runtimes.value[app.id]),
+})));
 const detailOpen = computed(() => Boolean(selectedId.value));
 const applicationColumns = computed(() => [
   { key: 'name', label: t('common.name') },
   { key: 'status', label: t('common.status'), nowrap: true },
   { key: 'image', label: t('applicationsPage.imageReferenceColumn'), nowrap: true },
-  { key: 'instances', label: t('applicationsPage.instances'), nowrap: true },
+  { key: 'instances', label: t('applicationsPage.nodeHealthColumn'), nowrap: true },
   { key: 'imageUpdate', label: t('applicationsPage.imageUpdate'), nowrap: true },
   { key: 'updatedAt', label: t('applicationsPage.updatedAtColumn'), nowrap: true },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
@@ -2162,14 +2167,22 @@ onBeforeUnmount(() => {
               <TableDetailName class="max-w-[16rem]" :name="row.app.name" :label="t('common.openDetails', { name: row.app.name })" @click="openApplicationDetail(row.app)" />
             </template>
             <template #status="{ row }">
-              <StatusBadge :status="applicationStatus(row.app, runtimes[row.app.id])" :tone="statusTone(applicationStatus(row.app, runtimes[row.app.id]))" :label="t(`applicationsPage.status.${applicationStatus(row.app, runtimes[row.app.id])}`)" />
+              <div class="grid gap-1">
+                <StatusBadge :status="applicationStatus(row.app)" :tone="statusTone(applicationStatus(row.app))" :label="t(`applicationsPage.status.${applicationStatus(row.app)}`)" />
+                <Badge v-if="row.app.planningError" tone="danger">{{ t('applicationsPage.status.planning_failed') }}</Badge>
+                <Badge v-else-if="row.app.reconcileStopped" tone="warning">{{ t('applicationsPage.status.attention') }}</Badge>
+              </div>
             </template>
             <template #image="{ row }">
               <span v-if="!loading && !(rowImageLoading[row.app.id] && !rowImageReference(row.app))" class="block max-w-[18rem] truncate text-muted-foreground">{{ rowImageReference(row.app) || row.app.jobId }}</span>
               <div v-else class="motion-skeleton h-3 w-40 rounded bg-muted animate-pulse" aria-hidden="true" />
             </template>
             <template #instances="{ row }">
-              <Badge tone="info">{{ t('applicationsPage.instancesCount', { count: row.app.instanceCount ?? row.summary.total }) }}</Badge>
+              <div class="flex flex-wrap gap-1">
+                <Badge tone="success">{{ t('applicationsPage.nodeBucket.healthy', { count: row.counts.healthy }) }}</Badge>
+                <Badge tone="danger">{{ t('applicationsPage.nodeBucket.abnormal', { count: row.counts.abnormal }) }}</Badge>
+                <Badge tone="warning">{{ t('applicationsPage.nodeBucket.deploying', { count: row.counts.deploying }) }}</Badge>
+              </div>
             </template>
             <template #imageUpdate="{ row }">
               <Badge :tone="row.app.imageUpdateAvailable ? 'warning' : 'neutral'">{{ row.app.imageUpdateAvailable ? t('applicationsPage.imageUpdate') : t('applicationsPage.imageCurrent') }}</Badge>
@@ -2231,7 +2244,12 @@ onBeforeUnmount(() => {
           <LoadingOverlay v-if="detailLoading && !applicationDetails[selectedId]" />
           <div class="flex flex-wrap items-center gap-2">
             <StatusBadge :status="appStatus" :tone="statusTone(appStatus)" :label="t(`applicationsPage.status.${appStatus}`)" />
+            <Badge v-if="planningError" tone="danger">{{ t('applicationsPage.status.planning_failed') }}</Badge>
+            <Badge v-else-if="selectedApplication.reconcileStopped" tone="warning">{{ t('applicationsPage.status.attention') }}</Badge>
             <Badge :tone="selectedApplication.imageUpdateAvailable ? 'warning' : 'neutral'">{{ selectedApplication.imageUpdateAvailable ? t('applicationsPage.imageUpdate') : t('applicationsPage.imageCurrent') }}</Badge>
+            <Badge tone="success">{{ t('applicationsPage.nodeBucket.healthy', { count: selectedNodeCounts.healthy }) }}</Badge>
+            <Badge tone="danger">{{ t('applicationsPage.nodeBucket.abnormal', { count: selectedNodeCounts.abnormal }) }}</Badge>
+            <Badge tone="warning">{{ t('applicationsPage.nodeBucket.deploying', { count: selectedNodeCounts.deploying }) }}</Badge>
           </div>
           <Tabs v-model="activeAppTab" :tabs="appDetailTabs">
             <section v-if="appTab === 'runtime'" class="grid gap-4">
@@ -2242,9 +2260,9 @@ onBeforeUnmount(() => {
               </EmptyState>
               <template v-else>
                 <div class="grid grid-cols-3 gap-3 max-md:grid-cols-1">
-                  <div class="rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.instances') }}</span><strong>{{ runtimeSummary(currentRuntime).total }}</strong></div>
-                  <div class="rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.running') }}</span><strong>{{ runtimeSummary(currentRuntime).running }}</strong></div>
-                  <div class="rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.failed') }}</span><strong>{{ runtimeSummary(currentRuntime).failed }}</strong></div>
+                  <div class="rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.nodeBucketHealthyLabel') }}</span><strong>{{ selectedNodeCounts.healthy }}</strong></div>
+                  <div class="rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.nodeBucketAbnormalLabel') }}</span><strong>{{ selectedNodeCounts.abnormal }}</strong></div>
+                  <div class="rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.nodeBucketDeployingLabel') }}</span><strong>{{ selectedNodeCounts.deploying }}</strong></div>
                 </div>
                 <div v-if="planningError" role="alert" class="grid gap-2 rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">
                   <div class="flex flex-wrap items-center justify-between gap-2">
@@ -2256,23 +2274,9 @@ onBeforeUnmount(() => {
                   <span v-if="planningError.field">{{ t('applicationsPage.planningField') }}: {{ planningError.field }}</span>
                   <span>{{ t(planningError.retryable ? 'applicationsPage.planningRetryHint' : 'applicationsPage.planningFixHint') }}</span>
                 </div>
-                <div v-if="currentOperation" class="grid gap-3 rounded-2xl border border-border bg-muted p-4">
-                  <div class="flex flex-wrap items-center justify-between gap-2">
-                    <h3 class="m-0">{{ t('applicationsPage.currentDeployment') }}</h3>
-                    <Button v-if="currentOperation.operationId" size="sm" variant="ghost" @click="openApplicationTasks(currentOperation.operationId)"><ClipboardList />{{ t('applicationsPage.viewOperation') }}</Button>
-                  </div>
-                  <div class="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
-                    <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationPhase') }}</span><StatusBadge :status="currentOperationStatus" domain="operation" :tone="currentOperationStatus === 'result_unknown' ? 'warning' : undefined" :label="operationStatusLabel(currentOperationStatus)" /></div>
-                    <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationStage') }}</span><strong>{{ operationStageLabel(currentOperation.stage || '') }}</strong></div>
-                    <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationAttempt') }}</span><strong>{{ currentOperation.attempt ?? t('common.notAvailable') }}</strong></div>
-                    <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationNextRetry') }}</span><strong>{{ currentOperation.nextRunAt ? formatDateTime(currentOperation.nextRunAt) : t('common.notAvailable') }}</strong></div>
-                  </div>
-                  <p v-if="currentOperationStatus === 'result_unknown'" class="m-0 text-sm text-warning">{{ t('applicationsPage.unknownResultHint') }}</p>
-                  <div v-if="currentOperationStatus !== 'result_unknown' && currentOperation.errorCode !== 'execution_monitoring' && (currentOperation.error || currentOperation.errorCode || currentOperation.errorDetail)" role="alert" class="grid gap-1 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
-                    <strong>{{ t('applicationsPage.operationError') }}<span v-if="currentOperation.errorCode"> · {{ currentOperation.errorCode }}</span></strong>
-                    <span v-if="currentOperation.error">{{ currentOperation.error }}</span>
-                    <details v-if="currentOperation.errorDetail && currentOperation.errorDetail !== currentOperation.error"><summary class="cursor-pointer">{{ t('facilityDiagnostics.technicalDetails') }}</summary><pre class="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words text-xs">{{ currentOperation.errorDetail }}</pre></details>
-                  </div>
+                <div v-if="selectedApplication.reconcileStopped" role="alert" class="rounded-2xl border border-warning-border bg-warning-bg p-4 text-sm text-warning">
+                  <strong>{{ t('applicationsPage.status.attention') }}</strong>
+                  <p class="m-0 mt-1">{{ t('applicationsPage.reconcileStoppedHint') }}</p>
                 </div>
                 <div v-else-if="!planningError && selectedApplication.lastError" role="alert" class="rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">
                   <strong>{{ t('applicationsPage.operationError') }}</strong>
@@ -2281,10 +2285,35 @@ onBeforeUnmount(() => {
                 <div class="rounded-2xl border border-border bg-muted p-4">
                   <h3>{{ t('applicationsPage.nodeInstances') }}</h3>
                   <div v-if="currentRuntime?.instances?.length" class="mt-3 grid gap-2">
-                    <div v-for="instance in currentRuntime.instances" :key="instance.instanceId || instance.id" class="grid gap-1 rounded-xl border border-border p-3 text-sm">
-                      <div class="flex items-center justify-between gap-2"><strong>{{ instance.serverName || instance.serverId || instance.instanceId }}</strong><StatusBadge :status="instance.status || instance.state || 'unknown'" :tone="statusTone(instance.status || instance.state || 'unknown')" :label="instanceStatusLabel(instance.status || instance.state || '')" /></div>
+                    <div v-for="instance in currentRuntime.instances" :key="instance.instanceId || instance.id" class="grid gap-2 rounded-xl border border-border p-3 text-sm">
+                      <div class="flex flex-wrap items-center justify-between gap-2">
+                        <strong>{{ instance.serverName || instance.serverId || instance.instanceId }}</strong>
+                        <StatusBadge :status="instance.status || instance.state || 'unknown'" :tone="statusTone(instance.status || instance.state || 'unknown')" :label="instanceStatusLabel(instance.status || instance.state || '')" />
+                      </div>
                       <span class="text-muted-foreground">{{ instance.containerName || instance.containerId || t('common.notAvailable') }}</span>
-                      <span v-if="instance.lastError" class="text-danger">{{ instance.lastError }}</span>
+                      <div v-if="instance.operation" class="grid gap-2 rounded-lg border border-border/70 bg-background/40 p-3">
+                        <div class="flex flex-wrap items-center justify-between gap-2">
+                          <StatusBadge
+                            :status="instanceOperationStatus(instance)"
+                            domain="operation"
+                            :tone="instanceOperationStatus(instance) === 'result_unknown' ? 'warning' : undefined"
+                            :label="operationStatusLabel(instanceOperationStatus(instance))"
+                          />
+                          <Button v-if="instance.operation.operationId" size="sm" variant="ghost" @click="openApplicationTasks(instance.operation.operationId)"><ClipboardList />{{ t('applicationsPage.viewOperation') }}</Button>
+                        </div>
+                        <div class="grid gap-2 sm:grid-cols-3">
+                          <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationStage') }}</span><strong>{{ uncertaintyNeedsAttention(instance.operation.errorClass, instance.operation.stage) ? t('applicationsPage.status.result_unknown') : (isDeployProgressStage(instance.operation.stage) || instance.operation.stage ? operationStageLabel(instance.operation.stage || '') : t('common.notAvailable')) }}</strong></div>
+                          <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationAttempt') }}</span><strong>{{ instance.operation.attempt ?? t('common.notAvailable') }}</strong></div>
+                          <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationNextRetry') }}</span><strong>{{ instance.operation.nextRunAt ? formatDateTime(instance.operation.nextRunAt) : t('common.notAvailable') }}</strong></div>
+                        </div>
+                        <p v-if="instanceOperationStatus(instance) === 'result_unknown'" class="m-0 text-sm text-warning">{{ t('applicationsPage.unknownResultHint') }}</p>
+                        <div v-if="instanceOperationStatus(instance) !== 'result_unknown' && instance.operation.errorCode !== 'execution_monitoring' && (instance.operation.error || instance.operation.errorCode || instance.operation.errorDetail)" role="alert" class="grid gap-1 rounded-lg border border-danger-border bg-danger-bg p-2 text-danger">
+                          <strong>{{ t('applicationsPage.operationError') }}<span v-if="instance.operation.errorCode"> · {{ instance.operation.errorCode }}</span></strong>
+                          <span v-if="instance.operation.error">{{ instance.operation.error }}</span>
+                          <details v-if="instance.operation.errorDetail && instance.operation.errorDetail !== instance.operation.error"><summary class="cursor-pointer">{{ t('facilityDiagnostics.technicalDetails') }}</summary><pre class="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words text-xs">{{ instance.operation.errorDetail }}</pre></details>
+                        </div>
+                      </div>
+                      <span v-if="instance.lastError && !instance.operation?.error" class="text-danger">{{ instance.lastError }}</span>
                     </div>
                   </div>
                   <div v-else-if="runtimeLoading" class="mt-3 grid gap-2" aria-hidden="true">
