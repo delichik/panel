@@ -568,6 +568,45 @@ func TestFailUncertainPastEvidenceWindowSkipsRemoteFence(t *testing.T) {
 	}
 }
 
+func TestFailUncertainPastEvidenceWindowORPrecedenceIgnoresCompleted(t *testing.T) {
+	// Regression (oracle-phoenix): unparenthesized
+	//   status=running AND stage=uncertain AND (A) OR (B)
+	// made (B) match every historical completed row with empty next_run_at.
+	// Production counted ~73k IDs then Get()+UPDATE each → ~85% CPU every 30s.
+	svc := newTestService(t)
+	ctx := context.Background()
+	old := time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339Nano)
+	for i := 0; i < 50; i++ {
+		task, err := svc.Create(ctx, CreateInput{Type: "test", Summary: "done"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := svc.Start(ctx, task.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := svc.Complete(ctx, task.ID, "ok"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET next_run_at='', started_at=?, created_at=?, finished_at=? WHERE id=?`, old, old, old, task.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	expired, err := svc.FailUncertainPastEvidenceWindow(ctx, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired != 0 {
+		t.Fatalf("completed history must not match uncertain window query, got %d", expired)
+	}
+	var completed int
+	if err := svc.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM event_runs WHERE status=?`, StatusCompleted).Scan(&completed); err != nil {
+		t.Fatal(err)
+	}
+	if completed != 50 {
+		t.Fatalf("completed rows must stay completed, got %d", completed)
+	}
+}
+
 func TestFailUncertainPastEvidenceWindowExcludesRemoteFenceAtQuery(t *testing.T) {
 	// Regression: load-then-skip on thousands of deploy uncertain rows saturated CPU
 	// (FailUncertainPastEvidenceWindow ~85% in production pprof). Query must exclude

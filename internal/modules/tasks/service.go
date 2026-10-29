@@ -997,10 +997,12 @@ func (s *Service) FailUncertainPastEvidenceWindow(ctx context.Context, now time.
 	taskIDs := []string{}
 	// Deploy uncertainty is owned by ORCH-LEASE-*; exclude remote-fence types at
 	// query time so stale application_deploy monitor rows are not Get()'d every 30s.
+	// The time predicate MUST be parenthesized: without it, SQL AND/OR precedence
+	// turns the second OR arm into a bare (next_run_at empty AND created_at old)
+	// match that pulls tens of thousands of completed rows (prod: ~73k / ~85% CPU).
 	q := orm.New(s.db).From("event_runs").
 		Where("status = ?", StatusRunning).
 		And("stage = ?", "uncertain").
-		// Parenthesize the OR so later AND type NOT IN (...) applies to both branches.
 		And("((next_run_at <> '' AND next_run_at <= ?) OR ((next_run_at IS NULL OR next_run_at = '') AND COALESCE(started_at, created_at) <= ?))", deadline, startedBefore)
 	q = q.AndNotIn("type", s.Registry().TypesWithRecovery(RecoveryRemoteFence))
 	if err := q.Pluck(ctx, "id", &taskIDs); err != nil {
