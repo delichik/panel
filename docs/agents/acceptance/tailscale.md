@@ -232,11 +232,11 @@
 ### TS-AGT-003 启用与加入语义：systemd 托管，仅在未登录时使用密钥
 
 - **触发入口**：`TailscaleConfigure`（Panel 已启用该节点）。
-- **前置条件**：软件包已安装；节点可能已登录 tailnet。
-- **成功结果**：通过 systemd 启用并启动 `tailscaled`；节点尚未登录时才执行加入：密钥写入仅 root 可读（0600）的临时文件并以 `--auth-key=file:<path>` 引用（CLI 不读取 `TS_AUTHKEY`），命令结束后立即删除；`tailscale up` 必须带 `--accept-dns=false --accept-routes=false`（不得接管本机 DNS / 接受他人子网路由），并带上全局 ACL 标签，等待后端进入 Running（有界等待），随后返回本机 tailnet 地址、主机名与版本。已登录节点不重复 `up`，但必须执行 `tailscale set --accept-dns=false --accept-routes=false` 收敛旧会话残留偏好。
-- **失败结果**：服务无法启用、加入失败或等待超时必须返回结构化失败；不得把“已安装但未登录”报告为成功，也不得在失败时删除状态文件。
-- **边界条件**：已登录节点不携带密钥也能成功；需要管理员批准的状态必须返回稳定原因而不是超时泛化错误；重复启用幂等；无 systemd 的环境按不支持处理；不得省略或改为 `true` 的 accept-dns/accept-routes。
-- **验证点**：`internal/agent/system/tailscale_test.go` 的密钥文件传递、空密钥、`accept-dns=false`/`accept-routes=false` 与错误脱敏用例；登录等待与幂等用例；Panel 侧 `TS-TASK-004` 联合验证。
+- **前置条件**：软件包已安装；节点可能已登录 tailnet；Panel 下发的 `Hostname` 为该服务器稳定 ID 的合法化形式（`servers.id` 中的 `_` 替换为 `-`，例如 `srv_…` → `srv-…`）。
+- **成功结果**：通过 systemd 启用并启动 `tailscaled`；节点尚未登录时才执行加入：密钥写入仅 root 可读（0600）的临时文件并以 `--auth-key=file:<path>` 引用（CLI 不读取 `TS_AUTHKEY`），命令结束后立即删除；`tailscale up` 必须带 `--hostname=<NodeHostname(server.id)> --accept-dns=false --accept-routes=false`（不得使用操作系统主机名、不得接管本机 DNS / 接受他人子网路由），并带上全局 ACL 标签，等待后端进入 Running（有界等待），随后返回本机 tailnet 地址、主机名与版本。已登录节点不重复 `up`，但必须执行 `tailscale set --accept-dns=false --accept-routes=false --hostname=<同上>` 收敛旧会话残留偏好与注册名（含此前以 OS 主机名加入的节点）。
+- **失败结果**：服务无法启用、加入失败、主机名非法或等待超时必须返回结构化失败；不得把“已安装但未登录”报告为成功，也不得在失败时删除状态文件；不得省略 `Hostname` 后静默回落到 OS 主机名。
+- **边界条件**：已登录节点不携带密钥也能成功；需要管理员批准的状态必须返回稳定原因而不是超时泛化错误；重复启用幂等；无 systemd 的环境按不支持处理；不得省略或改为 `true` 的 accept-dns/accept-routes；Panel 容器自身仍使用固定名 `seamark-panel`（`TS-INIT-002`），本条只约束托管节点。
+- **验证点**：`internal/platform/tailscale/tailscale_test.go` 的 `NodeHostname` 用例；`internal/modules/servers/tailscale_report_test.go` 断言 `TailscaleConfigure` 请求携带服务器 ID 派生主机名；`internal/agent/system/tailscale_test.go` 的密钥文件传递、空密钥、`--hostname`、`accept-dns=false`/`accept-routes=false`、已登录 `set --hostname` 与错误脱敏用例；登录等待与幂等用例；Panel 侧 `TS-TASK-004` 联合验证。
 
 ### TS-AGT-004 “关闭”是从 tailnet 移除，而非仅断连或卸载
 

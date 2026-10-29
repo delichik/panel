@@ -535,7 +535,8 @@ type TailscaleStatus struct {
 }
 
 // TailscaleConfigureRequest 只在节点尚未登录时使用 AuthKey；已在 tailnet 中的
-// 节点重新下发配置不得要求再次提供密钥。
+// 节点重新下发配置不得要求再次提供密钥。Hostname 必须是 Panel 服务器 ID 派生的
+// 稳定注册名（例如 srv-…），不得省略后回落到操作系统主机名。
 type TailscaleConfigureRequest struct {
 	AuthKey  string   `json:"authKey,omitempty"`
 	Tags     []string `json:"tags,omitempty"`

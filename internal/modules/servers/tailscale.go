@@ -11,6 +11,7 @@ import (
 	"panel/internal/modules/tasks"
 	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/logging"
+	"panel/internal/platform/tailscale"
 
 	"go.uber.org/zap"
 )
@@ -114,10 +115,15 @@ func (s *Service) runTailscaleApply(ctx context.Context, taskID, serverID string
 	}
 
 	settings := s.tailscaleConfig()
+	hostname, err := tailscale.NodeHostname(srv.ID)
+	if err != nil {
+		return s.failTailscaleApply(ctx, taskID, serverID, panelerr.Validation("invalid_tailscale_hostname", "Server id cannot be used as a Tailscale hostname"))
+	}
 	_ = s.tasks.Advance(ctx, taskID, "joining", "joining the tailnet")
 	status, err := client.TailscaleConfigure(ctx, endpoint, agentcontract.TailscaleConfigureRequest{
-		AuthKey: settings.AuthKey,
-		Tags:    append([]string(nil), settings.Tags...),
+		AuthKey:  settings.AuthKey,
+		Tags:     append([]string(nil), settings.Tags...),
+		Hostname: hostname,
 	})
 	if err != nil {
 		return s.failTailscaleApply(ctx, taskID, serverID, err)

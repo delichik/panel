@@ -27,7 +27,6 @@ const (
 )
 
 var (
-	tailscaleHostnamePattern = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
 	tailscaleCodenamePattern = regexp.MustCompile(`^[a-z]+$`)
 )
 
@@ -49,8 +48,10 @@ func (LocalCollector) TailscaleConfigure(ctx context.Context, req agentcontract.
 		return agentcontract.TailscaleStatus{}, err
 	}
 	hostname := strings.TrimSpace(req.Hostname)
-	if hostname != "" && !tailscaleHostnamePattern.MatchString(hostname) {
-		return agentcontract.TailscaleStatus{}, errors.New("tailscale hostname is invalid")
+	if hostname != "" {
+		if err := tailscale.ValidateHostname(hostname); err != nil {
+			return agentcontract.TailscaleStatus{}, errors.New("tailscale hostname is invalid")
+		}
 	}
 	if _, err := exec.LookPath("tailscale"); err != nil {
 		if err := installTailscale(ctx); err != nil {
@@ -66,8 +67,9 @@ func (LocalCollector) TailscaleConfigure(ctx context.Context, req agentcontract.
 	}
 	if status.LoggedIn {
 		// 已加入的节点不重复执行 up（避免打断连接），但仍强制关闭 DNS/子网
-		// 路由接受，防止旧会话残留 accept-dns/accept-routes=true。
-		if err := ensureTailscaleNetworkPrefs(ctx); err != nil {
+		// 路由接受，并在下发了稳定主机名时收敛注册名（例如从 OS 主机名改为
+		// Panel 服务器 ID）。
+		if err := ensureTailscaleNetworkPrefs(ctx, hostname); err != nil {
 			return agentcontract.TailscaleStatus{}, err
 		}
 		return readTailscaleStatus(ctx)
@@ -166,10 +168,15 @@ func stopTailscaled(ctx context.Context) error {
 	return nil
 }
 
-// ensureTailscaleNetworkPrefs 在已登录节点上强制关闭 MagicDNS 与子网路由接受。
-// 关闭意图本身走 TailscaleDisable，不依赖改偏好；这里只保证启用态不会接管本机网络。
-func ensureTailscaleNetworkPrefs(ctx context.Context) error {
-	if _, err := runCommand(ctx, tailscaleCommandTimeout, "tailscale", "set", "--accept-dns=false", "--accept-routes=false"); err != nil {
+// ensureTailscaleNetworkPrefs 在已登录节点上强制关闭 MagicDNS 与子网路由接受，
+// 并在提供主机名时收敛 Tailscale 注册名。关闭意图本身走 TailscaleDisable，不依赖
+// 改偏好；这里只保证启用态不会接管本机网络，且注册名与 Panel 下发的稳定 ID 一致。
+func ensureTailscaleNetworkPrefs(ctx context.Context, hostname string) error {
+	args := []string{"set", "--accept-dns=false", "--accept-routes=false"}
+	if hostname != "" {
+		args = append(args, "--hostname="+hostname)
+	}
+	if _, err := runCommand(ctx, tailscaleCommandTimeout, "tailscale", args...); err != nil {
 		return fmt.Errorf("disable tailscale dns/routes acceptance: %w", err)
 	}
 	return nil

@@ -124,6 +124,9 @@ func TestTailscaleUpDeliversAuthKeyThroughPrivateFile(t *testing.T) {
 	if !strings.Contains(fields["args"], "--accept-dns=false") || !strings.Contains(fields["args"], "--accept-routes=false") {
 		t.Fatalf("up args = %q, want --accept-dns=false --accept-routes=false", fields["args"])
 	}
+	if !strings.Contains(fields["args"], "--hostname=racknerd-4519e12") {
+		t.Fatalf("up args = %q, want --hostname=racknerd-4519e12", fields["args"])
+	}
 	if fields["keymode"] != "-rw-------" {
 		t.Fatalf("auth key file mode = %q, want -rw-------", fields["keymode"])
 	}
@@ -175,6 +178,32 @@ func TestWriteAuthKeyFileEmptyKey(t *testing.T) {
 	path, err := writeAuthKeyFile("   ")
 	if err != nil || path != "" {
 		t.Fatalf("writeAuthKeyFile(blank) = %q, %v; want empty path and no error", path, err)
+	}
+}
+
+// TS-AGT-003：已登录节点不重复 up，但必须经 set 收敛 DNS/路由偏好与稳定注册主机名。
+func TestEnsureTailscaleNetworkPrefsSetsHostname(t *testing.T) {
+	skipWithoutPOSIXShell(t)
+	recordPath := filepath.Join(t.TempDir(), "set-record")
+	installFakeTailscaleCLI(t, `#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_SET_RECORD"
+exit 0
+`)
+	t.Setenv("FAKE_SET_RECORD", recordPath)
+
+	if err := ensureTailscaleNetworkPrefs(context.Background(), "srv-a1b2c3d4e5f67890"); err != nil {
+		t.Fatalf("ensureTailscaleNetworkPrefs() error = %v", err)
+	}
+	raw, err := os.ReadFile(recordPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := strings.TrimSpace(string(raw))
+	if !strings.Contains(args, "--accept-dns=false") || !strings.Contains(args, "--accept-routes=false") {
+		t.Fatalf("set args = %q, want accept-dns/routes=false", args)
+	}
+	if !strings.Contains(args, "--hostname=srv-a1b2c3d4e5f67890") {
+		t.Fatalf("set args = %q, want --hostname=srv-a1b2c3d4e5f67890", args)
 	}
 }
 

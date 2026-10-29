@@ -190,6 +190,17 @@ func ValidateHostname(hostname string) error {
 	return nil
 }
 
+// NodeHostname 把 Panel 服务器 ID（例如 srv_a1b2c3d4e5f67890）转换为合法的
+// Tailscale 注册主机名。Tailscale 主机名不允许下划线，因此把 `_` 替换为 `-`。
+// 节点必须以该稳定 ID 加入 tailnet，而不是使用操作系统主机名。
+func NodeHostname(serverID string) (string, error) {
+	hostname := strings.ReplaceAll(strings.TrimSpace(serverID), "_", "-")
+	if err := ValidateHostname(hostname); err != nil {
+		return "", err
+	}
+	return hostname, nil
+}
+
 // NormalizeTags 裁剪、去重、排序并校验 tag 集合。
 func NormalizeTags(tags []string) ([]string, error) {
 	out := make([]string, 0, len(tags))

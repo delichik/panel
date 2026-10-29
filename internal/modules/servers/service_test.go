@@ -2324,6 +2324,8 @@ type serverFakeAgentClient struct {
 	prepareRestartErr    error
 	prepareRestartCalls  int
 	prepareRestartStates []string
+	tailscaleConfigure   agentcontract.TailscaleConfigureRequest
+	tailscaleStatus      agentcontract.TailscaleStatus
 }
 
 func agentHealth(version string) agentcontract.HealthResponse {
@@ -2402,6 +2404,31 @@ func (f *serverFakeAgentClient) PrepareRestartWithProgress(_ context.Context, _ 
 		}
 	}
 	return f.prepareRestartErr
+}
+
+func (f *serverFakeAgentClient) TailscaleStatus(context.Context, string) (agentcontract.TailscaleStatus, error) {
+	return f.tailscaleStatus, f.err
+}
+
+func (f *serverFakeAgentClient) TailscaleConfigure(_ context.Context, _ string, req agentcontract.TailscaleConfigureRequest) (agentcontract.TailscaleStatus, error) {
+	f.tailscaleConfigure = req
+	if f.tailscaleStatus.Installed || f.tailscaleStatus.LoggedIn || f.tailscaleStatus.Hostname != "" {
+		return f.tailscaleStatus, f.err
+	}
+	status := agentcontract.TailscaleStatus{
+		Installed: true,
+		Running:   true,
+		LoggedIn:  true,
+		Hostname:  req.Hostname,
+		IPv4:      "100.64.0.7",
+		Version:   "1.80.0",
+	}
+	f.tailscaleStatus = status
+	return status, f.err
+}
+
+func (f *serverFakeAgentClient) TailscaleDisable(context.Context, string) (agentcontract.TailscaleStatus, error) {
+	return agentcontract.TailscaleStatus{Installed: true, Running: false, LoggedIn: false}, f.err
 }
 
 type failingConnectivityExec struct{}

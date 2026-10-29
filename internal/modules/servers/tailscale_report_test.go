@@ -8,6 +8,7 @@ import (
 	agentcontract "panel/internal/agent/contract"
 	agentsecurity "panel/internal/agent/security"
 	"panel/internal/modules/tasks"
+	"panel/internal/platform/tailscale"
 )
 
 func createTailscaleServer(t *testing.T, svc *Service) Server {
@@ -303,6 +304,45 @@ func TestTailscaleApplyTaskReportsMissingAgentSupport(t *testing.T) {
 	err := svc.runTailscaleApply(context.Background(), "task-1", srv.ID)
 	if err == nil {
 		t.Fatal("expected the apply to fail when no agent endpoint is configured")
+	}
+}
+
+// TS-AGT-003：收敛必须把 Panel 服务器 ID 合法化后作为 Tailscale 注册主机名下发，
+// 不得省略 Hostname 让节点回落到操作系统主机名。
+func TestTailscaleApplyPassesServerIDAsHostname(t *testing.T) {
+	svc, _, store := testServerService(t, nil)
+	srv := createTailscaleServer(t, svc)
+	traits := `{"agent.enabled":"true","agent.url":"https://203.0.113.10:9786","agent.status":"compatible"}`
+	if _, err := store.AppDB().Exec(`UPDATE servers SET traits=? WHERE id=?`, traits, srv.ID); err != nil {
+		t.Fatal(err)
+	}
+	caps := append([]string{}, agentcontract.RequiredCapabilities...)
+	caps = append(caps, agentcontract.CapabilityTailscale)
+	agent := &serverFakeAgentClient{
+		health:       agentHealth(agentcontract.Version),
+		capabilities: caps,
+	}
+	svc.SetAgentClient(agent)
+	WithTailscaleSettings(func() TailscaleSettings {
+		return TailscaleSettings{AuthKey: "tskey-auth-test", Tags: []string{"tag:infra"}}
+	})(svc)
+
+	if err := svc.runTailscaleApply(context.Background(), "task-hostname", srv.ID); err != nil {
+		t.Fatalf("runTailscaleApply() error = %v", err)
+	}
+	want, err := tailscale.NodeHostname(srv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.tailscaleConfigure.Hostname != want {
+		t.Fatalf("configure hostname = %q, want %q (server id %q)", agent.tailscaleConfigure.Hostname, want, srv.ID)
+	}
+	if strings.Contains(agent.tailscaleConfigure.Hostname, "_") {
+		t.Fatalf("configure hostname %q must not contain underscores", agent.tailscaleConfigure.Hostname)
+	}
+	observed := mustGetServer(t, svc, srv.ID).Traits[agentcontract.TraitTailscaleHostname]
+	if observed != want {
+		t.Fatalf("observed hostname trait = %q, want %q", observed, want)
 	}
 }
 

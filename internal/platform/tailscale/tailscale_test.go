@@ -7,6 +7,22 @@ import (
 	"testing"
 )
 
+func TestNodeHostnameUsesServerIDWithoutUnderscores(t *testing.T) {
+	got, err := NodeHostname("srv_a1b2c3d4e5f67890")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "srv-a1b2c3d4e5f67890" {
+		t.Fatalf("NodeHostname() = %q, want srv-a1b2c3d4e5f67890", got)
+	}
+	if _, err := NodeHostname("srv_"); err != ErrHostnameInvalid {
+		t.Fatalf("NodeHostname(srv_) err = %v, want %v", err, ErrHostnameInvalid)
+	}
+	if _, err := NodeHostname("-bad-"); err != ErrHostnameInvalid {
+		t.Fatalf("NodeHostname(-bad-) err = %v, want %v", err, ErrHostnameInvalid)
+	}
+}
+
 func TestNormalizeConfigDisablesWithoutAuthKey(t *testing.T) {
 	cfg, err := NormalizeConfig(Config{Enabled: true, Tags: []string{"tag:server"}})
 	if err != nil {
