@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import { DatabaseBackup, KeyRound, Network, RefreshCcw, Save, Shield, UploadCloud } from '@lucide/vue';
+import { DatabaseBackup, KeyRound, Network, RefreshCcw, Save, Shield, Trash2, UploadCloud } from '@lucide/vue';
+import { eventsApi } from '@/api/events';
 import { keyAssetsApi } from '@/api/keyAssets';
 import { runtimeTailscaleUpdate, settingsApi, tailscaleUpdate } from '@/api/settings';
 import { systemApi, type VersionInfo } from '@/api/system';
@@ -53,7 +54,7 @@ const pending = ref('');
 const error = ref('');
 const actionError = ref('');
 const confirmOpen = ref(false);
-const confirmKind = ref<'export' | 'restore' | 'system' | 'system-certificate' | 'jwt-secret' | 'tailscale-auth-key'>('export');
+const confirmKind = ref<'export' | 'restore' | 'system' | 'system-certificate' | 'jwt-secret' | 'tailscale-auth-key' | 'clear-events-logs'>('export');
 const selectedSystemCertificate = ref<SystemCertificateDto | null>(null);
 const preflight = ref<RestorePreflightResponse | null>(null);
 const restoreFile = ref<File | null>(null);
@@ -247,6 +248,14 @@ async function confirmClearTailscaleAuthKey() {
   });
 }
 
+async function confirmClearEventsAndLogs() {
+  await run('clear-events-logs', async () => {
+    await eventsApi.clear();
+    confirmOpen.value = false;
+    notifySuccess(t('settingsPage.clearEventsLogsSucceeded'));
+  });
+}
+
 /** 202 语义：只表示协调请求已受理，状态以本次返回和后续刷新为准。 */
 async function applyTailscale() {
   const current = runtime.value;
@@ -435,6 +444,7 @@ const confirmIsDanger = computed(() => (
   || confirmKind.value === 'system-certificate'
   || confirmKind.value === 'jwt-secret'
   || confirmKind.value === 'tailscale-auth-key'
+  || confirmKind.value === 'clear-events-logs'
 ));
 
 function openConfirm(kind: typeof confirmKind.value) {
@@ -452,6 +462,7 @@ function confirmAction() {
   if (confirmKind.value === 'system-certificate') return resetSystemCertificate();
   if (confirmKind.value === 'jwt-secret') return confirmResetJwtSecret();
   if (confirmKind.value === 'tailscale-auth-key') return confirmClearTailscaleAuthKey();
+  if (confirmKind.value === 'clear-events-logs') return confirmClearEventsAndLogs();
   return startBackup();
 }
 
@@ -501,6 +512,13 @@ onMounted(load);
             <label class="grid gap-1 text-sm">{{ t('settingsPage.reconcileTrace') }}<Switch v-model="form.reconcileTraceEnabled" :label="t('settingsPage.reconcileTrace')" /><span class="text-xs text-muted-foreground">{{ t('settingsPage.reconcileTraceHint') }}</span></label>
           </div>
           <Button class="w-fit" variant="primary" :disabled="!runtimeSectionValid" :loading="pending === 'save-runtime'" @click="saveRuntimeSection('runtime')"><Save />{{ t('settingsPage.saveSection') }}</Button>
+          <div class="grid gap-3 border-t border-border pt-4">
+            <div class="min-w-0">
+              <h3 class="text-danger">{{ t('settingsPage.clearEventsLogs') }}</h3>
+              <p class="m-0 text-sm text-muted-foreground">{{ t('settingsPage.clearEventsLogsHint') }}</p>
+            </div>
+            <Button class="w-fit" variant="danger" :loading="pending === 'clear-events-logs'" @click="openConfirm('clear-events-logs')"><Trash2 />{{ t('settingsPage.clearEventsLogs') }}</Button>
+          </div>
         </section>
 
         <section v-else-if="activeSection === 'security'" class="grid gap-4 rounded-2xl border border-border bg-card p-4">
@@ -696,12 +714,12 @@ onMounted(load);
       :open="confirmOpen"
       :title="t(`settingsPage.confirm.${confirmKind}.title`)"
       :description="t(`settingsPage.confirm.${confirmKind}.description`)"
-      :impact="t('settingsPage.confirmDanger')"
+      :impact="confirmKind === 'clear-events-logs' ? t('settingsPage.confirm.clear-events-logs.impact') : t('settingsPage.confirmDanger')"
       :tone="confirmIsDanger ? 'danger' : 'warning'"
       :loading="Boolean(pending)"
       :require-checkbox="confirmIsDanger"
-      :checkbox-label="t('serversPage.confirmCheckbox')"
-      :confirm-label="t('common.apply')"
+      :checkbox-label="confirmKind === 'clear-events-logs' ? t('settingsPage.confirm.clear-events-logs.checkbox') : t('serversPage.confirmCheckbox')"
+      :confirm-label="confirmKind === 'clear-events-logs' ? t('settingsPage.clearEventsLogs') : t('common.apply')"
       :cancel-label="t('common.cancel')"
       @update:open="handleConfirmOpenChange"
       @confirm="confirmAction"

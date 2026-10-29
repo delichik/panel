@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -122,14 +123,18 @@ func syncFileSink() {
 	}
 }
 
-func closeFileSinkForTest() {
-	fileSinkMu.Lock()
-	defer fileSinkMu.Unlock()
+func closeFileSinkLocked() {
 	if fileSink != nil {
 		_ = fileSink.Close()
 		fileSink = nil
 		fileSinkDay = ""
 	}
+}
+
+func closeFileSinkForTest() {
+	fileSinkMu.Lock()
+	defer fileSinkMu.Unlock()
+	closeFileSinkLocked()
 	logDir = ""
 }
 
@@ -137,6 +142,57 @@ func closeFileSinkForTest() {
 // delete the log on Windows. Safe to call when no sink is open.
 func CloseFileSinkForTest() {
 	closeFileSinkForTest()
+}
+
+// ClearJSONLFiles closes the active sink and removes panel-*.jsonl under the
+// configured log directory. The directory setting is kept so later writes reopen
+// a fresh file. Safe when logging is unconfigured.
+func ClearJSONLFiles() error {
+	fileSinkMu.Lock()
+	dir := logDir
+	closeFileSinkLocked()
+	fileSinkMu.Unlock()
+	return removePanelJSONL(dir)
+}
+
+// ClearJSONLDir removes panel-*.jsonl under dir. If dir is the active sink
+// directory, the open file handle is closed first.
+func ClearJSONLDir(dir string) error {
+	dir = filepath.Clean(strings.TrimSpace(dir))
+	if dir == "" || dir == "." {
+		return nil
+	}
+	fileSinkMu.Lock()
+	if logDir != "" && filepath.Clean(logDir) == dir {
+		closeFileSinkLocked()
+	}
+	fileSinkMu.Unlock()
+	return removePanelJSONL(dir)
+}
+
+func removePanelJSONL(dir string) error {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	var first error
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasPrefix(name, "panel-") || !strings.HasSuffix(name, ".jsonl") {
+			continue
+		}
+		if removeErr := os.Remove(filepath.Join(dir, name)); removeErr != nil && !os.IsNotExist(removeErr) && first == nil {
+			first = removeErr
+		}
+	}
+	return first
 }
 
 func flattenFields(obj map[string]any, fields []zap.Field) {

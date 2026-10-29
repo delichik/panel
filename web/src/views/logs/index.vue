@@ -266,9 +266,7 @@ onBeforeUnmount(() => {
           :next-label="t('common.next')"
           @previous="previousPage"
           @next="nextPage"
-        >
-          <template #summary />
-        </PaginationBar>
+        />
       </template>
     </ListPage>
   </ConsolePage>

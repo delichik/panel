@@ -17,4 +17,12 @@ describe('events mock contract', () => {
   it('rejects non-GET', () => {
     expect(mockEventsRoute(new URL('http://panel.test/api/v1/events'), 'DELETE')!.status).toBe(405);
   });
+
+  it('clears events with exact confirmation', async () => {
+    expect(mockEventsRoute(new URL('http://panel.test/api/v1/events/clear'), 'POST', { confirmation: 'WRONG' })!.status).toBe(422);
+    const cleared = await mockEventsRoute(new URL('http://panel.test/api/v1/events/clear'), 'POST', { confirmation: 'CLEAR EVENTS AND LOGS' })!.json();
+    expect(cleared.data.cleared).toBe(true);
+    const page = await read('?limit=20');
+    expect(page.items).toEqual([]);
+  });
 });

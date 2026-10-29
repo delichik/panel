@@ -14,6 +14,9 @@ import (
 	"panel/internal/modules/activity"
 	"panel/internal/modules/runtimeevents"
 	"panel/internal/platform/activitylog"
+	"panel/internal/platform/config"
+	"panel/internal/platform/database"
+	platformevents "panel/internal/platform/events"
 	"panel/internal/platform/logging"
 )
 
@@ -80,6 +83,43 @@ func TestSystemEventWriterStopsWithoutBlocking(t *testing.T) {
 	case <-finished:
 	case <-time.After(time.Second):
 		t.Fatal("background writer survived stop")
+	}
+}
+
+func TestSystemEventWriterDoesNotCreateEventsRows(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	store, err := database.Open(cfg)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	eventsStore := platformevents.NewStore(store.AppDB())
+	logging.SetContextStore(eventsStore)
+	t.Cleanup(func() { logging.SetContextStore(nil) })
+	// Do not call logging.Configure: JSONL sink is process-global and would
+	// lock files under t.TempDir, breaking cleanup. ContextStore alone is enough.
+
+	writer := &systemEventWriter{service: activity.NewService(store.AppDB())}
+	writer.Log(context.Background(), runtimeevents.WriteEventInput{
+		EventType: "agent.disconnected",
+		Severity:  "warning",
+		Summary:   "Agent report stream disconnected: srv-1",
+		Source:    "agent-report",
+	})
+
+	rows, err := eventsStore.List(context.Background(), platformevents.ListFilter{Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("agent.disconnected must not create events rows, got %#v", rows)
 	}
 }
 func TestActivityResponseDoesNotBufferDownloads(t *testing.T) {

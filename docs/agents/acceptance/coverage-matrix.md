@@ -14,7 +14,7 @@
 
 - 应用详情的容器日志增加实例选择、单实例自动加载、手动刷新及请求取消；既有 logs API 必传 instanceId，未新增路由/API/数据库字段。对应 `APP-RUN-002`、`UI-APP-007`。
 
-- 可观测性 `/activity` 与旧 `/operations`、`/tasks` 收敛为 `/events`（AppDB 进程行：state/module/level）+ `/logs`（JSONL 行：level+eventId，无 state）；旧路由兼容重定向。产品读走 `/api/v1/events*` 与 `/api/v1/logs`（`eventId` 可选；legacy `/api/v1/log-contexts*` 仍可用）。对应 `UI-EVT-004..007`、`UI-LOG-001..003` 与 `ENG-EVT-001`（`UI-ACT-*`、`ENG-LOG-008`、`LOG-CTX-*` 已废弃）；前端证据含 `IntentRecordsPage.test.ts`、`logs/index.test.ts`、`events`/`logs` API/mock、`activityRedirect`/`activityReference`。RunEngine Phase A 不改这条诊断读面，也不新增执行页路由（`ENG-RUN-002`，`UI-EVT-004` 不变）。
+- 可观测性 `/activity` 与旧 `/operations`、`/tasks` 收敛为 `/events`（AppDB **过程**行：一件事，state/module/level）+ `/logs`（JSONL 行：level+eventId，无 state；瞬时诊断只在此）；普通日志不得自动新建 `events` 行（`ENG-LOG-007`）。旧路由兼容重定向。产品读走 `/api/v1/events*` 与 `/api/v1/logs`（`eventId` 可选；legacy `/api/v1/log-contexts*` 仍可用）。对应 `UI-EVT-004..007`、`UI-LOG-001..003` 与 `ENG-EVT-001`（`UI-ACT-*`、`ENG-LOG-008`、`LOG-CTX-*` 已废弃）；前端证据含 `IntentRecordsPage.test.ts`、`logs/index.test.ts`、`events`/`logs` API/mock、`activityRedirect`/`activityReference`。RunEngine Phase A 不改这条诊断读面，也不新增执行页路由（`ENG-RUN-002`，`UI-EVT-004` 不变）。
 
 `web/src/router/index.ts` 当前含 30 条路由 `path:` 声明（含父路由、重定向与 catch-all）。逐操作标准见 `ui-pages.md`，全局守卫及慢网路由进行中反馈见 `ui-shell-and-conventions.md`。
 
@@ -49,12 +49,12 @@
 
 ## 3. HTTP API 基线
 
-主 Panel `/api/v1` method/path 组合数与路由清单 SHA-256 以 `internal/bootstrap/panel/routes_manifest_test.go` 中 `TestAPIRouteManifest` 的 `wantCount` / `wantHash` 为准（events/logs 重命名后须重跑测试并更新期望值；本文不硬编码哈希）。本轮新增产品读路由 `/api/v1/events*`（含 export、`{eventId}/logs|lines`）与 `/api/v1/logs`，保留 legacy `/api/v1/log-contexts*` 别名，对应 `ENG-EVT-001`。来源计数如下（注册模块名，非产品表名）：
+主 Panel `/api/v1` method/path 组合数与路由清单 SHA-256 以 `internal/bootstrap/panel/routes_manifest_test.go` 中 `TestAPIRouteManifest` 的 `wantCount` / `wantHash` 为准（events/logs 重命名后须重跑测试并更新期望值；本文不硬编码哈希）。本轮新增产品读路由 `/api/v1/events*`（含 export、`{eventId}/logs|lines`、`POST /events/clear`）与 `/api/v1/logs`，保留 legacy `/api/v1/log-contexts*` 别名，对应 `ENG-EVT-001`/`ENG-EVT-002`。来源计数如下（注册模块名，非产品表名）：
 
 | 注册来源 | 数量 | 验收领域 |
 | --- | ---: | --- |
 | bootstrap auth | 5 | 身份、设置与系统 |
-| events | 10 | 工程质量与发布（`ENG-EVT-001`；含 6 条主路由 + 4 条 legacy `log-contexts` 别名，路由解析去重后计入清单） |
+| events | 11 | 工程质量与发布（`ENG-EVT-001`/`ENG-EVT-002`；含 7 条主路由含 clear + 4 条 legacy `log-contexts` 别名，路由解析去重后计入清单） |
 | applications | 26 | 应用与设施应用；协调、任务与运行事件 |
 | backups | 3 | 备份、恢复与诊断 |
 | certificates/certs | 11 | DNS、证书与密钥资产 |
@@ -150,7 +150,7 @@
 - Tailscale 新增任务类型 `server_tailscale_apply`，由通用任务 worker 执行：保存节点开关后自动排队，手动 apply 创建或复用，缺少 `agent.tailscale` 能力只失败该任务而不触发整节点重装；不新增 ticker/cron，对应 `TS-TASK-001..004`。
 - 周期 Agent 检查（`server_agent_check`）由 servers 模块 `StartPeriodic` 自有 loop（5 分钟）驱动，经 `CollectInputs`/`TriggerPeriodicNow` 入 event executor 框架；成功巡检 JSONL 为 `debug`（`Quiet`），失败仍为 `error`：不经 event executor 中央 PeriodicRunner；对应 `AGT-STATE-005`、`TASK-REG-003`、`TASK-PER-001`。
 - 应用协调仍由 containers `StartPeriodic` 每 5 秒调用 `application_reconcile` CollectInputs，以及业务侧 `TriggerApplicationReconcile`。两者都直接请求 Planner 写 `event_runs`（`type='application_deploy'`），不经 Manager 创建通用 event run。已删除任务类型 `application_reconcile_batch`（noop Execute）。无新增 API 或 ticker；存量非终态监控壳由 `cancel_application_reconcile_monitoring_shells` 取消。对应 `TASK-PER-003`、`ORCH-DRIFT-001`、`ENG-RUN-001`。
-- Panel 进程日志统一经 `platform/logging`（context 带 `eventId`+`module`+等级，默认 JSONL 文件 + stdout，AppDB `events` 索引）；产品读 API 为 `/api/v1/events*` 与 `/api/v1/logs`（`eventId` 可选）；对应 `ENG-LOG-001..007` 与 `ENG-EVT-001`。
+- Panel 进程日志统一经 `platform/logging`（context 带 `eventId`+`module`+等级，默认 JSONL 文件 + stdout）；`events` 仅由显式过程登记（`RecordContext` 等）索引，日志行最多 Touch 已有过程；产品读 API 为 `/api/v1/events*` 与 `/api/v1/logs`（`eventId` 可选）；对应 `ENG-LOG-001..007` 与 `ENG-EVT-001`。
 - 进程日志文件落在 `<dataRoot>/logs/panel-YYYYMMDD.jsonl`（随 dataRoot 进入全量备份）；对应 `ENG-LOG-006`、`BKP-API-005`。
 - 容器内 tailscale 自愈复用既有启动/30 秒 Agent 检查周期刷新实际态并在需要时触发收敛，不新增 ticker/cron；失败只更新容器实际态与 `lastError`，绝不终止或阻塞 Panel，对应 `TS-INIT-007`。
 - 节点 tailnet 地址出现、变化、消失或互联偏好意图变化时按需重同步互联设施：排队存储导出协调任务，并在受影响节点确实作为网关或源站参与时重新渲染入口代理设施，无设施配置时为 no-op；对应 `TS-ADDR-009`、`FAC-STO-009`、`FAC-RP-014`。

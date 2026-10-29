@@ -66,6 +66,8 @@ func (w *systemEventWriter) Log(ctx context.Context, in runtimeevents.WriteEvent
 	if msg == "" {
 		msg = in.EventType
 	}
+	// Point-in-time system observations (agent.connected/disconnected, etc.)
+	// are logs only — they must not register a process row in events.
 	logger := logging.From(ctx)
 	switch strings.ToLower(in.Severity) {
 	case "error":
@@ -75,11 +77,6 @@ func (w *systemEventWriter) Log(ctx context.Context, in runtimeevents.WriteEvent
 	default:
 		logger.Info(msg, fields...)
 	}
-	_ = logging.RecordContext(ctx, logging.ContextMeta{
-		Origin:  events.OriginSystem,
-		Title:   in.EventType,
-		Summary: msg,
-	})
 }
 
 func (w *systemEventWriter) Start(ctx context.Context) {

@@ -123,18 +123,9 @@ func (l *Logger) persistContext(level zapcore.Level, msg string) {
 	if eventID == "" {
 		eventID = l.ctx.StreamID
 	}
-	_ = store.Upsert(goCtx, ContextRecord{
-		EventID:     eventID,
-		Module:      l.ctx.Module,
-		Origin:      "process",
-		OperationID: l.ctx.OperationID,
-		ExecutionID: l.ctx.ExecutionID,
-		RequestID:   l.ctx.RequestID,
-		LogFile:     CurrentLogFileName(),
-		HadError:    level >= zapcore.ErrorLevel,
-		Level:       level.String(),
-		Summary:     summary,
-	})
+	// Logs never create process rows. Only Touch an events index that
+	// RecordContext (or another explicit process start) already registered.
+	_ = store.Touch(goCtx, eventID, level.String(), summary)
 }
 
 func (l *Logger) Debug(msg string, fields ...zap.Field) {

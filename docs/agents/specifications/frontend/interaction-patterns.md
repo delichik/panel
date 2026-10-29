@@ -5,7 +5,7 @@
 ## UI primitives
 
 - `SearchInput`：用于列表、资源、任务、证书等搜索输入。支持 `v-model`、`placeholder`、可选清空按钮和禁用态；启用清空按钮时必须传入本地化 `clearLabel`。搜索状态仍由页面同步到 URL query。
-- `PaginationBar`：支持 `mode="cursor"`、`hasPrevious`、`hasNext`，此模式只发出 previous/next，不计算或显示页码；必须由页面传入快照摘要并维护真实游标历史。原有 page 模式保持不变。用于长列表分页底栏。支持 `page`、`pageSize`、`total`、`v-model:page`、`previous`、`next`，固定放在列表模板底部，不随表格正文滚动；上一页、下一页和摘要文案由页面 i18n 传入。
+- `PaginationBar`：支持 `mode="cursor"`、`hasPrevious`、`hasNext`，此模式只发出 previous/next，不计算或显示页码；总数未知时不得传入伪造 `total`（默认也不再假定 `0`），且不得显示「x / y」或「a-b of total」摘要——仅在传入 `summaryLabel` 或自定义 `#summary` 时展示左侧文案；页面应维护真实游标历史。原有 page 模式在提供有限 `total` 时保持不变。用于长列表分页底栏。支持 `page`、`pageSize`、`total`、`v-model:page`、`previous`、`next`，固定放在列表模板底部，不随表格正文滚动；上一页、下一页和摘要文案由页面 i18n 传入。
 - `ConfirmDialog`：用于删除、停用、重置、覆盖导入等需要用户决策的操作。必须传入影响说明 `impact`；危险操作使用 `tone="danger"`，高风险操作可启用 `requireCheckbox`；确认、取消、勾选确认文案由页面 i18n 传入。
 - `FileUploadButton`：用于单文件或多文件选择，页面负责执行上传。禁止在业务页裸露不同样式的 `<input type="file">`。
 - `DownloadButton`：用于 blob、归档、证书、密钥等下载动作，页面负责调用 API 并处理 `saveBlobDownload`。

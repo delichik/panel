@@ -9,6 +9,8 @@ import (
 
 	"panel/internal/modules/observability/diagnostics"
 	"panel/internal/platform/activitylog"
+	platformevents "panel/internal/platform/events"
+	"panel/internal/platform/logging"
 )
 
 const runtimeClearBatchSize = 1000
@@ -126,6 +128,13 @@ func (a *App) clearRuntimeData(ctx context.Context) (result diagnostics.ClearRun
 		return result, err
 	}
 	if _, err := a.store.LogDB().ExecContext(ctx, `UPDATE activity_projection_checkpoint SET seq=0`); err != nil {
+		return result, err
+	}
+	// Product diagnostics: AppDB process index + JSONL sink (DIAG-CLR-002).
+	if err := platformevents.NewStore(a.store.AppDB()).ClearBatched(ctx); err != nil {
+		return result, err
+	}
+	if err := logging.ClearJSONLFiles(); err != nil {
 		return result, err
 	}
 	report("clearing_coordination")

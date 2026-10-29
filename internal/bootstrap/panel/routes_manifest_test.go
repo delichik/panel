@@ -45,8 +45,8 @@ func TestAPIRouteManifest(t *testing.T) {
 	// TS-*、UFW-API-*）必须与本清单同步变化（COV-API-001）。
 	// Events + logs product surface: /api/v1/events* + /api/v1/logs, with
 	// short-lived /api/v1/log-contexts* aliases. See UI-EVT / UI-LOG / ENG-EVT.
-	const wantCount = 173
-	const wantHash = "fa8fd4408463eccfda9fb98d9ffd3ada45ea341425c216fd7a5f3e39366ee3ba"
+	const wantCount = 174
+	const wantHash = "b7261e896be499281cddb74b0a86882474fd5266d7c68092d65b6a5526a5cbf1"
 	manifest := strings.Join(patterns, "\n") + "\n"
 	gotHash := fmt.Sprintf("%x", sha256.Sum256([]byte(manifest)))
 	if len(patterns) != wantCount || gotHash != wantHash {

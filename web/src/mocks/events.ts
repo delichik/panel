@@ -156,7 +156,18 @@ function eventGetResponse(eventId: string) {
   return found ? jsonResponse(found) : failResponse('event_not_found', 404);
 }
 
-export function mockEventsRoute(url: URL, method: string): Response | undefined {
+export function mockEventsRoute(url: URL, method: string, body?: unknown): Response | undefined {
+  if (method === 'POST' && (url.pathname === '/api/v1/events/clear' || url.pathname === '/api/v1/events/clear/')) {
+    const confirmation = body && typeof body === 'object' && body !== null && 'confirmation' in body
+      ? String((body as { confirmation?: unknown }).confirmation || '')
+      : '';
+    if (confirmation !== 'CLEAR EVENTS AND LOGS') {
+      return failResponse('events_clear_confirmation_invalid', 422);
+    }
+    mockEvents.splice(0, mockEvents.length);
+    return jsonResponse({ cleared: true });
+  }
+
   if (method !== 'GET') {
     if (url.pathname.startsWith('/api/v1/events') || url.pathname.startsWith('/api/v1/log-contexts') || url.pathname === '/api/v1/logs') {
       return failResponse('events_read_only', 405);

@@ -4,6 +4,7 @@
 
 ## 当前状态
 
+- 本轮设置页清空事件与日志：新增 `settingsPage.clearEventsLogs` / `clearEventsLogsHint` / `clearEventsLogsSucceeded` 与确认 `settingsPage.confirm.clear-events-logs.title|description|impact|checkbox`；en / zh-CN 已同步。
 - 本轮应用节点三态：新增 `applicationsPage.nodeHealthColumn` / `nodeBucket.healthy|abnormal|deploying` / `nodeBucketHealthyLabel|AbnormalLabel|DeployingLabel` / `reconcileStoppedHint`；en / zh-CN 已同步。
 - 本轮编辑会话改为保存时临时管道：改写 `applicationsPage.applicationEditorDescription` / `gatewayEditorDescription` / `saveStage.commit` / `emptyApplicationsHint` / `editorStartFailed` / `confirm.file-delete.description` / `confirm.facility-asset-delete.description`（进入编辑纯本地、保存时才创建会话）；en / zh-CN 已同步。
 - 本轮 `/logs` 改为全局可读：`eventId` 可选筛选；新增 `logsPage.eventIdOptional`，改写 `routes.logs.description`；en / zh-CN 已同步。

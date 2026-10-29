@@ -327,3 +327,34 @@ func boolToInt(v bool) int {
 	}
 	return 0
 }
+
+const clearBatchSize = 1000
+
+// ClearBatched deletes all AppDB events rows in short transactions (ENG-EVT-002).
+func (s *Store) ClearBatched(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	for {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		result, err := tx.ExecContext(ctx, `DELETE FROM events WHERE rowid IN (SELECT rowid FROM events LIMIT ?)`, clearBatchSize)
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		deleted, err := result.RowsAffected()
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if err = tx.Commit(); err != nil {
+			return err
+		}
+		if deleted < int64(clearBatchSize) {
+			return nil
+		}
+	}
+}

@@ -2,6 +2,7 @@ package events
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,6 +11,8 @@ import (
 	panelerr "panel/internal/platform/errors"
 	httpx "panel/internal/platform/http"
 )
+
+const clearEventsConfirmation = "CLEAR EVENTS AND LOGS"
 
 // Handler serves product HTTP routes for events and logs.
 type Handler struct{ service *Service }
@@ -73,6 +76,23 @@ func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
 	}
 	page, err := h.service.Lines(r.Context(), f.EventID, f)
 	respond(w, page, err)
+}
+
+func (h *Handler) Clear(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Confirmation string `json:"confirmation"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil || input.Confirmation != clearEventsConfirmation || decoder.Decode(new(any)) != io.EOF {
+		httpx.Error(w, panelerr.Validation("events_clear_confirmation_invalid", "Confirmation must exactly match CLEAR EVENTS AND LOGS"))
+		return
+	}
+	if err := h.service.Clear(r.Context()); err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"cleared": true})
 }
 
 func (h *Handler) Export(w http.ResponseWriter, r *http.Request) {

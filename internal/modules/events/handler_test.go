@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	modevents "panel/internal/modules/events"
@@ -169,5 +170,49 @@ func TestHandlerRoutesRegistered(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandlerClearEventsAndLogs(t *testing.T) {
+	h, store, logDir := openTestHandler(t)
+	ctx := context.Background()
+	if err := store.Upsert(ctx, logging.ContextRecord{
+		EventID: "event-clear",
+		Module:  "panel",
+		Origin:  "process",
+		Title:   "clear me",
+		Summary: "before",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(logDir, "panel-20260102.jsonl")
+	if err := os.WriteFile(path, []byte(`{"ts":"2026-01-02T00:00:00Z","level":"info","module":"panel","eventId":"event-clear","msg":"line"}\n`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	bad := httptest.NewRequest(http.MethodPost, "/api/v1/events/clear", strings.NewReader(`{"confirmation":"WRONG"}`))
+	bad.Header.Set("Content-Type", "application/json")
+	badRec := httptest.NewRecorder()
+	h.Clear(badRec, bad)
+	if badRec.Code != http.StatusUnprocessableEntity && badRec.Code != http.StatusBadRequest {
+		t.Fatalf("bad confirmation status=%d body=%s", badRec.Code, badRec.Body.String())
+	}
+
+	ok := httptest.NewRequest(http.MethodPost, "/api/v1/events/clear", strings.NewReader(`{"confirmation":"CLEAR EVENTS AND LOGS"}`))
+	ok.Header.Set("Content-Type", "application/json")
+	okRec := httptest.NewRecorder()
+	h.Clear(okRec, ok)
+	if okRec.Code != http.StatusOK {
+		t.Fatalf("clear status=%d body=%s", okRec.Code, okRec.Body.String())
+	}
+	rows, err := store.List(ctx, events.ListFilter{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("events remain: %#v", rows)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("jsonl still present: %v", err)
 	}
 }

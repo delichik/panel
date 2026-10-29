@@ -826,7 +826,12 @@ export function installMockApi() {
       }
     }
 
-    const eventsResponse = mockEventsRoute(url, method(init));
+    const eventsMethod = method(init);
+    const eventsResponse = mockEventsRoute(
+      url,
+      eventsMethod,
+      eventsMethod === 'POST' ? await body<Record<string, unknown>>(init) : undefined,
+    );
     if (eventsResponse) return eventsResponse;
 
     if (url.pathname === '/api/v1/executions' && method(init) === 'GET') {

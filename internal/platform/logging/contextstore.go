@@ -5,7 +5,7 @@ import (
 	"sync/atomic"
 )
 
-// ContextRecord is the row shape upserted into events on each valid log write.
+// ContextRecord is the row shape upserted into events by RecordContext (process registration).
 type ContextRecord struct {
 	EventID       string
 	Module        string
@@ -27,7 +27,9 @@ type ContextRecord struct {
 	FinishedAt    string
 }
 
-// ContextStore persists event metadata for unified file+event logging.
+// ContextStore persists process event metadata.
+// Upsert registers/updates an events row (explicit process start via RecordContext).
+// Touch refreshes an existing row from ordinary log lines without creating one.
 // Implementation lives under platform/events; set via SetContextStore at bootstrap.
 type ContextStore interface {
 	Upsert(ctx context.Context, row ContextRecord) error

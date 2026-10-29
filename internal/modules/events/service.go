@@ -9,6 +9,7 @@ import (
 
 	panelerr "panel/internal/platform/errors"
 	platformevents "panel/internal/platform/events"
+	"panel/internal/platform/logging"
 )
 
 // Service exposes product reads over AppDB events and the JSONL log directory.
@@ -80,6 +81,18 @@ func (s *Service) List(ctx context.Context, filter ListFilter) (ListPage, error)
 		page.Items = append(page.Items, toDTO(row))
 	}
 	return page, nil
+}
+
+// Clear removes AppDB process rows and panel JSONL files (ENG-EVT-002).
+// Configuration and resource state are untouched.
+func (s *Service) Clear(ctx context.Context) error {
+	if s == nil || s.store == nil {
+		return nil
+	}
+	if err := s.store.ClearBatched(ctx); err != nil {
+		return err
+	}
+	return logging.ClearJSONLDir(s.logDir)
 }
 
 func (s *Service) Get(ctx context.Context, eventID string) (EventDTO, error) {

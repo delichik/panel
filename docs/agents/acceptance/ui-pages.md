@@ -136,9 +136,9 @@
 ### UI-EVT-004 进程事件 `/events`：精简且利于排障
 
 - **前置**：认证用户进入 `/events`；旧 `/operations`、`/tasks` 重定向到 `/events`（保留 query）；`/activity` 按 `UI-EVT-007` 分流。
-- **动作**：看 AppDB 进程行（state/module/level）、失败摘要、跳到 JSONL 日志定位原因。
+- **动作**：看 AppDB **过程**行（一件事：如部署 Agent、一次执行），含 state/module/level、失败摘要，并跳到 JSONL 日志定位原因。
 - **结果**（排障路径必须短）：
-  1. 列表展示时间、模块、级别、标题、状态（`state`）；详情保留状态、失败摘要、模块/来源/时间/关联 ID，以及「查看日志」；不得展示 event executor 的 steps 树、时间线、上下文或证据下载。
+  1. 列表只展示真正的过程，不得把瞬时诊断（如 `agent.connected` / `agent.disconnected`、stream timeout）当作事件行。列表字段：时间、模块、级别、标题、状态（`state`）；详情保留状态、失败摘要、模块/来源/时间/关联 ID，以及「查看日志」；不得展示 event executor 的 steps 树、时间线、上下文或证据下载。
   2. 「查看日志」与带 `eventId` 的 Toast/`ActivityLink` 进入 `/logs?eventId=`，默认带 `level=warning,error`；仅有 `operationId`/`executionId` 时先在 `/events` 解析或筛选。
   3. 应用协调入口进 `/events`。
   4. 产品读 API 为 `/api/v1/events*`（legacy `/api/v1/log-contexts*` 仍可用）；不得再调用已停注册的 `/api/v1/activity/*`。
@@ -152,7 +152,7 @@
 
 - **前置**：认证用户进入 `/logs` 或经 `/events` 深链；旧 `/activity` 带 `eventId`/`streamId` 重定向到此。
 - **动作**：按 level 与可选 eventId 筛选 JSONL 行。
-- **结果**：默认全局扫描近期 `panel-*.jsonl`（优先新文件）；列表展示时间、级别、eventId、msg（无 state）；有结构化错误时分开展示 errorCode/error/detail。`eventId` 仅作可选筛选，不是进入页面的前置条件。不得做时间线、证据下载、技术 JSON 或覆盖式详情。产品读 API 为 `/api/v1/logs`（`eventId` 可选）或 `/api/v1/events/{eventId}/logs`。
+- **结果**：默认全局扫描近期 `panel-*.jsonl`（优先新文件）；列表展示时间、级别、eventId、msg（无 state）；瞬时系统观测（agent 连接/断开、超时等）只出现在此页，不进 `/events`。有结构化错误时分开展示 errorCode/error/detail。`eventId` 仅作可选筛选，不是进入页面的前置条件。不得做时间线、证据下载、技术 JSON 或覆盖式详情。产品读 API 为 `/api/v1/logs`（`eventId` 可选）或 `/api/v1/events/{eventId}/logs`。
 - **失败**：无匹配行时展示空态；查询失败保留错误与重试。不得伪造行数据。
 - **验证**：`views/logs/index.test.ts`、logs API client 测试。
 
@@ -173,10 +173,10 @@
 
 - **前置**：用户浏览进程事件或日志行，可能保留其它页面的全局自动刷新设置。
 - **动作**：首次进入、手动刷新、修改查询条件、选择对象或翻页。
-- **结果**：仅这些动作读取对应 events 或 logs API；不提供定时刷新开关，不读取或探测新数据，不显示总条数、错误/警告计数或新数据提示。
+- **结果**：仅这些动作读取对应 events 或 logs API；不提供定时刷新开关，不读取或探测新数据，不显示总条数、总页数、错误/警告计数或新数据提示。cursor 分页在总数不可用时必须隐藏摘要与页码（`PaginationBar` `mode="cursor"`，不得用 `total=0` 伪造「0-0 of 0」或「1 / 1」）。
 - **失败**：查询失败仍显示错误与手动重试；旧筛选响应不得覆盖当前结果。没有自动错误重试或页面重新可见时的隐式轮询。
 - **不变量**：列表保持 cursor/after 分页；events 手动刷新/导出走 `/api/v1/events/export`。页面不调用已停用的 activity summary/tail/operation 详情树。
-- **验证**：`views/logs/index.test.ts`、`IntentRecordsPage.test.ts` 覆盖首屏一次请求、游标翻页与迟到结果隔离。
+- **验证**：`views/logs/index.test.ts`、`IntentRecordsPage.test.ts`、`PaginationBar.test.ts` 覆盖首屏一次请求、游标翻页、未知总数隐藏摘要与迟到结果隔离。
 
 > `UI-ACT-003` 已废弃，由 `UI-EVT-006` / `UI-LOG-003` 替代。
 
@@ -295,6 +295,7 @@
 | UI-SET-009 | 选择还原文件 | FileUploadButton 选 `.panel-backup` 后先 preflight，显示 manifest 版本/文件数；用户另勾覆盖确认并再经 danger `ConfirmDialog`（impact + 强制勾选 + loading 锁）才 confirm restore | 更换文件清旧 preflight；无 preflight/未勾选不能恢复；确认中拒绝关闭 | 仅最终确认发送 multipart restore，成功显示 pending/restarting |
 | UI-SET-010 | 保存 Agent download（`/settings/agent`） | 编辑下载基址、传输超时与「校验下载 TLS 证书」开关；只合入 agent 分区；超时校验 60..3600 秒，越界就地报错且不发请求 | 基址留空即表示关闭 HTTP 投递，文案必须说明回落到 SSH 上传；校验开关关闭时必须说明完整性仍由 SSH 下发的 sha256 保证 | 保存后重新 hydrate 且只回显归一化基址；保存本分区不得提交其他分区未保存脏值 |
 | UI-SET-011 | 打开 `/settings/tailscale`、编辑认证密钥与 ACL 标签，或点击「应用 / 重连」 | 密钥为只写密码输入：留空保存表示保留已存密钥，已配置时显示「认证密钥已配置」徽标、未配置时警示节点无法加入 tailnet；标签按 `tag:name` 本地解析并对非法项就地阻断（错误文案列出具体标签）；保存只合入 `tailscale` 分区并重新 hydrate；「清除认证密钥」须 danger 确认后提交清除；容器状态区展示 available/running/loggedIn、主机名、版本、IPv4/IPv6、backendState、最近应用时间与 `lastError`；`available=false` 时显示不可用空态并禁用「应用 / 重连」 | 存在非法标签时不发请求；清除失败保留当前状态与输入；容器不可用时按钮禁用且不得伪造状态或轮询不存在的接口；「应用」只表示已请求协调，不得表述为 tailscaled 已登录 | 保存后只回显归一化标签与 `authKeyConfigured`（密钥框保持为空）；确认弹窗取消时零请求；不可用时展示需在 Seamark 之外配置的说明而不是错误码堆叠 |
+| UI-SET-012 | 在 `/settings/general` 点击「清空事件与日志」 | 危险确认（impact + 强制勾选）后调用 `POST /api/v1/events/clear`；成功 toast；仅清除过程事件与 JSONL，不影响配置与资源 | 未确认零请求；确认失败保留按钮可用并 toast 错误 | 文案须说明与 Debug 全量运行数据清理的范围差异（`ENG-EVT-002`） |
 
 ## 17. 维护 `/maintenance/backup`
 
