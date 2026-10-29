@@ -512,8 +512,8 @@ type reconcileOutcome struct {
 
 // dispatchReconcile runs RuntimeReconcile with an optional dispatch window.
 // If the RPC does not finish in time, the Job enters monitor mode and the
-// worker returns; late RPC results are discarded because Agent durable
-// evidence is settled by resolveUncertain.
+// worker returns. A late RPC outcome is still applied when the Job remains in
+// the same monitor fence; otherwise resolveUncertain consumes Agent evidence.
 func (c *Controller) dispatchReconcile(ctx context.Context, job Job, rpc ReconcileRequestRPC) (ReconcileResponse, error, bool) {
 	wait := c.config.DispatchWait
 	if wait == 0 {
@@ -539,14 +539,39 @@ func (c *Controller) dispatchReconcile(ctx context.Context, job Job, rpc Reconci
 	case outcome := <-outcomes:
 		return outcome.response, outcome.err, false
 	case <-timer.C:
-		// Drain the in-flight RPC without settling here; monitor owns completion.
-		go func() { <-outcomes }()
 		traceJobEvent(ctx, "agent_reconcile_dispatched", job, zap.Duration("dispatch_wait", wait))
 		if err := c.store.MarkUncertain(context.WithoutCancel(ctx), job, "remote execution dispatched; awaiting Agent progress reports"); err != nil {
+			go func() { <-outcomes }()
 			return ReconcileResponse{}, err, false
 		}
+		// Keep settling the late RPC when the fence is unchanged so a deploy that
+		// finishes shortly after the dispatch window does not wait on polling.
+		go c.applyLateDispatchOutcome(context.WithoutCancel(ctx), job, outcomes)
 		return ReconcileResponse{}, nil, true
 	}
+}
+
+func (c *Controller) applyLateDispatchOutcome(ctx context.Context, job Job, outcomes <-chan reconcileOutcome) {
+	outcome, ok := <-outcomes
+	if !ok {
+		return
+	}
+	current, err := c.store.GetJob(ctx, job.ID)
+	if err != nil || current.State != JobRunning || current.ErrorClass != "uncertainty" || current.ExecutionID != job.ExecutionID || current.LeaseToken != job.LeaseToken {
+		return
+	}
+	if outcome.err != nil {
+		if outcome.response.ErrorCode != "" || outcome.response.ErrorMessage != "" {
+			_ = c.fail(ctx, current, outcome.response)
+			return
+		}
+		if len(outcome.response.Steps) > 0 {
+			_, _ = c.store.UpdateProgress(ctx, current, lastStep(outcome.response.Steps), outcome.response.Steps)
+		}
+		// Stay in monitor; resolveUncertain continues against Agent evidence.
+		return
+	}
+	_ = c.acceptResponse(ctx, current, outcome.response)
 }
 
 func (c *Controller) acceptResponse(ctx context.Context, job Job, response ReconcileResponse) error {

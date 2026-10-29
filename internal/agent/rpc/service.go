@@ -345,7 +345,10 @@ func (h *Handler) RuntimeReconcile(ctx context.Context, req *agentpb.RuntimeReco
 		return PBRuntimeReconcileResponse(*previous.Result), nil
 	}
 	defer session.Abandon()
-	runCtx := agentcontract.WithExecutionEventSink(ctx, session)
+	// Detach mutate work from the RPC lifetime. Panel may drop the unary call
+	// (dispatch window / remote timeout) while ensure_image or verify_running is
+	// still running; the durable spool + GetExecutionResult recover the outcome.
+	runCtx := agentcontract.WithExecutionEventSink(context.WithoutCancel(ctx), session)
 	var result agentcontract.RuntimeReconcileResponse
 	var runErr error
 	_ = h.withDockerWrite(func() error {
