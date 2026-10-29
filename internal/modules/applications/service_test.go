@@ -2085,6 +2085,7 @@ func newTestService(t *testing.T) (*Service, *fakeRuntimeClient, *fakeServerProv
 		Region:         "global",
 		Datacenter:     "dc1",
 		SaveSessionDir: filepath.Join(dir, "sessions"),
+		DataRoot:       cfg.DataRoot,
 	})
 	svc.RegisterTasks(taskSvc)
 	svc.SetServerProvider(servers)
@@ -2528,6 +2529,105 @@ type countingReverseProxyReconciler struct {
 func (c *countingReverseProxyReconciler) ReconcileReverseProxy(context.Context) error {
 	c.calls++
 	return c.err
+}
+
+type fakeReverseProxyPolicyProvider struct{}
+
+func (fakeReverseProxyPolicyProvider) ResolveApplicationOrigins(_ context.Context, _ string, _ string, deploymentServers []string) ([]string, error) {
+	return append([]string(nil), deploymentServers...), nil
+}
+
+func (fakeReverseProxyPolicyProvider) ValidateApplicationReverseProxy(context.Context, string, string, []string, []ReverseProxyRule) error {
+	return nil
+}
+
+func TestReverseProxyReconcileNeeded(t *testing.T) {
+	t.Parallel()
+	base := Application{
+		Name: "web", Enabled: true, SpecHash: "h1", DeploymentMode: DeploymentModeAll,
+		ReverseProxy: []ReverseProxyRule{{Domain: "app.example.test", TargetPort: 8080, Paths: []ReverseProxyPath{{Path: "/"}}}},
+	}
+	cases := []struct {
+		name   string
+		before Application
+		after  Application
+		want   bool
+	}{
+		{name: "no routes either side", before: Application{Name: "a", SpecHash: "1"}, after: Application{Name: "a", SpecHash: "2"}, want: false},
+		{name: "create with routes", before: Application{}, after: base, want: true},
+		{name: "create without routes", before: Application{}, after: Application{Name: "web", Enabled: true, SpecHash: "h1"}, want: false},
+		{name: "spec hash change with routes", before: base, after: Application{Name: "web", Enabled: true, SpecHash: "h2", DeploymentMode: DeploymentModeAll, ReverseProxy: base.ReverseProxy}, want: true},
+		{name: "identical with routes", before: base, after: base, want: false},
+		{name: "disable with routes", before: base, after: Application{Name: "web", Enabled: false, SpecHash: "h1", DeploymentMode: DeploymentModeAll, ReverseProxy: base.ReverseProxy}, want: true},
+		{name: "remove routes", before: base, after: Application{Name: "web", Enabled: true, SpecHash: "h1"}, want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := reverseProxyReconcileNeeded(tc.before, tc.after); got != tc.want {
+				t.Fatalf("needed = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// APP-EDIT-004 / APP-LIFE-001: saves that cannot affect gateway export must not
+// trigger the facility-wide reverse-proxy rebuild.
+func TestUpdateWithoutReverseProxySkipsProxyReconcile(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	counter := &countingReverseProxyReconciler{}
+	svc.SetReverseProxyReconciler(counter)
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx:1\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	createCalls := counter.calls
+	if createCalls != 0 {
+		t.Fatalf("create without routes should skip proxy reconcile, calls=%d", createCalls)
+	}
+
+	if _, err := svc.Update(ctx, app.ID, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx:2\n"}); err != nil {
+		t.Fatal(err)
+	}
+	if counter.calls != createCalls {
+		t.Fatalf("update without routes should skip proxy reconcile, calls=%d", counter.calls)
+	}
+}
+
+func TestUpdateReverseProxyChangeTriggersProxyReconcile(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	counter := &countingReverseProxyReconciler{}
+	svc.SetReverseProxyReconciler(counter)
+	svc.SetReverseProxyPolicyProvider(fakeReverseProxyPolicyProvider{})
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counter.calls != 0 {
+		t.Fatalf("create without routes should skip proxy reconcile, calls=%d", counter.calls)
+	}
+
+	if _, err := svc.Update(ctx, app.ID, SaveInput{
+		Name:              "web",
+		Enabled:           true,
+		SpecYAML:          app.SpecYAML,
+		DeploymentMode:    DeploymentModeSelected,
+		DeploymentServers: []string{"srv-a"},
+		ReverseProxy: []ReverseProxyRule{{
+			Domain: "web.example.test", TargetPort: 80,
+			Paths: []ReverseProxyPath{{Path: "/"}},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if counter.calls != 1 {
+		t.Fatalf("adding reverse proxy routes must trigger reconcile, calls=%d", counter.calls)
+	}
 }
 
 // TestAfterLifecycleTargetVerifiedSkipsFacilityProxySelfRetrigger 回归测试：

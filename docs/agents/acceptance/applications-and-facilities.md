@@ -140,8 +140,8 @@
 - **动作**：列文件、读取 JSON 内容或调用 `/content` 下载。
 - **结果**：外部身份始终为应用内唯一不透明 `name`；列表不返回正文；template JSON 读取可用 base64，用户下载走认证流式 content endpoint，并使用净化后的下载文件名。
 - **失败**：名称含 `/`、`\`、`..`、控制字符或超过 255 字符时拒绝；物理 file id 不得暴露为调用身份。
-- **不变量**：旧 path/file key 只作兼容输入并原样迁移；两个应用可有同名文件但物理 ID 全局唯一。
-- **验证**：handler download、filename sanitization、cross-application same-name 测试。
+- **不变量**：旧 path/file key 只作兼容输入并原样迁移；两个应用可有同名文件但物理 ID 全局唯一；正式正文在 `{dataRoot}/applications/files/{applicationId}/{fileId}/content/{filename}`，表行持元数据与 `filename`，路径由 id+filename 推导（alpha 可 dual-read 旧绝对 `blob_path` / `content` BLOB / 扁平 `.blob`）。下载会话文件时：有 `blob_dir` 读会话 `content/`，否则回落正式 `source_file_id` 的 content 目录（与设施静态资源同构）。
+- **验证**：handler download、filename sanitization、cross-application same-name、content-layout / begin 零拷贝 / download 回落正式 content 测试。
 
 ### APP-FILE-002 文本、二进制与归档入口隔离
 
@@ -163,12 +163,12 @@
 
 ### APP-FILE-004 blob 提交原子性
 
-- **前置**：文件新增或替换产生新 immutable session blob。
-- **动作**：提交行事务或遭遇 revision/path/DB 冲突。
-- **结果**：事务成功后引用新 blob 并删除被替换 blob；事务失败删除新 blob、保留旧引用与旧正文。
-- **失败**：磁盘/DB 任一失败不得形成指向不存在 blob 的行或泄漏可立即确认的孤儿 blob。
-- **不变量**：workspace 根固定由 `<dataRoot>/tmp/application-save-sessions` 派生，不依赖进程 cwd。
-- **验证**：故障注入与 orphan cleanup 测试。
+- **前置**：文件新增或替换产生新 immutable session `blob_dir`（`{session}/files/{blobId}/content/{filename}`）。
+- **动作**：提交行事务或遭遇 revision/path/DB 冲突；commit 时对有 `blob_dir` 的项 `Rename` 到正式 `{fileId}/`，旧目录进 session `backup/`。
+- **结果**：事务成功后引用新内容树并删除被替换目录；事务失败回滚 rename（从 backup 还原）、删除未提交的新 `blob_dir`、保留旧引用与旧正文。Begin 只写 `source_file_id`+空 `blob_dir`，不整份拷贝。
+- **失败**：磁盘/DB 任一失败不得形成指向不存在内容树的行或泄漏可立即确认的孤儿目录。
+- **不变量**：workspace 根为 `{dataRoot}/tmp/application-edit-sessions/{sessionId}`（与设施 `tmp/facility-*-edit-sessions` 同族），不依赖进程 cwd；原子写/目录哈希共用 `internal/platform/filestorage`。
+- **验证**：故障注入、commit rename+rollback、begin 零拷贝与 orphan cleanup 测试。
 
 ### APP-EDIT-003 validate、preview 与 token
 
@@ -183,10 +183,10 @@
 
 - **前置**：valid preview token、当前 revision、baseResourceVersion、Idempotency-Key。
 - **动作**：commit 创建或更新。
-- **结果**：应用用户字段与完整文件集在同一 AppDB 事务 CAS；真实配置变化递增 version/config updated_at；完全相同定义和文件集为 no-op；返回 application、resourceVersion、applyRequested 与 diagnostics。
-- **失败**：并发输家返回 `resource_version_conflict` 且其应用/文件变更均不落库。
-- **不变量**：镜像检查、变量解析、renderer snapshot 等派生刷新不得递增用户 version 或覆盖并发用户字段。
-- **验证**：concurrent commit、identical commit、derived-update isolation 测试。
+- **结果**：应用用户字段与完整文件集在同一 AppDB 事务 CAS；真实配置变化递增 version/config updated_at；完全相同定义和文件集为 no-op；返回 application、resourceVersion、applyRequested 与 diagnostics。commit **信任同 revision 的 preview token**，不再重复跑一轮完整 `prepareWithFiles` 校验；草稿/文件在 preview 之后的任何 mutation 必须抬升 revision 并使旧 token 失效。仅当本应用对入口代理导出可能变化时（反向代理规则、启停、名称、部署目标，或带路由时的 SpecHash）才同步触发全量入口代理协调；无路由应用的普通保存不得扫全站应用重算网关。
+- **失败**：并发输家返回 `resource_version_conflict` 且其应用/文件变更均不落库；过期/错配 preview token 拒绝 commit。
+- **不变量**：镜像检查、变量解析、renderer snapshot 等派生刷新不得递增用户 version 或覆盖并发用户字段。正式应用文件正文落在 `{dataRoot}/applications/files/{applicationId}/{fileId}/content/{filename}`（与设施 `{dataRoot}/facility-apps/static-assets/{assetId}/content/` 同构）；`application_files` 持久化元数据与 `filename`，新写入不再填绝对 `blob_path` 或 `content` BLOB；alpha 旧行 dual-read 回落，启动 backfill 把 `.blob`/BLOB 迁入 content 布局并清空旧路径/BLOB。Commit 对会话 `blob_dir` 使用 rename+backup 回滚，happy path 不再整文件读入再拷贝落盘。删除应用时必须 `RemoveAll` 对应 `{fileId}/` 整树。应用 `archive` 仍不在 Panel 展开（产品差异保留）。
+- **验证**：concurrent commit、identical commit、derived-update isolation、无路由保存跳过入口代理重算、带路由变更仍触发、content-layout/backfill/rename-commit 测试。
 
 ### APP-EDIT-005 配置成功与 apply 请求分离
 
@@ -201,7 +201,7 @@
 
 - **前置**：active/committing/terminal sessions、过期 commit lease、partial/unreferenced/orphan workspace。
 - **动作**：周期 cleanup 或启动恢复。
-- **结果**：过期 commit lease 先恢复；过期/终态 workspace、过期 partial/unreferenced blobs 清理；无 DB 行 workspace 仅在目录及所有文件均至少陈旧 1 小时后删除。
+- **结果**：过期 commit lease 先恢复；过期/终态 workspace、过期 partial/unreferenced `blob_dir` 子树清理；无 DB 行 workspace 仅在目录及所有嵌套条目均至少陈旧 1 小时后删除（`filestorage.WorkspaceStale`，对齐设施）。
 - **失败**：活跃 lease 或 committing workspace 不得被普通 TTL 清理。
 - **不变量**：cleanup 本身与 mutation/commit 串行，且不得根据目录 mtime 单独推断 orphan。
 - **验证**：lease/TTL/orphan/race tests。
@@ -221,10 +221,10 @@
 
 - **前置**：合法 session commit，可选择 enabled/disabled。
 - **动作**：提交应用定义。
-- **结果**：disabled 应用只持久化不规划运行；enabled 应用保存 desired state、不可变 revision 与目标 Instance/Job 后快速返回。
+- **结果**：disabled 应用只持久化不规划运行；enabled 应用保存 desired state、不可变 revision 与目标 Instance/Job 后快速返回。入口代理全量重算仅在本应用可能影响网关导出时同步触发（见 `APP-EDIT-004`）。
 - **失败**：revision 或批量计划写入失败必须回滚控制面请求，不能留下无 revision 的 apply Job。
 - **不变量**：HTTP 不直接调用 Agent/Docker；远端突变仅由 Controller 执行。
-- **验证**：disabled create、async deploy return、atomic revision-and-plan tests。
+- **验证**：disabled create、async deploy return、atomic revision-and-plan、proxy reconcile gating tests。
 
 ### APP-LIFE-002 部署目标选择
 

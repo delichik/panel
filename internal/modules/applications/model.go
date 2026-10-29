@@ -171,8 +171,12 @@ type ApplicationFile struct {
 	Path          string    `json:"-"` // Deprecated compatibility alias for name.
 	Kind          string    `json:"kind"`
 	ContentType   string    `json:"contentType"`
+	Filename      string    `json:"-"` // on-disk basename under content/; defaults to sanitized Name
 	Size          int64     `json:"size"`
 	SHA256        string    `json:"sha256"`
+	BlobPath      string    `json:"-"` // alpha dual-read absolute path; empty means derive from id+filename
+	BlobDir       string    `json:"-"` // edit-session workspace dir; empty means unread source_file_id
+	SourceFileID  string    `json:"-"` // committed file id when BlobDir is empty in a session
 	Content       []byte    `json:"-"`
 	ContentBase64 string    `json:"contentBase64,omitempty"`
 	CreatedAt     time.Time `json:"createdAt"`

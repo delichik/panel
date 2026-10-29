@@ -296,18 +296,21 @@ func (*ApplicationEditSession) ExtraIndexDDL() map[string][]string {
 }
 
 // ApplicationEditSessionFile 对应 application_edit_session_files。
+// 未改写的文件只保留 SourceFileID（BlobDir 为空）；会话写入落在 BlobDir/content/。
 type ApplicationEditSessionFile struct {
-	SessionID   string    `orm:"primary_key;not_null;references:application_edit_sessions(id);on_delete:CASCADE"`
-	FileKey     string    `orm:"primary_key;not_null"`
-	Name        string    `orm:"not_null"`
-	Kind        string    `orm:"not_null"`
-	ContentType string    `orm:"not_null;default:''"`
-	Size        int       `orm:"not_null;default:0"`
-	SHA256      string    `orm:"not_null;default:''"`
-	BlobPath    string    `orm:"not_null"`
-	State       string    `orm:"not_null;default:'ready'"`
-	CreatedAt   time.Time `orm:"not_null"`
-	UpdatedAt   time.Time `orm:"not_null"`
+	SessionID    string    `orm:"primary_key;not_null;references:application_edit_sessions(id);on_delete:CASCADE"`
+	FileKey      string    `orm:"primary_key;not_null"`
+	SourceFileID string    `orm:"not_null;default:''"`
+	Name         string    `orm:"not_null"`
+	Kind         string    `orm:"not_null"`
+	ContentType  string    `orm:"not_null;default:''"`
+	Filename     string    `orm:"not_null;default:''"`
+	Size         int       `orm:"not_null;default:0"`
+	SHA256       string    `orm:"not_null;default:''"`
+	BlobDir      string    `orm:"not_null;default:''"`
+	State        string    `orm:"not_null;default:'ready'"`
+	CreatedAt    time.Time `orm:"not_null"`
+	UpdatedAt    time.Time `orm:"not_null"`
 }
 
 func (*ApplicationEditSessionFile) TableName() string { return "application_edit_session_files" }
@@ -350,14 +353,19 @@ func (*ApplicationEditSessionOperation) ExtraIndexDDL() map[string][]string {
 }
 
 // ApplicationFile 对应 application_files。
+// 正式正文落在 dataRoot/applications/files/{appId}/{fileId}/content/{filename}；
+// BlobPath 仅作 alpha 迁移期 dual-read（旧绝对路径 / .blob），新写入留空并由 id+filename 推导。
+// Content 仅保留作更早 BLOB 行的 dual-read 回落，新写入不再填充。
 type ApplicationFile struct {
 	ID            string `orm:"primary_key"`
 	ApplicationID string `orm:"not_null;references:applications(id);on_delete:CASCADE"`
 	Name          string `orm:"not_null"`
 	Kind          string `orm:"not_null"`
 	ContentType   string `orm:"not_null;default:''"`
+	Filename      string `orm:"not_null;default:''"`
 	Size          int    `orm:"not_null;default:0"`
 	SHA256        string `orm:"not_null;default:''"`
+	BlobPath      string `orm:"not_null;default:''"`
 	Content       []byte
 	CreatedAt     time.Time `orm:"not_null"`
 	UpdatedAt     time.Time `orm:"not_null"`

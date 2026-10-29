@@ -174,6 +174,7 @@ func New(cfg config.Config) (*App, error) {
 	)
 	applicationSvc := applications.NewServiceWithOptions(store.AppDB(), agentClient, taskSvc, applications.Config{
 		SaveSessionDir: applicationSaveSessionDir(cfg),
+		DataRoot:       cfg.DataRoot,
 	},
 		applications.WithServerProvider(serverSvc),
 		applications.WithBuiltinVariableResolver(variableRegistry),
@@ -181,6 +182,10 @@ func New(cfg config.Config) (*App, error) {
 		applications.WithContainerOperationQueue(containerBridge),
 		applications.WithRuntimeEvents(eventWriter),
 	)
+	if err := applicationSvc.BackfillApplicationFileBlobs(context.Background()); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
 	certBridge.apps = applicationSvc
 	containerBridge.apps = applicationSvc
 	containerSvc := containerization.NewService(store.AppDB(), serverSvc, agentClient, taskSvc,

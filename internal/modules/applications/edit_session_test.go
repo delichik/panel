@@ -395,7 +395,7 @@ func TestApplicationEditSessionFileConflictPreservesCurrentBlob(t *testing.T) {
 		t.Fatal(err)
 	}
 	var firstBlob string
-	if err := svc.db.QueryRow(`SELECT blob_path FROM application_edit_session_files WHERE session_id=? AND file_key=?`, session.ID, "file-a").Scan(&firstBlob); err != nil {
+	if err := svc.db.QueryRow(`SELECT blob_dir FROM application_edit_session_files WHERE session_id=? AND file_key=?`, session.ID, "file-a").Scan(&firstBlob); err != nil {
 		t.Fatal(err)
 	}
 	stale := firstInput
@@ -403,11 +403,11 @@ func TestApplicationEditSessionFileConflictPreservesCurrentBlob(t *testing.T) {
 	stale.Content = []byte("stale")
 	_, err = svc.UploadEditSessionBinary(ctx, "admin", session.ID, "file-a", "file-key-stale", stale)
 	assertPanelErrorCode(t, err, "edit_session_revision_conflict")
-	content, err := os.ReadFile(firstBlob)
+	content, err := readEditSessionBlobDir(firstBlob, "a.txt")
 	if err != nil || string(content) != "one" {
 		t.Fatalf("current blob changed after conflict: content=%q err=%v", content, err)
 	}
-	entries, err := os.ReadDir(svc.editSessionPath(session.ID))
+	entries, err := os.ReadDir(filepath.Join(svc.editSessionPath(session.ID), "files"))
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("failed blob was not cleaned: entries=%v err=%v", entries, err)
 	}
@@ -419,7 +419,7 @@ func TestApplicationEditSessionFileConflictPreservesCurrentBlob(t *testing.T) {
 	if err != nil || afterConflict.Revision != session.Revision || len(afterConflict.Files) != 1 {
 		t.Fatalf("database conflict changed session: session=%#v err=%v", afterConflict, err)
 	}
-	entries, err = os.ReadDir(svc.editSessionPath(session.ID))
+	entries, err = os.ReadDir(filepath.Join(svc.editSessionPath(session.ID), "files"))
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("database-conflict blob was not cleaned: entries=%v err=%v", entries, err)
 	}
@@ -429,7 +429,7 @@ func TestApplicationEditSessionFileConflictPreservesCurrentBlob(t *testing.T) {
 		t.Fatal(err)
 	}
 	var secondBlob string
-	if err := svc.db.QueryRow(`SELECT blob_path FROM application_edit_session_files WHERE session_id=? AND file_key=?`, session.ID, "file-a").Scan(&secondBlob); err != nil {
+	if err := svc.db.QueryRow(`SELECT blob_dir FROM application_edit_session_files WHERE session_id=? AND file_key=?`, session.ID, "file-a").Scan(&secondBlob); err != nil {
 		t.Fatal(err)
 	}
 	if secondBlob == firstBlob {
@@ -526,10 +526,10 @@ func TestApplicationEditSessionCleanupPreservesFreshCreatingWorkspace(t *testing
 	defer closeStore()
 	now := time.Now().UTC()
 	dir := svc.editSessionPath("aedit_creating")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	blob := filepath.Join(dir, "files", "blob1", "content", "new.txt")
+	if err := os.MkdirAll(filepath.Dir(blob), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	blob := filepath.Join(dir, "new.blob")
 	if err := os.WriteFile(blob, []byte("new"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -550,20 +550,20 @@ func TestApplicationEditSessionCleanupDeletesOnlyStaleOrphans(t *testing.T) {
 	defer closeStore()
 	now := time.Now().UTC()
 	dir := svc.editSessionPath("aedit_stale")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	blob := filepath.Join(dir, "files", "blob1", "content", "old.txt")
+	if err := os.MkdirAll(filepath.Dir(blob), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	blob := filepath.Join(dir, "old.blob")
 	if err := os.WriteFile(blob, []byte("old"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	old := now.Add(-2 * editSessionOrphanStaleAfter)
-	if err := os.Chtimes(blob, old, old); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chtimes(dir, old, old); err != nil {
-		t.Fatal(err)
-	}
+	_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		return os.Chtimes(path, old, old)
+	})
 	svc.cleanupEditSessions(now)
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatalf("stale orphan workspace remains: %v", err)
@@ -579,20 +579,26 @@ func TestApplicationEditSessionCleanupAgesUnreferencedBlobs(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	blob := filepath.Join(svc.editSessionPath(session.ID), "unreferenced.blob")
-	if err := os.WriteFile(blob, []byte("new"), 0o600); err != nil {
+	blobDir := filepath.Join(svc.editSessionPath(session.ID), "files", "unreferenced")
+	if err := os.MkdirAll(filepath.Join(blobDir, "content"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(blobDir, "content", "x.txt"), []byte("new"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	svc.cleanupEditSessions(now)
-	if _, err := os.Stat(blob); err != nil {
+	if _, err := os.Stat(blobDir); err != nil {
 		t.Fatalf("fresh unreferenced blob was removed: %v", err)
 	}
 	old := now.Add(-2 * editSessionOrphanStaleAfter)
-	if err := os.Chtimes(blob, old, old); err != nil {
-		t.Fatal(err)
-	}
+	_ = filepath.Walk(blobDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		return os.Chtimes(path, old, old)
+	})
 	svc.cleanupEditSessions(now)
-	if _, err := os.Stat(blob); !os.IsNotExist(err) {
+	if _, err := os.Stat(blobDir); !os.IsNotExist(err) {
 		t.Fatalf("stale unreferenced blob remains: %v", err)
 	}
 }
@@ -603,7 +609,13 @@ func TestApplicationEditSessionCommitSeparatesPersistedConfigFromApplyFailure(t 
 		setup func(*Service)
 		draft SaveInput
 	}{
-		{name: "proxy", setup: func(s *Service) { s.proxyReconciler = failingEditProxyReconciler{} }, draft: SaveInput{Name: "web", SpecYAML: "name: web\nimage: nginx\n"}},
+		{name: "proxy", setup: func(s *Service) {
+			s.proxyReconciler = failingEditProxyReconciler{}
+			s.SetReverseProxyPolicyProvider(fakeReverseProxyPolicyProvider{})
+		}, draft: SaveInput{
+			Name: "web", SpecYAML: "name: web\nimage: nginx\n", DeploymentMode: DeploymentModeSelected, DeploymentServers: []string{"srv-a"},
+			ReverseProxy: []ReverseProxyRule{{Domain: "web.example.test", TargetPort: 80, Paths: []ReverseProxyPath{{Path: "/"}}}},
+		}},
 		{name: "reconcile", setup: func(s *Service) { s.reconcileTrigger = failingEditReconcileTrigger{} }, draft: SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -20,6 +20,7 @@ import (
 	"panel/internal/platform/config"
 	storage "panel/internal/platform/database"
 	panelerr "panel/internal/platform/errors"
+	"panel/internal/platform/filestorage"
 )
 
 func TestFacilityEditSessionConcurrentCommitUsesConfigVersionCAS(t *testing.T) {
@@ -938,11 +939,11 @@ func TestFacilityAssetDirectoryHashFramesEntries(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(second, "bc"), []byte("d"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	firstHash, err := hashFacilityAssetDirectory(first)
+	firstHash, err := filestorage.HashDirectory(first)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondHash, err := hashFacilityAssetDirectory(second)
+	secondHash, err := filestorage.HashDirectory(second)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -17,6 +17,7 @@ import (
 	"panel/internal/platform/database/models"
 	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
+	"panel/internal/platform/filestorage"
 	"panel/internal/platform/i18n"
 	id "panel/internal/platform/identity"
 )
@@ -88,7 +89,7 @@ func (s *Service) BeginEditSession(ctx context.Context, owner string, in BeginEd
 	}
 	sessionID := id.New("aedit")
 	dir := s.editSessionPath(sessionID)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "files"), 0o700); err != nil {
 		return ApplicationEditSession{}, err
 	}
 	created := false
@@ -108,18 +109,17 @@ func (s *Service) BeginEditSession(ctx context.Context, owner string, in BeginEd
 		return ApplicationEditSession{}, err
 	}
 	if applicationID != "" {
-		files, err := s.listFiles(ctx, applicationID, true)
+		// Begin is metadata-only: point at committed content via source_file_id
+		// with an empty blob_dir (no full-file copy), matching facility assets.
+		files, err := s.listFiles(ctx, applicationID, false)
 		if err != nil {
 			return ApplicationEditSession{}, err
 		}
 		for _, file := range files {
 			fileKey := file.ID
-			blobPath := filepath.Join(dir, fileKey)
-			if err := os.WriteFile(blobPath, file.Content, 0o600); err != nil {
-				return ApplicationEditSession{}, err
-			}
-			if _, err := orm.RawExec(ctx, tx, `INSERT INTO application_edit_session_files(session_id,file_key,name,kind,content_type,size,sha256,blob_path,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
-				sessionID, fileKey, file.Name, file.Kind, file.ContentType, file.Size, file.SHA256, blobPath, "ready", formatTime(file.CreatedAt), formatTime(file.UpdatedAt)); err != nil {
+			filename := applicationFileFilename(file)
+			if _, err := orm.RawExec(ctx, tx, `INSERT INTO application_edit_session_files(session_id,file_key,source_file_id,name,kind,content_type,filename,size,sha256,blob_dir,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,'ready',?,?)`,
+				sessionID, fileKey, file.ID, file.Name, file.Kind, file.ContentType, filename, file.Size, file.SHA256, "", formatTime(file.CreatedAt), formatTime(file.UpdatedAt)); err != nil {
 				return ApplicationEditSession{}, err
 			}
 		}
@@ -246,7 +246,7 @@ func (s *Service) GetEditSessionFile(ctx context.Context, owner, sessionID, file
 		return EditSessionFileContent{}, resolveErr
 	}
 	var m models.ApplicationEditSessionFile
-	err = orm.New(s.db).From("application_edit_session_files").Select("file_key", "name", "kind", "content_type", "size", "sha256", "blob_path").Where("session_id=?", record.ID).And("file_key=?", strings.TrimSpace(fileKey)).And("state=?", "ready").First(ctx, &m)
+	err = orm.New(s.db).From("application_edit_session_files").Select("file_key", "source_file_id", "name", "kind", "content_type", "filename", "size", "sha256", "blob_dir").Where("session_id=?", record.ID).And("file_key=?", strings.TrimSpace(fileKey)).And("state=?", "ready").First(ctx, &m)
 	if err == sql.ErrNoRows {
 		return EditSessionFileContent{}, panelerr.NotFound("application_edit_session_file")
 	}
@@ -261,8 +261,7 @@ func (s *Service) GetEditSessionFile(ctx context.Context, owner, sessionID, file
 		Size:        int64(m.Size),
 		SHA256:      m.SHA256,
 	}
-	blobPath := m.BlobPath
-	content, err := readEditSessionBlob(result.FileKey, blobPath, result.Size, result.SHA256)
+	content, err := s.readEditSessionFileContent(record.ApplicationID, m)
 	if err != nil {
 		return EditSessionFileContent{}, err
 	}
@@ -343,8 +342,8 @@ func (s *Service) DeleteEditSessionFile(ctx context.Context, owner, sessionID, f
 		return ApplicationEditSession{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	var blobPath string
-	_ = orm.New(tx).From("application_edit_session_files").Select("blob_path").Where("session_id=?", sessionID).And("file_key=?", fileKey).ScanValue(ctx, &blobPath)
+	var blobDir string
+	_ = orm.New(tx).From("application_edit_session_files").Select("blob_dir").Where("session_id=?", sessionID).And("file_key=?", fileKey).ScanValue(ctx, &blobDir)
 	if err := orm.New(tx).From("application_edit_session_files").Where("session_id=?", sessionID).And("file_key=?", fileKey).Delete(ctx); err != nil {
 		return ApplicationEditSession{}, err
 	}
@@ -357,9 +356,7 @@ func (s *Service) DeleteEditSessionFile(ctx context.Context, owner, sessionID, f
 	if err := tx.Commit(); err != nil {
 		return ApplicationEditSession{}, err
 	}
-	if blobPath != "" {
-		_ = os.Remove(blobPath)
-	}
+	filestorage.RemoveAllQuiet(blobDir)
 	result, err := s.GetEditSession(ctx, owner, sessionID)
 	if err == nil {
 		_ = s.storeEditOperationResult(ctx, sessionID, in.ClientOperationID, result)
@@ -426,13 +423,9 @@ func (s *Service) CommitEditSession(ctx context.Context, owner, sessionID, idemp
 	if strings.TrimSpace(in.BaseResourceVersion) != strconv.Itoa(record.BaseResourceVersion.ValueInt()) {
 		return EditCommitResult{}, panelerr.Conflict("resource_version_conflict", "application base version changed")
 	}
-	diagnostics, err := s.validateEditDraft(ctx, record, files)
-	if err != nil {
-		return EditCommitResult{}, err
-	}
-	if hasBlockingDiagnostic(diagnostics) {
-		return EditCommitResult{}, panelerr.WithDetails(panelerr.Validation("application_invalid", "application edit session is invalid"), map[string]any{"diagnostics": diagnostics})
-	}
+	// Preview already ran validateEditDraft for this revision and issued the
+	// token. Any draft/file mutation bumps revision and invalidates the token,
+	// so re-preparing here only duplicates the expensive template pass.
 	commitKey := requireIdempotencyKey(idempotencyKey)
 	commitApplicationID := record.ApplicationID
 	if commitApplicationID == "" {
@@ -450,6 +443,19 @@ func (s *Service) CommitEditSession(ctx context.Context, owner, sessionID, idemp
 	}
 	record.CommitApplication = commitApplicationID
 	record.CommitKey = commitKey
+	backupDir := filepath.Join(s.editSessionPath(sessionID), "backup")
+	moved, moveErr := s.moveApplicationCommitFiles(commitApplicationID, files, backupDir)
+	if moveErr != nil {
+		_ = orm.New(s.db).From("application_edit_sessions").Where("id=?", sessionID).And("owner_id=?", owner).And("commit_lease_owner=?", leaseOwner).UpdateColumns(ctx, map[string]any{
+			"state":                   EditSessionStateActive,
+			"commit_lease_owner":      "",
+			"commit_lease_expires_at": "",
+			"updated_at":              formatTime(time.Now().UTC()),
+		})
+		s.rollbackApplicationCommitFiles(moved)
+		return EditCommitResult{}, moveErr
+	}
+	files = moved.Files
 	var app Application
 	if record.ApplicationID == "" {
 		app, err = s.createWithFilesID(ctx, commitApplicationID, record.Draft, files)
@@ -457,6 +463,7 @@ func (s *Service) CommitEditSession(ctx context.Context, owner, sessionID, idemp
 		app, err = s.updateWithFilesIfVersion(ctx, record.ApplicationID, record.BaseResourceVersion.ValueInt(), record.Draft, files)
 	}
 	if err != nil {
+		s.rollbackApplicationCommitFiles(moved)
 		if panelErrorCode(err) == "resource_version_conflict" {
 			_ = orm.New(s.db).From("application_edit_sessions").Where("id=?", sessionID).And("owner_id=?", owner).And("commit_lease_owner=?", leaseOwner).UpdateColumns(ctx, map[string]any{
 				"state":                   EditSessionStateConflict,
@@ -468,6 +475,7 @@ func (s *Service) CommitEditSession(ctx context.Context, owner, sessionID, idemp
 			return EditCommitResult{}, err
 		}
 		if recovered, ok := s.recoverPersistedEditCommit(ctx, record, files, err); ok {
+			filestorage.RemoveAllQuiet(backupDir)
 			return recovered, nil
 		}
 		nextState := EditSessionStateActive
@@ -485,6 +493,7 @@ func (s *Service) CommitEditSession(ctx context.Context, owner, sessionID, idemp
 		})
 		return EditCommitResult{}, err
 	}
+	filestorage.RemoveAllQuiet(backupDir)
 	result := EditCommitResult{Application: app, ResourceVersion: applicationResourceVersion(app), ApplyRequested: record.Draft.Enabled, Diagnostics: []Diagnostic{{Code: "application_apply_operation_reference_unavailable", Severity: "info", Message: "Configuration was committed and reconciliation was requested; an operation reference is not available from the current coordinator"}}}
 	resultRaw, _ := json.Marshal(result)
 	committedAt := time.Now().UTC()
@@ -516,25 +525,24 @@ func (s *Service) DiscardEditSession(ctx context.Context, owner, sessionID strin
 func (s *Service) writeEditSessionFile(ctx context.Context, owner, sessionID, fileKey, idempotencyKey, operationID, requestHash string, revision int, name, kind, contentType string, content []byte) (ApplicationEditSession, error) {
 	owner = normalizeEditOwner(owner)
 	dir := s.editSessionPath(sessionID)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return ApplicationEditSession{}, err
+	blobID := id.New("blob")
+	blobDir := filepath.Join(dir, "files", blobID)
+	filename := applicationSafeFilename(name)
+	if filename == "" {
+		filename = applicationSafeFilename(contentType)
 	}
-	tempPath := filepath.Join(dir, id.New("partial")+".partial")
-	if err := os.WriteFile(tempPath, content, 0o600); err != nil {
-		return ApplicationEditSession{}, err
+	if filename == "" {
+		filename = "content.bin"
 	}
-	defer os.Remove(tempPath)
-	// Every attempted revision gets a new immutable blob. A stale revision or a
-	// database constraint failure must never overwrite the blob referenced by
-	// the current row.
-	blobPath := filepath.Join(dir, id.New("blob")+".blob")
-	if err := os.Rename(tempPath, blobPath); err != nil {
+	contentPath := filepath.Join(blobDir, "content", filename)
+	if err := filestorage.WriteAtomic(contentPath, content, 0o600); err != nil {
+		filestorage.RemoveAllQuiet(blobDir)
 		return ApplicationEditSession{}, err
 	}
 	blobCommitted := false
 	defer func() {
 		if !blobCommitted {
-			_ = os.Remove(blobPath)
+			filestorage.RemoveAllQuiet(blobDir)
 		}
 	}()
 	sum := sha256.Sum256(content)
@@ -544,13 +552,13 @@ func (s *Service) writeEditSessionFile(ctx context.Context, owner, sessionID, fi
 		return ApplicationEditSession{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	var previousBlobPath string
-	_ = orm.New(tx).From("application_edit_session_files").Select("blob_path").Where("session_id=?", sessionID).And("file_key=?", fileKey).ScanValue(ctx, &previousBlobPath)
+	var previousBlobDir string
+	_ = orm.New(tx).From("application_edit_session_files").Select("blob_dir").Where("session_id=?", sessionID).And("file_key=?", fileKey).ScanValue(ctx, &previousBlobDir)
 	if err := s.bumpEditRevision(ctx, tx, owner, sessionID, revision); err != nil {
 		return ApplicationEditSession{}, err
 	}
-	_, err = orm.RawExec(ctx, tx, `INSERT INTO application_edit_session_files(session_id,file_key,name,kind,content_type,size,sha256,blob_path,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id,file_key) DO UPDATE SET name=excluded.name,kind=excluded.kind,content_type=excluded.content_type,size=excluded.size,sha256=excluded.sha256,blob_path=excluded.blob_path,state='ready',updated_at=excluded.updated_at`,
-		sessionID, fileKey, name, kind, strings.TrimSpace(contentType), len(content), hex.EncodeToString(sum[:]), blobPath, "ready", formatTime(now), formatTime(now))
+	_, err = orm.RawExec(ctx, tx, `INSERT INTO application_edit_session_files(session_id,file_key,source_file_id,name,kind,content_type,filename,size,sha256,blob_dir,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,'ready',?,?) ON CONFLICT(session_id,file_key) DO UPDATE SET source_file_id='',name=excluded.name,kind=excluded.kind,content_type=excluded.content_type,filename=excluded.filename,size=excluded.size,sha256=excluded.sha256,blob_dir=excluded.blob_dir,state='ready',updated_at=excluded.updated_at`,
+		sessionID, fileKey, "", name, kind, strings.TrimSpace(contentType), filename, len(content), hex.EncodeToString(sum[:]), blobDir, formatTime(now), formatTime(now))
 	if err != nil {
 		return ApplicationEditSession{}, applicationSaveError(err)
 	}
@@ -561,8 +569,8 @@ func (s *Service) writeEditSessionFile(ctx context.Context, owner, sessionID, fi
 		return ApplicationEditSession{}, err
 	}
 	blobCommitted = true
-	if previousBlobPath != "" && previousBlobPath != blobPath {
-		_ = os.Remove(previousBlobPath)
+	if previousBlobDir != "" && previousBlobDir != blobDir {
+		filestorage.RemoveAllQuiet(previousBlobDir)
 	}
 	result, err := s.GetEditSession(ctx, owner, sessionID)
 	if err == nil {
@@ -649,24 +657,31 @@ func (s *Service) editSessionFiles(ctx context.Context, sessionID string) ([]Edi
 
 func (s *Service) editSessionApplicationFiles(ctx context.Context, sessionID, applicationID string) ([]ApplicationFile, error) {
 	var rows []models.ApplicationEditSessionFile
-	if err := orm.New(s.db).From("application_edit_session_files").Select("file_key", "name", "kind", "content_type", "size", "sha256", "blob_path", "created_at", "updated_at").Where("session_id=?", sessionID).And("state=?", "ready").OrderBy("name").All(ctx, &rows); err != nil {
+	if err := orm.New(s.db).From("application_edit_session_files").Select("file_key", "source_file_id", "name", "kind", "content_type", "filename", "size", "sha256", "blob_dir", "created_at", "updated_at").Where("session_id=?", sessionID).And("state=?", "ready").OrderBy("name").All(ctx, &rows); err != nil {
 		return nil, err
 	}
 	files := make([]ApplicationFile, 0, len(rows))
 	for _, m := range rows {
+		fileID := strings.TrimSpace(m.FileKey)
+		if source := strings.TrimSpace(m.SourceFileID); source != "" && strings.TrimSpace(m.BlobDir) == "" {
+			fileID = source
+		}
 		file := ApplicationFile{
-			ID:            m.FileKey,
+			ID:            fileID,
 			ApplicationID: applicationID,
 			Name:          m.Name,
 			Path:          m.Name,
 			Kind:          m.Kind,
 			ContentType:   m.ContentType,
+			Filename:      firstNonEmpty(m.Filename, m.Name),
 			Size:          int64(m.Size),
 			SHA256:        m.SHA256,
+			BlobDir:       m.BlobDir,
+			SourceFileID:  m.SourceFileID,
 			CreatedAt:     m.CreatedAt,
 			UpdatedAt:     m.UpdatedAt,
 		}
-		content, err := readEditSessionBlob(m.FileKey, m.BlobPath, file.Size, file.SHA256)
+		content, err := s.readEditSessionFileContent(applicationID, m)
 		if err != nil {
 			return nil, err
 		}
@@ -676,19 +691,172 @@ func (s *Service) editSessionApplicationFiles(ctx context.Context, sessionID, ap
 	return files, nil
 }
 
-func readEditSessionBlob(fileKey, blobPath string, expectedSize int64, expectedHash string) ([]byte, error) {
-	content, err := os.ReadFile(blobPath)
+func (s *Service) readEditSessionFileContent(applicationID string, m models.ApplicationEditSessionFile) ([]byte, error) {
+	fileKey := m.FileKey
+	var content []byte
+	var err error
+	switch {
+	case strings.TrimSpace(m.BlobDir) != "":
+		content, err = readEditSessionBlobDir(m.BlobDir, m.Filename)
+	case strings.TrimSpace(m.SourceFileID) != "":
+		content, err = readApplicationFileBytes(s, ApplicationFile{
+			ID:            m.SourceFileID,
+			ApplicationID: applicationID,
+			Name:          m.Name,
+			Filename:      firstNonEmpty(m.Filename, m.Name),
+			Size:          int64(m.Size),
+			SHA256:        m.SHA256,
+		})
+	default:
+		err = os.ErrNotExist
+	}
 	if err != nil {
 		return nil, panelerr.WithDetails(panelerr.Conflict("application_edit_file_missing", "application edit session file is missing"), map[string]any{"fileKey": fileKey})
 	}
-	if int64(len(content)) != expectedSize {
+	if expectedSize := int64(m.Size); expectedSize > 0 && int64(len(content)) != expectedSize {
 		return nil, panelerr.WithDetails(panelerr.Conflict("application_edit_file_size_mismatch", "application edit session file size does not match"), map[string]any{"fileKey": fileKey})
 	}
-	sum := sha256.Sum256(content)
-	if hex.EncodeToString(sum[:]) != expectedHash {
+	if expectedHash := strings.TrimSpace(m.SHA256); expectedHash != "" && sha256Hex(content) != expectedHash {
 		return nil, panelerr.WithDetails(panelerr.Conflict("application_edit_file_hash_mismatch", "application edit session file hash does not match"), map[string]any{"fileKey": fileKey})
 	}
 	return content, nil
+}
+
+func readEditSessionBlobDir(blobDir, filename string) ([]byte, error) {
+	blobDir = strings.TrimSpace(blobDir)
+	if blobDir == "" {
+		return nil, os.ErrNotExist
+	}
+	if info, err := os.Stat(blobDir); err == nil && info.Mode().IsRegular() {
+		// Legacy flat session blob (pre blob_dir layout).
+		return os.ReadFile(blobDir)
+	}
+	contentDir := filepath.Join(blobDir, "content")
+	if name := applicationSafeFilename(filename); name != "" {
+		if raw, err := os.ReadFile(filepath.Join(contentDir, name)); err == nil {
+			return raw, nil
+		}
+	}
+	return readSingleContentFile(contentDir)
+}
+
+type applicationCommitMove struct {
+	BackupDir string
+	Files     []ApplicationFile
+	Moved     []applicationCommitMovedFile
+}
+
+type applicationCommitMovedFile struct {
+	FinalID  string
+	BlobDir  string
+	FinalDir string
+	BackedUp bool
+}
+
+func (s *Service) moveApplicationCommitFiles(appID string, files []ApplicationFile, backupDir string) (applicationCommitMove, error) {
+	result := applicationCommitMove{BackupDir: backupDir, Files: append([]ApplicationFile(nil), files...)}
+	if err := os.MkdirAll(backupDir, 0o700); err != nil {
+		return result, err
+	}
+	finalIDs := map[string]struct{}{}
+	for i := range result.Files {
+		file := &result.Files[i]
+		if strings.TrimSpace(file.ID) == "" || file.ID == file.Name {
+			file.ID = id.New("afile")
+		}
+		finalIDs[file.ID] = struct{}{}
+		file.Filename = applicationFileFilename(*file)
+		blobDir := strings.TrimSpace(file.BlobDir)
+		if blobDir == "" {
+			continue
+		}
+		finalDir := s.applicationFileDir(appID, file.ID)
+		if _, err := os.Stat(finalDir); err == nil {
+			backup := filepath.Join(backupDir, file.ID)
+			if err := os.Rename(finalDir, backup); err != nil {
+				s.rollbackApplicationCommitFiles(result)
+				return result, err
+			}
+			result.Moved = append(result.Moved, applicationCommitMovedFile{FinalID: file.ID, FinalDir: finalDir, BackedUp: true})
+		}
+		if err := os.MkdirAll(filepath.Dir(finalDir), 0o700); err != nil {
+			s.rollbackApplicationCommitFiles(result)
+			return result, err
+		}
+		if err := os.Rename(blobDir, finalDir); err != nil {
+			s.rollbackApplicationCommitFiles(result)
+			return result, err
+		}
+		result.Moved = append(result.Moved, applicationCommitMovedFile{FinalID: file.ID, BlobDir: blobDir, FinalDir: finalDir})
+		file.BlobDir = ""
+		file.BlobPath = ""
+		file.SourceFileID = ""
+	}
+	// Back up committed trees that are no longer referenced.
+	entries, _ := os.ReadDir(s.applicationFilesDir(appID))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			// Legacy flat .blob files.
+			if strings.HasSuffix(entry.Name(), ".blob") {
+				idName := strings.TrimSuffix(entry.Name(), ".blob")
+				if _, keep := finalIDs[idName]; !keep {
+					_ = os.Rename(filepath.Join(s.applicationFilesDir(appID), entry.Name()), filepath.Join(backupDir, entry.Name()))
+				}
+			}
+			continue
+		}
+		if _, keep := finalIDs[entry.Name()]; keep {
+			continue
+		}
+		from := filepath.Join(s.applicationFilesDir(appID), entry.Name())
+		to := filepath.Join(backupDir, entry.Name())
+		if err := os.Rename(from, to); err != nil {
+			s.rollbackApplicationCommitFiles(result)
+			return result, err
+		}
+		result.Moved = append(result.Moved, applicationCommitMovedFile{FinalID: entry.Name(), FinalDir: from, BackedUp: true})
+	}
+	return result, nil
+}
+
+func (s *Service) rollbackApplicationCommitFiles(moved applicationCommitMove) {
+	for i := len(moved.Moved) - 1; i >= 0; i-- {
+		item := moved.Moved[i]
+		if item.BlobDir == "" {
+			continue
+		}
+		if _, err := os.Stat(item.FinalDir); err == nil {
+			_ = os.MkdirAll(filepath.Dir(item.BlobDir), 0o700)
+			_ = os.Rename(item.FinalDir, item.BlobDir)
+		}
+	}
+	entries, _ := os.ReadDir(moved.BackupDir)
+	for _, entry := range entries {
+		backup := filepath.Join(moved.BackupDir, entry.Name())
+		final := ""
+		for _, item := range moved.Moved {
+			if item.FinalID == entry.Name() {
+				final = item.FinalDir
+				break
+			}
+		}
+		if final == "" && strings.HasSuffix(entry.Name(), ".blob") {
+			// Legacy flat blob restored beside the application files root of any moved entry.
+			for _, item := range moved.Moved {
+				if item.FinalDir != "" {
+					final = filepath.Join(filepath.Dir(item.FinalDir), entry.Name())
+					break
+				}
+			}
+		}
+		if final == "" {
+			continue
+		}
+		if _, err := os.Stat(final); errors.Is(err, os.ErrNotExist) {
+			_ = os.MkdirAll(filepath.Dir(final), 0o700)
+			_ = os.Rename(backup, final)
+		}
+	}
 }
 
 func (s *Service) validateEditDraft(ctx context.Context, record editSessionRecord, files []ApplicationFile) ([]Diagnostic, error) {
@@ -946,8 +1114,12 @@ func (s *Service) editMutationConflict(ctx context.Context, owner, sessionID str
 }
 
 func (s *Service) editSessionPath(sessionID string) string {
-	base := filepath.Dir(s.currentConfig().SaveSessionDir)
-	return filepath.Join(base, "application-edit-sessions", filepath.Base(strings.TrimSpace(sessionID)))
+	root := s.dataRoot()
+	if root == "" {
+		base := filepath.Dir(s.currentConfig().SaveSessionDir)
+		return filepath.Join(base, "application-edit-sessions", filepath.Base(strings.TrimSpace(sessionID)))
+	}
+	return filepath.Join(root, "tmp", "application-edit-sessions", filepath.Base(strings.TrimSpace(sessionID)))
 }
 
 func (s *Service) startEditSessionCleanup() {
@@ -1040,56 +1212,34 @@ func (s *Service) cleanupOrphanedEditSessionBlobs(now time.Time) {
 		}
 		sessionID := entry.Name()
 		exists, _ := orm.New(s.db).From("application_edit_sessions").Where("id=?", sessionID).Exists(context.Background())
+		dir := filepath.Join(root, sessionID)
 		if !exists {
-			dir := filepath.Join(root, sessionID)
-			if editSessionWorkspaceStale(dir, now) {
+			if filestorage.WorkspaceStale(dir, now, editSessionOrphanStaleAfter) {
 				_ = os.RemoveAll(dir)
 			}
 			continue
 		}
-		dir := filepath.Join(root, sessionID)
-		files, readErr := os.ReadDir(dir)
+		filesRoot := filepath.Join(dir, "files")
+		fileEntries, readErr := os.ReadDir(filesRoot)
 		if readErr != nil {
 			continue
 		}
-		for _, file := range files {
-			path := filepath.Join(dir, file.Name())
+		for _, file := range fileEntries {
+			path := filepath.Join(filesRoot, file.Name())
 			info, infoErr := file.Info()
 			if infoErr != nil || now.Sub(info.ModTime()) < editSessionOrphanStaleAfter {
 				continue
 			}
 			if strings.HasSuffix(file.Name(), ".partial") {
-				_ = os.Remove(path)
+				filestorage.RemoveAllQuiet(path)
 				continue
 			}
-			referenced, _ := orm.New(s.db).From("application_edit_session_files").Where("session_id=?", sessionID).And("blob_path=?", path).Exists(context.Background())
+			referenced, _ := orm.New(s.db).From("application_edit_session_files").Where("session_id=?", sessionID).And("blob_dir=?", path).Exists(context.Background())
 			if !referenced {
-				_ = os.Remove(path)
+				filestorage.RemoveAllQuiet(path)
 			}
 		}
 	}
-}
-
-func editSessionWorkspaceStale(dir string, now time.Time) bool {
-	info, err := os.Stat(dir)
-	if err != nil {
-		return false
-	}
-	newest := info.ModTime()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return false
-	}
-	for _, entry := range entries {
-		entryInfo, infoErr := entry.Info()
-		if infoErr != nil {
-			return false
-		}
-		if entryInfo.ModTime().After(newest) {
-			newest = entryInfo.ModTime()
-		}
-	}
-	return now.Sub(newest) >= editSessionOrphanStaleAfter
 }
 
 func saveInputFromApplication(app Application) SaveInput {

@@ -3,6 +3,7 @@ package applications
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"io"
 	"strings"
 
@@ -31,13 +32,6 @@ func (s *Service) GetFile(ctx context.Context, appID, fileRef string) (Applicati
 	return file, err
 }
 
-func fileQueryColumns(includeContent bool) []string {
-	if includeContent {
-		return []string{"id", "application_id", "name", "kind", "content_type", "size", "sha256", "content", "created_at", "updated_at"}
-	}
-	return []string{"id", "application_id", "name", "kind", "content_type", "size", "sha256", "created_at", "updated_at"}
-}
-
 func (s *Service) listFiles(ctx context.Context, appID string, includeContent bool) ([]ApplicationFile, error) {
 	var files []models.ApplicationFile
 	if err := orm.New(s.db).From("application_files").Select(fileQueryColumns(includeContent)...).Where("application_id=?", appID).OrderBy("name ASC").All(ctx, &files); err != nil {
@@ -45,7 +39,14 @@ func (s *Service) listFiles(ctx context.Context, appID string, includeContent bo
 	}
 	out := make([]ApplicationFile, 0, len(files))
 	for _, file := range files {
-		out = append(out, toDomainApplicationFile(file, includeContent))
+		item := toDomainApplicationFile(file, false)
+		if includeContent {
+			if err := hydrateApplicationFileContent(s, &item); err != nil {
+				return nil, err
+			}
+			item.ContentBase64 = base64.StdEncoding.EncodeToString(item.Content)
+		}
+		out = append(out, item)
 	}
 	return out, nil
 }
@@ -59,7 +60,14 @@ func (s *Service) getFileByName(ctx context.Context, appID, name string, include
 	if err != nil {
 		return ApplicationFile{}, err
 	}
-	return toDomainApplicationFile(file, includeContent), nil
+	item := toDomainApplicationFile(file, false)
+	if includeContent {
+		if err := hydrateApplicationFileContent(s, &item); err != nil {
+			return ApplicationFile{}, err
+		}
+		item.ContentBase64 = base64.StdEncoding.EncodeToString(item.Content)
+	}
+	return item, nil
 }
 
 func (s *Service) getFileByRef(ctx context.Context, appID, ref string, includeContent bool) (ApplicationFile, error) {
@@ -75,7 +83,14 @@ func (s *Service) getFileByRef(ctx context.Context, appID, ref string, includeCo
 	if err := orm.New(s.db).From("application_files").Select(fileQueryColumns(includeContent)...).Where("application_id=?", appID).And("id=?", ref).First(ctx, &byID); err != nil {
 		return ApplicationFile{}, err
 	}
-	return toDomainApplicationFile(byID, includeContent), nil
+	item := toDomainApplicationFile(byID, false)
+	if includeContent {
+		if err := hydrateApplicationFileContent(s, &item); err != nil {
+			return ApplicationFile{}, err
+		}
+		item.ContentBase64 = base64.StdEncoding.EncodeToString(item.Content)
+	}
+	return item, nil
 }
 
 func (s *Service) attachFiles(ctx context.Context, job appruntime.Spec, spec appspec.Spec, files []ApplicationFile, data map[string]any) (appruntime.Spec, error) {

@@ -144,7 +144,45 @@ func preAppMigrationSteps() []orm.Step {
 		{ID: "merge_jobs_into_event_runs", Run: func(ctx context.Context, tx *sql.Tx) error {
 			return mergeJobsIntoEventRunsOn(ctx, tx)
 		}},
+		{ID: "migrate_application_edit_session_file_blob_dir", Run: func(ctx context.Context, tx *sql.Tx) error {
+			return migrateApplicationEditSessionFileBlobDirOn(ctx, tx)
+		}},
 	}
+}
+
+// migrateApplicationEditSessionFileBlobDirOn renames blob_path → blob_dir and
+// adds source_file_id / filename before destructive AutoMigrate drops the old
+// column. Disk wrapping of legacy flat blobs happens at module backfill time.
+func migrateApplicationEditSessionFileBlobDirOn(ctx context.Context, q migrationExecutor) error {
+	exists, err := tableExistsOn(ctx, q, "application_edit_session_files")
+	if err != nil || !exists {
+		return err
+	}
+	cols, err := tableColumnsOn(ctx, q, "application_edit_session_files")
+	if err != nil {
+		return err
+	}
+	if cols["blob_path"] && !cols["blob_dir"] {
+		if _, err := q.ExecContext(ctx, `ALTER TABLE application_edit_session_files RENAME COLUMN blob_path TO blob_dir`); err != nil {
+			return err
+		}
+		cols["blob_dir"] = true
+		delete(cols, "blob_path")
+	}
+	if !cols["source_file_id"] {
+		if _, err := q.ExecContext(ctx, `ALTER TABLE application_edit_session_files ADD COLUMN source_file_id TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	if !cols["filename"] {
+		if _, err := q.ExecContext(ctx, `ALTER TABLE application_edit_session_files ADD COLUMN filename TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	if _, err := q.ExecContext(ctx, `UPDATE application_edit_session_files SET filename=name WHERE TRIM(COALESCE(filename,''))=''`); err != nil {
+		return err
+	}
+	return nil
 }
 
 func tableExistsOn(ctx context.Context, q migrationExecutor, name string) (bool, error) {

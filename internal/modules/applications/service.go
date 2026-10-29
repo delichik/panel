@@ -28,6 +28,7 @@ import (
 	"panel/internal/platform/database/models"
 	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
+	"panel/internal/platform/filestorage"
 	httpx "panel/internal/platform/http"
 	id "panel/internal/platform/identity"
 	"panel/internal/platform/logging"
@@ -42,6 +43,10 @@ type Config struct {
 	Region         string
 	Datacenter     string
 	SaveSessionDir string
+	// DataRoot holds the panel data directory. Application file bodies are
+	// stored under {DataRoot}/applications/files/. When empty it is derived
+	// from SaveSessionDir ({DataRoot}/tmp/application-save-sessions).
+	DataRoot string
 }
 
 type AgentRuntimeClient interface {
@@ -369,6 +374,9 @@ func (s *Service) currentConfig() Config {
 		if next.SaveSessionDir != "" {
 			cfg.SaveSessionDir = next.SaveSessionDir
 		}
+		if next.DataRoot != "" {
+			cfg.DataRoot = next.DataRoot
+		}
 	}
 	if cfg.Namespace == "" {
 		cfg.Namespace = "default"
@@ -656,15 +664,9 @@ func (s *Service) createWithFiles(ctx context.Context, in SaveInput, files []App
 func (s *Service) createWithFilesID(ctx context.Context, appID string, in SaveInput, files []ApplicationFile) (Application, error) {
 	in = stripDeprecatedApplicationConfig(in)
 	files = normalizeApplicationFilesForSave(appID, files, time.Now().UTC())
-	prepared, err := s.prepare(ctx, in, 1, appID)
+	prepared, err := s.prepareForSave(ctx, in, 1, appID, files)
 	if err != nil {
 		return Application{}, err
-	}
-	if files != nil {
-		prepared, err = s.prepareWithFiles(ctx, in, 1, appID, files)
-		if err != nil {
-			return Application{}, err
-		}
 	}
 	now := time.Now().UTC()
 	app := Application{
@@ -704,7 +706,7 @@ func (s *Service) createWithFilesID(ctx context.Context, appID string, in SaveIn
 				return Application{}, err
 			}
 		}
-		if err := s.reconcileReverseProxy(ctx); err != nil {
+		if err := s.reconcileReverseProxyIfNeeded(ctx, Application{}, app); err != nil {
 			return Application{}, err
 		}
 		return s.Get(ctx, app.ID)
@@ -718,7 +720,7 @@ func (s *Service) createWithFilesID(ctx context.Context, appID string, in SaveIn
 			return Application{}, err
 		}
 	}
-	if err := s.reconcileReverseProxy(ctx); err != nil {
+	if err := s.reconcileReverseProxyIfNeeded(ctx, Application{}, app); err != nil {
 		return Application{}, err
 	}
 	return s.Get(ctx, app.ID)
@@ -754,27 +756,15 @@ func (s *Service) updateWithFilesVersioned(ctx context.Context, appID string, ex
 		files = normalizeApplicationFilesForSave(appID, files, time.Now().UTC())
 	}
 	generation := current.Generation
-	prepared, err := s.prepare(ctx, in, generation, appID)
+	prepared, err := s.prepareForSave(ctx, in, generation, appID, files)
 	if err != nil {
 		return Application{}, err
 	}
-	if files != nil {
-		prepared, err = s.prepareWithFiles(ctx, in, generation, appID, files)
-		if err != nil {
-			return Application{}, err
-		}
-	}
 	if prepared.hash != current.SpecHash {
 		generation++
-		prepared, err = s.prepare(ctx, in, generation, appID)
+		prepared, err = s.prepareForSave(ctx, in, generation, appID, files)
 		if err != nil {
 			return Application{}, err
-		}
-		if files != nil {
-			prepared, err = s.prepareWithFiles(ctx, in, generation, appID, files)
-			if err != nil {
-				return Application{}, err
-			}
 		}
 	}
 	app := current
@@ -826,7 +816,7 @@ func (s *Service) updateWithFilesVersioned(ctx context.Context, appID string, ex
 				return Application{}, err
 			}
 		}
-		if err := s.reconcileReverseProxy(ctx); err != nil {
+		if err := s.reconcileReverseProxyIfNeeded(ctx, current, app); err != nil {
 			return Application{}, err
 		}
 		s.refreshReferencesAfterRename(ctx, current, app)
@@ -843,7 +833,7 @@ func (s *Service) updateWithFilesVersioned(ctx context.Context, appID string, ex
 			return Application{}, err
 		}
 	}
-	if err := s.reconcileReverseProxy(ctx); err != nil {
+	if err := s.reconcileReverseProxyIfNeeded(ctx, current, app); err != nil {
 		return Application{}, err
 	}
 	s.refreshReferencesAfterRename(ctx, current, app)
@@ -906,6 +896,7 @@ func (s *Service) Delete(ctx context.Context, appID string, confirmPersistentDat
 		if err := orm.New(s.db).From("applications").Where("id=?", app.ID).And("deletion_requested=1").Delete(ctx); err != nil {
 			return err
 		}
+		s.removeApplicationFileBlobs(app.ID)
 		return s.reconcileReverseProxy(ctx)
 	}
 	// Plan purge Jobs durably in this request (same pattern as Deploy/Restart).
@@ -1827,6 +1818,15 @@ func (s *Service) prepare(ctx context.Context, in SaveInput, generation int, app
 	return s.prepareWithFiles(ctx, in, generation, appID, files)
 }
 
+// prepareForSave uses caller-provided files when present so edit-session commit
+// does not re-list application_files and run a discarded prepare() pass first.
+func (s *Service) prepareForSave(ctx context.Context, in SaveInput, generation int, appID string, files []ApplicationFile) (preparedApplication, error) {
+	if files != nil {
+		return s.prepareWithFiles(ctx, in, generation, appID, files)
+	}
+	return s.prepare(ctx, in, generation, appID)
+}
+
 func (s *Service) prepareWithFiles(ctx context.Context, in SaveInput, generation int, appID string, files []ApplicationFile) (preparedApplication, error) {
 	appContext := Application{
 		ID:                appID,
@@ -2234,9 +2234,12 @@ func (s *Service) commitApplicationStateVersioned(ctx context.Context, app Appli
 			return err
 		}
 	}
+	var staleBlobPaths []string
 	if configurationChanged {
-		if err := replaceApplicationFiles(ctx, tx, app.ID, files); err != nil {
-			return err
+		var replaceErr error
+		staleBlobPaths, replaceErr = s.replaceApplicationFiles(ctx, tx, app.ID, files)
+		if replaceErr != nil {
+			return replaceErr
 		}
 	}
 	if insertApp || configurationChanged {
@@ -2246,6 +2249,9 @@ func (s *Service) commitApplicationStateVersioned(ctx context.Context, app Appli
 	}
 	if err := tx.Commit(); err != nil {
 		return err
+	}
+	for _, path := range staleBlobPaths {
+		filestorage.RemoveAllQuiet(path)
 	}
 	if insertRevision {
 		s.insertRevisionBestEffort(ctx, app, job)
@@ -2313,27 +2319,6 @@ func insertRevisionWithExec(ctx context.Context, exec orm.Executor, app Applicat
 		VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
 		id.New("arev"), app.ID, app.Generation, app.SpecHash, string(raw), "[]", app.ImageReference, app.ImageDigest, app.SpecYAML, string(raw), formatTime(time.Now().UTC()))
 	return err
-}
-
-func replaceApplicationFiles(ctx context.Context, exec orm.Executor, appID string, files []ApplicationFile) error {
-	if err := orm.New(exec).From("application_files").Where("application_id=?", appID).Delete(ctx); err != nil {
-		return err
-	}
-	if len(files) == 0 {
-		return nil
-	}
-	items := make([]*models.ApplicationFile, 0, len(files))
-	for _, file := range files {
-		item := fromDomainApplicationFile(file)
-		item.ApplicationID = appID
-		// 会话文件表的 file_key 对新建文件只是应用内 name（跨应用不唯一），
-		// 落库前必须为这些新文件分配全局唯一主键；已有全局 ID 的文件（含 legacy 暂存文件）保留原 ID。
-		if strings.TrimSpace(item.ID) == "" || item.ID == file.Name {
-			item.ID = id.New("afile")
-		}
-		items = append(items, item)
-	}
-	return orm.New(exec).From("application_files").InsertBatch(ctx, items)
 }
 
 func applicationSaveError(err error) error {
@@ -3121,6 +3106,7 @@ func (s *Service) deleteApplicationIfRuntimeGone(ctx context.Context, appID stri
 	if err := orm.New(s.db).From("applications").Where("id=?", appID).And("deletion_requested=1").Delete(ctx); err != nil {
 		return err
 	}
+	s.removeApplicationFileBlobs(appID)
 	return orm.New(s.db).From("reverse_proxy_routes").Where("app_id=?", appID).Delete(ctx)
 }
 
@@ -3791,6 +3777,54 @@ func (s *Service) reconcileReverseProxy(ctx context.Context) error {
 		return nil
 	}
 	return runtimeOperationError(s.proxyReconciler.ReconcileReverseProxy(ctx))
+}
+
+// reconcileReverseProxyIfNeeded skips the facility-wide reverse-proxy rebuild when
+// this application's contribution to gateway config cannot have changed. The
+// rebuild still scans every enabled app with routes, so avoiding the call on
+// unrelated saves is the main commit-path win.
+func (s *Service) reconcileReverseProxyIfNeeded(ctx context.Context, before, after Application) error {
+	if !reverseProxyReconcileNeeded(before, after) {
+		return nil
+	}
+	return s.reconcileReverseProxy(ctx)
+}
+
+func reverseProxyReconcileNeeded(before, after Application) bool {
+	if len(before.ReverseProxy) == 0 && len(after.ReverseProxy) == 0 {
+		return false
+	}
+	if before.Enabled != after.Enabled {
+		return true
+	}
+	if strings.TrimSpace(before.Name) != strings.TrimSpace(after.Name) {
+		return true
+	}
+	if before.DeploymentMode != after.DeploymentMode {
+		return true
+	}
+	if !deploymentServersEqual(before.DeploymentServers, after.DeploymentServers) {
+		return true
+	}
+	beforeProxy, err1 := json.Marshal(before.ReverseProxy)
+	afterProxy, err2 := json.Marshal(after.ReverseProxy)
+	if err1 != nil || err2 != nil || string(beforeProxy) != string(afterProxy) {
+		return true
+	}
+	// Domains/paths are template-rendered from SpecYAML/files.
+	return before.SpecHash != after.SpecHash
+}
+
+func deploymentServersEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Service) refreshApplicationSnapshot(ctx context.Context, current Application) (Application, error) {

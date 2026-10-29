@@ -1,14 +1,12 @@
-package facilityapps
+﻿package facilityapps
 
 import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -18,6 +16,7 @@ import (
 
 	"panel/internal/modules/applications"
 	panelerr "panel/internal/platform/errors"
+	"panel/internal/platform/filestorage"
 	"panel/internal/platform/i18n"
 	id "panel/internal/platform/identity"
 )
@@ -103,7 +102,7 @@ func (s *Service) BeginFacilityEditSession(ctx context.Context, in BeginFacility
 	}
 	contentHashes := make(map[string]string, len(assets))
 	for _, asset := range assets {
-		contentSHA, hashErr := hashFacilityAssetDirectory(s.staticAssetContentDir(asset.ID))
+		contentSHA, hashErr := filestorage.HashDirectory(s.staticAssetContentDir(asset.ID))
 		if hashErr != nil {
 			return FacilityEditSession{}, panelerr.WithDetails(panelerr.Conflict("facility_source_asset_missing", "facility source asset content is missing or unreadable"), map[string]any{"assetId": asset.ID})
 		}
@@ -281,7 +280,7 @@ func (s *Service) PutFacilityEditAsset(ctx context.Context, sessionID, assetRef,
 	} else if err := os.WriteFile(filepath.Join(contentDir, filename), in.Content, 0o644); err != nil {
 		return FacilityEditSession{}, err
 	}
-	contentSHA, err := hashFacilityAssetDirectory(contentDir)
+	contentSHA, err := filestorage.HashDirectory(contentDir)
 	if err != nil {
 		return FacilityEditSession{}, err
 	}
@@ -841,7 +840,7 @@ func (s *Service) verifyFacilityManifestAssets(manifest facilityCommitManifest) 
 		if contentDir == "" {
 			return panelerr.WithDetails(panelerr.Conflict("facility_asset_content_missing", "facility asset content is missing"), map[string]any{"assetKey": asset.AssetKey})
 		}
-		actual, err := hashFacilityAssetDirectory(contentDir)
+		actual, err := filestorage.HashDirectory(contentDir)
 		if err != nil {
 			return panelerr.WithDetails(panelerr.Conflict("facility_asset_content_missing", "facility asset content is missing or unreadable"), map[string]any{"assetKey": asset.AssetKey})
 		}
@@ -850,64 +849,6 @@ func (s *Service) verifyFacilityManifestAssets(manifest facilityCommitManifest) 
 		}
 	}
 	return nil
-}
-
-func hashFacilityAssetDirectory(root string) (string, error) {
-	hasher := sha256.New()
-	var entryCount uint64
-	err := filepath.WalkDir(root, func(current string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(root, current)
-		if err != nil {
-			return err
-		}
-		relBytes := []byte(filepath.ToSlash(rel))
-		if err := binary.Write(hasher, binary.BigEndian, uint64(len(relBytes))); err != nil {
-			return err
-		}
-		if _, err := hasher.Write(relBytes); err != nil {
-			return err
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if err := binary.Write(hasher, binary.BigEndian, uint64(info.Size())); err != nil {
-			return err
-		}
-		file, err := os.Open(current)
-		if err != nil {
-			return err
-		}
-		copied, copyErr := io.Copy(hasher, file)
-		closeErr := file.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		if closeErr != nil {
-			return closeErr
-		}
-		if copied != info.Size() {
-			return io.ErrUnexpectedEOF
-		}
-		if _, err := hasher.Write([]byte{0xff}); err != nil {
-			return err
-		}
-		entryCount++
-		return nil
-	})
-	if err != nil {
-		return "", err
-	}
-	if err := binary.Write(hasher, binary.BigEndian, entryCount); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
 func (s *Service) moveFacilityManifestFiles(manifest *facilityCommitManifest) error {
@@ -1042,11 +983,7 @@ func writeFacilityManifest(path string, manifest facilityCommitManifest) error {
 	if err != nil {
 		return err
 	}
-	tmp := path + ".partial"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return filestorage.WriteAtomic(path, raw, 0o600)
 }
 
 func (s *Service) recoverFacilityEditSessions(ctx context.Context) {
@@ -1151,7 +1088,7 @@ func (s *Service) facilityManifestDBCommitted(ctx context.Context, manifest faci
 		if persisted[asset.FinalID] != asset.SHA256 {
 			return false
 		}
-		contentSHA, err := hashFacilityAssetDirectory(s.staticAssetContentDir(asset.FinalID))
+		contentSHA, err := filestorage.HashDirectory(s.staticAssetContentDir(asset.FinalID))
 		if err != nil || contentSHA != asset.ContentSHA256 {
 			return false
 		}
@@ -1237,28 +1174,10 @@ func (s *Service) cleanupFacilityEditOrphans(now time.Time) {
 		}
 		dir := filepath.Join(s.editSessionDir, entry.Name())
 		var exists int
-		if err := s.db.QueryRow(`SELECT 1 FROM facility_edit_sessions WHERE id=?`, entry.Name()).Scan(&exists); err == sql.ErrNoRows && facilityWorkspaceStale(dir, now) {
+		if err := s.db.QueryRow(`SELECT 1 FROM facility_edit_sessions WHERE id=?`, entry.Name()).Scan(&exists); err == sql.ErrNoRows && filestorage.WorkspaceStale(dir, now, facilityEditOrphanStaleAge) {
 			_ = os.RemoveAll(dir)
 		}
 	}
-}
-
-func facilityWorkspaceStale(dir string, now time.Time) bool {
-	newest, err := os.Stat(dir)
-	if err != nil {
-		return false
-	}
-	latest := newest.ModTime()
-	_ = filepath.WalkDir(dir, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if info, infoErr := entry.Info(); infoErr == nil && info.ModTime().After(latest) {
-			latest = info.ModTime()
-		}
-		return nil
-	})
-	return now.Sub(latest) >= facilityEditOrphanStaleAge
 }
 
 func (s *Service) facilityEditPath(sessionID string) string {

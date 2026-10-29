@@ -18,6 +18,7 @@ import (
 	"panel/internal/platform/database/models"
 	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
+	"panel/internal/platform/filestorage"
 )
 
 const (
@@ -149,12 +150,7 @@ func (s *Service) staticAssetContentDir(assetID string) string {
 }
 
 func safeAssetFilename(value string) string {
-	value = strings.TrimSpace(filepath.Base(strings.ReplaceAll(value, "\\", "/")))
-	value = strings.Trim(value, ". ")
-	if value == "" || strings.ContainsAny(value, `/\`) {
-		return ""
-	}
-	return value
+	return filestorage.SafeFilename(value)
 }
 
 func extractStaticBundle(reader io.ReaderAt, size int64, filename, target string) error {

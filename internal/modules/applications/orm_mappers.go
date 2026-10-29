@@ -130,8 +130,10 @@ func toDomainApplicationFile(m models.ApplicationFile, includeContent bool) Appl
 		Name:          m.Name,
 		Kind:          m.Kind,
 		ContentType:   m.ContentType,
+		Filename:      m.Filename,
 		Size:          int64(m.Size),
 		SHA256:        m.SHA256,
+		BlobPath:      m.BlobPath,
 		Content:       m.Content,
 		CreatedAt:     m.CreatedAt,
 		UpdatedAt:     m.UpdatedAt,
@@ -144,14 +146,20 @@ func toDomainApplicationFile(m models.ApplicationFile, includeContent bool) Appl
 }
 
 func fromDomainApplicationFile(file ApplicationFile) *models.ApplicationFile {
+	filename := strings.TrimSpace(file.Filename)
+	if filename == "" {
+		filename = applicationFileFilename(file)
+	}
 	return &models.ApplicationFile{
 		ID:            file.ID,
 		ApplicationID: file.ApplicationID,
 		Name:          file.Name,
 		Kind:          file.Kind,
 		ContentType:   file.ContentType,
+		Filename:      filename,
 		Size:          int(file.Size),
 		SHA256:        file.SHA256,
+		BlobPath:      file.BlobPath,
 		Content:       file.Content,
 		CreatedAt:     file.CreatedAt,
 		UpdatedAt:     file.UpdatedAt,
