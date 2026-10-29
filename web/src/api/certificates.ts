@@ -1,46 +1,32 @@
 import { apiClient } from './client';
 import type {
-  CertificateDto,
-  CertificateIssueDto,
-  CertificateIssueInput,
-  NomadBuiltinCertificateDto,
-  SelfSignedCAInput,
+  DomainCertificateDto,
+  IssueCertificateInput,
+  IssueCertificateResult,
+  RenewCertificateResult,
+  SelfSignedCaInput,
   SelfSignedCertificateDto,
   SelfSignedLeafInput,
-} from '@/types/api';
+} from '@/types/certificates';
+import type { ListPage } from '@/types/pagination';
 
 export const certificatesApi = {
-  list() {
-    return apiClient.get<CertificateDto[]>('/certificates');
+  list: (params: { page?: number; pageSize?: number; q?: string } = {}) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([name, value]) => { if (value !== undefined && value !== '') query.set(name, String(value)); });
+    return apiClient.get<ListPage<DomainCertificateDto>>(`/certificates${query.size ? `?${query}` : ''}`);
   },
-  issue(input: CertificateIssueInput) {
-    return apiClient.post<CertificateIssueDto>('/certificates', input);
+  issue: (input: IssueCertificateInput) => apiClient.post<IssueCertificateResult>('/certificates', input),
+  reissue: (id: string, input: IssueCertificateInput) => apiClient.put<IssueCertificateResult>(`/certificates/${encodeURIComponent(id)}`, input),
+  renew: (id: string) => apiClient.post<RenewCertificateResult>(`/certificates/${encodeURIComponent(id)}/renew`),
+  delete: (id: string) => apiClient.delete<void>(`/certificates/${encodeURIComponent(id)}`),
+  listSelfSignedPage: (params: { page?: number; pageSize?: number; q?: string } = {}) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([name, value]) => { if (value !== undefined && value !== '') query.set(name, String(value)); });
+    return apiClient.get<ListPage<SelfSignedCertificateDto>>(`/self-signed-certificates${query.size ? `?${query}` : ''}`);
   },
-  delete(certificateId: string) {
-    return apiClient.delete(`/certificates/${certificateId}`);
-  },
-  renew(certificateId: string) {
-    return apiClient.post<{ renewed: boolean }>(`/certificates/${certificateId}/renew`);
-  },
-  builtin() {
-    return apiClient.get<NomadBuiltinCertificateDto[]>('/certificates/builtin');
-  },
-  rotateBuiltin() {
-    return apiClient.post<{ taskId: string }>('/certificates/builtin/rotate');
-  },
-  listSelfSigned() {
-    return apiClient.get<SelfSignedCertificateDto[]>('/self-signed-certificates');
-  },
-  createCA(input: SelfSignedCAInput) {
-    return apiClient.post<SelfSignedCertificateDto>('/self-signed-cas', input);
-  },
-  createSelfSigned(input: SelfSignedLeafInput) {
-    return apiClient.post<SelfSignedCertificateDto>('/self-signed-certificates', input);
-  },
-  renewSelfSigned(certificateId: string) {
-    return apiClient.post<SelfSignedCertificateDto>(`/self-signed-certificates/${certificateId}/renew`);
-  },
-  deleteSelfSigned(certificateId: string) {
-    return apiClient.delete(`/self-signed-certificates/${certificateId}`);
-  },
+  createSelfSignedCa: (input: SelfSignedCaInput) => apiClient.post<SelfSignedCertificateDto>('/self-signed-cas', input),
+  createSelfSignedLeaf: (input: SelfSignedLeafInput) => apiClient.post<SelfSignedCertificateDto>('/self-signed-certificates', input),
+  renewSelfSigned: (id: string) => apiClient.post<SelfSignedCertificateDto>(`/self-signed-certificates/${encodeURIComponent(id)}/renew`),
+  deleteSelfSigned: (id: string) => apiClient.delete<void>(`/self-signed-certificates/${encodeURIComponent(id)}`),
 };
