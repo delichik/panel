@@ -140,7 +140,7 @@
 | --- | --- | --- |
 | 应用 orchestrator scanner/worker | app 库 Job、Instance desired/observed、revision、事件 | 协调、任务与运行事件 |
 | Event executor worker（queue/stale/orphan） | `event_runs` 执行与恢复；**不含**周期 ticker | 协调、任务与运行事件及各触发域 |
-| 模块自有周期 SchedulerLoop | `StartPeriodic`：agent 检查、信息采集、镜像/包刷新、证书续签、Panel TLS、应用 reconcile 等。除应用 reconcile 外，经 `TriggerPeriodicNow`/`CollectInputs` 创建 event run。应用 reconcile 的 CollectInputs 只请求 Planner，不创建 event run（`TASK-PER-003`） | 相应领域与 `TASK-PER-001` |
+| 模块自有周期 SchedulerLoop / DailyAtLoop | `StartPeriodic`：agent 检查、信息采集、镜像/包刷新、每日本地 03:00 未使用镜像清理（`image_unused_cleanup`，7 天 `Created` 年龄门禁）、证书续签、Panel TLS、应用 reconcile 等。除应用 reconcile 外，经 `TriggerPeriodicNow`/`CollectInputs` 创建 event run。应用 reconcile 的 CollectInputs 只请求 Planner，不创建 event run（`TASK-PER-003`） | 相应领域与 `TASK-PER-001`；镜像清理见 `IMG-DEL-003` |
 | Task 清理 | 任务保留策略 | 协调、任务与运行事件 |
 | metrics 清理 | metrics 快照保留策略 | 身份、设置与系统 |
 | runtime event buffered writer/清理 | 运行事件及详情 | 协调、任务与运行事件 |
@@ -155,6 +155,7 @@
 - Agent report collector 对应用规划失败逐应用隔离并继续扫描，自动相同诊断去重，不新增定时任务；对应 `ORCH-PLAN-006`。
 - Tailscale 新增任务类型 `server_tailscale_apply`，由通用任务 worker 执行：保存节点开关后自动排队，手动 apply 创建或复用，缺少 `agent.tailscale` 能力只失败该任务而不触发整节点重装；不新增 ticker/cron，对应 `TS-TASK-001..004`。
 - 周期 Agent 检查（`server_agent_check`）由 servers 模块 `StartPeriodic` 自有 loop（5 分钟）驱动，经 `CollectInputs`/`TriggerPeriodicNow` 入 event executor 框架；成功巡检 JSONL 为 `debug`（`Quiet`），失败仍为 `error`：不经 event executor 中央 PeriodicRunner；对应 `AGT-STATE-005`、`TASK-REG-003`、`TASK-PER-001`。
+- 每日未使用镜像清理（`image_unused_cleanup`）由 containers `StartPeriodic` 自有 `StartDailyAtLoop` 驱动：Panel 主机本地时区每天 03:00 触发，重启后等待下一次 03:00（不补跑）；仅对 reachable+compatible 节点经 `CollectInputs` 创建 parallel event run；删除当前未被容器引用且 `Created` 早于 7 天的镜像（未知 Created 保留）；成功后尽力触发 `image_refresh`；与手动 `images/delete-unused` 共享 server queue 与 live usage 门禁，但不共享年龄过滤；无新增 API/设置/表；对应 `IMG-DEL-003`、`COV-BG-001/002`、`TASK-PER-001`。
 - 应用协调仍由 containers `StartPeriodic` 每 5 秒调用 `application_reconcile` CollectInputs，以及业务侧 `TriggerApplicationReconcile`。两者都直接请求 Planner 写 `event_runs`（`type='application_deploy'`），不经 Manager 创建通用 event run。已删除任务类型 `application_reconcile_batch`（noop Execute）。无新增 API 或 ticker；存量非终态监控壳由 `cancel_application_reconcile_monitoring_shells` 取消。对应 `TASK-PER-003`、`ORCH-DRIFT-001`、`ENG-RUN-001`。
 - Panel 进程日志统一经 `platform/logging`（context 带 `eventId`+`module`+等级，默认 JSONL 文件 + stdout）；`events` 仅由显式过程登记（`RecordContext` / `EmitProcess` / `TouchProcess`）索引，日志行最多 Touch 已有过程；过程行内容合同 `ENG-EVT-010`；产品读 API 为 `/api/v1/events*` 与 `/api/v1/logs`（`eventId` 可选）；对应 `ENG-LOG-001..007` 与 `ENG-EVT-001`/`ENG-EVT-010`。
 - 进程日志文件落在 `<dataRoot>/logs/panel-YYYYMMDD.jsonl`（随 dataRoot 进入全量备份）；对应 `ENG-LOG-006`、`BKP-API-005`。

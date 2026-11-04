@@ -3095,6 +3095,10 @@ const taskSummaryTranslations: Array<[string, string]> = [
   ['Updating application images', '更新应用镜像'],
   ['Monitoring application containers', '监控应用容器'],
   ['Refreshing scheduled image checks', '刷新计划镜像检查'],
+  ['Cleaning unused images older than 7 days', '清理超过 7 天未使用的镜像'],
+  ['Cleaning scheduled unused images', '按计划清理未使用镜像'],
+  ['Unused images older than 7 days cleaned', '已清理超过 7 天未使用的镜像'],
+
   ['Syncing reverse proxy DNS records', '同步反向代理 DNS 记录'],
   ['Refreshing package updates', '刷新软件包更新'],
   ['Upgrading selected packages', '升级所选软件包'],

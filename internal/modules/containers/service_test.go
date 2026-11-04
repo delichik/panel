@@ -1004,6 +1004,122 @@ func TestTriggerApplicationReconcileUsesPeriodicPayload(t *testing.T) {
 	}
 }
 
+func TestImageCreatedBeforeRequiresKnownTimestamp(t *testing.T) {
+	cutoff := time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)
+	if imageCreatedBefore(agentcontract.DockerImage{Created: 0}, cutoff) {
+		t.Fatal("unknown Created must not count as older")
+	}
+	if imageCreatedBefore(agentcontract.DockerImage{Created: cutoff.Unix()}, cutoff) {
+		t.Fatal("Created equal to cutoff must not count as strictly older")
+	}
+	if !imageCreatedBefore(agentcontract.DockerImage{Created: cutoff.Add(-time.Second).Unix()}, cutoff) {
+		t.Fatal("Created before cutoff must count as older")
+	}
+}
+
+func TestDeleteUnusedImagesKeepsRecentAndInUseImages(t *testing.T) {
+	svc, _, fakeAgent, _ := newContainerizationTestService(t)
+	now := time.Now().UTC()
+	fakeAgent.images = []agentcontract.DockerImage{
+		{ID: "img-old-unused", RepoTags: []string{"old:unused"}, Created: now.Add(-8 * 24 * time.Hour).Unix()},
+		{ID: "img-new-unused", RepoTags: []string{"new:unused"}, Created: now.Add(-2 * 24 * time.Hour).Unix()},
+		{ID: "img-old-inuse", RepoTags: []string{"old:inuse"}, Created: now.Add(-10 * 24 * time.Hour).Unix()},
+		{ID: "img-unknown", RepoTags: []string{"unknown:age"}, Created: 0},
+	}
+	fakeAgent.containers = []agentcontract.DockerContainer{{ID: "c1", ImageID: "img-old-inuse"}}
+
+	if err := svc.deleteUnusedImages(context.Background(), "server-1", unusedImageRetention); err != nil {
+		t.Fatalf("deleteUnusedImages: %v", err)
+	}
+	fakeAgent.mu.Lock()
+	deleted := append([]string(nil), fakeAgent.deletedImages...)
+	fakeAgent.mu.Unlock()
+	if len(deleted) != 1 || deleted[0] != "img-old-unused" {
+		t.Fatalf("deleted = %#v, want only img-old-unused", deleted)
+	}
+}
+
+func TestDeleteUnusedImagesWithoutAgeDeletesAllUnused(t *testing.T) {
+	svc, _, fakeAgent, _ := newContainerizationTestService(t)
+	now := time.Now().UTC()
+	fakeAgent.images = []agentcontract.DockerImage{
+		{ID: "img-old", Created: now.Add(-8 * 24 * time.Hour).Unix()},
+		{ID: "img-new", Created: now.Add(-time.Hour).Unix()},
+		{ID: "img-inuse", Created: now.Add(-10 * 24 * time.Hour).Unix()},
+	}
+	fakeAgent.containers = []agentcontract.DockerContainer{{ID: "c1", ImageID: "img-inuse"}}
+
+	if _, err := svc.DeleteUnusedImages(context.Background(), "server-1"); err != nil {
+		t.Fatalf("DeleteUnusedImages: %v", err)
+	}
+	fakeAgent.mu.Lock()
+	deleted := append([]string(nil), fakeAgent.deletedImages...)
+	fakeAgent.mu.Unlock()
+	if len(deleted) != 2 {
+		t.Fatalf("deleted = %#v, want both unused images", deleted)
+	}
+}
+
+func TestCollectImageUnusedCleanupInputsOnlyCompatibleServers(t *testing.T) {
+	svc, _, _, _ := newContainerizationTestService(t)
+	batch, shouldRun, err := svc.CollectImageUnusedCleanupInputs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !shouldRun || batch.Type != TaskImageUnusedCleanup || len(batch.Inputs) != 1 {
+		t.Fatalf("unexpected batch: shouldRun=%v batch=%#v", shouldRun, batch)
+	}
+	if batch.Inputs[0].Summary != "Cleaning unused images older than 7 days" {
+		t.Fatalf("summary = %q", batch.Inputs[0].Summary)
+	}
+
+	svc.servers = fakeServerProvider{server.Server{
+		ID:        "server-1",
+		Reachable: false,
+		Traits: map[string]string{
+			agentcontract.TraitURL:    "http://agent",
+			agentcontract.TraitStatus: agentcontract.StatusCompatible,
+		},
+	}}
+	batch, shouldRun, err = svc.CollectImageUnusedCleanupInputs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shouldRun || len(batch.Inputs) != 0 {
+		t.Fatalf("unreachable server must not create cleanup inputs: shouldRun=%v batch=%#v", shouldRun, batch)
+	}
+}
+
+func TestRunImageUnusedCleanupTaskDeletesOlderUnusedImages(t *testing.T) {
+	svc, taskSvc, fakeAgent, _ := newContainerizationTestService(t)
+	now := time.Now().UTC()
+	fakeAgent.images = []agentcontract.DockerImage{
+		{ID: "img-old-unused", Created: now.Add(-9 * 24 * time.Hour).Unix()},
+		{ID: "img-new-unused", Created: now.Add(-time.Hour).Unix()},
+	}
+	task, err := taskSvc.Create(context.Background(), tasks.CreateInput{
+		Type:         TaskImageUnusedCleanup,
+		ServerID:     "server-1",
+		ResourceType: "server",
+		ResourceID:   "server-1",
+		TriggerType:  "scheduler",
+		Summary:      "Cleaning unused images older than 7 days",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RunImageUnusedCleanupTask(tasks.TaskContext{Context: context.Background(), Task: task}); err != nil {
+		t.Fatalf("RunImageUnusedCleanupTask: %v", err)
+	}
+	waitTaskStatus(t, taskSvc, task.ID, tasks.StatusCompleted)
+	fakeAgent.mu.Lock()
+	deleted := append([]string(nil), fakeAgent.deletedImages...)
+	fakeAgent.mu.Unlock()
+	if len(deleted) != 1 || deleted[0] != "img-old-unused" {
+		t.Fatalf("deleted = %#v, want only img-old-unused", deleted)
+	}
+}
+
 func TestApplicationReconcileCollectorDoesNotCreateEventRuns(t *testing.T) {
 	svc, taskSvc, _, store := newContainerizationTestService(t)
 	if _, ok := taskSvc.Registry().Definition("application_reconcile_batch"); ok {
@@ -1107,11 +1223,12 @@ func (p fakeServerProvider) List(context.Context) ([]server.Server, error) {
 }
 
 type fakeContainerizationAgent struct {
-	mu         sync.Mutex
-	actions    []string
-	logTail    int
-	images     []agentcontract.DockerImage
-	containers []agentcontract.DockerContainer
+	mu            sync.Mutex
+	actions       []string
+	deletedImages []string
+	logTail       int
+	images        []agentcontract.DockerImage
+	containers    []agentcontract.DockerContainer
 }
 
 func (a *fakeContainerizationAgent) DockerContainers(context.Context, string) ([]agentcontract.DockerContainer, error) {
@@ -1142,7 +1259,10 @@ func (a *fakeContainerizationAgent) DockerImagePull(context.Context, string, str
 	return nil
 }
 
-func (a *fakeContainerizationAgent) DockerImageDelete(context.Context, string, string) error {
+func (a *fakeContainerizationAgent) DockerImageDelete(_ context.Context, _ string, imageID string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.deletedImages = append(a.deletedImages, imageID)
 	return nil
 }
 

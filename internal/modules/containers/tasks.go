@@ -10,10 +10,15 @@ import (
 	"panel/internal/modules/tasks"
 	panelerr "panel/internal/platform/errors"
 	id "panel/internal/platform/identity"
+	"panel/internal/platform/logging"
+
+	"go.uber.org/zap"
 )
 
 const (
 	imageRefreshInterval         = 30 * time.Minute
+	imageUnusedCleanupHour       = 3
+	imageUnusedCleanupMinute     = 0
 	applicationReconcileInterval = 5 * time.Second
 )
 
@@ -29,6 +34,16 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 			Periodic: &tasks.Periodic{
 				CollectInputs: func(ctx context.Context, _ tasks.PeriodicTrigger) (tasks.CreateBatchInput, bool, error) {
 					return s.CollectImageRefreshInputs(ctx)
+				},
+			},
+		},
+		{
+			Type:       TaskImageUnusedCleanup,
+			AllowRetry: true,
+			Execute:    s.RunImageUnusedCleanupTask,
+			Periodic: &tasks.Periodic{
+				CollectInputs: func(ctx context.Context, _ tasks.PeriodicTrigger) (tasks.CreateBatchInput, bool, error) {
+					return s.CollectImageUnusedCleanupInputs(ctx)
 				},
 			},
 		},
@@ -63,12 +78,16 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 	}
 }
 
-// StartPeriodic starts module-owned scheduler loops for image refresh and application reconcile.
+// StartPeriodic starts module-owned scheduler loops for image refresh, unused
+// image cleanup, and application reconcile. Loops cancel with the shared
+// periodic context. Interval loops delay the first tick by one full interval;
+// unused-image cleanup waits until the next local 03:00 wall clock.
 func (s *Service) StartPeriodic(ctx context.Context, taskSvc *tasks.Service) {
 	if s == nil || taskSvc == nil {
 		return
 	}
 	tasks.StartSchedulerLoop(ctx, taskSvc, TaskImageRefresh, imageRefreshInterval, "containers")
+	tasks.StartDailyAtLoop(ctx, taskSvc, TaskImageUnusedCleanup, imageUnusedCleanupHour, imageUnusedCleanupMinute, time.Local, "containers")
 	tasks.StartSchedulerLoop(ctx, taskSvc, TaskApplicationReconcile, applicationReconcileInterval, "containers")
 }
 
@@ -146,6 +165,14 @@ func applicationReconcileTriggerPayload(trigger tasks.PeriodicTrigger) Applicati
 }
 
 func (s *Service) CollectImageRefreshInputs(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
+	return s.collectCompatibleServerBatch(ctx, TaskImageRefresh, "Refreshing image updates", "Refreshing scheduled image checks")
+}
+
+func (s *Service) CollectImageUnusedCleanupInputs(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
+	return s.collectCompatibleServerBatch(ctx, TaskImageUnusedCleanup, "Cleaning unused images older than 7 days", "Cleaning scheduled unused images")
+}
+
+func (s *Service) collectCompatibleServerBatch(ctx context.Context, taskType, itemSummary, batchSummary string) (tasks.CreateBatchInput, bool, error) {
 	if s == nil || s.servers == nil {
 		return tasks.CreateBatchInput{}, false, nil
 	}
@@ -161,18 +188,54 @@ func (s *Service) CollectImageRefreshInputs(ctx context.Context) (tasks.CreateBa
 		}
 		inputs = append(inputs, tasks.CreateInput{
 			OperationID:  operationID,
-			Type:         TaskImageRefresh,
+			Type:         taskType,
 			ServerID:     srv.ID,
 			ResourceType: "server",
 			ResourceID:   srv.ID,
 			TriggerType:  "scheduler",
-			Summary:      "Refreshing image updates",
+			Summary:      itemSummary,
 		})
 	}
 	if len(inputs) == 0 {
 		return tasks.CreateBatchInput{}, false, nil
 	}
-	return tasks.CreateBatchInput{Type: TaskImageRefresh, OperationID: operationID, TriggerType: "scheduler", Summary: "Refreshing scheduled image checks", ExecutionMode: tasks.ExecutionModeParallel, Inputs: inputs}, true, nil
+	return tasks.CreateBatchInput{
+		Type:          taskType,
+		OperationID:   operationID,
+		TriggerType:   "scheduler",
+		Summary:       batchSummary,
+		ExecutionMode: tasks.ExecutionModeParallel,
+		Inputs:        inputs,
+	}, true, nil
+}
+
+func (s *Service) RunImageUnusedCleanupTask(tc tasks.TaskContext) error {
+	ctx, task := tc.Context, tc.Task
+	serverID := firstNonEmpty(task.ServerID, task.ResourceID)
+	if serverID == "" {
+		return panelerr.Validation("server_required", "Server is required")
+	}
+	if err := s.tasks.Start(ctx, task.ID); err != nil {
+		return err
+	}
+	s.runImageUnusedCleanup(s.tasks.ExecutionContext(task.ID), task, serverID)
+	return nil
+}
+
+func (s *Service) runImageUnusedCleanup(ctx context.Context, task tasks.Task, serverID string) {
+	defer s.tasks.FinishExecution(task.ID)
+	if err := ctx.Err(); err != nil {
+		return
+	}
+	if err := s.deleteUnusedImages(ctx, serverID, unusedImageRetention); err != nil {
+		_ = s.tasks.Fail(ctx, task.ID, err)
+		return
+	}
+	if _, err := s.RefreshImages(context.WithoutCancel(ctx), serverID, "scheduler", ""); err != nil {
+		// Deletes already succeeded; a concurrent refresh must not fail the cleanup.
+		logging.From(ctx).Warn("image unused cleanup refresh skipped", zap.String("server_id", serverID), zap.Error(err))
+	}
+	_ = s.tasks.Complete(ctx, task.ID, "Unused images older than 7 days cleaned")
 }
 
 func (s *Service) runSimpleRefreshTask(ctx context.Context, task tasks.Task, serverID, completedSummary string, refresh func(context.Context, string) error) error {

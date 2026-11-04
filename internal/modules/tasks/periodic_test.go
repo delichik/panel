@@ -6,6 +6,40 @@ import (
 	"time"
 )
 
+func TestNextDailyAtWaitsForNextWallClock(t *testing.T) {
+	loc := time.FixedZone("test", 8*3600)
+	now := time.Date(2026, 11, 4, 2, 30, 0, 0, loc)
+	got := nextDailyAt(now, 3, 0, loc)
+	want := time.Date(2026, 11, 4, 3, 0, 0, 0, loc)
+	if !got.Equal(want) {
+		t.Fatalf("before target: got %v want %v", got, want)
+	}
+
+	now = time.Date(2026, 11, 4, 3, 0, 0, 0, loc)
+	got = nextDailyAt(now, 3, 0, loc)
+	want = time.Date(2026, 11, 5, 3, 0, 0, 0, loc)
+	if !got.Equal(want) {
+		t.Fatalf("at target: got %v want %v", got, want)
+	}
+
+	now = time.Date(2026, 11, 4, 15, 0, 0, 0, loc)
+	got = nextDailyAt(now, 3, 0, loc)
+	want = time.Date(2026, 11, 5, 3, 0, 0, 0, loc)
+	if !got.Equal(want) {
+		t.Fatalf("after target: got %v want %v", got, want)
+	}
+}
+
+func TestStartDailyAtLoopRejectsInvalidClock(t *testing.T) {
+	svc := newTestService(t)
+	if loop := StartDailyAtLoop(context.Background(), svc, "daily_invalid", 24, 0, time.UTC, "test"); loop != nil {
+		t.Fatal("hour 24 must be rejected")
+	}
+	if loop := StartDailyAtLoop(context.Background(), svc, "daily_invalid", 3, 60, time.UTC, "test"); loop != nil {
+		t.Fatal("minute 60 must be rejected")
+	}
+}
+
 func TestTriggerSchedulerOnceSkipsWhenCollectInputsFalse(t *testing.T) {
 	svc := newTestService(t)
 	def := Definition{

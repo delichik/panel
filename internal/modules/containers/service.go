@@ -29,12 +29,17 @@ import (
 
 const (
 	TaskImageRefresh         = "image_refresh"
+	TaskImageUnusedCleanup   = "image_unused_cleanup"
 	TaskImageUpgradeMany     = "application_image_upgrade_selected"
 	TaskImageUpgradeAll      = "application_image_upgrade_all"
 	TaskVolumeRefresh        = "volume_refresh"
 	TaskNetworkRefresh       = "network_refresh"
 	TaskApplicationReconcile = "application_reconcile"
 )
+
+// unusedImageRetention is the minimum age of currently-unused images removed by
+// the daily image_unused_cleanup scheduler. Manual delete-unused keeps minAge=0.
+const unusedImageRetention = 7 * 24 * time.Hour
 
 const (
 	applicationReconcileMaxBackoff           = 10 * time.Minute
@@ -622,11 +627,21 @@ func (s *Service) DeleteImage(ctx context.Context, serverID, imageID string) (Op
 }
 
 func (s *Service) DeleteUnusedImages(ctx context.Context, serverID string) (OperationResult, error) {
-	srv, baseURL, err := s.readyServer(ctx, serverID)
-	if err != nil {
+	if err := s.deleteUnusedImages(ctx, serverID, 0); err != nil {
 		return OperationResult{}, err
 	}
-	if err := s.Execute(ctx, serverID, func(runCtx context.Context) error {
+	return s.refreshOperationResult(ctx, serverID, "images")
+}
+
+// deleteUnusedImages removes images that are not referenced by any live container.
+// When minAge > 0, only images with a known Created timestamp older than minAge
+// are removed (Created<=0 is retained). minAge=0 matches the manual delete-unused API.
+func (s *Service) deleteUnusedImages(ctx context.Context, serverID string, minAge time.Duration) error {
+	srv, baseURL, err := s.readyServer(ctx, serverID)
+	if err != nil {
+		return err
+	}
+	return s.Execute(ctx, serverID, func(runCtx context.Context) error {
 		images, err := s.agent.DockerImages(runCtx, baseURL)
 		if err != nil {
 			_ = s.handleAgentError(runCtx, srv, err)
@@ -641,12 +656,19 @@ func (s *Service) DeleteUnusedImages(ctx context.Context, serverID string) (Oper
 		for _, container := range containers {
 			inUse[container.ImageID] = true
 		}
+		cutoff := time.Time{}
+		if minAge > 0 {
+			cutoff = time.Now().Add(-minAge)
+		}
 		var failures []string
 		for _, image := range images {
 			if image.ID == "" {
 				continue
 			}
 			if inUse[image.ID] {
+				continue
+			}
+			if minAge > 0 && !imageCreatedBefore(image, cutoff) {
 				continue
 			}
 			if err := s.agent.DockerImageDelete(runCtx, baseURL, image.ID); err != nil {
@@ -658,10 +680,16 @@ func (s *Service) DeleteUnusedImages(ctx context.Context, serverID string) (Oper
 			return errors.New(strings.Join(failures, "; "))
 		}
 		return nil
-	}); err != nil {
-		return OperationResult{}, err
+	})
+}
+
+// imageCreatedBefore reports whether image.Created (unix seconds) is strictly before cutoff.
+// Unknown or zero Created values are treated as not older, so age-based cleanup keeps them.
+func imageCreatedBefore(image agentcontract.DockerImage, cutoff time.Time) bool {
+	if image.Created <= 0 || cutoff.IsZero() {
+		return false
 	}
-	return s.refreshOperationResult(ctx, serverID, "images")
+	return time.Unix(image.Created, 0).UTC().Before(cutoff.UTC())
 }
 
 // resourceRefreshStatus 从活跃刷新任务推导 refreshing/refreshTaskId，并从最新刷新任务推导 lastRefreshError。

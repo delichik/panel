@@ -624,12 +624,12 @@ Run HTTP 面是 `/api/v1/executions*`；诊断读面是 `/api/v1/events*` 与 `/
 
 ### TASK-PER-001 周期 collector 决策
 
-- **前置**：Definition.Periodic 仅指定 CollectInputs；各模块通过 `StartPeriodic`/`StartSchedulerLoop` 自管 cadence。
-- **动作**：模块 scheduler 首个 interval tick 或 TriggerPeriodicNow。
-- **结果**：`shouldRun=false` 不创建 task/log；true 将 collector 输出交 Manager；启动后首轮延迟至第一个 tick，不在重启瞬间齐发。
+- **前置**：Definition.Periodic 仅指定 CollectInputs；各模块通过 `StartPeriodic`/`StartSchedulerLoop`/`StartDailyAtLoop` 自管 cadence。
+- **动作**：模块 scheduler 首个 interval tick、墙钟 daily-at 时刻或 TriggerPeriodicNow。
+- **结果**：`shouldRun=false` 不创建 task/log；true 将 collector 输出交 Manager；启动后首轮延迟至第一个 tick 或下一次墙钟时刻，不在重启瞬间齐发。
 - **失败**：Execute 不得重新扫描本轮资源列表；collector-only definition 可无 Execute。
-- **不变量**：周期间隔由模块 SchedulerLoop 拥有，不再挂在 Periodic.Interval / NewIntervalCollector；Panel 关闭时取消共享 periodic context。
-- **验证**：periodic false/collector-only/scheduler-loop tests。
+- **不变量**：周期节奏由模块 SchedulerLoop / DailyAtLoop 拥有，不再挂在 Periodic.Interval / NewIntervalCollector；Panel 关闭时取消共享 periodic context。
+- **验证**：periodic false/collector-only/scheduler-loop/`nextDailyAt` tests。
 
 ### TASK-PER-002 立即触发 payload
 
