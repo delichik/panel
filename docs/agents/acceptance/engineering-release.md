@@ -45,6 +45,7 @@
 - `ENG-BUILD-007`：从源码构建的默认 `runtime` target 与 CI 使用预构建 artifact 的 `runtime-from-artifacts` target 产物布局和运行行为一致。
 - `ENG-BUILD-008`：镜像必须包含 Alpine `tailscale` 包提供的 `tailscale` 与 `tailscaled` 可执行文件，并位于 panel-init 的默认探测路径（`PANEL_INIT_TAILSCALE_PATH`、`PANEL_INIT_TAILSCALED_PATH` 可覆盖，显式置空表示有意关闭容器内 Tailscale 管理）。镜像不得内置 tailnet 认证密钥、已登录的节点身份或状态文件；`panel-init` 不得把认证密钥写入镜像、命令行参数或日志。容器内 tailscaled 生命周期见 `TS-INIT-001..007`。
 - `ENG-BUILD-009`：镜像构建必须用 `panel-init` 下发的完整监督参数集（`--maintenance-mode`、`--init-control-socket`、`--init-control-token`，附加 `--help` 只触发参数解析）对目标架构 Panel 二进制执行冒烟；任一参数未被接受时构建必须失败，不得产出镜像。源码构建的 `runtime` 与 CI 的 `runtime-from-artifacts` 两个 target 必须一致执行，见 `TS-INIT-005`。
+- `ENG-BUILD-010`：`go.mod` 必须声明 `godebug multipathtcp=0`，使 Panel、panel-init、panel-agent 在 Linux 上默认不以 MPTCP 监听（应对 CVE-2026-98432；本产品不使用 MPTCP）。托管节点上的主机级 sysctl 缓解由 Agent 部署动作安装（见 `AGT-DEP-007`），不由 `panel-init` 改写宿主/容器 sysctl。该应用层缓解不替代宿主内核安全更新。
 
 ## 4. 版本生成
 

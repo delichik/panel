@@ -67,6 +67,8 @@ const defaultAgentPort = 9786
 const agentRemoteBinaryPath = "/usr/local/bin/panel-agent"
 const agentRemoteConfigDir = "/etc/panel-agent"
 const agentRemoteServicePath = "/etc/systemd/system/panel-agent.service"
+// agentRemoteMPTCPSysctlPath persists CVE-2026-98432 mitigations across reboot.
+const agentRemoteMPTCPSysctlPath = "/etc/sysctl.d/99-panel-mptcp-mitigation.conf"
 
 // agentBundleRoot is the fixed panel-agent bundle location. It is a var only
 // so tests can point it at a temporary directory; it is not configurable.
@@ -1168,6 +1170,28 @@ func agentEnvFile(bundle AgentCertificateBundle) string {
 	}, "\n") + "\n"
 }
 
+// agentMPTCPMitigationSysctl is the persistent sysctl drop-in applied during
+// agent deploy. It shrinks the public CVE-2026-98432 exploit surface; it does
+// not replace a patched kernel.
+func agentMPTCPMitigationSysctl() string {
+	return "net.mptcp.enabled = 0\nnet.ipv4.tcp_migrate_req = 0\n"
+}
+
+// agentApplyMPTCPMitigationScript applies the mitigation immediately. Missing
+// keys (kernels without MPTCP) must not fail the deploy.
+func agentApplyMPTCPMitigationScript() string {
+	return strings.Join([]string{
+		`# CVE-2026-98432 mitigation: disable MPTCP and TCP request migration.`,
+		`if command -v sysctl >/dev/null 2>&1; then`,
+		`  sysctl -w net.mptcp.enabled=0 >/dev/null 2>&1 || true`,
+		`  sysctl -w net.ipv4.tcp_migrate_req=0 >/dev/null 2>&1 || true`,
+		`else`,
+		`  [ -w /proc/sys/net/mptcp/enabled ] && echo 0 > /proc/sys/net/mptcp/enabled || true`,
+		`  [ -w /proc/sys/net/ipv4/tcp_migrate_req ] && echo 0 > /proc/sys/net/ipv4/tcp_migrate_req || true`,
+		`fi`,
+	}, "\n")
+}
+
 func agentSystemdUnit() string {
 	return `[Unit]
 Description=Panel Agent
@@ -1206,6 +1230,7 @@ func agentRestartScript() string {
 func agentServiceStartScript() string {
 	port := strconv.Itoa(defaultAgentPort)
 	return strings.Join([]string{
+		agentApplyMPTCPMitigationScript(),
 		"systemctl daemon-reload",
 		`if ! systemctl enable panel-agent.service; then`,
 		`  echo "[panel] failed to enable panel-agent.service" >&2`,

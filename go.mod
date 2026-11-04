@@ -2,6 +2,10 @@ module panel
 
 go 1.25.0
 
+// CVE-2026-98432: Go 1.24+ enables MPTCP on Linux listen sockets by default.
+// This project does not use MPTCP; keep it off in all built binaries.
+godebug multipathtcp=0
+
 require (
 	go.uber.org/zap v1.28.0
 	golang.org/x/crypto v0.52.0

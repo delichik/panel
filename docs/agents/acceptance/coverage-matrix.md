@@ -96,6 +96,8 @@
 
 - Docker 成为 Agent 部署的第二个环境前提：新增 `internal/modules/servers/agent_docker.go`（默认本机 socket 下探测缺失则安装 `docker.io`、启用服务并在固定窗口内等待就绪；自定义 Docker host 完全跳过；失败以 `agent_docker_failed` 结束），`runDeployAgent` 在防火墙步骤之后、签发与投递之前对完整安装与仅重启两条分支执行；`remoteops` 新增 `DockerStatusScript`/`ParseDockerStatus`，后端新增 `agent_docker_failed` 中文翻译。无新增路由、数据库结构、表或后台任务；主 Panel `method/path` 计数不变。对应 `AGT-DKR-001..004`。
 
+- CVE-2026-98432 / MPTCP 缓解（2026-11-04）：`go.mod` 增加 `godebug multipathtcp=0`；由 Agent 部署动作写入 `/etc/sysctl.d/99-panel-mptcp-mitigation.conf`，并在完整安装与仅重启路径启动前尽力 `sysctl -w net.mptcp.enabled=0` / `net.ipv4.tcp_migrate_req=0`。无新增路由、表、列或后台任务；主 Panel `method/path` 计数不变。对应 `AGT-DEP-007`、`ENG-BUILD-010`、`SRV-EVD-006`。
+
 - 新增 GET `/facility-apps/reverse-proxy/diagnostics?serverId=`，配置 DTO 增加逐节点 deployments；对应 `FAC-RP-012/013`、`UI-FAC-012`。失败运行日志复用 errorDetail，按 ID/时间范围限量读取并降级，不新增 Agent RPC 字段、表或后台任务；对应 `ORCH-CTRL-008`。
 
 - 破局人工核实 uncertainty 成功/失败后调用与自动收敛相同的 OnSucceeded/OnFailed 钩子（仍不伪造 observed）；自动证据超时失败同样走 OnFailed。对应 `ORCH-CTRL-009`、`ORCH-LEASE-005`。

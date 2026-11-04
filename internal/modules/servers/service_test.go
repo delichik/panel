@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1806,6 +1807,8 @@ func TestAgentBundleInstallScriptDecompressesVerifiesAndStarts(t *testing.T) {
 		"systemctl stop panel-agent.service",
 		"pkill -x panel-agent",
 		"pkill -f '^/usr/local/bin/panel-agent($| )'",
+		"sysctl -w net.mptcp.enabled=0",
+		"sysctl -w net.ipv4.tcp_migrate_req=0",
 		"journalctl -u panel-agent.service -n 80 --no-pager",
 		"ss -ltnp 'sport = :9786'",
 		"for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do",
@@ -1814,6 +1817,40 @@ func TestAgentBundleInstallScriptDecompressesVerifiesAndStarts(t *testing.T) {
 		if !strings.Contains(script, want) {
 			t.Fatalf("expected install script to contain %q, got:\n%s", want, script)
 		}
+	}
+}
+
+func TestAgentMPTCPMitigationSysctlContent(t *testing.T) {
+	content := agentMPTCPMitigationSysctl()
+	for _, want := range []string{
+		"net.mptcp.enabled = 0",
+		"net.ipv4.tcp_migrate_req = 0",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected sysctl drop-in to contain %q, got:\n%s", want, content)
+		}
+	}
+	if agentRemoteMPTCPSysctlPath != "/etc/sysctl.d/99-panel-mptcp-mitigation.conf" {
+		t.Fatalf("unexpected sysctl path %q", agentRemoteMPTCPSysctlPath)
+	}
+	restart := agentRestartScript()
+	if !strings.Contains(restart, "sysctl -w net.mptcp.enabled=0") {
+		t.Fatalf("restart script must apply MPTCP mitigation, got:\n%s", restart)
+	}
+}
+
+func TestGoModDisablesMultipathTCP(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	modPath := filepath.Join(filepath.Dir(file), "..", "..", "..", "go.mod")
+	data, err := os.ReadFile(modPath)
+	if err != nil {
+		t.Fatalf("read go.mod: %v", err)
+	}
+	if !strings.Contains(string(data), "godebug multipathtcp=0") {
+		t.Fatalf("go.mod must declare godebug multipathtcp=0 for CVE-2026-98432 mitigation")
 	}
 }
 

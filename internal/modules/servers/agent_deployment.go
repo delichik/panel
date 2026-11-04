@@ -374,6 +374,7 @@ func (s *Service) runDeployAgent(ctx context.Context, taskID string, srv Server)
 		{agentRemoteConfigDir + "/server-key.pem", []byte(bundle.PrivateKey), "0600"},
 		{agentRemoteConfigDir + "/panel-agent.env", []byte(agentEnvFile(bundle)), "0600"},
 		{agentRemoteServicePath, []byte(agentSystemdUnit()), "0644"},
+		{agentRemoteMPTCPSysctlPath, []byte(agentMPTCPMitigationSysctl()), "0644"},
 	}
 	for _, file := range files {
 		if err := runner.WriteFileSudo(ctx, file.path, file.content, file.mode, agentDeployTimeout); err != nil {
