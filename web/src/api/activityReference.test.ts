@@ -3,8 +3,8 @@ import { ApiError } from './client';
 import { activityPath } from './activityReference';
 describe('activity deep links', () => {
   it('prefers eventId for logs and falls back to events for operation or execution', () => {
-    expect(activityPath({ eventId: 'evt-1', operationId: 'op/x' })).toBe('/logs?eventId=evt-1&level=warning%2Cerror');
-    expect(activityPath({ streamId: 's/1', operationId: 'op/x' })).toBe('/logs?eventId=s%2F1&level=warning%2Cerror');
+    expect(activityPath({ eventId: 'evt-1', operationId: 'op/x' })).toBe('/logs?eventId=evt-1&level=info%2Cwarning%2Cerror');
+    expect(activityPath({ streamId: 's/1', operationId: 'op/x' })).toBe('/logs?eventId=s%2F1&level=info%2Cwarning%2Cerror');
     expect(activityPath({ operationId: 'op/x & y', taskId: 'task-1' })).toBe('/events?operationId=op%2Fx+%26+y');
     expect(activityPath({ taskId: 'task-1' })).toBe('/events?executionId=task-1');
   });

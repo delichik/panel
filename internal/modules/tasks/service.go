@@ -391,10 +391,10 @@ func (s *Service) AppendLog(ctx context.Context, taskID, stream, line string) er
 		zap.String("domain", firstNonEmpty(task.ResourceType, "system")),
 	}
 	logger := logging.From(ctx)
-	switch {
-	case stream == "stderr":
+	switch classifyOutputLevel(stream, text, s.isQuietTaskType(task.Type)) {
+	case "error":
 		logger.Error(text, fields...)
-	case s.isQuietTaskType(task.Type):
+	case "debug":
 		logger.Debug(text, fields...)
 	default:
 		logger.Info(text, fields...)

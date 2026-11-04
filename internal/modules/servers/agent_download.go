@@ -156,7 +156,7 @@ func agentBundleFetchScript(downloadURL, archivePath string, settings AgentDeliv
 		// 33: the server ignored the range request and refused to resume. Start
 		// over rather than treating a cache that cannot resume as a data error.
 		`  if [ "$status" -eq 33 ]; then`,
-		`    echo "[panel] panel_agent_download_resume_unsupported fetcher=$fetcher" >&2`,
+		`    echo "[panel] panel_agent_download_resume_unsupported fetcher=$fetcher"`,
 		`    rm -f "$archive"`,
 		`    status=0`,
 		`    continue`,
@@ -165,7 +165,7 @@ func agentBundleFetchScript(downloadURL, archivePath string, settings AgentDeliv
 		// a connection that produced nothing also keeps it empty, which is what
 		// the classification below relies on.
 		`  if [ "$round" -lt ` + strconv.Itoa(agentDownloadRounds) + ` ]; then`,
-		`    echo "[panel] panel_agent_download_retry round=$round fetcher=$fetcher status=$status" >&2`,
+		`    echo "[panel] panel_agent_download_retry round=$round fetcher=$fetcher status=$status"`,
 		`    sleep ` + strconv.Itoa(int(agentDownloadRetryDelay/time.Second)),
 		`    continue`,
 		`  fi`,
@@ -195,7 +195,8 @@ func agentBundleFetchScript(downloadURL, archivePath string, settings AgentDeliv
 		`  rm -f "$archive"`,
 		`  exit ` + strconv.Itoa(agentFetchExitTruncated),
 		`fi`,
-		`echo "[panel] panel_agent_download_ok fetcher=$fetcher rounds=$round bytes=$(wc -c < "$archive" | tr -d ' ')" >&2`,
+		// Progress/success markers go to stdout so AppendLog keeps them off error.
+		`echo "[panel] panel_agent_download_ok fetcher=$fetcher rounds=$round bytes=$(wc -c < "$archive" | tr -d ' ')"`,
 	}, "\n")
 }
 
@@ -220,7 +221,7 @@ const agentFetcherSetupTimeout = 5 * time.Minute
 func agentFetcherSetupScript() string {
 	return strings.Join([]string{
 		strings.TrimRight(remoteops.APTInstallPrelude(agentFetcherAPTTimeoutSeconds), "\n"),
-		`echo "[panel] panel_agent_fetcher installing curl" >&2`,
+		`echo "[panel] panel_agent_fetcher installing curl"`,
 		`if ! apt_get update; then`,
 		`  echo "[panel] panel_agent_fetcher missing reason=apt_update_failed" >&2`,
 		`  exit 1`,
@@ -233,7 +234,7 @@ func agentFetcherSetupScript() string {
 		`  echo "[panel] panel_agent_fetcher missing reason=install_no_effect" >&2`,
 		`  exit 1`,
 		`fi`,
-		`echo "[panel] panel_agent_fetcher ready fetcher=curl installed=yes" >&2`,
+		`echo "[panel] panel_agent_fetcher ready fetcher=curl installed=yes"`,
 	}, "\n")
 }
 

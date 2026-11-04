@@ -26,7 +26,7 @@ const router = useRouter();
 const notifyError = useErrorToast();
 const read = (key: string) => typeof route.query[key] === 'string' ? route.query[key] as string : '';
 const eventId = computed(() => read('eventId') || read('streamId'));
-const lineLevel = computed(() => read('level') || 'warning,error');
+const lineLevel = computed(() => read('level') || 'info,warning,error');
 const lines = ref<LogLine[]>([]);
 const eventMeta = ref<Event | null>(null);
 const loading = ref(false);
@@ -38,9 +38,9 @@ let resolveTimer: ReturnType<typeof setTimeout> | undefined;
 let levelBootstrapped = false;
 
 const levelOptions = computed(() => [
-  { value: '', label: t('logsPage.filter.diagnoseLevels') },
+  { value: '', label: t('activity.filter.defaultLevels') },
+  { value: 'warning,error', label: t('logsPage.filter.diagnoseLevels') },
   { value: 'error', label: t('activity.level.error') },
-  { value: 'info,warning,error', label: t('activity.filter.defaultLevels') },
   { value: 'debug,info,warning,error', label: t('activity.filter.allLevels') },
 ]);
 const columns = computed(() => [
@@ -162,7 +162,7 @@ watch(() => read('after'), () => {
 });
 onMounted(() => {
   if (!read('level')) {
-    updateQuery({ level: 'warning,error' }, false);
+    updateQuery({ level: 'info,warning,error' }, false);
   } else {
     levelBootstrapped = true;
   }

@@ -4,6 +4,8 @@
 
 ## 当前状态
 
+- 本轮事件/任务摘要词典补齐：新增过程事件与 Agent 部署相关前缀（`Deploy `/`Entered monitor`/`Panel agent deployed`/`Execution evidence` 等）；列表与详情的 summary 也走 `translateEventSummary`。debug 进度默认不落 JSONL（进程日志级别为 info）。en / zh-CN 已同步。
+- 本轮日志默认含 info：排障默认 `info,warning,error`；`logsPage.filter.diagnoseLevels` 改为「仅警告和错误」；en / zh-CN 已同步。
 - 本轮过程事件可读性：新增 `eventsPage.viewOperationLogs` / `viewExecutionLogs`、`applicationsPage.monitorReason` / `evidenceDeadline`；en / zh-CN 已同步。
 - 本轮设置页清空事件与日志：新增 `settingsPage.clearEventsLogs` / `clearEventsLogsHint` / `clearEventsLogsSucceeded` 与确认 `settingsPage.confirm.clear-events-logs.title|description|impact|checkbox`；en / zh-CN 已同步。
 - 本轮应用节点三态：新增 `applicationsPage.nodeHealthColumn` / `nodeBucket.healthy|abnormal|deploying` / `nodeBucketHealthyLabel|AbnormalLabel|DeployingLabel` / `reconcileStoppedHint`；en / zh-CN 已同步。
@@ -82,7 +84,6 @@
 - 本轮新增 Panel HTTPS 域名、证书选择及内置自签名证书的 en / zh-CN 词条。
 - 本轮入口代理 DNS 区新增来源标注、重试与覆盖接管词条（`applicationsPage.dnsSyncSource.*`、`dnsSyncRetry*`、`dnsSyncTakeover*`、`confirm.dnsTakeover.*`），en / zh-CN 已同步；后端新增 `facility_dns_sync_unavailable`、`facility_dns_sync_domains_required`、`facility_dns_takeover_confirmation_required` 错误码中文翻译。
 - 前端摘要词典（`taskSummaryTranslations`）：新增 "Syncing storage share exports"、"Collecting initial server information"、"Refreshing volumes/networks"、"Volumes/Networks refreshed"、"Image updates refreshed"、"Syncing application <name>" 前缀与 "Running <type> batch" 前缀；删除已无发射点的 "Collecting scheduled metrics" / "Collecting metrics for " 词条。`translateEventSummary` 在事件词典未命中时回退到任务摘要词典，任务类事件摘要（续签证书、刷新软件包等）在 zh-CN 下不再显示英文。
-
 - 每日未使用镜像清理任务摘要：新增 "Cleaning unused images older than 7 days"、"Cleaning scheduled unused images"、"Unused images older than 7 days cleaned"；en 存库、zh-CN 经 `taskSummaryTranslations` 展示。
 
 ## 已知剩余未翻译项

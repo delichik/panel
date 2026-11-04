@@ -33,7 +33,7 @@ const eventMeta: Event = {
 let wrapper: VueWrapper | undefined;
 let router: Router;
 
-async function render(url = '/logs?eventId=first&from=2026-09-14T00:00:00Z&level=warning,error') {
+async function render(url = '/logs?eventId=first&from=2026-09-14T00:00:00Z&level=info,warning,error') {
   router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/logs', component: LogsPage }] });
   await router.push(url);
   await router.isReady();
@@ -75,7 +75,7 @@ afterEach(() => {
 describe('logs line list', () => {
   it('loads lines for eventId with diagnose levels', async () => {
     const view = await render();
-    expect(logsApi.list).toHaveBeenCalledWith(expect.objectContaining({ eventId: 'first', level: 'warning,error' }));
+    expect(logsApi.list).toHaveBeenCalledWith(expect.objectContaining({ eventId: 'first', level: 'info,warning,error' }));
     expect(view.text()).toContain('first');
     await button('Refresh').trigger('click');
     await flushPromises();

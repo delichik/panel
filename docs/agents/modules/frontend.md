@@ -139,8 +139,8 @@
 导航两项：`/events`（进程行）、`/logs`（JSONL 行）。旧 `/operations`、`/tasks`、`/activity` 仅重定向。产品读 API 为 `/api/v1/events*` 与 `/api/v1/logs?eventId=`（`web/src/api/events.ts`、`web/src/types/events.ts`；legacy client 可保留 `log-contexts` 别名）。`web/src/api/activity.ts` 已退役并抛错；`ActivityReceipt` 类型仍保留在 `web/src/types/activity.ts`。
 
 - 进程事件页：`IntentRecordsPage` + `TableDetailLayout`；列表 `GET /events`，显示时间/模块/级别/状态/标题；详情只保留摘要字段与「查看日志」，不渲染 execution steps/时间线/证据。
-- 「查看日志」与 Toast/`ActivityLink` 进入 `/logs`，默认 `level=warning,error`，并可带 `streamId`/`operationId`/`executionId`。
-- `/logs` 为 `ListPage` + Dialog：列表展示 log contexts（时间、状态、来源、标题）；Dialog 按 `streamId` 加载 `/lines`（默认 warning,error），结构化错误分开展示 errorCode/error/detail。不调用旧 activity context/evidence/tail/summary。
+- 「查看日志」与 Toast/`ActivityLink` 进入 `/logs`，默认 `level=info,warning,error`，并可带 `streamId`/`operationId`/`executionId`。
+- `/logs` 为 `ListPage` + Dialog：列表展示 log contexts（时间、状态、来源、标题）；Dialog 按 `streamId` 加载 `/lines`（默认 info,warning,error），结构化错误分开展示 errorCode/error/detail。不调用旧 activity context/evidence/tail/summary。
 - 列表按需读取、cursor 分页、迟到响应隔离；不接入自动刷新与统计横幅。
 - 服务器 Agent 卡片历史输出走 `GET /executions/{id}/logs`；完整排障跳 `/logs`。
 

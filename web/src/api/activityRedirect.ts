@@ -30,7 +30,7 @@ export function resolveActivityRedirect(query: LocationQuery): { path: string; q
     return { path: '/events', query: next };
   }
   if (!next.level && next.eventId) {
-    next.level = 'warning,error';
+    next.level = 'info,warning,error';
   }
   if (next.eventId) {
     return { path: '/logs', query: next };

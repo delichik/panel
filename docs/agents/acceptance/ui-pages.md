@@ -128,7 +128,7 @@
 | UI-APP-005 | 行内停用应用 | enabled 时可点，先 danger 确认后调用 stop；成功只提示请求接受并刷新 | 已停用禁用；失败保持应用状态 | 取消无请求，成功后状态来自重载而非前端假改 |
 | UI-APP-006 | 行内检查并更新镜像 | 仅 `imageUpdateAvailable` 时启用；提交 update 并按两阶段反馈 | 无更新时不请求 | 返回 ID 的 toast 正确，刷新后徽标由后端决定 |
 | UI-APP-007 | 点击行内“容器日志” | 打开 Dialog 并加载该应用实例；按服务器名/容器名选择目标，单个可读实例自动加载，多个等待选择；请求携带 instanceId、tail=240，正文内部滚动并支持手动刷新/刷新实例列表 | 已退出但存在的容器仍可选；无实例、不可读、空日志和读取失败分开；失败 toast 加就地重试；切换实例/应用/关闭时取消旧请求且迟到结果不串日志 | 只请求选中实例，不通过任务或协调记录代替容器日志；不定时轮询，长日志不撑开页面 |
-| UI-APP-008 | 打开协调记录 | 携带当前 application / facility resource filter 跳 `/events`；已有 operationId 时打开对应事件详情；节点 operation 若有 `executionId` 一并带入以便打开执行证据过程；诊断输出经「查看日志」进 `/logs?eventId=`（默认 `level=warning,error`）；监控态展示 `monitorReasonCode` 与证据/宽限截止（若 API 返回） | 不从全局相邻事件猜测因果，不直接展示原始 ID 作为用户标题 | 目标页面筛选与当前应用对应，本次部署入口定位同一 operation，并可跳到配对 execution 日志 |
+| UI-APP-008 | 打开协调记录 | 携带当前 application / facility resource filter 跳 `/events`；已有 operationId 时打开对应事件详情；节点 operation 若有 `executionId` 一并带入以便打开执行证据过程；诊断输出经「查看日志」进 `/logs?eventId=`（默认 `level=info,warning,error`）；监控态展示 `monitorReasonCode` 与证据/宽限截止（若 API 返回） | 不从全局相邻事件猜测因果，不直接展示原始 ID 作为用户标题 | 目标页面筛选与当前应用对应，本次部署入口定位同一 operation，并可跳到配对 execution 日志 |
 | UI-APP-009 | 行内删除应用 | 普通应用显示影响说明并 danger 确认；存在持久化配置/历史位置时先补载完整详情，使用 danger 强制勾选确认，明确说明将永久删除所有已记录节点的数据，并向后端传确认参数 | 取消零请求；未确认或清理失败不移除对象；补载详情失败不进入确认 | 持久化删除只有勾选后发出，成功后重载列表并关闭覆盖详情 |
 | UI-APP-010 | 下载持久化数据（详情上下文面板） | 展示历史数据节点选择器；单节点自动选择，多节点要求用户选择，携带 serverId 走授权 blob 下载 | 无记录位置或未选择节点时禁用；下载失败不生成损坏文件 | 未 apply 与已移除部署节点的数据均可按节点下载，按钮有单独 loading |
 | UI-APP-011 | 选择 zip 恢复持久化数据 | 文件选择后必须经 danger+强制勾选确认，再 multipart restore | 取消选择/确认不上传；没有 persistentPath 禁用 | 仅确认后发一笔请求，反馈只承诺已接受 |
@@ -139,7 +139,7 @@
 - **动作**：看 AppDB **过程**行（一件事：如部署 Agent、一次执行），含 state/module/level、失败摘要，并跳到 JSONL 日志定位原因。
 - **结果**（排障路径必须短）：
   1. 列表只展示真正的过程，不得把瞬时诊断（如 `agent.connected` / `agent.disconnected`、stream timeout）当作事件行。列表主列必须同时可读 **title + summary + state**（summary 不得被裁空或只显示 module）；详情保留状态、summary、模块/来源/时间、`operationId`/`executionId`，以及「查看日志」；不得展示 event executor 的 steps 树、时间线、上下文或证据下载。过程行文案须符合 `ENG-EVT-010`。
-  2. 「查看日志」优先当前行 `eventId` 进入 `/logs?eventId=`，默认带 `level=warning,error`。若同行同时有配对的 intent 过程与 execution 证据过程，详情须提供第二入口（协调过程日志 / 执行证据日志）。仅有 `operationId`/`executionId` 时先在 `/events` 解析或筛选。
+  2. 「查看日志」优先当前行 `eventId` 进入 `/logs?eventId=`，默认带 `level=info,warning,error`（里程碑 info 可见；进度噪声应为 debug）。若同行同时有配对的 intent 过程与 execution 证据过程，详情须提供第二入口（协调过程日志 / 执行证据日志）。仅有 `operationId`/`executionId` 时先在 `/events` 解析或筛选。
   3. 应用协调入口进 `/events`；节点 operation 深链须带齐 `operationId` 与可用的 `executionId`（`UI-APP-008`）。
   4. 产品读 API 为 `/api/v1/events*`（legacy `/api/v1/log-contexts*` 仍可用）；不得再调用已停注册的 `/api/v1/activity/*`。
 - **失败**：不得用 trigger reason 冒充失败摘要；不得把机器枚举码当作用户标题。
@@ -162,7 +162,7 @@
 
 - **前置**：认证用户进入 `/events` 或 `/logs`，URL 可能带完整查询条件，也可能缺少 `from`（events）或 `eventId`（logs）。
 - **动作**：页面首次挂载。
-- **结果**：`/events` 缺少 `from` 时使用最近 24 小时并写回 URL；`/logs` 缺省 `level` 使用 `warning,error`（可写回 URL），无 `eventId` 时直接加载全局日志行。
+- **结果**：`/events` 缺少 `from` 时使用最近 24 小时并写回 URL；`/logs` 缺省 `level` 使用 `info,warning,error`（可写回 URL），无 `eventId` 时直接加载全局日志行。
 - **失败**：默认时间写回不得替代、延迟或重复首次列表请求；失败保留错误空态、toast 和重试入口。
 - **不变量**：首次列表加载不依赖定时器，不启动轮询。
 - **验证**：logs/events initial-load 覆盖无 `from`、默认诊断等级和显式范围。
@@ -184,7 +184,7 @@
 
 - **前置**：旧书签或深链打开 `/activity`、`/operations` 或 `/tasks`，可能带 `view`、`operationId`、`eventId` 等 query。
 - **动作**：路由解析。
-- **结果**：`/operations`、`/tasks` 重定向到 `/events` 并保留筛选/选中参数；`/activity` 中 `view=operations` 等同；带 `eventId`（或 legacy `streamId`）重定向到 `/logs` 并补 `level=warning,error`；仅 `operationId`/`executionId` 时重定向到 `/events`；其余缺省重定向到 `/logs`。
+- **结果**：`/operations`、`/tasks` 重定向到 `/events` 并保留筛选/选中参数；`/activity` 中 `view=operations` 等同；带 `eventId`（或 legacy `streamId`）重定向到 `/logs` 并补 `level=info,warning,error`；仅 `operationId`/`executionId` 时重定向到 `/events`；其余缺省重定向到 `/logs`。
 - **失败**：不得落到空白页或仍渲染旧双 tab Activity 页。
 - **验证**：`activityRedirect` 单测。
 

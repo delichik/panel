@@ -12,11 +12,11 @@ describe('resolveActivityRedirect', () => {
   it('maps event deep links to logs and streamId to eventId', () => {
     expect(resolveActivityRedirect({ eventId: 'evt-1', from: '2026-01-01T00:00:00Z' })).toEqual({
       path: '/logs',
-      query: { eventId: 'evt-1', from: '2026-01-01T00:00:00Z', level: 'warning,error' },
+      query: { eventId: 'evt-1', from: '2026-01-01T00:00:00Z', level: 'info,warning,error' },
     });
     expect(resolveActivityRedirect({ streamId: 'evt-legacy', from: '2026-01-01T00:00:00Z' })).toEqual({
       path: '/logs',
-      query: { eventId: 'evt-legacy', from: '2026-01-01T00:00:00Z', level: 'warning,error' },
+      query: { eventId: 'evt-legacy', from: '2026-01-01T00:00:00Z', level: 'info,warning,error' },
     });
     expect(resolveActivityRedirect({ view: 'events', q: 'fail' })).toEqual({
       path: '/logs',

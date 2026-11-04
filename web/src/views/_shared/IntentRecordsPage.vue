@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { Download, Eye, RefreshCcw } from '@lucide/vue';
 import { eventsApi } from '@/api/events';
-import { logsPath } from '@/api/activityReference';
+import { DIAGNOSE_LOG_LEVELS, logsPath } from '@/api/activityReference';
 import { saveBlobDownload } from '@/api/download';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
@@ -125,7 +125,7 @@ function openLogs(item: Event, diagnose = true) {
     eventId: item.id,
     operationId: item.operationId,
     executionId: item.executionId,
-    level: diagnose ? 'warning,error' : undefined,
+    level: diagnose ? DIAGNOSE_LOG_LEVELS : undefined,
     from: read('from') || undefined,
     to: read('to') || undefined,
   }));
@@ -138,7 +138,7 @@ function openPairedLogs(item: Event, kind: 'operation' | 'execution') {
     eventId,
     operationId: item.operationId,
     executionId: item.executionId,
-    level: 'warning,error',
+    level: DIAGNOSE_LOG_LEVELS,
     from: read('from') || undefined,
     to: read('to') || undefined,
   }));
@@ -306,7 +306,7 @@ onBeforeUnmount(() => {
                 v-if="row.summary && row.summary !== row.title"
                 class="mt-1 block max-w-[28rem] truncate text-xs"
                 :class="row.hadError || row.state === 'failed' ? 'text-danger' : 'text-muted-foreground'"
-              >{{ row.summary }}</span>
+              >{{ translateEventSummary(t, row.summary) }}</span>
             </template>
             <template #state="{ row }">
               <Badge :tone="operationTone(row.state)">{{ stateLabel(row.state || (row.finishedAt ? 'ended' : 'running')) }}</Badge>
@@ -360,7 +360,7 @@ onBeforeUnmount(() => {
             v-if="detail.summary"
             class="m-0 break-words rounded-xl border p-3 text-sm"
             :class="detail.hadError || detail.state === 'failed' ? 'border-danger-border bg-danger-bg text-danger' : 'border-border bg-muted text-foreground'"
-          >{{ detail.summary }}</p>
+          >{{ translateEventSummary(t, detail.summary) }}</p>
           <p v-else class="m-0 text-sm text-muted-foreground">{{ t('eventsPage.noFailureSummary') }}</p>
           <dl class="grid gap-2 text-sm sm:grid-cols-2">
             <div><dt class="text-muted-foreground">{{ t('eventsPage.module') }}</dt><dd>{{ detail.module }}</dd></div>

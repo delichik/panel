@@ -67,7 +67,7 @@ export const messages: Record<Locale, Messages> = {
     "logsPage.eventIdOptional": "Optional event ID filter",
     "logsPage.pickEventTitle": "Choose an event",
     "logsPage.pickEventHint": "Enter an event ID or open Events to pick a process, then read its log lines here.",
-    "logsPage.filter.diagnoseLevels": "Warnings and errors (diagnose)",
+    "logsPage.filter.diagnoseLevels": "Warnings and errors only",
     "logsPage.errorCode": "Error code",
     "logsPage.error": "Error",
     "logsPage.detail": "Detail",
@@ -1184,7 +1184,7 @@ export const messages: Record<Locale, Messages> = {
     "logsPage.eventIdOptional": "可选：按事件 ID 筛选",
     "logsPage.pickEventTitle": "选择一个事件",
     "logsPage.pickEventHint": "输入事件 ID，或打开「事件」选择进程后在此查看日志行。",
-    "logsPage.filter.diagnoseLevels": "警告和错误（排障）",
+    "logsPage.filter.diagnoseLevels": "仅警告和错误",
     "logsPage.errorCode": "错误码",
     "logsPage.error": "错误",
     "logsPage.detail": "详情",
@@ -3085,6 +3085,7 @@ export function translateRuntimeEventType(t: (key: string, params?: Record<strin
 }
 
 // 后端任务摘要与运行时事件摘要以英文存库，前端按当前语言翻译后展示。
+// 更长的前缀必须排在更短的前面，避免被短词抢先匹配。
 const taskSummaryTranslations: Array<[string, string]> = [
   ['Application target coordination', '应用目标协调'],
   ['Claiming application deployment target', '认领应用部署目标'],
@@ -3098,7 +3099,6 @@ const taskSummaryTranslations: Array<[string, string]> = [
   ['Cleaning unused images older than 7 days', '清理超过 7 天未使用的镜像'],
   ['Cleaning scheduled unused images', '按计划清理未使用镜像'],
   ['Unused images older than 7 days cleaned', '已清理超过 7 天未使用的镜像'],
-
   ['Syncing reverse proxy DNS records', '同步反向代理 DNS 记录'],
   ['Refreshing package updates', '刷新软件包更新'],
   ['Upgrading selected packages', '升级所选软件包'],
@@ -3106,14 +3106,22 @@ const taskSummaryTranslations: Array<[string, string]> = [
   ['Refreshing scheduled packages', '刷新计划软件包'],
   ['Resetting system-managed agent certificate', '重置系统托管的 Agent 证书'],
   ['Deploying panel agent for ', '部署 panel-agent：'],
+  ['Panel agent deployed', 'Panel Agent 已部署'],
+  ['Queued agent deploy', '已排队部署 Agent'],
+  ['Applying Tailscale configuration for ', '应用 Tailscale 配置：'],
   ['Enabling UFW', '启用 UFW'],
   ['Installing UFW', '安装 UFW'],
   ['Restarting server', '重启服务器'],
+  ['Restarting application', '重启应用'],
   ['Collecting system information for ', '收集系统信息：'],
   ['Collecting scheduled system information', '采集计划系统信息'],
   ['Collecting initial server information', '采集服务器初始信息'],
   ['Checking agent for ', '检查 Agent：'],
   ['Checking configured agents', '检查已配置的 Agent'],
+  ['Checking image for ', '检查镜像：'],
+  ['Updating image for ', '更新镜像：'],
+  ['Stopping application ', '停止应用：'],
+  ['Refreshing application ', '刷新应用：'],
   ['Syncing storage share exports', '同步存储共享导出'],
   ['Syncing application ', '同步应用：'],
   ['Refreshing volumes', '刷新卷'],
@@ -3131,6 +3139,44 @@ const eventSummaryTranslations: Array<[string, string]> = [
   ['Application operation created: ', '应用操作已创建：'],
   ['Application operation failed: ', '应用操作失败：'],
   ['Application operation completed: ', '应用操作已完成：'],
+  ['Application planning failed', '应用规划失败'],
+  ['Application planning', '应用规划'],
+  ['Observation rejected', '观测被拒绝'],
+  ['Runtime observation was discarded (stale ownership or conflicting write)', '运行时观测已丢弃（所有权过期或写入冲突）'],
+  ['Manual execution verification', '人工执行核实'],
+  ['Manual execution verified', '人工执行已核实'],
+  ['Manual verification requested', '已请求人工核实'],
+  ['Execution evidence gap', '执行证据缺口'],
+  ['Collecting Agent step reports for execution ', '正在收集 Agent 步骤报告，执行 '],
+  ['Agent acknowledged through seq ', 'Agent 已确认到序号 '],
+  [' but Panel only has through ', '，但 Panel 仅有到 '],
+  ['; retransmission required', '；需要重传'],
+  ['Execution evidence (', '执行证据（'],
+  ['HTTP request accepted', 'HTTP 请求已接受'],
+  ['HTTP request finished with status ', 'HTTP 请求结束，状态 '],
+  ['Entered monitor (', '进入监控（'],
+  ['; last stage ', '；上一阶段 '],
+  ['Claimed job for ', '已认领任务：'],
+  ['Runtime reconcile started (generation ', '运行时协调已开始（世代 '],
+  ['Progress: ', '进度：'],
+  ['Succeeded; observed running', '已成功；观测为运行中'],
+  ['Succeeded; observed ', '已成功；观测为 '],
+  ['Succeeded', '已成功'],
+  ['Retry scheduled (', '已安排重试（'],
+  ['Observation already matched desired; releasing fence for bounded retry (execution evidence incomplete)', '观测已符合期望；释放围栏并有界重试（执行证据不完整）'],
+  ['Evidence window elapsed without a trustworthy Agent result', '证据窗口已过，仍无可信的 Agent 结果'],
+  ['Evidence window elapsed; no execution result resolver is available', '证据窗口已过；没有可用的执行结果解析器'],
+  ['Linked execution to existing deploy job', '已关联到现有部署任务'],
+  ['Deploy requested (trigger ', '已请求部署（触发 '],
+  ['Superseded prior intent ', '已取代先前意图 '],
+  [' with updated desired state', '（期望状态已更新）'],
+  ['Disabled ', '已停用 '],
+  ['Application disabled because it lost its last deployment node', '应用因失去最后一个部署节点而被停用'],
+  ['Step ', '步骤 '],
+  ['Deploy ', '部署 '],
+  ['Stop ', '停止 '],
+  ['Purge ', '清除 '],
+  [' → ', ' → '],
 ];
 
 function translateBackendSummary(
@@ -3159,7 +3205,11 @@ export function translateEventSummary(t: (key: string, params?: Record<string, s
   // 任务类事件的事件摘要直接使用任务 summary（英文），在事件词典未命中时
   // 回退到任务摘要词典，避免 zh-CN 下任务事件摘要显示英文。
   if (translated === summary) translated = translateBackendSummary(t, summary, taskSummaryTranslations);
-  return translated.replace(/ \((\d+)\/(\d+) targets succeeded\)$/, '（$1/$2 个目标成功）');
+  return translated
+    .replace(/ \((\d+)\/(\d+) targets succeeded\)$/, '（$1/$2 个目标成功）')
+    .replace(/ \(attempt (\d+)\)/g, '（第 $1 次尝试）')
+    .replace(/generation (\d+)\)/g, '世代 $1）')
+    .replace(/ \(generation (\d+)\)/g, '（世代 $1）');
 }
 
 

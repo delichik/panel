@@ -20,7 +20,7 @@ function open() {
     executionId: props.executionId,
     resourceType: props.resourceType,
     resourceId: props.resourceId,
-    level: 'warning,error',
+    level: 'info,warning,error',
   }));
 }
 </script>

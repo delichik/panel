@@ -35,7 +35,7 @@
 - 设施应用 API：`web/src/api/facilityApps.ts`
 - 类型：`web/src/types/applications.ts`、`web/src/types/facilityApps.ts`
 - Mock：`web/src/mocks/applications.ts`，由 `web/src/mocks/browser.ts` 挂载同名正式路径。
-- 协调/任务入口：应用详情跳转 `/tasks?resourceType=application&resourceId=<id>`；有 `operationId` 时打开该系统任务。排障日志经「查看日志」进入 `/logs?...&level=warning,error`。历史按不可变事件读取，不从当前 jobs 或 instance observed 反推。
+- 协调/任务入口：应用详情跳转 `/tasks?resourceType=application&resourceId=<id>`；有 `operationId` 时打开该系统任务。排障日志经「查看日志」进入 `/logs?...&level=info,warning,error`。历史按不可变事件读取，不从当前 jobs 或 instance observed 反推。
 
 ## API 范围
 

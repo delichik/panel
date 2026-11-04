@@ -1,3 +1,6 @@
+/** Default /logs level filter for triage: keep info milestones, hide debug noise. */
+export const DIAGNOSE_LOG_LEVELS = 'info,warning,error';
+
 /** Only server-provided correlation IDs may create a history link. Never infer one from a generic resource id. */
 export function activityPath(value: unknown, depth = 0): string | undefined {
   if (!value || typeof value !== 'object' || depth > 3) return;
@@ -9,7 +12,7 @@ export function activityPath(value: unknown, depth = 0): string | undefined {
   const query = new URLSearchParams();
   if (eventId) {
     query.set('eventId', eventId);
-    if (!query.has('level')) query.set('level', 'warning,error');
+    if (!query.has('level')) query.set('level', DIAGNOSE_LOG_LEVELS);
     return `/logs?${query}`;
   }
   if (operationId) query.set('operationId', operationId);

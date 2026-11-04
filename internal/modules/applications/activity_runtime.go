@@ -216,7 +216,7 @@ func (r *serviceRuntimeReconciler) collectExecutionProgress(ctx context.Context,
 			case remote.Status == "unknown" || remote.EventType == "uncertainty.detected":
 				logger.Warn(msg, fields...)
 			case remote.EventType == "output.chunk":
-				// Downsample pull/progress noise: keep status changes and every 20th chunk.
+				// Downsample pull/progress noise to debug: status changes or every 20th chunk.
 				chunkCount++
 				statusKey := strings.TrimSpace(remote.Text)
 				if i := strings.IndexByte(statusKey, ' '); i > 0 {
@@ -224,7 +224,7 @@ func (r *serviceRuntimeReconciler) collectExecutionProgress(ctx context.Context,
 				}
 				if statusKey != lastChunkStatus || chunkCount%20 == 1 {
 					lastChunkStatus = statusKey
-					logger.Info(msg, fields...)
+					logger.Debug(msg, fields...)
 				}
 			default:
 				logger.Info(msg, fields...)
