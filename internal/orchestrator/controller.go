@@ -25,6 +25,12 @@ const defaultMaxJobAttempts = 10
 // Never auto-succeed without Agent proof.
 const defaultUncertaintyEvidenceWindow = 30 * time.Minute
 
+// defaultUncertaintyConvergedRetryGrace is how long resolveUncertain waits after
+// the latest uncertainty updated_at before releasing a converged instance into
+// bounded retry (ORCH-LEASE-004). UpdateProgress refreshes updated_at so in-flight
+// ensure steps reset the grace window.
+const defaultUncertaintyConvergedRetryGrace = 2 * time.Minute
+
 // defaultDispatchWait is how long a worker waits for RuntimeReconcile to finish
 // synchronously before releasing into monitor mode. Agent work continues; Panel
 // settles from durable execution reports (phase-6 dispatch-only).
@@ -58,6 +64,10 @@ type ControllerConfig struct {
 	// error_class=uncertainty while Agent evidence is unavailable or incomplete.
 	// Zero uses defaultUncertaintyEvidenceWindow. Tests may shorten it.
 	UncertaintyEvidenceWindow time.Duration
+	// UncertaintyConvergedRetryGrace caps how long a Job may stay uncertain when
+	// AppDB observation already matches desired but Agent evidence is incomplete.
+	// Zero uses defaultUncertaintyConvergedRetryGrace. Tests may shorten it.
+	UncertaintyConvergedRetryGrace time.Duration
 	// DispatchWait caps how long process() blocks on RuntimeReconcile before
 	// entering monitor mode so the worker can release. Zero uses
 	// defaultDispatchWait. Negative disables dispatch-only (wait until RPC ends).
@@ -115,6 +125,9 @@ func NewController(store *Store, runtime RuntimeReconciler, cfg ControllerConfig
 	}
 	if cfg.UncertaintyEvidenceWindow <= 0 {
 		cfg.UncertaintyEvidenceWindow = defaultUncertaintyEvidenceWindow
+	}
+	if cfg.UncertaintyConvergedRetryGrace <= 0 {
+		cfg.UncertaintyConvergedRetryGrace = defaultUncertaintyConvergedRetryGrace
 	}
 	if strings.TrimSpace(cfg.Owner) == "" {
 		cfg.Owner = "orchestrator-worker"
@@ -254,10 +267,10 @@ func (c *Controller) Start(parent context.Context) error {
 		go c.workerLoop(ctx)
 	}
 	c.mu.Unlock()
-	if external {
-		// Immediate drain; subsequent polls come from the unified worker.
-		_, _ = c.enqueueDue(ctx)
-	} else {
+	// ORCH-LEASE-005: immediately hand uncertainty (and due) Jobs to the pool so
+	// a Panel restart does not wait on the first scan tick alone.
+	_, _ = c.enqueueDue(ctx)
+	if !external {
 		c.Wake()
 	}
 	return nil
@@ -643,6 +656,18 @@ func (c *Controller) resolveUncertain(ctx context.Context, job Job) error {
 		if finished {
 			return c.acceptResponse(ctx, job, response)
 		}
+		// Agent unreachable/unverifiable: keep the fence (ORCH-LEASE-004 failure path).
+		// Only when ResolveExecution returned without transport error may we consider
+		// converged-observation early retry.
+		if err == nil && c.shouldRetryUncertainWhenConverged(ctx, job) {
+			return c.fail(ctx, job, ReconcileResponse{
+				ErrorCode:    "execution_evidence_stale",
+				ErrorClass:   "evidence",
+				ErrorMessage: "execution evidence incomplete while instance observation already matched desired",
+				ErrorDetail:  "releasing fence for bounded retry with a new execution identity",
+				Retryable:    true,
+			})
+		}
 		if !c.uncertaintyEvidenceExpired(job) {
 			return err
 		}
@@ -653,6 +678,15 @@ func (c *Controller) resolveUncertain(ctx context.Context, job Job) error {
 			ErrorMessage: "execution evidence could not be obtained within the verification window",
 			ErrorDetail:  "agent result stayed unavailable or incomplete; remote side effects were not auto-confirmed",
 			Retryable:    false,
+		})
+	}
+	if c.shouldRetryUncertainWhenConverged(ctx, job) {
+		return c.fail(ctx, job, ReconcileResponse{
+			ErrorCode:    "execution_evidence_stale",
+			ErrorClass:   "evidence",
+			ErrorMessage: "execution evidence incomplete while instance observation already matched desired",
+			ErrorDetail:  "releasing fence for bounded retry with a new execution identity",
+			Retryable:    true,
 		})
 	}
 	if !c.uncertaintyEvidenceExpired(job) {
@@ -667,6 +701,17 @@ func (c *Controller) resolveUncertain(ctx context.Context, job Job) error {
 	})
 }
 
+// shouldRetryUncertainWhenConverged is ORCH-LEASE-004(b): AppDB observation already
+// matches desired running, grace since updated_at elapsed, and evidence is not
+// finished. Never Succeeds from observation alone.
+func (c *Controller) shouldRetryUncertainWhenConverged(ctx context.Context, job Job) bool {
+	if !c.uncertaintyConvergedGraceExpired(job) {
+		return false
+	}
+	matched, err := c.store.InstanceObservationMatchesDesired(ctx, job.InstanceID)
+	return err == nil && matched
+}
+
 func (c *Controller) uncertaintyEvidenceExpired(job Job) bool {
 	if job.UpdatedAt.IsZero() {
 		return false
@@ -676,6 +721,17 @@ func (c *Controller) uncertaintyEvidenceExpired(job Job) bool {
 		window = defaultUncertaintyEvidenceWindow
 	}
 	return c.store.now().UTC().Sub(job.UpdatedAt.UTC()) >= window
+}
+
+func (c *Controller) uncertaintyConvergedGraceExpired(job Job) bool {
+	if job.UpdatedAt.IsZero() {
+		return false
+	}
+	grace := c.config.UncertaintyConvergedRetryGrace
+	if grace <= 0 {
+		grace = defaultUncertaintyConvergedRetryGrace
+	}
+	return c.store.now().UTC().Sub(job.UpdatedAt.UTC()) >= grace
 }
 
 func (c *Controller) renewLease(ctx context.Context, job Job) {

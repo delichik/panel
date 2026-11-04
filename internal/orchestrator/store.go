@@ -118,6 +118,34 @@ func (s *Store) InstanceContainerName(ctx context.Context, instanceID string) (s
 	return name, err
 }
 
+// InstanceObservationMatchesDesired reports whether AppDB desired/observed for
+// the instance already agree on a running target (ORCH-LEASE-004 converged retry).
+// Uses only the durable snapshot — never live Agent status.
+func (s *Store) InstanceObservationMatchesDesired(ctx context.Context, instanceID string) (bool, error) {
+	var desiredState, observedState, desiredHash, observedHash string
+	var desiredGeneration, observedGeneration int
+	err := s.db.QueryRowContext(ctx, `SELECT desired_state,COALESCE(observed_state,''),desired_generation,observed_generation,COALESCE(desired_spec_hash,''),COALESCE(observed_spec_hash,'') FROM application_instances WHERE id=?`, strings.TrimSpace(instanceID)).
+		Scan(&desiredState, &observedState, &desiredGeneration, &observedGeneration, &desiredHash, &observedHash)
+	if err != nil {
+		return false, err
+	}
+	desiredState = strings.TrimSpace(desiredState)
+	if desiredState == "" {
+		desiredState = "running"
+	}
+	if desiredState != "running" || strings.TrimSpace(observedState) != "running" {
+		return false, nil
+	}
+	if desiredGeneration > 0 && observedGeneration != desiredGeneration {
+		return false, nil
+	}
+	desiredHash = strings.TrimSpace(desiredHash)
+	if desiredHash != "" && strings.TrimSpace(observedHash) != desiredHash {
+		return false, nil
+	}
+	return true, nil
+}
+
 func (s *Store) DesiredChanged(ctx context.Context, job Job) (bool, error) {
 	var desiredState, specHash, revisionID, desiredSpecJSON string
 	var generation int

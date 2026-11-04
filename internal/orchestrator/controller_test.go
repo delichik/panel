@@ -493,3 +493,169 @@ func TestUncertainExecutionFailsWhenEvidenceWindowExpires(t *testing.T) {
 		t.Fatalf("evidence timeout must not repeat reconcile side effects: calls=%d", runtime.calls)
 	}
 }
+
+func seedUncertainApplyJob(t *testing.T, db *sql.DB, updatedAt time.Time, lastStage string) {
+	t.Helper()
+	insertOrchestratorTestRows(t, db)
+	now := updatedAt.UTC().Format(time.RFC3339Nano)
+	if _, err := db.Exec(`UPDATE application_instances SET observed_state='running',observed_generation=1,observed_spec_hash='hash-1',observed_at=? WHERE id='inst-1'`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE event_runs SET status='running',attempts=1,lease_owner='worker-a',lease_token='lease-a',execution_id='exec-a',intent_id='job-1',error_code='execution_monitoring',error_class='uncertainty',error_message='awaiting',error='awaiting',last_stage=?,lease_expires_at=NULL,updated_at=? WHERE id='job-1'`, lastStage, now); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// ORCH-LEASE-004(b): converged AppDB observation + incomplete evidence past grace → bounded retry.
+func TestUncertainConvergedObservationRetriesAfterGrace(t *testing.T) {
+	db := newOrchestratorTestDB(t)
+	past := time.Now().UTC().Add(-3 * time.Minute)
+	seedUncertainApplyJob(t, db, past, "")
+	runtime := &uncertainReconciler{}
+	store := NewStore(db)
+	ctrl := NewController(store, runtime, ControllerConfig{UncertaintyConvergedRetryGrace: time.Minute})
+	if err := ctrl.process(context.Background(), "job-1"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.GetJob(context.Background(), "job-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.State != JobFailedRetryable || after.ErrorCode != "execution_evidence_stale" || after.ErrorClass != "evidence" {
+		t.Fatalf("expected stale bounded retry, got %#v", after)
+	}
+	if runtime.calls != 0 {
+		t.Fatalf("converged retry must not re-kick reconcile: calls=%d", runtime.calls)
+	}
+}
+
+func TestUncertainConvergedObservationKeepsFenceWithinGrace(t *testing.T) {
+	db := newOrchestratorTestDB(t)
+	seedUncertainApplyJob(t, db, time.Now().UTC(), "")
+	runtime := &uncertainReconciler{}
+	store := NewStore(db)
+	ctrl := NewController(store, runtime, ControllerConfig{UncertaintyConvergedRetryGrace: 2 * time.Minute})
+	if err := ctrl.process(context.Background(), "job-1"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.GetJob(context.Background(), "job-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.State != JobRunning || after.ErrorClass != "uncertainty" {
+		t.Fatalf("within grace must keep uncertainty: %#v", after)
+	}
+}
+
+func TestUncertainProgressRefreshDefersConvergedRetry(t *testing.T) {
+	db := newOrchestratorTestDB(t)
+	// Entered uncertainty long ago, but a fresh ensure_image projection refreshed updated_at.
+	seedUncertainApplyJob(t, db, time.Now().UTC().Add(-5*time.Minute), "ensure_image")
+	store := NewStore(db)
+	job, err := store.GetJob(context.Background(), "job-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateProgress(context.Background(), job, "ensure_image", []Step{{Name: "ensure_image", Status: "running"}}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &uncertainReconciler{}
+	ctrl := NewController(store, runtime, ControllerConfig{UncertaintyConvergedRetryGrace: 2 * time.Minute})
+	if err := ctrl.process(context.Background(), "job-1"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.GetJob(context.Background(), "job-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.State != JobRunning || after.ErrorClass != "uncertainty" || after.LastStage != "ensure_image" {
+		t.Fatalf("fresh progress must defer converged retry: %#v", after)
+	}
+}
+
+func TestUncertainUnconvergedKeepsEvidenceWindow(t *testing.T) {
+	db := newOrchestratorTestDB(t)
+	past := time.Now().UTC().Add(-5 * time.Minute)
+	seedUncertainApplyJob(t, db, past, "")
+	if _, err := db.Exec(`UPDATE application_instances SET observed_generation=0,observed_spec_hash='' WHERE id='inst-1'`); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &uncertainReconciler{}
+	store := NewStore(db)
+	ctrl := NewController(store, runtime, ControllerConfig{
+		UncertaintyConvergedRetryGrace: time.Minute,
+		UncertaintyEvidenceWindow:      10 * time.Minute,
+	})
+	if err := ctrl.process(context.Background(), "job-1"); err != nil {
+		t.Fatal(err)
+	}
+	still, err := store.GetJob(context.Background(), "job-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if still.State != JobRunning || still.ErrorClass != "uncertainty" {
+		t.Fatalf("unconverged must keep uncertainty inside evidence window: %#v", still)
+	}
+}
+
+type uncertainErrorReconciler struct{}
+
+func (*uncertainErrorReconciler) Reconcile(context.Context, ReconcileRequestRPC) (ReconcileResponse, error) {
+	return ReconcileResponse{}, errors.New("unused")
+}
+func (*uncertainErrorReconciler) ResolveExecution(context.Context, ReconcileRequestRPC) (ReconcileResponse, bool, error) {
+	return ReconcileResponse{}, false, errors.New("agent unreachable")
+}
+
+func TestUncertainAgentErrorKeepsFenceDespiteConverged(t *testing.T) {
+	db := newOrchestratorTestDB(t)
+	past := time.Now().UTC().Add(-5 * time.Minute)
+	seedUncertainApplyJob(t, db, past, "")
+	store := NewStore(db)
+	ctrl := NewController(store, &uncertainErrorReconciler{}, ControllerConfig{
+		UncertaintyConvergedRetryGrace: time.Minute,
+		UncertaintyEvidenceWindow:      30 * time.Minute,
+	})
+	if err := ctrl.process(context.Background(), "job-1"); err == nil {
+		// ResolveExecution error is returned to caller while fence stays.
+	}
+	after, err := store.GetJob(context.Background(), "job-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.State != JobRunning || after.ErrorClass != "uncertainty" {
+		t.Fatalf("unreachable agent must keep uncertainty despite converged observation: %#v", after)
+	}
+}
+
+func TestControllerStartEnqueuesUncertainJobs(t *testing.T) {
+	db := newOrchestratorTestDB(t)
+	past := time.Now().UTC().Add(-5 * time.Minute)
+	seedUncertainApplyJob(t, db, past, "")
+	store := NewStore(db)
+	ctrl := NewController(store, &uncertainReconciler{}, ControllerConfig{
+		Owner:                          "test-start",
+		WorkerCount:                    1,
+		ScanInterval:                   50 * time.Millisecond,
+		UncertaintyConvergedRetryGrace: time.Minute,
+	})
+	ctx := context.Background()
+	if err := ctrl.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ctrl.Stop() }()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		job, err := store.GetJob(ctx, "job-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if job.State == JobFailedRetryable && job.ErrorCode == "execution_evidence_stale" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("start did not settle uncertain job, got %#v", job)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}

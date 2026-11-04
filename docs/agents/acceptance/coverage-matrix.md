@@ -43,7 +43,7 @@
 - 应用文件正文离库（2026-10-29）：正式正文迁到 `{dataRoot}/applications/files/...`，`application_files` 增 `blob_path`；新写入不再填 `content` BLOB；启动 backfill + dual-read 兼容旧行；删除应用清理磁盘目录。对应 `APP-EDIT-004`、`APP-FILE-001`。
 - 应用文件与设施静态资源存储对齐（2026-10-29）：正式布局改为 `{fileId}/content/{filename}`；edit-session 增 `source_file_id`/`filename`/`blob_dir`，begin 零拷贝；commit 用 rename+backup 回滚；共用 `internal/platform/filestorage`。对应 `APP-FILE-001/004`、`APP-EDIT-004/006`。
 - Debug 既有清理操作增加阶段/时间、刷新恢复、部分失败与系统确认中展示；保留危险勾选确认，不新增路由；对应 `UI-DBG-007/008`。
-- 部署 remote-fence monitor：传输/lease 超时进入 `uncertainty`+`execution_monitoring`，投影 Agent step 报告；无进度才「系统核实中」，有进度为普通收敛；证据窗口耗尽终态 `execution_evidence_unreachable`；人工 resolve 仅为破局 API。对应 `ORCH-LEASE-003..005`、`ORCH-RETRY-001`、`ORCH-CTRL-009`、`TASK-WORK-003`、`APP-RUN-004`。
+- 部署 remote-fence monitor：传输/lease 超时进入 `uncertainty`+`execution_monitoring`，投影 Agent step 报告；无进度才「系统核实中」，有进度为普通收敛；观测已收敛且证据不完整时宽限后 `execution_evidence_stale` 有界重试（非无证据 Succeed）；证据窗口耗尽终态 `execution_evidence_unreachable`；人工 resolve 仅为破局 API。对应 `ORCH-LEASE-003..005`、`ORCH-RETRY-001`、`ORCH-CTRL-009`、`TASK-WORK-003`、`APP-RUN-004`。
 - 派活窗口（默认 15s）后 worker 释放、monitor 独占结算，对应 `ORCH-CTRL-010`。
 - 服务器创建/编辑重构：基础/高级分区、无凭据引导与弹窗内快捷创建、探测与保存解耦并标记过期、变量严格校验、创建后初始化任务跟踪与失败保留态，不新增路由；对应 `UI-SRV-003/004/005/011/012/013`，后端初始采集失败改为保留服务器并标记失败，对应 `SRV-SAVE-005/006`。
 - Tailscale 收敛：新增 `/settings/tailscale` 设置分区（只写认证密钥、ACL 标签、容器 tailscale 状态与「应用 / 重连」）与服务器侧的加入/偏好开关、状态徽标和手动重试，路由总数由 46 增至 47；对应 `UI-SET-011`、`UI-SRV-014/015`、`TS-SET-*`、`TS-NODE-*`。

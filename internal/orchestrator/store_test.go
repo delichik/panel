@@ -144,6 +144,34 @@ func insertOrchestratorTestRows(t *testing.T, db *sql.DB) {
 	}
 }
 
+func TestInstanceObservationMatchesDesired(t *testing.T) {
+	db := newOrchestratorTestDB(t)
+	insertOrchestratorTestRows(t, db)
+	store := NewStore(db)
+	ctx := context.Background()
+	matched, err := store.InstanceObservationMatchesDesired(ctx, "inst-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matched {
+		t.Fatal("default unknown observation must not match")
+	}
+	if _, err := db.Exec(`UPDATE application_instances SET observed_state='running',observed_generation=1,observed_spec_hash='hash-1' WHERE id='inst-1'`); err != nil {
+		t.Fatal(err)
+	}
+	matched, err = store.InstanceObservationMatchesDesired(ctx, "inst-1")
+	if err != nil || !matched {
+		t.Fatalf("running+gen+hash aligned must match: matched=%v err=%v", matched, err)
+	}
+	if _, err := db.Exec(`UPDATE application_instances SET observed_generation=0 WHERE id='inst-1'`); err != nil {
+		t.Fatal(err)
+	}
+	matched, err = store.InstanceObservationMatchesDesired(ctx, "inst-1")
+	if err != nil || matched {
+		t.Fatalf("generation mismatch must not match: matched=%v err=%v", matched, err)
+	}
+}
+
 func TestRequeueRefreshesCurrentDesiredSnapshot(t *testing.T) {
 	db := newOrchestratorTestDB(t)
 	insertOrchestratorTestRows(t, db)
