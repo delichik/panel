@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"panel/internal/modules/tasks"
 	"strings"
@@ -133,18 +134,20 @@ func (a *App) activityAuth(next http.Handler) http.Handler {
 		receivedID := ""
 		if mutation && ctx.Value(runtimeClearAuditContextKey{}) != true {
 			receivedID = streamID
-			logging.From(ctx).Info("http request received",
-				zap.String("method", r.Method),
-				zap.String("path", r.URL.Path),
-				zap.String("route", r.Pattern),
-				zap.String("domain", requestDomain(r)),
-				zap.String("eventType", "request.received"),
-			)
-			_ = logging.RecordContext(ctx, logging.ContextMeta{
+			_ = logging.EmitProcess(ctx, logging.ProcessSpec{
 				Origin:    events.OriginUser,
+				Module:    "http",
 				Title:     r.Method + " " + r.URL.Path,
-				Summary:   "request received",
-				ActorJSON: logging.MarshalActorJSON(map[string]string{"kind": "user", "id": "admin", "name": sess.Username}),
+				Summary:   "HTTP request accepted",
+				State:     logging.ProcessRunning,
+				EventType: "request.received",
+				Actor:     map[string]string{"kind": "user", "id": "admin", "name": sess.Username},
+				Fields: []zap.Field{
+					zap.String("method", r.Method),
+					zap.String("path", r.URL.Path),
+					zap.String("route", r.Pattern),
+					zap.String("domain", requestDomain(r)),
+				},
 			})
 			activitylog.RecordReceipt(ctx, streamID, receivedID, 0)
 			ctx = activitylog.WithCause(ctx, receivedID)
@@ -317,23 +320,25 @@ func (a *App) finishRequest(ctx context.Context, r *http.Request, w *activityRes
 		zap.String("causationId", receivedID),
 		zap.String("eventType", "request.finished"),
 	}
-	logger := logging.From(ctx)
 	result := "succeeded"
 	hadError := false
+	level := "info"
 	if status >= 400 {
 		hadError = true
 		result = "failed"
-		logger.Error("http request finished", fields...)
-	} else {
-		logger.Info("http request finished", fields...)
+		level = "error"
 	}
-	_ = logging.RecordContext(ctx, logging.ContextMeta{
-		Origin:   events.OriginUser,
-		Title:    r.Method + " " + r.URL.Path,
-		Summary:  "request finished",
-		Result:   result,
-		HadError: hadError,
-		Finished: true,
+	_ = logging.EmitProcess(ctx, logging.ProcessSpec{
+		Origin:    events.OriginUser,
+		Module:    "http",
+		Title:     r.Method + " " + r.URL.Path,
+		Summary:   fmt.Sprintf("HTTP request finished with status %d", status),
+		State:     result,
+		Level:     level,
+		HadError:  hadError,
+		Finished:  true,
+		EventType: "request.finished",
+		Fields:    fields,
 	})
 	activitylog.RecordReceipt(ctx, operationID, receivedID, 0)
 }

@@ -662,6 +662,7 @@ func TestConnectivityUsesBoundedSudoTimeoutAndCompletes(t *testing.T) {
 	if err := logging.Configure(cfg.DataRoot); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(logging.CloseFileSinkForTest)
 	logging.SetContextStore(events.NewStore(store.AppDB()))
 	t.Cleanup(func() { logging.SetContextStore(nil) })
 
@@ -2503,6 +2504,7 @@ func testServerService(t *testing.T, exec sshx.RemoteExecutor) (*Service, *tasks
 	if err := logging.Configure(cfg.DataRoot); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(logging.CloseFileSinkForTest)
 	logging.SetContextStore(events.NewStore(store.AppDB()))
 	t.Cleanup(func() { logging.SetContextStore(nil) })
 	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {

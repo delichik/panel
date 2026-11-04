@@ -328,19 +328,28 @@ func (s *Store) Fail(ctx context.Context, job Job, response ReconcileResponse) (
 }
 
 func (s *Store) RecoverExpiredLeases(ctx context.Context) error {
+	_, err := s.RecoverExpiredLeasesJobs(ctx)
+	return err
+}
+
+// RecoverExpiredLeasesJobs marks expired running leases as uncertainty and
+// returns the affected Jobs so callers can emit process events (ENG-EVT-010).
+func (s *Store) RecoverExpiredLeasesJobs(ctx context.Context) ([]Job, error) {
 	now := s.now().UTC()
 	expired, err := s.listRunningJobsWithExpiredLeases(ctx, now)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	out := make([]Job, 0, len(expired))
 	for _, job := range expired {
 		// Preserve the execution token and running conflict-domain lock. Expiry
 		// alone cannot establish whether the remote side effect has completed.
 		if err := s.MarkUncertain(ctx, job, "orchestrator lease expired; awaiting automatic execution evidence"); err != nil {
-			return err
+			return out, err
 		}
+		out = append(out, job)
 	}
-	return nil
+	return out, nil
 }
 
 // UpdateProgress persists incremental Agent step projection onto a running Job

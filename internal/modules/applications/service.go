@@ -1526,9 +1526,10 @@ func lifecycleOperationFromTask(appID string, row models.Task) LifecycleOperatio
 	if row.UpdatedAt != nil {
 		updatedAt = row.UpdatedAt.UTC()
 	}
-	return LifecycleOperation{
+	op := LifecycleOperation{
 		ID:            row.ID,
 		OperationID:   row.IntentID,
+		ExecutionID:   row.ExecutionID,
 		ApplicationID: appID,
 		Type:          row.Action,
 		Status:        deployStatusToJobState(row.Status),
@@ -1544,6 +1545,34 @@ func lifecycleOperationFromTask(appID string, row models.Task) LifecycleOperatio
 		ErrorDetail:   row.ErrorDetail,
 		CreatedAt:     row.CreatedAt,
 		UpdatedAt:     updatedAt,
+	}
+	if strings.TrimSpace(row.ErrorClass) == "uncertainty" {
+		op.MonitorReasonCode = monitorReasonCodeFromMessage(row.ErrorMessage)
+		base := updatedAt
+		if !base.IsZero() {
+			ev := base.Add(30 * time.Minute)
+			op.EvidenceDeadlineAt = &ev
+			gr := base.Add(2 * time.Minute)
+			op.GraceDeadlineAt = &gr
+		}
+	}
+	return op
+}
+
+func monitorReasonCodeFromMessage(msg string) string {
+	msg = strings.ToLower(strings.TrimSpace(msg))
+	switch {
+	case strings.Contains(msg, "dispatch") || strings.Contains(msg, "awaiting agent progress"):
+		return "dispatch_wait"
+	case strings.Contains(msg, "lease expired"):
+		return "lease_expired"
+	case strings.Contains(msg, "verify_running"):
+		return "awaiting_verify_running"
+	default:
+		if msg == "" {
+			return ""
+		}
+		return "transport_unconfirmed"
 	}
 }
 

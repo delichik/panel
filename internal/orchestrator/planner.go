@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -396,23 +397,42 @@ func appendRunningIntent(ctx context.Context, tx *sql.Tx, active Job, in PlanInp
 		result = "superseded"
 		related = in.IntentID
 	}
-	logCtx := logging.Ensure(ctx, logging.Context{Module: "orchestrator", OperationID: operationID, ExecutionID: active.ExecutionID})
-	logging.From(logCtx).Info(eventType,
-		zap.String("eventType", eventType),
-		zap.String("action", in.Action),
-		zap.String("jobId", active.ID),
-		zap.String("relatedOperationId", related),
-		zap.String("phase", phase),
-		zap.String("result", result),
-		zap.String("applicationId", in.ApplicationID),
-		zap.String("serverId", in.ServerID),
-	)
-	_ = logging.RecordContext(logCtx, logging.ContextMeta{
-		Origin:        events.OriginProcess,
-		Title:         eventType,
-		Summary:       eventType,
-		Result:        result,
-		ResourcesJSON: logging.MarshalResourcesJSON(resources),
+	appName, serverName := in.ApplicationID, in.ServerID
+	for _, r := range resources {
+		if r.Type == "application" && r.Name != "" {
+			appName = r.Name
+		}
+		if r.Type == "server" && r.Name != "" {
+			serverName = r.Name
+		}
+	}
+	title := logging.DeployTitle(in.Action, appName, serverName)
+	summary := "Linked execution to existing deploy job"
+	state := logging.ProcessRunning
+	finished := false
+	if eventType == "intent.superseded" {
+		summary = fmt.Sprintf("Superseded prior intent %s with updated desired state", related)
+		state = logging.ProcessCancelled
+		finished = true
+	}
+	_ = logging.EmitProcess(ctx, logging.ProcessSpec{
+		EventID:     operationID,
+		Module:      "orchestrator",
+		Origin:      events.OriginProcess,
+		OperationID: operationID,
+		ExecutionID: active.ExecutionID,
+		Title:       title,
+		Summary:     summary,
+		State:       state,
+		Finished:    finished,
+		EventType:   eventType,
+		Resources:   resources,
+		Fields: []zap.Field{
+			zap.String("jobId", active.ID),
+			zap.String("relatedOperationId", related),
+			zap.String("phase", phase),
+			zap.String("result", result),
+		},
 	})
 	return nil
 }
@@ -430,29 +450,36 @@ func appendPlanRequest(ctx context.Context, tx *sql.Tx, in PlanInput) error {
 	if actor.Kind == "" {
 		actor = activitylog.Actor{Kind: "controller", ID: "application"}
 	}
-	logCtx := logging.Ensure(ctx, logging.Context{Module: "orchestrator", OperationID: in.IntentID})
-	msg := in.Reason
-	if msg == "" {
-		msg = "operation.requested"
+	appName, serverName := in.ApplicationID, in.ServerID
+	for _, r := range resources {
+		if r.Type == "application" && r.Name != "" {
+			appName = r.Name
+		}
+		if r.Type == "server" && r.Name != "" {
+			serverName = r.Name
+		}
 	}
-	logging.From(logCtx).Info(msg,
-		zap.String("eventType", "operation.requested"),
-		zap.String("action", in.Action),
-		zap.String("trigger", in.TriggerType),
-		zap.String("applicationId", in.ApplicationID),
-		zap.String("serverId", in.ServerID),
-		zap.Int("desiredGeneration", in.DesiredGeneration),
-		zap.String("desiredRevisionId", in.DesiredRevisionID),
-		zap.String("phase", "queued"),
-		zap.String("actorKind", actor.Kind),
-		zap.String("actorId", actor.ID),
-	)
-	_ = logging.RecordContext(logCtx, logging.ContextMeta{
-		Origin:        events.OriginProcess,
-		Title:         "operation.requested",
-		Summary:       msg,
-		ActorJSON:     logging.MarshalActorJSON(map[string]string{"kind": actor.Kind, "id": actor.ID, "name": actor.Name}),
-		ResourcesJSON: logging.MarshalResourcesJSON(resources),
+	summary := strings.TrimSpace(in.Reason)
+	if summary == "" {
+		summary = fmt.Sprintf("Deploy requested (trigger %s, generation %d)", firstNonEmpty(in.TriggerType, "manual"), in.DesiredGeneration)
+	}
+	_ = logging.EmitProcess(ctx, logging.ProcessSpec{
+		EventID:     in.IntentID,
+		Module:      "orchestrator",
+		Origin:      events.OriginProcess,
+		OperationID: in.IntentID,
+		Title:       logging.DeployTitle(in.Action, appName, serverName),
+		Summary:     summary,
+		State:       logging.ProcessQueued,
+		EventType:   "operation.requested",
+		Actor:       map[string]string{"kind": actor.Kind, "id": actor.ID, "name": actor.Name},
+		Resources:   resources,
+		Fields: []zap.Field{
+			zap.String("action", in.Action),
+			zap.String("trigger", in.TriggerType),
+			zap.Int("desiredGeneration", in.DesiredGeneration),
+			zap.String("desiredRevisionId", in.DesiredRevisionID),
+		},
 	})
 	return nil
 }

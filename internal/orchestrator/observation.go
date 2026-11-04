@@ -84,16 +84,20 @@ func (w *ObservationWriter) Write(ctx context.Context, in Observation) (WriteRes
 				OperationID: rejection.operationID,
 				ExecutionID: rejection.executionID,
 			})
-			logging.From(logCtx).Warn("observation.rejected",
-				zap.String("eventType", "observation.rejected"),
-				zap.Any("data", rejection.data),
-			)
-			_ = logging.RecordContext(logCtx, logging.ContextMeta{
-				Origin:        events.OriginProcess,
-				Title:         "observation.rejected",
-				Summary:       "observation.rejected",
-				HadError:      true,
-				ResourcesJSON: logging.MarshalResourcesJSON(rejection.resources),
+			_ = logging.EmitProcess(logCtx, logging.ProcessSpec{
+				EventID:     firstNonEmpty(rejection.operationID, rejection.executionID, logging.NewEventID()),
+				Module:      "orchestrator",
+				Origin:      events.OriginProcess,
+				OperationID: rejection.operationID,
+				ExecutionID: rejection.executionID,
+				Title:       "Observation rejected",
+				Summary:     "Runtime observation was discarded (stale ownership or conflicting write)",
+				State:       logging.ProcessFailed,
+				HadError:    true,
+				Finished:    true,
+				EventType:   "observation.rejected",
+				Resources:   rejection.resources,
+				Fields:      []zap.Field{zap.Any("data", rejection.data)},
 			})
 		}
 	}

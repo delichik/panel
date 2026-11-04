@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -130,26 +131,29 @@ func disableApplicationsWithoutDeploymentTarget(ctx context.Context, tx *sql.Tx,
 			return err
 		}
 		// 停用是系统代替操作者做出的决定，必须经统一日志留痕。
-		logCtx := logging.Ensure(ctx, logging.Context{Module: "servers"})
 		msg := "Application disabled because it lost its last deployment node"
-		logging.From(logCtx).Warn(msg,
-			zap.String("eventType", "application.disabled"),
-			zap.String("action", "disable"),
-			zap.String("trigger", "server_removed"),
-			zap.String("reason", "server_removed"),
-			zap.String("serverId", serverID),
-			zap.String("applicationId", id),
-			zap.String("deploymentMode", mode),
-			zap.String("applicationName", name),
-		)
-		_ = logging.RecordContext(logCtx, logging.ContextMeta{
-			Origin:  events.OriginSystem,
-			Title:   "application.disabled",
-			Summary: msg,
-			ResourcesJSON: logging.MarshalResourcesJSON([]map[string]string{
-				{"resourceType": "application", "resourceId": id, "name": name, "role": "target"},
-				{"resourceType": "server", "resourceId": serverID, "role": "executor"},
-			}),
+		_ = logging.EmitProcess(ctx, logging.ProcessSpec{
+			Module:    "servers",
+			Origin:    events.OriginSystem,
+			Title:     fmt.Sprintf("Disabled %s", firstNonEmpty(name, id)),
+			Summary:   msg,
+			State:     logging.ProcessSucceeded,
+			Level:     "warn",
+			Finished:  true,
+			EventType: "application.disabled",
+			Resources: []logging.Resource{
+				logging.ResourceRef("application", id, name, "target"),
+				logging.ResourceRef("server", serverID, "", "executor"),
+			},
+			Fields: []zap.Field{
+				zap.String("action", "disable"),
+				zap.String("trigger", "server_removed"),
+				zap.String("reason", "server_removed"),
+				zap.String("serverId", serverID),
+				zap.String("applicationId", id),
+				zap.String("deploymentMode", mode),
+				zap.String("applicationName", name),
+			},
 		})
 	}
 	return nil

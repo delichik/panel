@@ -52,20 +52,25 @@ func (s *Service) ResolveExecutionManually(ctx context.Context, executionID, out
 	// This is a request to verify, not an already verified outcome. If the RPC
 	// or event transfer fails, the Job remains unknown and cannot be reissued.
 	logCtx := logging.Ensure(ctx, logging.Context{Module: "applications", OperationID: job.IntentID, ExecutionID: job.ExecutionID})
-	logging.From(logCtx).Info(reason,
-		zap.String("eventType", "verification.requested"),
-		zap.String("action", job.Action),
-		zap.String("jobId", job.ID),
-		zap.String("declaredOutcome", outcome),
-		zap.String("verificationSource", "manual"),
-		zap.Bool("uncertainty", true),
-		zap.String("actorId", actor.ID),
-	)
-	_ = logging.RecordContext(logCtx, logging.ContextMeta{
-		Origin:   events.OriginUser,
-		Title:    "verification.requested",
-		Summary:  reason,
-		ActorJSON: logging.MarshalActorJSON(map[string]string{"kind": actor.Kind, "id": actor.ID, "name": actor.Name}),
+	_ = logging.EmitProcess(logCtx, logging.ProcessSpec{
+		EventID:     firstNonEmpty(job.IntentID, job.ID),
+		Module:      "applications",
+		Origin:      events.OriginUser,
+		OperationID: job.IntentID,
+		ExecutionID: executionID,
+		Title:       "Manual verification requested",
+		Summary:     reason,
+		State:       logging.ProcessRunning,
+		EventType:   "verification.requested",
+		Actor:       map[string]string{"kind": actor.Kind, "id": actor.ID, "name": actor.Name},
+		Fields: []zap.Field{
+			zap.String("action", job.Action),
+			zap.String("jobId", job.ID),
+			zap.String("declaredOutcome", outcome),
+			zap.String("verificationSource", "manual"),
+			zap.Bool("uncertainty", true),
+			zap.String("actorId", actor.ID),
+		},
 	})
 	result, err := client.ResolveExecution(ctx, endpoint, agentcontract.ExecutionResolution{ExecutionID: executionID, Outcome: outcome, Reason: reason, ActorID: actor.ID, ActorName: actor.Name})
 	if err != nil {

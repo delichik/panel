@@ -260,6 +260,7 @@ export interface LifecycleTarget {
 export interface LifecycleOperation {
   id: string;
   operationId?: string;
+  executionId?: string;
   applicationId: string;
   type: string;
   status: string;
@@ -271,6 +272,9 @@ export interface LifecycleOperation {
   errorClass?: string;
   error?: string;
   errorDetail?: string;
+  monitorReasonCode?: string;
+  evidenceDeadlineAt?: string;
+  graceDeadlineAt?: string;
   attempt?: number;
   nextRunAt?: string;
   targets?: LifecycleTarget[];

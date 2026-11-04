@@ -14,7 +14,7 @@
 
 - 应用详情的容器日志增加实例选择、单实例自动加载、手动刷新及请求取消；既有 logs API 必传 instanceId，未新增路由/API/数据库字段。对应 `APP-RUN-002`、`UI-APP-007`。
 
-- 可观测性 `/activity` 与旧 `/operations`、`/tasks` 收敛为 `/events`（AppDB **过程**行：一件事，state/module/level）+ `/logs`（JSONL 行：level+eventId，无 state；瞬时诊断只在此）；普通日志不得自动新建 `events` 行（`ENG-LOG-007`）。旧路由兼容重定向。产品读走 `/api/v1/events*` 与 `/api/v1/logs`（`eventId` 可选；legacy `/api/v1/log-contexts*` 仍可用）。对应 `UI-EVT-004..007`、`UI-LOG-001..003` 与 `ENG-EVT-001`（`UI-ACT-*`、`ENG-LOG-008`、`LOG-CTX-*` 已废弃）；前端证据含 `IntentRecordsPage.test.ts`、`logs/index.test.ts`、`events`/`logs` API/mock、`activityRedirect`/`activityReference`。RunEngine Phase A 不改这条诊断读面，也不新增执行页路由（`ENG-RUN-002`，`UI-EVT-004` 不变）。
+- 可观测性 `/activity` 与旧 `/operations`、`/tasks` 收敛为 `/events`（AppDB **过程**行：一件事，state/module/level）+ `/logs`（JSONL 行：level+eventId，无 state；瞬时诊断只在此）；普通日志不得自动新建 `events` 行（`ENG-LOG-007`）。过程行 title/summary 须符合 `ENG-EVT-010`（人话、可深链）；部署决策须更新意图主过程。旧路由兼容重定向。产品读走 `/api/v1/events*` 与 `/api/v1/logs`（`eventId` 可选；legacy `/api/v1/log-contexts*` 仍可用）。对应 `UI-EVT-004..007`、`UI-LOG-001..003`、`ENG-EVT-001`/`ENG-EVT-010`（`UI-ACT-*`、`ENG-LOG-008`、`LOG-CTX-*` 已废弃）；前端证据含 `IntentRecordsPage.test.ts`、`logs/index.test.ts`、`events`/`logs` API/mock、`activityRedirect`/`activityReference`。RunEngine Phase A 不改这条诊断读面，也不新增执行页路由（`ENG-RUN-002`，`UI-EVT-004` 不变）。
 
 `web/src/router/index.ts` 当前含 30 条路由 `path:` 声明（含父路由、重定向与 catch-all）。逐操作标准见 `ui-pages.md`，全局守卫及慢网路由进行中反馈见 `ui-shell-and-conventions.md`。
 
@@ -43,7 +43,7 @@
 - 应用文件正文离库（2026-10-29）：正式正文迁到 `{dataRoot}/applications/files/...`，`application_files` 增 `blob_path`；新写入不再填 `content` BLOB；启动 backfill + dual-read 兼容旧行；删除应用清理磁盘目录。对应 `APP-EDIT-004`、`APP-FILE-001`。
 - 应用文件与设施静态资源存储对齐（2026-10-29）：正式布局改为 `{fileId}/content/{filename}`；edit-session 增 `source_file_id`/`filename`/`blob_dir`，begin 零拷贝；commit 用 rename+backup 回滚；共用 `internal/platform/filestorage`。对应 `APP-FILE-001/004`、`APP-EDIT-004/006`。
 - Debug 既有清理操作增加阶段/时间、刷新恢复、部分失败与系统确认中展示；保留危险勾选确认，不新增路由；对应 `UI-DBG-007/008`。
-- 部署 remote-fence monitor：传输/lease 超时进入 `uncertainty`+`execution_monitoring`，投影 Agent step 报告；无进度才「系统核实中」，有进度为普通收敛；观测已收敛且证据不完整时宽限后 `execution_evidence_stale` 有界重试（非无证据 Succeed）；证据窗口耗尽终态 `execution_evidence_unreachable`；人工 resolve 仅为破局 API。对应 `ORCH-LEASE-003..005`、`ORCH-RETRY-001`、`ORCH-CTRL-009`、`TASK-WORK-003`、`APP-RUN-004`。
+- 部署 remote-fence monitor：传输/lease 超时进入 `uncertainty`+`execution_monitoring`，投影 Agent step 报告；无进度才「系统核实中」，有进度为普通收敛；观测已收敛且证据不完整时宽限后 `execution_evidence_stale` 有界重试（非无证据 Succeed）；证据窗口耗尽终态 `execution_evidence_unreachable`；人工 resolve 仅为破局 API；进入 monitor / stale / settle 须更新意图过程事件（`ENG-EVT-010`）。对应 `ORCH-LEASE-003..005`、`ORCH-RETRY-001`、`ORCH-CTRL-009`、`TASK-WORK-003`、`APP-RUN-004`。
 - 派活窗口（默认 15s）后 worker 释放、monitor 独占结算，对应 `ORCH-CTRL-010`。
 - 服务器创建/编辑重构：基础/高级分区、无凭据引导与弹窗内快捷创建、探测与保存解耦并标记过期、变量严格校验、创建后初始化任务跟踪与失败保留态，不新增路由；对应 `UI-SRV-003/004/005/011/012/013`，后端初始采集失败改为保留服务器并标记失败，对应 `SRV-SAVE-005/006`。
 - Tailscale 收敛：新增 `/settings/tailscale` 设置分区（只写认证密钥、ACL 标签、容器 tailscale 状态与「应用 / 重连」）与服务器侧的加入/偏好开关、状态徽标和手动重试，路由总数由 46 增至 47；对应 `UI-SET-011`、`UI-SRV-014/015`、`TS-SET-*`、`TS-NODE-*`。
@@ -156,7 +156,7 @@
 - Tailscale 新增任务类型 `server_tailscale_apply`，由通用任务 worker 执行：保存节点开关后自动排队，手动 apply 创建或复用，缺少 `agent.tailscale` 能力只失败该任务而不触发整节点重装；不新增 ticker/cron，对应 `TS-TASK-001..004`。
 - 周期 Agent 检查（`server_agent_check`）由 servers 模块 `StartPeriodic` 自有 loop（5 分钟）驱动，经 `CollectInputs`/`TriggerPeriodicNow` 入 event executor 框架；成功巡检 JSONL 为 `debug`（`Quiet`），失败仍为 `error`：不经 event executor 中央 PeriodicRunner；对应 `AGT-STATE-005`、`TASK-REG-003`、`TASK-PER-001`。
 - 应用协调仍由 containers `StartPeriodic` 每 5 秒调用 `application_reconcile` CollectInputs，以及业务侧 `TriggerApplicationReconcile`。两者都直接请求 Planner 写 `event_runs`（`type='application_deploy'`），不经 Manager 创建通用 event run。已删除任务类型 `application_reconcile_batch`（noop Execute）。无新增 API 或 ticker；存量非终态监控壳由 `cancel_application_reconcile_monitoring_shells` 取消。对应 `TASK-PER-003`、`ORCH-DRIFT-001`、`ENG-RUN-001`。
-- Panel 进程日志统一经 `platform/logging`（context 带 `eventId`+`module`+等级，默认 JSONL 文件 + stdout）；`events` 仅由显式过程登记（`RecordContext` 等）索引，日志行最多 Touch 已有过程；产品读 API 为 `/api/v1/events*` 与 `/api/v1/logs`（`eventId` 可选）；对应 `ENG-LOG-001..007` 与 `ENG-EVT-001`。
+- Panel 进程日志统一经 `platform/logging`（context 带 `eventId`+`module`+等级，默认 JSONL 文件 + stdout）；`events` 仅由显式过程登记（`RecordContext` / `EmitProcess` / `TouchProcess`）索引，日志行最多 Touch 已有过程；过程行内容合同 `ENG-EVT-010`；产品读 API 为 `/api/v1/events*` 与 `/api/v1/logs`（`eventId` 可选）；对应 `ENG-LOG-001..007` 与 `ENG-EVT-001`/`ENG-EVT-010`。
 - 进程日志文件落在 `<dataRoot>/logs/panel-YYYYMMDD.jsonl`（随 dataRoot 进入全量备份）；对应 `ENG-LOG-006`、`BKP-API-005`。
 - 容器内 tailscale 自愈复用既有启动/30 秒 Agent 检查周期刷新实际态并在需要时触发收敛，不新增 ticker/cron；失败只更新容器实际态与 `lastError`，绝不终止或阻塞 Panel，对应 `TS-INIT-007`。
 - 节点 tailnet 地址出现、变化、消失或互联偏好意图变化时按需重同步互联设施：排队存储导出协调任务，并在受影响节点确实作为网关或源站参与时重新渲染入口代理设施，无设施配置时为 no-op；对应 `TS-ADDR-009`、`FAC-STO-009`、`FAC-RP-014`。

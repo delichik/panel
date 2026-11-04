@@ -58,23 +58,29 @@ func (s *Service) ResolveUncertain(ctx context.Context, taskID, outcome, reason 
 		OperationID: row.OperationID,
 		ExecutionID: row.ID,
 	})
-	logging.From(logCtx).Info(reason,
-		zap.String("eventType", "execution.verified"),
-		zap.String("domain", firstNonEmpty(row.ResourceType, "system")),
-		zap.String("action", row.Type),
-		zap.String("taskId", row.ID),
-		zap.String("outcome", result),
-		zap.String("verificationSource", "manual"),
-		zap.String("actorId", actor.ID),
-	)
-	_ = logging.RecordContext(logCtx, logging.ContextMeta{
-		Origin:   events.OriginUser,
-		Title:    "execution.verified",
-		Summary:  reason,
-		Result:   result,
-		HadError: result == "failed",
-		Finished: true,
-		ActorJSON: logging.MarshalActorJSON(map[string]string{"kind": actor.Kind, "id": actor.ID, "name": actor.Name}),
+	_ = logging.EmitProcess(logCtx, logging.ProcessSpec{
+		EventID:     row.ID,
+		Module:      "tasks",
+		Origin:      events.OriginUser,
+		OperationID: row.OperationID,
+		ExecutionID: row.ID,
+		Title:       "Manual execution verification",
+		Summary:     reason,
+		State:       result,
+		HadError:    result == "failed",
+		Finished:    true,
+		EventType:   "execution.verified",
+		Actor:       map[string]string{"kind": actor.Kind, "id": actor.ID, "name": actor.Name},
+		// Task log API shares this eventId; keep process row without injecting a line.
+		SkipJSONL: true,
+		Fields: []zap.Field{
+			zap.String("domain", firstNonEmpty(row.ResourceType, "system")),
+			zap.String("action", row.Type),
+			zap.String("outcome", result),
+			zap.String("taskId", row.ID),
+			zap.String("verificationSource", "manual"),
+			zap.String("actorId", actor.ID),
+		},
 	})
 	resultSQL, err := tx.ExecContext(ctx, `UPDATE event_runs SET status=?,stage='verified',error=CASE WHEN ?='completed' THEN '' ELSE ? END,finished_at=?,next_run_at=NULL WHERE id=? AND status='running' AND stage='uncertain'`, status, status, reason, time.Now().UTC().Format(time.RFC3339Nano), taskID)
 	if err != nil {

@@ -399,12 +399,6 @@ func (s *Service) AppendLog(ctx context.Context, taskID, stream, line string) er
 	default:
 		logger.Info(text, fields...)
 	}
-	_ = logging.RecordContext(ctx, logging.ContextMeta{
-		Origin:  platformevents.OriginProcess,
-		Title:   task.Type,
-		Summary: text,
-		State:   "running",
-	})
 	return nil
 }
 
@@ -1289,9 +1283,64 @@ func (s *Service) Retry(ctx context.Context, taskID string) (Task, error) {
 	return task, err
 }
 
-// State transitions are recorded by AppDB triggers inside the control
-// transaction; emitting a second post-commit runtime event would split truth.
+// writeTaskEvent upserts a readable process row for the task lifecycle (ENG-EVT-010).
+// AppDB triggers remain the control-plane truth; this only maintains the /events index.
 func (s *Service) writeTaskEvent(ctx context.Context, eventType string, task Task, summary, severity string) error {
+	title := strings.TrimSpace(task.Summary)
+	if title == "" {
+		title = fmt.Sprintf("Task %s", firstNonEmpty(task.Type, task.ID))
+	}
+	sum := strings.TrimSpace(summary)
+	if sum == "" {
+		sum = firstNonEmpty(task.Stage, task.Status, eventType)
+	}
+	state := logging.ProcessRunning
+	finished := false
+	hadError := false
+	switch eventType {
+	case runtimeevents.EventTaskCompleted:
+		state = logging.ProcessSucceeded
+		finished = true
+	case runtimeevents.EventTaskFailed, runtimeevents.EventTaskCancelled:
+		state = logging.ProcessFailed
+		if eventType == runtimeevents.EventTaskCancelled {
+			state = logging.ProcessCancelled
+		}
+		finished = true
+		hadError = eventType == runtimeevents.EventTaskFailed || severity == runtimeevents.SeverityError
+	case runtimeevents.EventTaskCreated:
+		state = logging.ProcessQueued
+	}
+	resources := make([]logging.Resource, 0, 2)
+	if id := strings.TrimSpace(task.ResourceID); id != "" {
+		resources = append(resources, logging.ResourceRef(firstNonEmpty(task.ResourceType, "resource"), id, "", "target"))
+	}
+	if id := strings.TrimSpace(task.ServerID); id != "" {
+		resources = append(resources, logging.ResourceRef("server", id, "", "executor"))
+	}
+	opID := firstNonEmpty(task.OperationID, task.ID)
+	_ = logging.EmitProcess(ctx, logging.ProcessSpec{
+		EventID:     eventRunLogID(task.ID),
+		Module:      "tasks",
+		Origin:      platformevents.OriginProcess,
+		OperationID: opID,
+		ExecutionID: task.ID,
+		Title:       title,
+		Summary:     sum,
+		State:       state,
+		HadError:    hadError,
+		Finished:    finished,
+		EventType:   eventType,
+		Resources:   resources,
+		// Task log API reads the same eventId JSONL; lifecycle rows must not
+		// inject extra stdout-like lines into AppendLog history.
+		SkipJSONL: true,
+		Fields: []zap.Field{
+			zap.String("taskType", task.Type),
+			zap.String("taskStatus", task.Status),
+			zap.String("stage", task.Stage),
+		},
+	})
 	return nil
 }
 

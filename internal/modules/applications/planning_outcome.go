@@ -134,24 +134,29 @@ func (s *Service) recordPlanningOutcome(ctx context.Context, app Application, re
 	}
 	fields = append(fields, zap.String("eventType", eventType))
 	logCtx := logging.Ensure(ctx, logging.Context{Module: "applications", OperationID: operationID})
+	title := "Application planning"
+	state := logging.ProcessSucceeded
+	level := "info"
 	if hadError {
-		logging.From(logCtx).Error(msg, fields...)
-	} else {
-		logging.From(logCtx).Info(msg, fields...)
+		title = "Application planning failed"
+		state = logging.ProcessFailed
+		level = "error"
 	}
-	result := ""
-	if hadError {
-		result = "failed"
-	}
-	_ = logging.RecordContext(logCtx, logging.ContextMeta{
-		Origin:        events.OriginProcess,
-		Title:         eventType,
-		Summary:       msg,
-		Result:        result,
-		HadError:      hadError,
-		Finished:      hadError,
-		ActorJSON:     logging.MarshalActorJSON(map[string]string{"kind": actor.Kind, "id": actor.ID, "name": actor.Name}),
-		ResourcesJSON: logging.MarshalResourcesJSON(resources),
+	_ = logging.EmitProcess(logCtx, logging.ProcessSpec{
+		EventID:     operationID,
+		Module:      "applications",
+		Origin:      events.OriginProcess,
+		OperationID: operationID,
+		Title:       title,
+		Summary:     msg,
+		State:       state,
+		Level:       level,
+		HadError:    hadError,
+		Finished:    true,
+		EventType:   eventType,
+		Actor:       map[string]string{"kind": actor.Kind, "id": actor.ID, "name": actor.Name},
+		Resources:   resources,
+		Fields:      fields,
 	})
 	return tx.Commit()
 }

@@ -312,7 +312,7 @@
 
 - **前置**：Instance 具有 desired/observed，可能存在按 server 的 active Job。
 - **动作**：GET runtime，必要时主动查询 Agent status。
-- **结果**：默认以 AppDB observed 快照派生实例观测；主动结果也经 ObservationWriter CAS 写回；返回 serverId/serverName、generation、容器身份、`lastError`、observedAt，以及应用级三态计数（与 `APP-READ-001` 同一归类：已启用且 `desired=stopped` 收敛计入异常；活跃 Job 计入部署中）。每个实例旁挂该 server 的 `operation`（活跃 `queued`/`running`/`failed_retryable`，或无活跃时该 server 最新终态 `failed`）：含 status、stage、attempt、nextRunAt、operationId 与结构化错误。应用级 `status`/`operation` 若仍返回，仅为兼容观测 rollup / 最差节点回声，UI 主路径不得依赖。
+- **结果**：默认以 AppDB observed 快照派生实例观测；主动结果也经 ObservationWriter CAS 写回；返回 serverId/serverName、generation、容器身份、`lastError`、observedAt，以及应用级三态计数（与 `APP-READ-001` 同一归类：已启用且 `desired=stopped` 收敛计入异常；活跃 Job 计入部署中）。每个实例旁挂该 server 的 `operation`（活跃 `queued`/`running`/`failed_retryable`，或无活跃时该 server 最新终态 `failed`）：含 status、stage、attempt、nextRunAt、operationId、`executionId`、结构化错误；uncertainty 时另含 `monitorReasonCode`、`evidenceDeadlineAt`、`graceDeadlineAt`（便于深链日志与排障，不替代过程事件）。应用级 `status`/`operation` 若仍返回，仅为兼容观测 rollup / 最差节点回声，UI 主路径不得依赖。
 - **失败**：Docker not found 映射 `missing` 而非 stopped；Agent 不兼容/不可达不回退 SSH；终态部署错误不得因 active 查询为空而从**该节点** runtime 投影消失；容器启动后退出的结构化错误必须保留有界脱敏的状态、exit code 与 Docker State.Error。
 - **不变量**：handler/业务服务不得直接覆盖 observed；无容器的 pending/failed Job 不提供日志入口。apply 启动成功必须经过 `ORCH-CTRL-007` 的稳定观察；短时退出即使退出码为 0，也必须展示部署失败/退避，而非以瞬间 running 表示部署完成。协调单位是节点上的应用。
 - **验证**：runtime cache/refresh/missing、retryable schedule、per-server terminal failure projection、启用+stale stop desired 三计数测试。

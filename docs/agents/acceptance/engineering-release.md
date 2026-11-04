@@ -23,6 +23,14 @@
 - `ENG-LOG-008`：**已废弃**（产品 HTTP 读接口改由 `ENG-EVT-001` 约束；legacy `/api/v1/log-contexts*` 仍作短期别名）。
 - `ENG-EVT-001`：产品 HTTP 读接口为认证后的 `/api/v1/events`（列表，查询 `origin`/`operationId`/`executionId`/`module`/`from`/`to`/`hadError`/`limit`/`cursor`）、`/api/v1/events/{eventId}`、`/api/v1/events/{eventId}/logs`（或等价 `/lines`）、`/api/v1/logs`（查询可选 `eventId` 与 `level`/`limit`/`after`；缺 `eventId` 为全局扫描）与可选 `/api/v1/events/export`（NDJSON）。进程行 DTO 使用 camelCase：`eventId`/`module`/`level`/`state`/`origin`/`operationId`/`executionId`/`requestId`/`title`/`summary`/`result`/`hadError`/`startedAt`/`updatedAt`/`finishedAt`；JSONL 行页为 `{ items, nextCursor, hasMore }`（**不返回 total**；UI 不得伪造总条数/总页数），行对象至少含 `ts`/`level`/`module`/`eventId`/`msg`（**不含 state**）。实现位于 `internal/modules/events`，底层复用 AppDB `events` 与 `<dataRoot>/logs`。legacy `/api/v1/log-contexts*` 映射到同一 handler（`streamId` 作 eventId）。原 `/api/v1/activity/*` 产品读路由不再注册。验证：handler 单测
 - `ENG-EVT-002`：认证用户可 `POST /api/v1/events/clear`，确认值必须精确为 `CLEAR EVENTS AND LOGS`，否则 422 且不删除。成功删除 AppDB `events` 全部过程行与 `<dataRoot>/logs/panel-*.jsonl`（先关闭活动 sink），返回 `{ cleared: true }`；不得删除应用/服务器/凭据/证书/指标/任务/配置。设置页 Runtime 分区提供危险确认入口（`UI-SET-012`）。`POST /api/v1/debug/clear-runtime-data` 的 `clearing_logs` 阶段也必须覆盖同一 AppDB `events` + JSONL 范围（`DIAG-CLR-002`）。验证：handler 单测 + settings 确认文案（temp DB + temp log dir）与 `routes_manifest_test` 路由清单哈希（须在同一改动中更新 `wantCount`/`wantHash`）。
+- `ENG-EVT-010`：过程行内容合同（排障主路径：先 `/events` 再 `/logs?eventId=`）。每次 `RecordContext` / `EmitProcess` / `TouchProcess` 写入的过程行必须满足：
+  1. **title**：人话一句话（动词 + 对象名；应用/服务器等资源优先用 name，不得仅用裸 ID 作标题）。
+  2. **summary**：当前进度或原因（阶段、监控原因、错误码释义）；禁止与 title 相同、禁止空话如单独的 `execution evidence`、禁止仅机器枚举码。
+  3. **state**：`queued` / `running` / `succeeded` / `failed` / `cancelled`；监控中仍为 `running`，但 summary 必须写明 monitor 原因。
+  4. **operationId / executionId**：有则必填；意图主过程与执行证据过程二者在详情须互相可见，以便深链日志。
+  5. **resources_json**：至少含目标资源且带 name（能解析时）。
+  6. **eventId 稳定策略**：用户意图过程用 intent/operationId；单次远端执行证据用 executionId；生命周期决策必须更新意图主过程，不得只改 Job 行而不留过程事件。
+  机器码（`eventType`、`error_code`、`monitorReasonCode`）进 JSONL / Job 字段，不得单独充当用户 title。验证：logging 助手单测、部署 monitor/settle 过程行测试、既有 RecordContext 调用点文案回归。
 - `LOG-CTX-001`：**已废弃**，由 `ENG-EVT-001` 替代（AppDB 进程索引表为 `events`，非 `log_contexts`）。
 - `LOG-CTX-002`：**已废弃**，由 `ENG-EVT-001` 与 `TASK-LOG-001` 替代：event executor 输出 `AppendLog` 写入统一 JSONL（带 `eventId`）；`GET /api/v1/executions/{id}/logs` 读 JSONL 行，不得再查 `activity_events`。
 

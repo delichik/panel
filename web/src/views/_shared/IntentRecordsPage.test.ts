@@ -8,7 +8,7 @@ import { toastKey } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import type { Event, EventPage as Page } from '@/types/events';
 
-const event = (id: string): Event => ({
+const event = (id: string, extra: Partial<Event> = {}): Event => ({
   id,
   module: 'applications',
   level: 'info',
@@ -19,6 +19,7 @@ const event = (id: string): Event => ({
   hadError: false,
   updatedAt: '2026-09-15T00:00:00Z',
   startedAt: '2026-09-15T00:00:00Z',
+  ...extra,
 });
 const page = (id = 'stream-1'): Page => ({
   items: [event(id)],
@@ -81,5 +82,24 @@ describe('Events list contract', () => {
   it('accepts legacy streamId query as eventId', async () => {
     await render('/events?from=2026-09-14T00:00:00Z&streamId=stream-1');
     expect(eventsApi.get).toHaveBeenCalledWith('stream-1');
+  });
+
+  it('shows paired coordination and execution log deep links', async () => {
+    const paired = event('intent-1', {
+      title: 'Deploy app → server',
+      summary: 'Entered monitor (dispatch_wait)',
+      operationId: 'intent-1',
+      executionId: 'exec-9',
+    });
+    vi.spyOn(eventsApi, 'list').mockResolvedValue({ items: [paired], hasMore: false });
+    vi.spyOn(eventsApi, 'get').mockResolvedValue(paired);
+    await render('/events?from=2026-09-14T00:00:00Z&eventId=intent-1');
+    expect(wrapper!.text()).toContain('Entered monitor (dispatch_wait)');
+    await button('Execution evidence logs').trigger('click');
+    await flushPromises();
+    expect(router.currentRoute.value.path).toBe('/logs');
+    expect(router.currentRoute.value.query.eventId).toBe('exec-9');
+    expect(router.currentRoute.value.query.operationId).toBe('intent-1');
+    expect(router.currentRoute.value.query.executionId).toBe('exec-9');
   });
 });

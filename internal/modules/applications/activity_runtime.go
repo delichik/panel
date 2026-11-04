@@ -79,16 +79,27 @@ func (r *serviceRuntimeReconciler) collectExecutionProgress(ctx context.Context,
 		ExecutionID: req.ExecutionID,
 		RequestID:   runID,
 	})
-	_ = logging.RecordContext(logCtx, logging.ContextMeta{
-		Origin:        events.OriginProcess,
-		Title:         action,
-		Summary:       "execution evidence",
-		ActorJSON:     logging.MarshalActorJSON(map[string]string{"kind": initiator.Kind, "id": initiator.ID, "name": initiator.Name}),
-		ResourcesJSON: logging.MarshalResourcesJSON(resources),
+	evidenceTitle := fmt.Sprintf("Execution evidence (%s)", firstNonEmpty(action, "apply"))
+	evidenceSummary := fmt.Sprintf("Collecting Agent step reports for execution %s", req.ExecutionID)
+	_ = logging.EmitProcess(logCtx, logging.ProcessSpec{
+		EventID:     req.ExecutionID,
+		Module:      "agent-evidence",
+		Origin:      events.OriginProcess,
+		OperationID: operationID,
+		ExecutionID: req.ExecutionID,
+		RequestID:   runID,
+		Title:       evidenceTitle,
+		Summary:     evidenceSummary,
+		State:       logging.ProcessRunning,
+		EventType:   "execution.evidence",
+		Actor:       map[string]string{"kind": initiator.Kind, "id": initiator.ID, "name": initiator.Name},
+		Resources:   resources,
 	})
 	stepsByID := map[string]controlplane.Step{}
 	stepOrder := make([]string, 0, 8)
 	sawStep := false
+	chunkCount := 0
+	lastChunkStatus := ""
 	for {
 		page, err := client.ReadExecutionEvents(ctx, endpoint, agentcontract.ExecutionEventsRequest{ExecutionID: req.ExecutionID, SourceEpoch: epoch, SourceStreamID: stream, AfterSourceSeq: after, Limit: 100})
 		if err != nil {
@@ -204,8 +215,33 @@ func (r *serviceRuntimeReconciler) collectExecutionProgress(ctx context.Context,
 				logger.Error(msg, fields...)
 			case remote.Status == "unknown" || remote.EventType == "uncertainty.detected":
 				logger.Warn(msg, fields...)
+			case remote.EventType == "output.chunk":
+				// Downsample pull/progress noise: keep status changes and every 20th chunk.
+				chunkCount++
+				statusKey := strings.TrimSpace(remote.Text)
+				if i := strings.IndexByte(statusKey, ' '); i > 0 {
+					statusKey = statusKey[:i]
+				}
+				if statusKey != lastChunkStatus || chunkCount%20 == 1 {
+					lastChunkStatus = statusKey
+					logger.Info(msg, fields...)
+				}
 			default:
 				logger.Info(msg, fields...)
+			}
+			if remote.EventType == "step.started" || remote.EventType == "step.finished" {
+				_ = logging.TouchProcess(logCtx, logging.ProcessSpec{
+					EventID:     req.ExecutionID,
+					Module:      "agent-evidence",
+					Origin:      events.OriginProcess,
+					OperationID: operationID,
+					ExecutionID: req.ExecutionID,
+					Title:       evidenceTitle,
+					Summary:     fmt.Sprintf("Step %s %s", firstNonEmpty(remote.StepName, remote.StepID), firstNonEmpty(remote.Status, remote.EventType)),
+					State:       logging.ProcessRunning,
+					EventType:   remote.EventType,
+					Resources:   resources,
+				})
 			}
 			if err = ctxStore.SetLastSourceSeq(logCtx, req.ExecutionID, remote.SourceSeq); err != nil {
 				return executionProgress{}, err
@@ -420,20 +456,25 @@ func (r *serviceRuntimeReconciler) recordExecutionGap(ctx context.Context, req c
 		OperationID: operationID,
 		ExecutionID: req.ExecutionID,
 	})
-	logging.From(logCtx).Warn("Execution evidence has a source sequence gap and requires retransmission",
-		zap.String("eventType", "evidence.gap_detected"),
-		zap.String("sourceId", "agent:"+req.ServerID),
-		zap.String("sourceEpoch", epoch),
-		zap.String("sourceStreamId", req.ExecutionID),
-		zap.Int64("fromSourceSeq", from),
-		zap.Int64("toSourceSeq", to),
-	)
-	_ = logging.RecordContext(logCtx, logging.ContextMeta{
-		Origin:        events.OriginProcess,
-		Title:         "evidence.gap_detected",
-		Summary:       "Execution evidence has a source sequence gap and requires retransmission",
-		HadError:      true,
-		ResourcesJSON: logging.MarshalResourcesJSON(resources),
+	_ = logging.EmitProcess(logCtx, logging.ProcessSpec{
+		EventID:     req.ExecutionID,
+		Module:      "agent-evidence",
+		Origin:      events.OriginProcess,
+		OperationID: operationID,
+		ExecutionID: req.ExecutionID,
+		Title:       "Execution evidence gap",
+		Summary:     fmt.Sprintf("Agent acknowledged through seq %d but Panel only has through %d; retransmission required", to-1, from-1),
+		State:       logging.ProcessFailed,
+		HadError:    true,
+		Finished:    true,
+		EventType:   "evidence.gap_detected",
+		Resources:   resources,
+		Fields: []zap.Field{
+			zap.String("sourceId", "agent:"+req.ServerID),
+			zap.String("sourceEpoch", epoch),
+			zap.Int64("fromSourceSeq", from),
+			zap.Int64("toSourceSeq", to),
+		},
 	})
 	return nil
 }

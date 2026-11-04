@@ -2431,7 +2431,10 @@ func (c *dockerAPIClient) pullImage(ctx context.Context, image string) error {
 	}
 	// Docker reports pull errors inside successful HTTP responses. Decode each
 	// progress message and durably forward only its public progress fields.
+	// Downsample layer progress: emit on status/id change or every 20th line.
 	decoder := json.NewDecoder(res.Body)
+	chunkN := 0
+	lastKey := ""
 	for {
 		var progress struct {
 			Status   string `json:"status"`
@@ -2447,9 +2450,14 @@ func (c *dockerAPIClient) pullImage(ctx context.Context, image string) error {
 		}
 		text := strings.TrimSpace(strings.Join([]string{progress.ID, progress.Status, progress.Progress, progress.Error}, " "))
 		if sink := agentcontract.ExecutionEventSinkFromContext(ctx); sink != nil && text != "" {
-			stepID, _ := ctx.Value(executionStepKey{}).(string)
-			if err := sink.Append(ctx, agentcontract.ExecutionEvent{EventType: "output.chunk", StepID: stepID, Stream: "system", Text: text}); err != nil {
-				return &agentcontract.EventPersistenceError{Stage: "output", Err: err}
+			key := progress.ID + "|" + progress.Status
+			chunkN++
+			if progress.Error != "" || key != lastKey || chunkN%20 == 1 {
+				lastKey = key
+				stepID, _ := ctx.Value(executionStepKey{}).(string)
+				if err := sink.Append(ctx, agentcontract.ExecutionEvent{EventType: "output.chunk", StepID: stepID, Stream: "system", Text: text}); err != nil {
+					return &agentcontract.EventPersistenceError{Stage: "output", Err: err}
+				}
 			}
 		}
 		if progress.Error != "" {

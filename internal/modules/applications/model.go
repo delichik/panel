@@ -367,27 +367,31 @@ type RuntimeInstance struct {
 }
 
 type LifecycleOperation struct {
-	ID            string            `json:"id"`
-	OperationID   string            `json:"operationId,omitempty"`
-	ApplicationID string            `json:"applicationId"`
-	Type          string            `json:"type"`
-	Status        string            `json:"status"`
-	TaskID        string            `json:"taskId,omitempty"`
-	Generation    int               `json:"generation"`
-	SpecHash      string            `json:"specHash,omitempty"`
-	Trigger       string            `json:"trigger,omitempty"`
-	Stage         string            `json:"stage,omitempty"`
-	Attempt       int               `json:"attempt,omitempty"`
-	NextRunAt     *time.Time        `json:"nextRunAt,omitempty"`
-	Error         string            `json:"error,omitempty"`
-	ErrorCode     string            `json:"errorCode,omitempty"`
-	ErrorClass    string            `json:"errorClass,omitempty"`
-	ErrorDetail   string            `json:"errorDetail,omitempty"`
-	Targets       []LifecycleTarget `json:"targets,omitempty"`
-	CreatedAt     time.Time         `json:"createdAt"`
-	StartedAt     *time.Time        `json:"startedAt,omitempty"`
-	FinishedAt    *time.Time        `json:"finishedAt,omitempty"`
-	UpdatedAt     time.Time         `json:"updatedAt"`
+	ID                 string            `json:"id"`
+	OperationID        string            `json:"operationId,omitempty"`
+	ExecutionID        string            `json:"executionId,omitempty"`
+	ApplicationID      string            `json:"applicationId"`
+	Type               string            `json:"type"`
+	Status             string            `json:"status"`
+	TaskID             string            `json:"taskId,omitempty"`
+	Generation         int               `json:"generation"`
+	SpecHash           string            `json:"specHash,omitempty"`
+	Trigger            string            `json:"trigger,omitempty"`
+	Stage              string            `json:"stage,omitempty"`
+	Attempt            int               `json:"attempt,omitempty"`
+	NextRunAt          *time.Time        `json:"nextRunAt,omitempty"`
+	Error              string            `json:"error,omitempty"`
+	ErrorCode          string            `json:"errorCode,omitempty"`
+	ErrorClass         string            `json:"errorClass,omitempty"`
+	ErrorDetail        string            `json:"errorDetail,omitempty"`
+	MonitorReasonCode  string            `json:"monitorReasonCode,omitempty"`
+	EvidenceDeadlineAt *time.Time        `json:"evidenceDeadlineAt,omitempty"`
+	GraceDeadlineAt    *time.Time        `json:"graceDeadlineAt,omitempty"`
+	Targets            []LifecycleTarget `json:"targets,omitempty"`
+	CreatedAt          time.Time         `json:"createdAt"`
+	StartedAt          *time.Time        `json:"startedAt,omitempty"`
+	FinishedAt         *time.Time        `json:"finishedAt,omitempty"`
+	UpdatedAt          time.Time         `json:"updatedAt"`
 }
 
 type LifecycleTarget struct {

@@ -49,23 +49,27 @@ func (s *Store) ResolveUncertainManually(ctx context.Context, job Job, outcome, 
 	reason = activitylog.Redact(reason)
 	resources := []activitylog.Resource{{Type: "application", ID: job.ApplicationID, Role: "subject", RevisionID: job.DesiredRevisionID, Generation: job.DesiredGeneration}, {Type: "server", ID: job.ServerID, Role: "target"}}
 	logCtx := logging.Ensure(ctx, logging.Context{Module: "orchestrator", OperationID: job.IntentID, ExecutionID: job.ExecutionID})
-	logging.From(logCtx).Info(reason,
-		zap.String("eventType", "execution.verified"),
-		zap.String("action", job.Action),
-		zap.String("jobId", job.ID),
-		zap.String("outcome", outcome),
-		zap.String("verificationSource", "manual"),
-		zap.String("actorId", actor.ID),
-	)
-	_ = logging.RecordContext(logCtx, logging.ContextMeta{
-		Origin:        events.OriginUser,
-		Title:         "execution.verified",
-		Summary:       reason,
-		Result:        outcome,
-		HadError:      outcome == "failed",
-		Finished:      true,
-		ActorJSON:     logging.MarshalActorJSON(map[string]string{"kind": actor.Kind, "id": actor.ID, "name": actor.Name}),
-		ResourcesJSON: logging.MarshalResourcesJSON(resources),
+	_ = logging.EmitProcess(logCtx, logging.ProcessSpec{
+		EventID:     firstNonEmpty(job.IntentID, job.ID),
+		Module:      "orchestrator",
+		Origin:      events.OriginUser,
+		OperationID: job.IntentID,
+		ExecutionID: job.ExecutionID,
+		Title:       "Manual execution verified",
+		Summary:     reason,
+		State:       outcome,
+		HadError:    outcome == "failed",
+		Finished:    true,
+		EventType:   "execution.verified",
+		Actor:       map[string]string{"kind": actor.Kind, "id": actor.ID, "name": actor.Name},
+		Resources:   resources,
+		Fields: []zap.Field{
+			zap.String("action", job.Action),
+			zap.String("jobId", job.ID),
+			zap.String("outcome", outcome),
+			zap.String("verificationSource", "manual"),
+			zap.String("actorId", actor.ID),
+		},
 	})
 	message := ""
 	code := ""

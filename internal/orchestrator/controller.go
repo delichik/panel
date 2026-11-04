@@ -333,8 +333,12 @@ func (c *Controller) scanLoop(ctx context.Context) {
 }
 
 func (c *Controller) enqueueDue(ctx context.Context) (int, error) {
-	if err := c.store.RecoverExpiredLeases(ctx); err != nil {
+	expired, err := c.store.RecoverExpiredLeasesJobs(ctx)
+	if err != nil {
 		return 0, err
+	}
+	for _, job := range expired {
+		c.emitMonitorEntered(ctx, job, MonitorReasonLeaseExpired, "orchestrator lease expired; awaiting automatic execution evidence")
 	}
 	uncertain, err := c.store.ListUncertain(ctx, c.config.QueueSize)
 	if err != nil {
@@ -477,6 +481,9 @@ func (c *Controller) process(ctx context.Context, jobID string) error {
 		return err
 	}
 	traceJobEvent(ctx, "job_claimed", job)
+	c.emitIntentProcess(ctx, job, "deploy.job_claimed",
+		fmt.Sprintf("Claimed job for %s (attempt %d)", job.Action, job.Attempts),
+		logging.ProcessRunning, false, false)
 	if strings.TrimSpace(job.DesiredRevisionID) == "" && job.Action == ActionApply {
 		return c.fail(ctx, job, ReconcileResponse{ErrorCode: "invalid_revision", ErrorClass: "configuration", ErrorMessage: "job has no immutable revision", Retryable: false})
 	}
@@ -496,6 +503,9 @@ func (c *Controller) process(ctx context.Context, jobID string) error {
 	defer stopLease()
 	go c.renewLease(leaseCtx, job)
 	traceJobEvent(ctx, "agent_reconcile_started", job)
+	c.emitIntentProcess(ctx, job, "deploy.reconcile_started",
+		fmt.Sprintf("Runtime reconcile started (generation %d)", job.DesiredGeneration),
+		logging.ProcessRunning, false, false)
 	response, runErr, handedToMonitor := c.dispatchReconcile(ctx, job, rpc)
 	if handedToMonitor {
 		return nil
@@ -509,11 +519,18 @@ func (c *Controller) process(ctx context.Context, jobID string) error {
 			return c.fail(ctx, job, response)
 		}
 		if len(response.Steps) > 0 {
-			_, _ = c.store.UpdateProgress(context.WithoutCancel(ctx), job, lastStep(response.Steps), response.Steps)
+			stage := lastStep(response.Steps)
+			_, _ = c.store.UpdateProgress(context.WithoutCancel(ctx), job, stage, response.Steps)
+			c.emitProgressProjected(context.WithoutCancel(ctx), job, stage)
 		}
 		// Keep the conflict row owned and resolve the same execution identity
 		// before allowing new work (ENG-RUN-004 remote-fence).
-		return c.store.MarkUncertain(context.WithoutCancel(ctx), job, runErr.Error())
+		reason := runErr.Error()
+		if err := c.store.MarkUncertain(context.WithoutCancel(ctx), job, reason); err != nil {
+			return err
+		}
+		c.emitMonitorEntered(context.WithoutCancel(ctx), job, MonitorReasonTransportUnconfirmed, reason)
+		return nil
 	}
 	return c.acceptResponse(ctx, job, response)
 }
@@ -553,10 +570,13 @@ func (c *Controller) dispatchReconcile(ctx context.Context, job Job, rpc Reconci
 		return outcome.response, outcome.err, false
 	case <-timer.C:
 		traceJobEvent(ctx, "agent_reconcile_dispatched", job, zap.Duration("dispatch_wait", wait))
-		if err := c.store.MarkUncertain(context.WithoutCancel(ctx), job, "remote execution dispatched; awaiting Agent progress reports"); err != nil {
+		reason := "remote execution dispatched; awaiting Agent progress reports"
+		if err := c.store.MarkUncertain(context.WithoutCancel(ctx), job, reason); err != nil {
 			go func() { <-outcomes }()
 			return ReconcileResponse{}, err, false
 		}
+		c.emitMonitorEntered(context.WithoutCancel(ctx), job, MonitorReasonDispatchWait,
+			fmt.Sprintf("dispatch wait exceeded (%s)", wait))
 		// Keep settling the late RPC when the fence is unchanged so a deploy that
 		// finishes shortly after the dispatch window does not wait on polling.
 		go c.applyLateDispatchOutcome(context.WithoutCancel(ctx), job, outcomes)
@@ -600,9 +620,16 @@ func (c *Controller) acceptResponse(ctx context.Context, job Job, response Recon
 		// ORCH-CTRL-007: do not succeed apply before verify_running evidence.
 		// Keep fencing and wait for monitor/resolve to obtain a complete trail.
 		if len(response.Steps) > 0 {
-			_, _ = c.store.UpdateProgress(ctx, job, lastStep(response.Steps), response.Steps)
+			stage := lastStep(response.Steps)
+			_, _ = c.store.UpdateProgress(ctx, job, stage, response.Steps)
+			c.emitProgressProjected(ctx, job, stage)
 		}
-		return c.store.MarkUncertain(ctx, job, "apply is awaiting verify_running evidence")
+		reason := "apply is awaiting verify_running evidence"
+		if err := c.store.MarkUncertain(ctx, job, reason); err != nil {
+			return err
+		}
+		c.emitMonitorEntered(ctx, job, MonitorReasonAwaitingVerifyRunning, reason)
+		return nil
 	}
 	if response.ObservedAt.IsZero() {
 		response.ObservedAt = time.Now().UTC()
@@ -642,6 +669,10 @@ func (c *Controller) acceptResponse(ctx context.Context, job Job, response Recon
 		return ErrOwnershipLost
 	}
 	traceJobEvent(ctx, "job_succeeded", job, zap.String("observed_state", response.ObservedState))
+	c.emitIntentProcess(ctx, job, "deploy.job_succeeded",
+		fmt.Sprintf("Succeeded; observed %s", firstNonEmpty(response.ObservedState, "ok")),
+		logging.ProcessSucceeded, false, true,
+		zap.String("observed_state", response.ObservedState))
 	if c.config.OnSucceeded != nil {
 		c.config.OnSucceeded(ctx, job, response)
 	}
@@ -660,6 +691,9 @@ func (c *Controller) resolveUncertain(ctx context.Context, job Job) error {
 		// Only when ResolveExecution returned without transport error may we consider
 		// converged-observation early retry.
 		if err == nil && c.shouldRetryUncertainWhenConverged(ctx, job) {
+			c.emitIntentProcess(ctx, job, "deploy.evidence_stale_retry",
+				"Observation already matched desired; releasing fence for bounded retry (execution evidence incomplete)",
+				logging.ProcessRunning, true, false)
 			return c.fail(ctx, job, ReconcileResponse{
 				ErrorCode:    "execution_evidence_stale",
 				ErrorClass:   "evidence",
@@ -672,6 +706,9 @@ func (c *Controller) resolveUncertain(ctx context.Context, job Job) error {
 			return err
 		}
 		// Evidence window elapsed with no trustworthy result: terminal fail, never succeed.
+		c.emitIntentProcess(ctx, job, "deploy.evidence_unreachable",
+			"Evidence window elapsed without a trustworthy Agent result",
+			logging.ProcessFailed, true, true)
 		return c.fail(ctx, job, ReconcileResponse{
 			ErrorCode:    "execution_evidence_unreachable",
 			ErrorClass:   "evidence",
@@ -681,6 +718,9 @@ func (c *Controller) resolveUncertain(ctx context.Context, job Job) error {
 		})
 	}
 	if c.shouldRetryUncertainWhenConverged(ctx, job) {
+		c.emitIntentProcess(ctx, job, "deploy.evidence_stale_retry",
+			"Observation already matched desired; releasing fence for bounded retry (execution evidence incomplete)",
+			logging.ProcessRunning, true, false)
 		return c.fail(ctx, job, ReconcileResponse{
 			ErrorCode:    "execution_evidence_stale",
 			ErrorClass:   "evidence",
@@ -692,6 +732,9 @@ func (c *Controller) resolveUncertain(ctx context.Context, job Job) error {
 	if !c.uncertaintyEvidenceExpired(job) {
 		return nil
 	}
+	c.emitIntentProcess(ctx, job, "deploy.evidence_unreachable",
+		"Evidence window elapsed; no execution result resolver is available",
+		logging.ProcessFailed, true, true)
 	return c.fail(ctx, job, ReconcileResponse{
 		ErrorCode:    "execution_evidence_unreachable",
 		ErrorClass:   "evidence",
@@ -797,12 +840,31 @@ func (c *Controller) fail(ctx context.Context, job Job, response ReconcileRespon
 		traceJobEvent(ctx, "job_retry_scheduled", job,
 			zap.String("error_code", response.ErrorCode),
 			zap.String("error_class", response.ErrorClass))
+		c.emitIntentProcess(ctx, job, "deploy.job_retry_scheduled",
+			fmt.Sprintf("Retry scheduled (%s): %s", response.ErrorCode, firstNonEmpty(response.ErrorMessage, response.ErrorClass)),
+			logging.ProcessRunning, true, false,
+			zap.String("error_code", response.ErrorCode),
+			zap.String("error_class", response.ErrorClass))
 	} else {
 		traceJobEvent(ctx, "job_failed", job,
 			zap.String("error_code", response.ErrorCode),
 			zap.String("error_class", response.ErrorClass))
+		c.emitIntentProcess(ctx, job, "deploy.job_failed",
+			fmt.Sprintf("Failed (%s): %s", response.ErrorCode, firstNonEmpty(response.ErrorMessage, response.ErrorClass)),
+			logging.ProcessFailed, true, true,
+			zap.String("error_code", response.ErrorCode),
+			zap.String("error_class", response.ErrorClass))
 	}
 	return nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 func (c *Controller) String() string { return fmt.Sprintf("orchestrator[%s]", c.config.Owner) }

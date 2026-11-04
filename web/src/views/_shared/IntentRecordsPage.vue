@@ -124,10 +124,29 @@ function openLogs(item: Event, diagnose = true) {
   void router.push(logsPath({
     eventId: item.id,
     operationId: item.operationId,
+    executionId: item.executionId,
     level: diagnose ? 'warning,error' : undefined,
     from: read('from') || undefined,
     to: read('to') || undefined,
   }));
+}
+
+function openPairedLogs(item: Event, kind: 'operation' | 'execution') {
+  const eventId = kind === 'execution' ? item.executionId : item.operationId;
+  if (!eventId) return;
+  void router.push(logsPath({
+    eventId,
+    operationId: item.operationId,
+    executionId: item.executionId,
+    level: 'warning,error',
+    from: read('from') || undefined,
+    to: read('to') || undefined,
+  }));
+}
+
+function hasPairedLogs(item: Event | null) {
+  if (!item?.operationId || !item.executionId) return false;
+  return item.operationId !== item.id || item.executionId !== item.id;
 }
 
 async function load() {
@@ -282,8 +301,12 @@ onBeforeUnmount(() => {
               <Badge v-if="row.level" :tone="eventTone(row.level)">{{ levelLabel(row.level) }}</Badge>
             </template>
             <template #title="{ row }">
-              <strong class="block max-w-[24rem] truncate text-foreground">{{ translateEventSummary(t, titleLabel(row)) }}</strong>
-              <span v-if="row.summary && row.summary !== row.title" class="mt-1 block max-w-[24rem] truncate text-xs text-danger">{{ row.summary }}</span>
+              <strong class="block max-w-[28rem] truncate text-foreground">{{ translateEventSummary(t, titleLabel(row)) }}</strong>
+              <span
+                v-if="row.summary && row.summary !== row.title"
+                class="mt-1 block max-w-[28rem] truncate text-xs"
+                :class="row.hadError || row.state === 'failed' ? 'text-danger' : 'text-muted-foreground'"
+              >{{ row.summary }}</span>
             </template>
             <template #state="{ row }">
               <Badge :tone="operationTone(row.state)">{{ stateLabel(row.state || (row.finishedAt ? 'ended' : 'running')) }}</Badge>
@@ -333,7 +356,11 @@ onBeforeUnmount(() => {
             <Badge v-if="detail.hadError" tone="danger">{{ t('activity.hadError') }}</Badge>
             <Badge v-if="detail.level" :tone="eventTone(detail.level)">{{ levelLabel(detail.level) }}</Badge>
           </div>
-          <p v-if="detail.summary" class="m-0 break-words rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ detail.summary }}</p>
+          <p
+            v-if="detail.summary"
+            class="m-0 break-words rounded-xl border p-3 text-sm"
+            :class="detail.hadError || detail.state === 'failed' ? 'border-danger-border bg-danger-bg text-danger' : 'border-border bg-muted text-foreground'"
+          >{{ detail.summary }}</p>
           <p v-else class="m-0 text-sm text-muted-foreground">{{ t('eventsPage.noFailureSummary') }}</p>
           <dl class="grid gap-2 text-sm sm:grid-cols-2">
             <div><dt class="text-muted-foreground">{{ t('eventsPage.module') }}</dt><dd>{{ detail.module }}</dd></div>
@@ -342,6 +369,10 @@ onBeforeUnmount(() => {
             <div v-if="detail.operationId"><dt class="text-muted-foreground">{{ t('logsPage.operationId') }}</dt><dd class="font-mono text-xs">{{ detail.operationId }}</dd></div>
             <div v-if="detail.executionId"><dt class="text-muted-foreground">{{ t('logsPage.executionId') }}</dt><dd class="font-mono text-xs">{{ detail.executionId }}</dd></div>
           </dl>
+          <div v-if="hasPairedLogs(detail)" class="flex flex-wrap gap-2">
+            <Button v-if="detail.operationId && detail.operationId !== detail.id" size="sm" variant="secondary" @click="openPairedLogs(detail, 'operation')">{{ t('eventsPage.viewOperationLogs') }}</Button>
+            <Button v-if="detail.executionId && detail.executionId !== detail.id" size="sm" variant="secondary" @click="openPairedLogs(detail, 'execution')">{{ t('eventsPage.viewExecutionLogs') }}</Button>
+          </div>
           <p class="m-0 text-sm text-muted-foreground">{{ t('eventsPage.diagnoseHint') }}</p>
         </div>
       </ConsolePage>

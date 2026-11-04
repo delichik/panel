@@ -2013,11 +2013,12 @@ function operationStageLabel(stage: string) {
   return label === key ? stage : label;
 }
 
-function openApplicationTasks(operationId = '') {
+function openApplicationTasks(operationId = '', executionId = '') {
   void router.push({
     path: '/events',
     query: {
       operationId: operationId || undefined,
+      executionId: executionId || undefined,
       resourceType: 'application',
       resourceId: selectedApplication.value.id,
     },
@@ -2299,13 +2300,14 @@ onBeforeUnmount(() => {
                             :tone="instanceOperationStatus(instance) === 'result_unknown' ? 'warning' : undefined"
                             :label="operationStatusLabel(instanceOperationStatus(instance))"
                           />
-                          <Button v-if="instance.operation.operationId" size="sm" variant="ghost" @click="openApplicationTasks(instance.operation.operationId)"><ClipboardList />{{ t('applicationsPage.viewOperation') }}</Button>
+                          <Button v-if="instance.operation.operationId" size="sm" variant="ghost" @click="openApplicationTasks(instance.operation.operationId, instance.operation.executionId)"><ClipboardList />{{ t('applicationsPage.viewOperation') }}</Button>
                         </div>
                         <div class="grid gap-2 sm:grid-cols-3">
                           <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationStage') }}</span><strong>{{ uncertaintyNeedsAttention(instance.operation.errorClass, instance.operation.stage) ? t('applicationsPage.status.result_unknown') : (isDeployProgressStage(instance.operation.stage) || instance.operation.stage ? operationStageLabel(instance.operation.stage || '') : t('common.notAvailable')) }}</strong></div>
                           <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationAttempt') }}</span><strong>{{ instance.operation.attempt ?? t('common.notAvailable') }}</strong></div>
                           <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationNextRetry') }}</span><strong>{{ instance.operation.nextRunAt ? formatDateTime(instance.operation.nextRunAt) : t('common.notAvailable') }}</strong></div>
                         </div>
+                        <p v-if="instance.operation.monitorReasonCode" class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.monitorReason') }}: {{ instance.operation.monitorReasonCode }}<span v-if="instance.operation.evidenceDeadlineAt"> · {{ t('applicationsPage.evidenceDeadline') }} {{ formatDateTime(instance.operation.evidenceDeadlineAt) }}</span></p>
                         <p v-if="instanceOperationStatus(instance) === 'result_unknown'" class="m-0 text-sm text-warning">{{ t('applicationsPage.unknownResultHint') }}</p>
                         <div v-if="instanceOperationStatus(instance) !== 'result_unknown' && instance.operation.errorCode !== 'execution_monitoring' && (instance.operation.error || instance.operation.errorCode || instance.operation.errorDetail)" role="alert" class="grid gap-1 rounded-lg border border-danger-border bg-danger-bg p-2 text-danger">
                           <strong>{{ t('applicationsPage.operationError') }}<span v-if="instance.operation.errorCode"> · {{ instance.operation.errorCode }}</span></strong>
