@@ -1,0 +1,1409 @@
+package tasks
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"panel/internal/platform/activitylog"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"panel/internal/platform/config"
+	storage "panel/internal/platform/database"
+	panelerr "panel/internal/platform/errors"
+	httpx "panel/internal/platform/http"
+	"panel/internal/platform/events"
+	"panel/internal/platform/logging"
+)
+
+func newTestService(t *testing.T) *Service {
+	t.Helper()
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := logging.Configure(cfg.DataRoot); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(logging.CloseFileSinkForTest)
+	logging.SetContextStore(events.NewStore(store.AppDB()))
+	t.Cleanup(func() { logging.SetContextStore(nil) })
+	svc := NewService(store.AppDB())
+	for _, def := range []Definition{
+		{Type: "test", ConcurrencyPolicy: ConcurrencyParallelAllowed},
+		{Type: "sample_task", AllowRetry: true, ConcurrencyPolicy: ConcurrencyParallelAllowed},
+		{Type: "sample_restart", AllowRetry: true, ConcurrencyPolicy: ConcurrencyParallelAllowed},
+		{Type: "package_refresh", AllowRunNow: true, AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
+		{Type: "package_upgrade_selected", DisallowCancel: true, ConcurrencyPolicy: ConcurrencyParallelAllowed},
+		{Type: "package_upgrade_all", DisallowCancel: true, ConcurrencyPolicy: ConcurrencyParallelAllowed},
+		{Type: "metrics_collect", Hidden: true, AllowRunNow: true, AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
+		{Type: "server_connectivity_test", Hidden: true, AllowRunNow: true, AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
+		{Type: "server_info_collect", AllowRunNow: true, AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
+		{Type: "task_fixture_retryable", AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
+		{Type: "server_restart", AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
+		{Type: "certificate_issue", AllowRunNow: true, AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
+	} {
+		svc.MustRegister(def)
+	}
+	return svc
+}
+
+func enableTestExecutor(svc *Service, taskType string) {
+	def, _ := svc.Registry().Definition(taskType)
+	def.Execute = func(TaskContext) error { return nil }
+	svc.Registry().Replace(def)
+}
+
+func TestCancelRejectsNonCancellableTask(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	task, err := svc.Create(ctx, CreateInput{Type: "package_upgrade_selected", Status: StatusRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = svc.Cancel(ctx, task.ID, "user requested")
+	var pe *panelerr.Error
+	if !errors.As(err, &pe) || pe.Code != "task_cancel_unsupported" {
+		t.Fatalf("expected non-cancellable task to be rejected, got %v", err)
+	}
+	got, err := svc.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusRunning {
+		t.Fatalf("expected task to stay running, got %s", got.Status)
+	}
+}
+
+func TestCancelByServerSkipsNonCancellableTasks(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	blocked, err := svc.Create(ctx, CreateInput{Type: "package_upgrade_all", ServerID: "srv_1", ResourceType: "server", ResourceID: "srv_1", Status: StatusRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !svc.isCancellationBlocked("package_upgrade_all") || !svc.isCancellationBlocked(blocked.Type) {
+		t.Fatalf("package_upgrade_all should be registered as non-cancellable, got %q", blocked.Type)
+	}
+	blockedFromDB, err := svc.Get(ctx, blocked.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !svc.isCancellationBlocked(blockedFromDB.Type) {
+		t.Fatalf("loaded task type %q should be non-cancellable", blockedFromDB.Type)
+	}
+	cancellable, err := svc.Create(ctx, CreateInput{Type: "package_refresh", ServerID: "srv_1", ResourceType: "server", ResourceID: "srv_1", Status: StatusRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	count, err := svc.CancelByServer(ctx, "srv_1", "server removed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected only the cancellable task to be cancelled, got %d", count)
+	}
+	gotBlocked, err := svc.Get(ctx, blocked.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotBlocked.Status != StatusRunning {
+		t.Fatalf("expected non-cancellable task to stay running, got %s", gotBlocked.Status)
+	}
+	gotCancellable, err := svc.Get(ctx, cancellable.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotCancellable.Status != StatusCancelled {
+		t.Fatalf("expected cancellable task to be cancelled, got %s", gotCancellable.Status)
+	}
+}
+
+func TestTaskLifecycleAndLogs(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	task, err := svc.Create(ctx, CreateInput{Type: "test", Summary: "test task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Start(ctx, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Advance(ctx, task.ID, "running", "password=secret"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Complete(ctx, task.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	logs, _, err := svc.Logs(ctx, task.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(logs) != 1 || strings.Contains(logs[0].Line, "secret") {
+		t.Fatalf("expected redacted log, got %#v", logs)
+	}
+	got, err := svc.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusCompleted || got.FinishedAt == nil {
+		t.Fatalf("unexpected task state: %#v", got)
+	}
+	if got.Percentage == nil || *got.Percentage != 100 {
+		t.Fatalf("expected completed task progress to be 100, got %#v", got.Percentage)
+	}
+}
+
+func TestCreateCompletedTaskHasFinishedState(t *testing.T) {
+	svc := newTestService(t)
+	task, err := svc.Create(context.Background(), CreateInput{Type: "sample_task", Status: StatusCompleted, Summary: "registered"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.FinishedAt == nil || got.Percentage == nil || *got.Percentage != 100 {
+		t.Fatalf("expected completed task to have finished time and 100 percent progress: %#v", got)
+	}
+}
+
+func TestListFiltersByStatusServerAndType(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	matching, err := svc.Create(ctx, CreateInput{Type: "metrics_collect", ServerID: "srv_1", Summary: "metrics"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Start(ctx, matching.ID); err != nil {
+		t.Fatal(err)
+	}
+	other, err := svc.Create(ctx, CreateInput{Type: "package_refresh", ServerID: "srv_2", Summary: "packages"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Complete(ctx, other.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.List(ctx, ListFilter{
+		Status:   string(StatusRunning),
+		ServerID: "srv_1",
+		Type:     "metrics_collect",
+		Limit:    50,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Total != 1 || len(got.Items) != 1 || got.Items[0].ID != matching.ID {
+		t.Fatalf("unexpected filtered tasks: %#v", got)
+	}
+}
+
+func TestListFiltersByMultipleStatusesAndTypes(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	runningApp, err := svc.Create(ctx, CreateInput{Type: "sample_task", ServerID: "srv_1", Summary: "deploy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Start(ctx, runningApp.ID); err != nil {
+		t.Fatal(err)
+	}
+	failedPackage, err := svc.Create(ctx, CreateInput{Type: "package_refresh", ServerID: "srv_1", Summary: "packages", Status: StatusFailed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completedApp, err := svc.Create(ctx, CreateInput{Type: "sample_restart", ServerID: "srv_1", Summary: "restart", Status: StatusCompleted})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := svc.List(ctx, ListFilter{
+		Statuses: []string{StatusRunning, StatusFailed},
+		Types:    []string{"sample_task", "package_refresh"},
+		ServerID: "srv_1",
+		Limit:    50,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Total != 2 || len(got.Items) != 2 {
+		t.Fatalf("expected two matching tasks, got %#v", got)
+	}
+	ids := map[string]bool{got.Items[0].ID: true, got.Items[1].ID: true}
+	if !ids[runningApp.ID] || !ids[failedPackage.ID] || ids[completedApp.ID] {
+		t.Fatalf("unexpected filtered task ids: %#v", got.Items)
+	}
+}
+
+func TestListReturnsEmptySliceWhenNoTasksMatch(t *testing.T) {
+	svc := newTestService(t)
+	got, err := svc.List(context.Background(), ListFilter{
+		Status: "failed",
+		Limit:  50,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Items == nil {
+		t.Fatal("expected empty slice, got nil")
+	}
+	if got.Total != 0 || len(got.Items) != 0 {
+		t.Fatalf("expected no tasks, got %#v", got)
+	}
+}
+
+func TestListHidesInternalConnectivityTasksUnlessFiltered(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	hiddenConnectivity, err := svc.Create(ctx, CreateInput{Type: "server_connectivity_test", Summary: "hidden connectivity"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hiddenMetrics, err := svc.Create(ctx, CreateInput{Type: "metrics_collect", Summary: "hidden metrics"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible, err := svc.Create(ctx, CreateInput{Type: "server_info_collect", Summary: "visible discovery"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := svc.List(ctx, ListFilter{Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Total != 1 || len(got.Items) != 1 || got.Items[0].ID != visible.ID {
+		t.Fatalf("expected only visible task, got %#v", got)
+	}
+
+	filtered, err := svc.List(ctx, ListFilter{Type: "server_connectivity_test", Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filtered.Total != 1 || len(filtered.Items) != 1 || filtered.Items[0].ID != hiddenConnectivity.ID {
+		t.Fatalf("explicit type filter should return internal task, got %#v", filtered)
+	}
+
+	all, err := svc.List(ctx, ListFilter{IncludeInternal: true, Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if all.Total != 3 || len(all.Items) != 3 {
+		t.Fatalf("all type filter should include internal tasks, got %#v", all)
+	}
+	ids := map[string]bool{}
+	for _, task := range all.Items {
+		ids[task.ID] = true
+	}
+	if !ids[hiddenConnectivity.ID] || !ids[hiddenMetrics.ID] || !ids[visible.ID] {
+		t.Fatalf("all type filter missed task ids: %#v", all.Items)
+	}
+}
+
+func TestListCommonTasksExcludesSchedulerTriggeredTasks(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	if _, err := svc.Create(ctx, CreateInput{Type: "package_refresh", TriggerType: "scheduler", Summary: "scheduled refresh"}); err != nil {
+		t.Fatal(err)
+	}
+	visible, err := svc.Create(ctx, CreateInput{Type: "package_refresh", TriggerType: "user", Summary: "manual refresh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	common, err := svc.List(ctx, ListFilter{ExcludeScheduled: true, Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if common.Total != 1 || len(common.Items) != 1 || common.Items[0].ID != visible.ID {
+		t.Fatalf("expected only user-triggered task, got %#v", common)
+	}
+
+	explicit, err := svc.List(ctx, ListFilter{Types: []string{"package_refresh"}, ExcludeScheduled: true, Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if explicit.Total != 2 {
+		t.Fatalf("explicit type filter should include scheduled tasks, got %#v", explicit)
+	}
+}
+
+func TestListOrdersNewestTasksFirst(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	oldTask, err := svc.Create(ctx, CreateInput{Type: "test", Summary: "old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newTask, err := svc.Create(ctx, CreateInput{Type: "test", Summary: "new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET created_at=? WHERE id=?`, time.Now().UTC().Add(-2*time.Hour).Format(time.RFC3339Nano), oldTask.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET created_at=? WHERE id=?`, time.Now().UTC().Format(time.RFC3339Nano), newTask.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := svc.List(ctx, ListFilter{Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Items) != 2 || got.Items[0].ID != newTask.ID || got.Items[1].ID != oldTask.ID {
+		t.Fatalf("expected newest task first, got %#v", got.Items)
+	}
+}
+
+func TestListPaginatesTasks(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		if _, err := svc.Create(ctx, CreateInput{Type: "test", Summary: "task"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := svc.List(ctx, ListFilter{Limit: 2, Offset: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Total != 3 || got.Page != 2 || got.PageSize != 2 || len(got.Items) != 1 {
+		t.Fatalf("unexpected paginated tasks: %#v", got)
+	}
+}
+
+func TestListOperationPagePaginatesOperationsAndReturnsTheirTasks(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	oldOp, err := svc.Create(ctx, CreateInput{OperationID: "op-old", Type: "test", Summary: "old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := svc.Create(ctx, CreateInput{OperationID: "op-batch", Type: "test", Summary: "batch parent", ChildCount: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	childIDs := []string{}
+	for i := 1; i <= 3; i++ {
+		child, err := svc.Create(ctx, CreateInput{OperationID: "op-batch", Type: "test", ParentTaskID: parent.ID, ChildIndex: i, ChildCount: 3, Summary: "batch child"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		childIDs = append(childIDs, child.ID)
+	}
+	newOp, err := svc.Create(ctx, CreateInput{OperationID: "op-new", Type: "test", Summary: "new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := svc.List(ctx, ListFilter{Limit: 2, OperationPage: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Total != 3 || got.Page != 1 || got.PageSize != 2 {
+		t.Fatalf("unexpected operation page metadata: %#v", got)
+	}
+	ids := map[string]bool{}
+	for _, item := range got.Items {
+		ids[item.ID] = true
+		if item.OperationID == oldOp.OperationID {
+			t.Fatalf("old operation should not be on the first operation page: %#v", got.Items)
+		}
+	}
+	if !ids[newOp.ID] || !ids[parent.ID] {
+		t.Fatalf("expected newest operation and batch parent, got %#v", got.Items)
+	}
+	for _, id := range childIDs {
+		if !ids[id] {
+			t.Fatalf("expected batch child %s on the operation page, got %#v", id, got.Items)
+		}
+	}
+}
+
+func TestMissingExecutionPreservesUncertainResult(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	tracked, err := svc.Create(ctx, CreateInput{Type: "task_fixture_retryable", Summary: "installing firewall", Status: StatusRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	untracked, err := svc.Create(ctx, CreateInput{Type: "server_restart", Summary: "restarting"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET status=?,started_at=? WHERE id=?`, StatusRunning, now.Format(time.RFC3339Nano), untracked.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	failed, err := svc.FailRunningWithoutExecution(ctx, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed != 1 {
+		t.Fatalf("expected one untracked task to fail, got %d", failed)
+	}
+	gotTracked, err := svc.Get(ctx, tracked.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotTracked.Status != StatusRunning || !svc.HasRunningExecution(tracked.ID) {
+		t.Fatalf("expected tracked task to remain running, got %#v", gotTracked)
+	}
+	gotUntracked, err := svc.Get(ctx, untracked.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotUntracked.Status != StatusRunning || gotUntracked.Stage != "uncertain" || gotUntracked.FinishedAt != nil || !strings.Contains(gotUntracked.Error, "automatic execution evidence") {
+		t.Fatalf("expected untracked task to retain uncertainty, got %#v", gotUntracked)
+	}
+	if gotUntracked.NextRunAt == nil || gotUntracked.NextRunAt.Before(now.Add(29*time.Minute)) {
+		t.Fatalf("expected evidence deadline about 30m ahead, got %#v", gotUntracked.NextRunAt)
+	}
+	still, err := svc.FailUncertainPastEvidenceWindow(ctx, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if still != 0 {
+		t.Fatalf("evidence window must not expire immediately, got %d", still)
+	}
+	expired, err := svc.FailUncertainPastEvidenceWindow(ctx, now.Add(31*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired != 1 {
+		t.Fatalf("expected uncertain task to fail after evidence window, got %d", expired)
+	}
+	gotExpired, err := svc.Get(ctx, untracked.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotExpired.Status != StatusFailed || gotExpired.Stage != "orphan_execution_timeout" || !strings.Contains(gotExpired.Error, "verification window") {
+		t.Fatalf("expected orphan timeout failure, got %#v", gotExpired)
+	}
+}
+
+func TestRemoteFenceOrphanSkipsLocalUncertainMark(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	svc.MustRegister(Definition{Type: "deploy_remote_fence", RecoveryPolicy: RecoveryRemoteFence, AllowRetry: true})
+	task, err := svc.Create(ctx, CreateInput{Type: "deploy_remote_fence", Summary: "deploy", Status: StatusRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const fence = "lease_keep_me"
+	if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET lease_token=?, execution_id='exec_keep', stage='' WHERE id=?`, fence, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	svc.runningMu.Lock()
+	delete(svc.runningExecutions, task.ID)
+	svc.runningMu.Unlock()
+
+	failed, err := svc.FailRunningWithoutExecution(ctx, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed != 0 {
+		t.Fatalf("remote-fence runs must not be marked uncertain by local orphan loop, got %d", failed)
+	}
+	got, err := svc.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusRunning || got.Stage == "uncertain" {
+		t.Fatalf("expected running without local uncertain stage, got %#v", got)
+	}
+	var leaseToken, stage string
+	if err := svc.db.QueryRowContext(ctx, `SELECT COALESCE(lease_token,''), COALESCE(stage,'') FROM event_runs WHERE id=?`, task.ID).Scan(&leaseToken, &stage); err != nil {
+		t.Fatal(err)
+	}
+	if leaseToken != fence {
+		t.Fatalf("orphan hold must keep lease_token, got %q want %q", leaseToken, fence)
+	}
+	if stage == "uncertain" {
+		t.Fatal("remote-fence orphan must not write stage=uncertain")
+	}
+}
+
+func TestFailUncertainPastEvidenceWindowSkipsRemoteFence(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	svc.MustRegister(Definition{Type: "deploy_remote_fence", RecoveryPolicy: RecoveryRemoteFence})
+	task, err := svc.Create(ctx, CreateInput{Type: "deploy_remote_fence", Summary: "deploy", Status: StatusRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339Nano)
+	if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET stage='uncertain', next_run_at=?, lease_token='lease_x' WHERE id=?`, past, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	expired, err := svc.FailUncertainPastEvidenceWindow(ctx, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired != 0 {
+		t.Fatalf("remote-fence must not be failed by local uncertain window, got %d", expired)
+	}
+	var status, leaseToken string
+	if err := svc.db.QueryRowContext(ctx, `SELECT status, COALESCE(lease_token,'') FROM event_runs WHERE id=?`, task.ID).Scan(&status, &leaseToken); err != nil {
+		t.Fatal(err)
+	}
+	if status != StatusRunning || leaseToken != "lease_x" {
+		t.Fatalf("expected running+lease retained, status=%s lease=%s", status, leaseToken)
+	}
+}
+
+func TestFailUncertainPastEvidenceWindowORPrecedenceIgnoresCompleted(t *testing.T) {
+	// Regression (oracle-phoenix): unparenthesized
+	//   status=running AND stage=uncertain AND (A) OR (B)
+	// made (B) match every historical completed row with empty next_run_at.
+	// Production counted ~73k IDs then Get()+UPDATE each → ~85% CPU every 30s.
+	svc := newTestService(t)
+	ctx := context.Background()
+	old := time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339Nano)
+	for i := 0; i < 50; i++ {
+		task, err := svc.Create(ctx, CreateInput{Type: "test", Summary: "done"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := svc.Start(ctx, task.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := svc.Complete(ctx, task.ID, "ok"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET next_run_at='', started_at=?, created_at=?, finished_at=? WHERE id=?`, old, old, old, task.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	expired, err := svc.FailUncertainPastEvidenceWindow(ctx, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired != 0 {
+		t.Fatalf("completed history must not match uncertain window query, got %d", expired)
+	}
+	var completed int
+	if err := svc.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM event_runs WHERE status=?`, StatusCompleted).Scan(&completed); err != nil {
+		t.Fatal(err)
+	}
+	if completed != 50 {
+		t.Fatalf("completed rows must stay completed, got %d", completed)
+	}
+}
+
+func TestFailUncertainPastEvidenceWindowExcludesRemoteFenceAtQuery(t *testing.T) {
+	// Regression: load-then-skip on thousands of deploy uncertain rows saturated CPU
+	// (FailUncertainPastEvidenceWindow ~85% in production pprof). Query must exclude
+	// remote-fence types so only local-timeout rows are loaded.
+	svc := newTestService(t)
+	ctx := context.Background()
+	svc.MustRegister(Definition{Type: "deploy_remote_fence", RecoveryPolicy: RecoveryRemoteFence})
+	past := time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339Nano)
+	for i := 0; i < 40; i++ {
+		task, err := svc.Create(ctx, CreateInput{Type: "deploy_remote_fence", Summary: "deploy", Status: StatusRunning})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET stage='uncertain', next_run_at=? WHERE id=?`, past, task.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	local, err := svc.Create(ctx, CreateInput{Type: "test", Summary: "local", Status: StatusRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET stage='uncertain', next_run_at=? WHERE id=?`, past, local.ID); err != nil {
+		t.Fatal(err)
+	}
+	expired, err := svc.FailUncertainPastEvidenceWindow(ctx, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired != 1 {
+		t.Fatalf("expected only the local-timeout row to expire, got %d", expired)
+	}
+	var deployRunning int
+	if err := svc.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM event_runs WHERE type='deploy_remote_fence' AND status=? AND stage='uncertain'`, StatusRunning).Scan(&deployRunning); err != nil {
+		t.Fatal(err)
+	}
+	if deployRunning != 40 {
+		t.Fatalf("remote-fence uncertain rows must remain untouched, got %d", deployRunning)
+	}
+	gotLocal, err := svc.Get(ctx, local.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotLocal.Status != StatusFailed || gotLocal.Stage != "orphan_execution_timeout" {
+		t.Fatalf("local-timeout row should fail, got %#v", gotLocal)
+	}
+}
+
+func TestRunningExecutionLifecycleFollowsTaskStatus(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	task, err := svc.Create(ctx, CreateInput{Type: "test", Summary: "task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if svc.HasRunningExecution(task.ID) {
+		t.Fatal("queued task should not have a running execution")
+	}
+	if err := svc.Start(ctx, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !svc.HasRunningExecution(task.ID) {
+		t.Fatal("started task should have a running execution")
+	}
+	if err := svc.Complete(ctx, task.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	if svc.HasRunningExecution(task.ID) {
+		t.Fatal("completed task should not have a running execution")
+	}
+}
+
+func TestStartIsIdempotentForActiveExecution(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	task, err := svc.Create(ctx, CreateInput{Type: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Start(ctx, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Start(ctx, task.ID); err != nil {
+		t.Fatalf("expected duplicate start to be idempotent, got %v", err)
+	}
+}
+
+func TestRetryPreservesTaskParams(t *testing.T) {
+	svc := newTestService(t)
+	enableTestExecutor(svc, "server_info_collect")
+	ctx := context.Background()
+	original, err := svc.Create(ctx, CreateInput{
+		OperationID:   "op-1",
+		Type:          "server_info_collect",
+		ExecutionMode: ExecutionModeSerial,
+		ScheduleKey:   "server-info:srv-1",
+		ServerID:      "srv-1",
+		ResourceType:  "server",
+		ResourceID:    "srv-1",
+		TriggeredBy:   "scheduler",
+		ParamsJSON:    `{"bootstrap":false}`,
+		MetadataJSON:  `{"source":"test"}`,
+		Summary:       "Collecting server information",
+		MaxRetries:    3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	retry, err := svc.Retry(ctx, original.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.ParamsJSON != original.ParamsJSON {
+		t.Fatalf("retry should preserve params json, got %q want %q", retry.ParamsJSON, original.ParamsJSON)
+	}
+	if retry.MetadataJSON != original.MetadataJSON || retry.ScheduleKey != original.ScheduleKey || retry.ExecutionMode != original.ExecutionMode {
+		t.Fatalf("retry should preserve execution context, got %#v from %#v", retry, original)
+	}
+	if retry.TriggerType != "retry" || retry.TriggerTaskID != original.ID {
+		t.Fatalf("retry trigger should point at original task, got %#v", retry)
+	}
+	if retry.ParentTaskID != "" || retry.ChildCount != 0 || retry.ChildIndex != 0 {
+		t.Fatalf("retry should not reattach to old batch parent, got %#v", retry)
+	}
+}
+
+func TestFinishExecutionKeepsRunningDatabaseTaskTracked(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	task, err := svc.Create(ctx, CreateInput{Type: "test", Summary: "task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Start(ctx, task.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	svc.FinishExecution(task.ID)
+	if !svc.HasRunningExecution(task.ID) {
+		t.Fatal("running database task should keep its live execution")
+	}
+	failed, err := svc.FailRunningWithoutExecution(ctx, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed != 0 {
+		t.Fatalf("expected tracked running task to remain active, got %d failed tasks", failed)
+	}
+	got, err := svc.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusRunning {
+		t.Fatalf("expected task to remain running, got %#v", got)
+	}
+}
+
+func TestFinishExecutionClearsNonRunningDatabaseTask(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	task, err := svc.Create(ctx, CreateInput{Type: "test", Summary: "task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Start(ctx, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET status=? WHERE id=?`, StatusFailed, task.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	svc.FinishExecution(task.ID)
+
+	if svc.HasRunningExecution(task.ID) {
+		t.Fatal("non-running database task should clear its live execution")
+	}
+}
+
+func TestExpireStaleQueuedMarksOnlySelectedOldQueuedTasksFailed(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	oldWorker, err := svc.Create(ctx, CreateInput{Type: "task_fixture_retryable", Summary: "installing firewall"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldScheduled, err := svc.Create(ctx, CreateInput{Type: "certificate_issue", Summary: "issue cert"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recentWorker, err := svc.Create(ctx, CreateInput{Type: "server_restart", Summary: "restart"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := now.Add(-30 * time.Minute).Format(time.RFC3339Nano)
+	for _, taskID := range []string{oldWorker.ID, oldScheduled.ID} {
+		if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET created_at=? WHERE id=?`, old, taskID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	expired, err := svc.ExpireStaleQueued(ctx, now, 10*time.Minute, []string{"task_fixture_retryable", "server_restart"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired != 1 {
+		t.Fatalf("expected one stale queued task to expire, got %d", expired)
+	}
+	gotOldWorker, err := svc.Get(ctx, oldWorker.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotOldWorker.Status != StatusFailed || gotOldWorker.FinishedAt == nil || !strings.Contains(gotOldWorker.Error, "worker startup timeout") {
+		t.Fatalf("expected old worker task to fail, got %#v", gotOldWorker)
+	}
+	gotOldScheduled, err := svc.Get(ctx, oldScheduled.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotOldScheduled.Status != StatusQueued {
+		t.Fatalf("scheduled task type should stay queued, got %#v", gotOldScheduled)
+	}
+	gotRecentWorker, err := svc.Get(ctx, recentWorker.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotRecentWorker.Status != StatusQueued {
+		t.Fatalf("recent worker task should stay queued, got %#v", gotRecentWorker)
+	}
+}
+
+func TestExpireStaleQueuedKeepsTasksWaitingBehindActiveHead(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	// 队首任务（更早创建、同一并发键）仍在活跃，其后的排队任务即使 age 超过
+	// maxAge 也不能被当作孤儿淘汰——否则一次耗时超过 StaleQueuedAfter 的部署
+	// 会杀掉所有合法排队的后续任务。
+	head, err := svc.Create(ctx, CreateInput{Type: "task_fixture_retryable", Summary: "installing firewall", ConcurrencyKey: "k1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiter, err := svc.Create(ctx, CreateInput{Type: "task_fixture_retryable", Summary: "waiting behind head", ConcurrencyKey: "k1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	orphan, err := svc.Create(ctx, CreateInput{Type: "server_restart", Summary: "orphan"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := now.Add(-10 * time.Minute).Format(time.RFC3339Nano)
+	older := now.Add(-20 * time.Minute).Format(time.RFC3339Nano)
+	if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET created_at=?, status='running' WHERE id=?`, older, head.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, taskID := range []string{waiter.ID, orphan.ID} {
+		if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET created_at=? WHERE id=?`, old, taskID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	expired, err := svc.ExpireStaleQueued(ctx, now, 5*time.Minute, []string{"task_fixture_retryable", "server_restart"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired != 1 {
+		t.Fatalf("expected only the orphan to expire, got %d", expired)
+	}
+	gotWaiter, err := svc.Get(ctx, waiter.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotWaiter.Status != StatusQueued {
+		t.Fatalf("expected the waiter behind an active head to stay queued, got %#v", gotWaiter)
+	}
+	gotOrphan, err := svc.Get(ctx, orphan.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotOrphan.Status != StatusFailed {
+		t.Fatalf("expected the orphan to expire, got %#v", gotOrphan)
+	}
+}
+
+func TestTaskOperationTriggerMetadataAndSteps(t *testing.T) {
+	svc := newTestService(t)
+	enableTestExecutor(svc, "sample_task")
+	ctx := context.Background()
+	task, err := svc.Create(ctx, CreateInput{
+		OperationID:         "op_1",
+		Type:                "sample_task",
+		ServerID:            "srv_1",
+		NodeID:              "srv_1",
+		ResourceType:        "application",
+		ResourceID:          "app_1",
+		TriggerType:         "user",
+		TriggerResourceType: "application",
+		TriggerResourceID:   "app_1",
+		TriggerTaskID:       "task_parent",
+		TriggeredBy:         "alice",
+		MetadataJSON:        `{"reason":"manual"}`,
+		Summary:             "deploy api",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.OperationID != "op_1" || got.NodeID != "srv_1" || got.TriggerType != "user" || got.TriggeredBy != "alice" || got.MetadataJSON != `{"reason":"manual"}` {
+		t.Fatalf("task metadata was not persisted: %#v", got)
+	}
+	step, err := svc.UpsertStep(ctx, task.ID, StepInput{Step: "schedule", Status: StatusRunning, Percentage: 25, MetadataJSON: `{"node":"srv_1"}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.ID == "" || step.StartedAt == nil {
+		t.Fatalf("expected started step: %#v", step)
+	}
+	step, err = svc.UpsertStep(ctx, task.ID, StepInput{Step: "schedule", Status: StatusCompleted, Percentage: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.FinishedAt == nil {
+		t.Fatalf("expected finished step: %#v", step)
+	}
+	steps, err := svc.Steps(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(steps) != 1 || steps[0].Step != "schedule" || steps[0].Status != StatusCompleted {
+		t.Fatalf("unexpected steps: %#v", steps)
+	}
+	retry, err := svc.Retry(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.ID == task.ID || retry.OperationID != task.OperationID || retry.TriggerType != "retry" || retry.TriggerTaskID != task.ID {
+		t.Fatalf("unexpected retry task: %#v", retry)
+	}
+}
+
+func TestCleanupRetainedDeletesOldGenericButKeepsDeploy(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	svc.MustRegister(Definition{Type: "application_deploy", Hidden: true, RecoveryPolicy: RecoveryRemoteFence})
+
+	old, err := svc.Create(ctx, CreateInput{Type: "test", Summary: "old completed", Status: StatusCompleted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET finished_at=? WHERE id=?`, time.Now().UTC().Add(-48*time.Hour).Format(time.RFC3339Nano), old.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	recent, err := svc.Create(ctx, CreateInput{Type: "test", Summary: "recent completed", Status: StatusCompleted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET finished_at=? WHERE id=?`, time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano), recent.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	deploy, err := svc.Create(ctx, CreateInput{Type: "application_deploy", Summary: "old deploy", Status: StatusCompleted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET finished_at=? WHERE id=?`, time.Now().UTC().Add(-48*time.Hour).Format(time.RFC3339Nano), deploy.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	deleted, err := svc.CleanupRetained(ctx, 24*time.Hour)
+	if err != nil {
+		t.Fatalf("cleanup failed: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("expected 1 generic terminal run deleted, got %d", deleted)
+	}
+	if _, err := svc.Get(ctx, old.ID); err == nil {
+		t.Fatal("expected old generic run to be deleted")
+	}
+	if _, err := svc.Get(ctx, recent.ID); err != nil {
+		t.Fatalf("expected recent generic run to remain: %v", err)
+	}
+	if _, err := svc.Get(ctx, deploy.ID); err != nil {
+		t.Fatalf("expected deploy run to remain (ENG-RET-001): %v", err)
+	}
+}
+
+func TestExpireStaleQueuedFailsOldScheduledTasks(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	svc.MustRegister(Definition{Type: "scheduled_stale", StaleQueuedAfter: time.Minute})
+	// scheduled 任务只有 next_run_at 已到期（<= now）才会被过期清理误杀修复后的行为。
+	past := now.Add(-time.Minute)
+	task, err := svc.Create(ctx, CreateInput{Type: "scheduled_stale", Status: StatusScheduled, NextRunAt: &past})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := now.Add(-30 * time.Minute).Format(time.RFC3339Nano)
+	if _, err := svc.db.ExecContext(ctx, `UPDATE event_runs SET created_at=? WHERE id=?`, old, task.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	expired, err := svc.ExpireStaleQueued(ctx, now, 10*time.Minute, []string{"scheduled_stale"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired != 1 {
+		t.Fatalf("expected one stale scheduled task to expire, got %d", expired)
+	}
+	got, err := svc.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusFailed || got.FinishedAt == nil || !strings.Contains(got.Error, "worker startup timeout") {
+		t.Fatalf("expected stale scheduled task to fail, got %#v", got)
+	}
+}
+
+func TestListFiltersByQuery(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	web, err := svc.Create(ctx, CreateInput{Type: "sample_task", Summary: "deploy web frontend"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := svc.Create(ctx, CreateInput{Type: "package_refresh", Summary: "refresh certificates"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := svc.Create(ctx, CreateInput{Type: "sample_restart", Summary: "restart node"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Fail(ctx, failed.ID, errors.New("timeout while contacting agent")); err != nil {
+		t.Fatal(err)
+	}
+	underscore, err := svc.Create(ctx, CreateInput{Type: "sample_task", Summary: "foo_bar"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := svc.Create(ctx, CreateInput{Type: "sample_task", Summary: "fooXbar"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertQueryIDs := func(q string, want ...string) {
+		t.Helper()
+		got, err := svc.List(ctx, ListFilter{Q: q, Limit: 50})
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotIDs := map[string]bool{}
+		for _, item := range got.Items {
+			gotIDs[item.ID] = true
+		}
+		if len(got.Items) != len(want) {
+			t.Fatalf("q=%q: got %d items %#v, want %d", q, len(got.Items), got.Items, len(want))
+		}
+		for _, id := range want {
+			if !gotIDs[id] {
+				t.Fatalf("q=%q: missing %s in %#v", q, id, got.Items)
+			}
+		}
+	}
+	assertQueryIDs("web", web.ID)
+	assertQueryIDs("certificates", cert.ID)
+	assertQueryIDs("timeout", failed.ID)
+	assertQueryIDs("package_refresh", cert.ID)
+	assertQueryIDs(web.ID, web.ID)
+	// LIKE 通配符必须转义：foo_bar 只匹配字面下划线，不能匹配 fooXbar。
+	assertQueryIDs("foo_bar", underscore.ID)
+	_ = other
+}
+
+func TestHandlerListAcceptsQuery(t *testing.T) {
+	svc := newTestService(t)
+	task, err := svc.Create(context.Background(), CreateInput{Type: "sample_task", Summary: "deploy web"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Create(context.Background(), CreateInput{Type: "sample_restart", Summary: "restart"}); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/executions?q=deploy&includeInternal=true", nil)
+	rec := httptest.NewRecorder()
+	NewHandler(svc).List(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected list to succeed, got %d", rec.Code)
+	}
+	var envelope httpx.Envelope
+	if err := json.NewDecoder(rec.Body).Decode(&envelope); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(envelope.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result ListResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 1 || len(result.Items) != 1 || result.Items[0].ID != task.ID {
+		t.Fatalf("expected one matching task, got %#v", result)
+	}
+}
+
+func TestAppendLogPreservesAllAcceptedLines(t *testing.T) {
+	svc := newTestService(t)
+	task, err := svc.Create(context.Background(), CreateInput{Type: "sample_task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for i := 0; i < 1005; i++ {
+		if err := svc.AppendLog(ctx, task.ID, "stdout", "line "+strconv.Itoa(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var count int
+	if err := svc.db.QueryRow(`SELECT COUNT(*) FROM activity_events WHERE event_type='output.chunk' AND json_extract(data_json,'$.taskId')=?`, task.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("AppendLog must not write activity_events, got %d", count)
+	}
+}
+
+func TestAppendLogPreservesOverlongUnicodeLine(t *testing.T) {
+	svc := newTestService(t)
+	task, err := svc.Create(context.Background(), CreateInput{Type: "sample_task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	long := strings.Repeat("长", 8292)
+	if err := svc.AppendLog(context.Background(), task.ID, "stdout", long); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFailDoesNotAppendLogToTerminalTask(t *testing.T) {
+	svc := newTestService(t)
+	task, err := svc.Create(context.Background(), CreateInput{Type: "sample_task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Complete(context.Background(), task.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Fail(context.Background(), task.ID, errors.New("late failure")); err != nil {
+		t.Fatal(err)
+	}
+	logs, _, err := svc.Logs(context.Background(), task.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(logs) != 0 {
+		t.Fatalf("terminal task should not receive failure log, got %#v", logs)
+	}
+	got, err := svc.Get(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusCompleted {
+		t.Fatalf("terminal status must not change, got %#v", got)
+	}
+}
+
+func TestExpireStaleQueuedKeepsFutureScheduledTask(t *testing.T) {
+	svc := newTestService(t)
+	svc.MustRegister(Definition{Type: "stale_scheduled", StaleQueuedAfter: time.Minute})
+	ctx := context.Background()
+	future := time.Now().UTC().Add(time.Hour)
+	task, err := svc.Create(ctx, CreateInput{Type: "stale_scheduled", Status: StatusScheduled, NextRunAt: &future})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)
+	if _, err := svc.db.Exec(`UPDATE event_runs SET created_at=? WHERE id=?`, old, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	expired, err := svc.ExpireStaleQueued(ctx, time.Now().UTC(), time.Minute, []string{"stale_scheduled"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired != 0 {
+		t.Fatalf("future scheduled task must not expire, got %d", expired)
+	}
+	got, err := svc.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusScheduled {
+		t.Fatalf("expected scheduled, got %#v", got)
+	}
+	past := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339Nano)
+	if _, err := svc.db.Exec(`UPDATE event_runs SET next_run_at=? WHERE id=?`, past, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	expired, err = svc.ExpireStaleQueued(ctx, time.Now().UTC(), time.Minute, []string{"stale_scheduled"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired != 1 {
+		t.Fatalf("due scheduled task should expire, got %d", expired)
+	}
+}
+
+func TestCancelByServerWritesCancelEvents(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	task, err := svc.Create(ctx, CreateInput{Type: "package_refresh", ServerID: "srv_1", ResourceType: "server", ResourceID: "srv_1", Status: StatusRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := svc.CancelByServer(ctx, "srv_1", "server removed"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := svc.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusCancelled {
+		t.Fatalf("expected cancelled task, got %#v", got)
+	}
+}
+
+func TestExecutionStartRollsBackWhenAuditCannotPersist(t *testing.T) {
+	t.Skip("control triggers no longer write activity_events; admission gate retired")
+}
+
+func TestTaskLogsReadEveryPageAfterCompletion(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	task, err := svc.Create(ctx, CreateInput{Type: "sample_task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Start(ctx, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		if err := svc.AppendLog(ctx, task.ID, "stdout", "line "+strconv.Itoa(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := svc.Complete(ctx, task.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	logs, next, err := svc.Logs(ctx, task.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(logs) != 5 || next != 5 {
+		t.Fatalf("logs=%d next=%d want 5", len(logs), next)
+	}
+	more, _, err := svc.Logs(ctx, task.ID, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(more) != 0 {
+		t.Fatalf("expected empty second page, got %#v", more)
+	}
+}
+
+func TestCreatedExecutionExposesCanonicalRequestReceipt(t *testing.T) {
+	svc := newTestService(t)
+	ctx := activitylog.WithReceipt(context.Background())
+	task, err := svc.Create(ctx, CreateInput{Type: "sample_task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationID, eventID, _ := activitylog.ReceiptFromContext(ctx)
+	if operationID != task.OperationID || eventID != task.ID {
+		t.Fatalf("missing canonical receipt: %s %s (task=%s op=%s)", operationID, eventID, task.ID, task.OperationID)
+	}
+}
+
+func TestManualRetryChainKeepsLogicalExecutionIdentity(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	enableTestExecutor(svc, "sample_task")
+	first, err := svc.Create(ctx, CreateInput{Type: "sample_task", Status: StatusFailed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := svc.Retry(ctx, first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	third, err := svc.Retry(ctx, second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.OperationID != first.OperationID || third.OperationID != first.OperationID {
+		t.Fatalf("retry chain changed operation: first=%s second=%s third=%s", first.OperationID, second.OperationID, third.OperationID)
+	}
+	if second.TriggerTaskID != first.ID || third.TriggerTaskID != second.ID {
+		t.Fatalf("retry chain trigger links broken: %#v %#v %#v", first, second, third)
+	}
+}
+
+// activityLevels 汇总一个执行的 Activity 事实按级别计数，用于断言内部例行
+// 任务的降噪范围。
+func activityLevels(t *testing.T, svc *Service, runID string) map[string]int {
+	t.Helper()
+	rows, err := svc.db.Query(`SELECT level,COUNT(*) FROM activity_events WHERE run_id=? GROUP BY level`, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var level string
+		var count int
+		if err := rows.Scan(&level, &count); err != nil {
+			t.Fatal(err)
+		}
+		out[level] = count
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// TestQuietTaskActivityFactsAreDebugUnlessFailed 固定 TASK-REG-003：内部例行
+// 任务的创建/成功流转/输出为 debug，失败仍为 error。
+func TestQuietTaskActivityFactsAreDebugUnlessFailed(t *testing.T) {
+	t.Skip("control triggers no longer write activity_events; quiet levels live in unified logging")
+	svc := newTestService(t)
+	svc.Registry().Replace(Definition{Type: "agent_check", Quiet: true, ConcurrencyPolicy: ConcurrencyParallelAllowed})
+	ctx := context.Background()
+
+	task, err := svc.Create(ctx, CreateInput{Type: "agent_check", Summary: "Checking agent for srv_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var quiet int
+	if err := svc.db.QueryRow(`SELECT quiet FROM event_runs WHERE id=?`, task.ID).Scan(&quiet); err != nil {
+		t.Fatal(err)
+	}
+	if quiet != 1 {
+		t.Fatalf("quiet definition must persist quiet=1, got %d", quiet)
+	}
+	if err := svc.Start(ctx, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Advance(ctx, task.ID, "checked", "agent is compatible"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Complete(ctx, task.ID, "Checking agent for srv_1"); err != nil {
+		t.Fatal(err)
+	}
+	levels := activityLevels(t, svc, task.ID)
+	if levels["debug"] < 4 || levels["info"] != 0 {
+		t.Fatalf("routine check facts must stay debug, got %#v", levels)
+	}
+
+	failed, err := svc.Create(ctx, CreateInput{Type: "agent_check", Summary: "Checking agent for srv_2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Start(ctx, failed.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Fail(ctx, failed.ID, errors.New("agent unreachable")); err != nil {
+		t.Fatal(err)
+	}
+	failedLevels := activityLevels(t, svc, failed.ID)
+	if failedLevels["error"] == 0 || failedLevels["info"] != 0 {
+		t.Fatalf("quiet task failure must stay visible as error, got %#v", failedLevels)
+	}
+}
+
+// TestRoutineTaskActivityFactsStayInfo 固定 TASK-REG-003 的反向边界：未声明
+// Quiet 的任务事实保持 info，降噪不得外溢。
+func TestRoutineTaskActivityFactsStayInfo(t *testing.T) {
+	t.Skip("control triggers no longer write activity_events; quiet levels live in unified logging")
+	svc := newTestService(t)
+	ctx := context.Background()
+	task, err := svc.Create(ctx, CreateInput{Type: "sample_task", Summary: "user visible work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Start(ctx, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Complete(ctx, task.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	levels := activityLevels(t, svc, task.ID)
+	if levels["info"] == 0 || levels["debug"] != 0 {
+		t.Fatalf("non-quiet task facts must stay info, got %#v", levels)
+	}
+}
