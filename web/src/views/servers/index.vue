@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Cable, Eye, MoreHorizontal, Plus, RefreshCcw, Trash2, Wrench } from '@lucide/vue';
+import { Cable, Eye, MoreHorizontal, PlayCircle, Plus, RefreshCcw, Trash2, Wrench } from '@lucide/vue';
 import { credentialsApi } from '@/api/credentials';
 import { serversApi } from '@/api/servers';
 import Badge from '@/components/ui/Badge.vue';
@@ -44,6 +44,7 @@ import {
   normalizeFirewallView,
   normalizeServerDetailTab,
   normalizeServerResourceSubtab,
+  canRunPrivilegedOperation,
   serverDetailTabs,
   serverResourceSubtabs,
   serverSummaryStatusKey,
@@ -82,6 +83,8 @@ const confirmTarget = ref<ServerDto | null>(null);
 const deleting = ref(false);
 const rowBusy = ref<{ id: string; kind: 'test' | 'edit' } | null>(null);
 const tailscaleApplying = ref(false);
+const restartOpen = ref(false);
+const restarting = ref(false);
 const detailRoot = ref<HTMLElement | null>(null);
 
 const visited = reactive<Record<ServerDetailTab, boolean>>(Object.fromEntries(serverDetailTabs.map((tab) => [tab, false])) as Record<ServerDetailTab, boolean>);
@@ -412,6 +415,21 @@ function refreshDetail() {
   void load();
 }
 
+async function restartHost() {
+  const server = selectedServer.value;
+  if (!server || restarting.value) return;
+  restarting.value = true;
+  try {
+    const accepted = await serversApi.restart(server.id);
+    notifySuccess(t('serversPage.restartAccepted', { taskId: accepted.taskId }), accepted);
+    restartOpen.value = false;
+  } catch (err) {
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
+  } finally {
+    restarting.value = false;
+  }
+}
+
 async function applyTailscale() {
   const server = selectedServer.value;
   if (!server?.tailscaleEnabled || tailscaleApplying.value) return;
@@ -512,8 +530,9 @@ onBeforeUnmount(() => {
 
     <template #detail>
       <ConsolePage :title="detailTitle" :description="detailDescription" :back-label="t('common.backToList')" :body-scroll="false" @back="closeDetail">
-        <template v-if="selectedServer && activeTab === 'tailscale'" #actions>
-          <Button size="sm" variant="primary" :disabled="!selectedServer.tailscaleEnabled" :loading="tailscaleApplying" @click="applyTailscale"><RefreshCcw />{{ t('serversPage.tailscale.apply') }}</Button>
+        <template v-if="selectedServer" #actions>
+          <Button size="sm" variant="danger" :disabled="!canRunPrivilegedOperation(selectedServer)" :loading="restarting" @click="restartOpen = true"><PlayCircle />{{ t('serversPage.restart') }}</Button>
+          <Button v-if="activeTab === 'tailscale'" size="sm" variant="primary" :disabled="!selectedServer.tailscaleEnabled" :loading="tailscaleApplying" @click="applyTailscale"><RefreshCcw />{{ t('serversPage.tailscale.apply') }}</Button>
         </template>
         <div ref="detailRoot" data-testid="server-detail" class="h-full min-h-0" tabindex="-1" @keydown="onDetailKeydown">
           <EmptyState v-if="detailError && !serverDetails[selectedId]" variant="page" :title="t('common.loadFailed')" :description="detailError">
@@ -573,5 +592,20 @@ onBeforeUnmount(() => {
     @update:open="(value) => { if (!value) confirmTarget = null; }"
     @confirm="deleteSelected"
     @cancel="confirmTarget = null"
+  />
+
+  <ConfirmDialog
+    :open="restartOpen"
+    :title="t('serversPage.confirmRestartTitle')"
+    :description="selectedServer ? t('serversPage.confirmRestartDescription', { name: selectedServer.name }) : ''"
+    :impact="t('serversPage.confirmRestartImpact')"
+    tone="danger"
+    :loading="restarting"
+    :confirm-label="t('common.confirm')"
+    :cancel-label="t('common.cancel')"
+    :checkbox-label="t('serversPage.confirmCheckbox')"
+    @update:open="(value) => { restartOpen = value; }"
+    @confirm="restartHost"
+    @cancel="restartOpen = false"
   />
 </template>
