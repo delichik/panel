@@ -223,7 +223,7 @@ func (p *CloudflareProvider) do(ctx context.Context, method, endpoint string, bo
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return panelerr.BadGateway("cloudflare_unreachable", "Cloudflare API unreachable: "+err.Error())
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if cloudflareErrorCode(raw) == 81054 {
@@ -242,7 +242,7 @@ func (p *CloudflareProvider) do(ctx context.Context, method, endpoint string, bo
 		return panelerr.BadGateway("cloudflare_invalid_response", "Cloudflare API returned a non-JSON response")
 	}
 	if failed := cloudflareError(out); failed != "" {
-		return panelerr.BadGateway("cloudflare_api_error", failed)
+		return panelerr.BadGateway("cloudflare_api_error", "Cloudflare API error: "+failed)
 	}
 	return nil
 }

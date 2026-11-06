@@ -26,6 +26,13 @@ func TestTranslateLocaleUsesCodeSpecificPrefix(t *testing.T) {
 	}
 }
 
+func TestTranslateLocalePreservesCloudflareAPIErrorDetails(t *testing.T) {
+	got := TranslateLocale(LocaleSimplifiedChinese, "cloudflare_api_error", "Cloudflare API error: 1004: DNS Validation Error")
+	if !strings.HasPrefix(got, "Cloudflare API 错误 ") || !strings.Contains(got, "1004: DNS Validation Error") {
+		t.Fatalf("translation = %q", got)
+	}
+}
+
 func TestTranslateLocaleCoversReverseProxyFacilityValidation(t *testing.T) {
 	tests := map[string]string{
 		"facility_domain_servers_required":              "每个域名必须至少选择一个入口节点",

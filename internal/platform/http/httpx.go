@@ -55,13 +55,16 @@ func Error(w http.ResponseWriter, err error) {
 	} else {
 		message = i18n.Translate(code, message)
 	}
-	logFields := []zap.Field{zap.Int("status", status), zap.String("code", code), zap.Error(err)}
+	logFields := []zap.Field{zap.Int("status", status), zap.String("code", code), zap.String("message", message), zap.Error(err)}
 	// Error has no request handle; open a short-lived http module stream.
 	logger := logging.From(logging.Background("http"))
 	if status >= http.StatusInternalServerError {
 		logger.Error("api error response", logFields...)
 	} else {
-		logger.Debug("api error response", logFields...)
+		// Client and upstream failures must stay visible at default info/warn
+		// levels; Debug hid Cloudflare/DNS 502s and left operators with only a
+		// bare "http request completed" line.
+		logger.Warn("api error response", logFields...)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

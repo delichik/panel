@@ -23,6 +23,7 @@
 - `DNS-REC-007`：更新时排除自身ID再做同主机冲突检查；空recordId返回 `dns_record_id_required`；provider成功后尽力刷新快照，快照刷新失败不得把已成功远端写入报告为未执行。
 - `DNS-REC-008`：删除只删除指定provider记录，成功后尽力重建快照；空ID拒绝，provider失败时不得本地假删。
 - `DNS-REC-009`：Cloudflare列表必须按 `result_info.total_pages` 拉取全部分页，默认HTTP client超时30秒；官方错误envelope优先提供错误码/消息，81054统一映射为友好CNAME冲突。
+- `DNS-REC-010`：provider/上游失败必须以稳定 `cloudflare_*` / `dns_record_*` 错误码返回，用户可见 message 必须保留 Cloudflare 原始错误细节（中文可前缀翻译）；Panel 进程日志在默认级别下必须记录 `api error response`（含 status/code/message），不得只留下无错误正文的 `http request completed`。
 
 ## 3. 入口代理 DNS 同步
 
