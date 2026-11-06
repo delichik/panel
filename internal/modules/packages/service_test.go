@@ -541,6 +541,7 @@ func (fakePackageAgent) UFWAllow(context.Context, string, agentcontract.UFWAllow
 func (fakePackageAgent) UFWDelete(context.Context, string, agentcontract.UFWDeleteRequest) (remoteops.UFWStatus, error) {
 	return remoteops.UFWStatus{}, nil
 }
+func (fakePackageAgent) UFWConfirmPending(context.Context, string) error { return nil }
 func (fakePackageAgent) Fail2BanStatus(context.Context, string) (agentcontract.Fail2BanStatusResponse, error) {
 	return agentcontract.Fail2BanStatusResponse{}, nil
 }

@@ -262,6 +262,13 @@ func (c *GRPCClient) UFWDelete(ctx context.Context, endpoint string, req agentco
 	return agentrpc.GoUFWStatus(out), err
 }
 
+func (c *GRPCClient) UFWConfirmPending(ctx context.Context, endpoint string) error {
+	_, err := callRPC(c, ctx, endpoint, maintenanceTimeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.OKResponse, error) {
+		return client.UFWConfirmPending(ctx, &agentpb.Empty{})
+	})
+	return err
+}
+
 func (c *GRPCClient) Fail2BanStatus(ctx context.Context, endpoint string) (agentcontract.Fail2BanStatusResponse, error) {
 	out, err := callRPC(c, ctx, endpoint, maintenanceTimeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.Fail2BanStatusResponse, error) {
 		return client.Fail2BanStatus(ctx, &agentpb.Empty{})

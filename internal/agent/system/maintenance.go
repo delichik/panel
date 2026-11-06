@@ -109,7 +109,22 @@ func (c LocalCollector) AllowUFW(ctx context.Context, req agentcontract.UFWAllow
 	if err := agentfirewall.ValidateProtectedPort(req.Rule.Port, req.SSHPort, req.AgentPort); err != nil {
 		return remoteops.UFWStatus{}, err
 	}
-	if err := agentfirewall.WithMutationLock(func() error { return runUFWAllow(ctx, req.Rule) }); err != nil {
+	if err := agentfirewall.WithMutationLock(func() error {
+		if err := runUFWAllow(ctx, req.Rule); err != nil {
+			return err
+		}
+		protocol := strings.ToLower(strings.TrimSpace(req.Rule.Protocol))
+		if protocol == "" {
+			protocol = "tcp"
+		}
+		agentfirewall.ArmPending(agentfirewall.InverseOp{
+			Action:   agentfirewall.InverseDeleteAllow,
+			Port:     req.Rule.Port,
+			Protocol: protocol,
+			From:     strings.TrimSpace(req.Rule.From),
+		})
+		return nil
+	}); err != nil {
 		return remoteops.UFWStatus{}, err
 	}
 	return c.UFWStatus(ctx)

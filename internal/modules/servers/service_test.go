@@ -2415,6 +2415,9 @@ func (f *serverFakeAgentClient) UFWDelete(_ context.Context, url string, req age
 	f.deletedSSHPort = req.SSHPort
 	return f.ufw, f.err
 }
+func (f *serverFakeAgentClient) UFWConfirmPending(context.Context, string) error {
+	return f.err
+}
 
 func (f *serverFakeAgentClient) Fail2BanStatus(context.Context, string) (agentcontract.Fail2BanStatusResponse, error) {
 	return agentcontract.Fail2BanStatusResponse{Installed: true, Active: true, Jails: []string{"sshd"}}, f.err

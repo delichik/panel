@@ -117,6 +117,7 @@ func (m *Manager) EnsureApplicationRules(ctx context.Context, applicationID stri
 			return err
 		}
 		existing = append(existing, addedRule{Rule: want, Comment: owner})
+		ArmPending(InverseOp{Action: InverseDeleteAllow, Port: want.Port, Protocol: want.Protocol, Comment: owner})
 	}
 	verified, err := m.addedRules(ctx)
 	if err != nil {
@@ -181,6 +182,7 @@ func (m *Manager) CleanupApplicationRules(ctx context.Context, applicationID str
 		if containsAddedRule(after, current) {
 			return fmt.Errorf("managed firewall rule %d/%s was still present after UFW deletion", current.Port, current.Protocol)
 		}
+		ArmPending(InverseOp{Action: InverseAllow, Port: current.Port, Protocol: current.Protocol, Comment: owner})
 	}
 	return nil
 }
@@ -195,8 +197,11 @@ func (m *Manager) AllowRule(ctx context.Context, rule Rule, sshPort, agentPort i
 	if err := m.requireInstalled(); err != nil {
 		return err
 	}
-	_, err = m.runner.Run(ctx, "ufw", "allow", ruleTarget(normalized[0]))
-	return err
+	if _, err = m.runner.Run(ctx, "ufw", "allow", ruleTarget(normalized[0])); err != nil {
+		return err
+	}
+	ArmPending(InverseOp{Action: InverseDeleteAllow, Port: normalized[0].Port, Protocol: normalized[0].Protocol})
+	return nil
 }
 
 func (m *Manager) DeleteRule(ctx context.Context, number, sshPort, agentPort int) error {
@@ -230,8 +235,25 @@ func (m *Manager) DeleteRule(ctx context.Context, number, sshPort, agentPort int
 	if !ok || verified != target {
 		return errors.New("UFW rule changed before deletion; refresh and retry")
 	}
-	_, err = m.runner.Run(ctx, "ufw", "--force", "delete", strconv.Itoa(number))
-	return err
+	if _, err = m.runner.Run(ctx, "ufw", "--force", "delete", strconv.Itoa(number)); err != nil {
+		return err
+	}
+	ArmPending(InverseOp{
+		Action:   InverseAllow,
+		Port:     target.Port,
+		Protocol: target.Protocol,
+		From:     pendingFrom(target.From),
+		Comment:  target.Comment,
+	})
+	return nil
+}
+
+func pendingFrom(value string) string {
+	from := strings.TrimSpace(value)
+	if from == "" || strings.EqualFold(from, "anywhere") || strings.HasPrefix(strings.ToLower(from), "anywhere") {
+		return ""
+	}
+	return from
 }
 
 func (m *Manager) requireInstalled() error {

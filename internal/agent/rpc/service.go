@@ -166,6 +166,11 @@ func (h *Handler) UFWDelete(ctx context.Context, req *agentpb.UFWDeleteRequest) 
 	return pbUFWStatus(status), remoteError(err)
 }
 
+func (h *Handler) UFWConfirmPending(_ context.Context, _ *agentpb.Empty) (*agentpb.OKResponse, error) {
+	agentfirewall.ConfirmPending()
+	return &agentpb.OKResponse{Ok: true}, nil
+}
+
 func (h *Handler) Fail2BanStatus(ctx context.Context, _ *agentpb.Empty) (*agentpb.Fail2BanStatusResponse, error) {
 	status, err := h.collector.Fail2BanStatus(ctx)
 	return pbFail2BanStatus(status), remoteError(err)

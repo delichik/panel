@@ -220,7 +220,7 @@ func TestRuntimeReconcileReportsFirewallChannelPreflightAsRetryableWithoutAgentC
 	}
 }
 
-func TestRuntimeReconcileReportsFirewallChannelPostflightAsRetryableKnownFailure(t *testing.T) {
+func TestRuntimeReconcilePostflightFailureDoesNotBlockReconcile(t *testing.T) {
 	r, client, req, session := trackedTransport(t)
 	req.RenderedRuntimeSpec = []byte(`{"applicationId":"app","instanceId":"instance","containerName":"panel-app","image":"nginx"}`)
 	checks := 0
@@ -236,11 +236,14 @@ func TestRuntimeReconcileReportsFirewallChannelPostflightAsRetryableKnownFailure
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ErrorCode != "firewall_channel_postflight_failed" || !result.Retryable {
-		t.Fatalf("result = %#v", result)
+	if result.ErrorCode != "" {
+		t.Fatalf("postflight must not fail reconcile, result = %#v", result)
 	}
 	if client.lastReconcile.ApplicationID != req.ApplicationID {
 		t.Fatalf("agent request = %#v", client.lastReconcile)
+	}
+	if checks != 2 {
+		t.Fatalf("channel checks = %d, want 2", checks)
 	}
 }
 

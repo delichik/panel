@@ -312,8 +312,11 @@ func (s *Service) AllowUFW(ctx context.Context, serverID string, req UFWAllowReq
 			return UFWState{}, callErr
 		}
 		if err := s.verifyFirewallControlChannels(ctx, srv); err != nil {
+			// Leave the agent timer armed so the mutation rolls back; do not confirm.
+			logging.From(ctx).Warn("firewall postflight failed after allow; agent will roll back", zap.String("serverId", srv.ID), zap.Error(err))
 			return UFWState{}, err
 		}
+		s.confirmFirewallPending(ctx, maintenance, baseURL, srv.ID)
 		return ufwStateFromStatus(srv.ID, true, status), nil
 	}
 	if err := s.ensureUFWInstalled(ctx, srv); err != nil {
@@ -361,8 +364,10 @@ func (s *Service) DeleteUFWRule(ctx context.Context, serverID string, number int
 			return UFWState{}, callErr
 		}
 		if err := s.verifyFirewallControlChannels(ctx, srv); err != nil {
+			logging.From(ctx).Warn("firewall postflight failed after delete; agent will roll back", zap.String("serverId", srv.ID), zap.Error(err))
 			return UFWState{}, err
 		}
+		s.confirmFirewallPending(ctx, maintenance, baseURL, srv.ID)
 		return ufwStateFromStatus(srv.ID, true, status), nil
 	}
 	if err := s.ensureUFWInstalled(ctx, srv); err != nil {
@@ -388,9 +393,40 @@ func (s *Service) DeleteUFWRule(ctx context.Context, serverID string, number int
 		return UFWState{}, err
 	}
 	if err := s.verifyFirewallControlChannels(ctx, srv); err != nil {
+		// No agent timer on the SSH path; best-effort restore so a postflight
+		// failure cannot leave the control plane locked out.
+		if restoreErr := s.restoreUFWRuleSSH(ctx, srv, rule); restoreErr != nil {
+			logging.From(ctx).Warn("firewall SSH postflight failed and restore also failed", zap.String("serverId", srv.ID), zap.Error(err), zap.NamedError("restore", restoreErr))
+		} else {
+			logging.From(ctx).Warn("firewall SSH postflight failed; restored deleted rule", zap.String("serverId", srv.ID), zap.Error(err))
+		}
 		return UFWState{}, err
 	}
 	return ufwStateFromStatus(srv.ID, true, status), nil
+}
+
+func (s *Service) restoreUFWRuleSSH(ctx context.Context, srv Server, rule remoteops.UFWRuleStatus) error {
+	port, ok := remoteops.UFWRuleTargetPort(rule)
+	if !ok || s.exec == nil {
+		return panelerr.Validation("ufw_rule_target_unknown", "Unable to resolve UFW rule target; refusing restore")
+	}
+	protocol := "tcp"
+	if strings.Contains(strings.ToLower(rule.To), "/udp") {
+		protocol = "udp"
+	}
+	from := strings.TrimSpace(rule.From)
+	if index := strings.LastIndex(from, "#"); index >= 0 {
+		from = strings.TrimSpace(from[:index])
+	}
+	if strings.EqualFold(from, "anywhere") || strings.HasPrefix(strings.ToLower(from), "anywhere") {
+		from = ""
+	}
+	script, err := remoteops.UFWAllowScript([]remoteops.UFWRule{{Port: port, Protocol: protocol, From: from}})
+	if err != nil {
+		return err
+	}
+	_, err = (remoteops.Runner{Exec: s.exec, Target: serverTarget(srv)}).RunSudoLogged(ctx, script, ufwManageTimeout)
+	return err
 }
 
 func (s *Service) VerifyFirewallControlChannels(ctx context.Context, serverID string) error {
@@ -399,6 +435,18 @@ func (s *Service) VerifyFirewallControlChannels(ctx context.Context, serverID st
 		return err
 	}
 	return s.verifyFirewallControlChannels(ctx, srv)
+}
+
+// confirmFirewallPending tells the agent to keep the latest firewall mutation
+// after Panel opened fresh SSH and Agent connections. Confirm failures only
+// log: the agent timer remains the safety net and must not block other flows.
+func (s *Service) confirmFirewallPending(ctx context.Context, maintenance agentcontract.MaintenanceClient, baseURL, serverID string) {
+	if maintenance == nil {
+		return
+	}
+	if err := maintenance.UFWConfirmPending(ctx, baseURL); err != nil {
+		logging.From(ctx).Warn("firewall pending confirm failed; agent timer remains armed", zap.String("serverId", serverID), zap.Error(err))
+	}
 }
 
 func (s *Service) verifyFirewallControlChannels(ctx context.Context, srv Server) error {

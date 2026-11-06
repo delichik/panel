@@ -112,6 +112,8 @@
 - `UFW-API-005`：**已废弃（替代项 `AGT-FW-001..005`）**。UFW 安装与启用不再由用户触发，也不再各自创建任务；本能力改为 Agent 部署时的自动前提，因此不再有 `POST /ufw/install`、`POST /ufw/enable` 与 `server_ufw_install`、`server_ufw_enable` 任务类型。保留编号以维持引用稳定。
 - `UFW-API-006`：开启防火墙前必须先放行 SSH端口，再按派生 reverse-proxy标记放行入口端口；该不变量现由 `AGT-FW-005` 在 Agent 部署路径上保证，并必须由测试断言顺序。
 - `UFW-API-007`：状态读取与规则增删是防火墙页仅存的操作。页面不得再提供安装或启用入口，也不得把 `sys.ufw_installed`/`sys.ufw_supported` 用作按钮可用性判断；必须改为说明「安装与启用由 Agent 部署自动完成」（`securityPage.managedAutomatically`）。
+- `UFW-API-008`：经兼容 Agent 的规则增删成功后，Agent 必须登记有界回滚定时器（默认 90s，持久化 pending）；Panel 必须用**新的** SSH 与 Agent 连接做事后通道核验，核验通过后调用 `UFWConfirmPending` 取消回滚；核验失败不得 Confirm，由定时器或 Agent 退出前回滚。Confirm/回滚/事后核验相关错误只记日志，不得阻断无关业务流程。无 Agent 的 SSH 删除路径在事后核验失败时必须尽力恢复刚删除的规则。
+- `AGT-FW-007`：Agent 在 Allow/Delete/应用受管规则 Ensure（新增）与 Cleanup（删除）成功后必须 `ArmPending`；定时器到期、进程收到退出信号、或启动时发现未确认且已过期的 pending 文件时必须执行回滚；`UFWConfirmPending` 清空 pending。回滚失败只记日志。
 
 ## 6. fail2ban
 

@@ -92,6 +92,7 @@ type MaintenanceClient interface {
 	UpgradePackages(ctx context.Context, url string, req PackageUpgradeRequest) (CommandResponse, error)
 	UFWAllow(ctx context.Context, url string, req UFWAllowRequest) (remoteops.UFWStatus, error)
 	UFWDelete(ctx context.Context, url string, req UFWDeleteRequest) (remoteops.UFWStatus, error)
+	UFWConfirmPending(ctx context.Context, url string) error
 	Fail2BanStatus(ctx context.Context, url string) (Fail2BanStatusResponse, error)
 	ApplyFail2Ban(ctx context.Context, url string, req Fail2BanApplyRequest) (Fail2BanStatusResponse, error)
 	ReleaseFail2Ban(ctx context.Context, url string) (Fail2BanStatusResponse, error)

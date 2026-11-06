@@ -12,6 +12,7 @@ import (
 	"time"
 
 	agentcli "panel/internal/agent/cli"
+	agentfirewall "panel/internal/agent/firewall"
 	agentbootstrap "panel/internal/bootstrap/agent"
 	"panel/internal/platform/buildinfo"
 
@@ -70,6 +71,7 @@ func serveAgent() int {
 		log.Printf("initialize agent server: %v", err)
 		return exitError
 	}
+	agentfirewall.RestorePendingOnStartup()
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -88,6 +90,10 @@ func serveAgent() int {
 			return exitError
 		}
 	}
+
+	// Roll firewall mutations back before closing the listener so a crash or
+	// deploy restart mid-window cannot leave the node unreachable.
+	agentfirewall.RollbackPendingNow(context.Background())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

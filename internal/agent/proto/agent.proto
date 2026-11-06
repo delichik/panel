@@ -20,6 +20,10 @@ service AgentService {
   rpc UFWEnable(UFWEnableRequest) returns (UFWStatusResponse);
   rpc UFWAllow(UFWAllowRequest) returns (UFWStatusResponse);
   rpc UFWDelete(UFWDeleteRequest) returns (UFWStatusResponse);
+  // UFWConfirmPending cancels the agent-side firewall rollback timer after
+  // Panel verifies fresh SSH and Agent connectivity. Without this call the
+  // agent rolls the last mutation back when the timer expires or the process exits.
+  rpc UFWConfirmPending(Empty) returns (OKResponse);
   rpc Fail2BanStatus(Empty) returns (Fail2BanStatusResponse);
   rpc ApplyFail2Ban(Fail2BanApplyRequest) returns (Fail2BanStatusResponse);
   rpc ReleaseFail2Ban(Empty) returns (Fail2BanStatusResponse);

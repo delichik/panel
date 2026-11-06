@@ -12,6 +12,9 @@ import (
 	agentcontract "panel/internal/agent/contract"
 	appruntime "panel/internal/modules/applications/runtime"
 	controlplane "panel/internal/orchestrator"
+	"panel/internal/platform/logging"
+
+	"go.uber.org/zap"
 )
 
 // serviceRuntimeReconciler is deliberately owned by the orchestrator
@@ -118,9 +121,30 @@ func (r *serviceRuntimeReconciler) Reconcile(ctx context.Context, req controlpla
 		return response, callErr
 	}
 	if postflightErr != nil {
-		return firewallChannelFailure("firewall_channel_postflight_failed", response.Steps, postflightErr), nil
+		// Do not fail the reconcile: agent keeps a rollback timer for firewall
+		// mutations, and a postflight error must not block unrelated runtime work.
+		// Skipping Confirm leaves the timer armed so the node can recover reachability.
+		logging.From(ctx).Warn("firewall postflight failed after runtime reconcile; agent will roll back pending rules",
+			zap.String("serverId", req.ServerID),
+			zap.String("applicationId", req.ApplicationID),
+			zap.Error(postflightErr),
+		)
+		return response, nil
+	}
+	if confirmer, ok := r.service.runtimeClient.(firewallPendingConfirmer); ok {
+		if err := confirmer.UFWConfirmPending(context.WithoutCancel(ctx), endpoint); err != nil {
+			logging.From(ctx).Warn("firewall pending confirm failed after runtime reconcile",
+				zap.String("serverId", req.ServerID),
+				zap.String("applicationId", req.ApplicationID),
+				zap.Error(err),
+			)
+		}
 	}
 	return response, nil
+}
+
+type firewallPendingConfirmer interface {
+	UFWConfirmPending(ctx context.Context, baseURL string) error
 }
 
 // withServerQueue serializes Docker-mutating reconcile work through the shared
