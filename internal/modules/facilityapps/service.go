@@ -264,7 +264,7 @@ func (s *Service) SaveReverseProxy(ctx context.Context, in ReverseProxySaveInput
 	if err := s.syncReverseProxyTraits(ctx, previous.DeploymentServers, next.DeploymentServers); err != nil {
 		return ReverseProxyConfig{}, err
 	}
-	if err := s.triggerReverseProxyReconcile(ctx, "facility_app", removedServers(previous.DeploymentServers, next.DeploymentServers)); err != nil {
+	if err := s.triggerReverseProxyReconcile(ctx, "facility_app", removedServers(previous.DeploymentServers, next.DeploymentServers), nil); err != nil {
 		_ = s.setLastError(ctx, err.Error())
 	}
 	previous = s.attachApplicationRoutes(ctx, previous)
@@ -310,7 +310,13 @@ func (s *Service) syncReverseProxyTraits(ctx context.Context, previous, next []s
 }
 
 func (s *Service) ReconcileReverseProxy(ctx context.Context) error {
-	return s.triggerReverseProxyReconcile(ctx, "application_change", nil)
+	return s.triggerReverseProxyReconcile(ctx, "application_change", nil, nil)
+}
+
+// ReconcileReverseProxyServers rebuilds nginx only for the named gateways.
+// Empty serverIDs means every configured gateway (full facility sync).
+func (s *Service) ReconcileReverseProxyServers(ctx context.Context, serverIDs []string) error {
+	return s.triggerReverseProxyReconcile(ctx, "application_change", nil, serverIDs)
 }
 
 // ReconcileAfterServerRemoved 在节点被删除后重新收敛入口代理与存储共享。
@@ -323,7 +329,7 @@ func (s *Service) ReconcileReverseProxy(ctx context.Context) error {
 // Job，硬传会让协调因为外键约束失败。
 func (s *Service) ReconcileAfterServerRemoved(ctx context.Context, serverID string) error {
 	var firstErr error
-	if err := s.triggerReverseProxyReconcile(ctx, "server_removed", nil); err != nil {
+	if err := s.triggerReverseProxyReconcile(ctx, "server_removed", nil, nil); err != nil {
 		firstErr = err
 	}
 	cfg, err := s.loadStorageConfig(ctx)
@@ -454,7 +460,7 @@ func anyAccessRouteServerIDs(anyAccess applications.AnyAccessConfig, origins, ga
 }
 
 func (s *Service) ReconcileReverseProxyNow(ctx context.Context) (ReconcileResult, error) {
-	if err := s.triggerReverseProxyReconcile(ctx, "user", nil); err != nil {
+	if err := s.triggerReverseProxyReconcile(ctx, "user", nil, nil); err != nil {
 		_ = s.setLastError(ctx, err.Error())
 		return ReconcileResult{}, err
 	}
@@ -488,14 +494,10 @@ func (s *Service) RuntimeSpecForServer(ctx context.Context, app applications.App
 	if err != nil {
 		return appruntime.Spec{}, true, err
 	}
+	// Keep application generation for revision bookkeeping, but retain the
+	// per-server content hash from proxySpec so unaffected gateways stay
+	// satisfied when only another node's nginx actually changed.
 	spec.Generation = app.Generation
-	// Use the application-level SpecHash for the facility runtime spec so that the
-	// lifecycle target expectation, the deploy verify step and the container drift
-	// detection all compare the same hash. Per-server rendered content stays in
-	// the managed-files layer only.
-	if strings.TrimSpace(app.SpecHash) != "" {
-		spec.SpecHash = app.SpecHash
-	}
 	return spec, true, nil
 }
 
@@ -518,34 +520,59 @@ func (s *Service) PlanRuntimeUpdate(_ context.Context, app applications.Applicat
 	}
 }
 
-func (s *Service) triggerReverseProxyReconcile(ctx context.Context, triggerType string, stopServers []string) error {
+func (s *Service) triggerReverseProxyReconcile(ctx context.Context, triggerType string, stopServers, serverIDs []string) error {
 	cfg, err := s.loadConfig(ctx)
 	if err != nil {
 		return err
 	}
-	if _, _, err := s.ensureReverseProxyApplication(ctx, cfg); err != nil {
+	var appRoutes []applications.ApplicationReverseProxyConfig
+	if s.apps != nil {
+		appRoutes, err = s.apps.ApplicationReverseProxyConfigs(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	// One catalog load is reused for ensure + per-gateway nginx render.
+	ctx = withCachedApplicationRoutes(ctx, appRoutes)
+	if _, _, err := s.ensureReverseProxyApplicationWithRoutes(ctx, cfg, appRoutes); err != nil {
 		return err
 	}
 	if s.reconciler == nil {
 		return panelerr.Validation("application_reconciler_unavailable", "Application reconciler is unavailable")
 	}
+	force := triggerType == "user"
 	_, _, err = s.reconciler.TriggerApplicationReconcile(ctx, tasks.PeriodicTrigger{
 		Type:                firstNonEmpty(triggerType, "facility_app"),
 		Manual:              triggerType == "user",
 		TriggerResourceType: "application",
 		TriggerResourceID:   proxyApplicationID,
-		Payload:             reverseProxyReconcilePayload(stopServers),
+		Payload:             reverseProxyReconcilePayload(stopServers, serverIDs, force),
 	})
 	return err
 }
 
-func reverseProxyReconcilePayload(stopServers []string) map[string]any {
-	return map[string]any{
+func reverseProxyReconcilePayload(stopServers, serverIDs []string, force bool) map[string]any {
+	payload := map[string]any{
 		"applicationIds": []string{proxyApplicationID},
-		"force":          true,
+		"force":          force,
 		"reason":         "reverse_proxy_changed",
 		"stopServers":    uniqueSorted(stopServers),
 	}
+	if len(serverIDs) > 0 {
+		payload["serverIds"] = uniqueSorted(serverIDs)
+	}
+	return payload
+}
+
+type applicationRoutesContextKey struct{}
+
+func withCachedApplicationRoutes(ctx context.Context, routes []applications.ApplicationReverseProxyConfig) context.Context {
+	return context.WithValue(ctx, applicationRoutesContextKey{}, routes)
+}
+
+func cachedApplicationRoutes(ctx context.Context) ([]applications.ApplicationReverseProxyConfig, bool) {
+	routes, ok := ctx.Value(applicationRoutesContextKey{}).([]applications.ApplicationReverseProxyConfig)
+	return routes, ok
 }
 
 // SyncInterconnectServers 在节点互联地址发生变化后重新收敛受影响的两个设施。
@@ -563,7 +590,7 @@ func (s *Service) SyncInterconnectServers(ctx context.Context, serverIDs []strin
 	if cfg, err := s.loadConfig(ctx); err != nil {
 		firstErr = err
 	} else if len(cfg.DeploymentServers) > 0 && s.reverseProxyUsesServers(ctx, cfg, affected) {
-		if err := s.triggerReverseProxyReconcile(ctx, "interconnect", nil); err != nil {
+		if err := s.triggerReverseProxyReconcile(ctx, "interconnect", nil, uniqueSorted(serverIDs)); err != nil {
 			firstErr = err
 		}
 	}
@@ -629,12 +656,11 @@ func routeCount(serverIDs []string, appRoutes []applications.ApplicationReverseP
 }
 
 func (s *Service) routesByServer(ctx context.Context, serverIDs []string) (map[string][]applications.ApplicationReverseProxyConfig, error) {
+	if apps, ok := cachedApplicationRoutes(ctx); ok {
+		return routesByServerConfigs(apps, serverIDs), nil
+	}
 	if s.apps == nil {
-		out := map[string][]applications.ApplicationReverseProxyConfig{}
-		for _, id := range serverIDs {
-			out[id] = []applications.ApplicationReverseProxyConfig{}
-		}
-		return out, nil
+		return routesByServerConfigs(nil, serverIDs), nil
 	}
 	apps, err := s.apps.ApplicationReverseProxyConfigs(ctx)
 	if err != nil {
@@ -1335,13 +1361,21 @@ func (s *Service) setLastError(ctx context.Context, message string) error {
 }
 
 func (s *Service) ensureReverseProxyApplication(ctx context.Context, cfg ReverseProxyConfig) (int, string, error) {
-	if s.apps != nil {
-		appRoutes, err := s.apps.ApplicationReverseProxyConfigs(ctx)
+	var appRoutes []applications.ApplicationReverseProxyConfig
+	if cached, ok := cachedApplicationRoutes(ctx); ok {
+		appRoutes = cached
+	} else if s.apps != nil {
+		var err error
+		appRoutes, err = s.apps.ApplicationReverseProxyConfigs(ctx)
 		if err != nil {
 			return 0, "", err
 		}
-		cfg.ApplicationRoutes = appRoutes
 	}
+	return s.ensureReverseProxyApplicationWithRoutes(ctx, cfg, appRoutes)
+}
+
+func (s *Service) ensureReverseProxyApplicationWithRoutes(ctx context.Context, cfg ReverseProxyConfig, appRoutes []applications.ApplicationReverseProxyConfig) (int, string, error) {
+	cfg.ApplicationRoutes = appRoutes
 	cfgHash := facilityConfigHash(cfg)
 	now := time.Now().UTC()
 	var app models.Application

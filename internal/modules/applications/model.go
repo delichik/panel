@@ -328,10 +328,25 @@ type CommitEditSessionInput struct {
 	ConfirmedDiagnosticCodes []string `json:"confirmedDiagnosticCodes,omitempty"`
 }
 
+const (
+	ApplyActionNone   = ""
+	ApplyActionDeploy = "deploy"
+	ApplyActionStop   = "stop"
+)
+
+// ApplyHint tells callers whether a follow-up deploy/stop is required after a
+// configuration persist. Commit itself does not request coordination.
+type ApplyHint struct {
+	Needed bool
+	Action string
+}
+
 type EditCommitResult struct {
 	Application     Application     `json:"application"`
 	ResourceVersion ResourceVersion `json:"resourceVersion"`
 	ApplyRequested  bool            `json:"applyRequested"`
+	ApplyNeeded     bool            `json:"applyNeeded"`
+	ApplyAction     string          `json:"applyAction,omitempty"`
 	Diagnostics     []Diagnostic    `json:"diagnostics,omitempty"`
 }
 

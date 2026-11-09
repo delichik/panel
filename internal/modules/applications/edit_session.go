@@ -457,10 +457,11 @@ func (s *Service) CommitEditSession(ctx context.Context, owner, sessionID, idemp
 	}
 	files = moved.Files
 	var app Application
+	var hint ApplyHint
 	if record.ApplicationID == "" {
-		app, err = s.createWithFilesID(ctx, commitApplicationID, record.Draft, files)
+		app, hint, err = s.createWithFilesID(ctx, commitApplicationID, record.Draft, files, true)
 	} else {
-		app, err = s.updateWithFilesIfVersion(ctx, record.ApplicationID, record.BaseResourceVersion.ValueInt(), record.Draft, files)
+		app, hint, err = s.updateWithFilesIfVersion(ctx, record.ApplicationID, record.BaseResourceVersion.ValueInt(), record.Draft, files)
 	}
 	if err != nil {
 		s.rollbackApplicationCommitFiles(moved)
@@ -494,7 +495,15 @@ func (s *Service) CommitEditSession(ctx context.Context, owner, sessionID, idemp
 		return EditCommitResult{}, err
 	}
 	filestorage.RemoveAllQuiet(backupDir)
-	result := EditCommitResult{Application: app, ResourceVersion: applicationResourceVersion(app), ApplyRequested: record.Draft.Enabled, Diagnostics: []Diagnostic{{Code: "application_apply_operation_reference_unavailable", Severity: "info", Message: "Configuration was committed and reconciliation was requested; an operation reference is not available from the current coordinator"}}}
+	diagnostics := []Diagnostic{}
+	result := EditCommitResult{
+		Application:     app,
+		ResourceVersion: applicationResourceVersion(app),
+		ApplyRequested:  false,
+		ApplyNeeded:     hint.Needed,
+		ApplyAction:     hint.Action,
+		Diagnostics:     diagnostics,
+	}
 	resultRaw, _ := json.Marshal(result)
 	committedAt := time.Now().UTC()
 	err = orm.New(s.db).From("application_edit_sessions").Where("id=?", sessionID).And("owner_id=?", owner).And("commit_lease_owner=?", leaseOwner).UpdateColumns(ctx, map[string]any{
@@ -992,7 +1001,20 @@ func (s *Service) persistedEditCommitResult(ctx context.Context, record editSess
 	if applyErr != nil {
 		diagnostics = append(diagnostics, Diagnostic{Code: "application_apply_request_failed", Severity: "warning", Message: i18n.Translate("application_apply_request_failed", "Configuration was committed, but applying it could not be requested"), Details: map[string]any{"error": applyErr.Error()}})
 	}
-	return EditCommitResult{Application: app, ResourceVersion: applicationResourceVersion(app), ApplyRequested: record.Draft.Enabled && applyErr == nil, Diagnostics: diagnostics}, true
+	hint := ApplyHint{}
+	if record.Draft.Enabled {
+		hint = ApplyHint{Needed: true, Action: ApplyActionDeploy}
+	} else if applyErr == nil {
+		hint = ApplyHint{Needed: true, Action: ApplyActionStop}
+	}
+	return EditCommitResult{
+		Application:     app,
+		ResourceVersion: applicationResourceVersion(app),
+		ApplyRequested:  false,
+		ApplyNeeded:     hint.Needed,
+		ApplyAction:     hint.Action,
+		Diagnostics:     diagnostics,
+	}, true
 }
 
 func (s *Service) applicationMatchesEditDraft(ctx context.Context, app Application, draft SaveInput, files []ApplicationFile) bool {

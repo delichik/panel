@@ -575,7 +575,7 @@ func (s *Service) CommitFacilityEditSession(ctx context.Context, sessionID, idem
 	if err := s.syncReverseProxyTraits(ctx, previous.DeploymentServers, config.DeploymentServers); err != nil {
 		result.ApplyRequested = false
 		result.Diagnostics = append(result.Diagnostics, applications.Diagnostic{Code: "facility_apply_request_failed", Severity: "warning", Message: i18n.Translate("facility_apply_request_failed", "Configuration was committed, but applying it could not be requested"), Details: map[string]any{"error": err.Error()}})
-	} else if err := s.triggerReverseProxyReconcile(ctx, "facility_app", removedServers(previous.DeploymentServers, config.DeploymentServers)); err != nil {
+	} else if err := s.triggerReverseProxyReconcile(ctx, "facility_app", removedServers(previous.DeploymentServers, config.DeploymentServers), nil); err != nil {
 		result.ApplyRequested = false
 		result.Diagnostics = append(result.Diagnostics, applications.Diagnostic{Code: "facility_apply_request_failed", Severity: "warning", Message: i18n.Translate("facility_apply_request_failed", "Configuration was committed, but applying it could not be requested"), Details: map[string]any{"error": err.Error()}})
 	}
@@ -1041,7 +1041,7 @@ func (s *Service) recoverFacilityEditRecord(ctx context.Context, record facility
 	if err := s.syncReverseProxyTraits(ctx, manifest.PreviousServers, config.DeploymentServers); err != nil {
 		result.ApplyRequested = false
 		result.Diagnostics = append(result.Diagnostics, applications.Diagnostic{Code: "facility_apply_request_failed", Severity: "warning", Message: i18n.Translate("facility_apply_request_failed", "Configuration was recovered, but applying it could not be requested"), Details: map[string]any{"error": err.Error()}})
-	} else if err := s.triggerReverseProxyReconcile(ctx, "facility_recovery", removedServers(manifest.PreviousServers, config.DeploymentServers)); err != nil {
+	} else if err := s.triggerReverseProxyReconcile(ctx, "facility_recovery", removedServers(manifest.PreviousServers, config.DeploymentServers), nil); err != nil {
 		result.ApplyRequested = false
 		result.Diagnostics = append(result.Diagnostics, applications.Diagnostic{Code: "facility_apply_request_failed", Severity: "warning", Message: i18n.Translate("facility_apply_request_failed", "Configuration was recovered, but applying it could not be requested"), Details: map[string]any{"error": err.Error()}})
 	}

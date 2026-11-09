@@ -1005,6 +1005,13 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string
 			observations[app.ID] = observation
 		}
 	}
+	// Selected targets with no instance row never appear in the per-server
+	// observed loop above. Surface them as drift so periodic reconcile can
+	// create the missing application_instances / Jobs after a save that
+	// expanded deploymentServers without a successful plan.
+	if err := s.appendMissingSelectedDeploymentDrift(ctx, appByID, wantedApps, observations); err != nil {
+		return nil, err
+	}
 	for appID, observation := range observations {
 		if !observation.seen {
 			continue
@@ -1067,6 +1074,78 @@ func applicationWantsServer(app applications.Application, serverID string) bool 
 		}
 	}
 	return false
+}
+
+func (s *Service) appendMissingSelectedDeploymentDrift(ctx context.Context, appByID map[string]applications.Application, wantedApps map[string]bool, observations map[string]reconcileObservation) error {
+	for appID, app := range appByID {
+		if len(wantedApps) > 0 && !wantedApps[appID] {
+			continue
+		}
+		if !app.Enabled || app.DeletionRequested {
+			continue
+		}
+		if strings.TrimSpace(app.DeploymentMode) != applications.DeploymentModeSelected {
+			continue
+		}
+		desired := uniqueTrimmedStrings(app.DeploymentServers)
+		if len(desired) == 0 {
+			continue
+		}
+		var rows []models.ApplicationInstance
+		if err := orm.New(s.db).From("application_instances").
+			Where("application_id = ?", appID).All(ctx, &rows); err != nil {
+			return fmt.Errorf("query application instances for missing-target drift %s: %w", appID, err)
+		}
+		have := map[string]struct{}{}
+		for _, row := range rows {
+			serverID := strings.TrimSpace(row.ServerID)
+			if serverID == "" || strings.TrimSpace(row.DesiredState) == controlplane.DesiredPurged {
+				continue
+			}
+			have[serverID] = struct{}{}
+		}
+		missing := make([]string, 0, len(desired))
+		for _, serverID := range desired {
+			if _, ok := have[serverID]; ok {
+				continue
+			}
+			missing = append(missing, serverID)
+		}
+		if len(missing) == 0 {
+			continue
+		}
+		sort.Strings(missing)
+		observation := observations[appID]
+		observation.app = app
+		observation.seen = true
+		for _, serverID := range missing {
+			observation.driftedServerIDs = append(observation.driftedServerIDs, serverID)
+			reconciletrace.Trace(ctx, "drift",
+				zap.String("application_id", appID),
+				zap.String("server_id", serverID),
+				zap.String("reason", "missing_instance"))
+		}
+		observations[appID] = observation
+	}
+	return nil
+}
+
+func uniqueTrimmedStrings(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func applicationReconcileBypassesBackoff(trigger tasks.PeriodicTrigger, payload ApplicationReconcileTrigger) bool {

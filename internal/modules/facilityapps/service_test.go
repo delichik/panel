@@ -352,8 +352,8 @@ func TestRuntimeSpecForServerUsesApplicationSpecHash(t *testing.T) {
 	if spec.Generation != 7 {
 		t.Fatalf("generation = %d, want 7", spec.Generation)
 	}
-	if spec.SpecHash != "application-spec-hash" {
-		t.Fatalf("spec hash = %q, want application-spec-hash so verify/drift checks match the application-level desired hash", spec.SpecHash)
+	if strings.TrimSpace(spec.SpecHash) == "" || spec.SpecHash == "application-spec-hash" {
+		t.Fatalf("spec hash = %q, want per-server content hash (not the application-level facilityConfigHash)", spec.SpecHash)
 	}
 }
 

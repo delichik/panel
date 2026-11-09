@@ -40,6 +40,7 @@
 - 应用状态改为节点三态计数（2026-10-29）：应用主徽标仅启停；列表/详情展示 `healthyInstanceCount`/`abnormalInstanceCount`/`deployingInstanceCount`；部署阶段与「系统核实中」挂在 Runtime 节点 `operation`；去掉应用级 `needs_attention` 主状态与单一「当前部署」块；`planningError`/`reconcileStopped` 为独立告警。不新增路由/表；摘要字段加法兼容。对应 `APP-READ-001`、`APP-RUN-001/004`、`APP-UI-002`、`UI-APP-001/002`。
 - 启用禁用应用后节点三态（2026-10-29）：`classifyInstanceBucket` 对 stop 收敛的省略仅适用于 `enabled=false`；`enabled=true` 且实例仍 `desired=stopped`+观测 stopped/missing 时计入异常（覆盖启用先落库、apply 规划未翻转 desired 或规划失败的半状态）。对应 `APP-READ-001`、`APP-RUN-001`。
 - 应用保存 commit 路径减负（2026-10-29）：commit 信任同 revision preview token 不再重复 validate/prepare；无反向代理导出影响的保存跳过全量入口代理协调；edit-session 已带文件时 `prepareForSave` 不再先 `listFiles`+空跑 `prepare`。对应 `APP-EDIT-004`、`APP-LIFE-001`。
+- 保存拆接口与入口代理局部更新（2026-11-09）：edit-session commit 只落配置并返回 `applyNeeded`/`applyAction`，前端再调 deploy/stop；保存规划默认 `force=false` 增量节点；入口代理按受影响网关 `serverIds` 局部规划，每节点 SpecHash 为 nginx 内容哈希，同次协调只加载一次应用路由目录。对应 `APP-EDIT-004/005/007`、`APP-LIFE-001/002/003`、`FAC-RP-010`。
 - 应用文件正文离库（2026-10-29）：正式正文迁到 `{dataRoot}/applications/files/...`，`application_files` 增 `blob_path`；新写入不再填 `content` BLOB；启动 backfill + dual-read 兼容旧行；删除应用清理磁盘目录。对应 `APP-EDIT-004`、`APP-FILE-001`。
 - 应用文件与设施静态资源存储对齐（2026-10-29）：正式布局改为 `{fileId}/content/{filename}`；edit-session 增 `source_file_id`/`filename`/`blob_dir`，begin 零拷贝；commit 用 rename+backup 回滚；共用 `internal/platform/filestorage`。对应 `APP-FILE-001/004`、`APP-EDIT-004/006`。
 - Debug 既有清理操作增加阶段/时间、刷新恢复、部分失败与系统确认中展示；保留危险勾选确认，不新增路由；对应 `UI-DBG-007/008`。

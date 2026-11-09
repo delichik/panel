@@ -269,7 +269,7 @@ func TestApplicationEditSessionPreviewAndCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Application.ID == "" || result.Application.Version != 1 || result.ApplyRequested {
+	if result.Application.ID == "" || result.Application.Version != 1 || result.ApplyRequested || result.ApplyNeeded {
 		t.Fatalf("commit result = %#v", result)
 	}
 	repeated, err := svc.CommitEditSession(ctx, "admin", session.ID, "commit-1", CommitEditSessionInput{Revision: session.Revision, BaseResourceVersion: "0", PreviewToken: preview.Token.Value})
@@ -603,11 +603,12 @@ func TestApplicationEditSessionCleanupAgesUnreferencedBlobs(t *testing.T) {
 	}
 }
 
-func TestApplicationEditSessionCommitSeparatesPersistedConfigFromApplyFailure(t *testing.T) {
+func TestApplicationEditSessionCommitReturnsApplyNeededWithoutPlanning(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		setup func(*Service)
 		draft SaveInput
+		want  string
 	}{
 		{name: "proxy", setup: func(s *Service) {
 			s.proxyReconciler = failingEditProxyReconciler{}
@@ -615,8 +616,8 @@ func TestApplicationEditSessionCommitSeparatesPersistedConfigFromApplyFailure(t 
 		}, draft: SaveInput{
 			Name: "web", SpecYAML: "name: web\nimage: nginx\n", DeploymentMode: DeploymentModeSelected, DeploymentServers: []string{"srv-a"},
 			ReverseProxy: []ReverseProxyRule{{Domain: "web.example.test", TargetPort: 80, Paths: []ReverseProxyPath{{Path: "/"}}}},
-		}},
-		{name: "reconcile", setup: func(s *Service) { s.reconcileTrigger = failingEditReconcileTrigger{} }, draft: SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"}},
+		}, want: ApplyActionDeploy},
+		{name: "enabled", setup: func(s *Service) { s.reconcileTrigger = failingEditReconcileTrigger{} }, draft: SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"}, want: ApplyActionDeploy},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, _, _, closeStore := newTestService(t)
@@ -631,12 +632,16 @@ func TestApplicationEditSessionCommitSeparatesPersistedConfigFromApplyFailure(t 
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, err := svc.CommitEditSession(ctx, "admin", session.ID, "commit-failure", CommitEditSessionInput{Revision: session.Revision, BaseResourceVersion: "0", PreviewToken: preview.Token.Value})
+			result, err := svc.CommitEditSession(ctx, "admin", session.ID, "commit-deferred-apply", CommitEditSessionInput{Revision: session.Revision, BaseResourceVersion: "0", PreviewToken: preview.Token.Value})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if result.Application.ID == "" || result.ApplyRequested || len(result.Diagnostics) == 0 || result.Diagnostics[0].Code != "application_apply_request_failed" {
-				t.Fatalf("result = %#v", result)
+			// Commit persists only; failing proxy/reconcile hooks must not run on commit.
+			if result.Application.ID == "" || result.ApplyRequested || !result.ApplyNeeded || result.ApplyAction != tc.want {
+				t.Fatalf("result = %#v, want applyNeeded action %q", result, tc.want)
+			}
+			if len(jobsForApplication(t, svc, result.Application.ID)) != 0 {
+				t.Fatalf("commit must not plan jobs, jobs=%#v", jobsForApplication(t, svc, result.Application.ID))
 			}
 			stored, err := svc.GetEditSession(ctx, "admin", session.ID)
 			if err != nil || stored.State != EditSessionStateCommitted {
@@ -764,6 +769,10 @@ func TestApplicationDerivedRefreshDoesNotChangeResourceVersion(t *testing.T) {
 type failingEditProxyReconciler struct{}
 
 func (failingEditProxyReconciler) ReconcileReverseProxy(context.Context) error {
+	return errors.New("proxy unavailable")
+}
+
+func (failingEditProxyReconciler) ReconcileReverseProxyServers(context.Context, []string) error {
 	return errors.New("proxy unavailable")
 }
 

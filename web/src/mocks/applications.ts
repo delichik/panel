@@ -791,7 +791,14 @@ export function commitAppSession(id: string) {
   const index = mockApplications.findIndex((item) => item.id === app.id);
   if (index >= 0) mockApplications[index] = app;
   else mockApplications.unshift(app);
-  return { application: app, resourceVersion: { value: String(app.version), updatedAt: now }, applyRequested: app.enabled, diagnostics: [{ code: 'application_apply_operation_reference_unavailable', severity: 'info', message: 'Apply requested.' }] };
+  return {
+    application: app,
+    resourceVersion: { value: String(app.version), updatedAt: now },
+    applyRequested: false,
+    applyNeeded: app.enabled,
+    applyAction: app.enabled ? 'deploy' : '',
+    diagnostics: [],
+  };
 }
 
 export function restorePersistentData(id: string): OperationResult | null {

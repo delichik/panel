@@ -183,16 +183,16 @@
 
 - **前置**：valid preview token、当前 revision、baseResourceVersion、Idempotency-Key。
 - **动作**：commit 创建或更新。
-- **结果**：应用用户字段与完整文件集在同一 AppDB 事务 CAS；真实配置变化递增 version/config updated_at；完全相同定义和文件集为 no-op；返回 application、resourceVersion、applyRequested 与 diagnostics。commit **信任同 revision 的 preview token**，不再重复跑一轮完整 `prepareWithFiles` 校验；草稿/文件在 preview 之后的任何 mutation 必须抬升 revision 并使旧 token 失效。仅当本应用对入口代理导出可能变化时（反向代理规则、启停、名称、部署目标，或带路由时的 SpecHash）才同步触发全量入口代理协调；无路由应用的普通保存不得扫全站应用重算网关。
+- **结果**：应用用户字段与完整文件集在同一 AppDB 事务 CAS；真实配置变化递增 version/config updated_at；完全相同定义和文件集为 no-op；返回 application、resourceVersion、`applyNeeded`/`applyAction` 与 diagnostics。edit-session commit **只持久化配置**，`applyRequested` 恒为 false；需要运行态收敛时返回 `applyNeeded=true` 与 `applyAction=deploy|stop`，由随后的 `POST /applications/{id}/deploy` 或 `/stop` 请求规划。commit **信任同 revision 的 preview token**，不再重复跑一轮完整 `prepareWithFiles` 校验；草稿/文件在 preview 之后的任何 mutation 必须抬升 revision 并使旧 token 失效。入口代理不得因单应用变更对全部网关 force 全量重算：仅对受影响网关节点规划（origins ∪ 显式 relays）；AnyAccess 且 relay 为空（表示全部非源站网关）时才退回全网关集合。无路由应用的普通保存不得触发入口代理协调。
 - **失败**：并发输家返回 `resource_version_conflict` 且其应用/文件变更均不落库；过期/错配 preview token 拒绝 commit。
 - **不变量**：镜像检查、变量解析、renderer snapshot 等派生刷新不得递增用户 version 或覆盖并发用户字段。正式应用文件正文落在 `{dataRoot}/applications/files/{applicationId}/{fileId}/content/{filename}`（与设施 `{dataRoot}/facility-apps/static-assets/{assetId}/content/` 同构）；`application_files` 持久化元数据与 `filename`，新写入不再填绝对 `blob_path` 或 `content` BLOB；alpha 旧行 dual-read 回落，启动 backfill 把 `.blob`/BLOB 迁入 content 布局并清空旧路径/BLOB。Commit 对会话 `blob_dir` 使用 rename+backup 回滚，happy path 不再整文件读入再拷贝落盘。删除应用时必须 `RemoveAll` 对应 `{fileId}/` 整树。应用 `archive` 仍不在 Panel 展开（产品差异保留）。
-- **验证**：concurrent commit、identical commit、derived-update isolation、无路由保存跳过入口代理重算、带路由变更仍触发、content-layout/backfill/rename-commit 测试。
+- **验证**：concurrent commit、identical commit、derived-update isolation、无路由保存跳过入口代理重算、带路由变更仅影响相关网关、content-layout/backfill/rename-commit 测试。
 
 ### APP-EDIT-005 配置成功与 apply 请求分离
 
-- **前置**：AppDB 配置/文件已成功提交，但协调器或入口网关触发失败。
-- **动作**：commit 收尾或进程重启恢复。
-- **结果**：session 仍为 `committed`，`applyRequested=false`，返回 `application_apply_request_failed` warning；不回滚已持久化配置。
+- **前置**：AppDB 配置/文件已成功提交；随后的 deploy/stop 或入口代理局部协调失败。
+- **动作**：commit 收尾、follow-up apply，或进程重启恢复。
+- **结果**：session 仍为 `committed`；commit 响应 `applyRequested=false` 且可带 `applyNeeded`；不回滚已持久化配置。follow-up apply 失败不得否定 commit 成功。
 - **失败**：恢复仅在预留 ID/精确版本、配置和文件集可验证时确认提交；结果可见但被后续变化遮蔽时转 `conflict/commit_outcome_ambiguous`。
 - **不变量**：模糊结果不得重置 active、重复创建或重复应用。
 - **验证**：apply failure remains committed 与 ambiguous recovery 测试。
@@ -210,9 +210,9 @@
 
 - **前置**：进入隐藏的创建/编辑页；进入时只加载已提交定义与文件清单到本地，不创建 edit-session。
 - **动作**：纯本地编辑结构化字段、文件（pending 队列）与复杂对话框；用户唯一主操作是「保存」。
-- **结果**：保存流水线固定为本地校验→begin→patch 本地草稿→flush 文件 pending→preview→无 blocking diagnostic 才 commit→清理会话；提交期间禁止重复提交和离开；复杂项取消不污染主草稿；成功只表示配置保存并已请求协调，并退出编辑页回到应用列表（选中该应用）。无独立 Preview 主按钮；诊断在保存失败时展示。
+- **结果**：保存流水线固定为本地校验→begin→patch 本地草稿→flush 文件 pending→preview→无 blocking diagnostic 才 commit→若 `applyNeeded` 再按 `applyAction` 调用 deploy 或 stop→清理会话；提交期间禁止重复提交和离开；复杂项取消不污染主草稿；成功表示配置已保存，若已发出 apply 则提示已请求同步，并退出编辑页回到应用列表（选中该应用）。无独立 Preview 主按钮；诊断在保存失败时展示。
 - **失败**：已提交定义 load 失败时禁止保存；保存任一步失败 discard 临时会话并保留本地草稿；取消/离开丢弃本地状态，使用统一 ConfirmDialog 保护脏编辑。
-- **不变量**：部署完成只能从协调记录/runtime 观察，不能把 commit 200 解释为运行完成；编辑期文件操作不得提前打 session mutation API。
+- **不变量**：部署完成只能从协调记录/runtime 观察，不能把 commit/deploy 200 解释为远端运行完成；编辑期文件操作不得提前打 session mutation API。
 - **验证**：editor model/dialog isolation/dirty guard、local pending flush order 测试。
 
 ## 5. 应用生命周期、修订与运行能力
@@ -220,28 +220,28 @@
 ### APP-LIFE-001 保存与启用
 
 - **前置**：合法 session commit，可选择 enabled/disabled。
-- **动作**：提交应用定义。
-- **结果**：disabled 应用只持久化不规划运行；enabled 应用保存 desired state、不可变 revision 与目标 Instance/Job 后快速返回。入口代理全量重算仅在本应用可能影响网关导出时同步触发（见 `APP-EDIT-004`）。
-- **失败**：revision 或批量计划写入失败必须回滚控制面请求，不能留下无 revision 的 apply Job。
-- **不变量**：HTTP 不直接调用 Agent/Docker；远端突变仅由 Controller 执行。
-- **验证**：disabled create、async deploy return、atomic revision-and-plan、proxy reconcile gating tests。
+- **动作**：提交应用定义；若需运行态收敛再调用 deploy/stop。
+- **结果**：disabled 应用只持久化不规划运行；enabled 应用在以下任一成立时必须通过 follow-up deploy（或非 session 的即时 Update 路径）请求协调（写 desired / Instance / Job）：首次启用、SpecHash 变化、部署目标集合变化，或 selected 模式下仍有期望节点缺少非 purged 实例行。edit-session commit 以 `applyNeeded`/`applyAction` 表达是否需要 follow-up。入口代理仅对受影响网关局部协调（见 `APP-EDIT-004`）。
+- **失败**：revision 或批量计划写入失败必须回滚该次规划请求，不能留下无 revision 的 apply Job；不得回滚已成功的配置 commit。
+- **不变量**：HTTP 不直接调用 Agent/Docker；远端突变仅由 Controller 执行；不得把“配置已写入但未请求规划”报告为已应用。保存触发的规划默认 `force=false`，已满足节点跳过。
+- **验证**：disabled create、commit applyNeeded、atomic revision-and-plan、proxy reconcile gating、adding selected server、re-save with missing selected instance tests。
 
 ### APP-LIFE-002 部署目标选择
 
 - **前置**：存在兼容/不兼容 Agent 与 `all/selected` 部署模式。
-- **动作**：部署或保存并应用。
-- **结果**：all 对所有健康兼容 Agent 节点各规划一实例；selected 仅规划所选节点，并对被移除旧目标规划 purge；无整应用删除意图的 purge 只删除该节点应用目录内的 managed workspace，保留同节点应用级 persistent 和其它节点各自的数据。
+- **动作**：部署或保存后 follow-up apply；或周期漂移巡检发现 selected 目标缺少实例行。
+- **结果**：all 对所有健康兼容 Agent 节点各规划一实例；selected 仅规划所选节点，并对被移除旧目标规划 purge；**仅改部署节点时不得因 force 重部署已满足节点**。无整应用删除意图的 purge 只删除该节点应用目录内的 managed workspace，保留同节点应用级 persistent 和其它节点各自的数据。selected 目标若尚无 `application_instances` 行，保存后的 apply 与周期巡检都必须为其创建实例与 apply Job，不得因 SpecHash 未变或仅扫描已有实例而永久遗漏。
 - **失败**：selected 空目标、不可用 Agent 或不合法目标返回稳定校验；持 persistent 的应用必须且只能选择一个节点。
 - **不变量**：单节点失败不阻断其它节点收敛；目标集合在单次 batch 事务中可见，不暴露部分计划。
-- **验证**：selected/all、removed target purge、node-workspace-only purge、persistent target tests。
+- **验证**：selected/all、removed target purge、node-workspace-only purge、persistent target、missing selected instance re-save / drift、delta add-server tests。
 
 ### APP-LIFE-003 显式部署/同步
 
 - **前置**：应用可部署，可能处于 disabled 或 `reconcile_stopped`。
-- **动作**：`POST /applications/{id}/deploy` 或显式同步。
-- **结果**：必要时以 version CAS 启用，清除人工停止协调状态，并以 `Manual=true` 直接请求 Planner；实际规划时保存 desired/revision/Job，返回 Job `deploymentId` 且响应附本次 `operationId`，全部目标已满足时返回 `noChange=true`。
+- **动作**：`POST /applications/{id}/deploy` 或显式同步（含保存后的 follow-up deploy）。
+- **结果**：必要时以 version CAS 启用，清除人工停止协调状态，并以 `Manual=true`、默认 `force=false` 直接请求 Planner；实际规划时保存 desired/revision/Job，返回 Job `deploymentId` 且响应附本次 `operationId`，全部目标已满足时返回 `noChange=true`。若应用含反向代理规则，仅对受影响网关触发入口代理局部协调。
 - **失败**：人工 deploy 不得被自动协调 `reconcile_next_run_at` 静默跳过；并发配置变化时不得整行覆盖；planner 失败原样报告，不合成 target task/log anchor。
-- **不变量**：人工操作绕过应用级退避但仍执行满足态过滤；force 才同时绕过满足态，不绕过 app/server active Job 唯一性。
+- **不变量**：人工操作绕过应用级退避但仍执行满足态过滤；force 才同时绕过满足态，不绕过 app/server active Job 唯一性。满足态以实例内容 SpecHash 为准，generation-only 上浮不得逼迫内容未变的节点重部署。
 - **验证**：enable CAS、manual bypass backoff、explicit no-change、skip satisfied、force planning tests。
 
 ### APP-PLAN-001 部署规划失败的可见性
@@ -479,12 +479,12 @@
 
 ### FAC-RP-010 配置提交后的协调
 
-- **前置**：设施配置已 commit。
-- **动作**：请求 application reconcile。
-- **结果**：设施模块只提供 per-server spec 和策略；Planner 写隐藏应用 Instance/Job，Controller RuntimeReconcile；响应继续暴露 reconcileStopped/lastError。
+- **前置**：设施配置已 commit，或应用路由变更触发入口代理局部协调。
+- **动作**：请求 application reconcile（可带 `serverIds` 限定网关）。
+- **结果**：设施模块只提供 per-server nginx spec 和策略；Planner 写隐藏应用 Instance/Job，Controller RuntimeReconcile；响应继续暴露 reconcileStopped/lastError。单应用路由/部署目标变更时默认只规划受影响网关；每节点 desired SpecHash 为该节点 nginx 内容哈希，未变节点在 `force=false` 下跳过。人工全量协调（`user`）可 force 全部网关。
 - **失败**：协调不可用时配置仍 committed 并返回 `facility_apply_request_failed` warning。
-- **不变量**：不得同步执行远端 Docker、创建旧 lifecycle target 或 `application_target_*` task。
-- **验证**：facility apply failure、hidden AppDB Job tests。
+- **不变量**：不得同步执行远端 Docker、创建旧 lifecycle target 或 `application_target_*` task；同一次协调只加载一次 `ApplicationReverseProxyConfigs` 并按网关复用。
+- **验证**：facility apply failure、hidden AppDB Job、scoped serverIds / per-server hash tests。
 
 ### FAC-RP-011 DNS 联动
 

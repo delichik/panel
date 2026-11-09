@@ -1416,11 +1416,20 @@ async function commitApplication() {
         return;
       }
       const result = await applicationsApi.commitEditSession(editSession.value, preview.value);
+      let applied = false;
+      if (result.applyNeeded) {
+        if (result.applyAction === 'stop') {
+          await applicationsApi.stop(result.application.id);
+        } else {
+          await applicationsApi.deploy(result.application.id);
+        }
+        applied = true;
+      }
       succeeded = true;
       editSession.value = null;
       preview.value = null;
       resetLocalAssetState(appLocalAssets, []);
-      notifySuccess(result.applyRequested ? t('applicationsPage.committedAndApplied') : t('applicationsPage.committed'), result);
+      notifySuccess(applied || result.applyRequested ? t('applicationsPage.committedAndApplied') : t('applicationsPage.committed'), result);
       isDirty.value = false;
       editorReady.value = false;
       await router.push({ path: '/applications/apps', query: { application: result.application.id } });

@@ -125,6 +125,9 @@ type PackageResult struct {
 
 type ReverseProxyReconciler interface {
 	ReconcileReverseProxy(ctx context.Context) error
+	// ReconcileReverseProxyServers updates only the listed gateway nodes.
+	// Empty serverIDs means every configured gateway.
+	ReconcileReverseProxyServers(ctx context.Context, serverIDs []string) error
 }
 
 type ReverseProxyPolicyProvider interface {
@@ -654,19 +657,20 @@ func (s *Service) getApplication(ctx context.Context, appID string) (Application
 }
 
 func (s *Service) Create(ctx context.Context, in SaveInput) (Application, error) {
-	return s.createWithFiles(ctx, in, nil)
+	app, _, err := s.createWithFiles(ctx, in, nil, false)
+	return app, err
 }
 
-func (s *Service) createWithFiles(ctx context.Context, in SaveInput, files []ApplicationFile) (Application, error) {
-	return s.createWithFilesID(ctx, id.New("app"), in, files)
+func (s *Service) createWithFiles(ctx context.Context, in SaveInput, files []ApplicationFile, deferApply bool) (Application, ApplyHint, error) {
+	return s.createWithFilesID(ctx, id.New("app"), in, files, deferApply)
 }
 
-func (s *Service) createWithFilesID(ctx context.Context, appID string, in SaveInput, files []ApplicationFile) (Application, error) {
+func (s *Service) createWithFilesID(ctx context.Context, appID string, in SaveInput, files []ApplicationFile, deferApply bool) (Application, ApplyHint, error) {
 	in = stripDeprecatedApplicationConfig(in)
 	files = normalizeApplicationFilesForSave(appID, files, time.Now().UTC())
 	prepared, err := s.prepareForSave(ctx, in, 1, appID, files)
 	if err != nil {
-		return Application{}, err
+		return Application{}, ApplyHint{}, err
 	}
 	now := time.Now().UTC()
 	app := Application{
@@ -690,81 +694,95 @@ func (s *Service) createWithFilesID(ctx context.Context, appID string, in SaveIn
 		app.Name = prepared.spec.Name
 	}
 	if app.Enabled {
-		prepared.job, _, err = s.renderApplicationWithFiles(ctx, app, files)
+		job, err := s.finishPreparedRuntimeJob(ctx, app, prepared, files)
 		if err != nil {
-			return Application{}, err
+			return Application{}, ApplyHint{}, err
 		}
+		prepared.job = job
+	}
+	hint := ApplyHint{}
+	if app.Enabled {
+		hint = ApplyHint{Needed: true, Action: ApplyActionDeploy}
+	} else if reverseProxyReconcileNeeded(Application{}, app) {
+		hint = ApplyHint{Needed: true, Action: ApplyActionDeploy}
 	}
 	if files == nil {
 		if err := s.insertApplicationWithRoutes(ctx, app); err != nil {
-			return Application{}, applicationSaveError(err)
+			return Application{}, ApplyHint{}, applicationSaveError(err)
 		}
 		s.insertRevisionBestEffort(ctx, app, prepared.job)
 		s.notifyProxyDNSSync(ctx, nil, app.ReverseProxy)
-		if app.Enabled {
+		if !deferApply {
+			if hint.Action == ApplyActionDeploy && app.Enabled {
+				if err := s.triggerApplicationReconcile(ctx, app, prepared.job, "application_save", "Syncing application "+app.Name); err != nil {
+					return Application{}, ApplyHint{}, err
+				}
+			}
+			if err := s.reconcileReverseProxyIfNeeded(ctx, Application{}, app); err != nil {
+				return Application{}, ApplyHint{}, err
+			}
+		}
+		out, err := s.Get(ctx, app.ID)
+		return out, hint, err
+	}
+	if err := s.commitApplicationState(ctx, app, files, prepared.job, true, true); err != nil {
+		return Application{}, ApplyHint{}, applicationSaveError(err)
+	}
+	s.notifyProxyDNSSync(ctx, nil, app.ReverseProxy)
+	if !deferApply {
+		if hint.Action == ApplyActionDeploy && app.Enabled {
 			if err := s.triggerApplicationReconcile(ctx, app, prepared.job, "application_save", "Syncing application "+app.Name); err != nil {
-				return Application{}, err
+				return Application{}, ApplyHint{}, err
 			}
 		}
 		if err := s.reconcileReverseProxyIfNeeded(ctx, Application{}, app); err != nil {
-			return Application{}, err
-		}
-		return s.Get(ctx, app.ID)
-	}
-	if err := s.commitApplicationState(ctx, app, files, prepared.job, true, true); err != nil {
-		return Application{}, applicationSaveError(err)
-	}
-	s.notifyProxyDNSSync(ctx, nil, app.ReverseProxy)
-	if app.Enabled {
-		if err := s.triggerApplicationReconcile(ctx, app, prepared.job, "application_save", "Syncing application "+app.Name); err != nil {
-			return Application{}, err
+			return Application{}, ApplyHint{}, err
 		}
 	}
-	if err := s.reconcileReverseProxyIfNeeded(ctx, Application{}, app); err != nil {
-		return Application{}, err
-	}
-	return s.Get(ctx, app.ID)
+	out, err := s.Get(ctx, app.ID)
+	return out, hint, err
 }
 
 func (s *Service) Update(ctx context.Context, appID string, in SaveInput) (Application, error) {
-	return s.updateWithFiles(ctx, appID, in, nil)
+	app, _, err := s.updateWithFiles(ctx, appID, in, nil)
+	return app, err
 }
 
-func (s *Service) updateWithFiles(ctx context.Context, appID string, in SaveInput, files []ApplicationFile) (Application, error) {
-	return s.updateWithFilesVersioned(ctx, appID, 0, false, in, files)
+func (s *Service) updateWithFiles(ctx context.Context, appID string, in SaveInput, files []ApplicationFile) (Application, ApplyHint, error) {
+	return s.updateWithFilesVersioned(ctx, appID, 0, false, in, files, false)
 }
 
-func (s *Service) updateWithFilesIfVersion(ctx context.Context, appID string, expectedVersion int, in SaveInput, files []ApplicationFile) (Application, error) {
-	return s.updateWithFilesVersioned(ctx, appID, expectedVersion, true, in, files)
+func (s *Service) updateWithFilesIfVersion(ctx context.Context, appID string, expectedVersion int, in SaveInput, files []ApplicationFile) (Application, ApplyHint, error) {
+	return s.updateWithFilesVersioned(ctx, appID, expectedVersion, true, in, files, true)
 }
 
-func (s *Service) updateWithFilesVersioned(ctx context.Context, appID string, expectedVersion int, enforceVersion bool, in SaveInput, files []ApplicationFile) (Application, error) {
+func (s *Service) updateWithFilesVersioned(ctx context.Context, appID string, expectedVersion int, enforceVersion bool, in SaveInput, files []ApplicationFile, deferApply bool) (Application, ApplyHint, error) {
 	in = stripDeprecatedApplicationConfig(in)
 	current, err := s.Get(ctx, appID)
 	if err != nil {
-		return Application{}, err
+		return Application{}, ApplyHint{}, err
 	}
 	if enforceVersion && current.Version != expectedVersion {
-		return Application{}, resourceVersionConflict(expectedVersion, current.Version)
+		return Application{}, ApplyHint{}, resourceVersionConflict(expectedVersion, current.Version)
 	}
 	var currentFiles []ApplicationFile
 	if files != nil {
 		currentFiles, err = s.listFiles(ctx, appID, false)
 		if err != nil {
-			return Application{}, err
+			return Application{}, ApplyHint{}, err
 		}
 		files = normalizeApplicationFilesForSave(appID, files, time.Now().UTC())
 	}
 	generation := current.Generation
 	prepared, err := s.prepareForSave(ctx, in, generation, appID, files)
 	if err != nil {
-		return Application{}, err
+		return Application{}, ApplyHint{}, err
 	}
 	if prepared.hash != current.SpecHash {
 		generation++
 		prepared, err = s.prepareForSave(ctx, in, generation, appID, files)
 		if err != nil {
-			return Application{}, err
+			return Application{}, ApplyHint{}, err
 		}
 	}
 	app := current
@@ -787,57 +805,105 @@ func (s *Service) updateWithFilesVersioned(ctx context.Context, appID string, ex
 	if files != nil && !applicationFileSetsMatch(currentFiles, files) {
 		configurationChanged = true
 	}
-	shouldDeploy := app.Enabled && (!current.Enabled || prepared.hash != current.SpecHash)
+	targetsChanged := !deploymentTargetSetEqual(current.DeploymentMode, current.DeploymentServers, app.DeploymentMode, app.DeploymentServers)
+	missingTargets, err := s.hasMissingSelectedDeploymentInstances(ctx, app)
+	if err != nil {
+		return Application{}, ApplyHint{}, err
+	}
+	// Deploy when the rendered hash changes, when selected targets expand/shrink
+	// (including hash/JSON desync after server pruning), or when an enabled
+	// selected app is missing instance rows for desired servers. Spec hash alone
+	// is not enough: a no-op re-save must still request planning so newly
+	// selected nodes cannot stay forever without application_instances.
+	shouldDeploy := app.Enabled && (!current.Enabled || prepared.hash != current.SpecHash || targetsChanged || missingTargets)
 	shouldStop := current.Enabled && !app.Enabled
+	proxyNeeded := reverseProxyReconcileNeeded(current, app)
+	hint := ApplyHint{}
+	switch {
+	case shouldStop:
+		hint = ApplyHint{Needed: true, Action: ApplyActionStop}
+	case shouldDeploy:
+		hint = ApplyHint{Needed: true, Action: ApplyActionDeploy}
+	case proxyNeeded:
+		hint = ApplyHint{Needed: true, Action: ApplyActionDeploy}
+	}
 	if shouldDeploy {
-		job, issues, err := s.renderApplicationWithFiles(ctx, app, files)
+		job, err := s.finishPreparedRuntimeJob(ctx, app, prepared, files)
 		if err != nil {
-			return Application{}, err
-		}
-		if len(issues) > 0 {
-			return Application{}, applicationValidationError(issues)
+			return Application{}, ApplyHint{}, err
 		}
 		prepared.job = job
 	}
 	if files == nil {
 		if configurationChanged {
 			if err := s.updateApplicationWithRoutes(ctx, app); err != nil {
-				return Application{}, applicationSaveError(err)
+				return Application{}, ApplyHint{}, applicationSaveError(err)
 			}
 			s.notifyProxyDNSSync(ctx, current.ReverseProxy, app.ReverseProxy)
 		} else if err := s.updateApplicationDerived(ctx, app); err != nil {
-			return Application{}, err
+			return Application{}, ApplyHint{}, err
 		}
 		if prepared.hash != current.SpecHash {
 			s.insertRevisionBestEffort(ctx, app, prepared.job)
 		}
-		if shouldDeploy || shouldStop {
-			if err := s.triggerApplicationReconcile(ctx, app, prepared.job, "application_save", "Syncing application "+app.Name); err != nil {
-				return Application{}, err
+		if !deferApply {
+			if shouldDeploy || shouldStop {
+				if err := s.triggerApplicationReconcile(ctx, app, prepared.job, "application_save", "Syncing application "+app.Name); err != nil {
+					return Application{}, ApplyHint{}, err
+				}
+			}
+			if err := s.reconcileReverseProxyIfNeeded(ctx, current, app); err != nil {
+				return Application{}, ApplyHint{}, err
 			}
 		}
-		if err := s.reconcileReverseProxyIfNeeded(ctx, current, app); err != nil {
-			return Application{}, err
-		}
 		s.refreshReferencesAfterRename(ctx, current, app)
-		return s.Get(ctx, app.ID)
+		out, err := s.Get(ctx, app.ID)
+		return out, hint, err
 	}
 	if err := s.commitApplicationStateVersioned(ctx, app, files, prepared.job, false, prepared.hash != current.SpecHash, expectedVersion, enforceVersion, configurationChanged); err != nil {
-		return Application{}, applicationSaveError(err)
+		return Application{}, ApplyHint{}, applicationSaveError(err)
 	}
 	if configurationChanged {
 		s.notifyProxyDNSSync(ctx, current.ReverseProxy, app.ReverseProxy)
 	}
-	if shouldDeploy || shouldStop {
-		if err := s.triggerApplicationReconcile(ctx, app, prepared.job, "application_save", "Syncing application "+app.Name); err != nil {
-			return Application{}, err
+	if !deferApply {
+		if shouldDeploy || shouldStop {
+			if err := s.triggerApplicationReconcile(ctx, app, prepared.job, "application_save", "Syncing application "+app.Name); err != nil {
+				return Application{}, ApplyHint{}, err
+			}
+		}
+		if err := s.reconcileReverseProxyIfNeeded(ctx, current, app); err != nil {
+			return Application{}, ApplyHint{}, err
 		}
 	}
-	if err := s.reconcileReverseProxyIfNeeded(ctx, current, app); err != nil {
-		return Application{}, err
-	}
 	s.refreshReferencesAfterRename(ctx, current, app)
-	return s.Get(ctx, app.ID)
+	out, err := s.Get(ctx, app.ID)
+	return out, hint, err
+}
+
+// finishPreparedRuntimeJob attaches managed files and deployment targets onto
+// the already-rendered prepare() job instead of re-running template decode.
+func (s *Service) finishPreparedRuntimeJob(ctx context.Context, app Application, prepared preparedApplication, files []ApplicationFile) (appruntime.Spec, error) {
+	var err error
+	if files == nil {
+		files, err = s.listFiles(ctx, app.ID, true)
+		if err != nil {
+			return appruntime.Spec{}, err
+		}
+	}
+	data, err := s.templateData(ctx, app, files, nil)
+	if err != nil {
+		return appruntime.Spec{}, err
+	}
+	job, err := s.attachFiles(ctx, prepared.job, prepared.spec, files, data)
+	if err != nil {
+		return appruntime.Spec{}, err
+	}
+	job, err = applyDeploymentTargets(job, app)
+	if err != nil {
+		return appruntime.Spec{}, panelerr.Validation("application_deployment_targets_invalid", err.Error())
+	}
+	return job, nil
 }
 
 func (s *Service) refreshReferencesAfterRename(ctx context.Context, before, after Application) {
@@ -1134,6 +1200,11 @@ func (s *Service) Deploy(ctx context.Context, appID string) (OperationResult, er
 	if err != nil {
 		return OperationResult{}, err
 	}
+	if len(app.ReverseProxy) > 0 {
+		if err := s.reconcileReverseProxyIfNeeded(ctx, Application{}, app); err != nil {
+			return OperationResult{}, err
+		}
+	}
 	app, err = s.Get(ctx, appID)
 	if err != nil {
 		return OperationResult{}, err
@@ -1372,7 +1443,7 @@ func (s *Service) Stop(ctx context.Context, appID string, purge bool) (Operation
 	if err != nil {
 		return OperationResult{}, err
 	}
-	if err := s.reconcileReverseProxy(ctx); err != nil {
+	if err := s.reconcileReverseProxyIfNeeded(ctx, Application{Enabled: true, ReverseProxy: app.ReverseProxy, DeploymentServers: app.DeploymentServers, Name: app.Name, DeploymentMode: app.DeploymentMode, SpecHash: app.SpecHash}, app); err != nil {
 		return OperationResult{}, err
 	}
 	return OperationResult{DeploymentID: firstString(plan.JobIDs), Application: app}, nil
@@ -2554,64 +2625,105 @@ func (s *Service) planOrchestratorTargets(ctx context.Context, app Application, 
 	if req.Force {
 		forceNonce = time.Now().UnixNano()
 	}
-	inputs := make([]controlplane.PlanInput, 0, len(serverIDs))
-	for _, serverID := range serverIDs {
-		if action == controlplane.ActionApply && strings.TrimSpace(app.PersistentPath) != "" {
-			if err := s.ensurePersistentLocation(ctx, app.ID, serverID); err != nil {
-				return result, err
-			}
-		}
-		instanceID := runtimeInstanceID(app.ID, serverID)
-		containerName := runtimeContainerName(app)
-		desiredSpec := []byte(`{}`)
-		if action == controlplane.ActionApply {
-			if s.servers == nil {
-				return result, panelerr.Validation("server_provider_unavailable", "Server provider is unavailable")
-			}
-			srv, err := s.servers.Get(ctx, serverID)
-			if err != nil {
-				return result, err
-			}
-			targetSpec, err := s.runtimeSpecForServer(ctx, app, baseSpec, srv, files)
-			if err != nil {
-				return result, err
-			}
-			containerName = targetSpec.ContainerName
-			desiredSpec, err = json.Marshal(targetSpec)
-			if err != nil {
-				return result, err
-			}
-		}
-		inputs = append(inputs, controlplane.PlanInput{
-			Automatic:           !req.Manual,
-			ApplicationID:       app.ID,
-			ServerID:            serverID,
-			InstanceID:          instanceID,
-			Action:              action,
-			DesiredState:        desired,
-			DesiredGeneration:   app.Generation,
-			DesiredSpecHash:     app.SpecHash,
-			DesiredRevisionID:   revision.ID,
-			DesiredSpecJSON:     desiredSpec,
-			ContainerName:       containerName,
-			RemoveData:          app.DeletionRequested && action == controlplane.ActionPurge,
-			ForceNonce:          forceNonce,
-			Priority:            orchestratorPriority(action),
-			IntentID:            intentID,
-			TriggerType:         triggerType,
-			TriggerResourceType: req.TriggerResourceType,
-			TriggerResourceID:   req.TriggerResourceID,
-			Reason:              req.Reason,
-		})
+	type builtTarget struct {
+		input controlplane.PlanInput
+		err   error
 	}
-	var planned []controlplane.PlanResult
+	built := make([]builtTarget, len(serverIDs))
+	workers := len(serverIDs)
+	if workers > 8 {
+		workers = 8
+	}
+	if action != controlplane.ActionApply {
+		workers = 1
+	}
+	jobs := make(chan int, len(serverIDs))
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range jobs {
+				serverID := serverIDs[idx]
+				if action == controlplane.ActionApply && strings.TrimSpace(app.PersistentPath) != "" {
+					if err := s.ensurePersistentLocation(ctx, app.ID, serverID); err != nil {
+						built[idx].err = err
+						continue
+					}
+				}
+				instanceID := runtimeInstanceID(app.ID, serverID)
+				containerName := runtimeContainerName(app)
+				desiredSpec := []byte(`{}`)
+				desiredHash := app.SpecHash
+				if action == controlplane.ActionApply {
+					if s.servers == nil {
+						built[idx].err = panelerr.Validation("server_provider_unavailable", "Server provider is unavailable")
+						continue
+					}
+					srv, err := s.servers.Get(ctx, serverID)
+					if err != nil {
+						built[idx].err = err
+						continue
+					}
+					targetSpec, err := s.runtimeSpecForServer(ctx, app, baseSpec, srv, files)
+					if err != nil {
+						built[idx].err = err
+						continue
+					}
+					containerName = targetSpec.ContainerName
+					if strings.TrimSpace(targetSpec.SpecHash) != "" {
+						desiredHash = targetSpec.SpecHash
+					}
+					desiredSpec, err = json.Marshal(targetSpec)
+					if err != nil {
+						built[idx].err = err
+						continue
+					}
+				}
+				built[idx].input = controlplane.PlanInput{
+					Automatic:           !req.Manual,
+					ApplicationID:       app.ID,
+					ServerID:            serverID,
+					InstanceID:          instanceID,
+					Action:              action,
+					DesiredState:        desired,
+					DesiredGeneration:   app.Generation,
+					DesiredSpecHash:     desiredHash,
+					DesiredRevisionID:   revision.ID,
+					DesiredSpecJSON:     desiredSpec,
+					ContainerName:       containerName,
+					RemoveData:          app.DeletionRequested && action == controlplane.ActionPurge,
+					ForceNonce:          forceNonce,
+					Priority:            orchestratorPriority(action),
+					IntentID:            intentID,
+					TriggerType:         triggerType,
+					TriggerResourceType: req.TriggerResourceType,
+					TriggerResourceID:   req.TriggerResourceID,
+					Reason:              req.Reason,
+				}
+			}
+		}()
+	}
+	for i := range serverIDs {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+	inputs := make([]controlplane.PlanInput, 0, len(serverIDs))
+	for _, item := range built {
+		if item.err != nil {
+			return result, item.err
+		}
+		inputs = append(inputs, item.input)
+	}
+	var planResults []controlplane.PlanResult
 	var err error
 	if action == controlplane.ActionApply && revision.ID == "" {
 		raw, marshalErr := json.Marshal(baseSpec)
 		if marshalErr != nil {
 			return result, marshalErr
 		}
-		_, planned, err = s.orchestrator.Planner().EnsureRevisionAndPlanBatch(ctx, controlplane.RevisionInput{
+		_, planResults, err = s.orchestrator.Planner().EnsureRevisionAndPlanBatch(ctx, controlplane.RevisionInput{
 			ApplicationID:       app.ID,
 			Generation:          app.Generation,
 			SpecHash:            app.SpecHash,
@@ -2622,12 +2734,12 @@ func (s *Service) planOrchestratorTargets(ctx context.Context, app Application, 
 			SpecYAML:            app.SpecYAML,
 		}, inputs)
 	} else {
-		planned, err = s.orchestrator.Planner().PlanBatch(ctx, inputs)
+		planResults, err = s.orchestrator.Planner().PlanBatch(ctx, inputs)
 	}
 	if err != nil {
 		return result, err
 	}
-	for _, item := range planned {
+	for _, item := range planResults {
 		result.JobIDs = append(result.JobIDs, item.Job.ID)
 		if item.Created {
 			result.CreatedJobIDs = append(result.CreatedJobIDs, item.Job.ID)
@@ -2770,11 +2882,14 @@ func runtimeInstanceSatisfiesDesired(instance appruntime.Instance, desired appru
 	if instance.DesiredState != appruntime.DesiredRunning || instance.Status != appruntime.StatusRunning {
 		return false
 	}
+	// Content hash wins over generation: facility (and any other) global
+	// generation bumps must not force redeploy when this node's rendered
+	// desired spec is unchanged.
+	if strings.TrimSpace(desired.SpecHash) != "" && strings.TrimSpace(instance.RuntimeSpec.SpecHash) != "" {
+		return instance.RuntimeSpec.SpecHash == desired.SpecHash
+	}
 	if instance.LastDeployedGeneration != desired.Generation {
 		return false
-	}
-	if strings.TrimSpace(instance.RuntimeSpec.SpecHash) != "" {
-		return instance.RuntimeSpec.SpecHash == desired.SpecHash
 	}
 	return strings.TrimSpace(desired.SpecHash) == ""
 }
@@ -2782,7 +2897,7 @@ func runtimeInstanceSatisfiesDesired(instance appruntime.Instance, desired appru
 func (s *Service) triggerApplicationReconcile(ctx context.Context, app Application, spec appruntime.Spec, triggerType, fallbackSummary string) error {
 	return s.triggerApplicationReconcileWithPayload(ctx, app.ID, triggerType, map[string]any{
 		"applicationIds": []string{app.ID},
-		"force":          true,
+		"force":          false,
 		"reason":         firstNonEmpty(triggerType, "application_change"),
 	})
 }
@@ -3487,6 +3602,20 @@ func normalizeDeploymentTargets(mode string, servers []string, persistentPath st
 	if mode != DeploymentModeAll && mode != DeploymentModeSelected {
 		return "", nil, panelerr.Validation("application_deployment_mode_invalid", "deployment mode must be all or selected")
 	}
+	out := uniqueSortedDeploymentServers(servers)
+	if mode == DeploymentModeAll {
+		out = nil
+	}
+	if mode == DeploymentModeSelected && len(out) == 0 {
+		return "", nil, panelerr.Validation("application_deployment_servers_required", "select at least one deployment server")
+	}
+	if strings.TrimSpace(persistentPath) != "" && (mode != DeploymentModeSelected || len(out) != 1) {
+		return "", nil, panelerr.Validation("application_persistent_single_target_required", "persistent applications must target exactly one server")
+	}
+	return mode, out, nil
+}
+
+func uniqueSortedDeploymentServers(servers []string) []string {
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(servers))
 	for _, serverID := range servers {
@@ -3501,16 +3630,63 @@ func normalizeDeploymentTargets(mode string, servers []string, persistentPath st
 		out = append(out, serverID)
 	}
 	sort.Strings(out)
-	if mode == DeploymentModeAll {
-		out = nil
+	return out
+}
+
+func normalizeDeploymentMode(mode string) string {
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		return DeploymentModeAll
 	}
-	if mode == DeploymentModeSelected && len(out) == 0 {
-		return "", nil, panelerr.Validation("application_deployment_servers_required", "select at least one deployment server")
+	return mode
+}
+
+func deploymentTargetSetEqual(leftMode string, leftServers []string, rightMode string, rightServers []string) bool {
+	leftMode = normalizeDeploymentMode(leftMode)
+	rightMode = normalizeDeploymentMode(rightMode)
+	if leftMode != rightMode {
+		return false
 	}
-	if strings.TrimSpace(persistentPath) != "" && (mode != DeploymentModeSelected || len(out) != 1) {
-		return "", nil, panelerr.Validation("application_persistent_single_target_required", "persistent applications must target exactly one server")
+	if leftMode == DeploymentModeAll {
+		return true
 	}
-	return mode, out, nil
+	return reflect.DeepEqual(uniqueSortedDeploymentServers(leftServers), uniqueSortedDeploymentServers(rightServers))
+}
+
+// hasMissingSelectedDeploymentInstances reports whether an enabled selected-mode
+// application still lacks a non-purged instance row for one or more desired
+// servers. Callers use this to force reconcile on save even when SpecHash is
+// unchanged (for example after a prior plan never created the new target).
+func (s *Service) hasMissingSelectedDeploymentInstances(ctx context.Context, app Application) (bool, error) {
+	if !app.Enabled || app.DeletionRequested {
+		return false, nil
+	}
+	mode := normalizeDeploymentMode(app.DeploymentMode)
+	if mode != DeploymentModeSelected {
+		return false, nil
+	}
+	selected := uniqueSortedDeploymentServers(app.DeploymentServers)
+	if len(selected) == 0 {
+		return false, nil
+	}
+	instances, err := s.runtimeInstances(ctx, app.ID)
+	if err != nil {
+		return false, err
+	}
+	have := map[string]struct{}{}
+	for _, instance := range instances {
+		serverID := strings.TrimSpace(instance.ServerID)
+		if serverID == "" || strings.TrimSpace(instance.DesiredState) == controlplane.DesiredPurged {
+			continue
+		}
+		have[serverID] = struct{}{}
+	}
+	for _, serverID := range selected {
+		if _, ok := have[serverID]; !ok {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func normalizeReverseProxyRules(rules []ReverseProxyRule) ([]ReverseProxyRule, error) {
@@ -3674,38 +3850,76 @@ func (s *Service) ApplicationReverseProxyConfigs(ctx context.Context) ([]Applica
 	if err != nil {
 		return nil, err
 	}
-	out := []ApplicationReverseProxyConfig{}
+	candidates := make([]Application, 0, len(apps))
 	for _, app := range apps {
-		if !app.Enabled || len(app.ReverseProxy) == 0 {
-			continue
+		if app.Enabled && len(app.ReverseProxy) > 0 {
+			candidates = append(candidates, app)
 		}
-		files, err := s.listFiles(ctx, app.ID, true)
-		if err != nil {
-			return nil, err
-		}
-		data, err := s.templateData(ctx, app, files, nil)
-		if err != nil {
-			return nil, err
-		}
-		rules, err := s.renderReverseProxyRules(ctx, app.ReverseProxy, data)
-		if err != nil {
-			return nil, err
-		}
-		routes := make([]ReverseProxyRoute, 0, len(rules))
-		for _, rule := range rules {
-			paths := make([]ReverseProxyPath, 0, len(rule.Paths))
-			for _, item := range rule.Paths {
-				paths = append(paths, ReverseProxyPath{Path: item.Path, Options: item.Options})
+	}
+	if len(candidates) == 0 {
+		return []ApplicationReverseProxyConfig{}, nil
+	}
+	type result struct {
+		cfg ApplicationReverseProxyConfig
+		err error
+	}
+	results := make([]result, len(candidates))
+	workers := len(candidates)
+	if workers > 8 {
+		workers = 8
+	}
+	jobs := make(chan int, len(candidates))
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range jobs {
+				app := candidates[idx]
+				files, err := s.listFiles(ctx, app.ID, true)
+				if err != nil {
+					results[idx].err = err
+					continue
+				}
+				data, err := s.templateData(ctx, app, files, nil)
+				if err != nil {
+					results[idx].err = err
+					continue
+				}
+				rules, err := s.renderReverseProxyRules(ctx, app.ReverseProxy, data)
+				if err != nil {
+					results[idx].err = err
+					continue
+				}
+				routes := make([]ReverseProxyRoute, 0, len(rules))
+				for _, rule := range rules {
+					paths := make([]ReverseProxyPath, 0, len(rule.Paths))
+					for _, item := range rule.Paths {
+						paths = append(paths, ReverseProxyPath{Path: item.Path, Options: item.Options})
+					}
+					routes = append(routes, ReverseProxyRoute{Domain: rule.Domain, TargetPort: rule.TargetPort, TargetContainer: runtimeContainerName(app), OriginServerIDs: append([]string(nil), rule.OriginServerIDs...), AnyAccess: rule.AnyAccess, Paths: paths})
+				}
+				results[idx].cfg = ApplicationReverseProxyConfig{
+					ApplicationID:     app.ID,
+					ApplicationName:   app.Name,
+					DeploymentMode:    app.DeploymentMode,
+					DeploymentServers: append([]string(nil), app.DeploymentServers...),
+					Routes:            routes,
+				}
 			}
-			routes = append(routes, ReverseProxyRoute{Domain: rule.Domain, TargetPort: rule.TargetPort, TargetContainer: runtimeContainerName(app), OriginServerIDs: append([]string(nil), rule.OriginServerIDs...), AnyAccess: rule.AnyAccess, Paths: paths})
+		}()
+	}
+	for i := range candidates {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+	out := make([]ApplicationReverseProxyConfig, 0, len(candidates))
+	for _, item := range results {
+		if item.err != nil {
+			return nil, item.err
 		}
-		out = append(out, ApplicationReverseProxyConfig{
-			ApplicationID:     app.ID,
-			ApplicationName:   app.Name,
-			DeploymentMode:    app.DeploymentMode,
-			DeploymentServers: append([]string(nil), app.DeploymentServers...),
-			Routes:            routes,
-		})
+		out = append(out, item.cfg)
 	}
 	return out, nil
 }
@@ -3808,15 +4022,55 @@ func (s *Service) reconcileReverseProxy(ctx context.Context) error {
 	return runtimeOperationError(s.proxyReconciler.ReconcileReverseProxy(ctx))
 }
 
-// reconcileReverseProxyIfNeeded skips the facility-wide reverse-proxy rebuild when
-// this application's contribution to gateway config cannot have changed. The
-// rebuild still scans every enabled app with routes, so avoiding the call on
-// unrelated saves is the main commit-path win.
+// reconcileReverseProxyIfNeeded skips reverse-proxy work when this application's
+// contribution to gateway config cannot have changed. When it runs, only the
+// gateways that host this application's origins/relays (before or after) are
+// replanned — other nginx nodes are left alone.
 func (s *Service) reconcileReverseProxyIfNeeded(ctx context.Context, before, after Application) error {
 	if !reverseProxyReconcileNeeded(before, after) {
 		return nil
 	}
-	return s.reconcileReverseProxy(ctx)
+	affected := applicationProxyAffectedGateways(before, after)
+	if affected == nil {
+		return s.reconcileReverseProxy(ctx)
+	}
+	if len(affected) == 0 {
+		return nil
+	}
+	return s.reconcileReverseProxyServers(ctx, affected)
+}
+
+func (s *Service) reconcileReverseProxyServers(ctx context.Context, serverIDs []string) error {
+	if s.proxyReconciler == nil {
+		return nil
+	}
+	return runtimeOperationError(s.proxyReconciler.ReconcileReverseProxyServers(ctx, serverIDs))
+}
+
+// applicationProxyAffectedGateways returns gateway nodes whose nginx may change
+// because of this application's reverse-proxy rules (union of before/after).
+// An empty result means "unknown / all gateways" — callers should full-sync.
+func applicationProxyAffectedGateways(before, after Application) []string {
+	var out []string
+	for _, rules := range [][]ReverseProxyRule{before.ReverseProxy, after.ReverseProxy} {
+		for _, rule := range rules {
+			if strings.TrimSpace(rule.Domain) == "" {
+				continue
+			}
+			origins := uniqueSortedDeploymentServers(rule.OriginServerIDs)
+			out = append(out, origins...)
+			if !rule.AnyAccess.Enabled {
+				continue
+			}
+			// Empty relay list means every non-origin facility gateway; without
+			// the facility gateway roster we cannot safely narrow the set.
+			if len(rule.AnyAccess.RelayServerIDs) == 0 {
+				return nil
+			}
+			out = append(out, rule.AnyAccess.RelayServerIDs...)
+		}
+	}
+	return uniqueSortedDeploymentServers(out)
 }
 
 func reverseProxyReconcileNeeded(before, after Application) bool {

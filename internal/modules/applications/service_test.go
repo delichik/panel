@@ -16,7 +16,7 @@ import (
 	"time"
 
 	agentcontract "panel/internal/agent/contract"
-	"panel/internal/modules/applications/runtime"
+	appruntime "panel/internal/modules/applications/runtime"
 	"panel/internal/modules/servers"
 	"panel/internal/modules/tasks"
 	controlplane "panel/internal/orchestrator"
@@ -838,6 +838,9 @@ func TestApplicationFileMountCreatesManagedRuntimeFile(t *testing.T) {
 	if _, err := svc.CommitEditSession(ctx, "admin", session.ID, "commit-1", CommitEditSessionInput{Revision: session.Revision, BaseResourceVersion: session.BaseResourceVersion.Value, PreviewToken: preview.Token.Value}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := svc.Deploy(ctx, app.ID); err != nil {
+		t.Fatal(err)
+	}
 	stored, err := svc.ListFiles(ctx, app.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -851,7 +854,7 @@ func TestApplicationFileMountCreatesManagedRuntimeFile(t *testing.T) {
 	if file.ID == "" {
 		t.Fatal("managed file not stored")
 	}
-	// 新控制面：提交只触发 plan 写 Job，渲染结果体现在 Job 的 DesiredSpecJSON。
+	// 新控制面：commit 后 follow-up deploy 写 Job，渲染结果体现在 Job 的 DesiredSpecJSON。
 	spec := applyJobSpecsForApplication(t, svc, app.ID)[0]
 	allocation := applicationFileAllocationName(file.ID)
 	files, _ := spec["files"].([]any)
@@ -914,6 +917,9 @@ func TestApplicationArchiveFileMountDeploysSingleManagedArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := svc.Deploy(ctx, commitResult.Application.ID); err != nil {
+		t.Fatal(err)
+	}
 	stored, err := svc.ListFiles(ctx, commitResult.Application.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -927,7 +933,7 @@ func TestApplicationArchiveFileMountDeploysSingleManagedArchive(t *testing.T) {
 	if file.ID == "" {
 		t.Fatal("archive file not stored")
 	}
-	// 新控制面：提交只触发 plan 写 Job，渲染结果体现在 Job 的 DesiredSpecJSON。
+	// 新控制面：commit 后 follow-up deploy 写 Job，渲染结果体现在 Job 的 DesiredSpecJSON。
 	spec := applyJobSpecsForApplication(t, svc, commitResult.Application.ID)[0]
 	allocation := applicationFileAllocationName(file.ID)
 	files, _ := spec["files"].([]any)
@@ -987,6 +993,9 @@ func TestApplicationFileTemplateRendersPerTargetServerVariables(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := svc.CommitEditSession(ctx, "admin", session.ID, "commit-1", CommitEditSessionInput{Revision: session.Revision, BaseResourceVersion: session.BaseResourceVersion.Value, PreviewToken: preview.Token.Value}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Deploy(ctx, app.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1208,8 +1217,13 @@ func TestStopAppWrapsReverseProxyReconcileFailure(t *testing.T) {
 	svc, _, _, closeStore := newTestService(t)
 	defer closeStore()
 	ctx := context.Background()
+	svc.SetReverseProxyPolicyProvider(fakeReverseProxyPolicyProvider{})
 
-	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	app, err := svc.Create(ctx, SaveInput{
+		Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n",
+		DeploymentMode: DeploymentModeSelected, DeploymentServers: []string{"srv-a"},
+		ReverseProxy: []ReverseProxyRule{{Domain: "web.example.test", TargetPort: 80, Paths: []ReverseProxyPath{{Path: "/"}}}},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1316,6 +1330,102 @@ func TestSelectedDeploymentRemovalPurgesRemovedInstance(t *testing.T) {
 	}
 	if len(runtime.stops) != 0 {
 		t.Fatalf("update must not call agent runtime directly, stops = %#v", runtime.stops)
+	}
+}
+
+func TestUpdateAddingSelectedServerPlansNewTarget(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{
+		Name:              "web",
+		Enabled:           true,
+		SpecYAML:          "name: web\nimage: nginx\n",
+		DeploymentMode:    DeploymentModeSelected,
+		DeploymentServers: []string{"srv-a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Mark srv-a satisfied so a target-only expand must not force-redeploy it.
+	markRuntimeInstanceSatisfied(t, svc, app.ID, "srv-a", app.Generation, app.SpecHash, appruntime.StatusRunning, "")
+	beforeJobs := len(jobsForApplication(t, svc, app.ID))
+	updated, err := svc.Update(ctx, app.ID, SaveInput{
+		Name:              "web",
+		Enabled:           true,
+		SpecYAML:          "name: web\nimage: nginx\n",
+		DeploymentMode:    DeploymentModeSelected,
+		DeploymentServers: []string{"srv-a", "srv-b"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(updated.DeploymentServers, []string{"srv-a", "srv-b"}) {
+		t.Fatalf("deployment servers = %#v", updated.DeploymentServers)
+	}
+	newApply := map[string]int{}
+	for _, job := range jobsForApplication(t, svc, app.ID) {
+		if job.Action == "apply" {
+			newApply[job.ServerID]++
+		}
+	}
+	if newApply["srv-b"] == 0 {
+		t.Fatalf("expected apply job for newly added srv-b, jobs = %#v", jobsForApplication(t, svc, app.ID))
+	}
+	if len(jobsForApplication(t, svc, app.ID)) <= beforeJobs && newApply["srv-b"] == 0 {
+		t.Fatalf("expected planning after expanding targets, jobs = %#v", jobsForApplication(t, svc, app.ID))
+	}
+}
+
+func TestUpdateResaveWithMissingSelectedInstancePlansTarget(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{
+		Name:              "web",
+		Enabled:           true,
+		SpecYAML:          "name: web\nimage: nginx\n",
+		DeploymentMode:    DeploymentModeSelected,
+		DeploymentServers: []string{"srv-a", "srv-b"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.ExecContext(ctx, `DELETE FROM application_instances WHERE application_id=? AND server_id=?`, app.ID, "srv-b"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.ExecContext(ctx, `DELETE FROM event_runs WHERE application_id=? AND server_id=?`, app.ID, "srv-b"); err != nil {
+		t.Fatal(err)
+	}
+	// Identical save must still request planning when a selected target has no
+	// instance row, even though SpecHash / deploymentServers are unchanged.
+	if _, err := svc.Update(ctx, app.ID, SaveInput{
+		Name:              "web",
+		Enabled:           true,
+		SpecYAML:          "name: web\nimage: nginx\n",
+		DeploymentMode:    DeploymentModeSelected,
+		DeploymentServers: []string{"srv-a", "srv-b"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, job := range jobsForApplication(t, svc, app.ID) {
+		if job.ServerID == "srv-b" && job.Action == "apply" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected re-save to plan missing selected target srv-b, jobs = %#v", jobsForApplication(t, svc, app.ID))
+	}
+	var instanceCount int
+	if err := svc.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM application_instances WHERE application_id=? AND server_id=?`, app.ID, "srv-b").Scan(&instanceCount); err != nil {
+		t.Fatal(err)
+	}
+	if instanceCount != 1 {
+		t.Fatalf("expected planner to recreate missing instance row for srv-b, count=%d", instanceCount)
 	}
 }
 
@@ -2306,6 +2416,10 @@ func (f fakeReverseProxyReconciler) ReconcileReverseProxy(context.Context) error
 	return f.err
 }
 
+func (f fakeReverseProxyReconciler) ReconcileReverseProxyServers(context.Context, []string) error {
+	return f.err
+}
+
 func (f *fakeRuntimeClient) RuntimeWriteFiles(ctx context.Context, baseURL string, req agentcontract.RuntimeWriteFilesRequest) error {
 	if f.writeHook != nil {
 		f.writeHook(req)
@@ -2527,6 +2641,11 @@ type countingReverseProxyReconciler struct {
 }
 
 func (c *countingReverseProxyReconciler) ReconcileReverseProxy(context.Context) error {
+	c.calls++
+	return c.err
+}
+
+func (c *countingReverseProxyReconciler) ReconcileReverseProxyServers(_ context.Context, _ []string) error {
 	c.calls++
 	return c.err
 }

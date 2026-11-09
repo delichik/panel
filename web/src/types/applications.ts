@@ -223,6 +223,8 @@ export interface ApplicationEditCommitResult extends ActivityReceipt {
   application: ApplicationDto;
   resourceVersion: ResourceVersion;
   applyRequested: boolean;
+  applyNeeded?: boolean;
+  applyAction?: 'deploy' | 'stop' | '';
   diagnostics?: Diagnostic[];
 }
 
