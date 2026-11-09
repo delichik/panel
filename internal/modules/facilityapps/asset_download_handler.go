@@ -22,6 +22,12 @@ type facilityAssetDownloadReader interface {
 	GetStaticAssetDownload(context.Context, string) (FacilityAssetDownload, error)
 }
 
+// facilityRecordAssetDownloadReader scopes committed asset downloads to one
+// configuration record. Kept separate so older service fakes stay valid.
+type facilityRecordAssetDownloadReader interface {
+	GetStaticAssetDownloadForRecord(context.Context, string, string) (FacilityAssetDownload, error)
+}
+
 func (h *Handler) DownloadFacilityEditAsset(w http.ResponseWriter, r *http.Request) {
 	service, ok := h.service.(facilityAssetDownloadReader)
 	if !ok {
@@ -40,6 +46,21 @@ func (h *Handler) DownloadStaticAsset(w http.ResponseWriter, r *http.Request) {
 	service, ok := h.service.(facilityAssetDownloadReader)
 	if !ok {
 		httpx.Error(w, panelerr.New(http.StatusNotImplemented, "facility_asset_download_unavailable", "Facility asset downloads are not available"))
+		return
+	}
+	recordID := strings.TrimSpace(r.URL.Query().Get("recordId"))
+	if recordID != "" {
+		scoped, scopedOK := h.service.(facilityRecordAssetDownloadReader)
+		if !scopedOK {
+			httpx.Error(w, panelerr.New(http.StatusNotImplemented, "facility_asset_download_unavailable", "Scoped facility asset downloads are not available"))
+			return
+		}
+		result, err := scoped.GetStaticAssetDownloadForRecord(r.Context(), recordID, r.PathValue("assetName"))
+		if err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		serveFacilityAssetDownload(w, r, result)
 		return
 	}
 	result, err := service.GetStaticAssetDownload(r.Context(), r.PathValue("assetName"))

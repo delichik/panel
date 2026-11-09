@@ -361,6 +361,12 @@ var (
 			"facility_cross_module_insights_stale":                   "DNS、证书、防火墙和网关端口的相关信息暂时不可用",
 			"facility_route_summary_stale":                           "路由摘要暂时无法刷新",
 			"facility_apply_request_failed":                          "配置已提交，但无法请求应用",
+			"facility_config_apply_failed":                           "配置已提交，但请求应用到网关失败",
+			"facility_proxy_ensure_failed":                           "代理容器确保运行失败",
+			"facility_proxy_plane_gateway_in_use":                    "仍有配置记录引用该网关，请先更新或删除对应记录",
+			"facility_record_id_required":                            "必须指定配置记录",
+			"facility_record_not_facility_domain":                    "应用反向代理记录请在应用编辑器中修改",
+			"facility_servers_unavailable":                           "节点列表不可用，无法同步配置",
 			"facility_gateway_removal_invalidates_origin":            "移除网关节点会移除已配置的域名源站",
 			"facility_gateway_removal_invalidates_anyaccess_primary": "移除网关节点会移除 AnyAccess 主源站",
 			"facility_commit_recovered":                              "重启后已恢复已提交的设施配置",
@@ -653,7 +659,8 @@ var (
 				"Cloudflare API unreachable: ": "无法访问 Cloudflare API：",
 			},
 			"cloudflare_api_error": {
-				"Cloudflare API error ": "Cloudflare API 错误 ",
+				"Cloudflare API error: ": "Cloudflare API 错误 ",
+				"Cloudflare API error ":  "Cloudflare API 错误 ",
 			},
 			"application_runtime_operation_failed": {
 				"runtime container configuration does not match the expected configuration": "容器配置与期望不一致",

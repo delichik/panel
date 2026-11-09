@@ -25,7 +25,8 @@ func TestFacilityAssetDownloadHandlersUseCommittedSourceAndSessionBlob(t *testin
 		t.Fatalf("committed status=%d body=%q", committed.Code, committed.Body.String())
 	}
 
-	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	bindStaticAssetRecord(t, svc, asset.ID, "edit.example.test")
+	session, err := beginFacilityEditForTest(t, svc, "edit.example.test", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

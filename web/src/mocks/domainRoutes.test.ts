@@ -277,7 +277,7 @@ describe('domain mock routes', () => {
   });
 
   it('serves facility reverse proxy edit session preview on real routes', async () => {
-    const created = await fetch('/api/v1/facility-apps/reverse-proxy/edit-sessions', { method: 'POST', body: JSON.stringify({}) });
+    const created = await fetch('/api/v1/facility-apps/reverse-proxy/edit-sessions', { method: 'POST', body: JSON.stringify({ recordId: 'static.example.test' }) });
     const createdEnvelope = await created.json();
     const preview = await fetch(`/api/v1/facility-apps/reverse-proxy/edit-sessions/${createdEnvelope.data.id}/preview`, {
       method: 'POST',
@@ -456,12 +456,12 @@ describe('domain mock routes', () => {
     expect(uploaded.status).toBe(200);
     expect(uploadedEnvelope.data.files.some((file: { name: string }) => file.name === 'extra.env')).toBe(true);
 
-    const facilityCreated = await fetch('/api/v1/facility-apps/reverse-proxy/edit-sessions', { method: 'POST', body: JSON.stringify({}) });
+    const facilityCreated = await fetch('/api/v1/facility-apps/reverse-proxy/edit-sessions', { method: 'POST', body: JSON.stringify({ recordId: 'static.example.test' }) });
     const facilityEnvelope = await facilityCreated.json();
     const facilitySessionId = facilityEnvelope.data.id;
     const facilityAsset = await fetch(`/api/v1/facility-apps/reverse-proxy/edit-sessions/${facilitySessionId}/assets/docs%20bundle/content`);
     expect(facilityAsset.status).toBe(200);
-    const staticAsset = await fetch('/api/v1/facility-apps/reverse-proxy/static-assets/status%20page/content');
+    const staticAsset = await fetch('/api/v1/facility-apps/reverse-proxy/static-assets/status%20page/content?recordId=status.example.test');
     expect(staticAsset.status).toBe(200);
 
     const refreshed = await fetch('/api/v1/dns/domains/domain-example/records/refresh', { method: 'POST' });

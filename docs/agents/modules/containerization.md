@@ -43,9 +43,9 @@
 
 Panel API 挂在 `/api/v1/servers/{serverId}/containers|images|networks|volumes`；容器日志使用 `GET /api/v1/servers/{serverId}/containers/{containerId}/logs`，tail 行数最大为 10000；批量 Application 镜像更新使用 `/api/v1/images/upgrade-selected|upgrade-all`。
 
-设施类型没有通用目录 API；前后端按设施分别内置适配器。当前入口代理设施直接使用 `reverse-proxy` 专属配置与 `/facility-apps/reverse-proxy` 端点。新事务编辑器使用持久 `/edit-sessions` API：创建、draft patch、按设施内唯一 `assetName` PUT/DELETE 资产、validate、preview、commit 和 discard；会话由稳定单管理员主体持有，idle TTL 为 24 小时、absolute TTL 为 7 天，draft/资产操作使用 revision，资产操作和 commit 使用幂等键。session 资产下载通过 `GET .../assets/{assetName}/content` 解析当前 blob；未替换的既有资产回退读取内部 `source_asset_id` 正式目录。正式资产通过 `GET .../static-assets/{assetName}/content` 下载，bundle 目录即时打包为 zip。物理 asset key/id 只用于存储、提交 manifest 和旧数据兼容。
+设施类型没有通用目录 API；前后端按设施分别内置适配器。当前入口代理设施拆成代理平面（`/facility-apps/reverse-proxy/proxy-plane`，网关成员与容器 ensure）与配置平面（`/facility-apps/reverse-proxy/config-records`，每条设施域名/应用反代记录独立 version）。单条配置编辑器使用持久 `/edit-sessions` API：创建时必须绑定 `recordId`、draft patch、按**该记录内**唯一 `assetName` PUT/DELETE 资产、validate、preview、commit 和 discard；会话由稳定单管理员主体持有，idle TTL 为 24 小时、absolute TTL 为 7 天，draft/资产操作使用 revision，资产操作和 commit 使用幂等键。session 资产下载通过 `GET .../assets/{assetName}/content` 解析当前 blob；未替换的既有资产回退读取内部 `source_asset_id` 正式目录。正式资产通过 `GET .../static-assets/{assetName}/content?recordId={recordId}` 按记录下载，bundle 目录即时打包为 zip；不带 `recordId` 只兼容未归属任何记录的 legacy 资产。物理 asset key/id 只用于存储、提交 manifest 和旧数据兼容。
 
-持久设施会话中的既有资产只保存 `source_asset_id` 和 metadata，不复制正文；新增或替换资产写入唯一 blob 目录。路由草稿在编辑期间以 `assetName` 引用资产，commit manifest 决定内部最终 asset id 并在写数据库前统一改写。删除仍被 route 引用的资产或移除仍被 origin/AnyAccess primary 使用的 gateway 都是阻断诊断，服务端不得静默修剪。
+持久设施会话中的既有资产只保存 `source_asset_id` 和 metadata，不复制正文；新增或替换资产写入唯一 blob 目录。路由草稿在编辑期间以 `assetName` 引用资产，commit manifest 决定内部最终 asset id 并在写数据库前统一改写。删除仍被 route 引用的资产或移除仍被 origin/AnyAccess primary/relay 使用的 gateway 都是阻断诊断，服务端不得静默修剪；代理平面保存对仍被配置记录引用的网关返回 `facility_proxy_plane_gateway_in_use`（空网关集合表示整体停用，放行）。
 
 所有会修改正式设施配置或正式静态资产的新入口共享同一单资源提交锁：edit-session commit 不得交错文件 rename 或数据库写。新会话冲突后可通过 draft PATCH 携带当前 `baseResourceVersion` 执行 rebase；rebase 保留 session assets、更新 base version、清除 conflict 后允许重新 preview/commit。
 
@@ -147,7 +147,7 @@ Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并
 - 设施路由、应用路由和 Panel 入口的规范化域名全局唯一。旧库迁移发现跨所有者冲突时必须中止并列出冲突，不得静默合并。
 - 手工代理、应用代理、Panel 入口和 AnyAccess 转发均明确生成 `proxy_cache off;`；Panel 不管理客户端缓存 Header。
 
-- `facility_static_assets` 保存设施应用上传的静态资产元数据；每个设施内的 `name` 唯一，编辑会话内的资产 `name` 也唯一。文件内容存放在内部 `<dataRoot>/facility-apps/static-assets/<assetId>/content`，asset id 不属于公开契约。普通文件永远不解压；文件夹包支持 zip、tar、tar.gz 或 tgz，并限制最多 10000 个文件、32 层目录、256 MiB 解包总量和 100 倍压缩比。
+- `facility_static_assets` 保存设施配置记录的静态资产元数据，行以 `record_id` 绑定所属记录（设施域名为 domain）；每个**配置记录内** `name` 唯一，跨记录允许同名且互不覆盖，编辑会话内的资产 `name` 也在本记录内唯一。文件内容存放在内部 `<dataRoot>/facility-apps/static-assets/<assetId>/content`，asset id 不属于公开契约；alpha 迁移按引用域名拆出记录级行后，启动 backfill 会从签名（sha256+filename+kind+content_mode）一致的 donor 复制补齐缺失目录。普通文件永远不解压；文件夹包支持 zip、tar、tar.gz 或 tgz，并限制最多 10000 个文件、32 层目录、256 MiB 解包总量和 100 倍压缩比。
 - 入口网关路径规则保存在 `domains[].paths` 中，`ruleType` 支持 `static`、`redirect`、`proxy_pass`，配置页 Path 对话框提供全部三种规则类型（`proxy_pass` 即“反向代理”）。`proxy_pass` 目标必须是 `http(s)://` 前缀的 upstream URL，前端校验与后端 `validProxyURL` 一致；proxy_pass 路径在加载、编辑会话和再次保存时原样保留，不得纠正为 `static`。
 - `static` 规则的 `sourceType` 只支持 `uploaded_file` 与 `uploaded_bundle`；`host_path`（服务器目录）来源已整体移除，前后端都不再提供或渲染，保存携带 `host_path` 返回 `facility_static_site_source_invalid`。遗留 `host_path` 配置在前端加载/再次保存时自动纠正为 `uploaded_file`（需重新选择静态文件）；后端渲染遇到尚未纠正的遗留 `host_path` 路由会以 `facility_static_site_source_invalid` 失败并停止协调，需在配置页修复该路由。上传来源通过 agent managed files 下发到节点并只读挂载。
 - `redirect` 规则写入 nginx `return`，支持 301、302、307、308；`proxy_pass` 规则写入手工 upstream URL，并通过 `proxySourceMode` 控制是否透传源请求信息（`preserve_source`/`hide_source`）。

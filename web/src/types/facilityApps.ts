@@ -17,6 +17,8 @@ export interface FacilityRoutePath {
 
 export interface FacilityRouteDomain {
   domain: string;
+  /** Optimistic-lock version of the owning config record; mirrors ConfigRecord.version. */
+  version?: number;
   originServerIds: string[];
   anyAccess: AnyAccessConfig;
   paths: FacilityRoutePath[];
@@ -31,6 +33,36 @@ export interface StaticAsset {
   sha256: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/** One independently versioned reverse-proxy configuration record. */
+export type ConfigRecordKind = 'facility_domain' | 'application_route';
+
+export interface ConfigRecord {
+  /** Lowercase domain for facility records; the route domain for application records. */
+  recordId: string;
+  kind: ConfigRecordKind;
+  /** Independent optimistic lock for this record only. */
+  version: number;
+  domain: FacilityRouteDomain;
+  staticAssets?: StaticAsset[];
+  applicationId?: string;
+  applicationName?: string;
+  updatedAt: string;
+}
+
+/** Proxy plane: gateway membership and container deployment state (no route content). */
+export interface ProxyPlaneState {
+  id: string;
+  deploymentServers: string[];
+  deployments: FacilityDeployment[];
+  reconcileStopped?: boolean;
+  lastError?: string;
+  updatedAt: string;
+}
+
+export interface ProxyPlaneSaveInput {
+  deploymentServers: string[];
 }
 
 export interface RouteSummary {
@@ -122,10 +154,12 @@ export interface FacilityEditAsset {
 
 export interface FacilityEditSession {
   id: string;
+  /** When set to the record being edited; every draft/asset operation is scoped to it. */
   clientDraftKey?: string;
+  recordId: string;
   state: string;
   baseResourceVersion: ResourceVersion;
-  draft: ReverseProxySaveInput;
+  draft: FacilityRouteDomain;
   revision: number;
   assets: FacilityEditAsset[];
   previewToken?: PreviewToken;
@@ -146,7 +180,10 @@ export interface FacilityEditValidationResult {
 export type FacilityEditPreviewResult = ApplicationEditPreviewResult;
 
 export interface FacilityEditCommitResult extends ActivityReceipt {
-  config: ReverseProxyConfig;
+  /** The single record that was just committed. */
+  record: ConfigRecord;
+  /** Aggregate snapshot; the backend may still return it, but commit only changes `record`. */
+  config?: ReverseProxyConfig;
   resourceVersion: ResourceVersion;
   applyRequested: boolean;
   applyNeeded?: boolean;

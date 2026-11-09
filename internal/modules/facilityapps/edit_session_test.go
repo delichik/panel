@@ -27,14 +27,31 @@ func TestFacilityEditSessionConcurrentCommitUsesConfigVersionCAS(t *testing.T) {
 	svc, _, closeStore := newFacilityEditTestService(t)
 	defer closeStore()
 	ctx := context.Background()
-	drafts := []ReverseProxySaveInput{{}, {DeploymentServers: []string{"srv-a"}}}
+	const recordID = "cas.example.test"
+	if _, err := svc.SaveReverseProxy(ctx, ReverseProxySaveInput{
+		DeploymentServers: []string{"srv-a"},
+		Domains: []FacilityRouteDomain{
+			{Domain: recordID, OriginServerIDs: []string{"srv-a"}, Paths: []FacilityRoutePath{{Path: "/", RuleType: StaticRuleRedirect, RedirectURL: "https://base.example.test/", RedirectCode: 302}}},
+			{Domain: "other.example.test", OriginServerIDs: []string{"srv-a"}, Paths: []FacilityRoutePath{{Path: "/", RuleType: StaticRuleRedirect, RedirectURL: "https://other.example.test/", RedirectCode: 302}}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	otherBefore, err := svc.GetConfigRecord(ctx, "other.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	drafts := []FacilityRouteDomain{
+		{Domain: recordID, OriginServerIDs: []string{"srv-a"}, Paths: []FacilityRoutePath{{Path: "/", RuleType: StaticRuleRedirect, RedirectURL: "https://one.example.test/", RedirectCode: 302}}},
+		{Domain: recordID, OriginServerIDs: []string{"srv-a"}, Paths: []FacilityRoutePath{{Path: "/", RuleType: StaticRuleRedirect, RedirectURL: "https://two.example.test/", RedirectCode: 302}}},
+	}
 	type candidateSpec struct {
 		session FacilityEditSession
 		preview FacilityEditPreviewResult
 	}
 	candidates := make([]candidateSpec, 2)
 	for index := range drafts {
-		session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{Draft: &drafts[index]})
+		session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{RecordID: recordID, Draft: &drafts[index]})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -72,6 +89,13 @@ func TestFacilityEditSessionConcurrentCommitUsesConfigVersionCAS(t *testing.T) {
 	if successes != 1 || conflicts != 1 {
 		t.Fatalf("successes=%d conflicts=%d", successes, conflicts)
 	}
+	otherAfter, err := svc.GetConfigRecord(ctx, "other.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if otherAfter.Version != otherBefore.Version {
+		t.Fatalf("unrelated record version %d -> %d", otherBefore.Version, otherAfter.Version)
+	}
 }
 
 func TestFacilityStaticAssetNamesAreUniqueWithinFacility(t *testing.T) {
@@ -90,7 +114,7 @@ func TestFacilityEditAssetNamesAreUniqueWithinSession(t *testing.T) {
 	svc, _, closeStore := newFacilityEditTestService(t)
 	defer closeStore()
 	ctx := context.Background()
-	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	session, err := beginFacilityEditForTest(t, svc, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +136,7 @@ func TestFacilityEditSessionCommitReturnsApplyNeededWithoutPlanning(t *testing.T
 	ctx := context.Background()
 	trigger := &recordingReconcileTrigger{}
 	svc.reconciler = trigger
-	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	session, err := beginFacilityEditForTest(t, svc, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,9 +178,9 @@ func TestFacilityEditSessionReuploadedAssetResolvesReferences(t *testing.T) {
 		}
 		return session
 	}
-	patch := func(session FacilityEditSession, domains []FacilityRouteDomain) FacilityEditSession {
+	patch := func(session FacilityEditSession, domain FacilityRouteDomain) FacilityEditSession {
 		t.Helper()
-		next, err := svc.PatchFacilityEditSession(ctx, session.ID, PatchFacilityEditSessionInput{Revision: session.Revision, BaseResourceVersion: session.BaseResourceVersion.Value, Draft: ReverseProxySaveInput{DeploymentServers: []string{"srv-a"}, Domains: domains}})
+		next, err := svc.PatchFacilityEditSession(ctx, session.ID, PatchFacilityEditSessionInput{Revision: session.Revision, BaseResourceVersion: session.BaseResourceVersion.Value, Draft: domain})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -164,28 +188,24 @@ func TestFacilityEditSessionReuploadedAssetResolvesReferences(t *testing.T) {
 	}
 
 	// 1. 提交带静态路由的设施配置。
-	if _, err := svc.UploadStaticAsset(ctx, StaticAssetUploadInput{Name: "main", Kind: StaticSourceUploadedFile, FileName: "index.html", Content: []byte("hello")}); err != nil {
+	asset, err := svc.UploadStaticAsset(ctx, StaticAssetUploadInput{Name: "main", Kind: StaticSourceUploadedFile, FileName: "index.html", Content: []byte("hello")})
+	if err != nil {
 		t.Fatal(err)
 	}
+	bindStaticAssetRecord(t, svc, asset.ID, "static.example.test")
 	if _, err := svc.SaveReverseProxy(ctx, ReverseProxySaveInput{
 		DeploymentServers: []string{"srv-a"},
 		Domains:           []FacilityRouteDomain{{Domain: "static.example.test", OriginServerIDs: []string{"srv-a"}, Paths: []FacilityRoutePath{{Path: "/", RuleType: StaticRuleStatic, SourceType: StaticSourceUploadedFile, AssetName: "main"}}}},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// 2. 打开编辑会话（前端会带上当前配置作为草稿）。
-	cfg, err := svc.GetReverseProxy(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	draft := ReverseProxySaveInput{DeploymentServers: cfg.DeploymentServers, Domains: cfg.Domains}
-	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{Draft: &draft})
+	// 2. 打开编辑会话。省略 draft 时由已提交记录播种。
+	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{RecordID: "static.example.test"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	// 3. 先从草稿移除引用该资产的路由，再删除资产。
-	emptyDomains := []FacilityRouteDomain{{Domain: "static.example.test", OriginServerIDs: []string{"srv-a"}, Paths: []FacilityRoutePath{}}}
-	session = patch(session, emptyDomains)
+	session = patch(session, FacilityRouteDomain{Domain: "static.example.test", OriginServerIDs: []string{"srv-a"}, Paths: []FacilityRoutePath{}})
 	session, err = svc.DeleteFacilityEditAsset(ctx, session.ID, "main", "asset-delete", FacilityEditMutationInput{Revision: session.Revision, ClientOperationID: "asset-delete"})
 	if err != nil {
 		t.Fatal(err)
@@ -193,14 +213,14 @@ func TestFacilityEditSessionReuploadedAssetResolvesReferences(t *testing.T) {
 	// 4. 重新添加引用已删除资产的路由：校验必须失败且带细节；同一域名下的
 	// redirect / proxy_pass 路由即使 sourceType 被前端默认值带成 uploaded_file，
 	// 也绝不能触发资产引用诊断。
-	session = patch(session, []FacilityRouteDomain{{
+	session = patch(session, FacilityRouteDomain{
 		Domain: "static.example.test", OriginServerIDs: []string{"srv-a"},
 		Paths: []FacilityRoutePath{
 			{Path: "/", RuleType: StaticRuleStatic, SourceType: StaticSourceUploadedFile, AssetName: "main"},
 			{Path: "/go", RuleType: StaticRuleRedirect, SourceType: StaticSourceUploadedFile, RedirectURL: "https://target.example.test", RedirectCode: 302},
 			{Path: "/api", RuleType: StaticRuleProxyPass, SourceType: StaticSourceUploadedFile, ProxyURL: "http://127.0.0.1:8080", ProxySourceMode: ProxySourcePreserve},
 		},
-	}})
+	})
 	validation, err := svc.ValidateFacilityEditSession(ctx, session.ID, session.Revision)
 	if err != nil {
 		t.Fatal(err)
@@ -227,8 +247,8 @@ func TestFacilityEditSessionDeletedReferencedAssetIsBlocking(t *testing.T) {
 	svc, _, closeStore := newFacilityEditTestService(t)
 	defer closeStore()
 	ctx := context.Background()
-	draft := ReverseProxySaveInput{DeploymentServers: []string{"srv-a"}, Domains: []FacilityRouteDomain{{Domain: "example.test", OriginServerIDs: []string{"srv-a"}, Paths: []FacilityRoutePath{{Path: "/", RuleType: StaticRuleStatic, SourceType: StaticSourceUploadedFile, AssetID: "asset-main"}}}}}
-	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{Draft: &draft})
+	draft := FacilityRouteDomain{Domain: "example.test", OriginServerIDs: []string{"srv-a"}, Paths: []FacilityRoutePath{{Path: "/", RuleType: StaticRuleStatic, SourceType: StaticSourceUploadedFile, AssetID: "asset-main"}}}
+	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{RecordID: "example.test", Draft: &draft})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +279,7 @@ func TestFacilityEditTextAssetModeValidationAndStableIdentity(t *testing.T) {
 	svc, _, closeStore := newFacilityEditTestService(t)
 	defer closeStore()
 	ctx := context.Background()
-	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	session, err := beginFacilityEditForTest(t, svc, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +329,7 @@ func TestFacilityEditAssetDefaultsToBinaryAndRejectsModeChange(t *testing.T) {
 	svc, _, closeStore := newFacilityEditTestService(t)
 	defer closeStore()
 	ctx := context.Background()
-	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	session, err := beginFacilityEditForTest(t, svc, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +363,7 @@ func TestFacilityEditAssetRejectsKindChangeWithoutMutation(t *testing.T) {
 	svc, _, closeStore := newFacilityEditTestService(t)
 	defer closeStore()
 	ctx := context.Background()
-	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	session, err := beginFacilityEditForTest(t, svc, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +407,7 @@ func TestFacilityEditTextAssetCommitAndReopenPreservesMode(t *testing.T) {
 	svc, _, closeStore := newFacilityEditTestService(t)
 	defer closeStore()
 	ctx := context.Background()
-	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	session, err := beginFacilityEditForTest(t, svc, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +425,7 @@ func TestFacilityEditTextAssetCommitAndReopenPreservesMode(t *testing.T) {
 	if _, err = svc.CommitFacilityEditSession(ctx, session.ID, "commit-text", CommitFacilityEditSessionInput{Revision: session.Revision, BaseResourceVersion: session.BaseResourceVersion.Value, PreviewToken: preview.Token.Value}); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	reopened, err := beginFacilityEditForTest(t, svc, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -431,21 +451,18 @@ func TestFacilityEditAssetOnlyCommitPreservesRedirectURL(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	session, err := beginFacilityEditForTest(t, svc, "gateway.example.test", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := facilityEditRedirectURL(session.Draft); got != committedURL {
 		t.Fatalf("begin without draft redirectUrl=%q, want %q", got, committedURL)
 	}
-	stale := ReverseProxySaveInput{
-		DeploymentServers: []string{"srv-a"},
-		Domains: []FacilityRouteDomain{{
-			Domain: "gateway.example.test", OriginServerIDs: []string{"srv-a"},
-			Paths: []FacilityRoutePath{{Path: "/go", RuleType: StaticRuleRedirect, RedirectURL: staleURL, RedirectCode: 301}},
-		}},
+	stale := FacilityRouteDomain{
+		Domain: "gateway.example.test", OriginServerIDs: []string{"srv-a"},
+		Paths: []FacilityRoutePath{{Path: "/go", RuleType: StaticRuleRedirect, RedirectURL: staleURL, RedirectCode: 301}},
 	}
-	staleSession, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{Draft: &stale})
+	staleSession, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{RecordID: "gateway.example.test", Draft: &stale})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -474,12 +491,10 @@ func TestFacilityEditAssetOnlyCommitPreservesRedirectURL(t *testing.T) {
 	}
 }
 
-func facilityEditRedirectURL(draft ReverseProxySaveInput) string {
-	for _, domain := range draft.Domains {
-		for _, path := range domain.Paths {
-			if path.RuleType == StaticRuleRedirect {
-				return path.RedirectURL
-			}
+func facilityEditRedirectURL(draft FacilityRouteDomain) string {
+	for _, path := range draft.Paths {
+		if path.RuleType == StaticRuleRedirect {
+			return path.RedirectURL
 		}
 	}
 	return ""
@@ -510,7 +525,8 @@ func TestFacilityAssetDownloadsResolveCommittedSourceAndReplacementBlob(t *testi
 	}
 	assertFacilityDownloadFile(t, committed, "committed")
 
-	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	bindStaticAssetRecord(t, svc, asset.ID, "edit.example.test")
+	session, err := beginFacilityEditForTest(t, svc, "edit.example.test", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -546,7 +562,7 @@ func TestFacilityEditSessionRestartRollsBackFilesBeforeDBCommit(t *testing.T) {
 	svc, store, closeStore := newFacilityEditTestService(t)
 	defer closeStore()
 	ctx := context.Background()
-	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	session, err := beginFacilityEditForTest(t, svc, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -595,7 +611,7 @@ func TestFacilityEditSessionRestartFinishesDBCommittedManifest(t *testing.T) {
 	svc, store, closeStore := newFacilityEditTestService(t)
 	defer closeStore()
 	ctx := context.Background()
-	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	session, err := beginFacilityEditForTest(t, svc, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -646,22 +662,47 @@ func TestFacilityEditSessionRebasePreservesAssetsAndCanCommit(t *testing.T) {
 	svc, _, closeStore := newFacilityEditTestService(t)
 	defer closeStore()
 	ctx := context.Background()
-	firstDraft := ReverseProxySaveInput{DeploymentServers: []string{"srv-a"}}
-	secondDraft := ReverseProxySaveInput{DeploymentServers: []string{"srv-b"}}
-	first, _ := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{Draft: &firstDraft})
-	second, _ := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{Draft: &secondDraft})
-	second, err := svc.PutFacilityEditAsset(ctx, second.ID, "asset-draft", "put", FacilityEditAssetInput{Revision: second.Revision, ClientOperationID: "put", Name: "draft", Kind: StaticSourceUploadedFile, FileName: "a.txt", Content: []byte("asset")})
+	const recordID = "rebase.example.test"
+	if _, err := svc.SaveReverseProxy(ctx, ReverseProxySaveInput{
+		DeploymentServers: []string{"srv-a", "srv-b"},
+		Domains: []FacilityRouteDomain{{
+			Domain: recordID, OriginServerIDs: []string{"srv-a"},
+			Paths: []FacilityRoutePath{{Path: "/", RuleType: StaticRuleRedirect, RedirectURL: "https://base.example.test/", RedirectCode: 302}},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	firstDraft := FacilityRouteDomain{Domain: recordID, OriginServerIDs: []string{"srv-a"}, Paths: []FacilityRoutePath{{Path: "/", RuleType: StaticRuleRedirect, RedirectURL: "https://first.example.test/", RedirectCode: 302}}}
+	secondDraft := FacilityRouteDomain{Domain: recordID, OriginServerIDs: []string{"srv-b"}, Paths: []FacilityRoutePath{{Path: "/", RuleType: StaticRuleRedirect, RedirectURL: "https://second.example.test/", RedirectCode: 302}}}
+	first, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{RecordID: recordID, Draft: &firstDraft})
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstPreview, _ := svc.PreviewFacilityEditSession(ctx, first.ID, first.Revision)
+	second, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{RecordID: recordID, Draft: &secondDraft})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err = svc.PutFacilityEditAsset(ctx, second.ID, "asset-draft", "put", FacilityEditAssetInput{Revision: second.Revision, ClientOperationID: "put", Name: "draft", Kind: StaticSourceUploadedFile, FileName: "a.txt", Content: []byte("asset")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstPreview, err := svc.PreviewFacilityEditSession(ctx, first.ID, first.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := svc.CommitFacilityEditSession(ctx, first.ID, "first", CommitFacilityEditSessionInput{Revision: first.Revision, BaseResourceVersion: first.BaseResourceVersion.Value, PreviewToken: firstPreview.Token.Value}); err != nil {
 		t.Fatal(err)
 	}
-	secondPreview, _ := svc.PreviewFacilityEditSession(ctx, second.ID, second.Revision)
+	secondPreview, err := svc.PreviewFacilityEditSession(ctx, second.ID, second.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = svc.CommitFacilityEditSession(ctx, second.ID, "second", CommitFacilityEditSessionInput{Revision: second.Revision, BaseResourceVersion: second.BaseResourceVersion.Value, PreviewToken: secondPreview.Token.Value})
 	assertFacilityPanelError(t, err, "resource_version_conflict")
-	current, _ := svc.loadConfig(ctx)
+	current, err := svc.GetConfigRecord(ctx, recordID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	rebased, err := svc.PatchFacilityEditSession(ctx, second.ID, PatchFacilityEditSessionInput{Revision: second.Revision, BaseResourceVersion: strconv.Itoa(current.Version), Draft: secondDraft})
 	if err != nil {
 		t.Fatal(err)
@@ -669,7 +710,10 @@ func TestFacilityEditSessionRebasePreservesAssetsAndCanCommit(t *testing.T) {
 	if len(rebased.Assets) != 1 || rebased.Assets[0].AssetKey != "asset-draft" {
 		t.Fatalf("rebase lost assets: %#v", rebased.Assets)
 	}
-	preview, _ := svc.PreviewFacilityEditSession(ctx, rebased.ID, rebased.Revision)
+	preview, err := svc.PreviewFacilityEditSession(ctx, rebased.ID, rebased.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := svc.CommitFacilityEditSession(ctx, rebased.ID, "second-rebased", CommitFacilityEditSessionInput{Revision: rebased.Revision, BaseResourceVersion: rebased.BaseResourceVersion.Value, PreviewToken: preview.Token.Value}); err != nil {
 		t.Fatal(err)
 	}
@@ -679,7 +723,7 @@ func TestFacilityEditSessionRejectsCorruptedBlobBeforeCommit(t *testing.T) {
 	svc, store, closeStore := newFacilityEditTestService(t)
 	defer closeStore()
 	ctx := context.Background()
-	session, _ := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	session, _ := beginFacilityEditForTest(t, svc, "", nil)
 	session, err := svc.PutFacilityEditAsset(ctx, session.ID, "asset", "put", FacilityEditAssetInput{Revision: session.Revision, ClientOperationID: "put", Name: "asset", Kind: StaticSourceUploadedFile, FileName: "a.txt", Content: []byte("original")})
 	if err != nil {
 		t.Fatal(err)
@@ -708,7 +752,8 @@ func TestFacilityEditSessionRejectsCorruptedSourceAssetBeforeCommit(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	bindStaticAssetRecord(t, svc, asset.ID, "edit.example.test")
+	session, err := beginFacilityEditForTest(t, svc, "edit.example.test", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -724,14 +769,14 @@ func TestFacilityEditSessionTTLAndLiveCommitLease(t *testing.T) {
 	svc, store, closeStore := newFacilityEditTestService(t)
 	defer closeStore()
 	ctx := context.Background()
-	expired, _ := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	expired, _ := beginFacilityEditForTest(t, svc, "", nil)
 	old := formatTime(time.Now().UTC().Add(-time.Hour))
 	_, _ = store.AppDB().Exec(`UPDATE facility_edit_sessions SET idle_expires_at=?,absolute_expires_at=? WHERE id=?`, old, old, expired.ID)
 	got, err := svc.GetFacilityEditSession(ctx, expired.ID)
 	if err != nil || got.State != FacilityEditSessionExpired {
 		t.Fatalf("expired session=%#v err=%v", got, err)
 	}
-	live, _ := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	live, _ := beginFacilityEditForTest(t, svc, "", nil)
 	future := formatTime(time.Now().UTC().Add(time.Hour))
 	_, _ = store.AppDB().Exec(`UPDATE facility_edit_sessions SET state=?,idle_expires_at=?,absolute_expires_at=?,commit_lease_owner='live',commit_lease_expires_at=? WHERE id=?`, FacilityEditSessionCommitting, old, old, future, live.ID)
 	svc.cleanupFacilityEditSessions(time.Now().UTC())
@@ -745,7 +790,7 @@ func TestFacilityDeleteMissingAssetIsIdempotentOperation(t *testing.T) {
 	svc, _, closeStore := newFacilityEditTestService(t)
 	defer closeStore()
 	ctx := context.Background()
-	session, _ := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	session, _ := beginFacilityEditForTest(t, svc, "", nil)
 	input := FacilityEditMutationInput{Revision: session.Revision, ClientOperationID: "delete-missing"}
 	first, err := svc.DeleteFacilityEditAsset(ctx, session.ID, "missing", "delete-key", input)
 	if err != nil {
@@ -761,7 +806,7 @@ func TestFacilityEditPutAndCleanupSerializeWorkspaceOwnership(t *testing.T) {
 	svc, store, closeStore := newFacilityEditTestService(t)
 	defer closeStore()
 	ctx := context.Background()
-	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	session, err := beginFacilityEditForTest(t, svc, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -817,7 +862,7 @@ func TestFacilityValidateAndPreviewDoNotReviveExpiredSessions(t *testing.T) {
 	ctx := context.Background()
 	for _, action := range []string{"validate", "preview"} {
 		t.Run(action, func(t *testing.T) {
-			session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+			session, err := beginFacilityEditForTest(t, svc, "", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -850,7 +895,7 @@ func TestFacilityAssetMutationsCannotCrossIdleDeadline(t *testing.T) {
 			svc, store, closeStore := newFacilityEditTestService(t)
 			defer closeStore()
 			ctx := context.Background()
-			session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+			session, err := beginFacilityEditForTest(t, svc, "", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -913,7 +958,7 @@ func TestFacilityCommitRecoversExpiredLeaseBeforeRetry(t *testing.T) {
 	svc, store, closeStore := newFacilityEditTestService(t)
 	defer closeStore()
 	ctx := context.Background()
-	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	session, err := beginFacilityEditForTest(t, svc, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1027,6 +1072,47 @@ type successfulFacilityReconciler struct{}
 
 func (successfulFacilityReconciler) TriggerApplicationReconcile(context.Context, tasks.PeriodicTrigger) (tasks.Task, bool, error) {
 	return tasks.Task{ID: "operation"}, true, nil
+}
+
+func beginFacilityEditForTest(t *testing.T, svc *Service, recordID string, draft *FacilityRouteDomain) (FacilityEditSession, error) {
+	t.Helper()
+	ctx := context.Background()
+	recordID = strings.ToLower(strings.TrimSpace(recordID))
+	if recordID == "" {
+		recordID = "edit.example.test"
+	}
+	cfg, err := svc.loadConfig(ctx)
+	if err != nil {
+		return FacilityEditSession{}, err
+	}
+	if !containsString(cfg.DeploymentServers, "srv-a") {
+		servers := uniqueSorted(append(append([]string{}, cfg.DeploymentServers...), "srv-a"))
+		if _, err := svc.SaveReverseProxy(ctx, ReverseProxySaveInput{DeploymentServers: servers, Domains: cfg.Domains}); err != nil {
+			return FacilityEditSession{}, err
+		}
+	}
+	in := BeginFacilityEditSessionInput{RecordID: recordID, Draft: draft}
+	if draft == nil {
+		if _, err := svc.loadRouteRow(ctx, recordID); err != nil {
+			if !isPanelNotFound(err) {
+				return FacilityEditSession{}, err
+			}
+			seeded := FacilityRouteDomain{
+				Domain:          recordID,
+				OriginServerIDs: []string{"srv-a"},
+				Paths:           []FacilityRoutePath{{Path: "/", RuleType: StaticRuleRedirect, RedirectURL: "https://example.test/", RedirectCode: 302}},
+			}
+			in.Draft = &seeded
+		}
+	}
+	return svc.BeginFacilityEditSession(ctx, in)
+}
+
+func bindStaticAssetRecord(t *testing.T, svc *Service, assetID, recordID string) {
+	t.Helper()
+	if _, err := svc.db.ExecContext(context.Background(), `UPDATE facility_static_assets SET record_id=? WHERE id=?`, strings.ToLower(strings.TrimSpace(recordID)), assetID); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func newFacilityEditTestService(t *testing.T) (*Service, *storage.Store, func()) {

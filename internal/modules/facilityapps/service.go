@@ -176,6 +176,7 @@ func NewService(db *sql.DB, agent AgentRuntimeClient, servers ServerProvider, ap
 		})
 	}
 	s.recoverFacilityEditSessions(context.Background())
+	s.backfillFacilityAssetBlobs(context.Background())
 	s.startFacilityEditSessionCleanup()
 	go s.storageReconcileLoop()
 	return s
@@ -792,7 +793,7 @@ func (s *Service) renderNginxConfig(ctx context.Context, serverID string, cfg Re
 			if route.RuleType == StaticRuleStatic {
 				mountTarget := proxyStaticMountRoot + "/" + strconv.Itoa(mountIndex)
 				mountIndex++
-				asset, err := s.staticSiteMount(ctx, pathConfig, mountTarget, &mounts, &files)
+				asset, err := s.staticSiteMount(ctx, domainConfig.Domain, pathConfig, mountTarget, &mounts, &files)
 				if err != nil {
 					return "", nil, nil, err
 				}
@@ -971,7 +972,7 @@ func hostForDomain(hosts map[string]*proxyHost, domain string) *proxyHost {
 	return host
 }
 
-func (s *Service) staticSiteMount(ctx context.Context, site FacilityRoutePath, mountTarget string, mounts *[]appruntime.Mount, files *[]appruntime.ManagedFile) (*staticMountAsset, error) {
+func (s *Service) staticSiteMount(ctx context.Context, recordID string, site FacilityRoutePath, mountTarget string, mounts *[]appruntime.Mount, files *[]appruntime.ManagedFile) (*staticMountAsset, error) {
 	sourceType := normalizedStaticSourceType(site.SourceType)
 	switch sourceType {
 	case StaticSourceUploadedFile, StaticSourceUploadedBundle:
@@ -979,7 +980,10 @@ func (s *Service) staticSiteMount(ctx context.Context, site FacilityRoutePath, m
 		if assetName == "" {
 			return nil, nil
 		}
-		asset, err := s.getStaticAssetByName(ctx, assetName)
+		asset, err := s.getStaticAssetByRecordName(ctx, recordID, assetName)
+		if err != nil && isPanelNotFound(err) {
+			asset, err = s.getStaticAssetByName(ctx, assetName)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -1304,6 +1308,7 @@ func (s *Service) loadFacilityRouteDomains(ctx context.Context) ([]FacilityRoute
 		_ = json.Unmarshal(pathsRaw, &paths)
 		out = append(out, FacilityRouteDomain{
 			Domain:          row.Domain,
+			Version:         row.Version,
 			OriginServerIDs: append([]string(nil), row.OriginServerIDs...),
 			AnyAccess:       anyAccess,
 			Paths:           paths,
@@ -1500,6 +1505,17 @@ func normalizeInput(in ReverseProxySaveInput) (ReverseProxyConfig, error) {
 	}
 	sort.Slice(domains, func(i, j int) bool { return domains[i].Domain < domains[j].Domain })
 	return ReverseProxyConfig{ID: ReverseProxyID, DeploymentServers: servers, Domains: domains}, nil
+}
+
+func normalizeFacilityDomain(domain FacilityRouteDomain, gateways []string) (FacilityRouteDomain, error) {
+	cfg, err := normalizeInput(ReverseProxySaveInput{DeploymentServers: gateways, Domains: []FacilityRouteDomain{domain}})
+	if err != nil {
+		return FacilityRouteDomain{}, err
+	}
+	if len(cfg.Domains) != 1 {
+		return FacilityRouteDomain{}, panelerr.Validation("facility_domain_invalid", "Reverse proxy domain is invalid")
+	}
+	return cfg.Domains[0], nil
 }
 
 func normalizeFacilityRoutePath(site FacilityRoutePath) (FacilityRoutePath, error) {
@@ -1845,8 +1861,46 @@ func facilityDomainUsesStaticAsset(domain FacilityRouteDomain) bool {
 	return false
 }
 
-func specHash(serverID string, cfg ReverseProxyConfig, routes []applications.ApplicationReverseProxyConfig, nginx string, files []appruntime.ManagedFile) string {
-	raw, _ := json.Marshal(map[string]any{"server": serverID, "config": cfg, "routes": routes, "nginx": nginx, "nginxFiles": nginxConfigFileContents(files)})
+func specHash(serverID string, _ ReverseProxyConfig, _ []applications.ApplicationReverseProxyConfig, nginx string, files []appruntime.ManagedFile) string {
+	// ConfigContentHash: only rendered nginx + managed file bytes for this node.
+	// Never include whole ReverseProxyConfig (version/unrelated domains) or the
+	// node will look unsatisfied on every unrelated record save.
+	raw, _ := json.Marshal(map[string]any{
+		"server":     serverID,
+		"nginx":      nginx,
+		"nginxFiles": nginxConfigFileContents(files),
+		"files":      managedFileFingerprint(files),
+	})
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+func managedFileFingerprint(files []appruntime.ManagedFile) map[string]string {
+	out := map[string]string{}
+	for _, file := range files {
+		sum := sha256.Sum256(file.Content)
+		out[file.Path] = hex.EncodeToString(sum[:]) + "|" + file.Kind + "|" + file.Mode
+	}
+	return out
+}
+
+func proxyIdentityHash(spec appruntime.Spec) string {
+	type mount struct {
+		Type, Source, Target, Mode string
+		ReadOnly                   bool
+	}
+	mounts := make([]mount, 0, len(spec.Mounts))
+	for _, m := range spec.Mounts {
+		mounts = append(mounts, mount{Type: m.Type, Source: m.Source, Target: m.Target, Mode: m.Mode, ReadOnly: m.ReadOnly})
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"image":   spec.Image,
+		"command": spec.Command,
+		"ports":   spec.Ports,
+		"mounts":  mounts,
+		"restart": spec.Restart,
+		"env":     spec.Env,
+	})
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
 }

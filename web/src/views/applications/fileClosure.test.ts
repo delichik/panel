@@ -28,11 +28,11 @@ describe('application and facility file closure', () => {
     expect(archiveName('website.tar.gz')).toBe('website');
     expect(archiveName('assets.tgz')).toBe('assets');
     expect(archiveName('.zip')).toBe('archive');
-    expect(viewSource).toContain('name: archiveName(file.name)');
+    expect(viewSource).toContain("const name = kind === 'archive' ? archiveName(file.name) : file.name;");
   });
 
   it('uses scoped names for replacement and exposes both download states', () => {
-    expect(viewSource).toContain('name: archiveName(file.name)');
+    expect(viewSource).toContain("const name = kind === 'archive' ? archiveName(file.name) : file.name;");
     expect(applicationsApiSource).toContain('/application-edit-sessions/${id(sessionId)}/files/${id(fileName)}/content');
     expect(applicationsApiSource).toContain('/applications/${id(applicationId)}/files/${id(fileName)}/content');
     expect(facilityApiSource).toContain('/edit-sessions/${id(sessionId)}/assets/${id(assetName)}/content');
@@ -40,9 +40,8 @@ describe('application and facility file closure', () => {
   });
 
   it('only exposes facility text assets to the editor and saves the same name', () => {
-    expect(viewSource).toContain("kind: kind === 'archive' ? 'uploaded_bundle' : 'uploaded_file'");
-    expect(viewSource).toContain("contentMode: 'text'");
-    expect(viewSource).toContain("contentMode: 'binary'");
+    expect(viewSource).toContain("const uploadKind = item.kind === 'archive' ? 'uploaded_bundle' : 'uploaded_file';");
+    expect(viewSource).toContain("const contentMode = item.kind === 'text' ? 'text' : 'binary';");
     expect(viewSource).toContain('key: asset.name');
     expect(facilityApiSource).toContain("form.set('contentMode', input.contentMode ?? 'binary')");
   });

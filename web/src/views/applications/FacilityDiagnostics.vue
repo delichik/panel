@@ -1,16 +1,22 @@
 <script setup lang="ts">
 import { onBeforeUnmount, reactive, watch } from 'vue';
 import Button from '@/components/ui/Button.vue';
+import EmptyState from '@/components/ui/EmptyState.vue';
 import StatusBadge from '@/components/ui/StatusBadge.vue';
 import ActivityLink from '@/components/activity/ActivityLink.vue';
 import { useErrorToast } from '@/components/ui/toast';
 import { reverseProxyFacilityApi } from '@/api/facilityApps';
-import type { ProxyDiagnostics, ReverseProxyConfig } from '@/types/facilityApps';
+import type { ProxyDiagnostics, ProxyPlaneState } from '@/types/facilityApps';
 import { useI18n } from '@/i18n';
 import { formatDateTime } from '@/utils/datetime';
 import { uncertaintyNeedsAttention } from './model';
 
-const props = defineProps<{ config: ReverseProxyConfig }>();
+/**
+ * Proxy-plane diagnostics: per-node container observation + deployment result.
+ * Route content lives in independent config records and is deliberately not
+ * part of this component.
+ */
+const props = defineProps<{ state: ProxyPlaneState }>();
 const { t } = useI18n();
 const notifyError = useErrorToast();
 const results = reactive<Record<string, ProxyDiagnostics>>({});
@@ -23,7 +29,7 @@ function operationNeedsAttention(op: { errorClass?: string; stage?: string; stat
   return uncertaintyNeedsAttention(op.errorClass, op.stage);
 }
 function cancelRequests() { for (const controller of requests.values()) controller.abort(); requests.clear(); }
-watch(() => props.config.version, () => { cancelRequests(); for (const id of Object.keys(results)) delete results[id]; for (const id of Object.keys(pending)) delete pending[id]; });
+watch(() => [props.state.updatedAt, ...(props.state.deploymentServers ?? [])], () => { cancelRequests(); for (const id of Object.keys(results)) delete results[id]; for (const id of Object.keys(pending)) delete pending[id]; });
 onBeforeUnmount(cancelRequests);
 async function check(serverId: string) {
   if (pending[serverId]) return;
@@ -46,13 +52,14 @@ async function check(serverId: string) {
   <section class="grid min-h-0 gap-3 text-sm">
     <h3 class="m-0">{{ t('facilityDiagnostics.title') }}</h3>
     <p class="m-0 text-muted-foreground">{{ t('facilityDiagnostics.scope') }}</p>
-    <p v-if="config.reconcileStopped" role="alert" class="m-0 text-danger">{{ t('facilityDiagnostics.stopped') }}</p>
-    <div v-if="config.lastError" role="alert" class="grid gap-2 rounded-xl border border-danger-border bg-danger-bg p-3 text-danger">
+    <p v-if="state.reconcileStopped" role="alert" class="m-0 text-danger">{{ t('facilityDiagnostics.stopped') }}</p>
+    <div v-if="state.lastError" role="alert" class="grid gap-2 rounded-xl border border-danger-border bg-danger-bg p-3 text-danger">
       <strong>{{ t('facilityDiagnostics.configError') }}</strong>
       <p class="m-0">{{ t('facilityDiagnostics.configErrorHint') }}</p>
-      <pre class="m-0 max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs">{{ config.lastError }}</pre>
+      <pre class="m-0 max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs">{{ state.lastError }}</pre>
     </div>
-    <article v-for="node in config.deployments ?? []" :key="node.serverId" class="grid min-w-0 gap-2 border-t border-border pt-3 first:border-t-0 first:pt-0">
+    <EmptyState v-if="!state.deployments?.length" :title="t('facilityDiagnostics.noNodes')" :description="t('facilityDiagnostics.noNodesHint')" />
+    <article v-for="node in state.deployments ?? []" :key="node.serverId" class="grid min-w-0 gap-2 border-t border-border pt-3 first:border-t-0 first:pt-0">
       <strong>{{ node.serverName || node.serverId }}</strong>
       <div class="flex flex-wrap items-center gap-2">
         <span>{{ t('facilityDiagnostics.containerState') }}</span>

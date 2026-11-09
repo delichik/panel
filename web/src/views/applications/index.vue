@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import { AlertTriangle, ClipboardList, Eye, Globe2, HardDrive, History, MoreHorizontal, Plus, RefreshCcw, Rocket, Save, Square, Trash2, UploadCloud, Wrench } from '@lucide/vue';
 import { applicationsApi } from '@/api/applications';
+import { ApiError } from '@/api/client';
 import { serversApi } from '@/api/servers';
 import { saveBlobDownload } from '@/api/download';
 import { reverseProxyFacilityApi, storageShareFacilityApi } from '@/api/facilityApps';
@@ -43,7 +44,7 @@ import TableDetailLayout from '@/components/templates/TableDetailLayout.vue';
 import ActivityLink from '@/components/activity/ActivityLink.vue';
 import { useI18n } from '@/i18n';
 import type { ApplicationDto, ApplicationEditPreviewResult, ApplicationEditSession, ApplicationFile, ApplicationRuntime, ApplicationSummaryDto, Diagnostic, PanelFileDefinition, ReverseProxyRule, TemplateVariableDefinition } from '@/types/applications';
-import type { FacilityEditPreviewResult, FacilityEditSession, FacilityRouteDomain, FacilityRoutePath, ReverseProxyConfig, StaticAsset, StorageShareConfig } from '@/types/facilityApps';
+import type { ConfigRecord, FacilityEditPreviewResult, FacilityEditSession, FacilityRouteDomain, FacilityRoutePath, ProxyPlaneState, ReverseProxyConfig, StaticAsset, StorageShareConfig } from '@/types/facilityApps';
 import type { ServerDto } from '@/types/servers';
 import { formatDateTime } from '@/utils/datetime';
 import {
@@ -52,7 +53,7 @@ import {
   applicationNodeCounts,
   applicationPlanningError,
   applicationStatus,
-  cloneFacilityDomains,
+  cloneFacilityDomain,
   instanceOperationStatus,
   isDeployProgressStage,
   uncertaintyNeedsAttention,
@@ -61,15 +62,14 @@ import {
   cloneProxyRules,
   defaultRouteOptions,
   diffApplications,
-  diffFacility,
+  diffFacilityRecord,
   draftFromApplication,
-  facilityDraftFromConfig,
-  facilitySaveInputFromDraft,
+  facilityRecordDraftFromRecord,
   hasBlockingDiagnostic,
-  makeFacilityDomain,
   makeFacilityPath,
   makeKeyValueRow,
   makeMountRow,
+  makeNewFacilityDomainRecord,
   makePortRow,
   makeProxyPath,
   makeProxyRule,
@@ -80,12 +80,10 @@ import {
   shouldPollApplicationRuntime,
   statusTone,
   validateApplicationDraft,
-  validateFileName,
-  validateFacilityDraft,
-  validateFacilityDomainFields,
   validateFacilityPathFields,
+  validateFacilityRecordDraft,
+  validateFileName,
   type ApplicationDraftUi,
-  type FacilityDraftUi,
   type FieldErrors,
   type KeyValueRow,
   type MountRow,
@@ -145,6 +143,25 @@ const runtimes = ref<Record<string, ApplicationRuntime>>({});
 const rowImageLoading = ref<Record<string, boolean>>({});
 const rowImageControllers = new Map<string, AbortController>();
 const facility = ref<ReverseProxyConfig | null>(null);
+/** Proxy plane: gateway membership + container deployments only (no route content). */
+const proxyPlane = ref<ProxyPlaneState | null>(null);
+const proxyPlaneDraft = ref<string[]>([]);
+const proxyPlaneDraftTouched = ref(false);
+const proxyPlaneSaving = ref(false);
+const proxyPlaneError = ref('');
+const proxyPlaneBlockedError = ref('');
+/** Independent configuration records (facility domains + application reverse proxies). */
+const configRecords = ref<ConfigRecord[]>([]);
+const configRecordsError = ref('');
+const configRecordActionKey = ref('');
+const deleteRecordTarget = ref<ConfigRecord | null>(null);
+const deleteRecordOpen = ref(false);
+/** Single-record editor: committed baseline + local draft (never more than one record). */
+const facilityRecord = ref<ConfigRecord | null>(null);
+const facilityRecordDraft = reactive<FacilityRouteDomain>(makeNewFacilityDomainRecord());
+const facilityRecordRelayScope = ref<'all' | 'selected'>('all');
+const facilityRecordId = computed(() => String(route.query.recordId ?? '').trim().toLowerCase());
+const facilityRecordIsNew = computed(() => route.query.new === '1' || route.query.new === 'true');
 const storageShareOptions = ref<{ label: string; value: string }[]>([]);
 const storageShareAvailable = ref(false);
 const storageShareLabelBySource = ref<Record<string, string>>({});
@@ -182,14 +199,14 @@ let pendingLeaveTarget: string | null = null;
 let pendingFacilityCancel = false;
 let allowLeave = false;
 type AppDetailTab = 'runtime' | 'routes' | 'files' | 'data';
-type FacilityDetailTab = 'routes' | 'nodes';
+type FacilityDetailTab = 'proxy' | 'configs' | 'dns';
 function normalizeAppDetailTab(value: unknown): AppDetailTab {
   if (value === 'routes' || value === 'files' || value === 'data') return value;
   return 'runtime';
 }
 function normalizeFacilityDetailTab(value: unknown): FacilityDetailTab {
-  if (value === 'nodes') return 'nodes';
-  return 'routes';
+  if (value === 'configs' || value === 'dns') return value;
+  return 'proxy';
 }
 const appTab = ref<AppDetailTab>(normalizeAppDetailTab(route.query.tab));
 const facilityTab = ref<FacilityDetailTab>(normalizeFacilityDetailTab(route.query.tab));
@@ -208,13 +225,12 @@ const appDetailTabs = computed(() => [
   { label: t('applicationsPage.persistentData'), value: 'data' },
 ]);
 const facilityDetailTabs = computed(() => [
-  { label: t('applicationsPage.facilityTabRoutes'), value: 'routes' },
-  { label: t('applicationsPage.facilityTabNodes'), value: 'nodes' },
+  { label: t('applicationsPage.facilityTabProxy'), value: 'proxy' },
+  { label: t('applicationsPage.facilityTabConfigs'), value: 'configs' },
+  { label: t('applicationsPage.facilityTabDns'), value: 'dns' },
 ]);
 const fileActionErrors = ref<Record<string, string>>({});
 const fileActionPending = ref('');
-const assetActionErrors = ref<Record<string, string>>({});
-const assetActionPending = ref('');
 const diagnostics = ref<Diagnostic[]>([]);
 const preview = ref<ApplicationEditPreviewResult | null>(null);
 /** Temporary save-pipeline session only; null while the user is editing locally. */
@@ -228,7 +244,7 @@ const editorReady = ref(false);
 const isDirty = ref(false);
 const saveStage = ref<SaveStage>('idle');
 const dialogOpen = ref(false);
-const dialogKind = ref<'env' | 'port' | 'mount' | 'proxy' | 'proxyPath' | 'facilityDomain' | 'facilityPath'>('env');
+const dialogKind = ref<'env' | 'port' | 'mount' | 'proxy' | 'proxyPath' | 'facilityPath'>('env');
 const dialogIndex = ref(-1);
 const dialogParentIndex = ref(-1);
 const rowDraft = reactive<KeyValueRow>(makeKeyValueRow());
@@ -238,10 +254,8 @@ const proxyDraft = reactive<ProxyRuleDraft>({
   ...makeProxyRule(),
 });
 const proxyPathDraft = reactive(makeProxyPath());
-const facilityDomainDraft = reactive<FacilityRouteDomain>(makeFacilityDomain());
 const facilityPathDraft = reactive<FacilityRoutePath>(makeFacilityPath());
 const facilityPathErrors = reactive<FieldErrors>({});
-const facilityDomainErrors = reactive<FieldErrors>({});
 const facilityRequestHeaders = ref<KeyValueRow[]>([]);
 const facilityResponseHeaders = ref<KeyValueRow[]>([]);
 const proxyRequestHeaders = ref<KeyValueRow[]>([]);
@@ -255,8 +269,16 @@ const isReverseProxyFacility = computed(() => !facilityKind.value || facilityKin
 const isStorageShareFacility = computed(() => facilityKind.value === 'storage-share');
 const currentFacilitySummary = computed(() => facilities.find((item) => item.kind === (facilityKind.value || 'reverse-proxy')) ?? null);
 const isFacilityEditor = computed(() => mode.value === 'facilityConfig' && isReverseProxyFacility.value);
-const facilityEditing = ref(false);
-const facilityEditingView = computed(() => (mode.value === 'facilityConfig' && isReverseProxyFacility.value) || facilityEditing.value);
+const facilityPageTitle = computed(() => {
+  if (mode.value === 'facilityConfig' && isReverseProxyFacility.value) {
+    return facilityRecordIsNew.value ? t('applicationsPage.facilityRecordCreateTitle') : t('applicationsPage.facilityRecordEditTitle');
+  }
+  return currentFacilitySummary.value ? t(currentFacilitySummary.value.titleKey) : t('applicationsPage.facilityUnavailable');
+});
+const facilityPageDescription = computed(() => {
+  if (mode.value === 'facilityConfig' && isReverseProxyFacility.value) return t('applicationsPage.facilityRecordEditorDescription');
+  return currentFacilitySummary.value ? t(currentFacilitySummary.value.descriptionKey) : t('applicationsPage.facilityUnavailableDescription', { kind: facilityKind.value });
+});
 const currentApplicationSummary = computed(() => applications.value.find((item) => item.id === selectedId.value) ?? null);
 const currentApplication = computed(() => selectedId.value ? applicationDetails.value[selectedId.value] ?? null : null);
 const selectedApplication = computed(() => currentApplication.value ?? applicationFromSummary(currentApplicationSummary.value) ?? emptyApplication());
@@ -266,11 +288,8 @@ const planningError = computed(() => applicationPlanningError(selectedApplicatio
 const appStatus = computed(() => currentApplicationSummary.value ? applicationStatus(selectedApplication.value, currentRuntime.value) : 'unknown');
 const selectedNodeCounts = computed(() => applicationNodeCounts(selectedApplication.value, currentRuntime.value));
 const appDraft = reactive<ApplicationDraftUi>(draftFromApplication());
-const facilityDraft = reactive<FacilityDraftUi>(facilityDraftFromConfig());
 const appErrors = computed(() => validateApplicationDraft(appDraft));
-const facilityErrors = computed(() => validateFacilityDraft(facilityDraft));
 const appDiff = computed(() => diffApplications(mode.value === 'edit' ? currentApplication.value : null, appDraft));
-const facilityDiff = computed(() => diffFacility(facility.value, facilityDraft));
 const appRows = computed(() => applications.value.map((app) => ({
   app,
   routes: routeSummary(applicationDetails.value[app.id] ?? emptyApplication()),
@@ -292,12 +311,6 @@ const logsApplication = computed(() => {
 });
 const confirmApplication = computed(() => confirmTarget.value ? applications.value.find((item) => item.id === confirmTarget.value) ?? null : null);
 const confirmHasPersistentData = computed(() => confirmTarget.value ? Boolean(applicationDetails.value[confirmTarget.value]?.hasPersistentData) : false);
-const facilityConfigSummary = computed(() => ({
-  gateways: facility.value?.deploymentServers.length ?? 0,
-  routes: facility.value?.routes ?? 0,
-  assets: facility.value?.staticAssets.length ?? 0,
-  appRoutes: facility.value?.applicationRoutes.length ?? 0,
-}));
 const servers = ref<ServerDto[]>([]);
 const serverNameMap = computed(() => new Map(servers.value.map((server) => [server.id, server.name])));
 const applicationTemplateVariableOptions = computed<TemplateVariableOption[]>(() => templateVariables.value
@@ -456,6 +469,8 @@ const panelFileMountSourceValid = computed(() => mountDraft.type !== 'panel_file
   || panelFileMountOptions.value.some((option) => option.value === mountDraft.source.trim() && !option.disabled));
 const panelFileLabelBySource = computed(() => new Map(panelFiles.value.map((file) => [file.source, panelFileLabel(file)])));
 const facilityAssetItems = computed<AssetFileItem[]>(() => visibleLocalAssets(facilityLocalAssets));
+/** Committed asset download must be scoped to the record being edited. */
+const facilityAssetRecordId = computed(() => facilityRecord.value?.recordId || facilityRecordId.value || facilityRecordDraft.domain.trim().toLowerCase());
 const mountTypeOptions = computed(() => ['persistent', 'volume', 'host', 'file', 'panel_file', 'storage_share'].map((value) => ({ label: t(`applicationsPage.mountType.${value}`), value })));
 const portProtocolOptions = computed(() => (['tcp', 'udp'] as const).map((value) => ({ label: value.toUpperCase(), value })));
 const routeTypeOptions = computed(() => ['static', 'redirect', 'proxy_pass'].map((value) => ({ label: t(`applicationsPage.routeType.${value}`), value })));
@@ -469,7 +484,6 @@ const proxyAnyAccessModel = computed({
   set: (value: boolean) => { proxyDraft.anyAccess.enabled = value; },
 });
 const proxyRelayScope = ref<'all' | 'selected'>('all');
-const facilityRelayScope = ref<'all' | 'selected'>('all');
 const anyAccessRelayScopeOptions = computed(() => [
   { label: t('applicationsPage.anyAccessRelayAll'), value: 'all' },
   { label: t('applicationsPage.anyAccessRelaySelected'), value: 'selected' },
@@ -479,18 +493,9 @@ const proxyRelayServerOptions = computed(() => {
   const gateways = new Set(facility.value?.deploymentServers ?? []);
   return serverOptions.value.filter((item) => gateways.has(item.id) && !origins.has(item.id));
 });
-const facilityRelayServerOptions = computed(() => {
-  const origins = new Set(facilityDomainDraft.originServerIds);
-  const gateways = new Set(facilityDraft.deploymentServers);
-  return serverOptions.value.filter((item) => gateways.has(item.id) && !origins.has(item.id));
-});
 const proxyRelayServerIdsModel = computed({
   get: () => proxyDraft.anyAccess.relayServerIds ?? [],
   set: (value: string[]) => { proxyDraft.anyAccess.relayServerIds = value; },
-});
-const facilityRelayServerIdsModel = computed({
-  get: () => facilityDomainDraft.anyAccess.relayServerIds ?? [],
-  set: (value: string[]) => { facilityDomainDraft.anyAccess.relayServerIds = value; },
 });
 const facilityRedirectCode = computed({
   get: () => String(facilityPathDraft.redirectCode ?? 302),
@@ -500,9 +505,111 @@ const anyAccessStrategyOptions = computed(() => (['round_robin', 'ip_hash', 'pri
 const httpModeOptions = computed(() => (['inherit', 'on', 'off'] as const).map((value) => ({ label: t(`applicationsPage.httpMode.${value}`), value })));
 const webSocketModeOptions = computed(() => (['auto', 'on', 'off'] as const).map((value) => ({ label: t(`applicationsPage.httpMode.${value}`), value })));
 const proxySourceModeOptions = computed(() => (['preserve_source', 'hide_source'] as const).map((value) => ({ label: t(`applicationsPage.proxySourceMode.${value}`), value })));
-const facilityDomainOriginOptions = computed(() => facilityDomainDraft.originServerIds.map((id) => ({ label: serverDisplayName(id), value: id })));
-const facilityGatewayIdSet = computed(() => new Set(facilityDraft.deploymentServers));
-const facilityDomainOriginServerOptions = computed(() => serverOptions.value.filter((item) => facilityGatewayIdSet.value.has(item.id)));
+
+// Single-record editor derived state. Gateways come from the proxy plane, so an
+// origin can never point at a server that is no longer a gateway.
+const facilityGatewayIds = computed(() => proxyPlane.value?.deploymentServers ?? facility.value?.deploymentServers ?? []);
+const facilityGatewayIdSet = computed(() => new Set(facilityGatewayIds.value));
+const facilityGatewayServers = computed(() => serverOptions.value.filter((item) => facilityGatewayIdSet.value.has(item.id)));
+const facilityRecordErrors = computed(() => {
+  const errors = validateFacilityRecordDraft(facilityRecordDraft, facilityGatewayIds.value);
+  if (facilityRecordIsNew.value && !errors.domain) {
+    const value = (facilityRecordDraft.domain ?? '').trim().toLowerCase();
+    if (value && configRecords.value.some((record) => record.recordId === value)) {
+      errors.domain = 'applicationsPage.validationDomainDuplicate';
+    }
+  }
+  return errors;
+});
+const facilityRecordDiff = computed(() => diffFacilityRecord(facilityRecord.value?.domain ?? null, facilityRecordDraft));
+const facilityRecordRelayServers = computed(() => {
+  const origins = new Set(facilityRecordDraft.originServerIds);
+  return facilityGatewayServers.value.filter((item) => !origins.has(item.id));
+});
+const facilityRecordOriginModel = computed({
+  get: () => facilityRecordDraft.originServerIds,
+  set: (value: string[]) => {
+    facilityRecordDraft.originServerIds = value;
+    const primary = facilityRecordDraft.anyAccess.primaryOriginServerId ?? '';
+    if (primary && !value.includes(primary)) facilityRecordDraft.anyAccess.primaryOriginServerId = '';
+    facilityRecordDraft.anyAccess.relayServerIds = (facilityRecordDraft.anyAccess.relayServerIds ?? []).filter((id) => !value.includes(id));
+    markDirty();
+  },
+});
+const facilityRecordRelayServerIdsModel = computed({
+  get: () => facilityRecordDraft.anyAccess.relayServerIds ?? [],
+  set: (value: string[]) => {
+    facilityRecordDraft.anyAccess.relayServerIds = value;
+    markDirty();
+  },
+});
+const facilityRecordAnyAccessModel = computed({
+  get: () => Boolean(facilityRecordDraft.anyAccess.enabled),
+  set: (value: boolean) => {
+    facilityRecordDraft.anyAccess.enabled = value;
+    markDirty();
+  },
+});
+const facilityRecordPrimaryOptions = computed(() => facilityRecordDraft.originServerIds.map((id) => ({ label: serverDisplayName(id), value: id })));
+
+// Proxy plane draft: members are edited locally and saved with PUT proxy-plane.
+const proxyPlaneDraftModel = computed({
+  get: () => proxyPlaneDraft.value,
+  set: (value: string[]) => {
+    proxyPlaneDraft.value = value;
+    proxyPlaneDraftTouched.value = true;
+    proxyPlaneBlockedError.value = '';
+  },
+});
+const proxyPlaneDirty = computed(() => {
+  const current = [...(proxyPlane.value?.deploymentServers ?? [])].sort();
+  const next = [...proxyPlaneDraft.value].sort();
+  return current.length !== next.length || current.some((id, index) => id !== next[index]);
+});
+type ProxyPlaneReference = { recordId: string; kind: ConfigRecord['kind']; serverIds: string[] };
+const proxyPlaneRemovedServers = computed(() => {
+  const next = new Set(proxyPlaneDraft.value);
+  return (proxyPlane.value?.deploymentServers ?? []).filter((id) => !next.has(id));
+});
+const proxyPlaneBlockedReferences = computed<ProxyPlaneReference[]>(() => {
+  const removed = new Set(proxyPlaneRemovedServers.value);
+  if (!removed.size) return [];
+  const rows: ProxyPlaneReference[] = [];
+  for (const record of configRecords.value) {
+    const serverIds = new Set<string>();
+    const domain = record.domain;
+    for (const serverId of domain?.originServerIds ?? []) if (removed.has(serverId)) serverIds.add(serverId);
+    const primary = domain?.anyAccess?.primaryOriginServerId ?? '';
+    if (primary && removed.has(primary)) serverIds.add(primary);
+    for (const serverId of domain?.anyAccess?.relayServerIds ?? []) if (removed.has(serverId)) serverIds.add(serverId);
+    if (serverIds.size) rows.push({ recordId: record.recordId, kind: record.kind, serverIds: [...serverIds] });
+  }
+  return rows;
+});
+const configRecordColumns = computed(() => [
+  { key: 'domain', label: t('applicationsPage.domain') },
+  { key: 'source', label: t('applicationsPage.configRecordSource') },
+  { key: 'version', label: t('applicationsPage.configRecordVersion'), nowrap: true },
+  { key: 'dns', label: t('applicationsPage.configRecordDns'), nowrap: true },
+  { key: 'updatedAt', label: t('applicationsPage.configRecordUpdatedAt'), nowrap: true },
+  { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
+]);
+function configRecordSourceLabel(record: ConfigRecord) {
+  if (record.kind === 'facility_domain') return t('applicationsPage.configRecordSourceFacility');
+  return record.applicationName
+    ? t('applicationsPage.configRecordSourceApplicationNamed', { name: record.applicationName })
+    : t('applicationsPage.configRecordSourceApplication');
+}
+function openFacilityRecord(record: ConfigRecord) {
+  void router.push({ path: `/applications/facility-apps/${facilityKind.value || 'reverse-proxy'}/config`, query: { recordId: record.recordId } });
+}
+function startNewFacilityRecord() {
+  void router.push({ path: `/applications/facility-apps/${facilityKind.value || 'reverse-proxy'}/config`, query: { new: '1' } });
+}
+function openRecordApplication(record: ConfigRecord) {
+  if (!record.applicationId) return;
+  void router.push({ path: '/applications/apps', query: { application: record.applicationId } });
+}
 
 function facilityPathNumberOption(field: 'clientMaxBodySizeMb' | 'connectTimeoutSeconds' | 'readTimeoutSeconds' | 'sendTimeoutSeconds') {
   return computed({
@@ -681,7 +788,7 @@ const facilityAssetAdapter: AssetFileAdapter = {
       saveBlobDownload({ blob: new Blob([pendingText], { type: 'text/plain;charset=utf-8' }), filename: item.filename || item.name });
       return;
     }
-    saveBlobDownload(await reverseProxyFacilityApi.downloadStaticAsset(item.key, item.filename || item.name));
+    saveBlobDownload(await reverseProxyFacilityApi.downloadStaticAsset(facilityAssetRecordId.value, item.key, item.filename || item.name));
   },
   async delete(item) {
     deleteLocalAsset(facilityLocalAssets, item.key);
@@ -692,7 +799,7 @@ const facilityAssetAdapter: AssetFileAdapter = {
     if (pendingText !== undefined) {
       return { content: pendingText, name: item.name, filename: item.filename, language: 'plain' as const };
     }
-    const result = await reverseProxyFacilityApi.downloadStaticAsset(item.key, item.filename || item.name);
+    const result = await reverseProxyFacilityApi.downloadStaticAsset(facilityAssetRecordId.value, item.key, item.filename || item.name);
     return { content: await result.blob.text(), name: item.name, filename: item.filename, language: 'plain' as const };
   },
   async saveText({ key: assetName, name, filename, content }) {
@@ -717,36 +824,6 @@ const appDeploymentServersModel = computed({
   set: (value: string[]) => {
     appDraft.deploymentServers = value;
     markAppStructuredDirty();
-  },
-});
-const facilityDeploymentServersModel = computed({
-  get: () => facilityDraft.deploymentServers,
-  set: (value: string[]) => {
-    const removed = facilityDraft.deploymentServers.filter((id) => !value.includes(id));
-    facilityDraft.deploymentServers = value;
-    if (removed.length) {
-      const gatewaySet = new Set(value);
-      let pruned = 0;
-      facilityDraft.domains.forEach((domain) => {
-        const before = domain.originServerIds.length;
-        domain.originServerIds = domain.originServerIds.filter((id) => gatewaySet.has(id));
-        pruned += before - domain.originServerIds.length;
-        if (domain.anyAccess.primaryOriginServerId && !gatewaySet.has(domain.anyAccess.primaryOriginServerId)) {
-          domain.anyAccess.primaryOriginServerId = '';
-        }
-        domain.anyAccess.relayServerIds = (domain.anyAccess.relayServerIds ?? []).filter((id) => gatewaySet.has(id));
-      });
-      if (pruned > 0) notify.push({ title: t('applicationsPage.gatewayPrunedOrigins', { count: pruned }), tone: 'warning' });
-    }
-    markDirty();
-  },
-});
-
-const facilityDomainOriginServersModel = computed({
-  get: () => facilityDomainDraft.originServerIds,
-  set: (value: string[]) => {
-    facilityDomainDraft.originServerIds = value;
-    markDirty();
   },
 });
 
@@ -775,7 +852,7 @@ watch(() => route.query.tab, (value) => {
     if (next !== appTab.value) appTab.value = next;
     return;
   }
-  if (mode.value === 'facilityDetail' || (mode.value === 'facilityConfig' && !facilityEditingView.value && isReverseProxyFacility.value)) {
+  if (mode.value === 'facilityDetail') {
     const next = normalizeFacilityDetailTab(value);
     if (next !== facilityTab.value) facilityTab.value = next;
   }
@@ -802,7 +879,7 @@ function applicationDetailQuery(applicationId = selectedId.value) {
 function facilityDetailQuery(tab = facilityTab.value) {
   return {
     ...route.query,
-    tab: tab === 'routes' ? undefined : tab,
+    tab: tab === 'proxy' ? undefined : tab,
   };
 }
 
@@ -815,7 +892,7 @@ function selectAppTab(value: AppDetailTab) {
 
 function selectFacilityTab(value: FacilityDetailTab) {
   facilityTab.value = value;
-  const expected = value === 'routes' ? undefined : value;
+  const expected = value === 'proxy' ? undefined : value;
   if (route.query.tab !== expected) {
     void router.replace({ query: facilityDetailQuery(value) });
   }
@@ -854,27 +931,27 @@ watch(() => selectedApplication.value.persistentServers, (serverIds) => {
   }
 }, { immediate: true });
 
-watch(facilityEditingView, (editing) => {
-  if (editing && dnsPollTimer) {
-    clearTimeout(dnsPollTimer);
-    dnsPollTimer = null;
-  }
-});
-
 watch(() => route.path, async () => {
   cancelRuntimeLoad();
   cancelApplicationDetailLoad();
   cancelRowImageLoads();
   cancelEditorQuery();
+  if (dnsPollTimer) {
+    clearTimeout(dnsPollTimer);
+    dnsPollTimer = null;
+  }
   actionError.value = '';
-  facilityEditing.value = false;
   editorReady.value = false;
   editSession.value = null;
   facilitySession.value = null;
+  facilityRecord.value = null;
   resetLocalAssetState(appLocalAssets, []);
   resetLocalAssetState(facilityLocalAssets, []);
   isDirty.value = false;
   dialogOpen.value = false;
+  if (mode.value !== 'facilityDetail') {
+    proxyPlaneDraftTouched.value = false;
+  }
   await load();
   if (isAppEditor.value) await startApplicationEditor();
   if (isFacilityEditor.value) await startFacilityEditor();
@@ -911,8 +988,13 @@ async function load() {
     await loadApplications({ loadSelectedRuntime: false });
     return;
   }
-  if (currentMode === 'facilityCatalog' || currentMode === 'facilityDetail' || currentMode === 'facilityConfig') {
+  if (currentMode === 'facilityCatalog') {
     await loadFacilityData();
+    return;
+  }
+  if (currentMode === 'facilityDetail') {
+    if (isReverseProxyFacility.value) await loadFacilityDetailData();
+    else await loadFacilityData();
   }
 }
 
@@ -1011,17 +1093,68 @@ async function loadFacilityData() {
       storageShareConfig.value = null;
     }
     facilitiesLoaded.value = true;
-    const pendingDns = primaryFacility?.dnsSync ? Object.values(primaryFacility.dnsSync).some((state) => state.state === 'pending') : false;
-    if (pendingDns && !facilityEditingView.value && document.visibilityState === 'visible') {
-      dnsPollTimer = setTimeout(() => { void loadFacilityData(); }, 3000);
-    }
   } catch (err) {
     if (isAbortError(err)) return;
-    error.value = err instanceof Error ? err.message : t('applicationsPage.loadFailed');
-    notifyError(err instanceof Error ? err.message : t('applicationsPage.loadFailed'), err);
+    error.value = errorMessage(err, t('applicationsPage.loadFailed'));
+    notifyError(error.value, err);
   } finally {
     if (requestId === pageLoadRequestId) loading.value = false;
   }
+}
+
+/** Detail page: aggregate snapshot (DNS), proxy plane and the independent config records. */
+async function loadFacilityDetailData() {
+  pageLoadController?.abort();
+  if (dnsPollTimer) clearTimeout(dnsPollTimer);
+  const requestId = ++pageLoadRequestId;
+  const controller = new AbortController();
+  pageLoadController = controller;
+  const modeAtStart = mode.value;
+  loading.value = true;
+  error.value = '';
+  proxyPlaneError.value = '';
+  configRecordsError.value = '';
+  const [configResult, planeResult, recordsResult] = await Promise.allSettled([
+    reverseProxyFacilityApi.getConfig({ signal: controller.signal }),
+    reverseProxyFacilityApi.getProxyPlane({ signal: controller.signal }),
+    reverseProxyFacilityApi.listConfigRecords({ signal: controller.signal }),
+  ]);
+  if (requestId !== pageLoadRequestId || mode.value !== modeAtStart) return;
+  try {
+    if (configResult.status === 'fulfilled') {
+      facility.value = configResult.value;
+    } else if (!isAbortError(configResult.reason)) {
+      error.value = errorMessage(configResult.reason, t('applicationsPage.loadFailed'));
+      notifyError(error.value, configResult.reason);
+    }
+    if (planeResult.status === 'fulfilled') {
+      proxyPlane.value = planeResult.value;
+      if (!proxyPlaneDraftTouched.value) proxyPlaneDraft.value = [...planeResult.value.deploymentServers];
+    } else if (!isAbortError(planeResult.reason)) {
+      proxyPlaneError.value = errorMessage(planeResult.reason, t('applicationsPage.proxyPlaneLoadFailed'));
+    }
+    if (recordsResult.status === 'fulfilled') {
+      configRecords.value = recordsResult.value;
+    } else if (!isAbortError(recordsResult.reason)) {
+      configRecordsError.value = errorMessage(recordsResult.reason, t('applicationsPage.configRecordsLoadFailed'));
+    }
+    try {
+      storageShareConfig.value = await storageShareFacilityApi.get({ signal: controller.signal });
+    } catch {
+      storageShareConfig.value = null;
+    }
+    facilitiesLoaded.value = true;
+    const pendingDns = facility.value?.dnsSync ? Object.values(facility.value.dnsSync).some((state) => state.state === 'pending') : false;
+    if (pendingDns && document.visibilityState === 'visible' && mode.value !== 'facilityConfig') {
+      dnsPollTimer = setTimeout(() => { void loadFacilityDetailData(); }, 3000);
+    }
+  } finally {
+    if (requestId === pageLoadRequestId) loading.value = false;
+  }
+}
+
+function errorMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.message ? error.message : fallback;
 }
 
 async function loadApplicationDetail(applicationId: string) {
@@ -1443,46 +1576,89 @@ async function commitApplication() {
 async function startFacilityEditor() {
   editorLoading.value = true;
   try {
-    await startFacilityEditorCore();
+    await startFacilityRecordEditorCore();
   } finally {
     editorLoading.value = false;
   }
 }
 
-async function startFacilityEditorCore() {
+/**
+ * Enter the single-record editor. It never creates an edit session: the
+ * committed record (or an empty draft for a new one) is loaded locally, and a
+ * session only exists inside the save pipeline.
+ */
+async function startFacilityRecordEditorCore() {
   editorQueryController?.abort();
   const requestId = ++editorQueryRequestId;
-  editorQueryController = new AbortController();
+  const controller = new AbortController();
+  editorQueryController = controller;
   const modeAtStart = mode.value;
   const kindAtStart = facilityKind.value;
+  const isNew = facilityRecordIsNew.value;
+  const recordId = facilityRecordId.value;
   editorReady.value = false;
   actionError.value = '';
-  await loadFacilityData();
+  facilityRecord.value = null;
+  await loadServers();
   if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || facilityKind.value !== kindAtStart) return;
   if (!isReverseProxyFacility.value) return;
-  if (!facility.value) {
-    actionError.value = error.value || t('applicationsPage.editorStartFailed');
+  if (!isNew && !recordId) {
+    actionError.value = t('applicationsPage.facilityRecordMissing');
     return;
   }
-  facilityDiagnostics.value = [];
-  facilityPreview.value = null;
-  facilitySession.value = null;
-  isDirty.value = false;
-  Object.assign(facilityDraft, facilityDraftFromConfig(facility.value));
-  resetLocalAssetState(facilityLocalAssets, facilityAssetBaseline(facility.value.staticAssets ?? []));
-  editorReady.value = true;
+  try {
+    const plane = await reverseProxyFacilityApi.getProxyPlane({ signal: controller.signal });
+    if (requestId !== editorQueryRequestId || mode.value !== modeAtStart) return;
+    proxyPlane.value = plane;
+    proxyPlaneDraft.value = [...plane.deploymentServers];
+    proxyPlaneDraftTouched.value = false;
+    if (isNew) {
+      // Load the record index so a new domain cannot silently overwrite an existing record.
+      try {
+        const records = await reverseProxyFacilityApi.listConfigRecords({ signal: controller.signal });
+        if (requestId !== editorQueryRequestId || mode.value !== modeAtStart) return;
+        configRecords.value = records;
+      } catch {
+        // Fall through: the save pipeline re-checks uniqueness before begin.
+      }
+      Object.assign(facilityRecordDraft, makeNewFacilityDomainRecord());
+      facilityRecordRelayScope.value = 'all';
+      resetLocalAssetState(facilityLocalAssets, []);
+    } else {
+      const record = await reverseProxyFacilityApi.getConfigRecord(recordId, { signal: controller.signal });
+      if (requestId !== editorQueryRequestId || mode.value !== modeAtStart) return;
+      if (record.kind !== 'facility_domain') {
+        actionError.value = t('applicationsPage.facilityRecordNotEditable');
+        return;
+      }
+      facilityRecord.value = record;
+      Object.assign(facilityRecordDraft, facilityRecordDraftFromRecord(record));
+      facilityRecordRelayScope.value = (record.domain.anyAccess?.relayServerIds ?? []).length ? 'selected' : 'all';
+      resetLocalAssetState(facilityLocalAssets, facilityAssetBaseline(record.staticAssets ?? []));
+    }
+    facilitySession.value = null;
+    facilityPreview.value = null;
+    facilityDiagnostics.value = [];
+    isDirty.value = false;
+    editorReady.value = true;
+  } catch (err) {
+    if (isAbortError(err)) return;
+    actionError.value = errorMessage(err, t('applicationsPage.editorStartFailed'));
+    notifyError(actionError.value, err);
+  }
 }
 
-async function startInPlaceFacilityEdit() {
-  if (facilityEditingView.value) return;
-  facilityEditing.value = true;
-  actionError.value = '';
-  await startFacilityEditor();
+function facilityDetailPath(tab: FacilityDetailTab = 'configs') {
+  return {
+    path: `/applications/facility-apps/${facilityKind.value || 'reverse-proxy'}`,
+    query: tab === 'proxy' ? undefined : { tab },
+  };
 }
 
-function cancelFacilityEdit() {
+function cancelFacilityRecordEdit() {
+  if (saving.value) return;
   if (!editorDirty.value) {
-    performCancelFacilityEdit();
+    performCancelFacilityRecordEdit();
     return;
   }
   pendingLeaveTarget = null;
@@ -1490,7 +1666,7 @@ function cancelFacilityEdit() {
   discardDialogOpen.value = true;
 }
 
-function performCancelFacilityEdit() {
+function performCancelFacilityRecordEdit() {
   facilitySession.value = null;
   facilityPreview.value = null;
   facilityDiagnostics.value = [];
@@ -1498,18 +1674,14 @@ function performCancelFacilityEdit() {
   editorReady.value = false;
   actionError.value = '';
   isDirty.value = false;
-  if (mode.value === 'facilityConfig') {
-    void router.push(`/applications/facility-apps/${facilityKind.value}`);
-    return;
-  }
-  facilityEditing.value = false;
+  void router.push(facilityDetailPath());
 }
 
 function confirmDiscard() {
   discardDialogOpen.value = false;
   if (pendingFacilityCancel) {
     pendingFacilityCancel = false;
-    performCancelFacilityEdit();
+    performCancelFacilityRecordEdit();
     return;
   }
   const target = pendingLeaveTarget;
@@ -1530,12 +1702,12 @@ function handleDiscardOpenChange(open: boolean) {
 }
 
 function goBackFromFacilityPage() {
-  if (facilityEditingView.value) {
-    cancelFacilityEdit();
-    return;
-  }
-  if (isStorageShareFacility.value && mode.value === 'facilityConfig') {
-    void router.replace('/applications/facility-apps/storage-share');
+  if (mode.value === 'facilityConfig') {
+    if (isStorageShareFacility.value) {
+      void router.replace('/applications/facility-apps/storage-share');
+      return;
+    }
+    cancelFacilityRecordEdit();
     return;
   }
   void router.push('/applications/facility-apps');
@@ -1561,7 +1733,7 @@ async function reloadFacilityEditor() {
     actionError.value = '';
     await startFacilityEditor();
   } catch (err) {
-    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
+    notifyError(errorMessage(err, t('common.operationFailed')), err);
   } finally {
     pending.value = '';
   }
@@ -1596,6 +1768,8 @@ async function flushFacilityLocalAssets() {
         ? new File([item.textContent], filename, { type: 'text/plain;charset=utf-8' })
         : null);
     if (!file) throw new Error(t('applicationsPage.fileLoadFailed'));
+    const uploadKind = item.kind === 'archive' ? 'uploaded_bundle' : 'uploaded_file';
+    const contentMode = item.kind === 'text' ? 'text' : 'binary';
     facilitySession.value = await reverseProxyFacilityApi.putEditAsset(
       facilitySession.value.id,
       item.key,
@@ -1603,70 +1777,142 @@ async function flushFacilityLocalAssets() {
       {
         file,
         name: item.name,
-        kind: item.kind === 'archive' ? 'uploaded_bundle' : 'uploaded_file',
-        contentMode: item.kind === 'text' ? 'text' : 'binary',
+        kind: uploadKind,
+        contentMode,
       },
     );
   }
 }
 
-async function commitFacilityConfig() {
-  const localErrorKeys = Object.keys(facilityErrors.value);
+/** Normalized payload for this one record: relays/primary are pruned to the current gateways. */
+function facilityRecordSaveDraft(): FacilityRouteDomain {
+  const draft = cloneFacilityDomain(facilityRecordDraft);
+  draft.domain = (facilityRecordIsNew.value ? draft.domain : facilityRecordId.value).trim().toLowerCase();
+  draft.originServerIds = (draft.originServerIds ?? []).filter((serverId) => facilityGatewayIdSet.value.has(serverId));
+  const enabled = Boolean(draft.anyAccess?.enabled);
+  const strategy = enabled ? (draft.anyAccess?.strategy || 'round_robin') : '';
+  const primary = enabled && strategy === 'primary_backup' ? (draft.anyAccess?.primaryOriginServerId ?? '') : '';
+  draft.anyAccess = {
+    enabled,
+    strategy,
+    primaryOriginServerId: primary && draft.originServerIds.includes(primary) ? primary : '',
+    relayServerIds: enabled && facilityRecordRelayScope.value === 'selected'
+      ? (draft.anyAccess?.relayServerIds ?? []).filter((serverId) => facilityGatewayIdSet.value.has(serverId) && !draft.originServerIds.includes(serverId))
+      : [],
+  };
+  draft.paths = (draft.paths ?? []).map((path) => cloneFacilityPath(path));
+  return draft;
+}
+
+function isConflictError(error: unknown) {
+  if (error instanceof ApiError) {
+    return error.status === 409 || error.code === 'resource_version_conflict' || error.code === 'conflict';
+  }
+  return false;
+}
+
+async function commitFacilityRecord() {
+  if (saving.value) return;
+  const localErrorKeys = Object.keys(facilityRecordErrors.value);
   if (localErrorKeys.length) {
-    actionError.value = t(facilityErrors.value[localErrorKeys[0]]);
+    actionError.value = t(facilityRecordErrors.value[localErrorKeys[0]]);
     return;
   }
-  await runEditorAction(async () => {
-    let succeeded = false;
+  const draft = facilityRecordSaveDraft();
+  const recordId = facilityRecordIsNew.value ? draft.domain : facilityRecordId.value;
+  if (!recordId) {
+    actionError.value = t('applicationsPage.facilityRecordMissing');
+    return;
+  }
+  if (facilityRecordIsNew.value) {
     try {
-      facilitySession.value = await reverseProxyFacilityApi.beginEdit();
-      facilitySession.value = await reverseProxyFacilityApi.patchEdit(
-        facilitySession.value.id,
-        facilitySession.value.revision,
-        facilitySession.value.baseResourceVersion.value,
-        facilitySaveInputFromDraft(facilityDraft),
-      );
-      await flushFacilityLocalAssets();
-      if (!facilitySession.value) return;
-      facilityPreview.value = await reverseProxyFacilityApi.previewEdit(
-        facilitySession.value.id,
-        facilitySession.value.revision,
-      );
-      facilityDiagnostics.value = facilityPreview.value.diagnostics ?? [];
-      if (hasBlockingDiagnostic(facilityDiagnostics.value)) {
-        notify.push({ title: t('applicationsPage.validationFound'), tone: 'warning' });
+      const records = await reverseProxyFacilityApi.listConfigRecords();
+      configRecords.value = records;
+      if (records.some((record) => record.recordId === recordId)) {
+        actionError.value = t('applicationsPage.validationDomainDuplicate');
         return;
       }
-      const result = await reverseProxyFacilityApi.commitEdit(facilitySession.value, facilityPreview.value);
-      // Commit already persisted; do not discard the session if follow-up apply fails.
-      succeeded = true;
-      let applied = false;
-      if (result.applyNeeded) {
-        await reverseProxyFacilityApi.reconcile({
-          apply: true,
-          serverIds: result.applyServerIds ?? [],
-          stopServerIds: result.stopServerIds ?? [],
-        });
-        applied = true;
-      }
-      facility.value = result.config;
-      facilitySession.value = null;
-      facilityPreview.value = null;
-      facilityDiagnostics.value = [];
-      resetLocalAssetState(facilityLocalAssets, facilityAssetBaseline(result.config.staticAssets ?? []));
-      notifySuccess(applied || result.applyRequested ? t('applicationsPage.gatewayCommittedAndApplied') : t('applicationsPage.gatewayCommitted'), result);
-      isDirty.value = false;
-      editorReady.value = false;
-      if (mode.value === 'facilityConfig') {
-        await router.replace(`/applications/facility-apps/${facilityKind.value}`);
-      } else {
-        facilityEditing.value = false;
-      }
-      await load();
-    } finally {
-      if (!succeeded) await discardFacilitySaveSession();
+    } catch {
+      // The server still rejects a duplicate record atomically; continue the pipeline.
     }
-  }, 'commit');
+  }
+  pending.value = 'commit';
+  saveStage.value = 'commit';
+  actionError.value = '';
+  let committed = false;
+  try {
+    facilitySession.value = await reverseProxyFacilityApi.beginEdit({
+      recordId,
+      clientDraftKey: `facility:${recordId}`,
+      ...(facilityRecordIsNew.value ? { draft } : {}),
+    });
+    facilitySession.value = await reverseProxyFacilityApi.patchEdit(
+      facilitySession.value.id,
+      facilitySession.value.revision,
+      facilitySession.value.baseResourceVersion.value,
+      draft,
+    );
+    await flushFacilityLocalAssets();
+    if (!facilitySession.value) return;
+    facilityPreview.value = await reverseProxyFacilityApi.previewEdit(
+      facilitySession.value.id,
+      facilitySession.value.revision,
+    );
+    facilityDiagnostics.value = facilityPreview.value.diagnostics ?? [];
+    if (hasBlockingDiagnostic(facilityDiagnostics.value)) {
+      notify.push({ title: t('applicationsPage.validationFound'), tone: 'warning' });
+      return;
+    }
+    const result = await reverseProxyFacilityApi.commitEdit(facilitySession.value, facilityPreview.value);
+    // The record is persisted from here on. The follow-up apply is only a
+    // config-plane reload request and must never roll back or negate the commit.
+    committed = true;
+    facilitySession.value = null;
+    facilityPreview.value = null;
+    facilityDiagnostics.value = [];
+    let applyFailed = false;
+    if (result.applyNeeded) {
+      try {
+        await reverseProxyFacilityApi.applyConfigRecord(result.record.recordId);
+      } catch (err) {
+        applyFailed = true;
+        notify.push({
+          title: t('applicationsPage.facilityRecordCommittedApplyFailed'),
+          description: errorMessage(err, ''),
+          tone: 'warning',
+        });
+      }
+    }
+    if (!applyFailed) {
+      notifySuccess(
+        result.applyNeeded
+          ? t('applicationsPage.facilityRecordCommittedAndReloadRequested')
+          : t('applicationsPage.facilityRecordCommitted'),
+        result,
+      );
+    }
+    isDirty.value = false;
+    editorReady.value = false;
+    resetLocalAssetState(facilityLocalAssets, []);
+    // Release the save lock before navigating: the leave guard refuses to leave
+    // while a commit is in flight, and the record is already persisted.
+    pending.value = '';
+    saveStage.value = 'idle';
+    await router.push(facilityDetailPath('configs'));
+  } catch (err) {
+    if (isAbortError(err)) return;
+    if (isConflictError(err)) {
+      await discardFacilitySaveSession();
+      actionError.value = t('applicationsPage.facilityRecordConflictHint');
+      notify.push({ title: t('applicationsPage.facilityRecordConflict'), tone: 'warning' });
+      return;
+    }
+    notifyError(errorMessage(err, t('common.operationFailed')), err);
+  } finally {
+    if (!committed) await discardFacilitySaveSession();
+    pending.value = '';
+    saveStage.value = 'idle';
+  }
 }
 
 async function runEditorAction(action: () => Promise<void>, name = 'editor') {
@@ -1886,43 +2132,12 @@ function cancelDialog() {
   dialogOpen.value = false;
 }
 
-function openFacilityDomainDialog(index = -1) {
-  dialogKind.value = 'facilityDomain';
-  dialogIndex.value = index;
-  Object.keys(facilityDomainErrors).forEach((key) => delete facilityDomainErrors[key]);
-  Object.assign(facilityDomainDraft, index >= 0 ? cloneFacilityDomains([facilityDraft.domains[index]])[0] : makeFacilityDomain());
-  const domainGatewaySet = new Set(facilityDraft.deploymentServers);
-  facilityDomainDraft.originServerIds = facilityDomainDraft.originServerIds.filter((id) => domainGatewaySet.has(id));
-  const domainPrimaryOrigin = facilityDomainDraft.anyAccess.primaryOriginServerId || '';
-  facilityDomainDraft.anyAccess.primaryOriginServerId = domainPrimaryOrigin && facilityDomainDraft.originServerIds.includes(domainPrimaryOrigin) ? domainPrimaryOrigin : '';
-  facilityDomainDraft.anyAccess.relayServerIds = (facilityDomainDraft.anyAccess.relayServerIds ?? []).filter((id) => domainGatewaySet.has(id));
-  facilityRelayScope.value = facilityDomainDraft.anyAccess?.relayServerIds?.length ? 'selected' : 'all';
-  dialogOpen.value = true;
-}
-
-function clearFacilityDomainError(field: string) {
-  delete facilityDomainErrors[field];
-}
-
-function saveFacilityDomainDialog() {
-  const nextErrors = validateFacilityDomainFields(facilityDomainDraft, facilityDraft.domains, dialogIndex.value);
-  Object.keys(facilityDomainErrors).forEach((key) => delete facilityDomainErrors[key]);
-  Object.assign(facilityDomainErrors, nextErrors);
-  if (Object.keys(facilityDomainErrors).length) return;
-  const next = cloneFacilityDomains([facilityDomainDraft])[0];
-  next.anyAccess.relayServerIds = facilityDomainDraft.anyAccess.enabled && facilityRelayScope.value === 'selected' ? [...(facilityDomainDraft.anyAccess.relayServerIds ?? [])] : [];
-  if (dialogIndex.value >= 0) facilityDraft.domains[dialogIndex.value] = next;
-  else facilityDraft.domains.push(next);
-  dialogOpen.value = false;
-  markDirty();
-}
-
-function openFacilityPathDialog(domainIndex: number, pathIndex = -1) {
+function openFacilityPathDialog(pathIndex = -1) {
   dialogKind.value = 'facilityPath';
-  dialogParentIndex.value = domainIndex;
+  dialogParentIndex.value = -1;
   dialogIndex.value = pathIndex;
   Object.keys(facilityPathErrors).forEach((key) => delete facilityPathErrors[key]);
-  Object.assign(facilityPathDraft, pathIndex >= 0 ? cloneFacilityPath(facilityDraft.domains[domainIndex].paths[pathIndex]) : makeFacilityPath());
+  Object.assign(facilityPathDraft, pathIndex >= 0 ? cloneFacilityPath(facilityRecordDraft.paths[pathIndex]) : makeFacilityPath());
   if (!facilityPathDraft.options) Object.assign(facilityPathDraft, { options: defaultRouteOptions() });
   facilityRequestHeaders.value = (facilityPathDraft.options?.requestHeaders ?? []).map((header) => makeKeyValueRow(header.name, header.value));
   facilityResponseHeaders.value = (facilityPathDraft.options?.responseHeaders ?? []).map((header) => makeKeyValueRow(header.name, header.value));
@@ -1934,8 +2149,6 @@ function clearFacilityPathError(field: string) {
 }
 
 function saveFacilityPathDialog() {
-  const paths = facilityDraft.domains[dialogParentIndex.value]?.paths;
-  if (!paths) return;
   const nextErrors = validateFacilityPathFields(facilityPathDraft);
   Object.keys(facilityPathErrors).forEach((key) => delete facilityPathErrors[key]);
   Object.assign(facilityPathErrors, nextErrors);
@@ -1947,16 +2160,108 @@ function saveFacilityPathDialog() {
     requestHeaders: facilityRequestHeaders.value.filter((row) => row.key.trim() || row.value.trim()).map((row) => ({ name: row.key.trim(), value: row.value })),
     responseHeaders: facilityResponseHeaders.value.filter((row) => row.key.trim() || row.value.trim()).map((row) => ({ name: row.key.trim(), value: row.value })),
   };
-  if (dialogIndex.value >= 0) paths[dialogIndex.value] = next;
-  else paths.push(next);
+  if (dialogIndex.value >= 0) facilityRecordDraft.paths[dialogIndex.value] = next;
+  else facilityRecordDraft.paths.push(next);
   dialogOpen.value = false;
   markDirty();
 }
 
-function removeAt<T>(items: T[], index: number, domain: 'app' | 'facility' = 'app') {
+function removeFacilityRecordPath(index: number) {
+  facilityRecordDraft.paths.splice(index, 1);
+  markDirty();
+}
+
+function removeAt<T>(items: T[], index: number) {
   items.splice(index, 1);
-  if (domain === 'app') markAppStructuredDirty();
-  else markDirty();
+  markAppStructuredDirty();
+}
+
+async function saveProxyPlaneDraft() {
+  if (proxyPlaneSaving.value || !proxyPlaneDirty.value) return;
+  if (proxyPlaneBlockedReferences.value.length) {
+    notify.push({ title: t('applicationsPage.gatewayRemovalBlocked'), tone: 'warning' });
+    return;
+  }
+  proxyPlaneSaving.value = true;
+  proxyPlaneError.value = '';
+  proxyPlaneBlockedError.value = '';
+  try {
+    const saved = await reverseProxyFacilityApi.saveProxyPlane({ deploymentServers: [...proxyPlaneDraft.value] });
+    proxyPlane.value = saved;
+    proxyPlaneDraft.value = [...saved.deploymentServers];
+    proxyPlaneDraftTouched.value = false;
+    notifySuccess(t('applicationsPage.gatewaySaved'));
+    await loadFacilityDetailData();
+  } catch (err) {
+    const blocked = proxyPlaneConflictDomains(err);
+    if (blocked.length) {
+      proxyPlaneBlockedError.value = blocked.join(', ');
+      notify.push({ title: t('applicationsPage.gatewayRemovalBlocked'), tone: 'warning' });
+      return;
+    }
+    proxyPlaneError.value = errorMessage(err, t('common.operationFailed'));
+    notifyError(proxyPlaneError.value, err);
+  } finally {
+    proxyPlaneSaving.value = false;
+  }
+}
+
+/** Server-side FAC-RP-006 guard fallback: list the records that still reference removed gateways. */
+function proxyPlaneConflictDomains(error: unknown): string[] {
+  if (!(error instanceof ApiError) || error.code !== 'facility_proxy_plane_gateway_in_use') return [];
+  const details = error.details as { records?: Array<{ recordId?: string }> } | undefined;
+  return (details?.records ?? []).map((item) => item.recordId ?? '').filter(Boolean);
+}
+
+async function ensureProxyRunning() {
+  await runOperation(
+    'facility-reconcile',
+    () => reverseProxyFacilityApi.reconcile(),
+    'applicationsPage.ensureProxyAccepted',
+    'applicationsPage.ensureProxyAcceptedWithoutId',
+  );
+}
+
+async function applyFacilityRecord(record: ConfigRecord) {
+  if (configRecordActionKey.value) return;
+  configRecordActionKey.value = `apply:${record.recordId}`;
+  try {
+    await reverseProxyFacilityApi.applyConfigRecord(record.recordId);
+    notifySuccess(t('applicationsPage.configRecordApplyRequested', { domain: record.recordId }));
+  } catch (err) {
+    notifyError(errorMessage(err, t('common.operationFailed')), err);
+  } finally {
+    configRecordActionKey.value = '';
+  }
+}
+
+function askDeleteFacilityRecord(record: ConfigRecord) {
+  deleteRecordTarget.value = record;
+  deleteRecordOpen.value = true;
+}
+
+async function confirmDeleteFacilityRecord() {
+  const record = deleteRecordTarget.value;
+  if (!record) return;
+  configRecordActionKey.value = `delete:${record.recordId}`;
+  try {
+    await reverseProxyFacilityApi.deleteConfigRecord(record.recordId, record.version);
+    notifySuccess(t('applicationsPage.configRecordDeleted'));
+    deleteRecordOpen.value = false;
+    deleteRecordTarget.value = null;
+    await loadFacilityDetailData();
+  } catch (err) {
+    if (isConflictError(err)) {
+      notify.push({ title: t('applicationsPage.configRecordDeleteConflict'), tone: 'warning' });
+      deleteRecordOpen.value = false;
+      deleteRecordTarget.value = null;
+      await loadFacilityDetailData();
+      return;
+    }
+    notifyError(errorMessage(err, t('common.operationFailed')), err);
+  } finally {
+    configRecordActionKey.value = '';
+  }
 }
 
 function encodeBase64Utf8(value: string) {
@@ -1987,24 +2292,6 @@ async function runFileAction(key: string, action: () => Promise<void>) {
     notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
   } finally {
     fileActionPending.value = '';
-  }
-}
-
-async function downloadCommittedFacilityAsset(asset: StaticAsset) {
-  await runAssetAction(`committed:${asset.name}`, async () => {
-    saveBlobDownload(await reverseProxyFacilityApi.downloadStaticAsset(asset.name, asset.filename));
-  });
-}
-
-async function runAssetAction(key: string, action: () => Promise<void>) {
-  assetActionPending.value = key;
-  assetActionErrors.value = { ...assetActionErrors.value, [key]: '' };
-  try {
-    await action();
-  } catch (err) {
-    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
-  } finally {
-    assetActionPending.value = '';
   }
 }
 
@@ -2404,26 +2691,33 @@ onBeforeUnmount(() => {
     />
   </ConsolePage>
 
-  <ConsolePage v-else-if="mode === 'facilityDetail' || mode === 'facilityConfig'" :back-label="t('common.back')" @back="goBackFromFacilityPage" :title="facilityEditingView ? t('applicationsPage.gatewayEditor') : (currentFacilitySummary ? t(currentFacilitySummary.titleKey) : t('applicationsPage.facilityUnavailable'))" :description="facilityEditingView ? t('applicationsPage.gatewayEditorDescription') : (currentFacilitySummary ? t(currentFacilitySummary.descriptionKey) : t('applicationsPage.facilityUnavailableDescription', { kind: facilityKind }))">
+  <ConsolePage v-else-if="mode === 'facilityDetail' || mode === 'facilityConfig'" :back-label="t('common.back')" @back="goBackFromFacilityPage" :title="facilityPageTitle" :description="facilityPageDescription">
     <template #actions>
-      <template v-if="!facilityEditingView">
+      <template v-if="mode === 'facilityDetail'">
         <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
-        <Button v-if="currentFacilitySummary" size="sm" variant="ghost" @click="openFacilityTasks"><ClipboardList />{{ t('applicationsPage.viewTasks') }}</Button><Button v-if="currentFacilitySummary && isReverseProxyFacility" size="sm" @click="runOperation(`facility-reconcile-${facilityKind}`, () => reverseProxyFacilityApi.reconcile(), 'applicationsPage.gatewayReconcileAccepted', 'applicationsPage.gatewayReconcileAcceptedWithoutId')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
-        <Button v-if="currentFacilitySummary && isReverseProxyFacility" size="sm" variant="primary" @click="startInPlaceFacilityEdit"><Wrench />{{ t('common.edit') }}</Button>
+        <Button v-if="currentFacilitySummary" size="sm" variant="ghost" @click="openFacilityTasks"><ClipboardList />{{ t('applicationsPage.viewTasks') }}</Button>
       </template>
     </template>
-    <template v-if="facilityEditingView">
+
+    <template v-if="isStorageShareFacility">
+      <StorageShareFacility :mode="mode" :servers="servers" />
+    </template>
+
+    <template v-else-if="mode === 'facilityConfig'">
       <EditorPage>
         <div v-if="!editorReady" class="relative grid min-h-64 place-items-center">
           <LoadingOverlay v-if="editorLoading || !actionError" />
           <div v-else class="grid max-w-md justify-items-center gap-3 text-center">
             <AlertTriangle class="size-6 text-danger" aria-hidden="true" />
             <p class="m-0 text-sm text-danger">{{ actionError }}</p>
-            <Button size="sm" :loading="pending === 'editor-reload'" @click="reloadFacilityEditor">{{ t('common.retry') }}</Button>
+            <div class="flex flex-wrap justify-center gap-2">
+              <Button size="sm" :loading="pending === 'editor-reload'" @click="reloadFacilityEditor">{{ t('common.retry') }}</Button>
+              <Button size="sm" variant="secondary" :disabled="saving" @click="cancelFacilityRecordEdit">{{ t('common.cancel') }}</Button>
+            </div>
           </div>
         </div>
         <div v-if="saving" class="mb-4 rounded-xl border border-info-border bg-info-bg p-3 text-sm text-info">{{ t(`applicationsPage.saveStage.${saveStage}`) }}</div>
-        <div v-if="editorReady && actionError" class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
+        <div v-if="editorReady && actionError" role="alert" class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
           <span class="text-danger">{{ actionError }}</span>
           <Button size="sm" :loading="pending === 'editor-reload'" @click="reloadFacilityEditor">{{ t('applicationsPage.reloadFacilityDraft') }}</Button>
         </div>
@@ -2431,174 +2725,230 @@ onBeforeUnmount(() => {
           <LoadingOverlay v-if="saving" :label="t(`applicationsPage.saveStage.${saveStage}`)" />
           <section class="app-editor-shell">
             <div class="app-editor-header">
-              <p class="editor-flow-hint">{{ t('applicationsPage.gatewayEditorFlowHint') }}</p>
+              <p class="editor-flow-hint">{{ t('applicationsPage.facilityRecordEditorFlowHint') }}</p>
             </div>
-  
+
             <div class="app-editor-body">
               <section class="workspace-panel motion-enter">
-                <div class="section-copy"><h3>{{ t('applicationsPage.gatewayNodes') }}</h3><p>{{ t('applicationsPage.gatewayNodesHint') }}</p></div>
-                <div class="server-picker-grid">
-                  <ServerMultiPicker v-model="facilityDeploymentServersModel" :servers="serverOptions" :label="t('applicationsPage.gatewayNodes')" />
-                </div>
-              </section>
-  
-              <section class="workspace-panel motion-enter">
-                <div class="section-heading"><div class="section-copy"><h3>{{ t('applicationsPage.domainGroups') }}</h3><p>{{ t('applicationsPage.domainGroupsHint') }}</p></div><Button size="sm" @click="openFacilityDomainDialog()"><Plus />{{ t('applicationsPage.addDomain') }}</Button></div>
-                <EmptyState v-if="!facilityDraft.domains.length" :title="t('applicationsPage.noDomains')" :description="t('applicationsPage.noDomainsHint')" />
-                <div v-for="(domain, domainIndex) in facilityDraft.domains" :key="`${domain.domain}-${domainIndex}`" class="facility-domain-card">
-                  <div class="facility-domain-header">
-                    <div class="min-w-0">
-                      <div class="flex flex-wrap items-center gap-2">
-                        <Globe2 class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                        <strong class="facility-domain-name">{{ domain.domain || t('applicationsPage.unnamedDomain') }}</strong>
-                        <Badge v-if="domain.anyAccess?.enabled" tone="info">{{ t(`applicationsPage.loadBalancingStrategy.${domain.anyAccess?.strategy || 'round_robin'}`) }}</Badge>
-                        <Badge :tone="facilityDnsTone(facilityDnsStatus(domain.domain))" :title="facilityDnsError(domain.domain) || undefined">{{ t(`applicationsPage.dnsSync.${facilityDnsStatus(domain.domain) || 'unknown'}`) }}</Badge>
-                      </div>
-                      <span class="facility-domain-servers">{{ t('applicationsPage.originServers', { count: domain.originServerIds.length }) }} · {{ domain.originServerIds.map((id) => serverDisplayName(id)).join(', ') || t('common.notAvailable') }}</span>
-                    </div>
-                    <div class="row-actions">
-                      <Button size="sm" @click="openFacilityDomainDialog(domainIndex)">{{ t('common.edit') }}</Button>
-                      <Button size="sm" variant="danger" @click="removeAt(facilityDraft.domains, domainIndex, 'facility')">{{ t('common.delete') }}</Button>
-                    </div>
-                  </div>
-                  <div class="facility-paths">
-                    <div v-for="(path, pathIndex) in domain.paths" :key="pathIndex" class="facility-path-row">
-                      <div class="min-w-0">
-                        <div class="flex flex-wrap items-center gap-2">
-                          <Badge tone="neutral" class="panel-mono">{{ path.path || '/' }}</Badge>
-                          <Badge tone="info">{{ path.ruleType ? t(`applicationsPage.routeType.${path.ruleType}`) : t('common.notAvailable') }}</Badge>
-                        </div>
-                        <span class="facility-path-target">{{ facilityPathTargetLabel(path) }}</span>
-                      </div>
-                      <div class="row-actions">
-                        <Button size="sm" @click="openFacilityPathDialog(domainIndex, pathIndex)">{{ t('common.edit') }}</Button>
-                        <Button size="sm" variant="danger" @click="removeAt(domain.paths, pathIndex, 'facility')">{{ t('common.delete') }}</Button>
-                      </div>
-                    </div>
-                    <p v-if="!domain.paths.length" class="facility-paths-empty">{{ t('applicationsPage.noPathsHint') }}</p>
-                    <Button size="sm" class="justify-self-start" @click="openFacilityPathDialog(domainIndex)"><Plus />{{ t('common.addPath') }}</Button>
+                <div class="section-copy"><h3>{{ t('applicationsPage.facilityRecordIdentity') }}</h3><p>{{ t('applicationsPage.facilityRecordIdentityHint') }}</p></div>
+                <div class="form-grid">
+                  <label class="field">{{ t('applicationsPage.domain') }}<Input v-model="facilityRecordDraft.domain" :invalid="Boolean(facilityRecordErrors.domain)" :disabled="!facilityRecordIsNew" @input="markDirty" /></label>
+                  <div class="field">
+                    <span>{{ t('applicationsPage.facilityRecordVersion') }}</span>
+                    <div class="flex items-center gap-2"><Badge tone="neutral">{{ facilityRecord ? facilityRecord.version : t('applicationsPage.facilityRecordNewVersion') }}</Badge></div>
                   </div>
                 </div>
-              </section>
-  
-              <section class="workspace-panel motion-enter">
-                <AssetFileManager
-                  :items="facilityAssetItems" :adapter="facilityAssetAdapter" :disabled="!editorReady || saving"
-                  :labels="{ title: t('applicationsPage.staticAssets'), hint: t('applicationsPage.assetUploadLimit'), uploadAsset: t('applicationsPage.uploadAsset'), uploadAssetTitle: t('applicationsPage.uploadAssetTitle'), uploadType: t('applicationsPage.uploadType'), uploadTypeText: t('applicationsPage.uploadTypeText'), uploadTypeBinary: t('applicationsPage.uploadTypeBinary'), uploadTypeArchive: t('applicationsPage.uploadTypeArchive'), uploadFile: t('applicationsPage.uploadFile'), uploadArchive: t('applicationsPage.uploadArchive'), operationFailed: t('applicationsPage.operationFailed'), edit: t('common.edit'), replace: t('common.replace'), download: t('common.download'), delete: t('common.delete'), bytes: t('applicationsPage.bytes'), noAssets: t('applicationsPage.noAssets'), noAssetsHint: t('applicationsPage.noAssetsHint'), textTitle: t('applicationsPage.editTextFile'), newTextTitle: t('applicationsPage.newTextFile'), name: t('applicationsPage.assetReferenceName'), nameHint: t('applicationsPage.assetReferenceNameHint'), filename: t('applicationsPage.assetDownloadFilename'), filenameHint: t('applicationsPage.assetDownloadFilenameHint'), language: t('applicationsPage.highlightLanguage'), content: t('applicationsPage.fileContent'), loading: t('applicationsPage.fileLoading'), loadFailed: t('applicationsPage.fileLoadFailed'), cancel: t('common.cancel'), save: t('common.save'), close: t('common.close'), reload: t('applicationsPage.discardTextAndReload'), deleteTitle: t('applicationsPage.confirm.facility-asset-delete.title'), deleteDescription: t('applicationsPage.confirm.facility-asset-delete.description'), confirmDelete: t('common.delete') }"
-                />
+                <p v-if="!facilityRecordIsNew" class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.facilityRecordDomainReadonly') }}</p>
+                <p v-if="facilityRecordErrors.domain" class="m-0 text-sm text-danger">{{ t(facilityRecordErrors.domain) }}</p>
               </section>
 
               <section class="workspace-panel motion-enter">
-                <div class="section-copy"><h3>{{ t('applicationsPage.gatewayChangeSummary') }}</h3></div>
-                <div class="grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-5">
-                  <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.gatewayNodes') }}</span><strong>{{ facilityDraft.deploymentServers.length }}</strong></div>
-                  <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.domainGroups') }}</span><strong>{{ facilityDraft.domains.length }}</strong></div>
-                  <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.previewAdded') }}</span><strong>{{ facilityDiff.added }}</strong></div>
-                  <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.previewChanged') }}</span><strong>{{ facilityDiff.changed }}</strong></div>
-                  <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.previewRemoved') }}</span><strong>{{ facilityDiff.removed }}</strong></div>
+                <div class="section-copy"><h3>{{ t('applicationsPage.facilityRecordOrigins') }}</h3><p>{{ t('applicationsPage.facilityRecordOriginsHint') }}</p></div>
+                <EmptyState v-if="!facilityGatewayServers.length" :title="t('applicationsPage.facilityRecordNoGateways')" :description="t('applicationsPage.facilityRecordNoGatewaysHint')" />
+                <div v-else class="server-picker-grid">
+                  <ServerMultiPicker v-model="facilityRecordOriginModel" :servers="facilityGatewayServers" :label="t('applicationsPage.facilityRecordOrigins')" />
+                </div>
+                <p v-if="facilityRecordErrors.originServers" class="m-0 text-sm text-danger">{{ t(facilityRecordErrors.originServers) }}</p>
+              </section>
+
+              <section class="workspace-panel motion-enter">
+                <div class="section-copy"><h3>{{ t('applicationsPage.anyAccess') }}</h3><p>{{ t('applicationsPage.anyAccessHint') }}</p></div>
+                <label class="switch-field">{{ t('applicationsPage.anyAccess') }}<Switch v-model="facilityRecordAnyAccessModel" :label="t('applicationsPage.anyAccess')" /></label>
+                <div v-if="facilityRecordDraft.anyAccess.enabled" class="grid gap-3">
+                  <label class="field">{{ t('applicationsPage.loadBalancingStrategy') }}<Select v-model="facilityRecordDraft.anyAccess.strategy" :options="anyAccessStrategyOptions" @change="markDirty" /></label>
+                  <label v-if="facilityRecordDraft.anyAccess.strategy === 'primary_backup'" class="field">{{ t('applicationsPage.primaryOriginServer') }}<Select v-model="facilityRecordDraft.anyAccess.primaryOriginServerId" :options="facilityRecordPrimaryOptions" :placeholder="t('applicationsPage.selectPrimaryOrigin')" @change="markDirty" /></label>
+                  <p v-if="facilityRecordErrors.primaryOrigin" class="m-0 text-sm text-danger">{{ t(facilityRecordErrors.primaryOrigin) }}</p>
+                  <label class="field">{{ t('applicationsPage.anyAccessRelayScope') }}<Select v-model="facilityRecordRelayScope" :options="anyAccessRelayScopeOptions" @change="markDirty" /></label>
+                  <ServerMultiPicker v-if="facilityRecordRelayScope === 'selected'" v-model="facilityRecordRelayServerIdsModel" :servers="facilityRecordRelayServers" :label="t('applicationsPage.anyAccessRelayServers', { count: facilityRecordDraft.anyAccess.relayServerIds?.length ?? 0 })" />
+                  <p v-if="facilityRecordRelayScope === 'selected' && !facilityRecordRelayServers.length" class="m-0 text-sm text-muted-foreground">{{ t('applicationsPage.anyAccessNoRelayServers') }}</p>
                 </div>
               </section>
+
               <section class="workspace-panel motion-enter">
-                <div class="section-copy"><h3>{{ t('applicationsPage.diagnostics') }}</h3></div>
-                <div class="grid gap-2">
-                  <div v-for="item in facilityDiagnostics" :key="`${item.code}-${item.field}`" class="rounded-xl border p-3 text-sm" :class="item.severity === 'error' ? 'border-danger-border bg-danger-bg text-danger' : 'border-warning-border bg-warning-bg text-warning'">{{ item.field ? `${item.field}: ` : '' }}{{ item.message }}{{ diagnosticDetailText(item) }}</div>
-                  <p v-if="!facilityDiagnostics.length" class="m-0 text-sm text-muted-foreground">{{ t('applicationsPage.noDiagnostics') }}</p>
+                <div class="section-heading">
+                  <div class="section-copy"><h3>{{ t('applicationsPage.facilityRecordPaths') }}</h3><p>{{ t('applicationsPage.facilityRecordPathsHint') }}</p></div>
+                  <Button size="sm" @click="openFacilityPathDialog()"><Plus />{{ t('common.addPath') }}</Button>
                 </div>
+                <EmptyState v-if="!facilityRecordDraft.paths.length" :title="t('applicationsPage.facilityRecordNoPaths')" :description="t('applicationsPage.noPathsHint')" />
+                <div v-for="(path, pathIndex) in facilityRecordDraft.paths" :key="`${path.path}-${pathIndex}`" class="item-row">
+                  <div class="min-w-0">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <Badge tone="neutral" class="panel-mono">{{ path.path || '/' }}</Badge>
+                      <Badge tone="info">{{ path.ruleType ? t(`applicationsPage.routeType.${path.ruleType}`) : t('common.notAvailable') }}</Badge>
+                    </div>
+                    <span class="block text-xs text-muted-foreground">{{ facilityPathTargetLabel(path) }}</span>
+                  </div>
+                  <div class="row-actions">
+                    <Button size="sm" @click="openFacilityPathDialog(pathIndex)">{{ t('common.edit') }}</Button>
+                    <Button size="sm" variant="danger" @click="removeFacilityRecordPath(pathIndex)">{{ t('common.delete') }}</Button>
+                  </div>
+                </div>
+                <p v-if="facilityRecordErrors.paths" class="m-0 text-sm text-danger">{{ t(facilityRecordErrors.paths) }}</p>
+              </section>
+
+              <section class="workspace-panel motion-enter">
+                <AssetFileManager
+                  :items="facilityAssetItems" :adapter="facilityAssetAdapter" :disabled="!editorReady || saving"
+                  :labels="{ title: t('applicationsPage.facilityRecordAssets'), hint: t('applicationsPage.facilityRecordAssetsHint'), uploadAsset: t('applicationsPage.uploadAsset'), uploadAssetTitle: t('applicationsPage.uploadAssetTitle'), uploadType: t('applicationsPage.uploadType'), uploadTypeText: t('applicationsPage.uploadTypeText'), uploadTypeBinary: t('applicationsPage.uploadTypeBinary'), uploadTypeArchive: t('applicationsPage.uploadTypeArchive'), uploadFile: t('applicationsPage.uploadFile'), uploadArchive: t('applicationsPage.uploadArchive'), operationFailed: t('applicationsPage.operationFailed'), edit: t('common.edit'), replace: t('common.replace'), download: t('common.download'), delete: t('common.delete'), bytes: t('applicationsPage.bytes'), noAssets: t('applicationsPage.noAssets'), noAssetsHint: t('applicationsPage.noAssetsHint'), textTitle: t('applicationsPage.editTextFile'), newTextTitle: t('applicationsPage.newTextFile'), name: t('applicationsPage.assetReferenceName'), nameHint: t('applicationsPage.assetReferenceNameHint'), filename: t('applicationsPage.assetDownloadFilename'), filenameHint: t('applicationsPage.assetDownloadFilenameHint'), language: t('applicationsPage.highlightLanguage'), content: t('applicationsPage.fileContent'), loading: t('applicationsPage.fileLoading'), loadFailed: t('applicationsPage.fileLoadFailed'), cancel: t('common.cancel'), save: t('common.save'), close: t('common.close'), reload: t('applicationsPage.discardTextAndReload'), deleteTitle: t('applicationsPage.confirm.facility-asset-delete.title'), deleteDescription: t('applicationsPage.confirm.facility-asset-delete.description'), confirmDelete: t('common.delete') }"
+                />
               </section>
             </div>
           </section>
+
+          <aside class="app-editor-summary">
+            <section class="rounded-2xl border border-border bg-card p-4">
+              <h3>{{ t('applicationsPage.facilityRecordSummary') }}</h3>
+              <p class="mt-2 text-sm text-muted-foreground">{{ t('applicationsPage.facilityRecordSummaryHint') }}</p>
+              <div class="mt-3 grid gap-2 text-sm">
+                <div><span>{{ t('applicationsPage.facilityRecordVersion') }}</span><strong>{{ facilityRecord ? facilityRecord.version : t('applicationsPage.facilityRecordNewVersion') }}</strong></div>
+                <div><span>{{ t('applicationsPage.facilityRecordPaths') }}</span><strong>{{ facilityRecordDraft.paths.length }}</strong></div>
+                <div><span>{{ t('applicationsPage.previewAdded') }}</span><strong>{{ facilityRecordDiff.added }}</strong></div>
+                <div><span>{{ t('applicationsPage.previewChanged') }}</span><strong>{{ facilityRecordDiff.changed }}</strong></div>
+                <div><span>{{ t('applicationsPage.previewRemoved') }}</span><strong>{{ facilityRecordDiff.removed }}</strong></div>
+                <Badge :tone="editorDirty ? 'warning' : 'success'">{{ editorDirty ? t('applicationsPage.dirty') : t('applicationsPage.clean') }}</Badge>
+              </div>
+            </section>
+            <section class="rounded-2xl border border-border bg-card p-4">
+              <h3>{{ t('applicationsPage.diagnostics') }}</h3>
+              <div class="mt-3 grid gap-2">
+                <div v-for="item in facilityDiagnostics" :key="`side-${item.code}-${item.field}`" class="rounded-xl border p-3 text-sm" :class="item.severity === 'error' ? 'border-danger-border bg-danger-bg text-danger' : 'border-warning-border bg-warning-bg text-warning'">{{ item.field ? `${item.field}: ` : '' }}{{ item.message }}{{ diagnosticDetailText(item) }}</div>
+                <p v-if="!facilityDiagnostics.length" class="m-0 text-sm text-muted-foreground">{{ t('applicationsPage.noDiagnostics') }}</p>
+              </div>
+            </section>
+          </aside>
         </div>
         <template #footer>
           <div class="flex flex-wrap items-center justify-between gap-3">
             <div class="text-sm text-muted-foreground">{{ editorDirty ? t('applicationsPage.unsavedChanges') : t('applicationsPage.readyToCommit') }}</div>
             <div class="flex flex-wrap gap-2">
-              <Button variant="secondary" :disabled="saving" @click="cancelFacilityEdit">{{ t('common.cancel') }}</Button>
-              <Button variant="primary" :loading="pending === 'commit'" :disabled="!editorReady || saving" @click="commitFacilityConfig"><Save />{{ t('applicationsPage.commit') }}</Button>
+              <Button variant="secondary" :disabled="saving" @click="cancelFacilityRecordEdit">{{ t('common.cancel') }}</Button>
+              <Button variant="primary" :loading="pending === 'commit'" :disabled="!editorReady || saving || !editorDirty" @click="commitFacilityRecord"><Save />{{ t('applicationsPage.facilityRecordSave') }}</Button>
             </div>
           </div>
         </template>
       </EditorPage>
     </template>
-    <template v-else-if="isStorageShareFacility">
-      <StorageShareFacility :mode="mode" :servers="servers" />
-    </template>
+
     <div v-else class="grid min-w-0 gap-4">
       <EmptyState v-if="!currentFacilitySummary" :title="t('applicationsPage.facilityUnavailable')" :description="t('applicationsPage.facilityUnavailableDescription', { kind: facilityKind })" />
+      <EmptyState v-else-if="error && !facility" :title="t('common.loadFailed')" :description="error">
+        <template #actions>
+          <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
+        </template>
+      </EmptyState>
       <div v-else-if="loading && !facility" class="relative grid min-h-64 place-items-center">
         <LoadingOverlay />
       </div>
       <Tabs v-else-if="facility" v-model="activeFacilityTab" :tabs="facilityDetailTabs">
-        <section v-if="facilityTab === 'routes'" class="grid gap-4">
-          <div class="overflow-hidden rounded-2xl border border-border bg-card">
-            <div class="grid grid-cols-4 gap-0 divide-x divide-border max-lg:grid-cols-2 max-lg:divide-x-0 max-lg:divide-y max-sm:grid-cols-1">
-              <div class="p-4"><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.gatewayNodes') }}</span><strong class="mt-1 block text-xl text-foreground">{{ facilityConfigSummary.gateways }}</strong></div>
-              <div class="p-4"><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.gatewayRoutes') }}</span><strong class="mt-1 block text-xl text-foreground">{{ facilityConfigSummary.routes }}</strong></div>
-              <div class="p-4"><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.staticAssets') }}</span><strong class="mt-1 block text-xl text-foreground">{{ facilityConfigSummary.assets }}</strong></div>
-              <div class="p-4"><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.applicationRoutes') }}</span><strong class="mt-1 block text-xl text-foreground">{{ facilityConfigSummary.appRoutes }}</strong></div>
+        <section v-if="facilityTab === 'proxy'" class="grid gap-4">
+          <section class="rounded-2xl border border-border bg-card p-4">
+            <div class="section-heading">
+              <div class="section-copy"><h3>{{ t('applicationsPage.proxyPlaneTitle') }}</h3><p>{{ t('applicationsPage.proxyPlaneHint') }}</p></div>
+              <div class="flex flex-wrap gap-2">
+                <Button size="sm" variant="secondary" :loading="pending === 'facility-reconcile'" :disabled="Boolean(pending)" @click="ensureProxyRunning"><Rocket />{{ t('applicationsPage.ensureProxyRunning') }}</Button>
+                <Button size="sm" variant="primary" :loading="proxyPlaneSaving" :disabled="proxyPlaneSaving || !proxyPlaneDirty || Boolean(proxyPlaneBlockedReferences.length)" @click="saveProxyPlaneDraft"><Save />{{ t('applicationsPage.gatewaySave') }}</Button>
+              </div>
             </div>
-            <section class="border-t border-border p-4">
-              <h3 class="m-0 text-sm font-semibold">{{ t('applicationsPage.routeSummaries') }}</h3>
-              <div class="mt-3 grid gap-2 motion-stagger">
-                <div v-for="summary in facility.routeSummaries" :key="`${summary.domain}-${summary.path}-${summary.source}`" class="motion-reveal grid gap-1 border-t border-border pt-3 text-sm first:border-t-0 first:pt-0">
-                  <div class="flex items-center justify-between"><strong>{{ summary.domain }}{{ summary.path }}</strong><StatusBadge :status="summary.httpsStatus" :tone="summary.httpsStatus === 'disabled' ? 'warning' : 'success'" /></div>
-                  <span class="text-muted-foreground">{{ summary.source }} / {{ summary.serverIds.map((id) => serverDisplayName(id)).join(', ') }}</span>
-                </div>
-                <EmptyState v-if="!facility.routeSummaries.length" :title="t('applicationsPage.noGatewayRoutes')" :description="t('applicationsPage.noGatewayRoutesHint')" />
+            <p class="editor-flow-hint mt-2">{{ t('applicationsPage.gatewayEditorFlowHint') }}</p>
+            <EmptyState v-if="proxyPlaneError" :title="t('common.loadFailed')" :description="proxyPlaneError">
+              <template #actions>
+                <Button size="sm" :loading="loading" @click="loadFacilityDetailData"><RefreshCcw />{{ t('common.retry') }}</Button>
+              </template>
+            </EmptyState>
+            <div v-else-if="!proxyPlane" class="relative grid min-h-32 place-items-center"><LoadingOverlay /></div>
+            <template v-else>
+              <div class="server-picker-grid mt-3">
+                <ServerMultiPicker v-model="proxyPlaneDraftModel" :servers="serverOptions" :label="t('applicationsPage.gatewayNodes')" />
               </div>
-            </section>
-            <section class="border-t border-border p-4">
-              <h3 class="m-0 text-sm font-semibold">{{ t('applicationsPage.dnsSyncTitle') }}</h3>
-              <div class="mt-3 grid gap-3 motion-stagger">
-                <div v-for="row in facilityDnsDomains" :key="`dns-${row.domain}`" class="motion-reveal grid gap-2 border-t border-border pt-3 text-sm first:border-t-0 first:pt-0">
-                  <div class="flex flex-wrap items-center justify-between gap-3">
-                    <div class="grid gap-1">
-                      <strong>{{ row.domain }}</strong>
-                      <span class="text-xs text-muted-foreground">{{ t(`applicationsPage.dnsSyncSource.${row.source}`) }}</span>
-                    </div>
-                    <div class="flex flex-wrap items-center gap-2">
-                      <Badge :tone="facilityDnsTone(facilityDnsStatus(row.domain))" :title="facilityDnsError(row.domain) || undefined">{{ t(`applicationsPage.dnsSync.${facilityDnsStatus(row.domain) || 'unknown'}`) }}</Badge>
-                      <Button
-                        v-if="facilityDnsNeedsAction(row.domain)"
-                        size="sm"
-                        variant="secondary"
-                        :loading="dnsSyncPendingDomain === row.domain"
-                        :disabled="Boolean(dnsSyncPendingDomain) && dnsSyncPendingDomain !== row.domain"
-                        @click="retryFacilityDns(row.domain)"
-                      >{{ t('applicationsPage.dnsSyncRetry') }}</Button>
-                      <Button
-                        v-if="facilityDnsStatus(row.domain) === 'failed' || facilityDnsConflict(row.domain)"
-                        size="sm"
-                        variant="danger"
-                        :loading="dnsSyncPendingDomain === row.domain"
-                        :disabled="Boolean(dnsSyncPendingDomain) && dnsSyncPendingDomain !== row.domain"
-                        @click="askFacilityDnsTakeover(row.domain)"
-                      >{{ t('applicationsPage.dnsSyncTakeover') }}</Button>
-                    </div>
-                  </div>
-                  <p v-if="facilityDnsError(row.domain)" class="m-0 text-xs text-danger">{{ facilityDnsError(row.domain) }}</p>
-                </div>
-                <EmptyState v-if="!facilityDnsDomains.length" :title="t('applicationsPage.noDomains')" :description="t('applicationsPage.noDomainsHint')" />
+              <p class="m-0 mt-2 text-xs text-muted-foreground">{{ t('applicationsPage.gatewayNodesHint') }}</p>
+              <div v-if="proxyPlaneBlockedReferences.length || proxyPlaneBlockedError" role="alert" class="mt-3 grid gap-1 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
+                <strong>{{ t('applicationsPage.gatewayRemovalBlocked') }}</strong>
+                <span>{{ t('applicationsPage.gatewayRemovalBlockedHint') }}</span>
+                <span>{{ t('applicationsPage.gatewayRemovalBlockedRecords', { domains: proxyPlaneBlockedReferences.map((item) => item.recordId).join(', ') || proxyPlaneBlockedError }) }}</span>
               </div>
-            </section>
-            <section class="border-t border-border p-4">
-              <h3 class="m-0 text-sm font-semibold">{{ t('applicationsPage.staticAssets') }}</h3>
-              <div class="mt-3 grid gap-2 motion-stagger">
-                <div v-for="asset in facility.staticAssets" :key="asset.name" class="item-row motion-reveal">
-                  <div><strong>{{ asset.name }}</strong><span>{{ asset.filename }} · {{ asset.size }} {{ t('applicationsPage.bytes') }}</span></div>
-                  <DownloadButton size="sm" :loading="assetActionPending === `committed:${asset.name}`" :label="t('common.download')" @click="downloadCommittedFacilityAsset(asset)" />
-                </div>
-                <EmptyState v-if="!facility.staticAssets.length" :title="t('applicationsPage.noAssets')" :description="t('applicationsPage.noAssetsHint')" />
-              </div>
-            </section>
-          </div>
+            </template>
+          </section>
+          <section class="rounded-2xl border border-border bg-card p-4">
+            <FacilityDiagnostics v-if="proxyPlane" :state="proxyPlane" />
+            <div v-else class="relative grid min-h-32 place-items-center"><LoadingOverlay /></div>
+          </section>
         </section>
-        <section v-else class="grid gap-4">
-          <div class="grid gap-3 border-b border-border pb-4 text-sm sm:grid-cols-2">
-            <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.lastUpdated') }}</span><strong>{{ formatDateTime(facility.updatedAt) || t('common.never') }}</strong></div>
-            <div v-if="facility.operation"><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.currentOperation') }}</span><StatusBadge :status="facility.operation.status" domain="operation" /></div>
-            <div v-if="facility.reconcileStopped"><StatusBadge :status="'needs_attention'" domain="operation" :label="t('applicationsPage.status.attention')" /></div>
+
+        <section v-else-if="facilityTab === 'configs'" class="grid gap-4">
+          <div class="section-heading">
+            <div class="section-copy"><h3>{{ t('applicationsPage.configRecordsTitle') }}</h3><p>{{ t('applicationsPage.configRecordsHint') }}</p></div>
+            <Button size="sm" variant="primary" :disabled="Boolean(pending)" @click="startNewFacilityRecord"><Plus />{{ t('applicationsPage.addDomainRecord') }}</Button>
           </div>
-          <FacilityDiagnostics :config="facility" />
+          <EmptyState v-if="configRecordsError" :title="t('common.loadFailed')" :description="configRecordsError">
+            <template #actions>
+              <Button size="sm" :loading="loading" @click="loadFacilityDetailData"><RefreshCcw />{{ t('common.retry') }}</Button>
+            </template>
+          </EmptyState>
+          <Table
+            v-else
+            :columns="configRecordColumns"
+            :rows="configRecords"
+            row-key="recordId"
+            :loading="loading && !configRecords.length"
+            :loading-label="t('common.loading')"
+          >
+            <template #domain="{ row }"><strong class="break-all">{{ row.recordId }}</strong></template>
+            <template #source="{ row }"><Badge :tone="row.kind === 'facility_domain' ? 'neutral' : 'info'">{{ configRecordSourceLabel(row) }}</Badge></template>
+            <template #version="{ row }"><Badge tone="neutral">{{ row.version }}</Badge></template>
+            <template #dns="{ row }"><Badge :tone="facilityDnsTone(facilityDnsStatus(row.recordId))" :title="facilityDnsError(row.recordId) || undefined">{{ t(`applicationsPage.dnsSync.${facilityDnsStatus(row.recordId) || 'unknown'}`) }}</Badge></template>
+            <template #updatedAt="{ row }"><span class="text-muted-foreground">{{ formatDateTime(row.updatedAt, t('common.never')) }}</span></template>
+            <template #actions="{ row }">
+              <div class="flex flex-wrap items-center justify-end gap-1">
+                <template v-if="row.kind === 'facility_domain'">
+                  <Button size="sm" variant="secondary" @click="openFacilityRecord(row)"><Wrench />{{ t('common.edit') }}</Button>
+                  <Button size="sm" variant="ghost" :loading="configRecordActionKey === `apply:${row.recordId}`" :disabled="Boolean(configRecordActionKey)" @click="applyFacilityRecord(row)"><RefreshCcw />{{ t('common.apply') }}</Button>
+                  <Button size="sm" variant="danger" :disabled="Boolean(configRecordActionKey)" @click="askDeleteFacilityRecord(row)"><Trash2 />{{ t('common.delete') }}</Button>
+                </template>
+                <Button v-else size="sm" variant="secondary" @click="openRecordApplication(row)"><Globe2 />{{ t('applicationsPage.configRecordOpenApplication') }}</Button>
+              </div>
+            </template>
+            <template #empty>
+              <EmptyState variant="inset" :title="t('applicationsPage.configRecordEmpty')" :description="t('applicationsPage.configRecordEmptyHint')" />
+            </template>
+          </Table>
+        </section>
+
+        <section v-else class="grid gap-4">
+          <div class="rounded-2xl border border-border bg-card p-4">
+            <h3 class="m-0 text-sm font-semibold">{{ t('applicationsPage.dnsSyncTitle') }}</h3>
+            <p class="mt-2 text-sm text-muted-foreground">{{ t('applicationsPage.dnsTabHint') }}</p>
+            <div class="mt-3 grid gap-3 motion-stagger">
+              <div v-for="row in facilityDnsDomains" :key="`dns-${row.domain}`" class="motion-reveal grid gap-2 border-t border-border pt-3 text-sm first:border-t-0 first:pt-0">
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <div class="grid gap-1">
+                    <strong>{{ row.domain }}</strong>
+                    <span class="text-xs text-muted-foreground">{{ t(`applicationsPage.dnsSyncSource.${row.source}`) }}</span>
+                  </div>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <Badge :tone="facilityDnsTone(facilityDnsStatus(row.domain))" :title="facilityDnsError(row.domain) || undefined">{{ t(`applicationsPage.dnsSync.${facilityDnsStatus(row.domain) || 'unknown'}`) }}</Badge>
+                    <Button
+                      v-if="facilityDnsNeedsAction(row.domain)"
+                      size="sm"
+                      variant="secondary"
+                      :loading="dnsSyncPendingDomain === row.domain"
+                      :disabled="Boolean(dnsSyncPendingDomain) && dnsSyncPendingDomain !== row.domain"
+                      @click="retryFacilityDns(row.domain)"
+                    >{{ t('applicationsPage.dnsSyncRetry') }}</Button>
+                    <Button
+                      v-if="facilityDnsStatus(row.domain) === 'failed' || facilityDnsConflict(row.domain)"
+                      size="sm"
+                      variant="danger"
+                      :loading="dnsSyncPendingDomain === row.domain"
+                      :disabled="Boolean(dnsSyncPendingDomain) && dnsSyncPendingDomain !== row.domain"
+                      @click="askFacilityDnsTakeover(row.domain)"
+                    >{{ t('applicationsPage.dnsSyncTakeover') }}</Button>
+                  </div>
+                </div>
+                <p v-if="facilityDnsError(row.domain)" class="m-0 text-xs text-danger">{{ facilityDnsError(row.domain) }}</p>
+              </div>
+              <EmptyState v-if="!facilityDnsDomains.length" :title="t('applicationsPage.configRecordEmpty')" :description="t('applicationsPage.configRecordEmptyHint')" />
+            </div>
+          </div>
         </section>
       </Tabs>
     </div>
@@ -2828,23 +3178,6 @@ onBeforeUnmount(() => {
         <Button size="sm" class="justify-self-start" @click="proxyResponseHeaders.push(makeKeyValueRow())"><Plus />{{ t('common.add') }}</Button>
       </div>
     </div>
-    <div v-else-if="dialogKind === 'facilityDomain'" class="grid gap-3">
-      <label class="field">{{ t('applicationsPage.domain') }}<Input v-model="facilityDomainDraft.domain" :invalid="Boolean(facilityDomainErrors.domain)" @input="clearFacilityDomainError('domain')" /></label>
-      <p v-if="facilityDomainErrors.domain" class="m-0 text-sm text-danger">{{ t(facilityDomainErrors.domain) }}</p>
-      <ServerMultiPicker v-model="facilityDomainOriginServersModel" :servers="facilityDomainOriginServerOptions" :label="t('applicationsPage.originServers', { count: facilityDomainDraft.originServerIds.length })" @update:model-value="clearFacilityDomainError('originServers')" />
-      <p v-if="facilityDomainErrors.originServers" class="m-0 text-sm text-danger">{{ t(facilityDomainErrors.originServers) }}</p>
-      <div class="options-block">
-        <div class="section-copy"><h3>{{ t('applicationsPage.anyAccess') }}</h3><p>{{ t('applicationsPage.anyAccessHint') }}</p></div>
-        <label class="switch-field">{{ t('applicationsPage.anyAccess') }}<Switch v-model="facilityDomainDraft.anyAccess.enabled" :label="t('applicationsPage.anyAccess')" /></label>
-        <div v-if="facilityDomainDraft.anyAccess.enabled" class="grid gap-3">
-          <label class="field">{{ t('applicationsPage.anyAccessRelayScope') }}<Select v-model="facilityRelayScope" :options="anyAccessRelayScopeOptions" /></label>
-          <ServerMultiPicker v-if="facilityRelayScope === 'selected'" v-model="facilityRelayServerIdsModel" :servers="facilityRelayServerOptions" :label="t('applicationsPage.anyAccessRelayServers', { count: facilityDomainDraft.anyAccess.relayServerIds?.length ?? 0 })" />
-          <p v-if="facilityRelayScope === 'selected' && !facilityRelayServerOptions.length" class="m-0 text-sm text-muted-foreground">{{ t('applicationsPage.anyAccessNoRelayServers') }}</p>
-          <label class="field">{{ t('applicationsPage.loadBalancingStrategy') }}<Select v-model="facilityDomainDraft.anyAccess.strategy" :options="anyAccessStrategyOptions" /></label>
-          <label v-if="facilityDomainDraft.anyAccess.strategy === 'primary_backup'" class="field">{{ t('applicationsPage.primaryOriginServer') }}<Select v-model="facilityDomainDraft.anyAccess.primaryOriginServerId" :options="facilityDomainOriginOptions" /></label>
-        </div>
-      </div>
-    </div>
     <div v-else-if="dialogKind === 'facilityPath'" class="grid gap-3">
       <label class="field">{{ t('common.path') }}<Input v-model="facilityPathDraft.path" :invalid="Boolean(facilityPathErrors.path)" @input="clearFacilityPathError('path')" /></label>
       <p v-if="facilityPathErrors.path" class="m-0 text-sm text-danger">{{ t(facilityPathErrors.path) }}</p>
@@ -2901,7 +3234,6 @@ onBeforeUnmount(() => {
       <Button v-else-if="dialogKind === 'mount'" variant="primary" @click="saveMountDialog">{{ t('common.save') }}</Button>
       <Button v-else-if="dialogKind === 'proxy'" variant="primary" @click="saveProxyDialog">{{ t('common.save') }}</Button>
       <Button v-else-if="dialogKind === 'proxyPath'" variant="primary" @click="saveProxyPathDialog">{{ t('common.save') }}</Button>
-      <Button v-else-if="dialogKind === 'facilityDomain'" variant="primary" @click="saveFacilityDomainDialog">{{ t('common.save') }}</Button>
       <Button v-else-if="dialogKind === 'facilityPath'" variant="primary" @click="saveFacilityPathDialog">{{ t('common.save') }}</Button>
     </template>
   </Dialog>
@@ -2961,6 +3293,20 @@ onBeforeUnmount(() => {
     :checkbox-label="t('applicationsPage.confirm.dnsTakeover.checkbox')"
     @confirm="confirmFacilityDnsTakeover"
     @update:open="(open: boolean) => { if (!open) { dnsTakeoverOpen = false; dnsTakeoverDomain = ''; } }"
+  />
+
+  <ConfirmDialog
+    :open="deleteRecordOpen"
+    :title="t('applicationsPage.configRecordDeleteTitle')"
+    :description="deleteRecordTarget ? t('applicationsPage.configRecordDeleteDescription', { domain: deleteRecordTarget.recordId, version: deleteRecordTarget.version }) : ''"
+    :impact="t('applicationsPage.configRecordDeleteImpact')"
+    tone="danger"
+    :loading="Boolean(configRecordActionKey)"
+    :confirm-label="t('common.delete')"
+    :cancel-label="t('common.cancel')"
+    checkbox-label=""
+    @confirm="confirmDeleteFacilityRecord"
+    @update:open="(open: boolean) => { deleteRecordOpen = open; if (!open) deleteRecordTarget = null; }"
   />
 
   <ConfirmDialog
@@ -3185,76 +3531,6 @@ strong {
 }
 
 
-.facility-domain-card {
-  display: grid;
-  gap: 0.875rem;
-  min-width: 0;
-  border-top: 1px dashed var(--panel-border);
-  padding-top: 0.875rem;
-}
-
-.facility-domain-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 0.75rem;
-  min-width: 0;
-}
-
-.facility-domain-name {
-  display: inline;
-  color: var(--panel-text);
-  font-size: 0.9375rem;
-  font-weight: 700;
-  overflow-wrap: anywhere;
-}
-
-.facility-domain-servers {
-  display: block;
-  margin-top: 0.25rem;
-  color: var(--panel-text-muted);
-  font-size: 0.8125rem;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}
-
-.facility-paths {
-  display: grid;
-  gap: 0.5rem;
-  min-width: 0;
-  padding-top: 0.875rem;
-  border-top: 1px dashed var(--panel-border);
-}
-
-.facility-path-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.5rem 0.75rem;
-  align-items: center;
-  min-width: 0;
-  border-top: 1px dashed var(--panel-border);
-  padding-top: 0.625rem;
-}
-
-.facility-path-target {
-  display: block;
-  margin-top: 0.25rem;
-  color: var(--panel-text-muted);
-  font-size: 0.8125rem;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}
-
-.facility-paths-empty {
-  margin: 0;
-  border: 1px dashed var(--panel-border);
-  border-radius: 0.625rem;
-  padding: 0.5rem 0.75rem;
-  color: var(--panel-text-muted);
-  font-size: 0.8125rem;
-  line-height: 1.5;
-}
-
 .options-block {
   display: grid;
   gap: 0.75rem;
@@ -3278,17 +3554,6 @@ strong {
   gap: 0.5rem;
   align-items: center;
   min-width: 0;
-}
-
-@media (max-width: 640px) {
-  .facility-path-row {
-    grid-template-columns: 1fr;
-    align-items: start;
-  }
-
-  .facility-path-row .row-actions {
-    justify-content: flex-start;
-  }
 }
 
 @media (max-width: 760px) {

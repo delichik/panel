@@ -73,8 +73,35 @@ type ReverseProxySaveInput struct {
 	Domains           []FacilityRouteDomain `json:"domains"`
 }
 
+// ProxyPlaneState is the gateway/container plane (not a business config document).
+type ProxyPlaneState struct {
+	ID                string               `json:"id"`
+	DeploymentServers []string             `json:"deploymentServers"`
+	Deployments       []FacilityDeployment `json:"deployments"`
+	ReconcileStopped  bool                 `json:"reconcileStopped,omitempty"`
+	LastError         string               `json:"lastError,omitempty"`
+	UpdatedAt         time.Time            `json:"updatedAt"`
+}
+
+type ProxyPlaneSaveInput struct {
+	DeploymentServers []string `json:"deploymentServers"`
+}
+
+// ConfigRecord is one independently versioned reverse-proxy configuration.
+type ConfigRecord struct {
+	RecordID    string              `json:"recordId"`
+	Kind        string              `json:"kind"` // facility_domain | application_route
+	Version     int                 `json:"version"`
+	Domain      FacilityRouteDomain `json:"domain"`
+	StaticAssets []StaticAsset      `json:"staticAssets,omitempty"`
+	ApplicationID   string `json:"applicationId,omitempty"`
+	ApplicationName string `json:"applicationName,omitempty"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+}
+
 type FacilityRouteDomain struct {
 	Domain          string                       `json:"domain"`
+	Version         int                          `json:"version,omitempty"`
 	OriginServerIDs []string                     `json:"originServerIds"`
 	AnyAccess       applications.AnyAccessConfig `json:"anyAccess"`
 	Paths           []FacilityRoutePath          `json:"paths"`
@@ -179,10 +206,11 @@ type FacilityEditAsset struct {
 
 type FacilityEditSession struct {
 	ID                  string                       `json:"id"`
+	RecordID            string                       `json:"recordId"`
 	ClientDraftKey      string                       `json:"clientDraftKey,omitempty"`
 	State               string                       `json:"state"`
 	BaseResourceVersion applications.ResourceVersion `json:"baseResourceVersion"`
-	Draft               ReverseProxySaveInput        `json:"draft"`
+	Draft               FacilityRouteDomain          `json:"draft"`
 	Revision            int                          `json:"revision"`
 	Assets              []FacilityEditAsset          `json:"assets"`
 	PreviewToken        *applications.PreviewToken   `json:"previewToken,omitempty"`
@@ -195,14 +223,15 @@ type FacilityEditSession struct {
 }
 
 type BeginFacilityEditSessionInput struct {
-	ClientDraftKey string                 `json:"clientDraftKey,omitempty"`
-	Draft          *ReverseProxySaveInput `json:"draft,omitempty"`
+	RecordID       string               `json:"recordId"`
+	ClientDraftKey string               `json:"clientDraftKey,omitempty"`
+	Draft          *FacilityRouteDomain `json:"draft,omitempty"`
 }
 
 type PatchFacilityEditSessionInput struct {
-	Revision            int                   `json:"revision"`
-	BaseResourceVersion string                `json:"baseResourceVersion,omitempty"`
-	Draft               ReverseProxySaveInput `json:"draft"`
+	Revision            int                 `json:"revision"`
+	BaseResourceVersion string              `json:"baseResourceVersion,omitempty"`
+	Draft               FacilityRouteDomain `json:"draft"`
 }
 
 type FacilityEditAssetInput struct {
@@ -240,19 +269,20 @@ type CommitFacilityEditSessionInput struct {
 }
 
 type FacilityEditCommitResult struct {
-	Config          ReverseProxyConfig           `json:"config"`
+	Record          ConfigRecord                 `json:"record"`
+	Config          ReverseProxyConfig           `json:"config,omitempty"` // aggregate snapshot for callers that still expect it
 	ResourceVersion applications.ResourceVersion `json:"resourceVersion"`
 	ApplyRequested  bool                         `json:"applyRequested"`
 	ApplyNeeded     bool                         `json:"applyNeeded"`
 	ApplyServerIDs  []string                     `json:"applyServerIds,omitempty"`
-	StopServerIDs   []string                     `json:"stopServerIds,omitempty"`
 	Diagnostics     []applications.Diagnostic    `json:"diagnostics,omitempty"`
 }
 
-// ReconcileReverseProxyInput controls manual vs post-commit gateway reconcile.
-// Apply=true uses force=false and may scope planning to ServerIDs/StopServerIDs.
+// ReconcileReverseProxyInput controls proxy-plane ensure vs config-plane apply.
+// Apply=true selects config-plane reload (force=false). Empty Apply is proxy ensure/force user reconcile.
 type ReconcileReverseProxyInput struct {
 	ServerIDs     []string `json:"serverIds"`
 	StopServerIDs []string `json:"stopServerIds"`
 	Apply         bool     `json:"apply"`
+	RecordID      string   `json:"recordId,omitempty"`
 }

@@ -3,13 +3,16 @@ import type { ApiRequestOptions } from './client';
 import { fetchDownload, type DownloadResult } from './download';
 import { deleteJson, idempotencyKey as key, multipartJson } from './assetRequests';
 import type {
+  ConfigRecord,
   FacilityEditCommitResult,
   FacilityEditPreviewResult,
   FacilityEditSession,
+  FacilityRouteDomain,
   ReverseProxyConfig,
   ProxyDiagnostics,
+  ProxyPlaneSaveInput,
+  ProxyPlaneState,
   ReverseProxyReconcileInput,
-  ReverseProxySaveInput,
   StorageShareConfig,
   StorageShareReconcileResult,
   StorageShareSaveInput,
@@ -51,6 +54,27 @@ export const reverseProxyFacilityApi = {
   getConfig(options?: ApiRequestOptions) {
     return apiClient.get<ReverseProxyConfig>('/facility-apps/reverse-proxy', options);
   },
+  // Proxy plane: gateway membership / container deployments. Saving it never
+  // touches individual config-record versions.
+  getProxyPlane(options?: ApiRequestOptions) {
+    return apiClient.get<ProxyPlaneState>('/facility-apps/reverse-proxy/proxy-plane', options);
+  },
+  saveProxyPlane(input: ProxyPlaneSaveInput) {
+    return apiClient.put<ProxyPlaneState>('/facility-apps/reverse-proxy/proxy-plane', { deploymentServers: [...input.deploymentServers] });
+  },
+  // Independent config records.
+  listConfigRecords(options?: ApiRequestOptions) {
+    return apiClient.get<ConfigRecord[]>('/facility-apps/reverse-proxy/config-records', options);
+  },
+  getConfigRecord(recordId: string, options?: ApiRequestOptions) {
+    return apiClient.get<ConfigRecord>(`/facility-apps/reverse-proxy/config-records/${id(recordId)}`, options);
+  },
+  deleteConfigRecord(recordId: string, version: number) {
+    return apiClient.delete<void>(`/facility-apps/reverse-proxy/config-records/${id(recordId)}?version=${encodeURIComponent(String(version))}`);
+  },
+  applyConfigRecord(recordId: string) {
+    return apiClient.post<void>(`/facility-apps/reverse-proxy/config-records/${id(recordId)}/apply`);
+  },
   reconcile(input?: ReverseProxyReconcileInput) {
     return apiClient.post<{ config: ReverseProxyConfig }>('/facility-apps/reverse-proxy/reconcile', input ?? {});
   },
@@ -61,16 +85,17 @@ export const reverseProxyFacilityApi = {
       confirmTakeover: Boolean(input.confirmTakeover),
     });
   },
-  beginEdit(draft?: ReverseProxySaveInput) {
+  beginEdit(input: { recordId: string; draft?: FacilityRouteDomain; clientDraftKey?: string }) {
     return apiClient.post<FacilityEditSession>('/facility-apps/reverse-proxy/edit-sessions', {
-      clientDraftKey: 'facility:reverse-proxy',
-      // Omit draft so the server seeds from the committed config. Sending a
-      // stale client snapshot would silently overwrite newer route fields
-      // (e.g. redirectUrl) on the next asset-only commit.
-      ...(draft ? { draft } : {}),
+      recordId: input.recordId,
+      // Omit draft for an existing record so the server seeds from the
+      // committed record. Sending a stale client snapshot would silently
+      // overwrite newer route fields on the next asset-only commit.
+      ...(input.clientDraftKey ? { clientDraftKey: input.clientDraftKey } : {}),
+      ...(input.draft ? { draft: input.draft } : {}),
     });
   },
-  patchEdit(sessionId: string, revision: number, baseResourceVersion: string, draft: ReverseProxySaveInput) {
+  patchEdit(sessionId: string, revision: number, baseResourceVersion: string, draft: FacilityRouteDomain) {
     return apiClient.patch<FacilityEditSession>(`/facility-apps/reverse-proxy/edit-sessions/${id(sessionId)}/draft`, { revision, baseResourceVersion, draft });
   },
   previewEdit(sessionId: string, revision: number) {
@@ -97,8 +122,9 @@ export const reverseProxyFacilityApi = {
   downloadEditAsset(sessionId: string, assetName: string, filename: string): Promise<DownloadResult> {
     return fetchDownload(`/api/v1/facility-apps/reverse-proxy/edit-sessions/${id(sessionId)}/assets/${id(assetName)}/content`, {}, filename);
   },
-  downloadStaticAsset(assetName: string, filename: string): Promise<DownloadResult> {
-    return fetchDownload(`/api/v1/facility-apps/reverse-proxy/static-assets/${id(assetName)}/content`, {}, filename);
+  /** Committed per-record asset; the record scope is mandatory. */
+  downloadStaticAsset(recordId: string, assetName: string, filename: string): Promise<DownloadResult> {
+    return fetchDownload(`/api/v1/facility-apps/reverse-proxy/static-assets/${id(assetName)}/content?recordId=${id(recordId)}`, {}, filename);
   },
   deleteEditAsset(sessionId: string, assetName: string, revision: number) {
     const clientOperationId = key();

@@ -13,6 +13,12 @@ import (
 
 type service interface {
 	GetReverseProxy(ctx context.Context) (ReverseProxyConfig, error)
+	GetProxyPlane(ctx context.Context) (ProxyPlaneState, error)
+	SaveProxyPlane(ctx context.Context, in ProxyPlaneSaveInput) (ProxyPlaneState, error)
+	ListConfigRecords(ctx context.Context) ([]ConfigRecord, error)
+	GetConfigRecord(ctx context.Context, recordID string) (ConfigRecord, error)
+	DeleteConfigRecord(ctx context.Context, recordID string, expectedVersion int) error
+	ApplyConfigRecord(ctx context.Context, recordID string) error
 	ReconcileReverseProxyNow(ctx context.Context, in ReconcileReverseProxyInput) (ReconcileResult, error)
 	RequestDNSSync(ctx context.Context, req DNSSyncRequest) (DNSSyncResult, error)
 	BeginFacilityEditSession(context.Context, BeginFacilityEditSessionInput) (FacilityEditSession, error)
@@ -176,6 +182,67 @@ func (h *Handler) ReverseProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) ProxyPlane(w http.ResponseWriter, r *http.Request) {
+	result, err := h.service.GetProxyPlane(r.Context())
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) SaveProxyPlane(w http.ResponseWriter, r *http.Request) {
+	var in ProxyPlaneSaveInput
+	if !httpx.Decode(w, r, &in) {
+		return
+	}
+	result, err := h.service.SaveProxyPlane(r.Context(), in)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) ConfigRecords(w http.ResponseWriter, r *http.Request) {
+	result, err := h.service.ListConfigRecords(r.Context())
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	if result == nil {
+		result = []ConfigRecord{}
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) ConfigRecord(w http.ResponseWriter, r *http.Request) {
+	result, err := h.service.GetConfigRecord(r.Context(), r.PathValue("recordId"))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) DeleteConfigRecord(w http.ResponseWriter, r *http.Request) {
+	version, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("version")))
+	if err := h.service.DeleteConfigRecord(r.Context(), r.PathValue("recordId"), version); err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) ApplyConfigRecord(w http.ResponseWriter, r *http.Request) {
+	recordID := r.PathValue("recordId")
+	if err := h.service.ApplyConfigRecord(r.Context(), recordID); err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, map[string]string{"recordId": recordID})
 }
 
 func (h *Handler) ReconcileReverseProxy(w http.ResponseWriter, r *http.Request) {

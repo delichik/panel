@@ -1,6 +1,6 @@
 import type { ApiEnvelope } from '@/api/client';
 import type { ApplicationDto, ApplicationEditSession, ApplicationFile, ApplicationRuntime, ApplicationSummaryDto, Diagnostic, LogResult, OperationResult } from '@/types/applications';
-import type { FacilityEditSession, ReverseProxyConfig, StorageShareConfig, StorageShareSaveInput } from '@/types/facilityApps';
+import type { ConfigRecord, FacilityEditSession, FacilityRouteDomain, FacilityRoutePath, ProxyPlaneSaveInput, ProxyPlaneState, ReverseProxyConfig, RouteSummary, StaticAsset, StorageShareConfig, StorageShareSaveInput } from '@/types/facilityApps';
 
 const now = '2026-08-01T08:00:00.000Z';
 
@@ -494,6 +494,174 @@ export let mockFacility: ReverseProxyConfig = {
   enabledServers: ['srv-edge-sgp', 'srv-edge-sgp-02', 'srv-api-hkg', 'srv-api-hkg-02', 'srv-edge-lax'],
 };
 
+function cloneFacilityDomainValue(domain: FacilityRouteDomain): FacilityRouteDomain {
+  const cloned: FacilityRouteDomain = {
+    domain: domain.domain ?? '',
+    originServerIds: [...(domain.originServerIds ?? [])],
+    anyAccess: {
+      enabled: Boolean(domain.anyAccess?.enabled),
+      strategy: domain.anyAccess?.strategy || 'round_robin',
+      primaryOriginServerId: domain.anyAccess?.primaryOriginServerId || '',
+      relayServerIds: [...(domain.anyAccess?.relayServerIds ?? [])],
+    },
+    paths: (domain.paths ?? []).map((path) => ({
+      ...path,
+      options: path.options ? {
+        ...path.options,
+        requestHeaders: (path.options.requestHeaders ?? []).map((header) => ({ ...header })),
+        responseHeaders: (path.options.responseHeaders ?? []).map((header) => ({ ...header })),
+      } : undefined,
+    })),
+  };
+  if (domain.anyAccess?.originPriority) cloned.anyAccess.originPriority = [...domain.anyAccess.originPriority];
+  if (typeof domain.version === 'number') cloned.version = domain.version;
+  return cloned;
+}
+
+const legacyStaticAssetByName = new Map(mockFacility.staticAssets.map((asset) => [asset.name, asset]));
+
+function recordStaticAssets(domain: FacilityRouteDomain): StaticAsset[] {
+  const names = new Set((domain.paths ?? []).map((path) => (path.assetName ?? '').trim()).filter(Boolean));
+  const assets: StaticAsset[] = [];
+  for (const name of names) {
+    const asset = legacyStaticAssetByName.get(name);
+    if (asset) assets.push({ ...asset });
+  }
+  return assets;
+}
+
+function initialFacilityRecords(): ConfigRecord[] {
+  const records: ConfigRecord[] = [];
+  mockFacility.domains.forEach((domain, index) => {
+    const domainValue = (domain.domain ?? '').trim().toLowerCase();
+    records.push({
+      recordId: domainValue,
+      kind: 'facility_domain',
+      version: Math.max(1, mockFacility.version - index),
+      domain: { ...cloneFacilityDomainValue(domain), version: Math.max(1, mockFacility.version - index) },
+      staticAssets: recordStaticAssets(domain),
+      updatedAt: mockFacility.updatedAt,
+    });
+  });
+  let applicationVersion = 1;
+  for (const application of mockFacility.applicationRoutes) {
+    for (const route of application.routes) {
+      const domainValue = (route.domain ?? '').trim().toLowerCase();
+      const paths: FacilityRoutePath[] = route.paths.map((path) => ({
+        path: path.path,
+        ruleType: 'proxy_pass',
+        sourceType: '',
+        proxyUrl: `http://127.0.0.1:${route.targetPort}`,
+      }));
+      records.push({
+        recordId: domainValue,
+        kind: 'application_route',
+        version: applicationVersion,
+        domain: {
+          domain: domainValue,
+          version: applicationVersion,
+          originServerIds: [...(route.originServerIds ?? [])],
+          anyAccess: { enabled: false, strategy: 'round_robin', relayServerIds: [] },
+          paths,
+        },
+        applicationId: application.applicationId,
+        applicationName: application.applicationName,
+        updatedAt: mockFacility.updatedAt,
+      });
+      applicationVersion += 1;
+    }
+  }
+  return records;
+}
+
+export let mockConfigRecords: ConfigRecord[] = initialFacilityRecords();
+
+export let mockProxyPlane: ProxyPlaneState = {
+  id: mockFacility.id,
+  deploymentServers: [...mockFacility.deploymentServers],
+  deployments: (mockFacility.deployments ?? []).map((deployment) => ({ ...deployment })),
+  reconcileStopped: false,
+  updatedAt: mockFacility.updatedAt,
+};
+
+/** Derived read-only aggregate; config records remain the source of truth. */
+function syncMockFacilityFromRecords() {
+  const legacyRouteStatus = new Map(mockFacility.routeSummaries.map((route) => [`${route.domain}${route.path}`, route]));
+  const facilityRecords = mockConfigRecords.filter((record) => record.kind === 'facility_domain');
+  const domains = facilityRecords.map((record) => ({ ...cloneFacilityDomainValue(record.domain), version: record.version }));
+  const routeSummaries: RouteSummary[] = mockConfigRecords.flatMap((record) => (record.domain.paths ?? []).map((path) => {
+    const legacy = legacyRouteStatus.get(`${record.domain.domain}${path.path}`);
+    return {
+      domain: record.domain.domain,
+      path: path.path,
+      source: record.kind === 'application_route' ? 'application' : 'static_asset',
+      serverIds: [...(record.domain.originServerIds ?? [])],
+      httpsStatus: legacy?.httpsStatus ?? 'missing',
+      ...(legacy?.certificateId ? { certificateId: legacy.certificateId } : {}),
+      ...(legacy?.certificateName ? { certificateName: legacy.certificateName } : {}),
+      ...(record.applicationId ? { applicationId: record.applicationId } : {}),
+      ...(record.applicationName ? { applicationName: record.applicationName } : {}),
+    };
+  }));
+  mockFacility = {
+    ...mockFacility,
+    deploymentServers: [...mockProxyPlane.deploymentServers],
+    enabledServers: [...mockProxyPlane.deploymentServers],
+    deployments: mockProxyPlane.deployments.map((deployment) => ({ ...deployment })),
+    domains,
+    staticAssets: facilityRecords.flatMap((record) => (record.staticAssets ?? []).map((asset) => ({ ...asset }))),
+    routeSummaries,
+    routes: domains.reduce((sum, domain) => sum + domain.paths.length, 0),
+    updatedAt: now,
+  };
+}
+
+function normalizeRecordId(recordId: string) {
+  return (recordId ?? '').trim().toLowerCase();
+}
+
+export function listMockConfigRecords(): ConfigRecord[] {
+  return mockConfigRecords;
+}
+
+export function getMockConfigRecord(recordId: string): ConfigRecord | undefined {
+  const normalized = normalizeRecordId(recordId);
+  return mockConfigRecords.find((record) => record.recordId === normalized);
+}
+
+export function deleteMockConfigRecord(recordId: string, version: number): 'deleted' | 'not_found' | 'conflict' | 'unsupported' {
+  const normalized = normalizeRecordId(recordId);
+  const index = mockConfigRecords.findIndex((record) => record.recordId === normalized);
+  if (index < 0) return 'not_found';
+  const record = mockConfigRecords[index];
+  if (!record) return 'not_found';
+  if (record.kind === 'application_route') return 'unsupported';
+  if (record.version !== version) return 'conflict';
+  mockConfigRecords.splice(index, 1);
+  syncMockFacilityFromRecords();
+  return 'deleted';
+}
+
+export function applyMockConfigRecord(recordId: string): boolean {
+  return Boolean(getMockConfigRecord(recordId));
+}
+
+export function saveMockProxyPlane(input: ProxyPlaneSaveInput): ProxyPlaneState {
+  mockProxyPlane = {
+    ...mockProxyPlane,
+    deploymentServers: [...(input.deploymentServers ?? [])],
+    updatedAt: now,
+  };
+  mockFacility = {
+    ...mockFacility,
+    version: mockFacility.version + 1,
+    deploymentServers: [...mockProxyPlane.deploymentServers],
+    enabledServers: [...mockProxyPlane.deploymentServers],
+    updatedAt: now,
+  };
+  return mockProxyPlane;
+}
+
 for (const app of mockApplications) {
   app.persistentServers = app.persistentPath ? [...app.deploymentServers] : [];
   app.hasPersistentData = Boolean(app.persistentPath || app.persistentServers.length);
@@ -813,15 +981,24 @@ export function restorePersistentData(id: string): OperationResult | null {
   };
 }
 
-export function beginFacilitySession(): FacilityEditSession {
+export function beginFacilitySession(recordId: string, draft?: FacilityRouteDomain): FacilityEditSession | null {
+  const normalized = normalizeRecordId(recordId);
+  if (!normalized) return null;
+  const record = getMockConfigRecord(normalized);
+  const source = draft ?? record?.domain;
+  if (!source) return null;
+  const seeded: FacilityRouteDomain = cloneFacilityDomainValue(source);
+  if (!seeded.domain) seeded.domain = normalized;
+  seeded.version = record ? (record.domain?.version ?? record.version) : 0;
   const session: FacilityEditSession = {
-    id: `fedit-${Date.now()}`,
-    clientDraftKey: 'facility:reverse-proxy',
+    id: `fedit-${Date.now()}-${facilitySessions.size + 1}`,
+    clientDraftKey: `facility:reverse-proxy:${normalized}`,
+    recordId: normalized,
     state: 'active',
-    baseResourceVersion: { value: String(mockFacility.version), updatedAt: mockFacility.updatedAt },
-    draft: { deploymentServers: mockFacility.deploymentServers, domains: mockFacility.domains },
+    baseResourceVersion: { value: String(record?.version ?? 0), updatedAt: record?.updatedAt ?? now },
+    draft: seeded,
     revision: 1,
-    assets: mockFacility.staticAssets.map((asset) => ({ name: asset.name, kind: asset.kind, contentMode: asset.contentMode, filename: asset.filename, size: asset.size, sha256: asset.sha256, createdAt: asset.createdAt, updatedAt: asset.updatedAt })),
+    assets: (record?.staticAssets ?? []).map((asset) => ({ name: asset.name, kind: asset.kind, contentMode: asset.contentMode, filename: asset.filename, size: asset.size, sha256: asset.sha256, createdAt: asset.createdAt, updatedAt: asset.updatedAt })),
     idleExpiresAt: '2026-07-22T08:00:00.000Z',
     absoluteExpiresAt: '2026-07-28T08:00:00.000Z',
     createdAt: now,
@@ -881,33 +1058,56 @@ export function facilityAssetContent(id: string, assetName: string): { name: str
   };
 }
 
-export function facilityStaticAssetContent(assetName: string): { name: string; contentType: string; content: string } | null {
-  const asset = mockFacility.staticAssets.find((item) => item.name === assetName);
-  if (!asset) return null;
+export function facilityStaticAssetContent(recordId: string, assetName: string): { name: string; contentType: string; content: string } | null {
+  const record = getMockConfigRecord(recordId);
+  const asset = record?.staticAssets?.find((item) => item.name === assetName);
+  if (!record || !asset) return null;
   return {
     name: asset.filename || asset.name,
     contentType: asset.contentMode === 'text' ? 'text/plain' : 'application/octet-stream',
-    content: `mock static asset: ${assetName}\n`,
+    content: `mock static asset: ${assetName} (record ${record.recordId})\n`,
   };
 }
 
 export function facilityDiagnostics(session: FacilityEditSession): Diagnostic[] {
   const issues: Diagnostic[] = [];
-  if (!session.draft.deploymentServers.length) issues.push({ code: 'facility_gateway_servers_required', severity: 'error', field: 'deploymentServers', message: 'At least one gateway server is required.' });
-  if (session.draft.domains.some((domain) => domain.domain.includes('conflict'))) issues.push({ code: 'facility_domain_owner_conflict', severity: 'error', message: 'Domain is already used by another route.' });
+  if (!(session.draft.domain ?? '').trim()) issues.push({ code: 'facility_domain_required', severity: 'error', field: 'domain', message: 'Domain is required.' });
+  if ((session.draft.domain ?? '').includes('conflict')) issues.push({ code: 'facility_domain_owner_conflict', severity: 'error', message: 'Domain is already used by another route.' });
+  if (!(session.draft.originServerIds ?? []).length) issues.push({ code: 'facility_origin_servers_required', severity: 'error', field: 'originServerIds', message: 'At least one origin server is required.' });
   if (JSON.stringify(session.draft).length > 1200) issues.push({ code: 'facility_long_config', severity: 'warning', message: 'Gateway configuration is long.' });
   return issues;
+}
+
+function affectedGatewaysForRecord(domain: FacilityRouteDomain): string[] {
+  const origins = new Set(domain.originServerIds ?? []);
+  const affected = new Set(origins);
+  const relays = domain.anyAccess?.enabled ? (domain.anyAccess.relayServerIds ?? []) : [];
+  if (relays.length) {
+    for (const serverId of relays) affected.add(serverId);
+  } else if (domain.anyAccess?.enabled) {
+    for (const serverId of mockProxyPlane.deploymentServers) {
+      if (!origins.has(serverId)) affected.add(serverId);
+    }
+  }
+  return [...affected].filter((serverId) => mockProxyPlane.deploymentServers.includes(serverId));
 }
 
 export function commitFacilitySession(id: string) {
   const session = facilitySessions.get(id);
   if (!session) return null;
-  if (session.draft.domains.some((domain) => domain.domain.includes('commit-fail'))) throw new Error('Gateway commit failed after preview.');
-  mockFacility = {
-    ...mockFacility,
-    version: mockFacility.version + 1,
-    deploymentServers: session.draft.deploymentServers,
-    domains: session.draft.domains,
+  if ((session.draft.domain ?? '').includes('commit-fail')) throw new Error('Gateway commit failed after preview.');
+  const recordId = normalizeRecordId(session.recordId);
+  const existingIndex = mockConfigRecords.findIndex((record) => record.recordId === recordId);
+  const existing = existingIndex >= 0 ? mockConfigRecords[existingIndex] : undefined;
+  const version = (existing?.version ?? 0) + 1;
+  const domain = cloneFacilityDomainValue(session.draft);
+  domain.domain = (domain.domain || recordId).trim().toLowerCase();
+  domain.version = version;
+  const record: ConfigRecord = {
+    recordId,
+    kind: existing?.kind ?? 'facility_domain',
+    version,
+    domain,
     staticAssets: session.assets.map((asset) => ({
       name: asset.name,
       kind: asset.kind,
@@ -919,17 +1119,27 @@ export function commitFacilitySession(id: string) {
       updatedAt: asset.updatedAt,
     })),
     updatedAt: now,
-    routes: session.draft.domains.reduce((sum, domain) => sum + domain.paths.length, 0),
   };
-  return {
+  if (existing?.applicationId) record.applicationId = existing.applicationId;
+  if (existing?.applicationName) record.applicationName = existing.applicationName;
+  if (existingIndex >= 0) mockConfigRecords[existingIndex] = record;
+  else mockConfigRecords.push(record);
+  syncMockFacilityFromRecords();
+  session.state = 'committed';
+  session.committedAt = now;
+  const affected = affectedGatewaysForRecord(domain);
+  const result = {
+    record,
     config: mockFacility,
-    resourceVersion: { value: String(mockFacility.version), updatedAt: now },
+    resourceVersion: { value: String(version), updatedAt: now },
     applyRequested: false,
-    applyNeeded: true,
-    applyServerIds: mockFacility.deploymentServers,
-    stopServerIds: [],
-    diagnostics: [],
+    applyNeeded: affected.length > 0,
+    applyServerIds: affected,
+    stopServerIds: [] as string[],
+    diagnostics: [] as Diagnostic[],
   };
+  session.commitResult = result;
+  return result;
 }
 
 export function data<T>(payload: T, status = 200) {

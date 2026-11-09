@@ -8,6 +8,12 @@ import (
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, auth httpx.Middleware) {
 	mux.Handle("GET /api/v1/facility-apps/reverse-proxy", auth(http.HandlerFunc(h.ReverseProxy)))
+	mux.Handle("GET /api/v1/facility-apps/reverse-proxy/proxy-plane", auth(http.HandlerFunc(h.ProxyPlane)))
+	mux.Handle("PUT /api/v1/facility-apps/reverse-proxy/proxy-plane", auth(http.HandlerFunc(h.SaveProxyPlane)))
+	mux.Handle("GET /api/v1/facility-apps/reverse-proxy/config-records", auth(http.HandlerFunc(h.ConfigRecords)))
+	mux.Handle("GET /api/v1/facility-apps/reverse-proxy/config-records/{recordId}", auth(http.HandlerFunc(h.ConfigRecord)))
+	mux.Handle("DELETE /api/v1/facility-apps/reverse-proxy/config-records/{recordId}", auth(http.HandlerFunc(h.DeleteConfigRecord)))
+	mux.Handle("POST /api/v1/facility-apps/reverse-proxy/config-records/{recordId}/apply", auth(http.HandlerFunc(h.ApplyConfigRecord)))
 	mux.Handle("GET /api/v1/facility-apps/reverse-proxy/diagnostics", auth(http.HandlerFunc(h.ReverseProxyDiagnostics)))
 	mux.Handle("POST /api/v1/facility-apps/reverse-proxy/reconcile", auth(http.HandlerFunc(h.ReconcileReverseProxy)))
 	mux.Handle("POST /api/v1/facility-apps/reverse-proxy/dns-sync", auth(http.HandlerFunc(h.SyncReverseProxyDNS)))

@@ -6,19 +6,23 @@ import {
   applicationRuntimePollDelay,
   applicationStatus,
   applicationPlanningError,
+  cloneFacilityDomain,
   cloneFacilityDomains,
   cloneFacilityPath,
   cloneProxyPath,
   cloneProxyRules,
   diffApplications,
   diffFacility,
+  diffFacilityRecord,
   draftFromApplication,
   facilityDraftFromConfig,
+  facilityRecordDraftFromRecord,
   facilitySaveInputFromDraft,
   instanceOperationStatus,
   makeFacilityDomain,
   makeFacilityPath,
   makeKeyValueRow,
+  makeNewFacilityDomainRecord,
   makePortRow,
   panelFileMountOptions,
   saveInputFromDraft,
@@ -30,9 +34,10 @@ import {
   validateFacilityDraft,
   validateFacilityDomainFields,
   validateFacilityPathFields,
+  validateFacilityRecordDraft,
 } from './model';
 import type { ApplicationDto } from '@/types/applications';
-import type { ReverseProxyConfig } from '@/types/facilityApps';
+import type { ConfigRecord, ReverseProxyConfig } from '@/types/facilityApps';
 
 const app = {
   id: 'app-1',
@@ -550,5 +555,142 @@ describe('facility domain dialog validation', () => {
   it('rejects a domain without origin servers', () => {
     const errors = validateFacilityDomainFields({ ...baseDomain, originServerIds: [] }, [], -1);
     expect(errors.originServers).toBe('applicationsPage.validationDomainOriginServers');
+  });
+});
+
+describe('facility single config record model', () => {
+  const gateways = ['srv-1', 'srv-2'];
+
+  function makeRecord(): ConfigRecord {
+    return {
+      recordId: 'static.example.test',
+      kind: 'facility_domain',
+      version: 7,
+      domain: {
+        domain: 'static.example.test',
+        version: 7,
+        originServerIds: ['srv-1'],
+        anyAccess: { enabled: true, strategy: 'primary_backup', primaryOriginServerId: 'srv-1', relayServerIds: ['srv-2'] },
+        paths: [
+          { path: '/', ruleType: 'static', sourceType: 'uploaded_file', assetName: 'index.html', options: { gzipMode: 'off' } },
+          { path: '/api', ruleType: 'proxy_pass', sourceType: 'uploaded_file', proxyUrl: 'http://127.0.0.1:9000', proxySourceMode: 'preserve_source' },
+        ],
+      },
+      staticAssets: [{ name: 'index.html', kind: 'uploaded_file', contentMode: 'text', filename: 'index.html', size: 10, sha256: 'sha-index', createdAt: '', updatedAt: '' }],
+      updatedAt: '2026-09-15T06:00:00Z',
+    };
+  }
+
+  it('clones one domain without sharing nested paths or AnyAccess arrays', () => {
+    const source = makeRecord().domain;
+    const draft = cloneFacilityDomain(source);
+
+    expect(draft).not.toBe(source);
+    expect(draft.version).toBe(7);
+    expect(draft.anyAccess.relayServerIds).toEqual(['srv-2']);
+    draft.originServerIds.push('srv-2');
+    draft.anyAccess.relayServerIds!.push('srv-1');
+    draft.paths[0].options!.gzipMode = 'on';
+
+    expect(source.originServerIds).toEqual(['srv-1']);
+    expect(source.anyAccess.relayServerIds).toEqual(['srv-2']);
+    expect(source.paths[0].options!.gzipMode).toBe('off');
+  });
+
+  it('seeds the editor draft from one committed record with its independent version', () => {
+    const record = makeRecord();
+    const draft = facilityRecordDraftFromRecord(record);
+
+    expect(draft.domain).toBe('static.example.test');
+    expect(draft.version).toBe(7);
+    expect(draft.paths).toHaveLength(2);
+
+    draft.paths[0].assetName = 'changed.html';
+    expect(record.domain.paths[0].assetName).toBe('index.html');
+  });
+
+  it('falls back to the record id when a legacy record has no domain value', () => {
+    const record = makeRecord();
+    record.recordId = 'fallback.example.test';
+    record.domain.domain = '';
+    expect(facilityRecordDraftFromRecord(record).domain).toBe('fallback.example.test');
+  });
+
+  it('makes a blank new domain record with one default static path', () => {
+    const draft = makeNewFacilityDomainRecord();
+    expect(draft.domain).toBe('');
+    expect(draft.originServerIds).toEqual([]);
+    expect(draft.paths).toHaveLength(1);
+    expect(draft.paths[0].ruleType).toBe('static');
+    expect(draft.paths[0].sourceType).toBe('uploaded_file');
+  });
+
+  it('validates a clean record draft against the current gateways', () => {
+    const draft = facilityRecordDraftFromRecord(makeRecord());
+    expect(validateFacilityRecordDraft(draft, gateways)).toEqual({});
+  });
+
+  it('rejects an empty domain, foreign origins, and an empty path list', () => {
+    const draft = facilityRecordDraftFromRecord(makeRecord());
+    draft.domain = ' ';
+    draft.originServerIds = ['srv-9'];
+    draft.paths = [];
+
+    const errors = validateFacilityRecordDraft(draft, gateways);
+    expect(errors.domain).toBe('applicationsPage.validationDomain');
+    expect(errors.originServers).toBe('applicationsPage.validationOriginServers');
+    expect(errors.paths).toBe('applicationsPage.validationPaths');
+  });
+
+  it('rejects a primary origin outside the record origins', () => {
+    const draft = facilityRecordDraftFromRecord(makeRecord());
+    draft.anyAccess.primaryOriginServerId = 'srv-2';
+    expect(validateFacilityRecordDraft(draft, gateways).primaryOrigin).toBe('applicationsPage.validationPrimaryOrigin');
+  });
+
+  it('rejects relay servers that are not gateways or overlap origins', () => {
+    const outside = facilityRecordDraftFromRecord(makeRecord());
+    outside.anyAccess.relayServerIds = ['srv-9'];
+    expect(validateFacilityRecordDraft(outside, gateways).originServers).toBe('applicationsPage.validationOriginServers');
+
+    const overlap = facilityRecordDraftFromRecord(makeRecord());
+    overlap.anyAccess.relayServerIds = ['srv-1'];
+    expect(validateFacilityRecordDraft(overlap, gateways).originServers).toBe('applicationsPage.validationOriginServers');
+  });
+
+  it('reuses per-path validation for asset, redirect, and proxy targets', () => {
+    const missingAsset = facilityRecordDraftFromRecord(makeRecord());
+    missingAsset.paths = [{ path: '/', ruleType: 'static', sourceType: 'uploaded_file', assetName: '' }];
+    expect(validateFacilityRecordDraft(missingAsset, gateways).asset).toBe('applicationsPage.validationStaticAsset');
+
+    const badRedirect = facilityRecordDraftFromRecord(makeRecord());
+    badRedirect.paths = [{ path: '/go', ruleType: 'redirect', sourceType: '', redirectUrl: 'https://example.com/a b' }];
+    expect(validateFacilityRecordDraft(badRedirect, gateways).redirectUrl).toBe('applicationsPage.validationRedirectUrl');
+
+    const badProxy = facilityRecordDraftFromRecord(makeRecord());
+    badProxy.paths = [{ path: '/p', ruleType: 'proxy_pass', sourceType: '', proxyUrl: '127.0.0.1:9000' }];
+    expect(validateFacilityRecordDraft(badProxy, gateways).proxyUrl).toBe('applicationsPage.validationProxyUrl');
+  });
+
+  it('diffs a single record by path without counting untouched paths', () => {
+    const base = facilityRecordDraftFromRecord(makeRecord());
+    expect(diffFacilityRecord(base, cloneFacilityDomain(base))).toEqual({ added: 0, changed: 0, removed: 0, warnings: 0 });
+
+    const added = cloneFacilityDomain(base);
+    added.paths.push(makeFacilityPath());
+    added.paths[added.paths.length - 1].path = '/new';
+    added.paths[added.paths.length - 1].assetName = 'new.html';
+    expect(diffFacilityRecord(base, added)).toEqual({ added: 1, changed: 0, removed: 0, warnings: 0 });
+
+    const changed = cloneFacilityDomain(base);
+    changed.paths[0].assetName = 'changed.html';
+    expect(diffFacilityRecord(base, changed)).toEqual({ added: 0, changed: 1, removed: 0, warnings: 0 });
+
+    const removed = cloneFacilityDomain(base);
+    removed.paths = removed.paths.filter((path) => path.path !== '/api');
+    expect(diffFacilityRecord(base, removed)).toEqual({ added: 0, changed: 0, removed: 1, warnings: 0 });
+
+    expect(diffFacilityRecord(null, base)).toEqual({ added: 2, changed: 0, removed: 0, warnings: 0 });
+    expect(diffFacilityRecord(base, null)).toEqual({ added: 0, changed: 0, removed: 0, warnings: 0 });
   });
 });

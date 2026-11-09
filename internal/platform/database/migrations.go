@@ -441,6 +441,9 @@ func appMigrationSteps() []orm.Step {
 		{ID: "backfill_application_persistent_locations", Run: func(ctx context.Context, tx *sql.Tx) error {
 			return backfillApplicationPersistentLocationsOn(ctx, tx)
 		}},
+		{ID: "facility_independent_config_records", Run: func(ctx context.Context, tx *sql.Tx) error {
+			return migrateFacilityIndependentConfigRecordsOn(ctx, tx)
+		}},
 	}
 }
 

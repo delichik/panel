@@ -77,9 +77,34 @@ func (s *Service) GetStaticAssetDownload(ctx context.Context, assetRef string) (
 	if err != nil {
 		return FacilityAssetDownload{}, err
 	}
+	var recordID string
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(record_id,'') FROM facility_static_assets WHERE id=?`, asset.ID).Scan(&recordID); err != nil {
+		return FacilityAssetDownload{}, err
+	}
+	if strings.TrimSpace(recordID) != "" {
+		// A committed asset name is only unique inside its own configuration
+		// record. Unscoped lookups would be ambiguous for duplicate names, so
+		// refuse unless the caller names the record explicitly.
+		return FacilityAssetDownload{}, panelerr.Validation("facility_record_id_required", "recordId is required to download a committed configuration asset")
+	}
+	return s.staticAssetDownload(ctx, asset.ID)
+}
+
+// GetStaticAssetDownloadForRecord serves a committed asset scoped to its
+// configuration record (FAC-RP-003: same name in different records must not
+// overwrite or resolve to each other).
+func (s *Service) GetStaticAssetDownloadForRecord(ctx context.Context, recordID, assetRef string) (FacilityAssetDownload, error) {
+	asset, err := s.getStaticAssetByRecordName(ctx, recordID, assetRef)
+	if err != nil {
+		return FacilityAssetDownload{}, err
+	}
+	return s.staticAssetDownload(ctx, asset.ID)
+}
+
+func (s *Service) staticAssetDownload(ctx context.Context, assetID string) (FacilityAssetDownload, error) {
 	var result FacilityAssetDownload
 	var row facilityStaticAssetRow
-	err = orm.New(s.db).From("facility_static_assets").Select("name", "kind", "content_mode", "filename").Where("id=?", asset.ID).First(ctx, &row)
+	err := orm.New(s.db).From("facility_static_assets").Select("name", "kind", "content_mode", "filename").Where("id=?", assetID).First(ctx, &row)
 	if err != nil {
 		return FacilityAssetDownload{}, err
 	}
@@ -87,7 +112,7 @@ func (s *Service) GetStaticAssetDownload(ctx context.Context, assetRef string) (
 	result.Kind = row.Kind
 	result.ContentMode = row.ContentMode
 	result.Filename = row.Filename
-	result.Root = s.staticAssetContentDir(asset.ID)
+	result.Root = s.staticAssetContentDir(assetID)
 	return validateFacilityAssetDownload(result)
 }
 

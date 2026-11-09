@@ -1,4 +1,4 @@
-﻿package facilityapps
+package facilityapps
 
 import (
 	"context"
@@ -43,14 +43,15 @@ type facilityEditRecord struct {
 }
 
 type facilityCommitManifest struct {
-	SessionID       string                  `json:"sessionId"`
-	BaseVersion     int                     `json:"baseVersion"`
-	Config          ReverseProxySaveInput   `json:"config"`
-	PreviousServers []string                `json:"previousServers"`
-	Assets          []facilityManifestAsset `json:"assets"`
-	BackupDir       string                  `json:"backupDir"`
-	FilesMoved      bool                    `json:"filesMoved"`
-	DBCommitted     bool                    `json:"dbCommitted"`
+	SessionID      string                  `json:"sessionId"`
+	RecordID       string                  `json:"recordId"`
+	BaseVersion    int                     `json:"baseVersion"`
+	Domain         FacilityRouteDomain     `json:"domain"`
+	PreviousDomain *FacilityRouteDomain    `json:"previousDomain,omitempty"`
+	Assets         []facilityManifestAsset `json:"assets"`
+	BackupDir      string                  `json:"backupDir"`
+	FilesMoved     bool                    `json:"filesMoved"`
+	DBCommitted    bool                    `json:"dbCommitted"`
 }
 
 type facilityManifestAsset struct {
@@ -72,14 +73,38 @@ type facilityManifestAsset struct {
 func (s *Service) BeginFacilityEditSession(ctx context.Context, in BeginFacilityEditSessionInput) (FacilityEditSession, error) {
 	s.editCommitMu.Lock()
 	defer s.editCommitMu.Unlock()
-	cfg, err := s.loadConfig(ctx)
+	recordID := strings.ToLower(strings.TrimSpace(in.RecordID))
+	if recordID == "" {
+		return FacilityEditSession{}, panelerr.Validation("facility_record_id_required", "recordId is required")
+	}
+	baseVersion := 0
+	var draft FacilityRouteDomain
+	row, err := s.loadRouteRow(ctx, recordID)
 	if err != nil {
-		return FacilityEditSession{}, err
+		if !isPanelNotFound(err) {
+			return FacilityEditSession{}, err
+		}
+		if in.Draft == nil {
+			return FacilityEditSession{}, err
+		}
+		draft = cloneFacilityRouteDomain(*in.Draft)
+	} else {
+		if row.AppID != proxyApplicationID && row.AppID != "facility_reverse_proxy" {
+			return FacilityEditSession{}, panelerr.Validation("facility_record_not_facility_domain", "application route records must be edited from the application editor")
+		}
+		baseVersion = row.Version
+		if in.Draft != nil {
+			draft = cloneFacilityRouteDomain(*in.Draft)
+		} else {
+			loaded, loadErr := s.routeRowToDomain(ctx, row)
+			if loadErr != nil {
+				return FacilityEditSession{}, loadErr
+			}
+			draft = loaded
+		}
 	}
-	draft := ReverseProxySaveInput{DeploymentServers: append([]string(nil), cfg.DeploymentServers...), Domains: cloneFacilityDomains(cfg.Domains)}
-	if in.Draft != nil {
-		draft = cloneFacilityDraft(*in.Draft)
-	}
+	draft.Domain = recordID
+	draft.Version = baseVersion
 	raw, err := json.Marshal(draft)
 	if err != nil {
 		return FacilityEditSession{}, err
@@ -96,7 +121,7 @@ func (s *Service) BeginFacilityEditSession(ctx context.Context, in BeginFacility
 			_ = os.RemoveAll(dir)
 		}
 	}()
-	assets, err := s.listStaticAssets(ctx)
+	assets, err := s.listStaticAssetsForRecord(ctx, recordID)
 	if err != nil {
 		return FacilityEditSession{}, err
 	}
@@ -113,8 +138,8 @@ func (s *Service) BeginFacilityEditSession(ctx context.Context, in BeginFacility
 		return FacilityEditSession{}, err
 	}
 	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `INSERT INTO facility_edit_sessions(id,owner_id,client_draft_key,state,base_resource_version,draft_json,revision,idle_expires_at,absolute_expires_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
-		sessionID, facilityEditOwner, strings.TrimSpace(in.ClientDraftKey), FacilityEditSessionActive, cfg.Version, string(raw), 1, formatTime(now.Add(facilityEditIdleTTL)), formatTime(now.Add(facilityEditAbsoluteTTL)), formatTime(now), formatTime(now))
+	_, err = tx.ExecContext(ctx, `INSERT INTO facility_edit_sessions(id,owner_id,record_id,client_draft_key,state,base_resource_version,draft_json,revision,idle_expires_at,absolute_expires_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+		sessionID, facilityEditOwner, recordID, strings.TrimSpace(in.ClientDraftKey), FacilityEditSessionActive, baseVersion, string(raw), 1, formatTime(now.Add(facilityEditIdleTTL)), formatTime(now.Add(facilityEditAbsoluteTTL)), formatTime(now), formatTime(now))
 	if err != nil {
 		return FacilityEditSession{}, err
 	}
@@ -165,16 +190,19 @@ func (s *Service) PatchFacilityEditSession(ctx context.Context, sessionID string
 		if parseErr != nil {
 			return FacilityEditSession{}, panelerr.Validation("resource_version_invalid", "baseResourceVersion is invalid")
 		}
-		current, loadErr := s.loadConfig(ctx)
+		currentVersion, loadErr := s.facilityRecordVersion(ctx, record.RecordID)
 		if loadErr != nil {
 			return FacilityEditSession{}, loadErr
 		}
-		if current.Version != requestedBase {
-			return FacilityEditSession{}, panelerr.WithDetails(panelerr.Conflict("resource_version_conflict", "facility configuration changed while rebasing"), map[string]any{"expectedVersion": requestedBase, "currentVersion": current.Version})
+		if currentVersion != requestedBase {
+			return FacilityEditSession{}, panelerr.WithDetails(panelerr.Conflict("resource_version_conflict", "facility configuration changed while rebasing"), map[string]any{"expectedVersion": requestedBase, "currentVersion": currentVersion})
 		}
 		baseVersion = requestedBase
 	}
-	raw, err := json.Marshal(cloneFacilityDraft(in.Draft))
+	draft := cloneFacilityRouteDomain(in.Draft)
+	draft.Domain = record.RecordID
+	draft.Version = baseVersion
+	raw, err := json.Marshal(draft)
 	if err != nil {
 		return FacilityEditSession{}, err
 	}
@@ -348,16 +376,17 @@ func (s *Service) DeleteFacilityEditAsset(ctx context.Context, sessionID, assetR
 	} else if lookupErr != nil {
 		return FacilityEditSession{}, lookupErr
 	}
-	for _, domain := range record.Draft.Domains {
-		for _, route := range domain.Paths {
-			assetName := strings.TrimSpace(route.AssetName)
-			if assetName == "" {
-				assetName = strings.TrimSpace(route.AssetID)
-			}
-			for _, asset := range record.Assets {
-				if asset.AssetKey == strings.TrimSpace(assetKey) && (asset.Name == assetName || asset.AssetKey == assetName || asset.SourceAssetID == assetName) {
-					return FacilityEditSession{}, panelerr.WithDetails(panelerr.Conflict("facility_static_asset_in_use", "Static asset is still referenced by a draft route"), map[string]any{"assetKey": assetKey, "assetName": assetName, "domain": domain.Domain, "path": route.Path})
-				}
+	for _, route := range record.Draft.Paths {
+		assetName := strings.TrimSpace(route.AssetName)
+		if assetName == "" {
+			assetName = strings.TrimSpace(route.AssetID)
+		}
+		if assetName == "" {
+			continue
+		}
+		for _, asset := range record.Assets {
+			if asset.AssetKey == strings.TrimSpace(assetKey) && (asset.Name == assetName || asset.AssetKey == assetName || asset.SourceAssetID == assetName) {
+				return FacilityEditSession{}, panelerr.WithDetails(panelerr.Conflict("facility_static_asset_in_use", "Static asset is still referenced by a draft route"), map[string]any{"assetKey": assetKey, "assetName": assetName, "domain": record.Draft.Domain, "path": route.Path})
 			}
 		}
 	}
@@ -456,8 +485,10 @@ func (s *Service) PreviewFacilityEditSession(ctx context.Context, sessionID stri
 			appRoutes = routes
 		}
 	}
-	if normalized, normalizeErr := normalizeInput(record.Draft); normalizeErr == nil {
-		if _, summaryErr := s.routeSummaries(ctx, normalized, appRoutes); summaryErr != nil {
+	if normalized, normalizeErr := s.normalizeEditDomain(ctx, record); normalizeErr == nil {
+		plane, _ := s.loadConfig(ctx)
+		snapshot := ReverseProxyConfig{ID: ReverseProxyID, DeploymentServers: append([]string(nil), plane.DeploymentServers...), Domains: []FacilityRouteDomain{normalized}}
+		if _, summaryErr := s.routeSummaries(ctx, snapshot, appRoutes); summaryErr != nil {
 			diagnostics = append(diagnostics, applications.Diagnostic{Code: "facility_route_summary_stale", Severity: "warning", Message: i18n.Translate("facility_route_summary_stale", "Route summary could not be refreshed"), Details: map[string]any{"error": summaryErr.Error()}})
 		}
 	}
@@ -549,10 +580,7 @@ func (s *Service) CommitFacilityEditSession(ctx context.Context, sessionID, idem
 		s.resetFacilityCommit(ctx, sessionID, leaseOwner, FacilityEditSessionActive, "")
 		return FacilityEditCommitResult{}, err
 	}
-	previous, _ := s.loadConfig(ctx)
-	if assets, assetErr := s.listStaticAssets(ctx); assetErr == nil {
-		previous.StaticAssets = assets
-	}
+	previous, _ := s.facilityRecordDomain(ctx, record.RecordID)
 	if err := s.renewFacilityCommitLease(ctx, sessionID, leaseOwner); err != nil {
 		s.rollbackFacilityManifestFiles(manifest)
 		s.resetFacilityCommit(ctx, sessionID, leaseOwner, FacilityEditSessionActive, "")
@@ -570,34 +598,25 @@ func (s *Service) CommitFacilityEditSession(ctx context.Context, sessionID, idem
 	}
 	manifest.DBCommitted = true
 	_ = writeFacilityManifest(manifestPath, manifest)
-	config, err := s.GetReverseProxy(ctx)
+	committed, err := s.GetConfigRecord(ctx, record.RecordID)
 	if err != nil {
-		config, _ = s.loadConfig(ctx)
+		return FacilityEditCommitResult{}, err
 	}
-	stopIDs := removedServers(previous.DeploymentServers, config.DeploymentServers)
-	applyIDs := facilityGatewaysAffectedByConfigChange(previous, config)
+	plane, _ := s.loadConfig(ctx)
+	applyIDs := facilityRecordApplyServers(previous, committed.Domain, plane.DeploymentServers)
 	result := FacilityEditCommitResult{
-		Config:          config,
-		ResourceVersion: applications.ResourceVersion{Value: strconv.Itoa(config.Version), UpdatedAt: config.UpdatedAt},
+		Record:          committed,
+		ResourceVersion: recordResourceVersion(committed),
 		ApplyRequested:  false,
 		ApplyNeeded:     true,
 		ApplyServerIDs:  applyIDs,
-		StopServerIDs:   stopIDs,
 	}
-	if err := s.syncReverseProxyTraits(ctx, previous.DeploymentServers, config.DeploymentServers); err != nil {
-		result.ApplyNeeded = false
-		result.ApplyServerIDs = nil
-		result.StopServerIDs = nil
-		result.Diagnostics = append(result.Diagnostics, applications.Diagnostic{Code: "facility_apply_request_failed", Severity: "warning", Message: i18n.Translate("facility_apply_request_failed", "Configuration was committed, but applying it could not be requested"), Details: map[string]any{"error": err.Error()}})
+	if config, cfgErr := s.GetReverseProxy(ctx); cfgErr == nil {
+		result.Config = config
 	}
-	previous = s.attachApplicationRoutes(ctx, previous)
-	config = s.attachApplicationRoutes(ctx, config)
-	result.Config = config
-	if affected := dnsSyncDomainsOnSave(previous, config); len(affected) > 0 {
-		if _, err := s.triggerDNSSync(ctx, affected, "facility_app", false); err != nil {
-			result.Diagnostics = append(result.Diagnostics, applications.Diagnostic{Code: "facility_dns_sync_failed", Severity: "warning", Message: i18n.Translate("facility_dns_sync_failed", "Configuration was committed, but requesting the DNS record sync failed"), Details: map[string]any{"error": err.Error()}})
-		} else if refreshed, loadErr := s.GetReverseProxy(ctx); loadErr == nil {
-			result.Config = refreshed
+	if facilityDomainDNSChanged(previous, committed.Domain) {
+		if _, dnsErr := s.triggerDNSSync(ctx, []string{committed.RecordID}, "facility_app", false); dnsErr != nil {
+			result.Diagnostics = append(result.Diagnostics, applications.Diagnostic{Code: "facility_dns_sync_failed", Severity: "warning", Message: i18n.Translate("facility_dns_sync_failed", "Configuration was committed, but requesting the DNS record sync failed"), Details: map[string]any{"error": dnsErr.Error()}})
 		}
 	}
 	if err := s.finishFacilityCommit(ctx, record, leaseOwner, result); err != nil {
@@ -630,10 +649,16 @@ func (s *Service) DiscardFacilityEditSession(ctx context.Context, sessionID stri
 }
 
 func (s *Service) validateFacilityEditDraft(ctx context.Context, record facilityEditRecord) []applications.Diagnostic {
-	if diagnostics := facilityTopologyDiagnostics(record.Draft); len(diagnostics) > 0 {
+	draft := record.Draft
+	draft.Domain = record.RecordID
+	plane, err := s.loadConfig(ctx)
+	if err != nil {
+		return facilityDiagnosticForError(err)
+	}
+	if diagnostics := facilityDomainTopologyDiagnostics(draft, plane.DeploymentServers); len(diagnostics) > 0 {
 		return diagnostics
 	}
-	normalized, err := normalizeInput(record.Draft)
+	normalized, err := normalizeFacilityDomain(draft, plane.DeploymentServers)
 	if err != nil {
 		return facilityDiagnosticForError(err)
 	}
@@ -643,55 +668,52 @@ func (s *Service) validateFacilityEditDraft(ctx context.Context, record facility
 		assets[asset.Name] = asset
 	}
 	assetDiagnostics := []applications.Diagnostic{}
-	for _, domain := range normalized.Domains {
-		for _, route := range domain.Paths {
-			// 只有静态规则才引用静态资产；redirect/proxy_pass 路由（即使
-			// sourceType 被前端默认值带成 uploaded_file）不得参与资产校验。
-			if route.RuleType != StaticRuleStatic || (route.SourceType != StaticSourceUploadedFile && route.SourceType != StaticSourceUploadedBundle) {
-				continue
-			}
-			asset, ok := assets[route.AssetName]
-			if !ok && route.AssetID != "" {
-				asset, ok = assets[route.AssetID]
-			}
-			if !ok {
-				assetDiagnostics = append(assetDiagnostics, applications.Diagnostic{Code: "facility_static_asset_referenced_after_delete", Severity: "error", Field: "domains", Message: i18n.Translate("facility_static_asset_referenced_after_delete", "A route still references a deleted asset"), Details: map[string]any{"domain": domain.Domain, "path": route.Path, "assetName": route.AssetName}})
-				continue
-			}
-			if asset.Kind != route.SourceType {
-				assetDiagnostics = append(assetDiagnostics, applications.Diagnostic{Code: "facility_static_site_asset_kind_invalid", Severity: "error", Field: "domains", Message: i18n.Translate("facility_static_site_asset_kind_invalid", "Static asset kind does not match route source"), Details: map[string]any{"domain": domain.Domain, "path": route.Path, "assetName": route.AssetName}})
-			}
+	for _, route := range normalized.Paths {
+		// 只有静态规则才引用静态资产；redirect/proxy_pass 路由（即使
+		// sourceType 被前端默认值带成 uploaded_file）不得参与资产校验。
+		if route.RuleType != StaticRuleStatic || (route.SourceType != StaticSourceUploadedFile && route.SourceType != StaticSourceUploadedBundle) {
+			continue
+		}
+		asset, ok := assets[route.AssetName]
+		if !ok && route.AssetID != "" {
+			asset, ok = assets[route.AssetID]
+		}
+		if !ok {
+			assetDiagnostics = append(assetDiagnostics, applications.Diagnostic{Code: "facility_static_asset_referenced_after_delete", Severity: "error", Field: "domains", Message: i18n.Translate("facility_static_asset_referenced_after_delete", "A route still references a deleted asset"), Details: map[string]any{"domain": normalized.Domain, "path": route.Path, "assetName": route.AssetName}})
+			continue
+		}
+		if asset.Kind != route.SourceType {
+			assetDiagnostics = append(assetDiagnostics, applications.Diagnostic{Code: "facility_static_site_asset_kind_invalid", Severity: "error", Field: "domains", Message: i18n.Translate("facility_static_site_asset_kind_invalid", "Static asset kind does not match route source"), Details: map[string]any{"domain": normalized.Domain, "path": route.Path, "assetName": route.AssetName}})
 		}
 	}
 	if len(assetDiagnostics) > 0 {
 		return assetDiagnostics
 	}
-	if err := s.validateRouteConflicts(ctx, normalized); err != nil {
+	snapshot := ReverseProxyConfig{ID: ReverseProxyID, DeploymentServers: append([]string(nil), plane.DeploymentServers...), Domains: []FacilityRouteDomain{normalized}}
+	if err := s.validateRouteConflicts(ctx, snapshot); err != nil {
 		return facilityDiagnosticForError(err)
 	}
 	return []applications.Diagnostic{}
 }
 
-func facilityTopologyDiagnostics(draft ReverseProxySaveInput) []applications.Diagnostic {
-	gateways := map[string]struct{}{}
-	for _, serverID := range draft.DeploymentServers {
+func facilityDomainTopologyDiagnostics(domain FacilityRouteDomain, gateways []string) []applications.Diagnostic {
+	gatewaySet := map[string]struct{}{}
+	for _, serverID := range gateways {
 		serverID = strings.TrimSpace(serverID)
 		if serverID != "" {
-			gateways[serverID] = struct{}{}
+			gatewaySet[serverID] = struct{}{}
 		}
 	}
 	diagnostics := []applications.Diagnostic{}
-	for _, domain := range draft.Domains {
-		for _, serverID := range domain.OriginServerIDs {
-			if _, ok := gateways[strings.TrimSpace(serverID)]; !ok {
-				diagnostics = append(diagnostics, applications.Diagnostic{Code: "facility_gateway_removal_invalidates_origin", Severity: "error", Field: "domains", Message: i18n.Translate("facility_gateway_removal_invalidates_origin", "Removing a gateway would remove a configured domain origin"), Details: map[string]any{"domain": domain.Domain, "serverId": serverID}})
-			}
+	for _, serverID := range domain.OriginServerIDs {
+		if _, ok := gatewaySet[strings.TrimSpace(serverID)]; !ok {
+			diagnostics = append(diagnostics, applications.Diagnostic{Code: "facility_gateway_removal_invalidates_origin", Severity: "error", Field: "domains", Message: i18n.Translate("facility_gateway_removal_invalidates_origin", "Removing a gateway would remove a configured domain origin"), Details: map[string]any{"domain": domain.Domain, "serverId": serverID}})
 		}
-		primary := strings.TrimSpace(domain.AnyAccess.PrimaryOriginServerID)
-		if domain.AnyAccess.Enabled && primary != "" {
-			if _, ok := gateways[primary]; !ok {
-				diagnostics = append(diagnostics, applications.Diagnostic{Code: "facility_gateway_removal_invalidates_anyaccess_primary", Severity: "error", Field: "domains", Message: i18n.Translate("facility_gateway_removal_invalidates_anyaccess_primary", "Removing a gateway would remove the AnyAccess primary origin"), Details: map[string]any{"domain": domain.Domain, "serverId": primary}})
-			}
+	}
+	primary := strings.TrimSpace(domain.AnyAccess.PrimaryOriginServerID)
+	if domain.AnyAccess.Enabled && primary != "" {
+		if _, ok := gatewaySet[primary]; !ok {
+			diagnostics = append(diagnostics, applications.Diagnostic{Code: "facility_gateway_removal_invalidates_anyaccess_primary", Severity: "error", Field: "domains", Message: i18n.Translate("facility_gateway_removal_invalidates_anyaccess_primary", "Removing a gateway would remove the AnyAccess primary origin"), Details: map[string]any{"domain": domain.Domain, "serverId": primary}})
 		}
 	}
 	return diagnostics
@@ -715,11 +737,11 @@ func facilityDiagnosticsBlock(items []applications.Diagnostic) bool {
 }
 
 func (s *Service) loadFacilityEditSession(ctx context.Context, sessionID string) (facilityEditRecord, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,owner_id,client_draft_key,state,base_resource_version,draft_json,revision,preview_token,preview_revision,COALESCE(preview_expires_at,''),commit_lease_owner,COALESCE(commit_lease_expires_at,''),commit_idempotency_key,commit_result_json,manifest_path,idle_expires_at,absolute_expires_at,created_at,updated_at,COALESCE(committed_at,'') FROM facility_edit_sessions WHERE id=? AND owner_id=?`, strings.TrimSpace(sessionID), facilityEditOwner)
+	row := s.db.QueryRowContext(ctx, `SELECT id,owner_id,record_id,client_draft_key,state,base_resource_version,draft_json,revision,preview_token,preview_revision,COALESCE(preview_expires_at,''),commit_lease_owner,COALESCE(commit_lease_expires_at,''),commit_idempotency_key,commit_result_json,manifest_path,idle_expires_at,absolute_expires_at,created_at,updated_at,COALESCE(committed_at,'') FROM facility_edit_sessions WHERE id=? AND owner_id=?`, strings.TrimSpace(sessionID), facilityEditOwner)
 	var record facilityEditRecord
 	var draftRaw, preview, previewExpires, leaseExpires, resultRaw, idle, absolute, created, updated, committed string
 	var baseVersion int
-	if err := row.Scan(&record.ID, &record.OwnerID, &record.ClientDraftKey, &record.State, &baseVersion, &draftRaw, &record.Revision, &preview, &record.PreviewRevision, &previewExpires, &record.CommitLeaseOwner, &leaseExpires, &record.CommitKey, &resultRaw, &record.ManifestPath, &idle, &absolute, &created, &updated, &committed); err != nil {
+	if err := row.Scan(&record.ID, &record.OwnerID, &record.RecordID, &record.ClientDraftKey, &record.State, &baseVersion, &draftRaw, &record.Revision, &preview, &record.PreviewRevision, &previewExpires, &record.CommitLeaseOwner, &leaseExpires, &record.CommitKey, &resultRaw, &record.ManifestPath, &idle, &absolute, &created, &updated, &committed); err != nil {
 		if err == sql.ErrNoRows {
 			return facilityEditRecord{}, panelerr.NotFound("facility_edit_session")
 		}
@@ -756,19 +778,20 @@ func (s *Service) loadFacilityEditSession(ctx context.Context, sessionID string)
 		return facilityEditRecord{}, err
 	}
 	record.Assets = assets
-	for domainIndex := range record.Draft.Domains {
-		for pathIndex := range record.Draft.Domains[domainIndex].Paths {
-			path := &record.Draft.Domains[domainIndex].Paths[pathIndex]
-			if strings.TrimSpace(path.AssetName) == "" && strings.TrimSpace(path.AssetID) != "" {
-				for _, asset := range assets {
-					if asset.AssetKey == path.AssetID || asset.SourceAssetID == path.AssetID {
-						path.AssetName = asset.Name
-						break
-					}
+	if record.Draft.Domain == "" {
+		record.Draft.Domain = record.RecordID
+	}
+	for pathIndex := range record.Draft.Paths {
+		path := &record.Draft.Paths[pathIndex]
+		if strings.TrimSpace(path.AssetName) == "" && strings.TrimSpace(path.AssetID) != "" {
+			for _, asset := range assets {
+				if asset.AssetKey == path.AssetID || asset.SourceAssetID == path.AssetID {
+					path.AssetName = asset.Name
+					break
 				}
 			}
-			path.AssetID = ""
 		}
+		path.AssetID = ""
 	}
 	return record, nil
 }
@@ -835,10 +858,14 @@ func (s *Service) prepareFacilityCommitManifest(record facilityEditRecord) (faci
 		}
 		assets = append(assets, item)
 	}
-	draft := cloneFacilityDraft(record.Draft)
+	draft := cloneFacilityRouteDomain(record.Draft)
+	draft.Domain = record.RecordID
 	baseVersion, _ := strconv.Atoi(record.BaseResourceVersion.Value)
-	current, _ := s.loadConfig(context.Background())
-	return facilityCommitManifest{SessionID: record.ID, BaseVersion: baseVersion, Config: draft, PreviousServers: append([]string(nil), current.DeploymentServers...), Assets: assets, BackupDir: filepath.Join(s.facilityEditPath(record.ID), "backup")}, nil
+	var previous *FacilityRouteDomain
+	if loaded, err := s.facilityRecordDomain(context.Background(), record.RecordID); err == nil {
+		previous = loaded
+	}
+	return facilityCommitManifest{SessionID: record.ID, RecordID: record.RecordID, BaseVersion: baseVersion, Domain: draft, PreviousDomain: previous, Assets: assets, BackupDir: filepath.Join(s.facilityEditPath(record.ID), "backup")}, nil
 }
 
 func (s *Service) verifyFacilityManifestAssets(manifest facilityCommitManifest) error {
@@ -871,7 +898,7 @@ func (s *Service) moveFacilityManifestFiles(manifest *facilityCommitManifest) er
 	for _, asset := range manifest.Assets {
 		finalIDs[asset.FinalID] = asset
 	}
-	existing, err := s.listStaticAssets(context.Background())
+	existing, err := s.listStaticAssetsForRecord(context.Background(), manifest.RecordID)
 	if err != nil {
 		return err
 	}
@@ -923,7 +950,25 @@ func (s *Service) rollbackFacilityManifestFiles(manifest facilityCommitManifest)
 }
 
 func (s *Service) commitFacilityManifestDB(ctx context.Context, manifest facilityCommitManifest) error {
-	normalized, err := normalizeInput(manifest.Config)
+	plane, err := s.loadConfig(ctx)
+	if err != nil {
+		return err
+	}
+	domain := manifest.Domain
+	domain.Domain = manifest.RecordID
+	normalized, err := normalizeFacilityDomain(domain, plane.DeploymentServers)
+	if err != nil {
+		return err
+	}
+	originsRaw, err := json.Marshal(normalized.OriginServerIDs)
+	if err != nil {
+		return err
+	}
+	anyRaw, err := json.Marshal(normalized.AnyAccess)
+	if err != nil {
+		return err
+	}
+	pathsRaw, err := json.Marshal(normalized.Paths)
 	if err != nil {
 		return err
 	}
@@ -932,32 +977,41 @@ func (s *Service) commitFacilityManifestDB(ctx context.Context, manifest facilit
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM facility_static_assets`); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM facility_static_assets WHERE record_id=?`, manifest.RecordID); err != nil {
 		return err
 	}
 	for _, asset := range manifest.Assets {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO facility_static_assets(id,name,kind,content_mode,filename,size,sha256,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`, asset.FinalID, asset.Name, asset.Kind, asset.ContentMode, asset.Filename, asset.Size, asset.SHA256, asset.CreatedAt, asset.UpdatedAt); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO facility_static_assets(id,record_id,name,kind,content_mode,filename,size,sha256,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, asset.FinalID, manifest.RecordID, asset.Name, asset.Kind, asset.ContentMode, asset.Filename, asset.Size, asset.SHA256, asset.CreatedAt, asset.UpdatedAt); err != nil {
 			return err
 		}
 	}
-	serversRaw, _ := json.Marshal(normalized.DeploymentServers)
 	now := formatTime(time.Now().UTC())
+	var currentVersion int
+	rowErr := tx.QueryRowContext(ctx, `SELECT version FROM reverse_proxy_routes WHERE domain=?`, manifest.RecordID).Scan(&currentVersion)
+	if rowErr != nil && rowErr != sql.ErrNoRows {
+		return rowErr
+	}
 	var result sql.Result
-	if manifest.BaseVersion == 0 {
-		result, err = tx.ExecContext(ctx, `INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,last_error,updated_at) VALUES(?,1,?,?,?) ON CONFLICT(id) DO NOTHING`, ReverseProxyID, string(serversRaw), "", now)
+	if rowErr == sql.ErrNoRows {
+		if manifest.BaseVersion != 0 {
+			return panelerr.WithDetails(panelerr.Conflict("resource_version_conflict", "facility configuration changed while editing"), map[string]any{"expectedVersion": manifest.BaseVersion, "currentVersion": 0})
+		}
+		result, err = tx.ExecContext(ctx, `INSERT INTO reverse_proxy_routes(domain,app_id,version,origin_server_ids,any_access_json,target_port,paths_json,created_at,updated_at) VALUES(?,?,1,?,?,0,?,?,?)`, manifest.RecordID, proxyApplicationID, string(originsRaw), string(anyRaw), string(pathsRaw), now, now)
+	} else if currentVersion != manifest.BaseVersion {
+		return panelerr.WithDetails(panelerr.Conflict("resource_version_conflict", "facility configuration changed while editing"), map[string]any{"expectedVersion": manifest.BaseVersion, "currentVersion": currentVersion})
 	} else {
-		result, err = tx.ExecContext(ctx, `UPDATE facility_app_configs SET version=version+1,deployment_server_ids_json=?,last_error='',updated_at=? WHERE id=? AND version=?`, string(serversRaw), now, ReverseProxyID, manifest.BaseVersion)
+		result, err = tx.ExecContext(ctx, `UPDATE reverse_proxy_routes SET version=version+1,origin_server_ids=?,any_access_json=?,paths_json=?,updated_at=? WHERE domain=? AND version=? AND app_id IN (?,?)`, string(originsRaw), string(anyRaw), string(pathsRaw), now, manifest.RecordID, manifest.BaseVersion, proxyApplicationID, "facility_reverse_proxy")
 	}
 	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			return panelerr.WithDetails(panelerr.Conflict("resource_version_conflict", "facility configuration changed while editing"), map[string]any{"expectedVersion": manifest.BaseVersion, "recordId": manifest.RecordID})
+		}
 		return err
 	}
 	if affected, _ := result.RowsAffected(); affected != 1 {
-		var currentVersion int
-		_ = tx.QueryRowContext(ctx, `SELECT version FROM facility_app_configs WHERE id=?`, ReverseProxyID).Scan(&currentVersion)
-		return panelerr.WithDetails(panelerr.Conflict("resource_version_conflict", "facility configuration changed while editing"), map[string]any{"expectedVersion": manifest.BaseVersion, "currentVersion": currentVersion})
-	}
-	if err := replaceFacilityRouteDomains(ctx, tx, normalized.Domains); err != nil {
-		return err
+		var latest int
+		_ = tx.QueryRowContext(ctx, `SELECT version FROM reverse_proxy_routes WHERE domain=?`, manifest.RecordID).Scan(&latest)
+		return panelerr.WithDetails(panelerr.Conflict("resource_version_conflict", "facility configuration changed while editing"), map[string]any{"expectedVersion": manifest.BaseVersion, "currentVersion": latest})
 	}
 	return tx.Commit()
 }
@@ -1039,8 +1093,8 @@ func (s *Service) recoverFacilityEditRecord(ctx context.Context, record facility
 		manifest.DBCommitted = s.facilityManifestDBCommitted(ctx, manifest)
 	}
 	if !manifest.DBCommitted {
-		current, _ := s.loadConfig(ctx)
-		if current.Version != manifest.BaseVersion {
+		currentVersion, versionErr := s.facilityRecordVersion(ctx, manifest.RecordID)
+		if versionErr != nil || currentVersion != manifest.BaseVersion {
 			s.resetFacilityCommit(ctx, record.ID, record.CommitLeaseOwner, FacilityEditSessionConflict, `{"code":"commit_outcome_ambiguous"}`)
 			return
 		}
@@ -1048,25 +1102,25 @@ func (s *Service) recoverFacilityEditRecord(ctx context.Context, record facility
 		s.resetFacilityCommit(ctx, record.ID, record.CommitLeaseOwner, FacilityEditSessionActive, "")
 		return
 	}
-	config, _ := s.GetReverseProxy(ctx)
-	stopIDs := removedServers(manifest.PreviousServers, config.DeploymentServers)
-	// Recovery has no frontend follow-up, so request apply here with the
-	// current gateway set (force=false skips SpecHash-equal nodes).
+	committed, err := s.GetConfigRecord(ctx, manifest.RecordID)
+	if err != nil {
+		s.resetFacilityCommit(ctx, record.ID, record.CommitLeaseOwner, FacilityEditSessionConflict, `{"code":"commit_outcome_ambiguous"}`)
+		return
+	}
+	plane, _ := s.loadConfig(ctx)
+	applyIDs := facilityRecordApplyServers(manifest.PreviousDomain, committed.Domain, plane.DeploymentServers)
 	result := FacilityEditCommitResult{
-		Config:          config,
-		ResourceVersion: applications.ResourceVersion{Value: strconv.Itoa(config.Version), UpdatedAt: config.UpdatedAt},
+		Record:          committed,
+		ResourceVersion: recordResourceVersion(committed),
 		ApplyRequested:  true,
 		ApplyNeeded:     false,
-		ApplyServerIDs:  append([]string{}, config.DeploymentServers...),
-		StopServerIDs:   stopIDs,
+		ApplyServerIDs:  applyIDs,
 		Diagnostics:     []applications.Diagnostic{{Code: "facility_commit_recovered", Severity: "info", Message: i18n.Translate("facility_commit_recovered", "Committed facility configuration was recovered after restart")}},
 	}
-	if err := s.syncReverseProxyTraits(ctx, manifest.PreviousServers, config.DeploymentServers); err != nil {
-		result.ApplyRequested = false
-		result.ApplyServerIDs = nil
-		result.StopServerIDs = nil
-		result.Diagnostics = append(result.Diagnostics, applications.Diagnostic{Code: "facility_apply_request_failed", Severity: "warning", Message: i18n.Translate("facility_apply_request_failed", "Configuration was recovered, but applying it could not be requested"), Details: map[string]any{"error": err.Error()}})
-	} else if err := s.triggerReverseProxyReconcile(ctx, "facility_recovery", stopIDs, result.ApplyServerIDs); err != nil {
+	if config, cfgErr := s.GetReverseProxy(ctx); cfgErr == nil {
+		result.Config = config
+	}
+	if err := s.triggerConfigReload(ctx, manifest.RecordID, applyIDs); err != nil {
 		result.ApplyRequested = false
 		result.Diagnostics = append(result.Diagnostics, applications.Diagnostic{Code: "facility_apply_request_failed", Severity: "warning", Message: i18n.Translate("facility_apply_request_failed", "Configuration was recovered, but applying it could not be requested"), Details: map[string]any{"error": err.Error()}})
 	}
@@ -1080,20 +1134,27 @@ func (s *Service) recoverFacilityEditRecord(ctx context.Context, record facility
 }
 
 func (s *Service) facilityManifestDBCommitted(ctx context.Context, manifest facilityCommitManifest) bool {
-	cfg, err := s.loadConfig(ctx)
-	if err != nil || cfg.Version != manifest.BaseVersion+1 {
+	row, err := s.loadRouteRow(ctx, manifest.RecordID)
+	if err != nil || row.Version != manifest.BaseVersion+1 {
 		return false
 	}
-	normalized, err := normalizeInput(manifest.Config)
+	plane, err := s.loadConfig(ctx)
 	if err != nil {
 		return false
 	}
-	want, _ := json.Marshal(ReverseProxySaveInput{DeploymentServers: normalized.DeploymentServers, Domains: normalized.Domains})
-	got, _ := json.Marshal(ReverseProxySaveInput{DeploymentServers: cfg.DeploymentServers, Domains: cfg.Domains})
-	if string(want) != string(got) {
+	loaded, err := s.routeRowToDomain(ctx, row)
+	if err != nil {
 		return false
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,sha256 FROM facility_static_assets`)
+	got, err := normalizeFacilityDomain(loaded, plane.DeploymentServers)
+	if err != nil {
+		return false
+	}
+	want, err := normalizeFacilityDomain(manifest.Domain, plane.DeploymentServers)
+	if err != nil || !facilityDomainsEqual(want, got) {
+		return false
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id,sha256 FROM facility_static_assets WHERE record_id=?`, manifest.RecordID)
 	if err != nil {
 		return false
 	}
@@ -1209,8 +1270,70 @@ func (s *Service) facilityEditPath(sessionID string) string {
 	return filepath.Join(s.editSessionDir, filepath.Base(strings.TrimSpace(sessionID)))
 }
 
-func cloneFacilityDraft(in ReverseProxySaveInput) ReverseProxySaveInput {
-	return ReverseProxySaveInput{DeploymentServers: append([]string(nil), in.DeploymentServers...), Domains: cloneFacilityDomains(in.Domains)}
+func cloneFacilityRouteDomain(in FacilityRouteDomain) FacilityRouteDomain {
+	raw, _ := json.Marshal(in)
+	var out FacilityRouteDomain
+	_ = json.Unmarshal(raw, &out)
+	return out
+}
+
+func (s *Service) facilityRecordVersion(ctx context.Context, recordID string) (int, error) {
+	row, err := s.loadRouteRow(ctx, recordID)
+	if err != nil {
+		if isPanelNotFound(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return row.Version, nil
+}
+
+func (s *Service) facilityRecordDomain(ctx context.Context, recordID string) (*FacilityRouteDomain, error) {
+	row, err := s.loadRouteRow(ctx, recordID)
+	if err != nil {
+		if isPanelNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	domain, err := s.routeRowToDomain(ctx, row)
+	if err != nil {
+		return nil, err
+	}
+	return &domain, nil
+}
+
+func (s *Service) normalizeEditDomain(ctx context.Context, record facilityEditRecord) (FacilityRouteDomain, error) {
+	draft := record.Draft
+	draft.Domain = record.RecordID
+	plane, err := s.loadConfig(ctx)
+	if err != nil {
+		return FacilityRouteDomain{}, err
+	}
+	return normalizeFacilityDomain(draft, plane.DeploymentServers)
+}
+
+func facilityRecordApplyServers(previous *FacilityRouteDomain, next FacilityRouteDomain, gateways []string) []string {
+	ids := anyAccessRouteServerIDs(next.AnyAccess, next.OriginServerIDs, gateways)
+	if previous != nil {
+		ids = append(ids, anyAccessRouteServerIDs(previous.AnyAccess, previous.OriginServerIDs, gateways)...)
+	}
+	return uniqueSorted(ids)
+}
+
+func facilityDomainDNSChanged(previous *FacilityRouteDomain, next FacilityRouteDomain) bool {
+	if previous == nil {
+		return strings.TrimSpace(next.Domain) != ""
+	}
+	return domainDNSSignature(*previous) != domainDNSSignature(next)
+}
+
+func facilityDomainsEqual(left, right FacilityRouteDomain) bool {
+	left.Version = 0
+	right.Version = 0
+	a, _ := json.Marshal(left)
+	b, _ := json.Marshal(right)
+	return string(a) == string(b)
 }
 
 func cloneFacilityDomains(in []FacilityRouteDomain) []FacilityRouteDomain {

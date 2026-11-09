@@ -396,99 +396,106 @@
 
 ## 7. 入口网关设施应用
 
-### FAC-RP-001 设施边界与隐藏应用
+入口网关分为两个逻辑平面（UI 显式分开）：
+
+- **代理平面**：网关成员与 nginx 容器是否存在/运行；隐藏应用 `facility-reverse-proxy` 只表达容器身份。
+- **配置平面**：每条设施域名记录、每条应用反代记录均为独立配置——独立 `version`、独立 CAS、私有文件；一次只编辑/提交一条。
+
+### FAC-RP-001 设施边界与双平面
 
 - **前置**：访问设施目录、详情和配置页。
 - **动作**：加载 `reverse-proxy`。
-- **结果**：目录/详情/配置使用专属 adapter/API；配置存在 `facility_app_configs` 和 `reverse_proxy_routes`，隐藏 identity `facility-reverse-proxy` 只投影 Instance/Job。
-- **失败**：不得通过普通 application editor 或通用设施 list API 编辑隐藏应用。
-- **不变量**：设施 generation/spec_hash 只由设施模块按 facilityConfigHash 写；应用 snapshot refresh 不得改写。
-- **验证**：hidden filtering、generation churn regression tests。
+- **结果**：目录/详情使用专属 adapter/API。代理平面状态存于 `facility_app_configs`（网关列表等，**不再**作为业务配置单一 version 源），读写入口为 `GET/PUT /api/v1/facility-apps/reverse-proxy/proxy-plane`。配置记录存于 `reverse_proxy_routes`（每域名/应用路由一行，自带 `version`）与按记录隔离的资产元数据/目录；列表与单条读写为 `GET /api/v1/facility-apps/reverse-proxy/config-records`、`GET/DELETE /api/v1/facility-apps/reverse-proxy/config-records/{recordId}`，配置平面生效为 `POST /api/v1/facility-apps/reverse-proxy/config-records/{recordId}/apply`，已提交资产按记录下载为 `GET /api/v1/facility-apps/reverse-proxy/static-assets/{assetName}/content?recordId={recordId}`。隐藏 identity `facility-reverse-proxy` 只投影容器 Instance/Job。
+- **失败**：不得通过普通 application editor 编辑隐藏应用。
+- **不变量**：代理平面 `ProxyIdentityHash` 不含路由/资产内容；配置平面变更不得 bump 无关记录的 `version`；应用反代记录 version 随应用保存单调递增，不得因整表替换归零或回退。
+- **验证**：hidden filtering、per-record version isolation tests。
 
-### FAC-RP-002 编辑会话创建与期限
+### FAC-RP-002 单条配置编辑会话
 
-- **前置**：稳定管理员主体在入口网关编辑页完成本地编辑后点击保存。
-- **动作**：保存流水线 POST facility edit-session；请求体省略 `draft`（由服务端已提交 config 播种）。
-- **结果**：会话草稿等于当前已提交 config（含 redirectUrl 等路由字段）；返回 draft/assets/revision/baseResourceVersion；idle TTL 24h、absolute TTL 7d 仅作保存中断兜底，mutation/validate/preview 延长 idle。
-- **失败**：GET 只检查状态不得延长 TTL；过期 session mutation 不得复活；保存失败须 discard 并保留本地草稿。
-- **不变量**：会话不是跨设备用户草稿；面板进入编辑不得创建会话、不得发送客户端草稿；既有资产只引用 source_asset_id 和 metadata，不复制正文。
-- **验证**：TTL/mutation deadline/source fallback tests；无 draft begin 后 domains 与 GetReverseProxy 一致。
+- **前置**：稳定管理员主体在**单条**配置记录编辑页完成本地编辑后点击保存。
+- **动作**：保存流水线 POST facility edit-session，绑定唯一 `recordId`（设施域名为 domain）；请求体省略业务 draft 时由服务端已提交该记录播种。
+- **结果**：会话草稿等于该条已提交记录；返回 draft/assets/revision/baseResourceVersion（base 为**该记录** version）；idle TTL 24h、absolute TTL 7d；mutation/validate/preview 延长 idle。
+- **失败**：过期 session mutation 不得复活；保存失败须 discard 并保留本地草稿。
+- **不变量**：一次会话不得编辑多条记录；进入编辑不得创建会话；资产只引用本记录私有源。
+- **验证**：per-record begin/TTL tests；begin 后 draft 与 GetRecord 一致。
 
-### FAC-RP-003 设施资产身份与模式
+### FAC-RP-003 记录私有资产
 
-- **前置**：保存流水线已创建会话；本地 pending 含 text/binary uploaded_file 或 binary uploaded_bundle。
-- **动作**：flush 时按设施内唯一 assetName PUT/替换/下载/删除。
-- **结果**：text 为≤1 MiB 的合法 UTF-8（允许空）；bundle 只能 binary；kind/contentMode 对同名资产不可变；未替换资产下载回退正式 source；仅改资产再 commit 不得回滚未改动的 redirect/proxy 等路由字段。
-- **失败**：转换 kind/mode、重复 name、损坏上传或删除仍被 static route 引用的资产在 mutation 前拒绝。
-- **不变量**：失败不改变 blob/metadata/route/revision；物理 asset ID/key 不属于公开契约；编辑期资产操作只写本地 pending。
-- **验证**：asset mode/identity/reference/download tests；asset-only commit 保留 redirectUrl。
+- **前置**：单条记录编辑会话已创建；本地 pending 含 text/binary uploaded_file 或 binary uploaded_bundle。
+- **动作**：flush 时按**该记录内**唯一 assetName PUT/替换/下载/删除。
+- **结果**：正文存放在内容寻址的内部目录 `{dataRoot}/facility-apps/static-assets/{assetId}/content/`（asset id 只是存储键，不属于公开契约），元数据行以 `record_id` 绑定该配置记录，同一记录内 `name` 唯一；跨记录允许同名但互不覆盖。alpha 迁移把共享旧资产按引用域名拆成记录级行，并在启动时从内容哈希/文件名一致的 donor 补齐缺失的私有目录。text ≤1 MiB UTF-8；bundle 只能 binary；kind/contentMode 对同名不可变；仅改资产再 commit 不得回滚未改路由字段。
+- **失败**：跨记录引用、重复 name、仍被本记录 static path 引用的删除在 mutation 前拒绝；`recordId` 归属的已提交资产不带 `recordId` 下载返回校验错误，未归属记录（迁移前无引用）的 legacy 资产仍可按名兼容读取。
+- **不变量**：不同记录的同名资产互不覆盖；无全设施共享资产表作为写路径。
+- **验证**：per-record asset isolation/reference/backfill tests、带 recordId 的已提交资产下载测试。
 
-### FAC-RP-004 草稿 rebase 与提交互斥
+### FAC-RP-004 单条 CAS 与提交互斥
 
-- **前置**：两个会话基于同一 config version 或会话已 conflict。
-- **动作**：并发 commit，或 PATCH 当前 baseResourceVersion 做 rebase。
-- **结果**：单资源提交锁阻止 rename/DB commit 交错；CAS 仅一方成功；rebase 保留 session assets、更新 base、清冲突后可再次 preview/commit。
-- **失败**：删除仍被引用资产、删除仍被 domain/AnyAccess 使用的 gateway、旧 base commit 均阻断。
-- **不变量**：commit、recovery、cleanup 共用同一资源锁；长文件阶段续 lease。
-- **验证**：concurrent commit/rebase/workspace ownership tests。
+- **前置**：两个会话基于同一**记录** version，或会话已 conflict。
+- **动作**：并发 commit 同一 recordId，或 PATCH rebase。
+- **结果**：该记录 CAS 仅一方成功；另一方 `resource_version_conflict`；其他记录 version 不变。
+- **失败**：origin 不在当前代理平面网关集合、删除仍被引用资产均阻断。
+- **不变量**：commit/recovery 锁按 recordId 分隔，不得阻塞无关记录提交。
+- **验证**：concurrent per-record commit tests。
 
-### FAC-RP-005 manifest 两阶段恢复
+### FAC-RP-005 单条 manifest 恢复
 
-- **前置**：commit manifest 已记录目标/backup/blob/base version，进程可能在目录移动或 DB 事务前后崩溃。
+- **前置**：某记录 commit manifest 已记录，进程可能在文件移动或 DB 前后崩溃。
 - **动作**：启动或 lease 过期恢复。
-- **结果**：DB 未提交则回滚目录并恢复 session；DB 已提交或 config version=base+1 且配置及全部 asset ID/hash 精确匹配则完成收尾并标 committed。
-- **失败**：commit 前重算新 blob 与 source asset content hash，缺失/漂移阻断；不满足精确条件不得猜测成功。
-- **不变量**：恢复不得重复写配置；恢复路径仍由服务端请求协调（无前端 follow-up），applyRequest 失败仍为 committed warning，不能谎报已请求协调。
-- **验证**：pre/post DB crash、corrupt blob/source、apply failure recovery tests。
+- **结果**：DB 未提交则回滚该记录文件并恢复 session；DB 已提交或该记录 version=base+1 且资产 hash 匹配则标 committed。
+- **失败**：不满足精确条件不得猜测成功；不得改写其他记录。
+- **不变量**：恢复路径可直接请求该记录的 config-plane apply；apply 失败仍为 committed warning。
+- **验证**：per-record crash recovery tests。
 
 ### FAC-RP-006 域名源站与 AnyAccess
 
-- **前置**：配置全局 gateways、domains、originServerIds 与 AnyAccess。
+- **前置**：代理平面已配置 gateways；编辑单条域名记录的 originServerIds 与 AnyAccess。
 - **动作**：validate/commit/render。
-- **结果**：每域名至少一 origin 且属于全局 gateways；AnyAccess 关闭仅源站开放，开启时 relay 按全部非源站或指定子集转发；负载策略为轮询/主备/IP hash，固定 `max_fails=3 fail_timeout=30s`。
-- **失败**：新请求空 origin 不得解释为全部；上游模式域名不得与普通应用/Panel 入口共享。
-- **不变量**：兼容读取旧空 deploymentServers 时按旧全局集合展开并取 Path 节点并集，避免迁移缩小覆盖面。
-- **验证**：normalize origins/relay/render/global ownership tests。
+- **结果**：每记录至少一 origin 且属于当前 gateways；AnyAccess 关闭仅源站开放，开启时 relay 按全部非源站或指定子集转发；负载策略为轮询/主备/IP hash，固定 `max_fails=3 fail_timeout=30s`。代理平面移除网关前校验所有配置记录（设施域名与应用反代）的 origin/AnyAccess primary/relay，仍在引用则拒绝并返回 `facility_proxy_plane_gateway_in_use`（空网关集合表示整体停用，放行且不改记录）。
+- **失败**：新请求空 origin 不得解释为全部；上游模式域名不得与普通应用/Panel 入口共享；不得通过代理平面 API 悄悄改写配置记录或 bump 其 version。
+- **不变量**：记录级校验不依赖其他域名草稿；移除网关后不得留下指向非网关服务器的 origin/relay。
+- **验证**：normalize origins/relay/render tests、proxy plane gateway-removal rejection tests。
 
 ### FAC-RP-007 Path 规则类型
 
-- **前置**：domain 下配置 static/redirect/proxy_pass。
+- **前置**：单条记录下配置 static/redirect/proxy_pass。
 - **动作**：validate、保存、重开与渲染。
-- **结果**：static 只接受 uploaded_file/uploaded_bundle；redirect 仅 301/302/307/308 与安全目标；proxy_pass 必须 `http(s)://` 且保持原值和 preserve_source/hide_source。
-- **失败**：host_path 返回 `facility_static_site_source_invalid`；非静态规则不因前端默认 sourceType 被资产引用校验误伤。
+- **结果**：static 只接受本记录私有 uploaded_file/uploaded_bundle；redirect 仅 301/302/307/308 与安全目标；proxy_pass 必须 `http(s)://` 且保持原值和 preserve_source/hide_source。
+- **失败**：host_path 返回 `facility_static_site_source_invalid`。
 - **不变量**：非 static normalize 清空 sourceType；proxy_pass 不得被纠正成 static。
 - **验证**：service/model route-type tests。
 
 ### FAC-RP-008 TLS、静态内容和 Nginx 文件布局
 
 - **前置**：域名可能匹配域名证书、自签用户域证书或无证书。
-- **动作**：构建每节点 Nginx runtime spec。
-- **结果**：固定镜像 `nginx:1.28-alpine`；主配置目录只读挂载 `/etc/panel-nginx`，证书独立 `/etc/panel-certs`；域名证书优先，其次匹配自签，无匹配仅生成 80；UI HTTPS 摘要与渲染共用匹配逻辑。AnyAccess 中继回源 HTTPS 时保持 `proxy_ssl_verify on`，`proxy_ssl_trusted_certificate` 使用 Panel 分发的公共 CA 包（`/etc/panel-certs/_ca_bundle/ca-certificates.crt`），不得把站点 `certificate.pem`（leaf/链）当作信任锚；自签证书中继改用该证书独立的 `trusted.pem`（链内 CA 或自签叶）。公共 CA 包只下发到实际承担中继的节点。
-- **失败**：不得覆盖镜像 `/etc/nginx` 或单文件 bind 主配置；静态内容由 managed files 只读分发，用户看不到内部 mount target。
-- **不变量**：主配置显式 `nginx -c /etc/panel-nginx/nginx.conf` 并保留镜像 mime.types；文件父目录 0755、上传文件 0644；中继 TLS 校验不得关闭。
-- **验证**：proxy spec mounts/TLS summary/static serving tests；`TestRenderAnyAccessRelayTLSUsesPublicCABundleNotLeaf`。
+- **动作**：构建每节点 Nginx runtime spec（拼装所有相关配置记录）。
+- **结果**：固定镜像 `nginx:1.28-alpine`；主配置目录只读挂载 `/etc/panel-nginx`，证书独立 `/etc/panel-certs`；域名证书优先，其次匹配自签，无匹配仅生成 80。AnyAccess 中继回源 HTTPS 时 `proxy_ssl_verify on`，信任锚使用 Panel 分发的公共 CA 包；自签中继用独立 `trusted.pem`。静态内容来自各记录私有 managed files。
+- **失败**：不得覆盖镜像 `/etc/nginx` 或单文件 bind 主配置。
+- **不变量**：主配置显式 `nginx -c /etc/panel-nginx/nginx.conf`；父目录 0755、上传文件 0644；中继 TLS 校验不得关闭。
+- **验证**：proxy spec mounts/TLS/static serving tests；`TestRenderAnyAccessRelayTLSUsesPublicCABundleNotLeaf`。
 
-### FAC-RP-009 reload 与 recreate 判定
+### FAC-RP-009 代理平面 recreate 与配置平面 reload
 
-- **前置**：已运行入口网关，新旧 runtime spec 有差异。
-- **动作**：设施 provider 计算 update plan 并协调。
-- **结果**：仅纯路由/upstream/header/现有挂载证书变化且结构完全一致时允许 validate+reload；镜像、命令、env、网络、端口、mount、权限、资源或 restart 差异必须 recreate。
-- **失败**：validate 失败回滚 managed files 并保留旧 worker；reload 或状态确认失败在同服务器串行边界回退 recreate。
-- **不变量**：默认/未知策略为 recreate；reload 成功用 applied-state 动态 generation/hash 防静态 label 误报漂移。
-- **验证**：reload plan/fallback/applied-state tests。
+- **前置**：网关上已有或尚无 nginx 容器；代理身份或配置内容发生变化。
+- **动作**：规划并执行。
+- **结果**：
+  - **配置平面**：记录内容变化 → 仅对受影响网关 `WriteManagedFiles` + `nginx -t` + `nginx -s reload`（`RuntimeReload`）。成功路径**不得** stop/remove/create 容器。
+  - **代理平面**：网关加入、镜像/命令/端口/mount 布局变化、或节点尚无容器 → `RuntimeReconcile` create/recreate；网关移除 → stop/purge。
+- **失败**：配置 validate 失败回滚该节点文件并保留原 worker，**不**自动 recreate；代理平面失败保留诊断。
+- **不变量**：`ProxyIdentityHash` 与 `ConfigContentHash` 分离；满足判定禁止把无关记录 version 打进其他节点 hash。
+- **验证**：reload-not-recreate、identity-change-recreate、per-record hash isolation tests。
 
-### FAC-RP-010 配置提交后的协调
+### FAC-RP-010 单条配置提交后的协调
 
-- **前置**：设施配置已 commit，或应用路由变更触发入口代理局部协调。
-- **动作**：edit-session commit **只持久化配置**并返回 `applyNeeded`/`applyServerIds`/`stopServerIds`（`applyRequested` 恒为 false）；前端再调 `POST /facility-apps/reverse-proxy/reconcile`（`apply=true` + 上述 serverIds）请求规划。崩溃恢复路径仍由服务端直接请求协调（无前端 follow-up）。应用路由变更触发入口代理局部协调时同样可带 `serverIds`。
-- **结果**：设施模块只提供 per-server nginx spec 和策略；Planner 写隐藏应用 Instance/Job，Controller RuntimeReconcile；响应继续暴露 reconcileStopped/lastError。设施域名/静态资产/网关集合变更默认只规划受影响网关；每节点 desired SpecHash 为该节点 nginx 内容哈希，未变节点在 `force=false` 下跳过。人工全量协调（`user`）可 force 全部网关。
-- **失败**：traits 同步失败时配置仍 committed，`applyNeeded=false` 并返回 `facility_apply_request_failed` warning；follow-up reconcile 失败不得否定 commit 成功。恢复路径协调失败同为 committed warning。
-- **不变量**：不得同步执行远端 Docker、创建旧 lifecycle target 或 `application_target_*` task；同一次协调只加载一次 `ApplicationReverseProxyConfigs` 并按网关复用。
-- **验证**：facility commit applyNeeded without planning、recovery apply failure、hidden AppDB Job、scoped serverIds / per-server hash tests。
+- **前置**：单条配置记录已 commit，或应用反代记录变更。
+- **动作**：commit 只持久化该记录并返回 `applyNeeded`；随后请求 **config-plane apply**（受该记录 origins∪relays 覆盖的网关；空 relay AnyAccess 时为全部非源站网关）。崩溃恢复可服务端直接 apply。
+- **结果**：未变 `ConfigContentHash` 的网关跳过；变了的网关只发 reload Job。代理平面 ensure 仅在缺容器时由代理 API/网关变更触发，不因普通配置保存 recreate。
+- **失败**：apply 错误须为稳定 `panelerr` 或 committed warning；**不得**用裸 500 否定 commit 成功。
+- **不变量**：不得同步执行远端 Docker；同一次 apply 只加载一次应用路由目录并按网关复用。
+- **验证**：single-record commit applyNeeded、reload job、unaffected record version unchanged tests。
 
 ### FAC-RP-011 DNS 联动
 
-- **前置**：设施保存新增、修改、保留或删除域名，或应用反向代理路由变更/删除，DNS zone 与服务器地址可能不完整。
+- **前置**：单条设施域名记录保存新增、修改或删除，或应用反向代理路由变更/删除，DNS zone 与服务器地址可能不完整。
 - **动作**：触发 `dns_proxy_records_sync`；手动重试/接管走 `POST /api/v1/facility-apps/reverse-proxy/dns-sync`。
 - **结果**：全部当前设施域名与应用反向代理域名及需清理旧域名进入 pending；任务读取并合并数据库中所有 pending（接管请求除外）；只在期望 A/AAAA 与实际不同时增删改；每域名持久化 pending/synced/failed/skipped。
 - **失败**：服务器列表读取失败或 `servers` 依赖未装配使任务失败且域名保留 pending，不得按“无服务器”误删；无 IPv4/IPv6 的域名 skipped 并带提示；接管缺少确认返回校验错误。
@@ -498,7 +505,7 @@
 ### FAC-RP-012 设施逐节点部署诊断
 
 - **前置**：多个网关节点分别成功、重试、失败、系统核实中或无 Job。
-- **动作**：GET 设施配置。
+- **动作**：GET 设施代理平面详情。
 - **结果**：`deployments` 分别返回节点身份、容器 observed 状态/时间、优先活跃否则最新 Job 的 operationId、状态、阶段、attempt、nextRunAt 和错误码/类/摘要/详情。另一节点较晚成功不能掩盖失败；容器与部署结果独立显示，移除节点后未完成的清理失败须保留。
 - **失败**：无 Job 显示无结果；配置/同步 lastError 独立说明来源；DNS 提供商同步与容器内名称解析错误保持区分。
 - **不变量**：常规读取只查询本地投影，不远端读日志，不新增表或 schema；无 Job 节点不能因列表顺序遮住其他节点进行中的操作。
@@ -515,9 +522,9 @@
 
 ### FAC-RP-014 入口代理上游的 tailnet 地址规则
 
-- **前置**：网关节点与源站节点都启用 Tailscale 且都已上报有效 tailnet 地址，其中至少一端要求「节点互联优先使用 Tailscale」；域名已保存且源站来自网关集合。
+- **前置**：网关节点与源站节点都启用 Tailscale 且都已上报有效 tailnet 地址，其中至少一端要求「节点互联优先使用 Tailscale」；域名记录已保存且源站来自网关集合。
 - **动作**：渲染每节点 Nginx runtime spec 时计算 upstream 地址。
-- **结果**：条件全部满足时上游使用源站的 tailnet 地址；任一条件不满足时保持规范地址。该地址属于实例期望 spec 的一部分，地址变化因此按 `FAC-RP-009` 判定 reload 或 recreate。
+- **结果**：条件全部满足时上游使用源站的 tailnet 地址；任一条件不满足时保持规范地址。该地址属于配置内容期望的一部分，地址变化按 `FAC-RP-009` 走配置平面 reload（非代理 recreate，除非同时改变容器身份）。
 - **失败**：只有一端满足条件时不得改写上游；不得把 tailnet 地址用于 DNS 记录或任何对外发布地址（DNS 联动仍按 `FAC-RP-011` 使用规范地址）。
 - **不变量**：地址解析是纯计算，不写设施配置、不改变路由归属；关闭开关后渲染结果必须与引入 Tailscale 之前完全一致。
 - **验证**：`TestReverseProxyUpstreamUsesTailnetAddressOnlyWhenBothQualify`；`FAC-RP-008`、`FAC-RP-009` 非回归用例；地址与偏好变化后的重同步见 `TS-ADDR-009`。

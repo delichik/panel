@@ -11,6 +11,7 @@ import (
 
 	agentcontract "panel/internal/agent/contract"
 	appruntime "panel/internal/modules/applications/runtime"
+	server "panel/internal/modules/servers"
 	controlplane "panel/internal/orchestrator"
 	"panel/internal/platform/logging"
 
@@ -105,6 +106,9 @@ func (r *serviceRuntimeReconciler) Reconcile(ctx context.Context, req controlpla
 	// Share the per-server Docker write queue with ordinary container/image/volume
 	// mutations so facility/app reconcile cannot race UI-driven Docker ops.
 	response, callErr := r.withServerQueue(runCtx, req.ServerID, func(queuedCtx context.Context) (controlplane.ReconcileResponse, error) {
+		if reloadResp, ok, reloadErr := r.tryFacilityConfigReload(queuedCtx, endpoint, req, spec); ok {
+			return reloadResp, reloadErr
+		}
 		return r.callTracked(queuedCtx, endpoint, req, client, agentcontract.RuntimeReconcileRequest{
 			OperationID: req.OperationID, RunID: req.RunID,
 			JobID: req.JobID, ExecutionID: req.ExecutionID, ApplicationID: req.ApplicationID, InstanceID: req.InstanceID,
@@ -147,6 +151,56 @@ type firewallPendingConfirmer interface {
 	UFWConfirmPending(ctx context.Context, baseURL string) error
 }
 
+type agentRuntimeReloadClient interface {
+	RuntimeReload(ctx context.Context, baseURL string, req agentcontract.RuntimeReloadRequest) (agentcontract.RuntimeReloadResponse, error)
+}
+
+// tryFacilityConfigReload applies facility reverse-proxy config via RuntimeReload
+// (write files + nginx -t + reload) without recreating the container. Returns
+// ok=false to fall through to RuntimeReconcile for proxy-plane / first install.
+func (r *serviceRuntimeReconciler) tryFacilityConfigReload(ctx context.Context, endpoint string, req controlplane.ReconcileRequestRPC, spec appruntime.Spec) (controlplane.ReconcileResponse, bool, error) {
+	if r == nil || r.service == nil || r.service.facilityRuntime == nil {
+		return controlplane.ReconcileResponse{}, false, nil
+	}
+	if req.ApplicationID != "facility-reverse-proxy" {
+		return controlplane.ReconcileResponse{}, false, nil
+	}
+	if req.Action != controlplane.ActionApply {
+		return controlplane.ReconcileResponse{}, false, nil
+	}
+	plan := r.service.facilityRuntime.PlanRuntimeUpdate(ctx, Application{ID: req.ApplicationID}, server.Server{ID: req.ServerID}, appruntime.Spec{}, spec)
+	if plan.Mode != appruntime.UpdateModeReload || plan.Strategy == nil {
+		return controlplane.ReconcileResponse{}, false, nil
+	}
+	reloadClient, ok := r.service.runtimeClient.(agentRuntimeReloadClient)
+	if !ok {
+		return controlplane.ReconcileResponse{}, false, nil
+	}
+	result, err := reloadClient.RuntimeReload(ctx, endpoint, agentcontract.RuntimeReloadRequest{
+		Spec:            spec,
+		ContainerName:   firstNonEmpty(spec.ContainerName, req.PreviousContainerName),
+		ValidateCommand: plan.Strategy.ValidateCommand,
+		ReloadCommand:   plan.Strategy.ReloadCommand,
+	})
+	if err != nil {
+		resp, _ := failureResponse("facility_config_reload_failed", "runtime", true, nil, err)
+		return resp, true, nil
+	}
+	if result.Phase == "unsupported" {
+		// No running worker / archive / legacy workspace → proxy-plane reconcile.
+		return controlplane.ReconcileResponse{}, false, nil
+	}
+	if strings.TrimSpace(result.Error) != "" || !result.Reloaded {
+		// Do not recreate on validate/reload failure; surface error and keep worker.
+		msg := firstNonEmpty(result.Error, result.Output, "facility config reload failed")
+		return controlplane.ReconcileResponse{
+			ErrorCode: "facility_config_reload_failed", ErrorClass: "runtime",
+			ErrorMessage: msg, Retryable: true,
+		}, true, nil
+	}
+	return controlplane.ReconcileResponse{ObservedState: "running"}, true, nil
+}
+
 // withServerQueue serializes Docker-mutating reconcile work through the shared
 // per-server queue when one is injected. Tests and degraded wiring without a
 // queue keep the direct path.
@@ -155,7 +209,7 @@ func (r *serviceRuntimeReconciler) withServerQueue(ctx context.Context, serverID
 		return run(ctx)
 	}
 	var (
-		resp controlplane.ReconcileResponse
+		resp   controlplane.ReconcileResponse
 		runErr error
 	)
 	if err := r.service.operationQueue.Execute(ctx, serverID, func(runCtx context.Context) error {

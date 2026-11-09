@@ -1,6 +1,6 @@
 import YAML from 'yaml';
 import type { ApplicationDto, ApplicationFile, ApplicationRuntime, ApplicationSaveInput, ApplicationSummaryDto, Diagnostic, HttpRouteOptions, PanelFileDefinition, ReverseProxyPath, ReverseProxyRule } from '@/types/applications';
-import type { FacilityRouteDomain, FacilityRoutePath, ReverseProxyConfig, ReverseProxySaveInput, StaticRuleType, StaticSourceType } from '@/types/facilityApps';
+import type { ConfigRecord, FacilityRouteDomain, FacilityRoutePath, ReverseProxyConfig, ReverseProxySaveInput, StaticRuleType, StaticSourceType } from '@/types/facilityApps';
 
 export type AppMode = 'apps' | 'create' | 'edit' | 'facilityCatalog' | 'facilityDetail' | 'facilityConfig';
 export type SaveStage = 'idle' | 'validate' | 'preview' | 'commit';
@@ -498,12 +498,100 @@ export function normalizeFacilityPath(path: FacilityRoutePath): FacilityRoutePat
 }
 
 export function cloneFacilityDomains(domains: FacilityRouteDomain[]) {
-  return domains.map((domain) => ({
-    domain: domain.domain,
+  return domains.map((domain) => cloneFacilityDomain(domain));
+}
+
+/** Deep-clones one domain (including the owning record version) for a single-record editor. */
+export function cloneFacilityDomain(domain: FacilityRouteDomain): FacilityRouteDomain {
+  const cloned: FacilityRouteDomain = {
+    domain: domain.domain ?? '',
     originServerIds: [...(domain.originServerIds ?? [])],
-    anyAccess: { enabled: Boolean(domain.anyAccess?.enabled), strategy: domain.anyAccess?.strategy || 'round_robin', primaryOriginServerId: domain.anyAccess?.primaryOriginServerId || '', relayServerIds: [...(domain.anyAccess?.relayServerIds ?? [])] },
+    anyAccess: {
+      enabled: Boolean(domain.anyAccess?.enabled),
+      strategy: domain.anyAccess?.strategy || 'round_robin',
+      primaryOriginServerId: domain.anyAccess?.primaryOriginServerId || '',
+      relayServerIds: [...(domain.anyAccess?.relayServerIds ?? [])],
+    },
     paths: (domain.paths ?? []).map((path) => normalizeFacilityPath(path)),
-  }));
+  };
+  if (typeof domain.version === 'number') cloned.version = domain.version;
+  return cloned;
+}
+
+/** Seeds the single-record editor draft from one committed config record. */
+export function facilityRecordDraftFromRecord(record: ConfigRecord): FacilityRouteDomain {
+  const draft = cloneFacilityDomain(record.domain);
+  if (!draft.domain) draft.domain = record.recordId;
+  draft.version = record.domain?.version ?? record.version;
+  return draft;
+}
+
+/** Blank draft for a brand-new facility domain record: empty domain + one default static path. */
+export function makeNewFacilityDomainRecord(): FacilityRouteDomain {
+  return makeFacilityDomain();
+}
+
+/**
+ * Validates one config-record draft against the current proxy-plane gateways.
+ * Keys: domain / originServers / primaryOrigin / paths / asset / redirectUrl / proxyUrl.
+ */
+export function validateFacilityRecordDraft(draft: FacilityRouteDomain, gateways: string[]): FieldErrors {
+  const errors: FieldErrors = {};
+  const value = (draft.domain ?? '').trim().toLowerCase();
+  if (!value || /[\s;]/.test(value)) {
+    errors.domain = 'applicationsPage.validationDomain';
+  }
+  const origins = draft.originServerIds ?? [];
+  const gatewaySet = new Set(gateways ?? []);
+  if (!origins.length || origins.some((serverId) => !gatewaySet.has(serverId))) {
+    errors.originServers = 'applicationsPage.validationOriginServers';
+  }
+  if (draft.anyAccess?.enabled) {
+    const primary = (draft.anyAccess.primaryOriginServerId ?? '').trim();
+    if (primary && !origins.includes(primary)) {
+      errors.primaryOrigin = 'applicationsPage.validationPrimaryOrigin';
+    }
+    const relays = draft.anyAccess.relayServerIds ?? [];
+    if (relays.some((serverId) => !gatewaySet.has(serverId) || origins.includes(serverId))) {
+      errors.originServers = 'applicationsPage.validationOriginServers';
+    }
+  }
+  const paths = draft.paths ?? [];
+  if (!paths.length) {
+    errors.paths = 'applicationsPage.validationPaths';
+  }
+  for (const path of paths) {
+    Object.assign(errors, validateFacilityPathFields(path));
+  }
+  return errors;
+}
+
+/** Path-granularity summary for the single-record editor (matched by path.path). */
+export function diffFacilityRecord(base?: FacilityRouteDomain | null, draft?: FacilityRouteDomain | null): PreviewDiff {
+  if (!draft) return { added: 0, changed: 0, removed: 0, warnings: 0 };
+  const nextPaths = new Map<string, string>();
+  for (const path of draft.paths ?? []) {
+    const normalized = normalizeFacilityPath(path);
+    nextPaths.set(normalized.path, JSON.stringify(normalized));
+  }
+  if (!base) return { added: nextPaths.size, changed: 0, removed: 0, warnings: 0 };
+  const basePaths = new Map<string, string>();
+  for (const path of base.paths ?? []) {
+    const normalized = normalizeFacilityPath(path);
+    basePaths.set(normalized.path, JSON.stringify(normalized));
+  }
+  let added = 0;
+  let changed = 0;
+  let removed = 0;
+  for (const [pathValue, next] of nextPaths) {
+    const previous = basePaths.get(pathValue);
+    if (previous === undefined) added += 1;
+    else if (previous !== next) changed += 1;
+  }
+  for (const pathValue of basePaths.keys()) {
+    if (!nextPaths.has(pathValue)) removed += 1;
+  }
+  return { added, changed, removed, warnings: 0 };
 }
 
 export function cloneFacilityPath(path: FacilityRoutePath) {

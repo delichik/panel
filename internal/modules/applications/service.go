@@ -149,9 +149,6 @@ type ContainerOperationQueue interface {
 
 type FacilityRuntimeProvider interface {
 	RuntimeSpecForServer(ctx context.Context, app Application, srv server.Server) (appruntime.Spec, bool, error)
-}
-
-type FacilityRuntimeUpdatePlanner interface {
 	PlanRuntimeUpdate(ctx context.Context, app Application, srv server.Server, current, desired appruntime.Spec) appruntime.UpdatePlan
 }
 
@@ -2157,6 +2154,17 @@ func (s *Service) loadReverseProxyRoutesByApp(ctx context.Context) (map[string][
 }
 
 func replaceApplicationReverseProxyRoutes(ctx context.Context, exec orm.Executor, appID string, rules []ReverseProxyRule) error {
+	// Application reverse-proxy rows are independent configuration records
+	// (each domain owns its version). A whole-application save must keep the
+	// record version monotonic instead of resetting it to the zero value.
+	var existing []models.ReverseProxyRoute
+	if err := orm.New(exec).From("reverse_proxy_routes").Select("domain", "version").Where("app_id=?", appID).All(ctx, &existing); err != nil {
+		return err
+	}
+	versions := make(map[string]int, len(existing))
+	for _, row := range existing {
+		versions[strings.ToLower(strings.TrimSpace(row.Domain))] = row.Version
+	}
 	if err := orm.New(exec).From("reverse_proxy_routes").Where("app_id=?", appID).Delete(ctx); err != nil {
 		return err
 	}
@@ -2166,6 +2174,7 @@ func replaceApplicationReverseProxyRoutes(ctx context.Context, exec orm.Executor
 	items := make([]*models.ReverseProxyRoute, 0, len(rules))
 	for _, rule := range rules {
 		route := reverseProxyRuleToModel(appID, rule)
+		route.Version = versions[route.Domain] + 1
 		items = append(items, &route)
 	}
 	return orm.New(exec).From("reverse_proxy_routes").InsertBatch(ctx, items)

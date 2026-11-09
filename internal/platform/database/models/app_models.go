@@ -449,6 +449,7 @@ func (*FacilityAppConfig) TableName() string { return "facility_app_configs" }
 
 // ReverseProxyRoute 对应 reverse_proxy_routes。domain 全局唯一，app_id 为所属
 // 应用 id；设施代理自身的路由使用 facility-reverse-proxy 作为 app_id。
+// Version 是该配置记录的独立乐观锁，与 facility_app_configs.version（代理平面）无关。
 type ReverseProxyRoute struct {
 	Domain          string           `orm:"primary_key;not_null"`
 	AppID           string           `orm:"not_null;column:app_id"`
@@ -458,6 +459,9 @@ type ReverseProxyRoute struct {
 	PathsJSON       []map[string]any `orm:"json;not_null;default:'[]';column:paths_json"`
 	CreatedAt       time.Time        `orm:"not_null"`
 	UpdatedAt       time.Time        `orm:"not_null"`
+	// Version 必须保持在结构体末尾：该列由 AutoMigrate 追加到 preAppMigration
+	// 创建的 legacy 表末尾，字段顺序需与升级后的列顺序一致（见 models 测试）。
+	Version int `orm:"not_null;default:1"`
 }
 
 func (*ReverseProxyRoute) TableName() string { return "reverse_proxy_routes" }
@@ -471,10 +475,12 @@ func (*ReverseProxyRoute) ExtraIndexDDL() map[string][]string {
 	}
 }
 
-// FacilityStaticAsset 对应 facility_static_assets。
+// FacilityStaticAsset 对应 facility_static_assets。RecordID 为所属配置记录
+// （设施域名为 domain）；资产在记录内按 name 唯一，跨记录互不覆盖。
 type FacilityStaticAsset struct {
 	ID          string    `orm:"primary_key"`
-	Name        string    `orm:"not_null;unique"`
+	RecordID    string    `orm:"not_null;default:'';column:record_id"`
+	Name        string    `orm:"not_null"`
 	Kind        string    `orm:"not_null"`
 	ContentMode string    `orm:"not_null;default:'binary'"`
 	Filename    string    `orm:"not_null;default:''"`
@@ -494,10 +500,20 @@ func (*FacilityStaticAsset) TableConstraints() []string {
 	}
 }
 
-// FacilityEditSession 对应 facility_edit_sessions。
+// ExtraIndexDDL 返回设施资产按配置记录隔离的唯一名约束。
+func (*FacilityStaticAsset) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"facility_static_assets": {
+			"CREATE UNIQUE INDEX IF NOT EXISTS idx_facility_static_assets_record_name ON facility_static_assets(record_id, name)",
+		},
+	}
+}
+
+// FacilityEditSession 对应 facility_edit_sessions。RecordID 绑定单条配置记录。
 type FacilityEditSession struct {
 	ID                   string         `orm:"primary_key"`
 	OwnerID              string         `orm:"not_null"`
+	RecordID             string         `orm:"not_null;default:'';column:record_id"`
 	ClientDraftKey       string         `orm:"not_null;default:''"`
 	State                string         `orm:"not_null"`
 	BaseResourceVersion  int            `orm:"not_null;default:0"`

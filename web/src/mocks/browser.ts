@@ -48,6 +48,7 @@ import {
   appOperation,
   appRuntime,
   appSession,
+  applyMockConfigRecord,
   beginAppSession,
   beginFacilitySession,
   commitAppSession,
@@ -56,6 +57,7 @@ import {
   deleteApp,
   deleteAppFile,
   deleteFacilityAsset,
+  deleteMockConfigRecord,
   deleteStoragePartition,
   deployedAppFileContent,
   facilityAssetContent,
@@ -63,23 +65,27 @@ import {
   facilitySession,
   facilityStaticAssetContent,
   getAppFile,
+  getMockConfigRecord,
+  listMockConfigRecords,
   mockApplicationSummaries,
   mockApplications,
   listAppFiles,
   mockFacility,
+  mockProxyPlane,
   mockStorageShare,
   patchAppSession,
   patchFacilitySession,
   putAppFile,
   putFacilityAsset,
   restorePersistentData,
+  saveMockProxyPlane,
   saveStorageShare,
   uninstallStorageShare,
   uploadAppArchive,
   uploadAppFile,
 } from './applications';
 import type { ApplicationEditSession } from '@/types/applications';
-import type { FacilityEditSession } from '@/types/facilityApps';
+import type { FacilityRouteDomain, ProxyPlaneSaveInput } from '@/types/facilityApps';
 import type { KeyAssetDto, SystemCertificateDto } from '@/types/keyAssets';
 import type { UfwAllowInput } from '@/types/security';
 import {
@@ -730,6 +736,32 @@ export function installMockApi() {
     }
 
     if (url.pathname === '/api/v1/facility-apps/reverse-proxy' && method(init) === 'GET') return json(mockFacility);
+    if (url.pathname === '/api/v1/facility-apps/reverse-proxy/proxy-plane' && method(init) === 'GET') return json(mockProxyPlane);
+    if (url.pathname === '/api/v1/facility-apps/reverse-proxy/proxy-plane' && method(init) === 'PUT') {
+      const input = await body<ProxyPlaneSaveInput>(init);
+      if (!Array.isArray(input.deploymentServers)) return error('facility_proxy_plane_invalid', 'deploymentServers must be an array of server IDs.', 422);
+      return json(saveMockProxyPlane({ deploymentServers: input.deploymentServers }));
+    }
+    if (url.pathname === '/api/v1/facility-apps/reverse-proxy/config-records' && method(init) === 'GET') return json(listMockConfigRecords());
+    const configRecordMatch = url.pathname.match(/^\/api\/v1\/facility-apps\/reverse-proxy\/config-records\/([^/]+)$/);
+    if (configRecordMatch && method(init) === 'GET') {
+      const record = getMockConfigRecord(decodeURIComponent(configRecordMatch[1]));
+      return record ? json(record) : error('facility_config_record_not_found', 'Config record was not found.', 404);
+    }
+    if (configRecordMatch && method(init) === 'DELETE') {
+      const version = Number(url.searchParams.get('version') ?? '');
+      const result = deleteMockConfigRecord(decodeURIComponent(configRecordMatch[1]), version);
+      if (result === 'deleted') return new Response(null, { status: 204 });
+      if (result === 'conflict') return error('facility_config_record_conflict', 'Config record changed; reload before deleting.', 409);
+      if (result === 'unsupported') return error('facility_config_record_application', 'Application reverse-proxy records cannot be deleted here.', 422);
+      return error('facility_config_record_not_found', 'Config record was not found.', 404);
+    }
+    const configRecordApplyMatch = url.pathname.match(/^\/api\/v1\/facility-apps\/reverse-proxy\/config-records\/([^/]+)\/apply$/);
+    if (configRecordApplyMatch && method(init) === 'POST') {
+      const recordId = decodeURIComponent(configRecordApplyMatch[1]);
+      if (!applyMockConfigRecord(recordId)) return error('facility_config_record_not_found', 'Config record was not found.', 404);
+      return json({ record: getMockConfigRecord(recordId), applyNeeded: true }, 202);
+    }
     if (url.pathname === '/api/v1/facility-apps/reverse-proxy/diagnostics' && method(init) === 'GET') {
       const serverId = url.searchParams.get('serverId') ?? '';
       if (!serverId || [...url.searchParams.keys()].length !== 1) return json({ error: { code: 'server_required', message: 'Server is required' } }, 422);
@@ -767,7 +799,12 @@ export function installMockApi() {
       if (!deleteStoragePartition(decodeURIComponent(storagePartitionDeleteMatch[1]))) return error('storage_share_partition', 'Storage share partition is not found.', 404);
       return new Response(null, { status: 204 });
     }
-    if (url.pathname === '/api/v1/facility-apps/reverse-proxy/edit-sessions' && method(init) === 'POST') return json(beginFacilitySession(), 201);
+    if (url.pathname === '/api/v1/facility-apps/reverse-proxy/edit-sessions' && method(init) === 'POST') {
+      const input = await body<{ recordId?: string; draft?: FacilityRouteDomain }>(init);
+      if (!input.recordId) return error('facility_record_id_required', 'Editing a reverse-proxy config requires recordId.', 422);
+      const session = beginFacilitySession(input.recordId, input.draft);
+      return session ? json(session, 201) : error('facility_config_record_not_found', 'Config record was not found; a new record requires a draft.', 404);
+    }
     const facilitySessionMatch = url.pathname.match(/^\/api\/v1\/facility-apps\/reverse-proxy\/edit-sessions\/([^/]+)$/);
     if (facilitySessionMatch && method(init) === 'GET') {
       const session = facilitySession(decodeURIComponent(facilitySessionMatch[1]));
@@ -776,7 +813,7 @@ export function installMockApi() {
     if (facilitySessionMatch && method(init) === 'DELETE') return json(null);
     const facilityDraftMatch = url.pathname.match(/^\/api\/v1\/facility-apps\/reverse-proxy\/edit-sessions\/([^/]+)\/draft$/);
     if (facilityDraftMatch && method(init) === 'PATCH') {
-      const input = await body<{ draft: FacilityEditSession['draft'] }>(init);
+      const input = await body<{ draft: FacilityRouteDomain }>(init);
       const session = patchFacilitySession(decodeURIComponent(facilityDraftMatch[1]), input.draft);
       return session ? json(session) : error('facility_edit_session_not_found', 'Facility edit session was not found.', 404);
     }
@@ -805,7 +842,9 @@ export function installMockApi() {
     }
     const facilityStaticAssetContentMatch = url.pathname.match(/^\/api\/v1\/facility-apps\/reverse-proxy\/static-assets\/([^/]+)\/content$/);
     if (facilityStaticAssetContentMatch && method(init) === 'GET') {
-      const asset = facilityStaticAssetContent(decodeURIComponent(facilityStaticAssetContentMatch[1]));
+      const recordId = url.searchParams.get('recordId') ?? '';
+      if (!recordId) return error('facility_record_id_required', 'Downloading a committed static asset requires recordId.', 400);
+      const asset = facilityStaticAssetContent(recordId, decodeURIComponent(facilityStaticAssetContentMatch[1]));
       return asset ? blobResponse(asset.content, asset.name, asset.contentType) : error('facility_static_asset_not_found', 'Facility static asset was not found.', 404);
     }
     const facilityValidateMatch = url.pathname.match(/^\/api\/v1\/facility-apps\/reverse-proxy\/edit-sessions\/([^/]+)\/(validate|preview)$/);

@@ -213,16 +213,16 @@
 | --- | --- | --- | --- | --- |
 | UI-FAC-001 | 打开设施目录 | 固定展示 reverse-proxy 与 storage-share 卡片、类别/可用状态、异步统计；管理进入对应详情 | 不调用不存在的设施 list API；统计加载用骨架 | reverse-proxy 显示路由/节点/资产，storage-share 显示分区/服务器/根目录数 |
 | UI-FAC-002 | 目录点击“协调/同步” | reverse proxy 调 reconcile；storage share 仅 enabled 时可调；反馈遵守两阶段 | 未配置 storage share 禁用；无 ID 不显示假 ID | 当前卡片独立 loading，完成后目录重载 |
-| UI-FAC-003 | 查看 reverse-proxy 详情 | 单列 + Tabs：`routes`（默认）纵向叠放 KPI、route summaries、DNS 同步、静态资产下载；`nodes` 展示 operation/reconcileStopped 与 `FacilityDiagnostics`；`tab` 进 URL；禁止主栏+右侧诊断常驻左右分栏；DNS 区列出设施域名与应用反向代理域名并标注来源 | 未知 facilityKind 显示不可用空态；加载失败可重试 | 用户可见服务器使用名称，未知才回退 ID；深链 `?tab=nodes` 直达节点状态；应用域名不得从 DNS 区遗漏 |
-| UI-FAC-004 | DNS 同步为 pending | 非编辑态、可见标签每约 3 秒重载设施直至不 pending | 编辑中停止轮询；离开清 timer | 状态从 pending 更新且不覆盖编辑草稿 |
+| UI-FAC-003 | 查看 reverse-proxy 详情 | 显式两栏/两段：**代理平面**（网关成员、容器部署/ensure、`FacilityDiagnostics`）与 **配置记录列表**（设施域名记录 + 链到应用反代）；DNS 区列出各记录域名并标注来源；`tab` 可区分 `proxy`/`configs`/`dns` | 未知 facilityKind 显示不可用空态；加载失败可重试 | 不得再把多域名塞进同一编辑画布；深链可直达代理或配置列表 |
+| UI-FAC-004 | DNS 同步为 pending | 非编辑态、可见标签每约 3 秒重载设施直至不 pending | 单条编辑中停止轮询；离开清 timer | 状态从 pending 更新且不覆盖单条编辑草稿 |
 | UI-FAC-013 | DNS 失败/跳过重试与覆盖接管 | 失败/跳过/未同步显示错误与「重试 DNS」；失败（或冲突类错误）提供「覆盖已有记录」，经危险确认后调用 `POST .../dns-sync`（`takeover`+`confirmTakeover`） | 未确认不得接管；请求中只锁当前域名操作 | 成功提示含 taskId 并刷新 DNS 状态 |
-| UI-FAC-005 | 进入入口代理编辑 | 详情页就地展开，config 深链也可直达；进入前重新拉取已提交配置到本地草稿与资产基线；**不**创建 edit-session；显示连续流：网关、域名/路由、静态资产 | 配置加载失败显示重试；编辑中隐藏详情 reconcile/refresh；不得用陈旧内存快照作为保存时的服务端播种源 | 两个入口同一本地编辑与保存行为 |
-| UI-FAC-006 | 修改网关服务器 | 仅从服务器选择；移除网关时自动剪除各域名 origin/primary/relay，并以 warning 告知数量 | 不得留下指向非网关服务器的引用 | payload 中所有关联服务器均属于 deploymentServers |
-| UI-FAC-007 | 新增/编辑域名 | 校验合法、非重复域名且至少一台 origin；origin 只能从网关选；可配置 AnyAccess relay/策略/主源 | primary 必须属于 origin，指定 relay 只能来自可用网关 | 错误字段就地显示且弹窗不关闭；成功才标脏 |
-| UI-FAC-008 | 新增/编辑设施 path | path 必须以 `/` 开头；static 要选**本地可见** asset；redirect 要合法 URL 与 301/302/307/308；proxy_pass 要 http(s) URL并可配 source mode | 各 ruleType 只发送相关字段；非法值就地阻止保存 | model 测试覆盖空/非法 path、redirect、proxy 和缺 asset |
+| UI-FAC-005 | 进入单条配置编辑 | 从配置记录列表点进；进入前拉取**该条**已提交记录与私有资产基线；**不**创建 edit-session；编辑器只含该域名/路径/本记录资产 | 配置加载失败显示重试；编辑中隐藏代理 ensure 的破坏性操作入口 | 一次只编辑一条；不得加载其他记录草稿 |
+| UI-FAC-006 | 修改代理平面网关 | 仅从服务器选择并保存代理平面；移除网关时对仍引用该网关的配置记录给出阻断或剪除确认 | 不得留下指向非网关服务器的 origin/relay | 网关变更走代理平面 API，不 bump 各配置记录 version |
+| UI-FAC-007 | 新增/编辑单条域名记录 | 校验合法、非重复域名且至少一台 origin；origin 只能从当前网关选；可配置 AnyAccess | primary 必须属于 origin；指定 relay 只能来自可用网关；已有记录的域名由 `recordId` 决定，编辑器只读（改名需删除后重建） | 错误字段就地显示；成功标脏仅本条 |
+| UI-FAC-008 | 新增/编辑设施 path | path 必须以 `/` 开头；static 要选**本记录本地可见** asset；redirect 要合法 URL 与 301/302/307/308；proxy_pass 要 http(s) URL并可配 source mode | 各 ruleType 只发送相关字段；非法值就地阻止保存 | model 测试覆盖空/非法 path、redirect、proxy 和缺 asset |
 | UI-FAC-009 | 配置设施 path 高级项 | 支持 gzip、请求体、超时、buffering、WebSocket、自定义请求/响应头；redirect 仅保留适用项 | 数值非负，空 header 过滤 | clone/编辑往返不丢 proxy_pass 和 options |
-| UI-FAC-010 | 管理静态资产 | 复用 AssetFileManager；变更写入本地 pending；文本「保存」只更新 pending；新文本下载名默认跟引用名且可分开改；路由引用用 asset.name；已提交资产下载走正式 static content | binary/archive 即使扩展名像文本也不可编辑；替换保留 name；编辑期不得调用 session asset API | 列表=已提交⊕pending；页面保存时 flush；删除仍被引用由保存时服务端诊断阻止 |
-| UI-FAC-011 | 保存/取消设施编辑 | 唯一主操作「保存」：本地校验→begin（无客户端草稿）→patch→flush pending 资产→preview→无 blocking diagnostic 才 commit→若 `applyNeeded` 再调 reconcile（`apply=true` + commit 返回的 serverIds）→清理会话；变更摘要按域名和网关服务器实际对象互斥归类；成功必须退出编辑并回到详情并刷新；取消脏草稿先确认；无独立 Preview 主按钮 | 冲突 discard 临时会话并保留本地；保存中整页阻塞；仅默认字段规范化、域名面板顺序或服务器选择顺序变化不得产生假修改；仅改静态文本不得回滚已提交 redirectUrl | applyNeeded/applyRequested 决定提示；diff model 测试覆盖新增、删除、同名内容修改、等量替换和未变更基线 |
+| UI-FAC-010 | 管理本记录私有资产 | 复用 AssetFileManager；变更写入本地 pending；文本「保存」只更新 pending；路由引用用 asset.name；已提交资产下载走 `GET .../static-assets/{assetName}/content?recordId={recordId}` | binary/archive 不可当文本编辑；替换保留 name；编辑期不得调用 session asset API；下载必须带本记录 recordId | 列表=本记录已提交⊕pending；不得显示其他记录资产 |
+| UI-FAC-011 | 保存/取消单条配置 | 唯一主操作「保存」：本地校验→begin（绑定 recordId）→patch→flush pending→preview→commit→若 `applyNeeded` 再 config-plane apply；成功退出单条编辑回列表并刷新；取消脏草稿先确认 | 冲突 discard 会话并保留本地；apply 失败仍提示配置已提交；保存中整页阻塞 | 其他记录 version 不变；applyNeeded 决定是否提示已请求 reload |
 
 `UI-FAC-012`：入口代理按节点显示容器观测与部署结果、失败阶段、下次重试及活动入口；错误带原因与处理提示，技术诊断/本次运行日志放入内部可滚动折叠区。按需代理检查显示样本限制、节点/域名/上游、分类解释与下一步；空样本不表示全部路由健康，旧配置/离页响应不得覆盖当前结果。
 

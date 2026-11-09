@@ -19,6 +19,9 @@ import (
 	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/filestorage"
+	"panel/internal/platform/logging"
+
+	"go.uber.org/zap"
 )
 
 const (
@@ -43,6 +46,23 @@ func (s *Service) listStaticAssets(ctx context.Context) ([]StaticAsset, error) {
 func (s *Service) getStaticAsset(ctx context.Context, assetID string) (StaticAsset, error) {
 	var item models.FacilityStaticAsset
 	err := orm.New(s.db).From("facility_static_assets").Where("id=?", assetID).First(ctx, &item)
+	if err == sql.ErrNoRows {
+		return StaticAsset{}, panelerr.NotFound("static asset")
+	}
+	if err != nil {
+		return StaticAsset{}, err
+	}
+	return staticAssetFromModel(item), nil
+}
+
+func (s *Service) getStaticAssetByRecordName(ctx context.Context, recordID, name string) (StaticAsset, error) {
+	recordID = strings.ToLower(strings.TrimSpace(recordID))
+	name = strings.TrimSpace(name)
+	if recordID == "" || name == "" {
+		return StaticAsset{}, panelerr.NotFound("static asset")
+	}
+	var item models.FacilityStaticAsset
+	err := orm.New(s.db).From("facility_static_assets").Where("record_id=? AND name=?", recordID, name).First(ctx, &item)
 	if err == sql.ErrNoRows {
 		return StaticAsset{}, panelerr.NotFound("static asset")
 	}
@@ -147,6 +167,88 @@ func (s *Service) staticAssetDir(assetID string) string {
 
 func (s *Service) staticAssetContentDir(assetID string) string {
 	return filepath.Join(s.staticAssetDir(assetID), "content")
+}
+
+// backfillFacilityAssetBlobs completes the alpha migration to per-record asset
+// rows: when the same legacy asset was referenced by several facility domains,
+// the DB migration inserted duplicate metadata rows with new ids but the blob
+// directory only exists for the first id. Copy the content from a donor row
+// with the same signature so every record genuinely owns readable files
+// (FAC-RP-003 private assets).
+func (s *Service) backfillFacilityAssetBlobs(ctx context.Context) {
+	if s == nil || s.db == nil {
+		return
+	}
+	var rows []models.FacilityStaticAsset
+	if err := orm.New(s.db).From("facility_static_assets").All(ctx, &rows); err != nil {
+		return
+	}
+	type signature struct {
+		SHA256      string
+		Filename    string
+		Kind        string
+		ContentMode string
+	}
+	signatureOf := func(row models.FacilityStaticAsset) signature {
+		return signature{SHA256: row.SHA256, Filename: row.Filename, Kind: row.Kind, ContentMode: row.ContentMode}
+	}
+	donors := make(map[signature]string, len(rows))
+	for _, row := range rows {
+		if !directoryExists(s.staticAssetContentDir(row.ID)) {
+			continue
+		}
+		sig := signatureOf(row)
+		if sig.SHA256 == "" {
+			continue
+		}
+		donors[sig] = row.ID
+	}
+	for _, row := range rows {
+		target := s.staticAssetContentDir(row.ID)
+		if directoryExists(target) {
+			continue
+		}
+		sig := signatureOf(row)
+		donorID, ok := donors[sig]
+		if !ok || donorID == row.ID {
+			continue
+		}
+		if err := copyFacilityAssetDir(s.staticAssetContentDir(donorID), target); err != nil {
+			logging.From(logging.With(ctx, logging.Context{Module: "facilityapps"})).Warn("facility asset blob backfill failed",
+				zap.String("assetId", row.ID), zap.String("sourceAssetId", donorID), zap.Error(err))
+			continue
+		}
+		donors[sig] = row.ID
+	}
+}
+
+func directoryExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+func copyFacilityAssetDir(source, target string) error {
+	return filepath.WalkDir(source, func(current string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(source, current)
+		if err != nil {
+			return err
+		}
+		destination := filepath.Join(target, rel)
+		if entry.IsDir() {
+			return os.MkdirAll(destination, 0o700)
+		}
+		content, err := os.ReadFile(current)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
+			return err
+		}
+		return filestorage.WriteAtomic(destination, content, 0o644)
+	})
 }
 
 func safeAssetFilename(value string) string {
