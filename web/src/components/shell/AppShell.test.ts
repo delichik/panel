@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { settingsApi } from '@/api/settings';
 import { toastKey } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
-import { beginRouteNavigation, finishRouteNavigation } from '@/router/navigationState';
 import type { RuntimeSettings } from '@/types/settings';
 
 // This vitest jsdom environment does not provide localStorage; stub it like
@@ -40,10 +39,10 @@ function makeRouter(): Router {
   return createRouter({
     history: createMemoryHistory(),
     routes: [
-      { path: '/', component: { template: '<div />' } },
-      { path: '/servers', component: { template: '<div />' } },
-      { path: '/fragment', component: { template: '<div /><section />' } },
-      { path: '/:pathMatch(.*)*', component: { template: '<div />' } },
+      { path: '/', component: { template: '<div />' }, meta: { titleKey: 'routes.overview.title' } },
+      { path: '/servers', component: { template: '<div />' }, meta: { titleKey: 'routes.servers.title' } },
+      { path: '/fragment', component: { template: '<div /><section />' }, meta: { titleKey: 'routes.overview.title' } },
+      { path: '/:pathMatch(.*)*', component: { template: '<div />' }, meta: { titleKey: 'routes.notFound.title' } },
     ],
   });
 }
@@ -127,7 +126,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  finishRouteNavigation();
   while (mountedWrappers.length) mountedWrappers.pop()!.unmount();
   document.body.innerHTML = '';
   document.body.style.overflow = '';
@@ -176,24 +174,17 @@ describe('AppShell mobile nav drawer', () => {
     }));
   });
 
-  it('shows immediate target feedback while a route is still resolving', async () => {
-    const { wrapper } = await mountShell();
+  it('updates title and nav highlight as soon as the route changes', async () => {
+    const { wrapper, router } = await mountShell();
 
-    beginRouteNavigation('/servers', 'routes.servers.title');
+    await router.push('/servers');
     await flushPromises();
 
-    const pendingLink = wrapper.get('aside nav a[href="/servers"]');
-    expect(pendingLink.attributes('aria-busy')).toBe('true');
-    expect(pendingLink.classes()).toContain('bg-primary');
-    expect(pendingLink.classes()).toContain('text-primary-foreground');
-    expect(wrapper.get('header p[aria-live="polite"]').text()).toBe('Opening Servers…');
-    expect(wrapper.get('header [role="progressbar"]').attributes('aria-label')).toBe('Opening Servers…');
-
-    finishRouteNavigation();
-    await flushPromises();
-
-    expect(pendingLink.attributes('aria-busy')).toBeUndefined();
+    expect(wrapper.get('header p[aria-live="polite"]').text()).toBe('Servers');
     expect(wrapper.find('header [role="progressbar"]').exists()).toBe(false);
+    const activeLink = wrapper.get('aside nav a[href="/servers"]');
+    expect(activeLink.attributes('aria-current')).toBe('page');
+    expect(activeLink.classes()).toContain('bg-primary');
   });
 
   it('opens as a modal dialog with aria wiring, focus and background lock', async () => {

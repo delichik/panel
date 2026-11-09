@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { useI18n } from '@/i18n';
 import NavList from './NavList.vue';
 
-async function mountNav(options: { path?: string; activeKey?: string; pendingKey?: string; collapsed?: boolean } = {}) {
+async function mountNav(options: { path?: string; activeKey?: string; collapsed?: boolean } = {}) {
   const { path = '/overview', ...props } = options;
   const router = createRouter({
     history: createMemoryHistory(),
@@ -37,15 +37,14 @@ describe('NavList', () => {
     expect(wrapper.get('a[href="/overview"]').attributes('aria-current')).toBeUndefined();
   });
 
-  it('reports a pending route on the target item instead of the current one', async () => {
-    // AppShell passes the pending key as the displayed active key so the target
-    // reads as current while its chunk is still loading.
-    const wrapper = await mountNav({ path: '/overview', activeKey: 'servers', pendingKey: 'servers' });
-    const pending = wrapper.get('a[href="/servers"]');
+  it('highlights the active family without a pending spinner', async () => {
+    const wrapper = await mountNav({ path: '/overview', activeKey: 'servers' });
+    const active = wrapper.get('a[href="/servers"]');
 
-    expect(pending.attributes('aria-busy')).toBe('true');
-    expect(pending.classes()).toContain('bg-primary');
-    expect(pending.classes()).toContain('text-primary-foreground');
+    expect(active.attributes('aria-busy')).toBeUndefined();
+    expect(active.attributes('aria-current')).toBe('page');
+    expect(active.classes()).toContain('bg-primary');
+    expect(active.classes()).toContain('text-primary-foreground');
     expect(wrapper.get('a[href="/overview"]').classes()).not.toContain('bg-primary');
   });
 

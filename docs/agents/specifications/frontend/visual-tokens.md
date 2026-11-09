@@ -63,7 +63,7 @@
 - `motion-field` 用于 Input / Select / Textarea；表格行使用只变色不位移的 `motion-table-row`，并支持 `--panel-stagger` 交错入场（每行延迟上限约 6 行，仅首屏/新增行播放）；异步列表「骨架 → 内容交错填充」：容器 `motion-stagger`，项 `motion-reveal` / `motion-list-item` / `motion-table-row`。`motion-overlay` 为挂载淡入工具类。
 - 入场动画一律使用 `animation-fill-mode: backwards`（`panel-motion-enter` 系列）。禁止改回 `both`/`forwards`。
 - 焦点态只有一套：字段与按钮统一用 `focus-visible:ring-2 ring-offset-2`。
-- 浮层进出场成对：`dialog-*`、`menu-*`、`drawer-*`、`toast-stack-*`；路由 `route-*`（仅淡入淡出）；Tab `tab-panel-*`；状态 `status-*`；侧栏 `shell-label` / `shell-grid` / `fade-*`；覆盖式详情 `detail-swap-*`（仅进场，位移走 `--panel-motion-enter-y`）；不确定进度 `motion-progress`。
+- 浮层进出场成对：`dialog-*`、`menu-*`、`drawer-*`、`toast-stack-*`；路由 `route-*`（仅进场淡入，旧页即时卸下）；Tab `tab-panel-*`；状态 `status-*`；侧栏 `shell-label` / `shell-grid` / `fade-*`；覆盖式详情 `detail-swap-*`（仅进场，位移走 `--panel-motion-enter-y`）；不确定进度 `motion-progress`（用于局部 LoadingOverlay 等，不得用于跨页顶栏等待条）。
 - 必须支持 `prefers-reduced-motion: reduce`。
 - 触屏：自有 `motion-*` 的 hover 反馈必须包在 `@media (hover: hover)` 内；交互控件统一 `touch-action: manipulation`。
 

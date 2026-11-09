@@ -1,19 +1,18 @@
 <script setup lang="ts">
-import { LoaderCircle } from '@lucide/vue';
 import { RouterLink } from 'vue-router';
 import { useI18n } from '@/i18n';
+import { prefetchPage } from '@/router/lazyPage';
+import { pageLoaderForPath } from '@/router/pageLoaders';
 import { navGroups } from './navModel';
 
 /**
  * Shared primary navigation list used by the desktop sidebar and the mobile
- * drawer. Keeps the two surfaces from drifting apart (labels, pending state,
- * active rail, collapsed behavior) and owns the nav motion.
+ * drawer. Keeps the two surfaces from drifting apart (labels, active rail,
+ * collapsed behavior) and owns the nav motion.
  */
 withDefaults(defineProps<{
   /** Nav item key that should read as the current location. */
   activeKey?: string;
-  /** Nav item key whose route is still resolving. */
-  pendingKey?: string;
   /** Icon-only mode: labels fade with the sidebar width instead of being removed. */
   collapsed?: boolean;
   label: string;
@@ -23,6 +22,11 @@ withDefaults(defineProps<{
 
 const emit = defineEmits<{ navigate: [] }>();
 const { t } = useI18n();
+
+function warmTarget(path: string) {
+  const loader = pageLoaderForPath(path);
+  if (loader) prefetchPage(loader);
+}
 </script>
 
 <template>
@@ -39,7 +43,6 @@ const { t } = useI18n();
         :key="item.key"
         :to="item.to"
         :title="collapsed ? t(item.titleKey) : undefined"
-        :aria-busy="pendingKey === item.key ? 'true' : undefined"
         :aria-current="activeKey === item.key ? 'page' : undefined"
         class="group relative mb-0.5 flex h-9 max-lg:h-11 items-center overflow-hidden rounded-lg px-2.5 text-sm font-medium transition-[background-color,color,box-shadow]"
         :class="[
@@ -48,10 +51,11 @@ const { t } = useI18n();
             : 'text-secondary-foreground hover:bg-accent hover:text-foreground',
           collapsed ? 'justify-center px-0' : 'gap-2.5',
         ]"
+        @pointerenter="warmTarget(item.to)"
+        @focusin="warmTarget(item.to)"
         @click="emit('navigate')"
       >
-        <LoaderCircle v-if="pendingKey === item.key" class="size-4 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-        <component :is="item.icon" v-else class="size-4 shrink-0" aria-hidden="true" />
+        <component :is="item.icon" class="size-4 shrink-0" aria-hidden="true" />
         <span
           class="shell-label min-w-0 truncate"
           :class="collapsed ? 'max-w-0 opacity-0' : 'max-w-[200px] flex-1'"

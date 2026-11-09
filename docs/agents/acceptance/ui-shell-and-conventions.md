@@ -87,7 +87,7 @@
 | UI-SHELL-048 | 异步列表首次填充或 UI 状态变化 | 使用统一 motion token（含 `--panel-motion-hover-y` / `enter-y` / `press-scale`）；列表仅首屏/新增项交错入场，已有内容刷新不重播；对话框、菜单、抽屉、toast 成对进退场；进场动画不得在结束后继续压制 hover/按压 transform；Button/IconButton/可交互卡片 hover 可轻微上移，列表/菜单项仅变色 | 不得用位移动画改变尺寸/滚动结构，不做循环装饰动画；不确定进度可用位移进度条但不改变布局；业务层禁止裸 `shadow-xl`/`shadow-2xl` | 刷新列表无整屏重播，进入/退出浮层视觉成对，控件入场结束后仍有 hover/按压反馈 |
 | UI-SHELL-049 | 系统启用 `prefers-reduced-motion: reduce` | 关闭位移和骨架动画，把 transition/animation 降为近似无动画 | 降级不能影响焦点时序、挂载或可用性 | 媒体查询下无明显移动/闪烁，所有操作结果不变 |
 | UI-SHELL-050 | 对前端行为做交付验收 | 至少覆盖共享逻辑单测、关键组件交互、页面关键 e2e、axe 可访问性；三档桌面加一档窄屏做布局回归 | 纯文档改动不跑测试/编译；业务改动只跑影响范围但不能省略关键链路 | 证据可追溯到稳定编号；`task test:web` / 必要时 `task build:web` 通过 |
-| UI-SHELL-051 | 用户触发跨路径导航，新页面路由代码块或守卫尚未完成 | 在导航解析开始时立即高亮目标主导航项并显示进行中图标；顶栏显示本地化的“正在打开”目标标题和可访问进度指示 | 导航成功、取消、守卫拒绝或路由代码块加载失败时必须清除进行中状态；动效降级不得隐去状态文本 | 慢速解析期间旧页面可保留，但点击后立即可见目标高亮、图标、标题与 `aria-busy`/progressbar；完成或失败后均无残留加载态 |
+| UI-SHELL-051 | 用户触发跨路径导航 | 路由切换不得被页面代码块下载拖住：顶栏标题与主导航激活态立即切到目标；内容区立即换到目标页（或其静态骨架），不得再用顶栏全局等待条/“正在打开”文案把用户留在旧页；页面数据加载继续用页内 Skeleton / LoadingOverlay | 守卫拒绝或导航取消时回落到原页且无残留加载态；代码块首次下载仅允许内容区骨架，不得保留旧页等待；外壳挂载后应预取控制台页面块，导航悬停/聚焦可再预热 | 点击后立刻看到目标标题、导航高亮与新页静态结构或骨架；无“等待条结束后才跳转” |
 | UI-SHELL-052 | 渲染主导航（桌面侧栏或移动抽屉） | 桌面与抽屉复用同一导航实现，分组、图标、进行中指示和激活样式一致；当前页族在深层子路径上仍以 `aria-current="page"` 标记并显示左侧激活条 | 两个入口不得各自漂移出不同标签/状态；折叠态文案仍留在无障碍树中 | 组件测试断言深链归属项带 `aria-current`、折叠标签仍是可读名称、点击发出导航事件 |
 | UI-SHELL-053 | 键盘用户进入控制台 | 外壳首个可聚焦元素是本地化“跳到主要内容”链接，激活后把焦点移动到路由内容区 | 链接在未激活时不得占据视觉空间或进入其他焦点圈定逻辑 | 首次 Tab 出现跳转链接，激活后焦点进入 `#main-content` |
 | UI-SHELL-054 | MasterDetailLayout 高度契约（遗留模板） | `MasterDetailLayout` 若仍被测试或遗留调用，自己承担 `h-full`/`min-h-0` 高度契约；详情区用 `grid-rows-[auto_minmax(0,1fr)]`（有可选横幅时横幅必须放进内部滚动区），页面不得再靠 `min-h-[600px+]` 撑高来换取滚动 | 操作/任务/日志交付页不得再接入；详情区在无横幅时也必须由正文承担内部滚动；桌面不得因此产生页面级滚动 | 模板组件测试覆盖高度契约 |
@@ -102,8 +102,8 @@
 
 ## 8. 覆盖来源
 
-- 路由与会话：`web/src/router/index.ts`、`web/src/stores/session.ts`、`web/src/api/client.ts`、`web/src/views/auth/LoginPage.vue`。
-- 外壳与响应式：`web/src/components/shell/AppShell.vue`、`NavList.vue`、`navModel.ts`、页面模板、`web/src/styles/main.css`。
+- 路由与会话：`web/src/router/index.ts`、`web/src/router/lazyPage.ts`、`web/src/router/pageLoaders.ts`、`web/src/stores/session.ts`、`web/src/api/client.ts`、`web/src/views/auth/LoginPage.vue`。
+- 外壳与响应式：`web/src/components/shell/AppShell.vue`、`NavList.vue`、`RoutePageFallback.vue`、`navModel.ts`、页面模板、`web/src/styles/main.css`。
 - 主题与 i18n：`web/src/design/theme.ts`、`web/index.html`、`web/src/i18n/index.ts`、`docs/agents/i18n-guide.md`。
 - 交互 primitives/patterns：`web/src/components/ui/`、`web/src/components/patterns/`、`web/src/composables/useOverlayBehavior.ts`、`useAutoRefresh.ts`。
 - 表格与覆盖式详情：`web/src/components/ui/Table.vue`、`web/src/components/templates/TableDetailLayout.vue`、`web/src/views/servers/tabs/`。

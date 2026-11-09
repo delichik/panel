@@ -10,6 +10,7 @@ const editorPageSource = readFileSync(resolve(__dirname, '../components/template
 const dialogSource = readFileSync(resolve(__dirname, '../components/ui/Dialog.vue'), 'utf8');
 const dropdownSource = readFileSync(resolve(__dirname, '../components/ui/Dropdown.vue'), 'utf8');
 const routerSource = readFileSync(resolve(__dirname, '../router/index.ts'), 'utf8');
+const pageLoadersSource = readFileSync(resolve(__dirname, '../router/pageLoaders.ts'), 'utf8');
 
 describe('new frontend foundation', () => {
   it('uses Tailwind and self-owned semantic tokens', () => {
@@ -29,11 +30,12 @@ describe('new frontend foundation', () => {
 
   it('does not route every page through the retired collection shell', () => {
     expect(routerSource).not.toContain('CollectionPage');
-    expect(routerSource).toContain('@/views/servers/index.vue');
-    expect(routerSource).toContain('@/views/applications/index.vue');
+    expect(routerSource).toContain('lazyPage');
+    expect(pageLoadersSource).toContain('@/views/servers/index.vue');
+    expect(pageLoadersSource).toContain('@/views/applications/index.vue');
     // 资源与安全页并入服务器详情 tabs 后，旧独立路由必须保持删除状态。
-    expect(routerSource).not.toContain('views/resources/index.vue');
-    expect(routerSource).not.toContain('views/security/index.vue');
+    expect(pageLoadersSource).not.toContain('views/resources/index.vue');
+    expect(pageLoadersSource).not.toContain('views/security/index.vue');
     expect(routerSource).not.toContain('/resources/');
   });
 });

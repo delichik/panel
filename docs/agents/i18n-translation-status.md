@@ -50,7 +50,7 @@
 - 本轮表格化 + 覆盖式详情 + 资源/安全并入服务器详情：新增 `common.details`、`common.moreActions`、`serversPage.tab.*`（10 个一级 tab）、`serversPage.columns.address/privilege`、`resourcesPage.image/ports/size/installedVersion/candidateVersion/source/driver/scope/attachedContainers`、`securityPage.ufw/ruleNumber/action/to`、`credentialsPage.updatedAtColumn`、`dnsPage.staleSnapshot`、`applicationsPage.imageReferenceColumn/updatedAtColumn`；删除无引用词条 `layout.nav.resources`、`resourcesPage.*`（serverContext/dockerReady/packageReady/limited/loadServersFailed/refreshed/managedContainerHint/containersAttached/confirmDangerDescription/confirmDeleteCheckbox/imageReference 等）、`securityPage.*`（serverContext/selectServer/selectServerHint/serverLimited/serverUnreachable/nodes/manageable/serverScopeDescription/ufwRules/ufwPosture/ufwConfirmHint/supported/fail2banRules/fail2banStatus/fail2banDraftHint/detectedJails/noRuntimeJails/panelConfig/loadServersFailed 等）与 `routes.packages|containers|images|networks|volumes|firewall|security|fail2ban.*` 中已无消费者的值；`routes.fail2ban.title` 保留供防火墙 tab 子视图使用；en / zh-CN 同步，并由 `i18n.test.ts` 强制校验。
 - 本轮新增 `common.details`（详情入口）、`common.moreActions`（行内更多操作）与服务器详情 tab 词条，删除资源/安全页遗留词条（详见上一条），en / zh-CN 已同步。
 
-- 本轮新增慢网路由切换反馈词条 `layout.navigation.loading`，en / zh-CN 已同步；目标页标题继续复用现有 `routes.*.title` 词条。
+- 本轮移除慢网路由顶栏等待词条 `layout.navigation.loading`（跨页切换改为立即换页/页内骨架，不再使用“正在打开”顶栏反馈）；en / zh-CN 已同步删除。
 
 - 本轮应用部署与统一日志修复新增 `applicationsPage.deployNoChange`、当前部署阶段/步骤/尝试/下次重试/错误、`failed_retryable` 状态，以及 `activity.observationRejected.*` 精确拒绝原因词条；en / zh-CN 已同步。观测拒绝文案明确说明不是部署重试，应用页直接展示结构化 Job 错误。
 - 本轮应用端口映射新增 TCP/UDP 协议、Panel 防火墙管理开关、固定端口约束和规则状态摘要词条，en / zh-CN 已同步；后端补充端口协议、UFW 未安装、SSH/Agent 管理端口保护、双通道连通性门禁和受管规则冲突等稳定错误翻译。

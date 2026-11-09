@@ -13,7 +13,7 @@ import { useI18n } from '@/i18n';
 import { useThemeMode, type ThemeMode, type ThemeScheme } from '@/design/theme';
 import { settingsApi } from '@/api/settings';
 import { useSessionStore } from '@/stores/session';
-import { routeNavigation } from '@/router/navigationState';
+import { prefetchShellPages } from '@/router/pageLoaders';
 import { activeNavKey } from './navModel';
 import NavList from './NavList.vue';
 
@@ -45,21 +45,11 @@ const signingOut = ref(false);
 const languageSaving = ref(false);
 let languageRequestId = 0;
 const activeKey = computed(() => activeNavKey(route.path));
-const pendingNavKey = computed(() => routeNavigation.pending.value ? activeNavKey(routeNavigation.targetPath.value.split('?')[0] || '') : undefined);
-const displayedActiveKey = computed(() => pendingNavKey.value || activeKey.value);
 const title = computed(() => t(String(route.meta.titleKey || 'app.name')));
-const navigationLabel = computed(() => {
-  if (!routeNavigation.pending.value) return title.value;
-  const targetTitle = routeNavigation.titleKey.value ? t(routeNavigation.titleKey.value) : title.value;
-  return t('layout.navigation.loading', { title: targetTitle });
-});
 
 watch(collapsed, (value) => localStorage.setItem('panel.nav.collapsed', String(value)));
 watch(() => route.fullPath, () => {
   drawerOpen.value = false;
-});
-watch(() => routeNavigation.pending.value, (pending) => {
-  if (pending) drawerOpen.value = false;
 });
 
 function supportedLocale(value: string) {
@@ -67,6 +57,9 @@ function supportedLocale(value: string) {
 }
 
 onMounted(async () => {
+  // Warm console page chunks in the background so later clicks swap static
+  // page chrome immediately instead of waiting on the first import().
+  prefetchShellPages();
   const requestId = languageRequestId;
   try {
     const settings = await settingsApi.runtime();
@@ -145,16 +138,16 @@ async function signOut() {
           </Transition>
         </IconButton>
       </div>
-      <NavList id="app-navigation" :active-key="displayedActiveKey" :pending-key="pendingNavKey" :collapsed="collapsed" :label="t('layout.main')" />
+      <NavList id="app-navigation" :active-key="activeKey" :collapsed="collapsed" :label="t('layout.main')" />
     </aside>
 
     <main class="grid min-h-dvh min-w-0 grid-rows-[52px_auto] lg:min-h-0 lg:grid-rows-[52px_minmax(0,1fr)]">
-      <header class="relative flex h-[52px] min-w-0 items-center justify-between gap-3 border-b border-border bg-background px-4 max-lg:sticky max-lg:top-0 max-lg:z-40" :aria-busy="routeNavigation.pending.value ? 'true' : undefined">
+      <header class="relative flex h-[52px] min-w-0 items-center justify-between gap-3 border-b border-border bg-background px-4 max-lg:sticky max-lg:top-0 max-lg:z-40">
         <div class="flex min-w-0 items-center gap-2">
           <IconButton class="lg:hidden" :label="t('layout.nav.open')" :aria-expanded="drawerOpen" :aria-controls="drawerId" aria-haspopup="dialog" @click="drawerOpen = true">
             <Menu />
           </IconButton>
-          <p class="m-0 truncate text-sm text-muted-foreground" aria-live="polite">{{ navigationLabel }}</p>
+          <p class="m-0 truncate text-sm text-muted-foreground" aria-live="polite">{{ title }}</p>
           <Badge class="font-medium">{{ t('layout.alpha') }}</Badge>
         </div>
         <div class="flex items-center gap-0.5 rounded-xl border border-border bg-card/90 p-0.5 shadow-sm">
@@ -195,15 +188,14 @@ async function signOut() {
             <DropdownItem @click="signOut">{{ t('layout.logout') }}</DropdownItem>
           </Dropdown>
         </div>
-        <div v-if="routeNavigation.pending.value" class="absolute inset-x-0 bottom-0 h-0.5 overflow-hidden bg-accent" role="progressbar" :aria-label="navigationLabel">
-          <div class="motion-progress h-full w-1/3 rounded-full bg-brand" />
-        </div>
       </header>
       <section id="main-content" tabindex="-1" class="min-h-0 min-w-0 overflow-visible lg:overflow-hidden focus:outline-none max-lg:scroll-mt-14">
         <RouterView v-slot="{ Component }">
-          <Transition name="route" mode="out-in">
+          <!-- Enter-only fade: previous page unmounts immediately so static chrome
+               of the target route appears without waiting for an out-in leave. -->
+          <Transition name="route">
             <!-- 路由组件可能含多个根节点（如 ListPage + Dialog），包一层单一根元素才能做过渡动画；
-                 按 route.path 作 key：每次路径切换都重挂载页面并播放淡出淡入（含网络/卷等同组件路由）；
+                 按 route.path 作 key：每次路径切换都重挂载页面并播放淡入（含网络/卷等同组件路由）；
                  仅查询参数变化（分页、筛选）不重挂载，保持 URL 状态行为 -->
             <div :key="route.path" class="h-full min-h-0">
               <component :is="Component" />
@@ -239,7 +231,7 @@ async function signOut() {
                 <X />
               </IconButton>
             </div>
-            <NavList :active-key="displayedActiveKey" :pending-key="pendingNavKey" :label="t('layout.main')" @navigate="drawerOpen = false" />
+            <NavList :active-key="activeKey" :label="t('layout.main')" @navigate="drawerOpen = false" />
           </aside>
         </div>
       </Transition>

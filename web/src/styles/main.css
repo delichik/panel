@@ -466,16 +466,11 @@ summary,
   transition: transform var(--panel-motion-duration-base) var(--panel-motion-ease-standard);
 }
 
-/* 路由内容切换：仅淡入淡出，避免 transform 影响页面内 fixed 元素。
-   退场走 fast（尽快让位），进场走 base，避免 out-in 模式下等待过久。 */
+/* 路由内容切换：仅淡入，旧页即时卸下，避免 out-in / leave 动画拖住静态内容响应。 */
 .route-enter-active {
   transition: opacity var(--panel-motion-duration-base) var(--panel-motion-ease-standard);
 }
-.route-leave-active {
-  transition: opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-standard);
-}
-.route-enter-from,
-.route-leave-to {
+.route-enter-from {
   opacity: 0;
 }
 
