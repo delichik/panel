@@ -681,3 +681,33 @@ func TestEnsureReverseProxyApplicationGenerationBumpsOnApplicationRouteChange(t 
 		t.Fatal("hash must change when application routes change")
 	}
 }
+
+func TestFacilityGatewaysAffectedByConfigChangeScopesDomainEdit(t *testing.T) {
+	previous := ReverseProxyConfig{
+		DeploymentServers: []string{"srv-a", "srv-b", "srv-c"},
+		Domains: []FacilityRouteDomain{
+			{Domain: "a.example.test", OriginServerIDs: []string{"srv-a"}, Paths: []FacilityRoutePath{{Path: "/", RuleType: StaticRuleRedirect, RedirectURL: "https://a.example.test/", RedirectCode: 302}}},
+			{Domain: "b.example.test", OriginServerIDs: []string{"srv-b"}, Paths: []FacilityRoutePath{{Path: "/", RuleType: StaticRuleRedirect, RedirectURL: "https://b.example.test/", RedirectCode: 302}}},
+		},
+	}
+	next := ReverseProxyConfig{
+		DeploymentServers: []string{"srv-a", "srv-b", "srv-c"},
+		Domains: []FacilityRouteDomain{
+			{Domain: "a.example.test", OriginServerIDs: []string{"srv-a"}, Paths: []FacilityRoutePath{{Path: "/", RuleType: StaticRuleRedirect, RedirectURL: "https://a.example.test/new", RedirectCode: 302}}},
+			{Domain: "b.example.test", OriginServerIDs: []string{"srv-b"}, Paths: []FacilityRoutePath{{Path: "/", RuleType: StaticRuleRedirect, RedirectURL: "https://b.example.test/", RedirectCode: 302}}},
+		},
+	}
+	got := facilityGatewaysAffectedByConfigChange(previous, next)
+	if !reflect.DeepEqual(got, []string{"srv-a"}) {
+		t.Fatalf("affected = %#v, want [srv-a]", got)
+	}
+}
+
+func TestFacilityGatewaysAffectedByConfigChangeIncludesAddedGateway(t *testing.T) {
+	previous := ReverseProxyConfig{DeploymentServers: []string{"srv-a"}}
+	next := ReverseProxyConfig{DeploymentServers: []string{"srv-a", "srv-b"}}
+	got := facilityGatewaysAffectedByConfigChange(previous, next)
+	if !reflect.DeepEqual(got, []string{"srv-b"}) {
+		t.Fatalf("affected = %#v, want [srv-b]", got)
+	}
+}

@@ -438,7 +438,7 @@
 - **动作**：启动或 lease 过期恢复。
 - **结果**：DB 未提交则回滚目录并恢复 session；DB 已提交或 config version=base+1 且配置及全部 asset ID/hash 精确匹配则完成收尾并标 committed。
 - **失败**：commit 前重算新 blob 与 source asset content hash，缺失/漂移阻断；不满足精确条件不得猜测成功。
-- **不变量**：恢复不得重复写配置；applyRequest 失败仍为 committed warning，不能谎报已请求协调。
+- **不变量**：恢复不得重复写配置；恢复路径仍由服务端请求协调（无前端 follow-up），applyRequest 失败仍为 committed warning，不能谎报已请求协调。
 - **验证**：pre/post DB crash、corrupt blob/source、apply failure recovery tests。
 
 ### FAC-RP-006 域名源站与 AnyAccess
@@ -480,11 +480,11 @@
 ### FAC-RP-010 配置提交后的协调
 
 - **前置**：设施配置已 commit，或应用路由变更触发入口代理局部协调。
-- **动作**：请求 application reconcile（可带 `serverIds` 限定网关）。
-- **结果**：设施模块只提供 per-server nginx spec 和策略；Planner 写隐藏应用 Instance/Job，Controller RuntimeReconcile；响应继续暴露 reconcileStopped/lastError。单应用路由/部署目标变更时默认只规划受影响网关；每节点 desired SpecHash 为该节点 nginx 内容哈希，未变节点在 `force=false` 下跳过。人工全量协调（`user`）可 force 全部网关。
-- **失败**：协调不可用时配置仍 committed 并返回 `facility_apply_request_failed` warning。
+- **动作**：edit-session commit **只持久化配置**并返回 `applyNeeded`/`applyServerIds`/`stopServerIds`（`applyRequested` 恒为 false）；前端再调 `POST /facility-apps/reverse-proxy/reconcile`（`apply=true` + 上述 serverIds）请求规划。崩溃恢复路径仍由服务端直接请求协调（无前端 follow-up）。应用路由变更触发入口代理局部协调时同样可带 `serverIds`。
+- **结果**：设施模块只提供 per-server nginx spec 和策略；Planner 写隐藏应用 Instance/Job，Controller RuntimeReconcile；响应继续暴露 reconcileStopped/lastError。设施域名/静态资产/网关集合变更默认只规划受影响网关；每节点 desired SpecHash 为该节点 nginx 内容哈希，未变节点在 `force=false` 下跳过。人工全量协调（`user`）可 force 全部网关。
+- **失败**：traits 同步失败时配置仍 committed，`applyNeeded=false` 并返回 `facility_apply_request_failed` warning；follow-up reconcile 失败不得否定 commit 成功。恢复路径协调失败同为 committed warning。
 - **不变量**：不得同步执行远端 Docker、创建旧 lifecycle target 或 `application_target_*` task；同一次协调只加载一次 `ApplicationReverseProxyConfigs` 并按网关复用。
-- **验证**：facility apply failure、hidden AppDB Job、scoped serverIds / per-server hash tests。
+- **验证**：facility commit applyNeeded without planning、recovery apply failure、hidden AppDB Job、scoped serverIds / per-server hash tests。
 
 ### FAC-RP-011 DNS 联动
 

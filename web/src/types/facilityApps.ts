@@ -149,7 +149,16 @@ export interface FacilityEditCommitResult extends ActivityReceipt {
   config: ReverseProxyConfig;
   resourceVersion: ResourceVersion;
   applyRequested: boolean;
+  applyNeeded?: boolean;
+  applyServerIds?: string[];
+  stopServerIds?: string[];
   diagnostics?: Diagnostic[];
+}
+
+export interface ReverseProxyReconcileInput {
+  serverIds?: string[];
+  stopServerIds?: string[];
+  apply?: boolean;
 }
 
 export interface StorageServerSetting {

@@ -7,7 +7,8 @@ import type {
   FacilityEditPreviewResult,
   FacilityEditSession,
   ReverseProxyConfig,
-	ProxyDiagnostics,
+  ProxyDiagnostics,
+  ReverseProxyReconcileInput,
   ReverseProxySaveInput,
   StorageShareConfig,
   StorageShareReconcileResult,
@@ -50,8 +51,8 @@ export const reverseProxyFacilityApi = {
   getConfig(options?: ApiRequestOptions) {
     return apiClient.get<ReverseProxyConfig>('/facility-apps/reverse-proxy', options);
   },
-  reconcile() {
-    return apiClient.post<{ config: ReverseProxyConfig }>('/facility-apps/reverse-proxy/reconcile');
+  reconcile(input?: ReverseProxyReconcileInput) {
+    return apiClient.post<{ config: ReverseProxyConfig }>('/facility-apps/reverse-proxy/reconcile', input ?? {});
   },
   syncDNS(input: { domains?: string[]; takeover?: boolean; confirmTakeover?: boolean }) {
     return apiClient.post<{ taskId: string }>('/facility-apps/reverse-proxy/dns-sync', {

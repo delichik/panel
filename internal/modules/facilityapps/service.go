@@ -251,6 +251,9 @@ func (s *Service) SaveReverseProxy(ctx context.Context, in ReverseProxySaveInput
 	if err != nil {
 		return ReverseProxyConfig{}, err
 	}
+	if assets, assetErr := s.listStaticAssets(ctx); assetErr == nil {
+		previous.StaticAssets = assets
+	}
 	next, err := normalizeInput(in)
 	if err != nil {
 		return ReverseProxyConfig{}, err
@@ -264,12 +267,21 @@ func (s *Service) SaveReverseProxy(ctx context.Context, in ReverseProxySaveInput
 	if err := s.syncReverseProxyTraits(ctx, previous.DeploymentServers, next.DeploymentServers); err != nil {
 		return ReverseProxyConfig{}, err
 	}
-	if err := s.triggerReverseProxyReconcile(ctx, "facility_app", removedServers(previous.DeploymentServers, next.DeploymentServers), nil); err != nil {
+	saved, err := s.loadConfig(ctx)
+	if err != nil {
+		return ReverseProxyConfig{}, err
+	}
+	if assets, assetErr := s.listStaticAssets(ctx); assetErr == nil {
+		saved.StaticAssets = assets
+	}
+	stopIDs := removedServers(previous.DeploymentServers, saved.DeploymentServers)
+	applyIDs := facilityGatewaysAffectedByConfigChange(previous, saved)
+	if err := s.triggerReverseProxyReconcile(ctx, "facility_app", stopIDs, applyIDs); err != nil {
 		_ = s.setLastError(ctx, err.Error())
 	}
 	previous = s.attachApplicationRoutes(ctx, previous)
-	next = s.attachApplicationRoutes(ctx, next)
-	if affected := dnsSyncDomainsOnSave(previous, next); len(affected) > 0 {
+	saved = s.attachApplicationRoutes(ctx, saved)
+	if affected := dnsSyncDomainsOnSave(previous, saved); len(affected) > 0 {
 		if _, err := s.triggerDNSSync(ctx, affected, "facility_app", false); err != nil {
 			_ = s.setLastError(ctx, err.Error())
 		}
@@ -459,8 +471,12 @@ func anyAccessRouteServerIDs(anyAccess applications.AnyAccessConfig, origins, ga
 	return uniqueSorted(append(append([]string{}, origins...), relay...))
 }
 
-func (s *Service) ReconcileReverseProxyNow(ctx context.Context) (ReconcileResult, error) {
-	if err := s.triggerReverseProxyReconcile(ctx, "user", nil, nil); err != nil {
+func (s *Service) ReconcileReverseProxyNow(ctx context.Context, in ReconcileReverseProxyInput) (ReconcileResult, error) {
+	triggerType := "user"
+	if in.Apply {
+		triggerType = "facility_app"
+	}
+	if err := s.triggerReverseProxyReconcile(ctx, triggerType, in.StopServerIDs, in.ServerIDs); err != nil {
 		_ = s.setLastError(ctx, err.Error())
 		return ReconcileResult{}, err
 	}
@@ -1701,6 +1717,132 @@ func removedServers(previous, next []string) []string {
 		}
 	}
 	return out
+}
+
+func addedServers(previous, next []string) []string {
+	return removedServers(next, previous)
+}
+
+// facilityGatewaysAffectedByConfigChange returns gateway server IDs whose
+// nginx desired state may change between two committed facility configs.
+// Empty means "all current gateways" for callers that treat nil/empty as
+// unscoped planning.
+func facilityGatewaysAffectedByConfigChange(previous, next ReverseProxyConfig) []string {
+	out := map[string]struct{}{}
+	add := func(ids []string) {
+		for _, id := range ids {
+			id = strings.TrimSpace(id)
+			if id == "" {
+				continue
+			}
+			out[id] = struct{}{}
+		}
+	}
+	add(addedServers(previous.DeploymentServers, next.DeploymentServers))
+
+	prevByDomain := map[string]FacilityRouteDomain{}
+	for _, domain := range previous.Domains {
+		prevByDomain[strings.ToLower(strings.TrimSpace(domain.Domain))] = domain
+	}
+	nextByDomain := map[string]FacilityRouteDomain{}
+	for _, domain := range next.Domains {
+		nextByDomain[strings.ToLower(strings.TrimSpace(domain.Domain))] = domain
+	}
+	for name, prev := range prevByDomain {
+		nextDomain, ok := nextByDomain[name]
+		if !ok {
+			add(anyAccessRouteServerIDs(prev.AnyAccess, prev.OriginServerIDs, previous.DeploymentServers))
+			continue
+		}
+		if facilityDomainNginxSignature(prev) != facilityDomainNginxSignature(nextDomain) {
+			add(anyAccessRouteServerIDs(prev.AnyAccess, prev.OriginServerIDs, previous.DeploymentServers))
+			add(anyAccessRouteServerIDs(nextDomain.AnyAccess, nextDomain.OriginServerIDs, next.DeploymentServers))
+		}
+	}
+	for name, nextDomain := range nextByDomain {
+		if _, ok := prevByDomain[name]; !ok {
+			add(anyAccessRouteServerIDs(nextDomain.AnyAccess, nextDomain.OriginServerIDs, next.DeploymentServers))
+		}
+	}
+
+	prevGateways := uniqueSorted(previous.DeploymentServers)
+	nextGateways := uniqueSorted(next.DeploymentServers)
+	if strings.Join(prevGateways, ",") != strings.Join(nextGateways, ",") {
+		for _, domain := range append(append([]FacilityRouteDomain{}, previous.Domains...), next.Domains...) {
+			if domain.AnyAccess.Enabled && len(domain.AnyAccess.RelayServerIDs) == 0 {
+				add(anyAccessRouteServerIDs(domain.AnyAccess, domain.OriginServerIDs, previous.DeploymentServers))
+				add(anyAccessRouteServerIDs(domain.AnyAccess, domain.OriginServerIDs, next.DeploymentServers))
+			}
+		}
+	}
+
+	if facilityStaticAssetsSignature(previous.StaticAssets) != facilityStaticAssetsSignature(next.StaticAssets) {
+		for _, domain := range append(append([]FacilityRouteDomain{}, previous.Domains...), next.Domains...) {
+			if facilityDomainUsesStaticAsset(domain) {
+				add(anyAccessRouteServerIDs(domain.AnyAccess, domain.OriginServerIDs, previous.DeploymentServers))
+				add(anyAccessRouteServerIDs(domain.AnyAccess, domain.OriginServerIDs, next.DeploymentServers))
+			}
+		}
+	}
+
+	ids := make([]string, 0, len(out))
+	for id := range out {
+		ids = append(ids, id)
+	}
+	ids = uniqueSorted(ids)
+	if len(ids) == 0 {
+		return uniqueSorted(next.DeploymentServers)
+	}
+	// Prefer planning only gateways that remain (or were just added); removals
+	// are handled via stopServerIds.
+	nextSet := map[string]struct{}{}
+	for _, id := range next.DeploymentServers {
+		nextSet[id] = struct{}{}
+	}
+	scoped := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := nextSet[id]; ok {
+			scoped = append(scoped, id)
+		}
+	}
+	if len(scoped) == 0 {
+		return uniqueSorted(next.DeploymentServers)
+	}
+	return scoped
+}
+
+func facilityDomainNginxSignature(domain FacilityRouteDomain) string {
+	raw, _ := json.Marshal(domain)
+	return string(raw)
+}
+
+func facilityStaticAssetsSignature(assets []StaticAsset) string {
+	type item struct {
+		Name   string `json:"name"`
+		SHA256 string `json:"sha256"`
+		Kind   string `json:"kind"`
+	}
+	rows := make([]item, 0, len(assets))
+	for _, asset := range assets {
+		rows = append(rows, item{Name: asset.Name, SHA256: asset.SHA256, Kind: asset.Kind})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Name == rows[j].Name {
+			return rows[i].SHA256 < rows[j].SHA256
+		}
+		return rows[i].Name < rows[j].Name
+	})
+	raw, _ := json.Marshal(rows)
+	return string(raw)
+}
+
+func facilityDomainUsesStaticAsset(domain FacilityRouteDomain) bool {
+	for _, path := range domain.Paths {
+		if path.RuleType == StaticRuleStatic || strings.TrimSpace(path.AssetName) != "" || strings.TrimSpace(path.AssetID) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func specHash(serverID string, cfg ReverseProxyConfig, routes []applications.ApplicationReverseProxyConfig, nginx string, files []appruntime.ManagedFile) string {

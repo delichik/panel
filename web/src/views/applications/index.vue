@@ -1638,13 +1638,23 @@ async function commitFacilityConfig() {
         return;
       }
       const result = await reverseProxyFacilityApi.commitEdit(facilitySession.value, facilityPreview.value);
+      // Commit already persisted; do not discard the session if follow-up apply fails.
       succeeded = true;
+      let applied = false;
+      if (result.applyNeeded) {
+        await reverseProxyFacilityApi.reconcile({
+          apply: true,
+          serverIds: result.applyServerIds ?? [],
+          stopServerIds: result.stopServerIds ?? [],
+        });
+        applied = true;
+      }
       facility.value = result.config;
       facilitySession.value = null;
       facilityPreview.value = null;
       facilityDiagnostics.value = [];
       resetLocalAssetState(facilityLocalAssets, facilityAssetBaseline(result.config.staticAssets ?? []));
-      notifySuccess(result.applyRequested ? t('applicationsPage.gatewayCommittedAndApplied') : t('applicationsPage.gatewayCommitted'), result);
+      notifySuccess(applied || result.applyRequested ? t('applicationsPage.gatewayCommittedAndApplied') : t('applicationsPage.gatewayCommitted'), result);
       isDirty.value = false;
       editorReady.value = false;
       if (mode.value === 'facilityConfig') {

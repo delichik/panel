@@ -222,7 +222,7 @@
 | UI-FAC-008 | 新增/编辑设施 path | path 必须以 `/` 开头；static 要选**本地可见** asset；redirect 要合法 URL 与 301/302/307/308；proxy_pass 要 http(s) URL并可配 source mode | 各 ruleType 只发送相关字段；非法值就地阻止保存 | model 测试覆盖空/非法 path、redirect、proxy 和缺 asset |
 | UI-FAC-009 | 配置设施 path 高级项 | 支持 gzip、请求体、超时、buffering、WebSocket、自定义请求/响应头；redirect 仅保留适用项 | 数值非负，空 header 过滤 | clone/编辑往返不丢 proxy_pass 和 options |
 | UI-FAC-010 | 管理静态资产 | 复用 AssetFileManager；变更写入本地 pending；文本「保存」只更新 pending；新文本下载名默认跟引用名且可分开改；路由引用用 asset.name；已提交资产下载走正式 static content | binary/archive 即使扩展名像文本也不可编辑；替换保留 name；编辑期不得调用 session asset API | 列表=已提交⊕pending；页面保存时 flush；删除仍被引用由保存时服务端诊断阻止 |
-| UI-FAC-011 | 保存/取消设施编辑 | 唯一主操作「保存」：本地校验→begin（无客户端草稿）→patch→flush pending 资产→preview→无 blocking diagnostic 才 commit→清理会话；变更摘要按域名和网关服务器实际对象互斥归类；成功必须退出编辑并回到详情并刷新；取消脏草稿先确认；无独立 Preview 主按钮 | 冲突 discard 临时会话并保留本地；保存中整页阻塞；仅默认字段规范化、域名面板顺序或服务器选择顺序变化不得产生假修改；仅改静态文本不得回滚已提交 redirectUrl | applyRequested 决定提示；diff model 测试覆盖新增、删除、同名内容修改、等量替换和未变更基线 |
+| UI-FAC-011 | 保存/取消设施编辑 | 唯一主操作「保存」：本地校验→begin（无客户端草稿）→patch→flush pending 资产→preview→无 blocking diagnostic 才 commit→若 `applyNeeded` 再调 reconcile（`apply=true` + commit 返回的 serverIds）→清理会话；变更摘要按域名和网关服务器实际对象互斥归类；成功必须退出编辑并回到详情并刷新；取消脏草稿先确认；无独立 Preview 主按钮 | 冲突 discard 临时会话并保留本地；保存中整页阻塞；仅默认字段规范化、域名面板顺序或服务器选择顺序变化不得产生假修改；仅改静态文本不得回滚已提交 redirectUrl | applyNeeded/applyRequested 决定提示；diff model 测试覆盖新增、删除、同名内容修改、等量替换和未变更基线 |
 
 `UI-FAC-012`：入口代理按节点显示容器观测与部署结果、失败阶段、下次重试及活动入口；错误带原因与处理提示，技术诊断/本次运行日志放入内部可滚动折叠区。按需代理检查显示样本限制、节点/域名/上游、分类解释与下一步；空样本不表示全部路由健康，旧配置/离页响应不得覆盖当前结果。
 

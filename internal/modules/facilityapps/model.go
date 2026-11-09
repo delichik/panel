@@ -243,5 +243,16 @@ type FacilityEditCommitResult struct {
 	Config          ReverseProxyConfig           `json:"config"`
 	ResourceVersion applications.ResourceVersion `json:"resourceVersion"`
 	ApplyRequested  bool                         `json:"applyRequested"`
+	ApplyNeeded     bool                         `json:"applyNeeded"`
+	ApplyServerIDs  []string                     `json:"applyServerIds,omitempty"`
+	StopServerIDs   []string                     `json:"stopServerIds,omitempty"`
 	Diagnostics     []applications.Diagnostic    `json:"diagnostics,omitempty"`
+}
+
+// ReconcileReverseProxyInput controls manual vs post-commit gateway reconcile.
+// Apply=true uses force=false and may scope planning to ServerIDs/StopServerIDs.
+type ReconcileReverseProxyInput struct {
+	ServerIDs     []string `json:"serverIds"`
+	StopServerIDs []string `json:"stopServerIds"`
+	Apply         bool     `json:"apply"`
 }

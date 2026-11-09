@@ -921,7 +921,15 @@ export function commitFacilitySession(id: string) {
     updatedAt: now,
     routes: session.draft.domains.reduce((sum, domain) => sum + domain.paths.length, 0),
   };
-  return { config: mockFacility, resourceVersion: { value: String(mockFacility.version), updatedAt: now }, applyRequested: true, diagnostics: [] };
+  return {
+    config: mockFacility,
+    resourceVersion: { value: String(mockFacility.version), updatedAt: now },
+    applyRequested: false,
+    applyNeeded: true,
+    applyServerIds: mockFacility.deploymentServers,
+    stopServerIds: [],
+    diagnostics: [],
+  };
 }
 
 export function data<T>(payload: T, status = 200) {

@@ -106,10 +106,12 @@ func TestFacilityEditAssetNamesAreUniqueWithinSession(t *testing.T) {
 	assertFacilityPanelError(t, err, "facility_static_asset_name_duplicate")
 }
 
-func TestFacilityEditSessionApplyFailureRemainsCommitted(t *testing.T) {
+func TestFacilityEditSessionCommitReturnsApplyNeededWithoutPlanning(t *testing.T) {
 	svc, _, closeStore := newFacilityEditTestService(t)
 	defer closeStore()
 	ctx := context.Background()
+	trigger := &recordingReconcileTrigger{}
+	svc.reconciler = trigger
 	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
 	if err != nil {
 		t.Fatal(err)
@@ -118,12 +120,16 @@ func TestFacilityEditSessionApplyFailureRemainsCommitted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	before := trigger.calls
 	result, err := svc.CommitFacilityEditSession(ctx, session.ID, "commit", CommitFacilityEditSessionInput{Revision: session.Revision, BaseResourceVersion: session.BaseResourceVersion.Value, PreviewToken: preview.Token.Value})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ApplyRequested || len(result.Diagnostics) == 0 || result.Diagnostics[0].Code != "facility_apply_request_failed" {
+	if result.ApplyRequested || !result.ApplyNeeded {
 		t.Fatalf("result = %#v", result)
+	}
+	if trigger.calls != before {
+		t.Fatalf("commit planned reconcile %d times, want 0", trigger.calls-before)
 	}
 	stored, err := svc.GetFacilityEditSession(ctx, session.ID)
 	if err != nil || stored.State != FacilityEditSessionCommitted {
@@ -1073,7 +1079,7 @@ func TestReconcileReverseProxyNowClearsStaleLastError(t *testing.T) {
 	}
 	// 注入协调器后手动协调成功，旧 last_error 必须被清空。
 	svc.reconciler = fakeFacilityReconcileTrigger{}
-	result, err := svc.ReconcileReverseProxyNow(ctx)
+	result, err := svc.ReconcileReverseProxyNow(ctx, ReconcileReverseProxyInput{})
 	if err != nil {
 		t.Fatal(err)
 	}

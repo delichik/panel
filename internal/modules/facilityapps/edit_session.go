@@ -550,6 +550,9 @@ func (s *Service) CommitFacilityEditSession(ctx context.Context, sessionID, idem
 		return FacilityEditCommitResult{}, err
 	}
 	previous, _ := s.loadConfig(ctx)
+	if assets, assetErr := s.listStaticAssets(ctx); assetErr == nil {
+		previous.StaticAssets = assets
+	}
 	if err := s.renewFacilityCommitLease(ctx, sessionID, leaseOwner); err != nil {
 		s.rollbackFacilityManifestFiles(manifest)
 		s.resetFacilityCommit(ctx, sessionID, leaseOwner, FacilityEditSessionActive, "")
@@ -571,16 +574,25 @@ func (s *Service) CommitFacilityEditSession(ctx context.Context, sessionID, idem
 	if err != nil {
 		config, _ = s.loadConfig(ctx)
 	}
-	result := FacilityEditCommitResult{Config: config, ResourceVersion: applications.ResourceVersion{Value: strconv.Itoa(config.Version), UpdatedAt: config.UpdatedAt}, ApplyRequested: true}
+	stopIDs := removedServers(previous.DeploymentServers, config.DeploymentServers)
+	applyIDs := facilityGatewaysAffectedByConfigChange(previous, config)
+	result := FacilityEditCommitResult{
+		Config:          config,
+		ResourceVersion: applications.ResourceVersion{Value: strconv.Itoa(config.Version), UpdatedAt: config.UpdatedAt},
+		ApplyRequested:  false,
+		ApplyNeeded:     true,
+		ApplyServerIDs:  applyIDs,
+		StopServerIDs:   stopIDs,
+	}
 	if err := s.syncReverseProxyTraits(ctx, previous.DeploymentServers, config.DeploymentServers); err != nil {
-		result.ApplyRequested = false
-		result.Diagnostics = append(result.Diagnostics, applications.Diagnostic{Code: "facility_apply_request_failed", Severity: "warning", Message: i18n.Translate("facility_apply_request_failed", "Configuration was committed, but applying it could not be requested"), Details: map[string]any{"error": err.Error()}})
-	} else if err := s.triggerReverseProxyReconcile(ctx, "facility_app", removedServers(previous.DeploymentServers, config.DeploymentServers), nil); err != nil {
-		result.ApplyRequested = false
+		result.ApplyNeeded = false
+		result.ApplyServerIDs = nil
+		result.StopServerIDs = nil
 		result.Diagnostics = append(result.Diagnostics, applications.Diagnostic{Code: "facility_apply_request_failed", Severity: "warning", Message: i18n.Translate("facility_apply_request_failed", "Configuration was committed, but applying it could not be requested"), Details: map[string]any{"error": err.Error()}})
 	}
 	previous = s.attachApplicationRoutes(ctx, previous)
 	config = s.attachApplicationRoutes(ctx, config)
+	result.Config = config
 	if affected := dnsSyncDomainsOnSave(previous, config); len(affected) > 0 {
 		if _, err := s.triggerDNSSync(ctx, affected, "facility_app", false); err != nil {
 			result.Diagnostics = append(result.Diagnostics, applications.Diagnostic{Code: "facility_dns_sync_failed", Severity: "warning", Message: i18n.Translate("facility_dns_sync_failed", "Configuration was committed, but requesting the DNS record sync failed"), Details: map[string]any{"error": err.Error()}})
@@ -1037,11 +1049,24 @@ func (s *Service) recoverFacilityEditRecord(ctx context.Context, record facility
 		return
 	}
 	config, _ := s.GetReverseProxy(ctx)
-	result := FacilityEditCommitResult{Config: config, ResourceVersion: applications.ResourceVersion{Value: strconv.Itoa(config.Version), UpdatedAt: config.UpdatedAt}, ApplyRequested: true, Diagnostics: []applications.Diagnostic{{Code: "facility_commit_recovered", Severity: "info", Message: i18n.Translate("facility_commit_recovered", "Committed facility configuration was recovered after restart")}}}
+	stopIDs := removedServers(manifest.PreviousServers, config.DeploymentServers)
+	// Recovery has no frontend follow-up, so request apply here with the
+	// current gateway set (force=false skips SpecHash-equal nodes).
+	result := FacilityEditCommitResult{
+		Config:          config,
+		ResourceVersion: applications.ResourceVersion{Value: strconv.Itoa(config.Version), UpdatedAt: config.UpdatedAt},
+		ApplyRequested:  true,
+		ApplyNeeded:     false,
+		ApplyServerIDs:  append([]string{}, config.DeploymentServers...),
+		StopServerIDs:   stopIDs,
+		Diagnostics:     []applications.Diagnostic{{Code: "facility_commit_recovered", Severity: "info", Message: i18n.Translate("facility_commit_recovered", "Committed facility configuration was recovered after restart")}},
+	}
 	if err := s.syncReverseProxyTraits(ctx, manifest.PreviousServers, config.DeploymentServers); err != nil {
 		result.ApplyRequested = false
+		result.ApplyServerIDs = nil
+		result.StopServerIDs = nil
 		result.Diagnostics = append(result.Diagnostics, applications.Diagnostic{Code: "facility_apply_request_failed", Severity: "warning", Message: i18n.Translate("facility_apply_request_failed", "Configuration was recovered, but applying it could not be requested"), Details: map[string]any{"error": err.Error()}})
-	} else if err := s.triggerReverseProxyReconcile(ctx, "facility_recovery", removedServers(manifest.PreviousServers, config.DeploymentServers), nil); err != nil {
+	} else if err := s.triggerReverseProxyReconcile(ctx, "facility_recovery", stopIDs, result.ApplyServerIDs); err != nil {
 		result.ApplyRequested = false
 		result.Diagnostics = append(result.Diagnostics, applications.Diagnostic{Code: "facility_apply_request_failed", Severity: "warning", Message: i18n.Translate("facility_apply_request_failed", "Configuration was recovered, but applying it could not be requested"), Details: map[string]any{"error": err.Error()}})
 	}
