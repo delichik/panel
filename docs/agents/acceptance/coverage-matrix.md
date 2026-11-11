@@ -33,6 +33,8 @@
 - 本轮前端外壳/布局/动效优化：主导航抽出 `NavList.vue` 供桌面侧栏与移动抽屉复用（`aria-current` 深层归属、激活条、连续折叠动效、跳转链接），`MasterDetailLayout` 承担高度契约并支持 `detail-key` 详情进场，详情区可选横幅回归内部滚动区，Dialog 锁定背景滚动，Toast 增加图标/堆叠上限/悬停暂停，`useOverlayBehavior` 增加最上层 Escape 兜底；不新增路由、API、数据库表或后台任务，对应 `UI-SHELL-015/039/041/048/052/053/054/055/056/057`。
 - Toast 气泡改为不透明 `--panel-popover` 底（去掉 `bg-*-bg/40`），语义仅靠边框与图标；验收与视觉规范同步 `UI-SHELL-056`。
 - 应用/服务器/凭据/DNS 覆盖式详情页头补「编辑」入口（与列表行编辑同一路径）；证书仍用续签/重签语义、设施配置按记录行编辑；对应 `UI-APP-002`、`UI-SRV-002`、`UI-CRED-001`、`UI-DNS-001`。
+- 应用节点健康/异常/部署中徽标与 Runtime 汇总卡仅展示 count>0 的桶；对应 `UI-APP-001/002`。
+- 应用镜像列不再用 `jobId`/`panel-<name>` 冒充镜像；粘性表头改为不透明 `bg-surface-raised`；对应 `UI-APP-001`、`APP-UI-002`。
 - 同轮窄屏适配：顶栏在 `<1024px` 粘性置顶，7 个主从工作台的主列表/服务器选择器在窄屏限高 `60dvh` 并保持内部滚动，使详情在一屏内可及；抽屉关闭按钮与导航行放大到 44px；自有 motion 类的 hover 反馈收进 `@media (hover: hover)`，交互控件加 `touch-action: manipulation`。不新增路由或组件，对应 `UI-SHELL-013`。
 - 同轮窄屏主从单视图曾为 `MasterDetailLayout` 过渡能力；当前实体与操作/任务统一覆盖式详情，日志为 ListPage+Dialog，不再保留 activity 双栏切换。对应 `UI-SHELL-019/058`。
 - 验证证据（2026-09-26/27，WSL Debian / Node 22.23.3 / task 3.53.1）：`task test:web` = 48 个文件 259 项全通过；`task build:web`（`vue-tsc --noEmit && vite build`）退出码 0；构建产物抽查确认新类均已生成，且入场动画只保留 `backwards`（无 `both`）。测试期间修掉 `MasterDetailLayout` 模板前置注释导致的多根问题（会静默丢弃页面传入的 class）与 `views/applications` 自建 `.workspace-panel` 入场动画。

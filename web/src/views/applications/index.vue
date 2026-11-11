@@ -1024,7 +1024,7 @@ async function loadRowImageDetail(applicationId: string) {
     if (rowImageControllers.get(applicationId) !== controller || mode.value !== 'apps') return;
     applicationDetails.value = { ...applicationDetails.value, [applicationId]: app };
   } catch {
-    // Keep the summary or job fallback when the image cannot be resolved.
+    // Leave the cell empty/unavailable when the image cannot be resolved; never fall back to jobId (container name).
   } finally {
     if (rowImageControllers.get(applicationId) === controller) {
       rowImageControllers.delete(applicationId);
@@ -2481,14 +2481,14 @@ onBeforeUnmount(() => {
               </div>
             </template>
             <template #image="{ row }">
-              <span v-if="!loading && !(rowImageLoading[row.app.id] && !rowImageReference(row.app))" class="block max-w-[18rem] truncate text-muted-foreground">{{ rowImageReference(row.app) || row.app.jobId }}</span>
+              <span v-if="!loading && !(rowImageLoading[row.app.id] && !rowImageReference(row.app))" class="block max-w-[18rem] truncate text-muted-foreground">{{ rowImageReference(row.app) || t('common.notAvailable') }}</span>
               <div v-else class="motion-skeleton h-3 w-40 rounded bg-muted animate-pulse" aria-hidden="true" />
             </template>
             <template #instances="{ row }">
               <div class="flex flex-wrap gap-1">
-                <Badge tone="success">{{ t('applicationsPage.nodeBucket.healthy', { count: row.counts.healthy }) }}</Badge>
-                <Badge tone="danger">{{ t('applicationsPage.nodeBucket.abnormal', { count: row.counts.abnormal }) }}</Badge>
-                <Badge tone="warning">{{ t('applicationsPage.nodeBucket.deploying', { count: row.counts.deploying }) }}</Badge>
+                <Badge v-if="row.counts.healthy > 0" tone="success">{{ t('applicationsPage.nodeBucket.healthy', { count: row.counts.healthy }) }}</Badge>
+                <Badge v-if="row.counts.abnormal > 0" tone="danger">{{ t('applicationsPage.nodeBucket.abnormal', { count: row.counts.abnormal }) }}</Badge>
+                <Badge v-if="row.counts.deploying > 0" tone="warning">{{ t('applicationsPage.nodeBucket.deploying', { count: row.counts.deploying }) }}</Badge>
               </div>
             </template>
             <template #imageUpdate="{ row }">
@@ -2530,7 +2530,7 @@ onBeforeUnmount(() => {
     </template>
 
     <template #detail>
-      <ConsolePage :title="selectedApplication.name" :description="selectedApplication.imageReference || selectedApplication.jobId" :back-label="t('common.backToList')" @back="backToApplicationList">
+      <ConsolePage :title="selectedApplication.name" :description="selectedApplication.imageReference || ''" :back-label="t('common.backToList')" @back="backToApplicationList">
         <template #actions>
           <Button size="sm" variant="secondary" @click="router.push(`/applications/apps/${encodeURIComponent(selectedApplication.id)}/edit`)"><Wrench />{{ t('common.edit') }}</Button>
           <ActivityLink resource-type="application" :resource-id="selectedApplication.id" />
@@ -2555,9 +2555,9 @@ onBeforeUnmount(() => {
             <Badge v-if="planningError" tone="danger">{{ t('applicationsPage.status.planning_failed') }}</Badge>
             <Badge v-else-if="selectedApplication.reconcileStopped" tone="warning">{{ t('applicationsPage.status.attention') }}</Badge>
             <Badge :tone="selectedApplication.imageUpdateAvailable ? 'warning' : 'neutral'">{{ selectedApplication.imageUpdateAvailable ? t('applicationsPage.imageUpdate') : t('applicationsPage.imageCurrent') }}</Badge>
-            <Badge tone="success">{{ t('applicationsPage.nodeBucket.healthy', { count: selectedNodeCounts.healthy }) }}</Badge>
-            <Badge tone="danger">{{ t('applicationsPage.nodeBucket.abnormal', { count: selectedNodeCounts.abnormal }) }}</Badge>
-            <Badge tone="warning">{{ t('applicationsPage.nodeBucket.deploying', { count: selectedNodeCounts.deploying }) }}</Badge>
+            <Badge v-if="selectedNodeCounts.healthy > 0" tone="success">{{ t('applicationsPage.nodeBucket.healthy', { count: selectedNodeCounts.healthy }) }}</Badge>
+            <Badge v-if="selectedNodeCounts.abnormal > 0" tone="danger">{{ t('applicationsPage.nodeBucket.abnormal', { count: selectedNodeCounts.abnormal }) }}</Badge>
+            <Badge v-if="selectedNodeCounts.deploying > 0" tone="warning">{{ t('applicationsPage.nodeBucket.deploying', { count: selectedNodeCounts.deploying }) }}</Badge>
           </div>
           <Tabs v-model="activeAppTab" :tabs="appDetailTabs">
             <section v-if="appTab === 'runtime'" class="grid gap-4">
@@ -2567,10 +2567,10 @@ onBeforeUnmount(() => {
                 </template>
               </EmptyState>
               <template v-else>
-                <div class="grid grid-cols-3 gap-3 max-md:grid-cols-1">
-                  <div class="rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.nodeBucketHealthyLabel') }}</span><strong>{{ selectedNodeCounts.healthy }}</strong></div>
-                  <div class="rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.nodeBucketAbnormalLabel') }}</span><strong>{{ selectedNodeCounts.abnormal }}</strong></div>
-                  <div class="rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.nodeBucketDeployingLabel') }}</span><strong>{{ selectedNodeCounts.deploying }}</strong></div>
+                <div v-if="selectedNodeCounts.healthy > 0 || selectedNodeCounts.abnormal > 0 || selectedNodeCounts.deploying > 0" class="flex flex-wrap gap-3">
+                  <div v-if="selectedNodeCounts.healthy > 0" class="min-w-[8rem] flex-1 rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.nodeBucketHealthyLabel') }}</span><strong>{{ selectedNodeCounts.healthy }}</strong></div>
+                  <div v-if="selectedNodeCounts.abnormal > 0" class="min-w-[8rem] flex-1 rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.nodeBucketAbnormalLabel') }}</span><strong>{{ selectedNodeCounts.abnormal }}</strong></div>
+                  <div v-if="selectedNodeCounts.deploying > 0" class="min-w-[8rem] flex-1 rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.nodeBucketDeployingLabel') }}</span><strong>{{ selectedNodeCounts.deploying }}</strong></div>
                 </div>
                 <div v-if="planningError" role="alert" class="grid gap-2 rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">
                   <div class="flex flex-wrap items-center justify-between gap-2">

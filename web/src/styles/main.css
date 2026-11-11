@@ -8,6 +8,7 @@
   --color-foreground: var(--panel-text);
   --color-card: var(--panel-surface);
   --color-card-foreground: var(--panel-text);
+  --color-surface-raised: var(--panel-surface-raised);
   --color-popover: var(--panel-popover);
   --color-popover-foreground: var(--panel-text);
   --color-primary: var(--panel-primary);

@@ -63,7 +63,7 @@ function skeletonClass(rowIndex: number, columnIndex: number, align?: 'left' | '
 <template>
   <div class="min-h-0 overflow-auto" :class="framed ? 'rounded-xl border border-border bg-card' : undefined">
     <table class="w-full border-collapse text-sm" :class="fixed ? 'table-fixed' : undefined" :aria-busy="loading ? 'true' : undefined" :aria-label="loadingLabel || undefined">
-      <thead class="sticky top-0 z-10 bg-muted text-xs font-semibold uppercase tracking-wide text-secondary-foreground">
+      <thead class="sticky top-0 z-10 bg-surface-raised text-xs font-semibold uppercase tracking-wide text-secondary-foreground">
           <tr>
             <th v-for="column in columns" :key="column.key" scope="col" class="border-b border-border px-3 py-2.5" :class="[column.align === 'right' ? 'text-right' : 'text-left', column.width, column.nowrap ? 'whitespace-nowrap' : undefined]">
               <slot v-if="$slots[`head-${column.key}`]" :name="`head-${column.key}`" :row="undefined as unknown as T" :value="undefined" />

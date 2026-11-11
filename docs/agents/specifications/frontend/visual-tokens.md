@@ -30,7 +30,7 @@
 - `--panel-bg` 只用于页面根（AppShell / LoginPage / maintenance 根容器）以及直接铺在页面上的页面级区域。
 - 侧栏与顶栏可用 `--panel-surface`（或半透明 surface + blur）与内容底区分；页脚条可用 surface。
 - 卡片 / 面板一律 `--panel-surface`；卡片内部任何组件**禁止**再使用 `--panel-bg`。
-- 卡片内的内嵌分组、统计小格、表格头、选中列表项使用 `--panel-muted`（中性灰井道），选中项叠加 `--panel-border-strong`。
+- 卡片内的内嵌分组、统计小格、选中列表项使用 `--panel-muted`（中性灰井道），选中项叠加 `--panel-border-strong`。**粘性表格头**必须用不透明 `--panel-surface-raised`（Tailwind：`bg-surface-raised`），不得用带 alpha 的 muted，以免滚动时正文透出。
 - **同一视觉区域内只允许一层卡片**：卡片内部不得再出现带边框 + 圆角 + 背景的卡片式容器。卡内分组用分节标题 + 分隔线（`border-t`）；纯数据块可用无边框的 muted 背景带（保留圆角但不加边框）；卡片内嵌的表格使用 `Table` 的 `framed=false`，由外层卡片承担边框；纯布局包装（仪表盘画布、编辑器外壳、详情区列容器）不得自带卡片外观。
 - 例外：语义提示横幅（success/warning/danger/info）、可交互列表行/下拉选项、输入控件、Dialog/菜单浮层内部与 EmptyState 不受“一层卡片”限制。
 - 输入类控件（Input / Select / Textarea / CodeEditor / 次要按钮 / 开关滑块 / 服务器选择行）使用 `--panel-surface` + 边框，在卡片内与卡片同色、靠边框区分。

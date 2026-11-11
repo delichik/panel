@@ -627,7 +627,7 @@
 
 - **前置**：列表/详情/runtime/设施 API 可独立慢或失败。
 - **动作**：进入页面、切换选择、执行操作。
-- **结果**：当前页列表摘要先加载；选中详情/runtime 按需异步；骨架不以 0/jobId 冒充数据；应用主徽标仅启停，旁挂健康/异常/部署中三计数；节点列表就地显示各节点观测态、Job 阶段或“系统核实中”、尝试次数、下次重试和结构化错误，并可按 operationId 深链；规划失败与 reconcile_stopped 以独立告警展示；设施直达 URL 先加载目录再判断 kind。
+- **结果**：当前页列表摘要先加载；选中详情/runtime 按需异步；骨架不以 0/`jobId` 冒充数据；镜像列只显示 `imageReference`（缺省补详情，失败显示不可用），**不得**用容器名 `panel-<name>`/`jobId` 顶替；应用主徽标仅启停，旁挂健康/异常/部署中三计数（仅展示 count>0 的桶，含列表徽标、详情页头与 Runtime 汇总卡）；节点列表就地显示各节点观测态、Job 阶段或“系统核实中”、尝试次数、下次重试和结构化错误，并可按 operationId 深链；规划失败与 reconcile_stopped 以独立告警展示；设施直达 URL 先加载目录再判断 kind。
 - **失败**：旧请求响应不得覆盖新选择；普通应用入口不得预拉设施或多应用 runtime；实例错误不得读取不存在的 `error` 字段而丢失后端 `lastError`。
 - **不变量**：危险删除/批量操作必须标准确认；部署请求完成与节点收敛状态分开展示；有界轮询以任一节点活跃 Job 为谓词。
 - **验证**：API call-count、race/stale-response、status/error contract、bounded polling model tests。
