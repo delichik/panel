@@ -368,6 +368,9 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
 
     <template #detail>
       <ConsolePage :title="detailTitle" :description="selectedCredential?.username || ''" :back-label="t('common.backToList')" @back="closeDetail">
+        <template v-if="selectedCredential" #actions>
+          <Button size="sm" variant="secondary" @click="openEdit(selectedCredential)"><Wrench />{{ t('common.edit') }}</Button>
+        </template>
         <div class="grid gap-6">
           <section class="grid gap-3 border-b border-border pb-5">
             <h3 class="m-0 flex items-center gap-2 text-sm font-semibold text-foreground"><KeyRound class="size-4 text-muted-foreground" />{{ t('credentialsPage.keySummary') }}</h3>

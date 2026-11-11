@@ -48,8 +48,8 @@
 
 - `web/src/views/applications/ApplicationLogsDialog.vue`：业务容器日志弹窗复用 Dialog/Select/Button/LoadingOverlay；按服务器与容器展示实例，日志在固定弹窗正文内滚动，切换/关闭取消旧请求，不使用活动日志替代容器输出。
 
-- `web/src/views/applications/index.vue`：应用搜索、状态、应用/设施连续纵向配置流、部署/网关/源站服务器多选、持久化数据下载/恢复，以及应用文件和设施静态资产共用的 `AssetFileManager` 已接入统一 primitives/patterns。 未保存修改的离开/取消保护已接入 `ConfirmDialog`。应用列表为表格 + 覆盖式详情，行操作区承载 详情/编辑/同步/停用/更新镜像/日志/删除，详情内保留 runtime/routes/files tabs 与持久化数据上下文面板。
-- `web/src/views/servers/index.vue` 与 `tabs/`：服务器列表为表格 + 覆盖式详情；详情一级 tab 覆盖资源/安全能力（容器、镜像、网络、存储卷、软件包、防火墙），tab 懒加载并在详情存活期内缓存；资源页与安全页的独立实现已删除。
+- `web/src/views/applications/index.vue`：应用搜索、状态、应用/设施连续纵向配置流、部署/网关/源站服务器多选、持久化数据下载/恢复，以及应用文件和设施静态资产共用的 `AssetFileManager` 已接入统一 primitives/patterns。 未保存修改的离开/取消保护已接入 `ConfirmDialog`。应用列表为表格 + 覆盖式详情，行操作区承载 详情/编辑/同步/停用/更新镜像/日志/删除，详情页头含编辑与 `ActivityLink`，详情内保留 runtime/routes/files tabs 与持久化数据上下文面板。
+- `web/src/views/servers/index.vue` 与 `tabs/`：服务器列表为表格 + 覆盖式详情；详情页头含编辑与重启等运维操作；详情一级 tab 覆盖资源/安全能力（容器、镜像、网络、存储卷、软件包、防火墙），tab 懒加载并在详情存活期内缓存；资源页与安全页的独立实现已删除。凭据/DNS 域名覆盖式详情页头同样提供编辑入口（与行内编辑同一表单）。
 - `web/src/components/templates/TableDetailLayout.vue`：servers、credentials、dns、certificates、applications、operations、tasks 通过 `detail-swap` 接入覆盖式详情进场；列表在详情打开时 `inert` + `aria-hidden`，关闭后保留滚动位置与筛选。`/logs` 使用 `ListPage` + Dialog，不走覆盖式详情。
 
 - 产品 UI 不得再使用 EventTimeline / context / evidence。日志页只按需读取 events 列表，默认 `level=info,warning,error`，手动刷新与 cursor 分页。

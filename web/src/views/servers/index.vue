@@ -531,6 +531,7 @@ onBeforeUnmount(() => {
     <template #detail>
       <ConsolePage :title="detailTitle" :description="detailDescription" :back-label="t('common.backToList')" :body-scroll="false" @back="closeDetail">
         <template v-if="selectedServer" #actions>
+          <Button size="sm" variant="secondary" :disabled="rowBusy?.id === selectedServer.id" :loading="rowBusy?.id === selectedServer.id && rowBusy?.kind === 'edit'" @click="openEdit(selectedServer)"><Wrench />{{ t('common.edit') }}</Button>
           <Button size="sm" variant="danger" :disabled="!canRunPrivilegedOperation(selectedServer)" :loading="restarting" @click="restartOpen = true"><PlayCircle />{{ t('serversPage.restart') }}</Button>
           <Button v-if="activeTab === 'tailscale'" size="sm" variant="primary" :disabled="!selectedServer.tailscaleEnabled" :loading="tailscaleApplying" @click="applyTailscale"><RefreshCcw />{{ t('serversPage.tailscale.apply') }}</Button>
         </template>

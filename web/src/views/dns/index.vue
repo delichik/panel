@@ -400,6 +400,9 @@ watch(page, (value) => {
 
     <template #detail>
       <ConsolePage :title="selectedDomain?.name ?? t('common.loading')" :description="t('dnsPage.recordsHint')" :back-label="t('common.backToList')" :body-scroll="false" @back="closeDetail">
+        <template v-if="selectedDomain" #actions>
+          <Button size="sm" variant="secondary" @click="openEditDomain(selectedDomain)"><Wrench />{{ t('common.edit') }}</Button>
+        </template>
         <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4">
           <div class="flex flex-wrap items-start justify-between gap-3">
             <div class="min-w-0">

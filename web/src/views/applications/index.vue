@@ -2532,6 +2532,7 @@ onBeforeUnmount(() => {
     <template #detail>
       <ConsolePage :title="selectedApplication.name" :description="selectedApplication.imageReference || selectedApplication.jobId" :back-label="t('common.backToList')" @back="backToApplicationList">
         <template #actions>
+          <Button size="sm" variant="secondary" @click="router.push(`/applications/apps/${encodeURIComponent(selectedApplication.id)}/edit`)"><Wrench />{{ t('common.edit') }}</Button>
           <ActivityLink resource-type="application" :resource-id="selectedApplication.id" />
         </template>
         <EmptyState v-if="detailError" :title="t('common.loadFailed')" :description="detailError">
