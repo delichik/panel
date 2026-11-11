@@ -78,6 +78,7 @@ async function check(serverId: string) {
           <strong>{{ t(operationNeedsAttention(node.operation) ? 'applicationsPage.status.result_unknown' : 'facilityDiagnostics.deploymentFailed') }}</strong>
           <p class="m-0">{{ t(operationNeedsAttention(node.operation) ? 'applicationsPage.unknownResultHint' : node.operation.errorCode === 'container_not_running' ? 'facilityDiagnostics.startFailedHint' : 'facilityDiagnostics.deploymentFailedHint') }}</p>
           <p class="m-0 whitespace-pre-wrap break-words">{{ node.operation.error }}</p>
+          <p v-if="node.operation.errorCode === 'container_not_running' && !node.operation.errorDetail?.includes('containerLogs:')" class="m-0 text-warning">{{ t('facilityDiagnostics.missingRunLogsHint') }}</p>
           <details v-if="node.operation.errorDetail"><summary class="cursor-pointer">{{ t('facilityDiagnostics.technicalDetails') }}</summary><pre class="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words text-xs">{{ node.operation.errorDetail }}</pre></details>
         </div>
         <ActivityLink v-if="node.operation.operationId" :operation-id="node.operation.operationId" />

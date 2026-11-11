@@ -363,7 +363,9 @@ const dnsTakeoverDomain = ref('');
 const dnsTakeoverOpen = ref(false);
 function facilityDnsNeedsAction(domain: string) {
   const state = facilityDnsStatus(domain);
-  return state === 'failed' || state === 'skipped' || state === 'unknown' || state === '';
+  // pending must be retryable: exclusive/queue races can leave domains stuck
+  // "同步中" with no automatic follow-up until the user re-triggers sync.
+  return state === 'pending' || state === 'failed' || state === 'skipped' || state === 'unknown' || state === '';
 }
 function facilityDnsConflict(domain: string) {
   const error = facilityDnsError(domain).toLowerCase();
@@ -2619,6 +2621,7 @@ onBeforeUnmount(() => {
                         <div v-if="instanceOperationStatus(instance) !== 'result_unknown' && instance.operation.errorCode !== 'execution_monitoring' && (instance.operation.error || instance.operation.errorCode || instance.operation.errorDetail)" role="alert" class="grid gap-1 rounded-lg border border-danger-border bg-danger-bg p-2 text-danger">
                           <strong>{{ t('applicationsPage.operationError') }}<span v-if="instance.operation.errorCode"> · {{ instance.operation.errorCode }}</span></strong>
                           <span v-if="instance.operation.error">{{ instance.operation.error }}</span>
+                          <p v-if="instance.operation.errorCode === 'container_not_running' && !instance.operation.errorDetail?.includes('containerLogs:')" class="m-0 text-warning">{{ t('facilityDiagnostics.missingRunLogsHint') }}</p>
                           <details v-if="instance.operation.errorDetail && instance.operation.errorDetail !== instance.operation.error"><summary class="cursor-pointer">{{ t('facilityDiagnostics.technicalDetails') }}</summary><pre class="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words text-xs">{{ instance.operation.errorDetail }}</pre></details>
                         </div>
                       </div>

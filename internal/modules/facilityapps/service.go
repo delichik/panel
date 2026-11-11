@@ -161,11 +161,12 @@ func NewService(db *sql.DB, agent AgentRuntimeClient, servers ServerProvider, ap
 	s.editSessionDir = filepath.Join(s.dataRoot, "tmp", "facility-reverse-proxy-edit-sessions")
 	if s.tasks != nil {
 		s.tasks.MustRegister(tasks.Definition{
-			Type:        dnsSyncTaskType,
-			Summary:     "Syncing reverse proxy DNS records",
-			AllowRunNow: true,
-			AllowRetry:  true,
-			Execute:     s.RunDNSSyncTask,
+			Type:              dnsSyncTaskType,
+			Summary:           "Syncing reverse proxy DNS records",
+			AllowRunNow:       true,
+			AllowRetry:        true,
+			ConcurrencyPolicy: tasks.ConcurrencyResourceQueue,
+			Execute:           s.RunDNSSyncTask,
 		})
 		s.tasks.MustRegister(tasks.Definition{
 			Type:        storageReconcileTaskType,

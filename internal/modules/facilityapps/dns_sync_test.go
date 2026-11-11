@@ -2,6 +2,7 @@ package facilityapps
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"panel/internal/modules/applications"
 	"panel/internal/modules/certificates/dns"
 	"panel/internal/modules/servers"
+	"panel/internal/modules/tasks"
 	"panel/internal/platform/config"
 	storage "panel/internal/platform/database"
 )
@@ -19,6 +21,7 @@ type fakeDNSProxySyncer struct {
 	targets []dns.ProxyRecordTarget
 	results []dns.ProxyZoneResult
 	err     error
+	onSync  func()
 }
 
 func (f *fakeDNSProxySyncer) ListDomains(ctx context.Context) ([]dns.Domain, error) {
@@ -27,6 +30,9 @@ func (f *fakeDNSProxySyncer) ListDomains(ctx context.Context) ([]dns.Domain, err
 
 func (f *fakeDNSProxySyncer) SyncProxyRecords(ctx context.Context, targets []dns.ProxyRecordTarget) ([]dns.ProxyZoneResult, error) {
 	f.targets = targets
+	if f.onSync != nil {
+		f.onSync()
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -350,6 +356,74 @@ type facilityTestAppsWithRoutes struct {
 
 func (p facilityTestAppsWithRoutes) ApplicationReverseProxyConfigs(context.Context) ([]applications.ApplicationReverseProxyConfig, error) {
 	return p.routes, nil
+}
+
+func TestRunDNSSyncTaskDrainsPendingMarkedDuringSync(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	taskSvc := tasks.NewService(store.AppDB())
+	svc := NewService(store.AppDB(), nil, facilityTestServers{items: map[string]server.Server{
+		"srv-a": {ID: "srv-a", IPv4: "203.0.113.10"},
+	}}, nil, WithDataRoot(cfg.DataRoot), WithTaskService(taskSvc))
+	syncer := &fakeDNSProxySyncer{
+		zones:   []dns.Domain{{Name: "example.test"}},
+		results: []dns.ProxyZoneResult{{Zone: "example.test"}},
+	}
+	svc.dns = syncer
+	ctx := context.Background()
+	if err := svc.saveConfig(ctx, ReverseProxyConfig{
+		DeploymentServers: []string{"srv-a"},
+		Domains: []FacilityRouteDomain{
+			{Domain: "app.example.test", OriginServerIDs: []string{"srv-a"}},
+			{Domain: "late.example.test", OriginServerIDs: []string{"srv-a"}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	syncer.onSync = func() {
+		now := formatTime(time.Now().UTC())
+		_ = svc.setDNSSyncStates(ctx, map[string]DNSSyncState{
+			"late.example.test": {State: DNSSyncPending, UpdatedAt: now},
+		}, nil)
+	}
+	raw, _ := json.Marshal(dnsSyncParams{Domains: []string{"app.example.test"}})
+	task, err := taskSvc.Create(ctx, tasks.CreateInput{
+		Type:         dnsSyncTaskType,
+		ResourceType: "facility_app",
+		ResourceID:   ReverseProxyID,
+		ParamsJSON:   string(raw),
+		Summary:      "Syncing reverse proxy DNS records",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RunDNSSyncTask(tasks.TaskContext{Context: ctx, Task: task, Service: taskSvc}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		loaded, loadErr := svc.loadConfig(ctx)
+		if loadErr != nil {
+			t.Fatal(loadErr)
+		}
+		if loaded.DNSSync["app.example.test"].State == DNSSyncSynced && loaded.DNSSync["late.example.test"].State == DNSSyncSynced {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("late pending domain must be drained after sync completes: %#v", loaded.DNSSync)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 }
 
 func TestRunDNSSyncIncludesApplicationDomains(t *testing.T) {

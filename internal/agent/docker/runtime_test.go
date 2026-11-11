@@ -932,6 +932,9 @@ func TestReconcileReportsBoundedExitedContainerDiagnostic(t *testing.T) {
 	if result.ErrorCode != "container_not_running" || !strings.Contains(result.ErrorDetail, "status=failed") || !strings.Contains(result.ErrorDetail, "exitCode=255") || !strings.Contains(result.ErrorDetail, "dockerError=") {
 		t.Fatalf("result did not retain exit diagnostics: %#v", result)
 	}
+	if !strings.Contains(result.ErrorDetail, "containerLogs:") || !strings.Contains(result.ErrorDetail, "container startup failed") {
+		t.Fatalf("result must attach this run's logs for troubleshooting: %q", result.ErrorDetail)
+	}
 	if len([]rune(result.ErrorDetail)) > maxContainerDiagnosticRunes+startupLogRunes+100 {
 		t.Fatalf("diagnostic runes = %d, want bounded", len([]rune(result.ErrorDetail)))
 	}

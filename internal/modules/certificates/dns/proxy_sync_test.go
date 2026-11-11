@@ -171,6 +171,34 @@ func TestSyncProxyRecordsKeepsMultipleARecordsForSameHost(t *testing.T) {
 	}
 }
 
+func TestSyncProxyRecordsTreatsSameValueUnmanagedAsUnchanged(t *testing.T) {
+	provider := &statefulFakeProvider{records: []Record{
+		{ID: "user_a", Name: "app.example.com", Type: "A", Value: "203.0.113.10", TTL: 300},
+	}}
+	svc := newProxySyncService(t, provider)
+
+	proxied := false
+	results, err := svc.SyncProxyRecords(context.Background(), []ProxyRecordTarget{{
+		Zone:  "example.com",
+		Names: []string{"app.example.com"},
+		Records: []RecordInput{
+			{Name: "app", Type: "A", Value: "203.0.113.10", TTL: 120, Proxied: &proxied, Comment: ProxyManagedRecordComment},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Created != 0 || results[0].Updated != 0 || results[0].Deleted != 0 || results[0].Unchanged != 1 {
+		t.Fatalf("results = %#v", results)
+	}
+	if provider.created != 0 {
+		t.Fatalf("must not create a duplicate when unmanaged already matches: created=%d records=%#v", provider.created, provider.records)
+	}
+	if len(provider.records) != 1 || provider.records[0].ID != "user_a" || provider.records[0].Comment != "" {
+		t.Fatalf("unmanaged record must stay untouched: %#v", provider.records)
+	}
+}
+
 func TestSyncProxyRecordsDetectsUserCNAMEConflict(t *testing.T) {
 	provider := &statefulFakeProvider{records: []Record{
 		{ID: "user_cname", Name: "app.example.com", Type: "CNAME", Value: "target.example.com", TTL: 300},

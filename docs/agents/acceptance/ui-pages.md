@@ -215,7 +215,7 @@
 | UI-FAC-002 | 目录点击“协调/同步” | reverse proxy 调 reconcile；storage share 仅 enabled 时可调；反馈遵守两阶段 | 未配置 storage share 禁用；无 ID 不显示假 ID | 当前卡片独立 loading，完成后目录重载 |
 | UI-FAC-003 | 查看 reverse-proxy 详情 | 显式两栏/两段：**代理平面**（网关成员、容器部署/ensure、`FacilityDiagnostics`）与 **配置记录列表**（设施域名记录 + 链到应用反代）；DNS 区列出各记录域名并标注来源；`tab` 可区分 `proxy`/`configs`/`dns` | 未知 facilityKind 显示不可用空态；加载失败可重试 | 不得再把多域名塞进同一编辑画布；深链可直达代理或配置列表 |
 | UI-FAC-004 | DNS 同步为 pending | 非编辑态、可见标签每约 3 秒重载设施直至不 pending | 单条编辑中停止轮询；离开清 timer | 状态从 pending 更新且不覆盖单条编辑草稿 |
-| UI-FAC-013 | DNS 失败/跳过重试与覆盖接管 | 失败/跳过/未同步显示错误与「重试 DNS」；失败（或冲突类错误）提供「覆盖已有记录」，经危险确认后调用 `POST .../dns-sync`（`takeover`+`confirmTakeover`） | 未确认不得接管；请求中只锁当前域名操作 | 成功提示含 taskId 并刷新 DNS 状态 |
+| UI-FAC-013 | DNS 失败/跳过/同步中重试与覆盖接管 | `pending`/失败/跳过/未同步均显示「重试 DNS」（长期「DNS 同步中」不得无操作入口）；失败（或冲突类错误）另提供「覆盖已有记录」，经危险确认后调用 `POST .../dns-sync`（`takeover`+`confirmTakeover`） | 未确认不得接管；请求中只锁当前域名操作 | 成功提示含 taskId 并刷新 DNS 状态 |
 | UI-FAC-005 | 进入单条配置编辑 | 从配置记录列表点进；进入前拉取**该条**已提交记录与私有资产基线；**不**创建 edit-session；编辑器只含该域名/路径/本记录资产 | 配置加载失败显示重试；编辑中隐藏代理 ensure 的破坏性操作入口 | 一次只编辑一条；不得加载其他记录草稿 |
 | UI-FAC-006 | 修改代理平面网关 | 仅从服务器选择并保存代理平面；移除网关时对仍引用该网关的配置记录给出阻断或剪除确认 | 不得留下指向非网关服务器的 origin/relay | 网关变更走代理平面 API，不 bump 各配置记录 version |
 | UI-FAC-007 | 新增/编辑单条域名记录 | 校验合法、非重复域名且至少一台 origin；origin 只能从当前网关选；可配置 AnyAccess | primary 必须属于 origin；指定 relay 只能来自可用网关；已有记录的域名由 `recordId` 决定，编辑器只读（改名需删除后重建） | 错误字段就地显示；成功标脏仅本条 |

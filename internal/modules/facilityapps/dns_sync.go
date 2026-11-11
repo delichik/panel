@@ -329,7 +329,17 @@ func (s *Service) RunDNSSyncTask(tc tasks.TaskContext) error {
 	if err := s.runDNSSync(tc.Context, params.Domains, params.Takeover); err != nil {
 		return err
 	}
-	return s.tasks.Complete(tc.Context, tc.Task.ID, "DNS records synced")
+	if err := s.tasks.Complete(tc.Context, tc.Task.ID, "DNS records synced"); err != nil {
+		return err
+	}
+	// FAC-RP-011: domains marked pending while this task was finishing must not
+	// stay stuck because Create reused an exclusive/queue head that already ended.
+	if !params.Takeover {
+		if remaining := s.pendingDNSDomains(context.Background()); len(remaining) > 0 {
+			_, _ = s.triggerDNSSync(context.Background(), remaining, "pending_drain", false)
+		}
+	}
+	return nil
 }
 
 func (s *Service) runDNSSync(ctx context.Context, domains []string, takeover bool) error {
@@ -339,11 +349,17 @@ func (s *Service) runDNSSync(ctx context.Context, domains []string, takeover boo
 	// 回收机制：普通同步执行时合并所有当前 pending 域名，避免同 key 活跃任务存在时
 	// 新触发标记的 pending 域名被现有任务 params 遗漏而长期停留在 pending。
 	// takeover 只处理显式请求的域名，避免把普通 pending 一并强制覆盖。
+	// 同步过程中新写入的 pending 由 RunDNSSyncTask 完成后的 pending_drain 再触发。
 	if !takeover {
 		domains = uniqueSorted(append(append([]string(nil), domains...), s.pendingDNSDomains(ctx)...))
 	} else {
 		domains = uniqueSorted(domains)
 	}
+	return s.runDNSSyncOnce(ctx, domains, takeover)
+}
+
+func (s *Service) runDNSSyncOnce(ctx context.Context, domains []string, takeover bool) error {
+	domains = uniqueSorted(domains)
 	cfg, err := s.loadConfig(ctx)
 	if err != nil {
 		return err

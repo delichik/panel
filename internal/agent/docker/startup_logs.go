@@ -19,16 +19,31 @@ import (
 const startupLogBytes = 8 << 10
 const startupLogRunes = 3072
 const startupLogTimeout = 2 * time.Second
+const startupLogTimeSkew = 2 * time.Second
 
 var startupPrivateKey = regexp.MustCompile(`(?s)-----BEGIN (?:RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----.*?(?:-----END (?:RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----|$)`)
+var startupCertificatePEM = regexp.MustCompile(`(?s)-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----`)
 var startupSecretAssignment = regexp.MustCompile(`(?i)((?:password|passwd|passphrase|private[_-]?key|(?:access[_-]?|refresh[_-]?)?token|api[_-]?key|authorization|secret)["']?\s*[=:]\s*)("[^"\r\n]*"?|'[^'\r\n]*'?|[^\s,;]+)`)
+var startupSensitiveLine = regexp.MustCompile(`(?i)(password|passwd|passphrase|private[_-]?key|(?:access[_-]?|refresh[_-]?)?token|api[_-]?key|authorization|secret)\s*[=:]|-----BEGIN |[A-Za-z0-9+/=]{80,}`)
 
 // Failure evidence is best effort: one bounded request, scoped by immutable
 // container ID and this process's actual start/finish timestamps. Never read
-// by name or attach historical runs when Docker cannot establish that scope.
+// by name. When evidence cannot be collected, always explain why — silent
+// omission leaves only exitCode and is useless for troubleshooting.
 func (r *LocalRuntime) startupFailureLogs(ctx context.Context, status appruntime.InstanceStatus, expectedID string, spec appruntime.Spec) string {
-	if status.ContainerID == "" || status.ContainerID != expectedID || (status.Status != appruntime.StatusFailed && status.Status != appruntime.StatusStopped) {
-		return ""
+	expectedID = strings.TrimSpace(expectedID)
+	if expectedID == "" {
+		return "\ncontainerLogs: unavailable (expected container id missing)"
+	}
+	observedID := strings.TrimSpace(status.ContainerID)
+	if observedID == "" {
+		return "\ncontainerLogs: unavailable (observed container id missing)"
+	}
+	if !containerIDEqual(observedID, expectedID) {
+		return "\ncontainerLogs: unavailable (container id mismatch observed=" + shortContainerID(observedID) + " expected=" + shortContainerID(expectedID) + ")"
+	}
+	if status.Status != appruntime.StatusFailed && status.Status != appruntime.StatusStopped && status.ExitCode == 0 {
+		return "\ncontainerLogs: unavailable (status=" + firstNonEmpty(status.Status, "unknown") + ")"
 	}
 	started, startErr := time.Parse(time.RFC3339Nano, status.StartedAt)
 	finished, finishErr := time.Parse(time.RFC3339Nano, status.FinishedAt)
@@ -37,22 +52,25 @@ func (r *LocalRuntime) startupFailureLogs(ctx context.Context, status appruntime
 	}
 	logctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), startupLogTimeout)
 	defer cancel()
-	query := url.Values{"stdout": {"true"}, "stderr": {"true"}, "tail": {"50"}, "since": {started.Format(time.RFC3339Nano)}, "until": {finished.Format(time.RFC3339Nano)}}
+	// Absorb small Docker clock skew so a sub-second crash still yields logs.
+	since := started.Add(-startupLogTimeSkew)
+	until := finished.Add(startupLogTimeSkew)
+	query := url.Values{"stdout": {"true"}, "stderr": {"true"}, "tail": {"50"}, "since": {since.Format(time.RFC3339Nano)}, "until": {until.Format(time.RFC3339Nano)}}
 	req, err := r.client.newRequest(logctx, http.MethodGet, "/containers/"+url.PathEscape(expectedID)+"/logs?"+query.Encode(), nil)
 	if err != nil {
-		return "\ncontainerLogs: unavailable"
+		return "\ncontainerLogs: unavailable (build request failed)"
 	}
 	res, err := r.client.client.Do(req)
 	if err != nil {
-		return "\ncontainerLogs: unavailable"
+		return "\ncontainerLogs: unavailable (docker request failed)"
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return "\ncontainerLogs: unavailable"
+		return fmt.Sprintf("\ncontainerLogs: unavailable (docker status %d)", res.StatusCode)
 	}
 	text, truncated, err := readStartupLogs(res.Body)
 	if err != nil {
-		return "\ncontainerLogs: unavailable"
+		return "\ncontainerLogs: unavailable (decode failed)"
 	}
 	if truncated {
 		// A cut line can contain half a credential that exact redaction cannot
@@ -75,6 +93,21 @@ func (r *LocalRuntime) startupFailureLogs(ctx context.Context, status appruntime
 		text += "\n[truncated]"
 	}
 	return "\ncontainerLogs:\n" + text
+}
+
+func containerIDEqual(a, b string) bool {
+	if a == b {
+		return true
+	}
+	// Docker create/inspect may surface full or truncated IDs depending on path.
+	return strings.HasPrefix(a, b) || strings.HasPrefix(b, a)
+}
+
+func shortContainerID(id string) string {
+	if len(id) <= 12 {
+		return id
+	}
+	return id[:12]
 }
 
 func readStartupLogs(src io.Reader) (string, bool, error) {
@@ -112,6 +145,7 @@ func readStartupLogs(src io.Reader) (string, bool, error) {
 
 func redactStartupLogs(text string, spec appruntime.Spec) string {
 	text = startupPrivateKey.ReplaceAllString(text, "[REDACTED PRIVATE KEY]")
+	text = startupCertificatePEM.ReplaceAllString(text, "[REDACTED CERTIFICATE]")
 	var values []string
 	for _, value := range spec.Env {
 		if value != "" {
@@ -119,12 +153,23 @@ func redactStartupLogs(text string, spec appruntime.Spec) string {
 		}
 	}
 	for _, file := range spec.Files {
-		if len(file.Content) > 0 {
-			values = append(values, string(file.Content))
-			for _, line := range strings.Split(string(file.Content), "\n") {
-				if line = strings.TrimSpace(line); len(line) >= 4 {
-					values = append(values, line)
-				}
+		if len(file.Content) == 0 {
+			continue
+		}
+		content := string(file.Content)
+		// Full-file match covers secrets embedded in managed payloads without
+		// erasing every short nginx/config directive from process errors.
+		values = append(values, content)
+		for _, block := range startupPrivateKey.FindAllString(content, -1) {
+			values = append(values, block)
+		}
+		for _, block := range startupCertificatePEM.FindAllString(content, -1) {
+			values = append(values, block)
+		}
+		for _, line := range strings.Split(content, "\n") {
+			line = strings.TrimSpace(line)
+			if len(line) >= 8 && startupSensitiveLine.MatchString(line) {
+				values = append(values, line)
 			}
 		}
 	}

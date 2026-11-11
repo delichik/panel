@@ -14,10 +14,10 @@
 
 - **前置**：存在多页普通应用、隐藏设施应用、删除中应用和若干实例/Job。
 - **动作**：调用 `GET /api/v1/applications?page=&pageSize=&q=`。
-- **结果**：返回分页 `items/total/page/pageSize`；单项只含摘要所需字段：`enabled`、`instanceCount`、节点三态计数 `healthyInstanceCount`/`abnormalInstanceCount`/`deployingInstanceCount`、可选 `planningError`/`reconcileStopped`、镜像更新与 `updatedAt`。三计数与实例/活跃 Job 由当前页 ID 的本地批量查询按 `(application_id, server_id)` 归类；三者之和可以小于 `instanceCount`（**仅禁用应用**上已收敛的 stop/purge 节点可省略）。已启用应用若实例仍为 `desired=stopped` 且观测已收敛（stopped/missing），必须计入 `abnormalInstanceCount`，不得因 stop 收敛而省略——覆盖“启用已写入但 apply 规划尚未翻转 desired / 规划失败”的半状态。兼容字段 `runtimeStatus` 仅为观测 rollup，不得再写入应用级 `needs_attention`/`deploying` 作为列表主状态。
+- **结果**：返回分页 `items/total/page/pageSize`；单项只含摘要所需字段：`enabled`、`instanceCount`、节点三态计数 `healthyInstanceCount`/`abnormalInstanceCount`/`deployingInstanceCount`、**`imageReference`**（来自 `applications.image_reference` 列）、可选 `planningError`/`reconcileStopped`、镜像更新与 `updatedAt`。三计数与实例/活跃 Job 由当前页 ID 的本地批量查询按 `(application_id, server_id)` 归类；三者之和可以小于 `instanceCount`（**仅禁用应用**上已收敛的 stop/purge 节点可省略）。已启用应用若实例仍为 `desired=stopped` 且观测已收敛（stopped/missing），必须计入 `abnormalInstanceCount`，不得因 stop 收敛而省略——覆盖“启用已写入但 apply 规划尚未翻转 desired / 规划失败”的半状态。兼容字段 `runtimeStatus` 仅为观测 rollup，不得再写入应用级 `needs_attention`/`deploying` 作为列表主状态。
 - **失败**：未知参数、非法页码或分页值返回 400；不得默许 `limit` 或 snake_case 别名。
-- **不变量**：列表不得解析 AppSpec/YAML、读取完整配置 JSON、访问 Agent/Registry、逐应用读取详情或 runtime；普通列表必须排除 `kind=facility_application` 和 `deletion_requested=1`。应用主状态语义是启停，不是聚合运行态。
-- **验证**：路由契约测试、固定查询次数/假 Agent 零调用测试、跨页 `q` 测试、三计数分类测试（含启用+stale stop desired→异常）。
+- **不变量**：列表不得解析 AppSpec/YAML、读取完整配置 JSON、访问 Agent/Registry、逐应用读取详情或 runtime；普通列表必须排除 `kind=facility_application` 和 `deletion_requested=1`。应用主状态语义是启停，不是聚合运行态。`imageReference` 必须在创建/更新时从 AppSpec/runtime 镜像写入列；空列不得用 `jobId`/`panel-<name>` 冒充。
+- **验证**：路由契约测试、固定查询次数/假 Agent 零调用测试、跨页 `q` 测试、三计数分类测试（含启用+stale stop desired→异常）、创建/更新持久化 `imageReference` 与空列回填迁移测试。
 
 ### APP-READ-002 应用详情完整性
 
@@ -41,10 +41,10 @@
 
 - **前置**：结构化草稿包含名称、镜像、command argv 与 env。
 - **动作**：校验并往返保存。
-- **结果**：名称为 1–32 位小写字母/数字/连字符且首尾为字母数字；镜像非空；command 保持有序 argv，不按空格拆分，空白项正规化移除；env key 非空且不含 `=`。
+- **结果**：名称为 1–32 位小写字母/数字/连字符且首尾为字母数字；镜像非空；command 保持有序 argv，不按空格拆分，空白项正规化移除；env key 非空且不含 `=`；创建/编辑会话提交必须把解析后的镜像写入 `applications.image_reference`（列表摘要与详情同源）。
 - **失败**：任一字段非法时返回对应稳定 field；不得用示例默认值掩盖缺失输入。
-- **不变量**：command 下发 Docker `Cmd`，不转换为 Entrypoint；含冒号的参数按字符串无损往返。
-- **验证**：spec validate/render 与前端 model round-trip 测试。
+- **不变量**：command 下发 Docker `Cmd`，不转换为 Entrypoint；含冒号的参数按字符串无损往返；不得只把镜像留在 `specYaml`/`imageUpdateTargets` 而让 `imageReference` 列为空。
+- **验证**：spec validate/render、创建/更新后 ListSummaries 含 `imageReference`、前端 model round-trip 测试。
 
 ### APP-DEF-003 端口、服务、检查与资源限制
 
@@ -496,11 +496,11 @@
 ### FAC-RP-011 DNS 联动
 
 - **前置**：单条设施域名记录保存新增、修改或删除，或应用反向代理路由变更/删除，DNS zone 与服务器地址可能不完整。
-- **动作**：触发 `dns_proxy_records_sync`；手动重试/接管走 `POST /api/v1/facility-apps/reverse-proxy/dns-sync`。
-- **结果**：全部当前设施域名与应用反向代理域名及需清理旧域名进入 pending；任务读取并合并数据库中所有 pending（接管请求除外）；只在期望 A/AAAA 与实际不同时增删改；每域名持久化 pending/synced/failed/skipped。
+- **动作**：触发 `dns_proxy_records_sync`（`ConcurrencyPolicy=resource_queue`，同资源串行排队而非复用活跃任务）；手动重试/接管走 `POST /api/v1/facility-apps/reverse-proxy/dns-sync`；设施 DNS 页对 `pending`/`failed`/`skipped`/`unknown` 均提供重试。
+- **结果**：全部当前设施域名与应用反向代理域名及需清理旧域名进入 pending；任务读取并合并数据库中所有 pending（接管请求除外）；只在期望 A/AAAA 与实际不同时增删改；每域名持久化 pending/synced/failed/skipped；任务成功完成后若仍有 pending（同步过程中新写入），必须再触发 `pending_drain`，不得长期停在「DNS 同步中」。
 - **失败**：服务器列表读取失败或 `servers` 依赖未装配使任务失败且域名保留 pending，不得按“无服务器”误删；无 IPv4/IPv6 的域名 skipped 并带提示；接管缺少确认返回校验错误。
-- **不变量**：anyAccess 关闭目标=origins，开启目标=全局 gateways；活跃任务期间新增 pending 不得因旧 params 遗漏；应用域名与设施域名共用同一同步状态与托管 comment。
-- **验证**：dns sync all-current/merge-pending/application-domain/server-error/status/takeover tests。
+- **不变量**：anyAccess 关闭目标=origins，开启目标=全局 gateways；活跃/排队任务期间新增 pending 不得因旧 params 或任务复用遗漏；应用域名与设施域名共用同一同步状态与托管 comment。
+- **验证**：dns sync all-current/merge-pending/pending-drain/application-domain/server-error/status/takeover tests；同值非托管记录见 `DNS-SYNC-001/004`。
 
 ### FAC-RP-012 设施逐节点部署诊断
 

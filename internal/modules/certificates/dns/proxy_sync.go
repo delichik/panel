@@ -124,6 +124,13 @@ func (s *Service) syncProxyZone(ctx context.Context, target ProxyRecordTarget) (
 			}
 			continue
 		}
+		// DNS-SYNC-001/004: an unmanaged record with the same type+name+value
+		// already satisfies resolution. Do not create a duplicate (provider
+		// reject) or rewrite the user record; leave it untouched.
+		if satisfyingUnmanagedRecord(existing, domain.Name, record) != nil {
+			result.Unchanged++
+			continue
+		}
 		if conflict := hostConflict(existing, domain.Name, record, ""); conflict != nil {
 			conflictErr := recordConflictError(record, *conflict)
 			result.Error = conflictErr.Error()
@@ -219,4 +226,30 @@ func recordEqual(desired RecordInput, current Record) bool {
 		proxied = *desired.Proxied
 	}
 	return proxied == current.Proxied
+}
+
+// satisfyingUnmanagedRecord finds a non-Panel record that already matches the
+// desired type+name+value. Comment/TTL/proxied differences are ignored so we
+// never rewrite user-owned records during a default sync.
+func satisfyingUnmanagedRecord(existing []Record, zone string, desired RecordInput) *Record {
+	wantName := proxyFullName(zone, desired.Name)
+	wantType := strings.ToUpper(strings.TrimSpace(desired.Type))
+	wantValue := strings.ToLower(strings.TrimSpace(desired.Value))
+	for i := range existing {
+		current := &existing[i]
+		if current.Comment == ProxyManagedRecordComment {
+			continue
+		}
+		if !strings.EqualFold(proxyFullName(zone, current.Name), wantName) {
+			continue
+		}
+		if strings.ToUpper(strings.TrimSpace(current.Type)) != wantType {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(current.Value)) != wantValue {
+			continue
+		}
+		return current
+	}
+	return nil
 }

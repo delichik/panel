@@ -25,12 +25,29 @@ describe('facility diagnostics', () => {
     expect(wrapper.text()).toContain('failed_retryable');
     expect(wrapper.text()).toContain('certificate missing');
     expect(wrapper.text()).not.toContain('No gateway nodes');
+    expect(wrapper.text()).not.toContain('This failure has no containerLogs snapshot');
     await wrapper.find('button').trigger('click');
     await flushPromises();
     expect(request).toHaveBeenCalledTimes(1);
     expect(wrapper.text()).toContain('app.example.test');
     expect(wrapper.text()).toContain('Upstream certificate verification failed');
     expect(wrapper.text()).toContain('Keep verification enabled');
+    wrapper.unmount();
+  });
+
+  it('warns when a startup failure has no containerLogs snapshot', async () => {
+    const wrapper = mount(FacilityDiagnostics, {
+      props: {
+        state: {
+          ...plane,
+          deployments: [
+            { serverId: 'a', serverName: 'Tokyo', observedState: 'running', operation: { id: 'job-a', status: 'failed', errorCode: 'container_not_running', error: 'container did not reach running state: status=failed; exitCode=1', errorDetail: 'status=failed; exitCode=1', attempt: 10 } },
+          ],
+        } as ProxyPlaneState,
+      },
+      global: { provide: { [toastKey as symbol]: { push: vi.fn() } }, stubs: { ActivityLink: true, StatusBadge: { props: ['status'], template: '<span>{{ status }}</span>' } } },
+    });
+    expect(wrapper.text()).toContain('This failure has no containerLogs snapshot');
     wrapper.unmount();
   });
 
