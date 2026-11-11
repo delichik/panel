@@ -8,7 +8,7 @@
 2. 业务代码禁止裸色值、裸尺寸、裸阴影和新增视觉常量；颜色和状态经 `--panel-*` token 或 Tailwind theme（`@theme` 桥接）。
 3. 图标统一用 `@lucide/vue`，图标按钮必须有可访问名称或 Tooltip。
 4. 主操作使用方案主色 `Button variant="primary"`（颜色由 `--panel-primary` 决定：灯塔为青绿、蔚蓝为深蓝/青）；**primary/brand 与 success 必须色相可区分**，语义状态只用于 success / warning / danger / info，不用品牌色表达健康或错误。
-5. 卡片/面板保持单层边框；不要叠卡片，不要用装饰性渐变或大色块制造视觉重量。浮层（Dialog / 菜单 / Toast / Tooltip）统一走 `.panel-shadow-overlay`。
+5. 卡片/面板保持单层边框；不要叠卡片，不要用装饰性渐变或大色块制造视觉重量。浮层（Dialog / 菜单 / Toast / Tooltip）统一走 `.panel-shadow-overlay`，且底色用不透明 `--panel-popover`；Toast 不得用带 alpha 的状态背景覆盖浮层底，以免透出下层内容。
 
 ## 色彩与层级
 
