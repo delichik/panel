@@ -468,10 +468,10 @@
 
 - **前置**：域名可能匹配域名证书、自签用户域证书或无证书。
 - **动作**：构建每节点 Nginx runtime spec（拼装所有相关配置记录）。
-- **结果**：固定镜像 `nginx:1.28-alpine`；主配置目录只读挂载 `/etc/panel-nginx`，证书独立 `/etc/panel-certs`；域名证书优先，其次匹配自签，无匹配仅生成 80。AnyAccess 中继回源 HTTPS 时 `proxy_ssl_verify on`，信任锚使用 Panel 分发的公共 CA 包；自签中继用独立 `trusted.pem`。静态内容来自各记录私有 managed files。
+- **结果**：固定镜像 `nginx:1.28-alpine`；主配置目录只读挂载 `/etc/panel-nginx`，证书独立 `/etc/panel-certs`；域名证书优先，其次匹配自签，无匹配仅生成 80。AnyAccess 中继回源 HTTPS 时 `proxy_ssl_verify on`，公共/ACME 信任锚只读绑定宿主 `/etc/ssl/certs/ca-certificates.crt`（`mount.type=host`），不得把 CA 包写入仓库或 managed files；自签中继用独立 `trusted.pem`。静态内容来自各记录私有 managed files。
 - **失败**：不得覆盖镜像 `/etc/nginx` 或单文件 bind 主配置。
-- **不变量**：主配置显式 `nginx -c /etc/panel-nginx/nginx.conf`；父目录 0755、上传文件 0644；中继 TLS 校验不得关闭。
-- **验证**：proxy spec mounts/TLS/static serving tests；`TestRenderAnyAccessRelayTLSUsesPublicCABundleNotLeaf`。
+- **不变量**：主配置显式 `nginx -c /etc/panel-nginx/nginx.conf`；父目录 0755、上传文件 0644；中继 TLS 校验不得关闭；公共 CA 仅来自宿主系统信任库。
+- **验证**：proxy spec mounts/TLS/static serving tests；`TestRenderAnyAccessRelayTLSUsesPublicCABundleNotLeaf`；`TestRelayTrustedCertificatePathUsesHostCABundleForDomainCerts`。
 
 ### FAC-RP-009 代理平面 recreate 与配置平面 reload
 

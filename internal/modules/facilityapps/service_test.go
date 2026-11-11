@@ -196,7 +196,7 @@ func TestRenderAnyAccessRelayTLSUsesPublicCABundleNotLeaf(t *testing.T) {
 	for _, want := range []string{
 		"server 10.0.0.51:443 max_fails=3 fail_timeout=30s;",
 		"proxy_pass https://panel_domain_app.example.test;",
-		"proxy_ssl_trusted_certificate /etc/panel-certs/_ca_bundle/ca-certificates.crt;",
+		"proxy_ssl_trusted_certificate " + proxyHostCABundleMountPath + ";",
 		"proxy_ssl_verify on;",
 		"proxy_ssl_name app.example.test;",
 	} {
@@ -207,24 +207,24 @@ func TestRenderAnyAccessRelayTLSUsesPublicCABundleNotLeaf(t *testing.T) {
 	if strings.Contains(relay, "proxy_ssl_trusted_certificate /etc/panel-certs/app-cert/certificate.pem;") {
 		t.Fatalf("relay must not trust the leaf certificate file:\n%s", relay)
 	}
-	foundBundle := false
 	for _, file := range relayFiles {
-		if file.Path == proxyCABundleSource && len(file.Content) > 0 {
-			foundBundle = true
-			break
+		if strings.Contains(file.Path, "_ca_bundle") || strings.HasSuffix(file.Path, "ca-certificates.crt") {
+			t.Fatalf("relay must not receive a vendored CA managed file: %q", file.Path)
 		}
 	}
-	if !foundBundle {
-		t.Fatalf("relay managed files missing public CA bundle %q", proxyCABundleSource)
-	}
-	_, _, originFiles, err := svc.renderNginxConfig(context.Background(), "srv-origin", cfg, []applications.ApplicationReverseProxyConfig{app}, certificates)
+	spec, err := svc.proxySpec(context.Background(), "srv-relay", cfg, []applications.ApplicationReverseProxyConfig{app}, certificates)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, file := range originFiles {
-		if file.Path == proxyCABundleSource {
-			t.Fatalf("origin node must not receive relay CA bundle")
+	foundHostCA := false
+	for _, mount := range spec.Mounts {
+		if mount.Type == "host" && mount.Source == proxyHostCABundleHostPath && mount.Target == proxyHostCABundleMountPath && mount.ReadOnly {
+			foundHostCA = true
+			break
 		}
+	}
+	if !foundHostCA {
+		t.Fatalf("proxy spec missing host CA bind mount: %#v", spec.Mounts)
 	}
 }
 
@@ -364,6 +364,7 @@ func TestProxySpecMountsNginxConfigurationDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	foundNginxMount := false
+	foundHostCA := false
 	for _, mount := range spec.Mounts {
 		if mount.Target == "/etc/nginx" {
 			t.Fatalf("nginx image configuration must not be shadowed: %#v", spec.Mounts)
@@ -371,12 +372,18 @@ func TestProxySpecMountsNginxConfigurationDirectory(t *testing.T) {
 		if mount.Source == proxyConfigRoot && mount.Target == proxyContainerRoot && mount.ReadOnly {
 			foundNginxMount = true
 		}
+		if mount.Type == "host" && mount.Source == proxyHostCABundleHostPath && mount.Target == proxyHostCABundleMountPath && mount.ReadOnly {
+			foundHostCA = true
+		}
 		if mount.Source == "certs" || mount.Target == proxyTLSMountRoot {
 			t.Fatalf("certificate mount must not be present without TLS certificates: %#v", spec.Mounts)
 		}
 	}
 	if !foundNginxMount {
 		t.Fatalf("nginx directory mount missing: %#v", spec.Mounts)
+	}
+	if !foundHostCA {
+		t.Fatalf("host CA bind mount missing: %#v", spec.Mounts)
 	}
 	wantCommand := []string{"nginx", "-c", "/etc/panel-nginx/nginx.conf", "-g", "daemon off;"}
 	if !reflect.DeepEqual(spec.Command, wantCommand) {

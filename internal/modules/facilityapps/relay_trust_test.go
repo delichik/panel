@@ -14,14 +14,18 @@ import (
 	"panel/internal/modules/certificates/proxycert"
 )
 
-func TestRelayTrustedCertificatePathUsesCABundleForDomainCerts(t *testing.T) {
+func TestRelayTrustedCertificatePathUsesHostCABundleForDomainCerts(t *testing.T) {
 	cert := &proxycert.Certificate{ID: "acme-1", Source: "domain_certificate"}
-	if got := relayTrustedCertificatePath(cert); got != proxyCABundlePath {
-		t.Fatalf("domain cert trust path = %q, want %q", got, proxyCABundlePath)
+	if got := relayTrustedCertificatePath(cert); got != proxyHostCABundleMountPath {
+		t.Fatalf("domain cert trust path = %q, want %q", got, proxyHostCABundleMountPath)
 	}
 	selfSigned := &proxycert.Certificate{ID: "ss-1", Source: "self_signed_certificate"}
 	if got := relayTrustedCertificatePath(selfSigned); got != certPath("ss-1", "trusted") {
 		t.Fatalf("self-signed trust path = %q", got)
+	}
+	mount := proxyHostCABundleMount()
+	if mount.Type != "host" || mount.Source != proxyHostCABundleHostPath || mount.Target != proxyHostCABundleMountPath || !mount.ReadOnly {
+		t.Fatalf("host CA mount = %#v", mount)
 	}
 }
 

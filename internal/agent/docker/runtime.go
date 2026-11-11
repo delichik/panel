@@ -3134,7 +3134,7 @@ func dockerBinds(root string, spec appruntime.Spec) []string {
 		switch mount.Type {
 		case "managed_file":
 			source = filepath.Join(root, spec.ApplicationID, "files", filepath.FromSlash(path.Clean(strings.TrimPrefix(mount.Source, "/"))))
-		case "persistent":
+		case "host", "persistent":
 			source = mount.Source
 		case "nfs":
 			source = nfsVolumeName(mount.Source, mount.Target)

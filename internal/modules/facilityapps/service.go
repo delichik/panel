@@ -724,6 +724,7 @@ func (s *Service) proxySpec(ctx context.Context, serverID string, cfg ReversePro
 	if managedFilesContainPrefix(files, "certs/") {
 		mounts = append(mounts, appruntime.Mount{Type: "managed_file", Source: "certs", Target: proxyTLSMountRoot, ReadOnly: true})
 	}
+	mounts = append(mounts, proxyHostCABundleMount())
 	mounts = append(mounts, appruntime.Mount{Type: "managed_file", Source: proxyConfigRoot, Target: proxyContainerRoot, ReadOnly: true})
 	return appruntime.Spec{
 		ID:            proxyApplicationID,
@@ -2039,25 +2040,19 @@ func appendRelayTrustFiles(cert *proxycert.Certificate, files *[]appruntime.Mana
 	if cert == nil {
 		return
 	}
-	if isSelfSignedProxyCertificate(cert) {
-		trustKey := cert.ID + ":trusted"
-		if _, ok := seen[trustKey]; !ok {
-			seen[trustKey] = struct{}{}
-			*files = append(*files, appruntime.ManagedFile{
-				Path:    certFileSource(cert.ID, "trusted"),
-				Content: relayTrustCertificatePEM(cert),
-				Mode:    "0644",
-			})
-		}
+	if !isSelfSignedProxyCertificate(cert) {
+		// Public/ACME relay verify uses the host CA bind mount; do not vendor
+		// or sync a CA package as a managed file.
 		return
 	}
-	if _, ok := seen[proxyCABundleSource]; ok {
+	trustKey := cert.ID + ":trusted"
+	if _, ok := seen[trustKey]; ok {
 		return
 	}
-	seen[proxyCABundleSource] = struct{}{}
+	seen[trustKey] = struct{}{}
 	*files = append(*files, appruntime.ManagedFile{
-		Path:    proxyCABundleSource,
-		Content: append([]byte(nil), proxyPublicCABundle...),
+		Path:    certFileSource(cert.ID, "trusted"),
+		Content: relayTrustCertificatePEM(cert),
 		Mode:    "0644",
 	})
 }

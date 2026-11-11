@@ -2,21 +2,20 @@ package facilityapps
 
 import (
 	"crypto/x509"
-	_ "embed"
 	"encoding/pem"
 	"strings"
 
+	appruntime "panel/internal/modules/applications/runtime"
 	"panel/internal/modules/certificates/proxycert"
 )
 
 const (
-	proxyCABundleFileName = "ca-certificates.crt"
-	proxyCABundleSource   = "certs/_ca_bundle/" + proxyCABundleFileName
-	proxyCABundlePath     = proxyTLSMountRoot + "/_ca_bundle/" + proxyCABundleFileName
+	// Host CA bundle used for public/ACME AnyAccess relay verify.
+	// Bound from the gateway host into the nginx container — never vendored
+	// in the Panel git repo. Path matches Debian/Ubuntu/Alpine ca-certificates.
+	proxyHostCABundleHostPath  = "/etc/ssl/certs/ca-certificates.crt"
+	proxyHostCABundleMountPath = "/etc/ssl/certs/ca-certificates.crt"
 )
-
-//go:embed ca/ca-certificates.crt
-var proxyPublicCABundle []byte
 
 func relayTrustedCertificatePath(cert *proxycert.Certificate) string {
 	if cert == nil {
@@ -25,7 +24,16 @@ func relayTrustedCertificatePath(cert *proxycert.Certificate) string {
 	if isSelfSignedProxyCertificate(cert) {
 		return certPath(cert.ID, "trusted")
 	}
-	return proxyCABundlePath
+	return proxyHostCABundleMountPath
+}
+
+func proxyHostCABundleMount() appruntime.Mount {
+	return appruntime.Mount{
+		Type:     "host",
+		Source:   proxyHostCABundleHostPath,
+		Target:   proxyHostCABundleMountPath,
+		ReadOnly: true,
+	}
 }
 
 func isSelfSignedProxyCertificate(cert *proxycert.Certificate) bool {
