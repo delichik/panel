@@ -756,7 +756,9 @@ func (r *LocalRuntime) Reconcile(ctx context.Context, req agentcontract.RuntimeR
 			result.ErrorMessage = containerNotRunningMessage(result, err)
 			result.ErrorDetail = containerExitDiagnostic(result)
 			// Keep the summary small; attach the run-scoped log only to detail.
-			result.ErrorDetail += r.startupFailureLogs(ctx, status, containerID, spec)
+			// Re-inspect by immutable ID when the last verify sample is still
+			// non-terminal so a crash between polls still yields readable logs.
+			result.ErrorDetail += r.attachStartupFailureEvidence(ctx, containerID, status, spec)
 			result.Retryable = true
 		}
 		if err == nil {
@@ -777,7 +779,16 @@ func (r *LocalRuntime) Reconcile(ctx context.Context, req agentcontract.RuntimeR
 				if err := recorder.do("start_container", func(stepctx context.Context) error {
 					return r.client.startContainer(stepctx, spec.ContainerName)
 				}); err != nil {
-					return fail("start_container_failed", "container_start_failed", err)
+					result, runErr := fail("start_container_failed", "container_start_failed", err)
+					result.ErrorDetail = strings.TrimPrefix(r.attachStartupFailureEvidence(ctx, inspect.ID, appruntime.InstanceStatus{
+						ContainerID: inspect.ID,
+						Status:      dockerStateToRuntime(inspect.State.Status, inspect.State.Running, inspect.State.ExitCode),
+						StartedAt:   inspect.State.StartedAt,
+						FinishedAt:  inspect.State.FinishedAt,
+						ExitCode:    inspect.State.ExitCode,
+						LastError:   inspect.State.Error,
+					}, spec), "\n")
+					return result, runErr
 				}
 			}
 			return verify(inspect.ID, !inspect.State.Running)
@@ -810,10 +821,14 @@ func (r *LocalRuntime) Reconcile(ctx context.Context, req agentcontract.RuntimeR
 		containerID, err = r.CreateContainer(stepctx, spec)
 		return err
 	}); err != nil {
-		return fail("create_container_failed", "runtime", err)
+		result, runErr := fail("create_container_failed", "runtime", err)
+		result.ErrorDetail = "containerLogs: unavailable (container never created)"
+		return result, runErr
 	}
 	if err := recorder.do("start_container", func(stepctx context.Context) error { return r.client.startContainer(stepctx, containerID) }); err != nil {
-		return fail("start_container_failed", "container_start_failed", err)
+		result, runErr := fail("start_container_failed", "container_start_failed", err)
+		result.ErrorDetail = strings.TrimPrefix(r.attachStartupFailureEvidence(ctx, containerID, appruntime.InstanceStatus{ContainerID: containerID}, spec), "\n")
+		return result, runErr
 	}
 	return verify(containerID, true)
 }

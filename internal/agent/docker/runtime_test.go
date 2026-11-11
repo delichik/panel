@@ -897,6 +897,92 @@ func TestReconcileStartsMatchingExitedContainerBeforeVerify(t *testing.T) {
 	}
 }
 
+func TestReconcileStartFailureAttachesContainerLogs(t *testing.T) {
+	started := "2026-11-11T16:10:00Z"
+	finished := "2026-11-11T16:10:01Z"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/containers/panel-web/json":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"Id": "container-start-1", "Name": "/panel-web",
+				"Config":     map[string]any{"Image": "example/web:1", "Labels": map[string]string{"panel.application.managed": "true", "panel.application.id": "app-1", "panel.application.instance.id": "inst-1", "panel.application.generation": "2", "panel.application.spec.hash": "hash"}},
+				"HostConfig": map[string]any{"NetworkMode": "panel-apps"},
+				"State":      map[string]any{"Status": "exited", "Running": false, "ExitCode": 1, "Error": "boot failed", "StartedAt": started, "FinishedAt": finished},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/containers/panel-web/start":
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"message":"cannot start container"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/containers/container-start-1/json":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"Id": "container-start-1", "Name": "/panel-web",
+				"Config": map[string]any{"Image": "example/web:1"},
+				"State":  map[string]any{"Status": "exited", "Running": false, "ExitCode": 1, "Error": "boot failed", "StartedAt": started, "FinishedAt": finished},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/containers/container-start-1/logs":
+			_, _ = io.WriteString(w, "nginx: [emerg] bad config\n")
+		default:
+			t.Errorf("unexpected Docker request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	runtime := &LocalRuntime{root: t.TempDir(), client: &dockerAPIClient{host: server.URL, client: server.Client()}}
+	result, err := runtime.Reconcile(context.Background(), agentcontract.RuntimeReconcileRequest{
+		ExecutionID: "exec-start-1", ApplicationID: "app-1", InstanceID: "inst-1", Action: "apply", DesiredGeneration: 2, DesiredSpecHash: "hash",
+		Spec: appruntime.Spec{ApplicationID: "app-1", InstanceID: "inst-1", ContainerName: "panel-web", Image: "example/web:1", Generation: 2, SpecHash: "hash"},
+	})
+	if err == nil {
+		t.Fatal("Reconcile() error = nil, want start failure")
+	}
+	if result.ErrorCode != "start_container_failed" {
+		t.Fatalf("ErrorCode = %q", result.ErrorCode)
+	}
+	if !strings.Contains(result.ErrorDetail, "containerLogs:") || !strings.Contains(result.ErrorDetail, "nginx: [emerg] bad config") {
+		t.Fatalf("start failure must attach readable container logs: %q", result.ErrorDetail)
+	}
+}
+
+func TestReconcileCreateFailureExplainsMissingContainerLogs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/containers/panel-new/json":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"message":"No such container"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/images/create":
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodGet && r.URL.Path == "/networks/"+managedBridgeNetwork:
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"Name":"panel-apps"}`)
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/containers/create"):
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"message":"create refused"}`)
+		default:
+			t.Errorf("unexpected Docker request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	httpClient := server.Client()
+	runtime := &LocalRuntime{root: t.TempDir(), client: &dockerAPIClient{host: server.URL, client: httpClient, pullClient: httpClient}}
+	result, err := runtime.Reconcile(context.Background(), agentcontract.RuntimeReconcileRequest{
+		ExecutionID: "exec-create-1", ApplicationID: "app-1", InstanceID: "inst-1", Action: "apply", DesiredGeneration: 1, DesiredSpecHash: "hash",
+		Spec: appruntime.Spec{ApplicationID: "app-1", InstanceID: "inst-1", ContainerName: "panel-new", Image: "example/web:1", Generation: 1, SpecHash: "hash"},
+	})
+	if err == nil {
+		t.Fatal("Reconcile() error = nil, want create failure")
+	}
+	if result.ErrorCode != "create_container_failed" {
+		t.Fatalf("ErrorCode = %q", result.ErrorCode)
+	}
+	if !strings.Contains(result.ErrorDetail, "containerLogs: unavailable (container never created)") {
+		t.Fatalf("create failure must explain missing logs: %q", result.ErrorDetail)
+	}
+}
+
 func TestReconcileReportsBoundedExitedContainerDiagnostic(t *testing.T) {
 	longDockerError := "token=top-secret " + strings.Repeat("process failed ", 500)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

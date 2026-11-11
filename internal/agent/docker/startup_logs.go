@@ -44,7 +44,11 @@ func (r *LocalRuntime) startupFailureLogs(ctx context.Context, status appruntime
 		return "\ncontainerLogs: unavailable (container id mismatch observed=" + shortContainerID(observedID) + " expected=" + shortContainerID(expectedID) + ")"
 	}
 	if status.Status != appruntime.StatusFailed && status.Status != appruntime.StatusStopped && status.ExitCode == 0 {
-		return "\ncontainerLogs: unavailable (status=" + firstNonEmpty(status.Status, "unknown") + ")"
+		reason := firstNonEmpty(status.Status, "unknown")
+		if reason == appruntime.StatusRunning || reason == appruntime.StatusPending {
+			return "\ncontainerLogs: unavailable (status=" + reason + "; no exited-run evidence for this container id)"
+		}
+		return "\ncontainerLogs: unavailable (status=" + reason + ")"
 	}
 	started, startErr := time.Parse(time.RFC3339Nano, status.StartedAt)
 	finished, finishErr := time.Parse(time.RFC3339Nano, status.FinishedAt)
@@ -149,15 +153,87 @@ func shortContainerID(id string) string {
 	return id[:12]
 }
 
+// resolveStartupFailureStatus prefers a fresh inspect by immutable container
+// ID when the last verify sample is still non-terminal. That covers the race
+// where the process exits between the failing poll and log collection without
+// ever attaching another run's logs (ID must still match).
+func (r *LocalRuntime) resolveStartupFailureStatus(ctx context.Context, expectedID string, observed appruntime.InstanceStatus) appruntime.InstanceStatus {
+	expectedID = strings.TrimSpace(expectedID)
+	if expectedID == "" || r == nil || r.client == nil {
+		return observed
+	}
+	if startupStatusHasExitedEvidence(observed, expectedID) {
+		return observed
+	}
+	inspectCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), startupLogTimeout)
+	defer cancel()
+	inspect, err := r.client.inspectContainer(inspectCtx, expectedID)
+	if err != nil {
+		if isDockerNotFound(err) {
+			observed.Status = appruntime.StatusMissing
+			if strings.TrimSpace(observed.ContainerID) == "" {
+				observed.ContainerID = expectedID
+			}
+		}
+		return observed
+	}
+	if !containerIDEqual(inspect.ID, expectedID) {
+		return observed
+	}
+	status := appruntime.InstanceStatus{
+		ContainerName: strings.TrimPrefix(inspect.Name, "/"),
+		ContainerID:   inspect.ID,
+		Status:        dockerStateToRuntime(inspect.State.Status, inspect.State.Running, inspect.State.ExitCode),
+		Image:         inspect.Config.Image,
+		StartedAt:     inspect.State.StartedAt,
+		FinishedAt:    inspect.State.FinishedAt,
+		ExitCode:      inspect.State.ExitCode,
+		LastError:     inspect.State.Error,
+		ObservedAt:    time.Now().UTC(),
+	}
+	if observed.InstanceID != "" {
+		status.InstanceID = observed.InstanceID
+	}
+	if observed.ServerID != "" {
+		status.ServerID = observed.ServerID
+	}
+	return status
+}
+
+func startupStatusHasExitedEvidence(status appruntime.InstanceStatus, expectedID string) bool {
+	if !containerIDEqual(strings.TrimSpace(status.ContainerID), strings.TrimSpace(expectedID)) {
+		return false
+	}
+	if status.Status != appruntime.StatusFailed && status.Status != appruntime.StatusStopped && status.ExitCode == 0 {
+		return false
+	}
+	started, startErr := time.Parse(time.RFC3339Nano, status.StartedAt)
+	finished, finishErr := time.Parse(time.RFC3339Nano, status.FinishedAt)
+	return startErr == nil && finishErr == nil && !started.IsZero() && !finished.Before(started)
+}
+
+func (r *LocalRuntime) attachStartupFailureEvidence(ctx context.Context, expectedID string, observed appruntime.InstanceStatus, spec appruntime.Spec) string {
+	status := r.resolveStartupFailureStatus(ctx, expectedID, observed)
+	return r.startupFailureLogs(ctx, status, expectedID, spec)
+}
+
 func readStartupLogs(src io.Reader) (string, bool, error) {
 	// Bound the wire response as well as decoded output, including malformed
 	// zero-length frames. Closing the HTTP body stops further transfer.
 	r := bufio.NewReader(io.LimitReader(src, 32<<10))
 	header, err := r.Peek(8)
-	framed := err == nil && header[0] <= 2 && header[1] == 0 && header[2] == 0 && header[3] == 0
+	framed := err == nil && len(header) >= 8 && header[0] <= 2 && header[1] == 0 && header[2] == 0 && header[3] == 0
 	if !framed {
 		b, err := io.ReadAll(io.LimitReader(r, startupLogBytes+1))
-		return string(b[:min(len(b), startupLogBytes)]), len(b) > startupLogBytes, err
+		text := string(b[:min(len(b), startupLogBytes)])
+		// Drop NULs and other control bytes that would make errorDetail look binary.
+		text = strings.Map(func(r rune) rune {
+			if r == 0 || (r < 32 && r != '\n' && r != '\t' && r != '\r') {
+				return -1
+			}
+			return r
+		}, strings.ToValidUTF8(text, ""))
+		return text, len(b) > startupLogBytes, err
 	}
 	var out strings.Builder
 	for {

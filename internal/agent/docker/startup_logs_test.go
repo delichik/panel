@@ -136,6 +136,52 @@ func TestStartupFailureLogsTimeoutDoesNotRetry(t *testing.T) {
 	})
 }
 
+func TestResolveStartupFailureStatusReinspectsNonTerminal(t *testing.T) {
+	started := "2026-11-11T16:00:00.000000000Z"
+	finished := "2026-11-11T16:00:00.500000000Z"
+	var inspectCalls, logCalls int
+	client := &http.Client{Transport: startupDockerTransport(func(req *http.Request) (*http.Response, error) {
+		switch {
+		case req.Method == http.MethodGet && req.URL.Path == "/containers/exact-id/json":
+			inspectCalls++
+			body := `{"Id":"exact-id","Name":"/panel-web","Config":{"Image":"example/web:1"},"State":{"Status":"exited","Running":false,"ExitCode":1,"Error":"","StartedAt":"` + started + `","FinishedAt":"` + finished + `"}}`
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{"Content-Type": []string{"application/json"}}}, nil
+		case req.Method == http.MethodGet && req.URL.Path == "/containers/exact-id/logs":
+			logCalls++
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("process crashed after start\n")), Header: make(http.Header)}, nil
+		default:
+			t.Fatalf("unexpected request: %s %s", req.Method, req.URL.Path)
+			return &http.Response{StatusCode: 404, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
+		}
+	})}
+	runtime := &LocalRuntime{client: &dockerAPIClient{host: "http://docker", client: client}}
+	observed := appruntime.InstanceStatus{ContainerID: "exact-id", Status: appruntime.StatusRunning, ExitCode: 0}
+	logs := runtime.attachStartupFailureEvidence(context.Background(), "exact-id", observed, appruntime.Spec{})
+	if inspectCalls != 1 || logCalls != 1 {
+		t.Fatalf("calls inspect=%d logs=%d", inspectCalls, logCalls)
+	}
+	if !strings.Contains(logs, "process crashed after start") {
+		t.Fatalf("expected reinspect to unlock logs: %q", logs)
+	}
+	// Terminal evidence already present: skip reinspect.
+	terminal := appruntime.InstanceStatus{ContainerID: "exact-id", Status: appruntime.StatusFailed, ExitCode: 1, StartedAt: started, FinishedAt: finished}
+	_ = runtime.attachStartupFailureEvidence(context.Background(), "exact-id", terminal, appruntime.Spec{})
+	if inspectCalls != 1 || logCalls != 2 {
+		t.Fatalf("terminal status must not reinspect: inspect=%d logs=%d", inspectCalls, logCalls)
+	}
+}
+
+func TestReadStartupLogsStripsBinaryControlBytes(t *testing.T) {
+	raw := "nginx emerg\x00\x01line\n"
+	text, truncated, err := readStartupLogs(strings.NewReader(raw))
+	if err != nil || truncated {
+		t.Fatalf("readStartupLogs = %q truncated=%v err=%v", text, truncated, err)
+	}
+	if strings.Contains(text, "\x00") || strings.Contains(text, "\x01") || !strings.Contains(text, "nginx emerg") {
+		t.Fatalf("control bytes must be stripped for readable detail: %q", text)
+	}
+}
+
 func parseDockerLogUnixTimestamp(value string) (time.Time, error) {
 	sec, frac, ok := strings.Cut(value, ".")
 	seconds, err := strconv.ParseInt(sec, 10, 64)
