@@ -1009,7 +1009,11 @@ async function loadServers() {
 }
 
 function rowImageReference(app: ApplicationSummaryDto) {
-  return applicationDetails.value[app.id]?.imageReference || app.imageReference || '';
+  const detail = applicationDetails.value[app.id];
+  return detail?.imageReference
+    || detail?.imageUpdateTargets?.find((target) => target.reference)?.reference
+    || app.imageReference
+    || '';
 }
 
 function cancelRowImageLoads() {
@@ -2532,7 +2536,7 @@ onBeforeUnmount(() => {
     </template>
 
     <template #detail>
-      <ConsolePage :title="selectedApplication.name" :description="selectedApplication.imageReference || ''" :back-label="t('common.backToList')" @back="backToApplicationList">
+      <ConsolePage :title="selectedApplication.name" :description="selectedApplication.imageReference || selectedApplication.imageUpdateTargets?.find((target) => target.reference)?.reference || ''" :back-label="t('common.backToList')" @back="backToApplicationList">
         <template #actions>
           <Button size="sm" variant="secondary" @click="router.push(`/applications/apps/${encodeURIComponent(selectedApplication.id)}/edit`)"><Wrench />{{ t('common.edit') }}</Button>
           <ActivityLink resource-type="application" :resource-id="selectedApplication.id" />

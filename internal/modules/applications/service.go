@@ -690,6 +690,7 @@ func (s *Service) createWithFilesID(ctx context.Context, appID string, in SaveIn
 	if app.Name == "" {
 		app.Name = prepared.spec.Name
 	}
+	applyPreparedImageReference(&app, "", prepared)
 	if app.Enabled {
 		job, err := s.finishPreparedRuntimeJob(ctx, app, prepared, files)
 		if err != nil {
@@ -755,7 +756,12 @@ func (s *Service) updateWithFilesIfVersion(ctx context.Context, appID string, ex
 
 func (s *Service) updateWithFilesVersioned(ctx context.Context, appID string, expectedVersion int, enforceVersion bool, in SaveInput, files []ApplicationFile, deferApply bool) (Application, ApplyHint, error) {
 	in = stripDeprecatedApplicationConfig(in)
-	current, err := s.Get(ctx, appID)
+	current, err := s.getApplication(ctx, appID)
+	if err != nil {
+		return Application{}, ApplyHint{}, err
+	}
+	storedImageReference := current.ImageReference
+	current, err = s.withImageUpdateStatus(ctx, current)
 	if err != nil {
 		return Application{}, ApplyHint{}, err
 	}
@@ -798,6 +804,8 @@ func (s *Service) updateWithFilesVersioned(ctx context.Context, appID string, ex
 	app.JobID = prepared.job.ID
 	app.Namespace = s.currentConfig().Namespace
 	app.UpdatedAt = time.Now().UTC()
+	applyPreparedImageReference(&app, storedImageReference, prepared)
+	imageReferenceDirty := app.ImageReference != storedImageReference
 	configurationChanged := !applicationUserConfigurationEqual(current, app)
 	if files != nil && !applicationFileSetsMatch(currentFiles, files) {
 		configurationChanged = true
@@ -859,6 +867,11 @@ func (s *Service) updateWithFilesVersioned(ctx context.Context, appID string, ex
 	}
 	if err := s.commitApplicationStateVersioned(ctx, app, files, prepared.job, false, prepared.hash != current.SpecHash, expectedVersion, enforceVersion, configurationChanged); err != nil {
 		return Application{}, ApplyHint{}, applicationSaveError(err)
+	}
+	if !configurationChanged && imageReferenceDirty {
+		if err := s.updateApplicationDerived(ctx, app); err != nil {
+			return Application{}, ApplyHint{}, err
+		}
 	}
 	if configurationChanged {
 		s.notifyProxyDNSSync(ctx, current.ReverseProxy, app.ReverseProxy)
@@ -1754,6 +1767,14 @@ func (s *Service) withImageUpdateStatus(ctx context.Context, app Application) (A
 	}
 	app.ImageUpdateTargets = targets
 	app.ImageUpdateAvailable = updateAvailable
+	if strings.TrimSpace(app.ImageReference) == "" {
+		for _, target := range targets {
+			if ref := strings.TrimSpace(target.Reference); ref != "" {
+				app.ImageReference = ref
+				break
+			}
+		}
+	}
 	if firstLocalDigest != "" && app.ImageDigest == "" {
 		app.ImageDigest = firstLocalDigest
 	}
@@ -1764,6 +1785,24 @@ func (s *Service) withImageUpdateStatus(ctx context.Context, app Application) (A
 		app.ImageCheckedAt = latestCheckedAt
 	}
 	return app, nil
+}
+
+// preparedImageReference prefers the rendered runtime image, then the AppSpec image.
+func preparedImageReference(prepared preparedApplication) string {
+	if ref := strings.TrimSpace(prepared.job.Image); ref != "" {
+		return ref
+	}
+	return strings.TrimSpace(prepared.spec.Image)
+}
+
+// applyPreparedImageReference keeps applications.image_reference aligned with the
+// saved AppSpec so list summaries can expose the mirror without parsing YAML.
+func applyPreparedImageReference(app *Application, previous string, prepared preparedApplication) {
+	next := preparedImageReference(prepared)
+	if strings.TrimSpace(previous) != "" && next != "" && previous != next {
+		app.ImageDigest = ""
+	}
+	app.ImageReference = next
 }
 
 func (s *Service) Logs(ctx context.Context, appID string, in LogInput) (LogResult, error) {

@@ -444,7 +444,87 @@ func appMigrationSteps() []orm.Step {
 		{ID: "facility_independent_config_records", Run: func(ctx context.Context, tx *sql.Tx) error {
 			return migrateFacilityIndependentConfigRecordsOn(ctx, tx)
 		}},
+		{ID: "backfill_application_image_reference", Run: func(ctx context.Context, tx *sql.Tx) error {
+			return backfillApplicationImageReferenceOn(ctx, tx)
+		}},
 	}
+}
+
+// backfillApplicationImageReferenceOn fills empty applications.image_reference
+// from instance runtime specs first, then from top-level AppSpec `image:` lines.
+// List summaries must not parse YAML, so the column has to be populated.
+func backfillApplicationImageReferenceOn(ctx context.Context, q migrationExecutor) error {
+	exists, err := tableExistsOn(ctx, q, "applications")
+	if err != nil || !exists {
+		return err
+	}
+	if _, err := q.ExecContext(ctx, `UPDATE applications
+		SET image_reference = (
+			SELECT trim(json_extract(ai.runtime_spec_json, '$.image'))
+			FROM application_instances ai
+			WHERE ai.application_id = applications.id
+			  AND trim(COALESCE(json_extract(ai.runtime_spec_json, '$.image'), '')) <> ''
+			ORDER BY COALESCE(NULLIF(ai.updated_at, ''), ai.created_at) DESC
+			LIMIT 1
+		)
+		WHERE trim(COALESCE(image_reference, '')) = ''
+		  AND EXISTS (
+			SELECT 1 FROM application_instances ai
+			WHERE ai.application_id = applications.id
+			  AND trim(COALESCE(json_extract(ai.runtime_spec_json, '$.image'), '')) <> ''
+		  )`); err != nil {
+		return err
+	}
+	rows, err := q.QueryContext(ctx, `SELECT id, COALESCE(spec_yaml, '') FROM applications WHERE trim(COALESCE(image_reference, '')) = ''`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type item struct {
+		id    string
+		image string
+	}
+	updates := make([]item, 0)
+	for rows.Next() {
+		var id, specYAML string
+		if err := rows.Scan(&id, &specYAML); err != nil {
+			return err
+		}
+		if image := imageReferenceFromSpecYAML(specYAML); image != "" {
+			updates = append(updates, item{id: id, image: image})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, update := range updates {
+		if _, err := q.ExecContext(ctx, `UPDATE applications SET image_reference=? WHERE id=? AND trim(COALESCE(image_reference, '')) = ''`, update.image, update.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func imageReferenceFromSpecYAML(raw string) string {
+	for _, line := range strings.Split(raw, "\n") {
+		content := strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+		if content == "" || content[0] == ' ' || content[0] == '\t' || content[0] == '#' {
+			continue
+		}
+		key, value, found := strings.Cut(content, ":")
+		if !found {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		if len(key) >= 2 && (key[0] == '"' && key[len(key)-1] == '"' || key[0] == '\'' && key[len(key)-1] == '\'') {
+			key = key[1 : len(key)-1]
+		}
+		if key != "image" {
+			continue
+		}
+		return strings.Trim(strings.TrimSpace(value), `"'`)
+	}
+	return ""
 }
 
 // backfillApplicationPersistentLocationsOn preserves the nodes that can hold

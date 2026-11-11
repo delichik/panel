@@ -1139,6 +1139,62 @@ func TestRemoveDeprecatedApplicationNetworkingOnClearsLegacySnapshots(t *testing
 	}
 }
 
+func TestBackfillApplicationImageReferenceOn(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, statement := range []string{
+		`CREATE TABLE applications (id TEXT PRIMARY KEY, image_reference TEXT NOT NULL DEFAULT '', spec_yaml TEXT NOT NULL)`,
+		`CREATE TABLE application_instances (application_id TEXT NOT NULL, runtime_spec_json TEXT NOT NULL, updated_at TEXT NOT NULL, created_at TEXT NOT NULL)`,
+		`INSERT INTO applications VALUES ('from-instance','','name: web\nimage: ignored\n')`,
+		`INSERT INTO applications VALUES ('from-yaml','','name: derper\nimage: ghcr.io/kaaanata/derper\nenv:\n  X: 1\n')`,
+		`INSERT INTO applications VALUES ('keep','already/set:1','name: keep\nimage: other\n')`,
+		`INSERT INTO application_instances VALUES ('from-instance','{"image":"nginx:1.27"}','2026-01-02T00:00:00Z','2026-01-01T00:00:00Z')`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backfillApplicationImageReferenceOn(context.Background(), tx); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	assertImage := func(id, want string) {
+		t.Helper()
+		var got string
+		if err := db.QueryRow(`SELECT image_reference FROM applications WHERE id=?`, id).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("%s image_reference = %q, want %q", id, got, want)
+		}
+	}
+	assertImage("from-instance", "nginx:1.27")
+	assertImage("from-yaml", "ghcr.io/kaaanata/derper")
+	assertImage("keep", "already/set:1")
+}
+
+func TestImageReferenceFromSpecYAML(t *testing.T) {
+	if got := imageReferenceFromSpecYAML("name: web\nimage: nginx:1.27\nenv:\n  A: 1\n"); got != "nginx:1.27" {
+		t.Fatalf("got %q", got)
+	}
+	if got := imageReferenceFromSpecYAML("name: web\n\"image\": \"ghcr.io/a/b\"\n"); got != "ghcr.io/a/b" {
+		t.Fatalf("quoted got %q", got)
+	}
+	if got := imageReferenceFromSpecYAML("name: web\nports:\n  - image: not-top-level\n"); got != "" {
+		t.Fatalf("nested image must be ignored, got %q", got)
+	}
+}
+
 func TestBackfillApplicationPersistentLocationsOn(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

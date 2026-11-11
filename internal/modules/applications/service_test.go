@@ -92,8 +92,46 @@ func TestCreateDisabledAppStoresRowAndDoesNotDeployRuntime(t *testing.T) {
 	if app.Generation != 1 || app.JobID != "panel-web" || app.Namespace != "apps" {
 		t.Fatalf("app persistence fields = %#v", app)
 	}
+	if app.ImageReference != "nginx" {
+		t.Fatalf("create must persist imageReference from AppSpec, got %#v", app.ImageReference)
+	}
+	page, err := svc.ListSummaries(context.Background(), 1, 10, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].ImageReference != "nginx" {
+		t.Fatalf("list summary must include imageReference, got %#v", page.Items)
+	}
 	if len(runtime.deploys) != 0 {
 		t.Fatalf("runtime deploys = %#v", runtime.deploys)
+	}
+}
+
+func TestUpdatePersistsImageReferenceFromSpec(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: false, SpecYAML: "name: web\nimage: nginx:1.27\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.ExecContext(ctx, `UPDATE applications SET image_reference='' WHERE id=?`, app.ID); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := svc.Update(ctx, app.ID, SaveInput{Name: "web", Enabled: false, SpecYAML: "name: web\nimage: ghcr.io/example/web:2\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ImageReference != "ghcr.io/example/web:2" {
+		t.Fatalf("update must rewrite imageReference from AppSpec, got %#v", updated.ImageReference)
+	}
+	page, err := svc.ListSummaries(ctx, 1, 10, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Items[0].ImageReference != "ghcr.io/example/web:2" {
+		t.Fatalf("list summary after update = %#v", page.Items[0])
 	}
 }
 
