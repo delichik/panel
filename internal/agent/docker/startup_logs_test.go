@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -24,8 +25,8 @@ func TestStartupFailureLogsScopeRedactionAndLimits(t *testing.T) {
 			payload := "certificate file missing\npassword=secret-password\n{\"token\":\"json-secret\"}\n-----BEGIN PRIVATE KEY-----\nprivate-data\n-----END PRIVATE KEY-----\n" + strings.Repeat("useful line\n", 1000)
 			client := &http.Client{Transport: startupDockerTransport(func(req *http.Request) (*http.Response, error) {
 				calls++
-				since, sinceErr := time.Parse(time.RFC3339Nano, req.URL.Query().Get("since"))
-				until, untilErr := time.Parse(time.RFC3339Nano, req.URL.Query().Get("until"))
+				since, sinceErr := parseDockerLogUnixTimestamp(req.URL.Query().Get("since"))
+				until, untilErr := parseDockerLogUnixTimestamp(req.URL.Query().Get("until"))
 				startedAt, _ := time.Parse(time.RFC3339Nano, started)
 				finishedAt, _ := time.Parse(time.RFC3339Nano, finished)
 				if req.URL.Path != "/containers/exact-id/logs" || sinceErr != nil || untilErr != nil || since.After(startedAt) || until.Before(finishedAt) || req.URL.Query().Get("tail") != "50" || req.URL.Query().Get("follow") != "" {
@@ -72,11 +73,11 @@ func TestStartupFailureLogsPreservesNginxEmergDespiteManagedConfig(t *testing.T)
 	nginxConf := "server {\n    listen 443 ssl;\n    server_name ha.esrv.imiku.moe;\n    ssl_certificate /etc/panel-certs/cert-1/certificate.pem;\n    ssl_certificate_key /etc/panel-certs/cert-1/private-key.pem;\n}\n"
 	emerg := "nginx: [emerg] cannot load certificate \"/etc/panel-certs/cert-1/certificate.pem\": BIO_new_file() failed (SSL: error:02001002:system library:fopen:No such file or directory)\n"
 	client := &http.Client{Transport: startupDockerTransport(func(req *http.Request) (*http.Response, error) {
-		since, err := time.Parse(time.RFC3339Nano, req.URL.Query().Get("since"))
+		since, err := parseDockerLogUnixTimestamp(req.URL.Query().Get("since"))
 		if err != nil {
 			t.Fatalf("since = %q", req.URL.Query().Get("since"))
 		}
-		until, err := time.Parse(time.RFC3339Nano, req.URL.Query().Get("until"))
+		until, err := parseDockerLogUnixTimestamp(req.URL.Query().Get("until"))
 		if err != nil {
 			t.Fatalf("until = %q", req.URL.Query().Get("until"))
 		}
@@ -133,4 +134,26 @@ func TestStartupFailureLogsTimeoutDoesNotRetry(t *testing.T) {
 			t.Fatalf("unbounded fallback: %d %s %q", calls, time.Since(start), logs)
 		}
 	})
+}
+
+func parseDockerLogUnixTimestamp(value string) (time.Time, error) {
+	sec, frac, ok := strings.Cut(value, ".")
+	seconds, err := strconv.ParseInt(sec, 10, 64)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if !ok || frac == "" {
+		return time.Unix(seconds, 0).UTC(), nil
+	}
+	if len(frac) > 9 {
+		frac = frac[:9]
+	}
+	for len(frac) < 9 {
+		frac += "0"
+	}
+	nanos, err := strconv.ParseInt(frac, 10, 64)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.Unix(seconds, nanos).UTC(), nil
 }

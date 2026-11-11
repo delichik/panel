@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -53,9 +54,16 @@ func (r *LocalRuntime) startupFailureLogs(ctx context.Context, status appruntime
 	logctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), startupLogTimeout)
 	defer cancel()
 	// Absorb small Docker clock skew so a sub-second crash still yields logs.
+	// Engine API /containers/{id}/logs expects Unix seconds[.nanoseconds], not RFC3339.
 	since := started.Add(-startupLogTimeSkew)
 	until := finished.Add(startupLogTimeSkew)
-	query := url.Values{"stdout": {"true"}, "stderr": {"true"}, "tail": {"50"}, "since": {since.Format(time.RFC3339Nano)}, "until": {until.Format(time.RFC3339Nano)}}
+	query := url.Values{
+		"stdout": {"true"},
+		"stderr": {"true"},
+		"tail":   {"50"},
+		"since":  {dockerLogUnixTimestamp(since)},
+		"until":  {dockerLogUnixTimestamp(until)},
+	}
 	req, err := r.client.newRequest(logctx, http.MethodGet, "/containers/"+url.PathEscape(expectedID)+"/logs?"+query.Encode(), nil)
 	if err != nil {
 		return "\ncontainerLogs: unavailable (build request failed)"
@@ -66,6 +74,10 @@ func (r *LocalRuntime) startupFailureLogs(ctx context.Context, status appruntime
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		detail := strings.TrimSpace(readDockerErrorBody(res.Body, 200))
+		if detail != "" {
+			return fmt.Sprintf("\ncontainerLogs: unavailable (docker status %d: %s)", res.StatusCode, detail)
+		}
 		return fmt.Sprintf("\ncontainerLogs: unavailable (docker status %d)", res.StatusCode)
 	}
 	text, truncated, err := readStartupLogs(res.Body)
@@ -93,6 +105,33 @@ func (r *LocalRuntime) startupFailureLogs(ctx context.Context, status appruntime
 		text += "\n[truncated]"
 	}
 	return "\ncontainerLogs:\n" + text
+}
+
+// dockerLogUnixTimestamp formats a time for Docker Engine log queries.
+// RFC3339 is rejected by dockerd (HTTP 400); use seconds[.nanoseconds].
+func dockerLogUnixTimestamp(value time.Time) string {
+	sec := value.Unix()
+	nsec := value.Nanosecond()
+	if nsec == 0 {
+		return strconv.FormatInt(sec, 10)
+	}
+	return fmt.Sprintf("%d.%09d", sec, nsec)
+}
+
+func readDockerErrorBody(src io.Reader, limit int) string {
+	if limit <= 0 {
+		limit = 200
+	}
+	b, err := io.ReadAll(io.LimitReader(src, int64(limit)))
+	if err != nil && len(b) == 0 {
+		return ""
+	}
+	return strings.Map(func(r rune) rune {
+		if r < 32 && r != ' ' {
+			return ' '
+		}
+		return r
+	}, strings.ToValidUTF8(string(b), ""))
 }
 
 func containerIDEqual(a, b string) bool {

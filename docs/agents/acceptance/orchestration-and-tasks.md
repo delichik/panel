@@ -271,7 +271,7 @@ Run HTTP 面是 `/api/v1/executions*`；诊断读面是 `/api/v1/events*` 与 `/
 ### ORCH-CTRL-008 失败运行日志快照与降级
 
 - **前置**：启动验证发现容器退出，Docker 提供有效 StartedAt/FinishedAt 与本次执行一致的不可变容器 ID。
-- **动作**：失败时最多读取一次 stdout/stderr，固定 tail=50、`since=StartedAt-2s`、`until=FinishedAt+2s`（吸收亚秒退出的时钟偏差）、follow=false；按不可变容器 ID 抓取（允许 create/inspect 全长与截断 ID 前缀相等），不按可复用名称抓取。
+- **动作**：失败时最多读取一次 stdout/stderr，固定 tail=50、`since=StartedAt-2s`、`until=FinishedAt+2s`（吸收亚秒退出的时钟偏差）、follow=false；`since`/`until` 必须用 Docker Engine 接受的 Unix `seconds[.nanoseconds]`（不得传 RFC3339，否则 dockerd 返回 400）；按不可变容器 ID 抓取（允许 create/inspect 全长与截断 ID 前缀相等），不按可复用名称抓取。
 - **结果**：日志快照放入已有 errorDetail，失败摘要不复制正文；保留多行，页面折叠展示。读取最多 2 秒、32 KiB 传输、8 KiB 解码和 3072 字符日志；状态诊断仍最多 4096 字符，截断明确标记。只要进入启动失败路径，errorDetail 必须出现 `containerLogs:` 段（正文或 empty/unavailable 原因），**不得**静默省略只留下 exitCode。
 - **失败**：身份变化或时间范围缺失不读取历史，但必须写明 unavailable 原因（缺 ID、ID 不匹配、时间戳缺失、Docker 状态码等）；空日志/不支持/HTTP 失败/损坏帧/超时以 empty/unavailable 降级，不覆盖原退出错误、不改变 retryable、不重试读取；无退出证据的取消或替换不附另一运行日志。
 - **不变量**：附加前脱敏环境值、管理文件**全文**与其中的 PEM/凭据形态行、凭据赋值、Bearer 与完整/被截断 PEM 私钥；**不得**把 nginx/应用进程错误行里引用的普通配置短行整段擦除到失去排错价值。传输截断时丢弃末尾不完整行。读取不创建 Job/task/output 事件，不改变既有 attempts/退避/熔断。
