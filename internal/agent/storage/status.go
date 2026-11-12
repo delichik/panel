@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -33,8 +34,8 @@ func Status(ctx context.Context, root string) ExportStatus {
 	}
 	if out, err := exec.CommandContext(ctx, "showmount", "-e", "localhost").CombinedOutput(); err == nil {
 		if exportsContainRoot(string(out), root) {
-			if _, nfsErr := exec.CommandContext(ctx, "pgrep", "-x", "rpc.nfsd").CombinedOutput(); nfsErr != nil {
-				status.Detail = "export is listed but the nfs server process is not running"
+			if !nfsServerRunning(ctx) {
+				status.Detail = "export is listed but the nfs server is not running"
 				return status
 			}
 			status.ExportLive = true
@@ -44,6 +45,10 @@ func Status(ctx context.Context, root string) ExportStatus {
 		return status
 	} else if out2, err2 := exec.CommandContext(ctx, "exportfs", "-s").CombinedOutput(); err2 == nil {
 		if exportsContainRoot(string(out2), root) {
+			if !nfsServerRunning(ctx) {
+				status.Detail = "export is listed but the nfs server is not running"
+				return status
+			}
 			status.ExportLive = true
 			return status
 		}
@@ -53,6 +58,30 @@ func Status(ctx context.Context, root string) ExportStatus {
 		status.Detail = "cannot query exports: " + strings.TrimSpace(string(out))
 		return status
 	}
+}
+
+// nfsServerRunning 判断内核 NFS 服务是否在提供服务。
+// 现代 nfs-kernel-server（含 Ubuntu 24.04）上 rpc.nfsd 只是把线程数写入
+// /proc/fs/nfsd/threads 后退出，systemd 显示 active (exited)；此时 pgrep
+// rpc.nfsd 会假阴性。优先读 threads；没有 proc 节点时再回退 pgrep。
+func nfsServerRunning(ctx context.Context) bool {
+	if raw, err := os.ReadFile("/proc/fs/nfsd/threads"); err == nil {
+		if n, ok := parseNFSThreadCount(string(raw)); ok {
+			return n > 0
+		}
+	}
+	if _, err := exec.CommandContext(ctx, "pgrep", "-x", "rpc.nfsd").CombinedOutput(); err == nil {
+		return true
+	}
+	return false
+}
+
+func parseNFSThreadCount(raw string) (int, bool) {
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 // MountStatus 描述应用节点上某个 NFS 挂载点是否已挂载且可读写。

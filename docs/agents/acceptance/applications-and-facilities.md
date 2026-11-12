@@ -598,7 +598,7 @@
 
 - **前置**：多 storage servers 与 partitions，部分 Agent 离线/超时。
 - **动作**：GET status。
-- **结果**：30 秒整体上限内并行汇总服务安装、root、export、rpc.nfsd 和每分区 volume/mounted/writable（写探测 5 秒）；前端每 15 秒刷新且防重入。
+- **结果**：30 秒整体上限内并行汇总服务安装、root、export、内核 NFS 是否在服务（优先 `/proc/fs/nfsd/threads`>0，回退 `rpc.nfsd` 进程）和每分区 volume/mounted/writable（写探测 5 秒）；不得仅因现代发行版上 `rpc.nfsd` 启动内核线程后退出而把已加载导出判为未生效；前端每 15 秒刷新且防重入。
 - **失败**：单节点错误写入对应 lastError/detail，不得把整组成功项清空或串行拖到无界。
 - **不变量**：状态只读，不在 GET 隐式修改配置；导出配置读写由 Agent mutex 串行。
 - **验证**：status parallel/partial error/timeout tests。

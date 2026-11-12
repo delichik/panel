@@ -12,6 +12,7 @@
 
 ## 2. 前端路由基线
 
+- 存储共享导出生效判定修复（2026-11-12）：Agent `StorageStatus` 不再仅用 `pgrep -x rpc.nfsd`（Ubuntu 24.04+ 上 rpc.nfsd 写完 `/proc/fs/nfsd/threads` 即退出，导致导出已加载仍报「nfs server process is not running」）；改为优先 threads>0，回退 rpc.nfsd 进程。不新增路由/API/表；对应 `FAC-STO-008`。
 - 应用详情的容器日志增加实例选择、单实例自动加载、手动刷新及请求取消；既有 logs API 必传 instanceId，未新增路由/API/数据库字段。对应 `APP-RUN-002`、`UI-APP-007`。
 
 - 可观测性 `/activity` 与旧 `/operations`、`/tasks` 收敛为 `/events`（AppDB **过程**行：一件事，state/module/level）+ `/logs`（JSONL 行：level+eventId，无 state；瞬时诊断只在此）；普通日志不得自动新建 `events` 行（`ENG-LOG-007`）。过程行 title/summary 须符合 `ENG-EVT-010`（人话、可深链）；部署决策须更新意图主过程。旧路由兼容重定向。产品读走 `/api/v1/events*` 与 `/api/v1/logs`（`eventId` 可选；legacy `/api/v1/log-contexts*` 仍可用）。对应 `UI-EVT-004..007`、`UI-LOG-001..003`、`ENG-EVT-001`/`ENG-EVT-010`（`UI-ACT-*`、`ENG-LOG-008`、`LOG-CTX-*` 已废弃）；前端证据含 `IntentRecordsPage.test.ts`、`logs/index.test.ts`、`events`/`logs` API/mock、`activityRedirect`/`activityReference`。RunEngine Phase A 不改这条诊断读面，也不新增执行页路由（`ENG-RUN-002`，`UI-EVT-004` 不变）。
