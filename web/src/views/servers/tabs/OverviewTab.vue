@@ -15,7 +15,18 @@ import type { ServerDto } from '@/types/servers';
 import type { TaskDto } from '@/types/tasks';
 import { formatDateTime } from '@/utils/datetime';
 import { createLatestRequestGuard, isAbortError } from '@/views/_shared/requestState';
-import { credentialLabel, privilegeStatusKey, serverSummaryStatusKey, serverSummaryTone } from '../model';
+import {
+  credentialLabel,
+  privilegeStatusKey,
+  reportDisconnectCount1h,
+  reportStabilityGrade,
+  reportStabilityStatusKey,
+  reportStabilityTone,
+  reportStreamStatusKey,
+  reportStreamTone,
+  serverSummaryStatusKey,
+  serverSummaryTone,
+} from '../model';
 
 const props = defineProps<{ server: ServerDto; credentials: CredentialDto[]; active: boolean }>();
 const emit = defineEmits<{ refresh: [] }>();
@@ -34,6 +45,8 @@ let initialTaskInFlight = false;
 let pollTimer: number | undefined;
 
 const credentialName = computed(() => credentialLabel(props.server.credentialId, props.credentials));
+const reportDisconnectCount = computed(() => reportDisconnectCount1h(props.server));
+const hasReportStability = computed(() => Boolean(reportStabilityGrade(props.server)));
 const hostKeyMismatch = computed(() => Boolean(props.server.hostKeyMismatch));
 
 function isActiveTask(task: TaskDto | null) {
@@ -143,6 +156,17 @@ onBeforeUnmount(() => {
           <div><dt>{{ t('serversPage.dockerHost') }}</dt><dd>{{ server.dockerHost || t('common.notAvailable') }}</dd></div>
           <div><dt>{{ t('serversPage.ipv4') }}</dt><dd>{{ server.ipv4 || t('common.notAvailable') }}</dd></div>
           <div><dt>{{ t('serversPage.ipv6') }}</dt><dd>{{ server.ipv6 || t('common.notAvailable') }}</dd></div>
+          <div class="grid gap-1">
+            <dt>{{ t('serversPage.reportStream.label') }}</dt>
+            <dd><Badge :tone="reportStreamTone(server)">{{ t(reportStreamStatusKey(server)) }}</Badge></dd>
+          </div>
+          <div class="grid gap-1">
+            <dt>{{ t('serversPage.reportStability.label') }}</dt>
+            <dd class="flex flex-wrap items-center gap-2">
+              <Badge :tone="reportStabilityTone(server)">{{ t(reportStabilityStatusKey(server)) }}</Badge>
+              <span v-if="hasReportStability && reportDisconnectCount != null" class="text-muted-foreground">{{ t('serversPage.reportStability.disconnects1h', { count: reportDisconnectCount }) }}</span>
+            </dd>
+          </div>
         </dl>
       </section>
 

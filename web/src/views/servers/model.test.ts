@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentTone, connectionHost, connectionSignature, credentialReferences, hasBlockingPairIssues, isLegacyResourceTab, normalizeServerDetailTab, normalizeServerResourceSubtab, parsePairs, serverDetailTabs, serverSummaryKind, serverSummaryStatusKey, serverSummaryTone, tailscaleObservedStatus, tailscalePreferences, tailscaleStatusKey, tailscaleTone, tailscaleTrait, validateProbeInput, validateServerInput } from './model';
+import { agentTone, connectionHost, connectionSignature, credentialReferences, hasBlockingPairIssues, isLegacyResourceTab, normalizeServerDetailTab, normalizeServerResourceSubtab, parsePairs, reportDisconnectCount1h, reportStabilityGrade, reportStabilityStatusKey, reportStabilityTone, reportStreamStatus, reportStreamStatusKey, serverDetailTabs, serverSummaryKind, serverSummaryStatusKey, serverSummaryTone, shouldShowListReportStability, tailscaleObservedStatus, tailscalePreferences, tailscaleStatusKey, tailscaleTone, tailscaleTrait, validateProbeInput, validateServerInput } from './model';
 import type { ServerDto } from '@/types/servers';
 
 const server: ServerDto = {
@@ -34,6 +34,33 @@ describe('server model', () => {
 
   it('maps agent capabilities from real server fields', () => {
     expect(agentTone(server)).toBe('success');
+  });
+
+  it('maps report stream stability without inventing excellent for missing data', () => {
+    expect(reportStreamStatus(server)).toBe('');
+    expect(reportStabilityGrade(server)).toBe('');
+    expect(reportStabilityStatusKey(server)).toBe('serversPage.reportStability.unknown');
+    expect(reportStreamStatusKey(server)).toBe('serversPage.reportStream.unknown');
+    expect(shouldShowListReportStability(server)).toBe(false);
+
+    const linked = {
+      ...server,
+      traits: {
+        ...server.traits,
+        'agent.report.status': 'connected',
+        'agent.report.stability': 'good',
+        'agent.report.disconnect_count_1h': '2',
+      },
+    };
+    expect(reportStreamStatus(linked)).toBe('connected');
+    expect(reportStabilityGrade(linked)).toBe('good');
+    expect(reportDisconnectCount1h(linked)).toBe(2);
+    expect(reportStabilityTone(linked)).toBe('info');
+    expect(shouldShowListReportStability(linked)).toBe(true);
+
+    const excellent = { ...linked, traits: { ...linked.traits, 'agent.report.stability': 'excellent', 'agent.report.disconnect_count_1h': '0' } };
+    expect(shouldShowListReportStability(excellent)).toBe(false);
+    expect(reportStabilityTone({ ...linked, traits: { ...linked.traits, 'agent.report.stability': 'critical' } })).toBe('danger');
   });
 
   it('summarizes one user-facing server status with agent problems outranking mere reachability', () => {

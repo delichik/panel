@@ -4,6 +4,7 @@ import { PlayCircle, RefreshCcw, ServerCog } from '@lucide/vue';
 import { serversApi } from '@/api/servers';
 import { tasksApi } from '@/api/tasks';
 import ActivityLink from '@/components/activity/ActivityLink.vue';
+import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
@@ -13,7 +14,16 @@ import { useI18n } from '@/i18n';
 import type { ServerDto } from '@/types/servers';
 import type { TaskDto, TaskLog } from '@/types/tasks';
 import { createLatestRequestGuard, isAbortError } from '@/views/_shared/requestState';
-import { canRunPrivilegedOperation, serverSummaryStatusKey } from '../model';
+import {
+  canRunPrivilegedOperation,
+  reportDisconnectCount1h,
+  reportStabilityGrade,
+  reportStabilityStatusKey,
+  reportStabilityTone,
+  reportStreamStatusKey,
+  reportStreamTone,
+  serverSummaryStatusKey,
+} from '../model';
 
 const props = defineProps<{ server: ServerDto; active: boolean }>();
 const { t } = useI18n();
@@ -32,6 +42,8 @@ let inFlight = false;
 let pollTimer: number | undefined;
 
 const visibleLogs = computed(() => logs.value.slice(-20));
+const reportDisconnectCount = computed(() => reportDisconnectCount1h(props.server));
+const hasReportStability = computed(() => Boolean(reportStabilityGrade(props.server)));
 
 function isActiveTask(task: TaskDto | null) {
   return Boolean(task && ['queued', 'scheduled', 'running', 'failed_retryable'].includes(task.status));
@@ -156,6 +168,9 @@ onBeforeUnmount(() => {
     <div class="flex flex-wrap items-center justify-between gap-2">
       <div class="flex flex-wrap items-center gap-2">
         <span class="text-sm text-muted-foreground">{{ t(serverSummaryStatusKey(server)) }}</span>
+        <Badge :tone="reportStreamTone(server)">{{ t(reportStreamStatusKey(server)) }}</Badge>
+        <Badge :tone="reportStabilityTone(server)">{{ t(reportStabilityStatusKey(server)) }}</Badge>
+        <span v-if="hasReportStability && reportDisconnectCount != null" class="text-xs text-muted-foreground">{{ t('serversPage.reportStability.disconnects1h', { count: reportDisconnectCount }) }}</span>
         <StatusBadge v-if="agentTask" :status="agentTask.status" domain="task" :label="t(`tasksPage.status.${agentTask.status}`)" />
       </div>
       <div class="flex flex-wrap gap-2">

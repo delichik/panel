@@ -12,6 +12,7 @@
 
 ## 2. 前端路由基线
 
+- Agent report 链路稳定性（2026-11-12）：按滚动 1 小时断连边沿派生 `agent.report.stability`（优/良好/一般/差/极差）与 `disconnect_count_1h`，写入既有 `servers.traits`；列表摘要投影 status/stability/count，概况与 Agent tab 展示。不新增路由/API/表；对应 `AGT-RPT-005/006`、`SRV-API-001`、`UI-SRV-001/002/020`。
 - 存储共享导出生效判定修复（2026-11-12）：Agent `StorageStatus` 不再仅用 `pgrep -x rpc.nfsd`（Ubuntu 24.04+ 上 rpc.nfsd 写完 `/proc/fs/nfsd/threads` 即退出，导致导出已加载仍报「nfs server process is not running」）；改为优先 threads>0，回退 rpc.nfsd 进程。不新增路由/API/表；对应 `FAC-STO-008`。
 - 应用详情的容器日志增加实例选择、单实例自动加载、手动刷新及请求取消；既有 logs API 必传 instanceId，未新增路由/API/数据库字段。对应 `APP-RUN-002`、`UI-APP-007`。
 

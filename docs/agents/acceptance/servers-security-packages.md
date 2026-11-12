@@ -15,7 +15,7 @@
 
 ## 2. 服务器列表、登记与删除
 
-- `SRV-API-001`：`GET /api/v1/servers` 只接受 `page`、`pageSize`、`q` 并返回 `ListPage<ServerSummary>`；摘要只含列表所需身份、IP/地址、可达性、credentialId及 Agent/UFW/权限信号，不得读取或返回 notes、variables、完整 traits、Docker 配置、完整 OS/架构、指标或凭据秘密。
+- `SRV-API-001`：`GET /api/v1/servers` 只接受 `page`、`pageSize`、`q` 并返回 `ListPage<ServerSummary>`；摘要只含列表所需身份、IP/地址、可达性、credentialId及 Agent/UFW/权限信号，以及可选的 report 链路投影键 `agent.report.status` / `agent.report.stability` / `agent.report.disconnect_count_1h`（见 `AGT-RPT-006`），不得读取或返回 notes、variables、完整 traits（含 `disconnect_events`）、Docker 配置、完整 OS/架构、指标或凭据秘密。
 - `SRV-API-002`：`GET /servers/{id}` 才返回完整详情；纯读取列表或详情不得创建连通性、系统探测、Agent 部署或其他后台任务。
 - `SRV-SAVE-001`：创建/更新必须要求名称、credentialId、1..65535 端口和非空 dockerHost；ipv4/ipv6 至少一个，且必须分别是对应族的 IP 字面量；客户端提交 `host` 必须以 `server_host_derived` 拒绝。
 - `SRV-SAVE-002`：连接 host 必须由 ipv4 优先、否则 ipv6 派生；旧记录仅有 IP 字面量 host 时读取可回填对应族，非 IP hostname 不得伪造为新合法地址。
@@ -102,6 +102,8 @@
 - `AGT-RPT-002`：流断开重连采用连续失败 5秒起至5分钟封顶退避；一旦该连接成功交付报告即重置退避，等待退避的连接不得被静默检测循环反复取消。
 - `AGT-RPT-003`：指标、容器、镜像或软件包报告的落库失败只记录日志，不中断流；容器保存失败不得触发应用 reconcile，空容器报告不得清空已有观察。
 - `AGT-RPT-004`：周期样本时间必须 Unix interval对齐；Docker事件触发的 `container_change` 可不对齐。缓存未齐或任一指标超过15秒未成功采样时不提交指标，Panel保留旧值。网络速率必须是采集窗口内的平均字节数每秒：Agent 按固定节拍读取 `/proc/net/dev` 累计收发字节并在内存累加相邻读数差，上报整点消费累加值除以自上次提交以来读数窗口的实际时长，因此采集间隔为 N 秒时样本反映这 N 秒产生的流量平均值，不得上报单次 1 秒瞬时样本；读数之间计数器回退（网卡重建、计数器回绕）按 0 增量跳过，消费后没有新读数时不产出网络指标（整体保持不提交）。
+- `AGT-RPT-005`：Panel 必须按**滚动 1 小时**窗口统计 Agent report stream 的真实断连边沿（仅 `connected`→`disconnected` 状态转换计入；从未连通的失败、重复写 disconnected、静默超时前本就未连通的情况不得计入）。每次 `RecordAgentReportStream` 与详情读投影都必须剪裁窗口外事件并写回/投影派生键：`agent.report.disconnect_events`（窗口内断连时间戳）、`agent.report.disconnect_count_1h`、`agent.report.stability`。稳定性等级阈值固定为：`excellent`（0 次）、`good`（1–2）、`fair`（3–5）、`poor`（6–10）、`critical`（≥11）。从未产生过 `agent.report.status` 且窗口内无断连事件时不得伪造等级。稳定性只反映链路抖动，**不得**改写或替代 `agent.status` / 综合主机状态。
+- `AGT-RPT-006`：服务器列表摘要可投影 `agent.report.status`、`agent.report.stability`、`agent.report.disconnect_count_1h` 供界面展示；仍不得把完整 `disconnect_events` 或其它完整 traits 塞进 `ServerSummary`。详情 `GET /servers/{id}` 必须返回上述 report 稳定性字段（含按当前时间剪裁后的派生等级）。
 
 ## 5. UFW
 

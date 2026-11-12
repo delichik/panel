@@ -30,9 +30,12 @@ const (
 	// 连接地址变化后是否需要重签证书（例如 tailscale 地址首次可用）。
 	TraitCertificateHosts = "agent.certificate.hosts"
 
-	TraitReportStatus        = "agent.report.status"
-	TraitReportLastMessageAt = "agent.report.last_message_at"
-	TraitReportLastError     = "agent.report.last_error"
+	TraitReportStatus             = "agent.report.status"
+	TraitReportLastMessageAt      = "agent.report.last_message_at"
+	TraitReportLastError          = "agent.report.last_error"
+	TraitReportDisconnectEvents   = "agent.report.disconnect_events"
+	TraitReportDisconnectCount1h  = "agent.report.disconnect_count_1h"
+	TraitReportStability          = "agent.report.stability"
 
 	StatusCompatible   = "compatible"
 	StatusIncompatible = "incompatible"
@@ -41,6 +44,13 @@ const (
 
 	ReportStatusConnected    = "connected"
 	ReportStatusDisconnected = "disconnected"
+
+	// Report stream stability over a rolling 1h window of disconnect transitions.
+	ReportStabilityExcellent = "excellent"
+	ReportStabilityGood      = "good"
+	ReportStabilityFair      = "fair"
+	ReportStabilityPoor      = "poor"
+	ReportStabilityCritical  = "critical"
 
 	DefaultDockerHost = "unix:///var/run/docker.sock"
 

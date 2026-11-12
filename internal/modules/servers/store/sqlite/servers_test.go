@@ -140,7 +140,7 @@ func TestServerRepositorySummariesExposeAgentURL(t *testing.T) {
 	defer closeStore()
 	ctx := context.Background()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	traits := `{"agent.enabled":"true","agent.url":"https://10.0.0.1:9786","agent.status":"compatible","sys.ufw_supported":"true","sys.ufw_installed":"false","custom.role":"edge"}`
+	traits := `{"agent.enabled":"true","agent.url":"https://10.0.0.1:9786","agent.status":"compatible","agent.report.status":"connected","agent.report.stability":"good","agent.report.disconnect_count_1h":"2","agent.report.disconnect_events":"[1,2]","sys.ufw_supported":"true","sys.ufw_installed":"false","custom.role":"edge"}`
 	if _, err := db.ExecContext(ctx, `INSERT INTO servers(id,name,host,port,ssh_username,credential_id,docker_host,traits,variables_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
 		"srv-agent", "Agent Host", "10.0.0.1", 22, "root", "cred-1", "unix:///var/run/docker.sock", traits, "{}", now, now); err != nil {
 		t.Fatalf("insert server: %v", err)
@@ -160,6 +160,12 @@ func TestServerRepositorySummariesExposeAgentURL(t *testing.T) {
 	if got["agent.enabled"] != "true" || got["agent.url"] != "https://10.0.0.1:9786" || got["agent.status"] != "compatible" || got["sys.ufw_supported"] != "true" {
 		t.Fatalf("summary traits = %#v, want agent traits and ufw flags", got)
 	}
+	if got["agent.report.status"] != "connected" || got["agent.report.stability"] != "good" || got["agent.report.disconnect_count_1h"] != "2" {
+		t.Fatalf("summary traits = %#v, want report stability projection", got)
+	}
+	if _, ok := got["agent.report.disconnect_events"]; ok {
+		t.Fatalf("summary traits = %#v, want disconnect_events omitted", got)
+	}
 	if _, ok := got["custom.role"]; ok {
 		t.Fatalf("summary traits = %#v, want unrelated traits omitted", got)
 	}
@@ -177,6 +183,9 @@ func TestServerRepositorySummariesExposeAgentURL(t *testing.T) {
 	got = page.Items[0].Traits
 	if got["agent.url"] != "https://10.0.0.1:9786" || got["agent.status"] != "compatible" {
 		t.Fatalf("summary page traits = %#v, want agent.url and agent.status", got)
+	}
+	if got["agent.report.stability"] != "good" || got["agent.report.disconnect_count_1h"] != "2" {
+		t.Fatalf("summary page traits = %#v, want report stability projection", got)
 	}
 }
 

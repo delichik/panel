@@ -40,6 +40,7 @@ func (r *ServerRepository) List(ctx context.Context) ([]domain.Server, error) {
 func (r *ServerRepository) ListSummaries(ctx context.Context) ([]domain.ServerSummary, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT id,name,host,port,credential_id,reachable,sudo_passwordless,privilege_mode,last_checked_at,last_error,updated_at,
 		COALESCE(json_extract(traits,'$."agent.enabled"'),''),COALESCE(json_extract(traits,'$."agent.url"'),''),COALESCE(json_extract(traits,'$."agent.status"'),''),
+		COALESCE(json_extract(traits,'$."agent.report.status"'),''),COALESCE(json_extract(traits,'$."agent.report.stability"'),''),COALESCE(json_extract(traits,'$."agent.report.disconnect_count_1h"'),''),
 		COALESCE(json_extract(traits,'$."sys.ufw_supported"'),''),COALESCE(json_extract(traits,'$."sys.ufw_installed"'),''),
 		COALESCE(json_extract(traits,'$."tailscale.status"'),''),
 		COALESCE(host_key_mismatch,0),COALESCE(tailscale_enabled,0)
@@ -53,9 +54,9 @@ func (r *ServerRepository) ListSummaries(ctx context.Context) ([]domain.ServerSu
 		var item domain.ServerSummary
 		var reachable, sudo int
 		var lastChecked sql.NullString
-		var updatedAt, agentEnabled, agentURL, agentStatus, ufwSupported, ufwInstalled, tailscaleStatus string
+		var updatedAt, agentEnabled, agentURL, agentStatus, reportStatus, reportStability, reportDisconnectCount, ufwSupported, ufwInstalled, tailscaleStatus string
 		var hostKeyMismatch, tailscaleEnabled int
-		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &item.CredentialID, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &ufwSupported, &ufwInstalled, &tailscaleStatus, &hostKeyMismatch, &tailscaleEnabled); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &item.CredentialID, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &reportStatus, &reportStability, &reportDisconnectCount, &ufwSupported, &ufwInstalled, &tailscaleStatus, &hostKeyMismatch, &tailscaleEnabled); err != nil {
 			return nil, err
 		}
 		item.Reachable = reachable == 1
@@ -66,6 +67,7 @@ func (r *ServerRepository) ListSummaries(ctx context.Context) ([]domain.ServerSu
 		normalizeSummaryPrivilege(&item)
 		item.Traits = map[string]string{
 			"agent.enabled": agentEnabled, "agent.url": agentURL, "agent.status": agentStatus,
+			agentcontract.TraitReportStatus: reportStatus, agentcontract.TraitReportStability: reportStability, agentcontract.TraitReportDisconnectCount1h: reportDisconnectCount,
 			"sys.ufw_supported": ufwSupported, "sys.ufw_installed": ufwInstalled,
 			agentcontract.TraitTailscaleStatus: tailscaleStatus,
 		}
@@ -96,6 +98,7 @@ func (r *ServerRepository) ListSummaryPage(ctx context.Context, page, pageSize i
 	listArgs := append(append([]any{}, args...), pageSize, (page-1)*pageSize)
 	rows, err := r.db.QueryContext(ctx, `SELECT id,name,host,port,credential_id,reachable,sudo_passwordless,privilege_mode,last_checked_at,last_error,updated_at,
 		COALESCE(json_extract(traits,'$."agent.enabled"'),''),COALESCE(json_extract(traits,'$."agent.url"'),''),COALESCE(json_extract(traits,'$."agent.status"'),''),
+		COALESCE(json_extract(traits,'$."agent.report.status"'),''),COALESCE(json_extract(traits,'$."agent.report.stability"'),''),COALESCE(json_extract(traits,'$."agent.report.disconnect_count_1h"'),''),
 		COALESCE(json_extract(traits,'$."sys.ufw_supported"'),''),COALESCE(json_extract(traits,'$."sys.ufw_installed"'),''),
 		COALESCE(json_extract(traits,'$."tailscale.status"'),''),
 		COALESCE(host_key_mismatch,0),COALESCE(tailscale_enabled,0)
@@ -109,9 +112,9 @@ func (r *ServerRepository) ListSummaryPage(ctx context.Context, page, pageSize i
 		var item domain.ServerSummary
 		var reachable, sudo int
 		var lastChecked sql.NullString
-		var updatedAt, agentEnabled, agentURL, agentStatus, ufwSupported, ufwInstalled, tailscaleStatus string
+		var updatedAt, agentEnabled, agentURL, agentStatus, reportStatus, reportStability, reportDisconnectCount, ufwSupported, ufwInstalled, tailscaleStatus string
 		var hostKeyMismatch, tailscaleEnabled int
-		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &item.CredentialID, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &ufwSupported, &ufwInstalled, &tailscaleStatus, &hostKeyMismatch, &tailscaleEnabled); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &item.CredentialID, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &reportStatus, &reportStability, &reportDisconnectCount, &ufwSupported, &ufwInstalled, &tailscaleStatus, &hostKeyMismatch, &tailscaleEnabled); err != nil {
 			return httpx.ListPage[domain.ServerSummary]{}, err
 		}
 		item.Reachable, item.Sudo.Passwordless = reachable == 1, sudo == 1
@@ -120,6 +123,7 @@ func (r *ServerRepository) ListSummaryPage(ctx context.Context, page, pageSize i
 		normalizeSummaryPrivilege(&item)
 		item.Traits = map[string]string{
 			"agent.enabled": agentEnabled, "agent.url": agentURL, "agent.status": agentStatus,
+			agentcontract.TraitReportStatus: reportStatus, agentcontract.TraitReportStability: reportStability, agentcontract.TraitReportDisconnectCount1h: reportDisconnectCount,
 			"sys.ufw_supported": ufwSupported, "sys.ufw_installed": ufwInstalled,
 			agentcontract.TraitTailscaleStatus: tailscaleStatus,
 		}

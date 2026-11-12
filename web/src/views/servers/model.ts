@@ -104,6 +104,72 @@ export function agentStatusKey(server: ServerDto) {
   return server.traits?.['agent.enabled'] === 'true' ? 'serversPage.agentIncompatible' : 'serversPage.agentNotInstalled';
 }
 
+/** Report stream 稳定性等级；来源固定为 traits 的 `agent.report.stability`。 */
+export const reportStabilityGrades = ['excellent', 'good', 'fair', 'poor', 'critical'] as const;
+
+export type ReportStabilityGrade = (typeof reportStabilityGrades)[number];
+
+export type ReportStabilityTone = 'success' | 'info' | 'warning' | 'danger' | 'neutral';
+
+export function reportStreamStatus(server: ServerDto): 'connected' | 'disconnected' | '' {
+  const raw = server.traits?.['agent.report.status'] ?? '';
+  if (raw === 'connected' || raw === 'disconnected') return raw;
+  return '';
+}
+
+export function reportStabilityGrade(server: ServerDto): ReportStabilityGrade | '' {
+  const raw = server.traits?.['agent.report.stability'] ?? '';
+  return (reportStabilityGrades as readonly string[]).includes(raw) ? (raw as ReportStabilityGrade) : '';
+}
+
+export function reportDisconnectCount1h(server: ServerDto): number | null {
+  const raw = server.traits?.['agent.report.disconnect_count_1h'];
+  if (raw == null || raw === '') return null;
+  const count = Number(raw);
+  return Number.isFinite(count) && count >= 0 ? count : null;
+}
+
+export function reportStabilityStatusKey(server: ServerDto) {
+  const grade = reportStabilityGrade(server);
+  return grade ? (`serversPage.reportStability.${grade}` as const) : ('serversPage.reportStability.unknown' as const);
+}
+
+export function reportStabilityTone(server: ServerDto): ReportStabilityTone {
+  switch (reportStabilityGrade(server)) {
+    case 'excellent':
+      return 'success';
+    case 'good':
+      return 'info';
+    case 'fair':
+      return 'warning';
+    case 'poor':
+    case 'critical':
+      return 'danger';
+    default:
+      return 'neutral';
+  }
+}
+
+export function reportStreamStatusKey(server: ServerDto) {
+  const status = reportStreamStatus(server);
+  if (status === 'connected') return 'serversPage.reportStream.connected' as const;
+  if (status === 'disconnected') return 'serversPage.reportStream.disconnected' as const;
+  return 'serversPage.reportStream.unknown' as const;
+}
+
+export function reportStreamTone(server: ServerDto): ReportStabilityTone {
+  const status = reportStreamStatus(server);
+  if (status === 'connected') return 'success';
+  if (status === 'disconnected') return 'warning';
+  return 'neutral';
+}
+
+/** 列表仅在非优时提示抖动，避免与综合状态徽标抢视线。 */
+export function shouldShowListReportStability(server: ServerDto) {
+  const grade = reportStabilityGrade(server);
+  return Boolean(grade && grade !== 'excellent');
+}
+
 /** 特权能力文案 key；列表行与概况 tab 共用。 */
 export function privilegeStatusKey(server: ServerDto) {
   if (server.privilege?.privileged) return 'serversPage.privileged';

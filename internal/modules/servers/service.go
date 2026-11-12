@@ -219,6 +219,10 @@ func (s *Service) latestLoadAverage(ctx context.Context, serverID string) string
 func (s *Service) prepareServerForRead(ctx context.Context, srv Server) Server {
 	srv.DockerHost = normalizeDockerHost(srv.DockerHost)
 	applyDistroSystemTraits(srv.OS, srv.Traits)
+	if srv.Traits != nil {
+		// Refresh derived 1h stability without requiring a new stream write.
+		applyReportStability(srv.Traits, time.Now().UTC(), false)
+	}
 	srv.LoadAverage = s.latestLoadAverage(ctx, srv.ID)
 	// Legacy servers registered before ipv4/ipv6 were persisted only carry the
 	// derived host; split it back so edit forms and DNS sync can use the stored
@@ -1193,6 +1197,9 @@ func (s *Service) RecordAgentReportStream(ctx context.Context, serverID string, 
 	if err != nil {
 		return err
 	}
+	prevStatus := strings.TrimSpace(traits[agentcontract.TraitReportStatus])
+	now := time.Now().UTC()
+	recordDisconnect := false
 	if connected {
 		traits[agentcontract.TraitReportStatus] = agentcontract.ReportStatusConnected
 		delete(traits, agentcontract.TraitReportLastError)
@@ -1201,10 +1208,13 @@ func (s *Service) RecordAgentReportStream(ctx context.Context, serverID string, 
 		if strings.TrimSpace(msg) != "" {
 			traits[agentcontract.TraitReportLastError] = strings.TrimSpace(msg)
 		}
+		// Only real connected→disconnected edges count toward stability.
+		recordDisconnect = prevStatus == agentcontract.ReportStatusConnected
 	}
 	if !lastMessageAt.IsZero() {
 		traits[agentcontract.TraitReportLastMessageAt] = lastMessageAt.UTC().Format(time.RFC3339Nano)
 	}
+	applyReportStability(traits, now, recordDisconnect)
 	return s.saveServerTraits(ctx, serverID, traits)
 }
 

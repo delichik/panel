@@ -4,6 +4,7 @@
 
 ## 当前状态
 
+- 本轮 Agent report 链路稳定性：新增 `serversPage.reportStability.*`（优/良好/一般/差/极差与近 1 小时断连次数）与 `serversPage.reportStream.*`（已连接/已断开/暂无数据）；en / zh-CN 已同步。
 - 本轮事件/任务摘要词典补齐：新增过程事件与 Agent 部署相关前缀（`Deploy `/`Entered monitor`/`Panel agent deployed`/`Execution evidence` 等）；列表与详情的 summary 也走 `translateEventSummary`。debug 进度默认不落 JSONL（进程日志级别为 info）。en / zh-CN 已同步。
 - 本轮日志默认含 info：排障默认 `info,warning,error`；`logsPage.filter.diagnoseLevels` 改为「仅警告和错误」；en / zh-CN 已同步。
 - 本轮过程事件可读性：新增 `eventsPage.viewOperationLogs` / `viewExecutionLogs`、`applicationsPage.monitorReason` / `evidenceDeadline`；en / zh-CN 已同步。

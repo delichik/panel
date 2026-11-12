@@ -3103,3 +3103,66 @@ func TestTrustHostKeyUnavailableWithoutExecutor(t *testing.T) {
 		t.Fatalf("expected server_executor_unavailable, got %v", err)
 	}
 }
+
+func TestRecordAgentReportStreamTracksStabilityWindow(t *testing.T) {
+	svc, _, _ := testServerService(t, nil)
+	ctx := context.Background()
+	srv, err := svc.Create(ctx, SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC()
+	if err := svc.RecordAgentReportStream(ctx, srv.ID, true, now, ""); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(ctx, srv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Traits[agentcontract.TraitReportStatus] != agentcontract.ReportStatusConnected {
+		t.Fatalf("status = %q, want connected", got.Traits[agentcontract.TraitReportStatus])
+	}
+	if got.Traits[agentcontract.TraitReportStability] != agentcontract.ReportStabilityExcellent {
+		t.Fatalf("stability = %q, want excellent", got.Traits[agentcontract.TraitReportStability])
+	}
+	if got.Traits[agentcontract.TraitStatus] != "" {
+		t.Fatalf("must not invent agent.status from report stream, got %q", got.Traits[agentcontract.TraitStatus])
+	}
+
+	if err := svc.RecordAgentReportStream(ctx, srv.ID, false, now, "eof"); err != nil {
+		t.Fatal(err)
+	}
+	// Repeated disconnected writes must not inflate the window.
+	if err := svc.RecordAgentReportStream(ctx, srv.ID, false, now, "eof again"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = svc.Get(ctx, srv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Traits[agentcontract.TraitReportStability] != agentcontract.ReportStabilityGood {
+		t.Fatalf("stability after one edge = %q, want good", got.Traits[agentcontract.TraitReportStability])
+	}
+	if got.Traits[agentcontract.TraitReportDisconnectCount1h] != "1" {
+		t.Fatalf("disconnect count = %q, want 1", got.Traits[agentcontract.TraitReportDisconnectCount1h])
+	}
+	if got.Traits[agentcontract.TraitReportLastError] != "eof again" {
+		t.Fatalf("last error = %q, want latest message", got.Traits[agentcontract.TraitReportLastError])
+	}
+
+	page, err := svc.ListSummaryPage(ctx, 1, 50, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 {
+		t.Fatalf("summary page items = %d, want 1", len(page.Items))
+	}
+	summary := page.Items[0].Traits
+	if summary[agentcontract.TraitReportStability] != agentcontract.ReportStabilityGood || summary[agentcontract.TraitReportDisconnectCount1h] != "1" {
+		t.Fatalf("summary projection = %#v, want good/1", summary)
+	}
+	if _, ok := summary[agentcontract.TraitReportDisconnectEvents]; ok {
+		t.Fatalf("summary must omit disconnect_events, got %#v", summary)
+	}
+}

@@ -47,8 +47,11 @@ import {
   canRunPrivilegedOperation,
   serverDetailTabs,
   serverResourceSubtabs,
+  reportStabilityStatusKey,
+  reportStabilityTone,
   serverSummaryStatusKey,
   serverSummaryTone,
+  shouldShowListReportStability,
   type FirewallView,
   type ServerDetailTab,
   type ServerResourceSubtab,
@@ -494,7 +497,10 @@ onBeforeUnmount(() => {
               </Tooltip>
             </template>
             <template #status="{ row }">
-              <Badge :tone="serverSummaryTone(row)">{{ statusText(row) }}</Badge>
+              <div class="flex flex-wrap items-center gap-1">
+                <Badge :tone="serverSummaryTone(row)">{{ statusText(row) }}</Badge>
+                <Badge v-if="shouldShowListReportStability(row)" :tone="reportStabilityTone(row)">{{ t(reportStabilityStatusKey(row)) }}</Badge>
+              </div>
             </template>
             <template #lastChecked="{ row }">
               <span class="text-muted-foreground">{{ formatDateTime(row.lastCheckedAt, t('common.never')) }}</span>
