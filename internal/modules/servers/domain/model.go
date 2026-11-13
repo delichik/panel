@@ -39,6 +39,19 @@ type Server struct {
 	TailscaleEnabled            bool `json:"tailscaleEnabled"`
 	TailscalePreferAgent        bool `json:"tailscalePreferAgent"`
 	TailscalePreferInterconnect bool `json:"tailscalePreferInterconnect"`
+
+	// 连接代理配置。proxyMode 为 direct 时其余字段为空。socks5PasswordSet 只
+	// 表示是否已存密码，密码本身永不出 API。
+	ProxyMode          string `json:"proxyMode"`
+	TunnelServerID     string `json:"tunnelServerId"`
+	TunnelServerName   string `json:"tunnelServerName,omitempty"`
+	Socks5Address      string `json:"socks5Address,omitempty"`
+	Socks5Username     string `json:"socks5Username,omitempty"`
+	Socks5PasswordSet  bool   `json:"socks5PasswordSet,omitempty"`
+	ProxyInvalid       bool   `json:"proxyInvalid,omitempty"`
+	ProxyError         string `json:"proxyError,omitempty"`
+	// Socks5PasswordCiphertext 只在模块内部解析代理链时使用，永不序列化。
+	Socks5PasswordCiphertext string `json:"-"`
 }
 
 type ServerSummary struct {
@@ -57,6 +70,15 @@ type ServerSummary struct {
 	UpdatedAt       time.Time         `json:"updatedAt"`
 
 	TailscaleEnabled bool `json:"tailscaleEnabled"`
+
+	// 连接方式摘要：列表页只需展示模式与隧道/代理地址，不暴露密码。
+	ProxyMode        string `json:"proxyMode"`
+	TunnelServerID   string `json:"tunnelServerId"`
+	TunnelServerName string `json:"tunnelServerName,omitempty"`
+	Socks5Address    string `json:"socks5Address,omitempty"`
+	Socks5Username   string `json:"socks5Username,omitempty"`
+	ProxyInvalid     bool   `json:"proxyInvalid,omitempty"`
+	ProxyError       string `json:"proxyError,omitempty"`
 }
 
 type ArchitectureInfo struct {
@@ -96,6 +118,19 @@ type SaveRequest struct {
 	TailscaleEnabled            bool `json:"tailscaleEnabled"`
 	TailscalePreferAgent        bool `json:"tailscalePreferAgent"`
 	TailscalePreferInterconnect bool `json:"tailscalePreferInterconnect"`
+
+	// 连接代理配置。direct 为默认；ssh_tunnel 使用隧道服务器；socks5 使用
+	// 手填地址与可选用户名/密码。socks5Password 只写，留空表示更新时保留
+	// 既有密码。
+	ProxyMode      string `json:"proxyMode"`
+	TunnelServerID string `json:"tunnelServerId"`
+	Socks5Address  string `json:"socks5Address"`
+	Socks5Username string `json:"socks5Username"`
+	Socks5Password string `json:"socks5Password"`
+
+	// ProbeServerID 只用于探测（POST /servers/probe）：编辑已有服务器时可复用
+	// 已存 SOCKS5 密码，并把待保存服务器纳入成环检测。保存接口忽略该字段。
+	ProbeServerID string `json:"serverId,omitempty"`
 }
 
 type ProbeResult struct {

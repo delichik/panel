@@ -1,5 +1,5 @@
 import { apiClient, type ApiRequestOptions } from './client';
-import type { OperationAccepted, ServerDto, ServerProbeResult, ServerSaveInput } from '@/types/servers';
+import type { OperationAccepted, ServerDto, ServerProbeInput, ServerProbeResult, ServerSaveInput } from '@/types/servers';
 import type { ListPage } from '@/types/pagination';
 
 export interface MetricsPoint {
@@ -58,7 +58,7 @@ export const serversApi = {
   delete(id: string) {
     return apiClient.delete<void>(`/servers/${encodeURIComponent(id)}`);
   },
-  probe(input: Pick<ServerSaveInput, 'ipv4' | 'ipv6' | 'port' | 'sshUsername' | 'credentialId'>) {
+  probe(input: ServerProbeInput) {
     return apiClient.post<ServerProbeResult>('/servers/probe', input);
   },
   test(id: string) {

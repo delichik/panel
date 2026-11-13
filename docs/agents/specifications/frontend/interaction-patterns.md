@@ -10,7 +10,7 @@
 - `FileUploadButton`：用于单文件或多文件选择，页面负责执行上传。禁止在业务页裸露不同样式的 `<input type="file">`。
 - `DownloadButton`：用于 blob、归档、证书、密钥等下载动作，页面负责调用 API 并处理 `saveBlobDownload`。
 - `StatusBadge`：集中维护状态到 tone 的映射。支持 `generic`、`server`、`task`、`certificate`、`resource`、`operation` domain；页面只有在确有业务差异时才传入显式 `tone`。
-- `Select`：用于单选下拉。交付形态必须是 Panel 自有 combobox + listbox 浮层，使用 popover 表面、统一 hover/selected/focus/motion 状态和暗色主题 token；不得把浏览器原生 `<option>` 展开菜单作为用户可见交互形态。必须把页面传入的 `aria-label` / `aria-invalid` 等 ARIA 属性绑定到 combobox 控件（组件 `inheritAttrs: false`，不得丢弃），并支持方向键、Home/End、Escape 与 `Tab` 关闭。
+- `Select`：用于单选下拉。交付形态必须是 Panel 自有 combobox + listbox 浮层，使用 popover 表面、统一 hover/selected/focus/motion 状态和暗色主题 token；不得把浏览器原生 `<option>` 展开菜单作为用户可见交互形态。必须把页面传入的 `aria-label` / `aria-invalid` 等 ARIA 属性绑定到 combobox 控件（组件 `inheritAttrs: false`，不得丢弃），并支持方向键、Home/End、Escape 与 `Tab` 关闭。可选搜索模式由 `searchable` 启用，配套 `searchPlaceholder`（下拉内搜索框占位与无障碍名称）和 `searchEmptyText`（输入非空且无匹配时的空态文案）两个文案 props；输入变化触发 `search(query)` 事件，原样携带当前搜索词，空串表示清空。默认搜索只过滤下拉可见选项，不清空、不改变已选标签：当前值不在过滤结果中时，触发器仍展示已选中的标签。搜索框内支持 ArrowUp/ArrowDown 移动、Enter 选择、Escape/Tab 关闭下拉；非搜索模式行为完全不变。父级可监听 `search` 做远程搜索并把结果按稳定 id 合并回 `options`（搜索词应防抖，空串时清理远程候选），加载/失败/无匹配文案由父级传入并在下拉外就地提示；组件不得内置业务 API 或路由。页面级搜索仍使用 `SearchInput`，不得手写放大镜 + Input 组合；下拉内部的候选项过滤与远程搜索才使用本搜索模式。
 - `Dropdown`：菜单 Teleport 到 `body`，使用 fixed 定位、视口边界收敛和上下碰撞选择，不能留在业务容器内被 `overflow` 裁切；菜单宽度按内容收缩并保持紧凑，禁止 fixed 后按视口宽度拉伸；继续支持方向键、Home/End、Escape 和焦点恢复；`Tab` 离开菜单时必须关闭并同步 `aria-expanded`。
 - `Dialog`：不响应遮罩点击关闭，只能通过关闭按钮、取消操作或 Escape 关闭；普通和 large 尺寸的 body 都必须有可靠的内部纵向滚动，页脚保持在弹窗网格底部；业务正文不能依赖外层页面滚动才能到达。
 - `ToastProvider`：支持可选 `action={label,to}` 路由动作，带动作保留 15 秒；`useSuccessToast(title, receipt)` / `useErrorToast(title, error)` 从本次返回的真实关联生成「查看日志」（默认 `/logs?...&level=info,warning,error`），禁止用全局最近请求或解析提示文本关联。全局顶部 toast；页面和组件内 catch 到的异常统一以 danger toast 展示，字段校验与结构化诊断仍就地展示。
@@ -42,7 +42,7 @@
 6. 中大屏布局中，表格与覆盖式详情必须各自在模板提供的内部滚动区域内完成滚动，不得恢复页面级滚动；宽表格允许在表格容器内横向滚动。
 7. 实体工作台（servers/credentials/dns/certificates/applications）的列表与详情切换必须复用 `TableDetailLayout`：列表保持挂载（`inert` + `aria-hidden`），详情的选中参数与 tab 参数进 URL，打开详情 `push` 历史、关闭 `replace` 清参数；页面不得自建第二套切换壳。
 8. 操作/任务与其它实体工作台使用 `TableDetailLayout`；日志使用 `ListPage` + Dialog；不得再接入 `MasterDetailLayout` 交付页，也不得新增“紧凑视口自动选中首条”逻辑。
-9. 页面内分段切换（如证书的域名/自签/密钥）使用带 `aria-current` 的链接或 `Tabs`，不得用一排 `primary` 按钮表达选中态；页面内搜索一律复用 `SearchInput`，不得手写放大镜 + Input 组合。
+9. 页面内分段切换（如证书的域名/自签/密钥）使用带 `aria-current` 的链接或 `Tabs`，不得用一排 `primary` 按钮表达选中态；页面内搜索一律复用 `SearchInput`，不得手写放大镜 + Input 组合；下拉内部的候选过滤/远程搜索使用 `Select` 的可选搜索模式，不在下拉外另造搜索框。
 
 ## 当前接入记录
 

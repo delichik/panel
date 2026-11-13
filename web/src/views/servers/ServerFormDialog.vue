@@ -14,11 +14,21 @@ import CredentialFormFields from '@/components/patterns/CredentialFormFields.vue
 import { emptyCredentialInput, secretPayload, validateCredentialInput, type CredentialFormLabels } from '@/components/patterns/credentialForm';
 import { useI18n } from '@/i18n';
 import type { CredentialDto, CredentialInput } from '@/types/credentials';
-import type { ServerDto, ServerProbeResult, ServerSaveInput } from '@/types/servers';
-import { connectionSignature, hasBlockingPairIssues, parsePairs, stringifyPairs, tailscalePreferences, validateProbeInput, validateServerInput } from './model';
+import type { ServerDto, ServerProbeInput, ServerProbeResult, ServerProxyMode, ServerSaveInput } from '@/types/servers';
+import {
+  connectionSignature,
+  hasBlockingPairIssues,
+  mergeServerCandidates,
+  parsePairs,
+  proxySavePayload,
+  stringifyPairs,
+  tailscalePreferences,
+  validateProbeInput,
+  validateServerInput,
+} from './model';
 
 /**
- * 服务器创建/编辑弹窗。探测是独立的连接诊断：只要求地址、端口、凭据有效，
+ * 服务器创建/编辑弹窗。探测是独立的连接诊断：只要求地址、端口、凭据与代理草稿有效，
  * 结果（含过期）不参与创建闸门；创建闸门只看完整表单校验。
  */
 const props = defineProps<{
@@ -26,6 +36,8 @@ const props = defineProps<{
   editing: ServerDto | null;
   credentials: CredentialDto[];
   credentialError: string;
+  /** 隧道服务器候选；由列表页传入，弹窗内排除当前编辑服务器自身。 */
+  servers: ServerDto[];
 }>();
 
 const emit = defineEmits<{
@@ -46,6 +58,11 @@ const form = reactive({
   sshUsername: '',
   credentialId: '',
   dockerHost: 'unix:///var/run/docker.sock',
+  proxyMode: 'direct' as ServerProxyMode,
+  tunnelServerId: '',
+  socks5Address: '',
+  socks5Username: '',
+  socks5Password: '',
   tailscaleEnabled: false,
   tailscalePreferAgent: false,
   tailscalePreferInterconnect: false,
@@ -62,12 +79,50 @@ const credentialDialogOpen = ref(false);
 const credentialForm = ref<CredentialInput>(emptyCredentialInput());
 const credentialSaving = ref(false);
 const credentialActionError = ref('');
+// 隧道候选：弹窗打开时拉取全量服务器（serversApi.list 固定 pageSize=200），
+// 与父页面分页列表合并去重；加载失败只降级提示，不阻塞直连模式保存。
+const allServers = ref<ServerDto[]>([]);
+const candidatesLoading = ref(false);
+const candidatesError = ref('');
+let candidatesRequestId = 0;
+// 隧道服务器搜索：打开下拉后按名称/地址远程搜索，覆盖 200 台以外无法预载的
+// 服务器；搜索结果合并进候选集，输入清空或弹窗关闭时丢弃。
+const remoteServers = ref<ServerDto[]>([]);
+const tunnelSearchError = ref('');
+let tunnelSearchRequestId = 0;
+let tunnelSearchTimer: number | undefined;
+const tunnelSearchDebounceMs = 250;
 
 const credentialOptions = computed(() => props.credentials.map((item) => ({ label: `${item.name} / ${item.username}`, value: item.id })));
+const proxyModeOptions = computed(() => [
+  { value: 'direct', label: t('serversPage.proxy.modeDirect') },
+  { value: 'ssh_tunnel', label: t('serversPage.proxy.modeSshTunnel') },
+  { value: 'socks5', label: t('serversPage.proxy.modeSocks5') },
+]);
+// 隧道服务器候选：分页列表、全量与远程搜索结果按 id 合并去重，并排除当前
+// 编辑服务器自身；当前值不在候选集中时保留一个占位选项，避免编辑态选择丢失。
+const tunnelServerOptions = computed(() => {
+  const options = mergeServerCandidates(props.servers, [...allServers.value, ...remoteServers.value], props.editing?.id)
+    .map((server) => ({ value: server.id, label: `${server.name} · ${server.host}` }));
+  const selectedId = form.tunnelServerId.trim();
+  if (selectedId && !options.some((option) => option.value === selectedId)) {
+    const knownName = props.editing?.tunnelServerId === selectedId ? props.editing.tunnelServerName : '';
+    options.unshift({ value: selectedId, label: `${knownName || selectedId} · ${t('serversPage.proxy.tunnelUnknown')}` });
+  }
+  return options;
+});
+const socks5PasswordStored = computed(() => Boolean(props.editing?.socks5PasswordSet));
 const tailscalePayload = computed(() => tailscalePreferences({
   tailscaleEnabled: form.tailscaleEnabled,
   tailscalePreferAgent: form.tailscalePreferAgent,
   tailscalePreferInterconnect: form.tailscalePreferInterconnect,
+}));
+const proxyPayload = computed(() => proxySavePayload({
+  proxyMode: form.proxyMode,
+  tunnelServerId: form.tunnelServerId,
+  socks5Address: form.socks5Address,
+  socks5Username: form.socks5Username,
+  socks5Password: form.socks5Password,
 }));
 const formPayload = computed<ServerSaveInput>(() => ({
   name: form.name,
@@ -77,14 +132,25 @@ const formPayload = computed<ServerSaveInput>(() => ({
   sshUsername: form.sshUsername,
   credentialId: form.credentialId,
   dockerHost: form.dockerHost,
+  ...proxyPayload.value,
   tailscaleEnabled: form.tailscaleEnabled,
   tailscalePreferAgent: tailscalePayload.value.tailscalePreferAgent,
   tailscalePreferInterconnect: tailscalePayload.value.tailscalePreferInterconnect,
   variables: parsePairs(form.variables).pairs,
   notes: form.notes,
 }));
-const validation = computed(() => validateServerInput(formPayload.value));
-const probeValidation = computed(() => validateProbeInput(formPayload.value));
+// 编辑探测时附带 serverId：密码留空可复用已存密文，并把待保存服务器纳入成环检测。
+const probePayload = computed<ServerProbeInput>(() => ({
+  ipv4: form.ipv4,
+  ipv6: form.ipv6,
+  port: Number(form.port),
+  sshUsername: form.sshUsername,
+  credentialId: form.credentialId,
+  ...proxyPayload.value,
+  ...(props.editing ? { serverId: props.editing.id } : {}),
+}));
+const validation = computed(() => validateServerInput(formPayload.value, { selfId: props.editing?.id }));
+const probeValidation = computed(() => validateProbeInput(probePayload.value));
 const pairResult = computed(() => parsePairs(form.variables));
 const pairErrors = computed(() => pairResult.value.issues.filter((issue) => issue.kind !== 'duplicate_key'));
 const pairWarnings = computed(() => pairResult.value.issues.filter((issue) => issue.kind === 'duplicate_key'));
@@ -124,8 +190,72 @@ const credentialTypeOptions = computed(() => [
   { value: 'private_key', label: t('credentialsPage.privateKey') },
 ]);
 
+async function loadTunnelCandidates() {
+  const requestId = ++candidatesRequestId;
+  candidatesLoading.value = true;
+  candidatesError.value = '';
+  try {
+    const list = await serversApi.list();
+    if (requestId !== candidatesRequestId) return;
+    allServers.value = list;
+  } catch {
+    if (requestId !== candidatesRequestId) return;
+    // 失败不阻塞表单：回退到父页面已加载的分页列表，仅在隧道选择处提示可重试。
+    allServers.value = [];
+    candidatesError.value = t('serversPage.proxy.candidatesLoadFailed');
+  } finally {
+    if (requestId === candidatesRequestId) candidatesLoading.value = false;
+  }
+}
+
+/** 隧道服务器搜索：防抖后按名称/地址查询，结果合并到候选集。 */
+function onTunnelSearch(query: string) {
+  window.clearTimeout(tunnelSearchTimer);
+  tunnelSearchError.value = '';
+  const term = query.trim();
+  if (!term) {
+    tunnelSearchRequestId += 1;
+    remoteServers.value = [];
+    return;
+  }
+  tunnelSearchTimer = window.setTimeout(() => {
+    void searchTunnelServers(term);
+  }, tunnelSearchDebounceMs);
+}
+
+async function searchTunnelServers(term: string) {
+  const requestId = ++tunnelSearchRequestId;
+  try {
+    const result = await serversApi.listPage({ page: 1, pageSize: 50, q: term });
+    if (requestId !== tunnelSearchRequestId) return;
+    const merged = new Map(remoteServers.value.map((server) => [server.id, server]));
+    for (const item of result.items) merged.set(item.id, item);
+    remoteServers.value = [...merged.values()];
+  } catch {
+    if (requestId !== tunnelSearchRequestId) return;
+    tunnelSearchError.value = t('serversPage.proxy.searchTunnelFailed');
+  }
+}
+
+/** 关闭隧道选择/关闭弹窗时丢弃远程搜索状态与在途请求。 */
+function resetTunnelSearch() {
+  window.clearTimeout(tunnelSearchTimer);
+  tunnelSearchRequestId += 1;
+  remoteServers.value = [];
+  tunnelSearchError.value = '';
+}
+
 watch(() => props.open, (open) => {
-  if (!open) return;
+  if (!open) {
+    candidatesRequestId += 1;
+    candidatesLoading.value = false;
+    resetTunnelSearch();
+    return;
+  }
+  allServers.value = [];
+  candidatesError.value = '';
+  resetTunnelSearch();
+  void loadTunnelCandidates();
   actionError.value = '';
   probeResult.value = null;
   probeSignature.value = '';
@@ -140,6 +270,11 @@ watch(() => props.open, (open) => {
       sshUsername: props.editing.sshUsername ?? '',
       credentialId: props.editing.credentialId,
       dockerHost: props.editing.dockerHost || 'unix:///var/run/docker.sock',
+      proxyMode: props.editing.proxyMode ?? 'direct',
+      tunnelServerId: props.editing.tunnelServerId ?? '',
+      socks5Address: props.editing.socks5Address ?? '',
+      socks5Username: props.editing.socks5Username ?? '',
+      socks5Password: '',
       tailscaleEnabled: props.editing.tailscaleEnabled,
       tailscalePreferAgent: props.editing.tailscalePreferAgent,
       tailscalePreferInterconnect: props.editing.tailscalePreferInterconnect,
@@ -155,6 +290,11 @@ watch(() => props.open, (open) => {
       sshUsername: '',
       credentialId: props.credentials[0]?.id ?? '',
       dockerHost: 'unix:///var/run/docker.sock',
+      proxyMode: 'direct',
+      tunnelServerId: '',
+      socks5Address: '',
+      socks5Username: '',
+      socks5Password: '',
       tailscaleEnabled: false,
       tailscalePreferAgent: false,
       tailscalePreferInterconnect: false,
@@ -186,10 +326,18 @@ const advancedFieldIds: Record<string, string> = {
   notes: 'server-form-notes',
 };
 
+const proxyFieldIds: Record<string, string> = {
+  tunnelServerId: 'server-form-tunnel-server',
+  socks5Address: 'server-form-socks5-address',
+  socks5Username: 'server-form-socks5-username',
+};
+
 async function focusField(field: string) {
   if (field in advancedFieldIds) advancedOpen.value = true;
   await nextTick();
-  const selector = field === 'credentialId' ? '#server-form-credential' : `#${advancedFieldIds[field] ?? `server-form-${field}`}`;
+  const selector = field === 'credentialId'
+    ? '#server-form-credential'
+    : `#${advancedFieldIds[field] ?? proxyFieldIds[field] ?? `server-form-${field}`}`;
   document.querySelector<HTMLElement>(selector)?.focus();
 }
 
@@ -199,14 +347,8 @@ async function probe() {
   probeResult.value = null;
   actionError.value = '';
   try {
-    probeResult.value = await serversApi.probe({
-      ipv4: form.ipv4,
-      ipv6: form.ipv6,
-      port: Number(form.port),
-      sshUsername: form.sshUsername,
-      credentialId: form.credentialId,
-    });
-    probeSignature.value = connectionSignature(formPayload.value);
+    probeResult.value = await serversApi.probe(probePayload.value);
+    probeSignature.value = connectionSignature(probePayload.value);
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('serversPage.probeFailed');
     notifyError(err instanceof Error ? err.message : t('serversPage.probeFailed'), err);
@@ -296,6 +438,42 @@ async function saveQuickCredential() {
             <span><Button size="sm" variant="primary" @click="credentialDialogOpen = true">{{ t('credentialsPage.addCredential') }}</Button></span>
           </div>
         </template>
+
+        <div class="grid gap-2 rounded-xl border border-border bg-muted p-3">
+          <h4 class="m-0 text-xs font-semibold text-foreground">{{ t('serversPage.proxy.title') }}</h4>
+          <label class="grid gap-1 text-sm">{{ t('serversPage.proxy.mode') }}<Select id="server-form-proxy-mode" v-model="form.proxyMode" :options="proxyModeOptions" /></label>
+          <template v-if="form.proxyMode === 'ssh_tunnel'">
+            <div class="grid gap-1">
+              <label class="grid gap-1 text-sm">{{ t('serversPage.proxy.tunnelServer') }}<Select id="server-form-tunnel-server" v-model="form.tunnelServerId" :options="tunnelServerOptions" :placeholder="t('serversPage.proxy.selectTunnelServer')" searchable :search-placeholder="t('serversPage.proxy.searchTunnelPlaceholder')" :search-empty-text="t('serversPage.proxy.searchTunnelEmpty')" @search="onTunnelSearch" /></label>
+              <p class="m-0 text-xs text-muted-foreground">{{ t('serversPage.proxy.tunnelHint') }}</p>
+              <p v-if="tunnelSearchError" class="m-0 text-xs text-warning">{{ tunnelSearchError }}</p>
+              <p v-if="candidatesLoading" class="m-0 text-xs text-muted-foreground">{{ t('serversPage.proxy.candidatesLoading') }}</p>
+              <p v-else-if="candidatesError" class="m-0 flex flex-wrap items-center gap-2 text-xs text-warning">
+                <span>{{ candidatesError }}</span>
+                <Button size="sm" variant="secondary" @click="loadTunnelCandidates">{{ t('common.retry') }}</Button>
+              </p>
+              <p v-if="!tunnelServerOptions.length && !candidatesLoading && !candidatesError" class="m-0 text-xs text-warning">{{ t('serversPage.proxy.noTunnelCandidates') }}</p>
+              <p v-if="validation.tunnelServerId" class="m-0 text-sm text-danger">{{ t(validation.tunnelServerId) }}</p>
+            </div>
+          </template>
+          <template v-else-if="form.proxyMode === 'socks5'">
+            <div class="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
+              <div class="grid gap-1">
+                <label class="grid gap-1 text-sm">{{ t('serversPage.proxy.socks5Address') }}<Input id="server-form-socks5-address" v-model="form.socks5Address" :invalid="Boolean(validation.socks5Address)" :placeholder="t('serversPage.proxy.socks5AddressPlaceholder')" /></label>
+                <p v-if="validation.socks5Address" class="m-0 text-sm text-danger">{{ t(validation.socks5Address) }}</p>
+              </div>
+              <div class="grid gap-1">
+                <label class="grid gap-1 text-sm">{{ t('serversPage.proxy.socks5Username') }}<Input id="server-form-socks5-username" v-model="form.socks5Username" :invalid="Boolean(validation.socks5Username)" /></label>
+                <p v-if="validation.socks5Username" class="m-0 text-sm text-danger">{{ t(validation.socks5Username) }}</p>
+              </div>
+            </div>
+            <div class="grid gap-1">
+              <label class="grid gap-1 text-sm">{{ t('serversPage.proxy.socks5Password') }}<Input id="server-form-socks5-password" v-model="form.socks5Password" type="password" autocomplete="new-password" :placeholder="socks5PasswordStored ? t('serversPage.proxy.socks5PasswordKeep') : ''" /></label>
+              <p class="m-0 text-xs text-muted-foreground">{{ t('serversPage.proxy.socks5AuthHint') }}</p>
+            </div>
+          </template>
+          <p v-else class="m-0 text-xs text-muted-foreground">{{ t('serversPage.proxy.directHint') }}</p>
+        </div>
 
         <div class="grid gap-2 rounded-xl border border-border bg-muted p-3">
           <div class="flex flex-wrap items-center justify-between gap-2">

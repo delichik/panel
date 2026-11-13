@@ -25,7 +25,20 @@ type AgentCertificateBundle = domain.AgentCertificateBundle
 type SystemCertificate = domain.SystemCertificate
 
 func Target(srv Server) sshx.Target {
-	return sshx.Target{ServerID: srv.ID, Host: srv.Host, Port: srv.Port, Username: srv.SSHUsername, CredentialID: srv.CredentialID, PrivilegeMode: privilegeMode(srv)}
+	return sshx.Target{
+		ServerID:      srv.ID,
+		Host:          srv.Host,
+		Port:          srv.Port,
+		Username:      srv.SSHUsername,
+		CredentialID:  srv.CredentialID,
+		PrivilegeMode: privilegeMode(srv),
+		Proxy: sshx.ProxySpec{
+			Mode:           srv.ProxyMode,
+			TunnelServerID: srv.TunnelServerID,
+			Socks5Address:  srv.Socks5Address,
+			Socks5Username: srv.Socks5Username,
+		},
+	}
 }
 
 func hasPrivilege(srv Server) bool {

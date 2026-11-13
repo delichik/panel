@@ -12,6 +12,7 @@
 
 ## 2. 前端路由基线
 
+- 服务器连接代理模式（2026-11-13）：`servers` 新增 `proxy_mode`、`tunnel_server_id`、`socks5_address`、`socks5_username`、`socks5_password_ciphertext` 五列（AutoMigrate 增列带默认值，旧数据等价 `direct`；`tunnel_server_id` 无外键、允许悬空表示隧道服务器已删除）。创建/更新新增代理字段与校验（模式缺省直连、隧道必填/存在性/自引用、成环与 8 层上限、SOCKS5 地址与用户名、密码只写且经 secretstore 加密、切直连清除配置与密钥）；`POST /servers/probe` 增加代理草稿字段与探测专用可选 `serverId`（仅用于复用已存密文与成环检测，保存接口忽略）；隧道选择器支持按名称/地址远程搜索，复用既有 `GET /api/v1/servers` 的 `q` 过滤（结果按 id 合并进候选集，可命中预载列表之外的分页外服务器，见 `UI-SRV-021`）；SSH 执行器与 Agent gRPC 客户端拨号经同一代理链，删除隧道服务器后依赖方读取派生 `proxyInvalid`/`proxyError=tunnel_missing`。不新增 method/path、数据库表或后台任务：主 Panel `method/path` 计数保持 180，路由清单与哈希不变（探测仍是既有 `POST /api/v1/servers/probe`）；对应 `SRV-PROXY-001..014`、`UI-SRV-021..024`。
 - Agent report 链路稳定性（2026-11-12）：按滚动 1 小时断连边沿派生 `agent.report.stability`（优/良好/一般/差/极差）与 `disconnect_count_1h`，写入既有 `servers.traits`；列表摘要投影 status/stability/count，概况与 Agent tab 展示。不新增路由/API/表；对应 `AGT-RPT-005/006`、`SRV-API-001`、`UI-SRV-001/002/020`。
 - 存储共享导出生效判定修复（2026-11-12）：Agent `StorageStatus` 不再仅用 `pgrep -x rpc.nfsd`（Ubuntu 24.04+ 上 rpc.nfsd 写完 `/proc/fs/nfsd/threads` 即退出，导致导出已加载仍报「nfs server process is not running」）；改为优先 threads>0，回退 rpc.nfsd 进程。不新增路由/API/表；对应 `FAC-STO-008`。
 - 应用详情的容器日志增加实例选择、单实例自动加载、手动刷新及请求取消；既有 logs API 必传 instanceId，未新增路由/API/数据库字段。对应 `APP-RUN-002`、`UI-APP-007`。
@@ -140,6 +141,7 @@
 - Tailscale 不新增数据库表：`servers` 由 ORM 自动增列 `tailscale_enabled`、`tailscale_prefer_agent`、`tailscale_prefer_interconnect`（默认 0，旧库升级后即为未启用、不偏好），节点观测态保存在既有 `servers.traits` 的 `tailscale.*` 键；全局设置使用既有 `runtime_settings` 的新键 `tailscale.authKey`、`tailscale.tags`（换行编码，密钥不参与任何读取响应）；对应 `TS-NODE-001..005`、`TS-SET-001..003`。
 
 - 内部例行 event run 的日志降噪不新增表：AppDB `event_runs` 由 ORM 自动增列 `quiet`（`NOT NULL DEFAULT 0`，自旧 `tasks` 迁移后存量行保持 info），创建 run 时由注册定义写入；对应 `TASK-REG-003`。
+- 服务器连接代理模式不新增表：`servers` 由 ORM 自动增列 `proxy_mode`（`TEXT NOT NULL DEFAULT 'direct'`）、`tunnel_server_id`、`socks5_address`、`socks5_username`、`socks5_password_ciphertext`（均 `TEXT NOT NULL DEFAULT ''`）；`tunnel_server_id` 不加外键，允许悬空以表达“隧道服务器已删除”，因此删除隧道服务器不必级联改写依赖方。SOCKS5 密码经 secretstore 加密，associated data 固定为 `assetID=serverID`、`assetType="server_proxy"`、`field="socks5_password"`，明文永不落库。旧 alpha 数据由增列默认值直接等价 `direct`，无需一次性数据迁移，既有服务器字段与行不得被改写；备份/恢复沿用 `servers` 表既有清单。对应 `SRV-PROXY-007`、`SRV-PROXY-013`、`DATA-MIG-008`。
 - 部署 Run 已并入 `event_runs`（`type='application_deploy'`），ORM 不再注册 `jobs`；生产 claim/Execute 经 Manager。诊断表 `events` 不并入 Run。对应 `ENG-RUN-001`、`ENG-RET-001`（`GAP-030` 已关）。
 
 ## 5. 常驻与周期后台行为

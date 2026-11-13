@@ -31,6 +31,7 @@ import {
   createServer,
   deleteCredential,
   deleteServer,
+  MockServerProxyError,
   mockCredentials,
   mockServerMetrics,
   mockServers,
@@ -41,7 +42,7 @@ import {
 } from './servers';
 import type { CredentialInput } from '@/types/credentials';
 import type { OverviewCardConfigurationSet } from '@/types/overview';
-import type { ServerSaveInput } from '@/types/servers';
+import type { ServerProbeInput, ServerSaveInput } from '@/types/servers';
 import {
   appDiagnostics,
   appLogs,
@@ -232,6 +233,12 @@ function error(code: string, message: string, status = 400, details?: unknown) {
   });
 }
 
+/** 服务器代理配置校验错误按契约码返回；其他异常继续抛出。 */
+function serverProxyErrorResponse(err: unknown) {
+  if (err instanceof MockServerProxyError) return error(err.code, err.message, err.status);
+  throw err;
+}
+
 function blobResponse(content: BlobPart, filename: string, contentType = 'application/octet-stream') {
   return new Response(content, {
     status: 200,
@@ -267,8 +274,20 @@ export function installMockApi() {
     if (url.pathname === '/api/v1/servers' && method(init) === 'GET') {
       return json(listPage(mockServers, url, (item, q) => includesText(q, item.name, item.host, item.id)));
     }
-    if (url.pathname === '/api/v1/servers' && method(init) === 'POST') return json(createServer(await body<ServerSaveInput>(init)), 201);
-    if (url.pathname === '/api/v1/servers/probe' && method(init) === 'POST') return json(probeServer(await body<ServerSaveInput>(init)));
+    if (url.pathname === '/api/v1/servers' && method(init) === 'POST') {
+      try {
+        return json(createServer(await body<ServerSaveInput>(init)), 201);
+      } catch (err) {
+        return serverProxyErrorResponse(err);
+      }
+    }
+    if (url.pathname === '/api/v1/servers/probe' && method(init) === 'POST') {
+      try {
+        return json(probeServer(await body<ServerProbeInput>(init)));
+      } catch (err) {
+        return serverProxyErrorResponse(err);
+      }
+    }
     const metricsMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)\/metrics$/);
     if (metricsMatch && method(init) === 'GET') {
       const range = url.searchParams.get('range') ?? '1h';
@@ -281,8 +300,12 @@ export function installMockApi() {
       return found ? json(found) : error('server_not_found', 'Server was not found.', 404);
     }
     if (serverMatch && method(init) === 'PUT') {
-      const saved = updateServer(decodeURIComponent(serverMatch[1]), await body<ServerSaveInput>(init));
-      return saved ? json(saved) : error('server_not_found', 'Server was not found.', 404);
+      try {
+        const saved = updateServer(decodeURIComponent(serverMatch[1]), await body<ServerSaveInput>(init));
+        return saved ? json(saved) : error('server_not_found', 'Server was not found.', 404);
+      } catch (err) {
+        return serverProxyErrorResponse(err);
+      }
     }
     if (serverMatch && method(init) === 'DELETE') {
       return deleteServer(decodeURIComponent(serverMatch[1])) ? json(null, 200) : error('server_not_found', 'Server was not found.', 404);

@@ -27,10 +27,15 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// DialFunc 是 agent 传输层拨号函数。生产环境由 server 服务注入，以便按目标
+// agent 地址套用服务器连接代理（SSH 隧道 / SOCKS5）。
+type DialFunc func(ctx context.Context, network, address string) (net.Conn, error)
+
 type GRPCClient struct {
 	mu        sync.RWMutex
 	tlsAssets *agentsecurity.TLSAssets
 	timeout   time.Duration
+	dialFunc  DialFunc
 }
 
 const dockerImagePullTimeout = 15 * time.Minute
@@ -75,6 +80,14 @@ func NewGRPCClient(tlsAssets *agentsecurity.TLSAssets, timeout time.Duration) (*
 		return nil, err
 	}
 	return client, nil
+}
+
+// SetDialFunc 注入 agent 连接拨号函数。必须在服务开始处理请求前调用一次；
+// 之后只读，nil 表示直连。
+func (c *GRPCClient) SetDialFunc(dial DialFunc) {
+	c.mu.Lock()
+	c.dialFunc = dial
+	c.mu.Unlock()
 }
 
 func (c *GRPCClient) ReloadTLSAssets(tlsAssets *agentsecurity.TLSAssets) error {
@@ -736,13 +749,16 @@ func (c *GRPCClient) dial(ctx context.Context, endpoint string) (*grpc.ClientCon
 	}
 	c.mu.RLock()
 	tlsAssets := c.tlsAssets
+	dialFunc := c.dialFunc
 	c.mu.RUnlock()
+	if dialFunc == nil {
+		dialFunc = defaultGRPCDial
+	}
 	opts := []grpc.DialOption{
 		// grpc.NewClient dials lazily on the first RPC; an explicit context
 		// dialer makes connection establishment honor the call's deadline.
 		grpc.WithContextDialer(func(dialCtx context.Context, addr string) (net.Conn, error) {
-			var d net.Dialer
-			return d.DialContext(dialCtx, "tcp", addr)
+			return dialFunc(dialCtx, "tcp", addr)
 		}),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(maxGRPCMessageBytes),
@@ -765,8 +781,12 @@ func (c *GRPCClient) dial(ctx context.Context, endpoint string) (*grpc.ClientCon
 	return conn, nil
 }
 
-func grpcTarget(endpoint string) (string, error) {
-	value := strings.TrimSpace(endpoint)
+func defaultGRPCDial(ctx context.Context, network, address string) (net.Conn, error) {
+	var d net.Dialer
+	return d.DialContext(ctx, network, address)
+}
+
+func grpcTarget(endpoint string) (string, error) {	value := strings.TrimSpace(endpoint)
 	if value == "" {
 		return "", fmt.Errorf("agent endpoint is empty")
 	}

@@ -12,11 +12,12 @@ const listPage = vi.fn();
 const get = vi.fn();
 const metrics = vi.fn();
 const containers = vi.fn();
+const list = vi.fn();
 
 vi.mock('@/api/servers', () => ({
   serversApi: {
     listPage: (...args: unknown[]) => listPage(...args),
-    list: vi.fn().mockResolvedValue([]),
+    list: (...args: unknown[]) => list(...args),
     get: (...args: unknown[]) => get(...args),
     test: vi.fn(),
     delete: vi.fn(),
@@ -96,6 +97,13 @@ const server = {
   tailscaleEnabled: false,
   tailscalePreferAgent: false,
   tailscalePreferInterconnect: false,
+  proxyMode: 'direct',
+  tunnelServerId: '',
+  tunnelServerName: '',
+  socks5Address: '',
+  socks5Username: '',
+  proxyInvalid: false,
+  proxyError: '',
   os: { prettyName: 'Debian 13', supported: true },
   sudo: { passwordless: true },
   privilege: { privileged: true, mode: 'passwordless_sudo' },
@@ -121,10 +129,27 @@ beforeEach(() => {
   useI18n().setLocale('en');
   vi.clearAllMocks();
   listPage.mockResolvedValue({ items: [server], total: 1, page: 1, pageSize: 50 });
+  list.mockResolvedValue([]);
   get.mockResolvedValue(server);
   metrics.mockResolvedValue({ cpu: [], memory: [], disk: [], network: [], load: [] });
   containers.mockResolvedValue({ items: [], observedAt: null, stale: false, refreshing: false });
 });
+
+/** 打开自定义 Select 并点击指定文案的选项（选项 Teleport 到 body）。 */
+async function chooseSelectOption(selector: string, label: string) {
+  const combobox = document.querySelector<HTMLElement>(selector);
+  expect(combobox).not.toBeNull();
+  combobox!.click();
+  await flushPromises();
+  const option = Array.from(document.querySelectorAll<HTMLElement>('[role="option"]')).find((element) => element.textContent?.trim() === label);
+  expect(option, `option ${label}`).toBeTruthy();
+  option!.click();
+  await flushPromises();
+}
+
+function tunnelOptionLabels() {
+  return Array.from(document.querySelectorAll<HTMLElement>('[role="option"]')).map((element) => element.textContent?.trim() ?? '');
+}
 
 describe('servers page table and covered detail', () => {
   it('renders the inventory as a table with row actions', async () => {
@@ -189,5 +214,75 @@ describe('servers page table and covered detail', () => {
 
     expect(wrapper.findAll('[role="tab"]').find((tab) => tab.text() === 'Resources')?.attributes('aria-selected')).toBe('true');
     expect(wrapper.findAll('[role="tab"]').find((tab) => tab.text() === 'Images')?.attributes('aria-selected')).toBe('true');
+  });
+
+  it('loads every server as an SSH tunnel candidate instead of only the current page', async () => {
+    list.mockResolvedValue([server, { ...server, id: 'srv-60', name: 'beyond-page', host: '10.0.0.60' }]);
+    const { wrapper } = await mountPage();
+    await wrapper.findAll('button').find((button) => button.text() === 'Add server')!.trigger('click');
+    await flushPromises();
+
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(list).toHaveBeenCalled();
+    await chooseSelectOption('#server-form-proxy-mode', 'SSH tunnel');
+    // 打开隧道下拉后，当前页之外的服务器也必须可选。
+    const combobox = document.querySelector<HTMLElement>('#server-form-tunnel-server')!;
+    combobox.click();
+    await flushPromises();
+    expect(tunnelOptionLabels()).toContain('beyond-page · 10.0.0.60');
+    expect(tunnelOptionLabels()).toContain('edge-1 · 10.0.0.1');
+  });
+
+  it('falls back to the page list with a retry hint when full candidates fail to load', async () => {
+    list.mockRejectedValueOnce(new Error('network down'));
+    const { wrapper } = await mountPage();
+    await wrapper.findAll('button').find((button) => button.text() === 'Add server')!.trigger('click');
+    await flushPromises();
+
+    await chooseSelectOption('#server-form-proxy-mode', 'SSH tunnel');
+    expect(document.body.textContent).toContain('Unable to load the full server list');
+    // 失败时仍用父页面列表兜底，直连/已有候选不受阻塞。
+    const combobox = document.querySelector<HTMLElement>('#server-form-tunnel-server')!;
+    combobox.click();
+    await flushPromises();
+    expect(tunnelOptionLabels()).toContain('edge-1 · 10.0.0.1');
+
+    // 重试成功后补全全量候选。
+    list.mockResolvedValue([{ ...server, id: 'srv-60', name: 'beyond-page', host: '10.0.0.60' }]);
+    const retry = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')).find((button) => button.textContent?.trim() === 'Retry')!;
+    retry.click();
+    await flushPromises();
+    expect(document.body.textContent).not.toContain('Unable to load the full server list');
+    expect(document.querySelector<HTMLElement>('#server-form-tunnel-server')).not.toBeNull();
+  });
+
+  it('searches servers beyond the preloaded list when picking an SSH tunnel server', async () => {
+    const remote = { ...server, id: 'srv-500', name: 'far-away', host: '10.9.9.9' };
+    listPage.mockImplementation(async (params: { q?: string } = {}) => (
+      params?.q === 'far'
+        ? { items: [remote], total: 1, page: 1, pageSize: 50 }
+        : { items: [server], total: 1, page: 1, pageSize: 50 }
+    ));
+    const { wrapper } = await mountPage();
+    await wrapper.findAll('button').find((button) => button.text() === 'Add server')!.trigger('click');
+    await flushPromises();
+    await chooseSelectOption('#server-form-proxy-mode', 'SSH tunnel');
+
+    document.querySelector<HTMLElement>('#server-form-tunnel-server')!.click();
+    await flushPromises();
+    const search = document.querySelector<HTMLInputElement>('[role="searchbox"]');
+    expect(search, 'tunnel server search input').not.toBeNull();
+    search!.value = 'far';
+    search!.dispatchEvent(new Event('input'));
+    await vi.waitFor(() => expect(listPage).toHaveBeenCalledWith(expect.objectContaining({ q: 'far' })));
+    await flushPromises();
+
+    // 搜索命中的分页外服务器必须加入候选并可被选择。
+    expect(tunnelOptionLabels()).toContain('far-away · 10.9.9.9');
+    const option = Array.from(document.querySelectorAll<HTMLElement>('[role="option"]'))
+      .find((element) => element.textContent?.trim() === 'far-away · 10.9.9.9');
+    option!.click();
+    await flushPromises();
+    expect(document.querySelector<HTMLElement>('#server-form-tunnel-server')!.textContent).toContain('far-away · 10.9.9.9');
   });
 });

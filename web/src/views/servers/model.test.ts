@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { agentTone, connectionHost, connectionSignature, credentialReferences, hasBlockingPairIssues, isLegacyResourceTab, normalizeServerDetailTab, normalizeServerResourceSubtab, parsePairs, reportDisconnectCount1h, reportStabilityGrade, reportStabilityStatusKey, reportStabilityTone, reportStreamStatus, reportStreamStatusKey, serverDetailTabs, serverSummaryKind, serverSummaryStatusKey, serverSummaryTone, shouldShowListReportStability, tailscaleObservedStatus, tailscalePreferences, tailscaleStatusKey, tailscaleTone, tailscaleTrait, validateProbeInput, validateServerInput } from './model';
-import type { ServerDto } from '@/types/servers';
+import { agentTone, connectionHost, connectionSignature, credentialReferences, hasBlockingPairIssues, isLegacyResourceTab, mergeServerCandidates, normalizeServerDetailTab, normalizeServerResourceSubtab, parsePairs, proxyErrorKey, proxyListHintKey, proxyModeLabelKey, proxySavePayload, proxyShortLabelKey, proxyTunnelDisplayName, reportDisconnectCount1h, reportStabilityGrade, reportStabilityStatusKey, reportStabilityTone, reportStreamStatus, reportStreamStatusKey, serverDetailTabs, serverProxyMode, serverSummaryKind, serverSummaryStatusKey, serverSummaryTone, shouldShowListReportStability, tailscaleObservedStatus, tailscalePreferences, tailscaleStatusKey, tailscaleTone, tailscaleTrait, validateProbeInput, validateProxyInput, validateServerInput } from './model';
+import type { ServerDto, ServerProxyMode, ServerSaveInput } from '@/types/servers';
 
 const server: ServerDto = {
   id: 'srv-1',
@@ -12,9 +12,24 @@ const server: ServerDto = {
   tailscaleEnabled: false,
   tailscalePreferAgent: false,
   tailscalePreferInterconnect: false,
+  proxyMode: 'direct',
+  tunnelServerId: '',
+  tunnelServerName: '',
+  socks5Address: '',
+  socks5Username: '',
+  proxyInvalid: false,
+  proxyError: '',
   sudo: { passwordless: true },
   privilege: { privileged: true },
   traits: { 'agent.enabled': 'true', 'agent.status': 'compatible', 'sys.ufw_supported': 'true', 'sys.ufw_installed': 'false' },
+};
+
+const proxy: { proxyMode: ServerProxyMode; tunnelServerId: string; socks5Address: string; socks5Username: string; socks5Password: string } = {
+  proxyMode: 'direct',
+  tunnelServerId: '',
+  socks5Address: '',
+  socks5Username: '',
+  socks5Password: '',
 };
 
 describe('server model', () => {
@@ -90,7 +105,7 @@ describe('server model', () => {
   });
 
   it('validates server forms before API calls', () => {
-    expect(validateServerInput({ name: '', ipv4: '', ipv6: '', port: 70000, credentialId: '', sshUsername: '', dockerHost: '', tailscaleEnabled: false, tailscalePreferAgent: false, tailscalePreferInterconnect: false, traits: {}, variables: {}, notes: '' })).toMatchObject({
+    expect(validateServerInput({ ...proxy, name: '', ipv4: '', ipv6: '', port: 70000, credentialId: '', sshUsername: '', dockerHost: '', tailscaleEnabled: false, tailscalePreferAgent: false, tailscalePreferInterconnect: false, traits: {}, variables: {}, notes: '' })).toMatchObject({
       name: 'serversPage.validationName',
       ipv4: 'serversPage.validationAddressRequired',
       port: 'serversPage.validationPort',
@@ -100,7 +115,7 @@ describe('server model', () => {
   });
 
   it('validates ipv4 and ipv6 literals and derives the connection host', () => {
-    const base = { name: 'edge', sshUsername: '', traits: {}, variables: {}, notes: '', tailscaleEnabled: false, tailscalePreferAgent: false, tailscalePreferInterconnect: false };
+    const base = { ...proxy, name: 'edge', sshUsername: '', traits: {}, variables: {}, notes: '', tailscaleEnabled: false, tailscalePreferAgent: false, tailscalePreferInterconnect: false };
     expect(validateServerInput({ ...base, ipv4: '999.0.0.1', ipv6: '', port: 22, credentialId: 'cred-1', dockerHost: 'unix:///var/run/docker.sock' }).ipv4).toBe('serversPage.validationIpv4');
     expect(validateServerInput({ ...base, ipv4: '', ipv6: '2001:db8::1', port: 22, credentialId: 'cred-1', dockerHost: 'unix:///var/run/docker.sock' })).toEqual({});
     expect(connectionHost({ ipv4: '203.0.113.5', ipv6: '2001:db8::5' })).toBe('203.0.113.5');
@@ -129,7 +144,7 @@ describe('server model', () => {
     expect(validateProbeInput({ ...base, credentialId: '' })).toEqual({ credentialId: 'serversPage.validationCredential' });
     expect(validateProbeInput({ ...base, port: 0 })).toEqual({ port: 'serversPage.validationPort' });
     // 名称与 Docker Host 错误不影响探测
-    const full = { ...base, name: '', dockerHost: '', variables: {}, notes: '', tailscaleEnabled: false, tailscalePreferAgent: false, tailscalePreferInterconnect: false };
+    const full = { ...proxy, ...base, name: '', dockerHost: '', variables: {}, notes: '', tailscaleEnabled: false, tailscalePreferAgent: false, tailscalePreferInterconnect: false };
     expect(Object.keys(validateServerInput(full))).toEqual(['name', 'dockerHost']);
   });
 
@@ -140,6 +155,74 @@ describe('server model', () => {
     expect(connectionSignature({ ...base, port: 2222 })).not.toBe(signature);
     expect(connectionSignature({ ...base, credentialId: 'cred-2' })).not.toBe(signature);
     expect(connectionSignature({ ...base, sshUsername: 'ops' })).not.toBe(signature);
+    // 代理配置变化同样视为连接方式变化
+    expect(connectionSignature({ ...base, proxyMode: 'ssh_tunnel', tunnelServerId: 'srv-2' })).not.toBe(signature);
+    expect(connectionSignature({ ...base, proxyMode: 'socks5', socks5Address: '127.0.0.1:1080' })).not.toBe(signature);
+    expect(connectionSignature({ ...base, socks5Password: 'secret' })).not.toBe(signature);
+  });
+
+  it('validates the proxy draft locally: tunnel required/self, socks5 host:port, password needs username', () => {
+    expect(validateProxyInput(proxy)).toEqual({});
+    expect(validateProxyInput({ ...proxy, proxyMode: 'ssh_tunnel' })).toEqual({ tunnelServerId: 'serversPage.proxy.validationTunnelRequired' });
+    expect(validateProxyInput({ ...proxy, proxyMode: 'ssh_tunnel', tunnelServerId: 'srv-1' }, { selfId: 'srv-1' })).toEqual({ tunnelServerId: 'serversPage.proxy.validationTunnelSelf' });
+    expect(validateProxyInput({ ...proxy, proxyMode: 'ssh_tunnel', tunnelServerId: 'srv-2' }, { selfId: 'srv-1' })).toEqual({});
+    expect(validateProxyInput({ ...proxy, proxyMode: 'socks5' })).toEqual({ socks5Address: 'serversPage.proxy.validationSocks5AddressRequired' });
+    expect(validateProxyInput({ ...proxy, proxyMode: 'socks5', socks5Address: '127.0.0.1' })).toEqual({ socks5Address: 'serversPage.proxy.validationSocks5AddressInvalid' });
+    expect(validateProxyInput({ ...proxy, proxyMode: 'socks5', socks5Address: ':1080' })).toEqual({ socks5Address: 'serversPage.proxy.validationSocks5AddressInvalid' });
+    expect(validateProxyInput({ ...proxy, proxyMode: 'socks5', socks5Address: '127.0.0.1:1080' })).toEqual({});
+    expect(validateProxyInput({ ...proxy, proxyMode: 'socks5', socks5Address: '[::1]:1080' })).toEqual({});
+    expect(validateProxyInput({ ...proxy, proxyMode: 'socks5', socks5Address: '127.0.0.1:1080', socks5Password: 'secret' })).toEqual({ socks5Username: 'serversPage.proxy.validationSocks5UsernameRequired' });
+    expect(validateProxyInput({ ...proxy, proxyMode: 'socks5', socks5Address: '127.0.0.1:1080', socks5Username: 'ops', socks5Password: 'secret' })).toEqual({});
+  });
+
+  it('gates saving and probing on the proxy draft while keeping proxy fields out of other modes', () => {
+    const draft: Pick<ServerSaveInput, 'proxyMode' | 'tunnelServerId' | 'socks5Address' | 'socks5Username' | 'socks5Password'> = {
+      ...proxy,
+      proxyMode: 'ssh_tunnel',
+      tunnelServerId: 'srv-1',
+    };
+    expect(validateServerInput({
+      ...draft, name: 'edge', ipv4: '10.0.0.1', ipv6: '', port: 22, credentialId: 'cred-1', sshUsername: '',
+      dockerHost: 'unix:///var/run/docker.sock', tailscaleEnabled: false, tailscalePreferAgent: false, tailscalePreferInterconnect: false,
+      variables: {}, notes: '',
+    }, { selfId: 'srv-1' }).tunnelServerId).toBe('serversPage.proxy.validationTunnelSelf');
+    const probeBase = { ipv4: '203.0.113.10', ipv6: '', port: 22, sshUsername: '', credentialId: 'cred-1' };
+    expect(validateProbeInput({ ...probeBase, ...draft, serverId: 'srv-1' }).tunnelServerId).toBe('serversPage.proxy.validationTunnelSelf');
+    expect(validateProbeInput({ ...probeBase, proxyMode: 'socks5', socks5Address: 'bad' }).socks5Address).toBe('serversPage.proxy.validationSocks5AddressInvalid');
+    expect(proxySavePayload({ ...draft, tunnelServerId: ' srv-2 ' })).toEqual({ proxyMode: 'ssh_tunnel', tunnelServerId: 'srv-2', socks5Address: '', socks5Username: '', socks5Password: '' });
+    expect(proxySavePayload({ ...proxy, proxyMode: 'socks5', socks5Address: ' 127.0.0.1:1080 ', socks5Username: ' ops ', socks5Password: 'secret', tunnelServerId: 'srv-2' })).toEqual({ proxyMode: 'socks5', tunnelServerId: '', socks5Address: '127.0.0.1:1080', socks5Username: 'ops', socks5Password: 'secret' });
+    expect(proxySavePayload({ ...proxy, proxyMode: 'direct', socks5Address: '127.0.0.1:1080', tunnelServerId: 'srv-2' })).toEqual({ proxyMode: 'direct', tunnelServerId: '', socks5Address: '', socks5Username: '', socks5Password: '' });
+  });
+
+  it('merges page and full server lists for tunnel candidates and excludes the edited server', () => {
+    const pageServer = { ...server, id: 'srv-1', name: 'page-edge' };
+    const fetchedOnly = { ...server, id: 'srv-60', name: 'beyond-page' };
+    const fetchedPageDuplicate = { ...server, id: 'srv-1', name: 'stale-name' };
+    expect(mergeServerCandidates([pageServer], [fetchedPageDuplicate, fetchedOnly])).toEqual([pageServer, fetchedOnly]);
+    expect(mergeServerCandidates([pageServer], [fetchedOnly], 'srv-1')).toEqual([fetchedOnly]);
+    expect(mergeServerCandidates([], [], 'srv-1')).toEqual([]);
+  });
+
+  it('derives proxy labels, tunnel name fallbacks, and stable error keys', () => {
+    expect(serverProxyMode(server)).toBe('direct');
+    expect(proxyModeLabelKey('direct')).toBe('serversPage.proxy.modeDirect');
+    expect(proxyModeLabelKey('ssh_tunnel')).toBe('serversPage.proxy.modeSshTunnel');
+    expect(proxyModeLabelKey('socks5')).toBe('serversPage.proxy.modeSocks5');
+    expect(proxyModeLabelKey('unknown')).toBe('serversPage.proxy.modeDirect');
+    expect(proxyShortLabelKey(server)).toBe('');
+    expect(proxyShortLabelKey({ proxyMode: 'ssh_tunnel' })).toBe('serversPage.proxy.short.ssh_tunnel');
+    expect(proxyShortLabelKey({ proxyMode: 'socks5' })).toBe('serversPage.proxy.short.socks5');
+    expect(proxyTunnelDisplayName({ tunnelServerId: 'srv-2', tunnelServerName: 'bastion' })).toBe('bastion');
+    expect(proxyTunnelDisplayName({ tunnelServerId: 'srv-2', tunnelServerName: '' })).toBe('srv-2');
+    expect(proxyTunnelDisplayName({ tunnelServerId: '', tunnelServerName: '' })).toBe('');
+    expect(proxyErrorKey({ proxyError: '' })).toBe('serversPage.proxy.error.unknown');
+    expect(proxyErrorKey({ proxyError: 'tunnel_missing' })).toBe('serversPage.proxy.error.tunnel_missing');
+    expect(proxyErrorKey({ proxyError: 'cycle' })).toBe('serversPage.proxy.error.cycle');
+    expect(proxyErrorKey({ proxyError: 'chain_too_deep' })).toBe('serversPage.proxy.error.chain_too_deep');
+    expect(proxyErrorKey({ proxyError: 'socks5_address_missing' })).toBe('serversPage.proxy.error.socks5_address_missing');
+    expect(proxyErrorKey({ proxyError: 'socks5_address_invalid' })).toBe('serversPage.proxy.error.socks5_address_invalid');
+    expect(proxyListHintKey({ proxyInvalid: false, proxyError: '' })).toBe('serversPage.proxy.listHint');
+    expect(proxyListHintKey({ proxyInvalid: true, proxyError: 'tunnel_missing' })).toBe('serversPage.proxy.error.tunnel_missing');
   });
 
   it('forces the tailscale preferences off when the node does not join the tailnet', () => {

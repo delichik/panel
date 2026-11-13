@@ -22,9 +22,14 @@ func (s *Service) Create(ctx context.Context, req SaveRequest) (Server, error) {
 	if err := validateSave(req); err != nil {
 		return Server{}, err
 	}
+	serverID := id.New("srv")
+	proxy, err := s.validateProxySave(ctx, serverID, req, nil)
+	if err != nil {
+		return Server{}, err
+	}
 	now := time.Now().UTC()
 	srv := Server{
-		ID:           id.New("srv"),
+		ID:           serverID,
 		Name:         req.Name,
 		Host:         derivedServerHost(req),
 		IPv4:         strings.TrimSpace(req.IPv4),
@@ -42,6 +47,12 @@ func (s *Service) Create(ctx context.Context, req SaveRequest) (Server, error) {
 		TailscaleEnabled:            req.TailscaleEnabled,
 		TailscalePreferAgent:        req.TailscaleEnabled && req.TailscalePreferAgent,
 		TailscalePreferInterconnect: req.TailscaleEnabled && req.TailscalePreferInterconnect,
+
+		ProxyMode:                proxy.mode,
+		TunnelServerID:           proxy.tunnelServerID,
+		Socks5Address:            proxy.socks5Address,
+		Socks5Username:           proxy.socks5Username,
+		Socks5PasswordCiphertext: proxy.socks5PasswordCiphertext,
 	}
 	if srv.Traits == nil {
 		srv.Traits = map[string]string{}
@@ -49,6 +60,7 @@ func (s *Service) Create(ctx context.Context, req SaveRequest) (Server, error) {
 	if err := s.repo.Insert(ctx, srv); err != nil {
 		return Server{}, err
 	}
+	s.noteProxyConfigured(proxy.mode)
 	if s.exec != nil {
 		task, err := s.EnsureInitialInfoTask(ctx, srv.ID, true)
 		if err != nil {
@@ -66,6 +78,10 @@ func (s *Service) Update(ctx context.Context, serverID string, req SaveRequest) 
 		return Server{}, err
 	}
 	current, err := s.Get(ctx, serverID)
+	if err != nil {
+		return Server{}, err
+	}
+	proxy, err := s.validateProxySave(ctx, serverID, req, &current)
 	if err != nil {
 		return Server{}, err
 	}
@@ -113,12 +129,18 @@ func (s *Service) Update(ctx context.Context, serverID string, req SaveRequest) 
 	current.TailscaleEnabled = req.TailscaleEnabled
 	current.TailscalePreferAgent = req.TailscaleEnabled && req.TailscalePreferAgent
 	current.TailscalePreferInterconnect = req.TailscaleEnabled && req.TailscalePreferInterconnect
+	current.ProxyMode = proxy.mode
+	current.TunnelServerID = proxy.tunnelServerID
+	current.Socks5Address = proxy.socks5Address
+	current.Socks5Username = proxy.socks5Username
+	current.Socks5PasswordCiphertext = proxy.socks5PasswordCiphertext
 	if !req.TailscaleEnabled {
 		clearTailscaleTraits(current.Traits)
 	}
 	if err := s.repo.Update(ctx, current); err != nil {
 		return Server{}, err
 	}
+	s.noteProxyConfigured(proxy.mode)
 	if s.exec != nil {
 		// The server is already persisted. A failed connectivity probe only
 		// marks the server unreachable (TestConnectivity records that) and must
@@ -319,18 +341,44 @@ func (s *Service) List(ctx context.Context) ([]Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	all := serverByID(out)
 	for i := range out {
+		s.decorateServerProxy(&out[i], all)
 		out[i] = s.prepareServerForRead(ctx, out[i])
 	}
 	return out, nil
 }
 
 func (s *Service) ListSummaries(ctx context.Context) ([]ServerSummary, error) {
-	return s.repo.ListSummaries(ctx)
+	out, err := s.repo.ListSummaries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	all, err := s.repo.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	byID := serverByID(all)
+	for i := range out {
+		s.decorateSummaryProxy(&out[i], byID)
+	}
+	return out, nil
 }
 
 func (s *Service) ListSummaryPage(ctx context.Context, page, pageSize int, query string) (httpx.ListPage[ServerSummary], error) {
-	return s.repo.ListSummaryPage(ctx, page, pageSize, query)
+	result, err := s.repo.ListSummaryPage(ctx, page, pageSize, query)
+	if err != nil {
+		return httpx.ListPage[ServerSummary]{}, err
+	}
+	all, err := s.repo.List(ctx)
+	if err != nil {
+		return httpx.ListPage[ServerSummary]{}, err
+	}
+	byID := serverByID(all)
+	for i := range result.Items {
+		s.decorateSummaryProxy(&result.Items[i], byID)
+	}
+	return result, nil
 }
 
 func (s *Service) Get(ctx context.Context, serverID string) (Server, error) {
@@ -338,5 +386,20 @@ func (s *Service) Get(ctx context.Context, serverID string) (Server, error) {
 	if err != nil {
 		return Server{}, err
 	}
+	all, listErr := s.repo.List(ctx)
+	if listErr != nil {
+		// 读取派生代理状态失败不应让单台服务器读取整体失败；退化为只含自身的
+		// 视图（隧道名缺失、悬空引用按失效处理）。
+		all = []Server{srv}
+	}
+	s.decorateServerProxy(&srv, serverByID(all))
 	return s.prepareServerForRead(ctx, srv), nil
+}
+
+func serverByID(servers []Server) map[string]Server {
+	out := make(map[string]Server, len(servers))
+	for _, srv := range servers {
+		out[srv.ID] = srv
+	}
+	return out
 }

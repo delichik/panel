@@ -159,6 +159,7 @@ func New(cfg config.Config) (*App, error) {
 		server.WithAgentTLSProvider(keyAssetSvc),
 		server.WithPanelTLSProvider(keyAssetSvc),
 		server.WithMetricsDB(store.MetricsDB()),
+		server.WithSecretStore(secretStore),
 		server.WithAgentDeliverySettings(func() server.AgentDeliverySettings {
 			runtime := settingsSvc.Runtime()
 			return server.AgentDeliverySettings{
@@ -172,6 +173,10 @@ func New(cfg config.Config) (*App, error) {
 			return server.TailscaleSettings{AuthKey: authKey, Tags: tags}
 		}),
 	)
+	// 服务器代理链（SSH 隧道 / SOCKS5）同时作用于 SSH 执行器与 agent gRPC
+	// 连接；解析器依赖 servers 服务本身，因此必须在构造完成后注入。
+	executor.SetProxyResolver(serverSvc)
+	agentClient.SetDialFunc(serverSvc.DialContext)
 	applicationSvc := applications.NewServiceWithOptions(store.AppDB(), agentClient, taskSvc, applications.Config{
 		SaveSessionDir: applicationSaveSessionDir(cfg),
 		DataRoot:       cfg.DataRoot,

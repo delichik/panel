@@ -61,6 +61,8 @@
 
 应用持久化位置由 app 库 `application_persistent_locations` 表追加记录，以 `(application_id, server_id)` 唯一；部署目标变化不得删除历史位置，应用物理删除时通过 application FK 级联清理。alpha 升级迁移从当前持久化应用的部署目标、实例与历史 Job 回填位置。
 
+服务器连接代理模式（`SRV-PROXY-*`）沿用 app 库 `servers` 表：由 ORM 自动增列 `proxy_mode`（`TEXT NOT NULL DEFAULT 'direct'`）、`tunnel_server_id`、`socks5_address`、`socks5_username`、`socks5_password_ciphertext`（均 `TEXT NOT NULL DEFAULT ''`）。`tunnel_server_id` 不加外键，允许悬空以表达“隧道服务器已删除”，依赖服务器读取时派生 `proxyInvalid`/`proxyError` 而不自动改写配置。SOCKS5 密码只经 secretstore 加密保存，associated data 固定为 `assetID=serverID`、`assetType="server_proxy"`、`field="socks5_password"`，满足 `ARCH-MOD-004` 的“秘密明文只可进入秘密存储或执行期内存”；解密失败必须返回 `server_proxy_password_unavailable`，不得降级为明文或跳过加密。旧 alpha 数据只需增列默认值，既有行读取等价 `direct`，不需要一次性数据迁移，也不得改写既有服务器字段（`DATA-MIG-008`）。
+
 - `DATA-MIG-001`：全部在管表必须在 `internal/platform/database/models` 有模型并按 app/log/coordination/metrics 明确分组；新增表必须同时进入正确清单。
 - `DATA-MIG-002`：启动迁移按库隔离执行，不得因全局注册表把模型建入错误数据库；父表排序、外键、CHECK、复合/部分/唯一索引必须可重复创建且与模型合同一致。
 - `DATA-MIG-003`：迁移必须幂等。同一版本数据库连续启动不得产生 schema drift、重复数据或重复索引。

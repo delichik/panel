@@ -1,7 +1,13 @@
 import type { CredentialDto } from '@/types/credentials';
-import type { OperationAccepted, ServerDto, ServerProbeResult, ServerSaveInput } from '@/types/servers';
+import type { OperationAccepted, ServerDto, ServerProbeInput, ServerProbeResult, ServerProxyMode, ServerSaveInput } from '@/types/servers';
 import type { ServerMetricsSeries } from '@/api/servers';
+import { deriveServerProxy, isSocks5Address, normalizeServerProxyMode, proxyChainSaveError, type ServerProxyNode } from '@/utils/serverProxy';
 import { acceptedServerTailscaleApply } from './tasks';
+
+/** SOCKS5 密码只写不读：mock 用内存表模拟密文存储，响应中只暴露 socks5PasswordSet。 */
+const mockSocks5Secrets = new Map<string, string>();
+
+let mockServerSequence = 0;
 
 export let mockCredentials: CredentialDto[] = [
   { id: 'cred-root-key', name: 'Root deploy key', type: 'private_key', username: 'root', createdAt: '2026-07-20T10:00:00.000Z', updatedAt: '2026-07-20T10:00:00.000Z' },
@@ -21,7 +27,7 @@ export let mockCredentials: CredentialDto[] = [
   { id: 'cred-edge-lax', name: 'LAX edge password', type: 'password', username: 'edge', createdAt: '2026-07-05T08:00:00.000Z', updatedAt: '2026-07-28T09:00:00.000Z' },
 ];
 
-export let mockServers: ServerDto[] = [
+export let mockServers: ServerDto[] = refreshProxyDerived([
   withTailscale(server('srv-edge-sgp', 'edge-sgp-01', '10.8.0.12', 'cred-root-key', true, {
     'agent.enabled': 'true',
     'agent.status': 'compatible',
@@ -65,7 +71,7 @@ export let mockServers: ServerDto[] = [
     'sys.disk_total_gb': '480',
     'mock.package_updates': '3',
   }),
-  withTailscale(server('srv-api-hkg-02', 'api-hkg-02-canary', '10.22.0.42', 'cred-ci-runner', true, {
+  withProxy(withTailscale(server('srv-api-hkg-02', 'api-hkg-02-canary', '10.22.0.42', 'cred-ci-runner', true, {
     'agent.enabled': 'true',
     'agent.status': 'compatible',
     'agent.version': '0.9.8-canary',
@@ -81,7 +87,7 @@ export let mockServers: ServerDto[] = [
     'tailscale.ipv6': '',
     'tailscale.lastError': '',
     'tailscale.updatedAt': '2026-08-01T07:58:00.000Z',
-  }), true, false),
+  }), true, false), { proxyMode: 'ssh_tunnel', tunnelServerId: 'srv-api-hkg' }),
   server('srv-worker-nrt', 'worker-nrt-queue-a', '10.31.4.9', 'cred-ci-runner', true, {
     'agent.enabled': 'true',
     'agent.status': 'compatible',
@@ -128,20 +134,20 @@ export let mockServers: ServerDto[] = [
     'sys.ufw_installed': 'false',
     'mock.package_updates': '11',
   }),
-  server('srv-media-syd', 'media-syd-transcode', '10.52.3.19', 'cred-ci-runner', true, {
+  withProxy(server('srv-media-syd', 'media-syd-transcode', '10.52.3.19', 'cred-ci-runner', true, {
     'agent.enabled': 'true',
     'agent.status': 'undeployable',
     'agent.last_error': 'unsupported cgroup layout detected',
     'sys.ufw_supported': 'true',
     'mock.package_updates': '17',
-  }),
-  server('srv-batch-iad', 'batch-iad-nightly', '10.63.7.31', 'cred-ci-runner', true, {
+  }), { proxyMode: 'ssh_tunnel', tunnelServerId: 'srv-retired-bastion' }),
+  withProxy(server('srv-batch-iad', 'batch-iad-nightly', '10.63.7.31', 'cred-ci-runner', true, {
     'agent.enabled': 'true',
     'agent.status': 'compatible',
     'sys.ufw_supported': 'true',
     'sys.ufw_installed': 'true',
     'mock.package_updates': '0',
-  }),
+  }), { proxyMode: 'socks5', socks5Address: '127.0.0.1:1080', socks5Username: 'proxyops', socks5Password: 'mock-socks-secret' }),
   server('srv-legacy-lon', 'legacy-lon-ubuntu-20', '10.71.2.20', 'cred-legacy-sudo', true, {
     'agent.enabled': 'true',
     'agent.status': 'compatible',
@@ -217,12 +223,84 @@ export let mockServers: ServerDto[] = [
     'sys.disk_total_gb': '4096',
     'mock.package_updates': '0',
   }),
-];
+]);
+
+/** 代理相关契约错误：browser mock 捕获后返回对应 HTTP 错误码。 */
+export class MockServerProxyError extends Error {
+  readonly code: string;
+  readonly status: number;
+
+  constructor(code: string, message: string, status = 422) {
+    super(message);
+    this.name = 'MockServerProxyError';
+    this.code = code;
+    this.status = status;
+  }
+}
+
+const proxyErrorMessages: Record<string, string> = {
+  server_proxy_mode_invalid: 'Proxy mode is invalid.',
+  server_proxy_tunnel_required: 'SSH tunnel mode requires a tunnel server.',
+  server_proxy_tunnel_self: 'A server cannot use itself as its tunnel server.',
+  server_proxy_tunnel_missing: 'The selected tunnel server does not exist.',
+  server_proxy_cycle: 'The proxy chain forms a loop.',
+  server_proxy_chain_too_deep: 'The proxy chain exceeds 8 hops.',
+  server_proxy_socks5_address_required: 'SOCKS5 mode requires an address.',
+  server_proxy_socks5_address_invalid: 'SOCKS5 address must be a valid host:port.',
+  server_proxy_socks5_username_required: 'SOCKS5 username is required when a password is set.',
+};
+
+function proxyError(code: string): MockServerProxyError {
+  const status = code === 'server_proxy_dial_failed' ? 502 : 422;
+  return new MockServerProxyError(code, proxyErrorMessages[code] ?? 'The connection proxy configuration is invalid.', status);
+}
+
+const proxyErrorCodes: Record<string, string> = {
+  tunnel_missing: 'server_proxy_tunnel_missing',
+  cycle: 'server_proxy_cycle',
+  chain_too_deep: 'server_proxy_chain_too_deep',
+  socks5_address_missing: 'server_proxy_socks5_address_required',
+  socks5_address_invalid: 'server_proxy_socks5_address_invalid',
+};
+
+/** 保存/探测共用的代理草稿校验；与契约 3.2、3.4 的错误码一一对应。 */
+function validateProxyDraft(input: { proxyMode?: unknown; tunnelServerId?: string; socks5Address?: string; socks5Username?: string; socks5Password?: string }, nodes: ServerProxyNode[], selfId?: string) {
+  const rawMode = input.proxyMode;
+  if (rawMode != null && rawMode !== '' && rawMode !== 'direct' && rawMode !== 'ssh_tunnel' && rawMode !== 'socks5') throw proxyError('server_proxy_mode_invalid');
+  const mode = normalizeServerProxyMode(rawMode);
+  if (mode === 'direct') return;
+  const tunnelServerId = (input.tunnelServerId ?? '').trim();
+  if (mode === 'ssh_tunnel') {
+    if (!tunnelServerId) throw proxyError('server_proxy_tunnel_required');
+    if (selfId && tunnelServerId === selfId) throw proxyError('server_proxy_tunnel_self');
+    if (!nodes.some((node) => node.id === tunnelServerId)) throw proxyError('server_proxy_tunnel_missing');
+  }
+  const address = (input.socks5Address ?? '').trim();
+  if (mode === 'socks5') {
+    if (!address) throw proxyError('server_proxy_socks5_address_required');
+    if (!isSocks5Address(address)) throw proxyError('server_proxy_socks5_address_invalid');
+    if ((input.socks5Password ?? '').trim() && !(input.socks5Username ?? '').trim()) throw proxyError('server_proxy_socks5_username_required');
+  }
+  const candidate: ServerProxyNode = {
+    id: selfId ?? `srv-draft-${Date.now()}`,
+    proxyMode: mode,
+    tunnelServerId,
+    socks5Address: address,
+  };
+  const chainError = proxyChainSaveError(candidate, nodes);
+  if (chainError) throw proxyError(proxyErrorCodes[chainError] ?? 'server_proxy_mode_invalid');
+}
+
 
 export function createServer(input: ServerSaveInput): ServerDto {
+  const id = `srv-${Date.now()}-${++mockServerSequence}`;
+  validateProxyDraft(input, mockServers, id);
   const host = input.ipv4 || input.ipv6;
-  const item = {
-    ...server(`srv-${Date.now()}`, input.name, host, input.credentialId, true, tailscaleTraits(input.traits, input.tailscaleEnabled)),
+  const mode = normalizeServerProxyMode(input.proxyMode);
+  const proxy = proxyFields(input);
+  if (mode === 'socks5' && input.socks5Password.trim()) mockSocks5Secrets.set(id, input.socks5Password);
+  const item: ServerDto = {
+    ...server(id, input.name, host, input.credentialId, true, tailscaleTraits(input.traits, input.tailscaleEnabled)),
     ipv4: input.ipv4,
     ipv6: input.ipv6,
     port: input.port,
@@ -232,28 +310,45 @@ export function createServer(input: ServerSaveInput): ServerDto {
     ...tailscalePreferences(input),
     variables: input.variables,
     notes: input.notes,
+    ...proxy,
+    socks5PasswordSet: mode === 'socks5' && Boolean(mockSocks5Secrets.get(id)),
     initialTaskId: `task-initial-${Date.now()}`,
   };
-  mockServers = [item, ...mockServers];
-  return item;
+  mockServers = refreshProxyDerived([item, ...mockServers]);
+  return mockServers.find((server) => server.id === id) ?? item;
 }
 
 export function updateServer(id: string, input: ServerSaveInput): ServerDto | null {
-  let saved: ServerDto | null = null;
-  mockServers = mockServers.map((item) => {
-    if (item.id !== id) return item;
-    saved = {
-      ...item,
-      ...input,
-      host: input.ipv4 || input.ipv6,
-      // 观测状态只由节点上报：意图变化时清掉旧的 tailscale.* 观测值。
-      traits: tailscaleTraits(input.traits ?? item.traits, input.tailscaleEnabled),
-      ...tailscalePreferences(input),
-      updatedAt: new Date().toISOString(),
-    };
-    return saved;
-  });
-  return saved;
+  const existing = mockServers.find((item) => item.id === id);
+  if (!existing) return null;
+  validateProxyDraft(input, mockServers, id);
+  const mode = normalizeServerProxyMode(input.proxyMode);
+  const proxy = proxyFields(input);
+  // 密码只写：留空保留已存密文；切回直连按契约丢弃代理配置与密钥。
+  if (mode === 'direct') mockSocks5Secrets.delete(id);
+  else if (mode === 'socks5' && input.socks5Password.trim()) mockSocks5Secrets.set(id, input.socks5Password);
+  const saved: ServerDto = {
+    ...existing,
+    name: input.name,
+    ipv4: input.ipv4,
+    ipv6: input.ipv6,
+    port: input.port,
+    sshUsername: input.sshUsername,
+    credentialId: input.credentialId,
+    dockerHost: input.dockerHost,
+    tailscaleEnabled: input.tailscaleEnabled,
+    // 观测状态只由节点上报：意图变化时清掉旧的 tailscale.* 观测值。
+    traits: tailscaleTraits(input.traits ?? existing.traits, input.tailscaleEnabled),
+    ...tailscalePreferences(input),
+    variables: input.variables,
+    notes: input.notes,
+    host: input.ipv4 || input.ipv6,
+    ...proxy,
+    socks5PasswordSet: mode === 'socks5' && Boolean(mockSocks5Secrets.get(id)),
+    updatedAt: new Date().toISOString(),
+  };
+  mockServers = refreshProxyDerived(mockServers.map((item) => (item.id === id ? saved : item)));
+  return mockServers.find((item) => item.id === id) ?? saved;
 }
 
 /** 受理一次 tailscale 协调：登记 server_tailscale_apply 任务并让观测状态进入中间态。 */
@@ -268,11 +363,14 @@ export function applyServerTailscale(id: string): OperationAccepted | null {
 
 export function deleteServer(id: string): boolean {
   const before = mockServers.length;
-  mockServers = mockServers.filter((item) => item.id !== id);
+  mockSocks5Secrets.delete(id);
+  // 删除不自动改写依赖方配置：重新派生后依赖服务器读出 proxyInvalid/tunnel_missing。
+  mockServers = refreshProxyDerived(mockServers.filter((item) => item.id !== id));
   return mockServers.length !== before;
 }
 
-export function probeServer(input: ServerSaveInput): ServerProbeResult {
+export function probeServer(input: ServerProbeInput): ServerProbeResult {
+  validateProxyDraft(input, mockServers, input.serverId ?? `srv-probe-${Date.now()}`);
   const host = input.ipv4 || input.ipv6;
   const unreachable = host.includes('198.51.100') || host.includes('timeout');
   return {
@@ -392,6 +490,14 @@ function server(id: string, name: string, host: string, credentialId: string, re
     tailscaleEnabled: false,
     tailscalePreferAgent: false,
     tailscalePreferInterconnect: false,
+    proxyMode: 'direct',
+    tunnelServerId: '',
+    tunnelServerName: '',
+    socks5Address: '',
+    socks5Username: '',
+    socks5PasswordSet: false,
+    proxyInvalid: false,
+    proxyError: '',
     reachable,
     loadAverage: reachable ? `${(0.34 + packageUpdates / 20).toFixed(2)} ${(0.28 + packageUpdates / 25).toFixed(2)} ${(0.24 + packageUpdates / 30).toFixed(2)}` : '',
     lastCheckedAt: reachable ? '2026-08-01T07:58:00.000Z' : '2026-07-31T22:12:00.000Z',
@@ -404,6 +510,44 @@ function server(id: string, name: string, host: string, credentialId: string, re
 /** 种子数据里声明“已加入 tailnet”的节点：意图字段与观测 traits 一起给出。 */
 function withTailscale(item: ServerDto, preferAgent: boolean, preferInterconnect: boolean): ServerDto {
   return { ...item, tailscaleEnabled: true, tailscalePreferAgent: preferAgent, tailscalePreferInterconnect: preferInterconnect };
+}
+
+/** 种子数据的代理配置：只改变连接方式字段，不回显密码，仅记录 socks5PasswordSet。 */
+function withProxy(
+  item: ServerDto,
+  config: { proxyMode: ServerProxyMode; tunnelServerId?: string; socks5Address?: string; socks5Username?: string; socks5Password?: string },
+): ServerDto {
+  const mode = normalizeServerProxyMode(config.proxyMode);
+  if (mode === 'socks5' && config.socks5Password) mockSocks5Secrets.set(item.id, config.socks5Password);
+  return {
+    ...item,
+    proxyMode: mode,
+    tunnelServerId: mode === 'ssh_tunnel' ? (config.tunnelServerId ?? '') : '',
+    socks5Address: mode === 'socks5' ? (config.socks5Address ?? '') : '',
+    socks5Username: mode === 'socks5' ? (config.socks5Username ?? '') : '',
+    socks5PasswordSet: mode === 'socks5' && Boolean(mockSocks5Secrets.get(item.id)),
+  };
+}
+
+function proxyNode(item: Pick<ServerDto, 'id' | 'name' | 'proxyMode' | 'tunnelServerId' | 'socks5Address'>): ServerProxyNode {
+  return { id: item.id, name: item.name, proxyMode: item.proxyMode, tunnelServerId: item.tunnelServerId, socks5Address: item.socks5Address };
+}
+
+/** 代理字段写入前按模式清理：直连丢弃全部代理配置；其他模式只保留自己的字段。 */
+function proxyFields(input: Pick<ServerSaveInput, 'proxyMode' | 'tunnelServerId' | 'socks5Address' | 'socks5Username'>) {
+  const mode = normalizeServerProxyMode(input.proxyMode);
+  return {
+    proxyMode: mode,
+    tunnelServerId: mode === 'ssh_tunnel' ? input.tunnelServerId.trim() : '',
+    socks5Address: mode === 'socks5' ? input.socks5Address.trim() : '',
+    socks5Username: mode === 'socks5' ? input.socks5Username.trim() : '',
+  };
+}
+
+/** 读取时派生代理状态：tunnelServerName / proxyInvalid / proxyError 均不持久化。 */
+function refreshProxyDerived(list: ServerDto[]): ServerDto[] {
+  const nodes = list.map(proxyNode);
+  return list.map((item) => ({ ...item, ...deriveServerProxy(proxyNode(item), nodes) }));
 }
 
 /** 未启用 Tailscale 的节点不参与 prefer 分支，提交时固定为 false。 */

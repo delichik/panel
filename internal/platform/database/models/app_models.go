@@ -64,6 +64,14 @@ type Server struct {
 	TailscaleEnabled            bool `orm:"not_null;default:0;column:tailscale_enabled"`
 	TailscalePreferAgent        bool `orm:"not_null;default:0;column:tailscale_prefer_agent"`
 	TailscalePreferInterconnect bool `orm:"not_null;default:0;column:tailscale_prefer_interconnect"`
+
+	// 连接代理意图列。proxy_mode 为 direct 时其余列必须为空；socks5 密码只存
+	// secretstore 密文（SRV-PROXY-*），明文永不落库。
+	ProxyMode                string `orm:"not_null;default:'direct';column:proxy_mode"`
+	TunnelServerID           string `orm:"not_null;default:'';column:tunnel_server_id"`
+	Socks5Address            string `orm:"not_null;default:'';column:socks5_address"`
+	Socks5Username           string `orm:"not_null;default:'';column:socks5_username"`
+	Socks5PasswordCiphertext string `orm:"not_null;default:'';column:socks5_password_ciphertext"`
 }
 
 func (*Server) TableName() string { return "servers" }

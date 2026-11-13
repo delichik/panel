@@ -18,12 +18,16 @@ import { createLatestRequestGuard, isAbortError } from '@/views/_shared/requestS
 import {
   credentialLabel,
   privilegeStatusKey,
+  proxyErrorKey,
+  proxyModeLabelKey,
+  proxyTunnelDisplayName,
   reportDisconnectCount1h,
   reportStabilityGrade,
   reportStabilityStatusKey,
   reportStabilityTone,
   reportStreamStatusKey,
   reportStreamTone,
+  serverProxyMode,
   serverSummaryStatusKey,
   serverSummaryTone,
 } from '../model';
@@ -48,6 +52,14 @@ const credentialName = computed(() => credentialLabel(props.server.credentialId,
 const reportDisconnectCount = computed(() => reportDisconnectCount1h(props.server));
 const hasReportStability = computed(() => Boolean(reportStabilityGrade(props.server)));
 const hostKeyMismatch = computed(() => Boolean(props.server.hostKeyMismatch));
+const proxyMode = computed(() => serverProxyMode(props.server));
+const proxyModeLabel = computed(() => t(proxyModeLabelKey(props.server.proxyMode)));
+const proxyDetail = computed(() => {
+  if (proxyMode.value === 'ssh_tunnel') return proxyTunnelDisplayName(props.server) || t('serversPage.proxy.tunnelUnknown');
+  if (proxyMode.value === 'socks5') return props.server.socks5Address || t('common.notAvailable');
+  return '';
+});
+const proxyInvalid = computed(() => Boolean(props.server.proxyInvalid));
 
 function isActiveTask(task: TaskDto | null) {
   return Boolean(task && ['queued', 'scheduled', 'running', 'failed_retryable'].includes(task.status));
@@ -156,6 +168,15 @@ onBeforeUnmount(() => {
           <div><dt>{{ t('serversPage.dockerHost') }}</dt><dd>{{ server.dockerHost || t('common.notAvailable') }}</dd></div>
           <div><dt>{{ t('serversPage.ipv4') }}</dt><dd>{{ server.ipv4 || t('common.notAvailable') }}</dd></div>
           <div><dt>{{ t('serversPage.ipv6') }}</dt><dd>{{ server.ipv6 || t('common.notAvailable') }}</dd></div>
+          <div class="grid gap-1">
+            <dt>{{ t('serversPage.proxy.label') }}</dt>
+            <dd class="flex flex-wrap items-center gap-2">
+              <span :class="proxyInvalid ? 'text-warning' : undefined">
+                {{ proxyModeLabel }}<template v-if="proxyDetail"> · <span class="panel-mono break-all">{{ proxyDetail }}</span></template>
+              </span>
+              <Badge v-if="proxyInvalid" tone="warning">{{ t(proxyErrorKey(server)) }}</Badge>
+            </dd>
+          </div>
           <div class="grid gap-1">
             <dt>{{ t('serversPage.reportStream.label') }}</dt>
             <dd><Badge :tone="reportStreamTone(server)">{{ t(reportStreamStatusKey(server)) }}</Badge></dd>

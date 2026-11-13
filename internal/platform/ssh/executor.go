@@ -23,6 +23,8 @@ type SSHExecutor struct {
 	timeoutProvider              func() time.Duration
 	knownHosts                   *knownHostsStore
 	knownHostsExplicitlyDisabled bool
+	// proxyResolver 展开服务器自身的代理配置；nil 表示只支持直连。
+	proxyResolver ProxyResolver
 }
 
 // SSHExecutorOption configures an SSHExecutor at construction time.
@@ -39,6 +41,13 @@ func WithKnownHosts(path string) SSHExecutorOption {
 		}
 		e.knownHosts = newKnownHostsStore(path)
 	}
+}
+
+// WithProxyResolver enables connecting to servers through their configured
+// proxy chain (SSH tunnel or SOCKS5). Callers usually install the resolver
+// after the servers service exists; see SetProxyResolver.
+func WithProxyResolver(resolver ProxyResolver) SSHExecutorOption {
+	return func(e *SSHExecutor) { e.proxyResolver = resolver }
 }
 
 // NewSSHExecutorWithOptions builds an executor with functional options. Host
@@ -161,9 +170,15 @@ func (e *SSHExecutor) TrustHostKey(ctx context.Context, target Target) error {
 			return nil
 		},
 	}
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "tcp", address)
+	dialer, err := e.proxyDialer(ctx, target.ServerID, target.Proxy)
 	if err != nil {
+		return err
+	}
+	conn, err := dialer(ctx, "tcp", address)
+	if err != nil {
+		if proxyConfigured(target.Proxy) {
+			return asProxyDialError(err)
+		}
 		return panelerr.BadGateway("ssh_connection_failed", "SSH connection failed")
 	}
 	c, _, _, err := ssh.NewClientConn(conn, address, cfg)
@@ -268,9 +283,15 @@ func (e *SSHExecutor) dial(ctx context.Context, target Target) (*ssh.Client, err
 	}
 	address := net.JoinHostPort(target.Host, strconv.Itoa(target.Port))
 	cfg := &ssh.ClientConfig{User: user, Auth: []ssh.AuthMethod{auth}, HostKeyCallback: e.hostKeyCallback(address), Timeout: e.timeout()}
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "tcp", address)
+	dialer, err := e.proxyDialer(ctx, target.ServerID, target.Proxy)
 	if err != nil {
+		return nil, err
+	}
+	conn, err := dialer(ctx, "tcp", address)
+	if err != nil {
+		if proxyConfigured(target.Proxy) {
+			return nil, asProxyDialError(err)
+		}
 		return nil, panelerr.BadGateway("ssh_connection_failed", "SSH connection failed")
 	}
 	c, chans, reqs, err := ssh.NewClientConn(conn, address, cfg)
@@ -279,6 +300,21 @@ func (e *SSHExecutor) dial(ctx context.Context, target Target) (*ssh.Client, err
 		return nil, classifySSHHandshakeError(err)
 	}
 	return ssh.NewClient(c, chans, reqs), nil
+}
+
+func proxyConfigured(spec ProxySpec) bool {
+	return spec.Mode != "" && spec.Mode != ProxyModeDirect
+}
+
+// asProxyDialError keeps typed panel errors (validation/timeout) but reports
+// transport failures as a proxy dial failure, so callers do not mistake a
+// broken tunnel/socks5 path for a target SSH authentication problem.
+func asProxyDialError(err error) error {
+	var panel *panelerr.Error
+	if errors.As(err, &panel) {
+		return err
+	}
+	return panelerr.BadGateway("server_proxy_dial_failed", "Failed to connect through the configured proxy")
 }
 
 // sshHandshakeMessage strips the "ssh: handshake failed: " wrapper that

@@ -43,7 +43,7 @@ func (r *ServerRepository) ListSummaries(ctx context.Context) ([]domain.ServerSu
 		COALESCE(json_extract(traits,'$."agent.report.status"'),''),COALESCE(json_extract(traits,'$."agent.report.stability"'),''),COALESCE(json_extract(traits,'$."agent.report.disconnect_count_1h"'),''),
 		COALESCE(json_extract(traits,'$."sys.ufw_supported"'),''),COALESCE(json_extract(traits,'$."sys.ufw_installed"'),''),
 		COALESCE(json_extract(traits,'$."tailscale.status"'),''),
-		COALESCE(host_key_mismatch,0),COALESCE(tailscale_enabled,0)
+		COALESCE(host_key_mismatch,0),COALESCE(tailscale_enabled,0),COALESCE(proxy_mode,'direct'),COALESCE(tunnel_server_id,''),COALESCE(socks5_address,''),COALESCE(socks5_username,'')
 		FROM servers ORDER BY created_at DESC,id ASC`)
 	if err != nil {
 		return nil, err
@@ -56,12 +56,17 @@ func (r *ServerRepository) ListSummaries(ctx context.Context) ([]domain.ServerSu
 		var lastChecked sql.NullString
 		var updatedAt, agentEnabled, agentURL, agentStatus, reportStatus, reportStability, reportDisconnectCount, ufwSupported, ufwInstalled, tailscaleStatus string
 		var hostKeyMismatch, tailscaleEnabled int
-		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &item.CredentialID, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &reportStatus, &reportStability, &reportDisconnectCount, &ufwSupported, &ufwInstalled, &tailscaleStatus, &hostKeyMismatch, &tailscaleEnabled); err != nil {
+		var proxyMode, tunnelServerID, socks5Address, socks5Username string
+		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &item.CredentialID, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &reportStatus, &reportStability, &reportDisconnectCount, &ufwSupported, &ufwInstalled, &tailscaleStatus, &hostKeyMismatch, &tailscaleEnabled, &proxyMode, &tunnelServerID, &socks5Address, &socks5Username); err != nil {
 			return nil, err
 		}
 		item.Reachable = reachable == 1
 		item.Sudo.Passwordless = sudo == 1
 		item.TailscaleEnabled = tailscaleEnabled == 1
+		item.ProxyMode = normalizeProxyMode(proxyMode)
+		item.TunnelServerID = tunnelServerID
+		item.Socks5Address = socks5Address
+		item.Socks5Username = socks5Username
 		// 列值优先（写入时按类型化错误码判定）；子串仅作为迁移前旧行的回退。
 		item.HostKeyMismatch = hostKeyMismatch == 1 || strings.Contains(item.LastError, "ssh host key mismatch")
 		normalizeSummaryPrivilege(&item)
@@ -101,7 +106,7 @@ func (r *ServerRepository) ListSummaryPage(ctx context.Context, page, pageSize i
 		COALESCE(json_extract(traits,'$."agent.report.status"'),''),COALESCE(json_extract(traits,'$."agent.report.stability"'),''),COALESCE(json_extract(traits,'$."agent.report.disconnect_count_1h"'),''),
 		COALESCE(json_extract(traits,'$."sys.ufw_supported"'),''),COALESCE(json_extract(traits,'$."sys.ufw_installed"'),''),
 		COALESCE(json_extract(traits,'$."tailscale.status"'),''),
-		COALESCE(host_key_mismatch,0),COALESCE(tailscale_enabled,0)
+		COALESCE(host_key_mismatch,0),COALESCE(tailscale_enabled,0),COALESCE(proxy_mode,'direct'),COALESCE(tunnel_server_id,''),COALESCE(socks5_address,''),COALESCE(socks5_username,'')
 		FROM servers WHERE `+filter+` ORDER BY created_at DESC,id ASC LIMIT ? OFFSET ?`, listArgs...)
 	if err != nil {
 		return httpx.ListPage[domain.ServerSummary]{}, err
@@ -114,11 +119,16 @@ func (r *ServerRepository) ListSummaryPage(ctx context.Context, page, pageSize i
 		var lastChecked sql.NullString
 		var updatedAt, agentEnabled, agentURL, agentStatus, reportStatus, reportStability, reportDisconnectCount, ufwSupported, ufwInstalled, tailscaleStatus string
 		var hostKeyMismatch, tailscaleEnabled int
-		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &item.CredentialID, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &reportStatus, &reportStability, &reportDisconnectCount, &ufwSupported, &ufwInstalled, &tailscaleStatus, &hostKeyMismatch, &tailscaleEnabled); err != nil {
+		var proxyMode, tunnelServerID, socks5Address, socks5Username string
+		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &item.CredentialID, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &reportStatus, &reportStability, &reportDisconnectCount, &ufwSupported, &ufwInstalled, &tailscaleStatus, &hostKeyMismatch, &tailscaleEnabled, &proxyMode, &tunnelServerID, &socks5Address, &socks5Username); err != nil {
 			return httpx.ListPage[domain.ServerSummary]{}, err
 		}
 		item.Reachable, item.Sudo.Passwordless = reachable == 1, sudo == 1
 		item.TailscaleEnabled = tailscaleEnabled == 1
+		item.ProxyMode = normalizeProxyMode(proxyMode)
+		item.TunnelServerID = tunnelServerID
+		item.Socks5Address = socks5Address
+		item.Socks5Username = socks5Username
 		item.HostKeyMismatch = hostKeyMismatch == 1 || strings.Contains(item.LastError, "ssh host key mismatch")
 		normalizeSummaryPrivilege(&item)
 		item.Traits = map[string]string{
@@ -175,9 +185,10 @@ func (r *ServerRepository) Update(ctx context.Context, srv domain.Server) error 
 	if err != nil {
 		return err
 	}
-	result, err := orm.RawExec(ctx, r.db, `UPDATE servers SET name=?,host=?,ipv4=?,ipv6=?,port=?,ssh_username=?,credential_id=?,docker_host=?,tailscale_enabled=?,tailscale_prefer_agent=?,tailscale_prefer_interconnect=?,traits=?,variables_json=?,notes=?,updated_at=? WHERE id=?`,
+	result, err := orm.RawExec(ctx, r.db, `UPDATE servers SET name=?,host=?,ipv4=?,ipv6=?,port=?,ssh_username=?,credential_id=?,docker_host=?,tailscale_enabled=?,tailscale_prefer_agent=?,tailscale_prefer_interconnect=?,proxy_mode=?,tunnel_server_id=?,socks5_address=?,socks5_username=?,socks5_password_ciphertext=?,traits=?,variables_json=?,notes=?,updated_at=? WHERE id=?`,
 		srv.Name, srv.Host, srv.IPv4, srv.IPv6, srv.Port, srv.SSHUsername, srv.CredentialID, srv.DockerHost,
 		boolToInt(srv.TailscaleEnabled), boolToInt(srv.TailscalePreferAgent), boolToInt(srv.TailscalePreferInterconnect),
+		normalizeProxyMode(srv.ProxyMode), srv.TunnelServerID, srv.Socks5Address, srv.Socks5Username, srv.Socks5PasswordCiphertext,
 		string(traits), string(variables), srv.Notes,
 		srv.UpdatedAt.UTC().Format(time.RFC3339Nano), srv.ID)
 	if err != nil {
@@ -238,6 +249,13 @@ func toDomainServer(m models.Server) domain.Server {
 		TailscaleEnabled:            m.TailscaleEnabled,
 		TailscalePreferAgent:        m.TailscalePreferAgent,
 		TailscalePreferInterconnect: m.TailscalePreferInterconnect,
+
+		ProxyMode:                normalizeProxyMode(m.ProxyMode),
+		TunnelServerID:           m.TunnelServerID,
+		Socks5Address:            m.Socks5Address,
+		Socks5Username:           m.Socks5Username,
+		Socks5PasswordCiphertext: m.Socks5PasswordCiphertext,
+		Socks5PasswordSet:        strings.TrimSpace(m.Socks5PasswordCiphertext) != "",
 	}
 	srv.Privilege = domain.PrivilegeState{Mode: m.PrivilegeMode, LastCheckedAt: m.PrivilegeLastCheckedAt}
 	if srv.Privilege.Mode == "" {
@@ -297,6 +315,24 @@ func fromDomainServer(srv domain.Server) *models.Server {
 		TailscaleEnabled:            srv.TailscaleEnabled,
 		TailscalePreferAgent:        srv.TailscalePreferAgent,
 		TailscalePreferInterconnect: srv.TailscalePreferInterconnect,
+
+		ProxyMode:                normalizeProxyMode(srv.ProxyMode),
+		TunnelServerID:           srv.TunnelServerID,
+		Socks5Address:            srv.Socks5Address,
+		Socks5Username:           srv.Socks5Username,
+		Socks5PasswordCiphertext: srv.Socks5PasswordCiphertext,
+	}
+}
+
+// normalizeProxyMode 把旧行/零值统一为 direct，保证读取侧永远拿到合法枚举。
+func normalizeProxyMode(mode string) string {
+	switch strings.TrimSpace(mode) {
+	case "ssh_tunnel":
+		return "ssh_tunnel"
+	case "socks5":
+		return "socks5"
+	default:
+		return "direct"
 	}
 }
 

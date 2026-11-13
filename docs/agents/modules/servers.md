@@ -191,6 +191,18 @@
 - 退出码：0 成功；1 运行错误（Docker 不可达、selector 找不到/歧义、home 不存在）；2 用法错误。错误写 stderr，帮助写 stdout。
 - 该 CLI 只在本机读取 Docker，不接入 gRPC，不提供任何容器变更操作。
 
+## 服务器连接代理模式（SSH tunnel / SOCKS5）
+
+- 代理链路作用于 Panel 连接目标服务器的出站链路：到该服务器的 SSH 连接与到其 panel-agent 的 gRPC 连接都经同一代理链。完整行为合同见 [服务器、安全与软件包验收规范](../acceptance/servers-security-packages.md) 的 `SRV-PROXY-001..014` 与 [逐页面验收](../acceptance/ui-pages.md) 的 `UI-SRV-021..024`。
+- 三种模式：`direct`（默认，旧数据/旧客户端缺省即此值）、`ssh_tunnel`（从已登记服务器中选一台 SSH 跳板，Panel 先 SSH 到跳板再经其转发目标 SSH/Agent 端口）、`socks5`（手动 `host:port`，用户名/密码可空表示无认证）。允许链式：跳板自身也可用 `ssh_tunnel` 或 `socks5`；保存时按最终链路检测自引用与传递闭包成环（`server_proxy_cycle`）并限制最多 8 个 hop（`server_proxy_chain_too_deep`）。
+- 持久化：`servers` 由 ORM 自动增列 `proxy_mode`（默认 `direct`）、`tunnel_server_id`、`socks5_address`、`socks5_username`、`socks5_password_ciphertext`；`tunnel_server_id` 不加外键以允许悬空。`tunnelServerName`、`proxyInvalid`、`proxyError` 是读取时派生，不落库。旧 alpha 数据升级即等价直连，无需数据迁移。
+- 保存规则：切回 `direct` 会清空隧道/SOCKS5 字段与已存密码密文；`ssh_tunnel` 的隧道服务器必填、必须存在且不能是自身；SOCKS5 地址必须是合法 `host:port`，密码非空时用户名必填，更新时密码留空表示保留旧密文。SOCKS5 密码只写（详情仅返回 `socks5PasswordSet`），经 secretstore 加密保存，associated data 为 `assetID=serverID`、`assetType="server_proxy"`、`field="socks5_password"`；解密失败返回 `server_proxy_password_unavailable`。
+- 删除仍被选作隧道服务器的节点是允许的：删除不级联、不改写依赖服务器配置；依赖方保留原 `tunnelServerId`，读取时派生 `proxyInvalid=true`、`proxyError="tunnel_missing"`，由用户重新指定。
+- 探测：`POST /servers/probe` 在原有连接字段上增加代理草稿字段与探测专用可选 `serverId`；`serverId` 只用于编辑时密码留空复用已存密文和把待保存服务器纳入成环检测，保存接口忽略该字段。探测目标地址仍取请求中的 ipv4/ipv6 + port，隧道服务器按其已保存配置递归解析；探测不写服务器、不创建任务。
+- 连接路径接入：`internal/platform/ssh/` 的 `Exec`/`ExecSudo`/`Upload`/`TrustHostKey` 等全部拨号经代理链（SOCKS5 dialer 与 SSH 跳板 hop 可串联），未配置代理时与改动前完全一致；`internal/agent/client/` 的 gRPC 拨号按目标 agent 地址（`host:port`）匹配服务器记录并取其代理链，匹配不到或直连时使用默认 `net.Dialer`，`internal/agent/endpoint` 的地址派生与证书/SAN 规则不变；经代理建立连接失败映射为 `server_proxy_dial_failed`（502，不得含凭据明文）；执行器装配未注入代理链解析器时返回内部配置错误 `server_proxy_unavailable`，不得静默直连。探测、连通性测试、Agent 部署、软件包维护与设施 SSH 操作复用同一 SSH 执行器，因此自动获得代理能力。
+- 代理配置变化视为连接方式变化：保存成功后必须重新探测并更新可达性与错误，不得沿用旧的可达结论。
+- 代码入口追踪线索：后端代理链解析/校验与保存用例在 `internal/modules/servers/`（域名、仓储端口与 SQLite 映射分别在 `domain/`、`ports/`、`store/sqlite/`），拨号接入点在 `internal/platform/ssh/`（`proxy.go` 展开 hop 并串联 SOCKS5/SSH 拨号）、`internal/agent/client/`，错误码中文翻译在 `internal/platform/i18n/i18n.go`；前端代理表单位于 `web/src/views/servers/ServerFormDialog.vue`（文案前缀 `serversPage.proxy.*`），隧道服务器候选来源为全量服务器列表（打开表单时加载，失败降级为已加载列表，排除自身），并支持按名称/地址远程搜索（防抖 250ms 复用 `GET /api/v1/servers?page=1&pageSize=50&q=`，结果按 id 合并进候选集，可命中预载集之外服务器，已选项不在候选集时保留占位项），搜索能力复用共享 `Select` 的可选搜索模式（`searchable`/`searchPlaceholder`/`searchEmptyText` + `search` 事件，见前端交互组件模式）；详情“连接方式”与失效警告位于 `web/src/views/servers/tabs/OverviewTab.vue`，校验/展示辅助在 `web/src/views/servers/model.ts`，类型与 API 在 `web/src/types/servers.ts`、`web/src/api/servers.ts`（probe 输入）。具体文件名以本次实现为准，行为以验收编号为准。
+
 ## 验证
 
 - 后端服务器、凭据、agent、指标、软件包、UFW 或 fail2ban 行为改动运行 `task test:backend`。

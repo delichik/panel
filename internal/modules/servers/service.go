@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	agentcontract "panel/internal/agent/contract"
@@ -25,6 +27,7 @@ import (
 	"panel/internal/platform/linux"
 	"panel/internal/platform/linux/remoteops"
 	"panel/internal/platform/logging"
+	"panel/internal/platform/secrets"
 	"panel/internal/platform/ssh"
 
 	"go.uber.org/zap"
@@ -79,6 +82,7 @@ var reverseProxyTCPPorts = []int{80, 443}
 type Service struct {
 	db                   *sql.DB
 	repo                 ports.ServerRepository
+	secrets              *secretstore.Store
 	metricsDB            *sql.DB
 	exec                 sshx.RemoteExecutor
 	agent                agentcontract.Client
@@ -104,6 +108,11 @@ type Service struct {
 	// serverReferenceReconciler 由持有服务器引用的模块实现：服务器删除提交后
 	// 重新收敛本模块保存的引用，避免继续渲染指向已不存在节点的配置。
 	serverReferenceReconciler ServerReferenceReconciler
+	// proxyConfigured 是“是否存在非直连服务器”的快速开关：绝大多数安装没有
+	// 配置连接代理，agent 拨号不应为每次 RPC 都查询全部服务器。首次为 false
+	// 时做一次性检测；保存非直连代理后置位。
+	proxyConfigured      atomic.Bool
+	proxyConfiguredCheck sync.Once
 }
 
 // ServerReferenceReconciler 由在自身配置内嵌服务器 ID 的模块实现。
@@ -141,6 +150,11 @@ type Option func(*Service)
 
 func WithMetricsDB(db *sql.DB) Option {
 	return func(s *Service) { s.metricsDB = db }
+}
+
+// WithSecretStore 注入 SOCKS5 密码等服务器级机密使用的加密存储。
+func WithSecretStore(store *secretstore.Store) Option {
+	return func(s *Service) { s.secrets = store }
 }
 
 func WithAgentClient(client agentcontract.Client) Option {
@@ -668,12 +682,24 @@ func (s *Service) ProbeConnectivity(ctx context.Context, req SaveRequest) (Probe
 	if err := validateProbe(req); err != nil {
 		return ProbeResult{}, err
 	}
+	if err := s.validateProxyProbe(ctx, req); err != nil {
+		return ProbeResult{}, err
+	}
 
+	proxyMode, _ := normalizeServerProxyMode(req.ProxyMode)
 	target := sshx.Target{
+		ServerID:     strings.TrimSpace(req.ProbeServerID),
 		Host:         derivedServerHost(req),
 		Port:         req.Port,
 		Username:     req.SSHUsername,
 		CredentialID: req.CredentialID,
+		Proxy: sshx.ProxySpec{
+			Mode:           proxyMode,
+			TunnelServerID: strings.TrimSpace(req.TunnelServerID),
+			Socks5Address:  strings.TrimSpace(req.Socks5Address),
+			Socks5Username: strings.TrimSpace(req.Socks5Username),
+			Socks5Password: req.Socks5Password,
+		},
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()

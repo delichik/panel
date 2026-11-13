@@ -45,6 +45,8 @@ import {
   normalizeServerDetailTab,
   normalizeServerResourceSubtab,
   canRunPrivilegedOperation,
+  proxyListHintKey,
+  proxyShortLabelKey,
   serverDetailTabs,
   serverResourceSubtabs,
   reportStabilityStatusKey,
@@ -500,6 +502,9 @@ onBeforeUnmount(() => {
               <div class="flex flex-wrap items-center gap-1">
                 <Badge :tone="serverSummaryTone(row)">{{ statusText(row) }}</Badge>
                 <Badge v-if="shouldShowListReportStability(row)" :tone="reportStabilityTone(row)">{{ t(reportStabilityStatusKey(row)) }}</Badge>
+                <Tooltip v-if="proxyShortLabelKey(row)" :text="t(proxyListHintKey(row))">
+                  <Badge :tone="row.proxyInvalid ? 'warning' : 'neutral'">{{ t(proxyShortLabelKey(row)) }}</Badge>
+                </Tooltip>
               </div>
             </template>
             <template #lastChecked="{ row }">
@@ -582,6 +587,7 @@ onBeforeUnmount(() => {
     :editing="editing"
     :credentials="credentials"
     :credential-error="credentialError"
+    :servers="servers"
     @saved="handleSaved"
     @refresh-credentials="loadCredentials"
   />
