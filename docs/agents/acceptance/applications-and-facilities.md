@@ -311,11 +311,20 @@
 ### APP-RUN-001 runtime 状态与刷新写回
 
 - **前置**：Instance 具有 desired/observed，可能存在按 server 的 active Job。
-- **动作**：GET runtime，必要时主动查询 Agent status。
-- **结果**：默认以 AppDB observed 快照派生实例观测；主动结果也经 ObservationWriter CAS 写回；返回 serverId/serverName、generation、容器身份、`lastError`、observedAt，以及应用级三态计数（与 `APP-READ-001` 同一归类：已启用且 `desired=stopped` 收敛计入异常；活跃 Job 计入部署中）。每个实例旁挂该 server 的 `operation`（活跃 `queued`/`running`/`failed_retryable`，或无活跃时该 server 最新终态 `failed`）：含 status、stage、attempt、nextRunAt、operationId、`executionId`、结构化错误；uncertainty 时另含 `monitorReasonCode`、`evidenceDeadlineAt`、`graceDeadlineAt`（便于深链日志与排障，不替代过程事件）。应用级 `status`/`operation` 若仍返回，仅为兼容观测 rollup / 最差节点回声，UI 主路径不得依赖。
-- **失败**：Docker not found 映射 `missing` 而非 stopped；Agent 不兼容/不可达不回退 SSH；终态部署错误不得因 active 查询为空而从**该节点** runtime 投影消失；容器启动后退出的结构化错误必须保留有界脱敏的状态、exit code 与 Docker State.Error。
-- **不变量**：handler/业务服务不得直接覆盖 observed；无容器的 pending/failed Job 不提供日志入口。apply 启动成功必须经过 `ORCH-CTRL-007` 的稳定观察；短时退出即使退出码为 0，也必须展示部署失败/退避，而非以瞬间 running 表示部署完成。协调单位是节点上的应用。
-- **验证**：runtime cache/refresh/missing、retryable schedule、per-server terminal failure projection、启用+stale stop desired 三计数测试。
+- **动作**：`GET /applications/{id}/runtime`。
+- **结果**：只以 AppDB observed 快照派生实例观测；返回 serverId/serverName、generation、容器身份、`lastError`、observedAt，以及应用级三态计数（与 `APP-READ-001` 同一归类：已启用且 `desired=stopped` 收敛计入异常；活跃 Job 计入部署中）。每个实例旁挂该 server 的 `operation`（活跃 `queued`/`running`/`failed_retryable`，或无活跃时该 server 最新终态 `failed`）：含 status、stage、attempt、nextRunAt、operationId、`executionId`、结构化错误；uncertainty 时另含 `monitorReasonCode`、`evidenceDeadlineAt`、`graceDeadlineAt`（便于深链日志与排障，不替代过程事件）。应用级 `status`/`operation` 若仍返回，仅为兼容观测 rollup / 最差节点回声，UI 主路径不得依赖。
+- **失败**：Docker not found 映射 `missing` 而非 stopped；Agent 不兼容/不可达不回退 SSH；终态部署错误不得因 active 查询为空而从**该节点** runtime 投影消失；容器启动后退出的结构化错误必须保留有界脱敏的状态、exit code 与 Docker State.Error。runtime 读取失败不得因 Agent 不可达而失败。
+- **不变量**：runtime 读取不得触发 Agent RPC（见 `APP-RUN-005`）；handler/业务服务不得直接覆盖 observed；无容器的 pending/failed Job 不提供日志入口。apply 启动成功必须经过 `ORCH-CTRL-007` 的稳定观察；短时退出即使退出码为 0，也必须展示部署失败/退避，而非以瞬间 running 表示部署完成。协调单位是节点上的应用。
+- **验证**：local observation snapshot、retryable schedule、per-server terminal failure projection、启用+stale stop desired 三计数测试。
+
+### APP-RUN-005 动作回执与请求内 Agent 调用边界
+
+- **前置**：已持久化应用，调用 `POST /applications/{id}/deploy|stop|restart` 等同步业务入口；随后由调用方按需读取 runtime。
+- **动作**：调用同步动作接口；再读取 `GET /applications/{id}/runtime`。
+- **结果**：同步动作响应只是规划/受理回执（`deploymentId`、`noChange`、`application`），不内嵌 runtime 快照，也不表示远端已完成；runtime 详情按 `APP-RUN-001` 从 AppDB 快照返回。
+- **失败**：Agent 慢/不可达不得让同步动作接口等待逐实例状态查询而超时；动作受理与远端收敛失败分别表达，不得把请求超时写成部署失败。
+- **不变量**：任何主 Panel HTTP 请求路径（含 deploy/stop/restart/runtime 与列表摘要）不得调用 Agent `RuntimeStatus` 或其它 Agent 读写 RPC；观测新鲜度只由 Agent report、周期漂移巡检和 `RuntimeReconcile` 经 `ObservationWriter` 写回；需要强制刷新时走后台任务。
+- **验证**：`TestApplicationActionReceiptsDoNotCallAgentStatus`、`TestRuntimeProjectsLocalObservationSnapshotWithoutAgent`、`TestListSummariesUsesCachedInstanceBucketsWithoutAgent`。
 
 ### APP-RUN-002 实例日志
 

@@ -64,6 +64,8 @@
 
 应用页“容器日志”的实例选择、手动读取及请求隔离见 [APP-RUN-002](applications-and-facilities.md) 和 [UI-APP-007](ui-pages.md)。
 
+应用同步动作（deploy/stop/restart）回执与 runtime 读取的请求内 Agent 调用边界见 [APP-RUN-001/005](applications-and-facilities.md)。
+
 服务器连接代理模式（`direct` / `ssh_tunnel` / `socks5`）的字段、校验、成环与层数限制、删除隧道服务器后的派生失效、探测复用与 SSH/Agent 两条连接链路见 [SRV-PROXY-001..014](servers-security-packages.md)，表单、详情与 i18n 行为见 [UI-SRV-021..024](ui-pages.md)，表结构与加密说明见 [架构、数据与 API](architecture-data-api.md)。
 
 进程事件 `/events`、诊断日志 `/logs`、按需读取与 `/activity`/`/operations`/`/tasks` 重定向见 [UI-EVT-004..007](ui-pages.md)、[UI-LOG-001..003](ui-pages.md)（`UI-ACT-*` 已废弃）。

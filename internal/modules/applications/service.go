@@ -1219,11 +1219,10 @@ func (s *Service) Deploy(ctx context.Context, appID string) (OperationResult, er
 	if err != nil {
 		return OperationResult{}, err
 	}
-	result := OperationResult{DeploymentID: firstString(plan.JobIDs), NoChange: len(plan.JobIDs) == 0, Application: app}
-	if runtime, err := s.Runtime(ctx, app.ID); err == nil {
-		result.ApplicationRuntime = &runtime
-	}
-	return result, nil
+	// The response is the planning receipt only. Reading runtime state here would
+	// fan out one synchronous Agent RuntimeStatus call per instance inside the
+	// HTTP request; callers read /runtime (AppDB observed snapshot) separately.
+	return OperationResult{DeploymentID: firstString(plan.JobIDs), NoChange: len(plan.JobIDs) == 0, Application: app}, nil
 }
 
 // RunDeploymentProjectionTask keeps old target-task rows readable without
@@ -1499,11 +1498,8 @@ func (s *Service) Restart(ctx context.Context, appID string) (OperationResult, e
 	if err != nil {
 		return OperationResult{}, err
 	}
-	runtime, err := s.Runtime(ctx, appID)
-	if err != nil {
-		return OperationResult{}, err
-	}
-	return OperationResult{DeploymentID: firstString(plan.JobIDs), ApplicationRuntime: &runtime}, nil
+	// Planning receipt only; runtime state is read from /runtime.
+	return OperationResult{DeploymentID: firstString(plan.JobIDs), Application: app}, nil
 }
 
 func (s *Service) RunRestartTask(tc tasks.TaskContext) error {
@@ -1925,11 +1921,9 @@ func (s *Service) RestorePersistentData(ctx context.Context, appID string, conte
 	if err != nil {
 		return OperationResult{}, err
 	}
-	runtime, err := s.Runtime(ctx, app.ID)
-	if err != nil {
-		return OperationResult{}, err
-	}
-	return OperationResult{DeploymentID: firstString(plan.JobIDs), Application: app, ApplicationRuntime: &runtime}, nil
+	// Planning receipt only; runtime state is read from /runtime, never by a
+	// synchronous Agent status fan-out inside this request.
+	return OperationResult{DeploymentID: firstString(plan.JobIDs), Application: app}, nil
 }
 
 type preparedApplication struct {
@@ -3482,33 +3476,22 @@ func (s *Service) cachedImageUpdate(ctx context.Context, serverID string, refere
 	return cachedImageUpdate{}, false, nil
 }
 
+// refreshInstanceStatuses projects the AppDB observation snapshot. It must not
+// call the Agent: request handlers (runtime GET, deploy/restart receipts) are not
+// allowed to fan out RuntimeStatus RPCs. Freshness comes from Agent reports, the
+// cycle drift collector and orchestrator observations, all written through
+// ObservationWriter.
 func (s *Service) refreshInstanceStatuses(ctx context.Context, instances []appruntime.Instance) []appruntime.InstanceStatus {
-	out := s.cachedInstanceStatuses(ctx, instances)
-	for i, instance := range instances {
-		status := out[i]
-		if s.runtimeClient != nil && s.servers != nil {
-			if srv, err := s.servers.Get(ctx, instance.ServerID); err == nil {
-				status.ServerName = strings.TrimSpace(firstNonEmpty(srv.Name, srv.ID))
-				if ensureAgentRuntimeReady(srv) == nil {
-					baseURL, _ := agentURLFromServer(srv)
-					if resp, err := s.runtimeClient.RuntimeStatus(ctx, baseURL, instance.ID, instance.ContainerName); err == nil {
-						status = resp.InstanceStatus
-						status.ServerID = instance.ServerID
-						status.InstanceID = instance.ID
-						if strings.TrimSpace(status.ServerName) == "" {
-							status.ServerName = strings.TrimSpace(firstNonEmpty(srv.Name, srv.ID))
-						}
-					}
-				}
-			}
-		}
-		out[i] = status
-	}
-	return out
+	return s.cachedInstanceStatuses(ctx, instances)
 }
+
 func (s *Service) cachedInstanceStatuses(ctx context.Context, instances []appruntime.Instance) []appruntime.InstanceStatus {
 	out := make([]appruntime.InstanceStatus, 0, len(instances))
 	for _, instance := range instances {
+		observedAt := instance.UpdatedAt
+		if observedAt.IsZero() {
+			observedAt = time.Now().UTC()
+		}
 		status := appruntime.InstanceStatus{
 			InstanceID:    instance.ID,
 			ServerID:      instance.ServerID,
@@ -3517,7 +3500,7 @@ func (s *Service) cachedInstanceStatuses(ctx context.Context, instances []apprun
 			Status:        instance.Status,
 			DesiredState:  instance.DesiredState,
 			LastError:     instance.LastError,
-			ObservedAt:    time.Now().UTC(),
+			ObservedAt:    observedAt,
 		}
 		if s.servers != nil {
 			if srv, err := s.servers.Get(ctx, instance.ServerID); err == nil {

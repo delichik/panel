@@ -173,6 +173,38 @@ func TestDeployEnablesDisabledApplicationWithVersionCAS(t *testing.T) {
 	}
 }
 
+// APP-RUN-005: deploy/restart/stop are planning receipts. They must not call
+// Agent status per instance; runtime observations are read from AppDB.
+func TestApplicationActionReceiptsDoNotCallAgentStatus(t *testing.T) {
+	svc, runtime, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusCalls := 0
+	runtime.statusHook = func(string) { statusCalls++ }
+
+	deployResult, err := svc.Deploy(ctx, app.ID)
+	if err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	if deployResult.ApplicationRuntime != nil {
+		t.Fatalf("deploy receipt must not embed a runtime snapshot, got %#v", deployResult.ApplicationRuntime)
+	}
+	if _, err := svc.Restart(ctx, app.ID); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if _, err := svc.Stop(ctx, app.ID, false); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if statusCalls != 0 {
+		t.Fatalf("action receipts made %d Agent status calls", statusCalls)
+	}
+}
+
 // APP-READ-001 / APP-RUN-001: re-enable after a converged stop must surface nodes
 // as deploying/abnormal, not leave stop-converged rows omitted from the buckets.
 func TestReenableAfterStopMarksNodesAbnormalOrDeploying(t *testing.T) {
@@ -1568,7 +1600,9 @@ func TestDeletePlansPurgeWithoutReconcileTrigger(t *testing.T) {
 	}
 }
 
-func TestRuntimeRefreshesInstanceStatuses(t *testing.T) {
+// APP-RUN-005: runtime reads the AppDB observation snapshot; the request path
+// must not fan out one synchronous Agent RuntimeStatus call per instance.
+func TestRuntimeProjectsLocalObservationSnapshotWithoutAgent(t *testing.T) {
 	svc, runtime, _, closeStore := newTestService(t)
 	defer closeStore()
 	ctx := context.Background()
@@ -1584,20 +1618,30 @@ func TestRuntimeRefreshesInstanceStatuses(t *testing.T) {
 		t.Fatal(err)
 	}
 	instanceID := app.ID + "-srv-a"
+	if _, err := svc.db.Exec(`UPDATE application_instances SET status=?,observed_state=?,observed_source='agent',observed_container_name=?,observed_container_id=?,updated_at=? WHERE application_id=?`,
+		appruntime.StatusRunning, appruntime.StatusRunning, "panel-web", "container-a", time.Now().UTC().Format(time.RFC3339Nano), app.ID); err != nil {
+		t.Fatal(err)
+	}
+	// A contradictory live Agent answer must not leak into the response.
+	statusCalls := 0
+	runtime.statusHook = func(string) { statusCalls++ }
 	runtime.statuses = map[string]appruntime.InstanceStatus{
-		instanceID: {InstanceID: instanceID, ContainerName: "panel-web", Status: appruntime.StatusRunning, Image: "nginx", ObservedAt: time.Now().UTC()},
+		instanceID: {InstanceID: instanceID, ContainerName: "remote", Status: appruntime.StatusMissing, ObservedAt: time.Now().UTC()},
 	}
 
 	result, err := svc.Runtime(ctx, app.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if statusCalls != 0 {
+		t.Fatalf("runtime read made %d Agent status calls", statusCalls)
+	}
 	if result.Status != appruntime.StatusRunning || len(result.Instances) != 2 {
 		t.Fatalf("runtime = %#v", result)
 	}
 	found := false
 	for _, inst := range result.Instances {
-		if inst.InstanceID == instanceID && inst.ContainerName == "panel-web" && inst.Image == "nginx" {
+		if inst.InstanceID == instanceID && inst.ContainerName == "panel-web" && inst.ContainerID == "container-a" && inst.Status == appruntime.StatusRunning {
 			found = true
 		}
 	}
