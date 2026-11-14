@@ -841,10 +841,23 @@ func (s *Service) updateWithFilesVersioned(ctx context.Context, appID string, ex
 	}
 	if files == nil {
 		if configurationChanged {
-			if err := s.updateApplicationWithRoutes(ctx, app); err != nil {
-				return Application{}, ApplyHint{}, applicationSaveError(err)
+			var updateErr error
+			if enforceVersion {
+				updateErr = s.updateApplicationWithRoutesIfVersion(ctx, app, expectedVersion)
+			} else {
+				updateErr = s.updateApplicationWithRoutes(ctx, app)
+			}
+			if updateErr != nil {
+				return Application{}, ApplyHint{}, applicationSaveError(updateErr)
 			}
 			s.notifyProxyDNSSync(ctx, current.ReverseProxy, app.ReverseProxy)
+		} else if enforceVersion {
+			// A derived-only save must still prove its base version inside the
+			// write transaction. Checking it only before the write lets two
+			// concurrent commits both pass and silently overwrite each other.
+			if err := s.updateApplicationDerivedIfVersion(ctx, app, expectedVersion); err != nil {
+				return Application{}, ApplyHint{}, applicationSaveError(err)
+			}
 		} else if err := s.updateApplicationDerived(ctx, app); err != nil {
 			return Application{}, ApplyHint{}, err
 		}
@@ -2283,6 +2296,28 @@ func (s *Service) updateApplicationWithRoutes(ctx context.Context, app Applicati
 	}
 	return tx.Commit()
 }
+
+// updateApplicationWithRoutesIfVersion is the version-guarded variant of
+// updateApplicationWithRoutes used by edit-session commits that carry no file
+// changes. The version predicate lives in the UPDATE itself so a concurrent
+// commit cannot pass the pre-check and then overwrite it.
+func (s *Service) updateApplicationWithRoutesIfVersion(ctx context.Context, app Application, expectedVersion int) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := s.updateApplicationWithExecIfVersion(ctx, tx, app, expectedVersion); err != nil {
+		return err
+	}
+	if err := ensurePersistentLocations(ctx, tx, app); err != nil {
+		return err
+	}
+	if err := replaceApplicationReverseProxyRoutes(ctx, tx, app.ID, app.ReverseProxy); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
 func (s *Service) insertApplication(ctx context.Context, app Application) error {
 	m := fromDomainApplication(app)
 	m.Version = 1
@@ -2315,6 +2350,29 @@ func (s *Service) updateApplicationLifecycleFlags(ctx context.Context, appID str
 // background refresh cannot overwrite a concurrent edit.
 func (s *Service) updateApplicationDerived(ctx context.Context, app Application) error {
 	return updateApplicationDerivedWithExec(ctx, s.db, app)
+}
+
+// updateApplicationDerivedIfVersion persists derived columns only when the user
+// configuration version still matches. The derived UPDATE takes the write lock
+// first, so the version read afterwards cannot be raced by another commit; a
+// mismatch rolls the derived columns back instead of accepting a stale edit.
+func (s *Service) updateApplicationDerivedIfVersion(ctx context.Context, app Application, expectedVersion int) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := updateApplicationDerivedWithExec(ctx, tx, app); err != nil {
+		return err
+	}
+	var currentVersion int
+	if err := orm.New(tx).From("applications").Select("version").Where("id=?", app.ID).ScanValue(ctx, &currentVersion); err != nil {
+		return err
+	}
+	if currentVersion != expectedVersion {
+		return resourceVersionConflict(expectedVersion, currentVersion)
+	}
+	return tx.Commit()
 }
 
 func updateApplicationDerivedWithExec(ctx context.Context, exec orm.Executor, app Application) error {
