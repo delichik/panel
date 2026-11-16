@@ -1,1104 +1,292 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { onBeforeRouteLeave, useRouter } from 'vue-router';
-import { Activity, AlertTriangle, BarChart3, Boxes, Check, ChevronRight, Grip, Gauge, HardDrive, Pencil, Plus, Radar, RefreshCcw, ShieldCheck, Server, Trash2 } from '@lucide/vue';
-import { overviewApi } from '@/api/overview';
+import { computed, onMounted, ref } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { RefreshCcw, Server as ServerIcon } from '@lucide/vue';
+import { containersApi } from '@/api/containers';
+import { networkProbeFacilityApi } from '@/api/networkProbe';
+import { packagesApi } from '@/api/packages';
+import { serversApi, type ServerMetricsSeries } from '@/api/servers';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
-import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
-import Dialog from '@/components/ui/Dialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
-import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
-import ServerMultiPicker from '@/components/patterns/ServerMultiPicker.vue';
 import { useErrorToast } from '@/components/ui/toast';
-import ConsolePage from '@/components/templates/ConsolePage.vue';
 import AutoRefreshControl from '@/components/patterns/AutoRefreshControl.vue';
+import ConsolePage from '@/components/templates/ConsolePage.vue';
 import { useAutoRefresh } from '@/composables/useAutoRefresh';
 import { useI18n } from '@/i18n';
-import type { OverviewCardConfiguration, OverviewCardData, OverviewCardKind, OverviewCardRange, OverviewDto } from '@/types/overview';
-import type { NetworkProbeResult } from '@/types/networkProbe';
-import { formatDateTime } from '@/utils/datetime';
-import { cardHasData, createOverviewCard, defaultOverviewCards, deriveCardView, deriveDiskCardView, deriveNetworkProbeCardView, mergeCardData, overviewRisks, summarizeOverview, trimCardDataToRange, type DiskCardView, type NetworkProbeCardView, type OverviewCardChartSeries, type OverviewCardView } from './model';
-
-const MetricLineChart = defineAsyncComponent(() => import('./MetricLineChart.vue'));
+import type { NetworkProbeConfig, NetworkProbeServerResults } from '@/types/networkProbe';
+import type { ServerDto } from '@/types/servers';
+import { isAbortError } from '@/views/_shared/requestState';
+import ServerCard from './ServerCard.vue';
+import { buildServerCards, summarizeNodeCards } from './model';
 
 const { t } = useI18n();
-const { mode: autoRefreshMode, enabled: autoRefreshEnabled, intervalMs: autoRefreshIntervalMs } = useAutoRefresh();
+const route = useRoute();
 const router = useRouter();
 const notifyError = useErrorToast();
+const autoRefresh = useAutoRefresh();
 
-const overview = ref<OverviewDto>({ servers: [] });
-const cards = ref<OverviewCardConfiguration[]>([]);
-const persistedCardIds = ref<Set<string>>(new Set());
-const cardLoading = ref<Record<string, boolean>>({});
-const cardErrors = ref<Record<string, string>>({});
-const cardValues = ref<Record<string, string>>({});
-const cardData = ref<Record<string, OverviewCardData>>({});
-const cardViews = ref<Record<string, OverviewCardView>>({});
-const cardDiskViews = ref<Record<string, DiskCardView>>({});
-const cardProbeViews = ref<Record<string, NetworkProbeCardView>>({});
-const emptyChartLabels: string[] = [];
-const emptyChartSeries: OverviewCardChartSeries[] = [];
-let cardRequestSeq = 0;
-const cardRequests = new Map<string, number>();
-const loading = ref(false);
+const servers = ref<ServerDto[]>([]);
+const metricsById = ref<Record<string, ServerMetricsSeries | undefined>>({});
+const metricsErrorIds = ref<Set<string>>(new Set());
+const packageUpdatesById = ref<Record<string, number | null>>({});
+const imageUpdatesById = ref<Record<string, number | null>>({});
+const probeConfig = ref<NetworkProbeConfig | null>(null);
+const probeSourceId = ref('');
+const probeResults = ref<NetworkProbeServerResults | null>(null);
+const pageLoading = ref(true);
+const refreshing = ref(false);
 const pageError = ref('');
-const saveError = ref('');
-const editMode = ref(false);
-const savedCardsSnapshot = ref<OverviewCardConfiguration[]>([]);
-const deleteCardTarget = ref<string | null>(null);
-const leaveConfirmOpen = ref(false);
-let leaveTarget: Parameters<typeof router.push>[0] | null = null;
-const cardEditorOpen = ref(false);
-const editingCardId = ref<string | null>(null);
-const saving = ref(false);
-const newCardKind = ref<OverviewCardKind>('cpu');
-const draggingCardId = ref<string | null>(null);
-const dragPreviewTargetId = ref<string | null>(null);
-const overviewGrid = ref<HTMLElement | null>(null);
-const resizeState = ref<{
-  cardId: string;
-  startX: number;
-  startY: number;
-  startWidth: number;
-  startHeight: number;
-  columnWidth: number;
-  rowHeight: number;
-} | null>(null);
-let autoRefreshTimer: number | undefined;
-let autoRefreshInFlight = false;
 
-const summary = computed(() => summarizeOverview(overview.value));
-const risks = computed(() => overviewRisks(overview.value.servers));
-const editingCard = computed(() => cards.value.find((card) => card.id === editingCardId.value));
-const serverOptions = computed(() => overview.value.servers.map((server) => ({
-  id: server.id,
-  name: server.name,
-  description: server.host,
-  status: server.reachable ? 'reachable' : 'unreachable',
-})));
+let loadSeq = 0;
+let probeSeq = 0;
+let controller: AbortController | null = null;
 
-const kindOptions = computed(() => [
-  { value: 'cpu', label: t('overviewPage.cardCpu') },
-  { value: 'memory', label: t('overviewPage.cardMemory') },
-  { value: 'disk', label: t('overviewPage.cardDisk') },
-  { value: 'diskIO', label: t('overviewPage.cardDiskIo') },
-  { value: 'network', label: t('overviewPage.cardNetwork') },
-  { value: 'networkProbe', label: t('overviewPage.cardNetworkProbe') },
-  { value: 'packageUpdates', label: t('overviewPage.cardPackages') },
-  { value: 'containerUpdates', label: t('overviewPage.cardStaleMetrics') },
-]);
+const candidateIds = computed(() => probeCandidateIds(probeConfig.value, servers.value));
+const probeSourceOptions = computed(() => candidateIds.value.map((id) => {
+  const server = servers.value.find((item) => item.id === id);
+  return { value: id, label: server ? `${server.name} · ${server.host}` : id };
+}));
 
-const rangeOptions = [
-  { value: '1h', label: '1h' },
-  { value: '6h', label: '6h' },
-  { value: '1d', label: '1d' },
-  { value: '7d', label: '7d' },
-];
+const cards = computed(() => buildServerCards({
+  servers: servers.value,
+  metricsById: metricsById.value,
+  metricsErrorIds: metricsErrorIds.value,
+  probeSourceId: probeSourceId.value,
+  probeResults: probeResults.value?.results ?? [],
+  packageUpdatesById: packageUpdatesById.value,
+  imageUpdatesById: imageUpdatesById.value,
+}));
+const nodeSummary = computed(() => summarizeNodeCards(cards.value));
+const onlinePercent = computed(() => (nodeSummary.value.total ? Math.round((nodeSummary.value.online / nodeSummary.value.total) * 100) : 0));
 
-const directionOptions = computed(() => [
-  { value: 'both', label: t('overviewPage.rxTx') },
-  { value: 'rx', label: t('overviewPage.rx') },
-  { value: 'tx', label: t('overviewPage.tx') },
-]);
-
-const widthOptions = computed(() => Array.from({ length: 6 }, (_, index) => ({ value: String(index + 1), label: `${index + 1}` })));
-const heightOptions = computed(() => Array.from({ length: 4 }, (_, index) => ({ value: String(index + 1), label: `${index + 1}` })));
-
-async function load() {
-  loading.value = true;
-  pageError.value = '';
-  invalidateCardRequests();
-  try {
-    const [nextOverview, nextCards] = await Promise.all([overviewApi.getOverview(), overviewApi.getCards()]);
-    overview.value = nextOverview;
-    cards.value = nextCards.cards.map(normalizeCardSize);
-    persistedCardIds.value = new Set(cards.value.map((card) => card.id));
-    await Promise.all(cards.value.map((card) => loadCard(card.id)));
-  } catch (err) {
-    pageError.value = err instanceof Error ? err.message : t('common.loadFailed');
-    notifyError(err instanceof Error ? err.message : t('common.loadFailed'), err);
-  } finally {
-    loading.value = false;
-  }
+function probeCandidateIds(config: NetworkProbeConfig | null, items: ServerDto[]): string[] {
+  if (!config || config.mode === 'all') return items.map((item) => item.id);
+  const selected = new Set(config.serverIds);
+  return items.filter((item) => selected.has(item.id)).map((item) => item.id);
 }
 
-async function loadCard(cardId: string) {
-  const card = cards.value.find((item) => item.id === cardId);
-  const nextErrors = { ...cardErrors.value };
-  delete nextErrors[cardId];
-  cardErrors.value = nextErrors;
-  const requestId = ++cardRequestSeq;
-  cardRequests.set(cardId, requestId);
-  if (!card || !persistedCardIds.value.has(cardId) || card.kind === 'packageUpdates' || card.kind === 'containerUpdates' || card.kind === 'placeholder') {
-    cardRequests.delete(cardId);
-    clearCardData(cardId, card);
+function syncProbeQuery(value: string) {
+  const current = route.query.probe === undefined ? '' : String(route.query.probe);
+  if (value && current !== value) {
+    void router.replace({ query: { ...route.query, probe: value } });
     return;
   }
-  const cardAtStart = {
-    kind: card.kind,
-    range: card.range,
-    networkDirection: card.networkDirection,
-    serverIds: [...card.serverIds],
-  };
-  cardLoading.value = { ...cardLoading.value, [cardId]: true };
-  try {
-    const data = await overviewApi.getCardData(cardId);
-    if (cardRequests.get(cardId) !== requestId) return;
-    const currentCard = cards.value.find((item) => item.id === cardId);
-    if (!currentCard || !sameCardConfig(currentCard, cardAtStart)) return;
-    applyCardData(card, data);
-  } catch (err) {
-    if (cardRequests.get(cardId) !== requestId) return;
-    const message = err instanceof Error ? err.message : t('overviewPage.cardFailed');
-    notifyError(message, err);
-    cardErrors.value = { ...cardErrors.value, [cardId]: t('overviewPage.cardFailed') };
-  } finally {
-    if (cardRequests.get(cardId) === requestId) {
-      const nextLoading = { ...cardLoading.value };
-      delete nextLoading[cardId];
-      cardLoading.value = nextLoading;
-      cardRequests.delete(cardId);
-    }
+  if (!value && route.query.probe !== undefined) {
+    const query = { ...route.query };
+    delete query.probe;
+    void router.replace({ query });
   }
 }
 
-function updateCardRange(card: OverviewCardConfiguration, range: string) {
-  card.range = range as OverviewCardRange;
-  void loadCard(card.id);
-}
-
-function addCard() {
-  const next = createOverviewCard(newCardKind.value, '1h', defaultWidth(newCardKind.value), defaultHeight(newCardKind.value));
-  cards.value = [...cards.value, next];
-  void loadCard(next.id);
-}
-
-function confirmRemoveCard(cardId: string) {
-  deleteCardTarget.value = cardId;
-}
-
-function removeCard(cardId: string) {
-  cards.value = cards.value.filter((card) => card.id !== cardId);
-  cardRequests.delete(cardId);
-  const nextLoading = { ...cardLoading.value };
-  delete nextLoading[cardId];
-  cardLoading.value = nextLoading;
-  clearCardData(cardId);
-  if (editingCardId.value === cardId) closeCardEditor();
-  deleteCardTarget.value = null;
-}
-
-function resetCards() {
-  invalidateCardRequests();
-  cards.value = defaultOverviewCards();
-  cardErrors.value = {};
-  cardData.value = {};
-  cardViews.value = {};
-  cardValues.value = Object.fromEntries(cards.value.map((card) => [card.id, derivedCardValue(card)]));
-  void Promise.all(cards.value.map((card) => loadCard(card.id)));
-}
-
-async function saveCards() {
-  saving.value = true;
-  saveError.value = '';
-  try {
-    const visibleCards = cards.value.map(normalizeCardSize);
-    const saved = await overviewApi.updateCards({ cards: visibleCards });
-    cards.value = saved.cards.map(normalizeCardSize);
-    persistedCardIds.value = new Set(cards.value.map((card) => card.id));
-    invalidateCardRequests();
-    editMode.value = false;
-    closeCardEditor();
-    await Promise.all(cards.value.map((card) => loadCard(card.id)));
-  } catch (err) {
-    saveError.value = err instanceof Error ? err.message : t('overviewPage.saveFailed');
-    notifyError(err instanceof Error ? err.message : t('overviewPage.saveFailed'), err);
-  } finally {
-    saving.value = false;
-  }
-}
-
-function toggleEditMode() {
-  saveError.value = '';
-  if (!editMode.value) {
-    savedCardsSnapshot.value = cards.value.map(normalizeCardSize);
-    editMode.value = true;
-    return;
-  }
-  void saveCards();
-}
-
-function cancelEdit() {
-  invalidateCardRequests();
-  cards.value = savedCardsSnapshot.value.map(normalizeCardSize);
-  cardErrors.value = {};
-  cardData.value = {};
-  cardViews.value = {};
-  cardValues.value = Object.fromEntries(cards.value.map((card) => [card.id, derivedCardValue(card)]));
-  editMode.value = false;
-  closeCardEditor();
-  void Promise.all(cards.value.map((card) => loadCard(card.id)));
-}
-
-function confirmLeave() {
-  cancelEdit();
-  if (leaveTarget) {
-    const target = leaveTarget;
-    leaveTarget = null;
-    void router.push(target);
-  }
-}
-
-onBeforeRouteLeave((to) => {
-  if (!editMode.value && !cardEditorOpen.value) return true;
-  leaveTarget = to;
-  leaveConfirmOpen.value = true;
-  return false;
-});
-
-function openCardEditor(cardId: string) {
-  editingCardId.value = cardId;
-  cardEditorOpen.value = true;
-}
-
-function closeCardEditor() {
-  cardEditorOpen.value = false;
-  editingCardId.value = null;
-}
-
-function onCardDragStart(cardId: string, event: DragEvent) {
-  if (!editMode.value) return;
-  draggingCardId.value = cardId;
-  dragPreviewTargetId.value = cardId;
-  if (event.dataTransfer) {
-    event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.setData('text/plain', cardId);
-  }
-}
-
-function onCardDragEnd() {
-  draggingCardId.value = null;
-  dragPreviewTargetId.value = null;
-}
-
-function onCardDragOver(targetCardId: string, event: DragEvent) {
-  if (!editMode.value || !draggingCardId.value) return;
-  event.preventDefault();
-  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
-  if (dragPreviewTargetId.value === targetCardId || draggingCardId.value === targetCardId) return;
-  const fromIndex = cards.value.findIndex((card) => card.id === draggingCardId.value);
-  const toIndex = cards.value.findIndex((card) => card.id === targetCardId);
-  if (fromIndex < 0 || toIndex < 0) return;
-  const next = [...cards.value];
-  const [moved] = next.splice(fromIndex, 1);
-  next.splice(toIndex, 0, moved);
-  cards.value = next;
-  dragPreviewTargetId.value = targetCardId;
-}
-
-function onCardDrop() {
-  draggingCardId.value = null;
-  dragPreviewTargetId.value = null;
-}
-
-function startResize(card: OverviewCardConfiguration, event: PointerEvent) {
-  if (!editMode.value) return;
-  event.preventDefault();
-  event.stopPropagation();
-  const grid = overviewGrid.value;
-  if (!grid) return;
-  const styles = window.getComputedStyle(grid);
-  const columns = styles.gridTemplateColumns.split(' ').filter(Boolean).length || 6;
-  const gap = Number.parseFloat(styles.columnGap || '0') || 0;
-  const rowHeight = Number.parseFloat(styles.gridAutoRows || '112') || 112;
-  const columnWidth = (grid.clientWidth - gap * Math.max(0, columns - 1)) / columns + gap;
-  resizeState.value = {
-    cardId: card.id,
-    startX: event.clientX,
-    startY: event.clientY,
-    startWidth: card.width,
-    startHeight: card.height,
-    columnWidth,
-    rowHeight,
-  };
-  window.addEventListener('pointermove', onResizeMove);
-  window.addEventListener('pointerup', stopResize, { once: true });
-}
-
-function onResizeMove(event: PointerEvent) {
-  const state = resizeState.value;
-  if (!state) return;
-  const card = cards.value.find((item) => item.id === state.cardId);
-  if (!card) return;
-  card.width = clampInteger(state.startWidth + Math.round((event.clientX - state.startX) / state.columnWidth), 1, 6);
-  card.height = clampInteger(state.startHeight + Math.round((event.clientY - state.startY) / state.rowHeight), 1, 4);
-}
-
-function stopResize() {
-  window.removeEventListener('pointermove', onResizeMove);
-  resizeState.value = null;
-}
-
-function cardTitle(card: OverviewCardConfiguration) {
-  if (card.kind === 'containerUpdates') return t('overviewPage.cardStaleMetrics');
-  return t(`overviewPage.card.${card.kind}`);
-}
-
-function cardIcon(kind: OverviewCardKind) {
-  if (kind === 'cpu') return Gauge;
-  if (kind === 'memory') return Activity;
-  if (kind === 'disk') return BarChart3;
-  if (kind === 'diskIO') return HardDrive;
-  if (kind === 'network') return Boxes;
-  if (kind === 'networkProbe') return Radar;
-  return AlertTriangle;
-}
-
-function cardTone(card: OverviewCardConfiguration) {
-  if (cardErrors.value[card.id]) return 'danger' as const;
-  if (card.kind === 'packageUpdates' && summary.value.updates > 0) return 'warning' as const;
-  return 'neutral' as const;
-}
-
-function derivedCardValue(card?: OverviewCardConfiguration) {
-  if (!card) return '-';
-  if (card.kind === 'packageUpdates') return String(summary.value.updates);
-  if (card.kind === 'containerUpdates') return String(overview.value.servers.filter((server) => !server.metricsFresh).length);
-  return '-';
-}
-
-function serverNameById(serverId: string) {
-  return overview.value.servers.find((server) => server.id === serverId)?.name ?? serverId;
-}
-
-function formatMetricValue(card: OverviewCardConfiguration, value: number | null) {
-  if (value === null) return '-';
-  if (card.kind === 'network' || card.kind === 'diskIO') return formatBytes(value);
-  return `${Math.round(value)}%`;
-}
-
-function clearCardData(cardId: string, card?: OverviewCardConfiguration) {
-  const nextData = { ...cardData.value };
-  delete nextData[cardId];
-  cardData.value = nextData;
-  const nextViews = { ...cardViews.value };
-  delete nextViews[cardId];
-  cardViews.value = nextViews;
-  const nextDiskViews = { ...cardDiskViews.value };
-  delete nextDiskViews[cardId];
-  cardDiskViews.value = nextDiskViews;
-  const nextProbeViews = { ...cardProbeViews.value };
-  delete nextProbeViews[cardId];
-  cardProbeViews.value = nextProbeViews;
-  cardValues.value = { ...cardValues.value, [cardId]: derivedCardValue(card) };
-}
-
-// 派生视图只在数据落地时计算一次，模板只读缓存，避免渲染期重复对齐与聚合。
-function applyCardData(card: OverviewCardConfiguration, data: OverviewCardData) {
-  const view = deriveCardView(card, data, serverNameById);
-  cardData.value = { ...cardData.value, [card.id]: data };
-  cardViews.value = { ...cardViews.value, [card.id]: view };
-  const nextDiskViews = { ...cardDiskViews.value };
-  const nextProbeViews = { ...cardProbeViews.value };
-  delete nextDiskViews[card.id];
-  delete nextProbeViews[card.id];
-  let valueText = formatMetricValue(card, view.latestValue);
-  if (card.kind === 'disk') {
-    const disk = deriveDiskCardView(data);
-    nextDiskViews[card.id] = disk;
-    valueText = disk.percent === null ? '-' : `${Math.round(disk.percent)}%`;
-  } else if (card.kind === 'networkProbe') {
-    const probe = deriveNetworkProbeCardView(data.probes);
-    nextProbeViews[card.id] = probe;
-    valueText = probe.averageLatencyMs === null ? '-' : `${probe.averageLatencyMs.toFixed(1)} ms`;
-  }
-  cardDiskViews.value = nextDiskViews;
-  cardProbeViews.value = nextProbeViews;
-  cardValues.value = { ...cardValues.value, [card.id]: valueText };
-  if (cardHasData(card, data)) {
-    if (cardErrors.value[card.id]) {
-      const nextErrors = { ...cardErrors.value };
-      delete nextErrors[card.id];
-      cardErrors.value = nextErrors;
-    }
+async function load(options: { initial?: boolean; includeUpdates?: boolean } = {}) {
+  const seq = ++loadSeq;
+  controller?.abort();
+  const request = new AbortController();
+  controller = request;
+  const initial = Boolean(options.initial) || servers.value.length === 0;
+  if (initial) {
+    pageLoading.value = true;
+    pageError.value = '';
   } else {
-    cardErrors.value = { ...cardErrors.value, [card.id]: t('overviewPage.cardEmpty') };
+    refreshing.value = true;
   }
-}
-
-function diskSecondaryValue(card: OverviewCardConfiguration) {
-  const view = cardDiskViews.value[card.id];
-  if (!view || view.usedBytes === null || view.totalBytes === null) return t('common.notAvailable');
-  return `${formatStorage(view.usedBytes)} / ${formatStorage(view.totalBytes)}`;
-}
-
-function diskSampledAt(card: OverviewCardConfiguration) {
-  const view = cardDiskViews.value[card.id];
-  return t('overviewPage.diskSampledAt', { time: formatDateTime(view?.sampledAt, t('common.never')) });
-}
-
-function probeView(card: OverviewCardConfiguration): NetworkProbeCardView | undefined {
-  return cardProbeViews.value[card.id];
-}
-
-function probeWorstText(result: NetworkProbeResult) {
-  if (result.error) return `${result.targetAddress} · ${t('overviewPage.probeFailed')}`;
-  return `${result.targetAddress} · ${result.latencyMs.toFixed(1)} ms · ${result.packetLossPercent.toFixed(0)}%`;
-}
-
-function probeMaxLossText(card: OverviewCardConfiguration) {
-  const view = cardProbeViews.value[card.id];
-  if (!view || view.maxPacketLossPercent === null) return t('common.notAvailable');
-  return `${view.maxPacketLossPercent.toFixed(0)}%`;
-}
-
-function cardSecondaryValue(card: OverviewCardConfiguration) {
-  if (card.kind === 'disk') return diskSampledAt(card);
-  if (card.kind === 'networkProbe') {
-    const view = cardProbeViews.value[card.id];
-    return view ? t('overviewPage.probeNodesCount', { count: view.nodeCount }) : t('common.notAvailable');
-  }
-  const data = cardData.value[card.id];
-  if (!data || isMessageCard(card)) return card.serverIds.length ? t('overviewPage.selectedServers') : t('overviewPage.allServers');
-  const view = cardViews.value[card.id];
-  if (!view || view.peakValue === null) return t('common.notAvailable');
-  return t('overviewPage.cardPeakValue', { value: formatMetricValue(card, view.peakValue) });
-}
-
-function cardMeta(card: OverviewCardConfiguration) {
-  const size = `${card.width}x${card.height}`;
-  const scope = card.serverIds.length
-    ? t('overviewPage.selectedServerCount', { count: card.serverIds.length })
-    : t('overviewPage.allServerCount', { count: overview.value.servers.length });
-  if (card.kind === 'disk' || card.kind === 'networkProbe') return `${size} / ${scope}`;
-  return `${size} / ${card.range} / ${scope}`;
-}
-
-function isMessageCard(card: OverviewCardConfiguration) {
-  return card.kind === 'packageUpdates' || card.kind === 'containerUpdates' || card.kind === 'placeholder';
-}
-
-/** 只有这些卡片带时序数据，可画折线图并参与增量刷新。 */
-function isChartCard(card: OverviewCardConfiguration) {
-  return card.kind === 'cpu' || card.kind === 'memory' || card.kind === 'network' || card.kind === 'diskIO';
-}
-
-function isRefreshableCard(card: OverviewCardConfiguration) {
-  return isChartCard(card) || card.kind === 'disk';
-}
-
-function shouldShowChart(card: OverviewCardConfiguration) {
-  return card.width >= 2 && card.height >= 2 && isChartCard(card);
-}
-
-function shouldShowDetail(card: OverviewCardConfiguration) {
-  return card.width >= 3 || card.height >= 3;
-}
-
-function cardChartValueKind(card: OverviewCardConfiguration) {
-  return card.kind === 'network' || card.kind === 'diskIO' ? 'bytes' as const : 'percent' as const;
-}
-
-function normalizeCardSize(card: OverviewCardConfiguration): OverviewCardConfiguration {
-  return {
-    ...card,
-    width: clampInteger(card.width, 1, 6),
-    height: clampInteger(card.height, 1, 4),
-    serverIds: [...card.serverIds],
-  };
-}
-
-function sameCardConfig(
-  card: OverviewCardConfiguration,
-  expected: { kind: OverviewCardKind; range: OverviewCardRange; networkDirection?: string; serverIds: string[] },
-) {
-  return card.kind === expected.kind
-    && card.range === expected.range
-    && card.networkDirection === expected.networkDirection
-    && JSON.stringify(card.serverIds) === JSON.stringify(expected.serverIds);
-}
-
-function invalidateCardRequests() {
-  cardRequestSeq += 1;
-  cardRequests.clear();
-  cardLoading.value = {};
-}
-
-function clampInteger(value: number, min: number, max: number) {
-  const next = Number.isFinite(value) ? Math.round(value) : min;
-  return Math.min(max, Math.max(min, next));
-}
-
-function updateCardWidth(card: OverviewCardConfiguration, value: string) {
-  card.width = clampInteger(Number(value), 1, 6);
-}
-
-function updateCardHeight(card: OverviewCardConfiguration, value: string) {
-  card.height = clampInteger(Number(value), 1, 4);
-}
-
-function updateCardKind(card: OverviewCardConfiguration, value: string) {
-  card.kind = value as OverviewCardKind;
-  card.width = defaultWidth(card.kind);
-  card.height = defaultHeight(card.kind);
-  void loadCard(card.id);
-}
-
-function defaultWidth(kind: OverviewCardKind) {
-  if (kind === 'network' || kind === 'diskIO') return 6;
-  if (kind === 'packageUpdates' || kind === 'containerUpdates') return 2;
-  return 3;
-}
-
-function defaultHeight(kind: OverviewCardKind) {
-  if (kind === 'packageUpdates' || kind === 'containerUpdates') return 1;
-  return 2;
-}
-
-function formatBytes(value: number) {
-  if (!value) return '0 B/s';
-  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s', 'TB/s'];
-  let unitIndex = 0;
-  let scaled = value;
-  while (scaled >= 1024 && unitIndex < units.length - 1) {
-    scaled /= 1024;
-    unitIndex += 1;
-  }
-  return `${scaled >= 100 ? scaled.toFixed(0) : scaled.toFixed(1)} ${units[unitIndex]}`;
-}
-
-function formatStorage(value: number) {
-  if (value >= 1024 ** 4) return `${(value / 1024 ** 4).toFixed(1)} TiB`;
-  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GiB`;
-  if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MiB`;
-  return `${Math.round(value)} B`;
-}
-
-/** 磁盘当前值与网络探测摘要没有时间序列/流量方向，编辑弹窗不展示对应字段。 */
-function showsCardRange(card: OverviewCardConfiguration) {
-  return card.kind !== 'disk' && card.kind !== 'networkProbe';
-}
-
-function startAutoRefresh() {
-  stopAutoRefresh();
-  if (!autoRefreshEnabled.value) return;
-  autoRefreshTimer = window.setInterval(() => {
-    if (document.visibilityState === 'visible') void refreshCardDeltas();
-  }, autoRefreshIntervalMs.value);
-}
-
-function stopAutoRefresh() {
-  if (autoRefreshTimer !== undefined) {
-    window.clearInterval(autoRefreshTimer);
-    autoRefreshTimer = undefined;
-  }
-}
-
-function latestPointTime(card: OverviewCardConfiguration, data: OverviewCardData): string | undefined {
-  let latest: string | undefined;
-  const newer = (time?: string) => {
-    if (time && (!latest || Date.parse(time) > Date.parse(latest))) latest = time;
-  };
-  for (const series of Object.values(data.metricsByServer)) {
-    if (card.kind === 'disk') {
-      // 磁盘当前值也参与增量刷新：用最近采样时间作为增量起点。
-      newer(series.diskCurrent?.time);
-      continue;
-    }
-    const points = card.kind === 'cpu' ? series.cpu : card.kind === 'memory' ? series.memory : card.kind === 'diskIO' ? series.diskIo : series.network;
-    for (const point of points ?? []) newer(point.time);
-  }
-  return latest;
-}
-
-async function refreshCardDeltas() {
-  if (autoRefreshInFlight || editMode.value || cardEditorOpen.value) return;
-  autoRefreshInFlight = true;
   try {
-    for (const card of cards.value) {
-      if (!isRefreshableCard(card) || cardLoading.value[card.id] || !cardData.value[card.id]) continue;
-      const data = cardData.value[card.id];
-      if (!data || !cardHasData(card, data)) continue;
-      const since = latestPointTime(card, data);
-      if (!since) continue;
-      const cardAtStart = {
-        kind: card.kind,
-        range: card.range,
-        networkDirection: card.networkDirection,
-        serverIds: [...card.serverIds],
-      };
-      const requestId = ++cardRequestSeq;
-      cardRequests.set(card.id, requestId);
-      try {
-        const delta = await overviewApi.getCardData(card.id, since);
-        if (cardRequests.get(card.id) !== requestId) continue;
-        const currentCard = cards.value.find((item) => item.id === card.id);
-        if (!currentCard || !sameCardConfig(currentCard, cardAtStart)) continue;
-        const existing = cardData.value[card.id];
-        if (!existing) continue;
-        if (delta.bucketSeconds !== existing.bucketSeconds) {
-          // 服务器数量变化会改变桶网格，混用两种粒度会画出错误曲线，整卡重载一次。
-          void loadCard(card.id);
-          continue;
-        }
-        const merged = mergeCardData(existing, delta);
-        const trimmed = trimCardDataToRange(merged);
-        if (latestPointTime(card, merged) && !latestPointTime(card, trimmed)) {
-          // The whole visible window expired without fresh points; reload the range once.
-          void loadCard(card.id);
-          continue;
-        }
-        applyCardData(card, trimmed);
-      } catch {
-        // Keep the existing points and retry on the next tick.
-      } finally {
-        if (cardRequests.get(card.id) === requestId) cardRequests.delete(card.id);
-      }
-    }
+    const [serversResult, configResult] = await Promise.allSettled([
+      serversApi.list({ signal: request.signal }),
+      networkProbeFacilityApi.config({ signal: request.signal }),
+    ]);
+    if (seq !== loadSeq) return;
+    if (serversResult.status === 'rejected') throw serversResult.reason;
+    servers.value = serversResult.value;
+    probeConfig.value = configResult.status === 'fulfilled' ? configResult.value : null;
+
+    const candidates = probeCandidateIds(probeConfig.value, servers.value);
+    const requested = route.query.probe === undefined ? '' : String(route.query.probe);
+    const nextSource = candidates.includes(probeSourceId.value)
+      ? probeSourceId.value
+      : candidates.includes(requested)
+        ? requested
+        : candidates[0] ?? '';
+    probeSourceId.value = nextSource;
+    syncProbeQuery(nextSource);
+
+    await Promise.all([
+      loadProbeResults(nextSource, request.signal),
+      loadServerDetails(servers.value, { signal: request.signal, includeUpdates: Boolean(options.includeUpdates) }),
+    ]);
+  } catch (err) {
+    if (isAbortError(err) || seq !== loadSeq) return;
+    const message = err instanceof Error ? err.message : t('common.loadFailed');
+    if (initial) pageError.value = message;
+    else notifyError(message, err);
   } finally {
-    autoRefreshInFlight = false;
+    if (seq === loadSeq) {
+      pageLoading.value = false;
+      refreshing.value = false;
+    }
   }
 }
 
-watch(autoRefreshMode, startAutoRefresh, { immediate: true });
-watch(editMode, (editing) => {
-  if (editing) {
-    stopAutoRefresh();
-  } else if (autoRefreshEnabled.value) {
-    startAutoRefresh();
+async function loadProbeResults(sourceId: string, signal: AbortSignal) {
+  const seq = ++probeSeq;
+  if (!sourceId) {
+    probeResults.value = null;
+    return;
   }
-});
+  try {
+    const result = await serversApi.networkProbes(sourceId, { signal }, true);
+    if (seq !== probeSeq) return;
+    probeResults.value = result;
+  } catch (err) {
+    // 探测结果失败只让相关卡片显示占位，不阻断页面其它数据。
+    if (isAbortError(err) || seq !== probeSeq) return;
+  }
+}
 
-onMounted(load);
-onBeforeUnmount(() => {
-  stopResize();
-  stopAutoRefresh();
+async function loadServerDetails(items: ServerDto[], options: { signal: AbortSignal; includeUpdates: boolean }) {
+  const nextMetrics: Record<string, ServerMetricsSeries | undefined> = {};
+  const nextErrors = new Set<string>();
+  const nextPackages = { ...packageUpdatesById.value };
+  const nextImages = { ...imageUpdatesById.value };
+  await forEachWithConcurrency(items, 6, async (server) => {
+    if (options.signal.aborted) return;
+    const jobs: Promise<unknown>[] = [
+      serversApi.metricsBucketed(server.id, '1d', 1800, { signal: options.signal })
+        .then((series) => { nextMetrics[server.id] = series; })
+        .catch((err) => { if (!isAbortError(err)) nextErrors.add(server.id); }),
+    ];
+    if (options.includeUpdates) {
+      jobs.push(packagesApi.updates(server.id, { signal: options.signal })
+        .then((list) => { nextPackages[server.id] = list.updates.length; })
+        .catch((err) => { if (!isAbortError(err)) nextPackages[server.id] = null; }));
+      jobs.push(containersApi.images(server.id, { signal: options.signal })
+        .then((list) => { nextImages[server.id] = list.items.filter((item) => item.updateAvailable).length; })
+        .catch((err) => { if (!isAbortError(err)) nextImages[server.id] = null; }));
+    }
+    await Promise.all(jobs);
+  });
+  if (options.signal.aborted) return;
+  metricsById.value = nextMetrics;
+  metricsErrorIds.value = nextErrors;
+  if (options.includeUpdates) {
+    packageUpdatesById.value = nextPackages;
+    imageUpdatesById.value = nextImages;
+  }
+}
+
+async function forEachWithConcurrency<T>(items: T[], limit: number, worker: (item: T) => Promise<void>) {
+  const queue = [...items];
+  const runners = Array.from({ length: Math.min(limit, queue.length) }, async () => {
+    for (;;) {
+      const item = queue.shift();
+      if (item === undefined) return;
+      await worker(item);
+    }
+  });
+  await Promise.all(runners);
+}
+
+function changeProbeSource(value: string) {
+  probeSourceId.value = value;
+  syncProbeQuery(value);
+  const request = new AbortController();
+  void loadProbeResults(value, request.signal);
+}
+
+function manualRefresh() {
+  void load({ includeUpdates: true });
+}
+
+onMounted(() => {
+  void load({ initial: true, includeUpdates: true });
+  autoRefresh.start(() => load({ includeUpdates: false }));
 });
 </script>
 
 <template>
   <ConsolePage :title="t('routes.overview.title')" :description="t('routes.overview.description')">
     <template #actions>
+      <div class="flex min-w-0 items-center gap-1.5">
+        <span class="shrink-0 text-xs text-muted-foreground">{{ t('overviewPage.probeSource') }}</span>
+        <Select
+          class="min-w-[9rem]"
+          :model-value="probeSourceId"
+          :options="probeSourceOptions"
+          :disabled="probeSourceOptions.length === 0"
+          :placeholder="t('overviewPage.probeSourcePlaceholder')"
+          :aria-label="t('overviewPage.probeSource')"
+          @update:model-value="changeProbeSource"
+        />
+      </div>
       <AutoRefreshControl
         :off-label="t('autoRefresh.off')"
         :short-label="t('autoRefresh.5s')"
         :long-label="t('autoRefresh.10s')"
         :hint-label="t('autoRefresh.hint')"
       />
-      <Button size="sm" :loading="loading" @click="load">
+      <Button size="sm" :loading="refreshing" @click="manualRefresh">
         <RefreshCcw />
         {{ t('common.refresh') }}
       </Button>
-      <Button size="sm" variant="primary" :loading="saving" @click="toggleEditMode">
-        <Check v-if="editMode" />
-        <Pencil v-else />
-        {{ editMode ? t('overviewPage.saveDashboard') : t('overviewPage.editDashboard') }}
-      </Button>
     </template>
 
-    <div class="overview-layout grid h-full min-h-0 min-w-0 gap-3 overflow-hidden max-xl:overflow-x-hidden max-xl:overflow-y-auto">
-      <main class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] gap-3">
-        <section class="overview-status-band relative min-w-0 overflow-hidden rounded-xl border border-border bg-card" :aria-label="t('routes.overview.title')">
-          <span class="pointer-events-none absolute inset-x-0 top-0 z-[1] h-0.5 bg-brand" aria-hidden="true" />
-          <div class="overview-status-grid grid min-w-0">
-            <div class="min-w-0 px-4 py-3">
-              <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.healthSummary') }}</span>
-              <strong class="mt-1 block text-[1.625rem] font-semibold leading-none tracking-tight text-foreground">{{ summary.reachable }}/{{ summary.total }}</strong>
-              <p class="m-0 mt-1.5 text-xs leading-4 text-secondary-foreground">{{ t('overviewPage.reachableHosts') }}</p>
-            </div>
-            <div class="min-w-0 px-4 py-3">
-              <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.capacitySummary') }}</span>
-              <strong class="mt-1 block text-[1.625rem] font-semibold leading-none tracking-tight text-foreground">{{ summary.fresh }}/{{ summary.total }}</strong>
-              <p class="m-0 mt-1.5 text-xs leading-4 text-secondary-foreground">{{ t('overviewPage.freshMetrics') }}</p>
-            </div>
-            <div class="min-w-0 px-4 py-3">
-              <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.taskSummary') }}</span>
-              <strong class="mt-1 block text-[1.625rem] font-semibold leading-none tracking-tight text-foreground">{{ summary.updates }}</strong>
-              <p class="m-0 mt-1.5 text-xs leading-4 text-secondary-foreground">{{ t('overviewPage.pendingUpdates') }}</p>
-            </div>
-            <div class="min-w-0 px-4 py-3">
-              <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.securitySummary') }}</span>
-              <strong class="mt-1 block text-[1.625rem] font-semibold leading-none tracking-tight text-foreground">{{ summary.supported }}/{{ summary.total }}</strong>
-              <p class="m-0 mt-1.5 text-xs leading-4 text-secondary-foreground">{{ t('overviewPage.supportedHosts') }}</p>
-            </div>
-          </div>
-        </section>
-
-        <section class="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden">
-          <div v-if="loading && cards.length === 0" class="grid min-w-0 gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(240px,100%),1fr))]">
-            <Skeleton v-for="item in 6" :key="item" class="h-40" />
-          </div>
-          <EmptyState v-else-if="pageError" :title="t('common.loadFailed')" :description="pageError">
-            <template #actions>
-              <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
-            </template>
-          </EmptyState>
-          <EmptyState v-else-if="overview.servers.length === 0" :title="t('overviewPage.noServersConnected')" :description="t('overviewPage.addServerHint')">
-            <template #actions>
-              <Button variant="primary" @click="router.push('/servers')">
-                <Server />
-                {{ t('overviewPage.addServer') }}
-              </Button>
-            </template>
-          </EmptyState>
-          <div v-else-if="editMode" class="mb-3 grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-2 max-sm:grid-cols-1">
-            <Select v-model="newCardKind" :options="kindOptions" />
-            <Button @click="addCard"><Plus />{{ t('overviewPage.addCard') }}</Button>
-            <Button variant="ghost" @click="resetCards">{{ t('overviewPage.resetCards') }}</Button>
-            <Button variant="secondary" @click="cancelEdit">{{ t('overviewPage.cancelEdit') }}</Button>
-          </div>
-          <div v-if="overview.servers.length > 0" ref="overviewGrid" class="motion-stagger overview-card-grid grid min-w-0 gap-3" :class="editMode ? 'is-editing' : undefined">
-            <article
-              v-for="card in cards"
-              :key="card.id"
-              class="motion-reveal overview-card relative grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-border bg-card"
-              :class="[
-                card.kind === 'placeholder' ? 'border-dashed bg-muted/30' : '',
-                editMode ? 'motion-card cursor-move ring-1 ring-primary/20' : '',
-                draggingCardId === card.id ? 'opacity-45' : '',
-                dragPreviewTargetId === card.id && draggingCardId !== card.id ? 'border-primary ring-2 ring-primary/30' : '',
-              ]"
-              :style="{ '--overview-card-w': String(card.width), '--overview-card-w-tablet': String(Math.min(card.width, 3)), '--overview-card-h': String(card.height) }"
-              :draggable="editMode"
-              @dragstart="onCardDragStart(card.id, $event)"
-              @dragend="onCardDragEnd"
-              @dragover="onCardDragOver(card.id, $event)"
-              @drop.prevent="onCardDrop"
-            >
-              <div v-if="editMode" class="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-xl border border-border bg-popover/95 p-1 shadow-sm">
-                <button type="button" class="grid size-7 place-items-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground" :title="t('overviewPage.moveCard')">
-                  <Grip class="size-4" aria-hidden="true" />
-                </button>
-                <button type="button" class="grid size-7 place-items-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground" :title="t('overviewPage.editCard')" @click.stop="openCardEditor(card.id)">
-                  <Pencil class="size-4" aria-hidden="true" />
-                </button>
-                <button type="button" class="grid size-7 place-items-center rounded-lg text-danger hover:bg-danger-bg" :title="t('overviewPage.deleteCard')" @click.stop="confirmRemoveCard(card.id)">
-                  <Trash2 class="size-4" aria-hidden="true" />
-                </button>
-              </div>
-              <div class="flex min-h-10 items-center justify-between gap-3 border-b border-border px-3.5 py-2">
-                <div class="min-w-0">
-                  <h3 class="m-0 flex min-w-0 items-center gap-1.5 truncate text-sm font-semibold text-foreground">
-                    <component :is="cardIcon(card.kind)" class="size-3.5 shrink-0 text-secondary-foreground" aria-hidden="true" />
-                    <span class="truncate">{{ cardTitle(card) }}</span>
-                  </h3>
-                  <p class="m-0 truncate text-[11px] leading-4 text-muted-foreground">{{ cardMeta(card) }}</p>
-                </div>
-                <Badge v-if="!editMode" class="shrink-0" :tone="cardTone(card)">{{ cardErrors[card.id] ? t('overviewPage.partial') : t('overviewPage.live') }}</Badge>
-              </div>
-              <div class="overview-card-body relative grid min-h-0 gap-1.5 overflow-hidden px-3.5 py-2.5" :class="shouldShowChart(card) ? 'is-chart-primary' : 'is-value-primary'">
-                <LoadingOverlay v-if="cardLoading[card.id]" :label="t('overviewPage.loadingCard')" />
-                <span v-else-if="cardErrors[card.id]" class="line-clamp-2 text-sm leading-6 text-danger">{{ cardErrors[card.id] }}</span>
-                <!-- 磁盘卡只有当前值：用量/总量与采样时间，不画历史曲线。 -->
-                <div v-else-if="card.kind === 'disk'" class="overview-card-value is-primary min-w-0">
-                  <span class="text-[11px] font-medium text-muted-foreground">{{ t('overviewPage.diskUsageCurrent') }}</span>
-                  <strong class="block truncate tracking-tight text-foreground" :class="card.width <= 1 ? 'text-2xl' : 'text-[1.75rem] leading-none'">{{ cardValues[card.id] || derivedCardValue(card) }}</strong>
-                  <span v-if="card.height >= 2" class="block truncate text-xs text-secondary-foreground">{{ diskSecondaryValue(card) }}</span>
-                  <span v-if="card.height >= 2" class="block truncate text-[11px] text-muted-foreground">{{ diskSampledAt(card) }}</span>
-                </div>
-                <!-- 网络探测卡：节点数、平均延迟、最大丢包与最差结果摘要。 -->
-                <div v-else-if="card.kind === 'networkProbe'" class="grid min-w-0 content-start gap-1.5">
-                  <div class="flex items-baseline justify-between gap-2">
-                    <strong class="truncate text-[1.75rem] leading-none tracking-tight text-foreground">{{ cardValues[card.id] || derivedCardValue(card) }}</strong>
-                    <span class="truncate text-[11px] text-muted-foreground">{{ t('overviewPage.probeAverageLatency') }}</span>
-                  </div>
-                  <dl v-if="card.height >= 2" class="m-0 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-                    <div class="min-w-0">
-                      <dt class="truncate text-muted-foreground">{{ t('overviewPage.probeNodes') }}</dt>
-                      <dd class="m-0 font-semibold tabular-nums text-foreground">{{ probeView(card)?.nodeCount ?? 0 }}</dd>
-                    </div>
-                    <div class="min-w-0">
-                      <dt class="truncate text-muted-foreground">{{ t('overviewPage.probeMaxLoss') }}</dt>
-                      <dd class="m-0 font-semibold tabular-nums text-foreground">{{ probeMaxLossText(card) }}</dd>
-                    </div>
-                  </dl>
-                  <div v-if="card.height >= 2 && probeView(card)?.worst.length" class="grid min-w-0 gap-0.5 border-t border-border pt-1.5">
-                    <span class="truncate text-[11px] text-muted-foreground">{{ t('overviewPage.probeWorst') }}</span>
-                    <span v-for="item in (probeView(card)?.worst ?? [])" :key="`${item.sourceServerId}:${item.targetServerId}`" class="truncate text-[11px] leading-4 text-secondary-foreground">{{ probeWorstText(item) }}</span>
-                  </div>
-                  <p v-else-if="card.height >= 2" class="m-0 text-xs text-secondary-foreground">{{ t('overviewPage.probeEmpty') }}</p>
-                </div>
-                <template v-else>
-                  <div v-if="shouldShowChart(card) && cardViews[card.id]" class="overview-chart-stage min-h-0 min-w-0">
-                    <MetricLineChart
-                      :labels="cardViews[card.id]?.labels ?? emptyChartLabels"
-                      :series="cardViews[card.id]?.series ?? emptyChartSeries"
-                      :value-kind="cardChartValueKind(card)"
-                    />
-                  </div>
-                  <div class="overview-card-value min-w-0" :class="shouldShowChart(card) ? 'is-supporting' : 'is-primary'">
-                    <span v-if="shouldShowChart(card)" class="text-[11px] font-medium text-muted-foreground">{{ t('overviewPage.live') }}</span>
-                    <strong class="block truncate tracking-tight text-foreground" :class="shouldShowChart(card) ? 'text-base' : card.width <= 1 ? 'text-2xl' : 'text-[1.75rem] leading-none'">{{ cardValues[card.id] || derivedCardValue(card) }}</strong>
-                    <span v-if="shouldShowDetail(card) || shouldShowChart(card)" class="block truncate text-xs text-secondary-foreground">{{ cardSecondaryValue(card) }}</span>
-                  </div>
-                </template>
-              </div>
-              <button
-                v-if="editMode"
-                type="button"
-                class="absolute bottom-2 right-2 grid size-8 touch-none place-items-center rounded-xl border border-border bg-popover text-muted-foreground shadow-sm hover:bg-accent hover:text-foreground"
-                :title="t('overviewPage.resizeCard')"
-                @pointerdown="startResize(card, $event)"
-              >
-                <Grip class="size-4 rotate-45" aria-hidden="true" />
-              </button>
-            </article>
-          </div>
-        </section>
-      </main>
-
-      <aside class="flex min-h-0 min-w-0 flex-col gap-3 overflow-hidden max-xl:overflow-visible">
-        <section class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-card max-xl:flex-none">
-          <div class="flex shrink-0 items-center justify-between border-b border-border px-3.5 py-2">
-            <h2 class="m-0 text-sm font-semibold text-foreground">{{ t('overviewPage.riskQueue') }}</h2>
-            <Badge :tone="risks.some((item) => item.tone === 'danger') ? 'danger' : risks.length ? 'warning' : 'success'">{{ risks.length }}</Badge>
-          </div>
-          <div v-if="risks.length" class="motion-stagger min-h-0 flex-1 overflow-y-auto divide-y divide-border">
-            <button
-              v-for="risk in risks"
-              :key="risk.id"
-              type="button"
-              class="motion-list-item relative grid min-w-0 gap-0.5 py-2.5 pl-3.5 pr-3 text-left hover:bg-accent"
-              @click="router.push(risk.to)"
-            >
-              <span
-                class="absolute inset-y-1.5 left-0 w-[3px] rounded-r-full"
-                :class="{
-                  'bg-danger': risk.tone === 'danger',
-                  'bg-warning': risk.tone === 'warning',
-                  'bg-info': risk.tone === 'info',
-                }"
-                aria-hidden="true"
-              />
-              <div class="flex min-w-0 items-center justify-between gap-2">
-                <strong class="truncate text-sm font-medium text-foreground">{{ risk.title }}</strong>
-                <Badge class="shrink-0" :tone="risk.tone">{{ t(`overviewPage.risk.${risk.tone}`) }}</Badge>
-              </div>
-              <span class="line-clamp-2 min-w-0 text-xs leading-4 text-secondary-foreground">{{ t(risk.description) }}</span>
-            </button>
-          </div>
-          <p v-else class="m-0 px-3.5 py-3 text-sm text-secondary-foreground">{{ t('overviewPage.noRisks') }}</p>
-        </section>
-
-        <section class="shrink-0 overflow-hidden rounded-xl border border-border bg-card">
-          <div class="border-b border-border px-3.5 py-2">
-            <h2 class="m-0 text-sm font-semibold text-foreground">{{ t('overviewPage.quickEntry') }}</h2>
-          </div>
-          <div class="grid divide-y divide-border">
-            <button type="button" class="motion-list-item flex min-w-0 items-center gap-2 px-3.5 py-2 text-left text-sm text-foreground hover:bg-accent" @click="router.push('/servers')">
-              <Server class="size-3.5 shrink-0 text-secondary-foreground" aria-hidden="true" />
-              <span class="min-w-0 flex-1 truncate">{{ t('routes.servers.title') }}</span>
-              <ChevronRight class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-            </button>
-            <button type="button" class="motion-list-item flex min-w-0 items-center gap-2 px-3.5 py-2 text-left text-sm text-foreground hover:bg-accent" @click="router.push('/credentials')">
-              <ShieldCheck class="size-3.5 shrink-0 text-secondary-foreground" aria-hidden="true" />
-              <span class="min-w-0 flex-1 truncate">{{ t('routes.credentials.title') }}</span>
-              <ChevronRight class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-            </button>
-            <button type="button" class="motion-list-item flex min-w-0 items-center gap-2 px-3.5 py-2 text-left text-sm text-foreground hover:bg-accent" @click="router.push('/servers')">
-              <Boxes class="size-3.5 shrink-0 text-secondary-foreground" aria-hidden="true" />
-              <span class="min-w-0 flex-1 truncate">{{ t('routes.packages.title') }}</span>
-              <ChevronRight class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-            </button>
-            <button type="button" class="motion-list-item flex min-w-0 items-center gap-2 px-3.5 py-2 text-left text-sm text-foreground hover:bg-accent" @click="router.push('/logs')">
-              <Activity class="size-3.5 shrink-0 text-secondary-foreground" aria-hidden="true" />
-              <span class="min-w-0 flex-1 truncate">{{ t('routes.logs.title') }}</span>
-              <ChevronRight class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-            </button>
-          </div>
-        </section>
-      </aside>
-    </div>
-
-    <ConfirmDialog
-      :open="Boolean(deleteCardTarget)"
-      :title="t('overviewPage.deleteCard')"
-      :impact="t('overviewPage.deleteCardImpact')"
-      tone="danger"
-      :confirm-label="t('common.delete')"
-      :cancel-label="t('common.cancel')"
-      :checkbox-label="t('common.confirm')"
-      @update:open="(value) => { if (!value) deleteCardTarget = null }"
-      @confirm="deleteCardTarget && removeCard(deleteCardTarget)"
-      @cancel="deleteCardTarget = null"
-    />
-
-    <ConfirmDialog
-      :open="leaveConfirmOpen"
-      :title="t('overviewPage.leaveEditTitle')"
-      :description="t('overviewPage.leaveEditDescription')"
-      tone="warning"
-      :confirm-label="t('common.discard')"
-      :cancel-label="t('common.cancel')"
-      :checkbox-label="t('common.confirm')"
-      @update:open="(value) => { if (!value) leaveConfirmOpen = false }"
-      @confirm="leaveConfirmOpen = false; confirmLeave()"
-      @cancel="leaveConfirmOpen = false"
-    />
-
-    <Dialog v-model:open="cardEditorOpen" :title="t('overviewPage.editCard')" :description="t('overviewPage.cardEditDescription')" :close-label="t('common.close')">
-      <div v-if="editingCard" class="grid gap-3">
-        <label class="grid gap-1">
-          <span class="text-xs font-medium text-muted-foreground">{{ t('common.type') }}</span>
-          <Select :model-value="editingCard.kind" :options="kindOptions" @update:model-value="updateCardKind(editingCard, $event)" />
-        </label>
-        <div class="grid grid-cols-2 gap-2">
-          <label class="grid gap-1">
-            <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.cardWidth') }}</span>
-            <Select :model-value="String(editingCard.width)" :options="widthOptions" @update:model-value="updateCardWidth(editingCard, $event)" />
-          </label>
-          <label class="grid gap-1">
-            <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.cardHeight') }}</span>
-            <Select :model-value="String(editingCard.height)" :options="heightOptions" @update:model-value="updateCardHeight(editingCard, $event)" />
-          </label>
+    <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 max-xl:block max-xl:h-auto">
+      <section class="min-w-0 rounded-xl border border-border bg-card p-3" data-testid="node-summary">
+        <div class="flex items-center justify-between gap-2">
+          <h2 class="m-0 flex items-center gap-1.5 text-sm font-semibold text-foreground">
+            <ServerIcon class="size-3.5 text-secondary-foreground" aria-hidden="true" />
+            {{ t('overviewPage.nodeStatus') }}
+          </h2>
+          <Badge :tone="nodeSummary.offline ? 'warning' : 'success'">{{ onlinePercent }}%</Badge>
         </div>
-        <div v-if="showsCardRange(editingCard)" class="grid gap-2" :class="editingCard.kind === 'network' ? 'grid-cols-2' : 'grid-cols-1'">
-          <label class="grid gap-1">
-            <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.cardRange') }}</span>
-            <Select :model-value="editingCard.range" :options="rangeOptions" @update:model-value="updateCardRange(editingCard, $event)" />
-          </label>
-          <label v-if="editingCard.kind === 'network'" class="grid gap-1">
-            <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.cardDirection') }}</span>
-            <Select :model-value="editingCard.networkDirection" :options="directionOptions" @update:model-value="editingCard.networkDirection = $event as any" />
-          </label>
-        </div>
-        <div class="grid gap-2">
-          <div>
-            <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.cardServers') }}</span>
-            <p class="m-0 mt-1 text-xs leading-5 text-muted-foreground">{{ t('overviewPage.cardServersHint') }}</p>
+        <div class="mt-3 grid grid-cols-3 divide-x divide-border">
+          <div class="min-w-0 pr-3">
+            <span class="block text-xs text-muted-foreground">{{ t('overviewPage.totalNodes') }}</span>
+            <strong class="mt-1 block text-2xl font-semibold leading-none text-foreground">{{ nodeSummary.total }}</strong>
           </div>
-          <ServerMultiPicker v-model="editingCard.serverIds" :servers="serverOptions" :label="t('overviewPage.cardServers')" />
+          <div class="min-w-0 px-3">
+            <span class="block text-xs text-muted-foreground">{{ t('overviewPage.onlineNodes') }}</span>
+            <strong class="mt-1 block text-2xl font-semibold leading-none text-success">{{ nodeSummary.online }}</strong>
+          </div>
+          <div class="min-w-0 pl-3">
+            <span class="block text-xs text-muted-foreground">{{ t('overviewPage.offlineNodes') }}</span>
+            <strong class="mt-1 block text-2xl font-semibold leading-none" :class="nodeSummary.offline ? 'text-danger' : 'text-foreground'">{{ nodeSummary.offline }}</strong>
+          </div>
+        </div>
+        <div class="mt-3 flex h-1.5 overflow-hidden rounded-full bg-muted" role="img" :aria-label="`${t('overviewPage.nodeStatus')}: ${onlinePercent}%`">
+          <span class="bg-success" :style="{ width: `${nodeSummary.total ? (nodeSummary.online / nodeSummary.total) * 100 : 0}%` }" />
+          <span class="bg-warning" :style="{ width: `${nodeSummary.total ? (nodeSummary.stale / nodeSummary.total) * 100 : 0}%` }" />
+          <span class="bg-danger" :style="{ width: `${nodeSummary.total ? (nodeSummary.offline / nodeSummary.total) * 100 : 0}%` }" />
+        </div>
+        <p class="m-0 mt-2 text-xs text-muted-foreground">
+          {{ t('overviewPage.freshMetrics') }} {{ nodeSummary.fresh }}/{{ nodeSummary.total }}
+        </p>
+      </section>
+
+      <div class="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden max-xl:overflow-visible">
+        <div v-if="pageLoading && servers.length === 0" class="grid gap-3 sm:grid-cols-2">
+          <Skeleton v-for="item in 6" :key="item" class="h-52" />
+        </div>
+        <EmptyState v-else-if="pageError && servers.length === 0" :title="t('common.loadFailed')" :description="pageError">
+          <template #actions>
+            <Button size="sm" :loading="pageLoading" @click="load({ initial: true, includeUpdates: true })">{{ t('common.retry') }}</Button>
+          </template>
+        </EmptyState>
+        <EmptyState v-else-if="servers.length === 0" :title="t('overviewPage.noServersConnected')" :description="t('overviewPage.addServerHint')">
+          <template #actions>
+            <Button variant="primary" @click="router.push('/servers')">
+              <ServerIcon />
+              {{ t('overviewPage.addServer') }}
+            </Button>
+          </template>
+        </EmptyState>
+        <div v-else class="grid gap-3 sm:grid-cols-2">
+          <ServerCard v-for="card in cards" :key="card.server.id" :card="card" />
         </div>
       </div>
-      <template #footer>
-        <Button variant="secondary" @click="closeCardEditor">{{ t('common.close') }}</Button>
-      </template>
-    </Dialog>
+    </div>
   </ConsolePage>
 </template>
-
-<style scoped>
-.overview-layout {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.overview-status-grid {
-  grid-template-columns: 1fr;
-}
-
-.overview-status-grid > * + * {
-  border-top: 1px solid var(--panel-border);
-}
-
-@media (min-width: 640px) {
-  .overview-status-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .overview-status-grid > * {
-    border-top: none;
-  }
-
-  .overview-status-grid > *:nth-child(odd) {
-    border-right: 1px solid var(--panel-border);
-  }
-
-  .overview-status-grid > *:nth-child(n + 3) {
-    border-top: 1px solid var(--panel-border);
-  }
-}
-
-@media (min-width: 1280px) {
-  .overview-status-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
-  .overview-status-grid > * {
-    border-top: none !important;
-    border-right: 1px solid var(--panel-border);
-  }
-
-  .overview-status-grid > *:last-child {
-    border-right: none;
-  }
-}
-
-.overview-card-grid {
-  container-type: inline-size;
-  grid-auto-flow: dense;
-  grid-auto-rows: 112px;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-}
-
-.overview-card {
-  grid-column: span var(--overview-card-w);
-  grid-row: span var(--overview-card-h);
-}
-
-.overview-card-body.is-chart-primary {
-  grid-template-rows: minmax(0, 1fr) auto;
-  align-content: stretch;
-}
-
-.overview-card-body.is-value-primary {
-  align-content: center;
-}
-
-.overview-chart-stage {
-  min-height: 96px;
-}
-
-.overview-card-value.is-supporting {
-  display: grid;
-  grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr);
-  align-items: baseline;
-  gap: 8px;
-}
-
-.overview-card-value.is-supporting strong {
-  line-height: 1.1;
-}
-
-.overview-card-value.is-supporting span:last-child {
-  min-width: 0;
-}
-
-.overview-card-value.is-primary {
-  display: block;
-}
-
-@media (max-width: 1024px) {
-  .overview-card-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .overview-card {
-    grid-column: span var(--overview-card-w-tablet);
-  }
-}
-
-@media (min-width: 1280px) {
-  .overview-layout {
-    grid-template-columns: minmax(0, 1fr) minmax(220px, min(28%, 320px));
-  }
-}
-
-@media (max-width: 640px) {
-  .overview-card-grid {
-    grid-auto-rows: 108px;
-    grid-template-columns: 1fr;
-  }
-
-  .overview-card {
-    grid-column: span 1;
-  }
-
-  .overview-card-value.is-supporting {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 2px;
-  }
-}
-</style>

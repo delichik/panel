@@ -3,6 +3,7 @@ package metrics
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"time"
 
@@ -36,6 +37,24 @@ type Series struct {
 	// DiskCurrent 是范围内最后一次有效磁盘采样（disk_total_bytes > 0）。
 	// 磁盘使用率不再提供历史曲线，只返回当前值；nil 表示范围内没有有效采样。
 	DiskCurrent *MemoryPoint `json:"diskCurrent"`
+	// Latest 是最新原始指标样本，供降采样（bucket）查询一次取回“当前值”。
+	// 仅 QueryBucketed 填充；原始 Query/QueryAfter 保持 nil，响应不出现该字段。
+	Latest *LatestSample `json:"latest,omitempty"`
+}
+
+// LatestSample 是一台服务器最新一条原始指标样本，语义上等价于原始查询的最后
+// 一个点，但由降采样响应一并返回，避免前端为当前值再发一次原始请求。
+type LatestSample struct {
+	Time             time.Time  `json:"time"`
+	CPUUsagePercent  float64    `json:"cpuUsagePercent"`
+	MemoryUsedBytes  int64      `json:"memoryUsedBytes"`
+	MemoryTotalBytes int64      `json:"memoryTotalBytes"`
+	DiskUsedBytes    int64      `json:"diskUsedBytes"`
+	DiskTotalBytes   int64      `json:"diskTotalBytes"`
+	DiskSampledAt    *time.Time `json:"diskSampledAt"`
+	Load1            float64    `json:"load1"`
+	NetworkRXBps     float64    `json:"rxBytesPerSecond"`
+	NetworkTXBps     float64    `json:"txBytesPerSecond"`
 }
 
 // SeriesFields 选择批量查询需要物化的指标序列，避免概览卡片为不使用的序列付出
@@ -197,6 +216,110 @@ func (s *Service) querySince(ctx context.Context, serverID, rng string, hasAfter
 		}
 	}
 	return series, nil
+}
+
+// QueryBucketed 返回单台服务器的降采样指标序列：按 bucketSeconds 聚合原始采样
+// （Unix 纪元对齐的固定时间桶取平均值），使响应点数只与时间范围有关；同时在
+// Latest 中附带最新原始样本的当前值，避免前端为“当前值”再发一次原始请求。
+// 空数据返回空数组且 Latest 为 nil。
+func (s *Service) QueryBucketed(ctx context.Context, serverID, rng string, bucketSeconds int) (Series, error) {
+	byServer, err := s.QueryMany(ctx, []string{serverID}, rng, QueryManyOptions{
+		BucketSeconds: bucketSeconds,
+		Fields: SeriesFields{
+			CPU:         true,
+			Memory:      true,
+			Network:     true,
+			Load:        true,
+			DiskIO:      true,
+			DiskCurrent: true,
+		},
+	})
+	if err != nil {
+		return Series{}, err
+	}
+	id := strings.TrimSpace(serverID)
+	series, ok := byServer[id]
+	if !ok {
+		// QueryMany 会清洗空 ID；这里保持与“无数据服务器”一致的响应形状。
+		series = emptySeries(rng)
+	}
+	duration, ok := RangeDuration(rng)
+	if !ok {
+		return Series{}, panelerr.Validation("range_invalid", "Range must be 1h, 6h, 1d, 24h, or 7d")
+	}
+	since := time.Now().UTC().Add(-duration).Format(time.RFC3339Nano)
+	latest, err := s.latestSample(ctx, id, since)
+	if err != nil {
+		return Series{}, err
+	}
+	series.Latest = latest
+	return series, nil
+}
+
+// latestSample 读取范围内最新一条原始指标样本，并附带范围内最近一次有效磁盘
+// 采样（disk_total_bytes > 0，语义同 diskCurrent）。两条查询都是按 server_id 的
+// 单行查询，不随服务器数量产生 N+1。
+func (s *Service) latestSample(ctx context.Context, serverID, since string) (*LatestSample, error) {
+	var rawTime string
+	var cpu, load1, rxBps, txBps float64
+	var memUsed, memTotal int64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT time, cpu_usage_percent, memory_used_bytes, memory_total_bytes, load_1, network_rx_bps, network_tx_bps
+		FROM metrics_snapshots
+		WHERE server_id = ? AND time >= ?
+		ORDER BY strftime('%s', time) DESC, time DESC
+		LIMIT 1`, serverID, since).
+		Scan(&rawTime, &cpu, &memUsed, &memTotal, &load1, &rxBps, &txBps)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	at, ok := parseMetricTime(rawTime)
+	if !ok {
+		return nil, nil
+	}
+	latest := &LatestSample{
+		Time:             at,
+		CPUUsagePercent:  cpu,
+		MemoryUsedBytes:  memUsed,
+		MemoryTotalBytes: memTotal,
+		Load1:            load1,
+		NetworkRXBps:     rxBps,
+		NetworkTXBps:     txBps,
+	}
+	var diskTime string
+	var diskUsed, diskTotal int64
+	err = s.db.QueryRowContext(ctx, `
+		SELECT time, disk_used_bytes, disk_total_bytes
+		FROM metrics_snapshots
+		WHERE server_id = ? AND time >= ? AND disk_total_bytes > 0
+		ORDER BY strftime('%s', time) DESC, time DESC
+		LIMIT 1`, serverID, since).
+		Scan(&diskTime, &diskUsed, &diskTotal)
+	if errors.Is(err, sql.ErrNoRows) {
+		return latest, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if diskAt, ok := parseMetricTime(diskTime); ok {
+		latest.DiskUsedBytes = diskUsed
+		latest.DiskTotalBytes = diskTotal
+		latest.DiskSampledAt = &diskAt
+	}
+	return latest, nil
+}
+
+// parseMetricTime 解析 metrics_snapshots.time（RFC3339Nano 文本，兼容 RFC3339）。
+func parseMetricTime(raw string) (time.Time, bool) {
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
+		if parsed, err := time.Parse(layout, raw); err == nil {
+			return parsed.UTC(), true
+		}
+	}
+	return time.Time{}, false
 }
 
 func (s *Service) Cleanup(ctx context.Context, retentionDays int) (int64, error) {

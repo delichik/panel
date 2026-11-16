@@ -78,7 +78,7 @@
 
 - `OBS-MET-001`：指标只接收compatible且有URL的Agent report；保存时绑定服务器ID并将时间UTC截断至秒，包含CPU、内存、磁盘用量、磁盘IO读写速率、网络、load1/5/15和系统状态字段。`metrics_snapshots.disk_read_bytes_rate`/`disk_write_bytes_rate` 为可空列：NULL表示该样本未测得磁盘IO（旧Agent或采样未就绪），不得写0冒充真实速率。磁盘用量在未重新采样的样本中写0，不得据此认定磁盘为空（`OBS-MET-007`）。保存前按 `(server_id, time)` 幂等去重：同一秒样本已存在时直接跳过，不覆盖、不重复插入（`OBS-MET-009`）。
 - `OBS-MET-002`：指标成功保存后可标记服务器可达；保存失败不得伪标可达或中断report stream。
-- `OBS-MET-003`：`GET /servers/{id}/metrics` 默认1h，只接受 `1h|6h|1d|24h|7d`（前端公开子集可更窄）；非法range返回 `range_invalid`，存在但无数据返回所有序列为空数组。
+- `OBS-MET-003`：`GET /servers/{id}/metrics` 默认1h，只接受 `1h|6h|1d|24h|7d`（前端公开子集可更窄）；非法range返回 `range_invalid`，存在但无数据返回所有序列为空数组。可选查询参数 `bucket`（秒，60..86400）：合法时按时间桶聚合该服务器的 CPU/内存/网络/load/diskIo 序列（复用批量桶聚合语义，点数有界），并在响应中附加 `latest` 当前原始样本（`time/cpuUsagePercent/memoryUsedBytes/memoryTotalBytes/diskUsedBytes/diskTotalBytes/diskSampledAt/load1/rxBytesPerSecond/txBytesPerSecond`，上下行取最新原始样本，磁盘字段取最近一次有效磁盘行，无有效样本时 `diskUsedBytes/diskTotalBytes=0` 且 `diskSampledAt=null`）；未传或 `bucket=0` 时保持原始序列、不返回 `latest`。非法 `bucket` 返回 `bucket_invalid`。首页卡片使用 `range=1d&bucket=1800` 获取 24h 历史与当前值（含实时上下行）。
 - `OBS-MET-004`：查询结果按时间升序，CPU/内存/网络/load/diskIo各序列共享样本时间语义；磁盘使用率不再返回历史序列（响应不含 `disk`），只返回 `diskCurrent`（范围内最后一次 `disk_total_bytes > 0` 的有效采样，字段 `time/usedBytes/totalBytes`，没有则为 `null`），前端不得为磁盘画曲线。`diskIo` 只包含至少一侧速率非 NULL 的样本，未知的一侧按0序列化但不得回写成历史事实。增量查询只返回严格晚于按秒对齐since的点；`diskCurrent` 是当前值语义，不参与桶降采样，概览 `disk` 卡直接使用每服务器最新有效磁盘行。
 - `OBS-MET-005`：清理worker按runtime retention和hourly/daily/weekly周期独立运行，不属于 event executor worker；retention小于1必须拒绝且不删除任何行。
 - `OBS-MET-006`：服务器删除必须删除其全部指标；其他服务器指标和MetricsDB结构保持不变。
@@ -87,6 +87,8 @@
 - `OBS-MET-009`：指标补报与幂等。**触发入口**：Agent report stream `Send` 失败（`internal/agent/rpc/report.go` 的 `reportHub`）与重连后的补发。**前置**：指标发送失败时，把失败报告与该watcher待发队列中携带指标的样本放入进程内内存环形缓冲，容量12条、最老10分钟；只保留 `Metrics != nil` 且样本时间未超龄的条目，并把每份报告裁剪为纯指标报告（保留 `sampleAt`/`reason`/`metrics`，不重放容器、Tailscale 等可能过期的观测）。**成功**：新连接建立后、进入正常发送循环前，按样本时间升序逐条补发并置 `replayed=true`；任一条发送失败则把剩余样本恢复到缓冲队首并结束本轮，等待下次重连。Panel对 `replayed=true` 的样本跳过整点对齐校验（`AGT-RPT-004`），但仍校验服务器身份与时间合法性，并按 `(server_id, time)` 幂等去重，重复重放不产生重复行、不覆盖既有值。**失败**：补报发送失败、Panel保存失败都只记录日志，不中断流、不回退为其他上报通道；缓冲满时丢弃最老的指标样本（丢弃的是未接受的事实，不得伪报成功）。**边界**：非指标报告不缓存；缓冲不持久化，进程重启丢失的仅是内存中尚未发送的样本，已被Panel接受并落库的样本不受影响（符合 `ARCH-CON-003`：内存队列只降低延迟）；补报只补缺，不覆盖同秒已有行。**验证点**：`reportHub` 补报队列容量/年龄/升序/失败恢复/裁剪为纯指标单测（`internal/agent/rpc/report_test.go`）、`agent_report_collector` 对 `replayed` 跳过对齐且失败仅日志的测试、`metrics.Service.Save` 去重测试。
 
 ## 9. 概览与卡片配置
+
+> **2026-11-16 起首页不再消费本节接口**：`/overview` 改为多接口并行取数（`servers` + 每服务器 `metrics` + 所选探测源 `network-probes` + `packages`/`images`），前端不再调用 `GET /overview`、`/overview/cards*` 与卡片数据接口。本节后端契约继续成立并保留，直至旧接口与 `overview_card_configurations` 表按 `GAP-031` 单独清理；清理前不得新增前端消费者，也不得据“无消费者”删除契约。
 
 - `OBS-OVW-001`：`GET /api/v1/overview` 必须对服务器批量聚合最新指标、load、包更新数和刷新时间，避免逐服务器N+1；最新指标少于5分钟才标metricsFresh。
 - `OBS-OVW-002`：首次 `GET /overview/cards` 必须幂等创建固定default配置；之后读取按原有顺序完整返回，空数组是合法配置。

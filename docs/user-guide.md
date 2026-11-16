@@ -168,7 +168,7 @@ Every gateway save checks the DNS state of all current domains: managed domains 
 
 ### Overview
 
-Use **Overview** for CPU, memory, disk, network, uptime, load, and other server summaries. Metrics require a healthy compatible agent.
+**Overview** is a fixed, read-only status page: a node summary and one card per server (CPU, latency, packet loss, load, memory, disk, plus current upload/download rates). CPU, latency, packet loss, and load include a 24-hour history strip; the toolbar probe-source selector chooses whose point of view is shown (the probe source card itself does not show latency or packet loss). Package or image updates appear as badges on a server card and link to the matching tab. Metrics require a healthy compatible agent, and probe values require the network probe facility to be configured.
 
 ### Package maintenance
 

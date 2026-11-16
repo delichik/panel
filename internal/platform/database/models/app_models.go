@@ -845,6 +845,10 @@ type NetworkProbeResult struct {
 	Sent              int       `orm:"not_null;default:0"`
 	Received          int       `orm:"not_null;default:0"`
 	Error             string    `orm:"not_null;default:''"`
+	// HistoryJSON 保存该 (source,target) 最近 24 小时的 30 分钟桶采样，
+	// 格式为 [{"t":<unix 秒桶起点>,"l":<延迟平均值>,"p":<丢包百分比>}]。
+	// 旧数据为 '[]'，读取方必须容忍空值/非法 JSON。
+	HistoryJSON string `orm:"not_null;default:'[]'"`
 }
 
 func (*NetworkProbeResult) TableName() string { return "network_probe_results" }

@@ -435,3 +435,119 @@ func newMetricsTestService(t *testing.T) (*Service, func()) {
 		}
 	}
 }
+
+// TestQueryBucketedAggregatesSeriesAndLatest covers the single-server bucketed
+// query: fixed 30-minute buckets average the raw samples, every series is
+// materialized, diskCurrent keeps its current-value semantics and Latest carries
+// the newest raw sample (with a nil diskSampledAt when no valid disk sample
+// exists).
+func TestQueryBucketedAggregatesSeriesAndLatest(t *testing.T) {
+	svc, closeStore := newMetricsTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	base := time.Now().UTC().Truncate(time.Second).Add(-2 * time.Minute)
+	bucketStart := floorTimeToBucket(base, 1800)
+	t1 := bucketStart
+	t2 := bucketStart.Add(2 * time.Minute)
+	for _, snap := range []linux.MetricsSnapshot{
+		{
+			ServerID: "srv", Time: t1, CPUUsagePercent: 10,
+			MemoryUsedBytes: 100, MemoryTotalBytes: 200,
+			NetworkRxBytesRate: 1, NetworkTxBytesRate: 2,
+			DiskUsedBytes: 40, DiskTotalBytes: 100, DiskIOAvailable: true,
+			DiskReadBytesRate: 5, DiskWriteBytesRate: 6,
+			Status: linux.SystemStatus{Load1: 0.5, Load5: 0.25, Load15: 0.5},
+		},
+		{
+			ServerID: "srv", Time: t2, CPUUsagePercent: 20,
+			MemoryUsedBytes: 300, MemoryTotalBytes: 400,
+			NetworkRxBytesRate: 3, NetworkTxBytesRate: 4,
+			DiskUsedBytes: 50, DiskTotalBytes: 120, DiskIOAvailable: true,
+			DiskReadBytesRate: 7, DiskWriteBytesRate: 8,
+			Status: linux.SystemStatus{Load1: 1.5, Load5: 1.25, Load15: 1.5},
+		},
+	} {
+		if err := svc.Save(ctx, snap); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := svc.Save(ctx, linux.MetricsSnapshot{ServerID: "srv_nodisk", Time: t2, CPUUsagePercent: 5}); err != nil {
+		t.Fatal(err)
+	}
+
+	series, err := svc.QueryBucketed(ctx, "srv", "1d", 1800)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if series.Range != "1d" {
+		t.Fatalf("range = %q, want 1d", series.Range)
+	}
+	if len(series.CPU) != 1 || series.CPU[0].UsagePercent != 15 || !series.CPU[0].Time.Equal(bucketStart) {
+		t.Fatalf("bucketed CPU = %#v", series.CPU)
+	}
+	if len(series.Memory) != 1 || series.Memory[0].UsedBytes != 200 || series.Memory[0].TotalBytes != 300 {
+		t.Fatalf("bucketed memory = %#v", series.Memory)
+	}
+	if len(series.Network) != 1 || series.Network[0].RxBytesPerSecond != 2 || series.Network[0].TxBytesPerSecond != 3 {
+		t.Fatalf("bucketed network = %#v", series.Network)
+	}
+	if len(series.Load) != 1 || series.Load[0].Load1 != 1 || series.Load[0].Load5 != 0.75 || series.Load[0].Load15 != 1 {
+		t.Fatalf("bucketed load = %#v", series.Load)
+	}
+	if len(series.DiskIO) != 1 || series.DiskIO[0].ReadBytesPerSecond != 6 || series.DiskIO[0].WriteBytesPerSecond != 7 {
+		t.Fatalf("bucketed diskIo = %#v", series.DiskIO)
+	}
+	if series.DiskCurrent == nil || !series.DiskCurrent.Time.Equal(t2) || series.DiskCurrent.UsedBytes != 50 || series.DiskCurrent.TotalBytes != 120 {
+		t.Fatalf("diskCurrent = %#v, want the latest valid disk sample", series.DiskCurrent)
+	}
+	if series.Latest == nil {
+		t.Fatal("latest = nil, want the newest raw sample")
+	}
+	latest := series.Latest
+	if !latest.Time.Equal(t2) || latest.CPUUsagePercent != 20 || latest.MemoryUsedBytes != 300 || latest.MemoryTotalBytes != 400 {
+		t.Fatalf("latest = %#v", latest)
+	}
+	if latest.Load1 != 1.5 || latest.DiskUsedBytes != 50 || latest.DiskTotalBytes != 120 {
+		t.Fatalf("latest raw values = %#v", latest)
+	}
+	if latest.NetworkRXBps != 3 || latest.NetworkTXBps != 4 {
+		t.Fatalf("latest network rates = %#v", latest)
+	}
+	if latest.DiskSampledAt == nil || !latest.DiskSampledAt.Equal(t2) {
+		t.Fatalf("latest.diskSampledAt = %v, want %s", latest.DiskSampledAt, t2)
+	}
+
+	// 没有有效磁盘样本时 diskSampledAt 必须为 null（nil），其余当前值仍返回。
+	noDisk, err := svc.QueryBucketed(ctx, "srv_nodisk", "1d", 1800)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if noDisk.Latest == nil || noDisk.Latest.DiskSampledAt != nil {
+		t.Fatalf("no-disk latest = %#v, want a nil diskSampledAt", noDisk.Latest)
+	}
+	if noDisk.Latest.CPUUsagePercent != 5 || noDisk.Latest.DiskUsedBytes != 0 || noDisk.Latest.DiskTotalBytes != 0 {
+		t.Fatalf("no-disk latest values = %#v", noDisk.Latest)
+	}
+	if noDisk.DiskCurrent != nil {
+		t.Fatalf("no-disk diskCurrent = %#v, want nil", noDisk.DiskCurrent)
+	}
+
+	// 空数据：保留空数组与正确 range，Latest 为 nil（JSON 中省略）。
+	empty, err := svc.QueryBucketed(ctx, "srv_missing", "1d", 3600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if empty.Range != "1d" || len(empty.CPU) != 0 || len(empty.Memory) != 0 || len(empty.Network) != 0 || len(empty.Load) != 0 || len(empty.DiskIO) != 0 {
+		t.Fatalf("empty bucketed series = %#v", empty)
+	}
+	if empty.Latest != nil || empty.DiskCurrent != nil {
+		t.Fatalf("empty bucketed series must keep latest/diskCurrent nil: %#v", empty)
+	}
+
+	if _, err := svc.QueryBucketed(ctx, "srv", "1d", 0); err == nil {
+		t.Fatal("expected invalid bucket error")
+	}
+	if _, err := svc.QueryBucketed(ctx, "srv", "bogus", 1800); err == nil {
+		t.Fatal("expected invalid range error")
+	}
+}

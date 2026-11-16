@@ -304,7 +304,8 @@ export function installMockApi() {
     }
     const serverNetworkProbesMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)\/network-probes$/);
     if (serverNetworkProbesMatch && method(init) === 'GET') {
-      const result = getServerNetworkProbes(decodeURIComponent(serverNetworkProbesMatch[1]));
+      const history = ['1', 'true'].includes(url.searchParams.get('history') ?? '');
+      const result = getServerNetworkProbes(decodeURIComponent(serverNetworkProbesMatch[1]), history);
       return result ? json(result) : error('server_not_found', 'Server was not found.', 404);
     }
     const serverMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)$/);

@@ -629,7 +629,7 @@
 
 - **前置**：访问设施目录、`/applications/facility-apps/network-probe` 或服务器详情的探测页签。
 - **动作**：读取/保存网络探测设施。
-- **结果**：目录卡片与设施详情使用 `networkProbeFacilityApi`（`web/src/api/networkProbe.ts`）；配置读写为 `GET/PUT /api/v1/facility-apps/network-probe`，矩阵结果为 `GET /api/v1/facility-apps/network-probe/results`，单节点结果为 `GET /api/v1/servers/{id}/network-probes`。配置存于 AppDB `network_probe_configs` 单行（`id='network_probe'`，`mode`、`server_ids_json`、`version`、`updated_at`），最新观测存于 AppDB `network_probe_results`（主键 `(source_server_id,target_server_id)`）。实现位于 `internal/modules/networkprobe`，模块在 `internal/bootstrap/panel/app.go` 装配并注册路由。
+- **结果**：目录卡片与设施详情使用 `networkProbeFacilityApi`（`web/src/api/networkProbe.ts`）；配置读写为 `GET/PUT /api/v1/facility-apps/network-probe`，矩阵结果为 `GET /api/v1/facility-apps/network-probe/results`，单节点结果为 `GET /api/v1/servers/{id}/network-probes`。配置存于 AppDB `network_probe_configs` 单行（`id='network_probe'`，`mode`、`server_ids_json`、`version`、`updated_at`），最新观测存于 AppDB `network_probe_results`（主键 `(source_server_id,target_server_id)`），同表 `history_json` 保存该 (source,target) 最近 24 小时的 30 分钟桶历史（见 `FAC-PRB-009`）。实现位于 `internal/modules/networkprobe`，模块在 `internal/bootstrap/panel/app.go` 装配并注册路由。
 - **失败**：不得把探测结果写入 `metrics_snapshots`，不得为探测设施创建隐藏应用或协调 Job；未知 facilityKind 仍按设施空态处理。
 - **不变量**：设施读取只查本地投影，不现场 SSH/ping；配置与观测的版本语义互不混用（配置 `version` 只在保存时递增，观测按时间单调覆盖）。
 - **验证**：设施路由注册与清单测试（`internal/bootstrap/panel/routes_manifest_test.go`）、`networkprobe` handler/service 测试、设施目录/Mock 路由测试。
@@ -698,8 +698,17 @@
 - **动作**：读取/保存配置或结果，等待周期探测。
 - **结果**：没有服务器时 `nodes=[]`、`results=[]`、`updatedAt=null`，页面显示明确空态；`selected` 模式下全部所选节点无地址时结果为空但配置合法；`ping` 命令缺失或不可执行时逐目标 `error`（不得让整个探测设施不可用），结果行保留 `sent=0/received=0`；正常情况下 `ping` 由 Agent 部署步骤保证（`AGT-DEP-008`），只有安装失败/被移除等异常才出现该降级；旧 Agent 不刷新观测时保留最后一行并标 stale；服务器详情非探测节点显示空态与设施入口。
 - **失败**：任何单目标失败不得升级为设施级失败或阻塞指标上报；配置校验失败不得写库（`FAC-PRB-003`）；读取失败返回 `panelerr` 稳定错误并由页面局部重试，不得用空数据冒充“全部正常”。
-- **边界**：结果只保留最新一行，不存在“历史曲线”或聚合统计持久化；`stale` 是读取期派生，不写库；观测时间与服务器时钟无关，以 Panel 接收的 sampleAt 为准。
+- **边界**：结果表本体每个 `(source,target)` 仍只保留最新一行；最近 24 小时历史仅在 `results[].history` 返回（见 `FAC-PRB-009`），不得把历史数组当作“最新观测”；`stale` 是读取期派生，不写库；观测时间与服务器时钟无关，以 Panel 接收的 sampleAt 为准。
 - **验证**：`internal/modules/networkprobe` 服务/handler 测试（空集合、无地址、错误目标、stale、旧 Agent 不清空）、`internal/agent/probe` 解析与失败测试、collector 单测、前端设施/探测页签空错态测试；人工观察点：真实 `ping` 权限/命令缺失场景与跨节点网络延迟展示。
+
+### FAC-PRB-009 24 小时探测历史
+
+- **前置**：探测节点按 60 秒周期上报结果（`FAC-PRB-004/005`）；读取方请求 `GET /api/v1/servers/{id}/network-probes?history=1`（也接受 `history=true`）。
+- **动作**：Panel 落库最新观测的同时维护该 `(source,target)` 的 24 小时桶历史。
+- **结果**：`network_probe_results.history_json` 保存 `[{"t":<unix 秒桶起点>,"l":<延迟毫秒>,"p":<丢包百分比>}]`，按 30 分钟桶（`1800s`）聚合：同一桶内后一次上报替换该桶，跨桶追加；只保留距本次 `sampleAt` 最近 24 小时内、最多 48 项，时间升序。`history=1` 时每个 `results[]` 附带 `history: [{time,latencyMs,packetLossPercent}]`（RFC3339 时间、延迟毫秒、丢包百分比）；不带该参数时响应与改造前一致，`Matrix`/`CardData` 永不返回 `history`。失败样本（`error` 非空或 `received=0`）在桶历史中记延迟 0、丢包 100；成功样本按本次上报的延迟与丢包值记录。
+- **失败**：旧数据或旧 Agent 没有历史时 `history=[]` 或字段缺省，读取不得报错；非法 `history` 值按未请求处理；历史合并失败只影响该 source 的历史（记录日志），不得阻断最新结果落库或指标上报。
+- **不变量**：历史只由服务端从已上报观测派生，不由前端拼接；不新增路由/表/迁移列以外的结构（`history_json` 为同表新增列，默认 `'[]'`）；服务器删除随结果行一并清理历史。
+- **验证**：`networkprobe` 服务测试（同桶替换、跨桶追加、24h 剪枝、48 上限、失败样本语义、默认不带 history）、handler 测试（`history=1` 传参）、`models`/迁移测试、前端首页历史条模型测试（`UI-OVR-016`）。
 
 ## 10. 用户界面验收边界
 

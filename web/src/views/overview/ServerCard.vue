@@ -1,0 +1,228 @@
+<script setup lang="ts">
+import { computed } from 'vue';
+import { useRouter } from 'vue-router';
+import { ChevronRight, Image as ImageIcon, Package } from '@lucide/vue';
+import Badge from '@/components/ui/Badge.vue';
+import IconButton from '@/components/ui/IconButton.vue';
+import { useI18n } from '@/i18n';
+import type { ServerCardView } from './model';
+import MetricCell from './MetricCell.vue';
+import {
+  diskPercent,
+  formatBytes,
+  formatLatency,
+  formatLoad,
+  formatPacketLoss,
+  formatPercent,
+  formatRate,
+  memoryPercent,
+  percentTone,
+  valueTone,
+  type HistoryKind,
+  type MetricTone,
+} from './model';
+
+const props = defineProps<{ card: ServerCardView }>();
+
+const { t } = useI18n();
+const router = useRouter();
+
+const statusLabel = computed(() => {
+  const key = `overviewPage.node${props.card.status.charAt(0).toUpperCase()}${props.card.status.slice(1)}`;
+  return t(key);
+});
+
+const metricsUsable = computed(() => props.card.status === 'online');
+const memoryPct = computed(() => (metricsUsable.value ? memoryPercent(props.card.metrics) : null));
+const diskPct = computed(() => (metricsUsable.value ? diskPercent(props.card.metrics) : null));
+const probeStale = computed(() => props.card.probeStale);
+const probeMissing = computed(() => !props.card.probeAvailable);
+
+const statusDotClass: Record<MetricTone, string> = {
+  success: 'bg-success',
+  warning: 'bg-warning',
+  danger: 'bg-danger',
+};
+const textToneClass: Record<MetricTone, string> = {
+  success: 'text-success',
+  warning: 'text-warning',
+  danger: 'text-danger',
+};
+
+interface CellView {
+  label: string;
+  text: string;
+  valueClass: string;
+  muted: boolean;
+  empty?: boolean;
+  hint?: string;
+  ariaLabel: string;
+  kind?: HistoryKind;
+  history?: Array<number | null>;
+  percent?: number | null;
+}
+
+function historyCell(kind: HistoryKind, label: string, value: number | null, text: string, history: Array<number | null>, muted: boolean): CellView {
+  const tone = muted || value === null ? null : valueTone(kind, value);
+  return {
+    label,
+    text,
+    muted: muted || value === null,
+    ariaLabel: `${label} · ${t('overviewPage.last24Hours')}`,
+    kind,
+    history,
+    valueClass: tone ? textToneClass[tone] : 'text-muted-foreground',
+  };
+}
+
+function meterCell(label: string, percent: number | null, hint: string): CellView {
+  const tone = percent === null ? null : percentTone(percent);
+  return {
+    label,
+    text: percent === null ? '—' : formatPercent(percent, 0),
+    muted: percent === null,
+    hint,
+    ariaLabel: `${label}: ${percent === null ? '—' : formatPercent(percent, 0)}`,
+    percent,
+    valueClass: tone ? textToneClass[tone] : 'text-muted-foreground',
+  };
+}
+
+const cpuCell = computed<CellView>(() => historyCell(
+  'cpu',
+  t('overviewPage.metricCpu'),
+  metricsUsable.value ? props.card.metrics.cpuPercent : null,
+  metricsUsable.value ? formatPercent(props.card.metrics.cpuPercent, 1) : '—',
+  props.card.cpuHistory,
+  !metricsUsable.value,
+));
+
+const loadCell = computed<CellView>(() => historyCell(
+  'load',
+  t('overviewPage.metricLoad'),
+  metricsUsable.value ? props.card.metrics.load1 : null,
+  metricsUsable.value ? formatLoad(props.card.metrics.load1) : '—',
+  props.card.loadHistory,
+  !metricsUsable.value,
+));
+
+const latencyCell = computed<CellView>(() => (
+  props.card.isProbeSource
+    ? { label: t('overviewPage.metricLatency'), text: '—', valueClass: 'text-muted-foreground', muted: true, empty: true, ariaLabel: t('overviewPage.metricLatency') }
+    : historyCell(
+      'latency',
+      t('overviewPage.metricLatency'),
+      probeMissing.value ? null : props.card.probeLatencyMs,
+      probeMissing.value ? '—' : formatLatency(props.card.probeLatencyMs),
+      props.card.latencyHistory,
+      probeStale.value,
+    )
+));
+
+const lossCell = computed<CellView>(() => (
+  props.card.isProbeSource
+    ? { label: t('overviewPage.metricPacketLoss'), text: '—', valueClass: 'text-muted-foreground', muted: true, empty: true, ariaLabel: t('overviewPage.metricPacketLoss') }
+    : historyCell(
+      'packetLoss',
+      t('overviewPage.metricPacketLoss'),
+      probeMissing.value ? null : props.card.probePacketLossPercent,
+      probeMissing.value ? '—' : formatPacketLoss(props.card.probePacketLossPercent),
+      props.card.lossHistory,
+      probeStale.value,
+    )
+));
+
+const memoryCell = computed<CellView>(() => meterCell(
+  t('overviewPage.metricMemory'),
+  memoryPct.value,
+  `${formatBytes(props.card.metrics.memoryUsedBytes)} / ${formatBytes(props.card.metrics.memoryTotalBytes)}`,
+));
+
+const diskCell = computed<CellView>(() => meterCell(
+  t('overviewPage.metricDisk'),
+  diskPct.value,
+  `${formatBytes(props.card.metrics.diskUsedBytes)} / ${formatBytes(props.card.metrics.diskTotalBytes)}`,
+));
+
+const rowPairs = computed<Array<[CellView, CellView]>>(() => [
+  [cpuCell.value, loadCell.value],
+  [memoryCell.value, diskCell.value],
+  [latencyCell.value, lossCell.value],
+]);
+
+const rxText = computed(() => (metricsUsable.value ? formatRate(props.card.metrics.rxBytesPerSecond) : '—'));
+const txText = computed(() => (metricsUsable.value ? formatRate(props.card.metrics.txBytesPerSecond) : '—'));
+
+function openDetails() {
+  void router.push({ path: '/servers', query: { server: props.card.server.id } });
+}
+
+function openPackages() {
+  void router.push({ path: '/servers', query: { server: props.card.server.id, tab: 'packages' } });
+}
+
+function openImages() {
+  void router.push({ path: '/servers', query: { server: props.card.server.id, tab: 'resources', subtab: 'images' } });
+}
+</script>
+
+<template>
+  <article
+    class="motion-reveal grid min-w-0 content-start gap-2 rounded-xl border border-border bg-card p-3"
+    data-testid="server-card"
+  >
+    <header class="flex min-w-0 items-start justify-between gap-2">
+      <div class="flex min-w-0 items-start gap-2">
+        <span class="mt-1.5 size-2 shrink-0 rounded-full" :class="statusDotClass[card.statusTone]" :title="statusLabel" aria-hidden="true" />
+        <span class="sr-only">{{ statusLabel }}</span>
+        <div class="flex min-w-0 items-baseline gap-2">
+          <h3 class="m-0 max-w-full truncate text-sm font-semibold text-foreground">{{ card.server.name }}</h3>
+          <span v-if="card.isProbeSource" class="shrink-0 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{{ t('overviewPage.probeSourceBadge') }}</span>
+        </div>
+      </div>
+      <div class="flex shrink-0 items-center gap-1">
+        <button
+          v-if="card.packageUpdates"
+          type="button"
+          class="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          :title="t('overviewPage.packageUpdatesHint', { count: card.packageUpdates })"
+          data-testid="package-updates-badge"
+          @click.stop="openPackages"
+        >
+          <Badge tone="warning"><Package class="size-3" aria-hidden="true" />{{ card.packageUpdates }}</Badge>
+        </button>
+        <button
+          v-if="card.imageUpdates"
+          type="button"
+          class="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          :title="t('overviewPage.imageUpdatesHint', { count: card.imageUpdates })"
+          data-testid="image-updates-badge"
+          @click.stop="openImages"
+        >
+          <Badge tone="info"><ImageIcon class="size-3" aria-hidden="true" />{{ card.imageUpdates }}</Badge>
+        </button>
+        <IconButton size="sm" :label="t('common.details')" data-testid="server-card-details" @click.stop="openDetails">
+          <ChevronRight aria-hidden="true" />
+        </IconButton>
+      </div>
+    </header>
+
+    <div class="grid min-w-0 gap-2">
+      <div v-for="(pair, index) in rowPairs" :key="index" class="grid min-w-0 grid-cols-2 gap-x-4">
+        <MetricCell v-bind="pair[0]" />
+        <MetricCell v-bind="pair[1]" />
+      </div>
+
+      <div class="flex min-w-0 items-center gap-4 border-t border-border pt-2 text-[11px] leading-4">
+        <span class="flex min-w-0 items-center gap-1 text-muted-foreground">
+          <span aria-hidden="true">↓</span>
+          <span class="shrink-0 tabular-nums text-foreground">{{ rxText }}</span>
+        </span>
+        <span class="flex min-w-0 items-center gap-1 text-muted-foreground">
+          <span aria-hidden="true">↑</span>
+          <span class="shrink-0 tabular-nums text-foreground">{{ txText }}</span>
+        </span>
+      </div>
+    </div>
+  </article>
+</template>

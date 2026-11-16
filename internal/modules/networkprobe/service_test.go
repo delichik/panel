@@ -3,8 +3,10 @@ package networkprobe
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,6 +34,7 @@ CREATE TABLE network_probe_results (
 	sent INTEGER NOT NULL DEFAULT 0,
 	received INTEGER NOT NULL DEFAULT 0,
 	error TEXT NOT NULL DEFAULT '',
+	history_json TEXT NOT NULL DEFAULT '[]',
 	PRIMARY KEY (source_server_id, target_server_id)
 );
 `
@@ -390,4 +393,208 @@ func TestCardDataFiltersProbeSources(t *testing.T) {
 	if len(onlyA.Results) != 1 || onlyA.Results[0].SourceServerID != "srv-a" {
 		t.Fatalf("filtered results = %#v", onlyA.Results)
 	}
+}
+
+// saveProbeSample 用单目标上报写入一条 srv-a → target 的探测结果。
+func saveProbeSample(t *testing.T, svc *Service, at time.Time, target string, latency, loss float64, sent, received int, errMsg string) {
+	t.Helper()
+	if err := svc.SaveReported(context.Background(), "srv-a", at, []ReportedResult{{
+		TargetServerID:    target,
+		TargetAddress:     "fd00::b",
+		LatencyMS:         latency,
+		PacketLossPercent: loss,
+		Sent:              sent,
+		Received:          received,
+		Error:             errMsg,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// historyFor 返回指定 target 的探测历史；不存在时返回 nil。
+func historyFor(results []Result, target string) []HistoryPoint {
+	for _, result := range results {
+		if result.TargetServerID == target {
+			return result.History
+		}
+	}
+	return nil
+}
+
+// TestSaveReportedMergesThirtyMinuteHistoryBuckets covers the probe history merge
+// contract: samples inside one 30-minute bucket replace each other, later buckets
+// append, and the stored history is exposed ascending with RFC3339 times.
+func TestSaveReportedMergesThirtyMinuteHistoryBuckets(t *testing.T) {
+	svc, _, now := newTestService(t, testServers()...)
+	ctx := context.Background()
+	// now 是 12:00 UTC，正好落在 30 分钟桶边界上。
+	bucket0 := *now
+	saveProbeSample(t, svc, bucket0.Add(2*time.Minute), "srv-b", 4, 1, 3, 3, "")
+	saveProbeSample(t, svc, bucket0.Add(17*time.Minute), "srv-b", 6, 2, 3, 3, "")
+	saveProbeSample(t, svc, bucket0.Add(31*time.Minute), "srv-b", 8, 0, 3, 3, "")
+
+	got, err := svc.ServerResultsHistory(ctx, "srv-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := historyFor(got.Results, "srv-b")
+	if len(history) != 2 {
+		t.Fatalf("history = %#v, want 2 buckets (same-bucket replacement, cross-bucket append)", history)
+	}
+	if !history[0].Time.Equal(bucket0) || history[0].LatencyMS != 6 || history[0].PacketLossPercent != 2 {
+		t.Fatalf("first bucket = %#v, want the replacement sample of the 12:00 bucket", history[0])
+	}
+	if !history[1].Time.Equal(bucket0.Add(30*time.Minute)) || history[1].LatencyMS != 8 || history[1].PacketLossPercent != 0 {
+		t.Fatalf("second bucket = %#v", history[1])
+	}
+	// 持久化格式使用紧凑键名。
+	var raw string
+	if err := svc.db.QueryRow(`SELECT history_json FROM network_probe_results WHERE source_server_id='srv-a' AND target_server_id='srv-b'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var stored []storedHistoryPoint
+	if err := json.Unmarshal([]byte(raw), &stored); err != nil {
+		t.Fatalf("history_json = %q, want a JSON array: %v", raw, err)
+	}
+	if len(stored) != 2 || stored[0].Time != bucket0.Unix() || stored[1].Time != bucket0.Add(30*time.Minute).Unix() {
+		t.Fatalf("stored history = %#v (raw %q)", stored, raw)
+	}
+}
+
+// TestSaveReportedHistoryPrunesBeyond24Hours covers the 24h retention window.
+func TestSaveReportedHistoryPrunesBeyond24Hours(t *testing.T) {
+	svc, _, now := newTestService(t, testServers()...)
+	ctx := context.Background()
+	saveProbeSample(t, svc, now.Add(-24*time.Hour-30*time.Minute), "srv-b", 1, 0, 3, 3, "")
+	saveProbeSample(t, svc, now.Add(-24*time.Hour), "srv-b", 2, 0, 3, 3, "")
+	saveProbeSample(t, svc, *now, "srv-b", 3, 0, 3, 3, "")
+
+	got, err := svc.ServerResultsHistory(ctx, "srv-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := historyFor(got.Results, "srv-b")
+	if len(history) != 2 {
+		t.Fatalf("history = %#v, want the oldest bucket pruned", history)
+	}
+	if !history[0].Time.Equal(now.Add(-24*time.Hour)) || !history[1].Time.Equal(*now) {
+		t.Fatalf("history times = %#v", history)
+	}
+}
+
+// TestSaveReportedHistoryCapsAt48Points covers the 48-point upper bound: the
+// bucket at the 24h boundary plus 48 later buckets must drop the oldest point.
+func TestSaveReportedHistoryCapsAt48Points(t *testing.T) {
+	svc, _, now := newTestService(t, testServers()...)
+	ctx := context.Background()
+	start := now.Add(-24 * time.Hour)
+	for i := 0; i <= 48; i++ {
+		saveProbeSample(t, svc, start.Add(time.Duration(i)*30*time.Minute), "srv-b", float64(i), 0, 3, 3, "")
+	}
+	got, err := svc.ServerResultsHistory(ctx, "srv-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := historyFor(got.Results, "srv-b")
+	if len(history) != 48 {
+		t.Fatalf("history length = %d, want 48", len(history))
+	}
+	if !history[0].Time.Equal(start.Add(30*time.Minute)) || !history[47].Time.Equal(*now) {
+		t.Fatalf("capped history span = %s..%s", history[0].Time, history[47].Time)
+	}
+}
+
+// TestSaveReportedHistoryFailureSamples covers the failure semantics: error or
+// received<=0 samples are recorded as 0ms latency and 100% loss, while successful
+// samples carry the reported latency and packet-loss values.
+func TestSaveReportedHistoryFailureSamples(t *testing.T) {
+	svc, _, now := newTestService(t, testServers()...)
+	ctx := context.Background()
+	saveProbeSample(t, svc, *now, "srv-b", 123, 0, 3, 0, "request timeout")
+	saveProbeSample(t, svc, now.Add(30*time.Minute), "srv-b", 5, 1, 3, 0, "")
+	saveProbeSample(t, svc, now.Add(60*time.Minute), "srv-b", 0, 12.5, 3, 3, "")
+
+	got, err := svc.ServerResultsHistory(ctx, "srv-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := historyFor(got.Results, "srv-b")
+	if len(history) != 3 {
+		t.Fatalf("history = %#v", history)
+	}
+	for i, point := range history[:2] {
+		if point.LatencyMS != 0 || point.PacketLossPercent != 100 {
+			t.Fatalf("failure sample %d = %#v, want 0ms/100%%", i, point)
+		}
+	}
+	if history[2].LatencyMS != 0 || history[2].PacketLossPercent != 12.5 {
+		t.Fatalf("success sample = %#v, want the reported values", history[2])
+	}
+}
+
+// TestProbeHistoryOnlyOnExplicitRequest keeps the existing wire contract: only
+// ServerResultsHistory materializes history; the plain server-results payload,
+// the facility matrix and the overview card must stay history-free.
+func TestProbeHistoryOnlyOnExplicitRequest(t *testing.T) {
+	svc, _, now := newTestService(t, testServers()...)
+	ctx := context.Background()
+	if _, err := svc.Save(ctx, SaveInput{Mode: ModeAll}); err != nil {
+		t.Fatal(err)
+	}
+	saveProbeSample(t, svc, *now, "srv-b", 7, 1, 3, 3, "")
+
+	plain, err := svc.ServerResults(ctx, "srv-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plain.Results) != 1 || len(plain.Results[0].History) != 0 {
+		t.Fatalf("plain server results must not carry history: %#v", plain.Results)
+	}
+	matrix, err := svc.Matrix(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matrix.Results) != 1 || len(matrix.Results[0].History) != 0 {
+		t.Fatalf("matrix must not carry history: %#v", matrix.Results)
+	}
+	card, err := svc.CardData(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(card.Results) != 1 || len(card.Results[0].History) != 0 {
+		t.Fatalf("card data must not carry history: %#v", card.Results)
+	}
+	for name, payload := range map[string]any{"matrix": matrix, "card": card, "server": plain} {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), `"history"`) {
+			t.Fatalf("%s payload must not serialize history: %s", name, encoded)
+		}
+	}
+
+	detailed, err := svc.ServerResultsHistory(ctx, "srv-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := historyFor(detailed.Results, "srv-b")
+	if len(history) != 1 || history[0].LatencyMS != 7 || history[0].PacketLossPercent != 1 {
+		t.Fatalf("detailed history = %#v", history)
+	}
+	encoded, err := json.Marshal(detailed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"history":[{"time":`) {
+		t.Fatalf("detailed payload must serialize history: %s", encoded)
+	}
+}
+
+// TestServerResultsHistoryMissingServer keeps the not_found contract on the
+// history-enabled path.
+func TestServerResultsHistoryMissingServer(t *testing.T) {
+	svc, _, _ := newTestService(t, testServers()...)
+	_, err := svc.ServerResultsHistory(context.Background(), "missing")
+	requirePanelCode(t, err, "not_found")
 }

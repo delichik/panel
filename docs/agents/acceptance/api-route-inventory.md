@@ -92,8 +92,8 @@
 | 78 | `GET` | `/api/v1/servers` | [服务器、安全与软件包](servers-security-packages.md) |
 | 79 | `GET` | `/api/v1/servers/{id}` | [服务器、安全与软件包](servers-security-packages.md) |
 | 80 | `GET` | `/api/v1/servers/{id}/fail2ban` | [服务器、安全与软件包](servers-security-packages.md) |
-| 81 | `GET` | `/api/v1/servers/{id}/metrics` | [服务器、安全与软件包](servers-security-packages.md)；`OBS-MET-003/004/007/008`（`diskIo`/`diskCurrent`，无 `disk`） |
-| 82 | `GET` | `/api/v1/servers/{id}/network-probes` | [服务器、安全与软件包](servers-security-packages.md)；[应用与设施应用](applications-and-facilities.md) `FAC-PRB-006`；单节点探测页签 |
+| 81 | `GET` | `/api/v1/servers/{id}/metrics` | [服务器、安全与软件包](servers-security-packages.md)；`OBS-MET-003/004/007/008`（`diskIo`/`diskCurrent`，无 `disk`；可选 `bucket` 桶聚合并返回 `latest` 当前样本） |
+| 82 | `GET` | `/api/v1/servers/{id}/network-probes` | [服务器、安全与软件包](servers-security-packages.md)；[应用与设施应用](applications-and-facilities.md) `FAC-PRB-006/009`；单节点探测页签；`?history=1` 时附带 24h 历史 |
 | 83 | `GET` | `/api/v1/servers/{id}/packages/updates` | [服务器、安全与软件包](servers-security-packages.md) |
 | 84 | `GET` | `/api/v1/servers/{id}/ufw` | [服务器、安全与软件包](servers-security-packages.md) |
 | 85 | `GET` | `/api/v1/servers/{serverId}/containers` | [容器与资源](containers-and-resources.md) |

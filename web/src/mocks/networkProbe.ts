@@ -1,6 +1,7 @@
 import type {
   NetworkProbeCardData,
   NetworkProbeConfig,
+  NetworkProbeHistoryPoint,
   NetworkProbeMatrix,
   NetworkProbeNode,
   NetworkProbeResult,
@@ -133,14 +134,33 @@ export function getNetworkProbeMatrix(): NetworkProbeMatrix {
   return { mode: config.mode, nodes, results, updatedAt: latestSampleAt(results) };
 }
 
-export function getServerNetworkProbes(serverId: string): NetworkProbeServerResults | null {
+export function getServerNetworkProbes(serverId: string, includeHistory = false): NetworkProbeServerResults | null {
   const source = mockServers.find((server) => server.id === serverId);
   if (!source) return null;
   const enabled = activeNodeIds().includes(serverId);
-  // 非探测节点不采集结果：返回空目标表，由页面提示加入设施。
   const nodes = enabled ? targetsFor(serverId).map(toNode) : [];
-  const results = enabled ? resultsForSource(source, Date.now()) : [];
+  const results = enabled
+    ? resultsForSource(source, Date.now()).map((result) => (
+      includeHistory ? { ...result, history: historyFor(source, result, Date.now()) } : result
+    ))
+    : [];
   return { serverId, enabled, nodes, results, updatedAt: latestSampleAt(results) };
+}
+
+/** 24h / 30 分钟桶历史，供首页历史条在 Mock 模式下演示。 */
+function historyFor(source: ServerDto, result: NetworkProbeResult, now: number): NetworkProbeHistoryPoint[] {
+  const hash = hashValue(`${source.id}|${result.targetServerId}|history`);
+  const bucketMs = 30 * 60 * 1000;
+  const currentBucket = Math.floor(now / bucketMs) * bucketMs;
+  return Array.from({ length: 48 }, (_, index) => {
+    const offset = hash + index * 7;
+    const failed = offset % 23 === 0;
+    return {
+      time: new Date(currentBucket - (47 - index) * bucketMs).toISOString(),
+      latencyMs: failed ? 0 : Math.round((result.latencyMs + ((offset % 9) - 4) * 4) * 10) / 10,
+      packetLossPercent: failed ? 100 : Math.max(0, Math.round((result.packetLossPercent + (offset % 5) - 2) * 10) / 10),
+    };
+  });
 }
 
 export function getNetworkProbeCardData(): NetworkProbeCardData {

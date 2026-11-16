@@ -70,7 +70,7 @@
 
 进程事件 `/events`、诊断日志 `/logs`、按需读取与 `/activity`/`/operations`/`/tasks` 重定向见 [UI-EVT-004..007](ui-pages.md)、[UI-LOG-001..003](ui-pages.md)（`UI-ACT-*` 已废弃）。
 
-磁盘使用率改为 5 分钟低频采样且只展示当前值、磁盘 IO 读写速率与指标弱网补报见 [OBS-MET-007..009](backup-restore-diagnostics.md)、[AGT-RPT-004/007](servers-security-packages.md)；磁盘卡/`diskIO` 卡/`networkProbe` 卡见 [UI-OVR-011/012](ui-pages.md)。设施网络探测（`network-probe`）的配置、周期、结果与删除清理见 [FAC-PRB-001..008](applications-and-facilities.md)，页面与矩阵见 [UI-FAC-014..017](ui-pages.md)、[UI-SRV-025](ui-pages.md)；表结构与可空磁盘 IO 列见 [架构、数据与 API](architecture-data-api.md)。
+磁盘使用率改为 5 分钟低频采样且只展示当前值、磁盘 IO 读写速率与指标弱网补报见 [OBS-MET-007..009](backup-restore-diagnostics.md)、[AGT-RPT-004/007](servers-security-packages.md)；首页概览已改为固定只读状态页（节点情况摘要 + 带 24h 历史条与上下行速率的服务器卡片，并行多接口取数，不再消费 `/overview` 卡片接口），见 [UI-OVR-001/013..019](ui-pages.md) 与 [GAP-031](known-gaps.md)；旧 `UI-OVR-002..012` 卡片条目已废弃。指标 bucket/latest 见 [OBS-MET-003](backup-restore-diagnostics.md)，探测 24h 历史见 [FAC-PRB-009](applications-and-facilities.md)。设施网络探测（`network-probe`）的配置、周期、结果与删除清理见 [FAC-PRB-001..008](applications-and-facilities.md)，页面与矩阵见 [UI-FAC-014..017](ui-pages.md)、[UI-SRV-025](ui-pages.md)；表结构与可空磁盘 IO 列见 [架构、数据与 API](architecture-data-api.md)。
 
 失败运行日志与有界降级见 [ORCH-CTRL-008](orchestration-and-tasks.md)；设施逐节点部署、按需请求错误诊断见 [FAC-RP-012/013](applications-and-facilities.md)。
 

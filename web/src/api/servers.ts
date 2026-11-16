@@ -32,6 +32,19 @@ export interface LoadMetricPoint extends MetricsPoint {
   load15: number;
 }
 
+export interface ServerMetricsLatest {
+  time: string;
+  cpuUsagePercent: number;
+  memoryUsedBytes: number;
+  memoryTotalBytes: number;
+  diskUsedBytes: number;
+  diskTotalBytes: number;
+  diskSampledAt: string | null;
+  load1: number;
+  rxBytesPerSecond: number;
+  txBytesPerSecond: number;
+}
+
 export interface ServerMetricsSeries {
   range: string;
   cpu: CpuMetricPoint[];
@@ -42,6 +55,8 @@ export interface ServerMetricsSeries {
   diskIo: DiskIOMetricPoint[];
   network: NetworkMetricPoint[];
   load: LoadMetricPoint[];
+  /** 仅桶查询返回：最新原始样本，供卡片显示当前值。 */
+  latest?: ServerMetricsLatest;
 }
 
 export type ServerMetricsRange = '1h' | '6h' | '1d' | '7d';
@@ -89,8 +104,13 @@ export const serversApi = {
   metrics(id: string, range: ServerMetricsRange = '1h', options?: ApiRequestOptions) {
     return apiClient.get<ServerMetricsSeries>(`/servers/${encodeURIComponent(id)}/metrics?range=${encodeURIComponent(range)}`, options);
   },
-  /** 该节点作为探测源的最新结果与目标表；非探测节点返回 enabled=false。 */
-  networkProbes(id: string, options?: ApiRequestOptions) {
-    return apiClient.get<NetworkProbeServerResults>(`/servers/${encodeURIComponent(id)}/network-probes`, options);
+  /** 24h 历史桶查询：服务端按 bucketSeconds 聚合，并返回最新原始样本 latest。 */
+  metricsBucketed(id: string, range: ServerMetricsRange, bucketSeconds: number, options?: ApiRequestOptions) {
+    return apiClient.get<ServerMetricsSeries>(`/servers/${encodeURIComponent(id)}/metrics?range=${encodeURIComponent(range)}&bucket=${bucketSeconds}`, options);
+  },
+  /** 该节点作为探测源的最新结果与目标表；includeHistory 时附带最近 24h 历史。 */
+  networkProbes(id: string, options?: ApiRequestOptions, includeHistory = false) {
+    const query = includeHistory ? '?history=1' : '';
+    return apiClient.get<NetworkProbeServerResults>(`/servers/${encodeURIComponent(id)}/network-probes${query}`, options);
   },
 };

@@ -7,6 +7,12 @@ export interface NetworkProbeNode {
   address: string;
 }
 
+export interface NetworkProbeHistoryPoint {
+  time: string;
+  latencyMs: number;
+  packetLossPercent: number;
+}
+
 export interface NetworkProbeResult {
   sourceServerId: string;
   targetServerId: string;
@@ -22,6 +28,8 @@ export interface NetworkProbeResult {
   error: string;
   /** 采样时间超出新鲜窗口；预计算值，客户端不重算。 */
   stale: boolean;
+  /** 最近 24 小时历史（仅 `GET /servers/{id}/network-probes?history=1` 返回）。 */
+  history?: NetworkProbeHistoryPoint[];
 }
 
 export interface NetworkProbeConfig {

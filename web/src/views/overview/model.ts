@@ -1,298 +1,379 @@
-import type { OverviewCardConfiguration, OverviewCardData, OverviewDto, OverviewMetricPoint, OverviewMetricsSeries, OverviewCardRange, OverviewServerSummary } from '@/types/overview';
-import type { NetworkProbeCardData, NetworkProbeResult } from '@/types/networkProbe';
+import type { ServerMetricsSeries } from '@/api/servers';
+import type { NetworkProbeHistoryPoint, NetworkProbeResult } from '@/types/networkProbe';
+import type { ServerDto } from '@/types/servers';
 
-export interface OverviewRisk {
-  id: string;
-  tone: 'warning' | 'danger' | 'info';
-  title: string;
-  description: string;
-  to: string;
+/** 指标新鲜度窗口：与后端 probe 口径一致（5 分钟）。 */
+export const METRICS_FRESH_WINDOW_MS = 5 * 60 * 1000;
+/** 卡片历史条展示最近 24 小时，逐小时一个分段。 */
+export const HISTORY_HOURS = 24;
+
+export type MetricTone = 'success' | 'warning' | 'danger';
+export type NodeStatusKind = 'online' | 'stale' | 'offline';
+
+/** 历史分段与数值的阈值；CPU/延迟/丢包/负载各一组。 */
+export const toneZones = {
+  cpu: [{ to: 70, tone: 'success' }, { to: 90, tone: 'warning' }, { to: Infinity, tone: 'danger' }],
+  latency: [{ to: 80, tone: 'success' }, { to: 150, tone: 'warning' }, { to: Infinity, tone: 'danger' }],
+  packetLoss: [{ to: 2, tone: 'success' }, { to: 5, tone: 'warning' }, { to: Infinity, tone: 'danger' }],
+  load: [{ to: 1, tone: 'success' }, { to: 2, tone: 'warning' }, { to: Infinity, tone: 'danger' }],
+} satisfies Record<string, Array<{ to: number; tone: MetricTone }>>;
+
+export type HistoryKind = keyof typeof toneZones;
+
+export function valueTone(kind: HistoryKind, value: number | null | undefined): MetricTone | null {
+  if (value === null || value === undefined || !Number.isFinite(value)) return null;
+  const zone = toneZones[kind].find((item) => value <= item.to);
+  return zone?.tone ?? 'danger';
 }
 
-export function summarizeOverview(data: OverviewDto) {
-  const total = data.servers.length;
-  const reachable = data.servers.filter((item) => item.reachable).length;
-  const supported = data.servers.filter((item) => item.supported).length;
-  const fresh = data.servers.filter((item) => item.metricsFresh).length;
-  const updates = data.servers.reduce((sum, item) => sum + (item.packageUpdateCount || 0), 0);
-  return { total, reachable, supported, fresh, updates };
+/** 内存/磁盘进度条的阈值：<70 绿、<90 黄、其余红。 */
+export function percentTone(percent: number | null | undefined): MetricTone | null {
+  if (percent === null || percent === undefined || !Number.isFinite(percent)) return null;
+  if (percent < 70) return 'success';
+  if (percent < 90) return 'warning';
+  return 'danger';
 }
 
-export function overviewRisks(servers: OverviewServerSummary[]): OverviewRisk[] {
-  const risks: OverviewRisk[] = [];
-  for (const server of servers) {
-    if (!server.reachable) {
-      risks.push({ id: `${server.id}:reach`, tone: 'danger', title: server.name, description: 'overviewPage.riskUnreachable', to: `/servers?server=${server.id}` });
-    } else if (!server.supported) {
-      risks.push({ id: `${server.id}:os`, tone: 'warning', title: server.name, description: 'overviewPage.riskUnsupported', to: `/servers?server=${server.id}` });
-    } else if (!server.metricsFresh) {
-      risks.push({ id: `${server.id}:metrics`, tone: 'warning', title: server.name, description: 'overviewPage.riskMetricsStale', to: `/servers?server=${server.id}` });
-    }
-    if (server.packageUpdateCount > 0) {
-      risks.push({ id: `${server.id}:packages`, tone: 'info', title: server.name, description: 'overviewPage.riskPackages', to: `/servers?server=${encodeURIComponent(server.id)}&tab=packages` });
-    }
-  }
-  return risks.slice(0, 8);
+export function nodeStatusKind(server: ServerDto, sampledAt: string | null | undefined, now = Date.now()): NodeStatusKind {
+  if (!server.reachable) return 'offline';
+  if (!sampledAt) return 'stale';
+  const parsed = Date.parse(sampledAt);
+  if (Number.isNaN(parsed) || now - parsed > METRICS_FRESH_WINDOW_MS) return 'stale';
+  return 'online';
 }
 
-export function cardHasData(card: OverviewCardConfiguration, data?: OverviewCardData) {
-  if (card.kind === 'placeholder') return false;
-  if (card.kind === 'packageUpdates' || card.kind === 'containerUpdates') return true;
-  // networkProbe 卡片的数据是节点/结果摘要；即使暂无结果也属于有效响应，由卡片正文提示等待。
-  if (card.kind === 'networkProbe') return Boolean(data?.probes);
-  return Object.keys(data?.metricsByServer ?? {}).length > 0;
+export function nodeStatusTone(kind: NodeStatusKind): MetricTone {
+  if (kind === 'online') return 'success';
+  if (kind === 'stale') return 'warning';
+  return 'danger';
 }
 
-export function defaultOverviewCards(): OverviewCardConfiguration[] {
-  return [
-    createOverviewCard('cpu', '1h', 3, 2),
-    createOverviewCard('memory', '1h', 3, 2),
-    createOverviewCard('disk', '6h', 2, 2),
-    createOverviewCard('network', '1h', 6, 2),
-    createOverviewCard('packageUpdates', '1d', 2, 1),
-    createOverviewCard('containerUpdates', '1d', 2, 1),
-  ];
+export interface ServerMetricsView {
+  cpuPercent: number | null;
+  memoryUsedBytes: number | null;
+  memoryTotalBytes: number | null;
+  diskUsedBytes: number | null;
+  diskTotalBytes: number | null;
+  diskSampledAt: string | null;
+  load1: number | null;
+  rxBytesPerSecond: number | null;
+  txBytesPerSecond: number | null;
+  sampledAt: string | null;
 }
 
-export function createOverviewCard(
-  kind: OverviewCardConfiguration['kind'],
-  range: OverviewCardConfiguration['range'],
-  width = 3,
-  height = 2,
-): OverviewCardConfiguration {
-  return {
-    id: `card-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    kind,
-    width,
-    height,
-    range,
-    networkDirection: 'both',
-    serverIds: [],
-  };
-}
-
-export interface OverviewCardChartSeries {
-  id: string;
-  name: string;
-  values: Array<number | null>;
-}
-
-export interface OverviewCardView {
-  labels: string[];
-  series: OverviewCardChartSeries[];
-  latestValue: number | null;
-  peakValue: number | null;
-}
-
-/**
- * 一次性把卡片原始指标派生成图表与摘要视图。每个服务器先建 time -> value
- * 映射，再按统一时间轴取值，整体复杂度为 O(总点数 + 服务器数 x 时间点数)，
- * 避免在渲染期做 O(n²) 的逐点查找。摘要值按时间取跨服务器均值，与旧聚合语义一致。
- */
-export function deriveCardView(
-  card: OverviewCardConfiguration,
-  data: OverviewCardData | undefined,
-  serverName: (serverId: string) => string,
-): OverviewCardView {
-  const entries = Object.entries(data?.metricsByServer ?? {})
-    .map(([serverId, series]) => ({ serverId, points: metricPoints(card, series) }))
-    .filter((entry) => entry.points.length > 0);
-  const timeSet = new Set<string>();
-  const perServer = entries.map(({ serverId, points }) => {
-    const values = new Map<string, number>();
-    for (const point of points) {
-      values.set(point.time, metricValueOf(card, point));
-      timeSet.add(point.time);
-    }
-    return { serverId, values };
-  });
-  const labels = [...timeSet].sort((a, b) => Date.parse(a) - Date.parse(b));
-  const series = perServer.map(({ serverId, values }) => ({
-    id: serverId,
-    name: serverName(serverId),
-    values: labels.map((time) => values.get(time) ?? null),
-  }));
-  const sums = labels.map(() => 0);
-  const counts = labels.map(() => 0);
-  for (const { values } of perServer) {
-    labels.forEach((time, index) => {
-      const value = values.get(time);
-      if (value === undefined) return;
-      sums[index] += value;
-      counts[index] += 1;
-    });
-  }
-  let latestValue: number | null = null;
-  let peakValue: number | null = null;
-  labels.forEach((_, index) => {
-    if (!counts[index]) return;
-    const average = sums[index] / counts[index];
-    latestValue = average;
-    if (peakValue === null || average > peakValue) peakValue = average;
-  });
-  return { labels, series, latestValue, peakValue };
-}
-
-export function metricPoints(card: OverviewCardConfiguration, series: OverviewMetricsSeries): OverviewMetricPoint[] {
-  if (card.kind === 'cpu') return series.cpu ?? [];
-  if (card.kind === 'memory') return series.memory ?? [];
-  if (card.kind === 'diskIO') return series.diskIo ?? [];
-  if (card.kind === 'network') return series.network ?? [];
-  return [];
-}
-
-export function metricValueOf(card: OverviewCardConfiguration, point: OverviewMetricPoint) {
-  if (card.kind === 'cpu') return point.usagePercent ?? 0;
-  if (card.kind === 'memory') return percentUsed(point);
-  if (card.kind === 'diskIO') return (point.readBytesPerSecond ?? 0) + (point.writeBytesPerSecond ?? 0);
-  if (card.kind === 'network') {
-    if (card.networkDirection === 'rx') return point.rxBytesPerSecond ?? 0;
-    if (card.networkDirection === 'tx') return point.txBytesPerSecond ?? 0;
-    return (point.rxBytesPerSecond ?? 0) + (point.txBytesPerSecond ?? 0);
-  }
-  return 0;
-}
-
-function percentUsed(point: OverviewMetricPoint) {
-  return point.totalBytes ? ((point.usedBytes ?? 0) / point.totalBytes) * 100 : 0;
-}
-
-/** 磁盘卡只有当前值：跨服务器汇总最近一次有效采样的用量与总量。 */
-export interface DiskCardView {
-  percent: number | null;
-  usedBytes: number | null;
-  totalBytes: number | null;
-  sampledAt: string;
-  serverCount: number;
-}
-
-export function deriveDiskCardView(data?: OverviewCardData): DiskCardView {
-  let usedBytes = 0;
-  let totalBytes = 0;
-  let sampledAt = '';
-  let serverCount = 0;
-  for (const series of Object.values(data?.metricsByServer ?? {})) {
-    const current = series.diskCurrent;
-    if (!current || typeof current.totalBytes !== 'number' || current.totalBytes <= 0) continue;
-    serverCount += 1;
-    usedBytes += current.usedBytes ?? 0;
-    totalBytes += current.totalBytes;
-    if (!sampledAt || Date.parse(current.time) > Date.parse(sampledAt)) sampledAt = current.time;
-  }
-  if (!serverCount) return { percent: null, usedBytes: null, totalBytes: null, sampledAt: '', serverCount: 0 };
-  return {
-    percent: totalBytes > 0 ? (usedBytes / totalBytes) * 100 : null,
-    usedBytes,
-    totalBytes,
-    sampledAt,
-    serverCount,
-  };
-}
-
-/** networkProbe 摘要卡：节点数、平均延迟、最大丢包与最差结果。 */
-export interface NetworkProbeCardView {
-  nodeCount: number;
-  resultCount: number;
-  averageLatencyMs: number | null;
-  maxPacketLossPercent: number | null;
-  worst: NetworkProbeResult[];
-  updatedAt: string;
-}
-
-const WORST_RESULT_LIMIT = 3;
-
-export function deriveNetworkProbeCardView(probes?: NetworkProbeCardData): NetworkProbeCardView {
-  const results = probes?.results ?? [];
-  const latencies = results
-    .filter((result) => !result.error && result.received > 0 && Number.isFinite(result.latencyMs))
-    .map((result) => result.latencyMs);
-  const maxPacketLossPercent = results.reduce<number | null>((max, result) => (max === null || result.packetLossPercent > max ? result.packetLossPercent : max), null);
-  // 失败优先，其次丢包，再按延迟从高到低；最多展示 3 条。
-  const worst = [...results].sort((a, b) => {
-    if (Boolean(a.error) !== Boolean(b.error)) return a.error ? -1 : 1;
-    if (a.packetLossPercent !== b.packetLossPercent) return b.packetLossPercent - a.packetLossPercent;
-    return b.latencyMs - a.latencyMs;
-  }).slice(0, WORST_RESULT_LIMIT);
-  return {
-    nodeCount: probes?.nodes.length ?? 0,
-    resultCount: results.length,
-    averageLatencyMs: latencies.length ? latencies.reduce((sum, value) => sum + value, 0) / latencies.length : null,
-    maxPacketLossPercent,
-    worst,
-    updatedAt: probes?.updatedAt ?? '',
-  };
-}
-
-/**
- * 增量响应返回从 since 所在桶开始的完整桶，因此按时间戳做后缀替换：保留
- * 早于首个新桶的旧点，再用重算后的桶替换尾部，避免把未满桶的均值追加两次。
- */
-export function mergeMetricPoints<T extends { time: string }>(existing: T[] | undefined, incoming: T[] | undefined): T[] {
-  if (!incoming?.length) return existing ? [...existing] : [];
-  if (!existing?.length) return [...incoming];
-  const cutoff = incoming[0].time;
-  return [...existing.filter((point) => point.time < cutoff), ...incoming];
-}
-
-export function mergeMetricSeries(existing: OverviewMetricsSeries | undefined, incoming: OverviewMetricsSeries | undefined): OverviewMetricsSeries {
-  // diskCurrent 不是时间序列：增量响应给出新的当前值时整值替换，未给出时保留旧值。
-  const diskCurrent = incoming?.diskCurrent !== undefined
-    ? incoming.diskCurrent
-    : (existing?.diskCurrent ?? null);
-  return {
-    cpu: mergeMetricPoints(existing?.cpu, incoming?.cpu),
-    memory: mergeMetricPoints(existing?.memory, incoming?.memory),
-    diskIo: mergeMetricPoints(existing?.diskIo, incoming?.diskIo),
-    network: mergeMetricPoints(existing?.network, incoming?.network),
-    diskCurrent,
-  };
-}
-
-export function mergeCardData(existing: OverviewCardData | undefined, delta: OverviewCardData): OverviewCardData {
-  const serverIds = new Set([...Object.keys(existing?.metricsByServer ?? {}), ...Object.keys(delta.metricsByServer)]);
-  const metricsByServer: Record<string, OverviewMetricsSeries> = {};
-  for (const serverId of serverIds) {
-    metricsByServer[serverId] = mergeMetricSeries(existing?.metricsByServer[serverId], delta.metricsByServer[serverId]);
-  }
-  return {
-    card: delta.card,
-    metricsByServer,
-    bucketSeconds: delta.bucketSeconds,
-    probes: delta.probes ?? existing?.probes,
-  };
-}
-
-const RANGE_DURATIONS_MS: Record<OverviewCardRange, number> = {
-  '1h': 60 * 60 * 1000,
-  '6h': 6 * 60 * 60 * 1000,
-  '1d': 24 * 60 * 60 * 1000,
-  '7d': 7 * 24 * 60 * 60 * 1000,
+const emptyMetricsView: ServerMetricsView = {
+  cpuPercent: null,
+  memoryUsedBytes: null,
+  memoryTotalBytes: null,
+  diskUsedBytes: null,
+  diskTotalBytes: null,
+  diskSampledAt: null,
+  load1: null,
+  rxBytesPerSecond: null,
+  txBytesPerSecond: null,
+  sampledAt: null,
 };
 
-export function trimMetricPoints<T extends { time: string }>(points: T[] | undefined, sinceMs: number): T[] {
-  if (!points?.length) return [];
-  return points.filter((point) => Date.parse(point.time) >= sinceMs);
-}
-
-export function trimMetricSeries(series: OverviewMetricsSeries | undefined, sinceMs: number): OverviewMetricsSeries {
+/** 取当前值：优先后端 bucket 查询返回的 latest 原始样本，退化到序列最后一点。 */
+export function latestMetricsView(series?: ServerMetricsSeries | null): ServerMetricsView {
+  if (!series) return { ...emptyMetricsView };
+  const latest = series.latest;
+  const cpu = lastPoint(series.cpu);
+  const memory = lastPoint(series.memory);
+  const load = lastPoint(series.load);
+  const network = lastPoint(series.network);
+  const disk = series.diskCurrent ?? null;
   return {
-    cpu: trimMetricPoints(series?.cpu, sinceMs),
-    memory: trimMetricPoints(series?.memory, sinceMs),
-    diskIo: trimMetricPoints(series?.diskIo, sinceMs),
-    network: trimMetricPoints(series?.network, sinceMs),
-    // 磁盘当前值不属于时间序列，不参与范围裁剪。
-    diskCurrent: series?.diskCurrent ?? null,
+    cpuPercent: latest?.cpuUsagePercent ?? cpu?.usagePercent ?? null,
+    memoryUsedBytes: latest?.memoryUsedBytes ?? memory?.usedBytes ?? null,
+    memoryTotalBytes: latest?.memoryTotalBytes ?? memory?.totalBytes ?? null,
+    diskUsedBytes: latest?.diskUsedBytes ?? disk?.usedBytes ?? null,
+    diskTotalBytes: latest?.diskTotalBytes ?? disk?.totalBytes ?? null,
+    diskSampledAt: latest?.diskSampledAt ?? disk?.time ?? null,
+    load1: latest?.load1 ?? load?.load1 ?? null,
+    rxBytesPerSecond: latest?.rxBytesPerSecond ?? network?.rxBytesPerSecond ?? null,
+    txBytesPerSecond: latest?.txBytesPerSecond ?? network?.txBytesPerSecond ?? null,
+    sampledAt: latest?.time ?? cpu?.time ?? memory?.time ?? load?.time ?? null,
   };
 }
 
-export function trimCardDataToRange(data: OverviewCardData, now: Date = new Date()): OverviewCardData {
-  const durationMs = RANGE_DURATIONS_MS[data.card.range];
-  if (!durationMs) return data;
-  const sinceMs = now.getTime() - durationMs;
-  const metricsByServer: Record<string, OverviewMetricsSeries> = {};
-  for (const [serverId, series] of Object.entries(data.metricsByServer)) {
-    metricsByServer[serverId] = trimMetricSeries(series, sinceMs);
+function lastPoint<T extends { time: string }>(points: T[] | undefined): T | null {
+  if (!points?.length) return null;
+  return points[points.length - 1] ?? null;
+}
+
+export interface HistoryPoint {
+  time: string;
+  value: number | null;
+}
+
+/**
+ * 把任意时间点的数值序列聚合成最近 24 个整点小时桶（最旧→最新）。
+ * 缺失小时为 null，便于渲染灰段；不做跨小时插值。
+ */
+export function hourlyHistory(points: HistoryPoint[] | undefined, now = Date.now()): Array<number | null> {
+  const buckets: number[][] = Array.from({ length: HISTORY_HOURS }, () => []);
+  const hourMs = 60 * 60 * 1000;
+  const currentHour = Math.floor(now / hourMs) * hourMs;
+  for (const point of points ?? []) {
+    if (point.value === null || !Number.isFinite(point.value)) continue;
+    const parsed = Date.parse(point.time);
+    if (Number.isNaN(parsed)) continue;
+    const hour = Math.floor(parsed / hourMs) * hourMs;
+    const index = HISTORY_HOURS - 1 - Math.round((currentHour - hour) / hourMs);
+    if (index < 0 || index >= HISTORY_HOURS) continue;
+    buckets[index]!.push(point.value);
   }
-  // probes 为最新快照，不按时间范围裁剪。
-  return { ...data, metricsByServer };
+  return buckets.map((values) => (values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null));
+}
+
+export function cpuHistory(series?: ServerMetricsSeries | null, now = Date.now()): Array<number | null> {
+  return hourlyHistory(series?.cpu?.map((point) => ({ time: point.time, value: point.usagePercent })), now);
+}
+
+export function loadHistory(series?: ServerMetricsSeries | null, now = Date.now()): Array<number | null> {
+  return hourlyHistory(series?.load?.map((point) => ({ time: point.time, value: point.load1 })), now);
+}
+
+export function probeLatencyHistory(history: NetworkProbeHistoryPoint[] | undefined, now = Date.now()): Array<number | null> {
+  return hourlyHistory(history?.map((point) => ({ time: point.time, value: point.latencyMs > 0 ? point.latencyMs : null })), now);
+}
+
+export function probeLossHistory(history: NetworkProbeHistoryPoint[] | undefined, now = Date.now()): Array<number | null> {
+  return hourlyHistory(history?.map((point) => ({ time: point.time, value: point.packetLossPercent })), now);
+}
+
+/** 探测源自身视角：把各目标的历史按小时合并（延迟取成功目标均值，丢包取均值）。 */
+export function aggregateProbeHistory(
+  results: NetworkProbeResult[],
+  field: 'latency' | 'loss',
+  now = Date.now(),
+): Array<number | null> {
+  const series = results.map((result) => (
+    field === 'latency' ? probeLatencyHistory(result.history, now) : probeLossHistory(result.history, now)
+  ));
+  return Array.from({ length: HISTORY_HOURS }, (_, index) => {
+    const values = series.map((item) => item[index]).filter((value): value is number => value !== null && Number.isFinite(value));
+    return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+  });
+}
+
+export interface ProbeTargetView {
+  targetServerId: string;
+  latencyMs: number | null;
+  packetLossPercent: number | null;
+  failed: boolean;
+  stale: boolean;
+  sampledAt: string | null;
+  history: NetworkProbeHistoryPoint[];
+}
+
+export function probeTargetView(result: NetworkProbeResult): ProbeTargetView {
+  const failed = result.error.trim() !== '' || result.received <= 0;
+  return {
+    targetServerId: result.targetServerId,
+    latencyMs: failed || result.latencyMs <= 0 ? null : result.latencyMs,
+    packetLossPercent: failed ? 100 : result.packetLossPercent,
+    failed,
+    stale: Boolean(result.stale),
+    sampledAt: result.sampledAt || null,
+    history: result.history ?? [],
+  };
+}
+
+export interface ProbeAggregateView {
+  latencyMs: number | null;
+  packetLossPercent: number | null;
+  targetCount: number;
+  failedTargetCount: number;
+  sampledAt: string | null;
+  stale: boolean;
+}
+
+export function summarizeProbeResults(results: NetworkProbeResult[] = []): ProbeAggregateView {
+  const views = results.map(probeTargetView);
+  const successful = views.filter((item) => !item.failed && item.latencyMs !== null);
+  const latencyMs = successful.length
+    ? successful.reduce((sum, item) => sum + (item.latencyMs ?? 0), 0) / successful.length
+    : null;
+  const sent = results.reduce((sum, item) => sum + Math.max(0, item.sent), 0);
+  const received = results.reduce((sum, item) => sum + Math.max(0, item.received), 0);
+  const packetLossPercent = sent > 0 ? ((sent - received) / sent) * 100 : null;
+  const sampledAt = latestIso(results.map((item) => item.sampledAt));
+  return {
+    latencyMs,
+    packetLossPercent,
+    targetCount: results.length,
+    failedTargetCount: views.filter((item) => item.failed).length,
+    sampledAt,
+    stale: results.length === 0 || views.every((item) => item.stale),
+  };
+}
+
+function latestIso(values: string[]): string | null {
+  let latest: string | null = null;
+  let latestMs = Number.NEGATIVE_INFINITY;
+  for (const value of values) {
+    const parsed = Date.parse(value);
+    if (Number.isNaN(parsed)) continue;
+    if (parsed > latestMs) {
+      latestMs = parsed;
+      latest = value;
+    }
+  }
+  return latest;
+}
+
+export interface ServerCardView {
+  server: ServerDto;
+  status: NodeStatusKind;
+  statusTone: MetricTone;
+  metrics: ServerMetricsView;
+  metricsError: boolean;
+  isProbeSource: boolean;
+  probeAvailable: boolean;
+  probeLatencyMs: number | null;
+  probePacketLossPercent: number | null;
+  probeStale: boolean;
+  cpuHistory: Array<number | null>;
+  loadHistory: Array<number | null>;
+  latencyHistory: Array<number | null>;
+  lossHistory: Array<number | null>;
+  packageUpdates: number | null;
+  imageUpdates: number | null;
+}
+
+export interface BuildCardsInput {
+  servers: ServerDto[];
+  metricsById: Record<string, ServerMetricsSeries | undefined>;
+  metricsErrorIds: ReadonlySet<string>;
+  probeSourceId: string;
+  probeResults: NetworkProbeResult[];
+  packageUpdatesById: Record<string, number | null>;
+  imageUpdatesById: Record<string, number | null>;
+  now?: number;
+}
+
+export function buildServerCards(input: BuildCardsInput): ServerCardView[] {
+  const now = input.now ?? Date.now();
+  const targets = new Map<string, ProbeTargetView>();
+  for (const result of input.probeResults) {
+    targets.set(result.targetServerId, probeTargetView(result));
+  }
+  return input.servers.map((server) => {
+    const series = input.metricsById[server.id];
+    const metrics = latestMetricsView(series);
+    const status = nodeStatusKind(server, metrics.sampledAt, now);
+    const isProbeSource = server.id === input.probeSourceId;
+    const target = isProbeSource ? undefined : targets.get(server.id);
+    const hasProbe = Boolean(target);
+    return {
+      server,
+      status,
+      statusTone: nodeStatusTone(status),
+      metrics,
+      metricsError: input.metricsErrorIds.has(server.id),
+      isProbeSource,
+      probeAvailable: hasProbe,
+      probeLatencyMs: target?.latencyMs ?? null,
+      probePacketLossPercent: target?.packetLossPercent ?? null,
+      probeStale: Boolean(target?.stale),
+      cpuHistory: cpuHistory(series, now),
+      loadHistory: loadHistory(series, now),
+      latencyHistory: probeLatencyHistory(target?.history, now),
+      lossHistory: probeLossHistory(target?.history, now),
+      packageUpdates: input.packageUpdatesById[server.id] ?? null,
+      imageUpdates: input.imageUpdatesById[server.id] ?? null,
+    };
+  });
+}
+
+export interface NodeSummaryView {
+  total: number;
+  online: number;
+  offline: number;
+  stale: number;
+  fresh: number;
+  unsupported: number;
+}
+
+export function summarizeNodeCards(cards: ServerCardView[]): NodeSummaryView {
+  let online = 0;
+  let offline = 0;
+  let stale = 0;
+  let fresh = 0;
+  let unsupported = 0;
+  for (const card of cards) {
+    if (card.status === 'online') online += 1;
+    else if (card.status === 'offline') offline += 1;
+    else stale += 1;
+    if (card.status === 'online') fresh += 1;
+    if (card.server.os?.supported === false) unsupported += 1;
+  }
+  return { total: cards.length, online, offline, stale, fresh, unsupported };
+}
+
+export interface RelativeTimeLabel {
+  key: string;
+  params?: Record<string, number>;
+}
+
+/** 相对时间文案 key（实际翻译由页面通过 t() 完成）。 */
+export function relativeTimeLabel(value: string | null | undefined, now = Date.now()): RelativeTimeLabel | null {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) return null;
+  const diff = Math.max(0, now - parsed);
+  if (diff < 60 * 1000) return { key: 'overviewPage.relativeJustNow' };
+  if (diff < 60 * 60 * 1000) return { key: 'overviewPage.relativeMinutes', params: { count: Math.floor(diff / 60000) } };
+  if (diff < 24 * 60 * 60 * 1000) return { key: 'overviewPage.relativeHours', params: { count: Math.floor(diff / 3600000) } };
+  return { key: 'overviewPage.relativeDays', params: { count: Math.floor(diff / 86400000) } };
+}
+
+export function memoryPercent(view: ServerMetricsView): number | null {
+  if (!view.memoryUsedBytes || !view.memoryTotalBytes || view.memoryTotalBytes <= 0) return null;
+  return Math.min(100, Math.max(0, (view.memoryUsedBytes / view.memoryTotalBytes) * 100));
+}
+
+export function diskPercent(view: ServerMetricsView): number | null {
+  if (!view.diskUsedBytes || !view.diskTotalBytes || view.diskTotalBytes <= 0) return null;
+  return Math.min(100, Math.max(0, (view.diskUsedBytes / view.diskTotalBytes) * 100));
+}
+
+export function formatPercent(value: number | null | undefined, digits = 0): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—';
+  return `${value.toFixed(digits)}%`;
+}
+
+export function formatLatency(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—';
+  return `${Math.round(value)} ms`;
+}
+
+export function formatPacketLoss(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—';
+  return `${value.toFixed(1)} %`;
+}
+
+export function formatLoad(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—';
+  return value.toFixed(2);
+}
+
+const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+
+export function formatBytes(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value) || value < 0) return '—';
+  let scaled = value;
+  let unit = 0;
+  while (scaled >= 1024 && unit < BYTE_UNITS.length - 1) {
+    scaled /= 1024;
+    unit += 1;
+  }
+  return `${scaled >= 100 || unit === 0 ? scaled.toFixed(0) : scaled.toFixed(1)} ${BYTE_UNITS[unit]}`;
+}
+
+export function formatRate(value: number | null | undefined): string {
+  const formatted = formatBytes(value);
+  return formatted === '—' ? '—' : `${formatted}/s`;
 }
