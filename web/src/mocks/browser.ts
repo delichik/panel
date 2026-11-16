@@ -25,6 +25,13 @@ import {
 } from './certificates';
 import { getOverviewCardData, getOverviewCards, overviewFromServers, setOverviewCards } from './overview';
 import {
+  getNetworkProbeConfig,
+  getNetworkProbeMatrix,
+  getServerNetworkProbes,
+  MockNetworkProbeError,
+  saveNetworkProbeConfig,
+} from './networkProbe';
+import {
   accepted,
   applyServerTailscale,
   createCredential,
@@ -42,6 +49,7 @@ import {
 } from './servers';
 import type { CredentialInput } from '@/types/credentials';
 import type { OverviewCardConfigurationSet } from '@/types/overview';
+import type { NetworkProbeSaveInput } from '@/types/networkProbe';
 import type { ServerProbeInput, ServerSaveInput } from '@/types/servers';
 import {
   appDiagnostics,
@@ -293,6 +301,11 @@ export function installMockApi() {
       const range = url.searchParams.get('range') ?? '1h';
       const series = mockServerMetrics(decodeURIComponent(metricsMatch[1]), range);
       return series ? json(series) : error('server_not_found', 'Server was not found.', 404);
+    }
+    const serverNetworkProbesMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)\/network-probes$/);
+    if (serverNetworkProbesMatch && method(init) === 'GET') {
+      const result = getServerNetworkProbes(decodeURIComponent(serverNetworkProbesMatch[1]));
+      return result ? json(result) : error('server_not_found', 'Server was not found.', 404);
     }
     const serverMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)$/);
     if (serverMatch && method(init) === 'GET') {
@@ -797,6 +810,16 @@ export function installMockApi() {
       if (input.takeover && !input.confirmTakeover) return json({ error: { code: 'facility_dns_takeover_confirmation_required', message: 'Confirm takeover before overwriting existing DNS records' } }, 422);
       return json({ taskId: 'mock-dns-sync' }, 202);
     }
+    if (url.pathname === '/api/v1/facility-apps/network-probe' && method(init) === 'GET') return json(getNetworkProbeConfig());
+    if (url.pathname === '/api/v1/facility-apps/network-probe' && method(init) === 'PUT') {
+      try {
+        return json(saveNetworkProbeConfig(await body<NetworkProbeSaveInput>(init)));
+      } catch (err) {
+        if (err instanceof MockNetworkProbeError) return error(err.code, err.message, err.status);
+        throw err;
+      }
+    }
+    if (url.pathname === '/api/v1/facility-apps/network-probe/results' && method(init) === 'GET') return json(getNetworkProbeMatrix());
     if (url.pathname === '/api/v1/facility-apps/storage-share' && method(init) === 'GET') return json(mockStorageShare);
     if (url.pathname === '/api/v1/facility-apps/storage-share' && method(init) === 'PUT') {
       const input = init?.body ? await new Response(init.body).json() as { servers?: Array<{ serverId?: string; root?: string }> } : {};

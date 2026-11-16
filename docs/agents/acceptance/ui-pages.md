@@ -36,15 +36,17 @@
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
 | UI-OVR-001 | 首次进入或手动刷新 | 并行加载 overview 与卡片配置，再按卡片加载数据；展示健康、指标新鲜度、更新压力、安全摘要 | 初始失败显示错误空态+重试；无服务器显示添加服务器引导；单卡失败仅留在卡内并 toast | 页面其余卡片不因一张卡失败消失，添加入口去 `/servers` |
-| UI-OVR-002 | 指标卡有多个服务器 | 以时间戳对齐，每台服务器独立折线；缺失点显示 gap 而非 0；tooltip 显示时间、服务器和数值且不被卡片裁切 | 不能按数组下标错位聚合；空数据明确显示卡片空态 | 改变样本顺序/缺点后曲线仍与时间、服务器一致 |
+| UI-OVR-002 | 指标卡有多个服务器 | 以时间戳对齐，每台服务器独立折线；缺失点显示 gap 而非 0；tooltip 显示时间、服务器和数值且不被卡片裁切 | 不能按数组下标错位聚合；空数据明确显示卡片空态；磁盘卡与探测卡不是折线卡（见 `UI-OVR-012`），不得为它们伪造曲线或把当前值画成历史点 | 改变样本顺序/缺点后曲线仍与时间、服务器一致 |
 | UI-OVR-003 | 选择自动刷新 5s/10s | 普通浏览态按 `since=最近点时间` 增量取数，合并严格更新点并按卡片 range 清理旧点 | 关闭、隐藏标签、编辑态或已有在途请求时不刷新；无增量不改旧序列 | 请求不是整段重载，刷新不闪白也不重放列表动画 |
 | UI-OVR-004 | 点击“编辑仪表盘” | 进入编辑态并保存进入前快照，暂停自动刷新；显示添加、重置、取消、卡片编辑/删除/拖动/缩放 | 编辑态不应立即写后端；卡片宽 1–6、高 1–4，布局不得横向溢出 | 编辑前后卡片配置可比对，编辑态显示脏操作区 |
-| UI-OVR-005 | 添加/删除/重置卡片 | 添加按类型给默认尺寸/range；删除须 danger 确认；重置恢复默认卡片并重载数据 | 删除取消不改变列表；新增未持久化指标卡不得调用不存在的 card-data ID | 卡片数量和顺序仅在确认后变化，删除确认关闭后状态清空 |
+| UI-OVR-005 | 添加/删除/重置卡片 | 添加按类型给默认尺寸/range；可选类型包含 CPU、内存、磁盘（当前值）、`diskIO`（读/写速率）、网络、`networkProbe`（探测摘要）等；删除须 danger 确认；重置恢复默认卡片并重载数据 | 删除取消不改变列表；新增未持久化指标卡不得调用不存在的 card-data ID；`disk`/`networkProbe` 添加后不得套用折线卡默认 range 语义 | 卡片数量和顺序仅在确认后变化，删除确认关闭后状态清空 |
 | UI-OVR-006 | 拖动或指针缩放卡片 | 拖过目标时实时预览重排；缩放按网格单位且限制范围；结束时清理拖拽/全局 pointer listener | 非编辑态完全禁用；容器列数变化不得生成隐式横向列 | 顺序、宽高在 UI 中即时反映，离开后无残留 listener |
-| UI-OVR-007 | 打开单卡编辑器 | 可改类型、宽高、range、服务器范围；网络卡额外显示 rx/tx/both；空 serverIds 表示全部服务器 | 类型改变需归一默认尺寸；非网络卡不得保留可见网络方向控件 | 关闭弹窗保留当前编辑草稿，最终统一由仪表盘保存提交 |
+| UI-OVR-007 | 打开单卡编辑器 | 可改类型、宽高、range、服务器范围；网络卡额外显示 rx/tx/both；空 serverIds 表示全部服务器。`diskIO` 卡保留 range（读写速率按 range 取数）；`disk` 与 `networkProbe` 卡不适用 range/方向，编辑器中隐藏这些控件，`networkProbe` 的 serverIds 表示过滤探测节点 | 类型改变需归一默认尺寸；非网络卡不得保留可见网络方向控件；`disk`/`networkProbe` 不得提交无效 range 或方向作为可见配置；不得因为隐藏控件而把已存 range 清成非法值 | 关闭弹窗保留当前编辑草稿，最终统一由仪表盘保存提交 |
 | UI-OVR-008 | 保存或取消编辑 | 保存一次提交完整可见卡片配置，成功退出编辑并整卡重载；取消恢复进入前快照 | 保存失败留在编辑态、显示 toast/错误；保存中防重复 | 后端返回配置成为新基线，失败时用户改动未丢失 |
 | UI-OVR-009 | 编辑中点击其他路由 | 弹出放弃确认；取消留在原页，确认恢复旧快照后再跳转 | 不得静默丢改动；仅打开卡片编辑器也视为需保护 | 两条确认分支的 URL 与卡片数据均正确 |
 | UI-OVR-010 | 风险队列或快捷入口 | 风险项跳到自身明确目标；快捷入口分别到 servers、credentials、servers（软件包 tab）、logs | 无风险显示健康空提示，不生成不可点击假项 | 每个按钮目标与文案匹配，较窄宽度不溢出 |
+| UI-OVR-011 | 概览存在 `diskIO` 卡片 | 卡片按服务器各画一条磁盘 IO 折线（每个点是该服务器读+写字节每秒之和），多服务器按时间对齐、缺失点为 gap；数据来自 `GET /overview/cards/{id}/data` 的 `metricsByServer[*].diskIo`，按卡片 range 服务端降采样；数值按字节速率格式化，摘要展示最新值与峰值；自动刷新按桶对已有序列做后缀替换 | 空数据或全部样本 NULL 显示卡片空态，不得把 NULL/缺测画成 0；失败只留在卡内并静默保留旧数据；不得跨服务器按数组下标错位聚合 | 序列形状与 `OBS-MET-008` 可空语义一致；`overview` model 测试覆盖读/写合计派生、gap、桶后缀替换与空态 |
+| UI-OVR-012 | 概览存在 `disk` 或 `networkProbe` 卡片 | `disk` 卡只显示当前磁盘用量/总量、百分比、最近采样时间与参与汇总的服务器数（跨服务器对各自最新有效 `diskCurrent` 求和，无有效采样显示未知空态），不画曲线、不显示 range 控件；`networkProbe` 卡显示节点数、结果数、平均延迟、最大丢包、最近采样时间与最差至多 3 条结果（失败优先，其次丢包率降序，再按延迟降序；含目标名/地址与过期标记），无数据时显示明确空态；卡片数据分别来自 `diskCurrent` 与 `probes` | 磁盘卡不得画历史曲线或用 0 填充缺测；探测卡不得把缺失延迟/丢包显示为 0 或把 stale 结果当作实时；两张卡都不参与桶后缀合并（每轮以最新值/probes 覆盖）；失败只影响本卡 | 卡片数据形状符合 `OBS-OVW-005`；概览 model 测试覆盖 `deriveDiskCardView`/`deriveNetworkProbeCardView` 的空值、跨服务器汇总与最差排序 |
 
 ## 5. 服务器 `/servers`
 
@@ -57,7 +59,7 @@
 | UI-SRV-005 | 提交服务器表单 | 创建/更新成功关闭弹窗、打开新对象覆盖详情、失效详情缓存并重载列表；创建返回 initialTaskId 时 toast 与概况 tab 只表达“服务器已登记、初始化任务已启动”，并跟踪该任务 | 提交中防重复；API 失败保持弹窗及输入；初始化任务失败时服务器记录保留（不自动删除）、标记不可达与原因，概况 tab 任务状态卡展示失败与错误，用户可编辑/删除 | 成功 toast 不早于服务端确认；活跃初始化任务每 2 秒刷新状态，失败态可经任务状态、服务器详情与活动日志追溯 |
 | UI-SRV-006 | 点击测试连接 | 调用所选服务器 test，成功刷新该详情和列表并提示服务器名 | 失败保留页面，不能伪造 reachable | 仅目标服务器状态改变，按钮 loading 覆盖请求期 |
 | UI-SRV-007 | 删除服务器 | 先显示对象名与影响说明的 danger 确认；成功清详情缓存、清选择并重载 | 失败不关闭确认/不移除行 | 取消零请求；成功后 URL 不再选中已删除 ID |
-| UI-SRV-008 | 指标卡首次加载、换 range、手刷或自动刷 | 默认 range=1h，支持 1h/6h/1d/7d；展示 CPU、内存、磁盘、网络 rx/tx 图和当前值 | 同服务器刷新保留旧图；换服务器清旧图；自动刷防重入且隐藏页暂停 | range 请求合法，失败只影响指标卡并保留可用旧数据 |
+| UI-SRV-008 | 指标卡首次加载、换 range、手刷或自动刷 | 默认 range=1h，支持 1h/6h/1d/7d；展示 CPU、内存、磁盘 IO（读/写双序列）、网络 rx/tx 四张曲线图和对应当前值；磁盘使用率改为**仅当前值卡片**（已用/总量+百分比+采样时间），不画历史曲线；`diskIo` 为 NULL 的样本显示为缺测而非 0 | 同服务器刷新保留旧图；换服务器清旧图；自动刷防重入且隐藏页暂停；磁盘区域无历史曲线时不得显示空图骨架或伪造曲线 | range 请求合法，`GET /servers/{id}/metrics` 响应含 `diskIo`/`diskCurrent` 且不含 `disk` 时前端仍能正确渲染；失败只影响指标卡并保留可用旧数据 |
 | UI-SRV-009 | 点击部署 Agent | 提交后台任务并显示真实 taskId；立即加载该任务，显示阶段、错误、最近 20 行日志；页头主机状态与列表共用综合状态文案，部署任务另用任务 StatusBadge，二者不得用「可达」代替 Agent 问题 | 无历史显示明确空态；任务加载失败有局部重试 | 活跃任务每 2 秒增量取日志，隐藏标签暂停，完成时刷新服务器详情 |
 | UI-SRV-010 | 重启或信任新 host key | 详情页头与 Agent tab 均可发起主机重启；按能力禁用不可执行项；两者均先 danger 确认，信任 host key 额外强制勾选 | 确认后重启只提示任务已接受；信任成功刷新主机指纹状态 | 未确认零请求；响应 taskId/服务器名与 toast 一致 |
 | UI-SRV-015 | 打开新建服务器表单（非编辑） | 在连接区之后显示**非阻断**警示横幅：面板将在部署 Agent 时接管该机防火墙（仅 UFW）——缺失时安装、放行 SSH/Agent 端口与反向代理 80/443、启用默认拒绝策略；未声明「开放防火墙」的应用端口会被阻断 | 横幅不得出现在编辑态；不得新增勾选项、弹窗或确认步骤 | 横幅不影响 `canSave`，不得因其存在而阻止提交或发出额外请求 |
@@ -66,7 +68,7 @@
 | UI-SRV-013 | 查看新建服务器初始化状态 | 概况 tab 以状态卡展示初始化任务（StatusBadge + 错误 + 活动入口），而非仅纯文本任务 id | 初始化任务加载失败有局部错误；任务失败时服务器保留、标记不可达并在状态卡持久展示原因，供编辑/删除 | 活跃初始化任务刷新，终态与失败原因可经任务状态与活动日志追溯 |
 | UI-SRV-014 | 在服务器表单中配置 Tailscale 意图 | 「将该节点加入 tailnet」与两个偏好开关（Agent 连接、节点互联）；未启用时两个偏好开关禁用并显示说明，提交时未启用的一侧偏好被规范化为 false | 不得在未启用时提交偏好组合；不得只依赖后端强制而在界面保留可点击的无效开关 | 重新打开表单回显与服务端一致的三个开关，保存后详情与列表按服务端返回状态渲染 |
 | UI-SRV-016 | 查看服务器 Tailscale 状态或手动重试 | `tailscaleEnabled` 时 Overview 身份条与 Tailscale tab 显示状态徽标（`disabled`/`pending`/`installing`/`running`/`degraded`/`unsupported`/`error` 的本地化文案）；列表不再常驻 Tailscale 列；Tailscale tab 单列只读展示三个开关、主机名、IPv4/IPv6、状态更新时间与 `lastError`；「应用 Tailscale」位于详情页头 actions，提交任务并提示真实 taskId，随后刷新服务器详情 | 未启用时显示未配置说明且页头应用按钮禁用；从未上报时显示明确空态而不是伪造状态；失败必须显示原因且可重试，不得把“任务已受理”表述为节点已加入 | toast 中的 taskId 可在 `/executions` 或 `/events` 定位；徽标与 `tailscale.status` 一致，`lastError` 脱敏后原样展示 |
-| UI-SRV-017 | 在服务器详情切换 tabs | 详情一级 tab 固定为 概况/监控/Agent/Tailscale/**资源**/软件包/防火墙；Docker 的容器/镜像/网络/存储卷合并进「资源」并用 URL `subtab`（`containers`/`images`/`networks`/`volumes`，默认 containers）切换；旧 `tab=containers|images|networks|volumes` 作兼容别名映射到 `tab=resources&subtab=…`；一级/资源 subtab 首次激活才请求并在详情存活期内缓存，切换服务器或关闭详情清空旧数据；监控轮询只在详情打开且该 tab 激活时运行；防火墙内 UFW/Fail2Ban 用分段控件（非嵌套 Tabs），选择进 URL `subtab`，Fail2Ban 仅 dev 可见 | 切 tab/subtab 不得清空已加载快照或重复请求；能力不足在对应面板内给出阻断原因；不得用页面级滚动承载 tab 内容；Overview/Tailscale/Agent 单列展示，禁止无关 aside | tab 切换无闪烁且状态保留；深链 `?server=&tab=resources&subtab=images` 与旧 `?tab=images` 均恢复对应面板；非 dev 无 Fail2Ban 子视图 |
+| UI-SRV-017 | 在服务器详情切换 tabs | 详情一级 tab 固定为 概况/监控/探测/Agent/Tailscale/资源/软件包/防火墙；探测 tab 契约见 `UI-SRV-025`；Docker 的容器/镜像/网络/存储卷合并进「资源」并用 URL `subtab`（`containers`/`images`/`networks`/`volumes`，默认 containers）切换；旧 `tab=containers|images|networks|volumes` 作兼容别名映射到 `tab=resources&subtab=…`；一级/资源 subtab 首次激活才请求并在详情存活期内缓存，切换服务器或关闭详情清空旧数据；监控轮询只在详情打开且该 tab 激活时运行；防火墙内 UFW/Fail2Ban 用分段控件（非嵌套 Tabs），选择进 URL `subtab`，Fail2Ban 仅 dev 可见 | 切 tab/subtab 不得清空已加载快照或重复请求；能力不足在对应面板内给出阻断原因；不得用页面级滚动承载 tab 内容；Overview/Tailscale/Agent/探测 单列展示，禁止无关 aside | tab 切换无闪烁且状态保留；深链 `?server=&tab=resources&subtab=images`、`?tab=probes` 与旧 `?tab=images` 均恢复对应面板；非 dev 无 Fail2Ban 子视图 |
 | UI-SRV-018 | 查看/操作资源表格 | 容器/镜像/网络/存储卷在资源 subtab、软件包在一级 tab 内以表格展示；子页去掉重复「左侧标题复述 tab 名」；镜像/Fail2Ban 工具栏收敛为**一个主操作 + Refresh，其余进 More**；容器行操作收紧为图标主操作（启动/日志）+ 溢出（停止/重启/删除，确认 + 托管提示）；镜像：拉取、升级应用、清理未使用、删除（in-use 禁删、危险确认强制勾选）；网络只读且删除禁用；存储卷：清理未使用、删除（in-use 禁删、确认强制勾选）；软件包：勾选只对当前快照，批量栏仅在有选中时出现，升级全部先 danger 确认；网络/存储卷首次打开且无快照时自动提交刷新任务 | 根据状态/能力禁用无效动作；操作按钮按（行, 操作）单独 loading；失败保留快照并 toast；不得把失败当作空列表 | 表格列包含名称/关键状态；请求 payload 与选中项一致；取消确认零请求；成功后重载当前面板 |
 | UI-SRV-019 | 在防火墙 tab 维护 UFW / Fail2Ban | UFW 展示 supported/installed/active/default policy 与规则号/action/to/from，提供新增 allow rule 与删除规则（确认、受保护端口/受管规则由后端拒绝），并展示「安装与启用由 Agent 部署自动完成」说明；Fail2Ban 可在 visual 与 YAML 间切换，提供 preset、jail 删除、保存草稿、安装、启用/接管确认、释放（danger 确认）；保存草稿仅在 YAML 变化时启用；UFW/Fail2Ban 切换用分段控件而非嵌套一级 Tabs | 页面不得出现 UFW 安装/启用入口；未勾选接管不提交；保存不等于启用；失败保留草稿/输入 | 规则增删使用返回值重建列表；toast 只承诺任务接受并含真实 taskId；visual 往返可解析 |
 | UI-SRV-020 | 查看 Agent report 链路稳定性 | 概况「连接信息」与 Agent tab 必须展示 report 链路状态（connected/disconnected）与稳定性等级（优/良好/一般/差/极差，对应 `excellent`/`good`/`fair`/`poor`/`critical`），并在有计数时展示近 1 小时断连次数；文案与色调独立于综合主机状态与部署任务 StatusBadge；列表仅在非优时附稳定性徽标（见 `UI-SRV-001`） | 尚无 `agent.report.status` 时显示明确空态/暂无数据，不得假装为优；不得把稳定性画进综合状态徽标或替代 Agent 健康文案 | 等级与 `AGT-RPT-005` 阈值一致；断连次数与摘要/详情 traits 一致 |
@@ -74,6 +76,7 @@
 | UI-SRV-022 | 编辑代理字段、点击“探测”或提交表单 | 本地校验：SSH 隧道必须选隧道服务器；SOCKS5 必须填合法 `host:port`；密码非空而用户名为空时报错；错误在字段下方内联显示并进入底部可点击错误摘要，摘要项聚焦对应字段；探测与保存携带全部代理字段，编辑态探测且密码留空时附带 `serverId`；探测结果按当前草稿展示 reachable/error/OS/架构/特权，代理草稿变化后旧结果标记过期 | 本地校验失败不发探测/保存请求；服务端返回代理错误码时就地展示本地化错误，不得匹配英文消息文本；探测失败保留输入且不创建记录；切换为直连后探测/保存不得再提交隧道或 SOCKS5 字段 | 合法草稿的探测请求含 `proxyMode`/`tunnelServerId`/`socks5Address`/`socks5Username`/`socks5Password`（编辑留空时另含 `serverId`）；保存请求不含 `serverId` |
 | UI-SRV-023 | 保存代理配置或重新打开编辑 | 保存成功后关闭表单并刷新详情；重新打开编辑时回显模式与隧道服务器/SOCKS5 地址、用户名，密码只以“已设置/留空保持原密码”表达；选择直连保存成功后再次编辑显示直连且无代理残留，`socks5PasswordSet` 等派生状态与详情一致 | 保存失败保持弹窗与输入；代理字段服务端校验失败按错误码展示且不关闭弹窗；切换直连不得清除基础连接字段 | 连续“设置密码→重开不回显→留空保存后 `socks5PasswordSet` 仍为 true→切直连保存后 `socks5PasswordSet` 为 false”可复现 |
 | UI-SRV-024 | 查看服务器详情连接区或列表连接提示 | 详情「连接」区展示当前模式：`直连` / `SSH 隧道 · <服务器名>` / `SOCKS5 · <地址>`；`proxyInvalid=true` 时以警告样式展示并翻译 `proxyError`（`tunnel_missing`/`cycle`/`chain_too_deep`/`socks5_address_missing`/`socks5_address_invalid`），用户可用详情页头既有「编辑」入口重新指定（不新增独立入口）；列表在综合状态旁以 `SSH`/`SOCKS5` 短标签提示，tooltip 为“经代理连接”或失效原因，失效时 warning 色调，且不替代综合状态/稳定性徽标 | `tunnelServerName` 为空时回退显示 `tunnelServerId`，两者皆空才显示“未知服务器”，不得留空；直连时该行显示“直连”（不隐藏，便于确认当前连接方式）；不得把代理失效并入综合状态徽标或据此误报主机健康；新增文案 en/zh-CN 同键（见 `i18n-translation-status.md`） | 删除隧道服务器后详情出现 `proxyInvalid` 警告与本地化原因；重新指定隧道服务器并保存后警告消失；切换语言后模式与错误文案随之切换 |
+| UI-SRV-025 | 打开服务器详情的「探测」tab（含深链 `?tab=probes`） | 该 tab 只在详情存活期内缓存，首次激活按需请求 `GET /api/v1/servers/{id}/network-probes`；页头显示最近采样时间并提供手动刷新（不得定时轮询）；探测节点以表格展示目标服务器名、目标地址、平均延迟、丢包率、发送/接收、采样时间与状态徽标（状态由 `error`/丢包/`stale` 派生：正常/降级/已过期/失败）；非探测节点（`enabled=false`）展示「该节点不是探测节点」空态与去设施配置的入口（`/applications/facility-apps/network-probe`），而不是空表格或伪造 0 值；探测节点但无结果时显示表格空态；旧 Agent 不刷新时保留最后一次结果并标 stale（`FAC-PRB-006`） | 切换服务器/离开 tab 取消旧请求且迟到结果不得串节点；失败显示 tab 内局部错误与重试，不得清空其他 tab 快照；不得把缺失延迟/丢包显示为 0（失败行的延迟显示不可用）；不得影响服务器综合状态 | 深链恢复探测 tab；非探测节点空态可直达设施页；`ProbesTab` 模型/组件测试（`probeOutcome` 派生、空态、请求竞态）与 typed client 测试 |
 
 ## 6. SSH 凭据 `/credentials`
 
@@ -229,6 +232,11 @@
 | UI-FAC-010 | 管理本记录私有资产 | 复用 AssetFileManager；变更写入本地 pending；文本「保存」只更新 pending；路由引用用 asset.name；已提交资产下载走 `GET .../static-assets/{assetName}/content?recordId={recordId}` | binary/archive 不可当文本编辑；替换保留 name；编辑期不得调用 session asset API；下载必须带本记录 recordId | 列表=本记录已提交⊕pending；不得显示其他记录资产 |
 | UI-FAC-011 | 保存/取消单条配置 | 唯一主操作「保存」：本地校验→begin（绑定 recordId）→patch→flush pending→preview→commit→若 `applyNeeded` 再 config-plane apply；成功退出单条编辑回列表并刷新；取消脏草稿先确认 | 冲突 discard 会话并保留本地；apply 失败仍提示配置已提交；保存中整页阻塞 | 其他记录 version 不变；applyNeeded 决定是否提示已请求 reload |
 
+| UI-FAC-014 | 打开设施目录 `/applications/facility-apps` | 目录卡片固定包含 reverse-proxy、storage-share 与 `network-probe`（Radar 图标、network 分类）；网络探测卡展示探测节点数、目标数与当前模式（`all`/`selected`），目录加载时并行读取网络探测配置，加载中显示占位；该卡不提供「协调/同步」按钮（网络探测无协调 Job），不得调用 reconcile API | 统计/配置失败只让该卡显示不可用或 `—`，不影响其他设施卡；未知 facilityKind 显示不可用空态 | 目录可点击进入网络探测详情；`FacilityCatalog` 模型/组件测试与 Mock 路由测试 |
+| UI-FAC-015 | 进入网络探测设施详情/配置（`/applications/facility-apps/network-probe`，`/config` 可直达；两种入口复用同一组件） | 页面并行加载配置 `GET /facility-apps/network-probe` 与矩阵 `GET /facility-apps/network-probe/results`；配置区为模式 Select（`all` 全部节点 / `selected` 指定节点），`selected` 时用 `ServerMultiPicker` 选择探测节点（候选来自服务器列表，含名称/地址/可达状态），`all` 时隐藏选择器；点「保存」提交 `{mode, serverIds}`，成功后刷新配置与矩阵；保存按钮仅在草稿与已保存配置不同且非保存中时可用；加载失败显示页面级错误与重试 | `selected` 未选节点时本地阻止保存并就地提示，不发请求；保存失败保留草稿并以 toast 显示服务端错误；切换 `selected`→`all` 保留已选节点以便切回，但保存时按模式归一化；加载中不得显示可编辑的旧配置 | 保存后重新进入回显归一化 mode/serverIds；`NetworkProbeFacility` 组件/模型测试覆盖脏检测、selected 校验与失败保留 |
+| UI-FAC-016 | 查看网络探测结果矩阵 | 结果区标题展示最近采样时间并提供手动刷新（加载态防重复，不得定时轮询）；矩阵为**源×目标**表格：首列为探测节点，其余列为目标节点，单元格显示到该目标的平均延迟与丢包率（如 `12.3 ms · 5%`），失败显示失败文案、过期结果附加过期标记、源与目标相同或缺少结果显示 `—`；矩阵数据来自 `results`（`nodes` 只含当前探测节点，`results` 只含仍存在的目标），表格在卡片内部滚动 | 无探测节点时显示空态（不渲染空表头）；读取失败显示局部错误+重试并保留上一次成功矩阵；不得把缺失延迟/丢包渲染为 0，不得把已删除节点或非探测源的结果混入矩阵 | 矩阵单元格语义与 `FAC-PRB-006` DTO 一致；`NetworkProbeFacility` 组件/模型测试覆盖矩阵派生、失败/过期/缺测单元格与空态 |
+| UI-FAC-017 | 网络探测设施的滚动、窄屏与离开行为 | 中大型屏幕下页面外层容器填满页头外剩余视口，配置与矩阵各自成卡片，长矩阵只在表格容器内滚动，不产生页面级滚动；窄屏单列可恢复页面滚动；保存按钮按草稿脏状态启用/禁用，未保存改动不得被静默保存；返回设施目录使用页面自身返回入口 | 不得用页面级滚动承载矩阵；不得在无改动时提交保存；失败时不得把页面清空为假空态 | 深链进入详情/配置页状态一致；窄屏布局与内部滚动符合 `APP-UI-001`；`NetworkProbeFacility` 布局/滚动测试（或人工观察点） |
+
 `UI-FAC-012`：入口代理按节点显示容器观测与部署结果、失败阶段、下次重试及活动入口；错误带原因与处理提示，技术诊断/本次运行日志放入内部可滚动折叠区。按需代理检查显示样本限制、节点/域名/上游、分类解释与下一步；空样本不表示全部路由健康，旧配置/离页响应不得覆盖当前结果。
 
 ## 12. 存储共享设施
@@ -336,8 +344,8 @@
 ## 20. 覆盖来源
 
 - 全部路由：`web/src/router/index.ts`。
-- 页面实现：`web/src/views/auth`、`overview`、`servers`（含 `tabs/` 资源与安全 tab）、`credentials`、`applications`、`dns`、`certificates`、`events`、`logs`（`events` 列表复用 `IntentRecordsPage`；`/operations`、`/tasks` 仅重定向）、`settings`、`maintenance`、`debug`。不得再保留可路由的 Activity 双视图页。
-- 操作/API：`web/src/api/*.ts`；DTO 与 capability：`web/src/types/*.ts`。
+- 页面实现：`web/src/views/auth`、`overview`、`servers`（含 `tabs/` 资源、安全与探测 tab）、`credentials`、`applications`（含设施 `NetworkProbeFacility.vue`）、`dns`、`certificates`、`events`、`logs`（`events` 列表复用 `IntentRecordsPage`；`/operations`、`/tasks` 仅重定向）、`settings`、`maintenance`、`debug`。不得再保留可路由的 Activity 双视图页。
+- 操作/API：`web/src/api/*.ts`（含 `networkProbe.ts`、`servers.ts` 的指标/探测方法）；DTO 与 capability：`web/src/types/*.ts`（含 `networkProbe.ts`、`overview.ts`）。
 - 字段校验和派生状态：各页面族 `model.ts`、`servers/tabs/resourceModel.ts`、`servers/tabs/securityModel.ts`、`assetImportEditor.ts`、`templateLanguage.ts`、`archivePath.ts`。
 - 共享交互：`web/src/components/ui`（含 `Table.vue`）、`web/src/components/templates/TableDetailLayout.vue`、`patterns/AssetFileManager.vue`、`ServerMultiPicker.vue`、`AutoRefreshControl.vue`。
 - 自动化证据：页面 model 测试、API client/API 模块测试、`domainRoutes.test.ts` Mock 集成样本、`Table.test.ts`、`TableDetailLayout.test.ts`、`servers/index.test.ts`、`servers/tabs/*.test.ts`，以及共享组件/布局/i18n/主题测试。

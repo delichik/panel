@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"panel/internal/modules/networkprobe"
 	"panel/internal/modules/observability/metrics"
 	"panel/internal/modules/packages"
 	"panel/internal/modules/servers"
@@ -14,11 +15,26 @@ import (
 	panelerr "panel/internal/platform/errors"
 )
 
+// ProbeCardProvider 由网络探测模块实现，为 networkProbe 概览卡提供矩阵摘要数据。
+// 接口在 overview 包定义、networkprobe 只需满足它，避免两个模块反向依赖。
+type ProbeCardProvider interface {
+	CardData(ctx context.Context, serverIDs []string) (networkprobe.CardData, error)
+}
+
+// Option 调整 Service 的可选依赖，保持 NewService 既有调用签名向后兼容。
+type Option func(*Service)
+
+// WithNetworkProbe 注入 networkProbe 卡片的数据提供者。未注入时卡片返回空数据。
+func WithNetworkProbe(provider ProbeCardProvider) Option {
+	return func(s *Service) { s.probes = provider }
+}
+
 type Service struct {
 	db       *sql.DB
 	servers  *server.Service
 	metrics  *metrics.Service
 	packages *packages.Service
+	probes   ProbeCardProvider
 }
 
 type Overview struct {
@@ -46,7 +62,9 @@ const (
 	CardKindCPU              CardKind = "cpu"
 	CardKindMemory           CardKind = "memory"
 	CardKindDisk             CardKind = "disk"
+	CardKindDiskIO           CardKind = "diskIO"
 	CardKindNetwork          CardKind = "network"
+	CardKindNetworkProbe     CardKind = "networkProbe"
 	CardKindPackageUpdates   CardKind = "packageUpdates"
 	CardKindContainerUpdates CardKind = "containerUpdates"
 	CardKindPlaceholder      CardKind = "placeholder"
@@ -71,10 +89,16 @@ type CardData struct {
 	MetricsByServer map[string]metrics.Series `json:"metricsByServer"`
 	// BucketSeconds 是本响应的降采样桶大小；增量刷新据此判断桶网格是否变化。
 	BucketSeconds int `json:"bucketSeconds"`
+	// Probes 仅 networkProbe 卡片返回；其他卡片保持省略。
+	Probes *networkprobe.CardData `json:"probes,omitempty"`
 }
 
-func NewService(db *sql.DB, servers *server.Service, metrics *metrics.Service, packages *packages.Service) *Service {
-	return &Service{db: db, servers: servers, metrics: metrics, packages: packages}
+func NewService(db *sql.DB, servers *server.Service, metrics *metrics.Service, packages *packages.Service, options ...Option) *Service {
+	svc := &Service{db: db, servers: servers, metrics: metrics, packages: packages}
+	for _, option := range options {
+		option(svc)
+	}
+	return svc
 }
 
 func (s *Service) Get(ctx context.Context) (Overview, error) {
@@ -193,6 +217,18 @@ func (s *Service) GetCardDataSince(ctx context.Context, cardID string, since *ti
 		return CardData{}, panelerr.NotFound("overview_card")
 	}
 	out := CardData{Card: target, MetricsByServer: map[string]metrics.Series{}}
+	if target.Kind == CardKindNetworkProbe {
+		// 探测卡不参与指标降采样（BucketSeconds 保持 0）；serverIds 为空表示
+		// 不过滤探测节点。未注入 provider 时返回空 probes，不报错。
+		if s.probes != nil {
+			probes, err := s.probes.CardData(ctx, target.ServerIDs)
+			if err != nil {
+				return CardData{}, err
+			}
+			out.Probes = &probes
+		}
+		return out, nil
+	}
 	if !isMetricCard(target.Kind) {
 		return out, nil
 	}
@@ -275,7 +311,10 @@ func cardSeriesFields(kind CardKind) metrics.SeriesFields {
 	case CardKindMemory:
 		return metrics.SeriesFields{Memory: true}
 	case CardKindDisk:
-		return metrics.SeriesFields{Disk: true}
+		// 磁盘不再有历史序列，卡片只展示 diskCurrent。
+		return metrics.SeriesFields{DiskCurrent: true}
+	case CardKindDiskIO:
+		return metrics.SeriesFields{DiskIO: true}
 	case CardKindNetwork:
 		return metrics.SeriesFields{Network: true}
 	default:
@@ -324,7 +363,7 @@ func validateCards(cards []CardConfiguration) error {
 
 func isMetricCard(kind CardKind) bool {
 	switch kind {
-	case CardKindCPU, CardKindMemory, CardKindDisk, CardKindNetwork:
+	case CardKindCPU, CardKindMemory, CardKindDisk, CardKindDiskIO, CardKindNetwork:
 		return true
 	default:
 		return false
@@ -333,7 +372,7 @@ func isMetricCard(kind CardKind) bool {
 
 func validCardKind(kind CardKind) bool {
 	switch kind {
-	case CardKindCPU, CardKindMemory, CardKindDisk, CardKindNetwork, CardKindPackageUpdates, CardKindContainerUpdates, CardKindPlaceholder:
+	case CardKindCPU, CardKindMemory, CardKindDisk, CardKindDiskIO, CardKindNetwork, CardKindNetworkProbe, CardKindPackageUpdates, CardKindContainerUpdates, CardKindPlaceholder:
 		return true
 	default:
 		return false

@@ -34,6 +34,10 @@ type MetricsSnapshot struct {
 	MemoryTotalBytes   int64
 	DiskUsedBytes      int64
 	DiskTotalBytes     int64
+	DiskUsageSampled   bool
+	DiskIOAvailable    bool
+	DiskReadBytesRate  float64
+	DiskWriteBytesRate float64
 	NetworkRxBytesRate float64
 	NetworkTxBytesRate float64
 	Status             SystemStatus

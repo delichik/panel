@@ -52,6 +52,10 @@ func TestMetricsSnapshotRoundTripIncludesLoadAverages(t *testing.T) {
 		MemoryTotalBytes:   8192,
 		DiskUsedBytes:      4096,
 		DiskTotalBytes:     16384,
+		DiskUsageSampled:   true,
+		DiskIOAvailable:    true,
+		DiskReadBytesRate:  1024.5,
+		DiskWriteBytesRate: 512.25,
 		NetworkRxBytesRate: 12.75,
 		NetworkTxBytesRate: 34.25,
 		Status: linux.SystemStatus{

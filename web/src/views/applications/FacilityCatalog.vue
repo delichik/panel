@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Component } from 'vue';
+import { computed, type Component } from 'vue';
 import { Rocket, Wrench } from '@lucide/vue';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
@@ -7,6 +7,7 @@ import EmptyState from '@/components/ui/EmptyState.vue';
 import StatusBadge from '@/components/ui/StatusBadge.vue';
 import { useI18n } from '@/i18n';
 import type { ReverseProxyConfig, StorageShareConfig } from '@/types/facilityApps';
+import type { NetworkProbeConfig } from '@/types/networkProbe';
 
 export type FacilityCatalogItem = {
   kind: string;
@@ -17,12 +18,15 @@ export type FacilityCatalogItem = {
   status: string;
 };
 
-defineProps<{
+const props = defineProps<{
   facilities: FacilityCatalogItem[];
   loading: boolean;
   pending: string;
   facility: ReverseProxyConfig | null;
   storageShareConfig: StorageShareConfig | null;
+  networkProbeConfig: NetworkProbeConfig | null;
+  /** 目录统计用的服务器总数：探测目标恒为“所有其他服务器”。 */
+  serverTotal: number;
 }>();
 
 const emit = defineEmits<{
@@ -31,6 +35,25 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
+
+const probeNodeCount = computed(() => {
+  const config = props.networkProbeConfig;
+  if (!config) return null;
+  return config.mode === 'all' ? props.serverTotal : config.serverIds.length;
+});
+
+/** 每个探测节点都向其余所有节点发起探测，目标对数 = 节点数 x (服务器总数 - 1)。 */
+const probeTargetCount = computed(() => {
+  const nodes = probeNodeCount.value;
+  if (nodes === null) return null;
+  return nodes * Math.max(0, props.serverTotal - 1);
+});
+
+const probeModeLabel = computed(() => {
+  const config = props.networkProbeConfig;
+  if (!config) return '—';
+  return t(config.mode === 'all' ? 'applicationsPage.networkProbeModeAll' : 'applicationsPage.networkProbeModeSelected');
+});
 </script>
 
 <template>
@@ -67,6 +90,11 @@ const { t } = useI18n();
               <div class="facility-card-stat"><strong>{{ storageShareConfig?.servers.length ?? '—' }}</strong><span>{{ t('applicationsPage.storageShareServers') }}</span></div>
               <div class="facility-card-stat"><strong>{{ storageShareConfig?.servers.filter((server) => server.root).length ?? '—' }}</strong><span>{{ t('applicationsPage.storageShareRoot') }}</span></div>
             </template>
+            <template v-else-if="item.kind === 'network-probe'">
+              <div class="facility-card-stat"><strong>{{ probeNodeCount ?? '—' }}</strong><span>{{ t('applicationsPage.networkProbeNodes') }}</span></div>
+              <div class="facility-card-stat"><strong>{{ probeTargetCount ?? '—' }}</strong><span>{{ t('applicationsPage.networkProbeTargets') }}</span></div>
+              <div class="facility-card-stat"><strong>{{ probeModeLabel }}</strong><span>{{ t('applicationsPage.networkProbeMode') }}</span></div>
+            </template>
             <template v-else>
               <div class="facility-card-stat"><strong>{{ facility?.routes ?? '—' }}</strong><span>{{ t('applicationsPage.gatewayRoutes') }}</span></div>
               <div class="facility-card-stat"><strong>{{ facility?.deploymentServers.length ?? '—' }}</strong><span>{{ t('applicationsPage.gatewayNodes') }}</span></div>
@@ -76,7 +104,9 @@ const { t } = useI18n();
         </div>
         <div class="flex flex-wrap items-start gap-2 lg:justify-end">
           <Button size="sm" variant="primary" @click="emit('open', item.kind)"><Wrench />{{ t('applicationsPage.manageFacility') }}</Button>
+          <!-- 探测设施结果由节点自动上报，没有可手动 reconcile 的网关/导出。 -->
           <Button
+            v-if="item.kind !== 'network-probe'"
             size="sm"
             variant="secondary"
             :disabled="item.kind === 'storage-share' && !storageShareConfig?.enabled"

@@ -1,5 +1,6 @@
 import type { ServerDto, ServerProbeInput, ServerProxyMode, ServerSaveInput } from '@/types/servers';
 import type { CredentialDto } from '@/types/credentials';
+import type { NetworkProbeResult } from '@/types/networkProbe';
 import { isSocks5Address, normalizeServerProxyMode } from '@/utils/serverProxy';
 
 export type { ServerProbeInput };
@@ -9,7 +10,7 @@ export type { ServerProbeInput };
  * 区分 containers/images/networks/volumes；旧一级 tab 名仍作深链别名。
  * 未知取值一律回落到 overview。
  */
-export const serverDetailTabs = ['overview', 'metrics', 'agent', 'tailscale', 'resources', 'packages', 'firewall'] as const;
+export const serverDetailTabs = ['overview', 'metrics', 'probes', 'agent', 'tailscale', 'resources', 'packages', 'firewall'] as const;
 
 export type ServerDetailTab = (typeof serverDetailTabs)[number];
 
@@ -42,6 +43,30 @@ export type FirewallView = 'ufw' | 'fail2ban';
 
 export function normalizeFirewallView(value: unknown): FirewallView {
   return String(value ?? '') === 'fail2ban' ? 'fail2ban' : 'ufw';
+}
+
+/**
+ * 网络探测结果的用户可见状态：失败优先于过期，丢包但送达算降级。
+ * 状态只由实际结果字段派生，不根据「探测节点是否存在」推测健康。
+ */
+export type ProbeOutcome = 'ok' | 'degraded' | 'stale' | 'failed';
+
+export function probeOutcome(result: Pick<NetworkProbeResult, 'error' | 'packetLossPercent' | 'sent' | 'received' | 'stale'>): ProbeOutcome {
+  if (result.error || (result.sent > 0 && result.received === 0) || result.packetLossPercent >= 100) return 'failed';
+  if (result.stale) return 'stale';
+  if (result.packetLossPercent > 0) return 'degraded';
+  return 'ok';
+}
+
+export function probeOutcomeTone(outcome: ProbeOutcome): 'success' | 'warning' | 'danger' | 'neutral' {
+  if (outcome === 'ok') return 'success';
+  if (outcome === 'degraded') return 'warning';
+  if (outcome === 'failed') return 'danger';
+  return 'neutral';
+}
+
+export function probeOutcomeStatusKey(outcome: ProbeOutcome) {
+  return `serversPage.probe.status.${outcome}` as const;
 }
 
 

@@ -72,6 +72,8 @@ message Empty {}
 message AgentReportControl {
   string server_id = 1;
   AgentReportConfig config = 2;
+  // 网络探测配置：设施网络探测节点列表变化时由 Panel 下发。旧 Agent 忽略该字段。
+  AgentProbeConfig probe = 3;
 }
 
 message AgentReport {
@@ -83,11 +85,42 @@ message AgentReport {
   DockerImagesResponse images = 6;
   // Tailscale 状态为节点本机事实；旧 Agent 不填该字段，Panel 必须按未知处理。
   TailscaleStatusResponse tailscale = 7;
+  // 网络探测结果。旧 Agent 不填该字段，Panel 必须按未知处理。
+  AgentProbeReport probes = 8;
+  // replayed 表示该指标样本是从本地补报缓冲重放的旧样本；Panel 跳过整点对齐
+  // 校验并按 (server_id, sample_at) 幂等落库。
+  bool replayed = 9;
 }
 
 message AgentReportConfig {
   int32 metrics_interval_seconds = 1;
   int32 containers_interval_seconds = 2;
+}
+
+message AgentProbeConfig {
+  bool enabled = 1;
+  int32 interval_seconds = 2;
+  repeated AgentProbeTarget targets = 3;
+}
+
+message AgentProbeTarget {
+  string server_id = 1;
+  string address = 2;
+  string name = 3;
+}
+
+message AgentProbeReport {
+  repeated AgentProbeResult items = 1;
+}
+
+message AgentProbeResult {
+  string target_server_id = 1;
+  string target_address = 2;
+  double latency_ms = 3;
+  double packet_loss_percent = 4;
+  int32 sent = 5;
+  int32 received = 6;
+  string error = 7;
 }
 
 message OKResponse {
@@ -135,6 +168,16 @@ message MetricsSnapshotResponse {
   double network_rx_bytes_rate = 8;
   double network_tx_bytes_rate = 9;
   SystemStatus status = 10;
+  // disk_usage_sampled 标记本次样本是否刷新了磁盘使用率（新 Agent 每 5 分钟
+  // 采样一次，其余样本值为 0）。旧 Agent 不填该字段：nil 表示“每次样本都带
+  // 磁盘值”，Panel 必须保留其磁盘字段。
+  google.protobuf.BoolValue disk_usage_sampled = 11;
+  // 磁盘 IO 读写速率（字节/秒），与网络速率使用同一采样窗口口径。
+  // disk_io_available 为 nil（旧 Agent）或 false 时两项速率视为未知，Panel
+  // 不得把它们当作 0 写入历史序列。
+  google.protobuf.BoolValue disk_io_available = 14;
+  double disk_read_bytes_rate = 12;
+  double disk_write_bytes_rate = 13;
 }
 
 message SystemStatus {

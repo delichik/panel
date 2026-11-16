@@ -31,7 +31,9 @@ const deploymentModeSelected = "selected"
 //   - application_persistent_locations 记录应用可能残留持久数据的节点，悬空后
 //     应用删除流程会因为取不到节点而永久失败；
 //   - 入口代理的网关、源站和中继节点，以及存储共享的存储节点都内嵌节点 ID，
-//     悬空后设施渲染会生成指向已不存在节点的 upstream。
+//     悬空后设施渲染会生成指向已不存在节点的 upstream；
+//   - 网络探测按 (source,target) 保存节点 ID，悬空结果会出现在探测矩阵与服务器
+//     探测页中，selected 模式的探测节点列表同样引用节点 ID。
 func (s *Service) cleanupServerReferences(ctx context.Context, tx *sql.Tx, serverID string) error {
 	if err := cancelAndDeleteServerJobs(ctx, tx, serverID); err != nil {
 		return err
@@ -53,6 +55,9 @@ func (s *Service) cleanupServerReferences(ctx context.Context, tx *sql.Tx, serve
 		return err
 	}
 	if err := removeServerFromStorageShare(ctx, tx, serverID); err != nil {
+		return err
+	}
+	if err := removeServerFromNetworkProbe(ctx, tx, serverID); err != nil {
 		return err
 	}
 	return disableApplicationsWithoutDeploymentTarget(ctx, tx, serverID, affected)
@@ -319,5 +324,53 @@ func removeServerFromStorageShare(ctx context.Context, tx *sql.Tx, serverID stri
 		}
 	}
 	_, err := orm.RawExec(ctx, tx, `DELETE FROM storage_share_partitions WHERE server_id=? OR storage_server_id=?`, serverID, serverID)
+	return err
+}
+
+// removeServerFromNetworkProbe 删除该服务器作为探测节点或目标的全部探测结果，
+// 并在 selected 模式下把它从探测节点列表里移除并递增设施版本。
+//
+// 结果表只按 (source,target) 保存最新一行且没有外键；节点删除后不清理会在矩阵
+// 与服务器探测页中留下指向已不存在节点的悬空结果。all 模式按现存节点探测，节点
+// 列表本身不参与渲染，因此不需要改配置。
+func removeServerFromNetworkProbe(ctx context.Context, tx *sql.Tx, serverID string) error {
+	if _, err := orm.RawExec(ctx, tx, `DELETE FROM network_probe_results WHERE source_server_id=? OR target_server_id=?`, serverID, serverID); err != nil {
+		return err
+	}
+	var mode, rawIDs string
+	err := tx.QueryRowContext(ctx, `SELECT mode,server_ids_json FROM network_probe_configs WHERE id='network_probe'`).Scan(&mode, &rawIDs)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(mode) != deploymentModeSelected {
+		return nil
+	}
+	ids := []string{}
+	if strings.TrimSpace(rawIDs) != "" {
+		if err := json.Unmarshal([]byte(rawIDs), &ids); err != nil {
+			return err
+		}
+	}
+	kept := make([]string, 0, len(ids))
+	changed := false
+	for _, id := range ids {
+		if id == serverID {
+			changed = true
+			continue
+		}
+		kept = append(kept, id)
+	}
+	if !changed {
+		return nil
+	}
+	encoded, err := json.Marshal(kept)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err = orm.RawExec(ctx, tx, `UPDATE network_probe_configs SET server_ids_json=?,version=version+1,updated_at=? WHERE id='network_probe'`, string(encoded), now)
 	return err
 }

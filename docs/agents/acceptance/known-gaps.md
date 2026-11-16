@@ -14,7 +14,7 @@
 | GAP-008 | ~~密钥资产详情类型~~（已关闭） | ~~前端要求 references/referenceCount，后端 detail DTO 未输出~~ | detail 输出完整 `references`+`referenceCount`；列表摘要只输出 `referenceCount`/`canDelete`（`references` 为空数组，见 `KAS-LIST-001/002`），删除门禁由 `canDelete`/`InUse` 驱动 |
 | GAP-009 | ~~系统版本类型~~（已关闭） | ~~后端可能返回 `checkError`，前端 `VersionInfo` 未声明~~ | typed client 声明 `checkError`；设置页系统段安全展示检查失败 |
 | GAP-010 | 备份旧文档引用 | 旧指引引用已不存在的 `web/src/api/backups.ts` 与 `web/src/types/api.ts` | 旧指引由本规范替代；后续引用只指向实际 maintenance/settings API 与类型 |
-| GAP-011 | Agent report 频率说明 | 旧指引写每秒检查，当前实现为每 5 秒 | 本规范以当前实现/运行时设置为准；增加频率行为测试或统一实现 |
+| GAP-011 | Agent report 频率说明 | 旧指引写「每秒检查」，当前实现中 report stream 的指标/容器节拍由运行时设置（`metricsCollectionIntervalSeconds`/`containerReportIntervalSeconds`，默认 5 秒）下发给已连接 Agent；磁盘使用率固定 5 分钟采样（`OBS-MET-007`）、设施网络探测固定 60 秒（`FAC-PRB-004`）、指标补报缓冲上限 12 条/10 分钟（`OBS-MET-009`）。这些频率语义不同，不得互相替代或把某个常量当成所有上报的周期 | 本规范以当前实现/运行时设置为准；变更任一节奏必须有对应验收合同、常量或运行时设置说明及行为测试（`AGT-RPT-004/008`、`OBS-MET-007/008/009`） |
 | GAP-012 | ~~UFW Agent 准入~~（已消除） | `InstallUFW` 曾绕过 `ensureUFWManageable` 并强制本地 privilege。手动安装入口已删除，防火墙改为 Agent 部署的自动前提（`AGT-FW-001..006`），该不一致随之消失 | 关闭；保留编号以便追溯 |
 | GAP-013 | ~~账户更新原子性~~（已关闭） | ~~账户、JWT secret、nonce 通过多次写入更新，缺少跨写入事务，失败可能部分成功~~ | `UpdateAccount` / `UpdateJWTSecret` 已在同一 AppDB 事务提交账户行、JWT secret 与 nonce，成功后再更新内存快照；见 `ID-ACC-011`、`ID-SES-006` 与 identity 服务测试 |
 | GAP-014 | 未来概览 API | 旧材料出现 `/overview/dashboard` 与 `baseVersion`，当前路由/服务未实现 | 保持不在当前合同；若实现，先新增 API/并发合同和前端消费测试 |
@@ -27,7 +27,7 @@
 | GAP-021 | 服务器资源 tabs 回归 | 首次空快照、请求竞态、桌面/窄屏滚动与 tab 切换缺少浏览器级 E2E（原资源页缺口并入服务器详情后仍存在） | 补服务器资源 tabs 的浏览器测试与三档桌面/一档窄屏布局证据，关联 `UI-SRV-017/018` |
 | GAP-022 | Docker network 写操作 | network 当前只读，尚无系统网络保护和实时使用门禁合同 | 继续只读；若新增 mutation，先定义 `panel-apps` 保护、确认、队列和使用中拒绝 |
 | GAP-023 | 多实例任务调度 | 通用任务队首缓存只适用于单 Panel 进程，共享 SQLite 多实例下没有 claim/fencing 一致性 | 保持单实例部署边界，或先实现数据库级 claim/lease/fencing |
-| GAP-024 | Runtime event 丢弃观测 | 满缓冲丢弃计数/告警与批量失败重试没有稳定对外合同 | 事件仍非业务事实；新增指标/告警/重试合同和测试后关闭 |
+| GAP-024 | Runtime event 丢弃观测 | 满缓冲丢弃计数/告警与批量失败重试没有稳定对外合同 | 事件仍非业务事实；新增指标/告警/重试合同和测试后关闭。**范围说明**：本轮指标弱网补报（`OBS-MET-009`）按合同只在 `Send` 失败时记录日志、缓冲满丢弃最老样本，不提供丢样计数/告警；不得据现有日志宣称该丢弃可观测，若产品要求可见丢样，请在本缺口内统一新增稳定计数与测试后再关闭 |
 | GAP-025 | 操作/任务/日志刷新 | `/operations`、`/tasks`、`/logs` 均保持手动刷新（页头 Refresh 带 loading）；不做隐式轮询或 summary/tail 探测。页面级窄屏/a11y 证据仍不足 | 补页面级验证后关闭；若产品改为可见自动刷新须先改合同 |
 | GAP-026 | 无效详情保留字段 | `runtimeEventDetailRetentionDays` 与 `runtime_event_details` 属兼容遗留且当前无有效业务意义 | 在可迁移版本中删除，或先定义真实写入/读取/清理合同，禁止半复活 |
 | GAP-027 | 复杂表单本地验证 | DNS 域名/记录与证书签发/自签/密钥资产表单已补轻量本地校验（必填与基本域名形状、字段错误、无效时禁用保存）；applications 编辑器与 settings 数值校验仍有更多输入依赖服务端 | 继续为剩余高频/安全关键输入增加本地阻止，同时完整保留服务端结构化错误 |

@@ -38,7 +38,7 @@
 
 - `ENG-GEN-001`：Panel、panel-init 和所有架构的 panel-agent 构建前必须生成并校验同一 gRPC contract hash。
 - `ENG-GEN-002`：protobuf 源是 RPC 字段的事实来源；生成文件和根目录兼容副本必须与源一致，手工修改生成文件不得作为合同变更。
-- `ENG-GEN-003`：新增 RPC 字段应保持旧 Agent 的可解析性；破坏性协议变化必须有明确版本拒绝和用户可诊断错误。
+- `ENG-GEN-003`：新增 RPC 字段应保持旧 Agent 的可解析性；破坏性协议变化必须有明确版本拒绝和用户可诊断错误。本轮指标/探测字段均为追加式可选字段：`AgentReportControl.probe`、`AgentReport.probes`/`replayed`、`AgentProbeConfig`/`AgentProbeTarget`/`AgentProbeReport`/`AgentProbeResult` 与 `MetricsSnapshotResponse.disk_usage_sampled`/`disk_read_bytes_rate`/`disk_write_bytes_rate`/`disk_io_available`；旧 Agent 忽略未知字段并按既有语义上报（缺省 = 每次样本携带磁盘值、无探测结果），不得用“缺字段”推断设备为空或探测结果为 0。追加字段后必须执行 `task generate:agent-proto` 与 `task generate:agent-contract-hash`，生成文件与根目录兼容副本、契约 hash 必须在同一改动中更新（`ENG-GEN-002`、`ARCH-BOOT-001`），旧 Agent 的健康检查与新 Panel 的 report stream 仍需可工作。
 - `ENG-GEN-004`：Agent 的部署兼容检查以 Panel 规定的版本策略为准；Panel 不得向已知不兼容 Agent 发送会导致未知破坏的写操作。
 - `ENG-GEN-005`：Tailscale 相关的 `TailscaleStatus`、`TailscaleConfigure`、`TailscaleDisable` RPC 与 `AgentReport.tailscale` 可选字段必须保持旧 Agent 的可解析性，并随本次修改更新契约 hash；缺省字段不得被解释为“已关闭”，缺少能力只让具体操作失败，不得作为通用兼容门槛。详见 `TS-AGT-001`、`TS-NODE-005`。
 

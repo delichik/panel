@@ -22,6 +22,7 @@ vi.mock('@/api/servers', () => ({
     test: vi.fn(),
     delete: vi.fn(),
     metrics: (...args: unknown[]) => metrics(...args),
+    networkProbes: vi.fn().mockResolvedValue({ serverId: 'srv-1', enabled: false, nodes: [], results: [], updatedAt: null }),
     deployAgent: vi.fn(),
     restart: vi.fn(),
     trustHostKey: vi.fn(),
@@ -131,7 +132,7 @@ beforeEach(() => {
   listPage.mockResolvedValue({ items: [server], total: 1, page: 1, pageSize: 50 });
   list.mockResolvedValue([]);
   get.mockResolvedValue(server);
-  metrics.mockResolvedValue({ cpu: [], memory: [], disk: [], network: [], load: [] });
+  metrics.mockResolvedValue({ cpu: [], memory: [], diskIo: [], diskCurrent: null, network: [], load: [] });
   containers.mockResolvedValue({ items: [], observedAt: null, stale: false, refreshing: false });
 });
 

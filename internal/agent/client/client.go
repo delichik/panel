@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -55,6 +56,33 @@ type ReportConfig struct {
 	ServerID                  string
 	MetricsIntervalSeconds    int
 	ContainersIntervalSeconds int
+	Probe                     ProbeReportConfig
+}
+
+// ProbeReportConfig 是 Panel 下发给单个探测节点的网络探测任务。Enabled 为
+// false 时 Agent 停止探测；Targets 已由 Panel 排除探测节点自身。
+type ProbeReportConfig struct {
+	Enabled         bool
+	IntervalSeconds int
+	Targets         []ProbeTarget
+}
+
+type ProbeTarget struct {
+	ServerID string
+	Address  string
+	Name     string
+}
+
+// ProbeResult 是 Agent 对一个目标执行 ping 后的测量结果。Error 非空表示本次
+// 探测未能得到有效延迟/丢包（例如 ping 不可用或全部超时）。
+type ProbeResult struct {
+	TargetServerID    string
+	TargetAddress     string
+	LatencyMS         float64
+	PacketLossPercent float64
+	Sent              int
+	Received          int
+	Error             string
 }
 
 type AgentReport struct {
@@ -69,6 +97,14 @@ type AgentReport struct {
 	// 节点没有启用 tailscale。
 	Tailscale    *agentcontract.TailscaleStatus
 	HasTailscale bool
+	// MetricsDiskUsageSampled 只在 Agent 明确回报该标记时非 nil。nil 表示旧
+	// Agent（每个样本都带磁盘值）；false 表示新 Agent 本样本未刷新磁盘使用率。
+	MetricsDiskUsageSampled *bool
+	// Probes 只在 HasProbes 为真时可信；旧 Agent 不上报探测结果。
+	Probes    []ProbeResult
+	HasProbes bool
+	// Replayed 表示该指标样本来自 Agent 本地补报缓冲，Panel 跳过整点对齐校验。
+	Replayed bool
 }
 
 func NewGRPCClient(tlsAssets *agentsecurity.TLSAssets, timeout time.Duration) (*GRPCClient, error) {
@@ -642,12 +678,17 @@ func (c *GRPCClient) StreamReports(ctx context.Context, endpoint string, config 
 	}
 	errCh := make(chan error, 2)
 	sendConfig := func(cfg ReportConfig) error {
+		probe := &agentpb.AgentProbeConfig{Enabled: cfg.Probe.Enabled, IntervalSeconds: int32(cfg.Probe.IntervalSeconds)}
+		for _, target := range cfg.Probe.Targets {
+			probe.Targets = append(probe.Targets, &agentpb.AgentProbeTarget{ServerId: target.ServerID, Address: target.Address, Name: target.Name})
+		}
 		return stream.Send(&agentpb.AgentReportControl{
 			ServerId: cfg.ServerID,
 			Config: &agentpb.AgentReportConfig{
 				MetricsIntervalSeconds:    int32(cfg.MetricsIntervalSeconds),
 				ContainersIntervalSeconds: int32(cfg.ContainersIntervalSeconds),
 			},
+			Probe: probe,
 		})
 	}
 	go func() {
@@ -656,7 +697,7 @@ func (c *GRPCClient) StreamReports(ctx context.Context, endpoint string, config 
 		defer ticker.Stop()
 		for {
 			next := config()
-			if next != last {
+			if !reflect.DeepEqual(next, last) {
 				if err := sendConfig(next); err != nil {
 					errCh <- err
 					return
@@ -710,7 +751,31 @@ func (c *GRPCClient) StreamReports(ctx context.Context, endpoint string, config 
 		// 处理并保留既有观测。
 		if msg.Tailscale != nil {
 			report.HasTailscale = true
-			report.Tailscale = agentrpc.GoTailscaleStatus(msg.Tailscale)		}
+			report.Tailscale = agentrpc.GoTailscaleStatus(msg.Tailscale)
+		}
+		report.Replayed = msg.Replayed
+		if msg.Metrics != nil && msg.Metrics.DiskUsageSampled != nil {
+			sampled := msg.Metrics.DiskUsageSampled.Value
+			report.MetricsDiskUsageSampled = &sampled
+		}
+		if msg.Probes != nil {
+			report.HasProbes = true
+			report.Probes = make([]ProbeResult, 0, len(msg.Probes.Items))
+			for _, item := range msg.Probes.Items {
+				if item == nil {
+					continue
+				}
+				report.Probes = append(report.Probes, ProbeResult{
+					TargetServerID:    item.TargetServerId,
+					TargetAddress:     item.TargetAddress,
+					LatencyMS:         item.LatencyMs,
+					PacketLossPercent: item.PacketLossPercent,
+					Sent:              int(item.Sent),
+					Received:          int(item.Received),
+					Error:             item.Error,
+				})
+			}
+		}
 		if handle != nil {
 			if err := handle(ctx, report); err != nil {
 				return err
@@ -786,7 +851,8 @@ func defaultGRPCDial(ctx context.Context, network, address string) (net.Conn, er
 	return d.DialContext(ctx, network, address)
 }
 
-func grpcTarget(endpoint string) (string, error) {	value := strings.TrimSpace(endpoint)
+func grpcTarget(endpoint string) (string, error) {
+	value := strings.TrimSpace(endpoint)
 	if value == "" {
 		return "", fmt.Errorf("agent endpoint is empty")
 	}

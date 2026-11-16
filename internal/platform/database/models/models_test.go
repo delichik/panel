@@ -1,4 +1,4 @@
-﻿package models_test
+package models_test
 
 import (
 	"context"
@@ -23,7 +23,7 @@ var appTables = []string{
 	"application_edit_session_operations", "application_files", "application_instances",
 	"facility_app_configs", "facility_static_assets", "reverse_proxy_routes", "facility_edit_sessions",
 	"facility_edit_session_assets", "facility_edit_session_operations", "storage_share_configs",
-	"storage_share_partitions", "dns_domains",
+	"storage_share_partitions", "network_probe_configs", "network_probe_results", "dns_domains",
 	"certificates", "self_signed_certificates", "key_assets", "overview_card_configurations",
 	"runtime_settings", "auth_state", "auth_accounts", "event_runs", "event_run_steps",
 	"events",

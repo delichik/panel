@@ -46,14 +46,14 @@
 | 产品范围、端到端用户旅程、全局非目标 | [产品范围与端到端验收](product-scope.md) |
 | 全局导航、慢网路由反馈、会话、布局、通用交互 | [界面外壳与交互约定](ui-shell-and-conventions.md) |
 | 任一具体页面、页面首次加载或用户操作 | [逐页面验收](ui-pages.md) |
-| 应用、挂载来源、应用文件、修订、部署、节点工作区布局、设施应用、存储共享；规划失败 `APP-PLAN-001`、系统核实中 `APP-RUN-004` | [应用与设施应用](applications-and-facilities.md) |
+| 应用、挂载来源、应用文件、修订、部署、节点工作区布局、设施应用、存储共享、网络探测设施 `FAC-PRB-001..008`；规划失败 `APP-PLAN-001`、系统核实中 `APP-RUN-004` | [应用与设施应用](applications-and-facilities.md) |
 | desired/observed、协调 Job、统一追加活动日志、任务、运行事件；规划失败隔离 `ORCH-PLAN-006`、启动稳定观察 `ORCH-CTRL-007`；RunEngine Phase A `ENG-RUN-001..005`、`ENG-RET-001`、`TASK-DISPATCH-001..003` | [协调、任务与运行事件](orchestration-and-tasks.md) |
 | 容器、镜像、网络、卷、资源缓存与操作队列 | [容器与资源](containers-and-resources.md) |
 | 登录、账号、运行时设置、概览、系统版本 | [身份、设置与系统](identity-settings-system.md) |
-| 凭据、服务器、Agent、SSH、UFW、Fail2ban、APT | [服务器、安全与软件包](servers-security-packages.md) |
+| 凭据、服务器、Agent、SSH、UFW、Fail2ban、APT；Agent report 补报 `AGT-RPT-007`、网络探测上报 `AGT-RPT-008` | [服务器、安全与软件包](servers-security-packages.md) |
 | Tailscale：容器内 tailscaled 生命周期、全局设置与只写认证密钥、节点加入意图与观测态、节点收敛任务、tailnet 地址优先 | [Tailscale](tailscale.md) |
 | DNS、ACME、自签名证书、密钥资产 | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 备份、恢复、维护模式、调试与诊断；清理数据进度/恢复/写入暂停 `DIAG-CLR-001..008`、`UI-DBG-007/008` | [备份、恢复与诊断](backup-restore-diagnostics.md)、[逐页面验收](ui-pages.md) |
+| 备份、恢复、维护模式、调试与诊断；清理数据进度/恢复/写入暂停 `DIAG-CLR-001..008`、`UI-DBG-007/008`；指标磁盘当前值/磁盘 IO `OBS-MET-007/008`、指标补报 `OBS-MET-009`、概览卡片数据 `OBS-OVW-005..007` | [备份、恢复与诊断](backup-restore-diagnostics.md)、[逐页面验收](ui-pages.md) |
 | ORM、数据库模型、迁移与兼容 | [架构、数据与 API](architecture-data-api.md) |
 | 测试入口、构建、容器和发布；Panel 进程日志 `ENG-LOG-001..007` 与产品读 API `ENG-EVT-001`、清空 `ENG-EVT-002`（`/api/v1/events*`、`/api/v1/logs`；legacy `/api/v1/log-contexts*`） | [工程质量与发布](engineering-release.md) |
 | 检查是否遗漏路由、API、表、后台行为或产物 | [项目覆盖基线](coverage-matrix.md) |
@@ -69,6 +69,8 @@
 服务器连接代理模式（`direct` / `ssh_tunnel` / `socks5`）的字段、校验、成环与层数限制、删除隧道服务器后的派生失效、探测复用与 SSH/Agent 两条连接链路见 [SRV-PROXY-001..014](servers-security-packages.md)，表单、详情与 i18n 行为见 [UI-SRV-021..024](ui-pages.md)，表结构与加密说明见 [架构、数据与 API](architecture-data-api.md)。
 
 进程事件 `/events`、诊断日志 `/logs`、按需读取与 `/activity`/`/operations`/`/tasks` 重定向见 [UI-EVT-004..007](ui-pages.md)、[UI-LOG-001..003](ui-pages.md)（`UI-ACT-*` 已废弃）。
+
+磁盘使用率改为 5 分钟低频采样且只展示当前值、磁盘 IO 读写速率与指标弱网补报见 [OBS-MET-007..009](backup-restore-diagnostics.md)、[AGT-RPT-004/007](servers-security-packages.md)；磁盘卡/`diskIO` 卡/`networkProbe` 卡见 [UI-OVR-011/012](ui-pages.md)。设施网络探测（`network-probe`）的配置、周期、结果与删除清理见 [FAC-PRB-001..008](applications-and-facilities.md)，页面与矩阵见 [UI-FAC-014..017](ui-pages.md)、[UI-SRV-025](ui-pages.md)；表结构与可空磁盘 IO 列见 [架构、数据与 API](architecture-data-api.md)。
 
 失败运行日志与有界降级见 [ORCH-CTRL-008](orchestration-and-tasks.md)；设施逐节点部署、按需请求错误诊断见 [FAC-RP-012/013](applications-and-facilities.md)。
 

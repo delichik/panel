@@ -344,6 +344,15 @@ func (s *Service) runDeployAgent(ctx context.Context, taskID string, srv Server)
 		s.failAgentDeployTask(ctx, taskID, srv, err)
 		return
 	}
+	// ping is the third prerequisite: the network-probe facility asks the agent
+	// to measure latency and packet loss with the node's own ping, so the
+	// deployment pipeline installs it instead of letting the agent shell out to
+	// a package manager. Existing nodes converge on their next deployment even
+	// when only the service is restarted (the restart-only path).
+	if err := s.ensureAgentPing(ctx, taskID, srv, runner); err != nil {
+		s.failAgentDeployTask(ctx, taskID, srv, err)
+		return
+	}
 	bundle, err := s.IssueAgentCertificate(ctx, srv.ID)
 	if err != nil {
 		s.failAgentDeployTask(ctx, taskID, srv, err)

@@ -1,4 +1,5 @@
 import type { OverviewCardConfiguration, OverviewCardData, OverviewDto, OverviewMetricPoint, OverviewMetricsSeries, OverviewCardRange, OverviewServerSummary } from '@/types/overview';
+import type { NetworkProbeCardData, NetworkProbeResult } from '@/types/networkProbe';
 
 export interface OverviewRisk {
   id: string;
@@ -37,6 +38,8 @@ export function overviewRisks(servers: OverviewServerSummary[]): OverviewRisk[] 
 export function cardHasData(card: OverviewCardConfiguration, data?: OverviewCardData) {
   if (card.kind === 'placeholder') return false;
   if (card.kind === 'packageUpdates' || card.kind === 'containerUpdates') return true;
+  // networkProbe 卡片的数据是节点/结果摘要；即使暂无结果也属于有效响应，由卡片正文提示等待。
+  if (card.kind === 'networkProbe') return Boolean(data?.probes);
   return Object.keys(data?.metricsByServer ?? {}).length > 0;
 }
 
@@ -133,14 +136,15 @@ export function deriveCardView(
 export function metricPoints(card: OverviewCardConfiguration, series: OverviewMetricsSeries): OverviewMetricPoint[] {
   if (card.kind === 'cpu') return series.cpu ?? [];
   if (card.kind === 'memory') return series.memory ?? [];
-  if (card.kind === 'disk') return series.disk ?? [];
+  if (card.kind === 'diskIO') return series.diskIo ?? [];
   if (card.kind === 'network') return series.network ?? [];
   return [];
 }
 
 export function metricValueOf(card: OverviewCardConfiguration, point: OverviewMetricPoint) {
   if (card.kind === 'cpu') return point.usagePercent ?? 0;
-  if (card.kind === 'memory' || card.kind === 'disk') return percentUsed(point);
+  if (card.kind === 'memory') return percentUsed(point);
+  if (card.kind === 'diskIO') return (point.readBytesPerSecond ?? 0) + (point.writeBytesPerSecond ?? 0);
   if (card.kind === 'network') {
     if (card.networkDirection === 'rx') return point.rxBytesPerSecond ?? 0;
     if (card.networkDirection === 'tx') return point.txBytesPerSecond ?? 0;
@@ -151,6 +155,72 @@ export function metricValueOf(card: OverviewCardConfiguration, point: OverviewMe
 
 function percentUsed(point: OverviewMetricPoint) {
   return point.totalBytes ? ((point.usedBytes ?? 0) / point.totalBytes) * 100 : 0;
+}
+
+/** 磁盘卡只有当前值：跨服务器汇总最近一次有效采样的用量与总量。 */
+export interface DiskCardView {
+  percent: number | null;
+  usedBytes: number | null;
+  totalBytes: number | null;
+  sampledAt: string;
+  serverCount: number;
+}
+
+export function deriveDiskCardView(data?: OverviewCardData): DiskCardView {
+  let usedBytes = 0;
+  let totalBytes = 0;
+  let sampledAt = '';
+  let serverCount = 0;
+  for (const series of Object.values(data?.metricsByServer ?? {})) {
+    const current = series.diskCurrent;
+    if (!current || typeof current.totalBytes !== 'number' || current.totalBytes <= 0) continue;
+    serverCount += 1;
+    usedBytes += current.usedBytes ?? 0;
+    totalBytes += current.totalBytes;
+    if (!sampledAt || Date.parse(current.time) > Date.parse(sampledAt)) sampledAt = current.time;
+  }
+  if (!serverCount) return { percent: null, usedBytes: null, totalBytes: null, sampledAt: '', serverCount: 0 };
+  return {
+    percent: totalBytes > 0 ? (usedBytes / totalBytes) * 100 : null,
+    usedBytes,
+    totalBytes,
+    sampledAt,
+    serverCount,
+  };
+}
+
+/** networkProbe 摘要卡：节点数、平均延迟、最大丢包与最差结果。 */
+export interface NetworkProbeCardView {
+  nodeCount: number;
+  resultCount: number;
+  averageLatencyMs: number | null;
+  maxPacketLossPercent: number | null;
+  worst: NetworkProbeResult[];
+  updatedAt: string;
+}
+
+const WORST_RESULT_LIMIT = 3;
+
+export function deriveNetworkProbeCardView(probes?: NetworkProbeCardData): NetworkProbeCardView {
+  const results = probes?.results ?? [];
+  const latencies = results
+    .filter((result) => !result.error && result.received > 0 && Number.isFinite(result.latencyMs))
+    .map((result) => result.latencyMs);
+  const maxPacketLossPercent = results.reduce<number | null>((max, result) => (max === null || result.packetLossPercent > max ? result.packetLossPercent : max), null);
+  // 失败优先，其次丢包，再按延迟从高到低；最多展示 3 条。
+  const worst = [...results].sort((a, b) => {
+    if (Boolean(a.error) !== Boolean(b.error)) return a.error ? -1 : 1;
+    if (a.packetLossPercent !== b.packetLossPercent) return b.packetLossPercent - a.packetLossPercent;
+    return b.latencyMs - a.latencyMs;
+  }).slice(0, WORST_RESULT_LIMIT);
+  return {
+    nodeCount: probes?.nodes.length ?? 0,
+    resultCount: results.length,
+    averageLatencyMs: latencies.length ? latencies.reduce((sum, value) => sum + value, 0) / latencies.length : null,
+    maxPacketLossPercent,
+    worst,
+    updatedAt: probes?.updatedAt ?? '',
+  };
 }
 
 /**
@@ -165,11 +235,16 @@ export function mergeMetricPoints<T extends { time: string }>(existing: T[] | un
 }
 
 export function mergeMetricSeries(existing: OverviewMetricsSeries | undefined, incoming: OverviewMetricsSeries | undefined): OverviewMetricsSeries {
+  // diskCurrent 不是时间序列：增量响应给出新的当前值时整值替换，未给出时保留旧值。
+  const diskCurrent = incoming?.diskCurrent !== undefined
+    ? incoming.diskCurrent
+    : (existing?.diskCurrent ?? null);
   return {
     cpu: mergeMetricPoints(existing?.cpu, incoming?.cpu),
     memory: mergeMetricPoints(existing?.memory, incoming?.memory),
-    disk: mergeMetricPoints(existing?.disk, incoming?.disk),
+    diskIo: mergeMetricPoints(existing?.diskIo, incoming?.diskIo),
     network: mergeMetricPoints(existing?.network, incoming?.network),
+    diskCurrent,
   };
 }
 
@@ -179,7 +254,12 @@ export function mergeCardData(existing: OverviewCardData | undefined, delta: Ove
   for (const serverId of serverIds) {
     metricsByServer[serverId] = mergeMetricSeries(existing?.metricsByServer[serverId], delta.metricsByServer[serverId]);
   }
-  return { card: delta.card, metricsByServer, bucketSeconds: delta.bucketSeconds };
+  return {
+    card: delta.card,
+    metricsByServer,
+    bucketSeconds: delta.bucketSeconds,
+    probes: delta.probes ?? existing?.probes,
+  };
 }
 
 const RANGE_DURATIONS_MS: Record<OverviewCardRange, number> = {
@@ -198,8 +278,10 @@ export function trimMetricSeries(series: OverviewMetricsSeries | undefined, sinc
   return {
     cpu: trimMetricPoints(series?.cpu, sinceMs),
     memory: trimMetricPoints(series?.memory, sinceMs),
-    disk: trimMetricPoints(series?.disk, sinceMs),
+    diskIo: trimMetricPoints(series?.diskIo, sinceMs),
     network: trimMetricPoints(series?.network, sinceMs),
+    // 磁盘当前值不属于时间序列，不参与范围裁剪。
+    diskCurrent: series?.diskCurrent ?? null,
   };
 }
 
@@ -211,5 +293,6 @@ export function trimCardDataToRange(data: OverviewCardData, now: Date = new Date
   for (const [serverId, series] of Object.entries(data.metricsByServer)) {
     metricsByServer[serverId] = trimMetricSeries(series, sinceMs);
   }
+  // probes 为最新快照，不按时间范围裁剪。
   return { ...data, metricsByServer };
 }

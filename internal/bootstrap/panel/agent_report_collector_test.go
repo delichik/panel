@@ -2,6 +2,7 @@ package panel
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -9,10 +10,13 @@ import (
 	agentclient "panel/internal/agent/client"
 	agentcontract "panel/internal/agent/contract"
 	containerization "panel/internal/modules/containers"
+	"panel/internal/modules/networkprobe"
+	"panel/internal/modules/observability/metrics"
 	server "panel/internal/modules/servers"
 	"panel/internal/modules/settings"
 	"panel/internal/platform/config"
 	storage "panel/internal/platform/database"
+	"panel/internal/platform/linux"
 )
 
 func TestSampleAligned(t *testing.T) {
@@ -251,4 +255,207 @@ type fakeImageReporter struct {
 func (f *fakeImageReporter) SaveReportedImages(_ context.Context, serverID string, images []agentcontract.DockerImage) error {
 	f.calls = append(f.calls, fakeImageReportCall{serverID: serverID, images: images})
 	return nil
+}
+
+// fakeProbeReporter 模拟网络探测设施在 Agent 上报链路中的两个入口。
+type fakeProbeReporter struct {
+	report         networkprobe.ProbeReport
+	reportErr      error
+	reportServerID string
+	saved          []fakeProbeSave
+	saveErr        error
+}
+
+type fakeProbeSave struct {
+	serverID string
+	sampleAt time.Time
+	results  []networkprobe.ReportedResult
+}
+
+func (f *fakeProbeReporter) ReportConfig(_ context.Context, serverID string) (networkprobe.ProbeReport, error) {
+	f.reportServerID = serverID
+	return f.report, f.reportErr
+}
+
+func (f *fakeProbeReporter) SaveReported(_ context.Context, serverID string, sampleAt time.Time, results []networkprobe.ReportedResult) error {
+	f.saved = append(f.saved, fakeProbeSave{serverID: serverID, sampleAt: sampleAt, results: results})
+	return f.saveErr
+}
+
+// TestAgentReportReportProbeConfigConverts covers FAC-PRB: the probe config read
+// from the facility is converted into the agent protocol structure, and a failed
+// lookup degrades to disabled instead of failing the report stream.
+func TestAgentReportReportProbeConfigConverts(t *testing.T) {
+	recorder := &fakeReportServerProvider{}
+	collector := newAgentReportCollector(recorder, nil, newReportCollectorSettings(t), nil, nil, nil)
+	probes := &fakeProbeReporter{report: networkprobe.ProbeReport{
+		Enabled:         true,
+		IntervalSeconds: 60,
+		Targets: []networkprobe.ProbeTarget{
+			{ServerID: "srv-2", Address: "10.0.0.2", Name: "b"},
+			{ServerID: "srv-3", Address: "fd00::3", Name: "c"},
+		},
+	}}
+	collector.SetNetworkProbe(probes)
+	got := collector.reportProbeConfig(context.Background(), "srv-1")
+	if probes.reportServerID != "srv-1" || !got.Enabled || got.IntervalSeconds != 60 || len(got.Targets) != 2 {
+		t.Fatalf("probe config = %#v (serverID=%q)", got, probes.reportServerID)
+	}
+	if got.Targets[0].ServerID != "srv-2" || got.Targets[0].Address != "10.0.0.2" || got.Targets[0].Name != "b" {
+		t.Fatalf("converted target = %#v", got.Targets[0])
+	}
+
+	failing := &fakeProbeReporter{reportErr: context.DeadlineExceeded}
+	collector.SetNetworkProbe(failing)
+	disabled := collector.reportProbeConfig(context.Background(), "srv-1")
+	if disabled.Enabled || len(disabled.Targets) != 0 {
+		t.Fatalf("probe config lookup failure must degrade to disabled, got %#v", disabled)
+	}
+
+	collector.SetNetworkProbe(nil)
+	if empty := collector.reportProbeConfig(context.Background(), "srv-1"); empty.Enabled || len(empty.Targets) != 0 {
+		t.Fatalf("missing probe facility must leave probes disabled, got %#v", empty)
+	}
+}
+
+// TestAgentReportHandleReportSavesProbes covers AGT-RPT-008: only reports that
+// explicitly carry probe results are persisted, and failures never break the
+// stream.
+func TestAgentReportHandleReportSavesProbes(t *testing.T) {
+	recorder := &fakeReportServerProvider{}
+	collector := newAgentReportCollector(recorder, nil, newReportCollectorSettings(t), nil, nil, nil)
+	probes := &fakeProbeReporter{}
+	collector.SetNetworkProbe(probes)
+	sampleAt := time.Unix(30, 0).UTC()
+	err := collector.handleReport(context.Background(), "srv-1", agentclient.AgentReport{
+		SampleAt:  sampleAt,
+		HasProbes: true,
+		Probes: []agentclient.ProbeResult{
+			{TargetServerID: "srv-2", TargetAddress: "10.0.0.2", LatencyMS: 1.5, PacketLossPercent: 0, Sent: 3, Received: 3},
+			{TargetServerID: "srv-3", TargetAddress: "fd00::3", LatencyMS: 0, PacketLossPercent: 100, Sent: 3, Received: 0, Error: "timeout"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(probes.saved) != 1 {
+		t.Fatalf("probe save calls = %d, want 1", len(probes.saved))
+	}
+	saved := probes.saved[0]
+	if saved.serverID != "srv-1" || !saved.sampleAt.Equal(sampleAt) || len(saved.results) != 2 {
+		t.Fatalf("saved probe report = %#v", saved)
+	}
+	if saved.results[0].TargetServerID != "srv-2" || saved.results[0].LatencyMS != 1.5 || saved.results[0].Received != 3 {
+		t.Fatalf("converted probe result = %#v", saved.results[0])
+	}
+	if saved.results[1].Error != "timeout" {
+		t.Fatalf("probe error must be preserved: %#v", saved.results[1])
+	}
+
+	collector.SetNetworkProbe(&fakeProbeReporter{saveErr: context.DeadlineExceeded})
+	if err := collector.handleReport(context.Background(), "srv-1", agentclient.AgentReport{
+		SampleAt:  sampleAt,
+		HasProbes: true,
+		Probes:    []agentclient.ProbeResult{{TargetServerID: "srv-2"}},
+	}); err != nil {
+		t.Fatalf("probe save failure must not fail the stream: %v", err)
+	}
+}
+
+// TestAgentReportHandleReportIgnoresProbesWithoutFlag keeps old agents from
+// clearing reported results.
+func TestAgentReportHandleReportIgnoresProbesWithoutFlag(t *testing.T) {
+	recorder := &fakeReportServerProvider{}
+	collector := newAgentReportCollector(recorder, nil, newReportCollectorSettings(t), nil, nil, nil)
+	probes := &fakeProbeReporter{}
+	collector.SetNetworkProbe(probes)
+	if err := collector.handleReport(context.Background(), "srv-1", agentclient.AgentReport{
+		SampleAt: time.Unix(30, 0).UTC(),
+		Probes:   []agentclient.ProbeResult{{TargetServerID: "srv-2"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(probes.saved) != 0 {
+		t.Fatalf("probes without HasProbes must not be saved, got %#v", probes.saved)
+	}
+}
+
+// TestAgentReportHandleReportReplayedMetrics covers OBS-MET-009: replayed
+// samples skip the interval alignment check, and samples that did not refresh
+// disk usage are stored with zeroed disk fields while old agents keep them.
+func TestAgentReportHandleReportReplayedMetrics(t *testing.T) {
+	settingsSvc, metricsSvc, metricsDB := newReportCollectorMetrics(t)
+	collector := newAgentReportCollector(&fakeReportServerProvider{}, nil, settingsSvc, metricsSvc, nil, nil)
+	ctx := context.Background()
+
+	// 31s 与默认 60s 采集间隔不对齐；Replayed=true 时仍必须落库。
+	sampled := false
+	notSampled := linux.MetricsSnapshot{DiskUsedBytes: 4096, DiskTotalBytes: 8192, CPUUsagePercent: 11}
+	if err := collector.handleReport(ctx, "srv-replay", agentclient.AgentReport{
+		SampleAt:                time.Unix(31, 0).UTC(),
+		Metrics:                 &notSampled,
+		MetricsDiskUsageSampled: &sampled,
+		Replayed:                true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var used, total int64
+	if err := metricsDB.QueryRow(`SELECT disk_used_bytes,disk_total_bytes FROM metrics_snapshots WHERE server_id='srv-replay'`).Scan(&used, &total); err != nil {
+		t.Fatal(err)
+	}
+	if used != 0 || total != 0 {
+		t.Fatalf("unsampled disk usage must be zeroed, got used=%d total=%d", used, total)
+	}
+
+	// 旧 Agent（nil 标记）保持上报值。
+	oldAgent := linux.MetricsSnapshot{DiskUsedBytes: 1024, DiskTotalBytes: 2048, CPUUsagePercent: 5}
+	if err := collector.handleReport(ctx, "srv-old", agentclient.AgentReport{
+		SampleAt: time.Unix(120, 0).UTC(),
+		Metrics:  &oldAgent,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := metricsDB.QueryRow(`SELECT disk_used_bytes,disk_total_bytes FROM metrics_snapshots WHERE server_id='srv-old'`).Scan(&used, &total); err != nil {
+		t.Fatal(err)
+	}
+	if used != 1024 || total != 2048 {
+		t.Fatalf("old agent disk values must be preserved, got used=%d total=%d", used, total)
+	}
+
+	// 非补报且不对齐的样本仍然跳过。
+	missed := linux.MetricsSnapshot{CPUUsagePercent: 7}
+	if err := collector.handleReport(ctx, "srv-missed", agentclient.AgentReport{
+		SampleAt: time.Unix(31, 0).UTC(),
+		Metrics:  &missed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := metricsDB.QueryRow(`SELECT COUNT(*) FROM metrics_snapshots WHERE server_id='srv-missed'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("unaligned non-replayed sample must be skipped, got %d rows", count)
+	}
+}
+
+func newReportCollectorMetrics(t *testing.T) (*settings.Service, *metrics.Service, *sql.DB) {
+	t.Helper()
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	settingsSvc, err := settings.NewService(store.AppDB(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return settingsSvc, metrics.NewService(store.MetricsDB(), nil), store.MetricsDB()
 }

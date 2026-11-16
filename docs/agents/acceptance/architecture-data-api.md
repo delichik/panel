@@ -47,10 +47,10 @@
 
 | 数据库 | 规范归属 | 禁止事项 |
 | --- | --- | --- |
-| app | 配置、资源、应用 desired/observed、不可变协调 revision、Job、遗留 `activity_events` schema（不再接受新产品事实）、凭据元数据、设置、认证状态、进程行 `events`、event executor `event_runs`/`event_run_steps` | 不存高容量 JSONL 正文或指标时间序列；JSONL 在 `<dataRoot>/logs` |
+| app | 配置、资源、应用 desired/observed、不可变协调 revision、Job、遗留 `activity_events` schema（不再接受新产品事实）、凭据元数据、设置、认证状态、进程行 `events`、event executor `event_runs`/`event_run_steps`、网络探测配置与最新观测（`network_probe_configs`/`network_probe_results`） | 不存高容量 JSONL 正文或指标时间序列；JSONL 在 `<dataRoot>/logs` |
 | log | 遗留可重建 Activity 查询投影/FTS（不再投影新事实）、应用修订历史投影、运行事件及详情、密钥导出审计 | 不作为应用协调、event executor 或新产品/过程事实来源 |
 | coordination | 当前不注册业务模型，保留路径只为兼容和备份拓扑 | 不重新引入旧 lifecycle 表作为第二事实源 |
-| metrics | 指标快照时间序列 | 不存资源配置或身份数据 |
+| metrics | 指标快照时间序列（含可空磁盘 IO 速率列 `disk_read_bytes_rate`/`disk_write_bytes_rate`，NULL=未测得） | 不存资源配置或身份数据 |
 
 - `DATA-DB-001`：四库连接均启用 WAL、foreign keys、5 秒 busy timeout，并维持有界连接池；调用方不得依赖 SQLite 默认 pragma。
 - `DATA-DB-002`：数据库目录和 `dataRoot/tmp` 以仅所有者可访问的权限创建；内存 DSN 不创建目录，`file:` DSN 必须剥离查询串后再解析路径。
@@ -62,6 +62,8 @@
 应用持久化位置由 app 库 `application_persistent_locations` 表追加记录，以 `(application_id, server_id)` 唯一；部署目标变化不得删除历史位置，应用物理删除时通过 application FK 级联清理。alpha 升级迁移从当前持久化应用的部署目标、实例与历史 Job 回填位置。
 
 服务器连接代理模式（`SRV-PROXY-*`）沿用 app 库 `servers` 表：由 ORM 自动增列 `proxy_mode`（`TEXT NOT NULL DEFAULT 'direct'`）、`tunnel_server_id`、`socks5_address`、`socks5_username`、`socks5_password_ciphertext`（均 `TEXT NOT NULL DEFAULT ''`）。`tunnel_server_id` 不加外键，允许悬空以表达“隧道服务器已删除”，依赖服务器读取时派生 `proxyInvalid`/`proxyError` 而不自动改写配置。SOCKS5 密码只经 secretstore 加密保存，associated data 固定为 `assetID=serverID`、`assetType="server_proxy"`、`field="socks5_password"`，满足 `ARCH-MOD-004` 的“秘密明文只可进入秘密存储或执行期内存”；解密失败必须返回 `server_proxy_password_unavailable`，不得降级为明文或跳过加密。旧 alpha 数据只需增列默认值，既有行读取等价 `direct`，不需要一次性数据迁移，也不得改写既有服务器字段（`DATA-MIG-008`）。
+
+网络探测设施新增两张 app 库表（`internal/platform/database/models/app_models.go`，注册于 `AppModels()`）：`network_probe_configs` 单行配置（`id` 固定 `network_probe`、`mode` 带 `CHECK(mode IN ('all','selected'))`、`server_ids_json`、`version`、`updated_at`）与 `network_probe_results` 最新观测（主键 `(source_server_id,target_server_id)`，另有 `target_address`、`sampled_at`、`latency_ms`、`packet_loss_percent`、`sent`、`received`、`error` 与目标查询索引）。metrics 库 `metrics_snapshots` 由 ORM 自动增列可空 `disk_read_bytes_rate`/`disk_write_bytes_rate`（NULL=该样本未测得磁盘 IO，旧库升级后既有行为 NULL），不新增指标表、不改磁盘用量既有列语义。旧 alpha 数据升级只需 AutoMigrate 建表/增列；从未保存过配置时读取返回默认 `all` 空选择（不落行），首次保存才 upsert 单行。服务器删除时在同一清理事务内删除相关 `network_probe_results` 行并修剪 `selected` 配置的 `server_ids_json`（版本 +1，`FAC-PRB-007`、`SRV-DEL-007`）。备份/恢复继续覆盖 app 与 metrics 数据库文件，不需要新增 manifest 条目（`BKP-API-005`、`DATA-MIG-009`）。
 
 - `DATA-MIG-001`：全部在管表必须在 `internal/platform/database/models` 有模型并按 app/log/coordination/metrics 明确分组；新增表必须同时进入正确清单。
 - `DATA-MIG-002`：启动迁移按库隔离执行，不得因全局注册表把模型建入错误数据库；父表排序、外键、CHECK、复合/部分/唯一索引必须可重复创建且与模型合同一致。

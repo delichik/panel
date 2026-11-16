@@ -16,16 +16,20 @@ type MetricsSnapshot struct {
 	MemoryTotalBytes int64     `orm:"not_null"`
 	DiskUsedBytes    int64     `orm:"not_null"`
 	DiskTotalBytes   int64     `orm:"not_null"`
-	NetworkRXBps     float64   `orm:"not_null"`
-	NetworkTXBps     float64   `orm:"not_null"`
-	LoadAverage      string    `orm:"not_null;default:''"`
-	Load1            float64   `orm:"not_null;default:0;column:load_1"`
-	Load5            float64   `orm:"not_null;default:0;column:load_5"`
-	Load15           float64   `orm:"not_null;default:0;column:load_15"`
-	UptimeSeconds    int64     `orm:"not_null;default:0"`
-	Hostname         string    `orm:"not_null;default:''"`
-	KernelVersion    string    `orm:"not_null;default:''"`
-	OSVersion        string    `orm:"not_null;default:''"`
+	// 磁盘 IO 速率为最新观测值；NULL 表示该样本未测得（旧 Agent 或非 Linux）。
+	// 使用可空列避免把“未知”伪装成 0 写进历史曲线。
+	DiskReadBytesRate  *float64 `orm:"column:disk_read_bytes_rate"`
+	DiskWriteBytesRate *float64 `orm:"column:disk_write_bytes_rate"`
+	NetworkRXBps       float64  `orm:"not_null"`
+	NetworkTXBps       float64  `orm:"not_null"`
+	LoadAverage        string   `orm:"not_null;default:''"`
+	Load1              float64  `orm:"not_null;default:0;column:load_1"`
+	Load5              float64  `orm:"not_null;default:0;column:load_5"`
+	Load15             float64  `orm:"not_null;default:0;column:load_15"`
+	UptimeSeconds      int64    `orm:"not_null;default:0"`
+	Hostname           string   `orm:"not_null;default:''"`
+	KernelVersion      string   `orm:"not_null;default:''"`
+	OSVersion          string   `orm:"not_null;default:''"`
 }
 
 func (*MetricsSnapshot) TableName() string { return "metrics_snapshots" }

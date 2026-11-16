@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentTone, connectionHost, connectionSignature, credentialReferences, hasBlockingPairIssues, isLegacyResourceTab, mergeServerCandidates, normalizeServerDetailTab, normalizeServerResourceSubtab, parsePairs, proxyErrorKey, proxyListHintKey, proxyModeLabelKey, proxySavePayload, proxyShortLabelKey, proxyTunnelDisplayName, reportDisconnectCount1h, reportStabilityGrade, reportStabilityStatusKey, reportStabilityTone, reportStreamStatus, reportStreamStatusKey, serverDetailTabs, serverProxyMode, serverSummaryKind, serverSummaryStatusKey, serverSummaryTone, shouldShowListReportStability, tailscaleObservedStatus, tailscalePreferences, tailscaleStatusKey, tailscaleTone, tailscaleTrait, validateProbeInput, validateProxyInput, validateServerInput } from './model';
+import { agentTone, connectionHost, connectionSignature, credentialReferences, hasBlockingPairIssues, isLegacyResourceTab, mergeServerCandidates, normalizeServerDetailTab, normalizeServerResourceSubtab, parsePairs, probeOutcome, probeOutcomeStatusKey, probeOutcomeTone, proxyErrorKey, proxyListHintKey, proxyModeLabelKey, proxySavePayload, proxyShortLabelKey, proxyTunnelDisplayName, reportDisconnectCount1h, reportStabilityGrade, reportStabilityStatusKey, reportStabilityTone, reportStreamStatus, reportStreamStatusKey, serverDetailTabs, serverProxyMode, serverSummaryKind, serverSummaryStatusKey, serverSummaryTone, shouldShowListReportStability, tailscaleObservedStatus, tailscalePreferences, tailscaleStatusKey, tailscaleTone, tailscaleTrait, validateProbeInput, validateProxyInput, validateServerInput } from './model';
 import type { ServerDto, ServerProxyMode, ServerSaveInput } from '@/types/servers';
 
 const server: ServerDto = {
@@ -34,7 +34,8 @@ const proxy: { proxyMode: ServerProxyMode; tunnelServerId: string; socks5Address
 
 describe('server model', () => {
   it('keeps primary detail tabs compact and aliases legacy docker tabs to resources', () => {
-    expect(serverDetailTabs).toEqual(['overview', 'metrics', 'agent', 'tailscale', 'resources', 'packages', 'firewall']);
+    expect(serverDetailTabs).toEqual(['overview', 'metrics', 'probes', 'agent', 'tailscale', 'resources', 'packages', 'firewall']);
+    expect(normalizeServerDetailTab('probes')).toBe('probes');
     expect(normalizeServerDetailTab('resources')).toBe('resources');
     expect(normalizeServerDetailTab('containers')).toBe('resources');
     expect(normalizeServerDetailTab('images')).toBe('resources');
@@ -248,5 +249,25 @@ describe('server model', () => {
     expect(tailscaleTone({ ...server, tailscaleEnabled: true, traits: { 'tailscale.status': 'error' } })).toBe('danger');
     expect(tailscaleTone({ ...server, tailscaleEnabled: true, traits: { 'tailscale.status': 'installing' } })).toBe('warning');
     expect(tailscaleTone({ ...server, tailscaleEnabled: true, traits: { 'tailscale.status': 'unsupported' } })).toBe('info');
+  });
+
+  it('derives network probe outcomes from result fields, with failures outranking staleness', () => {
+    const base = { error: '', packetLossPercent: 0, sent: 3, received: 3, stale: false };
+    expect(probeOutcome(base)).toBe('ok');
+    expect(probeOutcomeTone('ok')).toBe('success');
+    expect(probeOutcomeStatusKey('ok')).toBe('serversPage.probe.status.ok');
+
+    expect(probeOutcome({ ...base, packetLossPercent: 33, received: 2 })).toBe('degraded');
+    expect(probeOutcomeTone('degraded')).toBe('warning');
+
+    expect(probeOutcome({ ...base, stale: true })).toBe('stale');
+    expect(probeOutcomeTone('stale')).toBe('neutral');
+
+    expect(probeOutcome({ ...base, error: 'no route to host', received: 0 })).toBe('failed');
+    expect(probeOutcome({ ...base, received: 0 })).toBe('failed');
+    expect(probeOutcome({ ...base, packetLossPercent: 100 })).toBe('failed');
+    // 失败优先于过期：过期样本若本轮失败仍按失败展示。
+    expect(probeOutcome({ ...base, stale: true, error: 'timeout' })).toBe('failed');
+    expect(probeOutcomeTone('failed')).toBe('danger');
   });
 });

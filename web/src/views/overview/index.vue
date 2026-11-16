@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRouter } from 'vue-router';
-import { Activity, AlertTriangle, BarChart3, Boxes, Check, ChevronRight, Grip, Gauge, Pencil, Plus, RefreshCcw, ShieldCheck, Server, Trash2 } from '@lucide/vue';
+import { Activity, AlertTriangle, BarChart3, Boxes, Check, ChevronRight, Grip, Gauge, HardDrive, Pencil, Plus, Radar, RefreshCcw, ShieldCheck, Server, Trash2 } from '@lucide/vue';
 import { overviewApi } from '@/api/overview';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
@@ -18,7 +18,9 @@ import AutoRefreshControl from '@/components/patterns/AutoRefreshControl.vue';
 import { useAutoRefresh } from '@/composables/useAutoRefresh';
 import { useI18n } from '@/i18n';
 import type { OverviewCardConfiguration, OverviewCardData, OverviewCardKind, OverviewCardRange, OverviewDto } from '@/types/overview';
-import { cardHasData, createOverviewCard, defaultOverviewCards, deriveCardView, mergeCardData, overviewRisks, summarizeOverview, trimCardDataToRange, type OverviewCardChartSeries, type OverviewCardView } from './model';
+import type { NetworkProbeResult } from '@/types/networkProbe';
+import { formatDateTime } from '@/utils/datetime';
+import { cardHasData, createOverviewCard, defaultOverviewCards, deriveCardView, deriveDiskCardView, deriveNetworkProbeCardView, mergeCardData, overviewRisks, summarizeOverview, trimCardDataToRange, type DiskCardView, type NetworkProbeCardView, type OverviewCardChartSeries, type OverviewCardView } from './model';
 
 const MetricLineChart = defineAsyncComponent(() => import('./MetricLineChart.vue'));
 
@@ -35,6 +37,8 @@ const cardErrors = ref<Record<string, string>>({});
 const cardValues = ref<Record<string, string>>({});
 const cardData = ref<Record<string, OverviewCardData>>({});
 const cardViews = ref<Record<string, OverviewCardView>>({});
+const cardDiskViews = ref<Record<string, DiskCardView>>({});
+const cardProbeViews = ref<Record<string, NetworkProbeCardView>>({});
 const emptyChartLabels: string[] = [];
 const emptyChartSeries: OverviewCardChartSeries[] = [];
 let cardRequestSeq = 0;
@@ -80,7 +84,9 @@ const kindOptions = computed(() => [
   { value: 'cpu', label: t('overviewPage.cardCpu') },
   { value: 'memory', label: t('overviewPage.cardMemory') },
   { value: 'disk', label: t('overviewPage.cardDisk') },
+  { value: 'diskIO', label: t('overviewPage.cardDiskIo') },
   { value: 'network', label: t('overviewPage.cardNetwork') },
+  { value: 'networkProbe', label: t('overviewPage.cardNetworkProbe') },
   { value: 'packageUpdates', label: t('overviewPage.cardPackages') },
   { value: 'containerUpdates', label: t('overviewPage.cardStaleMetrics') },
 ]);
@@ -345,7 +351,9 @@ function cardIcon(kind: OverviewCardKind) {
   if (kind === 'cpu') return Gauge;
   if (kind === 'memory') return Activity;
   if (kind === 'disk') return BarChart3;
+  if (kind === 'diskIO') return HardDrive;
   if (kind === 'network') return Boxes;
+  if (kind === 'networkProbe') return Radar;
   return AlertTriangle;
 }
 
@@ -368,7 +376,7 @@ function serverNameById(serverId: string) {
 
 function formatMetricValue(card: OverviewCardConfiguration, value: number | null) {
   if (value === null) return '-';
-  if (card.kind === 'network') return formatBytes(value);
+  if (card.kind === 'network' || card.kind === 'diskIO') return formatBytes(value);
   return `${Math.round(value)}%`;
 }
 
@@ -379,6 +387,12 @@ function clearCardData(cardId: string, card?: OverviewCardConfiguration) {
   const nextViews = { ...cardViews.value };
   delete nextViews[cardId];
   cardViews.value = nextViews;
+  const nextDiskViews = { ...cardDiskViews.value };
+  delete nextDiskViews[cardId];
+  cardDiskViews.value = nextDiskViews;
+  const nextProbeViews = { ...cardProbeViews.value };
+  delete nextProbeViews[cardId];
+  cardProbeViews.value = nextProbeViews;
   cardValues.value = { ...cardValues.value, [cardId]: derivedCardValue(card) };
 }
 
@@ -387,7 +401,23 @@ function applyCardData(card: OverviewCardConfiguration, data: OverviewCardData) 
   const view = deriveCardView(card, data, serverNameById);
   cardData.value = { ...cardData.value, [card.id]: data };
   cardViews.value = { ...cardViews.value, [card.id]: view };
-  cardValues.value = { ...cardValues.value, [card.id]: formatMetricValue(card, view.latestValue) };
+  const nextDiskViews = { ...cardDiskViews.value };
+  const nextProbeViews = { ...cardProbeViews.value };
+  delete nextDiskViews[card.id];
+  delete nextProbeViews[card.id];
+  let valueText = formatMetricValue(card, view.latestValue);
+  if (card.kind === 'disk') {
+    const disk = deriveDiskCardView(data);
+    nextDiskViews[card.id] = disk;
+    valueText = disk.percent === null ? '-' : `${Math.round(disk.percent)}%`;
+  } else if (card.kind === 'networkProbe') {
+    const probe = deriveNetworkProbeCardView(data.probes);
+    nextProbeViews[card.id] = probe;
+    valueText = probe.averageLatencyMs === null ? '-' : `${probe.averageLatencyMs.toFixed(1)} ms`;
+  }
+  cardDiskViews.value = nextDiskViews;
+  cardProbeViews.value = nextProbeViews;
+  cardValues.value = { ...cardValues.value, [card.id]: valueText };
   if (cardHasData(card, data)) {
     if (cardErrors.value[card.id]) {
       const nextErrors = { ...cardErrors.value };
@@ -399,9 +429,40 @@ function applyCardData(card: OverviewCardConfiguration, data: OverviewCardData) 
   }
 }
 
+function diskSecondaryValue(card: OverviewCardConfiguration) {
+  const view = cardDiskViews.value[card.id];
+  if (!view || view.usedBytes === null || view.totalBytes === null) return t('common.notAvailable');
+  return `${formatStorage(view.usedBytes)} / ${formatStorage(view.totalBytes)}`;
+}
+
+function diskSampledAt(card: OverviewCardConfiguration) {
+  const view = cardDiskViews.value[card.id];
+  return t('overviewPage.diskSampledAt', { time: formatDateTime(view?.sampledAt, t('common.never')) });
+}
+
+function probeView(card: OverviewCardConfiguration): NetworkProbeCardView | undefined {
+  return cardProbeViews.value[card.id];
+}
+
+function probeWorstText(result: NetworkProbeResult) {
+  if (result.error) return `${result.targetAddress} · ${t('overviewPage.probeFailed')}`;
+  return `${result.targetAddress} · ${result.latencyMs.toFixed(1)} ms · ${result.packetLossPercent.toFixed(0)}%`;
+}
+
+function probeMaxLossText(card: OverviewCardConfiguration) {
+  const view = cardProbeViews.value[card.id];
+  if (!view || view.maxPacketLossPercent === null) return t('common.notAvailable');
+  return `${view.maxPacketLossPercent.toFixed(0)}%`;
+}
+
 function cardSecondaryValue(card: OverviewCardConfiguration) {
+  if (card.kind === 'disk') return diskSampledAt(card);
+  if (card.kind === 'networkProbe') {
+    const view = cardProbeViews.value[card.id];
+    return view ? t('overviewPage.probeNodesCount', { count: view.nodeCount }) : t('common.notAvailable');
+  }
   const data = cardData.value[card.id];
-  if (!data || card.kind === 'packageUpdates' || card.kind === 'containerUpdates') return card.serverIds.length ? t('overviewPage.selectedServers') : t('overviewPage.allServers');
+  if (!data || isMessageCard(card)) return card.serverIds.length ? t('overviewPage.selectedServers') : t('overviewPage.allServers');
   const view = cardViews.value[card.id];
   if (!view || view.peakValue === null) return t('common.notAvailable');
   return t('overviewPage.cardPeakValue', { value: formatMetricValue(card, view.peakValue) });
@@ -412,15 +473,25 @@ function cardMeta(card: OverviewCardConfiguration) {
   const scope = card.serverIds.length
     ? t('overviewPage.selectedServerCount', { count: card.serverIds.length })
     : t('overviewPage.allServerCount', { count: overview.value.servers.length });
+  if (card.kind === 'disk' || card.kind === 'networkProbe') return `${size} / ${scope}`;
   return `${size} / ${card.range} / ${scope}`;
 }
 
-function shouldShowChart(card: OverviewCardConfiguration) {
-  return card.width >= 2 && card.height >= 2 && !['packageUpdates', 'containerUpdates', 'placeholder'].includes(card.kind);
+function isMessageCard(card: OverviewCardConfiguration) {
+  return card.kind === 'packageUpdates' || card.kind === 'containerUpdates' || card.kind === 'placeholder';
 }
 
-function isMetricCard(card: OverviewCardConfiguration) {
-  return !['packageUpdates', 'containerUpdates', 'placeholder'].includes(card.kind);
+/** 只有这些卡片带时序数据，可画折线图并参与增量刷新。 */
+function isChartCard(card: OverviewCardConfiguration) {
+  return card.kind === 'cpu' || card.kind === 'memory' || card.kind === 'network' || card.kind === 'diskIO';
+}
+
+function isRefreshableCard(card: OverviewCardConfiguration) {
+  return isChartCard(card) || card.kind === 'disk';
+}
+
+function shouldShowChart(card: OverviewCardConfiguration) {
+  return card.width >= 2 && card.height >= 2 && isChartCard(card);
 }
 
 function shouldShowDetail(card: OverviewCardConfiguration) {
@@ -428,7 +499,7 @@ function shouldShowDetail(card: OverviewCardConfiguration) {
 }
 
 function cardChartValueKind(card: OverviewCardConfiguration) {
-  return card.kind === 'network' ? 'bytes' as const : 'percent' as const;
+  return card.kind === 'network' || card.kind === 'diskIO' ? 'bytes' as const : 'percent' as const;
 }
 
 function normalizeCardSize(card: OverviewCardConfiguration): OverviewCardConfiguration {
@@ -477,7 +548,7 @@ function updateCardKind(card: OverviewCardConfiguration, value: string) {
 }
 
 function defaultWidth(kind: OverviewCardKind) {
-  if (kind === 'network') return 6;
+  if (kind === 'network' || kind === 'diskIO') return 6;
   if (kind === 'packageUpdates' || kind === 'containerUpdates') return 2;
   return 3;
 }
@@ -499,6 +570,18 @@ function formatBytes(value: number) {
   return `${scaled >= 100 ? scaled.toFixed(0) : scaled.toFixed(1)} ${units[unitIndex]}`;
 }
 
+function formatStorage(value: number) {
+  if (value >= 1024 ** 4) return `${(value / 1024 ** 4).toFixed(1)} TiB`;
+  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GiB`;
+  if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MiB`;
+  return `${Math.round(value)} B`;
+}
+
+/** 磁盘当前值与网络探测摘要没有时间序列/流量方向，编辑弹窗不展示对应字段。 */
+function showsCardRange(card: OverviewCardConfiguration) {
+  return card.kind !== 'disk' && card.kind !== 'networkProbe';
+}
+
 function startAutoRefresh() {
   stopAutoRefresh();
   if (!autoRefreshEnabled.value) return;
@@ -516,11 +599,17 @@ function stopAutoRefresh() {
 
 function latestPointTime(card: OverviewCardConfiguration, data: OverviewCardData): string | undefined {
   let latest: string | undefined;
+  const newer = (time?: string) => {
+    if (time && (!latest || Date.parse(time) > Date.parse(latest))) latest = time;
+  };
   for (const series of Object.values(data.metricsByServer)) {
-    const points = card.kind === 'cpu' ? series.cpu : card.kind === 'memory' ? series.memory : card.kind === 'disk' ? series.disk : series.network;
-    for (const point of points ?? []) {
-      if (!latest || Date.parse(point.time) > Date.parse(latest)) latest = point.time;
+    if (card.kind === 'disk') {
+      // 磁盘当前值也参与增量刷新：用最近采样时间作为增量起点。
+      newer(series.diskCurrent?.time);
+      continue;
     }
+    const points = card.kind === 'cpu' ? series.cpu : card.kind === 'memory' ? series.memory : card.kind === 'diskIO' ? series.diskIo : series.network;
+    for (const point of points ?? []) newer(point.time);
   }
   return latest;
 }
@@ -530,7 +619,7 @@ async function refreshCardDeltas() {
   autoRefreshInFlight = true;
   try {
     for (const card of cards.value) {
-      if (!isMetricCard(card) || cardLoading.value[card.id] || !cardData.value[card.id]) continue;
+      if (!isRefreshableCard(card) || cardLoading.value[card.id] || !cardData.value[card.id]) continue;
       const data = cardData.value[card.id];
       if (!data || !cardHasData(card, data)) continue;
       const since = latestPointTime(card, data);
@@ -703,6 +792,35 @@ onBeforeUnmount(() => {
               <div class="overview-card-body relative grid min-h-0 gap-1.5 overflow-hidden px-3.5 py-2.5" :class="shouldShowChart(card) ? 'is-chart-primary' : 'is-value-primary'">
                 <LoadingOverlay v-if="cardLoading[card.id]" :label="t('overviewPage.loadingCard')" />
                 <span v-else-if="cardErrors[card.id]" class="line-clamp-2 text-sm leading-6 text-danger">{{ cardErrors[card.id] }}</span>
+                <!-- 磁盘卡只有当前值：用量/总量与采样时间，不画历史曲线。 -->
+                <div v-else-if="card.kind === 'disk'" class="overview-card-value is-primary min-w-0">
+                  <span class="text-[11px] font-medium text-muted-foreground">{{ t('overviewPage.diskUsageCurrent') }}</span>
+                  <strong class="block truncate tracking-tight text-foreground" :class="card.width <= 1 ? 'text-2xl' : 'text-[1.75rem] leading-none'">{{ cardValues[card.id] || derivedCardValue(card) }}</strong>
+                  <span v-if="card.height >= 2" class="block truncate text-xs text-secondary-foreground">{{ diskSecondaryValue(card) }}</span>
+                  <span v-if="card.height >= 2" class="block truncate text-[11px] text-muted-foreground">{{ diskSampledAt(card) }}</span>
+                </div>
+                <!-- 网络探测卡：节点数、平均延迟、最大丢包与最差结果摘要。 -->
+                <div v-else-if="card.kind === 'networkProbe'" class="grid min-w-0 content-start gap-1.5">
+                  <div class="flex items-baseline justify-between gap-2">
+                    <strong class="truncate text-[1.75rem] leading-none tracking-tight text-foreground">{{ cardValues[card.id] || derivedCardValue(card) }}</strong>
+                    <span class="truncate text-[11px] text-muted-foreground">{{ t('overviewPage.probeAverageLatency') }}</span>
+                  </div>
+                  <dl v-if="card.height >= 2" class="m-0 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                    <div class="min-w-0">
+                      <dt class="truncate text-muted-foreground">{{ t('overviewPage.probeNodes') }}</dt>
+                      <dd class="m-0 font-semibold tabular-nums text-foreground">{{ probeView(card)?.nodeCount ?? 0 }}</dd>
+                    </div>
+                    <div class="min-w-0">
+                      <dt class="truncate text-muted-foreground">{{ t('overviewPage.probeMaxLoss') }}</dt>
+                      <dd class="m-0 font-semibold tabular-nums text-foreground">{{ probeMaxLossText(card) }}</dd>
+                    </div>
+                  </dl>
+                  <div v-if="card.height >= 2 && probeView(card)?.worst.length" class="grid min-w-0 gap-0.5 border-t border-border pt-1.5">
+                    <span class="truncate text-[11px] text-muted-foreground">{{ t('overviewPage.probeWorst') }}</span>
+                    <span v-for="item in (probeView(card)?.worst ?? [])" :key="`${item.sourceServerId}:${item.targetServerId}`" class="truncate text-[11px] leading-4 text-secondary-foreground">{{ probeWorstText(item) }}</span>
+                  </div>
+                  <p v-else-if="card.height >= 2" class="m-0 text-xs text-secondary-foreground">{{ t('overviewPage.probeEmpty') }}</p>
+                </div>
                 <template v-else>
                   <div v-if="shouldShowChart(card) && cardViews[card.id]" class="overview-chart-stage min-h-0 min-w-0">
                     <MetricLineChart
@@ -714,7 +832,7 @@ onBeforeUnmount(() => {
                   <div class="overview-card-value min-w-0" :class="shouldShowChart(card) ? 'is-supporting' : 'is-primary'">
                     <span v-if="shouldShowChart(card)" class="text-[11px] font-medium text-muted-foreground">{{ t('overviewPage.live') }}</span>
                     <strong class="block truncate tracking-tight text-foreground" :class="shouldShowChart(card) ? 'text-base' : card.width <= 1 ? 'text-2xl' : 'text-[1.75rem] leading-none'">{{ cardValues[card.id] || derivedCardValue(card) }}</strong>
-                    <span v-if="shouldShowDetail(card) || (isMetricCard(card) && shouldShowChart(card))" class="block truncate text-xs text-secondary-foreground">{{ cardSecondaryValue(card) }}</span>
+                    <span v-if="shouldShowDetail(card) || shouldShowChart(card)" class="block truncate text-xs text-secondary-foreground">{{ cardSecondaryValue(card) }}</span>
                   </div>
                 </template>
               </div>
@@ -837,7 +955,7 @@ onBeforeUnmount(() => {
             <Select :model-value="String(editingCard.height)" :options="heightOptions" @update:model-value="updateCardHeight(editingCard, $event)" />
           </label>
         </div>
-        <div class="grid gap-2" :class="editingCard.kind === 'network' ? 'grid-cols-2' : 'grid-cols-1'">
+        <div v-if="showsCardRange(editingCard)" class="grid gap-2" :class="editingCard.kind === 'network' ? 'grid-cols-2' : 'grid-cols-1'">
           <label class="grid gap-1">
             <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.cardRange') }}</span>
             <Select :model-value="editingCard.range" :options="rangeOptions" @update:model-value="updateCardRange(editingCard, $event)" />

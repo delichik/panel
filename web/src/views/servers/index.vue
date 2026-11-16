@@ -37,6 +37,7 @@ import MetricsTab from './tabs/MetricsTab.vue';
 import NetworksTab from './tabs/NetworksTab.vue';
 import OverviewTab from './tabs/OverviewTab.vue';
 import PackagesTab from './tabs/PackagesTab.vue';
+import ProbesTab from './tabs/ProbesTab.vue';
 import TailscaleTab from './tabs/TailscaleTab.vue';
 import VolumesTab from './tabs/VolumesTab.vue';
 import {
@@ -563,6 +564,7 @@ onBeforeUnmount(() => {
             <div :key="selectedId" class="h-full min-h-0">
               <OverviewTab v-if="visited.overview" v-show="activeTab === 'overview'" :active="activeTab === 'overview'" :server="selectedServer" :credentials="credentials" @refresh="refreshDetail" />
               <MetricsTab v-if="visited.metrics" v-show="activeTab === 'metrics'" :active="activeTab === 'metrics'" :server="selectedServer" />
+              <ProbesTab v-if="visited.probes" v-show="activeTab === 'probes'" :active="activeTab === 'probes'" :server="selectedServer" />
               <AgentTab v-if="visited.agent" v-show="activeTab === 'agent'" :active="activeTab === 'agent'" :server="selectedServer" />
               <TailscaleTab v-if="visited.tailscale" v-show="activeTab === 'tailscale'" :server="selectedServer" />
               <div v-if="visited.resources" v-show="activeTab === 'resources'" class="h-full min-h-0">

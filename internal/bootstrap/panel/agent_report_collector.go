@@ -10,6 +10,7 @@ import (
 	agentcontract "panel/internal/agent/contract"
 	agentendpoint "panel/internal/agent/endpoint"
 	"panel/internal/modules/containers"
+	"panel/internal/modules/networkprobe"
 	"panel/internal/modules/observability/metrics"
 	"panel/internal/modules/runtimeevents"
 	server "panel/internal/modules/servers"
@@ -21,6 +22,12 @@ import (
 
 	"go.uber.org/zap"
 )
+
+// networkProbeReporter 是网络探测设施在 Agent 上报链路中需要的最小接口。
+type networkProbeReporter interface {
+	ReportConfig(ctx context.Context, serverID string) (networkprobe.ProbeReport, error)
+	SaveReported(ctx context.Context, sourceServerID string, sampleAt time.Time, results []networkprobe.ReportedResult) error
+}
 
 type agentReportCollector struct {
 	writers maintenance.Gate
@@ -41,6 +48,7 @@ type agentReportCollector struct {
 	packages interface {
 		SaveReportedUpdates(context.Context, string, []linux.PackageUpdate) error
 	}
+	probes  networkProbeReporter
 	logs    runtimeevents.EventWriter
 	cancel  context.CancelFunc
 	mu      sync.Mutex
@@ -296,6 +304,14 @@ func (c *agentReportCollector) SetSystemLogs(logs runtimeevents.EventWriter) {
 	c.logs = logs
 }
 
+// SetNetworkProbe 注入网络探测设施；未注入时上报链路不探测也不落库探测结果。
+func (c *agentReportCollector) SetNetworkProbe(probes networkProbeReporter) {
+	if c == nil {
+		return
+	}
+	c.probes = probes
+}
+
 func (c *agentReportCollector) logStreamStatus(entry *agentReportStream, connected bool, msg string) {
 	if c.logs == nil || entry == nil {
 		return
@@ -356,6 +372,7 @@ func (c *agentReportCollector) runServerStream(ctx context.Context, srv server.S
 				ServerID:                  srv.ID,
 				MetricsIntervalSeconds:    rt.MetricsCollectionIntervalSeconds,
 				ContainersIntervalSeconds: rt.ContainerReportIntervalSeconds,
+				Probe:                     c.reportProbeConfig(ctx, srv.ID),
 			}
 		}, func(ctx context.Context, report agentclient.AgentReport) error {
 			c.markConnected(entry, report.SampleAt)
@@ -421,6 +438,54 @@ func (c *agentReportCollector) savePackageUpdates(ctx context.Context, serverID 
 	return nil
 }
 
+// reportProbeConfig 把网络探测设施下发的探测配置转换为 Agent 协议结构。
+// 查询失败只记录日志并返回 disabled，不能因设施读库失败中断上报流。
+func (c *agentReportCollector) reportProbeConfig(ctx context.Context, serverID string) agentclient.ProbeReportConfig {
+	if c == nil || c.probes == nil {
+		return agentclient.ProbeReportConfig{}
+	}
+	report, err := c.probes.ReportConfig(ctx, serverID)
+	if err != nil {
+		logging.From(ctx).Warn("agent probe config lookup failed", zap.String("server_id", serverID), zap.Error(err))
+		return agentclient.ProbeReportConfig{}
+	}
+	out := agentclient.ProbeReportConfig{Enabled: report.Enabled, IntervalSeconds: report.IntervalSeconds}
+	if len(report.Targets) == 0 {
+		return out
+	}
+	out.Targets = make([]agentclient.ProbeTarget, 0, len(report.Targets))
+	for _, target := range report.Targets {
+		out.Targets = append(out.Targets, agentclient.ProbeTarget{
+			ServerID: target.ServerID,
+			Address:  target.Address,
+			Name:     target.Name,
+		})
+	}
+	return out
+}
+
+// saveProbeResults 保存一次探测上报。失败只记录日志，不中断上报流。
+func (c *agentReportCollector) saveProbeResults(ctx context.Context, serverID string, sampleAt time.Time, results []agentclient.ProbeResult) {
+	if c == nil || c.probes == nil {
+		return
+	}
+	converted := make([]networkprobe.ReportedResult, 0, len(results))
+	for _, result := range results {
+		converted = append(converted, networkprobe.ReportedResult{
+			TargetServerID:    result.TargetServerID,
+			TargetAddress:     result.TargetAddress,
+			LatencyMS:         result.LatencyMS,
+			PacketLossPercent: result.PacketLossPercent,
+			Sent:              result.Sent,
+			Received:          result.Received,
+			Error:             result.Error,
+		})
+	}
+	if err := c.probes.SaveReported(ctx, serverID, sampleAt, converted); err != nil {
+		logging.From(ctx).Warn("agent network probe report save failed", zap.String("server_id", serverID), zap.Error(err))
+	}
+}
+
 func (c *agentReportCollector) handleReport(ctx context.Context, serverID string, report agentclient.AgentReport) error {
 	done, ok := c.writers.Enter()
 	if !ok {
@@ -438,8 +503,17 @@ func (c *agentReportCollector) handleReport(ctx context.Context, serverID string
 	}
 	rt := c.settings.Runtime()
 	if report.Metrics != nil {
-		if sampleAligned(report.SampleAt, rt.MetricsCollectionIntervalSeconds) {
-			if err := c.metrics.SaveReported(ctx, serverID, report.SampleAt, *report.Metrics); err != nil {
+		// 补报重放样本可能落在当前采集间隔之外，必须跳过整点对齐校验；
+		// metrics.Service.Save 已按 (server_id,time) 去重保证重放幂等。
+		if report.Replayed || sampleAligned(report.SampleAt, rt.MetricsCollectionIntervalSeconds) {
+			// 磁盘使用率改为 5 分钟采样：未刷新磁盘值的样本把磁盘字段清零，
+			// 避免把旧值重复写成新的历史点。nil 表示旧 Agent，保持原值。
+			snapshot := *report.Metrics
+			if report.MetricsDiskUsageSampled != nil && !*report.MetricsDiskUsageSampled {
+				snapshot.DiskUsedBytes = 0
+				snapshot.DiskTotalBytes = 0
+			}
+			if err := c.metrics.SaveReported(ctx, serverID, report.SampleAt, snapshot); err != nil {
 				// 与包/镜像推送路径一致：落库失败只记录日志，不中断上报流。
 				logging.From(ctx).Warn("agent metrics report save failed", zap.String("server_id", serverID), zap.Error(err))
 			}
@@ -469,6 +543,11 @@ func (c *agentReportCollector) handleReport(ctx context.Context, serverID string
 				logging.From(ctx).Warn("agent report reconcile trigger failed", zap.String("server_id", serverID), zap.Error(err))
 			}
 		}
+	}
+	// 探测分支：只有 Agent 明确携带探测结果时才写入；旧 Agent 不上报，因此已有
+	// 结果不会被空报告清空。
+	if report.HasProbes {
+		c.saveProbeResults(ctx, serverID, report.SampleAt, report.Probes)
 	}
 	// Tailscale 分支：只有上报明确携带该字段时才写观测态。旧 Agent 不上报，
 	// 因此已有地址不会被空报告清空。

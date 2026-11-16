@@ -815,3 +815,45 @@ func (*StorageSharePartition) ExtraIndexDDL() map[string][]string {
 		},
 	}
 }
+
+// NetworkProbeConfig 是“网络探测”设施的单行配置。ID 固定为 network_probe；
+// Mode=all 表示所有节点都作为探测节点，selected 时仅 ServerIDs 内节点探测。
+type NetworkProbeConfig struct {
+	ID        string    `orm:"primary_key"`
+	Mode      string    `orm:"not_null;default:'all'"`
+	ServerIDs []string  `orm:"json;not_null;default:'[]';column:server_ids_json"`
+	Version   int       `orm:"not_null;default:1"`
+	UpdatedAt time.Time `orm:"not_null"`
+}
+
+func (*NetworkProbeConfig) TableName() string { return "network_probe_configs" }
+
+// TableConstraints 返回 network_probe_configs 表无法用 orm tag 表达的原始约束。
+func (*NetworkProbeConfig) TableConstraints() []string {
+	return []string{"CHECK(mode IN ('all','selected'))"}
+}
+
+// NetworkProbeResult 是探测节点到目标节点的最新一次 ping 观测。每个
+// (source,target) 只有一行；服务器删除或探测配置变化时由协调方修剪。
+type NetworkProbeResult struct {
+	SourceServerID    string    `orm:"primary_key;not_null"`
+	TargetServerID    string    `orm:"primary_key;not_null"`
+	TargetAddress     string    `orm:"not_null;default:''"`
+	SampledAt         time.Time `orm:"not_null"`
+	LatencyMS         float64   `orm:"not_null;default:0"`
+	PacketLossPercent float64   `orm:"not_null;default:0"`
+	Sent              int       `orm:"not_null;default:0"`
+	Received          int       `orm:"not_null;default:0"`
+	Error             string    `orm:"not_null;default:''"`
+}
+
+func (*NetworkProbeResult) TableName() string { return "network_probe_results" }
+
+// ExtraIndexDDL 返回网络探测结果按目标查询的索引。
+func (*NetworkProbeResult) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"network_probe_results": {
+			"CREATE INDEX IF NOT EXISTS idx_network_probe_results_target ON network_probe_results(target_server_id)",
+		},
+	}
+}

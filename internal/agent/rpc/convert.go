@@ -78,6 +78,8 @@ func goOSRelease(in *agentpb.OSReleaseResponse) linux.OSRelease {
 }
 
 func pbSnapshot(in linux.MetricsSnapshot) *agentpb.MetricsSnapshotResponse {
+	sampled := in.DiskUsageSampled
+	ioAvailable := in.DiskIOAvailable
 	return &agentpb.MetricsSnapshotResponse{
 		ServerId:           in.ServerID,
 		Time:               pbTime(in.Time),
@@ -88,6 +90,10 @@ func pbSnapshot(in linux.MetricsSnapshot) *agentpb.MetricsSnapshotResponse {
 		DiskTotalBytes:     in.DiskTotalBytes,
 		NetworkRxBytesRate: in.NetworkRxBytesRate,
 		NetworkTxBytesRate: in.NetworkTxBytesRate,
+		DiskUsageSampled:   wrapperspb.Bool(sampled),
+		DiskIoAvailable:    wrapperspb.Bool(ioAvailable),
+		DiskReadBytesRate:  in.DiskReadBytesRate,
+		DiskWriteBytesRate: in.DiskWriteBytesRate,
 		Status: &agentpb.SystemStatus{
 			Hostname:      in.Status.Hostname,
 			KernelVersion: in.Status.KernelVersion,
@@ -116,6 +122,14 @@ func goSnapshot(in *agentpb.MetricsSnapshotResponse) linux.MetricsSnapshot {
 		DiskTotalBytes:     in.DiskTotalBytes,
 		NetworkRxBytesRate: in.NetworkRxBytesRate,
 		NetworkTxBytesRate: in.NetworkTxBytesRate,
+		DiskReadBytesRate:  in.DiskReadBytesRate,
+		DiskWriteBytesRate: in.DiskWriteBytesRate,
+	}
+	if in.DiskUsageSampled != nil {
+		out.DiskUsageSampled = in.DiskUsageSampled.Value
+	}
+	if in.DiskIoAvailable != nil {
+		out.DiskIOAvailable = in.DiskIoAvailable.Value
 	}
 	if in.Status != nil {
 		out.Status = linux.SystemStatus{

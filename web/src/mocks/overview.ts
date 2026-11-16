@@ -1,5 +1,6 @@
 import type { OverviewCardConfiguration, OverviewCardConfigurationSet, OverviewCardData, OverviewDto, OverviewMetricsSeries } from '@/types/overview';
 import type { ServerDto } from '@/types/servers';
+import { getNetworkProbeCardData } from './networkProbe';
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -26,7 +27,9 @@ export let overviewCards: OverviewCardConfiguration[] = [
   card('card-cpu', 'cpu', '1h', 3, 2),
   card('card-memory', 'memory', '1h', 3, 2),
   card('card-disk', 'disk', '6h', 2, 2),
+  card('card-disk-io', 'diskIO', '1h', 6, 2),
   card('card-network', 'network', '1h', 6, 2),
+  card('card-network-probe', 'networkProbe', '1h', 3, 2),
   card('card-packages', 'packageUpdates', '1d', 2, 1),
   card('card-containers', 'containerUpdates', '1d', 2, 1),
 ];
@@ -40,17 +43,24 @@ export function setOverviewCards(input: OverviewCardConfigurationSet): OverviewC
   return getOverviewCards();
 }
 
+type SeriesCardKind = 'cpu' | 'memory' | 'disk' | 'diskIO' | 'network';
+
+const seriesCardKinds = new Set<string>(['cpu', 'memory', 'disk', 'diskIO', 'network']);
+
 export function getOverviewCardData(cardId: string, servers: ServerDto[], since?: string): OverviewCardData | null {
   const found = overviewCards.find((item) => item.id === cardId);
   if (!found) return null;
   const kind = found.kind;
-  if (kind !== 'cpu' && kind !== 'memory' && kind !== 'disk' && kind !== 'network') {
+  if (kind === 'networkProbe') {
+    return { card: { ...found, serverIds: [...found.serverIds] }, metricsByServer: {}, bucketSeconds: 0, probes: getNetworkProbeCardData() };
+  }
+  if (!seriesCardKinds.has(kind)) {
     return { card: { ...found, serverIds: [...found.serverIds] }, metricsByServer: {}, bucketSeconds: 0 };
   }
   const selected = new Set(found.serverIds);
   const targetServers = servers.filter((server) => selected.size === 0 || selected.has(server.id));
   const bucketSeconds = mockBucketSeconds(found.range);
-  const metricsByServer = Object.fromEntries(targetServers.map((server, index) => [server.id, mockCardSeries(kind, index, bucketSeconds, since)]));
+  const metricsByServer = Object.fromEntries(targetServers.map((server, index) => [server.id, mockCardSeries(kind as SeriesCardKind, index, bucketSeconds, since)]));
   return { card: { ...found, serverIds: [...found.serverIds] }, metricsByServer, bucketSeconds };
 }
 
@@ -65,12 +75,7 @@ function mockBucketSeconds(range: OverviewCardConfiguration['range']): number {
 }
 
 // 与后端一致：只返回卡片对应的序列，since 先向下对齐到桶起点。
-function mockCardSeries(
-  kind: 'cpu' | 'memory' | 'disk' | 'network',
-  seed: number,
-  bucketSeconds: number,
-  since: string | undefined,
-): OverviewMetricsSeries {
+function mockCardSeries(kind: SeriesCardKind, seed: number, bucketSeconds: number, since: string | undefined): OverviewMetricsSeries {
   const end = Math.floor(Date.now() / 1000 / bucketSeconds) * bucketSeconds;
   const sinceSeconds = since ? Math.floor(Date.parse(since) / 1000 / bucketSeconds) * bucketSeconds : null;
   const points = Array.from({ length: 120 }, (_, index) => ({
@@ -79,7 +84,20 @@ function mockCardSeries(
   })).filter((point) => sinceSeconds === null || Date.parse(point.time) >= sinceSeconds * 1000);
   if (kind === 'cpu') return { cpu: points.map((point) => ({ time: point.time, usagePercent: 18 + seed * 12 + point.index * 2 })) };
   if (kind === 'memory') return { memory: points.map((point) => ({ time: point.time, usedBytes: (2 + seed + point.index / 10) * 1024 ** 3, totalBytes: 8 * 1024 ** 3 })) };
-  if (kind === 'disk') return { disk: points.map((point) => ({ time: point.time, usedBytes: (35 + seed * 8 + point.index) * 1024 ** 3, totalBytes: 100 * 1024 ** 3 })) };
+  if (kind === 'disk') {
+    // 磁盘卡没有历史序列，只有最近一次有效采样。
+    const totalBytes = (120 + seed * 40) * 1024 ** 3;
+    return { diskCurrent: { time: new Date(end * 1000).toISOString(), usedBytes: totalBytes * (0.34 + seed * 0.03), totalBytes } };
+  }
+  if (kind === 'diskIO') {
+    return {
+      diskIo: points.map((point) => ({
+        time: point.time,
+        readBytesPerSecond: (seed + 1) * 320_000 + point.index * 41_000,
+        writeBytesPerSecond: (seed + 1) * 160_000 + point.index * 23_000,
+      })),
+    };
+  }
   return {
     network: points.map((point) => ({
       time: point.time,

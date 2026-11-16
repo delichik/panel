@@ -1,0 +1,62 @@
+/** 网络探测设施：探测节点之间的延迟与丢包；配置与结果分属两个后端契约。 */
+export type NetworkProbeMode = 'all' | 'selected';
+
+export interface NetworkProbeNode {
+  serverId: string;
+  name: string;
+  address: string;
+}
+
+export interface NetworkProbeResult {
+  sourceServerId: string;
+  targetServerId: string;
+  targetAddress: string;
+  /** 毫秒；探测失败时为 0。 */
+  latencyMs: number;
+  packetLossPercent: number;
+  sent: number;
+  received: number;
+  /** ISO 时间；服务端截断到秒。 */
+  sampledAt: string;
+  /** 稳定错误文本；空串表示本轮探测成功。 */
+  error: string;
+  /** 采样时间超出新鲜窗口；预计算值，客户端不重算。 */
+  stale: boolean;
+}
+
+export interface NetworkProbeConfig {
+  mode: NetworkProbeMode;
+  serverIds: string[];
+  version: number;
+  updatedAt: string;
+}
+
+export interface NetworkProbeSaveInput {
+  mode: NetworkProbeMode;
+  serverIds: string[];
+}
+
+export interface NetworkProbeMatrix {
+  mode: NetworkProbeMode;
+  nodes: NetworkProbeNode[];
+  results: NetworkProbeResult[];
+  updatedAt: string | null;
+}
+
+export interface NetworkProbeServerResults {
+  serverId: string;
+  /** 该节点当前是否参与探测；未参与时 nodes/results 为空。 */
+  enabled: boolean;
+  /** 该节点的探测目标。 */
+  nodes: NetworkProbeNode[];
+  /** source = 该节点的最新结果。 */
+  results: NetworkProbeResult[];
+  updatedAt: string | null;
+}
+
+/** 概览 networkProbe 卡片的数据切片。 */
+export interface NetworkProbeCardData {
+  nodes: NetworkProbeNode[];
+  results: NetworkProbeResult[];
+  updatedAt: string | null;
+}

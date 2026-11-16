@@ -20,6 +20,7 @@ import (
 	"panel/internal/modules/facilityapps"
 	"panel/internal/modules/identity"
 	"panel/internal/modules/keyassets"
+	"panel/internal/modules/networkprobe"
 	modevents "panel/internal/modules/events"
 	"panel/internal/modules/observability/diagnostics"
 	"panel/internal/modules/observability/metrics"
@@ -199,8 +200,9 @@ func New(cfg config.Config) (*App, error) {
 	containerBridge.containers = containerSvc
 	applicationSvc.SetApplicationReconcileTrigger(containerSvc)
 	metricsSvc := metrics.NewService(store.MetricsDB(), serverSvc)
+	probeSvc := networkprobe.NewService(store.AppDB(), serverSvc)
 	packageSvc := packages.NewService(store.AppDB(), serverSvc, executor, taskSvc, agentClient)
-	overviewSvc := overview.NewService(store.AppDB(), serverSvc, metricsSvc, packageSvc)
+	overviewSvc := overview.NewService(store.AppDB(), serverSvc, metricsSvc, packageSvc, overview.WithNetworkProbe(probeSvc))
 	if err := dns.MigrateProviderCredentials(context.Background(), store.AppDB(), secretStore); err != nil {
 		_ = store.Close()
 		return nil, err
@@ -267,6 +269,7 @@ func New(cfg config.Config) (*App, error) {
 	})
 	reportCollector := newAgentReportCollector(serverSvc, agentClient, settingsSvc, metricsSvc, containerSvc, packageSvc)
 	reportCollector.SetSystemLogs(eventWriter)
+	reportCollector.SetNetworkProbe(probeSvc)
 	a := &App{
 		cfg:            cfg,
 		store:          store,
@@ -322,7 +325,7 @@ func New(cfg config.Config) (*App, error) {
 	taskHandler := tasks.NewHandler(taskSvc, taskWorker)
 	taskHandler.SetExternalResolver(applicationSvc.ResolveExecutionManually)
 	eventsSvc := modevents.NewService(store.AppDB(), filepath.Join(cfg.DataRoot, "logs"))
-	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), taskHandler, metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), modevents.NewHandler(eventsSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), facilityapps.NewHandler(facilitySvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc), backups.NewHandler(backupSvc))
+	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), taskHandler, metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), modevents.NewHandler(eventsSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), facilityapps.NewHandler(facilitySvc), networkprobe.NewHandler(probeSvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc), backups.NewHandler(backupSvc))
 	logging.From(initCtx).Info("application initialized")
 	return a, nil
 }
@@ -397,7 +400,7 @@ func applicationSaveSessionDir(cfg config.Config) string {
 	return filepath.Join(cfg.DataRoot, "tmp", "application-save-sessions")
 }
 
-func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, eventsH *modevents.Handler, applicationH *applications.Handler, containerH *containerization.Handler, facilityH *facilityapps.Handler, overviewH *overview.Handler, settingsH *settings.Handler, systemH *systeminfo.Handler, diagnosticsH *diagnostics.Handler, backupH *backups.Handler) {
+func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, eventsH *modevents.Handler, applicationH *applications.Handler, containerH *containerization.Handler, facilityH *facilityapps.Handler, probeH *networkprobe.Handler, overviewH *overview.Handler, settingsH *settings.Handler, systemH *systeminfo.Handler, diagnosticsH *diagnostics.Handler, backupH *backups.Handler) {
 	a.mux.HandleFunc("POST /api/v1/auth/login", authH.Login)
 	a.mux.Handle("POST /api/v1/auth/logout", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.Logout)))
 	a.mux.Handle("POST /api/v1/auth/account", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.UpdateAccount)))
@@ -424,6 +427,7 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 	packageH.RegisterRoutes(a.mux, authenticated)
 	containerH.RegisterRoutes(a.mux, authenticated)
 	facilityH.RegisterRoutes(a.mux, authenticated)
+	probeH.RegisterRoutes(a.mux, authenticated)
 	applicationH.RegisterRoutes(a.mux, authenticated)
 	taskH.RegisterRoutes(a.mux, authenticated)
 	overviewH.RegisterRoutes(a.mux, authenticated)

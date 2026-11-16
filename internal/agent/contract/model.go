@@ -30,12 +30,12 @@ const (
 	// 连接地址变化后是否需要重签证书（例如 tailscale 地址首次可用）。
 	TraitCertificateHosts = "agent.certificate.hosts"
 
-	TraitReportStatus             = "agent.report.status"
-	TraitReportLastMessageAt      = "agent.report.last_message_at"
-	TraitReportLastError          = "agent.report.last_error"
-	TraitReportDisconnectEvents   = "agent.report.disconnect_events"
-	TraitReportDisconnectCount1h  = "agent.report.disconnect_count_1h"
-	TraitReportStability          = "agent.report.stability"
+	TraitReportStatus            = "agent.report.status"
+	TraitReportLastMessageAt     = "agent.report.last_message_at"
+	TraitReportLastError         = "agent.report.last_error"
+	TraitReportDisconnectEvents  = "agent.report.disconnect_events"
+	TraitReportDisconnectCount1h = "agent.report.disconnect_count_1h"
+	TraitReportStability         = "agent.report.stability"
 
 	StatusCompatible   = "compatible"
 	StatusIncompatible = "incompatible"
@@ -57,6 +57,10 @@ const (
 	CapabilityPrepareRestart      = "prepare-restart"
 	CapabilityExecutionEvents     = "execution-events-v1"
 	CapabilityExecutionResolution = "execution-resolution-v1"
+	// CapabilityNetworkProbe 表示 Agent 支持设施网络探测：接收 Panel 下发的
+	// ping 目标并在 report stream 回报延迟/丢包。它是可选能力，旧 Agent 缺失
+	// 只影响网络探测本身，不影响兼容性判定。
+	CapabilityNetworkProbe = "network-probe"
 
 	PrepareRestartStateHoldOn = "holdon"
 	PrepareRestartStateReady  = "ready"

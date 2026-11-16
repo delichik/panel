@@ -30,19 +30,23 @@ type Series struct {
 	Range   string        `json:"range"`
 	CPU     []CPUPoint    `json:"cpu"`
 	Memory  []MemoryPoint `json:"memory"`
-	Disk    []DiskPoint   `json:"disk"`
 	Network []NetPoint    `json:"network"`
 	Load    []LoadPoint   `json:"load"`
+	DiskIO  []DiskIOPoint `json:"diskIo"`
+	// DiskCurrent 是范围内最后一次有效磁盘采样（disk_total_bytes > 0）。
+	// 磁盘使用率不再提供历史曲线，只返回当前值；nil 表示范围内没有有效采样。
+	DiskCurrent *MemoryPoint `json:"diskCurrent"`
 }
 
 // SeriesFields 选择批量查询需要物化的指标序列，避免概览卡片为不使用的序列付出
 // 聚合与序列化成本。
 type SeriesFields struct {
-	CPU     bool
-	Memory  bool
-	Disk    bool
-	Network bool
-	Load    bool
+	CPU         bool
+	Memory      bool
+	Network     bool
+	Load        bool
+	DiskIO      bool
+	DiskCurrent bool
 }
 
 // QueryManyOptions 控制批量指标查询。BucketSeconds 必须大于零：查询按 Unix 纪元
@@ -64,11 +68,15 @@ type MemoryPoint struct {
 	UsedBytes  int64     `json:"usedBytes"`
 	TotalBytes int64     `json:"totalBytes"`
 }
-type DiskPoint = MemoryPoint
 type NetPoint struct {
 	Time             time.Time `json:"time"`
 	RxBytesPerSecond float64   `json:"rxBytesPerSecond"`
 	TxBytesPerSecond float64   `json:"txBytesPerSecond"`
+}
+type DiskIOPoint struct {
+	Time                time.Time `json:"time"`
+	ReadBytesPerSecond  float64   `json:"readBytesPerSecond"`
+	WriteBytesPerSecond float64   `json:"writeBytesPerSecond"`
 }
 type LoadPoint struct {
 	Time   time.Time `json:"time"`
@@ -86,24 +94,46 @@ func (s *Service) Save(ctx context.Context, snap linux.MetricsSnapshot) error {
 		snap.Time = time.Now().UTC()
 	}
 	snap.Time = alignMetricTime(snap.Time)
+	// 补报重放可能重复发送同一 (server_id, time) 样本。这里在插入前显式去重，
+	// 因为表上没有唯一约束；并发重复插入的窗口由 report 流串行写入收敛。
+	exists, err := orm.New(s.db).From("metrics_snapshots").
+		Where("server_id = ?", snap.ServerID).
+		And("time = ?", snap.Time.Format(time.RFC3339Nano)).
+		Exists(ctx)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	// 可空磁盘 IO 列：未测得时写 NULL，避免把“未知”伪装成 0 写入历史曲线。
+	var readRate, writeRate *float64
+	if snap.DiskIOAvailable {
+		read := snap.DiskReadBytesRate
+		write := snap.DiskWriteBytesRate
+		readRate = &read
+		writeRate = &write
+	}
 	return orm.New(s.db).Insert(ctx, &models.MetricsSnapshot{
-		ServerID:         snap.ServerID,
-		Time:             snap.Time,
-		CPUUsagePercent:  snap.CPUUsagePercent,
-		MemoryUsedBytes:  snap.MemoryUsedBytes,
-		MemoryTotalBytes: snap.MemoryTotalBytes,
-		DiskUsedBytes:    snap.DiskUsedBytes,
-		DiskTotalBytes:   snap.DiskTotalBytes,
-		NetworkRXBps:     snap.NetworkRxBytesRate,
-		NetworkTXBps:     snap.NetworkTxBytesRate,
-		LoadAverage:      snap.Status.LoadAverage,
-		Load1:            snap.Status.Load1,
-		Load5:            snap.Status.Load5,
-		Load15:           snap.Status.Load15,
-		UptimeSeconds:    snap.Status.UptimeSeconds,
-		Hostname:         snap.Status.Hostname,
-		KernelVersion:    snap.Status.KernelVersion,
-		OSVersion:        snap.Status.OSVersion,
+		ServerID:           snap.ServerID,
+		Time:               snap.Time,
+		CPUUsagePercent:    snap.CPUUsagePercent,
+		MemoryUsedBytes:    snap.MemoryUsedBytes,
+		MemoryTotalBytes:   snap.MemoryTotalBytes,
+		DiskUsedBytes:      snap.DiskUsedBytes,
+		DiskTotalBytes:     snap.DiskTotalBytes,
+		DiskReadBytesRate:  readRate,
+		DiskWriteBytesRate: writeRate,
+		NetworkRXBps:       snap.NetworkRxBytesRate,
+		NetworkTXBps:       snap.NetworkTxBytesRate,
+		LoadAverage:        snap.Status.LoadAverage,
+		Load1:              snap.Status.Load1,
+		Load5:              snap.Status.Load5,
+		Load15:             snap.Status.Load15,
+		UptimeSeconds:      snap.Status.UptimeSeconds,
+		Hostname:           snap.Status.Hostname,
+		KernelVersion:      snap.Status.KernelVersion,
+		OSVersion:          snap.Status.OSVersion,
 	})
 }
 
@@ -143,14 +173,28 @@ func (s *Service) querySince(ctx context.Context, serverID, rng string, hasAfter
 	if err := query.OrderBy("time").All(ctx, &rows); err != nil {
 		return Series{}, err
 	}
-	series := Series{Range: rng, CPU: []CPUPoint{}, Memory: []MemoryPoint{}, Disk: []DiskPoint{}, Network: []NetPoint{}, Load: []LoadPoint{}}
+	series := Series{Range: rng, CPU: []CPUPoint{}, Memory: []MemoryPoint{}, Network: []NetPoint{}, Load: []LoadPoint{}, DiskIO: []DiskIOPoint{}}
 	for _, row := range rows {
 		t := row.Time
 		series.CPU = append(series.CPU, CPUPoint{Time: t, UsagePercent: row.CPUUsagePercent})
 		series.Memory = append(series.Memory, MemoryPoint{Time: t, UsedBytes: row.MemoryUsedBytes, TotalBytes: row.MemoryTotalBytes})
-		series.Disk = append(series.Disk, DiskPoint{Time: t, UsedBytes: row.DiskUsedBytes, TotalBytes: row.DiskTotalBytes})
 		series.Network = append(series.Network, NetPoint{Time: t, RxBytesPerSecond: row.NetworkRXBps, TxBytesPerSecond: row.NetworkTXBps})
 		series.Load = append(series.Load, LoadPoint{Time: t, Load1: row.Load1, Load5: row.Load5, Load15: row.Load15})
+		// ORM 把可空的 disk_read_bytes_rate/disk_write_bytes_rate 扫描成 *float64，
+		// NULL 即 nil。两个都未测得的样本不产生 diskIo 点。
+		if row.DiskReadBytesRate != nil || row.DiskWriteBytesRate != nil {
+			point := DiskIOPoint{Time: t}
+			if row.DiskReadBytesRate != nil {
+				point.ReadBytesPerSecond = *row.DiskReadBytesRate
+			}
+			if row.DiskWriteBytesRate != nil {
+				point.WriteBytesPerSecond = *row.DiskWriteBytesRate
+			}
+			series.DiskIO = append(series.DiskIO, point)
+		}
+		if row.DiskTotalBytes > 0 {
+			series.DiskCurrent = &MemoryPoint{Time: t, UsedBytes: row.DiskUsedBytes, TotalBytes: row.DiskTotalBytes}
+		}
 	}
 	return series, nil
 }
@@ -251,8 +295,8 @@ func (s *Service) QueryMany(ctx context.Context, serverIDs []string, rng string,
 	if opts.Fields.Memory {
 		selects = append(selects, "CAST(ROUND(AVG(memory_used_bytes)) AS INTEGER) AS memory_used_bytes", "CAST(ROUND(AVG(memory_total_bytes)) AS INTEGER) AS memory_total_bytes")
 	}
-	if opts.Fields.Disk {
-		selects = append(selects, "CAST(ROUND(AVG(disk_used_bytes)) AS INTEGER) AS disk_used_bytes", "CAST(ROUND(AVG(disk_total_bytes)) AS INTEGER) AS disk_total_bytes")
+	if opts.Fields.DiskIO {
+		selects = append(selects, "AVG(disk_read_bytes_rate) AS disk_read_bytes_rate", "AVG(disk_write_bytes_rate) AS disk_write_bytes_rate")
 	}
 	if opts.Fields.Network {
 		selects = append(selects, "AVG(network_rx_bps) AS network_rx_bps", "AVG(network_tx_bps) AS network_tx_bps")
@@ -260,22 +304,69 @@ func (s *Service) QueryMany(ctx context.Context, serverIDs []string, rng string,
 	if opts.Fields.Load {
 		selects = append(selects, "AVG(load_1) AS load_1", "AVG(load_5) AS load_5", "AVG(load_15) AS load_15")
 	}
+	hasBucketedFields := opts.Fields.CPU || opts.Fields.Memory || opts.Fields.DiskIO || opts.Fields.Network || opts.Fields.Load
 	since := time.Now().UTC().Add(-duration).Format(time.RFC3339Nano)
 	for _, chunk := range chunkStrings(ids, 200) {
-		where := "server_id IN (" + inPlaceholders(len(chunk)) + ") AND time >= ?"
-		args := append([]any{}, selectArgs...)
-		args = append(args, stringArgs(chunk)...)
-		args = append(args, since)
-		if opts.After != nil {
-			where += " AND time >= ?"
-			args = append(args, floorTimeToBucket(*opts.After, opts.BucketSeconds).Format(time.RFC3339Nano))
+		if hasBucketedFields {
+			where := "server_id IN (" + inPlaceholders(len(chunk)) + ") AND time >= ?"
+			args := append([]any{}, selectArgs...)
+			args = append(args, stringArgs(chunk)...)
+			args = append(args, since)
+			if opts.After != nil {
+				where += " AND time >= ?"
+				args = append(args, floorTimeToBucket(*opts.After, opts.BucketSeconds).Format(time.RFC3339Nano))
+			}
+			query := "SELECT " + strings.Join(selects, ", ") + " FROM metrics_snapshots WHERE " + where + " GROUP BY server_id, bucket ORDER BY server_id, bucket"
+			if err := s.scanBucketedSeries(ctx, query, args, out, opts.Fields); err != nil {
+				return nil, err
+			}
 		}
-		query := "SELECT " + strings.Join(selects, ", ") + " FROM metrics_snapshots WHERE " + where + " GROUP BY server_id, bucket ORDER BY server_id, bucket"
-		if err := s.scanBucketedSeries(ctx, query, args, out, opts.Fields); err != nil {
-			return nil, err
+		if opts.Fields.DiskCurrent {
+			if err := s.scanDiskCurrent(ctx, chunk, since, out); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return out, nil
+}
+
+// scanDiskCurrent 为每个服务器填充范围内最后一次有效磁盘采样（disk_total_bytes > 0）。
+// 该值表示“当前磁盘占用”，必须忽略 After/桶：增量刷新时磁盘卡仍拿到完整当前值，
+// 而不是只拿到自上次刷新以来的空序列。
+func (s *Service) scanDiskCurrent(ctx context.Context, serverIDs []string, since string, out map[string]Series) error {
+	query := `
+		SELECT server_id, time, disk_used_bytes, disk_total_bytes
+		FROM (
+			SELECT server_id, time, disk_used_bytes, disk_total_bytes,
+				ROW_NUMBER() OVER (PARTITION BY server_id ORDER BY strftime('%s', time) DESC) AS rn
+			FROM metrics_snapshots
+			WHERE server_id IN (` + inPlaceholders(len(serverIDs)) + `) AND time >= ? AND disk_total_bytes > 0
+		) WHERE rn = 1`
+	args := append([]any{}, stringArgs(serverIDs)...)
+	args = append(args, since)
+	rows, err := orm.Raw(ctx, s.db, query, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var serverID, rawTime string
+		var used, total int64
+		if err := rows.Scan(&serverID, &rawTime, &used, &total); err != nil {
+			return err
+		}
+		series, ok := out[serverID]
+		if !ok {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339Nano, rawTime)
+		if err != nil {
+			continue
+		}
+		series.DiskCurrent = &MemoryPoint{Time: at.UTC(), UsedBytes: used, TotalBytes: total}
+		out[serverID] = series
+	}
+	return rows.Err()
 }
 
 func (s *Service) scanBucketedSeries(ctx context.Context, query string, args []any, out map[string]Series, fields SeriesFields) error {
@@ -289,15 +380,16 @@ func (s *Service) scanBucketedSeries(ctx context.Context, query string, args []a
 		var bucket int64
 		dest := []any{&serverID, &bucket}
 		var cpu, rx, tx, load1, load5, load15 float64
-		var memUsed, memTotal, diskUsed, diskTotal int64
+		var memUsed, memTotal int64
+		var diskRead, diskWrite sql.NullFloat64
 		if fields.CPU {
 			dest = append(dest, &cpu)
 		}
 		if fields.Memory {
 			dest = append(dest, &memUsed, &memTotal)
 		}
-		if fields.Disk {
-			dest = append(dest, &diskUsed, &diskTotal)
+		if fields.DiskIO {
+			dest = append(dest, &diskRead, &diskWrite)
 		}
 		if fields.Network {
 			dest = append(dest, &rx, &tx)
@@ -319,8 +411,16 @@ func (s *Service) scanBucketedSeries(ctx context.Context, query string, args []a
 		if fields.Memory {
 			series.Memory = append(series.Memory, MemoryPoint{Time: at, UsedBytes: memUsed, TotalBytes: memTotal})
 		}
-		if fields.Disk {
-			series.Disk = append(series.Disk, DiskPoint{Time: at, UsedBytes: diskUsed, TotalBytes: diskTotal})
+		if fields.DiskIO && (diskRead.Valid || diskWrite.Valid) {
+			// 桶内两个可空列都 NULL 表示整桶未测得磁盘 IO，不产生点。
+			point := DiskIOPoint{Time: at}
+			if diskRead.Valid {
+				point.ReadBytesPerSecond = diskRead.Float64
+			}
+			if diskWrite.Valid {
+				point.WriteBytesPerSecond = diskWrite.Float64
+			}
+			series.DiskIO = append(series.DiskIO, point)
 		}
 		if fields.Network {
 			series.Network = append(series.Network, NetPoint{Time: at, RxBytesPerSecond: rx, TxBytesPerSecond: tx})
@@ -334,7 +434,7 @@ func (s *Service) scanBucketedSeries(ctx context.Context, query string, args []a
 }
 
 func emptySeries(rng string) Series {
-	return Series{Range: rng, CPU: []CPUPoint{}, Memory: []MemoryPoint{}, Disk: []DiskPoint{}, Network: []NetPoint{}, Load: []LoadPoint{}}
+	return Series{Range: rng, CPU: []CPUPoint{}, Memory: []MemoryPoint{}, Network: []NetPoint{}, Load: []LoadPoint{}, DiskIO: []DiskIOPoint{}}
 }
 
 // floorTimeToBucket 把时间向下对齐到 Unix 纪元对齐的桶起点。

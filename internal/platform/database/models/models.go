@@ -19,7 +19,7 @@ func AppModels() []any {
 		&ApplicationEditSessionFile{}, &ApplicationEditSessionOperation{},
 		&ApplicationFile{}, &ApplicationInstance{}, &FacilityAppConfig{},
 		&FacilityStaticAsset{}, &ReverseProxyRoute{}, &FacilityEditSession{}, &FacilityEditSessionAsset{},
-		&FacilityEditSessionOperation{}, &StorageShareConfig{}, &StorageSharePartition{}, &Certificate{}, &SelfSignedCertificate{},
+		&FacilityEditSessionOperation{}, &StorageShareConfig{}, &StorageSharePartition{}, &NetworkProbeConfig{}, &NetworkProbeResult{}, &Certificate{}, &SelfSignedCertificate{},
 		&KeyAsset{}, &OverviewCardConfiguration{}, &RuntimeSetting{}, &AuthState{},
 		&AuthAccount{}, &Task{}, &TaskStep{}, &Event{},
 	}

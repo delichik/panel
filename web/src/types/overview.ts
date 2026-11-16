@@ -1,4 +1,6 @@
-export type OverviewCardKind = 'cpu' | 'memory' | 'disk' | 'network' | 'packageUpdates' | 'containerUpdates' | 'placeholder';
+import type { NetworkProbeCardData } from './networkProbe';
+
+export type OverviewCardKind = 'cpu' | 'memory' | 'disk' | 'diskIO' | 'network' | 'networkProbe' | 'packageUpdates' | 'containerUpdates' | 'placeholder';
 export type OverviewCardRange = '1h' | '6h' | '1d' | '7d';
 export type OverviewCardNetworkDirection = 'rx' | 'tx' | 'both';
 
@@ -40,13 +42,17 @@ export interface OverviewMetricPoint {
   totalBytes?: number;
   rxBytesPerSecond?: number;
   txBytesPerSecond?: number;
+  readBytesPerSecond?: number;
+  writeBytesPerSecond?: number;
 }
 
 export interface OverviewMetricsSeries {
   cpu?: OverviewMetricPoint[];
   memory?: OverviewMetricPoint[];
-  disk?: OverviewMetricPoint[];
+  diskIo?: OverviewMetricPoint[];
   network?: OverviewMetricPoint[];
+  /** 最近一次有效磁盘采样；不参与时间序列、增量刷新时整值替换。 */
+  diskCurrent?: OverviewMetricPoint | null;
 }
 
 export interface OverviewCardData {
@@ -54,4 +60,6 @@ export interface OverviewCardData {
   metricsByServer: Record<string, OverviewMetricsSeries>;
   /** 服务端降采样桶大小；增量刷新用它判断桶网格是否变化。 */
   bucketSeconds: number;
+  /** networkProbe 卡片的节点与最新结果。 */
+  probes?: NetworkProbeCardData;
 }

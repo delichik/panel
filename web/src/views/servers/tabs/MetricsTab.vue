@@ -41,16 +41,37 @@ const latest = computed(() => {
   return {
     cpu: series?.cpu.at(-1),
     memory: series?.memory.at(-1),
-    disk: series?.disk.at(-1),
+    disk: series?.diskCurrent ?? undefined,
+    diskIo: series?.diskIo.at(-1),
     network: series?.network.at(-1),
-    time: series?.cpu.at(-1)?.time ?? series?.memory.at(-1)?.time ?? '',
+    time: series?.cpu.at(-1)?.time
+      ?? series?.memory.at(-1)?.time
+      ?? series?.diskIo.at(-1)?.time
+      ?? series?.network.at(-1)?.time
+      ?? series?.diskCurrent?.time
+      ?? '',
   };
+});
+
+/** 磁盘只有当前值、没有历史序列；百分比由当前值派生。 */
+const diskUsage = computed(() => {
+  const disk = latest.value.disk;
+  const used = disk?.usedBytes;
+  const total = disk?.totalBytes;
+  if (typeof used !== 'number' || typeof total !== 'number' || total <= 0) return null;
+  return (used / total) * 100;
 });
 
 /** 有采样点才渲染图表区；空数组视为尚未收到指标。 */
 const hasSamples = computed(() => {
   const series = metrics.value;
-  return Boolean(series && (series.cpu.length || series.memory.length || series.disk.length || series.network.length));
+  return Boolean(series && (
+    series.cpu.length
+    || series.memory.length
+    || series.diskIo.length
+    || series.network.length
+    || series.diskCurrent
+  ));
 });
 
 const panels = computed(() => {
@@ -61,11 +82,28 @@ const panels = computed(() => {
   return [
     { key: 'cpu', label: 'CPU', current: percent(latest.value.cpu?.usagePercent), valueKind: 'percent' as const, labels: series.cpu.map((point) => point.time), series: single(series.cpu.map((point) => point.usagePercent)) },
     { key: 'memory', label: t('serversPage.memory'), current: `${bytes(latest.value.memory?.usedBytes)} / ${bytes(latest.value.memory?.totalBytes)}`, valueKind: 'percent' as const, labels: series.memory.map((point) => point.time), series: single(percentValues(series.memory)) },
-    { key: 'disk', label: t('serversPage.disk'), current: `${bytes(latest.value.disk?.usedBytes)} / ${bytes(latest.value.disk?.totalBytes)}`, valueKind: 'percent' as const, labels: series.disk.map((point) => point.time), series: single(percentValues(series.disk)) },
-    { key: 'network', label: t('serversPage.network'), current: `${bytesPerSecond(latest.value.network?.rxBytesPerSecond)} / ${bytesPerSecond(latest.value.network?.txBytesPerSecond)}`, valueKind: 'bytes' as const, labels: series.network.map((point) => point.time), series: [
-      { id: `${props.server.id}-rx`, name: t('serversPage.networkRx'), values: series.network.map((point) => point.rxBytesPerSecond ?? 0) },
-      { id: `${props.server.id}-tx`, name: t('serversPage.networkTx'), values: series.network.map((point) => point.txBytesPerSecond ?? 0) },
-    ] },
+    {
+      key: 'diskIo',
+      label: t('serversPage.diskIo'),
+      current: `${bytesPerSecond(latest.value.diskIo?.readBytesPerSecond)} / ${bytesPerSecond(latest.value.diskIo?.writeBytesPerSecond)}`,
+      valueKind: 'bytes' as const,
+      labels: series.diskIo.map((point) => point.time),
+      series: [
+        { id: `${props.server.id}-disk-read`, name: t('serversPage.diskIoRead'), values: series.diskIo.map((point) => point.readBytesPerSecond ?? 0) },
+        { id: `${props.server.id}-disk-write`, name: t('serversPage.diskIoWrite'), values: series.diskIo.map((point) => point.writeBytesPerSecond ?? 0) },
+      ],
+    },
+    {
+      key: 'network',
+      label: t('serversPage.network'),
+      current: `${bytesPerSecond(latest.value.network?.rxBytesPerSecond)} / ${bytesPerSecond(latest.value.network?.txBytesPerSecond)}`,
+      valueKind: 'bytes' as const,
+      labels: series.network.map((point) => point.time),
+      series: [
+        { id: `${props.server.id}-rx`, name: t('serversPage.networkRx'), values: series.network.map((point) => point.rxBytesPerSecond ?? 0) },
+        { id: `${props.server.id}-tx`, name: t('serversPage.networkTx'), values: series.network.map((point) => point.txBytesPerSecond ?? 0) },
+      ],
+    },
   ];
 });
 
@@ -176,6 +214,25 @@ function bytesPerSecond(value?: number) {
             <MetricLineChart :labels="panel.labels" :series="panel.series" :value-kind="panel.valueKind" />
           </div>
         </div>
+
+        <!-- 磁盘只有当前值：不画历史曲线，展示用量/总量与百分比。 -->
+        <section class="grid min-h-[240px] grid-rows-[auto_auto_auto] gap-3 rounded-xl border border-border bg-muted p-3 xl:col-span-2">
+          <div class="flex items-center justify-between gap-3">
+            <span class="text-xs font-medium text-muted-foreground">{{ t('serversPage.disk') }}</span>
+            <span class="truncate text-sm font-semibold text-foreground">{{ diskUsage === null ? t('common.notAvailable') : `${diskUsage.toFixed(1)}%` }}</span>
+          </div>
+          <dl class="m-0 grid grid-cols-2 gap-3 border-t border-border pt-3">
+            <div class="min-w-0">
+              <dt class="text-xs text-muted-foreground">{{ t('serversPage.diskUsed') }}</dt>
+              <dd class="m-0 mt-1 text-sm font-semibold text-foreground">{{ bytes(latest.disk?.usedBytes) }}</dd>
+            </div>
+            <div class="min-w-0">
+              <dt class="text-xs text-muted-foreground">{{ t('serversPage.diskTotal') }}</dt>
+              <dd class="m-0 mt-1 text-sm font-semibold text-foreground">{{ bytes(latest.disk?.totalBytes) }}</dd>
+            </div>
+          </dl>
+          <p class="m-0 text-xs text-muted-foreground">{{ t('serversPage.diskSampledAt') }}: {{ formatDateTime(latest.disk?.time, t('common.never')) }}</p>
+        </section>
       </div>
     </div>
   </div>

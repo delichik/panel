@@ -1,5 +1,6 @@
 import { apiClient, type ApiRequestOptions } from './client';
 import type { OperationAccepted, ServerDto, ServerProbeInput, ServerProbeResult, ServerSaveInput } from '@/types/servers';
+import type { NetworkProbeServerResults } from '@/types/networkProbe';
 import type { ListPage } from '@/types/pagination';
 
 export interface MetricsPoint {
@@ -20,6 +21,11 @@ export interface NetworkMetricPoint extends MetricsPoint {
   txBytesPerSecond: number;
 }
 
+export interface DiskIOMetricPoint extends MetricsPoint {
+  readBytesPerSecond: number;
+  writeBytesPerSecond: number;
+}
+
 export interface LoadMetricPoint extends MetricsPoint {
   load1: number;
   load5: number;
@@ -30,7 +36,10 @@ export interface ServerMetricsSeries {
   range: string;
   cpu: CpuMetricPoint[];
   memory: MemoryMetricPoint[];
-  disk: MemoryMetricPoint[];
+  /** 磁盘仅保留当前值：最近一次有效磁盘采样，可能为 null。 */
+  diskCurrent: MemoryMetricPoint | null;
+  /** 读写字节速率历史序列。 */
+  diskIo: DiskIOMetricPoint[];
   network: NetworkMetricPoint[];
   load: LoadMetricPoint[];
 }
@@ -79,5 +88,9 @@ export const serversApi = {
   },
   metrics(id: string, range: ServerMetricsRange = '1h', options?: ApiRequestOptions) {
     return apiClient.get<ServerMetricsSeries>(`/servers/${encodeURIComponent(id)}/metrics?range=${encodeURIComponent(range)}`, options);
+  },
+  /** 该节点作为探测源的最新结果与目标表；非探测节点返回 enabled=false。 */
+  networkProbes(id: string, options?: ApiRequestOptions) {
+    return apiClient.get<NetworkProbeServerResults>(`/servers/${encodeURIComponent(id)}/network-probes`, options);
   },
 };

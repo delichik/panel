@@ -50,8 +50,12 @@ func TestAPIRouteManifest(t *testing.T) {
 	//   GET /api/v1/facility-apps/reverse-proxy/config-records
 	//   GET/DELETE /api/v1/facility-apps/reverse-proxy/config-records/{recordId}
 	//   POST /api/v1/facility-apps/reverse-proxy/config-records/{recordId}/apply
-	const wantCount = 180
-	const wantHash = "16e79f5d91d6518adcd250b10d8e0d4a4b6b3ff84c0d865112295b2ac89cb90c"
+	// 网络探测设施（FAC-PRB-*）新增 4 条路由：
+	//   GET/PUT /api/v1/facility-apps/network-probe
+	//   GET /api/v1/facility-apps/network-probe/results
+	//   GET /api/v1/servers/{id}/network-probes
+	const wantCount = 184
+	const wantHash = "1d28584a1580d0c3238e05227fa5b694e8d1f3462533c87415b4fd02d05b87b7"
 	manifest := strings.Join(patterns, "\n") + "\n"
 	gotHash := fmt.Sprintf("%x", sha256.Sum256([]byte(manifest)))
 	if len(patterns) != wantCount || gotHash != wantHash {

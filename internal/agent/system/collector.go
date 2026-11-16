@@ -62,6 +62,8 @@ func (LocalCollector) MetricsSnapshot(ctx context.Context, serverID string) (lin
 	if err != nil {
 		return linux.MetricsSnapshot{}, err
 	}
+	// 磁盘 IO 是可选观测：不可用时只把 IO 标记为未可用，不影响其余指标。
+	firstIO, firstIOErr := readDiskIOTotals()
 	timer := time.NewTimer(time.Second)
 	defer timer.Stop()
 	select {
@@ -76,6 +78,13 @@ func (LocalCollector) MetricsSnapshot(ctx context.Context, serverID string) (lin
 	secondNet, err := readNetworkTotals()
 	if err != nil {
 		return linux.MetricsSnapshot{}, err
+	}
+	secondIO, secondIOErr := readDiskIOTotals()
+	diskIOAvailable := firstIOErr == nil && secondIOErr == nil
+	var diskReadRate, diskWriteRate float64
+	if diskIOAvailable {
+		diskReadRate = float64(maxInt64(0, secondIO.readBytes-firstIO.readBytes))
+		diskWriteRate = float64(maxInt64(0, secondIO.writeBytes-firstIO.writeBytes))
 	}
 	memTotal, memAvailable := readMemoryStats()
 	diskTotal, diskUsed := readRootDiskUsage()
@@ -94,6 +103,10 @@ func (LocalCollector) MetricsSnapshot(ctx context.Context, serverID string) (lin
 		MemoryUsedBytes:    maxInt64(0, memTotal-memAvailable),
 		DiskTotalBytes:     int64(diskTotal),
 		DiskUsedBytes:      int64(diskUsed),
+		DiskUsageSampled:   true,
+		DiskIOAvailable:    diskIOAvailable,
+		DiskReadBytesRate:  diskReadRate,
+		DiskWriteBytesRate: diskWriteRate,
 		NetworkRxBytesRate: float64(maxInt64(0, secondNet.rx-firstNet.rx)),
 		NetworkTxBytesRate: float64(maxInt64(0, secondNet.tx-firstNet.tx)),
 		Status: linux.SystemStatus{
@@ -133,6 +146,19 @@ func (LocalCollector) NetworkTotals(_ context.Context) (int64, int64, error) {
 		return 0, 0, err
 	}
 	return totals.rx, totals.tx, nil
+}
+
+// DiskIOTotals 返回 /proc/diskstats 中物理块设备的累计读写字节数。速率由
+// 报告中心基于相邻读数的时间差计算，这里不做窗口采样。
+func (LocalCollector) DiskIOTotals(ctx context.Context) (readBytes, writeBytes int64, err error) {
+	if err := ctx.Err(); err != nil {
+		return 0, 0, err
+	}
+	totals, err := readDiskIOTotals()
+	if err != nil {
+		return 0, 0, err
+	}
+	return totals.readBytes, totals.writeBytes, nil
 }
 
 func (LocalCollector) MemoryStats(ctx context.Context) (total, used int64, err error) {

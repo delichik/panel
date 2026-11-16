@@ -482,4 +482,46 @@ describe('domain mock routes', () => {
     expect(certDetail.status).toBe(200);
   });
 
+  it('serves network probe configuration, matrix, and per-node results on real routes', async () => {
+    const config = await (await fetch('/api/v1/facility-apps/network-probe')).json();
+    expect(config.data).toMatchObject({ mode: 'all', serverIds: [], version: expect.any(Number) });
+
+    const rejected = await fetch('/api/v1/facility-apps/network-probe', {
+      method: 'PUT',
+      body: JSON.stringify({ mode: 'selected', serverIds: [] }),
+    });
+    expect(rejected.status).toBe(422);
+    expect((await rejected.json()).error.code).toBe('network_probe_servers_required');
+
+    const unknown = await fetch('/api/v1/facility-apps/network-probe', {
+      method: 'PUT',
+      body: JSON.stringify({ mode: 'selected', serverIds: ['srv-missing'] }),
+    });
+    expect(unknown.status).toBe(404);
+    expect((await unknown.json()).error.code).toBe('network_probe_server_not_found');
+
+    const saved = await fetch('/api/v1/facility-apps/network-probe', {
+      method: 'PUT',
+      body: JSON.stringify({ mode: 'selected', serverIds: ['srv-edge-sgp'] }),
+    });
+    expect(saved.status).toBe(200);
+    expect((await saved.json()).data).toMatchObject({ mode: 'selected', serverIds: ['srv-edge-sgp'] });
+
+    const matrix = await (await fetch('/api/v1/facility-apps/network-probe/results')).json();
+    expect(matrix.data.mode).toBe('selected');
+    expect(matrix.data.nodes.map((node: { serverId: string }) => node.serverId)).toEqual(['srv-edge-sgp']);
+    expect(matrix.data.results.length).toBeGreaterThan(0);
+
+    const source = await (await fetch('/api/v1/servers/srv-edge-sgp/network-probes')).json();
+    expect(source.data).toMatchObject({ serverId: 'srv-edge-sgp', enabled: true });
+    expect(source.data.nodes.some((node: { serverId: string }) => node.serverId === 'srv-core-fra')).toBe(true);
+    expect(source.data.results.every((result: { sourceServerId: string }) => result.sourceServerId === 'srv-edge-sgp')).toBe(true);
+
+    const nonProbe = await (await fetch('/api/v1/servers/srv-core-fra/network-probes')).json();
+    expect(nonProbe.data.enabled).toBe(false);
+    expect(nonProbe.data.nodes).toEqual([]);
+
+    expect((await fetch('/api/v1/servers/srv-missing/network-probes')).status).toBe(404);
+  });
+
 });

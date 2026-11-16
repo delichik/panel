@@ -76,12 +76,15 @@
 
 ## 8. 指标采集、查询与保留
 
-- `OBS-MET-001`：指标只接收compatible且有URL的Agent report；保存时绑定服务器ID并将时间UTC截断至秒，包含CPU、内存、磁盘、网络、load1/5/15和系统状态字段。
+- `OBS-MET-001`：指标只接收compatible且有URL的Agent report；保存时绑定服务器ID并将时间UTC截断至秒，包含CPU、内存、磁盘用量、磁盘IO读写速率、网络、load1/5/15和系统状态字段。`metrics_snapshots.disk_read_bytes_rate`/`disk_write_bytes_rate` 为可空列：NULL表示该样本未测得磁盘IO（旧Agent或采样未就绪），不得写0冒充真实速率。磁盘用量在未重新采样的样本中写0，不得据此认定磁盘为空（`OBS-MET-007`）。保存前按 `(server_id, time)` 幂等去重：同一秒样本已存在时直接跳过，不覆盖、不重复插入（`OBS-MET-009`）。
 - `OBS-MET-002`：指标成功保存后可标记服务器可达；保存失败不得伪标可达或中断report stream。
 - `OBS-MET-003`：`GET /servers/{id}/metrics` 默认1h，只接受 `1h|6h|1d|24h|7d`（前端公开子集可更窄）；非法range返回 `range_invalid`，存在但无数据返回所有序列为空数组。
-- `OBS-MET-004`：查询结果按时间升序，CPU/内存/磁盘/网络/load各序列共享样本时间语义；增量查询只返回严格晚于按秒对齐since的点。
+- `OBS-MET-004`：查询结果按时间升序，CPU/内存/网络/load/diskIo各序列共享样本时间语义；磁盘使用率不再返回历史序列（响应不含 `disk`），只返回 `diskCurrent`（范围内最后一次 `disk_total_bytes > 0` 的有效采样，字段 `time/usedBytes/totalBytes`，没有则为 `null`），前端不得为磁盘画曲线。`diskIo` 只包含至少一侧速率非 NULL 的样本，未知的一侧按0序列化但不得回写成历史事实。增量查询只返回严格晚于按秒对齐since的点；`diskCurrent` 是当前值语义，不参与桶降采样，概览 `disk` 卡直接使用每服务器最新有效磁盘行。
 - `OBS-MET-005`：清理worker按runtime retention和hourly/daily/weekly周期独立运行，不属于 event executor worker；retention小于1必须拒绝且不删除任何行。
 - `OBS-MET-006`：服务器删除必须删除其全部指标；其他服务器指标和MetricsDB结构保持不变。
+- `OBS-MET-007`：磁盘使用率低频采样与“仅当前值”。**触发入口**：Agent指标上报（`internal/agent/rpc/report.go` 的 `metricCache`）与 `GET /servers/{id}/metrics`、概览 `disk` 卡。**前置**：新Agent磁盘使用率采样节拍固定为5分钟（`diskUsageSampleInterval`），每轮上报用 `disk_usage_sampled` 标记本轮是否重新采样磁盘使用率。**成功**：Panel只把 `disk_usage_sampled=true` 的样本按其用量/总量落库，其余样本磁盘两列写0；旧Agent不带该标记（nil）时按“每次样本都携带磁盘值”兼容保留。查询只返回 `diskCurrent`，概览磁盘卡只显示当前用量/总量与采样时间。**失败**：磁盘读取失败时该轮不递增采样标记，样本按未采样（0/0）处理，不得把失败样本写成有效磁盘值或让整个指标上报中断。**边界**：首次启动在所有指标（含磁盘用量）至少成功观测一次前不提交指标；此后磁盘使用率不参与15秒全量新鲜度门槛（`AGT-RPT-004`），因此历史行中的0只表示未采样。**验证点**：`internal/modules/observability/metrics` 的 `Save/Query/QueryMany` 测试（含 `diskCurrent` 取最后有效行、0值被跳过）、Agent指标缓存新鲜度与磁盘标记单测、前端指标卡/概览卡模型测试。
+- `OBS-MET-008`：磁盘IO读写速率。**触发入口**：Agent每1秒读取 `/proc/diskstats` 累计扇区数，经指标上报写入 `metrics_snapshots.disk_read_bytes_rate`/`disk_write_bytes_rate`。**前置**：只汇总 `/sys/block` 列出的整盘设备行，排除分区行以避免整盘与分区重复计数，并排除 `loop`/`ram`/`zram` 伪设备；内核块层扇区单位固定为512字节，与设备逻辑扇区大小无关；`/sys/block` 或 `/proc/diskstats` 读取失败时本轮磁盘IO不可用。**成功**：按网络速率的同一窗口口径，在内存累加相邻读数差，上报整点时消费累加值并除以自上次提交以来读数窗口的实际时长，得到读/写字节每秒；`disk_io_available` 为 true 时两列写实际值。**失败**：`disk_io_available` 为 nil（旧Agent）或false时两列写NULL表示未知，不得写0；两个速率都未知的样本不产生 `diskIo` 查询点。**边界**：磁盘IO是可选能力，不参与15秒全量新鲜度门槛（否则平台不支持 `/proc/diskstats` 时全部指标会停摆）；累计读数超过15秒未更新或读取失败时本轮按未可用上报，面板保留旧值而不是伪造0；计数器回退（设备重建、计数器回绕）按0增量跳过；单侧已知、单侧未知时只输出已知侧。**验证点**：Agent侧 `/proc/diskstats` 解析/整盘过滤/窗口累计/伪设备排除/回退单测（`internal/agent/system/diskio_test.go`），Panel指标保存NULL语义与 `diskIO` 卡桶平均测试，`overview` 卡片序列选择测试。
+- `OBS-MET-009`：指标补报与幂等。**触发入口**：Agent report stream `Send` 失败（`internal/agent/rpc/report.go` 的 `reportHub`）与重连后的补发。**前置**：指标发送失败时，把失败报告与该watcher待发队列中携带指标的样本放入进程内内存环形缓冲，容量12条、最老10分钟；只保留 `Metrics != nil` 且样本时间未超龄的条目，并把每份报告裁剪为纯指标报告（保留 `sampleAt`/`reason`/`metrics`，不重放容器、Tailscale 等可能过期的观测）。**成功**：新连接建立后、进入正常发送循环前，按样本时间升序逐条补发并置 `replayed=true`；任一条发送失败则把剩余样本恢复到缓冲队首并结束本轮，等待下次重连。Panel对 `replayed=true` 的样本跳过整点对齐校验（`AGT-RPT-004`），但仍校验服务器身份与时间合法性，并按 `(server_id, time)` 幂等去重，重复重放不产生重复行、不覆盖既有值。**失败**：补报发送失败、Panel保存失败都只记录日志，不中断流、不回退为其他上报通道；缓冲满时丢弃最老的指标样本（丢弃的是未接受的事实，不得伪报成功）。**边界**：非指标报告不缓存；缓冲不持久化，进程重启丢失的仅是内存中尚未发送的样本，已被Panel接受并落库的样本不受影响（符合 `ARCH-CON-003`：内存队列只降低延迟）；补报只补缺，不覆盖同秒已有行。**验证点**：`reportHub` 补报队列容量/年龄/升序/失败恢复/裁剪为纯指标单测（`internal/agent/rpc/report_test.go`）、`agent_report_collector` 对 `replayed` 跳过对齐且失败仅日志的测试、`metrics.Service.Save` 去重测试。
 
 ## 9. 概览与卡片配置
 
@@ -89,9 +92,9 @@
 - `OBS-OVW-002`：首次 `GET /overview/cards` 必须幂等创建固定default配置；之后读取按原有顺序完整返回，空数组是合法配置。
 - `OBS-OVW-003`：`PUT /overview/cards` 整套原子替换，最多100卡；ID非空且唯一、kind在白名单、width 1..6、height 1..4、range合法、networkDirection为rx/tx/both、serverIds非空项且卡内唯一。
 - `OBS-OVW-004`：验证失败不得覆盖旧卡片JSON；成功后重启仍保持顺序、尺寸、范围和服务器选择。
-- `OBS-OVW-005`：`GET /overview/cards/{id}/data` 对不存在ID返回404；非指标卡返回空metricsByServer和bucketSeconds=0；指标卡空serverIds表示全部现存服务器，非空只查询仍存在的选择；指标卡只物化该卡kind对应的序列（CPU/内存/磁盘/网络，load不参与概览），其余序列返回空数组。
-- `OBS-OVW-006`：指标卡数据必须服务端降采样：按range和本次查询的服务器数量选择固定时间桶（响应携带bucketSeconds），保证单卡点数有界且与原始采样频率无关；合法 `since` 先向下对齐到桶起点，并返回从该桶开始、完整重算的桶；非法RFC3339Nano返回422；多服务器必须批量查询并为无数据服务器保留空Series，不能用0填缺失采样。
-- `OBS-OVW-007`：自动刷新前端必须防重入、页面隐藏/离线/编辑态暂停、切换或卸载丢弃迟到响应；增量按桶对已有序列做后缀替换，不得把同一未满桶重复追加；`bucketSeconds` 变化时必须整卡重载；失败静默保留旧数据并下周期重试，不弹误导toast。
+- `OBS-OVW-005`：`GET /overview/cards/{id}/data` 对不存在ID返回404；非指标卡返回空metricsByServer和bucketSeconds=0；指标卡空serverIds表示全部现存服务器，非空只查询仍存在的选择；指标卡只物化该卡kind对应的序列：`cpu`/`memory`/`network` 分别物化同名序列（load不参与概览），`disk` 只物化 `diskCurrent`（不再物化磁盘历史序列），`diskIO` 只物化 `diskIo`；未物化的序列返回空数组。`networkProbe` 卡不是指标卡：响应返回 `probes`（`nodes`：探测节点ID/名称/目标地址；`results`：源/目标、延迟、丢包、收发计数、采样时间、错误与stale标记；`updatedAt`：最近采样时间，无数据为null）且 `metricsByServer` 为空对象、`bucketSeconds=0`，`serverIds` 为空表示不过滤探测节点，非空只保留落在选择内且目标仍存在的节点/结果；未注入探测提供方时返回空probes而不是报错。
+- `OBS-OVW-006`：指标卡数据必须服务端降采样：按range和本次查询的服务器数量选择固定时间桶（响应携带bucketSeconds），保证单卡点数有界且与原始采样频率无关；合法 `since` 先向下对齐到桶起点，并返回从该桶开始、完整重算的桶；非法RFC3339Nano返回422；多服务器必须批量查询并为无数据服务器保留空Series，不能用0填缺失采样。`disk` 卡仍返回 `bucketSeconds` 但只返回 `diskCurrent`（当前值不随时间桶变化），不因桶产生曲线点；`diskIO` 卡按桶分别平均读/写速率，两个速率都NULL的桶不产生点；`networkProbe` 卡不降采样、不受 `since` 影响，直接返回最新观测（卡片契约见 `OBS-OVW-005`）。
+- `OBS-OVW-007`：自动刷新前端必须防重入、页面隐藏/离线/编辑态暂停、切换或卸载丢弃迟到响应；增量按桶对已有序列做后缀替换，不得把同一未满桶重复追加；`bucketSeconds` 变化时必须整卡重载；失败静默保留旧数据并下周期重试，不弹误导toast。`disk` 卡是当前值、无时间序列：每轮用最新 `diskCurrent` 覆盖，不参与桶后缀合并；`networkProbe` 卡无桶，每轮以最新 `probes` 覆盖。
 - `OBS-OVW-008`：概览卡片的时间轴对齐、跨服务器聚合、最新值与峰值必须在数据落地时派生一次并缓存，渲染期只读缓存；单卡派生复杂度与总点数线性，禁止渲染期做逐点查找（O(n²)）或 `Math.max(...values)` 式参数展开。
 
 ## 10. 诊断快照
@@ -129,5 +132,5 @@
 - `BKP-EVD-002`：归档测试必须覆盖加密/非加密往返、路径穿越、临时目录排除、超长段拒绝、写失败、8GiB限制和错误码映射。
 - `RST-EVD-001`：事务测试必须覆盖跨卷外置数据库stage、各rename断点、逆序rollback、protected media优先、previous收敛、symlink/非普通文件拒绝和阻断状态。
 - `MNT-EVD-001`：并发测试必须证明同revision竞争只接受一个、幂等重放不重复、键冲突/陈旧revision/非法phase返回409及加密retry重新要密码。
-- `OBS-EVD-001`：测试必须覆盖指标时间对齐/range/增量/保留、概览批量聚合与卡片全量验证、dbstat降级和pprof仅loopback/幂等关闭。
+- `OBS-EVD-001`：测试必须覆盖指标时间对齐/range/增量/保留、`(server_id,time)` 补报去重、磁盘当前值不再产出历史序列、磁盘IO可空列与桶平均、概览批量聚合与卡片（含 `diskCurrent`/`diskIo`/`networkProbe` 数据形状）全量验证、dbstat降级和pprof仅loopback/幂等关闭。
 - `BKP-EVD-003`：路由清单和前端typed client必须分别验证正常态三条backup API、export维护最小API、restore维护最小API以及debug/metrics/overview API，维护静态fallback不得吞未知API。

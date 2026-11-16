@@ -12,6 +12,7 @@
 
 ## 2. 前端路由基线
 
+- 磁盘使用率/磁盘IO/网络探测/指标补报（2026-11-16）：Agent 磁盘使用率采样降为 5 分钟且仅为当前值（`diskUsageSampleInterval`、`disk_usage_sampled`），`/proc/diskstats` 新增磁盘 IO 读/写字节速率（`disk_io_available`，未测得为 NULL），Agent report `Send` 失败进入内存补报缓冲（cap 12、10 分钟、重连升序补发 `replayed=true`），Panel 按 `(server_id,time)` 幂等落库并跳过重放样本的整点对齐；设施新增 `network-probe`（`mode=all|selected` 配置、60 秒周期、服务端跳过自身、每 `(source,target)` 仅保留最新结果、服务器删除修剪）。**路由**：新增 4 条 method/path（`GET/PUT /api/v1/facility-apps/network-probe`、`GET /api/v1/facility-apps/network-probe/results`、`GET /api/v1/servers/{id}/network-probes`），主 Panel `method/path` 计数 180 → 184（`TestAPIRouteManifest` 期望 `wantCount=184`，哈希由同一测试输出更新，本文不硬编码）；**前端路由不变**（设施复用 `/applications/facility-apps/:facilityKind` 与 `/:facilityKind/config`）。**数据**：新增 app 库 `network_probe_configs`/`network_probe_results`（ORM 表数 44 → 46），`metrics_snapshots` 增可空 `disk_read_bytes_rate`/`disk_write_bytes_rate`；`GET /servers/{id}/metrics` 移除 `disk` 历史序列、增加 `diskIo` 与 `diskCurrent`；概览卡 kind 新增 `diskIO`/`networkProbe`，`disk` 卡改当前值-only；`GET /overview/cards/{id}/data` 增加 `probes`。**后台**：不新增 Panel ticker/任务类型，网络探测配置附着在既有 Agent report stream，探测采样协程在 Agent 进程内按 60 秒运行；指标补报缓冲只在 Agent 内存。对应 `OBS-MET-001/004/007/008/009`、`OBS-OVW-005/006/007`、`AGT-RPT-003/004/007/008`、`FAC-PRB-001..008`、`UI-SRV-008/017/025`、`UI-FAC-014..017`、`UI-OVR-011/012`。
 - HTTP 请求内 Agent 调用边界（2026-11-14）：`POST /applications/{id}/deploy|stop|restart` 回执只返回规划结果（`deploymentId`/`noChange`/`application`，不再内嵌 runtime 快照），`GET /applications/{id}/runtime` 只读 AppDB observed 快照，`refreshInstanceStatuses` 不再逐实例同步调用 Agent `RuntimeStatus`；观测新鲜度由 Agent report、周期漂移巡检与 `RuntimeReconcile` 经 `ObservationWriter` 写回。不新增/删除路由、API、数据库表或后台任务，主 Panel method/path 计数保持 180，路由清单与哈希不变；对应 `APP-RUN-001`、`APP-RUN-005`，验证 `TestApplicationActionReceiptsDoNotCallAgentStatus`、`TestRuntimeProjectsLocalObservationSnapshotWithoutAgent`、`TestListSummariesUsesCachedInstanceBucketsWithoutAgent`。
 - 服务器连接代理模式（2026-11-13）：`servers` 新增 `proxy_mode`、`tunnel_server_id`、`socks5_address`、`socks5_username`、`socks5_password_ciphertext` 五列（AutoMigrate 增列带默认值，旧数据等价 `direct`；`tunnel_server_id` 无外键、允许悬空表示隧道服务器已删除）。创建/更新新增代理字段与校验（模式缺省直连、隧道必填/存在性/自引用、成环与 8 层上限、SOCKS5 地址与用户名、密码只写且经 secretstore 加密、切直连清除配置与密钥）；`POST /servers/probe` 增加代理草稿字段与探测专用可选 `serverId`（仅用于复用已存密文与成环检测，保存接口忽略）；隧道选择器支持按名称/地址远程搜索，复用既有 `GET /api/v1/servers` 的 `q` 过滤（结果按 id 合并进候选集，可命中预载列表之外的分页外服务器，见 `UI-SRV-021`）；SSH 执行器与 Agent gRPC 客户端拨号经同一代理链，删除隧道服务器后依赖方读取派生 `proxyInvalid`/`proxyError=tunnel_missing`。不新增 method/path、数据库表或后台任务：主 Panel `method/path` 计数保持 180，路由清单与哈希不变（探测仍是既有 `POST /api/v1/servers/probe`）；对应 `SRV-PROXY-001..014`、`UI-SRV-021..024`。
 - Agent report 链路稳定性（2026-11-12）：按滚动 1 小时断连边沿派生 `agent.report.stability`（优/良好/一般/差/极差）与 `disconnect_count_1h`，写入既有 `servers.traits`；列表摘要投影 status/stability/count，概况与 Agent tab 展示。不新增路由/API/表；对应 `AGT-RPT-005/006`、`SRV-API-001`、`UI-SRV-001/002/020`。
@@ -75,19 +76,22 @@
 | certificates/certs | 11 | DNS、证书与密钥资产 |
 | certificates/dns | 9 | DNS、证书与密钥资产 |
 | containers | 17 | 容器与资源 |
-| facilityapps | 21 | 应用与设施应用 |
+| facilityapps | 27 | 应用与设施应用 |
 | keyassets | 14 | DNS、证书与密钥资产 |
 | diagnostics | 7 | 备份、恢复与诊断 |
 | metrics | 1 | 身份、设置与系统；服务器、安全与软件包 |
+| networkprobe | 4 | 应用与设施应用（`FAC-PRB-001..008`）；服务器、安全与软件包（Network Probe 页签/上报） |
 | overview | 4 | 身份、设置与系统 |
 | packages | 4 | 服务器、安全与软件包 |
 | credentials | 5 | 服务器、安全与软件包 |
-| servers | 24 | 服务器、安全与软件包 |
+| servers | 22 | 服务器、安全与软件包 |
 | settings | 6 | 身份、设置与系统 |
 | systeminfo | 1 | 身份、设置与系统 |
 | tasks（HTTP：`/executions`；AppDB：`event_runs`/`event_run_steps`） | 7 | 协调、任务与运行事件 |
 
 - RunEngine 不新增 method/path。`/api/v1/executions*` 是 Run API；Run 存储是 `event_runs`/`event_run_steps`（部署行 `type='application_deploy'`）。`/api/v1/events*` 与 `/api/v1/logs` 仍是诊断读面。对应 `ENG-RUN-001..005`、`ENG-RET-001`、`TASK-DISPATCH-001..003`（`GAP-030` 已关）。
+
+- 网络探测设施（`internal/modules/networkprobe/routes.go`）由独立模块注册 4 条路由（见上表 `networkprobe` 行）；它与 `facilityapps` 模块的设施路由共享 `/facility-apps/*` 前缀但分属不同注册来源。逐项映射见 [主 Panel API 路由逐项清单](api-route-inventory.md) 的序号 53/54/82/176。主 Panel 计数以 `TestAPIRouteManifest` 的 `wantCount=184` 与同轮更新的 `wantHash` 为准；`api-route-inventory.md` 条目数必须同为 184（`COV-API-003`）。
 
 - `COV-API-001`：路由清单测试失败时必须先确定是哪一个 method/path 改变，再更新消费者、Mock、验收项和期望哈希；不得只替换哈希让测试通过。
 
@@ -123,11 +127,11 @@
 
 ## 4. 持久化基线
 
-当前 ORM 模型有 44 个数据库内表声明；`application_revisions` 在 app 与 log 库分别存在，含义不同。coordination 库当前 0 个业务模型。
+当前 ORM 模型有 46 个数据库内表声明；`application_revisions` 在 app 与 log 库分别存在，含义不同。coordination 库当前 0 个业务模型。
 
 | 数据库 | 在管表 |
 | --- | --- |
-| app | `credentials`、`servers`、`package_updates`、`package_refreshes`、`fail2ban_configs`、`image_updates`、`image_refreshes`、`applications`、`application_persistent_locations`、`application_reconcile_states`、`container_observations`、`docker_resource_snapshots`、`application_revisions`、`dns_domains`、`dns_record_snapshots`、`application_edit_sessions`、`application_edit_session_files`、`application_edit_session_operations`、`application_files`、`application_instances`、`facility_app_configs`、`facility_static_assets`、`reverse_proxy_routes`、`facility_edit_sessions`、`facility_edit_session_assets`、`facility_edit_session_operations`、`storage_share_configs`、`storage_share_partitions`、`certificates`、`self_signed_certificates`、`key_assets`、`overview_card_configurations`、`runtime_settings`、`auth_state`、`auth_accounts`、`events`、`event_runs`、`event_run_steps` |
+| app | `credentials`、`servers`、`package_updates`、`package_refreshes`、`fail2ban_configs`、`image_updates`、`image_refreshes`、`applications`、`application_persistent_locations`、`application_reconcile_states`、`container_observations`、`docker_resource_snapshots`、`application_revisions`、`dns_domains`、`dns_record_snapshots`、`application_edit_sessions`、`application_edit_session_files`、`application_edit_session_operations`、`application_files`、`application_instances`、`facility_app_configs`、`facility_static_assets`、`reverse_proxy_routes`、`facility_edit_sessions`、`facility_edit_session_assets`、`facility_edit_session_operations`、`storage_share_configs`、`storage_share_partitions`、`network_probe_configs`、`network_probe_results`、`certificates`、`self_signed_certificates`、`key_assets`、`overview_card_configurations`、`runtime_settings`、`auth_state`、`auth_accounts`、`events`、`event_runs`、`event_run_steps` |
 | log | `application_revisions`、`runtime_events`、`runtime_event_details`、`key_asset_exports` |
 | coordination | 无业务表 |
 | metrics | `metrics_snapshots` |
@@ -143,6 +147,7 @@
 
 - 内部例行 event run 的日志降噪不新增表：AppDB `event_runs` 由 ORM 自动增列 `quiet`（`NOT NULL DEFAULT 0`，自旧 `tasks` 迁移后存量行保持 info），创建 run 时由注册定义写入；对应 `TASK-REG-003`。
 - 服务器连接代理模式不新增表：`servers` 由 ORM 自动增列 `proxy_mode`（`TEXT NOT NULL DEFAULT 'direct'`）、`tunnel_server_id`、`socks5_address`、`socks5_username`、`socks5_password_ciphertext`（均 `TEXT NOT NULL DEFAULT ''`）；`tunnel_server_id` 不加外键，允许悬空以表达“隧道服务器已删除”，因此删除隧道服务器不必级联改写依赖方。SOCKS5 密码经 secretstore 加密，associated data 固定为 `assetID=serverID`、`assetType="server_proxy"`、`field="socks5_password"`，明文永不落库。旧 alpha 数据由增列默认值直接等价 `direct`，无需一次性数据迁移，既有服务器字段与行不得被改写；备份/恢复沿用 `servers` 表既有清单。对应 `SRV-PROXY-007`、`SRV-PROXY-013`、`DATA-MIG-008`。
+- 网络探测设施与磁盘 IO（2026-11-16）：新增 app 库 `network_probe_configs`（单行 `id='network_probe'`，`mode` 带 `CHECK(mode IN ('all','selected'))`，`server_ids_json`、`version`、`updated_at`）与 `network_probe_results`（主键 `(source_server_id,target_server_id)`、`target_address`、`sampled_at`、`latency_ms`、`packet_loss_percent`、`sent`、`received`、`error`，另有 `idx_network_probe_results_target` 索引），ORM 表数 44 → 46；两表无外键，服务器删除时在同一删除事务内清理结果行并修剪 `selected` 配置（`FAC-PRB-007`、`SRV-DEL-007`）。`metrics_snapshots` 由 ORM 自动增列可空 `disk_read_bytes_rate`/`disk_write_bytes_rate`（NULL=未测得磁盘 IO，旧库升级后既有行为 NULL；旧 Agent 无 `disk_io_available` 时不得写 0），不新增指标表、不改磁盘用量既有列语义；备份/恢复仍覆盖 app 与 metrics 库文件，无需新增 manifest 条目（`DATA-MIG-009`）。对应 `OBS-MET-001/007/008`、`FAC-PRB-001/005/007`、`AGT-RPT-004`。
 - 部署 Run 已并入 `event_runs`（`type='application_deploy'`），ORM 不再注册 `jobs`；生产 claim/Execute 经 Manager。诊断表 `events` 不并入 Run。对应 `ENG-RUN-001`、`ENG-RET-001`（`GAP-030` 已关）。
 
 ## 5. 常驻与周期后台行为
@@ -157,7 +162,7 @@
 | Task 清理 | 任务保留策略 | 协调、任务与运行事件 |
 | metrics 清理 | metrics 快照保留策略 | 身份、设置与系统 |
 | runtime event buffered writer/清理 | 运行事件及详情 | 协调、任务与运行事件 |
-| Agent report collector | Server/Agent 状态、指标、资源观察、包状态、应用漂移、节点 Tailscale 观测 | 服务器、安全与软件包；容器与资源；协调 |
+| Agent report collector | Server/Agent 状态、指标（含 `replayed` 补报与未采样磁盘样本）、资源观察、包状态、应用漂移、节点 Tailscale 观测、网络探测配置下发与结果落库 | 服务器、安全与软件包；容器与资源；协调；应用与设施应用（`FAC-PRB-*`） |
 | 启动 Agent 检查 | 配置服务器的兼容与在线状态 | 服务器、安全与软件包 |
 | systeminfo/update checker | 版本与更新状态 | 身份、设置与系统 |
 
@@ -166,6 +171,7 @@
 - `COV-BG-002`：后台触发的远端写操作必须与等价手动操作共享服务端安全门和可追踪记录。
 
 - Agent report collector 对应用规划失败逐应用隔离并继续扫描，自动相同诊断去重，不新增定时任务；对应 `ORCH-PLAN-006`。
+- 网络探测与指标补报不新增 Panel ticker/任务类型（2026-11-16）：Panel 在既有 Agent report stream 的 config 闭包中附加 `AgentProbeConfig`（配置读取 3 秒 TTL 快照）并在收到 `AgentReport.probes` 时事务落库（失败只记日志），探测节拍与并发由 Agent 进程内 probe sampler 承担（60 秒、并发 8、单目标 7 秒兜底超时）；指标 `Send` 失败由 Agent 进程内内存缓冲补报（cap 12、10 分钟），重连后升序补发并置 `replayed=true`，Panel 跳过整点对齐并幂等落库。启动/关闭沿用既有 report collector 与 reportHub 生命周期，不新增进程重启恢复的持久化队列（丢失的只可能是内存未发送样本）。对应 `FAC-PRB-004/005`、`AGT-RPT-007/008`、`OBS-MET-009`、`COV-BG-001/002`。
 - Tailscale 新增任务类型 `server_tailscale_apply`，由通用任务 worker 执行：保存节点开关后自动排队，手动 apply 创建或复用，缺少 `agent.tailscale` 能力只失败该任务而不触发整节点重装；不新增 ticker/cron，对应 `TS-TASK-001..004`。
 - 周期 Agent 检查（`server_agent_check`）由 servers 模块 `StartPeriodic` 自有 loop（5 分钟）驱动，经 `CollectInputs`/`TriggerPeriodicNow` 入 event executor 框架；成功巡检 JSONL 为 `debug`（`Quiet`），失败仍为 `error`：不经 event executor 中央 PeriodicRunner；对应 `AGT-STATE-005`、`TASK-REG-003`、`TASK-PER-001`。
 - 每日未使用镜像清理（`image_unused_cleanup`）由 containers `StartPeriodic` 自有 `StartDailyAtLoop` 驱动：Panel 主机本地时区每天 03:00 触发，重启后等待下一次 03:00（不补跑）；仅对 reachable+compatible 节点经 `CollectInputs` 创建 parallel event run；删除当前未被容器引用且 `Created` 早于 7 天的镜像（未知 Created 保留）；成功后尽力触发 `image_refresh`；与手动 `images/delete-unused` 共享 server queue 与 live usage 门禁，但不共享年龄过滤；无新增 API/设置/表；对应 `IMG-DEL-003`、`COV-BG-001/002`、`TASK-PER-001`。
@@ -199,5 +205,6 @@
 - `COV-TEST-004`：应用编辑器的嵌套代理 path 必须覆盖 Vue reactive 既有值回显所需的完整克隆与父草稿隔离；不得把 reactive Proxy 直接交给浏览器深拷贝 API。
 
 - 本轮增加 `planning_outcome_test.go`、`planning_error_migration_test.go`，扩展容器巡检与前端应用模型测试，覆盖 `APP-PLAN-001`、`APP-RUN-004`、`ORCH-PLAN-006`；Vitest 缓存固定在仓库 `tmp/vitest`，遵守 `ENG-TEST-001/003` 的测试入口和中间产物约定。
+- 磁盘使用率/磁盘IO/网络探测/指标补报一轮（2026-11-16）：仓库 Go `*_test.go` 文件 187 个、`web/src` 下 `*.test.ts` 64 个（数量只作漏项信号，`COV-TEST-003`）。新增 Go 测试 `internal/agent/probe/probe_test.go`、`internal/agent/system/diskio_test.go`、`internal/modules/networkprobe/service_test.go`、`handler_test.go`、`internal/modules/servers/deletecleanup_networkprobe_test.go`、`internal/modules/servers/agent_ping_test.go`（Agent 部署的 ping 前提：已安装只探测、缺失时安装 `iputils-ping` 并验证、失败可见、最坏耗时上界），扩展 `internal/agent/rpc/report_test.go`、`convert_test.go`、`internal/bootstrap/panel/agent_report_collector_test.go`、`routes_manifest_test.go`、`internal/modules/observability/metrics/service_test.go`、`overview/service_test.go`、`internal/platform/database/models/models_test.go`、`internal/platform/i18n/i18n_test.go`；前端新增 `web/src/api/networkProbe.test.ts` 并扩展 `views/overview/model.test.ts`、`views/servers/index.test.ts`/`model.test.ts`、`api/servers.test.ts`、`mocks/domainRoutes.test.ts`。`TestAPIRouteManifest` 期望 `wantCount=184`，`wantHash` 随本清单同步更新（`COV-API-003`）。对应 `OBS-MET-001/004/007/008/009`、`OBS-OVW-005/006`、`AGT-RPT-003/004/007/008`、`AGT-DEP-008`、`FAC-PRB-001..008`、`UI-SRV-008/025`、`UI-FAC-014..017`、`UI-OVR-011/012`。`AGT-DEP-008` 不新增路由/表/列/后台任务，只在既有 Agent 部署步骤前增加一个有界的 SSH 包安装步骤。
 - Tailscale 本轮新增 Go 测试 `internal/platform/tailscale/tailscale_test.go`、`internal/modules/settings/tailscale_test.go`、`internal/modules/servers/tailscale_report_test.go`、`internal/modules/facilityapps/interconnect_test.go`、`interconnect_sync_test.go`、`cmd/panel-init/tailscale_test.go`，并扩展 `internal/agent/endpoint/endpoint_test.go` 与 `cmd/panel-init/main_test.go`；前端新增 `web/src/views/settings/tailscale.test.ts`、`tailscaleSection.test.ts`（`web/src` 下 `*.test.ts` 由 48 增至 50）。回归修复新增 `internal/platform/panelsupervision` 的监督参数合同用例与镜像构建冒烟（`TS-INIT-005`、`ENG-BUILD-009`）；panel-init 控制面由 loopback TCP 端口改为 `<dataRoot>/run/panel-control.sock` Unix domain socket（重启与 tailscale 共用，`TS-INIT-005`、`BKP-API-003`）；容器与节点两侧的 tailscale 登录密钥都改经 0600 临时文件以 `--auth-key=file:` 传递（`TS-INIT-006`、`TS-AGT-003`），容器侧 `tailscale up` 增加超时。真实 tailscaled、真实 tailnet 与宿主 `tun` 前提属于人工观察点，单元测试只使用替身控制面与临时目录；对应 `TS-EVD-001/002`、`TS-INIT-001..007`。
 - Debug 清理新增状态生命周期、暂停门排空/超时、HTTP 豁免、worker 恢复原状态与资源保留回归；前端 `useRuntimeCleanup.test.ts` 覆盖刷新恢复、查询失败、请求结果丢失、进程重启结果丢失、runId 归属与卸载/隐藏行为，Mock 路由测试覆盖确认值、202、重复请求和阶段终态；对应 `DIAG-CLR-001..008`、`UI-DBG-007/008`。

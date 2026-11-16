@@ -47,6 +47,19 @@ func TestTranslateLocaleCoversReverseProxyFacilityValidation(t *testing.T) {
 	}
 }
 
+func TestTranslateLocaleCoversNetworkProbeValidation(t *testing.T) {
+	tests := map[string]string{
+		"network_probe_mode_invalid":     "网络探测模式必须为 all 或 selected",
+		"network_probe_servers_required": "选择指定节点模式时必须至少选择一个探测节点",
+		"network_probe_server_not_found": "所选探测节点不存在",
+	}
+	for code, want := range tests {
+		if got := TranslateLocale(LocaleSimplifiedChinese, code, "fallback"); got != want {
+			t.Fatalf("translation for %s = %q, want %q", code, got, want)
+		}
+	}
+}
+
 func TestTranslateLocaleCoversNewErrorCodes(t *testing.T) {
 	tests := map[string]string{
 		"application_deletion_requested": "已请求删除该应用",

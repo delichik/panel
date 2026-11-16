@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
-import { AlertTriangle, ClipboardList, Eye, Globe2, HardDrive, History, MoreHorizontal, Plus, RefreshCcw, Rocket, Save, Square, Trash2, UploadCloud, Wrench } from '@lucide/vue';
+import { AlertTriangle, ClipboardList, Eye, Globe2, HardDrive, History, MoreHorizontal, Plus, Radar, RefreshCcw, Rocket, Save, Square, Trash2, UploadCloud, Wrench } from '@lucide/vue';
 import { applicationsApi } from '@/api/applications';
 import { ApiError } from '@/api/client';
 import { serversApi } from '@/api/servers';
 import { saveBlobDownload } from '@/api/download';
 import { reverseProxyFacilityApi, storageShareFacilityApi } from '@/api/facilityApps';
+import { networkProbeFacilityApi } from '@/api/networkProbe';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
@@ -31,6 +32,7 @@ import ServerMultiPicker from '@/components/patterns/ServerMultiPicker.vue';
 import TemplateVariableInput from '@/components/patterns/TemplateVariableInput.vue';
 import type { TemplateVariableOption } from '@/components/patterns/templateVariable';
 import StorageShareFacility from './StorageShareFacility.vue';
+import NetworkProbeFacility from './NetworkProbeFacility.vue';
 import FacilityCatalog from './FacilityCatalog.vue';
 import FacilityDiagnostics from './FacilityDiagnostics.vue';
 import ApplicationLogsDialog from './ApplicationLogsDialog.vue';
@@ -45,6 +47,7 @@ import ActivityLink from '@/components/activity/ActivityLink.vue';
 import { useI18n } from '@/i18n';
 import type { ApplicationDto, ApplicationEditPreviewResult, ApplicationEditSession, ApplicationFile, ApplicationRuntime, ApplicationSummaryDto, Diagnostic, PanelFileDefinition, ReverseProxyRule, TemplateVariableDefinition } from '@/types/applications';
 import type { ConfigRecord, FacilityEditPreviewResult, FacilityEditSession, FacilityRouteDomain, FacilityRoutePath, ProxyPlaneState, ReverseProxyConfig, StaticAsset, StorageShareConfig } from '@/types/facilityApps';
+import type { NetworkProbeConfig } from '@/types/networkProbe';
 import type { ServerDto } from '@/types/servers';
 import { formatDateTime } from '@/utils/datetime';
 import {
@@ -166,6 +169,7 @@ const storageShareOptions = ref<{ label: string; value: string }[]>([]);
 const storageShareAvailable = ref(false);
 const storageShareLabelBySource = ref<Record<string, string>>({});
 const storageShareConfig = ref<StorageShareConfig | null>(null);
+const networkProbeConfig = ref<NetworkProbeConfig | null>(null);
 const selectedId = ref(String(route.query.application ?? ''));
 const search = ref(String(route.query.search ?? ''));
 const page = ref(normalizePage(route.query.page));
@@ -181,6 +185,7 @@ const facilitiesLoaded = ref(true);
 const facilities = [
   { kind: 'reverse-proxy', icon: Globe2, titleKey: 'applicationsPage.entranceProxyFacility', descriptionKey: 'applicationsPage.entranceProxyFacilityDescription', categoryKey: 'applicationsPage.facilityCategoryTraffic', status: 'available' },
   { kind: 'storage-share', icon: HardDrive, titleKey: 'applicationsPage.storageShareFacility', descriptionKey: 'applicationsPage.storageShareFacilityDescription', categoryKey: 'applicationsPage.facilityCategoryStorage', status: 'available' },
+  { kind: 'network-probe', icon: Radar, titleKey: 'applicationsPage.networkProbeFacility', descriptionKey: 'applicationsPage.networkProbeFacilityDescription', categoryKey: 'applicationsPage.facilityCategoryNetwork', status: 'available' },
 ];
 const error = ref('');
 const actionError = ref('');
@@ -267,6 +272,7 @@ const isAppEditor = computed(() => mode.value === 'create' || mode.value === 'ed
 const isCreateMode = computed(() => mode.value === 'create');
 const isReverseProxyFacility = computed(() => !facilityKind.value || facilityKind.value === 'reverse-proxy');
 const isStorageShareFacility = computed(() => facilityKind.value === 'storage-share');
+const isNetworkProbeFacility = computed(() => facilityKind.value === 'network-probe');
 const currentFacilitySummary = computed(() => facilities.find((item) => item.kind === (facilityKind.value || 'reverse-proxy')) ?? null);
 const isFacilityEditor = computed(() => mode.value === 'facilityConfig' && isReverseProxyFacility.value);
 const facilityPageTitle = computed(() => {
@@ -1097,6 +1103,11 @@ async function loadFacilityData() {
       storageShareConfig.value = await storageShareFacilityApi.get({ signal: controller.signal });
     } catch {
       storageShareConfig.value = null;
+    }
+    try {
+      networkProbeConfig.value = await networkProbeFacilityApi.config({ signal: controller.signal });
+    } catch {
+      networkProbeConfig.value = null;
     }
     facilitiesLoaded.value = true;
   } catch (err) {
@@ -2694,6 +2705,8 @@ onBeforeUnmount(() => {
       :pending="pending"
       :facility="facility"
       :storage-share-config="storageShareConfig"
+      :network-probe-config="networkProbeConfig"
+      :server-total="servers.length"
       @open="(kind) => router.push(`/applications/facility-apps/${kind}`)"
       @reconcile="(kind) => runOperation(`facility-reconcile-${kind}`, () => kind === 'storage-share' ? storageShareFacilityApi.reconcile() : reverseProxyFacilityApi.reconcile(), kind === 'storage-share' ? 'applicationsPage.storageShareReconcileAccepted' : 'applicationsPage.gatewayReconcileAccepted', 'applicationsPage.gatewayReconcileAcceptedWithoutId')"
     />
@@ -2702,13 +2715,18 @@ onBeforeUnmount(() => {
   <ConsolePage v-else-if="mode === 'facilityDetail' || mode === 'facilityConfig'" :back-label="t('common.back')" @back="goBackFromFacilityPage" :title="facilityPageTitle" :description="facilityPageDescription">
     <template #actions>
       <template v-if="mode === 'facilityDetail'">
-        <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
-        <Button v-if="currentFacilitySummary" size="sm" variant="ghost" @click="openFacilityTasks"><ClipboardList />{{ t('applicationsPage.viewTasks') }}</Button>
+        <Button v-if="currentFacilitySummary" size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
+        <!-- 网络探测设施没有协调任务/活动事件，不展示任务入口避免死链。 -->
+        <Button v-if="currentFacilitySummary && !isNetworkProbeFacility" size="sm" variant="ghost" @click="openFacilityTasks"><ClipboardList />{{ t('applicationsPage.viewTasks') }}</Button>
       </template>
     </template>
 
     <template v-if="isStorageShareFacility">
       <StorageShareFacility :mode="mode" :servers="servers" />
+    </template>
+
+    <template v-else-if="isNetworkProbeFacility">
+      <NetworkProbeFacility :mode="mode" :servers="servers" />
     </template>
 
     <template v-else-if="mode === 'facilityConfig'">

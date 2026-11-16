@@ -410,11 +410,18 @@ export function mockServerMetrics(id: string, range: string = '1h'): ServerMetri
   const now = Date.now();
   const points = Array.from({ length: count }, (_, index) => new Date(now - (count - 1 - index) * step).toISOString());
   const seed = serverIndex + 1;
+  const diskTotalBytes = (120 + seed * 40) * 1024 ** 3;
   return {
     range,
     cpu: points.map((time, index) => ({ time, usagePercent: Math.min(96, 12 + seed * 3 + index * 1.7) })),
     memory: points.map((time, index) => ({ time, usedBytes: (3.5 + seed * 0.7 + index * 0.09) * 1024 ** 3, totalBytes: (8 + seed * 2) * 1024 ** 3 })),
-    disk: points.map((time, index) => ({ time, usedBytes: (34 + seed * 7 + index * 0.35) * 1024 ** 3, totalBytes: (120 + seed * 40) * 1024 ** 3 })),
+    // 磁盘只保留当前值（最近一次有效采样），不再返回历史曲线。
+    diskCurrent: { time: points.at(-1) ?? new Date().toISOString(), usedBytes: diskTotalBytes * (0.36 + seed * 0.02), totalBytes: diskTotalBytes },
+    diskIo: points.map((time, index) => ({
+      time,
+      readBytesPerSecond: 820_000 + seed * 240_000 + index * 53_000,
+      writeBytesPerSecond: 410_000 + seed * 150_000 + index * 31_000,
+    })),
     network: points.map((time, index) => ({ time, rxBytesPerSecond: 64_000 + seed * 19_000 + index * 4_200, txBytesPerSecond: 42_000 + seed * 13_000 + index * 3_100 })),
     load: points.map((time, index) => ({ time, load1: 0.25 + seed * 0.11 + index * 0.018, load5: 0.22 + seed * 0.09 + index * 0.014, load15: 0.2 + seed * 0.07 + index * 0.01 })),
   };

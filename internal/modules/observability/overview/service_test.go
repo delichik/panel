@@ -2,10 +2,12 @@ package overview
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"panel/internal/modules/networkprobe"
 	metricspkg "panel/internal/modules/observability/metrics"
 	serverpkg "panel/internal/modules/servers"
 	"panel/internal/modules/tasks"
@@ -123,7 +125,7 @@ func TestGetCardDataReturnsMetricsForConfiguredServers(t *testing.T) {
 	if len(series.CPU) != 1 || series.CPU[0].UsagePercent != 42 {
 		t.Fatalf("unexpected cpu series: %#v", series.CPU)
 	}
-	if len(series.Memory) != 0 || len(series.Disk) != 0 || len(series.Network) != 0 || len(series.Load) != 0 {
+	if len(series.Memory) != 0 || len(series.DiskIO) != 0 || len(series.Network) != 0 || len(series.Load) != 0 || series.DiskCurrent != nil {
 		t.Fatalf("metric card must only materialize its own series: %#v", series)
 	}
 	if got.BucketSeconds != 10 {
@@ -261,6 +263,117 @@ func TestGetCardDataAveragesSamplesWithinOneBucket(t *testing.T) {
 	t.Fatalf("bucket %s missing from %#v", bucketStart, got.MetricsByServer[serverIDs[0]].CPU)
 }
 
+func TestGetCardDataDiskCardReturnsCurrentValueOnly(t *testing.T) {
+	svc, serverIDs, closeStore := newCardDataTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	if _, err := svc.UpdateCards(ctx, CardConfigurationSet{Cards: []CardConfiguration{{
+		ID:               "card-disk",
+		Kind:             CardKindDisk,
+		Width:            2,
+		Height:           2,
+		Range:            "1h",
+		NetworkDirection: "both",
+		ServerIDs:        []string{serverIDs[0]},
+	}}}); err != nil {
+		t.Fatalf("update cards: %v", err)
+	}
+
+	// 最近一次有效磁盘采样之后还有未采样磁盘的行：磁盘卡必须展示最后有效行。
+	validAt := time.Now().UTC().Truncate(time.Second).Add(2 * time.Second)
+	for _, snap := range []linux.MetricsSnapshot{
+		{ServerID: serverIDs[0], Time: validAt, DiskUsedBytes: 70, DiskTotalBytes: 140},
+		{ServerID: serverIDs[0], Time: validAt.Add(time.Second)},
+	} {
+		if err := svc.metrics.Save(ctx, snap); err != nil {
+			t.Fatalf("save metrics: %v", err)
+		}
+	}
+
+	got, err := svc.GetCardData(ctx, "card-disk")
+	if err != nil {
+		t.Fatalf("get card data: %v", err)
+	}
+	if got.BucketSeconds == 0 {
+		t.Fatalf("disk card must still report bucket seconds")
+	}
+	series := got.MetricsByServer[serverIDs[0]]
+	if series.DiskCurrent == nil {
+		t.Fatalf("disk card diskCurrent = nil, want current disk sample")
+	}
+	if series.DiskCurrent.UsedBytes != 70 || series.DiskCurrent.TotalBytes != 140 {
+		t.Fatalf("unexpected diskCurrent: %#v", series.DiskCurrent)
+	}
+	if len(series.CPU) != 0 || len(series.Memory) != 0 || len(series.DiskIO) != 0 || len(series.Network) != 0 || len(series.Load) != 0 {
+		t.Fatalf("disk card must only materialize diskCurrent: %#v", series)
+	}
+}
+
+func TestGetCardDataDiskIOCardProjectsReadWriteSeries(t *testing.T) {
+	svc, serverIDs, closeStore := newCardDataTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	if _, err := svc.UpdateCards(ctx, CardConfigurationSet{Cards: []CardConfiguration{{
+		ID:               "card-disk-io",
+		Kind:             CardKindDiskIO,
+		Width:            3,
+		Height:           2,
+		Range:            "1h",
+		NetworkDirection: "both",
+		ServerIDs:        []string{serverIDs[0]},
+	}}}); err != nil {
+		t.Fatalf("update cards: %v", err)
+	}
+
+	base := time.Unix(time.Now().Unix()/10*10, 0).UTC().Add(-30 * time.Second)
+	for _, snap := range []linux.MetricsSnapshot{
+		{ServerID: serverIDs[0], Time: base, DiskIOAvailable: true, DiskReadBytesRate: 100, DiskWriteBytesRate: 200},
+		{ServerID: serverIDs[0], Time: base.Add(10 * time.Second), DiskIOAvailable: true, DiskReadBytesRate: 300, DiskWriteBytesRate: 400},
+	} {
+		if err := svc.metrics.Save(ctx, snap); err != nil {
+			t.Fatalf("save metrics: %v", err)
+		}
+	}
+
+	got, err := svc.GetCardData(ctx, "card-disk-io")
+	if err != nil {
+		t.Fatalf("get card data: %v", err)
+	}
+	series := got.MetricsByServer[serverIDs[0]]
+	if len(series.DiskIO) != 2 {
+		t.Fatalf("diskIo buckets = %d, want 2: %#v", len(series.DiskIO), series.DiskIO)
+	}
+	if !series.DiskIO[0].Time.Equal(base) || series.DiskIO[0].ReadBytesPerSecond != 100 || series.DiskIO[0].WriteBytesPerSecond != 200 {
+		t.Fatalf("unexpected first diskIo bucket: %#v", series.DiskIO[0])
+	}
+	if !series.DiskIO[1].Time.Equal(base.Add(10*time.Second)) || series.DiskIO[1].ReadBytesPerSecond != 300 || series.DiskIO[1].WriteBytesPerSecond != 400 {
+		t.Fatalf("unexpected second diskIo bucket: %#v", series.DiskIO[1])
+	}
+	if series.DiskCurrent != nil || len(series.CPU) != 0 || len(series.Memory) != 0 || len(series.Network) != 0 || len(series.Load) != 0 {
+		t.Fatalf("diskIO card must only materialize diskIo: %#v", series)
+	}
+}
+
+func TestUpdateCardsAcceptsDiskIOAndNetworkProbeKinds(t *testing.T) {
+	svc, closeStore := newCardTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	cards := []CardConfiguration{
+		{ID: "card-disk-io", Kind: CardKindDiskIO, Width: 2, Height: 2, Range: "1h", NetworkDirection: "both", ServerIDs: []string{}},
+		{ID: "card-network-probe", Kind: CardKindNetworkProbe, Width: 3, Height: 2, Range: "1h", NetworkDirection: "both", ServerIDs: []string{}},
+	}
+	if _, err := svc.UpdateCards(ctx, CardConfigurationSet{Cards: cards}); err != nil {
+		t.Fatalf("update cards with new kinds: %v", err)
+	}
+	got, err := svc.GetCards(ctx)
+	if err != nil {
+		t.Fatalf("get cards: %v", err)
+	}
+	if len(got.Cards) != 2 || got.Cards[0].Kind != CardKindDiskIO || got.Cards[1].Kind != CardKindNetworkProbe {
+		t.Fatalf("new card kinds were not persisted: %#v", got.Cards)
+	}
+}
+
 func TestPlanBucketSecondsKeepsPointCountsBounded(t *testing.T) {
 	tests := []struct {
 		rng     string
@@ -289,6 +402,158 @@ func TestGetCardDataRejectsUnknownCard(t *testing.T) {
 	if _, err := svc.GetCardData(context.Background(), "missing"); err == nil {
 		t.Fatalf("expected missing card error")
 	}
+}
+
+func TestGetCardDataNetworkProbeCardReturnsProviderData(t *testing.T) {
+	svc, serverIDs, closeStore := newCardDataTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	if _, err := svc.UpdateCards(ctx, CardConfigurationSet{Cards: []CardConfiguration{{
+		ID:               "card-probe",
+		Kind:             CardKindNetworkProbe,
+		Width:            3,
+		Height:           2,
+		Range:            "1h",
+		NetworkDirection: "both",
+		ServerIDs:        []string{},
+	}}}); err != nil {
+		t.Fatalf("update cards: %v", err)
+	}
+	updatedAt := time.Now().UTC()
+	provider := &fakeProbeCardProvider{card: networkprobe.CardData{
+		Nodes: []networkprobe.Node{
+			{ServerID: serverIDs[0], Name: "Alpha", Address: "10.0.0.1"},
+			{ServerID: serverIDs[1], Name: "Beta", Address: "10.0.0.2"},
+		},
+		Results: []networkprobe.Result{{
+			SourceServerID: serverIDs[0], TargetServerID: serverIDs[1], TargetAddress: "10.0.0.2",
+			LatencyMS: 12.5, PacketLossPercent: 0, Sent: 3, Received: 3, SampledAt: updatedAt,
+		}},
+		UpdatedAt: &updatedAt,
+	}}
+	svc.probes = provider
+
+	got, err := svc.GetCardData(ctx, "card-probe")
+	if err != nil {
+		t.Fatalf("get card data: %v", err)
+	}
+	if got.Probes == nil {
+		t.Fatal("networkProbe card must return probes")
+	}
+	if len(got.Probes.Nodes) != 2 || got.Probes.Nodes[1].ServerID != serverIDs[1] {
+		t.Fatalf("unexpected probe nodes: %#v", got.Probes.Nodes)
+	}
+	if len(got.Probes.Results) != 1 || got.Probes.Results[0].LatencyMS != 12.5 || got.Probes.Results[0].SourceServerID != serverIDs[0] {
+		t.Fatalf("unexpected probe results: %#v", got.Probes.Results)
+	}
+	if got.BucketSeconds != 0 {
+		t.Fatalf("networkProbe card bucketSeconds = %d, want 0", got.BucketSeconds)
+	}
+	if len(got.MetricsByServer) != 0 {
+		t.Fatalf("networkProbe card must not materialize metrics: %#v", got.MetricsByServer)
+	}
+	if provider.calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", provider.calls)
+	}
+	if len(provider.gotServerIDs) != 0 {
+		t.Fatalf("empty server selection must pass no filter, got %#v", provider.gotServerIDs)
+	}
+}
+
+func TestGetCardDataNetworkProbeCardPassesSelectedServers(t *testing.T) {
+	svc, serverIDs, closeStore := newCardDataTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	if _, err := svc.UpdateCards(ctx, CardConfigurationSet{Cards: []CardConfiguration{{
+		ID:               "card-probe",
+		Kind:             CardKindNetworkProbe,
+		Width:            3,
+		Height:           2,
+		Range:            "1h",
+		NetworkDirection: "both",
+		ServerIDs:        []string{serverIDs[1]},
+	}}}); err != nil {
+		t.Fatalf("update cards: %v", err)
+	}
+	provider := &fakeProbeCardProvider{}
+	svc.probes = provider
+
+	if _, err := svc.GetCardData(ctx, "card-probe"); err != nil {
+		t.Fatalf("get card data: %v", err)
+	}
+	if len(provider.gotServerIDs) != 1 || provider.gotServerIDs[0] != serverIDs[1] {
+		t.Fatalf("provider serverIDs = %#v, want the card selection", provider.gotServerIDs)
+	}
+}
+
+func TestGetCardDataNetworkProbeWithoutProviderAndProviderError(t *testing.T) {
+	svc, _, closeStore := newCardDataTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	if _, err := svc.UpdateCards(ctx, CardConfigurationSet{Cards: []CardConfiguration{{
+		ID:               "card-probe",
+		Kind:             CardKindNetworkProbe,
+		Width:            3,
+		Height:           2,
+		Range:            "1h",
+		NetworkDirection: "both",
+		ServerIDs:        []string{},
+	}}}); err != nil {
+		t.Fatalf("update cards: %v", err)
+	}
+
+	// 未注入 provider：返回空 probes 而不是错误。
+	got, err := svc.GetCardData(ctx, "card-probe")
+	if err != nil {
+		t.Fatalf("get card data without provider: %v", err)
+	}
+	if got.Probes != nil {
+		t.Fatalf("probes = %#v, want nil without provider", got.Probes)
+	}
+
+	// provider 失败必须向上返回错误，不得静默展示空数据。
+	svc.probes = &fakeProbeCardProvider{err: errors.New("probe unavailable")}
+	if _, err := svc.GetCardData(ctx, "card-probe"); err == nil {
+		t.Fatal("expected provider error to propagate")
+	}
+}
+
+func TestGetCardDataMetricCardsDoNotCallProbeProvider(t *testing.T) {
+	svc, serverIDs, closeStore := newCardDataTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	if _, err := svc.UpdateCards(ctx, CardConfigurationSet{Cards: []CardConfiguration{{
+		ID:               "card-cpu",
+		Kind:             CardKindCPU,
+		Width:            3,
+		Height:           2,
+		Range:            "1h",
+		NetworkDirection: "both",
+		ServerIDs:        []string{serverIDs[0]},
+	}}}); err != nil {
+		t.Fatalf("update cards: %v", err)
+	}
+	provider := &fakeProbeCardProvider{}
+	svc.probes = provider
+	if _, err := svc.GetCardData(ctx, "card-cpu"); err != nil {
+		t.Fatalf("get card data: %v", err)
+	}
+	if provider.calls != 0 {
+		t.Fatalf("metric card must not call the probe provider, calls = %d", provider.calls)
+	}
+}
+
+type fakeProbeCardProvider struct {
+	card         networkprobe.CardData
+	err          error
+	gotServerIDs []string
+	calls        int
+}
+
+func (f *fakeProbeCardProvider) CardData(_ context.Context, serverIDs []string) (networkprobe.CardData, error) {
+	f.calls++
+	f.gotServerIDs = append([]string{}, serverIDs...)
+	return f.card, f.err
 }
 
 func newCardTestService(t *testing.T) (*Service, func()) {

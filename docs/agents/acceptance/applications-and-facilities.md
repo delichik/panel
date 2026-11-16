@@ -621,7 +621,87 @@
 - **不变量**：与存储共享无关的应用不受影响（`FAC-STO-005`）；节点关闭 Tailscale 后必须从白名单移除；导出配置写入失败仍按 `FAC-STO-004` 的原子回滚语义处理，不得部分生效。
 - **验证**：`TestStorageMountUsesTailnetAddressWhenEndsQualify`、`TestStorageExportWhitelistIncludesTailnetAddresses`；`FAC-STO-003`、`FAC-STO-004` 非回归用例；地址/IP 偏好变化后的重同步见 `TS-ADDR-009`。
 
-## 9. 用户界面验收边界
+## 9. 网络探测设施
+
+网络探测设施（`network-probe`）是纯观测型设施：没有隐藏应用/容器，也不产生协调 Job，只保存一份全局配置和每 `(source,target)` 的最新 ping 观测。配置与观测都保存在 AppDB，不进入 metrics 时间序列库。
+
+### FAC-PRB-001 设施边界与数据归属
+
+- **前置**：访问设施目录、`/applications/facility-apps/network-probe` 或服务器详情的探测页签。
+- **动作**：读取/保存网络探测设施。
+- **结果**：目录卡片与设施详情使用 `networkProbeFacilityApi`（`web/src/api/networkProbe.ts`）；配置读写为 `GET/PUT /api/v1/facility-apps/network-probe`，矩阵结果为 `GET /api/v1/facility-apps/network-probe/results`，单节点结果为 `GET /api/v1/servers/{id}/network-probes`。配置存于 AppDB `network_probe_configs` 单行（`id='network_probe'`，`mode`、`server_ids_json`、`version`、`updated_at`），最新观测存于 AppDB `network_probe_results`（主键 `(source_server_id,target_server_id)`）。实现位于 `internal/modules/networkprobe`，模块在 `internal/bootstrap/panel/app.go` 装配并注册路由。
+- **失败**：不得把探测结果写入 `metrics_snapshots`，不得为探测设施创建隐藏应用或协调 Job；未知 facilityKind 仍按设施空态处理。
+- **不变量**：设施读取只查本地投影，不现场 SSH/ping；配置与观测的版本语义互不混用（配置 `version` 只在保存时递增，观测按时间单调覆盖）。
+- **验证**：设施路由注册与清单测试（`internal/bootstrap/panel/routes_manifest_test.go`）、`networkprobe` handler/service 测试、设施目录/Mock 路由测试。
+
+### FAC-PRB-002 探测目标与地址解析
+
+- **前置**：存在多台带地址的服务器，`mode=all` 或 `mode=selected`。
+- **动作**：生成某探测节点应执行的目标列表（配置下发或结果读取前都按同一规则计算）。
+- **结果**：探测节点集合在 `all` 模式下为全部服务器，在 `selected` 模式下仅 `serverIds` 选中的服务器；每个探测节点要 ping **所有其他服务器**（无论模式），服务端强制跳过探测节点自身；目标地址按 `servers.ipv4` 优先、否则 `ipv6`、否则规范化 `host` 解析，三者均无地址的目标跳过；目标按 `serverId` 升序并去重，配置快照缓存 3 秒，避免每轮每秒查库。
+- **失败**：服务器列表读取失败时本轮不下发新目标、不覆盖上一份配置；不得把无地址目标或自身作为目标下发；不得因 `all` 模式把非探测节点也当成探测源。
+- **不变量**：目标集合只由当前服务器表与配置派生，不得由 Agent 自选目标；节点地址变化后在下一个配置快照周期生效，无需重启 Agent。
+- **验证**：`networkprobe` 服务 `ReportConfig` 测试（模式、排序、去重、跳过自身、地址回落、无地址跳过）、3 秒 TTL 快照测试。
+
+### FAC-PRB-003 配置保存与校验
+
+- **前置**：认证用户提交 `PUT /api/v1/facility-apps/network-probe`，body 为 `{mode, serverIds}`。
+- **动作**：校验、去重并保存配置。
+- **结果**：`mode` 只允许 `all|selected`（`networkprobe.ModeAll/ModeSelected`）；`selected` 时 `serverIds` 必须非空且每个 ID 当前存在，保存前去空、去重、按稳定服务器 ID 保留；成功写单行配置并 `version` 递增、更新 `updated_at`，返回保存后的完整配置（含归一化后的 mode/serverIds/version/updatedAt）。
+- **失败**：非法 mode 返回校验错误 `network_probe_mode_invalid`；`selected` 空集合返回 `network_probe_servers_required`；不存在的服务器 ID 返回 `network_probe_server_not_found`；任一校验失败不得写入或 bump version，也不得部分保存。
+- **边界**：`all` 模式忽略并保存空 `serverIds`（归一化后为空数组），但切到 `selected` 时仍需重新提供非空集合；重复 ID 静默去重而不是报错；删除服务器后的配置修剪见 `FAC-PRB-007`。
+- **不变量**：配置是单行 upsert，不存在同一设施多行；旧客户端缺省 `serverIds` 在 `all` 下等价空数组，在 `selected` 下按校验失败处理。
+- **验证**：handler/service 校验测试（非法 mode、空选择、缺失服务器、去重、版本递增、失败不写库）、i18n 错误码测试。
+
+### FAC-PRB-004 配置下发与周期探测
+
+- **前置**：Panel 已与某兼容 Agent 建立 report stream；探测设施已保存配置。
+- **动作**：Panel 周期性下发 `AgentReportControl.probe`（`AgentProbeConfig`：`enabled`、`intervalSeconds`、`targets[]`），Agent 侧执行 ping 并上报结果。
+- **结果**：探测节点收到自己的目标列表（`AgentProbeTarget{serverId,address,name}`），周期固定 `probeIntervalSeconds=60`；Agent 配置整体替换，支持 disabled 或清空目标；配置变化在下一轮 stream 更新后生效，无需重连或重启。Agent 部署步骤必须确保目标机系统 `ping` 可用（`AGT-DEP-008`：已有则只探测，缺失则安装 `iputils-ping` 并验证），因此探测能力不依赖运维手工装包。Agent 侧并发上限 8、单目标 7 秒兜底超时（`ping -c 3 -W 2` 最坏耗时的上界），执行 `LC_ALL=C ping -n -c 3 -W 2 <addr>`（IPv6 用 `-6`），逐目标回报平均延迟、丢包率、发送/接收计数和错误（`AGT-RPT-008`）。
+- **失败**：旧 Agent 忽略 `probe` 字段且不上报 `probes`，Panel 不得清空其历史观测，只保持最后一次结果并按 stale 展示；探测配置读取失败时按 disabled 下发（只记录日志、不中断指标流），Agent 停止该节点探测，设施恢复后下一轮配置重新启用；服务器已从 Panel 删除时同样按 disabled 下发，不回退旧目标；单个目标 ping 失败不阻断其他目标与指标上报。
+- **不变量**：探测只依赖 Agent report stream，不新增 Panel→Agent 的独立 RPC、不新增后台 ticker；探测节点自身不再是目标；非探测节点即使收到空目标也不得执行 ping。
+- **验证**：`reportHub` 配置解析/整体替换/disabled/广播范围测试（`internal/agent/rpc/report_test.go`）；`internal/agent/probe` 的并发/超时/命令参数/输出解析测试；collector 配置闭包测试。
+
+### FAC-PRB-005 结果上报、落库与新鲜度
+
+- **前置**：Agent 上报 `AgentReport{probes, sampleAt}`，或同一 `(source,target)` 已有历史观测。
+- **动作**：Panel 保存探测结果。
+- **结果**：`sampleAt` UTC 截断到秒；同一 `source_server_id` 的报告在单事务内先删除该源的全部旧行，再按 `(source,target)` upsert 本次所有目标结果，保证每个 `(source,target)` 只有最新一行；`target` 为空或等于 source 的结果被丢弃；超过 5 分钟未更新的结果在读取时标记 `stale=true`（`networkprobe.ResultFreshFor`），不删除旧行、不产生空矩阵。
+- **失败**：保存失败只记录日志，不中断 report stream（`AGT-RPT-003`）；目标在保存瞬间已不存在不报错，读取时按当前服务器表过滤掉悬空目标，不得把它显示为有效目标。
+- **边界**：同一轮并发/重复上报按“后到覆盖”收敛；旧 Agent 不上报时保留最后一次结果并标 stale；无任何观测时 `results` 为空数组、`updatedAt=null`。
+- **不变量**：结果行只表达最新观测，不保留历史曲线（需要历史曲线时不得复用 `metrics_snapshots` 时间序列语义）；读取不现场探测。
+- **验证**：`SaveReported` 事务删除+批量插入/时间截断/重复上报收敛测试，`Matrix`/`ServerResults` 的 stale 与目标过滤测试。
+
+### FAC-PRB-006 读取视图：矩阵、服务器结果与概览卡
+
+- **前置**：已保存配置与部分/全部探测结果，可能包含已删除目标、stale 结果或未探测节点。
+- **动作**：读取矩阵 `GET /api/v1/facility-apps/network-probe/results`、单服务器 `GET /api/v1/servers/{id}/network-probes`、概览 `networkProbe` 卡数据。
+- **结果**：矩阵返回 `mode`、`nodes`（当前探测节点 ID/名称/目标地址）与 `results`（只包含 source 属于当前探测节点且 target 仍存在的行）；结果接口支持可选的 `serverIds` 查询参数（可重复或逗号分隔）只看部分探测节点，缺省/空表示全部节点。`serverResults` 返回 `{serverId,enabled,nodes,results,updatedAt}`，`enabled=false` 表示该节点当前不是探测节点（仍可展示其目标说明与历史行的空态），`nodes` 为该节点的目标列表，服务器不存在返回稳定 not-found；概览卡返回 `{nodes,results,updatedAt}` 摘要（节点数、平均延迟、最大丢包与最差结果由前端派生）。所有读取不现场探测、不写库。
+- **失败**：配置不存在时返回默认 `all` 配置与空结果；未注入探测服务时概览卡返回空 `probes` 而不是 500；已删除服务器作为 target 的行不得出现在矩阵中；服务器详情读取非探测节点时 `enabled=false` 且前端显示设施入口空态（`UI-SRV-025`）。
+- **边界**：模式切换后旧观测可能来自不再被选中的源，读取时按当前探测节点过滤；`serverIds` 过滤为空表示全部节点，非空只保留选择内的源/目标；JSON 中时间使用 RFC3339 UTC。
+- **不变量**：矩阵/服务器结果/概览卡必须来自同一份本地投影，不得各自引用不同快照；前端不得把缺失值当成 0 延迟或 0 丢包。
+- **验证**：handler/service 的矩阵/服务器结果/概览卡 DTO 测试、过滤与空态测试，前端 `networkProbeFacility`/`ProbesTab`/概览卡模型测试。
+
+### FAC-PRB-007 服务器删除与配置修剪
+
+- **前置**：删除一台可能同时是探测源、探测目标或 `selected` 配置成员的服务器。
+- **动作**：在同一删除清理路径（`internal/modules/servers/deletecleanup.go` 的 `cleanupServerReferences`）中清理该服务器的探测引用。
+- **结果**：删除 `network_probe_results` 中 `source_server_id=?` 或 `target_server_id=?` 的全部行；`mode=selected` 时从 `network_probe_configs.server_ids_json` 移除该 ID 并将 `version` 加 1、更新 `updated_at`；`mode=all` 时不改写 `server_ids_json`（`all` 的探测节点集合由服务器表现算）。
+- **失败**：清理失败必须让服务器删除返回错误，不得留下指向已删除服务器的探测行或选中 ID；重复删除/清理幂等。
+- **边界**：目标服务器删除后，其他探测节点到它的结果行同时清除，矩阵中不再出现该目标；该服务器作为探测源的历史结果全部删除；配置修剪只在 `selected` 下发生，不把 `all` 模式改成 `selected`。
+- **不变量**：删除清理必须与服务器删除同事务，不得事后异步补删（否则配置引用会短暂悬空）；`serverIds` 修剪后仍保持稳定排序/去重。
+- **验证**：`servers` 删除清理测试（结果行删除、selected 修剪与版本递增、all 不改写、幂等）、再次读取矩阵的行为测试。
+
+### FAC-PRB-008 失败语义与验收证据
+
+- **前置**：Agent 不可达/不兼容、服务器列表为空、所有目标无地址、`ping` 命令缺失、探测结果全部失败、旧 Agent 或没有历史观测等异常场景。
+- **动作**：读取/保存配置或结果，等待周期探测。
+- **结果**：没有服务器时 `nodes=[]`、`results=[]`、`updatedAt=null`，页面显示明确空态；`selected` 模式下全部所选节点无地址时结果为空但配置合法；`ping` 命令缺失或不可执行时逐目标 `error`（不得让整个探测设施不可用），结果行保留 `sent=0/received=0`；正常情况下 `ping` 由 Agent 部署步骤保证（`AGT-DEP-008`），只有安装失败/被移除等异常才出现该降级；旧 Agent 不刷新观测时保留最后一行并标 stale；服务器详情非探测节点显示空态与设施入口。
+- **失败**：任何单目标失败不得升级为设施级失败或阻塞指标上报；配置校验失败不得写库（`FAC-PRB-003`）；读取失败返回 `panelerr` 稳定错误并由页面局部重试，不得用空数据冒充“全部正常”。
+- **边界**：结果只保留最新一行，不存在“历史曲线”或聚合统计持久化；`stale` 是读取期派生，不写库；观测时间与服务器时钟无关，以 Panel 接收的 sampleAt 为准。
+- **验证**：`internal/modules/networkprobe` 服务/handler 测试（空集合、无地址、错误目标、stale、旧 Agent 不清空）、`internal/agent/probe` 解析与失败测试、collector 单测、前端设施/探测页签空错态测试；人工观察点：真实 `ping` 权限/命令缺失场景与跨节点网络延迟展示。
+
+## 10. 用户界面验收边界
 
 ### APP-UI-001 信息架构与滚动
 
@@ -641,14 +721,14 @@
 - **不变量**：危险删除/批量操作必须标准确认；部署请求完成与节点收敛状态分开展示；有界轮询以任一节点活跃 Job 为谓词。
 - **验证**：API call-count、race/stale-response、status/error contract、bounded polling model tests。
 
-## 10. 覆盖来源与已知缺口
+## 11. 覆盖来源与已知缺口
 
 主要取证来源：
 
 - `docs/agents/modules/applications.md`、`containerization.md`、`tasks-scheduler.md`、`runtime-events.md`
-- `internal/modules/applications/`、`internal/modules/facilityapps/`、`internal/orchestrator/`
-- `internal/agent/docker/`、`internal/agent/nfsvol/` 及相应契约/测试
-- `web/src/api/applications.ts`、`facilityApps.ts`、`containers.ts`，以及 `web/src/types/applications.ts`、`facilityApps.ts`、`resources.ts`
+- `internal/modules/applications/`、`internal/modules/facilityapps/`、`internal/modules/networkprobe/`、`internal/orchestrator/`
+- `internal/agent/docker/`、`internal/agent/nfsvol/`、`internal/agent/probe/` 及相应契约/测试
+- `web/src/api/applications.ts`、`facilityApps.ts`、`networkProbe.ts`、`containers.ts`，以及 `web/src/types/applications.ts`、`facilityApps.ts`、`networkProbe.ts`、`resources.ts`
 - `internal/integration/appdeploy/` 与上述模块单元测试
 
 已知缺口（变更触及前应先补证据）：
