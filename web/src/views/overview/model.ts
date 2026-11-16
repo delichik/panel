@@ -16,6 +16,8 @@ export const toneZones = {
   latency: [{ to: 80, tone: 'success' }, { to: 150, tone: 'warning' }, { to: Infinity, tone: 'danger' }],
   packetLoss: [{ to: 2, tone: 'success' }, { to: 5, tone: 'warning' }, { to: Infinity, tone: 'danger' }],
   load: [{ to: 1, tone: 'success' }, { to: 2, tone: 'warning' }, { to: Infinity, tone: 'danger' }],
+  diskRead: [{ to: 50 * 1024 ** 2, tone: 'success' }, { to: 200 * 1024 ** 2, tone: 'warning' }, { to: Infinity, tone: 'danger' }],
+  diskWrite: [{ to: 50 * 1024 ** 2, tone: 'success' }, { to: 200 * 1024 ** 2, tone: 'warning' }, { to: Infinity, tone: 'danger' }],
 } satisfies Record<string, Array<{ to: number; tone: MetricTone }>>;
 
 export type HistoryKind = keyof typeof toneZones;
@@ -58,6 +60,8 @@ export interface ServerMetricsView {
   load1: number | null;
   rxBytesPerSecond: number | null;
   txBytesPerSecond: number | null;
+  diskReadBytesPerSecond: number | null;
+  diskWriteBytesPerSecond: number | null;
   sampledAt: string | null;
 }
 
@@ -71,6 +75,8 @@ const emptyMetricsView: ServerMetricsView = {
   load1: null,
   rxBytesPerSecond: null,
   txBytesPerSecond: null,
+  diskReadBytesPerSecond: null,
+  diskWriteBytesPerSecond: null,
   sampledAt: null,
 };
 
@@ -82,6 +88,7 @@ export function latestMetricsView(series?: ServerMetricsSeries | null): ServerMe
   const memory = lastPoint(series.memory);
   const load = lastPoint(series.load);
   const network = lastPoint(series.network);
+  const diskIO = lastPoint(series.diskIo);
   const disk = series.diskCurrent ?? null;
   return {
     cpuPercent: latest?.cpuUsagePercent ?? cpu?.usagePercent ?? null,
@@ -93,6 +100,8 @@ export function latestMetricsView(series?: ServerMetricsSeries | null): ServerMe
     load1: latest?.load1 ?? load?.load1 ?? null,
     rxBytesPerSecond: latest?.rxBytesPerSecond ?? network?.rxBytesPerSecond ?? null,
     txBytesPerSecond: latest?.txBytesPerSecond ?? network?.txBytesPerSecond ?? null,
+    diskReadBytesPerSecond: diskIO?.readBytesPerSecond ?? null,
+    diskWriteBytesPerSecond: diskIO?.writeBytesPerSecond ?? null,
     sampledAt: latest?.time ?? cpu?.time ?? memory?.time ?? load?.time ?? null,
   };
 }
@@ -133,6 +142,14 @@ export function cpuHistory(series?: ServerMetricsSeries | null, now = Date.now()
 
 export function loadHistory(series?: ServerMetricsSeries | null, now = Date.now()): Array<number | null> {
   return hourlyHistory(series?.load?.map((point) => ({ time: point.time, value: point.load1 })), now);
+}
+
+export function diskReadHistory(series?: ServerMetricsSeries | null, now = Date.now()): Array<number | null> {
+  return hourlyHistory(series?.diskIo?.map((point) => ({ time: point.time, value: point.readBytesPerSecond })), now);
+}
+
+export function diskWriteHistory(series?: ServerMetricsSeries | null, now = Date.now()): Array<number | null> {
+  return hourlyHistory(series?.diskIo?.map((point) => ({ time: point.time, value: point.writeBytesPerSecond })), now);
 }
 
 export function probeLatencyHistory(history: NetworkProbeHistoryPoint[] | undefined, now = Date.now()): Array<number | null> {
@@ -237,6 +254,8 @@ export interface ServerCardView {
   probeStale: boolean;
   cpuHistory: Array<number | null>;
   loadHistory: Array<number | null>;
+  diskReadHistory: Array<number | null>;
+  diskWriteHistory: Array<number | null>;
   latencyHistory: Array<number | null>;
   lossHistory: Array<number | null>;
   packageUpdates: number | null;
@@ -280,6 +299,8 @@ export function buildServerCards(input: BuildCardsInput): ServerCardView[] {
       probeStale: Boolean(target?.stale),
       cpuHistory: cpuHistory(series, now),
       loadHistory: loadHistory(series, now),
+      diskReadHistory: diskReadHistory(series, now),
+      diskWriteHistory: diskWriteHistory(series, now),
       latencyHistory: probeLatencyHistory(target?.history, now),
       lossHistory: probeLossHistory(target?.history, now),
       packageUpdates: input.packageUpdatesById[server.id] ?? null,

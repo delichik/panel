@@ -267,8 +267,8 @@ onMounted(() => {
       </section>
 
       <div class="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden max-xl:overflow-visible">
-        <div v-if="pageLoading && servers.length === 0" class="grid gap-3 sm:grid-cols-2">
-          <Skeleton v-for="item in 6" :key="item" class="h-52" />
+        <div v-if="pageLoading && servers.length === 0" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+          <Skeleton v-for="item in 8" :key="item" class="h-52" />
         </div>
         <EmptyState v-else-if="pageError && servers.length === 0" :title="t('common.loadFailed')" :description="pageError">
           <template #actions>
@@ -283,7 +283,7 @@ onMounted(() => {
             </Button>
           </template>
         </EmptyState>
-        <div v-else class="grid gap-3 sm:grid-cols-2">
+        <div v-else class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
           <ServerCard v-for="card in cards" :key="card.server.id" :card="card" />
         </div>
       </div>

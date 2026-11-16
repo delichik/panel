@@ -6,7 +6,9 @@ import {
   aggregateProbeHistory,
   buildServerCards,
   cpuHistory,
+  diskReadHistory,
   diskPercent,
+  diskWriteHistory,
   formatBytes,
   formatLatency,
   formatLoad,
@@ -62,7 +64,7 @@ function series(overrides: Partial<ServerMetricsSeries> = {}): ServerMetricsSeri
     cpu: [{ time, usagePercent: 42.5 }],
     memory: [{ time, usedBytes: 4 * 1024 ** 3, totalBytes: 8 * 1024 ** 3 }],
     diskCurrent: { time: '2026-11-16T06:55:00Z', usedBytes: 60 * 1024 ** 3, totalBytes: 100 * 1024 ** 3 },
-    diskIo: [],
+    diskIo: [{ time, readBytesPerSecond: 1536, writeBytesPerSecond: 512 }],
     network: [{ time, rxBytesPerSecond: 1, txBytesPerSecond: 1 }],
     load: [{ time, load1: 0.42, load5: 0.3, load15: 0.2 }],
     latest: {
@@ -134,6 +136,8 @@ describe('overview model', () => {
     expect(view.load1).toBe(0.42);
     expect(view.rxBytesPerSecond).toBe(1536);
     expect(view.txBytesPerSecond).toBe(512);
+    expect(view.diskReadBytesPerSecond).toBe(1536);
+    expect(view.diskWriteBytesPerSecond).toBe(512);
     expect(view.sampledAt).toBe('2026-11-16T07:00:00Z');
 
     const fallback = latestMetricsView(series({ latest: undefined, diskCurrent: null }));
@@ -157,11 +161,12 @@ describe('overview model', () => {
     expect(values[0]).toBeNull();
   });
 
-  it('builds CPU and load history from bucketed metric series', () => {
+  it('builds CPU, load and disk IO history from bucketed metric series', () => {
     const now = Date.parse('2026-11-16T12:30:00Z');
     const h = series({
       cpu: [{ time: hourIso(2, now), usagePercent: 30 }, { time: hourIso(1, now), usagePercent: 50 }],
       load: [{ time: hourIso(1, now), load1: 1.5, load5: 0, load15: 0 }],
+      diskIo: [{ time: hourIso(1, now), readBytesPerSecond: 2048, writeBytesPerSecond: 1024 }],
     });
     const cpu = cpuHistory(h, now);
     const load = loadHistory(h, now);
@@ -169,6 +174,8 @@ describe('overview model', () => {
     expect(cpu[22]).toBe(50);
     expect(load[22]).toBe(1.5);
     expect(cpu.filter((value) => value !== null)).toHaveLength(2);
+    expect(diskReadHistory(h, now)[22]).toBe(2048);
+    expect(diskWriteHistory(h, now)[22]).toBe(1024);
   });
 
   it('derives per-target and per-source latency/loss history from probe history', () => {

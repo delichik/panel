@@ -9,6 +9,8 @@ defineProps<{
   valueClass: string;
   muted?: boolean;
   empty?: boolean;
+  placeholder?: boolean;
+  plain?: boolean;
   hint?: string;
   ariaLabel: string;
   kind?: HistoryKind;
@@ -18,13 +20,20 @@ defineProps<{
 </script>
 
 <template>
-  <div class="grid min-w-0 gap-1" :class="muted ? 'opacity-60' : ''">
+  <div class="grid min-w-0 gap-1.5" :class="muted ? 'opacity-60' : ''">
     <div class="flex min-w-0 items-baseline justify-between gap-2">
       <span class="truncate text-xs text-muted-foreground">{{ label }}</span>
       <span class="shrink-0 text-xs font-medium tabular-nums" :class="valueClass" :title="hint">{{ text }}</span>
     </div>
-    <template v-if="!empty">
-      <HistoryStrip v-if="kind" :kind="kind" :values="history ?? []" :label="ariaLabel" />
+    <template v-if="!empty && !plain">
+      <div
+        v-if="placeholder"
+        class="h-2 min-w-0 rounded-sm border border-dashed border-border-strong"
+        role="img"
+        :aria-label="ariaLabel"
+        data-testid="metric-placeholder"
+      />
+      <HistoryStrip v-else-if="kind" :kind="kind" :values="history ?? []" :label="ariaLabel" />
       <MeterBar v-else :percent="percent ?? null" :label="ariaLabel" />
     </template>
   </div>

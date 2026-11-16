@@ -55,6 +55,8 @@ interface CellView {
   valueClass: string;
   muted: boolean;
   empty?: boolean;
+  placeholder?: boolean;
+  plain?: boolean;
   hint?: string;
   ariaLabel: string;
   kind?: HistoryKind;
@@ -71,6 +73,18 @@ function historyCell(kind: HistoryKind, label: string, value: number | null, tex
     ariaLabel: `${label} · ${t('overviewPage.last24Hours')}`,
     kind,
     history,
+    valueClass: tone ? textToneClass[tone] : 'text-muted-foreground',
+  };
+}
+
+function plainCell(kind: HistoryKind, label: string, value: number | null, text: string, muted: boolean): CellView {
+  const tone = muted || value === null ? null : valueTone(kind, value);
+  return {
+    label,
+    text,
+    muted: muted || value === null,
+    plain: true,
+    ariaLabel: label,
     valueClass: tone ? textToneClass[tone] : 'text-muted-foreground',
   };
 }
@@ -97,18 +111,24 @@ const cpuCell = computed<CellView>(() => historyCell(
   !metricsUsable.value,
 ));
 
-const loadCell = computed<CellView>(() => historyCell(
+const loadCell = computed<CellView>(() => plainCell(
   'load',
   t('overviewPage.metricLoad'),
   metricsUsable.value ? props.card.metrics.load1 : null,
   metricsUsable.value ? formatLoad(props.card.metrics.load1) : '—',
-  props.card.loadHistory,
   !metricsUsable.value,
 ));
 
 const latencyCell = computed<CellView>(() => (
   props.card.isProbeSource
-    ? { label: t('overviewPage.metricLatency'), text: '—', valueClass: 'text-muted-foreground', muted: true, empty: true, ariaLabel: t('overviewPage.metricLatency') }
+    ? {
+      label: t('overviewPage.metricLatency'),
+      text: '—',
+      valueClass: 'text-muted-foreground',
+      muted: true,
+      placeholder: true,
+      ariaLabel: t('overviewPage.probeSourceMetricHint'),
+    }
     : historyCell(
       'latency',
       t('overviewPage.metricLatency'),
@@ -121,7 +141,14 @@ const latencyCell = computed<CellView>(() => (
 
 const lossCell = computed<CellView>(() => (
   props.card.isProbeSource
-    ? { label: t('overviewPage.metricPacketLoss'), text: '—', valueClass: 'text-muted-foreground', muted: true, empty: true, ariaLabel: t('overviewPage.metricPacketLoss') }
+    ? {
+      label: t('overviewPage.metricPacketLoss'),
+      text: '—',
+      valueClass: 'text-muted-foreground',
+      muted: true,
+      placeholder: true,
+      ariaLabel: t('overviewPage.probeSourceMetricHint'),
+    }
     : historyCell(
       'packetLoss',
       t('overviewPage.metricPacketLoss'),
@@ -130,6 +157,22 @@ const lossCell = computed<CellView>(() => (
       props.card.lossHistory,
       probeStale.value,
     )
+));
+
+const diskReadCell = computed<CellView>(() => plainCell(
+  'diskRead',
+  t('overviewPage.metricDiskRead'),
+  metricsUsable.value ? props.card.metrics.diskReadBytesPerSecond : null,
+  metricsUsable.value ? formatRate(props.card.metrics.diskReadBytesPerSecond) : '—',
+  !metricsUsable.value,
+));
+
+const diskWriteCell = computed<CellView>(() => plainCell(
+  'diskWrite',
+  t('overviewPage.metricDiskWrite'),
+  metricsUsable.value ? props.card.metrics.diskWriteBytesPerSecond : null,
+  metricsUsable.value ? formatRate(props.card.metrics.diskWriteBytesPerSecond) : '—',
+  !metricsUsable.value,
 ));
 
 const memoryCell = computed<CellView>(() => meterCell(
@@ -144,14 +187,29 @@ const diskCell = computed<CellView>(() => meterCell(
   `${formatBytes(props.card.metrics.diskUsedBytes)} / ${formatBytes(props.card.metrics.diskTotalBytes)}`,
 ));
 
+const networkDownCell = computed<CellView>(() => plainCell(
+  'load',
+  t('overviewPage.metricNetworkDown'),
+  metricsUsable.value ? props.card.metrics.rxBytesPerSecond : null,
+  metricsUsable.value ? formatRate(props.card.metrics.rxBytesPerSecond) : '—',
+  !metricsUsable.value,
+));
+
+const networkUpCell = computed<CellView>(() => plainCell(
+  'load',
+  t('overviewPage.metricNetworkUp'),
+  metricsUsable.value ? props.card.metrics.txBytesPerSecond : null,
+  metricsUsable.value ? formatRate(props.card.metrics.txBytesPerSecond) : '—',
+  !metricsUsable.value,
+));
+
 const rowPairs = computed<Array<[CellView, CellView]>>(() => [
   [cpuCell.value, loadCell.value],
   [memoryCell.value, diskCell.value],
+  [diskReadCell.value, diskWriteCell.value],
+  [networkDownCell.value, networkUpCell.value],
   [latencyCell.value, lossCell.value],
 ]);
-
-const rxText = computed(() => (metricsUsable.value ? formatRate(props.card.metrics.rxBytesPerSecond) : '—'));
-const txText = computed(() => (metricsUsable.value ? formatRate(props.card.metrics.txBytesPerSecond) : '—'));
 
 function openDetails() {
   void router.push({ path: '/servers', query: { server: props.card.server.id } });
@@ -168,7 +226,7 @@ function openImages() {
 
 <template>
   <article
-    class="motion-reveal grid min-w-0 content-start gap-2 rounded-xl border border-border bg-card p-3"
+    class="motion-reveal grid min-w-0 content-start gap-3.5 rounded-xl border border-border bg-card p-4"
     data-testid="server-card"
   >
     <header class="flex min-w-0 items-start justify-between gap-2">
@@ -207,21 +265,10 @@ function openImages() {
       </div>
     </header>
 
-    <div class="grid min-w-0 gap-2">
-      <div v-for="(pair, index) in rowPairs" :key="index" class="grid min-w-0 grid-cols-2 gap-x-4">
+    <div class="grid min-w-0 gap-3">
+      <div v-for="(pair, index) in rowPairs" :key="index" class="grid min-w-0 grid-cols-2 gap-x-5">
         <MetricCell v-bind="pair[0]" />
         <MetricCell v-bind="pair[1]" />
-      </div>
-
-      <div class="flex min-w-0 items-center gap-4 border-t border-border pt-2 text-[11px] leading-4">
-        <span class="flex min-w-0 items-center gap-1 text-muted-foreground">
-          <span aria-hidden="true">↓</span>
-          <span class="shrink-0 tabular-nums text-foreground">{{ rxText }}</span>
-        </span>
-        <span class="flex min-w-0 items-center gap-1 text-muted-foreground">
-          <span aria-hidden="true">↑</span>
-          <span class="shrink-0 tabular-nums text-foreground">{{ txText }}</span>
-        </span>
       </div>
     </div>
   </article>

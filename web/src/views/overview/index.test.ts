@@ -69,7 +69,7 @@ function series(cpu = 23.5) {
     cpu: [{ time: hourIso(1), usagePercent: cpu }],
     memory: [{ time, usedBytes: 4 * 1024 ** 3, totalBytes: 8 * 1024 ** 3 }],
     diskCurrent: { time, usedBytes: 63, totalBytes: 100 },
-    diskIo: [],
+    diskIo: [{ time, readBytesPerSecond: 1536 * 1024, writeBytesPerSecond: 512 * 1024 }],
     network: [{ time, rxBytesPerSecond: 1, txBytesPerSecond: 1 }],
     load: [{ time: hourIso(1), load1: 0.42, load5: 0.3, load15: 0.2 }],
     latest: {
@@ -168,6 +168,9 @@ describe('overview status page', () => {
     expect(wrapper.text()).toContain('63%');
     expect(wrapper.text()).toContain('12.0 MB/s');
     expect(wrapper.text()).toContain('3.0 MB/s');
+    expect(wrapper.text()).toContain('Disk read');
+    expect(wrapper.text()).toContain('Disk write');
+    expect(wrapper.text()).toContain('1.5 MB/s');
     expect(wrapper.text()).not.toContain('Edit');
     expect(wrapper.text()).not.toContain('10.0.0.1:22');
     expect(wrapper.text()).not.toContain('Network overview');
@@ -175,10 +178,14 @@ describe('overview status page', () => {
     const cards = wrapper.findAll('[data-testid="server-card"]');
     expect(cards).toHaveLength(2);
     expect(cards[0]!.text()).toContain('Probe source');
-    // 探测源卡片不显示延迟/丢包历史条（只有 CPU + 负载两条）。
-    expect(cards[0]!.findAll('[data-testid="history-strip"]')).toHaveLength(2);
-    expect(cards[1]!.findAll('[data-testid="history-strip"]')).toHaveLength(4);
-    expect(wrapper.findAll('[data-testid="history-strip"]')).toHaveLength(6);
+    // 探测源卡片仍显示延迟/丢包占位控件，但不发起历史数据请求、不画历史条。
+    expect(cards[0]!.text()).toContain('Latency');
+    expect(cards[0]!.text()).toContain('Packet loss');
+    expect(cards[0]!.findAll('[data-testid="metric-placeholder"]')).toHaveLength(2);
+    expect(cards[1]!.findAll('[data-testid="metric-placeholder"]')).toHaveLength(0);
+    expect(cards[0]!.findAll('[data-testid="history-strip"]')).toHaveLength(1);
+    expect(cards[1]!.findAll('[data-testid="history-strip"]')).toHaveLength(3);
+    expect(wrapper.findAll('[data-testid="history-strip"]')).toHaveLength(4);
     // 状态用颜色点表达，但必须保留读屏文本。
     expect(cards[0]!.find('.sr-only').text()).toBe('Online');
   });

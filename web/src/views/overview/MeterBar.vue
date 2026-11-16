@@ -20,7 +20,7 @@ const barClass: Record<MetricTone, string> = {
 </script>
 
 <template>
-  <div class="h-1.5 min-w-0 overflow-hidden rounded-full bg-muted" role="progressbar" :aria-label="label" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="Math.round(width)">
+  <div class="h-2 min-w-0 overflow-hidden rounded-full bg-muted" role="progressbar" :aria-label="label" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="Math.round(width)">
     <span
       class="block h-full rounded-full transition-[width] duration-300"
       :class="tone ? barClass[tone] : 'bg-muted-foreground/30'"
