@@ -25,6 +25,17 @@ describe('serversApi', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/servers/srv-main/metrics?range=1h', expect.any(Object));
   });
 
+  it('requests bucketed metrics with the range bucket used by the overview charts', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      data: { range: '1d', cpu: [], memory: [], diskIo: [], diskCurrent: null, network: [], load: [] },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await serversApi.metricsBucketed('srv-main', '1d', 300);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/servers/srv-main/metrics?range=1d&bucket=300', expect.any(Object));
+  });
+
   it('requests the per-node tailscale apply endpoint and returns the task receipt', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: { taskId: 'task-tailscale-apply-1' } }), { status: 202, headers: { 'Content-Type': 'application/json' } }));
     vi.stubGlobal('fetch', fetchMock);

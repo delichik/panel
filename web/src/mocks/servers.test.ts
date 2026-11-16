@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createServer, deleteServer, MockServerProxyError, mockServers, probeServer, updateServer } from './servers';
+import { createServer, deleteServer, MockServerProxyError, mockServerMetrics, mockServers, probeServer, updateServer } from './servers';
 import type { ServerSaveInput } from '@/types/servers';
 
 function input(overrides: Partial<ServerSaveInput> = {}): ServerSaveInput {
@@ -121,5 +121,17 @@ describe('servers mock proxy behavior', () => {
       proxyMode: 'socks5',
       socks5Address: 'bad',
     }), 'server_proxy_socks5_address_invalid');
+  });
+
+  it('serves bucketed metrics with a latest sample and non-linear history for chart review', () => {
+    const bucketed = mockServerMetrics('srv-edge-sgp', '1d', 300)!;
+    expect(bucketed.latest?.time).toBe(bucketed.cpu.at(-1)?.time);
+    expect(bucketed.cpu.length).toBeGreaterThan(24);
+    expect(new Set(bucketed.cpu.map((point) => point.usagePercent)).size).toBeGreaterThan(10);
+    expect(bucketed.diskIo.length).toBeLessThan(bucketed.cpu.length);
+    expect(bucketed.diskCurrent?.totalBytes).toBeGreaterThan(0);
+
+    const raw = mockServerMetrics('srv-edge-sgp', '1h')!;
+    expect(raw.latest).toBeUndefined();
   });
 });

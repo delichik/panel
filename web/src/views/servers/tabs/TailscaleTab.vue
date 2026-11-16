@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import Badge from '@/components/ui/Badge.vue';
-import Switch from '@/components/ui/Switch.vue';
 import { useI18n } from '@/i18n';
 import type { ServerDto } from '@/types/servers';
 import { formatDateTime } from '@/utils/datetime';
@@ -16,15 +15,25 @@ const { t } = useI18n();
       <div class="flex min-w-0 flex-wrap items-center justify-between gap-2 border-b border-border pb-4">
         <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.tailscale.title') }}</h3>
         <Badge v-if="server.tailscaleEnabled" :tone="tailscaleTone(server)">{{ t(tailscaleStatusKey(server)) }}</Badge>
+        <Badge v-else tone="neutral">{{ t('serversPage.tailscale.notEnabled') }}</Badge>
       </div>
       <p v-if="!server.tailscaleEnabled" class="m-0 text-sm text-muted-foreground">{{ t('serversPage.tailscale.disabledHint') }}</p>
       <template v-else>
         <p class="m-0 text-xs text-muted-foreground">{{ t('serversPage.tailscale.applyHint') }}</p>
-        <div class="grid gap-2 text-sm">
-          <label class="flex items-center justify-between gap-3">{{ t('serversPage.tailscale.enabled') }}<Switch :model-value="server.tailscaleEnabled" disabled :label="t('serversPage.tailscale.enabled')" /></label>
-          <label class="flex items-center justify-between gap-3">{{ t('serversPage.tailscale.preferAgent') }}<Switch :model-value="server.tailscalePreferAgent" disabled :label="t('serversPage.tailscale.preferAgent')" /></label>
-          <label class="flex items-center justify-between gap-3">{{ t('serversPage.tailscale.preferInterconnect') }}<Switch :model-value="server.tailscalePreferInterconnect" disabled :label="t('serversPage.tailscale.preferInterconnect')" /></label>
-        </div>
+        <dl class="grid gap-2 text-sm">
+          <div class="flex items-center justify-between gap-3">
+            <dt>{{ t('serversPage.tailscale.enabled') }}</dt>
+            <dd><Badge tone="success">{{ t('serversPage.preferenceEnabled') }}</Badge></dd>
+          </div>
+          <div class="flex items-center justify-between gap-3">
+            <dt>{{ t('serversPage.tailscale.preferAgent') }}</dt>
+            <dd><Badge :tone="server.tailscalePreferAgent ? 'success' : 'neutral'">{{ t(server.tailscalePreferAgent ? 'serversPage.preferenceEnabled' : 'serversPage.preferenceDisabled') }}</Badge></dd>
+          </div>
+          <div class="flex items-center justify-between gap-3">
+            <dt>{{ t('serversPage.tailscale.preferInterconnect') }}</dt>
+            <dd><Badge :tone="server.tailscalePreferInterconnect ? 'success' : 'neutral'">{{ t(server.tailscalePreferInterconnect ? 'serversPage.preferenceEnabled' : 'serversPage.preferenceDisabled') }}</Badge></dd>
+          </div>
+        </dl>
         <dl class="grid grid-cols-2 gap-3 border-t border-border pt-4 text-sm max-md:grid-cols-1">
           <div><dt>{{ t('serversPage.tailscale.hostname') }}</dt><dd>{{ tailscaleTrait(server, 'hostname') || t('common.notAvailable') }}</dd></div>
           <div><dt>{{ t('serversPage.tailscale.updatedAt') }}</dt><dd>{{ formatDateTime(tailscaleTrait(server, 'updatedAt'), t('common.never')) }}</dd></div>

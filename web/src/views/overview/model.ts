@@ -1,6 +1,7 @@
 import type { ServerMetricsSeries } from '@/api/servers';
 import type { NetworkProbeHistoryPoint, NetworkProbeResult } from '@/types/networkProbe';
 import type { ServerDto } from '@/types/servers';
+import { formatPercent as sharedFormatPercent } from '@/utils/metrics';
 
 /** 指标新鲜度窗口：与后端 probe 口径一致（5 分钟）。 */
 export const METRICS_FRESH_WINDOW_MS = 5 * 60 * 1000;
@@ -362,8 +363,7 @@ export function diskPercent(view: ServerMetricsView): number | null {
 }
 
 export function formatPercent(value: number | null | undefined, digits = 0): string {
-  if (value === null || value === undefined || !Number.isFinite(value)) return '—';
-  return `${value.toFixed(digits)}%`;
+  return sharedFormatPercent(value, digits);
 }
 
 export function formatLatency(value: number | null | undefined): string {
@@ -381,20 +381,4 @@ export function formatLoad(value: number | null | undefined): string {
   return value.toFixed(2);
 }
 
-const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
-
-export function formatBytes(value: number | null | undefined): string {
-  if (value === null || value === undefined || !Number.isFinite(value) || value < 0) return '—';
-  let scaled = value;
-  let unit = 0;
-  while (scaled >= 1024 && unit < BYTE_UNITS.length - 1) {
-    scaled /= 1024;
-    unit += 1;
-  }
-  return `${scaled >= 100 || unit === 0 ? scaled.toFixed(0) : scaled.toFixed(1)} ${BYTE_UNITS[unit]}`;
-}
-
-export function formatRate(value: number | null | undefined): string {
-  const formatted = formatBytes(value);
-  return formatted === '—' ? '—' : `${formatted}/s`;
-}
+export { formatBytes, formatRate } from '@/utils/metrics';

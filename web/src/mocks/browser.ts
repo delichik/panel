@@ -299,7 +299,8 @@ export function installMockApi() {
     const metricsMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)\/metrics$/);
     if (metricsMatch && method(init) === 'GET') {
       const range = url.searchParams.get('range') ?? '1h';
-      const series = mockServerMetrics(decodeURIComponent(metricsMatch[1]), range);
+      const bucket = Number(url.searchParams.get('bucket') ?? 0);
+      const series = mockServerMetrics(decodeURIComponent(metricsMatch[1]), range, Number.isFinite(bucket) && bucket > 0 ? bucket : 0);
       return series ? json(series) : error('server_not_found', 'Server was not found.', 404);
     }
     const serverNetworkProbesMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)\/network-probes$/);

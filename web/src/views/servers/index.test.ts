@@ -11,8 +11,18 @@ enableAutoUnmount(afterEach);
 const listPage = vi.fn();
 const get = vi.fn();
 const metrics = vi.fn();
+const metricsBucketed = vi.fn();
 const containers = vi.fn();
 const list = vi.fn();
+
+// jsdom 无 canvas：图表本体只验证挂载契约，具体选项由 metricsModel 单测覆盖。
+vi.mock('@/components/patterns/MetricChart.vue', () => ({
+  default: {
+    name: 'MetricChart',
+    props: ['series', 'valueKind', 'thresholds', 'label'],
+    template: '<div data-testid="metric-chart" />',
+  },
+}));
 
 vi.mock('@/api/servers', () => ({
   serversApi: {
@@ -22,6 +32,7 @@ vi.mock('@/api/servers', () => ({
     test: vi.fn(),
     delete: vi.fn(),
     metrics: (...args: unknown[]) => metrics(...args),
+    metricsBucketed: (...args: unknown[]) => metricsBucketed(...args),
     networkProbes: vi.fn().mockResolvedValue({ serverId: 'srv-1', enabled: false, nodes: [], results: [], updatedAt: null }),
     deployAgent: vi.fn(),
     restart: vi.fn(),
@@ -126,6 +137,21 @@ async function mountPage() {
   return { wrapper, router };
 }
 
+async function mountAtQuery(query: Record<string, string>) {
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/servers', component: ServersPage }] });
+  await router.push({ path: '/servers', query });
+  await router.isReady();
+  const wrapper = mount(ServersPage, {
+    global: {
+      plugins: [router],
+      provide: { [toastKey as symbol]: { push: vi.fn(), remove: vi.fn() } },
+    },
+    attachTo: document.body,
+  });
+  await flushPromises();
+  return { wrapper, router };
+}
+
 beforeEach(() => {
   useI18n().setLocale('en');
   vi.clearAllMocks();
@@ -133,6 +159,7 @@ beforeEach(() => {
   list.mockResolvedValue([]);
   get.mockResolvedValue(server);
   metrics.mockResolvedValue({ cpu: [], memory: [], diskIo: [], diskCurrent: null, network: [], load: [] });
+  metricsBucketed.mockResolvedValue({ cpu: [], memory: [], diskIo: [], diskCurrent: null, network: [], load: [] });
   containers.mockResolvedValue({ items: [], observedAt: null, stale: false, refreshing: false });
 });
 
@@ -215,6 +242,25 @@ describe('servers page table and covered detail', () => {
 
     expect(wrapper.findAll('[role="tab"]').find((tab) => tab.text() === 'Resources')?.attributes('aria-selected')).toBe('true');
     expect(wrapper.findAll('[role="tab"]').find((tab) => tab.text() === 'Images')?.attributes('aria-selected')).toBe('true');
+  });
+
+  it('maps the legacy metrics deep link onto the merged overview tab', async () => {
+    const { wrapper } = await mountAtQuery({ server: 'srv-1', tab: 'metrics' });
+    expect(wrapper.findAll('[role="tab"]').find((tab) => tab.text() === 'Overview')?.attributes('aria-selected')).toBe('true');
+    expect(wrapper.findAll('[role="tab"]').some((tab) => tab.text() === 'Metrics')).toBe(false);
+    expect(metricsBucketed).toHaveBeenCalledWith('srv-1', '1h', 60, expect.anything());
+  });
+
+  it('maps legacy agent and probes deep links onto system and network-security subtabs', async () => {
+    const agentPage = await mountAtQuery({ server: 'srv-1', tab: 'agent' });
+    expect(agentPage.wrapper.findAll('[role="tab"]').find((tab) => tab.text() === 'System')?.attributes('aria-selected')).toBe('true');
+    expect(agentPage.wrapper.findAll('[role="tab"]').find((tab) => tab.text() === 'Agent')?.attributes('aria-selected')).toBe('true');
+  });
+
+  it('maps the legacy probes deep link onto the network-security tab', async () => {
+    const { wrapper } = await mountAtQuery({ server: 'srv-1', tab: 'probes' });
+    expect(wrapper.findAll('[role="tab"]').find((tab) => tab.text() === 'Network & security')?.attributes('aria-selected')).toBe('true');
+    expect(wrapper.findAll('[role="tab"]').find((tab) => tab.text() === 'Network probes')?.attributes('aria-selected')).toBe('true');
   });
 
   it('loads every server as an SSH tunnel candidate instead of only the current page', async () => {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { KeyRound } from '@lucide/vue';
-import { serversApi } from '@/api/servers';
+import { serversApi, type ServerMetricsSeries } from '@/api/servers';
 import { tasksApi } from '@/api/tasks';
 import ActivityLink from '@/components/activity/ActivityLink.vue';
 import Badge from '@/components/ui/Badge.vue';
@@ -15,21 +15,14 @@ import type { ServerDto } from '@/types/servers';
 import type { TaskDto } from '@/types/tasks';
 import { formatDateTime } from '@/utils/datetime';
 import { createLatestRequestGuard, isAbortError } from '@/views/_shared/requestState';
+import MetricsPanel from './MetricsPanel.vue';
+import OverviewSummary from './OverviewSummary.vue';
 import {
   credentialLabel,
-  privilegeStatusKey,
   proxyErrorKey,
   proxyModeLabelKey,
   proxyTunnelDisplayName,
-  reportDisconnectCount1h,
-  reportStabilityGrade,
-  reportStabilityStatusKey,
-  reportStabilityTone,
-  reportStreamStatusKey,
-  reportStreamTone,
   serverProxyMode,
-  serverSummaryStatusKey,
-  serverSummaryTone,
 } from '../model';
 
 const props = defineProps<{ server: ServerDto; credentials: CredentialDto[]; active: boolean }>();
@@ -41,6 +34,7 @@ const notifySuccess = useSuccessToast();
 const initialTask = ref<TaskDto | null>(null);
 const initialTaskLoading = ref(false);
 const initialTaskError = ref('');
+const metricsSnapshot = ref<ServerMetricsSeries | null>(null);
 const trustHostKeyOpen = ref(false);
 const trusting = ref(false);
 
@@ -49,8 +43,6 @@ let initialTaskInFlight = false;
 let pollTimer: number | undefined;
 
 const credentialName = computed(() => credentialLabel(props.server.credentialId, props.credentials));
-const reportDisconnectCount = computed(() => reportDisconnectCount1h(props.server));
-const hasReportStability = computed(() => Boolean(reportStabilityGrade(props.server)));
 const hostKeyMismatch = computed(() => Boolean(props.server.hostKeyMismatch));
 const proxyMode = computed(() => serverProxyMode(props.server));
 const proxyModeLabel = computed(() => t(proxyModeLabelKey(props.server.proxyMode)));
@@ -137,83 +129,70 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="h-full min-h-0 overflow-y-auto pr-1">
-    <div v-if="hostKeyMismatch || server.lastError" class="mb-4 grid gap-2">
-      <div v-if="hostKeyMismatch" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
-        <div class="flex flex-wrap items-start justify-between gap-3">
-          <div class="grid min-w-0 gap-1">
-            <strong>{{ t('serversPage.hostKeyMismatchTitle') }}</strong>
-            <p class="m-0">{{ t('serversPage.hostKeyMismatchDescription') }}</p>
-          </div>
-          <Button size="sm" variant="danger" @click="trustHostKeyOpen = true"><KeyRound />{{ t('serversPage.trustHostKey') }}</Button>
-        </div>
-      </div>
-      <div v-if="server.lastError" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ server.lastError }}</div>
-    </div>
-
-    <div class="grid content-start gap-6">
-      <section class="grid gap-3 border-b border-border pb-5">
-        <div class="flex flex-wrap items-center justify-between gap-2">
-          <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.privilegeAndSecurity') }}</h3>
-          <Badge :tone="serverSummaryTone(server)">{{ t(serverSummaryStatusKey(server)) }}</Badge>
-        </div>
-        <p class="m-0 text-sm text-muted-foreground">{{ server.os?.prettyName || t('common.notAvailable') }} · {{ server.architecture || t('common.notAvailable') }} · {{ t(privilegeStatusKey(server)) }}</p>
-      </section>
-
-      <section class="grid gap-3 border-b border-border pb-5">
-        <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.connection') }}</h3>
-        <dl class="grid grid-cols-2 gap-3 text-sm max-md:grid-cols-1">
-          <div><dt>{{ t('serversPage.host') }}</dt><dd>{{ server.host }}</dd></div>
-          <div><dt>{{ t('serversPage.port') }}</dt><dd>{{ server.port }}</dd></div>
-          <div><dt>{{ t('serversPage.credential') }}</dt><dd>{{ credentialName || t('common.notAvailable') }}</dd></div>
-          <div><dt>{{ t('serversPage.dockerHost') }}</dt><dd>{{ server.dockerHost || t('common.notAvailable') }}</dd></div>
-          <div><dt>{{ t('serversPage.ipv4') }}</dt><dd>{{ server.ipv4 || t('common.notAvailable') }}</dd></div>
-          <div><dt>{{ t('serversPage.ipv6') }}</dt><dd>{{ server.ipv6 || t('common.notAvailable') }}</dd></div>
-          <div class="grid gap-1">
-            <dt>{{ t('serversPage.proxy.label') }}</dt>
-            <dd class="flex flex-wrap items-center gap-2">
-              <span :class="proxyInvalid ? 'text-warning' : undefined">
-                {{ proxyModeLabel }}<template v-if="proxyDetail"> · <span class="panel-mono break-all">{{ proxyDetail }}</span></template>
-              </span>
-              <Badge v-if="proxyInvalid" tone="warning">{{ t(proxyErrorKey(server)) }}</Badge>
-            </dd>
-          </div>
-          <div class="grid gap-1">
-            <dt>{{ t('serversPage.reportStream.label') }}</dt>
-            <dd><Badge :tone="reportStreamTone(server)">{{ t(reportStreamStatusKey(server)) }}</Badge></dd>
-          </div>
-          <div class="grid gap-1">
-            <dt>{{ t('serversPage.reportStability.label') }}</dt>
-            <dd class="flex flex-wrap items-center gap-2">
-              <Badge :tone="reportStabilityTone(server)">{{ t(reportStabilityStatusKey(server)) }}</Badge>
-              <span v-if="hasReportStability && reportDisconnectCount != null" class="text-muted-foreground">{{ t('serversPage.reportStability.disconnects1h', { count: reportDisconnectCount }) }}</span>
-            </dd>
-          </div>
-        </dl>
-      </section>
-
-      <section class="grid gap-3">
-        <div class="flex flex-wrap items-center justify-between gap-2">
-          <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.recentOperations') }}</h3>
-          <ActivityLink resource-type="server" :resource-id="server.id" />
-        </div>
-        <div class="grid gap-2 text-sm text-muted-foreground">
-          <span>{{ t('serversPage.lastChecked') }}: {{ formatDateTime(server.lastCheckedAt) || t('common.never') }}</span>
-          <span>{{ t('serversPage.updatedAt') }}: {{ formatDateTime(server.updatedAt) || t('common.never') }}</span>
-          <div v-if="initialTask || server.initialTaskId" class="grid gap-1">
-            <div class="flex flex-wrap items-center justify-between gap-2">
-              <span>{{ t('serversPage.initialTask') }}</span>
-              <span class="flex items-center gap-2">
-                <StatusBadge v-if="initialTask" :status="initialTask.status" domain="task" :label="t(`tasksPage.status.${initialTask.status}`)" />
-                <ActivityLink v-if="server.initialTaskId" :execution-id="server.initialTaskId" />
-              </span>
+    <div class="grid content-start gap-4">
+      <div v-if="hostKeyMismatch || server.lastError" class="grid gap-2">
+        <div v-if="hostKeyMismatch" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
+          <div class="flex flex-wrap items-start justify-between gap-3">
+            <div class="grid min-w-0 gap-1">
+              <strong>{{ t('serversPage.hostKeyMismatchTitle') }}</strong>
+              <p class="m-0">{{ t('serversPage.hostKeyMismatchDescription') }}</p>
             </div>
-            <span class="panel-mono text-xs">{{ server.initialTaskId }}</span>
-            <p v-if="initialTaskLoading && !initialTask" class="m-0 text-xs">{{ t('serversPage.agentTaskLoading') }}</p>
-            <p v-if="initialTaskError" class="m-0 break-words text-danger">{{ initialTaskError }}</p>
-            <p v-else-if="initialTask?.error" class="m-0 break-words text-danger">{{ initialTask.error }}</p>
+            <Button size="sm" variant="danger" @click="trustHostKeyOpen = true"><KeyRound />{{ t('serversPage.trustHostKey') }}</Button>
           </div>
         </div>
-      </section>
+        <div v-if="server.lastError" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ server.lastError }}</div>
+      </div>
+
+      <OverviewSummary :server="server" :metrics="metricsSnapshot" />
+
+      <MetricsPanel :server="server" @metrics-loaded="metricsSnapshot = $event" />
+
+      <div class="grid gap-4 border-t border-border pt-4 lg:grid-cols-2">
+        <section class="grid gap-2">
+          <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.connection') }}</h3>
+          <dl class="grid grid-cols-2 gap-x-4 gap-y-2 text-sm max-sm:grid-cols-1">
+            <div class="min-w-0"><dt>{{ t('serversPage.host') }}</dt><dd>{{ server.host }}</dd></div>
+            <div class="min-w-0"><dt>{{ t('serversPage.port') }}</dt><dd>{{ server.port }}</dd></div>
+            <div class="min-w-0"><dt>{{ t('serversPage.credential') }}</dt><dd>{{ credentialName || t('common.notAvailable') }}</dd></div>
+            <div class="min-w-0"><dt>{{ t('serversPage.dockerHost') }}</dt><dd>{{ server.dockerHost || t('common.notAvailable') }}</dd></div>
+            <div class="min-w-0"><dt>{{ t('serversPage.ipv4') }}</dt><dd>{{ server.ipv4 || t('common.notAvailable') }}</dd></div>
+            <div class="min-w-0"><dt>{{ t('serversPage.ipv6') }}</dt><dd>{{ server.ipv6 || t('common.notAvailable') }}</dd></div>
+            <div class="col-span-2 min-w-0 max-sm:col-span-1">
+              <dt>{{ t('serversPage.proxy.label') }}</dt>
+              <dd>
+                <span :class="proxyInvalid ? 'text-warning' : undefined">
+                  {{ proxyModeLabel }}<template v-if="proxyDetail"> · <span class="panel-mono break-all">{{ proxyDetail }}</span></template>
+                </span>
+                <Badge v-if="proxyInvalid" tone="warning">{{ t(proxyErrorKey(server)) }}</Badge>
+              </dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="grid content-start gap-2">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.recentOperations') }}</h3>
+            <ActivityLink resource-type="server" :resource-id="server.id" />
+          </div>
+          <div class="grid gap-2 text-sm text-muted-foreground">
+            <span>{{ t('serversPage.updatedAt') }}: {{ formatDateTime(server.updatedAt) || t('common.never') }}</span>
+            <div v-if="initialTask || server.initialTaskId" class="grid gap-1">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <span>{{ t('serversPage.initialTask') }}</span>
+                <span class="flex items-center gap-2">
+                  <StatusBadge v-if="initialTask" :status="initialTask.status" domain="task" :label="t(`tasksPage.status.${initialTask.status}`)" />
+                  <ActivityLink v-if="server.initialTaskId" :execution-id="server.initialTaskId" />
+                </span>
+              </div>
+              <span class="panel-mono text-xs">{{ server.initialTaskId }}</span>
+              <p v-if="initialTaskLoading && !initialTask" class="m-0 text-xs">{{ t('serversPage.agentTaskLoading') }}</p>
+              <p v-if="initialTaskError" class="m-0 break-words text-danger">{{ initialTaskError }}</p>
+              <p v-else-if="initialTask?.error" class="m-0 break-words text-danger">{{ initialTask.error }}</p>
+            </div>
+            <span v-else class="text-xs">{{ t('serversPage.agentTaskNoHistory') }}</span>
+          </div>
+        </section>
+      </div>
     </div>
 
     <ConfirmDialog
@@ -236,7 +215,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 dt {
-  margin: 0 0 4px;
+  margin: 0 0 2px;
   color: var(--panel-text-muted);
   font-size: 12px;
 }

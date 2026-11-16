@@ -400,31 +400,85 @@ export function accepted(prefix: string): OperationAccepted {
   return { taskId: `${prefix}-${Date.now()}` };
 }
 
-export function mockServerMetrics(id: string, range: string = '1h'): ServerMetricsSeries | null {
+export function mockServerMetrics(id: string, range: string = '1h', bucketSeconds = 0): ServerMetricsSeries | null {
   const serverIndex = mockServers.findIndex((server) => server.id === id);
   if (serverIndex < 0) return null;
   const durations: Record<string, number> = { '1h': 3_600_000, '6h': 21_600_000, '1d': 86_400_000, '7d': 604_800_000 };
   const duration = durations[range] ?? 3_600_000;
-  const count = range === '7d' ? 28 : 24;
-  const step = duration / (count - 1);
-  const now = Date.now();
-  const points = Array.from({ length: count }, (_, index) => new Date(now - (count - 1 - index) * step).toISOString());
+  // 与后端桶查询保持同一形状：传 bucket 时按桶返回并附加 latest 当前样本。
+  const fallbackStep = range === '7d' ? 3_600 : range === '1d' ? 900 : range === '6h' ? 300 : 60;
+  const stepSeconds = bucketSeconds > 0 ? bucketSeconds : fallbackStep;
+  const count = Math.max(2, Math.floor(duration / (stepSeconds * 1000)) + 1);
+  const now = Math.floor(Date.now() / 1000) * 1000;
+  const points = Array.from({ length: count }, (_, index) => new Date(now - (count - 1 - index) * stepSeconds * 1000).toISOString());
   const seed = serverIndex + 1;
+  const phase = seed * 0.7;
+  const memoryTotalBytes = (8 + seed * 2) * 1024 ** 3;
   const diskTotalBytes = (120 + seed * 40) * 1024 ** 3;
+
+  const cpu = points.map((time, index) => {
+    const wave = 26 + Math.sin(index / 6 + phase) * 13 + Math.sin(index / 17 + phase) * 6;
+    const spike = index % 41 > 36 ? (index % 41) * 1.6 : 0;
+    return { time, usagePercent: clampNumber(wave + spike + seededNoise(index, seed) * 5, 2, 98) };
+  });
+  const memoryUsedAt = (index: number) => clampNumber(memoryTotalBytes * (0.42 + Math.sin(index / 11 + phase) * 0.05 + index * 0.0012), memoryTotalBytes * 0.2, memoryTotalBytes * 0.95);
+  const memory = points.map((time, index) => ({ time, usedBytes: Math.round(memoryUsedAt(index)), totalBytes: memoryTotalBytes }));
+  const diskCurrentUsed = Math.round(diskTotalBytes * (0.34 + seed * 0.02));
+  const diskCurrent = { time: points.at(-1) ?? new Date().toISOString(), usedBytes: diskCurrentUsed, totalBytes: diskTotalBytes };
+  const diskIo = points.flatMap((time, index) => {
+    // 每隔一段缺测：图表应按时间轴断线，而不是把缺测补成 0。
+    if (index > 0 && index % 29 === 0) return [];
+    const burst = index % 23 < 3 ? 4_200_000 : 0;
+    return [{
+      time,
+      readBytesPerSecond: Math.max(0, 760_000 + seed * 120_000 + Math.sin(index / 5 + phase) * 420_000 + burst + seededNoise(index + 7, seed) * 140_000),
+      writeBytesPerSecond: Math.max(0, 320_000 + seed * 80_000 + Math.sin(index / 8 + phase) * 220_000 + seededNoise(index + 3, seed) * 90_000),
+    }];
+  });
+  const network = points.map((time, index) => ({
+    time,
+    rxBytesPerSecond: Math.max(0, 92_000 + seed * 16_000 + Math.sin(index / 7 + phase) * 64_000 + (index % 37 < 2 ? 1_100_000 : 0) + seededNoise(index + 11, seed) * 32_000),
+    txBytesPerSecond: Math.max(0, 48_000 + seed * 9_000 + Math.sin(index / 12 + phase) * 28_000 + seededNoise(index + 5, seed) * 16_000),
+  }));
+  const load = points.map((time, index) => ({
+    time,
+    load1: Math.max(0, 0.35 + seed * 0.08 + Math.sin(index / 9 + phase) * 0.18),
+    load5: Math.max(0, 0.32 + seed * 0.07 + Math.sin(index / 12 + phase) * 0.14),
+    load15: Math.max(0, 0.3 + seed * 0.06 + Math.sin(index / 15 + phase) * 0.1),
+  }));
+
+  const latest = bucketSeconds > 0 ? {
+    time: points.at(-1) ?? new Date().toISOString(),
+    cpuUsagePercent: cpu.at(-1)?.usagePercent ?? 0,
+    memoryUsedBytes: memory.at(-1)?.usedBytes ?? 0,
+    memoryTotalBytes,
+    diskUsedBytes: diskCurrentUsed,
+    diskTotalBytes,
+    diskSampledAt: diskCurrent.time,
+    load1: load.at(-1)?.load1 ?? 0,
+    rxBytesPerSecond: network.at(-1)?.rxBytesPerSecond ?? 0,
+    txBytesPerSecond: network.at(-1)?.txBytesPerSecond ?? 0,
+  } : undefined;
+
   return {
     range,
-    cpu: points.map((time, index) => ({ time, usagePercent: Math.min(96, 12 + seed * 3 + index * 1.7) })),
-    memory: points.map((time, index) => ({ time, usedBytes: (3.5 + seed * 0.7 + index * 0.09) * 1024 ** 3, totalBytes: (8 + seed * 2) * 1024 ** 3 })),
-    // 磁盘只保留当前值（最近一次有效采样），不再返回历史曲线。
-    diskCurrent: { time: points.at(-1) ?? new Date().toISOString(), usedBytes: diskTotalBytes * (0.36 + seed * 0.02), totalBytes: diskTotalBytes },
-    diskIo: points.map((time, index) => ({
-      time,
-      readBytesPerSecond: 820_000 + seed * 240_000 + index * 53_000,
-      writeBytesPerSecond: 410_000 + seed * 150_000 + index * 31_000,
-    })),
-    network: points.map((time, index) => ({ time, rxBytesPerSecond: 64_000 + seed * 19_000 + index * 4_200, txBytesPerSecond: 42_000 + seed * 13_000 + index * 3_100 })),
-    load: points.map((time, index) => ({ time, load1: 0.25 + seed * 0.11 + index * 0.018, load5: 0.22 + seed * 0.09 + index * 0.014, load15: 0.2 + seed * 0.07 + index * 0.01 })),
+    cpu,
+    memory,
+    diskCurrent,
+    diskIo,
+    network,
+    load,
+    latest,
   };
+}
+
+function seededNoise(index: number, seed: number) {
+  const value = Math.sin((index + 1) * 12.9898 + seed * 78.233) * 43758.5453;
+  return (value - Math.floor(value)) * 2 - 1;
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 export function createCredential(input: CredentialDto): CredentialDto {

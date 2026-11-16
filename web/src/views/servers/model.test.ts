@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentTone, connectionHost, connectionSignature, credentialReferences, hasBlockingPairIssues, isLegacyResourceTab, mergeServerCandidates, normalizeServerDetailTab, normalizeServerResourceSubtab, parsePairs, probeOutcome, probeOutcomeStatusKey, probeOutcomeTone, proxyErrorKey, proxyListHintKey, proxyModeLabelKey, proxySavePayload, proxyShortLabelKey, proxyTunnelDisplayName, reportDisconnectCount1h, reportStabilityGrade, reportStabilityStatusKey, reportStabilityTone, reportStreamStatus, reportStreamStatusKey, serverDetailTabs, serverProxyMode, serverSummaryKind, serverSummaryStatusKey, serverSummaryTone, shouldShowListReportStability, tailscaleObservedStatus, tailscalePreferences, tailscaleStatusKey, tailscaleTone, tailscaleTrait, validateProbeInput, validateProxyInput, validateServerInput } from './model';
+import { agentTone, architectureLabel, connectionHost, connectionSignature, credentialReferences, hasBlockingPairIssues, isLegacyNetworkTab, isLegacyResourceTab, isLegacySystemTab, mergeServerCandidates, normalizeServerDetailTab, normalizeServerNetworkSubtab, normalizeServerResourceSubtab, normalizeServerSystemSubtab, parsePairs, probeOutcome, probeOutcomeStatusKey, probeOutcomeTone, proxyErrorKey, proxyListHintKey, proxyModeLabelKey, proxySavePayload, proxyShortLabelKey, proxyTunnelDisplayName, reportDisconnectCount1h, reportStabilityGrade, reportStabilityStatusKey, reportStabilityTone, reportStreamStatus, reportStreamStatusKey, serverDetailTabs, serverNetworkSubtabs, serverProxyMode, serverResourceSubtabs, serverSummaryKind, serverSummaryStatusKey, serverSummaryTone, serverSystemSubtabs, shouldShowListReportStability, tailscaleObservedStatus, tailscalePreferences, tailscaleStatusKey, tailscaleTone, tailscaleTrait, validateProbeInput, validateProxyInput, validateServerInput } from './model';
 import type { ServerDto, ServerProxyMode, ServerSaveInput } from '@/types/servers';
 
 const server: ServerDto = {
@@ -33,19 +33,49 @@ const proxy: { proxyMode: ServerProxyMode; tunnelServerId: string; socks5Address
 };
 
 describe('server model', () => {
-  it('keeps primary detail tabs compact and aliases legacy docker tabs to resources', () => {
-    expect(serverDetailTabs).toEqual(['overview', 'metrics', 'probes', 'agent', 'tailscale', 'resources', 'packages', 'firewall']);
-    expect(normalizeServerDetailTab('probes')).toBe('probes');
+  it('merges short detail tabs and aliases legacy tab names onto subtabs', () => {
+    expect(serverDetailTabs).toEqual(['overview', 'system', 'resources', 'network-security']);
+    expect(serverSystemSubtabs).toEqual(['agent', 'tailscale', 'packages']);
+    expect(serverResourceSubtabs).toEqual(['containers', 'images', 'networks', 'volumes']);
+    expect(serverNetworkSubtabs).toEqual(['probes', 'firewall']);
+
+    expect(normalizeServerDetailTab('metrics')).toBe('overview');
+    expect(normalizeServerDetailTab('overview')).toBe('overview');
+    expect(normalizeServerDetailTab('system')).toBe('system');
+    expect(normalizeServerDetailTab('agent')).toBe('system');
+    expect(normalizeServerDetailTab('tailscale')).toBe('system');
+    expect(normalizeServerDetailTab('packages')).toBe('system');
     expect(normalizeServerDetailTab('resources')).toBe('resources');
     expect(normalizeServerDetailTab('containers')).toBe('resources');
     expect(normalizeServerDetailTab('images')).toBe('resources');
     expect(normalizeServerDetailTab('networks')).toBe('resources');
     expect(normalizeServerDetailTab('volumes')).toBe('resources');
+    expect(normalizeServerDetailTab('probes')).toBe('network-security');
+    expect(normalizeServerDetailTab('firewall')).toBe('network-security');
+    expect(normalizeServerDetailTab('network-security')).toBe('network-security');
     expect(normalizeServerDetailTab('unknown')).toBe('overview');
+
+    expect(isLegacySystemTab('tailscale')).toBe(true);
     expect(isLegacyResourceTab('containers')).toBe(true);
+    expect(isLegacyNetworkTab('probes')).toBe(true);
+    expect(normalizeServerSystemSubtab(undefined, 'packages')).toBe('packages');
+    expect(normalizeServerSystemSubtab('tailscale')).toBe('tailscale');
+    expect(normalizeServerSystemSubtab(undefined)).toBe('agent');
     expect(normalizeServerResourceSubtab(undefined, 'images')).toBe('images');
     expect(normalizeServerResourceSubtab('volumes')).toBe('volumes');
     expect(normalizeServerResourceSubtab(undefined)).toBe('containers');
+    expect(normalizeServerNetworkSubtab('fail2ban')).toBe('firewall');
+    expect(normalizeServerNetworkSubtab(undefined, 'firewall')).toBe('firewall');
+    expect(normalizeServerNetworkSubtab('probes')).toBe('probes');
+    expect(normalizeServerNetworkSubtab(undefined)).toBe('probes');
+  });
+
+  it('renders the architecture object as readable text instead of raw JSON', () => {
+    expect(architectureLabel({ arch: 'amd64', rawMachine: 'x86_64' })).toBe('amd64 (x86_64)');
+    expect(architectureLabel({ arch: 'arm64', rawMachine: 'arm64' })).toBe('arm64');
+    expect(architectureLabel({ rawMachine: 'aarch64' })).toBe('aarch64');
+    expect(architectureLabel({})).toBe('');
+    expect(architectureLabel(undefined)).toBe('');
   });
 
   it('maps agent capabilities from real server fields', () => {

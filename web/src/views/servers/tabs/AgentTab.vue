@@ -166,11 +166,17 @@ onBeforeUnmount(() => {
 <template>
   <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4">
     <div class="flex flex-wrap items-center justify-between gap-2">
-      <div class="flex flex-wrap items-center gap-2">
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5">
         <span class="text-sm text-muted-foreground">{{ t(serverSummaryStatusKey(server)) }}</span>
-        <Badge :tone="reportStreamTone(server)">{{ t(reportStreamStatusKey(server)) }}</Badge>
-        <Badge :tone="reportStabilityTone(server)">{{ t(reportStabilityStatusKey(server)) }}</Badge>
-        <span v-if="hasReportStability && reportDisconnectCount != null" class="text-xs text-muted-foreground">{{ t('serversPage.reportStability.disconnects1h', { count: reportDisconnectCount }) }}</span>
+        <span class="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+          {{ t('serversPage.reportStream.label') }}
+          <Badge :tone="reportStreamTone(server)">{{ t(reportStreamStatusKey(server)) }}</Badge>
+        </span>
+        <span class="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+          {{ t('serversPage.reportStability.label') }}
+          <Badge :tone="reportStabilityTone(server)">{{ t(reportStabilityStatusKey(server)) }}</Badge>
+          <span v-if="hasReportStability && reportDisconnectCount != null" class="text-muted-foreground">{{ t('serversPage.reportStability.disconnects1h', { count: reportDisconnectCount }) }}</span>
+        </span>
         <StatusBadge v-if="agentTask" :status="agentTask.status" domain="task" :label="t(`tasksPage.status.${agentTask.status}`)" />
       </div>
       <div class="flex flex-wrap gap-2">
@@ -183,7 +189,7 @@ onBeforeUnmount(() => {
     <div class="relative min-h-0 overflow-y-auto">
       <LoadingOverlay v-if="loading && !agentTask" :label="t('serversPage.agentTaskLoading')" />
       <div v-if="agentTask" class="grid min-w-0 gap-3 border-t border-border pt-4 text-xs">
-        <div class="flex min-w-0 flex-wrap items-center justify-between gap-2">
+        <div v-if="agentTask.stage" class="flex min-w-0 flex-wrap items-center justify-between gap-2">
           <strong class="text-foreground">{{ t('serversPage.agentTaskCurrentStage') }}</strong>
           <span class="text-muted-foreground">{{ stageLabel(agentTask.stage) }}</span>
         </div>

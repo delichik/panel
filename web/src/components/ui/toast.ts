@@ -22,7 +22,12 @@ export interface ToastApi {
   remove(id: number): void;
 }
 
-export const toastKey: InjectionKey<ToastApi> = Symbol('toast');
+/**
+ * 使用全局 Symbol 注册表：浏览器缓存了新旧 chunk 或 Vite HMR 造成模块被重复
+ * 求值时，Symbol('toast') 会得到两个不同键，inject 便会误报 ToastProvider 缺失。
+ * Symbol.for 保证同一页面内所有模块实例解析到同一个键。
+ */
+export const toastKey: InjectionKey<ToastApi> = Symbol.for('seamark.toast') as InjectionKey<ToastApi>;
 
 export function useToast() {
   const toast = inject(toastKey);

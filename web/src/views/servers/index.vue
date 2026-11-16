@@ -33,7 +33,6 @@ import AgentTab from './tabs/AgentTab.vue';
 import ContainersTab from './tabs/ContainersTab.vue';
 import FirewallTab from './tabs/FirewallTab.vue';
 import ImagesTab from './tabs/ImagesTab.vue';
-import MetricsTab from './tabs/MetricsTab.vue';
 import NetworksTab from './tabs/NetworksTab.vue';
 import OverviewTab from './tabs/OverviewTab.vue';
 import PackagesTab from './tabs/PackagesTab.vue';
@@ -41,15 +40,21 @@ import ProbesTab from './tabs/ProbesTab.vue';
 import TailscaleTab from './tabs/TailscaleTab.vue';
 import VolumesTab from './tabs/VolumesTab.vue';
 import {
+  isLegacyNetworkTab,
   isLegacyResourceTab,
+  isLegacySystemTab,
   normalizeFirewallView,
   normalizeServerDetailTab,
+  normalizeServerNetworkSubtab,
   normalizeServerResourceSubtab,
+  normalizeServerSystemSubtab,
   canRunPrivilegedOperation,
   proxyListHintKey,
   proxyShortLabelKey,
   serverDetailTabs,
+  serverNetworkSubtabs,
   serverResourceSubtabs,
+  serverSystemSubtabs,
   reportStabilityStatusKey,
   reportStabilityTone,
   serverSummaryStatusKey,
@@ -57,7 +62,9 @@ import {
   shouldShowListReportStability,
   type FirewallView,
   type ServerDetailTab,
+  type ServerNetworkSubtab,
   type ServerResourceSubtab,
+  type ServerSystemSubtab,
 } from './model';
 
 const { t } = useI18n();
@@ -73,7 +80,9 @@ const serverDetails = ref<Record<string, ServerDto>>({});
 const credentials = ref<CredentialDto[]>([]);
 const selectedId = ref(String(route.query.server ?? ''));
 const selectedTab = ref<ServerDetailTab>(normalizeServerDetailTab(route.query.tab));
+const systemSubtab = ref<ServerSystemSubtab>(normalizeServerSystemSubtab(route.query.subtab, route.query.tab));
 const resourceSubtab = ref<ServerResourceSubtab>(normalizeServerResourceSubtab(route.query.subtab, route.query.tab));
+const networkSubtab = ref<ServerNetworkSubtab>(normalizeServerNetworkSubtab(route.query.subtab, route.query.tab));
 const firewallView = ref<FirewallView>(isDev ? normalizeFirewallView(route.query.subtab) : 'ufw');
 const search = ref(String(route.query.search ?? ''));
 const page = ref(normalizePage(route.query.page));
@@ -94,7 +103,9 @@ const restarting = ref(false);
 const detailRoot = ref<HTMLElement | null>(null);
 
 const visited = reactive<Record<ServerDetailTab, boolean>>(Object.fromEntries(serverDetailTabs.map((tab) => [tab, false])) as Record<ServerDetailTab, boolean>);
+const visitedSystem = reactive<Record<ServerSystemSubtab, boolean>>(Object.fromEntries(serverSystemSubtabs.map((tab) => [tab, false])) as Record<ServerSystemSubtab, boolean>);
 const visitedResources = reactive<Record<ServerResourceSubtab, boolean>>(Object.fromEntries(serverResourceSubtabs.map((tab) => [tab, false])) as Record<ServerResourceSubtab, boolean>);
+const visitedNetwork = reactive<Record<ServerNetworkSubtab, boolean>>(Object.fromEntries(serverNetworkSubtabs.map((tab) => [tab, false])) as Record<ServerNetworkSubtab, boolean>);
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 let detailController: AbortController | null = null;
 const listGuard = createLatestRequestGuard();
@@ -106,12 +117,28 @@ const activeTab = computed<ServerDetailTab>({
   get: () => selectedTab.value,
   set: (value) => selectTab(value),
 });
+const activeSystemSubtab = computed<ServerSystemSubtab>({
+  get: () => systemSubtab.value,
+  set: (value) => selectSystemSubtab(value),
+});
 const activeResourceSubtab = computed<ServerResourceSubtab>({
   get: () => resourceSubtab.value,
   set: (value) => selectResourceSubtab(value),
 });
-const tabItems = computed(() => serverDetailTabs.map((tab) => ({ value: tab, label: t(`serversPage.tab.${tab}`) })));
+const activeNetworkSubtab = computed<ServerNetworkSubtab>({
+  get: () => networkSubtab.value,
+  set: (value) => selectNetworkSubtab(value),
+});
+const detailTabLabelKeys: Record<ServerDetailTab, string> = {
+  overview: 'serversPage.tab.overview',
+  system: 'serversPage.tab.system',
+  resources: 'serversPage.tab.resources',
+  'network-security': 'serversPage.tab.networkSecurity',
+};
+const tabItems = computed(() => serverDetailTabs.map((tab) => ({ value: tab, label: t(detailTabLabelKeys[tab]) })));
+const systemSubtabItems = computed(() => serverSystemSubtabs.map((tab) => ({ value: tab, label: t(`serversPage.tab.${tab}`) })));
 const resourceSubtabItems = computed(() => serverResourceSubtabs.map((tab) => ({ value: tab, label: t(`serversPage.tab.${tab}`) })));
+const networkSubtabItems = computed(() => serverNetworkSubtabs.map((tab) => ({ value: tab, label: t(`serversPage.tab.${tab}`) })));
 const detailTitle = computed(() => selectedServer.value?.name ?? t('common.loading'));
 const detailDescription = computed(() => selectedServer.value ? `${selectedServer.value.host}:${selectedServer.value.port} / ${selectedServer.value.os?.prettyName || t('common.notAvailable')}` : '');
 
@@ -137,10 +164,16 @@ function statusText(server: ServerDto) {
 }
 
 function detailSubtabQuery() {
+  if (selectedTab.value === 'system') {
+    return systemSubtab.value === 'agent' ? undefined : systemSubtab.value;
+  }
   if (selectedTab.value === 'resources') {
     return resourceSubtab.value === 'containers' ? undefined : resourceSubtab.value;
   }
-  if (selectedTab.value === 'firewall' && firewallView.value === 'fail2ban') return 'fail2ban';
+  if (selectedTab.value === 'network-security') {
+    if (networkSubtab.value === 'probes') return undefined;
+    return firewallView.value === 'fail2ban' ? 'fail2ban' : 'firewall';
+  }
   return undefined;
 }
 
@@ -157,7 +190,9 @@ function openDetail(server: ServerDto) {
   if (selectedId.value !== server.id) {
     selectedId.value = server.id;
     selectedTab.value = 'overview';
+    systemSubtab.value = 'agent';
     resourceSubtab.value = 'containers';
+    networkSubtab.value = 'probes';
     firewallView.value = 'ufw';
     resetVisited();
   }
@@ -172,9 +207,21 @@ function closeDetail() {
 
 function selectTab(value: ServerDetailTab) {
   selectedTab.value = value;
+  visited[value] = true;
+  if (value === 'system') visitedSystem[systemSubtab.value] = true;
+  if (value === 'resources') visitedResources[resourceSubtab.value] = true;
+  if (value === 'network-security') visitedNetwork[networkSubtab.value] = true;
   const expectedTab = value === 'overview' ? undefined : value;
   const expectedSubtab = detailSubtabQuery();
   if (selectedId.value && (route.query.tab !== expectedTab || route.query.subtab !== expectedSubtab)) {
+    void router.replace({ query: detailQuery() });
+  }
+}
+
+function selectSystemSubtab(value: ServerSystemSubtab) {
+  systemSubtab.value = value;
+  visitedSystem[value] = true;
+  if (selectedId.value && route.query.subtab !== (value === 'agent' ? undefined : value)) {
     void router.replace({ query: detailQuery() });
   }
 }
@@ -187,23 +234,39 @@ function selectResourceSubtab(value: ServerResourceSubtab) {
   }
 }
 
+function selectNetworkSubtab(value: ServerNetworkSubtab) {
+  networkSubtab.value = value;
+  visitedNetwork[value] = true;
+  if (selectedId.value) void router.replace({ query: detailQuery() });
+}
+
 function selectFirewallView(value: FirewallView) {
   firewallView.value = value;
-  if (selectedId.value && route.query.subtab !== (value === 'fail2ban' ? 'fail2ban' : undefined)) void router.replace({ query: detailQuery() });
+  networkSubtab.value = 'firewall';
+  visitedNetwork.firewall = true;
+  if (selectedId.value) void router.replace({ query: detailQuery() });
 }
 
 function resetVisited() {
   serverDetailTabs.forEach((tab) => { visited[tab] = false; });
+  serverSystemSubtabs.forEach((tab) => { visitedSystem[tab] = false; });
   serverResourceSubtabs.forEach((tab) => { visitedResources[tab] = false; });
+  serverNetworkSubtabs.forEach((tab) => { visitedNetwork[tab] = false; });
   visited[selectedTab.value] = true;
+  if (selectedTab.value === 'system') visitedSystem[systemSubtab.value] = true;
   if (selectedTab.value === 'resources') visitedResources[resourceSubtab.value] = true;
+  if (selectedTab.value === 'network-security') visitedNetwork[networkSubtab.value] = true;
 }
 
 watch(activeTab, (tab) => {
   visited[tab] = true;
+  if (tab === 'system') visitedSystem[systemSubtab.value] = true;
   if (tab === 'resources') visitedResources[resourceSubtab.value] = true;
+  if (tab === 'network-security') visitedNetwork[networkSubtab.value] = true;
 });
+watch(systemSubtab, (subtab) => { visitedSystem[subtab] = true; });
 watch(resourceSubtab, (subtab) => { visitedResources[subtab] = true; });
+watch(networkSubtab, (subtab) => { visitedNetwork[subtab] = true; });
 watch(selectedId, () => { resetVisited(); }, { immediate: true });
 
 watch(() => route.query.server, (value) => {
@@ -213,19 +276,36 @@ watch(() => route.query.server, (value) => {
 watch(() => route.query.tab, (value) => {
   const next = normalizeServerDetailTab(value);
   if (next !== selectedTab.value) selectedTab.value = next;
-  if (isLegacyResourceTab(value)) {
-    const nextSub = value;
-    if (nextSub !== resourceSubtab.value) resourceSubtab.value = nextSub;
+  const legacy = route.query.tab;
+  if (isLegacySystemTab(legacy)) {
+    const nextSub = normalizeServerSystemSubtab(undefined, legacy);
+    if (nextSub !== systemSubtab.value) systemSubtab.value = nextSub;
+  }
+  if (isLegacyResourceTab(legacy)) {
+    if (legacy !== resourceSubtab.value) resourceSubtab.value = legacy;
+  }
+  if (isLegacyNetworkTab(legacy)) {
+    const nextSub = normalizeServerNetworkSubtab(undefined, legacy);
+    if (nextSub !== networkSubtab.value) networkSubtab.value = nextSub;
   }
 });
 watch(() => route.query.subtab, (value) => {
+  if (selectedTab.value === 'system' || isLegacySystemTab(route.query.tab)) {
+    const next = normalizeServerSystemSubtab(value, route.query.tab);
+    if (next !== systemSubtab.value) systemSubtab.value = next;
+    return;
+  }
   if (selectedTab.value === 'resources' || isLegacyResourceTab(route.query.tab)) {
     const next = normalizeServerResourceSubtab(value, route.query.tab);
     if (next !== resourceSubtab.value) resourceSubtab.value = next;
     return;
   }
-  const next = isDev ? normalizeFirewallView(value) : 'ufw';
-  if (next !== firewallView.value) firewallView.value = next;
+  if (selectedTab.value === 'network-security' || isLegacyNetworkTab(route.query.tab)) {
+    const next = normalizeServerNetworkSubtab(value, route.query.tab);
+    if (next !== networkSubtab.value) networkSubtab.value = next;
+    const nextView = isDev ? normalizeFirewallView(value) : 'ufw';
+    if (nextView !== firewallView.value) firewallView.value = nextView;
+  }
 });
 watch(() => route.query.page, (value) => {
   const next = normalizePage(value);
@@ -545,9 +625,9 @@ onBeforeUnmount(() => {
         <template v-if="selectedServer" #actions>
           <Button size="sm" variant="secondary" :disabled="rowBusy?.id === selectedServer.id" :loading="rowBusy?.id === selectedServer.id && rowBusy?.kind === 'edit'" @click="openEdit(selectedServer)"><Wrench />{{ t('common.edit') }}</Button>
           <Button size="sm" variant="danger" :disabled="!canRunPrivilegedOperation(selectedServer)" :loading="restarting" @click="restartOpen = true"><PlayCircle />{{ t('serversPage.restart') }}</Button>
-          <Button v-if="activeTab === 'tailscale'" size="sm" variant="primary" :disabled="!selectedServer.tailscaleEnabled" :loading="tailscaleApplying" @click="applyTailscale"><RefreshCcw />{{ t('serversPage.tailscale.apply') }}</Button>
+          <Button v-if="activeTab === 'system' && systemSubtab === 'tailscale'" size="sm" variant="primary" :disabled="!selectedServer.tailscaleEnabled" :loading="tailscaleApplying" @click="applyTailscale"><RefreshCcw />{{ t('serversPage.tailscale.apply') }}</Button>
         </template>
-        <div ref="detailRoot" data-testid="server-detail" class="h-full min-h-0" tabindex="-1" @keydown="onDetailKeydown">
+        <div ref="detailRoot" data-testid="server-detail" class="h-full min-h-0 outline-none" tabindex="-1" @keydown="onDetailKeydown">
           <EmptyState v-if="detailError && !serverDetails[selectedId]" variant="page" :title="t('common.loadFailed')" :description="detailError">
             <template #actions>
               <Button size="sm" :loading="detailLoading" @click="invalidateServerDetail()"><RefreshCcw />{{ t('common.retry') }}</Button>
@@ -563,10 +643,13 @@ onBeforeUnmount(() => {
           <Tabs v-else v-model="activeTab" class="h-full min-h-0" :tabs="tabItems" keep-panels>
             <div :key="selectedId" class="h-full min-h-0">
               <OverviewTab v-if="visited.overview" v-show="activeTab === 'overview'" :active="activeTab === 'overview'" :server="selectedServer" :credentials="credentials" @refresh="refreshDetail" />
-              <MetricsTab v-if="visited.metrics" v-show="activeTab === 'metrics'" :active="activeTab === 'metrics'" :server="selectedServer" />
-              <ProbesTab v-if="visited.probes" v-show="activeTab === 'probes'" :active="activeTab === 'probes'" :server="selectedServer" />
-              <AgentTab v-if="visited.agent" v-show="activeTab === 'agent'" :active="activeTab === 'agent'" :server="selectedServer" />
-              <TailscaleTab v-if="visited.tailscale" v-show="activeTab === 'tailscale'" :server="selectedServer" />
+              <div v-if="visited.system" v-show="activeTab === 'system'" class="h-full min-h-0">
+                <Tabs v-model="activeSystemSubtab" class="h-full min-h-0" :tabs="systemSubtabItems" keep-panels>
+                  <AgentTab v-if="visitedSystem.agent" v-show="activeSystemSubtab === 'agent'" :active="activeTab === 'system' && activeSystemSubtab === 'agent'" :server="selectedServer" />
+                  <TailscaleTab v-if="visitedSystem.tailscale" v-show="activeSystemSubtab === 'tailscale'" :server="selectedServer" />
+                  <PackagesTab v-if="visitedSystem.packages" v-show="activeSystemSubtab === 'packages'" :server="selectedServer" />
+                </Tabs>
+              </div>
               <div v-if="visited.resources" v-show="activeTab === 'resources'" class="h-full min-h-0">
                 <Tabs v-model="activeResourceSubtab" class="h-full min-h-0" :tabs="resourceSubtabItems" keep-panels>
                   <ContainersTab v-if="visitedResources.containers" v-show="activeResourceSubtab === 'containers'" :server="selectedServer" />
@@ -575,8 +658,12 @@ onBeforeUnmount(() => {
                   <VolumesTab v-if="visitedResources.volumes" v-show="activeResourceSubtab === 'volumes'" :server="selectedServer" />
                 </Tabs>
               </div>
-              <PackagesTab v-if="visited.packages" v-show="activeTab === 'packages'" :server="selectedServer" />
-              <FirewallTab v-if="visited.firewall" v-show="activeTab === 'firewall'" :server="selectedServer" :view="firewallView" @update:view="selectFirewallView" />
+              <div v-if="visited['network-security']" v-show="activeTab === 'network-security'" class="h-full min-h-0">
+                <Tabs v-model="activeNetworkSubtab" class="h-full min-h-0" :tabs="networkSubtabItems" keep-panels>
+                  <ProbesTab v-if="visitedNetwork.probes" v-show="activeNetworkSubtab === 'probes'" :server="selectedServer" :active="activeTab === 'network-security' && activeNetworkSubtab === 'probes'" />
+                  <FirewallTab v-if="visitedNetwork.firewall" v-show="activeNetworkSubtab === 'firewall'" :server="selectedServer" :view="firewallView" @update:view="selectFirewallView" />
+                </Tabs>
+              </div>
             </div>
           </Tabs>
         </div>

@@ -27,11 +27,12 @@
 - `ServerMultiPicker`：用于应用部署、设施覆盖节点、批量任务等服务器多选。支持禁用 id 与禁用原因，选中态、禁用态和能力标签保持一致。原 `ServerContextSelector` 已随资源/安全页并入服务器详情而删除，不得再新增单服务器上下文选择器；单服务器操作一律通过该服务器的详情 tabs 进入。
 - `AssetFileManager`：用于应用文件和设施静态资产这两类同构的文件工作区。顶部只提供一个上传入口，弹窗内选择文本文件、普通文件或文件夹归档；文本类型显示编辑器，普通文件和归档显示文件选择控件。新建文本资产时下载文件名自动跟随引用名称，仍可单独修改，留空保存时使用引用名称；组件还统一提供文本编辑、替换、下载、删除、错误行展示和并发冲突重载；页面只通过 `AssetFileAdapter` 注入领域 API 和文案。`items[].key` 必须是应用内或设施内唯一的 `name`，不把物理 `id`、`fileKey` 或 `assetKey` 暴露给组件。
 - `TemplateVariableInput`（`web/src/components/patterns/TemplateVariableInput.vue`）：用于支持模板表达式的单行字段；复用 Input 和 Dropdown，在原光标插入表达式或替换当前选区，插入后恢复输入焦点。业务页面负责传入按上下文筛选后的目录项和本地化文案，不得把后端返回的全部变量无差别暴露给不支持相应渲染阶段的字段。
+- `MetricChart`（`web/src/components/patterns/MetricChart.vue`）：指标曲线图。输入 `series`（每项含 `id`/`name`/`points[{time,value}]`，缺失值保持 `null`）、`valueKind`（`percent`/`bytes`）、可选 `thresholds` 与本地化 `label`；组件负责时间轴与单位轴、虚线网格、单序列面积、双序列配色、悬停十字 tooltip、阈值参考线，并从 `--panel-*` token 读取颜色、响应 `data-theme`/`data-scheme`。业务页面负责图例文案、平均/峰值统计、当前值与空态；缺少采样时必须传 `null` 而不是补 0。服务器概览指标区的组合见 `MetricsPanel.vue` 与 `utils/metrics.ts`。
 - `CredentialFormFields`（`web/src/components/patterns/CredentialFormFields.vue`）：SSH 凭据表单字段的共享实现（name/type/username/password 或 privateKey+passphrase，含类型切换、编辑保留 secret、字段级错误），供凭据页与任意需要快捷创建凭据的弹窗复用；凭据校验/负载逻辑在 `web/src/components/patterns/credentialForm.ts`（空输入、校验、secret 裁剪），文案经 `labels` 从页面传入。服务器创建弹窗在无可用凭据时内嵌本组件实现“快捷创建凭据 → 自动选中”，作为死胡同的引导闭环。
 
 ## 自动刷新模式
 
-自动刷新设置由共享 composable `web/src/composables/useAutoRefresh.ts` 统一管理（localStorage `panel.autoRefresh`，默认 `5` 秒），所有页面共用同一设置；控件统一使用 `web/src/components/patterns/AutoRefreshControl.vue`（触发按钮显示当前状态：`关闭` / `5 秒` / `10 秒`，弹出菜单选择并带勾选），标签、提示和 aria-label 由页面 i18n 传入。已接入：概览折线图、服务器详情指标。轮询实现必须满足：防重入、标签页不可见时暂停；概览进入编辑态时暂停，保存成功后恢复并整卡重载；目标数据加载中跳过本轮；概览每次请求只带 `since`（上次数据点时间）增量拉取新点并追加到现有序列，同时按卡片时间范围滑动清理等量旧点，不整段重载；服务器指标按所选范围拉取，切换范围/刷新时保留旧数据避免闪跳。其他页面接入同类自动刷新时复用 `AutoRefreshControl` + `useAutoRefresh`，不另造控件。
+自动刷新设置由共享 composable `web/src/composables/useAutoRefresh.ts` 统一管理（localStorage `panel.autoRefresh`，默认 `5` 秒），所有页面共用同一设置；控件统一使用 `web/src/components/patterns/AutoRefreshControl.vue`（触发按钮显示当前状态：`关闭` / `5 秒` / `10 秒`，弹出菜单选择并带勾选），标签、提示和 aria-label 由页面 i18n 传入。已接入：概览页服务器卡片。服务器详情指标区已移除 5s/10s 自动刷新，只保留手动刷新与切换 range 时请求，避免 60 秒采集间隔下高频重拉。轮询实现必须满足：防重入、标签页不可见时暂停；概览进入编辑态时暂停，保存成功后恢复并整卡重载；目标数据加载中跳过本轮；概览每次请求只带 `since`（上次数据点时间）增量拉取新点并追加到现有序列，同时按卡片时间范围滑动清理等量旧点，不整段重载。其他页面接入同类自动刷新时复用 `AutoRefreshControl` + `useAutoRefresh`，不另造控件。
 ## 使用规则
 
 1. 页面内不得为同类控件重新手写尺寸、圆角、选中态、禁用态或 loading 样式；缺能力时先扩展上述组件。
@@ -49,7 +50,7 @@
 - `web/src/views/applications/ApplicationLogsDialog.vue`：业务容器日志弹窗复用 Dialog/Select/Button/LoadingOverlay；按服务器与容器展示实例，日志在固定弹窗正文内滚动，切换/关闭取消旧请求，不使用活动日志替代容器输出。
 
 - `web/src/views/applications/index.vue`：应用搜索、状态、应用/设施连续纵向配置流、部署/网关/源站服务器多选、持久化数据下载/恢复，以及应用文件和设施静态资产共用的 `AssetFileManager` 已接入统一 primitives/patterns。 未保存修改的离开/取消保护已接入 `ConfirmDialog`。应用列表为表格 + 覆盖式详情，行操作区承载 详情/编辑/同步/停用/更新镜像/日志/删除，详情页头含编辑与 `ActivityLink`，详情内保留 runtime/routes/files tabs 与持久化数据上下文面板。
-- `web/src/views/servers/index.vue` 与 `tabs/`：服务器列表为表格 + 覆盖式详情；详情页头含编辑与重启等运维操作；详情一级 tab 覆盖资源/安全能力（容器、镜像、网络、存储卷、软件包、防火墙），tab 懒加载并在详情存活期内缓存；资源页与安全页的独立实现已删除。凭据/DNS 域名覆盖式详情页头同样提供编辑入口（与行内编辑同一表单）。
+- `web/src/views/servers/index.vue` 与 `tabs/`：服务器列表为表格 + 覆盖式详情；详情页头含编辑与重启等运维操作；详情一级 tab 为 概览/系统/资源/网络与安全，概览合并状态条与 `MetricChart` 指标区，系统内为 Agent/Tailscale/软件包，网络与安全内为网络探测/防火墙，资源内为容器/镜像/网络/存储卷；tab/子视图懒加载并在详情存活期内缓存，旧一级 tab 名映射到新 tab + subtab；资源页与安全页的独立实现已删除。凭据/DNS 域名覆盖式详情页头同样提供编辑入口（与行内编辑同一表单）。
 - `web/src/components/templates/TableDetailLayout.vue`：servers、credentials、dns、certificates、applications、operations、tasks 通过 `detail-swap` 接入覆盖式详情进场；列表在详情打开时 `inert` + `aria-hidden`，关闭后保留滚动位置与筛选。`/logs` 使用 `ListPage` + Dialog，不走覆盖式详情。
 
 - 产品 UI 不得再使用 EventTimeline / context / evidence。日志页只按需读取 events 列表，默认 `level=info,warning,error`，手动刷新与 cursor 分页。

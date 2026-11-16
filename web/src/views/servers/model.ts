@@ -1,4 +1,4 @@
-import type { ServerDto, ServerProbeInput, ServerProxyMode, ServerSaveInput } from '@/types/servers';
+import type { ServerArchitecture, ServerDto, ServerProbeInput, ServerProxyMode, ServerSaveInput } from '@/types/servers';
 import type { CredentialDto } from '@/types/credentials';
 import type { NetworkProbeResult } from '@/types/networkProbe';
 import { isSocks5Address, normalizeServerProxyMode } from '@/utils/serverProxy';
@@ -6,13 +6,22 @@ import { isSocks5Address, normalizeServerProxyMode } from '@/utils/serverProxy';
 export type { ServerProbeInput };
 
 /**
- * 服务器详情的一级 tab。Docker 资源合并为 `resources`，再用 URL `subtab`
- * 区分 containers/images/networks/volumes；旧一级 tab 名仍作深链别名。
- * 未知取值一律回落到 overview。
+ * 服务器详情的一级 tab。概览合并了状态与指标；系统、资源、网络与安全各自
+ * 再用 URL `subtab` 区分子视图；旧一级 tab 名仍作深链别名。未知取值回落到 overview。
  */
-export const serverDetailTabs = ['overview', 'metrics', 'probes', 'agent', 'tailscale', 'resources', 'packages', 'firewall'] as const;
+export const serverDetailTabs = ['overview', 'system', 'resources', 'network-security'] as const;
 
 export type ServerDetailTab = (typeof serverDetailTabs)[number];
+
+/** 系统 tab 内的子视图；也是旧 `tab=agent|tailscale|packages` 别名的目标。 */
+export const serverSystemSubtabs = ['agent', 'tailscale', 'packages'] as const;
+
+export type ServerSystemSubtab = (typeof serverSystemSubtabs)[number];
+
+/** 网络与安全 tab 内的子视图；也是旧 `tab=probes|firewall` 别名的目标。 */
+export const serverNetworkSubtabs = ['probes', 'firewall'] as const;
+
+export type ServerNetworkSubtab = (typeof serverNetworkSubtabs)[number];
 
 /** Docker 资源在 Resources 一级 tab 内的分段；也是旧 `tab=containers|…` 别名的目标。 */
 export const serverResourceSubtabs = ['containers', 'images', 'networks', 'volumes'] as const;
@@ -20,15 +29,36 @@ export const serverResourceSubtabs = ['containers', 'images', 'networks', 'volum
 export type ServerResourceSubtab = (typeof serverResourceSubtabs)[number];
 
 const legacyResourceTabSet = new Set<string>(serverResourceSubtabs);
+const legacySystemTabSet = new Set<string>(serverSystemSubtabs);
+const legacyNetworkTabSet = new Set<string>(serverNetworkSubtabs);
 
 export function isLegacyResourceTab(value: unknown): value is ServerResourceSubtab {
   return legacyResourceTabSet.has(String(value ?? ''));
 }
 
+export function isLegacySystemTab(value: unknown): value is ServerSystemSubtab {
+  return legacySystemTabSet.has(String(value ?? ''));
+}
+
+export function isLegacyNetworkTab(value: unknown): value is ServerNetworkSubtab {
+  return legacyNetworkTabSet.has(String(value ?? ''));
+}
+
 export function normalizeServerDetailTab(value: unknown): ServerDetailTab {
   const raw = String(value ?? '');
+  if (isLegacySystemTab(raw)) return 'system';
   if (isLegacyResourceTab(raw)) return 'resources';
+  if (isLegacyNetworkTab(raw)) return 'network-security';
+  // 监控已并入概览：旧深链直接打开概览（指标区就在首屏）。
+  if (raw === 'metrics') return 'overview';
   return (serverDetailTabs as readonly string[]).includes(raw) ? (raw as ServerDetailTab) : 'overview';
+}
+
+export function normalizeServerSystemSubtab(value: unknown, legacyTab?: unknown): ServerSystemSubtab {
+  const fromSubtab = String(value ?? '');
+  if ((serverSystemSubtabs as readonly string[]).includes(fromSubtab)) return fromSubtab as ServerSystemSubtab;
+  if (isLegacySystemTab(legacyTab)) return legacyTab;
+  return 'agent';
 }
 
 export function normalizeServerResourceSubtab(value: unknown, legacyTab?: unknown): ServerResourceSubtab {
@@ -36,6 +66,23 @@ export function normalizeServerResourceSubtab(value: unknown, legacyTab?: unknow
   if ((serverResourceSubtabs as readonly string[]).includes(fromSubtab)) return fromSubtab as ServerResourceSubtab;
   if (isLegacyResourceTab(legacyTab)) return legacyTab;
   return 'containers';
+}
+
+/** `subtab=fail2ban` 同时表示防火墙子视图与 dev 下的 Fail2Ban 视图。 */
+export function normalizeServerNetworkSubtab(value: unknown, legacyTab?: unknown): ServerNetworkSubtab {
+  const fromSubtab = String(value ?? '');
+  if (fromSubtab === 'fail2ban') return 'firewall';
+  if ((serverNetworkSubtabs as readonly string[]).includes(fromSubtab)) return fromSubtab as ServerNetworkSubtab;
+  if (isLegacyNetworkTab(legacyTab)) return legacyTab;
+  return 'probes';
+}
+
+/** 架构对象渲染文案：优先 arch，其次 rawMachine；相同值只显示一次。 */
+export function architectureLabel(architecture?: ServerArchitecture): string {
+  const arch = architecture?.arch?.trim() ?? '';
+  const raw = architecture?.rawMachine?.trim() ?? '';
+  if (arch && raw && arch !== raw) return `${arch} (${raw})`;
+  return arch || raw;
 }
 
 /** 防火墙 tab 内部的 UFW / Fail2Ban 分段（Fail2Ban 仅 dev 构建可见）。 */
