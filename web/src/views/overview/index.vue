@@ -246,7 +246,7 @@ onMounted(() => {
             <ServerIcon class="size-3.5 text-secondary-foreground" aria-hidden="true" />
             {{ t('overviewPage.nodeStatus') }}
           </h2>
-          <Badge :tone="nodeSummary.offline ? 'warning' : 'success'">{{ onlinePercent }}%</Badge>
+          <Badge :tone="nodeSummary.offline ? 'danger' : 'success'">{{ onlinePercent }}%</Badge>
         </div>
         <div class="mt-3 grid grid-cols-3 divide-x divide-border">
           <div class="min-w-0 pr-3">
@@ -264,7 +264,6 @@ onMounted(() => {
         </div>
         <div class="mt-3 flex h-1.5 overflow-hidden rounded-full bg-muted" role="img" :aria-label="`${t('overviewPage.nodeStatus')}: ${onlinePercent}%`">
           <span class="bg-success" :style="{ width: `${nodeSummary.total ? (nodeSummary.online / nodeSummary.total) * 100 : 0}%` }" />
-          <span class="bg-warning" :style="{ width: `${nodeSummary.total ? (nodeSummary.stale / nodeSummary.total) * 100 : 0}%` }" />
           <span class="bg-danger" :style="{ width: `${nodeSummary.total ? (nodeSummary.offline / nodeSummary.total) * 100 : 0}%` }" />
         </div>
         <p class="m-0 mt-2 text-xs text-muted-foreground">

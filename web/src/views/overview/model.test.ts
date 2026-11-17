@@ -3,7 +3,6 @@ import type { ServerMetricsSeries } from '@/api/servers';
 import type { NetworkProbeHistoryPoint, NetworkProbeResult } from '@/types/networkProbe';
 import type { ServerDto } from '@/types/servers';
 import {
-  BUCKET_FRESHNESS_FALLBACK_MS,
   aggregateProbeHistory,
   buildServerCards,
   cpuHistory,
@@ -117,16 +116,24 @@ describe('overview model', () => {
     expect(percentTone(96)).toBe('danger');
   });
 
-  it('derives node status from reachability and the metrics freshness window', () => {
+  it('derives node status from reachability only, independent of metric freshness', () => {
     const now = Date.parse('2026-11-16T07:10:00Z');
-    expect(nodeStatusKind(server({ reachable: false }), '2026-11-16T07:09:00Z', now)).toBe('offline');
-    expect(nodeStatusKind(server(), null, now)).toBe('stale');
-    expect(nodeStatusKind(server(), '2026-11-16T07:00:00Z', now)).toBe('stale');
-    expect(nodeStatusKind(server(), '2026-11-16T07:08:00Z', now)).toBe('online');
-    // 桶查询缺少 latest 时允许一个桶宽度的兜底窗口，避免整卡指标被误判过期。
-    expect(nodeStatusKind(server(), '2026-11-16T06:40:00Z', now, BUCKET_FRESHNESS_FALLBACK_MS)).toBe('online');
+    expect(nodeStatusKind(server({ reachable: false }))).toBe('offline');
+    expect(nodeStatusKind(server())).toBe('online');
+    // 指标缺失/过期不改变在线状态；指标新鲜度单独用于摘要的新鲜指标计数。
+    const cards = buildServerCards({
+      servers: [server()],
+      metricsById: {},
+      metricsErrorIds: new Set(['srv-1']),
+      probeSourceId: '',
+      probeResults: [],
+      packageUpdatesById: {},
+      imageUpdatesById: {},
+      now,
+    });
+    expect(cards[0]!.status).toBe('online');
+    expect(cards[0]!.metricsFresh).toBe(false);
     expect(nodeStatusTone('online')).toBe('success');
-    expect(nodeStatusTone('stale')).toBe('warning');
     expect(nodeStatusTone('offline')).toBe('danger');
   });
 
@@ -247,7 +254,7 @@ describe('overview model', () => {
     expect(core.probeLatencyMs).toBe(55);
     expect(core.probePacketLossPercent).toBe(1.5);
     expect(core.metricsError).toBe(true);
-    expect(core.status).toBe('stale');
+    expect(core.status).toBe('online');
     expect(core.latencyHistory[22]).toBe(55);
   });
 
@@ -267,7 +274,7 @@ describe('overview model', () => {
       imageUpdatesById: {},
       now,
     });
-    expect(summarizeNodeCards(cards)).toEqual({ total: 3, online: 1, offline: 1, stale: 1, fresh: 1, unsupported: 1 });
+    expect(summarizeNodeCards(cards)).toEqual({ total: 3, online: 2, offline: 1, fresh: 1, unsupported: 1 });
     expect(formatPercent(42.56, 1)).toBe('42.6%');
     expect(formatPercent(null)).toBe('—');
     expect(formatLatency(144.6)).toBe('145 ms');

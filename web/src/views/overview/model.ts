@@ -14,7 +14,7 @@ export const BUCKET_FRESHNESS_FALLBACK_MS = 35 * 60 * 1000;
 export const HISTORY_HOURS = 24;
 
 export type MetricTone = 'success' | 'warning' | 'danger';
-export type NodeStatusKind = 'online' | 'stale' | 'offline';
+export type NodeStatusKind = 'online' | 'offline';
 
 /** 历史分段与数值的阈值；CPU/延迟/丢包/负载各一组。 */
 export const toneZones = {
@@ -42,23 +42,14 @@ export function percentTone(percent: number | null | undefined): MetricTone | nu
   return 'danger';
 }
 
-export function nodeStatusKind(
-  server: ServerDto,
-  sampledAt: string | null | undefined,
-  now = Date.now(),
-  freshnessMs = METRICS_FRESH_WINDOW_MS,
-): NodeStatusKind {
-  if (!server.reachable) return 'offline';
-  if (!sampledAt) return 'stale';
-  const parsed = Date.parse(sampledAt);
-  if (Number.isNaN(parsed) || now - parsed > freshnessMs) return 'stale';
-  return 'online';
+export function nodeStatusKind(server: ServerDto): NodeStatusKind {
+  // 在线状态以面板的可达性为准，与指标新鲜度解耦：没有指标样本的在线节点
+  // 仍应显示在线（指标单元格显示 `—`），不能因此被误判为离线/指标过期。
+  return server.reachable ? 'online' : 'offline';
 }
 
 export function nodeStatusTone(kind: NodeStatusKind): MetricTone {
-  if (kind === 'online') return 'success';
-  if (kind === 'stale') return 'warning';
-  return 'danger';
+  return kind === 'online' ? 'success' : 'danger';
 }
 
 export interface ServerMetricsView {
@@ -258,6 +249,7 @@ export interface ServerCardView {
   statusTone: MetricTone;
   metrics: ServerMetricsView;
   metricsError: boolean;
+  metricsFresh: boolean;
   isProbeSource: boolean;
   probeAvailable: boolean;
   probeLatencyMs: number | null;
@@ -294,7 +286,12 @@ export function buildServerCards(input: BuildCardsInput): ServerCardView[] {
     const series = input.metricsById[server.id];
     const metrics = latestMetricsView(series);
     const freshnessMs = series?.latest ? METRICS_FRESH_WINDOW_MS : BUCKET_FRESHNESS_FALLBACK_MS;
-    const status = nodeStatusKind(server, metrics.sampledAt, now, freshnessMs);
+    const metricsFresh = (() => {
+      if (!metrics.sampledAt) return false;
+      const parsed = Date.parse(metrics.sampledAt);
+      return !Number.isNaN(parsed) && now - parsed <= freshnessMs;
+    })();
+    const status = nodeStatusKind(server);
     const isProbeSource = server.id === input.probeSourceId;
     const target = isProbeSource ? undefined : targets.get(server.id);
     const hasProbe = Boolean(target);
@@ -304,6 +301,7 @@ export function buildServerCards(input: BuildCardsInput): ServerCardView[] {
       statusTone: nodeStatusTone(status),
       metrics,
       metricsError: input.metricsErrorIds.has(server.id),
+      metricsFresh,
       isProbeSource,
       probeAvailable: hasProbe,
       probeLatencyMs: target?.latencyMs ?? null,
@@ -325,7 +323,6 @@ export interface NodeSummaryView {
   total: number;
   online: number;
   offline: number;
-  stale: number;
   fresh: number;
   unsupported: number;
 }
@@ -333,17 +330,15 @@ export interface NodeSummaryView {
 export function summarizeNodeCards(cards: ServerCardView[]): NodeSummaryView {
   let online = 0;
   let offline = 0;
-  let stale = 0;
   let fresh = 0;
   let unsupported = 0;
   for (const card of cards) {
     if (card.status === 'online') online += 1;
-    else if (card.status === 'offline') offline += 1;
-    else stale += 1;
-    if (card.status === 'online') fresh += 1;
+    else offline += 1;
+    if (card.metricsFresh) fresh += 1;
     if (card.server.os?.supported === false) unsupported += 1;
   }
-  return { total: cards.length, online, offline, stale, fresh, unsupported };
+  return { total: cards.length, online, offline, fresh, unsupported };
 }
 
 export interface RelativeTimeLabel {
