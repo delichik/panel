@@ -750,7 +750,7 @@
 - **成功**：`mode` 只允许 `all|selected`；`mode=selected` 时 `serverIds` 必须非空、每项当前存在，保存前去空白、去重、按稳定服务器 ID 升序；`retentionDays` 必须 ≥1；`collectionIntervalSeconds` 必须 ≥1；`cleanupSchedule` 只允许 `hourly|daily|weekly`。`mode=all` 忽略并保存空 `serverIds`（归一化为 `[]`）。校验通过后单行 upsert，`version = 上次 version + 1`、更新 `updated_at`，返回保存后的完整配置。
 - **失败**：非法 mode 返回 `metrics_facility_mode_invalid`；`selected` 空集合返回 `metrics_facility_servers_required`；不存在的服务器 ID 返回 `metrics_facility_server_not_found`；`retentionDays < 1` 返回 `metrics_facility_retention_invalid`；`collectionIntervalSeconds < 1` 返回 `metrics_facility_interval_invalid`；`cleanupSchedule` 非法返回 `metrics_facility_cleanup_schedule_invalid`。任一校验失败不得写库、不得 bump `version`、不得部分保存。
 - **边界**：与网络探测不同，保存路径中的 `0` 不是“使用默认值”而是非法值（默认值只用于从未保存的读取与迁移播种，见 `FAC-MET-001/006`）；重复服务器 ID 静默去重而不是报错；`mode=all` 时即使提交了 `serverIds` 也归一化为空数组；读取侧对旧行/手工数据的非法值做防御性归一化，不得让读取失败或把非法节奏下发给 Agent。
-- **不变量**：配置恒为单行 upsert；保存成功不要求立即重算指标历史（间隔在对齐落库路径生效，见 `FAC-MET-004`）；保存成功后使服务端 3 秒 TTL 配置快照失效，下一次 stream 读取到新值。设施页把「采集范围」与「采集配置」拆成两个独立区域、节点选择器改为紧凑网格（`UI-FAC-019`，不改变本条字段、校验、payload 与归一化语义）。
+- **不变量**：配置恒为单行 upsert；保存成功不要求立即重算指标历史（间隔在对齐落库路径生效，见 `FAC-MET-004`）；保存成功后使服务端 3 秒 TTL 配置快照失效，下一次 stream 读取到新值。设施页把「采集范围」与「采集配置」上下堆叠为两个独立区域（范围在上、配置在下）、节点选择器改为紧凑网格（`UI-FAC-019`，不改变本条字段、校验、payload 与归一化语义）。
 - **验证点**：`metricsfacility` handler/service 的归一化与错误码测试（`TestSaveValidationErrors`、`TestSaveAllModeClearsServerIDsAndBumpsVersion`、`TestSaveSelectedModeNormalizesServerIDs`、`TestHandlerMapsValidationErrors`、`TestValidationErrorCodesHaveChineseTranslations`；覆盖六类错误码、失败不写库、`version` 递增、`all` 忽略 serverIds、`selected` 空集合、重复 ID 去重、读取侧坏数据归一化）。
 
 ### FAC-MET-004 采集间隔与对齐生效

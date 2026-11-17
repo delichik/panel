@@ -161,7 +161,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="relative grid h-full min-h-0 gap-4 max-lg:h-auto lg:grid-cols-2" data-testid="metrics-facility">
+  <div class="relative grid h-full min-h-0 content-start gap-4 max-lg:h-auto" data-testid="metrics-facility">
     <LoadingOverlay v-if="loading && !config" :label="t('applicationsPage.metricsLoading')" />
 
     <EmptyState v-if="error && !config" variant="page" class="lg:col-span-2" :title="t('common.loadFailed')" :description="error">
@@ -171,25 +171,25 @@ onBeforeUnmount(() => {
     </EmptyState>
 
     <template v-else>
-      <!-- 区域一：采集范围（模式 + 节点选择）。 -->
-      <section class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 rounded-xl border border-border bg-card p-4 max-lg:grid-rows-none" data-testid="metrics-scope-section">
+      <!-- 区域一：采集范围（模式 + 节点选择），与配置区上下堆叠。 -->
+      <section class="grid gap-3 rounded-xl border border-border bg-card p-4" data-testid="metrics-scope-section">
         <div>
           <h2 class="m-0 text-base font-semibold text-foreground">{{ t('applicationsPage.metricsScopeTitle') }}</h2>
           <p class="m-0 mt-1 text-sm leading-6 text-muted-foreground">{{ t('applicationsPage.metricsScopeHint') }}</p>
         </div>
 
-        <div class="grid min-h-0 content-start gap-3 max-lg:content-normal">
+        <div class="grid content-start gap-3">
           <label class="grid gap-1 sm:max-w-xs">
             <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.metricsMode') }}</span>
             <Select v-model="draft.mode" :options="modeOptions" :disabled="saving" />
           </label>
 
-          <div v-if="draft.mode === 'selected'" class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-2 max-lg:grid-rows-none">
+          <div v-if="draft.mode === 'selected'" class="grid gap-2">
             <div>
               <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.metricsSelectServers') }}</span>
               <p class="m-0 mt-1 text-xs leading-5 text-muted-foreground">{{ t('applicationsPage.metricsSelectServersHint') }}</p>
             </div>
-            <div class="min-h-0 lg:overflow-y-auto lg:pr-1">
+            <div class="max-h-64 overflow-y-auto pr-1">
               <ServerMultiPicker v-model="draft.serverIds" variant="compact" :servers="serverOptions" :label="t('applicationsPage.metricsSelectServers')" />
             </div>
           </div>
@@ -197,13 +197,13 @@ onBeforeUnmount(() => {
       </section>
 
       <!-- 区域二：采集配置（保留天数、采集间隔、清理计划 + 保存）。 -->
-      <section class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-3 rounded-xl border border-border bg-card p-4 max-lg:grid-rows-none" data-testid="metrics-config-form">
+      <section class="grid gap-3 rounded-xl border border-border bg-card p-4" data-testid="metrics-config-form">
         <div>
           <h2 class="m-0 text-base font-semibold text-foreground">{{ t('applicationsPage.metricsConfigTitle') }}</h2>
           <p class="m-0 mt-1 text-sm leading-6 text-muted-foreground">{{ t('applicationsPage.metricsConfigHint') }}</p>
         </div>
 
-        <div class="grid min-h-0 content-start gap-3 max-lg:content-normal">
+        <div class="grid content-start gap-3">
           <div class="grid gap-3 sm:grid-cols-2">
             <label class="grid gap-1">
               <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.metricsCleanupSchedule') }}</span>
