@@ -12,7 +12,7 @@ import EmptyState from '@/components/ui/EmptyState.vue';
 import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import { useErrorToast } from '@/components/ui/toast';
-import AutoRefreshControl from '@/components/patterns/AutoRefreshControl.vue';
+import DataRefreshControl from '@/components/patterns/DataRefreshControl.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import { useAutoRefresh } from '@/composables/useAutoRefresh';
 import { useI18n } from '@/i18n';
@@ -42,6 +42,7 @@ const pageError = ref('');
 
 let loadSeq = 0;
 let probeSeq = 0;
+let loadInFlight = false;
 let controller: AbortController | null = null;
 
 const candidateIds = computed(() => probeCandidateIds(probeConfig.value, servers.value));
@@ -82,6 +83,10 @@ function syncProbeQuery(value: string) {
 }
 
 async function load(options: { initial?: boolean; includeUpdates?: boolean } = {}) {
+  // 自动刷新/手动刷新不得与在途加载并发：并发会互相 abort，导致长时间
+  // 只有被中止的请求，页面像“全部消失”。在途时直接跳过下一拍。
+  if (loadInFlight) return;
+  loadInFlight = true;
   const seq = ++loadSeq;
   controller?.abort();
   const request = new AbortController();
@@ -100,7 +105,10 @@ async function load(options: { initial?: boolean; includeUpdates?: boolean } = {
     ]);
     if (seq !== loadSeq) return;
     if (serversResult.status === 'rejected') throw serversResult.reason;
-    servers.value = serversResult.value;
+    // 自动刷新偶发拿到空列表时保留现有服务器，避免整页瞬间变成“暂无服务器”。
+    if (serversResult.value.length > 0 || servers.value.length === 0) {
+      servers.value = serversResult.value;
+    }
     probeConfig.value = configResult.status === 'fulfilled' ? configResult.value : null;
 
     const candidates = probeCandidateIds(probeConfig.value, servers.value);
@@ -113,7 +121,8 @@ async function load(options: { initial?: boolean; includeUpdates?: boolean } = {
     probeSourceId.value = nextSource;
     syncProbeQuery(nextSource);
 
-    await Promise.all([
+    // 探测与指标相互独立：探测失败/无数据不得影响指标渲染。
+    await Promise.allSettled([
       loadProbeResults(nextSource, request.signal),
       loadServerDetails(servers.value, { signal: request.signal, includeUpdates: Boolean(options.includeUpdates) }),
     ]);
@@ -123,6 +132,7 @@ async function load(options: { initial?: boolean; includeUpdates?: boolean } = {
     if (initial) pageError.value = message;
     else notifyError(message, err);
   } finally {
+    loadInFlight = false;
     if (seq === loadSeq) {
       pageLoading.value = false;
       refreshing.value = false;
@@ -147,7 +157,8 @@ async function loadProbeResults(sourceId: string, signal: AbortSignal) {
 }
 
 async function loadServerDetails(items: ServerDto[], options: { signal: AbortSignal; includeUpdates: boolean }) {
-  const nextMetrics: Record<string, ServerMetricsSeries | undefined> = {};
+  // 以旧数据为基线：单台指标请求失败时保留上一次的值，而不是把该卡片清空。
+  const nextMetrics: Record<string, ServerMetricsSeries | undefined> = { ...metricsById.value };
   const nextErrors = new Set<string>();
   const nextPackages = { ...packageUpdatesById.value };
   const nextImages = { ...imageUpdatesById.value };
@@ -221,12 +232,7 @@ onMounted(() => {
           @update:model-value="changeProbeSource"
         />
       </div>
-      <AutoRefreshControl
-        :off-label="t('autoRefresh.off')"
-        :short-label="t('autoRefresh.5s')"
-        :long-label="t('autoRefresh.10s')"
-        :hint-label="t('autoRefresh.hint')"
-      />
+      <DataRefreshControl />
       <Button size="sm" :loading="refreshing" @click="manualRefresh">
         <RefreshCcw />
         {{ t('common.refresh') }}

@@ -32,7 +32,7 @@
 
 ## 自动刷新模式
 
-自动刷新设置由共享 composable `web/src/composables/useAutoRefresh.ts` 统一管理（localStorage `panel.autoRefresh`，默认 `5` 秒），所有页面共用同一设置；控件统一使用 `web/src/components/patterns/AutoRefreshControl.vue`（触发按钮显示当前状态：`关闭` / `5 秒` / `10 秒`，弹出菜单选择并带勾选），标签、提示和 aria-label 由页面 i18n 传入。已接入：概览页服务器卡片。服务器详情指标区已移除 5s/10s 自动刷新，只保留手动刷新与切换 range 时请求，避免 60 秒采集间隔下高频重拉。轮询实现必须满足：防重入、标签页不可见时暂停；概览进入编辑态时暂停，保存成功后恢复并整卡重载；目标数据加载中跳过本轮；概览每次请求只带 `since`（上次数据点时间）增量拉取新点并追加到现有序列，同时按卡片时间范围滑动清理等量旧点，不整段重载。其他页面接入同类自动刷新时复用 `AutoRefreshControl` + `useAutoRefresh`，不另造控件。
+自动刷新设置由共享 composable `web/src/composables/useAutoRefresh.ts` 统一管理（localStorage `panel.autoRefresh`，默认 `10m`），所有页面共用同一设置；控件统一使用 `web/src/components/patterns/DataRefreshControl.vue`（内部包装 `AutoRefreshControl` 并注入中英文档位文案；触发按钮显示当前状态：`关闭` / `10 分钟` / `30 分钟` / `1 小时`，弹出菜单选择并带勾选）。已接入：概览页服务器卡片、服务器详情概览指标面板、服务器详情「网络与安全 → 网络探测」子视图、网络探测设施结果区。服务器详情指标面板与探测子视图只在当前 tab 激活时刷新，非激活/加载中/页面隐藏时跳过；网络探测设施结果区只重取当前探测源结果，配置表单有未保存修改时不刷新。轮询实现必须满足：防重入、标签页不可见时暂停；目标数据加载中跳过本轮；概览每次整页重取列表、指标与当前探测源结果（不拉取软件包/镜像更新统计），失败保留旧数据。旧版秒级模式（5s/10s）不再兼容，读取到旧值时回落到默认 10 分钟。其他页面接入同类自动刷新时复用 `DataRefreshControl` + `useAutoRefresh`，不另造控件。
 ## 使用规则
 
 1. 页面内不得为同类控件重新手写尺寸、圆角、选中态、禁用态或 loading 样式；缺能力时先扩展上述组件。

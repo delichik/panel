@@ -145,7 +145,7 @@ onBeforeUnmount(() => {
 
       <OverviewSummary :server="server" :metrics="metricsSnapshot" />
 
-      <MetricsPanel :server="server" @metrics-loaded="metricsSnapshot = $event" />
+      <MetricsPanel :server="server" :active="active" @metrics-loaded="metricsSnapshot = $event" />
 
       <div class="grid gap-4 border-t border-border pt-4 lg:grid-cols-2">
         <section class="grid gap-2">

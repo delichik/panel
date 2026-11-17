@@ -14,6 +14,12 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Editors/agents may write atomically through temporary files under src/.
+    // Watching those transient entries can throw EBUSY and kill the dev server,
+    // so ignore temp files/directories entirely.
+    watch: {
+      ignored: ['**/.*.tmpdir/**', '**/.*.tmp', '**/*.tmpdir/**'],
+    },
     proxy: {
       '/api': {
         target: backendProxyTarget,

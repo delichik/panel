@@ -1,18 +1,21 @@
 <script setup lang="ts">
+import { computed } from 'vue';
 import { Check, ChevronDown, RefreshCcw } from '@lucide/vue';
 import Button from '@/components/ui/Button.vue';
 import Dropdown from '@/components/ui/Dropdown.vue';
 import DropdownItem from '@/components/ui/DropdownItem.vue';
 import { useAutoRefresh, type AutoRefreshMode } from '@/composables/useAutoRefresh';
 
-defineProps<{
+const props = defineProps<{
   offLabel: string;
-  shortLabel: string;
-  longLabel: string;
+  options: Array<{ value: AutoRefreshMode; label: string }>;
   hintLabel: string;
 }>();
 
 const { mode, setMode } = useAutoRefresh();
+const currentLabel = computed(() => (
+  mode.value === 'off' ? props.offLabel : (props.options.find((option) => option.value === mode.value)?.label ?? '')
+));
 
 function select(value: AutoRefreshMode) {
   setMode(value);
@@ -24,7 +27,7 @@ function select(value: AutoRefreshMode) {
     <template #trigger>
       <Button size="sm" variant="secondary" :title="hintLabel">
         <RefreshCcw class="size-4" />
-        <span>{{ mode === 'off' ? offLabel : mode === '5' ? shortLabel : longLabel }}</span>
+        <span>{{ currentLabel }}</span>
         <ChevronDown class="size-3.5 text-muted-foreground" />
       </Button>
     </template>
@@ -32,13 +35,14 @@ function select(value: AutoRefreshMode) {
       <span class="flex-1">{{ offLabel }}</span>
       <span class="flex w-4 justify-end"><Check v-if="mode === 'off'" class="size-4 text-brand" /></span>
     </DropdownItem>
-    <DropdownItem :class="mode === '5' ? 'text-brand font-semibold' : ''" @click="select('5')">
-      <span class="flex-1">{{ shortLabel }}</span>
-      <span class="flex w-4 justify-end"><Check v-if="mode === '5'" class="size-4 text-brand" /></span>
-    </DropdownItem>
-    <DropdownItem :class="mode === '10' ? 'text-brand font-semibold' : ''" @click="select('10')">
-      <span class="flex-1">{{ longLabel }}</span>
-      <span class="flex w-4 justify-end"><Check v-if="mode === '10'" class="size-4 text-brand" /></span>
+    <DropdownItem
+      v-for="option in options"
+      :key="option.value"
+      :class="mode === option.value ? 'text-brand font-semibold' : ''"
+      @click="select(option.value)"
+    >
+      <span class="flex-1">{{ option.label }}</span>
+      <span class="flex w-4 justify-end"><Check v-if="mode === option.value" class="size-4 text-brand" /></span>
     </DropdownItem>
   </Dropdown>
 </template>

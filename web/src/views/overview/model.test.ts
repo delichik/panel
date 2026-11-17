@@ -3,6 +3,7 @@ import type { ServerMetricsSeries } from '@/api/servers';
 import type { NetworkProbeHistoryPoint, NetworkProbeResult } from '@/types/networkProbe';
 import type { ServerDto } from '@/types/servers';
 import {
+  BUCKET_FRESHNESS_FALLBACK_MS,
   aggregateProbeHistory,
   buildServerCards,
   cpuHistory,
@@ -122,6 +123,8 @@ describe('overview model', () => {
     expect(nodeStatusKind(server(), null, now)).toBe('stale');
     expect(nodeStatusKind(server(), '2026-11-16T07:00:00Z', now)).toBe('stale');
     expect(nodeStatusKind(server(), '2026-11-16T07:08:00Z', now)).toBe('online');
+    // 桶查询缺少 latest 时允许一个桶宽度的兜底窗口，避免整卡指标被误判过期。
+    expect(nodeStatusKind(server(), '2026-11-16T06:40:00Z', now, BUCKET_FRESHNESS_FALLBACK_MS)).toBe('online');
     expect(nodeStatusTone('online')).toBe('success');
     expect(nodeStatusTone('stale')).toBe('warning');
     expect(nodeStatusTone('offline')).toBe('danger');

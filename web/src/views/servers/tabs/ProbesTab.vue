@@ -7,6 +7,8 @@ import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import Table from '@/components/ui/Table.vue';
+import DataRefreshControl from '@/components/patterns/DataRefreshControl.vue';
+import { useAutoRefresh } from '@/composables/useAutoRefresh';
 import { useErrorToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import type { NetworkProbeResult, NetworkProbeServerResults } from '@/types/networkProbe';
@@ -19,6 +21,7 @@ const props = defineProps<{ server: ServerDto; active?: boolean }>();
 const { t } = useI18n();
 const notifyError = useErrorToast();
 const router = useRouter();
+const autoRefresh = useAutoRefresh();
 
 const data = ref<NetworkProbeServerResults | null>(null);
 const loading = ref(false);
@@ -79,7 +82,14 @@ function openFacility() {
   void router.push('/applications/facility-apps/network-probe');
 }
 
-onMounted(() => { void load(); });
+onMounted(() => {
+  void load();
+  // 探测页签复用全局自动刷新档位；非当前 tab / 加载中时跳过这一拍。
+  autoRefresh.start(() => {
+    if (props.active === false || loading.value) return;
+    void load();
+  });
+});
 </script>
 
 <template>
@@ -88,7 +98,10 @@ onMounted(() => { void load(); });
       <span class="text-xs text-muted-foreground">
         {{ t('serversPage.probe.lastSample') }}: {{ formatDateTime(data?.updatedAt, t('common.never')) }}
       </span>
-      <Button size="sm" variant="ghost" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
+      <div class="flex flex-wrap items-center gap-2">
+        <DataRefreshControl />
+        <Button size="sm" variant="ghost" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
+      </div>
     </div>
 
     <EmptyState v-if="error && !data" variant="page" :title="t('common.loadFailed')" :description="error">

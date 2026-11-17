@@ -10,7 +10,9 @@ import Input from '@/components/ui/Input.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
 import Select from '@/components/ui/Select.vue';
+import DataRefreshControl from '@/components/patterns/DataRefreshControl.vue';
 import ServerMultiPicker from '@/components/patterns/ServerMultiPicker.vue';
+import { useAutoRefresh } from '@/composables/useAutoRefresh';
 import HistoryStrip from '@/views/overview/HistoryStrip.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
@@ -29,6 +31,7 @@ const props = defineProps<{
 const { t } = useI18n();
 const notifyError = useErrorToast();
 const notifySuccess = useSuccessToast();
+const autoRefresh = useAutoRefresh();
 
 type ParameterField = 'intervalSeconds' | 'pingCount' | 'pingTimeoutSeconds';
 type ProbeOutcome = 'ok' | 'degraded' | 'stale' | 'failed';
@@ -295,7 +298,14 @@ async function save() {
   }
 }
 
-onMounted(() => { void load(); });
+onMounted(() => {
+  void load();
+  // 自动刷新只重取当前探测源结果与历史；配置表单有未保存修改时不打断。
+  autoRefresh.start(() => {
+    if (dirty.value || resultsLoading.value || !sourceId.value) return;
+    void loadSourceResults(sourceId.value);
+  });
+});
 onBeforeUnmount(() => {
   controller?.abort();
   resultsController?.abort();
@@ -383,7 +393,10 @@ onBeforeUnmount(() => {
           :label="t('applicationsPage.networkProbeSearchTargets')"
           :clear-label="t('common.clearSearch')"
         />
-        <Button size="sm" variant="ghost" :loading="resultsLoading" :disabled="!sourceId" @click="loadSourceResults(sourceId)"><RefreshCcw />{{ t('common.refresh') }}</Button>
+        <div class="flex flex-wrap items-center justify-end gap-2">
+          <DataRefreshControl />
+          <Button size="sm" variant="ghost" :loading="resultsLoading" :disabled="!sourceId" @click="loadSourceResults(sourceId)"><RefreshCcw />{{ t('common.refresh') }}</Button>
+        </div>
       </div>
 
       <LoadingOverlay v-if="resultsLoading && !sourceResults" :label="t('applicationsPage.networkProbeLoading')" />

@@ -1,13 +1,20 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 
-export type AutoRefreshMode = 'off' | '5' | '10';
+export type AutoRefreshMode = 'off' | '10m' | '30m' | '1h';
 
 const STORAGE_KEY = 'panel.autoRefresh';
-const fallback: AutoRefreshMode = '5';
+const fallback: AutoRefreshMode = '10m';
+const validModes: AutoRefreshMode[] = ['off', '10m', '30m', '1h'];
+const intervalByMode: Record<Exclude<AutoRefreshMode, 'off'>, number> = {
+  '10m': 10 * 60 * 1000,
+  '30m': 30 * 60 * 1000,
+  '1h': 60 * 60 * 1000,
+};
 const stored = (globalThis.localStorage?.getItem(STORAGE_KEY) as AutoRefreshMode | null) ?? null;
-const mode = ref<AutoRefreshMode>(stored === 'off' || stored === '5' || stored === '10' ? stored : fallback);
+// 旧版本可能存过 '5'/'10'（秒级），不再兼容，直接回落到默认 10 分钟。
+const mode = ref<AutoRefreshMode>(stored && validModes.includes(stored) ? stored : fallback);
 const enabled = computed(() => mode.value !== 'off');
-const intervalMs = computed(() => (mode.value === 'off' ? 0 : Number(mode.value) * 1000));
+const intervalMs = computed(() => (mode.value === 'off' ? 0 : intervalByMode[mode.value]));
 
 /**
  * Shared auto-refresh composable. `setMode` persists the global setting;

@@ -6,6 +6,8 @@ import Button from '@/components/ui/Button.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import Select from '@/components/ui/Select.vue';
+import DataRefreshControl from '@/components/patterns/DataRefreshControl.vue';
+import { useAutoRefresh } from '@/composables/useAutoRefresh';
 import { useErrorToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import type { ServerDto } from '@/types/servers';
@@ -28,10 +30,11 @@ import {
   statsFor,
 } from './metricsModel';
 
-const props = defineProps<{ server: ServerDto }>();
+const props = defineProps<{ server: ServerDto; active?: boolean }>();
 const emit = defineEmits<{ 'metrics-loaded': [series: ServerMetricsSeries] }>();
 const { t } = useI18n();
 const notifyError = useErrorToast();
+const autoRefresh = useAutoRefresh();
 const MetricChart = defineAsyncComponent(() => import('@/components/patterns/MetricChart.vue'));
 
 const metrics = ref<ServerMetricsSeries | null>(null);
@@ -191,7 +194,14 @@ async function load(force = false) {
 
 watch(range, () => { void load(true); });
 
-onMounted(() => { void load(true); });
+onMounted(() => {
+  void load(true);
+  // 指标展示页复用全局自动刷新档位；非当前 tab / 加载中时跳过这一拍。
+  autoRefresh.start(() => {
+    if (props.active === false || inFlight) return;
+    void load();
+  });
+});
 onBeforeUnmount(() => {
   metricsGuard.invalidate();
   metricsController?.abort();
@@ -204,6 +214,7 @@ onBeforeUnmount(() => {
       <span class="text-xs text-muted-foreground">{{ t('serversPage.metricsSampledAt') }}: {{ formatDateTime(sampledAt, t('common.never')) }}</span>
       <div class="flex flex-wrap items-center gap-2">
         <Select v-model="range" :options="rangeOptions" class="w-24" />
+        <DataRefreshControl />
         <Button size="sm" variant="ghost" :loading="loading" @click="load(true)"><RefreshCcw />{{ t('common.refresh') }}</Button>
       </div>
     </div>

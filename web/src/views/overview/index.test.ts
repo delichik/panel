@@ -225,6 +225,68 @@ describe('overview status page', () => {
     expect(cards[1]!.text()).not.toContain('23.5%');
   });
 
+  it('keeps metric values after an auto-refresh tick', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const { wrapper } = await mountPage();
+    expect(wrapper.findAll('[data-testid="server-card"]')[0]!.text()).toContain('23.5%');
+
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+    await flushPromises();
+    await flushPromises();
+
+    const cards = wrapper.findAll('[data-testid="server-card"]');
+    expect(cards).toHaveLength(2);
+    expect(cards[0]!.text()).toContain('23.5%');
+    expect(cards[1]!.text()).toContain('23.5%');
+    vi.useRealTimers();
+  });
+
+  it('keeps metric values when the probe source has no results', async () => {
+    networkProbes.mockResolvedValue({
+      serverId: 'srv-1',
+      enabled: true,
+      nodes: [{ serverId: 'srv-2', name: 'core', address: '10.0.0.2' }],
+      results: [],
+      updatedAt: null,
+    });
+    const { wrapper } = await mountPage();
+
+    const cards = wrapper.findAll('[data-testid="server-card"]');
+    expect(cards).toHaveLength(2);
+    expect(cards[0]!.text()).toContain('23.5%');
+    expect(cards[1]!.text()).toContain('23.5%');
+    expect(cards[0]!.text()).toContain('50%');
+    expect(cards[1]!.text()).toContain('63%');
+  });
+
+  it('keeps previous metric values when an auto-refresh metrics request fails', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const { wrapper } = await mountPage();
+    expect(wrapper.findAll('[data-testid="server-card"]')[0]!.text()).toContain('23.5%');
+
+    metricsBucketed.mockRejectedValue(new Error('metrics unavailable'));
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+    await flushPromises();
+    await flushPromises();
+
+    const cards = wrapper.findAll('[data-testid="server-card"]');
+    expect(cards).toHaveLength(2);
+    expect(cards[0]!.text()).toContain('23.5%');
+    expect(cards[1]!.text()).toContain('23.5%');
+    vi.useRealTimers();
+  });
+
+  it('keeps metric values when probe data is unavailable', async () => {
+    networkProbes.mockRejectedValue(new Error('probe unavailable'));
+    const { wrapper } = await mountPage();
+
+    const cards = wrapper.findAll('[data-testid="server-card"]');
+    expect(cards).toHaveLength(2);
+    expect(cards[0]!.text()).toContain('23.5%');
+    expect(cards[1]!.text()).toContain('23.5%');
+    expect(cards[1]!.text()).toContain('63%');
+  });
+
   it('shows the add-server guidance when no servers exist', async () => {
     list.mockResolvedValue([]);
     const { wrapper } = await mountPage();

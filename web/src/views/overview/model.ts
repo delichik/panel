@@ -5,6 +5,11 @@ import { formatPercent as sharedFormatPercent } from '@/utils/metrics';
 
 /** 指标新鲜度窗口：与后端 probe 口径一致（5 分钟）。 */
 export const METRICS_FRESH_WINDOW_MS = 5 * 60 * 1000;
+/**
+ * 桶查询缺少 latest 时的兜底新鲜度窗口：24h/30min 桶的最后一点是桶起点，
+ * 最多可能比当前时间早一个桶；缺少 latest 时不能因此把整卡指标误判为过期。
+ */
+export const BUCKET_FRESHNESS_FALLBACK_MS = 35 * 60 * 1000;
 /** 卡片历史条展示最近 24 小时，逐小时一个分段。 */
 export const HISTORY_HOURS = 24;
 
@@ -37,11 +42,16 @@ export function percentTone(percent: number | null | undefined): MetricTone | nu
   return 'danger';
 }
 
-export function nodeStatusKind(server: ServerDto, sampledAt: string | null | undefined, now = Date.now()): NodeStatusKind {
+export function nodeStatusKind(
+  server: ServerDto,
+  sampledAt: string | null | undefined,
+  now = Date.now(),
+  freshnessMs = METRICS_FRESH_WINDOW_MS,
+): NodeStatusKind {
   if (!server.reachable) return 'offline';
   if (!sampledAt) return 'stale';
   const parsed = Date.parse(sampledAt);
-  if (Number.isNaN(parsed) || now - parsed > METRICS_FRESH_WINDOW_MS) return 'stale';
+  if (Number.isNaN(parsed) || now - parsed > freshnessMs) return 'stale';
   return 'online';
 }
 
@@ -283,7 +293,8 @@ export function buildServerCards(input: BuildCardsInput): ServerCardView[] {
   return input.servers.map((server) => {
     const series = input.metricsById[server.id];
     const metrics = latestMetricsView(series);
-    const status = nodeStatusKind(server, metrics.sampledAt, now);
+    const freshnessMs = series?.latest ? METRICS_FRESH_WINDOW_MS : BUCKET_FRESHNESS_FALLBACK_MS;
+    const status = nodeStatusKind(server, metrics.sampledAt, now, freshnessMs);
     const isProbeSource = server.id === input.probeSourceId;
     const target = isProbeSource ? undefined : targets.get(server.id);
     const hasProbe = Boolean(target);
