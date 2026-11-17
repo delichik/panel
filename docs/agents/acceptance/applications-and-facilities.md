@@ -719,7 +719,91 @@
 - **边界**：0 与缺省（旧客户端/旧 Panel）表示“用默认值”，不是合法显式值；负数与越界只允许在保存路径拒绝，读取路径回落到默认值，不得让旧数据导致读取失败。探测周期影响上报频率与 stale 阈值，但不改变 30 分钟历史桶宽（`FAC-PRB-009`）；周期小于 30 秒时可加快故障发现，周期大于 5 分钟时 stale 阈值按 3 倍周期放大。服务器数量超过 100 台时目标数量随之增大，设施详情仍按探测源纵向列表逐目标展示（容器内部纵向滚动），不得改写为横向矩阵或整页横向滚动（`UI-FAC-018`）。旧 Agent 忽略新字段时保持其自身 3 包/2 秒口径，探测仍可用但不反映新配置；旧 Panel 不下发新字段时新 Agent 回退默认。
 - **验证点**：`internal/modules/networkprobe` 服务保存/读取测试（默认值、边界值、越界与负数错误码、失败不写库、版本递增、旧数据归一化）、`ReportConfig` 下发三参数测试；`internal/agent/rpc/report_test.go` 配置解析（默认/夹紧/旧 Panel 缺省）与 `internal/agent/probe/probe_test.go`（`Options.Normalize`、`Count*Timeout+2s` 兜底超时、动态 `-c`/`-W`）；前端 `NetworkProbeFacility` 表单单测（三字段缺省/范围/脏检测/保存 payload）与结果列表/历史条测试。
 
-## 10. 用户界面验收边界
+## 10. 指标设施
+
+指标设施（`metrics`）是观测型设施：没有隐藏应用与容器，也不产生协调 Job；只保存一份全局采集配置（采集范围、采集间隔、保留天数与清理计划），指标样本仍只写入 metrics 库 `metrics_snapshots`。原运行时设置中的指标保留天数、指标采集间隔和清理计划移入本设施（`FAC-MET-006`）；容器上报间隔等其它运行时设置保持不变。
+
+### FAC-MET-001 设施边界与数据归属
+
+- **触发入口**：访问设施目录 `/applications/facility-apps`、指标设施详情 `/applications/facility-apps/metrics` 或配置页 `/applications/facility-apps/metrics/config`；直接调用 `GET/PUT /api/v1/facility-apps/metrics`。
+- **前置**：认证用户；AppDB 已完成启动迁移（`metrics_facility_configs` 表已由既有 destructive AutoMigrate 创建）；MetricsDB 可读。
+- **成功**：目录卡片与设施详情/配置页使用 `web/src/api/metricsFacility.ts`（`config` → `GET`、`saveConfig` → `PUT`，路径 `/facility-apps/metrics`）；配置保存于 AppDB `metrics_facility_configs` 单行（`id='metrics'`，列 `mode`、`server_ids_json`、`retention_days`、`collection_interval_seconds`、`cleanup_schedule`、`version`、`updated_at`）；指标样本继续保存在 MetricsDB `metrics_snapshots`，不因设施化新增指标表或复制历史。实现位于 `internal/modules/observability/metricsfacility`（`NewService`/`NewHandler`/`RegisterRoutes`），在 `internal/bootstrap/panel/app.go` 装配独立注册路由。
+- **失败**：不得为指标设施创建隐藏应用、容器或协调 Job；不得把设施配置写入 LogDB/Coordination 库；未知 `facilityKind` 按设施不可用空态处理，不猜测成其它设施。
+- **边界**：从未保存且尚未播种时 `GET` 返回默认值（`mode=all`、`serverIds=[]`、`retentionDays=7`、`collectionIntervalSeconds=60`、`cleanupSchedule=daily`、`version=0`、`updatedAt` 零值/`null`），不落行；正常启动会由 `EnsureMigrated` 写入播种行（`version=1`，见 `FAC-MET-006`），此后用户首次保存再递增为 2。设施目录统计失败只影响该卡片，不影响其它设施卡。
+- **不变量**：配置 `version` 只在保存成功时递增；指标读取仍走既有 `GET /api/v1/servers/{id}/metrics`（`OBS-MET-003/004`），设施 API 不返回时间序列；设施配置与指标样本的事实源分库，不得混用。
+- **验证点**：路由清单测试（新增 2 条 method/path 后计数/哈希同步，`internal/bootstrap/panel/routes_manifest_test.go`）、`metricsfacility` handler/service 测试（`TestHandlerRoutes`、`TestGetDefaultsWhenNeverSaved`、`TestTableConstraintsRejectInvalidRows`）、设施目录与 Mock 路由测试（`web/src/mocks/domainRoutes.test.ts`、`web/src/api/metricsFacility.test.ts`）。
+
+### FAC-MET-002 采集节点选择与下发
+
+- **触发入口**：保存设施配置后，既有 Agent report stream 在每条连接建立时及后续每轮按**该服务器**读取 `ReportConfig` 并下发指标间隔；也可经 `GET /api/v1/facility-apps/metrics` 读取当前选择。
+- **前置**：至少一个兼容 Agent 已连接（既有 report stream 链路）；设施配置合法（`FAC-MET-003`）。
+- **成功**：`mode=all` 时所有现存服务器均启用采集；`mode=selected` 时仅 `serverIds` 内且当前仍存在的服务器启用采集。Panel 按服务器下发 `metrics_interval_seconds`：启用节点为设施 `collectionIntervalSeconds`，禁用节点为 `0`，Agent 据此停止该节点的指标采集；容器上报间隔 `containers_interval_seconds` 仍取运行时设置（`SET-RUN-014`），不因指标模式改变，容器上报也不因节点被指标禁用而停止。
+- **失败**：设施配置或服务器列表读取失败时按 disabled（间隔 0）下发并只记录日志，不中断 report stream、不清空其它节点；服务器已从 Panel 删除时按 disabled 下发，不回退旧间隔。单节点取消失败不影响其它连接。
+- **边界**：`all` 模式下 `serverIds` 被忽略；切换 `all`→`selected` 只对未选中的节点停止采集，已存在的历史样本保留（`FAC-MET-004`）；`selected` 删空后没有节点被启用，但配置仍为 `selected`。stream 静默超时取 `min(指标设施采集间隔, containerReportIntervalSeconds)`，既有 10 秒下限逻辑保留，设施读取失败回退默认 60 秒。
+- **不变量**：节点选择与间隔只经既有 Agent report stream 下发，不新增 Panel→Agent 独立 RPC、不新增后台 ticker；下发集合只由当前服务器表与设施配置派生，Agent 不得自选节点或放大 Panel 已归一化的间隔。
+- **验证点**：`internal/bootstrap/panel/agent_report_collector_test.go` 覆盖按服务器计算间隔（all/selected/已删除节点/读失败回退）、容器间隔不受影响；`metricsfacility` 的 `TestReportConfigAllMode`、`TestReportConfigSelectedMode`、`TestSnapshotsRespectTTLAndInvalidation`、`TestSnapshotReadFailureFallsBackToDefaults`；Agent report stream 配置解析测试。
+
+### FAC-MET-003 配置保存与校验
+
+- **触发入口**：认证用户在指标设施配置页点击「保存」，或直接 `PUT /api/v1/facility-apps/metrics`，body 为 `{mode, serverIds, retentionDays, collectionIntervalSeconds, cleanupSchedule}`（无 `version`/`updatedAt`）。
+- **前置**：AppDB 可写；服务器列表可读；请求与当前已保存配置不同（页面仅在脏状态启用保存，但服务端不依赖前端校验）。
+- **成功**：`mode` 只允许 `all|selected`；`mode=selected` 时 `serverIds` 必须非空、每项当前存在，保存前去空白、去重、按稳定服务器 ID 升序；`retentionDays` 必须 ≥1；`collectionIntervalSeconds` 必须 ≥1；`cleanupSchedule` 只允许 `hourly|daily|weekly`。`mode=all` 忽略并保存空 `serverIds`（归一化为 `[]`）。校验通过后单行 upsert，`version = 上次 version + 1`、更新 `updated_at`，返回保存后的完整配置。
+- **失败**：非法 mode 返回 `metrics_facility_mode_invalid`；`selected` 空集合返回 `metrics_facility_servers_required`；不存在的服务器 ID 返回 `metrics_facility_server_not_found`；`retentionDays < 1` 返回 `metrics_facility_retention_invalid`；`collectionIntervalSeconds < 1` 返回 `metrics_facility_interval_invalid`；`cleanupSchedule` 非法返回 `metrics_facility_cleanup_schedule_invalid`。任一校验失败不得写库、不得 bump `version`、不得部分保存。
+- **边界**：与网络探测不同，保存路径中的 `0` 不是“使用默认值”而是非法值（默认值只用于从未保存的读取与迁移播种，见 `FAC-MET-001/006`）；重复服务器 ID 静默去重而不是报错；`mode=all` 时即使提交了 `serverIds` 也归一化为空数组；读取侧对旧行/手工数据的非法值做防御性归一化，不得让读取失败或把非法节奏下发给 Agent。
+- **不变量**：配置恒为单行 upsert；保存成功不要求立即重算指标历史（间隔在对齐落库路径生效，见 `FAC-MET-004`）；保存成功后使服务端 3 秒 TTL 配置快照失效，下一次 stream 读取到新值。
+- **验证点**：`metricsfacility` handler/service 的归一化与错误码测试（`TestSaveValidationErrors`、`TestSaveAllModeClearsServerIDsAndBumpsVersion`、`TestSaveSelectedModeNormalizesServerIDs`、`TestHandlerMapsValidationErrors`、`TestValidationErrorCodesHaveChineseTranslations`；覆盖六类错误码、失败不写库、`version` 递增、`all` 忽略 serverIds、`selected` 空集合、重复 ID 去重、读取侧坏数据归一化）。
+
+### FAC-MET-004 采集间隔与对齐生效
+
+- **触发入口**：保存设施配置后下一轮 report stream 下发；Agent 按新间隔上报指标样本；Panel 的 `handleReport` 处理样本。
+- **前置**：节点被设施判定为启用；Agent 已连接且兼容。
+- **成功**：新采集间隔在下一轮 stream 生效，无需重连或重启 Agent；启用节点按设施 `collectionIntervalSeconds` 做整点对齐后落库（沿用既有指标整点对齐语义，`AGT-RPT-004`）；`replayed=true` 的补报样本跳过整点对齐但仍按 `(server_id, time)` 幂等落库（`OBS-MET-009`）；禁用节点上报的样本跳过落库并记录 debug 日志，其**既有历史行保留**，读取查询仍返回历史序列。
+- **失败**：落库路径（`handleReport`）设施配置读取失败时按 fail-open 回退 enabled/默认 60 秒继续落库并记录日志，不中断流（下发路径按 `FAC-MET-002` fail-closed 下发 disabled）；`metrics.SaveReported` 失败只记录日志，不中断 report stream、不回退其它节点；采集间隔在样本在途期间变化导致对齐不匹配时跳过该样本并记录 debug 日志，不追写。
+- **边界**：间隔变更只影响后续样本的落库对齐，不追溯删除或重写历史；禁用→重新启用后从新样本继续，中间空档在指标图中表现为断线而不是补 0；禁用节点不产生新行，不代表服务器不可达（可达性由其它上报/探测判定）。
+- **不变量**：指标落库仍只写 MetricsDB `metrics_snapshots`，字段与幂等语义不变（`OBS-MET-001/009`）；整点对齐与重放跳过逻辑不因设施化改变。
+- **验证点**：`internal/bootstrap/panel/agent_report_collector_test.go` 覆盖禁用节点跳过落库、启用节点按设施间隔对齐、`replayed` 跳过对齐、读失败回退默认、保存失败仅日志；`metrics.Service.Save` 幂等回归测试。
+
+### FAC-MET-005 保留清理
+
+- **触发入口**：既有 metrics cleanup worker 的周期循环（不新增 ticker/任务类型），由 `internal/bootstrap/panel/app.go` 把 provider 从运行时设置换为指标设施。
+- **前置**：设施已迁移（`FAC-MET-006`）；`cleanupSchedule` 为合法值。
+- **成功**：worker 通过设施 `CleanupSettings()` 获取 `retentionDays` 与 `cleanupSchedule`（3 秒 TTL 快照，`Save` 后失效），按既有 hourly/daily/weekly 调度独立运行，不属于 event executor worker；每轮只删除超过保留期的 `metrics_snapshots` 行，成功后记录日志。
+- **失败**：设施读取失败回退默认（7 天/daily）继续运行并记录日志，不得删除额外行；读取层对非法 `retentionDays`（<1，仅可能来自手工/旧数据）防御性回落默认 7 天，保证下发给清理的保留期总是合法；worker 若仍收到 <1 的保留期（直接调用/装配错误），必须拒绝本轮删除且不删除任何行，不得按 0 天全删；单次删除失败不得终止 worker。
+- **边界**：保存更低保留天数后在下一次清理生效；提高保留天数不会恢复已删除行；清理按既有时间/调度语义执行，配置热更新无需重启 Panel。
+- **不变量**：清理只作用于 `metrics_snapshots`，不得清理事件、日志、协调 Job 或其它表；worker 结构不变，仅 provider 换源。
+- **验证点**：`internal/modules/observability/metrics/cleanup_worker_test.go` 的 `TestCleanupWorkerUsesFacilityProviderSettings`、`TestCleanupInterval`、`TestCleanupDue`（provider 来自设施配置、调度周期、默认回退）；`internal/modules/observability/metrics/service_test.go` 的 `TestMetricsCleanupRejectsInvalidRetention`（retention<1 拒绝且零删除）；`internal/bootstrap/panel` 装配测试；`FAC-MET-003` 的保存校验回归。
+
+### FAC-MET-006 旧设置迁移与设置页移除
+
+- **触发入口**：Panel 启动装配时调用 `metricsfacility.Service.EnsureMigrated`；同时 `GET/PUT /api/v1/settings/runtime` 与设置页「运行时」分区不再包含指标三项。
+- **前置**：旧 alpha 数据库的 `runtime_settings` 可能已有旧键 `metricsRetentionDays`、`metricsCollectionIntervalSeconds`、`cleanupSchedule`；`metrics_facility_configs` 可能为空（首次升级）。
+- **成功**：`metrics_facility_configs` 无行时读取旧三键播种：合法值（retention≥1、interval≥1、schedule∈hourly/daily/weekly）原样采用，缺失或非法时使用默认（7 天/60 秒/daily）；写入单行（`version=1`、`updated_at` 为播种时间）后**不再读取旧键**（只播种一次）；旧键保留不删除，使旧备份恢复后仍能播种。`GET/PUT /settings/runtime` 与前端类型不再包含 `metricsRetentionDays`、`metricsCollectionIntervalSeconds`、`cleanupSchedule`，设置页“运行时”分区只保留容器上报间隔、语言、日志等级、协调 trace 与清空事件日志；`containerReportIntervalSeconds` 及其更新语义保持不变（`SET-RUN-014`）。
+- **失败**：`EnsureMigrated` 失败必须导致 Panel 启动失败（配置无法可靠建立），不得静默用默认值继续对外服务；设置接口不得因移除字段而对合法请求报错或写入旧键。
+- **边界**：表由既有 destructive AutoMigrate 自动创建（旧库升级即为空表），无需手写迁移；旧客户端仍提交三个旧字段时按未知 JSON 字段忽略，不得写回 `runtime_settings` 或影响设施配置；删除旧键后不会重新播种（设计上旧键保留）。
+- **不变量**：运行时设置不再读取/写入/校验指标三项（`SET-RUN-006/007/021`）；设置页“运行时”分区不得再出现这三项表单；迁移播种是唯一读取旧键的位置，且只在首次无行时发生。
+- **验证点**：`metricsfacility` 的 `EnsureMigrated` 测试（`TestEnsureMigratedSeedsLegacySettings`、`TestEnsureMigratedFallsBackForInvalidLegacySettings`、`TestEnsureMigratedIsOneTime`；覆盖合法旧值采用、非法回退默认、只播种一次、重复启动幂等）、`internal/modules/settings` 服务测试（`GET/PUT` 不再含三项、容器上报间隔仍生效、旧 payload 不恢复语义）、前端设置页 fixture/mocks 同步删除字段（`web/src/mocks/settings.ts`、`web/src/api/settings.test.ts`）。
+
+### FAC-MET-007 服务器删除修剪
+
+- **触发入口**：`DELETE /api/v1/servers/{id}`，在既有 `cleanupServerReferences` 同一 AppDB 事务内执行。
+- **前置**：被删服务器可能出现在 `selected` 配置的 `server_ids_json` 中，也可能不存在于其中（`all` 模式或未被选中）；服务器可能已有指标行。
+- **成功**：`mode=selected` 时从 `server_ids_json` 移除该 ID 并将 `version` 加 1、更新 `updated_at`；`mode=all` 时不改写 `server_ids_json`（`all` 的采集节点集合由服务器表现算）；该服务器的指标数据行删除仍由既有 OBS-MET-006 路径负责且不得被遗漏。
+- **失败**：设施修剪或指标行删除失败必须让服务器删除返回错误（同一事务回滚），不得留下指向已删除服务器的选中 ID 或悬空指标行；重复删除/清理必须幂等。
+- **边界**：修剪后 `serverIds` 仍保持稳定排序/去重；删空后配置仍为 `selected` 但没有节点被启用（`FAC-MET-002`），不会把 `all` 改成 `selected`；被删节点仅作为采集节点时，其历史指标删除后其它服务器指标不变。
+- **不变量**：配置修剪与服务器删除同事务，不得事后异步补删；指标数据删除路径（`OBS-MET-006`）与设施配置修剪互不替代；不 bump 无关配置或其它设施版本。
+- **验证点**：`internal/modules/servers` 删除清理测试（`TestDeleteServerCleansMetricsFacilityReferences`、`TestDeleteServerLeavesMetricsFacilityAllModeAlone`、`TestDeleteServerFailsWhenMetricsFacilityPruneFails`；覆盖 `selected` 移除+version 递增、`all` 不改写、指标行删除仍执行、幂等、失败回滚）、`OBS-MET-006` 回归测试。
+
+### FAC-MET-008 失败语义与验证证据
+
+- **触发入口**：设施配置/服务器列表读取失败、保存失败、页面加载与保存、空服务器、无观测数据、节点被禁用/重新启用等异常场景；由 `GET/PUT /api/v1/facility-apps/metrics` 与设施页面、report stream 共同触发。
+- **前置**：系统处于部分依赖不可用或数据为空的状态；调用方已认证（页面/API 均受通用认证约束）。
+- **成功**：设施配置读取失败时 report stream 按 disabled 下发（只记录日志）；保存失败不影响已生效的指标流；页面配置读取失败显示局部 `EmptyState` + 重试，保存失败 toast 并保留草稿；没有服务器时 `mode=all` 仍然合法、页面显示节点数 0 的空态；没有任何观测样本时指标页/概览显示明确空态，不用 0 或伪造曲线冒充数据。
+- **失败**：任何单节点或单次保存失败不得升级为设施级失败、不得阻塞容器上报或其它设施；不得用空数据冒充“采集正常”；不得伪造 `version`/`updatedAt`，也不得在错误响应里泄漏内部路径或配置正文。
+- **边界**：`selected` 且选中节点均已删除/禁用时全部节点停止采集但配置仍可读取与保存（保存非空校验只在用户提交 `selected` 时执行）；旧 Agent 按既有协议字段理解间隔，协议向后兼容由既有 report contract 保证；页面文案全部走 i18n（`applicationsPage.metrics*`，见[多语言翻译状态](../i18n-translation-status.md)）。
+- **不变量**：失败路径只记录日志/返回稳定 `panelerr` 错误码，不改变已保存配置；验证证据必须能以稳定验收编号或测试名称反查（`GOV-TRACE-002`）。
+- **验证点**：`metricsfacility` 服务/handler 的空集合、读失败、保存失败、非法配置测试（`TestGetDefaultsWhenNeverSaved`、`TestSaveValidationErrors`、`TestSnapshotReadFailureFallsBackToDefaults`、`TestHandlerRoutes`）；`internal/bootstrap/panel/agent_report_collector_test.go` 的读失败 disabled 与保存失败仅日志；前端 `MetricsFacility` 组件/模型测试（加载失败重试、保存失败保留草稿、空服务器空态）、`web/src/mocks/domainRoutes.test.ts` 的设施路由与 PUT 校验；人工观察点：真实 Agent 断连/重连后新间隔是否在下一轮生效。
+
+## 11. 用户界面验收边界
 
 ### APP-UI-001 信息架构与滚动
 
@@ -739,14 +823,14 @@
 - **不变量**：危险删除/批量操作必须标准确认；部署请求完成与节点收敛状态分开展示；有界轮询以任一节点活跃 Job 为谓词。
 - **验证**：API call-count、race/stale-response、status/error contract、bounded polling model tests。
 
-## 11. 覆盖来源与已知缺口
+## 12. 覆盖来源与已知缺口
 
 主要取证来源：
 
 - `docs/agents/modules/applications.md`、`containerization.md`、`tasks-scheduler.md`、`runtime-events.md`
-- `internal/modules/applications/`、`internal/modules/facilityapps/`、`internal/modules/networkprobe/`、`internal/orchestrator/`
+- `internal/modules/applications/`、`internal/modules/facilityapps/`、`internal/modules/networkprobe/`、`internal/modules/observability/metricsfacility/`、`internal/orchestrator/`
 - `internal/agent/docker/`、`internal/agent/nfsvol/`、`internal/agent/probe/` 及相应契约/测试
-- `web/src/api/applications.ts`、`facilityApps.ts`、`networkProbe.ts`、`containers.ts`，以及 `web/src/types/applications.ts`、`facilityApps.ts`、`networkProbe.ts`、`resources.ts`；探测参数与纵向结果列表的证据还包括 `web/src/utils/networkProbe.ts`、`web/src/views/applications/NetworkProbeFacility.vue` 与 `web/src/views/overview/HistoryStrip.vue`
+- `web/src/api/applications.ts`、`facilityApps.ts`、`networkProbe.ts`、`metricsFacility.ts`、`containers.ts`，以及 `web/src/types/applications.ts`、`facilityApps.ts`、`networkProbe.ts`、`metricsFacility.ts`、`resources.ts`；探测参数与纵向结果列表的证据还包括 `web/src/utils/networkProbe.ts`、`web/src/views/applications/NetworkProbeFacility.vue` 与 `web/src/views/overview/HistoryStrip.vue`
 - `internal/integration/appdeploy/` 与上述模块单元测试
 
 已知缺口（变更触及前应先补证据）：

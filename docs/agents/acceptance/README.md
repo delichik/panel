@@ -46,10 +46,10 @@
 | 产品范围、端到端用户旅程、全局非目标 | [产品范围与端到端验收](product-scope.md) |
 | 全局导航、慢网路由反馈、会话、布局、通用交互 | [界面外壳与交互约定](ui-shell-and-conventions.md) |
 | 任一具体页面、页面首次加载或用户操作 | [逐页面验收](ui-pages.md) |
-| 应用、挂载来源、应用文件、修订、部署、节点工作区布局、设施应用、存储共享、网络探测设施 `FAC-PRB-001..010`；规划失败 `APP-PLAN-001`、系统核实中 `APP-RUN-004` | [应用与设施应用](applications-and-facilities.md) |
+| 应用、挂载来源、应用文件、修订、部署、节点工作区布局、设施应用、存储共享、网络探测设施 `FAC-PRB-001..010`、指标设施 `FAC-MET-001..008`；规划失败 `APP-PLAN-001`、系统核实中 `APP-RUN-004` | [应用与设施应用](applications-and-facilities.md) |
 | desired/observed、协调 Job、统一追加活动日志、任务、运行事件；规划失败隔离 `ORCH-PLAN-006`、启动稳定观察 `ORCH-CTRL-007`；RunEngine Phase A `ENG-RUN-001..005`、`ENG-RET-001`、`TASK-DISPATCH-001..003` | [协调、任务与运行事件](orchestration-and-tasks.md) |
 | 容器、镜像、网络、卷、资源缓存与操作队列 | [容器与资源](containers-and-resources.md) |
-| 登录、账号、运行时设置、概览、系统版本 | [身份、设置与系统](identity-settings-system.md) |
+| 登录、账号、运行时设置（指标保留/采集间隔/清理计划已移出，见 `SET-RUN-021`）、概览、系统版本 | [身份、设置与系统](identity-settings-system.md) |
 | 凭据、服务器、Agent、SSH、UFW、Fail2ban、APT；Agent report 补报 `AGT-RPT-007`、网络探测上报 `AGT-RPT-008` | [服务器、安全与软件包](servers-security-packages.md) |
 | Tailscale：容器内 tailscaled 生命周期、全局设置与只写认证密钥、节点加入意图与观测态、节点收敛任务、tailnet 地址优先 | [Tailscale](tailscale.md) |
 | DNS、ACME、自签名证书、密钥资产 | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
@@ -76,6 +76,8 @@
 
 失败运行日志与有界降级见 [ORCH-CTRL-008](orchestration-and-tasks.md)；设施逐节点部署、按需请求错误诊断见 [FAC-RP-012/013](applications-and-facilities.md)。
 
+指标采集与保留从设置页移出为**指标设施**（`metrics`）：配置读写 `GET/PUT /api/v1/facility-apps/metrics`、采集节点选择与按节点下发、采集间隔对齐生效、保留清理、旧运行时设置播种与设置页移除、服务器删除配置修剪、失败语义见 [FAC-MET-001..008](applications-and-facilities.md)；设施目录与页面行为见 [UI-FAC-014/019](ui-pages.md)、[UI-SRV-008](ui-pages.md)、[UI-SET-002](ui-pages.md)；设置接口移除三项见 [SET-RUN-021](identity-settings-system.md)，容器上报间隔仍由 [SET-RUN-014](identity-settings-system.md) 约束；表/路由基线见 [项目覆盖基线](coverage-matrix.md)、[API 路由逐项清单](api-route-inventory.md)。
+
 修改下列对象时，至少检查对应消费者：
 
 | 被修改对象 | 必查消费者 |
@@ -87,6 +89,7 @@
 | Tailscale 意图、观测地址或容器期望态 | 地址解析优先级与回落、节点证书 SAN、存储导出白名单、入口代理上游、设施重同步、节点收敛任务、设置页与服务器页、容器内 tailscaled 生命周期 |
 | DNS 或证书 | 反向代理、应用内置变量、密钥资产引用、续签任务、删除引用检查 |
 | 数据库模型 | 四库归属、迁移顺序、索引/约束、备份恢复、保留清理、旧版本升级 |
+| 指标设施配置（采集范围/间隔/保留天数/清理计划） | Agent report stream 按节点下发、指标整点对齐与禁用节点跳过落库、metrics cleanup worker、指标查询与概览、设置页迁移播种、服务器删除修剪、i18n 与设施目录/详情页 |
 | 运行时设置 | 启动加载、热更新范围、后台调度器、认证、TLS、前端表单与公开品牌接口 |
 | 用户可见文本 | 中英文 key、后端错误翻译、默认/回退语言、翻译状态 |
 | 构建产物或版本 | Panel、panel-init、全架构 Agent bundle、前端静态资源、镜像健康检查、发布标签 |

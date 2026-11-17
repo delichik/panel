@@ -52,10 +52,7 @@ export interface RuntimeSettings {
   appDatabase: string;
   metricsDatabase: string;
   dataRoot: string;
-  metricsRetentionDays: number;
-  metricsCollectionIntervalSeconds: number;
   containerReportIntervalSeconds: number;
-  cleanupSchedule: string;
   tokenExpiration: string;
   language: string;
   logLevel: string;
@@ -70,10 +67,7 @@ export interface RuntimeSettings {
 }
 
 export interface RuntimeUpdate {
-  metricsRetentionDays: number;
-  metricsCollectionIntervalSeconds: number;
   containerReportIntervalSeconds: number;
-  cleanupSchedule: string;
   tokenExpiration: string;
   language: string;
   logLevel: string;

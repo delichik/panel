@@ -864,3 +864,29 @@ func (*NetworkProbeResult) ExtraIndexDDL() map[string][]string {
 		},
 	}
 }
+
+// MetricsFacilityConfig 是“指标采集/保留”设施的单行配置。ID 固定为 metrics；
+// Mode=all 表示所有节点采集指标，selected 时仅 ServerIDs 内节点采集。
+// RetentionDays/CollectionIntervalSeconds/CleanupSchedule 取代旧 runtime_settings
+// 中的三项指标设置；旧库升级时由 AutoMigrate 以默认值补齐，首次启动由设施
+// EnsureMigrated 播种。
+type MetricsFacilityConfig struct {
+	ID                        string    `orm:"primary_key"`
+	Mode                      string    `orm:"not_null;default:'all'"`
+	ServerIDs                 []string  `orm:"json;not_null;default:'[]';column:server_ids_json"`
+	RetentionDays             int       `orm:"not_null;default:7"`
+	CollectionIntervalSeconds int       `orm:"not_null;default:60"`
+	CleanupSchedule           string    `orm:"not_null;default:'daily'"`
+	Version                   int       `orm:"not_null;default:1"`
+	UpdatedAt                 time.Time `orm:"not_null"`
+}
+
+func (*MetricsFacilityConfig) TableName() string { return "metrics_facility_configs" }
+
+// TableConstraints 返回 metrics_facility_configs 表无法用 orm tag 表达的原始约束。
+func (*MetricsFacilityConfig) TableConstraints() []string {
+	return []string{
+		"CHECK(mode IN ('all','selected'))",
+		"CHECK(cleanup_schedule IN ('hourly','daily','weekly'))",
+	}
+}

@@ -33,7 +33,10 @@ const deploymentModeSelected = "selected"
 //   - 入口代理的网关、源站和中继节点，以及存储共享的存储节点都内嵌节点 ID，
 //     悬空后设施渲染会生成指向已不存在节点的 upstream；
 //   - 网络探测按 (source,target) 保存节点 ID，悬空结果会出现在探测矩阵与服务器
-//     探测页中，selected 模式的探测节点列表同样引用节点 ID。
+//     探测页中，selected 模式的探测节点列表同样引用节点 ID；
+//   - 指标设施 selected 模式的采集节点列表同样引用节点 ID，悬空后设施页仍会把
+//     已删除节点算作采集节点（其指标历史行由删除提交后的 metrics DB 清理负责，
+//     见 OBS-MET-006）。
 func (s *Service) cleanupServerReferences(ctx context.Context, tx *sql.Tx, serverID string) error {
 	if err := cancelAndDeleteServerJobs(ctx, tx, serverID); err != nil {
 		return err
@@ -58,6 +61,9 @@ func (s *Service) cleanupServerReferences(ctx context.Context, tx *sql.Tx, serve
 		return err
 	}
 	if err := removeServerFromNetworkProbe(ctx, tx, serverID); err != nil {
+		return err
+	}
+	if err := removeServerFromMetricsFacility(ctx, tx, serverID); err != nil {
 		return err
 	}
 	return disableApplicationsWithoutDeploymentTarget(ctx, tx, serverID, affected)
@@ -372,5 +378,51 @@ func removeServerFromNetworkProbe(ctx context.Context, tx *sql.Tx, serverID stri
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err = orm.RawExec(ctx, tx, `UPDATE network_probe_configs SET server_ids_json=?,version=version+1,updated_at=? WHERE id='network_probe'`, string(encoded), now)
+	return err
+}
+
+// removeServerFromMetricsFacility 在 selected 模式下把该服务器从指标设施的采集
+// 节点列表中移除并递增设施版本；all 模式按现存服务器采集，不写配置。
+//
+// 与网络探测设施相同：节点删除后不修剪会在设施页继续显示已不存在的采集节点。
+// 幂等——列表里没有该节点时不改库、不递增版本。指标数据行（metrics_snapshots）
+// 不在这里删除：数据在独立 MetricsDB，由服务器删除提交后的既有路径清理
+// （OBS-MET-006），不能在 AppDB 事务里跨库删除。
+func removeServerFromMetricsFacility(ctx context.Context, tx *sql.Tx, serverID string) error {
+	var mode, rawIDs string
+	err := tx.QueryRowContext(ctx, `SELECT mode,server_ids_json FROM metrics_facility_configs WHERE id='metrics'`).Scan(&mode, &rawIDs)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(mode) != deploymentModeSelected {
+		return nil
+	}
+	ids := []string{}
+	if strings.TrimSpace(rawIDs) != "" {
+		if err := json.Unmarshal([]byte(rawIDs), &ids); err != nil {
+			return err
+		}
+	}
+	kept := make([]string, 0, len(ids))
+	changed := false
+	for _, id := range ids {
+		if id == serverID {
+			changed = true
+			continue
+		}
+		kept = append(kept, id)
+	}
+	if !changed {
+		return nil
+	}
+	encoded, err := json.Marshal(kept)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err = orm.RawExec(ctx, tx, `UPDATE metrics_facility_configs SET server_ids_json=?,version=version+1,updated_at=? WHERE id='metrics'`, string(encoded), now)
 	return err
 }

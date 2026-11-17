@@ -12,6 +12,7 @@ import (
 	containerization "panel/internal/modules/containers"
 	"panel/internal/modules/networkprobe"
 	"panel/internal/modules/observability/metrics"
+	"panel/internal/modules/observability/metricsfacility"
 	server "panel/internal/modules/servers"
 	"panel/internal/modules/settings"
 	"panel/internal/platform/config"
@@ -436,6 +437,184 @@ func TestAgentReportHandleReportReplayedMetrics(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("unaligned non-replayed sample must be skipped, got %d rows", count)
+	}
+}
+
+// fakeMetricsFacility 模拟指标设施在 Agent 上报链路中的两个入口：按服务器
+// 计算采集目标，以及供静默检测使用的设施间隔。
+type fakeMetricsFacility struct {
+	reports  map[string]metricsfacility.ReportConfig
+	err      error
+	interval int
+	asked    []string
+}
+
+func (f *fakeMetricsFacility) ReportConfig(_ context.Context, serverID string) (metricsfacility.ReportConfig, error) {
+	f.asked = append(f.asked, serverID)
+	if f.err != nil {
+		return metricsfacility.ReportConfig{}, f.err
+	}
+	return f.reports[serverID], nil
+}
+
+func (f *fakeMetricsFacility) IntervalSeconds() int { return f.interval }
+
+// TestAgentReportStreamConfigTargetsMetricsPerServer covers FAC-MET-002: the
+// report stream tells each server whether it collects metrics (0 = disabled)
+// and with which facility interval, while the container interval still comes
+// from runtime settings. An absent facility degrades to enabled/60s.
+func TestAgentReportStreamConfigTargetsMetricsPerServer(t *testing.T) {
+	settingsSvc := newReportCollectorSettings(t)
+	collector := newAgentReportCollector(&fakeReportServerProvider{}, nil, settingsSvc, nil, nil, nil)
+	collector.SetMetricsFacility(&fakeMetricsFacility{reports: map[string]metricsfacility.ReportConfig{
+		"srv-on":  {Enabled: true, IntervalSeconds: 120},
+		"srv-off": {Enabled: false},
+	}})
+	ctx := context.Background()
+
+	on := collector.reportStreamConfig(ctx, server.Server{ID: "srv-on"})
+	if on.ServerID != "srv-on" || on.MetricsIntervalSeconds != 120 {
+		t.Fatalf("enabled server config = %#v, want metrics interval 120", on)
+	}
+	if want := settingsSvc.Runtime().ContainerReportIntervalSeconds; on.ContainersIntervalSeconds != want {
+		t.Fatalf("containers interval = %d, want runtime settings value %d", on.ContainersIntervalSeconds, want)
+	}
+	off := collector.reportStreamConfig(ctx, server.Server{ID: "srv-off"})
+	if off.MetricsIntervalSeconds != 0 {
+		t.Fatalf("disabled server must be told metrics interval 0, got %#v", off)
+	}
+
+	// 未注入设施（测试/降级）回退 enabled=true、默认 60s。
+	fallback := newAgentReportCollector(&fakeReportServerProvider{}, nil, newReportCollectorSettings(t), nil, nil, nil)
+	if got := fallback.reportStreamConfig(ctx, server.Server{ID: "srv-x"}); got.MetricsIntervalSeconds != defaultMetricsIntervalSeconds {
+		t.Fatalf("missing facility fallback = %#v, want %ds", got, defaultMetricsIntervalSeconds)
+	}
+}
+
+// TestAgentReportStreamConfigFacilityFailureDisablesMetrics covers FAC-MET-008:
+// when the facility cannot be read the delivery path must degrade to disabled
+// (only a log), never keep a stale collection interval.
+func TestAgentReportStreamConfigFacilityFailureDisablesMetrics(t *testing.T) {
+	collector := newAgentReportCollector(&fakeReportServerProvider{}, nil, newReportCollectorSettings(t), nil, nil, nil)
+	collector.SetMetricsFacility(&fakeMetricsFacility{err: context.DeadlineExceeded})
+	got := collector.reportStreamConfig(context.Background(), server.Server{ID: "srv-1"})
+	if got.MetricsIntervalSeconds != 0 {
+		t.Fatalf("facility read failure must disable metrics delivery, got %#v", got)
+	}
+}
+
+// TestAgentReportHandleReportSkipsDisabledMetricsNode covers FAC-MET-002/004:
+// samples from a node that is outside the selected collection scope are not
+// persisted even if an old agent keeps reporting.
+func TestAgentReportHandleReportSkipsDisabledMetricsNode(t *testing.T) {
+	settingsSvc, metricsSvc, metricsDB := newReportCollectorMetrics(t)
+	collector := newAgentReportCollector(&fakeReportServerProvider{}, nil, settingsSvc, metricsSvc, nil, nil)
+	collector.SetMetricsFacility(&fakeMetricsFacility{reports: map[string]metricsfacility.ReportConfig{
+		"srv-disabled": {Enabled: false},
+	}})
+	snapshot := linux.MetricsSnapshot{CPUUsagePercent: 42}
+	if err := collector.handleReport(context.Background(), "srv-disabled", agentclient.AgentReport{
+		SampleAt: time.Unix(120, 0).UTC(),
+		Metrics:  &snapshot,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := metricsDB.QueryRow(`SELECT COUNT(*) FROM metrics_snapshots WHERE server_id='srv-disabled'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("disabled node samples must be skipped, got %d rows", count)
+	}
+}
+
+// TestAgentReportHandleReportFacilityFailureFallsBackToDefault covers the save
+// path failure semantics: a transient facility read failure stores with
+// enabled=true and the default 60s interval instead of dropping the sample.
+func TestAgentReportHandleReportFacilityFailureFallsBackToDefault(t *testing.T) {
+	settingsSvc, metricsSvc, metricsDB := newReportCollectorMetrics(t)
+	collector := newAgentReportCollector(&fakeReportServerProvider{}, nil, settingsSvc, metricsSvc, nil, nil)
+	collector.SetMetricsFacility(&fakeMetricsFacility{err: context.DeadlineExceeded})
+	snapshot := linux.MetricsSnapshot{CPUUsagePercent: 21}
+	if err := collector.handleReport(context.Background(), "srv-1", agentclient.AgentReport{
+		SampleAt: time.Unix(120, 0).UTC(),
+		Metrics:  &snapshot,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := metricsDB.QueryRow(`SELECT COUNT(*) FROM metrics_snapshots WHERE server_id='srv-1'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("facility read failure must still store the sample, got %d rows", count)
+	}
+}
+
+// TestAgentReportHandleReportUsesFacilityInterval covers FAC-MET-004: an enabled
+// node's samples are aligned against the facility collection interval, not the
+// removed runtime setting.
+func TestAgentReportHandleReportUsesFacilityInterval(t *testing.T) {
+	settingsSvc, metricsSvc, metricsDB := newReportCollectorMetrics(t)
+	collector := newAgentReportCollector(&fakeReportServerProvider{}, nil, settingsSvc, metricsSvc, nil, nil)
+	collector.SetMetricsFacility(&fakeMetricsFacility{reports: map[string]metricsfacility.ReportConfig{
+		"srv-1": {Enabled: true, IntervalSeconds: 120},
+	}})
+	// 60s 是旧默认间隔、不是设施间隔；启用节点必须按 120s 对齐。
+	unaligned := linux.MetricsSnapshot{CPUUsagePercent: 30}
+	if err := collector.handleReport(context.Background(), "srv-1", agentclient.AgentReport{
+		SampleAt: time.Unix(60, 0).UTC(),
+		Metrics:  &unaligned,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := metricsDB.QueryRow(`SELECT COUNT(*) FROM metrics_snapshots WHERE server_id='srv-1'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("sample aligned to the old interval must be skipped, got %d rows", count)
+	}
+	aligned := linux.MetricsSnapshot{CPUUsagePercent: 31}
+	if err := collector.handleReport(context.Background(), "srv-1", agentclient.AgentReport{
+		SampleAt: time.Unix(120, 0).UTC(),
+		Metrics:  &aligned,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := metricsDB.QueryRow(`SELECT COUNT(*) FROM metrics_snapshots WHERE server_id='srv-1'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("sample aligned to the facility interval must be stored, got %d rows", count)
+	}
+}
+
+// TestAgentReportSilentTimeoutUsesMetricsFacility covers FAC-MET-004: the stream
+// silence timeout is min(facility interval, container interval) with the 10s
+// floor, and falls back to the 60s default when the facility is absent.
+func TestAgentReportSilentTimeoutUsesMetricsFacility(t *testing.T) {
+	cases := []struct {
+		name      string
+		interval  int
+		withFac   bool
+		wantDelay time.Duration
+	}{
+		{"facility interval dominates container", 120, true, 90 * time.Second},
+		{"container interval dominates when smaller", 20, true, 60 * time.Second},
+		{"floor keeps timeout at 10s", 1, true, 10 * time.Second},
+		{"missing facility falls back to 60s", 0, false, 90 * time.Second},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			collector := newAgentReportCollector(&fakeReportServerProvider{}, nil, newReportCollectorSettings(t), nil, nil, nil)
+			if tc.withFac {
+				collector.SetMetricsFacility(&fakeMetricsFacility{interval: tc.interval})
+			}
+			if got := collector.silentTimeout(); got != tc.wantDelay {
+				t.Fatalf("silentTimeout() = %s, want %s", got, tc.wantDelay)
+			}
+		})
 	}
 }
 

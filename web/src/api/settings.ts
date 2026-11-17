@@ -8,10 +8,7 @@ async function multipart<T>(path: string, form: FormData): Promise<T> {
 /** PUT /settings/runtime 是整体替换语义：改一个分区时其余标量仍需按当前值回填。 */
 function runtimeScalars(current: RuntimeSettings): RuntimeUpdate {
   return {
-    metricsRetentionDays: current.metricsRetentionDays,
-    metricsCollectionIntervalSeconds: current.metricsCollectionIntervalSeconds,
     containerReportIntervalSeconds: current.containerReportIntervalSeconds,
-    cleanupSchedule: current.cleanupSchedule,
     tokenExpiration: current.tokenExpiration,
     language: current.language,
     logLevel: current.logLevel,

@@ -48,24 +48,21 @@ func newTestService(t *testing.T) *Service {
 func TestRuntimeSettingsUpdatePersists(t *testing.T) {
 	svc := newTestService(t)
 	got, err := svc.Update(context.Background(), RuntimeUpdate{
-		MetricsRetentionDays:             30,
-		MetricsCollectionIntervalSeconds: 120,
-		ContainerReportIntervalSeconds:   3,
-		CleanupSchedule:                  "weekly",
-		TokenExpiration:                  TokenExpiration5Days,
-		Language:                         "zh-CN",
-		LogLevel:                         "debug",
-		RemoteCommandTimeoutSeconds:      45,
-		Branding:                         &RuntimeBrandingSettings{LoginTitle: "Operations", LoginSubtitle: "Manage infrastructure"},
-		Certificates:                     &RuntimeCertificateSettings{Email: "admin@example.com", DNSPropagationDelaySeconds: 10},
+		ContainerReportIntervalSeconds: 3,
+		TokenExpiration:                TokenExpiration5Days,
+		Language:                       "zh-CN",
+		LogLevel:                       "debug",
+		RemoteCommandTimeoutSeconds:    45,
+		Branding:                       &RuntimeBrandingSettings{LoginTitle: "Operations", LoginSubtitle: "Manage infrastructure"},
+		Certificates:                   &RuntimeCertificateSettings{Email: "admin@example.com", DNSPropagationDelaySeconds: 10},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.MetricsRetentionDays != 30 || got.MetricsCollectionIntervalSeconds != 120 || got.ContainerReportIntervalSeconds != 3 || got.CleanupSchedule != "weekly" || got.TokenExpiration != TokenExpiration5Days || got.Language != "zh-CN" || got.LogLevel != "debug" || got.RemoteCommandTimeoutSeconds != 45 || got.Branding.LoginTitle != "Operations" || got.Branding.LoginSubtitle != "Manage infrastructure" || got.Certificates.Email != "admin@example.com" || got.Certificates.DNSPropagationDelaySeconds != 10 {
+	if got.ContainerReportIntervalSeconds != 3 || got.TokenExpiration != TokenExpiration5Days || got.Language != "zh-CN" || got.LogLevel != "debug" || got.RemoteCommandTimeoutSeconds != 45 || got.Branding.LoginTitle != "Operations" || got.Branding.LoginSubtitle != "Manage infrastructure" || got.Certificates.Email != "admin@example.com" || got.Certificates.DNSPropagationDelaySeconds != 10 {
 		t.Fatalf("unexpected runtime settings: %#v", got)
 	}
-	if got := svc.Runtime(); got.MetricsRetentionDays != 30 {
+	if got := svc.Runtime(); got.ContainerReportIntervalSeconds != 3 {
 		t.Fatalf("runtime cache did not update: %#v", got)
 	}
 	reloaded, err := NewService(svc.db, svc.cfg)
@@ -99,15 +96,12 @@ func TestRuntimeSettingsDoesNotPersistPanelSelectionWhenTLSActivationFails(t *te
 	}
 	current := svc.Runtime()
 	_, err = svc.Update(context.Background(), RuntimeUpdate{
-		MetricsRetentionDays:             current.MetricsRetentionDays,
-		MetricsCollectionIntervalSeconds: current.MetricsCollectionIntervalSeconds,
-		ContainerReportIntervalSeconds:   current.ContainerReportIntervalSeconds,
-		CleanupSchedule:                  current.CleanupSchedule,
-		TokenExpiration:                  current.TokenExpiration,
-		Language:                         current.Language,
-		LogLevel:                         current.LogLevel,
-		RemoteCommandTimeoutSeconds:      current.RemoteCommandTimeoutSeconds,
-		Panel:                            &RuntimePanelSettings{Domain: "panel.example.test"},
+		ContainerReportIntervalSeconds: current.ContainerReportIntervalSeconds,
+		TokenExpiration:                current.TokenExpiration,
+		Language:                       current.Language,
+		LogLevel:                       current.LogLevel,
+		RemoteCommandTimeoutSeconds:    current.RemoteCommandTimeoutSeconds,
+		Panel:                          &RuntimePanelSettings{Domain: "panel.example.test"},
 	})
 	if err == nil {
 		t.Fatal("expected Panel TLS activation failure")
@@ -130,15 +124,12 @@ func TestRuntimeSettingsReconcileTracePersists(t *testing.T) {
 	svc := newTestService(t)
 	enabled := true
 	got, err := svc.Update(context.Background(), RuntimeUpdate{
-		MetricsRetentionDays:             7,
-		MetricsCollectionIntervalSeconds: 60,
-		ContainerReportIntervalSeconds:   30,
-		CleanupSchedule:                  "daily",
-		TokenExpiration:                  TokenExpiration1Day,
-		Language:                         "en",
-		LogLevel:                         "info",
-		RemoteCommandTimeoutSeconds:      30,
-		ReconcileTraceEnabled:            &enabled,
+		ContainerReportIntervalSeconds: 30,
+		TokenExpiration:                TokenExpiration1Day,
+		Language:                       "en",
+		LogLevel:                       "info",
+		RemoteCommandTimeoutSeconds:    30,
+		ReconcileTraceEnabled:          &enabled,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -151,14 +142,11 @@ func TestRuntimeSettingsReconcileTracePersists(t *testing.T) {
 	}
 	// 未传该字段时保持当前值（*bool 语义）。
 	got, err = svc.Update(context.Background(), RuntimeUpdate{
-		MetricsRetentionDays:             7,
-		MetricsCollectionIntervalSeconds: 60,
-		ContainerReportIntervalSeconds:   30,
-		CleanupSchedule:                  "daily",
-		TokenExpiration:                  TokenExpiration1Day,
-		Language:                         "en",
-		LogLevel:                         "info",
-		RemoteCommandTimeoutSeconds:      30,
+		ContainerReportIntervalSeconds: 30,
+		TokenExpiration:                TokenExpiration1Day,
+		Language:                       "en",
+		LogLevel:                       "info",
+		RemoteCommandTimeoutSeconds:    30,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -276,28 +264,11 @@ func TestRuntimeSettingsPreservesExplicitConfigJWTSecret(t *testing.T) {
 		t.Fatalf("explicit jwt secret not preserved: %q", got)
 	}
 }
-func TestRuntimeSettingsRejectInvalidSchedule(t *testing.T) {
-	svc := newTestService(t)
-	_, err := svc.Update(context.Background(), RuntimeUpdate{
-		MetricsRetentionDays:             7,
-		MetricsCollectionIntervalSeconds: 60,
-		CleanupSchedule:                  "sometimes",
-		TokenExpiration:                  DefaultTokenExpiration,
-		Language:                         "en",
-	})
-	if err == nil {
-		t.Fatal("expected validation error")
-	}
-}
-
 func TestRuntimeSettingsRejectInvalidLanguage(t *testing.T) {
 	svc := newTestService(t)
 	_, err := svc.Update(context.Background(), RuntimeUpdate{
-		MetricsRetentionDays:             7,
-		MetricsCollectionIntervalSeconds: 60,
-		CleanupSchedule:                  "daily",
-		TokenExpiration:                  DefaultTokenExpiration,
-		Language:                         "fr",
+		TokenExpiration: DefaultTokenExpiration,
+		Language:        "fr",
 	})
 	if err == nil {
 		t.Fatal("expected validation error")
@@ -307,12 +278,9 @@ func TestRuntimeSettingsRejectInvalidLanguage(t *testing.T) {
 func TestRuntimeSettingsRejectInvalidLogLevel(t *testing.T) {
 	svc := newTestService(t)
 	_, err := svc.Update(context.Background(), RuntimeUpdate{
-		MetricsRetentionDays:             7,
-		MetricsCollectionIntervalSeconds: 60,
-		CleanupSchedule:                  "daily",
-		TokenExpiration:                  DefaultTokenExpiration,
-		Language:                         "en",
-		LogLevel:                         "verbose",
+		TokenExpiration: DefaultTokenExpiration,
+		Language:        "en",
+		LogLevel:        "verbose",
 	})
 	if err == nil {
 		t.Fatal("expected validation error")
@@ -322,11 +290,8 @@ func TestRuntimeSettingsRejectInvalidLogLevel(t *testing.T) {
 func TestRuntimeSettingsRejectInvalidTokenExpiration(t *testing.T) {
 	svc := newTestService(t)
 	_, err := svc.Update(context.Background(), RuntimeUpdate{
-		MetricsRetentionDays:             7,
-		MetricsCollectionIntervalSeconds: 60,
-		CleanupSchedule:                  "daily",
-		TokenExpiration:                  "2h",
-		Language:                         "en",
+		TokenExpiration: "2h",
+		Language:        "en",
 	})
 	if err == nil {
 		t.Fatal("expected validation error")
@@ -336,12 +301,9 @@ func TestRuntimeSettingsRejectInvalidTokenExpiration(t *testing.T) {
 func TestRuntimeSettingsRejectLongBranding(t *testing.T) {
 	svc := newTestService(t)
 	_, err := svc.Update(context.Background(), RuntimeUpdate{
-		MetricsRetentionDays:             7,
-		MetricsCollectionIntervalSeconds: 60,
-		CleanupSchedule:                  "daily",
-		TokenExpiration:                  DefaultTokenExpiration,
-		Language:                         "en",
-		Branding:                         &RuntimeBrandingSettings{LoginTitle: strings.Repeat("a", 81)},
+		TokenExpiration: DefaultTokenExpiration,
+		Language:        "en",
+		Branding:        &RuntimeBrandingSettings{LoginTitle: strings.Repeat("a", 81)},
 	})
 	if err == nil {
 		t.Fatal("expected validation error")
@@ -350,12 +312,9 @@ func TestRuntimeSettingsRejectLongBranding(t *testing.T) {
 
 func validAgentRuntimeUpdate(agent *RuntimeAgentSettings) RuntimeUpdate {
 	return RuntimeUpdate{
-		MetricsRetentionDays:             7,
-		MetricsCollectionIntervalSeconds: 60,
-		CleanupSchedule:                  "daily",
-		TokenExpiration:                  DefaultTokenExpiration,
-		Language:                         "en",
-		Agent:                            agent,
+		TokenExpiration: DefaultTokenExpiration,
+		Language:        "en",
+		Agent:           agent,
 	}
 }
 

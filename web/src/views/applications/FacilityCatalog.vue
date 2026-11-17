@@ -7,6 +7,7 @@ import EmptyState from '@/components/ui/EmptyState.vue';
 import StatusBadge from '@/components/ui/StatusBadge.vue';
 import { useI18n } from '@/i18n';
 import type { ReverseProxyConfig, StorageShareConfig } from '@/types/facilityApps';
+import type { MetricsFacilityConfig } from '@/types/metricsFacility';
 import type { NetworkProbeConfig } from '@/types/networkProbe';
 
 export type FacilityCatalogItem = {
@@ -25,6 +26,7 @@ const props = defineProps<{
   facility: ReverseProxyConfig | null;
   storageShareConfig: StorageShareConfig | null;
   networkProbeConfig: NetworkProbeConfig | null;
+  metricsConfig: MetricsFacilityConfig | null;
   /** 目录统计用的服务器总数：探测目标恒为“所有其他服务器”。 */
   serverTotal: number;
 }>();
@@ -53,6 +55,19 @@ const probeModeLabel = computed(() => {
   const config = props.networkProbeConfig;
   if (!config) return '—';
   return t(config.mode === 'all' ? 'applicationsPage.networkProbeModeAll' : 'applicationsPage.networkProbeModeSelected');
+});
+
+/** 采集范围与探测一致：all 覆盖全部服务器，selected 只统计选中节点。 */
+const metricsNodeCount = computed(() => {
+  const config = props.metricsConfig;
+  if (!config) return null;
+  return config.mode === 'all' ? props.serverTotal : config.serverIds.length;
+});
+
+const metricsModeLabel = computed(() => {
+  const config = props.metricsConfig;
+  if (!config) return '—';
+  return t(config.mode === 'all' ? 'applicationsPage.metricsModeAll' : 'applicationsPage.metricsModeSelected');
 });
 </script>
 
@@ -95,6 +110,11 @@ const probeModeLabel = computed(() => {
               <div class="facility-card-stat"><strong>{{ probeTargetCount ?? '—' }}</strong><span>{{ t('applicationsPage.networkProbeTargets') }}</span></div>
               <div class="facility-card-stat"><strong>{{ probeModeLabel }}</strong><span>{{ t('applicationsPage.networkProbeMode') }}</span></div>
             </template>
+            <template v-else-if="item.kind === 'metrics'">
+              <div class="facility-card-stat"><strong>{{ metricsNodeCount ?? '—' }}</strong><span>{{ t('applicationsPage.metricsNodes') }}</span></div>
+              <div class="facility-card-stat"><strong>{{ metricsModeLabel }}</strong><span>{{ t('applicationsPage.metricsMode') }}</span></div>
+              <div class="facility-card-stat"><strong>{{ metricsConfig?.retentionDays ?? '—' }}</strong><span>{{ t('applicationsPage.metricsRetention') }}</span></div>
+            </template>
             <template v-else>
               <div class="facility-card-stat"><strong>{{ facility?.routes ?? '—' }}</strong><span>{{ t('applicationsPage.gatewayRoutes') }}</span></div>
               <div class="facility-card-stat"><strong>{{ facility?.deploymentServers.length ?? '—' }}</strong><span>{{ t('applicationsPage.gatewayNodes') }}</span></div>
@@ -104,9 +124,9 @@ const probeModeLabel = computed(() => {
         </div>
         <div class="flex flex-wrap items-start gap-2 lg:justify-end">
           <Button size="sm" variant="primary" @click="emit('open', item.kind)"><Wrench />{{ t('applicationsPage.manageFacility') }}</Button>
-          <!-- 探测设施结果由节点自动上报，没有可手动 reconcile 的网关/导出。 -->
+          <!-- 探测/指标设施结果由节点自动上报，没有可手动 reconcile 的网关/导出。 -->
           <Button
-            v-if="item.kind !== 'network-probe'"
+            v-if="item.kind !== 'network-probe' && item.kind !== 'metrics'"
             size="sm"
             variant="secondary"
             :disabled="item.kind === 'storage-share' && !storageShareConfig?.enabled"

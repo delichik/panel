@@ -17,13 +17,14 @@ import (
 	"panel/internal/modules/certificates/certs"
 	"panel/internal/modules/certificates/dns"
 	"panel/internal/modules/containers"
+	modevents "panel/internal/modules/events"
 	"panel/internal/modules/facilityapps"
 	"panel/internal/modules/identity"
 	"panel/internal/modules/keyassets"
 	"panel/internal/modules/networkprobe"
-	modevents "panel/internal/modules/events"
 	"panel/internal/modules/observability/diagnostics"
 	"panel/internal/modules/observability/metrics"
+	"panel/internal/modules/observability/metricsfacility"
 	"panel/internal/modules/observability/overview"
 	"panel/internal/modules/packages"
 	"panel/internal/modules/servers"
@@ -201,6 +202,13 @@ func New(cfg config.Config) (*App, error) {
 	applicationSvc.SetApplicationReconcileTrigger(containerSvc)
 	metricsSvc := metrics.NewService(store.MetricsDB(), serverSvc)
 	probeSvc := networkprobe.NewService(store.AppDB(), serverSvc)
+	// 指标设施保存采集范围/保留天数/采集间隔/清理计划。首次启动时从旧 runtime
+	// settings 播种；失败会让后续采集节奏与清理参数不可靠，因此启动失败。
+	metricsFacility := metricsfacility.NewService(store.AppDB(), serverSvc)
+	if err := metricsFacility.EnsureMigrated(context.Background()); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
 	packageSvc := packages.NewService(store.AppDB(), serverSvc, executor, taskSvc, agentClient)
 	overviewSvc := overview.NewService(store.AppDB(), serverSvc, metricsSvc, packageSvc, overview.WithNetworkProbe(probeSvc))
 	if err := dns.MigrateProviderCredentials(context.Background(), store.AppDB(), secretStore); err != nil {
@@ -252,10 +260,11 @@ func New(cfg config.Config) (*App, error) {
 	)
 
 	metricsCleanup := metrics.NewCleanupWorker(metricsSvc, func() metrics.CleanupSettings {
-		runtime := settingsSvc.Runtime()
+		// 保留天数与清理计划由指标设施配置驱动（读失败时设施内部回退默认值）。
+		settings := metricsFacility.CleanupSettings()
 		return metrics.CleanupSettings{
-			RetentionDays: runtime.MetricsRetentionDays,
-			Schedule:      runtime.CleanupSchedule,
+			RetentionDays: settings.RetentionDays,
+			Schedule:      settings.Schedule,
 		}
 	})
 
@@ -270,6 +279,8 @@ func New(cfg config.Config) (*App, error) {
 	reportCollector := newAgentReportCollector(serverSvc, agentClient, settingsSvc, metricsSvc, containerSvc, packageSvc)
 	reportCollector.SetSystemLogs(eventWriter)
 	reportCollector.SetNetworkProbe(probeSvc)
+	// 指标采集范围与间隔由设施按服务器下发；未注入时采集链路回退 enabled/60s。
+	reportCollector.SetMetricsFacility(metricsFacility)
 	a := &App{
 		cfg:            cfg,
 		store:          store,
@@ -325,7 +336,7 @@ func New(cfg config.Config) (*App, error) {
 	taskHandler := tasks.NewHandler(taskSvc, taskWorker)
 	taskHandler.SetExternalResolver(applicationSvc.ResolveExecutionManually)
 	eventsSvc := modevents.NewService(store.AppDB(), filepath.Join(cfg.DataRoot, "logs"))
-	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), taskHandler, metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), modevents.NewHandler(eventsSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), facilityapps.NewHandler(facilitySvc), networkprobe.NewHandler(probeSvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc), backups.NewHandler(backupSvc))
+	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), taskHandler, metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), modevents.NewHandler(eventsSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), facilityapps.NewHandler(facilitySvc), networkprobe.NewHandler(probeSvc), metricsfacility.NewHandler(metricsFacility), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc), backups.NewHandler(backupSvc))
 	logging.From(initCtx).Info("application initialized")
 	return a, nil
 }
@@ -400,7 +411,7 @@ func applicationSaveSessionDir(cfg config.Config) string {
 	return filepath.Join(cfg.DataRoot, "tmp", "application-save-sessions")
 }
 
-func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, eventsH *modevents.Handler, applicationH *applications.Handler, containerH *containerization.Handler, facilityH *facilityapps.Handler, probeH *networkprobe.Handler, overviewH *overview.Handler, settingsH *settings.Handler, systemH *systeminfo.Handler, diagnosticsH *diagnostics.Handler, backupH *backups.Handler) {
+func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, eventsH *modevents.Handler, applicationH *applications.Handler, containerH *containerization.Handler, facilityH *facilityapps.Handler, probeH *networkprobe.Handler, metricsFacilityH *metricsfacility.Handler, overviewH *overview.Handler, settingsH *settings.Handler, systemH *systeminfo.Handler, diagnosticsH *diagnostics.Handler, backupH *backups.Handler) {
 	a.mux.HandleFunc("POST /api/v1/auth/login", authH.Login)
 	a.mux.Handle("POST /api/v1/auth/logout", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.Logout)))
 	a.mux.Handle("POST /api/v1/auth/account", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.UpdateAccount)))
@@ -428,6 +439,7 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 	containerH.RegisterRoutes(a.mux, authenticated)
 	facilityH.RegisterRoutes(a.mux, authenticated)
 	probeH.RegisterRoutes(a.mux, authenticated)
+	metricsFacilityH.RegisterRoutes(a.mux, authenticated)
 	applicationH.RegisterRoutes(a.mux, authenticated)
 	taskH.RegisterRoutes(a.mux, authenticated)
 	overviewH.RegisterRoutes(a.mux, authenticated)

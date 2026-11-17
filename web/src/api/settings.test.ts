@@ -20,10 +20,7 @@ const current: RuntimeSettings = {
   appDatabase: 'app.db',
   metricsDatabase: 'metrics.db',
   dataRoot: 'data',
-  metricsRetentionDays: 14,
-  metricsCollectionIntervalSeconds: 60,
   containerReportIntervalSeconds: 30,
-  cleanupSchedule: 'daily',
   tokenExpiration: '1d',
   language: 'en',
   logLevel: 'info',
@@ -38,10 +35,7 @@ const current: RuntimeSettings = {
 };
 
 const scalars = {
-  metricsRetentionDays: 14,
-  metricsCollectionIntervalSeconds: 60,
   containerReportIntervalSeconds: 30,
-  cleanupSchedule: 'daily',
   tokenExpiration: '1d',
   logLevel: 'info',
   remoteCommandTimeoutSeconds: 45,

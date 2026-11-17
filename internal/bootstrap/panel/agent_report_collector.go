@@ -12,6 +12,7 @@ import (
 	"panel/internal/modules/containers"
 	"panel/internal/modules/networkprobe"
 	"panel/internal/modules/observability/metrics"
+	"panel/internal/modules/observability/metricsfacility"
 	"panel/internal/modules/runtimeevents"
 	server "panel/internal/modules/servers"
 	"panel/internal/modules/settings"
@@ -23,10 +24,19 @@ import (
 	"go.uber.org/zap"
 )
 
+// defaultMetricsIntervalSeconds 是未注入指标设施（测试/降级）时的采集间隔回退值。
+const defaultMetricsIntervalSeconds = 60
+
 // networkProbeReporter 是网络探测设施在 Agent 上报链路中需要的最小接口。
 type networkProbeReporter interface {
 	ReportConfig(ctx context.Context, serverID string) (networkprobe.ProbeReport, error)
 	SaveReported(ctx context.Context, sourceServerID string, sampleAt time.Time, results []networkprobe.ReportedResult) error
+}
+
+// metricsFacilityReporter 是指标设施在 Agent 上报链路中需要的最小接口。
+type metricsFacilityReporter interface {
+	ReportConfig(ctx context.Context, serverID string) (metricsfacility.ReportConfig, error)
+	IntervalSeconds() int
 }
 
 type agentReportCollector struct {
@@ -48,11 +58,14 @@ type agentReportCollector struct {
 	packages interface {
 		SaveReportedUpdates(context.Context, string, []linux.PackageUpdate) error
 	}
-	probes  networkProbeReporter
-	logs    runtimeevents.EventWriter
-	cancel  context.CancelFunc
-	mu      sync.Mutex
-	streams map[string]*agentReportStream
+	probes networkProbeReporter
+	// metricsFacility 决定每台服务器是否采集指标以及采集间隔；未注入时按
+	// enabled=true、默认 60s 处理（仅测试/降级）。
+	metricsFacility metricsFacilityReporter
+	logs            runtimeevents.EventWriter
+	cancel          context.CancelFunc
+	mu              sync.Mutex
+	streams         map[string]*agentReportStream
 }
 
 type agentReportStream struct {
@@ -227,10 +240,18 @@ func (c *agentReportCollector) auditSilentStreams() {
 }
 
 func (c *agentReportCollector) silentTimeout() time.Duration {
-	rt := c.settings.Runtime()
-	interval := rt.MetricsCollectionIntervalSeconds
-	if rt.ContainerReportIntervalSeconds > 0 && (interval <= 0 || rt.ContainerReportIntervalSeconds < interval) {
-		interval = rt.ContainerReportIntervalSeconds
+	// 指标采集间隔来自指标设施；未注入或设施读取失败（IntervalSeconds 内部
+	// 已回退默认 60）时使用默认值。容器上报间隔仍取 runtime settings。
+	interval := defaultMetricsIntervalSeconds
+	if c != nil && c.metricsFacility != nil {
+		if configured := c.metricsFacility.IntervalSeconds(); configured > 0 {
+			interval = configured
+		}
+	}
+	if c != nil {
+		if container := c.settings.Runtime().ContainerReportIntervalSeconds; container > 0 && container < interval {
+			interval = container
+		}
 	}
 	if interval < 1 {
 		interval = 1
@@ -312,6 +333,63 @@ func (c *agentReportCollector) SetNetworkProbe(probes networkProbeReporter) {
 	c.probes = probes
 }
 
+// SetMetricsFacility 注入指标设施；未注入时按 enabled=true、默认 60s 处理
+// （仅测试/降级）。设施配置按服务器决定是否采集指标与采集间隔。
+func (c *agentReportCollector) SetMetricsFacility(facility metricsFacilityReporter) {
+	if c == nil {
+		return
+	}
+	c.metricsFacility = facility
+}
+
+// metricsTargeting 解析指定服务器当前的指标采集目标：是否启用以及采集间隔。
+//
+// failOpen 决定设施读取失败的语义：保存路径（handleReport）传 true，瞬时读库
+// 错误时按 enabled=true、默认 60s 继续落库，避免丢指标；下发路径（report
+// stream 配置闭包）传 false，读不到配置就下发 disabled，让 Agent 停止采集而不是
+// 用过时间隔继续上报。两条路径都只记录日志，不中断上报流。
+func (c *agentReportCollector) metricsTargeting(ctx context.Context, serverID string, failOpen bool) (bool, int) {
+	if c == nil || c.metricsFacility == nil {
+		return true, defaultMetricsIntervalSeconds
+	}
+	report, err := c.metricsFacility.ReportConfig(ctx, serverID)
+	if err != nil {
+		logging.From(ctx).Warn("agent metrics facility config lookup failed",
+			zap.String("server_id", serverID),
+			zap.Bool("fail_open", failOpen),
+			zap.Error(err))
+		if failOpen {
+			return true, defaultMetricsIntervalSeconds
+		}
+		return false, 0
+	}
+	if !report.Enabled {
+		return false, 0
+	}
+	interval := report.IntervalSeconds
+	if interval < 1 {
+		// 防御性：启用却拿到非法间隔时回落默认，保证整点对齐校验不会 panic/全跳过。
+		interval = defaultMetricsIntervalSeconds
+	}
+	return true, interval
+}
+
+// reportStreamConfig 构造下发给单台服务器的 Agent 上报配置。指标采集间隔按该
+// 服务器的指标设施归属计算：禁用节点下发 0（Agent 停止采集），启用节点下发设施
+// 配置的间隔；容器上报间隔仍取 runtime settings，不受指标设施影响。
+func (c *agentReportCollector) reportStreamConfig(ctx context.Context, srv server.Server) agentclient.ReportConfig {
+	metricsEnabled, metricsInterval := c.metricsTargeting(ctx, srv.ID, false)
+	if !metricsEnabled {
+		metricsInterval = 0
+	}
+	return agentclient.ReportConfig{
+		ServerID:                  srv.ID,
+		MetricsIntervalSeconds:    metricsInterval,
+		ContainersIntervalSeconds: c.settings.Runtime().ContainerReportIntervalSeconds,
+		Probe:                     c.reportProbeConfig(ctx, srv.ID),
+	}
+}
+
 func (c *agentReportCollector) logStreamStatus(entry *agentReportStream, connected bool, msg string) {
 	if c.logs == nil || entry == nil {
 		return
@@ -367,13 +445,7 @@ func (c *agentReportCollector) runServerStream(ctx context.Context, srv server.S
 		entry.delivered = false
 		c.mu.Unlock()
 		err := c.client.StreamReports(ctx, entry.endpoint, func() agentclient.ReportConfig {
-			rt := c.settings.Runtime()
-			return agentclient.ReportConfig{
-				ServerID:                  srv.ID,
-				MetricsIntervalSeconds:    rt.MetricsCollectionIntervalSeconds,
-				ContainersIntervalSeconds: rt.ContainerReportIntervalSeconds,
-				Probe:                     c.reportProbeConfig(ctx, srv.ID),
-			}
+			return c.reportStreamConfig(ctx, srv)
 		}, func(ctx context.Context, report agentclient.AgentReport) error {
 			c.markConnected(entry, report.SampleAt)
 			return c.handleReport(ctx, srv.ID, report)
@@ -508,9 +580,16 @@ func (c *agentReportCollector) handleReport(ctx context.Context, serverID string
 	}
 	rt := c.settings.Runtime()
 	if report.Metrics != nil {
-		// 补报重放样本可能落在当前采集间隔之外，必须跳过整点对齐校验；
-		// metrics.Service.Save 已按 (server_id,time) 去重保证重放幂等。
-		if report.Replayed || sampleAligned(report.SampleAt, rt.MetricsCollectionIntervalSeconds) {
+		// 指标采集范围由指标设施按服务器决定：禁用节点即使旧 Agent 仍在上报，
+		// 也必须跳过落库（历史数据保留），否则“停止采集”的配置不会生效。
+		metricsEnabled, metricsInterval := c.metricsTargeting(ctx, serverID, true)
+		switch {
+		case !metricsEnabled:
+			logging.From(ctx).Debug("agent metrics report skipped: server is not a metrics collection node",
+				zap.String("server_id", serverID))
+		case report.Replayed || sampleAligned(report.SampleAt, metricsInterval):
+			// 补报重放样本可能落在当前采集间隔之外，必须跳过整点对齐校验；
+			// metrics.Service.Save 已按 (server_id,time) 去重保证重放幂等。
 			// 磁盘使用率改为 5 分钟采样：未刷新磁盘值的样本把磁盘字段清零，
 			// 避免把旧值重复写成新的历史点。nil 表示旧 Agent，保持原值。
 			snapshot := *report.Metrics
@@ -522,14 +601,14 @@ func (c *agentReportCollector) handleReport(ctx context.Context, serverID string
 				// 与包/镜像推送路径一致：落库失败只记录日志，不中断上报流。
 				logging.From(ctx).Warn("agent metrics report save failed", zap.String("server_id", serverID), zap.Error(err))
 			}
-		} else {
-			// agent 按发送时的间隔计算整点、Panel 按收到时的间隔校验；
-			// 设置项在上报在途时变更会让样本落在新间隔之外，这里记录日志便于排查，
+		default:
+			// agent 按发送时的间隔计算整点、Panel 按收到时的设施间隔校验；
+			// 设施间隔在上报在途时变更会让样本落在新间隔之外，这里记录日志便于排查，
 			// 但同样不中断上报流。
 			logging.From(ctx).Debug("agent metrics report skipped: sample not aligned to collection interval",
 				zap.String("server_id", serverID),
 				zap.Time("sample_at", report.SampleAt),
-				zap.Int("interval_seconds", rt.MetricsCollectionIntervalSeconds))
+				zap.Int("interval_seconds", metricsInterval))
 		}
 	}
 	// 容器分支：仅当上报明确携带容器快照（非 nil）时才替换观察集合；

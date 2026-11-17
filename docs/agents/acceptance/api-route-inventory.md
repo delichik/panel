@@ -64,135 +64,137 @@
 | 50 | `GET` | `/api/v1/executions/{id}` | [协调、任务与运行事件](orchestration-and-tasks.md) |
 | 51 | `GET` | `/api/v1/executions/{id}/logs` | [协调、任务与运行事件](orchestration-and-tasks.md) |
 | 52 | `GET` | `/api/v1/executions/{id}/steps` | [协调、任务与运行事件](orchestration-and-tasks.md) |
-| 53 | `GET` | `/api/v1/facility-apps/network-probe` | [应用与设施应用](applications-and-facilities.md) `FAC-PRB-001/003`；网络探测设施配置 |
-| 54 | `GET` | `/api/v1/facility-apps/network-probe/results` | [应用与设施应用](applications-and-facilities.md) `FAC-PRB-006`；探测矩阵，可选 `serverIds` 过滤 |
-| 55 | `GET` | `/api/v1/facility-apps/reverse-proxy` | [应用与设施应用](applications-and-facilities.md) |
-| 56 | `GET` | `/api/v1/facility-apps/reverse-proxy/config-records` | [应用与设施应用](applications-and-facilities.md) |
-| 57 | `GET` | `/api/v1/facility-apps/reverse-proxy/config-records/{recordId}` | [应用与设施应用](applications-and-facilities.md) |
-| 58 | `GET` | `/api/v1/facility-apps/reverse-proxy/diagnostics` | [应用与设施应用](applications-and-facilities.md) |
-| 59 | `GET` | `/api/v1/facility-apps/reverse-proxy/edit-sessions/{id}/assets/{assetName}/content` | [应用与设施应用](applications-and-facilities.md) |
-| 60 | `GET` | `/api/v1/facility-apps/reverse-proxy/proxy-plane` | [应用与设施应用](applications-and-facilities.md) |
-| 61 | `GET` | `/api/v1/facility-apps/reverse-proxy/static-assets/{assetName}/content` | [应用与设施应用](applications-and-facilities.md) |
-| 62 | `GET` | `/api/v1/facility-apps/storage-share` | [应用与设施应用](applications-and-facilities.md) |
-| 63 | `GET` | `/api/v1/facility-apps/storage-share/partitions/{id}/download` | [应用与设施应用](applications-and-facilities.md) |
-| 64 | `GET` | `/api/v1/facility-apps/storage-share/status` | [应用与设施应用](applications-and-facilities.md) |
-| 65 | `GET` | `/api/v1/key-assets` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 66 | `GET` | `/api/v1/key-assets/system` | [服务器、安全与软件包](servers-security-packages.md) |
-| 67 | `GET` | `/api/v1/key-assets/tls` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 68 | `GET` | `/api/v1/key-assets/{downloadPath...}` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 69 | `GET` | `/api/v1/key-assets/{id}` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 70 | `GET` | `/api/v1/log-contexts` | [工程质量与发布](engineering-release.md) `ENG-EVT-001`（legacy 别名，等同 `/events`） |
-| 71 | `GET` | `/api/v1/log-contexts/export` | [工程质量与发布](engineering-release.md) `ENG-EVT-001`（legacy 别名） |
-| 72 | `GET` | `/api/v1/log-contexts/{streamId}` | [工程质量与发布](engineering-release.md) `ENG-EVT-001`（legacy：`streamId` 作 eventId） |
-| 73 | `GET` | `/api/v1/log-contexts/{streamId}/lines` | [工程质量与发布](engineering-release.md) `ENG-EVT-001`（legacy 别名） |
-| 74 | `GET` | `/api/v1/overview` | [身份、设置与系统](identity-settings-system.md) |
-| 75 | `GET` | `/api/v1/overview/cards` | [身份、设置与系统](identity-settings-system.md) |
-| 76 | `GET` | `/api/v1/overview/cards/{cardId}/data` | [身份、设置与系统](identity-settings-system.md)；`OBS-OVW-005/006`；`disk` 卡返回 `diskCurrent`、`diskIO` 卡返回 `diskIo`、`networkProbe` 卡返回 `probes` |
-| 77 | `GET` | `/api/v1/self-signed-certificates` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 78 | `GET` | `/api/v1/servers` | [服务器、安全与软件包](servers-security-packages.md) |
-| 79 | `GET` | `/api/v1/servers/{id}` | [服务器、安全与软件包](servers-security-packages.md) |
-| 80 | `GET` | `/api/v1/servers/{id}/fail2ban` | [服务器、安全与软件包](servers-security-packages.md) |
-| 81 | `GET` | `/api/v1/servers/{id}/metrics` | [服务器、安全与软件包](servers-security-packages.md)；`OBS-MET-003/004/007/008`（`diskIo`/`diskCurrent`，无 `disk`；可选 `bucket` 桶聚合并返回 `latest` 当前样本） |
-| 82 | `GET` | `/api/v1/servers/{id}/network-probes` | [服务器、安全与软件包](servers-security-packages.md)；[应用与设施应用](applications-and-facilities.md) `FAC-PRB-006/009`；单节点探测页签；`?history=1` 时附带 24h 历史 |
-| 83 | `GET` | `/api/v1/servers/{id}/packages/updates` | [服务器、安全与软件包](servers-security-packages.md) |
-| 84 | `GET` | `/api/v1/servers/{id}/ufw` | [服务器、安全与软件包](servers-security-packages.md) |
-| 85 | `GET` | `/api/v1/servers/{serverId}/containers` | [容器与资源](containers-and-resources.md) |
-| 86 | `GET` | `/api/v1/servers/{serverId}/containers/{resourceId}/logs` | [容器与资源](containers-and-resources.md) |
-| 87 | `GET` | `/api/v1/servers/{serverId}/images` | [容器与资源](containers-and-resources.md) |
-| 88 | `GET` | `/api/v1/servers/{serverId}/networks` | [容器与资源](containers-and-resources.md) |
-| 89 | `GET` | `/api/v1/servers/{serverId}/volumes` | [容器与资源](containers-and-resources.md) |
-| 90 | `GET` | `/api/v1/settings/public-branding` | [身份、设置与系统](identity-settings-system.md) |
-| 91 | `GET` | `/api/v1/settings/runtime` | [身份、设置与系统](identity-settings-system.md) `TS-SET-001..005` |
-| 92 | `GET` | `/api/v1/settings/server-variables` | [身份、设置与系统](identity-settings-system.md) |
-| 93 | `GET` | `/api/v1/system/version` | [身份、设置与系统](identity-settings-system.md) |
-| 94 | `PATCH` | `/api/v1/application-edit-sessions/{id}/draft` | [应用与设施应用](applications-and-facilities.md) |
-| 95 | `PATCH` | `/api/v1/facility-apps/reverse-proxy/edit-sessions/{id}/draft` | [应用与设施应用](applications-and-facilities.md) |
-| 96 | `POST` | `/api/v1/application-edit-sessions` | [应用与设施应用](applications-and-facilities.md) |
-| 97 | `POST` | `/api/v1/application-edit-sessions/{id}/archives` | [应用与设施应用](applications-and-facilities.md) |
-| 98 | `POST` | `/api/v1/application-edit-sessions/{id}/commit` | [应用与设施应用](applications-and-facilities.md) |
-| 99 | `POST` | `/api/v1/application-edit-sessions/{id}/preview` | [应用与设施应用](applications-and-facilities.md) |
-| 100 | `POST` | `/api/v1/application-edit-sessions/{id}/validate` | [应用与设施应用](applications-and-facilities.md) |
-| 101 | `POST` | `/api/v1/applications/{id}/deploy` | [应用与设施应用](applications-and-facilities.md) |
-| 102 | `POST` | `/api/v1/applications/{id}/image/update` | [应用与设施应用](applications-and-facilities.md) |
-| 103 | `POST` | `/api/v1/applications/{id}/persistent-data` | [应用与设施应用](applications-and-facilities.md) |
-| 104 | `POST` | `/api/v1/applications/{id}/restart` | [应用与设施应用](applications-and-facilities.md) |
-| 105 | `POST` | `/api/v1/applications/{id}/stop` | [应用与设施应用](applications-and-facilities.md) |
-| 106 | `POST` | `/api/v1/auth/account` | [身份、设置与系统](identity-settings-system.md) |
-| 107 | `POST` | `/api/v1/auth/jwt-secret` | [身份、设置与系统](identity-settings-system.md) |
-| 108 | `POST` | `/api/v1/auth/login` | [身份、设置与系统](identity-settings-system.md) |
-| 109 | `POST` | `/api/v1/auth/logout` | [身份、设置与系统](identity-settings-system.md) |
-| 110 | `POST` | `/api/v1/backups/export` | [备份、恢复与诊断](backup-restore-diagnostics.md) |
-| 111 | `POST` | `/api/v1/backups/restore/confirm` | [备份、恢复与诊断](backup-restore-diagnostics.md) |
-| 112 | `POST` | `/api/v1/backups/restore/preflight` | [备份、恢复与诊断](backup-restore-diagnostics.md) |
-| 113 | `POST` | `/api/v1/certificates` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 114 | `POST` | `/api/v1/certificates/{id}/renew` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 115 | `POST` | `/api/v1/credentials` | [服务器、安全与软件包](servers-security-packages.md) |
-| 116 | `POST` | `/api/v1/debug/clear-runtime-data` | [备份、恢复与诊断](backup-restore-diagnostics.md) |
-| 117 | `POST` | `/api/v1/dns/domains` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 118 | `POST` | `/api/v1/dns/domains/{domainId}/records` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 119 | `POST` | `/api/v1/dns/domains/{domainId}/records/refresh` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 120 | `POST` | `/api/v1/executions/{id}/resolve` | [协调、任务与运行事件](orchestration-and-tasks.md) |
-| 121 | `POST` | `/api/v1/executions/{id}/retry` | [协调、任务与运行事件](orchestration-and-tasks.md) |
-| 122 | `POST` | `/api/v1/executions/{id}/run-now` | [协调、任务与运行事件](orchestration-and-tasks.md) |
-| 123 | `POST` | `/api/v1/facility-apps/reverse-proxy/config-records/{recordId}/apply` | [应用与设施应用](applications-and-facilities.md) |
-| 124 | `POST` | `/api/v1/facility-apps/reverse-proxy/dns-sync` | [应用与设施应用](applications-and-facilities.md) |
-| 125 | `POST` | `/api/v1/facility-apps/reverse-proxy/edit-sessions` | [应用与设施应用](applications-and-facilities.md) |
-| 126 | `POST` | `/api/v1/facility-apps/reverse-proxy/edit-sessions/{id}/commit` | [应用与设施应用](applications-and-facilities.md) |
-| 127 | `POST` | `/api/v1/facility-apps/reverse-proxy/edit-sessions/{id}/preview` | [应用与设施应用](applications-and-facilities.md) |
-| 128 | `POST` | `/api/v1/facility-apps/reverse-proxy/edit-sessions/{id}/validate` | [应用与设施应用](applications-and-facilities.md) |
-| 129 | `POST` | `/api/v1/facility-apps/reverse-proxy/reconcile` | [应用与设施应用](applications-and-facilities.md) |
-| 130 | `POST` | `/api/v1/facility-apps/storage-share/reconcile` | [应用与设施应用](applications-and-facilities.md) |
-| 131 | `POST` | `/api/v1/images/upgrade-all` | [容器与资源](containers-and-resources.md) |
-| 132 | `POST` | `/api/v1/images/upgrade-selected` | [容器与资源](containers-and-resources.md) |
-| 133 | `POST` | `/api/v1/key-assets/ca` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 134 | `POST` | `/api/v1/key-assets/exports` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 135 | `POST` | `/api/v1/key-assets/import` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 136 | `POST` | `/api/v1/key-assets/imports/preflight` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 137 | `POST` | `/api/v1/key-assets/imports/{planId}/execute` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 138 | `POST` | `/api/v1/key-assets/ssh/generate` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 139 | `POST` | `/api/v1/key-assets/system/{id}/reset` | [服务器、安全与软件包](servers-security-packages.md) |
-| 140 | `POST` | `/api/v1/key-assets/tls` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 141 | `POST` | `/api/v1/key-assets/{id}/regenerate` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 142 | `POST` | `/api/v1/key-assets/{id}/reissue` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 143 | `POST` | `/api/v1/self-signed-cas` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 144 | `POST` | `/api/v1/self-signed-certificates` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 145 | `POST` | `/api/v1/self-signed-certificates/{id}/renew` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 146 | `POST` | `/api/v1/servers` | [服务器、安全与软件包](servers-security-packages.md) |
-| 147 | `POST` | `/api/v1/servers/probe` | [服务器、安全与软件包](servers-security-packages.md) |
-| 148 | `POST` | `/api/v1/servers/{id}/agent/certificate` | [服务器、安全与软件包](servers-security-packages.md) |
-| 149 | `POST` | `/api/v1/servers/{id}/agent/deploy` | [服务器、安全与软件包](servers-security-packages.md) |
-| 150 | `POST` | `/api/v1/servers/{id}/fail2ban/enable` | [服务器、安全与软件包](servers-security-packages.md) |
-| 151 | `POST` | `/api/v1/servers/{id}/fail2ban/install` | [服务器、安全与软件包](servers-security-packages.md) |
-| 152 | `POST` | `/api/v1/servers/{id}/fail2ban/release` | [服务器、安全与软件包](servers-security-packages.md) |
-| 153 | `POST` | `/api/v1/servers/{id}/packages/refresh` | [服务器、安全与软件包](servers-security-packages.md) |
-| 154 | `POST` | `/api/v1/servers/{id}/packages/upgrade-all` | [服务器、安全与软件包](servers-security-packages.md) |
-| 155 | `POST` | `/api/v1/servers/{id}/packages/upgrade-selected` | [服务器、安全与软件包](servers-security-packages.md) |
-| 156 | `POST` | `/api/v1/servers/{id}/restart` | [服务器、安全与软件包](servers-security-packages.md) |
-| 157 | `POST` | `/api/v1/servers/{id}/tailscale/apply` | [服务器、安全与软件包](servers-security-packages.md) |
-| 158 | `POST` | `/api/v1/servers/{id}/test` | [服务器、安全与软件包](servers-security-packages.md) |
-| 159 | `POST` | `/api/v1/servers/{id}/trust-host-key` | [服务器、安全与软件包](servers-security-packages.md) |
-| 160 | `POST` | `/api/v1/servers/{id}/ufw/rules` | [服务器、安全与软件包](servers-security-packages.md) |
-| 161 | `POST` | `/api/v1/servers/{serverId}/containers/{resourceId}/{action}` | [容器与资源](containers-and-resources.md) |
-| 162 | `POST` | `/api/v1/servers/{serverId}/images/delete-unused` | [容器与资源](containers-and-resources.md) |
-| 163 | `POST` | `/api/v1/servers/{serverId}/images/pull` | [容器与资源](containers-and-resources.md) |
-| 164 | `POST` | `/api/v1/servers/{serverId}/images/refresh` | [容器与资源](containers-and-resources.md) |
-| 165 | `POST` | `/api/v1/servers/{serverId}/networks/refresh` | [容器与资源](containers-and-resources.md) |
-| 166 | `POST` | `/api/v1/servers/{serverId}/volumes/delete-unused` | [容器与资源](containers-and-resources.md) |
-| 167 | `POST` | `/api/v1/servers/{serverId}/volumes/refresh` | [容器与资源](containers-and-resources.md) |
-| 168 | `POST` | `/api/v1/settings/tailscale/apply` | [Tailscale](tailscale.md) `TS-SET-005`；领域入口见 [身份、设置与系统](identity-settings-system.md) |
-| 169 | `PUT` | `/api/v1/application-edit-sessions/{id}/files/{name}` | [应用与设施应用](applications-and-facilities.md) |
-| 170 | `PUT` | `/api/v1/application-edit-sessions/{id}/uploads/{name}` | [应用与设施应用](applications-and-facilities.md) |
-| 171 | `PUT` | `/api/v1/certificates/{id}` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 172 | `PUT` | `/api/v1/credentials/{id}` | [服务器、安全与软件包](servers-security-packages.md) |
-| 173 | `PUT` | `/api/v1/debug/pprof` | [备份、恢复与诊断](backup-restore-diagnostics.md) |
-| 174 | `PUT` | `/api/v1/dns/domains/{domainId}` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 175 | `PUT` | `/api/v1/dns/domains/{domainId}/records/{recordId}` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 176 | `PUT` | `/api/v1/facility-apps/network-probe` | [应用与设施应用](applications-and-facilities.md) `FAC-PRB-003`；保存网络探测配置 |
-| 177 | `PUT` | `/api/v1/facility-apps/reverse-proxy/edit-sessions/{id}/assets/{assetName}` | [应用与设施应用](applications-and-facilities.md) |
-| 178 | `PUT` | `/api/v1/facility-apps/reverse-proxy/proxy-plane` | [应用与设施应用](applications-and-facilities.md) |
-| 179 | `PUT` | `/api/v1/facility-apps/storage-share` | [应用与设施应用](applications-and-facilities.md) |
-| 180 | `PUT` | `/api/v1/overview/cards` | [身份、设置与系统](identity-settings-system.md) |
-| 181 | `PUT` | `/api/v1/servers/{id}` | [服务器、安全与软件包](servers-security-packages.md) |
-| 182 | `PUT` | `/api/v1/servers/{id}/fail2ban` | [服务器、安全与软件包](servers-security-packages.md) |
-| 183 | `PUT` | `/api/v1/settings/runtime` | [身份、设置与系统](identity-settings-system.md) `TS-SET-001..005` |
-| 184 | `PUT` | `/api/v1/settings/server-variables` | [身份、设置与系统](identity-settings-system.md) |
+| 53 | `GET` | `/api/v1/facility-apps/metrics` | [应用与设施应用](applications-and-facilities.md) `FAC-MET-001/003`；读取指标设施配置 |
+| 54 | `GET` | `/api/v1/facility-apps/network-probe` | [应用与设施应用](applications-and-facilities.md) `FAC-PRB-001/003`；网络探测设施配置 |
+| 55 | `GET` | `/api/v1/facility-apps/network-probe/results` | [应用与设施应用](applications-and-facilities.md) `FAC-PRB-006`；探测矩阵，可选 `serverIds` 过滤 |
+| 56 | `GET` | `/api/v1/facility-apps/reverse-proxy` | [应用与设施应用](applications-and-facilities.md) |
+| 57 | `GET` | `/api/v1/facility-apps/reverse-proxy/config-records` | [应用与设施应用](applications-and-facilities.md) |
+| 58 | `GET` | `/api/v1/facility-apps/reverse-proxy/config-records/{recordId}` | [应用与设施应用](applications-and-facilities.md) |
+| 59 | `GET` | `/api/v1/facility-apps/reverse-proxy/diagnostics` | [应用与设施应用](applications-and-facilities.md) |
+| 60 | `GET` | `/api/v1/facility-apps/reverse-proxy/edit-sessions/{id}/assets/{assetName}/content` | [应用与设施应用](applications-and-facilities.md) |
+| 61 | `GET` | `/api/v1/facility-apps/reverse-proxy/proxy-plane` | [应用与设施应用](applications-and-facilities.md) |
+| 62 | `GET` | `/api/v1/facility-apps/reverse-proxy/static-assets/{assetName}/content` | [应用与设施应用](applications-and-facilities.md) |
+| 63 | `GET` | `/api/v1/facility-apps/storage-share` | [应用与设施应用](applications-and-facilities.md) |
+| 64 | `GET` | `/api/v1/facility-apps/storage-share/partitions/{id}/download` | [应用与设施应用](applications-and-facilities.md) |
+| 65 | `GET` | `/api/v1/facility-apps/storage-share/status` | [应用与设施应用](applications-and-facilities.md) |
+| 66 | `GET` | `/api/v1/key-assets` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 67 | `GET` | `/api/v1/key-assets/system` | [服务器、安全与软件包](servers-security-packages.md) |
+| 68 | `GET` | `/api/v1/key-assets/tls` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 69 | `GET` | `/api/v1/key-assets/{downloadPath...}` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 70 | `GET` | `/api/v1/key-assets/{id}` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 71 | `GET` | `/api/v1/log-contexts` | [工程质量与发布](engineering-release.md) `ENG-EVT-001`（legacy 别名，等同 `/events`） |
+| 72 | `GET` | `/api/v1/log-contexts/export` | [工程质量与发布](engineering-release.md) `ENG-EVT-001`（legacy 别名） |
+| 73 | `GET` | `/api/v1/log-contexts/{streamId}` | [工程质量与发布](engineering-release.md) `ENG-EVT-001`（legacy：`streamId` 作 eventId） |
+| 74 | `GET` | `/api/v1/log-contexts/{streamId}/lines` | [工程质量与发布](engineering-release.md) `ENG-EVT-001`（legacy 别名） |
+| 75 | `GET` | `/api/v1/overview` | [身份、设置与系统](identity-settings-system.md) |
+| 76 | `GET` | `/api/v1/overview/cards` | [身份、设置与系统](identity-settings-system.md) |
+| 77 | `GET` | `/api/v1/overview/cards/{cardId}/data` | [身份、设置与系统](identity-settings-system.md)；`OBS-OVW-005/006`；`disk` 卡返回 `diskCurrent`、`diskIO` 卡返回 `diskIo`、`networkProbe` 卡返回 `probes` |
+| 78 | `GET` | `/api/v1/self-signed-certificates` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 79 | `GET` | `/api/v1/servers` | [服务器、安全与软件包](servers-security-packages.md) |
+| 80 | `GET` | `/api/v1/servers/{id}` | [服务器、安全与软件包](servers-security-packages.md) |
+| 81 | `GET` | `/api/v1/servers/{id}/fail2ban` | [服务器、安全与软件包](servers-security-packages.md) |
+| 82 | `GET` | `/api/v1/servers/{id}/metrics` | [服务器、安全与软件包](servers-security-packages.md)；`OBS-MET-003/004/007/008`（`diskIo`/`diskCurrent`，无 `disk`；可选 `bucket` 桶聚合并返回 `latest` 当前样本） |
+| 83 | `GET` | `/api/v1/servers/{id}/network-probes` | [服务器、安全与软件包](servers-security-packages.md)；[应用与设施应用](applications-and-facilities.md) `FAC-PRB-006/009`；单节点探测页签；`?history=1` 时附带 24h 历史 |
+| 84 | `GET` | `/api/v1/servers/{id}/packages/updates` | [服务器、安全与软件包](servers-security-packages.md) |
+| 85 | `GET` | `/api/v1/servers/{id}/ufw` | [服务器、安全与软件包](servers-security-packages.md) |
+| 86 | `GET` | `/api/v1/servers/{serverId}/containers` | [容器与资源](containers-and-resources.md) |
+| 87 | `GET` | `/api/v1/servers/{serverId}/containers/{resourceId}/logs` | [容器与资源](containers-and-resources.md) |
+| 88 | `GET` | `/api/v1/servers/{serverId}/images` | [容器与资源](containers-and-resources.md) |
+| 89 | `GET` | `/api/v1/servers/{serverId}/networks` | [容器与资源](containers-and-resources.md) |
+| 90 | `GET` | `/api/v1/servers/{serverId}/volumes` | [容器与资源](containers-and-resources.md) |
+| 91 | `GET` | `/api/v1/settings/public-branding` | [身份、设置与系统](identity-settings-system.md) |
+| 92 | `GET` | `/api/v1/settings/runtime` | [身份、设置与系统](identity-settings-system.md) `TS-SET-001..005` |
+| 93 | `GET` | `/api/v1/settings/server-variables` | [身份、设置与系统](identity-settings-system.md) |
+| 94 | `GET` | `/api/v1/system/version` | [身份、设置与系统](identity-settings-system.md) |
+| 95 | `PATCH` | `/api/v1/application-edit-sessions/{id}/draft` | [应用与设施应用](applications-and-facilities.md) |
+| 96 | `PATCH` | `/api/v1/facility-apps/reverse-proxy/edit-sessions/{id}/draft` | [应用与设施应用](applications-and-facilities.md) |
+| 97 | `POST` | `/api/v1/application-edit-sessions` | [应用与设施应用](applications-and-facilities.md) |
+| 98 | `POST` | `/api/v1/application-edit-sessions/{id}/archives` | [应用与设施应用](applications-and-facilities.md) |
+| 99 | `POST` | `/api/v1/application-edit-sessions/{id}/commit` | [应用与设施应用](applications-and-facilities.md) |
+| 100 | `POST` | `/api/v1/application-edit-sessions/{id}/preview` | [应用与设施应用](applications-and-facilities.md) |
+| 101 | `POST` | `/api/v1/application-edit-sessions/{id}/validate` | [应用与设施应用](applications-and-facilities.md) |
+| 102 | `POST` | `/api/v1/applications/{id}/deploy` | [应用与设施应用](applications-and-facilities.md) |
+| 103 | `POST` | `/api/v1/applications/{id}/image/update` | [应用与设施应用](applications-and-facilities.md) |
+| 104 | `POST` | `/api/v1/applications/{id}/persistent-data` | [应用与设施应用](applications-and-facilities.md) |
+| 105 | `POST` | `/api/v1/applications/{id}/restart` | [应用与设施应用](applications-and-facilities.md) |
+| 106 | `POST` | `/api/v1/applications/{id}/stop` | [应用与设施应用](applications-and-facilities.md) |
+| 107 | `POST` | `/api/v1/auth/account` | [身份、设置与系统](identity-settings-system.md) |
+| 108 | `POST` | `/api/v1/auth/jwt-secret` | [身份、设置与系统](identity-settings-system.md) |
+| 109 | `POST` | `/api/v1/auth/login` | [身份、设置与系统](identity-settings-system.md) |
+| 110 | `POST` | `/api/v1/auth/logout` | [身份、设置与系统](identity-settings-system.md) |
+| 111 | `POST` | `/api/v1/backups/export` | [备份、恢复与诊断](backup-restore-diagnostics.md) |
+| 112 | `POST` | `/api/v1/backups/restore/confirm` | [备份、恢复与诊断](backup-restore-diagnostics.md) |
+| 113 | `POST` | `/api/v1/backups/restore/preflight` | [备份、恢复与诊断](backup-restore-diagnostics.md) |
+| 114 | `POST` | `/api/v1/certificates` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 115 | `POST` | `/api/v1/certificates/{id}/renew` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 116 | `POST` | `/api/v1/credentials` | [服务器、安全与软件包](servers-security-packages.md) |
+| 117 | `POST` | `/api/v1/debug/clear-runtime-data` | [备份、恢复与诊断](backup-restore-diagnostics.md) |
+| 118 | `POST` | `/api/v1/dns/domains` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 119 | `POST` | `/api/v1/dns/domains/{domainId}/records` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 120 | `POST` | `/api/v1/dns/domains/{domainId}/records/refresh` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 121 | `POST` | `/api/v1/executions/{id}/resolve` | [协调、任务与运行事件](orchestration-and-tasks.md) |
+| 122 | `POST` | `/api/v1/executions/{id}/retry` | [协调、任务与运行事件](orchestration-and-tasks.md) |
+| 123 | `POST` | `/api/v1/executions/{id}/run-now` | [协调、任务与运行事件](orchestration-and-tasks.md) |
+| 124 | `POST` | `/api/v1/facility-apps/reverse-proxy/config-records/{recordId}/apply` | [应用与设施应用](applications-and-facilities.md) |
+| 125 | `POST` | `/api/v1/facility-apps/reverse-proxy/dns-sync` | [应用与设施应用](applications-and-facilities.md) |
+| 126 | `POST` | `/api/v1/facility-apps/reverse-proxy/edit-sessions` | [应用与设施应用](applications-and-facilities.md) |
+| 127 | `POST` | `/api/v1/facility-apps/reverse-proxy/edit-sessions/{id}/commit` | [应用与设施应用](applications-and-facilities.md) |
+| 128 | `POST` | `/api/v1/facility-apps/reverse-proxy/edit-sessions/{id}/preview` | [应用与设施应用](applications-and-facilities.md) |
+| 129 | `POST` | `/api/v1/facility-apps/reverse-proxy/edit-sessions/{id}/validate` | [应用与设施应用](applications-and-facilities.md) |
+| 130 | `POST` | `/api/v1/facility-apps/reverse-proxy/reconcile` | [应用与设施应用](applications-and-facilities.md) |
+| 131 | `POST` | `/api/v1/facility-apps/storage-share/reconcile` | [应用与设施应用](applications-and-facilities.md) |
+| 132 | `POST` | `/api/v1/images/upgrade-all` | [容器与资源](containers-and-resources.md) |
+| 133 | `POST` | `/api/v1/images/upgrade-selected` | [容器与资源](containers-and-resources.md) |
+| 134 | `POST` | `/api/v1/key-assets/ca` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 135 | `POST` | `/api/v1/key-assets/exports` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 136 | `POST` | `/api/v1/key-assets/import` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 137 | `POST` | `/api/v1/key-assets/imports/preflight` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 138 | `POST` | `/api/v1/key-assets/imports/{planId}/execute` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 139 | `POST` | `/api/v1/key-assets/ssh/generate` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 140 | `POST` | `/api/v1/key-assets/system/{id}/reset` | [服务器、安全与软件包](servers-security-packages.md) |
+| 141 | `POST` | `/api/v1/key-assets/tls` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 142 | `POST` | `/api/v1/key-assets/{id}/regenerate` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 143 | `POST` | `/api/v1/key-assets/{id}/reissue` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 144 | `POST` | `/api/v1/self-signed-cas` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 145 | `POST` | `/api/v1/self-signed-certificates` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 146 | `POST` | `/api/v1/self-signed-certificates/{id}/renew` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 147 | `POST` | `/api/v1/servers` | [服务器、安全与软件包](servers-security-packages.md) |
+| 148 | `POST` | `/api/v1/servers/probe` | [服务器、安全与软件包](servers-security-packages.md) |
+| 149 | `POST` | `/api/v1/servers/{id}/agent/certificate` | [服务器、安全与软件包](servers-security-packages.md) |
+| 150 | `POST` | `/api/v1/servers/{id}/agent/deploy` | [服务器、安全与软件包](servers-security-packages.md) |
+| 151 | `POST` | `/api/v1/servers/{id}/fail2ban/enable` | [服务器、安全与软件包](servers-security-packages.md) |
+| 152 | `POST` | `/api/v1/servers/{id}/fail2ban/install` | [服务器、安全与软件包](servers-security-packages.md) |
+| 153 | `POST` | `/api/v1/servers/{id}/fail2ban/release` | [服务器、安全与软件包](servers-security-packages.md) |
+| 154 | `POST` | `/api/v1/servers/{id}/packages/refresh` | [服务器、安全与软件包](servers-security-packages.md) |
+| 155 | `POST` | `/api/v1/servers/{id}/packages/upgrade-all` | [服务器、安全与软件包](servers-security-packages.md) |
+| 156 | `POST` | `/api/v1/servers/{id}/packages/upgrade-selected` | [服务器、安全与软件包](servers-security-packages.md) |
+| 157 | `POST` | `/api/v1/servers/{id}/restart` | [服务器、安全与软件包](servers-security-packages.md) |
+| 158 | `POST` | `/api/v1/servers/{id}/tailscale/apply` | [服务器、安全与软件包](servers-security-packages.md) |
+| 159 | `POST` | `/api/v1/servers/{id}/test` | [服务器、安全与软件包](servers-security-packages.md) |
+| 160 | `POST` | `/api/v1/servers/{id}/trust-host-key` | [服务器、安全与软件包](servers-security-packages.md) |
+| 161 | `POST` | `/api/v1/servers/{id}/ufw/rules` | [服务器、安全与软件包](servers-security-packages.md) |
+| 162 | `POST` | `/api/v1/servers/{serverId}/containers/{resourceId}/{action}` | [容器与资源](containers-and-resources.md) |
+| 163 | `POST` | `/api/v1/servers/{serverId}/images/delete-unused` | [容器与资源](containers-and-resources.md) |
+| 164 | `POST` | `/api/v1/servers/{serverId}/images/pull` | [容器与资源](containers-and-resources.md) |
+| 165 | `POST` | `/api/v1/servers/{serverId}/images/refresh` | [容器与资源](containers-and-resources.md) |
+| 166 | `POST` | `/api/v1/servers/{serverId}/networks/refresh` | [容器与资源](containers-and-resources.md) |
+| 167 | `POST` | `/api/v1/servers/{serverId}/volumes/delete-unused` | [容器与资源](containers-and-resources.md) |
+| 168 | `POST` | `/api/v1/servers/{serverId}/volumes/refresh` | [容器与资源](containers-and-resources.md) |
+| 169 | `POST` | `/api/v1/settings/tailscale/apply` | [Tailscale](tailscale.md) `TS-SET-005`；领域入口见 [身份、设置与系统](identity-settings-system.md) |
+| 170 | `PUT` | `/api/v1/application-edit-sessions/{id}/files/{name}` | [应用与设施应用](applications-and-facilities.md) |
+| 171 | `PUT` | `/api/v1/application-edit-sessions/{id}/uploads/{name}` | [应用与设施应用](applications-and-facilities.md) |
+| 172 | `PUT` | `/api/v1/certificates/{id}` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 173 | `PUT` | `/api/v1/credentials/{id}` | [服务器、安全与软件包](servers-security-packages.md) |
+| 174 | `PUT` | `/api/v1/debug/pprof` | [备份、恢复与诊断](backup-restore-diagnostics.md) |
+| 175 | `PUT` | `/api/v1/dns/domains/{domainId}` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 176 | `PUT` | `/api/v1/dns/domains/{domainId}/records/{recordId}` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 177 | `PUT` | `/api/v1/facility-apps/metrics` | [应用与设施应用](applications-and-facilities.md) `FAC-MET-003`；保存指标设施配置 |
+| 178 | `PUT` | `/api/v1/facility-apps/network-probe` | [应用与设施应用](applications-and-facilities.md) `FAC-PRB-003`；保存网络探测配置 |
+| 179 | `PUT` | `/api/v1/facility-apps/reverse-proxy/edit-sessions/{id}/assets/{assetName}` | [应用与设施应用](applications-and-facilities.md) |
+| 180 | `PUT` | `/api/v1/facility-apps/reverse-proxy/proxy-plane` | [应用与设施应用](applications-and-facilities.md) |
+| 181 | `PUT` | `/api/v1/facility-apps/storage-share` | [应用与设施应用](applications-and-facilities.md) |
+| 182 | `PUT` | `/api/v1/overview/cards` | [身份、设置与系统](identity-settings-system.md) |
+| 183 | `PUT` | `/api/v1/servers/{id}` | [服务器、安全与软件包](servers-security-packages.md) |
+| 184 | `PUT` | `/api/v1/servers/{id}/fail2ban` | [服务器、安全与软件包](servers-security-packages.md) |
+| 185 | `PUT` | `/api/v1/settings/runtime` | [身份、设置与系统](identity-settings-system.md) `TS-SET-001..005` |
+| 186 | `PUT` | `/api/v1/settings/server-variables` | [身份、设置与系统](identity-settings-system.md) |

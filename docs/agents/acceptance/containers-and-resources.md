@@ -220,7 +220,7 @@
 - **动作**：containers 模块 `StartPeriodic` 通过 `StartDailyAtLoop` 在 Panel 主机本地时区每天 03:00 触发 `image_unused_cleanup` collector；对每个 reachable+compatible 服务器创建 parallel event run（`triggerType=scheduler`）。
 - **结果**：每个任务在同一 server queue 内实时获取 images+containers；跳过空 ID、使用中、Created≤0、以及 Created 未早于「现在−7 天」的镜像；删除其余未使用镜像。删除全部成功后尝试触发 `image_refresh`（`triggerType=scheduler`）；刷新冲突或失败不得推翻已成功的删除结果，任务仍完成。
 - **失败**：列举/删除 Agent 失败或逐镜像删除部分失败时任务失败，且不得把部分成功描述为全部成功；无 compatible 服务器时 collector 返回 `shouldRun=false` 且不创建 event run。
-- **不变量**：年龄阈值固定为 7 天、触发时刻固定为本地每天 03:00，不复用 metrics 的 `cleanupSchedule`/`metricsRetentionDays`；不跟踪“上次使用时间”，仅用 Docker `Created` unix 秒作为年龄依据（与 `docker image prune --filter until=` 同类语义）；手动 `IMG-DEL-002` 仍删除全部当前未使用镜像，不受 7 天限制；进程取消共享 periodic context 时 loop 停止；重启后等待下一次本地 03:00（不在启动瞬间补跑，也不用固定 24h ticker）；每次触发后按墙钟重算下次时刻以应对夏令时。
+- **不变量**：年龄阈值固定为 7 天、触发时刻固定为本地每天 03:00，不复用指标设施的清理计划/保留天数（`FAC-MET-005` 的 `cleanupSchedule`/`retentionDays` 只管理 `metrics_snapshots`，不驱动镜像清理）；不跟踪“上次使用时间”，仅用 Docker `Created` unix 秒作为年龄依据（与 `docker image prune --filter until=` 同类语义）；手动 `IMG-DEL-002` 仍删除全部当前未使用镜像，不受 7 天限制；进程取消共享 periodic context 时 loop 停止；重启后等待下一次本地 03:00（不在启动瞬间补跑，也不用固定 24h ticker）；每次触发后按墙钟重算下次时刻以应对夏令时。
 - **验证**：age gate / in-use skip / unknown Created retain、collector only-compatible、task complete after aged unused delete、`nextDailyAt` wall-clock tests；`COV-BG-001/002`。
 
 ### IMG-REF-001 手动/周期刷新

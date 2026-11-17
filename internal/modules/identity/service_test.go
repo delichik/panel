@@ -87,13 +87,10 @@ func TestLoginUsesRuntimeTokenExpiration(t *testing.T) {
 	svc := newTestService(t)
 	runtime := svc.runtime.Runtime()
 	_, err := svc.runtime.Update(ctx, settings.RuntimeUpdate{
-		MetricsRetentionDays:             runtime.MetricsRetentionDays,
-		MetricsCollectionIntervalSeconds: runtime.MetricsCollectionIntervalSeconds,
-		CleanupSchedule:                  runtime.CleanupSchedule,
-		TokenExpiration:                  settings.TokenExpirationNever,
-		Language:                         runtime.Language,
-		RemoteCommandTimeoutSeconds:      runtime.RemoteCommandTimeoutSeconds,
-		Certificates:                     &runtime.Certificates,
+		TokenExpiration:             settings.TokenExpirationNever,
+		Language:                    runtime.Language,
+		RemoteCommandTimeoutSeconds: runtime.RemoteCommandTimeoutSeconds,
+		Certificates:                &runtime.Certificates,
 	})
 	if err != nil {
 		t.Fatalf("set token expiration: %v", err)

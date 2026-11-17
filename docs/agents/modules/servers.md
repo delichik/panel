@@ -125,7 +125,7 @@
 - 软件包刷新与升级共用 per-server 维护互斥（`packages.Service` 的 refreshing 机制即“维护中”）：同一服务器同一时间只允许一种软件包维护动作，进行中被拒绝的刷新/升级任务会以明确的“维护中”错误进入失败态，不再被误标成功。
 - 升级任务（`package_upgrade_selected` / `package_upgrade_all`）已注册 `Execute` 并声明 `AllowRunNow` / `AllowRetry`，选中的软件包名单持久化在 `tasks.params_json`；Panel 重启后遗留的 `queued` 升级任务可由 tasks worker 恢复执行，不再是死任务。
 - 周期性指标采集依赖 agent 上报流，只对 `agent.enabled=true`、存在 `agent.url` 且 `agent.status=compatible` 的服务器采集并标记可达；不再因旧 `reachable=false` 跳过，以便恢复成功时重新标记可达。指标快照除 CPU、内存、磁盘和网络外，结构化保存 Linux 标准的 1、5、15 分钟负载 `load1`、`load5`、`load15`。
-- 指标历史清理由 `internal/modules/observability/metrics/cleanup_worker.go` 自主管理，按运行时设置中的保留天数和清理周期执行，不属于 tasks 内部 worker。
+- 指标历史清理由 `internal/modules/observability/metrics/cleanup_worker.go` 自主管理，按指标设施配置（`metrics_facility_configs` 单行 `id='metrics'` 的 `retention_days`/`cleanup_schedule`，`FAC-MET-005`）执行，不属于 tasks 内部 worker。
 - `POST /api/v1/servers/{id}/ufw/install` 与 `POST /api/v1/servers/{id}/ufw/enable` **已删除**（`UFW-API-005` 已废弃）：防火墙不再由用户安装或接管，而是 Agent 部署的自动前提，见下文防火墙前提条目。防火墙页只保留 `GET /ufw` 状态读取与规则增删。
 - `POST /api/v1/servers/{id}/restart` 要求服务器可达且已确认 root 或免密 sudo 特权能力，返回 `server_restart` 任务；前端必须二次确认并保留 `/executions` 或 toast taskId 入口。
 

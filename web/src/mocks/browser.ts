@@ -32,6 +32,11 @@ import {
   saveNetworkProbeConfig,
 } from './networkProbe';
 import {
+  getMetricsFacilityConfig,
+  MockMetricsFacilityError,
+  saveMetricsFacilityConfig,
+} from './metricsFacility';
+import {
   accepted,
   applyServerTailscale,
   createCredential,
@@ -49,6 +54,7 @@ import {
 } from './servers';
 import type { CredentialInput } from '@/types/credentials';
 import type { OverviewCardConfigurationSet } from '@/types/overview';
+import type { MetricsFacilitySaveInput } from '@/types/metricsFacility';
 import type { NetworkProbeSaveInput } from '@/types/networkProbe';
 import type { ServerProbeInput, ServerSaveInput } from '@/types/servers';
 import {
@@ -822,6 +828,15 @@ export function installMockApi() {
       }
     }
     if (url.pathname === '/api/v1/facility-apps/network-probe/results' && method(init) === 'GET') return json(getNetworkProbeMatrix());
+    if (url.pathname === '/api/v1/facility-apps/metrics' && method(init) === 'GET') return json(getMetricsFacilityConfig());
+    if (url.pathname === '/api/v1/facility-apps/metrics' && method(init) === 'PUT') {
+      try {
+        return json(saveMetricsFacilityConfig(await body<MetricsFacilitySaveInput>(init)));
+      } catch (err) {
+        if (err instanceof MockMetricsFacilityError) return error(err.code, err.message, err.status);
+        throw err;
+      }
+    }
     if (url.pathname === '/api/v1/facility-apps/storage-share' && method(init) === 'GET') return json(mockStorageShare);
     if (url.pathname === '/api/v1/facility-apps/storage-share' && method(init) === 'PUT') {
       const input = init?.body ? await new Response(init.body).json() as { servers?: Array<{ serverId?: string; root?: string }> } : {};

@@ -40,7 +40,7 @@ Seamark immediately requires a different password. The password change also rota
 
 After login, review these optional settings:
 
-- **Settings → General:** interface language, token lifetime, metrics retention, collection intervals, and command timeout.
+- **Settings → General:** interface language, token lifetime, and command timeout. Metrics collection interval, retention, and cleanup schedule now live in the **Applications → Facility apps → Metrics** facility.
 - **Settings → Certificates:** ACME email and certificate defaults, if you plan to issue public certificates.
 - **Settings → Security:** administrator account, password, and JWT secret settings.
 

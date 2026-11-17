@@ -324,7 +324,9 @@ func parseMetricTime(raw string) (time.Time, bool) {
 
 func (s *Service) Cleanup(ctx context.Context, retentionDays int) (int64, error) {
 	if retentionDays < 1 {
-		return 0, panelerr.Validation("invalid_metrics_retention", "Metrics retention must be at least 1 day")
+		// 指标保留天数由指标设施配置（FAC-MET-005）提供；该分支只防御非法
+		// provider，错误码与设施校验保持一致，避免设置页移除后仍出现旧错误码。
+		return 0, panelerr.Validation("metrics_facility_retention_invalid", "Metrics retention must be at least 1 day")
 	}
 	cutoff := time.Now().UTC().Add(-time.Duration(retentionDays) * 24 * time.Hour).Format(time.RFC3339Nano)
 	res, err := orm.RawExec(ctx, s.db, `DELETE FROM metrics_snapshots WHERE time < ?`, cutoff)

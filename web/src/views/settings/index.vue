@@ -68,10 +68,7 @@ const agentTransferTimeoutMin = 60;
 const agentTransferTimeoutMax = 3600;
 
 const form = reactive({
-  metricsRetentionDays: '14',
-  metricsCollectionIntervalSeconds: '60',
   containerReportIntervalSeconds: '30',
-  cleanupSchedule: 'daily',
   tokenExpiration: '1d',
   language: 'zh-CN',
   logLevel: 'info',
@@ -106,15 +103,13 @@ const sections = computed(() => [
   { key: 'system', label: t('settingsPage.section.system'), to: '/settings/system' },
   { key: 'backups', label: t('settingsPage.section.backups'), to: '/settings/backups' },
 ]);
-const cleanupOptions = computed(() => ['hourly', 'daily', 'weekly'].map((value) => ({ label: t(`settingsPage.cleanup.${value}`), value })));
-const tokenOptions = computed(() => ['10m', '1h', '1d', '5d', '30d', 'never'].map((value) => ({ label: t(`settingsPage.token.${value}`), value })));
-const languageOptions = computed(() => [{ label: t('settingsPage.language.en'), value: 'en' }, { label: t('settingsPage.language.zh'), value: 'zh-CN' }]);
+const tokenOptions = computed(() => ['10m', '1h', '1d', '5d', '30d', 'never'].map((value) => ({ label: t(`settingsPage.token.${value}`), value })));const languageOptions = computed(() => [{ label: t('settingsPage.language.en'), value: 'en' }, { label: t('settingsPage.language.zh'), value: 'zh-CN' }]);
 const logOptions = computed(() => ['debug', 'info', 'warn', 'error'].map((value) => ({ label: value, value })));
 const panelTlsOptions = computed(() => tlsCertificates.value.map((certificate) => ({ label: certificate.name, value: certificate.id })));
 const jwtSecretValid = computed(() => form.jwtSecret.trim().length >= 16);
 const fieldErrors = computed<Record<string, string>>(() => {
   const errors: Record<string, string> = {};
-  const positive: Array<keyof typeof form> = ['metricsRetentionDays', 'metricsCollectionIntervalSeconds', 'containerReportIntervalSeconds', 'remoteCommandTimeoutSeconds'];
+  const positive: Array<keyof typeof form> = ['containerReportIntervalSeconds', 'remoteCommandTimeoutSeconds'];
   positive.forEach((key) => {
     const value = Number(form[key]);
     if (!Number.isFinite(value) || value < 1) errors[key] = 'settingsPage.validationPositiveNumber';
@@ -128,7 +123,7 @@ const fieldErrors = computed<Record<string, string>>(() => {
   }
   return errors;
 });
-const runtimeSectionValid = computed(() => !fieldErrors.value.metricsRetentionDays && !fieldErrors.value.metricsCollectionIntervalSeconds && !fieldErrors.value.containerReportIntervalSeconds);
+const runtimeSectionValid = computed(() => !fieldErrors.value.containerReportIntervalSeconds);
 const tailscaleTagResult = computed(() => parseTailscaleTags(form.tailscaleTags));
 const invalidTailscaleTags = computed(() => tailscaleTagResult.value.invalid);
 const tailscaleContainer = computed(() => runtime.value?.tailscale.container ?? null);
@@ -182,10 +177,7 @@ async function load() {
 
 function hydrate(settings: RuntimeSettings, variables: ServerVariableDefinition[]) {
   Object.assign(form, {
-    metricsRetentionDays: String(settings.metricsRetentionDays),
-    metricsCollectionIntervalSeconds: String(settings.metricsCollectionIntervalSeconds),
     containerReportIntervalSeconds: String(settings.containerReportIntervalSeconds),
-    cleanupSchedule: settings.cleanupSchedule,
     tokenExpiration: settings.tokenExpiration,
     language: settings.language,
     logLevel: settings.logLevel,
@@ -353,10 +345,7 @@ async function run(name: string, action: () => Promise<void>) {
 function buildRuntimeUpdate(kind: 'runtime' | 'security' | 'certificates' | 'agent' | 'system' | 'tailscale'): RuntimeUpdate {
   const current = runtime.value!;
   const update: RuntimeUpdate = {
-    metricsRetentionDays: current.metricsRetentionDays,
-    metricsCollectionIntervalSeconds: current.metricsCollectionIntervalSeconds,
     containerReportIntervalSeconds: current.containerReportIntervalSeconds,
-    cleanupSchedule: current.cleanupSchedule,
     tokenExpiration: current.tokenExpiration,
     language: current.language,
     logLevel: current.logLevel,
@@ -367,10 +356,7 @@ function buildRuntimeUpdate(kind: 'runtime' | 'security' | 'certificates' | 'age
     agent: current.agent,
   };
   if (kind === 'runtime') {
-    update.metricsRetentionDays = numberField(form.metricsRetentionDays, current.metricsRetentionDays);
-    update.metricsCollectionIntervalSeconds = numberField(form.metricsCollectionIntervalSeconds, current.metricsCollectionIntervalSeconds);
     update.containerReportIntervalSeconds = numberField(form.containerReportIntervalSeconds, current.containerReportIntervalSeconds);
-    update.cleanupSchedule = form.cleanupSchedule;
     update.language = form.language;
     update.logLevel = form.logLevel;
     update.reconcileTraceEnabled = form.reconcileTraceEnabled;
@@ -503,10 +489,7 @@ onMounted(load);
         <section v-if="activeSection === 'general'" class="grid gap-4 rounded-2xl border border-border bg-card p-4">
           <h2>{{ t('settingsPage.section.runtime') }}</h2>
           <div class="grid grid-cols-2 gap-3 max-md:grid-cols-1">
-            <label class="grid gap-1 text-sm">{{ t('settingsPage.metricsRetention') }}<Input v-model="form.metricsRetentionDays" type="number" min="1" :invalid="Boolean(fieldErrors.metricsRetentionDays)" /><span v-if="fieldErrors.metricsRetentionDays" class="text-xs text-danger">{{ t(fieldErrors.metricsRetentionDays) }}</span></label>
-            <label class="grid gap-1 text-sm">{{ t('settingsPage.metricsInterval') }}<Input v-model="form.metricsCollectionIntervalSeconds" type="number" min="1" :invalid="Boolean(fieldErrors.metricsCollectionIntervalSeconds)" /><span v-if="fieldErrors.metricsCollectionIntervalSeconds" class="text-xs text-danger">{{ t(fieldErrors.metricsCollectionIntervalSeconds) }}</span></label>
             <label class="grid gap-1 text-sm">{{ t('settingsPage.containerInterval') }}<Input v-model="form.containerReportIntervalSeconds" type="number" min="1" :invalid="Boolean(fieldErrors.containerReportIntervalSeconds)" /><span v-if="fieldErrors.containerReportIntervalSeconds" class="text-xs text-danger">{{ t(fieldErrors.containerReportIntervalSeconds) }}</span></label>
-            <label class="grid gap-1 text-sm">{{ t('settingsPage.cleanupSchedule') }}<Select v-model="form.cleanupSchedule" :options="cleanupOptions" /></label>
             <label class="grid gap-1 text-sm">{{ t('settingsPage.language') }}<Select v-model="form.language" :options="languageOptions" /></label>
             <label class="grid gap-1 text-sm">{{ t('settingsPage.logLevel') }}<Select v-model="form.logLevel" :options="logOptions" /></label>
             <label class="grid gap-1 text-sm">{{ t('settingsPage.reconcileTrace') }}<Switch v-model="form.reconcileTraceEnabled" :label="t('settingsPage.reconcileTrace')" /><span class="text-xs text-muted-foreground">{{ t('settingsPage.reconcileTraceHint') }}</span></label>

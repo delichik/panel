@@ -32,7 +32,7 @@
 
 容器、镜像、网络、卷与软件包不再是独立路由页面，而是服务器详情的一级 tab（`UI-SRV-017/018`、`UI-SHELL-062`）。每个 tab 保持独立的信息架构与操作闭环，不得退回同质通用列表；服务器上下文由详情固定，不再有独立的服务器选择器。所有控件使用 Panel 自有 primitives，禁止引入 Naive UI / Vuetify。
 
-- 设施应用页面是 `/applications/facility-apps` 独立入口，必须先呈现设施目录；内置“反向代理”与“存储共享”两个设施项。`facilityKind=reverse-proxy` 的只读详情展示路由与部署状态；独立配置页保存 Nginx 镜像、全局网关节点、Panel 入口、域名策略、Path 规则和静态资产草稿。指定的全局网关节点即视为开启反向代理能力。`facilityKind=storage-share` 由独立组件 `web/src/views/applications/StorageShareFacility.vue` 渲染健康、分区与设置，详见下文“存储共享设施”。
+- 设施应用页面是 `/applications/facility-apps` 独立入口，必须先呈现设施目录；内置反向代理、存储共享、网络探测与指标四个设施项（后两者为纯观测设施，不创建容器/隐藏应用）。`facilityKind=reverse-proxy` 的只读详情展示路由与部署状态；独立配置页保存 Nginx 镜像、全局网关节点、Panel 入口、域名策略、Path 规则和静态资产草稿。指定的全局网关节点即视为开启反向代理能力。`facilityKind=storage-share` 由独立组件 `web/src/views/applications/StorageShareFacility.vue` 渲染健康、分区与设置，详见下文“存储共享设施”。`facilityKind=network-probe`/`metrics` 分别由 `NetworkProbeFacility.vue`/`MetricsFacility.vue` 渲染配置（`FAC-PRB-*`、`FAC-MET-*`）。
 - 容器支持查询、查看日志、启动、停止、重启、删除；日志入口与其他行操作使用带图标的小型操作，托管 Application 容器的直接停止、重启和删除入口必须禁用并提示改走 Application 生命周期。
 - 容器卡片端口行在没有发布端口时显示「无端口映射」，不使用「不可用」，避免与容器故障状态混淆。
 - 镜像支持查询、拉取、删除、删除未使用镜像、刷新更新状态、升级选中 Application 和全部升级；批量危险操作必须通过确认对话框触发。

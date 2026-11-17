@@ -74,43 +74,37 @@ type ServerVariableDefinitionsUpdate struct {
 }
 
 type RuntimeUpdate struct {
-	MetricsRetentionDays             int                         `json:"metricsRetentionDays"`
-	MetricsCollectionIntervalSeconds int                         `json:"metricsCollectionIntervalSeconds"`
-	ContainerReportIntervalSeconds   int                         `json:"containerReportIntervalSeconds"`
-	CleanupSchedule                  string                      `json:"cleanupSchedule"`
-	TokenExpiration                  string                      `json:"tokenExpiration"`
-	Language                         string                      `json:"language"`
-	LogLevel                         string                      `json:"logLevel"`
-	RemoteCommandTimeoutSeconds      int                         `json:"remoteCommandTimeoutSeconds"`
-	ReconcileTraceEnabled            *bool                       `json:"reconcileTraceEnabled"`
-	Branding                         *RuntimeBrandingSettings    `json:"branding"`
-	Certificates                     *RuntimeCertificateSettings `json:"certificates"`
-	Panel                            *RuntimePanelSettings       `json:"panel"`
-	Agent                            *RuntimeAgentSettings       `json:"agent"`
-	Tailscale                        *RuntimeTailscaleUpdate     `json:"tailscale"`
+	ContainerReportIntervalSeconds int                         `json:"containerReportIntervalSeconds"`
+	TokenExpiration                string                      `json:"tokenExpiration"`
+	Language                       string                      `json:"language"`
+	LogLevel                       string                      `json:"logLevel"`
+	RemoteCommandTimeoutSeconds    int                         `json:"remoteCommandTimeoutSeconds"`
+	ReconcileTraceEnabled          *bool                       `json:"reconcileTraceEnabled"`
+	Branding                       *RuntimeBrandingSettings    `json:"branding"`
+	Certificates                   *RuntimeCertificateSettings `json:"certificates"`
+	Panel                          *RuntimePanelSettings       `json:"panel"`
+	Agent                          *RuntimeAgentSettings       `json:"agent"`
+	Tailscale                      *RuntimeTailscaleUpdate     `json:"tailscale"`
 }
 
 type RuntimeSettings struct {
-	ListenAddress                    string                     `json:"listenAddress"`
-	AppDatabase                      string                     `json:"appDatabase"`
-	MetricsDatabase                  string                     `json:"metricsDatabase"`
-	DataRoot                         string                     `json:"dataRoot"`
-	MetricsRetentionDays             int                        `json:"metricsRetentionDays"`
-	MetricsCollectionIntervalSeconds int                        `json:"metricsCollectionIntervalSeconds"`
-	ContainerReportIntervalSeconds   int                        `json:"containerReportIntervalSeconds"`
-	CleanupSchedule                  string                     `json:"cleanupSchedule"`
-	TokenExpiration                  string                     `json:"tokenExpiration"`
-	Language                         string                     `json:"language"`
-	LogLevel                         string                     `json:"logLevel"`
-	RemoteCommandTimeoutSeconds      int                        `json:"remoteCommandTimeoutSeconds"`
-	ReconcileTraceEnabled            bool                       `json:"reconcileTraceEnabled"`
-	Branding                         RuntimeBrandingSettings    `json:"branding"`
-	Certificates                     RuntimeCertificateSettings `json:"certificates"`
-	Panel                            RuntimePanelSettings       `json:"panel"`
-	Agent                            RuntimeAgentSettings       `json:"agent"`
-	Tailscale                        RuntimeTailscaleSettings   `json:"tailscale"`
-	JWTSecret                        string                     `json:"-"`
-	JWTSecretConfigured              bool                       `json:"jwtSecretConfigured"`
+	ListenAddress                  string                     `json:"listenAddress"`
+	AppDatabase                    string                     `json:"appDatabase"`
+	MetricsDatabase                string                     `json:"metricsDatabase"`
+	DataRoot                       string                     `json:"dataRoot"`
+	ContainerReportIntervalSeconds int                        `json:"containerReportIntervalSeconds"`
+	TokenExpiration                string                     `json:"tokenExpiration"`
+	Language                       string                     `json:"language"`
+	LogLevel                       string                     `json:"logLevel"`
+	RemoteCommandTimeoutSeconds    int                        `json:"remoteCommandTimeoutSeconds"`
+	ReconcileTraceEnabled          bool                       `json:"reconcileTraceEnabled"`
+	Branding                       RuntimeBrandingSettings    `json:"branding"`
+	Certificates                   RuntimeCertificateSettings `json:"certificates"`
+	Panel                          RuntimePanelSettings       `json:"panel"`
+	Agent                          RuntimeAgentSettings       `json:"agent"`
+	Tailscale                      RuntimeTailscaleSettings   `json:"tailscale"`
+	JWTSecret                      string                     `json:"-"`
+	JWTSecretConfigured            bool                       `json:"jwtSecretConfigured"`
 }
 
 const (
@@ -279,23 +273,20 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 		}
 	}
 	next := RuntimeSettings{
-		ListenAddress:                    current.ListenAddress,
-		AppDatabase:                      current.AppDatabase,
-		MetricsDatabase:                  current.MetricsDatabase,
-		DataRoot:                         current.DataRoot,
-		MetricsRetentionDays:             input.MetricsRetentionDays,
-		MetricsCollectionIntervalSeconds: input.MetricsCollectionIntervalSeconds,
-		ContainerReportIntervalSeconds:   input.ContainerReportIntervalSeconds,
-		CleanupSchedule:                  input.CleanupSchedule,
-		TokenExpiration:                  NormalizeTokenExpiration(input.TokenExpiration),
-		Language:                         i18n.NormalizeLocale(input.Language),
-		LogLevel:                         logging.NormalizeLevel(input.LogLevel),
-		RemoteCommandTimeoutSeconds:      input.RemoteCommandTimeoutSeconds,
-		ReconcileTraceEnabled:            current.ReconcileTraceEnabled,
-		Branding:                         brandingSettings,
-		Certificates:                     certSettings,
-		Panel:                            panelSettings,
-		Agent:                            agentSettings,
+		ListenAddress:                  current.ListenAddress,
+		AppDatabase:                    current.AppDatabase,
+		MetricsDatabase:                current.MetricsDatabase,
+		DataRoot:                       current.DataRoot,
+		ContainerReportIntervalSeconds: input.ContainerReportIntervalSeconds,
+		TokenExpiration:                NormalizeTokenExpiration(input.TokenExpiration),
+		Language:                       i18n.NormalizeLocale(input.Language),
+		LogLevel:                       logging.NormalizeLevel(input.LogLevel),
+		RemoteCommandTimeoutSeconds:    input.RemoteCommandTimeoutSeconds,
+		ReconcileTraceEnabled:          current.ReconcileTraceEnabled,
+		Branding:                       brandingSettings,
+		Certificates:                   certSettings,
+		Panel:                          panelSettings,
+		Agent:                          agentSettings,
 		// Tailscale 分组与 Agent 分组一样遵循“缺省即保持”：请求省略该分组时
 		// 必须保留标签、密钥状态与容器实际态。漏掉这一行会把它清零，既清空
 		// 持久化的标签，也让响应出现 tags=null。
@@ -339,10 +330,7 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 		return RuntimeSettings{}, err
 	}
 	s.mu.Lock()
-	s.rt.MetricsRetentionDays = next.MetricsRetentionDays
-	s.rt.MetricsCollectionIntervalSeconds = next.MetricsCollectionIntervalSeconds
 	s.rt.ContainerReportIntervalSeconds = next.ContainerReportIntervalSeconds
-	s.rt.CleanupSchedule = next.CleanupSchedule
 	s.rt.TokenExpiration = next.TokenExpiration
 	s.rt.Language = next.Language
 	s.rt.LogLevel = next.LogLevel
@@ -511,20 +499,10 @@ func (s *Service) load(ctx context.Context) error {
 	for _, row := range rows {
 		key, value := row.Key, row.Value
 		switch key {
-		case "metricsRetentionDays":
-			if n, err := strconv.Atoi(value); err == nil {
-				next.MetricsRetentionDays = n
-			}
-		case "metricsCollectionIntervalSeconds":
-			if n, err := strconv.Atoi(value); err == nil {
-				next.MetricsCollectionIntervalSeconds = n
-			}
 		case "containerReportIntervalSeconds":
 			if n, err := strconv.Atoi(value); err == nil {
 				next.ContainerReportIntervalSeconds = n
 			}
-		case "cleanupSchedule":
-			next.CleanupSchedule = value
 		case RuntimeSettingTokenExpiration:
 			if tokenExpiration := NormalizeTokenExpiration(value); tokenExpiration != "" {
 				next.TokenExpiration = tokenExpiration
@@ -603,19 +581,16 @@ func defaultRuntimeSettings(cfg config.Config) RuntimeSettings {
 		dnsDelay = 30
 	}
 	return RuntimeSettings{
-		ListenAddress:                    cfg.ListenAddress,
-		AppDatabase:                      cfg.AppDatabase,
-		MetricsDatabase:                  cfg.MetricsDatabase,
-		DataRoot:                         cfg.DataRoot,
-		MetricsRetentionDays:             7,
-		MetricsCollectionIntervalSeconds: 60,
-		ContainerReportIntervalSeconds:   30,
-		CleanupSchedule:                  "daily",
-		TokenExpiration:                  DefaultTokenExpiration,
-		Language:                         i18n.DefaultLocale(),
-		LogLevel:                         logging.DefaultLevel,
-		RemoteCommandTimeoutSeconds:      remoteTimeout,
-		Branding:                         RuntimeBrandingSettings{},
+		ListenAddress:                  cfg.ListenAddress,
+		AppDatabase:                    cfg.AppDatabase,
+		MetricsDatabase:                cfg.MetricsDatabase,
+		DataRoot:                       cfg.DataRoot,
+		ContainerReportIntervalSeconds: 30,
+		TokenExpiration:                DefaultTokenExpiration,
+		Language:                       i18n.DefaultLocale(),
+		LogLevel:                       logging.DefaultLevel,
+		RemoteCommandTimeoutSeconds:    remoteTimeout,
+		Branding:                       RuntimeBrandingSettings{},
 		Certificates: RuntimeCertificateSettings{
 			Email:                      strings.TrimSpace(cfg.Certificates.Email),
 			DNSPropagationDelaySeconds: dnsDelay,
@@ -635,10 +610,7 @@ func defaultRuntimeSettings(cfg config.Config) RuntimeSettings {
 
 func runtimeValues(settings RuntimeSettings, includeJWT bool) map[string]string {
 	values := map[string]string{
-		"metricsRetentionDays":                             strconv.Itoa(settings.MetricsRetentionDays),
-		"metricsCollectionIntervalSeconds":                 strconv.Itoa(settings.MetricsCollectionIntervalSeconds),
 		"containerReportIntervalSeconds":                   strconv.Itoa(settings.ContainerReportIntervalSeconds),
-		"cleanupSchedule":                                  settings.CleanupSchedule,
 		RuntimeSettingTokenExpiration:                      settings.TokenExpiration,
 		"language":                                         settings.Language,
 		RuntimeSettingLogLevel:                             settings.LogLevel,
@@ -662,19 +634,8 @@ func runtimeValues(settings RuntimeSettings, includeJWT bool) map[string]string 
 }
 
 func validateRuntimeSettings(settings RuntimeSettings) error {
-	if settings.MetricsRetentionDays < 1 {
-		return panelerr.Validation("invalid_metrics_retention", "Metrics retention must be at least 1 day")
-	}
-	if settings.MetricsCollectionIntervalSeconds < 1 {
-		return panelerr.Validation("invalid_metrics_interval", "Metrics collection interval must be at least 1 second")
-	}
 	if settings.ContainerReportIntervalSeconds < 1 {
 		return panelerr.Validation("invalid_container_report_interval", "Container report interval must be at least 1 second")
-	}
-	switch settings.CleanupSchedule {
-	case "hourly", "daily", "weekly":
-	default:
-		return panelerr.Validation("invalid_cleanup_schedule", "Cleanup schedule must be hourly, daily, or weekly")
 	}
 	if tokenExpiration := NormalizeTokenExpiration(settings.TokenExpiration); tokenExpiration == "" {
 		return panelerr.Validation("invalid_token_expiration", "Token expiration must be 10 minutes, 1 hour, 1 day, 5 days, 30 days, or never")

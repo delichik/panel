@@ -361,7 +361,11 @@ describe('domain mock routes', () => {
     const settings = await fetch('/api/v1/settings/runtime');
     const settingsEnvelope = await settings.json();
     expect(settings.status).toBe(200);
-    expect(settingsEnvelope.data.cleanupSchedule).toBe('daily');
+    expect(settingsEnvelope.data.containerReportIntervalSeconds).toBe(30);
+    // 指标保留/采集间隔/清理计划已移出运行时设置，由指标设施契约管理。
+    expect(settingsEnvelope.data).not.toHaveProperty('metricsRetentionDays');
+    expect(settingsEnvelope.data).not.toHaveProperty('metricsCollectionIntervalSeconds');
+    expect(settingsEnvelope.data).not.toHaveProperty('cleanupSchedule');
 
     const conflict = await fetch('/api/v1/settings/runtime', {
       method: 'PUT',
@@ -485,6 +489,27 @@ describe('domain mock routes', () => {
   it('serves network probe configuration, matrix, and per-node results on real routes', async () => {
     const config = await (await fetch('/api/v1/facility-apps/network-probe')).json();
     expect(config.data).toMatchObject({ mode: 'all', serverIds: [], version: expect.any(Number) });
+    expect(config.data).toMatchObject({
+      mode: 'all',
+      serverIds: [],
+      intervalSeconds: 60,
+      version: expect.any(Number),
+    });
+
+    // 旧 payload 缺省三个节拍参数时必须按默认值补齐，而不是报错或写回 0。
+    const legacy = await fetch('/api/v1/facility-apps/network-probe', {
+      method: 'PUT',
+      body: JSON.stringify({ mode: 'all', serverIds: [] }),
+    });
+    expect(legacy.status).toBe(200);
+
+    const invalidSettings: Array<{ body: Record<string, unknown>; code: string }> = [
+    ];
+    for (const item of invalidSettings) {
+      const response = await fetch('/api/v1/facility-apps/network-probe', { method: 'PUT', body: JSON.stringify(item.body) });
+      expect(response.status, item.code).toBe(422);
+      expect((await response.json()).error.code).toBe(item.code);
+    }
 
     const rejected = await fetch('/api/v1/facility-apps/network-probe', {
       method: 'PUT',
@@ -506,6 +531,12 @@ describe('domain mock routes', () => {
     });
     expect(saved.status).toBe(200);
     expect((await saved.json()).data).toMatchObject({ mode: 'selected', serverIds: ['srv-edge-sgp'] });
+    expect((await saved.json()).data).toMatchObject({
+      mode: 'selected',
+      serverIds: ['srv-edge-sgp'],
+      intervalSeconds: 120,
+    });
+    const persisted = await (await fetch('/api/v1/facility-apps/network-probe')).json();
 
     const matrix = await (await fetch('/api/v1/facility-apps/network-probe/results')).json();
     expect(matrix.data.mode).toBe('selected');
@@ -517,11 +548,72 @@ describe('domain mock routes', () => {
     expect(source.data.nodes.some((node: { serverId: string }) => node.serverId === 'srv-core-fra')).toBe(true);
     expect(source.data.results.every((result: { sourceServerId: string }) => result.sourceServerId === 'srv-edge-sgp')).toBe(true);
 
+    expect(withHistory.data.results.every((result: { history?: unknown[] }) => Array.isArray(result.history) && result.history.length > 0)).toBe(true);
+
     const nonProbe = await (await fetch('/api/v1/servers/srv-core-fra/network-probes')).json();
     expect(nonProbe.data.enabled).toBe(false);
     expect(nonProbe.data.nodes).toEqual([]);
 
     expect((await fetch('/api/v1/servers/srv-missing/network-probes')).status).toBe(404);
+  });
+
+  it('serves and validates metrics facility configuration on real routes', async () => {
+    const initial = await (await fetch('/api/v1/facility-apps/metrics')).json();
+    expect(initial.data).toMatchObject({
+      mode: 'all',
+      serverIds: [],
+      retentionDays: 7,
+      collectionIntervalSeconds: 60,
+      cleanupSchedule: 'daily',
+      version: 0,
+    });
+
+    const validBody = { mode: 'all', serverIds: [] as string[], retentionDays: 7, collectionIntervalSeconds: 60, cleanupSchedule: 'daily' };
+    const invalid: Array<{ body: Record<string, unknown>; code: string; status?: number }> = [
+      { body: { ...validBody, mode: 'every' }, code: 'metrics_facility_mode_invalid' },
+      { body: { ...validBody, mode: 'selected', serverIds: [] }, code: 'metrics_facility_servers_required' },
+      { body: { ...validBody, retentionDays: 0 }, code: 'metrics_facility_retention_invalid' },
+      { body: { ...validBody, collectionIntervalSeconds: 0 }, code: 'metrics_facility_interval_invalid' },
+      { body: { ...validBody, cleanupSchedule: 'monthly' }, code: 'metrics_facility_cleanup_schedule_invalid' },
+      { body: { ...validBody, mode: 'selected', serverIds: ['srv-missing'] }, code: 'metrics_facility_server_not_found' },
+    ];
+    for (const item of invalid) {
+      const response = await fetch('/api/v1/facility-apps/metrics', { method: 'PUT', body: JSON.stringify(item.body) });
+      expect(response.status, item.code).toBe(item.status ?? 422);
+      expect((await response.json()).error.code).toBe(item.code);
+    }
+    // 任一校验失败都不得写库、不得 bump version。
+    expect((await (await fetch('/api/v1/facility-apps/metrics')).json()).data.version).toBe(0);
+
+    const saved = await fetch('/api/v1/facility-apps/metrics', {
+      method: 'PUT',
+      body: JSON.stringify({ mode: 'selected', serverIds: ['srv-edge-sgp'], retentionDays: 14, collectionIntervalSeconds: 120, cleanupSchedule: 'hourly' }),
+    });
+    expect(saved.status).toBe(200);
+    expect((await saved.json()).data).toMatchObject({
+      mode: 'selected',
+      serverIds: ['srv-edge-sgp'],
+      retentionDays: 14,
+      collectionIntervalSeconds: 120,
+      cleanupSchedule: 'hourly',
+      version: 1,
+    });
+
+    const persisted = await (await fetch('/api/v1/facility-apps/metrics')).json();
+    expect(persisted.data).toMatchObject({
+      mode: 'selected',
+      serverIds: ['srv-edge-sgp'],
+      retentionDays: 14,
+      collectionIntervalSeconds: 120,
+      cleanupSchedule: 'hourly',
+    });
+
+    // all 模式忽略 serverIds，与后端归一化一致。
+    const normalized = await fetch('/api/v1/facility-apps/metrics', {
+      method: 'PUT',
+      body: JSON.stringify({ mode: 'all', serverIds: ['srv-edge-sgp'], retentionDays: 7, collectionIntervalSeconds: 60, cleanupSchedule: 'daily' }),
+    });
+    expect((await normalized.json()).data).toMatchObject({ mode: 'all', serverIds: [] });
   });
 
 });

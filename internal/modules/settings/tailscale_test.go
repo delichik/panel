@@ -38,15 +38,12 @@ func TestRuntimeSettingsNeverExposeTailscaleAuthKey(t *testing.T) {
 	controller := &fakeTailscaleController{supported: true}
 	svc := newTailscaleTestService(t, controller)
 	if _, err := svc.Update(context.Background(), RuntimeUpdate{
-		MetricsRetentionDays:             7,
-		MetricsCollectionIntervalSeconds: 60,
-		ContainerReportIntervalSeconds:   30,
-		CleanupSchedule:                  "daily",
-		TokenExpiration:                  "1d",
-		Language:                         "en",
-		LogLevel:                         "info",
-		RemoteCommandTimeoutSeconds:      30,
-		Tailscale:                        &RuntimeTailscaleUpdate{AuthKey: "tskey-auth-secret", Tags: []string{"tag:web"}},
+		ContainerReportIntervalSeconds: 30,
+		TokenExpiration:                "1d",
+		Language:                       "en",
+		LogLevel:                       "info",
+		RemoteCommandTimeoutSeconds:    30,
+		Tailscale:                      &RuntimeTailscaleUpdate{AuthKey: "tskey-auth-secret", Tags: []string{"tag:web"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -91,14 +88,11 @@ func TestRuntimeSettingsKeepExistingTailscaleAuthKey(t *testing.T) {
 	svc := newTailscaleTestService(t, controller)
 	ctx := context.Background()
 	base := RuntimeUpdate{
-		MetricsRetentionDays:             7,
-		MetricsCollectionIntervalSeconds: 60,
-		ContainerReportIntervalSeconds:   30,
-		CleanupSchedule:                  "daily",
-		TokenExpiration:                  "1d",
-		Language:                         "en",
-		LogLevel:                         "info",
-		RemoteCommandTimeoutSeconds:      30,
+		ContainerReportIntervalSeconds: 30,
+		TokenExpiration:                "1d",
+		Language:                       "en",
+		LogLevel:                       "info",
+		RemoteCommandTimeoutSeconds:    30,
 	}
 	first := base
 	first.Tailscale = &RuntimeTailscaleUpdate{AuthKey: "tskey-auth-secret"}
@@ -154,14 +148,11 @@ func TestRuntimeSettingsPreserveTailscaleOnUnrelatedUpdate(t *testing.T) {
 	svc := newTailscaleTestService(t, controller)
 	ctx := context.Background()
 	base := RuntimeUpdate{
-		MetricsRetentionDays:             7,
-		MetricsCollectionIntervalSeconds: 60,
-		ContainerReportIntervalSeconds:   30,
-		CleanupSchedule:                  "daily",
-		TokenExpiration:                  "1d",
-		Language:                         "en",
-		LogLevel:                         "info",
-		RemoteCommandTimeoutSeconds:      30,
+		ContainerReportIntervalSeconds: 30,
+		TokenExpiration:                "1d",
+		Language:                       "en",
+		LogLevel:                       "info",
+		RemoteCommandTimeoutSeconds:    30,
 	}
 	first := base
 	first.Tailscale = &RuntimeTailscaleUpdate{AuthKey: "tskey-auth-secret", Tags: []string{"tag:infra"}}
@@ -210,19 +201,16 @@ func TestRuntimeSettingsPreserveTailscaleOnUnrelatedUpdate(t *testing.T) {
 
 func TestRuntimeSettingsRejectInvalidTailscaleInput(t *testing.T) {
 	base := RuntimeUpdate{
-		MetricsRetentionDays:             7,
-		MetricsCollectionIntervalSeconds: 60,
-		ContainerReportIntervalSeconds:   30,
-		CleanupSchedule:                  "daily",
-		TokenExpiration:                  "1d",
-		Language:                         "en",
-		LogLevel:                         "info",
-		RemoteCommandTimeoutSeconds:      30,
+		ContainerReportIntervalSeconds: 30,
+		TokenExpiration:                "1d",
+		Language:                       "en",
+		LogLevel:                       "info",
+		RemoteCommandTimeoutSeconds:    30,
 	}
 	cases := map[string]RuntimeTailscaleUpdate{
-		"key without prefix": {AuthKey: "not-a-key"},
-		"tag without prefix": {AuthKey: "tskey-auth-x", Tags: []string{"web"}},
-		"tag with space":     {AuthKey: "tskey-auth-x", Tags: []string{"tag:web app"}},
+		"key without prefix":  {AuthKey: "not-a-key"},
+		"tag without prefix":  {AuthKey: "tskey-auth-x", Tags: []string{"web"}},
+		"tag with space":      {AuthKey: "tskey-auth-x", Tags: []string{"tag:web app"}},
 		"tag with underscore": {AuthKey: "tskey-auth-x", Tags: []string{"tag:web_app"}},
 	}
 	for name, group := range cases {
@@ -244,14 +232,11 @@ func TestRuntimeSettingsRejectInvalidTailscaleInput(t *testing.T) {
 func TestRuntimeSettingsNormalizeTailscaleTags(t *testing.T) {
 	svc := newTailscaleTestService(t, &fakeTailscaleController{supported: true})
 	settings, err := svc.Update(context.Background(), RuntimeUpdate{
-		MetricsRetentionDays:             7,
-		MetricsCollectionIntervalSeconds: 60,
-		ContainerReportIntervalSeconds:   30,
-		CleanupSchedule:                  "daily",
-		TokenExpiration:                  "1d",
-		Language:                         "en",
-		LogLevel:                         "info",
-		RemoteCommandTimeoutSeconds:      30,
+		ContainerReportIntervalSeconds: 30,
+		TokenExpiration:                "1d",
+		Language:                       "en",
+		LogLevel:                       "info",
+		RemoteCommandTimeoutSeconds:    30,
 		// tag 大小写不敏感：统一规范化为小写并去重、排序。
 		Tailscale: &RuntimeTailscaleUpdate{AuthKey: "tskey-auth-x", Tags: []string{" tag:Web ", "tag:web", "tag:db"}},
 	})

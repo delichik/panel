@@ -30,26 +30,27 @@
 
 ## 3. 运行时设置读取与写入
 
-- `SET-RUN-001`：前置为认证用户；`GET /api/v1/settings/runtime` 必须返回监听地址、数据库路径、数据根、指标/事件保留与周期、会话期限、语言、日志级别、远程超时、协调追踪、品牌、证书、Panel TLS 选择状态、Agent 投递分组和 Tailscale 分组（只写密钥状态、标签与容器实际态，见 `SET-RUN-018`），但绝不返回 JWT secret，仅返回 `jwtSecretConfigured`；Tailscale 认证密钥同样绝不返回，仅返回 `authKeyConfigured`。
+- `SET-RUN-001`：前置为认证用户；`GET /api/v1/settings/runtime` 必须返回监听地址、数据库路径、数据根、容器上报间隔、会话期限、语言、日志级别、远程超时、协调追踪、品牌、证书、Panel TLS 选择状态、Agent 投递分组和 Tailscale 分组（只写密钥状态、标签与容器实际态，见 `SET-RUN-018`），但绝不返回 JWT secret，仅返回 `jwtSecretConfigured`；Tailscale 认证密钥同样绝不返回，仅返回 `authKeyConfigured`。指标保留天数、指标采集间隔与清理计划不属于运行时设置，改由指标设施管理（`FAC-MET-001/006`、`SET-RUN-021`）。
 - `SET-RUN-002`：前置为未认证用户；仅 `GET /api/v1/settings/public-branding` 可公开，且只返回登录标题和副标题；不得泄露路径、邮箱、证书 ID、保留策略或其他运行时配置。
 - `SET-RUN-003`：前置为旧库缺少设置行；启动必须用配置文件、环境变量和内置默认值幂等补齐空值；已持久化值优先于基础配置，重复启动不得漂移。
 - `SET-RUN-004`：前置为配置 JWT secret 为空或仍是公开默认常量；首次确保默认设置时必须生成随机 32 字节 secret 并持久化；配置显式提供的非默认 secret 必须原样保留。
 - `SET-RUN-005`：`PUT /api/v1/settings/runtime` 成功时必须以整套有效候选进行校验后持久化，并更新内存快照；失败时不得出现数据库已改、内存未改或部分字段已生效的状态。
-- `SET-RUN-006`：保留天数均必须至少 1，且运行事件保留天数不得小于详情保留天数；指标和容器上报间隔至少 1 秒；远程命令超时至少 1 秒，非法值分别返回稳定验证错误且不写入。
-- `SET-RUN-007`：清理周期和运行事件清理周期只允许 `hourly|daily|weekly`；token expiration 只允许 `10m|1h|1d|5d|30d|never`；日志级别只允许 `debug|info|warn|error`；语言只允许受支持 locale，非法输入不得被静默改成另一个值。
+- `SET-RUN-006`：容器上报间隔至少 1 秒，远程命令超时至少 1 秒，非法值分别返回稳定验证错误且不写入。指标保留天数与采集间隔不再属于运行时设置，改由指标设施校验（`FAC-MET-003`）并由清理 worker 使用（`FAC-MET-005`）；设置接口不得再发射 `invalid_metrics_retention`/`invalid_metrics_interval`。
+- `SET-RUN-007`：token expiration 只允许 `10m|1h|1d|5d|30d|never`；日志级别只允许 `debug|info|warn|error`；语言只允许受支持 locale，非法输入不得被静默改成另一个值。清理计划 `cleanupSchedule` 已随指标设施移出设置接口（`FAC-MET-006`），运行时设置不再校验或保存该字段。另外，已移除的保留/采集间隔/清理计划错误码 `invalid_metrics_retention`、`invalid_metrics_interval`、`invalid_cleanup_schedule` 不得继续发射。
 - `SET-RUN-008`：品牌标题按 Unicode 字符计数不得超过 80，副标题不得超过 240；输入成功时去除首尾空白并立即供公开品牌接口读取。
 - `SET-RUN-009`：证书邮箱为空时允许保存，非空时必须是合法地址；DNS 传播延迟可为 0 但不得为负；验证失败不得改变 ACME 后续执行配置。
 - `SET-RUN-010`：Panel 域名保存前必须小写并裁剪，只接受 IP、`localhost` 或合法完整主机名；空值、路径/端口/用户信息字符、连续点、无点的任意主机名或超过长度限制必须返回 `invalid_panel_domain`。
 - `SET-RUN-011`：请求省略规范允许的可选子对象时必须保留当前 `branding`、`certificates`、`panel` 和协调追踪值；以 0/空串表示“保留”的兼容字段只能按服务定义处理，不得意外清空既有值。
 - `SET-RUN-012`：语言更新成功后后端默认 locale必须立即切换；日志级别必须立即更新进程 AtomicLevel；协调追踪必须立即同步全局开关；这些热更新无需重启且重启后从持久值恢复。
 - `SET-RUN-013`：远程命令超时更新成功后，新发起的 SSH 操作必须读取新时长；正在执行的操作不要求被追溯修改。
-- `SET-RUN-014`：指标采集与容器上报间隔更新后，已连接的 Agent report stream 必须接收当前值；不得要求重建服务器记录或写入节点侧 Panel 回调地址。
+- `SET-RUN-014`：容器上报间隔更新后，已连接的 Agent report stream 必须接收当前值；不得要求重建服务器记录或写入节点侧 Panel 回调地址。指标采集间隔不再由运行时设置下发，而由指标设施按节点下发并在下一轮 stream 生效（`FAC-MET-002/004`）；改指标间隔不需要也不得触发运行时设置保存。
 - `SET-RUN-015`：运行时设置包含 Agent 投递分组 `agent.downloadBaseUrl`、`agent.downloadVerifyTls`、`agent.transferTimeoutSeconds`（默认空、false、120）。`GET`/`PUT /settings/runtime` 必须返回并接受该分组；省略 `agent` 时保留现值，省略 `transferTimeoutSeconds` 时保留已存值而不是写入 0。空 `downloadBaseUrl` 表示关闭 HTTP 投递，Agent 部署继续只走 SSH 上传。
 - `SET-RUN-016`：`downloadBaseUrl` 必须校验并归一化为不含 path/query/fragment/userinfo 的 `http(s)://host[:port]` 源，并拒绝引号、空白、反斜杠与 shell 元字符（该值会被插值进远端 shell 命令）；`transferTimeoutSeconds` 必须在 60..3600 之间。读写响应必须回显归一化结果（去掉末尾 `/`）。
 - `SET-RUN-017`：Agent 投递设置更新成功后，随后创建的 `server_agent_deploy` 任务必须读取新值，无需重启 Panel。
 - `SET-RUN-018`：运行时设置包含 Tailscale 分组 `tailscale`。`GET /settings/runtime` 必须返回 `authKeyConfigured`（布尔，永不返回密钥本身或密文）、已归一化的 `tags`，以及容器实际态 `container`（`available`、`running`、`loggedIn`、`hostname`、`ipv4`、`ipv6`、`version`、`backendState`、`lastError`、`updatedAt`）。容器内 tailscale 不可管理时 `available=false`、其余字段为空值/零值并记录日志，不得让整个设置接口失败。详见 `TS-SET-001`。
 - `SET-RUN-019`：`PUT /settings/runtime` 的 `tailscale.authKey` 是只写字段：非空时校验后替换存储值，空或省略保留已存密钥，`clearAuthKey=true` 删除该键并把容器期望态置为关闭；`tailscale.tags` 必须形如 `tag:name`（小写字母、数字、连字符），保存前统一小写、去重并排序（换行编码持久化）。非法密钥返回 `invalid_tailscale_auth_key`，非法标签返回 `invalid_tailscale_tag`，失败时本次请求的 Tailscale 字段与标签都不得写入；整个 `tailscale` 分组省略时保留现值（标签、密钥状态与容器实际态），保存其它分区不得清空 Tailscale 配置；密钥不得出现在 API 响应、进程日志、任务参数或运行事件中。详见 `TS-SET-002/003`。
 - `SET-RUN-020`：`POST /api/v1/settings/tailscale/apply` 重新生成 `<dataRoot>/tailscale/config.json` 并请求 panel-init 重新收敛，返回 202 与当前容器实际态；未经 panel-init 监管（例如 `go run ./cmd/panel`）时返回 `tailscale_container_unavailable`，期望态写入失败返回 `tailscale_config_write_failed`。设置持久化与容器收敛是两步：收敛失败只反映在随后读取的 `container.lastError` 中，不得回滚已保存设置，也不得把受理当成本地节点已登录。详见 `TS-SET-004/005`。
+- `SET-RUN-021`：`GET/PUT /api/v1/settings/runtime` 与设置页「运行时」分区不再包含 `metricsRetentionDays`、`metricsCollectionIntervalSeconds`、`cleanupSchedule`；这三项改由指标设施配置管理（`FAC-MET-001/003/005/006`），设置页与前端类型、Mock、校验、dirty/保存负载都必须移除它们。`runtime_settings` 旧键保留不删除，仅供设施首次播种；旧客户端仍提交这三项时按未知字段忽略，不得写回运行时设置或改变设施配置。`containerReportIntervalSeconds` 保留并继续按 `SET-RUN-014` 热更新。
 
 ## 4. Panel HTTPS 设置与持久化安全
 

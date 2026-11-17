@@ -19,12 +19,12 @@
 ## Agent Report Stream
 
 - Panel starts an internal `agentReportCollector` worker from `internal/bootstrap/panel/agent_report_collector.go`. It does not expose a Panel-side report API or listen address.
-- The collector actively dials each compatible agent and opens `AgentReportService.Report`. Panel sends the current metrics and container report intervals on the stream; the agent responds on that same Panel-initiated stream with metrics and container snapshots.
-- The collector inspects compatible agents every second. It creates missing streams, recreates streams when the agent endpoint changes, and cancels streams with no messages for `max(10s, min(metricsInterval, containerInterval) * 3)`. Stream health is recorded in `agent.report.status`, `agent.report.last_message_at`, and `agent.report.last_error`; it does not change the normal `agent.status`.
+- The collector actively dials each compatible agent and opens `AgentReportService.Report`. Panel sends the current container report interval from runtime settings and, per server, the metrics interval from the metrics facility (`metrics_facility_configs`; disabled nodes get 0); the agent responds on that same Panel-initiated stream with metrics and container snapshots.
+- The collector inspects compatible agents every second. It creates missing streams, recreates streams when the agent endpoint changes, and cancels streams with no messages for `max(10s, min(metrics facility interval, containerReportIntervalSeconds) * 3)`. Stream health is recorded in `agent.report.status`, `agent.report.last_message_at`, and `agent.report.last_error`; it does not change the normal `agent.status`.
 - Agent-side report streams are watchers over one shared collector hub. The hub starts only while at least one watcher exists, stops when the last watcher leaves, and broadcasts one collected periodic result to all watchers that are due at the same Unix-aligned `sampleAt`. When a metrics or container collection fails the corresponding report field stays nil and the broadcast is skipped, so the Panel never overwrites stored snapshots with empty objects.
 - The agent also watches Docker container events while report watchers exist. Container create/start/stop/die/destroy and related events trigger an immediate container snapshot with reason `container_change`; periodic Unix-aligned snapshots remain the baseline. Container snapshots include managed-file drift labels computed from a local stat-based fingerprint cache (`state/managed-files.fingerprint.json`), so unchanged files are not re-hashed on every snapshot.
-- Runtime settings now include `containerReportIntervalSeconds` in addition to `metricsCollectionIntervalSeconds`. Both values are persisted in `runtime_settings`, exposed through `/api/v1/settings/runtime`, and may be changed while agents are connected (metrics default 60s, containers default 30s).
-- App database schema includes `container_observations`, which stores the latest full container snapshot per server. Metrics snapshots continue to use the metrics database.
+- Runtime settings now include only `containerReportIntervalSeconds` for reporting cadence; it is persisted in `runtime_settings`, exposed through `/api/v1/settings/runtime`, and may be changed while agents are connected (containers default 30s). The metrics retention, collection interval and cleanup schedule are owned by the metrics facility (`metrics_facility_configs` single row `id='metrics'`, startup `EnsureMigrated`, `GET/PUT /api/v1/facility-apps/metrics`) and are no longer read from or written to runtime settings; the old `metricsRetentionDays`/`metricsCollectionIntervalSeconds`/`cleanupSchedule` rows keep existing only as seed data for the facility.
+- App database schema includes `container_observations`, which stores the latest full container snapshot per server, and `metrics_facility_configs` for the metrics facility. Metrics snapshots continue to use the metrics database.
 
 ## 适用场景
 
@@ -40,6 +40,7 @@
 - 应用部署控制面：`internal/orchestrator/`（Planner、Job lease、ObservationWriter、RuntimeReconcile worker）
 - 认证：`internal/modules/identity/`
 - 运行时设置：`internal/modules/settings/`
+- 指标设施：`internal/modules/observability/metricsfacility/`（单行配置、迁移播种、ReportConfig、清理设置）；指标采集/查询/清理：`internal/modules/observability/metrics/`（清理 provider 由设施提供）
 - 统一 HTTP 响应与路由注册契约：`internal/platform/http/`
 - 统一错误：`internal/platform/errors/`
 - 后端错误翻译：`internal/platform/i18n/`
@@ -104,7 +105,7 @@
 
 - Activity 事实 Writer 与控制触发器位于 `internal/platform/activitylog/`；查询投影仍在 `internal/modules/activity/`（Service 保留，产品 HTTP `/api/v1/activity/*` 已停注册）。原始事实保存在 AppDB，任务执行控制与协调关键事实在同一事务提交；LogDB 用于可重建的查询数据。
 - 进程/诊断日志读 API 使用 `/api/v1/events*` 与 `/api/v1/logs?eventId=`。Event executor 控制面使用 `/api/v1/executions`，不提供编辑或删除 JSONL 的接口。
-- `runtimeEventRetentionDays`、`runtimeEventDetailRetentionDays`、`runtimeEventCleanupSchedule` 已从 runtime settings 的模型、默认值、读取、保存与校验移除，不再创建历史清理 worker。日志只追加且不自动过期；指标数据的 `metricsRetentionDays` / `cleanupSchedule` 继续独立生效。
+- `runtimeEventRetentionDays`、`runtimeEventDetailRetentionDays`、`runtimeEventCleanupSchedule` 已从 runtime settings 的模型、默认值、读取、保存与校验移除，不再创建历史清理 worker。日志只追加且不自动过期；指标数据的保留与采集节拍改由指标设施 `metrics_facility_configs` 驱动（启动 `EnsureMigrated`，清理 worker 的 provider 来自设施，见 `FAC-MET-005/006`），不再来自 runtime settings；旧 `metricsRetentionDays`/`metricsCollectionIntervalSeconds`/`cleanupSchedule` 行仅为设施首次播种保留。
 - `activity_redact` / `activity_redact_json` / `activity_hash` 在 SQLite 驱动打开连接前全局注册；控制触发器对字符串与结构化快照使用同一脱敏规则，并为控制业务载荷保存 SHA-256 散列。
 
 ## 密钥资产启动与存储
