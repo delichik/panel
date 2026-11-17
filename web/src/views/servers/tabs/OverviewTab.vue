@@ -17,6 +17,7 @@ import { formatDateTime } from '@/utils/datetime';
 import { createLatestRequestGuard, isAbortError } from '@/views/_shared/requestState';
 import MetricsPanel from './MetricsPanel.vue';
 import OverviewSummary from './OverviewSummary.vue';
+import ProbeOverviewPanel from './ProbeOverviewPanel.vue';
 import {
   credentialLabel,
   proxyErrorKey,
@@ -146,6 +147,8 @@ onBeforeUnmount(() => {
       <OverviewSummary :server="server" :metrics="metricsSnapshot" />
 
       <MetricsPanel :server="server" :active="active" @metrics-loaded="metricsSnapshot = $event" />
+
+      <ProbeOverviewPanel :server="server" :active="active" />
 
       <div class="grid gap-4 border-t border-border pt-4 lg:grid-cols-2">
         <section class="grid gap-2">

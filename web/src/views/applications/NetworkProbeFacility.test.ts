@@ -3,25 +3,30 @@ import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toastKey } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
+import type { NetworkProbeTargetMatrix } from '@/types/networkProbe';
 import type { ServerDto } from '@/types/servers';
 import NetworkProbeFacility from './NetworkProbeFacility.vue';
 
 enableAutoUnmount(afterEach);
 
 const config = vi.fn();
-const results = vi.fn();
 const saveConfig = vi.fn();
-const networkProbes = vi.fn();
+const targets = vi.fn();
 
 vi.mock('@/api/networkProbe', () => ({
   networkProbeFacilityApi: {
     config: (...args: unknown[]) => config(...args),
-    results: (...args: unknown[]) => results(...args),
     saveConfig: (...args: unknown[]) => saveConfig(...args),
+    targets: (...args: unknown[]) => targets(...args),
   },
 }));
-vi.mock('@/api/servers', () => ({
-  serversApi: { networkProbes: (...args: unknown[]) => networkProbes(...args) },
+// 图表本体由 MetricChart/ProbeHistoryCharts 的测试覆盖；这里断言历史序列与空态传递。
+vi.mock('@/components/patterns/ProbeHistoryCharts.vue', () => ({
+  default: {
+    name: 'ProbeHistoryCharts',
+    props: ['latency', 'loss', 'latencyCurrent', 'lossCurrent'],
+    template: '<div data-testid="probe-history-charts"><span data-testid="latency-points">{{ latency.points.length }}</span><span v-if="!latency.points.length">No probe history for this server yet.</span></div>',
+  },
 }));
 
 function server(id: string, name: string, host: string): ServerDto {
@@ -56,34 +61,33 @@ function history() {
   }));
 }
 
-function probeResult(sourceId: string, targetId: string, overrides: Record<string, unknown> = {}) {
+function targetNode(overrides: Record<string, unknown> = {}) {
   return {
-    sourceServerId: sourceId,
-    targetServerId: targetId,
-    targetAddress: `10.0.0.${targetId.slice(-1)}`,
-    latencyMs: 145,
-    packetLossPercent: 1.7,
-    sent: 3,
-    received: 3,
+    serverId: 'srv-1',
+    name: 'edge',
+    address: '10.0.0.1',
+    sourceCount: 2,
+    latencyMs: 30,
+    packetLossPercent: 0,
+    worstPacketLossPercent: 0,
     sampledAt: new Date().toISOString(),
-    error: '',
     stale: false,
     history: history(),
     ...overrides,
   };
 }
 
+function targetMatrix(nodes: ReturnType<typeof targetNode>[]): NetworkProbeTargetMatrix {
+  return { nodes, updatedAt: new Date().toISOString() };
+}
+
 const servers = [server('srv-1', 'edge', '10.0.0.1'), server('srv-2', 'core', '10.0.0.2'), server('srv-3', 'worker', '10.0.0.3')];
 
-function sourceResults(sourceId: string, targetId: string, targetName: string) {
-  return {
-    serverId: sourceId,
-    enabled: true,
-    nodes: [{ serverId: targetId, name: targetName, address: `10.0.0.${targetId.slice(-1)}` }],
-    results: [probeResult(sourceId, targetId)],
-    updatedAt: new Date().toISOString(),
-  };
-}
+const defaultNodes = [
+  targetNode(),
+  targetNode({ serverId: 'srv-2', name: 'core', address: '10.0.0.2', sourceCount: 1, latencyMs: 145, packetLossPercent: 1.7, worstPacketLossPercent: 1.7 }),
+  targetNode({ serverId: 'srv-3', name: 'worker', address: '10.0.0.3', sourceCount: 0, latencyMs: null, packetLossPercent: null, worstPacketLossPercent: null, sampledAt: null, stale: true, history: [] }),
+];
 
 async function mountFacility() {
   const wrapper = mount(NetworkProbeFacility, {
@@ -93,7 +97,12 @@ async function mountFacility() {
   });
   await flushPromises();
   await flushPromises();
+  await flushPromises();
   return wrapper;
+}
+
+function targetCards(wrapper: Awaited<ReturnType<typeof mountFacility>>) {
+  return wrapper.findAll('[data-testid="probe-target-card"]');
 }
 
 async function selectOption(comboboxIndex: number, label: string) {
@@ -111,92 +120,72 @@ beforeEach(() => {
   vi.clearAllMocks();
   config.mockResolvedValue({ mode: 'all', serverIds: [], intervalSeconds: 60, pingCount: 3, pingTimeoutSeconds: 2, version: 1, updatedAt: new Date().toISOString() });
   saveConfig.mockImplementation(async (input: Record<string, unknown>) => ({ ...input, version: 2, updatedAt: new Date().toISOString() }));
-  results.mockResolvedValue({
-    mode: 'all',
-    nodes: [
-      { serverId: 'srv-1', name: 'edge', address: '10.0.0.1' },
-      { serverId: 'srv-2', name: 'core', address: '10.0.0.2' },
-    ],
-    results: [probeResult('srv-1', 'srv-2'), probeResult('srv-2', 'srv-1')],
-    updatedAt: new Date().toISOString(),
-  });
-  networkProbes.mockImplementation(async (sourceId: string) => (
-    sourceId === 'srv-2' ? sourceResults('srv-2', 'srv-1', 'edge') : sourceResults('srv-1', 'srv-2', 'core')
-  ));
+  targets.mockResolvedValue(targetMatrix(defaultNodes));
 });
 
 describe('network probe facility', () => {
-  it('renders current values and 24h history as a vertical target list instead of a matrix table', async () => {
+  it('shows every server with aggregated current values and two 24h history charts, without a source/target selector', async () => {
     const wrapper = await mountFacility();
 
-    expect(networkProbes).toHaveBeenCalledWith('srv-1', expect.objectContaining({ signal: expect.anything() }), true);
+    expect(targets).toHaveBeenCalledWith(expect.objectContaining({ signal: expect.anything() }), true);
     expect(wrapper.find('table').exists()).toBe(false);
-    const rows = wrapper.findAll('[data-testid="probe-target"]');
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.text()).toContain('core');
-    expect(rows[0]!.text()).toContain('145 ms');
-    expect(rows[0]!.text()).toContain('1.7 %');
-    expect(rows[0]!.text()).toContain('3 / 3');
-    // 有丢包但未失败 → 降级状态文案。
-    expect(rows[0]!.text()).toContain('Packet loss');
-    // 延迟与丢包各一条历史条。
-    expect(rows[0]!.findAll('[data-testid="history-strip"]')).toHaveLength(2);
-    expect(rows[0]!.text()).toContain('Latency · last 24 hours');
-    expect(rows[0]!.text()).toContain('Packet loss · last 24 hours');
+    // 结果区不再提供探测源/目标选择器。
+    expect(wrapper.find('[data-testid="network-probe-results-section"] [role="combobox"]').exists()).toBe(false);
+
+    const cards = targetCards(wrapper);
+    expect(cards).toHaveLength(servers.length);
+    expect(cards[0]!.text()).toContain('edge');
+    expect(cards[0]!.text()).toContain('2');
+    expect(cards[0]!.text()).toContain('30 ms');
+    expect(cards[0]!.text()).toContain('OK');
+    expect(cards[1]!.text()).toContain('core');
+    expect(cards[1]!.text()).toContain('145 ms');
+    expect(cards[1]!.text()).toContain('1.7 %');
+    expect(cards[1]!.text()).toContain('Packet loss');
+
+    // 每台服务器（含无结果）都保留两张 24h 折线图。
+    expect(cards.every((card) => card.find('[data-testid="probe-history-charts"]').exists())).toBe(true);
+    expect(cards[0]!.find('[data-testid="latency-points"]').text()).toBe('4');
+    expect(cards[2]!.find('[data-testid="latency-points"]').text()).toBe('0');
   });
 
-  it('filters targets by name or address', async () => {
-    results.mockResolvedValue({
-      mode: 'all',
-      nodes: [
-        { serverId: 'srv-1', name: 'edge', address: '10.0.0.1' },
-        { serverId: 'srv-2', name: 'core', address: '10.0.0.2' },
-        { serverId: 'srv-3', name: 'worker', address: '10.0.0.3' },
-      ],
-      results: [probeResult('srv-1', 'srv-2'), probeResult('srv-1', 'srv-3')],
-      updatedAt: new Date().toISOString(),
-    });
-    networkProbes.mockImplementation(async (sourceId: string) => ({
-      serverId: sourceId,
-      enabled: true,
-      nodes: [
-        { serverId: 'srv-2', name: 'core', address: '10.0.0.2' },
-        { serverId: 'srv-3', name: 'worker', address: '10.0.0.3' },
-      ],
-      results: [probeResult(sourceId, 'srv-2'), probeResult(sourceId, 'srv-3', { latencyMs: 42 })],
-      updatedAt: new Date().toISOString(),
-    }));
+  it('keeps no-data server cards and their chart empty states visible', async () => {
     const wrapper = await mountFacility();
-    expect(wrapper.findAll('[data-testid="probe-target"]')).toHaveLength(2);
 
-    const search = wrapper.find<HTMLInputElement>('input[type="search"]');
-    search.element.value = 'worker';
-    await search.trigger('input');
-    await flushPromises();
-
-    const rows = wrapper.findAll('[data-testid="probe-target"]');
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.text()).toContain('worker');
-
-    search.element.value = 'no-such-target';
-    await search.trigger('input');
-    await flushPromises();
-    expect(wrapper.findAll('[data-testid="probe-target"]')).toHaveLength(0);
-    expect(wrapper.text()).toContain('No targets match the search');
+    const cards = targetCards(wrapper);
+    const noDataCard = cards[2]!;
+    expect(noDataCard.text()).toContain('worker');
+    expect(noDataCard.text()).toContain('No data');
+    expect(noDataCard.text()).toContain('—');
+    const charts = noDataCard.find('[data-testid="probe-history-charts"]');
+    expect(charts.exists()).toBe(true);
+    expect(charts.text()).toContain('No probe history for this server yet.');
+    expect(wrapper.text()).toContain('3 servers · 2 probed');
   });
 
-  it('loads the selected probe source and keeps last data when a refresh fails', async () => {
+  it('keeps the last successful data when a refresh fails', async () => {
     const wrapper = await mountFacility();
-    expect(wrapper.findAll('[data-testid="probe-target"]')[0]!.text()).toContain('core');
+    expect(targetCards(wrapper)).toHaveLength(servers.length);
 
-    networkProbes.mockRejectedValueOnce(new Error('network down'));
+    targets.mockRejectedValueOnce(new Error('network down'));
     const refresh = wrapper.findAll('button').find((button) => button.text() === 'Refresh')!;
     await refresh.trigger('click');
     await flushPromises();
 
     // 失败不清空上次成功数据，只提示当前为旧结果。
     expect(wrapper.text()).toContain('Refresh failed. Showing the last successful results.');
-    expect(wrapper.findAll('[data-testid="probe-target"]')).toHaveLength(1);
+    expect(targetCards(wrapper)).toHaveLength(servers.length);
+    expect(targetCards(wrapper)[1]!.text()).toContain('145 ms');
+  });
+
+  it('scrolls the result list vertically inside the card without a horizontal table', async () => {
+    const wrapper = await mountFacility();
+
+    const list = wrapper.find('[data-testid="probe-target-cards"]');
+    expect(list.exists()).toBe(true);
+    expect(list.classes()).toContain('overflow-y-auto');
+    expect(list.classes()).toContain('overflow-x-hidden');
+    expect(list.element.tagName).toBe('UL');
   });
 
   it('splits probe scope, probe configuration, and results into independent sections', async () => {
@@ -213,10 +202,10 @@ describe('network probe facility', () => {
     expect(scope.text()).toContain('All servers');
     expect(configSection.text()).toContain('Probe configuration');
     expect(configSection.text()).toContain('Probe interval (minutes)');
-    expect(resultsSection.text()).toContain('Node-to-node results');
-    // 结果区必须独立于配置区，目标列表仍在结果卡片内。
-    expect(resultsSection.find('[data-testid="probe-target"]').exists()).toBe(true);
-    expect(configSection.find('[data-testid="probe-target"]').exists()).toBe(false);
+    expect(resultsSection.text()).toContain('core');
+    // 结果区展示全部服务器，配置区不渲染历史图表。
+    expect(resultsSection.find('[data-testid="probe-history-charts"]').exists()).toBe(true);
+    expect(configSection.find('[data-testid="probe-history-charts"]').exists()).toBe(false);
   });
 
   it('uses the compact server picker grid when the scope is selected', async () => {

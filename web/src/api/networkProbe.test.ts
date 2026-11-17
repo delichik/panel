@@ -50,6 +50,34 @@ describe('networkProbeFacilityApi', () => {
     await expect(networkProbeFacilityApi.results()).resolves.toEqual({ mode: 'all', nodes: [], results: [], updatedAt: null });
   });
 
+  it('reads the aggregated all-servers target view with 24h history', async () => {
+    const node = {
+      serverId: 'srv-1',
+      name: 'edge',
+      address: '10.0.0.1',
+      sourceCount: 2,
+      latencyMs: 42,
+      packetLossPercent: 1.5,
+      worstPacketLossPercent: 3,
+      sampledAt: '2026-11-17T05:00:00.000Z',
+      stale: false,
+      history: [{ time: '2026-11-17T05:00:00.000Z', latencyMs: 42, packetLossPercent: 1.5 }],
+    };
+    const fetchMock = vi.fn(async () => jsonResponse({ nodes: [node], updatedAt: '2026-11-17T05:00:00.000Z' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(networkProbeFacilityApi.targets()).resolves.toEqual({ nodes: [node], updatedAt: '2026-11-17T05:00:00.000Z' });
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/facility-apps/network-probe/results?view=targets&history=1', expect.objectContaining({ method: 'GET' }));
+  });
+
+  it('can request the target view without history and normalizes null nodes', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ nodes: null, updatedAt: null }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(networkProbeFacilityApi.targets(undefined, false)).resolves.toEqual({ nodes: [], updatedAt: null });
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/facility-apps/network-probe/results?view=targets', expect.objectContaining({ method: 'GET' }));
+  });
+
   it('surfaces stable contract error codes', async () => {
     const codes = ['network_probe_servers_required', 'network_probe_interval_invalid', 'network_probe_ping_count_invalid', 'network_probe_ping_timeout_invalid'];
     for (const code of codes) {

@@ -1,4 +1,53 @@
-import type { NetworkProbeSettings } from '@/types/networkProbe';
+import type { NetworkProbeHistoryPoint, NetworkProbeSettings, NetworkProbeTargetResult } from '@/types/networkProbe';
+import type { MetricSeriesData, MetricSeriesPoint } from './metrics';
+
+/**
+ * 把探测历史桶转成 MetricChart 折线数据。延迟为 0/缺测时用 null 断线，
+ * 丢包始终是 0..100 的有效百分比；没有历史时返回空点集，由调用方展示空态。
+ */
+export function probeHistorySeries(
+  history: NetworkProbeHistoryPoint[] | undefined,
+  field: 'latency' | 'packetLoss',
+  id: string,
+  name: string,
+): MetricSeriesData {
+  const points: MetricSeriesPoint[] = (history ?? [])
+    .filter((point) => point && typeof point.time === 'string' && point.time !== '')
+    .map((point) => ({
+      time: point.time,
+      value: field === 'latency'
+        ? (point.latencyMs > 0 ? point.latencyMs : null)
+        : point.packetLossPercent,
+    }));
+  return { id, name, points };
+}
+
+/** 按目标聚合结果的用户可见状态：无源/无结果为 noData，失败语义并入 stale/degraded。 */
+export type NetworkProbeAggregateOutcome = 'ok' | 'degraded' | 'stale' | 'noData';
+
+/**
+ * 从按目标聚合摘要派生状态：没有探测源或没有采样 → noData；超过新鲜窗口 → stale；
+ * 有丢包 → degraded；其余为 ok。状态只由真实字段派生，不推测健康。
+ */
+export function probeTargetOutcome(
+  node: Pick<NetworkProbeTargetResult, 'sourceCount' | 'stale' | 'packetLossPercent'>,
+): NetworkProbeAggregateOutcome {
+  if (node.sourceCount <= 0) return 'noData';
+  if (node.stale) return 'stale';
+  return (node.packetLossPercent ?? 0) > 0 ? 'degraded' : 'ok';
+}
+
+export function probeAggregateOutcomeTone(outcome: NetworkProbeAggregateOutcome): 'success' | 'warning' | 'danger' | 'neutral' {
+  if (outcome === 'ok') return 'success';
+  if (outcome === 'degraded' || outcome === 'stale') return 'warning';
+  if (outcome === 'noData') return 'neutral';
+  return 'danger';
+}
+
+export function probeAggregateOutcomeStatusKey(outcome: NetworkProbeAggregateOutcome) {
+  return `serversPage.probe.status.${outcome}` as const;
+}
+
 
 /**
  * 网络探测节拍参数契约：前端表单、Mock 与测试共用同一组默认值/区间/错误码，

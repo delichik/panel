@@ -806,3 +806,237 @@ func TestStaleThresholdScalesWithInterval(t *testing.T) {
 		t.Fatal("1-hour-old result must be fresh with a 3-hour threshold")
 	}
 }
+
+// saveProbeSampleFrom 用指定探测源写入一条探测结果。
+func saveProbeSampleFrom(t *testing.T, svc *Service, source string, at time.Time, target string, latency, loss float64, received int, errMsg string) {
+	t.Helper()
+	if err := svc.SaveReported(context.Background(), source, at, []ReportedResult{{
+		TargetServerID:    target,
+		TargetAddress:     "10.0.0.9",
+		LatencyMS:         latency,
+		PacketLossPercent: loss,
+		Sent:              3,
+		Received:          received,
+		Error:             errMsg,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// targetNode 返回目标聚合视图中的指定服务器行。
+func targetNode(t *testing.T, matrix TargetMatrix, serverID string) TargetResult {
+	t.Helper()
+	for _, node := range matrix.Nodes {
+		if node.ServerID == serverID {
+			return node
+		}
+	}
+	t.Fatalf("target node %s not found in %#v", serverID, matrix.Nodes)
+	return TargetResult{}
+}
+
+// TestTargetResultsAggregatesAcrossSources covers FAC-PRB target view: every
+// server appears, multiple sources are averaged, the worst loss is kept, invalid
+// latency samples are excluded from the latency average but still counted for
+// loss, and servers without results stay visible with null values.
+func TestTargetResultsAggregatesAcrossSources(t *testing.T) {
+	svc, _, now := newTestService(t, testServers()...)
+	ctx := context.Background()
+	if _, err := svc.Save(ctx, SaveInput{Mode: ModeAll}); err != nil {
+		t.Fatal(err)
+	}
+	saveProbeSampleFrom(t, svc, "srv-a", now.Add(-2*time.Minute), "srv-c", 10, 0, 3, "")
+	saveProbeSampleFrom(t, svc, "srv-b", now.Add(-time.Minute), "srv-c", 30, 20, 3, "")
+	// 失败样本：延迟不参与平均，但丢包参与平均且成为最差值。
+	saveProbeSampleFrom(t, svc, "srv-d", now.Add(-3*time.Minute), "srv-c", 999, 100, 0, "request timeout")
+
+	matrix, err := svc.TargetResults(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matrix.Nodes) != 4 {
+		t.Fatalf("nodes = %#v, want every server", matrix.Nodes)
+	}
+	for i, want := range []string{"srv-a", "srv-b", "srv-c", "srv-d"} {
+		if matrix.Nodes[i].ServerID != want {
+			t.Fatalf("nodes must be sorted by serverID: %#v", matrix.Nodes)
+		}
+	}
+	target := targetNode(t, matrix, "srv-c")
+	if target.SourceCount != 3 {
+		t.Fatalf("sourceCount = %d, want 3", target.SourceCount)
+	}
+	if target.LatencyMS == nil || *target.LatencyMS != 20 {
+		t.Fatalf("latency average = %v, want (10+30)/2 = 20 (failure sample excluded)", target.LatencyMS)
+	}
+	if target.PacketLossPercent == nil || *target.PacketLossPercent != 40 {
+		t.Fatalf("packet loss average = %v, want (0+20+100)/3 = 40", target.PacketLossPercent)
+	}
+	if target.WorstPacketLossPercent == nil || *target.WorstPacketLossPercent != 100 {
+		t.Fatalf("worst packet loss = %v, want 100", target.WorstPacketLossPercent)
+	}
+	if target.SampledAt == nil || !target.SampledAt.Equal(now.Add(-time.Minute)) {
+		t.Fatalf("sampledAt = %v, want newest source sample", target.SampledAt)
+	}
+	if target.Stale {
+		t.Fatal("fresh aggregate must not be stale")
+	}
+	if len(target.History) != 0 {
+		t.Fatalf("history must be empty without history=1: %#v", target.History)
+	}
+	if matrix.UpdatedAt == nil || !matrix.UpdatedAt.Equal(now.Add(-time.Minute)) {
+		t.Fatalf("updatedAt = %v, want newest sample", matrix.UpdatedAt)
+	}
+
+	// 没有任何源探测 srv-a：仍占一行，数值为 null 且标记 stale。
+	empty := targetNode(t, matrix, "srv-a")
+	if empty.SourceCount != 0 || empty.LatencyMS != nil || empty.PacketLossPercent != nil || empty.WorstPacketLossPercent != nil || empty.SampledAt != nil || !empty.Stale {
+		t.Fatalf("server without results = %#v", empty)
+	}
+}
+
+// TestTargetResultsOnlyCurrentProbeSources keeps stale rows from non-probe
+// sources out of the aggregate in selected mode.
+func TestTargetResultsOnlyCurrentProbeSources(t *testing.T) {
+	svc, _, now := newTestService(t, testServers()...)
+	ctx := context.Background()
+	if _, err := svc.Save(ctx, SaveInput{Mode: ModeSelected, ServerIDs: []string{"srv-a"}}); err != nil {
+		t.Fatal(err)
+	}
+	saveProbeSampleFrom(t, svc, "srv-a", *now, "srv-c", 10, 0, 3, "")
+	saveProbeSampleFrom(t, svc, "srv-b", *now, "srv-c", 30, 50, 3, "")
+
+	matrix, err := svc.TargetResults(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := targetNode(t, matrix, "srv-c")
+	if target.SourceCount != 1 {
+		t.Fatalf("sourceCount = %d, want only the current probe node", target.SourceCount)
+	}
+	if target.LatencyMS == nil || *target.LatencyMS != 10 || target.WorstPacketLossPercent == nil || *target.WorstPacketLossPercent != 0 {
+		t.Fatalf("aggregate must ignore non-probe sources: %#v", target)
+	}
+	if len(matrix.Nodes) != 4 {
+		t.Fatalf("selected mode must still list every server, got %d", len(matrix.Nodes))
+	}
+}
+
+// TestTargetResultsIgnoresMissingTargets drops results whose target server no
+// longer exists and keeps nodes limited to the current server table.
+func TestTargetResultsIgnoresMissingTargets(t *testing.T) {
+	svc, provider, now := newTestService(t, testServers()...)
+	ctx := context.Background()
+	if _, err := svc.Save(ctx, SaveInput{Mode: ModeAll}); err != nil {
+		t.Fatal(err)
+	}
+	saveProbeSampleFrom(t, svc, "srv-a", *now, "srv-c", 10, 0, 3, "")
+	provider.items = testServers()[:2]
+	*now = now.Add(2 * snapshotTTL)
+
+	matrix, err := svc.TargetResults(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matrix.Nodes) != 2 || matrix.Nodes[0].ServerID != "srv-a" || matrix.Nodes[1].ServerID != "srv-b" {
+		t.Fatalf("nodes = %#v", matrix.Nodes)
+	}
+	if matrix.UpdatedAt != nil {
+		t.Fatalf("updatedAt must be nil when every result targets a missing server, got %v", matrix.UpdatedAt)
+	}
+	for _, node := range matrix.Nodes {
+		if node.SourceCount != 0 || node.SampledAt != nil {
+			t.Fatalf("removed-target rows must be ignored: %#v", node)
+		}
+	}
+}
+
+// TestTargetResultsNoResults covers the empty state: every server still appears
+// with null fields and stale=true.
+func TestTargetResultsNoResults(t *testing.T) {
+	svc, _, _ := newTestService(t, testServers()...)
+	matrix, err := svc.TargetResults(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matrix.Nodes) != 4 || matrix.UpdatedAt != nil {
+		t.Fatalf("empty target matrix = %#v", matrix)
+	}
+	for _, node := range matrix.Nodes {
+		if node.SourceCount != 0 || node.LatencyMS != nil || node.PacketLossPercent != nil || node.WorstPacketLossPercent != nil || node.SampledAt != nil || !node.Stale {
+			t.Fatalf("empty target node = %#v", node)
+		}
+	}
+}
+
+// TestTargetResultsHistoryAggregatesAcrossSources covers the target view history:
+// same 30-minute bucket samples from different sources are averaged, buckets are
+// ascending, points older than 24h are pruned, and history is only materialized
+// when requested.
+func TestTargetResultsHistoryAggregatesAcrossSources(t *testing.T) {
+	svc, _, now := newTestService(t, testServers()...)
+	ctx := context.Background()
+	if _, err := svc.Save(ctx, SaveInput{Mode: ModeAll}); err != nil {
+		t.Fatal(err)
+	}
+	// 25 小时前的点会被 24h 窗口裁掉。
+	saveProbeSampleFrom(t, svc, "srv-a", now.Add(-25*time.Hour), "srv-c", 5, 0, 3, "")
+	// 两个 30 分钟桶：now-40m（早）与 now-10m/now-8m（同一桶，跨源平均）。
+	saveProbeSampleFrom(t, svc, "srv-a", now.Add(-40*time.Minute), "srv-c", 40, 10, 3, "")
+	saveProbeSampleFrom(t, svc, "srv-a", now.Add(-10*time.Minute), "srv-c", 10, 0, 3, "")
+	saveProbeSampleFrom(t, svc, "srv-b", now.Add(-8*time.Minute), "srv-c", 30, 20, 3, "")
+
+	plain, err := svc.TargetResults(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if history := targetNode(t, plain, "srv-c").History; len(history) != 0 {
+		t.Fatalf("history must stay empty without history=1: %#v", history)
+	}
+
+	matrix, err := svc.TargetResults(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := targetNode(t, matrix, "srv-c").History
+	if len(history) != 2 {
+		t.Fatalf("history = %#v, want two 30-minute buckets", history)
+	}
+	earlier := time.Unix(historyBucketStart(now.Add(-40*time.Minute)), 0).UTC()
+	later := time.Unix(historyBucketStart(now.Add(-10*time.Minute)), 0).UTC()
+	if !history[0].Time.Equal(earlier) || !history[1].Time.Equal(later) {
+		t.Fatalf("history times = %s, %s; want ascending %s, %s", history[0].Time, history[1].Time, earlier, later)
+	}
+	if history[0].LatencyMS != 40 || history[0].PacketLossPercent != 10 {
+		t.Fatalf("earlier bucket = %#v", history[0])
+	}
+	if history[1].LatencyMS != 20 || history[1].PacketLossPercent != 10 {
+		t.Fatalf("cross-source bucket = %#v, want latency (10+30)/2=20 loss (0+20)/2=10", history[1])
+	}
+}
+
+// TestTargetResultsFreshnessUsesConfiguredInterval verifies the target view
+// stale flag follows the same max(5min, 3*interval) threshold as other views.
+func TestTargetResultsFreshnessUsesConfiguredInterval(t *testing.T) {
+	svc, _, now := newTestService(t, testServers()...)
+	ctx := context.Background()
+	if _, err := svc.Save(ctx, SaveInput{Mode: ModeAll, IntervalSeconds: 120}); err != nil {
+		t.Fatal(err)
+	}
+	saveProbeSampleFrom(t, svc, "srv-a", now.Add(-5*time.Minute-30*time.Second), "srv-b", 10, 0, 3, "")
+	matrix, err := svc.TargetResults(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if targetNode(t, matrix, "srv-b").Stale {
+		t.Fatal("5.5-minute-old result must be fresh with a 6-minute threshold")
+	}
+	saveProbeSampleFrom(t, svc, "srv-a", now.Add(-6*time.Minute-30*time.Second), "srv-b", 10, 0, 3, "")
+	matrix, err = svc.TargetResults(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !targetNode(t, matrix, "srv-b").Stale {
+		t.Fatal("6.5-minute-old result must be stale with a 6-minute threshold")
+	}
+}

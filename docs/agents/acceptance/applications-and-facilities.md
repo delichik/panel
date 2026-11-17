@@ -629,7 +629,7 @@
 
 - **前置**：访问设施目录、`/applications/facility-apps/network-probe` 或服务器详情的探测页签。
 - **动作**：读取/保存网络探测设施。
-- **结果**：目录卡片与设施详情使用 `networkProbeFacilityApi`（`web/src/api/networkProbe.ts`）；配置读写为 `GET/PUT /api/v1/facility-apps/network-probe`，矩阵结果为 `GET /api/v1/facility-apps/network-probe/results`（后端读取契约保留，设施详情 UI 已改为按探测源读取单节点结果 + 24h 历史，见 `FAC-PRB-006`、`FAC-PRB-009`、`UI-FAC-018`），单节点结果为 `GET /api/v1/servers/{id}/network-probes`。配置存于 AppDB `network_probe_configs` 单行（`id='network_probe'`，`mode`、`server_ids_json`、`interval_seconds`/`ping_count`/`ping_timeout_seconds`（`FAC-PRB-010`）、`version`、`updated_at`），最新观测存于 AppDB `network_probe_results`（主键 `(source_server_id,target_server_id)`），同表 `history_json` 保存该 (source,target) 最近 24 小时的 30 分钟桶历史（见 `FAC-PRB-009`）。实现位于 `internal/modules/networkprobe`，模块在 `internal/bootstrap/panel/app.go` 装配并注册路由。
+- **结果**：目录卡片与设施详情使用 `networkProbeFacilityApi`（`web/src/api/networkProbe.ts`）；配置读写为 `GET/PUT /api/v1/facility-apps/network-probe`，结果读取统一走 `GET /api/v1/facility-apps/network-probe/results`：默认返回按探测源组织的矩阵（兼容保留），设施详情与服务器概览使用 `?view=targets&history=1` 的按目标聚合视图（所有服务器各一条、24h 跨源聚合历史，见 `FAC-PRB-006`、`UI-FAC-018`、`UI-SRV-027`），单节点结果为 `GET /api/v1/servers/{id}/network-probes`。配置存于 AppDB `network_probe_configs` 单行（`id='network_probe'`，`mode`、`server_ids_json`、`interval_seconds`/`ping_count`/`ping_timeout_seconds`（`FAC-PRB-010`）、`version`、`updated_at`），最新观测存于 AppDB `network_probe_results`（主键 `(source_server_id,target_server_id)`），同表 `history_json` 保存该 (source,target) 最近 24 小时的 30 分钟桶历史（见 `FAC-PRB-009`）。实现位于 `internal/modules/networkprobe`，模块在 `internal/bootstrap/panel/app.go` 装配并注册路由。
 - **失败**：不得把探测结果写入 `metrics_snapshots`，不得为探测设施创建隐藏应用或协调 Job；未知 facilityKind 仍按设施空态处理。
 - **不变量**：设施读取只查本地投影，不现场 SSH/ping；配置与观测的版本语义互不混用（配置 `version` 只在保存时递增，观测按时间单调覆盖）。
 - **验证**：设施路由注册与清单测试（`internal/bootstrap/panel/routes_manifest_test.go`）、`networkprobe` handler/service 测试、设施目录/Mock 路由测试。
@@ -672,15 +672,15 @@
 - **不变量**：结果行只表达最新观测，不保留历史曲线（24 小时历史另存 `history_json`，见 `FAC-PRB-009`）；读取不现场探测；`stale` 不得进入持久化字段。
 - **验证**：`SaveReported` 事务删除+批量插入/时间截断/重复上报收敛测试，`Matrix`/`ServerResults`/`ServerResultsHistory` 的 stale 与目标过滤测试（5 分钟下限、interval=120s→6 分钟、interval=3600s→3 小时、旧配置行归一化）。
 
-### FAC-PRB-006 读取视图：矩阵、服务器结果与概览卡
+### FAC-PRB-006 读取视图：矩阵、服务器结果、按目标聚合与概览卡
 
-- **前置**：已保存配置与部分/全部探测结果，可能包含已删除目标、stale 结果或未探测节点。
-- **动作**：读取矩阵 `GET /api/v1/facility-apps/network-probe/results`、单服务器 `GET /api/v1/servers/{id}/network-probes`、概览 `networkProbe` 卡数据。
-- **结果**：矩阵返回 `mode`、`nodes`（当前探测节点 ID/名称/目标地址）与 `results`（只包含 source 属于当前探测节点且 target 仍存在的行）；结果接口支持可选的 `serverIds` 查询参数（可重复或逗号分隔）只看部分探测节点，缺省/空表示全部节点。`serverResults` 返回 `{serverId,enabled,nodes,results,updatedAt}`，`enabled=false` 表示该节点当前不是探测节点（仍可展示其目标说明与历史行的空态），`nodes` 为该节点的目标列表，服务器不存在返回稳定 not-found；概览卡返回 `{nodes,results,updatedAt}` 摘要（节点数、平均延迟、最大丢包与最差结果由前端派生）。所有读取不现场探测、不写库。
-- **失败**：配置不存在时返回默认 `all` 配置与空结果；未注入探测服务时概览卡返回空 `probes` 而不是 500；已删除服务器作为 target 的行不得出现在矩阵中；服务器详情读取非探测节点时 `enabled=false` 且前端显示设施入口空态（`UI-SRV-025`）。
-- **边界**：模式切换后旧观测可能来自不再被选中的源，读取时按当前探测节点过滤；`serverIds` 过滤为空表示全部节点，非空只保留选择内的源/目标；JSON 中时间使用 RFC3339 UTC。
-- **不变量**：矩阵/服务器结果/概览卡必须来自同一份本地投影，不得各自引用不同快照；前端不得把缺失值当成 0 延迟或 0 丢包。
-- **验证**：handler/service 的矩阵/服务器结果/概览卡 DTO 测试、过滤与空态测试，前端 `networkProbeFacility`/`ProbesTab`/概览卡模型测试。
+- **前置**：已保存配置与部分/全部探测结果，可能包含已删除目标、stale 结果、没有探测结果的服务器或未探测节点。
+- **动作**：读取默认矩阵 `GET /api/v1/facility-apps/network-probe/results`、按目标聚合视图 `GET /api/v1/facility-apps/network-probe/results?view=targets&history=1`、单服务器 `GET /api/v1/servers/{id}/network-probes`、概览 `networkProbe` 卡数据。
+- **结果**：默认矩阵返回 `mode`、`nodes`（当前探测节点 ID/名称/目标地址）与 `results`（只包含 source 属于当前探测节点且 target 仍存在的行）；结果接口支持可选的 `serverIds` 查询参数（可重复或逗号分隔）只看部分探测节点，缺省/空表示全部节点。`serverResults` 返回 `{serverId,enabled,nodes,results,updatedAt}`，`enabled=false` 表示该节点当前不是探测节点（仍可展示其目标说明与历史行的空态），`nodes` 为该节点的目标列表，服务器不存在返回稳定 not-found；概览卡返回 `{nodes,results,updatedAt}` 摘要（节点数、平均延迟、最大丢包与最差结果由前端派生）。**按目标聚合视图**：查询参数 `view=targets`（忽略大小写）或兼容别名 `targets=1`/`targets=true` 选择以“目标服务器”为中心的聚合读取，`history=1`/`history=true` 时附带 24h 历史；响应为 `TargetMatrix{nodes:[TargetResult],updatedAt}`，每个 `TargetResult` 含 `serverId`、`name`、`address`、`sourceCount`（为该目标贡献结果的探测源数量）、`latencyMs|null`（所有**有效**延迟的平均：仅 `received>0` 且 `error` 为空的结果计入）、`packetLossPercent|null`（所有有结果源的平均丢包）、`worstPacketLossPercent|null`（所有有结果源的最大丢包）、`sampledAt|null`（最新采样时间）、`stale`（有结果时按当前配置的 `freshnessFor` 判定；无结果时默认 `true`）与 `history`（30 分钟桶按目标跨源聚合的平均延迟/丢包，最近 24h、时间升序）。`nodes` **必须包含当前所有服务器**（无任何探测结果的服务器也返回，`sourceCount=0`、聚合值/采样时间/历史为 null 或空、`stale=true`），顺序稳定（按 serverId 升序）；只聚合当前确实作为探测节点的源，target 已不存在的结果忽略；`updatedAt` 取所有结果的最新采样时间，无结果为 null。默认（不带 `view=targets`）行为保持不变，`serverIds` 过滤只作用于默认矩阵视图，聚合视图不使用该过滤。
+- **失败**：配置不存在时返回默认 `all` 配置与空结果；未注入探测服务时概览卡返回空 `probes` 而不是 500；已删除服务器作为 target 的行不得出现在矩阵/聚合视图中（服务器列表是聚合节点的来源）；`view` 非 `targets`（或 `targets` 非 `1`/`true`）及非法值回落到默认矩阵契约而不是报错；`history` 非法值按未请求处理；服务器详情读取非探测节点时 `enabled=false` 且前端显示设施入口空态（`UI-SRV-025`）。聚合读取失败不得让设施详情/服务器概览以外的区域失败。
+- **边界**：模式切换后旧观测可能来自不再被选中的源，读取时按当前探测节点过滤；`serverIds` 过滤为空表示全部节点，非空只保留选择内的源/目标（默认视图）；JSON 中时间使用 RFC3339 UTC。`view=targets` 下无服务器时 `nodes=[]`、`updatedAt=null`；某服务器只有失败样本时延迟为 null、丢包按失败样本计入平均、`stale` 按采样时间判定；历史跨源聚合只包含已有历史桶的源，不因为某源缺历史而把平均拉成 0。
+- **不变量**：默认矩阵/服务器结果/概览卡/聚合视图必须来自同一份本地投影，不得各自引用不同快照；前端不得把缺失值当成 0 延迟或 0 丢包；聚合算法只在服务端实现，前端不得自行用单源结果拼装“所有源平均”。
+- **验证**：handler/service 的矩阵/服务器结果/概览卡/`TargetMatrix` DTO 测试（多源平均、`worstPacketLossPercent`、`sourceCount`、无结果服务器仍出现且为 null、只聚合当前探测源、target 已删除忽略、历史桶跨源平均与升序、`history=1` 开关、`view=targets` 别名、默认 view 不受影响）、过滤与空态测试，前端 `networkProbeFacility`/`ProbesTab`/`ProbeOverviewPanel`/概览卡模型测试。
 
 ### FAC-PRB-007 服务器删除与配置修剪
 
@@ -708,7 +708,7 @@
 - **结果**：`network_probe_results.history_json` 保存 `[{"t":<unix 秒桶起点>,"l":<延迟毫秒>,"p":<丢包百分比>}]`，按 30 分钟桶（`1800s`）聚合：同一桶内后一次上报替换该桶，跨桶追加；只保留距本次 `sampleAt` 最近 24 小时内、最多 48 项，时间升序。`history=1` 时每个 `results[]` 附带 `history: [{time,latencyMs,packetLossPercent}]`（RFC3339 时间、延迟毫秒、丢包百分比）；不带该参数时响应与改造前一致，`Matrix`/`CardData` 永不返回 `history`。失败样本（`error` 非空或 `received=0`）在桶历史中记延迟 0、丢包 100；成功样本按本次上报的延迟与丢包值记录。
 - **失败**：旧数据或旧 Agent 没有历史时 `history=[]` 或字段缺省，读取不得报错；非法 `history` 值按未请求处理；历史合并失败只影响该 source 的历史（记录日志），不得阻断最新结果落库或指标上报。
 - **不变量**：历史只由服务端从已上报观测派生，不由前端拼接；桶宽固定 30 分钟，与探测周期无关（周期大于 30 分钟时每桶最多一次上报，周期小于 30 分钟时同桶替换）；不新增表，`history_json` 为同表列；服务器删除随结果行一并清理历史。
-- **验证**：`networkprobe` 服务测试（同桶替换、跨桶追加、24h 剪枝、48 上限、失败样本语义、默认不带 history、探测周期 60s/3600s 下历史桶行为不变）、handler 测试（`history=1` 传参）、`models`/迁移测试、前端设施详情历史条模型测试（`UI-FAC-018`）。
+- **验证**：`networkprobe` 服务测试（同桶替换、跨桶追加、24h 剪枝、48 上限、失败样本语义、默认不带 history、探测周期 60s/3600s 下历史桶行为不变、跨源聚合桶平均）、handler 测试（`history=1` 传参、`view=targets` 时返回聚合历史）、`models`/迁移测试、前端设施详情与服务器概览折线图测试（`UI-FAC-018`、`UI-SRV-027`）。
 
 ### FAC-PRB-010 探测参数配置（周期/包数/超时）
 
@@ -716,8 +716,8 @@
 - **前置**：探测设施已启用或即将启用；调用方已认证；系统 `ping` 已由 Agent 部署步骤保证（`AGT-DEP-008`）。
 - **成功**：配置持久化三列 `interval_seconds`/`ping_count`/`ping_timeout_seconds`，默认 60/3/2；保存时按 `FAC-PRB-003` 归一化并 `version`+1、更新 `updated_at`，返回完整配置；探测节点在下一轮 stream 更新后按新周期与新的包数/单包超时执行 ping，无需重连或重启 Agent；Panel 读取侧对旧行越界值防御性回落默认值（含旧版本 10..59 秒 interval 回落 60 秒），再计算结果新鲜度 `max(5min, 3×intervalSeconds)` 与下发参数。
 - **失败**：`intervalSeconds` 不在 60..3600（1..60 分钟）返回 `network_probe_interval_invalid`（错误码不变，中文提示「探测间隔必须在 1 到 60 分钟之间」）；`pingCount` 不在 1..10 返回 `network_probe_ping_count_invalid`；`pingTimeoutSeconds` 不在 1..10 返回 `network_probe_ping_timeout_invalid`；任一失败不写库、不 bump version、不下发新参数；Agent 收到非法/缺失的 `pingCount`/`pingTimeoutSeconds` 时自行夹紧，探测间隔缺失或 ≤0 时回退默认 60 秒且不做上下界夹紧（`FAC-PRB-004`），不得让探测协程崩溃或无限拖住。
-- **边界**：0 与缺省（旧客户端/旧 Panel）表示“用默认值”，不是合法显式值；前端表单按分钟输入（1..60，默认 1）并在保存时换算为秒，读取时 `分钟 = max(1, 四舍五入(intervalSeconds/60))`，旧 alpha 行 10..59 秒在读取侧归一回默认 60 秒；负数与越界只允许在保存路径拒绝，读取路径回落到默认值，不得让旧数据导致读取失败。探测周期影响上报频率与 stale 阈值，但不改变 30 分钟历史桶宽（`FAC-PRB-009`）；周期越短故障发现越快（最短 1 分钟），周期大于 5 分钟时 stale 阈值按 3 倍周期放大。服务器数量超过 100 台时目标数量随之增大，设施详情仍按探测源纵向列表逐目标展示（容器内部纵向滚动），不得改写为横向矩阵或整页横向滚动（`UI-FAC-018`）。旧 Agent 忽略新字段时保持其自身 3 包/2 秒口径，探测仍可用但不反映新配置；旧 Panel 不下发新字段时新 Agent 回退默认。
-- **验证点**：`internal/modules/networkprobe` 服务保存/读取测试（默认值、边界值 60/3600、旧数据 10..59 秒回落、越界与负数错误码、失败不写库、版本递增、旧数据归一化）、`ReportConfig` 下发三参数测试；`internal/agent/rpc/report_test.go` 配置解析（默认/缺省或 ≤0 兜底 60 秒/旧 Panel 缺省，Agent 不对间隔做上下界夹紧）与 `internal/agent/probe/probe_test.go`（`Options.Normalize`、`Count*Timeout+2s` 兜底超时、动态 `-c`/`-W`）；前端 `NetworkProbeFacility` 表单单测（分钟默认 1/范围 1..60/秒↔分钟换算/脏检测/保存 payload `intervalSeconds=分钟×60`）与结果列表/历史条测试。
+- **边界**：0 与缺省（旧客户端/旧 Panel）表示“用默认值”，不是合法显式值；前端表单按分钟输入（1..60，默认 1）并在保存时换算为秒，读取时 `分钟 = max(1, 四舍五入(intervalSeconds/60))`，旧 alpha 行 10..59 秒在读取侧归一回默认 60 秒；负数与越界只允许在保存路径拒绝，读取路径回落到默认值，不得让旧数据导致读取失败。探测周期影响上报频率与 stale 阈值，但不改变 30 分钟历史桶宽（`FAC-PRB-009`）；周期越短故障发现越快（最短 1 分钟），周期大于 5 分钟时 stale 阈值按 3 倍周期放大。**观测入口**：设施详情与服务器详情概览读取按目标聚合视图 `GET /api/v1/facility-apps/network-probe/results?view=targets&history=1`（`FAC-PRB-006`），直接展示所有服务器按目标聚合的结果，不要求用户选择探测源/目标；服务器数量超过 100 台时仍返回全部服务器的聚合条目，设施详情以卡片网格/纵向列表在结果容器内部滚动展示（每卡含 24h 折线图），不得改写为横向矩阵、历史条或整页横向滚动（`UI-FAC-018`、`UI-SRV-027`）。旧 Agent 忽略新字段时保持其自身 3 包/2 秒口径，探测仍可用但不反映新配置；旧 Panel 不下发新字段时新 Agent 回退默认。
+- **验证点**：`internal/modules/networkprobe` 服务保存/读取测试（默认值、边界值 60/3600、旧数据 10..59 秒回落、越界与负数错误码、失败不写库、版本递增、旧数据归一化）、`ReportConfig` 下发三参数测试；`internal/agent/rpc/report_test.go` 配置解析（默认/缺省或 ≤0 兜底 60 秒/旧 Panel 缺省，Agent 不对间隔做上下界夹紧）与 `internal/agent/probe/probe_test.go`（`Options.Normalize`、`Count*Timeout+2s` 兜底超时、动态 `-c`/`-W`）；前端 `NetworkProbeFacility` 表单单测（分钟默认 1/范围 1..60/秒↔分钟换算/脏检测/保存 payload `intervalSeconds=分钟×60`）与按目标聚合结果测试（全服务器卡片、探测源数、24h 折线图、无数据空态、无选择器）。
 
 ## 10. 指标设施
 

@@ -46,6 +46,12 @@ export function formatRate(value: number | null | undefined): string {
   return formatted === '—' ? '—' : `${formatted}/s`;
 }
 
+/** 探测延迟展示：毫秒，保留 1 位；缺失值不伪造 0。 */
+export function formatLatency(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—';
+  return `${value.toFixed(1)} ms`;
+}
+
 /** 图表 Y 轴用：省略 `/s` 以压缩标签宽度；单位由面板标题表达。 */
 export function formatRateAxis(value: number | null | undefined): string {
   return formatBytes(value);

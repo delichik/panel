@@ -146,6 +146,34 @@ type CardData struct {
 	UpdatedAt *time.Time `json:"updatedAt"`
 }
 
+// TargetResult 是按目标聚合的探测摘要：所有当前探测源对该服务器的最近结果，
+// 供设施详情页直接展示全部服务器，不再要求用户选择探测源/目标。
+type TargetResult struct {
+	ServerID  string `json:"serverId"`
+	Name      string `json:"name"`
+	Address   string `json:"address"`
+	SourceCount int  `json:"sourceCount"`
+	// LatencyMS 是所有探测源有效延迟（received>0 且 error 为空）的平均值；
+	// 没有有效样本时为 null。
+	LatencyMS *float64 `json:"latencyMs"`
+	// PacketLossPercent 是所有有结果源的丢包百分比平均值；没有结果时 null。
+	PacketLossPercent *float64 `json:"packetLossPercent"`
+	// WorstPacketLossPercent 是所有有结果源中的最大丢包百分比；没有结果时 null。
+	WorstPacketLossPercent *float64 `json:"worstPacketLossPercent"`
+	// SampledAt 是该目标所有结果中的最新采样时间；没有结果时 null。
+	SampledAt *time.Time `json:"sampledAt"`
+	Stale     bool       `json:"stale"`
+	// History 是按目标跨源聚合后的最近 24 小时 30 分钟桶历史；仅
+	// TargetResults(withHistory=true) 填充。
+	History []HistoryPoint `json:"history,omitempty"`
+}
+
+// TargetMatrix 是设施详情页的按目标聚合视图：所有服务器各一行。
+type TargetMatrix struct {
+	Nodes     []TargetResult `json:"nodes"`
+	UpdatedAt *time.Time     `json:"updatedAt"`
+}
+
 // ProbeTarget 是下发给 Agent 的一个 ping 目标。
 type ProbeTarget struct {
 	ServerID string
@@ -420,6 +448,200 @@ func (s *Service) CardData(ctx context.Context, serverIDs []string) (CardData, e
 		return CardData{}, err
 	}
 	return CardData{Nodes: nodes, Results: results, UpdatedAt: latestSample(results)}, nil
+}
+
+// targetAggregate 是单个目标服务器在内存中的跨源汇总。
+type targetAggregate struct {
+	sourceCount  int
+	latencySum   float64
+	latencyCount int
+	lossSum      float64
+	lossCount    int
+	worstLoss    float64
+	hasLoss      bool
+	latest       time.Time
+	history      []HistoryPoint
+}
+
+// historyBucketAggregate 是一个 (目标 × 30 分钟桶) 的跨源累计值。
+type historyBucketAggregate struct {
+	latencySum float64
+	lossSum    float64
+	count      int
+}
+
+// TargetResults 返回按目标聚合的探测摘要。nodes 覆盖服务器表中的全部服务器
+// （没有结果也保留一条空摘要），只聚合当前确实作为探测节点的 source 的结果，
+// target 已不存在的结果被忽略。
+func (s *Service) TargetResults(ctx context.Context, withHistory bool) (TargetMatrix, error) {
+	cfg, all, err := s.snapshot(ctx)
+	if err != nil {
+		return TargetMatrix{}, err
+	}
+	probeSources := nodeIDSet(probeNodes(cfg, all))
+	aggregates, err := s.aggregateTargets(ctx, probeSources, serverIDSet(all), withHistory)
+	if err != nil {
+		return TargetMatrix{}, err
+	}
+	now := s.now()
+	threshold := freshnessFor(cfg)
+	servers := sortedServers(all)
+	nodes := make([]TargetResult, 0, len(servers))
+	var updatedAt *time.Time
+	for _, srv := range servers {
+		node := TargetResult{ServerID: srv.ID, Name: srv.Name, Address: addressFor(srv), Stale: true}
+		if aggregate := aggregates[srv.ID]; aggregate != nil {
+			node.SourceCount = aggregate.sourceCount
+			node.LatencyMS = averageOrNil(aggregate.latencySum, aggregate.latencyCount)
+			node.PacketLossPercent = averageOrNil(aggregate.lossSum, aggregate.lossCount)
+			if aggregate.hasLoss {
+				worst := aggregate.worstLoss
+				node.WorstPacketLossPercent = &worst
+			}
+			if !aggregate.latest.IsZero() {
+				sampledAt := aggregate.latest
+				node.SampledAt = &sampledAt
+				node.Stale = now.Sub(sampledAt) > threshold
+				if updatedAt == nil || sampledAt.After(*updatedAt) {
+					latest := sampledAt
+					updatedAt = &latest
+				}
+			}
+			if withHistory {
+				node.History = aggregate.history
+			}
+		}
+		nodes = append(nodes, node)
+	}
+	return TargetMatrix{Nodes: nodes, UpdatedAt: updatedAt}, nil
+}
+
+func (s *Service) aggregateTargets(ctx context.Context, sources, targets map[string]struct{}, withHistory bool) (map[string]*targetAggregate, error) {
+	columns := `source_server_id,target_server_id,sampled_at,latency_ms,packet_loss_percent,received,error`
+	if withHistory {
+		columns += `,history_json`
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+columns+` FROM network_probe_results`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	now := s.now()
+	historyCutoff := now.Unix() - int64(historyWindow/time.Second)
+	aggregates := map[string]*targetAggregate{}
+	historyBuckets := map[string]map[int64]*historyBucketAggregate{}
+	for rows.Next() {
+		var source, target, sampledAt, reportError, rawHistory string
+		var latency, loss float64
+		var received int
+		dest := []any{&source, &target, &sampledAt, &latency, &loss, &received, &reportError}
+		if withHistory {
+			dest = append(dest, &rawHistory)
+		}
+		if err := rows.Scan(dest...); err != nil {
+			return nil, err
+		}
+		if _, ok := sources[source]; !ok {
+			continue
+		}
+		if _, ok := targets[target]; !ok {
+			continue
+		}
+		aggregate := aggregates[target]
+		if aggregate == nil {
+			aggregate = &targetAggregate{}
+			aggregates[target] = aggregate
+		}
+		aggregate.sourceCount++
+		lossValue := sanitizeFloat(loss)
+		aggregate.lossSum += lossValue
+		aggregate.lossCount++
+		if !aggregate.hasLoss || lossValue > aggregate.worstLoss {
+			aggregate.worstLoss = lossValue
+			aggregate.hasLoss = true
+		}
+		if received > 0 && strings.TrimSpace(reportError) == "" {
+			aggregate.latencySum += sanitizeFloat(latency)
+			aggregate.latencyCount++
+		}
+		if at := parseTime(sampledAt); at.After(aggregate.latest) {
+			aggregate.latest = at
+		}
+		if !withHistory {
+			continue
+		}
+		buckets := historyBuckets[target]
+		if buckets == nil {
+			buckets = map[int64]*historyBucketAggregate{}
+			historyBuckets[target] = buckets
+		}
+		for _, point := range decodeStoredHistory(rawHistory) {
+			if point.Time < historyCutoff {
+				continue
+			}
+			bucket := buckets[point.Time]
+			if bucket == nil {
+				bucket = &historyBucketAggregate{}
+				buckets[point.Time] = bucket
+			}
+			bucket.latencySum += sanitizeFloat(point.LatencyMS)
+			bucket.lossSum += sanitizeFloat(point.PacketLossPercent)
+			bucket.count++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if withHistory {
+		for target, buckets := range historyBuckets {
+			aggregate := aggregates[target]
+			if aggregate == nil {
+				aggregate = &targetAggregate{}
+				aggregates[target] = aggregate
+			}
+			aggregate.history = aggregateHistoryPoints(buckets)
+		}
+	}
+	return aggregates, nil
+}
+
+// aggregateHistoryPoints 把跨源同桶累计值换算成升序的对外历史点；延迟与丢包都
+// 取所有源点的算术平均。
+func aggregateHistoryPoints(buckets map[int64]*historyBucketAggregate) []HistoryPoint {
+	if len(buckets) == 0 {
+		return nil
+	}
+	keys := make([]int64, 0, len(buckets))
+	for bucket := range buckets {
+		keys = append(keys, bucket)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	out := make([]HistoryPoint, 0, len(keys))
+	for _, key := range keys {
+		bucket := buckets[key]
+		out = append(out, HistoryPoint{
+			Time:              time.Unix(key, 0).UTC(),
+			LatencyMS:         bucket.latencySum / float64(bucket.count),
+			PacketLossPercent: bucket.lossSum / float64(bucket.count),
+		})
+	}
+	return out
+}
+
+// averageOrNil 返回平均值；没有样本时返回 nil（JSON null）。
+func averageOrNil(sum float64, count int) *float64 {
+	if count == 0 {
+		return nil
+	}
+	value := sum / float64(count)
+	return &value
+}
+
+// sortedServers 返回按 serverID 升序的服务器副本，保证 TargetMatrix 顺序稳定。
+func sortedServers(all []server.Server) []server.Server {
+	out := append([]server.Server(nil), all...)
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
 }
 
 func (s *Service) invalidate() {

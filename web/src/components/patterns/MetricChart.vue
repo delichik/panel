@@ -7,13 +7,13 @@ import { GridComponent, MarkLineComponent, TooltipComponent } from 'echarts/comp
 import { CanvasRenderer } from 'echarts/renderers';
 import type { EChartsOption } from 'echarts';
 import type { MetricSeriesData, MetricThreshold } from '@/utils/metrics';
-import { formatMetricAxisTime, formatMetricDateTime, formatPercent, formatRate, formatRateAxis } from '@/utils/metrics';
+import { formatLatency, formatMetricAxisTime, formatMetricDateTime, formatPercent, formatRate, formatRateAxis } from '@/utils/metrics';
 
 use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, MarkLineComponent]);
 
 const props = withDefaults(defineProps<{
   series: MetricSeriesData[];
-  valueKind: 'percent' | 'bytes';
+  valueKind: 'percent' | 'bytes' | 'latency';
   thresholds?: MetricThreshold[];
   label: string;
 }>(), { thresholds: () => [] });
@@ -45,6 +45,7 @@ function timePairs(points: MetricSeriesData['points']): Array<[number, number | 
 }
 
 function formatValue(value: number) {
+  if (props.valueKind === 'latency') return formatLatency(value);
   return props.valueKind === 'percent' ? formatPercent(value, 1) : formatRate(value);
 }
 
@@ -123,6 +124,7 @@ const option = computed<EChartsOption>(() => {
         color: textMuted.value,
         fontSize: 10,
         formatter(value: number) {
+          if (props.valueKind === 'latency') return `${value} ms`;
           return props.valueKind === 'percent' ? `${value}%` : formatRateAxis(value);
         },
       },
@@ -186,7 +188,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="h-full min-h-0 w-full" role="img" :aria-label="label">
+  <div class="h-full min-h-0 w-full" role="img" :aria-label="label" data-testid="metric-chart">
     <VChart class="h-full w-full" :option="option" autoresize aria-hidden="true" />
   </div>
 </template>

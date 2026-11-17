@@ -4334,8 +4334,8 @@ Object.assign(messages.en, {
   'applicationsPage.networkProbeSave': 'Save configuration',
   'applicationsPage.networkProbeSaved': 'Network probe configuration saved.',
   'applicationsPage.networkProbeServersRequired': 'Select at least one probe node.',
-  'applicationsPage.networkProbeResultsTitle': 'Node-to-node results',
-  'applicationsPage.networkProbeResultsHint': 'Choose a probe source, then review current latency and packet loss for every target with its last 24 hours of history.',
+  'applicationsPage.networkProbeResultsTitle': 'Probe results · all servers',
+  'applicationsPage.networkProbeResultsHint': 'Every server is listed with latency and packet loss aggregated from all probe sources, plus the last 24 hours of history.',
   'applicationsPage.networkProbeUpdatedAt': 'Last updated',
   'applicationsPage.networkProbeNoResults': 'No probe results yet',
   'applicationsPage.networkProbeNoResultsHint': 'Results appear after the next probe interval.',
@@ -4402,8 +4402,8 @@ Object.assign(messages['zh-CN'], {
   'applicationsPage.networkProbeSave': '保存配置',
   'applicationsPage.networkProbeSaved': '网络探测配置已保存。',
   'applicationsPage.networkProbeServersRequired': '请至少选择一个探测节点。',
-  'applicationsPage.networkProbeResultsTitle': '节点间探测结果',
-  'applicationsPage.networkProbeResultsHint': '选择探测源后，查看该节点到每个目标的当前延迟与丢包，以及最近 24 小时历史。',
+  'applicationsPage.networkProbeResultsTitle': '探测结果 · 全部服务器',
+  'applicationsPage.networkProbeResultsHint': '直接列出全部服务器：延迟与丢包按所有探测源聚合，并展示最近 24 小时历史。',
   'applicationsPage.networkProbeUpdatedAt': '最近更新',
   'applicationsPage.networkProbeNoResults': '暂无探测结果',
   'applicationsPage.networkProbeNoResultsHint': '下一个探测周期后结果会出现在这里。',
@@ -4427,9 +4427,9 @@ Object.assign(messages.en, {
   'applicationsPage.networkProbeSearchTargets': 'Search targets by name or address',
   'applicationsPage.networkProbeSearchEmpty': 'No targets match the search',
   'applicationsPage.networkProbeSearchEmptyHint': 'Clear the search to see every probed target.',
-  'applicationsPage.networkProbeTargetsSummary': '{count} targets · {failed} failing',
-  'applicationsPage.networkProbeNoTargets': 'No results for this probe source yet',
-  'applicationsPage.networkProbeNoTargetsHint': 'Results appear after the next probe interval; every other server is a target.',
+  'applicationsPage.networkProbeTargetsSummary': '{count} servers · {probed} probed',
+  'applicationsPage.networkProbeNoTargets': 'No servers in the probe result',
+  'applicationsPage.networkProbeNoTargetsHint': 'All servers appear here; results show up after the next probe interval.',
   'applicationsPage.networkProbeNoProbeNodes': 'No probe nodes configured',
   'applicationsPage.networkProbeNoProbeNodesHint': 'Set the probe scope above and save; probe nodes then report automatically.',
   'applicationsPage.networkProbeShowingStale': 'Refresh failed. Showing the last successful results.',
@@ -4452,9 +4452,9 @@ Object.assign(messages['zh-CN'], {
   'applicationsPage.networkProbeSearchTargets': '按名称或地址搜索目标',
   'applicationsPage.networkProbeSearchEmpty': '没有匹配的目标',
   'applicationsPage.networkProbeSearchEmptyHint': '清空搜索即可查看全部探测目标。',
-  'applicationsPage.networkProbeTargetsSummary': '{count} 个目标 · {failed} 个失败',
-  'applicationsPage.networkProbeNoTargets': '该探测源暂无结果',
-  'applicationsPage.networkProbeNoTargetsHint': '下一个探测周期后会出现结果；探测目标为其余所有服务器。',
+  'applicationsPage.networkProbeTargetsSummary': '{count} 台服务器 · {probed} 台有结果',
+  'applicationsPage.networkProbeNoTargets': '探测结果中暂无服务器',
+  'applicationsPage.networkProbeNoTargetsHint': '全部服务器都会显示在这里；结果会在下一个探测周期后出现。',
   'applicationsPage.networkProbeNoProbeNodes': '尚未配置探测节点',
   'applicationsPage.networkProbeNoProbeNodesHint': '在上方设置探测范围并保存；探测节点会自动上报。',
   'applicationsPage.networkProbeShowingStale': '刷新失败，当前显示上次成功的结果。',
@@ -4522,4 +4522,47 @@ Object.assign(messages['zh-CN'], {
   'applicationsPage.metricsIntervalInvalid': '请输入不小于 1 的整数秒。',
   'applicationsPage.metricsLoadFailed': '无法加载指标设施配置。',
   'applicationsPage.metricsLoading': '正在加载指标设施配置',
+});
+
+Object.assign(messages.en, {
+  'applicationsPage.networkProbeTarget': 'Target',
+  'applicationsPage.networkProbeTargetPlaceholder': 'Select a target',
+  'serversPage.probe.latencyHistory': 'Latency · last 24 hours',
+  'serversPage.probe.packetLossHistory': 'Packet loss · last 24 hours',
+  'serversPage.probe.noHistory': 'No probe history for this pair yet.',
+  'serversPage.probe.source': 'Probe source',
+  'serversPage.probe.sourceHint': 'Latency and packet loss are aggregated from every probe source that targets this server.',
+  'serversPage.probe.sourceSelf': 'The probe source does not measure itself.',
+  'serversPage.probe.noProbeSource': 'No probe source configured',
+  'serversPage.probe.noProbeSourceHint': 'Configure the network probe facility to measure latency and packet loss.',
+  'serversPage.probe.resultUnavailable': 'No probe result for this server yet.',
+  'serversPage.probe.historyTitle': 'Latency and packet loss · last 24 hours',
+});
+
+Object.assign(messages['zh-CN'], {
+  'applicationsPage.networkProbeTarget': '探测目标',
+  'applicationsPage.networkProbeTargetPlaceholder': '选择探测目标',
+  'serversPage.probe.latencyHistory': '延迟 · 最近 24 小时',
+  'serversPage.probe.packetLossHistory': '丢包率 · 最近 24 小时',
+  'serversPage.probe.noHistory': '该探测对还没有历史数据。',
+  'serversPage.probe.source': '探测源',
+  'serversPage.probe.sourceHint': '延迟与丢包按所有以本服务器为目标的探测源聚合。',
+  'serversPage.probe.sourceSelf': '探测源自身不测量自己。',
+  'serversPage.probe.noProbeSource': '未配置探测源',
+  'serversPage.probe.noProbeSourceHint': '请先在网络探测设施中配置探测节点。',
+  'serversPage.probe.resultUnavailable': '暂无此服务器的探测结果。',
+  'serversPage.probe.historyTitle': '延迟与丢包 · 最近 24 小时',
+});
+
+// 网络探测按目标聚合（全部服务器）：设施详情与服务器概览直接展示，不再选择探测源/目标。
+Object.assign(messages.en, {
+  'serversPage.probe.status.noData': 'No data',
+  'applicationsPage.networkProbeSourceCountLabel': 'Probe sources',
+  'applicationsPage.networkProbeNoSourcesHint': 'No probe source has reported yet. Results appear after the next probe interval.',
+});
+
+Object.assign(messages['zh-CN'], {
+  'serversPage.probe.status.noData': '无数据',
+  'applicationsPage.networkProbeSourceCountLabel': '探测源数',
+  'applicationsPage.networkProbeNoSourcesHint': '暂未有探测源上报；结果会在下一个探测周期后出现。',
 });

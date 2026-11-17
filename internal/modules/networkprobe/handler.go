@@ -13,6 +13,7 @@ type service interface {
 	Get(ctx context.Context) (Config, error)
 	Save(ctx context.Context, in SaveInput) (Config, error)
 	Matrix(ctx context.Context, filterServerIDs []string) (Matrix, error)
+	TargetResults(ctx context.Context, withHistory bool) (TargetMatrix, error)
 	ServerResults(ctx context.Context, serverID string) (ServerResults, error)
 	ServerResultsHistory(ctx context.Context, serverID string) (ServerResults, error)
 }
@@ -51,9 +52,21 @@ func (h *Handler) SaveConfig(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, result)
 }
 
-// Results 返回探测矩阵：GET /api/v1/facility-apps/network-probe/results。
-// 可选 serverIds 查询参数（可重复或逗号分隔）用于只看部分探测节点。
+// Results 返回探测结果：GET /api/v1/facility-apps/network-probe/results。
+//
+// 默认返回按探测源组织的矩阵，可选 serverIds 查询参数（可重复或逗号分隔）只看
+// 部分探测节点。`view=targets`（或 `targets=1`）返回按目标聚合的全部服务器摘要；
+// 两种视图都支持 `history=1`（targets 视图返回跨源聚合历史）。
 func (h *Handler) Results(w http.ResponseWriter, r *http.Request) {
+	if targetView(r) {
+		result, err := h.service.TargetResults(r.Context(), historyEnabled(r))
+		if err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, result)
+		return
+	}
 	result, err := h.service.Matrix(r.Context(), serverIDsFromQuery(r))
 	if err != nil {
 		httpx.Error(w, err)
@@ -89,6 +102,21 @@ func (h *Handler) ServerResults(w http.ResponseWriter, r *http.Request) {
 func historyEnabled(r *http.Request) bool {
 	raw := strings.TrimSpace(r.URL.Query().Get("history"))
 	return raw == "1" || strings.EqualFold(raw, "true")
+}
+
+// targetView 判断是否请求按目标聚合视图：`view=targets`（忽略大小写）或
+// `targets=1|true`。
+func targetView(r *http.Request) bool {
+	query := r.URL.Query()
+	if strings.EqualFold(strings.TrimSpace(query.Get("view")), "targets") {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(query.Get("targets"))) {
+	case "1", "true":
+		return true
+	default:
+		return false
+	}
 }
 
 func serverIDsFromQuery(r *http.Request) []string {

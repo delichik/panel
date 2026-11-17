@@ -27,6 +27,7 @@ import { getOverviewCardData, getOverviewCards, overviewFromServers, setOverview
 import {
   getNetworkProbeConfig,
   getNetworkProbeMatrix,
+  getNetworkProbeTargets,
   getServerNetworkProbes,
   MockNetworkProbeError,
   saveNetworkProbeConfig,
@@ -829,7 +830,14 @@ export function installMockApi() {
         throw err;
       }
     }
-    if (url.pathname === '/api/v1/facility-apps/network-probe/results' && method(init) === 'GET') return json(getNetworkProbeMatrix());
+    if (url.pathname === '/api/v1/facility-apps/network-probe/results' && method(init) === 'GET') {
+      // `view=targets`（或 targets=1/true）返回按目标聚合的全部服务器摘要，
+      // 可选 history=1 附带跨源聚合的 24h 历史；其余请求保持按探测源的矩阵视图。
+      const view = (url.searchParams.get('view') ?? '').trim().toLowerCase();
+      const targetsView = view === 'targets' || ['1', 'true'].includes((url.searchParams.get('targets') ?? '').trim().toLowerCase());
+      const history = ['1', 'true'].includes((url.searchParams.get('history') ?? '').trim().toLowerCase());
+      return json(targetsView ? getNetworkProbeTargets(history) : getNetworkProbeMatrix());
+    }
     if (url.pathname === '/api/v1/facility-apps/metrics' && method(init) === 'GET') return json(getMetricsFacilityConfig());
     if (url.pathname === '/api/v1/facility-apps/metrics' && method(init) === 'PUT') {
       try {

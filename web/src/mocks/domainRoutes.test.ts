@@ -562,6 +562,21 @@ describe('domain mock routes', () => {
     expect(matrix.data.nodes.map((node: { serverId: string }) => node.serverId)).toEqual(['srv-edge-sgp']);
     expect(matrix.data.results.length).toBeGreaterThan(0);
 
+    // view=targets：按目标聚合、覆盖全部服务器（无结果也保留空摘要），history=1 附带跨源历史。
+    const targetView = await (await fetch('/api/v1/facility-apps/network-probe/results?view=targets&history=1')).json();
+    expect(targetView.data.nodes.length).toBeGreaterThanOrEqual(15);
+    const coreTarget = targetView.data.nodes.find((node: { serverId: string }) => node.serverId === 'srv-core-fra');
+    expect(coreTarget).toMatchObject({ name: expect.any(String), address: expect.any(String), sourceCount: 1, stale: expect.any(Boolean) });
+    expect(Array.isArray(coreTarget.history)).toBe(true);
+    expect(coreTarget.history.length).toBeGreaterThan(0);
+    const selfTarget = targetView.data.nodes.find((node: { serverId: string }) => node.serverId === 'srv-edge-sgp');
+    expect(selfTarget.sourceCount).toBe(0);
+    expect(targetView.data.updatedAt).not.toBeNull();
+
+    // 不带 history 时按后端 omitempty 语义省略历史字段。
+    const targetsWithoutHistory = await (await fetch('/api/v1/facility-apps/network-probe/results?view=targets')).json();
+    expect(targetsWithoutHistory.data.nodes[0].history).toBeUndefined();
+
     const source = await (await fetch('/api/v1/servers/srv-edge-sgp/network-probes')).json();
     expect(source.data).toMatchObject({ serverId: 'srv-edge-sgp', enabled: true });
     expect(source.data.nodes.some((node: { serverId: string }) => node.serverId === 'srv-core-fra')).toBe(true);

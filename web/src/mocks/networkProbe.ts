@@ -7,6 +7,8 @@ import type {
   NetworkProbeResult,
   NetworkProbeSaveInput,
   NetworkProbeServerResults,
+  NetworkProbeTargetMatrix,
+  NetworkProbeTargetResult,
 } from '@/types/networkProbe';
 import type { ServerDto } from '@/types/servers';
 import { networkProbeSettingRules, normalizeNetworkProbeSettings, networkProbeSettingsError } from '@/utils/networkProbe';
@@ -177,4 +179,103 @@ function historyFor(source: ServerDto, result: NetworkProbeResult, now: number):
 export function getNetworkProbeCardData(): NetworkProbeCardData {
   const matrix = getNetworkProbeMatrix();
   return { nodes: matrix.nodes, results: matrix.results, updatedAt: matrix.updatedAt };
+}
+
+/** 5 分钟新鲜度窗口，与后端 `freshnessFor` / ResultFreshFor 对齐。 */
+const TARGET_FRESH_WINDOW_MS = 5 * 60 * 1000;
+
+function roundTenth(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+/** 跨源聚合 24h 历史：时间桶按当前时间对齐，延迟取有效均值、丢包取均值。 */
+function aggregateTargetHistory(histories: NetworkProbeHistoryPoint[][]): NetworkProbeHistoryPoint[] {
+  if (!histories.length) return [];
+  const length = Math.max(...histories.map((history) => history.length));
+  return Array.from({ length }, (_, index) => {
+    const points = histories
+      .map((history) => history[index])
+      .filter((point): point is NetworkProbeHistoryPoint => Boolean(point));
+    const latencies = points.map((point) => point.latencyMs).filter((value) => value > 0);
+    const losses = points.map((point) => point.packetLossPercent);
+    return {
+      time: points[0]?.time ?? new Date().toISOString(),
+      latencyMs: latencies.length ? roundTenth(latencies.reduce((sum, value) => sum + value, 0) / latencies.length) : 0,
+      packetLossPercent: losses.length ? roundTenth(losses.reduce((sum, value) => sum + value, 0) / losses.length) : 0,
+    };
+  });
+}
+
+/**
+ * 按目标聚合视图（设施详情 / 服务器概览）：nodes 覆盖全部服务器，没有结果也保留
+ * 一条空摘要；只聚合当前探测节点的结果，自身不会探测自己。
+ */
+export function getNetworkProbeTargets(includeHistory = false): NetworkProbeTargetMatrix {
+  const now = Date.now();
+  const sources = activeNodes()
+    .map((node) => mockServers.find((server) => server.id === node.serverId))
+    .filter((server): server is ServerDto => Boolean(server));
+
+  interface Aggregate {
+    sourceCount: number;
+    latencySum: number;
+    latencyCount: number;
+    lossSum: number;
+    lossCount: number;
+    worstLoss: number | null;
+    latestSampledAt: number;
+    histories: NetworkProbeHistoryPoint[][];
+  }
+
+  const aggregates = new Map<string, Aggregate>();
+  for (const source of sources) {
+    for (const target of targetsFor(source.id)) {
+      const result = resultFor(source, target, now);
+      const entry = aggregates.get(target.id) ?? {
+        sourceCount: 0,
+        latencySum: 0,
+        latencyCount: 0,
+        lossSum: 0,
+        lossCount: 0,
+        worstLoss: null,
+        latestSampledAt: 0,
+        histories: [],
+      };
+      entry.sourceCount += 1;
+      if (!result.error && result.received > 0 && result.latencyMs > 0) {
+        entry.latencySum += result.latencyMs;
+        entry.latencyCount += 1;
+      }
+      entry.lossSum += result.packetLossPercent;
+      entry.lossCount += 1;
+      if (entry.worstLoss === null || result.packetLossPercent > entry.worstLoss) entry.worstLoss = result.packetLossPercent;
+      const sampledAt = Date.parse(result.sampledAt);
+      if (sampledAt > entry.latestSampledAt) entry.latestSampledAt = sampledAt;
+      if (includeHistory) entry.histories.push(historyFor(source, result, now));
+      aggregates.set(target.id, entry);
+    }
+  }
+
+  const nodes: NetworkProbeTargetResult[] = mockServers.map((server) => {
+    const entry = aggregates.get(server.id);
+    const sampledAtMs = entry?.latestSampledAt ?? 0;
+    return {
+      serverId: server.id,
+      name: server.name,
+      address: server.ipv4 || server.ipv6 || server.host,
+      sourceCount: entry?.sourceCount ?? 0,
+      latencyMs: entry && entry.latencyCount ? roundTenth(entry.latencySum / entry.latencyCount) : null,
+      packetLossPercent: entry && entry.lossCount ? roundTenth(entry.lossSum / entry.lossCount) : null,
+      worstPacketLossPercent: entry?.worstLoss ?? null,
+      sampledAt: sampledAtMs ? new Date(sampledAtMs).toISOString() : null,
+      stale: !sampledAtMs || now - sampledAtMs > TARGET_FRESH_WINDOW_MS,
+      ...(includeHistory ? { history: aggregateTargetHistory(entry?.histories ?? []) } : {}),
+    };
+  });
+
+  let updatedAt: string | null = null;
+  for (const node of nodes) {
+    if (node.sampledAt && (!updatedAt || node.sampledAt > updatedAt)) updatedAt = node.sampledAt;
+  }
+  return { nodes, updatedAt };
 }

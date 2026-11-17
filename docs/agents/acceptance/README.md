@@ -70,7 +70,7 @@
 
 进程事件 `/events`、诊断日志 `/logs`、按需读取与 `/activity`/`/operations`/`/tasks` 重定向见 [UI-EVT-004..007](ui-pages.md)、[UI-LOG-001..003](ui-pages.md)（`UI-ACT-*` 已废弃）。
 
-磁盘使用率改为 5 分钟低频采样且只展示当前值、磁盘 IO 读写速率与指标弱网补报见 [OBS-MET-007..009](backup-restore-diagnostics.md)、[AGT-RPT-004/007](servers-security-packages.md)；首页概览已改为固定只读状态页（节点情况摘要 + 带 24h 历史条与上下行速率的服务器卡片，并行多接口取数，不再消费 `/overview` 卡片接口），见 [UI-OVR-001/013..019](ui-pages.md) 与 [GAP-031](known-gaps.md)；旧 `UI-OVR-002..012` 卡片条目已废弃。指标 bucket/latest 见 [OBS-MET-003](backup-restore-diagnostics.md)，探测 24h 历史见 [FAC-PRB-009](applications-and-facilities.md)。设施网络探测（`network-probe`）的配置、周期/包数/超时参数（`FAC-PRB-010`）、结果与删除清理见 [FAC-PRB-001..010](applications-and-facilities.md)，设施详情配置与「探测源 + 搜索 + 纵向历史列表」见 [UI-FAC-014..018](ui-pages.md)、[UI-SRV-025](ui-pages.md)（横向矩阵 UI 已废弃，`UI-FAC-016`）；表结构与可空磁盘 IO 列、`network_probe_configs` 三参数列见 [架构、数据与 API](architecture-data-api.md)。
+磁盘使用率改为 5 分钟低频采样且只展示当前值、磁盘 IO 读写速率与指标弱网补报见 [OBS-MET-007..009](backup-restore-diagnostics.md)、[AGT-RPT-004/007](servers-security-packages.md)；首页概览已改为固定只读状态页（节点情况摘要 + 带 24h 历史条与上下行速率的服务器卡片，并行多接口取数，不再消费 `/overview` 卡片接口），见 [UI-OVR-001/013..019](ui-pages.md) 与 [GAP-031](known-gaps.md)；旧 `UI-OVR-002..012` 卡片条目已废弃。指标 bucket/latest 见 [OBS-MET-003](backup-restore-diagnostics.md)，探测 24h 历史见 [FAC-PRB-009](applications-and-facilities.md)。设施网络探测（`network-probe`）的配置、周期/包数/超时参数（`FAC-PRB-010`）、按目标聚合读取视图（`FAC-PRB-006` 的 `view=targets&history=1`）、结果与删除清理见 [FAC-PRB-001..010](applications-and-facilities.md)，设施详情与服务器概览的“所有服务器按目标聚合 + 24h 折线图”（无探测源/目标选择器）见 [UI-FAC-014..018](ui-pages.md)、[UI-SRV-025/027](ui-pages.md)（横向矩阵与选择器 UI 均已废弃，`UI-FAC-016`）；表结构与可空磁盘 IO 列、`network_probe_configs` 三参数列见 [架构、数据与 API](architecture-data-api.md)。
 
 服务器详情一级 tab 收敛为 概览/系统/资源/网络与安全；概览合并原「概况」与「监控」，状态条与指标仪表盘同屏，系统内为 Agent/Tailscale/软件包，网络与安全内为网络探测/防火墙；旧一级 tab 深链保留别名。指标改按范围请求后端既有 `bucket` 桶聚合并展示坐标轴/图例/平均峰值/阈值/空档断线。见 [UI-SRV-002/008/009/016/017/018/019/020/025/026](ui-pages.md)、[UI-SHELL-062](ui-shell-and-conventions.md)；不新增后端 API、数据库表或后台任务。
 
@@ -79,6 +79,7 @@
 指标采集与保留从设置页移出为**指标设施**（`metrics`）：配置读写 `GET/PUT /api/v1/facility-apps/metrics`、采集节点选择与按节点下发、采集间隔对齐生效、保留清理、旧运行时设置播种与设置页移除、服务器删除配置修剪、失败语义见 [FAC-MET-001..008](applications-and-facilities.md)；设施目录与页面行为见 [UI-FAC-014/019](ui-pages.md)、[UI-SRV-008](ui-pages.md)、[UI-SET-002](ui-pages.md)；设置接口移除三项见 [SET-RUN-021](identity-settings-system.md)，容器上报间隔仍由 [SET-RUN-014](identity-settings-system.md) 约束；表/路由基线见 [项目覆盖基线](coverage-matrix.md)、[API 路由逐项清单](api-route-inventory.md)。
 
 设施命名、布局与探测节拍（2026-11-17）：导航、路由标题与用户指南的用户可见产品名由「设施应用 / Facility Apps」改为「设施 / Facilities」（路由路径 `/applications/facility-apps` 不变）；网络探测与指标设施页把「范围」与「配置」上下堆叠为两个独立区域（范围在上、配置在下），服务器选择器改为紧凑网格；网络探测间隔改为分钟输入（1..60 分钟、默认 1，保存换算 `intervalSeconds=分钟×60`，Panel 校验范围 60..3600 秒），概览服务器卡片的镜像更新徽标改用镜像语义图标。无新增路由/表/后台任务，见 [UI-FAC-014/015/017/018/019](ui-pages.md)、[UI-OVR-017](ui-pages.md)、[UI-SHELL-014](ui-shell-and-conventions.md)、[FAC-PRB-003/004/010](applications-and-facilities.md)、[FAC-MET-003](applications-and-facilities.md)、[AGT-RPT-008](servers-security-packages.md)。
+
 
 修改下列对象时，至少检查对应消费者：
 

@@ -13,11 +13,14 @@ import (
 )
 
 type fakeHandlerService struct {
-	config           Config
-	matrixFilter     []string
-	serverResults    string
-	saveInput        SaveInput
-	historyRequested bool
+	config                 Config
+	matrixFilter           []string
+	matrixRequested        bool
+	targetResultsRequested bool
+	targetHistoryRequested bool
+	serverResults          string
+	saveInput              SaveInput
+	historyRequested       bool
 }
 
 func (f *fakeHandlerService) Get(context.Context) (Config, error) {
@@ -30,8 +33,20 @@ func (f *fakeHandlerService) Save(_ context.Context, in SaveInput) (Config, erro
 }
 
 func (f *fakeHandlerService) Matrix(_ context.Context, filterServerIDs []string) (Matrix, error) {
+	f.matrixRequested = true
 	f.matrixFilter = filterServerIDs
 	return Matrix{Mode: ModeAll, Nodes: []Node{}, Results: []Result{}}, nil
+}
+
+func (f *fakeHandlerService) TargetResults(_ context.Context, withHistory bool) (TargetMatrix, error) {
+	f.targetResultsRequested = true
+	f.targetHistoryRequested = withHistory
+	return TargetMatrix{Nodes: []TargetResult{{
+		ServerID:    "srv-a",
+		Name:        "A",
+		Address:     "10.0.0.1",
+		SourceCount: 2,
+	}}}, nil
 }
 
 func (f *fakeHandlerService) ServerResults(_ context.Context, serverID string) (ServerResults, error) {
@@ -161,6 +176,53 @@ func firstResultField(t *testing.T, recorder *httptest.ResponseRecorder, field s
 		t.Fatalf("response result = %#v", results[0])
 	}
 	return result[field]
+}
+
+// TestHandlerResultsViews keeps the default matrix view and adds the
+// target-aggregated view selected by view=targets / targets=1, with history=1
+// forwarded to the service.
+func TestHandlerResultsViews(t *testing.T) {
+	svc := &fakeHandlerService{}
+	handler := NewHandler(svc)
+
+	rec := httptest.NewRecorder()
+	handler.Results(rec, httptest.NewRequest(http.MethodGet, "/api/v1/facility-apps/network-probe/results?serverIds=srv-a", nil))
+	if rec.Code != http.StatusOK || !svc.matrixRequested || svc.targetResultsRequested {
+		t.Fatalf("default view must stay the matrix: code=%d matrix=%v targets=%v", rec.Code, svc.matrixRequested, svc.targetResultsRequested)
+	}
+
+	for _, request := range []string{"view=targets", "targets=1", "targets=true"} {
+		svc.targetResultsRequested = false
+		svc.targetHistoryRequested = true
+		rec = httptest.NewRecorder()
+		handler.Results(rec, httptest.NewRequest(http.MethodGet, "/api/v1/facility-apps/network-probe/results?"+request, nil))
+		if rec.Code != http.StatusOK || !svc.targetResultsRequested || svc.targetHistoryRequested {
+			t.Fatalf("%s: code=%d targets=%v history=%v", request, rec.Code, svc.targetResultsRequested, svc.targetHistoryRequested)
+		}
+		data, ok := decodeEnvelope(t, rec)["data"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s: data = %#v", request, decodeEnvelope(t, rec)["data"])
+		}
+		nodes, ok := data["nodes"].([]any)
+		if !ok || len(nodes) != 1 {
+			t.Fatalf("%s: nodes = %#v", request, data["nodes"])
+		}
+		node, ok := nodes[0].(map[string]any)
+		if !ok || node["serverId"] != "srv-a" || node["sourceCount"] != 2.0 {
+			t.Fatalf("%s: node = %#v", request, nodes[0])
+		}
+		if _, ok := node["latencyMs"]; !ok {
+			t.Fatalf("%s: target node must expose latencyMs (null allowed): %#v", request, node)
+		}
+	}
+
+	svc.targetResultsRequested = false
+	svc.targetHistoryRequested = false
+	rec = httptest.NewRecorder()
+	handler.Results(rec, httptest.NewRequest(http.MethodGet, "/api/v1/facility-apps/network-probe/results?view=targets&history=1", nil))
+	if rec.Code != http.StatusOK || !svc.targetResultsRequested || !svc.targetHistoryRequested {
+		t.Fatalf("view=targets&history=1: code=%d targets=%v history=%v", rec.Code, svc.targetResultsRequested, svc.targetHistoryRequested)
+	}
 }
 
 // TestHandlerMapsValidationErrors keeps the stable error codes visible on the

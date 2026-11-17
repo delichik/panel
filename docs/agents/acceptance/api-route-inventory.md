@@ -66,7 +66,7 @@
 | 52 | `GET` | `/api/v1/executions/{id}/steps` | [协调、任务与运行事件](orchestration-and-tasks.md) |
 | 53 | `GET` | `/api/v1/facility-apps/metrics` | [应用与设施应用](applications-and-facilities.md) `FAC-MET-001/003`；读取指标设施配置 |
 | 54 | `GET` | `/api/v1/facility-apps/network-probe` | [应用与设施应用](applications-and-facilities.md) `FAC-PRB-001/003`；网络探测设施配置 |
-| 55 | `GET` | `/api/v1/facility-apps/network-probe/results` | [应用与设施应用](applications-and-facilities.md) `FAC-PRB-006`；探测矩阵，可选 `serverIds` 过滤 |
+| 55 | `GET` | `/api/v1/facility-apps/network-probe/results` | [应用与设施应用](applications-and-facilities.md) `FAC-PRB-006`；默认探测矩阵（可选 `serverIds` 过滤）；`?view=targets&history=1` 返回按目标聚合的全部服务器摘要（`targets=1`/`targets=true` 兼容别名） |
 | 56 | `GET` | `/api/v1/facility-apps/reverse-proxy` | [应用与设施应用](applications-and-facilities.md) |
 | 57 | `GET` | `/api/v1/facility-apps/reverse-proxy/config-records` | [应用与设施应用](applications-and-facilities.md) |
 | 58 | `GET` | `/api/v1/facility-apps/reverse-proxy/config-records/{recordId}` | [应用与设施应用](applications-and-facilities.md) |

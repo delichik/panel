@@ -12,6 +12,10 @@ import {
   normalizeNetworkProbeSettings,
   parseNetworkProbeIntervalMinutes,
   parseNetworkProbeSetting,
+  probeAggregateOutcomeStatusKey,
+  probeAggregateOutcomeTone,
+  probeHistorySeries,
+  probeTargetOutcome,
 } from './networkProbe';
 
 describe('network probe settings contract', () => {
@@ -110,5 +114,40 @@ describe('network probe interval minute conversion', () => {
     expect(parseNetworkProbeIntervalMinutes('61')).toBeNull();
     expect(parseNetworkProbeIntervalMinutes('1.5')).toBeNull();
     expect(parseNetworkProbeIntervalMinutes('abc')).toBeNull();
+  });
+});
+
+describe('network probe target aggregation helpers', () => {
+  it('derives aggregated target outcomes from source count, freshness, and packet loss', () => {
+    expect(probeTargetOutcome({ sourceCount: 2, stale: false, packetLossPercent: 0 })).toBe('ok');
+    expect(probeTargetOutcome({ sourceCount: 2, stale: false, packetLossPercent: 1.7 })).toBe('degraded');
+    expect(probeTargetOutcome({ sourceCount: 2, stale: true, packetLossPercent: 0 })).toBe('stale');
+    expect(probeTargetOutcome({ sourceCount: 0, stale: true, packetLossPercent: null })).toBe('noData');
+
+    expect(probeAggregateOutcomeTone('ok')).toBe('success');
+    expect(probeAggregateOutcomeTone('degraded')).toBe('warning');
+    expect(probeAggregateOutcomeTone('stale')).toBe('warning');
+    expect(probeAggregateOutcomeTone('noData')).toBe('neutral');
+    expect(probeAggregateOutcomeStatusKey('ok')).toBe('serversPage.probe.status.ok');
+    expect(probeAggregateOutcomeStatusKey('noData')).toBe('serversPage.probe.status.noData');
+  });
+
+  it('maps aggregated 24h history into chart series; zero latency breaks the line', () => {
+    const historyPoints = [
+      { time: '2026-11-17T10:00:00.000Z', latencyMs: 42, packetLossPercent: 0 },
+      { time: '2026-11-17T10:30:00.000Z', latencyMs: 0, packetLossPercent: 100 },
+      { time: '', latencyMs: 30, packetLossPercent: 0 },
+    ];
+    const latency = probeHistorySeries(historyPoints, 'latency', 'latency', 'Latency');
+    const loss = probeHistorySeries(historyPoints, 'packetLoss', 'loss', 'Packet loss');
+    expect(latency.points).toEqual([
+      { time: '2026-11-17T10:00:00.000Z', value: 42 },
+      { time: '2026-11-17T10:30:00.000Z', value: null },
+    ]);
+    expect(loss.points).toEqual([
+      { time: '2026-11-17T10:00:00.000Z', value: 0 },
+      { time: '2026-11-17T10:30:00.000Z', value: 100 },
+    ]);
+    expect(probeHistorySeries(undefined, 'latency', 'latency', 'Latency').points).toEqual([]);
   });
 });

@@ -79,6 +79,33 @@ export interface NetworkProbeServerResults {
   updatedAt: string | null;
 }
 
+/** 按目标聚合的探测摘要：所有当前探测源对某台服务器的最近结果。 */
+export interface NetworkProbeTargetResult {
+  serverId: string;
+  name: string;
+  address: string;
+  /** 当前该目标的有效探测源数量（自身不会探测自己）。 */
+  sourceCount: number;
+  /** 所有有效探测源延迟的平均值；无有效样本时为 null。 */
+  latencyMs: number | null;
+  /** 所有有结果源丢包率的平均值；无结果时为 null。 */
+  packetLossPercent: number | null;
+  /** 所有有结果源中的最大丢包率；无结果时为 null。 */
+  worstPacketLossPercent: number | null;
+  /** 该目标所有结果中的最新采样时间；无结果时为 null。 */
+  sampledAt: string | null;
+  /** 最新采样超出新鲜窗口，或完全没有结果。 */
+  stale: boolean;
+  /** 跨源聚合的最近 24 小时历史；仅 `history=1` 返回，无历史时缺省/空数组。 */
+  history?: NetworkProbeHistoryPoint[];
+}
+
+/** 设施详情页的按目标聚合视图：所有服务器各一条（无结果也保留空摘要）。 */
+export interface NetworkProbeTargetMatrix {
+  nodes: NetworkProbeTargetResult[];
+  updatedAt: string | null;
+}
+
 /** 概览 networkProbe 卡片的数据切片。 */
 export interface NetworkProbeCardData {
   nodes: NetworkProbeNode[];
