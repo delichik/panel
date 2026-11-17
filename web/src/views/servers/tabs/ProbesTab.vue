@@ -41,11 +41,11 @@ const columns = computed(() => [
 ]);
 
 /** 非探测节点返回 enabled=false：空态引导到设施配置，而不是伪造健康结果。 */
-const isProbeNode = computed(() => Boolean(data.value?.enabled && (data.value.nodes.length || data.value.results.length)));
+const isProbeNode = computed(() => Boolean(data.value?.enabled && ((data.value.nodes?.length ?? 0) || (data.value.results?.length ?? 0))));
 const rows = computed<NetworkProbeResult[]>(() => data.value?.results ?? []);
 
 function targetName(row: NetworkProbeResult) {
-  return data.value?.nodes.find((node) => node.serverId === row.targetServerId)?.name || row.targetAddress || row.targetServerId;
+  return data.value?.nodes?.find((node) => node.serverId === row.targetServerId)?.name || row.targetAddress || row.targetServerId;
 }
 
 function latencyText(row: NetworkProbeResult) {

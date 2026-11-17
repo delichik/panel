@@ -24,8 +24,8 @@ export interface NetworkProbeResult {
   received: number;
   /** ISO 时间；服务端截断到秒。 */
   sampledAt: string;
-  /** 稳定错误文本；空串表示本轮探测成功。 */
-  error: string;
+  /** 稳定错误文本；空串表示本轮探测成功；服务端空值会省略该字段。 */
+  error?: string;
   /** 采样时间超出新鲜窗口；预计算值，客户端不重算。 */
   stale: boolean;
   /** 最近 24 小时历史（仅 `GET /servers/{id}/network-probes?history=1` 返回）。 */

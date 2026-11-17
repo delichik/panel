@@ -148,8 +148,10 @@ interface TargetRow {
 const allTargetRows = computed<TargetRow[]>(() => {
   const data = sourceResults.value;
   if (!data) return [];
-  const nodesById = new Map(data.nodes.map((node) => [node.serverId, node]));
-  return data.results
+  const nodes = data.nodes ?? [];
+  const results = data.results ?? [];
+  const nodesById = new Map(nodes.map((node) => [node.serverId, node]));
+  return results
     .filter((result) => result.targetServerId !== data.serverId)
     .map((result) => {
       const node = nodesById.get(result.targetServerId);
@@ -230,7 +232,7 @@ async function load() {
     config.value = { ...nextConfig, ...normalizeNetworkProbeSettings(nextConfig) };
     matrix.value = nextMatrix;
     resetDraft();
-    const nodes = nextMatrix.nodes;
+    const nodes = nextMatrix.nodes ?? [];
     const nextSource = nodes.some((node) => node.serverId === sourceId.value)
       ? sourceId.value
       : nodes[0]?.serverId ?? '';
@@ -334,7 +336,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div
-    class="relative grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4 max-lg:h-auto max-lg:grid-rows-none"
+    class="relative grid h-full min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] gap-4 max-lg:h-auto max-lg:grid-rows-none"
     data-testid="network-probe-facility"
   >
     <LoadingOverlay v-if="loading && !config" :label="t('applicationsPage.networkProbeLoading')" />
@@ -346,10 +348,10 @@ onBeforeUnmount(() => {
     </EmptyState>
 
     <template v-else>
-      <div class="grid min-h-0 gap-4 lg:grid-cols-2 lg:items-start">
-        <!-- 区域一：探测范围（模式 + 探测节点）。 -->
+      <div class="grid gap-4">
+        <!-- 区域一：探测范围（模式 + 探测节点），与配置区上下堆叠。 -->
         <section
-          class="grid min-h-0 gap-3 rounded-xl border border-border bg-card p-4 lg:max-h-[20rem] lg:grid-rows-[auto_minmax(0,1fr)]"
+          class="grid gap-3 rounded-xl border border-border bg-card p-4"
           data-testid="network-probe-scope-section"
         >
           <div>
@@ -357,18 +359,18 @@ onBeforeUnmount(() => {
             <p class="m-0 mt-1 text-sm leading-6 text-muted-foreground">{{ t('applicationsPage.networkProbeScopeHint') }}</p>
           </div>
 
-          <div class="grid min-h-0 content-start gap-3 max-lg:content-normal">
+          <div class="grid content-start gap-3">
             <label class="grid gap-1 sm:max-w-xs">
               <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.networkProbeMode') }}</span>
               <Select v-model="draft.mode" :options="modeOptions" :disabled="saving" />
             </label>
 
-            <div v-if="draft.mode === 'selected'" class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-2 max-lg:grid-rows-none">
+            <div v-if="draft.mode === 'selected'" class="grid gap-2">
               <div>
                 <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.networkProbeSelectServers') }}</span>
                 <p class="m-0 mt-1 text-xs leading-5 text-muted-foreground">{{ t('applicationsPage.networkProbeSelectServersHint') }}</p>
               </div>
-              <div class="min-h-0 lg:overflow-y-auto lg:pr-1">
+              <div class="max-h-64 overflow-y-auto pr-1">
                 <ServerMultiPicker v-model="draft.serverIds" variant="compact" :servers="serverOptions" :label="t('applicationsPage.networkProbeSelectServers')" />
               </div>
             </div>

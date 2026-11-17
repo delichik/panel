@@ -43,6 +43,13 @@ describe('networkProbeFacilityApi', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/facility-apps/network-probe/results', expect.objectContaining({ method: 'GET' }));
   });
 
+  it('normalizes null matrix arrays', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ mode: 'all', nodes: null, results: null, updatedAt: null }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(networkProbeFacilityApi.results()).resolves.toEqual({ mode: 'all', nodes: [], results: [], updatedAt: null });
+  });
+
   it('surfaces stable contract error codes', async () => {
     const codes = ['network_probe_servers_required', 'network_probe_interval_invalid', 'network_probe_ping_count_invalid', 'network_probe_ping_timeout_invalid'];
     for (const code of codes) {

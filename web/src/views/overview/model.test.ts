@@ -24,6 +24,7 @@ import {
   percentTone,
   probeLatencyHistory,
   probeLossHistory,
+  probeTargetView,
   relativeTimeLabel,
   summarizeNodeCards,
   summarizeProbeResults,
@@ -220,6 +221,28 @@ describe('overview model', () => {
 
     expect(summarizeProbeResults([])).toMatchObject({ latencyMs: null, packetLossPercent: null, targetCount: 0, stale: true });
     expect(summarizeProbeResults([probe({ stale: true })]).stale).toBe(true);
+  });
+
+  it('treats a probe result with an omitted error field as successful', () => {
+    const result = probe({ error: undefined, received: 3 });
+    const view = probeTargetView(result);
+    expect(view.failed).toBe(false);
+    expect(view.latencyMs).toBe(40);
+    expect(view.packetLossPercent).toBe(0);
+
+    // 回归：error 被 JSON omitempty 省略时，概览卡片构建不能抛错清空整页 metric。
+    const cards = buildServerCards({
+      servers: [server({ id: 'edge' }), server({ id: 'core', name: 'core', host: '10.0.0.2' })],
+      metricsById: { edge: series(), core: series() },
+      metricsErrorIds: new Set(),
+      probeSourceId: 'edge',
+      probeResults: [result],
+      packageUpdatesById: {},
+      imageUpdatesById: {},
+      now: Date.parse('2026-11-16T07:01:00Z'),
+    });
+    expect(cards[0]!.metrics.cpuPercent).toBe(42.5);
+    expect(cards[1]!.probeAvailable).toBe(true);
   });
 
   it('builds cards with source aggregate history and target history', () => {

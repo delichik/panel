@@ -58,4 +58,18 @@ describe('serversApi', () => {
     await expect(serversApi.networkProbes('srv-main')).resolves.toEqual(payload);
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/servers/srv-main/network-probes', expect.any(Object));
   });
+
+  it('normalizes null probe arrays from older servers', async () => {
+    const payload = { serverId: 'srv-main', enabled: true, nodes: null, results: null, updatedAt: null };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: payload }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(serversApi.networkProbes('srv-main')).resolves.toEqual({
+      serverId: 'srv-main',
+      enabled: true,
+      nodes: [],
+      results: [],
+      updatedAt: null,
+    });
+  });
 });

@@ -111,6 +111,12 @@ export const serversApi = {
   /** 该节点作为探测源的最新结果与目标表；includeHistory 时附带最近 24h 历史。 */
   networkProbes(id: string, options?: ApiRequestOptions, includeHistory = false) {
     const query = includeHistory ? '?history=1' : '';
-    return apiClient.get<NetworkProbeServerResults>(`/servers/${encodeURIComponent(id)}/network-probes${query}`, options);
+    return apiClient.get<NetworkProbeServerResults>(`/servers/${encodeURIComponent(id)}/network-probes${query}`, options)
+      // 旧服务端/nil slice 可能返回 null；统一成数组，避免页面计算属性读 .length/.map 崩溃。
+      .then((result) => ({
+        ...result,
+        nodes: result.nodes ?? [],
+        results: result.results ?? [],
+      }));
   },
 };

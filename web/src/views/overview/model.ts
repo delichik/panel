@@ -188,7 +188,8 @@ export interface ProbeTargetView {
 }
 
 export function probeTargetView(result: NetworkProbeResult): ProbeTargetView {
-  const failed = result.error.trim() !== '' || result.received <= 0;
+  // 后端 error 字段 omitempty：成功结果不会带该字段，不能直接 trim()。
+  const failed = Boolean(result.error?.trim()) || result.received <= 0;
   return {
     targetServerId: result.targetServerId,
     latencyMs: failed || result.latencyMs <= 0 ? null : result.latencyMs,
