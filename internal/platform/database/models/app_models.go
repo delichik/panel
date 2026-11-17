@@ -818,15 +818,17 @@ func (*StorageSharePartition) ExtraIndexDDL() map[string][]string {
 
 // NetworkProbeConfig 是“网络探测”设施的单行配置。ID 固定为 network_probe；
 // Mode=all 表示所有节点都作为探测节点，selected 时仅 ServerIDs 内节点探测。
+// IntervalSeconds/PingCount/PingTimeoutSeconds 是 Panel 下发给 Agent 的探测节奏
+// 与单次 ping 参数；旧库升级时由 AutoMigrate 以默认值补齐。
 type NetworkProbeConfig struct {
-	ID        string    `orm:"primary_key"`
-	Mode      string    `orm:"not_null;default:'all'"`
-	ServerIDs []string  `orm:"json;not_null;default:'[]';column:server_ids_json"`
+	ID                 string    `orm:"primary_key"`
+	Mode               string    `orm:"not_null;default:'all'"`
+	ServerIDs          []string  `orm:"json;not_null;default:'[]';column:server_ids_json"`
 	IntervalSeconds    int       `orm:"not_null;default:60"`
 	PingCount          int       `orm:"not_null;default:3"`
 	PingTimeoutSeconds int       `orm:"not_null;default:2"`
-	Version   int       `orm:"not_null;default:1"`
-	UpdatedAt time.Time `orm:"not_null"`
+	Version            int       `orm:"not_null;default:1"`
+	UpdatedAt          time.Time `orm:"not_null"`
 }
 
 func (*NetworkProbeConfig) TableName() string { return "network_probe_configs" }

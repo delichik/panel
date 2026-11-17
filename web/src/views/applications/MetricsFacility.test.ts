@@ -97,23 +97,36 @@ afterEach(() => {
 });
 
 describe('metrics facility', () => {
-  it('loads and renders the current collection configuration', async () => {
+  it('loads and renders the current collection configuration in two independent sections', async () => {
     const wrapper = await mountFacility();
 
     expect(config).toHaveBeenCalledWith(expect.objectContaining({ signal: expect.anything() }));
     expect((wrapper.find('[data-testid="metrics-retention"]').element as HTMLInputElement).value).toBe('7');
     expect((wrapper.find('[data-testid="metrics-interval"]').element as HTMLInputElement).value).toBe('60');
-    expect(wrapper.text()).toContain('Collection configuration');
-    expect(wrapper.text()).toContain('All servers');
-    expect(wrapper.text()).toContain('Daily');
+    // 采集范围与采集配置是两个独立卡片区域。
+    const scope = wrapper.find('[data-testid="metrics-scope-section"]');
+    const configSection = wrapper.find('[data-testid="metrics-config-form"]');
+    expect(scope.exists()).toBe(true);
+    expect(configSection.exists()).toBe(true);
+    expect(scope.text()).toContain('Collection scope');
+    expect(scope.text()).toContain('All servers');
+    expect(configSection.text()).toContain('Collection configuration');
+    expect(configSection.text()).toContain('Daily');
+    expect(scope.find('[data-testid="metrics-retention"]').exists()).toBe(false);
     expect(saveButton(wrapper).attributes('disabled')).toBeDefined();
   });
 
-  it('requires at least one node when the scope is selected', async () => {
+  it('uses the compact server picker grid when the scope is selected', async () => {
     const wrapper = await mountFacility();
     await selectOption(0, 'Selected servers');
 
-    expect(wrapper.text()).toContain('Metrics nodes');
+    expect(wrapper.find('[data-testid="metrics-scope-section"]').text()).toContain('Metrics nodes');
+    const picker = wrapper.find('section[aria-label="Metrics nodes"]');
+    expect(picker.exists()).toBe(true);
+    expect(picker.classes()).toContain('sm:grid-cols-2');
+    expect(picker.classes()).toContain('xl:grid-cols-3');
+    expect(picker.findAll('button[aria-pressed]')).toHaveLength(servers.length);
+
     await saveButton(wrapper).trigger('click');
     await flushPromises();
 

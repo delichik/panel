@@ -820,6 +820,8 @@ export function installMockApi() {
     }
     if (url.pathname === '/api/v1/facility-apps/network-probe' && method(init) === 'GET') return json(getNetworkProbeConfig());
     if (url.pathname === '/api/v1/facility-apps/network-probe' && method(init) === 'PUT') {
+      // 参数校验（含 intervalSeconds 合法区间 60..3600；<60 返回 network_probe_interval_invalid 422）
+      // 集中在 mocks/networkProbe.ts，与前端契约共用 utils/networkProbe.ts 的规则。
       try {
         return json(saveNetworkProbeConfig(await body<NetworkProbeSaveInput>(init)));
       } catch (err) {

@@ -46,7 +46,7 @@
 | 产品范围、端到端用户旅程、全局非目标 | [产品范围与端到端验收](product-scope.md) |
 | 全局导航、慢网路由反馈、会话、布局、通用交互 | [界面外壳与交互约定](ui-shell-and-conventions.md) |
 | 任一具体页面、页面首次加载或用户操作 | [逐页面验收](ui-pages.md) |
-| 应用、挂载来源、应用文件、修订、部署、节点工作区布局、设施应用、存储共享、网络探测设施 `FAC-PRB-001..010`、指标设施 `FAC-MET-001..008`；规划失败 `APP-PLAN-001`、系统核实中 `APP-RUN-004` | [应用与设施应用](applications-and-facilities.md) |
+| 应用、挂载来源、应用文件、修订、部署、节点工作区布局、设施、存储共享、网络探测设施 `FAC-PRB-001..010`、指标设施 `FAC-MET-001..008`；规划失败 `APP-PLAN-001`、系统核实中 `APP-RUN-004` | [应用与设施应用](applications-and-facilities.md) |
 | desired/observed、协调 Job、统一追加活动日志、任务、运行事件；规划失败隔离 `ORCH-PLAN-006`、启动稳定观察 `ORCH-CTRL-007`；RunEngine Phase A `ENG-RUN-001..005`、`ENG-RET-001`、`TASK-DISPATCH-001..003` | [协调、任务与运行事件](orchestration-and-tasks.md) |
 | 容器、镜像、网络、卷、资源缓存与操作队列 | [容器与资源](containers-and-resources.md) |
 | 登录、账号、运行时设置（指标保留/采集间隔/清理计划已移出，见 `SET-RUN-021`）、概览、系统版本 | [身份、设置与系统](identity-settings-system.md) |
@@ -77,6 +77,8 @@
 失败运行日志与有界降级见 [ORCH-CTRL-008](orchestration-and-tasks.md)；设施逐节点部署、按需请求错误诊断见 [FAC-RP-012/013](applications-and-facilities.md)。
 
 指标采集与保留从设置页移出为**指标设施**（`metrics`）：配置读写 `GET/PUT /api/v1/facility-apps/metrics`、采集节点选择与按节点下发、采集间隔对齐生效、保留清理、旧运行时设置播种与设置页移除、服务器删除配置修剪、失败语义见 [FAC-MET-001..008](applications-and-facilities.md)；设施目录与页面行为见 [UI-FAC-014/019](ui-pages.md)、[UI-SRV-008](ui-pages.md)、[UI-SET-002](ui-pages.md)；设置接口移除三项见 [SET-RUN-021](identity-settings-system.md)，容器上报间隔仍由 [SET-RUN-014](identity-settings-system.md) 约束；表/路由基线见 [项目覆盖基线](coverage-matrix.md)、[API 路由逐项清单](api-route-inventory.md)。
+
+设施命名、布局与探测节拍（2026-11-17）：导航、路由标题与用户指南的用户可见产品名由「设施应用 / Facility Apps」改为「设施 / Facilities」（路由路径 `/applications/facility-apps` 不变）；网络探测与指标设施页把「范围」与「配置」拆成两个独立区域，服务器选择器改为紧凑网格；网络探测间隔改为分钟输入（1..60 分钟、默认 1，保存换算 `intervalSeconds=分钟×60`，Panel 校验范围 60..3600 秒），概览服务器卡片的镜像更新徽标改用镜像语义图标。无新增路由/表/后台任务，见 [UI-FAC-014/015/017/018/019](ui-pages.md)、[UI-OVR-017](ui-pages.md)、[UI-SHELL-014](ui-shell-and-conventions.md)、[FAC-PRB-003/004/010](applications-and-facilities.md)、[FAC-MET-003](applications-and-facilities.md)、[AGT-RPT-008](servers-security-packages.md)。
 
 修改下列对象时，至少检查对应消费者：
 

@@ -41,7 +41,10 @@ export interface NetworkProbeConfig extends NetworkProbeSettings {
 
 /** 探测节拍参数；旧 payload 缺省时由服务端按默认值补齐（interval=60、count=3、timeout=2）。 */
 export interface NetworkProbeSettings {
-  /** 探测周期（秒），合法区间 10..3600。 */
+  /**
+   * 探测周期（后台契约单位为秒），合法区间 60..3600（即 1..60 分钟）。
+   * 界面以整数分钟输入（默认 1 分钟），保存时换算为 intervalSeconds = 分钟 × 60。
+   */
   intervalSeconds: number;
   /** 每次探测发送的 ping 包数，合法区间 1..10。 */
   pingCount: number;

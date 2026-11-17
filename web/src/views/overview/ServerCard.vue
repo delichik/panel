@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useRouter } from 'vue-router';
-import { ChevronRight, Image as ImageIcon, Package } from '@lucide/vue';
+import { ChevronRight, Layers, Package } from '@lucide/vue';
 import Badge from '@/components/ui/Badge.vue';
 import IconButton from '@/components/ui/IconButton.vue';
 import { useI18n } from '@/i18n';
@@ -257,7 +257,8 @@ function openImages() {
           data-testid="image-updates-badge"
           @click.stop="openImages"
         >
-          <Badge tone="info"><ImageIcon class="size-3" aria-hidden="true" />{{ card.imageUpdates }}</Badge>
+          <!-- 容器镜像更新：用 Layers（镜像层）语义图标，避免与图片/相册图标或 Package 软件包徽标混淆。 -->
+          <Badge tone="info"><Layers class="size-3" aria-hidden="true" />{{ card.imageUpdates }}</Badge>
         </button>
         <IconButton size="sm" :label="t('common.details')" data-testid="server-card-details" @click.stop="openDetails">
           <ChevronRight aria-hidden="true" />

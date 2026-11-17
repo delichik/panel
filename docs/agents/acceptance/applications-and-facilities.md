@@ -645,22 +645,22 @@
 
 ### FAC-PRB-003 配置保存与校验
 
-- **前置**：认证用户提交 `PUT /api/v1/facility-apps/network-probe`，body 为 `{mode, serverIds, intervalSeconds?, pingCount?, pingTimeoutSeconds?}`；旧客户端可省略后三个参数。
+- **前置**：认证用户提交 `PUT /api/v1/facility-apps/network-probe`，body 为 `{mode, serverIds, intervalSeconds?, pingCount?, pingTimeoutSeconds?}`；旧客户端可省略后三个参数。设施页表单以**分钟**输入探测间隔（1..60 分钟、默认 1 分钟，见 `UI-FAC-015`），保存时换算为 `intervalSeconds = 分钟 × 60`；设施 API 仍以秒存储和下发。
 - **动作**：校验、归一化、去重并保存配置。
-- **结果**：`mode` 只允许 `all|selected`（`networkprobe.ModeAll/ModeSelected`）。探测参数按以下规则归一化后写入同一单行（列 `interval_seconds`/`ping_count`/`ping_timeout_seconds`）：`intervalSeconds` 为 0 或缺省时取默认 60，否则必须在 10..3600；`pingCount` 为 0 或缺省时取默认 3，否则必须在 1..10；`pingTimeoutSeconds` 为 0 或缺省时取默认 2，否则必须在 1..10。`selected` 时 `serverIds` 必须非空且每个 ID 当前存在，保存前去空、去重、按稳定服务器 ID 保留。成功写单行配置并 `version` 递增、更新 `updated_at`，返回保存后的完整配置（含归一化后的 mode/serverIds/intervalSeconds/pingCount/pingTimeoutSeconds/version/updatedAt）。
+- **结果**：`mode` 只允许 `all|selected`（`networkprobe.ModeAll/ModeSelected`）。探测参数按以下规则归一化后写入同一单行（列 `interval_seconds`/`ping_count`/`ping_timeout_seconds`）：`intervalSeconds` 为 0 或缺省时取默认 60（1 分钟），否则必须在 60..3600（即 1..60 分钟）；`pingCount` 为 0 或缺省时取默认 3，否则必须在 1..10；`pingTimeoutSeconds` 为 0 或缺省时取默认 2，否则必须在 1..10。`selected` 时 `serverIds` 必须非空且每个 ID 当前存在，保存前去空、去重、按稳定服务器 ID 保留。成功写单行配置并 `version` 递增、更新 `updated_at`，返回保存后的完整配置（含归一化后的 mode/serverIds/intervalSeconds/pingCount/pingTimeoutSeconds/version/updatedAt）。
 - **失败**：非法 mode 返回 `network_probe_mode_invalid`；参数越界（含负数）返回 `network_probe_interval_invalid`、`network_probe_ping_count_invalid`、`network_probe_ping_timeout_invalid`；`selected` 空集合返回 `network_probe_servers_required`；不存在的服务器 ID 返回 `network_probe_server_not_found`。任一校验失败不得写入或 bump version，也不得部分保存；参数校验顺序固定为 mode → 三个参数 → selected 集合，便于稳定断言。
-- **边界**：0/缺省表示“使用默认值”而不是“显式 0”（旧客户端兼容）；负数与越界在保存路径必须拒绝而不是静默夹紧。读取侧对旧 alpha 行、手工数据或越界值做防御性归一化（`loadConfig` 回落到默认 60/3/2），不得因旧数据把非法探测节奏下发给 Agent，也不得让读取失败。`all` 模式忽略并保存空 `serverIds`（归一化后为空数组），但切到 `selected` 时仍需重新提供非空集合；重复 ID 静默去重而不是报错；删除服务器后的配置修剪见 `FAC-PRB-007`。
+- **边界**：0/缺省表示“使用默认值”而不是“显式 0”（旧客户端兼容）；负数与越界在保存路径必须拒绝而不是静默夹紧。读取侧对旧 alpha 行、手工数据或越界值做防御性归一化（`loadConfig` 回落到默认 60/3/2），旧版本可能保存的 10..59 秒 `interval` 同样回落默认 60 秒（1 分钟），不得因旧数据把非法探测节奏下发给 Agent，也不得让读取失败。`all` 模式忽略并保存空 `serverIds`（归一化后为空数组），但切到 `selected` 时仍需重新提供非空集合；重复 ID 静默去重而不是报错；删除服务器后的配置修剪见 `FAC-PRB-007`。
 - **不变量**：配置是单行 upsert，不存在同一设施多行；保存成功不要求探测目标立即重算（目标仍在下一次配置快照/下发时生效，见 `FAC-PRB-004`）；参数值不参与权限或目标选择语义。
-- **验证**：handler/service 校验与归一化测试（三参数 0/缺省→默认、边界值 10/3600/1/10、越界与负数错误码、失败不写库、版本递增、旧客户端省略字段）、读取侧坏数据归一化测试、i18n 错误码测试。
+- **验证**：handler/service 校验与归一化测试（三参数 0/缺省→默认、边界值 60/3600/1/10、旧数据 10..59 秒回落默认 60、越界与负数错误码、失败不写库、版本递增、旧客户端省略字段）、读取侧坏数据归一化测试、i18n 错误码测试。
 
 ### FAC-PRB-004 配置下发与周期探测
 
 - **前置**：Panel 已与某兼容 Agent 建立 report stream；探测设施已保存配置。
 - **动作**：Panel 周期性下发 `AgentReportControl.probe`（`AgentProbeConfig`：`enabled`、`intervalSeconds`、`pingCount`、`pingTimeoutSeconds`、`targets[]`），Agent 侧按参数执行 ping 并上报结果。
-- **结果**：探测节点收到自己的目标列表（`AgentProbeTarget{serverId,address,name}`）与设施探测参数；探测周期使用配置的 `intervalSeconds`（默认 60 秒，范围 10..3600，见 `FAC-PRB-010`），**不再固定 60 秒**；`pingCount`/`pingTimeoutSeconds` 使用配置值（默认 3/2，范围 1..10）。Agent 配置整体替换，支持 disabled 或清空目标；配置变化在下一轮 stream 下发后生效（无需重连或重启）。Agent 部署步骤必须确保目标机系统 `ping` 可用（`AGT-DEP-008`：已有则只探测，缺失则安装 `iputils-ping` 并验证），因此探测能力不依赖运维手工装包。Agent 侧并发上限 8；单目标兜底超时按 `Count*TimeoutSeconds+2s` 计算且不低于 3 秒（`internal/agent/probe` 的 `Options.targetTimeout`），执行 `LC_ALL=C ping -n -c <pingCount> -W <pingTimeoutSeconds> <addr>`（IPv6 用 `-6`），逐目标回报平均延迟、丢包率、发送/接收计数和错误（`AGT-RPT-008`）。
-- **失败**：旧 Agent 忽略 `probe` 字段且不上报 `probes`，Panel 不得清空其历史观测，只保持最后一次结果并按 stale 展示；旧 Agent 只理解 `interval_seconds`，对新字段忽略，仍按自身 3 包/2 秒逻辑探测（协议向后兼容，不得因新字段改变旧 Agent 行为）。旧 Panel 不下发 `ping_count`/`ping_timeout_seconds` 时，新 Agent 必须按 0 处理并回退默认 3 包/2 秒；`intervalSeconds` 缺省或 ≤0 时 Agent 兜底默认 60 秒。探测配置读取失败时按 disabled 下发（只记录日志、不中断指标流），Agent 停止该节点探测，设施恢复后下一轮配置重新启用；服务器已从 Panel 删除时同样按 disabled 下发，不回退旧目标；单个目标 ping 失败不阻断其他目标与指标上报。
-- **不变量**：探测只依赖 Agent report stream，不新增 Panel→Agent 的独立 RPC、不新增后台 ticker；探测节点自身不再是目标；非探测节点即使收到空目标也不得执行 ping；Agent 不得自行放大或改写 Panel 已归一化的参数（只做防御性夹紧）。
-- **验证**：`reportHub` 配置解析（含三参数默认/夹紧）/整体替换/disabled/广播范围测试（`internal/agent/rpc/report_test.go`）；`internal/agent/probe` 的 `Options.Normalize`、目标超时公式、动态 `-c`/`-W` 命令参数、并发与输出解析测试；collector 配置闭包包含三字段的测试。
+- **结果**：探测节点收到自己的目标列表（`AgentProbeTarget{serverId,address,name}`）与设施探测参数；探测周期使用配置的 `intervalSeconds`（默认 60 秒即 1 分钟，范围 60..3600 秒即 1..60 分钟，见 `FAC-PRB-010`），**不再固定 60 秒**；`pingCount`/`pingTimeoutSeconds` 使用配置值（默认 3/2，范围 1..10）。Agent 配置整体替换，支持 disabled 或清空目标；配置变化在下一轮 stream 下发后生效（无需重连或重启）。Agent 部署步骤必须确保目标机系统 `ping` 可用（`AGT-DEP-008`：已有则只探测，缺失则安装 `iputils-ping` 并验证），因此探测能力不依赖运维手工装包。Agent 侧并发上限 8；单目标兜底超时按 `Count*TimeoutSeconds+2s` 计算且不低于 3 秒（`internal/agent/probe` 的 `Options.targetTimeout`），执行 `LC_ALL=C ping -n -c <pingCount> -W <pingTimeoutSeconds> <addr>`（IPv6 用 `-6`），逐目标回报平均延迟、丢包率、发送/接收计数和错误（`AGT-RPT-008`）。
+- **失败**：旧 Agent 忽略 `probe` 字段且不上报 `probes`，Panel 不得清空其历史观测，只保持最后一次结果并按 stale 展示；旧 Agent 只理解 `interval_seconds`，对新字段忽略，仍按自身 3 包/2 秒逻辑探测（协议向后兼容，不得因新字段改变旧 Agent 行为）。旧 Panel 不下发 `ping_count`/`ping_timeout_seconds` 时，新 Agent 必须按 0 处理并回退默认 3 包/2 秒；`intervalSeconds` 缺省或 ≤0 时 Agent 兜底默认 60 秒；Agent 不修改探测间隔的上下界：旧 Panel 若下发 10..59 秒，Agent 按原值执行（协议向后兼容），新 Panel 读取侧已把旧数据 10..59 秒归一回默认 60 秒，因此新 Panel 不再下发亚分钟值。探测配置读取失败时按 disabled 下发（只记录日志、不中断指标流），Agent 停止该节点探测，设施恢复后下一轮配置重新启用；服务器已从 Panel 删除时同样按 disabled 下发，不回退旧目标；单个目标 ping 失败不阻断其他目标与指标上报。
+- **不变量**：探测只依赖 Agent report stream，不新增 Panel→Agent 的独立 RPC、不新增后台 ticker；探测节点自身不再是目标；非探测节点即使收到空目标也不得执行 ping；Agent 不得自行放大或改写 Panel 已归一化的参数（仅对 `pingCount`/`pingTimeoutSeconds` 做防御性夹紧，探测间隔缺失或 ≤0 才兜底默认 60 秒，不做上下界夹紧）。
+- **验证**：`reportHub` 配置解析（含三参数默认/夹紧与探测间隔缺省/≤0 兜底 60 秒）/整体替换/disabled/广播范围测试（`internal/agent/rpc/report_test.go`）；`internal/agent/probe` 的 `Options.Normalize`、目标超时公式、动态 `-c`/`-W` 命令参数、并发与输出解析测试；collector 配置闭包包含三字段的测试。
 
 ### FAC-PRB-005 结果上报、落库与新鲜度
 
@@ -668,7 +668,7 @@
 - **动作**：Panel 保存探测结果并在读取时判定新鲜度。
 - **结果**：`sampleAt` UTC 截断到秒；同一 `source_server_id` 的报告在单事务内先删除该源的全部旧行，再按 `(source,target)` upsert 本次所有目标结果，保证每个 `(source,target)` 只有最新一行；`target` 为空或等于 source 的结果被丢弃；读取时超过新鲜度阈值的结果标记 `stale=true`，阈值按当前配置动态计算为 `max(5min, 3×intervalSeconds)`（`networkprobe.ResultFreshFor` 与 `freshnessFor`，见 `FAC-PRB-010`），不删除旧行、不产生空矩阵。
 - **失败**：保存失败只记录日志，不中断 report stream（`AGT-RPT-003`）；目标在保存瞬间已不存在不报错，读取时按当前服务器表过滤掉悬空目标，不得把它显示为有效目标。
-- **边界**：同一轮并发/重复上报按“后到覆盖”收敛；旧 Agent 不上报时保留最后一次结果并按当前阈值标 stale；无任何观测时 `results` 为空数组、`updatedAt=null`。探测周期调大（最长 3600 秒）后阈值随之放大为 3 倍周期（最长 3 小时），避免刚上报的结果立即显示过期；周期调小后按新阈值重新判定，阈值本身是读取期派生、不写库。读取侧对旧配置行的越界 interval 先归一化再计算阈值。
+- **边界**：同一轮并发/重复上报按“后到覆盖”收敛；旧 Agent 不上报时保留最后一次结果并按当前阈值标 stale；无任何观测时 `results` 为空数组、`updatedAt=null`。探测周期调大（最长 3600 秒）后阈值随之放大为 3 倍周期（最长 3 小时），避免刚上报的结果立即显示过期；周期调小后按新阈值重新判定，阈值本身是读取期派生、不写库。读取侧对旧配置行的越界 interval（含旧版本 10..59 秒）先归一化回默认 60 秒再计算阈值。
 - **不变量**：结果行只表达最新观测，不保留历史曲线（24 小时历史另存 `history_json`，见 `FAC-PRB-009`）；读取不现场探测；`stale` 不得进入持久化字段。
 - **验证**：`SaveReported` 事务删除+批量插入/时间截断/重复上报收敛测试，`Matrix`/`ServerResults`/`ServerResultsHistory` 的 stale 与目标过滤测试（5 分钟下限、interval=120s→6 分钟、interval=3600s→3 小时、旧配置行归一化）。
 
@@ -703,21 +703,21 @@
 
 ### FAC-PRB-009 24 小时探测历史
 
-- **前置**：探测节点按设施配置的探测周期上报结果（默认 60 秒，可配置 10..3600，见 `FAC-PRB-004/010`；**不再写死 60 秒**）；读取方请求 `GET /api/v1/servers/{id}/network-probes?history=1`（也接受 `history=true`）。
+- **前置**：探测节点按设施配置的探测周期上报结果（默认 60 秒即 1 分钟，可配置 1..60 分钟即 60..3600 秒，见 `FAC-PRB-004/010`；**不再写死 60 秒**）；读取方请求 `GET /api/v1/servers/{id}/network-probes?history=1`（也接受 `history=true`）。
 - **动作**：Panel 落库最新观测的同时维护该 `(source,target)` 的 24 小时桶历史。
 - **结果**：`network_probe_results.history_json` 保存 `[{"t":<unix 秒桶起点>,"l":<延迟毫秒>,"p":<丢包百分比>}]`，按 30 分钟桶（`1800s`）聚合：同一桶内后一次上报替换该桶，跨桶追加；只保留距本次 `sampleAt` 最近 24 小时内、最多 48 项，时间升序。`history=1` 时每个 `results[]` 附带 `history: [{time,latencyMs,packetLossPercent}]`（RFC3339 时间、延迟毫秒、丢包百分比）；不带该参数时响应与改造前一致，`Matrix`/`CardData` 永不返回 `history`。失败样本（`error` 非空或 `received=0`）在桶历史中记延迟 0、丢包 100；成功样本按本次上报的延迟与丢包值记录。
 - **失败**：旧数据或旧 Agent 没有历史时 `history=[]` 或字段缺省，读取不得报错；非法 `history` 值按未请求处理；历史合并失败只影响该 source 的历史（记录日志），不得阻断最新结果落库或指标上报。
 - **不变量**：历史只由服务端从已上报观测派生，不由前端拼接；桶宽固定 30 分钟，与探测周期无关（周期大于 30 分钟时每桶最多一次上报，周期小于 30 分钟时同桶替换）；不新增表，`history_json` 为同表列；服务器删除随结果行一并清理历史。
-- **验证**：`networkprobe` 服务测试（同桶替换、跨桶追加、24h 剪枝、48 上限、失败样本语义、默认不带 history、探测周期 10s/3600s 下历史桶行为不变）、handler 测试（`history=1` 传参）、`models`/迁移测试、前端设施详情历史条模型测试（`UI-FAC-018`）。
+- **验证**：`networkprobe` 服务测试（同桶替换、跨桶追加、24h 剪枝、48 上限、失败样本语义、默认不带 history、探测周期 60s/3600s 下历史桶行为不变）、handler 测试（`history=1` 传参）、`models`/迁移测试、前端设施详情历史条模型测试（`UI-FAC-018`）。
 
 ### FAC-PRB-010 探测参数配置（周期/包数/超时）
 
 - **触发入口**：认证用户在设施配置页提交 `PUT /api/v1/facility-apps/network-probe`（表单见 `UI-FAC-015`），或读取 `GET /api/v1/facility-apps/network-probe`；保存后由既有 Agent report stream 下发给探测节点。
 - **前置**：探测设施已启用或即将启用；调用方已认证；系统 `ping` 已由 Agent 部署步骤保证（`AGT-DEP-008`）。
-- **成功**：配置持久化三列 `interval_seconds`/`ping_count`/`ping_timeout_seconds`，默认 60/3/2；保存时按 `FAC-PRB-003` 归一化并 `version`+1、更新 `updated_at`，返回完整配置；探测节点在下一轮 stream 更新后按新周期与新的包数/单包超时执行 ping，无需重连或重启 Agent；Panel 读取侧对旧行越界值防御性回落默认值，再计算结果新鲜度 `max(5min, 3×intervalSeconds)` 与下发参数。
-- **失败**：`intervalSeconds` 不在 10..3600 返回 `network_probe_interval_invalid`；`pingCount` 不在 1..10 返回 `network_probe_ping_count_invalid`；`pingTimeoutSeconds` 不在 1..10 返回 `network_probe_ping_timeout_invalid`；任一失败不写库、不 bump version、不下发新参数；Agent 收到非法/缺失参数时自行夹紧或回退默认（`FAC-PRB-004`），不得让探测协程崩溃或无限拖住。
-- **边界**：0 与缺省（旧客户端/旧 Panel）表示“用默认值”，不是合法显式值；负数与越界只允许在保存路径拒绝，读取路径回落到默认值，不得让旧数据导致读取失败。探测周期影响上报频率与 stale 阈值，但不改变 30 分钟历史桶宽（`FAC-PRB-009`）；周期小于 30 秒时可加快故障发现，周期大于 5 分钟时 stale 阈值按 3 倍周期放大。服务器数量超过 100 台时目标数量随之增大，设施详情仍按探测源纵向列表逐目标展示（容器内部纵向滚动），不得改写为横向矩阵或整页横向滚动（`UI-FAC-018`）。旧 Agent 忽略新字段时保持其自身 3 包/2 秒口径，探测仍可用但不反映新配置；旧 Panel 不下发新字段时新 Agent 回退默认。
-- **验证点**：`internal/modules/networkprobe` 服务保存/读取测试（默认值、边界值、越界与负数错误码、失败不写库、版本递增、旧数据归一化）、`ReportConfig` 下发三参数测试；`internal/agent/rpc/report_test.go` 配置解析（默认/夹紧/旧 Panel 缺省）与 `internal/agent/probe/probe_test.go`（`Options.Normalize`、`Count*Timeout+2s` 兜底超时、动态 `-c`/`-W`）；前端 `NetworkProbeFacility` 表单单测（三字段缺省/范围/脏检测/保存 payload）与结果列表/历史条测试。
+- **成功**：配置持久化三列 `interval_seconds`/`ping_count`/`ping_timeout_seconds`，默认 60/3/2；保存时按 `FAC-PRB-003` 归一化并 `version`+1、更新 `updated_at`，返回完整配置；探测节点在下一轮 stream 更新后按新周期与新的包数/单包超时执行 ping，无需重连或重启 Agent；Panel 读取侧对旧行越界值防御性回落默认值（含旧版本 10..59 秒 interval 回落 60 秒），再计算结果新鲜度 `max(5min, 3×intervalSeconds)` 与下发参数。
+- **失败**：`intervalSeconds` 不在 60..3600（1..60 分钟）返回 `network_probe_interval_invalid`（错误码不变，中文提示「探测间隔必须在 1 到 60 分钟之间」）；`pingCount` 不在 1..10 返回 `network_probe_ping_count_invalid`；`pingTimeoutSeconds` 不在 1..10 返回 `network_probe_ping_timeout_invalid`；任一失败不写库、不 bump version、不下发新参数；Agent 收到非法/缺失的 `pingCount`/`pingTimeoutSeconds` 时自行夹紧，探测间隔缺失或 ≤0 时回退默认 60 秒且不做上下界夹紧（`FAC-PRB-004`），不得让探测协程崩溃或无限拖住。
+- **边界**：0 与缺省（旧客户端/旧 Panel）表示“用默认值”，不是合法显式值；前端表单按分钟输入（1..60，默认 1）并在保存时换算为秒，读取时 `分钟 = max(1, 四舍五入(intervalSeconds/60))`，旧 alpha 行 10..59 秒在读取侧归一回默认 60 秒；负数与越界只允许在保存路径拒绝，读取路径回落到默认值，不得让旧数据导致读取失败。探测周期影响上报频率与 stale 阈值，但不改变 30 分钟历史桶宽（`FAC-PRB-009`）；周期越短故障发现越快（最短 1 分钟），周期大于 5 分钟时 stale 阈值按 3 倍周期放大。服务器数量超过 100 台时目标数量随之增大，设施详情仍按探测源纵向列表逐目标展示（容器内部纵向滚动），不得改写为横向矩阵或整页横向滚动（`UI-FAC-018`）。旧 Agent 忽略新字段时保持其自身 3 包/2 秒口径，探测仍可用但不反映新配置；旧 Panel 不下发新字段时新 Agent 回退默认。
+- **验证点**：`internal/modules/networkprobe` 服务保存/读取测试（默认值、边界值 60/3600、旧数据 10..59 秒回落、越界与负数错误码、失败不写库、版本递增、旧数据归一化）、`ReportConfig` 下发三参数测试；`internal/agent/rpc/report_test.go` 配置解析（默认/缺省或 ≤0 兜底 60 秒/旧 Panel 缺省，Agent 不对间隔做上下界夹紧）与 `internal/agent/probe/probe_test.go`（`Options.Normalize`、`Count*Timeout+2s` 兜底超时、动态 `-c`/`-W`）；前端 `NetworkProbeFacility` 表单单测（分钟默认 1/范围 1..60/秒↔分钟换算/脏检测/保存 payload `intervalSeconds=分钟×60`）与结果列表/历史条测试。
 
 ## 10. 指标设施
 
@@ -750,7 +750,7 @@
 - **成功**：`mode` 只允许 `all|selected`；`mode=selected` 时 `serverIds` 必须非空、每项当前存在，保存前去空白、去重、按稳定服务器 ID 升序；`retentionDays` 必须 ≥1；`collectionIntervalSeconds` 必须 ≥1；`cleanupSchedule` 只允许 `hourly|daily|weekly`。`mode=all` 忽略并保存空 `serverIds`（归一化为 `[]`）。校验通过后单行 upsert，`version = 上次 version + 1`、更新 `updated_at`，返回保存后的完整配置。
 - **失败**：非法 mode 返回 `metrics_facility_mode_invalid`；`selected` 空集合返回 `metrics_facility_servers_required`；不存在的服务器 ID 返回 `metrics_facility_server_not_found`；`retentionDays < 1` 返回 `metrics_facility_retention_invalid`；`collectionIntervalSeconds < 1` 返回 `metrics_facility_interval_invalid`；`cleanupSchedule` 非法返回 `metrics_facility_cleanup_schedule_invalid`。任一校验失败不得写库、不得 bump `version`、不得部分保存。
 - **边界**：与网络探测不同，保存路径中的 `0` 不是“使用默认值”而是非法值（默认值只用于从未保存的读取与迁移播种，见 `FAC-MET-001/006`）；重复服务器 ID 静默去重而不是报错；`mode=all` 时即使提交了 `serverIds` 也归一化为空数组；读取侧对旧行/手工数据的非法值做防御性归一化，不得让读取失败或把非法节奏下发给 Agent。
-- **不变量**：配置恒为单行 upsert；保存成功不要求立即重算指标历史（间隔在对齐落库路径生效，见 `FAC-MET-004`）；保存成功后使服务端 3 秒 TTL 配置快照失效，下一次 stream 读取到新值。
+- **不变量**：配置恒为单行 upsert；保存成功不要求立即重算指标历史（间隔在对齐落库路径生效，见 `FAC-MET-004`）；保存成功后使服务端 3 秒 TTL 配置快照失效，下一次 stream 读取到新值。设施页把「采集范围」与「采集配置」拆成两个独立区域、节点选择器改为紧凑网格（`UI-FAC-019`，不改变本条字段、校验、payload 与归一化语义）。
 - **验证点**：`metricsfacility` handler/service 的归一化与错误码测试（`TestSaveValidationErrors`、`TestSaveAllModeClearsServerIDsAndBumpsVersion`、`TestSaveSelectedModeNormalizesServerIDs`、`TestHandlerMapsValidationErrors`、`TestValidationErrorCodesHaveChineseTranslations`；覆盖六类错误码、失败不写库、`version` 递增、`all` 忽略 serverIds、`selected` 空集合、重复 ID 去重、读取侧坏数据归一化）。
 
 ### FAC-MET-004 采集间隔与对齐生效

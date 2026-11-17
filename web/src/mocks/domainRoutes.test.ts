@@ -488,11 +488,12 @@ describe('domain mock routes', () => {
 
   it('serves network probe configuration, matrix, and per-node results on real routes', async () => {
     const config = await (await fetch('/api/v1/facility-apps/network-probe')).json();
-    expect(config.data).toMatchObject({ mode: 'all', serverIds: [], version: expect.any(Number) });
     expect(config.data).toMatchObject({
       mode: 'all',
       serverIds: [],
       intervalSeconds: 60,
+      pingCount: 3,
+      pingTimeoutSeconds: 2,
       version: expect.any(Number),
     });
 
@@ -502,14 +503,30 @@ describe('domain mock routes', () => {
       body: JSON.stringify({ mode: 'all', serverIds: [] }),
     });
     expect(legacy.status).toBe(200);
+    expect((await legacy.json()).data).toMatchObject({ intervalSeconds: 60, pingCount: 3, pingTimeoutSeconds: 2 });
 
     const invalidSettings: Array<{ body: Record<string, unknown>; code: string }> = [
+      // 探测间隔已改为最小 1 分钟：59 秒非法，60 秒合法。
+      { body: { mode: 'all', serverIds: [], intervalSeconds: 59 }, code: 'network_probe_interval_invalid' },
+      { body: { mode: 'all', serverIds: [], intervalSeconds: 3601 }, code: 'network_probe_interval_invalid' },
+      { body: { mode: 'all', serverIds: [], pingCount: 0 }, code: 'network_probe_ping_count_invalid' },
+      { body: { mode: 'all', serverIds: [], pingCount: 11 }, code: 'network_probe_ping_count_invalid' },
+      { body: { mode: 'all', serverIds: [], pingTimeoutSeconds: 0 }, code: 'network_probe_ping_timeout_invalid' },
+      { body: { mode: 'all', serverIds: [], pingTimeoutSeconds: 11 }, code: 'network_probe_ping_timeout_invalid' },
     ];
     for (const item of invalidSettings) {
       const response = await fetch('/api/v1/facility-apps/network-probe', { method: 'PUT', body: JSON.stringify(item.body) });
       expect(response.status, item.code).toBe(422);
       expect((await response.json()).error.code).toBe(item.code);
     }
+
+    // 下界 60 秒（1 分钟）必须被接受。
+    const minimum = await fetch('/api/v1/facility-apps/network-probe', {
+      method: 'PUT',
+      body: JSON.stringify({ mode: 'all', serverIds: [], intervalSeconds: 60 }),
+    });
+    expect(minimum.status).toBe(200);
+    expect((await minimum.json()).data).toMatchObject({ intervalSeconds: 60 });
 
     const rejected = await fetch('/api/v1/facility-apps/network-probe', {
       method: 'PUT',
@@ -527,16 +544,18 @@ describe('domain mock routes', () => {
 
     const saved = await fetch('/api/v1/facility-apps/network-probe', {
       method: 'PUT',
-      body: JSON.stringify({ mode: 'selected', serverIds: ['srv-edge-sgp'] }),
+      body: JSON.stringify({ mode: 'selected', serverIds: ['srv-edge-sgp'], intervalSeconds: 120, pingCount: 5, pingTimeoutSeconds: 4 }),
     });
     expect(saved.status).toBe(200);
-    expect((await saved.json()).data).toMatchObject({ mode: 'selected', serverIds: ['srv-edge-sgp'] });
     expect((await saved.json()).data).toMatchObject({
       mode: 'selected',
       serverIds: ['srv-edge-sgp'],
       intervalSeconds: 120,
+      pingCount: 5,
+      pingTimeoutSeconds: 4,
     });
     const persisted = await (await fetch('/api/v1/facility-apps/network-probe')).json();
+    expect(persisted.data).toMatchObject({ intervalSeconds: 120, pingCount: 5, pingTimeoutSeconds: 4 });
 
     const matrix = await (await fetch('/api/v1/facility-apps/network-probe/results')).json();
     expect(matrix.data.mode).toBe('selected');
@@ -548,6 +567,8 @@ describe('domain mock routes', () => {
     expect(source.data.nodes.some((node: { serverId: string }) => node.serverId === 'srv-core-fra')).toBe(true);
     expect(source.data.results.every((result: { sourceServerId: string }) => result.sourceServerId === 'srv-edge-sgp')).toBe(true);
 
+    // includeHistory=true 时必须附带 24h 历史点。
+    const withHistory = await (await fetch('/api/v1/servers/srv-edge-sgp/network-probes?history=1')).json();
     expect(withHistory.data.results.every((result: { history?: unknown[] }) => Array.isArray(result.history) && result.history.length > 0)).toBe(true);
 
     const nonProbe = await (await fetch('/api/v1/servers/srv-core-fra/network-probes')).json();

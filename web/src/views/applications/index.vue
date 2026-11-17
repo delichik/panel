@@ -2728,7 +2728,7 @@ onBeforeUnmount(() => {
     />
   </ConsolePage>
 
-  <ConsolePage v-else-if="mode === 'facilityDetail' || mode === 'facilityConfig'" :back-label="t('common.back')" @back="goBackFromFacilityPage" :title="facilityPageTitle" :description="facilityPageDescription">
+  <ConsolePage v-else-if="mode === 'facilityDetail' || mode === 'facilityConfig'" :back-label="t('common.back')" @back="goBackFromFacilityPage" :title="facilityPageTitle" :description="facilityPageDescription" :body-scroll="!(isNetworkProbeFacility || isMetricsFacility)">
     <template #actions>
       <template v-if="mode === 'facilityDetail'">
         <Button v-if="currentFacilitySummary" size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>

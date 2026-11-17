@@ -32,8 +32,9 @@ const (
 	DefaultPingCount = 3
 	// DefaultPingTimeoutSeconds 是单个 ping 包默认等待秒数。
 	DefaultPingTimeoutSeconds = 2
-	// MinProbeIntervalSeconds/MaxProbeIntervalSeconds 是探测周期允许范围。
-	MinProbeIntervalSeconds = 10
+	// MinProbeIntervalSeconds/MaxProbeIntervalSeconds 是探测周期允许范围：
+	// 1..60 分钟（按秒存储并下发给 Agent）。
+	MinProbeIntervalSeconds = 60
 	MaxProbeIntervalSeconds = 3600
 	// MinPingCount/MaxPingCount 是每次探测的 ping 包数允许范围。
 	MinPingCount = 1
@@ -218,7 +219,7 @@ func (s *Service) Save(ctx context.Context, in SaveInput) (Config, error) {
 	}
 	intervalSeconds, ok := resolveProbeIntervalSeconds(in.IntervalSeconds)
 	if !ok {
-		return Config{}, panelerr.Validation("network_probe_interval_invalid", "intervalSeconds must be between 10 and 3600")
+		return Config{}, panelerr.Validation("network_probe_interval_invalid", "intervalSeconds must be between 60 and 3600")
 	}
 	pingCount, ok := resolvePingCount(in.PingCount)
 	if !ok {
@@ -825,8 +826,9 @@ func resolvePingTimeoutSeconds(raw int) (int, bool) {
 	return raw, true
 }
 
-// normalizeProbeIntervalSeconds 是读取侧的防御性归一化：0、负数或越界值都回落
-// 默认值，保证下发给 Agent 的参数总是合法。
+// normalizeProbeIntervalSeconds 是读取侧的防御性归一化：0、负数、越界值以及旧版本
+// 允许的亚分钟值（<60 秒）都回落默认值，保证下发给 Agent 的参数总是合法——探测
+// 间隔在面板侧以分钟为单位，最小 1 分钟。
 func normalizeProbeIntervalSeconds(raw int) int {
 	if raw < MinProbeIntervalSeconds || raw > MaxProbeIntervalSeconds {
 		return DefaultProbeIntervalSeconds

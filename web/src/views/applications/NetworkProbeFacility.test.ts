@@ -96,10 +96,21 @@ async function mountFacility() {
   return wrapper;
 }
 
+async function selectOption(comboboxIndex: number, label: string) {
+  const comboboxes = document.querySelectorAll<HTMLButtonElement>('[role="combobox"]');
+  comboboxes[comboboxIndex]!.click();
+  await flushPromises();
+  const option = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="option"]')).find((item) => item.textContent?.trim() === label);
+  expect(option, `option "${label}"`).toBeTruthy();
+  option!.click();
+  await flushPromises();
+}
+
 beforeEach(() => {
   useI18n().setLocale('en');
   vi.clearAllMocks();
   config.mockResolvedValue({ mode: 'all', serverIds: [], intervalSeconds: 60, pingCount: 3, pingTimeoutSeconds: 2, version: 1, updatedAt: new Date().toISOString() });
+  saveConfig.mockImplementation(async (input: Record<string, unknown>) => ({ ...input, version: 2, updatedAt: new Date().toISOString() }));
   results.mockResolvedValue({
     mode: 'all',
     nodes: [
@@ -188,18 +199,82 @@ describe('network probe facility', () => {
     expect(wrapper.findAll('[data-testid="probe-target"]')).toHaveLength(1);
   });
 
-  it('shows probe parameter fields with inline range validation', async () => {
+  it('splits probe scope, probe configuration, and results into independent sections', async () => {
+    const wrapper = await mountFacility();
+
+    const scope = wrapper.find('[data-testid="network-probe-scope-section"]');
+    const configSection = wrapper.find('[data-testid="network-probe-config-section"]');
+    const resultsSection = wrapper.find('[data-testid="network-probe-results-section"]');
+    expect(scope.exists()).toBe(true);
+    expect(configSection.exists()).toBe(true);
+    expect(resultsSection.exists()).toBe(true);
+
+    expect(scope.text()).toContain('Probe scope');
+    expect(scope.text()).toContain('All servers');
+    expect(configSection.text()).toContain('Probe configuration');
+    expect(configSection.text()).toContain('Probe interval (minutes)');
+    expect(resultsSection.text()).toContain('Node-to-node results');
+    // 结果区必须独立于配置区，目标列表仍在结果卡片内。
+    expect(resultsSection.find('[data-testid="probe-target"]').exists()).toBe(true);
+    expect(configSection.find('[data-testid="probe-target"]').exists()).toBe(false);
+  });
+
+  it('uses the compact server picker grid when the scope is selected', async () => {
+    const wrapper = await mountFacility();
+    await selectOption(0, 'Selected servers');
+
+    const picker = wrapper.find('section[aria-label="Probe nodes"]');
+    expect(picker.exists()).toBe(true);
+    expect(picker.classes()).toContain('sm:grid-cols-2');
+    expect(picker.classes()).toContain('xl:grid-cols-3');
+    expect(picker.findAll('button[aria-pressed]')).toHaveLength(servers.length);
+  });
+
+  it('shows probe parameter fields in minutes with inline range validation', async () => {
     const wrapper = await mountFacility();
     const inputs = wrapper.findAll<HTMLInputElement>('input[type="number"]');
     expect(inputs).toHaveLength(3);
-    expect(inputs[0]!.element.value).toBe('60');
+    // 默认配置 intervalSeconds=60 → 1 分钟。
+    expect(inputs[0]!.element.value).toBe('1');
     expect(inputs[1]!.element.value).toBe('3');
     expect(inputs[2]!.element.value).toBe('2');
+    expect(wrapper.text()).toContain('Range 1–60 minutes, default 1.');
 
-    inputs[0]!.element.value = '5';
+    inputs[0]!.element.value = '61';
     await inputs[0]!.trigger('input');
     await flushPromises();
-    expect(wrapper.text()).toContain('Enter a whole number between 10 and 3600 seconds.');
+    expect(wrapper.text()).toContain('Enter a whole number between 1 and 60 minutes.');
     expect(saveConfig).not.toHaveBeenCalled();
+  });
+
+  it('saves the probe interval in minutes as intervalSeconds', async () => {
+    const wrapper = await mountFacility();
+    const interval = wrapper.find<HTMLInputElement>('[data-testid="network-probe-interval-minutes"]');
+    interval.element.value = '2';
+    await interval.trigger('input');
+    await flushPromises();
+
+    const save = wrapper.findAll('button').find((button) => button.text() === 'Save configuration')!;
+    await save.trigger('click');
+    await flushPromises();
+
+    expect(saveConfig).toHaveBeenCalledWith({
+      mode: 'all',
+      serverIds: [],
+      intervalSeconds: 120,
+      pingCount: 3,
+      pingTimeoutSeconds: 2,
+    });
+  });
+
+  it('loads a legacy interval in seconds as whole minutes', async () => {
+    config.mockResolvedValueOnce({ mode: 'all', serverIds: [], intervalSeconds: 90, pingCount: 3, pingTimeoutSeconds: 2, version: 1, updatedAt: new Date().toISOString() });
+    const wrapper = await mountFacility();
+
+    const interval = wrapper.find<HTMLInputElement>('[data-testid="network-probe-interval-minutes"]');
+    // 90 秒按四舍五入显示为 2 分钟，且不会因为换算产生伪脏状态。
+    expect(interval.element.value).toBe('2');
+    const save = wrapper.findAll('button').find((button) => button.text() === 'Save configuration')!;
+    expect(save.attributes('disabled')).toBeDefined();
   });
 });

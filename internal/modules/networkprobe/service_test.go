@@ -707,6 +707,20 @@ func TestLoadConfigNormalizesLegacyAndOutOfRangeParameters(t *testing.T) {
 		t.Fatalf("legacy zero row report = %#v", report)
 	}
 
+	// 旧版本允许 10..59 秒；面板侧改为最小 1 分钟后，读取必须回退默认值，
+	// 不能把亚分钟间隔继续下发给 Agent。
+	if _, err := svc.db.Exec(`UPDATE network_probe_configs SET interval_seconds=30 WHERE id='network_probe'`); err != nil {
+		t.Fatal(err)
+	}
+	svc.invalidate()
+	subMinute, err := svc.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if subMinute.IntervalSeconds != DefaultProbeIntervalSeconds {
+		t.Fatalf("sub-minute legacy interval must normalize to default: %#v", subMinute)
+	}
+
 	if _, err := svc.db.Exec(`UPDATE network_probe_configs SET interval_seconds=99999,ping_count=-3,ping_timeout_seconds=11 WHERE id='network_probe'`); err != nil {
 		t.Fatal(err)
 	}

@@ -29,7 +29,7 @@
 
 ## 前端入口
 
-- 应用 + 设施应用页面族（v4 阶段 5）：`web/src/views/applications/index.vue`；`/applications/apps` 与 `/applications/facility-apps` 是菜单中的独立入口，不使用顶层互切 tabs。
+- 应用 + 设施页面族（v4 阶段 5）：`web/src/views/applications/index.vue`；`/applications/apps` 与 `/applications/facility-apps` 是菜单中的独立入口（后者用户可见名称为「设施」），不使用顶层互切 tabs。
 - 页面派生逻辑和草稿校验：`web/src/views/applications/model.ts`
 - API：`web/src/api/applications.ts`
 - 设施应用 API：`web/src/api/facilityApps.ts`
@@ -214,7 +214,7 @@
 - Validation refreshes the session idle TTL. Periodic cleanup acts as the recovery worker for expired commit leases even when no client performs a session GET, removes expired/terminal workspaces, and cleans abandoned `.partial` files, unreferenced `blob_dir` trees, and workspace directories that no longer have a database session row. Orphan candidates require at least one hour of staleness (`filestorage.WorkspaceStale`); a workspace without a database row is removed only when both the directory and every contained entry are stale, because directory timestamps alone cannot distinguish an abandoned workspace from `BeginEditSession` or an upload that has not committed its database row yet. A live commit lease always protects its workspace.
 - Configuration persistence and apply/reconcile dispatch are separate outcomes. If application rows/files were committed but lifecycle or reverse-proxy dispatch fails, the session is finalized as `committed` with an `application_apply_request_failed` warning. Commit recovery verifies the exact persisted draft and file set before finalizing. If persistence is observable through the reserved create ID or a newer application version but later changes prevent exact verification, recovery moves the session to `conflict` with `commit_outcome_ambiguous`; it must never reset such a session to `active` or create/apply it twice.
 - Facility reverse-proxy editing uses its own `facility_edit_sessions`, asset, operation, manifest, and config-version contract documented in `containerization.md`; it must not reuse application edit-session rows or expose the hidden `facility-reverse-proxy` application as the editable resource. Both commit adapters separate durable configuration success from the later application reconcile request.
-- 前端设施应用入口使用前后端内置的设施适配器，不调用通用设施 list API；当前 `reverse-proxy` 详情与配置直接使用其专属 API。新增设施类型时应新增自己的类型、配置和 API adapter，而不是把所有设施抽象成共享 summary。
+- 前端设施入口使用前后端内置的设施适配器，不调用通用设施 list API；当前 `reverse-proxy` 详情与配置直接使用其专属 API。新增设施类型时应新增自己的类型、配置和 API adapter，而不是把所有设施抽象成共享 summary。
 - 前端设施 API adapter 按设施提供 `getConfig`、`reconcile`、`beginEdit` 等专属域语义，直接映射到 `/api/v1/facility-apps/reverse-proxy`；不提供 `listFacilities` 目录方法。新增设施时新增自己的 adapter 和配置契约。设施静态资产同样通过设施配置/编辑会话返回自己的 `assets` 集合，客户端按设施内唯一 `name` 操作，不新增通用资产目录 API。
 - 前端入口代理设施配置页必须是独立编辑页：正文按网关服务器、域名和路由、Panel 访问入口、静态文件顺序连续展开，右侧 sticky 摘要展示新增、修改、删除数量与检查结果；不提供左侧分区导航，域名、Path、静态文件和 Panel 入口不得合并成 JSON 大文本框。
 - 设施域名和 Path 编辑使用“列表 + 对话框”模式：域名对话框编辑域名和源站节点，Path 对话框按 `static` / `redirect` / `proxy_pass` 展示不同字段；复杂项取消时不得污染主草稿。域名源服务器选择器只展示当前草稿已选择的网关节点，避免选出后端不允许的非网关源站；取消网关节点时前端同步清理受影响域名的源服务器、AnyAccess 主源站和转发节点并给出提示。保存仍走 `/api/v1/facility-apps/reverse-proxy/edit-sessions/*` 的 patch、validate、preview、commit 路径，不新增 mock-only endpoint。

@@ -161,76 +161,91 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="grid gap-4">
-    <section class="relative grid gap-3 rounded-xl border border-border bg-card p-4" data-testid="metrics-config-form">
-      <LoadingOverlay v-if="loading && !config" :label="t('applicationsPage.metricsLoading')" />
-      <div>
-        <h2 class="m-0 text-base font-semibold text-foreground">{{ t('applicationsPage.metricsConfigTitle') }}</h2>
-        <p class="m-0 mt-1 text-sm leading-6 text-muted-foreground">{{ t('applicationsPage.metricsConfigHint') }}</p>
-      </div>
+  <div class="relative grid h-full min-h-0 gap-4 max-lg:h-auto lg:grid-cols-2" data-testid="metrics-facility">
+    <LoadingOverlay v-if="loading && !config" :label="t('applicationsPage.metricsLoading')" />
 
-      <EmptyState v-if="error && !config" variant="page" :title="t('common.loadFailed')" :description="error">
-        <template #actions>
-          <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
-        </template>
-      </EmptyState>
+    <EmptyState v-if="error && !config" variant="page" class="lg:col-span-2" :title="t('common.loadFailed')" :description="error">
+      <template #actions>
+        <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
+      </template>
+    </EmptyState>
 
-      <template v-else>
-        <div class="grid gap-3 sm:grid-cols-2">
-          <label class="grid gap-1">
+    <template v-else>
+      <!-- 区域一：采集范围（模式 + 节点选择）。 -->
+      <section class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 rounded-xl border border-border bg-card p-4 max-lg:grid-rows-none" data-testid="metrics-scope-section">
+        <div>
+          <h2 class="m-0 text-base font-semibold text-foreground">{{ t('applicationsPage.metricsScopeTitle') }}</h2>
+          <p class="m-0 mt-1 text-sm leading-6 text-muted-foreground">{{ t('applicationsPage.metricsScopeHint') }}</p>
+        </div>
+
+        <div class="grid min-h-0 content-start gap-3 max-lg:content-normal">
+          <label class="grid gap-1 sm:max-w-xs">
             <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.metricsMode') }}</span>
             <Select v-model="draft.mode" :options="modeOptions" :disabled="saving" />
           </label>
-          <label class="grid gap-1">
-            <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.metricsCleanupSchedule') }}</span>
-            <Select v-model="draft.cleanupSchedule" :options="cleanupOptions" :disabled="saving" />
-          </label>
-        </div>
 
-        <div class="grid gap-3 sm:grid-cols-2">
-          <label class="grid gap-1">
-            <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.metricsRetention') }}</span>
-            <Input
-              v-model="draft.retentionDays"
-              type="number"
-              inputmode="numeric"
-              :min="1"
-              step="1"
-              :invalid="retentionInvalid"
-              :disabled="saving"
-              data-testid="metrics-retention"
-            />
-            <span v-if="retentionInvalid" class="text-xs leading-4 text-danger">{{ t('applicationsPage.metricsRetentionInvalid') }}</span>
-          </label>
-          <label class="grid gap-1">
-            <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.metricsInterval') }}</span>
-            <Input
-              v-model="draft.collectionIntervalSeconds"
-              type="number"
-              inputmode="numeric"
-              :min="metricsCollectionIntervalMin"
-              step="1"
-              :invalid="intervalInvalid"
-              :disabled="saving"
-              data-testid="metrics-interval"
-            />
-            <span class="text-xs leading-4 text-muted-foreground">{{ t('applicationsPage.metricsIntervalHint', { min: metricsCollectionIntervalMin, default: metricsFacilityDefaults.collectionIntervalSeconds }) }}</span>
-            <span v-if="intervalInvalid" class="text-xs leading-4 text-danger">{{ t('applicationsPage.metricsIntervalInvalid') }}</span>
-          </label>
-        </div>
-
-        <div v-if="draft.mode === 'selected'" class="grid gap-2">
-          <div>
-            <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.metricsSelectServers') }}</span>
-            <p class="m-0 mt-1 text-xs leading-5 text-muted-foreground">{{ t('applicationsPage.metricsSelectServersHint') }}</p>
+          <div v-if="draft.mode === 'selected'" class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-2 max-lg:grid-rows-none">
+            <div>
+              <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.metricsSelectServers') }}</span>
+              <p class="m-0 mt-1 text-xs leading-5 text-muted-foreground">{{ t('applicationsPage.metricsSelectServersHint') }}</p>
+            </div>
+            <div class="min-h-0 lg:overflow-y-auto lg:pr-1">
+              <ServerMultiPicker v-model="draft.serverIds" variant="compact" :servers="serverOptions" :label="t('applicationsPage.metricsSelectServers')" />
+            </div>
           </div>
-          <ServerMultiPicker v-model="draft.serverIds" :servers="serverOptions" :label="t('applicationsPage.metricsSelectServers')" />
         </div>
-        <p v-if="formError" role="alert" class="m-0 text-sm text-danger">{{ formError }}</p>
+      </section>
+
+      <!-- 区域二：采集配置（保留天数、采集间隔、清理计划 + 保存）。 -->
+      <section class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-3 rounded-xl border border-border bg-card p-4 max-lg:grid-rows-none" data-testid="metrics-config-form">
+        <div>
+          <h2 class="m-0 text-base font-semibold text-foreground">{{ t('applicationsPage.metricsConfigTitle') }}</h2>
+          <p class="m-0 mt-1 text-sm leading-6 text-muted-foreground">{{ t('applicationsPage.metricsConfigHint') }}</p>
+        </div>
+
+        <div class="grid min-h-0 content-start gap-3 max-lg:content-normal">
+          <div class="grid gap-3 sm:grid-cols-2">
+            <label class="grid gap-1">
+              <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.metricsCleanupSchedule') }}</span>
+              <Select v-model="draft.cleanupSchedule" :options="cleanupOptions" :disabled="saving" />
+            </label>
+            <label class="grid gap-1">
+              <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.metricsRetention') }}</span>
+              <Input
+                v-model="draft.retentionDays"
+                type="number"
+                inputmode="numeric"
+                :min="1"
+                step="1"
+                :invalid="retentionInvalid"
+                :disabled="saving"
+                data-testid="metrics-retention"
+              />
+              <span v-if="retentionInvalid" class="text-xs leading-4 text-danger">{{ t('applicationsPage.metricsRetentionInvalid') }}</span>
+            </label>
+            <label class="grid gap-1">
+              <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.metricsInterval') }}</span>
+              <Input
+                v-model="draft.collectionIntervalSeconds"
+                type="number"
+                inputmode="numeric"
+                :min="metricsCollectionIntervalMin"
+                step="1"
+                :invalid="intervalInvalid"
+                :disabled="saving"
+                data-testid="metrics-interval"
+              />
+              <span class="text-xs leading-4 text-muted-foreground">{{ t('applicationsPage.metricsIntervalHint', { min: metricsCollectionIntervalMin, default: metricsFacilityDefaults.collectionIntervalSeconds }) }}</span>
+              <span v-if="intervalInvalid" class="text-xs leading-4 text-danger">{{ t('applicationsPage.metricsIntervalInvalid') }}</span>
+            </label>
+          </div>
+          <p v-if="formError" role="alert" class="m-0 text-sm text-danger">{{ formError }}</p>
+        </div>
+
         <div class="flex justify-end">
           <Button size="sm" variant="primary" :loading="saving" :disabled="!dirty" @click="save"><Save />{{ t('applicationsPage.metricsSave') }}</Button>
         </div>
-      </template>
-    </section>
+      </section>
+    </template>
   </div>
 </template>

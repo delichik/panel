@@ -40,7 +40,7 @@ Seamark immediately requires a different password. The password change also rota
 
 After login, review these optional settings:
 
-- **Settings → General:** interface language, token lifetime, and command timeout. Metrics collection interval, retention, and cleanup schedule now live in the **Applications → Facility apps → Metrics** facility.
+- **Settings → General:** interface language, token lifetime, and command timeout. Metrics collection interval, retention, and cleanup schedule now live in the **Applications → Facilities → Metrics** facility.
 - **Settings → Certificates:** ACME email and certificate defaults, if you plan to issue public certificates.
 - **Settings → Security:** administrator account, password, and JWT secret settings.
 
@@ -156,7 +156,7 @@ Recommended order:
 3. Give the token Zone read permission and DNS record write permission for the target zone.
 4. Create or update DNS records so the application domain points to the public address of the gateway server.
 5. In **Certificates → Domain certificates**, request the certificate and follow the operation in **Task Center**.
-6. In **Applications → Facility Apps**, configure the reverse-proxy gateway servers. These servers need a healthy agent, Docker, and reachable ports `80` and `443`.
+6. In **Applications → Facilities**, configure the reverse-proxy gateway servers. These servers need a healthy agent, Docker, and reachable ports `80` and `443`.
 7. Edit the application and add a reverse-proxy rule for the domain, path, and application target port.
 8. Save and apply, then watch the application and gateway operations until they settle.
 

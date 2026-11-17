@@ -19,7 +19,16 @@ import { useI18n } from '@/i18n';
 import type { NetworkProbeConfig, NetworkProbeMatrix, NetworkProbeMode, NetworkProbeResult, NetworkProbeServerResults } from '@/types/networkProbe';
 import type { ServerDto } from '@/types/servers';
 import { formatDateTime } from '@/utils/datetime';
-import { isValidNetworkProbeSetting, networkProbeSettingRules, normalizeNetworkProbeSettings, parseNetworkProbeSetting } from '@/utils/networkProbe';
+import {
+  isValidNetworkProbeSetting,
+  networkProbeIntervalMinutes,
+  networkProbeIntervalMinutesFromSeconds,
+  networkProbeIntervalSecondsFromMinutes,
+  networkProbeSettingRules,
+  normalizeNetworkProbeSettings,
+  parseNetworkProbeIntervalMinutes,
+  parseNetworkProbeSetting,
+} from '@/utils/networkProbe';
 import { createLatestRequestGuard, isAbortError } from '@/views/_shared/requestState';
 import { formatLatency, formatPacketLoss, probeLatencyHistory, probeLossHistory, probeTargetView, valueTone, type MetricTone } from '@/views/overview/model';
 
@@ -33,11 +42,11 @@ const notifyError = useErrorToast();
 const notifySuccess = useSuccessToast();
 const autoRefresh = useAutoRefresh();
 
-type ParameterField = 'intervalSeconds' | 'pingCount' | 'pingTimeoutSeconds';
+// 探测间隔在界面上按分钟输入（1..60，默认 1），保存时换算成后台的 intervalSeconds。
+type ParameterField = 'pingCount' | 'pingTimeoutSeconds';
 type ProbeOutcome = 'ok' | 'degraded' | 'stale' | 'failed';
 
 const parameterFields = [
-  { field: 'intervalSeconds', labelKey: 'applicationsPage.networkProbeInterval', hintKey: 'applicationsPage.networkProbeIntervalHint', invalidKey: 'applicationsPage.networkProbeIntervalInvalid', rule: networkProbeSettingRules.intervalSeconds },
   { field: 'pingCount', labelKey: 'applicationsPage.networkProbePingCount', hintKey: 'applicationsPage.networkProbePingCountHint', invalidKey: 'applicationsPage.networkProbePingCountInvalid', rule: networkProbeSettingRules.pingCount },
   { field: 'pingTimeoutSeconds', labelKey: 'applicationsPage.networkProbePingTimeout', hintKey: 'applicationsPage.networkProbePingTimeoutHint', invalidKey: 'applicationsPage.networkProbePingTimeoutInvalid', rule: networkProbeSettingRules.pingTimeoutSeconds },
 ] as const;
@@ -51,13 +60,13 @@ const formError = ref('');
 const draft = reactive<{
   mode: NetworkProbeMode;
   serverIds: string[];
-  intervalSeconds: string;
+  intervalMinutes: string;
   pingCount: string;
   pingTimeoutSeconds: string;
 }>({
   mode: 'all',
   serverIds: [],
-  intervalSeconds: String(networkProbeSettingRules.intervalSeconds.defaultValue),
+  intervalMinutes: String(networkProbeIntervalMinutes.defaultValue),
   pingCount: String(networkProbeSettingRules.pingCount.defaultValue),
   pingTimeoutSeconds: String(networkProbeSettingRules.pingTimeoutSeconds.defaultValue),
 });
@@ -97,10 +106,12 @@ const sourceOptions = computed(() => (matrix.value?.nodes ?? []).map((node) => (
 })));
 
 const parameterValues = computed<Record<ParameterField, number | null>>(() => ({
-  intervalSeconds: parseNetworkProbeSetting(draft.intervalSeconds),
   pingCount: parseNetworkProbeSetting(draft.pingCount),
   pingTimeoutSeconds: parseNetworkProbeSetting(draft.pingTimeoutSeconds),
 }));
+
+const intervalMinutesValue = computed(() => parseNetworkProbeIntervalMinutes(draft.intervalMinutes));
+const intervalInvalid = computed(() => intervalMinutesValue.value === null);
 
 function parameterInvalid(field: ParameterField) {
   const value = parameterValues.value[field];
@@ -116,6 +127,8 @@ const dirty = computed(() => {
   if (!current) return true;
   if (draft.mode !== current.mode) return true;
   if (JSON.stringify([...draft.serverIds].sort()) !== JSON.stringify([...current.serverIds].sort())) return true;
+  // 秒为单位保存/加载，比较时把分钟草稿换算回秒，避免出现“1 分钟 vs 60 秒”的伪脏状态。
+  if (intervalMinutesValue.value !== networkProbeIntervalMinutesFromSeconds(current.intervalSeconds)) return true;
   return parameterFields.some((item) => parameterValues.value[item.field] !== current[item.field]);
 });
 
@@ -194,7 +207,7 @@ function resetDraft() {
   const current = config.value;
   draft.mode = current?.mode ?? 'all';
   draft.serverIds = [...(current?.serverIds ?? [])];
-  draft.intervalSeconds = String(current?.intervalSeconds ?? networkProbeSettingRules.intervalSeconds.defaultValue);
+  draft.intervalMinutes = String(networkProbeIntervalMinutesFromSeconds(current?.intervalSeconds));
   draft.pingCount = String(current?.pingCount ?? networkProbeSettingRules.pingCount.defaultValue);
   draft.pingTimeoutSeconds = String(current?.pingTimeoutSeconds ?? networkProbeSettingRules.pingTimeoutSeconds.defaultValue);
   formError.value = '';
@@ -276,14 +289,19 @@ async function save() {
     formError.value = t('applicationsPage.networkProbeServersRequired');
     return;
   }
+  if (intervalInvalid.value) {
+    formError.value = t('applicationsPage.networkProbeIntervalInvalid', { min: networkProbeIntervalMinutes.min, max: networkProbeIntervalMinutes.max });
+    return;
+  }
   if (parameterFields.some((item) => parameterInvalid(item.field))) return;
   const settings = parameterValues.value;
+  const intervalMinutes = intervalMinutesValue.value ?? networkProbeIntervalMinutes.defaultValue;
   saving.value = true;
   try {
     const saved = await networkProbeFacilityApi.saveConfig({
       mode: draft.mode,
       serverIds: [...draft.serverIds],
-      intervalSeconds: settings.intervalSeconds ?? networkProbeSettingRules.intervalSeconds.defaultValue,
+      intervalSeconds: networkProbeIntervalSecondsFromMinutes(intervalMinutes),
       pingCount: settings.pingCount ?? networkProbeSettingRules.pingCount.defaultValue,
       pingTimeoutSeconds: settings.pingTimeoutSeconds ?? networkProbeSettingRules.pingTimeoutSeconds.defaultValue,
     });
@@ -315,168 +333,209 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="grid gap-4">
-    <section class="relative grid gap-3 rounded-xl border border-border bg-card p-4">
-      <LoadingOverlay v-if="loading && !config" :label="t('applicationsPage.networkProbeLoading')" />
-      <div>
-        <h2 class="m-0 text-base font-semibold text-foreground">{{ t('applicationsPage.networkProbeConfigTitle') }}</h2>
-        <p class="m-0 mt-1 text-sm leading-6 text-muted-foreground">{{ t('applicationsPage.networkProbeConfigHint') }}</p>
-      </div>
+  <div
+    class="relative grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4 max-lg:h-auto max-lg:grid-rows-none"
+    data-testid="network-probe-facility"
+  >
+    <LoadingOverlay v-if="loading && !config" :label="t('applicationsPage.networkProbeLoading')" />
 
-      <EmptyState v-if="error && !config" variant="page" :title="t('common.loadFailed')" :description="error">
-        <template #actions>
-          <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
-        </template>
-      </EmptyState>
+    <EmptyState v-if="error && !config" variant="page" :title="t('common.loadFailed')" :description="error">
+      <template #actions>
+        <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
+      </template>
+    </EmptyState>
 
-      <template v-else>
-        <div class="grid gap-3 sm:grid-cols-2">
-          <label class="grid gap-1">
-            <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.networkProbeMode') }}</span>
-            <Select v-model="draft.mode" :options="modeOptions" :disabled="saving" />
-          </label>
-        </div>
-
-        <div class="grid gap-3 sm:grid-cols-3">
-          <label v-for="item in parameterFields" :key="item.field" class="grid min-w-0 gap-1">
-            <span class="text-xs font-medium text-muted-foreground">{{ t(item.labelKey) }}</span>
-            <Input
-              :model-value="draft[item.field]"
-              type="number"
-              inputmode="numeric"
-              :min="item.rule.min"
-              :max="item.rule.max"
-              :step="item.rule.step"
-              :invalid="parameterInvalid(item.field)"
-              :disabled="saving"
-              @update:model-value="setParameter(item.field, $event)"
-            />
-            <span class="text-xs leading-4 text-muted-foreground">{{ t(item.hintKey, { min: item.rule.min, max: item.rule.max, default: item.rule.defaultValue }) }}</span>
-            <span v-if="parameterInvalid(item.field)" class="text-xs leading-4 text-danger">{{ t(item.invalidKey, { min: item.rule.min, max: item.rule.max }) }}</span>
-          </label>
-        </div>
-
-        <div v-if="draft.mode === 'selected'" class="grid gap-2">
+    <template v-else>
+      <div class="grid min-h-0 gap-4 lg:grid-cols-2 lg:items-start">
+        <!-- 区域一：探测范围（模式 + 探测节点）。 -->
+        <section
+          class="grid min-h-0 gap-3 rounded-xl border border-border bg-card p-4 lg:max-h-[20rem] lg:grid-rows-[auto_minmax(0,1fr)]"
+          data-testid="network-probe-scope-section"
+        >
           <div>
-            <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.networkProbeSelectServers') }}</span>
-            <p class="m-0 mt-1 text-xs leading-5 text-muted-foreground">{{ t('applicationsPage.networkProbeSelectServersHint') }}</p>
+            <h2 class="m-0 text-base font-semibold text-foreground">{{ t('applicationsPage.networkProbeScopeTitle') }}</h2>
+            <p class="m-0 mt-1 text-sm leading-6 text-muted-foreground">{{ t('applicationsPage.networkProbeScopeHint') }}</p>
           </div>
-          <ServerMultiPicker v-model="draft.serverIds" :servers="serverOptions" :label="t('applicationsPage.networkProbeSelectServers')" />
-        </div>
-        <p v-if="formError" class="m-0 text-sm text-danger">{{ formError }}</p>
-        <div class="flex justify-end">
-          <Button size="sm" variant="primary" :loading="saving" :disabled="!dirty" @click="save"><Save />{{ t('applicationsPage.networkProbeSave') }}</Button>
-        </div>
-      </template>
-    </section>
 
-    <section class="relative grid min-w-0 gap-3 rounded-xl border border-border bg-card p-4">
-      <div class="min-w-0">
-        <h2 class="m-0 text-base font-semibold text-foreground">{{ t('applicationsPage.networkProbeResultsTitle') }}</h2>
-        <p class="m-0 mt-1 text-sm leading-6 text-muted-foreground">{{ t('applicationsPage.networkProbeResultsHint') }}</p>
-      </div>
+          <div class="grid min-h-0 content-start gap-3 max-lg:content-normal">
+            <label class="grid gap-1 sm:max-w-xs">
+              <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.networkProbeMode') }}</span>
+              <Select v-model="draft.mode" :options="modeOptions" :disabled="saving" />
+            </label>
 
-      <div class="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,17rem)_minmax(0,1fr)_auto]">
-        <Select
-          :model-value="sourceId"
-          :options="sourceOptions"
-          :disabled="!sourceOptions.length"
-          :placeholder="t('applicationsPage.networkProbeSourcePlaceholder')"
-          :aria-label="t('applicationsPage.networkProbeSource')"
-          @update:model-value="changeSource"
-        />
-        <SearchInput
-          v-model="targetSearch"
-          clearable
-          :disabled="!sourceOptions.length"
-          :placeholder="t('applicationsPage.networkProbeSearchTargets')"
-          :label="t('applicationsPage.networkProbeSearchTargets')"
-          :clear-label="t('common.clearSearch')"
-        />
-        <div class="flex flex-wrap items-center justify-end gap-2">
-          <DataRefreshControl />
-          <Button size="sm" variant="ghost" :loading="resultsLoading" :disabled="!sourceId" @click="loadSourceResults(sourceId)"><RefreshCcw />{{ t('common.refresh') }}</Button>
-        </div>
-      </div>
-
-      <LoadingOverlay v-if="resultsLoading && !sourceResults" :label="t('applicationsPage.networkProbeLoading')" />
-      <EmptyState
-        v-else-if="!sourceOptions.length"
-        variant="inset"
-        :title="t('applicationsPage.networkProbeNoProbeNodes')"
-        :description="t('applicationsPage.networkProbeNoProbeNodesHint')"
-      />
-      <EmptyState v-else-if="resultsError && !sourceResults" variant="page" :title="t('common.loadFailed')" :description="resultsError">
-        <template #actions>
-          <Button size="sm" :loading="resultsLoading" @click="loadSourceResults(sourceId)"><RefreshCcw />{{ t('common.retry') }}</Button>
-        </template>
-      </EmptyState>
-      <template v-else>
-        <p v-if="resultsError" role="alert" class="m-0 rounded-xl border border-warning-border bg-warning-bg p-2 text-xs text-warning">{{ t('applicationsPage.networkProbeShowingStale') }}</p>
-        <div class="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-          <span>{{ t('applicationsPage.networkProbeTargetsSummary', { count: allTargetRows.length, failed: failedTargetCount }) }}</span>
-          <span>{{ t('serversPage.probe.lastSample') }}: {{ formatDateTime(sourceResults?.updatedAt, t('common.never')) }}</span>
-        </div>
-
-        <EmptyState
-          v-if="!allTargetRows.length"
-          variant="inset"
-          :title="t('applicationsPage.networkProbeNoTargets')"
-          :description="t('applicationsPage.networkProbeNoTargetsHint')"
-        />
-        <EmptyState
-          v-else-if="!targetRows.length"
-          variant="inset"
-          :title="t('applicationsPage.networkProbeSearchEmpty')"
-          :description="t('applicationsPage.networkProbeSearchEmptyHint')"
-        />
-        <ul v-else class="m-0 max-h-[36rem] list-none overflow-x-hidden overflow-y-auto p-0" data-testid="probe-target-list">
-          <li
-            v-for="row in targetRows"
-            :key="row.targetServerId"
-            class="grid min-w-0 gap-2 border-t border-border py-3 first:border-t-0"
-            data-testid="probe-target"
-          >
-            <div class="flex min-w-0 flex-wrap items-start justify-between gap-2">
-              <div class="min-w-0">
-                <strong class="block truncate text-sm text-foreground">{{ row.name }}</strong>
-                <span class="panel-mono block truncate text-xs text-muted-foreground">{{ row.address || t('common.notAvailable') }}</span>
+            <div v-if="draft.mode === 'selected'" class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-2 max-lg:grid-rows-none">
+              <div>
+                <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.networkProbeSelectServers') }}</span>
+                <p class="m-0 mt-1 text-xs leading-5 text-muted-foreground">{{ t('applicationsPage.networkProbeSelectServersHint') }}</p>
               </div>
-              <Badge :tone="outcomeTone(row.outcome)">{{ t(outcomeKey(row.outcome)) }}</Badge>
-            </div>
-
-            <dl class="m-0 grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-4">
-              <div class="min-w-0">
-                <dt class="truncate text-xs text-muted-foreground">{{ t('serversPage.probe.latency') }}</dt>
-                <dd class="m-0 text-sm font-semibold tabular-nums" :class="valueClass('latency', row.latencyMs)">{{ formatLatency(row.latencyMs) }}</dd>
-              </div>
-              <div class="min-w-0">
-                <dt class="truncate text-xs text-muted-foreground">{{ t('serversPage.probe.packetLoss') }}</dt>
-                <dd class="m-0 text-sm font-semibold tabular-nums" :class="valueClass('packetLoss', row.packetLossPercent)">{{ formatPacketLoss(row.packetLossPercent) }}</dd>
-              </div>
-              <div class="min-w-0">
-                <dt class="truncate text-xs text-muted-foreground">{{ t('applicationsPage.networkProbeSentReceived') }}</dt>
-                <dd class="m-0 text-sm font-semibold tabular-nums text-muted-foreground">{{ sentReceived(row) }}</dd>
-              </div>
-              <div class="min-w-0">
-                <dt class="truncate text-xs text-muted-foreground">{{ t('serversPage.probe.sampledAt') }}</dt>
-                <dd class="m-0 truncate text-xs text-secondary-foreground">{{ formatDateTime(row.sampledAt, t('common.never')) }}</dd>
-              </div>
-            </dl>
-
-            <div class="grid min-w-0 gap-2 sm:grid-cols-2">
-              <div class="grid min-w-0 gap-1">
-                <span class="truncate text-xs text-muted-foreground">{{ t('applicationsPage.networkProbeLatencyHistory') }}</span>
-                <HistoryStrip kind="latency" :values="row.latencyHistory" :label="`${row.name} · ${t('applicationsPage.networkProbeLatencyHistory')}`" />
-              </div>
-              <div class="grid min-w-0 gap-1">
-                <span class="truncate text-xs text-muted-foreground">{{ t('applicationsPage.networkProbeLossHistory') }}</span>
-                <HistoryStrip kind="packetLoss" :values="row.lossHistory" :label="`${row.name} · ${t('applicationsPage.networkProbeLossHistory')}`" />
+              <div class="min-h-0 lg:overflow-y-auto lg:pr-1">
+                <ServerMultiPicker v-model="draft.serverIds" variant="compact" :servers="serverOptions" :label="t('applicationsPage.networkProbeSelectServers')" />
               </div>
             </div>
-          </li>
-        </ul>
-      </template>
-    </section>
+          </div>
+        </section>
+
+        <!-- 区域二：探测配置（间隔、包数、单包超时 + 保存）。 -->
+        <section class="grid gap-3 rounded-xl border border-border bg-card p-4" data-testid="network-probe-config-section">
+          <div>
+            <h2 class="m-0 text-base font-semibold text-foreground">{{ t('applicationsPage.networkProbeConfigTitle') }}</h2>
+            <p class="m-0 mt-1 text-sm leading-6 text-muted-foreground">{{ t('applicationsPage.networkProbeConfigHint') }}</p>
+          </div>
+
+          <div class="grid gap-3 sm:grid-cols-3">
+            <label class="grid min-w-0 gap-1">
+              <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.networkProbeInterval') }}</span>
+              <Input
+                v-model="draft.intervalMinutes"
+                type="number"
+                inputmode="numeric"
+                :min="networkProbeIntervalMinutes.min"
+                :max="networkProbeIntervalMinutes.max"
+                step="1"
+                :invalid="intervalInvalid"
+                :disabled="saving"
+                data-testid="network-probe-interval-minutes"
+              />
+              <span class="text-xs leading-4 text-muted-foreground">{{ t('applicationsPage.networkProbeIntervalHint', { min: networkProbeIntervalMinutes.min, max: networkProbeIntervalMinutes.max, default: networkProbeIntervalMinutes.defaultValue }) }}</span>
+              <span v-if="intervalInvalid" class="text-xs leading-4 text-danger">{{ t('applicationsPage.networkProbeIntervalInvalid', { min: networkProbeIntervalMinutes.min, max: networkProbeIntervalMinutes.max }) }}</span>
+            </label>
+            <label v-for="item in parameterFields" :key="item.field" class="grid min-w-0 gap-1">
+              <span class="text-xs font-medium text-muted-foreground">{{ t(item.labelKey) }}</span>
+              <Input
+                :model-value="draft[item.field]"
+                type="number"
+                inputmode="numeric"
+                :min="item.rule.min"
+                :max="item.rule.max"
+                :step="item.rule.step"
+                :invalid="parameterInvalid(item.field)"
+                :disabled="saving"
+                @update:model-value="setParameter(item.field, $event)"
+              />
+              <span class="text-xs leading-4 text-muted-foreground">{{ t(item.hintKey, { min: item.rule.min, max: item.rule.max, default: item.rule.defaultValue }) }}</span>
+              <span v-if="parameterInvalid(item.field)" class="text-xs leading-4 text-danger">{{ t(item.invalidKey, { min: item.rule.min, max: item.rule.max }) }}</span>
+            </label>
+          </div>
+
+          <p v-if="formError" role="alert" class="m-0 text-sm text-danger">{{ formError }}</p>
+          <div class="flex justify-end">
+            <Button size="sm" variant="primary" :loading="saving" :disabled="!dirty" @click="save"><Save />{{ t('applicationsPage.networkProbeSave') }}</Button>
+          </div>
+        </section>
+      </div>
+
+      <!-- 区域三：结果（保持独立，卡片内部滚动）。 -->
+      <section
+        class="relative grid min-h-0 gap-3 rounded-xl border border-border bg-card p-4 max-lg:grid-rows-none lg:grid-rows-[auto_auto_minmax(0,1fr)]"
+        data-testid="network-probe-results-section"
+      >
+        <div class="min-w-0">
+          <h2 class="m-0 text-base font-semibold text-foreground">{{ t('applicationsPage.networkProbeResultsTitle') }}</h2>
+          <p class="m-0 mt-1 text-sm leading-6 text-muted-foreground">{{ t('applicationsPage.networkProbeResultsHint') }}</p>
+        </div>
+
+        <div class="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,17rem)_minmax(0,1fr)_auto]">
+          <Select
+            :model-value="sourceId"
+            :options="sourceOptions"
+            :disabled="!sourceOptions.length"
+            :placeholder="t('applicationsPage.networkProbeSourcePlaceholder')"
+            :aria-label="t('applicationsPage.networkProbeSource')"
+            @update:model-value="changeSource"
+          />
+          <SearchInput
+            v-model="targetSearch"
+            clearable
+            :disabled="!sourceOptions.length"
+            :placeholder="t('applicationsPage.networkProbeSearchTargets')"
+            :label="t('applicationsPage.networkProbeSearchTargets')"
+            :clear-label="t('common.clearSearch')"
+          />
+          <div class="flex flex-wrap items-center justify-end gap-2">
+            <DataRefreshControl />
+            <Button size="sm" variant="ghost" :loading="resultsLoading" :disabled="!sourceId" @click="loadSourceResults(sourceId)"><RefreshCcw />{{ t('common.refresh') }}</Button>
+          </div>
+        </div>
+
+        <LoadingOverlay v-if="resultsLoading && !sourceResults" :label="t('applicationsPage.networkProbeLoading')" />
+        <EmptyState
+          v-else-if="!sourceOptions.length"
+          variant="inset"
+          :title="t('applicationsPage.networkProbeNoProbeNodes')"
+          :description="t('applicationsPage.networkProbeNoProbeNodesHint')"
+        />
+        <EmptyState v-else-if="resultsError && !sourceResults" variant="page" :title="t('common.loadFailed')" :description="resultsError">
+          <template #actions>
+            <Button size="sm" :loading="resultsLoading" @click="loadSourceResults(sourceId)"><RefreshCcw />{{ t('common.retry') }}</Button>
+          </template>
+        </EmptyState>
+        <div v-else class="grid min-h-0 content-start gap-2 lg:overflow-y-auto lg:pr-1">
+          <p v-if="resultsError" role="alert" class="m-0 rounded-xl border border-warning-border bg-warning-bg p-2 text-xs text-warning">{{ t('applicationsPage.networkProbeShowingStale') }}</p>
+          <div class="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>{{ t('applicationsPage.networkProbeTargetsSummary', { count: allTargetRows.length, failed: failedTargetCount }) }}</span>
+            <span>{{ t('serversPage.probe.lastSample') }}: {{ formatDateTime(sourceResults?.updatedAt, t('common.never')) }}</span>
+          </div>
+
+          <EmptyState
+            v-if="!allTargetRows.length"
+            variant="inset"
+            :title="t('applicationsPage.networkProbeNoTargets')"
+            :description="t('applicationsPage.networkProbeNoTargetsHint')"
+          />
+          <EmptyState
+            v-else-if="!targetRows.length"
+            variant="inset"
+            :title="t('applicationsPage.networkProbeSearchEmpty')"
+            :description="t('applicationsPage.networkProbeSearchEmptyHint')"
+          />
+          <ul v-else class="m-0 list-none overflow-x-hidden p-0 max-lg:max-h-[36rem] max-lg:overflow-y-auto" data-testid="probe-target-list">
+            <li
+              v-for="row in targetRows"
+              :key="row.targetServerId"
+              class="grid min-w-0 gap-2 border-t border-border py-3 first:border-t-0"
+              data-testid="probe-target"
+            >
+              <div class="flex min-w-0 flex-wrap items-start justify-between gap-2">
+                <div class="min-w-0">
+                  <strong class="block truncate text-sm text-foreground">{{ row.name }}</strong>
+                  <span class="panel-mono block truncate text-xs text-muted-foreground">{{ row.address || t('common.notAvailable') }}</span>
+                </div>
+                <Badge :tone="outcomeTone(row.outcome)">{{ t(outcomeKey(row.outcome)) }}</Badge>
+              </div>
+
+              <dl class="m-0 grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-4">
+                <div class="min-w-0">
+                  <dt class="truncate text-xs text-muted-foreground">{{ t('serversPage.probe.latency') }}</dt>
+                  <dd class="m-0 text-sm font-semibold tabular-nums" :class="valueClass('latency', row.latencyMs)">{{ formatLatency(row.latencyMs) }}</dd>
+                </div>
+                <div class="min-w-0">
+                  <dt class="truncate text-xs text-muted-foreground">{{ t('serversPage.probe.packetLoss') }}</dt>
+                  <dd class="m-0 text-sm font-semibold tabular-nums" :class="valueClass('packetLoss', row.packetLossPercent)">{{ formatPacketLoss(row.packetLossPercent) }}</dd>
+                </div>
+                <div class="min-w-0">
+                  <dt class="truncate text-xs text-muted-foreground">{{ t('applicationsPage.networkProbeSentReceived') }}</dt>
+                  <dd class="m-0 text-sm font-semibold tabular-nums text-muted-foreground">{{ sentReceived(row) }}</dd>
+                </div>
+                <div class="min-w-0">
+                  <dt class="truncate text-xs text-muted-foreground">{{ t('serversPage.probe.sampledAt') }}</dt>
+                  <dd class="m-0 truncate text-xs text-secondary-foreground">{{ formatDateTime(row.sampledAt, t('common.never')) }}</dd>
+                </div>
+              </dl>
+
+              <div class="grid min-w-0 gap-2 sm:grid-cols-2">
+                <div class="grid min-w-0 gap-1">
+                  <span class="truncate text-xs text-muted-foreground">{{ t('applicationsPage.networkProbeLatencyHistory') }}</span>
+                  <HistoryStrip kind="latency" :values="row.latencyHistory" :label="`${row.name} · ${t('applicationsPage.networkProbeLatencyHistory')}`" />
+                </div>
+                <div class="grid min-w-0 gap-1">
+                  <span class="truncate text-xs text-muted-foreground">{{ t('applicationsPage.networkProbeLossHistory') }}</span>
+                  <HistoryStrip kind="packetLoss" :values="row.lossHistory" :label="`${row.name} · ${t('applicationsPage.networkProbeLossHistory')}`" />
+                </div>
+              </div>
+            </li>
+          </ul>
+        </div>
+      </section>
+    </template>
   </div>
 </template>

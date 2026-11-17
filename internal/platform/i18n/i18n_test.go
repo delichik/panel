@@ -49,10 +49,10 @@ func TestTranslateLocaleCoversReverseProxyFacilityValidation(t *testing.T) {
 
 func TestTranslateLocaleCoversNetworkProbeValidation(t *testing.T) {
 	tests := map[string]string{
-		"network_probe_mode_invalid":     "网络探测模式必须为 all 或 selected",
-		"network_probe_servers_required": "选择指定节点模式时必须至少选择一个探测节点",
-		"network_probe_server_not_found": "所选探测节点不存在",
-		"network_probe_interval_invalid":      "探测间隔必须在 10 到 3600 秒之间",
+		"network_probe_mode_invalid":          "网络探测模式必须为 all 或 selected",
+		"network_probe_servers_required":      "选择指定节点模式时必须至少选择一个探测节点",
+		"network_probe_server_not_found":      "所选探测节点不存在",
+		"network_probe_interval_invalid":      "探测间隔必须在 1 到 60 分钟之间",
 		"network_probe_ping_count_invalid":    "每次探测的 ping 包数必须在 1 到 10 之间",
 		"network_probe_ping_timeout_invalid":  "单包超时必须在 1 到 10 秒之间",
 	}

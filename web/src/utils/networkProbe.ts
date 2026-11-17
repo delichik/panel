@@ -16,10 +16,45 @@ export interface NetworkProbeSettingRule {
 }
 
 export const networkProbeSettingRules: Record<NetworkProbeSettingField, NetworkProbeSettingRule> = {
-  intervalSeconds: { min: 10, max: 3600, step: 1, defaultValue: 60, errorCode: 'network_probe_interval_invalid' },
+  // 后台契约以秒为单位：最小 1 分钟（60 秒）、最大 60 分钟（3600 秒）。
+  intervalSeconds: { min: 60, max: 3600, step: 1, defaultValue: 60, errorCode: 'network_probe_interval_invalid' },
   pingCount: { min: 1, max: 10, step: 1, defaultValue: 3, errorCode: 'network_probe_ping_count_invalid' },
   pingTimeoutSeconds: { min: 1, max: 10, step: 1, defaultValue: 2, errorCode: 'network_probe_ping_timeout_invalid' },
 };
+
+/**
+ * 探测间隔的界面口径：表单以整数分钟输入（1..60，默认 1），保存时换算为后台的
+ * intervalSeconds = 分钟 × 60。这里集中定义分钟规则与换算 helper，避免表单、Mock
+ * 与测试各自漂移。
+ */
+export const networkProbeIntervalMinutes = { min: 1, max: 60, step: 1, defaultValue: 1 } as const;
+
+/** 分钟 → 秒（后台契约单位）。 */
+export function networkProbeIntervalSecondsFromMinutes(minutes: number): number {
+  return minutes * 60;
+}
+
+/** 秒 → 分钟：四舍五入取整，最小 1 分钟（兼容旧配置中的 <60 秒或非整分钟值）。 */
+export function networkProbeIntervalMinutesFromSeconds(seconds: number | null | undefined): number {
+  const value = typeof seconds === 'number' && Number.isFinite(seconds)
+    ? seconds
+    : networkProbeSettingRules.intervalSeconds.defaultValue;
+  return Math.max(networkProbeIntervalMinutes.min, Math.round(value / 60));
+}
+
+/** 分钟输入合法值必须是 1..60 的整数。 */
+export function isValidNetworkProbeIntervalMinutes(value: unknown): boolean {
+  return typeof value === 'number'
+    && Number.isInteger(value)
+    && value >= networkProbeIntervalMinutes.min
+    && value <= networkProbeIntervalMinutes.max;
+}
+
+/** 表单分钟原始输入（字符串）转数字；空串、小数、越界一律返回 null。 */
+export function parseNetworkProbeIntervalMinutes(raw: string): number | null {
+  const value = parseNetworkProbeSetting(raw);
+  return value !== null && isValidNetworkProbeIntervalMinutes(value) ? value : null;
+}
 
 export const networkProbeSettingFields = Object.keys(networkProbeSettingRules) as NetworkProbeSettingField[];
 

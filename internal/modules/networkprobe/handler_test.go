@@ -168,7 +168,7 @@ func firstResultField(t *testing.T, recorder *httptest.ResponseRecorder, field s
 func TestHandlerMapsValidationErrors(t *testing.T) {
 	cases := map[string]string{
 		"network_probe_mode_invalid":         "mode must be all or selected",
-		"network_probe_interval_invalid":     "intervalSeconds must be between 10 and 3600",
+		"network_probe_interval_invalid":     "intervalSeconds must be between 60 and 3600",
 		"network_probe_ping_count_invalid":   "pingCount must be between 1 and 10",
 		"network_probe_ping_timeout_invalid": "pingTimeoutSeconds must be between 1 and 10",
 	}
