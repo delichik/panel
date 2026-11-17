@@ -116,7 +116,7 @@ func TestRunUsesInjectedRunnerAndKeepsTargetOrder(t *testing.T) {
 		}
 		return strings.ReplaceAll(iputilsOutput, "10.0.0.2", address), nil
 	}
-	results := Run(context.Background(), targets, runner)
+	results := Run(context.Background(), targets, Options{}, runner)
 	if len(results) != len(targets) {
 		t.Fatalf("Run returned %d results, want %d", len(results), len(targets))
 	}
@@ -138,7 +138,7 @@ func TestRunReportsAllLostTargetsWithError(t *testing.T) {
 	runner := func(context.Context, string) (string, error) {
 		return output, errors.New("exit status 1")
 	}
-	results := Run(context.Background(), []Target{{ServerID: "s9", Address: "10.0.0.9"}}, runner)
+	results := Run(context.Background(), []Target{{ServerID: "s9", Address: "10.0.0.9"}}, Options{}, runner)
 	if len(results) != 1 {
 		t.Fatalf("unexpected results: %#v", results)
 	}
@@ -168,19 +168,89 @@ func TestRunCapsConcurrency(t *testing.T) {
 	for index := range targets {
 		targets[index] = Target{ServerID: fmt.Sprintf("s%d", index), Address: fmt.Sprintf("10.0.1.%d", index+1)}
 	}
-	Run(context.Background(), targets, runner)
+	Run(context.Background(), targets, Options{}, runner)
 	if got := maxActive.Load(); got > MaxConcurrency {
 		t.Fatalf("max concurrent probes = %d, want at most %d", got, MaxConcurrency)
 	}
 }
 
+func TestOptionsNormalizeDefaultsAndClamps(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   Options
+		want Options
+	}{
+		{name: "zero falls back to defaults", in: Options{}, want: Options{Count: DefaultCount, TimeoutSeconds: DefaultTimeoutSeconds}},
+		{name: "negative falls back to defaults", in: Options{Count: -2, TimeoutSeconds: -3}, want: Options{Count: DefaultCount, TimeoutSeconds: DefaultTimeoutSeconds}},
+		{name: "custom values kept", in: Options{Count: 5, TimeoutSeconds: 4}, want: Options{Count: 5, TimeoutSeconds: 4}},
+		{name: "count clamped high", in: Options{Count: 99, TimeoutSeconds: 2}, want: Options{Count: MaxCount, TimeoutSeconds: 2}},
+		{name: "timeout clamped high", in: Options{Count: 3, TimeoutSeconds: 99}, want: Options{Count: 3, TimeoutSeconds: MaxTimeoutSeconds}},
+		{name: "single values kept at bounds", in: Options{Count: 1, TimeoutSeconds: 1}, want: Options{Count: 1, TimeoutSeconds: 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.in.Normalize(); got != tc.want {
+				t.Fatalf("Normalize(%+v) = %+v, want %+v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestOptionsTargetTimeoutFollowsPingBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts Options
+		want time.Duration
+	}{
+		// 默认 3 包 * 2 秒 + 2 秒余量。
+		{name: "defaults", opts: Options{}, want: 8 * time.Second},
+		{name: "custom", opts: Options{Count: 5, TimeoutSeconds: 4}, want: 22 * time.Second},
+		// 最小组合 1*1+2=3 秒，正好落在下限。
+		{name: "minimal combination", opts: Options{Count: 1, TimeoutSeconds: 1}, want: 3 * time.Second},
+		// 越界输入先夹紧再计算。
+		{name: "clamped", opts: Options{Count: 50, TimeoutSeconds: 50}, want: 102 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.opts.targetTimeout(); got != tc.want {
+				t.Fatalf("targetTimeout(%+v) = %s, want %s", tc.opts, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunUsesConfiguredPerTargetTimeout(t *testing.T) {
+	runner := func(ctx context.Context, _ string) (string, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Error("probe runner context must carry a deadline")
+			return "", errors.New("missing deadline")
+		}
+		// 5 包 * 4 秒 + 2 秒余量 = 22 秒；允许极小的时间流逝误差。
+		if remaining := time.Until(deadline); remaining <= 21*time.Second || remaining > 22*time.Second {
+			t.Errorf("per-target timeout = %s, want ~22s", remaining)
+		}
+		return iputilsOutput, nil
+	}
+	Run(context.Background(), []Target{{ServerID: "s1", Address: "10.0.0.1"}}, Options{Count: 5, TimeoutSeconds: 4}, runner)
+}
+
 func TestPingArgsBuildsIPv4AndIPv6Commands(t *testing.T) {
+	defaults := Options{}
 	wantV4 := []string{"-n", "-c", "3", "-W", "2", "10.0.0.1"}
-	if got := pingArgs("10.0.0.1"); !reflect.DeepEqual(got, wantV4) {
+	if got := pingArgs("10.0.0.1", defaults); !reflect.DeepEqual(got, wantV4) {
 		t.Fatalf("pingArgs(ipv4) = %#v, want %#v", got, wantV4)
 	}
 	wantV6 := []string{"-6", "-n", "-c", "3", "-W", "2", "fd00::1"}
-	if got := pingArgs("fd00::1"); !reflect.DeepEqual(got, wantV6) {
+	if got := pingArgs("fd00::1", defaults); !reflect.DeepEqual(got, wantV6) {
 		t.Fatalf("pingArgs(ipv6) = %#v, want %#v", got, wantV6)
+	}
+	custom := Options{Count: 5, TimeoutSeconds: 4}
+	wantCustom := []string{"-n", "-c", "5", "-W", "4", "10.0.0.2"}
+	if got := pingArgs("10.0.0.2", custom); !reflect.DeepEqual(got, wantCustom) {
+		t.Fatalf("pingArgs(custom) = %#v, want %#v", got, wantCustom)
+	}
+	clamped := Options{Count: 99, TimeoutSeconds: 0}
+	wantClamped := []string{"-n", "-c", "10", "-W", "2", "10.0.0.3"}
+	if got := pingArgs("10.0.0.3", clamped); !reflect.DeepEqual(got, wantClamped) {
+		t.Fatalf("pingArgs(clamped) = %#v, want %#v", got, wantClamped)
 	}
 }

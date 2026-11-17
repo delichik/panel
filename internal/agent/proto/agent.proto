@@ -101,6 +101,11 @@ message AgentProbeConfig {
   bool enabled = 1;
   int32 interval_seconds = 2;
   repeated AgentProbeTarget targets = 3;
+  // ping_count/ping_timeout_seconds 是每次探测的发包数与单包等待秒数，来自
+  // 探测设施配置。旧 Panel 不填这两个字段：Agent 必须回退到默认 3 包/2 秒，
+  // 不得把 0 当成有效配置。
+  int32 ping_count = 4;
+  int32 ping_timeout_seconds = 5;
 }
 
 message AgentProbeTarget {

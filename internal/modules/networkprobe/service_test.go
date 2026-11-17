@@ -21,6 +21,9 @@ CREATE TABLE network_probe_configs (
 	id TEXT PRIMARY KEY,
 	mode TEXT NOT NULL DEFAULT 'all',
 	server_ids_json TEXT NOT NULL DEFAULT '[]',
+	interval_seconds INTEGER NOT NULL DEFAULT 60,
+	ping_count INTEGER NOT NULL DEFAULT 3,
+	ping_timeout_seconds INTEGER NOT NULL DEFAULT 2,
 	version INTEGER NOT NULL DEFAULT 1,
 	updated_at TEXT NOT NULL
 );
@@ -597,4 +600,195 @@ func TestServerResultsHistoryMissingServer(t *testing.T) {
 	svc, _, _ := newTestService(t, testServers()...)
 	_, err := svc.ServerResultsHistory(context.Background(), "missing")
 	requirePanelCode(t, err, "not_found")
+}
+
+// TestSaveProbeParameterDefaultsAndBounds covers FAC-PRB: omitted (0) parameter
+// values are normalized to the documented defaults, boundary values are
+// accepted, and out-of-range values return the stable error codes without writing
+// the configuration.
+func TestSaveProbeParameterDefaultsAndBounds(t *testing.T) {
+	svc, _, _ := newTestService(t, testServers()...)
+	ctx := context.Background()
+
+	saved, err := svc.Save(ctx, SaveInput{Mode: ModeAll})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.IntervalSeconds != DefaultProbeIntervalSeconds || saved.PingCount != DefaultPingCount || saved.PingTimeoutSeconds != DefaultPingTimeoutSeconds {
+		t.Fatalf("omitted parameters must default, got %#v", saved)
+	}
+	reloaded, err := svc.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.IntervalSeconds != DefaultProbeIntervalSeconds || reloaded.PingCount != DefaultPingCount || reloaded.PingTimeoutSeconds != DefaultPingTimeoutSeconds {
+		t.Fatalf("persisted defaults = %#v", reloaded)
+	}
+
+	// 合法边界值必须原样保存。
+	saved, err = svc.Save(ctx, SaveInput{Mode: ModeAll, IntervalSeconds: MinProbeIntervalSeconds, PingCount: MinPingCount, PingTimeoutSeconds: MinPingTimeoutSeconds})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.IntervalSeconds != MinProbeIntervalSeconds || saved.PingCount != MinPingCount || saved.PingTimeoutSeconds != MinPingTimeoutSeconds {
+		t.Fatalf("minimum bounds = %#v", saved)
+	}
+	saved, err = svc.Save(ctx, SaveInput{Mode: ModeAll, IntervalSeconds: MaxProbeIntervalSeconds, PingCount: MaxPingCount, PingTimeoutSeconds: MaxPingTimeoutSeconds})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.IntervalSeconds != MaxProbeIntervalSeconds || saved.PingCount != MaxPingCount || saved.PingTimeoutSeconds != MaxPingTimeoutSeconds {
+		t.Fatalf("maximum bounds = %#v", saved)
+	}
+
+	before, err := svc.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		in   SaveInput
+		code string
+	}{
+		{"negative interval", SaveInput{Mode: ModeAll, IntervalSeconds: -1}, "network_probe_interval_invalid"},
+		{"interval below minimum", SaveInput{Mode: ModeAll, IntervalSeconds: MinProbeIntervalSeconds - 1}, "network_probe_interval_invalid"},
+		{"interval above maximum", SaveInput{Mode: ModeAll, IntervalSeconds: MaxProbeIntervalSeconds + 1}, "network_probe_interval_invalid"},
+		{"negative ping count", SaveInput{Mode: ModeAll, PingCount: -1}, "network_probe_ping_count_invalid"},
+		{"ping count above maximum", SaveInput{Mode: ModeAll, PingCount: MaxPingCount + 1}, "network_probe_ping_count_invalid"},
+		{"negative ping timeout", SaveInput{Mode: ModeAll, PingTimeoutSeconds: -1}, "network_probe_ping_timeout_invalid"},
+		{"ping timeout above maximum", SaveInput{Mode: ModeAll, PingTimeoutSeconds: MaxPingTimeoutSeconds + 1}, "network_probe_ping_timeout_invalid"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := svc.Save(ctx, tc.in); err != nil {
+				requirePanelCode(t, err, tc.code)
+			} else {
+				t.Fatalf("expected %s, save succeeded", tc.code)
+			}
+		})
+	}
+	after, err := svc.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Version != before.Version || after.IntervalSeconds != before.IntervalSeconds || after.PingCount != before.PingCount || after.PingTimeoutSeconds != before.PingTimeoutSeconds {
+		t.Fatalf("invalid saves must not persist: before=%#v after=%#v", before, after)
+	}
+}
+
+// TestLoadConfigNormalizesLegacyAndOutOfRangeParameters covers defensive reads:
+// legacy alpha rows with 0 and manually corrupted out-of-range values fall back
+// to the defaults instead of being handed to agents.
+func TestLoadConfigNormalizesLegacyAndOutOfRangeParameters(t *testing.T) {
+	svc, _, _ := newTestService(t, testServers()...)
+	ctx := context.Background()
+	empty, err := svc.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if empty.IntervalSeconds != DefaultProbeIntervalSeconds || empty.PingCount != DefaultPingCount || empty.PingTimeoutSeconds != DefaultPingTimeoutSeconds {
+		t.Fatalf("missing config row must expose defaults: %#v", empty)
+	}
+	if _, err := svc.db.Exec(`INSERT INTO network_probe_configs(id,mode,server_ids_json,interval_seconds,ping_count,ping_timeout_seconds,version,updated_at) VALUES('network_probe','all','[]',0,0,0,4,'2026-11-16T12:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := svc.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Version != 4 || cfg.IntervalSeconds != DefaultProbeIntervalSeconds || cfg.PingCount != DefaultPingCount || cfg.PingTimeoutSeconds != DefaultPingTimeoutSeconds {
+		t.Fatalf("legacy zero row normalization = %#v", cfg)
+	}
+	report, err := svc.ReportConfig(ctx, "srv-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.IntervalSeconds != DefaultProbeIntervalSeconds || report.PingCount != DefaultPingCount || report.PingTimeoutSeconds != DefaultPingTimeoutSeconds {
+		t.Fatalf("legacy zero row report = %#v", report)
+	}
+
+	if _, err := svc.db.Exec(`UPDATE network_probe_configs SET interval_seconds=99999,ping_count=-3,ping_timeout_seconds=11 WHERE id='network_probe'`); err != nil {
+		t.Fatal(err)
+	}
+	svc.invalidate()
+	outOfRange, err := svc.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outOfRange.IntervalSeconds != DefaultProbeIntervalSeconds || outOfRange.PingCount != DefaultPingCount || outOfRange.PingTimeoutSeconds != DefaultPingTimeoutSeconds {
+		t.Fatalf("out-of-range row normalization = %#v", outOfRange)
+	}
+}
+
+// TestReportConfigCarriesConfiguredParameters covers the downstream contract:
+// the saved probe parameters are what the report stream sends to agents.
+func TestReportConfigCarriesConfiguredParameters(t *testing.T) {
+	svc, _, _ := newTestService(t, testServers()...)
+	ctx := context.Background()
+	if _, err := svc.Save(ctx, SaveInput{Mode: ModeAll, IntervalSeconds: 120, PingCount: 5, PingTimeoutSeconds: 4}); err != nil {
+		t.Fatal(err)
+	}
+	report, err := svc.ReportConfig(ctx, "srv-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Enabled || report.IntervalSeconds != 120 || report.PingCount != 5 || report.PingTimeoutSeconds != 4 {
+		t.Fatalf("report = %#v, want configured parameters", report)
+	}
+	if len(report.Targets) == 0 {
+		t.Fatal("enabled report must carry targets")
+	}
+}
+
+// TestStaleThresholdScalesWithInterval covers the freshness rule
+// max(5min, 3*intervalSeconds): larger intervals must widen the stale window so
+// results do not stay stale forever after the user slows probing down.
+func TestStaleThresholdScalesWithInterval(t *testing.T) {
+	svc, _, now := newTestService(t, testServers()...)
+	ctx := context.Background()
+	matrixStale := func() bool {
+		svc.invalidate()
+		matrix, err := svc.Matrix(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, result := range matrix.Results {
+			if result.SourceServerID == "srv-a" && result.TargetServerID == "srv-b" {
+				return result.Stale
+			}
+		}
+		t.Fatalf("result not found in matrix: %#v", matrix.Results)
+		return false
+	}
+
+	// 120s 间隔 → 阈值 6 分钟：5.5 分钟旧仍新鲜，6.5 分钟旧已过期。
+	if _, err := svc.Save(ctx, SaveInput{Mode: ModeAll, IntervalSeconds: 120}); err != nil {
+		t.Fatal(err)
+	}
+	saveProbeSample(t, svc, now.Add(-5*time.Minute-30*time.Second), "srv-b", 1, 0, 3, 3, "")
+	if matrixStale() {
+		t.Fatal("5.5-minute-old result must be fresh with a 6-minute threshold")
+	}
+	saveProbeSample(t, svc, now.Add(-6*time.Minute-30*time.Second), "srv-b", 1, 0, 3, 3, "")
+	if !matrixStale() {
+		t.Fatal("6.5-minute-old result must be stale with a 6-minute threshold")
+	}
+
+	// 默认 60s 间隔 → 仍使用固定 5 分钟下限。
+	if _, err := svc.Save(ctx, SaveInput{Mode: ModeAll}); err != nil {
+		t.Fatal(err)
+	}
+	saveProbeSample(t, svc, now.Add(-5*time.Minute-30*time.Second), "srv-b", 1, 0, 3, 3, "")
+	if !matrixStale() {
+		t.Fatal("5.5-minute-old result must be stale with the 5-minute default threshold")
+	}
+
+	// 3600s 间隔 → 阈值 3 小时：1 小时旧仍新鲜。
+	if _, err := svc.Save(ctx, SaveInput{Mode: ModeAll, IntervalSeconds: 3600}); err != nil {
+		t.Fatal(err)
+	}
+	saveProbeSample(t, svc, now.Add(-time.Hour), "srv-b", 1, 0, 3, 3, "")
+	if matrixStale() {
+		t.Fatal("1-hour-old result must be fresh with a 3-hour threshold")
+	}
 }

@@ -61,7 +61,7 @@ func decodeEnvelope(t *testing.T, recorder *httptest.ResponseRecorder) map[strin
 // TestHandlerRoutes covers the facility HTTP surface: config read/save, matrix
 // query filtering and the server-scoped results endpoint.
 func TestHandlerRoutes(t *testing.T) {
-	svc := &fakeHandlerService{config: Config{Mode: ModeAll, ServerIDs: []string{}, Version: 1}}
+	svc := &fakeHandlerService{config: Config{Mode: ModeAll, ServerIDs: []string{}, IntervalSeconds: 120, PingCount: 5, PingTimeoutSeconds: 4, Version: 1}}
 	handler := NewHandler(svc)
 
 	rec := httptest.NewRecorder()
@@ -69,14 +69,21 @@ func TestHandlerRoutes(t *testing.T) {
 	if rec.Code != http.StatusOK || svc.config.Mode != ModeAll {
 		t.Fatalf("config response = %d", rec.Code)
 	}
+	configData, ok := decodeEnvelope(t, rec)["data"].(map[string]any)
+	if !ok || configData["intervalSeconds"] != 120.0 || configData["pingCount"] != 5.0 || configData["pingTimeoutSeconds"] != 4.0 {
+		t.Fatalf("config response must expose probe parameters: %#v", configData)
+	}
 
 	rec = httptest.NewRecorder()
-	handler.SaveConfig(rec, httptest.NewRequest(http.MethodPut, "/api/v1/facility-apps/network-probe", strings.NewReader(`{"mode":"selected","serverIds":["srv-a"]}`)))
+	handler.SaveConfig(rec, httptest.NewRequest(http.MethodPut, "/api/v1/facility-apps/network-probe", strings.NewReader(`{"mode":"selected","serverIds":["srv-a"],"intervalSeconds":120,"pingCount":5,"pingTimeoutSeconds":4}`)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("save response = %d (%s)", rec.Code, rec.Body.String())
 	}
 	if svc.saveInput.Mode != ModeSelected || len(svc.saveInput.ServerIDs) != 1 || svc.saveInput.ServerIDs[0] != "srv-a" {
 		t.Fatalf("decoded save input = %#v", svc.saveInput)
+	}
+	if svc.saveInput.IntervalSeconds != 120 || svc.saveInput.PingCount != 5 || svc.saveInput.PingTimeoutSeconds != 4 {
+		t.Fatalf("decoded probe parameters = %#v", svc.saveInput)
 	}
 
 	rec = httptest.NewRecorder()
@@ -159,17 +166,25 @@ func firstResultField(t *testing.T, recorder *httptest.ResponseRecorder, field s
 // TestHandlerMapsValidationErrors keeps the stable error codes visible on the
 // wire.
 func TestHandlerMapsValidationErrors(t *testing.T) {
-	svc := &failingHandlerService{err: panelerr.Validation("network_probe_mode_invalid", "mode must be all or selected")}
-	handler := NewHandler(svc)
-	rec := httptest.NewRecorder()
-	handler.SaveConfig(rec, httptest.NewRequest(http.MethodPut, "/api/v1/facility-apps/network-probe", strings.NewReader(`{"mode":"bogus"}`)))
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422", rec.Code)
+	cases := map[string]string{
+		"network_probe_mode_invalid":         "mode must be all or selected",
+		"network_probe_interval_invalid":     "intervalSeconds must be between 10 and 3600",
+		"network_probe_ping_count_invalid":   "pingCount must be between 1 and 10",
+		"network_probe_ping_timeout_invalid": "pingTimeoutSeconds must be between 1 and 10",
 	}
-	envelope := decodeEnvelope(t, rec)
-	errorPayload, ok := envelope["error"].(map[string]any)
-	if !ok || errorPayload["code"] != "network_probe_mode_invalid" {
-		t.Fatalf("error payload = %#v", envelope["error"])
+	for code, message := range cases {
+		svc := &failingHandlerService{err: panelerr.Validation(code, message)}
+		handler := NewHandler(svc)
+		rec := httptest.NewRecorder()
+		handler.SaveConfig(rec, httptest.NewRequest(http.MethodPut, "/api/v1/facility-apps/network-probe", strings.NewReader(`{"mode":"all"}`)))
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("%s: status = %d, want 422", code, rec.Code)
+		}
+		envelope := decodeEnvelope(t, rec)
+		errorPayload, ok := envelope["error"].(map[string]any)
+		if !ok || errorPayload["code"] != code {
+			t.Fatalf("%s: error payload = %#v", code, envelope["error"])
+		}
 	}
 }
 

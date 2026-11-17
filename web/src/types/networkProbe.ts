@@ -32,16 +32,30 @@ export interface NetworkProbeResult {
   history?: NetworkProbeHistoryPoint[];
 }
 
-export interface NetworkProbeConfig {
+export interface NetworkProbeConfig extends NetworkProbeSettings {
   mode: NetworkProbeMode;
   serverIds: string[];
   version: number;
   updatedAt: string;
 }
 
+/** 探测节拍参数；旧 payload 缺省时由服务端按默认值补齐（interval=60、count=3、timeout=2）。 */
+export interface NetworkProbeSettings {
+  /** 探测周期（秒），合法区间 10..3600。 */
+  intervalSeconds: number;
+  /** 每次探测发送的 ping 包数，合法区间 1..10。 */
+  pingCount: number;
+  /** 单包超时（秒），合法区间 1..10。 */
+  pingTimeoutSeconds: number;
+}
+
 export interface NetworkProbeSaveInput {
   mode: NetworkProbeMode;
   serverIds: string[];
+  /** 旧 payload 可缺省，服务端按默认值补齐。 */
+  intervalSeconds?: number;
+  pingCount?: number;
+  pingTimeoutSeconds?: number;
 }
 
 export interface NetworkProbeMatrix {

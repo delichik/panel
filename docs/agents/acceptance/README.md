@@ -46,7 +46,7 @@
 | 产品范围、端到端用户旅程、全局非目标 | [产品范围与端到端验收](product-scope.md) |
 | 全局导航、慢网路由反馈、会话、布局、通用交互 | [界面外壳与交互约定](ui-shell-and-conventions.md) |
 | 任一具体页面、页面首次加载或用户操作 | [逐页面验收](ui-pages.md) |
-| 应用、挂载来源、应用文件、修订、部署、节点工作区布局、设施应用、存储共享、网络探测设施 `FAC-PRB-001..008`；规划失败 `APP-PLAN-001`、系统核实中 `APP-RUN-004` | [应用与设施应用](applications-and-facilities.md) |
+| 应用、挂载来源、应用文件、修订、部署、节点工作区布局、设施应用、存储共享、网络探测设施 `FAC-PRB-001..010`；规划失败 `APP-PLAN-001`、系统核实中 `APP-RUN-004` | [应用与设施应用](applications-and-facilities.md) |
 | desired/observed、协调 Job、统一追加活动日志、任务、运行事件；规划失败隔离 `ORCH-PLAN-006`、启动稳定观察 `ORCH-CTRL-007`；RunEngine Phase A `ENG-RUN-001..005`、`ENG-RET-001`、`TASK-DISPATCH-001..003` | [协调、任务与运行事件](orchestration-and-tasks.md) |
 | 容器、镜像、网络、卷、资源缓存与操作队列 | [容器与资源](containers-and-resources.md) |
 | 登录、账号、运行时设置、概览、系统版本 | [身份、设置与系统](identity-settings-system.md) |
@@ -70,7 +70,7 @@
 
 进程事件 `/events`、诊断日志 `/logs`、按需读取与 `/activity`/`/operations`/`/tasks` 重定向见 [UI-EVT-004..007](ui-pages.md)、[UI-LOG-001..003](ui-pages.md)（`UI-ACT-*` 已废弃）。
 
-磁盘使用率改为 5 分钟低频采样且只展示当前值、磁盘 IO 读写速率与指标弱网补报见 [OBS-MET-007..009](backup-restore-diagnostics.md)、[AGT-RPT-004/007](servers-security-packages.md)；首页概览已改为固定只读状态页（节点情况摘要 + 带 24h 历史条与上下行速率的服务器卡片，并行多接口取数，不再消费 `/overview` 卡片接口），见 [UI-OVR-001/013..019](ui-pages.md) 与 [GAP-031](known-gaps.md)；旧 `UI-OVR-002..012` 卡片条目已废弃。指标 bucket/latest 见 [OBS-MET-003](backup-restore-diagnostics.md)，探测 24h 历史见 [FAC-PRB-009](applications-and-facilities.md)。设施网络探测（`network-probe`）的配置、周期、结果与删除清理见 [FAC-PRB-001..008](applications-and-facilities.md)，页面与矩阵见 [UI-FAC-014..017](ui-pages.md)、[UI-SRV-025](ui-pages.md)；表结构与可空磁盘 IO 列见 [架构、数据与 API](architecture-data-api.md)。
+磁盘使用率改为 5 分钟低频采样且只展示当前值、磁盘 IO 读写速率与指标弱网补报见 [OBS-MET-007..009](backup-restore-diagnostics.md)、[AGT-RPT-004/007](servers-security-packages.md)；首页概览已改为固定只读状态页（节点情况摘要 + 带 24h 历史条与上下行速率的服务器卡片，并行多接口取数，不再消费 `/overview` 卡片接口），见 [UI-OVR-001/013..019](ui-pages.md) 与 [GAP-031](known-gaps.md)；旧 `UI-OVR-002..012` 卡片条目已废弃。指标 bucket/latest 见 [OBS-MET-003](backup-restore-diagnostics.md)，探测 24h 历史见 [FAC-PRB-009](applications-and-facilities.md)。设施网络探测（`network-probe`）的配置、周期/包数/超时参数（`FAC-PRB-010`）、结果与删除清理见 [FAC-PRB-001..010](applications-and-facilities.md)，设施详情配置与「探测源 + 搜索 + 纵向历史列表」见 [UI-FAC-014..018](ui-pages.md)、[UI-SRV-025](ui-pages.md)（横向矩阵 UI 已废弃，`UI-FAC-016`）；表结构与可空磁盘 IO 列、`network_probe_configs` 三参数列见 [架构、数据与 API](architecture-data-api.md)。
 
 服务器详情一级 tab 收敛为 概览/系统/资源/网络与安全；概览合并原「概况」与「监控」，状态条与指标仪表盘同屏，系统内为 Agent/Tailscale/软件包，网络与安全内为网络探测/防火墙；旧一级 tab 深链保留别名。指标改按范围请求后端既有 `bucket` 桶聚合并展示坐标轴/图例/平均峰值/阈值/空档断线。见 [UI-SRV-002/008/009/016/017/018/019/020/025/026](ui-pages.md)、[UI-SHELL-062](ui-shell-and-conventions.md)；不新增后端 API、数据库表或后台任务。
 

@@ -822,6 +822,9 @@ type NetworkProbeConfig struct {
 	ID        string    `orm:"primary_key"`
 	Mode      string    `orm:"not_null;default:'all'"`
 	ServerIDs []string  `orm:"json;not_null;default:'[]';column:server_ids_json"`
+	IntervalSeconds    int       `orm:"not_null;default:60"`
+	PingCount          int       `orm:"not_null;default:3"`
+	PingTimeoutSeconds int       `orm:"not_null;default:2"`
 	Version   int       `orm:"not_null;default:1"`
 	UpdatedAt time.Time `orm:"not_null"`
 }

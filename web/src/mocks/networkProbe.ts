@@ -9,6 +9,7 @@ import type {
   NetworkProbeServerResults,
 } from '@/types/networkProbe';
 import type { ServerDto } from '@/types/servers';
+import { networkProbeSettingRules, normalizeNetworkProbeSettings, networkProbeSettingsError } from '@/utils/networkProbe';
 import { mockServers } from './servers';
 
 /** 网络探测设施配置/结果校验错误：browser mock 捕获后按契约错误码返回。 */
@@ -27,6 +28,9 @@ export class MockNetworkProbeError extends Error {
 let config: NetworkProbeConfig = {
   mode: 'all',
   serverIds: [],
+  intervalSeconds: networkProbeSettingRules.intervalSeconds.defaultValue,
+  pingCount: networkProbeSettingRules.pingCount.defaultValue,
+  pingTimeoutSeconds: networkProbeSettingRules.pingTimeoutSeconds.defaultValue,
   version: 1,
   updatedAt: '2026-11-16T05:00:00.000Z',
 };
@@ -115,9 +119,16 @@ export function saveNetworkProbeConfig(input: NetworkProbeSaveInput): NetworkPro
   if (missing) {
     throw new MockNetworkProbeError('network_probe_server_not_found', `Server ${missing} was not found.`, 404);
   }
+  // 旧 payload 缺省三个节拍参数时按默认值补齐；显式非法值按契约错误码拒绝。
+  const settingsError = networkProbeSettingsError(input);
+  if (settingsError) {
+    throw new MockNetworkProbeError(settingsError.code, `Probe setting ${settingsError.field} is out of range.`);
+  }
+  const settings = normalizeNetworkProbeSettings(input);
   config = {
     mode: input.mode,
     serverIds,
+    ...settings,
     version: config.version + 1,
     updatedAt: new Date().toISOString(),
   };

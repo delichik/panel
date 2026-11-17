@@ -19,14 +19,60 @@ import (
 const (
 	// MaxConcurrency 是单轮探测的最大并发数，避免一次探测高峰影响节点网络。
 	MaxConcurrency = 8
-	// perTargetTimeout 是单个目标的探测预算。ping 自身用 -c 3 -W 2 控制发包，
-	// 最坏情况（3 个包全部超时）约 6 秒，因此预算留到 7 秒，保证仍能拿到
-	// 统计行；这里再兜底一次，防止 ping 进程卡死占用探测协程。
-	perTargetTimeout = 7 * time.Second
-	// pingCount/pingWaitSeconds 与 Panel 的探测口径保持一致。
-	pingCount       = 3
-	pingWaitSeconds = 2
+	// DefaultCount/DefaultTimeoutSeconds 是默认探测口径：3 个包、单包最多
+	// 等 2 秒。旧 Panel 不下发 ping 配置时使用。
+	DefaultCount          = 3
+	DefaultTimeoutSeconds = 2
+	// 合法范围：防止异常配置放大探测负载，或让探测协程被长时间占用。
+	MinCount          = 1
+	MaxCount          = 10
+	MinTimeoutSeconds = 1
+	MaxTimeoutSeconds = 10
+	// minTargetTimeout 是单目标兜底超时的下限。
+	minTargetTimeout = 3 * time.Second
 )
+
+// Options 是一次探测的 ping 参数。Count 是发包数，TimeoutSeconds 是单包等待
+// 秒数（ping -W），均由 Panel 的探测设施配置下发。
+type Options struct {
+	Count          int
+	TimeoutSeconds int
+}
+
+// Normalize 把选项归一到合法范围：<=0 回默认值，越界值夹紧到 1..10。
+// 返回值而非原地修改，调用方不会因共享 Options 产生串扰。
+func (o Options) Normalize() Options {
+	if o.Count <= 0 {
+		o.Count = DefaultCount
+	}
+	if o.Count > MaxCount {
+		o.Count = MaxCount
+	}
+	if o.Count < MinCount {
+		o.Count = MinCount
+	}
+	if o.TimeoutSeconds <= 0 {
+		o.TimeoutSeconds = DefaultTimeoutSeconds
+	}
+	if o.TimeoutSeconds > MaxTimeoutSeconds {
+		o.TimeoutSeconds = MaxTimeoutSeconds
+	}
+	if o.TimeoutSeconds < MinTimeoutSeconds {
+		o.TimeoutSeconds = MinTimeoutSeconds
+	}
+	return o
+}
+
+// targetTimeout 是单个目标的兜底超时：ping 自身要等 Count*TimeoutSeconds
+// 才可能全部超时，这里再加 2 秒留出进程启动和统计行输出时间，且不低于 3 秒。
+func (o Options) targetTimeout() time.Duration {
+	o = o.Normalize()
+	timeout := time.Duration(o.Count*o.TimeoutSeconds)*time.Second + 2*time.Second
+	if timeout < minTargetTimeout {
+		timeout = minTargetTimeout
+	}
+	return timeout
+}
 
 // Target 是一个探测目标：Panel 已排除探测节点自身，地址取自目标服务器的
 // IPv4、IPv6 或主机名。
@@ -69,10 +115,12 @@ var (
 	icmpTimePattern = regexp.MustCompile(`time[=<]([0-9.]+)\s*ms`)
 )
 
-// Run 并发探测全部目标，返回顺序与 targets 一致。runner 为 nil 时使用系统 ping。
-func Run(ctx context.Context, targets []Target, runner Runner) []Result {
+// Run 使用 opts 描述的 ping 参数并发探测全部目标，返回顺序与 targets 一致。
+// runner 为 nil 时使用系统 ping；opts 会先归一化，非法值回默认/夹紧。
+func Run(ctx context.Context, targets []Target, opts Options, runner Runner) []Result {
+	opts = opts.Normalize()
 	if runner == nil {
-		runner = execRunner
+		runner = execRunner(opts)
 	}
 	results := make([]Result, len(targets))
 	sem := make(chan struct{}, MaxConcurrency)
@@ -89,16 +137,16 @@ func Run(ctx context.Context, targets []Target, runner Runner) []Result {
 				results[index] = Result{TargetServerID: target.ServerID, TargetAddress: target.Address, Error: ctx.Err().Error()}
 				return
 			}
-			results[index] = probeTarget(ctx, target, runner)
+			results[index] = probeTarget(ctx, target, opts, runner)
 		}()
 	}
 	wg.Wait()
 	return results
 }
 
-func probeTarget(ctx context.Context, target Target, runner Runner) Result {
+func probeTarget(ctx context.Context, target Target, opts Options, runner Runner) Result {
 	result := Result{TargetServerID: target.ServerID, TargetAddress: target.Address}
-	probeCtx, cancel := context.WithTimeout(ctx, perTargetTimeout)
+	probeCtx, cancel := context.WithTimeout(ctx, opts.targetTimeout())
 	defer cancel()
 	output, runErr := runner(probeCtx, target.Address)
 	stats, parseErr := ParsePingOutput(output)
@@ -160,21 +208,25 @@ func ParsePingOutput(output string) (Stats, error) {
 	return stats, nil
 }
 
-// execRunner 用系统 ping 测量目标：-n 不解析域名、-c 3 发 3 个包、
-// -W 2 每个包最多等 2 秒；IPv6 地址追加 -6。LC_ALL=C 保证统计行可解析。
-func execRunner(ctx context.Context, address string) (string, error) {
-	cmd := exec.CommandContext(ctx, "ping", pingArgs(address)...)
-	cmd.Env = append(os.Environ(), "LC_ALL=C")
-	output, err := cmd.CombinedOutput()
-	return string(output), err
+// execRunner 返回使用系统 ping 的 Runner：-n 不解析域名、-c count 发包数、
+// -W timeout 单包等待秒数；IPv6 地址追加 -6。LC_ALL=C 保证统计行可解析。
+func execRunner(opts Options) Runner {
+	opts = opts.Normalize()
+	return func(ctx context.Context, address string) (string, error) {
+		cmd := exec.CommandContext(ctx, "ping", pingArgs(address, opts)...)
+		cmd.Env = append(os.Environ(), "LC_ALL=C")
+		output, err := cmd.CombinedOutput()
+		return string(output), err
+	}
 }
 
-func pingArgs(address string) []string {
+func pingArgs(address string, opts Options) []string {
+	opts = opts.Normalize()
 	args := make([]string, 0, 8)
 	if isIPv6Address(address) {
 		args = append(args, "-6")
 	}
-	args = append(args, "-n", "-c", strconv.Itoa(pingCount), "-W", strconv.Itoa(pingWaitSeconds), address)
+	args = append(args, "-n", "-c", strconv.Itoa(opts.Count), "-W", strconv.Itoa(opts.TimeoutSeconds), address)
 	return args
 }
 

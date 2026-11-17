@@ -1,19 +1,25 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { RefreshCcw, Save } from '@lucide/vue';
 import { networkProbeFacilityApi } from '@/api/networkProbe';
+import { serversApi } from '@/api/servers';
+import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
+import Input from '@/components/ui/Input.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
+import SearchInput from '@/components/ui/SearchInput.vue';
 import Select from '@/components/ui/Select.vue';
 import ServerMultiPicker from '@/components/patterns/ServerMultiPicker.vue';
-import Table from '@/components/ui/Table.vue';
+import HistoryStrip from '@/views/overview/HistoryStrip.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
-import type { NetworkProbeConfig, NetworkProbeMatrix, NetworkProbeMode, NetworkProbeResult } from '@/types/networkProbe';
+import type { NetworkProbeConfig, NetworkProbeMatrix, NetworkProbeMode, NetworkProbeResult, NetworkProbeServerResults } from '@/types/networkProbe';
 import type { ServerDto } from '@/types/servers';
 import { formatDateTime } from '@/utils/datetime';
+import { isValidNetworkProbeSetting, networkProbeSettingRules, normalizeNetworkProbeSettings, parseNetworkProbeSetting } from '@/utils/networkProbe';
 import { createLatestRequestGuard, isAbortError } from '@/views/_shared/requestState';
+import { formatLatency, formatPacketLoss, probeLatencyHistory, probeLossHistory, probeTargetView, valueTone, type MetricTone } from '@/views/overview/model';
 
 const props = defineProps<{
   mode: 'facilityDetail' | 'facilityConfig';
@@ -24,15 +30,51 @@ const { t } = useI18n();
 const notifyError = useErrorToast();
 const notifySuccess = useSuccessToast();
 
+type ParameterField = 'intervalSeconds' | 'pingCount' | 'pingTimeoutSeconds';
+type ProbeOutcome = 'ok' | 'degraded' | 'stale' | 'failed';
+
+const parameterFields = [
+  { field: 'intervalSeconds', labelKey: 'applicationsPage.networkProbeInterval', hintKey: 'applicationsPage.networkProbeIntervalHint', invalidKey: 'applicationsPage.networkProbeIntervalInvalid', rule: networkProbeSettingRules.intervalSeconds },
+  { field: 'pingCount', labelKey: 'applicationsPage.networkProbePingCount', hintKey: 'applicationsPage.networkProbePingCountHint', invalidKey: 'applicationsPage.networkProbePingCountInvalid', rule: networkProbeSettingRules.pingCount },
+  { field: 'pingTimeoutSeconds', labelKey: 'applicationsPage.networkProbePingTimeout', hintKey: 'applicationsPage.networkProbePingTimeoutHint', invalidKey: 'applicationsPage.networkProbePingTimeoutInvalid', rule: networkProbeSettingRules.pingTimeoutSeconds },
+] as const;
+
 const config = ref<NetworkProbeConfig | null>(null);
 const matrix = ref<NetworkProbeMatrix | null>(null);
 const loading = ref(false);
 const saving = ref(false);
 const error = ref('');
 const formError = ref('');
-const draft = reactive<{ mode: NetworkProbeMode; serverIds: string[] }>({ mode: 'all', serverIds: [] });
+const draft = reactive<{
+  mode: NetworkProbeMode;
+  serverIds: string[];
+  intervalSeconds: string;
+  pingCount: string;
+  pingTimeoutSeconds: string;
+}>({
+  mode: 'all',
+  serverIds: [],
+  intervalSeconds: String(networkProbeSettingRules.intervalSeconds.defaultValue),
+  pingCount: String(networkProbeSettingRules.pingCount.defaultValue),
+  pingTimeoutSeconds: String(networkProbeSettingRules.pingTimeoutSeconds.defaultValue),
+});
 const guard = createLatestRequestGuard();
 let controller: AbortController | null = null;
+
+// 结果区：探测源 + 搜索 + 纵向目标列表（含 24h 历史），不再使用横向源×目标矩阵。
+const sourceId = ref('');
+const targetSearch = ref('');
+const sourceResults = ref<NetworkProbeServerResults | null>(null);
+const resultsLoading = ref(false);
+const resultsError = ref('');
+const resultsGuard = createLatestRequestGuard();
+let resultsController: AbortController | null = null;
+
+const textToneClass: Record<MetricTone, string> = {
+  success: 'text-success',
+  warning: 'text-warning',
+  danger: 'text-danger',
+};
 
 const serverOptions = computed(() => props.servers.map((server) => ({
   id: server.id,
@@ -46,53 +88,112 @@ const modeOptions = computed(() => [
   { value: 'selected', label: t('applicationsPage.networkProbeModeSelected') },
 ]);
 
-const dirty = computed(() => {
-  if (!config.value) return true;
-  if (draft.mode !== config.value.mode) return true;
-  return JSON.stringify([...draft.serverIds].sort()) !== JSON.stringify([...config.value.serverIds].sort());
-});
+const sourceOptions = computed(() => (matrix.value?.nodes ?? []).map((node) => ({
+  value: node.serverId,
+  label: node.address ? `${node.name} · ${node.address}` : node.name,
+})));
 
-const sourceNodes = computed(() => matrix.value?.nodes ?? []);
-
-/** 列是所有被探测目标：selected 模式下非探测节点也会作为目标出现。 */
-const targetNodes = computed(() => {
-  const ids = new Set((matrix.value?.results ?? []).map((result) => result.targetServerId));
-  return props.servers
-    .filter((server) => ids.has(server.id))
-    .map((server) => ({ serverId: server.id, name: server.name }));
-});
-
-const resultsByPair = computed(() => {
-  const map = new Map<string, NetworkProbeResult>();
-  for (const result of matrix.value?.results ?? []) map.set(`${result.sourceServerId}:${result.targetServerId}`, result);
-  return map;
-});
-
-const matrixColumns = computed(() => [
-  { key: 'source', label: t('applicationsPage.networkProbeSource'), nowrap: true },
-  ...targetNodes.value.map((node) => ({ key: node.serverId, label: node.name, nowrap: true })),
-]);
-
-const matrixRows = computed<Array<Record<string, string>>>(() => sourceNodes.value.map((source) => {
-  const row: Record<string, string> = { id: source.serverId, source: source.name };
-  for (const target of targetNodes.value) {
-    row[target.serverId] = matrixCell(source.serverId, target.serverId);
-  }
-  return row;
+const parameterValues = computed<Record<ParameterField, number | null>>(() => ({
+  intervalSeconds: parseNetworkProbeSetting(draft.intervalSeconds),
+  pingCount: parseNetworkProbeSetting(draft.pingCount),
+  pingTimeoutSeconds: parseNetworkProbeSetting(draft.pingTimeoutSeconds),
 }));
 
-function matrixCell(sourceServerId: string, targetServerId: string) {
-  if (sourceServerId === targetServerId) return '—';
-  const result = resultsByPair.value.get(`${sourceServerId}:${targetServerId}`);
-  if (!result) return '—';
-  if (result.error) return t('applicationsPage.networkProbeFailed');
-  const base = `${result.latencyMs.toFixed(1)} ms · ${result.packetLossPercent.toFixed(0)}%`;
-  return result.stale ? `${base} · ${t('applicationsPage.networkProbeStale')}` : base;
+function parameterInvalid(field: ParameterField) {
+  const value = parameterValues.value[field];
+  return value === null || !isValidNetworkProbeSetting(field, value);
+}
+
+function setParameter(field: ParameterField, value: string) {
+  draft[field] = value;
+}
+
+const dirty = computed(() => {
+  const current = config.value;
+  if (!current) return true;
+  if (draft.mode !== current.mode) return true;
+  if (JSON.stringify([...draft.serverIds].sort()) !== JSON.stringify([...current.serverIds].sort())) return true;
+  return parameterFields.some((item) => parameterValues.value[item.field] !== current[item.field]);
+});
+
+interface TargetRow {
+  result: NetworkProbeResult;
+  targetServerId: string;
+  name: string;
+  address: string;
+  latencyMs: number | null;
+  packetLossPercent: number | null;
+  sampledAt: string;
+  outcome: ProbeOutcome;
+  latencyHistory: Array<number | null>;
+  lossHistory: Array<number | null>;
+}
+
+const allTargetRows = computed<TargetRow[]>(() => {
+  const data = sourceResults.value;
+  if (!data) return [];
+  const nodesById = new Map(data.nodes.map((node) => [node.serverId, node]));
+  return data.results
+    .filter((result) => result.targetServerId !== data.serverId)
+    .map((result) => {
+      const node = nodesById.get(result.targetServerId);
+      const server = props.servers.find((item) => item.id === result.targetServerId);
+      const view = probeTargetView(result);
+      const outcome: ProbeOutcome = view.failed
+        ? 'failed'
+        : view.stale
+          ? 'stale'
+          : (view.packetLossPercent ?? 0) > 0 ? 'degraded' : 'ok';
+      return {
+        result,
+        targetServerId: result.targetServerId,
+        name: node?.name || server?.name || result.targetServerId,
+        address: node?.address || result.targetAddress || '',
+        latencyMs: view.latencyMs,
+        packetLossPercent: view.packetLossPercent,
+        sampledAt: view.sampledAt ?? '',
+        outcome,
+        latencyHistory: probeLatencyHistory(result.history),
+        lossHistory: probeLossHistory(result.history),
+      };
+    });
+});
+
+const targetRows = computed(() => {
+  const query = targetSearch.value.trim().toLowerCase();
+  if (!query) return allTargetRows.value;
+  return allTargetRows.value.filter((row) => [row.name, row.address, row.result.targetServerId].some((value) => value.toLowerCase().includes(query)));
+});
+
+const failedTargetCount = computed(() => allTargetRows.value.filter((row) => row.outcome === 'failed').length);
+
+function outcomeTone(outcome: ProbeOutcome): 'success' | 'warning' | 'danger' | 'neutral' {
+  if (outcome === 'ok') return 'success';
+  if (outcome === 'degraded' || outcome === 'stale') return 'warning';
+  if (outcome === 'failed') return 'danger';
+  return 'neutral';
+}
+
+function outcomeKey(outcome: ProbeOutcome) {
+  return `serversPage.probe.status.${outcome}` as const;
+}
+
+function valueClass(kind: 'latency' | 'packetLoss', value: number | null) {
+  const tone = valueTone(kind, value);
+  return tone ? textToneClass[tone] : 'text-foreground';
+}
+
+function sentReceived(row: TargetRow) {
+  return `${row.result.sent} / ${row.result.received}`;
 }
 
 function resetDraft() {
-  draft.mode = config.value?.mode ?? 'all';
-  draft.serverIds = [...(config.value?.serverIds ?? [])];
+  const current = config.value;
+  draft.mode = current?.mode ?? 'all';
+  draft.serverIds = [...(current?.serverIds ?? [])];
+  draft.intervalSeconds = String(current?.intervalSeconds ?? networkProbeSettingRules.intervalSeconds.defaultValue);
+  draft.pingCount = String(current?.pingCount ?? networkProbeSettingRules.pingCount.defaultValue);
+  draft.pingTimeoutSeconds = String(current?.pingTimeoutSeconds ?? networkProbeSettingRules.pingTimeoutSeconds.defaultValue);
   formError.value = '';
 }
 
@@ -109,9 +210,16 @@ async function load() {
       networkProbeFacilityApi.results({ signal: next.signal }),
     ]);
     if (!guard.isCurrent(requestId)) return;
-    config.value = nextConfig;
+    // 旧服务端可能不返回三个节拍参数：按默认值补齐，避免表单显示空白。
+    config.value = { ...nextConfig, ...normalizeNetworkProbeSettings(nextConfig) };
     matrix.value = nextMatrix;
     resetDraft();
+    const nodes = nextMatrix.nodes;
+    const nextSource = nodes.some((node) => node.serverId === sourceId.value)
+      ? sourceId.value
+      : nodes[0]?.serverId ?? '';
+    sourceId.value = nextSource;
+    await loadSourceResults(nextSource, { clear: true });
   } catch (err) {
     if (isAbortError(err)) return;
     if (!guard.isCurrent(requestId)) return;
@@ -122,6 +230,42 @@ async function load() {
   }
 }
 
+/** 加载单个探测源的当前结果与 24h 历史；失败时保留上次成功数据不清空。 */
+async function loadSourceResults(sourceServerId: string, options: { clear?: boolean } = {}) {
+  if (!sourceServerId) {
+    sourceResults.value = null;
+    resultsError.value = '';
+    return;
+  }
+  if (options.clear) {
+    sourceResults.value = null;
+    resultsError.value = '';
+  }
+  resultsController?.abort();
+  const requestId = resultsGuard.begin();
+  const controller = new AbortController();
+  resultsController = controller;
+  resultsLoading.value = true;
+  resultsError.value = '';
+  try {
+    const next = await serversApi.networkProbes(sourceServerId, { signal: controller.signal }, true);
+    if (!resultsGuard.isCurrent(requestId)) return;
+    sourceResults.value = next;
+  } catch (err) {
+    if (isAbortError(err)) return;
+    if (!resultsGuard.isCurrent(requestId)) return;
+    resultsError.value = err instanceof Error ? err.message : t('applicationsPage.networkProbeLoadFailed');
+    notifyError(resultsError.value, err);
+  } finally {
+    if (resultsGuard.isCurrent(requestId)) resultsLoading.value = false;
+  }
+}
+
+function changeSource(value: string) {
+  sourceId.value = value;
+  void loadSourceResults(value, { clear: true });
+}
+
 async function save() {
   if (saving.value) return;
   formError.value = '';
@@ -129,9 +273,17 @@ async function save() {
     formError.value = t('applicationsPage.networkProbeServersRequired');
     return;
   }
+  if (parameterFields.some((item) => parameterInvalid(item.field))) return;
+  const settings = parameterValues.value;
   saving.value = true;
   try {
-    const saved = await networkProbeFacilityApi.saveConfig({ mode: draft.mode, serverIds: [...draft.serverIds] });
+    const saved = await networkProbeFacilityApi.saveConfig({
+      mode: draft.mode,
+      serverIds: [...draft.serverIds],
+      intervalSeconds: settings.intervalSeconds ?? networkProbeSettingRules.intervalSeconds.defaultValue,
+      pingCount: settings.pingCount ?? networkProbeSettingRules.pingCount.defaultValue,
+      pingTimeoutSeconds: settings.pingTimeoutSeconds ?? networkProbeSettingRules.pingTimeoutSeconds.defaultValue,
+    });
     config.value = saved;
     resetDraft();
     notifySuccess(t('applicationsPage.networkProbeSaved'), saved);
@@ -144,6 +296,12 @@ async function save() {
 }
 
 onMounted(() => { void load(); });
+onBeforeUnmount(() => {
+  controller?.abort();
+  resultsController?.abort();
+  guard.invalidate();
+  resultsGuard.invalidate();
+});
 </script>
 
 <template>
@@ -168,6 +326,26 @@ onMounted(() => { void load(); });
             <Select v-model="draft.mode" :options="modeOptions" :disabled="saving" />
           </label>
         </div>
+
+        <div class="grid gap-3 sm:grid-cols-3">
+          <label v-for="item in parameterFields" :key="item.field" class="grid min-w-0 gap-1">
+            <span class="text-xs font-medium text-muted-foreground">{{ t(item.labelKey) }}</span>
+            <Input
+              :model-value="draft[item.field]"
+              type="number"
+              inputmode="numeric"
+              :min="item.rule.min"
+              :max="item.rule.max"
+              :step="item.rule.step"
+              :invalid="parameterInvalid(item.field)"
+              :disabled="saving"
+              @update:model-value="setParameter(item.field, $event)"
+            />
+            <span class="text-xs leading-4 text-muted-foreground">{{ t(item.hintKey, { min: item.rule.min, max: item.rule.max, default: item.rule.defaultValue }) }}</span>
+            <span v-if="parameterInvalid(item.field)" class="text-xs leading-4 text-danger">{{ t(item.invalidKey, { min: item.rule.min, max: item.rule.max }) }}</span>
+          </label>
+        </div>
+
         <div v-if="draft.mode === 'selected'" class="grid gap-2">
           <div>
             <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.networkProbeSelectServers') }}</span>
@@ -182,34 +360,110 @@ onMounted(() => { void load(); });
       </template>
     </section>
 
-    <section class="relative grid gap-3 rounded-xl border border-border bg-card p-4">
-      <div class="flex flex-wrap items-start justify-between gap-2">
-        <div class="min-w-0">
-          <h2 class="m-0 text-base font-semibold text-foreground">{{ t('applicationsPage.networkProbeResultsTitle') }}</h2>
-          <p class="m-0 mt-1 text-sm leading-6 text-muted-foreground">{{ t('applicationsPage.networkProbeResultsHint') }}</p>
-          <p class="m-0 mt-1 text-xs text-muted-foreground">{{ t('applicationsPage.networkProbeUpdatedAt') }}: {{ formatDateTime(matrix?.updatedAt, t('common.never')) }}</p>
-        </div>
-        <Button size="sm" variant="ghost" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
+    <section class="relative grid min-w-0 gap-3 rounded-xl border border-border bg-card p-4">
+      <div class="min-w-0">
+        <h2 class="m-0 text-base font-semibold text-foreground">{{ t('applicationsPage.networkProbeResultsTitle') }}</h2>
+        <p class="m-0 mt-1 text-sm leading-6 text-muted-foreground">{{ t('applicationsPage.networkProbeResultsHint') }}</p>
       </div>
 
-      <LoadingOverlay v-if="loading && !matrix" :label="t('applicationsPage.networkProbeLoading')" />
+      <div class="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,17rem)_minmax(0,1fr)_auto]">
+        <Select
+          :model-value="sourceId"
+          :options="sourceOptions"
+          :disabled="!sourceOptions.length"
+          :placeholder="t('applicationsPage.networkProbeSourcePlaceholder')"
+          :aria-label="t('applicationsPage.networkProbeSource')"
+          @update:model-value="changeSource"
+        />
+        <SearchInput
+          v-model="targetSearch"
+          clearable
+          :disabled="!sourceOptions.length"
+          :placeholder="t('applicationsPage.networkProbeSearchTargets')"
+          :label="t('applicationsPage.networkProbeSearchTargets')"
+          :clear-label="t('common.clearSearch')"
+        />
+        <Button size="sm" variant="ghost" :loading="resultsLoading" :disabled="!sourceId" @click="loadSourceResults(sourceId)"><RefreshCcw />{{ t('common.refresh') }}</Button>
+      </div>
+
+      <LoadingOverlay v-if="resultsLoading && !sourceResults" :label="t('applicationsPage.networkProbeLoading')" />
       <EmptyState
-        v-else-if="!sourceNodes.length || !targetNodes.length"
+        v-else-if="!sourceOptions.length"
         variant="inset"
-        :title="t('applicationsPage.networkProbeNoResults')"
-        :description="t('applicationsPage.networkProbeNoResultsHint')"
+        :title="t('applicationsPage.networkProbeNoProbeNodes')"
+        :description="t('applicationsPage.networkProbeNoProbeNodesHint')"
       />
-      <Table
-        v-else
-        class="max-h-[32rem]"
-        :columns="matrixColumns"
-        :rows="matrixRows"
-        row-key="id"
-      >
-        <template #source="{ row }">
-          <strong class="whitespace-nowrap text-foreground">{{ row.source }}</strong>
+      <EmptyState v-else-if="resultsError && !sourceResults" variant="page" :title="t('common.loadFailed')" :description="resultsError">
+        <template #actions>
+          <Button size="sm" :loading="resultsLoading" @click="loadSourceResults(sourceId)"><RefreshCcw />{{ t('common.retry') }}</Button>
         </template>
-      </Table>
+      </EmptyState>
+      <template v-else>
+        <p v-if="resultsError" role="alert" class="m-0 rounded-xl border border-warning-border bg-warning-bg p-2 text-xs text-warning">{{ t('applicationsPage.networkProbeShowingStale') }}</p>
+        <div class="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+          <span>{{ t('applicationsPage.networkProbeTargetsSummary', { count: allTargetRows.length, failed: failedTargetCount }) }}</span>
+          <span>{{ t('serversPage.probe.lastSample') }}: {{ formatDateTime(sourceResults?.updatedAt, t('common.never')) }}</span>
+        </div>
+
+        <EmptyState
+          v-if="!allTargetRows.length"
+          variant="inset"
+          :title="t('applicationsPage.networkProbeNoTargets')"
+          :description="t('applicationsPage.networkProbeNoTargetsHint')"
+        />
+        <EmptyState
+          v-else-if="!targetRows.length"
+          variant="inset"
+          :title="t('applicationsPage.networkProbeSearchEmpty')"
+          :description="t('applicationsPage.networkProbeSearchEmptyHint')"
+        />
+        <ul v-else class="m-0 max-h-[36rem] list-none overflow-x-hidden overflow-y-auto p-0" data-testid="probe-target-list">
+          <li
+            v-for="row in targetRows"
+            :key="row.targetServerId"
+            class="grid min-w-0 gap-2 border-t border-border py-3 first:border-t-0"
+            data-testid="probe-target"
+          >
+            <div class="flex min-w-0 flex-wrap items-start justify-between gap-2">
+              <div class="min-w-0">
+                <strong class="block truncate text-sm text-foreground">{{ row.name }}</strong>
+                <span class="panel-mono block truncate text-xs text-muted-foreground">{{ row.address || t('common.notAvailable') }}</span>
+              </div>
+              <Badge :tone="outcomeTone(row.outcome)">{{ t(outcomeKey(row.outcome)) }}</Badge>
+            </div>
+
+            <dl class="m-0 grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-4">
+              <div class="min-w-0">
+                <dt class="truncate text-xs text-muted-foreground">{{ t('serversPage.probe.latency') }}</dt>
+                <dd class="m-0 text-sm font-semibold tabular-nums" :class="valueClass('latency', row.latencyMs)">{{ formatLatency(row.latencyMs) }}</dd>
+              </div>
+              <div class="min-w-0">
+                <dt class="truncate text-xs text-muted-foreground">{{ t('serversPage.probe.packetLoss') }}</dt>
+                <dd class="m-0 text-sm font-semibold tabular-nums" :class="valueClass('packetLoss', row.packetLossPercent)">{{ formatPacketLoss(row.packetLossPercent) }}</dd>
+              </div>
+              <div class="min-w-0">
+                <dt class="truncate text-xs text-muted-foreground">{{ t('applicationsPage.networkProbeSentReceived') }}</dt>
+                <dd class="m-0 text-sm font-semibold tabular-nums text-muted-foreground">{{ sentReceived(row) }}</dd>
+              </div>
+              <div class="min-w-0">
+                <dt class="truncate text-xs text-muted-foreground">{{ t('serversPage.probe.sampledAt') }}</dt>
+                <dd class="m-0 truncate text-xs text-secondary-foreground">{{ formatDateTime(row.sampledAt, t('common.never')) }}</dd>
+              </div>
+            </dl>
+
+            <div class="grid min-w-0 gap-2 sm:grid-cols-2">
+              <div class="grid min-w-0 gap-1">
+                <span class="truncate text-xs text-muted-foreground">{{ t('applicationsPage.networkProbeLatencyHistory') }}</span>
+                <HistoryStrip kind="latency" :values="row.latencyHistory" :label="`${row.name} · ${t('applicationsPage.networkProbeLatencyHistory')}`" />
+              </div>
+              <div class="grid min-w-0 gap-1">
+                <span class="truncate text-xs text-muted-foreground">{{ t('applicationsPage.networkProbeLossHistory') }}</span>
+                <HistoryStrip kind="packetLoss" :values="row.lossHistory" :label="`${row.name} · ${t('applicationsPage.networkProbeLossHistory')}`" />
+              </div>
+            </div>
+          </li>
+        </ul>
+      </template>
     </section>
   </div>
 </template>

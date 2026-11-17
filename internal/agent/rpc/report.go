@@ -54,6 +54,10 @@ type probeConfig struct {
 	enabled  bool
 	interval time.Duration
 	targets  []agentprobe.Target
+	// pingCount/pingTimeoutSeconds 是 ping 发包数与单包等待秒数。旧 Panel 不
+	// 下发这两个字段时由 normalizeReportConfig 归一到默认 3 包/2 秒。
+	pingCount          int
+	pingTimeoutSeconds int
 }
 
 // reportCollector is the subset of agentsystem.LocalCollector used by the
@@ -973,7 +977,10 @@ func (h *reportHub) runProbeSampler(ctx context.Context) {
 			}
 			continue
 		}
-		results := agentprobe.Run(ctx, cfg.targets, h.probeRunner)
+		results := agentprobe.Run(ctx, cfg.targets, agentprobe.Options{
+			Count:          cfg.pingCount,
+			TimeoutSeconds: cfg.pingTimeoutSeconds,
+		}, h.probeRunner)
 		if ctx.Err() != nil {
 			return
 		}
@@ -1151,6 +1158,11 @@ func normalizeReportConfig(msg *agentpb.AgentReportControl) reportConfig {
 		if out.probe.interval <= 0 {
 			out.probe.interval = defaultProbeInterval
 		}
+		// 包数/单包超时同样来自 Panel；0 或越界值在这里归一，避免异常配置
+		// 放大探测负载或拖住探测协程。
+		options := agentprobe.Options{Count: int(msg.Probe.PingCount), TimeoutSeconds: int(msg.Probe.PingTimeoutSeconds)}.Normalize()
+		out.probe.pingCount = options.Count
+		out.probe.pingTimeoutSeconds = options.TimeoutSeconds
 		out.probe.targets = make([]agentprobe.Target, 0, len(msg.Probe.Targets))
 		for _, target := range msg.Probe.Targets {
 			if target == nil {

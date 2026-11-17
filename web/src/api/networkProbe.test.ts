@@ -5,13 +5,15 @@ function jsonResponse(data: unknown, status = 200) {
   return new Response(JSON.stringify({ data }), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
+const settings = { intervalSeconds: 60, pingCount: 3, pingTimeoutSeconds: 2 };
+
 describe('networkProbeFacilityApi', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it('reads the facility configuration', async () => {
-    const config = { mode: 'selected', serverIds: ['srv-1'], version: 3, updatedAt: '2026-11-16T05:00:00.000Z' };
+  it('reads the facility configuration including probe parameters', async () => {
+    const config = { mode: 'selected', serverIds: ['srv-1'], ...settings, version: 3, updatedAt: '2026-11-16T05:00:00.000Z' };
     const fetchMock = vi.fn(async () => jsonResponse(config));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -19,15 +21,16 @@ describe('networkProbeFacilityApi', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/facility-apps/network-probe', expect.objectContaining({ method: 'GET' }));
   });
 
-  it('saves the configuration with mode and serverIds', async () => {
-    const saved = { mode: 'all', serverIds: [], version: 4, updatedAt: '2026-11-16T05:05:00.000Z' };
+  it('saves mode, serverIds and every probe parameter', async () => {
+    const saved = { mode: 'all', serverIds: [], intervalSeconds: 120, pingCount: 5, pingTimeoutSeconds: 4, version: 4, updatedAt: '2026-11-16T05:05:00.000Z' };
     const fetchMock = vi.fn(async () => jsonResponse(saved));
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(networkProbeFacilityApi.saveConfig({ mode: 'all', serverIds: [] })).resolves.toEqual(saved);
+    const input = { mode: 'all' as const, serverIds: [], intervalSeconds: 120, pingCount: 5, pingTimeoutSeconds: 4 };
+    await expect(networkProbeFacilityApi.saveConfig(input)).resolves.toEqual(saved);
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/facility-apps/network-probe', expect.objectContaining({
       method: 'PUT',
-      body: JSON.stringify({ mode: 'all', serverIds: [] }),
+      body: JSON.stringify(input),
     }));
   });
 
@@ -41,14 +44,11 @@ describe('networkProbeFacilityApi', () => {
   });
 
   it('surfaces stable contract error codes', async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      error: { code: 'network_probe_servers_required', message: 'Select at least one probe node.' },
-    }), { status: 422, headers: { 'Content-Type': 'application/json' } }));
-    vi.stubGlobal('fetch', fetchMock);
-
-    await expect(networkProbeFacilityApi.saveConfig({ mode: 'selected', serverIds: [] })).rejects.toMatchObject({
-      code: 'network_probe_servers_required',
-      status: 422,
-    });
+    const codes = ['network_probe_servers_required', 'network_probe_interval_invalid', 'network_probe_ping_count_invalid', 'network_probe_ping_timeout_invalid'];
+    for (const code of codes) {
+      const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: { code, message: code } }), { status: 422, headers: { 'Content-Type': 'application/json' } }));
+      vi.stubGlobal('fetch', fetchMock);
+      await expect(networkProbeFacilityApi.saveConfig({ mode: 'selected', serverIds: [] })).rejects.toMatchObject({ code, status: 422 });
+    }
   });
 });

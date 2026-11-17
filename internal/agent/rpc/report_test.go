@@ -650,8 +650,10 @@ func TestNormalizeReportConfigParsesProbe(t *testing.T) {
 	cfg := normalizeReportConfig(&agentpb.AgentReportControl{
 		ServerId: "s1",
 		Probe: &agentpb.AgentProbeConfig{
-			Enabled:         true,
-			IntervalSeconds: 60,
+			Enabled:            true,
+			IntervalSeconds:    60,
+			PingCount:          5,
+			PingTimeoutSeconds: 4,
 			Targets: []*agentpb.AgentProbeTarget{
 				{ServerId: "s2", Address: "10.0.0.2", Name: "web"},
 				{ServerId: "s3", Address: "  10.0.0.3  "},
@@ -666,6 +668,9 @@ func TestNormalizeReportConfigParsesProbe(t *testing.T) {
 	if cfg.probe.interval != time.Minute {
 		t.Fatalf("probe interval = %s, want 1m", cfg.probe.interval)
 	}
+	if cfg.probe.pingCount != 5 || cfg.probe.pingTimeoutSeconds != 4 {
+		t.Fatalf("ping options = (%d, %d), want (5, 4)", cfg.probe.pingCount, cfg.probe.pingTimeoutSeconds)
+	}
 	want := []agentprobe.Target{
 		{ServerID: "s2", Address: "10.0.0.2", Name: "web"},
 		{ServerID: "s3", Address: "10.0.0.3"},
@@ -673,13 +678,26 @@ func TestNormalizeReportConfigParsesProbe(t *testing.T) {
 	if !reflect.DeepEqual(cfg.probe.targets, want) {
 		t.Fatalf("probe targets = %#v, want %#v", cfg.probe.targets, want)
 	}
-	// 显式关闭/清空目标必须整体替换，而不是保留旧目标。
+	// 显式关闭/清空目标必须整体替换，而不是保留旧目标；旧 Panel 不填 ping
+	// 参数（0）时回退默认 3 包/2 秒。
 	disabled := normalizeReportConfig(&agentpb.AgentReportControl{Probe: &agentpb.AgentProbeConfig{Enabled: false}})
 	if !disabled.probeSet || disabled.probe.enabled || len(disabled.probe.targets) != 0 {
 		t.Fatalf("disabled probe config = %#v", disabled)
 	}
 	if disabled.probe.interval != defaultProbeInterval {
 		t.Fatalf("default probe interval = %s, want %s", disabled.probe.interval, defaultProbeInterval)
+	}
+	if disabled.probe.pingCount != agentprobe.DefaultCount || disabled.probe.pingTimeoutSeconds != agentprobe.DefaultTimeoutSeconds {
+		t.Fatalf("default ping options = (%d, %d), want (%d, %d)", disabled.probe.pingCount, disabled.probe.pingTimeoutSeconds, agentprobe.DefaultCount, agentprobe.DefaultTimeoutSeconds)
+	}
+	// 越界值必须夹紧，不能下发给 ping 放大负载。
+	clamped := normalizeReportConfig(&agentpb.AgentReportControl{Probe: &agentpb.AgentProbeConfig{
+		Enabled:            true,
+		PingCount:          99,
+		PingTimeoutSeconds: -3,
+	}})
+	if clamped.probe.pingCount != agentprobe.MaxCount || clamped.probe.pingTimeoutSeconds != agentprobe.DefaultTimeoutSeconds {
+		t.Fatalf("clamped ping options = (%d, %d), want (%d, %d)", clamped.probe.pingCount, clamped.probe.pingTimeoutSeconds, agentprobe.MaxCount, agentprobe.DefaultTimeoutSeconds)
 	}
 	// 旧 Panel 不携带 probe 字段：保持“未设置”语义，不覆盖现有任务。
 	if normalizeReportConfig(&agentpb.AgentReportControl{ServerId: "s1"}).probeSet {
@@ -691,9 +709,11 @@ func TestReportHubUpdateReplacesProbeConfig(t *testing.T) {
 	hub := newReportHub(okReportCollector{}, nil)
 	hub.probeRunner = func(context.Context, string) (string, error) { return probeSamplerPingOutput, nil }
 	watcher := hub.add(reportConfig{serverID: "s1", probeSet: true, probe: probeConfig{
-		enabled:  true,
-		interval: time.Minute,
-		targets:  []agentprobe.Target{{ServerID: "s2", Address: "10.0.0.2"}},
+		enabled:            true,
+		interval:           time.Minute,
+		targets:            []agentprobe.Target{{ServerID: "s2", Address: "10.0.0.2"}},
+		pingCount:          5,
+		pingTimeoutSeconds: 4,
 	}})
 	defer hub.remove(watcher.id)
 	hub.update(watcher.id, normalizeReportConfig(&agentpb.AgentReportControl{
@@ -704,17 +724,26 @@ func TestReportHubUpdateReplacesProbeConfig(t *testing.T) {
 	if cfg.enabled || len(cfg.targets) != 0 {
 		t.Fatalf("probe config must be replaced wholesale: %#v", cfg)
 	}
+	// 关闭后的控制消息不带 ping 参数：必须回到默认口径，而不是沿用旧值。
+	if cfg.pingCount != agentprobe.DefaultCount || cfg.pingTimeoutSeconds != agentprobe.DefaultTimeoutSeconds {
+		t.Fatalf("disabled probe ping options = (%d, %d), want defaults", cfg.pingCount, cfg.pingTimeoutSeconds)
+	}
 	hub.update(watcher.id, normalizeReportConfig(&agentpb.AgentReportControl{
 		ServerId: "s1",
 		Probe: &agentpb.AgentProbeConfig{
-			Enabled:         true,
-			IntervalSeconds: 90,
-			Targets:         []*agentpb.AgentProbeTarget{{ServerId: "s3", Address: "10.0.0.3"}},
+			Enabled:            true,
+			IntervalSeconds:    90,
+			PingCount:          6,
+			PingTimeoutSeconds: 3,
+			Targets:            []*agentpb.AgentProbeTarget{{ServerId: "s3", Address: "10.0.0.3"}},
 		},
 	}))
 	cfg = hub.probeConfigSnapshot()
 	if !cfg.enabled || cfg.interval != 90*time.Second || len(cfg.targets) != 1 || cfg.targets[0].ServerID != "s3" {
 		t.Fatalf("probe config not replaced by the new control message: %#v", cfg)
+	}
+	if cfg.pingCount != 6 || cfg.pingTimeoutSeconds != 3 {
+		t.Fatalf("probe ping options = (%d, %d), want (6, 3)", cfg.pingCount, cfg.pingTimeoutSeconds)
 	}
 }
 
@@ -768,6 +797,34 @@ func TestRunProbeSamplerRequiresEnabledTargets(t *testing.T) {
 	case report := <-watcher.ch:
 		t.Fatalf("watcher without targets received a probe report: %#v", report)
 	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestRunProbeSamplerUsesConfiguredPingOptions(t *testing.T) {
+	hub := newReportHub(okReportCollector{}, nil)
+	deadlines := make(chan time.Duration, 1)
+	hub.probeRunner = func(ctx context.Context, _ string) (string, error) {
+		if deadline, ok := ctx.Deadline(); ok {
+			deadlines <- time.Until(deadline)
+		}
+		return probeSamplerPingOutput, nil
+	}
+	watcher := hub.add(reportConfig{serverID: "s1", probeSet: true, probe: probeConfig{
+		enabled:            true,
+		interval:           time.Hour,
+		pingCount:          4,
+		pingTimeoutSeconds: 3,
+		targets:            []agentprobe.Target{{ServerID: "s9", Address: "10.0.0.9"}},
+	}})
+	defer hub.remove(watcher.id)
+	select {
+	case remaining := <-deadlines:
+		// 4 包 * 3 秒 + 2 秒余量 = 14 秒。
+		if remaining <= 13*time.Second || remaining > 14*time.Second {
+			t.Fatalf("per-target timeout = %s, want ~14s", remaining)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("probe runner was not invoked")
 	}
 }
 

@@ -65,6 +65,10 @@ type ProbeReportConfig struct {
 	Enabled         bool
 	IntervalSeconds int
 	Targets         []ProbeTarget
+	// PingCount/PingTimeoutSeconds 是每次探测的发包数与单包等待秒数。旧 Agent
+	// 忽略这两个字段并保持固定 3 包/2 秒行为。
+	PingCount          int
+	PingTimeoutSeconds int
 }
 
 type ProbeTarget struct {
@@ -678,7 +682,12 @@ func (c *GRPCClient) StreamReports(ctx context.Context, endpoint string, config 
 	}
 	errCh := make(chan error, 2)
 	sendConfig := func(cfg ReportConfig) error {
-		probe := &agentpb.AgentProbeConfig{Enabled: cfg.Probe.Enabled, IntervalSeconds: int32(cfg.Probe.IntervalSeconds)}
+		probe := &agentpb.AgentProbeConfig{
+			Enabled:            cfg.Probe.Enabled,
+			IntervalSeconds:    int32(cfg.Probe.IntervalSeconds),
+			PingCount:          int32(cfg.Probe.PingCount),
+			PingTimeoutSeconds: int32(cfg.Probe.PingTimeoutSeconds),
+		}
 		for _, target := range cfg.Probe.Targets {
 			probe.Targets = append(probe.Targets, &agentpb.AgentProbeTarget{ServerId: target.ServerID, Address: target.Address, Name: target.Name})
 		}

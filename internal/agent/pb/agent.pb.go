@@ -289,8 +289,13 @@ type AgentProbeConfig struct {
 	Enabled         bool                   `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
 	IntervalSeconds int32                  `protobuf:"varint,2,opt,name=interval_seconds,json=intervalSeconds,proto3" json:"interval_seconds,omitempty"`
 	Targets         []*AgentProbeTarget    `protobuf:"bytes,3,rep,name=targets,proto3" json:"targets,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// ping_count/ping_timeout_seconds 是每次探测的发包数与单包等待秒数，来自
+	// 探测设施配置。旧 Panel 不填这两个字段：Agent 必须回退到默认 3 包/2 秒，
+	// 不得把 0 当成有效配置。
+	PingCount          int32 `protobuf:"varint,4,opt,name=ping_count,json=pingCount,proto3" json:"ping_count,omitempty"`
+	PingTimeoutSeconds int32 `protobuf:"varint,5,opt,name=ping_timeout_seconds,json=pingTimeoutSeconds,proto3" json:"ping_timeout_seconds,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *AgentProbeConfig) Reset() {
@@ -342,6 +347,20 @@ func (x *AgentProbeConfig) GetTargets() []*AgentProbeTarget {
 		return x.Targets
 	}
 	return nil
+}
+
+func (x *AgentProbeConfig) GetPingCount() int32 {
+	if x != nil {
+		return x.PingCount
+	}
+	return 0
+}
+
+func (x *AgentProbeConfig) GetPingTimeoutSeconds() int32 {
+	if x != nil {
+		return x.PingTimeoutSeconds
+	}
+	return 0
 }
 
 type AgentProbeTarget struct {
@@ -6694,11 +6713,14 @@ const file_agent_proto_rawDesc = "" +
 	"\breplayed\x18\t \x01(\bR\breplayed\"\x8d\x01\n" +
 	"\x11AgentReportConfig\x128\n" +
 	"\x18metrics_interval_seconds\x18\x01 \x01(\x05R\x16metricsIntervalSeconds\x12>\n" +
-	"\x1bcontainers_interval_seconds\x18\x02 \x01(\x05R\x19containersIntervalSeconds\"\x93\x01\n" +
+	"\x1bcontainers_interval_seconds\x18\x02 \x01(\x05R\x19containersIntervalSeconds\"\xe4\x01\n" +
 	"\x10AgentProbeConfig\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12)\n" +
 	"\x10interval_seconds\x18\x02 \x01(\x05R\x0fintervalSeconds\x12:\n" +
-	"\atargets\x18\x03 \x03(\v2 .panel.agent.v1.AgentProbeTargetR\atargets\"]\n" +
+	"\atargets\x18\x03 \x03(\v2 .panel.agent.v1.AgentProbeTargetR\atargets\x12\x1d\n" +
+	"\n" +
+	"ping_count\x18\x04 \x01(\x05R\tpingCount\x120\n" +
+	"\x14ping_timeout_seconds\x18\x05 \x01(\x05R\x12pingTimeoutSeconds\"]\n" +
 	"\x10AgentProbeTarget\x12\x1b\n" +
 	"\tserver_id\x18\x01 \x01(\tR\bserverId\x12\x18\n" +
 	"\aaddress\x18\x02 \x01(\tR\aaddress\x12\x12\n" +

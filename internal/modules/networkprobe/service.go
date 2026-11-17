@@ -26,9 +26,25 @@ const (
 	ModeAll = "all"
 	// ModeSelected 表示只有配置列表内的节点是探测节点。
 	ModeSelected = "selected"
-	// ProbeIntervalSeconds 是下发给 Agent 的探测周期（秒）。
-	ProbeIntervalSeconds = 60
-	// ResultFreshFor 是探测结果被视为新鲜的时长；超过即标记 Stale。
+	// DefaultProbeIntervalSeconds 是探测周期的默认值（秒）。
+	DefaultProbeIntervalSeconds = 60
+	// DefaultPingCount 是每次探测默认发送的 ping 包数。
+	DefaultPingCount = 3
+	// DefaultPingTimeoutSeconds 是单个 ping 包默认等待秒数。
+	DefaultPingTimeoutSeconds = 2
+	// MinProbeIntervalSeconds/MaxProbeIntervalSeconds 是探测周期允许范围。
+	MinProbeIntervalSeconds = 10
+	MaxProbeIntervalSeconds = 3600
+	// MinPingCount/MaxPingCount 是每次探测的 ping 包数允许范围。
+	MinPingCount = 1
+	MaxPingCount = 10
+	// MinPingTimeoutSeconds/MaxPingTimeoutSeconds 是单包超时允许范围。
+	MinPingTimeoutSeconds = 1
+	MaxPingTimeoutSeconds = 10
+	// ProbeIntervalSeconds 是默认探测周期的旧名称，保留下发给旧调用方。
+	ProbeIntervalSeconds = DefaultProbeIntervalSeconds
+	// ResultFreshFor 是探测结果被视为新鲜的最小阈值；实际阈值还会随探测间隔
+	// 放大（max(ResultFreshFor, 3*intervalSeconds)）。
 	ResultFreshFor = 5 * time.Minute
 
 	configID = "network_probe"
@@ -46,16 +62,23 @@ const (
 
 // Config 是网络探测设施的对外配置。
 type Config struct {
-	Mode      string    `json:"mode"`
-	ServerIDs []string  `json:"serverIds"`
-	Version   int       `json:"version"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	Mode               string    `json:"mode"`
+	ServerIDs          []string  `json:"serverIds"`
+	IntervalSeconds    int       `json:"intervalSeconds"`
+	PingCount          int       `json:"pingCount"`
+	PingTimeoutSeconds int       `json:"pingTimeoutSeconds"`
+	Version            int       `json:"version"`
+	UpdatedAt          time.Time `json:"updatedAt"`
 }
 
-// SaveInput 是保存网络探测设施的输入。
+// SaveInput 是保存网络探测设施的输入。参数为 0/缺省时按默认值归一化（兼容
+// 旧客户端）。
 type SaveInput struct {
-	Mode      string   `json:"mode"`
-	ServerIDs []string `json:"serverIds"`
+	Mode               string   `json:"mode"`
+	ServerIDs          []string `json:"serverIds"`
+	IntervalSeconds    int      `json:"intervalSeconds"`
+	PingCount          int      `json:"pingCount"`
+	PingTimeoutSeconds int      `json:"pingTimeoutSeconds"`
 }
 
 // Node 是一个探测节点（同时也是其它探测节点的目标）。
@@ -132,9 +155,11 @@ type ProbeTarget struct {
 // ProbeReport 是下发给单个探测节点的探测配置。Enabled 为 false 时 Agent 停止
 // 探测；Targets 已排除探测节点自身。
 type ProbeReport struct {
-	Enabled         bool
-	IntervalSeconds int
-	Targets         []ProbeTarget
+	Enabled            bool
+	IntervalSeconds    int
+	PingCount          int
+	PingTimeoutSeconds int
+	Targets            []ProbeTarget
 }
 
 // ReportedResult 是 Agent 上报的一条探测结果。
@@ -191,6 +216,18 @@ func (s *Service) Save(ctx context.Context, in SaveInput) (Config, error) {
 	if mode != ModeAll && mode != ModeSelected {
 		return Config{}, panelerr.Validation("network_probe_mode_invalid", "mode must be all or selected")
 	}
+	intervalSeconds, ok := resolveProbeIntervalSeconds(in.IntervalSeconds)
+	if !ok {
+		return Config{}, panelerr.Validation("network_probe_interval_invalid", "intervalSeconds must be between 10 and 3600")
+	}
+	pingCount, ok := resolvePingCount(in.PingCount)
+	if !ok {
+		return Config{}, panelerr.Validation("network_probe_ping_count_invalid", "pingCount must be between 1 and 10")
+	}
+	pingTimeoutSeconds, ok := resolvePingTimeoutSeconds(in.PingTimeoutSeconds)
+	if !ok {
+		return Config{}, panelerr.Validation("network_probe_ping_timeout_invalid", "pingTimeoutSeconds must be between 1 and 10")
+	}
 	ids := normalizeIDs(in.ServerIDs)
 	all, err := s.servers.List(ctx)
 	if err != nil {
@@ -219,15 +256,23 @@ func (s *Service) Save(ctx context.Context, in SaveInput) (Config, error) {
 		return Config{}, err
 	}
 	now := s.now().UTC()
-	cfg := Config{Mode: mode, ServerIDs: ids, Version: previous.Version + 1, UpdatedAt: now}
+	cfg := Config{
+		Mode:               mode,
+		ServerIDs:          ids,
+		IntervalSeconds:    intervalSeconds,
+		PingCount:          pingCount,
+		PingTimeoutSeconds: pingTimeoutSeconds,
+		Version:            previous.Version + 1,
+		UpdatedAt:          now,
+	}
 	encoded, err := json.Marshal(ids)
 	if err != nil {
 		return Config{}, err
 	}
-	if _, err := orm.RawExec(ctx, s.db, `INSERT INTO network_probe_configs(id,mode,server_ids_json,version,updated_at)
-VALUES(?,?,?,?,?)
-ON CONFLICT(id) DO UPDATE SET mode=excluded.mode,server_ids_json=excluded.server_ids_json,version=excluded.version,updated_at=excluded.updated_at`,
-		configID, cfg.Mode, string(encoded), cfg.Version, formatTime(cfg.UpdatedAt)); err != nil {
+	if _, err := orm.RawExec(ctx, s.db, `INSERT INTO network_probe_configs(id,mode,server_ids_json,interval_seconds,ping_count,ping_timeout_seconds,version,updated_at)
+VALUES(?,?,?,?,?,?,?,?)
+ON CONFLICT(id) DO UPDATE SET mode=excluded.mode,server_ids_json=excluded.server_ids_json,interval_seconds=excluded.interval_seconds,ping_count=excluded.ping_count,ping_timeout_seconds=excluded.ping_timeout_seconds,version=excluded.version,updated_at=excluded.updated_at`,
+		configID, cfg.Mode, string(encoded), cfg.IntervalSeconds, cfg.PingCount, cfg.PingTimeoutSeconds, cfg.Version, formatTime(cfg.UpdatedAt)); err != nil {
 		return Config{}, err
 	}
 	s.invalidate()
@@ -241,13 +286,19 @@ func (s *Service) ReportConfig(ctx context.Context, serverID string) (ProbeRepor
 	if err != nil {
 		return ProbeReport{}, err
 	}
-	report := ProbeReport{Enabled: isProbeNode(cfg, serverID), IntervalSeconds: ProbeIntervalSeconds}
+	report := ProbeReport{
+		Enabled:            isProbeNode(cfg, serverID),
+		IntervalSeconds:    cfg.IntervalSeconds,
+		PingCount:          cfg.PingCount,
+		PingTimeoutSeconds: cfg.PingTimeoutSeconds,
+	}
 	if !report.Enabled {
 		return report, nil
 	}
 	// 已从 Panel 删除的节点不应再收到探测目标；上报流会在下一次 sync 回收。
 	if _, ok := serverByID(all)[strings.TrimSpace(serverID)]; !ok {
-		return ProbeReport{Enabled: false, IntervalSeconds: ProbeIntervalSeconds}, nil
+		report.Enabled = false
+		return report, nil
 	}
 	report.Targets = targetsForServer(serverID, all)
 	return report, nil
@@ -309,7 +360,7 @@ func (s *Service) Matrix(ctx context.Context, filterServerIDs []string) (Matrix,
 	if filter := normalizeIDs(filterServerIDs); len(filter) > 0 {
 		nodes = filterNodes(nodes, filter)
 	}
-	results, err := s.results(ctx, nodeIDSet(nodes), serverIDSet(all), false)
+	results, err := s.results(ctx, nodeIDSet(nodes), serverIDSet(all), false, freshnessFor(cfg))
 	if err != nil {
 		return Matrix{}, err
 	}
@@ -339,7 +390,7 @@ func (s *Service) serverResults(ctx context.Context, serverID string, withHistor
 	if _, ok := serverByID(all)[id]; !ok {
 		return ServerResults{}, panelerr.NotFound("server")
 	}
-	results, err := s.results(ctx, map[string]struct{}{id: {}}, serverIDSet(all), withHistory)
+	results, err := s.results(ctx, map[string]struct{}{id: {}}, serverIDSet(all), withHistory, freshnessFor(cfg))
 	if err != nil {
 		return ServerResults{}, err
 	}
@@ -363,7 +414,7 @@ func (s *Service) CardData(ctx context.Context, serverIDs []string) (CardData, e
 	if filter := normalizeIDs(serverIDs); len(filter) > 0 {
 		nodes = filterNodes(nodes, filter)
 	}
-	results, err := s.results(ctx, nodeIDSet(nodes), serverIDSet(all), false)
+	results, err := s.results(ctx, nodeIDSet(nodes), serverIDSet(all), false, freshnessFor(cfg))
 	if err != nil {
 		return CardData{}, err
 	}
@@ -402,11 +453,17 @@ func (s *Service) snapshot(ctx context.Context) (Config, []server.Server, error)
 }
 
 func (s *Service) loadConfig(ctx context.Context) (Config, error) {
-	cfg := Config{Mode: ModeAll, ServerIDs: []string{}}
+	cfg := Config{
+		Mode:               ModeAll,
+		ServerIDs:          []string{},
+		IntervalSeconds:    DefaultProbeIntervalSeconds,
+		PingCount:          DefaultPingCount,
+		PingTimeoutSeconds: DefaultPingTimeoutSeconds,
+	}
 	var mode, rawIDs, updatedAt string
 	var version int
-	err := s.db.QueryRowContext(ctx, `SELECT mode,server_ids_json,version,updated_at FROM network_probe_configs WHERE id=?`, configID).
-		Scan(&mode, &rawIDs, &version, &updatedAt)
+	err := s.db.QueryRowContext(ctx, `SELECT mode,server_ids_json,interval_seconds,ping_count,ping_timeout_seconds,version,updated_at FROM network_probe_configs WHERE id=?`, configID).
+		Scan(&mode, &rawIDs, &cfg.IntervalSeconds, &cfg.PingCount, &cfg.PingTimeoutSeconds, &version, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return cfg, nil
 	}
@@ -415,6 +472,11 @@ func (s *Service) loadConfig(ctx context.Context) (Config, error) {
 	}
 	cfg.Mode = normalizeMode(mode)
 	cfg.ServerIDs = decodeIDs(rawIDs)
+	// 防御性归一化：旧 alpha 行、手工数据或越界值都回落到默认参数，避免把
+	// 非法探测节奏下发给 Agent。
+	cfg.IntervalSeconds = normalizeProbeIntervalSeconds(cfg.IntervalSeconds)
+	cfg.PingCount = normalizePingCount(cfg.PingCount)
+	cfg.PingTimeoutSeconds = normalizePingTimeoutSeconds(cfg.PingTimeoutSeconds)
 	cfg.Version = version
 	cfg.UpdatedAt = parseTime(updatedAt)
 	return cfg, nil
@@ -422,7 +484,8 @@ func (s *Service) loadConfig(ctx context.Context) (Config, error) {
 
 // results 读取探测结果。withHistory 为 true 时额外读取并解码 history_json，
 // 供 detail 页 history=1 请求使用；其它调用方不付出该列的解码与序列化成本。
-func (s *Service) results(ctx context.Context, sources, targets map[string]struct{}, withHistory bool) ([]Result, error) {
+// staleAfter 是本次配置下的新鲜度阈值。
+func (s *Service) results(ctx context.Context, sources, targets map[string]struct{}, withHistory bool, staleAfter time.Duration) ([]Result, error) {
 	if len(sources) == 0 {
 		return []Result{}, nil
 	}
@@ -455,7 +518,7 @@ func (s *Service) results(ctx context.Context, sources, targets map[string]struc
 			continue
 		}
 		item.SampledAt = parseTime(sampledAt)
-		item.Stale = item.SampledAt.IsZero() || now.Sub(item.SampledAt) > ResultFreshFor
+		item.Stale = item.SampledAt.IsZero() || now.Sub(item.SampledAt) > staleAfter
 		if withHistory {
 			item.History = decodeHistoryPoints(rawHistory)
 		}
@@ -728,6 +791,72 @@ func normalizeMode(mode string) string {
 	default:
 		return strings.TrimSpace(mode)
 	}
+}
+
+// resolveProbeIntervalSeconds 把保存输入归一化为合法探测周期：0/缺省表示使用
+// 默认值（旧客户端），其余必须落在允许范围内。
+func resolveProbeIntervalSeconds(raw int) (int, bool) {
+	if raw == 0 {
+		return DefaultProbeIntervalSeconds, true
+	}
+	if raw < MinProbeIntervalSeconds || raw > MaxProbeIntervalSeconds {
+		return 0, false
+	}
+	return raw, true
+}
+
+func resolvePingCount(raw int) (int, bool) {
+	if raw == 0 {
+		return DefaultPingCount, true
+	}
+	if raw < MinPingCount || raw > MaxPingCount {
+		return 0, false
+	}
+	return raw, true
+}
+
+func resolvePingTimeoutSeconds(raw int) (int, bool) {
+	if raw == 0 {
+		return DefaultPingTimeoutSeconds, true
+	}
+	if raw < MinPingTimeoutSeconds || raw > MaxPingTimeoutSeconds {
+		return 0, false
+	}
+	return raw, true
+}
+
+// normalizeProbeIntervalSeconds 是读取侧的防御性归一化：0、负数或越界值都回落
+// 默认值，保证下发给 Agent 的参数总是合法。
+func normalizeProbeIntervalSeconds(raw int) int {
+	if raw < MinProbeIntervalSeconds || raw > MaxProbeIntervalSeconds {
+		return DefaultProbeIntervalSeconds
+	}
+	return raw
+}
+
+func normalizePingCount(raw int) int {
+	if raw < MinPingCount || raw > MaxPingCount {
+		return DefaultPingCount
+	}
+	return raw
+}
+
+func normalizePingTimeoutSeconds(raw int) int {
+	if raw < MinPingTimeoutSeconds || raw > MaxPingTimeoutSeconds {
+		return DefaultPingTimeoutSeconds
+	}
+	return raw
+}
+
+// freshnessFor 返回当前探测间隔下的结果新鲜度阈值。间隔调大后 3 个周期可能超过
+// 固定的 5 分钟，此时必须跟着放大，否则结果会一直显示为 stale。
+func freshnessFor(cfg Config) time.Duration {
+	interval := normalizeProbeIntervalSeconds(cfg.IntervalSeconds)
+	threshold := 3 * time.Duration(interval) * time.Second
+	if threshold < ResultFreshFor {
+		return ResultFreshFor
+	}
+	return threshold
 }
 
 // normalizeIDs 去空白、去重并按 serverID 升序排列。

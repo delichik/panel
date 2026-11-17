@@ -449,7 +449,12 @@ func (c *agentReportCollector) reportProbeConfig(ctx context.Context, serverID s
 		logging.From(ctx).Warn("agent probe config lookup failed", zap.String("server_id", serverID), zap.Error(err))
 		return agentclient.ProbeReportConfig{}
 	}
-	out := agentclient.ProbeReportConfig{Enabled: report.Enabled, IntervalSeconds: report.IntervalSeconds}
+	out := agentclient.ProbeReportConfig{
+		Enabled:            report.Enabled,
+		IntervalSeconds:    report.IntervalSeconds,
+		PingCount:          report.PingCount,
+		PingTimeoutSeconds: report.PingTimeoutSeconds,
+	}
 	if len(report.Targets) == 0 {
 		return out
 	}
