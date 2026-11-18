@@ -76,6 +76,8 @@
 
 服务器详情概览图标化与窄屏重排（2026-11-18）：概览摘要卡新增发行版标识（Ubuntu/Debian/Arch 等本地 vendored 图形 + 品牌色底）与架构标识（芯片图形 + 可读架构文案），磁盘当前值由进度条改为环形图（百分比 + 已用/可用/总量 + 采样时间），状态摘要改为图标化紧凑瓦片并重排手机宽度（<640px）布局；CPU/内存/磁盘 IO/网络与延迟/丢包的当前值与历史只保留在下方指标/探测面板，摘要卡不再重复文字摘要；仅消费详情响应既有 `os`/`architecture` 与指标响应既有 `diskCurrent`/`latest`，**不新增后端 API、数据库表、前端路由或后台任务**，标识为纯识别用途、不表达受支持或健康。见 [UI-SRV-002/008/028/029/030](ui-pages.md)、[UI-SHELL-013/018/062](ui-shell-and-conventions.md)、[OBS-MET-003/004](backup-restore-diagnostics.md)、[前端交互模式规范](../specifications/frontend/interaction-patterns.md)、[覆盖基线](coverage-matrix.md)。
 
+概览顶部摘要区去方化（2026-11-18）：`/overview` 服务器卡片以上的两张摘要卡改为**开放状态总览头**（不套卡片表面、直接位于页面层），拆为节点情况/应用/容量三组，以留白与非对称栅格组织；节点在线率改为语义色环形占比 + 胶囊 KPI，应用改为总数 + 状态胶囊 + 互斥的启用/停用分布条，新增容量组（仅聚合在线且有样本节点：CPU 均值、内存/磁盘合计比例，无样本显示 `—` 与空环不伪造 0）；`DiskUsageChart` 抽取通用 `RatioRing` 薄包装并新增概览本地 `StatChip`；服务器卡片、页头操作行、请求批次、滚动逻辑与 `UI-OVR-016/017` 均不变，**不新增后端 API、数据库表、前端路由或后台任务**（197/48/31 不变）。见 [UI-OVR-014/020/021](ui-pages.md)、[UI-SHELL-026/048/064](ui-shell-and-conventions.md)、[前端交互模式规范](../specifications/frontend/interaction-patterns.md)、[布局体系规范](../specifications/frontend/layout-system.md)、[覆盖基线](coverage-matrix.md)。
+
 失败运行日志与有界降级见 [ORCH-CTRL-008](orchestration-and-tasks.md)；设施逐节点部署、按需请求错误诊断见 [FAC-RP-012/013](applications-and-facilities.md)。
 
 指标采集与保留从设置页移出为**指标设施**（`metrics`）：配置读写 `GET/PUT /api/v1/facility-apps/metrics`、采集节点选择与按节点下发、采集间隔对齐生效、保留清理、旧运行时设置播种与设置页移除、服务器删除配置修剪、失败语义见 [FAC-MET-001..008](applications-and-facilities.md)；设施目录与页面行为见 [UI-FAC-014/019](ui-pages.md)、[UI-SRV-008](ui-pages.md)、[UI-SET-002](ui-pages.md)；设置接口移除三项见 [SET-RUN-021](identity-settings-system.md)，容器上报间隔仍由 [SET-RUN-014](identity-settings-system.md) 约束；表/路由基线见 [项目覆盖基线](coverage-matrix.md)、[API 路由逐项清单](api-route-inventory.md)。

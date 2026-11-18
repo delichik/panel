@@ -101,6 +101,7 @@ AppShell
   优先用 `divide-y` / `border-t` 分段或 `bg-muted` 条带，不得再包一层带边框的内卡片；内部组件自带卡片表面时，
   外层不要再加卡片框（如 `ProbeOverviewPanel` 外层透明、由内部图表卡承担表面）。
 - `motion-card` 仅用于真正可交互/可拖拽的磁贴；静态 KPI 与只读摘要卡用静态表面 + 可选 `motion-reveal` 入场即可。
+- **概览页顶部状态总览头是显式例外**：`/overview` 服务器卡片网格以上的摘要区允许不套 `surface-card`，直接位于页面层（Mica 透出），以 `RatioRing`（环形占比）、胶囊 `StatChip`、胶囊分布条/计量条组织节点情况/应用/容量三组；组间只用留白或细分隔线，不画通长方框。仍禁止阴影、渐变、card-in-card、大圆角与装饰动画；服务器卡片网格继续使用既有卡片表面，`UI-OVR-016/017` 不变。
 - 路由分段模式（如证书 domains/self/keys、服务器详情 tabs）必须复用共享 `Tabs` 的 **WinUI TabView header** 视觉：
   透明 tab 行 + 底部 1px divider、选中项填充 + 2px 强调色下划线，并由**单个共享指示器**在切换时滑动
   （`transition-indicator` 250ms；`prefers-reduced-motion` 降级）；tab 行只允许横向滚动，必须

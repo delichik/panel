@@ -35,6 +35,27 @@ export function emptyApplicationSummary(): ApplicationSummaryView {
   return { total: null, enabled: 0, disabled: 0, deploying: 0, attention: 0, available: false };
 }
 
+export interface ApplicationRatioView {
+  /** 已启用占全部应用的比例（0–100）；不可用或总数为 0 时为 null。 */
+  enabledPercent: number | null;
+  /** 已停用占比；与 enabledPercent 互斥，合计 100。 */
+  disabledPercent: number | null;
+}
+
+/**
+ * 应用启用/停用占比，仅用于摘要区的分布条。
+ *
+ * 部署中、需关注都是“已启用”下的子集，因此不进入互斥分布条，避免同一应用被
+ * 重复计数；占比只在应用摘要可用且总数 > 0 时给出，失败时不得伪造 0。
+ */
+export function applicationRatio(summary: ApplicationSummaryView): ApplicationRatioView {
+  if (!summary.available || summary.total === null || summary.total <= 0) {
+    return { enabledPercent: null, disabledPercent: null };
+  }
+  const enabledPercent = Math.min(100, Math.max(0, (summary.enabled / summary.total) * 100));
+  return { enabledPercent, disabledPercent: 100 - enabledPercent };
+}
+
 /** 指标新鲜度窗口：与后端 probe 口径一致（5 分钟）。 */
 export const METRICS_FRESH_WINDOW_MS = 5 * 60 * 1000;
 /**
@@ -372,6 +393,101 @@ export function summarizeNodeCards(cards: ServerCardView[]): NodeSummaryView {
     if (card.server.os?.supported === false) unsupported += 1;
   }
   return { total: cards.length, online, offline, fresh, unsupported };
+}
+
+/** 节点摘要环的语义色调：没有离线节点为 success，出现离线为 warning。 */
+export function onlineRateTone(summary: NodeSummaryView): MetricTone {
+  return summary.offline > 0 ? 'warning' : 'success';
+}
+
+export interface CapacityView {
+  /** 至少有一种指标样本的在线节点数（离线节点不参与聚合）。 */
+  sampleNodes: number;
+  cpuPercent: number | null;
+  memoryUsedBytes: number | null;
+  memoryTotalBytes: number | null;
+  memoryPercent: number | null;
+  diskUsedBytes: number | null;
+  diskTotalBytes: number | null;
+  diskPercent: number | null;
+}
+
+const emptyCapacityView: CapacityView = {
+  sampleNodes: 0,
+  cpuPercent: null,
+  memoryUsedBytes: null,
+  memoryTotalBytes: null,
+  memoryPercent: null,
+  diskUsedBytes: null,
+  diskTotalBytes: null,
+  diskPercent: null,
+};
+
+/**
+ * 在线节点容量摘要：只聚合在线且有有效样本的节点。
+ *
+ * CPU 取有样本节点的算术平均；内存/磁盘取有 used+total 节点的合计后求比例。
+ * 离线节点、无样本节点不进入任何分子分母；完全无样本时所有值为 null，页面
+ * 显示 `—` 与空环，不得用 0% 冒充“磁盘为空”。
+ */
+export function summarizeCapacity(cards: ServerCardView[]): CapacityView {
+  let cpuSum = 0;
+  let cpuCount = 0;
+  let memoryUsed = 0;
+  let memoryTotal = 0;
+  let memoryCount = 0;
+  let diskUsed = 0;
+  let diskTotal = 0;
+  let diskCount = 0;
+  const sampleIds = new Set<string>();
+  for (const card of cards) {
+    if (card.status !== 'online') continue;
+    const metrics = card.metrics;
+    if (metrics.cpuPercent !== null && Number.isFinite(metrics.cpuPercent)) {
+      cpuSum += metrics.cpuPercent;
+      cpuCount += 1;
+      sampleIds.add(card.server.id);
+    }
+    if (
+      metrics.memoryUsedBytes !== null
+      && metrics.memoryTotalBytes !== null
+      && Number.isFinite(metrics.memoryUsedBytes)
+      && Number.isFinite(metrics.memoryTotalBytes)
+      && metrics.memoryTotalBytes > 0
+    ) {
+      memoryUsed += metrics.memoryUsedBytes;
+      memoryTotal += metrics.memoryTotalBytes;
+      memoryCount += 1;
+      sampleIds.add(card.server.id);
+    }
+    if (
+      metrics.diskUsedBytes !== null
+      && metrics.diskTotalBytes !== null
+      && Number.isFinite(metrics.diskUsedBytes)
+      && Number.isFinite(metrics.diskTotalBytes)
+      && metrics.diskTotalBytes > 0
+    ) {
+      diskUsed += metrics.diskUsedBytes;
+      diskTotal += metrics.diskTotalBytes;
+      diskCount += 1;
+      sampleIds.add(card.server.id);
+    }
+  }
+  if (sampleIds.size === 0) return emptyCapacityView;
+  return {
+    sampleNodes: sampleIds.size,
+    cpuPercent: cpuCount > 0 ? cpuSum / cpuCount : null,
+    memoryUsedBytes: memoryCount > 0 ? memoryUsed : null,
+    memoryTotalBytes: memoryCount > 0 ? memoryTotal : null,
+    memoryPercent: memoryTotal > 0 ? clampPercent((memoryUsed / memoryTotal) * 100) : null,
+    diskUsedBytes: diskCount > 0 ? diskUsed : null,
+    diskTotalBytes: diskCount > 0 ? diskTotal : null,
+    diskPercent: diskTotal > 0 ? clampPercent((diskUsed / diskTotal) * 100) : null,
+  };
+}
+
+function clampPercent(value: number): number {
+  return Math.min(100, Math.max(0, value));
 }
 
 export interface RelativeTimeLabel {

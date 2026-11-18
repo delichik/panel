@@ -5,6 +5,7 @@ import type { NetworkProbeHistoryPoint, NetworkProbeResult } from '@/types/netwo
 import type { ServerDto } from '@/types/servers';
 import {
   aggregateProbeHistory,
+  applicationRatio,
   buildServerCards,
   cpuHistory,
   diskReadHistory,
@@ -22,6 +23,7 @@ import {
   memoryPercent,
   nodeStatusKind,
   nodeStatusTone,
+  onlineRateTone,
   percentTone,
   probeLatencyHistory,
   probeLossHistory,
@@ -29,6 +31,7 @@ import {
   relativeTimeLabel,
   emptyApplicationSummary,
   summarizeApplications,
+  summarizeCapacity,
   summarizeNodeCards,
   summarizeProbeResults,
   valueTone,
@@ -339,5 +342,72 @@ describe('overview model', () => {
     });
     expect(summarizeApplications([], 0)).toEqual({ total: 0, enabled: 0, disabled: 0, deploying: 0, attention: 0, available: true });
     expect(emptyApplicationSummary().available).toBe(false);
+  });
+
+  it('derives the online-rate ring tone from offline nodes only', () => {
+    expect(onlineRateTone({ total: 3, online: 3, offline: 0, fresh: 3, unsupported: 0 })).toBe('success');
+    expect(onlineRateTone({ total: 3, online: 2, offline: 1, fresh: 3, unsupported: 1 })).toBe('warning');
+  });
+
+  it('derives an exclusive enabled/disabled application ratio for the summary bar', () => {
+    expect(applicationRatio({ total: 4, enabled: 3, disabled: 1, deploying: 1, attention: 1, available: true }))
+      .toEqual({ enabledPercent: 75, disabledPercent: 25 });
+    expect(applicationRatio(emptyApplicationSummary())).toEqual({ enabledPercent: null, disabledPercent: null });
+    expect(applicationRatio({ total: 0, enabled: 0, disabled: 0, deploying: 0, attention: 0, available: true }))
+      .toEqual({ enabledPercent: null, disabledPercent: null });
+  });
+
+  it('summarizes capacity from online nodes with valid samples only', () => {
+    const now = Date.parse('2026-11-16T07:10:00Z');
+    const second = series();
+    second.latest = {
+      ...second.latest!,
+      cpuUsagePercent: 50,
+      memoryUsedBytes: 2 * 1024 ** 3,
+      memoryTotalBytes: 4 * 1024 ** 3,
+      diskUsedBytes: 20 * 1024 ** 3,
+      diskTotalBytes: 100 * 1024 ** 3,
+    };
+    const cards = buildServerCards({
+      servers: [server({ id: 'a' }), server({ id: 'b' }), server({ id: 'offline', reachable: false })],
+      metricsById: { a: series(), b: second, offline: series() },
+      metricsErrorIds: new Set(),
+      probeSourceId: '',
+      probeResults: [],
+      packageUpdatesById: {},
+      imageUpdatesById: {},
+      now,
+    });
+    const capacity = summarizeCapacity(cards);
+    expect(capacity.sampleNodes).toBe(2);
+    expect(capacity.cpuPercent).toBeCloseTo(46.25, 5);
+    expect(capacity.memoryUsedBytes).toBe(6 * 1024 ** 3);
+    expect(capacity.memoryTotalBytes).toBe(12 * 1024 ** 3);
+    expect(capacity.memoryPercent).toBe(50);
+    expect(capacity.diskUsedBytes).toBe(80 * 1024 ** 3);
+    expect(capacity.diskTotalBytes).toBe(200 * 1024 ** 3);
+    expect(capacity.diskPercent).toBe(40);
+
+    // 无样本不得伪造 0%：所有值保持 null，页面显示 — 与空环。
+    const empty = buildServerCards({
+      servers: [server()],
+      metricsById: {},
+      metricsErrorIds: new Set(),
+      probeSourceId: '',
+      probeResults: [],
+      packageUpdatesById: {},
+      imageUpdatesById: {},
+      now,
+    });
+    expect(summarizeCapacity(empty)).toEqual({
+      sampleNodes: 0,
+      cpuPercent: null,
+      memoryUsedBytes: null,
+      memoryTotalBytes: null,
+      memoryPercent: null,
+      diskUsedBytes: null,
+      diskTotalBytes: null,
+      diskPercent: null,
+    });
   });
 });

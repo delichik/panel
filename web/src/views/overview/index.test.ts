@@ -177,10 +177,20 @@ describe('overview status page', () => {
     expect(wrapper.text()).toContain('Node status');
     expect(wrapper.text()).toContain('Applications');
     expect(wrapper.text()).toContain('4');
-    expect(wrapper.get('[data-testid="application-summary"]').text()).toContain('Disabled 1');
+    expect(wrapper.get('[data-testid="application-summary"]').text()).toContain('Disabled');
+    // 摘要头：在线率环 + 胶囊 KPI + 应用分布条 + 容量三环。
+    const onlineRing = wrapper.get('[data-testid="online-rate-ring"]');
+    expect(onlineRing.attributes('role')).toBe('img');
+    expect(onlineRing.attributes('aria-label')).toBe('Online rate: 100%');
+    expect(onlineRing.text()).toBe('100%');
+    expect(wrapper.get('[data-testid="application-ratio-bar"]').attributes('aria-label')).toBe('Applications: 3 enabled, 1 disabled');
+    expect(wrapper.get('[data-testid="capacity-summary"]').text()).toContain('Capacity');
+    expect(wrapper.get('[data-testid="capacity-cpu"]').text()).toBe('24%');
+    expect(wrapper.get('[data-testid="capacity-memory"]').text()).toBe('50%');
+    expect(wrapper.get('[data-testid="capacity-disk"]').text()).toBe('63%');
+    expect(wrapper.text()).toContain('23.5%');
     expect(wrapper.text()).toContain('edge');
     expect(wrapper.text()).toContain('core');
-    expect(wrapper.text()).toContain('23.5%');
     expect(wrapper.text()).toContain('145 ms');
     expect(wrapper.text()).toContain('1.7 %');
     expect(wrapper.text()).toContain('50%');
@@ -319,9 +329,10 @@ describe('overview mobile layout contract', () => {
   const pageSource = readFileSync(resolve(__dirname, './index.vue'), 'utf8');
   const cardSource = readFileSync(resolve(__dirname, './ServerCard.vue'), 'utf8');
 
-  it('collapses summaries and server cards to one column below sm', () => {
-    // 应用摘要主指标 <sm 单列；服务器卡内的指标对 <sm 纵向单列（不压缩标签）。
-    expect(pageSource).toContain('grid grid-cols-1 gap-2 sm:grid-cols-4');
+  it('stacks the open summary header and keeps server cards single-column below sm', () => {
+    // 摘要头在 wide 以下单列；wide 两列（容量整行）、wider 三列。
+    expect(pageSource).toContain('wide:grid-cols-2 wider:grid-cols-3');
+    expect(pageSource).toContain('flex min-w-0 flex-wrap items-center gap-4');
     expect(cardSource).toContain('max-sm:grid-cols-1');
     expect(cardSource).toContain('gap-x-4 gap-y-2 max-sm:grid-cols-1');
   });
