@@ -43,7 +43,7 @@ let listController: AbortController | null = null;
 const columns = computed(() => [
   { key: 'image', label: t('resourcesPage.image') },
   { key: 'state', label: t('common.status'), nowrap: true, width: 'w-40' },
-  { key: 'checkedAt', label: t('serversPage.lastChecked'), nowrap: true, width: 'w-40' },
+  { key: 'checkedAt', label: t('serversPage.lastChecked'), nowrap: true, width: 'w-40', hideBelow: 'wide' as const },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
 ]);
 
@@ -197,7 +197,15 @@ onBeforeUnmount(() => listController?.abort());
         <span class="whitespace-nowrap text-muted-foreground">{{ imageTime(row) }}</span>
       </template>
       <template #actions="{ row }">
-        <Button size="sm" variant="danger" :disabled="blocked || row.inUse" @click="askDelete(row)"><Trash2 />{{ t('common.delete') }}</Button>
+        <div class="flex items-center justify-end gap-1">
+          <Button class="max-wide:hidden" size="sm" variant="danger" :disabled="blocked || row.inUse" @click="askDelete(row)"><Trash2 />{{ t('common.delete') }}</Button>
+          <Dropdown class="wide:hidden" align="right">
+            <template #trigger>
+              <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
+            </template>
+            <DropdownItem tone="danger" :disabled="blocked || row.inUse" @click="askDelete(row)"><Trash2 />{{ t('common.delete') }}</DropdownItem>
+          </Dropdown>
+        </div>
       </template>
       <template #empty>
         <EmptyState variant="inset" :title="t('resourcesPage.noImages')" :description="t('resourcesPage.noImagesHint')" />

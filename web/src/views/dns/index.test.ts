@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import DnsView from './index.vue';
 import { dnsApi } from '@/api/dns';
 import { toastKey } from '@/components/ui/toast';
+import Table from '@/components/ui/Table.vue';
 import { useI18n } from '@/i18n';
 import type { DnsDomainDto } from '@/types/dns';
 
@@ -90,6 +91,21 @@ describe('dns detail migration', () => {
     ]);
     // 列表页没有面包屑。
     expect(view.find('header nav').exists()).toBe(false);
+
+    // 次级时间列 <wide 隐藏；行内 Sync 在 <wide 收进 More（More 中保留）。
+    const listColumns = (view.findComponent(Table).vm.$props as unknown as { columns: Array<{ key: string; hideBelow?: string }> }).columns;
+    expect(listColumns.find((column) => column.key === 'updatedAt')?.hideBelow).toBe('wide');
+    const updatedHeader = view.findAll('table thead th').find((item) => item.text() === useI18n().t('dnsPage.updatedAt'));
+    expect(updatedHeader?.classes()).toContain('max-wide:hidden');
+    const syncButton = view.findAll('button').find((item) => item.text() === useI18n().t('dnsPage.syncRecords'));
+    expect(syncButton?.classes()).toContain('max-wide:hidden');
+
+    const moreButton = view.findAll('button').find((item) => item.attributes('aria-label') === useI18n().t('common.moreActions'));
+    expect(moreButton).toBeTruthy();
+    await moreButton!.trigger('click');
+    await flushPromises();
+    expect(document.body.textContent).toContain(useI18n().t('dnsPage.syncRecords'));
+    expect(document.body.textContent).toContain(useI18n().t('common.edit'));
   });
 
   it('keeps one records hint and renders the in-table empty state as inset', async () => {

@@ -8,6 +8,7 @@ import { certificatesApi } from '@/api/certificates';
 import { dnsApi } from '@/api/dns';
 import { keyAssetsApi } from '@/api/keyAssets';
 import { toastKey } from '@/components/ui/toast';
+import Table from '@/components/ui/Table.vue';
 import { useI18n } from '@/i18n';
 import type { DomainCertificateDto } from '@/types/certificates';
 
@@ -125,6 +126,15 @@ describe('certificates detail migration', () => {
       useI18n().t('certificatesPage.expiresAt'),
       useI18n().t('common.actions'),
     ]);
+
+    // 二级列在 <wide 隐藏；行内续签在 <wide 只保留详情+更多。
+    const listColumns = (view.findComponent(Table).vm.$props as unknown as { columns: Array<{ key: string; hideBelow?: string }> }).columns;
+    expect(listColumns.find((column) => column.key === 'expiresAt')?.hideBelow).toBe('wide');
+    expect(listColumns.some((column) => column.key === 'actions')).toBe(true);
+    const expiresHeader = view.findAll('table thead th').find((item) => item.text() === useI18n().t('certificatesPage.expiresAt'));
+    expect(expiresHeader?.classes()).toContain('max-wide:hidden');
+    const renewButton = view.findAll('button').find((item) => item.text() === useI18n().t('certificatesPage.renew'));
+    expect(renewButton?.classes()).toContain('max-wide:hidden');
 
     // 详情面包屑：列表标题链接 + 当前对象 aria-current；列表页不渲染面包屑。
     const breadcrumb = view.find('header nav');

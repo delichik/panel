@@ -65,6 +65,7 @@ AppShell
 - 名称列：实体列表用 `TableDetailName` 打开覆盖式详情（与「详情」按钮同语义）；须有本地化 `aria-label`（`common.openDetails`）。
 - 当前选中行（覆盖详情打开的对象）通过 `active-key` 标记 `aria-current="true"` 与 `accent-selected` 表面；表格行本身不可点击，不得把整行绑成点击区。
 - 多行内容（title+summary、name+path、结构化错误）必须显式使用 `rowHeight="auto"`；默认 40px 单行。auto 行 td 允许换行/align-top，短列在页面插槽补 nowrap。
+- 响应式列：列定义可用 `hideBelow?: 'sm'|'md'|'lg'|'wide'`（`wide`=1239）隐藏次级列；必须保留名称/主状态/操作主入口。`<wide` 时行内次级操作加 `max-wide:hidden` 收入「更多」菜单，More 必须包含所有被隐藏操作；宽屏保持内联布局。
 
 ## 页面模板
 

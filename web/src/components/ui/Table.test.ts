@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { mount } from '@vue/test-utils';
 import { describe, expect, it } from 'vitest';
 import Table from './Table.vue';
@@ -122,6 +124,70 @@ describe('Table', () => {
     expect(wrapper.get('thead').classes()).toContain('bg-card-solid');
     // text-body-strong 自带 600，不再手写 font-semibold。
     expect(wrapper.get('th').classes()).not.toContain('font-semibold');
+  });
+
+  it('hides columns below the requested breakpoint on both header and data cells', () => {
+    const responsiveColumns = [
+      { key: 'a', label: 'A', hideBelow: 'sm' as const },
+      { key: 'b', label: 'B', hideBelow: 'md' as const },
+      { key: 'c', label: 'C', hideBelow: 'lg' as const },
+      { key: 'd', label: 'D', hideBelow: 'wide' as const },
+      { key: 'e', label: 'E', width: 'w-24', nowrap: true },
+    ];
+    const wrapper = mount(Table, {
+      props: {
+        columns: responsiveColumns,
+        rows: [{ a: '1', b: '2', c: '3', d: '4', e: '5' }],
+      },
+    });
+
+    const headers = wrapper.findAll('th');
+    expect(headers[0]!.classes()).toContain('max-sm:hidden');
+    expect(headers[1]!.classes()).toContain('max-md:hidden');
+    expect(headers[2]!.classes()).toContain('max-lg:hidden');
+    expect(headers[3]!.classes()).toContain('max-wide:hidden');
+    expect(headers[4]!.classes()).not.toContain('max-sm:hidden');
+    expect(headers[4]!.classes()).not.toContain('max-wide:hidden');
+    // 列宽/nowrap 契约不变。
+    expect(headers[4]!.classes()).toContain('w-24');
+    expect(headers[4]!.classes()).toContain('whitespace-nowrap');
+
+    const cells = wrapper.get('tbody tr').findAll('td');
+    expect(cells[0]!.classes()).toContain('max-sm:hidden');
+    expect(cells[1]!.classes()).toContain('max-md:hidden');
+    expect(cells[2]!.classes()).toContain('max-lg:hidden');
+    expect(cells[3]!.classes()).toContain('max-wide:hidden');
+    expect(cells[4]!.classes()).not.toContain('max-wide:hidden');
+    expect(cells[4]!.classes()).toContain('w-24');
+    expect(cells[4]!.classes()).toContain('whitespace-nowrap');
+  });
+
+  it('applies hideBelow to loading skeleton cells too', () => {
+    const responsiveColumns = [
+      { key: 'a', label: 'A', hideBelow: 'sm' as const },
+      { key: 'd', label: 'D', hideBelow: 'wide' as const },
+    ];
+    const wrapper = mount(Table, {
+      props: { columns: responsiveColumns, rows: [], loading: true, loadingRows: 1 },
+    });
+
+    const headers = wrapper.findAll('th');
+    expect(headers[0]!.classes()).toContain('max-sm:hidden');
+    expect(headers[1]!.classes()).toContain('max-wide:hidden');
+
+    const skeletonCells = wrapper.get('tbody tr').findAll('td');
+    expect(skeletonCells[0]!.classes()).toContain('max-sm:hidden');
+    expect(skeletonCells[1]!.classes()).toContain('max-wide:hidden');
+    expect(skeletonCells[0]!.find('.motion-skeleton').exists()).toBe(true);
+  });
+
+  it('keeps every hideBelow class as a static literal so Tailwind can generate it', () => {
+    // Tailwind 只扫描源码中的完整类名字面量；动态 `max-${bp}:hidden` 不会被生成，
+    // 因此这里用源码断言锁住四档静态类名（wide 依赖 main.css --breakpoint-wide:1239px）。
+    const source = readFileSync(resolve(__dirname, 'Table.vue'), 'utf8');
+    for (const className of ['max-sm:hidden', 'max-md:hidden', 'max-lg:hidden', 'max-wide:hidden']) {
+      expect(source).toContain(className);
+    }
   });
 
   it('drops its own frame when embedded in a card that already owns one', () => {

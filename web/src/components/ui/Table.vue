@@ -1,6 +1,20 @@
 <script setup lang="ts" generic="T">
+type TableColumn = {
+  key: string;
+  label: string;
+  align?: 'left' | 'right';
+  width?: string;
+  nowrap?: boolean;
+  /**
+   * 响应式列隐藏：在断点以下隐藏该列（th/td/skeleton 同步）。
+   * `sm|md|lg` 走 Tailwind 内置断点；`wide` 依赖 main.css `--breakpoint-wide: 1239px`，
+   * 生成 `max-wide:hidden`。
+   */
+  hideBelow?: 'sm' | 'md' | 'lg' | 'wide';
+};
+
 const props = withDefaults(defineProps<{
-  columns: Array<{ key: string; label: string; align?: 'left' | 'right'; width?: string; nowrap?: boolean }>;
+  columns: TableColumn[];
   rows: T[];
   rowKey?: string;
   /**
@@ -59,6 +73,22 @@ function staggerStyle(index: number): Record<string, string> {
   return { '--panel-stagger': `${Math.min(index, 6) * 20}ms` };
 }
 
+/**
+ * 列级响应式隐藏 class；宽/nowrap/align 契约不受影响。
+ * 使用静态映射而不是模板字符串拼接：Tailwind 只扫描源码中的完整类名字面量，
+ * 动态 `` `max-${bp}:hidden` `` 不会被生成 CSS。
+ */
+const HIDE_BELOW_CLASS: Record<NonNullable<TableColumn['hideBelow']>, string> = {
+  sm: 'max-sm:hidden',
+  md: 'max-md:hidden',
+  lg: 'max-lg:hidden',
+  wide: 'max-wide:hidden',
+};
+
+function hideClass(column: TableColumn): string | undefined {
+  return column.hideBelow ? HIDE_BELOW_CLASS[column.hideBelow] : undefined;
+}
+
 function skeletonClass(rowIndex: number, columnIndex: number, align?: 'left' | 'right') {
   return [
     'motion-skeleton h-4 rounded-control bg-hover animate-pulse',
@@ -75,7 +105,7 @@ function skeletonClass(rowIndex: number, columnIndex: number, align?: 'left' | '
     <table class="w-full border-collapse text-body" :class="fixed ? 'table-fixed' : undefined" :aria-busy="loading ? 'true' : undefined" :aria-label="loadingLabel || undefined">
       <thead class="sticky top-0 z-10 bg-card-solid text-body-strong text-secondary-foreground">
           <tr>
-            <th v-for="column in columns" :key="column.key" scope="col" class="whitespace-nowrap border-b border-divider px-3 py-2.5" :class="[column.align === 'right' ? 'text-right' : 'text-left', column.width]">
+            <th v-for="column in columns" :key="column.key" scope="col" class="whitespace-nowrap border-b border-divider px-3 py-2.5" :class="[column.align === 'right' ? 'text-right' : 'text-left', column.width, hideClass(column)]">
               <slot v-if="$slots[`head-${column.key}`]" :name="`head-${column.key}`" :row="undefined as unknown as T" :value="undefined" />
               <template v-else>{{ column.label }}</template>
             </th>
@@ -90,14 +120,14 @@ function skeletonClass(rowIndex: number, columnIndex: number, align?: 'left' | '
           -->
           <template v-if="loading && !rows.length">
             <tr v-for="rowIndex in loadingRows" :key="`loading-${rowIndex}`" class="h-10">
-              <td v-for="(column, columnIndex) in columns" :key="column.key" class="px-3 py-1.5">
+              <td v-for="(column, columnIndex) in columns" :key="column.key" class="px-3 py-1.5" :class="hideClass(column)">
                 <div :class="skeletonClass(rowIndex, columnIndex, column.align)" />
               </td>
             </tr>
           </template>
           <template v-else-if="rows.length">
             <tr v-for="(row, index) in rows" :key="rowId(row, index)" class="motion-table-row transition-colors duration-fast hover:bg-hover" :class="[rowHeight === 'auto' ? 'min-h-10' : 'h-10', isActive(row) ? 'bg-accent-selected hover:bg-accent-selected' : undefined]" :aria-current="isActive(row) ? 'true' : undefined" :style="staggerStyle(index)">
-              <td v-for="column in columns" :key="column.key" class="px-3 py-1.5 text-foreground" :class="[rowHeight === 'auto' ? (column.nowrap ? 'whitespace-nowrap align-top' : 'whitespace-normal align-top') : 'whitespace-nowrap align-middle', column.align === 'right' ? 'text-right' : 'text-left', column.width]">
+              <td v-for="column in columns" :key="column.key" class="px-3 py-1.5 text-foreground" :class="[hideClass(column), rowHeight === 'auto' ? (column.nowrap ? 'whitespace-nowrap align-top' : 'whitespace-normal align-top') : 'whitespace-nowrap align-middle', column.align === 'right' ? 'text-right' : 'text-left', column.width]">
                 <slot :name="column.key" :row="row" :value="cellValue(row, column.key)">
                   {{ cellValue(row, column.key) }}
                 </slot>
@@ -105,6 +135,7 @@ function skeletonClass(rowIndex: number, columnIndex: number, align?: 'left' | '
             </tr>
           </template>
           <tr v-else class="text-muted-foreground">
+            <!-- 空态跨全部列（含被 hideBelow 隐藏的列）；<td> 仍是表格合法结构，隐藏列不参与布局。 -->
             <td :colspan="columns.length" class="px-3 py-2">
               <slot name="empty" :row="undefined as unknown as T" :value="undefined" />
             </td>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Eye, RefreshCcw } from '@/icons';
+import { Eye, MoreHorizontal, RefreshCcw } from '@/icons';
 import { eventsApi } from '@/api/events';
 import { DIAGNOSE_LOG_LEVELS, logsPath } from '@/api/activityReference';
 import { saveBlobDownload } from '@/api/download';
@@ -10,7 +10,10 @@ import Button from '@/components/ui/Button.vue';
 import DateTimeRangePicker from '@/components/ui/DateTimeRangePicker.vue';
 import Dialog from '@/components/ui/Dialog.vue';
 import DownloadButton from '@/components/ui/DownloadButton.vue';
+import Dropdown from '@/components/ui/Dropdown.vue';
+import DropdownItem from '@/components/ui/DropdownItem.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
+import IconButton from '@/components/ui/IconButton.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import PaginationBar from '@/components/ui/PaginationBar.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
@@ -76,15 +79,15 @@ const levelOptions = computed(() => [
 
 /**
  * 列精简（≤5）：时间列合并级别徽标（时间为主行、级别为副行），不再单列 level；
- * 模块、标题（title+summary 两行）、状态、操作。宽度用语义间距刻度固定短列，
- * 标题列占剩余宽度。
+ * 模块、标题（title+summary 两行）、状态、操作。次级列（module/state）在 <wide
+ * 隐藏（Table hideBelow），窄屏只保留时间+级别、标题与操作；标题列吃剩余宽度。
  */
 const columns = computed(() => [
-  { key: 'updatedAt', label: t('eventsPage.time'), width: 'w-40' },
-  { key: 'module', label: t('eventsPage.module'), width: 'w-28' },
+  { key: 'updatedAt', label: t('eventsPage.time'), width: 'w-36 wide:w-40', nowrap: true },
+  { key: 'module', label: t('eventsPage.module'), width: 'w-28', nowrap: true, hideBelow: 'wide' as const },
   { key: 'title', label: t('eventsPage.title') },
-  { key: 'state', label: t('common.status'), width: 'w-24' },
-  { key: 'actions', label: t('common.actions'), align: 'right' as const, width: 'w-52' },
+  { key: 'state', label: t('common.status'), width: 'w-24', nowrap: true, hideBelow: 'wide' as const },
+  { key: 'actions', label: t('common.actions'), align: 'right' as const, width: 'w-36 wide:w-52', nowrap: true },
 ]);
 
 const detailProperties = computed<PropertyListItem[]>(() => {
@@ -385,7 +388,14 @@ onBeforeUnmount(() => {
             <template #actions="{ row }">
               <div class="flex items-center justify-end gap-1">
                 <Button size="sm" variant="secondary" @click="openDetail(row.id)"><Eye />{{ t('common.details') }}</Button>
-                <Button size="sm" variant="ghost" @click="openLogs(row)">{{ t('eventsPage.viewLogs') }}</Button>
+                <!-- 次级行操作在 <wide 收进「更多」，窄屏只保留详情主入口。 -->
+                <Button class="max-wide:hidden" size="sm" variant="ghost" @click="openLogs(row)">{{ t('eventsPage.viewLogs') }}</Button>
+                <Dropdown class="wide:hidden" align="right">
+                  <template #trigger>
+                    <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
+                  </template>
+                  <DropdownItem @click="openLogs(row)">{{ t('eventsPage.viewLogs') }}</DropdownItem>
+                </Dropdown>
               </div>
             </template>
             <template #empty>

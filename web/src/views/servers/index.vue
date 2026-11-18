@@ -151,7 +151,7 @@ const { onKeydown: onDetailKeydown } = useOverlayBehavior({
 const columns = computed(() => [
   { key: 'name', label: t('common.name') },
   { key: 'status', label: t('common.status'), nowrap: true, width: 'w-36' },
-  { key: 'lastChecked', label: t('serversPage.lastChecked'), nowrap: true, width: 'w-40 max-sm:hidden' },
+  { key: 'lastChecked', label: t('serversPage.lastChecked'), nowrap: true, width: 'w-40', hideBelow: 'wide' as const },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true, width: 'w-52' },
 ]);
 
@@ -622,11 +622,12 @@ onBeforeUnmount(() => {
             <template #actions="{ row }">
               <div class="flex items-center justify-end gap-1">
                 <Button size="sm" variant="secondary" @click="openDetail(row)"><Eye />{{ t('common.details') }}</Button>
-                <Button size="sm" variant="ghost" :loading="rowBusy?.id === row.id && rowBusy.kind === 'test'" :disabled="rowBusy?.id === row.id" @click="testConnection(row)"><Cable />{{ t('serversPage.testConnection') }}</Button>
+                <Button class="max-wide:hidden" size="sm" variant="ghost" :loading="rowBusy?.id === row.id && rowBusy.kind === 'test'" :disabled="rowBusy?.id === row.id" @click="testConnection(row)"><Cable />{{ t('serversPage.testConnection') }}</Button>
                 <Dropdown align="right">
                   <template #trigger>
                     <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
                   </template>
+                  <DropdownItem class="wide:hidden" :disabled="rowBusy?.id === row.id" @click="testConnection(row)"><Cable />{{ t('serversPage.testConnection') }}</DropdownItem>
                   <DropdownItem :disabled="rowBusy?.id === row.id" @click="openEdit(row)"><Wrench />{{ t('common.edit') }}</DropdownItem>
                   <DropdownItem tone="danger" @click="confirmTarget = row"><Trash2 />{{ t('common.delete') }}</DropdownItem>
                 </Dropdown>

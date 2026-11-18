@@ -249,19 +249,19 @@ const assetImportMaterialTabs = computed(() => [
 const domainColumns = computed(() => [
   { key: 'name', label: t('common.name'), width: 'w-72' },
   { key: 'status', label: t('common.status'), nowrap: true },
-  { key: 'expiresAt', label: t('certificatesPage.expiresAt'), nowrap: true, width: 'w-36' },
+  { key: 'expiresAt', label: t('certificatesPage.expiresAt'), nowrap: true, width: 'w-36', hideBelow: 'wide' as const },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
 ]);
 const selfColumns = computed(() => [
   { key: 'name', label: t('common.name'), width: 'w-72' },
   { key: 'kind', label: t('common.type'), nowrap: true },
-  { key: 'expiresAt', label: t('certificatesPage.expiresAt'), nowrap: true, width: 'w-36' },
+  { key: 'expiresAt', label: t('certificatesPage.expiresAt'), nowrap: true, width: 'w-36', hideBelow: 'wide' as const },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
 ]);
 const assetColumns = computed(() => [
   { key: 'name', label: t('common.name'), width: 'w-72' },
   { key: 'type', label: t('common.type'), nowrap: true },
-  { key: 'expiresAt', label: t('certificatesPage.expiresAt'), nowrap: true, width: 'w-36' },
+  { key: 'expiresAt', label: t('certificatesPage.expiresAt'), nowrap: true, width: 'w-36', hideBelow: 'wide' as const },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
 ]);
 
@@ -873,11 +873,12 @@ function onFileChange(value: File | File[]) {
               <template #actions="{ row }">
                 <div class="flex items-center justify-end gap-1">
                   <Button size="sm" variant="secondary" @click="openDetail(row.id)"><Eye />{{ t('common.details') }}</Button>
-                  <Button size="sm" variant="ghost" :loading="rowPending === `domains:${row.id}`" :disabled="Boolean(rowPending)" @click="renewDomainRow(row)"><RotateCcw />{{ t('certificatesPage.renew') }}</Button>
+                  <Button class="max-wide:hidden" size="sm" variant="ghost" :loading="rowPending === `domains:${row.id}`" :disabled="Boolean(rowPending)" @click="renewDomainRow(row)"><RotateCcw />{{ t('certificatesPage.renew') }}</Button>
                   <Dropdown align="right">
                     <template #trigger>
                       <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
                     </template>
+                    <DropdownItem @click="renewDomainRow(row)"><RotateCcw />{{ t('certificatesPage.renew') }}</DropdownItem>
                     <DropdownItem @click="openReissue(row)"><Wrench />{{ t('certificatesPage.adjustReissue') }}</DropdownItem>
                     <DropdownItem tone="danger" @click="askDelete('domains', row.id, row.name)"><Trash2 />{{ t('common.delete') }}</DropdownItem>
                   </Dropdown>
@@ -915,11 +916,12 @@ function onFileChange(value: File | File[]) {
               <template #actions="{ row }">
                 <div class="flex items-center justify-end gap-1">
                   <Button size="sm" variant="secondary" @click="openDetail(row.id)"><Eye />{{ t('common.details') }}</Button>
-                  <Button size="sm" variant="ghost" :loading="rowPending === `self:${row.id}`" :disabled="Boolean(rowPending)" @click="renewSelfRow(row)"><RotateCcw />{{ t('certificatesPage.reissue') }}</Button>
+                  <Button class="max-wide:hidden" size="sm" variant="ghost" :loading="rowPending === `self:${row.id}`" :disabled="Boolean(rowPending)" @click="renewSelfRow(row)"><RotateCcw />{{ t('certificatesPage.reissue') }}</Button>
                   <Dropdown align="right">
                     <template #trigger>
                       <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
                     </template>
+                    <DropdownItem @click="renewSelfRow(row)"><RotateCcw />{{ t('certificatesPage.reissue') }}</DropdownItem>
                     <DropdownItem @click="openSelf('self-leaf')"><Plus />{{ t('certificatesPage.generateLeaf') }}</DropdownItem>
                     <DropdownItem tone="danger" @click="askDelete('self', row.id, row.name)"><Trash2 />{{ t('common.delete') }}</DropdownItem>
                   </Dropdown>
@@ -959,11 +961,12 @@ function onFileChange(value: File | File[]) {
               <template #actions="{ row }">
                 <div class="flex items-center justify-end gap-1">
                   <Button size="sm" variant="secondary" @click="openDetail(row.id)"><Eye />{{ t('common.details') }}</Button>
-                  <Button size="sm" variant="ghost" :disabled="(!row.canReissue && !row.canRegenerate) || Boolean(rowPending)" :loading="rowPending === `keys:${row.id}`" @click="reissueAssetRow(row)"><RotateCcw />{{ row.type === 'ssh_key_pair' ? t('certificatesPage.regenerate') : t('certificatesPage.reissue') }}</Button>
+                  <Button class="max-wide:hidden" size="sm" variant="ghost" :disabled="(!row.canReissue && !row.canRegenerate) || Boolean(rowPending)" :loading="rowPending === `keys:${row.id}`" @click="reissueAssetRow(row)"><RotateCcw />{{ row.type === 'ssh_key_pair' ? t('certificatesPage.regenerate') : t('certificatesPage.reissue') }}</Button>
                   <Dropdown align="right">
                     <template #trigger>
                       <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
                     </template>
+                    <DropdownItem :disabled="(!row.canReissue && !row.canRegenerate) || Boolean(rowPending)" @click="reissueAssetRow(row)"><RotateCcw />{{ row.type === 'ssh_key_pair' ? t('certificatesPage.regenerate') : t('certificatesPage.reissue') }}</DropdownItem>
                     <DropdownItem @click="openExport(row)"><FileArchive />{{ t('certificatesPage.exportAsset') }}</DropdownItem>
                     <DropdownItem @click="openAsset('asset-import')"><KeyRound />{{ t('certificatesPage.importAsset') }}</DropdownItem>
                     <DropdownItem tone="danger" :disabled="!row.canDelete" @click="askDelete('keys', row.id, row.name, row.canDelete)"><Trash2 />{{ t('common.delete') }}</DropdownItem>

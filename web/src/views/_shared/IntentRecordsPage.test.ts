@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { createMemoryHistory, createRouter, type Router } from 'vue-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -69,6 +71,30 @@ afterEach(() => {
   wrapper?.unmount();
   wrapper = undefined;
   vi.restoreAllMocks();
+});
+
+describe('Events narrow viewport contract', () => {
+  const source = readFileSync(resolve(__dirname, './IntentRecordsPage.vue'), 'utf8');
+  const columnsSource = source.slice(source.indexOf('const columns = computed'), source.indexOf('const detailProperties'));
+
+  it('hides secondary columns below wide and keeps time/level, title, actions', () => {
+    expect(columnsSource).toMatch(/key: 'module'[^\n]*hideBelow: 'wide'/);
+    expect(columnsSource).toMatch(/key: 'state'[^\n]*hideBelow: 'wide'/);
+    // 主列不隐藏：时间+级别、标题、操作。
+    expect(columnsSource).not.toMatch(/key: 'updatedAt'[^\n]*hideBelow/);
+    expect(columnsSource).not.toMatch(/key: 'title'[^\n]*hideBelow/);
+    expect(columnsSource).not.toMatch(/key: 'actions'[^\n]*hideBelow/);
+    // 标题列占剩余宽度（不固定宽度），且旧 level 独立列已移除。
+    expect(columnsSource).not.toMatch(/key: 'title'[^\n]*width/);
+    expect(columnsSource).not.toContain("key: 'level'");
+  });
+
+  it('folds the secondary row action into an overflow menu below wide', () => {
+    expect(source).toContain('max-wide:hidden');
+    expect(source).toContain('wide:hidden');
+    expect(source).toContain('common.moreActions');
+    expect(source).toMatch(/<Dropdown[\s\S]*?DropdownItem[\s\S]*?eventsPage\.viewLogs/);
+  });
 });
 
 describe('Events list contract', () => {

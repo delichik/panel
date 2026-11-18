@@ -349,8 +349,9 @@ const detailOpen = computed(() => Boolean(selectedId.value));
 const applicationColumns = computed(() => [
   { key: 'name', label: t('common.name') },
   { key: 'status', label: t('common.status') },
-  { key: 'instances', label: t('applicationsPage.nodeHealthColumn') },
-  { key: 'updatedAt', label: t('applicationsPage.updatedAtColumn') },
+  // 次级列按优先级在窄屏隐藏：实例摘要 <lg 隐藏，更新时间仅 >=wide(1239) 显示。
+  { key: 'instances', label: t('applicationsPage.nodeHealthColumn'), hideBelow: 'lg' as const },
+  { key: 'updatedAt', label: t('applicationsPage.updatedAtColumn'), hideBelow: 'wide' as const },
   { key: 'actions', label: t('common.actions'), align: 'right' as const },
 ]);
 const logsApplication = computed(() => {
@@ -638,10 +639,11 @@ const proxyPlaneBlockedReferences = computed<ProxyPlaneReference[]>(() => {
 });
 const configRecordColumns = computed(() => [
   { key: 'domain', label: t('applicationsPage.domain') },
-  { key: 'source', label: t('applicationsPage.configRecordSource') },
-  { key: 'version', label: t('applicationsPage.configRecordVersion'), nowrap: true },
-  { key: 'dns', label: t('applicationsPage.configRecordDns'), nowrap: true },
-  { key: 'updatedAt', label: t('applicationsPage.configRecordUpdatedAt'), nowrap: true },
+  // 设施记录表同样按优先级隐藏次级列：来源/版本 <lg 隐藏，DNS/更新时间仅 >=wide 显示。
+  { key: 'source', label: t('applicationsPage.configRecordSource'), hideBelow: 'lg' as const },
+  { key: 'version', label: t('applicationsPage.configRecordVersion'), nowrap: true, hideBelow: 'lg' as const },
+  { key: 'dns', label: t('applicationsPage.configRecordDns'), nowrap: true, hideBelow: 'wide' as const },
+  { key: 'updatedAt', label: t('applicationsPage.configRecordUpdatedAt'), nowrap: true, hideBelow: 'wide' as const },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
 ]);
 function configRecordSourceLabel(record: ConfigRecord) {
@@ -2665,12 +2667,18 @@ onBeforeUnmount(() => {
             <template #actions="{ row }">
               <div class="flex flex-wrap items-center justify-end gap-1">
                 <Button size="sm" variant="secondary" @click="openApplicationDetail(row.app)"><Eye />{{ t('common.details') }}</Button>
-                <Button size="sm" variant="ghost" @click="router.push(`/applications/apps/${encodeURIComponent(row.app.id)}/edit`)"><Wrench />{{ t('common.edit') }}</Button>
-                <Button size="sm" variant="ghost" :loading="rowActionKey === `deploy:${row.app.id}`" :disabled="Boolean(rowActionKey)" @click="deployFor(row.app)"><Rocket />{{ t('applicationsPage.sync') }}</Button>
+                <!-- <wide：行内编辑/同步收进行内 More 菜单，只保留详情 + 更多。 -->
+                <div class="hidden items-center gap-1 wide:flex">
+                  <Button size="sm" variant="ghost" @click="router.push(`/applications/apps/${encodeURIComponent(row.app.id)}/edit`)"><Wrench />{{ t('common.edit') }}</Button>
+                  <Button size="sm" variant="ghost" :loading="rowActionKey === `deploy:${row.app.id}`" :disabled="Boolean(rowActionKey)" @click="deployFor(row.app)"><Rocket />{{ t('applicationsPage.sync') }}</Button>
+                </div>
                 <Dropdown align="right">
                   <template #trigger>
                     <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
                   </template>
+                  <!-- More 必须始终包含窄屏被隐藏的行内主操作。 -->
+                  <DropdownItem @click="router.push(`/applications/apps/${encodeURIComponent(row.app.id)}/edit`)"><Wrench />{{ t('common.edit') }}</DropdownItem>
+                  <DropdownItem :disabled="Boolean(rowActionKey)" @click="deployFor(row.app)"><Rocket />{{ t('applicationsPage.sync') }}</DropdownItem>
                   <DropdownItem :disabled="!row.app.enabled" @click="ask('stop', row.app.id)"><Square />{{ t('applicationsPage.disable') }}</DropdownItem>
                   <DropdownItem :disabled="!row.app.imageUpdateAvailable || Boolean(rowActionKey)" @click="updateImageFor(row.app)"><UploadCloud />{{ t('applicationsPage.updateImage') }}</DropdownItem>
                   <DropdownItem @click="openLogsFor(row.app)"><History />{{ t('applicationsPage.logs') }}</DropdownItem>
@@ -3024,12 +3032,24 @@ onBeforeUnmount(() => {
             <template #updatedAt="{ row }"><span class="text-muted-foreground">{{ formatDateTime(row.updatedAt, t('common.never')) }}</span></template>
             <template #actions="{ row }">
               <div class="flex flex-wrap items-center justify-end gap-1">
-                <template v-if="row.kind === 'facility_domain'">
+                <!-- <wide：设施记录操作全部收进 More；>=wide 保持行内按钮。 -->
+                <div v-if="row.kind === 'facility_domain'" class="hidden items-center gap-1 wide:flex">
                   <Button size="sm" variant="secondary" @click="openFacilityRecord(row)"><Wrench />{{ t('common.edit') }}</Button>
                   <Button size="sm" variant="ghost" :loading="configRecordActionKey === `apply:${row.recordId}`" :disabled="Boolean(configRecordActionKey)" @click="applyFacilityRecord(row)"><RefreshCcw />{{ t('common.apply') }}</Button>
                   <Button size="sm" variant="danger" :disabled="Boolean(configRecordActionKey)" @click="askDeleteFacilityRecord(row)"><Trash2 />{{ t('common.delete') }}</Button>
-                </template>
-                <Button v-else size="sm" variant="secondary" @click="openRecordApplication(row)"><Globe2 />{{ t('applicationsPage.configRecordOpenApplication') }}</Button>
+                </div>
+                <Button v-else size="sm" variant="secondary" class="hidden wide:inline-flex" @click="openRecordApplication(row)"><Globe2 />{{ t('applicationsPage.configRecordOpenApplication') }}</Button>
+                <Dropdown align="right">
+                  <template #trigger>
+                    <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
+                  </template>
+                  <template v-if="row.kind === 'facility_domain'">
+                    <DropdownItem @click="openFacilityRecord(row)"><Wrench />{{ t('common.edit') }}</DropdownItem>
+                    <DropdownItem :disabled="Boolean(configRecordActionKey)" @click="applyFacilityRecord(row)"><RefreshCcw />{{ t('common.apply') }}</DropdownItem>
+                    <DropdownItem tone="danger" :disabled="Boolean(configRecordActionKey)" @click="askDeleteFacilityRecord(row)"><Trash2 />{{ t('common.delete') }}</DropdownItem>
+                  </template>
+                  <DropdownItem v-else @click="openRecordApplication(row)"><Globe2 />{{ t('applicationsPage.configRecordOpenApplication') }}</DropdownItem>
+                </Dropdown>
               </div>
             </template>
             <template #empty>

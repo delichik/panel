@@ -127,9 +127,9 @@ const typeOptions = computed(() => [
 ]);
 const columns = computed(() => [
   { key: 'name', label: t('common.name'), width: 'w-72' },
-  { key: 'summary', label: t('credentialsPage.username') },
-  { key: 'references', label: t('credentialsPage.references'), nowrap: true },
-  { key: 'updatedAt', label: t('credentialsPage.updatedAtColumn'), nowrap: true, width: 'w-36' },
+  { key: 'summary', label: t('credentialsPage.username'), hideBelow: 'wide' as const },
+  { key: 'references', label: t('credentialsPage.references'), nowrap: true, hideBelow: 'lg' as const },
+  { key: 'updatedAt', label: t('credentialsPage.updatedAtColumn'), nowrap: true, width: 'w-36', hideBelow: 'wide' as const },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
 ]);
 /** ListPage 页级状态槽：首屏 loading / 页级 error / 真·空态走槽；筛选无结果仍由 Table #empty（inset）承担。 */
@@ -400,12 +400,13 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
             <template #actions="{ row }">
               <div class="flex items-center justify-end gap-1">
                 <Button size="sm" variant="secondary" @click="openDetail(row)"><Eye />{{ t('common.details') }}</Button>
-                <Button size="sm" variant="ghost" :disabled="credentialReferences(row.id, servers).length === 0" @click="openTest(row)"><Cable />{{ t('credentialsPage.test') }}</Button>
+                <Button class="max-wide:hidden" size="sm" variant="ghost" :disabled="credentialReferences(row.id, servers).length === 0" @click="openTest(row)"><Cable />{{ t('credentialsPage.test') }}</Button>
                 <Dropdown align="right">
                   <template #trigger>
                     <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
                   </template>
                   <DropdownItem @click="openEdit(row)"><Wrench />{{ t('common.edit') }}</DropdownItem>
+                  <DropdownItem :disabled="credentialReferences(row.id, servers).length === 0" @click="openTest(row)"><Cable />{{ t('credentialsPage.test') }}</DropdownItem>
                   <DropdownItem tone="danger" @click="askDelete(row)"><Trash2 />{{ t('common.delete') }}</DropdownItem>
                 </Dropdown>
               </div>

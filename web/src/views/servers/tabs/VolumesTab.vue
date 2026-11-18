@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { RefreshCcw, Trash2 } from '@/icons';
+import { MoreHorizontal, RefreshCcw, Trash2 } from '@/icons';
 import { containersApi } from '@/api/containers';
 import { waitForTask } from '@/api/taskWait';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
+import Dropdown from '@/components/ui/Dropdown.vue';
+import DropdownItem from '@/components/ui/DropdownItem.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
+import IconButton from '@/components/ui/IconButton.vue';
 import Table from '@/components/ui/Table.vue';
 import Tooltip from '@/components/ui/Tooltip.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
@@ -39,7 +42,7 @@ const autoSnapshotKeys = new Set<string>();
 const columns = computed(() => [
   { key: 'name', label: t('common.name') },
   { key: 'state', label: t('common.status'), nowrap: true, width: 'w-44' },
-  { key: 'created', label: t('serversPage.updatedAt'), nowrap: true, width: 'w-40' },
+  { key: 'created', label: t('serversPage.updatedAt'), nowrap: true, width: 'w-40', hideBelow: 'wide' as const },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
 ]);
 
@@ -192,7 +195,15 @@ onBeforeUnmount(() => {
         <span class="whitespace-nowrap text-muted-foreground">{{ formatDateTime(row.createdAt, t('common.never')) }}</span>
       </template>
       <template #actions="{ row }">
-        <Button size="sm" variant="danger" :disabled="blocked || row.inUse" @click="askDelete(row)"><Trash2 />{{ t('common.delete') }}</Button>
+        <div class="flex items-center justify-end gap-1">
+          <Button class="max-wide:hidden" size="sm" variant="danger" :disabled="blocked || row.inUse" @click="askDelete(row)"><Trash2 />{{ t('common.delete') }}</Button>
+          <Dropdown class="wide:hidden" align="right">
+            <template #trigger>
+              <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
+            </template>
+            <DropdownItem tone="danger" :disabled="blocked || row.inUse" @click="askDelete(row)"><Trash2 />{{ t('common.delete') }}</DropdownItem>
+          </Dropdown>
+        </div>
       </template>
       <template #empty>
         <EmptyState variant="inset" :title="t('resourcesPage.noVolumes')" :description="t('resourcesPage.noVolumesHint')" />

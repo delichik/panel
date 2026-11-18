@@ -64,7 +64,7 @@
   （`min-h-touch`），文本/选择器最小宽 64（`min-w-field`），ContentDialog min 320 / max 548（默认）
   （`min-w-dialog`），页面最小宽 320（body `min-width`），侧栏展开 320（`--panel-nav-width`）/ compact 48。
   除图标按钮等显式紧凑控件外，不得低于上述值。
-- 字号/断点：`--text-body-strong` 自带 600；内容栏断点使用项目 token `--breakpoint-wide:1239px` / `--breakpoint-wider:1599px`（`wide:` / `wider:`），外壳断点仍为 1024；不得用 `xl/2xl`（1280/1536）做内容栅格。
+- 字号/断点：`--text-body-strong` 自带 600；内容栏断点使用项目 token `--breakpoint-wide:1239px` / `--breakpoint-wider:1599px`（`wide:` / `wider:`），外壳断点仍为 1024；不得用 `xl/2xl`（1280/1536）做内容栅格。表格列可按 `hideBelow` 生成 `max-sm/md/lg/wide:hidden`。
 - 控件高度：md 32px（`h-control`）、sm 28px（`h-control-sm`）、lg 40px（`h-control-lg`）。
 - 表格：WinUI ListView 语义——行高 40px（`h-10`），表头 Body Strong 14，数据单元格默认单行
   （`whitespace-nowrap` + `align-middle`），长文本由页面插槽 `truncate`/列宽处理，不得靠换行改变行高；

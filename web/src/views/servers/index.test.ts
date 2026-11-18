@@ -187,13 +187,26 @@ describe('servers page table and covered detail', () => {
     expect(listPage).toHaveBeenCalledWith(expect.objectContaining({ page: 1, pageSize: 50 }));
     // 列精简：名称合并 host:port，地址不再单独占列；窄屏隐藏最近检查。
     expect(wrapper.findAll('thead th').map((cell) => cell.text())).toEqual(['Name', 'Status', 'Last checked', 'Actions']);
-    expect(wrapper.findAll('thead th')[2]!.classes()).toContain('max-sm:hidden');
+    expect(wrapper.findAll('thead th')[2]!.classes()).toContain('max-wide:hidden');
     const rows = wrapper.findAll('tbody tr');
     expect(rows).toHaveLength(1);
     expect(rows[0]!.text()).toContain('edge-1');
     expect(rows[0]!.text()).toContain('10.0.0.1:22');
     // 状态列只有一枚综合徽标（稳定性/代理信息进 tooltip）。
     expect(rows[0]!.findAll('td')[1]!.findAllComponents(Badge)).toHaveLength(1);
+    // <wide 隐藏行内「测试连接」，改由行内 More 承载；详情按钮保留。
+    const rowButtons = rows[0]!.findAll('button');
+    expect(rowButtons.find((button) => button.text() === 'Test connection')!.classes()).toContain('max-wide:hidden');
+    expect(rowButtons.some((button) => button.text().includes('Details'))).toBe(true);
+    const moreTrigger = rowButtons.find((button) => button.attributes('aria-label') === 'More actions')!;
+    await moreTrigger.trigger('click');
+    await flushPromises();
+    const menuItems = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'));
+    const testItem = menuItems.find((item) => item.textContent?.includes('Test connection'));
+    expect(testItem).toBeTruthy();
+    expect(testItem!.className).toContain('wide:hidden');
+    expect(menuItems.some((item) => item.textContent?.includes('Edit'))).toBe(true);
+    expect(menuItems.some((item) => item.textContent?.includes('Delete'))).toBe(true);
     // 名称列与操作列「详情」均可打开覆盖式详情；整行不可点。
     const buttons = rows[0]!.findAll('button');
     expect(buttons.find((button) => button.text() === 'edge-1')?.attributes('aria-label')).toBe('Open details for edge-1');
@@ -250,6 +263,48 @@ describe('servers page table and covered detail', () => {
     // 子视图改成单层 tab 下的下拉选择器，不再出现第二排 tab。
     expect(wrapper.find('[role="combobox"][aria-label="Resources"]').text()).toContain('Containers');
     expect(wrapper.findAll('[role="tab"]').some((tab) => tab.text() === 'Images')).toBe(false);
+  });
+
+  it('collapses container row actions and hides secondary columns below wide', async () => {
+    containers.mockResolvedValue({
+      items: [{ id: 'c-1', names: ['/web'], image: 'nginx:latest', imageId: 'img-1', command: '', created: 1_700_000_000, state: 'running', status: 'Up', ports: [], labels: {}, mounts: [], managed: false }],
+      observedAt: null,
+      stale: false,
+      refreshing: false,
+    });
+    const { wrapper } = await mountPage();
+    const detailButton = wrapper.findAll('tbody tr').at(0)!.findAll('button').find((button) => button.text().includes('Details'))!;
+    await detailButton.trigger('click');
+    await flushPromises();
+    const resourcesTab = wrapper.findAll('[role="tab"]').find((tab) => tab.text() === 'Resources')!;
+    await resourcesTab.trigger('click');
+    await flushPromises();
+
+    // 创建时间等次级列在 <wide 隐藏。
+    const createdHeader = wrapper.findAll('thead th').find((cell) => cell.text() === 'Updated')!;
+    expect(createdHeader.classes()).toContain('max-wide:hidden');
+
+    const actionsCell = wrapper.findAll('tbody tr')
+      .find((row) => row.text().includes('web'))!
+      .findAll('td')
+      .at(-1)!;
+    // 行内开始/日志在 <wide 隐藏，保留 More 触发。
+    for (const label of ['Start', 'Logs']) {
+      const button = actionsCell.findAll('button').find((item) => item.attributes('aria-label') === label);
+      expect(button).toBeTruthy();
+      expect(button!.classes()).toContain('max-wide:hidden');
+    }
+    const moreTrigger = actionsCell.find('button[aria-label="More actions"]');
+    expect(moreTrigger.exists()).toBe(true);
+    await moreTrigger.trigger('click');
+    await flushPromises();
+    const menuItems = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'));
+    const menuTexts = menuItems.map((item) => item.textContent?.trim() ?? '');
+    expect(menuTexts).toContain('Start');
+    expect(menuTexts).toContain('Logs');
+    // 隐藏操作在 More 内只在 <wide 出现，宽屏保留行内按钮。
+    const startItem = menuItems.find((item) => item.textContent?.trim() === 'Start')!;
+    expect(startItem.className).toContain('wide:hidden');
   });
 
   it('uses a bounded NumberBox for the UFW rule port', async () => {

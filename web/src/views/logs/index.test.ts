@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { createMemoryHistory, createRouter, type Router } from 'vue-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -70,6 +72,25 @@ afterEach(() => {
   wrapper?.unmount();
   wrapper = undefined;
   vi.restoreAllMocks();
+});
+
+describe('Logs narrow viewport contract', () => {
+  const source = readFileSync(resolve(__dirname, './index.vue'), 'utf8');
+  const columnsSource = source.slice(source.indexOf('const columns = computed'), source.indexOf('const selectedLine'));
+
+  it('hides eventId below wide while keeping time/level, msg, actions', () => {
+    expect(columnsSource).toMatch(/key: 'eventId'[^\n]*hideBelow: 'wide'/);
+    expect(columnsSource).not.toMatch(/key: 'ts'[^\n]*hideBelow/);
+    expect(columnsSource).not.toMatch(/key: 'msg'[^\n]*hideBelow/);
+    expect(columnsSource).not.toMatch(/key: 'actions'[^\n]*hideBelow/);
+    // 旧 level 独立列已移除（并入时间列）。
+    expect(columnsSource).not.toContain("key: 'level'");
+  });
+
+  it('keeps the multi-line message renderer and the eventId tooltip', () => {
+    expect(source).toContain('whitespace-pre-wrap');
+    expect(source).toContain(':title="String(row.eventId || eventId)"');
+  });
 });
 
 describe('logs line list', () => {

@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { RefreshCcw, Router, Trash2 } from '@/icons';
+import { MoreHorizontal, RefreshCcw, Router, Trash2 } from '@/icons';
 import { containersApi } from '@/api/containers';
 import { waitForTask } from '@/api/taskWait';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
+import Dropdown from '@/components/ui/Dropdown.vue';
+import DropdownItem from '@/components/ui/DropdownItem.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import IconButton from '@/components/ui/IconButton.vue';
 import Table from '@/components/ui/Table.vue';
@@ -37,7 +39,7 @@ const autoSnapshotKeys = new Set<string>();
 const columns = computed(() => [
   { key: 'name', label: t('common.name') },
   { key: 'state', label: t('common.status'), nowrap: true, width: 'w-36' },
-  { key: 'created', label: t('serversPage.updatedAt'), nowrap: true, width: 'w-40' },
+  { key: 'created', label: t('serversPage.updatedAt'), nowrap: true, width: 'w-40', hideBelow: 'wide' as const },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
 ]);
 
@@ -158,9 +160,17 @@ onBeforeUnmount(() => {
         <span class="whitespace-nowrap text-muted-foreground">{{ formatDateTime(row.created, t('common.never')) }}</span>
       </template>
       <template #actions>
-        <Tooltip :text="t('resourcesPage.networkDeleteUnavailable')">
-          <IconButton size="sm" variant="danger" disabled :label="t('common.delete')"><Trash2 /></IconButton>
-        </Tooltip>
+        <div class="flex items-center justify-end gap-1">
+          <Tooltip class="max-wide:hidden" :text="t('resourcesPage.networkDeleteUnavailable')">
+            <IconButton size="sm" variant="danger" disabled :label="t('common.delete')"><Trash2 /></IconButton>
+          </Tooltip>
+          <Dropdown class="wide:hidden" align="right">
+            <template #trigger>
+              <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
+            </template>
+            <DropdownItem disabled :title="t('resourcesPage.networkDeleteUnavailable')" :aria-label="t('resourcesPage.networkDeleteUnavailable')"><Trash2 />{{ t('common.delete') }}</DropdownItem>
+          </Dropdown>
+        </div>
       </template>
       <template #empty>
         <EmptyState variant="inset" :title="t('resourcesPage.noNetworks')" :description="t('resourcesPage.noNetworksHint')" />

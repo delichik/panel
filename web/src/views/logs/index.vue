@@ -60,14 +60,15 @@ const levelOptions = computed(() => [
   { value: 'debug,info,warning,error', label: t('activity.filter.allLevels') },
 ]);
 /**
- * 列精简（4 列）：时间列合并级别徽标（时间主行、级别副行）；eventId 截断并可点击
- * 过滤；msg 保留结构化错误与原文多行；操作列固定宽度。不再单列 level。
+ * 列精简（4 列）：时间列合并级别徽标（时间主行、级别副行）；eventId 在 <wide
+ * 隐藏（详情 Dialog 仍可看完整 eventId），窄屏只保留时间+级别、msg、操作；
+ * msg 保留结构化错误与原文多行；操作列固定宽度。
  */
 const columns = computed(() => [
-  { key: 'ts', label: t('logsPage.time'), width: 'w-40' },
-  { key: 'eventId', label: t('logsPage.eventId'), width: 'w-40' },
+  { key: 'ts', label: t('logsPage.time'), width: 'w-40', nowrap: true },
+  { key: 'eventId', label: t('logsPage.eventId'), width: 'w-40', nowrap: true, hideBelow: 'wide' as const },
   { key: 'msg', label: t('logsPage.message') },
-  { key: 'actions', label: t('common.actions'), align: 'right' as const, width: 'w-28' },
+  { key: 'actions', label: t('common.actions'), align: 'right' as const, width: 'w-28', nowrap: true },
 ]);
 
 const selectedLine = ref<LogLine | null>(null);

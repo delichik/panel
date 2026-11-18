@@ -42,7 +42,7 @@ let listController: AbortController | null = null;
 const columns = computed(() => [
   { key: 'name', label: t('common.name') },
   { key: 'state', label: t('common.status'), nowrap: true, width: 'w-36' },
-  { key: 'created', label: t('serversPage.updatedAt'), nowrap: true, width: 'w-40' },
+  { key: 'created', label: t('serversPage.updatedAt'), nowrap: true, width: 'w-40', hideBelow: 'wide' as const },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
 ]);
 
@@ -188,12 +188,14 @@ onBeforeUnmount(() => listController?.abort());
       </template>
       <template #actions="{ row }">
         <div class="flex items-center justify-end gap-1">
-          <IconButton size="sm" :label="t('resourcesPage.start')" :disabled="blocked || Boolean(containerActionDisabled(row, 'start')) || pending === `start-${row.id}`" @click="start(row)"><Play /></IconButton>
-          <IconButton size="sm" :label="t('resourcesPage.logs')" :disabled="blocked || pending === `logs-${row.id}`" @click="openLogs(row)"><FileText /></IconButton>
+          <IconButton class="max-wide:hidden" size="sm" :label="t('resourcesPage.start')" :disabled="blocked || Boolean(containerActionDisabled(row, 'start')) || pending === `start-${row.id}`" @click="start(row)"><Play /></IconButton>
+          <IconButton class="max-wide:hidden" size="sm" :label="t('resourcesPage.logs')" :disabled="blocked || pending === `logs-${row.id}`" @click="openLogs(row)"><FileText /></IconButton>
           <Dropdown align="right">
             <template #trigger>
               <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
             </template>
+            <DropdownItem class="wide:hidden" :disabled="blocked || Boolean(containerActionDisabled(row, 'start')) || pending === `start-${row.id}`" @click="start(row)"><Play />{{ t('resourcesPage.start') }}</DropdownItem>
+            <DropdownItem class="wide:hidden" :disabled="blocked || pending === `logs-${row.id}`" @click="openLogs(row)"><FileText />{{ t('resourcesPage.logs') }}</DropdownItem>
             <DropdownItem :disabled="blocked || Boolean(containerActionDisabled(row, 'stop'))" @click="ask(row, 'stop')"><Square />{{ t('resourcesPage.stop') }}</DropdownItem>
             <DropdownItem :disabled="blocked || Boolean(containerActionDisabled(row, 'restart'))" @click="ask(row, 'restart')"><RefreshCcw />{{ t('resourcesPage.restart') }}</DropdownItem>
             <DropdownItem tone="danger" :disabled="blocked || Boolean(containerActionDisabled(row, 'delete'))" @click="ask(row, 'delete')"><Trash2 />{{ t('common.delete') }}</DropdownItem>

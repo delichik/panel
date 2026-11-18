@@ -109,7 +109,7 @@ const providerOptions = [{ label: 'Cloudflare', value: 'cloudflare' }];
 const booleanOptions = [{ label: t('dnsPage.proxied'), value: 'true' }, { label: t('dnsPage.dnsOnly'), value: 'false' }];
 const domainColumns = computed(() => [
   { key: 'name', label: t('common.name'), width: 'w-72' },
-  { key: 'updatedAt', label: t('dnsPage.updatedAt'), nowrap: true, width: 'w-36' },
+  { key: 'updatedAt', label: t('dnsPage.updatedAt'), nowrap: true, width: 'w-36', hideBelow: 'wide' as const },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
 ]);
 const recordColumns = computed(() => [
@@ -423,11 +423,12 @@ watch(page, (value) => {
             <template #actions="{ row }">
               <div class="flex items-center justify-end gap-1">
                 <Button size="sm" variant="secondary" @click="openDetail(row)"><Eye />{{ t('common.details') }}</Button>
-                <Button size="sm" variant="ghost" :loading="syncingId === row.id" :disabled="syncingId === row.id" @click="syncRecords(row)"><Cloud />{{ t('dnsPage.syncRecords') }}</Button>
+                <Button class="max-wide:hidden" size="sm" variant="ghost" :loading="syncingId === row.id" :disabled="syncingId === row.id" @click="syncRecords(row)"><Cloud />{{ t('dnsPage.syncRecords') }}</Button>
                 <Dropdown align="right">
                   <template #trigger>
                     <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
                   </template>
+                  <DropdownItem :disabled="syncingId === row.id" @click="syncRecords(row)"><Cloud />{{ t('dnsPage.syncRecords') }}</DropdownItem>
                   <DropdownItem @click="openEditDomain(row)"><Wrench />{{ t('common.edit') }}</DropdownItem>
                   <DropdownItem tone="danger" @click="deleteTarget = row"><Trash2 />{{ t('common.delete') }}</DropdownItem>
                 </Dropdown>

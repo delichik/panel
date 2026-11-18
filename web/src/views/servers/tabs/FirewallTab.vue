@@ -287,7 +287,15 @@ onBeforeUnmount(() => {
           </div>
         </template>
         <template #actions="{ row }">
-          <Button size="sm" variant="danger" @click="confirmTarget = { kind: 'delete-rule', rule: row }"><Trash2 />{{ t('common.delete') }}</Button>
+          <div class="flex items-center justify-end gap-1">
+            <Button class="max-wide:hidden" size="sm" variant="danger" @click="confirmTarget = { kind: 'delete-rule', rule: row }"><Trash2 />{{ t('common.delete') }}</Button>
+            <Dropdown class="wide:hidden" align="right">
+              <template #trigger>
+                <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
+              </template>
+              <DropdownItem tone="danger" @click="confirmTarget = { kind: 'delete-rule', rule: row }"><Trash2 />{{ t('common.delete') }}</DropdownItem>
+            </Dropdown>
+          </div>
         </template>
         <template #empty>
           <EmptyState variant="inset" :title="t('securityPage.noRules')" :description="t('securityPage.noRulesHint')" />
@@ -363,7 +371,15 @@ onBeforeUnmount(() => {
             </div>
           </template>
           <template #actions="{ row }">
-            <Button size="sm" variant="danger" @click="removeJail(row.name)"><Trash2 />{{ t('common.delete') }}</Button>
+            <div class="flex items-center justify-end gap-1">
+              <Button class="max-wide:hidden" size="sm" variant="danger" @click="removeJail(row.name)"><Trash2 />{{ t('common.delete') }}</Button>
+              <Dropdown class="wide:hidden" align="right">
+                <template #trigger>
+                  <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
+                </template>
+                <DropdownItem tone="danger" @click="removeJail(row.name)"><Trash2 />{{ t('common.delete') }}</DropdownItem>
+              </Dropdown>
+            </div>
           </template>
           <template #empty>
             <EmptyState variant="inset" :title="t('securityPage.noJails')" :description="t('securityPage.noJailsHint')" />

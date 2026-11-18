@@ -7,6 +7,7 @@ import CredentialsView from './index.vue';
 import { credentialsApi } from '@/api/credentials';
 import { serversApi } from '@/api/servers';
 import { toastKey } from '@/components/ui/toast';
+import Table from '@/components/ui/Table.vue';
 import { useI18n } from '@/i18n';
 import type { CredentialDetailDto, CredentialDto } from '@/types/credentials';
 import type { ServerDto } from '@/types/servers';
@@ -109,6 +110,25 @@ describe('credentials detail migration', () => {
     ]);
     // 列表页没有面包屑。
     expect(view.find('header nav').exists()).toBe(false);
+
+    // 次级列按优先级隐藏；行内 Test 在 <wide 收进 More（More 中保留）。
+    const listColumns = (view.findComponent(Table).vm.$props as unknown as { columns: Array<{ key: string; hideBelow?: string }> }).columns;
+    expect(listColumns.find((column) => column.key === 'summary')?.hideBelow).toBe('wide');
+    expect(listColumns.find((column) => column.key === 'references')?.hideBelow).toBe('lg');
+    expect(listColumns.find((column) => column.key === 'updatedAt')?.hideBelow).toBe('wide');
+    const summaryHeader = view.findAll('table thead th').find((item) => item.text() === useI18n().t('credentialsPage.username'));
+    const referencesHeader = view.findAll('table thead th').find((item) => item.text() === useI18n().t('credentialsPage.references'));
+    expect(summaryHeader?.classes()).toContain('max-wide:hidden');
+    expect(referencesHeader?.classes()).toContain('max-lg:hidden');
+    const testButton = view.findAll('button').find((item) => item.text() === useI18n().t('credentialsPage.test'));
+    expect(testButton?.classes()).toContain('max-wide:hidden');
+
+    const moreButton = view.findAll('button').find((item) => item.attributes('aria-label') === useI18n().t('common.moreActions'));
+    expect(moreButton).toBeTruthy();
+    await moreButton!.trigger('click');
+    await flushPromises();
+    expect(document.body.textContent).toContain(useI18n().t('credentialsPage.test'));
+    expect(document.body.textContent).toContain(useI18n().t('common.edit'));
   });
 
   it('renders key summary and server references as DetailSection + PropertyList rows', async () => {
