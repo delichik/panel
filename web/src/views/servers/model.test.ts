@@ -37,7 +37,7 @@ describe('server model', () => {
     expect(serverDetailTabs).toEqual(['overview', 'system', 'resources', 'network-security']);
     expect(serverSystemSubtabs).toEqual(['agent', 'tailscale', 'packages']);
     expect(serverResourceSubtabs).toEqual(['containers', 'images', 'networks', 'volumes']);
-    expect(serverNetworkSubtabs).toEqual(['probes', 'firewall']);
+    expect(serverNetworkSubtabs).toEqual(['firewall', 'fail2ban']);
 
     expect(normalizeServerDetailTab('metrics')).toBe('overview');
     expect(normalizeServerDetailTab('overview')).toBe('overview');
@@ -64,10 +64,12 @@ describe('server model', () => {
     expect(normalizeServerResourceSubtab(undefined, 'images')).toBe('images');
     expect(normalizeServerResourceSubtab('volumes')).toBe('volumes');
     expect(normalizeServerResourceSubtab(undefined)).toBe('containers');
-    expect(normalizeServerNetworkSubtab('fail2ban')).toBe('firewall');
+    expect(normalizeServerNetworkSubtab('fail2ban')).toBe('fail2ban');
     expect(normalizeServerNetworkSubtab(undefined, 'firewall')).toBe('firewall');
-    expect(normalizeServerNetworkSubtab('probes')).toBe('probes');
-    expect(normalizeServerNetworkSubtab(undefined)).toBe('probes');
+    expect(normalizeServerNetworkSubtab(undefined, 'fail2ban')).toBe('fail2ban');
+    expect(normalizeServerNetworkSubtab('probes')).toBe('firewall');
+    expect(normalizeServerNetworkSubtab(undefined, 'probes')).toBe('firewall');
+    expect(normalizeServerNetworkSubtab(undefined)).toBe('firewall');
   });
 
   it('renders the architecture object as readable text instead of raw JSON', () => {

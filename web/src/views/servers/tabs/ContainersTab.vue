@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { FileText, MoreHorizontal, Play, RefreshCcw, Square, Trash2 } from '@lucide/vue';
+import { FileText, MoreHorizontal, Play, RefreshCcw, Square, Trash2 } from '@/icons';
 import { containersApi } from '@/api/containers';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
@@ -16,6 +16,7 @@ import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import type { ContainerDto } from '@/types/resources';
 import type { ServerDto } from '@/types/servers';
+import { formatDateTime } from '@/utils/datetime';
 import { createLatestRequestGuard, isAbortError } from '@/views/_shared/requestState';
 import { containerActionDisabled, containerTone } from './resourceModel';
 
@@ -40,14 +41,19 @@ let listController: AbortController | null = null;
 
 const columns = computed(() => [
   { key: 'name', label: t('common.name') },
-  { key: 'image', label: t('resourcesPage.image') },
-  { key: 'state', label: t('common.status'), nowrap: true },
-  { key: 'ports', label: t('resourcesPage.ports') },
+  { key: 'state', label: t('common.status'), nowrap: true, width: 'w-36' },
+  { key: 'created', label: t('serversPage.updatedAt'), nowrap: true, width: 'w-40' },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
 ]);
 
 function containerName(container: ContainerDto) {
   return (container.names[0] || container.id).replace(/^\//, '');
+}
+
+/** Docker `created` 为 Unix 秒；列内统一显示本地时间。 */
+function createdText(value: number) {
+  if (!value) return t('common.never');
+  return formatDateTime(new Date(value * 1000).toISOString(), t('common.never'));
 }
 
 function portsText(container: ContainerDto) {
@@ -140,9 +146,9 @@ onBeforeUnmount(() => listController?.abort());
 </script>
 
 <template>
-  <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4">
+  <div class="grid h-full min-h-0 grid-rows-page gap-4">
     <div class="grid gap-3">
-      <div v-if="blocked" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('resourcesPage.blockAgent') }}</div>
+      <div v-if="blocked" class="rounded-control border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('resourcesPage.blockAgent') }}</div>
       <div class="flex flex-wrap items-center justify-end gap-2">
         <Button size="sm" :loading="loading" :disabled="blocked" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
       </div>
@@ -159,22 +165,26 @@ onBeforeUnmount(() => listController?.abort());
       :columns="columns"
       :rows="containers"
       row-key="id"
+      row-height="auto"
       :loading="loading"
       :loading-label="t('common.loading')"
     >
       <template #name="{ row }">
-        <strong class="block max-w-[16rem] truncate text-foreground">{{ containerName(row) }}</strong>
-      </template>
-      <template #image="{ row }">
-        <Tooltip :text="row.image" trigger-class="max-w-[18rem]">
-          <span class="truncate">{{ row.image }}</span>
-        </Tooltip>
+        <div class="min-w-0">
+          <strong class="block max-w-64 truncate text-foreground">{{ containerName(row) }}</strong>
+          <Tooltip :text="row.image" trigger-class="max-w-72">
+            <span class="block truncate text-caption text-muted-foreground">{{ row.image }}</span>
+          </Tooltip>
+        </div>
       </template>
       <template #state="{ row }">
-        <Badge :tone="containerTone(row)">{{ row.managed ? t('resourcesPage.managed') : row.state }}</Badge>
+        <div class="grid justify-start gap-1">
+          <Badge class="whitespace-nowrap" :tone="containerTone(row)">{{ row.managed ? t('resourcesPage.managed') : row.state }}</Badge>
+          <span class="max-w-40 truncate text-caption text-muted-foreground">{{ portsText(row) }}</span>
+        </div>
       </template>
-      <template #ports="{ row }">
-        <span class="text-muted-foreground">{{ portsText(row) }}</span>
+      <template #created="{ row }">
+        <span class="whitespace-nowrap text-muted-foreground">{{ createdText(row.created) }}</span>
       </template>
       <template #actions="{ row }">
         <div class="flex items-center justify-end gap-1">
@@ -191,12 +201,12 @@ onBeforeUnmount(() => listController?.abort());
         </div>
       </template>
       <template #empty>
-        <EmptyState :title="t('resourcesPage.noContainers')" :description="t('resourcesPage.noContainersHint')" />
+        <EmptyState variant="inset" :title="t('resourcesPage.noContainers')" :description="t('resourcesPage.noContainersHint')" />
       </template>
     </Table>
 
     <Dialog v-model:open="logsDialog" :title="logsTitle" :description="t('resourcesPage.logsDescription')" :close-label="t('common.close')">
-      <pre class="max-h-[520px] overflow-auto rounded-xl border border-border bg-muted p-3 text-xs leading-5 text-foreground">{{ logsText }}</pre>
+      <pre class="max-h-130 overflow-auto rounded-control border border-divider bg-muted p-3 text-xs leading-5 text-foreground">{{ logsText }}</pre>
       <template #footer>
         <Button @click="logsDialog = false">{{ t('common.close') }}</Button>
       </template>

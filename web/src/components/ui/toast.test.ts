@@ -60,14 +60,19 @@ describe('toast process actions', () => {
     wrapper.unmount();
   });
 
-  it('keeps toast bubbles opaque so page content cannot show through', async () => {
+  it('uses the WinUI InfoBar visual (4px, semantic fill, no flyout shadow)', async () => {
     const { wrapper } = await mountToastHost();
     await wrapper.get('#send').trigger('click');
-    const bubbles = [...document.querySelectorAll('section[role="status"], section[role="alert"]')];
+    const bubbles = [...document.querySelectorAll<HTMLElement>('section[role="status"], section[role="alert"]')];
     expect(bubbles.length).toBeGreaterThan(0);
     for (const bubble of bubbles) {
-      expect(bubble.className).toContain('bg-popover');
-      expect(bubble.className).not.toMatch(/bg-(success|warning|danger|info)-bg(?:\/\d+)?/);
+      expect(bubble.className).toContain('rounded-control');
+      expect(bubble.className).not.toContain('rounded-overlay');
+      expect(bubble.className).not.toContain('shadow-flyout');
+      expect(bubble.className).not.toContain('bg-popover');
+      // 语义 InfoBar 底色由 tone 决定（不再用不透明 popover + 语义边框的混合体）。
+      expect(bubble.className).toMatch(/bg-(success|warning|danger|info)-bg/);
+      expect(bubble.dataset.tone).toBeTruthy();
     }
     wrapper.unmount();
   });

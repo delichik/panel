@@ -1,26 +1,33 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Cable, Eye, KeyRound, MoreHorizontal, Plus, RefreshCcw, Trash2, Wrench } from '@lucide/vue';
+import { Cable, Eye, KeyRound, MoreHorizontal, Plus, RefreshCcw, Trash2, Wrench } from '@/icons';
 import { credentialsApi } from '@/api/credentials';
 import { serversApi } from '@/api/servers';
-import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
+import CodeEditor from '@/components/ui/CodeEditor.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import Dialog from '@/components/ui/Dialog.vue';
 import Dropdown from '@/components/ui/Dropdown.vue';
 import DropdownItem from '@/components/ui/DropdownItem.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import IconButton from '@/components/ui/IconButton.vue';
+import Input from '@/components/ui/Input.vue';
 import PaginationBar from '@/components/ui/PaginationBar.vue';
+import RadioButton from '@/components/ui/RadioButton.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
+import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import Table from '@/components/ui/Table.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import ListPage from '@/components/templates/ListPage.vue';
 import TableDetailLayout from '@/components/templates/TableDetailLayout.vue';
-import CredentialFormFields from '@/components/patterns/CredentialFormFields.vue';
+import DetailSection from '@/components/patterns/DetailSection.vue';
+import FormField from '@/components/patterns/FormField.vue';
+import InfoBar from '@/components/patterns/InfoBar.vue';
+import ListCommandBar from '@/components/patterns/ListCommandBar.vue';
+import PropertyList from '@/components/patterns/PropertyList.vue';
 import TableDetailName from '@/components/patterns/TableDetailName.vue';
 import { emptyCredentialInput, secretPayload, validateCredentialInput, type CredentialFormLabels } from '@/components/patterns/credentialForm';
 import { useI18n } from '@/i18n';
@@ -49,6 +56,7 @@ const total = ref(0);
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 const listGuard = createLatestRequestGuard();
 const loading = ref(false);
+const listLoaded = ref(false);
 const error = ref('');
 const actionError = ref('');
 const dialogOpen = ref(false);
@@ -69,9 +77,39 @@ const detailOpen = computed(() => Boolean(selectedId.value));
 const references = computed(() => selectedCredential.value ? credentialReferences(selectedCredential.value.id, servers.value) : []);
 const testReferences = computed(() => testTarget.value ? credentialReferences(testTarget.value.id, servers.value) : []);
 const deleteReferences = computed(() => deleteTarget.value ? credentialReferences(deleteTarget.value.id, servers.value) : []);
+const keySummaryItems = computed(() => {
+  const summary = credentialDetail.value?.keySummary;
+  if (!summary) return [];
+  return [
+    { key: 'keyName', label: t('credentialsPage.keyName'), value: summary.comment || selectedCredential.value?.name || '' },
+    { key: 'algorithm', label: t('credentialsPage.algorithm'), value: summary.bits ? `${summary.algorithm} / ${summary.bits}` : summary.algorithm },
+    { key: 'fingerprint', label: t('credentialsPage.fingerprint'), value: summary.fingerprint, mono: true },
+  ];
+});
+const referenceItems = computed(() => references.value.map((ref) => ({ key: ref.id, label: ref.name, value: ref.host })));
+
+/** 语义化测试目标单选组：方向键在目标间移动，选中态用 accent-selected。 */
+function onTestTargetKeydown(event: KeyboardEvent, index: number) {
+  const targets = testReferences.value;
+  if (!targets.length) return;
+  let next = index;
+  if (event.key === 'ArrowDown' || event.key === 'ArrowRight') next = (index + 1) % targets.length;
+  else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') next = (index - 1 + targets.length) % targets.length;
+  else if (event.key === 'Home') next = 0;
+  else if (event.key === 'End') next = targets.length - 1;
+  else return;
+  event.preventDefault();
+  testTargetId.value = targets[next]!.id;
+  const radios = (event.currentTarget as HTMLElement | null)?.parentElement?.querySelectorAll<HTMLButtonElement>('[role="radio"]');
+  radios?.[next]?.focus();
+}
 const typeChanged = computed(() => Boolean(editing.value && editing.value.type !== form.value.type));
 const validation = computed(() => validateCredentialInput(form.value, Boolean(editing.value), typeChanged.value));
 const detailTitle = computed(() => selectedCredential.value?.name ?? t('common.loading'));
+const breadcrumbs = computed(() => [
+  { label: t('routes.credentials.title'), to: '/credentials' },
+  { label: detailTitle.value },
+]);
 const credentialFormLabels = computed<CredentialFormLabels>(() => ({
   name: t('credentialsPage.name'),
   type: t('credentialsPage.type'),
@@ -88,20 +126,23 @@ const typeOptions = computed(() => [
   { value: 'private_key', label: t('credentialsPage.privateKey') },
 ]);
 const columns = computed(() => [
-  { key: 'name', label: t('common.name') },
-  { key: 'type', label: t('credentialsPage.type'), nowrap: true },
-  { key: 'username', label: t('credentialsPage.username') },
+  { key: 'name', label: t('common.name'), width: 'w-72' },
+  { key: 'summary', label: t('credentialsPage.username') },
   { key: 'references', label: t('credentialsPage.references'), nowrap: true },
-  { key: 'updatedAt', label: t('credentialsPage.updatedAtColumn'), nowrap: true },
+  { key: 'updatedAt', label: t('credentialsPage.updatedAtColumn'), nowrap: true, width: 'w-36' },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
 ]);
+/** ListPage 页级状态槽：首屏 loading / 页级 error / 真·空态走槽；筛选无结果仍由 Table #empty（inset）承担。 */
+const listState = computed<'ready' | 'loading' | 'error' | 'empty'>(() => {
+  if (!listLoaded.value && !error.value) return 'loading';
+  if (loading.value && !credentials.value.length) return 'loading';
+  if (error.value && !credentials.value.length) return 'error';
+  if (!loading.value && !error.value && !credentials.value.length && !search.value.trim()) return 'empty';
+  return 'ready';
+});
 
 function typeLabel(type: CredentialType) {
   return type === 'private_key' ? t('credentialsPage.privateKey') : t('credentialsPage.password');
-}
-
-function typeTone(type: CredentialType) {
-  return type === 'private_key' ? 'info' as const : 'warning' as const;
 }
 
 function referenceLabel(credential: CredentialDto) {
@@ -159,7 +200,10 @@ async function load() {
     error.value = err instanceof Error ? err.message : t('credentialsPage.loadFailed');
     notifyError(err instanceof Error ? err.message : t('credentialsPage.loadFailed'), err);
   } finally {
-    if (listGuard.isCurrent(requestId)) loading.value = false;
+    if (listGuard.isCurrent(requestId)) {
+      loading.value = false;
+      listLoaded.value = true;
+    }
   }
 }
 
@@ -187,6 +231,10 @@ async function loadDetail(id: string) {
   } finally {
     if (selectedId.value === id) detailLoading.value = false;
   }
+}
+
+function setCredentialType(value: string) {
+  form.value.type = value as CredentialType;
 }
 
 function openCreate() {
@@ -295,26 +343,40 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
 <template>
   <TableDetailLayout class="h-full" :has-detail="detailOpen">
     <template #list>
-      <ConsolePage :title="t('routes.credentials.title')" :description="t('routes.credentials.description')">
-        <template #actions>
-          <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
-          <Button size="sm" variant="primary" @click="openCreate"><Plus />{{ t('credentialsPage.addCredential') }}</Button>
-        </template>
-
-        <ListPage>
+      <ConsolePage width="content" :title="t('routes.credentials.title')" :description="t('routes.credentials.description')">
+        <ListPage :state="listState">
           <template #toolbar>
-            <SearchInput v-model="search" clearable :placeholder="t('credentialsPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
+            <ListCommandBar :label="t('routes.credentials.title')">
+              <template #search>
+                <SearchInput v-model="search" clearable :placeholder="t('credentialsPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
+              </template>
+              <template #actions>
+                <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
+                <Button size="sm" variant="primary" @click="openCreate"><Plus />{{ t('common.add') }}</Button>
+              </template>
+            </ListCommandBar>
           </template>
 
-          <EmptyState v-if="error && !credentials.length" variant="page" :title="t('common.loadFailed')" :description="error">
-            <template #actions>
-              <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
-            </template>
-          </EmptyState>
+          <template #loading>
+            <div class="grid gap-2" aria-busy="true">
+              <Skeleton v-for="row in 6" :key="row" class="h-10 w-full" />
+            </div>
+          </template>
+
+          <template #error>
+            <EmptyState variant="page" :title="t('common.loadFailed')" :description="error">
+              <template #actions>
+                <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
+              </template>
+            </EmptyState>
+          </template>
+
+          <template #empty>
+            <EmptyState variant="page" :title="t('credentialsPage.noCredentials')" :description="t('credentialsPage.noCredentialsHint')" />
+          </template>
 
           <Table
-            v-else
-            class="h-full max-lg:max-h-[60dvh]"
+            class="h-full max-lg:max-h-list"
             :columns="columns"
             :rows="credentials"
             row-key="id"
@@ -323,13 +385,11 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
             :loading-label="t('common.loading')"
           >
             <template #name="{ row }">
-              <TableDetailName class="max-w-[16rem]" :name="row.name" :label="t('common.openDetails', { name: row.name })" @click="openDetail(row)" />
+              <TableDetailName class="max-w-64" :name="row.name" :label="t('common.openDetails', { name: row.name })" @click="openDetail(row)" />
+              <span class="block text-xs text-muted-foreground">{{ typeLabel(row.type) }}</span>
             </template>
-            <template #type="{ row }">
-              <Badge :tone="typeTone(row.type)">{{ typeLabel(row.type) }}</Badge>
-            </template>
-            <template #username="{ row }">
-              <span class="text-muted-foreground">{{ row.username }}</span>
+            <template #summary="{ row }">
+              <span class="block max-w-48 truncate text-muted-foreground" :title="row.username">{{ row.username }}</span>
             </template>
             <template #references="{ row }">
               <span class="text-muted-foreground">{{ referenceLabel(row) }}</span>
@@ -340,12 +400,12 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
             <template #actions="{ row }">
               <div class="flex items-center justify-end gap-1">
                 <Button size="sm" variant="secondary" @click="openDetail(row)"><Eye />{{ t('common.details') }}</Button>
-                <Button size="sm" variant="ghost" @click="openEdit(row)"><Wrench />{{ t('common.edit') }}</Button>
                 <Button size="sm" variant="ghost" :disabled="credentialReferences(row.id, servers).length === 0" @click="openTest(row)"><Cable />{{ t('credentialsPage.test') }}</Button>
                 <Dropdown align="right">
                   <template #trigger>
                     <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
                   </template>
+                  <DropdownItem @click="openEdit(row)"><Wrench />{{ t('common.edit') }}</DropdownItem>
                   <DropdownItem tone="danger" @click="askDelete(row)"><Trash2 />{{ t('common.delete') }}</DropdownItem>
                 </Dropdown>
               </div>
@@ -367,48 +427,29 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
     </template>
 
     <template #detail>
-      <ConsolePage :title="detailTitle" :description="selectedCredential?.username || ''" :back-label="t('common.backToList')" @back="closeDetail">
+      <ConsolePage width="content" :title="detailTitle" :description="selectedCredential?.username || ''" :breadcrumbs="breadcrumbs" :back-label="t('common.backToList')" :body-scroll="false" @back="closeDetail">
         <template v-if="selectedCredential" #actions>
           <Button size="sm" variant="secondary" @click="openEdit(selectedCredential)"><Wrench />{{ t('common.edit') }}</Button>
         </template>
-        <div class="grid gap-6">
-          <section class="grid gap-3 border-b border-border pb-5">
-            <h3 class="m-0 flex items-center gap-2 text-sm font-semibold text-foreground"><KeyRound class="size-4 text-muted-foreground" />{{ t('credentialsPage.keySummary') }}</h3>
-            <div v-if="detailLoading" class="grid gap-2">
+        <div class="grid h-full min-h-0 content-start gap-4 overflow-y-auto pr-1 lg:grid-cols-2">
+          <DetailSection :title="t('credentialsPage.keySummary')">
+            <div v-if="detailLoading" class="grid gap-2 px-4 py-3">
               <Skeleton v-for="item in 3" :key="item" class="h-10" />
             </div>
-            <EmptyState v-else-if="detailError" :title="t('common.loadFailed')" :description="detailError">
+            <EmptyState v-else-if="detailError" variant="inset" :title="t('common.loadFailed')" :description="detailError">
               <template #actions>
                 <Button size="sm" :loading="detailLoading" @click="loadDetail(selectedId)"><RefreshCcw />{{ t('common.retry') }}</Button>
               </template>
             </EmptyState>
-            <div v-else-if="selectedCredential?.type === 'private_key' && credentialDetail?.keySummary" class="grid gap-2 text-sm">
-              <div class="flex items-center justify-between gap-3 rounded-xl border border-border p-3">
-                <span class="text-muted-foreground">{{ t('credentialsPage.keyName') }}</span>
-                <strong class="truncate text-foreground">{{ credentialDetail.keySummary.comment || selectedCredential.name }}</strong>
-              </div>
-              <div class="flex items-center justify-between gap-3 rounded-xl border border-border p-3">
-                <span class="text-muted-foreground">{{ t('credentialsPage.algorithm') }}</span>
-                <strong class="text-foreground">{{ credentialDetail.keySummary.algorithm }}<template v-if="credentialDetail.keySummary.bits"> / {{ credentialDetail.keySummary.bits }}</template></strong>
-              </div>
-              <div class="flex items-center justify-between gap-3 rounded-xl border border-border p-3">
-                <span class="text-muted-foreground">{{ t('credentialsPage.fingerprint') }}</span>
-                <strong class="break-all text-right text-foreground">{{ credentialDetail.keySummary.fingerprint }}</strong>
-              </div>
-            </div>
-            <p v-else-if="selectedCredential?.type === 'private_key'" class="m-0 text-sm text-muted-foreground">{{ t('credentialsPage.keySummaryUnavailable') }}</p>
-            <p v-else-if="selectedCredential" class="m-0 text-sm text-muted-foreground">{{ t('credentialsPage.passwordCredentialSummary', { username: selectedCredential.username }) }}</p>
-          </section>
-          <section class="grid gap-3">
-            <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('credentialsPage.references') }}</h3>
-            <div v-if="references.length" class="grid gap-2">
-              <div v-for="ref in references" :key="ref.id" class="rounded-xl border border-border p-3">
-                <strong class="block truncate text-sm text-foreground">{{ ref.name }}</strong>
-                <span class="text-xs text-muted-foreground">{{ ref.host }}</span>
-              </div>
-            </div>
-            <p v-else class="m-0 text-sm text-muted-foreground">{{ t('credentialsPage.noReferences') }}</p>
-          </section>
+            <PropertyList v-else-if="credentialDetail?.keySummary" :items="keySummaryItems" :columns="1" />
+            <p v-else-if="selectedCredential?.type === 'private_key'" class="m-0 px-4 py-3 text-caption text-muted-foreground">{{ t('credentialsPage.keySummaryUnavailable') }}</p>
+            <p v-else class="m-0 px-4 py-3 text-caption text-muted-foreground">{{ t('credentialsPage.passwordCredentialSummary', { username: selectedCredential?.username ?? '' }) }}</p>
+          </DetailSection>
+
+          <DetailSection :title="t('credentialsPage.references')">
+            <PropertyList v-if="referenceItems.length" :items="referenceItems" :columns="1" />
+            <EmptyState v-else variant="inset" :title="t('credentialsPage.noReferences')" />
+          </DetailSection>
         </div>
       </ConsolePage>
     </template>
@@ -416,18 +457,40 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
 
   <Dialog v-model:open="dialogOpen" :size="form.type === 'private_key' ? 'large' : 'default'" :title="editing ? t('credentialsPage.editCredential') : t('credentialsPage.createCredential')" :description="editing ? t('credentialsPage.editDescription') : t('credentialsPage.createDescription')" :close-label="t('common.close')">
     <div class="grid gap-4" :class="form.type === 'private_key' ? 'h-full min-h-0' : ''">
-      <CredentialFormFields
-        v-model:input="form"
-        :editing="Boolean(editing)"
-        :type-changed="typeChanged"
-        :type-options="typeOptions"
-        :errors="validation"
-        :labels="credentialFormLabels"
-      />
-      <div v-if="Object.keys(validation).length" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">
-        {{ t(Object.values(validation)[0] || 'credentialsPage.validationGeneric') }}
+      <div class="grid gap-3 sm:grid-cols-2">
+        <FormField :label="credentialFormLabels.name" required :error="validation.name ? t(validation.name) : ''">
+          <template #default="{ id, describedBy, invalid }">
+            <Input :id="id" :aria-describedby="describedBy" :invalid="invalid" :model-value="form.name" @update:model-value="form.name = $event" />
+          </template>
+        </FormField>
+        <FormField :label="credentialFormLabels.type">
+          <template #default="{ id }">
+            <Select :id="id" :model-value="form.type" :options="typeOptions" @update:model-value="setCredentialType" />
+          </template>
+        </FormField>
+        <FormField :label="credentialFormLabels.username" required :error="validation.username ? t(validation.username) : ''">
+          <template #default="{ id, describedBy, invalid }">
+            <Input :id="id" :aria-describedby="describedBy" :invalid="invalid" :model-value="form.username" @update:model-value="form.username = $event" />
+          </template>
+        </FormField>
+        <FormField v-if="form.type === 'password'" :label="credentialFormLabels.password" :hint="editing ? credentialFormLabels.leaveSecretBlank : ''" :error="validation.password ? t(validation.password) : ''">
+          <template #default="{ id, describedBy, invalid }">
+            <Input :id="id" :aria-describedby="describedBy" :invalid="invalid" :model-value="form.password ?? ''" type="password" @update:model-value="form.password = $event" />
+          </template>
+        </FormField>
+        <FormField v-else :label="credentialFormLabels.passphrase">
+          <template #default="{ id }">
+            <Input :id="id" :model-value="form.passphrase ?? ''" type="password" @update:model-value="form.passphrase = $event" />
+          </template>
+        </FormField>
       </div>
-      <div v-if="actionError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ actionError }}</div>
+      <FormField v-if="form.type === 'private_key'" :label="credentialFormLabels.privateKey" :error="validation.privateKey ? t(validation.privateKey) : ''" class="min-h-0 grid-rows-page">
+        <CodeEditor :model-value="form.privateKey ?? ''" language="plain" :editor-label="credentialFormLabels.privateKey" :invalid="Boolean(validation.privateKey)" @update:model-value="form.privateKey = $event" />
+      </FormField>
+      <InfoBar v-if="editing && typeChanged" tone="warning">{{ credentialFormLabels.typeChangedRequiresSecret }}</InfoBar>
+      <InfoBar v-else-if="editing" tone="info">{{ credentialFormLabels.blankSecretKeepsCurrent }}</InfoBar>
+      <InfoBar v-if="Object.keys(validation).length" tone="warning">{{ t(Object.values(validation)[0] || 'credentialsPage.validationGeneric') }}</InfoBar>
+      <InfoBar v-if="actionError" tone="danger">{{ actionError }}</InfoBar>
     </div>
     <template #footer>
       <Button variant="secondary" @click="dialogOpen = false">{{ t('common.cancel') }}</Button>
@@ -437,11 +500,24 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
 
   <Dialog v-model:open="testOpen" :title="t('credentialsPage.test')" :description="testTarget ? t('credentialsPage.testDescription', { name: testTarget.name }) : ''" :close-label="t('common.close')">
     <div class="grid gap-2">
-      <p class="m-0 text-sm text-muted-foreground">{{ t('credentialsPage.testTargetHint') }}</p>
-      <button v-for="ref in testReferences" :key="ref.id" type="button" class="grid gap-1 rounded-xl border border-border p-3 text-left hover:bg-accent" :class="testTargetId === ref.id ? 'border-border-strong bg-card' : ''" @click="testTargetId = ref.id">
-        <strong class="truncate text-sm text-foreground">{{ ref.name }}</strong>
-        <span class="text-xs text-muted-foreground">{{ ref.host }}</span>
-      </button>
+      <p class="m-0 text-caption text-muted-foreground">{{ t('credentialsPage.testTargetHint') }}</p>
+      <div role="radiogroup" :aria-label="t('credentialsPage.test')" class="grid gap-2">
+        <div
+          v-for="(ref, index) in testReferences"
+          :key="ref.id"
+          class="rounded-control"
+          :class="testTargetId === ref.id ? 'bg-accent-selected' : undefined"
+          @keydown="onTestTargetKeydown($event, index)"
+        >
+          <RadioButton
+            :model-value="testTargetId"
+            :value="ref.id"
+            :label="ref.name"
+            :description="ref.host"
+            @update:model-value="testTargetId = String($event)"
+          />
+        </div>
+      </div>
     </div>
     <template #footer>
       <Button variant="secondary" @click="testOpen = false">{{ t('common.cancel') }}</Button>

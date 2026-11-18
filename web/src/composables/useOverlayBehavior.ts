@@ -1,4 +1,5 @@
 import { nextTick, onBeforeUnmount, watch, type Ref } from 'vue';
+import { focusWithoutScroll } from '@/utils/focus';
 
 export interface OverlayBehaviorOptions {
   open: () => boolean;
@@ -92,7 +93,7 @@ export function useOverlayBehavior({ open, containerRef, onClose, lockScroll = f
   }
 
   function focusOverlay() {
-    (resolveInitialFocus() ?? containerRef.value)?.focus();
+    focusWithoutScroll(resolveInitialFocus() ?? containerRef.value);
   }
 
   function onKeydown(event: KeyboardEvent) {
@@ -106,17 +107,17 @@ export function useOverlayBehavior({ open, containerRef, onClose, lockScroll = f
     const elements = focusableElements();
     if (!elements.length) {
       event.preventDefault();
-      containerRef.value?.focus();
+      focusWithoutScroll(containerRef.value);
       return;
     }
     const first = elements[0];
     const last = elements[elements.length - 1];
     if (event.shiftKey && (document.activeElement === first || document.activeElement === containerRef.value)) {
       event.preventDefault();
-      last?.focus();
+      focusWithoutScroll(last);
     } else if (!event.shiftKey && document.activeElement === last) {
       event.preventDefault();
-      first?.focus();
+      focusWithoutScroll(first);
     }
   }
 
@@ -170,13 +171,13 @@ export function useOverlayBehavior({ open, containerRef, onClose, lockScroll = f
       scrollLocked = false;
     }
     await nextTick();
-    if (restoreFocusTo?.isConnected) restoreFocusTo.focus();
+    focusWithoutScroll(restoreFocusTo?.isConnected ? restoreFocusTo : null);
     restoreFocusTo = null;
   }, { immediate: true });
 
   onBeforeUnmount(() => {
     unregister();
-    if (restoreFocusTo?.isConnected) restoreFocusTo.focus();
+    focusWithoutScroll(restoreFocusTo?.isConnected ? restoreFocusTo : null);
     restoreFocusTo = null;
     if (scrollLocked) {
       unlockBodyScroll();

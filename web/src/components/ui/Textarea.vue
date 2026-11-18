@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, useAttrs } from 'vue';
+import { fieldDisabled, fieldFocus } from './states';
 import { cn } from './cn';
 
 defineOptions({ inheritAttrs: false });
@@ -8,7 +9,9 @@ defineEmits<{ 'update:modelValue': [value: string] }>();
 
 const attrs = useAttrs();
 const classes = computed(() => cn(
-  'motion-field min-h-24 w-full resize-y rounded-xl border bg-card px-3 py-2 text-sm text-foreground shadow-sm transition-[background-color,border-color,box-shadow] placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:ring-offset-2 focus-visible:ring-offset-card disabled:cursor-not-allowed disabled:opacity-45',
+  'min-h-24 w-full min-w-field resize-y surface-control px-3 py-2 text-body text-foreground transition-state duration-fast ease-move placeholder:text-muted-foreground hover:border-border-strong',
+  fieldFocus,
+  fieldDisabled,
   attrs.class as string,
 ));
 </script>
@@ -18,7 +21,7 @@ const classes = computed(() => cn(
     v-bind="{ ...attrs, class: undefined }"
     :value="modelValue"
     :aria-invalid="invalid || undefined"
-    :class="[classes, invalid ? 'border-danger-border' : 'border-input focus-visible:border-ring']"
+    :class="[classes, invalid ? 'border-danger-border focus:border-danger-border focus:focus-danger-underline' : undefined]"
     @input="$emit('update:modelValue', ($event.target as HTMLTextAreaElement).value)"
   />
 </template>

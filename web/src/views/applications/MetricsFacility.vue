@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
-import { RefreshCcw, Save } from '@lucide/vue';
+import { RefreshCcw, Save } from '@/icons';
 import { metricsFacilityApi } from '@/api/metricsFacility';
 import Button from '@/components/ui/Button.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
-import Input from '@/components/ui/Input.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
+import NumberBox from '@/components/ui/NumberBox.vue';
 import Select from '@/components/ui/Select.vue';
+import FacilityField from '@/components/patterns/FacilityField.vue';
+import FacilitySection from '@/components/patterns/FacilitySection.vue';
+import InfoBar from '@/components/patterns/InfoBar.vue';
 import ServerMultiPicker from '@/components/patterns/ServerMultiPicker.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
@@ -72,6 +75,15 @@ const cleanupOptions = computed(() => [
 
 const retentionValue = computed(() => parseMetricsPositiveInteger(draft.retentionDays));
 const intervalValue = computed(() => parseMetricsPositiveInteger(draft.collectionIntervalSeconds));
+/** NumberBox 适配：draft 仍是字符串（校验/保存沿用 parse），空值映射为 null。 */
+const retentionNumber = computed<number | null>({
+  get: () => retentionValue.value,
+  set: (value: number | null) => { draft.retentionDays = value === null ? '' : String(value); },
+});
+const intervalNumber = computed<number | null>({
+  get: () => intervalValue.value,
+  set: (value: number | null) => { draft.collectionIntervalSeconds = value === null ? '' : String(value); },
+});
 const retentionInvalid = computed(() => retentionValue.value === null || !isValidMetricsRetention(retentionValue.value));
 const intervalInvalid = computed(() => intervalValue.value === null || !isValidMetricsCollectionInterval(intervalValue.value));
 
@@ -161,10 +173,10 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="relative grid h-full min-h-0 content-start gap-4 max-lg:h-auto" data-testid="metrics-facility">
+  <div class="relative grid content-start gap-4" data-testid="metrics-facility">
     <LoadingOverlay v-if="loading && !config" :label="t('applicationsPage.metricsLoading')" />
 
-    <EmptyState v-if="error && !config" variant="page" class="lg:col-span-2" :title="t('common.loadFailed')" :description="error">
+    <EmptyState v-if="error && !config" variant="page" :title="t('common.loadFailed')" :description="error">
       <template #actions>
         <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
       </template>
@@ -172,80 +184,72 @@ onBeforeUnmount(() => {
 
     <template v-else>
       <!-- 区域一：采集范围（模式 + 节点选择），与配置区上下堆叠。 -->
-      <section class="grid gap-3 rounded-xl border border-border bg-card p-4" data-testid="metrics-scope-section">
-        <div>
-          <h2 class="m-0 text-base font-semibold text-foreground">{{ t('applicationsPage.metricsScopeTitle') }}</h2>
-          <p class="m-0 mt-1 text-sm leading-6 text-muted-foreground">{{ t('applicationsPage.metricsScopeHint') }}</p>
-        </div>
-
+      <FacilitySection
+        :title="t('applicationsPage.metricsScopeTitle')"
+        :description="t('applicationsPage.metricsScopeHint')"
+        data-testid="metrics-scope-section"
+      >
         <div class="grid content-start gap-3">
-          <label class="grid gap-1 sm:max-w-xs">
-            <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.metricsMode') }}</span>
+          <FacilityField class="sm:max-w-xs" :label="t('applicationsPage.metricsMode')">
             <Select v-model="draft.mode" :options="modeOptions" :disabled="saving" />
-          </label>
+          </FacilityField>
 
           <div v-if="draft.mode === 'selected'" class="grid gap-2">
-            <div>
-              <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.metricsSelectServers') }}</span>
-              <p class="m-0 mt-1 text-xs leading-5 text-muted-foreground">{{ t('applicationsPage.metricsSelectServersHint') }}</p>
-            </div>
-            <div class="max-h-64 overflow-y-auto pr-1">
-              <ServerMultiPicker v-model="draft.serverIds" variant="compact" :servers="serverOptions" :label="t('applicationsPage.metricsSelectServers')" />
-            </div>
+            <FacilityField :label="t('applicationsPage.metricsSelectServers')" :hint="t('applicationsPage.metricsSelectServersHint')">
+              <div class="max-h-64 overflow-y-auto pr-1">
+                <ServerMultiPicker v-model="draft.serverIds" variant="compact" :servers="serverOptions" :label="t('applicationsPage.metricsSelectServers')" />
+              </div>
+            </FacilityField>
           </div>
         </div>
-      </section>
+      </FacilitySection>
 
       <!-- 区域二：采集配置（保留天数、采集间隔、清理计划 + 保存）。 -->
-      <section class="grid gap-3 rounded-xl border border-border bg-card p-4" data-testid="metrics-config-form">
-        <div>
-          <h2 class="m-0 text-base font-semibold text-foreground">{{ t('applicationsPage.metricsConfigTitle') }}</h2>
-          <p class="m-0 mt-1 text-sm leading-6 text-muted-foreground">{{ t('applicationsPage.metricsConfigHint') }}</p>
-        </div>
-
+      <FacilitySection
+        :title="t('applicationsPage.metricsConfigTitle')"
+        :description="t('applicationsPage.metricsConfigHint')"
+        data-testid="metrics-config-form"
+      >
         <div class="grid content-start gap-3">
           <div class="grid gap-3 sm:grid-cols-2">
-            <label class="grid gap-1">
-              <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.metricsCleanupSchedule') }}</span>
+            <FacilityField :label="t('applicationsPage.metricsCleanupSchedule')">
               <Select v-model="draft.cleanupSchedule" :options="cleanupOptions" :disabled="saving" />
-            </label>
-            <label class="grid gap-1">
-              <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.metricsRetention') }}</span>
-              <Input
-                v-model="draft.retentionDays"
-                type="number"
-                inputmode="numeric"
+            </FacilityField>
+            <FacilityField
+              :label="t('applicationsPage.metricsRetention')"
+              :error="retentionInvalid ? t('applicationsPage.metricsRetentionInvalid') : ''"
+            >
+              <NumberBox
+                v-model="retentionNumber"
                 :min="1"
-                step="1"
+                :step="1"
                 :invalid="retentionInvalid"
                 :disabled="saving"
                 data-testid="metrics-retention"
               />
-              <span v-if="retentionInvalid" class="text-xs leading-4 text-danger">{{ t('applicationsPage.metricsRetentionInvalid') }}</span>
-            </label>
-            <label class="grid gap-1">
-              <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.metricsInterval') }}</span>
-              <Input
-                v-model="draft.collectionIntervalSeconds"
-                type="number"
-                inputmode="numeric"
+            </FacilityField>
+            <FacilityField
+              :label="t('applicationsPage.metricsInterval')"
+              :hint="t('applicationsPage.metricsIntervalHint', { min: metricsCollectionIntervalMin, default: metricsFacilityDefaults.collectionIntervalSeconds })"
+              :error="intervalInvalid ? t('applicationsPage.metricsIntervalInvalid') : ''"
+            >
+              <NumberBox
+                v-model="intervalNumber"
                 :min="metricsCollectionIntervalMin"
-                step="1"
+                :step="1"
                 :invalid="intervalInvalid"
                 :disabled="saving"
                 data-testid="metrics-interval"
               />
-              <span class="text-xs leading-4 text-muted-foreground">{{ t('applicationsPage.metricsIntervalHint', { min: metricsCollectionIntervalMin, default: metricsFacilityDefaults.collectionIntervalSeconds }) }}</span>
-              <span v-if="intervalInvalid" class="text-xs leading-4 text-danger">{{ t('applicationsPage.metricsIntervalInvalid') }}</span>
-            </label>
+            </FacilityField>
           </div>
-          <p v-if="formError" role="alert" class="m-0 text-sm text-danger">{{ formError }}</p>
+          <InfoBar v-if="formError" tone="danger">{{ formError }}</InfoBar>
         </div>
 
         <div class="flex justify-end">
           <Button size="sm" variant="primary" :loading="saving" :disabled="!dirty" @click="save"><Save />{{ t('applicationsPage.metricsSave') }}</Button>
         </div>
-      </section>
+      </FacilitySection>
     </template>
   </div>
 </template>

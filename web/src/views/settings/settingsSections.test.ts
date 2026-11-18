@@ -1,0 +1,414 @@
+// @vitest-environment jsdom
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
+import { createPinia } from 'pinia';
+import { createMemoryHistory, createRouter, type Router } from 'vue-router';
+import { nextTick } from 'vue';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import SettingsView from './index.vue';
+import SettingsCard from '@/components/patterns/SettingsCard.vue';
+import SettingsSection from '@/components/patterns/SettingsSection.vue';
+import { keyAssetsApi } from '@/api/keyAssets';
+import { settingsApi } from '@/api/settings';
+import { systemApi } from '@/api/system';
+import { toastKey } from '@/components/ui/toast';
+import { useI18n } from '@/i18n';
+import type { RuntimeSettings, RuntimeTailscaleContainerState } from '@/types/settings';
+
+const container: RuntimeTailscaleContainerState = {
+  available: true,
+  running: true,
+  loggedIn: true,
+  hostname: 'seamark-panel',
+  ipv4: '100.101.102.103',
+  ipv6: 'fd7a:115c:a1e0::1',
+  version: '1.78.1',
+  backendState: 'Running',
+  lastError: '',
+  updatedAt: '2026-08-01T07:55:00.000Z',
+};
+
+function runtimeSettings(): RuntimeSettings {
+  return {
+    listenAddress: '127.0.0.1:8080',
+    appDatabase: 'app.db',
+    metricsDatabase: 'metrics.db',
+    dataRoot: 'data',
+    containerReportIntervalSeconds: 30,
+    tokenExpiration: '1d',
+    language: 'en',
+    logLevel: 'info',
+    remoteCommandTimeoutSeconds: 45,
+    reconcileTraceEnabled: false,
+    branding: { loginTitle: 'Seamark', loginSubtitle: '' },
+    certificates: { email: '', dnsPropagationDelaySeconds: 30 },
+    panel: { domain: 'localhost', tlsCertificateId: '' },
+    agent: { downloadBaseUrl: '', downloadVerifyTls: false, transferTimeoutSeconds: 120 },
+    tailscale: { authKeyConfigured: true, tags: ['tag:server'], container },
+    jwtSecretConfigured: true,
+  };
+}
+
+const toastPush = vi.fn();
+let wrapper: VueWrapper | undefined;
+let router: Router;
+
+// jsdom in this vitest environment has no localStorage; stub it like the other
+// settings/shell tests so i18n and the session store can read their keys.
+function createStorage(): Storage {
+  let store = new Map<string, string>();
+  return {
+    get length() {
+      return store.size;
+    },
+    clear() {
+      store = new Map();
+    },
+    getItem(key: string) {
+      return store.has(key) ? store.get(key)! : null;
+    },
+    key(index: number) {
+      return Array.from(store.keys())[index] ?? null;
+    },
+    removeItem(key: string) {
+      store.delete(key);
+    },
+    setItem(key: string, value: string) {
+      store.set(key, String(value));
+    },
+  };
+}
+vi.stubGlobal('localStorage', createStorage());
+
+async function render(path: string) {
+  router = createRouter({
+    history: createMemoryHistory(),
+    routes: [{ path: '/settings/:section?', name: 'settings', component: SettingsView }],
+  });
+  await router.push(path);
+  await router.isReady();
+  wrapper = mount(SettingsView, {
+    global: {
+      plugins: [createPinia(), router],
+      provide: { [toastKey as symbol]: { push: toastPush, remove: vi.fn() } },
+    },
+  });
+  await flushPromises();
+  return wrapper;
+}
+
+beforeEach(() => {
+  toastPush.mockReset();
+  useI18n().setLocale('en');
+  vi.spyOn(settingsApi, 'runtime').mockResolvedValue(runtimeSettings());
+  vi.spyOn(settingsApi, 'serverVariables').mockResolvedValue([]);
+  vi.spyOn(settingsApi, 'updateRuntime').mockImplementation(async () => runtimeSettings());
+  vi.spyOn(systemApi, 'version').mockResolvedValue({ version: '0.2.0-dev', channel: 'dev', latestVersion: '', updateAvailable: false });
+  vi.spyOn(keyAssetsApi, 'systemCertificates').mockResolvedValue([]);
+  vi.spyOn(keyAssetsApi, 'tlsCertificates').mockResolvedValue([]);
+});
+
+afterEach(() => {
+  wrapper?.unmount();
+  wrapper = undefined;
+  document.body.innerHTML = '';
+  vi.restoreAllMocks();
+});
+
+describe('WinUI settings section primitives', () => {
+  it('renders a settings section as a title/description header plus one surface card with divider rows', () => {
+    const view = mount(SettingsSection, {
+      props: { title: 'Section title', description: 'Section description' },
+      slots: {
+        default: '<div data-row>Row A</div><div data-row>Row B</div>',
+        actions: '<button type="button">Section action</button>',
+      },
+    });
+
+    expect(view.find('[data-settings-section]').exists()).toBe(true);
+    expect(view.find('h2').text()).toBe('Section title');
+    expect(view.text()).toContain('Section description');
+    expect(view.find('.surface-card').exists()).toBe(true);
+    expect(view.find('.divide-y').exists()).toBe(true);
+    expect(view.findAll('[data-row]')).toHaveLength(2);
+    expect(view.findAll('button')).toHaveLength(1);
+    // 分区容器内不出现第二层卡片。
+    expect(view.find('.surface-card .surface-card').exists()).toBe(false);
+  });
+
+  it('omits the section header when no title/description/actions are provided', () => {
+    const view = mount(SettingsSection, {
+      props: { description: 'Only context copy' },
+      slots: { default: '<div data-row>Row A</div>' },
+    });
+
+    expect(view.find('h2').exists()).toBe(false);
+    expect(view.text()).toContain('Only context copy');
+    expect(view.find('[data-row]').exists()).toBe(true);
+
+    const bare = mount(SettingsSection, { slots: { default: '<div data-row>Row B</div>' } });
+    // 无 header 时不渲染标题行（卡片行仍存在）。
+    expect(bare.find('h2').exists()).toBe(false);
+    expect(bare.text()).not.toContain('Section');
+  });
+
+  it('renders a SettingsCard row with title, description, control, hint and full-width content', () => {
+    const view = mount(SettingsCard, {
+      props: { title: 'Row title', description: 'Row description' },
+      slots: {
+        control: '<button type="button">Row control</button>',
+        hint: '<span data-hint>Row hint</span>',
+        default: '<p data-body>Row body</p>',
+      },
+    });
+
+    const card = view.find('[data-settings-card]');
+    expect(card.exists()).toBe(true);
+    expect(view.text()).toContain('Row title');
+    expect(view.text()).toContain('Row description');
+    expect(view.find('button').text()).toBe('Row control');
+    expect(view.find('[data-hint]').text()).toBe('Row hint');
+    expect(view.find('[data-body]').text()).toBe('Row body');
+    expect(card.attributes('aria-disabled')).toBeUndefined();
+    expect(card.attributes('aria-invalid')).toBeUndefined();
+  });
+
+  it('marks SettingsCard disabled and invalid states for semantics and visual styling', () => {
+    const disabled = mount(SettingsCard, { props: { title: 'Disabled row', disabled: true } });
+    expect(disabled.find('[data-settings-card]').classes()).toContain('opacity-45');
+    expect(disabled.find('[data-settings-card]').attributes('aria-disabled')).toBe('true');
+
+    const invalid = mount(SettingsCard, {
+      props: { title: 'Invalid row', invalid: true },
+      slots: { hint: '<span class="text-danger">Row error</span>' },
+    });
+    expect(invalid.find('[data-settings-card]').attributes('aria-invalid')).toBe('true');
+    expect(invalid.find('[data-settings-card]').text()).toContain('Row error');
+    expect(invalid.find('p').classes()).toContain('text-danger');
+  });
+});
+
+describe('settings page sections use the shared WinUI SettingsCard shell', () => {
+  const cases: Array<{ path: string; heading: string; rows: number; saveButtons: number }> = [
+    { path: '/settings/general', heading: 'settingsPage.section.runtime', rows: 5, saveButtons: 1 },
+    { path: '/settings/security', heading: 'settingsPage.section.security', rows: 5, saveButtons: 1 },
+    { path: '/settings/certificates', heading: 'settingsPage.section.certificates', rows: 4, saveButtons: 1 },
+    { path: '/settings/agent', heading: 'settingsPage.section.agent', rows: 3, saveButtons: 1 },
+    { path: '/settings/tailscale', heading: 'settingsPage.section.tailscale', rows: 6, saveButtons: 1 },
+    { path: '/settings/system-certificates', heading: 'settingsPage.section.systemCertificates', rows: 0, saveButtons: 0 },
+    { path: '/settings/system', heading: 'settingsPage.section.system', rows: 4, saveButtons: 0 },
+  ];
+
+  it('renders every non-appearance section with a heading and a single surface card of rows', async () => {
+    const { t } = useI18n();
+    for (const testCase of cases) {
+      const view = await render(testCase.path);
+      const section = view.find('[data-settings-section]');
+      expect(section.exists(), `${testCase.path} settings section`).toBe(true);
+      // 顶层分区标题由 PageHeader 承担，SettingsSection 不再重复标题。
+      expect(view.find('h1').text()).toBe(t(testCase.heading));
+      expect(view.find('[data-width]').attributes('data-width')).toBe('content');
+      expect(section.find('h2').exists()).toBe(false);
+      expect(section.find('.surface-card').exists()).toBe(true);
+      expect(section.find('.surface-card .surface-card').exists()).toBe(false);
+      expect(section.findAll('[data-settings-card]'), `${testCase.path} card rows`).toHaveLength(testCase.rows);
+
+      if (testCase.saveButtons) {
+        const saveButtons = view.findAll('button').filter((item) => item.text() === t('settingsPage.saveSection'));
+        // 每个分区保留自己的「保存分区」行动作，而不是整页保存；动作在分区 footer，不占用 SettingsCard 行。
+        expect(saveButtons, `${testCase.path} save actions`).toHaveLength(testCase.saveButtons);
+        expect(saveButtons[0]!.element.closest('[data-settings-card]')).toBeNull();
+      }
+      view.unmount();
+      wrapper = undefined;
+    }
+  });
+
+  it('renders backup export and restore as two settings sections with card rows', async () => {
+    const { t } = useI18n();
+    const view = await render('/settings/backups');
+
+    const sections = view.findAll('[data-settings-section]');
+    expect(sections).toHaveLength(2);
+    expect(sections[0]!.find('h2').text()).toBe(t('settingsPage.backupExport'));
+    expect(sections[1]!.find('h2').text()).toBe(t('settingsPage.restore'));
+    expect(view.findAll('[data-settings-card]')).toHaveLength(5);
+
+    const restoreButton = view.findAll('button').find((item) => item.text() === t('settingsPage.confirmRestore'));
+    expect(restoreButton).toBeTruthy();
+    expect(restoreButton!.attributes('disabled')).toBeDefined();
+  });
+
+  it('uses an inset empty state inside the Tailscale card instead of nesting a second card', async () => {
+    const { t } = useI18n();
+    const unavailable = runtimeSettings();
+    unavailable.tailscale.container = { ...container, available: false };
+    vi.mocked(settingsApi.runtime).mockResolvedValue(unavailable);
+    const view = await render('/settings/tailscale');
+
+    expect(view.text()).toContain(t('settingsPage.tailscale.unavailableTitle'));
+    expect(view.find('.surface-card .surface-card').exists()).toBe(false);
+    // inset empty state 不渲染自己的卡片描边。
+    const emptyCard = view.find('[data-settings-card]');
+    expect(emptyCard.exists()).toBe(true);
+    expect(emptyCard.find('.rounded-overlay').exists()).toBe(false);
+  });
+
+  it('keeps the danger confirmation wired from the runtime card row', async () => {
+    const { t } = useI18n();
+    const view = await render('/settings/general');
+
+    const clearButton = view.findAll('button').find((item) => item.text() === t('settingsPage.clearEventsLogs'));
+    expect(clearButton).toBeTruthy();
+    await clearButton!.trigger('click');
+    await flushPromises();
+
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+  });
+
+  it('keeps field hints and validation errors inside the row control column', async () => {
+    const view = await render('/settings/general');
+    const cards = view.findAll('[data-settings-card]');
+    // 默认合法值下不显示错误 hint。
+    expect(cards[0]!.text()).not.toContain(useI18n().t('settingsPage.validationPositiveNumber'));
+
+    const interval = view.find('[role="spinbutton"]');
+    await interval.setValue('');
+    await interval.trigger('change');
+    await flushPromises();
+
+    const invalidCard = view.findAll('[data-settings-card]')[0]!;
+    expect(invalidCard.attributes('aria-invalid')).toBe('true');
+    expect(invalidCard.text()).toContain(useI18n().t('settingsPage.validationPositiveNumber'));
+  });
+});
+
+describe('settings page section navigation', () => {
+  it('uses one horizontal WinUI tab strip instead of a second sidebar', async () => {
+    const { t } = useI18n();
+    const view = await render('/settings/security');
+
+    // AppShell 的全局导航之外，设置页不再渲染自己的左侧 aside。
+    expect(view.find('aside').exists()).toBe(false);
+    const tablist = view.find('[role="tablist"]');
+    expect(tablist.exists()).toBe(true);
+    expect(tablist.classes()).toContain('overflow-x-auto');
+    expect(tablist.classes()).toContain('overflow-y-hidden');
+
+    const tabs = view.findAll('[role="tab"]');
+    expect(tabs).toHaveLength(9);
+    const selected = view.find('[role="tab"][aria-selected="true"]');
+    expect(selected.text()).toBe(t('settingsPage.section.security'));
+  });
+
+  it('switches sections through the tab strip while keeping the URL authoritative', async () => {
+    const { t } = useI18n();
+    const view = await render('/settings/security');
+
+    const generalTab = view.findAll('[role="tab"]').find((item) => item.text() === t('settingsPage.section.runtime'));
+    expect(generalTab).toBeTruthy();
+    await generalTab!.trigger('click');
+    await flushPromises();
+
+    expect(router.currentRoute.value.path).toBe('/settings/general');
+    expect(view.find('[role="tab"][aria-selected="true"]').text()).toBe(t('settingsPage.section.runtime'));
+    // 内容随 URL 切换，且不整页刷新。
+    expect(view.find('[role="spinbutton"]').exists()).toBe(true);
+    expect(view.find('[data-settings-section]').exists()).toBe(true);
+  });
+
+  it('restores the selected tab from a direct section URL', async () => {
+    const { t } = useI18n();
+    const view = await render('/settings/backups');
+
+    expect(view.find('[role="tab"][aria-selected="true"]').text()).toBe(t('settingsPage.section.backups'));
+    expect(view.findAll('[data-settings-section]')).toHaveLength(2);
+  });
+
+  it('keeps the tab header fixed while only the section content scrolls', async () => {
+    const view = await render('/settings/general');
+
+    const tablist = view.find('[role="tablist"]');
+    const scroll = view.find('[data-settings-scroll]');
+    expect(tablist.exists()).toBe(true);
+    expect(scroll.exists()).toBe(true);
+    expect(scroll.classes()).toContain('overflow-y-auto');
+    // Tab header 在滚动容器之外，不随分区内容滚走；Tabs 根有高度约束。
+    expect(scroll.find('[role="tablist"]').exists()).toBe(false);
+    const tabsRoot = tablist.element.parentElement;
+    expect(tabsRoot?.classList.contains('h-full')).toBe(true);
+    expect(tabsRoot?.classList.contains('min-h-0')).toBe(true);
+  });
+
+  it('resets the section scroll position when switching tabs', async () => {
+    const { t } = useI18n();
+    const view = await render('/settings/general');
+
+    const scroll = view.find('[data-settings-scroll]').element as HTMLElement;
+    scroll.scrollTop = 120;
+
+    const securityTab = view.findAll('[role="tab"]').find((item) => item.text() === t('settingsPage.section.security'))!;
+    await securityTab.trigger('click');
+    await flushPromises();
+    await nextTick();
+
+    expect(scroll.scrollTop).toBe(0);
+  });
+
+  it('keeps the page mounted when switching sections so unsaved field values survive', async () => {
+    const { t } = useI18n();
+    const view = await render('/settings/general');
+
+    const interval = view.find('[role="spinbutton"]');
+    await interval.setValue('45');
+    await interval.trigger('change');
+
+    const backupsTab = view.findAll('[role="tab"]').find((item) => item.text() === t('settingsPage.section.backups'))!;
+    await backupsTab.trigger('click');
+    await flushPromises();
+    expect(view.find('[role="spinbutton"]').exists()).toBe(false);
+
+    const runtimeTab = view.findAll('[role="tab"]').find((item) => item.text() === t('settingsPage.section.runtime'))!;
+    await runtimeTab.trigger('click');
+    await flushPromises();
+
+    // 同一页面实例：切走再切回不会重置未保存的输入。
+    expect(view.find<HTMLInputElement>('[role="spinbutton"]').element.value).toBe('45');
+  });
+
+  it('redirects an invalid section to general instead of rendering another section', async () => {
+    const { t } = useI18n();
+    const view = await render('/settings/not-a-section');
+    await flushPromises();
+
+    expect(router.currentRoute.value.path).toBe('/settings/general');
+    expect(view.find('[role="tab"][aria-selected="true"]').text()).toBe(t('settingsPage.section.runtime'));
+    expect(view.findAll('[data-settings-section]')).toHaveLength(1);
+  });
+
+  it('refreshes the active section from the page header', async () => {
+    const { t } = useI18n();
+    const view = await render('/settings/general');
+    vi.mocked(settingsApi.runtime).mockClear();
+
+    const refresh = view.findAll('button').find((item) => item.text() === t('common.refresh'))!;
+    await refresh.trigger('click');
+    await flushPromises();
+
+    expect(settingsApi.runtime).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders the fixed tab header before section data finishes loading', async () => {
+    let resolveRuntime: ((value: RuntimeSettings) => void) | undefined;
+    vi.mocked(settingsApi.runtime).mockReturnValueOnce(new Promise((resolve) => {
+      resolveRuntime = resolve;
+    }));
+
+    const view = await render('/settings/general');
+    expect(view.find('[role="tablist"]').exists()).toBe(true);
+    expect(view.find('[data-settings-scroll] [aria-busy="true"]').exists()).toBe(true);
+
+    resolveRuntime?.(runtimeSettings());
+    await flushPromises();
+    expect(view.find('[role="spinbutton"]').exists()).toBe(true);
+  });
+});

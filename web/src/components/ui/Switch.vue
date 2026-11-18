@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { focusRing } from './states';
+
 defineProps<{ modelValue: boolean; disabled?: boolean; label: string }>();
 defineEmits<{ 'update:modelValue': [value: boolean] }>();
 </script>
@@ -10,9 +12,27 @@ defineEmits<{ 'update:modelValue': [value: boolean] }>();
     :aria-checked="modelValue"
     :aria-label="label"
     :disabled="disabled"
-    class="motion-switch relative h-6 w-11 rounded-full border border-border bg-muted transition-[background-color,border-color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:ring-offset-2 focus-visible:ring-offset-card disabled:pointer-events-none disabled:opacity-45 aria-checked:border-primary aria-checked:bg-primary"
+    class="group inline-grid min-h-control max-lg:min-h-touch w-10 shrink-0 place-items-center rounded-control disabled:pointer-events-none"
+    :class="focusRing"
     @click="$emit('update:modelValue', !modelValue)"
   >
-    <span class="absolute left-0.5 top-0.5 size-5 rounded-full bg-card shadow-sm transition-transform duration-[var(--panel-motion-duration-base)] ease-out" :class="modelValue ? 'translate-x-5' : 'translate-x-0'" />
+    <!-- WinUI 3 ToggleSwitch：40×20 胶囊轨道 + 12px 圆滑块；命中区至少 32px（窄屏 40px）。
+         PointerOver/Pressed 只改变轨道/滑块的填充与描边（167/83ms），无位移/缩放动画（滑块位移除外）。 -->
+    <span
+      class="relative block h-5 w-10 rounded-full border transition-fill duration-fast ease-move group-active:duration-fade"
+      :class="disabled
+        ? 'border-stroke bg-muted'
+        : modelValue
+          ? 'border-transparent bg-primary group-hover:bg-accent-strong group-active:bg-accent-stronger'
+          : 'border-border-strong bg-control group-hover:bg-hover group-active:bg-pressed'"
+    >
+      <span
+        class="absolute left-1 top-1 size-3 rounded-full transition-transform-fill duration-fast ease-enter"
+        :class="[
+          modelValue ? 'translate-x-5' : 'translate-x-0',
+          disabled ? 'bg-muted-foreground' : modelValue ? 'bg-primary-foreground' : 'bg-foreground',
+        ]"
+      />
+    </span>
   </button>
 </template>

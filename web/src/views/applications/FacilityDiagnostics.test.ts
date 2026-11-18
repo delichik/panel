@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+﻿// @vitest-environment jsdom
 import { mount, flushPromises } from '@vue/test-utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import FacilityDiagnostics from './FacilityDiagnostics.vue';
@@ -13,6 +13,11 @@ const plane = {
   ],
 } as ProxyPlaneState;
 function render() { return mount(FacilityDiagnostics, { props: { state: plane }, global: { provide: { [toastKey as symbol]: { push: vi.fn() } }, stubs: { ActivityLink: true, StatusBadge: { props: ['status'], template: '<span>{{ status }}</span>' } } } }); }
+
+/** Expander header 也是 button；显式按文案定位每个节点的“检查”按钮。 */
+function checkButton(wrapper: ReturnType<typeof render>) {
+  return wrapper.findAll('button').find((button) => button.text() === 'Inspect proxy error logs')!;
+}
 afterEach(() => vi.restoreAllMocks());
 
 describe('facility diagnostics', () => {
@@ -26,7 +31,7 @@ describe('facility diagnostics', () => {
     expect(wrapper.text()).toContain('certificate missing');
     expect(wrapper.text()).not.toContain('No gateway nodes');
     expect(wrapper.text()).not.toContain('This failure has no containerLogs snapshot');
-    await wrapper.find('button').trigger('click');
+    await checkButton(wrapper).trigger('click');
     await flushPromises();
     expect(request).toHaveBeenCalledTimes(1);
     expect(wrapper.text()).toContain('app.example.test');
@@ -55,14 +60,14 @@ describe('facility diagnostics', () => {
     let resolve!: (result: ProxyDiagnostics) => void;
     const request = vi.spyOn(reverseProxyFacilityApi, 'getDiagnostics').mockImplementation(() => new Promise((done) => { resolve = done; }));
     const wrapper = render();
-    await wrapper.find('button').trigger('click');
+    await checkButton(wrapper).trigger('click');
     const signal = request.mock.calls[0][1]?.signal;
     await wrapper.setProps({ state: { ...plane, updatedAt: '2026-09-15T05:30:00Z' } });
     expect(signal?.aborted).toBe(true);
     resolve({ serverId: 'a', status: 'sampled', checkedAt: '', truncated: false, issues: [{ code: 'upstream_tls_untrusted', domain: 'stale.example.test', count: 1 }] });
     await flushPromises();
     expect(wrapper.text()).not.toContain('stale.example.test');
-    await wrapper.find('button').trigger('click');
+    await checkButton(wrapper).trigger('click');
     wrapper.unmount();
     expect(request.mock.calls[1][1]?.signal?.aborted).toBe(true);
   });

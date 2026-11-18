@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { ArrowLeft } from '@lucide/vue';
+import { ArrowLeft } from '@/icons';
 import Button from '@/components/ui/Button.vue';
 
 /*
@@ -40,12 +40,12 @@ const detailVisible = computed(() => !singleView.value || props.hasDetail === tr
 </script>
 
 <template>
-  <div class="grid h-full min-h-0 min-w-0 grid-cols-1 gap-4 overflow-x-hidden xl:grid-cols-[360px_minmax(0,1fr)]">
+  <div class="grid h-full min-h-0 min-w-0 grid-cols-1 gap-4 overflow-x-hidden xl:grid-cols-master">
     <div class="grid min-h-0 min-w-0" :class="listVisible ? undefined : 'max-xl:hidden'">
       <slot name="master" />
     </div>
     <div class="grid min-h-0 min-w-0" :class="detailVisible ? undefined : 'max-xl:hidden'">
-      <div class="grid min-h-0 min-w-0 max-xl:grid-rows-[auto_minmax(0,1fr)] xl:grid-rows-[minmax(0,1fr)]">
+      <div class="grid min-h-0 min-w-0 max-xl:grid-rows-page xl:grid-rows-1-safe">
         <div v-if="!listVisible && backLabel" class="mb-3 xl:hidden">
           <Button size="sm" variant="secondary" @click="emit('back')">
             <ArrowLeft />{{ backLabel }}

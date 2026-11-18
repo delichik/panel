@@ -18,8 +18,8 @@ export const serverSystemSubtabs = ['agent', 'tailscale', 'packages'] as const;
 
 export type ServerSystemSubtab = (typeof serverSystemSubtabs)[number];
 
-/** 网络与安全 tab 内的子视图；也是旧 `tab=probes|firewall` 别名的目标。 */
-export const serverNetworkSubtabs = ['probes', 'firewall'] as const;
+/** 网络与安全 tab 内的子视图；探测结果已移到设施页/概览，这里只保留防火墙与 Fail2Ban。 */
+export const serverNetworkSubtabs = ['firewall', 'fail2ban'] as const;
 
 export type ServerNetworkSubtab = (typeof serverNetworkSubtabs)[number];
 
@@ -30,7 +30,8 @@ export type ServerResourceSubtab = (typeof serverResourceSubtabs)[number];
 
 const legacyResourceTabSet = new Set<string>(serverResourceSubtabs);
 const legacySystemTabSet = new Set<string>(serverSystemSubtabs);
-const legacyNetworkTabSet = new Set<string>(serverNetworkSubtabs);
+/** 旧深链 `tab=probes` 仍识别为网络与安全，但子视图回落到防火墙。 */
+const legacyNetworkTabSet = new Set<string>([...serverNetworkSubtabs, 'probes']);
 
 export function isLegacyResourceTab(value: unknown): value is ServerResourceSubtab {
   return legacyResourceTabSet.has(String(value ?? ''));
@@ -40,7 +41,7 @@ export function isLegacySystemTab(value: unknown): value is ServerSystemSubtab {
   return legacySystemTabSet.has(String(value ?? ''));
 }
 
-export function isLegacyNetworkTab(value: unknown): value is ServerNetworkSubtab {
+export function isLegacyNetworkTab(value: unknown): value is ServerNetworkSubtab | 'probes' {
   return legacyNetworkTabSet.has(String(value ?? ''));
 }
 
@@ -68,13 +69,14 @@ export function normalizeServerResourceSubtab(value: unknown, legacyTab?: unknow
   return 'containers';
 }
 
-/** `subtab=fail2ban` 同时表示防火墙子视图与 dev 下的 Fail2Ban 视图。 */
+/** `subtab=fail2ban` 直接表示 Fail2Ban 视图；旧 `probes` 深链回落到防火墙。 */
 export function normalizeServerNetworkSubtab(value: unknown, legacyTab?: unknown): ServerNetworkSubtab {
   const fromSubtab = String(value ?? '');
-  if (fromSubtab === 'fail2ban') return 'firewall';
+  if (fromSubtab === 'probes') return 'firewall';
   if ((serverNetworkSubtabs as readonly string[]).includes(fromSubtab)) return fromSubtab as ServerNetworkSubtab;
-  if (isLegacyNetworkTab(legacyTab)) return legacyTab;
-  return 'probes';
+  if (String(legacyTab ?? '') === 'probes') return 'firewall';
+  if (legacyTab === 'firewall' || legacyTab === 'fail2ban') return legacyTab;
+  return 'firewall';
 }
 
 /** 架构对象渲染文案：优先 arch，其次 rawMachine；相同值只显示一次。 */

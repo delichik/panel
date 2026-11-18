@@ -40,6 +40,33 @@ describe('ServerMultiPicker', () => {
     expect(wrapper.emitted('update:modelValue')?.[0]?.[0]).toEqual(['srv-2', 'srv-1']);
   });
 
+  it('marks selection with the WinUI accent fill only (no self-made accent border/text)', () => {
+    const wrapper = mount(ServerMultiPicker, {
+      props: { modelValue: ['srv-2'], servers, label: 'nodes', variant: 'compact' },
+    });
+
+    const selectedTile = wrapper.findAll('button')[1]!;
+    expect(selectedTile.classes()).toContain('aria-pressed:bg-accent-selected');
+    expect(selectedTile.classes()).not.toContain('aria-pressed:border-accent-text');
+    // 选中行的 checkbox 使用 accent 填充 + white check。
+    const box = selectedTile.get('span[aria-hidden="true"]');
+    expect(box.classes()).toContain('bg-primary');
+    expect(box.classes()).toContain('border-primary');
+
+    const unselectedBox = wrapper.findAll('button')[0]!.get('span[aria-hidden="true"]');
+    expect(unselectedBox.classes()).not.toContain('bg-primary');
+  });
+
+  it('applies the same selectable-row treatment to the list variant', () => {
+    const wrapper = mount(ServerMultiPicker, {
+      props: { modelValue: ['srv-3'], servers, label: 'nodes' },
+    });
+    const selectedRow = wrapper.findAll('button')[2]!;
+    expect(selectedRow.classes()).toContain('aria-pressed:bg-accent-selected');
+    expect(selectedRow.classes()).not.toContain('aria-pressed:border-accent-text');
+    expect(selectedRow.find('span[aria-hidden="true"]').classes()).toContain('bg-primary');
+  });
+
   it('keeps disabled tiles visible with their disabled reason', () => {
     const wrapper = mount(ServerMultiPicker, {
       props: { modelValue: [], servers, label: 'nodes', variant: 'compact', disabledIds: ['srv-1'], disabledReasons: { 'srv-1': 'Agent required' } },

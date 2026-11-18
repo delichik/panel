@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Search, X } from '@lucide/vue';
+import { Search, X } from '@/icons';
 import Input from './Input.vue';
 import IconButton from './IconButton.vue';
 
@@ -35,7 +35,7 @@ defineEmits<{
     />
     <IconButton
       v-if="clearable && modelValue"
-      class="absolute right-0.5 top-0.5"
+      class="absolute right-0.5 top-1/2 -translate-y-1/2"
       size="sm"
       :disabled="disabled"
       :label="clearLabel ?? label ?? placeholder ?? ''"

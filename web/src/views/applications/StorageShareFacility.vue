@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRouter } from 'vue-router';
-import { Download, HardDrive, Plus, RefreshCcw, Rocket, Save, Trash2, Users, Wrench } from '@lucide/vue';
+import { Download, HardDrive, Plus, RefreshCcw, Rocket, Save, Trash2, Users, Wrench } from '@/icons';
 import { storageShareFacilityApi } from '@/api/facilityApps';
 import { saveBlobDownload } from '@/api/download';
 import type { StoragePartitionStatus, StorageServerSetting, StorageShareConfig, StorageSharePartition, StorageShareStatus } from '@/types/facilityApps';
@@ -16,6 +16,7 @@ import Skeleton from '@/components/ui/Skeleton.vue';
 import StatusBadge from '@/components/ui/StatusBadge.vue';
 import Tabs from '@/components/ui/Tabs.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
+import FacilityStat from '@/components/patterns/FacilityStat.vue';
 import { useI18n } from '@/i18n';
 import { formatDateTime } from '@/utils/datetime';
 
@@ -377,19 +378,19 @@ onBeforeUnmount(() => {
   <div class="grid gap-5">
     <div v-if="loading && !config" class="grid gap-5" aria-busy="true">
       <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <div v-for="item in 4" :key="item" class="rounded-2xl border border-border bg-card p-4">
+        <div v-for="item in 4" :key="item" class="surface-card p-4">
           <Skeleton class="h-6 w-12" />
           <Skeleton class="mt-2 h-4 w-24 max-w-full" />
         </div>
       </div>
-      <Skeleton class="h-10 w-fit rounded-xl" />
+      <Skeleton class="h-10 w-fit rounded-overlay" />
       <div class="grid gap-4">
-        <div v-for="item in 2" :key="item" class="rounded-2xl border border-border bg-card p-4">
+        <div v-for="item in 2" :key="item" class="surface-card p-4">
           <Skeleton class="h-5 w-32 max-w-full" />
           <Skeleton class="mt-3 h-4 w-full" />
           <Skeleton class="mt-2 h-4 w-2/3" />
         </div>
-        <div class="grid content-start gap-3 rounded-2xl border border-border bg-card p-5">
+        <div class="grid content-start gap-3 surface-card p-4">
           <Skeleton class="h-5 w-28 max-w-full" />
           <Skeleton class="h-16 w-full" />
         </div>
@@ -403,7 +404,7 @@ onBeforeUnmount(() => {
     </div>
 
     <template v-else>
-      <section class="grid gap-4 rounded-2xl border border-border bg-card p-5">
+      <section class="grid gap-4 surface-card p-4">
         <div class="flex flex-wrap items-start justify-between gap-4">
           <div class="min-w-0">
             <div class="flex flex-wrap items-center gap-2">
@@ -437,10 +438,10 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <div class="rounded-lg bg-muted/35 p-3"><strong class="block text-lg">{{ config?.servers.length ?? 0 }}</strong><span class="text-xs text-muted-foreground">{{ t('applicationsPage.storageShareServers') }}</span></div>
-          <div class="rounded-lg bg-muted/35 p-3"><strong class="block text-lg">{{ liveExports }}/{{ status?.servers.length ?? 0 }}</strong><span class="text-xs text-muted-foreground">{{ t('applicationsPage.storageShareLiveExports') }}</span></div>
-          <div class="rounded-lg bg-muted/35 p-3"><strong class="block text-lg">{{ config?.partitions.length ?? 0 }}</strong><span class="text-xs text-muted-foreground">{{ t('applicationsPage.storageSharePartitions') }}</span></div>
-          <div class="rounded-lg bg-muted/35 p-3"><strong class="block text-lg">{{ healthyPartitions }}/{{ config?.partitions.length ?? 0 }}</strong><span class="text-xs text-muted-foreground">{{ t('applicationsPage.storageShareHealthyMounts') }}</span></div>
+          <FacilityStat :loading="loading && !config" :value="config?.servers.length" :label="t('applicationsPage.storageShareServers')" />
+          <FacilityStat :loading="loading && !config" :value="`${liveExports}/${status?.servers.length ?? 0}`" :label="t('applicationsPage.storageShareLiveExports')" />
+          <FacilityStat :loading="loading && !config" :value="config?.partitions.length" :label="t('applicationsPage.storageSharePartitions')" />
+          <FacilityStat :loading="loading && !config" :value="`${healthyPartitions}/${config?.partitions.length ?? 0}`" :label="t('applicationsPage.storageShareHealthyMounts')" />
         </div>
       </section>
 
@@ -452,10 +453,10 @@ onBeforeUnmount(() => {
         <!-- 运行健康 -->
         <div v-if="activeView === 'health'" class="grid gap-4">
           <div class="grid content-start gap-4 motion-stagger">
-            <article v-for="server in status?.servers ?? []" :key="server.serverId" class="motion-reveal grid min-w-0 gap-3 rounded-2xl border border-border bg-card p-4">
+            <article v-for="server in status?.servers ?? []" :key="server.serverId" class="motion-reveal grid min-w-0 gap-3 surface-card p-4">
               <div class="flex flex-wrap items-center justify-between gap-3">
                 <strong class="truncate">{{ serverName(server.serverId) }}</strong>
-                <code class="min-w-0 overflow-x-auto whitespace-nowrap rounded-lg bg-muted/40 px-2 py-1 text-xs text-foreground/80">{{ server.root }}</code>
+                <code class="min-w-0 overflow-x-auto whitespace-nowrap rounded-control bg-muted px-2 py-1 text-xs text-foreground/80">{{ server.root }}</code>
               </div>
               <div class="flex flex-wrap gap-2">
                 <StatusBadge
@@ -468,8 +469,8 @@ onBeforeUnmount(() => {
               </div>
               <p v-if="server.detail" class="m-0 break-words text-xs" :class="server.exportLive ? 'text-muted-foreground' : 'text-danger'">{{ server.detail }}</p>
             </article>
-            <div v-if="!status?.servers.length" class="rounded-2xl border border-border bg-card p-6">
-              <EmptyState :title="t('applicationsPage.storageShareStateNoServers')" :description="t('applicationsPage.storageShareStateNoServersHint')">
+            <div v-if="!status?.servers.length" class="surface-card p-4">
+              <EmptyState variant="inset" :title="t('applicationsPage.storageShareStateNoServers')" :description="t('applicationsPage.storageShareStateNoServersHint')">
                 <template #actions>
                   <Button size="sm" variant="primary" @click="openSettings"><Wrench />{{ t('applicationsPage.storageShareGoConfigure') }}</Button>
                 </template>
@@ -477,25 +478,25 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <section class="grid content-start gap-3 border-t border-border pt-4">
+          <section class="grid content-start gap-3 border-t border-divider pt-4">
             <div>
-              <h3 class="m-0 text-base font-semibold">{{ t('applicationsPage.storageShareAssociatedAppsTitle') }}</h3>
+              <h3 class="m-0 text-body font-semibold">{{ t('applicationsPage.storageShareAssociatedAppsTitle') }}</h3>
               <p class="m-0 mt-1 text-sm text-muted-foreground">{{ t('applicationsPage.storageShareAssociationsHint', { count: config?.references?.length ?? 0 }) }}</p>
             </div>
             <ul class="m-0 grid list-none gap-2 p-0">
-              <li v-for="usage in config?.references ?? []" :key="usage.applicationId" class="flex min-w-0 items-center justify-between gap-2 rounded-xl border border-border p-3 text-sm">
+              <li v-for="usage in config?.references ?? []" :key="usage.applicationId" class="flex min-w-0 items-center justify-between gap-2 rounded-control border border-divider p-3 text-sm">
                 <span class="min-w-0 truncate font-medium">{{ usage.applicationName }}</span>
                 <Button size="sm" @click="goEditApplication(usage.applicationId)"><Users />{{ t('common.edit') }}</Button>
               </li>
             </ul>
-            <EmptyState v-if="!(config?.references?.length)" :title="t('applicationsPage.storageShareNoAssociatedApps')" :description="t('applicationsPage.storageShareNoPartitionsHint')" />
+            <EmptyState v-if="!(config?.references?.length)" variant="inset" :title="t('applicationsPage.storageShareNoAssociatedApps')" :description="t('applicationsPage.storageShareNoPartitionsHint')" />
           </section>
         </div>
 
         <!-- 分区资产 -->
         <div v-else-if="activeView === 'partitions'" class="motion-stagger grid gap-3">
           <p v-if="statusLoading" class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.storageShareRefreshingMounts') }}</p>
-          <article v-for="partition in config?.partitions ?? []" :key="partition.id" class="motion-reveal grid min-w-0 gap-3 rounded-2xl border border-border bg-card p-4">
+          <article v-for="partition in config?.partitions ?? []" :key="partition.id" class="motion-reveal grid min-w-0 gap-3 surface-card p-4">
             <div class="flex flex-wrap items-start justify-between gap-3">
               <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-2">
@@ -514,11 +515,11 @@ onBeforeUnmount(() => {
               </div>
             </div>
             <dl class="m-0 grid gap-2 sm:grid-cols-2">
-              <div class="min-w-0 rounded-xl bg-muted/40 px-3 py-2">
+              <div class="min-w-0 rounded-control bg-muted px-3 py-2">
                 <dt class="text-xs text-muted-foreground">{{ t('applicationsPage.storageShareHostPath') }}</dt>
                 <dd class="m-0 block overflow-x-auto whitespace-nowrap font-mono text-xs">{{ partition.path }}</dd>
               </div>
-              <div class="min-w-0 rounded-xl bg-muted/40 px-3 py-2">
+              <div class="min-w-0 rounded-control bg-muted px-3 py-2">
                 <dt class="text-xs text-muted-foreground">{{ t('applicationsPage.storageShareContainerTarget') }}</dt>
                 <dd class="m-0 block overflow-x-auto whitespace-nowrap font-mono text-xs">{{ partition.target || '—' }}</dd>
               </div>
@@ -530,20 +531,20 @@ onBeforeUnmount(() => {
             <p v-if="statusPartitionById(partition.id)?.mountDetail" class="m-0 break-words text-xs text-muted-foreground">{{ statusPartitionById(partition.id)?.mountDetail }}</p>
             <p v-if="partitionDeleteBlocked(partition)" class="m-0 text-xs text-warning">{{ partitionDeleteBlocked(partition) }}</p>
           </article>
-          <div v-if="!(config?.partitions.length)" class="rounded-2xl border border-border bg-card p-6">
-            <EmptyState :title="t('applicationsPage.storageShareNoPartitions')" :description="t('applicationsPage.storageShareNoPartitionsHint')" />
+          <div v-if="!(config?.partitions.length)" class="surface-card p-4">
+            <EmptyState variant="inset" :title="t('applicationsPage.storageShareNoPartitions')" :description="t('applicationsPage.storageShareNoPartitionsHint')" />
           </div>
         </div>
 
         <!-- 设置 -->
         <div v-else class="grid gap-4">
-          <section class="grid min-w-0 gap-4 rounded-2xl border border-border bg-card p-5">
+          <section class="grid min-w-0 gap-4 surface-card p-4">
             <div>
-              <h3 class="m-0 text-base font-semibold">{{ t('applicationsPage.storageShareConfigTitle') }}</h3>
+              <h3 class="m-0 text-body font-semibold">{{ t('applicationsPage.storageShareConfigTitle') }}</h3>
               <p class="m-0 mt-1 text-sm leading-6 text-muted-foreground">{{ t('applicationsPage.storageShareServerRootHint') }}</p>
             </div>
             <div class="grid gap-3">
-              <div v-for="(item, index) in form.servers" :key="index" class="grid gap-3 border-t border-border pt-4 first:border-t-0 first:pt-0">
+              <div v-for="(item, index) in form.servers" :key="index" class="grid gap-3 border-t border-divider pt-4 first:border-t-0 first:pt-0">
                 <div class="flex items-center justify-between gap-2">
                   <strong class="text-sm">{{ t('applicationsPage.storageShareServerItem', { index: index + 1 }) }}</strong>
                   <Button size="sm" variant="danger" :disabled="form.servers.length <= 1" @click="removeServerRow(index)"><Trash2 />{{ t('common.delete') }}</Button>
@@ -559,7 +560,7 @@ onBeforeUnmount(() => {
               </div>
               <Button class="justify-self-start" size="sm" @click="addServerRow"><Plus />{{ t('applicationsPage.storageShareAddServer') }}</Button>
             </div>
-            <div class="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+            <div class="flex flex-wrap items-center justify-between gap-3 border-t border-divider pt-4">
               <span class="text-sm text-muted-foreground">{{ dirty ? t('applicationsPage.unsavedChanges') : t('applicationsPage.readyToCommit') }}</span>
               <div class="flex flex-wrap gap-2">
                 <Button variant="secondary" :disabled="saving || !dirty" @click="resetDraft">{{ t('common.cancel') }}</Button>
@@ -568,13 +569,13 @@ onBeforeUnmount(() => {
             </div>
           </section>
 
-          <section class="grid content-start gap-3 border-t border-border pt-4">
+          <section class="grid content-start gap-3 border-t border-divider pt-4">
             <div>
-              <h3 class="m-0 text-base font-semibold">{{ t('applicationsPage.storageShareStateTitle') }}</h3>
+              <h3 class="m-0 text-body font-semibold">{{ t('applicationsPage.storageShareStateTitle') }}</h3>
               <p class="m-0 mt-1 text-sm leading-6 text-muted-foreground">{{ t('applicationsPage.storageShareStateHint') }}</p>
             </div>
             <div class="grid gap-2">
-              <div v-for="server in status?.servers ?? []" :key="server.serverId" class="grid gap-2 border-t border-border pt-3 text-sm first:border-t-0 first:pt-0">
+              <div v-for="server in status?.servers ?? []" :key="server.serverId" class="grid gap-2 border-t border-divider pt-3 text-sm first:border-t-0 first:pt-0">
                 <div class="flex min-w-0 items-center justify-between gap-2">
                   <strong class="truncate">{{ serverName(server.serverId) }}</strong>
                   <StatusBadge
@@ -583,12 +584,12 @@ onBeforeUnmount(() => {
                     :tone="server.exportLive ? 'success' : 'danger'"
                   />
                 </div>
-                <code class="block min-w-0 overflow-x-auto whitespace-nowrap rounded-lg bg-muted/40 px-2 py-1 text-xs text-foreground/80">{{ server.root }}</code>
+                <code class="block min-w-0 overflow-x-auto whitespace-nowrap rounded-control bg-muted px-2 py-1 text-xs text-foreground/80">{{ server.root }}</code>
                 <span v-if="server.detail" class="break-words text-xs text-muted-foreground">{{ server.detail }}</span>
               </div>
               <p v-if="!status?.servers.length" class="m-0 text-sm text-muted-foreground">{{ t('applicationsPage.storageShareStateNoServers') }}</p>
             </div>
-            <div class="border-t border-border pt-3">
+            <div class="border-t border-divider pt-3">
               <Button size="sm" variant="ghost" @click="leaveSettings">{{ t('applicationsPage.storageShareBackToDetail') }}</Button>
             </div>
           </section>
@@ -618,7 +619,7 @@ onBeforeUnmount(() => {
       >
         <div class="grid gap-3">
           <p class="m-0 text-sm text-warning">{{ t('applicationsPage.storageSharePartitionUnlinkHint') }}</p>
-          <div v-if="deletePartitionTarget" class="flex items-center justify-between gap-2 rounded-xl border border-border p-3 text-sm">
+          <div v-if="deletePartitionTarget" class="flex items-center justify-between gap-2 rounded-control border border-divider p-3 text-sm">
             <span class="min-w-0 truncate">{{ deletePartitionTarget.applicationName }}</span>
             <Button size="sm" @click="goEditApplication(deletePartitionTarget.applicationId)">{{ t('applicationsPage.storageShareUnlink') }}</Button>
           </div>
@@ -641,7 +642,7 @@ onBeforeUnmount(() => {
         <div class="grid gap-3">
           <template v-if="uninstallBlocked">
             <p class="m-0 text-sm text-warning">{{ t('applicationsPage.storageShareUnlinkHint') }}</p>
-            <div v-for="usage in config?.references ?? []" :key="usage.applicationId" class="flex items-center justify-between gap-2 rounded-xl border border-border p-3 text-sm">
+            <div v-for="usage in config?.references ?? []" :key="usage.applicationId" class="flex items-center justify-between gap-2 rounded-control border border-divider p-3 text-sm">
               <span class="min-w-0 truncate">{{ usage.applicationName }}</span>
               <Button size="sm" @click="goEditApplication(usage.applicationId)">{{ t('applicationsPage.storageShareUnlink') }}</Button>
             </div>

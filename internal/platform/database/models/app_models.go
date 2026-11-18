@@ -742,6 +742,38 @@ func (*OverviewCardConfiguration) TableConstraints() []string {
 	return []string{"CHECK(id = 'default')"}
 }
 
+// AppearanceSetting 对应 appearance_settings。单行全局面板外观（单管理员面板，
+// id 固定 appearance）：主题/深色模式、Mica、强调色与背景。背景图片字节不落库，
+// 只保存 <dataRoot>/appearance/<BackgroundAssetID>/ 资产目录元数据（MIME、归一化
+// 尺寸/字节数与递增 revision）；文件由 appearance 模块负责原子写入与孤儿清理。
+// 所有列由 AutoMigrate 建表，旧 alpha 库升级即为空表并由服务首次启动幂等 seed。
+type AppearanceSetting struct {
+	ID        string `orm:"primary_key"`
+	ThemeMode string `orm:"not_null;default:'system'"`
+	Mica      bool   `orm:"not_null;default:1"`
+	Accent    string `orm:"not_null;default:'blue'"`
+	// BackgroundKind 为 none|preset|image；切到 none/preset 时保留资产元数据，
+	// 便于重新启用已上传图片（hasImage 由 BackgroundAssetID 是否为空决定）。
+	BackgroundKind     string `orm:"not_null;default:'none'"`
+	BackgroundPreset   string `orm:"not_null;default:''"`
+	BackgroundAssetID  string `orm:"not_null;default:''"`
+	BackgroundMime     string `orm:"not_null;default:''"`
+	BackgroundWidth    int    `orm:"not_null;default:0"`
+	BackgroundHeight   int    `orm:"not_null;default:0"`
+	BackgroundBytes    int    `orm:"not_null;default:0"`
+	BackgroundRevision int    `orm:"not_null;default:0"`
+	// Initialized 表示外观是否已被显式保存过，用于旧 localStorage 偏好一次性迁移。
+	Initialized bool      `orm:"not_null;default:0"`
+	UpdatedAt   time.Time `orm:"not_null"`
+}
+
+func (*AppearanceSetting) TableName() string { return "appearance_settings" }
+
+// TableConstraints 返回 appearance_settings 表无法用 orm tag 表达的原始约束。
+func (*AppearanceSetting) TableConstraints() []string {
+	return []string{"CHECK(id = 'appearance')"}
+}
+
 // RuntimeSetting 对应 runtime_settings。
 type RuntimeSetting struct {
 	Key       string    `orm:"primary_key"`

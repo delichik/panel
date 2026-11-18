@@ -6,6 +6,8 @@ import Dialog from '@/components/ui/Dialog.vue';
 import Select from '@/components/ui/Select.vue';
 import Button from '@/components/ui/Button.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
+import FormField from '@/components/patterns/FormField.vue';
+import InfoBar from '@/components/patterns/InfoBar.vue';
 import { useErrorToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 
@@ -88,25 +90,28 @@ onBeforeUnmount(cancelAll);
 
 <template>
   <Dialog :open="open" :title="t('applicationsPage.logs')" :description="applicationName" :close-label="t('common.close')" size="large" @update:open="emit('update:open', $event)">
-    <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3">
+    <div class="grid h-full min-h-0 grid-rows-page gap-3">
       <div class="flex flex-wrap items-end gap-3">
-        <label class="grid min-w-0 flex-1 gap-2 text-sm">
-          <span>{{ t('applicationLogs.instance') }}</span>
-          <Select v-model="selected" :options="options" :placeholder="t('applicationLogs.chooseInstance')" :disabled="instancesLoading || !selectable.length" />
-        </label>
+        <FormField class="min-w-0 flex-1" :label="t('applicationLogs.instance')">
+          <template #default="{ id }">
+            <Select :id="id" v-model="selected" :options="options" :placeholder="t('applicationLogs.chooseInstance')" :disabled="instancesLoading || !selectable.length" />
+          </template>
+        </FormField>
         <Button size="sm" :disabled="!selected || instancesLoading || logsLoading" @click="readLogs">{{ t('common.refresh') }}</Button>
         <Button size="sm" variant="ghost" :disabled="instancesLoading || logsLoading" @click="loadInstances">{{ t('applicationLogs.reloadInstances') }}</Button>
       </div>
-      <div class="relative min-h-48 min-w-0 overflow-auto rounded-xl border border-border bg-muted p-3">
+      <div class="relative min-h-48 min-w-0 overflow-auto rounded-control border border-divider bg-muted p-3">
         <LoadingOverlay v-if="instancesLoading || logsLoading" :label="t(instancesLoading ? 'applicationLogs.instancesLoading' : 'applicationsPage.logsLoading')" />
-        <div v-else-if="error" role="alert" class="grid gap-3 text-sm text-danger">
+        <InfoBar v-else-if="error" tone="danger" :title="t('common.loadFailed')">
           <p class="m-0 whitespace-pre-wrap break-words">{{ error }}</p>
-          <Button size="sm" @click="selected ? readLogs() : loadInstances()">{{ t('common.retry') }}</Button>
-        </div>
-        <p v-else-if="!selectable.length" class="m-0 text-sm text-muted-foreground">{{ t('applicationLogs.noInstances') }}</p>
-        <p v-else-if="!selected" class="m-0 text-sm text-muted-foreground">{{ t('applicationLogs.chooseHint') }}</p>
-        <pre v-else-if="text" class="m-0 whitespace-pre-wrap break-words text-xs text-foreground">{{ text }}</pre>
-        <p v-else class="m-0 text-sm text-muted-foreground">{{ t('applicationLogs.empty') }}</p>
+          <div class="mt-2">
+            <Button size="sm" @click="selected ? readLogs() : loadInstances()">{{ t('common.retry') }}</Button>
+          </div>
+        </InfoBar>
+        <p v-else-if="!selectable.length" class="m-0 text-caption text-muted-foreground">{{ t('applicationLogs.noInstances') }}</p>
+        <p v-else-if="!selected" class="m-0 text-caption text-muted-foreground">{{ t('applicationLogs.chooseHint') }}</p>
+        <pre v-else-if="text" class="m-0 whitespace-pre-wrap break-words text-caption text-foreground">{{ text }}</pre>
+        <p v-else class="m-0 text-caption text-muted-foreground">{{ t('applicationLogs.empty') }}</p>
       </div>
     </div>
   </Dialog>

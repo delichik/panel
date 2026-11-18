@@ -5,6 +5,7 @@ import { useI18n } from '@/i18n';
 import type { ServerDto } from '@/types/servers';
 import { formatDateTime } from '@/utils/datetime';
 import { formatBytes, formatPercent } from '@/utils/metrics';
+import ProgressBar from '@/components/patterns/ProgressBar.vue';
 import { diskUsagePercent } from './metricsModel';
 import {
   architectureLabel,
@@ -134,60 +135,48 @@ const DISK_TONE_TEXT_CLASSES: Record<'success' | 'warning' | 'danger' | 'neutral
   danger: 'text-danger',
   neutral: 'text-muted-foreground',
 };
-const DISK_TONE_BG_CLASSES: Record<'success' | 'warning' | 'danger' | 'neutral', string> = {
-  success: 'bg-success',
-  warning: 'bg-warning',
-  danger: 'bg-danger',
-  neutral: 'bg-border-strong',
-};
 const diskToneText = computed(() => DISK_TONE_TEXT_CLASSES[diskTone.value]);
-const diskToneBg = computed(() => DISK_TONE_BG_CLASSES[diskTone.value]);
-const diskWidth = computed(() => `${Math.min(100, Math.max(0, diskPercent.value ?? 0))}%`);
+const diskProgressTone = computed<'accent' | 'success' | 'warning' | 'danger'>(() => (
+  diskTone.value === 'neutral' ? 'accent' : diskTone.value
+));
 </script>
 
 <template>
-  <section class="rounded-2xl border border-border bg-card">
+  <section class="surface-card">
     <div class="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 px-4 py-2.5">
       <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5">
-        <span class="inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-xs font-semibold" :class="summaryPillClass">
+        <span class="inline-flex items-center gap-2 rounded-control border px-2.5 py-1 text-caption font-semibold" :class="summaryPillClass">
           <span class="size-1.5 rounded-full bg-current" aria-hidden="true" />
           {{ t(serverSummaryStatusKey(server)) }}
         </span>
-        <span class="min-w-0 text-xs text-muted-foreground">
+        <span class="min-w-0 text-caption text-muted-foreground">
           {{ server.os?.prettyName || t('common.notAvailable') }}
           <template v-if="architecture"> · {{ architecture }}</template>
           · {{ t(privilegeStatusKey(server)) }}
         </span>
       </div>
-      <span class="text-[11.5px] text-muted-foreground">
+      <span class="text-caption text-muted-foreground">
         {{ t('serversPage.lastChecked') }} <strong class="font-medium text-secondary-foreground">{{ formatDateTime(server.lastCheckedAt, t('common.never')) }}</strong>
         · {{ t('serversPage.updatedAt') }} <strong class="font-medium text-secondary-foreground">{{ formatDateTime(server.updatedAt, t('common.never')) }}</strong>
       </span>
     </div>
 
-    <dl class="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-border px-4 py-2">
+    <dl class="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-divider px-4 py-2">
       <div v-for="(item, index) in statusItems" :key="item.key" class="inline-flex min-w-0 items-baseline gap-1.5">
         <span v-if="index > 0" class="text-border-strong" aria-hidden="true">·</span>
-        <dt class="text-[11px] text-muted-foreground">{{ item.label }}</dt>
-        <dd class="m-0 max-w-[18rem] truncate text-xs font-medium" :class="item.muted ? 'text-muted-foreground' : TONE_TEXT_CLASSES[item.tone]" :title="item.value">{{ item.value }}</dd>
+        <dt class="text-caption text-muted-foreground">{{ item.label }}</dt>
+        <dd class="m-0 max-w-72 truncate text-caption font-medium" :class="item.muted ? 'text-muted-foreground' : TONE_TEXT_CLASSES[item.tone]" :title="item.value">{{ item.value }}</dd>
       </div>
     </dl>
 
-    <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border px-4 py-2">
-      <span class="text-xs text-muted-foreground">{{ t('serversPage.disk') }}</span>
-      <strong class="text-base font-semibold tabular-nums" :class="diskToneText">{{ diskPercentText }}</strong>
-      <div
-        class="h-2 w-[180px] overflow-hidden rounded-full bg-border/60 sm:w-[240px]"
-        role="progressbar"
-        :aria-valuenow="diskPercent ?? undefined"
-        aria-valuemin="0"
-        aria-valuemax="100"
-        :aria-label="t('serversPage.disk')"
-      >
-        <div class="h-full rounded-full transition-[width]" :class="diskToneBg" :style="{ width: diskWidth }" />
+    <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-divider px-4 py-2">
+      <span class="text-caption text-muted-foreground">{{ t('serversPage.disk') }}</span>
+      <strong class="text-body font-semibold tabular-nums" :class="diskToneText">{{ diskPercentText }}</strong>
+      <div class="w-45 shrink-0 sm:w-60">
+        <ProgressBar :value="diskPercent ?? 0" :label="t('serversPage.disk')" :tone="diskProgressTone" />
       </div>
-      <span v-if="diskPoint" class="text-[11.5px] text-muted-foreground">{{ formatBytes(diskPoint.usedBytes) }} / {{ formatBytes(diskPoint.totalBytes) }}</span>
-      <span class="text-[11.5px] text-muted-foreground sm:ml-auto">
+      <span v-if="diskPoint" class="text-caption text-muted-foreground">{{ formatBytes(diskPoint.usedBytes) }} / {{ formatBytes(diskPoint.totalBytes) }}</span>
+      <span class="text-caption text-muted-foreground sm:ml-auto">
         <template v-if="diskPoint">{{ t('serversPage.diskSampledAt') }} {{ formatDateTime(diskPoint.time, t('common.never')) }}</template>
         <template v-else>{{ t('serversPage.metrics.waitingSample') }}</template>
       </span>

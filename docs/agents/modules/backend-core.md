@@ -40,6 +40,7 @@
 - 应用部署控制面：`internal/orchestrator/`（Planner、Job lease、ObservationWriter、RuntimeReconcile worker）
 - 认证：`internal/modules/identity/`
 - 运行时设置：`internal/modules/settings/`
+- 外观设置：`internal/modules/appearance/`（服务器持久化主题/Mica/强调色 + 背景图上传/归一化/缩略图/公开外观；表 `appearance_settings`，文件 `<dataRoot>/appearance/<assetId>/`）
 - 指标设施：`internal/modules/observability/metricsfacility/`（单行配置、迁移播种、ReportConfig、清理设置）；指标采集/查询/清理：`internal/modules/observability/metrics/`（清理 provider 由设施提供）
 - 统一 HTTP 响应与路由注册契约：`internal/platform/http/`
 - 统一错误：`internal/platform/errors/`
@@ -54,7 +55,7 @@
 - Agent gRPC 契约包含 `PrepareRestart` 流式重启就绪检查（详见 servers.md）：Panel 在部署/重启 agent 前调用，避免打断 agent 发起的软件包升级；旧 agent 缺失该能力时 Panel 直接继续部署。
 - bootstrap bridge 在依赖尚未装配时必须返回明确错误，不能 nil pointer panic；相关防护由 `internal/bootstrap/panel/bridges_test.go` 覆盖。
 - `bootstrap/panel.New` 创建任务服务后会立即校验数据库中的 `running` 任务；当前进程内没有对应 execution 对象的任务会在其他后台服务启动前标记为失败。应用服务装配完成后启动 AppDB Job controller，由它恢复过期 lease、扫描 pending/failed_retryable Job，并通过 execution ID 与 lease token 继续收敛应用运行时；旧 lifecycle target 层已全部下线，不再读取。
-- API 统一挂在 `/api/v1/`。`/api/v1/auth/login`、`/api/v1/auth/session` 和只返回登录页标题/说明的 `GET /api/v1/settings/public-branding` 是开放入口，其余 API 经认证中间件保护。业务 API 路由由各模块的 `RegisterRoutes(*http.ServeMux, httpx.Middleware)` 注册，bootstrap 不再维护业务路径 switch。
+- API 统一挂在 `/api/v1/`。`/api/v1/auth/login`、`/api/v1/auth/session`、只返回登录页标题/说明的 `GET /api/v1/settings/public-branding` 与只返回主题/强调色/背景模糊缩略图的 `GET /api/v1/settings/public-appearance` 是开放入口，其余 API 经认证中间件保护。业务 API 路由由各模块的 `RegisterRoutes(*http.ServeMux, httpx.Middleware)` 注册，bootstrap 不再维护业务路径 switch。
 - 根路径由后端静态托管 `web/dist`；没有构建前端时返回纯文本后端运行提示。构建产物 `assets/` 下的 Vite 指纹资源响应 `Cache-Control: public, max-age=31536000, immutable`，其他非 HTML 静态资源缓存 1 天；`index.html` 和 SPA 回退响应使用 `Cache-Control: no-cache`，允许存储但每次发布重新验证，避免入口继续引用旧资源。
 - `GET /api/v1/system/version` 返回构建时注入的版本、通道（`release` 或 `dev`）、commit、仓库和缓存的最新版本状态。`internal/modules/systeminfo` 每 6 小时只读检查 GitHub 最新 Release；只有 `release` 通道且版本为三段数字核心版本（可带 `v` 前缀和预发布后缀）时才检查更新。未注入或无效通道按 `dev` 处理，不发起检查，也不提供下载或安装能力。
 - Debug 只读诊断按职责拆为 `GET /api/v1/debug/runtime`、`GET /api/v1/debug/tasks` 和 `GET /api/v1/debug/databases`，仅认证用户可访问，三类采集互不阻塞。runtime 提供进程与 Go runtime 内存/GC；tasks 提供 worker 状态和注册定义能力；databases 提供 app/log/metrics 连接池、文件/SQLite 页面大小、准确行数及表/索引空间。表级空间通过 SQLite `dbstat` 读取，不可用时只降级空间统计。响应不返回数据库路径、schema SQL、配置值、任务参数或任何业务记录与秘密。

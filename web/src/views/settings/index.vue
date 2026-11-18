@@ -1,35 +1,70 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
-import { useRoute } from 'vue-router';
-import { DatabaseBackup, KeyRound, Network, RefreshCcw, Save, Shield, Trash2, UploadCloud } from '@lucide/vue';
+import { computed, defineAsyncComponent, nextTick, onMounted, reactive, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { DatabaseBackup, KeyRound, Network, RefreshCcw, Save, Shield, Trash2, UploadCloud } from '@/icons';
 import { eventsApi } from '@/api/events';
 import { keyAssetsApi } from '@/api/keyAssets';
 import { runtimeTailscaleUpdate, settingsApi, tailscaleUpdate } from '@/api/settings';
 import { systemApi, type VersionInfo } from '@/api/system';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
+import Checkbox from '@/components/ui/Checkbox.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import FileUploadButton from '@/components/ui/FileUploadButton.vue';
 import Input from '@/components/ui/Input.vue';
+import NumberBox from '@/components/ui/NumberBox.vue';
 import Select from '@/components/ui/Select.vue';
 import Switch from '@/components/ui/Switch.vue';
 import Table from '@/components/ui/Table.vue';
+import Tabs from '@/components/ui/Tabs.vue';
 import Textarea from '@/components/ui/Textarea.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
-import SettingsPage from '@/components/templates/SettingsPage.vue';
+import SettingsCard from '@/components/patterns/SettingsCard.vue';
+import SettingsSection from '@/components/patterns/SettingsSection.vue';
 import { useI18n } from '@/i18n';
 import { useSessionStore } from '@/stores/session';
 import type { KeyAssetDto, SystemCertificateDto } from '@/types/keyAssets';
 import type { RestorePreflightResponse, RuntimeSettings, RuntimeUpdate, ServerVariableDefinition } from '@/types/settings';
 import { createLatestRequestGuard } from '@/views/_shared/requestState';
 import { formatDateTime } from '@/utils/datetime';
-import { parseTailscaleTags, tailscaleContainerTone, tailscaleFormState } from './tailscale';
+import AppearanceSectionSkeleton from './AppearanceSectionSkeleton.vue';
+import { parseTailscaleTags, tailscaleFormState } from './tailscale';
 
 const { t, locale, setLocale } = useI18n();
 const route = useRoute();
+const router = useRouter();
+
+/** 9 个设置分区；顺序即顶部 Tabs 顺序（默认落点 general 必须在第一位）。 */
+const sectionKeys = ['general', 'appearance', 'security', 'certificates', 'agent', 'tailscale', 'system-certificates', 'system', 'backups'] as const;
+type SectionKey = (typeof sectionKeys)[number];
+
+function isSectionKey(value: string): value is SectionKey {
+  return (sectionKeys as readonly string[]).includes(value);
+}
+
+/** 单一 `settings/:section?` 路由：分区只由 route.params.section 决定。 */
+function routeSectionValue(): string {
+  const raw = route.params.section;
+  return Array.isArray(raw) ? (raw[0] ?? '') : (raw ?? '');
+}
+
+const activeSection = ref<SectionKey>(isSectionKey(routeSectionValue()) ? routeSectionValue() as SectionKey : 'general');
+/** 分区内容滚动容器：切分区回到顶部，Tab header 不随内容滚走。 */
+const settingsScroll = ref<HTMLElement | null>(null);
+const appearanceSectionRef = ref<{ reload: () => Promise<void> } | null>(null);
+const refreshing = ref(false);
+// 外观分区按需加载：它消费共享 appearance store（带首屏缓存/DOM 应用），
+// 其它设置分区不需要把外观模块拉进同一个同步依赖图。loadingComponent 保证
+// 首次切到外观 tab 时不会空白一帧。
+const AppearanceSection = defineAsyncComponent({
+  loader: () => import('@/components/appearance/AppearanceSection.vue'),
+  loadingComponent: AppearanceSectionSkeleton,
+  delay: 0,
+  suspensible: false,
+});
 const session = useSessionStore();
 const notifyError = useErrorToast();
 const notifySuccess = useSuccessToast();
@@ -47,7 +82,6 @@ const systemCertificateColumns = computed(() => [
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
 ]);
 const tlsCertificates = ref<KeyAssetDto[]>([]);
-const activeSection = ref(sectionFromPath(route.path));
 const loading = ref(false);
 const listRequests = createLatestRequestGuard();
 const pending = ref('');
@@ -93,20 +127,65 @@ const form = reactive({
   restoreConfirm: false,
 });
 
-const sections = computed(() => [
-  { key: 'general', label: t('settingsPage.section.runtime'), to: '/settings/general' },
-  { key: 'security', label: t('settingsPage.section.security'), to: '/settings/security' },
-  { key: 'certificates', label: t('settingsPage.section.certificates'), to: '/settings/certificates' },
-  { key: 'agent', label: t('settingsPage.section.agent'), to: '/settings/agent' },
-  { key: 'tailscale', label: t('settingsPage.section.tailscale'), to: '/settings/tailscale' },
-  { key: 'system-certificates', label: t('settingsPage.section.systemCertificates'), to: '/settings/system-certificates' },
-  { key: 'system', label: t('settingsPage.section.system'), to: '/settings/system' },
-  { key: 'backups', label: t('settingsPage.section.backups'), to: '/settings/backups' },
+const sections = computed<Array<{ key: SectionKey; label: string }>>(() => [
+  { key: 'general', label: t('settingsPage.section.runtime') },
+  { key: 'appearance', label: t('settingsPage.section.appearance') },
+  { key: 'security', label: t('settingsPage.section.security') },
+  { key: 'certificates', label: t('settingsPage.section.certificates') },
+  { key: 'agent', label: t('settingsPage.section.agent') },
+  { key: 'tailscale', label: t('settingsPage.section.tailscale') },
+  { key: 'system-certificates', label: t('settingsPage.section.systemCertificates') },
+  { key: 'system', label: t('settingsPage.section.system') },
+  { key: 'backups', label: t('settingsPage.section.backups') },
 ]);
+/**
+ * 设置分区用共享 WinUI Tabs 作为顶部横向选择器（不再有第二条左侧导航）；
+ * value 是分区 key，与 `settings/:section?` 路由参数一一对应，直链/刷新/前进后退由 URL 驱动。
+ */
+const sectionTabs = computed(() => sections.value.map((section) => ({ label: section.label, value: section.key })));
+/** PageHeader 标题跟随当前分区（不再固定“设置”），避免“设置 → 运行时”双重标题。 */
+const activeSectionLabel = computed(() => sections.value.find((section) => section.key === activeSection.value)?.label ?? t('routes.settings.title'));
+
+function navigateSection(value: string) {
+  if (!isSectionKey(value)) return;
+  if (value === activeSection.value && routeSectionValue() === value) return;
+  void router.push({ name: 'settings', params: { section: value } });
+}
+
+function resetSectionScroll() {
+  void nextTick(() => {
+    if (settingsScroll.value) settingsScroll.value.scrollTop = 0;
+  });
+}
+
+/** 当前分区的刷新：始终重取设置数据；外观激活时并行刷新共享 appearance store。 */
+async function refreshCurrentSection() {
+  if (refreshing.value) return;
+  refreshing.value = true;
+  try {
+    const tasks: Array<Promise<void>> = [load()];
+    if (activeSection.value === 'appearance' && appearanceSectionRef.value) {
+      tasks.push(appearanceSectionRef.value.reload());
+    }
+    await Promise.all(tasks);
+  } finally {
+    refreshing.value = false;
+  }
+}
 const tokenOptions = computed(() => ['10m', '1h', '1d', '5d', '30d', 'never'].map((value) => ({ label: t(`settingsPage.token.${value}`), value })));const languageOptions = computed(() => [{ label: t('settingsPage.language.en'), value: 'en' }, { label: t('settingsPage.language.zh'), value: 'zh-CN' }]);
 const logOptions = computed(() => ['debug', 'info', 'warn', 'error'].map((value) => ({ label: value, value })));
 const panelTlsOptions = computed(() => tlsCertificates.value.map((certificate) => ({ label: certificate.name, value: certificate.id })));
 const jwtSecretValid = computed(() => form.jwtSecret.trim().length >= 16);
+/** NumberBox 使用 number|null；设置表单仍是字符串，保留原校验/保存负载逻辑。 */
+function toNumber(value: string): number | null {
+  const raw = value.trim();
+  if (!raw) return null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+function fromNumber(value: number | null): string {
+  return value === null ? '' : String(value);
+}
 const fieldErrors = computed<Record<string, string>>(() => {
   const errors: Record<string, string> = {};
   const positive: Array<keyof typeof form> = ['containerReportIntervalSeconds', 'remoteCommandTimeoutSeconds'];
@@ -128,9 +207,19 @@ const tailscaleTagResult = computed(() => parseTailscaleTags(form.tailscaleTags)
 const invalidTailscaleTags = computed(() => tailscaleTagResult.value.invalid);
 const tailscaleContainer = computed(() => runtime.value?.tailscale.container ?? null);
 
-watch(() => route.path, (path) => {
-  activeSection.value = sectionFromPath(path);
-});
+// 单条 settings/:section? 路由：只监听 section 参数，切分区不重挂载页面。
+watch(() => route.params.section, (raw) => {
+  const value = Array.isArray(raw) ? (raw[0] ?? '') : (raw ?? '');
+  if (value && !isSectionKey(value)) {
+    void router.replace({ name: 'settings', params: { section: 'general' } });
+    return;
+  }
+  const nextKey: SectionKey = isSectionKey(value) ? value : 'general';
+  if (activeSection.value !== nextKey) {
+    activeSection.value = nextKey;
+    resetSectionScroll();
+  }
+}, { immediate: true });
 watch(locale, (value) => {
   form.language = value;
   if (runtime.value) runtime.value = { ...runtime.value, language: value };
@@ -421,10 +510,6 @@ function certificateType(type: string) {
   return type ? t(`settingsPage.certificateType.${type}`) : t('common.notAvailable');
 }
 
-function sectionFromPath(path: string) {
-  return path.split('/').filter(Boolean).at(-1) || 'general';
-}
-
 const confirmIsDanger = computed(() => (
   confirmKind.value === 'restore'
   || confirmKind.value === 'system-certificate'
@@ -462,236 +547,487 @@ onMounted(load);
 </script>
 
 <template>
-  <ConsolePage :title="t('routes.settings.title')" :description="t('routes.settings.description')">
+  <ConsolePage width="content" :body-scroll="false" :title="activeSectionLabel" :description="t('routes.settings.description')">
     <template #actions>
-      <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
+      <Badge v-if="exportPending || restorePending" tone="warning">{{ restarting ? t('settingsPage.restarting') : t('settingsPage.pending') }}</Badge>
+      <Button size="sm" :loading="loading || refreshing" @click="refreshCurrentSection"><RefreshCcw />{{ t('common.refresh') }}</Button>
     </template>
 
-    <div class="relative grid h-full min-h-0 grid-cols-[260px_minmax(0,1fr)] gap-4 max-lg:grid-cols-1">
-      <aside class="min-h-0 overflow-auto rounded-2xl border border-border bg-card p-2 max-lg:overflow-visible">
-        <RouterLink v-for="section in sections" :key="section.key" :to="section.to" :aria-current="activeSection === section.key ? 'page' : undefined" class="motion-list-item mb-1 flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm hover:bg-accent" :class="activeSection === section.key ? 'bg-muted text-foreground' : 'text-muted-foreground'">
-          {{ section.label }}
-          <Badge v-if="section.key === 'backups' && (exportPending || restorePending)" tone="warning">{{ restarting ? t('settingsPage.restarting') : t('settingsPage.pending') }}</Badge>
-        </RouterLink>
-      </aside>
-      <LoadingOverlay v-if="loading && !runtime" />
-      <EmptyState v-else-if="error && !runtime" :title="t('common.loadFailed')" :description="error">
-        <template #actions>
-          <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
-        </template>
-      </EmptyState>
+    <!--
+      WinUI 3 Settings 页：TabView header 固定在内容区顶部，只有分区内容滚动；
+      9 个分区共用 SettingsSection/SettingsCard，保存动作在分区 footer，不再有整页保存。
+    -->
+    <Tabs
+      class="h-full min-h-0 w-full"
+      :model-value="activeSection"
+      :tabs="sectionTabs"
+      keep-panels
+      @update:model-value="navigateSection"
+    >
+      <div ref="settingsScroll" data-settings-scroll class="h-full min-h-0 overflow-y-auto">
+        <div class="grid gap-4 pb-6">
+          <section v-if="actionError" class="grid gap-2">
+            <div v-if="actionError" class="rounded-overlay border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ actionError }}</div>
+          </section>
 
-      <SettingsPage v-else>
-        <section v-if="actionError" class="grid gap-2">
-          <div v-if="actionError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ actionError }}</div>
-        </section>
+          <AppearanceSection v-if="activeSection === 'appearance'" ref="appearanceSectionRef" />
 
-        <section v-if="activeSection === 'general'" class="grid gap-4 rounded-2xl border border-border bg-card p-4">
-          <h2>{{ t('settingsPage.section.runtime') }}</h2>
-          <div class="grid grid-cols-2 gap-3 max-md:grid-cols-1">
-            <label class="grid gap-1 text-sm">{{ t('settingsPage.containerInterval') }}<Input v-model="form.containerReportIntervalSeconds" type="number" min="1" :invalid="Boolean(fieldErrors.containerReportIntervalSeconds)" /><span v-if="fieldErrors.containerReportIntervalSeconds" class="text-xs text-danger">{{ t(fieldErrors.containerReportIntervalSeconds) }}</span></label>
-            <label class="grid gap-1 text-sm">{{ t('settingsPage.language') }}<Select v-model="form.language" :options="languageOptions" /></label>
-            <label class="grid gap-1 text-sm">{{ t('settingsPage.logLevel') }}<Select v-model="form.logLevel" :options="logOptions" /></label>
-            <label class="grid gap-1 text-sm">{{ t('settingsPage.reconcileTrace') }}<Switch v-model="form.reconcileTraceEnabled" :label="t('settingsPage.reconcileTrace')" /><span class="text-xs text-muted-foreground">{{ t('settingsPage.reconcileTraceHint') }}</span></label>
-          </div>
-          <Button class="w-fit" variant="primary" :disabled="!runtimeSectionValid" :loading="pending === 'save-runtime'" @click="saveRuntimeSection('runtime')"><Save />{{ t('settingsPage.saveSection') }}</Button>
-          <div class="grid gap-3 border-t border-border pt-4">
-            <div class="min-w-0">
-              <h3 class="text-danger">{{ t('settingsPage.clearEventsLogs') }}</h3>
-              <p class="m-0 text-sm text-muted-foreground">{{ t('settingsPage.clearEventsLogsHint') }}</p>
-            </div>
-            <Button class="w-fit" variant="danger" :loading="pending === 'clear-events-logs'" @click="openConfirm('clear-events-logs')"><Trash2 />{{ t('settingsPage.clearEventsLogs') }}</Button>
-          </div>
-        </section>
-
-        <section v-else-if="activeSection === 'security'" class="grid gap-4 rounded-2xl border border-border bg-card p-4">
-          <h2>{{ t('settingsPage.section.security') }}</h2>
-          <div class="grid grid-cols-2 gap-3 max-md:grid-cols-1">
-            <label class="grid gap-1 text-sm">{{ t('settingsPage.tokenExpiration') }}<Select v-model="form.tokenExpiration" :options="tokenOptions" /></label>
-            <label class="grid gap-1 text-sm">{{ t('settingsPage.remoteTimeout') }}<Input v-model="form.remoteCommandTimeoutSeconds" type="number" min="1" :invalid="Boolean(fieldErrors.remoteCommandTimeoutSeconds)" /><span v-if="fieldErrors.remoteCommandTimeoutSeconds" class="text-xs text-danger">{{ t(fieldErrors.remoteCommandTimeoutSeconds) }}</span></label>
-          </div>
-          <div class="grid gap-3 border-t border-border pt-4">
-            <div class="flex flex-wrap items-center justify-between gap-3 text-sm">
-              <span class="text-muted-foreground">{{ t('settingsPage.jwtSecretConfigured') }}</span>
-              <Badge :tone="runtime?.jwtSecretConfigured ? 'success' : 'warning'">{{ runtime?.jwtSecretConfigured ? t('state.healthy') : t('state.warning') }}</Badge>
-            </div>
-            <label class="grid gap-1 text-sm">{{ t('settingsPage.jwtSecret') }}<Input v-model="form.jwtSecret" type="password" :placeholder="t('settingsPage.jwtSecretHint')" /></label>
-            <Button class="w-fit" :disabled="!form.jwtSecret.trim()" :loading="pending === 'jwt-secret'" @click="resetJwtSecret"><KeyRound />{{ t('settingsPage.resetJwtSecret') }}</Button>
-          </div>
-          <Button class="w-fit" variant="primary" :disabled="Boolean(fieldErrors.remoteCommandTimeoutSeconds)" :loading="pending === 'save-security'" @click="saveRuntimeSection('security')"><Shield />{{ t('settingsPage.saveSection') }}</Button>
-        </section>
-
-        <section v-else-if="activeSection === 'certificates'" class="grid gap-4 rounded-2xl border border-border bg-card p-4">
-          <h2>{{ t('settingsPage.section.certificates') }}</h2>
-          <div class="grid gap-3 border-t border-border pt-4">
-            <h3>{{ t('settingsPage.panelHttps') }}</h3>
-            <label class="grid gap-1 text-sm">{{ t('settingsPage.panelDomain') }}<Input v-model="form.panelDomain" /></label>
-            <label class="grid gap-1 text-sm">{{ t('settingsPage.panelTlsCertificate') }}<Select v-model="form.panelTlsCertificateId" :options="panelTlsOptions" /></label>
-            <p class="m-0 text-xs text-muted-foreground">{{ t('settingsPage.panelHttpsHint') }}</p>
-          </div>
-          <label class="grid gap-1 text-sm">{{ t('settingsPage.certificateEmail') }}<Input v-model="form.certificateEmail" /></label>
-          <label class="grid gap-1 text-sm">{{ t('settingsPage.dnsDelay') }}<Input v-model="form.dnsPropagationDelaySeconds" type="number" min="0" :invalid="Boolean(fieldErrors.dnsPropagationDelaySeconds)" /><span v-if="fieldErrors.dnsPropagationDelaySeconds" class="text-xs text-danger">{{ t(fieldErrors.dnsPropagationDelaySeconds) }}</span></label>
-          <Button class="w-fit" variant="primary" :disabled="Boolean(fieldErrors.dnsPropagationDelaySeconds)" :loading="pending === 'save-certificates'" @click="saveRuntimeSection('certificates')"><Save />{{ t('settingsPage.saveSection') }}</Button>
-        </section>
-
-        <section v-else-if="activeSection === 'agent'" class="grid gap-4 rounded-2xl border border-border bg-card p-4">
-          <h2>{{ t('settingsPage.section.agent') }}</h2>
-          <p class="m-0 text-sm text-muted-foreground">{{ t('settingsPage.agentDownloadHint') }}</p>
-          <label class="grid gap-1 text-sm">
-            {{ t('settingsPage.agentDownloadBaseUrl') }}
-            <Input v-model="form.agentDownloadBaseUrl" :placeholder="t('settingsPage.agentDownloadBaseUrlPlaceholder')" />
-            <span class="text-xs text-muted-foreground">{{ t('settingsPage.agentDownloadBaseUrlHint') }}</span>
-          </label>
-          <label class="grid gap-1 text-sm">
-            {{ t('settingsPage.agentTransferTimeout') }}
-            <Input v-model="form.agentTransferTimeoutSeconds" type="number" :min="agentTransferTimeoutMin" :max="agentTransferTimeoutMax" :invalid="Boolean(fieldErrors.agentTransferTimeoutSeconds)" />
-            <span v-if="fieldErrors.agentTransferTimeoutSeconds" class="text-xs text-danger">{{ t(fieldErrors.agentTransferTimeoutSeconds) }}</span>
-            <span v-else class="text-xs text-muted-foreground">{{ t('settingsPage.agentTransferTimeoutHint') }}</span>
-          </label>
-          <label class="grid gap-1 text-sm">
-            {{ t('settingsPage.agentDownloadVerifyTls') }}
-            <Switch v-model="form.agentDownloadVerifyTls" :label="t('settingsPage.agentDownloadVerifyTls')" />
-            <span class="text-xs text-muted-foreground">{{ t('settingsPage.agentDownloadVerifyTlsHint') }}</span>
-          </label>
-          <Button class="w-fit" variant="primary" :disabled="Boolean(fieldErrors.agentTransferTimeoutSeconds)" :loading="pending === 'save-agent'" @click="saveRuntimeSection('agent')"><Save />{{ t('settingsPage.saveSection') }}</Button>
-        </section>
-
-        <section v-else-if="activeSection === 'tailscale'" class="grid gap-4 rounded-2xl border border-border bg-card p-4">
-          <h2>{{ t('settingsPage.section.tailscale') }}</h2>
-          <p class="m-0 text-sm text-muted-foreground">{{ t('settingsPage.tailscale.hint') }}</p>
-          <div v-if="!runtime?.tailscale.authKeyConfigured" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('settingsPage.tailscale.authKeyMissing') }}</div>
-
-          <div class="grid gap-3 border-t border-border pt-4">
-            <div class="flex flex-wrap items-center justify-between gap-3 text-sm">
-              <span class="text-muted-foreground">{{ t('settingsPage.tailscale.authKeyConfigured') }}</span>
-              <Badge :tone="runtime?.tailscale.authKeyConfigured ? 'success' : 'warning'">{{ runtime?.tailscale.authKeyConfigured ? t('state.healthy') : t('state.warning') }}</Badge>
-            </div>
-            <label class="grid gap-1 text-sm">
-              {{ t('settingsPage.tailscale.authKey') }}
-              <Input v-model="form.tailscaleAuthKey" type="password" :placeholder="t('settingsPage.tailscale.authKeyPlaceholder')" />
-              <span class="text-xs text-muted-foreground">{{ t('settingsPage.tailscale.authKeyHint') }}</span>
-            </label>
-            <Button class="w-fit" variant="danger" :disabled="!runtime?.tailscale.authKeyConfigured" :loading="pending === 'clear-tailscale-auth-key'" @click="openConfirm('tailscale-auth-key')"><KeyRound />{{ t('settingsPage.tailscale.clearAuthKey') }}</Button>
+          <div v-else-if="loading && !runtime" class="relative min-h-48" aria-busy="true">
+            <LoadingOverlay :label="t('common.loading')" />
           </div>
 
-          <label class="grid gap-1 text-sm">
-            {{ t('settingsPage.tailscale.tags') }}
-            <Input v-model="form.tailscaleTags" :invalid="invalidTailscaleTags.length > 0" :placeholder="t('settingsPage.tailscale.tagsPlaceholder')" />
-            <span v-if="invalidTailscaleTags.length" class="text-xs text-danger">{{ t('settingsPage.tailscale.tagsInvalid', { tags: invalidTailscaleTags.join(', ') }) }}</span>
-            <span v-else class="text-xs text-muted-foreground">{{ t('settingsPage.tailscale.tagsHint') }}</span>
-          </label>
-          <Button class="w-fit" variant="primary" :disabled="invalidTailscaleTags.length > 0" :loading="pending === 'save-tailscale'" @click="saveRuntimeSection('tailscale')"><Save />{{ t('settingsPage.saveSection') }}</Button>
+          <EmptyState v-else-if="error && !runtime" variant="inset" :title="t('common.loadFailed')" :description="error">
+            <template #actions>
+              <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
+            </template>
+          </EmptyState>
 
-          <div class="grid gap-3 border-t border-border pt-4">
-            <div class="flex flex-wrap items-center justify-between gap-3">
-              <div class="min-w-0">
-                <h3>{{ t('settingsPage.tailscale.containerTitle') }}</h3>
-                <p class="m-0 text-xs text-muted-foreground">{{ t('settingsPage.tailscale.containerHint') }}</p>
+          <SettingsSection v-else-if="activeSection === 'general'">
+            <SettingsCard
+              :title="t('settingsPage.containerInterval')"
+              :invalid="Boolean(fieldErrors.containerReportIntervalSeconds)"
+            >
+              <template #control>
+                <NumberBox
+                  id="settings-container-interval"
+                  :aria-label="t('settingsPage.containerInterval')"
+                  :aria-describedby="fieldErrors.containerReportIntervalSeconds ? 'settings-container-interval-error' : undefined"
+                  class="w-full sm:w-44"
+                  :min="1"
+                  :step="1"
+                  :invalid="Boolean(fieldErrors.containerReportIntervalSeconds)"
+                  :model-value="toNumber(form.containerReportIntervalSeconds)"
+                  @update:model-value="form.containerReportIntervalSeconds = fromNumber($event)"
+                />
+              </template>
+              <template v-if="fieldErrors.containerReportIntervalSeconds" #hint>
+                <span id="settings-container-interval-error" class="text-danger">{{ t(fieldErrors.containerReportIntervalSeconds) }}</span>
+              </template>
+            </SettingsCard>
+
+            <SettingsCard :title="t('settingsPage.language')">
+              <template #control>
+                <Select v-model="form.language" :aria-label="t('settingsPage.language')" class="w-full sm:w-64" :options="languageOptions" />
+              </template>
+            </SettingsCard>
+
+            <SettingsCard :title="t('settingsPage.logLevel')">
+              <template #control>
+                <Select v-model="form.logLevel" :aria-label="t('settingsPage.logLevel')" class="w-full sm:w-64" :options="logOptions" />
+              </template>
+            </SettingsCard>
+
+            <SettingsCard :title="t('settingsPage.reconcileTrace')" :description="t('settingsPage.reconcileTraceHint')">
+              <template #control>
+                <Switch v-model="form.reconcileTraceEnabled" :label="t('settingsPage.reconcileTrace')" />
+              </template>
+            </SettingsCard>
+
+            <SettingsCard>
+              <div class="flex min-w-0 flex-wrap items-center justify-between gap-3">
+                <div class="min-w-0">
+                  <h3 class="m-0 text-sm font-medium leading-5 text-danger">{{ t('settingsPage.clearEventsLogs') }}</h3>
+                  <p class="m-0 text-xs leading-4 text-muted-foreground">{{ t('settingsPage.clearEventsLogsHint') }}</p>
+                </div>
+                <Button variant="danger" :loading="pending === 'clear-events-logs'" @click="openConfirm('clear-events-logs')">
+                  <Trash2 />{{ t('settingsPage.clearEventsLogs') }}
+                </Button>
               </div>
-              <Button size="sm" variant="secondary" :disabled="!tailscaleContainer?.available" :loading="pending === 'apply-tailscale'" @click="applyTailscale"><Network />{{ t('settingsPage.tailscale.apply') }}</Button>
+            </SettingsCard>
+
+            <template #footer>
+              <Button variant="primary" :disabled="!runtimeSectionValid" :loading="pending === 'save-runtime'" @click="saveRuntimeSection('runtime')">
+                <Save />{{ t('settingsPage.saveSection') }}
+              </Button>
+            </template>
+          </SettingsSection>
+
+          <SettingsSection v-else-if="activeSection === 'security'">
+            <SettingsCard :title="t('settingsPage.tokenExpiration')">
+              <template #control>
+                <Select v-model="form.tokenExpiration" :aria-label="t('settingsPage.tokenExpiration')" class="w-full sm:w-64" :options="tokenOptions" />
+              </template>
+            </SettingsCard>
+
+            <SettingsCard
+              :title="t('settingsPage.remoteTimeout')"
+              :invalid="Boolean(fieldErrors.remoteCommandTimeoutSeconds)"
+            >
+              <template #control>
+                <NumberBox
+                  id="settings-remote-timeout"
+                  :aria-label="t('settingsPage.remoteTimeout')"
+                  :aria-describedby="fieldErrors.remoteCommandTimeoutSeconds ? 'settings-remote-timeout-error' : undefined"
+                  class="w-full sm:w-44"
+                  :min="1"
+                  :step="1"
+                  :invalid="Boolean(fieldErrors.remoteCommandTimeoutSeconds)"
+                  :model-value="toNumber(form.remoteCommandTimeoutSeconds)"
+                  @update:model-value="form.remoteCommandTimeoutSeconds = fromNumber($event)"
+                />
+              </template>
+              <template v-if="fieldErrors.remoteCommandTimeoutSeconds" #hint>
+                <span id="settings-remote-timeout-error" class="text-danger">{{ t(fieldErrors.remoteCommandTimeoutSeconds) }}</span>
+              </template>
+            </SettingsCard>
+
+            <SettingsCard :title="t('settingsPage.jwtSecretConfigured')">
+              <template #control>
+                <Badge :tone="runtime?.jwtSecretConfigured ? 'success' : 'warning'">{{ runtime?.jwtSecretConfigured ? t('state.healthy') : t('state.warning') }}</Badge>
+              </template>
+            </SettingsCard>
+
+            <SettingsCard :title="t('settingsPage.jwtSecret')">
+              <template #control>
+                <Input v-model="form.jwtSecret" :aria-label="t('settingsPage.jwtSecret')" class="w-full sm:w-64" type="password" :placeholder="t('settingsPage.jwtSecretHint')" />
+              </template>
+            </SettingsCard>
+
+            <SettingsCard>
+              <template #control>
+                <Button :disabled="!form.jwtSecret.trim()" :loading="pending === 'jwt-secret'" @click="resetJwtSecret">
+                  <KeyRound />{{ t('settingsPage.resetJwtSecret') }}
+                </Button>
+              </template>
+            </SettingsCard>
+
+            <template #footer>
+              <Button variant="primary" :disabled="Boolean(fieldErrors.remoteCommandTimeoutSeconds)" :loading="pending === 'save-security'" @click="saveRuntimeSection('security')">
+                <Shield />{{ t('settingsPage.saveSection') }}
+              </Button>
+            </template>
+          </SettingsSection>
+
+          <SettingsSection v-else-if="activeSection === 'certificates'" :description="t('settingsPage.panelHttpsHint')">
+            <SettingsCard :title="t('settingsPage.panelDomain')">
+              <template #control>
+                <Input v-model="form.panelDomain" :aria-label="t('settingsPage.panelDomain')" class="w-full sm:w-64" />
+              </template>
+            </SettingsCard>
+
+            <SettingsCard :title="t('settingsPage.panelTlsCertificate')">
+              <template #control>
+                <Select v-model="form.panelTlsCertificateId" :aria-label="t('settingsPage.panelTlsCertificate')" class="w-full sm:w-64" :options="panelTlsOptions" />
+              </template>
+            </SettingsCard>
+
+            <SettingsCard :title="t('settingsPage.certificateEmail')">
+              <template #control>
+                <Input v-model="form.certificateEmail" :aria-label="t('settingsPage.certificateEmail')" class="w-full sm:w-72" />
+              </template>
+            </SettingsCard>
+
+            <SettingsCard
+              :title="t('settingsPage.dnsDelay')"
+              :invalid="Boolean(fieldErrors.dnsPropagationDelaySeconds)"
+            >
+              <template #control>
+                <NumberBox
+                  id="settings-dns-delay"
+                  :aria-label="t('settingsPage.dnsDelay')"
+                  :aria-describedby="fieldErrors.dnsPropagationDelaySeconds ? 'settings-dns-delay-error' : undefined"
+                  class="w-full sm:w-44"
+                  :min="0"
+                  :step="1"
+                  :invalid="Boolean(fieldErrors.dnsPropagationDelaySeconds)"
+                  :model-value="toNumber(form.dnsPropagationDelaySeconds)"
+                  @update:model-value="form.dnsPropagationDelaySeconds = fromNumber($event)"
+                />
+              </template>
+              <template v-if="fieldErrors.dnsPropagationDelaySeconds" #hint>
+                <span id="settings-dns-delay-error" class="text-danger">{{ t(fieldErrors.dnsPropagationDelaySeconds) }}</span>
+              </template>
+            </SettingsCard>
+
+            <template #footer>
+              <Button variant="primary" :disabled="Boolean(fieldErrors.dnsPropagationDelaySeconds)" :loading="pending === 'save-certificates'" @click="saveRuntimeSection('certificates')">
+                <Save />{{ t('settingsPage.saveSection') }}
+              </Button>
+            </template>
+          </SettingsSection>
+
+          <SettingsSection v-else-if="activeSection === 'agent'" :description="t('settingsPage.agentDownloadHint')">
+            <SettingsCard :title="t('settingsPage.agentDownloadBaseUrl')" :description="t('settingsPage.agentDownloadBaseUrlHint')">
+              <template #control>
+                <Input
+                  v-model="form.agentDownloadBaseUrl"
+                  :aria-label="t('settingsPage.agentDownloadBaseUrl')"
+                  class="w-full sm:w-72"
+                  :placeholder="t('settingsPage.agentDownloadBaseUrlPlaceholder')"
+                />
+              </template>
+            </SettingsCard>
+
+            <SettingsCard
+              :title="t('settingsPage.agentTransferTimeout')"
+              :description="t('settingsPage.agentTransferTimeoutHint')"
+              :invalid="Boolean(fieldErrors.agentTransferTimeoutSeconds)"
+            >
+              <template #control>
+                <NumberBox
+                  id="settings-agent-transfer-timeout"
+                  :aria-label="t('settingsPage.agentTransferTimeout')"
+                  :aria-describedby="fieldErrors.agentTransferTimeoutSeconds ? 'settings-agent-transfer-timeout-error' : undefined"
+                  class="w-full sm:w-44"
+                  :min="agentTransferTimeoutMin"
+                  :max="agentTransferTimeoutMax"
+                  :step="1"
+                  :invalid="Boolean(fieldErrors.agentTransferTimeoutSeconds)"
+                  :model-value="toNumber(form.agentTransferTimeoutSeconds)"
+                  @update:model-value="form.agentTransferTimeoutSeconds = fromNumber($event)"
+                />
+              </template>
+              <template v-if="fieldErrors.agentTransferTimeoutSeconds" #hint>
+                <span id="settings-agent-transfer-timeout-error" class="text-danger">{{ t(fieldErrors.agentTransferTimeoutSeconds) }}</span>
+              </template>
+            </SettingsCard>
+
+            <SettingsCard :title="t('settingsPage.agentDownloadVerifyTls')" :description="t('settingsPage.agentDownloadVerifyTlsHint')">
+              <template #control>
+                <Switch v-model="form.agentDownloadVerifyTls" :label="t('settingsPage.agentDownloadVerifyTls')" />
+              </template>
+            </SettingsCard>
+
+            <template #footer>
+              <Button variant="primary" :disabled="Boolean(fieldErrors.agentTransferTimeoutSeconds)" :loading="pending === 'save-agent'" @click="saveRuntimeSection('agent')">
+                <Save />{{ t('settingsPage.saveSection') }}
+              </Button>
+            </template>
+          </SettingsSection>
+
+          <SettingsSection v-else-if="activeSection === 'tailscale'" :description="t('settingsPage.tailscale.hint')">
+            <SettingsCard v-if="!runtime?.tailscale.authKeyConfigured">
+              <div class="rounded-control border border-warning-border bg-warning-bg px-3 py-2 text-sm text-warning">{{ t('settingsPage.tailscale.authKeyMissing') }}</div>
+            </SettingsCard>
+
+            <SettingsCard :title="t('settingsPage.tailscale.authKeyConfigured')">
+              <template #control>
+                <Badge :tone="runtime?.tailscale.authKeyConfigured ? 'success' : 'warning'">{{ runtime?.tailscale.authKeyConfigured ? t('state.healthy') : t('state.warning') }}</Badge>
+              </template>
+            </SettingsCard>
+
+            <SettingsCard :title="t('settingsPage.tailscale.authKey')" :description="t('settingsPage.tailscale.authKeyHint')">
+              <template #control>
+                <Input v-model="form.tailscaleAuthKey" :aria-label="t('settingsPage.tailscale.authKey')" class="w-full sm:w-64" type="password" :placeholder="t('settingsPage.tailscale.authKeyPlaceholder')" />
+              </template>
+            </SettingsCard>
+
+            <SettingsCard>
+              <template #control>
+                <Button variant="danger" :disabled="!runtime?.tailscale.authKeyConfigured" :loading="pending === 'clear-tailscale-auth-key'" @click="openConfirm('tailscale-auth-key')">
+                  <KeyRound />{{ t('settingsPage.tailscale.clearAuthKey') }}
+                </Button>
+              </template>
+            </SettingsCard>
+
+            <SettingsCard :title="t('settingsPage.tailscale.tags')" :invalid="invalidTailscaleTags.length > 0">
+              <template #control>
+                <Input
+                  v-model="form.tailscaleTags"
+                  :aria-label="t('settingsPage.tailscale.tags')"
+                  class="w-full sm:w-72"
+                  :invalid="invalidTailscaleTags.length > 0"
+                  :placeholder="t('settingsPage.tailscale.tagsPlaceholder')"
+                />
+              </template>
+              <template #description>
+                <span :class="invalidTailscaleTags.length ? 'text-xs leading-4 text-danger' : 'text-xs leading-4 text-muted-foreground'">
+                  {{ invalidTailscaleTags.length ? t('settingsPage.tailscale.tagsInvalid', { tags: invalidTailscaleTags.join(', ') }) : t('settingsPage.tailscale.tagsHint') }}
+                </span>
+              </template>
+            </SettingsCard>
+
+            <template #footer>
+              <Button variant="primary" :disabled="invalidTailscaleTags.length > 0" :loading="pending === 'save-tailscale'" @click="saveRuntimeSection('tailscale')">
+                <Save />{{ t('settingsPage.saveSection') }}
+              </Button>
+            </template>
+
+            <SettingsCard :title="t('settingsPage.tailscale.containerTitle')" :description="t('settingsPage.tailscale.containerHint')">
+              <template #control>
+                <Button size="sm" variant="secondary" :disabled="!tailscaleContainer?.available" :loading="pending === 'apply-tailscale'" @click="applyTailscale">
+                  <Network />{{ t('settingsPage.tailscale.apply') }}
+                </Button>
+              </template>
+            </SettingsCard>
+
+            <SettingsCard v-if="tailscaleContainer?.available">
+              <div class="grid gap-3">
+                <div class="flex flex-wrap items-center gap-2">
+                  <Badge tone="info">{{ t('settingsPage.tailscale.available') }}</Badge>
+                  <Badge :tone="tailscaleContainer.running ? 'success' : 'neutral'">{{ tailscaleContainer.running ? t('settingsPage.tailscale.running') : t('settingsPage.tailscale.stopped') }}</Badge>
+                  <Badge :tone="tailscaleContainer.loggedIn ? 'success' : 'warning'">{{ tailscaleContainer.loggedIn ? t('settingsPage.tailscale.loggedIn') : t('settingsPage.tailscale.loggedOut') }}</Badge>
+                </div>
+                <div class="grid gap-3 text-sm lg:grid-cols-2-safe">
+                  <div class="min-w-0"><span class="text-muted-foreground">{{ t('settingsPage.tailscale.hostname') }}</span><strong class="block truncate text-foreground">{{ tailscaleContainer.hostname || t('common.notAvailable') }}</strong></div>
+                  <div class="min-w-0"><span class="text-muted-foreground">{{ t('settingsPage.tailscale.version') }}</span><strong class="block truncate text-foreground">{{ tailscaleContainer.version || t('common.notAvailable') }}</strong></div>
+                  <div class="min-w-0"><span class="text-muted-foreground">{{ t('settingsPage.tailscale.ipv4') }}</span><strong class="block truncate font-mono text-xs text-foreground">{{ tailscaleContainer.ipv4 || t('common.notAvailable') }}</strong></div>
+                  <div class="min-w-0"><span class="text-muted-foreground">{{ t('settingsPage.tailscale.ipv6') }}</span><strong class="block truncate font-mono text-xs text-foreground">{{ tailscaleContainer.ipv6 || t('common.notAvailable') }}</strong></div>
+                  <div class="min-w-0"><span class="text-muted-foreground">{{ t('settingsPage.tailscale.backendState') }}</span><strong class="block truncate text-foreground">{{ tailscaleContainer.backendState || t('common.notAvailable') }}</strong></div>
+                  <div class="min-w-0"><span class="text-muted-foreground">{{ t('settingsPage.tailscale.updatedAt') }}</span><strong class="block text-foreground">{{ formatDateTime(tailscaleContainer.updatedAt, t('common.never')) }}</strong></div>
+                </div>
+                <div v-if="tailscaleContainer.lastError" class="grid gap-1 rounded-control border border-danger-border bg-danger-bg px-3 py-2 text-sm text-danger">
+                  <strong>{{ t('settingsPage.tailscale.lastError') }}</strong>
+                  <span class="break-words">{{ tailscaleContainer.lastError }}</span>
+                </div>
+                <p class="m-0 text-xs text-muted-foreground">{{ t('settingsPage.tailscale.applyHint') }}</p>
+              </div>
+            </SettingsCard>
+
+            <SettingsCard v-else>
+              <EmptyState variant="inset" :title="t('settingsPage.tailscale.unavailableTitle')" :description="t('settingsPage.tailscale.unavailableHint')" />
+            </SettingsCard>
+          </SettingsSection>
+
+          <SettingsSection v-else-if="activeSection === 'system-certificates'" :description="t('settingsPage.systemCertificatesHint')">
+            <EmptyState v-if="!systemCertificates.length" variant="inset" :title="t('settingsPage.systemCertificatesEmpty')" :description="t('settingsPage.systemCertificatesEmptyHint')" />
+            <div v-else class="p-3">
+              <Table
+                :framed="false"
+                row-height="auto"
+                :columns="systemCertificateColumns"
+                :rows="systemCertificates"
+                row-key="id"
+              >
+                <template #name="{ row }">
+                  <strong class="block max-w-72 truncate text-foreground">{{ row.name }}</strong>
+                  <span class="block max-w-72 truncate text-xs text-muted-foreground">{{ row.serverName ? t('settingsPage.systemCertificateServer', { server: row.serverName }) : t('settingsPage.systemCertificateBuiltIn') }}</span>
+                </template>
+                <template #type="{ row }">
+                  <Badge tone="info">{{ certificateType(row.type) }}</Badge>
+                </template>
+                <template #status="{ row }">
+                  <Badge :tone="certificateTone(row.status)">{{ certificateStatus(row.status) }}</Badge>
+                </template>
+                <template #fingerprint="{ row }">
+                  <span class="panel-mono block max-w-72 truncate text-xs text-muted-foreground">{{ row.fingerprint || t('common.notAvailable') }}</span>
+                </template>
+                <template #expiresAt="{ row }">
+                  <span class="text-muted-foreground">{{ formatDateTime(row.notAfter, t('common.notAvailable')) }}</span>
+                </template>
+                <template #actions="{ row }">
+                  <Button class="w-fit" :disabled="!row.canReset" :loading="pending === `system-certificate-${row.id}`" @click="openSystemCertificateConfirm(row)"><KeyRound />{{ t('settingsPage.systemCertificateReset') }}</Button>
+                </template>
+              </Table>
             </div>
-            <template v-if="tailscaleContainer?.available">
-              <div class="flex flex-wrap items-center gap-2">
-                <Badge tone="info">{{ t('settingsPage.tailscale.available') }}</Badge>
-                <Badge :tone="tailscaleContainer.running ? 'success' : 'neutral'">{{ tailscaleContainer.running ? t('settingsPage.tailscale.running') : t('settingsPage.tailscale.stopped') }}</Badge>
-                <Badge :tone="tailscaleContainer.loggedIn ? 'success' : 'warning'">{{ tailscaleContainer.loggedIn ? t('settingsPage.tailscale.loggedIn') : t('settingsPage.tailscale.loggedOut') }}</Badge>
-              </div>
-              <div class="grid gap-3 text-sm lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-                <div class="min-w-0"><span class="text-muted-foreground">{{ t('settingsPage.tailscale.hostname') }}</span><strong class="block truncate text-foreground">{{ tailscaleContainer.hostname || t('common.notAvailable') }}</strong></div>
-                <div class="min-w-0"><span class="text-muted-foreground">{{ t('settingsPage.tailscale.version') }}</span><strong class="block truncate text-foreground">{{ tailscaleContainer.version || t('common.notAvailable') }}</strong></div>
-                <div class="min-w-0"><span class="text-muted-foreground">{{ t('settingsPage.tailscale.ipv4') }}</span><strong class="block truncate font-mono text-xs text-foreground">{{ tailscaleContainer.ipv4 || t('common.notAvailable') }}</strong></div>
-                <div class="min-w-0"><span class="text-muted-foreground">{{ t('settingsPage.tailscale.ipv6') }}</span><strong class="block truncate font-mono text-xs text-foreground">{{ tailscaleContainer.ipv6 || t('common.notAvailable') }}</strong></div>
-                <div class="min-w-0"><span class="text-muted-foreground">{{ t('settingsPage.tailscale.backendState') }}</span><strong class="block truncate text-foreground">{{ tailscaleContainer.backendState || t('common.notAvailable') }}</strong></div>
-                <div class="min-w-0"><span class="text-muted-foreground">{{ t('settingsPage.tailscale.updatedAt') }}</span><strong class="block text-foreground">{{ formatDateTime(tailscaleContainer.updatedAt, t('common.never')) }}</strong></div>
-              </div>
-              <div v-if="tailscaleContainer.lastError" class="grid gap-1 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
-                <strong>{{ t('settingsPage.tailscale.lastError') }}</strong>
-                <span class="break-words">{{ tailscaleContainer.lastError }}</span>
-              </div>
-              <p class="m-0 text-xs text-muted-foreground">{{ t('settingsPage.tailscale.applyHint') }}</p>
-            </template>
-            <EmptyState v-else :title="t('settingsPage.tailscale.unavailableTitle')" :description="t('settingsPage.tailscale.unavailableHint')" />
-          </div>
-        </section>
+          </SettingsSection>
 
-        <section v-else-if="activeSection === 'system-certificates'" class="grid gap-4 rounded-2xl border border-border bg-card p-4">
-          <h2>{{ t('settingsPage.section.systemCertificates') }}</h2>
-          <p class="m-0 text-sm text-muted-foreground">{{ t('settingsPage.systemCertificatesHint') }}</p>
-          <EmptyState v-if="!systemCertificates.length" :title="t('settingsPage.systemCertificatesEmpty')" :description="t('settingsPage.systemCertificatesEmptyHint')" />
-          <Table
-            v-else
-            :framed="false"
-            :columns="systemCertificateColumns"
-            :rows="systemCertificates"
-            row-key="id"
-          >
-            <template #name="{ row }">
-              <strong class="block max-w-[18rem] truncate text-foreground">{{ row.name }}</strong>
-              <span class="block max-w-[18rem] truncate text-xs text-muted-foreground">{{ row.serverName ? t('settingsPage.systemCertificateServer', { server: row.serverName }) : t('settingsPage.systemCertificateBuiltIn') }}</span>
-            </template>
-            <template #type="{ row }">
-              <Badge tone="info">{{ certificateType(row.type) }}</Badge>
-            </template>
-            <template #status="{ row }">
-              <Badge :tone="certificateTone(row.status)">{{ certificateStatus(row.status) }}</Badge>
-            </template>
-            <template #fingerprint="{ row }">
-              <span class="panel-mono block max-w-[18rem] truncate text-xs text-muted-foreground">{{ row.fingerprint || t('common.notAvailable') }}</span>
-            </template>
-            <template #expiresAt="{ row }">
-              <span class="text-muted-foreground">{{ formatDateTime(row.notAfter, t('common.notAvailable')) }}</span>
-            </template>
-            <template #actions="{ row }">
-              <Button class="w-fit" :disabled="!row.canReset" :loading="pending === `system-certificate-${row.id}`" @click="openSystemCertificateConfirm(row)"><KeyRound />{{ t('settingsPage.systemCertificateReset') }}</Button>
-            </template>
-          </Table>
-        </section>
+          <SettingsSection v-else-if="activeSection === 'system'">
+            <SettingsCard>
+              <div class="grid gap-3 text-sm">
+                <div class="grid grid-cols-2 gap-3 max-md:grid-cols-1">
+                  <div><span class="text-muted-foreground">{{ t('settingsPage.panelVersion') }}</span><strong class="block text-foreground">{{ version?.version || t('common.notAvailable') }}</strong></div>
+                  <div><span class="text-muted-foreground">{{ t('settingsPage.releaseChannel') }}</span><strong class="block text-foreground">{{ version?.channel || t('common.notAvailable') }}</strong></div>
+                  <div><span class="text-muted-foreground">{{ t('settingsPage.latestVersion') }}</span><strong class="block text-foreground">{{ version?.latestVersion || t('common.notAvailable') }}</strong></div>
+                  <div><span class="text-muted-foreground">{{ t('settingsPage.updateStatus') }}</span><Badge :tone="version?.checkError ? 'danger' : version?.updateAvailable ? 'warning' : 'success'">{{ version?.checkError ? t('settingsPage.versionCheckError') : version?.updateAvailable ? t('settingsPage.updateAvailable') : t('settingsPage.upToDate') }}</Badge></div>
+                </div>
+                <p v-if="version?.checkError" class="m-0 text-sm text-danger">{{ t('settingsPage.versionCheckErrorDetail', { error: version.checkError }) }}</p>
+              </div>
+            </SettingsCard>
 
-        <section v-else-if="activeSection === 'system'" class="grid gap-4 rounded-2xl border border-border bg-card p-4">
-          <h2>{{ t('settingsPage.section.system') }}</h2>
-          <div class="grid gap-3 border-t border-border pt-4 text-sm">
-            <div class="grid grid-cols-2 gap-3 max-md:grid-cols-1">
-              <div><span class="text-muted-foreground">{{ t('settingsPage.panelVersion') }}</span><strong class="block text-foreground">{{ version?.version || t('common.notAvailable') }}</strong></div>
-              <div><span class="text-muted-foreground">{{ t('settingsPage.releaseChannel') }}</span><strong class="block text-foreground">{{ version?.channel || t('common.notAvailable') }}</strong></div>
-              <div><span class="text-muted-foreground">{{ t('settingsPage.latestVersion') }}</span><strong class="block text-foreground">{{ version?.latestVersion || t('common.notAvailable') }}</strong></div>
-              <div><span class="text-muted-foreground">{{ t('settingsPage.updateStatus') }}</span><Badge :tone="version?.checkError ? 'danger' : version?.updateAvailable ? 'warning' : 'success'">{{ version?.checkError ? t('settingsPage.versionCheckError') : version?.updateAvailable ? t('settingsPage.updateAvailable') : t('settingsPage.upToDate') }}</Badge></div>
+            <SettingsCard :title="t('settingsPage.loginTitle')">
+              <template #control>
+                <Input v-model="form.loginTitle" :aria-label="t('settingsPage.loginTitle')" class="w-full sm:w-72" />
+              </template>
+            </SettingsCard>
+
+            <SettingsCard :title="t('settingsPage.loginSubtitle')">
+              <template #control>
+                <Input v-model="form.loginSubtitle" :aria-label="t('settingsPage.loginSubtitle')" class="w-full sm:w-72" />
+              </template>
+            </SettingsCard>
+
+            <SettingsCard :title="t('settingsPage.serverVariables')" stacked>
+              <template #control>
+                <Textarea v-model="form.variablesText" :aria-label="t('settingsPage.serverVariables')" class="min-h-44 w-full font-mono" :placeholder="t('settingsPage.serverVariablesHint')" />
+              </template>
+            </SettingsCard>
+
+            <template #footer>
+              <Button :loading="pending === 'save-variables'" @click="saveVariables"><Save />{{ t('settingsPage.saveVariables') }}</Button>
+              <Button :loading="pending === 'save-system'" variant="primary" @click="saveRuntimeSection('system')"><Save />{{ t('settingsPage.saveBranding') }}</Button>
+            </template>
+          </SettingsSection>
+
+          <template v-else>
+            <SettingsSection :title="t('settingsPage.backupExport')">
+              <SettingsCard :title="t('settingsPage.encryptExport')">
+                <template #control>
+                  <Switch v-model="form.exportEncrypt" :label="t('settingsPage.encryptExport')" />
+                </template>
+              </SettingsCard>
+
+              <SettingsCard v-if="!form.exportEncrypt">
+                <div class="rounded-control border border-warning-border bg-warning-bg px-3 py-2 text-sm text-warning">{{ t('settingsPage.unencryptedExportWarning') }}</div>
+              </SettingsCard>
+
+              <SettingsCard
+                :title="t('settingsPage.backupPassword')"
+                :invalid="Boolean(form.exportEncrypt && !form.exportPassword.trim())"
+              >
+                <template #control>
+                  <Input
+                    v-model="form.exportPassword"
+                    :aria-label="t('settingsPage.backupPassword')"
+                    class="w-full sm:w-64"
+                    type="password"
+                    :invalid="Boolean(form.exportEncrypt && !form.exportPassword.trim())"
+                  />
+                </template>
+                <template v-if="form.exportEncrypt && !form.exportPassword.trim()" #hint>
+                  <span class="text-danger">{{ t('settingsPage.backupPasswordRequired') }}</span>
+                </template>
+              </SettingsCard>
+
+              <template #footer>
+                <Button variant="primary" :disabled="Boolean(form.exportEncrypt && !form.exportPassword.trim())" :loading="pending === 'export'" @click="openConfirm('export')">
+                  <DatabaseBackup />{{ t('settingsPage.startExport') }}
+                </Button>
+              </template>
+            </SettingsSection>
+
+            <SettingsSection :title="t('settingsPage.restore')">
+              <SettingsCard :title="t('settingsPage.backupPassword')">
+                <template #control>
+                  <Input v-model="form.restorePassword" :aria-label="t('settingsPage.backupPassword')" class="w-full sm:w-64" type="password" />
+                </template>
+              </SettingsCard>
+
+              <SettingsCard stacked>
+                <template #control>
+                  <div class="relative grid w-full gap-3">
+                    <FileUploadButton
+                      accept=".panel-backup,application/octet-stream"
+                      :loading="pending === 'preflight'"
+                      :label="restoreFile ? restoreFile.name : t('settingsPage.selectRestoreFile')"
+                      @change="handleRestoreFile"
+                    />
+                    <div v-if="preflight" class="rounded-control bg-muted p-3 text-sm">
+                      {{ t('settingsPage.restoreManifest', { version: preflight.manifest.panelVersion, count: preflight.manifest.files.length }) }}
+                    </div>
+                    <LoadingOverlay v-if="pending === 'preflight'" />
+                  </div>
+                </template>
+              </SettingsCard>
+
+              <SettingsCard>
+                <Checkbox v-model="form.restoreConfirm" :label="t('settingsPage.confirmRestoreOverwrite')" class="rounded-control border border-warning-border bg-warning-bg p-3 text-warning" />
+              </SettingsCard>
+
+              <template #footer>
+                <Button variant="danger" :disabled="!restoreFile || !preflight || !form.restoreConfirm" :loading="pending === 'restore'" @click="openConfirm('restore')">
+                  <UploadCloud />{{ t('settingsPage.confirmRestore') }}
+                </Button>
+              </template>
+            </SettingsSection>
+
+            <div v-if="exportPending || restorePending" class="rounded-control border border-warning-border bg-warning-bg px-3 py-2 text-sm text-warning">
+              {{ restarting ? t('settingsPage.restartingHint') : t('settingsPage.pendingHint') }}
             </div>
-            <p v-if="version?.checkError" class="text-sm text-danger">{{ t('settingsPage.versionCheckErrorDetail', { error: version.checkError }) }}</p>
-          </div>
-          <div class="grid grid-cols-2 gap-3 max-md:grid-cols-1">
-            <label class="grid gap-1 text-sm">{{ t('settingsPage.loginTitle') }}<Input v-model="form.loginTitle" /></label>
-            <label class="grid gap-1 text-sm">{{ t('settingsPage.loginSubtitle') }}<Input v-model="form.loginSubtitle" /></label>
-          </div>
-          <label class="grid gap-1 text-sm">{{ t('settingsPage.serverVariables') }}<Textarea v-model="form.variablesText" class="min-h-[180px] font-mono" :placeholder="t('settingsPage.serverVariablesHint')" /></label>
-          <div class="flex flex-wrap gap-2"><Button :loading="pending === 'save-system'" variant="primary" @click="saveRuntimeSection('system')"><Save />{{ t('settingsPage.saveBranding') }}</Button><Button :loading="pending === 'save-variables'" @click="saveVariables"><Save />{{ t('settingsPage.saveVariables') }}</Button></div>
-        </section>
-
-        <section v-else class="grid gap-4 rounded-2xl border border-border bg-card p-4">
-          <h2>{{ t('settingsPage.section.backups') }}</h2>
-          <div class="grid gap-4 xl:grid-cols-2">
-            <section class="grid gap-3 border-t border-border pt-4">
-              <h3>{{ t('settingsPage.backupExport') }}</h3>
-              <label class="flex items-center justify-between gap-3 text-sm">{{ t('settingsPage.encryptExport') }}<Switch v-model="form.exportEncrypt" :label="t('settingsPage.encryptExport')" /></label>
-              <div v-if="!form.exportEncrypt" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('settingsPage.unencryptedExportWarning') }}</div>
-              <label class="grid gap-1 text-sm">{{ t('settingsPage.backupPassword') }}<Input v-model="form.exportPassword" type="password" :invalid="Boolean(form.exportEncrypt && !form.exportPassword.trim())" /><span v-if="form.exportEncrypt && !form.exportPassword.trim()" class="text-xs text-danger">{{ t('settingsPage.backupPasswordRequired') }}</span></label>
-              <Button variant="primary" :disabled="Boolean(form.exportEncrypt && !form.exportPassword.trim())" :loading="pending === 'export'" @click="openConfirm('export')"><DatabaseBackup />{{ t('settingsPage.startExport') }}</Button>
-            </section>
-            <section class="grid gap-3 border-t border-border pt-4">
-              <h3>{{ t('settingsPage.restore') }}</h3>
-              <label class="grid gap-1 text-sm">{{ t('settingsPage.backupPassword') }}<Input v-model="form.restorePassword" type="password" /></label>
-              <div class="relative grid gap-3">
-                <FileUploadButton accept=".panel-backup,application/octet-stream" :loading="pending === 'preflight'" :label="restoreFile ? restoreFile.name : t('settingsPage.selectRestoreFile')" @change="handleRestoreFile" />
-                <div v-if="preflight" class="rounded-lg bg-muted p-3 text-sm">{{ t('settingsPage.restoreManifest', { version: preflight.manifest.panelVersion, count: preflight.manifest.files.length }) }}</div>
-                <LoadingOverlay v-if="pending === 'preflight'" />
-              </div>
-              <label class="flex items-start gap-2 rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning"><input v-model="form.restoreConfirm" class="mt-1" type="checkbox" />{{ t('settingsPage.confirmRestoreOverwrite') }}</label>
-              <Button variant="danger" :disabled="!restoreFile || !preflight || !form.restoreConfirm" :loading="pending === 'restore'" @click="openConfirm('restore')"><UploadCloud />{{ t('settingsPage.confirmRestore') }}</Button>
-            </section>
-          </div>
-          <div v-if="exportPending || restorePending" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ restarting ? t('settingsPage.restartingHint') : t('settingsPage.pendingHint') }}</div>
-        </section>
-      </SettingsPage>
-    </div>
+          </template>
+        </div>
+      </div>
+    </Tabs>
 
     <ConfirmDialog
       :open="confirmOpen"
@@ -709,12 +1045,3 @@ onMounted(load);
     />
   </ConsolePage>
 </template>
-
-<style scoped>
-h2,
-h3 {
-  margin: 0;
-  color: var(--panel-text);
-  font-weight: 650;
-}
-</style>

@@ -7,6 +7,7 @@ import { GridComponent, MarkLineComponent, TooltipComponent } from 'echarts/comp
 import { CanvasRenderer } from 'echarts/renderers';
 import type { EChartsOption } from 'echarts';
 import type { MetricSeriesData, MetricThreshold } from '@/utils/metrics';
+import { resolveCssColor } from '@/utils/cssColor';
 import { formatLatency, formatMetricAxisTime, formatMetricDateTime, formatPercent, formatRate, formatRateAxis } from '@/utils/metrics';
 
 use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, MarkLineComponent]);
@@ -24,7 +25,35 @@ const border = ref('');
 const text = ref('');
 const textMuted = ref('');
 const gridLine = ref('');
+/** forced-colors / prefers-contrast: more 时降级为系统色可读摘要。 */
+const highContrast = ref(false);
 let themeObserver: MutationObserver | undefined;
+const contrastQueries: MediaQueryList[] = [];
+const contrastCleanups: Array<() => void> = [];
+
+/** Canvas 需要具体颜色；CSS token 可能是 `color-mix(...)`/`var(...)`。 */
+function tokenColor(styles: CSSStyleDeclaration, name: string): string {
+  return resolveCssColor(styles.getPropertyValue(name).trim());
+}
+
+/** 读取系统色（forced-colors 下 Canvas/CanvasText 可读）；不支持时回退主题黑/白。 */
+function systemColor(name: 'Canvas' | 'CanvasText', fallback: string): string {
+  if (typeof document === 'undefined' || !document.body) return fallback;
+  const probe = document.createElement('span');
+  probe.style.color = name;
+  probe.style.position = 'absolute';
+  probe.style.visibility = 'hidden';
+  document.body.appendChild(probe);
+  try {
+    const raw = window.getComputedStyle(probe).color;
+    const resolved = resolveCssColor(raw);
+    // jsdom/旧浏览器可能不解析系统色（返回空或原样关键字）→ 回退主题黑/白。
+    if (!resolved || resolved.toLowerCase() === name.toLowerCase()) return fallback;
+    return resolved;
+  } finally {
+    probe.remove();
+  }
+}
 
 const timeSpanMs = computed(() => {
   let min = Number.POSITIVE_INFINITY;
@@ -58,9 +87,25 @@ function escapeHtml(value: string) {
     .replace(/'/g, '&#39;');
 }
 
+/** 第二条及后续序列用虚线 + 不同 symbol，避免只靠颜色区分（HC 下颜色会趋同）。 */
+function seriesLineType(index: number): 'solid' | 'dashed' {
+  return index % 2 === 1 ? 'dashed' : 'solid';
+}
+
+function seriesSymbol(index: number): 'circle' | 'diamond' | 'rect' {
+  if (index === 1) return 'diamond';
+  return index % 2 === 1 ? 'rect' : 'circle';
+}
+
 const option = computed<EChartsOption>(() => {
   const colors = palette.value;
   const thresholds = props.thresholds;
+  const hc = highContrast.value;
+  const multipleSeries = props.series.length > 1;
+  const lineWidth = hc ? 3 : 2;
+  const axisFontSize = hc ? 11 : 10;
+  const showSymbol = hc || multipleSeries;
+  const symbolSize = hc ? 7 : 5;
   return {
     animation: false,
     color: colors,
@@ -72,12 +117,12 @@ const option = computed<EChartsOption>(() => {
       renderMode: 'html',
       backgroundColor: surface.value,
       borderColor: border.value,
-      borderWidth: 1,
+      borderWidth: hc ? 2 : 1,
       padding: 0,
       textStyle: { color: text.value, fontSize: 12 },
       axisPointer: {
         type: 'line',
-        lineStyle: { color: textMuted.value, width: 1, type: 'dashed', opacity: 0.6 },
+        lineStyle: { color: textMuted.value, width: hc ? 2 : 1, type: hc ? 'solid' : 'dashed', opacity: hc ? 1 : 0.6 },
       },
       formatter(params) {
         const rows = (Array.isArray(params) ? params : [params]) as Array<{
@@ -106,7 +151,7 @@ const option = computed<EChartsOption>(() => {
       axisTick: { show: false },
       axisLabel: {
         color: textMuted.value,
-        fontSize: 10,
+        fontSize: axisFontSize,
         hideOverlap: true,
         formatter(value: number) {
           return formatMetricAxisTime(value, timeSpanMs.value);
@@ -122,35 +167,37 @@ const option = computed<EChartsOption>(() => {
       axisTick: { show: false },
       axisLabel: {
         color: textMuted.value,
-        fontSize: 10,
+        fontSize: axisFontSize,
         formatter(value: number) {
           if (props.valueKind === 'latency') return `${value} ms`;
           return props.valueKind === 'percent' ? `${value}%` : formatRateAxis(value);
         },
       },
-      splitLine: { lineStyle: { color: gridLine.value, type: 'dashed' } },
+      splitLine: { lineStyle: { color: gridLine.value, type: hc ? 'solid' : 'dashed', opacity: hc ? 1 : 1 } },
     },
     series: props.series.map((item, index) => ({
       id: item.id,
       name: item.name,
       type: 'line',
       data: timePairs(item.points),
-      showSymbol: false,
-      symbol: 'circle',
-      symbolSize: 5,
+      showSymbol,
+      symbol: seriesSymbol(index),
+      symbolSize,
       connectNulls: false,
-      lineStyle: { width: 2, color: colors[index % Math.max(colors.length, 1)] },
+      lineStyle: { width: lineWidth, color: colors[index % Math.max(colors.length, 1)], type: seriesLineType(index) },
       itemStyle: { color: colors[index % Math.max(colors.length, 1)] },
-      areaStyle: props.series.length === 1 && index === 0
+      // HC 下不铺面积，避免低对比色块影响读数；单序列正常模式保留轻面积。
+      areaStyle: !hc && props.series.length === 1 && index === 0
         ? { opacity: 0.16, color: colors[0] }
         : undefined,
-      emphasis: { focus: 'series', lineStyle: { width: 3 } },
+      // 悬停只加重当前线，不因 focus:'series' 把其他线压暗/压没（暗色下尤其明显）。
+      emphasis: { focus: 'none', lineStyle: { width: hc ? 4 : 3 } },
       markLine: index === 0 && thresholds.length
         ? {
             silent: true,
             symbol: 'none',
-            label: { position: 'insideEndTop', color: textMuted.value, fontSize: 10 },
-            lineStyle: { color: colors[3] ?? colors[0], type: 'dashed', width: 1, opacity: 0.7 },
+            label: { position: 'insideEndTop', color: textMuted.value, fontSize: axisFontSize },
+            lineStyle: { color: hc ? palette.value[0] : (colors[3] ?? colors[0]), type: 'dashed', width: hc ? 2 : 1, opacity: hc ? 1 : 0.7 },
             data: thresholds.map((threshold) => ({ yAxis: threshold.value, name: threshold.label, label: { formatter: threshold.label } })),
           }
         : undefined,
@@ -158,11 +205,29 @@ const option = computed<EChartsOption>(() => {
   } as EChartsOption;
 });
 
+function applyHighContrastPalette() {
+  const dark = typeof document !== 'undefined' && document.documentElement.dataset.theme === 'dark';
+  // HC 下统一用系统前景/背景色：两条线同色，靠线型 + symbol 区分。
+  const hcText = systemColor('CanvasText', dark ? '#ffffff' : '#000000');
+  const hcSurface = systemColor('Canvas', dark ? '#000000' : '#ffffff');
+  palette.value = [hcText, hcText, hcText, hcText, hcText, hcText];
+  surface.value = hcSurface;
+  border.value = hcText;
+  text.value = hcText;
+  textMuted.value = hcText;
+  gridLine.value = hcText;
+}
+
 function readTheme() {
+  if (highContrast.value) {
+    applyHighContrastPalette();
+    return;
+  }
   const styles = window.getComputedStyle(document.documentElement);
-  const token = (name: string) => styles.getPropertyValue(name).trim();
+  const token = (name: string) => tokenColor(styles, name);
+  // 首序列优先取 accent ramp（随 data-accent 变化），其余沿用语义状态色。
   palette.value = [
-    token('--panel-primary'),
+    token('--accent-fill-default') || token('--panel-primary'),
     token('--panel-info'),
     token('--panel-success'),
     token('--panel-warning'),
@@ -176,14 +241,50 @@ function readTheme() {
   gridLine.value = token('--panel-border');
 }
 
+function syncContrast() {
+  highContrast.value = contrastQueries.some((query) => query.matches);
+  readTheme();
+}
+
+function watchContrastQuery(query: MediaQueryList) {
+  const handler = () => syncContrast();
+  if (typeof query.addEventListener === 'function') {
+    query.addEventListener('change', handler);
+    contrastCleanups.push(() => query.removeEventListener('change', handler));
+  } else if (typeof query.addListener === 'function') {
+    query.addListener(handler);
+    contrastCleanups.push(() => query.removeListener(handler));
+  }
+}
+
 onMounted(() => {
+  if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+    for (const media of ['(forced-colors: active)', '(prefers-contrast: more)']) {
+      try {
+        const query = window.matchMedia(media);
+        contrastQueries.push(query);
+        watchContrastQuery(query);
+      } catch {
+        // 老环境不支持该媒体查询时忽略，按普通主题渲染。
+      }
+    }
+    highContrast.value = contrastQueries.some((query) => query.matches);
+  }
   readTheme();
   themeObserver = new MutationObserver(readTheme);
-  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-scheme'] });
+  // accent / background / mica / theme 变化都会影响图表取用的 token，必须重新读取。
+  themeObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['data-theme', 'data-accent', 'data-background', 'data-mica'],
+  });
 });
 
 onBeforeUnmount(() => {
   themeObserver?.disconnect();
+  themeObserver = undefined;
+  for (const cleanup of contrastCleanups) cleanup();
+  contrastCleanups.length = 0;
+  contrastQueries.length = 0;
 });
 </script>
 
@@ -196,10 +297,10 @@ onBeforeUnmount(() => {
 <style>
 .metric-chart-tooltip {
   overflow: hidden;
-  border-radius: 12px;
+  border-radius: 8px;
   background: var(--panel-popover) !important;
   border: 1px solid var(--panel-border-strong) !important;
-  box-shadow: var(--panel-motion-shadow-raised);
+  box-shadow: var(--panel-shadow-flyout);
   color: var(--panel-text);
 }
 
@@ -239,5 +340,15 @@ onBeforeUnmount(() => {
 .metric-chart-tooltip__value {
   color: var(--panel-text-muted);
   font-variant-numeric: tabular-nums;
+}
+
+/* forced-colors 下 HTML tooltip 跟随系统 Canvas/CanvasText，避免自定义色被强制吞掉。 */
+@media (forced-colors: active) {
+  .metric-chart-tooltip {
+    background: Canvas !important;
+    color: CanvasText !important;
+    border-color: CanvasText !important;
+    box-shadow: none !important;
+  }
 }
 </style>

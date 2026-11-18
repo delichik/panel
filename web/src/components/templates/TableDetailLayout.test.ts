@@ -26,6 +26,7 @@ describe('TableDetailLayout', () => {
     expect(listPane.className).toContain('col-start-1');
     expect(listPane.className).toContain('relative');
     expect(listPane.className).toContain('z-0');
+    expect(listPane.className).not.toContain('invisible');
     expect(listPane.hasAttribute('inert')).toBe(false);
     expect(listPane.getAttribute('aria-hidden')).toBeNull();
     expect(wrapper.find('#detail').exists()).toBe(false);
@@ -41,20 +42,24 @@ describe('TableDetailLayout', () => {
       },
     });
 
-    const [listPane, detailPane] = panes(wrapper);
+    const [listPane, detailPane] = panes(wrapper)!;
     expect(listPane!.hasAttribute('inert')).toBe(true);
     expect(listPane!.getAttribute('aria-hidden')).toBe('true');
+    // The list stays mounted (scroll position and filters survive) but is
+    // visually hidden so the translucent detail sits directly on the shell
+    // content layer instead of an opaque bg-background patch over Mica.
+    expect(listPane!.className).toContain('invisible');
     expect(detailPane!.className).toContain('col-start-1');
     expect(detailPane!.className).toContain('relative');
     expect(detailPane!.className).toContain('z-10');
-    expect(detailPane!.className).toContain('bg-background');
+    expect(detailPane!.className).not.toContain('bg-background');
     expect(wrapper.get('#detail').text()).toBe('detail');
-    // The list stays mounted so scroll position and filters survive the detour.
     expect(wrapper.find('#list').exists()).toBe(true);
 
     await wrapper.setProps({ hasDetail: false });
     await vi.waitFor(() => expect(wrapper.find('#detail').exists()).toBe(false));
     expect(panes(wrapper)[0]!.hasAttribute('inert')).toBe(false);
+    expect(panes(wrapper)[0]!.className).not.toContain('invisible');
     expect(wrapper.find('#list').exists()).toBe(true);
   });
 });

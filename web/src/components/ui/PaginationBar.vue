@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChevronLeft, ChevronRight } from '@lucide/vue';
+import { ChevronLeft, ChevronRight } from '@/icons';
 import { computed, useSlots } from 'vue';
 import { useI18n } from '@/i18n';
 import Button from './Button.vue';
@@ -82,8 +82,9 @@ function goNext() {
 </script>
 
 <template>
-  <nav class="flex min-h-12 flex-wrap items-center justify-between gap-3 border-t border-border bg-card/95 px-1 py-3" :aria-label="resolvedNavLabel">
-    <p v-if="showSummaryRegion" class="m-0 text-sm text-muted-foreground">
+  <!-- 分页区只用间距与列表分隔，不再画 border-t（表格卡片已有底边，避免两条线）。 -->
+  <nav class="flex flex-wrap items-center justify-between gap-3 px-1 py-2" :aria-label="resolvedNavLabel">
+    <p v-if="showSummaryRegion" class="m-0 text-body text-muted-foreground">
       <slot name="summary" :start="start" :end="end" :total="total" :page="currentPage" :page-count="pageCount">
         {{ resolvedSummary }}
       </slot>
@@ -94,7 +95,7 @@ function goNext() {
         <ChevronLeft />
         {{ previousLabel }}
       </Button>
-      <span v-if="mode !== 'cursor' && totalKnown" class="min-w-16 text-center text-sm font-medium text-foreground">
+      <span v-if="mode !== 'cursor' && totalKnown" class="min-w-16 text-center text-body font-medium text-foreground">
         {{ currentPage }} / {{ pageCount }}
       </span>
       <Button size="sm" variant="secondary" :disabled="!canNext" :loading="loading && (mode === 'cursor' || currentPage < pageCount)" @click="goNext">

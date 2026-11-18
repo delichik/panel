@@ -43,6 +43,47 @@ async function typeSearch(value: string) {
   await nextTick();
 }
 
+describe('Select invalid state', () => {  it('uses the danger border and marks the combobox aria-invalid from the invalid prop', () => {
+    const wrapper = mount(Select, {
+      attachTo: document.body,
+      props: {
+        modelValue: 'one',
+        options: [{ label: 'One', value: 'one' }],
+        invalid: true,
+      },
+    });
+    const combobox = wrapper.get('[role="combobox"]');
+    expect(combobox.attributes('aria-invalid')).toBe('true');
+    expect(combobox.classes()).toContain('border-danger-border');
+    wrapper.unmount();
+  });
+
+  it('honours an externally passed aria-invalid without duplicating it', () => {
+    const wrapper = mount(Select, {
+      attachTo: document.body,
+      props: {
+        modelValue: 'one',
+        options: [{ label: 'One', value: 'one' }],
+      },
+      attrs: { 'aria-invalid': 'true', 'aria-describedby': 'field-error' },
+    });
+    const combobox = wrapper.get('[role="combobox"]');
+    expect(combobox.attributes('aria-invalid')).toBe('true');
+    expect(combobox.attributes('aria-describedby')).toBe('field-error');
+    expect(combobox.classes()).toContain('border-danger-border');
+    wrapper.unmount();
+  });
+
+  it('leaves a valid combobox without aria-invalid', () => {
+    const wrapper = mount(Select, {
+      attachTo: document.body,
+      props: { modelValue: 'one', options: [{ label: 'One', value: 'one' }] },
+    });
+    expect(wrapper.get('[role="combobox"]').attributes('aria-invalid')).toBeUndefined();
+    wrapper.unmount();
+  });
+});
+
 describe('Select searchable mode', () => {
   it('filters visible options and emits search without changing the selected label', async () => {
     const wrapper = mountSelectable();
@@ -96,5 +137,17 @@ describe('Select searchable mode', () => {
     await nextTick();
 
     expect(optionLabels()).toEqual(['Far away · 10.9.9.9']);
+  });
+});
+
+describe('Select pressed state', () => {
+  it('adds the WinUI pressed fill to the combobox trigger', () => {
+    const wrapper = mount(Select, {
+      attachTo: document.body,
+      props: { modelValue: 'one', options: [{ label: 'One', value: 'one' }] },
+    });
+    const combobox = wrapper.get('[role="combobox"]');
+    expect(combobox.classes()).toContain('active:bg-pressed');
+    wrapper.unmount();
   });
 });

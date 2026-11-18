@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
-import { Package, RefreshCcw } from '@lucide/vue';
+import { Package, RefreshCcw } from '@/icons';
 import { packagesApi } from '@/api/packages';
 import { waitForTask } from '@/api/taskWait';
 import Button from '@/components/ui/Button.vue';
+import Checkbox from '@/components/ui/Checkbox.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
@@ -41,9 +42,8 @@ let taskWaitController = new AbortController();
 const columns = computed(() => [
   { key: 'select', label: '', width: 'w-10' },
   { key: 'name', label: t('common.name') },
-  { key: 'installed', label: t('resourcesPage.installedVersion'), nowrap: true },
-  { key: 'candidate', label: t('resourcesPage.candidateVersion'), nowrap: true },
-  { key: 'source', label: t('resourcesPage.source'), nowrap: true },
+  { key: 'installed', label: t('resourcesPage.installedVersion'), nowrap: true, width: 'w-40' },
+  { key: 'candidate', label: t('resourcesPage.candidateVersion'), nowrap: true, width: 'w-40' },
 ]);
 
 function clearSelection() {
@@ -128,9 +128,9 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-4">
+  <div class="grid h-full min-h-0 grid-rows-page-footer gap-4">
     <div class="grid gap-3">
-      <div v-if="blockReason" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t(blockReason) }}</div>
+      <div v-if="blockReason" class="rounded-control border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t(blockReason) }}</div>
       <div class="flex flex-wrap items-center justify-between gap-2">
         <SearchInput v-model="search" class="w-full max-w-sm" clearable :label="t('common.search')" :placeholder="t('resourcesPage.searchPackages')" :clear-label="t('common.clearSearch')" />
         <div class="flex flex-wrap gap-2">
@@ -152,39 +152,39 @@ onBeforeUnmount(() => {
       :columns="columns"
       :rows="rows"
       row-key="name"
+      row-height="auto"
       :loading="loading"
       :loading-label="t('common.loading')"
     >
       <template #head-select>
-        <input
-          type="checkbox"
-          :checked="allVisibleSelected"
+        <Checkbox
+          :model-value="allVisibleSelected"
           :disabled="!canMaintain || !rows.length"
           :aria-label="t('common.actions')"
-          @change="toggleAll(($event.target as HTMLInputElement).checked)"
+          @update:model-value="toggleAll"
         />
       </template>
       <template #select="{ row }">
-        <input v-model="selection[row.name]" type="checkbox" :disabled="!canMaintain" :aria-label="row.name" />
+        <Checkbox v-model="selection[row.name]" :disabled="!canMaintain" :aria-label="row.name" />
       </template>
       <template #name="{ row }">
-        <strong class="block max-w-[20rem] truncate text-foreground">{{ row.name }}</strong>
+        <div class="min-w-0">
+          <strong class="block max-w-80 truncate text-foreground">{{ row.name }}</strong>
+          <span class="block truncate text-caption text-muted-foreground">{{ row.source }}</span>
+        </div>
       </template>
       <template #installed="{ row }">
-        <span class="text-muted-foreground">{{ row.installedVersion }}</span>
+        <span class="whitespace-nowrap text-muted-foreground">{{ row.installedVersion }}</span>
       </template>
       <template #candidate="{ row }">
-        <strong class="text-foreground">{{ row.candidateVersion }}</strong>
-      </template>
-      <template #source="{ row }">
-        <span class="text-muted-foreground">{{ row.source }}</span>
+        <strong class="whitespace-nowrap text-foreground">{{ row.candidateVersion }}</strong>
       </template>
       <template #empty>
-        <EmptyState :title="t('resourcesPage.noPackages')" :description="t('resourcesPage.noPackagesHint')" />
+        <EmptyState variant="inset" :title="t('resourcesPage.noPackages')" :description="t('resourcesPage.noPackagesHint')" />
       </template>
     </Table>
 
-    <footer class="flex items-center justify-between border-t border-border pt-3 text-sm text-muted-foreground">
+    <footer class="flex items-center justify-between border-t border-divider pt-3 text-sm text-muted-foreground">
       <span>{{ t('resourcesPage.lastRefresh') }}: {{ formatDateTime(packageList?.lastRefreshedAt) || t('common.never') }}</span>
       <span v-if="selectedNames.length">{{ selectedNames.length }} {{ t('resourcesPage.selectedCount') }}</span>
     </footer>

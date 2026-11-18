@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { RefreshCcw, Router, Trash2 } from '@lucide/vue';
+import { RefreshCcw, Router, Trash2 } from '@/icons';
 import { containersApi } from '@/api/containers';
 import { waitForTask } from '@/api/taskWait';
 import Badge from '@/components/ui/Badge.vue';
@@ -36,9 +36,8 @@ const autoSnapshotKeys = new Set<string>();
 
 const columns = computed(() => [
   { key: 'name', label: t('common.name') },
-  { key: 'driver', label: t('resourcesPage.driver'), nowrap: true },
-  { key: 'scope', label: t('resourcesPage.scope'), nowrap: true },
-  { key: 'state', label: t('common.status'), nowrap: true },
+  { key: 'state', label: t('common.status'), nowrap: true, width: 'w-36' },
+  { key: 'created', label: t('serversPage.updatedAt'), nowrap: true, width: 'w-40' },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
 ]);
 
@@ -116,9 +115,9 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4">
+  <div class="grid h-full min-h-0 grid-rows-page gap-4">
     <div class="grid gap-3">
-      <div v-if="blocked" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('resourcesPage.blockAgent') }}</div>
+      <div v-if="blocked" class="rounded-control border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('resourcesPage.blockAgent') }}</div>
       <div class="flex flex-wrap items-start justify-between gap-2">
         <p class="m-0 flex items-center gap-2 text-sm text-muted-foreground">
           <Router class="size-4 shrink-0" />
@@ -142,20 +141,21 @@ onBeforeUnmount(() => {
       :columns="columns"
       :rows="networks"
       row-key="id"
+      row-height="auto"
       :loading="loading || pending === 'refresh'"
       :loading-label="t('common.loading')"
     >
       <template #name="{ row }">
-        <strong class="block max-w-[20rem] truncate text-foreground">{{ row.name }}</strong>
-      </template>
-      <template #driver="{ row }">
-        <span class="text-muted-foreground">{{ row.driver }}</span>
-      </template>
-      <template #scope="{ row }">
-        <span class="text-muted-foreground">{{ row.scope }}</span>
+        <div class="min-w-0">
+          <strong class="block max-w-80 truncate text-foreground">{{ row.name }}</strong>
+          <span class="block truncate text-caption text-muted-foreground">{{ row.driver }} · {{ row.scope }}</span>
+        </div>
       </template>
       <template #state="{ row }">
-        <Badge :tone="networkState(row).tone">{{ networkState(row).label }}</Badge>
+        <Badge class="whitespace-nowrap" :tone="networkState(row).tone">{{ networkState(row).label }}</Badge>
+      </template>
+      <template #created="{ row }">
+        <span class="whitespace-nowrap text-muted-foreground">{{ formatDateTime(row.created, t('common.never')) }}</span>
       </template>
       <template #actions>
         <Tooltip :text="t('resourcesPage.networkDeleteUnavailable')">
@@ -163,7 +163,7 @@ onBeforeUnmount(() => {
         </Tooltip>
       </template>
       <template #empty>
-        <EmptyState :title="t('resourcesPage.noNetworks')" :description="t('resourcesPage.noNetworksHint')" />
+        <EmptyState variant="inset" :title="t('resourcesPage.noNetworks')" :description="t('resourcesPage.noNetworksHint')" />
       </template>
     </Table>
   </div>

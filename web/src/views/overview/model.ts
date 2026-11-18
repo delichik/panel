@@ -1,7 +1,39 @@
 import type { ServerMetricsSeries } from '@/api/servers';
+import type { ApplicationSummaryDto } from '@/types/applications';
 import type { NetworkProbeHistoryPoint, NetworkProbeResult } from '@/types/networkProbe';
 import type { ServerDto } from '@/types/servers';
 import { formatPercent as sharedFormatPercent } from '@/utils/metrics';
+
+/** 应用总览：总数 + 启用/停用/部署中/需关注（后三者是启用状态下的细分）。 */
+export interface ApplicationSummaryView {
+  total: number | null;
+  enabled: number;
+  disabled: number;
+  deploying: number;
+  attention: number;
+  available: boolean;
+}
+
+export function summarizeApplications(items: ApplicationSummaryDto[], total = items.length): ApplicationSummaryView {
+  let enabled = 0;
+  let disabled = 0;
+  let deploying = 0;
+  let attention = 0;
+  for (const app of items) {
+    if (!app.enabled) {
+      disabled += 1;
+      continue;
+    }
+    enabled += 1;
+    if ((app.deployingInstanceCount ?? 0) > 0) deploying += 1;
+    if (app.planningError || app.lastError || (app.abnormalInstanceCount ?? 0) > 0) attention += 1;
+  }
+  return { total, enabled, disabled, deploying, attention, available: true };
+}
+
+export function emptyApplicationSummary(): ApplicationSummaryView {
+  return { total: null, enabled: 0, disabled: 0, deploying: 0, attention: 0, available: false };
+}
 
 /** 指标新鲜度窗口：与后端 probe 口径一致（5 分钟）。 */
 export const METRICS_FRESH_WINDOW_MS = 5 * 60 * 1000;

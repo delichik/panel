@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { RefreshCcw, Server as ServerIcon } from '@lucide/vue';
+import { AppWindow, RefreshCcw, Server as ServerIcon } from '@/icons';
+import { applicationsApi } from '@/api/applications';
 import { containersApi } from '@/api/containers';
 import { networkProbeFacilityApi } from '@/api/networkProbe';
 import { packagesApi } from '@/api/packages';
@@ -17,10 +18,11 @@ import ConsolePage from '@/components/templates/ConsolePage.vue';
 import { useAutoRefresh } from '@/composables/useAutoRefresh';
 import { useI18n } from '@/i18n';
 import type { NetworkProbeConfig, NetworkProbeServerResults } from '@/types/networkProbe';
+import type { ApplicationSummaryDto } from '@/types/applications';
 import type { ServerDto } from '@/types/servers';
 import { isAbortError } from '@/views/_shared/requestState';
 import ServerCard from './ServerCard.vue';
-import { buildServerCards, summarizeNodeCards } from './model';
+import { buildServerCards, emptyApplicationSummary, summarizeApplications, summarizeNodeCards } from './model';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -36,6 +38,9 @@ const imageUpdatesById = ref<Record<string, number | null>>({});
 const probeConfig = ref<NetworkProbeConfig | null>(null);
 const probeSourceId = ref('');
 const probeResults = ref<NetworkProbeServerResults | null>(null);
+const applications = ref<ApplicationSummaryDto[]>([]);
+const applicationsTotal = ref(0);
+const applicationsError = ref(false);
 const pageLoading = ref(true);
 const refreshing = ref(false);
 const pageError = ref('');
@@ -62,6 +67,9 @@ const cards = computed(() => buildServerCards({
 }));
 const nodeSummary = computed(() => summarizeNodeCards(cards.value));
 const onlinePercent = computed(() => (nodeSummary.value.total ? Math.round((nodeSummary.value.online / nodeSummary.value.total) * 100) : 0));
+const applicationSummary = computed(() => (
+  applicationsError.value ? emptyApplicationSummary() : summarizeApplications(applications.value, applicationsTotal.value || applications.value.length)
+));
 
 function probeCandidateIds(config: NetworkProbeConfig | null, items: ServerDto[]): string[] {
   if (!config || config.mode === 'all') return items.map((item) => item.id);
@@ -99,9 +107,10 @@ async function load(options: { initial?: boolean; includeUpdates?: boolean } = {
     refreshing.value = true;
   }
   try {
-    const [serversResult, configResult] = await Promise.allSettled([
+    const [serversResult, configResult, applicationsResult] = await Promise.allSettled([
       serversApi.list({ signal: request.signal }),
       networkProbeFacilityApi.config({ signal: request.signal }),
+      applicationsApi.list({ pageSize: 200 }, { signal: request.signal }),
     ]);
     if (seq !== loadSeq) return;
     if (serversResult.status === 'rejected') throw serversResult.reason;
@@ -110,6 +119,14 @@ async function load(options: { initial?: boolean; includeUpdates?: boolean } = {
       servers.value = serversResult.value;
     }
     probeConfig.value = configResult.status === 'fulfilled' ? configResult.value : null;
+    // 应用总览是独立摘要：失败只让卡片显示不可用，不能拖垮服务器/指标区域。
+    if (applicationsResult.status === 'fulfilled') {
+      applications.value = applicationsResult.value.items;
+      applicationsTotal.value = applicationsResult.value.total;
+      applicationsError.value = false;
+    } else if (applications.value.length === 0) {
+      applicationsError.value = true;
+    }
 
     const candidates = probeCandidateIds(probeConfig.value, servers.value);
     const requested = route.query.probe === undefined ? '' : String(route.query.probe);
@@ -221,9 +238,9 @@ onMounted(() => {
   <ConsolePage :title="t('routes.overview.title')" :description="t('routes.overview.description')">
     <template #actions>
       <div class="flex min-w-0 items-center gap-1.5">
-        <span class="shrink-0 text-xs text-muted-foreground">{{ t('overviewPage.probeSource') }}</span>
+        <span class="shrink-0 text-caption text-muted-foreground">{{ t('overviewPage.probeSource') }}</span>
         <Select
-          class="min-w-[9rem]"
+          class="min-w-36"
           :model-value="probeSourceId"
           :options="probeSourceOptions"
           :disabled="probeSourceOptions.length === 0"
@@ -233,46 +250,82 @@ onMounted(() => {
         />
       </div>
       <DataRefreshControl />
-      <Button size="sm" :loading="refreshing" @click="manualRefresh">
+      <Button :loading="refreshing" @click="manualRefresh">
         <RefreshCcw />
         {{ t('common.refresh') }}
       </Button>
     </template>
 
-    <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 max-xl:block max-xl:h-auto">
-      <section class="min-w-0 rounded-xl border border-border bg-card p-3" data-testid="node-summary">
+    <div class="grid h-full min-h-0 grid-rows-page gap-3 max-lg:block max-lg:h-auto">
+      <div class="grid min-w-0 gap-3 wide:grid-cols-2" data-testid="overview-summary">
+      <section class="min-w-0 surface-card p-4" data-testid="node-summary">
         <div class="flex items-center justify-between gap-2">
-          <h2 class="m-0 flex items-center gap-1.5 text-sm font-semibold text-foreground">
+          <h2 class="m-0 flex items-center gap-1.5 text-body-strong font-semibold text-foreground">
             <ServerIcon class="size-3.5 text-secondary-foreground" aria-hidden="true" />
             {{ t('overviewPage.nodeStatus') }}
           </h2>
           <Badge :tone="nodeSummary.offline ? 'danger' : 'success'">{{ onlinePercent }}%</Badge>
         </div>
-        <div class="mt-3 grid grid-cols-3 divide-x divide-border">
-          <div class="min-w-0 pr-3">
-            <span class="block text-xs text-muted-foreground">{{ t('overviewPage.totalNodes') }}</span>
-            <strong class="mt-1 block text-2xl font-semibold leading-none text-foreground">{{ nodeSummary.total }}</strong>
+        <div class="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3 sm:gap-0 sm:divide-x sm:divide-divider">
+          <div class="min-w-0 sm:pr-3">
+            <span class="block text-caption text-muted-foreground">{{ t('overviewPage.totalNodes') }}</span>
+            <strong class="mt-1 block text-title font-semibold leading-none text-foreground">{{ nodeSummary.total }}</strong>
           </div>
-          <div class="min-w-0 px-3">
-            <span class="block text-xs text-muted-foreground">{{ t('overviewPage.onlineNodes') }}</span>
-            <strong class="mt-1 block text-2xl font-semibold leading-none text-success">{{ nodeSummary.online }}</strong>
+          <div class="min-w-0 sm:px-3">
+            <span class="block text-caption text-muted-foreground">{{ t('overviewPage.onlineNodes') }}</span>
+            <strong class="mt-1 block text-title font-semibold leading-none text-success">{{ nodeSummary.online }}</strong>
           </div>
-          <div class="min-w-0 pl-3">
-            <span class="block text-xs text-muted-foreground">{{ t('overviewPage.offlineNodes') }}</span>
-            <strong class="mt-1 block text-2xl font-semibold leading-none" :class="nodeSummary.offline ? 'text-danger' : 'text-foreground'">{{ nodeSummary.offline }}</strong>
+          <div class="min-w-0 sm:pl-3">
+            <span class="block text-caption text-muted-foreground">{{ t('overviewPage.offlineNodes') }}</span>
+            <strong class="mt-1 block text-title font-semibold leading-none" :class="nodeSummary.offline ? 'text-danger' : 'text-foreground'">{{ nodeSummary.offline }}</strong>
           </div>
         </div>
-        <div class="mt-3 flex h-1.5 overflow-hidden rounded-full bg-muted" role="img" :aria-label="`${t('overviewPage.nodeStatus')}: ${onlinePercent}%`">
+        <div class="mt-3 flex h-1 overflow-hidden rounded-control bg-muted" role="img" :aria-label="`${t('overviewPage.nodeStatus')}: ${onlinePercent}%`">
           <span class="bg-success" :style="{ width: `${nodeSummary.total ? (nodeSummary.online / nodeSummary.total) * 100 : 0}%` }" />
           <span class="bg-danger" :style="{ width: `${nodeSummary.total ? (nodeSummary.offline / nodeSummary.total) * 100 : 0}%` }" />
         </div>
-        <p class="m-0 mt-2 text-xs text-muted-foreground">
+        <p class="m-0 mt-2 text-caption text-muted-foreground">
           {{ t('overviewPage.freshMetrics') }} {{ nodeSummary.fresh }}/{{ nodeSummary.total }}
         </p>
       </section>
 
-      <div class="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden max-xl:overflow-visible">
-        <div v-if="pageLoading && servers.length === 0" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+      <section class="min-w-0 surface-card p-4" data-testid="application-summary">
+        <div class="flex items-center justify-between gap-2">
+          <h2 class="m-0 flex items-center gap-1.5 text-body-strong font-semibold text-foreground">
+            <AppWindow class="size-3.5 text-secondary-foreground" aria-hidden="true" />
+            {{ t('overviewPage.applications') }}
+          </h2>
+          <Badge :tone="applicationSummary.available ? (applicationSummary.attention ? 'warning' : 'success') : 'neutral'">
+            {{ applicationSummary.available ? applicationSummary.total : '—' }}
+          </Badge>
+        </div>
+        <div class="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-0 sm:divide-x sm:divide-divider">
+          <div class="min-w-0 sm:pr-3">
+            <span class="block text-caption text-muted-foreground">{{ t('overviewPage.totalApplications') }}</span>
+            <strong class="mt-1 block text-title font-semibold leading-none text-foreground">{{ applicationSummary.total ?? '—' }}</strong>
+          </div>
+          <div class="min-w-0 sm:px-3">
+            <span class="block text-caption text-muted-foreground">{{ t('applicationsPage.status.enabled') }}</span>
+            <strong class="mt-1 block text-title font-semibold leading-none text-success">{{ applicationSummary.available ? applicationSummary.enabled : '—' }}</strong>
+          </div>
+          <div class="min-w-0 sm:px-3">
+            <span class="block text-caption text-muted-foreground">{{ t('applicationsPage.status.deploying') }}</span>
+            <strong class="mt-1 block text-title font-semibold leading-none text-foreground">{{ applicationSummary.available ? applicationSummary.deploying : '—' }}</strong>
+          </div>
+          <div class="min-w-0 sm:pl-3">
+            <span class="block text-caption text-muted-foreground">{{ t('applicationsPage.status.attention') }}</span>
+            <strong class="mt-1 block text-title font-semibold leading-none" :class="applicationSummary.attention ? 'text-warning' : 'text-foreground'">{{ applicationSummary.available ? applicationSummary.attention : '—' }}</strong>
+          </div>
+        </div>
+        <p v-if="!applicationSummary.available" class="m-0 mt-2 text-caption text-muted-foreground">{{ t('overviewPage.applicationsUnavailable') }}</p>
+        <p v-else class="m-0 mt-2 text-caption text-muted-foreground">
+          {{ t('applicationsPage.status.disabled') }} {{ applicationSummary.disabled }}
+        </p>
+      </section>
+      </div>
+
+      <div class="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden max-lg:overflow-visible">
+        <div v-if="pageLoading && servers.length === 0" class="grid gap-3 sm:grid-cols-2 wide:grid-cols-3">
           <Skeleton v-for="item in 8" :key="item" class="h-52" />
         </div>
         <EmptyState v-else-if="pageError && servers.length === 0" :title="t('common.loadFailed')" :description="pageError">
@@ -284,11 +337,11 @@ onMounted(() => {
           <template #actions>
             <Button variant="primary" @click="router.push('/servers')">
               <ServerIcon />
-              {{ t('overviewPage.addServer') }}
+              {{ t('common.add') }}
             </Button>
           </template>
         </EmptyState>
-        <div v-else class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+        <div v-else class="grid gap-3 sm:grid-cols-2 wide:grid-cols-3">
           <ServerCard v-for="card in cards" :key="card.server.id" :card="card" />
         </div>
       </div>

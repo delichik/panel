@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Cloud, Eye, MoreHorizontal, Plus, RefreshCcw, Trash2, Wrench } from '@lucide/vue';
+import { Cloud, Eye, MoreHorizontal, Plus, RefreshCcw, Trash2, Wrench } from '@/icons';
 import { dnsApi } from '@/api/dns';
 import { waitForTask } from '@/api/taskWait';
 import Badge from '@/components/ui/Badge.vue';
@@ -13,11 +13,18 @@ import DropdownItem from '@/components/ui/DropdownItem.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import IconButton from '@/components/ui/IconButton.vue';
 import Input from '@/components/ui/Input.vue';
+import NumberBox from '@/components/ui/NumberBox.vue';
 import PaginationBar from '@/components/ui/PaginationBar.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
 import Select from '@/components/ui/Select.vue';
 import Table from '@/components/ui/Table.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
+import Skeleton from '@/components/ui/Skeleton.vue';
+import DetailSection from '@/components/patterns/DetailSection.vue';
+import FormField from '@/components/patterns/FormField.vue';
+import InfoBar from '@/components/patterns/InfoBar.vue';
+import ListCommandBar from '@/components/patterns/ListCommandBar.vue';
+import PropertyList from '@/components/patterns/PropertyList.vue';
 import TableDetailName from '@/components/patterns/TableDetailName.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import ListPage from '@/components/templates/ListPage.vue';
@@ -26,7 +33,7 @@ import { useI18n } from '@/i18n';
 import type { DnsDomainDto, DnsRecordDto } from '@/types/dns';
 import { createLatestRequestGuard, isAbortError, normalizePage } from '@/views/_shared/requestState';
 import { formatDateTime } from '@/utils/datetime';
-import { domainTone, normalizeRecordName, validateDnsDomainForm, validateDnsRecordForm, type FieldErrors } from './model';
+import { normalizeRecordName, validateDnsDomainForm, validateDnsRecordForm, type FieldErrors } from './model';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -55,10 +62,10 @@ function syncTaskSignal() {
 }
 const listGuard = createLatestRequestGuard();
 const loadingDomains = ref(false);
+const listLoaded = ref(false);
 const loadingRecords = ref(false);
 const error = ref('');
 const recordsError = ref('');
-const providerErrorDomainId = ref('');
 const domainDialog = ref(false);
 const recordDialog = ref(false);
 const saving = ref(false);
@@ -74,6 +81,16 @@ const domainForm = reactive({ name: '', provider: 'cloudflare', apiToken: '' });
 const recordForm = reactive({ type: 'A', name: '@', value: '', ttl: '300', proxied: 'true' });
 const domainFormErrors = reactive<FieldErrors>({});
 const recordFormErrors = reactive<FieldErrors>({});
+/** NumberBox 使用 number|null；DNS 表单仍保存字符串。 */
+function toNumber(value: string): number | null {
+  const raw = value.trim();
+  if (!raw) return null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+function fromNumber(value: number | null): string {
+  return value === null ? '' : String(value);
+}
 const domainFormValid = computed(() => {
   const errors = validateDnsDomainForm(domainForm);
   const tokenOk = Boolean(editingDomain.value) || Boolean(domainForm.apiToken.trim());
@@ -83,13 +100,16 @@ const recordFormValid = computed(() => Object.keys(validateDnsRecordForm(recordF
 
 const selectedDomain = computed(() => domains.value.find((item) => item.id === selectedId.value) ?? null);
 const detailOpen = computed(() => Boolean(selectedId.value));
+const breadcrumbs = computed(() => [
+  { label: t('routes.dns.title'), to: '/dns/domains' },
+  { label: selectedDomain.value?.name ?? t('common.loading') },
+]);
 const recordTypeOptions = ['A', 'AAAA', 'CNAME', 'TXT', 'MX'].map((value) => ({ label: value, value }));
 const providerOptions = [{ label: 'Cloudflare', value: 'cloudflare' }];
 const booleanOptions = [{ label: t('dnsPage.proxied'), value: 'true' }, { label: t('dnsPage.dnsOnly'), value: 'false' }];
 const domainColumns = computed(() => [
-  { key: 'name', label: t('common.name') },
-  { key: 'provider', label: t('dnsPage.provider'), nowrap: true },
-  { key: 'updatedAt', label: t('dnsPage.updatedAt'), nowrap: true },
+  { key: 'name', label: t('common.name'), width: 'w-72' },
+  { key: 'updatedAt', label: t('dnsPage.updatedAt'), nowrap: true, width: 'w-36' },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
 ]);
 const recordColumns = computed(() => [
@@ -99,6 +119,24 @@ const recordColumns = computed(() => [
   { key: 'ttl', label: 'TTL', nowrap: true },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
 ]);
+/** 详情摘要：provider / 记录数 / 更新时间（短属性 ≥wide 两列并排）。 */
+const domainSummaryItems = computed(() => {
+  const domain = selectedDomain.value;
+  if (!domain) return [];
+  return [
+    { key: 'provider', label: t('dnsPage.provider'), value: domain.provider },
+    { key: 'records', label: t('dnsPage.records'), value: records.value.length },
+    { key: 'updatedAt', label: t('dnsPage.updatedAt'), value: formatDateTime(domain.updatedAt, t('common.never')) },
+  ];
+});
+/** ListPage 页级状态槽：首屏 loading / 页级 error / 真·空态走槽；筛选无结果仍由 Table #empty（inset）承担。 */
+const listState = computed<'ready' | 'loading' | 'error' | 'empty'>(() => {
+  if (!listLoaded.value && !error.value) return 'loading';
+  if (loadingDomains.value && !domains.value.length) return 'loading';
+  if (error.value && !domains.value.length) return 'error';
+  if (!loadingDomains.value && !error.value && !domains.value.length && !search.value.trim()) return 'empty';
+  return 'ready';
+});
 
 function openDetail(domain: DnsDomainDto) {
   selectedId.value = domain.id;
@@ -153,7 +191,10 @@ async function loadDomains() {
     error.value = err instanceof Error ? err.message : t('dnsPage.loadFailed');
     notifyError(err instanceof Error ? err.message : t('dnsPage.loadFailed'), err);
   } finally {
-    if (listGuard.isCurrent(requestId)) loadingDomains.value = false;
+    if (listGuard.isCurrent(requestId)) {
+      loadingDomains.value = false;
+      listLoaded.value = true;
+    }
   }
 }
 
@@ -175,12 +216,10 @@ async function loadRecords(domainId = selectedId.value, signal?: AbortSignal) {
     recordsObservedAt.value = result.observedAt ?? '';
     recordsStale.value = result.stale;
     recordsLastRefreshError.value = result.lastRefreshError ?? '';
-    providerErrorDomainId.value = '';
   } catch (err) {
     if (signal?.aborted || requestId !== recordsRequestId) return;
     recordsError.value = err instanceof Error ? err.message : t('dnsPage.recordsLoadFailed');
     notifyError(err instanceof Error ? err.message : t('dnsPage.recordsLoadFailed'), err);
-    providerErrorDomainId.value = domainId;
   } finally {
     if (requestId === recordsRequestId) loadingRecords.value = false;
   }
@@ -333,26 +372,40 @@ watch(page, (value) => {
 <template>
   <TableDetailLayout class="h-full" :has-detail="detailOpen">
     <template #list>
-      <ConsolePage :title="t('routes.dns.title')" :description="t('routes.dns.description')">
-        <template #actions>
-          <Button size="sm" :loading="loadingDomains" @click="loadDomains"><RefreshCcw />{{ t('common.refresh') }}</Button>
-          <Button size="sm" variant="primary" @click="openCreateDomain"><Plus />{{ t('dnsPage.addDomain') }}</Button>
-        </template>
-
-        <ListPage>
+      <ConsolePage width="content" :title="t('routes.dns.title')" :description="t('routes.dns.description')">
+        <ListPage :state="listState">
           <template #toolbar>
-            <SearchInput v-model="search" clearable :placeholder="t('dnsPage.searchDomains')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
+            <ListCommandBar :label="t('routes.dns.title')">
+              <template #search>
+                <SearchInput v-model="search" clearable :placeholder="t('dnsPage.searchDomains')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
+              </template>
+              <template #actions>
+                <Button size="sm" :loading="loadingDomains" @click="loadDomains"><RefreshCcw />{{ t('common.refresh') }}</Button>
+                <Button size="sm" variant="primary" @click="openCreateDomain"><Plus />{{ t('common.add') }}</Button>
+              </template>
+            </ListCommandBar>
           </template>
 
-          <EmptyState v-if="error && !domains.length" variant="page" :title="t('common.loadFailed')" :description="error">
-            <template #actions>
-              <Button size="sm" :loading="loadingDomains" @click="loadDomains"><RefreshCcw />{{ t('common.retry') }}</Button>
-            </template>
-          </EmptyState>
+          <template #loading>
+            <div class="grid gap-2" aria-busy="true">
+              <Skeleton v-for="row in 6" :key="row" class="h-10 w-full" />
+            </div>
+          </template>
+
+          <template #error>
+            <EmptyState variant="page" :title="t('common.loadFailed')" :description="error">
+              <template #actions>
+                <Button size="sm" :loading="loadingDomains" @click="loadDomains"><RefreshCcw />{{ t('common.retry') }}</Button>
+              </template>
+            </EmptyState>
+          </template>
+
+          <template #empty>
+            <EmptyState variant="page" :title="t('dnsPage.noDomains')" :description="t('dnsPage.noDomainsHint')" />
+          </template>
 
           <Table
-            v-else
-            class="h-full max-lg:max-h-[60dvh]"
+            class="h-full max-lg:max-h-list"
             :columns="domainColumns"
             :rows="domains"
             row-key="id"
@@ -361,10 +414,8 @@ watch(page, (value) => {
             :loading-label="t('common.loading')"
           >
             <template #name="{ row }">
-              <TableDetailName class="max-w-[18rem]" :name="row.name" :label="t('common.openDetails', { name: row.name })" @click="openDetail(row)" />
-            </template>
-            <template #provider="{ row }">
-              <Badge :tone="domainTone(row, providerErrorDomainId)">{{ row.provider }}</Badge>
+              <TableDetailName class="max-w-72" :name="row.name" :label="t('common.openDetails', { name: row.name })" @click="openDetail(row)" />
+              <span class="block text-xs text-muted-foreground">{{ row.provider }}</span>
             </template>
             <template #updatedAt="{ row }">
               <span class="text-muted-foreground">{{ formatDateTime(row.updatedAt, t('common.never')) }}</span>
@@ -373,11 +424,11 @@ watch(page, (value) => {
               <div class="flex items-center justify-end gap-1">
                 <Button size="sm" variant="secondary" @click="openDetail(row)"><Eye />{{ t('common.details') }}</Button>
                 <Button size="sm" variant="ghost" :loading="syncingId === row.id" :disabled="syncingId === row.id" @click="syncRecords(row)"><Cloud />{{ t('dnsPage.syncRecords') }}</Button>
-                <Button size="sm" variant="ghost" @click="openEditDomain(row)"><Wrench />{{ t('common.edit') }}</Button>
                 <Dropdown align="right">
                   <template #trigger>
                     <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
                   </template>
+                  <DropdownItem @click="openEditDomain(row)"><Wrench />{{ t('common.edit') }}</DropdownItem>
                   <DropdownItem tone="danger" @click="deleteTarget = row"><Trash2 />{{ t('common.delete') }}</DropdownItem>
                 </Dropdown>
               </div>
@@ -399,42 +450,47 @@ watch(page, (value) => {
     </template>
 
     <template #detail>
-      <ConsolePage :title="selectedDomain?.name ?? t('common.loading')" :description="t('dnsPage.recordsHint')" :back-label="t('common.backToList')" :body-scroll="false" @back="closeDetail">
+      <ConsolePage width="content" :title="selectedDomain?.name ?? t('common.loading')" :breadcrumbs="breadcrumbs" :back-label="t('common.backToList')" :body-scroll="false" @back="closeDetail">
         <template v-if="selectedDomain" #actions>
           <Button size="sm" variant="secondary" @click="openEditDomain(selectedDomain)"><Wrench />{{ t('common.edit') }}</Button>
         </template>
-        <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4">
-          <div class="flex flex-wrap items-start justify-between gap-3">
-            <div class="min-w-0">
-              <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('dnsPage.records') }}</h3>
-              <p class="m-0 text-sm text-muted-foreground">{{ t('dnsPage.recordsHint') }}</p>
+        <div class="grid h-full min-h-0 content-start gap-4 overflow-y-auto pr-1">
+          <DetailSection :title="t('common.details')">
+            <PropertyList :items="domainSummaryItems" :columns="2" />
+          </DetailSection>
+
+          <div class="grid gap-3">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div class="min-w-0">
+                <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('dnsPage.records') }}</h3>
+                <p class="m-0 text-sm text-muted-foreground">{{ t('dnsPage.recordsHint') }}</p>
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="text-xs text-muted-foreground">
+                  {{ formatDateTime(recordsObservedAt, t('common.never')) }}
+                  <template v-if="recordsStale"> · {{ t('dnsPage.staleSnapshot') }}</template>
+                </span>
+                <Button size="sm" :loading="loadingRecords || syncingId === selectedId" @click="selectedDomain && syncRecords(selectedDomain)"><Cloud />{{ t('dnsPage.syncRecords') }}</Button>
+                <Button size="sm" variant="primary" @click="openCreateRecord"><Plus />{{ t('dnsPage.addRecord') }}</Button>
+              </div>
             </div>
-            <div class="flex flex-wrap items-center gap-2">
-              <span class="text-xs text-muted-foreground">
-                {{ formatDateTime(recordsObservedAt, t('common.never')) }}
-                <template v-if="recordsStale"> · {{ t('dnsPage.staleSnapshot') }}</template>
-              </span>
-              <Button size="sm" :loading="loadingRecords || syncingId === selectedId" @click="selectedDomain && syncRecords(selectedDomain)"><Cloud />{{ t('dnsPage.syncRecords') }}</Button>
-              <Button size="sm" variant="primary" @click="openCreateRecord"><Plus />{{ t('dnsPage.addRecord') }}</Button>
-            </div>
-          </div>
 
-          <p v-if="recordsLastRefreshError" class="m-0 rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ recordsLastRefreshError }}</p>
+            <InfoBar v-if="recordsLastRefreshError" tone="warning">{{ recordsLastRefreshError }}</InfoBar>
 
-          <EmptyState v-if="recordsError && !records.length" class="self-start" :title="t('common.loadFailed')" :description="recordsError">
-            <template #actions>
-              <Button size="sm" :loading="loadingRecords" @click="loadRecords()"><RefreshCcw />{{ t('common.retry') }}</Button>
-            </template>
-          </EmptyState>
+            <EmptyState v-if="recordsError && !records.length" variant="inset" :title="t('common.loadFailed')" :description="recordsError">
+              <template #actions>
+                <Button size="sm" :loading="loadingRecords" @click="loadRecords()"><RefreshCcw />{{ t('common.retry') }}</Button>
+              </template>
+            </EmptyState>
 
-          <Table
-            v-else
-            :columns="recordColumns"
-            :rows="records"
-            row-key="id"
-            :loading="loadingRecords"
-            :loading-label="t('common.loading')"
-          >
+            <Table
+              v-else
+              :columns="recordColumns"
+              :rows="records"
+              row-key="id"
+              :loading="loadingRecords"
+              :loading-label="t('common.loading')"
+            >
             <template #type="{ row }">
               <Badge tone="info">{{ row.type }}</Badge>
             </template>
@@ -454,9 +510,10 @@ watch(page, (value) => {
               </div>
             </template>
             <template #empty>
-              <EmptyState :title="t('dnsPage.noRecords')" :description="t('dnsPage.noRecordsHint')" />
+              <EmptyState variant="inset" :title="t('dnsPage.noRecords')" :description="t('dnsPage.noRecordsHint')" />
             </template>
           </Table>
+          </div>
         </div>
       </ConsolePage>
     </template>
@@ -464,13 +521,23 @@ watch(page, (value) => {
 
   <Dialog v-model:open="domainDialog" :title="editingDomain ? t('dnsPage.editDomain') : t('dnsPage.addDomain')" :description="t('dnsPage.domainFormHint')" :close-label="t('common.close')">
     <div class="grid gap-3">
-      <label class="grid gap-1 text-sm">
-        {{ t('common.name') }}
-        <Input v-model="domainForm.name" :invalid="Boolean(domainFormErrors.name)" @input="delete domainFormErrors.name" />
-        <span v-if="domainFormErrors.name" class="text-xs text-danger">{{ t(domainFormErrors.name) }}</span>
-      </label>
-      <label class="grid gap-1 text-sm">{{ t('dnsPage.provider') }}<Select v-model="domainForm.provider" :options="providerOptions" /></label>
-      <label class="grid gap-1 text-sm">{{ t('dnsPage.apiToken') }}<Input v-model="domainForm.apiToken" type="password" :placeholder="editingDomain ? t('dnsPage.blankTokenKeepsCurrent') : ''" /></label>
+      <div class="grid gap-3 sm:grid-cols-2">
+        <FormField :label="t('common.name')" required :error="domainFormErrors.name ? t(domainFormErrors.name) : ''">
+          <template #default="{ id, describedBy, invalid }">
+            <Input :id="id" :aria-describedby="describedBy" :invalid="invalid" :model-value="domainForm.name" @update:model-value="domainForm.name = $event; delete domainFormErrors.name" />
+          </template>
+        </FormField>
+        <FormField :label="t('dnsPage.provider')">
+          <template #default="{ id }">
+            <Select :id="id" :model-value="domainForm.provider" :options="providerOptions" @update:model-value="domainForm.provider = $event" />
+          </template>
+        </FormField>
+      </div>
+      <FormField :label="t('dnsPage.apiToken')" :hint="editingDomain ? t('dnsPage.blankTokenKeepsCurrent') : ''">
+        <template #default="{ id, describedBy }">
+          <Input :id="id" :aria-describedby="describedBy" :model-value="domainForm.apiToken" type="password" @update:model-value="domainForm.apiToken = $event" />
+        </template>
+      </FormField>
     </div>
     <template #footer>
       <Button @click="domainDialog = false">{{ t('common.cancel') }}</Button>
@@ -480,23 +547,33 @@ watch(page, (value) => {
 
   <Dialog v-model:open="recordDialog" :title="editingRecord ? t('dnsPage.editRecord') : t('dnsPage.addRecord')" :close-label="t('common.close')">
     <div class="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
-      <label class="grid gap-1 text-sm">
-        {{ t('common.type') }}
-        <Select v-model="recordForm.type" :options="recordTypeOptions" />
-        <span v-if="recordFormErrors.type" class="text-xs text-danger">{{ t(recordFormErrors.type) }}</span>
-      </label>
-      <label class="grid gap-1 text-sm">
-        {{ t('common.name') }}
-        <Input v-model="recordForm.name" :invalid="Boolean(recordFormErrors.name)" @input="delete recordFormErrors.name" />
-        <span v-if="recordFormErrors.name" class="text-xs text-danger">{{ t(recordFormErrors.name) }}</span>
-      </label>
-      <label class="col-span-2 grid gap-1 text-sm max-sm:col-span-1">
-        {{ t('dnsPage.content') }}
-        <Input v-model="recordForm.value" :invalid="Boolean(recordFormErrors.value)" @input="delete recordFormErrors.value" />
-        <span v-if="recordFormErrors.value" class="text-xs text-danger">{{ t(recordFormErrors.value) }}</span>
-      </label>
-      <label class="grid gap-1 text-sm">TTL<Input v-model="recordForm.ttl" type="number" /></label>
-      <label class="grid gap-1 text-sm">{{ t('dnsPage.proxyMode') }}<Select v-model="recordForm.proxied" :options="booleanOptions" /></label>
+      <FormField :label="t('common.type')" required :error="recordFormErrors.type ? t(recordFormErrors.type) : ''">
+        <template #default="{ id, describedBy, invalid }">
+          <Select :id="id" :aria-describedby="describedBy" :aria-invalid="invalid || undefined" :invalid="invalid" :model-value="recordForm.type" :options="recordTypeOptions" @update:model-value="recordForm.type = $event; delete recordFormErrors.type" />
+        </template>
+      </FormField>
+      <FormField :label="t('common.name')" required :error="recordFormErrors.name ? t(recordFormErrors.name) : ''">
+        <template #default="{ id, describedBy, invalid }">
+          <Input :id="id" :aria-describedby="describedBy" :invalid="invalid" :model-value="recordForm.name" @update:model-value="recordForm.name = $event; delete recordFormErrors.name" />
+        </template>
+      </FormField>
+      <div class="col-span-2 max-sm:col-span-1">
+        <FormField :label="t('dnsPage.content')" required :error="recordFormErrors.value ? t(recordFormErrors.value) : ''">
+          <template #default="{ id, describedBy, invalid }">
+            <Input :id="id" :aria-describedby="describedBy" :invalid="invalid" :model-value="recordForm.value" @update:model-value="recordForm.value = $event; delete recordFormErrors.value" />
+          </template>
+        </FormField>
+      </div>
+      <FormField label="TTL">
+        <template #default="{ id, describedBy, invalid }">
+          <NumberBox :id="id" :aria-describedby="describedBy" :invalid="invalid" :min="1" :max="86400" :step="1" :model-value="toNumber(recordForm.ttl)" @update:model-value="recordForm.ttl = fromNumber($event)" />
+        </template>
+      </FormField>
+      <FormField :label="t('dnsPage.proxyMode')">
+        <template #default="{ id }">
+          <Select :id="id" :model-value="recordForm.proxied" :options="booleanOptions" @update:model-value="recordForm.proxied = $event" />
+        </template>
+      </FormField>
     </div>
     <template #footer>
       <Button @click="recordDialog = false">{{ t('common.cancel') }}</Button>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { UploadCloud } from '@lucide/vue';
+import { UploadCloud } from '@/icons';
 import { ref } from 'vue';
 import Button from './Button.vue';
 

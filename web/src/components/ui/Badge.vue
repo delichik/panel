@@ -4,8 +4,9 @@ import { cn } from './cn';
 
 const props = withDefaults(defineProps<{ tone?: 'neutral' | 'success' | 'warning' | 'danger' | 'info' }>(), { tone: 'neutral' });
 const attrs = useAttrs();
+// WinUI InfoBadge：胶囊表面，24px 高、12px 文案。
 const classes = computed(() => cn(
-  'inline-flex h-6 items-center rounded-md border px-2 text-[12px] font-semibold leading-none tracking-wide',
+  'inline-flex h-6 items-center rounded-pill border px-2 text-caption font-semibold leading-none',
   props.tone === 'neutral' && 'border-neutral-border bg-neutral-bg text-neutral',
   props.tone === 'success' && 'border-success-border bg-success-bg text-success',
   props.tone === 'warning' && 'border-warning-border bg-warning-bg text-warning',

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { PlayCircle, RefreshCcw, ServerCog } from '@lucide/vue';
+import { PlayCircle, RefreshCcw, ServerCog } from '@/icons';
 import { serversApi } from '@/api/servers';
 import { tasksApi } from '@/api/tasks';
 import ActivityLink from '@/components/activity/ActivityLink.vue';
@@ -164,7 +164,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4">
+  <div class="grid h-full min-h-0 grid-rows-page gap-4">
     <div class="flex flex-wrap items-center justify-between gap-2">
       <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5">
         <span class="text-sm text-muted-foreground">{{ t(serverSummaryStatusKey(server)) }}</span>
@@ -188,7 +188,7 @@ onBeforeUnmount(() => {
 
     <div class="relative min-h-0 overflow-y-auto">
       <LoadingOverlay v-if="loading && !agentTask" :label="t('serversPage.agentTaskLoading')" />
-      <div v-if="agentTask" class="grid min-w-0 gap-3 border-t border-border pt-4 text-xs">
+      <div v-if="agentTask" class="grid min-w-0 gap-3 border-t border-divider pt-4 text-xs">
         <div v-if="agentTask.stage" class="flex min-w-0 flex-wrap items-center justify-between gap-2">
           <strong class="text-foreground">{{ t('serversPage.agentTaskCurrentStage') }}</strong>
           <span class="text-muted-foreground">{{ stageLabel(agentTask.stage) }}</span>
@@ -199,10 +199,10 @@ onBeforeUnmount(() => {
             <strong class="text-foreground">{{ t('serversPage.agentTaskRecentLogs') }}</strong>
             <ActivityLink :execution-id="agentTask.id" />
           </div>
-          <pre aria-live="polite" class="m-0 max-h-64 min-w-0 overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words rounded-lg border border-border bg-card p-3 text-[11px] text-foreground [overflow-wrap:anywhere]">{{ visibleLogs.map((line) => `[${line.stream}] ${formatLog(line.line)}`).join('\n') || t('serversPage.agentTaskNoLogs') }}</pre>
+          <pre aria-live="polite" class="m-0 max-h-64 min-w-0 overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words rounded-control border border-divider bg-muted p-3 text-xs text-foreground [overflow-wrap:anywhere]">{{ visibleLogs.map((line) => `[${line.stream}] ${formatLog(line.line)}`).join('\n') || t('serversPage.agentTaskNoLogs') }}</pre>
         </div>
       </div>
-      <div v-if="error" class="mt-3 grid gap-2 rounded-xl border border-danger-border bg-danger-bg p-3 text-xs text-danger">
+      <div v-if="error" class="mt-3 grid gap-2 rounded-control border border-danger-border bg-danger-bg p-3 text-xs text-danger">
         <span class="break-words">{{ error }}</span>
         <Button size="sm" variant="secondary" :loading="loading" @click="load(true)"><RefreshCcw />{{ t('common.retry') }}</Button>
       </div>

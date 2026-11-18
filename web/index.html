@@ -6,19 +6,38 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Seamark</title>
     <script>
-      // Resolve the saved theme before first paint so the boot overlay never
-      // flashes white when dark mode is enabled.
+      // Resolve the cached appearance before first paint so the boot overlay and
+      // Mica background never flash a different theme. The server remains the
+      // source of truth; this cache is refreshed right after the app boots.
       (function () {
         try {
-          var mode = localStorage.getItem('panel.theme.mode');
-          var scheme = localStorage.getItem('panel.theme.scheme');
-          if (scheme === 'ocean' || scheme === 'lighthouse') {
-            document.documentElement.dataset.scheme = scheme;
-          }
+          var raw = localStorage.getItem('panel.appearance.cache');
+          var appearance = null;
+          if (raw) appearance = JSON.parse(raw);
           var media = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-color-scheme: dark)') : null;
-          var dark = mode === 'dark' || (mode !== 'light' && !!media && media.matches);
-          document.documentElement.dataset.theme = dark ? 'dark' : 'light';
-          document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+          var prefersDark = !!(media && media.matches);
+          var mode = appearance && (appearance.themeMode === 'light' || appearance.themeMode === 'dark' || appearance.themeMode === 'system')
+            ? appearance.themeMode
+            : 'system';
+          var dark = mode === 'dark' || (mode === 'system' && prefersDark);
+          var root = document.documentElement;
+          root.dataset.theme = dark ? 'dark' : 'light';
+          root.style.colorScheme = dark ? 'dark' : 'light';
+          var accents = ['blue', 'teal', 'green', 'gold', 'orange', 'red', 'pink', 'purple', 'gray'];
+          var accent = appearance && accents.indexOf(appearance.accent) >= 0 ? appearance.accent : 'blue';
+          root.dataset.accent = accent;
+          var background = appearance && appearance.background && typeof appearance.background === 'object' ? appearance.background : null;
+          var kind = background && (background.kind === 'none' || background.kind === 'preset' || background.kind === 'image')
+            ? background.kind
+            : 'none';
+          root.dataset.background = kind;
+          root.dataset.mica = appearance && appearance.mica === false ? 'off' : 'on';
+          if (kind === 'preset' && background && typeof background.presetId === 'string') {
+            root.dataset.preset = background.presetId;
+          }
+          if (kind === 'image' && appearance && typeof appearance.thumbDataUrl === 'string' && appearance.thumbDataUrl) {
+            root.style.setProperty('--panel-mica-thumb', 'url("' + appearance.thumbDataUrl + '")');
+          }
           // Reflect the saved UI language on <html lang> before first paint so
           // browsers never treat the page as English after a Chinese switch.
           var locale = localStorage.getItem('panel.locale');
@@ -32,30 +51,35 @@
     </script>
     <style>
       :root {
-        --boot-bg: #f3f5f7;
-        --boot-track: #c5ced9;
-        --boot-accent: #0c6b54;
+        --boot-bg: #f3f3f3;
+        --boot-track: rgba(0, 0, 0, 0.12);
+        --boot-accent: #0078d4;
       }
-      :root[data-scheme='ocean'] {
-        --boot-bg: #eef4f9;
-        --boot-track: #b0c9de;
-        --boot-accent: #164a78;
-      }
+      :root[data-accent='teal'] { --boot-accent: #038387; }
+      :root[data-accent='green'] { --boot-accent: #107c10; }
+      :root[data-accent='gold'] { --boot-accent: #986f0b; }
+      :root[data-accent='orange'] { --boot-accent: #ca5010; }
+      :root[data-accent='red'] { --boot-accent: #c50f1f; }
+      :root[data-accent='pink'] { --boot-accent: #c239b3; }
+      :root[data-accent='purple'] { --boot-accent: #8764b8; }
+      :root[data-accent='gray'] { --boot-accent: #69797e; }
       :root[data-theme='dark'] {
-        --boot-bg: #0c1218;
-        --boot-track: rgba(168, 204, 232, 0.24);
-        --boot-accent: #46e89c;
+        --boot-bg: #202020;
+        --boot-track: rgba(255, 255, 255, 0.12);
+        --boot-accent: color-mix(in srgb, #0078d4 45%, white);
       }
-      :root[data-theme='dark'][data-scheme='ocean'] {
-        --boot-bg: #08121f;
-        --boot-track: rgba(130, 185, 230, 0.26);
-        --boot-accent: #38c6d9;
-      }
+      :root[data-theme='dark'][data-accent='teal'] { --boot-accent: color-mix(in srgb, #038387 55%, white); }
+      :root[data-theme='dark'][data-accent='green'] { --boot-accent: color-mix(in srgb, #107c10 55%, white); }
+      :root[data-theme='dark'][data-accent='gold'] { --boot-accent: color-mix(in srgb, #986f0b 55%, white); }
+      :root[data-theme='dark'][data-accent='orange'] { --boot-accent: color-mix(in srgb, #ca5010 55%, white); }
+      :root[data-theme='dark'][data-accent='red'] { --boot-accent: color-mix(in srgb, #c50f1f 55%, white); }
+      :root[data-theme='dark'][data-accent='pink'] { --boot-accent: color-mix(in srgb, #c239b3 55%, white); }
+      :root[data-theme='dark'][data-accent='purple'] { --boot-accent: color-mix(in srgb, #8764b8 55%, white); }
+      :root[data-theme='dark'][data-accent='gray'] { --boot-accent: color-mix(in srgb, #69797e 55%, white); }
       @media (prefers-color-scheme: dark) {
         :root:not([data-theme]) {
-          --boot-bg: #0c1218;
-          --boot-track: rgba(168, 204, 232, 0.24);
-          --boot-accent: #46e89c;
+          --boot-bg: #202020;
+          --boot-track: rgba(255, 255, 255, 0.12);
         }
       }
       .boot-screen {
@@ -66,8 +90,8 @@
         background: var(--boot-bg, #ffffff);
       }
       .boot-spinner {
-        width: 32px;
-        height: 32px;
+        width: 28px;
+        height: 28px;
         border: 3px solid var(--boot-track, #d7d7d7);
         border-top-color: var(--boot-accent, rgba(0, 0, 0, 0.92));
         border-radius: 9999px;
@@ -75,6 +99,9 @@
       }
       @keyframes boot-spin {
         to { transform: rotate(360deg); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .boot-spinner { animation: none; border-top-color: var(--boot-track, #d7d7d7); }
       }
     </style>
   </head>

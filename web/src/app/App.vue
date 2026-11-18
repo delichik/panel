@@ -1,8 +1,13 @@
 <script setup lang="ts">
+import { onMounted } from 'vue';
 import ToastProvider from '@/components/ui/ToastProvider.vue';
-import { useThemeMode } from '@/design/theme';
+import { bootstrapAppearance } from '@/design/appearance';
 
-useThemeMode();
+// Load the server-persisted appearance as soon as the app mounts: authenticated
+// users get the full settings, the login page gets the public subset.
+onMounted(() => {
+  void bootstrapAppearance();
+});
 </script>
 
 <template>

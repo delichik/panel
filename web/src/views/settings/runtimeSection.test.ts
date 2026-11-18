@@ -111,9 +111,10 @@ describe('settings runtime section', () => {
   it('keeps only the container report interval as a numeric runtime setting', async () => {
     const view = await render();
 
-    const numberInputs = view.findAll<HTMLInputElement>('input[type="number"]');
+    const numberInputs = view.findAll<HTMLInputElement>('[role="spinbutton"]');
     expect(numberInputs).toHaveLength(1);
     expect(numberInputs[0]!.element.value).toBe('30');
+    expect(numberInputs[0]!.attributes('aria-valuemin')).toBe('1');
     expect(view.text()).toContain('Container report interval seconds');
     // 指标保留/采集间隔/清理计划已移出运行时设置，由指标设施管理。
     expect(view.text()).not.toContain('Metrics retention days');
@@ -123,9 +124,10 @@ describe('settings runtime section', () => {
 
   it('saves the runtime section with the container interval but without removed metrics fields', async () => {
     const view = await render();
-    const interval = view.find<HTMLInputElement>('input[type="number"]');
+    const interval = view.find<HTMLInputElement>('[role="spinbutton"]');
     interval.element.value = '45';
     await interval.trigger('input');
+    await interval.trigger('change');
     await flushPromises();
 
     const save = view.findAll('button').find((button) => button.text() === 'Save section')!;

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { Activity, Database, Pause, Play, RefreshCcw, Trash2 } from '@lucide/vue';
+import { Activity, Database, Pause, Play, RefreshCcw, Trash2 } from '@/icons';
 import { debugApi } from '@/api/debug';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
@@ -12,7 +12,6 @@ import Table from '@/components/ui/Table.vue';
 import Tabs from '@/components/ui/Tabs.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
-import WorkspacePage from '@/components/templates/WorkspacePage.vue';
 import { useI18n } from '@/i18n';
 import type { DebugDatabase, DebugDatabaseSnapshots, DebugPprofStatus, DebugRuntimeSnapshot, DebugTaskDefinition, DebugTaskSnapshot } from '@/types/debug';
 import { formatDateTime } from '@/utils/datetime';
@@ -106,6 +105,11 @@ const taskDefinitionColumns = computed<Array<{ key: keyof TaskDefinitionRow & st
   { key: 'concurrencyPolicy', label: t('debugPage.concurrencyPolicy') },
   { key: 'defaultMaxRetries', label: t('debugPage.maxRetries'), align: 'right' },
   { key: 'staleQueuedAfter', label: t('debugPage.staleQueuedAfter'), align: 'right' },
+]);
+const databaseTableColumns = computed(() => [
+  { key: 'name', label: t('debugPage.table') },
+  { key: 'rows', label: t('debugPage.rows') },
+  { key: 'size', label: t('debugPage.size') },
 ]);
 function eventRuntimeSnapshot() {
   return taskSnapshot.value?.eventRuntime ?? taskSnapshot.value?.tasks;
@@ -313,142 +317,144 @@ onBeforeUnmount(() => window.clearInterval(timer));
       </Button>
     </template>
 
-    <WorkspacePage>
-      <template #toolbar>
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <div class="flex flex-wrap gap-2">
-            <Badge :tone="stale ? 'warning' : 'success'">{{ stale ? t('debugPage.staleSnapshot') : t('debugPage.liveSnapshot') }}</Badge>
-            <Badge tone="info">{{ formatDateTime(collectedAt) || t('common.never') }}</Badge>
-          </div>
+    <div class="grid min-w-0 gap-4">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div class="flex flex-wrap items-center gap-2">
+          <Badge :tone="stale ? 'warning' : 'success'">{{ stale ? t('debugPage.staleSnapshot') : t('debugPage.liveSnapshot') }}</Badge>
+          <Badge tone="info">{{ formatDateTime(collectedAt) || t('common.never') }}</Badge>
         </div>
-      </template>
+      </div>
 
-      <section class="mb-4 rounded-2xl border border-border bg-card p-5">
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <div class="grid gap-1">
-            <h3><Activity class="size-4" />{{ t('debugPage.pprof') }}</h3>
-            <p class="text-sm text-muted-foreground">{{ pprof?.enabled ? t('debugPage.pprofEnabledHint') : t('debugPage.pprofDisabledHint') }}</p>
+      <!-- 短分组在 wide(≥1239px) 起两列并排；长定义表/数据库表各自全宽。 -->
+      <div class="grid gap-4 wide:grid-cols-2">
+        <section class="surface-card p-4">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="grid gap-1">
+              <h3 class="m-0 flex items-center gap-2 text-body-strong font-semibold text-foreground"><Activity class="size-4" />{{ t('debugPage.pprof') }}</h3>
+              <p class="text-sm text-muted-foreground">{{ pprof?.enabled ? t('debugPage.pprofEnabledHint') : t('debugPage.pprofDisabledHint') }}</p>
+            </div>
+            <div class="flex items-center gap-3">
+              <a v-if="pprofUrl" class="text-xs text-muted-foreground transition-colors hover:text-foreground" :href="pprofUrl" target="_blank" rel="noreferrer">{{ pprofUrl }}</a>
+              <Switch :model-value="pprof?.enabled ?? false" :disabled="pprofPending" :label="t('debugPage.pprof')" @update:model-value="togglePprof" />
+            </div>
           </div>
-          <div class="flex items-center gap-3">
-            <a v-if="pprofUrl" class="text-xs text-muted-foreground transition-colors hover:text-foreground" :href="pprofUrl" target="_blank" rel="noreferrer">{{ pprofUrl }}</a>
-            <Switch :model-value="pprof?.enabled ?? false" :disabled="pprofPending" :label="t('debugPage.pprof')" @update:model-value="togglePprof" />
-          </div>
-        </div>
-      </section>
+        </section>
 
-      <section class="mb-4 rounded-2xl border border-danger-border bg-danger-bg p-5">
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <div class="grid gap-1">
-            <h3 class="text-danger"><Trash2 class="size-4" />{{ t('debugPage.clearRuntimeData') }}</h3>
-            <p class="text-sm text-danger">{{ t('debugPage.clearRuntimeDataHint') }}</p>
+        <section class="rounded-overlay border border-danger-border bg-danger-bg p-4">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="grid gap-1">
+              <h3 class="m-0 flex items-center gap-2 text-body-strong font-semibold text-danger"><Trash2 class="size-4" />{{ t('debugPage.clearRuntimeData') }}</h3>
+              <p class="m-0 text-sm text-danger">{{ t('debugPage.clearRuntimeDataHint') }}</p>
+            </div>
+            <Button variant="danger" :loading="clearSubmitting" :disabled="!canClear" @click="clearOpen = true"><Trash2 />{{ t('debugPage.clearRuntimeData') }}</Button>
           </div>
-          <Button variant="danger" :loading="clearSubmitting" :disabled="!canClear" @click="clearOpen = true"><Trash2 />{{ t('debugPage.clearRuntimeData') }}</Button>
-        </div>
-        <div class="mt-4 grid gap-3 rounded-xl border border-border bg-card p-4 text-sm" aria-live="polite" aria-atomic="true">
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <div class="flex flex-wrap items-center gap-2"><strong>{{ t('debugPage.cleanup.latest') }}</strong><Badge :tone="clearTone">{{ clearStateLabel }}</Badge></div>
-            <Button size="sm" variant="ghost" :loading="clearChecking" :disabled="clearSubmitting" @click="refreshClearStatus"><RefreshCcw />{{ t('debugPage.cleanup.checkStatus') }}</Button>
+          <div class="mt-4 grid gap-3 rounded-control border border-divider bg-control p-4 text-sm" aria-live="polite" aria-atomic="true">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="flex flex-wrap items-center gap-2"><strong class="text-body-strong text-foreground">{{ t('debugPage.cleanup.latest') }}</strong><Badge :tone="clearTone">{{ clearStateLabel }}</Badge></div>
+              <Button size="sm" variant="ghost" :loading="clearChecking" :disabled="clearSubmitting" @click="refreshClearStatus"><RefreshCcw />{{ t('debugPage.cleanup.checkStatus') }}</Button>
+            </div>
+            <dl v-if="clearStatus?.runId" class="grid gap-3 sm:grid-cols-3">
+              <div><dt class="text-caption text-muted-foreground">{{ t('debugPage.cleanup.phase') }}</dt><dd class="m-0 break-words text-body text-foreground">{{ clearStageLabel(clearStatus.failedStage || clearStatus.stage) }}</dd></div>
+              <div><dt class="text-caption text-muted-foreground">{{ t('debugPage.cleanup.startedAt') }}</dt><dd class="m-0 break-words text-body text-foreground">{{ formatDateTime(clearStatus.startedAt) || t('common.notAvailable') }}</dd></div>
+              <div><dt class="text-caption text-muted-foreground">{{ t('debugPage.cleanup.finishedAt') }}</dt><dd class="m-0 break-words text-body text-foreground">{{ formatDateTime(clearStatus.finishedAt) || t('common.notAvailable') }}</dd></div>
+            </dl>
+            <p v-if="clearQueryFailed" role="alert" class="m-0 text-warning">{{ t('debugPage.cleanup.queryFailed') }}</p>
+            <p v-else-if="clearResultMissing" role="alert" class="m-0 text-warning">{{ t('debugPage.cleanup.resultMissing') }}</p>
+            <p v-else-if="clearRunning" class="m-0 text-muted-foreground">{{ t('debugPage.cleanup.runningHint') }}</p>
+            <p v-else-if="clearStatus?.status === 'failed'" role="alert" class="m-0 text-danger">{{ clearFailureHint }}</p>
+            <p v-else-if="clearStatus?.status === 'succeeded'" class="m-0 text-muted-foreground">{{ t('debugPage.cleanup.completedHint') }}</p>
           </div>
-          <dl v-if="clearStatus?.runId" class="grid gap-3 sm:grid-cols-3">
-            <div><dt class="text-muted-foreground">{{ t('debugPage.cleanup.phase') }}</dt><dd>{{ clearStageLabel(clearStatus.failedStage || clearStatus.stage) }}</dd></div>
-            <div><dt class="text-muted-foreground">{{ t('debugPage.cleanup.startedAt') }}</dt><dd>{{ formatDateTime(clearStatus.startedAt) || t('common.notAvailable') }}</dd></div>
-            <div><dt class="text-muted-foreground">{{ t('debugPage.cleanup.finishedAt') }}</dt><dd>{{ formatDateTime(clearStatus.finishedAt) || t('common.notAvailable') }}</dd></div>
-          </dl>
-          <p v-if="clearQueryFailed" role="alert" class="m-0 text-warning">{{ t('debugPage.cleanup.queryFailed') }}</p>
-          <p v-else-if="clearResultMissing" role="alert" class="m-0 text-warning">{{ t('debugPage.cleanup.resultMissing') }}</p>
-          <p v-else-if="clearRunning" class="m-0 text-muted-foreground">{{ t('debugPage.cleanup.runningHint') }}</p>
-          <p v-else-if="clearStatus?.status === 'failed'" role="alert" class="m-0 text-danger">{{ clearFailureHint }}</p>
-          <p v-else-if="clearStatus?.status === 'succeeded'" class="m-0 text-muted-foreground">{{ t('debugPage.cleanup.completedHint') }}</p>
-        </div>
-      </section>
+        </section>
+      </div>
 
-      <Tabs v-model="activeTab" class="h-full min-h-[600px]" :tabs="tabs">
-        <section v-if="activeTab === 'runtime'" class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <div v-if="runtimeLoading && !runtimeSnapshot" class="relative grid min-h-96 place-items-center xl:col-span-2"><LoadingOverlay /></div>
-          <EmptyState v-else-if="runtimeError && !runtimeSnapshot" class="xl:col-span-2" :title="t('common.loadFailed')" :description="runtimeError">
+      <Tabs v-model="activeTab" class="min-h-0" :tabs="tabs">
+        <section v-if="activeTab === 'runtime'" class="grid gap-4 wide:grid-cols-2">
+          <div v-if="runtimeLoading && !runtimeSnapshot" class="relative grid min-h-96 place-items-center wide:col-span-2"><LoadingOverlay /></div>
+          <EmptyState v-else-if="runtimeError && !runtimeSnapshot" class="wide:col-span-2" :title="t('common.loadFailed')" :description="runtimeError">
             <template #actions><Button size="sm" :loading="runtimeLoading" @click="loadRuntime"><RefreshCcw />{{ t('common.retry') }}</Button></template>
           </EmptyState>
           <template v-else-if="runtimeSnapshot">
-            <div class="grid gap-4 md:grid-cols-3">
-              <div class="rounded-2xl border border-border bg-card p-4"><span>{{ t('debugPage.uptime') }}</span><strong>{{ runtimeSnapshot.process.uptimeSeconds }}s</strong></div>
-              <div class="rounded-2xl border border-border bg-card p-4"><span>{{ t('debugPage.goroutines') }}</span><strong>{{ runtimeSnapshot.process.goroutineCount }}</strong></div>
-              <div class="rounded-2xl border border-border bg-card p-4"><span>{{ t('debugPage.heap') }}</span><strong>{{ formatBytes(Number(runtimeSnapshot.memory.heapAllocBytes || runtimeSnapshot.memory.allocBytes || 0)) }}</strong></div>
+            <div class="grid grid-cols-1 gap-4 wide:grid-cols-3">
+              <div class="surface-card p-4"><span class="block text-caption text-muted-foreground">{{ t('debugPage.uptime') }}</span><strong class="mt-1 block text-body-strong text-foreground">{{ runtimeSnapshot.process.uptimeSeconds }}s</strong></div>
+              <div class="surface-card p-4"><span class="block text-caption text-muted-foreground">{{ t('debugPage.goroutines') }}</span><strong class="mt-1 block text-body-strong text-foreground">{{ runtimeSnapshot.process.goroutineCount }}</strong></div>
+              <div class="surface-card p-4"><span class="block text-caption text-muted-foreground">{{ t('debugPage.heap') }}</span><strong class="mt-1 block break-words text-body-strong text-foreground">{{ formatBytes(Number(runtimeSnapshot.memory.heapAllocBytes || runtimeSnapshot.memory.allocBytes || 0)) }}</strong></div>
             </div>
-            <section class="rounded-2xl border border-border bg-card p-5">
-              <h3><Activity class="size-4" />{{ t('debugPage.process') }}</h3>
-              <dl class="mt-4 grid grid-cols-2 gap-3 text-sm max-md:grid-cols-1">
-                <div><dt>PID</dt><dd>{{ runtimeSnapshot.process.pid }}</dd></div>
-                <div><dt>{{ t('debugPage.goVersion') }}</dt><dd>{{ runtimeSnapshot.process.goVersion }}</dd></div>
-                <div><dt>{{ t('debugPage.platform') }}</dt><dd>{{ runtimeSnapshot.process.os }} / {{ runtimeSnapshot.process.architecture }}</dd></div>
-                <div><dt>{{ t('debugPage.cpu') }}</dt><dd>{{ runtimeSnapshot.process.cpuCount }}</dd></div>
+            <section class="surface-card p-4">
+              <h3 class="m-0 flex items-center gap-2 text-body-strong font-semibold text-foreground"><Activity class="size-4" />{{ t('debugPage.process') }}</h3>
+              <dl class="mt-4 grid grid-cols-1 gap-3 wide:grid-cols-2">
+                <div><dt class="text-caption text-muted-foreground">PID</dt><dd class="m-0 break-words text-body text-foreground">{{ runtimeSnapshot.process.pid }}</dd></div>
+                <div><dt class="text-caption text-muted-foreground">{{ t('debugPage.goVersion') }}</dt><dd class="m-0 break-words text-body text-foreground">{{ runtimeSnapshot.process.goVersion }}</dd></div>
+                <div><dt class="text-caption text-muted-foreground">{{ t('debugPage.platform') }}</dt><dd class="m-0 break-words text-body text-foreground">{{ runtimeSnapshot.process.os }} / {{ runtimeSnapshot.process.architecture }}</dd></div>
+                <div><dt class="text-caption text-muted-foreground">{{ t('debugPage.cpu') }}</dt><dd class="m-0 break-words text-body text-foreground">{{ runtimeSnapshot.process.cpuCount }}</dd></div>
               </dl>
             </section>
           </template>
-          <EmptyState v-else class="xl:col-span-2" :title="t('debugPage.empty')" :description="t('debugPage.emptyHint')" />
+          <EmptyState v-else class="wide:col-span-2" :title="t('debugPage.empty')" :description="t('debugPage.emptyHint')" />
         </section>
 
-        <section v-else-if="activeTab === 'tasks'" class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <div v-if="tasksLoading && !taskSnapshot" class="relative grid min-h-96 place-items-center xl:col-span-2"><LoadingOverlay /></div>
-          <EmptyState v-else-if="tasksError && !taskSnapshot" class="xl:col-span-2" :title="t('common.loadFailed')" :description="tasksError">
+        <section v-else-if="activeTab === 'tasks'" class="grid gap-4">
+          <div v-if="tasksLoading && !taskSnapshot" class="relative grid min-h-96 place-items-center"><LoadingOverlay /></div>
+          <EmptyState v-else-if="tasksError && !taskSnapshot" :title="t('common.loadFailed')" :description="tasksError">
             <template #actions><Button size="sm" :loading="tasksLoading" @click="loadTasks"><RefreshCcw />{{ t('common.retry') }}</Button></template>
           </EmptyState>
           <template v-else-if="taskSnapshot">
-            <div class="min-w-0 rounded-2xl border border-border bg-card p-5">
-              <h3>{{ t('debugPage.taskRuntime') }}</h3>
-              <div class="mt-4 grid grid-cols-3 gap-3 max-md:grid-cols-1">
-                <div v-for="metric in taskMetricRows" :key="metric.key" class="rounded-lg bg-muted p-3"><span class="block text-xs text-muted-foreground">{{ metric.label }}</span><strong class="block">{{ metric.value }}</strong></div>
+            <div class="grid gap-4 wide:grid-cols-2">
+              <div class="min-w-0 surface-card p-4">
+                <h3 class="m-0 flex items-center gap-2 text-body-strong font-semibold text-foreground">{{ t('debugPage.taskRuntime') }}</h3>
+                <div class="mt-4 grid grid-cols-1 gap-3 wide:grid-cols-2">
+                  <div v-for="metric in taskMetricRows" :key="metric.key" class="rounded-control bg-muted p-3"><span class="block text-caption text-muted-foreground">{{ metric.label }}</span><strong class="mt-1 block break-words text-body-strong text-foreground">{{ metric.value }}</strong></div>
+                </div>
               </div>
-              <div class="mt-6 min-w-0">
-                <h3>{{ t('debugPage.taskDefinitions') }}</h3>
-                <Table v-if="taskDefinitionRows.length" class="mt-4 max-h-96" :framed="false" :columns="taskDefinitionColumns" :rows="taskDefinitionRows" row-key="type" />
-                <p v-else class="mt-3 text-sm text-muted-foreground">{{ t('debugPage.noTaskDefinitions') }}</p>
-              </div>
+              <aside class="surface-card p-4">
+                <h3 class="m-0 flex items-center gap-2 text-body-strong font-semibold text-foreground">{{ t('debugPage.polling') }}</h3>
+                <p class="text-sm text-muted-foreground">{{ paused ? t('debugPage.pausedHint') : t('debugPage.runningHint') }}</p>
+              </aside>
             </div>
-            <aside class="rounded-2xl border border-border bg-card p-5">
-              <h3>{{ t('debugPage.polling') }}</h3>
-              <p class="text-sm text-muted-foreground">{{ paused ? t('debugPage.pausedHint') : t('debugPage.runningHint') }}</p>
-            </aside>
+            <section class="min-w-0 surface-card p-4">
+              <h3 class="m-0 flex items-center gap-2 text-body-strong font-semibold text-foreground">{{ t('debugPage.taskDefinitions') }}</h3>
+              <Table v-if="taskDefinitionRows.length" class="mt-4 max-h-96" :framed="false" :columns="taskDefinitionColumns" :rows="taskDefinitionRows" row-key="type" />
+              <p v-else class="mt-3 text-sm text-muted-foreground">{{ t('debugPage.noTaskDefinitions') }}</p>
+            </section>
           </template>
-          <EmptyState v-else class="xl:col-span-2" :title="t('debugPage.empty')" :description="t('debugPage.emptyHint')" />
+          <EmptyState v-else :title="t('debugPage.empty')" :description="t('debugPage.emptyHint')" />
         </section>
 
-        <section v-else class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <div v-if="databasesLoading && !databaseSnapshots" class="relative grid min-h-96 place-items-center xl:col-span-2"><LoadingOverlay /></div>
-          <EmptyState v-else-if="databasesError && !databaseSnapshots" class="xl:col-span-2" :title="t('common.loadFailed')" :description="databasesError">
+        <section v-else class="grid gap-4">
+          <div v-if="databasesLoading && !databaseSnapshots" class="relative grid min-h-96 place-items-center"><LoadingOverlay /></div>
+          <EmptyState v-else-if="databasesError && !databaseSnapshots" :title="t('common.loadFailed')" :description="databasesError">
             <template #actions><Button size="sm" :loading="databasesLoading" @click="loadDatabases"><RefreshCcw />{{ t('common.retry') }}</Button></template>
           </EmptyState>
           <template v-else-if="databaseSnapshots">
-            <div class="grid min-h-0 gap-3">
-              <article v-for="db in databaseSnapshots.databases" :key="db.name" class="grid gap-3 rounded-2xl border border-border bg-card p-4">
-              <div class="flex items-center justify-between gap-3">
-                <h3><Database class="size-4" />{{ db.name }}</h3>
-                <Badge :tone="dbTone(db)">{{ db.healthy ? t('state.healthy') : db.errorCode || t('state.critical') }}</Badge>
-              </div>
-              <div class="grid grid-cols-3 gap-3 text-sm max-md:grid-cols-1">
-                <div><span>{{ t('debugPage.fileSize') }}</span><strong>{{ formatBytes(db.fileSizeBytes) }}</strong></div>
-                <div><span>{{ t('debugPage.used') }}</span><strong>{{ formatBytes(db.usedBytes) }}</strong></div>
-                <div><span>{{ t('debugPage.free') }}</span><strong>{{ formatBytes(db.freeBytes) }}</strong></div>
-              </div>
-              <div class="max-h-56 overflow-auto rounded-xl border border-border">
-                <table class="w-full text-left text-sm">
-                  <thead class="sticky top-0 bg-muted text-xs text-muted-foreground"><tr><th class="p-2">{{ t('debugPage.table') }}</th><th class="p-2">{{ t('debugPage.rows') }}</th><th class="p-2">{{ t('debugPage.size') }}</th></tr></thead>
-                  <tbody><tr v-for="table in db.tables" :key="table.name" class="border-t border-border"><td class="p-2">{{ table.name }}</td><td class="p-2">{{ table.rowCount }}</td><td class="p-2">{{ formatBytes(table.totalSizeBytes) }}</td></tr></tbody>
-                </table>
-              </div>
-              </article>
-            </div>
-            <aside class="rounded-2xl border border-border bg-card p-5">
-              <h3>{{ t('debugPage.databaseSummary') }}</h3>
-              <div class="mt-4 grid gap-3 text-sm">
-                <div><span>{{ t('debugPage.healthyDatabases') }}</span><strong>{{ databaseTotals.healthy }} / {{ databaseTotals.total }}</strong></div>
-                <div><span>{{ t('debugPage.used') }}</span><strong>{{ formatBytes(databaseTotals.used) }}</strong></div>
+            <aside class="surface-card p-4">
+              <h3 class="m-0 flex items-center gap-2 text-body-strong font-semibold text-foreground">{{ t('debugPage.databaseSummary') }}</h3>
+              <div class="mt-4 grid grid-cols-1 gap-3 wide:grid-cols-2">
+                <div><span class="block text-caption text-muted-foreground">{{ t('debugPage.healthyDatabases') }}</span><strong class="mt-1 block break-words text-body text-foreground">{{ databaseTotals.healthy }} / {{ databaseTotals.total }}</strong></div>
+                <div><span class="block text-caption text-muted-foreground">{{ t('debugPage.used') }}</span><strong class="mt-1 block break-words text-body text-foreground">{{ formatBytes(databaseTotals.used) }}</strong></div>
               </div>
             </aside>
+            <div class="grid gap-3">
+              <article v-for="db in databaseSnapshots.databases" :key="db.name" class="grid gap-3 surface-card p-4">
+                <div class="flex items-center justify-between gap-3">
+                  <h3 class="m-0 flex items-center gap-2 text-body-strong font-semibold text-foreground"><Database class="size-4" />{{ db.name }}</h3>
+                  <Badge :tone="dbTone(db)">{{ db.healthy ? t('state.healthy') : db.errorCode || t('state.critical') }}</Badge>
+                </div>
+                <div class="grid grid-cols-1 gap-3 wide:grid-cols-3">
+                  <div><span class="block text-caption text-muted-foreground">{{ t('debugPage.fileSize') }}</span><strong class="mt-1 block break-words text-body text-foreground">{{ formatBytes(db.fileSizeBytes) }}</strong></div>
+                  <div><span class="block text-caption text-muted-foreground">{{ t('debugPage.used') }}</span><strong class="mt-1 block break-words text-body text-foreground">{{ formatBytes(db.usedBytes) }}</strong></div>
+                  <div><span class="block text-caption text-muted-foreground">{{ t('debugPage.free') }}</span><strong class="mt-1 block break-words text-body text-foreground">{{ formatBytes(db.freeBytes) }}</strong></div>
+                </div>
+                <Table class="max-h-56" :framed="false" :columns="databaseTableColumns" :rows="db.tables" row-key="name">
+                  <template #name="{ row }">{{ row.name }}</template>
+                  <template #rows="{ row }">{{ row.rowCount }}</template>
+                  <template #size="{ row }">{{ formatBytes(row.totalSizeBytes) }}</template>
+                </Table>
+              </article>
+            </div>
           </template>
-          <EmptyState v-else class="xl:col-span-2" :title="t('debugPage.empty')" :description="t('debugPage.emptyHint')" />
+          <EmptyState v-else :title="t('debugPage.empty')" :description="t('debugPage.emptyHint')" />
         </section>
       </Tabs>
-    </WorkspacePage>
+    </div>
     <ConfirmDialog
       v-model:open="clearOpen"
       :title="t('debugPage.clearRuntimeDataTitle')"
@@ -464,28 +470,3 @@ onBeforeUnmount(() => window.clearInterval(timer));
     />
   </ConsolePage>
 </template>
-
-<style scoped>
-h3 {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0;
-  color: var(--panel-text);
-  font-size: 14px;
-  font-weight: 650;
-}
-
-span,
-dt {
-  color: var(--panel-text-muted);
-  font-size: 12px;
-}
-
-strong,
-dd {
-  margin: 0;
-  color: var(--panel-text);
-  overflow-wrap: anywhere;
-}
-</style>

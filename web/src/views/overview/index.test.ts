@@ -15,6 +15,11 @@ const networkProbes = vi.fn();
 const updates = vi.fn();
 const images = vi.fn();
 const config = vi.fn();
+const applicationsList = vi.fn();
+
+vi.mock('@/api/applications', () => ({
+  applicationsApi: { list: (...args: unknown[]) => applicationsList(...args) },
+}));
 
 vi.mock('@/api/servers', () => ({
   serversApi: {
@@ -148,6 +153,15 @@ beforeEach(() => {
   updates.mockResolvedValue({ lastRefreshedAt: null, refreshing: false, updates: [{}, {}, {}] });
   images.mockResolvedValue({ items: [{ id: 'img-1', updateAvailable: true }], observedAt: null, stale: false, refreshing: false });
   config.mockResolvedValue({ mode: 'all', serverIds: [], version: 1, updatedAt: new Date().toISOString() });
+  applicationsList.mockResolvedValue({
+    items: [
+      { id: 'app-1', enabled: true, deployingInstanceCount: 0, abnormalInstanceCount: 0 },
+      { id: 'app-2', enabled: false, deployingInstanceCount: 0, abnormalInstanceCount: 0 },
+      { id: 'app-3', enabled: true, deployingInstanceCount: 1, abnormalInstanceCount: 0 },
+      { id: 'app-4', enabled: true, deployingInstanceCount: 0, abnormalInstanceCount: 0, lastError: 'deploy failed' },
+    ],
+    total: 4,
+  });
 });
 
 describe('overview status page', () => {
@@ -159,6 +173,9 @@ describe('overview status page', () => {
     expect(metricsBucketed).toHaveBeenCalledWith('srv-1', '1d', 1800, expect.objectContaining({ signal: expect.anything() }));
     expect(networkProbes).toHaveBeenCalledWith('srv-1', expect.objectContaining({ signal: expect.anything() }), true);
     expect(wrapper.text()).toContain('Node status');
+    expect(wrapper.text()).toContain('Applications');
+    expect(wrapper.text()).toContain('4');
+    expect(wrapper.get('[data-testid="application-summary"]').text()).toContain('Disabled 1');
     expect(wrapper.text()).toContain('edge');
     expect(wrapper.text()).toContain('core');
     expect(wrapper.text()).toContain('23.5%');
@@ -292,6 +309,6 @@ describe('overview status page', () => {
     const { wrapper } = await mountPage();
 
     expect(wrapper.text()).toContain('No servers connected');
-    expect(wrapper.text()).toContain('Add server');
+    expect(wrapper.text()).toContain('Add');
   });
 });

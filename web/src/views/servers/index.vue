@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Cable, Eye, MoreHorizontal, PlayCircle, Plus, RefreshCcw, Trash2, Wrench } from '@lucide/vue';
+import { Cable, Eye, MoreHorizontal, PlayCircle, Plus, RefreshCcw, Trash2, Wrench } from '@/icons';
 import { credentialsApi } from '@/api/credentials';
 import { serversApi } from '@/api/servers';
 import Badge from '@/components/ui/Badge.vue';
@@ -16,9 +16,11 @@ import SearchInput from '@/components/ui/SearchInput.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import Table from '@/components/ui/Table.vue';
 import Tabs from '@/components/ui/Tabs.vue';
+import Select from '@/components/ui/Select.vue';
 import Tooltip from '@/components/ui/Tooltip.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import TableDetailName from '@/components/patterns/TableDetailName.vue';
+import ListCommandBar from '@/components/patterns/ListCommandBar.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import ListPage from '@/components/templates/ListPage.vue';
 import TableDetailLayout from '@/components/templates/TableDetailLayout.vue';
@@ -36,14 +38,12 @@ import ImagesTab from './tabs/ImagesTab.vue';
 import NetworksTab from './tabs/NetworksTab.vue';
 import OverviewTab from './tabs/OverviewTab.vue';
 import PackagesTab from './tabs/PackagesTab.vue';
-import ProbesTab from './tabs/ProbesTab.vue';
 import TailscaleTab from './tabs/TailscaleTab.vue';
 import VolumesTab from './tabs/VolumesTab.vue';
 import {
   isLegacyNetworkTab,
   isLegacyResourceTab,
   isLegacySystemTab,
-  normalizeFirewallView,
   normalizeServerDetailTab,
   normalizeServerNetworkSubtab,
   normalizeServerResourceSubtab,
@@ -60,7 +60,6 @@ import {
   serverSummaryStatusKey,
   serverSummaryTone,
   shouldShowListReportStability,
-  type FirewallView,
   type ServerDetailTab,
   type ServerNetworkSubtab,
   type ServerResourceSubtab,
@@ -83,7 +82,7 @@ const selectedTab = ref<ServerDetailTab>(normalizeServerDetailTab(route.query.ta
 const systemSubtab = ref<ServerSystemSubtab>(normalizeServerSystemSubtab(route.query.subtab, route.query.tab));
 const resourceSubtab = ref<ServerResourceSubtab>(normalizeServerResourceSubtab(route.query.subtab, route.query.tab));
 const networkSubtab = ref<ServerNetworkSubtab>(normalizeServerNetworkSubtab(route.query.subtab, route.query.tab));
-const firewallView = ref<FirewallView>(isDev ? normalizeFirewallView(route.query.subtab) : 'ufw');
+if (!isDev && networkSubtab.value === 'fail2ban') networkSubtab.value = 'firewall';
 const search = ref(String(route.query.search ?? ''));
 const page = ref(normalizePage(route.query.page));
 const totalServers = ref(0);
@@ -117,18 +116,6 @@ const activeTab = computed<ServerDetailTab>({
   get: () => selectedTab.value,
   set: (value) => selectTab(value),
 });
-const activeSystemSubtab = computed<ServerSystemSubtab>({
-  get: () => systemSubtab.value,
-  set: (value) => selectSystemSubtab(value),
-});
-const activeResourceSubtab = computed<ServerResourceSubtab>({
-  get: () => resourceSubtab.value,
-  set: (value) => selectResourceSubtab(value),
-});
-const activeNetworkSubtab = computed<ServerNetworkSubtab>({
-  get: () => networkSubtab.value,
-  set: (value) => selectNetworkSubtab(value),
-});
 const detailTabLabelKeys: Record<ServerDetailTab, string> = {
   overview: 'serversPage.tab.overview',
   system: 'serversPage.tab.system',
@@ -138,9 +125,19 @@ const detailTabLabelKeys: Record<ServerDetailTab, string> = {
 const tabItems = computed(() => serverDetailTabs.map((tab) => ({ value: tab, label: t(detailTabLabelKeys[tab]) })));
 const systemSubtabItems = computed(() => serverSystemSubtabs.map((tab) => ({ value: tab, label: t(`serversPage.tab.${tab}`) })));
 const resourceSubtabItems = computed(() => serverResourceSubtabs.map((tab) => ({ value: tab, label: t(`serversPage.tab.${tab}`) })));
-const networkSubtabItems = computed(() => serverNetworkSubtabs.map((tab) => ({ value: tab, label: t(`serversPage.tab.${tab}`) })));
+const networkSubtabItems = computed(() => serverNetworkSubtabs
+  .filter((tab) => isDev || tab !== 'fail2ban')
+  .map((tab) => ({
+    value: tab,
+    label: tab === 'fail2ban' ? t('routes.fail2ban.title') : t('serversPage.tab.firewall'),
+  })));
 const detailTitle = computed(() => selectedServer.value?.name ?? t('common.loading'));
 const detailDescription = computed(() => selectedServer.value ? `${selectedServer.value.host}:${selectedServer.value.port} / ${selectedServer.value.os?.prettyName || t('common.notAvailable')}` : '');
+/** 覆盖式详情从服务器列表入口建立面包屑；末项（当前服务器名）无 to，由 BreadcrumbBar 标记 aria-current。 */
+const detailBreadcrumbs = computed(() => [
+  { label: t('routes.servers.title'), to: '/servers' },
+  { label: selectedServer.value?.name ?? t('common.loading') },
+]);
 
 // 覆盖式详情不是弹窗，但复用浮层键盘模型：Escape 关闭、焦点归还触发按钮、
 // 与内层 Dialog/Dropdown 组成 LIFO 栈（内层优先）；详情是页面级视图，不锁背景滚动。
@@ -153,11 +150,30 @@ const { onKeydown: onDetailKeydown } = useOverlayBehavior({
 
 const columns = computed(() => [
   { key: 'name', label: t('common.name') },
-  { key: 'address', label: t('serversPage.columns.address') },
-  { key: 'status', label: t('common.status'), nowrap: true },
-  { key: 'lastChecked', label: t('serversPage.lastChecked'), nowrap: true },
-  { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
+  { key: 'status', label: t('common.status'), nowrap: true, width: 'w-36' },
+  { key: 'lastChecked', label: t('serversPage.lastChecked'), nowrap: true, width: 'w-40 max-sm:hidden' },
+  { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true, width: 'w-52' },
 ]);
+
+/** 状态单元格 tooltip：单一综合徽标，链路稳定性/连接代理等次级信息并入提示，不再并排多枚。 */
+function statusTooltip(server: ServerDto) {
+  const parts = [statusText(server)];
+  if (shouldShowListReportStability(server)) parts.push(t(reportStabilityStatusKey(server)));
+  const proxy = proxyShortLabelKey(server);
+  if (proxy) parts.push(`${t(proxy)} · ${t(proxyListHintKey(server))}`);
+  return parts.join(' · ');
+}
+
+/**
+ * 列表页级状态：首载/页级错误/无库存走 ListPage 状态槽；
+ * 表格内的筛选空态仍由 Table #empty 负责（保留）。
+ */
+const listState = computed<'ready' | 'loading' | 'error' | 'empty'>(() => {
+  if (loading.value && !servers.value.length) return 'loading';
+  if (error.value && !servers.value.length) return 'error';
+  if (!loading.value && !servers.value.length && !search.value.trim() && page.value === 1) return 'empty';
+  return 'ready';
+});
 
 function statusText(server: ServerDto) {
   return t(serverSummaryStatusKey(server));
@@ -171,8 +187,7 @@ function detailSubtabQuery() {
     return resourceSubtab.value === 'containers' ? undefined : resourceSubtab.value;
   }
   if (selectedTab.value === 'network-security') {
-    if (networkSubtab.value === 'probes') return undefined;
-    return firewallView.value === 'fail2ban' ? 'fail2ban' : 'firewall';
+    return networkSubtab.value === 'firewall' ? undefined : networkSubtab.value;
   }
   return undefined;
 }
@@ -192,8 +207,7 @@ function openDetail(server: ServerDto) {
     selectedTab.value = 'overview';
     systemSubtab.value = 'agent';
     resourceSubtab.value = 'containers';
-    networkSubtab.value = 'probes';
-    firewallView.value = 'ufw';
+    networkSubtab.value = 'firewall';
     resetVisited();
   }
   if (route.query.server !== server.id) void router.push({ query: detailQuery(server.id) });
@@ -218,32 +232,29 @@ function selectTab(value: ServerDetailTab) {
   }
 }
 
-function selectSystemSubtab(value: ServerSystemSubtab) {
-  systemSubtab.value = value;
-  visitedSystem[value] = true;
-  if (selectedId.value && route.query.subtab !== (value === 'agent' ? undefined : value)) {
+function selectSystemSubtab(value: string) {
+  const next = value as ServerSystemSubtab;
+  systemSubtab.value = next;
+  visitedSystem[next] = true;
+  if (selectedId.value && route.query.subtab !== (next === 'agent' ? undefined : next)) {
     void router.replace({ query: detailQuery() });
   }
 }
 
-function selectResourceSubtab(value: ServerResourceSubtab) {
-  resourceSubtab.value = value;
-  visitedResources[value] = true;
-  if (selectedId.value && route.query.subtab !== (value === 'containers' ? undefined : value)) {
+function selectResourceSubtab(value: string) {
+  const next = value as ServerResourceSubtab;
+  resourceSubtab.value = next;
+  visitedResources[next] = true;
+  if (selectedId.value && route.query.subtab !== (next === 'containers' ? undefined : next)) {
     void router.replace({ query: detailQuery() });
   }
 }
 
-function selectNetworkSubtab(value: ServerNetworkSubtab) {
-  networkSubtab.value = value;
-  visitedNetwork[value] = true;
-  if (selectedId.value) void router.replace({ query: detailQuery() });
-}
-
-function selectFirewallView(value: FirewallView) {
-  firewallView.value = value;
-  networkSubtab.value = 'firewall';
-  visitedNetwork.firewall = true;
+function selectNetworkSubtab(value: string) {
+  const next = value as ServerNetworkSubtab;
+  if (!isDev && next === 'fail2ban') return;
+  networkSubtab.value = next;
+  visitedNetwork[next] = true;
   if (selectedId.value) void router.replace({ query: detailQuery() });
 }
 
@@ -301,10 +312,9 @@ watch(() => route.query.subtab, (value) => {
     return;
   }
   if (selectedTab.value === 'network-security' || isLegacyNetworkTab(route.query.tab)) {
-    const next = normalizeServerNetworkSubtab(value, route.query.tab);
+    const normalized = normalizeServerNetworkSubtab(value, route.query.tab);
+    const next = isDev || normalized !== 'fail2ban' ? normalized : 'firewall';
     if (next !== networkSubtab.value) networkSubtab.value = next;
-    const nextView = isDev ? normalizeFirewallView(value) : 'ufw';
-    if (nextView !== firewallView.value) firewallView.value = nextView;
   }
 });
 watch(() => route.query.page, (value) => {
@@ -545,51 +555,69 @@ onBeforeUnmount(() => {
   <TableDetailLayout class="h-full" :has-detail="detailOpen">
     <template #list>
       <ConsolePage :title="t('routes.servers.title')" :description="t('routes.servers.description')">
-        <template #actions>
-          <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
-          <Button size="sm" variant="primary" @click="openCreate"><Plus />{{ t('serversPage.addServer') }}</Button>
-        </template>
-
-        <ListPage>
+        <ListPage :state="listState">
           <template #toolbar>
-            <SearchInput v-model="search" clearable :placeholder="t('serversPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
+            <ListCommandBar :label="t('routes.servers.title')">
+              <template #search>
+                <SearchInput v-model="search" clearable :placeholder="t('serversPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
+              </template>
+              <template #actions>
+                <Button :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
+                <Button variant="primary" @click="openCreate"><Plus />{{ t('common.add') }}</Button>
+              </template>
+            </ListCommandBar>
           </template>
 
-          <EmptyState v-if="error && !servers.length" variant="page" :title="t('common.loadFailed')" :description="error">
-            <template #actions>
-              <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
-            </template>
-          </EmptyState>
+          <template #loading>
+            <div class="grid content-start gap-2 rounded-overlay border border-card-stroke bg-card p-3" aria-busy="true">
+              <Skeleton v-for="item in 6" :key="item" class="h-9" />
+            </div>
+          </template>
+
+          <template #error>
+            <div class="grid h-full min-h-0 place-items-center">
+              <EmptyState variant="page" :title="t('common.loadFailed')" :description="error">
+                <template #actions>
+                  <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
+                </template>
+              </EmptyState>
+            </div>
+          </template>
+
+          <template #empty>
+            <div class="grid h-full min-h-0 place-items-center">
+              <EmptyState variant="page" :title="t('serversPage.noServers')" :description="t('serversPage.noServersHint')">
+                <template #actions>
+                  <Button size="sm" variant="primary" @click="openCreate"><Plus />{{ t('common.add') }}</Button>
+                </template>
+              </EmptyState>
+            </div>
+          </template>
 
           <Table
-            v-else
-            class="h-full max-lg:max-h-[60dvh]"
+            class="h-full max-lg:max-h-list"
             :columns="columns"
             :rows="servers"
             row-key="id"
+            row-height="auto"
             :active-key="selectedId"
-            :loading="loading && !servers.length"
             :loading-label="t('common.loading')"
           >
             <template #name="{ row }">
-              <TableDetailName class="max-w-[14rem]" :name="row.name" :label="t('common.openDetails', { name: row.name })" @click="openDetail(row)" />
-            </template>
-            <template #address="{ row }">
-              <Tooltip :text="`${row.host}:${row.port}`" trigger-class="max-w-[16rem]">
-                <span class="panel-mono truncate text-xs text-muted-foreground">{{ row.host }}:{{ row.port }}</span>
-              </Tooltip>
+              <div class="grid min-w-0 content-start">
+                <TableDetailName class="max-w-64" :name="row.name" :label="t('common.openDetails', { name: row.name })" @click="openDetail(row)" />
+                <span class="truncate panel-mono text-caption text-muted-foreground max-sm:hidden">{{ row.host }}:{{ row.port }}</span>
+              </div>
             </template>
             <template #status="{ row }">
-              <div class="flex flex-wrap items-center gap-1">
-                <Badge :tone="serverSummaryTone(row)">{{ statusText(row) }}</Badge>
-                <Badge v-if="shouldShowListReportStability(row)" :tone="reportStabilityTone(row)">{{ t(reportStabilityStatusKey(row)) }}</Badge>
-                <Tooltip v-if="proxyShortLabelKey(row)" :text="t(proxyListHintKey(row))">
-                  <Badge :tone="row.proxyInvalid ? 'warning' : 'neutral'">{{ t(proxyShortLabelKey(row)) }}</Badge>
+              <div class="flex items-center whitespace-nowrap">
+                <Tooltip :text="statusTooltip(row)">
+                  <Badge class="h-5 shrink-0" :tone="serverSummaryTone(row)">{{ statusText(row) }}</Badge>
                 </Tooltip>
               </div>
             </template>
             <template #lastChecked="{ row }">
-              <span class="text-muted-foreground">{{ formatDateTime(row.lastCheckedAt, t('common.never')) }}</span>
+              <span class="whitespace-nowrap text-muted-foreground">{{ formatDateTime(row.lastCheckedAt, t('common.never')) }}</span>
             </template>
             <template #actions="{ row }">
               <div class="flex items-center justify-end gap-1">
@@ -621,11 +649,11 @@ onBeforeUnmount(() => {
     </template>
 
     <template #detail>
-      <ConsolePage :title="detailTitle" :description="detailDescription" :back-label="t('common.backToList')" :body-scroll="false" @back="closeDetail">
+      <ConsolePage :title="detailTitle" :description="detailDescription" :breadcrumbs="detailBreadcrumbs" :back-label="t('common.backToList')" :body-scroll="false" @back="closeDetail">
         <template v-if="selectedServer" #actions>
-          <Button size="sm" variant="secondary" :disabled="rowBusy?.id === selectedServer.id" :loading="rowBusy?.id === selectedServer.id && rowBusy?.kind === 'edit'" @click="openEdit(selectedServer)"><Wrench />{{ t('common.edit') }}</Button>
-          <Button size="sm" variant="danger" :disabled="!canRunPrivilegedOperation(selectedServer)" :loading="restarting" @click="restartOpen = true"><PlayCircle />{{ t('serversPage.restart') }}</Button>
-          <Button v-if="activeTab === 'system' && systemSubtab === 'tailscale'" size="sm" variant="primary" :disabled="!selectedServer.tailscaleEnabled" :loading="tailscaleApplying" @click="applyTailscale"><RefreshCcw />{{ t('serversPage.tailscale.apply') }}</Button>
+          <Button variant="secondary" :disabled="rowBusy?.id === selectedServer.id" :loading="rowBusy?.id === selectedServer.id && rowBusy?.kind === 'edit'" @click="openEdit(selectedServer)"><Wrench />{{ t('common.edit') }}</Button>
+          <Button variant="danger" :disabled="!canRunPrivilegedOperation(selectedServer)" :loading="restarting" @click="restartOpen = true"><PlayCircle />{{ t('serversPage.restart') }}</Button>
+          <Button v-if="activeTab === 'system' && systemSubtab === 'tailscale'" variant="primary" :disabled="!selectedServer.tailscaleEnabled" :loading="tailscaleApplying" @click="applyTailscale"><RefreshCcw />{{ t('serversPage.tailscale.apply') }}</Button>
         </template>
         <div ref="detailRoot" data-testid="server-detail" class="h-full min-h-0 outline-none" tabindex="-1" @keydown="onDetailKeydown">
           <EmptyState v-if="detailError && !serverDetails[selectedId]" variant="page" :title="t('common.loadFailed')" :description="detailError">
@@ -643,26 +671,37 @@ onBeforeUnmount(() => {
           <Tabs v-else v-model="activeTab" class="h-full min-h-0" :tabs="tabItems" keep-panels>
             <div :key="selectedId" class="h-full min-h-0">
               <OverviewTab v-if="visited.overview" v-show="activeTab === 'overview'" :active="activeTab === 'overview'" :server="selectedServer" :credentials="credentials" @refresh="refreshDetail" />
-              <div v-if="visited.system" v-show="activeTab === 'system'" class="h-full min-h-0">
-                <Tabs v-model="activeSystemSubtab" class="h-full min-h-0" :tabs="systemSubtabItems" keep-panels>
-                  <AgentTab v-if="visitedSystem.agent" v-show="activeSystemSubtab === 'agent'" :active="activeTab === 'system' && activeSystemSubtab === 'agent'" :server="selectedServer" />
-                  <TailscaleTab v-if="visitedSystem.tailscale" v-show="activeSystemSubtab === 'tailscale'" :server="selectedServer" />
-                  <PackagesTab v-if="visitedSystem.packages" v-show="activeSystemSubtab === 'packages'" :server="selectedServer" />
-                </Tabs>
+              <div v-if="visited.system" v-show="activeTab === 'system'" class="flex h-full min-h-0 flex-col gap-3">
+                <div class="flex shrink-0 items-center gap-2">
+                  <span class="text-caption text-muted-foreground" aria-hidden="true">{{ t('serversPage.tab.system') }}</span>
+                  <Select class="w-44" :model-value="systemSubtab" :options="systemSubtabItems" :aria-label="t('serversPage.tab.system')" @update:model-value="selectSystemSubtab" />
+                </div>
+                <div class="min-h-0 flex-1">
+                  <AgentTab v-if="visitedSystem.agent" v-show="systemSubtab === 'agent'" :active="activeTab === 'system' && systemSubtab === 'agent'" :server="selectedServer" />
+                  <TailscaleTab v-if="visitedSystem.tailscale" v-show="systemSubtab === 'tailscale'" :server="selectedServer" />
+                  <PackagesTab v-if="visitedSystem.packages" v-show="systemSubtab === 'packages'" :server="selectedServer" />
+                </div>
               </div>
-              <div v-if="visited.resources" v-show="activeTab === 'resources'" class="h-full min-h-0">
-                <Tabs v-model="activeResourceSubtab" class="h-full min-h-0" :tabs="resourceSubtabItems" keep-panels>
-                  <ContainersTab v-if="visitedResources.containers" v-show="activeResourceSubtab === 'containers'" :server="selectedServer" />
-                  <ImagesTab v-if="visitedResources.images" v-show="activeResourceSubtab === 'images'" :server="selectedServer" />
-                  <NetworksTab v-if="visitedResources.networks" v-show="activeResourceSubtab === 'networks'" :server="selectedServer" />
-                  <VolumesTab v-if="visitedResources.volumes" v-show="activeResourceSubtab === 'volumes'" :server="selectedServer" />
-                </Tabs>
+              <div v-if="visited.resources" v-show="activeTab === 'resources'" class="flex h-full min-h-0 flex-col gap-3">
+                <div class="flex shrink-0 items-center gap-2">
+                  <span class="text-caption text-muted-foreground" aria-hidden="true">{{ t('serversPage.tab.resources') }}</span>
+                  <Select class="w-44" :model-value="resourceSubtab" :options="resourceSubtabItems" :aria-label="t('serversPage.tab.resources')" @update:model-value="selectResourceSubtab" />
+                </div>
+                <div class="min-h-0 flex-1">
+                  <ContainersTab v-if="visitedResources.containers" v-show="resourceSubtab === 'containers'" :server="selectedServer" />
+                  <ImagesTab v-if="visitedResources.images" v-show="resourceSubtab === 'images'" :server="selectedServer" />
+                  <NetworksTab v-if="visitedResources.networks" v-show="resourceSubtab === 'networks'" :server="selectedServer" />
+                  <VolumesTab v-if="visitedResources.volumes" v-show="resourceSubtab === 'volumes'" :server="selectedServer" />
+                </div>
               </div>
-              <div v-if="visited['network-security']" v-show="activeTab === 'network-security'" class="h-full min-h-0">
-                <Tabs v-model="activeNetworkSubtab" class="h-full min-h-0" :tabs="networkSubtabItems" keep-panels>
-                  <ProbesTab v-if="visitedNetwork.probes" v-show="activeNetworkSubtab === 'probes'" :server="selectedServer" :active="activeTab === 'network-security' && activeNetworkSubtab === 'probes'" />
-                  <FirewallTab v-if="visitedNetwork.firewall" v-show="activeNetworkSubtab === 'firewall'" :server="selectedServer" :view="firewallView" @update:view="selectFirewallView" />
-                </Tabs>
+              <div v-if="visited['network-security']" v-show="activeTab === 'network-security'" class="flex h-full min-h-0 flex-col gap-3">
+                <div v-if="networkSubtabItems.length > 1" class="flex shrink-0 items-center gap-2">
+                  <span class="text-caption text-muted-foreground" aria-hidden="true">{{ t('serversPage.tab.networkSecurity') }}</span>
+                  <Select class="w-44" :model-value="networkSubtab" :options="networkSubtabItems" :aria-label="t('serversPage.tab.networkSecurity')" @update:model-value="selectNetworkSubtab" />
+                </div>
+                <div class="min-h-0 flex-1">
+                  <FirewallTab v-if="visitedNetwork.firewall || visitedNetwork.fail2ban" :server="selectedServer" :view="networkSubtab === 'fail2ban' ? 'fail2ban' : 'ufw'" />
+                </div>
               </div>
             </div>
           </Tabs>

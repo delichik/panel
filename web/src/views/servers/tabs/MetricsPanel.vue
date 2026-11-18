@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { RefreshCcw } from '@lucide/vue';
+import { RefreshCcw } from '@/icons';
 import { serversApi, type ServerMetricsRange, type ServerMetricsSeries } from '@/api/servers';
 import Button from '@/components/ui/Button.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import Select from '@/components/ui/Select.vue';
 import DataRefreshControl from '@/components/patterns/DataRefreshControl.vue';
+import ChartCard from '@/components/patterns/ChartCard.vue';
 import { useAutoRefresh } from '@/composables/useAutoRefresh';
 import { useErrorToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
@@ -211,7 +212,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="grid gap-3">
     <div class="flex flex-wrap items-center justify-between gap-2">
-      <span class="text-xs text-muted-foreground">{{ t('serversPage.metricsSampledAt') }}: {{ formatDateTime(sampledAt, t('common.never')) }}</span>
+      <span class="text-caption text-muted-foreground">{{ t('serversPage.metricsSampledAt') }}: {{ formatDateTime(sampledAt, t('common.never')) }}</span>
       <div class="flex flex-wrap items-center gap-2">
         <Select v-model="range" :options="rangeOptions" class="w-24" />
         <DataRefreshControl />
@@ -219,7 +220,7 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <div class="relative grid min-h-[240px] gap-3">
+    <div class="relative grid min-h-60 gap-3">
       <LoadingOverlay v-if="loading && !metrics" :label="t('common.loading')" />
       <EmptyState v-else-if="error && !metrics" variant="inset" :title="t('common.loadFailed')" :description="error">
         <template #actions>
@@ -229,22 +230,15 @@ onBeforeUnmount(() => {
       <EmptyState v-else-if="metrics && !hasSamples(metrics)" variant="inset" :title="t('serversPage.noMetrics')" :description="t('serversPage.noMetricsHint')" />
 
       <template v-else-if="metrics">
-        <div class="grid gap-3 xl:grid-cols-2">
-          <section v-for="panel in panels" :key="panel.key" class="grid min-w-0 gap-2 rounded-xl bg-muted p-3">
-            <div class="flex min-w-0 items-baseline justify-between gap-3">
-              <h3 class="m-0 text-xs font-medium text-muted-foreground">{{ panel.title }}</h3>
-              <div class="min-w-0 text-right">
-                <div class="truncate text-sm font-semibold text-foreground">{{ panel.current }}</div>
-                <div v-if="panel.currentHint" class="text-[11px] text-muted-foreground">{{ panel.currentHint }}</div>
-              </div>
-            </div>
-            <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-              <span>{{ panel.stats }}</span>
-              <span v-for="item in panel.legend" :key="item.name" class="inline-flex items-center gap-1.5">
-                <i class="size-2 rounded-sm" :class="item.colorClass" aria-hidden="true" />{{ item.name }}
-              </span>
-            </div>
-            <div class="h-[200px] min-h-0 sm:h-[220px]">
+        <div class="grid gap-3 wide:grid-cols-2">
+          <ChartCard
+            v-for="panel in panels"
+            :key="panel.key"
+            :title="panel.title"
+            :value="panel.hasData ? panel.current : null"
+            :value-label="panel.currentHint ? `${panel.title}: ${panel.currentHint}` : panel.title"
+          >
+            <div class="h-48 min-h-0 sm:h-55">
               <MetricChart
                 v-if="panel.hasData"
                 :series="panel.series"
@@ -252,11 +246,20 @@ onBeforeUnmount(() => {
                 :thresholds="panel.thresholds"
                 :label="panel.title"
               />
-              <div v-else class="grid h-full place-items-center text-xs text-muted-foreground">{{ t(panel.emptyKey) }}</div>
+              <div v-else class="grid h-full place-items-center rounded-control border border-dashed border-stroke px-3 text-center text-caption text-muted-foreground">{{ t(panel.emptyKey) }}</div>
             </div>
-          </section>
+            <template #footer>
+              <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-caption text-muted-foreground">
+                <span>{{ panel.stats }}</span>
+                <span v-for="item in panel.legend" :key="item.name" class="inline-flex items-center gap-1.5">
+                  <i class="size-2 rounded-micro" :class="item.colorClass" aria-hidden="true" />{{ item.name }}
+                </span>
+                <span v-if="panel.currentHint" class="tabular-nums">{{ panel.currentHint }}</span>
+              </div>
+            </template>
+          </ChartCard>
         </div>
-        <p v-if="usesBuckets" class="m-0 text-[11px] text-muted-foreground">{{ t('serversPage.metrics.bucketNote') }}</p>
+        <p v-if="usesBuckets" class="m-0 text-caption text-muted-foreground">{{ t('serversPage.metrics.bucketNote') }}</p>
       </template>
     </div>
   </div>

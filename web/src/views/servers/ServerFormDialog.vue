@@ -1,16 +1,18 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue';
-import { ChevronDown, Cable } from '@lucide/vue';
+import { ChevronDown, Cable } from '@/icons';
 import { credentialsApi } from '@/api/credentials';
 import { serversApi } from '@/api/servers';
 import Button from '@/components/ui/Button.vue';
 import Dialog from '@/components/ui/Dialog.vue';
 import Input from '@/components/ui/Input.vue';
+import NumberBox from '@/components/ui/NumberBox.vue';
 import Select from '@/components/ui/Select.vue';
 import Switch from '@/components/ui/Switch.vue';
 import Textarea from '@/components/ui/Textarea.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import CredentialFormFields from '@/components/patterns/CredentialFormFields.vue';
+import FormField from '@/components/patterns/FormField.vue';
 import { emptyCredentialInput, secretPayload, validateCredentialInput, type CredentialFormLabels } from '@/components/patterns/credentialForm';
 import { useI18n } from '@/i18n';
 import type { CredentialDto, CredentialInput } from '@/types/credentials';
@@ -151,6 +153,18 @@ const probePayload = computed<ServerProbeInput>(() => ({
 }));
 const validation = computed(() => validateServerInput(formPayload.value, { selfId: props.editing?.id }));
 const probeValidation = computed(() => validateProbeInput(probePayload.value));
+
+/** NumberBox 使用 number|null；草稿/保存负载仍是 string，保持既有校验与焦点摘要行为。 */
+const portModelValue = computed<number | null>(() => {
+  const trimmed = form.port.trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
+});
+
+function updatePort(value: number | null) {
+  form.port = value === null ? '' : String(value);
+}
 const pairResult = computed(() => parsePairs(form.variables));
 const pairErrors = computed(() => pairResult.value.issues.filter((issue) => issue.kind !== 'duplicate_key'));
 const pairWarnings = computed(() => pairResult.value.issues.filter((issue) => issue.kind === 'duplicate_key'));
@@ -397,131 +411,148 @@ async function saveQuickCredential() {
   <Dialog :open="open" :title="editing ? t('serversPage.editServer') : t('serversPage.createServer')" :description="t(editing ? 'serversPage.editServerDescription' : 'serversPage.formDescription')" :close-label="t('common.close')" @update:open="emit('update:open', $event)">
     <div class="grid gap-4">
       <section class="grid gap-3">
-        <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.sectionConnection') }}</h3>
+        <h3 class="m-0 text-body-strong font-semibold text-foreground">{{ t('serversPage.sectionConnection') }}</h3>
         <div class="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
-          <div class="grid gap-1">
-            <label class="grid gap-1 text-sm">{{ t('serversPage.name') }}<Input id="server-form-name" v-model="form.name" :invalid="Boolean(validation.name)" /></label>
-            <p v-if="validation.name" class="m-0 text-sm text-danger">{{ t(validation.name) }}</p>
-          </div>
-          <div class="grid gap-1">
-            <label class="grid gap-1 text-sm">{{ t('serversPage.port') }}<Input id="server-form-port" v-model="form.port" type="number" :invalid="Boolean(validation.port)" /></label>
-            <p v-if="validation.port" class="m-0 text-sm text-danger">{{ t(validation.port) }}</p>
-          </div>
-          <div class="grid gap-1">
-            <label class="grid gap-1 text-sm">{{ t('serversPage.ipv4') }}<Input id="server-form-ipv4" v-model="form.ipv4" :invalid="Boolean(validation.ipv4)" placeholder="203.0.113.10" /></label>
-            <p v-if="validation.ipv4" class="m-0 text-sm text-danger">{{ t(validation.ipv4) }}</p>
-          </div>
-          <div class="grid gap-1">
-            <label class="grid gap-1 text-sm">{{ t('serversPage.ipv6') }}<Input id="server-form-ipv6" v-model="form.ipv6" :invalid="Boolean(validation.ipv6)" placeholder="2001:db8::10" /></label>
-            <p v-if="validation.ipv6" class="m-0 text-sm text-danger">{{ t(validation.ipv6) }}</p>
-          </div>
+          <FormField id="server-form-name" v-slot="{ id, describedBy, invalid }" :label="t('serversPage.name')" :error="validation.name ? t(validation.name) : ''">
+            <Input :id="id" v-model="form.name" :aria-describedby="describedBy" :invalid="invalid" />
+          </FormField>
+          <FormField id="server-form-port" v-slot="{ id, describedBy, invalid }" :label="t('serversPage.port')" :error="validation.port ? t(validation.port) : ''">
+            <NumberBox
+              :id="id"
+              :model-value="portModelValue"
+              :aria-describedby="describedBy"
+              :invalid="invalid"
+              :min="1"
+              :max="65535"
+              :step="1"
+              @update:model-value="updatePort"
+            />
+          </FormField>
+          <FormField id="server-form-ipv4" v-slot="{ id, describedBy, invalid }" :label="t('serversPage.ipv4')" :error="validation.ipv4 ? t(validation.ipv4) : ''">
+            <Input :id="id" v-model="form.ipv4" :aria-describedby="describedBy" :invalid="invalid" placeholder="203.0.113.10" />
+          </FormField>
+          <FormField id="server-form-ipv6" v-slot="{ id, describedBy, invalid }" :label="t('serversPage.ipv6')" :error="validation.ipv6 ? t(validation.ipv6) : ''">
+            <Input :id="id" v-model="form.ipv6" :aria-describedby="describedBy" :invalid="invalid" placeholder="2001:db8::10" />
+          </FormField>
         </div>
-        <p class="m-0 text-xs text-muted-foreground">{{ t('serversPage.addressHint') }} <span class="panel-mono">{{ form.ipv4.trim() || form.ipv6.trim() || t('common.notAvailable') }}</span></p>
+        <p class="m-0 text-caption text-muted-foreground">{{ t('serversPage.addressHint') }} <span class="panel-mono">{{ form.ipv4.trim() || form.ipv6.trim() || t('common.notAvailable') }}</span></p>
 
         <template v-if="credentialError">
-          <div class="grid gap-2 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
+          <div class="grid gap-2 rounded-control border border-danger-border bg-danger-bg p-3 text-body text-danger">
             <span>{{ credentialError }}</span>
             <span><Button size="sm" variant="secondary" @click="emit('refresh-credentials')">{{ t('common.retry') }}</Button></span>
           </div>
         </template>
         <template v-else-if="credentialOptions.length">
-          <div class="grid gap-1">
-            <label class="grid gap-1 text-sm">{{ t('serversPage.credential') }}<Select id="server-form-credential" v-model="form.credentialId" :options="credentialOptions" :placeholder="t('serversPage.selectCredential')" /></label>
-            <p v-if="validation.credentialId" class="m-0 text-sm text-danger">{{ t(validation.credentialId) }}</p>
-          </div>
-          <label class="grid gap-1 text-sm">{{ t('serversPage.sshUsername') }}<Input v-model="form.sshUsername" :placeholder="t('serversPage.sshUsernameHint')" /></label>
+          <FormField id="server-form-credential" v-slot="{ id, describedBy, invalid }" :label="t('serversPage.credential')" :error="validation.credentialId ? t(validation.credentialId) : ''">
+            <Select :id="id" v-model="form.credentialId" :aria-describedby="describedBy" :aria-invalid="invalid || undefined" :options="credentialOptions" :placeholder="t('serversPage.selectCredential')" />
+          </FormField>
+          <FormField v-slot="{ id, describedBy }" :label="t('serversPage.sshUsername')">
+            <Input :id="id" v-model="form.sshUsername" :aria-describedby="describedBy" :placeholder="t('serversPage.sshUsernameHint')" />
+          </FormField>
         </template>
         <template v-else>
-          <div class="grid gap-2 rounded-xl border border-border bg-muted p-3">
-            <strong class="text-sm text-foreground">{{ t('serversPage.credentialMissingTitle') }}</strong>
-            <p class="m-0 text-sm text-muted-foreground">{{ t('serversPage.credentialMissingHint') }}</p>
+          <div class="grid gap-2 rounded-control border border-divider bg-muted p-3">
+            <strong class="text-body font-semibold text-foreground">{{ t('serversPage.credentialMissingTitle') }}</strong>
+            <p class="m-0 text-body text-muted-foreground">{{ t('serversPage.credentialMissingHint') }}</p>
             <span><Button size="sm" variant="primary" @click="credentialDialogOpen = true">{{ t('credentialsPage.addCredential') }}</Button></span>
           </div>
         </template>
 
-        <div class="grid gap-2 rounded-xl border border-border bg-muted p-3">
-          <h4 class="m-0 text-xs font-semibold text-foreground">{{ t('serversPage.proxy.title') }}</h4>
-          <label class="grid gap-1 text-sm">{{ t('serversPage.proxy.mode') }}<Select id="server-form-proxy-mode" v-model="form.proxyMode" :options="proxyModeOptions" /></label>
+        <div class="grid gap-2 rounded-control border border-divider bg-muted p-3">
+          <h4 class="m-0 text-caption font-semibold text-foreground">{{ t('serversPage.proxy.title') }}</h4>
+          <FormField id="server-form-proxy-mode" v-slot="{ id, describedBy }" :label="t('serversPage.proxy.mode')">
+            <Select :id="id" v-model="form.proxyMode" :aria-describedby="describedBy" :options="proxyModeOptions" />
+          </FormField>
           <template v-if="form.proxyMode === 'ssh_tunnel'">
-            <div class="grid gap-1">
-              <label class="grid gap-1 text-sm">{{ t('serversPage.proxy.tunnelServer') }}<Select id="server-form-tunnel-server" v-model="form.tunnelServerId" :options="tunnelServerOptions" :placeholder="t('serversPage.proxy.selectTunnelServer')" searchable :search-placeholder="t('serversPage.proxy.searchTunnelPlaceholder')" :search-empty-text="t('serversPage.proxy.searchTunnelEmpty')" @search="onTunnelSearch" /></label>
-              <p class="m-0 text-xs text-muted-foreground">{{ t('serversPage.proxy.tunnelHint') }}</p>
-              <p v-if="tunnelSearchError" class="m-0 text-xs text-warning">{{ tunnelSearchError }}</p>
-              <p v-if="candidatesLoading" class="m-0 text-xs text-muted-foreground">{{ t('serversPage.proxy.candidatesLoading') }}</p>
-              <p v-else-if="candidatesError" class="m-0 flex flex-wrap items-center gap-2 text-xs text-warning">
-                <span>{{ candidatesError }}</span>
-                <Button size="sm" variant="secondary" @click="loadTunnelCandidates">{{ t('common.retry') }}</Button>
-              </p>
-              <p v-if="!tunnelServerOptions.length && !candidatesLoading && !candidatesError" class="m-0 text-xs text-warning">{{ t('serversPage.proxy.noTunnelCandidates') }}</p>
-              <p v-if="validation.tunnelServerId" class="m-0 text-sm text-danger">{{ t(validation.tunnelServerId) }}</p>
-            </div>
+            <FormField
+              id="server-form-tunnel-server"
+              v-slot="{ id, describedBy, invalid }"
+              :label="t('serversPage.proxy.tunnelServer')"
+              :hint="t('serversPage.proxy.tunnelHint')"
+              :error="validation.tunnelServerId ? t(validation.tunnelServerId) : ''"
+            >
+              <Select :id="id" v-model="form.tunnelServerId" :aria-describedby="describedBy" :aria-invalid="invalid || undefined" :options="tunnelServerOptions" :placeholder="t('serversPage.proxy.selectTunnelServer')" searchable :search-placeholder="t('serversPage.proxy.searchTunnelPlaceholder')" :search-empty-text="t('serversPage.proxy.searchTunnelEmpty')" @search="onTunnelSearch" />
+            </FormField>
+            <p v-if="tunnelSearchError" class="m-0 text-caption text-warning">{{ tunnelSearchError }}</p>
+            <p v-if="candidatesLoading" class="m-0 text-caption text-muted-foreground">{{ t('serversPage.proxy.candidatesLoading') }}</p>
+            <p v-else-if="candidatesError" class="m-0 flex flex-wrap items-center gap-2 text-caption text-warning">
+              <span>{{ candidatesError }}</span>
+              <Button size="sm" variant="secondary" @click="loadTunnelCandidates">{{ t('common.retry') }}</Button>
+            </p>
+            <p v-if="!tunnelServerOptions.length && !candidatesLoading && !candidatesError" class="m-0 text-caption text-warning">{{ t('serversPage.proxy.noTunnelCandidates') }}</p>
           </template>
           <template v-else-if="form.proxyMode === 'socks5'">
             <div class="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
-              <div class="grid gap-1">
-                <label class="grid gap-1 text-sm">{{ t('serversPage.proxy.socks5Address') }}<Input id="server-form-socks5-address" v-model="form.socks5Address" :invalid="Boolean(validation.socks5Address)" :placeholder="t('serversPage.proxy.socks5AddressPlaceholder')" /></label>
-                <p v-if="validation.socks5Address" class="m-0 text-sm text-danger">{{ t(validation.socks5Address) }}</p>
-              </div>
-              <div class="grid gap-1">
-                <label class="grid gap-1 text-sm">{{ t('serversPage.proxy.socks5Username') }}<Input id="server-form-socks5-username" v-model="form.socks5Username" :invalid="Boolean(validation.socks5Username)" /></label>
-                <p v-if="validation.socks5Username" class="m-0 text-sm text-danger">{{ t(validation.socks5Username) }}</p>
-              </div>
+              <FormField id="server-form-socks5-address" v-slot="{ id, describedBy, invalid }" :label="t('serversPage.proxy.socks5Address')" :error="validation.socks5Address ? t(validation.socks5Address) : ''">
+                <Input :id="id" v-model="form.socks5Address" :aria-describedby="describedBy" :invalid="invalid" :placeholder="t('serversPage.proxy.socks5AddressPlaceholder')" />
+              </FormField>
+              <FormField id="server-form-socks5-username" v-slot="{ id, describedBy, invalid }" :label="t('serversPage.proxy.socks5Username')" :error="validation.socks5Username ? t(validation.socks5Username) : ''">
+                <Input :id="id" v-model="form.socks5Username" :aria-describedby="describedBy" :invalid="invalid" />
+              </FormField>
             </div>
-            <div class="grid gap-1">
-              <label class="grid gap-1 text-sm">{{ t('serversPage.proxy.socks5Password') }}<Input id="server-form-socks5-password" v-model="form.socks5Password" type="password" autocomplete="new-password" :placeholder="socks5PasswordStored ? t('serversPage.proxy.socks5PasswordKeep') : ''" /></label>
-              <p class="m-0 text-xs text-muted-foreground">{{ t('serversPage.proxy.socks5AuthHint') }}</p>
-            </div>
+            <FormField id="server-form-socks5-password" v-slot="{ id, describedBy }" :label="t('serversPage.proxy.socks5Password')" :hint="t('serversPage.proxy.socks5AuthHint')">
+              <Input :id="id" v-model="form.socks5Password" :aria-describedby="describedBy" type="password" autocomplete="new-password" :placeholder="socks5PasswordStored ? t('serversPage.proxy.socks5PasswordKeep') : ''" />
+            </FormField>
           </template>
-          <p v-else class="m-0 text-xs text-muted-foreground">{{ t('serversPage.proxy.directHint') }}</p>
+          <p v-else class="m-0 text-caption text-muted-foreground">{{ t('serversPage.proxy.directHint') }}</p>
         </div>
 
-        <div class="grid gap-2 rounded-xl border border-border bg-muted p-3">
+        <div class="grid gap-2 rounded-control border border-divider bg-muted p-3">
           <div class="flex flex-wrap items-center justify-between gap-2">
-            <p class="m-0 text-xs text-muted-foreground">{{ t('serversPage.probeHint') }}</p>
+            <p class="m-0 text-caption text-muted-foreground">{{ t('serversPage.probeHint') }}</p>
             <Button size="sm" variant="secondary" :disabled="Boolean(Object.keys(probeValidation).length)" :loading="probing" @click="probe"><Cable />{{ probeResult ? t('serversPage.probeAgain') : t('serversPage.probe') }}</Button>
           </div>
-          <div v-if="probeResult" class="rounded-xl border p-3 text-sm" :class="probeToneClass">
+          <div v-if="probeResult" class="rounded-control border p-3 text-body" :class="probeToneClass">
             <p class="m-0">{{ t(probeResult.reachable ? 'serversPage.probeReachable' : 'serversPage.probeUnreachable') }}<span v-if="probeResult.error"> {{ probeResult.error }}</span></p>
-            <p v-if="probeSummary" class="m-0 mt-1 text-xs">{{ probeSummary }}</p>
-            <p v-if="probeStale" class="m-0 mt-1 text-xs font-medium">{{ t('serversPage.probeStale') }}</p>
+            <p v-if="probeSummary" class="m-0 mt-1 text-caption">{{ probeSummary }}</p>
+            <p v-if="probeStale" class="m-0 mt-1 text-caption font-medium">{{ t('serversPage.probeStale') }}</p>
           </div>
         </div>
       </section>
 
-      <div v-if="!editing" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">
+      <div v-if="!editing" class="rounded-control border border-warning-border bg-warning-bg p-3 text-body text-warning">
         {{ t('serversPage.firewallTakeoverNotice') }}
       </div>
 
-      <section class="grid gap-3 border-t border-border pt-3">
-        <button type="button" class="flex w-full items-center justify-between gap-2 rounded-xl px-1 py-1 text-left text-sm font-semibold text-foreground hover:bg-accent" :aria-expanded="advancedOpen" @click="advancedOpen = !advancedOpen">
+      <section class="grid gap-3 border-t border-divider pt-3">
+        <button type="button" class="flex w-full items-center justify-between gap-2 rounded-control px-1 py-1 text-left text-body-strong font-semibold text-foreground hover:bg-hover" :aria-expanded="advancedOpen" @click="advancedOpen = !advancedOpen">
           {{ t('serversPage.sectionAdvanced') }}
           <ChevronDown class="size-4 text-muted-foreground transition-transform" :class="advancedOpen ? 'rotate-180' : ''" />
         </button>
         <div v-show="advancedOpen" class="grid gap-3">
+          <FormField
+            id="server-form-docker-host"
+            v-slot="{ id, describedBy, invalid }"
+            :label="t('serversPage.dockerHost')"
+            :hint="t('serversPage.dockerHostHint')"
+            :error="validation.dockerHost ? t(validation.dockerHost) : ''"
+          >
+            <Input :id="id" v-model="form.dockerHost" :aria-describedby="describedBy" :invalid="invalid" />
+          </FormField>
           <div class="grid gap-1">
-            <label class="grid gap-1 text-sm">{{ t('serversPage.dockerHost') }}<Input id="server-form-docker-host" v-model="form.dockerHost" :invalid="Boolean(validation.dockerHost)" /></label>
-            <p class="m-0 text-xs text-muted-foreground">{{ t('serversPage.dockerHostHint') }}</p>
-            <p v-if="validation.dockerHost" class="m-0 text-sm text-danger">{{ t(validation.dockerHost) }}</p>
+            <FormField id="server-form-variables" v-slot="{ id, describedBy }" :label="t('serversPage.variables')">
+              <Textarea :id="id" v-model="form.variables" :aria-describedby="describedBy" :placeholder="t('serversPage.pairsHint')" class="font-mono" />
+            </FormField>
+            <p v-for="issue in pairErrors" :key="`e${issue.line}`" class="m-0 text-caption text-danger">{{ t(issue.kind === 'missing_separator' ? 'serversPage.variablesErrorMissingSeparator' : 'serversPage.variablesErrorEmptyKey', { line: issue.line }) }}</p>
+            <p v-for="issue in pairWarnings" :key="`w${issue.line}`" class="m-0 text-caption text-warning">{{ t('serversPage.variablesWarningDuplicateKey', { line: issue.line, key: issue.key ?? '' }) }}</p>
           </div>
-          <div class="grid gap-1">
-            <label class="grid gap-1 text-sm">{{ t('serversPage.variables') }}<Textarea id="server-form-variables" v-model="form.variables" :placeholder="t('serversPage.pairsHint')" class="font-mono" /></label>
-            <p v-for="issue in pairErrors" :key="`e${issue.line}`" class="m-0 text-sm text-danger">{{ t(issue.kind === 'missing_separator' ? 'serversPage.variablesErrorMissingSeparator' : 'serversPage.variablesErrorEmptyKey', { line: issue.line }) }}</p>
-            <p v-for="issue in pairWarnings" :key="`w${issue.line}`" class="m-0 text-sm text-warning">{{ t('serversPage.variablesWarningDuplicateKey', { line: issue.line, key: issue.key ?? '' }) }}</p>
-          </div>
-          <label class="grid gap-1 text-sm">{{ t('serversPage.notes') }}<Textarea id="server-form-notes" v-model="form.notes" /></label>
+          <FormField id="server-form-notes" v-slot="{ id, describedBy }" :label="t('serversPage.notes')">
+            <Textarea :id="id" v-model="form.notes" :aria-describedby="describedBy" />
+          </FormField>
 
-          <div class="grid gap-2 rounded-xl border border-border bg-muted p-3">
-            <h4 class="m-0 text-xs font-semibold text-foreground">{{ t('serversPage.tailscale.title') }}</h4>
-            <label class="flex items-center justify-between gap-3 text-sm">
+          <div class="grid gap-2 rounded-control border border-divider bg-muted p-3">
+            <h4 class="m-0 text-caption font-semibold text-foreground">{{ t('serversPage.tailscale.title') }}</h4>
+            <label class="flex items-center justify-between gap-3 text-body">
               {{ t('serversPage.tailscale.enabled') }}
               <Switch id="server-form-tailscale-enabled" v-model="form.tailscaleEnabled" :label="t('serversPage.tailscale.enabled')" />
             </label>
             <p class="m-0 text-xs text-muted-foreground">{{ t('serversPage.tailscale.enabledHint') }}</p>
-            <label class="flex items-center justify-between gap-3 text-sm">
+            <label class="flex items-center justify-between gap-3 text-body">
               {{ t('serversPage.tailscale.preferAgent') }}
               <Switch id="server-form-tailscale-prefer-agent" v-model="form.tailscalePreferAgent" :disabled="!form.tailscaleEnabled" :label="t('serversPage.tailscale.preferAgent')" />
             </label>
-            <label class="flex items-center justify-between gap-3 text-sm">
+            <label class="flex items-center justify-between gap-3 text-body">
               {{ t('serversPage.tailscale.preferInterconnect') }}
               <Switch id="server-form-tailscale-prefer-interconnect" v-model="form.tailscalePreferInterconnect" :disabled="!form.tailscaleEnabled" :label="t('serversPage.tailscale.preferInterconnect')" />
             </label>
@@ -530,10 +561,10 @@ async function saveQuickCredential() {
         </div>
       </section>
 
-      <div v-if="summaryItems.length" class="grid gap-1 rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">
+      <div v-if="summaryItems.length" class="grid gap-1 rounded-control border border-warning-border bg-warning-bg p-3 text-body text-warning">
         <button v-for="item in summaryItems" :key="`${item.field}-${item.text}`" type="button" class="text-left underline-offset-2 hover:underline" @click="focusField(item.field)">{{ item.text }}</button>
       </div>
-      <div v-if="actionError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ actionError }}</div>
+      <div v-if="actionError" class="rounded-control border border-danger-border bg-danger-bg p-3 text-body text-danger">{{ actionError }}</div>
     </div>
     <template #footer>
       <Button variant="secondary" @click="close">{{ t('common.cancel') }}</Button>
@@ -551,7 +582,7 @@ async function saveQuickCredential() {
         :errors="credentialValidation"
         :labels="credentialFormLabels"
       />
-      <div v-if="credentialActionError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ credentialActionError }}</div>
+      <div v-if="credentialActionError" class="rounded-control border border-danger-border bg-danger-bg p-3 text-body text-danger">{{ credentialActionError }}</div>
     </div>
     <template #footer>
       <Button variant="secondary" @click="credentialDialogOpen = false">{{ t('common.cancel') }}</Button>

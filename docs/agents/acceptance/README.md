@@ -72,7 +72,7 @@
 
 磁盘使用率改为 5 分钟低频采样且只展示当前值、磁盘 IO 读写速率与指标弱网补报见 [OBS-MET-007..009](backup-restore-diagnostics.md)、[AGT-RPT-004/007](servers-security-packages.md)；首页概览已改为固定只读状态页（节点情况摘要 + 带 24h 历史条与上下行速率的服务器卡片，并行多接口取数，不再消费 `/overview` 卡片接口），见 [UI-OVR-001/013..019](ui-pages.md) 与 [GAP-031](known-gaps.md)；旧 `UI-OVR-002..012` 卡片条目已废弃。指标 bucket/latest 见 [OBS-MET-003](backup-restore-diagnostics.md)，探测 24h 历史见 [FAC-PRB-009](applications-and-facilities.md)。设施网络探测（`network-probe`）的配置、周期/包数/超时参数（`FAC-PRB-010`）、按目标聚合读取视图（`FAC-PRB-006` 的 `view=targets&history=1`）、结果与删除清理见 [FAC-PRB-001..010](applications-and-facilities.md)，设施详情与服务器概览的“所有服务器按目标聚合 + 24h 折线图”（无探测源/目标选择器）见 [UI-FAC-014..018](ui-pages.md)、[UI-SRV-025/027](ui-pages.md)（横向矩阵与选择器 UI 均已废弃，`UI-FAC-016`）；表结构与可空磁盘 IO 列、`network_probe_configs` 三参数列见 [架构、数据与 API](architecture-data-api.md)。
 
-服务器详情一级 tab 收敛为 概览/系统/资源/网络与安全；概览合并原「概况」与「监控」，状态条与指标仪表盘同屏，系统内为 Agent/Tailscale/软件包，网络与安全内为网络探测/防火墙；旧一级 tab 深链保留别名。指标改按范围请求后端既有 `bucket` 桶聚合并展示坐标轴/图例/平均峰值/阈值/空档断线。见 [UI-SRV-002/008/009/016/017/018/019/020/025/026](ui-pages.md)、[UI-SHELL-062](ui-shell-and-conventions.md)；不新增后端 API、数据库表或后台任务。
+服务器详情一级 tab 收敛为 概览/系统/资源/网络与安全；概览合并原「概况」与「监控」，状态条与指标仪表盘同屏，系统内为 Agent/Tailscale/软件包，网络与安全内为 防火墙/Fail2Ban（网络探测子视图已移除，探测结果只在设施页与概览面板），子视图用 tab 内的下拉选择器切换，页面只保留一层 tab；旧一级 tab 深链保留别名，`tab=probes` 回落到防火墙。指标改按范围请求后端既有 `bucket` 桶聚合并展示坐标轴/图例/平均峰值/阈值/空档断线。见 [UI-SRV-002/008/009/016/017/018/019/020/025/026](ui-pages.md)、[UI-SHELL-062](ui-shell-and-conventions.md)；不新增后端 API、数据库表或后台任务。
 
 失败运行日志与有界降级见 [ORCH-CTRL-008](orchestration-and-tasks.md)；设施逐节点部署、按需请求错误诊断见 [FAC-RP-012/013](applications-and-facilities.md)。
 
@@ -80,6 +80,9 @@
 
 设施命名、布局与探测节拍（2026-11-17）：导航、路由标题与用户指南的用户可见产品名由「设施应用 / Facility Apps」改为「设施 / Facilities」（路由路径 `/applications/facility-apps` 不变）；网络探测与指标设施页把「范围」与「配置」上下堆叠为两个独立区域（范围在上、配置在下），服务器选择器改为紧凑网格；网络探测间隔改为分钟输入（1..60 分钟、默认 1，保存换算 `intervalSeconds=分钟×60`，Panel 校验范围 60..3600 秒），概览服务器卡片的镜像更新徽标改用镜像语义图标。无新增路由/表/后台任务，见 [UI-FAC-014/015/017/018/019](ui-pages.md)、[UI-OVR-017](ui-pages.md)、[UI-SHELL-014](ui-shell-and-conventions.md)、[FAC-PRB-003/004/010](applications-and-facilities.md)、[FAC-MET-003](applications-and-facilities.md)、[AGT-RPT-008](servers-security-packages.md)。
 
+侧栏品牌区去装饰竖条（2026-11-17）：AppShell 桌面侧栏与移动抽屉品牌区左缘的 3px 品牌色装饰竖条已移除，品牌区仅保留图标/名称/折叠按钮；无新增路由/表/后台任务，见 [UI-SHELL-014](ui-shell-and-conventions.md)、[布局体系规范](../specifications/frontend/layout-system.md)。
+
+WinUI 3 风格改版与服务器持久化外观（2026-11-17）：前端 token/动效/外壳/控件/模板改为 WinUI 3 观感（中性灰阶、Mica、4/8px 圆角、32px 控件、83/167/250/333ms 无上浮/无缩放动效、Page refresh 路由切换）；外观（明暗/Mica/9 强调色/背景图上传）改为服务器持久化：新增 `appearance_settings` 表（表 47→48）、6 条 `settings/appearance*` 路由（186→192）与 `<dataRoot>/appearance/` 文件目录，登录页走公开外观接口（仅模糊缩略图），localStorage 仅首屏缓存，旧 lighthouse/ocean 偏好首次登录一次性迁移；外观设置新增分区 `/settings/appearance`（路由声明 34→35）。P2 又把 14 个页面族的页面/分区表面统一为 WinUI 3 token（卡片 `rounded-overlay` + `border-card-stroke`、行内元素 `rounded-control` + `border-divider`，清除 `rounded-2xl/xl/lg`、`bg-background`、静态阴影与 hover 位移；无新增 API/表/路由）。P3 统一图标与加载指示：本地 vendored Fluent System Icons 兼容层 `@/icons`（52 文件迁移，MIT，见 `web/src/icons/README.md`）、WinUI `ProgressRing` 与 `Checkbox` primitive；仍无新增 API/表/路由。见 [SET-APP-001..012](identity-settings-system.md)、[UI-SHELL-017/020/021(已废弃)/026/047/048/049/052/063](ui-shell-and-conventions.md)、[UI-SET-013](ui-pages.md)、[视觉 Token 规范](../specifications/frontend/visual-tokens.md)、[布局体系规范](../specifications/frontend/layout-system.md)、[覆盖基线](coverage-matrix.md)。
 
 修改下列对象时，至少检查对应消费者：
 

@@ -1,14 +1,18 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
-import { RefreshCcw, Save } from '@lucide/vue';
+import { RefreshCcw, Save } from '@/icons';
 import { networkProbeFacilityApi } from '@/api/networkProbe';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
-import Input from '@/components/ui/Input.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
+import NumberBox from '@/components/ui/NumberBox.vue';
 import Select from '@/components/ui/Select.vue';
 import DataRefreshControl from '@/components/patterns/DataRefreshControl.vue';
+import FacilityField from '@/components/patterns/FacilityField.vue';
+import FacilitySection from '@/components/patterns/FacilitySection.vue';
+import FacilitySectionHeader from '@/components/patterns/FacilitySectionHeader.vue';
+import InfoBar from '@/components/patterns/InfoBar.vue';
 import ProbeHistoryCharts from '@/components/patterns/ProbeHistoryCharts.vue';
 import ServerMultiPicker from '@/components/patterns/ServerMultiPicker.vue';
 import { useAutoRefresh } from '@/composables/useAutoRefresh';
@@ -102,6 +106,11 @@ const parameterValues = computed<Record<ParameterField, number | null>>(() => ({
 
 const intervalMinutesValue = computed(() => parseNetworkProbeIntervalMinutes(draft.intervalMinutes));
 const intervalInvalid = computed(() => intervalMinutesValue.value === null);
+/** NumberBox 适配：draft 仍是字符串（换算/校验/保存沿用 parse），空值映射为 null。 */
+const intervalNumber = computed<number | null>({
+  get: () => intervalMinutesValue.value,
+  set: (value: number | null) => { draft.intervalMinutes = value === null ? '' : String(value); },
+});
 
 function parameterInvalid(field: ParameterField) {
   const value = parameterValues.value[field];
@@ -251,7 +260,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div
-    class="relative grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4 max-lg:h-auto max-lg:grid-rows-none"
+    class="relative grid h-full min-h-0 grid-rows-page gap-4 max-lg:h-auto max-lg:grid-rows-none"
     data-testid="network-probe-facility"
   >
     <LoadingOverlay v-if="loading && !config" :label="t('applicationsPage.networkProbeLoading')" />
@@ -265,97 +274,89 @@ onBeforeUnmount(() => {
     <template v-else>
       <div class="grid gap-4">
         <!-- 区域一：探测范围（模式 + 探测节点），与配置区上下堆叠。 -->
-        <section
-          class="grid gap-3 rounded-xl border border-border bg-card p-4"
+        <FacilitySection
+          :title="t('applicationsPage.networkProbeScopeTitle')"
+          :description="t('applicationsPage.networkProbeScopeHint')"
           data-testid="network-probe-scope-section"
         >
-          <div>
-            <h2 class="m-0 text-base font-semibold text-foreground">{{ t('applicationsPage.networkProbeScopeTitle') }}</h2>
-            <p class="m-0 mt-1 text-sm leading-6 text-muted-foreground">{{ t('applicationsPage.networkProbeScopeHint') }}</p>
-          </div>
-
           <div class="grid content-start gap-3">
-            <label class="grid gap-1 sm:max-w-xs">
-              <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.networkProbeMode') }}</span>
+            <FacilityField class="sm:max-w-xs" :label="t('applicationsPage.networkProbeMode')">
               <Select v-model="draft.mode" :options="modeOptions" :disabled="saving" />
-            </label>
+            </FacilityField>
 
             <div v-if="draft.mode === 'selected'" class="grid gap-2">
-              <div>
-                <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.networkProbeSelectServers') }}</span>
-                <p class="m-0 mt-1 text-xs leading-5 text-muted-foreground">{{ t('applicationsPage.networkProbeSelectServersHint') }}</p>
-              </div>
-              <div class="max-h-64 overflow-y-auto pr-1">
-                <ServerMultiPicker v-model="draft.serverIds" variant="compact" :servers="serverOptions" :label="t('applicationsPage.networkProbeSelectServers')" />
-              </div>
+              <FacilityField :label="t('applicationsPage.networkProbeSelectServers')" :hint="t('applicationsPage.networkProbeSelectServersHint')">
+                <div class="max-h-64 overflow-y-auto pr-1">
+                  <ServerMultiPicker v-model="draft.serverIds" variant="compact" :servers="serverOptions" :label="t('applicationsPage.networkProbeSelectServers')" />
+                </div>
+              </FacilityField>
             </div>
           </div>
-        </section>
+        </FacilitySection>
 
         <!-- 区域二：探测配置（间隔、包数、单包超时 + 保存）。 -->
-        <section class="grid gap-3 rounded-xl border border-border bg-card p-4" data-testid="network-probe-config-section">
-          <div>
-            <h2 class="m-0 text-base font-semibold text-foreground">{{ t('applicationsPage.networkProbeConfigTitle') }}</h2>
-            <p class="m-0 mt-1 text-sm leading-6 text-muted-foreground">{{ t('applicationsPage.networkProbeConfigHint') }}</p>
-          </div>
-
+        <FacilitySection
+          :title="t('applicationsPage.networkProbeConfigTitle')"
+          :description="t('applicationsPage.networkProbeConfigHint')"
+          data-testid="network-probe-config-section"
+        >
           <div class="grid gap-3 sm:grid-cols-3">
-            <label class="grid min-w-0 gap-1">
-              <span class="text-xs font-medium text-muted-foreground">{{ t('applicationsPage.networkProbeInterval') }}</span>
-              <Input
-                v-model="draft.intervalMinutes"
-                type="number"
-                inputmode="numeric"
+            <FacilityField
+              :label="t('applicationsPage.networkProbeInterval')"
+              :hint="t('applicationsPage.networkProbeIntervalHint', { min: networkProbeIntervalMinutes.min, max: networkProbeIntervalMinutes.max, default: networkProbeIntervalMinutes.defaultValue })"
+              :error="intervalInvalid ? t('applicationsPage.networkProbeIntervalInvalid', { min: networkProbeIntervalMinutes.min, max: networkProbeIntervalMinutes.max }) : ''"
+            >
+              <NumberBox
+                v-model="intervalNumber"
                 :min="networkProbeIntervalMinutes.min"
                 :max="networkProbeIntervalMinutes.max"
-                step="1"
+                :step="1"
                 :invalid="intervalInvalid"
                 :disabled="saving"
                 data-testid="network-probe-interval-minutes"
               />
-              <span class="text-xs leading-4 text-muted-foreground">{{ t('applicationsPage.networkProbeIntervalHint', { min: networkProbeIntervalMinutes.min, max: networkProbeIntervalMinutes.max, default: networkProbeIntervalMinutes.defaultValue }) }}</span>
-              <span v-if="intervalInvalid" class="text-xs leading-4 text-danger">{{ t('applicationsPage.networkProbeIntervalInvalid', { min: networkProbeIntervalMinutes.min, max: networkProbeIntervalMinutes.max }) }}</span>
-            </label>
-            <label v-for="item in parameterFields" :key="item.field" class="grid min-w-0 gap-1">
-              <span class="text-xs font-medium text-muted-foreground">{{ t(item.labelKey) }}</span>
-              <Input
-                :model-value="draft[item.field]"
-                type="number"
-                inputmode="numeric"
+            </FacilityField>
+            <FacilityField
+              v-for="item in parameterFields"
+              :key="item.field"
+              :label="t(item.labelKey)"
+              :hint="t(item.hintKey, { min: item.rule.min, max: item.rule.max, default: item.rule.defaultValue })"
+              :error="parameterInvalid(item.field) ? t(item.invalidKey, { min: item.rule.min, max: item.rule.max }) : ''"
+            >
+              <NumberBox
+                :model-value="parameterValues[item.field]"
                 :min="item.rule.min"
                 :max="item.rule.max"
                 :step="item.rule.step"
                 :invalid="parameterInvalid(item.field)"
                 :disabled="saving"
-                @update:model-value="setParameter(item.field, $event)"
+                @update:model-value="setParameter(item.field, $event === null ? '' : String($event))"
               />
-              <span class="text-xs leading-4 text-muted-foreground">{{ t(item.hintKey, { min: item.rule.min, max: item.rule.max, default: item.rule.defaultValue }) }}</span>
-              <span v-if="parameterInvalid(item.field)" class="text-xs leading-4 text-danger">{{ t(item.invalidKey, { min: item.rule.min, max: item.rule.max }) }}</span>
-            </label>
+            </FacilityField>
           </div>
 
-          <p v-if="formError" role="alert" class="m-0 text-sm text-danger">{{ formError }}</p>
+          <InfoBar v-if="formError" tone="danger">{{ formError }}</InfoBar>
           <div class="flex justify-end">
             <Button size="sm" variant="primary" :loading="saving" :disabled="!dirty" @click="save"><Save />{{ t('applicationsPage.networkProbeSave') }}</Button>
           </div>
-        </section>
+        </FacilitySection>
       </div>
 
-      <!-- 区域三：全部服务器结果（每台服务器直接展示聚合值与两张 24h 折线图，卡片内部滚动）。 -->
+      <!-- 区域三：全部服务器结果（每台服务器直接展示聚合值与两张 24h 折线图）。
+           结果区不再画第二层卡片：图表自身是 ChartCard 语义的 surface-card，外层只负责分区与滚动。 -->
       <section
-        class="relative grid min-h-0 gap-3 rounded-xl border border-border bg-card p-4 max-lg:grid-rows-none lg:grid-rows-[auto_auto_minmax(0,1fr)]"
+        class="relative grid min-h-0 gap-3 p-4 max-lg:grid-rows-none lg:grid-rows-page-top"
         data-testid="network-probe-results-section"
       >
-        <div class="flex min-w-0 flex-wrap items-start justify-between gap-2">
-          <div class="min-w-0">
-            <h2 class="m-0 text-base font-semibold text-foreground">{{ t('applicationsPage.networkProbeResultsTitle') }}</h2>
-            <p class="m-0 mt-1 text-sm leading-6 text-muted-foreground">{{ t('applicationsPage.networkProbeResultsHint') }}</p>
-          </div>
-          <div class="flex flex-wrap items-center gap-2">
+        <FacilitySectionHeader
+          :title="t('applicationsPage.networkProbeResultsTitle')"
+          :description="t('applicationsPage.networkProbeResultsHint')"
+        >
+          <template #actions>
             <DataRefreshControl />
             <Button size="sm" variant="ghost" :loading="resultsLoading" @click="loadTargets"><RefreshCcw />{{ t('common.refresh') }}</Button>
-          </div>
-        </div>
+          </template>
+        </FacilitySectionHeader>
 
         <LoadingOverlay v-if="resultsLoading && !targetMatrix" :label="t('applicationsPage.networkProbeLoading')" />
         <EmptyState v-else-if="resultsError && !targetMatrix" variant="page" :title="t('common.loadFailed')" :description="resultsError">
@@ -365,7 +366,7 @@ onBeforeUnmount(() => {
         </EmptyState>
         <template v-else>
           <div class="grid min-w-0 gap-2">
-            <p v-if="resultsError" role="alert" class="m-0 rounded-xl border border-warning-border bg-warning-bg p-2 text-xs text-warning">{{ t('applicationsPage.networkProbeShowingStale') }}</p>
+            <InfoBar v-if="resultsError" tone="warning">{{ t('applicationsPage.networkProbeShowingStale') }}</InfoBar>
             <div class="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
               <span>{{ t('applicationsPage.networkProbeTargetsSummary', { count: targetCards.length, probed: probedCount }) }}</span>
               <span>{{ t('serversPage.probe.lastSample') }}: {{ formatDateTime(targetMatrix?.updatedAt, t('common.never')) }}</span>
@@ -387,7 +388,7 @@ onBeforeUnmount(() => {
             <li
               v-for="card in targetCards"
               :key="card.node.serverId"
-              class="grid min-w-0 content-start gap-3 border-t border-border pt-3 first:border-t-0 first:pt-0"
+              class="grid min-w-0 content-start gap-3 border-t border-divider pt-3 first:border-t-0 first:pt-0"
               data-testid="probe-target-card"
             >
               <div class="flex min-w-0 flex-wrap items-start justify-between gap-2">

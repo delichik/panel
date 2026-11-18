@@ -25,7 +25,7 @@ var appTables = []string{
 	"facility_edit_session_assets", "facility_edit_session_operations", "storage_share_configs",
 	"storage_share_partitions", "network_probe_configs", "network_probe_results", "metrics_facility_configs", "dns_domains",
 	"certificates", "self_signed_certificates", "key_assets", "overview_card_configurations",
-	"runtime_settings", "auth_state", "auth_accounts", "event_runs", "event_run_steps",
+	"runtime_settings", "appearance_settings", "auth_state", "auth_accounts", "event_runs", "event_run_steps",
 	"events",
 }
 

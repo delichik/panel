@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { Check, ChevronDown, RefreshCcw } from '@lucide/vue';
+import { Check, ChevronDown, RefreshCcw } from '@/icons';
 import Button from '@/components/ui/Button.vue';
 import Dropdown from '@/components/ui/Dropdown.vue';
 import DropdownItem from '@/components/ui/DropdownItem.vue';
@@ -28,21 +28,21 @@ function select(value: AutoRefreshMode) {
       <Button size="sm" variant="secondary" :title="hintLabel">
         <RefreshCcw class="size-4" />
         <span>{{ currentLabel }}</span>
-        <ChevronDown class="size-3.5 text-muted-foreground" />
+        <ChevronDown class="size-4 text-muted-foreground" />
       </Button>
     </template>
-    <DropdownItem :class="mode === 'off' ? 'text-brand font-semibold' : ''" @click="select('off')">
+    <!-- MenuFlyout 选中语义：只显示勾选，不改文字颜色/字重。 -->
+    <DropdownItem @click="select('off')">
       <span class="flex-1">{{ offLabel }}</span>
-      <span class="flex w-4 justify-end"><Check v-if="mode === 'off'" class="size-4 text-brand" /></span>
+      <span class="flex w-4 justify-end"><Check v-if="mode === 'off'" class="size-4 text-accent-text" aria-hidden="true" /></span>
     </DropdownItem>
     <DropdownItem
       v-for="option in options"
       :key="option.value"
-      :class="mode === option.value ? 'text-brand font-semibold' : ''"
       @click="select(option.value)"
     >
       <span class="flex-1">{{ option.label }}</span>
-      <span class="flex w-4 justify-end"><Check v-if="mode === option.value" class="size-4 text-brand" /></span>
+      <span class="flex w-4 justify-end"><Check v-if="mode === option.value" class="size-4 text-accent-text" aria-hidden="true" /></span>
     </DropdownItem>
   </Dropdown>
 </template>

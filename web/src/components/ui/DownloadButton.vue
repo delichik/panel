@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Download } from '@lucide/vue';
+import { Download } from '@/icons';
 import Button from './Button.vue';
 
 withDefaults(defineProps<{

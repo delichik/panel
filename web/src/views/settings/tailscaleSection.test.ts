@@ -128,11 +128,15 @@ afterEach(() => {
 });
 
 describe('settings tailscale section', () => {
-  it('is reachable from the settings sidebar', async () => {
+  it('is reachable from the settings tabs without a second sidebar', async () => {
     await render();
-    const link = wrapper!.findAll('a').find((item) => item.text() === 'Tailscale');
-    expect(link?.attributes('href')).toBe('/settings/tailscale');
-    expect(link?.attributes('aria-current')).toBe('page');
+    // 设置页内部不再有第二条左侧分区导航，只有顶部共享 Tabs。
+    expect(wrapper!.find('aside').exists()).toBe(false);
+    const tabs = wrapper!.findAll('[role="tab"]');
+    expect(tabs).toHaveLength(9);
+    const tailscaleTab = tabs.find((item) => item.text() === 'Tailscale');
+    expect(tailscaleTab).toBeTruthy();
+    expect(tailscaleTab!.attributes('aria-selected')).toBe('true');
   });
 
   it('never hydrates the stored auth key from the server response', async () => {

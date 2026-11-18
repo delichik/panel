@@ -15,7 +15,7 @@ describe('MasterDetailLayout', () => {
     expect(wrapper.classes()).toContain('h-full');
     expect(wrapper.classes()).toContain('min-h-0');
     expect(wrapper.classes()).toContain('overflow-x-hidden');
-    expect(wrapper.classes()).toContain('xl:grid-cols-[360px_minmax(0,1fr)]');
+    expect(wrapper.classes()).toContain('xl:grid-cols-master');
     expect(wrapper.get('#master').text()).toBe('master');
     expect(wrapper.get('#detail').text()).toBe('detail');
   });

@@ -32,8 +32,10 @@
 
 - 前端入口：`web/src/main.ts`
 - 根组件：`web/src/app/App.vue`
-- 全局样式与 Tailwind token：`web/src/styles/main.css`（`--panel-*` 为真源；`@theme` 桥接 Tailwind 色名，含 `border-strong` / `secondary-foreground`）
-- 主题运行时：`web/src/design/theme.ts`
+- 全局样式与 Tailwind token：`web/src/styles/main.css`（WinUI 3 / Fluent 2 `--panel-*` 与 accent token 为真源；`@theme` 桥接 Tailwind 色名、圆角 `rounded-control|overlay` 与 `shadow-flyout`）
+- 外观运行时：`web/src/design/appearance.ts`（服务器持久化主题/Mica/强调色/背景 + localStorage 首屏缓存；旧 `theme.ts` 已删除，不得恢复 lighthouse/ocean 或 `data-scheme`）
+- 外观 API：`web/src/api/appearance.ts`、类型 `web/src/types/appearance.ts`、Mock `web/src/mocks/appearance.ts`
+- 背景图存储：服务器 `<dataRoot>/appearance/<assetId>/{master,thumb}`；登录页走公开 `GET /settings/public-appearance`
 - 自有 UI primitives：`web/src/components/ui/`
 - 外壳与导航：`web/src/components/shell/`；AppShell 一级菜单顺序为「概览 → 资产 → 应用 → 资源 → 设置」，定义在 `web/src/components/shell/navModel.ts`。
 - 页面模板：`web/src/components/templates/`
@@ -48,16 +50,17 @@
 
 - 禁止新增 `naive-ui`、Vuetify 或旧 UI 框架依赖。
 - 复杂无样式交互可使用 headless 组件库；业务页面仍必须通过 Panel 自有 primitives 暴露一致样式。
-- `web/src/components/ui/` 当前基础组件：Button、IconButton、Input、Textarea、Select、Dialog、Dropdown、DropdownItem、Tabs、Badge、Table、ToastProvider/useToast、Skeleton、EmptyState、Tooltip、Switch、DateTimeRangePicker、TimeSegmentInput。
+- `web/src/components/ui/` 当前基础组件：Button、IconButton、Input、Textarea、SearchInput、Select、Dialog、Dropdown、DropdownItem、Tabs、Badge、Table、ToastProvider/useToast、Skeleton、EmptyState、Tooltip、Switch、Checkbox、ProgressRing、DateTimeRangePicker、TimeSegmentInput、CodeEditor。
 - 等待网络接口响应的加载效果统一使用 `web/src/components/ui/LoadingOverlay.vue` 或既有骨架/按钮 loading；文本加载位置不得只显示文字。
 - 所有异步数据列表统一为「骨架/加载态 → 内容交错填充」：加载期按页面结构显示 Skeleton（`Table` 自带表格骨架行），数据就绪后经 `motion-stagger` + `motion-reveal` / `motion-table-row` 播放逐项进场动效；已有内容刷新不重放。
 - 列表、详情、轮询等异步加载必须使用 `createLatestRequestGuard` 或 AbortController 丢弃过期响应；轮询必须防重入、标签页不可见时暂停轮询，刷新按钮应覆盖其对应面板的全部数据源。
 - 新增或替换跨页面同类交互时，优先复用 `web/src/components/ui/` 的 Table、TableDetailLayout、SearchInput、PaginationBar、ConfirmDialog、FileUploadButton、DownloadButton、StatusBadge，以及 `web/src/components/patterns/` 的 ServerMultiPicker、AutoRefreshControl、AssetFileManager；适用边界见 `docs/agents/specifications/frontend/interaction-patterns.md`。
 - `web/src/views/applications/index.vue`、`web/src/views/servers/index.vue`（含 `tabs/`）等页面已接入统一 patterns：搜索使用 `SearchInput`，列表使用 `Table` + 覆盖式详情，行操作使用 `Dropdown`/`IconButton`，任务/应用状态使用 `StatusBadge`，应用/设施服务器多选使用 `ServerMultiPicker`，持久化与文件内容操作使用 `DownloadButton` / `FileUploadButton`。应用和设施编辑器采用同一连续纵向瀑布流：所有配置区在一个编辑正文中按业务顺序展开，正文独立滚动，右侧保留摘要；不得恢复分区切换、分页卡片或隐藏其他配置区的交互。单服务器上下文选择器（原 `ServerContextSelector`）已删除，服务器操作一律经服务器详情 tabs 进入。
-- 图标统一使用 `@lucide/vue`。
+- 共享 CSS utility 层：`web/src/styles/main.css` 的 `@utility`（`surface-*`、`duration-*`/`ease-*`、`transition-*`、`grid-rows-*`/`grid-cols-*`、`focus-*-underline`、`h-shell-header`、`max-h-list` 等）。组件/页面不得再写裸 px/rem 字号、任意圆角/阴影/过渡；`tokenGuard.test.ts` 会拦截。
+- 图标统一使用 `@/icons`（`web/src/icons/`，vendored Fluent System Icons 24px regular + Vue 兼容层，MIT）；禁止直接 import `@lucide/vue`。新增图标需更新 `tmp/gen-fluent-icons.mjs` 白名单并重新生成。
 - 构建链路：路由组件全部懒加载（`component: () => import(...)`），每个页面族独立 chunk，初始包只含 AppShell 外壳与共享依赖；`web/vite.config.ts` 通过 `build.rollupOptions.output.manualChunks` 固定拆分 `vue-vendor`（vue/vue-router/pinia）、`code-editor`（@codemirror/*）、`echarts`、`yaml` 等大依赖块，保持各 chunk 低于 500 kB 警告阈值。新增页面族路由必须继续使用懒加载，不得恢复静态组件导入。
-- 主题支持 `system` / `light` / `dark` 明暗模式，以及 `lighthouse`（灯塔，默认）/ `ocean`（蔚蓝）两套配色方案，分别通过 `data-theme` / `data-scheme` 和 CSS 变量运行；配色偏好保存在 localStorage `panel.theme.scheme`。灯塔浅色为中性冷灰底；primary/brand 与 success 色相可区分；motion 经 `--panel-motion-*`（含 hover 轻微上移与更明显入场位移）。
-- 首次加载的启动遮罩（web/index.html 内联 boot-screen）在首帧渲染前按 panel.theme.mode、panel.theme.scheme 与 prefers-color-scheme 应用主题与配色，避免深色模式先闪白屏；内联色值与各方案 --panel-bg / --panel-border-strong / --panel-primary 保持一致。
+- 主题/外观：外观支持 `system` / `light` / `dark`、Mica 开/关、9 个强调色预设、背景（纯色/4 内置预设/上传图片）；**设置保存在服务器**（`appearance_settings` + `<dataRoot>/appearance/`），localStorage `panel.appearance.cache` 仅用于首屏防闪。运行时通过 `data-theme` / `data-background` / `data-mica` / `data-accent` / `data-preset` 与 `--panel-mica-thumb` 生效；旧 `lighthouse/ocean` 与 `data-scheme` 已删除，旧本地偏好首次登录时一次性迁移（lighthouse→teal、ocean→blue）。WinUI 3 动效经 `--panel-motion-*`（hover/press 仅变色，无上浮/按压缩放）。
+- 首次加载的启动遮罩（web/index.html 内联 boot-screen）在首帧渲染前按 `panel.appearance.cache` 与 prefers-color-scheme 应用主题/强调色/背景缩略图，避免白闪；随后 `App.vue` 调 `bootstrapAppearance()` 用服务器真源覆盖（登录后为完整外观，未登录为公开外观）。
 - 中大屏 AppShell 必须填满视口并禁止页面级滚动；滚动限制在模板正文、表格、详情、日志或编辑正文内部。
 - 窄屏 AppShell 侧边抽屉以 dialog 语义呈现（`role="dialog"` / `aria-modal` / `aria-label`），复用 `web/src/composables/useOverlayBehavior.ts` 的焦点圈定、Escape 关闭与焦点恢复，提供可见关闭按钮，锁定背景滚动并把背景置为 inert；跨入 `lg`（1024px）断点时自动关闭。
 - 异常消息和操作成功提示统一通过 `ToastProvider` 以顶部 toast 展示，不再使用页面内成功横幅或内联操作错误条；表单校验、结构化诊断和状态型错误仍就地展示。`Dialog` 不因点击遮罩关闭，只能通过显式关闭、取消或 Escape 关闭。
@@ -93,7 +96,7 @@
 
 `web/src/views/overview/`、`web/src/views/servers/`、`web/src/views/credentials/` 已替换阶段占位：
 
-- 概览页是固定只读状态页（2026-11-16 起，不再是可配置 Dashboard）：顶部「节点情况」摘要，下方服务器卡片网格；不提供编辑/增删/拖拽/缩放/卡片编辑器等自定义入口（`UI-OVR-013`）。数据由前端并行取数组合，**不使用 `/api/v1/overview`**：`GET /api/v1/servers`（列表与可达/OS 支持）、`GET /api/v1/facility-apps/network-probe`（探测来源候选）、每服务器 `GET /api/v1/servers/{id}/metrics?range=1d&bucket=1800`（24h 桶历史 + `latest` 当前值，覆盖 CPU/内存/磁盘当前值/负载/上下行）与 `GET /api/v1/servers/{id}/network-probes?history=1`（所选探测源的延迟/丢包最新值与 24h 历史），另有 `GET /servers/{id}/packages/updates`、`GET /servers/{id}/images` 读取更新数量；请求分两批并行，单台失败只影响该卡片（`UI-OVR-001`）。网络探测视角由**页面头部操作行**的“探测来源”选择器决定并以 URL `?probe=` 恢复；其它卡片显示该源到该服务器的历史，**探测源自身卡片的延迟/丢包显示占位控件**（`—` + 虚线占位条，不请求该源历史、不画历史条）（`UI-OVR-015/016`）。卡片标题不显示 IP/端口，只用状态点（在线=服务器可达、离线=不可达；指标新鲜度不改变在线状态，也不显示“在线/系统不支持”文字徽标）；正文按行分组（CPU+负载、内存+磁盘、磁盘读取+磁盘写入、网络下行+网络上行、延迟+丢包率）：仅 CPU/延迟/丢包率保留 24h 逐小时历史条（展示时合并为 12 段降低视觉密度），负载、磁盘读写与网络上下行只显示当前值，内存/磁盘为进度条 + 百分比；卡片使用较大内边距与行距。阈值与桶常量集中在 `web/src/views/overview/model.ts`。软件包/镜像更新以卡片标题徽标展示并深链到对应服务器 tab（`UI-OVR-017`）。自动刷新按 10 分钟/30 分钟/1 小时（或关闭）重取列表、指标与当前探测源结果，不重复拉取更新统计；服务器详情指标面板、网络探测子视图与网络探测设施结果区复用同一 `DataRefreshControl`，只在对应 tab 激活/页面可见时刷新（`UI-OVR-018`、`UI-SRV-008/025`、`UI-FAC-018`）。无服务器/无探测候选/过期状态必须明确显示，不得伪造 0（`UI-OVR-019`）。
+- 概览页是固定只读状态页（2026-11-16 起，不再是可配置 Dashboard）：顶部「节点情况」与「应用总览」两张摘要卡，下方服务器卡片网格；应用总览显示应用总数、已启用、部署中、需关注与已停用数量（数据来自 `GET /api/v1/applications?pageSize=200`，失败只让该卡显示不可用）。不提供编辑/增删/拖拽/缩放/卡片编辑器等自定义入口（`UI-OVR-013`）。数据由前端并行取数组合，**不使用 `/api/v1/overview`**：`GET /api/v1/servers`（列表与可达/OS 支持）、`GET /api/v1/facility-apps/network-probe`（探测来源候选）、每服务器 `GET /api/v1/servers/{id}/metrics?range=1d&bucket=1800`（24h 桶历史 + `latest` 当前值，覆盖 CPU/内存/磁盘当前值/负载/上下行）与 `GET /api/v1/servers/{id}/network-probes?history=1`（所选探测源的延迟/丢包最新值与 24h 历史），另有 `GET /servers/{id}/packages/updates`、`GET /servers/{id}/images` 读取更新数量；请求分两批并行，单台失败只影响该卡片（`UI-OVR-001`）。网络探测视角由**页面头部操作行**的“探测来源”选择器决定并以 URL `?probe=` 恢复；其它卡片显示该源到该服务器的历史，**探测源自身卡片的延迟/丢包显示占位控件**（`—` + 虚线占位条，不请求该源历史、不画历史条）（`UI-OVR-015/016`）。卡片标题不显示 IP/端口，只用状态点（在线=服务器可达、离线=不可达；指标新鲜度不改变在线状态，也不显示“在线/系统不支持”文字徽标）；正文按行分组（CPU+负载、内存+磁盘、磁盘读取+磁盘写入、网络下行+网络上行、延迟+丢包率）：每个字段名带语义图标、字段名用 text-sm；仅 CPU/延迟/丢包率保留 24h 逐小时历史条（**按小时直接展示 24 段，不再合并为 12 段**，条高 h-2），负载、磁盘读写与网络上下行只显示当前值，内存/磁盘为进度条 + 百分比；卡片使用较大内边距与行距。阈值与桶常量集中在 `web/src/views/overview/model.ts`。软件包/镜像更新以卡片标题徽标展示并深链到对应服务器 tab（`UI-OVR-017`）。自动刷新按 10 分钟/30 分钟/1 小时（或关闭）重取列表、指标与当前探测源结果，不重复拉取更新统计；服务器详情指标面板、网络探测子视图与网络探测设施结果区复用同一 `DataRefreshControl`，只在对应 tab 激活/页面可见时刷新（`UI-OVR-018`、`UI-SRV-008/025`、`UI-FAC-018`）。无服务器/无探测候选/过期状态必须明确显示，不得伪造 0（`UI-OVR-019`）。
 - 服务器页是运维工作台：列表为表格（`GET /api/v1/servers` 摘要 + 行操作），点击「详情」覆盖列表；选择或编辑服务器时通过 `GET /api/v1/servers/{id}` 按需加载完整详情。详情一级 tab 覆盖连接、指标、Agent、Tailscale 与资源/安全能力，并接入创建、编辑、探测、测试连接、删除、重启、Agent 部署与防火墙规则维护。其他正式 API 使用 `/api/v1/servers/probe`、`/api/v1/servers/{id}/test`、`/restart`、`/agent/deploy`、`/agent/certificate`、`/metrics`、`/ufw`；指标展示使用 `/metrics` 返回的最新采样，不要求服务器列表携带指标详情。
 - 服务器添加/编辑表单填写 `ipv4`/`ipv6`（至少一个，必须是 IP 字面量），连接地址由后端派生并只读展示，不再提供直接填写 host 的输入。
 - SSH 凭据页是独立 vault：支持密码/私钥创建编辑、secret 留空不更新、删除前引用影响、引用服务器测试。后端当前没有独立凭据测试或引用预检接口，前端用 `/api/v1/servers` 计算引用影响，并仅在存在引用服务器时通过 `/api/v1/servers/{id}/test` 测试；无引用时测试入口禁用。
@@ -138,7 +141,7 @@
 
 导航两项：`/events`（进程行）、`/logs`（JSONL 行）。旧 `/operations`、`/tasks`、`/activity` 仅重定向。产品读 API 为 `/api/v1/events*` 与 `/api/v1/logs?eventId=`（`web/src/api/events.ts`、`web/src/types/events.ts`；legacy client 可保留 `log-contexts` 别名）。`web/src/api/activity.ts` 已退役并抛错；`ActivityReceipt` 类型仍保留在 `web/src/types/activity.ts`。
 
-- 进程事件页：`IntentRecordsPage` + `TableDetailLayout`；列表 `GET /events`，显示时间/模块/级别/状态/标题；详情只保留摘要字段与「查看日志」，不渲染 execution steps/时间线/证据。
+- 进程事件页：`IntentRecordsPage` + `ListPage` + `Dialog`（详情弹窗，不再使用 `TableDetailLayout`/第二个页面）；列表 `GET /events`，显示时间/模块/级别/状态/标题；详情弹窗只保留摘要字段与「查看日志」，不渲染 execution steps/时间线/证据。`/logs` 为 ListPage + 行详情 Dialog。
 - 「查看日志」与 Toast/`ActivityLink` 进入 `/logs`，默认 `level=info,warning,error`，并可带 `streamId`/`operationId`/`executionId`。
 - `/logs` 为 `ListPage` + Dialog：列表展示 log contexts（时间、状态、来源、标题）；Dialog 按 `streamId` 加载 `/lines`（默认 info,warning,error），结构化错误分开展示 errorCode/error/detail。不调用旧 activity context/evidence/tail/summary。
 - 列表按需读取、cursor 分页、迟到响应隔离；不接入自动刷新与统计横幅。

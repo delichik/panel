@@ -219,9 +219,9 @@ describe('network probe facility', () => {
     expect(picker.findAll('button[aria-pressed]')).toHaveLength(servers.length);
   });
 
-  it('shows probe parameter fields in minutes with inline range validation', async () => {
+  it('renders probe parameters as NumberBox spinbuttons with min/max clamping and inline validation', async () => {
     const wrapper = await mountFacility();
-    const inputs = wrapper.findAll<HTMLInputElement>('input[type="number"]');
+    const inputs = wrapper.findAll<HTMLInputElement>('input[role="spinbutton"]');
     expect(inputs).toHaveLength(3);
     // 默认配置 intervalSeconds=60 → 1 分钟。
     expect(inputs[0]!.element.value).toBe('1');
@@ -229,10 +229,24 @@ describe('network probe facility', () => {
     expect(inputs[2]!.element.value).toBe('2');
     expect(wrapper.text()).toContain('Range 1–60 minutes, default 1.');
 
+    // NumberBox 在 commit 时按 min/max 夹取：61 → 60。
     inputs[0]!.element.value = '61';
     await inputs[0]!.trigger('input');
+    await inputs[0]!.trigger('change');
+    await flushPromises();
+    expect(inputs[0]!.element.value).toBe('60');
+    expect(wrapper.text()).not.toContain('Enter a whole number between 1 and 60 minutes.');
+
+    // 清空仍触发字段校验并阻止保存（保持原有校验路径）。
+    inputs[0]!.element.value = '';
+    await inputs[0]!.trigger('input');
+    await inputs[0]!.trigger('change');
     await flushPromises();
     expect(wrapper.text()).toContain('Enter a whole number between 1 and 60 minutes.');
+
+    const save = wrapper.findAll('button').find((button) => button.text() === 'Save configuration')!;
+    await save.trigger('click');
+    await flushPromises();
     expect(saveConfig).not.toHaveBeenCalled();
   });
 
@@ -241,6 +255,7 @@ describe('network probe facility', () => {
     const interval = wrapper.find<HTMLInputElement>('[data-testid="network-probe-interval-minutes"]');
     interval.element.value = '2';
     await interval.trigger('input');
+    await interval.trigger('change');
     await flushPromises();
 
     const save = wrapper.findAll('button').find((button) => button.text() === 'Save configuration')!;

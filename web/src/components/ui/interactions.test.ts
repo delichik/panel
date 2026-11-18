@@ -287,6 +287,28 @@ describe('Dropdown', () => {
   });
 });
 
+describe('Teleported popups keep the document scroll position', () => {
+  it('moves focus into dropdown menus without requestAnimation-style page jumps', async () => {
+    const wrapper = mount(Dropdown, {
+      attachTo: document.body,
+      slots: {
+        trigger: '<button id="dropdown-trigger">Options</button>',
+        default: '<DropdownItem>First</DropdownItem><DropdownItem>Second</DropdownItem>',
+      },
+      global: { components: { DropdownItem } },
+    });
+    await wrapper.get('#dropdown-trigger').trigger('click');
+    await flushPromises();
+
+    const firstItem = document.querySelector<HTMLElement>('[role="menuitem"]');
+    expect(firstItem).not.toBeNull();
+    // Position + preventScroll focus are covered by the shared focus helper
+    // (utils/focus.test.ts); here we assert the menu actually receives focus.
+    expect(document.activeElement).toBe(firstItem);
+    expect(document.querySelector('.surface-flyout')?.getAttribute('style')).toContain('position: fixed');
+  });
+});
+
 describe('Tabs', () => {
   it('links tabs to the panel and skips disabled tabs with arrow keys', async () => {
     const Host = defineComponent({
@@ -308,6 +330,9 @@ describe('Tabs', () => {
     expect(tabs[0]?.attributes('aria-controls')).toBe(panel.attributes('id'));
     expect(panel.attributes('aria-labelledby')).toBe(tabs[0]?.attributes('id'));
     expect(tabs.map((tab) => tab.attributes('tabindex'))).toEqual(['0', '-1', '-1']);
+    // WinUI TabView header: a single shared accent underline slides between tabs.
+    expect(wrapper.find('span.bg-primary').exists()).toBe(true);
+    expect(wrapper.find('span.transition-indicator').classes()).toContain('bg-primary');
 
     await tabs[0]!.trigger('keydown', { key: 'ArrowRight' });
     await nextTick();

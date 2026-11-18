@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { DownloadCloud, MoreHorizontal, RefreshCcw, Trash2 } from '@lucide/vue';
+import { DownloadCloud, MoreHorizontal, RefreshCcw, Trash2 } from '@/icons';
 import { containersApi } from '@/api/containers';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
@@ -42,10 +42,17 @@ let listController: AbortController | null = null;
 
 const columns = computed(() => [
   { key: 'image', label: t('resourcesPage.image') },
-  { key: 'size', label: t('resourcesPage.size'), nowrap: true },
-  { key: 'state', label: t('common.status'), nowrap: true },
+  { key: 'state', label: t('common.status'), nowrap: true, width: 'w-40' },
+  { key: 'checkedAt', label: t('serversPage.lastChecked'), nowrap: true, width: 'w-40' },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
 ]);
+
+/** 优先展示最近一次镜像检查时间，未检查时回落到镜像创建时间（Docker created 为 Unix 秒）。 */
+function imageTime(row: ImageDto) {
+  if (row.checkedAt) return formatDateTime(row.checkedAt, t('common.never'));
+  if (!row.created) return t('common.never');
+  return formatDateTime(new Date(row.created * 1000).toISOString(), t('common.never'));
+}
 
 async function load() {
   listController?.abort();
@@ -137,9 +144,9 @@ onBeforeUnmount(() => listController?.abort());
 </script>
 
 <template>
-  <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4">
+  <div class="grid h-full min-h-0 grid-rows-page gap-4">
     <div class="grid gap-3">
-      <div v-if="blocked" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('resourcesPage.blockAgent') }}</div>
+      <div v-if="blocked" class="rounded-control border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('resourcesPage.blockAgent') }}</div>
       <div class="flex flex-wrap items-center justify-between gap-2">
         <span class="text-xs text-muted-foreground">{{ formatDateTime(images?.observedAt) || t('common.never') }}</span>
         <div class="flex flex-wrap items-center gap-2">
@@ -168,31 +175,32 @@ onBeforeUnmount(() => listController?.abort());
       :columns="columns"
       :rows="images?.items ?? []"
       row-key="id"
+      row-height="auto"
       :loading="loading"
       :loading-label="t('common.loading')"
     >
       <template #image="{ row }">
         <div class="min-w-0">
-          <Tooltip :text="imageLabel(row)" trigger-class="max-w-[22rem]">
+          <Tooltip :text="imageLabel(row)" trigger-class="max-w-88">
             <strong class="truncate text-foreground">{{ imageLabel(row) }}</strong>
           </Tooltip>
-          <span class="panel-mono block truncate text-xs text-muted-foreground">{{ row.id }}</span>
+          <span class="panel-mono block truncate text-caption text-muted-foreground">{{ row.id }}</span>
         </div>
-      </template>
-      <template #size="{ row }">
-        <span class="text-muted-foreground">{{ formatBytes(row.size) }}</span>
       </template>
       <template #state="{ row }">
         <div class="grid justify-start gap-1">
-          <Badge :tone="imageTone(row)">{{ row.updateAvailable ? t('resourcesPage.updateAvailable') : row.inUse ? t('resourcesPage.inUse') : t('resourcesPage.unused') }}</Badge>
-          <span v-if="row.lastError" class="max-w-[14rem] truncate text-xs text-warning">{{ row.lastError }}</span>
+          <Badge class="whitespace-nowrap" :tone="imageTone(row)">{{ row.updateAvailable ? t('resourcesPage.updateAvailable') : row.inUse ? t('resourcesPage.inUse') : t('resourcesPage.unused') }}</Badge>
+          <span class="max-w-48 truncate whitespace-nowrap text-caption text-muted-foreground" :class="row.lastError ? 'text-warning' : undefined">{{ row.lastError || formatBytes(row.size) }}</span>
         </div>
+      </template>
+      <template #checkedAt="{ row }">
+        <span class="whitespace-nowrap text-muted-foreground">{{ imageTime(row) }}</span>
       </template>
       <template #actions="{ row }">
         <Button size="sm" variant="danger" :disabled="blocked || row.inUse" @click="askDelete(row)"><Trash2 />{{ t('common.delete') }}</Button>
       </template>
       <template #empty>
-        <EmptyState :title="t('resourcesPage.noImages')" :description="t('resourcesPage.noImagesHint')" />
+        <EmptyState variant="inset" :title="t('resourcesPage.noImages')" :description="t('resourcesPage.noImagesHint')" />
       </template>
     </Table>
 

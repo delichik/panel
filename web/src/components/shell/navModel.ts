@@ -1,15 +1,15 @@
 import {
   AppWindow,
   CircleGauge,
+  FileText,
   FolderKanban,
   Globe,
+  History,
   KeyRound,
-  RadioTower,
-  ScrollText,
   Server,
   Settings,
   ShieldCheck,
-} from '@lucide/vue';
+} from '@/icons';
 import type { Component } from 'vue';
 
 export interface NavItem {
@@ -49,8 +49,8 @@ export const navGroups: NavGroup[] = [
     key: 'system',
     titleKey: 'layout.nav.settings',
     items: [
-      { key: 'events', titleKey: 'routes.events.title', to: '/events', icon: ScrollText },
-      { key: 'logs', titleKey: 'routes.logs.title', to: '/logs', icon: RadioTower },
+      { key: 'events', titleKey: 'routes.events.title', to: '/events', icon: History },
+      { key: 'logs', titleKey: 'routes.logs.title', to: '/logs', icon: FileText },
       { key: 'settings', titleKey: 'routes.settings.title', to: '/settings/general', icon: Settings },
     ],
   },

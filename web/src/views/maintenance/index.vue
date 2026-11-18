@@ -1,14 +1,20 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
-import { Download, LogOut, Play, RefreshCcw, RotateCcw, ShieldCheck } from '@lucide/vue';
+import { LogOut, Play, RefreshCcw, RotateCcw } from '@/icons';
 import { maintenanceApi } from '@/api/maintenance';
 import { ApiError } from '@/api/client';
 import { saveBlobDownload } from '@/api/download';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
+import DownloadButton from '@/components/ui/DownloadButton.vue';
 import Input from '@/components/ui/Input.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
+import FormField from '@/components/patterns/FormField.vue';
+import InfoBar from '@/components/patterns/InfoBar.vue';
+import ProgressBar from '@/components/patterns/ProgressBar.vue';
+import SettingsCard from '@/components/patterns/SettingsCard.vue';
+import SettingsSection from '@/components/patterns/SettingsSection.vue';
 import { useI18n } from '@/i18n';
 import type { MaintenanceStatus } from '@/types/maintenance';
 import { formatDateTime } from '@/utils/datetime';
@@ -201,13 +207,18 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main class="grid min-h-dvh bg-background p-6 text-foreground max-sm:p-4">
-    <section class="mx-auto grid w-full max-w-6xl gap-5 self-center">
-      <header class="flex items-start justify-between gap-4 max-md:grid">
-        <div>
-          <Badge tone="warning">{{ t('layout.alpha') }}</Badge>
-          <h1 class="mt-3 text-3xl font-semibold tracking-normal">{{ t('maintenancePage.title') }}</h1>
-          <p class="m-0 mt-2 max-w-2xl text-sm text-muted-foreground">{{ t('maintenancePage.description') }}</p>
+  <!--
+    独立无壳页几何：不加载 AppShell，内容列与数据页一致 1200px（max-w-content）并水平
+    居中；短分组（状态 / 动作 / 清单）在 wide(≥1239px) 起两列排布，表单/登录仍收窄到
+    1000px（max-w-content-narrow）。登录页的聚焦卡居中属于检查表登记的例外，不在本页套用。
+  -->
+  <main class="grid min-h-dvh p-6 text-foreground max-sm:p-4">
+    <div class="mx-auto grid w-full max-w-content content-start gap-4">
+      <header class="flex flex-wrap items-start justify-between gap-4">
+        <div class="grid min-w-0 gap-2">
+          <div><Badge tone="warning">{{ t('layout.alpha') }}</Badge></div>
+          <h1 class="m-0 text-title font-semibold tracking-tight">{{ t('maintenancePage.title') }}</h1>
+          <p class="m-0 max-w-2xl text-sm text-muted-foreground">{{ t('maintenancePage.description') }}</p>
         </div>
         <div v-if="authenticated" class="flex flex-wrap gap-2">
           <Button :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
@@ -215,87 +226,115 @@ onBeforeUnmount(() => {
         </div>
       </header>
 
-      <div v-if="error" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ error }}</div>
+      <InfoBar v-if="error" tone="danger">{{ error }}</InfoBar>
 
-      <section v-if="!authenticated" class="grid gap-4 rounded-2xl border border-border bg-card p-5 md:max-w-md">
-        <div class="flex items-center gap-3"><ShieldCheck class="size-5 text-muted-foreground" /><h2 class="m-0 text-lg font-semibold">{{ t('maintenancePage.signIn') }}</h2></div>
-        <label class="grid gap-1 text-sm">{{ t('auth.username') }}<Input v-model="form.username" autocomplete="username" /></label>
-        <label class="grid gap-1 text-sm">{{ t('auth.password') }}<Input v-model="form.password" type="password" autocomplete="current-password" /></label>
-        <Button variant="primary" :loading="pending === 'login'" @click="login">{{ t('auth.signIn') }}</Button>
-      </section>
-
-      <section v-else class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <article class="grid gap-4 rounded-2xl border border-border bg-card p-5">
-          <div class="flex items-center justify-between gap-3">
-            <div>
-              <h2 class="m-0 text-xl font-semibold">{{ mode === 'export' ? t('maintenancePage.exportMode') : t('maintenancePage.restoreMode') }}</h2>
-              <p class="m-0 mt-1 text-sm text-muted-foreground">{{ status?.mode || t('state.unknown') }}</p>
-              <p class="m-0 mt-1 text-xs text-muted-foreground">{{ t('maintenancePage.modeHint') }}</p>
-            </div>
-            <Badge :tone="phaseTone">{{ status?.phase || t('state.unknown') }}</Badge>
+      <div v-if="!authenticated" class="mx-auto w-full max-w-content-narrow">
+        <SettingsSection :title="t('maintenancePage.signIn')">
+          <SettingsCard stacked>
+            <FormField :label="t('auth.username')">
+              <template #default="{ id, describedBy, invalid }">
+                <Input :id="id" v-model="form.username" autocomplete="username" :aria-describedby="describedBy" :invalid="invalid" />
+              </template>
+            </FormField>
+          </SettingsCard>
+          <SettingsCard stacked>
+            <FormField :label="t('auth.password')">
+              <template #default="{ id, describedBy, invalid }">
+                <Input :id="id" v-model="form.password" type="password" autocomplete="current-password" :aria-describedby="describedBy" :invalid="invalid" />
+              </template>
+            </FormField>
+          </SettingsCard>
+          <div class="flex justify-end p-4">
+            <Button variant="primary" :loading="pending === 'login'" @click="login">{{ t('auth.signIn') }}</Button>
           </div>
-          <div class="h-3 overflow-hidden rounded-full bg-muted"><div class="h-full bg-primary transition-all" :style="{ width: `${status?.progress || 0}%` }" /></div>
-          <div class="grid grid-cols-3 gap-3 max-md:grid-cols-1">
-            <div class="rounded-lg bg-muted p-3"><span class="text-xs text-muted-foreground">{{ t('maintenancePage.revision') }}</span><strong class="block">{{ status?.revision ?? '-' }}</strong></div>
-            <div class="rounded-lg bg-muted p-3"><span class="text-xs text-muted-foreground">{{ t('maintenancePage.startedAt') }}</span><strong class="block">{{ formatDateTime(status?.startedAt) || t('common.never') }}</strong></div>
-            <div class="rounded-lg bg-muted p-3"><span class="text-xs text-muted-foreground">{{ t('maintenancePage.restart') }}</span><strong class="block">{{ status?.restartSupported ? t('state.healthy') : t('common.notAvailable') }}</strong></div>
+        </SettingsSection>
+      </div>
+
+      <template v-else>
+        <div class="grid gap-4 wide:grid-cols-2">
+          <div class="grid content-start gap-4">
+            <SettingsSection
+              :title="mode === 'export' ? t('maintenancePage.exportMode') : t('maintenancePage.restoreMode')"
+              :description="t('maintenancePage.modeHint')"
+            >
+              <SettingsCard stacked>
+                <div class="grid gap-2">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <Badge :tone="phaseTone">{{ status?.phase || t('state.unknown') }}</Badge>
+                    <span class="text-caption text-muted-foreground">{{ status?.mode || t('state.unknown') }}</span>
+                  </div>
+                  <ProgressBar
+                    :value="status?.progress || 0"
+                    :label="mode === 'export' ? t('maintenancePage.exportMode') : t('maintenancePage.restoreMode')"
+                  />
+                </div>
+              </SettingsCard>
+              <SettingsCard :title="t('maintenancePage.revision')">
+                <template #control><span class="text-body text-foreground">{{ status?.revision ?? '-' }}</span></template>
+              </SettingsCard>
+              <SettingsCard :title="t('maintenancePage.startedAt')">
+                <template #control><span class="text-body text-foreground">{{ formatDateTime(status?.startedAt) || t('common.never') }}</span></template>
+              </SettingsCard>
+              <SettingsCard :title="t('maintenancePage.restart')">
+                <template #control><span class="text-body text-foreground">{{ status?.restartSupported ? t('state.healthy') : t('common.notAvailable') }}</span></template>
+              </SettingsCard>
+            </SettingsSection>
+
+            <InfoBar v-if="status?.error || status?.errorDetail" tone="danger">{{ status.errorDetail?.message || status.error }}</InfoBar>
           </div>
-          <div v-if="status?.error || status?.errorDetail" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ status.errorDetail?.message || status.error }}</div>
-        </article>
 
-        <aside class="grid content-start gap-4">
-          <section class="grid gap-3 rounded-2xl border border-border bg-card p-5">
-            <h3 class="m-0 text-sm font-semibold">{{ t('maintenancePage.actions') }}</h3>
-            <Button v-if="status?.capabilities.canStart" variant="primary" :loading="pending === 'start'" @click="command('start')"><Play />{{ t('maintenancePage.startExport') }}</Button>
-            <template v-if="status?.capabilities.canSubmitPassword">
-              <label class="grid gap-1 text-sm">{{ t('maintenancePage.archivePassword') }}<Input v-model="form.archivePassword" type="password" /></label>
-              <Button variant="primary" :disabled="!form.archivePassword" :loading="pending === 'password'" @click="command('password')">{{ t('maintenancePage.submitPassword') }}</Button>
-            </template>
-            <Button v-if="status?.capabilities.canRetry" :loading="pending === 'retry'" @click="command('retry')"><RotateCcw />{{ t('common.retry') }}</Button>
-            <Button v-if="status?.capabilities.canClearPending && status.phase !== 'applying'" variant="danger" :loading="pending === 'clear'" @click="openClearConfirm">{{ t('maintenancePage.clearPending') }}</Button>
-            <Button v-if="status?.capabilities.canDownload" :loading="pending === 'download'" @click="downloadArchive"><Download />{{ t('maintenancePage.download') }}</Button>
-            <Button v-if="status?.capabilities.canExit" :loading="pending === 'exit'" @click="command('exit')">{{ t('maintenancePage.exit') }}</Button>
-          </section>
+          <div class="grid content-start gap-4">
+            <SettingsSection :title="t('maintenancePage.actions')">
+              <div class="grid gap-2 p-4">
+                <Button v-if="status?.capabilities.canStart" variant="primary" :loading="pending === 'start'" @click="command('start')"><Play />{{ t('maintenancePage.startExport') }}</Button>
+                <template v-if="status?.capabilities.canSubmitPassword">
+                  <FormField :label="t('maintenancePage.archivePassword')">
+                    <template #default="{ id, describedBy, invalid }">
+                      <Input :id="id" v-model="form.archivePassword" type="password" :aria-describedby="describedBy" :invalid="invalid" />
+                    </template>
+                  </FormField>
+                  <Button variant="primary" :disabled="!form.archivePassword" :loading="pending === 'password'" @click="command('password')">{{ t('maintenancePage.submitPassword') }}</Button>
+                </template>
+                <Button v-if="status?.capabilities.canRetry" :loading="pending === 'retry'" @click="command('retry')"><RotateCcw />{{ t('common.retry') }}</Button>
+                <Button v-if="status?.capabilities.canClearPending && status.phase !== 'applying'" variant="danger" :loading="pending === 'clear'" @click="openClearConfirm">{{ t('maintenancePage.clearPending') }}</Button>
+                <DownloadButton
+                  v-if="status?.capabilities.canDownload"
+                  :loading="pending === 'download'"
+                  :label="t('maintenancePage.download')"
+                  @click="downloadArchive"
+                />
+                <Button v-if="status?.capabilities.canExit" :loading="pending === 'exit'" @click="command('exit')">{{ t('maintenancePage.exit') }}</Button>
+              </div>
+            </SettingsSection>
 
-          <section class="rounded-2xl border border-border bg-card p-5">
-            <h3 class="m-0 text-sm font-semibold">{{ t('maintenancePage.manifest') }}</h3>
-            <div class="mt-3 grid gap-2 text-sm">
-              <div><span>{{ t('maintenancePage.panelVersion') }}</span><strong>{{ status?.manifest?.panelVersion || '-' }}</strong></div>
-              <div><span>{{ t('maintenancePage.encrypted') }}</span><strong>{{ status?.manifest?.encrypted ? t('state.healthy') : t('common.notAvailable') }}</strong></div>
-              <div><span>{{ t('maintenancePage.includes') }}</span><strong>{{ status?.manifest?.includes?.join(', ') || '-' }}</strong></div>
-            </div>
-          </section>
-        </aside>
-      </section>
-    </section>
+            <SettingsSection :title="t('maintenancePage.manifest')">
+              <SettingsCard :title="t('maintenancePage.panelVersion')">
+                <template #control><span class="text-body text-foreground">{{ status?.manifest?.panelVersion || '-' }}</span></template>
+              </SettingsCard>
+              <SettingsCard :title="t('maintenancePage.encrypted')">
+                <template #control><span class="text-body text-foreground">{{ status?.manifest?.encrypted ? t('state.healthy') : t('common.notAvailable') }}</span></template>
+              </SettingsCard>
+              <SettingsCard :title="t('maintenancePage.includes')" stacked>
+                <template #control><span class="break-words text-body text-foreground">{{ status?.manifest?.includes?.join(', ') || '-' }}</span></template>
+              </SettingsCard>
+            </SettingsSection>
+          </div>
+        </div>
+      </template>
 
-    <ConfirmDialog
-      :open="clearConfirmOpen"
-      :title="t('maintenancePage.clearPending')"
-      :impact="t('maintenancePage.clearPendingImpact')"
-      tone="danger"
-      :loading="pending === 'clear'"
-      :confirm-label="t('common.delete')"
-      :cancel-label="t('common.cancel')"
-      :checkbox-label="t('common.confirm')"
-      @update:open="(value) => { if (!value) clearConfirmOpen = false }"
-      @confirm="confirmClearPending"
-      @cancel="clearConfirmOpen = false"
-    />
+      <ConfirmDialog
+        :open="clearConfirmOpen"
+        :title="t('maintenancePage.clearPending')"
+        :impact="t('maintenancePage.clearPendingImpact')"
+        tone="danger"
+        :loading="pending === 'clear'"
+        :confirm-label="t('common.delete')"
+        :cancel-label="t('common.cancel')"
+        :checkbox-label="t('common.confirm')"
+        @update:open="(value) => { if (!value) clearConfirmOpen = false }"
+        @confirm="confirmClearPending"
+        @cancel="clearConfirmOpen = false"
+      />
+    </div>
   </main>
 </template>
-
-<style scoped>
-span {
-  display: block;
-  color: var(--panel-text-muted);
-  font-size: 12px;
-}
-
-strong {
-  display: block;
-  overflow-wrap: anywhere;
-  color: var(--panel-text);
-  font-size: 13px;
-}
-</style>

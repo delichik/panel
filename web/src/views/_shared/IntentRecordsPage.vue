@@ -1,22 +1,28 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Download, Eye, RefreshCcw } from '@lucide/vue';
+import { Eye, RefreshCcw } from '@/icons';
 import { eventsApi } from '@/api/events';
 import { DIAGNOSE_LOG_LEVELS, logsPath } from '@/api/activityReference';
 import { saveBlobDownload } from '@/api/download';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import DateTimeRangePicker from '@/components/ui/DateTimeRangePicker.vue';
+import Dialog from '@/components/ui/Dialog.vue';
+import DownloadButton from '@/components/ui/DownloadButton.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
+import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import PaginationBar from '@/components/ui/PaginationBar.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
 import Select from '@/components/ui/Select.vue';
 import Table from '@/components/ui/Table.vue';
+import ToggleButton from '@/components/ui/ToggleButton.vue';
 import { useErrorToast } from '@/components/ui/toast';
+import InfoBar from '@/components/patterns/InfoBar.vue';
+import ListCommandBar from '@/components/patterns/ListCommandBar.vue';
+import PropertyList, { type PropertyListItem } from '@/components/patterns/PropertyList.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import ListPage from '@/components/templates/ListPage.vue';
-import TableDetailLayout from '@/components/templates/TableDetailLayout.vue';
 import { translateEventSummary, useI18n } from '@/i18n';
 import type { Event, EventQuery } from '@/types/events';
 import { formatDateTime } from '@/utils/datetime';
@@ -68,19 +74,52 @@ const levelOptions = computed(() => [
   { value: 'error', label: t('activity.level.error') },
 ]);
 
+/**
+ * 列精简（≤5）：时间列合并级别徽标（时间为主行、级别为副行），不再单列 level；
+ * 模块、标题（title+summary 两行）、状态、操作。宽度用语义间距刻度固定短列，
+ * 标题列占剩余宽度。
+ */
 const columns = computed(() => [
-  { key: 'updatedAt', label: t('eventsPage.time'), nowrap: true },
-  { key: 'module', label: t('eventsPage.module'), nowrap: true },
-  { key: 'level', label: t('activity.level'), nowrap: true },
+  { key: 'updatedAt', label: t('eventsPage.time'), width: 'w-40' },
+  { key: 'module', label: t('eventsPage.module'), width: 'w-28' },
   { key: 'title', label: t('eventsPage.title') },
-  { key: 'state', label: t('common.status'), nowrap: true },
-  { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
+  { key: 'state', label: t('common.status'), width: 'w-24' },
+  { key: 'actions', label: t('common.actions'), align: 'right' as const, width: 'w-52' },
 ]);
+
+const detailProperties = computed<PropertyListItem[]>(() => {
+  const item = detail.value;
+  if (!item) return [];
+  const items: PropertyListItem[] = [
+    { key: 'module', label: t('eventsPage.module'), value: item.module },
+    { key: 'origin', label: t('eventsPage.origin'), value: item.origin },
+    { key: 'time', label: t('eventsPage.time'), value: formatDateTime(item.updatedAt || item.startedAt) },
+  ];
+  if (item.operationId) items.push({ key: 'operationId', label: t('logsPage.operationId'), value: item.operationId, mono: true });
+  if (item.executionId) items.push({ key: 'executionId', label: t('logsPage.executionId'), value: item.executionId, mono: true });
+  return items;
+});
+
+function setAttention(value: boolean) {
+  updateQuery({ hadError: value ? 'true' : undefined });
+}
 
 const visibleEvents = computed(() => {
   const q = search.value.trim().toLowerCase();
   if (!q) return events.value;
   return events.value.filter((item) => JSON.stringify(item).toLowerCase().includes(q));
+});
+
+/**
+ * ListPage 状态槽契约：首屏 loading / 加载失败 / 无筛选且无事件走页级槽；
+ * 有关键字或查询筛选时空结果仍由 Table 的 inset 空态承接，保持既有文案。
+ */
+const recordsListState = computed<'ready' | 'loading' | 'error' | 'empty'>(() => {
+  if (error.value && !events.value.length) return 'error';
+  if (loading.value && !events.value.length) return 'loading';
+  const filtered = Boolean(search.value.trim() || filterKeys.some((key) => read(key)));
+  if (!visibleEvents.value.length && !filtered) return 'empty';
+  return 'ready';
 });
 
 function stateLabel(value: string) {
@@ -251,39 +290,69 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <TableDetailLayout class="h-full" :has-detail="detailOpen">
-    <template #list>
-      <ConsolePage :title="t('routes.events.title')" :description="t('routes.events.description')">
+  <ConsolePage :title="t('routes.events.title')" :description="t('routes.events.description')">
         <template #actions>
           <Button size="sm" :loading="loading" @click="refresh"><RefreshCcw />{{ t('common.refresh') }}</Button>
-          <Button size="sm" :loading="exporting" @click="download"><Download />{{ t('activity.export') }}</Button>
+          <DownloadButton size="sm" :loading="exporting" :label="t('activity.export')" @click="download" />
         </template>
-        <ListPage>
+        <ListPage :state="recordsListState">
           <template #toolbar>
-            <div class="grid min-w-0 gap-3">
-              <div class="grid min-w-0 gap-3 lg:grid-cols-2">
-                <SearchInput v-model="search" clearable :label="t('common.search')" :placeholder="t('eventsPage.search')" :clear-label="t('common.clearSearch')" />
-                <DateTimeRangePicker :model-value="range" @update:model-value="value => updateQuery({ from: value.from, to: value.to || undefined })" />
+            <div class="grid min-w-0 gap-2">
+              <ListCommandBar :label="t('routes.events.title')">
+                <template #search>
+                  <SearchInput v-model="search" clearable class="w-full" :label="t('common.search')" :placeholder="t('eventsPage.search')" :clear-label="t('common.clearSearch')" />
+                </template>
+                <template #filters>
+                  <div class="w-full min-w-0 sm:w-56">
+                    <DateTimeRangePicker :model-value="range" @update:model-value="value => updateQuery({ from: value.from, to: value.to || undefined })" />
+                  </div>
+                  <Select class="w-32" :model-value="read('origin')" :options="originOptions" :aria-label="t('eventsPage.origin')" @update:model-value="changeFilter('origin', $event)" />
+                  <Select class="w-28" :model-value="read('level')" :options="levelOptions" :aria-label="t('activity.level')" @update:model-value="changeFilter('level', $event)" />
+                </template>
+                <template #actions>
+                  <ToggleButton
+                    size="sm"
+                    :model-value="read('hadError') === 'true'"
+                    :label="t('activity.attention')"
+                    @update:model-value="setAttention"
+                  >
+                    {{ t('activity.attention') }}
+                  </ToggleButton>
+                </template>
+              </ListCommandBar>
+              <div v-if="read('operationId') || read('executionId')" class="flex flex-wrap items-center gap-2 text-caption text-muted-foreground">
+                <span v-if="read('operationId')">{{ t('logsPage.operationFilterHint') }}</span>
+                <span v-else-if="read('executionId')">{{ t('activity.executionFilterHint') }}</span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  @click="updateQuery({ executionId: undefined, operationId: undefined, eventId: undefined, streamId: undefined })"
+                >
+                  {{ t('activity.clearResource') }}
+                </Button>
               </div>
-              <div class="grid min-w-0 grid-cols-2 gap-3 xl:grid-cols-4">
-                <Select :model-value="read('origin')" :options="originOptions" :aria-label="t('eventsPage.origin')" @update:model-value="changeFilter('origin', $event)" />
-                <Select :model-value="read('level')" :options="levelOptions" :aria-label="t('activity.level')" @update:model-value="changeFilter('level', $event)" />
-                <SearchInput :model-value="read('module')" :label="t('eventsPage.module')" :placeholder="t('eventsPage.module')" @update:model-value="changeFilter('module', $event)" />
-                <SearchInput :model-value="read('state')" :label="t('eventsPage.state')" :placeholder="t('eventsPage.state')" @update:model-value="changeFilter('state', $event)" />
-              </div>
-              <div class="flex flex-wrap gap-2">
-                <Button size="sm" :variant="!read('hadError') ? 'primary' : 'ghost'" @click="updateQuery({ hadError: undefined })">{{ t('activity.all') }}</Button>
-                <Button size="sm" :variant="read('hadError') === 'true' ? 'primary' : 'ghost'" @click="updateQuery({ hadError: 'true' })">{{ t('activity.attention') }}</Button>
+              <div v-if="read('module') || read('state')" class="flex flex-wrap items-center gap-2 text-caption text-muted-foreground">
+                <span v-if="read('module')">{{ t('eventsPage.module') }}: {{ read('module') }}</span>
+                <span v-if="read('state')">{{ t('eventsPage.state') }}: {{ read('state') }}</span>
+                <Button size="sm" variant="ghost" @click="updateQuery({ module: undefined, state: undefined })">{{ t('activity.clearResource') }}</Button>
               </div>
             </div>
           </template>
 
-          <EmptyState v-if="error && !events.length" variant="page" :title="t('common.loadFailed')" :description="error">
-            <template #actions><Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button></template>
-          </EmptyState>
+          <template #loading>
+            <Table class="h-full max-lg:max-h-list" row-height="auto" :columns="columns" :rows="[]" :loading="true" :loading-label="t('common.loading')" />
+          </template>
+          <template #error>
+            <EmptyState variant="page" :title="t('common.loadFailed')" :description="error">
+              <template #actions><Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button></template>
+            </EmptyState>
+          </template>
+          <template #empty>
+            <EmptyState variant="inset" :title="t('eventsPage.empty')" :description="t('eventsPage.emptyHint')" />
+          </template>
           <Table
-            v-else
-            class="h-full max-lg:max-h-[60dvh]"
+            class="h-full max-lg:max-h-list"
+            row-height="auto"
             :columns="columns"
             :rows="visibleEvents"
             row-key="id"
@@ -292,21 +361,23 @@ onBeforeUnmount(() => {
             :loading-label="t('common.loading')"
           >
             <template #updatedAt="{ row }">
-              <span class="text-muted-foreground">{{ formatDateTime(row.updatedAt || row.startedAt) }}</span>
+              <div class="flex min-w-0 flex-col items-start gap-1">
+                <span class="whitespace-nowrap text-muted-foreground">{{ formatDateTime(row.updatedAt || row.startedAt) }}</span>
+                <Badge v-if="row.level" :tone="eventTone(row.level)">{{ levelLabel(row.level) }}</Badge>
+              </div>
             </template>
             <template #module="{ row }">
-              <span class="text-muted-foreground">{{ row.module }}</span>
-            </template>
-            <template #level="{ row }">
-              <Badge v-if="row.level" :tone="eventTone(row.level)">{{ levelLabel(row.level) }}</Badge>
+              <span class="whitespace-nowrap text-muted-foreground">{{ row.module }}</span>
             </template>
             <template #title="{ row }">
-              <strong class="block max-w-[28rem] truncate text-foreground">{{ translateEventSummary(t, titleLabel(row)) }}</strong>
-              <span
-                v-if="row.summary && row.summary !== row.title"
-                class="mt-1 block max-w-[28rem] truncate text-xs"
-                :class="row.hadError || row.state === 'failed' ? 'text-danger' : 'text-muted-foreground'"
-              >{{ translateEventSummary(t, row.summary) }}</span>
+              <div class="grid min-w-0 gap-0.5">
+                <strong class="block truncate text-body-strong font-semibold text-foreground">{{ translateEventSummary(t, titleLabel(row)) }}</strong>
+                <span
+                  v-if="row.summary && row.summary !== row.title"
+                  class="line-clamp-2 text-caption"
+                  :class="row.hadError || row.state === 'failed' ? 'text-danger' : 'text-muted-foreground'"
+                >{{ translateEventSummary(t, row.summary) }}</span>
+              </div>
             </template>
             <template #state="{ row }">
               <Badge :tone="operationTone(row.state)">{{ stateLabel(row.state || (row.finishedAt ? 'ended' : 'running')) }}</Badge>
@@ -318,7 +389,11 @@ onBeforeUnmount(() => {
               </div>
             </template>
             <template #empty>
-              <EmptyState variant="inset" :title="t('eventsPage.empty')" :description="t('eventsPage.emptyHint')" />
+              <EmptyState
+                variant="inset"
+                :title="search ? t('common.filterEmpty') : t('eventsPage.empty')"
+                :description="search ? t('common.filterEmptyHint') : t('eventsPage.emptyHint')"
+              />
             </template>
           </Table>
           <template #pagination>
@@ -334,48 +409,47 @@ onBeforeUnmount(() => {
             />
           </template>
         </ListPage>
-      </ConsolePage>
-    </template>
 
-    <template #detail>
-      <ConsolePage
-        :title="detail ? translateEventSummary(t, titleLabel(detail)) : t('common.loading')"
-        :back-label="t('common.backToList')"
-        @back="closeDetail"
-      >
-        <template #actions>
-          <Button v-if="detail" size="sm" variant="primary" @click="openLogs(detail)">{{ t('eventsPage.viewLogs') }}</Button>
-        </template>
+    <!--
+      Event detail is a WinUI ContentDialog instead of a second page: the list
+      stays visible (URL `eventId` still deep-links the dialog), Escape/close
+      clears the selection, and focus returns to the row action.
+    -->
+    <Dialog
+      :open="detailOpen"
+      :title="detail ? translateEventSummary(t, titleLabel(detail)) : t('common.loading')"
+      @update:open="value => { if (!value) closeDetail(); }"
+    >
+      <template #footer>
+        <Button variant="secondary" @click="closeDetail">{{ t('common.close') }}</Button>
+        <Button v-if="detail" variant="primary" @click="openLogs(detail)">{{ t('eventsPage.viewLogs') }}</Button>
+      </template>
 
-        <EmptyState v-if="detailError" :title="t('common.loadFailed')" :description="detailError">
-          <template #actions><Button size="sm" :loading="detailLoading" @click="loadDetail"><RefreshCcw />{{ t('common.retry') }}</Button></template>
-        </EmptyState>
-        <div v-else-if="detail" class="grid min-w-0 gap-4">
-          <div class="flex flex-wrap gap-2">
-            <Badge :tone="operationTone(detail.state)">{{ stateLabel(detail.state || (detail.finishedAt ? 'ended' : 'running')) }}</Badge>
-            <Badge v-if="detail.hadError" tone="danger">{{ t('activity.hadError') }}</Badge>
-            <Badge v-if="detail.level" :tone="eventTone(detail.level)">{{ levelLabel(detail.level) }}</Badge>
-          </div>
-          <p
-            v-if="detail.summary"
-            class="m-0 break-words rounded-xl border p-3 text-sm"
-            :class="detail.hadError || detail.state === 'failed' ? 'border-danger-border bg-danger-bg text-danger' : 'border-border bg-muted text-foreground'"
-          >{{ translateEventSummary(t, detail.summary) }}</p>
-          <p v-else class="m-0 text-sm text-muted-foreground">{{ t('eventsPage.noFailureSummary') }}</p>
-          <dl class="grid gap-2 text-sm sm:grid-cols-2">
-            <div><dt class="text-muted-foreground">{{ t('eventsPage.module') }}</dt><dd>{{ detail.module }}</dd></div>
-            <div><dt class="text-muted-foreground">{{ t('eventsPage.origin') }}</dt><dd>{{ detail.origin }}</dd></div>
-            <div><dt class="text-muted-foreground">{{ t('eventsPage.time') }}</dt><dd>{{ formatDateTime(detail.updatedAt || detail.startedAt) }}</dd></div>
-            <div v-if="detail.operationId"><dt class="text-muted-foreground">{{ t('logsPage.operationId') }}</dt><dd class="font-mono text-xs">{{ detail.operationId }}</dd></div>
-            <div v-if="detail.executionId"><dt class="text-muted-foreground">{{ t('logsPage.executionId') }}</dt><dd class="font-mono text-xs">{{ detail.executionId }}</dd></div>
-          </dl>
-          <div v-if="hasPairedLogs(detail)" class="flex flex-wrap gap-2">
-            <Button v-if="detail.operationId && detail.operationId !== detail.id" size="sm" variant="secondary" @click="openPairedLogs(detail, 'operation')">{{ t('eventsPage.viewOperationLogs') }}</Button>
-            <Button v-if="detail.executionId && detail.executionId !== detail.id" size="sm" variant="secondary" @click="openPairedLogs(detail, 'execution')">{{ t('eventsPage.viewExecutionLogs') }}</Button>
-          </div>
-          <p class="m-0 text-sm text-muted-foreground">{{ t('eventsPage.diagnoseHint') }}</p>
+      <EmptyState v-if="detailError" variant="inset" :title="t('common.loadFailed')" :description="detailError">
+        <template #actions><Button size="sm" :loading="detailLoading" @click="loadDetail"><RefreshCcw />{{ t('common.retry') }}</Button></template>
+      </EmptyState>
+      <div v-else-if="!detail" class="relative grid min-h-40 place-items-center">
+        <LoadingOverlay :label="t('common.loading')" />
+      </div>
+      <div v-else class="grid min-w-0 gap-4">
+        <div class="flex flex-wrap gap-2">
+          <Badge :tone="operationTone(detail.state)">{{ stateLabel(detail.state || (detail.finishedAt ? 'ended' : 'running')) }}</Badge>
+          <Badge v-if="detail.hadError" tone="danger">{{ t('activity.hadError') }}</Badge>
+          <Badge v-if="detail.level" :tone="eventTone(detail.level)">{{ levelLabel(detail.level) }}</Badge>
         </div>
-      </ConsolePage>
-    </template>
-  </TableDetailLayout>
+        <InfoBar v-if="detail.summary" :tone="detail.hadError || detail.state === 'failed' ? 'danger' : 'info'">
+          {{ translateEventSummary(t, detail.summary) }}
+        </InfoBar>
+        <p v-else class="m-0 text-sm text-muted-foreground">{{ t('eventsPage.noFailureSummary') }}</p>
+        <div class="-mx-4">
+          <PropertyList :items="detailProperties" :columns="1" />
+        </div>
+        <div v-if="hasPairedLogs(detail)" class="flex flex-wrap gap-2">
+          <Button v-if="detail.operationId && detail.operationId !== detail.id" size="sm" variant="secondary" @click="openPairedLogs(detail, 'operation')">{{ t('eventsPage.viewOperationLogs') }}</Button>
+          <Button v-if="detail.executionId && detail.executionId !== detail.id" size="sm" variant="secondary" @click="openPairedLogs(detail, 'execution')">{{ t('eventsPage.viewExecutionLogs') }}</Button>
+        </div>
+        <p class="m-0 text-sm text-muted-foreground">{{ t('eventsPage.diagnoseHint') }}</p>
+      </div>
+    </Dialog>
+  </ConsolePage>
 </template>

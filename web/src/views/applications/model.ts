@@ -5,6 +5,11 @@ import type { ConfigRecord, FacilityRouteDomain, FacilityRoutePath, ReverseProxy
 export type AppMode = 'apps' | 'create' | 'edit' | 'facilityCatalog' | 'facilityDetail' | 'facilityConfig';
 export type SaveStage = 'idle' | 'validate' | 'preview' | 'commit';
 
+/** 应用详情页签（URL `tab` 查询参数）。 */
+export type AppDetailTab = 'runtime' | 'routes' | 'files' | 'data';
+/** 反向代理设施详情页签（URL `tab` 查询参数）。 */
+export type FacilityDetailTab = 'proxy' | 'configs' | 'dns';
+
 export interface KeyValueRow {
   id: string;
   key: string;

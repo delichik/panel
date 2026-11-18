@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { RefreshCcw, Trash2 } from '@lucide/vue';
+import { RefreshCcw, Trash2 } from '@/icons';
 import { containersApi } from '@/api/containers';
 import { waitForTask } from '@/api/taskWait';
 import Badge from '@/components/ui/Badge.vue';
@@ -38,9 +38,8 @@ const autoSnapshotKeys = new Set<string>();
 
 const columns = computed(() => [
   { key: 'name', label: t('common.name') },
-  { key: 'state', label: t('common.status'), nowrap: true },
-  { key: 'containers', label: t('resourcesPage.attachedContainers'), nowrap: true },
-  { key: 'size', label: t('resourcesPage.size'), nowrap: true },
+  { key: 'state', label: t('common.status'), nowrap: true, width: 'w-44' },
+  { key: 'created', label: t('serversPage.updatedAt'), nowrap: true, width: 'w-40' },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
 ]);
 
@@ -147,9 +146,9 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4">
+  <div class="grid h-full min-h-0 grid-rows-page gap-4">
     <div class="grid gap-3">
-      <div v-if="blocked" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('resourcesPage.blockAgent') }}</div>
+      <div v-if="blocked" class="rounded-control border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('resourcesPage.blockAgent') }}</div>
       <div class="flex flex-wrap items-center justify-between gap-2">
         <p class="m-0 text-sm text-muted-foreground">{{ t('resourcesPage.volumeSafety') }}</p>
         <div class="flex flex-wrap items-center gap-2">
@@ -171,31 +170,32 @@ onBeforeUnmount(() => {
       :columns="columns"
       :rows="volumes"
       row-key="name"
+      row-height="auto"
       :loading="loading || pending === 'refresh'"
       :loading-label="t('common.loading')"
     >
       <template #name="{ row }">
         <div class="min-w-0">
-          <strong class="block max-w-[20rem] truncate text-foreground">{{ row.name }}</strong>
-          <Tooltip :text="row.mountpoint" trigger-class="max-w-[20rem]">
+          <strong class="block max-w-80 truncate text-foreground">{{ row.name }}</strong>
+          <Tooltip :text="row.mountpoint" trigger-class="max-w-80">
             <span class="panel-mono block truncate text-xs text-muted-foreground">{{ row.mountpoint }}</span>
           </Tooltip>
         </div>
       </template>
       <template #state="{ row }">
-        <Badge :tone="volumeTone(row)">{{ row.inUse ? t('resourcesPage.inUse') : t('resourcesPage.unused') }}</Badge>
+        <div class="grid justify-start gap-1">
+          <Badge class="whitespace-nowrap" :tone="volumeTone(row)">{{ row.inUse ? t('resourcesPage.inUse') : t('resourcesPage.unused') }}</Badge>
+          <span class="whitespace-nowrap text-caption text-muted-foreground">{{ formatBytes(row.usageData?.size) }} · {{ row.containerCount }}</span>
+        </div>
       </template>
-      <template #containers="{ row }">
-        <span class="text-muted-foreground">{{ row.containerCount }}</span>
-      </template>
-      <template #size="{ row }">
-        <span class="text-muted-foreground">{{ formatBytes(row.usageData?.size) }}</span>
+      <template #created="{ row }">
+        <span class="whitespace-nowrap text-muted-foreground">{{ formatDateTime(row.createdAt, t('common.never')) }}</span>
       </template>
       <template #actions="{ row }">
         <Button size="sm" variant="danger" :disabled="blocked || row.inUse" @click="askDelete(row)"><Trash2 />{{ t('common.delete') }}</Button>
       </template>
       <template #empty>
-        <EmptyState :title="t('resourcesPage.noVolumes')" :description="t('resourcesPage.noVolumesHint')" />
+        <EmptyState variant="inset" :title="t('resourcesPage.noVolumes')" :description="t('resourcesPage.noVolumesHint')" />
       </template>
     </Table>
 

@@ -37,24 +37,57 @@ describe('NavList', () => {
     expect(wrapper.get('a[href="/overview"]').attributes('aria-current')).toBeUndefined();
   });
 
-  it('highlights the active family without a pending spinner', async () => {
+  it('paints the WinUI NavigationView selected state: neutral fill, accent pill, foreground text', async () => {
     const wrapper = await mountNav({ path: '/overview', activeKey: 'servers' });
     const active = wrapper.get('a[href="/servers"]');
 
     expect(active.attributes('aria-busy')).toBeUndefined();
     expect(active.attributes('aria-current')).toBe('page');
-    expect(active.classes()).toContain('bg-primary');
-    expect(active.classes()).toContain('text-primary-foreground');
-    expect(wrapper.get('a[href="/overview"]').classes()).not.toContain('bg-primary');
+    // WinUI selected item: ControlFillColorSecondary family fill, primary text.
+    expect(active.classes()).toContain('bg-control');
+    expect(active.classes()).toContain('text-foreground');
+    // Accent never tints the label/fill of a nav item; it is the 3x16 pill only.
+    expect(active.classes()).not.toContain('bg-accent-selected');
+    expect(active.classes()).not.toContain('text-accent-text');
+    expect(active.classes()).not.toContain('font-semibold');
+    const indicator = active.get('.nav-indicator');
+    expect(indicator.classes()).toContain('bg-primary');
+    expect(indicator.classes()).toContain('h-4');
+    expect(indicator.classes()).toContain('w-indicator');
+    expect(wrapper.get('a[href="/overview"]').classes()).not.toContain('bg-control');
+    expect(wrapper.get('a[href="/overview"]').find('.nav-indicator').exists()).toBe(false);
   });
 
-  it('keeps collapsed labels in the DOM so the accessible name survives', async () => {
-    const wrapper = await mountNav({ activeKey: 'servers', collapsed: true });
-    const label = wrapper.get('a[href="/servers"] .shell-label');
+  it('uses the WinUI 32px row height with fill-only hover/press feedback', async () => {
+    const wrapper = await mountNav({ activeKey: 'servers' });
+    const inactive = wrapper.get('a[href="/overview"]');
 
-    expect(label.text()).toBe('Servers');
-    expect(label.classes()).toContain('max-w-0');
-    expect(label.classes()).toContain('opacity-0');
+    expect(inactive.classes()).toContain('h-8');
+    expect(inactive.classes()).toContain('rounded-control');
+    // Narrow screens enlarge nav rows to a touch-friendly height.
+    expect(inactive.classes()).toContain('max-lg:h-11');
+    expect(inactive.classes()).toContain('hover:bg-hover');
+    expect(inactive.classes()).toContain('active:bg-pressed');
+    // No hover lift / press scale: WinUI nav feedback is fill-only.
+    expect(inactive.classes().join(' ')).not.toMatch(/hover:-translate|active:scale/);
+  });
+
+  it('uses WinUI NavigationView compact mode: 40x40 targets, sr-only labels and the same indicator', async () => {
+    const wrapper = await mountNav({ activeKey: 'servers', collapsed: true });
+    const link = wrapper.get('a[href="/servers"]');
+
+    // Compact pane: 40x40 icon-only targets centered in the 48px pane.
+    expect(link.classes()).toContain('w-10');
+    expect(link.classes()).toContain('h-10');
+    expect(link.classes()).toContain('justify-center');
+    // Labels stay in the accessibility tree without the old clipped fade.
+    expect(link.find('.sr-only').text()).toBe('Servers');
+    // Compact keeps the same neutral selected fill + accent indicator.
+    expect(link.classes()).toContain('bg-control');
+    expect(link.classes()).toContain('text-foreground');
+    expect(link.find('.nav-indicator').exists()).toBe(true);
+    // Collapsed groups are separated by 1px dividers instead of captions.
+    expect(wrapper.findAll('div.bg-divider').length).toBeGreaterThan(0);
   });
 
   it('emits navigate so the mobile drawer can close on selection', async () => {

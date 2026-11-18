@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, type Component } from 'vue';
 import { useRouter } from 'vue-router';
-import { ChevronRight, Layers, Package } from '@lucide/vue';
+import { Activity, ChevronRight, CircleGauge, Download, HardDrive, Layers, Network, Package, Radar, Server, UploadCloud } from '@/icons';
 import Badge from '@/components/ui/Badge.vue';
 import IconButton from '@/components/ui/IconButton.vue';
 import { useI18n } from '@/i18n';
@@ -51,6 +51,7 @@ const textToneClass: Record<MetricTone, string> = {
 
 interface CellView {
   label: string;
+  icon: Component;
   text: string;
   valueClass: string;
   muted: boolean;
@@ -64,10 +65,11 @@ interface CellView {
   percent?: number | null;
 }
 
-function historyCell(kind: HistoryKind, label: string, value: number | null, text: string, history: Array<number | null>, muted: boolean): CellView {
+function historyCell(icon: Component, kind: HistoryKind, label: string, value: number | null, text: string, history: Array<number | null>, muted: boolean): CellView {
   const tone = muted || value === null ? null : valueTone(kind, value);
   return {
     label,
+    icon,
     text,
     muted: muted || value === null,
     ariaLabel: `${label} · ${t('overviewPage.last24Hours')}`,
@@ -77,10 +79,11 @@ function historyCell(kind: HistoryKind, label: string, value: number | null, tex
   };
 }
 
-function plainCell(kind: HistoryKind, label: string, value: number | null, text: string, muted: boolean): CellView {
+function plainCell(icon: Component, kind: HistoryKind, label: string, value: number | null, text: string, muted: boolean): CellView {
   const tone = muted || value === null ? null : valueTone(kind, value);
   return {
     label,
+    icon,
     text,
     muted: muted || value === null,
     plain: true,
@@ -89,10 +92,11 @@ function plainCell(kind: HistoryKind, label: string, value: number | null, text:
   };
 }
 
-function meterCell(label: string, percent: number | null, hint: string): CellView {
+function meterCell(icon: Component, label: string, percent: number | null, hint: string): CellView {
   const tone = percent === null ? null : percentTone(percent);
   return {
     label,
+    icon,
     text: percent === null ? '—' : formatPercent(percent, 0),
     muted: percent === null,
     hint,
@@ -103,6 +107,7 @@ function meterCell(label: string, percent: number | null, hint: string): CellVie
 }
 
 const cpuCell = computed<CellView>(() => historyCell(
+  CircleGauge,
   'cpu',
   t('overviewPage.metricCpu'),
   metricsUsable.value ? props.card.metrics.cpuPercent : null,
@@ -112,6 +117,7 @@ const cpuCell = computed<CellView>(() => historyCell(
 ));
 
 const loadCell = computed<CellView>(() => plainCell(
+  Activity,
   'load',
   t('overviewPage.metricLoad'),
   metricsUsable.value ? props.card.metrics.load1 : null,
@@ -123,6 +129,7 @@ const latencyCell = computed<CellView>(() => (
   props.card.isProbeSource
     ? {
       label: t('overviewPage.metricLatency'),
+      icon: Radar,
       text: '—',
       valueClass: 'text-muted-foreground',
       muted: true,
@@ -130,6 +137,7 @@ const latencyCell = computed<CellView>(() => (
       ariaLabel: t('overviewPage.probeSourceMetricHint'),
     }
     : historyCell(
+      Radar,
       'latency',
       t('overviewPage.metricLatency'),
       probeMissing.value ? null : props.card.probeLatencyMs,
@@ -143,6 +151,7 @@ const lossCell = computed<CellView>(() => (
   props.card.isProbeSource
     ? {
       label: t('overviewPage.metricPacketLoss'),
+      icon: Network,
       text: '—',
       valueClass: 'text-muted-foreground',
       muted: true,
@@ -150,6 +159,7 @@ const lossCell = computed<CellView>(() => (
       ariaLabel: t('overviewPage.probeSourceMetricHint'),
     }
     : historyCell(
+      Network,
       'packetLoss',
       t('overviewPage.metricPacketLoss'),
       probeMissing.value ? null : props.card.probePacketLossPercent,
@@ -160,6 +170,7 @@ const lossCell = computed<CellView>(() => (
 ));
 
 const diskReadCell = computed<CellView>(() => plainCell(
+  Download,
   'diskRead',
   t('overviewPage.metricDiskRead'),
   metricsUsable.value ? props.card.metrics.diskReadBytesPerSecond : null,
@@ -168,6 +179,7 @@ const diskReadCell = computed<CellView>(() => plainCell(
 ));
 
 const diskWriteCell = computed<CellView>(() => plainCell(
+  UploadCloud,
   'diskWrite',
   t('overviewPage.metricDiskWrite'),
   metricsUsable.value ? props.card.metrics.diskWriteBytesPerSecond : null,
@@ -176,18 +188,21 @@ const diskWriteCell = computed<CellView>(() => plainCell(
 ));
 
 const memoryCell = computed<CellView>(() => meterCell(
+  Server,
   t('overviewPage.metricMemory'),
   memoryPct.value,
   `${formatBytes(props.card.metrics.memoryUsedBytes)} / ${formatBytes(props.card.metrics.memoryTotalBytes)}`,
 ));
 
 const diskCell = computed<CellView>(() => meterCell(
+  HardDrive,
   t('overviewPage.metricDisk'),
   diskPct.value,
   `${formatBytes(props.card.metrics.diskUsedBytes)} / ${formatBytes(props.card.metrics.diskTotalBytes)}`,
 ));
 
 const networkDownCell = computed<CellView>(() => plainCell(
+  Download,
   'load',
   t('overviewPage.metricNetworkDown'),
   metricsUsable.value ? props.card.metrics.rxBytesPerSecond : null,
@@ -196,6 +211,7 @@ const networkDownCell = computed<CellView>(() => plainCell(
 ));
 
 const networkUpCell = computed<CellView>(() => plainCell(
+  UploadCloud,
   'load',
   t('overviewPage.metricNetworkUp'),
   metricsUsable.value ? props.card.metrics.txBytesPerSecond : null,
@@ -226,7 +242,7 @@ function openImages() {
 
 <template>
   <article
-    class="motion-reveal grid min-w-0 content-start gap-3.5 rounded-xl border border-border bg-card p-4"
+    class="motion-reveal grid min-w-0 content-start gap-3 surface-card p-4"
     data-testid="server-card"
   >
     <header class="flex min-w-0 items-start justify-between gap-2">
@@ -234,15 +250,15 @@ function openImages() {
         <span class="mt-1.5 size-2 shrink-0 rounded-full" :class="statusDotClass[card.statusTone]" :title="statusLabel" aria-hidden="true" />
         <span class="sr-only">{{ statusLabel }}</span>
         <div class="flex min-w-0 items-baseline gap-2">
-          <h3 class="m-0 max-w-full truncate text-sm font-semibold text-foreground">{{ card.server.name }}</h3>
-          <span v-if="card.isProbeSource" class="shrink-0 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{{ t('overviewPage.probeSourceBadge') }}</span>
+          <h3 class="m-0 max-w-full truncate text-body-strong font-semibold text-foreground">{{ card.server.name }}</h3>
+          <span v-if="card.isProbeSource" class="shrink-0 text-caption font-medium uppercase tracking-wide text-muted-foreground">{{ t('overviewPage.probeSourceBadge') }}</span>
         </div>
       </div>
       <div class="flex shrink-0 items-center gap-1">
         <button
           v-if="card.packageUpdates"
           type="button"
-          class="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          class="inline-flex min-h-8 items-center justify-center rounded-control px-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-lg:min-h-10"
           :title="t('overviewPage.packageUpdatesHint', { count: card.packageUpdates })"
           data-testid="package-updates-badge"
           @click.stop="openPackages"
@@ -252,7 +268,7 @@ function openImages() {
         <button
           v-if="card.imageUpdates"
           type="button"
-          class="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          class="inline-flex min-h-8 items-center justify-center rounded-control px-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-lg:min-h-10"
           :title="t('overviewPage.imageUpdatesHint', { count: card.imageUpdates })"
           data-testid="image-updates-badge"
           @click.stop="openImages"

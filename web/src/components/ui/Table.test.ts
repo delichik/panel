@@ -26,7 +26,7 @@ describe('Table', () => {
     expect(wrapper.findAll('th')).toHaveLength(2);
   });
 
-  it('marks the row matching activeKey with aria-current and a muted surface', () => {
+  it('marks the row matching activeKey with aria-current and a selected fill', () => {
     const wrapper = mount(Table, {
       props: {
         columns,
@@ -39,7 +39,8 @@ describe('Table', () => {
     const rows = wrapper.findAll('tbody tr');
     expect(rows[0]!.attributes('aria-current')).toBeUndefined();
     expect(rows[1]!.attributes('aria-current')).toBe('true');
-    expect(rows[1]!.classes()).toContain('bg-muted');
+    // WinUI ListView 选中行只改填充，不使用通高强调条。
+    expect(rows[1]!.classes()).toContain('bg-accent-selected');
   });
 
   it('renders the empty slot only when there are rows to fill it', () => {
@@ -67,14 +68,68 @@ describe('Table', () => {
     expect(wrapper.findAll('tbody tr')).toHaveLength(2);
   });
 
+  it('keeps rows a fixed single-line height (no wrap-induced height changes)', () => {
+    const wrapper = mount(Table, {
+      props: {
+        columns: [
+          { key: 'name', label: 'Name' },
+          { key: 'description', label: 'Description' },
+        ],
+        rows: [{ name: 'alpha', description: 'a very long value that must not wrap the row taller' }],
+      },
+    });
+
+    const row = wrapper.get('tbody tr');
+    expect(row.classes()).toContain('h-10');
+    for (const cell of row.findAll('td')) {
+      expect(cell.classes()).toContain('whitespace-nowrap');
+      expect(cell.classes()).toContain('align-middle');
+    }
+  });
+
+  it('supports the shared rowHeight="auto" multi-line row contract', () => {
+    const wrapper = mount(Table, {
+      props: {
+        columns: [
+          { key: 'message', label: 'Message' },
+          { key: 'time', label: 'Time', nowrap: true },
+        ],
+        rows: [{ message: 'line one\nline two\nline three', time: '12:00' }],
+        rowHeight: 'auto',
+      },
+    });
+
+    const row = wrapper.get('tbody tr');
+    expect(row.classes()).toContain('min-h-10');
+    expect(row.classes()).not.toContain('h-10');
+
+    const cells = row.findAll('td');
+    // 非 nowrap 列允许换行、顶部对齐。
+    expect(cells[0]!.classes()).toContain('whitespace-normal');
+    expect(cells[0]!.classes()).toContain('align-top');
+    expect(cells[0]!.classes()).not.toContain('whitespace-nowrap');
+    // auto 模式仍尊重列级 nowrap 元数据（时间列不换行）。
+    expect(cells[1]!.classes()).toContain('whitespace-nowrap');
+    expect(cells[1]!.classes()).toContain('align-top');
+    expect(cells[1]!.classes()).not.toContain('whitespace-normal');
+    expect(cells[1]!.classes()).not.toContain('align-middle');
+  });
+
+  it('uses the WinUI list surface and Body 14 semibold sticky header', () => {
+    const wrapper = mount(Table, { props: { columns, rows: [{ name: 'alpha' }] } });
+    expect(wrapper.get('thead').classes()).toContain('sticky');
+    expect(wrapper.get('thead').classes()).toContain('text-body-strong');
+    expect(wrapper.get('thead').classes()).toContain('bg-card-solid');
+    // text-body-strong 自带 600，不再手写 font-semibold。
+    expect(wrapper.get('th').classes()).not.toContain('font-semibold');
+  });
+
   it('drops its own frame when embedded in a card that already owns one', () => {
     const framed = mount(Table, { props: { columns, rows: [{ name: 'alpha' }] } });
-    expect(framed.classes()).toContain('rounded-xl');
-    expect(framed.classes()).toContain('border');
+    expect(framed.classes()).toContain('surface-card');
 
     const unframed = mount(Table, { props: { columns, rows: [{ name: 'alpha' }], framed: false } });
     expect(unframed.classes()).toContain('overflow-auto');
-    expect(unframed.classes()).not.toContain('rounded-xl');
-    expect(unframed.classes()).not.toContain('border');
+    expect(unframed.classes()).not.toContain('surface-card');
   });
 });

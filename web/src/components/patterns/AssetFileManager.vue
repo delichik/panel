@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { UploadCloud } from '@lucide/vue';
+import { UploadCloud } from '@/icons';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import CodeEditor from '@/components/ui/CodeEditor.vue';
@@ -246,7 +246,7 @@ async function confirmDelete() {
 <template>
   <section class="grid min-h-0 gap-3">
     <div class="section-heading">
-      <div class="section-copy"><h3>{{ labels.title }}</h3><p>{{ labels.hint }}</p></div>
+      <div class="section-copy"><h3 class="text-body-strong text-foreground">{{ labels.title }}</h3><p class="text-caption text-muted-foreground">{{ labels.hint }}</p></div>
       <div class="flex flex-wrap gap-2">
         <Button size="sm" :disabled="disabled" @click="openUpload"><UploadCloud />{{ labels.uploadAsset }}</Button>
       </div>
@@ -254,10 +254,10 @@ async function confirmDelete() {
     <div v-for="item in items" :key="item.key" class="item-row">
       <div class="min-w-0">
         <div class="flex flex-wrap items-center gap-2">
-          <strong class="asset-name">{{ item.name }}</strong>
+          <strong class="asset-name text-body-strong text-foreground">{{ item.name }}</strong>
           <Badge tone="neutral">{{ kindLabel(item.kind) }}</Badge>
         </div>
-        <span class="asset-meta">{{ item.filename ? `${item.filename} · ` : '' }}{{ item.size }} {{ labels.bytes }}</span>
+        <span class="asset-meta text-caption text-muted-foreground">{{ item.filename ? `${item.filename} · ` : '' }}{{ item.size }} {{ labels.bytes }}</span>
       </div>
       <div class="row-actions">
         <Button v-if="item.kind === 'text' && item.editable !== false" size="sm" :disabled="pending === item.key" @click="openText(item)">{{ labels.edit }}</Button>
@@ -270,29 +270,29 @@ async function confirmDelete() {
   </section>
 
   <Dialog v-model:open="assetOpen" size="large" :title="assetTitle" :close-label="labels.close" :close-disabled="textSaving">
-    <div class="grid h-full min-h-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] gap-3">
-      <div v-if="!textEditing" class="text-sm font-medium text-foreground">{{ labels.uploadType }}</div>
+    <div class="grid h-full min-h-0 grid-cols-safe grid-rows-page gap-3">
+      <div v-if="!textEditing" class="text-body text-foreground">{{ labels.uploadType }}</div>
       <Tabs :model-value="uploadMode" :tabs="uploadTabs" @update:model-value="selectUploadMode">
-        <div v-if="uploadMode === 'text'" class="grid h-full min-h-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] gap-3">
+        <div v-if="uploadMode === 'text'" class="grid h-full min-h-0 grid-cols-safe grid-rows-page gap-3">
           <div class="grid gap-3" :class="showFilename ? 'md:grid-cols-3' : 'md:grid-cols-2'">
-            <label class="field">
-              <span>{{ labels.name }}</span>
+            <label class="field text-body">
+              <span class="text-caption text-muted-foreground">{{ labels.name }}</span>
               <Input v-model="textName" />
-              <span v-if="labels.nameHint" class="text-xs leading-5 text-muted-foreground">{{ labels.nameHint }}</span>
+              <span v-if="labels.nameHint" class="text-caption text-muted-foreground">{{ labels.nameHint }}</span>
             </label>
-            <label v-if="showFilename" class="field">
-              <span>{{ labels.filename }}</span>
+            <label v-if="showFilename" class="field text-body">
+              <span class="text-caption text-muted-foreground">{{ labels.filename }}</span>
               <Input :model-value="textFilename" @update:model-value="textFilename = $event; filenameTouched = true" />
-              <span v-if="labels.filenameHint" class="text-xs leading-5 text-muted-foreground">{{ labels.filenameHint }}</span>
+              <span v-if="labels.filenameHint" class="text-caption text-muted-foreground">{{ labels.filenameHint }}</span>
             </label>
-            <label v-if="languageOptions.length" class="field">{{ labels.language }}<Select v-model="textLanguage" :options="languageOptions" /></label>
+            <label v-if="languageOptions.length" class="field text-body">{{ labels.language }}<Select v-model="textLanguage" :options="languageOptions" /></label>
           </div>
           <div class="relative min-h-0">
             <LoadingOverlay v-if="textLoading" :label="labels.loading" />
-            <div v-else-if="textError && !textContent" class="rounded-md border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ labels.loadFailed }}</div>
+            <div v-else-if="textError && !textContent" class="rounded-control border border-danger-border bg-danger-bg p-3 text-caption text-danger">{{ labels.loadFailed }}</div>
             <CodeEditor v-else v-model="textContent" :language="textLanguage" :editor-label="labels.content" />
           </div>
-          <div v-if="textConflict && adapter.reload" role="alert" class="row-error">
+          <div v-if="textConflict && adapter.reload" role="alert" class="row-error text-caption">
             <Button size="sm" variant="secondary" @click="reloadText">{{ labels.reload }}</Button>
           </div>
         </div>
@@ -339,16 +339,10 @@ async function confirmDelete() {
 
 .section-copy h3 {
   margin: 0;
-  color: var(--panel-text);
-  font-size: 14px;
-  font-weight: 650;
 }
 
 .section-copy p {
   margin: 0;
-  color: var(--panel-text-muted);
-  font-size: 0.8125rem;
-  line-height: 1.5;
 }
 
 .item-row {
@@ -357,15 +351,13 @@ async function confirmDelete() {
   gap: 0.75rem;
   align-items: center;
   min-width: 0;
-  border: 1px solid var(--panel-border);
-  border-radius: 0.875rem;
-  background: var(--panel-surface);
+  border: 1px solid var(--panel-stroke);
+  border-radius: var(--panel-radius-overlay);
+  background: var(--panel-card);
   padding: 0.75rem;
   transition:
-    background-color var(--panel-motion-duration-base) var(--panel-motion-ease-standard),
-    border-color var(--panel-motion-duration-base) var(--panel-motion-ease-standard),
-    box-shadow var(--panel-motion-duration-base) var(--panel-motion-ease-standard),
-    transform var(--panel-motion-duration-base) var(--panel-motion-ease-standard);
+    background-color var(--panel-motion-duration-fast) var(--panel-motion-ease-move),
+    border-color var(--panel-motion-duration-fast) var(--panel-motion-ease-move);
 }
 
 /* 触屏没有可靠 hover：与 motion 工具类保持同一策略，避免点击后样式粘住 */
@@ -373,24 +365,16 @@ async function confirmDelete() {
   .item-row:hover {
     border-color: var(--panel-border-strong);
     background: var(--panel-hover);
-    transform: translateY(calc(var(--panel-motion-hover-y) * -1));
-    box-shadow: var(--panel-motion-shadow-raised);
   }
 }
 
 .asset-name {
-  color: var(--panel-text);
-  font-size: 0.875rem;
-  font-weight: 650;
   overflow-wrap: anywhere;
 }
 
 .asset-meta {
   display: block;
   margin-top: 0.25rem;
-  color: var(--panel-text-muted);
-  font-size: 0.75rem;
-  line-height: 1.5;
 }
 
 .row-actions {
@@ -404,11 +388,10 @@ async function confirmDelete() {
   grid-column: 1 / -1;
   min-width: 0;
   border: 1px solid var(--panel-danger-border);
-  border-radius: 0.5rem;
+  border-radius: var(--panel-radius-control);
   background: var(--panel-danger-bg);
   color: var(--panel-danger);
   padding: 0.5rem 0.625rem;
-  font-size: 0.75rem;
   overflow-wrap: anywhere;
 }
 
@@ -416,13 +399,6 @@ async function confirmDelete() {
   display: grid;
   gap: 0.35rem;
   color: var(--panel-text);
-  font-size: 0.875rem;
-}
-
-.field > span {
-  color: var(--panel-text-muted);
-  font-size: 0.75rem;
-  line-height: 1.5;
 }
 
 @media (max-width: 760px) {

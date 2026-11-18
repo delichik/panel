@@ -2,7 +2,9 @@
 import { onBeforeUnmount, reactive, watch } from 'vue';
 import Button from '@/components/ui/Button.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
+import Expander from '@/components/ui/Expander.vue';
 import StatusBadge from '@/components/ui/StatusBadge.vue';
+import InfoBar from '@/components/patterns/InfoBar.vue';
 import ActivityLink from '@/components/activity/ActivityLink.vue';
 import { useErrorToast } from '@/components/ui/toast';
 import { reverseProxyFacilityApi } from '@/api/facilityApps';
@@ -49,56 +51,61 @@ async function check(serverId: string) {
 </script>
 
 <template>
-  <section class="grid min-h-0 gap-3 text-sm">
-    <h3 class="m-0">{{ t('facilityDiagnostics.title') }}</h3>
-    <p class="m-0 text-muted-foreground">{{ t('facilityDiagnostics.scope') }}</p>
-    <p v-if="state.reconcileStopped" role="alert" class="m-0 text-danger">{{ t('facilityDiagnostics.stopped') }}</p>
-    <div v-if="state.lastError" role="alert" class="grid gap-2 rounded-xl border border-danger-border bg-danger-bg p-3 text-danger">
-      <strong>{{ t('facilityDiagnostics.configError') }}</strong>
+  <section class="grid min-h-0 gap-3">
+    <h3 class="m-0 text-body-strong font-semibold text-foreground">{{ t('facilityDiagnostics.title') }}</h3>
+    <p class="m-0 text-caption text-muted-foreground">{{ t('facilityDiagnostics.scope') }}</p>
+    <InfoBar v-if="state.reconcileStopped" tone="danger">{{ t('facilityDiagnostics.stopped') }}</InfoBar>
+    <InfoBar v-if="state.lastError" tone="danger" :title="t('facilityDiagnostics.configError')">
       <p class="m-0">{{ t('facilityDiagnostics.configErrorHint') }}</p>
-      <pre class="m-0 max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs">{{ state.lastError }}</pre>
-    </div>
-    <EmptyState v-if="!state.deployments?.length" :title="t('facilityDiagnostics.noNodes')" :description="t('facilityDiagnostics.noNodesHint')" />
-    <article v-for="node in state.deployments ?? []" :key="node.serverId" class="grid min-w-0 gap-2 border-t border-border pt-3 first:border-t-0 first:pt-0">
-      <strong>{{ node.serverName || node.serverId }}</strong>
+      <pre class="m-0 max-h-40 overflow-auto whitespace-pre-wrap break-words text-caption">{{ state.lastError }}</pre>
+    </InfoBar>
+    <EmptyState v-if="!state.deployments?.length" variant="inset" :title="t('facilityDiagnostics.noNodes')" :description="t('facilityDiagnostics.noNodesHint')" />
+    <article v-for="node in state.deployments ?? []" :key="node.serverId" class="grid min-w-0 gap-2 border-t border-divider pt-3 first:border-t-0 first:pt-0">
+      <strong class="text-body-strong font-semibold text-foreground">{{ node.serverName || node.serverId }}</strong>
       <div class="flex flex-wrap items-center gap-2">
-        <span>{{ t('facilityDiagnostics.containerState') }}</span>
+        <span class="text-caption text-muted-foreground">{{ t('facilityDiagnostics.containerState') }}</span>
         <StatusBadge :status="node.observedState" :label="label('applicationsPage.status', node.observedState)" />
       </div>
-      <span v-if="node.observedAt" class="text-xs text-muted-foreground">{{ formatDateTime(node.observedAt) }}</span>
+      <span v-if="node.observedAt" class="text-caption text-muted-foreground">{{ formatDateTime(node.observedAt) }}</span>
       <template v-if="node.operation">
         <div class="flex flex-wrap items-center gap-2">
-          <span>{{ t('applicationsPage.currentDeployment') }}</span>
+          <span class="text-caption text-muted-foreground">{{ t('applicationsPage.currentDeployment') }}</span>
           <StatusBadge :status="operationNeedsAttention(node.operation) ? 'needs_attention' : node.operation.status" domain="operation" :label="label('applicationsPage.operationStatus', operationNeedsAttention(node.operation) ? 'result_unknown' : node.operation.status)" />
         </div>
-        <span v-if="node.operation.stage">{{ t('applicationsPage.operationStage') }}: {{ label('applicationOperationsPage.stage', node.operation.stage) }}</span>
-        <span>{{ t('applicationsPage.operationAttempt') }}: {{ node.operation.attempt ?? 0 }}</span>
-        <span v-if="node.operation.nextRunAt">{{ t('applicationsPage.operationNextRetry') }}: {{ formatDateTime(node.operation.nextRunAt) }}</span>
-        <div v-if="operationNeedsAttention(node.operation) || (node.operation.errorCode && node.operation.errorCode !== 'execution_monitoring') || (node.operation.error && node.operation.errorClass !== 'uncertainty')" role="alert" class="grid gap-2 text-danger">
-          <strong>{{ t(operationNeedsAttention(node.operation) ? 'applicationsPage.status.result_unknown' : 'facilityDiagnostics.deploymentFailed') }}</strong>
+        <span v-if="node.operation.stage" class="text-caption text-muted-foreground">{{ t('applicationsPage.operationStage') }}: {{ label('applicationOperationsPage.stage', node.operation.stage) }}</span>
+        <span class="text-caption text-muted-foreground">{{ t('applicationsPage.operationAttempt') }}: {{ node.operation.attempt ?? 0 }}</span>
+        <span v-if="node.operation.nextRunAt" class="text-caption text-muted-foreground">{{ t('applicationsPage.operationNextRetry') }}: {{ formatDateTime(node.operation.nextRunAt) }}</span>
+        <InfoBar
+          v-if="operationNeedsAttention(node.operation) || (node.operation.errorCode && node.operation.errorCode !== 'execution_monitoring') || (node.operation.error && node.operation.errorClass !== 'uncertainty')"
+          tone="danger"
+          :title="t(operationNeedsAttention(node.operation) ? 'applicationsPage.status.result_unknown' : 'facilityDiagnostics.deploymentFailed')"
+        >
           <p class="m-0">{{ t(operationNeedsAttention(node.operation) ? 'applicationsPage.unknownResultHint' : node.operation.errorCode === 'container_not_running' ? 'facilityDiagnostics.startFailedHint' : 'facilityDiagnostics.deploymentFailedHint') }}</p>
           <p class="m-0 whitespace-pre-wrap break-words">{{ node.operation.error }}</p>
           <p v-if="node.operation.errorCode === 'container_not_running' && !node.operation.errorDetail?.includes('containerLogs:')" class="m-0 text-warning">{{ t('facilityDiagnostics.missingRunLogsHint') }}</p>
-          <details v-if="node.operation.errorDetail"><summary class="cursor-pointer">{{ t('facilityDiagnostics.technicalDetails') }}</summary><pre class="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words text-xs">{{ node.operation.errorDetail }}</pre></details>
-        </div>
+          <Expander v-if="node.operation.errorDetail" :title="t('facilityDiagnostics.technicalDetails')">
+            <pre class="m-0 max-h-56 overflow-auto whitespace-pre-wrap break-words text-caption">{{ node.operation.errorDetail }}</pre>
+          </Expander>
+        </InfoBar>
         <ActivityLink v-if="node.operation.operationId" :operation-id="node.operation.operationId" />
       </template>
-      <p v-else class="m-0 text-muted-foreground">{{ t('facilityDiagnostics.noDeployment') }}</p>
+      <p v-else class="m-0 text-caption text-muted-foreground">{{ t('facilityDiagnostics.noDeployment') }}</p>
       <Button size="sm" :loading="pending[node.serverId]" :disabled="pending[node.serverId]" @click="check(node.serverId)">{{ t('facilityDiagnostics.check') }}</Button>
       <div v-if="results[node.serverId]" class="grid gap-2">
-        <span class="text-xs text-muted-foreground">{{ t('facilityDiagnostics.checkedAt') }}: {{ formatDateTime(results[node.serverId].checkedAt) }}</span>
-        <p v-if="results[node.serverId].status === 'unavailable'" class="m-0 text-warning">{{ t('facilityDiagnostics.unavailable') }}</p>
-        <p v-else-if="!results[node.serverId].issues.length" class="m-0 text-muted-foreground">{{ t('facilityDiagnostics.noErrors') }}</p>
-        <div v-for="(issue, index) in results[node.serverId].issues" :key="index" class="grid gap-1 rounded-xl border border-warning-border bg-warning-bg p-3">
-          <strong>{{ t(issueKey(issue.code, 'title')) }}</strong>
-          <span v-if="issue.domain">{{ t('facilityDiagnostics.domain') }}: {{ issue.domain }}</span>
-          <span v-if="issue.upstream">{{ t('facilityDiagnostics.upstream') }}: {{ issue.upstream }}</span>
-          <span>{{ t('facilityDiagnostics.occurrences', { count: issue.count }) }}</span>
-          <span v-if="issue.lastSeen">{{ t('facilityDiagnostics.lastSeen') }}: {{ issue.lastSeen }}</span>
+        <span class="text-caption text-muted-foreground">{{ t('facilityDiagnostics.checkedAt') }}: {{ formatDateTime(results[node.serverId].checkedAt) }}</span>
+        <p v-if="results[node.serverId].status === 'unavailable'" class="m-0 text-caption font-semibold text-warning">{{ t('facilityDiagnostics.unavailable') }}</p>
+        <p v-else-if="!results[node.serverId].issues.length" class="m-0 text-caption text-muted-foreground">{{ t('facilityDiagnostics.noErrors') }}</p>
+        <InfoBar v-for="(issue, index) in results[node.serverId].issues" :key="index" tone="warning" :title="t(issueKey(issue.code, 'title'))">
+          <span v-if="issue.domain" class="block">{{ t('facilityDiagnostics.domain') }}: {{ issue.domain }}</span>
+          <span v-if="issue.upstream" class="block">{{ t('facilityDiagnostics.upstream') }}: {{ issue.upstream }}</span>
+          <span class="block">{{ t('facilityDiagnostics.occurrences', { count: issue.count }) }}</span>
+          <span v-if="issue.lastSeen" class="block">{{ t('facilityDiagnostics.lastSeen') }}: {{ issue.lastSeen }}</span>
           <p class="m-0">{{ t(issueKey(issue.code, 'hint')) }}</p>
-          <details v-if="issue.evidence"><summary class="cursor-pointer">{{ t('facilityDiagnostics.evidence') }}</summary><pre class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs">{{ issue.evidence }}</pre></details>
-        </div>
-        <p v-if="results[node.serverId].truncated" class="m-0 text-muted-foreground">{{ t('facilityDiagnostics.truncated') }}</p>
+          <Expander v-if="issue.evidence" :title="t('facilityDiagnostics.evidence')">
+            <pre class="m-0 max-h-40 overflow-auto whitespace-pre-wrap break-words text-caption">{{ issue.evidence }}</pre>
+          </Expander>
+        </InfoBar>
+        <p v-if="results[node.serverId].truncated" class="m-0 text-caption text-muted-foreground">{{ t('facilityDiagnostics.truncated') }}</p>
       </div>
     </article>
   </section>

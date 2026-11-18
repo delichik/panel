@@ -2,6 +2,7 @@
 import { flushPromises, mount, enableAutoUnmount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryHistory, createRouter } from 'vue-router';
+import Badge from '@/components/ui/Badge.vue';
 import { toastKey } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import ServersPage from './index.vue';
@@ -184,10 +185,15 @@ describe('servers page table and covered detail', () => {
     const { wrapper } = await mountPage();
 
     expect(listPage).toHaveBeenCalledWith(expect.objectContaining({ page: 1, pageSize: 50 }));
+    // 列精简：名称合并 host:port，地址不再单独占列；窄屏隐藏最近检查。
+    expect(wrapper.findAll('thead th').map((cell) => cell.text())).toEqual(['Name', 'Status', 'Last checked', 'Actions']);
+    expect(wrapper.findAll('thead th')[2]!.classes()).toContain('max-sm:hidden');
     const rows = wrapper.findAll('tbody tr');
     expect(rows).toHaveLength(1);
     expect(rows[0]!.text()).toContain('edge-1');
     expect(rows[0]!.text()).toContain('10.0.0.1:22');
+    // 状态列只有一枚综合徽标（稳定性/代理信息进 tooltip）。
+    expect(rows[0]!.findAll('td')[1]!.findAllComponents(Badge)).toHaveLength(1);
     // 名称列与操作列「详情」均可打开覆盖式详情；整行不可点。
     const buttons = rows[0]!.findAll('button');
     expect(buttons.find((button) => button.text() === 'edge-1')?.attributes('aria-label')).toBe('Open details for edge-1');
@@ -198,14 +204,31 @@ describe('servers page table and covered detail', () => {
   it('covers the table with the detail view and syncs the URL', async () => {
     const { wrapper, router } = await mountPage();
 
+    // 列表页本身没有面包屑；只有覆盖详情从列表入口建立 trail。
+    expect(wrapper.find('nav[aria-label="Breadcrumb"]').exists()).toBe(false);
+
     const nameButton = wrapper.findAll('tbody tr').at(0)!.findAll('button').find((button) => button.text() === 'edge-1')!;
     await nameButton.trigger('click');
     await flushPromises();
 
     expect(router.currentRoute.value.query.server).toBe('srv-1');
+    const breadcrumbs = wrapper.get('nav[aria-label="Breadcrumb"]');
+    const trailLink = breadcrumbs.findAll('a').find((link) => link.text() === 'Servers')!;
+    expect(trailLink.attributes('href')).toBe('/servers');
+    // 末项（当前服务器）由 BreadcrumbBar 渲染 aria-current="page"；祖先链接的 aria-current 由 RouterLink 精确匹配补充。
+    const currentCrumbs = breadcrumbs.findAll('[aria-current="page"]');
+    expect(currentCrumbs.at(-1)!.text()).toBe('edge-1');
+    // back 与面包屑由 PageHeader 自动同行，back 行为保留。
+    expect(wrapper.find('button[aria-label="Back to list"]').exists()).toBe(true);
+
     const detail = wrapper.get('[data-testid="server-detail"]');
     expect(detail.text()).toContain('Overview');
     expect(detail.text()).toContain('Connection');
+    // 宽屏概览：摘要卡后为两列属性/指标（PropertyList 2 列），图表长内容在全宽区域。
+    expect(detail.html()).toContain('wide:grid-cols-2');
+    expect(detail.find('[data-property-list]').exists()).toBe(true);
+    expect(detail.text()).toContain('Metrics');
+    expect(detail.text()).toContain('Probe');
     // 详情覆盖时列表保持挂载（用于保留滚动和筛选），但不可交互。
     const listPane = wrapper.element.querySelector('[inert]');
     expect(listPane).not.toBeNull();
@@ -224,7 +247,31 @@ describe('servers page table and covered detail', () => {
 
     expect(containers).toHaveBeenCalledWith('srv-1', expect.anything());
     expect(wrapper.text()).toContain('No containers');
-    expect(wrapper.findAll('[role="tab"]').some((tab) => tab.text() === 'Images')).toBe(true);
+    // 子视图改成单层 tab 下的下拉选择器，不再出现第二排 tab。
+    expect(wrapper.find('[role="combobox"][aria-label="Resources"]').text()).toContain('Containers');
+    expect(wrapper.findAll('[role="tab"]').some((tab) => tab.text() === 'Images')).toBe(false);
+  });
+
+  it('uses a bounded NumberBox for the UFW rule port', async () => {
+    const { wrapper } = await mountPage();
+    const detailButton = wrapper.findAll('tbody tr').at(0)!.findAll('button').find((button) => button.text().includes('Details'))!;
+    await detailButton.trigger('click');
+    await flushPromises();
+
+    const securityTab = wrapper.findAll('[role="tab"]').find((tab) => tab.text() === 'Network & security')!;
+    await securityTab.trigger('click');
+    await flushPromises();
+
+    const addRule = wrapper.findAll('button').find((button) => button.text() === 'Add rule');
+    expect(addRule).toBeTruthy();
+    await addRule!.trigger('click');
+    await flushPromises();
+
+    const portBox = document.querySelector<HTMLInputElement>('#ufw-rule-port');
+    expect(portBox).not.toBeNull();
+    expect(portBox!.getAttribute('role')).toBe('spinbutton');
+    expect(portBox!.getAttribute('aria-valuemin')).toBe('1');
+    expect(portBox!.getAttribute('aria-valuemax')).toBe('65535');
   });
 
   it('maps legacy resource tab query aliases onto resources + subtab', async () => {
@@ -241,7 +288,7 @@ describe('servers page table and covered detail', () => {
     await flushPromises();
 
     expect(wrapper.findAll('[role="tab"]').find((tab) => tab.text() === 'Resources')?.attributes('aria-selected')).toBe('true');
-    expect(wrapper.findAll('[role="tab"]').find((tab) => tab.text() === 'Images')?.attributes('aria-selected')).toBe('true');
+    expect(wrapper.find('[role="combobox"][aria-label="Resources"]').text()).toContain('Images');
   });
 
   it('maps the legacy metrics deep link onto the merged overview tab', async () => {
@@ -254,23 +301,30 @@ describe('servers page table and covered detail', () => {
   it('maps legacy agent and probes deep links onto system and network-security subtabs', async () => {
     const agentPage = await mountAtQuery({ server: 'srv-1', tab: 'agent' });
     expect(agentPage.wrapper.findAll('[role="tab"]').find((tab) => tab.text() === 'System')?.attributes('aria-selected')).toBe('true');
-    expect(agentPage.wrapper.findAll('[role="tab"]').find((tab) => tab.text() === 'Agent')?.attributes('aria-selected')).toBe('true');
+    expect(agentPage.wrapper.find('[role="combobox"][aria-label="System"]').text()).toContain('Agent');
   });
 
-  it('maps the legacy probes deep link onto the network-security tab', async () => {
+  it('maps the legacy probes deep link onto the firewall subview without a probes tab', async () => {
     const { wrapper } = await mountAtQuery({ server: 'srv-1', tab: 'probes' });
     expect(wrapper.findAll('[role="tab"]').find((tab) => tab.text() === 'Network & security')?.attributes('aria-selected')).toBe('true');
-    expect(wrapper.findAll('[role="tab"]').find((tab) => tab.text() === 'Network probes')?.attributes('aria-selected')).toBe('true');
+    expect(wrapper.find('[role="combobox"][aria-label="Network & security"]').text()).toContain('Firewall');
+    expect(wrapper.findAll('[role="tab"]').some((tab) => tab.text() === 'Network probes')).toBe(false);
   });
 
   it('loads every server as an SSH tunnel candidate instead of only the current page', async () => {
     list.mockResolvedValue([server, { ...server, id: 'srv-60', name: 'beyond-page', host: '10.0.0.60' }]);
     const { wrapper } = await mountPage();
-    await wrapper.findAll('button').find((button) => button.text() === 'Add server')!.trigger('click');
+    await wrapper.findAll('button').find((button) => button.text() === 'Add')!.trigger('click');
     await flushPromises();
 
     expect(document.querySelector('[role="dialog"]')).not.toBeNull();
     expect(list).toHaveBeenCalled();
+    // 端口使用 WinUI NumberBox（spinbutton）并带 1..65535 边界；draft 仍为字符串。
+    const portBox = document.querySelector<HTMLInputElement>('#server-form-port');
+    expect(portBox).not.toBeNull();
+    expect(portBox!.getAttribute('role')).toBe('spinbutton');
+    expect(portBox!.getAttribute('aria-valuemin')).toBe('1');
+    expect(portBox!.getAttribute('aria-valuemax')).toBe('65535');
     await chooseSelectOption('#server-form-proxy-mode', 'SSH tunnel');
     // 打开隧道下拉后，当前页之外的服务器也必须可选。
     const combobox = document.querySelector<HTMLElement>('#server-form-tunnel-server')!;
@@ -283,12 +337,12 @@ describe('servers page table and covered detail', () => {
   it('falls back to the page list with a retry hint when full candidates fail to load', async () => {
     list.mockRejectedValueOnce(new Error('network down'));
     const { wrapper } = await mountPage();
-    await wrapper.findAll('button').find((button) => button.text() === 'Add server')!.trigger('click');
+    await wrapper.findAll('button').find((button) => button.text() === 'Add')!.trigger('click');
     await flushPromises();
 
     await chooseSelectOption('#server-form-proxy-mode', 'SSH tunnel');
     expect(document.body.textContent).toContain('Unable to load the full server list');
-    // 失败时仍用父页面列表兜底，直连/已有候选不受阻塞。
+    // 失败时仍用父页面列表兜底，直连已有候选不受阻塞。
     const combobox = document.querySelector<HTMLElement>('#server-form-tunnel-server')!;
     combobox.click();
     await flushPromises();
@@ -311,7 +365,7 @@ describe('servers page table and covered detail', () => {
         : { items: [server], total: 1, page: 1, pageSize: 50 }
     ));
     const { wrapper } = await mountPage();
-    await wrapper.findAll('button').find((button) => button.text() === 'Add server')!.trigger('click');
+    await wrapper.findAll('button').find((button) => button.text() === 'Add')!.trigger('click');
     await flushPromises();
     await chooseSelectOption('#server-form-proxy-mode', 'SSH tunnel');
 

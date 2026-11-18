@@ -49,12 +49,12 @@ func TestTranslateLocaleCoversReverseProxyFacilityValidation(t *testing.T) {
 
 func TestTranslateLocaleCoversNetworkProbeValidation(t *testing.T) {
 	tests := map[string]string{
-		"network_probe_mode_invalid":          "网络探测模式必须为 all 或 selected",
-		"network_probe_servers_required":      "选择指定节点模式时必须至少选择一个探测节点",
-		"network_probe_server_not_found":      "所选探测节点不存在",
-		"network_probe_interval_invalid":      "探测间隔必须在 1 到 60 分钟之间",
-		"network_probe_ping_count_invalid":    "每次探测的 ping 包数必须在 1 到 10 之间",
-		"network_probe_ping_timeout_invalid":  "单包超时必须在 1 到 10 秒之间",
+		"network_probe_mode_invalid":         "网络探测模式必须为 all 或 selected",
+		"network_probe_servers_required":     "选择指定节点模式时必须至少选择一个探测节点",
+		"network_probe_server_not_found":     "所选探测节点不存在",
+		"network_probe_interval_invalid":     "探测间隔必须在 1 到 60 分钟之间",
+		"network_probe_ping_count_invalid":   "每次探测的 ping 包数必须在 1 到 10 之间",
+		"network_probe_ping_timeout_invalid": "单包超时必须在 1 到 10 秒之间",
 	}
 	for code, want := range tests {
 		if got := TranslateLocale(LocaleSimplifiedChinese, code, "fallback"); got != want {
@@ -100,5 +100,26 @@ func TestTranslateLocaleUsesAgentRequestInvalidPrefix(t *testing.T) {
 	got := TranslateLocale(LocaleSimplifiedChinese, "agent_request_invalid", "Agent request invalid: bad input")
 	if got != "Agent 请求无效：bad input" {
 		t.Fatalf("translation = %q", got)
+	}
+}
+
+// TestTranslateLocaleCoversAppearanceErrors pins the nine zh-CN messages of the
+// appearance settings/background upload error codes.
+func TestTranslateLocaleCoversAppearanceErrors(t *testing.T) {
+	tests := map[string]string{
+		"invalid_theme_mode":             "主题模式必须为 system、light 或 dark",
+		"invalid_appearance_accent":      "强调色必须是受支持的预设之一",
+		"invalid_background_kind":        "背景类型必须为 none、preset 或 image，且预设 id 必须有效",
+		"background_required":            "缺少背景图片",
+		"background_too_large":           "背景图片不能超过 8 MiB",
+		"background_unsupported_type":    "背景图片只支持 JPEG 或 PNG 格式",
+		"background_invalid_image":       "背景图片无效或已损坏",
+		"background_dimensions_exceeded": "背景图片不能超过 4096×4096 或 1200 万像素",
+		"background_store_failed":        "保存背景图片失败",
+	}
+	for code, want := range tests {
+		if got := TranslateLocale(LocaleSimplifiedChinese, code, "fallback"); got != want {
+			t.Fatalf("translation for %s = %q, want %q", code, got, want)
+		}
 	}
 }

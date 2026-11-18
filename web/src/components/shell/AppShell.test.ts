@@ -1,15 +1,18 @@
 // @vitest-environment jsdom
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { createPinia } from 'pinia';
+import { defineComponent, h } from 'vue';
 import { createMemoryHistory, createRouter, type Router } from 'vue-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { appearanceApi } from '@/api/appearance';
 import { settingsApi } from '@/api/settings';
 import { toastKey } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
+import type { Appearance } from '@/types/appearance';
 import type { RuntimeSettings } from '@/types/settings';
 
 // This vitest jsdom environment does not provide localStorage; stub it like
-// other tests stub fetch so AppShell / theme can read persistence keys.
+// other tests stub fetch so AppShell / appearance can read persistence keys.
 function createStorage(): Storage {
   let store = new Map<string, string>();
   return {
@@ -35,20 +38,41 @@ function createStorage(): Storage {
 }
 vi.stubGlobal('localStorage', createStorage());
 
+/** Counts page mounts so tests can assert the page key controls remounting. */
+let pageMounts = 0;
+
+function pageStub(name: string, heading: string) {
+  return defineComponent({
+    name,
+    setup() {
+      pageMounts += 1;
+      return () => h('div', { 'data-page': name }, [h('h1', { tabindex: '-1' }, heading)]);
+    },
+  });
+}
+
+const ServersPageStub = pageStub('ServersPage', 'Servers');
+const SettingsPageStub = pageStub('SettingsPage', 'Settings');
+
 function makeRouter(): Router {
   return createRouter({
     history: createMemoryHistory(),
     routes: [
       { path: '/', component: { template: '<div />' }, meta: { titleKey: 'routes.overview.title' } },
-      { path: '/servers', component: { template: '<div />' }, meta: { titleKey: 'routes.servers.title' } },
+      { path: '/servers', component: ServersPageStub, meta: { titleKey: 'routes.servers.title', pageKey: 'servers' } },
+      // All settings sections share one pageKey: switching sections must keep
+      // the same page instance (no route transition, no remount).
+      { path: '/settings/general', component: SettingsPageStub, meta: { titleKey: 'routes.settings.title', pageKey: 'settings' } },
+      { path: '/settings/security', component: SettingsPageStub, meta: { titleKey: 'routes.settings.title', pageKey: 'settings' } },
       { path: '/fragment', component: { template: '<div /><section />' }, meta: { titleKey: 'routes.overview.title' } },
       { path: '/:pathMatch(.*)*', component: { template: '<div />' }, meta: { titleKey: 'routes.notFound.title' } },
     ],
   });
 }
 
-// AppShell teleports the mobile drawer to <body>; unmount every mounted shell
-// after each test so no stale teleported DOM leaks into the next test.
+// AppShell teleports the mobile drawer and the appearance flyout to <body>;
+// unmount every mounted shell after each test so no stale teleported DOM leaks
+// into the next test.
 const mountedWrappers: VueWrapper[] = [];
 const toastPush = vi.fn();
 
@@ -74,6 +98,19 @@ function runtimeSettings(language = 'en'): RuntimeSettings {
       container: { available: false, running: false, loggedIn: false, hostname: '', ipv4: '', ipv6: '', version: '', backendState: '', lastError: '', updatedAt: '' },
     },
     jwtSecretConfigured: true,
+  };
+}
+
+function appearanceFixture(overrides: Partial<Appearance> = {}): Appearance {
+  return {
+    themeMode: 'system',
+    mica: true,
+    accent: 'blue',
+    background: { kind: 'none', presetId: null, assetId: null, revision: 0, hasImage: false },
+    thumbDataUrl: null,
+    initialized: true,
+    updatedAt: '2026-01-01T00:00:00Z',
+    ...overrides,
   };
 }
 
@@ -117,8 +154,10 @@ function stubMatchMedia() {
 
 beforeEach(() => {
   toastPush.mockReset();
+  pageMounts = 0;
   vi.spyOn(settingsApi, 'runtime').mockResolvedValue(runtimeSettings());
   vi.spyOn(settingsApi, 'updateLanguage').mockImplementation(async (language) => runtimeSettings(language));
+  vi.spyOn(appearanceApi, 'get').mockResolvedValue(appearanceFixture());
   useI18n().setLocale('en');
 });
 
@@ -171,17 +210,36 @@ describe('AppShell mobile nav drawer', () => {
     }));
   });
 
-  it('updates title and nav highlight as soon as the route changes', async () => {
+  it('collapses the desktop pane to the WinUI 48px compact width', async () => {
+    const { wrapper } = await mountShell();
+    const toggle = wrapper.get('button[aria-label="Toggle navigation"]');
+    expect(wrapper.attributes('style')).toContain('--panel-nav-width');
+    expect(wrapper.attributes('style')).toContain('320px');
+
+    await toggle.trigger('click');
+    await flushPromises();
+
+    expect(wrapper.attributes('style')).toContain('--panel-nav-width-compact');
+    expect(wrapper.attributes('style')).toContain('48px');
+    expect(localStorage.getItem('panel.nav.collapsed')).toBe('true');
+    // The app identity lives in the full-width title bar and stays visible.
+    expect(wrapper.get('header strong').text()).toBe('Seamark');
+  });
+
+  it('shows the app identity in the title bar and owns the nav highlight', async () => {
     const { wrapper, router } = await mountShell();
 
     await router.push('/servers');
     await flushPromises();
 
-    expect(wrapper.get('header p[aria-live="polite"]').text()).toBe('Servers');
+    // The title bar no longer duplicates the page title / alpha badge.
+    expect(wrapper.get('header strong').text()).toBe('Seamark');
+    expect(wrapper.find('header [aria-live]').exists()).toBe(false);
     expect(wrapper.find('header [role="progressbar"]').exists()).toBe(false);
+    expect(wrapper.get('header').text()).not.toContain('alpha');
     const activeLink = wrapper.get('aside nav a[href="/servers"]');
     expect(activeLink.attributes('aria-current')).toBe('page');
-    expect(activeLink.classes()).toContain('bg-primary');
+    expect(activeLink.classes()).toContain('bg-control');
   });
 
   it('opens as a modal dialog with aria wiring, focus and background lock', async () => {
@@ -287,5 +345,111 @@ describe('AppShell mobile nav drawer', () => {
 
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(document.body.style.overflow).toBe('');
+  });
+});
+
+describe('AppShell WinUI title bar and page surface', () => {
+  it('renders one full-width title bar above the pane/content row and keeps it outside main', async () => {
+    const { wrapper } = await mountShell();
+
+    const header = wrapper.get('header');
+    expect(header.classes()).toContain('lg:col-span-2');
+    expect(header.classes()).toContain('bg-layer');
+    // main is the landmark for routed content only — no header inside it.
+    expect(wrapper.find('main header').exists()).toBe(false);
+    const main = wrapper.get('main#main-content');
+    expect(main.attributes('tabindex')).toBe('-1');
+    // Skip link is the first focusable element and carries the 2px focus ring.
+    const skip = wrapper.get('a[href="#main-content"]');
+    expect(skip.text()).toBe('Skip to main content');
+    expect(skip.classes()).toContain('focus:ring-2');
+  });
+
+  it('keeps one page instance while routes share a pageKey (settings sections)', async () => {
+    const { wrapper, router } = await mountShell();
+    await router.push('/settings/general');
+    await flushPromises();
+
+    const settingsPage = wrapper.get('[data-page="SettingsPage"]');
+    const pageElement = settingsPage.element;
+    expect(pageMounts).toBe(1);
+
+    await router.push('/settings/security');
+    await flushPromises();
+
+    // Same pageKey: the page is patched in place (no remount, no route replay).
+    expect(pageMounts).toBe(1);
+    expect(wrapper.find('[data-page="SettingsPage"]').exists()).toBe(true);
+    expect(wrapper.get('[data-page="SettingsPage"]').element).toBe(pageElement);
+  });
+
+  it('unmounts the old page immediately and moves focus on a pageKey change', async () => {
+    const { wrapper, router } = await mountShell();
+    await router.push('/settings/general');
+    await flushPromises();
+    expect(wrapper.find('[data-page="SettingsPage"]').exists()).toBe(true);
+
+    await router.push('/servers');
+    await flushPromises();
+
+    // Enter-only Page refresh: the old page is already gone, the new one is
+    // present (and animating) instead of waiting for an out-in leave.
+    expect(wrapper.find('[data-page="SettingsPage"]').exists()).toBe(false);
+    expect(wrapper.find('[data-page="ServersPage"]').exists()).toBe(true);
+    expect(pageMounts).toBe(2);
+
+    // Focus moves into the new page after the navigation commits.
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    await flushPromises();
+    expect(document.activeElement).toBe(wrapper.get('main h1').element);
+  });
+
+  it('stretches the drawer with the same navigation width token', async () => {
+    const { wrapper } = await mountShell();
+    await wrapper.get('button[aria-label="Open navigation"]').trigger('click');
+    await flushPromises();
+
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(dialog.className).toContain('w-nav');
+    expect(dialog.className).not.toContain('w-73');
+  });
+});
+
+describe('AppShell WinUI appearance entry', () => {
+  it('replaces the theme and scheme dropdowns with one appearance flyout', async () => {
+    const { wrapper } = await mountShell();
+
+    // The old theme/scheme dropdown triggers are gone.
+    expect(wrapper.find('button[aria-label="Theme"]').exists()).toBe(false);
+    expect(wrapper.find('button[aria-label="Scheme"]').exists()).toBe(false);
+
+    const trigger = wrapper.get('button[aria-label="Appearance"]');
+    expect(trigger.attributes('aria-haspopup')).toBe('dialog');
+    expect(trigger.attributes('aria-expanded')).toBe('false');
+    expect(trigger.attributes('aria-controls')).toBeTruthy();
+  });
+
+  it('opens the appearance flyout with Escape closing it and returning focus', async () => {
+    const { wrapper } = await mountShell();
+    const trigger = wrapper.get<HTMLButtonElement>('button[aria-label="Appearance"]');
+    trigger.element.focus();
+
+    await trigger.trigger('click');
+    await flushPromises();
+
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"][aria-label="Appearance"]');
+    expect(dialog).not.toBeNull();
+    expect(dialog!.getAttribute('aria-modal')).toBe('false');
+    expect(trigger.attributes('aria-expanded')).toBe('true');
+    expect(dialog!.contains(document.activeElement)).toBe(true);
+    // Initial focus lands on the current theme option.
+    expect(document.activeElement?.getAttribute('role')).toBe('radio');
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await flushPromises();
+
+    expect(document.querySelector('[role="dialog"][aria-label="Appearance"]')).toBeNull();
+    expect(trigger.attributes('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(trigger.element);
   });
 });

@@ -134,6 +134,15 @@ import { acceptedAgentDeployment, completedTask, mockTasks, mockTaskLogs, mockTa
 import { resolveMockExecution } from './activity';
 import { mockEventsRoute } from './events';
 import { applyContainerTailscale, confirmRestore, mockRuntimeSettings, mockServerVariables, restorePreflight, saveRuntime, saveServerVariables, startExport, type RuntimeUpdatePayload } from './settings';
+import {
+  mockAppearance,
+  mockBackgroundBlob,
+  publicMockAppearance,
+  removeMockBackground,
+  saveMockAppearance,
+  uploadMockBackground,
+} from './appearance';
+import type { AppearanceUpdate } from '@/types/appearance';
 import { advanceExport, exportStatus, resetExport, restoreStatus } from './maintenance';
 import { debugClearRuntimeDataStatus, debugDatabases, debugPprofStatus, debugRuntime, debugTasks, setDebugPprof, startDebugClearRuntimeData } from './debug';
 
@@ -990,6 +999,22 @@ export function installMockApi() {
       return json(mockRuntimeSettings);
     }
     if (url.pathname === '/api/v1/settings/public-branding' && method(init) === 'GET') return json(mockRuntimeSettings.branding);
+    if (url.pathname === '/api/v1/settings/appearance' && method(init) === 'GET') return json(mockAppearance);
+    if (url.pathname === '/api/v1/settings/appearance' && method(init) === 'PUT') {
+      try {
+        return json(saveMockAppearance(await body<AppearanceUpdate>(init)));
+      } catch (err) {
+        const code = (err as { code?: string }).code ?? 'settings_conflict';
+        return error(code, err instanceof Error ? err.message : 'Appearance settings are invalid.', code === 'background_required' ? 422 : 409);
+      }
+    }
+    if (url.pathname === '/api/v1/settings/appearance/background' && method(init) === 'POST') return json(uploadMockBackground());
+    if (url.pathname === '/api/v1/settings/appearance/background' && method(init) === 'DELETE') return json(removeMockBackground());
+    if (url.pathname === '/api/v1/settings/appearance/background/content' && method(init) === 'GET') {
+      if (!mockAppearance.background.hasImage) return error('background_not_found', 'No background image is configured.', 404);
+      return blobResponse(mockBackgroundBlob(), 'background.png', 'image/png');
+    }
+    if (url.pathname === '/api/v1/settings/public-appearance' && method(init) === 'GET') return json(publicMockAppearance());
     if (url.pathname === '/api/v1/system/version' && method(init) === 'GET') return json({ version: '0.2.0-dev', channel: 'dev', commit: 'mock', repository: 'mock/panel', latestVersion: '', updateAvailable: false });
     if (url.pathname === '/api/v1/settings/runtime' && method(init) === 'PUT') {
       try {

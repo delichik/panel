@@ -27,11 +27,11 @@
 - `ARCH-API-002`：业务错误使用稳定、机器可判定的 `code` 和正确 HTTP 状态；`message` 是已按服务端语言策略翻译的用户可读文本，`details` 仅包含安全的结构化上下文。
 - `ARCH-API-003`：未知错误对外统一为 `internal_error`，服务端记录原始错误；不得把堆栈、SQL、绝对敏感路径或秘密写入响应。
 - `ARCH-API-004`：通过通用 JSON decoder 处理的请求 body 最大 10 MiB；超限返回 `request_body_too_large`，无效 JSON 返回 `bad_request`，不得执行部分业务写入。
-- `ARCH-API-005`：除登录、会话查询、公开品牌和明确的维护模式入口外，`/api/v1` 路由必须经过认证；“必须修改初始密码”状态仅允许会话、登出和账号修改相关动作。
+- `ARCH-API-005`：除登录、会话查询、公开品牌、公开外观（`GET /api/v1/settings/public-appearance`）和明确的维护模式入口外，`/api/v1` 路由必须经过认证；“必须修改初始密码”状态仅允许会话、登出和账号修改相关动作。
 - `ARCH-API-006`：列表接口必须对分页参数、排序字段、方向、搜索和筛选做白名单校验；空结果返回空集合和合法分页元数据，不得用 404 表示列表为空。
 - `ARCH-API-007`：时间通过 RFC3339/RFC3339Nano 表达并以 UTC 持久化；前端负责按当前 locale/timezone 展示，禁止传递无时区的歧义时间。
 - `ARCH-API-008`：DELETE 的成功语义在各域明确规定为 204 或带操作结果的 2xx；异步删除只表示任务已可靠创建，不得假称远端资源已删除。
-- `ARCH-API-009`：当前 Panel API 路由集合由 `internal/bootstrap/panel/routes_manifest_test.go` 固定；增加、删除或改名路由时必须同时更新域验收项、前端消费者/Mock（如有）和清单计数/哈希。
+- `ARCH-API-009`：当前 Panel API 路由集合由 `internal/bootstrap/panel/routes_manifest_test.go` 固定；增加、删除或改名路由时必须同时更新域验收项、前端消费者/Mock（如有）和清单计数/哈希。外观设置（`GET/PUT /api/v1/settings/appearance`、`POST/DELETE /api/v1/settings/appearance/background`、`GET /api/v1/settings/appearance/background/content`、`GET /api/v1/settings/public-appearance`）新增 6 条后主 API 基线由 186 变为 192；公开外观走 `RegisterPublicRoutes` 但仍以 `/api/` 前缀计入主清单，不改变 2 条非 `/api` 公开产物路由。
 - `ARCH-API-010`：前端静态托管对 HTML 使用 `no-cache`，指纹化 `assets/` 使用一年 immutable cache，其他静态资源使用日级缓存；未知前端路径回退 `index.html`，未构建前端时返回明确的纯文本运行状态。
 
 ## 4. 模块责任与调用边界
@@ -47,7 +47,7 @@
 
 | 数据库 | 规范归属 | 禁止事项 |
 | --- | --- | --- |
-| app | 配置、资源、应用 desired/observed、不可变协调 revision、Job、遗留 `activity_events` schema（不再接受新产品事实）、凭据元数据、设置、认证状态、进程行 `events`、event executor `event_runs`/`event_run_steps`、网络探测配置与最新观测（`network_probe_configs`/`network_probe_results`）、指标设施配置（`metrics_facility_configs`） | 不存高容量 JSONL 正文或指标时间序列；JSONL 在 `<dataRoot>/logs` |
+| app | 配置、资源、应用 desired/observed、不可变协调 revision、Job、遗留 `activity_events` schema（不再接受新产品事实）、凭据元数据、设置、认证状态、进程行 `events`、event executor `event_runs`/`event_run_steps`、网络探测配置与最新观测（`network_probe_configs`/`network_probe_results`）、指标设施配置（`metrics_facility_configs`）、全局外观设置（`appearance_settings`，仅背景资产元数据） | 不存高容量 JSONL 正文或指标时间序列；JSONL 在 `<dataRoot>/logs`；外观背景图片字节在 `<dataRoot>/appearance/`，不得把图片或 base64 原图存入本库 |
 | log | 遗留可重建 Activity 查询投影/FTS（不再投影新事实）、应用修订历史投影、运行事件及详情、密钥导出审计 | 不作为应用协调、event executor 或新产品/过程事实来源 |
 | coordination | 当前不注册业务模型，保留路径只为兼容和备份拓扑 | 不重新引入旧 lifecycle 表作为第二事实源 |
 | metrics | 指标快照时间序列（含可空磁盘 IO 速率列 `disk_read_bytes_rate`/`disk_write_bytes_rate`，NULL=未测得） | 不存资源配置或身份数据 |
@@ -67,6 +67,8 @@
 
 指标设施新增一张 app 库表 `metrics_facility_configs`（`internal/platform/database/models/app_models.go`，注册于 `AppModels()`）：单行配置（`id` 固定 `metrics`、`mode` 带 `CHECK(mode IN ('all','selected'))`、`server_ids_json`（JSON 数组，默认 `'[]'`）、`retention_days`（`INTEGER NOT NULL`，默认 7）、`collection_interval_seconds`（`INTEGER NOT NULL`，默认 60）、`cleanup_schedule` 带 `CHECK(cleanup_schedule IN ('hourly','daily','weekly'))`（默认 `daily`）、`version`、`updated_at`）。表由既有 destructive AutoMigrate 创建，旧 alpha 库升级即为空表；`EnsureMigrated` 在无行时从 `runtime_settings` 旧键 `metricsRetentionDays`/`metricsCollectionIntervalSeconds`/`cleanupSchedule` 播种（合法值采用、非法/缺失用默认，只播种一次，旧键保留不删除，`FAC-MET-006`）。指标样本仍只存 metrics 库 `metrics_snapshots`，本表不复制历史；服务器删除在同一清理事务内修剪 `selected` 的 `server_ids_json`（`version`+1）并沿用 `OBS-MET-006` 删除指标行（`FAC-MET-007`、`SRV-DEL-007`）。运行时设置只在旧键保留作为播种来源，`GET/PUT /api/v1/settings/runtime` 不再读写三项（`SET-RUN-021`）。
 
+外观设置新增一张 app 库表 `appearance_settings`（`internal/platform/database/models/app_models.go`，注册于 `AppModels()`）：单行全局配置（`id` 固定 `appearance`，带 `CHECK(id = 'appearance')`；`theme_mode` 默认 `system`、`mica` 默认 1、`accent` 默认 `blue`、`background_kind` 默认 `none`、`background_preset`、`background_asset_id`、`background_mime`、`background_width`、`background_height`、`background_bytes`、`background_revision`、`initialized` 默认 0、`updated_at`）。图片字节**不入库**：归一化 master 与 160×90 缩略图位于 `<dataRoot>/appearance/<assetId>/`（`master.jpg|master.png`、`thumb.jpg`，目录 0700/文件 0644，`assetId` 为内容 SHA-256 前缀），DB 只保存 MIME/尺寸/字节数/revision 等元数据；写入顺序固定为“写新资产目录 → 提交 DB → 删除旧资产目录”，启动与每 6 小时清理 24 小时以上未被引用的孤儿目录，DB 记录指向缺失文件时降级为无背景并告警（`SET-APP-008/010`）。表由既有 destructive AutoMigrate 创建，旧 alpha 库升级即为空表，首次启动幂等 seed 默认行（`initialized=false`），无需一次性数据迁移（`DATA-MIG-008/009`）；只有 DELETE 背景才删除资产目录，PUT 省略背景或切到 `none`/`preset` 均保留资产供重新启用（`SET-APP-002/009`）。备份/恢复继续覆盖整个 `dataRoot` 与四库文件，外观目录自动纳入、恢复为整目录替换，无需新增 manifest 条目（`BKP-API-005`）。
+
 - `DATA-MIG-001`：全部在管表必须在 `internal/platform/database/models` 有模型并按 app/log/coordination/metrics 明确分组；新增表必须同时进入正确清单。
 - `DATA-MIG-002`：启动迁移按库隔离执行，不得因全局注册表把模型建入错误数据库；父表排序、外键、CHECK、复合/部分/唯一索引必须可重复创建且与模型合同一致。
 - `DATA-MIG-003`：迁移必须幂等。同一版本数据库连续启动不得产生 schema drift、重复数据或重复索引。
@@ -75,7 +77,7 @@
 - `DATA-MIG-006`：ORM 只允许自动删除已接管快照中的对象；外部列、表、索引不得被自动删除。破坏性同步必须显式开启，非破坏模式只报告差异。
 - `DATA-MIG-007`：可空时间无值统一为 NULL；历史空字符串在读取、更新和启动归一化时按未设置处理，不得导致升级失败。
 - `DATA-MIG-008`：迁移必须保留 alpha 旧版本升级路径，包括旧数据库名、旧秘密字段、旧证书/密钥资产和已下线协调表的明确处理；不得只验证全新数据库。
-- `DATA-MIG-009`：备份/恢复清单必须覆盖四库及规范声明的数据文件；新增持久化位置时必须同步更新备份合同。
+- `DATA-MIG-009`：备份/恢复清单必须覆盖四库及规范声明的数据文件；新增持久化位置时必须同步更新备份合同。`dataRoot` 内的持久化数据（含 `<dataRoot>/appearance/` 外观背景资产目录与 `<dataRoot>/logs`）随整目录归档自动纳入，存储于 dataRoot 之外的文件必须显式声明。
 
 ## 7. ORM 行为合同
 
@@ -100,6 +102,6 @@
 
 - `ARCH-SEC-001`：密码使用自适应哈希保存；JWT secret、私钥和 provider token 不出现在列表/详情响应中。
 - `ARCH-SEC-002`：文件名、归档路径、下载路径和远端资源 ID 必须拒绝目录穿越、绝对路径逃逸、NUL 和跨租户/跨资源引用。
-- `ARCH-SEC-003`：导入、上传和归档解包必须限制请求大小、条目数/总展开量和目标目录；失败时清理临时内容。
+- `ARCH-SEC-003`：导入、上传和归档解包必须限制请求大小、条目数/总展开量和目标目录；失败时清理临时内容。外观背景上传必须显式限制 8 MiB+1 MiB 请求体、只接受按魔数识别的 JPEG/PNG（拒绝 GIF/WebP）、先用 `DecodeConfig` 拒绝 >4096×4096 或 >12MP 的图片再解码、忽略用户文件名并由服务端内容哈希生成资产目录/缓存键；原图仅认证接口可读，公开接口只暴露模糊缩略图。
 - `ARCH-SEC-004`：删除远端资源前必须验证 Panel 托管身份与作用域；同名非托管资源不得自动删除或覆盖。
 - `ARCH-SEC-005`：认证、导出、证书/密钥变更、远端执行和恢复等敏感动作必须留下不含秘密的审计或运行事件。

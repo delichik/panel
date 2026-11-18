@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Braces } from '@lucide/vue';
+import { Braces } from '@/icons';
 import { nextTick, ref } from 'vue';
 import Button from '@/components/ui/Button.vue';
 import Dropdown from '@/components/ui/Dropdown.vue';
@@ -47,7 +47,7 @@ async function insert(option: TemplateVariableOption) {
 </script>
 
 <template>
-  <div class="grid grid-cols-[minmax(0,1fr)_auto] gap-2 max-sm:grid-cols-1">
+  <div class="grid grid-cols-field gap-2 max-sm:grid-cols-1">
     <Input
       ref="input"
       :model-value="modelValue"
@@ -73,7 +73,7 @@ async function insert(option: TemplateVariableOption) {
       >
         <span class="grid min-w-0 gap-0.5">
           <strong class="truncate font-medium">{{ option.label }}</strong>
-          <span v-if="option.description" class="truncate font-mono text-xs text-muted-foreground">{{ option.description }}</span>
+          <span v-if="option.description" class="truncate font-mono text-caption text-muted-foreground">{{ option.description }}</span>
         </span>
       </DropdownItem>
       <DropdownItem v-if="!options.length" disabled>{{ emptyLabel }}</DropdownItem>

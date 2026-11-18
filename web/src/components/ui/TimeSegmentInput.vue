@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { fieldFocus } from './states';
 
 const props = withDefaults(defineProps<{ modelValue: number; min?: number; max?: number; label?: string }>(), {
   min: 0,
@@ -49,7 +50,8 @@ function onWheel(event: WheelEvent) {
     inputmode="numeric"
     :value="display"
     :aria-label="label"
-    class="motion-field h-7 w-10 rounded-lg border border-input bg-card text-center text-xs tabular-nums text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+    class="h-control-sm w-10 surface-control text-center text-caption tabular-nums text-foreground transition-state duration-fast ease-move hover:border-border-strong"
+    :class="fieldFocus"
     @input="onInput"
     @blur="onBlur"
     @keydown="onKeydown"

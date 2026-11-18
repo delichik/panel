@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight } from '@lucide/vue';
+import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight } from '@/icons';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId } from 'vue';
 import Button from './Button.vue';
 import TimeSegmentInput from './TimeSegmentInput.vue';
 import { useI18n } from '@/i18n';
+import { focusRing, zIndex } from './states';
 import type { DateTimeRangeValue } from './dateTimeRange';
 
 const props = defineProps<{ modelValue: DateTimeRangeValue }>();
@@ -34,9 +35,10 @@ const triggerText = computed(() => {
 });
 
 const buttonClasses = computed(() => [
-  'motion-field flex h-9 w-full min-w-0 items-center justify-between gap-2 rounded-xl border border-input bg-card px-3 text-left text-sm text-foreground shadow-sm transition-[background-color,border-color,box-shadow]',
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:ring-offset-2 focus-visible:ring-offset-card',
-  open.value && 'border-border-strong bg-popover panel-shadow-overlay',
+  'flex h-control w-full min-w-0 items-center justify-between gap-2 surface-control px-3 text-left text-body text-foreground transition-state duration-fast ease-move',
+  'hover:border-border-strong hover:bg-hover',
+  focusRing,
+  open.value && 'border-border-strong bg-flyout',
 ]);
 
 
@@ -203,7 +205,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="root" class="relative w-full min-w-0">
+  <div ref="root" class="relative w-full min-w-field">
     <button
       ref="button"
       type="button"
@@ -216,7 +218,7 @@ onBeforeUnmount(() => {
     >
       <CalendarDays class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
       <span class="min-w-0 flex-1 truncate text-foreground">{{ triggerText }}</span>
-      <ChevronDown class="size-4 shrink-0 text-muted-foreground transition-transform duration-150 ease-out" :class="open ? 'rotate-180' : undefined" aria-hidden="true" />
+      <ChevronDown class="size-4 shrink-0 text-muted-foreground transition-transform duration-fast ease-enter" :class="open ? 'rotate-180' : undefined" aria-hidden="true" />
     </button>
 
     <Teleport to="body">
@@ -225,41 +227,44 @@ onBeforeUnmount(() => {
           v-if="open"
           :id="panelId"
           ref="panel"
-          class="panel-shadow-overlay z-50 max-h-[calc(100dvh-32px)] w-[min(584px,calc(100vw-32px))] overflow-y-auto rounded-xl border border-border bg-popover p-4 text-popover-foreground"
+          class="max-h-[calc(100dvh-32px)] w-[min(var(--panel-datetime-panel-width,584px),calc(100vw-32px))] overflow-y-auto surface-flyout p-4 text-popover-foreground backdrop-blur-flyout"
+          :class="zIndex.flyout"
           :style="panelStyle"
           role="dialog"
           :aria-label="t('components.dateTimeRange.title')"
           @keydown.esc.prevent="closePanel"
         >
-          <p class="m-0 mb-3 text-sm font-semibold text-foreground">{{ t('components.dateTimeRange.title') }}</p>
+          <p class="m-0 mb-3 text-body-strong text-foreground">{{ t('components.dateTimeRange.title') }}</p>
 
           <div class="grid grid-cols-2 gap-4 max-md:grid-cols-1">
-            <div v-for="month in [viewMonth, addMonths(viewMonth, 1)]" :key="month.toISOString()" class="rounded-xl border border-border p-2">
+            <div v-for="month in [viewMonth, addMonths(viewMonth, 1)]" :key="month.toISOString()" class="rounded-overlay border border-stroke p-2">
               <div class="mb-1 flex items-center justify-between px-1">
-                <button v-if="month === viewMonth" type="button" class="rounded-lg p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" :aria-label="t('components.dateTimeRange.previousMonth')" @click="viewMonth = addMonths(viewMonth, -1)">
+                <button v-if="month === viewMonth" type="button" class="grid size-control place-items-center rounded-control text-secondary-foreground transition-colors hover:bg-hover hover:text-foreground" :class="focusRing" :aria-label="t('components.dateTimeRange.previousMonth')" @click="viewMonth = addMonths(viewMonth, -1)">
                   <ChevronLeft class="size-4" aria-hidden="true" />
                 </button>
-                <span v-else class="w-6" />
-                <span class="text-sm font-medium text-foreground">{{ monthFormatter.format(month) }}</span>
-                <button v-if="month !== viewMonth" type="button" class="rounded-lg p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" :aria-label="t('components.dateTimeRange.nextMonth')" @click="viewMonth = addMonths(viewMonth, 1)">
+                <span v-else class="w-7" />
+                <span class="text-body font-medium text-foreground">{{ monthFormatter.format(month) }}</span>
+                <button v-if="month !== viewMonth" type="button" class="grid size-control place-items-center rounded-control text-secondary-foreground transition-colors hover:bg-hover hover:text-foreground" :class="focusRing" :aria-label="t('components.dateTimeRange.nextMonth')" @click="viewMonth = addMonths(viewMonth, 1)">
                   <ChevronRight class="size-4" aria-hidden="true" />
                 </button>
-                <span v-else class="w-6" />
+                <span v-else class="w-7" />
               </div>
-              <div class="grid grid-cols-7 text-center text-[10px] text-muted-foreground">
+              <div class="grid grid-cols-7 text-center text-caption text-muted-foreground">
                 <span v-for="(label, index) in weekdayLabels" :key="index" class="py-1">{{ label }}</span>
               </div>
-              <div class="grid grid-cols-7 gap-0.5 text-center text-xs" @mouseleave="hoverDay = null">
+              <div class="grid grid-cols-7 gap-0.5 text-center text-caption" @mouseleave="hoverDay = null">
                 <template v-for="(cell, index) in monthCells(month)" :key="index">
                   <span v-if="!cell" class="py-1" />
                   <button
                     v-else
                     type="button"
-                    class="rounded-lg py-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                    class="h-control rounded-control transition-colors duration-fast"
                     :class="[
+                      focusRing,
+                      'focus-visible:ring-inset',
                       sameDay(cell, fromDraft) || sameDay(cell, toDraft) ? 'bg-primary font-semibold text-primary-foreground' : '',
-                      inRange(cell) && !sameDay(cell, fromDraft) && !sameDay(cell, toDraft) ? 'bg-brand-bg text-brand' : '',
-                      !sameDay(cell, fromDraft) && !sameDay(cell, toDraft) && !inRange(cell) ? 'text-foreground hover:bg-accent' : '',
+                      inRange(cell) && !sameDay(cell, fromDraft) && !sameDay(cell, toDraft) ? 'bg-accent-selected text-foreground' : '',
+                      !sameDay(cell, fromDraft) && !sameDay(cell, toDraft) && !inRange(cell) ? 'text-foreground hover:bg-hover' : '',
                     ]"
                     @mouseenter="hoverDay = cell"
                     @click="pickDay(cell)"
@@ -273,27 +278,27 @@ onBeforeUnmount(() => {
 
           <div class="mt-3 flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
             <div class="flex items-start gap-1.5">
-              <span class="mt-2 text-xs font-medium text-muted-foreground">{{ t('components.dateTimeRange.from') }}</span>
+              <span class="mt-2 text-caption font-medium text-muted-foreground">{{ t('components.dateTimeRange.from') }}</span>
               <TimeSegmentInput :model-value="timeNum('from', 'hour')" :min="0" :max="23" :label="t('components.dateTimeRange.hour')" @update:model-value="setTimeNum('from', 'hour', $event)" />
-              <span class="mt-2 text-xs text-muted-foreground">:</span>
+              <span class="mt-2 text-caption text-muted-foreground">:</span>
               <TimeSegmentInput :model-value="timeNum('from', 'minute')" :min="0" :max="59" :label="t('components.dateTimeRange.minute')" @update:model-value="setTimeNum('from', 'minute', $event)" />
-              <span class="mt-2 text-xs text-muted-foreground">:</span>
+              <span class="mt-2 text-caption text-muted-foreground">:</span>
               <TimeSegmentInput :model-value="timeNum('from', 'second')" :min="0" :max="59" :label="t('components.dateTimeRange.second')" @update:model-value="setTimeNum('from', 'second', $event)" />
             </div>
-            <span class="mt-2 text-sm text-muted-foreground" aria-hidden="true">–</span>
+            <span class="mt-2 text-body text-muted-foreground" aria-hidden="true">–</span>
             <div class="flex items-start gap-1.5">
-              <span class="mt-2 text-xs font-medium text-muted-foreground">{{ t('components.dateTimeRange.to') }}</span>
+              <span class="mt-2 text-caption font-medium text-muted-foreground">{{ t('components.dateTimeRange.to') }}</span>
               <TimeSegmentInput :model-value="timeNum('to', 'hour')" :min="0" :max="23" :label="t('components.dateTimeRange.hour')" @update:model-value="setTimeNum('to', 'hour', $event)" />
-              <span class="mt-2 text-xs text-muted-foreground">:</span>
+              <span class="mt-2 text-caption text-muted-foreground">:</span>
               <TimeSegmentInput :model-value="timeNum('to', 'minute')" :min="0" :max="59" :label="t('components.dateTimeRange.minute')" @update:model-value="setTimeNum('to', 'minute', $event)" />
-              <span class="mt-2 text-xs text-muted-foreground">:</span>
+              <span class="mt-2 text-caption text-muted-foreground">:</span>
               <TimeSegmentInput :model-value="timeNum('to', 'second')" :min="0" :max="59" :label="t('components.dateTimeRange.second')" @update:model-value="setTimeNum('to', 'second', $event)" />
             </div>
           </div>
-          <div class="mt-3 flex flex-wrap gap-2 border-t border-border pt-3">
-            <button type="button" class="rounded-lg border border-border px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" @click="applyPreset(24)">{{ t('components.dateTimeRange.last24h') }}</button>
-            <button type="button" class="rounded-lg border border-border px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" @click="applyPreset(168)">{{ t('components.dateTimeRange.last7d') }}</button>
-            <button type="button" class="rounded-lg border border-border px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" @click="applyPreset(720)">{{ t('components.dateTimeRange.last30d') }}</button>
+          <div class="mt-3 flex flex-wrap gap-2 border-t border-divider pt-3">
+            <button type="button" class="inline-flex h-control-sm items-center surface-control-line px-3 text-caption text-secondary-foreground transition-colors hover:bg-hover hover:text-foreground" @click="applyPreset(24)">{{ t('components.dateTimeRange.last24h') }}</button>
+            <button type="button" class="inline-flex h-control-sm items-center surface-control-line px-3 text-caption text-secondary-foreground transition-colors hover:bg-hover hover:text-foreground" @click="applyPreset(168)">{{ t('components.dateTimeRange.last7d') }}</button>
+            <button type="button" class="inline-flex h-control-sm items-center surface-control-line px-3 text-caption text-secondary-foreground transition-colors hover:bg-hover hover:text-foreground" @click="applyPreset(720)">{{ t('components.dateTimeRange.last30d') }}</button>
           </div>
           <div class="mt-4 flex justify-end gap-2">
             <Button size="sm" variant="secondary" @click="cancel">{{ t('common.cancel') }}</Button>

@@ -31,7 +31,7 @@
 ## 3. 运行时设置读取与写入
 
 - `SET-RUN-001`：前置为认证用户；`GET /api/v1/settings/runtime` 必须返回监听地址、数据库路径、数据根、容器上报间隔、会话期限、语言、日志级别、远程超时、协调追踪、品牌、证书、Panel TLS 选择状态、Agent 投递分组和 Tailscale 分组（只写密钥状态、标签与容器实际态，见 `SET-RUN-018`），但绝不返回 JWT secret，仅返回 `jwtSecretConfigured`；Tailscale 认证密钥同样绝不返回，仅返回 `authKeyConfigured`。指标保留天数、指标采集间隔与清理计划不属于运行时设置，改由指标设施管理（`FAC-MET-001/006`、`SET-RUN-021`）。
-- `SET-RUN-002`：前置为未认证用户；仅 `GET /api/v1/settings/public-branding` 可公开，且只返回登录标题和副标题；不得泄露路径、邮箱、证书 ID、保留策略或其他运行时配置。
+- `SET-RUN-002`：前置为未认证用户；仅 `GET /api/v1/settings/public-branding` 与 `GET /api/v1/settings/public-appearance` 可公开，且品牌接口只返回登录标题和副标题、外观接口只返回主题/Mica/强调色/背景元数据和 `kind='image'` 时的模糊缩略图（`SET-APP-007`）；不得泄露路径、邮箱、证书 ID、保留策略、背景原图或资产 id 或其他运行时配置。
 - `SET-RUN-003`：前置为旧库缺少设置行；启动必须用配置文件、环境变量和内置默认值幂等补齐空值；已持久化值优先于基础配置，重复启动不得漂移。
 - `SET-RUN-004`：前置为配置 JWT secret 为空或仍是公开默认常量；首次确保默认设置时必须生成随机 32 字节 secret 并持久化；配置显式提供的非默认 secret 必须原样保留。
 - `SET-RUN-005`：`PUT /api/v1/settings/runtime` 成功时必须以整套有效候选进行校验后持久化，并更新内存快照；失败时不得出现数据库已改、内存未改或部分字段已生效的状态。
@@ -52,7 +52,24 @@
 - `SET-RUN-020`：`POST /api/v1/settings/tailscale/apply` 重新生成 `<dataRoot>/tailscale/config.json` 并请求 panel-init 重新收敛，返回 202 与当前容器实际态；未经 panel-init 监管（例如 `go run ./cmd/panel`）时返回 `tailscale_container_unavailable`，期望态写入失败返回 `tailscale_config_write_failed`。设置持久化与容器收敛是两步：收敛失败只反映在随后读取的 `container.lastError` 中，不得回滚已保存设置，也不得把受理当成本地节点已登录。详见 `TS-SET-004/005`。
 - `SET-RUN-021`：`GET/PUT /api/v1/settings/runtime` 与设置页「运行时」分区不再包含 `metricsRetentionDays`、`metricsCollectionIntervalSeconds`、`cleanupSchedule`；这三项改由指标设施配置管理（`FAC-MET-001/003/005/006`），设置页与前端类型、Mock、校验、dirty/保存负载都必须移除它们。`runtime_settings` 旧键保留不删除，仅供设施首次播种；旧客户端仍提交这三项时按未知字段忽略，不得写回运行时设置或改变设施配置。`containerReportIntervalSeconds` 保留并继续按 `SET-RUN-014` 热更新。
 
-## 4. Panel HTTPS 设置与持久化安全
+## 4. 外观设置（主题 / Mica / 强调色 / 背景图）
+
+面板是单管理员全局面板：外观只有一份全局设置，所有浏览器与设备共享，最后写入生效，不做“每用户偏好”或 revision 乐观锁。真源是 AppDB `appearance_settings` 单行（`id='appearance'`），前端 localStorage 只作首屏缓存（`SET-APP-012`）。
+
+- `SET-APP-001`：前置为认证用户；`GET /api/v1/settings/appearance` 必须返回与前端 `web/src/types/appearance.ts` 完全一致的字段：`{themeMode,mica,accent,background:{kind,presetId,assetId,revision,hasImage},thumbDataUrl,initialized,updatedAt}`。`themeMode` 只能是 `system|light|dark`，`accent` 只能取 9 个预设，`kind` 只能是 `none|preset|image`，`presetId` 在 `kind='preset'` 时是 `aurora|dusk|mist|slate` 之一否则为 null，`assetId` 在 `hasImage=false` 时为 null，`updatedAt` 为 UTC RFC3339(Nano) 字符串。**`hasImage=true` 时响应必须总是带 `thumbDataUrl`（`data:image/jpeg;base64,...`，约 2–6KB），与当前 `kind` 是 none/preset/image 无关**；响应绝不包含背景原图字节或服务端文件路径。
+- `SET-APP-002`：`PUT /api/v1/settings/appearance` 以整套有效候选整体替换主题/Mica/强调色，并可选更新背景；请求体为 `{themeMode,mica,accent,background?}`。`background` 省略时**必须保留当前背景（包括已上传图片资产与缩略图），不得删除任何文件**；成功返回完整 `Appearance` 并置 `initialized=true`、刷新 `updatedAt`。校验失败必须零写入（主题/Mica/强调色/背景均不改变），单管理员场景下最后一次成功写入生效。
+- `SET-APP-003`：PUT 与上传接口必须发射稳定错误码：非法 `themeMode` 返回 `invalid_theme_mode`；非法 `accent` 返回 `invalid_appearance_accent`；非法 `kind`/预设 id 返回 `invalid_background_kind`；`kind='image'` 但没有可复用资产、或上传请求缺少 `file` 字段时返回 `background_required`。任一错误不得写库或改动既有背景资产。
+- `SET-APP-004`：`POST /api/v1/settings/appearance/background` 使用 multipart 字段 `file`。必须显式用 `http.MaxBytesReader` 限制请求体为 **8 MiB + 1 MiB** 余量（不依赖全局 10 MiB JSON 上限）、用小内存 `ParseMultipartForm` 并 `defer RemoveAll`，再用 `io.LimitReader(limit+1)` 判定文件本身是否超过 8 MiB；超过返回 413 `background_too_large`。**一律忽略用户文件名**，目录名/缓存键由服务端按内容哈希生成；损坏或非 multipart 请求返回稳定 4xx。
+- `SET-APP-005`：图片只接受真实 **JPEG/PNG**（以 `http.DetectContentType` 魔数判断，不看扩展名/客户端 Content-Type）；GIF/WebP 必须拒绝并返回 `background_unsupported_type`（等价 APNG 按 PNG 静态首帧处理）。JPEG 以 quality 87 重新编码（剥离 EXIF 等元数据），PNG 重新编码并保留透明通道；最大边超过 2560 时用标准库盒子采样等比缩小到 2560 内，其余尺寸原样保留。服务端不解析 EXIF 方向：浏览器上传前用 canvas 归一化，直接调 API 的带方向 JPEG 按像素原样处理。
+- `SET-APP-006`：解码前必须先用 `image.DecodeConfig` 读取尺寸并拒绝 >4096×4096 或 >12MP 的图片（返回 `background_dimensions_exceeded`），再完整解码；无法解码/伪造魔数/损坏文件返回 `background_invalid_image`。必须生成 **160×90（cover）JPEG quality 70** 缩略图作为 Mica 底图，缩略图超过 64KB 或归一化 master 超过 8 MiB 时失败且不写 DB；上传失败不得留下资产目录或改变旧背景（原子替换）。
+- `SET-APP-007`：`GET /api/v1/settings/public-appearance` 必须 `skipAuth`（登录页可用，注册于公开路由但仍计入主 API 路由清单），只返回 `{themeMode,mica,accent,background:{kind,presetId,hasImage},thumbDataUrl}`；`thumbDataUrl` **仅在 `kind='image'` 时返回**，且始终是模糊缩略图。该接口绝不返回背景原图、`assetId`、`revision`、文件路径或其它运行时配置；原图只能经认证的 background/content 接口读取。
+- `SET-APP-008`：背景资产存放于 `<dataRoot>/appearance/<assetId>/`（`assetId` 为归一化 master 的 SHA-256 十六进制前缀，目录 0700、文件 0644），文件名固定为 `master.jpg|master.png` 与 `thumb.jpg`；写入必须复用 `filestorage.WriteAtomic`（临时文件 + rename），顺序固定为“写新资产目录 → 提交 DB → 删除旧资产目录”。上传/删除都要递增 `background_revision`（用于缓存与并发提示），删除后旧目录必须被移除。
+- `SET-APP-009`：`DELETE /api/v1/settings/appearance/background` 删除背景资产并恢复 `kind='none'`、`hasImage=false`、`presetId=null`，保留主题/Mica/强调色；重复删除幂等返回当前外观。`GET /api/v1/settings/appearance/background/content?variant=full|thumb` 必须返回 `Content-Type`、`ETag`（按 assetId+variant）、`Cache-Control: private, max-age=31536000, immutable`、`Content-Disposition: inline`；未设置背景返回 404，非法 variant 返回 400。`GET/PUT/DELETE` 与上传/删除之外的 `kind=none|preset` 切换必须保留已上传资产，只有 DELETE 才真正删除文件与 `hasImage`。
+- `SET-APP-010`：启动时必须幂等 seed 默认行（`themeMode=system`、`mica=true`、`accent=blue`、`background=preset/mist`、`initialized=false`），并把从未初始化过（`initialized=0`、无上传资产、背景 none）的旧行升级为默认 `mist` 预设；用户显式选择 none 后 `initialized=1`，不得覆盖。旧 alpha 库由 AutoMigrate 自动建表，不需要额外迁移工具。启动与定时任务必须清理 `<dataRoot>/appearance/` 下不再被当前行引用且超过保留期（24 小时）的孤儿目录；DB 记录指向缺失/不可读文件时必须降级为“无背景”（清空资产元数据、`kind=image` 时回落 none、revision 递增）并记录告警，不得让读取接口失败或阻塞启动。
+- `SET-APP-011`：默认全量备份归档覆盖整个 `dataRoot`，因此必须自动包含 `<dataRoot>/appearance/` 背景资产目录（`BKP-API-005`），恢复按整目录替换；不需要新增 manifest 条目或备份代码改动。备份/恢复合同必须与“外观是全局唯一设置 + 文件在 dataRoot 内”的持久化模型保持一致。
+- `SET-APP-012`：外观是单管理员全局面板设置（无每用户/多租户分支）：多个浏览器/设备共享同一 `appearance_settings` 行，最后写入生效；并发上传/删除必须由服务端互斥串行化，避免两个请求交叉删除对方资产目录。`initialized=false` 表示从未显式保存过外观，仅用于前端首次登录时把旧 localStorage 偏好（lighthouse→teal、ocean→blue、旧 mode）一次性 PUT 迁移；迁移成功后服务器置 `initialized=true`，已初始化安装不得被本地缓存覆盖。localStorage `panel.appearance.cache` 只是首屏缓存，服务器始终为真源。
+
+## 5. Panel HTTPS 设置与持久化安全
 
 - `SET-TLS-001`：前置为 TLS certificate ID 为空；Panel 必须选择内置 `panel-tls` 资产并同步到 `<dataRoot>/tls/panel.crt|panel.key`，Agent mTLS 资产不得被当作监听证书。
 - `SET-TLS-002`：前置为选择自定义资产；资产必须存在、类型为 TLS certificate、包含可读取且匹配的证书/私钥、当前有效、具备 ServerAuth（若声明 EKU）、链完整，并使用 RSA 2048+ 或 ECDSA P-256/P-384/P-521 与 SHA-2 签名；否则返回 `invalid_panel_tls_certificate`。
@@ -62,14 +79,14 @@
 - `SET-TLS-006`：同步成功必须清空进程证书缓存，使下一条新 TLS 连接加载新对；固定文件只是监听缓存，数据库 key asset 才是真源。
 - `SET-TLS-007`：固定证书缺失、不完整、无法解析或不符合监听基线时，HTTPS 监听必须失败关闭；不得自动生成未登记证书或退回明文 HTTP。
 
-## 5. 服务器变量定义
+## 6. 服务器变量定义
 
 - `SET-VAR-001`：认证用户调用 `GET /api/v1/settings/server-variables` 时，未配置返回空数组；已配置按保存顺序返回 `{name,key,required}`，展示名不作为持久化键。
 - `SET-VAR-002`：`PUT /api/v1/settings/server-variables` 必须将整套定义作为一个稳定 JSON 值替换；成功响应与随后读取结果一致，空数组表示明确清空。
 - `SET-VAR-003`：每个展示名裁剪后必须非空；key 必须匹配 `[A-Za-z_][A-Za-z0-9_]*` 且在同一集合中唯一；失败返回对应稳定错误并保留旧集合。
 - `SET-VAR-004`：定义更新不得隐式改写已有服务器变量值；服务器创建/编辑如何校验 required 由服务器域合同约束。
 
-## 6. 系统版本与更新检查
+## 7. 系统版本与更新检查
 
 - `SYS-VER-001`：认证用户调用 `GET /api/v1/system/version` 时，必须返回构建注入的规范化 `version`、`channel`、可选 commit/repository、缓存的 latestVersion、updateAvailable、checkedAt和可选 checkError；接口只读，不提供下载或安装。
 - `SYS-VER-002`：仅 `channel=release`、repository 非空且当前版本为三段数字核心版本（可有 `v` 和预发布后缀）时启动更新检查；dev、无效通道、`dev` 版本或未注入仓库不得发外部请求。
@@ -78,9 +95,9 @@
 - `SYS-VER-005`：检查成功时按数字核心版本比较，只有远端更高才设置 `updateAvailable=true`；预发布后缀不应把相同核心误判为更新。
 - `SYS-VER-006`：网络、HTTP、JSON或 release 内容失败时，必须更新 checkedAt 和安全的 checkError，清空 latestVersion并置 updateAvailable=false；失败不得使版本接口不可用或终止 Panel。
 
-## 7. 权限、幂等与验证证据
+## 8. 权限、幂等与验证证据
 
-- `ID-EVD-001`：除登录、会话和公开品牌外，上述 API 未认证均返回 401；强制改密状态的权限矩阵必须由后端集成测试覆盖。
+- `ID-EVD-001`：除登录、会话、公开品牌与公开外观外，上述 API 未认证均返回 401；强制改密状态的权限矩阵必须由后端集成测试覆盖。
 - `ID-EVD-002`：账户、nonce、JWT secret和 runtime settings 位于 AppDB；进程重启后账户、设置和主动注销效果必须保持，登录失败计数可重置。
 - `ID-EVD-003`：账户修改、JWT secret 更新和设置更新的失败用例必须验证旧值仍可读取；成功用例必须验证旧 token 失效或继续有效的精确边界。
-- `ID-EVD-004`：路由验收必须覆盖 `POST /auth/login|logout|account|jwt-secret`、`GET /auth/session`、`GET/PUT /settings/runtime`（含 `tailscale` 分组）、`POST /settings/tailscale/apply`、`GET/PUT /settings/server-variables`、`GET /settings/public-branding` 和 `GET /system/version`，且与路由清单及前端 typed client 一致。
+- `ID-EVD-004`：路由验收必须覆盖 `POST /auth/login|logout|account|jwt-secret`、`GET /auth/session`、`GET/PUT /settings/runtime`（含 `tailscale` 分组）、`POST /settings/tailscale/apply`、`GET/PUT /settings/server-variables`、`GET/PUT /settings/appearance`、`POST/DELETE /settings/appearance/background`、`GET /settings/appearance/background/content`、`GET /settings/public-branding`、`GET /settings/public-appearance` 和 `GET /system/version`，且与路由清单（`routes_manifest_test.go` 192 条基线）及前端 typed client 一致。

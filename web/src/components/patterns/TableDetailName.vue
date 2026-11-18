@@ -15,7 +15,7 @@ const emit = defineEmits<{ click: [] }>();
 <template>
   <button
     type="button"
-    class="motion-control max-w-full truncate rounded-md text-left text-sm font-semibold text-foreground hover:text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-offset-2 focus-visible:ring-offset-card"
+    class="max-w-full truncate rounded-control text-left text-body-strong text-foreground transition-colors duration-fast hover:text-accent-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     :aria-label="label"
     :title="name"
     @click.stop="emit('click')"

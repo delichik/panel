@@ -24,7 +24,7 @@ describe('new frontend foundation', () => {
   it('keeps desktop shell scrolling constrained to internal regions', () => {
     expect(mainStyles).toMatch(/body\s*\{[^}]*overflow:\s*hidden;/s);
     expect(shellSource).toContain('lg:h-dvh lg:min-h-0 lg:overflow-hidden');
-    expect(shellSource).toContain('lg:grid-rows-[52px_minmax(0,1fr)]');
+    expect(shellSource).toContain('lg:grid-rows-shell');
     expect(shellSource).toContain('overflow-hidden');
   });
 
@@ -44,7 +44,7 @@ describe('motion foundation', () => {
   it('lets entrance animations release hover and press transforms', () => {
     // fill-mode: both 会在动画结束后继续压制 hover/active 的 transform，
     // 必须使用 backwards，让元素回到自身计算样式。
-    expect(mainStyles).toContain('panel-motion-enter var(--panel-motion-duration-slow) var(--panel-motion-ease-emphasized) backwards');
+    expect(mainStyles).toContain('animation: panel-motion-enter var(--panel-motion-duration-normal) var(--panel-motion-ease-enter) backwards');
     expect(mainStyles).not.toMatch(/panel-motion-enter[^;]*\bboth\b/);
     expect(mainStyles).toContain('.motion-control:not(:disabled):hover');
   });
@@ -58,7 +58,8 @@ describe('motion foundation', () => {
 
   it('disables the new motion in the reduced-motion downgrade', () => {
     expect(mainStyles).toMatch(/\.detail-swap-enter-from,/);
-    expect(mainStyles).toMatch(/\.motion-skeleton,\s*\.motion-progress\s*\{\s*animation: none !important;/);
+    expect(mainStyles).toMatch(/\.motion-skeleton,[\s\S]*?\.motion-progress[\s\S]*?\{\s*animation: none !important;/);
+    expect(mainStyles).toMatch(/\.winui-progress-ring,[\s\S]*?\{\s*animation: none !important;/);
   });
 
   it('keeps custom hover feedback off touch devices and enables fast taps', () => {

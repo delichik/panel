@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, useAttrs } from 'vue';
+import { disabledControl, disabledControlColors, focusRing } from './states';
 import { cn } from './cn';
 
 const props = withDefaults(defineProps<{
@@ -16,11 +17,16 @@ const props = withDefaults(defineProps<{
 
 const attrs = useAttrs();
 const classes = computed(() => cn(
-  'motion-icon-control inline-grid shrink-0 place-items-center rounded-xl border transition-[background-color,border-color,color,box-shadow,transform,opacity] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:ring-offset-2 focus-visible:ring-offset-card disabled:pointer-events-none disabled:opacity-45 [&_svg]:size-4',
-  props.size === 'sm' ? 'size-8' : 'size-9',
-  props.variant === 'ghost' && 'border-transparent text-secondary-foreground hover:bg-accent hover:text-foreground',
-  props.variant === 'secondary' && 'border-border-strong bg-card text-foreground hover:bg-accent',
-  props.variant === 'danger' && 'border-danger-border bg-danger-bg text-danger hover:bg-danger-bg/80',
+  // 图标按钮 32(28)px 命中区，4px 圆角；hover/press 仅填充变化；图标 16。
+  'inline-grid shrink-0 place-items-center rounded-control border transition-control duration-fast ease-move active:duration-fade',
+  focusRing,
+  disabledControl,
+  'disabled:opacity-100 [&_svg]:size-4',
+  props.size === 'sm' ? 'size-control-sm' : 'size-control',
+  props.variant === 'ghost' && 'border-transparent text-secondary-foreground hover:bg-hover hover:text-foreground active:bg-pressed',
+  props.variant === 'secondary' && 'border-stroke bg-control text-foreground hover:bg-hover active:bg-pressed',
+  props.variant === 'danger' && 'border-danger-border bg-danger-bg text-danger hover:bg-danger-bg/80 active:bg-danger-bg/70',
+  props.disabled && disabledControlColors,
   attrs.class as string,
 ));
 </script>

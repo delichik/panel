@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { RefreshCcw } from '@lucide/vue';
+import { RefreshCcw } from '@/icons';
 import { networkProbeFacilityApi } from '@/api/networkProbe';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
@@ -15,8 +15,10 @@ import type { ServerDto } from '@/types/servers';
 import { formatDateTime } from '@/utils/datetime';
 import { probeHistorySeries, probeAggregateOutcomeStatusKey, probeAggregateOutcomeTone, probeTargetOutcome } from '@/utils/networkProbe';
 import { createLatestRequestGuard, isAbortError } from '@/views/_shared/requestState';
+import { summarizeProbeOverview, type ProbeOverviewSummary } from './probeSummary';
 
 const props = defineProps<{ server: ServerDto; active?: boolean }>();
+const emit = defineEmits<{ summary: [value: ProbeOverviewSummary | null] }>();
 const { t } = useI18n();
 const autoRefresh = useAutoRefresh();
 
@@ -47,6 +49,7 @@ async function load() {
     const nextMatrix = await networkProbeFacilityApi.targets({ signal: next.signal }, true);
     if (!guard.isCurrent(requestId)) return;
     matrix.value = nextMatrix;
+    emit('summary', summarizeProbeOverview(target.value, t));
   } catch (err) {
     if (isAbortError(err) || !guard.isCurrent(requestId)) return;
     // 失败保留上次成功数据；首次加载失败时显示明确错误空态。
@@ -61,6 +64,7 @@ async function load() {
 
 watch(() => props.server.id, () => {
   matrix.value = null;
+  emit('summary', null);
   void load();
 });
 
@@ -78,11 +82,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="grid min-w-0 gap-3 rounded-2xl border border-border bg-card p-4" data-testid="server-probe-overview">
+  <section class="grid min-w-0 gap-3" data-testid="server-probe-overview">
     <div class="flex flex-wrap items-start justify-between gap-2">
       <div class="min-w-0">
-        <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.probe.historyTitle') }}</h3>
-        <p class="m-0 mt-1 text-xs leading-5 text-muted-foreground">{{ t('serversPage.probe.sourceHint') }}</p>
+        <h3 class="m-0 text-body-strong font-semibold text-foreground">{{ t('serversPage.probe.historyTitle') }}</h3>
+        <p class="m-0 mt-1 text-caption leading-5 text-muted-foreground">{{ t('serversPage.probe.sourceHint') }}</p>
       </div>
       <div class="flex flex-wrap items-center gap-2">
         <DataRefreshControl />
@@ -97,7 +101,7 @@ onBeforeUnmount(() => {
       </template>
     </EmptyState>
     <template v-else>
-      <div class="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+      <div class="flex flex-wrap items-center justify-between gap-2 text-caption text-muted-foreground">
         <span class="inline-flex flex-wrap items-center gap-2">
           <Badge :tone="probeAggregateOutcomeTone(outcome)">{{ t(probeAggregateOutcomeStatusKey(outcome)) }}</Badge>
           <span>{{ t('serversPage.probe.lastSample') }}: {{ formatDateTime(target?.sampledAt, t('common.never')) }}</span>

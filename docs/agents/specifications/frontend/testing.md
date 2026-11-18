@@ -18,10 +18,13 @@ Vitest 缓存通过 `vitest.unit.config.ts` 的 `cacheDir` 写入仓库 `tmp/vit
 
 ## 单元测试组织
 
-- 测试文件 `*.test.ts` **就近放置**在被测对象旁（如 `web/src/components/shell/navModel.test.ts`、`web/src/components/templates/TableDetailLayout.test.ts`、`web/src/design/useThemeMode.test.ts`），不建平行的 `tests/` 目录镜像。
+- 测试文件 `*.test.ts` **就近放置**在被测对象旁（如 `web/src/components/shell/navModel.test.ts`、`web/src/components/templates/TableDetailLayout.test.ts`、`web/src/design/theme.test.ts`），不建平行的 `tests/` 目录镜像。
 - 需要 DOM 的组件测试在文件首行标注 `// @vitest-environment jsdom`，用 `@vue/test-utils` 的 `mount` 断言结构区域、插槽渲染与事件（参考 `MasterDetailLayout.test.ts` / `TableDetailLayout.test.ts` 的断言方式：结构 class、插槽内容就位、缺省插槽不渲染、props/emit 行为）；页面级测试按 `views/servers/index.test.ts` 的方式 mock API 模块并挂载真实路由。
 - 纯逻辑优先抽成纯函数模块再测（如 `navModel.ts` 的导航可见性/高亮模型），避免为测逻辑而挂载组件。
-- 主题与视觉数值的测试断言 token 来源正确（经 `main.css` / `theme.ts`），而不是断言具体色值——色值以冻结规格为准，测试不应成为改数值的第二处修改点。
+- 主题与视觉数值的测试断言 token 来源正确（经 `main.css` / `design/appearance.ts`），而不是断言具体色值——色值以冻结规格为准，测试不应成为改数值的第二处修改点。
+- `styles/tokenGuard.test.ts` 守卫“统一 CSS 属性”：扫描 `.vue/.ts`（跳过测试、Mock 与 token 定义文件），发现裸字体尺寸、任意 px/rem 尺寸、任意圆角/阴影/过渡/`bg-[var()]` 等即失败；结构性视口表达式（`calc/min/max/dvh/vw/vh/var`）允许。新增可复用样式应先落到 `main.css` 的 `@utility` 层。
+- `styles/tokensContrast.test.ts` 守卫 WinUI token 的 WCAG AA：主/次文本 vs 背景/卡片/控件、9 个强调色的按钮前景与链接色。
+- Mica、`backdrop-filter`、过渡节奏在 jsdom 中不可验证：单元测试只断言 `data-theme/data-accent/data-background/data-mica/data-preset`、CSS token 存在、外观缓存读写与失败回滚；视觉/动效证据用 `tmp/` 下的截图或录屏人工评审（三档桌面宽度 + 一档窄屏），恢复 Playwright 视觉回归时再纳入 `task test:web`。
 
 ## 页面族重写时的测试要求
 

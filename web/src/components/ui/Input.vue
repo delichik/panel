@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, useAttrs } from 'vue';
+import { fieldDisabled, fieldFocus } from './states';
 import { cn } from './cn';
 
 defineOptions({ inheritAttrs: false });
@@ -7,8 +8,11 @@ defineProps<{ modelValue?: string | number; invalid?: boolean }>();
 defineEmits<{ 'update:modelValue': [value: string] }>();
 
 const attrs = useAttrs();
+// WinUI TextBox：Body 14、32px、4px 圆角、填充底 + 1px 描边；聚焦保留 1px 描边并出现 2px 底部强调线。
 const classes = computed(() => cn(
-  'motion-field h-9 w-full rounded-xl border bg-card px-3 text-sm text-foreground shadow-sm transition-[background-color,border-color,box-shadow] placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:ring-offset-2 focus-visible:ring-offset-card disabled:cursor-not-allowed disabled:opacity-45',
+  'h-control w-full min-w-field surface-control px-3 text-body text-foreground transition-state duration-fast ease-move placeholder:text-muted-foreground hover:border-border-strong',
+  fieldFocus,
+  fieldDisabled,
   attrs.class as string,
 ));
 </script>
@@ -18,7 +22,7 @@ const classes = computed(() => cn(
     v-bind="{ ...attrs, class: undefined }"
     :value="modelValue"
     :aria-invalid="invalid || undefined"
-    :class="[classes, invalid ? 'border-danger-border' : 'border-input focus-visible:border-ring']"
+    :class="[classes, invalid ? 'border-danger-border focus:border-danger-border focus:focus-danger-underline' : undefined]"
     @input="$emit('update:modelValue', ($event.target as HTMLInputElement).value)"
   />
 </template>

@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { Check, ChevronDown } from '@lucide/vue';
+import { Check, ChevronDown } from '@/icons';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useAttrs, useId, watch } from 'vue';
+import { focusWithoutScroll } from '@/utils/focus';
+import { fieldDisabled, fieldFocus, focusRing, zIndex } from './states';
 import { cn } from './cn';
 
 defineOptions({ inheritAttrs: false });
@@ -12,6 +14,8 @@ const props = defineProps<{
   options: SelectOption[];
   placeholder?: string;
   disabled?: boolean;
+  /** 无效态：危险描边 + aria-invalid。外部也可直接传 aria-invalid（FormField 槽属性）。 */
+  invalid?: boolean;
   /** 启用下拉内搜索。父级可监听 search 事件做远程搜索，把结果合并回 options。 */
   searchable?: boolean;
   searchPlaceholder?: string;
@@ -38,6 +42,13 @@ const id = useId();
 
 const selectedOption = computed(() => props.options.find((option) => option.value === props.modelValue));
 const selectedLabel = computed(() => selectedOption.value?.label ?? props.placeholder ?? '');
+/** 无效态：显式 invalid prop 与外部 aria-invalid 取并集，避免 FormField 槽属性与 prop 重复冲突。 */
+const isInvalid = computed(() => (
+  props.invalid
+  || attrs['aria-invalid'] === true
+  || attrs['aria-invalid'] === 'true'
+  || attrs['aria-invalid'] === ''
+));
 const normalizedQuery = computed(() => query.value.trim().toLowerCase());
 /**
  * 搜索只过滤下拉可见项，不影响 selectedLabel：即使当前值不在过滤结果里，
@@ -54,16 +65,19 @@ const activeOption = computed(() => visibleOptions.value[activeIndex.value]);
 const activeOptionId = computed(() => (open.value && activeOption.value ? `${id}-option-${activeIndex.value}` : undefined));
 const listboxStyle = ref<Record<string, string>>({});
 
-const rootClasses = computed(() => cn('relative w-full min-w-0', attrs.class as string));
+const rootClasses = computed(() => cn('relative w-full min-w-field', attrs.class as string));
 const buttonClasses = computed(() => cn(
-  'motion-field flex h-9 w-full min-w-0 items-center justify-between gap-2 rounded-xl border border-input bg-card px-3 text-left text-sm text-foreground shadow-sm transition-[background-color,border-color,box-shadow]',
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:ring-offset-2 focus-visible:ring-offset-card',
-  'disabled:cursor-not-allowed disabled:opacity-45',
-  open.value && 'border-border-strong bg-popover panel-shadow-overlay',
+  // WinUI ComboBox：Body 14、32px、4px 圆角、填充底 + 1px 描边；打开时切到浮层表面。
+  'flex h-control w-full min-w-0 items-center justify-between gap-2 surface-control px-3 text-left text-body text-foreground transition-state duration-fast ease-move',
+  'hover:border-border-strong hover:bg-hover active:bg-pressed',
+  focusRing,
+  fieldDisabled,
+  isInvalid.value && 'border-danger-border hover:border-danger-border focus-visible:ring-danger',
+  open.value && 'border-border-strong bg-flyout',
 ));
 const searchInputClasses = cn(
-  'motion-field h-9 w-full rounded-xl border border-input bg-card px-3 text-sm text-foreground shadow-sm placeholder:text-muted-foreground',
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:ring-offset-2 focus-visible:ring-offset-card',
+  'h-control w-full surface-control px-3 text-body text-foreground transition-state duration-fast placeholder:text-muted-foreground hover:border-border-strong',
+  fieldFocus,
 );
 
 const hiddenSelectAttrs = computed(() => ({
@@ -76,9 +90,10 @@ const hiddenSelectAttrs = computed(() => ({
  * `inheritAttrs: false` keeps the visual markup clean, but ARIA attributes
  * passed by pages (aria-label / aria-invalid / aria-describedby) must still
  * reach the combobox control instead of being dropped.
+ * aria-invalid 统一由 isInvalid 计算后显式绑定，避免 v-bind 与 prop 双写冲突。
  */
 const comboboxAriaAttrs = computed(() => Object.fromEntries(
-  Object.entries(attrs).filter(([key, value]) => key.startsWith('aria-') && value !== undefined && value !== false),
+  Object.entries(attrs).filter(([key, value]) => key.startsWith('aria-') && key !== 'aria-invalid' && value !== undefined && value !== false),
 ));
 
 function firstEnabledIndex() {
@@ -112,12 +127,21 @@ function setActiveIndex(nextIndex: number) {
 function scrollActiveIntoView() {
   nextTick(() => {
     if (activeIndex.value < 0) return;
+    const list = listbox.value;
     const item = document.getElementById(`${id}-option-${activeIndex.value}`);
-    if (typeof item?.scrollIntoView === 'function') item.scrollIntoView({ block: 'nearest' });
+    if (!list || !item) return;
+    // Scroll only the listbox itself. scrollIntoView() would also walk up to the
+    // document and can shift the shell when the popup is still being positioned.
+    const itemTop = item.offsetTop;
+    const itemBottom = itemTop + item.offsetHeight;
+    const viewTop = list.scrollTop;
+    const viewBottom = viewTop + list.clientHeight;
+    if (itemTop < viewTop) list.scrollTop = itemTop;
+    else if (itemBottom > viewBottom) list.scrollTop = itemBottom - list.clientHeight;
   });
 }
 
-function openList() {
+async function openList() {
   if (isDisabled.value) return;
   // 非搜索模式下没有任何选项时保持现状（不展开空面板）；搜索模式下允许展开
   // 面板以便用户输入关键词触发远程搜索。
@@ -125,18 +149,21 @@ function openList() {
   open.value = true;
   query.value = '';
   activeIndex.value = currentOrFirstEnabledIndex();
+  await nextTick();
+  // Fix the popup position before focusing/scrolling anything: while it is still
+  // in normal flow the browser can scroll the document to reveal the focused
+  // element, which leaves the whole shell shifted up after closing the list.
+  updateListboxPosition();
+  await nextTick();
   scrollActiveIntoView();
-  nextTick(() => {
-    updateListboxPosition();
-    if (props.searchable) searchInput.value?.focus();
-  });
+  if (props.searchable) focusWithoutScroll(searchInput.value);
 }
 
 function closeList({ restoreFocus = false } = {}) {
   open.value = false;
   activeIndex.value = -1;
   query.value = '';
-  if (restoreFocus) button.value?.focus();
+  if (restoreFocus) focusWithoutScroll(button.value);
 }
 
 function toggleList() {
@@ -327,6 +354,7 @@ onBeforeUnmount(() => {
       :aria-controls="`${id}-listbox`"
       :aria-expanded="open"
       :aria-activedescendant="activeOptionId"
+      :aria-invalid="isInvalid ? 'true' : undefined"
       :disabled="isDisabled"
       :class="buttonClasses"
       @click="toggleList"
@@ -335,7 +363,7 @@ onBeforeUnmount(() => {
       <span class="min-w-0 flex-1 truncate" :class="selectedOption ? 'text-foreground' : 'text-muted-foreground'">
         {{ selectedLabel }}
       </span>
-      <ChevronDown class="size-4 shrink-0 text-muted-foreground transition-transform duration-150 ease-out" :class="open ? 'rotate-180' : undefined" aria-hidden="true" />
+      <ChevronDown class="size-4 shrink-0 text-muted-foreground transition-transform duration-fast ease-enter" :class="open ? 'rotate-180' : undefined" aria-hidden="true" />
     </button>
 
     <Teleport to="body">
@@ -344,12 +372,13 @@ onBeforeUnmount(() => {
           v-if="open"
           :id="`${id}-listbox`"
           ref="listbox"
-          class="panel-shadow-overlay z-50 overflow-y-auto overflow-x-hidden rounded-xl border border-border bg-popover p-1 text-popover-foreground"
+          class="overflow-y-auto overflow-x-hidden surface-flyout p-1 text-popover-foreground backdrop-blur-flyout"
+          :class="zIndex.flyout"
           :style="listboxStyle"
           role="listbox"
           :aria-labelledby="attrs.id as string | undefined"
         >
-          <div v-if="searchable" class="sticky top-0 z-10 bg-popover px-1 pb-1 pt-1">
+          <div v-if="searchable" class="sticky top-0 z-10 bg-flyout px-1 pb-1 pt-1">
             <input
               ref="searchInput"
               type="search"
@@ -371,20 +400,18 @@ onBeforeUnmount(() => {
               role="option"
               :aria-selected="modelValue === option.value"
               :disabled="option.disabled"
-              class="motion-menu-item flex w-full min-w-0 items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40"
+              class="motion-menu-item flex h-control w-full min-w-0 items-center gap-2 rounded-control px-3 text-left text-body text-foreground transition-colors duration-fast disabled:pointer-events-none disabled:text-muted-foreground"
               :class="[
-                modelValue === option.value ? 'bg-brand-bg text-brand' : 'text-foreground/72 hover:bg-accent hover:text-foreground',
-                activeIndex === index && modelValue !== option.value ? 'bg-accent text-foreground' : undefined,
+                activeIndex === index && modelValue !== option.value ? 'bg-hover' : undefined,
               ]"
               @mouseenter="setActiveFromPointer(option, index)"
               @click="choose(option)"
             >
               <span class="min-w-0 flex-1 truncate">{{ option.label }}</span>
-              <Check v-if="modelValue === option.value" class="size-4 shrink-0 text-brand" aria-hidden="true" />
-            </button>
+              <Check v-if="modelValue === option.value" class="size-4 shrink-0 text-accent-text" aria-hidden="true" />            </button>
             <p
               v-if="searchable && normalizedQuery && !visibleOptions.length"
-              class="m-0 px-3 py-2 text-sm text-muted-foreground"
+              class="m-0 px-3 py-2 text-body text-muted-foreground"
             >
               {{ searchEmptyText }}
             </p>

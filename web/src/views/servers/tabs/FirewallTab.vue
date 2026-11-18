@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-import { AlertTriangle, FileCode2, LockKeyhole, MoreHorizontal, Plus, RefreshCcw, Save, ShieldCheck, Trash2, UnlockKeyhole } from '@lucide/vue';
+import { AlertTriangle, FileCode2, LockKeyhole, MoreHorizontal, Plus, RefreshCcw, Save, ShieldCheck, Trash2, UnlockKeyhole } from '@/icons';
 import { securityApi } from '@/api/security';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
@@ -12,9 +12,11 @@ import DropdownItem from '@/components/ui/DropdownItem.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import IconButton from '@/components/ui/IconButton.vue';
 import Input from '@/components/ui/Input.vue';
+import NumberBox from '@/components/ui/NumberBox.vue';
 import Select from '@/components/ui/Select.vue';
 import Table from '@/components/ui/Table.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
+import FormField from '@/components/patterns/FormField.vue';
 import { useI18n } from '@/i18n';
 import type { Fail2BanJail, Fail2BanState, UfwRule, UfwState } from '@/types/security';
 import type { ServerDto } from '@/types/servers';
@@ -24,16 +26,10 @@ import type { FirewallView } from '../model';
 import { fail2BanPreset, fail2BanTone, hasAdvancedJailConfig, jailsToYaml, parseSimpleJailsFromYaml, ufwTone, validateUfwRule } from './securityModel';
 
 const props = defineProps<{ server: ServerDto; view: FirewallView }>();
-const emit = defineEmits<{ 'update:view': [value: FirewallView] }>();
 const { t } = useI18n();
 const notifyError = useErrorToast();
 const notifySuccess = useSuccessToast();
-
 const isDev = import.meta.env.DEV;
-const subTabs = computed(() => [
-  { value: 'ufw', label: t('securityPage.ufw') },
-  ...(isDev ? [{ value: 'fail2ban', label: t('routes.fail2ban.title') }] : []),
-]);
 
 const ufwState = ref<UfwState | null>(null);
 const ufwLoading = ref(false);
@@ -58,25 +54,33 @@ let ufwController: AbortController | null = null;
 let fail2banController: AbortController | null = null;
 
 const ufwRuleValidation = computed(() => validateUfwRule({ port: Number(ruleForm.port), protocol: ruleForm.protocol, from: ruleForm.from }));
+
+/** UFW 端口是 1..65535 的整数（不含范围文本），NumberBox 直接承载；draft 保持 string。 */
+const rulePortValue = computed<number | null>(() => {
+  const trimmed = ruleForm.port.trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
+});
+
+function updateRulePort(value: number | null) {
+  ruleForm.port = value === null ? '' : String(value);
+}
 const hasYamlChanges = computed(() => fail2banState.value ? yamlDraft.value.trim() !== (fail2banState.value.configYaml ?? '').trim() : false);
 const runtimeJails = computed(() => fail2banState.value?.jails ?? []);
 const takeoverRequired = computed(() => Boolean(fail2banState.value?.installed && !fail2banState.value?.managed));
 
 const ufwColumns = computed(() => [
   { key: 'number', label: t('securityPage.ruleNumber'), nowrap: true, width: 'w-16' },
-  { key: 'action', label: t('securityPage.action'), nowrap: true },
-  { key: 'to', label: t('securityPage.to') },
-  { key: 'from', label: t('securityPage.from') },
+  { key: 'action', label: t('securityPage.action'), nowrap: true, width: 'w-28' },
+  { key: 'details', label: t('common.details') },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
 ]);
 
 const jailColumns = computed(() => [
   { key: 'name', label: t('common.name') },
-  { key: 'state', label: t('common.status'), nowrap: true },
-  { key: 'port', label: t('securityPage.port'), nowrap: true },
-  { key: 'maxretry', label: t('securityPage.maxRetry'), nowrap: true },
-  { key: 'findtime', label: t('securityPage.findTime'), nowrap: true },
-  { key: 'bantime', label: t('securityPage.banTime'), nowrap: true },
+  { key: 'state', label: t('common.status'), nowrap: true, width: 'w-28' },
+  { key: 'details', label: t('common.details') },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
 ]);
 
@@ -240,35 +244,20 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4">
-    <div v-if="subTabs.length > 1" class="inline-flex w-fit max-w-full overflow-x-auto rounded-xl border border-border bg-muted p-1" role="tablist" :aria-label="t('serversPage.tab.firewall')">
-      <button
-        v-for="tab in subTabs"
-        :key="tab.value"
-        type="button"
-        role="tab"
-        class="motion-tab h-8 rounded-lg px-3 text-sm font-medium text-muted-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 aria-selected:bg-brand-bg aria-selected:text-brand"
-        :aria-selected="view === tab.value"
-        :tabindex="view === tab.value ? 0 : -1"
-        @click="emit('update:view', tab.value as FirewallView)"
-      >
-        {{ tab.label }}
-      </button>
-    </div>
-
-    <div v-show="view === 'ufw'" class="grid h-full min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] gap-3">
+  <div class="grid h-full min-h-0 grid-rows-page gap-4">
+    <div v-show="view === 'ufw'" class="grid h-full min-h-0 grid-rows-page-top gap-3">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <div class="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
           <Badge :tone="ufwTone(ufwState)">{{ ufwState?.status || t('state.unknown') }}</Badge>
           <span>{{ ufwState?.defaultPolicy || t('securityPage.noDefaultPolicy') }}</span>
-          <span class="hidden xl:inline">{{ t('securityPage.managedAutomatically') }}</span>
+          <span class="hidden wide:inline">{{ t('securityPage.managedAutomatically') }}</span>
         </div>
         <div class="flex flex-wrap gap-2">
           <Button size="sm" variant="primary" :disabled="!ufwState?.supported" @click="openRuleDialog"><Plus />{{ t('securityPage.addRule') }}</Button>
           <Button size="sm" :loading="ufwLoading" @click="loadUfw"><RefreshCcw />{{ t('common.refresh') }}</Button>
         </div>
       </div>
-      <div class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning xl:hidden">{{ t('securityPage.managedAutomatically') }}</div>
+      <div class="rounded-control border border-warning-border bg-warning-bg p-3 text-sm text-warning wide:hidden">{{ t('securityPage.managedAutomatically') }}</div>
 
       <EmptyState v-if="ufwError && !ufwState" class="self-start" :title="t('common.loadFailed')" :description="ufwError">
         <template #actions>
@@ -281,31 +270,32 @@ onBeforeUnmount(() => {
         :columns="ufwColumns"
         :rows="ufwState?.rules ?? []"
         row-key="number"
+        row-height="auto"
         :loading="ufwLoading"
         :loading-label="t('common.loading')"
       >
         <template #number="{ row }">
-          <span class="text-xs font-semibold text-muted-foreground">#{{ row.number }}</span>
+          <span class="whitespace-nowrap text-caption font-semibold text-muted-foreground">#{{ row.number }}</span>
         </template>
         <template #action="{ row }">
-          <strong class="text-foreground">{{ row.action }}</strong>
+          <strong class="whitespace-nowrap text-foreground">{{ row.action }}</strong>
         </template>
-        <template #to="{ row }">
-          <span class="text-muted-foreground">{{ row.to }}</span>
-        </template>
-        <template #from="{ row }">
-          <span class="text-muted-foreground">{{ row.from }}</span>
+        <template #details="{ row }">
+          <div class="grid min-w-0 gap-0.5 text-caption text-muted-foreground">
+            <span class="truncate whitespace-nowrap">{{ t('securityPage.to') }}: {{ row.to }}</span>
+            <span class="truncate whitespace-nowrap">{{ t('securityPage.from') }}: {{ row.from }}</span>
+          </div>
         </template>
         <template #actions="{ row }">
           <Button size="sm" variant="danger" @click="confirmTarget = { kind: 'delete-rule', rule: row }"><Trash2 />{{ t('common.delete') }}</Button>
         </template>
         <template #empty>
-          <EmptyState :title="t('securityPage.noRules')" :description="t('securityPage.noRulesHint')" />
+          <EmptyState variant="inset" :title="t('securityPage.noRules')" :description="t('securityPage.noRulesHint')" />
         </template>
       </Table>
     </div>
 
-    <div v-show="view === 'fail2ban'" class="grid h-full min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] gap-3">
+    <div v-show="view === 'fail2ban'" class="grid h-full min-h-0 grid-rows-page-top gap-3">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <div class="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
           <Badge :tone="fail2BanTone(fail2banState)">{{ fail2banState?.managed ? t('securityPage.managed') : t('securityPage.notManaged') }}</Badge>
@@ -353,6 +343,7 @@ onBeforeUnmount(() => {
           :columns="jailColumns"
           :rows="jailDrafts"
           row-key="name"
+          row-height="auto"
           :loading="fail2banLoading"
           :loading-label="t('common.loading')"
         >
@@ -363,25 +354,19 @@ onBeforeUnmount(() => {
             </div>
           </template>
           <template #state="{ row }">
-            <Badge :tone="row.enabled ? 'success' : 'neutral'">{{ row.enabled ? t('securityPage.enabled') : t('securityPage.disabled') }}</Badge>
+            <Badge class="whitespace-nowrap" :tone="row.enabled ? 'success' : 'neutral'">{{ row.enabled ? t('securityPage.enabled') : t('securityPage.disabled') }}</Badge>
           </template>
-          <template #port="{ row }">
-            <span class="text-muted-foreground">{{ row.port || '-' }}</span>
-          </template>
-          <template #maxretry="{ row }">
-            <span class="text-muted-foreground">{{ row.maxretry ?? '-' }}</span>
-          </template>
-          <template #findtime="{ row }">
-            <span class="text-muted-foreground">{{ row.findtime || '-' }}</span>
-          </template>
-          <template #bantime="{ row }">
-            <span class="text-muted-foreground">{{ row.bantime || '-' }}</span>
+          <template #details="{ row }">
+            <div class="grid min-w-0 gap-0.5 text-caption text-muted-foreground">
+              <span class="truncate whitespace-nowrap">{{ t('securityPage.port') }}: {{ row.port || '-' }} · {{ t('securityPage.maxRetry') }}: {{ row.maxretry ?? '-' }}</span>
+              <span class="truncate whitespace-nowrap">{{ t('securityPage.findTime') }}: {{ row.findtime || '-' }} · {{ t('securityPage.banTime') }}: {{ row.bantime || '-' }}</span>
+            </div>
           </template>
           <template #actions="{ row }">
             <Button size="sm" variant="danger" @click="removeJail(row.name)"><Trash2 />{{ t('common.delete') }}</Button>
           </template>
           <template #empty>
-            <EmptyState :title="t('securityPage.noJails')" :description="t('securityPage.noJailsHint')" />
+            <EmptyState variant="inset" :title="t('securityPage.noJails')" :description="t('securityPage.noJailsHint')" />
           </template>
         </Table>
       </div>
@@ -389,10 +374,26 @@ onBeforeUnmount(() => {
 
     <Dialog v-model:open="ruleDialog" :title="t('securityPage.addRule')" :description="t('securityPage.addRuleDescription')" :close-label="t('common.close')">
       <div class="grid gap-3">
-        <label class="grid gap-1 text-sm">{{ t('securityPage.port') }}<Input v-model="ruleForm.port" type="number" :invalid="Boolean(ufwRuleValidation.port)" /></label>
+        <FormField
+          id="ufw-rule-port"
+          v-slot="{ id, describedBy, invalid }"
+          :label="t('securityPage.port')"
+          :error="ufwRuleValidation.port ? t(ufwRuleValidation.port) : ''"
+        >
+          <NumberBox
+            :id="id"
+            :model-value="rulePortValue"
+            :aria-describedby="describedBy"
+            :invalid="invalid"
+            :min="1"
+            :max="65535"
+            :step="1"
+            @update:model-value="updateRulePort"
+          />
+        </FormField>
         <label class="grid gap-1 text-sm">{{ t('securityPage.protocol') }}<Select v-model="ruleForm.protocol" :options="[{ label: 'TCP', value: 'tcp' }, { label: 'UDP', value: 'udp' }]" /></label>
         <label class="grid gap-1 text-sm">{{ t('securityPage.from') }}<Input v-model="ruleForm.from" :invalid="Boolean(ufwRuleValidation.from)" /></label>
-        <div v-if="Object.values(ufwRuleValidation).length" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t(Object.values(ufwRuleValidation)[0] || 'securityPage.validationGeneric') }}</div>
+        <div v-if="Object.values(ufwRuleValidation).length" class="rounded-control border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t(Object.values(ufwRuleValidation)[0] || 'securityPage.validationGeneric') }}</div>
       </div>
       <template #footer>
         <Button @click="ruleDialog = false">{{ t('common.cancel') }}</Button>

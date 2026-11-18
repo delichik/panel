@@ -1,31 +1,50 @@
 @import "tailwindcss";
 @import "@fontsource/inter/latin.css";
 
+/*
+ * WinUI 3 / Fluent 2 视觉体系（详见 docs/agents/specifications/frontend/visual-tokens.md）。
+ * CSS 变量仍是唯一真源；@theme inline 只负责桥接 Tailwind utility。
+ */
 @theme inline {
-  --font-sans: Inter, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
-  --font-mono: "SF Mono", "Cascadia Mono", Consolas, "Courier New", monospace;
+  --font-sans: "Segoe UI Variable Text", "Segoe UI Variable Display", "Segoe UI", system-ui, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+  --font-mono: "Cascadia Mono", "SF Mono", Consolas, "Courier New", monospace;
+
   --color-background: var(--panel-bg);
   --color-foreground: var(--panel-text);
-  --color-card: var(--panel-surface);
+  --color-layer: var(--panel-layer);
+  --color-card: var(--panel-card);
   --color-card-foreground: var(--panel-text);
-  --color-surface-raised: var(--panel-surface-raised);
+  --color-surface-raised: var(--panel-card);
   --color-popover: var(--panel-popover);
   --color-popover-foreground: var(--panel-text);
+  --color-flyout: var(--panel-flyout);
   --color-primary: var(--panel-primary);
   --color-primary-foreground: var(--panel-primary-foreground);
   --color-secondary: var(--panel-muted);
   --color-secondary-foreground: var(--panel-text-secondary);
   --color-muted: var(--panel-muted);
   --color-muted-foreground: var(--panel-text-muted);
+  --color-hover: var(--panel-hover);
+  --color-pressed: var(--panel-pressed);
   --color-accent: var(--panel-hover);
   --color-accent-foreground: var(--panel-text);
+  --color-accent-text: var(--accent-text);
+  --color-accent-selected: var(--accent-selected-bg);
+  --color-accent-strong: var(--accent-fill-secondary);
+  --color-accent-stronger: var(--accent-fill-tertiary);
   --color-brand: var(--panel-brand);
   --color-brand-bg: var(--panel-brand-bg);
   --color-brand-border: var(--panel-brand-border);
+  --color-control: var(--panel-control-fill);
+  --color-stroke: var(--panel-stroke);
+  --color-card-stroke: var(--panel-card-stroke);
+  --color-card-solid: var(--panel-card-solid);
+  --color-divider: var(--panel-divider);
   --color-border: var(--panel-border);
   --color-border-strong: var(--panel-border-strong);
   --color-input: var(--panel-input-border);
   --color-ring: var(--panel-ring);
+
   --color-success: var(--panel-success);
   --color-success-bg: var(--panel-success-bg);
   --color-success-border: var(--panel-success-border);
@@ -41,177 +60,420 @@
   --color-neutral: var(--panel-neutral);
   --color-neutral-bg: var(--panel-neutral-bg);
   --color-neutral-border: var(--panel-neutral-border);
+
+  --radius-control: var(--panel-radius-control);
+  --radius-overlay: var(--panel-radius-overlay);
+  --radius-pill: var(--panel-radius-pill);
+  --shadow-flyout: var(--panel-shadow-flyout);
+
+  /* WinUI 3 type ramp (Caption/Body/Subtitle/Title/TitleLarge/Display). */
+  --text-caption: 12px;
+  --text-caption--line-height: 16px;
+  --text-body: 14px;
+  --text-body--line-height: 20px;
+  --text-body-strong: 14px;
+  --text-body-strong--line-height: 20px;
+  --text-body-strong--font-weight: 600;
+  --text-subtitle: 20px;
+  --text-subtitle--line-height: 28px;
+  --text-title: 28px;
+  --text-title--line-height: 36px;
+  --text-title-large: 40px;
+  --text-title-large--line-height: 52px;
+  --text-display: 68px;
+  --text-display--line-height: 92px;
+
+  /* 语义间距 / 尺寸：统一 shell、指示条与 blur 等可复用常量 */
+  --spacing-shell-header: var(--panel-shell-header);
+  --spacing-indicator: var(--panel-indicator-width);
+  --spacing-nav: var(--panel-nav-width);
+  --spacing-nav-compact: var(--panel-nav-width-compact);
+  --spacing-control-sm: var(--panel-control-height-sm);
+  --spacing-control: var(--panel-control-height);
+  --spacing-control-lg: var(--panel-control-height-lg);
+  --spacing-touch: var(--panel-touch-target);
+  --spacing-field: var(--panel-field-min-width);
+  --spacing-dialog: var(--panel-dialog-min-width);
+  /* WinUI content column: data/list pages 1200, settings/form pages 1000. */
+  --container-content: 1200px;
+  --container-content-narrow: 1000px;
+  /* WinUI adaptive content breakpoints (viewport): 1007 / 1239 / 1599. */
+  --breakpoint-wide: 1239px;
+  --breakpoint-wider: 1599px;
+  --blur-flyout: 20px;
+  --blur-subtle: 2px;
+}
+
+/*
+ * 共享工具类：把重复出现的结构性/交互性 CSS 收口为语义 utility，
+ * 业务与组件不再到处写裸 font-size/px/rem/transition/shadow 组合。
+ */
+@utility duration-fade {
+  transition-duration: var(--panel-motion-duration-fade);
+}
+@utility duration-fast {
+  transition-duration: var(--panel-motion-duration-fast);
+}
+@utility duration-normal {
+  transition-duration: var(--panel-motion-duration-normal);
+}
+@utility ease-enter {
+  transition-timing-function: var(--panel-motion-ease-enter);
+}
+@utility ease-exit {
+  transition-timing-function: var(--panel-motion-ease-exit);
+}
+@utility ease-move {
+  transition-timing-function: var(--panel-motion-ease-move);
+}
+@utility transition-fill {
+  transition-property: background-color, border-color, color, box-shadow, opacity;
+}
+@utility transition-field {
+  transition-property: background-color, border-color, color, box-shadow;
+}
+@utility transition-state {
+  transition-property: background-color, border-color, color;
+}
+@utility transition-control {
+  transition-property: background-color, border-color, color, opacity;
+}
+@utility transition-width {
+  transition-property: width;
+}
+@utility transition-indicator {
+  transition-property: left, width;
+  transition-duration: var(--panel-motion-duration-normal);
+  transition-timing-function: var(--panel-motion-ease-move);
+}
+@utility transition-transform-fill {
+  transition-property: transform, background-color;
+}
+@utility z-dialog {
+  z-index: 60;
+}
+@utility z-skip {
+  z-index: 70;
+}
+@utility rounded-micro {
+  border-radius: 1px;
+}
+@utility rounded-inherit {
+  border-radius: inherit;
+}
+@utility max-h-list {
+  max-height: 60dvh;
+}
+@utility min-h-touch {
+  min-height: var(--panel-touch-target);
+}
+@utility min-w-field {
+  min-width: var(--panel-field-min-width);
+}
+@utility min-w-dialog {
+  min-width: min(var(--panel-dialog-min-width), calc(100vw - 2rem));
+}
+@utility surface-card {
+  border-radius: var(--panel-radius-overlay);
+  border: 1px solid var(--panel-card-stroke);
+  background-color: var(--panel-card);
+}
+@utility surface-panel {
+  border-radius: var(--panel-radius-overlay);
+  border: 1px solid var(--panel-card-stroke);
+}
+@utility surface-list {
+  border-radius: var(--panel-radius-control);
+  border: 1px solid var(--panel-card-stroke);
+  background-color: var(--panel-card);
+}
+@utility surface-control {
+  border-radius: var(--panel-radius-control);
+  border: 1px solid var(--panel-input-border);
+  background-color: var(--panel-control-fill);
+}
+@utility surface-control-line {
+  border-radius: var(--panel-radius-control);
+  border: 1px solid var(--panel-stroke);
+}
+@utility surface-flyout {
+  border-radius: var(--panel-radius-overlay);
+  border: 1px solid var(--panel-stroke);
+  background-color: var(--panel-flyout);
+  box-shadow: var(--panel-shadow-flyout);
+}
+@utility focus-accent-underline {
+  box-shadow: inset 0 -2px 0 0 var(--accent-fill-default);
+}
+@utility focus-danger-underline {
+  box-shadow: inset 0 -2px 0 0 var(--panel-danger);
+}
+@utility grid-rows-page {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+@utility grid-rows-page-footer {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+@utility grid-rows-page-top {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+@utility grid-rows-shell {
+  grid-template-rows: var(--panel-shell-header) minmax(0, 1fr);
+}
+@utility grid-cols-field {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+@utility grid-cols-safe {
+  grid-template-columns: minmax(0, 1fr);
+}
+@utility grid-cols-2-safe {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+@utility grid-cols-main-aside {
+  grid-template-columns: minmax(0, 1fr) 320px;
+}
+@utility grid-cols-master {
+  grid-template-columns: 360px minmax(0, 1fr);
+}
+@utility grid-cols-detail {
+  grid-template-columns: minmax(0, 1fr) 360px;
+}
+@utility grid-cols-detail-wide {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+}
+@utility grid-cols-settings {
+  grid-template-columns: 260px minmax(0, 1fr);
+}
+@utility grid-cols-toolbar {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+@utility grid-cols-shell {
+  grid-template-columns: var(--shell-nav, 260px) minmax(0, 1fr);
+}
+@utility grid-rows-page-bottom {
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+@utility grid-rows-shell-top {
+  grid-template-rows: var(--panel-shell-header) auto;
+}
+@utility grid-rows-1-safe {
+  grid-template-rows: minmax(0, 1fr);
 }
 
 :root {
+  color-scheme: light;
   font-family: var(--font-sans);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  color-scheme: light;
-  /* 灯塔 · 浅色：中性冷灰底，主色青绿与 success 纯绿拉开 */
-  --panel-bg: #f3f5f7;
-  --panel-surface: #ffffff;
-  --panel-surface-raised: #f8fafb;
-  --panel-muted: rgba(15, 23, 32, 0.055);
-  --panel-hover: rgba(15, 23, 32, 0.08);
-  --panel-popover: #ffffff;
-  --panel-border: #d5dbe3;
-  --panel-border-strong: #b4becb;
-  --panel-input-border: #c5ced9;
-  --panel-ring: rgba(12, 107, 84, 0.4);
-  --panel-overlay: rgba(12, 18, 28, 0.48);
-  --panel-text: rgba(15, 23, 32, 0.96);
-  --panel-text-secondary: rgba(15, 23, 32, 0.7);
-  --panel-text-muted: rgba(15, 23, 32, 0.52);
-  --panel-primary: #0c6b54;
-  --panel-primary-foreground: #ffffff;
-  --panel-brand: #0d7a5f;
-  --panel-brand-bg: rgba(13, 122, 95, 0.12);
-  --panel-brand-border: rgba(13, 122, 95, 0.28);
-  --panel-success: #15803d;
-  --panel-success-bg: #e8f6ee;
-  --panel-success-border: #b7e0c6;
-  --panel-warning: #b45309;
-  --panel-warning-bg: #fef3e2;
-  --panel-warning-border: #f0d4a8;
-  --panel-danger: #c0392b;
-  --panel-danger-bg: #fceceb;
-  --panel-danger-border: #f0c4bf;
-  --panel-info: #1d6fa5;
-  --panel-info-bg: #e7f1f8;
-  --panel-info-border: #bdd6ea;
-  --panel-neutral: #5b6572;
-  --panel-neutral-bg: #eef1f4;
-  --panel-neutral-border: #d5dbe3;
-  --panel-motion-duration-fast: 160ms;
-  --panel-motion-duration-base: 200ms;
-  --panel-motion-duration-slow: 260ms;
-  --panel-motion-ease-standard: cubic-bezier(0.2, 0, 0, 1);
-  --panel-motion-ease-emphasized: cubic-bezier(0.16, 1, 0.3, 1);
-  --panel-motion-press-scale: 0.97;
-  --panel-motion-hover-y: 1.5px;
-  --panel-motion-enter-y: 8px;
-  --panel-motion-shadow-raised: 0 12px 36px rgba(15, 23, 32, 0.12);
-}
 
-:root[data-scheme='ocean'] {
-  /* 蔚蓝 · 浅色：更高对比边框与文字 */
-  --panel-bg: #eef4f9;
-  --panel-surface: #ffffff;
-  --panel-surface-raised: #f5f9fc;
-  --panel-muted: rgba(8, 29, 48, 0.055);
-  --panel-hover: rgba(8, 29, 48, 0.08);
+  /* ---- 形状与密度 ---- */
+  --panel-radius-control: 4px;
+  --panel-radius-overlay: 8px;
+  --panel-radius-pill: 999px;
+  --panel-control-height: 32px;
+  --panel-control-height-sm: 28px;
+  --panel-control-height-lg: 40px;
+  /* WinUI 3 最小尺寸：触控目标 40、文本框/选择器最小宽 64、ContentDialog 最小宽 320。 */
+  --panel-touch-target: 40px;
+  --panel-field-min-width: 64px;
+  --panel-dialog-min-width: 320px;
+  /* WinUI ContentDialog: 默认最大 548；large 是项目自定义宽表/编辑器弹窗上限。 */
+  --panel-dialog-max-width: 548px;
+  --panel-dialog-max-width-large: 1024px;
+  --panel-dialog-max-width-wide: 720px;
+  --panel-datetime-panel-width: 584px;
+  /* WinUI ListView: OpenPaneLength 320, CompactPaneLength 48. */
+  --panel-nav-width: 320px;
+  --panel-nav-width-compact: 48px;
+  --panel-shell-header: 52px;
+  --panel-indicator-width: 3px;
+
+  /* ---- 中性层（浅色） ---- */
+  --panel-bg: #f3f3f3;
+  --panel-layer: rgba(255, 255, 255, 0.5);
+  --panel-card: rgba(255, 255, 255, 0.7);
+  --panel-card-solid: #ffffff;
   --panel-popover: #ffffff;
-  --panel-border: #c5d8e8;
-  --panel-border-strong: #93b4ce;
-  --panel-input-border: #b0c9de;
-  --panel-ring: rgba(20, 86, 140, 0.42);
-  --panel-overlay: rgba(8, 24, 40, 0.5);
-  --panel-text: rgba(8, 24, 40, 0.96);
-  --panel-text-secondary: rgba(8, 24, 40, 0.72);
-  --panel-text-muted: rgba(8, 24, 40, 0.54);
-  --panel-primary: #164a78;
+  --panel-flyout: rgba(252, 252, 252, 0.92);
+  --panel-control-fill: rgba(255, 255, 255, 0.7);
+  --panel-muted: rgba(0, 0, 0, 0.037);
+  --panel-hover: rgba(0, 0, 0, 0.037);
+  --panel-pressed: rgba(0, 0, 0, 0.06);
+  --panel-text: rgba(0, 0, 0, 0.895);
+  --panel-text-secondary: rgba(0, 0, 0, 0.606);
+  --panel-text-muted: rgba(0, 0, 0, 0.56);
+  --panel-border: rgba(0, 0, 0, 0.058);
+  --panel-stroke: rgba(0, 0, 0, 0.058);
+  --panel-border-strong: rgba(0, 0, 0, 0.16);
+  --panel-input-border: rgba(0, 0, 0, 0.12);
+  --panel-card-stroke: rgba(0, 0, 0, 0.058);
+  --panel-divider: rgba(0, 0, 0, 0.08);
+  --panel-overlay: rgba(0, 0, 0, 0.3);
+
+  /* ---- 背景 / Mica ---- */
+  --panel-mica-tint: rgba(243, 243, 243, 0.72);
+  --panel-mica-blur: 24px;
+  --panel-mica-noise: none;
+
+  /* ---- 强调色（默认 Windows 蓝；[data-accent] 覆盖 seed） ---- */
+  --accent-seed: #0078d4;
+  --accent-fill-default: var(--accent-seed);
+  --accent-fill-secondary: color-mix(in srgb, var(--accent-seed) 88%, black);
+  --accent-fill-tertiary: color-mix(in srgb, var(--accent-seed) 76%, black);
+  --accent-text: color-mix(in srgb, var(--accent-seed) 72%, black);
+  --accent-selected-bg: color-mix(in srgb, var(--accent-seed) 12%, transparent);
+  --accent-focus: var(--accent-seed);
+  --panel-primary: var(--accent-fill-default);
   --panel-primary-foreground: #ffffff;
-  --panel-brand: #0d9494;
-  --panel-brand-bg: rgba(13, 148, 148, 0.12);
-  --panel-brand-border: rgba(13, 148, 148, 0.3);
-  --panel-success: #15803d;
-  --panel-success-bg: #e6f7f0;
-  --panel-success-border: #aedfcf;
-  --panel-warning: #b45309;
-  --panel-warning-bg: #fef3e2;
-  --panel-warning-border: #f0d4a8;
-  --panel-danger: #c0392b;
-  --panel-danger-bg: #fceceb;
-  --panel-danger-border: #f0c4bf;
-  --panel-info: #1d6fa5;
-  --panel-info-bg: #e3eef8;
-  --panel-info-border: #b5d4ec;
-  --panel-neutral: #4d6275;
-  --panel-neutral-bg: #eaf0f6;
-  --panel-neutral-border: #cddae6;
-  --panel-motion-shadow-raised: 0 12px 36px rgba(8, 36, 64, 0.14);
+  --panel-brand: var(--accent-fill-default);
+  --panel-brand-bg: var(--accent-selected-bg);
+  --panel-brand-border: color-mix(in srgb, var(--accent-seed) 34%, transparent);
+  --panel-ring: var(--panel-text);
+
+  /* ---- 语义状态色（不随强调色变化） ---- */
+  --panel-success: #0f7b0f;
+  --panel-success-bg: #dff6dd;
+  --panel-success-border: #b7e0b3;
+  --panel-warning: #9d5d00;
+  --panel-warning-bg: #fff4ce;
+  --panel-warning-border: #f2d98c;
+  --panel-danger: #c42b1c;
+  --panel-danger-bg: #fde7e9;
+  --panel-danger-border: #f4b8b8;
+  --panel-info: #005a9e;
+  --panel-info-bg: #e5f1fb;
+  --panel-info-border: #b3d6f2;
+  --panel-neutral: #5d5d5d;
+  --panel-neutral-bg: rgba(0, 0, 0, 0.05);
+  --panel-neutral-border: rgba(0, 0, 0, 0.12);
+
+  /* ---- 动效（WinUI 3 / Fluent 2） ---- */
+  --panel-motion-duration-fade: 83ms;
+  --panel-motion-duration-fast: 167ms;
+  --panel-motion-duration-normal: 250ms;
+  --panel-motion-duration-slow: 333ms;
+  --panel-motion-ease-enter: cubic-bezier(0, 0, 0, 1);
+  --panel-motion-ease-exit: cubic-bezier(1, 0, 1, 1);
+  --panel-motion-ease-move: cubic-bezier(0.55, 0.55, 0, 1);
+  --panel-motion-ease-linear: linear;
+  --panel-motion-enter-y: 8px;
+  --panel-motion-press-scale: 1;
+  --panel-motion-hover-y: 0px;
+
+  /* 兼容旧命名：保留变量名，值映射到新体系 */
+  --panel-motion-duration-base: var(--panel-motion-duration-fast);
+  --panel-motion-ease-standard: var(--panel-motion-ease-move);
+  --panel-motion-ease-emphasized: var(--panel-motion-ease-enter);
+
+  /* ---- 阴影：普通表面无阴影，只有浮层 ---- */
+  --panel-shadow-flyout: 0 8px 24px rgba(0, 0, 0, 0.12);
+  --panel-motion-shadow-raised: var(--panel-shadow-flyout);
 }
 
 :root[data-theme='dark'] {
   color-scheme: dark;
-  /* 灯塔 · 深色：底/面分层更清晰，薄荷绿强调 */
-  --panel-bg: #0c1218;
-  --panel-surface: #141c24;
-  --panel-surface-raised: #1a2430;
-  --panel-muted: rgba(255, 255, 255, 0.07);
-  --panel-hover: rgba(255, 255, 255, 0.11);
-  --panel-popover: #1a2530;
-  --panel-border: rgba(168, 204, 232, 0.18);
-  --panel-border-strong: rgba(168, 204, 232, 0.32);
-  --panel-input-border: rgba(168, 204, 232, 0.24);
-  --panel-ring: rgba(70, 232, 156, 0.48);
-  --panel-overlay: rgba(4, 8, 14, 0.76);
-  --panel-text: #f2f6f9;
-  --panel-text-secondary: rgba(220, 230, 238, 0.78);
-  --panel-text-muted: rgba(220, 230, 238, 0.56);
-  --panel-primary: #46e89c;
-  --panel-primary-foreground: #04281c;
-  --panel-brand: #54f0a3;
-  --panel-brand-bg: rgba(84, 240, 163, 0.14);
-  --panel-brand-border: rgba(84, 240, 163, 0.34);
-  --panel-success: #3fd68b;
-  --panel-success-bg: rgba(63, 214, 139, 0.16);
-  --panel-success-border: rgba(63, 214, 139, 0.34);
-  --panel-warning: #f0b35c;
-  --panel-warning-bg: rgba(240, 179, 92, 0.16);
-  --panel-warning-border: rgba(240, 179, 92, 0.34);
-  --panel-danger: #f47a6f;
-  --panel-danger-bg: rgba(244, 122, 111, 0.16);
-  --panel-danger-border: rgba(244, 122, 111, 0.34);
-  --panel-info: #6fb3e0;
-  --panel-info-bg: rgba(111, 179, 224, 0.16);
-  --panel-info-border: rgba(111, 179, 224, 0.34);
-  --panel-neutral: rgba(220, 230, 238, 0.7);
-  --panel-neutral-bg: rgba(220, 230, 238, 0.08);
-  --panel-neutral-border: rgba(220, 230, 238, 0.2);
-  --panel-motion-shadow-raised: 0 14px 40px rgba(0, 0, 0, 0.55);
+  --panel-bg: #202020;
+  --panel-layer: rgba(58, 58, 58, 0.3);
+  --panel-card: rgba(255, 255, 255, 0.05);
+  --panel-card-solid: #2b2b2b;
+  --panel-popover: #2b2b2b;
+  --panel-flyout: rgba(44, 44, 44, 0.92);
+  --panel-control-fill: rgba(255, 255, 255, 0.06);
+  --panel-muted: rgba(255, 255, 255, 0.06);
+  --panel-hover: rgba(255, 255, 255, 0.06);
+  --panel-pressed: rgba(255, 255, 255, 0.09);
+  --panel-text: #ffffff;
+  --panel-text-secondary: rgba(255, 255, 255, 0.786);
+  --panel-text-muted: rgba(255, 255, 255, 0.544);
+  --panel-border: rgba(255, 255, 255, 0.07);
+  --panel-stroke: rgba(255, 255, 255, 0.07);
+  --panel-border-strong: rgba(255, 255, 255, 0.12);
+  --panel-input-border: rgba(255, 255, 255, 0.1);
+  --panel-card-stroke: rgba(255, 255, 255, 0.07);
+  --panel-divider: rgba(255, 255, 255, 0.08);
+  --panel-overlay: rgba(0, 0, 0, 0.7);
+  --panel-mica-tint: rgba(32, 32, 32, 0.78);
+  --panel-ring: var(--panel-text);
+  --accent-fill-default: color-mix(in srgb, var(--accent-seed) 45%, white);
+  --accent-fill-secondary: color-mix(in srgb, var(--accent-seed) 55%, white);
+  --accent-fill-tertiary: color-mix(in srgb, var(--accent-seed) 35%, white);
+  --accent-text: color-mix(in srgb, var(--accent-seed) 45%, white);
+  --accent-selected-bg: color-mix(in srgb, var(--accent-seed) 20%, transparent);
+  --panel-primary-foreground: #1a1a1a;
+  --panel-success: #6ccb5f;
+  --panel-success-bg: rgba(108, 203, 95, 0.16);
+  --panel-success-border: rgba(108, 203, 95, 0.34);
+  --panel-warning: #fce100;
+  --panel-warning-bg: rgba(252, 225, 0, 0.16);
+  --panel-warning-border: rgba(252, 225, 0, 0.34);
+  --panel-danger: #ff99a4;
+  --panel-danger-bg: rgba(255, 153, 164, 0.16);
+  --panel-danger-border: rgba(255, 153, 164, 0.34);
+  --panel-info: #60cdff;
+  --panel-info-bg: rgba(96, 205, 255, 0.16);
+  --panel-info-border: rgba(96, 205, 255, 0.34);
+  --panel-neutral: rgba(255, 255, 255, 0.7);
+  --panel-neutral-bg: rgba(255, 255, 255, 0.08);
+  --panel-neutral-border: rgba(255, 255, 255, 0.2);
+  --panel-shadow-flyout: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --panel-motion-shadow-raised: var(--panel-shadow-flyout);
 }
 
-:root[data-theme='dark'][data-scheme='ocean'] {
-  /* 蔚蓝 · 深色 */
-  --panel-bg: #08121f;
-  --panel-surface: #0f1f34;
-  --panel-surface-raised: #162a44;
-  --panel-muted: rgba(255, 255, 255, 0.07);
-  --panel-hover: rgba(255, 255, 255, 0.11);
-  --panel-popover: #142840;
-  --panel-border: rgba(130, 185, 230, 0.2);
-  --panel-border-strong: rgba(130, 185, 230, 0.36);
-  --panel-input-border: rgba(130, 185, 230, 0.26);
-  --panel-ring: rgba(64, 220, 230, 0.52);
-  --panel-overlay: rgba(2, 8, 16, 0.78);
-  --panel-text: #eaf3fa;
-  --panel-text-secondary: rgba(210, 230, 244, 0.78);
-  --panel-text-muted: rgba(210, 230, 244, 0.56);
-  --panel-primary: #38c6d9;
-  --panel-primary-foreground: #04242c;
-  --panel-brand: #5ee7f2;
-  --panel-brand-bg: rgba(94, 231, 242, 0.14);
-  --panel-brand-border: rgba(94, 231, 242, 0.34);
-  --panel-success: #3fd68b;
-  --panel-success-bg: rgba(63, 214, 139, 0.16);
-  --panel-success-border: rgba(63, 214, 139, 0.34);
-  --panel-warning: #f0b35c;
-  --panel-warning-bg: rgba(240, 179, 92, 0.16);
-  --panel-warning-border: rgba(240, 179, 92, 0.34);
-  --panel-danger: #f47a6f;
-  --panel-danger-bg: rgba(244, 122, 111, 0.16);
-  --panel-danger-border: rgba(244, 122, 111, 0.34);
-  --panel-info: #6fb3e0;
-  --panel-info-bg: rgba(111, 179, 224, 0.16);
-  --panel-info-border: rgba(111, 179, 224, 0.34);
-  --panel-neutral: rgba(210, 230, 244, 0.7);
-  --panel-neutral-bg: rgba(210, 230, 244, 0.08);
-  --panel-neutral-border: rgba(210, 230, 244, 0.2);
-  --panel-motion-shadow-raised: 0 14px 40px rgba(0, 4, 12, 0.58);
+/* ---- 9 个强调色预设（只提供 seed，ramp 在 :root 派生） ---- */
+:root[data-accent='blue'] { --accent-seed: #0078d4; }
+:root[data-accent='teal'] { --accent-seed: #038387; }
+:root[data-accent='green'] { --accent-seed: #107c10; }
+:root[data-accent='gold'] { --accent-seed: #986f0b; }
+:root[data-accent='orange'] { --accent-seed: #ca5010; }
+:root[data-accent='red'] { --accent-seed: #c50f1f; }
+:root[data-accent='pink'] { --accent-seed: #c239b3; }
+:root[data-accent='purple'] { --accent-seed: #8764b8; }
+:root[data-accent='gray'] { --accent-seed: #69797e; }
+
+/* ---- Mica：用户背景层（body::before，固定、只采样模糊缩略图/预设） ---- */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-color: var(--panel-mica-tint);
+  background-image: linear-gradient(var(--panel-mica-tint), var(--panel-mica-tint)), var(--panel-mica-image, none);
+  background-size: cover, cover;
+  background-position: center, center;
+}
+
+:root[data-background='none'] body::before,
+:root[data-mica='off'] body::before {
+  display: none;
+}
+
+:root[data-background='image'] {
+  --panel-mica-image: var(--panel-mica-thumb, none);
+}
+
+:root[data-background='image'] body::before {
+  filter: blur(var(--panel-mica-blur)) saturate(1.15);
+  transform: scale(1.05);
+}
+
+:root[data-background='preset'][data-preset='aurora'] {
+  --panel-mica-image: radial-gradient(at 18% 22%, #2d5c8a 0%, transparent 60%), radial-gradient(at 82% 18%, #6a4a86 0%, transparent 55%), radial-gradient(at 55% 85%, #1f6b5f 0%, transparent 60%);
+}
+:root[data-background='preset'][data-preset='dusk'] {
+  --panel-mica-image: radial-gradient(at 20% 80%, #8a4a36 0%, transparent 60%), radial-gradient(at 78% 25%, #7a3f68 0%, transparent 55%), linear-gradient(135deg, #1c2340, #2b1d2a);
+}
+:root[data-background='preset'][data-preset='mist'] {
+  --panel-mica-image: radial-gradient(at 30% 30%, #6f8fa8 0%, transparent 60%), radial-gradient(at 80% 70%, #8aa3b5 0%, transparent 55%), linear-gradient(160deg, #c8d6df, #9fb3c2);
+}
+:root[data-background='preset'][data-preset='slate'] {
+  --panel-mica-image: radial-gradient(at 70% 20%, #4a5a6a 0%, transparent 60%), radial-gradient(at 25% 75%, #39424c 0%, transparent 55%), linear-gradient(180deg, #262d34, #1d2329);
+}
+
+:root[data-theme='light'][data-background='preset'] {
+  --panel-mica-tint: rgba(243, 243, 243, 0.66);
 }
 
 /*
@@ -230,6 +492,11 @@
   }
   a { color: inherit; text-decoration: none; }
   button, input, textarea, select { font: inherit; }
+  /* WinUI 强调色：原生 checkbox/radio（少量尚未替换为 Checkbox primitive 的位置）跟随 accent。 */
+  input[type='checkbox'],
+  input[type='radio'] {
+    accent-color: var(--accent-fill-default);
+  }
   button { cursor: pointer; }
   button:disabled { cursor: not-allowed; }
 }
@@ -251,51 +518,52 @@ summary,
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--panel-border-strong); border: 3px solid transparent; border-radius: 999px; background-clip: content-box; }
+/* 横向/纵向滚动条交汇处默认会画白色方块，透明化避免小屏出现亮的角落。 */
+::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-button { display: none; }
 
 .panel-mono { font-family: var(--font-mono); }
 .bg-overlay { background: var(--panel-overlay); }
 
-.motion-control,
-.motion-icon-control,
-.motion-tab,
-.motion-menu-item,
-.motion-list-item,
-.motion-card,
-.motion-field,
-.motion-switch {
-  transition-duration: var(--panel-motion-duration-base);
-  transition-timing-function: var(--panel-motion-ease-standard);
-}
-
 .panel-shadow-overlay {
-  box-shadow: var(--panel-motion-shadow-raised);
+  box-shadow: var(--panel-shadow-flyout);
+}
+
+/* ---- WinUI 3 动效基础：只变色，不位移/不缩放 ---- */
+.motion-control,
+.motion-icon-control,
+.motion-card,
+.motion-tab,
+.motion-menu-item,
+.motion-list-item,
+.motion-field,
+.motion-switch {
+  transition-duration: var(--panel-motion-duration-fast);
+  transition-timing-function: var(--panel-motion-ease-move);
 }
 
 .motion-control,
 .motion-icon-control,
+.motion-card {
+  transition-property: background-color, border-color, color, box-shadow, opacity;
+}
+
 .motion-tab,
 .motion-menu-item,
-.motion-list-item,
-.motion-card {
-  transition-property: background-color, border-color, color, box-shadow, transform, opacity;
+.motion-list-item {
+  transition-property: background-color, border-color, color, opacity;
 }
 
 .motion-field,
 .motion-switch {
-  transition-property: background-color, border-color, color, box-shadow, transform;
+  transition-property: background-color, border-color, color, box-shadow;
 }
 
-/*
- * hover 反馈只给真正支持 hover 的指针：触屏上点击后 :hover 会“粘”在元素上，
- * 导致高亮/抬升残留。Tailwind v4 的 hover: 变体本身已按 (hover: hover) 处理，
- * 这里补齐自有 motion 工具类的同类保护。
- */
 @media (hover: hover) {
   .motion-control:not(:disabled):hover,
   .motion-icon-control:not(:disabled):hover,
   .motion-card:hover {
     background-color: var(--panel-hover);
-    transform: translateY(calc(var(--panel-motion-hover-y) * -1));
   }
 
   .motion-tab:not(:disabled):hover,
@@ -317,38 +585,28 @@ summary,
 .motion-menu-item:not(:disabled):active,
 .motion-list-item:not(:disabled):active,
 .motion-card:active {
-  transform: translateY(0) scale(var(--panel-motion-press-scale));
+  background-color: var(--panel-pressed);
+  transform: none;
+  transition-duration: var(--panel-motion-duration-fade);
 }
 
-/* 选中态阴影与 hover 无关，触屏下同样保留 */
 .motion-list-item[aria-current='true'],
 .motion-list-item[aria-checked='true'],
 .motion-list-item[aria-pressed='true'] {
   box-shadow: none;
 }
 
-/*
- * 字段焦点态统一交给 `focus-visible:ring-*` 工具类（与 Button / IconButton 同一套 ring），
- * 不再用未分层的 box-shadow 覆盖，避免输入框和按钮出现两套焦点视觉。
- */
-
 .motion-enter {
-  animation: panel-motion-enter var(--panel-motion-duration-slow) var(--panel-motion-ease-emphasized) backwards;
+  animation: panel-motion-enter var(--panel-motion-duration-normal) var(--panel-motion-ease-enter) backwards;
 }
 
-/*
- * 进场动画使用 backwards 填充：
- * 动画结束后元素回到自身计算样式，hover 抬升与 :active 按压才不会被
- * 动画终帧的 `transform: translateY(0)` 永久压制（此前 fill-mode: both 会吃掉所有列表项动效）。
- */
 .motion-list-item,
 .motion-table-row,
 .motion-reveal {
-  animation: panel-motion-enter var(--panel-motion-duration-slow) var(--panel-motion-ease-emphasized) backwards;
+  animation: panel-motion-enter var(--panel-motion-duration-normal) var(--panel-motion-ease-enter) backwards;
   animation-delay: var(--panel-stagger, 0ms);
 }
 
-/* 列表内容填充：骨架加载完成后内容交错进场（与系统事件表格一致；仅首屏/新增项播放，已有内容刷新不重放） */
 .motion-stagger > * {
   --panel-stagger: 0ms;
 }
@@ -361,13 +619,13 @@ summary,
 .motion-stagger > *:nth-child(n + 7) { --panel-stagger: 120ms; }
 
 .motion-overlay {
-  animation: panel-motion-fade var(--panel-motion-duration-fast) var(--panel-motion-ease-standard) both;
+  animation: panel-motion-fade var(--panel-motion-duration-fast) var(--panel-motion-ease-linear) both;
 }
 
 .motion-table-row {
   transition:
-    background-color var(--panel-motion-duration-base) var(--panel-motion-ease-standard),
-    color var(--panel-motion-duration-base) var(--panel-motion-ease-standard);
+    background-color var(--panel-motion-duration-fast) var(--panel-motion-ease-move),
+    color var(--panel-motion-duration-fast) var(--panel-motion-ease-move);
 }
 
 .motion-tooltip {
@@ -375,33 +633,40 @@ summary,
   visibility: hidden;
   transform: translate(-50%, 3px);
   transition:
-    opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-standard),
-    transform var(--panel-motion-duration-fast) var(--panel-motion-ease-standard),
-    visibility var(--panel-motion-duration-fast) var(--panel-motion-ease-standard);
+    opacity var(--panel-motion-duration-fade) var(--panel-motion-ease-linear),
+    transform var(--panel-motion-duration-fade) var(--panel-motion-ease-exit),
+    visibility var(--panel-motion-duration-fade) var(--panel-motion-ease-linear);
+  transition-delay: 500ms;
 }
 
-/* Tooltip 的 hover 揭示已在上面的 (hover: hover) 区块里，这里只保留键盘焦点揭示 */
 .group:focus-within .motion-tooltip {
   opacity: 1;
   visibility: visible;
   transform: translate(-50%, 0);
+  transition-delay: 0ms;
 }
 
 .motion-skeleton {
   animation-duration: 1.45s;
 }
-/* ---- Vue <Transition> 进出场：退场与进场成对，统一经 motion token ---- */
 
-/* 对话框：遮罩淡入淡出 + 面板轻微上浮/下落 */
+/* ---- Vue <Transition> 进出场：WinUI 3 时长/曲线 ---- */
+
+/* 对话框：遮罩淡入淡出 + 面板缩放淡入（无 translateY） */
 .dialog-enter-active,
 .dialog-leave-active {
-  transition: opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-standard);
+  transition: opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-linear);
 }
-.dialog-enter-active .dialog-panel,
+.dialog-enter-active .dialog-panel {
+  transition:
+    opacity var(--panel-motion-duration-normal) var(--panel-motion-ease-enter),
+    transform var(--panel-motion-duration-normal) var(--panel-motion-ease-enter);
+}
+/* WinUI ContentDialog：退场比进场更快（167ms / exit easing）。 */
 .dialog-leave-active .dialog-panel {
   transition:
-    opacity var(--panel-motion-duration-base) var(--panel-motion-ease-standard),
-    transform var(--panel-motion-duration-base) var(--panel-motion-ease-emphasized);
+    opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-exit),
+    transform var(--panel-motion-duration-fast) var(--panel-motion-ease-exit);
 }
 .dialog-enter-from,
 .dialog-leave-to {
@@ -410,30 +675,34 @@ summary,
 .dialog-enter-from .dialog-panel,
 .dialog-leave-to .dialog-panel {
   opacity: 0;
-  transform: translateY(var(--panel-motion-enter-y)) scale(0.98);
+  transform: scale(0.98);
 }
 
-/* 下拉菜单 / 下拉选择：淡入淡出 + 轻微上下滑动 */
-.menu-enter-active,
+/* 菜单 / 下拉：250ms 缩放淡入，167ms 更快退场 */
+.menu-enter-active {
+  transition:
+    opacity var(--panel-motion-duration-normal) var(--panel-motion-ease-enter),
+    transform var(--panel-motion-duration-normal) var(--panel-motion-ease-enter);
+}
 .menu-leave-active {
   transition:
-    opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-standard),
-    transform var(--panel-motion-duration-fast) var(--panel-motion-ease-standard);
+    opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-exit),
+    transform var(--panel-motion-duration-fast) var(--panel-motion-ease-exit);
 }
 .menu-enter-from,
 .menu-leave-to {
   opacity: 0;
-  transform: translateY(calc(var(--panel-motion-enter-y) * -1));
+  transform: scale(0.98);
 }
 
-/* 移动端侧边抽屉：遮罩淡入淡出 + 面板左右滑入滑出 */
+/* 移动端侧边抽屉：滑入滑出 */
 .drawer-enter-active,
 .drawer-leave-active {
-  transition: opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-standard);
+  transition: opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-linear);
 }
 .drawer-enter-active .drawer-panel,
 .drawer-leave-active .drawer-panel {
-  transition: transform var(--panel-motion-duration-base) var(--panel-motion-ease-emphasized);
+  transition: transform var(--panel-motion-duration-normal) var(--panel-motion-ease-enter);
 }
 .drawer-enter-from,
 .drawer-leave-to {
@@ -444,16 +713,16 @@ summary,
   transform: translateX(-100%);
 }
 
-/* Toast：从上方淡入、向下淡出，列表重排平滑 */
+/* Toast：上方滑入 + 淡入 */
 .toast-stack-enter-active {
   transition:
-    opacity var(--panel-motion-duration-base) var(--panel-motion-ease-standard),
-    transform var(--panel-motion-duration-base) var(--panel-motion-ease-emphasized);
+    opacity var(--panel-motion-duration-normal) var(--panel-motion-ease-enter),
+    transform var(--panel-motion-duration-normal) var(--panel-motion-ease-enter);
 }
 .toast-stack-leave-active {
   transition:
-    opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-standard),
-    transform var(--panel-motion-duration-fast) var(--panel-motion-ease-standard);
+    opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-exit),
+    transform var(--panel-motion-duration-fast) var(--panel-motion-ease-exit);
 }
 .toast-stack-enter-from {
   opacity: 0;
@@ -461,31 +730,29 @@ summary,
 }
 .toast-stack-leave-to {
   opacity: 0;
-  transform: translateY(var(--panel-motion-enter-y));
+  transform: translateY(calc(var(--panel-motion-enter-y) * -1));
 }
 .toast-stack-move {
-  transition: transform var(--panel-motion-duration-base) var(--panel-motion-ease-standard);
+  transition: transform var(--panel-motion-duration-fast) var(--panel-motion-ease-move);
 }
 
-/* 路由内容切换：仅淡入，旧页即时卸下，避免 out-in / leave 动画拖住静态内容响应。 */
+/* 路由内容切换：WinUI Page refresh（旧页直接卸下，新页 8px 上滑 + 淡入） */
 .route-enter-active {
-  transition: opacity var(--panel-motion-duration-base) var(--panel-motion-ease-standard);
+  transition:
+    opacity var(--panel-motion-duration-slow) var(--panel-motion-ease-enter),
+    transform var(--panel-motion-duration-slow) var(--panel-motion-ease-enter);
 }
 .route-enter-from {
   opacity: 0;
-}
-
-/* Tab 内容切换：淡入 + 轻微上移 */
-.tab-panel-enter-active,
-.tab-panel-leave-active {
-  transition:
-    opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-standard),
-    transform var(--panel-motion-duration-fast) var(--panel-motion-ease-standard);
-}
-.tab-panel-enter-from {
-  opacity: 0;
   transform: translateY(var(--panel-motion-enter-y));
 }
+
+/* Tab 内容切换：淡入 */
+.tab-panel-enter-active,
+.tab-panel-leave-active {
+  transition: opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-linear);
+}
+.tab-panel-enter-from,
 .tab-panel-leave-to {
   opacity: 0;
 }
@@ -494,12 +761,12 @@ summary,
 .status-enter-active,
 .status-leave-active {
   transition:
-    opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-standard),
-    transform var(--panel-motion-duration-fast) var(--panel-motion-ease-standard);
+    opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-move),
+    transform var(--panel-motion-duration-fast) var(--panel-motion-ease-move);
 }
 .status-enter-from {
   opacity: 0;
-  transform: scale(0.9);
+  transform: scale(0.96);
 }
 .status-leave-to {
   opacity: 0;
@@ -507,37 +774,67 @@ summary,
 
 /* 侧边栏折叠文字淡入（收起时随宽度收缩即时隐藏，不播放退场） */
 .fade-enter-active {
-  transition: opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-standard);
+  transition: opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-linear);
 }
 .fade-enter-from {
   opacity: 0;
 }
 
-/* 侧边栏折叠/展开：导航列宽平滑过渡；文字用 max-width + opacity 跟随列宽，收起时不重挂载 DOM */
+/* 侧边栏折叠/展开：导航列宽平滑过渡 */
 .shell-grid {
-  transition: grid-template-columns var(--panel-motion-duration-base) var(--panel-motion-ease-standard);
+  transition: grid-template-columns var(--panel-motion-duration-normal) var(--panel-motion-ease-move);
 }
 
 .shell-label {
   transition:
-    opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-standard),
-    max-width var(--panel-motion-duration-base) var(--panel-motion-ease-standard);
+    opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-linear),
+    max-width var(--panel-motion-duration-normal) var(--panel-motion-ease-move);
 }
 
-/* 详情区上下文切换：只给新内容做进场（旧内容即时移除），点击反馈不被出场延迟拖慢 */
+/* 详情区上下文切换：Drill 入场（右侧 24px 滑入 + 淡入） */
 .detail-swap-enter-active {
   transition:
-    opacity var(--panel-motion-duration-base) var(--panel-motion-ease-standard),
-    transform var(--panel-motion-duration-base) var(--panel-motion-ease-emphasized);
+    opacity var(--panel-motion-duration-normal) var(--panel-motion-ease-enter),
+    transform var(--panel-motion-duration-normal) var(--panel-motion-ease-enter);
 }
 .detail-swap-enter-from {
   opacity: 0;
-  transform: translateY(var(--panel-motion-enter-y));
+  transform: translateX(24px);
+}
+/* 返回/关闭也必须有反馈：向右淡出，避免详情瞬间消失。 */
+.detail-swap-leave-active {
+  transition:
+    opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-exit),
+    transform var(--panel-motion-duration-fast) var(--panel-motion-ease-exit);
+}
+.detail-swap-leave-to {
+  opacity: 0;
+  transform: translateX(16px);
 }
 
-/* 路由加载进度条：不确定进度用平滑往返位移表达，比静态脉冲更接近真实加载反馈 */
+/* WinUI 3 ProgressRing：短弧旋转 + 轻微伸缩 */
+.winui-progress-ring {
+  animation: winui-ring-rotate 2s linear infinite;
+}
+.winui-progress-ring__track {
+  opacity: 0.18;
+}
+.winui-progress-ring__arc {
+  stroke-dasharray: 30 100;
+  animation: winui-ring-dash 1.6s var(--panel-motion-ease-move) infinite;
+}
+@keyframes winui-ring-rotate {
+  to { transform: rotate(360deg); }
+}
+@keyframes winui-ring-dash {
+  0% { stroke-dasharray: 10 100; }
+  50% { stroke-dasharray: 42 100; }
+  100% { stroke-dasharray: 10 100; }
+}
+
+/* 不确定进度条 */
 .motion-progress {
-  animation: panel-motion-progress 1.15s var(--panel-motion-ease-standard) infinite;
+  animation: panel-motion-progress 1.15s var(--panel-motion-ease-move) infinite;
 }
 
 @keyframes panel-motion-progress {
@@ -585,6 +882,7 @@ summary,
   .motion-reveal,
   .motion-tooltip,
   .detail-swap-enter-from,
+  .detail-swap-leave-to,
   .dialog-panel,
   .drawer-panel,
   .menu-enter-from,
@@ -601,9 +899,49 @@ summary,
   }
 
   .motion-skeleton,
-  .motion-progress {
+  .motion-progress,
+  .winui-progress-ring,
+  .winui-progress-ring__arc {
     animation: none !important;
   }
+}
+
+/* 高对比/减少透明：Mica 与半透明层回退到实色 */
+@media (prefers-reduced-transparency: reduce) {
+  body::before { display: none !important; }
+  :root, :root[data-theme='dark'] {
+    --panel-layer: var(--panel-bg);
+    --panel-card: var(--panel-card-solid);
+    --panel-flyout: var(--panel-popover);
+    --panel-control-fill: var(--panel-card-solid);
+    --panel-mica-tint: transparent;
+  }
+  [class*='backdrop-blur-'] { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+}
+
+/* 高对比度：不要依赖自定义 rgba/box-shadow，使用系统色与实色 outline。 */
+@media (forced-colors: active) {
+  body::before { display: none !important; }
+  :root, :root[data-theme='dark'] {
+    --panel-layer: Canvas;
+    --panel-card: Canvas;
+    --panel-card-solid: Canvas;
+    --panel-flyout: Canvas;
+    --panel-control-fill: Canvas;
+    --panel-mica-tint: transparent;
+    --panel-text: CanvasText;
+    --panel-text-secondary: CanvasText;
+    --panel-text-muted: CanvasText;
+    --panel-stroke: CanvasText;
+    --panel-border: CanvasText;
+    --panel-card-stroke: CanvasText;
+    --panel-divider: CanvasText;
+  }
+  :focus-visible { outline: 2px solid CanvasText !important; outline-offset: 2px !important; }
+  [aria-current='page'],
+  [aria-selected='true'],
+  [aria-checked='true'] { outline: 1px solid Highlight !important; outline-offset: -1px; forced-color-adjust: none; }
+  .backdrop-blur-flyout { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
 }
 
 @media (max-width: 1023.98px) {

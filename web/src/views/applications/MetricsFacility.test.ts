@@ -134,11 +134,12 @@ describe('metrics facility', () => {
     expect(saveConfig).not.toHaveBeenCalled();
   });
 
-  it('blocks saving an out-of-range retention value with an inline error', async () => {
+  it('blocks saving when the retention NumberBox is cleared (inline error)', async () => {
     const wrapper = await mountFacility();
     const retention = wrapper.find<HTMLInputElement>('[data-testid="metrics-retention"]');
-    retention.element.value = '0';
+    retention.element.value = '';
     await retention.trigger('input');
+    await retention.trigger('change');
     await flushPromises();
 
     expect(wrapper.text()).toContain('Enter a whole number of days of at least 1.');
@@ -152,6 +153,7 @@ describe('metrics facility', () => {
     const interval = wrapper.find<HTMLInputElement>('[data-testid="metrics-interval"]');
     interval.element.value = '120';
     await interval.trigger('input');
+    await interval.trigger('change');
     await flushPromises();
 
     await saveButton(wrapper).trigger('click');

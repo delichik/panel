@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
-import { Activity, AlertTriangle, ClipboardList, Eye, Globe2, HardDrive, History, MoreHorizontal, Plus, Radar, RefreshCcw, Rocket, Save, Square, Trash2, UploadCloud, Wrench } from '@lucide/vue';
+import { Activity, AlertTriangle, ClipboardList, Eye, Globe2, HardDrive, History, MoreHorizontal, Plus, Radar, RefreshCcw, Rocket, Save, Square, Trash2, UploadCloud, Wrench } from '@/icons';
 import { applicationsApi } from '@/api/applications';
 import { ApiError } from '@/api/client';
 import { serversApi } from '@/api/servers';
@@ -13,13 +13,12 @@ import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import Dialog from '@/components/ui/Dialog.vue';
-import DownloadButton from '@/components/ui/DownloadButton.vue';
 import Dropdown from '@/components/ui/Dropdown.vue';
 import DropdownItem from '@/components/ui/DropdownItem.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
-import FileUploadButton from '@/components/ui/FileUploadButton.vue';
 import IconButton from '@/components/ui/IconButton.vue';
 import Input from '@/components/ui/Input.vue';
+import NumberBox from '@/components/ui/NumberBox.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
 import PaginationBar from '@/components/ui/PaginationBar.vue';
 import Select from '@/components/ui/Select.vue';
@@ -38,7 +37,15 @@ import MetricsFacility from './MetricsFacility.vue';
 import FacilityCatalog from './FacilityCatalog.vue';
 import FacilityDiagnostics from './FacilityDiagnostics.vue';
 import ApplicationLogsDialog from './ApplicationLogsDialog.vue';
+import ApplicationDetailPane from './components/ApplicationDetailPane.vue';
+import ApplicationDiagnosticsList from './components/ApplicationDiagnosticsList.vue';
+import { applicationDetailTrail, applicationEditorTrail, facilityTrail } from './breadcrumbs';
 import AssetFileManager from '@/components/patterns/AssetFileManager.vue';
+import DetailSection from '@/components/patterns/DetailSection.vue';
+import FormField from '@/components/patterns/FormField.vue';
+import InfoBar from '@/components/patterns/InfoBar.vue';
+import ListCommandBar from '@/components/patterns/ListCommandBar.vue';
+import PropertyList from '@/components/patterns/PropertyList.vue';
 import TableDetailName from '@/components/patterns/TableDetailName.vue';
 import type { AssetFileAdapter, AssetFileItem } from '@/components/patterns/assetFileManager';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
@@ -60,9 +67,6 @@ import {
   applicationPlanningError,
   applicationStatus,
   cloneFacilityDomain,
-  instanceOperationStatus,
-  isDeployProgressStage,
-  uncertaintyNeedsAttention,
   cloneFacilityPath,
   cloneProxyPath,
   cloneProxyRules,
@@ -90,6 +94,8 @@ import {
   validateFacilityRecordDraft,
   validateFileName,
   type ApplicationDraftUi,
+  type AppDetailTab,
+  type FacilityDetailTab,
   type FieldErrors,
   type KeyValueRow,
   type MountRow,
@@ -148,6 +154,19 @@ const applicationFiles = ref<Record<string, ApplicationFile[]>>({});
 const runtimes = ref<Record<string, ApplicationRuntime>>({});
 const rowImageLoading = ref<Record<string, boolean>>({});
 const rowImageControllers = new Map<string, AbortController>();
+/** 行图片懒加载缓存/去重：已解析的 imageReference、已尝试过的 id（失败也不重试）、延迟队列。 */
+const rowImageRefs = ref<Record<string, string>>({});
+const rowImageAttempted = new Set<string>();
+const rowImageQueue: string[] = [];
+let rowImageQueueTimer: ReturnType<typeof setTimeout> | undefined;
+/** 服务器列表：按 mode 需要时加载一次，并由 ensureServers() 去重并发请求。 */
+const serversLoaded = ref(false);
+let serversRequest: Promise<void> | null = null;
+/** 已成功加载的列表查询键（page + q）；返回列表命中时不再重复请求，显式刷新仍会重取。 */
+let applicationsLoadedKey = '';
+/** 同查询的列表请求去重：mode 切换与显式刷新并发时复用同一个 Promise。 */
+let applicationsLoadPromise: Promise<void> | null = null;
+let applicationsLoadPromiseKey = '';
 const facility = ref<ReverseProxyConfig | null>(null);
 /** Proxy plane: gateway membership + container deployments only (no route content). */
 const proxyPlane = ref<ProxyPlaneState | null>(null);
@@ -208,8 +227,6 @@ const discardDialogOpen = ref(false);
 let pendingLeaveTarget: string | null = null;
 let pendingFacilityCancel = false;
 let allowLeave = false;
-type AppDetailTab = 'runtime' | 'routes' | 'files' | 'data';
-type FacilityDetailTab = 'proxy' | 'configs' | 'dns';
 function normalizeAppDetailTab(value: unknown): AppDetailTab {
   if (value === 'routes' || value === 'files' || value === 'data') return value;
   return 'runtime';
@@ -228,7 +245,7 @@ const activeFacilityTab = computed({
   get: () => facilityTab.value,
   set: (value: FacilityDetailTab) => selectFacilityTab(value),
 });
-const appDetailTabs = computed(() => [
+const appDetailTabs = computed<Array<{ label: string; value: AppDetailTab }>>(() => [
   { label: t('applicationsPage.runtime'), value: 'runtime' },
   { label: t('applicationsPage.routes'), value: 'routes' },
   { label: t('applicationsPage.files'), value: 'files' },
@@ -299,6 +316,17 @@ const currentRuntime = computed(() => selectedId.value ? runtimes.value[selected
 const planningError = computed(() => applicationPlanningError(selectedApplication.value, currentRuntime.value));
 const appStatus = computed(() => currentApplicationSummary.value ? applicationStatus(selectedApplication.value, currentRuntime.value) : 'unknown');
 const selectedNodeCounts = computed(() => applicationNodeCounts(selectedApplication.value, currentRuntime.value));
+/**
+ * 面包屑：仅详情/编辑器/设施详情/配置使用；列表页与设施目录不加。
+ * 末项不带 `to`，由共享 BreadcrumbBar 渲染 aria-current="page"；back 行为保持不变。
+ */
+const applicationDetailBreadcrumbs = computed(() => applicationDetailTrail(t, selectedApplication.value.name));
+const applicationEditorBreadcrumbs = computed(() => applicationEditorTrail(t, { create: isCreateMode.value, name: selectedApplication.value.name }));
+const facilityBreadcrumbs = computed(() => facilityTrail(
+  t,
+  currentFacilitySummary.value ? t(currentFacilitySummary.value.titleKey) : null,
+  mode.value === 'facilityConfig',
+));
 const appDraft = reactive<ApplicationDraftUi>(draftFromApplication());
 const appErrors = computed(() => validateApplicationDraft(appDraft));
 const appDiff = computed(() => diffApplications(mode.value === 'edit' ? currentApplication.value : null, appDraft));
@@ -307,15 +335,23 @@ const appRows = computed(() => applications.value.map((app) => ({
   routes: routeSummary(applicationDetails.value[app.id] ?? emptyApplication()),
   counts: applicationNodeCounts(app, runtimes.value[app.id]),
 })));
+/**
+ * ListPage 状态槽契约：首屏 loading / 加载失败 / “无任何筛选且无数据”走页级槽，
+ * 搜索无结果仍留在 Table 的 inset 空态（保留现有文案与行为）。
+ */
+const applicationListState = computed<'ready' | 'loading' | 'error' | 'empty'>(() => {
+  if (error.value && !appRows.value.length) return 'error';
+  if (loading.value && !applications.value.length) return 'loading';
+  if (!appRows.value.length && !search.value.trim()) return 'empty';
+  return 'ready';
+});
 const detailOpen = computed(() => Boolean(selectedId.value));
 const applicationColumns = computed(() => [
   { key: 'name', label: t('common.name') },
-  { key: 'status', label: t('common.status'), nowrap: true },
-  { key: 'image', label: t('applicationsPage.imageReferenceColumn'), nowrap: true },
-  { key: 'instances', label: t('applicationsPage.nodeHealthColumn'), nowrap: true },
-  { key: 'imageUpdate', label: t('applicationsPage.imageUpdate'), nowrap: true },
-  { key: 'updatedAt', label: t('applicationsPage.updatedAtColumn'), nowrap: true },
-  { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
+  { key: 'status', label: t('common.status') },
+  { key: 'instances', label: t('applicationsPage.nodeHealthColumn') },
+  { key: 'updatedAt', label: t('applicationsPage.updatedAtColumn') },
+  { key: 'actions', label: t('common.actions'), align: 'right' as const },
 ]);
 const logsApplication = computed(() => {
   const target = logsTargetId.value ? applications.value.find((item) => item.id === logsTargetId.value) : null;
@@ -626,12 +662,15 @@ function openRecordApplication(record: ConfigRecord) {
 }
 
 function facilityPathNumberOption(field: 'clientMaxBodySizeMb' | 'connectTimeoutSeconds' | 'readTimeoutSeconds' | 'sendTimeoutSeconds') {
-  return computed({
-    get: () => String(facilityPathDraft.options?.[field] ?? 0),
-    set: (value: string) => {
+  return computed<number | null>({
+    get: () => {
+      const value = facilityPathDraft.options?.[field];
+      return typeof value === 'number' ? value : null;
+    },
+    set: (value: number | null) => {
       if (!facilityPathDraft.options) return;
-      const parsed = Number(value);
-      facilityPathDraft.options[field] = Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+      // 空值在旧 Input 时代落到 0；这里保持保存语义不变（NumberBox 负责 min=0 夹取）。
+      facilityPathDraft.options[field] = value === null ? 0 : Math.max(0, value);
     },
   });
 }
@@ -650,12 +689,15 @@ const facilityReadTimeoutSeconds = facilityPathNumberOption('readTimeoutSeconds'
 const facilitySendTimeoutSeconds = facilityPathNumberOption('sendTimeoutSeconds');
 
 function proxyPathNumberOption(field: 'clientMaxBodySizeMb' | 'connectTimeoutSeconds' | 'readTimeoutSeconds' | 'sendTimeoutSeconds') {
-  return computed({
-    get: () => String(proxyPathDraft.options?.[field] ?? ''),
-    set: (value: string) => {
+  return computed<number | null>({
+    get: () => {
+      const value = proxyPathDraft.options?.[field];
+      return typeof value === 'number' ? value : null;
+    },
+    set: (value: number | null) => {
       if (!proxyPathDraft.options) return;
-      const parsed = Number(value);
-      proxyPathDraft.options[field] = value.trim() === '' ? 0 : Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+      // 保持旧 Input 语义：空值保存为 0，非法/负数回落 0。
+      proxyPathDraft.options[field] = value === null ? 0 : Math.max(0, value);
     },
   });
 }
@@ -877,6 +919,8 @@ watch(selectedId, async (value) => {
   detailError.value = '';
   runtimeError.value = '';
   if (value) {
+    // 详情/路由页签需要服务器名称；列表页本身不触发服务器请求。
+    void ensureServers();
     void loadApplicationDetail(value);
     await loadRuntime(value);
   }
@@ -966,7 +1010,7 @@ watch(() => route.path, async () => {
   if (mode.value !== 'facilityDetail') {
     proxyPlaneDraftTouched.value = false;
   }
-  await load();
+  await ensureModeData();
   if (isAppEditor.value) await startApplicationEditor();
   if (isFacilityEditor.value) await startFacilityEditor();
 });
@@ -986,8 +1030,12 @@ function handleBeforeUnload(event: BeforeUnloadEvent) {
   event.returnValue = '';
 }
 
+/**
+ * 显式刷新（页头刷新按钮 / 操作完成后的数据回填）：强制重取当前 mode 所需数据。
+ * 进入页面/切换 mode 走 ensureModeData()，避免列表→详情/编辑器时重复拉列表。
+ */
 async function load() {
-  void loadServers();
+  serversLoaded.value = false;
   const currentMode = mode.value;
   if (currentMode !== 'apps') {
     cancelRuntimeLoad();
@@ -996,12 +1044,11 @@ async function load() {
   }
   if (currentMode === 'apps') {
     await loadApplications({ loadSelectedRuntime: true });
+    void ensureServers();
     return;
   }
-  if (isAppEditor.value) {
-    await loadApplications({ loadSelectedRuntime: false });
-    return;
-  }
+  await ensureServers();
+  if (isAppEditor.value) return;
   if (currentMode === 'facilityCatalog') {
     await loadFacilityData();
     return;
@@ -1012,37 +1059,125 @@ async function load() {
   }
 }
 
+/** 进入页面 / 切换 mode 时的按需加载：只取当前 mode 真正需要的数据。 */
+async function ensureModeData() {
+  const currentMode = mode.value;
+  if (currentMode === 'apps') {
+    await ensureApplicationsList();
+    // 详情/路由页签需要服务器名称；列表本身不需要，故只在打开详情时补一次。
+    if (selectedId.value) void ensureServers();
+    return;
+  }
+  await ensureServers();
+  if (isAppEditor.value) {
+    // startApplicationEditor 内部按需补列表/应用详情/文件与模板目录，这里不预取列表。
+    return;
+  }
+  if (currentMode === 'facilityCatalog') {
+    if (!facilitiesLoaded.value || !facility.value) await loadFacilityData();
+    return;
+  }
+  if (currentMode === 'facilityDetail') {
+    if (isReverseProxyFacility.value) await loadFacilityDetailData();
+    else await loadFacilityData();
+    return;
+  }
+  // facilityConfig（含 storage-share/network-probe/metrics 配置）：startFacilityEditor / 组件自取数据。
+}
+
+function applicationsListQueryKey() {
+  return `${page.value}\u0000${search.value.trim()}`;
+}
+
+/** 返回列表命中已有数据时不刷新；搜索/分页变化仍由各自的 watcher 强制重取。 */
+async function ensureApplicationsList() {
+  if (applicationsLoadedKey === applicationsListQueryKey()) return;
+  await loadApplications({ loadSelectedRuntime: Boolean(selectedId.value) });
+}
+
 async function loadServers() {
   try {
     servers.value = await serversApi.list();
+    serversLoaded.value = true;
   } catch {
     // Server names are a display enhancement; keep IDs when the list is unavailable.
   }
+}
+
+/** 服务器列表只加载一次；并发进入多个 mode 时复用同一个请求。 */
+async function ensureServers() {
+  if (serversLoaded.value) return;
+  if (serversRequest) return serversRequest;
+  serversRequest = loadServers().finally(() => {
+    serversRequest = null;
+  });
+  return serversRequest;
 }
 
 function rowImageReference(app: ApplicationSummaryDto) {
   const detail = applicationDetails.value[app.id];
   return detail?.imageReference
     || detail?.imageUpdateTargets?.find((target) => target.reference)?.reference
+    || rowImageRefs.value[app.id]
     || app.imageReference
     || '';
 }
 
 function cancelRowImageLoads() {
+  if (rowImageQueueTimer) {
+    clearTimeout(rowImageQueueTimer);
+    rowImageQueueTimer = undefined;
+  }
+  rowImageQueue.length = 0;
   rowImageControllers.forEach((controller) => controller.abort());
   rowImageControllers.clear();
   rowImageLoading.value = {};
 }
 
+/**
+ * 行图片详情按需、延迟、去重加载：列表首屏后排队延迟预取（串行），
+ * 已解析/已尝试过的 id 不再发请求；切走列表或重新加载列表时取消队列。
+ * 不清空 rowImageAttempted/rowImageRefs，避免翻页/刷新后重复 GET 或回退到“不可用”。
+ */
+function enqueueRowImagePrefetch(applicationIds: string[]) {
+  if (!applicationIds.length) return;
+  rowImageQueue.push(...applicationIds);
+  if (rowImageQueueTimer) return;
+  rowImageQueueTimer = setTimeout(() => {
+    rowImageQueueTimer = undefined;
+    void drainRowImageQueue();
+  }, 250);
+}
+
+async function drainRowImageQueue() {
+  while (rowImageQueue.length) {
+    if (mode.value !== 'apps') {
+      rowImageQueue.length = 0;
+      return;
+    }
+    const applicationId = rowImageQueue.shift();
+    if (!applicationId) return;
+    await loadRowImageDetail(applicationId);
+  }
+}
+
 async function loadRowImageDetail(applicationId: string) {
+  if (rowImageRefs.value[applicationId]
+    || applicationDetails.value[applicationId]?.imageReference
+    || rowImageAttempted.has(applicationId)
+    || rowImageControllers.has(applicationId)) return;
+  rowImageAttempted.add(applicationId);
   const controller = new AbortController();
   rowImageControllers.set(applicationId, controller);
   try {
     const app = await applicationsApi.get(applicationId, { signal: controller.signal });
     if (rowImageControllers.get(applicationId) !== controller || mode.value !== 'apps') return;
     applicationDetails.value = { ...applicationDetails.value, [applicationId]: app };
+    const reference = app.imageReference || app.imageUpdateTargets?.find((target) => target.reference)?.reference || '';
+    if (reference) rowImageRefs.value = { ...rowImageRefs.value, [applicationId]: reference };
   } catch {
     // Leave the cell empty/unavailable when the image cannot be resolved; never fall back to jobId (container name).
+    // 失败保持 attempted，刷新列表也不重试，避免把行图片变成请求风暴。
   } finally {
     if (rowImageControllers.get(applicationId) === controller) {
       rowImageControllers.delete(applicationId);
@@ -1051,7 +1186,21 @@ async function loadRowImageDetail(applicationId: string) {
   }
 }
 
-async function loadApplications(options: { loadSelectedRuntime?: boolean } = {}) {
+async function loadApplications(options: { loadSelectedRuntime?: boolean } = {}): Promise<void> {
+  const key = applicationsListQueryKey();
+  if (applicationsLoadPromise && applicationsLoadPromiseKey === key) return applicationsLoadPromise;
+  applicationsLoadPromiseKey = key;
+  const promise = runLoadApplications(options).finally(() => {
+    if (applicationsLoadPromise === promise) {
+      applicationsLoadPromise = null;
+      applicationsLoadPromiseKey = '';
+    }
+  });
+  applicationsLoadPromise = promise;
+  return promise;
+}
+
+async function runLoadApplications(options: { loadSelectedRuntime?: boolean } = {}) {
   pageLoadController?.abort();
   cancelRowImageLoads();
   const requestId = ++pageLoadRequestId;
@@ -1066,13 +1215,15 @@ async function loadApplications(options: { loadSelectedRuntime?: boolean } = {})
     const apps = result.items;
     applications.value = apps;
     totalApplications.value = result.total;
+    applicationsLoadedKey = applicationsListQueryKey();
     if (modeAtStart === 'apps') {
       const missing: Record<string, boolean> = {};
       apps.forEach((app) => {
-        if (!app.imageReference) missing[app.id] = true;
+        if (!app.imageReference && !rowImageRefs.value[app.id] && !rowImageAttempted.has(app.id)) missing[app.id] = true;
       });
       rowImageLoading.value = missing;
-      Object.keys(missing).forEach((id) => { void loadRowImageDetail(id); });
+      // 延迟串行预取，避免首屏对每一行立即发 GET（N+1 风暴）。
+      enqueueRowImagePrefetch(Object.keys(missing));
     }
     const appIds = new Set(apps.map((item) => item.id));
     applicationDetails.value = Object.fromEntries(Object.entries(applicationDetails.value).filter(([id]) => appIds.has(id)));
@@ -1626,7 +1777,7 @@ async function startFacilityRecordEditorCore() {
   editorReady.value = false;
   actionError.value = '';
   facilityRecord.value = null;
-  await loadServers();
+  await ensureServers();
   if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || facilityKind.value !== kindAtStart) return;
   if (!isReverseProxyFacility.value) return;
   if (!isNew && !recordId) {
@@ -1962,7 +2113,8 @@ async function runEditorAction(action: () => Promise<void>, name = 'editor') {
 }
 
 async function ensureApplicationsLoaded() {
-  if (!applications.value.length) await loadApplications({ loadSelectedRuntime: false });
+  if (applicationsLoadedKey === applicationsListQueryKey()) return;
+  await loadApplications({ loadSelectedRuntime: false });
 }
 
 async function ensureFacilityLoaded() {
@@ -2327,30 +2479,6 @@ async function runFileAction(key: string, action: () => Promise<void>) {
   }
 }
 
-function instanceStatusLabel(status: string) {
-  if (!status) return t('common.notAvailable');
-  const key = `applicationsPage.instanceStatus.${status}`;
-  const label = t(key);
-  return label === key ? status : label;
-}
-
-function operationStatusLabel(status: string) {
-  if (!status) return t('common.notAvailable');
-  const keys = [`applicationsPage.operationStatus.${status}`, `activity.state.${status}`, `tasksPage.status.${status}`];
-  for (const key of keys) {
-    const label = t(key);
-    if (label !== key) return label;
-  }
-  return status;
-}
-
-function operationStageLabel(stage: string) {
-  if (!stage) return t('common.notAvailable');
-  const key = `applicationOperationsPage.stage.${stage}`;
-  const label = t(key);
-  return label === key ? stage : label;
-}
-
 function openApplicationTasks(operationId = '', executionId = '') {
   void router.push({
     path: '/events',
@@ -2365,22 +2493,6 @@ function openApplicationTasks(operationId = '', executionId = '') {
 
 function openFacilityTasks() {
   void router.push({ path: '/events', query: { resourceType: 'facility_app', resourceId: facilityKind.value } });
-}
-
-// 诊断详情（domain/path/assetName 等）只放在 details 里，页面必须展示出来，
-// 否则像“仍有路由引用了已删除的静态资产”这类错误无法定位到具体域名与路径。
-function diagnosticDetailText(item: Diagnostic): string {
-  const details = item.details ?? {};
-  const parts: string[] = [];
-  const domain = typeof details.domain === 'string' ? details.domain : '';
-  const path = typeof details.path === 'string' ? details.path : '';
-  const assetName = typeof details.assetName === 'string' ? details.assetName : '';
-  const serverId = typeof details.serverId === 'string' ? details.serverId : '';
-  if (domain) parts.push(`${t('applicationsPage.domain')}: ${domain}`);
-  if (path) parts.push(`${t('common.path')}: ${path}`);
-  if (assetName) parts.push(`${t('applicationsPage.assetReferenceName')}: ${assetName}`);
-  if (serverId) parts.push(`${t('applicationsPage.server')}: ${serverId}`);
-  return parts.length ? ` — ${parts.join(' · ')}` : '';
 }
 
 function sourceSummary() {
@@ -2455,7 +2567,7 @@ function cancelEditorQuery() {
 onMounted(async () => {
   window.addEventListener('beforeunload', handleBeforeUnload);
   document.addEventListener('visibilitychange', handleVisibilityChange);
-  await load();
+  await ensureModeData();
   if (isAppEditor.value) await startApplicationEditor();
   if (isFacilityEditor.value) await startFacilityEditor();
 });
@@ -2479,22 +2591,35 @@ onBeforeUnmount(() => {
       <ConsolePage :title="t('routes.applications.title')" :description="t('routes.applications.description')">
         <template #actions>
           <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
-          <Button size="sm" variant="primary" @click="router.push('/applications/apps/create')"><Plus />{{ t('applicationsPage.createApplication') }}</Button>
+          <Button size="sm" variant="primary" @click="router.push('/applications/apps/create')"><Plus />{{ t('common.create') }}</Button>
         </template>
 
-        <ListPage>
+        <ListPage :state="applicationListState">
           <template #toolbar>
-            <SearchInput v-model="search" clearable :placeholder="t('applicationsPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
+            <ListCommandBar :label="t('routes.applications.title')">
+              <template #search>
+                <SearchInput v-model="search" clearable :placeholder="t('applicationsPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
+              </template>
+            </ListCommandBar>
           </template>
-          <EmptyState v-if="error && !appRows.length" variant="page" :title="t('common.loadFailed')" :description="error">
-            <template #actions>
-              <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
-            </template>
-          </EmptyState>
+
+          <template #loading>
+            <Table class="h-full max-lg:max-h-list" :columns="applicationColumns" :rows="[]" :loading="true" :loading-label="t('common.loading')" />
+          </template>
+          <template #error>
+            <EmptyState variant="page" :title="t('common.loadFailed')" :description="error">
+              <template #actions>
+                <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
+              </template>
+            </EmptyState>
+          </template>
+          <template #empty>
+            <EmptyState variant="inset" :title="t('applicationsPage.emptyApplications')" :description="t('applicationsPage.emptyApplicationsHint')" />
+          </template>
 
           <Table
-            v-else
-            class="h-full max-lg:max-h-[60dvh]"
+            class="h-full max-lg:max-h-list"
+            row-height="auto"
             :columns="applicationColumns"
             :rows="appRows"
             row-key="id"
@@ -2503,34 +2628,42 @@ onBeforeUnmount(() => {
             :loading-label="t('common.loading')"
           >
             <template #name="{ row }">
-              <TableDetailName class="max-w-[16rem]" :name="row.app.name" :label="t('common.openDetails', { name: row.app.name })" @click="openApplicationDetail(row.app)" />
+              <div class="grid min-w-0 gap-0.5">
+                <TableDetailName class="max-w-72" :name="row.app.name" :label="t('common.openDetails', { name: row.app.name })" @click="openApplicationDetail(row.app)" />
+                <!-- 副行合并 namespace + image reference：列表不再单列 image，避免重复信息列。 -->
+                <span class="flex min-w-0 items-center gap-1 text-caption text-muted-foreground">
+                  <span v-if="row.app.namespace" class="shrink-0">{{ row.app.namespace }}</span>
+                  <span v-if="row.app.namespace" class="shrink-0" aria-hidden="true">·</span>
+                  <span v-if="!loading && !(rowImageLoading[row.app.id] && !rowImageReference(row.app))" class="min-w-0 truncate">{{ rowImageReference(row.app) || t('common.notAvailable') }}</span>
+                  <span v-else class="motion-skeleton h-3 w-32 rounded bg-muted animate-pulse" aria-hidden="true" />
+                </span>
+              </div>
             </template>
             <template #status="{ row }">
-              <div class="grid gap-1">
+              <div class="flex flex-nowrap items-center gap-1">
                 <StatusBadge :status="applicationStatus(row.app)" :tone="statusTone(applicationStatus(row.app))" :label="t(`applicationsPage.status.${applicationStatus(row.app)}`)" />
-                <Badge v-if="row.app.planningError" tone="danger">{{ t('applicationsPage.status.planning_failed') }}</Badge>
-                <Badge v-else-if="row.app.reconcileStopped" tone="warning">{{ t('applicationsPage.status.attention') }}</Badge>
+                <!-- 单枚综合徽标之外只保留一枚紧凑次级标记：规划失败 > 需关注 > 有镜像更新。 -->
+                <Badge v-if="row.app.planningError" tone="danger" class="whitespace-nowrap">{{ t('applicationsPage.status.planning_failed') }}</Badge>
+                <Badge v-else-if="row.app.reconcileStopped" tone="warning" class="whitespace-nowrap">{{ t('applicationsPage.status.attention') }}</Badge>
+                <Badge v-else-if="row.app.imageUpdateAvailable" tone="warning" class="whitespace-nowrap">{{ t('applicationsPage.imageUpdate') }}</Badge>
               </div>
-            </template>
-            <template #image="{ row }">
-              <span v-if="!loading && !(rowImageLoading[row.app.id] && !rowImageReference(row.app))" class="block max-w-[18rem] truncate text-muted-foreground">{{ rowImageReference(row.app) || t('common.notAvailable') }}</span>
-              <div v-else class="motion-skeleton h-3 w-40 rounded bg-muted animate-pulse" aria-hidden="true" />
             </template>
             <template #instances="{ row }">
-              <div class="flex flex-wrap gap-1">
-                <Badge v-if="row.counts.healthy > 0" tone="success">{{ t('applicationsPage.nodeBucket.healthy', { count: row.counts.healthy }) }}</Badge>
-                <Badge v-if="row.counts.abnormal > 0" tone="danger">{{ t('applicationsPage.nodeBucket.abnormal', { count: row.counts.abnormal }) }}</Badge>
-                <Badge v-if="row.counts.deploying > 0" tone="warning">{{ t('applicationsPage.nodeBucket.deploying', { count: row.counts.deploying }) }}</Badge>
+              <!-- 实例摘要合并为一格单行：健康 / 异常 / 部署中；全 0 时显示不可用。 -->
+              <div class="flex flex-nowrap items-center gap-1 whitespace-nowrap">
+                <template v-if="row.counts.healthy || row.counts.abnormal || row.counts.deploying">
+                  <Badge v-if="row.counts.healthy > 0" tone="success">{{ t('applicationsPage.nodeBucket.healthy', { count: row.counts.healthy }) }}</Badge>
+                  <Badge v-if="row.counts.abnormal > 0" tone="danger">{{ t('applicationsPage.nodeBucket.abnormal', { count: row.counts.abnormal }) }}</Badge>
+                  <Badge v-if="row.counts.deploying > 0" tone="warning">{{ t('applicationsPage.nodeBucket.deploying', { count: row.counts.deploying }) }}</Badge>
+                </template>
+                <span v-else class="text-caption text-muted-foreground">{{ t('common.notAvailable') }}</span>
               </div>
             </template>
-            <template #imageUpdate="{ row }">
-              <Badge :tone="row.app.imageUpdateAvailable ? 'warning' : 'neutral'">{{ row.app.imageUpdateAvailable ? t('applicationsPage.imageUpdate') : t('applicationsPage.imageCurrent') }}</Badge>
-            </template>
             <template #updatedAt="{ row }">
-              <span class="text-muted-foreground">{{ formatDateTime(row.app.updatedAt, t('common.never')) }}</span>
+              <span class="whitespace-nowrap text-muted-foreground">{{ formatDateTime(row.app.updatedAt, t('common.never')) }}</span>
             </template>
             <template #actions="{ row }">
-              <div class="flex items-center justify-end gap-1">
+              <div class="flex flex-wrap items-center justify-end gap-1">
                 <Button size="sm" variant="secondary" @click="openApplicationDetail(row.app)"><Eye />{{ t('common.details') }}</Button>
                 <Button size="sm" variant="ghost" @click="router.push(`/applications/apps/${encodeURIComponent(row.app.id)}/edit`)"><Wrench />{{ t('common.edit') }}</Button>
                 <Button size="sm" variant="ghost" :loading="rowActionKey === `deploy:${row.app.id}`" :disabled="Boolean(rowActionKey)" @click="deployFor(row.app)"><Rocket />{{ t('applicationsPage.sync') }}</Button>
@@ -2562,150 +2695,57 @@ onBeforeUnmount(() => {
     </template>
 
     <template #detail>
-      <ConsolePage :title="selectedApplication.name" :description="selectedApplication.imageReference || selectedApplication.imageUpdateTargets?.find((target) => target.reference)?.reference || ''" :back-label="t('common.backToList')" @back="backToApplicationList">
+      <ConsolePage
+        :title="selectedApplication.name"
+        :description="selectedApplication.imageReference || selectedApplication.imageUpdateTargets?.find((target) => target.reference)?.reference || ''"
+        :back-label="t('common.backToList')"
+        :breadcrumbs="applicationDetailBreadcrumbs"
+        :body-scroll="false"
+        @back="backToApplicationList"
+      >
         <template #actions>
           <Button size="sm" variant="secondary" @click="router.push(`/applications/apps/${encodeURIComponent(selectedApplication.id)}/edit`)"><Wrench />{{ t('common.edit') }}</Button>
           <ActivityLink resource-type="application" :resource-id="selectedApplication.id" />
         </template>
-        <EmptyState v-if="detailError" :title="t('common.loadFailed')" :description="detailError">
+
+        <EmptyState v-if="detailError" variant="page" :title="t('common.loadFailed')" :description="detailError">
           <template #actions>
             <Button size="sm" :loading="detailLoading" @click="retryApplicationDetail"><RefreshCcw />{{ t('common.retry') }}</Button>
           </template>
         </EmptyState>
-        <div v-else-if="!currentApplicationSummary && !currentApplication" class="grid gap-4">
+        <div v-else-if="!currentApplicationSummary && !currentApplication" class="grid content-start gap-4">
           <div class="motion-skeleton h-7 w-48 rounded bg-muted animate-pulse" />
           <div class="motion-skeleton h-4 w-80 max-w-full rounded bg-muted animate-pulse" />
-          <div class="grid grid-cols-3 gap-3 max-md:grid-cols-1">
-            <div v-for="item in 3" :key="item" class="motion-skeleton h-24 rounded-2xl bg-muted animate-pulse" />
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div v-for="item in 3" :key="item" class="motion-skeleton h-24 rounded-overlay bg-muted animate-pulse" />
           </div>
-          <div class="motion-skeleton h-72 rounded-2xl bg-muted animate-pulse" />
+          <div class="motion-skeleton h-72 rounded-overlay bg-muted animate-pulse" />
         </div>
-        <article v-else class="relative grid min-w-0 gap-4">
-          <LoadingOverlay v-if="detailLoading && !applicationDetails[selectedId]" />
-          <div class="flex flex-wrap items-center gap-2">
-            <StatusBadge :status="appStatus" :tone="statusTone(appStatus)" :label="t(`applicationsPage.status.${appStatus}`)" />
-            <Badge v-if="planningError" tone="danger">{{ t('applicationsPage.status.planning_failed') }}</Badge>
-            <Badge v-else-if="selectedApplication.reconcileStopped" tone="warning">{{ t('applicationsPage.status.attention') }}</Badge>
-            <Badge :tone="selectedApplication.imageUpdateAvailable ? 'warning' : 'neutral'">{{ selectedApplication.imageUpdateAvailable ? t('applicationsPage.imageUpdate') : t('applicationsPage.imageCurrent') }}</Badge>
-            <Badge v-if="selectedNodeCounts.healthy > 0" tone="success">{{ t('applicationsPage.nodeBucket.healthy', { count: selectedNodeCounts.healthy }) }}</Badge>
-            <Badge v-if="selectedNodeCounts.abnormal > 0" tone="danger">{{ t('applicationsPage.nodeBucket.abnormal', { count: selectedNodeCounts.abnormal }) }}</Badge>
-            <Badge v-if="selectedNodeCounts.deploying > 0" tone="warning">{{ t('applicationsPage.nodeBucket.deploying', { count: selectedNodeCounts.deploying }) }}</Badge>
-          </div>
-          <Tabs v-model="activeAppTab" :tabs="appDetailTabs">
-            <section v-if="appTab === 'runtime'" class="grid gap-4">
-              <EmptyState v-if="runtimeError" :title="t('common.loadFailed')" :description="runtimeError">
-                <template #actions>
-                  <Button size="sm" :loading="runtimeLoading" @click="retryApplicationRuntime"><RefreshCcw />{{ t('common.retry') }}</Button>
-                </template>
-              </EmptyState>
-              <template v-else>
-                <div v-if="selectedNodeCounts.healthy > 0 || selectedNodeCounts.abnormal > 0 || selectedNodeCounts.deploying > 0" class="flex flex-wrap gap-3">
-                  <div v-if="selectedNodeCounts.healthy > 0" class="min-w-[8rem] flex-1 rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.nodeBucketHealthyLabel') }}</span><strong>{{ selectedNodeCounts.healthy }}</strong></div>
-                  <div v-if="selectedNodeCounts.abnormal > 0" class="min-w-[8rem] flex-1 rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.nodeBucketAbnormalLabel') }}</span><strong>{{ selectedNodeCounts.abnormal }}</strong></div>
-                  <div v-if="selectedNodeCounts.deploying > 0" class="min-w-[8rem] flex-1 rounded-2xl border border-border bg-muted p-4"><span>{{ t('applicationsPage.nodeBucketDeployingLabel') }}</span><strong>{{ selectedNodeCounts.deploying }}</strong></div>
-                </div>
-                <div v-if="planningError" role="alert" class="grid gap-2 rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">
-                  <div class="flex flex-wrap items-center justify-between gap-2">
-                    <strong>{{ t('applicationsPage.planningFailed') }}</strong>
-                    <Button size="sm" variant="ghost" @click="openApplicationTasks(planningError.operationId)"><ClipboardList />{{ t('applicationsPage.viewOperation') }}</Button>
-                  </div>
-                  <span class="whitespace-pre-wrap break-words">{{ planningError.message }}</span>
-                  <span v-if="planningError.fileName" class="break-words">{{ t('applicationsPage.planningFile') }}: {{ planningError.fileName }}</span>
-                  <span v-if="planningError.field">{{ t('applicationsPage.planningField') }}: {{ planningError.field }}</span>
-                  <span>{{ t(planningError.retryable ? 'applicationsPage.planningRetryHint' : 'applicationsPage.planningFixHint') }}</span>
-                </div>
-                <div v-if="selectedApplication.reconcileStopped" role="alert" class="rounded-2xl border border-warning-border bg-warning-bg p-4 text-sm text-warning">
-                  <strong>{{ t('applicationsPage.status.attention') }}</strong>
-                  <p class="m-0 mt-1">{{ t('applicationsPage.reconcileStoppedHint') }}</p>
-                </div>
-                <div v-else-if="!planningError && selectedApplication.lastError" role="alert" class="rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">
-                  <strong>{{ t('applicationsPage.operationError') }}</strong>
-                  <p class="m-0 mt-1 whitespace-pre-wrap break-words">{{ selectedApplication.lastError }}</p>
-                </div>
-                <div class="rounded-2xl border border-border bg-muted p-4">
-                  <h3>{{ t('applicationsPage.nodeInstances') }}</h3>
-                  <div v-if="currentRuntime?.instances?.length" class="mt-3 grid gap-2">
-                    <div v-for="instance in currentRuntime.instances" :key="instance.instanceId || instance.id" class="grid gap-2 rounded-xl border border-border p-3 text-sm">
-                      <div class="flex flex-wrap items-center justify-between gap-2">
-                        <strong>{{ instance.serverName || instance.serverId || instance.instanceId }}</strong>
-                        <StatusBadge :status="instance.status || instance.state || 'unknown'" :tone="statusTone(instance.status || instance.state || 'unknown')" :label="instanceStatusLabel(instance.status || instance.state || '')" />
-                      </div>
-                      <span class="text-muted-foreground">{{ instance.containerName || instance.containerId || t('common.notAvailable') }}</span>
-                      <div v-if="instance.operation" class="grid gap-2 rounded-lg border border-border/70 bg-background/40 p-3">
-                        <div class="flex flex-wrap items-center justify-between gap-2">
-                          <StatusBadge
-                            :status="instanceOperationStatus(instance)"
-                            domain="operation"
-                            :tone="instanceOperationStatus(instance) === 'result_unknown' ? 'warning' : undefined"
-                            :label="operationStatusLabel(instanceOperationStatus(instance))"
-                          />
-                          <Button v-if="instance.operation.operationId" size="sm" variant="ghost" @click="openApplicationTasks(instance.operation.operationId, instance.operation.executionId)"><ClipboardList />{{ t('applicationsPage.viewOperation') }}</Button>
-                        </div>
-                        <div class="grid gap-2 sm:grid-cols-3">
-                          <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationStage') }}</span><strong>{{ uncertaintyNeedsAttention(instance.operation.errorClass, instance.operation.stage) ? t('applicationsPage.status.result_unknown') : (isDeployProgressStage(instance.operation.stage) || instance.operation.stage ? operationStageLabel(instance.operation.stage || '') : t('common.notAvailable')) }}</strong></div>
-                          <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationAttempt') }}</span><strong>{{ instance.operation.attempt ?? t('common.notAvailable') }}</strong></div>
-                          <div><span class="block text-xs text-muted-foreground">{{ t('applicationsPage.operationNextRetry') }}</span><strong>{{ instance.operation.nextRunAt ? formatDateTime(instance.operation.nextRunAt) : t('common.notAvailable') }}</strong></div>
-                        </div>
-                        <p v-if="instance.operation.monitorReasonCode" class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.monitorReason') }}: {{ instance.operation.monitorReasonCode }}<span v-if="instance.operation.evidenceDeadlineAt"> · {{ t('applicationsPage.evidenceDeadline') }} {{ formatDateTime(instance.operation.evidenceDeadlineAt) }}</span></p>
-                        <p v-if="instanceOperationStatus(instance) === 'result_unknown'" class="m-0 text-sm text-warning">{{ t('applicationsPage.unknownResultHint') }}</p>
-                        <div v-if="instanceOperationStatus(instance) !== 'result_unknown' && instance.operation.errorCode !== 'execution_monitoring' && (instance.operation.error || instance.operation.errorCode || instance.operation.errorDetail)" role="alert" class="grid gap-1 rounded-lg border border-danger-border bg-danger-bg p-2 text-danger">
-                          <strong>{{ t('applicationsPage.operationError') }}<span v-if="instance.operation.errorCode"> · {{ instance.operation.errorCode }}</span></strong>
-                          <span v-if="instance.operation.error">{{ instance.operation.error }}</span>
-                          <p v-if="instance.operation.errorCode === 'container_not_running' && !instance.operation.errorDetail?.includes('containerLogs:')" class="m-0 text-warning">{{ t('facilityDiagnostics.missingRunLogsHint') }}</p>
-                          <details v-if="instance.operation.errorDetail && instance.operation.errorDetail !== instance.operation.error"><summary class="cursor-pointer">{{ t('facilityDiagnostics.technicalDetails') }}</summary><pre class="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words text-xs">{{ instance.operation.errorDetail }}</pre></details>
-                        </div>
-                      </div>
-                      <span v-if="instance.lastError && !instance.operation?.error" class="text-danger">{{ instance.lastError }}</span>
-                    </div>
-                  </div>
-                  <div v-else-if="runtimeLoading" class="mt-3 grid gap-2" aria-hidden="true">
-                    <div v-for="item in 4" :key="item" class="grid gap-2 rounded-xl border border-border p-3">
-                      <div class="flex items-center justify-between gap-2">
-                        <div class="motion-skeleton h-4 w-36 rounded bg-muted animate-pulse" />
-                        <div class="motion-skeleton h-6 w-20 rounded-full bg-muted animate-pulse" />
-                      </div>
-                      <div class="motion-skeleton h-3 w-56 max-w-full rounded bg-muted animate-pulse" />
-                    </div>
-                  </div>
-                  <EmptyState v-else :title="t('applicationsPage.noRuntime')" :description="t('applicationsPage.noRuntimeHint')" />
-                </div>
-              </template>
-            </section>
-            <section v-else-if="appTab === 'routes'" class="grid gap-3 motion-stagger">
-              <div v-for="rule in selectedApplication.reverseProxy" :key="rule.domain" class="motion-reveal rounded-2xl border border-border bg-muted p-4">
-                <div class="flex items-center justify-between gap-2"><strong>{{ rule.domain }}</strong><Badge tone="info">{{ rule.targetPort }}</Badge></div>
-                <p class="text-sm text-muted-foreground">{{ t('applicationsPage.originServers', { count: rule.originServerIds.length }) }} · {{ rule.originServerIds.map((id) => serverDisplayName(id)).join(', ') || t('common.notAvailable') }}</p>
-                <div class="mt-2 flex flex-wrap gap-2"><Badge v-for="path in rule.paths" :key="path.path" tone="neutral">{{ path.path }}</Badge></div>
-              </div>
-              <EmptyState v-if="!selectedApplication.reverseProxy.length" :title="t('applicationsPage.noRoutes')" :description="t('applicationsPage.noRoutesHint')" />
-            </section>
-            <section v-else-if="appTab === 'files'" class="rounded-2xl border border-border bg-muted p-4">
-              <div class="grid gap-3 motion-stagger">
-                <div v-for="file in applicationFiles[selectedApplication.id] || []" :key="file.name" class="item-row motion-reveal">
-                  <div><strong>{{ file.name }}</strong><span>{{ file.size }} {{ t('applicationsPage.bytes') }}</span></div>
-                  <div class="row-actions">
-                    <DownloadButton size="sm" :loading="fileActionPending === `committed:${file.name}`" :label="t('common.download')" @click="downloadCommittedApplicationFile(file)" />
-                  </div>
-                </div>
-                <EmptyState v-if="!(applicationFiles[selectedApplication.id] || []).length" :title="t('applicationsPage.noFiles')" :description="t('applicationsPage.noCommittedFilesHint')" />
-              </div>
-            </section>
-            <section v-else class="grid gap-4 rounded-2xl border border-border bg-muted p-4">
-              <div>
-                <h3 class="m-0">{{ t('applicationsPage.persistentData') }}</h3>
-                <p class="mt-2 text-sm text-muted-foreground">{{ selectedApplication.hasPersistentData ? t('applicationsPage.persistentDataHint') : t('applicationsPage.persistentDataUnavailable') }}</p>
-              </div>
-              <div v-if="persistentServerOptions.length" class="grid gap-1.5">
-                <span class="text-xs text-muted-foreground">{{ t('applicationsPage.persistentDataNode') }}</span>
-                <Select v-model="persistentServerId" :options="persistentServerOptions" :placeholder="t('applicationsPage.selectPersistentDataNode')" />
-              </div>
-              <div class="flex flex-wrap gap-2">
-                <DownloadButton size="sm" :disabled="!persistentServerId" :loading="pending === 'persistent-download'" :label="t('applicationsPage.downloadPersistentData')" @click="downloadPersistentData(selectedApplication)" />
-                <FileUploadButton size="sm" accept=".zip,application/zip" :disabled="!selectedApplication.persistentPath" :loading="pending === 'persistent-restore'" :label="t('applicationsPage.restorePersistentData')" @change="restorePersistentData" />
-              </div>
-            </section>
-          </Tabs>
-        </article>
+        <ApplicationDetailPane
+          v-else
+          v-model:persistent-server-id="persistentServerId"
+          :application="selectedApplication"
+          :app-status="appStatus"
+          :planning-error="planningError"
+          :node-counts="selectedNodeCounts"
+          :runtime="currentRuntime"
+          :runtime-loading="runtimeLoading"
+          :runtime-error="runtimeError"
+          :files="applicationFiles[selectedApplication.id] || []"
+          :file-action-pending="fileActionPending"
+          :persistent-server-options="persistentServerOptions"
+          :pending="pending"
+          :tabs="appDetailTabs"
+          :active-tab="appTab"
+          :show-loading="detailLoading && !applicationDetails[selectedId]"
+          :server-name="serverDisplayName"
+          @update:active-tab="selectAppTab"
+          @retry-runtime="retryApplicationRuntime"
+          @open-operation="openApplicationTasks"
+          @download-file="downloadCommittedApplicationFile"
+          @download-persistent-data="downloadPersistentData(selectedApplication)"
+          @restore-persistent-data="restorePersistentData"
+        />
       </ConsolePage>
     </template>
   </TableDetailLayout>
@@ -2728,7 +2768,16 @@ onBeforeUnmount(() => {
     />
   </ConsolePage>
 
-  <ConsolePage v-else-if="mode === 'facilityDetail' || mode === 'facilityConfig'" :back-label="t('common.back')" @back="goBackFromFacilityPage" :title="facilityPageTitle" :description="facilityPageDescription" :body-scroll="!(isNetworkProbeFacility || isMetricsFacility)">
+  <ConsolePage
+    v-else-if="mode === 'facilityDetail' || mode === 'facilityConfig'"
+    :back-label="t('common.back')"
+    @back="goBackFromFacilityPage"
+    :title="facilityPageTitle"
+    :description="facilityPageDescription"
+    :breadcrumbs="facilityBreadcrumbs"
+    :body-scroll="isStorageShareFacility || isMetricsFacility"
+    width="content"
+  >
     <template #actions>
       <template v-if="mode === 'facilityDetail'">
         <Button v-if="currentFacilitySummary" size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
@@ -2755,117 +2804,144 @@ onBeforeUnmount(() => {
           <LoadingOverlay v-if="editorLoading || !actionError" />
           <div v-else class="grid max-w-md justify-items-center gap-3 text-center">
             <AlertTriangle class="size-6 text-danger" aria-hidden="true" />
-            <p class="m-0 text-sm text-danger">{{ actionError }}</p>
+            <p class="m-0 text-body text-danger">{{ actionError }}</p>
             <div class="flex flex-wrap justify-center gap-2">
               <Button size="sm" :loading="pending === 'editor-reload'" @click="reloadFacilityEditor">{{ t('common.retry') }}</Button>
               <Button size="sm" variant="secondary" :disabled="saving" @click="cancelFacilityRecordEdit">{{ t('common.cancel') }}</Button>
             </div>
           </div>
         </div>
-        <div v-if="saving" class="mb-4 rounded-xl border border-info-border bg-info-bg p-3 text-sm text-info">{{ t(`applicationsPage.saveStage.${saveStage}`) }}</div>
-        <div v-if="editorReady && actionError" role="alert" class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
-          <span class="text-danger">{{ actionError }}</span>
-          <Button size="sm" :loading="pending === 'editor-reload'" @click="reloadFacilityEditor">{{ t('applicationsPage.reloadFacilityDraft') }}</Button>
+        <div class="grid gap-3">
+          <InfoBar v-if="saving" tone="info">{{ t(`applicationsPage.saveStage.${saveStage}`) }}</InfoBar>
+          <InfoBar v-if="editorReady && actionError" tone="danger">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <span class="min-w-0">{{ actionError }}</span>
+              <Button size="sm" :loading="pending === 'editor-reload'" @click="reloadFacilityEditor">{{ t('applicationsPage.reloadFacilityDraft') }}</Button>
+            </div>
+          </InfoBar>
         </div>
-        <div v-if="editorReady" class="relative app-editor-layout">
+
+        <!--
+          Two-column editor geometry: only at >=1280px (xl) is the 320px summary column beside the
+          main column. 1024–1279px stays single-column with the summary below, because at 1024px
+          the shell content area is ~928px wide: 928 − 320 − 16 = 592px main column (>=560 minimum).
+        -->
+        <div v-if="editorReady" class="relative grid min-w-0 content-start gap-4 xl:grid-cols-[minmax(0,1fr)_320px] xl:items-start">
           <LoadingOverlay v-if="saving" :label="t(`applicationsPage.saveStage.${saveStage}`)" />
-          <section class="app-editor-shell">
-            <div class="app-editor-header">
-              <p class="editor-flow-hint">{{ t('applicationsPage.facilityRecordEditorFlowHint') }}</p>
-            </div>
+          <div class="grid min-w-0 content-start gap-4">
+            <p class="m-0 text-caption text-muted-foreground">{{ t('applicationsPage.facilityRecordEditorFlowHint') }}</p>
 
-            <div class="app-editor-body">
-              <section class="workspace-panel motion-enter">
-                <div class="section-copy"><h3>{{ t('applicationsPage.facilityRecordIdentity') }}</h3><p>{{ t('applicationsPage.facilityRecordIdentityHint') }}</p></div>
-                <div class="form-grid">
-                  <label class="field">{{ t('applicationsPage.domain') }}<Input v-model="facilityRecordDraft.domain" :invalid="Boolean(facilityRecordErrors.domain)" :disabled="!facilityRecordIsNew" @input="markDirty" /></label>
-                  <div class="field">
-                    <span>{{ t('applicationsPage.facilityRecordVersion') }}</span>
-                    <div class="flex items-center gap-2"><Badge tone="neutral">{{ facilityRecord ? facilityRecord.version : t('applicationsPage.facilityRecordNewVersion') }}</Badge></div>
-                  </div>
+            <DetailSection :title="t('applicationsPage.facilityRecordIdentity')" :description="t('applicationsPage.facilityRecordIdentityHint')">
+              <div class="grid gap-3 p-4 sm:grid-cols-2">
+                <FormField :label="t('applicationsPage.domain')" :error="facilityRecordErrors.domain ? t(facilityRecordErrors.domain) : ''">
+                  <template #default="{ id, describedBy, invalid }">
+                    <Input :id="id" :aria-describedby="describedBy" v-model="facilityRecordDraft.domain" :invalid="invalid" :disabled="!facilityRecordIsNew" @input="markDirty" />
+                  </template>
+                </FormField>
+                <div class="grid content-start gap-0.5">
+                  <span class="text-caption text-muted-foreground">{{ t('applicationsPage.facilityRecordVersion') }}</span>
+                  <div class="flex items-center gap-2"><Badge tone="neutral">{{ facilityRecord ? facilityRecord.version : t('applicationsPage.facilityRecordNewVersion') }}</Badge></div>
                 </div>
-                <p v-if="!facilityRecordIsNew" class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.facilityRecordDomainReadonly') }}</p>
-                <p v-if="facilityRecordErrors.domain" class="m-0 text-sm text-danger">{{ t(facilityRecordErrors.domain) }}</p>
-              </section>
+              </div>
+              <p v-if="!facilityRecordIsNew" class="m-0 px-4 pb-4 text-caption text-muted-foreground">{{ t('applicationsPage.facilityRecordDomainReadonly') }}</p>
+            </DetailSection>
 
-              <section class="workspace-panel motion-enter">
-                <div class="section-copy"><h3>{{ t('applicationsPage.facilityRecordOrigins') }}</h3><p>{{ t('applicationsPage.facilityRecordOriginsHint') }}</p></div>
-                <EmptyState v-if="!facilityGatewayServers.length" :title="t('applicationsPage.facilityRecordNoGateways')" :description="t('applicationsPage.facilityRecordNoGatewaysHint')" />
-                <div v-else class="server-picker-grid">
-                  <ServerMultiPicker v-model="facilityRecordOriginModel" :servers="facilityGatewayServers" :label="t('applicationsPage.facilityRecordOrigins')" />
-                </div>
-                <p v-if="facilityRecordErrors.originServers" class="m-0 text-sm text-danger">{{ t(facilityRecordErrors.originServers) }}</p>
-              </section>
+            <DetailSection :title="t('applicationsPage.facilityRecordOrigins')" :description="t('applicationsPage.facilityRecordOriginsHint')">
+              <EmptyState v-if="!facilityGatewayServers.length" variant="inset" :title="t('applicationsPage.facilityRecordNoGateways')" :description="t('applicationsPage.facilityRecordNoGatewaysHint')" />
+              <div v-else class="p-4">
+                <ServerMultiPicker v-model="facilityRecordOriginModel" :servers="facilityGatewayServers" :label="t('applicationsPage.facilityRecordOrigins')" />
+              </div>
+              <div v-if="facilityRecordErrors.originServers" class="px-4 pb-4">
+                <InfoBar tone="danger">{{ t(facilityRecordErrors.originServers) }}</InfoBar>
+              </div>
+            </DetailSection>
 
-              <section class="workspace-panel motion-enter">
-                <div class="section-copy"><h3>{{ t('applicationsPage.anyAccess') }}</h3><p>{{ t('applicationsPage.anyAccessHint') }}</p></div>
-                <label class="switch-field">{{ t('applicationsPage.anyAccess') }}<Switch v-model="facilityRecordAnyAccessModel" :label="t('applicationsPage.anyAccess')" /></label>
+            <DetailSection :title="t('applicationsPage.anyAccess')" :description="t('applicationsPage.anyAccessHint')">
+              <div class="grid gap-3 p-4">
+                <FormField :label="t('applicationsPage.anyAccess')">
+                  <template #default="{ id }">
+                    <Switch :id="id" v-model="facilityRecordAnyAccessModel" :label="t('applicationsPage.anyAccess')" />
+                  </template>
+                </FormField>
                 <div v-if="facilityRecordDraft.anyAccess.enabled" class="grid gap-3">
-                  <label class="field">{{ t('applicationsPage.loadBalancingStrategy') }}<Select v-model="facilityRecordDraft.anyAccess.strategy" :options="anyAccessStrategyOptions" @change="markDirty" /></label>
-                  <label v-if="facilityRecordDraft.anyAccess.strategy === 'primary_backup'" class="field">{{ t('applicationsPage.primaryOriginServer') }}<Select v-model="facilityRecordDraft.anyAccess.primaryOriginServerId" :options="facilityRecordPrimaryOptions" :placeholder="t('applicationsPage.selectPrimaryOrigin')" @change="markDirty" /></label>
-                  <p v-if="facilityRecordErrors.primaryOrigin" class="m-0 text-sm text-danger">{{ t(facilityRecordErrors.primaryOrigin) }}</p>
-                  <label class="field">{{ t('applicationsPage.anyAccessRelayScope') }}<Select v-model="facilityRecordRelayScope" :options="anyAccessRelayScopeOptions" @change="markDirty" /></label>
+                  <FormField :label="t('applicationsPage.loadBalancingStrategy')">
+                    <template #default="{ id }">
+                      <Select :id="id" v-model="facilityRecordDraft.anyAccess.strategy" :options="anyAccessStrategyOptions" @change="markDirty" />
+                    </template>
+                  </FormField>
+                  <FormField v-if="facilityRecordDraft.anyAccess.strategy === 'primary_backup'" :label="t('applicationsPage.primaryOriginServer')" :error="facilityRecordErrors.primaryOrigin ? t(facilityRecordErrors.primaryOrigin) : ''">
+                    <template #default="{ id, describedBy, invalid }">
+                      <Select :id="id" :aria-describedby="describedBy" v-model="facilityRecordDraft.anyAccess.primaryOriginServerId" :options="facilityRecordPrimaryOptions" :placeholder="t('applicationsPage.selectPrimaryOrigin')" @change="markDirty" />
+                    </template>
+                  </FormField>
+                  <FormField :label="t('applicationsPage.anyAccessRelayScope')">
+                    <template #default="{ id }">
+                      <Select :id="id" v-model="facilityRecordRelayScope" :options="anyAccessRelayScopeOptions" @change="markDirty" />
+                    </template>
+                  </FormField>
                   <ServerMultiPicker v-if="facilityRecordRelayScope === 'selected'" v-model="facilityRecordRelayServerIdsModel" :servers="facilityRecordRelayServers" :label="t('applicationsPage.anyAccessRelayServers', { count: facilityRecordDraft.anyAccess.relayServerIds?.length ?? 0 })" />
-                  <p v-if="facilityRecordRelayScope === 'selected' && !facilityRecordRelayServers.length" class="m-0 text-sm text-muted-foreground">{{ t('applicationsPage.anyAccessNoRelayServers') }}</p>
+                  <p v-if="facilityRecordRelayScope === 'selected' && !facilityRecordRelayServers.length" class="m-0 text-caption text-muted-foreground">{{ t('applicationsPage.anyAccessNoRelayServers') }}</p>
                 </div>
-              </section>
+              </div>
+            </DetailSection>
 
-              <section class="workspace-panel motion-enter">
-                <div class="section-heading">
-                  <div class="section-copy"><h3>{{ t('applicationsPage.facilityRecordPaths') }}</h3><p>{{ t('applicationsPage.facilityRecordPathsHint') }}</p></div>
-                  <Button size="sm" @click="openFacilityPathDialog()"><Plus />{{ t('common.addPath') }}</Button>
-                </div>
-                <EmptyState v-if="!facilityRecordDraft.paths.length" :title="t('applicationsPage.facilityRecordNoPaths')" :description="t('applicationsPage.noPathsHint')" />
-                <div v-for="(path, pathIndex) in facilityRecordDraft.paths" :key="`${path.path}-${pathIndex}`" class="item-row">
-                  <div class="min-w-0">
-                    <div class="flex flex-wrap items-center gap-2">
-                      <Badge tone="neutral" class="panel-mono">{{ path.path || '/' }}</Badge>
-                      <Badge tone="info">{{ path.ruleType ? t(`applicationsPage.routeType.${path.ruleType}`) : t('common.notAvailable') }}</Badge>
-                    </div>
-                    <span class="block text-xs text-muted-foreground">{{ facilityPathTargetLabel(path) }}</span>
+            <DetailSection :title="t('applicationsPage.facilityRecordPaths')" :description="t('applicationsPage.facilityRecordPathsHint')">
+              <template #actions>
+                <Button size="sm" @click="openFacilityPathDialog()"><Plus />{{ t('common.addPath') }}</Button>
+              </template>
+              <div v-for="(path, pathIndex) in facilityRecordDraft.paths" :key="`${path.path}-${pathIndex}`" class="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+                <div class="min-w-0">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <Badge tone="neutral" class="panel-mono">{{ path.path || '/' }}</Badge>
+                    <Badge tone="info">{{ path.ruleType ? t(`applicationsPage.routeType.${path.ruleType}`) : t('common.notAvailable') }}</Badge>
                   </div>
-                  <div class="row-actions">
-                    <Button size="sm" @click="openFacilityPathDialog(pathIndex)">{{ t('common.edit') }}</Button>
-                    <Button size="sm" variant="danger" @click="removeFacilityRecordPath(pathIndex)">{{ t('common.delete') }}</Button>
-                  </div>
+                  <span class="mt-1 block text-caption text-muted-foreground">{{ facilityPathTargetLabel(path) }}</span>
                 </div>
-                <p v-if="facilityRecordErrors.paths" class="m-0 text-sm text-danger">{{ t(facilityRecordErrors.paths) }}</p>
-              </section>
+                <div class="flex flex-wrap justify-start gap-2 sm:justify-end">
+                  <Button size="sm" @click="openFacilityPathDialog(pathIndex)">{{ t('common.edit') }}</Button>
+                  <Button size="sm" variant="danger" @click="removeFacilityRecordPath(pathIndex)">{{ t('common.delete') }}</Button>
+                </div>
+              </div>
+              <EmptyState v-if="!facilityRecordDraft.paths.length" variant="inset" :title="t('applicationsPage.facilityRecordNoPaths')" :description="t('applicationsPage.noPathsHint')" />
+              <div v-if="facilityRecordErrors.paths" class="px-4 pb-4">
+                <InfoBar tone="danger">{{ t(facilityRecordErrors.paths) }}</InfoBar>
+              </div>
+            </DetailSection>
+          </div>
 
-              <section class="workspace-panel motion-enter">
-                <AssetFileManager
-                  :items="facilityAssetItems" :adapter="facilityAssetAdapter" :disabled="!editorReady || saving"
-                  :labels="{ title: t('applicationsPage.facilityRecordAssets'), hint: t('applicationsPage.facilityRecordAssetsHint'), uploadAsset: t('applicationsPage.uploadAsset'), uploadAssetTitle: t('applicationsPage.uploadAssetTitle'), uploadType: t('applicationsPage.uploadType'), uploadTypeText: t('applicationsPage.uploadTypeText'), uploadTypeBinary: t('applicationsPage.uploadTypeBinary'), uploadTypeArchive: t('applicationsPage.uploadTypeArchive'), uploadFile: t('applicationsPage.uploadFile'), uploadArchive: t('applicationsPage.uploadArchive'), operationFailed: t('applicationsPage.operationFailed'), edit: t('common.edit'), replace: t('common.replace'), download: t('common.download'), delete: t('common.delete'), bytes: t('applicationsPage.bytes'), noAssets: t('applicationsPage.noAssets'), noAssetsHint: t('applicationsPage.noAssetsHint'), textTitle: t('applicationsPage.editTextFile'), newTextTitle: t('applicationsPage.newTextFile'), name: t('applicationsPage.assetReferenceName'), nameHint: t('applicationsPage.assetReferenceNameHint'), filename: t('applicationsPage.assetDownloadFilename'), filenameHint: t('applicationsPage.assetDownloadFilenameHint'), language: t('applicationsPage.highlightLanguage'), content: t('applicationsPage.fileContent'), loading: t('applicationsPage.fileLoading'), loadFailed: t('applicationsPage.fileLoadFailed'), cancel: t('common.cancel'), save: t('common.save'), close: t('common.close'), reload: t('applicationsPage.discardTextAndReload'), deleteTitle: t('applicationsPage.confirm.facility-asset-delete.title'), deleteDescription: t('applicationsPage.confirm.facility-asset-delete.description'), confirmDelete: t('common.delete') }"
+          <aside class="grid min-w-0 content-start gap-4 xl:sticky xl:top-0">
+            <DetailSection :title="t('applicationsPage.facilityRecordSummary')" :description="t('applicationsPage.facilityRecordSummaryHint')">
+              <div class="grid gap-3 p-4">
+                <PropertyList
+                  :columns="1"
+                  :items="[
+                    { label: t('applicationsPage.facilityRecordVersion'), value: facilityRecord ? facilityRecord.version : t('applicationsPage.facilityRecordNewVersion') },
+                    { label: t('applicationsPage.facilityRecordPaths'), value: facilityRecordDraft.paths.length },
+                    { label: t('applicationsPage.previewAdded'), value: facilityRecordDiff.added },
+                    { label: t('applicationsPage.previewChanged'), value: facilityRecordDiff.changed },
+                    { label: t('applicationsPage.previewRemoved'), value: facilityRecordDiff.removed },
+                  ]"
                 />
-              </section>
-            </div>
-          </section>
-
-          <aside class="app-editor-summary">
-            <section class="rounded-2xl border border-border bg-card p-4">
-              <h3>{{ t('applicationsPage.facilityRecordSummary') }}</h3>
-              <p class="mt-2 text-sm text-muted-foreground">{{ t('applicationsPage.facilityRecordSummaryHint') }}</p>
-              <div class="mt-3 grid gap-2 text-sm">
-                <div><span>{{ t('applicationsPage.facilityRecordVersion') }}</span><strong>{{ facilityRecord ? facilityRecord.version : t('applicationsPage.facilityRecordNewVersion') }}</strong></div>
-                <div><span>{{ t('applicationsPage.facilityRecordPaths') }}</span><strong>{{ facilityRecordDraft.paths.length }}</strong></div>
-                <div><span>{{ t('applicationsPage.previewAdded') }}</span><strong>{{ facilityRecordDiff.added }}</strong></div>
-                <div><span>{{ t('applicationsPage.previewChanged') }}</span><strong>{{ facilityRecordDiff.changed }}</strong></div>
-                <div><span>{{ t('applicationsPage.previewRemoved') }}</span><strong>{{ facilityRecordDiff.removed }}</strong></div>
                 <Badge :tone="editorDirty ? 'warning' : 'success'">{{ editorDirty ? t('applicationsPage.dirty') : t('applicationsPage.clean') }}</Badge>
               </div>
-            </section>
-            <section class="rounded-2xl border border-border bg-card p-4">
-              <h3>{{ t('applicationsPage.diagnostics') }}</h3>
-              <div class="mt-3 grid gap-2">
-                <div v-for="item in facilityDiagnostics" :key="`side-${item.code}-${item.field}`" class="rounded-xl border p-3 text-sm" :class="item.severity === 'error' ? 'border-danger-border bg-danger-bg text-danger' : 'border-warning-border bg-warning-bg text-warning'">{{ item.field ? `${item.field}: ` : '' }}{{ item.message }}{{ diagnosticDetailText(item) }}</div>
-                <p v-if="!facilityDiagnostics.length" class="m-0 text-sm text-muted-foreground">{{ t('applicationsPage.noDiagnostics') }}</p>
-              </div>
-            </section>
+            </DetailSection>
+            <DetailSection :title="t('applicationsPage.diagnostics')">
+              <ApplicationDiagnosticsList :items="facilityDiagnostics" />
+            </DetailSection>
           </aside>
         </div>
+
+        <!-- 资产/代码编辑器全宽：不放进 xl 双列的窄主列，避免 YAML/模板被压窄。 -->
+        <div class="mt-4 surface-card p-4">
+          <AssetFileManager
+            :items="facilityAssetItems" :adapter="facilityAssetAdapter" :disabled="!editorReady || saving"
+            :labels="{ title: t('applicationsPage.facilityRecordAssets'), hint: t('applicationsPage.facilityRecordAssetsHint'), uploadAsset: t('applicationsPage.uploadAsset'), uploadAssetTitle: t('applicationsPage.uploadAssetTitle'), uploadType: t('applicationsPage.uploadType'), uploadTypeText: t('applicationsPage.uploadTypeText'), uploadTypeBinary: t('applicationsPage.uploadTypeBinary'), uploadTypeArchive: t('applicationsPage.uploadTypeArchive'), uploadFile: t('applicationsPage.uploadFile'), uploadArchive: t('applicationsPage.uploadArchive'), operationFailed: t('applicationsPage.operationFailed'), edit: t('common.edit'), replace: t('common.replace'), download: t('common.download'), delete: t('common.delete'), bytes: t('applicationsPage.bytes'), noAssets: t('applicationsPage.noAssets'), noAssetsHint: t('applicationsPage.noAssetsHint'), textTitle: t('applicationsPage.editTextFile'), newTextTitle: t('applicationsPage.newTextFile'), name: t('applicationsPage.assetReferenceName'), nameHint: t('applicationsPage.assetReferenceNameHint'), filename: t('applicationsPage.assetDownloadFilename'), filenameHint: t('applicationsPage.assetDownloadFilenameHint'), language: t('applicationsPage.highlightLanguage'), content: t('applicationsPage.fileContent'), loading: t('applicationsPage.fileLoading'), loadFailed: t('applicationsPage.fileLoadFailed'), cancel: t('common.cancel'), save: t('common.save'), close: t('common.close'), reload: t('applicationsPage.discardTextAndReload'), deleteTitle: t('applicationsPage.confirm.facility-asset-delete.title'), deleteDescription: t('applicationsPage.confirm.facility-asset-delete.description'), confirmDelete: t('common.delete') }"
+          />
+        </div>
+
         <template #footer>
           <div class="flex flex-wrap items-center justify-between gap-3">
-            <div class="text-sm text-muted-foreground">{{ editorDirty ? t('applicationsPage.unsavedChanges') : t('applicationsPage.readyToCommit') }}</div>
+            <div class="text-caption text-muted-foreground">{{ editorDirty ? t('applicationsPage.unsavedChanges') : t('applicationsPage.readyToCommit') }}</div>
             <div class="flex flex-wrap gap-2">
               <Button variant="secondary" :disabled="saving" @click="cancelFacilityRecordEdit">{{ t('common.cancel') }}</Button>
               <Button variant="primary" :loading="pending === 'commit'" :disabled="!editorReady || saving || !editorDirty" @click="commitFacilityRecord"><Save />{{ t('applicationsPage.facilityRecordSave') }}</Button>
@@ -2875,57 +2951,60 @@ onBeforeUnmount(() => {
       </EditorPage>
     </template>
 
-    <div v-else class="grid min-w-0 gap-4">
-      <EmptyState v-if="!currentFacilitySummary" :title="t('applicationsPage.facilityUnavailable')" :description="t('applicationsPage.facilityUnavailableDescription', { kind: facilityKind })" />
-      <EmptyState v-else-if="error && !facility" :title="t('common.loadFailed')" :description="error">
+    <div v-else class="grid h-full min-h-0 min-w-0 content-start gap-4">
+      <EmptyState v-if="!currentFacilitySummary" variant="page" :title="t('applicationsPage.facilityUnavailable')" :description="t('applicationsPage.facilityUnavailableDescription', { kind: facilityKind })" />
+      <EmptyState v-else-if="error && !facility" variant="page" :title="t('common.loadFailed')" :description="error">
         <template #actions>
           <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
         </template>
       </EmptyState>
-      <div v-else-if="loading && !facility" class="relative grid min-h-64 place-items-center">
+      <div v-else-if="loading && !facility" class="relative grid h-full min-h-64 place-items-center">
         <LoadingOverlay />
       </div>
-      <Tabs v-else-if="facility" v-model="activeFacilityTab" :tabs="facilityDetailTabs">
-        <section v-if="facilityTab === 'proxy'" class="grid gap-4">
-          <section class="rounded-2xl border border-border bg-card p-4">
-            <div class="section-heading">
-              <div class="section-copy"><h3>{{ t('applicationsPage.proxyPlaneTitle') }}</h3><p>{{ t('applicationsPage.proxyPlaneHint') }}</p></div>
-              <div class="flex flex-wrap gap-2">
-                <Button size="sm" variant="secondary" :loading="pending === 'facility-reconcile'" :disabled="Boolean(pending)" @click="ensureProxyRunning"><Rocket />{{ t('applicationsPage.ensureProxyRunning') }}</Button>
-                <Button size="sm" variant="primary" :loading="proxyPlaneSaving" :disabled="proxyPlaneSaving || !proxyPlaneDirty || Boolean(proxyPlaneBlockedReferences.length)" @click="saveProxyPlaneDraft"><Save />{{ t('applicationsPage.gatewaySave') }}</Button>
-              </div>
-            </div>
-            <p class="editor-flow-hint mt-2">{{ t('applicationsPage.gatewayEditorFlowHint') }}</p>
-            <EmptyState v-if="proxyPlaneError" :title="t('common.loadFailed')" :description="proxyPlaneError">
-              <template #actions>
-                <Button size="sm" :loading="loading" @click="loadFacilityDetailData"><RefreshCcw />{{ t('common.retry') }}</Button>
-              </template>
-            </EmptyState>
-            <div v-else-if="!proxyPlane" class="relative grid min-h-32 place-items-center"><LoadingOverlay /></div>
-            <template v-else>
-              <div class="server-picker-grid mt-3">
-                <ServerMultiPicker v-model="proxyPlaneDraftModel" :servers="serverOptions" :label="t('applicationsPage.gatewayNodes')" />
-              </div>
-              <p class="m-0 mt-2 text-xs text-muted-foreground">{{ t('applicationsPage.gatewayNodesHint') }}</p>
-              <div v-if="proxyPlaneBlockedReferences.length || proxyPlaneBlockedError" role="alert" class="mt-3 grid gap-1 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
-                <strong>{{ t('applicationsPage.gatewayRemovalBlocked') }}</strong>
-                <span>{{ t('applicationsPage.gatewayRemovalBlockedHint') }}</span>
-                <span>{{ t('applicationsPage.gatewayRemovalBlockedRecords', { domains: proxyPlaneBlockedReferences.map((item) => item.recordId).join(', ') || proxyPlaneBlockedError }) }}</span>
-              </div>
+      <Tabs v-else-if="facility" v-model="activeFacilityTab" :tabs="facilityDetailTabs" class="h-full min-h-0">
+        <section v-if="facilityTab === 'proxy'" class="grid h-full min-h-0 content-start gap-4 overflow-y-auto pr-1">
+          <DetailSection :title="t('applicationsPage.proxyPlaneTitle')" :description="t('applicationsPage.proxyPlaneHint')">
+            <template #actions>
+              <Button size="sm" variant="secondary" :loading="pending === 'facility-reconcile'" :disabled="Boolean(pending)" @click="ensureProxyRunning"><Rocket />{{ t('applicationsPage.ensureProxyRunning') }}</Button>
+              <Button size="sm" variant="primary" :loading="proxyPlaneSaving" :disabled="proxyPlaneSaving || !proxyPlaneDirty || Boolean(proxyPlaneBlockedReferences.length)" @click="saveProxyPlaneDraft"><Save />{{ t('applicationsPage.gatewaySave') }}</Button>
             </template>
-          </section>
-          <section class="rounded-2xl border border-border bg-card p-4">
+            <div class="grid gap-3 p-4">
+              <p class="m-0 text-caption text-muted-foreground">{{ t('applicationsPage.gatewayEditorFlowHint') }}</p>
+              <EmptyState v-if="proxyPlaneError" variant="inset" :title="t('common.loadFailed')" :description="proxyPlaneError">
+                <template #actions>
+                  <Button size="sm" :loading="loading" @click="loadFacilityDetailData"><RefreshCcw />{{ t('common.retry') }}</Button>
+                </template>
+              </EmptyState>
+              <div v-else-if="!proxyPlane" class="relative grid min-h-32 place-items-center"><LoadingOverlay /></div>
+              <template v-else>
+                <div class="grid gap-1">
+                  <span class="text-caption text-muted-foreground">{{ t('applicationsPage.gatewayNodes') }}</span>
+                  <ServerMultiPicker v-model="proxyPlaneDraftModel" :servers="serverOptions" :label="t('applicationsPage.gatewayNodes')" />
+                  <p class="m-0 text-caption text-secondary-foreground">{{ t('applicationsPage.gatewayNodesHint') }}</p>
+                </div>
+                <InfoBar v-if="proxyPlaneBlockedReferences.length || proxyPlaneBlockedError" tone="danger" :title="t('applicationsPage.gatewayRemovalBlocked')">
+                  <p class="m-0">{{ t('applicationsPage.gatewayRemovalBlockedHint') }}</p>
+                  <p class="m-0 break-words">{{ t('applicationsPage.gatewayRemovalBlockedRecords', { domains: proxyPlaneBlockedReferences.map((item) => item.recordId).join(', ') || proxyPlaneBlockedError }) }}</p>
+                </InfoBar>
+              </template>
+            </div>
+          </DetailSection>
+
+          <div class="surface-card p-4">
             <FacilityDiagnostics v-if="proxyPlane" :state="proxyPlane" />
             <div v-else class="relative grid min-h-32 place-items-center"><LoadingOverlay /></div>
-          </section>
+          </div>
         </section>
 
-        <section v-else-if="facilityTab === 'configs'" class="grid gap-4">
-          <div class="section-heading">
-            <div class="section-copy"><h3>{{ t('applicationsPage.configRecordsTitle') }}</h3><p>{{ t('applicationsPage.configRecordsHint') }}</p></div>
+        <section v-else-if="facilityTab === 'configs'" class="grid h-full min-h-0 content-start gap-4 overflow-y-auto pr-1">
+          <div class="flex flex-wrap items-start justify-between gap-3">
+            <div class="grid min-w-0 gap-0.5">
+              <h2 class="m-0 text-body-strong font-semibold text-foreground">{{ t('applicationsPage.configRecordsTitle') }}</h2>
+              <p class="m-0 text-caption text-muted-foreground">{{ t('applicationsPage.configRecordsHint') }}</p>
+            </div>
             <Button size="sm" variant="primary" :disabled="Boolean(pending)" @click="startNewFacilityRecord"><Plus />{{ t('applicationsPage.addDomainRecord') }}</Button>
           </div>
-          <EmptyState v-if="configRecordsError" :title="t('common.loadFailed')" :description="configRecordsError">
+          <EmptyState v-if="configRecordsError" variant="page" :title="t('common.loadFailed')" :description="configRecordsError">
             <template #actions>
               <Button size="sm" :loading="loading" @click="loadFacilityDetailData"><RefreshCcw />{{ t('common.retry') }}</Button>
             </template>
@@ -2959,169 +3038,237 @@ onBeforeUnmount(() => {
           </Table>
         </section>
 
-        <section v-else class="grid gap-4">
-          <div class="rounded-2xl border border-border bg-card p-4">
-            <h3 class="m-0 text-sm font-semibold">{{ t('applicationsPage.dnsSyncTitle') }}</h3>
-            <p class="mt-2 text-sm text-muted-foreground">{{ t('applicationsPage.dnsTabHint') }}</p>
-            <div class="mt-3 grid gap-3 motion-stagger">
-              <div v-for="row in facilityDnsDomains" :key="`dns-${row.domain}`" class="motion-reveal grid gap-2 border-t border-border pt-3 text-sm first:border-t-0 first:pt-0">
-                <div class="flex flex-wrap items-center justify-between gap-3">
-                  <div class="grid gap-1">
-                    <strong>{{ row.domain }}</strong>
-                    <span class="text-xs text-muted-foreground">{{ t(`applicationsPage.dnsSyncSource.${row.source}`) }}</span>
-                  </div>
-                  <div class="flex flex-wrap items-center gap-2">
-                    <Badge :tone="facilityDnsTone(facilityDnsStatus(row.domain))" :title="facilityDnsError(row.domain) || undefined">{{ t(`applicationsPage.dnsSync.${facilityDnsStatus(row.domain) || 'unknown'}`) }}</Badge>
-                    <Button
-                      v-if="facilityDnsNeedsAction(row.domain)"
-                      size="sm"
-                      variant="secondary"
-                      :loading="dnsSyncPendingDomain === row.domain"
-                      :disabled="Boolean(dnsSyncPendingDomain) && dnsSyncPendingDomain !== row.domain"
-                      @click="retryFacilityDns(row.domain)"
-                    >{{ t('applicationsPage.dnsSyncRetry') }}</Button>
-                    <Button
-                      v-if="facilityDnsStatus(row.domain) === 'failed' || facilityDnsConflict(row.domain)"
-                      size="sm"
-                      variant="danger"
-                      :loading="dnsSyncPendingDomain === row.domain"
-                      :disabled="Boolean(dnsSyncPendingDomain) && dnsSyncPendingDomain !== row.domain"
-                      @click="askFacilityDnsTakeover(row.domain)"
-                    >{{ t('applicationsPage.dnsSyncTakeover') }}</Button>
-                  </div>
+        <section v-else class="grid h-full min-h-0 content-start gap-4 overflow-y-auto pr-1">
+          <DetailSection :title="t('applicationsPage.dnsSyncTitle')" :description="t('applicationsPage.dnsTabHint')">
+            <div v-for="row in facilityDnsDomains" :key="`dns-${row.domain}`" class="grid gap-2 p-4">
+              <div class="flex flex-wrap items-center justify-between gap-3">
+                <div class="grid gap-0.5">
+                  <strong class="break-all text-body-strong font-semibold text-foreground">{{ row.domain }}</strong>
+                  <span class="text-caption text-muted-foreground">{{ t(`applicationsPage.dnsSyncSource.${row.source}`) }}</span>
                 </div>
-                <p v-if="facilityDnsError(row.domain)" class="m-0 text-xs text-danger">{{ facilityDnsError(row.domain) }}</p>
+                <div class="flex flex-wrap items-center gap-2">
+                  <Badge :tone="facilityDnsTone(facilityDnsStatus(row.domain))" :title="facilityDnsError(row.domain) || undefined">{{ t(`applicationsPage.dnsSync.${facilityDnsStatus(row.domain) || 'unknown'}`) }}</Badge>
+                  <Button
+                    v-if="facilityDnsNeedsAction(row.domain)"
+                    size="sm"
+                    variant="secondary"
+                    :loading="dnsSyncPendingDomain === row.domain"
+                    :disabled="Boolean(dnsSyncPendingDomain) && dnsSyncPendingDomain !== row.domain"
+                    @click="retryFacilityDns(row.domain)"
+                  >{{ t('applicationsPage.dnsSyncRetry') }}</Button>
+                  <Button
+                    v-if="facilityDnsStatus(row.domain) === 'failed' || facilityDnsConflict(row.domain)"
+                    size="sm"
+                    variant="danger"
+                    :loading="dnsSyncPendingDomain === row.domain"
+                    :disabled="Boolean(dnsSyncPendingDomain) && dnsSyncPendingDomain !== row.domain"
+                    @click="askFacilityDnsTakeover(row.domain)"
+                  >{{ t('applicationsPage.dnsSyncTakeover') }}</Button>
+                </div>
               </div>
-              <EmptyState v-if="!facilityDnsDomains.length" :title="t('applicationsPage.configRecordEmpty')" :description="t('applicationsPage.configRecordEmptyHint')" />
+              <p v-if="facilityDnsError(row.domain)" class="m-0 text-caption font-semibold text-danger">{{ facilityDnsError(row.domain) }}</p>
             </div>
-          </div>
+            <EmptyState v-if="!facilityDnsDomains.length" variant="inset" :title="t('applicationsPage.configRecordEmpty')" :description="t('applicationsPage.configRecordEmptyHint')" />
+          </DetailSection>
         </section>
       </Tabs>
     </div>
   </ConsolePage>
 
-  <ConsolePage v-else-if="isAppEditor" :back-label="t('common.back')" @back="leaveApplicationEditor" :title="isCreateMode ? t('applicationsPage.createApplication') : t('applicationsPage.applicationEditor')" :description="t('applicationsPage.applicationEditorDescription')">
+  <ConsolePage
+    v-else-if="isAppEditor"
+    :back-label="t('common.back')"
+    @back="leaveApplicationEditor"
+    :title="isCreateMode ? t('applicationsPage.createApplication') : t('applicationsPage.applicationEditor')"
+    :description="t('applicationsPage.applicationEditorDescription')"
+    :breadcrumbs="applicationEditorBreadcrumbs"
+    :body-scroll="false"
+    width="content"
+  >
     <EditorPage>
       <div v-if="!editorReady" class="relative grid min-h-64 place-items-center">
         <LoadingOverlay v-if="editorLoading || !actionError" />
         <div v-else class="grid max-w-md justify-items-center gap-3 text-center">
           <AlertTriangle class="size-6 text-danger" aria-hidden="true" />
-          <p class="m-0 text-sm text-danger">{{ actionError }}</p>
+          <p class="m-0 text-body text-danger">{{ actionError }}</p>
           <Button size="sm" :loading="pending === 'editor-reload'" @click="reloadApplicationEditor">{{ t('common.retry') }}</Button>
         </div>
       </div>
-      <div v-if="saving" class="mb-4 rounded-xl border border-info-border bg-info-bg p-3 text-sm text-info">{{ t(`applicationsPage.saveStage.${saveStage}`) }}</div>
-      <div v-if="editorReady && actionError" class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
-        <span class="text-danger">{{ actionError }}</span>
+      <div class="grid gap-3">
+        <InfoBar v-if="saving" tone="info">{{ t(`applicationsPage.saveStage.${saveStage}`) }}</InfoBar>
+        <InfoBar v-if="editorReady && actionError" tone="danger">
+          <span class="min-w-0 break-words">{{ actionError }}</span>
+        </InfoBar>
       </div>
-      <div v-if="editorReady" class="relative app-editor-layout">
+
+      <!-- 同设施记录编辑器：xl 才双列 + sticky，1024–1279 摘要下移为单列。 -->
+      <div v-if="editorReady" class="relative grid min-w-0 content-start gap-4 xl:grid-cols-[minmax(0,1fr)_320px] xl:items-start">
         <LoadingOverlay v-if="saving" :label="t(`applicationsPage.saveStage.${saveStage}`)" />
-        <section class="app-editor-shell">
-          <div class="app-editor-header">
-            <div class="app-editor-title-row">
-              <p class="editor-flow-hint">{{ t('applicationsPage.editorFlowHint') }}</p>
+        <div class="grid min-w-0 content-start gap-4">
+          <p class="m-0 text-caption text-muted-foreground">{{ t('applicationsPage.editorFlowHint') }}</p>
+
+          <DetailSection :title="t('applicationsPage.panelIdentity')" :description="isCreateMode ? t('applicationsPage.createFastPathHint') : t('applicationsPage.editRuntimeHint')">
+            <div class="grid gap-3 p-4 sm:grid-cols-2">
+              <FormField :label="t('common.name')" :invalid="Boolean(appErrors.name)">
+                <template #default="{ id, describedBy, invalid }">
+                  <Input :id="id" :aria-describedby="describedBy" v-model="appDraft.name" :invalid="invalid" @input="markAppStructuredDirty" />
+                </template>
+              </FormField>
+              <FormField :label="t('applicationsPage.enabled')">
+                <template #default="{ id }">
+                  <Switch :id="id" v-model="appDraft.enabled" :label="t('applicationsPage.enabled')" @click="markAppStructuredDirty" />
+                </template>
+              </FormField>
             </div>
-          </div>
+          </DetailSection>
 
-          <div class="app-editor-body">
-            <section class="workspace-panel motion-enter">
-              <div class="section-copy"><h3>{{ t('applicationsPage.panelIdentity') }}</h3><p>{{ isCreateMode ? t('applicationsPage.createFastPathHint') : t('applicationsPage.editRuntimeHint') }}</p></div>
-              <div class="form-grid">
-                <label class="field">{{ t('common.name') }}<Input v-model="appDraft.name" :invalid="Boolean(appErrors.name)" @input="markAppStructuredDirty" /></label>
-                <label class="field">{{ t('applicationsPage.enabled') }}<Switch v-model="appDraft.enabled" :label="t('applicationsPage.enabled')" @click="markAppStructuredDirty" /></label>
+          <DetailSection :title="t('applicationsPage.panelRuntimeSource')" :description="t('applicationsPage.sourceHint')">
+            <div class="grid gap-3 p-4 sm:grid-cols-2">
+              <div class="sm:col-span-2">
+                <FormField :label="t('applicationsPage.image')" :invalid="Boolean(appErrors.image)">
+                  <template #default="{ id, describedBy, invalid }">
+                    <Input :id="id" :aria-describedby="describedBy" v-model="appDraft.image" :invalid="invalid" @input="markAppStructuredDirty" />
+                  </template>
+                </FormField>
               </div>
-            </section>
-
-            <section class="workspace-panel motion-enter">
-              <div class="section-copy"><h3>{{ t('applicationsPage.panelRuntimeSource') }}</h3><p>{{ t('applicationsPage.sourceHint') }}</p></div>
-              <div class="form-grid">
-                <label class="field wide-field">{{ t('applicationsPage.image') }}<Input v-model="appDraft.image" :invalid="Boolean(appErrors.image)" @input="markAppStructuredDirty" /></label>
-                <label class="field">{{ t('applicationsPage.cpu') }}<Input v-model="appDraft.cpu" placeholder="0.5" :invalid="Boolean(appErrors.cpu)" @input="markAppStructuredDirty" /></label>
-                <label class="field">{{ t('applicationsPage.memoryMb') }}<Input v-model="appDraft.memoryMb" placeholder="512" :invalid="Boolean(appErrors.memoryMb)" @input="markAppStructuredDirty" /></label>
-                <div class="field wide-field">
-                  <span>{{ t('applicationsPage.command') }}</span>
-                  <div class="grid gap-2">
-                    <div v-for="row in appDraft.commandRows" :key="row.id" class="header-row">
-                      <Input v-model="row.value" :placeholder="t('applicationsPage.commandArgument')" @input="markAppStructuredDirty" />
-                      <Button size="sm" variant="danger" class="shrink-0" @click="removeCommandRow(row.id)"><Trash2 /></Button>
-                    </div>
-                    <Button size="sm" class="justify-self-start" @click="addCommandRow"><Plus />{{ t('common.add') }}</Button>
+              <FormField :label="t('applicationsPage.cpu')" :invalid="Boolean(appErrors.cpu)">
+                <template #default="{ id, describedBy, invalid }">
+                  <Input :id="id" :aria-describedby="describedBy" v-model="appDraft.cpu" placeholder="0.5" :invalid="invalid" @input="markAppStructuredDirty" />
+                </template>
+              </FormField>
+              <FormField :label="t('applicationsPage.memoryMb')" :invalid="Boolean(appErrors.memoryMb)">
+                <template #default="{ id, describedBy, invalid }">
+                  <Input :id="id" :aria-describedby="describedBy" v-model="appDraft.memoryMb" placeholder="512" :invalid="invalid" @input="markAppStructuredDirty" />
+                </template>
+              </FormField>
+              <div class="grid content-start gap-1 sm:col-span-2">
+                <span class="text-caption text-muted-foreground">{{ t('applicationsPage.command') }}</span>
+                <div class="grid gap-2">
+                  <div v-for="row in appDraft.commandRows" :key="row.id" class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+                    <Input v-model="row.value" :placeholder="t('applicationsPage.commandArgument')" @input="markAppStructuredDirty" />
+                    <Button size="sm" variant="danger" class="shrink-0" @click="removeCommandRow(row.id)"><Trash2 /></Button>
                   </div>
+                  <Button size="sm" variant="secondary" class="justify-self-start" @click="addCommandRow"><Plus />{{ t('common.add') }}</Button>
                 </div>
-                <label class="switch-field wide-field">{{ t('applicationsPage.privileged') }}<Switch v-model="appDraft.privileged" :label="t('applicationsPage.privileged')" @click="markAppStructuredDirty" /></label>
               </div>
-            </section>
+              <FormField :label="t('applicationsPage.privileged')" class="sm:col-span-2">
+                <template #default="{ id }">
+                  <Switch :id="id" v-model="appDraft.privileged" :label="t('applicationsPage.privileged')" @click="markAppStructuredDirty" />
+                </template>
+              </FormField>
+            </div>
+          </DetailSection>
 
-            <section class="workspace-panel motion-enter">
-              <div class="section-heading"><div class="section-copy"><h3>{{ t('applicationsPage.panelNetworking') }}</h3><p>{{ t('applicationsPage.networkingHint') }}</p></div><div class="flex flex-wrap gap-2"><Button size="sm" @click="openPortDialog()"><Plus />{{ t('applicationsPage.addPort') }}</Button><Button size="sm" @click="openProxyDialog()"><Globe2 />{{ t('applicationsPage.addProxyRule') }}</Button></div></div>
-              <div class="grid gap-3">
-                <div v-for="(port, index) in appDraft.ports" :key="port.id" class="item-row"><div><strong>{{ port.label || t('applicationsPage.unnamedPort') }}</strong><span>{{ t('applicationsPage.containerPortSummary', { port: port.to }) }} · {{ port.staticPort ? t('applicationsPage.staticPort', { port: port.staticPort }) : t('applicationsPage.dynamicPort') }} · {{ t('applicationsPage.protocolSummary', { protocol: port.protocol.toUpperCase() }) }} · {{ port.openFirewall ? t('applicationsPage.firewallManaged') : t('applicationsPage.firewallUnchanged') }}</span></div><div class="row-actions"><Button size="sm" @click="openPortDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(appDraft.ports, index)">{{ t('common.delete') }}</Button></div></div>
-                <div v-for="(rule, index) in appDraft.reverseProxy" :key="index" class="item-row"><div><strong>{{ rule.domain || t('applicationsPage.unnamedDomain') }}</strong><span>{{ t('applicationsPage.routeTargetSummary', { port: rule.targetPort, paths: rule.paths.map((path) => path.path).join(', ') }) }}</span></div><div class="row-actions"><Button size="sm" @click="openProxyDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(appDraft.reverseProxy, index)">{{ t('common.delete') }}</Button></div></div>
-                <EmptyState v-if="!appDraft.ports.length && !appDraft.reverseProxy.length" :title="t('applicationsPage.noRoutes')" :description="t('applicationsPage.networkingEmptyHint')" />
+          <DetailSection :title="t('applicationsPage.panelNetworking')" :description="t('applicationsPage.networkingHint')">
+            <template #actions>
+              <Button size="sm" variant="secondary" @click="openPortDialog()"><Plus />{{ t('applicationsPage.addPort') }}</Button>
+              <Button size="sm" variant="secondary" @click="openProxyDialog()"><Globe2 />{{ t('applicationsPage.addProxyRule') }}</Button>
+            </template>
+            <div v-for="(port, index) in appDraft.ports" :key="port.id" class="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+              <div class="min-w-0">
+                <strong class="block break-all text-body-strong font-semibold text-foreground">{{ port.label || t('applicationsPage.unnamedPort') }}</strong>
+                <span class="mt-0.5 block text-caption text-muted-foreground">{{ t('applicationsPage.containerPortSummary', { port: port.to }) }} · {{ port.staticPort ? t('applicationsPage.staticPort', { port: port.staticPort }) : t('applicationsPage.dynamicPort') }} · {{ t('applicationsPage.protocolSummary', { protocol: port.protocol.toUpperCase() }) }} · {{ port.openFirewall ? t('applicationsPage.firewallManaged') : t('applicationsPage.firewallUnchanged') }}</span>
               </div>
-            </section>
-
-            <section class="workspace-panel motion-enter">
-              <div class="section-heading"><div class="section-copy"><h3>{{ t('applicationsPage.containerEnv') }}</h3><p>{{ t('applicationsPage.environmentHint') }}</p></div><Button size="sm" @click="openRowDialog()"><Plus />{{ t('common.add') }}</Button></div>
-              <div class="grid gap-3">
-                <div v-for="(row, index) in appDraft.env" :key="row.id" class="item-row"><div><strong>{{ row.key }}</strong><span>{{ row.value || t('common.empty') }}</span></div><div class="row-actions"><Button size="sm" @click="openRowDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeRow(index)">{{ t('common.delete') }}</Button></div></div>
-                <EmptyState v-if="!appDraft.env.length" :title="t('applicationsPage.noEnvironment')" :description="t('applicationsPage.noEnvironmentHint')" />
+              <div class="flex flex-wrap justify-start gap-2 sm:justify-end">
+                <Button size="sm" @click="openPortDialog(index)">{{ t('common.edit') }}</Button>
+                <Button size="sm" variant="danger" @click="removeAt(appDraft.ports, index)">{{ t('common.delete') }}</Button>
               </div>
-            </section>
-
-            <section class="workspace-panel motion-enter">
-              <div class="section-heading"><div class="section-copy"><h3>{{ t('applicationsPage.panelStorage') }}</h3><p>{{ t('applicationsPage.storageHint') }}</p></div><Button size="sm" @click="openMountDialog()"><Plus />{{ t('applicationsPage.addMount') }}</Button></div>
-              <div class="grid gap-3">
-                <div v-for="(mount, index) in appDraft.mounts" :key="mount.id" class="item-row"><div><strong>{{ t('applicationsPage.mountSummary', { type: mount.type, target: mount.target }) }}</strong><span>{{ mountSourceLabel(mount) }}</span></div><div class="row-actions"><Button size="sm" @click="openMountDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(appDraft.mounts, index)">{{ t('common.delete') }}</Button></div></div>
-                <EmptyState v-if="!appDraft.mounts.length" :title="t('applicationsPage.noMounts')" :description="t('applicationsPage.noMountsHint')" />
+            </div>
+            <div v-for="(rule, index) in appDraft.reverseProxy" :key="index" class="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+              <div class="min-w-0">
+                <strong class="block break-all text-body-strong font-semibold text-foreground">{{ rule.domain || t('applicationsPage.unnamedDomain') }}</strong>
+                <span class="mt-0.5 block text-caption text-muted-foreground">{{ t('applicationsPage.routeTargetSummary', { port: rule.targetPort, paths: rule.paths.map((path) => path.path).join(', ') }) }}</span>
               </div>
-            </section>
+              <div class="flex flex-wrap justify-start gap-2 sm:justify-end">
+                <Button size="sm" @click="openProxyDialog(index)">{{ t('common.edit') }}</Button>
+                <Button size="sm" variant="danger" @click="removeAt(appDraft.reverseProxy, index)">{{ t('common.delete') }}</Button>
+              </div>
+            </div>
+            <EmptyState v-if="!appDraft.ports.length && !appDraft.reverseProxy.length" variant="inset" :title="t('applicationsPage.noRoutes')" :description="t('applicationsPage.networkingEmptyHint')" />
+          </DetailSection>
 
-            <section class="workspace-panel motion-enter">
-              <div class="section-copy"><h3>{{ t('applicationsPage.panelDeployment') }}</h3><p>{{ t('applicationsPage.deployHint') }}</p></div>
-              <label class="field">{{ t('applicationsPage.deploymentMode') }}<Select v-model="appDraft.deploymentMode" :options="[{ label: t('applicationsPage.allServers'), value: 'all' }, { label: t('applicationsPage.selectedServers'), value: 'selected' }]" @change="markAppStructuredDirty" /></label>
-              <div v-if="appDraft.deploymentMode === 'selected'" class="server-picker-grid">
+          <DetailSection :title="t('applicationsPage.containerEnv')" :description="t('applicationsPage.environmentHint')">
+            <template #actions>
+              <Button size="sm" variant="secondary" @click="openRowDialog()"><Plus />{{ t('common.add') }}</Button>
+            </template>
+            <div v-for="(row, index) in appDraft.env" :key="row.id" class="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+              <div class="min-w-0">
+                <strong class="block break-all text-body-strong font-semibold text-foreground">{{ row.key }}</strong>
+                <span class="mt-0.5 block break-all text-caption text-muted-foreground">{{ row.value || t('common.empty') }}</span>
+              </div>
+              <div class="flex flex-wrap justify-start gap-2 sm:justify-end">
+                <Button size="sm" @click="openRowDialog(index)">{{ t('common.edit') }}</Button>
+                <Button size="sm" variant="danger" @click="removeRow(index)">{{ t('common.delete') }}</Button>
+              </div>
+            </div>
+            <EmptyState v-if="!appDraft.env.length" variant="inset" :title="t('applicationsPage.noEnvironment')" :description="t('applicationsPage.noEnvironmentHint')" />
+          </DetailSection>
+
+          <DetailSection :title="t('applicationsPage.panelStorage')" :description="t('applicationsPage.storageHint')">
+            <template #actions>
+              <Button size="sm" variant="secondary" @click="openMountDialog()"><Plus />{{ t('applicationsPage.addMount') }}</Button>
+            </template>
+            <div v-for="(mount, index) in appDraft.mounts" :key="mount.id" class="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+              <div class="min-w-0">
+                <strong class="block break-all text-body-strong font-semibold text-foreground">{{ t('applicationsPage.mountSummary', { type: mount.type, target: mount.target }) }}</strong>
+                <span class="mt-0.5 block break-all text-caption text-muted-foreground">{{ mountSourceLabel(mount) }}</span>
+              </div>
+              <div class="flex flex-wrap justify-start gap-2 sm:justify-end">
+                <Button size="sm" @click="openMountDialog(index)">{{ t('common.edit') }}</Button>
+                <Button size="sm" variant="danger" @click="removeAt(appDraft.mounts, index)">{{ t('common.delete') }}</Button>
+              </div>
+            </div>
+            <EmptyState v-if="!appDraft.mounts.length" variant="inset" :title="t('applicationsPage.noMounts')" :description="t('applicationsPage.noMountsHint')" />
+          </DetailSection>
+
+          <DetailSection :title="t('applicationsPage.panelDeployment')" :description="t('applicationsPage.deployHint')">
+            <div class="grid gap-3 p-4">
+              <FormField :label="t('applicationsPage.deploymentMode')">
+                <template #default="{ id }">
+                  <Select :id="id" v-model="appDraft.deploymentMode" :options="[{ label: t('applicationsPage.allServers'), value: 'all' }, { label: t('applicationsPage.selectedServers'), value: 'selected' }]" @change="markAppStructuredDirty" />
+                </template>
+              </FormField>
+              <div v-if="appDraft.deploymentMode === 'selected'">
                 <ServerMultiPicker v-model="appDeploymentServersModel" :servers="serverOptions" :disabled-ids="deploymentDisabledIds" :disabled-reasons="deploymentDisabledReasons" :label="t('applicationsPage.deploymentServers')" />
               </div>
-            </section>
+            </div>
+          </DetailSection>
+        </div>
 
-            <section class="workspace-panel motion-enter">
-              <AssetFileManager
-                :items="applicationAssetItems" :adapter="applicationAssetAdapter" :disabled="!editorReady || saving" :show-filename="false"
-                :language-options="fileLanguageOptions" :infer-language="inferTemplateLanguage"
-                :labels="{ title: t('applicationsPage.panelFilesAssets'), hint: t('applicationsPage.filesHint'), uploadAsset: t('applicationsPage.uploadAsset'), uploadAssetTitle: t('applicationsPage.uploadAssetTitle'), uploadType: t('applicationsPage.uploadType'), uploadTypeText: t('applicationsPage.uploadTypeText'), uploadTypeBinary: t('applicationsPage.uploadTypeBinary'), uploadTypeArchive: t('applicationsPage.uploadTypeArchive'), uploadFile: t('applicationsPage.uploadFile'), uploadArchive: t('applicationsPage.uploadFolderArchive'), operationFailed: t('applicationsPage.operationFailed'), edit: t('common.edit'), replace: t('common.replace'), download: t('common.download'), delete: t('common.delete'), bytes: t('applicationsPage.bytes'), noAssets: t('applicationsPage.noFiles'), noAssetsHint: t('applicationsPage.noFilesHint'), textTitle: t('applicationsPage.editTextFile'), newTextTitle: t('applicationsPage.newTextFile'), name: t('applicationsPage.fileName'), filename: t('applicationsPage.assetDownloadFilename'), language: t('applicationsPage.highlightLanguage'), content: t('applicationsPage.fileContent'), loading: t('applicationsPage.fileLoading'), loadFailed: t('applicationsPage.fileLoadFailed'), cancel: t('common.cancel'), save: t('common.save'), close: t('common.close'), reload: t('applicationsPage.discardTextAndReload'), deleteTitle: t('applicationsPage.confirm.file-delete.title'), deleteDescription: t('applicationsPage.confirm.file-delete.description'), confirmDelete: t('common.delete') }"
+        <aside class="grid min-w-0 content-start gap-4 xl:sticky xl:top-0">
+          <DetailSection :title="isCreateMode ? t('applicationsPage.createSummary') : t('applicationsPage.changeSummary')">
+            <div class="grid gap-3 p-4">
+              <PropertyList
+                :columns="1"
+                :items="[
+                  { label: t('applicationsPage.configuration'), value: sourceSummary() },
+                  { label: t('applicationsPage.routes'), value: appDraft.reverseProxy.length },
+                  { label: t('applicationsPage.mounts'), value: appDraft.mounts.length },
+                  { label: t('applicationsPage.previewAdded'), value: appDiff.added },
+                  { label: t('applicationsPage.previewChanged'), value: appDiff.changed },
+                ]"
               />
-            </section>
-          </div>
-
-        </section>
-
-        <aside class="app-editor-summary">
-          <section class="rounded-2xl border border-border bg-card p-4">
-            <h3>{{ isCreateMode ? t('applicationsPage.createSummary') : t('applicationsPage.changeSummary') }}</h3>
-            <div class="mt-3 grid gap-2 text-sm">
-              <div><span>{{ t('applicationsPage.configuration') }}</span><strong>{{ sourceSummary() }}</strong></div>
-              <div><span>{{ t('applicationsPage.routes') }}</span><strong>{{ appDraft.reverseProxy.length }}</strong></div>
-              <div><span>{{ t('applicationsPage.mounts') }}</span><strong>{{ appDraft.mounts.length }}</strong></div>
-              <div><span>{{ t('applicationsPage.previewAdded') }}</span><strong>{{ appDiff.added }}</strong></div>
-              <div><span>{{ t('applicationsPage.previewChanged') }}</span><strong>{{ appDiff.changed }}</strong></div>
               <Badge :tone="editorDirty ? 'warning' : 'success'">{{ editorDirty ? t('applicationsPage.dirty') : t('applicationsPage.clean') }}</Badge>
             </div>
-          </section>
-          <section class="rounded-2xl border border-border bg-card p-4">
-            <h3>{{ t('applicationsPage.diagnostics') }}</h3>
-            <div class="mt-3 grid gap-2">
-              <div v-for="item in diagnostics" :key="`${item.code}-${item.field}`" class="rounded-xl border p-3 text-sm" :class="item.severity === 'error' ? 'border-danger-border bg-danger-bg text-danger' : 'border-warning-border bg-warning-bg text-warning'">{{ item.field ? `${item.field}: ` : '' }}{{ item.message }}{{ diagnosticDetailText(item) }}</div>
-              <p v-if="!diagnostics.length" class="m-0 text-sm text-muted-foreground">{{ t('applicationsPage.noDiagnostics') }}</p>
-            </div>
-          </section>
+          </DetailSection>
+          <DetailSection :title="t('applicationsPage.diagnostics')">
+            <ApplicationDiagnosticsList :items="diagnostics" />
+          </DetailSection>
         </aside>
       </div>
 
+      <!-- 资产/代码编辑器全宽：不放进 xl 双列的窄主列，避免 YAML/模板被压窄。 -->
+      <div class="mt-4 surface-card p-4">
+        <AssetFileManager
+          :items="applicationAssetItems" :adapter="applicationAssetAdapter" :disabled="!editorReady || saving" :show-filename="false"
+          :language-options="fileLanguageOptions" :infer-language="inferTemplateLanguage"
+          :labels="{ title: t('applicationsPage.panelFilesAssets'), hint: t('applicationsPage.filesHint'), uploadAsset: t('applicationsPage.uploadAsset'), uploadAssetTitle: t('applicationsPage.uploadAssetTitle'), uploadType: t('applicationsPage.uploadType'), uploadTypeText: t('applicationsPage.uploadTypeText'), uploadTypeBinary: t('applicationsPage.uploadTypeBinary'), uploadTypeArchive: t('applicationsPage.uploadTypeArchive'), uploadFile: t('applicationsPage.uploadFile'), uploadArchive: t('applicationsPage.uploadFolderArchive'), operationFailed: t('applicationsPage.operationFailed'), edit: t('common.edit'), replace: t('common.replace'), download: t('common.download'), delete: t('common.delete'), bytes: t('applicationsPage.bytes'), noAssets: t('applicationsPage.noFiles'), noAssetsHint: t('applicationsPage.noFilesHint'), textTitle: t('applicationsPage.editTextFile'), newTextTitle: t('applicationsPage.newTextFile'), name: t('applicationsPage.fileName'), filename: t('applicationsPage.assetDownloadFilename'), language: t('applicationsPage.highlightLanguage'), content: t('applicationsPage.fileContent'), loading: t('applicationsPage.fileLoading'), loadFailed: t('applicationsPage.fileLoadFailed'), cancel: t('common.cancel'), save: t('common.save'), close: t('common.close'), reload: t('applicationsPage.discardTextAndReload'), deleteTitle: t('applicationsPage.confirm.file-delete.title'), deleteDescription: t('applicationsPage.confirm.file-delete.description'), confirmDelete: t('common.delete') }"
+        />
+      </div>
 
       <template #footer>
         <div class="flex flex-wrap items-center justify-between gap-3">
-          <div class="text-sm text-muted-foreground">{{ editorDirty ? t('applicationsPage.unsavedChanges') : t('applicationsPage.readyToCommit') }}</div>
+          <div class="text-caption text-muted-foreground">{{ editorDirty ? t('applicationsPage.unsavedChanges') : t('applicationsPage.readyToCommit') }}</div>
           <div class="flex flex-wrap gap-2">
             <Button variant="secondary" :disabled="saving" @click="leaveApplicationEditor">{{ t('common.cancel') }}</Button>
             <Button variant="primary" :loading="pending === 'commit'" :disabled="!editorReady || saving" @click="commitApplication()"><Save />{{ t('applicationsPage.commit') }}</Button>
@@ -3135,142 +3282,263 @@ onBeforeUnmount(() => {
 
   <Dialog v-model:open="dialogOpen" :title="t(`applicationsPage.dialog.${dialogKind}`)" :close-label="t('common.close')">
     <div v-if="dialogKind === 'env'" class="grid gap-3">
-      <label class="field">{{ t('common.name') }}<Input v-model="rowDraft.key" /></label>
-      <label class="field">
-        {{ t('common.value') }}
+      <FormField :label="t('common.name')">
+        <template #default="{ id }"><Input :id="id" v-model="rowDraft.key" /></template>
+      </FormField>
+      <div class="grid gap-1">
+        <span class="text-caption text-muted-foreground">{{ t('common.value') }}</span>
         <TemplateVariableInput
           v-model="rowDraft.value"
           :options="applicationTemplateVariableOptions"
           :insert-label="t('applicationsPage.insertVariable')"
           :empty-label="t('applicationsPage.noInsertableVariables')"
         />
-        <span class="text-xs text-muted-foreground">{{ t('applicationsPage.variableReferenceHint') }}</span>
-      </label>
+        <span class="text-caption text-secondary-foreground">{{ t('applicationsPage.variableReferenceHint') }}</span>
+      </div>
     </div>
     <div v-else-if="dialogKind === 'port'" class="grid gap-3">
-      <label class="field">{{ t('common.name') }}<Input v-model="portDraft.label" /></label>
-      <label class="field">{{ t('applicationsPage.containerPort') }}<Input v-model="portDraft.to" /></label>
-      <label class="field">{{ t('applicationsPage.hostPort') }}<Input v-model="portDraft.staticPort" @input="onPortStaticPortInput" /></label>
-      <label class="field">{{ t('applicationsPage.protocol') }}<Select v-model="portDraft.protocol" :options="portProtocolOptions" /></label>
-      <label class="switch-field">{{ t('applicationsPage.openFirewall') }}<Switch v-model="portDraft.openFirewall" :label="t('applicationsPage.openFirewall')" :disabled="!portDraft.staticPort.trim()" /></label>
-      <p class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.openFirewallHint') }}</p>
+      <FormField :label="t('common.name')">
+        <template #default="{ id }"><Input :id="id" v-model="portDraft.label" /></template>
+      </FormField>
+      <FormField :label="t('applicationsPage.containerPort')">
+        <template #default="{ id }"><Input :id="id" v-model="portDraft.to" /></template>
+      </FormField>
+      <FormField :label="t('applicationsPage.hostPort')">
+        <template #default="{ id }"><Input :id="id" v-model="portDraft.staticPort" @input="onPortStaticPortInput" /></template>
+      </FormField>
+      <FormField :label="t('applicationsPage.protocol')">
+        <template #default="{ id }"><Select :id="id" v-model="portDraft.protocol" :options="portProtocolOptions" /></template>
+      </FormField>
+      <FormField :label="t('applicationsPage.openFirewall')" :hint="t('applicationsPage.openFirewallHint')">
+        <template #default="{ id }"><Switch :id="id" v-model="portDraft.openFirewall" :label="t('applicationsPage.openFirewall')" :disabled="!portDraft.staticPort.trim()" /></template>
+      </FormField>
     </div>
     <div v-else-if="dialogKind === 'mount'" class="grid gap-3">
-      <label class="field">{{ t('common.type') }}<Select v-model="mountDraft.type" :options="mountTypeOptions" /></label>
-      <label class="field">{{ t('applicationsPage.source') }}<Select v-if="mountDraft.type === 'file'" v-model="mountDraft.source" :options="applicationFileMountOptions" :placeholder="t('applicationsPage.applicationFileMountSourcePlaceholder')" /><Select v-else-if="mountDraft.type === 'panel_file'" v-model="mountDraft.source" :options="panelFileMountOptions" :placeholder="t('applicationsPage.panelFileMountSourcePlaceholder')" /><Select v-else-if="mountDraft.type === 'storage_share'" v-model="mountDraft.source" :options="storageShareOptions" :placeholder="t('applicationsPage.storageShareMountSourcePlaceholder')" :disabled="!storageShareAvailable" /><Input v-else v-model="mountDraft.source" /></label>
-      <p v-if="mountDraft.type === 'file' && !applicationAssetItems.length" class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.applicationFileMountEmpty') }}</p>
-      <p v-else-if="mountDraft.type === 'file' && mountDraft.source && !applicationFileMountSourceValid" class="m-0 text-xs text-danger">{{ t('applicationsPage.applicationFileMountMissing', { name: mountDraft.source }) }}</p>
-      <p v-if="mountDraft.type === 'panel_file' && !panelFiles.length" class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.panelFileMountEmpty') }}</p>
-      <p v-else-if="mountDraft.type === 'panel_file' && mountDraft.source && !panelFileMountSourceValid" class="m-0 text-xs text-danger">{{ t('applicationsPage.panelFileMountMissing', { source: mountDraft.source }) }}</p>
-      <p v-if="mountDraft.type === 'storage_share'" class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.storageShareMountHint') }}</p>
-      <p v-if="mountDraft.type === 'storage_share' && !storageShareAvailable" class="m-0 text-xs text-warning">{{ t('applicationsPage.storageShareMountUnconfigured') }} <Button size="sm" variant="ghost" @click="router.push('/applications/facility-apps/storage-share/config')">{{ t('applicationsPage.storageShareGoConfigure') }}</Button></p>
-      <label class="field">{{ t('applicationsPage.target') }}<Input v-model="mountDraft.target" /></label>
-      <label v-if="mountDraft.type !== 'storage_share'" class="field">{{ t('applicationsPage.mode') }}<Input v-model="mountDraft.mode" placeholder="0755" /></label>
-      <label class="flex items-center justify-between rounded-xl border border-border p-3 text-sm">{{ t('applicationsPage.readOnly') }}<Switch v-model="mountDraft.readOnly" :label="t('applicationsPage.readOnly')" /></label>
+      <FormField :label="t('common.type')">
+        <template #default="{ id }"><Select :id="id" v-model="mountDraft.type" :options="mountTypeOptions" /></template>
+      </FormField>
+      <FormField :label="t('applicationsPage.source')">
+        <template #default="{ id }">
+          <Select v-if="mountDraft.type === 'file'" :id="id" v-model="mountDraft.source" :options="applicationFileMountOptions" :placeholder="t('applicationsPage.applicationFileMountSourcePlaceholder')" />
+          <Select v-else-if="mountDraft.type === 'panel_file'" :id="id" v-model="mountDraft.source" :options="panelFileMountOptions" :placeholder="t('applicationsPage.panelFileMountSourcePlaceholder')" />
+          <Select v-else-if="mountDraft.type === 'storage_share'" :id="id" v-model="mountDraft.source" :options="storageShareOptions" :placeholder="t('applicationsPage.storageShareMountSourcePlaceholder')" :disabled="!storageShareAvailable" />
+          <Input v-else :id="id" v-model="mountDraft.source" />
+        </template>
+      </FormField>
+      <p v-if="mountDraft.type === 'file' && !applicationAssetItems.length" class="m-0 text-caption text-muted-foreground">{{ t('applicationsPage.applicationFileMountEmpty') }}</p>
+      <p v-else-if="mountDraft.type === 'file' && mountDraft.source && !applicationFileMountSourceValid" class="m-0 text-caption font-semibold text-danger">{{ t('applicationsPage.applicationFileMountMissing', { name: mountDraft.source }) }}</p>
+      <p v-if="mountDraft.type === 'panel_file' && !panelFiles.length" class="m-0 text-caption text-muted-foreground">{{ t('applicationsPage.panelFileMountEmpty') }}</p>
+      <p v-else-if="mountDraft.type === 'panel_file' && mountDraft.source && !panelFileMountSourceValid" class="m-0 text-caption font-semibold text-danger">{{ t('applicationsPage.panelFileMountMissing', { source: mountDraft.source }) }}</p>
+      <p v-if="mountDraft.type === 'storage_share'" class="m-0 text-caption text-muted-foreground">{{ t('applicationsPage.storageShareMountHint') }}</p>
+      <p v-if="mountDraft.type === 'storage_share' && !storageShareAvailable" class="m-0 text-caption text-warning">{{ t('applicationsPage.storageShareMountUnconfigured') }} <Button size="sm" variant="ghost" @click="router.push('/applications/facility-apps/storage-share/config')">{{ t('applicationsPage.storageShareGoConfigure') }}</Button></p>
+      <FormField :label="t('applicationsPage.target')">
+        <template #default="{ id }"><Input :id="id" v-model="mountDraft.target" /></template>
+      </FormField>
+      <FormField v-if="mountDraft.type !== 'storage_share'" :label="t('applicationsPage.mode')">
+        <template #default="{ id }"><Input :id="id" v-model="mountDraft.mode" placeholder="0755" /></template>
+      </FormField>
+      <FormField :label="t('applicationsPage.readOnly')">
+        <template #default="{ id }"><Switch :id="id" v-model="mountDraft.readOnly" :label="t('applicationsPage.readOnly')" /></template>
+      </FormField>
     </div>
     <div v-else-if="dialogKind === 'proxy'" class="grid gap-3">
-      <label class="field">{{ t('applicationsPage.domain') }}<Input v-model="proxyDraft.domain" /></label>
-      <label class="field">{{ t('applicationsPage.targetPort') }}<Input v-model="proxyDraft.targetPort" /></label>
-      <div class="options-block">
-        <div class="section-copy"><h3>{{ t('applicationsPage.anyAccess') }}</h3><p>{{ t('applicationsPage.anyAccessHint') }}</p></div>
-        <label class="switch-field">{{ t('applicationsPage.anyAccess') }}<Switch v-model="proxyAnyAccessModel" :label="t('applicationsPage.anyAccess')" /></label>
+      <FormField :label="t('applicationsPage.domain')">
+        <template #default="{ id }"><Input :id="id" v-model="proxyDraft.domain" /></template>
+      </FormField>
+      <FormField :label="t('applicationsPage.targetPort')">
+        <template #default="{ id }"><Input :id="id" v-model="proxyDraft.targetPort" /></template>
+      </FormField>
+      <div class="grid gap-3 rounded-control border border-divider bg-control p-3">
+        <div class="grid gap-0.5">
+          <h3 class="m-0 text-body-strong font-semibold text-foreground">{{ t('applicationsPage.anyAccess') }}</h3>
+          <p class="m-0 text-caption text-muted-foreground">{{ t('applicationsPage.anyAccessHint') }}</p>
+        </div>
+        <FormField :label="t('applicationsPage.anyAccess')">
+          <template #default="{ id }"><Switch :id="id" v-model="proxyAnyAccessModel" :label="t('applicationsPage.anyAccess')" /></template>
+        </FormField>
         <div v-if="proxyDraft.anyAccess.enabled" class="grid gap-3">
-          <label class="field">{{ t('applicationsPage.anyAccessRelayScope') }}<Select v-model="proxyRelayScope" :options="anyAccessRelayScopeOptions" /></label>
+          <FormField :label="t('applicationsPage.anyAccessRelayScope')">
+            <template #default="{ id }"><Select :id="id" v-model="proxyRelayScope" :options="anyAccessRelayScopeOptions" /></template>
+          </FormField>
           <ServerMultiPicker v-if="proxyRelayScope === 'selected'" v-model="proxyRelayServerIdsModel" :servers="proxyRelayServerOptions" :label="t('applicationsPage.anyAccessRelayServers', { count: proxyDraft.anyAccess.relayServerIds?.length ?? 0 })" />
-          <p v-if="proxyRelayScope === 'selected' && !proxyRelayServerOptions.length" class="m-0 text-sm text-muted-foreground">{{ t('applicationsPage.anyAccessNoRelayServers') }}</p>
-          <label class="field">{{ t('applicationsPage.loadBalancingStrategy') }}<Select v-model="proxyDraft.anyAccess.strategy" :options="anyAccessStrategyOptions" /></label>
-          <div v-if="proxyDraft.anyAccess.strategy === 'primary_backup'" class="options-block">
-            <div class="section-copy"><h3>{{ t('applicationsPage.originPriority') }}</h3><p>{{ t('applicationsPage.originPriorityHint') }}</p></div>
-            <div v-for="(serverId, index) in proxyOriginPriorityModel" :key="serverId" class="item-row">
-              <div><strong>{{ index + 1 }}. {{ serverDisplayName(serverId) }}</strong><span v-if="index === 0" class="text-xs text-muted-foreground">{{ t('applicationsPage.primaryOriginServer') }}</span></div>
-              <div class="row-actions">
+          <p v-if="proxyRelayScope === 'selected' && !proxyRelayServerOptions.length" class="m-0 text-caption text-muted-foreground">{{ t('applicationsPage.anyAccessNoRelayServers') }}</p>
+          <FormField :label="t('applicationsPage.loadBalancingStrategy')">
+            <template #default="{ id }"><Select :id="id" v-model="proxyDraft.anyAccess.strategy" :options="anyAccessStrategyOptions" /></template>
+          </FormField>
+          <div v-if="proxyDraft.anyAccess.strategy === 'primary_backup'" class="grid gap-3 rounded-control border border-divider bg-control p-3">
+            <div class="grid gap-0.5">
+              <h3 class="m-0 text-body-strong font-semibold text-foreground">{{ t('applicationsPage.originPriority') }}</h3>
+              <p class="m-0 text-caption text-muted-foreground">{{ t('applicationsPage.originPriorityHint') }}</p>
+            </div>
+            <div v-for="(serverId, index) in proxyOriginPriorityModel" :key="serverId" class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+              <div class="min-w-0">
+                <strong class="block break-all text-body-strong font-semibold text-foreground">{{ index + 1 }}. {{ serverDisplayName(serverId) }}</strong>
+                <span v-if="index === 0" class="text-caption text-muted-foreground">{{ t('applicationsPage.primaryOriginServer') }}</span>
+              </div>
+              <div class="flex flex-wrap gap-2 sm:justify-end">
                 <Button size="sm" :disabled="index === 0" @click="moveProxyOriginPriority(index, -1)">{{ t('applicationsPage.moveUp') }}</Button>
                 <Button size="sm" :disabled="index === proxyOriginPriorityModel.length - 1" @click="moveProxyOriginPriority(index, 1)">{{ t('applicationsPage.moveDown') }}</Button>
               </div>
             </div>
-            <p v-if="!proxyOriginPriorityModel.length" class="m-0 text-sm text-danger">{{ t('applicationsPage.proxyOriginEmptyHint') }}</p>
+            <InfoBar v-if="!proxyOriginPriorityModel.length" tone="danger">{{ t('applicationsPage.proxyOriginEmptyHint') }}</InfoBar>
           </div>
         </div>
       </div>
-      <div class="section-heading"><strong>{{ t('common.path') }}</strong><Button size="sm" @click="openProxyPathDialog()"><Plus />{{ t('common.addPath') }}</Button></div>
-      <div v-for="(path, index) in proxyDraft.paths" :key="`${path.path}-${index}`" class="item-row"><div><strong>{{ path.path }}</strong><span>{{ t('applicationsPage.webSocketMode') }}: {{ t(`applicationsPage.httpMode.${path.options?.webSocketMode || 'off'}`) }}</span></div><div class="row-actions"><Button size="sm" @click="openProxyPathDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="proxyDraft.paths.splice(index, 1)">{{ t('common.delete') }}</Button></div></div>
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <strong class="text-body-strong font-semibold text-foreground">{{ t('common.path') }}</strong>
+        <Button size="sm" variant="secondary" @click="openProxyPathDialog()"><Plus />{{ t('common.addPath') }}</Button>
+      </div>
+      <div v-for="(path, index) in proxyDraft.paths" :key="`${path.path}-${index}`" class="grid gap-2 rounded-control border border-divider p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+        <div class="min-w-0">
+          <strong class="block break-all text-body-strong font-semibold text-foreground">{{ path.path }}</strong>
+          <span class="block text-caption text-muted-foreground">{{ t('applicationsPage.webSocketMode') }}: {{ t(`applicationsPage.httpMode.${path.options?.webSocketMode || 'off'}`) }}</span>
+        </div>
+        <div class="flex flex-wrap gap-2 sm:justify-end">
+          <Button size="sm" @click="openProxyPathDialog(index)">{{ t('common.edit') }}</Button>
+          <Button size="sm" variant="danger" @click="proxyDraft.paths.splice(index, 1)">{{ t('common.delete') }}</Button>
+        </div>
+      </div>
     </div>
     <div v-else-if="dialogKind === 'proxyPath'" class="grid gap-3">
-      <label class="field">{{ t('common.path') }}<Input v-model="proxyPathDraft.path" /></label>
-      <div class="options-block">
-        <div class="section-copy"><h3>{{ t('applicationsPage.advancedOptions') }}</h3><p>{{ t('applicationsPage.advancedOptionsHint') }}</p></div>
-        <label class="field">{{ t('applicationsPage.gzipMode') }}<Select v-model="proxyGzipMode" :options="httpModeOptions" /></label>
-        <div class="form-grid">
-          <label class="field">{{ t('applicationsPage.clientMaxBodySizeMb') }}<Input v-model="proxyClientMaxBodySizeMb" type="number" min="0" /></label>
-          <label class="field">{{ t('applicationsPage.connectTimeoutSeconds') }}<Input v-model="proxyConnectTimeoutSeconds" type="number" min="0" /></label>
-          <label class="field">{{ t('applicationsPage.readTimeoutSeconds') }}<Input v-model="proxyReadTimeoutSeconds" type="number" min="0" /></label>
-          <label class="field">{{ t('applicationsPage.sendTimeoutSeconds') }}<Input v-model="proxySendTimeoutSeconds" type="number" min="0" /></label>
-          <label class="field">{{ t('applicationsPage.bufferingMode') }}<Select v-model="proxyBufferingMode" :options="httpModeOptions" /></label>
-          <label class="field">{{ t('applicationsPage.webSocketMode') }}<Select v-model="proxyWebSocketMode" :options="webSocketModeOptions" /></label>
+      <FormField :label="t('common.path')">
+        <template #default="{ id }"><Input :id="id" v-model="proxyPathDraft.path" /></template>
+      </FormField>
+      <div class="grid gap-3 rounded-control border border-divider bg-control p-3">
+        <div class="grid gap-0.5">
+          <h3 class="m-0 text-body-strong font-semibold text-foreground">{{ t('applicationsPage.advancedOptions') }}</h3>
+          <p class="m-0 text-caption text-muted-foreground">{{ t('applicationsPage.advancedOptionsHint') }}</p>
         </div>
-        <div class="options-subheading">{{ t('applicationsPage.requestHeaders') }}</div>
-        <div v-for="(row, index) in proxyRequestHeaders" :key="row.id" class="header-row">
-          <Input v-model="row.key" :placeholder="t('applicationsPage.headerName')" />
-          <Input v-model="row.value" :placeholder="t('applicationsPage.headerValue')" />
-          <Button size="sm" variant="danger" class="shrink-0" @click="proxyRequestHeaders.splice(index, 1)"><Trash2 /></Button>
+        <FormField :label="t('applicationsPage.gzipMode')">
+          <template #default="{ id }"><Select :id="id" v-model="proxyGzipMode" :options="httpModeOptions" /></template>
+        </FormField>
+        <div class="grid gap-3 sm:grid-cols-2">
+          <FormField :label="t('applicationsPage.clientMaxBodySizeMb')">
+            <template #default="{ id, describedBy, invalid }"><NumberBox :id="id" v-model="proxyClientMaxBodySizeMb" :aria-describedby="describedBy" :invalid="invalid" :min="0" :step="1" /></template>
+          </FormField>
+          <FormField :label="t('applicationsPage.connectTimeoutSeconds')">
+            <template #default="{ id, describedBy, invalid }"><NumberBox :id="id" v-model="proxyConnectTimeoutSeconds" :aria-describedby="describedBy" :invalid="invalid" :min="0" :step="1" /></template>
+          </FormField>
+          <FormField :label="t('applicationsPage.readTimeoutSeconds')">
+            <template #default="{ id, describedBy, invalid }"><NumberBox :id="id" v-model="proxyReadTimeoutSeconds" :aria-describedby="describedBy" :invalid="invalid" :min="0" :step="1" /></template>
+          </FormField>
+          <FormField :label="t('applicationsPage.sendTimeoutSeconds')">
+            <template #default="{ id, describedBy, invalid }"><NumberBox :id="id" v-model="proxySendTimeoutSeconds" :aria-describedby="describedBy" :invalid="invalid" :min="0" :step="1" /></template>
+          </FormField>
+          <FormField :label="t('applicationsPage.bufferingMode')">
+            <template #default="{ id }"><Select :id="id" v-model="proxyBufferingMode" :options="httpModeOptions" /></template>
+          </FormField>
+          <FormField :label="t('applicationsPage.webSocketMode')">
+            <template #default="{ id }"><Select :id="id" v-model="proxyWebSocketMode" :options="webSocketModeOptions" /></template>
+          </FormField>
         </div>
-        <Button size="sm" class="justify-self-start" @click="proxyRequestHeaders.push(makeKeyValueRow())"><Plus />{{ t('common.add') }}</Button>
-        <div class="options-subheading">{{ t('applicationsPage.responseHeaders') }}</div>
-        <div v-for="(row, index) in proxyResponseHeaders" :key="row.id" class="header-row">
-          <Input v-model="row.key" :placeholder="t('applicationsPage.headerName')" />
-          <Input v-model="row.value" :placeholder="t('applicationsPage.headerValue')" />
-          <Button size="sm" variant="danger" class="shrink-0" @click="proxyResponseHeaders.splice(index, 1)"><Trash2 /></Button>
+        <div class="grid gap-1">
+          <span class="text-caption font-semibold text-foreground">{{ t('applicationsPage.requestHeaders') }}</span>
+          <div v-for="(row, index) in proxyRequestHeaders" :key="row.id" class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-center">
+            <Input v-model="row.key" :placeholder="t('applicationsPage.headerName')" />
+            <Input v-model="row.value" :placeholder="t('applicationsPage.headerValue')" />
+            <Button size="sm" variant="danger" class="shrink-0" @click="proxyRequestHeaders.splice(index, 1)"><Trash2 /></Button>
+          </div>
+          <Button size="sm" variant="secondary" class="justify-self-start" @click="proxyRequestHeaders.push(makeKeyValueRow())"><Plus />{{ t('common.add') }}</Button>
         </div>
-        <Button size="sm" class="justify-self-start" @click="proxyResponseHeaders.push(makeKeyValueRow())"><Plus />{{ t('common.add') }}</Button>
+        <div class="grid gap-1">
+          <span class="text-caption font-semibold text-foreground">{{ t('applicationsPage.responseHeaders') }}</span>
+          <div v-for="(row, index) in proxyResponseHeaders" :key="row.id" class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-center">
+            <Input v-model="row.key" :placeholder="t('applicationsPage.headerName')" />
+            <Input v-model="row.value" :placeholder="t('applicationsPage.headerValue')" />
+            <Button size="sm" variant="danger" class="shrink-0" @click="proxyResponseHeaders.splice(index, 1)"><Trash2 /></Button>
+          </div>
+          <Button size="sm" variant="secondary" class="justify-self-start" @click="proxyResponseHeaders.push(makeKeyValueRow())"><Plus />{{ t('common.add') }}</Button>
+        </div>
       </div>
     </div>
     <div v-else-if="dialogKind === 'facilityPath'" class="grid gap-3">
-      <label class="field">{{ t('common.path') }}<Input v-model="facilityPathDraft.path" :invalid="Boolean(facilityPathErrors.path)" @input="clearFacilityPathError('path')" /></label>
-      <p v-if="facilityPathErrors.path" class="m-0 text-sm text-danger">{{ t(facilityPathErrors.path) }}</p>
-      <label class="field">{{ t('common.type') }}<Select v-model="facilityPathDraft.ruleType" :options="routeTypeOptions" /></label>
+      <FormField :label="t('common.path')" :error="facilityPathErrors.path ? t(facilityPathErrors.path) : ''" :invalid="Boolean(facilityPathErrors.path)">
+        <template #default="{ id, describedBy, invalid }">
+          <Input :id="id" :aria-describedby="describedBy" v-model="facilityPathDraft.path" :invalid="invalid" @input="clearFacilityPathError('path')" />
+        </template>
+      </FormField>
+      <FormField :label="t('common.type')">
+        <template #default="{ id }"><Select :id="id" v-model="facilityPathDraft.ruleType" :options="routeTypeOptions" /></template>
+      </FormField>
       <template v-if="facilityPathDraft.ruleType === 'static'">
-        <label class="field">{{ t('applicationsPage.sourceType') }}<Select v-model="facilityPathDraft.sourceType" :options="sourceTypeOptions" /></label>
-        <label class="field">{{ t('applicationsPage.staticAsset') }}<Select v-model="facilityPathDraft.assetName" :options="assetOptions" @change="clearFacilityPathError('asset')" /></label>
-        <p v-if="facilityPathErrors.asset" class="m-0 text-sm text-danger">{{ t(facilityPathErrors.asset) }}</p>
+        <FormField :label="t('applicationsPage.sourceType')">
+          <template #default="{ id }"><Select :id="id" v-model="facilityPathDraft.sourceType" :options="sourceTypeOptions" /></template>
+        </FormField>
+        <FormField :label="t('applicationsPage.staticAsset')" :error="facilityPathErrors.asset ? t(facilityPathErrors.asset) : ''" :invalid="Boolean(facilityPathErrors.asset)">
+          <template #default="{ id, describedBy, invalid }">
+            <Select :id="id" :aria-describedby="describedBy" v-model="facilityPathDraft.assetName" :options="assetOptions" @change="clearFacilityPathError('asset')" />
+          </template>
+        </FormField>
       </template>
       <template v-else-if="facilityPathDraft.ruleType === 'redirect'">
-        <label class="field">{{ t('applicationsPage.redirectUrl') }}<Input v-model="facilityPathDraft.redirectUrl" :invalid="Boolean(facilityPathErrors.redirectUrl)" @input="clearFacilityPathError('redirectUrl')" /></label>
-        <p v-if="facilityPathErrors.redirectUrl" class="m-0 text-sm text-danger">{{ t(facilityPathErrors.redirectUrl) }}</p>
-        <label class="field">{{ t('applicationsPage.redirectCode') }}<Select v-model="facilityRedirectCode" :options="['301', '302', '307', '308'].map((value) => ({ label: value, value }))" /></label>
+        <FormField :label="t('applicationsPage.redirectUrl')" :error="facilityPathErrors.redirectUrl ? t(facilityPathErrors.redirectUrl) : ''" :invalid="Boolean(facilityPathErrors.redirectUrl)">
+          <template #default="{ id, describedBy, invalid }">
+            <Input :id="id" :aria-describedby="describedBy" v-model="facilityPathDraft.redirectUrl" :invalid="invalid" @input="clearFacilityPathError('redirectUrl')" />
+          </template>
+        </FormField>
+        <FormField :label="t('applicationsPage.redirectCode')">
+          <template #default="{ id }"><Select :id="id" v-model="facilityRedirectCode" :options="['301', '302', '307', '308'].map((value) => ({ label: value, value }))" /></template>
+        </FormField>
       </template>
       <template v-else>
-        <label class="field">{{ t('applicationsPage.proxyUrl') }}<Input v-model="facilityPathDraft.proxyUrl" :invalid="Boolean(facilityPathErrors.proxyUrl)" @input="clearFacilityPathError('proxyUrl')" /></label>
-        <p v-if="facilityPathErrors.proxyUrl" class="m-0 text-sm text-danger">{{ t(facilityPathErrors.proxyUrl) }}</p>
-        <label class="field">{{ t('applicationsPage.proxySourceMode') }}<Select v-model="facilityPathDraft.proxySourceMode" :options="proxySourceModeOptions" /></label>
+        <FormField :label="t('applicationsPage.proxyUrl')" :error="facilityPathErrors.proxyUrl ? t(facilityPathErrors.proxyUrl) : ''" :invalid="Boolean(facilityPathErrors.proxyUrl)">
+          <template #default="{ id, describedBy, invalid }">
+            <Input :id="id" :aria-describedby="describedBy" v-model="facilityPathDraft.proxyUrl" :invalid="invalid" @input="clearFacilityPathError('proxyUrl')" />
+          </template>
+        </FormField>
+        <FormField :label="t('applicationsPage.proxySourceMode')">
+          <template #default="{ id }"><Select :id="id" v-model="facilityPathDraft.proxySourceMode" :options="proxySourceModeOptions" /></template>
+        </FormField>
       </template>
 
-      <div class="options-block">
-        <div class="section-copy"><h3>{{ t('applicationsPage.advancedOptions') }}</h3><p>{{ t('applicationsPage.advancedOptionsHint') }}</p></div>
-        <label v-if="facilityPathDraft.ruleType !== 'redirect'" class="field">{{ t('applicationsPage.gzipMode') }}<Select v-model="facilityGzipMode" :options="httpModeOptions" /></label>
+      <div class="grid gap-3 rounded-control border border-divider bg-control p-3">
+        <div class="grid gap-0.5">
+          <h3 class="m-0 text-body-strong font-semibold text-foreground">{{ t('applicationsPage.advancedOptions') }}</h3>
+          <p class="m-0 text-caption text-muted-foreground">{{ t('applicationsPage.advancedOptionsHint') }}</p>
+        </div>
+        <FormField v-if="facilityPathDraft.ruleType !== 'redirect'" :label="t('applicationsPage.gzipMode')">
+          <template #default="{ id }"><Select :id="id" v-model="facilityGzipMode" :options="httpModeOptions" /></template>
+        </FormField>
         <template v-if="facilityPathDraft.ruleType === 'proxy_pass'">
-          <div class="form-grid">
-            <label class="field">{{ t('applicationsPage.clientMaxBodySizeMb') }}<Input v-model="facilityClientMaxBodySizeMb" type="number" min="0" /></label>
-            <label class="field">{{ t('applicationsPage.connectTimeoutSeconds') }}<Input v-model="facilityConnectTimeoutSeconds" type="number" min="0" /></label>
-            <label class="field">{{ t('applicationsPage.readTimeoutSeconds') }}<Input v-model="facilityReadTimeoutSeconds" type="number" min="0" /></label>
-            <label class="field">{{ t('applicationsPage.sendTimeoutSeconds') }}<Input v-model="facilitySendTimeoutSeconds" type="number" min="0" /></label>
-            <label class="field">{{ t('applicationsPage.bufferingMode') }}<Select v-model="facilityBufferingMode" :options="httpModeOptions" /></label>
-            <label class="field">{{ t('applicationsPage.webSocketMode') }}<Select v-model="facilityWebSocketMode" :options="webSocketModeOptions" /></label>
+          <div class="grid gap-3 sm:grid-cols-2">
+            <FormField :label="t('applicationsPage.clientMaxBodySizeMb')">
+              <template #default="{ id, describedBy, invalid }"><NumberBox :id="id" v-model="facilityClientMaxBodySizeMb" :aria-describedby="describedBy" :invalid="invalid" :min="0" :step="1" /></template>
+            </FormField>
+            <FormField :label="t('applicationsPage.connectTimeoutSeconds')">
+              <template #default="{ id, describedBy, invalid }"><NumberBox :id="id" v-model="facilityConnectTimeoutSeconds" :aria-describedby="describedBy" :invalid="invalid" :min="0" :step="1" /></template>
+            </FormField>
+            <FormField :label="t('applicationsPage.readTimeoutSeconds')">
+              <template #default="{ id, describedBy, invalid }"><NumberBox :id="id" v-model="facilityReadTimeoutSeconds" :aria-describedby="describedBy" :invalid="invalid" :min="0" :step="1" /></template>
+            </FormField>
+            <FormField :label="t('applicationsPage.sendTimeoutSeconds')">
+              <template #default="{ id, describedBy, invalid }"><NumberBox :id="id" v-model="facilitySendTimeoutSeconds" :aria-describedby="describedBy" :invalid="invalid" :min="0" :step="1" /></template>
+            </FormField>
+            <FormField :label="t('applicationsPage.bufferingMode')">
+              <template #default="{ id }"><Select :id="id" v-model="facilityBufferingMode" :options="httpModeOptions" /></template>
+            </FormField>
+            <FormField :label="t('applicationsPage.webSocketMode')">
+              <template #default="{ id }"><Select :id="id" v-model="facilityWebSocketMode" :options="webSocketModeOptions" /></template>
+            </FormField>
           </div>
-          <div class="options-subheading">{{ t('applicationsPage.requestHeaders') }}</div>
-          <div v-for="(row, index) in facilityRequestHeaders" :key="row.id" class="header-row">
+          <div class="grid gap-1">
+            <span class="text-caption font-semibold text-foreground">{{ t('applicationsPage.requestHeaders') }}</span>
+            <div v-for="(row, index) in facilityRequestHeaders" :key="row.id" class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-center">
+              <Input v-model="row.key" :placeholder="t('applicationsPage.headerName')" />
+              <Input v-model="row.value" :placeholder="t('applicationsPage.headerValue')" />
+              <Button size="sm" variant="danger" class="shrink-0" @click="facilityRequestHeaders.splice(index, 1)"><Trash2 /></Button>
+            </div>
+            <Button size="sm" variant="secondary" class="justify-self-start" @click="facilityRequestHeaders.push(makeKeyValueRow())"><Plus />{{ t('common.add') }}</Button>
+          </div>
+        </template>
+        <div class="grid gap-1">
+          <span class="text-caption font-semibold text-foreground">{{ t('applicationsPage.responseHeaders') }}</span>
+          <div v-for="(row, index) in facilityResponseHeaders" :key="row.id" class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-center">
             <Input v-model="row.key" :placeholder="t('applicationsPage.headerName')" />
             <Input v-model="row.value" :placeholder="t('applicationsPage.headerValue')" />
-            <Button size="sm" variant="danger" class="shrink-0" @click="facilityRequestHeaders.splice(index, 1)"><Trash2 /></Button>
+            <Button size="sm" variant="danger" class="shrink-0" @click="facilityResponseHeaders.splice(index, 1)"><Trash2 /></Button>
           </div>
-          <Button size="sm" class="justify-self-start" @click="facilityRequestHeaders.push(makeKeyValueRow())"><Plus />{{ t('common.add') }}</Button>
-        </template>
-        <div class="options-subheading">{{ t('applicationsPage.responseHeaders') }}</div>
-        <div v-for="(row, index) in facilityResponseHeaders" :key="row.id" class="header-row">
-          <Input v-model="row.key" :placeholder="t('applicationsPage.headerName')" />
-          <Input v-model="row.value" :placeholder="t('applicationsPage.headerValue')" />
-          <Button size="sm" variant="danger" class="shrink-0" @click="facilityResponseHeaders.splice(index, 1)"><Trash2 /></Button>
+          <Button size="sm" variant="secondary" class="justify-self-start" @click="facilityResponseHeaders.push(makeKeyValueRow())"><Plus />{{ t('common.add') }}</Button>
         </div>
-        <Button size="sm" class="justify-self-start" @click="facilityResponseHeaders.push(makeKeyValueRow())"><Plus />{{ t('common.add') }}</Button>
       </div>
     </div>
     <template #footer>
@@ -3366,313 +3634,3 @@ onBeforeUnmount(() => {
     @update:open="handleDiscardOpenChange"
   />
 </template>
-
-<style scoped>
-h3 {
-  margin: 0;
-  color: var(--panel-text);
-  font-size: 14px;
-  font-weight: 650;
-}
-
-span {
-  color: var(--panel-text-muted);
-  font-size: 12px;
-}
-
-strong {
-  display: block;
-  color: var(--panel-text);
-  overflow-wrap: anywhere;
-}
-
-.field {
-  display: grid;
-  gap: 0.35rem;
-  color: var(--panel-text);
-  font-size: 0.875rem;
-}
-
-.section-copy {
-  display: grid;
-  gap: 0.25rem;
-  min-width: 0;
-}
-
-.section-copy p {
-  margin: 0;
-  color: var(--panel-text-muted);
-  font-size: 0.8125rem;
-  line-height: 1.5;
-}
-
-.section-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 0.75rem;
-}
-
-.editor-flow-hint {
-  margin: 0;
-  align-self: center;
-  color: var(--panel-text-muted);
-  font-size: 0.8125rem;
-  line-height: 1.5;
-}
-
-.app-editor-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(272px, 23vw, 320px);
-  gap: 1rem;
-  height: 100%;
-  min-height: 0;
-  min-width: 0;
-}
-
-.app-editor-shell {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.app-editor-header {
-  display: grid;
-  gap: 1rem;
-  min-width: 0;
-  border-bottom: 1px solid var(--panel-border);
-  background: var(--panel-surface);
-  padding: 1rem 1.125rem;
-}
-
-.app-editor-title-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 1rem;
-  min-width: 0;
-}
-
-.app-editor-body {
-  display: grid;
-  align-content: start;
-  gap: 1.25rem;
-  min-width: 0;
-  min-height: 0;
-  overflow: auto;
-  padding: 1.25rem;
-}
-
-.editor-flow-hint {
-  margin: 0;
-  align-self: center;
-  color: var(--panel-text-muted);
-  font-size: 0.8125rem;
-  line-height: 1.5;
-}
-
-.app-editor-summary {
-  position: sticky;
-  top: 0;
-  display: grid;
-  align-content: start;
-  gap: 0.75rem;
-  min-width: 0;
-  align-self: start;
-}
-
-.workspace-panel {
-  display: grid;
-  gap: 1rem;
-  min-width: 0;
-  width: 100%;
-  max-width: 70rem;
-  border: 1px solid var(--panel-border);
-  border-radius: 1rem;
-  background: var(--panel-muted);
-  padding: 1rem;
-}
-
-.form-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.75rem;
-  width: 100%;
-  max-width: 58rem;
-  min-width: 0;
-}
-
-.wide-field {
-  grid-column: 1 / -1;
-}
-
-.switch-field {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  min-width: 0;
-  padding: 0.25rem 0;
-  color: var(--panel-text);
-  font-size: 0.875rem;
-}
-
-.server-picker-grid {
-  width: 100%;
-  max-width: 58rem;
-}
-
-.server-picker-grid :deep(section) {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.75rem;
-}
-
-.item-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.75rem;
-  align-items: center;
-  min-width: 0;
-  border: 1px solid var(--panel-border);
-  border-radius: 0.875rem;
-  background: var(--panel-surface);
-  padding: 0.75rem;
-  transition:
-    background-color var(--panel-motion-duration-base) var(--panel-motion-ease-standard),
-    border-color var(--panel-motion-duration-base) var(--panel-motion-ease-standard),
-    box-shadow var(--panel-motion-duration-base) var(--panel-motion-ease-standard),
-    transform var(--panel-motion-duration-base) var(--panel-motion-ease-standard);
-}
-
-/* 触屏没有可靠 hover：与 motion 工具类保持同一策略，避免点击后样式粘住 */
-@media (hover: hover) {
-  .item-row:hover {
-    border-color: var(--panel-border-strong);
-    background: var(--panel-hover);
-    transform: translateY(calc(var(--panel-motion-hover-y) * -1));
-    box-shadow: var(--panel-motion-shadow-raised);
-  }
-}
-
-.row-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  justify-content: flex-end;
-}
-
-.row-error {
-  grid-column: 1 / -1;
-  min-width: 0;
-  border: 1px solid var(--panel-danger-border);
-  border-radius: 0.5rem;
-  background: var(--panel-danger-bg);
-  color: var(--panel-danger);
-  padding: 0.5rem 0.625rem;
-  font-size: 0.75rem;
-  overflow-wrap: anywhere;
-}
-
-
-.options-block {
-  display: grid;
-  gap: 0.75rem;
-  min-width: 0;
-  border: 1px solid var(--panel-border);
-  border-radius: 0.875rem;
-  background: color-mix(in srgb, var(--panel-muted) 30%, transparent);
-  padding: 0.875rem;
-}
-
-.options-subheading {
-  margin: 0;
-  color: var(--panel-text);
-  font-size: 0.8125rem;
-  font-weight: 650;
-}
-
-.header-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
-  gap: 0.5rem;
-  align-items: center;
-  min-width: 0;
-}
-
-@media (max-width: 760px) {
-  .item-row {
-    grid-template-columns: 1fr;
-    align-items: start;
-  }
-
-  .item-row .row-actions {
-    justify-content: flex-start;
-  }
-
-  .section-heading {
-    align-items: stretch;
-    flex-direction: column;
-  }
-}
-
-@media (max-width: 1279px) {
-  .app-editor-layout {
-    grid-template-columns: minmax(0, 1fr);
-    height: auto;
-  }
-
-  .app-editor-title-row {
-    grid-template-columns: 1fr;
-    gap: 0.75rem;
-  }
-
-  .app-editor-summary {
-    position: static;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 1023px) {
-  .app-editor-shell {
-    overflow: visible;
-  }
-
-  .app-editor-body {
-    overflow: visible;
-  }
-}
-
-@media (max-width: 900px) {
-  .form-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .server-picker-grid :deep(section) {
-    grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 640px) {
-  .app-editor-title-row,
-  .app-editor-summary {
-    grid-template-columns: 1fr;
-  }
-
-  .app-editor-body {
-    padding: 0.875rem;
-  }
-
-  .workspace-panel {
-    padding: 0.875rem;
-  }
-}
-
-@media (max-width: 420px) {
-  .form-grid {
-    grid-template-columns: 1fr;
-  }
-}
-</style>

@@ -4,6 +4,8 @@ import { useRoute, useRouter } from 'vue-router';
 import { settingsApi } from '@/api/settings';
 import Button from '@/components/ui/Button.vue';
 import Input from '@/components/ui/Input.vue';
+import InfoBar from '@/components/patterns/InfoBar.vue';
+import FormField from '@/components/patterns/FormField.vue';
 import { useErrorToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import { useSessionStore } from '@/stores/session';
@@ -101,53 +103,64 @@ async function updateAccount() {
 </script>
 
 <template>
-  <main class="grid min-h-dvh place-items-center bg-background p-6 pb-24">
-    <section class="panel-shadow-overlay w-full max-w-[420px] rounded-2xl border border-border-strong bg-card p-6">
+  <!--
+    聚焦面例外（检查表登记；文档由 Lead 统一更新）：登录 / 首次改密是无 AppShell 的
+    独立聚焦页，品牌卡按视口水平 + 垂直居中（place-items-center），不套用 AppShell
+    页面的 max-w-content-narrow(1000) 左对齐内容列；maintenance 已改为左对齐 1000 列。
+  -->
+  <main class="grid min-h-dvh place-items-center p-6 pb-24">
+    <section class="w-full max-w-md surface-card p-5">
       <div class="mb-6 flex items-center gap-3">
-        <img src="/favicon.svg" class="size-10 rounded-xl border border-border" alt="" aria-hidden="true" />
+        <img src="/favicon.svg" class="size-10 rounded-control border border-divider" alt="" aria-hidden="true" />
         <div>
           <strong class="block text-sm font-semibold tracking-tight text-foreground">{{ title }}</strong>
           <span class="block text-xs text-secondary-foreground">{{ subtitle }}</span>
         </div>
       </div>
-      <h1 class="m-0 text-xl font-semibold tracking-tight text-foreground">{{ pageTitle }}</h1>
+      <h1 class="m-0 text-title font-semibold tracking-tight text-foreground">{{ pageTitle }}</h1>
       <p v-if="changingPassword" class="m-0 mt-2 text-sm text-muted-foreground">{{ t('auth.passwordChangeRequired') }}</p>
       <form v-if="!changingPassword" class="mt-6 grid gap-4" @submit.prevent="submit">
-        <label class="grid gap-1.5 text-sm font-medium text-foreground">
-          {{ t('auth.username') }}
-          <Input v-model="username" autocomplete="username" autofocus />
-        </label>
-        <label class="grid gap-1.5 text-sm font-medium text-foreground">
-          {{ t('auth.password') }}
-          <Input v-model="password" type="password" autocomplete="current-password" />
-        </label>
-        <p v-if="error" class="m-0 rounded-xl border border-danger-border bg-danger-bg px-3 py-2 text-sm text-danger">{{ error }}</p>
+        <FormField :label="t('auth.username')">
+          <template #default="{ id, describedBy, invalid }">
+            <Input :id="id" v-model="username" autocomplete="username" autofocus :aria-describedby="describedBy" :invalid="invalid" />
+          </template>
+        </FormField>
+        <FormField :label="t('auth.password')">
+          <template #default="{ id, describedBy, invalid }">
+            <Input :id="id" v-model="password" type="password" autocomplete="current-password" :aria-describedby="describedBy" :invalid="invalid" />
+          </template>
+        </FormField>
+        <InfoBar v-if="error" tone="danger">{{ error }}</InfoBar>
         <Button type="submit" variant="primary" :loading="loading">{{ t('auth.signIn') }}</Button>
       </form>
       <form v-else class="mt-6 grid gap-4" @submit.prevent="updateAccount">
-        <label class="grid gap-1.5 text-sm font-medium text-foreground">
-          {{ t('auth.username') }}
-          <Input v-model="accountUsername" autocomplete="username" />
-        </label>
-        <label class="grid gap-1.5 text-sm font-medium text-foreground">
-          {{ t('auth.currentPassword') }}
-          <Input v-model="currentPassword" type="password" autocomplete="current-password" />
-        </label>
-        <label class="grid gap-1.5 text-sm font-medium text-foreground">
-          {{ t('auth.newPassword') }}
-          <Input v-model="newPassword" type="password" autocomplete="new-password" />
-        </label>
-        <label class="grid gap-1.5 text-sm font-medium text-foreground">
-          {{ t('auth.confirmPassword') }}
-          <Input v-model="confirmPassword" type="password" autocomplete="new-password" />
-        </label>
-        <p v-if="error" class="m-0 rounded-xl border border-danger-border bg-danger-bg px-3 py-2 text-sm text-danger">{{ error }}</p>
+        <FormField :label="t('auth.username')">
+          <template #default="{ id, describedBy, invalid }">
+            <Input :id="id" v-model="accountUsername" autocomplete="username" :aria-describedby="describedBy" :invalid="invalid" />
+          </template>
+        </FormField>
+        <FormField :label="t('auth.currentPassword')">
+          <template #default="{ id, describedBy, invalid }">
+            <Input :id="id" v-model="currentPassword" type="password" autocomplete="current-password" :aria-describedby="describedBy" :invalid="invalid" />
+          </template>
+        </FormField>
+        <FormField :label="t('auth.newPassword')">
+          <template #default="{ id, describedBy, invalid }">
+            <Input :id="id" v-model="newPassword" type="password" autocomplete="new-password" :aria-describedby="describedBy" :invalid="invalid" />
+          </template>
+        </FormField>
+        <FormField :label="t('auth.confirmPassword')">
+          <template #default="{ id, describedBy, invalid }">
+            <Input :id="id" v-model="confirmPassword" type="password" autocomplete="new-password" :aria-describedby="describedBy" :invalid="invalid" />
+          </template>
+        </FormField>
+        <InfoBar v-if="error" tone="danger">{{ error }}</InfoBar>
         <Button type="submit" variant="primary" :loading="loading">{{ t('auth.updatePassword') }}</Button>
       </form>
     </section>
     <footer class="fixed bottom-5 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2">
-      <img src="/favicon.svg" class="size-7 rounded-lg" alt="" aria-hidden="true" />
-      <span class="text-[13px] font-semibold text-foreground/70">{{ t('app.name') }}</span>
+      <img src="/favicon.svg" class="size-7 rounded-control" alt="" aria-hidden="true" />
+      <span class="text-sm font-semibold text-foreground/70">{{ t('app.name') }}</span>
     </footer>
   </main>
 </template>

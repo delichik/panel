@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { onBeforeUnmount, provide, ref } from 'vue';
 import { RouterLink } from 'vue-router';
-import { AlertTriangle, CheckCircle2, Info, X, XCircle } from '@lucide/vue';
+import { AlertTriangle, CheckCircle2, Info, X, XCircle } from '@/icons';
 import { useI18n } from '@/i18n';
 import IconButton from './IconButton.vue';
+import { zIndex } from './states';
 import { toastKey, type ToastPayload, type ToastRecord, type ToastTone } from './toast';
 
 const { t } = useI18n();
@@ -90,40 +91,42 @@ const toneClasses: Record<ToastTone, string> = {
   danger: 'text-danger',
 };
 
-const stackClasses = 'fixed right-4 top-4 z-[60] grid w-[min(360px,calc(100vw-32px))] gap-2 lg:top-[68px]';
+/** WinUI InfoBar 视觉：4px 圆角 + 语义 bg/border + 无阴影。 */
+const bubbleClasses: Record<ToastTone, string> = {
+  success: 'border-success-border bg-success-bg text-success',
+  info: 'border-info-border bg-info-bg text-info',
+  warning: 'border-warning-border bg-warning-bg text-warning',
+  danger: 'border-danger-border bg-danger-bg text-danger',
+};
+
+const stackClasses = 'fixed right-4 top-4 grid w-[min(360px,calc(100vw-32px))] gap-2 lg:top-17';
 </script>
 
 <template>
   <slot />
   <Teleport to="body">
-    <TransitionGroup name="toast-stack" tag="div" :class="stackClasses">
+    <TransitionGroup name="toast-stack" tag="div" :class="[stackClasses, zIndex.toast]">
       <section
         v-for="toast in toasts"
         :key="toast.id"
-        class="panel-shadow-overlay rounded-2xl border bg-popover p-4 text-sm text-popover-foreground"
-        :class="{
-          'border-success-border': toast.tone === 'success',
-          'border-warning-border': toast.tone === 'warning',
-          'border-danger-border': toast.tone === 'danger',
-          'border-info-border': toast.tone === 'info',
-        }"
+        class="flex min-w-0 items-start gap-2 rounded-control border p-3 text-body"
+        :class="bubbleClasses[toast.tone]"
+        :data-tone="toast.tone"
         :role="toast.tone === 'danger' ? 'alert' : 'status'"
         @mouseenter="pause(toast.id)"
         @mouseleave="resume(toast.id)"
         @focusin="pause(toast.id)"
         @focusout="resume(toast.id)"
       >
-        <div class="flex items-start gap-3">
-          <component :is="toneIcons[toast.tone]" class="mt-0.5 size-4 shrink-0" :class="toneClasses[toast.tone]" aria-hidden="true" />
-          <div class="min-w-0 flex-1">
-            <strong class="block text-foreground">{{ toast.title }}</strong>
-            <RouterLink v-if="toast.action" :to="toast.action.to" class="mt-2 inline-flex items-center rounded-lg text-sm font-medium text-brand underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40" @click="remove(toast.id)">{{ toast.action.label }}</RouterLink>
-            <p v-if="toast.description" class="m-0 mt-1 text-muted-foreground">{{ toast.description }}</p>
-          </div>
-          <IconButton size="sm" class="-mr-1 -mt-1 shrink-0" :label="t('common.close')" @click="remove(toast.id)">
-            <X />
-          </IconButton>
+        <component :is="toneIcons[toast.tone]" class="mt-0.5 size-4 shrink-0" :class="toneClasses[toast.tone]" aria-hidden="true" />
+        <div class="min-w-0 flex-1">
+          <strong class="block text-body-strong">{{ toast.title }}</strong>
+          <RouterLink v-if="toast.action" :to="toast.action.to" class="mt-2 inline-flex items-center rounded-control text-body font-medium underline underline-offset-4 text-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @click="remove(toast.id)">{{ toast.action.label }}</RouterLink>
+          <p v-if="toast.description" class="m-0 mt-1">{{ toast.description }}</p>
         </div>
+        <IconButton size="sm" class="shrink-0 text-current" :label="t('common.close')" @click="remove(toast.id)">
+          <X />
+        </IconButton>
       </section>
     </TransitionGroup>
   </Teleport>

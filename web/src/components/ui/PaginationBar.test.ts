@@ -30,4 +30,13 @@ describe('cursor pagination', () => {
     expect(wrapper.text()).not.toContain('1 / 1');
     wrapper.unmount();
   });
+
+  it('sits under the table without drawing a second top border', () => {
+    const wrapper = mount(PaginationBar, { props: { page: 1, pageSize: 20, total: 40, previousLabel: 'Previous', nextLabel: 'Next' } });
+    const nav = wrapper.get('nav');
+    expect(nav.classes()).not.toContain('border-t');
+    expect(nav.classes()).not.toContain('min-h-12');
+    expect(nav.classes()).toContain('py-2');
+    wrapper.unmount();
+  });
 });

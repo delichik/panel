@@ -2,25 +2,33 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const themeSource = readFileSync(resolve(__dirname, 'theme.ts'), 'utf8');
+const appearanceSource = readFileSync(resolve(__dirname, 'appearance.ts'), 'utf8');
 const appSource = readFileSync(resolve(__dirname, '../app/App.vue'), 'utf8');
 
-describe('theme runtime', () => {
-  it('uses the system/light/dark mode contract without a UI framework provider', () => {
-    expect(themeSource).toContain("export type ThemeMode = 'system' | 'light' | 'dark'");
-    expect(themeSource).toContain("const STORAGE_KEY = 'panel.theme.mode'");
-    expect(themeSource).toContain('prefers-color-scheme: dark');
+describe('appearance runtime', () => {
+  it('persists theme/mica/accent on the server instead of a UI framework provider', () => {
+    expect(appearanceSource).toContain("const APPEARANCE_CACHE_KEY = 'panel.appearance.cache'");
+    expect(appearanceSource).toContain('/settings/appearance');
+    expect(appearanceSource).toContain('prefers-color-scheme: dark');
+    expect(appSource).toContain('bootstrapAppearance');
     expect(appSource).not.toContain(['N', 'ConfigProvider'].join(''));
-    expect(themeSource).not.toContain(['naive', 'ui'].join('-'));
+    expect(appearanceSource).not.toContain(['naive', 'ui'].join('-'));
   });
 
-  it('sets runtime theme state through document data attributes', () => {
-    expect(themeSource).toContain('document.documentElement.dataset.theme');
-    expect(themeSource).toContain('document.documentElement.style.colorScheme');
+  it('applies the appearance through document data attributes and Mica tokens', () => {
+    expect(appearanceSource).toContain('document.documentElement');
+    expect(appearanceSource).toContain('dataset.accent');
+    expect(appearanceSource).toContain('dataset.background');
+    expect(appearanceSource).toContain('dataset.mica');
+    expect(appearanceSource).toContain('--panel-mica-thumb');
+    expect(appearanceSource).toContain('root.style.colorScheme');
   });
-  it('persists the lighthouse/ocean color scheme contract', () => {
-    expect(themeSource).toContain("export type ThemeScheme = 'lighthouse' | 'ocean'");
-    expect(themeSource).toContain("const SCHEME_STORAGE_KEY = 'panel.theme.scheme'");
-    expect(themeSource).toContain('document.documentElement.dataset.scheme');
+
+  it('migrates the retired lighthouse/ocean preferences exactly once', () => {
+    expect(appearanceSource).toContain("const LEGACY_MODE_KEY = 'panel.theme.mode'");
+    expect(appearanceSource).toContain("const LEGACY_SCHEME_KEY = 'panel.theme.scheme'");
+    expect(appearanceSource).toContain("legacyScheme === 'ocean'");
+    expect(appearanceSource).toContain("clearLegacyKeys");
+    expect(appearanceSource).toContain('initialized');
   });
 });

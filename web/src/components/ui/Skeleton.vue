@@ -3,7 +3,7 @@ import { computed, useAttrs } from 'vue';
 import { cn } from './cn';
 
 const attrs = useAttrs();
-const classes = computed(() => cn('motion-skeleton animate-pulse rounded-xl bg-muted', attrs.class as string));
+const classes = computed(() => cn('motion-skeleton animate-pulse rounded-control bg-hover', attrs.class as string));
 </script>
 
 <template>

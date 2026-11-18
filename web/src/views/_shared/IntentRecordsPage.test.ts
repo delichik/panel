@@ -39,7 +39,10 @@ async function render(url = '/events?from=2026-09-14T00:00:00Z') {
       stubs: {
         ConsolePage: { template: '<section><header><slot name="actions" /></header><slot /></section>' },
         ListPage: { template: '<div><slot name="toolbar" /><slot /><slot name="pagination" /></div>' },
-        TableDetailLayout: { template: '<div><slot name="list" /><slot name="detail" /></div>' },
+        Dialog: {
+          props: ['open', 'title'],
+          template: '<div v-if="open" role="dialog"><h2>{{ title }}</h2><slot /><footer><slot name="footer" /></footer></div>',
+        },
         Table: {
           props: ['rows'],
           template: '<div><div v-for="row in rows" :key="row.id">{{ row.title }}</div><slot name="actions" :row="rows[0]" /><slot name="empty" /></div>',

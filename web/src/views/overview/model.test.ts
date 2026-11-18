@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ServerMetricsSeries } from '@/api/servers';
+import type { ApplicationSummaryDto } from '@/types/applications';
 import type { NetworkProbeHistoryPoint, NetworkProbeResult } from '@/types/networkProbe';
 import type { ServerDto } from '@/types/servers';
 import {
@@ -26,6 +27,8 @@ import {
   probeLossHistory,
   probeTargetView,
   relativeTimeLabel,
+  emptyApplicationSummary,
+  summarizeApplications,
   summarizeNodeCards,
   summarizeProbeResults,
   valueTone,
@@ -316,5 +319,25 @@ describe('overview model', () => {
     expect(relativeTimeLabel('2026-11-16T04:10:00Z', now)).toEqual({ key: 'overviewPage.relativeHours', params: { count: 3 } });
     expect(relativeTimeLabel('2026-11-13T07:10:00Z', now)).toEqual({ key: 'overviewPage.relativeDays', params: { count: 3 } });
     expect(relativeTimeLabel(null, now)).toBeNull();
+  });
+
+  it('summarizes application count and states for the overview card', () => {
+    const apps = [
+      { enabled: true, deployingInstanceCount: 0, abnormalInstanceCount: 0 },
+      { enabled: false, deployingInstanceCount: 0, abnormalInstanceCount: 0 },
+      { enabled: true, deployingInstanceCount: 1, abnormalInstanceCount: 0 },
+      { enabled: true, deployingInstanceCount: 0, abnormalInstanceCount: 2 },
+      { enabled: true, deployingInstanceCount: 0, abnormalInstanceCount: 0, lastError: 'deploy failed' },
+    ] as ApplicationSummaryDto[];
+    expect(summarizeApplications(apps, 5)).toEqual({
+      total: 5,
+      enabled: 4,
+      disabled: 1,
+      deploying: 1,
+      attention: 2,
+      available: true,
+    });
+    expect(summarizeApplications([], 0)).toEqual({ total: 0, enabled: 0, disabled: 0, deploying: 0, attention: 0, available: true });
+    expect(emptyApplicationSummary().available).toBe(false);
   });
 });

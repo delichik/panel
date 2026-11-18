@@ -24,7 +24,7 @@ describe('responsive shared layout', () => {
     });
 
     expect(wrapper.classes()).toContain('overflow-auto');
-    expect(wrapper.classes()).toContain('rounded-xl');
+    expect(wrapper.classes()).toContain('surface-card');
     expect(wrapper.get('thead').classes()).toContain('sticky');
     expect(wrapper.element.querySelector(':scope > div')).toBeNull();
   });

@@ -6,14 +6,17 @@ import { pageLoaderForPath } from '@/router/pageLoaders';
 import { navGroups } from './navModel';
 
 /**
- * Shared primary navigation list used by the desktop sidebar and the mobile
- * drawer. Keeps the two surfaces from drifting apart (labels, active rail,
- * collapsed behavior) and owns the nav motion.
+ * Shared NavigationView list used by the desktop pane and the mobile drawer.
+ * WinUI 3 item anatomy: a neutral selected fill (ControlFillColorSecondary
+ * family), the 3x16px accent indicator, and TextFillColorPrimary text/icon;
+ * accent never tints the label itself. Compact mode (48px pane) keeps 40x40
+ * icon targets and the same indicator, with labels sr-only. Feedback is
+ * fill-only (hover 167ms / press 83ms); no lift or scale.
  */
 withDefaults(defineProps<{
   /** Nav item key that should read as the current location. */
   activeKey?: string;
-  /** Icon-only mode: labels fade with the sidebar width instead of being removed. */
+  /** WinUI compact mode: 48px pane, 40x40 icon targets, labels sr-only. */
   collapsed?: boolean;
   label: string;
 }>(), {
@@ -30,11 +33,12 @@ function warmTarget(path: string) {
 </script>
 
 <template>
-  <nav class="min-h-0 flex-1 overflow-auto px-2 py-2.5" :aria-label="label">
-    <section v-for="(group, groupIndex) in navGroups" :key="group.key" class="mb-3.5 last:mb-0">
-      <div v-if="collapsed && groupIndex > 0" class="mx-2 my-2.5 h-px bg-border" aria-hidden="true" />
-      <div class="mb-1 h-4 overflow-hidden px-2.5">
-        <div class="shell-label whitespace-nowrap text-[11px] font-medium leading-4 text-muted-foreground" :class="collapsed ? 'max-w-0 opacity-0' : 'max-w-[200px]'">
+  <nav class="min-h-0 flex-1 overflow-auto py-2" :class="collapsed ? 'px-1' : 'px-2'" :aria-label="label">
+    <section v-for="(group, groupIndex) in navGroups" :key="group.key" :class="collapsed ? 'mb-1.5 last:mb-0' : 'mb-2 last:mb-0'">
+      <div v-if="collapsed && groupIndex > 0" class="mx-2 my-1.5 h-px bg-divider" aria-hidden="true" />
+      <span v-if="collapsed" class="sr-only">{{ t(group.titleKey) }}</span>
+      <div v-else class="mb-0.5 h-7 overflow-hidden px-3">
+        <div class="flex h-7 whitespace-nowrap text-xs font-semibold leading-4 text-muted-foreground">
           {{ t(group.titleKey) }}
         </div>
       </div>
@@ -44,23 +48,51 @@ function warmTarget(path: string) {
         :to="item.to"
         :title="collapsed ? t(item.titleKey) : undefined"
         :aria-current="activeKey === item.key ? 'page' : undefined"
-        class="group relative mb-0.5 flex h-9 max-lg:h-11 items-center overflow-hidden rounded-lg px-2.5 text-sm font-medium transition-[background-color,color,box-shadow]"
+        class="nav-item group relative flex items-center rounded-control text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
         :class="[
           activeKey === item.key
-            ? 'bg-primary text-primary-foreground shadow-sm'
-            : 'text-secondary-foreground hover:bg-accent hover:text-foreground',
-          collapsed ? 'justify-center px-0' : 'gap-2.5',
+            ? 'bg-control text-foreground hover:bg-hover active:bg-pressed'
+            : 'text-secondary-foreground hover:bg-hover hover:text-foreground active:bg-pressed',
+          collapsed ? 'mx-auto mb-0.5 h-10 w-10 justify-center px-0' : 'mb-0.5 h-8 max-lg:h-11 gap-3 px-3',
         ]"
         @pointerenter="warmTarget(item.to)"
         @focusin="warmTarget(item.to)"
         @click="emit('navigate')"
       >
-        <component :is="item.icon" class="size-4 shrink-0" aria-hidden="true" />
+        <!-- WinUI 3 NavigationView selection indicator: 3x16 accent pill. -->
         <span
-          class="shell-label min-w-0 truncate"
-          :class="collapsed ? 'max-w-0 opacity-0' : 'max-w-[200px] flex-1'"
-        >{{ t(item.titleKey) }}</span>
+          v-if="activeKey === item.key"
+          class="nav-indicator pointer-events-none absolute left-0 top-1/2 h-4 w-indicator -translate-y-1/2 rounded-full bg-primary"
+          aria-hidden="true"
+        />
+        <component :is="item.icon" class="size-4 shrink-0" aria-hidden="true" />
+        <span v-if="collapsed" class="sr-only">{{ t(item.titleKey) }}</span>
+        <span v-else class="min-w-0 flex-1 overflow-hidden truncate">{{ t(item.titleKey) }}</span>
       </RouterLink>
     </section>
   </nav>
 </template>
+
+<style scoped>
+/*
+ * NavigationView feedback is fill-only: hover 167ms, press 83ms, no translate
+ * or scale. Timing tokens come from main.css so the pane matches the rest of
+ * the WinUI motion system.
+ */
+.nav-item {
+  transition:
+    background-color var(--panel-motion-duration-fast) var(--panel-motion-ease-enter),
+    color var(--panel-motion-duration-fast) var(--panel-motion-ease-enter);
+}
+
+.nav-item:active {
+  transition-duration: var(--panel-motion-duration-fade);
+  transition-timing-function: var(--panel-motion-ease-linear);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-item {
+    transition-duration: 1ms;
+  }
+}
+</style>

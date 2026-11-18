@@ -1,7 +1,14 @@
 <template>
-  <div class="grid h-full min-h-0 grid-rows-[minmax(0,1fr)_auto] max-lg:h-auto max-lg:grid-rows-none">
-    <div class="relative min-h-0 overflow-auto p-6 max-lg:overflow-visible max-sm:p-4"><slot /></div>
-    <footer v-if="$slots.footer" class="border-t border-border bg-card p-4">
+  <div class="grid h-full min-h-0 grid-rows-page-bottom max-lg:h-auto max-lg:grid-rows-none">
+    <!--
+      WinUI editor host: internally scrolling body + fixed command bar footer.
+      Page padding is owned by the parent ConsolePage (one padding per page),
+      so neither the editor body nor the footer adds a page p-* layer: the
+      footer is a full-bleed command bar (top divider + vertical spacing only).
+      The desktop body scroll contract is unchanged.
+    -->
+    <div class="relative min-h-0 overflow-auto max-lg:overflow-visible"><slot /></div>
+    <footer v-if="$slots.footer" class="border-t border-divider bg-layer py-3">
       <slot name="footer" />
     </footer>
   </div>

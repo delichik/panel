@@ -56,8 +56,13 @@ func TestAPIRouteManifest(t *testing.T) {
 	//   GET /api/v1/servers/{id}/network-probes
 	// 指标设施（FAC-MET-*）新增 2 条路由：
 	//   GET/PUT /api/v1/facility-apps/metrics
-	const wantCount = 186
-	const wantHash = "2c8caa992ef83c6675686618655a8a030a91d5b445a1ba915a67e26e8d9341f0"
+	// 外观设置（SET-APP-*）新增 6 条路由（186 → 192）：
+	//   GET/PUT /api/v1/settings/appearance
+	//   POST/DELETE /api/v1/settings/appearance/background
+	//   GET /api/v1/settings/appearance/background/content
+	//   GET /api/v1/settings/public-appearance（skipAuth，仍计入 /api manifest）
+	const wantCount = 192
+	const wantHash = "398dd44f9f0f2caf156f962d73f50f779aff9ffe777c52f651ff8c0e150ed504"
 	manifest := strings.Join(patterns, "\n") + "\n"
 	gotHash := fmt.Sprintf("%x", sha256.Sum256([]byte(manifest)))
 	if len(patterns) != wantCount || gotHash != wantHash {

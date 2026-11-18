@@ -65,10 +65,16 @@ describe('application and facility file closure', () => {
   });
 
   it('renders application and facility configuration as one continuous workspace', () => {
-    expect(viewSource).toContain('class="app-editor-body"');
-    expect(viewSource).toContain('class="workspace-panel motion-enter"');
+    // 编辑器只保留一层页面 padding / 一层滚动：ConsolePage 关闭自身滚动，EditorPage 是唯一滚动 owner。
+    expect(viewSource).toContain(':body-scroll="false"');
+    expect(viewSource).toContain('<EditorPage>');
+    expect(viewSource).not.toContain('class="app-editor-body"');
+    expect(viewSource).not.toContain('class="app-editor-shell"');
+    expect(viewSource).not.toContain('class="app-editor-header"');
+    expect(viewSource).not.toContain('<style');
     expect(viewSource).toContain("t('applicationsPage.editorFlowHint')");
     expect(viewSource).toContain("t('applicationsPage.gatewayEditorFlowHint')");
+    expect(viewSource).toContain('<DetailSection :title="t(\'applicationsPage.panelIdentity\')"');
     expect(viewSource).not.toContain("t('applicationsPage.editorWorkspace')");
     expect(viewSource).not.toContain("t('applicationsPage.gatewayWorkspace')");
     expect(viewSource).not.toContain('EditorSectionRail');
@@ -79,9 +85,9 @@ describe('application and facility file closure', () => {
   });
 
   it('separates networking, container environment, and storage into peer panels', () => {
-    const networkingPanel = viewSource.indexOf("<h3>{{ t('applicationsPage.panelNetworking') }}</h3>");
-    const environmentPanel = viewSource.indexOf("<h3>{{ t('applicationsPage.containerEnv') }}</h3>");
-    const storagePanel = viewSource.indexOf("<h3>{{ t('applicationsPage.panelStorage') }}</h3>");
+    const networkingPanel = viewSource.indexOf("<DetailSection :title=\"t('applicationsPage.panelNetworking')\"");
+    const environmentPanel = viewSource.indexOf("<DetailSection :title=\"t('applicationsPage.containerEnv')\"");
+    const storagePanel = viewSource.indexOf("<DetailSection :title=\"t('applicationsPage.panelStorage')\"");
 
     expect(networkingPanel).toBeGreaterThan(-1);
     expect(environmentPanel).toBeGreaterThan(networkingPanel);
@@ -89,5 +95,9 @@ describe('application and facility file closure', () => {
     expect(viewSource).toContain('v-if="!appDraft.env.length"');
     expect(viewSource).toContain('v-if="!appDraft.mounts.length"');
     expect(viewSource).not.toContain('v-if="!appDraft.env.length && !appDraft.mounts.length"');
+    // 共享 pattern 取代手写分区排版。
+    expect(viewSource).toContain('<FormField');
+    expect(viewSource).toContain('<PropertyList');
+    expect(viewSource).toContain('<InfoBar');
   });
 });

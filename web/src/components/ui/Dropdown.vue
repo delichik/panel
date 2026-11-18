@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue';
+import { focusWithoutScroll } from '@/utils/focus';
+import { zIndex } from './states';
 
 const props = defineProps<{ align?: 'left' | 'right' }>();
 
@@ -31,10 +33,17 @@ function menuItems() {
 async function setOpen(value: boolean, focus: 'first' | 'last' | 'trigger' | 'none' = 'none') {
   open.value = value;
   await nextTick();
-  if (value) updateMenuPosition();
-  if (focus === 'first') menuItems()[0]?.focus();
-  if (focus === 'last') menuItems().at(-1)?.focus();
-  if (focus === 'trigger') triggerControl()?.focus();
+  if (value) {
+    // Position the teleported popup before moving focus. Focusing a menu item
+    // while the panel is still in normal flow at the end of <body> makes the
+    // browser scroll the document, which leaves the whole shell shifted up with
+    // blank space below (and overflow:hidden prevents scrolling it back).
+    updateMenuPosition();
+    await nextTick();
+  }
+  if (focus === 'first') focusWithoutScroll(menuItems()[0]);
+  if (focus === 'last') focusWithoutScroll(menuItems().at(-1));
+  if (focus === 'trigger') focusWithoutScroll(triggerControl());
 }
 
 function onDocumentClick(event: MouseEvent) {
@@ -110,7 +119,7 @@ function onMenuKeydown(event: KeyboardEvent) {
   }
   if (nextIndex !== undefined && items.length) {
     event.preventDefault();
-    items[nextIndex]?.focus();
+    focusWithoutScroll(items[nextIndex]);
   }
 }
 
@@ -140,7 +149,8 @@ onBeforeUnmount(() => {
           v-if="open"
           :id="menuId"
           ref="menu"
-          class="panel-shadow-overlay z-50 w-max overflow-y-auto overflow-x-hidden rounded-xl border border-border-strong bg-popover p-1 text-popover-foreground"
+          class="w-max overflow-y-auto overflow-x-hidden surface-flyout p-1 text-popover-foreground backdrop-blur-flyout"
+          :class="zIndex.flyout"
           :style="menuStyle"
           role="menu"
           @click="setOpen(false, 'trigger')"

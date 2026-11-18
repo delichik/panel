@@ -12,6 +12,7 @@ import (
 	agentclient "panel/internal/agent/client"
 	agentcontract "panel/internal/agent/contract"
 	"panel/internal/modules/activity"
+	"panel/internal/modules/appearance"
 	"panel/internal/modules/applications"
 	"panel/internal/modules/backups"
 	"panel/internal/modules/certificates/certs"
@@ -136,6 +137,19 @@ func New(cfg config.Config) (*App, error) {
 	}
 	initCtx := logging.Background("panel")
 	logging.From(initCtx).Info("runtime settings loaded", zap.String("log_level", settingsSvc.Runtime().LogLevel))
+	// 外观设置是单行 AppDB 配置，背景图片字节落在 <dataRoot>/appearance/。
+	// 启动时幂等 seed 默认行、修复 DB 与文件不一致，并清理崩溃遗留的孤儿目录。
+	appearanceSvc := appearance.NewService(store.AppDB(), cfg.DataRoot)
+	if err := appearanceSvc.EnsureSeeded(initCtx); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	if err := appearanceSvc.Reconcile(initCtx); err != nil {
+		logging.From(initCtx).Warn("appearance background reconcile failed", zap.Error(err))
+	}
+	if err := appearanceSvc.CleanupOrphans(initCtx, time.Now().UTC()); err != nil {
+		logging.From(initCtx).Warn("appearance orphan cleanup failed", zap.Error(err))
+	}
 	authSvc, err := auth.NewService(store.AppDB(), cfg, settingsSvc)
 	if err != nil {
 		_ = store.Close()
@@ -329,6 +343,7 @@ func New(cfg config.Config) (*App, error) {
 	packageSvc.StartPeriodic(periodicCtx, taskSvc)
 	certSvc.StartPeriodic(periodicCtx, taskSvc)
 	keyAssetSvc.StartPeriodic(periodicCtx, taskSvc)
+	appearanceSvc.StartPeriodic(periodicCtx)
 	metricsCleanup.Start(context.Background())
 	eventWriter.Start(context.Background())
 	reportCollector.Start(context.Background())
@@ -336,7 +351,7 @@ func New(cfg config.Config) (*App, error) {
 	taskHandler := tasks.NewHandler(taskSvc, taskWorker)
 	taskHandler.SetExternalResolver(applicationSvc.ResolveExecutionManually)
 	eventsSvc := modevents.NewService(store.AppDB(), filepath.Join(cfg.DataRoot, "logs"))
-	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), taskHandler, metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), modevents.NewHandler(eventsSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), facilityapps.NewHandler(facilitySvc), networkprobe.NewHandler(probeSvc), metricsfacility.NewHandler(metricsFacility), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc), backups.NewHandler(backupSvc))
+	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), taskHandler, metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), modevents.NewHandler(eventsSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), facilityapps.NewHandler(facilitySvc), networkprobe.NewHandler(probeSvc), metricsfacility.NewHandler(metricsFacility), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), appearance.NewHandler(appearanceSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc), backups.NewHandler(backupSvc))
 	logging.From(initCtx).Info("application initialized")
 	return a, nil
 }
@@ -411,7 +426,7 @@ func applicationSaveSessionDir(cfg config.Config) string {
 	return filepath.Join(cfg.DataRoot, "tmp", "application-save-sessions")
 }
 
-func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, eventsH *modevents.Handler, applicationH *applications.Handler, containerH *containerization.Handler, facilityH *facilityapps.Handler, probeH *networkprobe.Handler, metricsFacilityH *metricsfacility.Handler, overviewH *overview.Handler, settingsH *settings.Handler, systemH *systeminfo.Handler, diagnosticsH *diagnostics.Handler, backupH *backups.Handler) {
+func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, eventsH *modevents.Handler, applicationH *applications.Handler, containerH *containerization.Handler, facilityH *facilityapps.Handler, probeH *networkprobe.Handler, metricsFacilityH *metricsfacility.Handler, overviewH *overview.Handler, settingsH *settings.Handler, appearanceH *appearance.Handler, systemH *systeminfo.Handler, diagnosticsH *diagnostics.Handler, backupH *backups.Handler) {
 	a.mux.HandleFunc("POST /api/v1/auth/login", authH.Login)
 	a.mux.Handle("POST /api/v1/auth/logout", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.Logout)))
 	a.mux.Handle("POST /api/v1/auth/account", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.UpdateAccount)))
@@ -420,6 +435,7 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 
 	authenticated := a.activityAuth
 	settingsH.RegisterPublicRoutes(a.mux)
+	appearanceH.RegisterPublicRoutes(a.mux)
 	backupH.RegisterRoutes(a.mux, authenticated)
 	credH.RegisterRoutes(a.mux, authenticated)
 	dnsH.RegisterRoutes(a.mux, authenticated)
@@ -444,6 +460,7 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 	taskH.RegisterRoutes(a.mux, authenticated)
 	overviewH.RegisterRoutes(a.mux, authenticated)
 	settingsH.RegisterRoutes(a.mux, authenticated)
+	appearanceH.RegisterRoutes(a.mux, authenticated)
 	systemH.RegisterRoutes(a.mux, authenticated)
 	diagnosticsH.RegisterRoutes(a.mux, authenticated)
 
