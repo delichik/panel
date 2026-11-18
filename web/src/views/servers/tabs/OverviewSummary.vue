@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, type Component } from 'vue';
+import { Activity, CalendarDays, History, KeyRound, Network, Router, ServerCog, ShieldCheck, UnlockKeyhole } from '@/icons';
 import type { ServerMetricsSeries } from '@/api/servers';
+import ArchitectureMark from '@/components/patterns/ArchitectureMark.vue';
+import DiskUsageChart from '@/components/patterns/DiskUsageChart.vue';
+import OsMark from '@/components/patterns/OsMark.vue';
 import { useI18n } from '@/i18n';
 import type { ServerDto } from '@/types/servers';
 import { formatDateTime } from '@/utils/datetime';
 import { formatBytes, formatPercent } from '@/utils/metrics';
-import ProgressBar from '@/components/patterns/ProgressBar.vue';
-import { diskUsagePercent } from './metricsModel';
+import { diskUsagePercent, diskUsageTone } from './metricsModel';
 import {
-  architectureLabel,
   privilegeStatusKey,
   proxyErrorKey,
   proxyModeLabelKey,
@@ -37,6 +39,7 @@ interface StatusItem {
   value: string;
   tone: StatusTone;
   muted?: boolean;
+  icon: Component;
 }
 
 const SUMMARY_PILL_CLASSES: Record<'success' | 'warning' | 'danger', string> = {
@@ -55,7 +58,12 @@ const TONE_TEXT_CLASSES: Record<StatusTone, string> = {
 
 const summaryTone = computed(() => serverSummaryTone(props.server));
 const summaryPillClass = computed(() => SUMMARY_PILL_CLASSES[summaryTone.value]);
-const architecture = computed(() => architectureLabel(props.server.architecture));
+const osName = computed(() => props.server.os?.prettyName || t('common.notAvailable'));
+const privilegeIcon = computed<Component>(() => {
+  if (props.server.privilege?.privileged) return ShieldCheck;
+  if (props.server.sudo?.passwordless) return KeyRound;
+  return UnlockKeyhole;
+});
 const proxyMode = computed(() => serverProxyMode(props.server));
 const proxyModeLabel = computed(() => t(proxyModeLabelKey(props.server.proxyMode)));
 const proxyDetail = computed(() => {
@@ -69,6 +77,7 @@ const hasReportStability = computed(() => Boolean(reportStabilityGrade(props.ser
 const agentVersion = computed(() => props.server.traits?.['agent.version'] ?? '');
 const hasTailscale = computed(() => props.server.tailscaleEnabled);
 
+/** Status summary as compact tiles: icon + label + tone value, never a bare text row. */
 const statusItems = computed<StatusItem[]>(() => {
   const streamTone = reportStreamTone(props.server);
   const stabilityTone = reportStabilityTone(props.server);
@@ -86,6 +95,7 @@ const statusItems = computed<StatusItem[]>(() => {
       value: t(reportStreamStatusKey(props.server)),
       tone: streamTone,
       muted: streamTone === 'neutral',
+      icon: Activity,
     },
     {
       key: 'stability',
@@ -93,6 +103,7 @@ const statusItems = computed<StatusItem[]>(() => {
       value: stabilityText,
       tone: stabilityTone,
       muted: stabilityTone === 'neutral',
+      icon: History,
     },
     {
       key: 'proxy',
@@ -101,6 +112,8 @@ const statusItems = computed<StatusItem[]>(() => {
         ? `${proxyModeLabel.value} · ${t(proxyErrorKey(props.server))}`
         : `${proxyModeLabel.value}${proxyDetail.value ? ` · ${proxyDetail.value}` : ''}`,
       tone: proxyInvalid.value ? 'warning' : 'neutral',
+      muted: !proxyInvalid.value,
+      icon: Router,
     },
     {
       key: 'tailscale',
@@ -108,6 +121,7 @@ const statusItems = computed<StatusItem[]>(() => {
       value: hasTailscale.value ? t(tailscaleStatusKey(props.server)) : t('serversPage.tailscale.notEnabled'),
       tone: hasTailscale.value ? tailscaleStateTone : 'neutral',
       muted: !hasTailscale.value || tailscaleStateTone === 'neutral',
+      icon: Network,
     },
     {
       key: 'agent',
@@ -115,6 +129,7 @@ const statusItems = computed<StatusItem[]>(() => {
       value: agentVersion.value || t('common.notAvailable'),
       tone: 'neutral',
       muted: !agentVersion.value,
+      icon: ServerCog,
     },
   ];
 });
@@ -122,13 +137,10 @@ const statusItems = computed<StatusItem[]>(() => {
 const diskPercent = computed(() => diskUsagePercent(props.metrics));
 const diskPoint = computed(() => props.metrics?.diskCurrent ?? null);
 const diskPercentText = computed(() => (diskPercent.value === null ? t('common.notAvailable') : formatPercent(diskPercent.value, 1)));
-const diskTone = computed<'success' | 'warning' | 'danger' | 'neutral'>(() => {
-  const percent = diskPercent.value;
-  if (percent === null) return 'neutral';
-  if (percent >= 95) return 'danger';
-  if (percent >= 85) return 'warning';
-  return 'success';
-});
+/** Ring center stays compact; the legend still spells out “not available”. */
+const diskChartValueText = computed(() => (diskPercent.value === null ? '—' : diskPercentText.value));
+const diskTone = computed(() => diskUsageTone(diskPercent.value));
+const diskChartTone = computed(() => (diskTone.value === 'neutral' ? 'accent' : diskTone.value) as 'accent' | 'success' | 'warning' | 'danger');
 const DISK_TONE_TEXT_CLASSES: Record<'success' | 'warning' | 'danger' | 'neutral', string> = {
   success: 'text-success',
   warning: 'text-warning',
@@ -136,50 +148,103 @@ const DISK_TONE_TEXT_CLASSES: Record<'success' | 'warning' | 'danger' | 'neutral
   neutral: 'text-muted-foreground',
 };
 const diskToneText = computed(() => DISK_TONE_TEXT_CLASSES[diskTone.value]);
-const diskProgressTone = computed<'accent' | 'success' | 'warning' | 'danger'>(() => (
-  diskTone.value === 'neutral' ? 'accent' : diskTone.value
-));
+const diskChartLabel = computed(() => t('serversPage.diskUsageChart', { percent: diskChartValueText.value }));
+const diskStats = computed(() => {
+  const point = diskPoint.value;
+  if (!point) return [];
+  return [
+    { key: 'used', label: t('serversPage.diskUsed'), value: formatBytes(point.usedBytes) },
+    { key: 'free', label: t('serversPage.diskFree'), value: formatBytes(Math.max(0, point.totalBytes - point.usedBytes)) },
+    { key: 'total', label: t('serversPage.diskTotal'), value: formatBytes(point.totalBytes) },
+  ];
+});
+const diskSampledText = computed(() => {
+  const point = diskPoint.value;
+  return point
+    ? `${t('serversPage.diskSampledAt')} ${formatDateTime(point.time, t('common.never'))}`
+    : t('serversPage.metrics.waitingSample');
+});
+
+function toneClass(item: StatusItem) {
+  return item.muted ? 'text-muted-foreground' : TONE_TEXT_CLASSES[item.tone];
+}
 </script>
 
 <template>
-  <section class="surface-card">
-    <div class="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 px-4 py-2.5">
-      <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5">
-        <span class="inline-flex items-center gap-2 rounded-control border px-2.5 py-1 text-caption font-semibold" :class="summaryPillClass">
-          <span class="size-1.5 rounded-full bg-current" aria-hidden="true" />
-          {{ t(serverSummaryStatusKey(server)) }}
-        </span>
-        <span class="min-w-0 text-caption text-muted-foreground">
-          {{ server.os?.prettyName || t('common.notAvailable') }}
-          <template v-if="architecture"> · {{ architecture }}</template>
-          · {{ t(privilegeStatusKey(server)) }}
-        </span>
+  <section data-testid="server-overview-summary" class="surface-card">
+    <div class="grid gap-4 p-3 sm:p-4 wide:grid-cols-[minmax(0,1fr)_minmax(0,34rem)] wide:items-start">
+      <!-- 身份区：发行版徽标 + 名称 + 综合状态 + 架构/特权/时间元信息。 -->
+      <div class="flex min-w-0 items-start gap-3">
+        <OsMark :os="server.os" size="lg" />
+        <div class="grid min-w-0 flex-1 content-start gap-1.5">
+          <div class="flex min-w-0 flex-wrap items-center gap-2">
+            <h2 class="m-0 min-w-0 truncate text-subtitle text-foreground" :title="osName">{{ osName }}</h2>
+            <span class="inline-flex shrink-0 items-center gap-1.5 rounded-pill border px-2 py-0.5 text-caption font-semibold" :class="summaryPillClass">
+              <span class="size-1.5 rounded-full bg-current" aria-hidden="true" />
+              {{ t(serverSummaryStatusKey(server)) }}
+            </span>
+          </div>
+          <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 text-caption text-muted-foreground">
+            <ArchitectureMark :architecture="server.architecture" />
+            <span class="inline-flex min-w-0 items-center gap-1">
+              <component :is="privilegeIcon" class="size-3.5 shrink-0" aria-hidden="true" />
+              {{ t(privilegeStatusKey(server)) }}
+            </span>
+            <span class="inline-flex min-w-0 items-center gap-1">
+              <CalendarDays class="size-3.5 shrink-0" aria-hidden="true" />
+              {{ t('serversPage.lastChecked') }}
+              <strong class="font-medium text-secondary-foreground">{{ formatDateTime(server.lastCheckedAt, t('common.never')) }}</strong>
+            </span>
+            <span class="inline-flex min-w-0 items-center gap-1">
+              <History class="size-3.5 shrink-0" aria-hidden="true" />
+              {{ t('serversPage.updatedAt') }}
+              <strong class="font-medium text-secondary-foreground">{{ formatDateTime(server.updatedAt, t('common.never')) }}</strong>
+            </span>
+          </div>
+        </div>
       </div>
-      <span class="text-caption text-muted-foreground">
-        {{ t('serversPage.lastChecked') }} <strong class="font-medium text-secondary-foreground">{{ formatDateTime(server.lastCheckedAt, t('common.never')) }}</strong>
-        · {{ t('serversPage.updatedAt') }} <strong class="font-medium text-secondary-foreground">{{ formatDateTime(server.updatedAt, t('common.never')) }}</strong>
-      </span>
+
+      <!-- 状态瓦片：不再用一行行「标签 · 值」文字，窄屏两列、宽屏三列。 -->
+      <dl class="grid min-w-0 content-start grid-cols-2 gap-2 sm:grid-cols-3">
+        <div
+          v-for="item in statusItems"
+          :key="item.key"
+          class="grid min-w-0 content-start gap-0.5 rounded-control border border-divider bg-muted px-2 py-1.5"
+          :class="item.key === 'proxy' ? 'max-sm:col-span-2' : undefined"
+        >
+          <dt class="flex min-w-0 items-center gap-1 text-caption text-muted-foreground">
+            <component :is="item.icon" class="size-3.5 shrink-0" aria-hidden="true" />
+            <span class="truncate">{{ item.label }}</span>
+          </dt>
+          <dd class="m-0 min-w-0 truncate text-caption font-medium" :class="toneClass(item)" :title="item.value">{{ item.value }}</dd>
+        </div>
+      </dl>
     </div>
 
-    <dl class="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-divider px-4 py-2">
-      <div v-for="(item, index) in statusItems" :key="item.key" class="inline-flex min-w-0 items-baseline gap-1.5">
-        <span v-if="index > 0" class="text-border-strong" aria-hidden="true">·</span>
-        <dt class="text-caption text-muted-foreground">{{ item.label }}</dt>
-        <dd class="m-0 max-w-72 truncate text-caption font-medium" :class="item.muted ? 'text-muted-foreground' : TONE_TEXT_CLASSES[item.tone]" :title="item.value">{{ item.value }}</dd>
+    <!-- 磁盘当前值：环形图 + 已用/可用/总量 + 采样时间（只消费 metrics.diskCurrent）。 -->
+    <div class="border-t border-divider p-3 sm:p-4">
+      <div class="flex min-w-0 flex-wrap items-center gap-4">
+        <DiskUsageChart
+          :percent="diskPercent"
+          :value-text="diskChartValueText"
+          :label="diskChartLabel"
+          :tone="diskChartTone"
+          size="lg"
+        />
+        <div class="grid min-w-0 flex-1 content-start gap-2">
+          <div class="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+            <span class="text-body-strong text-foreground">{{ t('serversPage.disk') }}</span>
+            <strong class="text-body font-semibold tabular-nums" :class="diskToneText">{{ diskPercentText }}</strong>
+          </div>
+          <dl v-if="diskStats.length" class="grid min-w-0 grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3">
+            <div v-for="stat in diskStats" :key="stat.key" class="grid min-w-0 gap-0.5">
+              <dt class="text-caption text-muted-foreground">{{ stat.label }}</dt>
+              <dd class="m-0 truncate text-body tabular-nums text-foreground" :title="stat.value">{{ stat.value }}</dd>
+            </div>
+          </dl>
+          <p class="m-0 text-caption text-muted-foreground">{{ diskSampledText }}</p>
+        </div>
       </div>
-    </dl>
-
-    <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-divider px-4 py-2">
-      <span class="text-caption text-muted-foreground">{{ t('serversPage.disk') }}</span>
-      <strong class="text-body font-semibold tabular-nums" :class="diskToneText">{{ diskPercentText }}</strong>
-      <div class="w-45 shrink-0 sm:w-60">
-        <ProgressBar :value="diskPercent ?? 0" :label="t('serversPage.disk')" :tone="diskProgressTone" />
-      </div>
-      <span v-if="diskPoint" class="text-caption text-muted-foreground">{{ formatBytes(diskPoint.usedBytes) }} / {{ formatBytes(diskPoint.totalBytes) }}</span>
-      <span class="text-caption text-muted-foreground sm:ml-auto">
-        <template v-if="diskPoint">{{ t('serversPage.diskSampledAt') }} {{ formatDateTime(diskPoint.time, t('common.never')) }}</template>
-        <template v-else>{{ t('serversPage.metrics.waitingSample') }}</template>
-      </span>
     </div>
   </section>
 </template>

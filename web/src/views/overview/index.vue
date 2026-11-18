@@ -237,10 +237,10 @@ onMounted(() => {
 <template>
   <ConsolePage :title="t('routes.overview.title')" :description="t('routes.overview.description')">
     <template #actions>
-      <div class="flex min-w-0 items-center gap-1.5 max-sm:w-full">
+      <div class="flex min-w-0 items-center gap-1.5 max-sm:w-full sm:flex-none">
         <span class="shrink-0 text-caption text-muted-foreground">{{ t('overviewPage.probeSource') }}</span>
         <Select
-          class="min-w-0 flex-1 sm:min-w-36 sm:flex-none"
+          class="min-w-0 flex-1 sm:w-44 sm:flex-none"
           :model-value="probeSourceId"
           :options="probeSourceOptions"
           :disabled="probeSourceOptions.length === 0"
@@ -256,7 +256,7 @@ onMounted(() => {
       </Button>
     </template>
 
-    <div class="grid h-full min-h-0 grid-rows-page gap-3 max-lg:block max-lg:h-auto">
+    <div class="grid min-w-0 gap-3">
       <div class="grid min-w-0 gap-3 wide:grid-cols-2" data-testid="overview-summary">
       <section class="min-w-0 surface-card p-4" data-testid="node-summary">
         <div class="flex items-center justify-between gap-2">
@@ -324,7 +324,7 @@ onMounted(() => {
       </section>
       </div>
 
-      <div class="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden max-lg:overflow-visible">
+      <div class="min-w-0">
         <div v-if="pageLoading && servers.length === 0" class="grid gap-3 sm:grid-cols-2 wide:grid-cols-3">
           <Skeleton v-for="item in 8" :key="item" class="h-52" />
         </div>

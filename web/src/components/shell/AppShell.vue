@@ -202,11 +202,11 @@ onBeforeUnmount(() => {
     <!-- Content region is the main landmark; the title bar stays outside it. -->
     <main id="main-content" ref="mainContent" tabindex="-1" class="relative isolate grid min-h-[calc(100dvh-var(--panel-shell-header))] min-w-0 grid-rows-1-safe overflow-visible lg:overflow-hidden bg-layer focus:outline-none lg:min-h-0 max-lg:scroll-mt-14">
       <RouterView v-slot="{ Component }">
-        <!-- WinUI Page refresh: enter-only. The outgoing page is unmounted as
-             soon as the page key changes so the target page (or its skeleton)
-             appears immediately with the 8px rise + fade; query changes keep
-             the same key and never replay the transition. -->
-        <Transition name="route">
+        <!-- WinUI Page refresh: the outgoing page becomes an absolute overlay
+             and fades out while the target page fades in; both background and
+             text leave together. Query changes keep the same key and never
+             replay the transition. -->
+        <Transition name="route" mode="out-in">
           <!-- 路由组件可能含多个根节点（如 ListPage + Dialog），包一层单一根元素才能做过渡动画；
                按页面标识作 key：切换设置分区等同页路由不重挂载，只有真正换页才重播进场。 -->
           <div :key="pageKey" class="h-full min-h-0">
@@ -242,16 +242,4 @@ onBeforeUnmount(() => {
   </div>
 </template>
 
-<style scoped>
-/*
- * WinUI Page refresh is enter-only: the outgoing page leaves immediately when
- * the page key changes. Shared `route-leave-*` CSS (main.css) is neutralized
- * here so a residual leave wrapper can never sit in flow, push the incoming
- * page or double-expose while being torn down.
- */
-.route-leave-active {
-  position: absolute;
-  inset: 0;
-  transition: none;
-}
-</style>
+

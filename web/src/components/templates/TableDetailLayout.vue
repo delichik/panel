@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
 
 /*
  * 表格 + 覆盖式详情的统一几何：列表与详情叠放在同一网格单元，详情覆盖整个内容区。
@@ -23,19 +23,27 @@ const props = withDefaults(defineProps<{
 }>(), { hasDetail: false });
 
 const detailVisible = computed(() => props.hasDetail === true);
+// Keep the list hidden through the detail's leave transition; otherwise the
+// transparent detail surface would expose the list while its text is still
+// fading out.
+const detailLeaving = ref(false);
+watch(detailVisible, (visible, previous) => {
+  if (previous && !visible) detailLeaving.value = true;
+});
+const listHidden = computed(() => detailVisible.value || detailLeaving.value);
 </script>
 
 <template>
   <div class="isolate grid h-full min-h-0 min-w-0">
     <div
       class="relative z-0 col-start-1 row-start-1 grid min-h-0 min-w-0"
-      :class="detailVisible ? 'invisible' : undefined"
-      :inert="detailVisible || undefined"
-      :aria-hidden="detailVisible ? 'true' : undefined"
+      :class="listHidden ? 'invisible' : undefined"
+      :inert="listHidden || undefined"
+      :aria-hidden="listHidden ? 'true' : undefined"
     >
       <slot name="list" />
     </div>
-    <Transition name="detail-swap">
+    <Transition name="detail-swap" @after-leave="detailLeaving = false">
       <div v-if="detailVisible" class="relative z-10 col-start-1 row-start-1 grid min-h-0 min-w-0">
         <slot name="detail" />
       </div>

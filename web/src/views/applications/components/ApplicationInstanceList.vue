@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ClipboardList } from '@/icons';
+import { ClipboardList, Server } from '@/icons';
 import Button from '@/components/ui/Button.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import Expander from '@/components/ui/Expander.vue';
@@ -11,13 +11,15 @@ import type { ApplicationRuntimeInstance } from '@/types/applications';
 import { instanceOperationStatus, isDeployProgressStage, statusTone, uncertaintyNeedsAttention } from '../model';
 
 /**
- * 应用 Runtime 实例列表：每台部署节点的容器状态 + 最近部署操作。
- * 纯展示组件：数据由页面加载并传入，操作入口（打开任务中心）通过 emit 交回页面；
- * 实例行直接渲染为父级 `DetailSection` 的 `divide-y` 子节点，保持原有分隔线视觉。
+ * 应用 Runtime 节点实例卡片：每台部署节点一张 surface-card（wide 2 列，窄屏单列）。
+ * 卡片层级：头部（Server 图标 + 节点名 + 容器名/短 id + 单状态徽标，左侧 2px 语义色条）
+ * → 主体（operation 状态/阶段/尝试/下次重试 2×2，无 operation 时显示当前状态/最近更新）
+ * → 底部（查看操作 + 更新时间）；错误用 InfoBar/Expander 保留，不再嵌套第二层灰块。
+ * 父级 `DetailSection` 以 `:surface="false"` 使用，避免 card-in-card。
  */
 withDefaults(defineProps<{
   instances: ApplicationRuntimeInstance[];
-  /** Runtime 正在加载：无实例时展示骨架行而不是空态。 */
+  /** Runtime 正在加载：无实例时展示卡片骨架而不是空态。 */
   loading?: boolean;
 }>(), {
   loading: false,
@@ -50,68 +52,138 @@ function operationStageLabel(stage: string) {
   const label = t(key);
   return label === key ? stage : label;
 }
+
+function instanceState(instance: ApplicationRuntimeInstance) {
+  return instance.status || instance.state || 'unknown';
+}
+
+/** 头部容器名/短 id：有名字优先显示名字，容器 id 只保留前 12 位，避免撑破卡片。 */
+function containerLabel(instance: ApplicationRuntimeInstance) {
+  const name = instance.containerName || '';
+  const id = instance.containerId ? instance.containerId.slice(0, 12) : '';
+  if (name && id) return `${name} · ${id}`;
+  return name || id || t('common.notAvailable');
+}
+
+/** 左侧 2px 语义色条（复用状态色 token，不新增色板）。 */
+function statusAccentClass(status: string) {
+  const tone = statusTone(status);
+  if (tone === 'success') return 'bg-success';
+  if (tone === 'warning') return 'bg-warning';
+  if (tone === 'danger') return 'bg-danger';
+  return 'bg-divider';
+}
+
+function instanceUpdatedAt(instance: ApplicationRuntimeInstance) {
+  return instance.operation?.updatedAt ?? instance.updatedAt;
+}
 </script>
 
 <template>
-  <template v-if="instances.length">
-    <div
-      v-for="instance in instances"
-      :key="instance.instanceId || instance.id"
-      class="grid gap-2 p-4 text-body"
-    >
-    <div class="flex flex-wrap items-center justify-between gap-2">
-      <strong class="min-w-0 break-all text-body-strong font-semibold text-foreground">{{ instance.serverName || instance.serverId || instance.instanceId }}</strong>
-      <StatusBadge :status="instance.status || instance.state || 'unknown'" :tone="statusTone(instance.status || instance.state || 'unknown')" :label="instanceStatusLabel(instance.status || instance.state || '')" />
-    </div>
-    <span class="text-caption text-muted-foreground">{{ instance.containerName || instance.containerId || t('common.notAvailable') }}</span>
-    <div v-if="instance.operation" class="grid gap-2 rounded-control bg-muted p-3">
-      <div class="flex flex-wrap items-center justify-between gap-2">
-        <StatusBadge
-          :status="instanceOperationStatus(instance)"
-          domain="operation"
-          :tone="instanceOperationStatus(instance) === 'result_unknown' ? 'warning' : undefined"
-          :label="operationStatusLabel(instanceOperationStatus(instance))"
-        />
-        <Button v-if="instance.operation.operationId" size="sm" variant="ghost" @click="emit('openOperation', instance.operation.operationId, instance.operation.executionId)"><ClipboardList />{{ t('applicationsPage.viewOperation') }}</Button>
-      </div>
-      <dl class="m-0 grid gap-2 sm:grid-cols-3">
-        <div class="min-w-0">
-          <dt class="text-caption text-muted-foreground">{{ t('applicationsPage.operationStage') }}</dt>
-          <dd class="m-0 break-words text-caption font-semibold text-foreground">{{ uncertaintyNeedsAttention(instance.operation.errorClass, instance.operation.stage) ? t('applicationsPage.status.result_unknown') : (isDeployProgressStage(instance.operation.stage) || instance.operation.stage ? operationStageLabel(instance.operation.stage || '') : t('common.notAvailable')) }}</dd>
-        </div>
-        <div class="min-w-0">
-          <dt class="text-caption text-muted-foreground">{{ t('applicationsPage.operationAttempt') }}</dt>
-          <dd class="m-0 text-caption font-semibold text-foreground">{{ instance.operation.attempt ?? t('common.notAvailable') }}</dd>
-        </div>
-        <div class="min-w-0">
-          <dt class="text-caption text-muted-foreground">{{ t('applicationsPage.operationNextRetry') }}</dt>
-          <dd class="m-0 text-caption font-semibold text-foreground">{{ instance.operation.nextRunAt ? formatDateTime(instance.operation.nextRunAt) : t('common.notAvailable') }}</dd>
-        </div>
-      </dl>
-      <p v-if="instance.operation.monitorReasonCode" class="m-0 text-caption text-muted-foreground">{{ t('applicationsPage.monitorReason') }}: {{ instance.operation.monitorReasonCode }}<span v-if="instance.operation.evidenceDeadlineAt"> · {{ t('applicationsPage.evidenceDeadline') }} {{ formatDateTime(instance.operation.evidenceDeadlineAt) }}</span></p>
-      <p v-if="instanceOperationStatus(instance) === 'result_unknown'" class="m-0 text-caption font-semibold text-warning">{{ t('applicationsPage.unknownResultHint') }}</p>
-      <InfoBar
-        v-if="instanceOperationStatus(instance) !== 'result_unknown' && instance.operation.errorCode !== 'execution_monitoring' && (instance.operation.error || instance.operation.errorCode || instance.operation.errorDetail)"
-        tone="danger"
-        :title="instance.operation.errorCode ? `${t('applicationsPage.operationError')} · ${instance.operation.errorCode}` : t('applicationsPage.operationError')"
+  <div data-instance-list class="grid min-w-0 gap-3 wide:grid-cols-2">
+    <template v-if="instances.length">
+      <article
+        v-for="instance in instances"
+        :key="instance.instanceId || instance.id"
+        data-instance-card
+        class="relative grid min-w-0 content-start gap-3 overflow-hidden surface-card p-4"
       >
-        <p v-if="instance.operation.error" class="m-0 whitespace-pre-wrap break-words">{{ instance.operation.error }}</p>
-        <p v-if="instance.operation.errorCode === 'container_not_running' && !instance.operation.errorDetail?.includes('containerLogs:')" class="m-0 text-warning">{{ t('facilityDiagnostics.missingRunLogsHint') }}</p>
-        <Expander v-if="instance.operation.errorDetail && instance.operation.errorDetail !== instance.operation.error" :title="t('facilityDiagnostics.technicalDetails')">
-          <pre class="m-0 max-h-56 overflow-auto whitespace-pre-wrap break-words text-caption">{{ instance.operation.errorDetail }}</pre>
-        </Expander>
-      </InfoBar>
-    </div>
-    <span v-if="instance.lastError && !instance.operation?.error" class="text-caption font-semibold text-danger">{{ instance.lastError }}</span>
-    </div>
-  </template>
+        <span class="absolute inset-y-0 left-0 w-0.5" :class="statusAccentClass(instanceState(instance))" aria-hidden="true" />
 
-  <div v-else-if="loading" class="grid gap-3 p-4" aria-hidden="true">
-    <div class="motion-skeleton h-4 w-40 rounded bg-muted animate-pulse" />
-    <div class="motion-skeleton h-4 w-56 max-w-full rounded bg-muted animate-pulse" />
-    <div class="motion-skeleton h-4 w-48 max-w-full rounded bg-muted animate-pulse" />
-    <div class="motion-skeleton h-4 w-52 max-w-full rounded bg-muted animate-pulse" />
+        <!-- 头部：Server 图标 + 节点名 + 容器名/短 id，右侧单状态徽标。 -->
+        <header class="flex min-w-0 items-start justify-between gap-3 pl-1">
+          <div class="flex min-w-0 items-start gap-2">
+            <Server class="mt-0.5 size-4 shrink-0 text-secondary-foreground" aria-hidden="true" />
+            <div class="grid min-w-0 gap-0.5">
+              <strong class="block truncate text-body-strong font-semibold text-foreground">{{ instance.serverName || instance.serverId || instance.instanceId }}</strong>
+              <span class="panel-mono block truncate text-caption text-muted-foreground" :title="containerLabel(instance)">{{ containerLabel(instance) }}</span>
+            </div>
+          </div>
+          <StatusBadge :status="instanceState(instance)" :tone="statusTone(instanceState(instance))" :label="instanceStatusLabel(instance.status || instance.state || '')" />
+        </header>
+
+        <!-- 主体：operation 状态/阶段/尝试/下次重试 2×2；无 operation 时显示当前状态/最近更新。 -->
+        <dl v-if="instance.operation" class="m-0 grid min-w-0 grid-cols-2 gap-3 pl-1">
+          <div class="grid min-w-0 content-start gap-0.5">
+            <dt class="text-caption text-muted-foreground">{{ t('applicationsPage.currentDeployment') }}</dt>
+            <dd class="m-0 min-w-0">
+              <StatusBadge
+                :status="instanceOperationStatus(instance)"
+                domain="operation"
+                :tone="instanceOperationStatus(instance) === 'result_unknown' ? 'warning' : undefined"
+                :label="operationStatusLabel(instanceOperationStatus(instance))"
+              />
+            </dd>
+          </div>
+          <div class="grid min-w-0 content-start gap-0.5">
+            <dt class="text-caption text-muted-foreground">{{ t('applicationsPage.operationStage') }}</dt>
+            <dd class="m-0 break-words text-caption font-semibold text-foreground">{{ uncertaintyNeedsAttention(instance.operation.errorClass, instance.operation.stage) ? t('applicationsPage.status.result_unknown') : (isDeployProgressStage(instance.operation.stage) || instance.operation.stage ? operationStageLabel(instance.operation.stage || '') : t('common.notAvailable')) }}</dd>
+          </div>
+          <div class="grid min-w-0 content-start gap-0.5">
+            <dt class="text-caption text-muted-foreground">{{ t('applicationsPage.operationAttempt') }}</dt>
+            <dd class="m-0 text-caption font-semibold text-foreground">{{ instance.operation.attempt ?? t('common.notAvailable') }}</dd>
+          </div>
+          <div class="grid min-w-0 content-start gap-0.5">
+            <dt class="text-caption text-muted-foreground">{{ t('applicationsPage.operationNextRetry') }}</dt>
+            <dd class="m-0 break-words text-caption font-semibold text-foreground">{{ instance.operation.nextRunAt ? formatDateTime(instance.operation.nextRunAt) : t('common.notAvailable') }}</dd>
+          </div>
+        </dl>
+        <dl v-else class="m-0 grid min-w-0 grid-cols-2 gap-3 pl-1">
+          <div class="grid min-w-0 content-start gap-0.5">
+            <dt class="text-caption text-muted-foreground">{{ t('common.status') }}</dt>
+            <dd class="m-0 text-caption font-semibold text-foreground">{{ instanceStatusLabel(instance.status || instance.state || '') }}</dd>
+          </div>
+          <div class="grid min-w-0 content-start gap-0.5">
+            <dt class="text-caption text-muted-foreground">{{ t('applicationsPage.updatedAtColumn') }}</dt>
+            <dd class="m-0 break-words text-caption font-semibold text-foreground">{{ formatDateTime(instance.updatedAt, t('common.never')) }}</dd>
+          </div>
+        </dl>
+
+        <p v-if="instance.operation?.monitorReasonCode" class="m-0 pl-1 text-caption text-muted-foreground">{{ t('applicationsPage.monitorReason') }}: {{ instance.operation.monitorReasonCode }}<span v-if="instance.operation.evidenceDeadlineAt"> · {{ t('applicationsPage.evidenceDeadline') }} {{ formatDateTime(instance.operation.evidenceDeadlineAt) }}</span></p>
+        <p v-if="instance.operation && instanceOperationStatus(instance) === 'result_unknown'" class="m-0 pl-1 text-caption font-semibold text-warning">{{ t('applicationsPage.unknownResultHint') }}</p>
+        <p v-if="instance.lastError && !instance.operation?.error" class="m-0 pl-1 text-caption font-semibold text-danger">{{ instance.lastError }}</p>
+        <InfoBar
+          v-if="instance.operation && instanceOperationStatus(instance) !== 'result_unknown' && instance.operation.errorCode !== 'execution_monitoring' && (instance.operation.error || instance.operation.errorCode || instance.operation.errorDetail)"
+          tone="danger"
+          :title="instance.operation.errorCode ? `${t('applicationsPage.operationError')} · ${instance.operation.errorCode}` : t('applicationsPage.operationError')"
+        >
+          <p v-if="instance.operation.error" class="m-0 whitespace-pre-wrap break-words">{{ instance.operation.error }}</p>
+          <p v-if="instance.operation.errorCode === 'container_not_running' && !instance.operation.errorDetail?.includes('containerLogs:')" class="m-0 text-warning">{{ t('facilityDiagnostics.missingRunLogsHint') }}</p>
+          <Expander v-if="instance.operation.errorDetail && instance.operation.errorDetail !== instance.operation.error" :title="t('facilityDiagnostics.technicalDetails')">
+            <pre class="m-0 max-h-56 overflow-auto whitespace-pre-wrap break-words text-caption">{{ instance.operation.errorDetail }}</pre>
+          </Expander>
+        </InfoBar>
+
+        <!-- 底部：查看操作（仅 operationId）+ 更新时间。 -->
+        <footer class="flex flex-wrap items-center justify-between gap-2 pl-1">
+          <Button v-if="instance.operation?.operationId" size="sm" variant="ghost" class="max-sm:w-full" @click="emit('openOperation', instance.operation.operationId, instance.operation.executionId)"><ClipboardList />{{ t('applicationsPage.viewOperation') }}</Button>
+          <span class="text-caption text-muted-foreground">{{ t('applicationsPage.updatedAtColumn') }}: {{ formatDateTime(instanceUpdatedAt(instance), t('common.never')) }}</span>
+        </footer>
+      </article>
+    </template>
+
+    <template v-else-if="loading">
+      <div
+        v-for="item in 2"
+        :key="`instance-skeleton-${item}`"
+        data-instance-skeleton
+        class="grid min-w-0 content-start gap-3 surface-card p-4"
+        aria-hidden="true"
+      >
+        <div class="flex items-center gap-2">
+          <div class="motion-skeleton size-4 rounded bg-muted animate-pulse" />
+          <div class="motion-skeleton h-4 w-32 max-w-full rounded bg-muted animate-pulse" />
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div class="motion-skeleton h-3 w-20 rounded bg-muted animate-pulse" />
+          <div class="motion-skeleton h-3 w-16 rounded bg-muted animate-pulse" />
+          <div class="motion-skeleton h-3 w-24 rounded bg-muted animate-pulse" />
+          <div class="motion-skeleton h-3 w-20 rounded bg-muted animate-pulse" />
+        </div>
+        <div class="motion-skeleton h-3 w-28 rounded bg-muted animate-pulse" />
+      </div>
+    </template>
+
+    <EmptyState v-else variant="inset" class="wide:col-span-2" :title="t('applicationsPage.noRuntime')" :description="t('applicationsPage.noRuntimeHint')" />
   </div>
-
-  <EmptyState v-else variant="inset" :title="t('applicationsPage.noRuntime')" :description="t('applicationsPage.noRuntimeHint')" />
 </template>

@@ -327,7 +327,7 @@ describe('overview mobile layout contract', () => {
   });
 
   it('lets the probe selector and refresh action wrap full width on phones', () => {
-    expect(pageSource).toContain('min-w-0 flex-1 sm:min-w-36 sm:flex-none');
+    expect(pageSource).toContain('min-w-0 flex-1 sm:w-44 sm:flex-none');
     expect(pageSource).toContain('max-sm:w-full');
   });
 });

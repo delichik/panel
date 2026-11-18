@@ -2,6 +2,7 @@
 import { enableAutoUnmount, mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { useI18n } from '@/i18n';
+import DetailSection from '@/components/patterns/DetailSection.vue';
 import type { ApplicationDto, ApplicationFile, ApplicationRuntime, ApplicationRuntimeInstance, DeploymentPlanningError } from '@/types/applications';
 import ApplicationDetailPane from './ApplicationDetailPane.vue';
 
@@ -80,6 +81,24 @@ describe('ApplicationDetailPane', () => {
     expect(wrapper.text()).toContain('2');
     expect(wrapper.text()).toContain(t('applicationsPage.instanceStatus.running'));
     expect(wrapper.text()).toContain('edge · panel-app'.split(' · ')[0]!);
+  });
+
+  it('turns off the DetailSection surface for node instance cards (no card-in-card)', () => {
+    const wrapper = render();
+    const { t } = useI18n();
+    const sections = wrapper.findAllComponents(DetailSection);
+    expect(sections.length).toBeGreaterThanOrEqual(2);
+
+    const nodeInstances = sections.find((section) => section.props('title') === t('applicationsPage.nodeInstances'));
+    expect(nodeInstances).toBeTruthy();
+    expect(nodeInstances!.props('surface')).toBe(false);
+    // 父级分区不再渲染自身 surface-card/divide-y 包裹；卡片网格直接落在 body 里。
+    expect(nodeInstances!.find('[data-detail-section-body]').exists()).toBe(true);
+    expect(nodeInstances!.find('.surface-card.overflow-hidden > .divide-y').exists()).toBe(false);
+    expect(nodeInstances!.find('[data-instance-card]').exists()).toBe(true);
+
+    const runtimeSummary = sections.find((section) => section.props('title') === t('applicationsPage.runtime'));
+    expect(runtimeSummary?.props('surface')).not.toBe(false);
   });
 
   it('shows the planning-failed badge and planning detail without a second attention badge', () => {

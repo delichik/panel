@@ -312,6 +312,12 @@
   --panel-divider: rgba(0, 0, 0, 0.08);
   --panel-overlay: rgba(0, 0, 0, 0.3);
 
+  /* ---- OS 发行版标识字形（Simple Icons CC0 品牌色底）----
+     发行版徽标底色是固定品牌色，不随主题/强调色变化；字形前景只在这两档之间取，
+     保证白色或深色字形在品牌色底上均满足对比度。 */
+  --panel-mark-on-brand: #ffffff;
+  --panel-mark-on-light: #1a1a1a;
+
   /* ---- 背景 / Mica ---- */
   --panel-mica-tint: rgba(243, 243, 243, 0.72);
   --panel-mica-blur: 24px;
@@ -736,11 +742,17 @@ summary,
   transition: transform var(--panel-motion-duration-fast) var(--panel-motion-ease-move);
 }
 
-/* 路由内容切换：WinUI Page refresh（旧页直接卸下，新页 8px 上滑 + 淡入） */
+/* 路由内容切换：WinUI Page refresh（out-in：旧页 167ms 淡出后再进新页） */
+.route-leave-active {
+  transition: opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-exit);
+}
+.route-leave-to {
+  opacity: 0;
+}
 .route-enter-active {
   transition:
-    opacity var(--panel-motion-duration-slow) var(--panel-motion-ease-enter),
-    transform var(--panel-motion-duration-slow) var(--panel-motion-ease-enter);
+    opacity var(--panel-motion-duration-normal) var(--panel-motion-ease-enter),
+    transform var(--panel-motion-duration-normal) var(--panel-motion-ease-enter);
 }
 .route-enter-from {
   opacity: 0;

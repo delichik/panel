@@ -161,7 +161,7 @@ describe('PageHeader mobile layout (360–430px)', () => {
     const actions = wrapper.get('header > div:last-child');
     // Existing desktop/tablet contract stays intact.
     expect(actions.classes()).toContain('flex-wrap');
-    expect(actions.classes()).toContain('max-lg:w-full');
+    expect(actions.classes()).toContain('max-wide:w-full');
     // Phone: vertical column, every slotted control full width.
     expect(actions.classes()).toContain('max-sm:flex-col');
     expect(actions.classes()).toContain('max-sm:items-stretch');

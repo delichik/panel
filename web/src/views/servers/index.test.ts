@@ -120,6 +120,7 @@ const server = {
   proxyInvalid: false,
   proxyError: '',
   os: { prettyName: 'Debian 13', supported: true },
+  architecture: { os: 'linux', arch: 'amd64', rawMachine: 'x86_64' },
   sudo: { passwordless: true },
   privilege: { privileged: true, mode: 'passwordless_sudo' },
   traits: { 'agent.status': 'compatible', 'agent.url': 'https://10.0.0.1:9786' },
@@ -249,11 +250,17 @@ describe('servers page table and covered detail', () => {
     const detail = wrapper.get('[data-testid="server-detail"]');
     expect(detail.text()).toContain('Overview');
     expect(detail.text()).toContain('Connection');
-    // 宽屏概览：摘要卡后为两列属性/指标（PropertyList 2 列），图表长内容在全宽区域。
+    // 宽屏概览：摘要卡后为连接信息与最近操作两列（PropertyList 2 列），图表长内容在全宽区域。
     expect(detail.html()).toContain('wide:grid-cols-2');
     expect(detail.find('[data-property-list]').exists()).toBe(true);
-    expect(detail.text()).toContain('Metrics');
-    expect(detail.text()).toContain('Probe');
+    const summary = detail.get('[data-testid="server-overview-summary"]');
+    expect(summary.find('[data-testid="os-mark"]').exists()).toBe(true);
+    expect(summary.find('[data-testid="arch-mark"]').exists()).toBe(true);
+    expect(summary.find('[data-testid="disk-usage-chart"]').exists()).toBe(true);
+    // CPU/延迟等当前值只在下方指标/探测面板展示，摘要卡不再重复文字属性。
+    expect(summary.text()).not.toContain('CPU');
+    expect(summary.text()).not.toContain('Latency');
+    expect(detail.text()).toContain('Recent operations');
     // 详情覆盖时列表保持挂载（用于保留滚动和筛选），但不可交互。
     const listPane = wrapper.element.querySelector('[inert]');
     expect(listPane).not.toBeNull();

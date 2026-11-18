@@ -24,7 +24,9 @@ AppShell
 - 内容列（WinUI 页面几何）：所有页面统一用 `ConsolePage width="content"`（1200px）并在外壳内容区**水平居中**（`mx-auto`）；页头与页面正文同列；数据表格在内容列内部横向滚动。表单/编辑器靠内部栅格控制可读宽度，不得通过窄页面列制造跨页宽度差。`width="narrow"` 仅保留为未来聚焦型页面的可选 API，当前未使用。
 - padding owner：`ConsolePage` 根是唯一页面 padding owner（桌面 16、窄屏 <1024 为 12）；`PageHeader` 是无 padding 结构件，返回入口在标题上方独立行（保证 h1 与正文左缘对齐）；`EditorPage` footer 全出血、仅垂直间距；`RoutePageFallback` 使用与目标页相同的列宽/padding。
 - 登录/首次改密是独立聚焦面（居中卡片），是内容列左对齐规则的显式例外；维护页使用 1200 列居中。
-- 移动端（<640px）：页面单列；PropertyList 强制 1 列；SettingsCard/FormField/ListCommandBar 纵向堆叠；PageHeader actions 纵向全宽；Dialog footer 2 列整行；表格列隐藏规则用 `hideBelow:'sm'` 再降级（<sm 仅名称+操作，状态/时间折入名称副行或隐藏）；操作仅保留详情+More；Tabs 横向滚动、不压缩标签。
+- 移动端（<640px）：页面单列；PropertyList 强制 1 列；SettingsCard/FormField/ListCommandBar 纵向堆叠；PageHeader actions 纵向全宽；Dialog footer 2 列整行；表格列隐藏规则用 `hideBelow:'sm'` 再降级（<sm 仅名称+操作，状态/时间折入名称副行或隐藏）；操作仅保留详情+More；Tabs 横向滚动、不压缩标签；服务器详情概览摘要卡改为「发行版/架构标识 + 状态瓦片（2 列）」纵向分行、磁盘当前值为环形图 + 图例，连接信息与最近操作单列；CPU/延迟等当前值只在下方指标与探测面板展示，摘要卡不重复。
+- 概览类仪表页：摘要区与下方卡片区共享同一个 ConsolePage body 滚动 owner，不得用 `h-full grid-rows-page` + 卡片区独立 `overflow-y-auto`；否则内部滚动条会让上下区域宽度不一致。PageHeader actions 在 `<wide` 整行换行，避免选择器/刷新按钮挤压重叠。
+- 详情卡片列表：需要“每项一张卡”时给 `DetailSection` 传 `surface=false`（只保留标题/说明），由子项 `surface-card` 形成唯一表面，避免 card-in-card。
 - 桌面 `>=1024px`：`h-dvh`、`overflow-hidden`，左侧导航固定，顶部条固定，路由内容区 `overflow-hidden`。
 - Mica 分层（WinUI 3）：页面底是服务器下发的用户背景（Mica 缩略图/预设渐变），AppShell 主区与侧栏用
   `--panel-layer`（`bg-layer`）透出背景，卡片/表格用 `--panel-card` + `border-card-stroke`；页面根**不得**
@@ -124,3 +126,4 @@ AppShell
 - 仪表盘卡片允许跨列时，必须用容器宽度或断点保护；在容器不足以容纳两列时不得让 `grid-column: span 2` 生成隐式列撑宽页面。
 - 编辑器类固定格式页面必须至少定义宽屏、中屏、窄屏三档布局：宽屏可保留主编辑区 + sticky 摘要，主编辑正文内部滚动；中屏（约 900-1279px）必须让摘要区下移或折叠到主内容之后，header 自然堆叠，连续配置正文不得被过小 `max-height` 压扁；窄屏必须单列组织 header、模式切换、字段和摘要，不得依赖横向滚动兜底。只有确实采用步骤导航的页面才允许为步骤导航定义稳定的多列布局。
 - 窄屏：AppShell、RouteContent、ConsolePage 和 EditorPage 必须共同解除视口裁切并允许页面级滚动，双栏折叠为单栏或抽屉；只改 body overflow 不算完成。large Dialog 的 body 自身滚动，Dropdown 使用 body portal、fixed 定位和上下碰撞计算，确保提交栏与菜单可达。
+- 窄屏例外：`<1024px` 时详情正文（例如服务器详情概览）可恢复页面级滚动，概览 tab 在 `max-lg` 取消自身的内部滚动容器（`max-lg:h-auto max-lg:overflow-visible`）；`≥1024px` 仍由详情正文内部滚动，不得出现页面级滚动（`UI-SHELL-013`、`UI-SRV-030`）。

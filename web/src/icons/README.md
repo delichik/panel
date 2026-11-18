@@ -10,6 +10,9 @@
 - 许可：图标原始文件遵循 MIT（见 <https://github.com/microsoft/fluentui-system-icons>）；
   本仓库仅保留图标文件与生成的包装代码，不修改图标语义。
 
+> **例外**：操作系统发行版标识（Ubuntu/Debian/Arch 等品牌色徽标）不属于本 Fluent 图标层，位于
+> `web/src/components/patterns/`（`OsMark.vue` + Simple Icons CC0 数据），不要在此目录添加品牌图标。
+
 ## 重新生成
 
 ```powershell

@@ -15,6 +15,11 @@
 3. 图标统一使用本地 vendored 的 Fluent System Icons 兼容层 `@/icons`（`web/src/icons/`，官方 24px regular，MIT）；
    业务/组件不得直接 import `@lucide/vue`。新增图标必须同时更新 `tmp/gen-fluent-icons.mjs` 白名单与
    `web/src/icons/README.md`，图标按钮必须有可访问名称或 Tooltip；纯装饰图标默认 `aria-hidden`。
+   **唯一例外是操作系统发行版标识**：`web/src/components/patterns/OsMark.vue` 使用 Simple Icons（CC0 1.0）
+   本地 vendored 的 24×24 单路径字形与品牌色（数据在 `osMarkData.ts`，由 `tmp/gen-os-marks.mjs` 生成），
+   仅用于识别发行版，不属于 Fluent 图标体系；字形前景必须取 `--panel-mark-on-brand`（品牌色较亮时取
+   `--panel-mark-on-light`），不得用状态色/强调色表达受支持或健康，且相邻文本始终保留 OS 名称。架构标识
+   `ArchitectureMark`、磁盘环形图 `DiskUsageChart` 属于中性 WinUI chrome，只能使用 `--panel-*` token。
 4. 语义状态色（success/warning/danger/info/neutral）只表达状态，不得用强调色表达健康/错误，
    也不得用状态色冒充主操作。
 5. 普通面板/卡片只有一层 1px 描边、无阴影；禁止 card-in-card；浮层（Dialog/菜单/Dropdown/Toast/Tooltip）
@@ -47,6 +52,8 @@
 - 加载：不确定进度统一用 `web/src/components/ui/ProgressRing.vue`（`winui-progress-ring`，短弧旋转 + 轨道，
   `prefers-reduced-motion` 下静止）；LoadingOverlay / 按钮 loading / 顶栏语言保存都用它。禁止裸 spinner 图标。
 - 焦点：`--panel-ring` = 前景色（WinUI 2px 实色焦点框），禁止再用 accent ring 充当焦点态。
+- OS 发行版标识字形：`--panel-mark-on-brand`（品牌色底上的白色字形）与 `--panel-mark-on-light`（亮品牌色底上的
+  深色字形）只服务 `OsMark` 的发行版徽标，不属于状态色/强调色；徽标底色来自 vendored 品牌数据，不随主题改变。
 
 ## 字体与尺寸
 

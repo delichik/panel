@@ -4672,3 +4672,14 @@ Object.assign(messages['zh-CN'], {
   'settingsPage.serverVariablesInvalid': '每行必须是 [*]KEY=显示名，key 唯一且匹配 [A-Za-z_][A-Za-z0-9_]*，显示名不能为空。',
   'settingsPage.tailscale.authKeyInvalid': '请输入 Tailscale 认证密钥（tskey-…），或留空。',
 });
+
+/* ---- 服务器详情概览：发行版/架构标识与磁盘环形图（UI-SRV-028/029/030） ---- */
+Object.assign(messages.en, {
+  'serversPage.diskFree': 'Free',
+  'serversPage.diskUsageChart': 'Disk usage: {percent}',
+});
+
+Object.assign(messages['zh-CN'], {
+  'serversPage.diskFree': '可用',
+  'serversPage.diskUsageChart': '磁盘使用率：{percent}',
+});

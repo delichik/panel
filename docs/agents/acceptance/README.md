@@ -74,6 +74,8 @@
 
 服务器详情一级 tab 收敛为 概览/系统/资源/网络与安全；概览合并原「概况」与「监控」，状态条与指标仪表盘同屏，系统内为 Agent/Tailscale/软件包，网络与安全内为 防火墙/Fail2Ban（网络探测子视图已移除，探测结果只在设施页与概览面板），子视图用 tab 内的下拉选择器切换，页面只保留一层 tab；旧一级 tab 深链保留别名，`tab=probes` 回落到防火墙。指标改按范围请求后端既有 `bucket` 桶聚合并展示坐标轴/图例/平均峰值/阈值/空档断线。见 [UI-SRV-002/008/009/016/017/018/019/020/025/026](ui-pages.md)、[UI-SHELL-062](ui-shell-and-conventions.md)；不新增后端 API、数据库表或后台任务。
 
+服务器详情概览图标化与窄屏重排（2026-11-18）：概览摘要卡新增发行版标识（Ubuntu/Debian/Arch 等本地 vendored 图形 + 品牌色底）与架构标识（芯片图形 + 可读架构文案），磁盘当前值由进度条改为环形图（百分比 + 已用/可用/总量 + 采样时间），状态摘要改为图标化紧凑瓦片并重排手机宽度（<640px）布局；CPU/内存/磁盘 IO/网络与延迟/丢包的当前值与历史只保留在下方指标/探测面板，摘要卡不再重复文字摘要；仅消费详情响应既有 `os`/`architecture` 与指标响应既有 `diskCurrent`/`latest`，**不新增后端 API、数据库表、前端路由或后台任务**，标识为纯识别用途、不表达受支持或健康。见 [UI-SRV-002/008/028/029/030](ui-pages.md)、[UI-SHELL-013/018/062](ui-shell-and-conventions.md)、[OBS-MET-003/004](backup-restore-diagnostics.md)、[前端交互模式规范](../specifications/frontend/interaction-patterns.md)、[覆盖基线](coverage-matrix.md)。
+
 失败运行日志与有界降级见 [ORCH-CTRL-008](orchestration-and-tasks.md)；设施逐节点部署、按需请求错误诊断见 [FAC-RP-012/013](applications-and-facilities.md)。
 
 指标采集与保留从设置页移出为**指标设施**（`metrics`）：配置读写 `GET/PUT /api/v1/facility-apps/metrics`、采集节点选择与按节点下发、采集间隔对齐生效、保留清理、旧运行时设置播种与设置页移除、服务器删除配置修剪、失败语义见 [FAC-MET-001..008](applications-and-facilities.md)；设施目录与页面行为见 [UI-FAC-014/019](ui-pages.md)、[UI-SRV-008](ui-pages.md)、[UI-SET-002](ui-pages.md)；设置接口移除三项见 [SET-RUN-021](identity-settings-system.md)，容器上报间隔仍由 [SET-RUN-014](identity-settings-system.md) 约束；表/路由基线见 [项目覆盖基线](coverage-matrix.md)、[API 路由逐项清单](api-route-inventory.md)。

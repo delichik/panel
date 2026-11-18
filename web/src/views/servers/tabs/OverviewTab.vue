@@ -16,13 +16,10 @@ import type { CredentialDto } from '@/types/credentials';
 import type { ServerDto } from '@/types/servers';
 import type { TaskDto } from '@/types/tasks';
 import { formatDateTime } from '@/utils/datetime';
-import { formatBytes, formatPercent, formatRate } from '@/utils/metrics';
 import { createLatestRequestGuard, isAbortError } from '@/views/_shared/requestState';
 import MetricsPanel from './MetricsPanel.vue';
 import OverviewSummary from './OverviewSummary.vue';
 import ProbeOverviewPanel from './ProbeOverviewPanel.vue';
-import { cpuCurrent, diskIoCurrent, latestSampleTime, memoryCurrent, networkCurrent } from './metricsModel';
-import type { ProbeOverviewSummary } from './probeSummary';
 import {
   credentialLabel,
   proxyErrorKey,
@@ -72,55 +69,7 @@ const connectionItems = computed<PropertyListItem[]>(() => [
   },
 ]);
 
-/** 概览右栏「指标」摘要：取 MetricsPanel 上报的当前样本，短属性两列展示。 */
-const metricsSummaryItems = computed<PropertyListItem[]>(() => {
-  const series = metricsSnapshot.value;
-  const unavailable = t('common.notAvailable');
-  const cpu = cpuCurrent(series);
-  const memory = memoryCurrent(series);
-  const diskIo = diskIoCurrent(series);
-  const network = networkCurrent(series);
-  return [
-    { key: 'cpu', label: t('serversPage.metrics.cpuUsage'), value: cpu === null ? unavailable : formatPercent(cpu, 1) },
-    {
-      key: 'memory',
-      label: t('serversPage.metrics.memoryUsage'),
-      value: memory
-        ? `${formatBytes(memory.usedBytes)} / ${formatBytes(memory.totalBytes)}${memory.percent === null ? '' : ` (${formatPercent(memory.percent, 0)})`}`
-        : unavailable,
-    },
-    { key: 'diskRead', label: t('serversPage.diskIoRead'), value: diskIo ? formatRate(diskIo.read) : unavailable },
-    { key: 'diskWrite', label: t('serversPage.diskIoWrite'), value: diskIo ? formatRate(diskIo.write) : unavailable },
-    { key: 'networkRx', label: t('serversPage.networkRx'), value: network ? formatRate(network.rx) : unavailable },
-    { key: 'networkTx', label: t('serversPage.networkTx'), value: network ? formatRate(network.tx) : unavailable },
-    { key: 'sampledAt', label: t('serversPage.metricsSampledAt'), value: formatDateTime(latestSampleTime(series), t('serversPage.metrics.waitingSample')) },
-  ];
-});
-
-/** 概览右栏「探测」摘要：由 ProbeOverviewPanel 载入聚合结果后上报。 */
-const probeSummary = ref<ProbeOverviewSummary | null>(null);
-const probeSummaryItems = computed<PropertyListItem[]>(() => {
-  const summary = probeSummary.value;
-  if (!summary) {
-    return [
-      { key: 'status', label: t('common.status'), value: t('common.loading') },
-      { key: 'latency', label: t('serversPage.probe.latency'), value: t('common.notAvailable') },
-      { key: 'packetLoss', label: t('serversPage.probe.packetLoss'), value: t('common.notAvailable') },
-      { key: 'sampledAt', label: t('serversPage.probe.lastSample'), value: t('common.never') },
-    ];
-  }
-  return [
-    { key: 'status', label: t('common.status'), value: summary.status },
-    { key: 'latency', label: t('serversPage.probe.latency'), value: summary.latency },
-    { key: 'packetLoss', label: t('serversPage.probe.packetLoss'), value: summary.packetLoss },
-    { key: 'sampledAt', label: t('serversPage.probe.lastSample'), value: summary.sampledAt },
-  ];
-});
-
-function onProbeSummary(value: ProbeOverviewSummary | null) {
-  probeSummary.value = value;
-}
-
+/** 概览摘要只保留状态/发行版/磁盘；CPU、内存、磁盘 IO、网络与延迟的当前值/历史都在下方图表区展示。 */
 function isActiveTask(task: TaskDto | null) {
   return Boolean(task && ['queued', 'scheduled', 'running', 'failed_retryable'].includes(task.status));
 }
@@ -196,7 +145,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="h-full min-h-0 overflow-y-auto pr-1">
+  <div class="h-full min-h-0 overflow-y-auto pr-1 max-lg:h-auto max-lg:overflow-visible max-lg:pr-0">
     <div class="grid content-start gap-4">
       <div v-if="hostKeyMismatch || server.lastError" class="grid gap-2">
         <div v-if="hostKeyMismatch" class="rounded-control border border-danger-border bg-danger-bg p-3 text-body text-danger">
@@ -213,69 +162,50 @@ onBeforeUnmount(() => {
 
       <OverviewSummary :server="server" :metrics="metricsSnapshot" />
 
-      <!-- 宽屏：摘要卡之后为两列属性/指标；图表等长内容保持全宽在下方。 -->
+      <!-- 摘要卡之后：连接信息与最近操作并排（宽屏）。指标/探测的当前值与历史统一由下方图表面板承担，摘要卡不再重复。 -->
       <div class="grid content-start gap-4 wide:grid-cols-2">
-        <div class="grid content-start gap-4">
-          <DetailSection :title="t('serversPage.connection')">
-            <PropertyList :items="connectionItems" :columns="2">
-              <template #value="{ item, text }">
-                <template v-if="item.key === 'proxy'">
-                  <span :class="proxyInvalid ? 'text-warning' : undefined">
-                    {{ proxyModeLabel }}<template v-if="proxyDetail"> · <span class="panel-mono break-all">{{ proxyDetail }}</span></template>
-                  </span>
-                  <Badge v-if="proxyInvalid" tone="warning">{{ t(proxyErrorKey(server)) }}</Badge>
-                </template>
-                <span v-else class="min-w-0 break-all" :class="item.mono ? 'panel-mono' : undefined">{{ text }}</span>
+        <DetailSection :title="t('serversPage.connection')">
+          <PropertyList :items="connectionItems" :columns="2">
+            <template #value="{ item, text }">
+              <template v-if="item.key === 'proxy'">
+                <span :class="proxyInvalid ? 'text-warning' : undefined">
+                  {{ proxyModeLabel }}<template v-if="proxyDetail"> · <span class="panel-mono break-all">{{ proxyDetail }}</span></template>
+                </span>
+                <Badge v-if="proxyInvalid" tone="warning">{{ t(proxyErrorKey(server)) }}</Badge>
               </template>
-            </PropertyList>
-          </DetailSection>
-
-          <DetailSection :title="t('serversPage.recentOperations')">
-            <template #actions>
-              <ActivityLink resource-type="server" :resource-id="server.id" />
+              <span v-else class="min-w-0 break-all" :class="item.mono ? 'panel-mono' : undefined">{{ text }}</span>
             </template>
-            <div class="grid gap-2 p-4 text-body text-muted-foreground">
-              <span>{{ t('serversPage.updatedAt') }}: {{ formatDateTime(server.updatedAt) || t('common.never') }}</span>
-              <div v-if="initialTask || server.initialTaskId" class="grid gap-1">
-                <div class="flex flex-wrap items-center justify-between gap-2">
-                  <span>{{ t('serversPage.initialTask') }}</span>
-                  <span class="flex items-center gap-2">
-                    <StatusBadge v-if="initialTask" :status="initialTask.status" domain="task" :label="t(`tasksPage.status.${initialTask.status}`)" />
-                    <ActivityLink v-if="server.initialTaskId" :execution-id="server.initialTaskId" />
-                  </span>
-                </div>
-                <span class="panel-mono text-caption">{{ server.initialTaskId }}</span>
-                <p v-if="initialTaskLoading && !initialTask" class="m-0 text-caption">{{ t('serversPage.agentTaskLoading') }}</p>
-                <p v-if="initialTaskError" class="m-0 break-words text-danger">{{ initialTaskError }}</p>
-                <p v-else-if="initialTask?.error" class="m-0 break-words text-danger">{{ initialTask.error }}</p>
+          </PropertyList>
+        </DetailSection>
+
+        <DetailSection :title="t('serversPage.recentOperations')">
+          <template #actions>
+            <ActivityLink resource-type="server" :resource-id="server.id" />
+          </template>
+          <div class="grid gap-2 p-4 text-body text-muted-foreground">
+            <span>{{ t('serversPage.updatedAt') }}: {{ formatDateTime(server.updatedAt) || t('common.never') }}</span>
+            <div v-if="initialTask || server.initialTaskId" class="grid gap-1">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <span>{{ t('serversPage.initialTask') }}</span>
+                <span class="flex items-center gap-2">
+                  <StatusBadge v-if="initialTask" :status="initialTask.status" domain="task" :label="t(`tasksPage.status.${initialTask.status}`)" />
+                  <ActivityLink v-if="server.initialTaskId" :execution-id="server.initialTaskId" />
+                </span>
               </div>
-              <span v-else class="text-caption">{{ t('serversPage.agentTaskNoHistory') }}</span>
+              <span class="panel-mono text-caption">{{ server.initialTaskId }}</span>
+              <p v-if="initialTaskLoading && !initialTask" class="m-0 text-caption">{{ t('serversPage.agentTaskLoading') }}</p>
+              <p v-if="initialTaskError" class="m-0 break-words text-danger">{{ initialTaskError }}</p>
+              <p v-else-if="initialTask?.error" class="m-0 break-words text-danger">{{ initialTask.error }}</p>
             </div>
-          </DetailSection>
-        </div>
-
-        <div class="grid content-start gap-4">
-          <DetailSection :title="t('serversPage.metrics')">
-            <PropertyList :items="metricsSummaryItems" :columns="2">
-              <template #value="{ text }"><span class="tabular-nums">{{ text }}</span></template>
-            </PropertyList>
-          </DetailSection>
-
-          <DetailSection :title="t('serversPage.probe')">
-            <PropertyList :items="probeSummaryItems" :columns="2">
-              <template #value="{ item, text }">
-                <Badge v-if="item.key === 'status'" :tone="probeSummary?.tone ?? 'neutral'">{{ text }}</Badge>
-                <span v-else class="tabular-nums">{{ text }}</span>
-              </template>
-            </PropertyList>
-          </DetailSection>
-        </div>
+            <span v-else class="text-caption">{{ t('serversPage.agentTaskNoHistory') }}</span>
+          </div>
+        </DetailSection>
       </div>
 
-      <!-- 长内容（指标图表、24h 探测图表）保持全宽。 -->
+      <!-- 指标/探测的当前值与历史由下方图表面板展示（含当前值、时间轴、阈值与空态），摘要卡不再重复。 -->
       <MetricsPanel :server="server" :active="active" @metrics-loaded="metricsSnapshot = $event" />
 
-      <ProbeOverviewPanel :server="server" :active="active" @summary="onProbeSummary" />
+      <ProbeOverviewPanel :server="server" :active="active" />
     </div>
 
     <ConfirmDialog

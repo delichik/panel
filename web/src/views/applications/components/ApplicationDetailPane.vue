@@ -125,7 +125,7 @@ function selectTab(value: string) {
             <wide 单列堆叠，避免 1200 内容列被压窄后仍强行三列。
           -->
           <div class="grid min-w-0 content-start gap-4 wide:grid-cols-[minmax(0,1fr)_320px] wide:items-start">
-            <DetailSection :title="t('applicationsPage.nodeInstances')" class="min-w-0">
+            <DetailSection :title="t('applicationsPage.nodeInstances')" class="min-w-0" :surface="false">
               <ApplicationInstanceList
                 :instances="runtime?.instances ?? []"
                 :loading="runtimeLoading"

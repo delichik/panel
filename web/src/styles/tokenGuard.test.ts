@@ -15,6 +15,7 @@ const allowlist = new Set([
   'icons/README.md',
   'design/appearance.ts', // accent seeds + preset gradients are the token definitions
   'styles/main.css',
+  'components/patterns/osMarkData.ts', // vendored CC0 distro marks carry fixed brand colors, not theme colors
 ]);
 
 const deprecatedPatterns: Array<{ pattern: RegExp; message: string }> = [
@@ -109,6 +110,8 @@ describe('WinUI design-token guard', () => {
       '--spacing-indicator',
       '--color-accent-strong',
       '--color-accent-stronger',
+      '--panel-mark-on-brand',
+      '--panel-mark-on-light',
     ]) {
       expect(styles, `${token} must stay defined`).toContain(token);
     }

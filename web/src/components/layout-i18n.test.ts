@@ -38,7 +38,7 @@ describe('responsive shared layout', () => {
     expect(wrapper.classes()).toContain('max-lg:flex-col');
     const actions = wrapper.get('header > div:last-child');
     expect(actions.classes()).toContain('flex-wrap');
-    expect(actions.classes()).toContain('max-lg:w-full');
+    expect(actions.classes()).toContain('max-wide:w-full');
   });
 });
 

@@ -7,6 +7,7 @@ import {
   diskIoCurrent,
   diskIoSeries,
   diskUsagePercent,
+  diskUsageTone,
   hasSamples,
   latestSampleTime,
   memoryCurrent,
@@ -94,5 +95,14 @@ describe('server metrics model', () => {
     expect(diskUsagePercent(series({ diskCurrent: { time: base, usedBytes: 1, totalBytes: 0 } }))).toBeNull();
     expect(memoryCurrent(series({ memory: [{ time: base, usedBytes: 1, totalBytes: 0 }] }))).toBeNull();
     expect(latestSampleTime(null)).toBe('');
+  });
+
+  it('maps disk usage percentages to stable semantic tones for the ring chart', () => {
+    // UI-SRV-029: the disk ring keeps the 85/95 thresholds used by the former progress bar.
+    expect(diskUsageTone(null)).toBe('neutral');
+    expect(diskUsageTone(84.9)).toBe('success');
+    expect(diskUsageTone(85)).toBe('warning');
+    expect(diskUsageTone(94.9)).toBe('warning');
+    expect(diskUsageTone(95)).toBe('danger');
   });
 });

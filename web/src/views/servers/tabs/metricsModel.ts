@@ -91,6 +91,17 @@ export function diskUsagePercent(series: ServerMetricsSeries | null | undefined)
   return disk ? percentOf(disk.usedBytes, disk.totalBytes) : null;
 }
 
+/**
+ * 磁盘使用率语义 tone：与摘要卡阈值保持一致（>=95 danger、>=85 warning），
+ * 无有效样本返回 neutral；只用于展示，不参与任何能力门禁。
+ */
+export function diskUsageTone(percent: number | null | undefined): 'success' | 'warning' | 'danger' | 'neutral' {
+  if (percent === null || percent === undefined || !Number.isFinite(percent)) return 'neutral';
+  if (percent >= 95) return 'danger';
+  if (percent >= 85) return 'warning';
+  return 'success';
+}
+
 export function cpuCurrent(series: ServerMetricsSeries | null | undefined): number | null {
   if (!series) return null;
   if (series.latest) return series.latest.cpuUsagePercent;

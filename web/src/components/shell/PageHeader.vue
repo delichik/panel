@@ -70,7 +70,7 @@ const breadcrumbNavLabel = computed(() => props.breadcrumbLabel ?? t('common.bre
     </div>
     <div
       v-if="$slots.actions"
-      class="flex min-w-0 max-w-full shrink-0 flex-wrap items-center justify-end gap-2 max-lg:w-full max-lg:justify-start max-sm:flex-col max-sm:items-stretch max-sm:gap-2 max-sm:[&>*]:w-full"
+      class="flex min-w-0 max-w-full shrink-0 flex-wrap items-center justify-end gap-2 max-wide:w-full max-wide:justify-start max-sm:flex-col max-sm:items-stretch max-sm:gap-2 max-sm:[&>*]:w-full"
     >
       <slot name="actions" />
     </div>
