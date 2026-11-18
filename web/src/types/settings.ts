@@ -40,12 +40,38 @@ export interface RuntimeTailscaleSettings {
   container: RuntimeTailscaleContainerState;
 }
 
-/** PUT /settings/runtime 的 tailscale 子对象：字段缺省表示保持当前值。 */
+/** PUT /settings/tailscale 的请求体：字段缺省表示保持当前值。 */
 export interface RuntimeTailscaleUpdate {
   authKey?: string;
   clearAuthKey?: boolean;
   tags?: string[];
 }
+
+/** PUT /settings/runtime/general：运行时/常规分区。 */
+export interface RuntimeGeneralUpdate {
+  containerReportIntervalSeconds: number;
+  language: string;
+  logLevel: string;
+  reconcileTraceEnabled: boolean;
+}
+
+/** PUT /settings/runtime/security：安全分区。 */
+export interface RuntimeSecurityUpdate {
+  tokenExpiration: string;
+  remoteCommandTimeoutSeconds: number;
+}
+
+/** PUT /settings/runtime/certificates：证书/Panel HTTPS 分区。 */
+export interface RuntimeCertificatesUpdate {
+  panel: RuntimePanelSettings;
+  certificates: RuntimeCertificateSettings;
+}
+
+/** PUT /settings/runtime/agent：Agent 投递分区。 */
+export type RuntimeAgentUpdate = RuntimeAgentSettings;
+
+/** PUT /settings/runtime/branding：登录品牌分区。 */
+export type RuntimeBrandingUpdate = RuntimeBrandingSettings;
 
 export interface RuntimeSettings {
   listenAddress: string;
@@ -64,20 +90,6 @@ export interface RuntimeSettings {
   agent: RuntimeAgentSettings;
   tailscale: RuntimeTailscaleSettings;
   jwtSecretConfigured: boolean;
-}
-
-export interface RuntimeUpdate {
-  containerReportIntervalSeconds: number;
-  tokenExpiration: string;
-  language: string;
-  logLevel: string;
-  remoteCommandTimeoutSeconds: number;
-  reconcileTraceEnabled?: boolean;
-  branding?: RuntimeBrandingSettings;
-  certificates?: RuntimeCertificateSettings;
-  panel?: RuntimePanelSettings;
-  agent?: RuntimeAgentSettings;
-  tailscale?: RuntimeTailscaleUpdate;
 }
 
 export interface ServerVariableDefinition {

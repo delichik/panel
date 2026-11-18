@@ -25,25 +25,25 @@
 
 ### TS-SET-002 认证密钥只写语义与清除语义
 
-- **触发入口**：`PUT /api/v1/settings/runtime` 的 `tailscale.authKey` 与 `tailscale.clearAuthKey`。
+- **触发入口**：`PUT /api/v1/settings/tailscale` 的 `authKey` 与 `clearAuthKey`。
 - **前置条件**：认证用户；已存在或尚不存在 `runtime_settings` 键 `tailscale.authKey`。
 - **成功结果**：`authKey` 非空时先校验后替换存储值，此后任何 API 只暴露 `authKeyConfigured=true`；`authKey` 为空或省略时保留已存密钥；`clearAuthKey=true` 时删除该键、把容器期望态置为关闭（`enabled=false`），随即 `authKeyConfigured=false`。
 - **失败结果**：密钥格式非法返回 `invalid_tailscale_auth_key`，且认证密钥、标签与同请求内其它字段都不得部分写入。密钥不得出现在任何 API 响应、日志、任务参数或运行事件中（`GOV-DOD-009`）。
-- **边界条件**：同一请求同时给出非空 `authKey` 与 `clearAuthKey=true` 时必须有稳定且单一的最终语义，不得出现“密钥已清除但期望态仍为启用”的半状态；重复清除幂等；键本就不存在时清除返回成功；密钥只能整体替换，不提供读取接口，也不进入备份以外的任何导出面。
+- **边界条件**：同一请求同时给出非空 `authKey` 与 `clearAuthKey=true` 时必须有稳定且单一的最终语义，不得出现“密钥已清除但期望态仍为启用”的半状态；重复清除幂等；键本就不存在时清除返回成功；密钥只能整体替换，不提供读取接口，也不进入备份以外的任何导出面；`tags` 省略时保留既有标签，`clearAuthKey=true` 不得同时清空标签，只有显式 `tags=[]` 才清空标签（`TS-SET-003`）。
 - **验证点**：`tailscale_test.go` 断言响应与任务参数中不含密钥、清除后 `authKeyConfigured=false` 且期望态文件为 `enabled=false`；`settingsPage.confirm.tailscale-auth-key.*` 覆盖清除前确认。
 
 ### TS-SET-003 标签归一化与非法输入拒绝
 
-- **触发入口**：`PUT /api/v1/settings/runtime` 的 `tailscale.tags`。
+- **触发入口**：`PUT /api/v1/settings/tailscale` 的 `tags`。
 - **前置条件**：认证用户；提交换行、逗号或空格分隔的标签输入，或已归一化的数组。
 - **成功结果**：每项裁剪后小写化、去重、排序，写入 `runtime_settings` 键 `tailscale.tags`（换行编码）；读写响应回显归一化结果，后续节点加入使用同一集合。
 - **失败结果**：任一项不符合 `tag:name`（只允许小写字母、数字和连字符，且首尾必须是字母或数字）返回 `invalid_tailscale_tag`，整套标签不写入，且本次请求的其它字段也不得写入。
-- **边界条件**：空数组或空串表示明确清空；整个 `tailscale` 分组省略时（例如只保存 Agent 或运行时分区的请求）标签、密钥配置状态与容器实际态必须保持现值，不得被解释为清空，响应中的 `tags` 必须是数组而不是 `null`；大小写不同视为同一标签只保留一份；含合法与非法混合项时整体拒绝，不得静默丢弃非法项后再保存；数量上限超限同样拒绝。
+- **边界条件**：显式 `tags=[]` 表示明确清空；`tags` 字段省略时（例如只保存认证密钥或其它分区的请求）必须保留既有标签，不得被解释为清空；保存认证密钥或其它分区不得改变标签、密钥配置状态与容器实际态，响应中的 `tags` 必须是数组而不是 `null`；大小写不同视为同一标签只保留一份；含合法与非法混合项时整体拒绝，不得静默丢弃非法项后再保存；数量上限超限同样拒绝。
 - **验证点**：`internal/platform/tailscale/tailscale_test.go` 的 `NormalizeTags`/`ValidateTag` 用例，`tailscale_test.go` 的 PUT 拒绝用例与 `TestRuntimeSettingsPreserveTailscaleOnUnrelatedUpdate`（省略分组时保留标签、密钥状态、容器态与持久化值）；前端 `web/src/views/settings/tailscale.test.ts` 覆盖本地解析与阻断。
 
 ### TS-SET-004 设置先持久化，容器收敛失败不回流
 
-- **触发入口**：`PUT /api/v1/settings/runtime` 成功后的容器期望态写入与收敛请求。
+- **触发入口**：`PUT /api/v1/settings/tailscale` 成功后的容器期望态写入与收敛请求。
 - **前置条件**：设置已通过校验；分别覆盖“由 panel-init 监管”和“以 `go run ./cmd/panel` 独立运行”两种形态。
 - **成功结果**：设置先持久化并同步内存快照后返回；随后写 `<dataRoot>/tailscale/config.json` 并请求 panel-init 收敛。收敛失败只体现在随后读取的 `tailscale.container.lastError` 中。
 - **失败结果**：期望态写入失败返回 `tailscale_config_write_failed`，已保存的设置不回滚；未经 panel-init 监管时不得把容器态报成“已收敛”。
@@ -362,10 +362,10 @@
 ### TS-EVD-001 路由清单与前端契约一致性
 
 - **触发入口**：`internal/bootstrap/panel/routes_manifest_test.go` 与 [主 Panel API 路由逐项清单](api-route-inventory.md)。
-- **前置条件**：本次新增两条路由：`POST /api/v1/settings/tailscale/apply`、`POST /api/v1/servers/{id}/tailscale/apply`。
-- **成功结果**：清单计数为 175，SHA-256 为 `f57a6287ff235634949f6f5fd63a3455bfaaa088ce5ea08562bfeb7a886eda44`（上一轮新增两条 Tailscale 路由，本轮删除了两条手动防火墙路由，`AGT-FW-001..006`）；两条路由在清单中分别映射到本文档与相应领域文档；前端 typed client、类型与 Mock 同步。
+- **前置条件**：设置写入已拆分为分区子资源（`SET-RUN-022`）：`PUT /api/v1/settings/tailscale` 取代旧整体 `PUT /api/v1/settings/runtime` 中的 `tailscale` 分组，`GET /api/v1/settings/runtime` 不变。
+- **成功结果**：主 Panel 路由清单计数为 197（删除整体 `PUT /settings/runtime`，新增 5 条 `PUT /settings/runtime/*` 与 `PUT /settings/tailscale`，见 `SET-RUN-022`）；`PUT /settings/tailscale` 映射到本文档，`POST /settings/tailscale/apply` 与 `POST /servers/{id}/tailscale/apply` 映射到本文档与服务器领域文档；哈希以 `routes_manifest_test.go` 的 `wantHash` 为准，本文不硬编码。前端 typed client、类型与 Mock 同步。
 - **失败结果**：不得只更新哈希或计数让测试通过；新增路由缺少验收映射时必须先补合同（`API-COV-001`、`API-COV-002`）。
-- **边界条件**：`GET /api/v1/settings/runtime` 与 `PUT /api/v1/settings/runtime` 的分组扩展不改变 method/path 数量；`POST /api/v1/servers/{id}/tailscale/apply` 与既有 `agent/*` 子资源互不影响。
+- **边界条件**：`GET /api/v1/settings/runtime` 仍返回 `tailscale` 分组；`PUT /api/v1/settings/tailscale` 与其它分区写入端点各自只改变本分区、不改变 method/path 集合；`POST /api/v1/servers/{id}/tailscale/apply` 与既有 `agent/*` 子资源互不影响。
 - **验证点**：路由清单测试、`api-route-inventory.md`、`coverage-matrix.md` 三者同步。
 
 ### TS-EVD-002 测试与人工观察证据

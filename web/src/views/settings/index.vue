@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, nextTick, onMounted, reactive, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { DatabaseBackup, KeyRound, Network, RefreshCcw, Save, Shield, Trash2, UploadCloud } from '@/icons';
+import { DatabaseBackup, KeyRound, Network, RefreshCcw, Trash2, UploadCloud } from '@/icons';
 import { eventsApi } from '@/api/events';
 import { keyAssetsApi } from '@/api/keyAssets';
-import { runtimeTailscaleUpdate, settingsApi, tailscaleUpdate } from '@/api/settings';
+import { settingsApi, tailscaleUpdate } from '@/api/settings';
 import { systemApi, type VersionInfo } from '@/api/system';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
@@ -22,12 +22,24 @@ import Textarea from '@/components/ui/Textarea.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
+import AutoSaveStatus from '@/components/patterns/AutoSaveStatus.vue';
 import SettingsCard from '@/components/patterns/SettingsCard.vue';
 import SettingsSection from '@/components/patterns/SettingsSection.vue';
+import { useDebouncedAutoSave, type AutoSaveStatusLabels } from '@/composables/useDebouncedAutoSave';
 import { useI18n } from '@/i18n';
 import { useSessionStore } from '@/stores/session';
 import type { KeyAssetDto, SystemCertificateDto } from '@/types/keyAssets';
-import type { RestorePreflightResponse, RuntimeSettings, RuntimeUpdate, ServerVariableDefinition } from '@/types/settings';
+import type {
+  RestorePreflightResponse,
+  RuntimeAgentUpdate,
+  RuntimeBrandingUpdate,
+  RuntimeCertificatesUpdate,
+  RuntimeGeneralUpdate,
+  RuntimeSecurityUpdate,
+  RuntimeSettings,
+  RuntimeTailscaleUpdate,
+  ServerVariableDefinition,
+} from '@/types/settings';
 import { createLatestRequestGuard } from '@/views/_shared/requestState';
 import { formatDateTime } from '@/utils/datetime';
 import AppearanceSectionSkeleton from './AppearanceSectionSkeleton.vue';
@@ -100,6 +112,10 @@ const builtInPanelTLSAssetID = 'panel-tls';
 // backend so an out-of-range value is caught before the request.
 const agentTransferTimeoutMin = 60;
 const agentTransferTimeoutMax = 3600;
+const loginTitleMaxLength = 80;
+const loginSubtitleMaxLength = 240;
+/** 认证密钥只写字段的本地形态校验；不匹配时不发请求。 */
+const tailscaleAuthKeyPattern = /^tskey-[A-Za-z0-9_-]+$/;
 
 const form = reactive({
   containerReportIntervalSeconds: '30',
@@ -138,6 +154,7 @@ const sections = computed<Array<{ key: SectionKey; label: string }>>(() => [
   { key: 'system', label: t('settingsPage.section.system') },
   { key: 'backups', label: t('settingsPage.section.backups') },
 ]);
+
 /**
  * 设置分区用共享 WinUI Tabs 作为顶部横向选择器（不再有第二条左侧导航）；
  * value 是分区 key，与 `settings/:section?` 路由参数一一对应，直链/刷新/前进后退由 URL 驱动。
@@ -158,21 +175,112 @@ function resetSectionScroll() {
   });
 }
 
-/** 当前分区的刷新：始终重取设置数据；外观激活时并行刷新共享 appearance store。 */
-async function refreshCurrentSection() {
-  if (refreshing.value) return;
-  refreshing.value = true;
-  try {
-    const tasks: Array<Promise<void>> = [load()];
-    if (activeSection.value === 'appearance' && appearanceSectionRef.value) {
-      tasks.push(appearanceSectionRef.value.reload());
-    }
-    await Promise.all(tasks);
-  } finally {
-    refreshing.value = false;
-  }
+/* ------------------------------------------------------------------------ */
+/* 本地校验：非法输入不发请求，只在字段旁展示错误并让 AutoSaveStatus 进入 invalid。 */
+/* ------------------------------------------------------------------------ */
+
+function integerField(raw: string, min: number): number | null {
+  const text = raw.trim();
+  if (!text) return null;
+  const value = Number(text);
+  return Number.isInteger(value) && value >= min ? value : null;
 }
-const tokenOptions = computed(() => ['10m', '1h', '1d', '5d', '30d', 'never'].map((value) => ({ label: t(`settingsPage.token.${value}`), value })));const languageOptions = computed(() => [{ label: t('settingsPage.language.en'), value: 'en' }, { label: t('settingsPage.language.zh'), value: 'zh-CN' }]);
+
+function integerInRange(raw: string, min: number, max: number): number | null {
+  const value = integerField(raw, min);
+  return value !== null && value <= max ? value : null;
+}
+
+function isIPv4(value: string): boolean {
+  const parts = value.split('.');
+  return parts.length === 4 && parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255);
+}
+
+function isDottedHostname(value: string): boolean {
+  const labels = value.split('.');
+  if (labels.length < 2) return false;
+  return labels.every((label) => label.length <= 63 && /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(label));
+}
+
+/**
+ * Panel 域名：trim + 小写；非空、不含路径/查询/凭据字符与空白、不含 `..`，
+ * 且必须是 IP、localhost 或带点主机名（<=253）。
+ */
+function normalizePanelDomain(raw: string): string | null {
+  const value = raw.trim().toLowerCase();
+  if (!value || value.length > 253) return null;
+  if (/[/\\?#@\s:]/.test(value)) return null;
+  if (value.includes('..')) return null;
+  if (value === 'localhost' || isIPv4(value)) return value;
+  return isDottedHostname(value) ? value : null;
+}
+
+/** ACME 联系邮箱：允许留空，否则要求基本邮箱形态。 */
+function normalizeCertificateEmail(raw: string): string | null {
+  const value = raw.trim();
+  if (!value) return '';
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) ? value : null;
+}
+
+/**
+ * Agent 下载基址：允许留空；否则必须是裸 http(s) origin（无 path/query/fragment/userinfo），
+ * 且不含空白、引号、反斜杠与 shell 元字符。返回规范化 origin 作为提交值。
+ */
+function normalizeAgentDownloadBaseUrl(raw: string): string | null {
+  const value = raw.trim();
+  if (!value) return '';
+  if (/[\s"'`\\$&|;<>(){}*!~]/.test(value)) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+  if (parsed.username || parsed.password) return null;
+  if (parsed.search || parsed.hash || parsed.pathname !== '/') return null;
+  if (!parsed.hostname) return null;
+  return parsed.origin;
+}
+
+interface ParsedServerVariables {
+  definitions: ServerVariableDefinition[];
+  invalid: boolean;
+}
+
+/** `[*]KEY=Name` 每行一条；key 匹配 `[A-Za-z_][A-Za-z0-9_]*` 且唯一，显示名非空。 */
+function parseServerVariables(raw: string): ParsedServerVariables {
+  const definitions: ServerVariableDefinition[] = [];
+  const seen = new Set<string>();
+  let invalid = false;
+  raw.split(/\r?\n/).forEach((rawLine) => {
+    const line = rawLine.trim();
+    if (!line) return;
+    const required = line.startsWith('*');
+    const body = required ? line.slice(1) : line;
+    const separator = body.indexOf('=');
+    if (separator <= 0) {
+      invalid = true;
+      return;
+    }
+    const key = body.slice(0, separator).trim();
+    const name = body.slice(separator + 1).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || !name || seen.has(key)) {
+      invalid = true;
+      return;
+    }
+    seen.add(key);
+    definitions.push({ key, name, required });
+  });
+  return { definitions, invalid };
+}
+
+function formatServerVariables(definitions: ServerVariableDefinition[]): string {
+  return definitions.map((item) => `${item.required ? '*' : ''}${item.key}=${item.name}`).join('\n');
+}
+
+const tokenOptions = computed(() => ['10m', '1h', '1d', '5d', '30d', 'never'].map((value) => ({ label: t(`settingsPage.token.${value}`), value })));
+const languageOptions = computed(() => [{ label: t('settingsPage.language.en'), value: 'en' }, { label: t('settingsPage.language.zh'), value: 'zh-CN' }]);
 const logOptions = computed(() => ['debug', 'info', 'warn', 'error'].map((value) => ({ label: value, value })));
 const panelTlsOptions = computed(() => tlsCertificates.value.map((certificate) => ({ label: certificate.name, value: certificate.id })));
 const jwtSecretValid = computed(() => form.jwtSecret.trim().length >= 16);
@@ -188,23 +296,24 @@ function fromNumber(value: number | null): string {
 }
 const fieldErrors = computed<Record<string, string>>(() => {
   const errors: Record<string, string> = {};
-  const positive: Array<keyof typeof form> = ['containerReportIntervalSeconds', 'remoteCommandTimeoutSeconds'];
-  positive.forEach((key) => {
-    const value = Number(form[key]);
-    if (!Number.isFinite(value) || value < 1) errors[key] = 'settingsPage.validationPositiveNumber';
-  });
-  if (!Number.isFinite(Number(form.dnsPropagationDelaySeconds)) || Number(form.dnsPropagationDelaySeconds) < 0) {
-    errors.dnsPropagationDelaySeconds = 'settingsPage.validationNonNegativeNumber';
-  }
-  const transferTimeout = Number(form.agentTransferTimeoutSeconds);
-  if (!Number.isFinite(transferTimeout) || transferTimeout < agentTransferTimeoutMin || transferTimeout > agentTransferTimeoutMax) {
-    errors.agentTransferTimeoutSeconds = 'settingsPage.validationAgentTransferTimeout';
-  }
+  if (integerField(form.containerReportIntervalSeconds, 1) === null) errors.containerReportIntervalSeconds = 'settingsPage.validationPositiveNumber';
+  if (integerField(form.remoteCommandTimeoutSeconds, 1) === null) errors.remoteCommandTimeoutSeconds = 'settingsPage.validationPositiveNumber';
+  if (integerField(form.dnsPropagationDelaySeconds, 0) === null) errors.dnsPropagationDelaySeconds = 'settingsPage.validationNonNegativeNumber';
+  if (integerInRange(form.agentTransferTimeoutSeconds, agentTransferTimeoutMin, agentTransferTimeoutMax) === null) errors.agentTransferTimeoutSeconds = 'settingsPage.validationAgentTransferTimeout';
+  if (normalizePanelDomain(form.panelDomain) === null) errors.panelDomain = 'settingsPage.validationPanelDomain';
+  if (normalizeCertificateEmail(form.certificateEmail) === null) errors.certificateEmail = 'settingsPage.validationCertificateEmail';
+  if (normalizeAgentDownloadBaseUrl(form.agentDownloadBaseUrl) === null) errors.agentDownloadBaseUrl = 'settingsPage.validationAgentDownloadBaseUrl';
+  if ([...form.loginTitle.trim()].length > loginTitleMaxLength) errors.loginTitle = 'settingsPage.validationMaxLength';
+  if ([...form.loginSubtitle.trim()].length > loginSubtitleMaxLength) errors.loginSubtitle = 'settingsPage.validationMaxLength';
   return errors;
 });
-const runtimeSectionValid = computed(() => !fieldErrors.value.containerReportIntervalSeconds);
 const tailscaleTagResult = computed(() => parseTailscaleTags(form.tailscaleTags));
 const invalidTailscaleTags = computed(() => tailscaleTagResult.value.invalid);
+const tailscaleAuthKeyInvalid = computed(() => {
+  const value = form.tailscaleAuthKey.trim();
+  return value !== '' && !tailscaleAuthKeyPattern.test(value);
+});
+const parsedServerVariables = computed(() => parseServerVariables(form.variablesText));
 const tailscaleContainer = computed(() => runtime.value?.tailscale.container ?? null);
 
 // 单条 settings/:section? 路由：只监听 section 参数，切分区不重挂载页面。
@@ -220,10 +329,291 @@ watch(() => route.params.section, (raw) => {
     resetSectionScroll();
   }
 }, { immediate: true });
-watch(locale, (value) => {
-  form.language = value;
-  if (runtime.value) runtime.value = { ...runtime.value, language: value };
+
+/* ------------------------------------------------------------------------ */
+/* 分区自动保存：每分区一个串行控制器，500ms 防抖，只提交本分区子资源。       */
+/* ------------------------------------------------------------------------ */
+
+/** 程序性回填期间抑制自动保存，避免 hydrate 触发回写形成循环。 */
+let hydrating = false;
+
+function withProgrammatic(apply: () => void) {
+  hydrating = true;
+  try {
+    apply();
+  } finally {
+    hydrating = false;
+  }
+}
+
+function notifyAutoSaveError(errorValue: unknown) {
+  const message = errorValue instanceof Error && errorValue.message
+    ? errorValue.message
+    : t('settingsPage.autoSave.failed');
+  notifyError(message, errorValue);
+}
+
+const autoSaveLabels = computed<AutoSaveStatusLabels>(() => ({
+  saving: t('settingsPage.autoSave.saving'),
+  saved: t('settingsPage.autoSave.saved'),
+  failed: t('settingsPage.autoSave.failed'),
+  invalid: t('settingsPage.autoSave.invalid'),
+  retry: t('common.retry'),
+}));
+
+function collectGeneralPayload(): RuntimeGeneralUpdate | null {
+  const interval = integerField(form.containerReportIntervalSeconds, 1);
+  if (interval === null) return null;
+  return {
+    containerReportIntervalSeconds: interval,
+    language: form.language,
+    logLevel: form.logLevel,
+    reconcileTraceEnabled: form.reconcileTraceEnabled,
+  };
+}
+
+function collectSecurityPayload(): RuntimeSecurityUpdate | null {
+  const timeout = integerField(form.remoteCommandTimeoutSeconds, 1);
+  if (timeout === null) return null;
+  return { tokenExpiration: form.tokenExpiration, remoteCommandTimeoutSeconds: timeout };
+}
+
+function collectCertificatesPayload(): RuntimeCertificatesUpdate | null {
+  const domain = normalizePanelDomain(form.panelDomain);
+  const email = normalizeCertificateEmail(form.certificateEmail);
+  const delay = integerField(form.dnsPropagationDelaySeconds, 0);
+  if (domain === null || email === null || delay === null) return null;
+  return {
+    panel: {
+      domain,
+      tlsCertificateId: form.panelTlsCertificateId === builtInPanelTLSAssetID ? '' : form.panelTlsCertificateId,
+    },
+    certificates: { email, dnsPropagationDelaySeconds: delay },
+  };
+}
+
+function collectAgentPayload(): RuntimeAgentUpdate | null {
+  const baseUrl = normalizeAgentDownloadBaseUrl(form.agentDownloadBaseUrl);
+  const timeout = integerInRange(form.agentTransferTimeoutSeconds, agentTransferTimeoutMin, agentTransferTimeoutMax);
+  if (baseUrl === null || timeout === null) return null;
+  return {
+    downloadBaseUrl: baseUrl,
+    downloadVerifyTls: form.agentDownloadVerifyTls,
+    transferTimeoutSeconds: timeout,
+  };
+}
+
+function collectBrandingPayload(): RuntimeBrandingUpdate | null {
+  const loginTitle = form.loginTitle.trim();
+  const loginSubtitle = form.loginSubtitle.trim();
+  if ([...loginTitle].length > loginTitleMaxLength || [...loginSubtitle].length > loginSubtitleMaxLength) return null;
+  return { loginTitle, loginSubtitle };
+}
+
+function collectVariablesPayload(): ServerVariableDefinition[] | null {
+  const parsed = parsedServerVariables.value;
+  return parsed.invalid ? null : parsed.definitions;
+}
+
+function collectTailscalePayload(): RuntimeTailscaleUpdate | null {
+  const parsed = tailscaleTagResult.value;
+  if (parsed.invalid.length) return null;
+  const authKey = form.tailscaleAuthKey.trim();
+  if (authKey && !tailscaleAuthKeyPattern.test(authKey)) return null;
+  // tags 总是整体提交（省略=保留，[]=清空由后端区分；这里给出当前完整列表）。
+  return tailscaleUpdate({ authKey, tags: parsed.tags });
+}
+
+function refillGeneral(settings: RuntimeSettings) {
+  form.containerReportIntervalSeconds = String(settings.containerReportIntervalSeconds);
+  form.language = settings.language === 'zh-CN' ? 'zh-CN' : 'en';
+  form.logLevel = settings.logLevel;
+  form.reconcileTraceEnabled = settings.reconcileTraceEnabled;
+  setLocale(settings.language === 'zh-CN' ? 'zh-CN' : 'en');
+}
+
+function refillSecurity(settings: RuntimeSettings) {
+  form.tokenExpiration = settings.tokenExpiration;
+  form.remoteCommandTimeoutSeconds = String(settings.remoteCommandTimeoutSeconds);
+}
+
+function refillCertificates(settings: RuntimeSettings) {
+  form.panelDomain = settings.panel.domain;
+  form.panelTlsCertificateId = settings.panel.tlsCertificateId || builtInPanelTLSAssetID;
+  form.certificateEmail = settings.certificates.email;
+  form.dnsPropagationDelaySeconds = String(settings.certificates.dnsPropagationDelaySeconds);
+}
+
+function refillAgent(settings: RuntimeSettings) {
+  form.agentDownloadBaseUrl = settings.agent.downloadBaseUrl;
+  form.agentDownloadVerifyTls = settings.agent.downloadVerifyTls;
+  form.agentTransferTimeoutSeconds = String(settings.agent.transferTimeoutSeconds);
+}
+
+function refillBranding(settings: RuntimeSettings) {
+  form.loginTitle = settings.branding.loginTitle;
+  form.loginSubtitle = settings.branding.loginSubtitle;
+}
+
+function refillTailscale(settings: RuntimeSettings) {
+  // 认证密钥只写不读：保存成功后清空输入；标签以响应为准。
+  Object.assign(form, tailscaleFormState(settings));
+}
+
+function refillVariables(definitions: ServerVariableDefinition[]) {
+  form.variablesText = formatServerVariables(definitions);
+}
+
+/** 语言保存失败：把界面语言与表单回滚到服务端已持久化的值。 */
+function rollbackLanguage() {
+  const persisted = runtime.value?.language === 'zh-CN' ? 'zh-CN' : 'en';
+  if (form.language !== persisted) withProgrammatic(() => { form.language = persisted; });
+  if (locale.value !== persisted) setLocale(persisted);
+}
+
+function partitionAutoSave<P>(
+  save: (payload: P) => Promise<RuntimeSettings>,
+  refill: (settings: RuntimeSettings) => void,
+  onFailed?: (errorValue: unknown) => void,
+) {
+  return useDebouncedAutoSave<P, RuntimeSettings>({
+    save,
+    onSaved(result, _payload, meta) {
+      runtime.value = result;
+      // 请求期间用户又改了本分区时，保留更新后的输入；等下一次防抖保存完成后再回填。
+      if (!meta.queued) withProgrammatic(() => refill(result));
+    },
+    onFailed(errorValue) {
+      onFailed?.(errorValue);
+      notifyAutoSaveError(errorValue);
+    },
+  });
+}
+
+const generalAutoSave = partitionAutoSave<RuntimeGeneralUpdate>(
+  (payload) => settingsApi.updateGeneral(payload),
+  refillGeneral,
+  rollbackLanguage,
+);
+const securityAutoSave = partitionAutoSave<RuntimeSecurityUpdate>(
+  (payload) => settingsApi.updateSecurity(payload),
+  refillSecurity,
+);
+const certificatesAutoSave = partitionAutoSave<RuntimeCertificatesUpdate>(
+  (payload) => settingsApi.updateCertificates(payload),
+  refillCertificates,
+);
+const agentAutoSave = partitionAutoSave<RuntimeAgentUpdate>(
+  (payload) => settingsApi.updateAgent(payload),
+  refillAgent,
+);
+const brandingAutoSave = partitionAutoSave<RuntimeBrandingUpdate>(
+  (payload) => settingsApi.updateBranding(payload),
+  refillBranding,
+);
+const tailscaleAutoSave = partitionAutoSave<RuntimeTailscaleUpdate>(
+  (payload) => settingsApi.updateTailscale(payload),
+  refillTailscale,
+);
+const variablesAutoSave = useDebouncedAutoSave<ServerVariableDefinition[], ServerVariableDefinition[]>({
+  save: (definitions) => settingsApi.updateServerVariables(definitions),
+  onSaved(result, _payload, meta) {
+    serverVariables.value = result;
+    if (!meta.queued) withProgrammatic(() => refillVariables(result));
+  },
+  onFailed: notifyAutoSaveError,
 });
+
+const generalStatus = generalAutoSave.status;
+const securityStatus = securityAutoSave.status;
+const certificatesStatus = certificatesAutoSave.status;
+const agentStatus = agentAutoSave.status;
+const brandingStatus = brandingAutoSave.status;
+const tailscaleStatus = tailscaleAutoSave.status;
+const variablesStatus = variablesAutoSave.status;
+
+const autoSaveControllers = [
+  generalAutoSave,
+  securityAutoSave,
+  certificatesAutoSave,
+  agentAutoSave,
+  brandingAutoSave,
+  tailscaleAutoSave,
+  variablesAutoSave,
+];
+
+function cancelAllAutoSaves() {
+  autoSaveControllers.forEach((controller) => controller.cancel());
+}
+
+function disposeAllAutoSaves() {
+  autoSaveControllers.forEach((controller) => controller.dispose());
+}
+
+function scheduleAutoSave<P>(controller: ReturnType<typeof useDebouncedAutoSave<P, RuntimeSettings>>, collect: () => P | null) {
+  if (hydrating) return;
+  controller.schedule(collect);
+}
+
+// flush: 'sync' 让程序性回填的 hydrating 标记能可靠抑制 watcher 触发的回写。
+const syncWatch = { flush: 'sync' as const };
+
+watch(() => form.containerReportIntervalSeconds, () => scheduleAutoSave(generalAutoSave, collectGeneralPayload), syncWatch);
+watch(() => form.logLevel, () => scheduleAutoSave(generalAutoSave, collectGeneralPayload), syncWatch);
+watch(() => form.reconcileTraceEnabled, () => scheduleAutoSave(generalAutoSave, collectGeneralPayload), syncWatch);
+// 语言下拉：先立即切换界面语言，再进入 general 防抖保存；失败由 rollbackLanguage 回滚。
+watch(() => form.language, (value) => {
+  if (hydrating) return;
+  const next = value === 'zh-CN' ? 'zh-CN' : 'en';
+  if (next !== locale.value) setLocale(next);
+  scheduleAutoSave(generalAutoSave, collectGeneralPayload);
+}, syncWatch);
+watch(() => form.tokenExpiration, () => scheduleAutoSave(securityAutoSave, collectSecurityPayload), syncWatch);
+watch(() => form.remoteCommandTimeoutSeconds, () => scheduleAutoSave(securityAutoSave, collectSecurityPayload), syncWatch);
+watch(() => form.panelDomain, () => scheduleAutoSave(certificatesAutoSave, collectCertificatesPayload), syncWatch);
+watch(() => form.panelTlsCertificateId, () => scheduleAutoSave(certificatesAutoSave, collectCertificatesPayload), syncWatch);
+watch(() => form.certificateEmail, () => scheduleAutoSave(certificatesAutoSave, collectCertificatesPayload), syncWatch);
+watch(() => form.dnsPropagationDelaySeconds, () => scheduleAutoSave(certificatesAutoSave, collectCertificatesPayload), syncWatch);
+watch(() => form.agentDownloadBaseUrl, () => scheduleAutoSave(agentAutoSave, collectAgentPayload), syncWatch);
+watch(() => form.agentDownloadVerifyTls, () => scheduleAutoSave(agentAutoSave, collectAgentPayload), syncWatch);
+watch(() => form.agentTransferTimeoutSeconds, () => scheduleAutoSave(agentAutoSave, collectAgentPayload), syncWatch);
+watch(() => form.loginTitle, () => scheduleAutoSave(brandingAutoSave, collectBrandingPayload), syncWatch);
+watch(() => form.loginSubtitle, () => scheduleAutoSave(brandingAutoSave, collectBrandingPayload), syncWatch);
+watch(() => form.variablesText, () => scheduleAutoSave(variablesAutoSave, collectVariablesPayload), syncWatch);
+watch(() => form.tailscaleAuthKey, () => scheduleAutoSave(tailscaleAutoSave, collectTailscalePayload), syncWatch);
+watch(() => form.tailscaleTags, () => scheduleAutoSave(tailscaleAutoSave, collectTailscalePayload), syncWatch);
+
+/**
+ * 界面语言被其它入口（顶栏语言切换）改变时同步表单与 runtime，
+ * 该语言已经由顶栏持久化，不能再次触发自动保存。
+ */
+watch(locale, (value) => {
+  if (form.language === value) return;
+  withProgrammatic(() => {
+    form.language = value;
+    if (runtime.value) runtime.value = { ...runtime.value, language: value };
+  });
+}, syncWatch);
+
+/* ------------------------------------------------------------------------ */
+/* 数据加载与动作                                                            */
+/* ------------------------------------------------------------------------ */
+
+/** 当前分区的刷新：取消待发自动保存后整体重载；外观激活时并行刷新共享 store。 */
+async function refreshCurrentSection() {
+  if (refreshing.value) return;
+  refreshing.value = true;
+  cancelAllAutoSaves();
+  try {
+    const tasks: Array<Promise<void>> = [load()];
+    if (activeSection.value === 'appearance' && appearanceSectionRef.value) {
+      tasks.push(appearanceSectionRef.value.reload());
+    }
+    await Promise.all(tasks);
+  } finally {
+    refreshing.value = false;
+  }
+}
 
 async function load() {
   const requestId = listRequests.begin();
@@ -246,7 +636,7 @@ async function load() {
     if (versionResult.status === 'fulfilled') version.value = versionResult.value;
     else if (!firstError) firstError = versionResult.reason instanceof Error ? versionResult.reason.message : t('settingsPage.loadFailed');
     if (certsResult.status === 'fulfilled') systemCertificates.value = certsResult.value;
-      else if (!firstError) firstError = certsResult.reason instanceof Error ? certsResult.reason.message : t('settingsPage.loadFailed');
+    else if (!firstError) firstError = certsResult.reason instanceof Error ? certsResult.reason.message : t('settingsPage.loadFailed');
     if (tlsResult.status === 'fulfilled') tlsCertificates.value = tlsResult.value;
     else if (!firstError) firstError = tlsResult.reason instanceof Error ? tlsResult.reason.message : t('settingsPage.loadFailed');
     if (settingsResult.status === 'fulfilled' && variablesResult.status === 'fulfilled') {
@@ -265,26 +655,28 @@ async function load() {
 }
 
 function hydrate(settings: RuntimeSettings, variables: ServerVariableDefinition[]) {
-  Object.assign(form, {
-    containerReportIntervalSeconds: String(settings.containerReportIntervalSeconds),
-    tokenExpiration: settings.tokenExpiration,
-    language: settings.language,
-    logLevel: settings.logLevel,
-    remoteCommandTimeoutSeconds: String(settings.remoteCommandTimeoutSeconds),
-    reconcileTraceEnabled: settings.reconcileTraceEnabled,
-    jwtSecret: '',
-    loginTitle: settings.branding.loginTitle,
-    loginSubtitle: settings.branding.loginSubtitle,
-    certificateEmail: settings.certificates.email,
-    dnsPropagationDelaySeconds: String(settings.certificates.dnsPropagationDelaySeconds),
-    panelDomain: settings.panel.domain,
-    panelTlsCertificateId: settings.panel.tlsCertificateId || builtInPanelTLSAssetID,
-    agentDownloadBaseUrl: settings.agent.downloadBaseUrl,
-    agentDownloadVerifyTls: settings.agent.downloadVerifyTls,
-    agentTransferTimeoutSeconds: String(settings.agent.transferTimeoutSeconds),
-    // 认证密钥只写不读：表单永远以空值开始，服务端响应里没有密钥可回填。
-    ...tailscaleFormState(settings),
-    variablesText: variables.map((item) => `${item.required ? '*' : ''}${item.key}=${item.name}`).join('\n'),
+  withProgrammatic(() => {
+    Object.assign(form, {
+      containerReportIntervalSeconds: String(settings.containerReportIntervalSeconds),
+      tokenExpiration: settings.tokenExpiration,
+      language: settings.language,
+      logLevel: settings.logLevel,
+      remoteCommandTimeoutSeconds: String(settings.remoteCommandTimeoutSeconds),
+      reconcileTraceEnabled: settings.reconcileTraceEnabled,
+      jwtSecret: '',
+      loginTitle: settings.branding.loginTitle,
+      loginSubtitle: settings.branding.loginSubtitle,
+      certificateEmail: settings.certificates.email,
+      dnsPropagationDelaySeconds: String(settings.certificates.dnsPropagationDelaySeconds),
+      panelDomain: settings.panel.domain,
+      panelTlsCertificateId: settings.panel.tlsCertificateId || builtInPanelTLSAssetID,
+      agentDownloadBaseUrl: settings.agent.downloadBaseUrl,
+      agentDownloadVerifyTls: settings.agent.downloadVerifyTls,
+      agentTransferTimeoutSeconds: String(settings.agent.transferTimeoutSeconds),
+      // 认证密钥只写不读：表单永远以空值开始，服务端响应里没有密钥可回填。
+      ...tailscaleFormState(settings),
+      variablesText: formatServerVariables(variables),
+    });
   });
 }
 
@@ -319,13 +711,15 @@ async function resetSystemCertificate() {
 
 /** 清空认证密钥是危险操作：只经确认对话框触发，且不携带新的 authKey。 */
 async function confirmClearTailscaleAuthKey() {
-  const current = runtime.value;
-  if (!current) return;
+  if (!runtime.value) return;
   await run('clear-tailscale-auth-key', async () => {
-    runtime.value = await settingsApi.updateRuntime(runtimeTailscaleUpdate(current, { clearAuthKey: true }));
-    hydrate(runtime.value, serverVariables.value);
+    const result = await settingsApi.updateTailscale({ clearAuthKey: true });
+    // 清除成功后丢弃 tailscale 待发自动保存，避免旧输入在清除后覆盖服务端状态。
+    tailscaleAutoSave.cancel();
+    runtime.value = result;
+    withProgrammatic(() => refillTailscale(result));
     confirmOpen.value = false;
-    notifySuccess(t('settingsPage.tailscale.authKeyCleared'), runtime.value);
+    notifySuccess(t('settingsPage.tailscale.authKeyCleared'), result);
   });
 }
 
@@ -343,46 +737,36 @@ async function applyTailscale() {
   if (!current?.tailscale.container.available) return;
   await run('apply-tailscale', async () => {
     const container = await settingsApi.applyTailscale();
+    // 协调结果已返回：丢弃待发的 tailscale 表单保存，避免旧输入覆盖新状态。
+    tailscaleAutoSave.cancel();
     runtime.value = { ...current, tailscale: { ...current.tailscale, container } };
     notifySuccess(t('settingsPage.tailscale.applyAccepted'), container);
   });
 }
 
-async function saveRuntimeSection(kind: 'runtime' | 'security' | 'certificates' | 'agent' | 'system' | 'tailscale') {
-  if (!runtime.value) return;
-  if (kind === 'runtime' && !runtimeSectionValid.value) {
-    actionError.value = t('settingsPage.validationPositiveNumber');
-    return;
-  }
-  if (kind === 'security' && fieldErrors.value.remoteCommandTimeoutSeconds) {
-    actionError.value = t('settingsPage.validationPositiveNumber');
-    return;
-  }
-  if (kind === 'certificates' && fieldErrors.value.dnsPropagationDelaySeconds) {
-    actionError.value = t('settingsPage.validationNonNegativeNumber');
-    return;
-  }
-  if (kind === 'agent' && fieldErrors.value.agentTransferTimeoutSeconds) {
-    actionError.value = t('settingsPage.validationAgentTransferTimeout');
-    return;
-  }
-  if (kind === 'tailscale' && invalidTailscaleTags.value.length) {
-    actionError.value = t('settingsPage.tailscale.tagsInvalid', { tags: invalidTailscaleTags.value.join(', ') });
-    return;
-  }
-  await run(`save-${kind}`, async () => {
-    runtime.value = await settingsApi.updateRuntime(buildRuntimeUpdate(kind));
-    hydrate(runtime.value, serverVariables.value);
-    if (kind === 'runtime') setLocale(runtime.value.language === 'zh-CN' ? 'zh-CN' : 'en');
-    notifySuccess(t(`settingsPage.saved.${kind}`), runtime.value);
-  });
+function openConfirm(kind: typeof confirmKind.value) {
+  confirmKind.value = kind;
+  confirmOpen.value = true;
 }
 
-async function saveVariables() {
-  await run('save-variables', async () => {
-    serverVariables.value = await settingsApi.updateServerVariables(parseVariables(form.variablesText));
-    notifySuccess(t('settingsPage.saved.system'), serverVariables.value);
-  });
+function openSystemCertificateConfirm(cert: SystemCertificateDto) {
+  selectedSystemCertificate.value = cert;
+  openConfirm('system-certificate');
+}
+
+function confirmAction() {
+  if (confirmKind.value === 'restore') return confirmRestore();
+  if (confirmKind.value === 'system-certificate') return resetSystemCertificate();
+  if (confirmKind.value === 'jwt-secret') return confirmResetJwtSecret();
+  if (confirmKind.value === 'tailscale-auth-key') return confirmClearTailscaleAuthKey();
+  if (confirmKind.value === 'clear-events-logs') return confirmClearEventsAndLogs();
+  return startBackup();
+}
+
+function handleConfirmOpenChange(open: boolean) {
+  if (!open && pending.value) return;
+  confirmOpen.value = open;
+  if (!open) selectedSystemCertificate.value = null;
 }
 
 async function startBackup() {
@@ -431,70 +815,6 @@ async function run(name: string, action: () => Promise<void>) {
   }
 }
 
-function buildRuntimeUpdate(kind: 'runtime' | 'security' | 'certificates' | 'agent' | 'system' | 'tailscale'): RuntimeUpdate {
-  const current = runtime.value!;
-  const update: RuntimeUpdate = {
-    containerReportIntervalSeconds: current.containerReportIntervalSeconds,
-    tokenExpiration: current.tokenExpiration,
-    language: current.language,
-    logLevel: current.logLevel,
-    remoteCommandTimeoutSeconds: current.remoteCommandTimeoutSeconds,
-    branding: current.branding,
-    certificates: current.certificates,
-    panel: current.panel,
-    agent: current.agent,
-  };
-  if (kind === 'runtime') {
-    update.containerReportIntervalSeconds = numberField(form.containerReportIntervalSeconds, current.containerReportIntervalSeconds);
-    update.language = form.language;
-    update.logLevel = form.logLevel;
-    update.reconcileTraceEnabled = form.reconcileTraceEnabled;
-  }
-  if (kind === 'security') {
-    update.tokenExpiration = form.tokenExpiration;
-    update.remoteCommandTimeoutSeconds = numberField(form.remoteCommandTimeoutSeconds, current.remoteCommandTimeoutSeconds);
-  }
-  if (kind === 'certificates') {
-    update.certificates = {
-      email: form.certificateEmail,
-      dnsPropagationDelaySeconds: numberField(form.dnsPropagationDelaySeconds, current.certificates.dnsPropagationDelaySeconds),
-    };
-    update.panel = {
-      domain: form.panelDomain.trim().toLowerCase(),
-      tlsCertificateId: form.panelTlsCertificateId === builtInPanelTLSAssetID ? '' : form.panelTlsCertificateId,
-    };
-  }
-  if (kind === 'agent') {
-    update.agent = {
-      downloadBaseUrl: form.agentDownloadBaseUrl.trim(),
-      downloadVerifyTls: form.agentDownloadVerifyTls,
-      transferTimeoutSeconds: numberField(form.agentTransferTimeoutSeconds, current.agent.transferTimeoutSeconds),
-    };
-  }
-  if (kind === 'system') {
-    update.branding = { loginTitle: form.loginTitle, loginSubtitle: form.loginSubtitle };
-  }
-  if (kind === 'tailscale') {
-    // 密钥留空表示保留已存密钥；保存分区不会顺带清除它。
-    update.tailscale = tailscaleUpdate({ authKey: form.tailscaleAuthKey, tags: tailscaleTagResult.value.tags });
-  }
-  return update;
-}
-
-function parseVariables(raw: string): ServerVariableDefinition[] {
-  return raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
-    const required = line.startsWith('*');
-    const clean = required ? line.slice(1) : line;
-    const [key, ...nameParts] = clean.split('=');
-    return { key: key.trim(), name: (nameParts.join('=') || key).trim(), required };
-  });
-}
-
-function numberField(value: string, fallback: number) {
-  const next = Number(value);
-  return Number.isFinite(next) ? next : fallback;
-}
-
 function certificateTone(status?: string): 'neutral' | 'success' | 'warning' | 'danger' | 'info' {
   if (status === 'valid') return 'success';
   if (status === 'expiring') return 'warning';
@@ -518,32 +838,12 @@ const confirmIsDanger = computed(() => (
   || confirmKind.value === 'clear-events-logs'
 ));
 
-function openConfirm(kind: typeof confirmKind.value) {
-  confirmKind.value = kind;
-  confirmOpen.value = true;
-}
-
-function openSystemCertificateConfirm(cert: SystemCertificateDto) {
-  selectedSystemCertificate.value = cert;
-  openConfirm('system-certificate');
-}
-
-function confirmAction() {
-  if (confirmKind.value === 'restore') return confirmRestore();
-  if (confirmKind.value === 'system-certificate') return resetSystemCertificate();
-  if (confirmKind.value === 'jwt-secret') return confirmResetJwtSecret();
-  if (confirmKind.value === 'tailscale-auth-key') return confirmClearTailscaleAuthKey();
-  if (confirmKind.value === 'clear-events-logs') return confirmClearEventsAndLogs();
-  return startBackup();
-}
-
-function handleConfirmOpenChange(open: boolean) {
-  if (!open && pending.value) return;
-  confirmOpen.value = open;
-  if (!open) selectedSystemCertificate.value = null;
-}
-
 onMounted(load);
+
+onBeforeUnmount(() => {
+  // 卸载时把待保存修改 fire-and-forget 发出，并清理所有计时器。
+  disposeAllAutoSaves();
+});
 </script>
 
 <template>
@@ -555,7 +855,8 @@ onMounted(load);
 
     <!--
       WinUI 3 Settings 页：TabView header 固定在内容区顶部，只有分区内容滚动；
-      9 个分区共用 SettingsSection/SettingsCard，保存动作在分区 footer，不再有整页保存。
+      9 个分区共用 SettingsSection/SettingsCard。表单控件 500ms 自动保存，
+      分区 actions 只承载 AutoSaveStatus 与保留的动作按钮。
     -->
     <Tabs
       class="h-full min-h-0 w-full"
@@ -583,6 +884,10 @@ onMounted(load);
           </EmptyState>
 
           <SettingsSection v-else-if="activeSection === 'general'">
+            <template #actions>
+              <AutoSaveStatus :status="generalStatus" :labels="autoSaveLabels" @retry="generalAutoSave.flush()" />
+            </template>
+
             <SettingsCard
               :title="t('settingsPage.containerInterval')"
               :invalid="Boolean(fieldErrors.containerReportIntervalSeconds)"
@@ -634,15 +939,13 @@ onMounted(load);
                 </Button>
               </div>
             </SettingsCard>
-
-            <template #footer>
-              <Button variant="primary" :disabled="!runtimeSectionValid" :loading="pending === 'save-runtime'" @click="saveRuntimeSection('runtime')">
-                <Save />{{ t('settingsPage.saveSection') }}
-              </Button>
-            </template>
           </SettingsSection>
 
           <SettingsSection v-else-if="activeSection === 'security'">
+            <template #actions>
+              <AutoSaveStatus :status="securityStatus" :labels="autoSaveLabels" @retry="securityAutoSave.flush()" />
+            </template>
+
             <SettingsCard :title="t('settingsPage.tokenExpiration')">
               <template #control>
                 <Select v-model="form.tokenExpiration" :aria-label="t('settingsPage.tokenExpiration')" class="w-full sm:w-64" :options="tokenOptions" />
@@ -690,18 +993,25 @@ onMounted(load);
                 </Button>
               </template>
             </SettingsCard>
-
-            <template #footer>
-              <Button variant="primary" :disabled="Boolean(fieldErrors.remoteCommandTimeoutSeconds)" :loading="pending === 'save-security'" @click="saveRuntimeSection('security')">
-                <Shield />{{ t('settingsPage.saveSection') }}
-              </Button>
-            </template>
           </SettingsSection>
 
           <SettingsSection v-else-if="activeSection === 'certificates'" :description="t('settingsPage.panelHttpsHint')">
-            <SettingsCard :title="t('settingsPage.panelDomain')">
+            <template #actions>
+              <AutoSaveStatus :status="certificatesStatus" :labels="autoSaveLabels" @retry="certificatesAutoSave.flush()" />
+            </template>
+
+            <SettingsCard :title="t('settingsPage.panelDomain')" :invalid="Boolean(fieldErrors.panelDomain)">
               <template #control>
-                <Input v-model="form.panelDomain" :aria-label="t('settingsPage.panelDomain')" class="w-full sm:w-64" />
+                <Input
+                  v-model="form.panelDomain"
+                  :aria-label="t('settingsPage.panelDomain')"
+                  :aria-describedby="fieldErrors.panelDomain ? 'settings-panel-domain-error' : undefined"
+                  class="w-full sm:w-64"
+                  :invalid="Boolean(fieldErrors.panelDomain)"
+                />
+              </template>
+              <template v-if="fieldErrors.panelDomain" #hint>
+                <span id="settings-panel-domain-error" class="text-danger">{{ t(fieldErrors.panelDomain) }}</span>
               </template>
             </SettingsCard>
 
@@ -711,9 +1021,18 @@ onMounted(load);
               </template>
             </SettingsCard>
 
-            <SettingsCard :title="t('settingsPage.certificateEmail')">
+            <SettingsCard :title="t('settingsPage.certificateEmail')" :invalid="Boolean(fieldErrors.certificateEmail)">
               <template #control>
-                <Input v-model="form.certificateEmail" :aria-label="t('settingsPage.certificateEmail')" class="w-full sm:w-72" />
+                <Input
+                  v-model="form.certificateEmail"
+                  :aria-label="t('settingsPage.certificateEmail')"
+                  :aria-describedby="fieldErrors.certificateEmail ? 'settings-certificate-email-error' : undefined"
+                  class="w-full sm:w-72"
+                  :invalid="Boolean(fieldErrors.certificateEmail)"
+                />
+              </template>
+              <template v-if="fieldErrors.certificateEmail" #hint>
+                <span id="settings-certificate-email-error" class="text-danger">{{ t(fieldErrors.certificateEmail) }}</span>
               </template>
             </SettingsCard>
 
@@ -738,23 +1057,30 @@ onMounted(load);
                 <span id="settings-dns-delay-error" class="text-danger">{{ t(fieldErrors.dnsPropagationDelaySeconds) }}</span>
               </template>
             </SettingsCard>
-
-            <template #footer>
-              <Button variant="primary" :disabled="Boolean(fieldErrors.dnsPropagationDelaySeconds)" :loading="pending === 'save-certificates'" @click="saveRuntimeSection('certificates')">
-                <Save />{{ t('settingsPage.saveSection') }}
-              </Button>
-            </template>
           </SettingsSection>
 
           <SettingsSection v-else-if="activeSection === 'agent'" :description="t('settingsPage.agentDownloadHint')">
-            <SettingsCard :title="t('settingsPage.agentDownloadBaseUrl')" :description="t('settingsPage.agentDownloadBaseUrlHint')">
+            <template #actions>
+              <AutoSaveStatus :status="agentStatus" :labels="autoSaveLabels" @retry="agentAutoSave.flush()" />
+            </template>
+
+            <SettingsCard
+              :title="t('settingsPage.agentDownloadBaseUrl')"
+              :description="t('settingsPage.agentDownloadBaseUrlHint')"
+              :invalid="Boolean(fieldErrors.agentDownloadBaseUrl)"
+            >
               <template #control>
                 <Input
                   v-model="form.agentDownloadBaseUrl"
                   :aria-label="t('settingsPage.agentDownloadBaseUrl')"
+                  :aria-describedby="fieldErrors.agentDownloadBaseUrl ? 'settings-agent-base-url-error' : undefined"
                   class="w-full sm:w-72"
+                  :invalid="Boolean(fieldErrors.agentDownloadBaseUrl)"
                   :placeholder="t('settingsPage.agentDownloadBaseUrlPlaceholder')"
                 />
+              </template>
+              <template v-if="fieldErrors.agentDownloadBaseUrl" #hint>
+                <span id="settings-agent-base-url-error" class="text-danger">{{ t(fieldErrors.agentDownloadBaseUrl) }}</span>
               </template>
             </SettingsCard>
 
@@ -787,15 +1113,13 @@ onMounted(load);
                 <Switch v-model="form.agentDownloadVerifyTls" :label="t('settingsPage.agentDownloadVerifyTls')" />
               </template>
             </SettingsCard>
-
-            <template #footer>
-              <Button variant="primary" :disabled="Boolean(fieldErrors.agentTransferTimeoutSeconds)" :loading="pending === 'save-agent'" @click="saveRuntimeSection('agent')">
-                <Save />{{ t('settingsPage.saveSection') }}
-              </Button>
-            </template>
           </SettingsSection>
 
           <SettingsSection v-else-if="activeSection === 'tailscale'" :description="t('settingsPage.tailscale.hint')">
+            <template #actions>
+              <AutoSaveStatus :status="tailscaleStatus" :labels="autoSaveLabels" @retry="tailscaleAutoSave.flush()" />
+            </template>
+
             <SettingsCard v-if="!runtime?.tailscale.authKeyConfigured">
               <div class="rounded-control border border-warning-border bg-warning-bg px-3 py-2 text-sm text-warning">{{ t('settingsPage.tailscale.authKeyMissing') }}</div>
             </SettingsCard>
@@ -806,9 +1130,24 @@ onMounted(load);
               </template>
             </SettingsCard>
 
-            <SettingsCard :title="t('settingsPage.tailscale.authKey')" :description="t('settingsPage.tailscale.authKeyHint')">
+            <SettingsCard
+              :title="t('settingsPage.tailscale.authKey')"
+              :description="t('settingsPage.tailscale.authKeyHint')"
+              :invalid="tailscaleAuthKeyInvalid"
+            >
               <template #control>
-                <Input v-model="form.tailscaleAuthKey" :aria-label="t('settingsPage.tailscale.authKey')" class="w-full sm:w-64" type="password" :placeholder="t('settingsPage.tailscale.authKeyPlaceholder')" />
+                <Input
+                  v-model="form.tailscaleAuthKey"
+                  :aria-label="t('settingsPage.tailscale.authKey')"
+                  :aria-describedby="tailscaleAuthKeyInvalid ? 'settings-tailscale-auth-key-error' : undefined"
+                  class="w-full sm:w-64"
+                  type="password"
+                  :invalid="tailscaleAuthKeyInvalid"
+                  :placeholder="t('settingsPage.tailscale.authKeyPlaceholder')"
+                />
+              </template>
+              <template v-if="tailscaleAuthKeyInvalid" #hint>
+                <span id="settings-tailscale-auth-key-error" class="text-danger">{{ t('settingsPage.tailscale.authKeyInvalid') }}</span>
               </template>
             </SettingsCard>
 
@@ -836,12 +1175,6 @@ onMounted(load);
                 </span>
               </template>
             </SettingsCard>
-
-            <template #footer>
-              <Button variant="primary" :disabled="invalidTailscaleTags.length > 0" :loading="pending === 'save-tailscale'" @click="saveRuntimeSection('tailscale')">
-                <Save />{{ t('settingsPage.saveSection') }}
-              </Button>
-            </template>
 
             <SettingsCard :title="t('settingsPage.tailscale.containerTitle')" :description="t('settingsPage.tailscale.containerHint')">
               <template #control>
@@ -913,6 +1246,10 @@ onMounted(load);
           </SettingsSection>
 
           <SettingsSection v-else-if="activeSection === 'system'">
+            <template #actions>
+              <AutoSaveStatus :status="brandingStatus" :labels="autoSaveLabels" @retry="brandingAutoSave.flush()" />
+            </template>
+
             <SettingsCard>
               <div class="grid gap-3 text-sm">
                 <div class="grid grid-cols-2 gap-3 max-md:grid-cols-1">
@@ -925,15 +1262,35 @@ onMounted(load);
               </div>
             </SettingsCard>
 
-            <SettingsCard :title="t('settingsPage.loginTitle')">
+            <SettingsCard :title="t('settingsPage.loginTitle')" :invalid="Boolean(fieldErrors.loginTitle)">
               <template #control>
-                <Input v-model="form.loginTitle" :aria-label="t('settingsPage.loginTitle')" class="w-full sm:w-72" />
+                <Input
+                  id="settings-login-title"
+                  v-model="form.loginTitle"
+                  :aria-label="t('settingsPage.loginTitle')"
+                  :aria-describedby="fieldErrors.loginTitle ? 'settings-login-title-error' : undefined"
+                  class="w-full sm:w-72"
+                  :invalid="Boolean(fieldErrors.loginTitle)"
+                />
+              </template>
+              <template v-if="fieldErrors.loginTitle" #hint>
+                <span id="settings-login-title-error" class="text-danger">{{ t(fieldErrors.loginTitle, { max: loginTitleMaxLength }) }}</span>
               </template>
             </SettingsCard>
 
-            <SettingsCard :title="t('settingsPage.loginSubtitle')">
+            <SettingsCard :title="t('settingsPage.loginSubtitle')" :invalid="Boolean(fieldErrors.loginSubtitle)">
               <template #control>
-                <Input v-model="form.loginSubtitle" :aria-label="t('settingsPage.loginSubtitle')" class="w-full sm:w-72" />
+                <Input
+                  id="settings-login-subtitle"
+                  v-model="form.loginSubtitle"
+                  :aria-label="t('settingsPage.loginSubtitle')"
+                  :aria-describedby="fieldErrors.loginSubtitle ? 'settings-login-subtitle-error' : undefined"
+                  class="w-full sm:w-72"
+                  :invalid="Boolean(fieldErrors.loginSubtitle)"
+                />
+              </template>
+              <template v-if="fieldErrors.loginSubtitle" #hint>
+                <span id="settings-login-subtitle-error" class="text-danger">{{ t(fieldErrors.loginSubtitle, { max: loginSubtitleMaxLength }) }}</span>
               </template>
             </SettingsCard>
 
@@ -941,12 +1298,13 @@ onMounted(load);
               <template #control>
                 <Textarea v-model="form.variablesText" :aria-label="t('settingsPage.serverVariables')" class="min-h-44 w-full font-mono" :placeholder="t('settingsPage.serverVariablesHint')" />
               </template>
+              <template #hint>
+                <div class="grid gap-1">
+                  <AutoSaveStatus :status="variablesStatus" :labels="autoSaveLabels" @retry="variablesAutoSave.flush()" />
+                  <span v-if="variablesStatus === 'invalid'" class="text-danger">{{ t('settingsPage.serverVariablesInvalid') }}</span>
+                </div>
+              </template>
             </SettingsCard>
-
-            <template #footer>
-              <Button :loading="pending === 'save-variables'" @click="saveVariables"><Save />{{ t('settingsPage.saveVariables') }}</Button>
-              <Button :loading="pending === 'save-system'" variant="primary" @click="saveRuntimeSection('system')"><Save />{{ t('settingsPage.saveBranding') }}</Button>
-            </template>
           </SettingsSection>
 
           <template v-else>

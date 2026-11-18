@@ -775,9 +775,9 @@
 
 ### FAC-MET-006 旧设置迁移与设置页移除
 
-- **触发入口**：Panel 启动装配时调用 `metricsfacility.Service.EnsureMigrated`；同时 `GET/PUT /api/v1/settings/runtime` 与设置页「运行时」分区不再包含指标三项。
+- **触发入口**：Panel 启动装配时调用 `metricsfacility.Service.EnsureMigrated`；同时 `GET /api/v1/settings/runtime`（以及分区写入端点 `PUT /api/v1/settings/runtime/*`，`SET-RUN-022`）与设置页「运行时」分区不再包含指标三项。
 - **前置**：旧 alpha 数据库的 `runtime_settings` 可能已有旧键 `metricsRetentionDays`、`metricsCollectionIntervalSeconds`、`cleanupSchedule`；`metrics_facility_configs` 可能为空（首次升级）。
-- **成功**：`metrics_facility_configs` 无行时读取旧三键播种：合法值（retention≥1、interval≥1、schedule∈hourly/daily/weekly）原样采用，缺失或非法时使用默认（7 天/60 秒/daily）；写入单行（`version=1`、`updated_at` 为播种时间）后**不再读取旧键**（只播种一次）；旧键保留不删除，使旧备份恢复后仍能播种。`GET/PUT /settings/runtime` 与前端类型不再包含 `metricsRetentionDays`、`metricsCollectionIntervalSeconds`、`cleanupSchedule`，设置页“运行时”分区只保留容器上报间隔、语言、日志等级、协调 trace 与清空事件日志；`containerReportIntervalSeconds` 及其更新语义保持不变（`SET-RUN-014`）。
+- **成功**：`metrics_facility_configs` 无行时读取旧三键播种：合法值（retention≥1、interval≥1、schedule∈hourly/daily/weekly）原样采用，缺失或非法时使用默认（7 天/60 秒/daily）；写入单行（`version=1`、`updated_at` 为播种时间）后**不再读取旧键**（只播种一次）；旧键保留不删除，使旧备份恢复后仍能播种。`GET /settings/runtime` 与分区写入端点（`SET-RUN-022`）以及前端类型不再包含 `metricsRetentionDays`、`metricsCollectionIntervalSeconds`、`cleanupSchedule`，设置页“运行时”分区只保留容器上报间隔、语言、日志等级、协调 trace 与清空事件日志；`containerReportIntervalSeconds` 及其更新语义保持不变（`SET-RUN-014`）。
 - **失败**：`EnsureMigrated` 失败必须导致 Panel 启动失败（配置无法可靠建立），不得静默用默认值继续对外服务；设置接口不得因移除字段而对合法请求报错或写入旧键。
 - **边界**：表由既有 destructive AutoMigrate 自动创建（旧库升级即为空表），无需手写迁移；旧客户端仍提交三个旧字段时按未知 JSON 字段忽略，不得写回 `runtime_settings` 或影响设施配置；删除旧键后不会重新播种（设计上旧键保留）。
 - **不变量**：运行时设置不再读取/写入/校验指标三项（`SET-RUN-006/007/021`）；设置页“运行时”分区不得再出现这三项表单；迁移播种是唯一读取旧键的位置，且只在首次无行时发生。

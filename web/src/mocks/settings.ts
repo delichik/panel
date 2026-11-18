@@ -1,7 +1,18 @@
-import type { BackupExportResponse, RestoreConfirmResponse, RestorePreflightResponse, RuntimeSettings, RuntimeTailscaleContainerState, RuntimeTailscaleSettings, RuntimeTailscaleUpdate, ServerVariableDefinition } from '@/types/settings';
-
-/** PUT /settings/runtime 的请求体：tailscale 子对象使用只写字段形态，而非响应形态。 */
-export type RuntimeUpdatePayload = Partial<Omit<RuntimeSettings, 'tailscale'>> & { tailscale?: RuntimeTailscaleUpdate };
+import type {
+  BackupExportResponse,
+  RestoreConfirmResponse,
+  RestorePreflightResponse,
+  RuntimeAgentUpdate,
+  RuntimeBrandingUpdate,
+  RuntimeCertificatesUpdate,
+  RuntimeGeneralUpdate,
+  RuntimeSecurityUpdate,
+  RuntimeSettings,
+  RuntimeTailscaleContainerState,
+  RuntimeTailscaleSettings,
+  RuntimeTailscaleUpdate,
+  ServerVariableDefinition,
+} from '@/types/settings';
 
 export let mockRuntimeSettings: RuntimeSettings = {
   listenAddress: '0.0.0.0:8080',
@@ -46,32 +57,59 @@ export let mockServerVariables: ServerVariableDefinition[] = [
   { name: 'Backup tier', key: 'BACKUP_TIER', required: false },
 ];
 
-export function saveRuntime(input: RuntimeUpdatePayload) {
-  if (input.logLevel === 'debug' && input.remoteCommandTimeoutSeconds === 13) {
+/**
+ * 分区保存 mock：每个函数只合入本分区字段，返回完整 RuntimeSettings，
+ * 与真实后端“当前内存快照 + 本分区字段”的语义一致。
+ */
+export function saveRuntimeGeneral(input: RuntimeGeneralUpdate) {
+  if (input.logLevel === 'debug' && input.containerReportIntervalSeconds === 13) {
     throw new Error('Runtime settings changed on the server. Refresh and apply this section again.');
   }
-  const tailscaleInput = input.tailscale;
+  mockRuntimeSettings = { ...mockRuntimeSettings, ...input };
+  return mockRuntimeSettings;
+}
+
+export function saveRuntimeSecurity(input: RuntimeSecurityUpdate) {
+  mockRuntimeSettings = { ...mockRuntimeSettings, ...input };
+  return mockRuntimeSettings;
+}
+
+export function saveRuntimeCertificates(input: RuntimeCertificatesUpdate) {
+  mockRuntimeSettings = {
+    ...mockRuntimeSettings,
+    panel: { ...mockRuntimeSettings.panel, ...input.panel },
+    certificates: { ...mockRuntimeSettings.certificates, ...input.certificates },
+  };
+  return mockRuntimeSettings;
+}
+
+export function saveRuntimeAgent(input: RuntimeAgentUpdate) {
+  mockRuntimeSettings = { ...mockRuntimeSettings, agent: { ...mockRuntimeSettings.agent, ...input } };
+  return mockRuntimeSettings;
+}
+
+export function saveRuntimeBranding(input: RuntimeBrandingUpdate) {
+  mockRuntimeSettings = { ...mockRuntimeSettings, branding: { ...mockRuntimeSettings.branding, ...input } };
+  return mockRuntimeSettings;
+}
+
+/**
+ * tailscale 只写密钥语义：authKey 非空即替换；clearAuthKey=true 删除并停止容器；
+ * tags 省略时保留既有标签，显式 [] 才清空。
+ */
+export function saveRuntimeTailscale(input: RuntimeTailscaleUpdate) {
   const nextTailscale: RuntimeTailscaleSettings = {
     ...mockRuntimeSettings.tailscale,
     container: { ...mockRuntimeSettings.tailscale.container },
   };
-  if (tailscaleInput?.tags) nextTailscale.tags = [...tailscaleInput.tags];
-  // 密钥只写不读：只记录“是否已配置”，绝不把密钥本身写进可读状态。
-  if (tailscaleInput?.authKey) {
+  if (input.tags !== undefined) nextTailscale.tags = [...input.tags];
+  if (input.authKey) {
     nextTailscale.authKeyConfigured = true;
-  } else if (tailscaleInput?.clearAuthKey) {
+  } else if (input.clearAuthKey) {
     nextTailscale.authKeyConfigured = false;
     nextTailscale.container = { ...nextTailscale.container, running: false, loggedIn: false, backendState: 'Stopped', lastError: '', updatedAt: new Date().toISOString() };
   }
-  mockRuntimeSettings = {
-    ...mockRuntimeSettings,
-    ...input,
-    branding: { ...mockRuntimeSettings.branding, ...input.branding },
-    certificates: { ...mockRuntimeSettings.certificates, ...input.certificates },
-    panel: { ...mockRuntimeSettings.panel, ...input.panel },
-    agent: { ...mockRuntimeSettings.agent, ...input.agent },
-    tailscale: nextTailscale,
-  };
+  mockRuntimeSettings = { ...mockRuntimeSettings, tailscale: nextTailscale };
   return mockRuntimeSettings;
 }
 

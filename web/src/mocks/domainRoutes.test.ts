@@ -131,24 +131,36 @@ describe('domain mock routes', () => {
     expect(apply.status).toBe(202);
     expect(applied.data).toMatchObject({ available: true, running: true, loggedIn: true, lastError: '' });
 
-    const saved = await (await fetch('/api/v1/settings/runtime', {
+    const saved = await (await fetch('/api/v1/settings/tailscale', {
       method: 'PUT',
-      body: JSON.stringify({ tailscale: { authKey: 'tskey-auth-mock', tags: ['tag:panel'] } }),
+      body: JSON.stringify({ authKey: 'tskey-auth-mock', tags: ['tag:panel'] }),
     })).json();
     expect(saved.data.tailscale.tags).toEqual(['tag:panel']);
     expect(saved.data.tailscale.authKeyConfigured).toBe(true);
     expect(saved.data.tailscale).not.toHaveProperty('authKey');
-    // 其他分区保存时未提交 tailscale，分组必须原样保留。
-    const scalarSave = await (await fetch('/api/v1/settings/runtime', {
+    // 保存 general 分区不提交 tailscale，分组必须原样保留。
+    const scalarSave = await (await fetch('/api/v1/settings/runtime/general', {
       method: 'PUT',
-      body: JSON.stringify({ logLevel: 'warn' }),
+      body: JSON.stringify({ containerReportIntervalSeconds: 30, language: 'zh-CN', logLevel: 'warn', reconcileTraceEnabled: false }),
     })).json();
     expect(scalarSave.data.logLevel).toBe('warn');
     expect(scalarSave.data.tailscale.tags).toEqual(['tag:panel']);
-
-    const cleared = await (await fetch('/api/v1/settings/runtime', {
+    // 省略 tags 时保留既有标签（只替换密钥）。
+    const keyOnly = await (await fetch('/api/v1/settings/tailscale', {
       method: 'PUT',
-      body: JSON.stringify({ tailscale: { clearAuthKey: true } }),
+      body: JSON.stringify({ authKey: 'tskey-auth-mock-2' }),
+    })).json();
+    expect(keyOnly.data.tailscale.tags).toEqual(['tag:panel']);
+    // 显式 [] 才清空标签。
+    const tagsCleared = await (await fetch('/api/v1/settings/tailscale', {
+      method: 'PUT',
+      body: JSON.stringify({ tags: [] }),
+    })).json();
+    expect(tagsCleared.data.tailscale.tags).toEqual([]);
+
+    const cleared = await (await fetch('/api/v1/settings/tailscale', {
+      method: 'PUT',
+      body: JSON.stringify({ clearAuthKey: true }),
     })).json();
     expect(cleared.data.tailscale.authKeyConfigured).toBe(false);
     expect(cleared.data.tailscale.container).toMatchObject({ running: false, loggedIn: false, backendState: 'Stopped' });
@@ -367,13 +379,44 @@ describe('domain mock routes', () => {
     expect(settingsEnvelope.data).not.toHaveProperty('metricsCollectionIntervalSeconds');
     expect(settingsEnvelope.data).not.toHaveProperty('cleanupSchedule');
 
-    const conflict = await fetch('/api/v1/settings/runtime', {
+    const conflict = await fetch('/api/v1/settings/runtime/general', {
       method: 'PUT',
-      body: JSON.stringify({ ...settingsEnvelope.data, logLevel: 'debug', remoteCommandTimeoutSeconds: 13 }),
+      body: JSON.stringify({ containerReportIntervalSeconds: 13, language: 'en', logLevel: 'debug', reconcileTraceEnabled: false }),
     });
     const conflictEnvelope = await conflict.json();
     expect(conflict.status).toBe(409);
     expect(conflictEnvelope.error.code).toBe('settings_conflict');
+
+    // 每个分区子资源只写本分区字段，仍返回完整 runtime 设置。
+    const security = await (await fetch('/api/v1/settings/runtime/security', {
+      method: 'PUT',
+      body: JSON.stringify({ tokenExpiration: '30d', remoteCommandTimeoutSeconds: 60 }),
+    })).json();
+    expect(security.data.tokenExpiration).toBe('30d');
+    expect(security.data.remoteCommandTimeoutSeconds).toBe(60);
+    expect(security.data.containerReportIntervalSeconds).toBe(30);
+
+    const certificates = await (await fetch('/api/v1/settings/runtime/certificates', {
+      method: 'PUT',
+      body: JSON.stringify({ panel: { domain: 'Panel.Example.com', tlsCertificateId: '' }, certificates: { email: 'ops@example.com', dnsPropagationDelaySeconds: 10 } }),
+    })).json();
+    expect(certificates.data.panel.domain).toBe('Panel.Example.com');
+    expect(certificates.data.certificates.email).toBe('ops@example.com');
+    expect(certificates.data.tokenExpiration).toBe('30d');
+
+    const agent = await (await fetch('/api/v1/settings/runtime/agent', {
+      method: 'PUT',
+      body: JSON.stringify({ downloadBaseUrl: 'https://cdn.example.com', downloadVerifyTls: true, transferTimeoutSeconds: 300 }),
+    })).json();
+    expect(agent.data.agent).toMatchObject({ downloadBaseUrl: 'https://cdn.example.com', downloadVerifyTls: true, transferTimeoutSeconds: 300 });
+    expect(agent.data.certificates.email).toBe('ops@example.com');
+
+    const branding = await (await fetch('/api/v1/settings/runtime/branding', {
+      method: 'PUT',
+      body: JSON.stringify({ loginTitle: 'Ops', loginSubtitle: 'Control plane' }),
+    })).json();
+    expect(branding.data.branding).toEqual({ loginTitle: 'Ops', loginSubtitle: 'Control plane' });
+    expect(branding.data.agent.downloadVerifyTls).toBe(true);
 
     const unauthenticated = await fetch('/api/v1/auth/session');
     const unauthenticatedEnvelope = await unauthenticated.json();

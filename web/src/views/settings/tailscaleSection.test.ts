@@ -76,6 +76,16 @@ function createStorage(): Storage {
 }
 vi.stubGlobal('localStorage', createStorage());
 
+/** 只 fake 计时器与 Date，保留 setImmediate（flushPromises 依赖）。 */
+function enableAutoSaveTimers() {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+}
+
+async function advanceAutoSave(ms = 500) {
+  await vi.advanceTimersByTimeAsync(ms);
+  await flushPromises();
+}
+
 async function render(path = '/settings/tailscale') {
   router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/settings/:section', component: SettingsView }] });
   await router.push(path);
@@ -100,6 +110,10 @@ function authKeyInput() {
   return wrapper!.find('input[type="password"]');
 }
 
+function tagsInput() {
+  return wrapper!.find('input[placeholder="tag:server, tag:panel"]');
+}
+
 function confirmDialogButton(text: string) {
   const dialog = document.querySelector('[role="dialog"]');
   expect(dialog).not.toBeNull();
@@ -113,7 +127,13 @@ beforeEach(() => {
   useI18n().setLocale('en');
   vi.spyOn(settingsApi, 'runtime').mockResolvedValue(runtimeSettings());
   vi.spyOn(settingsApi, 'serverVariables').mockResolvedValue([]);
-  vi.spyOn(settingsApi, 'updateRuntime').mockImplementation(async () => runtimeSettings());
+  vi.spyOn(settingsApi, 'updateGeneral').mockImplementation(async () => runtimeSettings());
+  vi.spyOn(settingsApi, 'updateSecurity').mockImplementation(async () => runtimeSettings());
+  vi.spyOn(settingsApi, 'updateCertificates').mockImplementation(async () => runtimeSettings());
+  vi.spyOn(settingsApi, 'updateAgent').mockImplementation(async () => runtimeSettings());
+  vi.spyOn(settingsApi, 'updateBranding').mockImplementation(async () => runtimeSettings());
+  vi.spyOn(settingsApi, 'updateTailscale').mockImplementation(async () => runtimeSettings());
+  vi.spyOn(settingsApi, 'updateServerVariables').mockImplementation(async () => []);
   vi.spyOn(settingsApi, 'applyTailscale').mockResolvedValue(container);
   vi.spyOn(systemApi, 'version').mockResolvedValue({ version: '0.2.0-dev', channel: 'dev', latestVersion: '', updateAvailable: false });
   vi.spyOn(keyAssetsApi, 'systemCertificates').mockResolvedValue([]);
@@ -121,6 +141,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   wrapper?.unmount();
   wrapper = undefined;
   document.body.innerHTML = '';
@@ -145,33 +166,60 @@ describe('settings tailscale section', () => {
     expect(wrapper!.text()).toContain('Auth key configured');
   });
 
-  it('sends a new auth key with the parsed tags when the section is saved', async () => {
+  it('autosaves a new auth key with the parsed tags after 500ms and clears the write-only input', async () => {
+    vi.mocked(settingsApi.updateTailscale).mockResolvedValue(runtimeSettings({ tags: ['tag:server', 'tag:edge-1'] }));
     await render();
+    enableAutoSaveTimers();
+
     await authKeyInput().setValue('tskey-auth-new');
-    await wrapper!.find('input[placeholder="tag:server, tag:panel"]').setValue('tag:server, tag:edge-1');
-    await sectionButton('Save section').trigger('click');
+    await tagsInput().setValue('tag:server, tag:edge-1');
     await flushPromises();
 
-    const payload = vi.mocked(settingsApi.updateRuntime).mock.calls[0][0];
-    expect(payload.tailscale).toEqual({ authKey: 'tskey-auth-new', tags: ['tag:server', 'tag:edge-1'] });
+    expect(settingsApi.updateTailscale).not.toHaveBeenCalled();
+    await advanceAutoSave();
+
+    expect(vi.mocked(settingsApi.updateTailscale).mock.calls[0][0]).toEqual({
+      tags: ['tag:server', 'tag:edge-1'],
+      authKey: 'tskey-auth-new',
+    });
+    // 保存成功后清空只写密钥输入，并保持已配置状态。
+    expect((authKeyInput().element as HTMLInputElement).value).toBe('');
+    expect(wrapper!.text()).toContain('Auth key configured');
+    expect(wrapper!.find('[data-autosave-status]').attributes('data-autosave-state')).toBe('saved');
   });
 
-  it('blocks saving and shows the offending entries when a tag is invalid', async () => {
+  it('blocks autosave and reports the offending entries when a tag is invalid', async () => {
     await render();
-    await wrapper!.find('input[placeholder="tag:server, tag:panel"]').setValue('Tag:Panel');
-    await flushPromises();
+    enableAutoSaveTimers();
 
+    await tagsInput().setValue('Tag:Panel');
+    await advanceAutoSave();
+
+    expect(settingsApi.updateTailscale).not.toHaveBeenCalled();
     expect(wrapper!.text()).toContain('Invalid ACL tags: Tag:Panel');
-    expect(sectionButton('Save section').attributes('disabled')).toBeDefined();
+    expect(wrapper!.find('[data-autosave-status]').attributes('data-autosave-state')).toBe('invalid');
+  });
+
+  it('blocks autosave when the auth key does not look like a Tailscale key', async () => {
+    await render();
+    enableAutoSaveTimers();
+
+    await authKeyInput().setValue('not-a-tskey');
+    await advanceAutoSave();
+
+    expect(settingsApi.updateTailscale).not.toHaveBeenCalled();
+    expect(wrapper!.text()).toContain('Enter a Tailscale auth key');
+    expect(wrapper!.find('[data-autosave-status]').attributes('data-autosave-state')).toBe('invalid');
   });
 
   it('sends clearAuthKey only after the danger confirm is accepted', async () => {
     await render();
+
     await sectionButton('Clear auth key').trigger('click');
     await flushPromises();
 
     // 对话框已打开但尚未确认：此时不得发出任何写请求。
-    expect(settingsApi.updateRuntime).not.toHaveBeenCalled();
+    expect(settingsApi.updateTailscale).not.toHaveBeenCalled();
 
     const dialog = document.querySelector('[role="dialog"]');
     expect(dialog).not.toBeNull();
@@ -183,10 +231,36 @@ describe('settings tailscale section', () => {
     confirmDialogButton('Apply').click();
     await flushPromises();
 
-    const payload = vi.mocked(settingsApi.updateRuntime).mock.calls[0][0];
-    expect(payload.tailscale).toEqual({ clearAuthKey: true });
-    expect(payload.tailscale).not.toHaveProperty('authKey');
+    const payload = vi.mocked(settingsApi.updateTailscale).mock.calls[0][0];
+    expect(payload).toEqual({ clearAuthKey: true });
+    expect(payload).not.toHaveProperty('authKey');
+    expect(payload).not.toHaveProperty('tags');
     expect(toastPush).toHaveBeenCalledWith(expect.objectContaining({ tone: 'success' }));
+  });
+
+  it('drops a pending tag autosave after clearing the auth key', async () => {
+    await render();
+    enableAutoSaveTimers();
+
+    await tagsInput().setValue('tag:server, tag:panel');
+    await flushPromises();
+    expect(settingsApi.updateTailscale).not.toHaveBeenCalled();
+
+    // 取消待发自动保存，清除密钥请求只带 clearAuthKey。
+    vi.mocked(settingsApi.updateTailscale).mockClear();
+    await sectionButton('Clear auth key').trigger('click');
+    await flushPromises();
+    const dialog = document.querySelector('[role="dialog"]');
+    const checkbox = dialog!.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    checkbox!.click();
+    await flushPromises();
+    confirmDialogButton('Apply').click();
+    await flushPromises();
+    await advanceAutoSave();
+
+    const payloads = vi.mocked(settingsApi.updateTailscale).mock.calls.map((call) => call[0]);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toEqual({ clearAuthKey: true });
   });
 
   it('refreshes the reported container state after requesting reconciliation', async () => {

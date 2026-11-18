@@ -135,16 +135,23 @@ func (s *Service) writeTailscaleConfig() error {
 	return nil
 }
 
-// applyTailscaleUpdate 校验并持久化设置页提交的 tailscale 分组。
+// applyTailscaleUpdate 校验并持久化设置页提交的 tailscale 分区。
 //
 // 语义与既有的秘密字段一致：空 authKey 表示保留旧密钥，显式清除必须提供
-// clearAuthKey，避免一次普通的标签保存就把密钥清空。
+// clearAuthKey，避免一次普通的标签保存就把密钥清空。标签遵循“缺省即保持”：
+// JSON 省略 tags（nil）时保留既有标签，只有显式空数组才清空；clearAuthKey
+// 只影响密钥，不得顺带清空标签。
 func (s *Service) applyTailscaleUpdate(input RuntimeTailscaleUpdate) error {
-	tags, err := normalizeTailscaleTags(input.Tags)
-	if err != nil {
-		return err
-	}
 	current := s.Runtime()
+	tags := current.Tailscale.Tags
+	tagsProvided := input.Tags != nil
+	if tagsProvided {
+		normalized, err := normalizeTailscaleTags(input.Tags)
+		if err != nil {
+			return err
+		}
+		tags = normalized
+	}
 	nextKey := current.Tailscale.authKey
 	authKeyConfigured := current.Tailscale.AuthKeyConfigured
 	switch {
@@ -159,7 +166,10 @@ func (s *Service) applyTailscaleUpdate(input RuntimeTailscaleUpdate) error {
 		nextKey = ""
 		authKeyConfigured = false
 	}
-	values := map[string]string{RuntimeSettingTailscaleTags: encodeStringList(tags)}
+	values := map[string]string{}
+	if tagsProvided {
+		values[RuntimeSettingTailscaleTags] = encodeStringList(tags)
+	}
 	if nextKey != current.Tailscale.authKey {
 		values[RuntimeSettingTailscaleAuthKey] = nextKey
 	}

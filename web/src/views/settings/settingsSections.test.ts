@@ -79,6 +79,16 @@ function createStorage(): Storage {
 }
 vi.stubGlobal('localStorage', createStorage());
 
+/** 只 fake 计时器与 Date，保留 setImmediate（flushPromises 依赖）。 */
+function enableAutoSaveTimers() {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+}
+
+async function advanceAutoSave(ms = 500) {
+  await vi.advanceTimersByTimeAsync(ms);
+  await flushPromises();
+}
+
 async function render(path: string) {
   router = createRouter({
     history: createMemoryHistory(),
@@ -101,13 +111,20 @@ beforeEach(() => {
   useI18n().setLocale('en');
   vi.spyOn(settingsApi, 'runtime').mockResolvedValue(runtimeSettings());
   vi.spyOn(settingsApi, 'serverVariables').mockResolvedValue([]);
-  vi.spyOn(settingsApi, 'updateRuntime').mockImplementation(async () => runtimeSettings());
+  vi.spyOn(settingsApi, 'updateGeneral').mockImplementation(async () => runtimeSettings());
+  vi.spyOn(settingsApi, 'updateSecurity').mockImplementation(async () => runtimeSettings());
+  vi.spyOn(settingsApi, 'updateCertificates').mockImplementation(async () => runtimeSettings());
+  vi.spyOn(settingsApi, 'updateAgent').mockImplementation(async () => runtimeSettings());
+  vi.spyOn(settingsApi, 'updateBranding').mockImplementation(async () => runtimeSettings());
+  vi.spyOn(settingsApi, 'updateTailscale').mockImplementation(async () => runtimeSettings());
+  vi.spyOn(settingsApi, 'updateServerVariables').mockImplementation(async () => []);
   vi.spyOn(systemApi, 'version').mockResolvedValue({ version: '0.2.0-dev', channel: 'dev', latestVersion: '', updateAvailable: false });
   vi.spyOn(keyAssetsApi, 'systemCertificates').mockResolvedValue([]);
   vi.spyOn(keyAssetsApi, 'tlsCertificates').mockResolvedValue([]);
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   wrapper?.unmount();
   wrapper = undefined;
   document.body.innerHTML = '';
@@ -188,14 +205,14 @@ describe('WinUI settings section primitives', () => {
 });
 
 describe('settings page sections use the shared WinUI SettingsCard shell', () => {
-  const cases: Array<{ path: string; heading: string; rows: number; saveButtons: number }> = [
-    { path: '/settings/general', heading: 'settingsPage.section.runtime', rows: 5, saveButtons: 1 },
-    { path: '/settings/security', heading: 'settingsPage.section.security', rows: 5, saveButtons: 1 },
-    { path: '/settings/certificates', heading: 'settingsPage.section.certificates', rows: 4, saveButtons: 1 },
-    { path: '/settings/agent', heading: 'settingsPage.section.agent', rows: 3, saveButtons: 1 },
-    { path: '/settings/tailscale', heading: 'settingsPage.section.tailscale', rows: 6, saveButtons: 1 },
-    { path: '/settings/system-certificates', heading: 'settingsPage.section.systemCertificates', rows: 0, saveButtons: 0 },
-    { path: '/settings/system', heading: 'settingsPage.section.system', rows: 4, saveButtons: 0 },
+  const cases: Array<{ path: string; heading: string; rows: number }> = [
+    { path: '/settings/general', heading: 'settingsPage.section.runtime', rows: 5 },
+    { path: '/settings/security', heading: 'settingsPage.section.security', rows: 5 },
+    { path: '/settings/certificates', heading: 'settingsPage.section.certificates', rows: 4 },
+    { path: '/settings/agent', heading: 'settingsPage.section.agent', rows: 3 },
+    { path: '/settings/tailscale', heading: 'settingsPage.section.tailscale', rows: 6 },
+    { path: '/settings/system-certificates', heading: 'settingsPage.section.systemCertificates', rows: 0 },
+    { path: '/settings/system', heading: 'settingsPage.section.system', rows: 4 },
   ];
 
   it('renders every non-appearance section with a heading and a single surface card of rows', async () => {
@@ -212,12 +229,11 @@ describe('settings page sections use the shared WinUI SettingsCard shell', () =>
       expect(section.find('.surface-card .surface-card').exists()).toBe(false);
       expect(section.findAll('[data-settings-card]'), `${testCase.path} card rows`).toHaveLength(testCase.rows);
 
-      if (testCase.saveButtons) {
-        const saveButtons = view.findAll('button').filter((item) => item.text() === t('settingsPage.saveSection'));
-        // 每个分区保留自己的「保存分区」行动作，而不是整页保存；动作在分区 footer，不占用 SettingsCard 行。
-        expect(saveButtons, `${testCase.path} save actions`).toHaveLength(testCase.saveButtons);
-        expect(saveButtons[0]!.element.closest('[data-settings-card]')).toBeNull();
-      }
+      // 自动保存替代了分区保存按钮：不再有任何保存分区/品牌/变量入口。
+      const saveButtons = view.findAll('button').filter((item) => (
+        item.text() === 'Save section' || item.text() === 'Save branding' || item.text() === 'Save variables'
+      ));
+      expect(saveButtons, `${testCase.path} save actions`).toHaveLength(0);
       view.unmount();
       wrapper = undefined;
     }
@@ -279,6 +295,90 @@ describe('settings page sections use the shared WinUI SettingsCard shell', () =>
     const invalidCard = view.findAll('[data-settings-card]')[0]!;
     expect(invalidCard.attributes('aria-invalid')).toBe('true');
     expect(invalidCard.text()).toContain(useI18n().t('settingsPage.validationPositiveNumber'));
+  });
+});
+
+describe('settings partition auto-save', () => {
+  it('autosaves only the security partition after editing the remote timeout', async () => {
+    const view = await render('/settings/security');
+    enableAutoSaveTimers();
+
+    const timeout = view.find<HTMLInputElement>('[role="spinbutton"]');
+    await timeout.setValue('90');
+    await timeout.trigger('change');
+    await advanceAutoSave();
+
+    expect(vi.mocked(settingsApi.updateSecurity).mock.calls[0][0]).toEqual({
+      tokenExpiration: '1d',
+      remoteCommandTimeoutSeconds: 90,
+    });
+    expect(settingsApi.updateGeneral).not.toHaveBeenCalled();
+    expect(view.find('[data-autosave-status]').attributes('data-autosave-state')).toBe('saved');
+  });
+
+  it('autosaves the certificates partition with a normalized panel domain', async () => {
+    const view = await render('/settings/certificates');
+    enableAutoSaveTimers();
+
+    await view.find('input[aria-label="Panel domain"]').setValue('Panel.Example.COM');
+    await advanceAutoSave();
+
+    expect(vi.mocked(settingsApi.updateCertificates).mock.calls[0][0]).toEqual({
+      panel: { domain: 'panel.example.com', tlsCertificateId: '' },
+      certificates: { email: '', dnsPropagationDelaySeconds: 30 },
+    });
+    expect(settingsApi.updateAgent).not.toHaveBeenCalled();
+  });
+
+  it('normalizes the agent download origin and blocks a URL with a path locally', async () => {
+    const view = await render('/settings/agent');
+    enableAutoSaveTimers();
+
+    const baseUrl = view.find('input[aria-label="Agent download base URL"]');
+    await baseUrl.setValue('https://cdn.example.com/');
+    await advanceAutoSave();
+    expect(vi.mocked(settingsApi.updateAgent).mock.calls[0][0]).toEqual({
+      downloadBaseUrl: 'https://cdn.example.com',
+      downloadVerifyTls: false,
+      transferTimeoutSeconds: 120,
+    });
+
+    vi.mocked(settingsApi.updateAgent).mockClear();
+    await baseUrl.setValue('https://cdn.example.com/dist');
+    await advanceAutoSave();
+    expect(settingsApi.updateAgent).not.toHaveBeenCalled();
+    expect(view.find('[data-autosave-status]').attributes('data-autosave-state')).toBe('invalid');
+    expect(view.text()).toContain(useI18n().t('settingsPage.validationAgentDownloadBaseUrl'));
+  });
+
+  it('autosaves branding and server variables independently in the system section', async () => {
+    const view = await render('/settings/system');
+    enableAutoSaveTimers();
+
+    await view.find('input[aria-label="Login title"]').setValue('Ops');
+    await advanceAutoSave();
+    expect(vi.mocked(settingsApi.updateBranding).mock.calls[0][0]).toEqual({ loginTitle: 'Ops', loginSubtitle: '' });
+    expect(settingsApi.updateServerVariables).not.toHaveBeenCalled();
+
+    await view.find('textarea').setValue('*PUBLIC_ADDRESS=Public address\nREGION_CODE=Region code');
+    await advanceAutoSave();
+    expect(vi.mocked(settingsApi.updateServerVariables).mock.calls[0][0]).toEqual([
+      { key: 'PUBLIC_ADDRESS', name: 'Public address', required: true },
+      { key: 'REGION_CODE', name: 'Region code', required: false },
+    ]);
+    expect(settingsApi.updateBranding).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks malformed server variable lines locally and explains the expected format', async () => {
+    const view = await render('/settings/system');
+    enableAutoSaveTimers();
+
+    await view.find('textarea').setValue('PUBLIC ADDRESS=Public address');
+    await advanceAutoSave();
+
+    expect(settingsApi.updateServerVariables).not.toHaveBeenCalled();
+    expect(view.find('[data-autosave-status]').attributes('data-autosave-state')).toBe('invalid');
+    expect(view.text()).toContain(useI18n().t('settingsPage.serverVariablesInvalid'));
   });
 });
 

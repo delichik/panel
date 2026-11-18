@@ -10,7 +10,7 @@
 - 前端运行时语言同步：`web/src/i18n/index.ts`
 - 后端翻译入口：`internal/platform/i18n/i18n.go`
 - 后端运行时语言设置：`internal/modules/settings/service.go`
-- 语言设置来源：`/api/v1/settings/runtime`
+- 语言设置来源：`GET /api/v1/settings/runtime`；语言写入经 `PUT /api/v1/settings/runtime/general`（`SET-RUN-022`）
 - 前端运行时默认语言：`web/src/i18n/index.ts` 的 `state.locale` 缺省为 `en`（与默认语言约定一致），localStorage 已有值时保持用户选择。
 - en/zh-CN 词条 key 集合必须完全一致，由 `web/src/i18n/i18n.test.ts` 强制校验（含 en 不得残留中文值、词条非空）。
 
@@ -146,8 +146,8 @@ if locale == "zh-CN" {
 如果新配置会影响用户语言体验，不要只放在前端本地状态中，优先评估是否需要纳入：
 
 - `RuntimeSettings`
-- `RuntimeUpdate`
-- `/api/v1/settings/runtime`
+- 对应的分区更新载荷（如 `RuntimeGeneralUpdate`）
+- `GET /api/v1/settings/runtime` 与 `PUT /api/v1/settings/runtime/general`
 
 ### 4. 摘要存储与任务错误翻译
 

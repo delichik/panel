@@ -49,7 +49,7 @@
 | 应用、挂载来源、应用文件、修订、部署、节点工作区布局、设施、存储共享、网络探测设施 `FAC-PRB-001..010`、指标设施 `FAC-MET-001..008`；规划失败 `APP-PLAN-001`、系统核实中 `APP-RUN-004` | [应用与设施应用](applications-and-facilities.md) |
 | desired/observed、协调 Job、统一追加活动日志、任务、运行事件；规划失败隔离 `ORCH-PLAN-006`、启动稳定观察 `ORCH-CTRL-007`；RunEngine Phase A `ENG-RUN-001..005`、`ENG-RET-001`、`TASK-DISPATCH-001..003` | [协调、任务与运行事件](orchestration-and-tasks.md) |
 | 容器、镜像、网络、卷、资源缓存与操作队列 | [容器与资源](containers-and-resources.md) |
-| 登录、账号、运行时设置（指标保留/采集间隔/清理计划已移出，见 `SET-RUN-021`）、概览、系统版本 | [身份、设置与系统](identity-settings-system.md) |
+| 登录、账号、运行时设置（分区写入 `SET-RUN-022`；指标保留/采集间隔/清理计划已移出，见 `SET-RUN-021`）、概览、系统版本 | [身份、设置与系统](identity-settings-system.md) |
 | 凭据、服务器、Agent、SSH、UFW、Fail2ban、APT；Agent report 补报 `AGT-RPT-007`、网络探测上报 `AGT-RPT-008` | [服务器、安全与软件包](servers-security-packages.md) |
 | Tailscale：容器内 tailscaled 生命周期、全局设置与只写认证密钥、节点加入意图与观测态、节点收敛任务、tailnet 地址优先 | [Tailscale](tailscale.md) |
 | DNS、ACME、自签名证书、密钥资产 | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
@@ -83,6 +83,8 @@
 侧栏品牌区去装饰竖条（2026-11-17）：AppShell 桌面侧栏与移动抽屉品牌区左缘的 3px 品牌色装饰竖条已移除，品牌区仅保留图标/名称/折叠按钮；无新增路由/表/后台任务，见 [UI-SHELL-014](ui-shell-and-conventions.md)、[布局体系规范](../specifications/frontend/layout-system.md)。
 
 WinUI 3 风格改版与服务器持久化外观（2026-11-17）：前端 token/动效/外壳/控件/模板改为 WinUI 3 观感（中性灰阶、Mica、4/8px 圆角、32px 控件、83/167/250/333ms 无上浮/无缩放动效、Page refresh 路由切换）；外观（明暗/Mica/9 强调色/背景图上传）改为服务器持久化：新增 `appearance_settings` 表（表 47→48）、6 条 `settings/appearance*` 路由（186→192）与 `<dataRoot>/appearance/` 文件目录，登录页走公开外观接口（仅模糊缩略图），localStorage 仅首屏缓存，旧 lighthouse/ocean 偏好首次登录一次性迁移；外观设置新增分区 `/settings/appearance`（路由声明 34→35）。P2 又把 14 个页面族的页面/分区表面统一为 WinUI 3 token（卡片 `rounded-overlay` + `border-card-stroke`、行内元素 `rounded-control` + `border-divider`，清除 `rounded-2xl/xl/lg`、`bg-background`、静态阴影与 hover 位移；无新增 API/表/路由）。P3 统一图标与加载指示：本地 vendored Fluent System Icons 兼容层 `@/icons`（52 文件迁移，MIT，见 `web/src/icons/README.md`）、WinUI `ProgressRing` 与 `Checkbox` primitive；仍无新增 API/表/路由。见 [SET-APP-001..012](identity-settings-system.md)、[UI-SHELL-017/020/021(已废弃)/026/047/048/049/052/063](ui-shell-and-conventions.md)、[UI-SET-013](ui-pages.md)、[视觉 Token 规范](../specifications/frontend/visual-tokens.md)、[布局体系规范](../specifications/frontend/layout-system.md)、[覆盖基线](coverage-matrix.md)。
+
+设置写入拆分与设置页自动保存（2026-11-18）：运行时设置写入由整体 `PUT /api/v1/settings/runtime` 拆成 6 条分区子资源端点（`PUT /settings/runtime/general|security|certificates|agent|branding` 与 `PUT /settings/tailscale`），`GET /settings/runtime` 与完整 `RuntimeSettings` 响应不变，整体 PUT 删除；主 Panel `method/path` 计数 192 → 197，无数据库表/后台任务变更。设置页 general/security/certificates/agent/tailscale/system（品牌+服务器变量）移除保存按钮，改为 500ms 防抖自动保存（分区串行、本地校验失败不发请求、成功仅状态指示、失败 toast+重试、语言即时切换与失败回滚、切 tab 不卸载、刷新取消待发），保留 JWT 重置、清除 Tailscale 认证密钥、应用/重连、系统证书重置、清空事件与日志、备份导出/还原、外观上传/移除/恢复默认等动作按钮，外观分区仍走乐观即时保存。见 [SET-RUN-022](identity-settings-system.md)、[TS-SET-002/003/004](tailscale.md)、[UI-SET-002/003/005/007/010/011/014](ui-pages.md)、[UI-SHELL-022](ui-shell-and-conventions.md)、[ARCH-API-009](architecture-data-api.md)、[AutoSaveStatus 模式](../specifications/frontend/interaction-patterns.md)、[覆盖基线](coverage-matrix.md)、[API 路由清单](api-route-inventory.md)。
 
 修改下列对象时，至少检查对应消费者：
 

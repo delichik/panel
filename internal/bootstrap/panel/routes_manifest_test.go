@@ -61,8 +61,18 @@ func TestAPIRouteManifest(t *testing.T) {
 	//   POST/DELETE /api/v1/settings/appearance/background
 	//   GET /api/v1/settings/appearance/background/content
 	//   GET /api/v1/settings/public-appearance（skipAuth，仍计入 /api manifest）
-	const wantCount = 192
-	const wantHash = "398dd44f9f0f2caf156f962d73f50f779aff9ffe777c52f651ff8c0e150ed504"
+	// 设置写入按分区拆分为子资源（SET-RUN-022，192 → 197）：删除整体
+	//   PUT /api/v1/settings/runtime
+	// 新增 6 条分区 PUT（自动保存只提交当前分区）：
+	//   PUT /api/v1/settings/runtime/general
+	//   PUT /api/v1/settings/runtime/security
+	//   PUT /api/v1/settings/runtime/certificates
+	//   PUT /api/v1/settings/runtime/agent
+	//   PUT /api/v1/settings/runtime/branding
+	//   PUT /api/v1/settings/tailscale
+	// GET /api/v1/settings/runtime 不变。
+	const wantCount = 197
+	const wantHash = "ab4d1a219baf5b2644b1597312e2155b5254575a38a5e6d51d86d3a0d5dc04cc"
 	manifest := strings.Join(patterns, "\n") + "\n"
 	gotHash := fmt.Sprintf("%x", sha256.Sum256([]byte(manifest)))
 	if len(patterns) != wantCount || gotHash != wantHash {

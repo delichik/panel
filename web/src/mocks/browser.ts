@@ -133,7 +133,7 @@ import {
 import { acceptedAgentDeployment, completedTask, mockTasks, mockTaskLogs, mockTaskSteps, retryTask, runTaskNow } from './tasks';
 import { resolveMockExecution } from './activity';
 import { mockEventsRoute } from './events';
-import { applyContainerTailscale, confirmRestore, mockRuntimeSettings, mockServerVariables, restorePreflight, saveRuntime, saveServerVariables, startExport, type RuntimeUpdatePayload } from './settings';
+import { applyContainerTailscale, confirmRestore, mockRuntimeSettings, mockServerVariables, restorePreflight, saveRuntimeAgent, saveRuntimeBranding, saveRuntimeCertificates, saveRuntimeGeneral, saveRuntimeSecurity, saveRuntimeTailscale, saveServerVariables, startExport } from './settings';
 import {
   mockAppearance,
   mockBackgroundBlob,
@@ -143,6 +143,7 @@ import {
   uploadMockBackground,
 } from './appearance';
 import type { AppearanceUpdate } from '@/types/appearance';
+import type { RuntimeAgentUpdate, RuntimeBrandingUpdate, RuntimeCertificatesUpdate, RuntimeGeneralUpdate, RuntimeSecurityUpdate, RuntimeTailscaleUpdate } from '@/types/settings';
 import { advanceExport, exportStatus, resetExport, restoreStatus } from './maintenance';
 import { debugClearRuntimeDataStatus, debugDatabases, debugPprofStatus, debugRuntime, debugTasks, setDebugPprof, startDebugClearRuntimeData } from './debug';
 
@@ -1016,13 +1017,18 @@ export function installMockApi() {
     }
     if (url.pathname === '/api/v1/settings/public-appearance' && method(init) === 'GET') return json(publicMockAppearance());
     if (url.pathname === '/api/v1/system/version' && method(init) === 'GET') return json({ version: '0.2.0-dev', channel: 'dev', commit: 'mock', repository: 'mock/panel', latestVersion: '', updateAvailable: false });
-    if (url.pathname === '/api/v1/settings/runtime' && method(init) === 'PUT') {
+    if (url.pathname === '/api/v1/settings/runtime/general' && method(init) === 'PUT') {
       try {
-        return json(saveRuntime(await body<RuntimeUpdatePayload>(init)));
+        return json(saveRuntimeGeneral(await body<RuntimeGeneralUpdate>(init)));
       } catch (err) {
         return error('settings_conflict', err instanceof Error ? err.message : 'Settings conflict.', 409);
       }
     }
+    if (url.pathname === '/api/v1/settings/runtime/security' && method(init) === 'PUT') return json(saveRuntimeSecurity(await body<RuntimeSecurityUpdate>(init)));
+    if (url.pathname === '/api/v1/settings/runtime/certificates' && method(init) === 'PUT') return json(saveRuntimeCertificates(await body<RuntimeCertificatesUpdate>(init)));
+    if (url.pathname === '/api/v1/settings/runtime/agent' && method(init) === 'PUT') return json(saveRuntimeAgent(await body<RuntimeAgentUpdate>(init)));
+    if (url.pathname === '/api/v1/settings/runtime/branding' && method(init) === 'PUT') return json(saveRuntimeBranding(await body<RuntimeBrandingUpdate>(init)));
+    if (url.pathname === '/api/v1/settings/tailscale' && method(init) === 'PUT') return json(saveRuntimeTailscale(await body<RuntimeTailscaleUpdate>(init)));
     if (url.pathname === '/api/v1/settings/tailscale/apply' && method(init) === 'POST') return json(applyContainerTailscale(), 202);
     if (url.pathname === '/api/v1/settings/server-variables' && method(init) === 'GET') return json(mockServerVariables);
     if (url.pathname === '/api/v1/settings/server-variables' && method(init) === 'PUT') {

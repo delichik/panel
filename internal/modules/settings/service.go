@@ -73,6 +73,10 @@ type ServerVariableDefinitionsUpdate struct {
 	Definitions []ServerVariableDefinition `json:"definitions"`
 }
 
+// RuntimeUpdate 是内部使用的完整设置写入负载。设置页的写入已按分区拆分
+// （SET-RUN-022），分区方法在当前内存快照上合成完整候选后委托 Update，从而
+// 复用校验、原子持久化、热更新与 Panel TLS 临界区；identity 等模块仍可直接
+// 使用 Update 做跨分区的小范围更新。
 type RuntimeUpdate struct {
 	ContainerReportIntervalSeconds int                         `json:"containerReportIntervalSeconds"`
 	TokenExpiration                string                      `json:"tokenExpiration"`
@@ -85,6 +89,29 @@ type RuntimeUpdate struct {
 	Panel                          *RuntimePanelSettings       `json:"panel"`
 	Agent                          *RuntimeAgentSettings       `json:"agent"`
 	Tailscale                      *RuntimeTailscaleUpdate     `json:"tailscale"`
+}
+
+// RuntimeGeneralUpdate 是 PUT /api/v1/settings/runtime/general 的写入负载。
+// 分区负载只携带本分区字段；省略的字段沿用当前快照，而不是被清零。
+type RuntimeGeneralUpdate struct {
+	ContainerReportIntervalSeconds int    `json:"containerReportIntervalSeconds"`
+	Language                       string `json:"language"`
+	LogLevel                       string `json:"logLevel"`
+	ReconcileTraceEnabled          *bool  `json:"reconcileTraceEnabled"`
+}
+
+// RuntimeSecurityUpdate 是 PUT /api/v1/settings/runtime/security 的写入负载。
+type RuntimeSecurityUpdate struct {
+	TokenExpiration             string `json:"tokenExpiration"`
+	RemoteCommandTimeoutSeconds int    `json:"remoteCommandTimeoutSeconds"`
+}
+
+// RuntimeCertificatesUpdate 是 PUT /api/v1/settings/runtime/certificates 的
+// 写入负载。Panel 与 Certificates 用指针表达分组是否提供：省略的分组保持
+// 现值，避免半套负载把 Panel 域名清零后触发校验失败。
+type RuntimeCertificatesUpdate struct {
+	Panel        *RuntimePanelSettings       `json:"panel"`
+	Certificates *RuntimeCertificateSettings `json:"certificates"`
 }
 
 type RuntimeSettings struct {
@@ -353,6 +380,50 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 		out = s.Runtime()
 	}
 	return out, nil
+}
+
+// UpdateGeneral 只更新运行时/常规分区：容器上报间隔、界面语言、日志级别与
+// 协调追踪开关。其余分区沿用当前内存快照，热更新语义与 Update 一致。
+func (s *Service) UpdateGeneral(ctx context.Context, input RuntimeGeneralUpdate) (RuntimeSettings, error) {
+	return s.Update(ctx, RuntimeUpdate{
+		ContainerReportIntervalSeconds: input.ContainerReportIntervalSeconds,
+		Language:                       input.Language,
+		LogLevel:                       input.LogLevel,
+		ReconcileTraceEnabled:          input.ReconcileTraceEnabled,
+	})
+}
+
+// UpdateSecurity 只更新安全分区：令牌有效期与远程命令超时。
+func (s *Service) UpdateSecurity(ctx context.Context, input RuntimeSecurityUpdate) (RuntimeSettings, error) {
+	return s.Update(ctx, RuntimeUpdate{
+		TokenExpiration:             input.TokenExpiration,
+		RemoteCommandTimeoutSeconds: input.RemoteCommandTimeoutSeconds,
+	})
+}
+
+// UpdateCertificates 只更新证书/Panel HTTPS 分区。Panel 选择仍走
+// paneltls.WithUpdate 临界区与 fixed pair 回滚（SET-TLS-004）。
+func (s *Service) UpdateCertificates(ctx context.Context, input RuntimeCertificatesUpdate) (RuntimeSettings, error) {
+	return s.Update(ctx, RuntimeUpdate{
+		Panel:        input.Panel,
+		Certificates: input.Certificates,
+	})
+}
+
+// UpdateAgent 只更新 Agent 投递分区。
+func (s *Service) UpdateAgent(ctx context.Context, input RuntimeAgentSettings) (RuntimeSettings, error) {
+	return s.Update(ctx, RuntimeUpdate{Agent: &input})
+}
+
+// UpdateBranding 只更新品牌分区（登录页标题与副标题）。
+func (s *Service) UpdateBranding(ctx context.Context, input RuntimeBrandingSettings) (RuntimeSettings, error) {
+	return s.Update(ctx, RuntimeUpdate{Branding: &input})
+}
+
+// UpdateTailscale 只更新 Tailscale 分区。密钥与标签的写入语义见
+// applyTailscaleUpdate；保存成功后仍由 Update 触发容器期望态收敛。
+func (s *Service) UpdateTailscale(ctx context.Context, input RuntimeTailscaleUpdate) (RuntimeSettings, error) {
+	return s.Update(ctx, RuntimeUpdate{Tailscale: &input})
 }
 
 func (s *Service) syncPanelTLS(ctx context.Context, panel RuntimePanelSettings) error {

@@ -206,7 +206,7 @@ beforeEach(() => {
   storeMock.current = buildStore();
   vi.spyOn(settingsApi, 'runtime').mockResolvedValue(runtimeSettings());
   vi.spyOn(settingsApi, 'serverVariables').mockResolvedValue([]);
-  vi.spyOn(settingsApi, 'updateRuntime').mockImplementation(async () => runtimeSettings());
+  vi.spyOn(settingsApi, 'updateGeneral').mockImplementation(async () => runtimeSettings());
   vi.spyOn(systemApi, 'version').mockResolvedValue({ version: '0.2.0-dev', channel: 'dev', latestVersion: '', updateAvailable: false });
   vi.spyOn(keyAssetsApi, 'systemCertificates').mockResolvedValue([]);
   vi.spyOn(keyAssetsApi, 'tlsCertificates').mockResolvedValue([]);
@@ -248,7 +248,9 @@ describe('settings appearance section', () => {
     expect(view.findAll('h3')).toHaveLength(0);
 
     // 分区独立即时保存：没有「保存分区」按钮语义。
-    const saveButtons = view.findAll('button').filter((item) => item.text() === useI18n().t('settingsPage.saveSection'));
+    const saveButtons = view.findAll('button').filter((item) => (
+      item.text() === 'Save section' || item.text() === 'Save branding' || item.text() === 'Save variables'
+    ));
     expect(saveButtons).toHaveLength(0);
   });
 

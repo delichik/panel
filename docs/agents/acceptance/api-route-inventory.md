@@ -202,5 +202,10 @@
 | 188 | `PUT` | `/api/v1/servers/{id}` | [服务器、安全与软件包](servers-security-packages.md) |
 | 189 | `PUT` | `/api/v1/servers/{id}/fail2ban` | [服务器、安全与软件包](servers-security-packages.md) |
 | 190 | `PUT` | `/api/v1/settings/appearance` | [身份、设置与系统](identity-settings-system.md) |
-| 191 | `PUT` | `/api/v1/settings/runtime` | [身份、设置与系统](identity-settings-system.md) `TS-SET-001..005` |
-| 192 | `PUT` | `/api/v1/settings/server-variables` | [身份、设置与系统](identity-settings-system.md) |
+| 191 | `PUT` | `/api/v1/settings/runtime/agent` | [身份、设置与系统](identity-settings-system.md) `SET-RUN-022` |
+| 192 | `PUT` | `/api/v1/settings/runtime/branding` | [身份、设置与系统](identity-settings-system.md) `SET-RUN-022` |
+| 193 | `PUT` | `/api/v1/settings/runtime/certificates` | [身份、设置与系统](identity-settings-system.md) `SET-RUN-022` |
+| 194 | `PUT` | `/api/v1/settings/runtime/general` | [身份、设置与系统](identity-settings-system.md) `SET-RUN-022` |
+| 195 | `PUT` | `/api/v1/settings/runtime/security` | [身份、设置与系统](identity-settings-system.md) `SET-RUN-022` |
+| 196 | `PUT` | `/api/v1/settings/server-variables` | [身份、设置与系统](identity-settings-system.md) |
+| 197 | `PUT` | `/api/v1/settings/tailscale` | [Tailscale](tailscale.md) `TS-SET-002/003/004`；领域入口见 [身份、设置与系统](identity-settings-system.md) `SET-RUN-019/022` |

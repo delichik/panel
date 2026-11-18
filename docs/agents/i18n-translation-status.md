@@ -4,6 +4,7 @@
 
 ## 当前状态
 
+- 本轮设置页自动保存（2026-11-18）：新增 `settingsPage.autoSave.*` 4 个词条（`saving` / `saved` / `failed` / `invalid`）与本地校验词条 `settingsPage.validationPanelDomain`、`settingsPage.validationCertificateEmail`、`settingsPage.validationAgentDownloadBaseUrl`、`settingsPage.validationMaxLength`（品牌标题/副标题 80/240 上限，带 `{max}` 参数）、`settingsPage.serverVariablesInvalid`（覆盖 `[*]KEY=Name` 行格式、key 合法、key 唯一三类失败）、`settingsPage.tailscale.authKeyInvalid`（认证密钥本地格式提示）；如拆成多条也必须 en/zh 同键；重试按钮复用既有 `common.retry`。删除设置页保存动作相关旧词条（确认无引用后）：`settingsPage.saveSection`、`settingsPage.saveBranding`、`settingsPage.saveVariables`、`settingsPage.saved.runtime|security|certificates|agent|system|tailscale`；若测试仍引用可保留但必须 en / zh-CN 同键，最终以“无引用则删除”为准。en / zh-CN 键集合同步修改；本轮不新增/删除后端错误码（分区端点沿用既有稳定错误码）。文案约束：自动保存成功只显示“已自动保存”，不得用 success toast 刷屏；失败文案与 `AutoSaveStatus` 的 error 状态一致；语言切换失败回滚复用既有语言词条。
 - Agent 部署时钟同步前提与特权探测修复（2026-11-18）：后端新增稳定错误码 `agent_time_sync_failed`（目标服务器时钟同步失败，详情见任务日志），已补简体中文词条并由 `i18n_test.go` 覆盖；本轮不新增前端词条——任务阶段复用既有 `preparing`，远端输出为自由文本，`privileged_access_required` 复用既有翻译。
 - 页面迁移（2026-11-18）：新增 `certificatesPage.issuer`（en "Issuer"/zh "颁发者"）与 `certificatesPage.new`（en "New"/zh "新建"），供证书详情正文属性与「新建 ▾」下拉；其余迁移复用既有 key，en/zh 同步。
 - 概览应用总览（2026-11-17）：新增 `overviewPage.applications` / `overviewPage.totalApplications` / `overviewPage.applicationsUnavailable`，状态标签复用 `applicationsPage.status.enabled|disabled|deploying|attention`；en / zh-CN 键值已同步。

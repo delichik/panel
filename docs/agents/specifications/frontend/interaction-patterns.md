@@ -39,10 +39,24 @@
 - `ProgressBar`（`ProgressBar.vue`）：确定性进度条，`role=progressbar` + aria 值；4px 圆角、token 过渡、语义 tone；替代概览/详情的手写进度条。
 - `ChartCard`（`ChartCard.vue`）：图表卡（surface-card + Body Strong 标题 + 右上当前值/操作/空态）；指标与探测图表统一使用，禁止 card-in-card。
 - `SettingsSection` / `SettingsCard`：设置页唯一分区/行实现（卡外标题 + 单卡行 + Section actions/footer）；设置页与设置型表单必须复用。
+- `AutoSaveStatus`（`web/src/components/patterns/AutoSaveStatus.vue`）：设置分区自动保存的只读状态指示，不承载业务逻辑。放在 `SettingsSection` 的 `#actions` 插槽（system 分区的服务器变量卡片在卡内单独一个指示）；`saving`/`pending` 显示 `ProgressRing` + 保存中文案，`saved` 用成功色并在约 2s 后回到 idle，`invalid`/`error` 用危险色；`error` 时提供重试按钮（复用 `common.retry`）。状态文本必须通过 `role=status` / `aria-live` 播报，重试按钮有可访问名称；组件不得自行弹 toast 或发请求。
 
 ## 自动刷新模式
 
 自动刷新设置由共享 composable `web/src/composables/useAutoRefresh.ts` 统一管理（localStorage `panel.autoRefresh`，默认 `10m`），所有页面共用同一设置；控件统一使用 `web/src/components/patterns/DataRefreshControl.vue`（内部包装 `AutoRefreshControl` 并注入中英文档位文案；触发按钮显示当前状态：`关闭` / `10 分钟` / `30 分钟` / `1 小时`，弹出菜单选择并带勾选）。已接入：概览页服务器卡片、服务器详情概览指标面板、网络探测设施结果区。服务器详情指标面板只在当前 tab 激活时刷新，非激活/加载中/页面隐藏时跳过；网络探测设施结果区只重取当前探测源结果，配置表单有未保存修改时不刷新。轮询实现必须满足：防重入、标签页不可见时暂停；目标数据加载中跳过本轮；概览每次整页重取列表、指标与当前探测源结果（不拉取软件包/镜像更新统计），失败保留旧数据。旧版秒级模式（5s/10s）不再兼容，读取到旧值时回落到默认 10 分钟。其他页面接入同类自动刷新时复用 `DataRefreshControl` + `useAutoRefresh`，不另造控件。
+
+## 设置页自动保存模式
+
+设置页 general/security/certificates/agent/system（品牌+服务器变量）/tailscale 分区不再提供保存按钮，统一复用 `web/src/composables/useDebouncedAutoSave.ts`（延迟常量 `AUTO_SAVE_DELAY_MS = 500`）与 `AutoSaveStatus.vue`（`UI-SET-014`）：
+
+- 触发与合并：任一表单控件修改后重置 500ms 计时器；连续修改只发最后一次；同一分区同一时刻只允许一个请求在飞，请求期间的新修改不立即补发，而是在本次响应返回后重新开始 500ms 防抖（继续输入会继续取消并顺延，停止输入满 500ms 才补发）。每个分区一个控制器，不同分区互不阻塞。
+- 负载与回填：只提交本分区子资源（`PUT /api/v1/settings/runtime/{general|security|certificates|agent|branding}`、`PUT /api/v1/settings/tailscale`、`PUT /api/v1/settings/server-variables`），成功响应返回完整 `RuntimeSettings`，用其回填规范化值；回填必须抑制 watcher，防循环保存。
+- 状态机：`idle | pending | saving | saved | invalid | error`；`saved` 约 2s 后回 idle；成功不弹 success toast，仅状态指示；失败 danger toast + `error` + 重试；`invalid` 只表示本地校验未通过，不发请求。
+- 与动作按钮边界：JWT 重置、清除 Tailscale 认证密钥、应用/重连、系统证书重置、清空事件与日志、备份导出/还原、外观上传/移除/恢复默认仍是显式动作按钮（确认/loading/两阶段反馈沿用 [interaction-model.md](interaction-model.md)），不得改造成自动保存；外观分区保持乐观即时保存（`UI-SET-013`），不纳入 500ms 防抖。
+- 生命周期：刷新按钮取消所有待发计时器并整体重载；切 tab 不卸载页面、允许在途请求完成；页面卸载时若有待发修改立即 fire-and-forget 发送一次；卸载后不得再改状态；迟到响应不得覆盖更新的本地输入。
+- 语言：语言下拉改变时立即 `setLocale` 并进入 general 防抖保存；持久化失败回滚界面语言到服务端已持久化的 `runtime.language`，不得产生循环保存。
+- 可访问性：`AutoSaveStatus` 的保存中/已保存/失败/待修正文本经 `role=status` / `aria-live="polite"` 播报；错误状态的重试按钮必须有本地化可访问名称；不得只靠颜色表达保存状态。
+
 ## 使用规则
 
 1. 页面内不得为同类控件重新手写尺寸、圆角、选中态、禁用态或 loading 样式；缺能力时先扩展上述组件。
@@ -54,7 +68,7 @@
 7. 实体工作台（servers/credentials/dns/certificates/applications）的列表与详情切换必须复用 `TableDetailLayout`：列表保持挂载（`inert` + `aria-hidden`），详情的选中参数与 tab 参数进 URL，打开详情 `push` 历史、关闭 `replace` 清参数；页面不得自建第二套切换壳。
 8. 操作/任务与其它实体工作台使用 `TableDetailLayout`；日志使用 `ListPage` + Dialog；不得再接入 `MasterDetailLayout` 交付页，也不得新增“紧凑视口自动选中首条”逻辑。
 9. 页面内分段切换（如证书的域名/自签/密钥）使用带 `aria-current` 的链接或 `Tabs`，不得用一排 `primary` 按钮表达选中态；页面内搜索一律复用 `SearchInput`，不得手写放大镜 + Input 组合；下拉内部的候选过滤/远程搜索使用 `Select` 的可选搜索模式，不在下拉外另造搜索框。
-10. 设置页：单页 + 顶部固定 `Tabs`（`settings/:section`、`/settings` 重定向 general、`pageKey='settings'`），切分区不重载、不重播转场、不重拉全量设置；分区内容为 `SettingsSection` + `SettingsCard` 单列卡行，内容区独立滚动；卡内空态用 `variant="inset"`；每个分区一个主保存入口，放 Section actions，不再使用空 Save 行。
+10. 设置页：单页 + 顶部固定 `Tabs`（`settings/:section`、`/settings` 重定向 general、`pageKey='settings'`），切分区不重载、不重播转场、不重拉全量设置；分区内容为 `SettingsSection` + `SettingsCard` 单列卡行，内容区独立滚动；卡内空态用 `variant="inset"`；每个分区没有保存按钮，Section actions 只放 `AutoSaveStatus` 与保留的动作按钮（见“设置页自动保存模式”），不再使用空 Save 行。
 11. 列表筛选：宽屏用单行 `ListCommandBar`（搜索 + 1–2 个下拉 + 「筛选」Flyout/Dropdown），窄屏折叠；不得用一排 primary 按钮表达筛选选中态，也不得把多个长文本搜索框硬塞一行。
 
 ## 当前接入记录
@@ -68,3 +82,5 @@
 - 产品 UI 不得再使用 EventTimeline / context / evidence。日志页只按需读取 events 列表，默认 `level=info,warning,error`，手动刷新与 cursor 分页。
 
 - `ActivityLink` 与 Toast 统一进入 `/logs?...&level=info,warning,error`；应用/设施协调入口进入 `/tasks`；用户意图列表为 `/operations`。
+
+- `web/src/views/settings/index.vue`：分区表单统一接入 `useDebouncedAutoSave` + `AutoSaveStatus`；general/security/certificates/agent/system/tailscale 修改后 500ms 自动保存且只提交本分区；保留 JWT 重置、清除 Tailscale 认证密钥、应用/重连、系统证书重置、清空事件与日志、备份导出/还原等动作按钮；外观分区仍用乐观即时保存。

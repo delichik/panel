@@ -3,12 +3,15 @@ package settings
 import (
 	"context"
 	"errors"
+	"net/http"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"panel/internal/platform/config"
 	storage "panel/internal/platform/database"
+	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/reconciletrace"
 )
 
@@ -407,5 +410,266 @@ func TestRuntimeSettingsRejectOutOfRangeAgentTransferTimeout(t *testing.T) {
 		if _, err := svc.Update(context.Background(), validAgentRuntimeUpdate(agent)); err != nil {
 			t.Fatalf("expected transfer timeout %d to be accepted: %v", seconds, err)
 		}
+	}
+}
+
+// newSeededRuntimeService 构造一个各分区均为非默认值的设置服务，供分区写入测试
+// 断言“只改本分区、其余保持”。基线同时覆盖常规、安全、证书、Agent、品牌与
+// Tailscale，避免零值让断言失去区分度。
+func newSeededRuntimeService(t *testing.T) (*Service, RuntimeSettings) {
+	t.Helper()
+	svc := newTestService(t)
+	reconcileTraceEnabled := true
+	if _, err := svc.Update(context.Background(), RuntimeUpdate{
+		ContainerReportIntervalSeconds: 7,
+		TokenExpiration:                TokenExpiration5Days,
+		Language:                       "en",
+		LogLevel:                       "info",
+		RemoteCommandTimeoutSeconds:    45,
+		ReconcileTraceEnabled:          &reconcileTraceEnabled,
+		Branding:                       &RuntimeBrandingSettings{LoginTitle: "Operations", LoginSubtitle: "Manage infrastructure"},
+		Certificates:                   &RuntimeCertificateSettings{Email: "admin@example.test", DNSPropagationDelaySeconds: 15},
+		Agent:                          &RuntimeAgentSettings{DownloadBaseURL: "https://agent.example.test", DownloadVerifyTLS: true, TransferTimeoutSeconds: 600},
+		Tailscale:                      &RuntimeTailscaleUpdate{AuthKey: "tskey-auth-baseline", Tags: []string{"tag:web"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return svc, svc.Runtime()
+}
+
+// TestRuntimePartitionUpdatesOnlyTouchTheirSection 验证每个分区 Service 方法在
+// 完整候选快照上只替换本分区字段，并返回与持久化一致的完整 RuntimeSettings。
+func TestRuntimePartitionUpdatesOnlyTouchTheirSection(t *testing.T) {
+	cases := []struct {
+		name   string
+		apply  func(context.Context, *Service) (RuntimeSettings, error)
+		expect func(RuntimeSettings) RuntimeSettings
+	}{
+		{
+			name: "general",
+			apply: func(ctx context.Context, svc *Service) (RuntimeSettings, error) {
+				reconcileTraceEnabled := false
+				return svc.UpdateGeneral(ctx, RuntimeGeneralUpdate{
+					ContainerReportIntervalSeconds: 9,
+					Language:                       "zh-CN",
+					LogLevel:                       "debug",
+					ReconcileTraceEnabled:          &reconcileTraceEnabled,
+				})
+			},
+			expect: func(base RuntimeSettings) RuntimeSettings {
+				base.ContainerReportIntervalSeconds = 9
+				base.Language = "zh-CN"
+				base.LogLevel = "debug"
+				base.ReconcileTraceEnabled = false
+				return base
+			},
+		},
+		{
+			name: "security",
+			apply: func(ctx context.Context, svc *Service) (RuntimeSettings, error) {
+				return svc.UpdateSecurity(ctx, RuntimeSecurityUpdate{
+					TokenExpiration:             TokenExpiration30Days,
+					RemoteCommandTimeoutSeconds: 90,
+				})
+			},
+			expect: func(base RuntimeSettings) RuntimeSettings {
+				base.TokenExpiration = TokenExpiration30Days
+				base.RemoteCommandTimeoutSeconds = 90
+				return base
+			},
+		},
+		{
+			name: "certificates",
+			apply: func(ctx context.Context, svc *Service) (RuntimeSettings, error) {
+				return svc.UpdateCertificates(ctx, RuntimeCertificatesUpdate{
+					Panel:        &RuntimePanelSettings{Domain: "panel2.example.test"},
+					Certificates: &RuntimeCertificateSettings{Email: "ops@example.test", DNSPropagationDelaySeconds: 60},
+				})
+			},
+			expect: func(base RuntimeSettings) RuntimeSettings {
+				base.Panel = RuntimePanelSettings{Domain: "panel2.example.test"}
+				base.Certificates = RuntimeCertificateSettings{Email: "ops@example.test", DNSPropagationDelaySeconds: 60}
+				return base
+			},
+		},
+		{
+			name: "agent",
+			apply: func(ctx context.Context, svc *Service) (RuntimeSettings, error) {
+				return svc.UpdateAgent(ctx, RuntimeAgentSettings{
+					DownloadBaseURL:        "https://cdn.example.test",
+					DownloadVerifyTLS:      false,
+					TransferTimeoutSeconds: 120,
+				})
+			},
+			expect: func(base RuntimeSettings) RuntimeSettings {
+				base.Agent = RuntimeAgentSettings{DownloadBaseURL: "https://cdn.example.test", DownloadVerifyTLS: false, TransferTimeoutSeconds: 120}
+				return base
+			},
+		},
+		{
+			name: "branding",
+			apply: func(ctx context.Context, svc *Service) (RuntimeSettings, error) {
+				return svc.UpdateBranding(ctx, RuntimeBrandingSettings{LoginTitle: "Seamark Ops", LoginSubtitle: "Infrastructure control"})
+			},
+			expect: func(base RuntimeSettings) RuntimeSettings {
+				base.Branding = RuntimeBrandingSettings{LoginTitle: "Seamark Ops", LoginSubtitle: "Infrastructure control"}
+				return base
+			},
+		},
+		{
+			name: "tailscale",
+			apply: func(ctx context.Context, svc *Service) (RuntimeSettings, error) {
+				return svc.UpdateTailscale(ctx, RuntimeTailscaleUpdate{Tags: []string{"tag:db"}})
+			},
+			expect: func(base RuntimeSettings) RuntimeSettings {
+				base.Tailscale.Tags = []string{"tag:db"}
+				return base
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, baseline := newSeededRuntimeService(t)
+			got, err := tc.apply(context.Background(), svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := tc.expect(baseline)
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("update returned %#v, want %#v", got, want)
+			}
+			if !reflect.DeepEqual(svc.Runtime(), want) {
+				t.Fatalf("in-memory settings = %#v, want %#v", svc.Runtime(), want)
+			}
+			// 分区写入返回值必须仍是完整 RuntimeSettings，而不是只含本分区。
+			if got.TokenExpiration == "" || got.Panel.Domain == "" || got.Agent.TransferTimeoutSeconds < MinAgentTransferTimeoutSeconds || !got.JWTSecretConfigured {
+				t.Fatalf("partition update returned incomplete settings: %#v", got)
+			}
+			reloaded, err := NewService(svc.db, svc.cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(reloaded.Runtime(), want) {
+				t.Fatalf("persisted settings = %#v, want %#v", reloaded.Runtime(), want)
+			}
+		})
+	}
+}
+
+// TestRuntimePartitionUpdateKeepsOmittedFields 验证分区负载内省略的字段保持现值：
+// 自动保存可能只改动一个控件，不得把同分区的其它字段清零。
+func TestRuntimePartitionUpdateKeepsOmittedFields(t *testing.T) {
+	ctx := context.Background()
+	svc, baseline := newSeededRuntimeService(t)
+
+	got, err := svc.UpdateGeneral(ctx, RuntimeGeneralUpdate{LogLevel: "warn"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LogLevel != "warn" {
+		t.Fatalf("log level = %q", got.LogLevel)
+	}
+	if got.ContainerReportIntervalSeconds != baseline.ContainerReportIntervalSeconds || got.Language != baseline.Language || got.ReconcileTraceEnabled != baseline.ReconcileTraceEnabled {
+		t.Fatalf("omitted general fields changed: %#v", got)
+	}
+
+	got, err = svc.UpdateAgent(ctx, RuntimeAgentSettings{DownloadBaseURL: "https://cdn.example.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Agent.TransferTimeoutSeconds != baseline.Agent.TransferTimeoutSeconds {
+		t.Fatalf("omitted agent transfer timeout changed: %#v", got.Agent)
+	}
+
+	got, err = svc.UpdateCertificates(ctx, RuntimeCertificatesUpdate{
+		Certificates: &RuntimeCertificateSettings{Email: "ops@example.test", DNSPropagationDelaySeconds: 60},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Panel != baseline.Panel {
+		t.Fatalf("omitted panel group changed: %#v", got.Panel)
+	}
+	if got.Certificates.Email != "ops@example.test" {
+		t.Fatalf("certificate settings were not applied: %#v", got.Certificates)
+	}
+}
+
+// TestRuntimePartitionUpdateValidationErrorsAreStable 验证分区方法沿用既有稳定
+// 错误码与 422 状态，且失败不改变内存快照或持久化值（SET-RUN-005）。
+func TestRuntimePartitionUpdateValidationErrorsAreStable(t *testing.T) {
+	cases := []struct {
+		name  string
+		apply func(context.Context, *Service) (RuntimeSettings, error)
+		code  string
+	}{
+		{
+			name: "general",
+			apply: func(ctx context.Context, svc *Service) (RuntimeSettings, error) {
+				return svc.UpdateGeneral(ctx, RuntimeGeneralUpdate{Language: "fr"})
+			},
+			code: "invalid_language",
+		},
+		{
+			name: "security",
+			apply: func(ctx context.Context, svc *Service) (RuntimeSettings, error) {
+				return svc.UpdateSecurity(ctx, RuntimeSecurityUpdate{TokenExpiration: "2h"})
+			},
+			code: "invalid_token_expiration",
+		},
+		{
+			name: "certificates",
+			apply: func(ctx context.Context, svc *Service) (RuntimeSettings, error) {
+				return svc.UpdateCertificates(ctx, RuntimeCertificatesUpdate{Panel: &RuntimePanelSettings{Domain: "bad domain"}})
+			},
+			code: "invalid_panel_domain",
+		},
+		{
+			name: "agent",
+			apply: func(ctx context.Context, svc *Service) (RuntimeSettings, error) {
+				return svc.UpdateAgent(ctx, RuntimeAgentSettings{DownloadBaseURL: "ftp://agent.example.test"})
+			},
+			code: "invalid_agent_download_base_url",
+		},
+		{
+			name: "branding",
+			apply: func(ctx context.Context, svc *Service) (RuntimeSettings, error) {
+				return svc.UpdateBranding(ctx, RuntimeBrandingSettings{LoginTitle: strings.Repeat("a", 81)})
+			},
+			code: "invalid_branding_login_title",
+		},
+		{
+			name: "tailscale",
+			apply: func(ctx context.Context, svc *Service) (RuntimeSettings, error) {
+				return svc.UpdateTailscale(ctx, RuntimeTailscaleUpdate{Tags: []string{"web"}})
+			},
+			code: "invalid_tailscale_tag",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, baseline := newSeededRuntimeService(t)
+			_, err := tc.apply(context.Background(), svc)
+			if err == nil {
+				t.Fatal("expected a validation error")
+			}
+			var domainErr *panelerr.Error
+			if !errors.As(err, &domainErr) {
+				t.Fatalf("error is not a domain error: %v", err)
+			}
+			if domainErr.Code != tc.code || domainErr.HTTPStatus != http.StatusUnprocessableEntity {
+				t.Fatalf("error = %#v, want code %q with 422", domainErr, tc.code)
+			}
+			if !reflect.DeepEqual(svc.Runtime(), baseline) {
+				t.Fatalf("rejected update changed the runtime snapshot: %#v, want %#v", svc.Runtime(), baseline)
+			}
+			reloaded, err := NewService(svc.db, svc.cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(reloaded.Runtime(), baseline) {
+				t.Fatalf("rejected update changed persistent settings: %#v, want %#v", reloaded.Runtime(), baseline)
+			}
+		})
 	}
 }

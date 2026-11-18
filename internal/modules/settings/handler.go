@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"context"
 	"net/http"
 
 	"panel/internal/platform/http"
@@ -18,17 +19,44 @@ func (h *Handler) PublicBranding(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, h.service.Runtime().Branding)
 }
 
-func (h *Handler) UpdateRuntime(w http.ResponseWriter, r *http.Request) {
-	var input RuntimeUpdate
+// updatePartition 解码分区写入负载，委托对应的 Service 方法，并统一返回完整
+// RuntimeSettings。分区端点只描述本分区字段，校验、原子持久化与热更新由
+// Service 在完整候选快照上完成（SET-RUN-005 / SET-RUN-022）。
+func updatePartition[T any](h *Handler, w http.ResponseWriter, r *http.Request, update func(context.Context, T) (RuntimeSettings, error)) {
+	var input T
 	if !httpx.Decode(w, r, &input) {
 		return
 	}
-	settings, err := h.service.Update(r.Context(), input)
+	settings, err := update(r.Context(), input)
 	if err != nil {
 		httpx.Error(w, err)
 		return
 	}
 	httpx.JSON(w, http.StatusOK, settings)
+}
+
+func (h *Handler) UpdateGeneral(w http.ResponseWriter, r *http.Request) {
+	updatePartition(h, w, r, h.service.UpdateGeneral)
+}
+
+func (h *Handler) UpdateSecurity(w http.ResponseWriter, r *http.Request) {
+	updatePartition(h, w, r, h.service.UpdateSecurity)
+}
+
+func (h *Handler) UpdateCertificates(w http.ResponseWriter, r *http.Request) {
+	updatePartition(h, w, r, h.service.UpdateCertificates)
+}
+
+func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
+	updatePartition(h, w, r, h.service.UpdateAgent)
+}
+
+func (h *Handler) UpdateBranding(w http.ResponseWriter, r *http.Request) {
+	updatePartition(h, w, r, h.service.UpdateBranding)
+}
+
+func (h *Handler) UpdateTailscale(w http.ResponseWriter, r *http.Request) {
+	updatePartition(h, w, r, h.service.UpdateTailscale)
 }
 
 // ApplyTailscale 重新下发容器内 tailscale 期望态并返回最新实际态。2xx 只代表
