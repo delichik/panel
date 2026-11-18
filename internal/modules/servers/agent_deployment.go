@@ -174,6 +174,7 @@ func (s *Service) ensureAgentDeployTask(ctx context.Context, serverID, triggered
 		ServerID:     srv.ID,
 		ResourceType: connectivityResourceType,
 		ResourceID:   srv.ID,
+		TriggerType:  triggeredBy,
 		TriggeredBy:  triggeredBy,
 		Summary:      "Deploying panel agent for " + srv.Name,
 	}, tasks.Trigger{Type: triggeredBy, Manual: triggeredBy == "user", Periodic: triggeredBy != "user"})
@@ -287,8 +288,26 @@ func agentAutoDeployBackoffDuration(failures int) time.Duration {
 
 func (s *Service) runDeployAgent(ctx context.Context, taskID string, srv Server) {
 	defer s.tasks.FinishExecution(taskID)
-	runner := remoteops.Runner{Exec: s.exec, Target: serverTarget(srv), Log: serverTaskLogSink{s.tasks, taskID}}
 	_ = s.tasks.Advance(ctx, taskID, "preparing", "preparing panel agent deployment")
+	// A stale privilege mode must not turn every privileged step below into a
+	// misleading remote-command failure: a node whose stored mode cannot execute
+	// privileged commands is re-probed once and the detected mode is persisted.
+	// A transient probe failure leaves the stored mode untouched (SSH-OPS-003).
+	if !hasPrivilege(srv) {
+		refreshed, err := s.refreshPrivilegeForDeploy(ctx, srv)
+		if err != nil {
+			s.failAgentDeployTask(ctx, taskID, srv, err)
+			return
+		}
+		srv = refreshed
+	}
+	if !hasPrivilege(srv) {
+		s.failAgentDeployTask(ctx, taskID, srv, panelerr.Validation("privileged_access_required", "Root or passwordless sudo access is required to deploy the agent"))
+		return
+	}
+	// The runner must carry the refreshed mode: a target built before the
+	// re-probe would keep wrapping every privileged command in sudo -n.
+	runner := remoteops.Runner{Exec: s.exec, Target: serverTarget(srv), Log: serverTaskLogSink{s.tasks, taskID}}
 	// Before any stop/restart action, ask the running agent whether it is safe
 	// to restart. Agents too old to support the RPC, or unreachable agents,
 	// fall back to proceeding directly; cancellation aborts the deployment.
@@ -350,6 +369,15 @@ func (s *Service) runDeployAgent(ctx context.Context, taskID string, srv Server)
 	// a package manager. Existing nodes converge on their next deployment even
 	// when only the service is restarted (the restart-only path).
 	if err := s.ensureAgentPing(ctx, taskID, srv, runner); err != nil {
+		s.failAgentDeployTask(ctx, taskID, srv, err)
+		return
+	}
+	// The node clock is the fourth prerequisite. The Panel's report-stream
+	// watchdog rejects a stream whose agent-reported sample timestamps look
+	// older than its silence window, so a drifting clock makes a healthy agent
+	// look offline forever. Existing nodes converge on their next deployment,
+	// including the restart-only path.
+	if err := s.ensureAgentTimeSync(ctx, taskID, srv, runner); err != nil {
 		s.failAgentDeployTask(ctx, taskID, srv, err)
 		return
 	}
@@ -610,7 +638,12 @@ func (s *Service) prepareAgentRestartWithProgress(ctx context.Context, srv Serve
 func (s *Service) failAgentDeployTask(ctx context.Context, taskID string, srv Server, cause error) {
 	_ = s.tasks.Fail(ctx, taskID, cause)
 	task, err := s.tasks.Get(ctx, taskID)
-	if err != nil || task.TriggeredBy == "user" {
+	// Manual deployments must not consume the automatic-deployment failure
+	// budget: only a system-triggered failure may move the node toward
+	// "undeployable". The stored triggered_by is the operator name for a fresh
+	// manual task and "user" for a reused one, so the trigger kind and that
+	// sentinel together identify manual runs (AGT-AUTO-003).
+	if err != nil || task.TriggerType == "user" || task.TriggeredBy == "user" {
 		return
 	}
 	_, _ = s.recordAgentAutoDeployFailure(ctx, srv.ID)

@@ -63,6 +63,14 @@ func TestTranslateLocaleCoversNetworkProbeValidation(t *testing.T) {
 	}
 }
 
+// TestTranslateLocaleCoversAgentTimeSyncFailure pins the zh-CN message of the
+// agent deployment clock-synchronization prerequisite error (AGT-DEP-009).
+func TestTranslateLocaleCoversAgentTimeSyncFailure(t *testing.T) {
+	if got := TranslateLocale(LocaleSimplifiedChinese, "agent_time_sync_failed", "fallback"); got != "目标服务器时钟同步失败，详情见任务日志" {
+		t.Fatalf("translation for agent_time_sync_failed = %q", got)
+	}
+}
+
 func TestTranslateLocaleCoversNewErrorCodes(t *testing.T) {
 	tests := map[string]string{
 		"application_deletion_requested": "已请求删除该应用",

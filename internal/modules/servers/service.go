@@ -263,11 +263,48 @@ func (s *Service) TestConnectivity(ctx context.Context, serverID string) (Server
 		_ = s.recordReachability(ctx, serverID, false, hostKeyMismatch, err.Error())
 		return Server{}, err
 	}
+	// SSH-OPS-003: 只有结论已知（root / passwordless_sudo / 确定的 none）时才
+	// 落库 privilege_mode；传输层/会话层的瞬时失败（mode==""）只刷新可达性，
+	// 否则一次网络抖动就会把 root 节点永久降级为 none。
 	mode, _ := s.detectPrivilege(ctx, target)
+	if strings.TrimSpace(mode) == "" {
+		if err := s.recordReachability(ctx, serverID, true, false, ""); err != nil {
+			return Server{}, err
+		}
+		return s.Get(ctx, serverID)
+	}
 	if err := s.recordConnectivity(ctx, serverID, true, mode, false, ""); err != nil {
 		return Server{}, err
 	}
 	return s.Get(ctx, serverID)
+}
+
+// refreshPrivilegeForDeploy 在 Agent 部署前重新探测特权模式，用于自愈“曾因一次
+// 瞬时 SSH 失败被永久降级为 none”的存量记录（SSH-OPS-003）。已有 root/sudo
+// 的节点原样返回，不发起任何远端探测。探测结果为确定的 none（含 sudo -n 以
+// 非零退出）时把“无特权”作为已知结论返回 (srv, nil)，让部署侧给出清晰的
+// privileged_access_required；只有结论未知（传输/会话层错误）才上浮 error。
+func (s *Service) refreshPrivilegeForDeploy(ctx context.Context, srv Server) (Server, error) {
+	if hasPrivilege(srv) {
+		return srv, nil
+	}
+	if s.exec == nil {
+		return srv, panelerr.Validation("server_executor_unavailable", "Server connectivity test executor is unavailable")
+	}
+	mode, err := s.detectPrivilege(ctx, serverTarget(srv))
+	switch mode {
+	case sshx.PrivilegeModeRoot, sshx.PrivilegeModeSudo:
+		if recordErr := s.recordConnectivity(ctx, srv.ID, true, mode, false, ""); recordErr != nil {
+			return srv, recordErr
+		}
+		return s.Get(ctx, srv.ID)
+	case sshx.PrivilegeModeNone:
+		// 确定的 none 不可自愈，也不是探测失败；部署侧据此报 privileged_access_required。
+		return srv, nil
+	default:
+		// 空 mode 表示探测结论未知（瞬时失败），必须上浮原始错误。
+		return srv, err
+	}
 }
 
 // TrustHostKey explicitly replaces the recorded SSH host key for a server
@@ -710,8 +747,14 @@ func (s *Service) ProbeConnectivity(ctx context.Context, req SaveRequest) (Probe
 	}
 
 	mode, privilegeErr := s.detectPrivilege(probeCtx, target)
-	root := mode == sshx.PrivilegeModeRoot
-	passwordless := mode == sshx.PrivilegeModeSudo
+	// 探测结论未知（SSH-OPS-003）时按 none 展示，但不把未知当成“确定无特权”；
+	// 探测错误文本通过 PasswordlessSudoText 保留给界面提示。
+	displayMode := mode
+	if strings.TrimSpace(displayMode) == "" {
+		displayMode = sshx.PrivilegeModeNone
+	}
+	root := displayMode == sshx.PrivilegeModeRoot
+	passwordless := displayMode == sshx.PrivilegeModeSudo
 
 	architecture, architectureErr := s.detectArchitectureInfo(probeCtx, target)
 	if architectureErr != nil {
@@ -724,13 +767,13 @@ func (s *Service) ProbeConnectivity(ctx context.Context, req SaveRequest) (Probe
 		Reachable:        true,
 		PasswordlessSudo: passwordless,
 		Root:             root,
-		Privileged:       mode != sshx.PrivilegeModeNone,
-		PrivilegeMode:    mode,
+		Privileged:       displayMode != sshx.PrivilegeModeNone,
+		PrivilegeMode:    displayMode,
 		OS:               osInfo,
 		Architecture:     architecture,
 		Traits:           sysTraits,
 	}
-	if privilegeErr != nil && mode == sshx.PrivilegeModeNone {
+	if privilegeErr != nil && displayMode == sshx.PrivilegeModeNone {
 		result.PasswordlessSudoText = privilegeErr.Error()
 	}
 	if !osInfo.Supported {
@@ -847,8 +890,13 @@ func (s *Service) runInitialServerInfoCollection(ctx context.Context, task tasks
 	}
 	_ = s.tasks.Advance(ctx, taskID, "verifying", "checking privileged access")
 	mode, privilegeErr := s.detectPrivilege(ctx, target)
-	if privilegeErr != nil && mode == sshx.PrivilegeModeNone {
+	if privilegeErr != nil {
 		_ = s.tasks.AppendLog(ctx, taskID, "system", "privileged access unavailable: "+privilegeErr.Error())
+	}
+	if strings.TrimSpace(mode) == "" {
+		// 结论未知（瞬时探测失败）时本次按 none 展示：初始采集没有可保留的
+		// 既有特权结论，但也不能把失败当成“确定无特权”。
+		mode = sshx.PrivilegeModeNone
 	}
 	sysTraits := map[string]string{}
 	applyDistroSystemTraits(osInfo, sysTraits)
@@ -1696,20 +1744,34 @@ func serverTarget(srv Server) sshx.Target {
 	return Target(srv)
 }
 
+// detectPrivilege 探测目标节点的特权模式（SSH-OPS-003）：
+//   - id -u 成功且输出 0 -> root，不再探测 sudo；
+//   - id -u 成功且非 0 -> 用 sudo -n true 判定 passwordless_sudo；
+//   - sudo -n true 以“命令非零退出”（Code=remote_command_failed）失败 -> 确定的 none；
+//   - 其它任何执行错误都是“结论未知”，返回空 mode 和错误，绝不回落为 none，
+//     避免一次瞬时 SSH 失败把 root 节点永久降级。
 func (s *Service) detectPrivilege(ctx context.Context, target sshx.Target) (string, error) {
 	rootResult, rootErr := s.exec.Exec(ctx, target, sshx.CommandSpec{Command: "id -u", Timeout: connectivitySudoTimeout})
-	if rootErr == nil && strings.TrimSpace(rootResult.Stdout) == "0" {
+	if rootErr != nil {
+		return "", rootErr
+	}
+	if strings.TrimSpace(rootResult.Stdout) == "0" {
 		return sshx.PrivilegeModeRoot, nil
 	}
 	target.PrivilegeMode = sshx.PrivilegeModeSudo
 	sudoResult, sudoErr := s.exec.ExecSudo(ctx, target, sshx.CommandSpec{Command: "true", Timeout: connectivitySudoTimeout})
-	if sudoErr == nil && sudoResult.ExitCode == 0 {
-		return sshx.PrivilegeModeSudo, nil
+	if sudoErr == nil {
+		if sudoResult.ExitCode == 0 {
+			return sshx.PrivilegeModeSudo, nil
+		}
+		return sshx.PrivilegeModeNone, nil
 	}
-	if sudoErr != nil {
+	var panelErr *panelerr.Error
+	if errors.As(sudoErr, &panelErr) && panelErr.Code == "remote_command_failed" {
+		// sudo 存在但拒绝免密执行：这是确定的“无特权”结论。
 		return sshx.PrivilegeModeNone, sudoErr
 	}
-	return sshx.PrivilegeModeNone, rootErr
+	return "", sudoErr
 }
 
 func validateSave(req SaveRequest) error {
