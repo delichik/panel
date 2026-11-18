@@ -43,7 +43,7 @@ const columns = computed(() => [
   { key: 'select', label: '', width: 'w-10' },
   { key: 'name', label: t('common.name') },
   { key: 'installed', label: t('resourcesPage.installedVersion'), nowrap: true, width: 'w-40', hideBelow: 'wide' as const },
-  { key: 'candidate', label: t('resourcesPage.candidateVersion'), nowrap: true, width: 'w-40' },
+  { key: 'candidate', label: t('resourcesPage.candidateVersion'), nowrap: true, width: 'w-40', hideBelow: 'sm' as const },
 ]);
 
 function clearSelection() {

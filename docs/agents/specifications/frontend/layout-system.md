@@ -23,7 +23,8 @@ AppShell
 
 - 内容列（WinUI 页面几何）：所有页面统一用 `ConsolePage width="content"`（1200px）并在外壳内容区**水平居中**（`mx-auto`）；页头与页面正文同列；数据表格在内容列内部横向滚动。表单/编辑器靠内部栅格控制可读宽度，不得通过窄页面列制造跨页宽度差。`width="narrow"` 仅保留为未来聚焦型页面的可选 API，当前未使用。
 - padding owner：`ConsolePage` 根是唯一页面 padding owner（桌面 16、窄屏 <1024 为 12）；`PageHeader` 是无 padding 结构件，返回入口在标题上方独立行（保证 h1 与正文左缘对齐）；`EditorPage` footer 全出血、仅垂直间距；`RoutePageFallback` 使用与目标页相同的列宽/padding。
-- 登录/首次改密是独立聚焦面（居中卡片），是内容列左对齐规则的显式例外；维护页使用 1000 列左对齐。
+- 登录/首次改密是独立聚焦面（居中卡片），是内容列左对齐规则的显式例外；维护页使用 1200 列居中。
+- 移动端（<640px）：页面单列；PropertyList 强制 1 列；SettingsCard/FormField/ListCommandBar 纵向堆叠；PageHeader actions 纵向全宽；Dialog footer 2 列整行；表格列隐藏规则用 `hideBelow:'sm'` 再降级（<sm 仅名称+操作，状态/时间折入名称副行或隐藏）；操作仅保留详情+More；Tabs 横向滚动、不压缩标签。
 - 桌面 `>=1024px`：`h-dvh`、`overflow-hidden`，左侧导航固定，顶部条固定，路由内容区 `overflow-hidden`。
 - Mica 分层（WinUI 3）：页面底是服务器下发的用户背景（Mica 缩略图/预设渐变），AppShell 主区与侧栏用
   `--panel-layer`（`bg-layer`）透出背景，卡片/表格用 `--panel-card` + `border-card-stroke`；页面根**不得**

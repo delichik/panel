@@ -39,9 +39,10 @@ describe('applications narrow columns', () => {
     const block = sourceBlock('const applicationColumns', 'const logsApplication');
     expect(columnLine(block, 'instances')).toContain("hideBelow: 'lg'");
     expect(columnLine(block, 'updatedAt')).toContain("hideBelow: 'wide'");
-    // 名称/状态/操作始终保留。
+    // 移动端（<sm）连状态列也收进名称副行。
+    expect(columnLine(block, 'status')).toContain("hideBelow: 'sm'");
+    // 名称/操作始终保留。
     expect(columnLine(block, 'name')).not.toContain('hideBelow');
-    expect(columnLine(block, 'status')).not.toContain('hideBelow');
     expect(columnLine(block, 'actions')).not.toContain('hideBelow');
   });
 

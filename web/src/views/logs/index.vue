@@ -61,11 +61,11 @@ const levelOptions = computed(() => [
 ]);
 /**
  * 列精简（4 列）：时间列合并级别徽标（时间主行、级别副行）；eventId 在 <wide
- * 隐藏（详情 Dialog 仍可看完整 eventId），窄屏只保留时间+级别、msg、操作；
- * msg 保留结构化错误与原文多行；操作列固定宽度。
+ * 隐藏（详情 Dialog 仍可看完整 eventId）；时间列在 <sm 再隐藏，手机只保留 msg
+ * 与操作；msg 保留结构化错误与原文多行；操作列固定宽度。
  */
 const columns = computed(() => [
-  { key: 'ts', label: t('logsPage.time'), width: 'w-40', nowrap: true },
+  { key: 'ts', label: t('logsPage.time'), width: 'w-40', nowrap: true, hideBelow: 'sm' as const },
   { key: 'eventId', label: t('logsPage.eventId'), width: 'w-40', nowrap: true, hideBelow: 'wide' as const },
   { key: 'msg', label: t('logsPage.message') },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, width: 'w-28', nowrap: true },
@@ -248,7 +248,7 @@ onBeforeUnmount(() => {
               />
             </template>
             <template #filters>
-              <Select class="w-44" :model-value="read('level')" :options="levelOptions" :aria-label="t('activity.level')" @update:model-value="changeFilter('level', $event)" />
+              <Select class="w-44 max-sm:w-full" :model-value="read('level')" :options="levelOptions" :aria-label="t('activity.level')" @update:model-value="changeFilter('level', $event)" />
             </template>
           </ListCommandBar>
           <div v-if="eventMeta" class="truncate text-caption text-muted-foreground">
@@ -352,14 +352,17 @@ onBeforeUnmount(() => {
       @update:open="value => { if (!value) closeLine(); }"
     >
       <template #footer>
-        <Button variant="secondary" @click="closeLine">{{ t('common.close') }}</Button>
-        <Button
-          v-if="selectedLine && (selectedLine.eventId || eventId)"
-          variant="primary"
-          @click="filterByEvent(String(selectedLine.eventId || eventId)); closeLine()"
-        >
-          {{ t('eventsPage.viewLogs') }}
-        </Button>
+        <div class="flex w-full flex-col gap-2 sm:flex-row sm:justify-end">
+          <Button class="max-sm:w-full" variant="secondary" @click="closeLine">{{ t('common.close') }}</Button>
+          <Button
+            v-if="selectedLine && (selectedLine.eventId || eventId)"
+            class="max-sm:w-full"
+            variant="primary"
+            @click="filterByEvent(String(selectedLine.eventId || eventId)); closeLine()"
+          >
+            {{ t('eventsPage.viewLogs') }}
+          </Button>
+        </div>
       </template>
 
       <div v-if="selectedLine" class="-mx-4">

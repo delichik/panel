@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { flushPromises, mount, enableAutoUnmount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryHistory, createRouter } from 'vue-router';
@@ -310,5 +312,22 @@ describe('overview status page', () => {
 
     expect(wrapper.text()).toContain('No servers connected');
     expect(wrapper.text()).toContain('Add');
+  });
+});
+
+describe('overview mobile layout contract', () => {
+  const pageSource = readFileSync(resolve(__dirname, './index.vue'), 'utf8');
+  const cardSource = readFileSync(resolve(__dirname, './ServerCard.vue'), 'utf8');
+
+  it('collapses summaries and server cards to one column below sm', () => {
+    // 应用摘要主指标 <sm 单列；服务器卡内的指标对 <sm 纵向单列（不压缩标签）。
+    expect(pageSource).toContain('grid grid-cols-1 gap-2 sm:grid-cols-4');
+    expect(cardSource).toContain('max-sm:grid-cols-1');
+    expect(cardSource).toContain('gap-x-4 gap-y-2 max-sm:grid-cols-1');
+  });
+
+  it('lets the probe selector and refresh action wrap full width on phones', () => {
+    expect(pageSource).toContain('min-w-0 flex-1 sm:min-w-36 sm:flex-none');
+    expect(pageSource).toContain('max-sm:w-full');
   });
 });

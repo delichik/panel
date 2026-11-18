@@ -45,7 +45,6 @@ import DetailSection from '@/components/patterns/DetailSection.vue';
 import FormField from '@/components/patterns/FormField.vue';
 import InfoBar from '@/components/patterns/InfoBar.vue';
 import ListCommandBar from '@/components/patterns/ListCommandBar.vue';
-import PropertyList from '@/components/patterns/PropertyList.vue';
 import TableDetailName from '@/components/patterns/TableDetailName.vue';
 import type { AssetFileAdapter, AssetFileItem } from '@/components/patterns/assetFileManager';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
@@ -71,8 +70,6 @@ import {
   cloneProxyPath,
   cloneProxyRules,
   defaultRouteOptions,
-  diffApplications,
-  diffFacilityRecord,
   draftFromApplication,
   facilityRecordDraftFromRecord,
   hasBlockingDiagnostic,
@@ -265,6 +262,12 @@ const editSession = ref<ApplicationEditSession | null>(null);
 const facilitySession = ref<FacilityEditSession | null>(null);
 const facilityPreview = ref<FacilityEditPreviewResult | null>(null);
 const facilityDiagnostics = ref<Diagnostic[]>([]);
+/**
+ * 保存失败（preview 返回 blocking diagnostics）时的检查结果弹窗：复用共享 Dialog +
+ * ApplicationDiagnosticsList；关闭后停留编辑器，不再在右侧常驻摘要/检查面板。
+ */
+const editorDiagnosticsOpen = ref(false);
+const editorDiagnostics = computed(() => (isFacilityEditor.value ? facilityDiagnostics.value : diagnostics.value));
 const appLocalAssets = reactive<LocalAssetState>(emptyLocalAssetState());
 const facilityLocalAssets = reactive<LocalAssetState>(emptyLocalAssetState());
 const editorReady = ref(false);
@@ -329,7 +332,6 @@ const facilityBreadcrumbs = computed(() => facilityTrail(
 ));
 const appDraft = reactive<ApplicationDraftUi>(draftFromApplication());
 const appErrors = computed(() => validateApplicationDraft(appDraft));
-const appDiff = computed(() => diffApplications(mode.value === 'edit' ? currentApplication.value : null, appDraft));
 const appRows = computed(() => applications.value.map((app) => ({
   app,
   routes: routeSummary(applicationDetails.value[app.id] ?? emptyApplication()),
@@ -348,7 +350,8 @@ const applicationListState = computed<'ready' | 'loading' | 'error' | 'empty'>((
 const detailOpen = computed(() => Boolean(selectedId.value));
 const applicationColumns = computed(() => [
   { key: 'name', label: t('common.name') },
-  { key: 'status', label: t('common.status') },
+  // 移动端（<sm）只保留名称+操作：状态/实例折入名称副行（见 #name 的 sm:hidden 行）。
+  { key: 'status', label: t('common.status'), hideBelow: 'sm' as const },
   // 次级列按优先级在窄屏隐藏：实例摘要 <lg 隐藏，更新时间仅 >=wide(1239) 显示。
   { key: 'instances', label: t('applicationsPage.nodeHealthColumn'), hideBelow: 'lg' as const },
   { key: 'updatedAt', label: t('applicationsPage.updatedAtColumn'), hideBelow: 'wide' as const },
@@ -572,7 +575,6 @@ const facilityRecordErrors = computed(() => {
   }
   return errors;
 });
-const facilityRecordDiff = computed(() => diffFacilityRecord(facilityRecord.value?.domain ?? null, facilityRecordDraft));
 const facilityRecordRelayServers = computed(() => {
   const origins = new Set(facilityRecordDraft.originServerIds);
   return facilityGatewayServers.value.filter((item) => !origins.has(item.id));
@@ -1725,7 +1727,7 @@ async function commitApplication() {
       preview.value = await applicationsApi.previewEditSession(editSession.value.id, editSession.value.revision);
       diagnostics.value = preview.value.diagnostics ?? [];
       if (hasBlockingDiagnostic(diagnostics.value)) {
-        notify.push({ title: t('applicationsPage.validationFound'), tone: 'warning' });
+        editorDiagnosticsOpen.value = true;
         return;
       }
       const result = await applicationsApi.commitEditSession(editSession.value, preview.value);
@@ -2045,7 +2047,7 @@ async function commitFacilityRecord() {
     );
     facilityDiagnostics.value = facilityPreview.value.diagnostics ?? [];
     if (hasBlockingDiagnostic(facilityDiagnostics.value)) {
-      notify.push({ title: t('applicationsPage.validationFound'), tone: 'warning' });
+      editorDiagnosticsOpen.value = true;
       return;
     }
     const result = await reverseProxyFacilityApi.commitEdit(facilitySession.value, facilityPreview.value);
@@ -2497,10 +2499,6 @@ function openFacilityTasks() {
   void router.push({ path: '/events', query: { resourceType: 'facility_app', resourceId: facilityKind.value } });
 }
 
-function sourceSummary() {
-  return appDraft.image || t('common.notAvailable');
-}
-
 function pathTarget(path: FacilityRoutePath) {
   if (path.ruleType === 'redirect') return path.redirectUrl || t('common.notAvailable');
   if (path.ruleType === 'proxy_pass') return path.proxyUrl || t('common.notAvailable');
@@ -2631,7 +2629,7 @@ onBeforeUnmount(() => {
           >
             <template #name="{ row }">
               <div class="grid min-w-0 gap-0.5">
-                <TableDetailName class="max-w-72" :name="row.app.name" :label="t('common.openDetails', { name: row.app.name })" @click="openApplicationDetail(row.app)" />
+                <TableDetailName class="max-w-44 sm:max-w-72" :name="row.app.name" :label="t('common.openDetails', { name: row.app.name })" @click="openApplicationDetail(row.app)" />
                 <!-- 副行合并 namespace + image reference：列表不再单列 image，避免重复信息列。 -->
                 <span class="flex min-w-0 items-center gap-1 text-caption text-muted-foreground">
                   <span v-if="row.app.namespace" class="shrink-0">{{ row.app.namespace }}</span>
@@ -2639,6 +2637,16 @@ onBeforeUnmount(() => {
                   <span v-if="!loading && !(rowImageLoading[row.app.id] && !rowImageReference(row.app))" class="min-w-0 truncate">{{ rowImageReference(row.app) || t('common.notAvailable') }}</span>
                   <span v-else class="motion-skeleton h-3 w-32 rounded bg-muted animate-pulse" aria-hidden="true" />
                 </span>
+                <!-- <sm：状态/实例列被隐藏，折入名称副行的紧凑摘要，避免移动端丢信息。 -->
+                <div class="flex flex-wrap items-center gap-1 sm:hidden">
+                  <StatusBadge :status="applicationStatus(row.app)" :tone="statusTone(applicationStatus(row.app))" :label="t(`applicationsPage.status.${applicationStatus(row.app)}`)" />
+                  <template v-if="row.counts.healthy || row.counts.abnormal || row.counts.deploying">
+                    <Badge v-if="row.counts.healthy > 0" tone="success">{{ t('applicationsPage.nodeBucket.healthy', { count: row.counts.healthy }) }}</Badge>
+                    <Badge v-if="row.counts.abnormal > 0" tone="danger">{{ t('applicationsPage.nodeBucket.abnormal', { count: row.counts.abnormal }) }}</Badge>
+                    <Badge v-if="row.counts.deploying > 0" tone="warning">{{ t('applicationsPage.nodeBucket.deploying', { count: row.counts.deploying }) }}</Badge>
+                  </template>
+                  <Badge v-else-if="row.app.imageUpdateAvailable" tone="warning">{{ t('applicationsPage.imageUpdate') }}</Badge>
+                </div>
               </div>
             </template>
             <template #status="{ row }">
@@ -2830,11 +2838,10 @@ onBeforeUnmount(() => {
         </div>
 
         <!--
-          Two-column editor geometry: only at >=1280px (xl) is the 320px summary column beside the
-          main column. 1024–1279px stays single-column with the summary below, because at 1024px
-          the shell content area is ~928px wide: 928 − 320 − 16 = 592px main column (>=560 minimum).
+          编辑器主区单列全宽（不再保留右侧摘要/检查结果栏）：保存前检查仍在内部 preview 阶段完成，
+          仅当出现 blocking diagnostics 时用共享 Dialog 展示检查结果。
         -->
-        <div v-if="editorReady" class="relative grid min-w-0 content-start gap-4 xl:grid-cols-[minmax(0,1fr)_320px] xl:items-start">
+        <div v-if="editorReady" class="relative grid min-w-0 content-start gap-4">
           <LoadingOverlay v-if="saving" :label="t(`applicationsPage.saveStage.${saveStage}`)" />
           <div class="grid min-w-0 content-start gap-4">
             <p class="m-0 text-caption text-muted-foreground">{{ t('applicationsPage.facilityRecordEditorFlowHint') }}</p>
@@ -2917,26 +2924,6 @@ onBeforeUnmount(() => {
             </DetailSection>
           </div>
 
-          <aside class="grid min-w-0 content-start gap-4 xl:sticky xl:top-0">
-            <DetailSection :title="t('applicationsPage.facilityRecordSummary')" :description="t('applicationsPage.facilityRecordSummaryHint')">
-              <div class="grid gap-3 p-4">
-                <PropertyList
-                  :columns="1"
-                  :items="[
-                    { label: t('applicationsPage.facilityRecordVersion'), value: facilityRecord ? facilityRecord.version : t('applicationsPage.facilityRecordNewVersion') },
-                    { label: t('applicationsPage.facilityRecordPaths'), value: facilityRecordDraft.paths.length },
-                    { label: t('applicationsPage.previewAdded'), value: facilityRecordDiff.added },
-                    { label: t('applicationsPage.previewChanged'), value: facilityRecordDiff.changed },
-                    { label: t('applicationsPage.previewRemoved'), value: facilityRecordDiff.removed },
-                  ]"
-                />
-                <Badge :tone="editorDirty ? 'warning' : 'success'">{{ editorDirty ? t('applicationsPage.dirty') : t('applicationsPage.clean') }}</Badge>
-              </div>
-            </DetailSection>
-            <DetailSection :title="t('applicationsPage.diagnostics')">
-              <ApplicationDiagnosticsList :items="facilityDiagnostics" />
-            </DetailSection>
-          </aside>
         </div>
 
         <!-- 资产/代码编辑器全宽：不放进 xl 双列的窄主列，避免 YAML/模板被压窄。 -->
@@ -2948,11 +2935,11 @@ onBeforeUnmount(() => {
         </div>
 
         <template #footer>
-          <div class="flex flex-wrap items-center justify-between gap-3">
+          <div class="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
             <div class="text-caption text-muted-foreground">{{ editorDirty ? t('applicationsPage.unsavedChanges') : t('applicationsPage.readyToCommit') }}</div>
-            <div class="flex flex-wrap gap-2">
-              <Button variant="secondary" :disabled="saving" @click="cancelFacilityRecordEdit">{{ t('common.cancel') }}</Button>
-              <Button variant="primary" :loading="pending === 'commit'" :disabled="!editorReady || saving || !editorDirty" @click="commitFacilityRecord"><Save />{{ t('applicationsPage.facilityRecordSave') }}</Button>
+            <div class="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+              <Button variant="secondary" class="w-full sm:w-auto" :disabled="saving" @click="cancelFacilityRecordEdit">{{ t('common.cancel') }}</Button>
+              <Button variant="primary" class="w-full sm:w-auto" :loading="pending === 'commit'" :disabled="!editorReady || saving || !editorDirty" @click="commitFacilityRecord"><Save />{{ t('applicationsPage.facilityRecordSave') }}</Button>
             </div>
           </div>
         </template>
@@ -3121,8 +3108,8 @@ onBeforeUnmount(() => {
         </InfoBar>
       </div>
 
-      <!-- 同设施记录编辑器：xl 才双列 + sticky，1024–1279 摘要下移为单列。 -->
-      <div v-if="editorReady" class="relative grid min-w-0 content-start gap-4 xl:grid-cols-[minmax(0,1fr)_320px] xl:items-start">
+      <!-- 同设施记录编辑器：主区单列全宽；检查结果只在保存失败时弹窗展示。 -->
+      <div v-if="editorReady" class="relative grid min-w-0 content-start gap-4">
         <LoadingOverlay v-if="saving" :label="t(`applicationsPage.saveStage.${saveStage}`)" />
         <div class="grid min-w-0 content-start gap-4">
           <p class="m-0 text-caption text-muted-foreground">{{ t('applicationsPage.editorFlowHint') }}</p>
@@ -3255,27 +3242,7 @@ onBeforeUnmount(() => {
           </DetailSection>
         </div>
 
-        <aside class="grid min-w-0 content-start gap-4 xl:sticky xl:top-0">
-          <DetailSection :title="isCreateMode ? t('applicationsPage.createSummary') : t('applicationsPage.changeSummary')">
-            <div class="grid gap-3 p-4">
-              <PropertyList
-                :columns="1"
-                :items="[
-                  { label: t('applicationsPage.configuration'), value: sourceSummary() },
-                  { label: t('applicationsPage.routes'), value: appDraft.reverseProxy.length },
-                  { label: t('applicationsPage.mounts'), value: appDraft.mounts.length },
-                  { label: t('applicationsPage.previewAdded'), value: appDiff.added },
-                  { label: t('applicationsPage.previewChanged'), value: appDiff.changed },
-                ]"
-              />
-              <Badge :tone="editorDirty ? 'warning' : 'success'">{{ editorDirty ? t('applicationsPage.dirty') : t('applicationsPage.clean') }}</Badge>
-            </div>
-          </DetailSection>
-          <DetailSection :title="t('applicationsPage.diagnostics')">
-            <ApplicationDiagnosticsList :items="diagnostics" />
-          </DetailSection>
-        </aside>
-      </div>
+        </div>
 
       <!-- 资产/代码编辑器全宽：不放进 xl 双列的窄主列，避免 YAML/模板被压窄。 -->
       <div class="mt-4 surface-card p-4">
@@ -3287,16 +3254,30 @@ onBeforeUnmount(() => {
       </div>
 
       <template #footer>
-        <div class="flex flex-wrap items-center justify-between gap-3">
+        <div class="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
           <div class="text-caption text-muted-foreground">{{ editorDirty ? t('applicationsPage.unsavedChanges') : t('applicationsPage.readyToCommit') }}</div>
-          <div class="flex flex-wrap gap-2">
-            <Button variant="secondary" :disabled="saving" @click="leaveApplicationEditor">{{ t('common.cancel') }}</Button>
-            <Button variant="primary" :loading="pending === 'commit'" :disabled="!editorReady || saving" @click="commitApplication()"><Save />{{ t('applicationsPage.commit') }}</Button>
+          <div class="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+            <Button variant="secondary" class="w-full sm:w-auto" :disabled="saving" @click="leaveApplicationEditor">{{ t('common.cancel') }}</Button>
+            <Button variant="primary" class="w-full sm:w-auto" :loading="pending === 'commit'" :disabled="!editorReady || saving" @click="commitApplication()"><Save />{{ t('applicationsPage.commit') }}</Button>
           </div>
         </div>
       </template>
     </EditorPage>
   </ConsolePage>
+
+  <!-- 保存失败（preview 返回 blocking diagnostics）时的检查结果；关闭后停留编辑器。 -->
+  <Dialog
+    :open="editorDiagnosticsOpen"
+    :title="t('applicationsPage.diagnostics')"
+    :description="t('applicationsPage.validationFoundDialog')"
+    :close-label="t('common.close')"
+    @update:open="(open: boolean) => { if (!open) editorDiagnosticsOpen = false }"
+  >
+    <ApplicationDiagnosticsList :items="editorDiagnostics" />
+    <template #footer>
+      <Button variant="primary" class="w-full sm:w-auto" @click="editorDiagnosticsOpen = false">{{ t('common.close') }}</Button>
+    </template>
+  </Dialog>
 
   <ApplicationLogsDialog v-model:open="logsOpen" :application-id="logsApplication?.id ?? ''" :application-name="logsApplication?.name ?? ''" />
 
@@ -3562,13 +3543,15 @@ onBeforeUnmount(() => {
       </div>
     </div>
     <template #footer>
-      <Button variant="secondary" @click="cancelDialog">{{ t('common.cancel') }}</Button>
-      <Button v-if="dialogKind === 'env'" variant="primary" @click="saveRowDialog">{{ t('common.save') }}</Button>
-      <Button v-else-if="dialogKind === 'port'" variant="primary" @click="savePortDialog">{{ t('common.save') }}</Button>
-      <Button v-else-if="dialogKind === 'mount'" variant="primary" @click="saveMountDialog">{{ t('common.save') }}</Button>
-      <Button v-else-if="dialogKind === 'proxy'" variant="primary" @click="saveProxyDialog">{{ t('common.save') }}</Button>
-      <Button v-else-if="dialogKind === 'proxyPath'" variant="primary" @click="saveProxyPathDialog">{{ t('common.save') }}</Button>
-      <Button v-else-if="dialogKind === 'facilityPath'" variant="primary" @click="saveFacilityPathDialog">{{ t('common.save') }}</Button>
+      <div class="grid w-full grid-cols-1 gap-2 sm:flex sm:flex-wrap sm:justify-end">
+        <Button variant="secondary" class="w-full sm:w-auto" @click="cancelDialog">{{ t('common.cancel') }}</Button>
+        <Button v-if="dialogKind === 'env'" variant="primary" class="w-full sm:w-auto" @click="saveRowDialog">{{ t('common.save') }}</Button>
+        <Button v-else-if="dialogKind === 'port'" variant="primary" class="w-full sm:w-auto" @click="savePortDialog">{{ t('common.save') }}</Button>
+        <Button v-else-if="dialogKind === 'mount'" variant="primary" class="w-full sm:w-auto" @click="saveMountDialog">{{ t('common.save') }}</Button>
+        <Button v-else-if="dialogKind === 'proxy'" variant="primary" class="w-full sm:w-auto" @click="saveProxyDialog">{{ t('common.save') }}</Button>
+        <Button v-else-if="dialogKind === 'proxyPath'" variant="primary" class="w-full sm:w-auto" @click="saveProxyPathDialog">{{ t('common.save') }}</Button>
+        <Button v-else-if="dialogKind === 'facilityPath'" variant="primary" class="w-full sm:w-auto" @click="saveFacilityPathDialog">{{ t('common.save') }}</Button>
+      </div>
     </template>
   </Dialog>
 

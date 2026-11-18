@@ -355,6 +355,9 @@ describe('AppShell WinUI title bar and page surface', () => {
     const header = wrapper.get('header');
     expect(header.classes()).toContain('lg:col-span-2');
     expect(header.classes()).toContain('bg-layer');
+    // Narrow screens keep the sticky, opaque title bar.
+    expect(header.classes()).toContain('max-lg:sticky');
+    expect(header.classes()).toContain('max-lg:bg-popover');
     // main is the landmark for routed content only — no header inside it.
     expect(wrapper.find('main header').exists()).toBe(false);
     const main = wrapper.get('main#main-content');
@@ -363,6 +366,41 @@ describe('AppShell WinUI title bar and page surface', () => {
     const skip = wrapper.get('a[href="#main-content"]');
     expect(skip.text()).toBe('Skip to main content');
     expect(skip.classes()).toContain('focus:ring-2');
+  });
+
+  it('keeps the phone title bar to the app identity + global commands', async () => {
+    const { wrapper } = await mountShell();
+    const header = wrapper.get('header');
+
+    // Phone compression: tighter gaps/padding, app identity truncates, command
+    // strip never shrinks below its icon buttons.
+    expect(header.classes()).toContain('max-sm:gap-2');
+    expect(header.classes()).toContain('max-sm:px-2');
+    const identity = header.get('div:first-child');
+    expect(identity.classes()).toContain('min-w-0');
+    expect(identity.classes()).toContain('flex-1');
+    expect(header.get('strong').classes()).toContain('truncate');
+    const commands = header.get('div:last-child');
+    expect(commands.classes()).toContain('shrink-0');
+    // The page route title is not duplicated in the title bar; global commands stay.
+    expect(header.find('[aria-live]').exists()).toBe(false);
+    expect(header.find('button[aria-label="Appearance"]').exists()).toBe(true);
+    expect(header.find('button[aria-label="Account"]').exists()).toBe(true);
+    // The appearance trigger collapses to its icon on phones.
+    expect(header.get('button[aria-label="Appearance"] span').classes()).toContain('max-sm:hidden');
+  });
+
+  it('does not repeat the brand row inside the mobile drawer', async () => {
+    const { wrapper } = await mountShell();
+    await wrapper.get('button[aria-label="Open navigation"]').trigger('click');
+    await flushPromises();
+
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    const drawerHeader = dialog.firstElementChild as HTMLElement;
+    expect(drawerHeader.className).toContain('h-shell-header');
+    expect(drawerHeader.className).toContain('justify-end');
+    expect(drawerHeader.querySelector('strong')).toBeNull();
+    expect(drawerHeader.querySelector('button[aria-label="Close"]')).not.toBeNull();
   });
 
   it('keeps one page instance while routes share a pageKey (settings sections)', async () => {

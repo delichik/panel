@@ -94,7 +94,7 @@ const metricsModeLabel = computed(() => {
           </div>
         </div>
 
-        <div class="grid grid-cols-3 gap-3 border-t border-divider pt-3">
+        <div class="grid grid-cols-1 gap-3 border-t border-divider pt-3 sm:grid-cols-3">
           <template v-if="item.kind === 'storage-share'">
             <FacilityStat :loading="loading" :value="storageShareConfig?.partitions.length" :label="t('applicationsPage.storageSharePartitions')" />
             <FacilityStat :loading="loading" :value="storageShareConfig?.servers.length" :label="t('applicationsPage.storageShareServers')" />

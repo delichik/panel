@@ -12,6 +12,10 @@ import { navGroups } from './navModel';
  * accent never tints the label itself. Compact mode (48px pane) keeps 40x40
  * icon targets and the same indicator, with labels sr-only. Feedback is
  * fill-only (hover 167ms / press 83ms); no lift or scale.
+ *
+ * Mobile drawer: rows keep the 44px touch height, labels truncate inside the
+ * item column and the list never scrolls horizontally (no sideways drift at
+ * 360–430px).
  */
 withDefaults(defineProps<{
   /** Nav item key that should read as the current location. */
@@ -33,7 +37,7 @@ function warmTarget(path: string) {
 </script>
 
 <template>
-  <nav class="min-h-0 flex-1 overflow-auto py-2" :class="collapsed ? 'px-1' : 'px-2'" :aria-label="label">
+  <nav class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden py-2" :class="collapsed ? 'px-1' : 'px-2'" :aria-label="label">
     <section v-for="(group, groupIndex) in navGroups" :key="group.key" :class="collapsed ? 'mb-1.5 last:mb-0' : 'mb-2 last:mb-0'">
       <div v-if="collapsed && groupIndex > 0" class="mx-2 my-1.5 h-px bg-divider" aria-hidden="true" />
       <span v-if="collapsed" class="sr-only">{{ t(group.titleKey) }}</span>
@@ -48,7 +52,7 @@ function warmTarget(path: string) {
         :to="item.to"
         :title="collapsed ? t(item.titleKey) : undefined"
         :aria-current="activeKey === item.key ? 'page' : undefined"
-        class="nav-item group relative flex items-center rounded-control text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+        class="nav-item group relative flex min-w-0 items-center rounded-control text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
         :class="[
           activeKey === item.key
             ? 'bg-control text-foreground hover:bg-hover active:bg-pressed'
@@ -67,7 +71,7 @@ function warmTarget(path: string) {
         />
         <component :is="item.icon" class="size-4 shrink-0" aria-hidden="true" />
         <span v-if="collapsed" class="sr-only">{{ t(item.titleKey) }}</span>
-        <span v-else class="min-w-0 flex-1 overflow-hidden truncate">{{ t(item.titleKey) }}</span>
+        <span v-else class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{{ t(item.titleKey) }}</span>
       </RouterLink>
     </section>
   </nav>

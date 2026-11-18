@@ -248,19 +248,19 @@ const assetImportMaterialTabs = computed(() => [
 ]);
 const domainColumns = computed(() => [
   { key: 'name', label: t('common.name'), width: 'w-72' },
-  { key: 'status', label: t('common.status'), nowrap: true },
+  { key: 'status', label: t('common.status'), nowrap: true, hideBelow: 'sm' as const },
   { key: 'expiresAt', label: t('certificatesPage.expiresAt'), nowrap: true, width: 'w-36', hideBelow: 'wide' as const },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
 ]);
 const selfColumns = computed(() => [
   { key: 'name', label: t('common.name'), width: 'w-72' },
-  { key: 'kind', label: t('common.type'), nowrap: true },
+  { key: 'kind', label: t('common.type'), nowrap: true, hideBelow: 'sm' as const },
   { key: 'expiresAt', label: t('certificatesPage.expiresAt'), nowrap: true, width: 'w-36', hideBelow: 'wide' as const },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
 ]);
 const assetColumns = computed(() => [
   { key: 'name', label: t('common.name'), width: 'w-72' },
-  { key: 'type', label: t('common.type'), nowrap: true },
+  { key: 'type', label: t('common.type'), nowrap: true, hideBelow: 'sm' as const },
   { key: 'expiresAt', label: t('certificatesPage.expiresAt'), nowrap: true, width: 'w-36', hideBelow: 'wide' as const },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
 ]);
@@ -795,7 +795,7 @@ function onFileChange(value: File | File[]) {
     <template #list>
       <ConsolePage width="content" :title="title" :description="description">
         <Tabs
-          class="h-full min-h-0"
+          class="h-full min-h-0 [&_[role=tab]]:shrink-0 [&_[role=tab]]:whitespace-nowrap"
           :model-value="mode"
           :tabs="modeTabs"
           keep-panels
@@ -808,6 +808,7 @@ function onFileChange(value: File | File[]) {
                   <SearchInput v-model="search" clearable :label="t('common.search')" :placeholder="t('certificatesPage.searchPlaceholder')" :clear-label="t('common.clearSearch')" />
                 </template>
                 <template #actions>
+                  <div class="flex w-full flex-nowrap items-center gap-2 overflow-x-auto sm:w-auto sm:flex-wrap sm:justify-end">
                   <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
                   <template v-if="mode === 'domains'">
                     <Button size="sm" variant="primary" @click="openIssue"><Plus />{{ t('certificatesPage.issue') }}</Button>
@@ -826,6 +827,7 @@ function onFileChange(value: File | File[]) {
                       <DropdownItem @click="openBatchImport"><FileArchive />{{ t('certificatesPage.batchImport') }}</DropdownItem>
                     </Dropdown>
                   </template>
+                  </div>
                 </template>
               </ListCommandBar>
             </template>
@@ -1094,7 +1096,9 @@ function onFileChange(value: File | File[]) {
         <div class="flex flex-wrap gap-2"><Badge v-for="domain in issueCoverage" :key="domain" tone="info">{{ domain }}</Badge></div>
       </InfoBar>
     </div>
-    <template #footer><Button @click="dialog = ''">{{ t('common.cancel') }}</Button><Button variant="primary" :loading="saving" :disabled="!issueFormValid" @click="issueCertificate">{{ editingCertificateId ? t('certificatesPage.adjustReissue') : t('certificatesPage.issue') }}</Button></template>
+    <template #footer>
+      <div class="flex w-full flex-col-reverse gap-2 sm:flex-row sm:justify-end"><Button @click="dialog = ''">{{ t('common.cancel') }}</Button><Button variant="primary" :loading="saving" :disabled="!issueFormValid" @click="issueCertificate">{{ editingCertificateId ? t('certificatesPage.adjustReissue') : t('certificatesPage.issue') }}</Button></div>
+    </template>
   </Dialog>
 
   <Dialog :open="dialog === 'self-ca' || dialog === 'self-leaf'" :title="dialog === 'self-ca' ? t('certificatesPage.generateCa') : t('certificatesPage.generateLeaf')" :close-label="t('common.close')" @update:open="(open: boolean) => { if (!open) dialog = '' }">
@@ -1145,7 +1149,9 @@ function onFileChange(value: File | File[]) {
         </template>
       </FormField>
     </div>
-    <template #footer><Button @click="dialog = ''">{{ t('common.cancel') }}</Button><Button variant="primary" :loading="saving" :disabled="!selfFormValid" @click="saveSelf">{{ t('common.create') }}</Button></template>
+    <template #footer>
+      <div class="flex w-full flex-col-reverse gap-2 sm:flex-row sm:justify-end"><Button @click="dialog = ''">{{ t('common.cancel') }}</Button><Button variant="primary" :loading="saving" :disabled="!selfFormValid" @click="saveSelf">{{ t('common.create') }}</Button></div>
+    </template>
   </Dialog>
 
   <Dialog :open="dialog.startsWith('asset-') && !['asset-export','asset-preflight'].includes(dialog)" :size="dialog === 'asset-import' ? 'large' : 'default'" :title="t('certificatesPage.assetForm')" :close-label="t('common.close')" @update:open="(open: boolean) => { if (!open) dialog = '' }">
@@ -1215,7 +1221,9 @@ function onFileChange(value: File | File[]) {
         </div>
       </FormField>
     </div>
-    <template #footer><Button @click="dialog = ''">{{ t('common.cancel') }}</Button><Button variant="primary" :loading="saving" :disabled="!assetFormValid" @click="saveAsset">{{ t('common.save') }}</Button></template>
+    <template #footer>
+      <div class="flex w-full flex-col-reverse gap-2 sm:flex-row sm:justify-end"><Button @click="dialog = ''">{{ t('common.cancel') }}</Button><Button variant="primary" :loading="saving" :disabled="!assetFormValid" @click="saveAsset">{{ t('common.save') }}</Button></div>
+    </template>
   </Dialog>
 
   <Dialog :open="dialog === 'asset-export'" :title="t('certificatesPage.exportAsset')" :close-label="t('common.close')" @update:open="(open: boolean) => { if (!open) dialog = '' }">
@@ -1226,7 +1234,9 @@ function onFileChange(value: File | File[]) {
         </template>
       </FormField>
     </div>
-    <template #footer><Button @click="dialog = ''">{{ t('common.cancel') }}</Button><Button :loading="saving" :disabled="!assetForm.password" @click="createExport">{{ t('certificatesPage.exportAsset') }}</Button></template>
+    <template #footer>
+      <div class="flex w-full flex-col-reverse gap-2 sm:flex-row sm:justify-end"><Button @click="dialog = ''">{{ t('common.cancel') }}</Button><Button :loading="saving" :disabled="!assetForm.password" @click="createExport">{{ t('certificatesPage.exportAsset') }}</Button></div>
+    </template>
   </Dialog>
 
   <Dialog :open="dialog === 'asset-preflight'" :title="t('certificatesPage.batchImport')" :description="t('certificatesPage.batchImportHint')" :close-label="t('common.close')" @update:open="(open: boolean) => { if (!open) dialog = '' }">
@@ -1244,9 +1254,11 @@ function onFileChange(value: File | File[]) {
       <InfoBar v-if="importPlan && !importPlan.requiresDangerConfirm" tone="info">{{ t('certificatesPage.importReady') }}</InfoBar>
     </div>
     <template #footer>
+      <div class="flex w-full flex-col-reverse gap-2 sm:flex-row sm:justify-end">
       <Button @click="dialog = ''">{{ t('common.cancel') }}</Button>
       <Button v-if="importPlan && !importPlan.requiresDangerConfirm" variant="primary" :loading="saving" @click="executeImport(false)">{{ t('certificatesPage.executeImport') }}</Button>
       <Button v-if="importPlan && importPlan.requiresDangerConfirm" variant="danger" :loading="saving" @click="importConfirmOpen = true">{{ t('certificatesPage.executeImport') }}</Button>
+    </div>
     </template>
   </Dialog>
 

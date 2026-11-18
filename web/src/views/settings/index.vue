@@ -859,7 +859,7 @@ onBeforeUnmount(() => {
       分区 actions 只承载 AutoSaveStatus 与保留的动作按钮。
     -->
     <Tabs
-      class="h-full min-h-0 w-full"
+      class="h-full min-h-0 w-full [&_[role=tab]]:shrink-0 [&_[role=tab]]:whitespace-nowrap"
       :model-value="activeSection"
       :tabs="sectionTabs"
       keep-panels
@@ -1338,7 +1338,7 @@ onBeforeUnmount(() => {
               </SettingsCard>
 
               <template #footer>
-                <Button variant="primary" :disabled="Boolean(form.exportEncrypt && !form.exportPassword.trim())" :loading="pending === 'export'" @click="openConfirm('export')">
+                <Button class="max-sm:w-full" variant="primary" :disabled="Boolean(form.exportEncrypt && !form.exportPassword.trim())" :loading="pending === 'export'" @click="openConfirm('export')">
                   <DatabaseBackup />{{ t('settingsPage.startExport') }}
                 </Button>
               </template>
@@ -1373,7 +1373,7 @@ onBeforeUnmount(() => {
               </SettingsCard>
 
               <template #footer>
-                <Button variant="danger" :disabled="!restoreFile || !preflight || !form.restoreConfirm" :loading="pending === 'restore'" @click="openConfirm('restore')">
+                <Button class="max-sm:w-full" variant="danger" :disabled="!restoreFile || !preflight || !form.restoreConfirm" :loading="pending === 'restore'" @click="openConfirm('restore')">
                   <UploadCloud />{{ t('settingsPage.confirmRestore') }}
                 </Button>
               </template>

@@ -122,8 +122,14 @@ describe('WinUI 3 ContentDialog', () => {
     expect(dialog.className).toContain('w-auto');
     expect(dialog.className).toContain('max-w-[var(--panel-dialog-max-width)]');
     expect(dialog.querySelector('h2')!.className).toContain('text-subtitle');
+    expect(dialog.querySelector('h2')!.className).toContain('break-words');
     expect(dialog.querySelector('h2')!.className).not.toContain('tracking-tight');
-    expect(dialog.querySelector('footer')!.className).not.toContain('border-t');
+    const footer = dialog.querySelector('footer')!;
+    expect(footer.className).not.toContain('border-t');
+    // 手机宽度：footer 两列 full width，主操作（DOM 最后）保持在最后。
+    expect(footer.className).toContain('max-sm:grid');
+    expect(footer.className).toContain('max-sm:grid-cols-2');
+    expect(footer.className).toContain('max-sm:items-stretch');
     const body = dialog.querySelector<HTMLElement>('header + div')!;
     expect(body.className).toContain('p-6');
     wrapper.unmount();

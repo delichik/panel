@@ -252,6 +252,10 @@ describe('settings page sections use the shared WinUI SettingsCard shell', () =>
     const restoreButton = view.findAll('button').find((item) => item.text() === t('settingsPage.confirmRestore'));
     expect(restoreButton).toBeTruthy();
     expect(restoreButton!.attributes('disabled')).toBeDefined();
+    // 移动端分区 footer 按钮 full width。
+    const exportButton = view.findAll('button').find((item) => item.text() === t('settingsPage.startExport'));
+    expect(exportButton?.classes()).toContain('max-sm:w-full');
+    expect(restoreButton!.classes()).toContain('max-sm:w-full');
   });
 
   it('uses an inset empty state inside the Tailscale card instead of nesting a second card', async () => {
@@ -437,6 +441,9 @@ describe('settings page section navigation', () => {
     const tabsRoot = tablist.element.parentElement;
     expect(tabsRoot?.classList.contains('h-full')).toBe(true);
     expect(tabsRoot?.classList.contains('min-h-0')).toBe(true);
+    // 移动端 Tabs 不挤压：tab 按钮 shrink-0 + whitespace-nowrap（横向滚动）。
+    expect(tabsRoot?.className).toContain('[&_[role=tab]]:shrink-0');
+    expect(tabsRoot?.className).toContain('[&_[role=tab]]:whitespace-nowrap');
   });
 
   it('resets the section scroll position when switching tabs', async () => {

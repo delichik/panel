@@ -22,13 +22,13 @@ withDefaults(defineProps<{
     :aria-label="label || undefined"
     class="flex min-h-control min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center"
   >
-    <div v-if="$slots.search" class="min-w-0 sm:w-72 sm:shrink-0">
+    <div v-if="$slots.search" class="min-w-0 sm:w-72 sm:shrink-0 max-sm:w-full">
       <slot name="search" />
     </div>
-    <div v-if="$slots.filters" class="flex min-w-0 flex-wrap items-center gap-2">
+    <div v-if="$slots.filters" class="flex min-w-0 flex-wrap items-center gap-2 max-sm:grid max-sm:grid-cols-1 max-sm:items-stretch">
       <slot name="filters" />
     </div>
-    <div v-if="$slots.actions" class="flex min-w-0 flex-wrap items-center gap-2 sm:ml-auto">
+    <div v-if="$slots.actions" class="flex min-w-0 flex-wrap items-center gap-2 sm:ml-auto max-sm:grid max-sm:w-full max-sm:grid-cols-1 max-sm:items-stretch">
       <slot name="actions" />
     </div>
     <div v-if="$slots.default" class="min-w-0 sm:basis-full">

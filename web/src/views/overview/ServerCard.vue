@@ -283,7 +283,7 @@ function openImages() {
     </header>
 
     <div class="grid min-w-0 gap-3">
-      <div v-for="(pair, index) in rowPairs" :key="index" class="grid min-w-0 grid-cols-2 gap-x-5">
+      <div v-for="(pair, index) in rowPairs" :key="index" class="grid min-w-0 grid-cols-2 gap-x-4 gap-y-2 max-sm:grid-cols-1 sm:gap-x-5">
         <MetricCell v-bind="pair[0]" />
         <MetricCell v-bind="pair[1]" />
       </div>

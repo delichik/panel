@@ -78,18 +78,21 @@ describe('Logs narrow viewport contract', () => {
   const source = readFileSync(resolve(__dirname, './index.vue'), 'utf8');
   const columnsSource = source.slice(source.indexOf('const columns = computed'), source.indexOf('const selectedLine'));
 
-  it('hides eventId below wide while keeping time/level, msg, actions', () => {
+  it('hides eventId below wide and the time column below sm', () => {
     expect(columnsSource).toMatch(/key: 'eventId'[^\n]*hideBelow: 'wide'/);
-    expect(columnsSource).not.toMatch(/key: 'ts'[^\n]*hideBelow/);
+    expect(columnsSource).toMatch(/key: 'ts'[^\n]*hideBelow: 'sm'/);
+    // <sm 只保留 msg 与操作两列。
     expect(columnsSource).not.toMatch(/key: 'msg'[^\n]*hideBelow/);
     expect(columnsSource).not.toMatch(/key: 'actions'[^\n]*hideBelow/);
     // 旧 level 独立列已移除（并入时间列）。
     expect(columnsSource).not.toContain("key: 'level'");
   });
 
-  it('keeps the multi-line message renderer and the eventId tooltip', () => {
+  it('keeps the multi-line message renderer, eventId tooltip and stacked dialog footer', () => {
     expect(source).toContain('whitespace-pre-wrap');
     expect(source).toContain(':title="String(row.eventId || eventId)"');
+    expect((source.match(/max-sm:w-full/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    expect(source).toContain('flex w-full flex-col gap-2 sm:flex-row');
   });
 });
 

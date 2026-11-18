@@ -159,9 +159,11 @@ onBeforeUnmount(() => {
     <a href="#main-content" class="panel-shadow-overlay sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-skip focus:rounded-overlay focus:border focus:border-border-strong focus:bg-popover focus:px-3 focus:py-2 focus:text-sm focus:text-popover-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-inset">{{ t('layout.skipToContent') }}</a>
     <LoadingOverlay v-if="signingOut" :label="t('layout.signingOut')" />
 
-    <!-- Title bar: full window width (both grid columns); no page-title duplication. -->
-    <header class="relative z-30 flex h-shell-header min-w-0 items-center justify-between gap-3 border-b border-stroke bg-layer px-3 max-lg:sticky max-lg:top-0 max-lg:z-40 max-lg:bg-popover lg:col-span-2">
-      <div class="flex min-w-0 items-center gap-2">
+    <!-- Title bar: full window width (both grid columns); no page-title duplication.
+         Mobile (360–430px): the bar keeps only the app identity + global commands,
+         with the identity truncating instead of pushing the command strip off-screen. -->
+    <header class="relative z-30 flex h-shell-header min-w-0 items-center justify-between gap-3 border-b border-stroke bg-layer px-3 max-lg:sticky max-lg:top-0 max-lg:z-40 max-lg:bg-popover max-sm:gap-2 max-sm:px-2 lg:col-span-2">
+      <div class="flex min-w-0 flex-1 items-center gap-2 max-sm:gap-1.5">
         <IconButton class="lg:hidden" :label="t('layout.nav.open')" :aria-expanded="drawerOpen" :aria-controls="drawerId" aria-haspopup="dialog" @click="drawerOpen = true">
           <Menu />
         </IconButton>
@@ -174,7 +176,7 @@ onBeforeUnmount(() => {
         <strong class="min-w-0 truncate text-sm font-semibold text-foreground">{{ t('app.name') }}</strong>
       </div>
       <!-- WinUI command strip: borderless icon controls, fill-only hover feedback. -->
-      <div class="flex items-center gap-0.5">
+      <div class="flex shrink-0 items-center gap-0.5 max-sm:gap-0">
         <AppearanceFlyout />
         <IconButton :label="t(languageSaving ? 'layout.language.saving' : 'layout.language')" :disabled="languageSaving" :aria-busy="languageSaving ? 'true' : undefined" @click="toggleLanguage">
           <ProgressRing v-if="languageSaving" :size="16" aria-hidden="true" />
@@ -227,8 +229,7 @@ onBeforeUnmount(() => {
             class="drawer-panel flex h-full w-nav max-w-[86vw] flex-col border-r border-stroke bg-flyout backdrop-blur-flyout"
             @keydown="onDrawerKeydown"
           >
-            <div class="flex h-shell-header shrink-0 items-center justify-between gap-3 border-b border-stroke px-4">
-              <strong class="min-w-0 truncate text-sm font-semibold text-foreground">{{ t('app.name') }}</strong>
+            <div class="flex h-shell-header shrink-0 items-center justify-end border-b border-stroke px-2">
               <IconButton class="max-lg:size-11" :label="t('common.close')" @click="drawerOpen = false">
                 <X />
               </IconButton>

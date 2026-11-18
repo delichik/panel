@@ -5,11 +5,10 @@ import { describe, expect, it } from 'vitest';
 const viewSource = readFileSync(resolve(__dirname, 'index.vue'), 'utf8');
 
 /**
- * 编辑器几何契约（修复批次 1 + 内容列统一）：
+ * 编辑器几何契约（修复批次 1 + 内容列统一 + 单列主区）：
  * - 应用编辑器 / 设施记录配置统一走 ConsolePage width="content"（1200，与所有页面一致；
  *   表单可读宽度由内部栅格控制，不用页面宽度收窄）；
- * - 主区 + 摘要双列只在 >=1280（xl）出现，1024–1279 摘要下移为单列；
- * - sticky 只跟随双列断点；
+ * - 主区单列全宽：不再保留右侧摘要/检查结果 aside，也不再有 xl 双列/sticky；
  * - ConsolePage 是唯一页面滚动/padding owner（编辑器 body-scroll=false、无 EditorPage 以外的页面 padding）。
  */
 describe('applications editor geometry', () => {
@@ -20,14 +19,12 @@ describe('applications editor geometry', () => {
     expect(viewSource).not.toContain(':width=');
   });
 
-  it('only splits into two columns at xl and keeps the summary non-sticky below it', () => {
-    const twoColumn = viewSource.match(/xl:grid-cols-\[minmax\(0,1fr\)_320px\]/g) ?? [];
-    expect(twoColumn).toHaveLength(2);
-    expect(viewSource).not.toContain('lg:grid-cols-[minmax(0,1fr)_320px]');
-
-    const sticky = viewSource.match(/xl:sticky xl:top-0/g) ?? [];
-    expect(sticky).toHaveLength(2);
-    expect(viewSource).not.toMatch(/(^|\s)lg:sticky(\s|$)/m);
+  it('keeps both editors single-column without a summary/diagnostics aside', () => {
+    expect(viewSource).not.toContain('xl:grid-cols-[minmax(0,1fr)_320px]');
+    expect(viewSource).not.toContain('xl:sticky xl:top-0');
+    expect(viewSource).not.toContain('<aside');
+    // 两个编辑器主区都是单列 grid。
+    expect(viewSource.match(/class="relative grid min-w-0 content-start gap-4"/g) ?? []).toHaveLength(2);
   });
 
   it('keeps both editors on the ConsolePage single-scroll contract without a third padding layer', () => {

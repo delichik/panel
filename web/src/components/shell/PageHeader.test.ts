@@ -110,3 +110,63 @@ describe('PageHeader breadcrumbs', () => {
     expect(wrapper.get('header h1').element.previousElementSibling).toBeNull();
   });
 });
+
+describe('PageHeader mobile layout (360–430px)', () => {
+  it('balances/wraps the title and description without leaving the type ramp', () => {
+    const wrapper = mountHeader({
+      props: {
+        title: 'A very long server name that would otherwise overflow the phone viewport',
+        description: 'A long description that must wrap inside the body column instead of forcing a horizontal scrollbar.',
+      },
+    });
+
+    const title = wrapper.get('header h1');
+    expect(title.classes()).toContain('text-title');
+    expect(title.classes()).toContain('text-balance');
+    expect(title.classes()).toContain('break-words');
+    const description = wrapper.get('header p');
+    expect(description.classes()).toContain('text-body');
+    expect(description.classes()).toContain('break-words');
+  });
+
+  it('keeps back + trail in a wrapping row with a truncating breadcrumb column', () => {
+    const wrapper = mountHeader({
+      props: {
+        title: 'web-01',
+        backLabel: 'Back to list',
+        breadcrumbs: [
+          { label: 'A very long assets breadcrumb label that must truncate', to: '/' },
+          { label: 'web-01' },
+        ],
+      },
+    });
+
+    const back = wrapper.get('header button[aria-label="Back to list"]');
+    const row = back.element.parentElement as HTMLElement;
+    expect(row.className).toContain('flex-wrap');
+    expect(row.className).toContain('max-sm:gap-1.5');
+    const nav = wrapper.get('nav[aria-label="Breadcrumb"]');
+    expect(nav.classes()).toContain('min-w-0');
+    expect(nav.classes()).toContain('flex-1');
+    // The breadcrumb items themselves truncate (ui/BreadcrumbBar contract).
+    expect(nav.classes()).toContain('flex-wrap');
+  });
+
+  it('stacks actions full width below sm so buttons cannot be compressed', () => {
+    const wrapper = mountHeader({
+      props: { title: 'Server detail' },
+      slots: { actions: '<button type="button">Refresh</button><button type="button">Restart</button><button type="button">Delete</button>' },
+    });
+
+    const actions = wrapper.get('header > div:last-child');
+    // Existing desktop/tablet contract stays intact.
+    expect(actions.classes()).toContain('flex-wrap');
+    expect(actions.classes()).toContain('max-lg:w-full');
+    // Phone: vertical column, every slotted control full width.
+    expect(actions.classes()).toContain('max-sm:flex-col');
+    expect(actions.classes()).toContain('max-sm:items-stretch');
+    expect(actions.classes()).toContain('max-sm:gap-2');
+    expect(actions.classes()).toContain('max-sm:[&>*]:w-full');
+    expect(wrapper.findAll('header > div:last-child > button')).toHaveLength(3);
+  });
+});

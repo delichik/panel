@@ -77,11 +77,11 @@ describe('Events narrow viewport contract', () => {
   const source = readFileSync(resolve(__dirname, './IntentRecordsPage.vue'), 'utf8');
   const columnsSource = source.slice(source.indexOf('const columns = computed'), source.indexOf('const detailProperties'));
 
-  it('hides secondary columns below wide and keeps time/level, title, actions', () => {
+  it('hides secondary columns below wide and the time column below sm', () => {
     expect(columnsSource).toMatch(/key: 'module'[^\n]*hideBelow: 'wide'/);
     expect(columnsSource).toMatch(/key: 'state'[^\n]*hideBelow: 'wide'/);
-    // 主列不隐藏：时间+级别、标题、操作。
-    expect(columnsSource).not.toMatch(/key: 'updatedAt'[^\n]*hideBelow/);
+    expect(columnsSource).toMatch(/key: 'updatedAt'[^\n]*hideBelow: 'sm'/);
+    // <sm 只保留标题与操作两列。
     expect(columnsSource).not.toMatch(/key: 'title'[^\n]*hideBelow/);
     expect(columnsSource).not.toMatch(/key: 'actions'[^\n]*hideBelow/);
     // 标题列占剩余宽度（不固定宽度），且旧 level 独立列已移除。
@@ -89,11 +89,13 @@ describe('Events narrow viewport contract', () => {
     expect(columnsSource).not.toContain("key: 'level'");
   });
 
-  it('folds the secondary row action into an overflow menu below wide', () => {
+  it('keeps the secondary row action folded and dialog footer stacked on phones', () => {
     expect(source).toContain('max-wide:hidden');
     expect(source).toContain('wide:hidden');
     expect(source).toContain('common.moreActions');
     expect(source).toMatch(/<Dropdown[\s\S]*?DropdownItem[\s\S]*?eventsPage\.viewLogs/);
+    expect(source).toContain('flex w-full flex-col gap-2 sm:flex-row');
+    expect((source.match(/max-sm:w-full/g) ?? []).length).toBeGreaterThanOrEqual(4);
   });
 });
 

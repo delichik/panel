@@ -26,7 +26,7 @@ withDefaults(defineProps<{
 <template>
   <div
     data-settings-card
-    class="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3"
+    class="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 max-sm:flex-col max-sm:items-stretch"
     :class="disabled ? 'opacity-45' : undefined"
     :aria-disabled="disabled || undefined"
     :aria-invalid="invalid || undefined"
@@ -38,18 +38,18 @@ withDefaults(defineProps<{
         <slot name="icon" />
       </span>
       <div class="grid min-w-0 gap-0.5">
-        <p v-if="title" class="m-0 text-body" :class="invalid ? 'text-danger' : 'text-foreground'">{{ title }}</p>
-        <p v-if="description" class="m-0 text-caption text-muted-foreground">{{ description }}</p>
+        <p v-if="title" class="m-0 break-words text-body" :class="invalid ? 'text-danger' : 'text-foreground'">{{ title }}</p>
+        <p v-if="description" class="m-0 break-words text-caption text-muted-foreground">{{ description }}</p>
         <slot name="description" />
       </div>
     </div>
 
     <div
       v-if="$slots.control || $slots.hint"
-      class="flex w-full shrink-0 flex-col gap-1 sm:w-auto"
+      class="flex w-full shrink-0 flex-col gap-1 sm:w-auto max-sm:w-full max-sm:items-stretch"
       :class="stacked ? 'sm:w-full sm:items-stretch' : 'sm:items-end'"
     >
-      <div v-if="$slots.control" class="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto" :class="stacked ? 'sm:w-full sm:justify-start' : undefined">
+      <div v-if="$slots.control" class="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto max-sm:w-full max-sm:flex-col max-sm:items-stretch max-sm:justify-start" :class="stacked ? 'sm:w-full sm:justify-start' : undefined">
         <slot name="control" />
       </div>
       <div v-if="$slots.hint" class="w-full text-left text-caption">

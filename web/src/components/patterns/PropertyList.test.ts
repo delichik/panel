@@ -38,10 +38,20 @@ describe('PropertyList', () => {
 
     const double = mount(PropertyList, { props: { items, columns: 2 } });
     expect(double.get('[data-property-list]').classes()).toContain('sm:grid-cols-2');
+    // 手机宽度（<sm）强制单列，避免两列把标签/值挤到溢出。
+    expect(double.get('[data-property-list]').classes()).toContain('max-sm:grid-cols-1');
     expect(double.get('[data-property-list]').classes()).not.toContain('divide-y');
 
     const triple = mount(PropertyList, { props: { items, columns: 3 } });
     expect(triple.get('[data-property-list]').classes()).toContain('xl:grid-cols-3');
+    expect(triple.get('[data-property-list]').classes()).toContain('max-sm:grid-cols-1');
+  });
+
+  it('lets labels and values wrap on narrow screens', () => {
+    const wrapper = mount(PropertyList, { props: { items } });
+    const row = wrapper.get('[data-property-row]');
+    expect(row.get('dt').classes()).toContain('break-words');
+    expect(row.get('dd').classes()).toContain('break-words');
   });
 
   it('renders links for href items and opts external links out of the app window', () => {

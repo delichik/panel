@@ -118,8 +118,12 @@ describe('credentials detail migration', () => {
     expect(listColumns.find((column) => column.key === 'updatedAt')?.hideBelow).toBe('wide');
     const summaryHeader = view.findAll('table thead th').find((item) => item.text() === useI18n().t('credentialsPage.username'));
     const referencesHeader = view.findAll('table thead th').find((item) => item.text() === useI18n().t('credentialsPage.references'));
+    const updatedHeader = view.findAll('table thead th').find((item) => item.text() === useI18n().t('credentialsPage.updatedAtColumn'));
     expect(summaryHeader?.classes()).toContain('max-wide:hidden');
     expect(referencesHeader?.classes()).toContain('max-lg:hidden');
+    expect(updatedHeader?.classes()).toContain('max-wide:hidden');
+    // <sm 时只保留名称+操作（摘要/引用/时间都已隐藏）。
+    expect(view.find('[data-list-command-bar] .flex-nowrap').exists()).toBe(true);
     const testButton = view.findAll('button').find((item) => item.text() === useI18n().t('credentialsPage.test'));
     expect(testButton?.classes()).toContain('max-wide:hidden');
 
@@ -148,6 +152,8 @@ describe('credentials detail migration', () => {
     expect(listLink.text()).toBe(useI18n().t('routes.credentials.title'));
     expect(listLink.attributes('href')).toBe('/credentials');
     expect(breadcrumb.find('[aria-current="page"]').text()).toBe('deploy-key');
+    // 详情属性列表在移动端单列（共享 PropertyList 的 grid-cols-1 基础类）。
+    expect(view.findAll('[data-property-list]').every((item) => item.classes().includes('grid-cols-1'))).toBe(true);
   });
 
   it('offers semantic radio targets for credential testing and supports arrow keys', async () => {
@@ -164,6 +170,7 @@ describe('credentials detail migration', () => {
     expect(group).not.toBeNull();
     const radios = Array.from(group!.querySelectorAll<HTMLButtonElement>('[role="radio"]'));
     expect(radios).toHaveLength(2);
+    expect(document.querySelector('[role="dialog"] .flex-col-reverse')).not.toBeNull();
     expect(radios[0]!.getAttribute('aria-checked')).toBe('true');
     expect(radios[0]!.closest('.bg-accent-selected')).not.toBeNull();
     expect(radios[0]!.classList.contains('border-accent-text')).toBe(false);

@@ -150,7 +150,7 @@ const { onKeydown: onDetailKeydown } = useOverlayBehavior({
 
 const columns = computed(() => [
   { key: 'name', label: t('common.name') },
-  { key: 'status', label: t('common.status'), nowrap: true, width: 'w-36' },
+  { key: 'status', label: t('common.status'), nowrap: true, width: 'w-36', hideBelow: 'sm' as const },
   { key: 'lastChecked', label: t('serversPage.lastChecked'), nowrap: true, width: 'w-40', hideBelow: 'wide' as const },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true, width: 'w-52' },
 ]);
@@ -562,8 +562,8 @@ onBeforeUnmount(() => {
                 <SearchInput v-model="search" clearable :placeholder="t('serversPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
               </template>
               <template #actions>
-                <Button :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
-                <Button variant="primary" @click="openCreate"><Plus />{{ t('common.add') }}</Button>
+                <Button class="max-sm:w-full" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
+                <Button class="max-sm:w-full" variant="primary" @click="openCreate"><Plus />{{ t('common.add') }}</Button>
               </template>
             </ListCommandBar>
           </template>
@@ -607,6 +607,8 @@ onBeforeUnmount(() => {
               <div class="grid min-w-0 content-start">
                 <TableDetailName class="max-w-64" :name="row.name" :label="t('common.openDetails', { name: row.name })" @click="openDetail(row)" />
                 <span class="truncate panel-mono text-caption text-muted-foreground max-sm:hidden">{{ row.host }}:{{ row.port }}</span>
+                <!-- <sm：状态列隐藏后折入名称副行，保留单一综合徽标语义。 -->
+                <span class="sm:hidden"><Badge class="h-5 shrink-0" :tone="serverSummaryTone(row)">{{ statusText(row) }}</Badge></span>
               </div>
             </template>
             <template #status="{ row }">
@@ -652,9 +654,9 @@ onBeforeUnmount(() => {
     <template #detail>
       <ConsolePage :title="detailTitle" :description="detailDescription" :breadcrumbs="detailBreadcrumbs" :back-label="t('common.backToList')" :body-scroll="false" @back="closeDetail">
         <template v-if="selectedServer" #actions>
-          <Button variant="secondary" :disabled="rowBusy?.id === selectedServer.id" :loading="rowBusy?.id === selectedServer.id && rowBusy?.kind === 'edit'" @click="openEdit(selectedServer)"><Wrench />{{ t('common.edit') }}</Button>
-          <Button variant="danger" :disabled="!canRunPrivilegedOperation(selectedServer)" :loading="restarting" @click="restartOpen = true"><PlayCircle />{{ t('serversPage.restart') }}</Button>
-          <Button v-if="activeTab === 'system' && systemSubtab === 'tailscale'" variant="primary" :disabled="!selectedServer.tailscaleEnabled" :loading="tailscaleApplying" @click="applyTailscale"><RefreshCcw />{{ t('serversPage.tailscale.apply') }}</Button>
+          <Button class="max-sm:w-full" variant="secondary" :disabled="rowBusy?.id === selectedServer.id" :loading="rowBusy?.id === selectedServer.id && rowBusy?.kind === 'edit'" @click="openEdit(selectedServer)"><Wrench />{{ t('common.edit') }}</Button>
+          <Button class="max-sm:w-full" variant="danger" :disabled="!canRunPrivilegedOperation(selectedServer)" :loading="restarting" @click="restartOpen = true"><PlayCircle />{{ t('serversPage.restart') }}</Button>
+          <Button v-if="activeTab === 'system' && systemSubtab === 'tailscale'" class="max-sm:w-full" variant="primary" :disabled="!selectedServer.tailscaleEnabled" :loading="tailscaleApplying" @click="applyTailscale"><RefreshCcw />{{ t('serversPage.tailscale.apply') }}</Button>
         </template>
         <div ref="detailRoot" data-testid="server-detail" class="h-full min-h-0 outline-none" tabindex="-1" @keydown="onDetailKeydown">
           <EmptyState v-if="detailError && !serverDetails[selectedId]" variant="page" :title="t('common.loadFailed')" :description="detailError">

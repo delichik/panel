@@ -97,6 +97,8 @@ describe('dns detail migration', () => {
     expect(listColumns.find((column) => column.key === 'updatedAt')?.hideBelow).toBe('wide');
     const updatedHeader = view.findAll('table thead th').find((item) => item.text() === useI18n().t('dnsPage.updatedAt'));
     expect(updatedHeader?.classes()).toContain('max-wide:hidden');
+    expect(listColumns.length).toBe(3);
+    expect(view.find('[data-list-command-bar] .flex-nowrap').exists()).toBe(true);
     const syncButton = view.findAll('button').find((item) => item.text() === useI18n().t('dnsPage.syncRecords'));
     expect(syncButton?.classes()).toContain('max-wide:hidden');
 
@@ -136,6 +138,7 @@ describe('dns detail migration', () => {
     expect(ttl).not.toBeNull();
     expect(ttl!.getAttribute('aria-valuemin')).toBe('1');
     expect(ttl!.getAttribute('aria-valuemax')).toBe('86400');
+    expect(document.querySelector('[role="dialog"] .flex-col-reverse')).not.toBeNull();
 
     // 详情面包屑：DNS 列表链接 + 当前域名 aria-current。
     const breadcrumb = view.find('header nav');

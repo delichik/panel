@@ -71,7 +71,7 @@ const runtimeJails = computed(() => fail2banState.value?.jails ?? []);
 const takeoverRequired = computed(() => Boolean(fail2banState.value?.installed && !fail2banState.value?.managed));
 
 const ufwColumns = computed(() => [
-  { key: 'number', label: t('securityPage.ruleNumber'), nowrap: true, width: 'w-16' },
+  { key: 'number', label: t('securityPage.ruleNumber'), nowrap: true, width: 'w-16', hideBelow: 'sm' as const },
   { key: 'action', label: t('securityPage.action'), nowrap: true, width: 'w-28' },
   { key: 'details', label: t('common.details') },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },

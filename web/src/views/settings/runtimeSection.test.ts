@@ -136,6 +136,8 @@ describe('settings runtime section', () => {
     expect(numberInputs).toHaveLength(1);
     expect(numberInputs[0]!.element.value).toBe('30');
     expect(numberInputs[0]!.attributes('aria-valuemin')).toBe('1');
+    // NumberBox 在窄屏占满行（width token 由页面 class 控制）。
+    expect(numberInputs[0]!.element.parentElement?.classList.contains('w-full')).toBe(true);
     expect(view.text()).toContain('Container report interval seconds');
     // 指标保留/采集间隔/清理计划已移出运行时设置，由指标设施管理。
     expect(view.text()).not.toContain('Metrics retention days');

@@ -41,14 +41,15 @@ describe('applications detail layout', () => {
 });
 
 describe('applications editor layout', () => {
-  it('keeps the long asset/code area full width below the two-column form grid', () => {
-    // 两个编辑器（应用 / 设施记录）都把资产区移出 xl 双列，放在网格后全宽呈现。
+  it('keeps the long asset/code area full width below the single-column form', () => {
+    // 两个编辑器（应用 / 设施记录）主区单列，资产区在表单之后全宽呈现。
     expect(listSource.match(/class="mt-4 surface-card p-4"/g) ?? []).toHaveLength(2);
-    const assetBlocks = [...listSource.matchAll(/<\/aside>\s*<\/div>\s*\n\s*<!--[^>]*资产[\s\S]*?<AssetFileManager/g)];
-    expect(assetBlocks).toHaveLength(2);
-    // 表单仍是 ≥sm 两列，摘要仍是 ≥xl 右列 + sticky（1024–1279 下移）。
+    expect(listSource).not.toContain('<aside');
+    expect(listSource).not.toContain('xl:grid-cols-[minmax(0,1fr)_320px]');
+    expect(listSource).not.toContain('xl:sticky xl:top-0');
+    // 表单仍是 ≥sm 两列。
     expect(listSource.match(/sm:grid-cols-2/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
-    expect(listSource.match(/xl:grid-cols-\[minmax\(0,1fr\)_320px\]/g) ?? []).toHaveLength(2);
-    expect(listSource.match(/xl:sticky xl:top-0/g) ?? []).toHaveLength(2);
+    // 资产区位于编辑器之后（滚动由 EditorPage 单 owner 承担）。
+    expect(listSource.indexOf('class="mt-4 surface-card p-4"')).toBeGreaterThan(listSource.indexOf('<EditorPage>'));
   });
 });

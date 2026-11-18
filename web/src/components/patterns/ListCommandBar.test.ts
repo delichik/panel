@@ -27,6 +27,18 @@ describe('ListCommandBar', () => {
     expect(bar.classes()).toContain('sm:flex-row');
     expect(bar.get('#search').element.parentElement?.className).toContain('sm:w-72');
     expect(bar.get('#batch').element.parentElement?.className).toContain('sm:ml-auto');
+
+    // 手机宽度：搜索占满行，filters/actions 单列 full width（按钮不被压缩）。
+    expect(bar.get('#search').element.parentElement?.className).toContain('max-sm:w-full');
+    const filters = bar.get('#filters').element.parentElement!;
+    expect(filters.className).toContain('max-sm:grid');
+    expect(filters.className).toContain('max-sm:grid-cols-1');
+    expect(filters.className).toContain('max-sm:items-stretch');
+    const actions = bar.get('#batch').element.parentElement!;
+    expect(actions.className).toContain('max-sm:grid');
+    expect(actions.className).toContain('max-sm:grid-cols-1');
+    expect(actions.className).toContain('max-sm:w-full');
+    expect(actions.className).toContain('max-sm:items-stretch');
   });
 
   it('only renders the areas that have content', () => {

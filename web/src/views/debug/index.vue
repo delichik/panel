@@ -309,8 +309,8 @@ onBeforeUnmount(() => window.clearInterval(timer));
 <template>
   <ConsolePage :title="t('routes.debug.title')" :description="t('routes.debug.description')">
     <template #actions>
-      <Button size="sm" :loading="loading" :disabled="clearRunning" @click="loadAll"><RefreshCcw />{{ t('common.refresh') }}</Button>
-      <Button size="sm" :variant="paused ? 'primary' : 'secondary'" @click="paused = !paused">
+      <Button class="max-sm:w-full" size="sm" :loading="loading" :disabled="clearRunning" @click="loadAll"><RefreshCcw />{{ t('common.refresh') }}</Button>
+      <Button class="max-sm:w-full" size="sm" :variant="paused ? 'primary' : 'secondary'" @click="paused = !paused">
         <Play v-if="paused" />
         <Pause v-else />
         {{ paused ? t('debugPage.resume') : t('debugPage.pause') }}
@@ -333,8 +333,8 @@ onBeforeUnmount(() => window.clearInterval(timer));
               <h3 class="m-0 flex items-center gap-2 text-body-strong font-semibold text-foreground"><Activity class="size-4" />{{ t('debugPage.pprof') }}</h3>
               <p class="text-sm text-muted-foreground">{{ pprof?.enabled ? t('debugPage.pprofEnabledHint') : t('debugPage.pprofDisabledHint') }}</p>
             </div>
-            <div class="flex items-center gap-3">
-              <a v-if="pprofUrl" class="text-xs text-muted-foreground transition-colors hover:text-foreground" :href="pprofUrl" target="_blank" rel="noreferrer">{{ pprofUrl }}</a>
+            <div class="flex min-w-0 flex-wrap items-center gap-3">
+              <a v-if="pprofUrl" class="min-w-0 break-all text-xs text-muted-foreground transition-colors hover:text-foreground" :href="pprofUrl" target="_blank" rel="noreferrer">{{ pprofUrl }}</a>
               <Switch :model-value="pprof?.enabled ?? false" :disabled="pprofPending" :label="t('debugPage.pprof')" @update:model-value="togglePprof" />
             </div>
           </div>
@@ -346,12 +346,12 @@ onBeforeUnmount(() => window.clearInterval(timer));
               <h3 class="m-0 flex items-center gap-2 text-body-strong font-semibold text-danger"><Trash2 class="size-4" />{{ t('debugPage.clearRuntimeData') }}</h3>
               <p class="m-0 text-sm text-danger">{{ t('debugPage.clearRuntimeDataHint') }}</p>
             </div>
-            <Button variant="danger" :loading="clearSubmitting" :disabled="!canClear" @click="clearOpen = true"><Trash2 />{{ t('debugPage.clearRuntimeData') }}</Button>
+            <Button class="max-sm:w-full" variant="danger" :loading="clearSubmitting" :disabled="!canClear" @click="clearOpen = true"><Trash2 />{{ t('debugPage.clearRuntimeData') }}</Button>
           </div>
           <div class="mt-4 grid gap-3 rounded-control border border-divider bg-control p-4 text-sm" aria-live="polite" aria-atomic="true">
             <div class="flex flex-wrap items-center justify-between gap-2">
               <div class="flex flex-wrap items-center gap-2"><strong class="text-body-strong text-foreground">{{ t('debugPage.cleanup.latest') }}</strong><Badge :tone="clearTone">{{ clearStateLabel }}</Badge></div>
-              <Button size="sm" variant="ghost" :loading="clearChecking" :disabled="clearSubmitting" @click="refreshClearStatus"><RefreshCcw />{{ t('debugPage.cleanup.checkStatus') }}</Button>
+              <Button class="max-sm:w-full" size="sm" variant="ghost" :loading="clearChecking" :disabled="clearSubmitting" @click="refreshClearStatus"><RefreshCcw />{{ t('debugPage.cleanup.checkStatus') }}</Button>
             </div>
             <dl v-if="clearStatus?.runId" class="grid gap-3 sm:grid-cols-3">
               <div><dt class="text-caption text-muted-foreground">{{ t('debugPage.cleanup.phase') }}</dt><dd class="m-0 break-words text-body text-foreground">{{ clearStageLabel(clearStatus.failedStage || clearStatus.stage) }}</dd></div>
@@ -412,7 +412,9 @@ onBeforeUnmount(() => window.clearInterval(timer));
             </div>
             <section class="min-w-0 surface-card p-4">
               <h3 class="m-0 flex items-center gap-2 text-body-strong font-semibold text-foreground">{{ t('debugPage.taskDefinitions') }}</h3>
-              <Table v-if="taskDefinitionRows.length" class="mt-4 max-h-96" :framed="false" :columns="taskDefinitionColumns" :rows="taskDefinitionRows" row-key="type" />
+              <Table v-if="taskDefinitionRows.length" class="mt-4 max-h-96" row-height="auto" :framed="false" :columns="taskDefinitionColumns" :rows="taskDefinitionRows" row-key="type">
+                <template #type="{ row }"><span class="break-all">{{ row.type }}</span></template>
+              </Table>
               <p v-else class="mt-3 text-sm text-muted-foreground">{{ t('debugPage.noTaskDefinitions') }}</p>
             </section>
           </template>
@@ -434,8 +436,8 @@ onBeforeUnmount(() => window.clearInterval(timer));
             </aside>
             <div class="grid gap-3">
               <article v-for="db in databaseSnapshots.databases" :key="db.name" class="grid gap-3 surface-card p-4">
-                <div class="flex items-center justify-between gap-3">
-                  <h3 class="m-0 flex items-center gap-2 text-body-strong font-semibold text-foreground"><Database class="size-4" />{{ db.name }}</h3>
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <h3 class="m-0 flex min-w-0 items-center gap-2 break-all text-body-strong font-semibold text-foreground"><Database class="size-4 shrink-0" />{{ db.name }}</h3>
                   <Badge :tone="dbTone(db)">{{ db.healthy ? t('state.healthy') : db.errorCode || t('state.critical') }}</Badge>
                 </div>
                 <div class="grid grid-cols-1 gap-3 wide:grid-cols-3">
@@ -443,8 +445,8 @@ onBeforeUnmount(() => window.clearInterval(timer));
                   <div><span class="block text-caption text-muted-foreground">{{ t('debugPage.used') }}</span><strong class="mt-1 block break-words text-body text-foreground">{{ formatBytes(db.usedBytes) }}</strong></div>
                   <div><span class="block text-caption text-muted-foreground">{{ t('debugPage.free') }}</span><strong class="mt-1 block break-words text-body text-foreground">{{ formatBytes(db.freeBytes) }}</strong></div>
                 </div>
-                <Table class="max-h-56" :framed="false" :columns="databaseTableColumns" :rows="db.tables" row-key="name">
-                  <template #name="{ row }">{{ row.name }}</template>
+                <Table class="max-h-56" row-height="auto" :framed="false" :columns="databaseTableColumns" :rows="db.tables" row-key="name">
+                  <template #name="{ row }"><span class="break-all">{{ row.name }}</span></template>
                   <template #rows="{ row }">{{ row.rowCount }}</template>
                   <template #size="{ row }">{{ formatBytes(row.totalSizeBytes) }}</template>
                 </Table>

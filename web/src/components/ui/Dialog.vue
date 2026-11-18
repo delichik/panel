@@ -61,10 +61,10 @@ const { onKeydown } = useOverlayBehavior({
              --panel-dialog-max-width-wide（main.css 待补 token，组件 fallback 720）/ legacy large 1024；
              8px 圆角、浮层表面、短阴影、内容 24px padding；命令区右对齐，仅用间距分隔（无 footer 分割线）。 -->
         <section ref="dialog" class="dialog-panel grid w-auto min-w-dialog grid-rows-page-footer overflow-hidden surface-flyout text-popover-foreground backdrop-blur-flyout" :class="[widthClass, heightClass]" role="dialog" aria-modal="true" :aria-labelledby="titleId" :aria-describedby="description ? descriptionId : undefined" tabindex="-1" @keydown="onKeydown">
-          <header class="flex min-h-0 items-start justify-between gap-4 px-6 pt-6">
+          <header class="flex min-h-0 items-start justify-between gap-4 px-6 pt-6 max-sm:gap-3">
             <div class="min-w-0">
-              <h2 :id="titleId" class="m-0 text-subtitle font-semibold text-foreground">{{ title }}</h2>
-              <p v-if="description" :id="descriptionId" class="m-0 mt-1 text-body text-secondary-foreground">{{ description }}</p>
+              <h2 :id="titleId" class="m-0 break-words text-subtitle font-semibold text-foreground">{{ title }}</h2>
+              <p v-if="description" :id="descriptionId" class="m-0 mt-1 break-words text-body text-secondary-foreground">{{ description }}</p>
             </div>
             <IconButton :label="closeLabel || t('common.close')" size="sm" :disabled="closeDisabled" @click="close">
               <X />
@@ -73,7 +73,7 @@ const { onKeydown } = useOverlayBehavior({
           <div class="min-h-0 overflow-auto p-6">
             <slot />
           </div>
-          <footer v-if="$slots.footer" class="flex justify-end gap-2 px-6 pb-6">
+          <footer v-if="$slots.footer" class="flex justify-end gap-2 px-6 pb-6 max-sm:grid max-sm:grid-cols-2 max-sm:items-stretch">
             <slot name="footer" />
           </footer>
         </section>

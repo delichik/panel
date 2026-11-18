@@ -220,13 +220,13 @@ onBeforeUnmount(() => {
           <h1 class="m-0 text-title font-semibold tracking-tight">{{ t('maintenancePage.title') }}</h1>
           <p class="m-0 max-w-2xl text-sm text-muted-foreground">{{ t('maintenancePage.description') }}</p>
         </div>
-        <div v-if="authenticated" class="flex flex-wrap gap-2">
-          <Button :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
-          <Button :loading="loggingOut" @click="logout"><LogOut />{{ t('layout.logout') }}</Button>
+        <div v-if="authenticated" class="flex flex-wrap gap-2 max-sm:w-full max-sm:flex-col">
+          <Button class="max-sm:w-full" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
+          <Button class="max-sm:w-full" :loading="loggingOut" @click="logout"><LogOut />{{ t('layout.logout') }}</Button>
         </div>
       </header>
 
-      <InfoBar v-if="error" tone="danger">{{ error }}</InfoBar>
+      <InfoBar v-if="error" tone="danger"><span class="break-all">{{ error }}</span></InfoBar>
 
       <div v-if="!authenticated" class="mx-auto w-full max-w-content-narrow">
         <SettingsSection :title="t('maintenancePage.signIn')">
@@ -245,7 +245,7 @@ onBeforeUnmount(() => {
             </FormField>
           </SettingsCard>
           <div class="flex justify-end p-4">
-            <Button variant="primary" :loading="pending === 'login'" @click="login">{{ t('auth.signIn') }}</Button>
+            <Button class="max-sm:w-full" variant="primary" :loading="pending === 'login'" @click="login">{{ t('auth.signIn') }}</Button>
           </div>
         </SettingsSection>
       </div>
@@ -280,7 +280,7 @@ onBeforeUnmount(() => {
               </SettingsCard>
             </SettingsSection>
 
-            <InfoBar v-if="status?.error || status?.errorDetail" tone="danger">{{ status.errorDetail?.message || status.error }}</InfoBar>
+            <InfoBar v-if="status?.error || status?.errorDetail" tone="danger"><span class="break-all">{{ status.errorDetail?.message || status.error }}</span></InfoBar>
           </div>
 
           <div class="grid content-start gap-4">
@@ -315,7 +315,7 @@ onBeforeUnmount(() => {
                 <template #control><span class="text-body text-foreground">{{ status?.manifest?.encrypted ? t('state.healthy') : t('common.notAvailable') }}</span></template>
               </SettingsCard>
               <SettingsCard :title="t('maintenancePage.includes')" stacked>
-                <template #control><span class="break-words text-body text-foreground">{{ status?.manifest?.includes?.join(', ') || '-' }}</span></template>
+                <template #control><span class="break-all text-body text-foreground">{{ status?.manifest?.includes?.join(', ') || '-' }}</span></template>
               </SettingsCard>
             </SettingsSection>
           </div>

@@ -96,4 +96,21 @@ describe('NavList', () => {
 
     expect(wrapper.emitted('navigate')).toHaveLength(1);
   });
+
+  it('keeps mobile rows at the 44px touch height with truncating labels and no horizontal scroll', async () => {
+    const wrapper = await mountNav({ activeKey: 'servers' });
+    const nav = wrapper.get('nav');
+    expect(nav.classes()).toContain('overflow-y-auto');
+    expect(nav.classes()).toContain('overflow-x-hidden');
+
+    const link = wrapper.get('a[href="/servers"]');
+    expect(link.classes()).toContain('max-lg:h-11');
+    expect(link.classes()).toContain('min-w-0');
+    const label = link.findAll('span').at(-1)!;
+    expect(label.classes()).toContain('min-w-0');
+    expect(label.classes()).toContain('flex-1');
+    expect(label.classes()).toContain('overflow-hidden');
+    expect(label.classes()).toContain('text-ellipsis');
+    expect(label.classes()).toContain('whitespace-nowrap');
+  });
 });

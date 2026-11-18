@@ -80,10 +80,10 @@ const levelOptions = computed(() => [
 /**
  * 列精简（≤5）：时间列合并级别徽标（时间为主行、级别为副行），不再单列 level；
  * 模块、标题（title+summary 两行）、状态、操作。次级列（module/state）在 <wide
- * 隐藏（Table hideBelow），窄屏只保留时间+级别、标题与操作；标题列吃剩余宽度。
+ * 隐藏（Table hideBelow）；时间列在 <sm 再隐藏，手机只保留标题与操作；标题列吃剩余宽度。
  */
 const columns = computed(() => [
-  { key: 'updatedAt', label: t('eventsPage.time'), width: 'w-36 wide:w-40', nowrap: true },
+  { key: 'updatedAt', label: t('eventsPage.time'), width: 'w-36 wide:w-40', nowrap: true, hideBelow: 'sm' as const },
   { key: 'module', label: t('eventsPage.module'), width: 'w-28', nowrap: true, hideBelow: 'wide' as const },
   { key: 'title', label: t('eventsPage.title') },
   { key: 'state', label: t('common.status'), width: 'w-24', nowrap: true, hideBelow: 'wide' as const },
@@ -309,11 +309,12 @@ onBeforeUnmount(() => {
                   <div class="w-full min-w-0 sm:w-56">
                     <DateTimeRangePicker :model-value="range" @update:model-value="value => updateQuery({ from: value.from, to: value.to || undefined })" />
                   </div>
-                  <Select class="w-32" :model-value="read('origin')" :options="originOptions" :aria-label="t('eventsPage.origin')" @update:model-value="changeFilter('origin', $event)" />
-                  <Select class="w-28" :model-value="read('level')" :options="levelOptions" :aria-label="t('activity.level')" @update:model-value="changeFilter('level', $event)" />
+                  <Select class="w-32 max-sm:w-full" :model-value="read('origin')" :options="originOptions" :aria-label="t('eventsPage.origin')" @update:model-value="changeFilter('origin', $event)" />
+                  <Select class="w-28 max-sm:w-full" :model-value="read('level')" :options="levelOptions" :aria-label="t('activity.level')" @update:model-value="changeFilter('level', $event)" />
                 </template>
                 <template #actions>
                   <ToggleButton
+                    class="max-sm:w-full"
                     size="sm"
                     :model-value="read('hadError') === 'true'"
                     :label="t('activity.attention')"
@@ -431,8 +432,10 @@ onBeforeUnmount(() => {
       @update:open="value => { if (!value) closeDetail(); }"
     >
       <template #footer>
-        <Button variant="secondary" @click="closeDetail">{{ t('common.close') }}</Button>
-        <Button v-if="detail" variant="primary" @click="openLogs(detail)">{{ t('eventsPage.viewLogs') }}</Button>
+        <div class="flex w-full flex-col gap-2 sm:flex-row sm:justify-end">
+          <Button class="max-sm:w-full" variant="secondary" @click="closeDetail">{{ t('common.close') }}</Button>
+          <Button v-if="detail" class="max-sm:w-full" variant="primary" @click="openLogs(detail)">{{ t('eventsPage.viewLogs') }}</Button>
+        </div>
       </template>
 
       <EmptyState v-if="detailError" variant="inset" :title="t('common.loadFailed')" :description="detailError">

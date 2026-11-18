@@ -133,6 +133,12 @@ describe('certificates detail migration', () => {
     expect(listColumns.some((column) => column.key === 'actions')).toBe(true);
     const expiresHeader = view.findAll('table thead th').find((item) => item.text() === useI18n().t('certificatesPage.expiresAt'));
     expect(expiresHeader?.classes()).toContain('max-wide:hidden');
+    const statusHeader = view.findAll('table thead th').find((item) => item.text() === useI18n().t('common.status'));
+    expect(statusHeader?.classes()).toContain('max-sm:hidden');
+    const actionsHeader = view.findAll('table thead th').find((item) => item.text() === useI18n().t('common.actions'));
+    expect(actionsHeader?.classes()).toContain('text-right');
+    // 命令栏操作行在移动端不换行（横向可滚）。
+    expect(view.find('[data-list-command-bar] .flex-nowrap').exists()).toBe(true);
     const renewButton = view.findAll('button').find((item) => item.text() === useI18n().t('certificatesPage.renew'));
     expect(renewButton?.classes()).toContain('max-wide:hidden');
 
@@ -175,6 +181,8 @@ describe('certificates detail migration', () => {
     const spinbutton = document.querySelector('[role="dialog"] [role="spinbutton"]');
     expect(spinbutton).not.toBeNull();
     expect(spinbutton!.getAttribute('aria-valuemin')).toBe('1');
+    // Dialog footer 在移动端纵向堆叠（full width 容器）。
+    expect(document.querySelector('[role="dialog"] .flex-col-reverse')).not.toBeNull();
   });
 
   it('lazy-loads each certificate tab and reuses the cache when switching back', async () => {

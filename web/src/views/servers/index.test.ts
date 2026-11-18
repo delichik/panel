@@ -5,7 +5,9 @@ import { createMemoryHistory, createRouter } from 'vue-router';
 import Badge from '@/components/ui/Badge.vue';
 import { toastKey } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
+import type { ServerDto } from '@/types/servers';
 import ServersPage from './index.vue';
+import PackagesTab from './tabs/PackagesTab.vue';
 
 enableAutoUnmount(afterEach);
 
@@ -188,10 +190,18 @@ describe('servers page table and covered detail', () => {
     // 列精简：名称合并 host:port，地址不再单独占列；窄屏隐藏最近检查。
     expect(wrapper.findAll('thead th').map((cell) => cell.text())).toEqual(['Name', 'Status', 'Last checked', 'Actions']);
     expect(wrapper.findAll('thead th')[2]!.classes()).toContain('max-wide:hidden');
+    // <sm：状态列整列隐藏，状态折入名称副行；命令栏操作按钮纵向 full width。
+    expect(wrapper.findAll('thead th')[1]!.classes()).toContain('max-sm:hidden');
     const rows = wrapper.findAll('tbody tr');
     expect(rows).toHaveLength(1);
     expect(rows[0]!.text()).toContain('edge-1');
     expect(rows[0]!.text()).toContain('10.0.0.1:22');
+    // 名称单元格包含 <sm 显示的状态徽标副行。
+    expect(rows[0]!.findAll('td')[0]!.findAllComponents(Badge).length).toBe(1);
+    for (const label of ['Refresh', 'Add']) {
+      const action = wrapper.findAll('button').find((button) => button.text() === label)!;
+      expect(action.classes()).toContain('max-sm:w-full');
+    }
     // 状态列只有一枚综合徽标（稳定性/代理信息进 tooltip）。
     expect(rows[0]!.findAll('td')[1]!.findAllComponents(Badge)).toHaveLength(1);
     // <wide 隐藏行内「测试连接」，改由行内 More 承载；详情按钮保留。
@@ -233,6 +243,8 @@ describe('servers page table and covered detail', () => {
     expect(currentCrumbs.at(-1)!.text()).toBe('edge-1');
     // back 与面包屑由 PageHeader 自动同行，back 行为保留。
     expect(wrapper.find('button[aria-label="Back to list"]').exists()).toBe(true);
+    // 窄屏 PageHeader actions 纵向 full width。
+    expect(wrapper.findAll('button').find((button) => button.text() === 'Edit')!.classes()).toContain('max-sm:w-full');
 
     const detail = wrapper.get('[data-testid="server-detail"]');
     expect(detail.text()).toContain('Overview');
@@ -307,6 +319,21 @@ describe('servers page table and covered detail', () => {
     expect(startItem.className).toContain('wide:hidden');
   });
 
+  it('hides package version columns below their responsive breakpoints', async () => {
+    const wrapper = mount(PackagesTab, {
+      props: { server: server as unknown as ServerDto },
+      global: { provide: { [toastKey as symbol]: { push: vi.fn(), remove: vi.fn() } } },
+    });
+    await flushPromises();
+
+    const headers = wrapper.findAll('thead th');
+    const installed = headers.find((cell) => cell.text() === 'Installed')!;
+    const candidate = headers.find((cell) => cell.text() === 'Candidate')!;
+    // Installed 在 <wide 隐藏；Candidate（版本）在 <sm 再隐藏，手机只保留名称。
+    expect(installed.classes()).toContain('max-wide:hidden');
+    expect(candidate.classes()).toContain('max-sm:hidden');
+  });
+
   it('uses a bounded NumberBox for the UFW rule port', async () => {
     const { wrapper } = await mountPage();
     const detailButton = wrapper.findAll('tbody tr').at(0)!.findAll('button').find((button) => button.text().includes('Details'))!;
@@ -316,6 +343,10 @@ describe('servers page table and covered detail', () => {
     const securityTab = wrapper.findAll('[role="tab"]').find((tab) => tab.text() === 'Network & security')!;
     await securityTab.trigger('click');
     await flushPromises();
+
+    // <sm：UFW 规则编号列隐藏，保留动作/明细/操作。
+    const ruleNumberHeader = wrapper.findAll('thead th').find((cell) => cell.text() === 'No.')!;
+    expect(ruleNumberHeader.classes()).toContain('max-sm:hidden');
 
     const addRule = wrapper.findAll('button').find((button) => button.text() === 'Add rule');
     expect(addRule).toBeTruthy();

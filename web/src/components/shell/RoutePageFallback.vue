@@ -19,14 +19,14 @@ const fallbackWidth = computed(() => (route?.meta?.pageKey === 'settings' ? 'max
 
 <template>
   <div
-    class="mx-auto grid h-full min-h-0 w-full min-w-0 gap-4 p-4 max-lg:p-3"
+    class="mx-auto grid h-full min-h-0 w-full min-w-0 gap-4 p-4 max-lg:p-3 max-sm:gap-3"
     :class="fallbackWidth"
     aria-busy="true"
     :aria-label="t('common.loading')"
   >
     <div class="grid gap-2">
       <Skeleton class="h-7 w-48 max-w-full" />
-      <Skeleton class="h-4 w-72 max-w-full" />
+      <Skeleton class="h-4 w-72 max-w-full max-sm:w-full" />
     </div>
     <div class="grid gap-3">
       <Skeleton class="h-10 w-full" />

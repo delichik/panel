@@ -50,8 +50,8 @@ const emit = defineEmits<{ copy: [value: string] }>();
 
 const columnsClass = computed(() => {
   if (props.columns === 1) return 'grid-cols-1 divide-y divide-divider';
-  if (props.columns === 3) return 'grid-cols-1 gap-x-4 sm:grid-cols-2 xl:grid-cols-3';
-  return 'grid-cols-1 gap-x-4 sm:grid-cols-2';
+  if (props.columns === 3) return 'grid-cols-1 gap-x-4 sm:grid-cols-2 xl:grid-cols-3 max-sm:grid-cols-1';
+  return 'grid-cols-1 gap-x-4 sm:grid-cols-2 max-sm:grid-cols-1';
 });
 
 const copiedKey = ref<string | null>(null);
@@ -85,8 +85,8 @@ async function copyValue(item: PropertyListItem, index: number) {
       data-property-row
       class="grid min-w-0 gap-1 px-4 py-3"
     >
-      <dt class="m-0 min-w-0 text-caption text-muted-foreground">{{ item.label }}</dt>
-      <dd class="m-0 flex min-w-0 flex-wrap items-center gap-2 text-body text-foreground">
+      <dt class="m-0 min-w-0 break-words text-caption text-muted-foreground">{{ item.label }}</dt>
+      <dd class="m-0 flex min-w-0 flex-wrap items-center gap-2 break-words text-body text-foreground">
         <slot name="value" :item="item" :index="index" :text="displayValue(item)">
           <a
             v-if="item.href"

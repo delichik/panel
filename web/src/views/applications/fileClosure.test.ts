@@ -95,9 +95,9 @@ describe('application and facility file closure', () => {
     expect(viewSource).toContain('v-if="!appDraft.env.length"');
     expect(viewSource).toContain('v-if="!appDraft.mounts.length"');
     expect(viewSource).not.toContain('v-if="!appDraft.env.length && !appDraft.mounts.length"');
-    // 共享 pattern 取代手写分区排版。
+    // 共享 pattern 取代手写分区排版；检查结果改为保存失败时弹窗复用诊断列表。
     expect(viewSource).toContain('<FormField');
-    expect(viewSource).toContain('<PropertyList');
+    expect(viewSource).toContain('<ApplicationDiagnosticsList');
     expect(viewSource).toContain('<InfoBar');
   });
 });

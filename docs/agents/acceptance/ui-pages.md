@@ -214,16 +214,16 @@
 | 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
 | --- | --- | --- | --- | --- |
 | UI-APP-012 | 进入 create 或 `:applicationId/edit` | 只加载必要应用/设施/文件清单到本地草稿；**不**创建 edit-session；加载完成前不渲染可编辑表单，保存禁用 | 已提交定义/清单加载失败就地显示错误和重试 | 成功后表单与文件列表来自本地快照；重试重新拉取已提交数据并清空 pending |
-| UI-APP-013 | 编辑连续配置流 | 依次完整展开：身份、运行源、网络访问、容器环境、存储与挂载、部署目标、应用文件；网络、环境、存储必须为同级独立面板并各自提供操作与空态；正文内部滚动、右侧摘要 sticky/下移 | 不得把环境变量与挂载混入同一面板，不得恢复 YAML 源码模式、分页卡片或分区隐藏；窄屏单列无横滚 | 所有区块在同一编辑正文可连续到达，网络、环境、存储的标题和内容边界可独立辨认 |
-| UI-APP-014 | 编辑基本/运行字段 | name、enabled、image、CPU、memory、命令参数数组、privileged 任一变化标脏并清过期诊断 | CPU/memory 非数字、name/image 等必填错误阻止保存；命令新增项默认空 | 右侧 diff/dirty 立即更新，序列化保留未被 UI 覆盖的 spec 字段 |
+| UI-APP-013 | 编辑连续配置流 | 依次完整展开：身份、运行源、网络访问、容器环境、存储与挂载、部署目标、应用文件；网络、环境、存储必须为同级独立面板并各自提供操作与空态；正文内部滚动、单列全宽（不再有右侧摘要栏）；<640px 表单单列、footer 按钮整行 | 不得把环境变量与挂载混入同一面板，不得恢复 YAML 源码模式、分页卡片或分区隐藏；窄屏单列无横滚 | 所有区块在同一编辑正文可连续到达，网络、环境、存储的标题和内容边界可独立辨认 |
+| UI-APP-014 | 编辑基本/运行字段 | name、enabled、image、CPU、memory、命令参数数组、privileged 任一变化标脏并清过期诊断 | CPU/memory 非数字、name/image 等必填错误阻止保存；命令新增项默认空 | footer dirty 状态立即更新，序列化保留未被 UI 覆盖的 spec 字段（不再有右侧 diff 摘要） |
 | UI-APP-015 | 新增/编辑环境变量或端口 | 弹窗草稿与主草稿隔离，保存才写入；env 含 key/value，value 可从目录在当前光标/选区插入当前应用或其它应用容器占位符；port 含 label/container/host port | 目录失败只禁用插入能力，不阻止手工编辑；取消不得污染主草稿；删除/保存均标脏 | model 测试证明 dialog draft 独立，插入测试覆盖光标与替换选区，列表摘要更新 |
 | UI-APP-016 | 新增/编辑挂载 | 支持 persistent/volume/host/file/panel_file/storage_share，含 source/target/mode/readOnly；file 仅从**本地可见**应用文件 name 下拉选择（已提交∪pending−删除），storage_share 从已启用设施服务器选来源 | 应用文件为空时提示先添加；旧 file 引用已不存在时保留原值并标记失效、禁止再次保存；storage share 未配置显示配置入口且无来源不能保存；该类型不显示 mode | file 与 storage_share 保存后 source 均使用稳定值而非展示文案，取消无改变 |
 | UI-APP-017 | 新增/编辑应用反向代理 | 配置 domain、targetPort、paths、AnyAccess；来源服务器由部署目标与网关自动推导，只读，不允许手填 | primary_backup 无来源优先级时报错/阻止提交；domain/port/path 无效阻止最终保存 | 保存生成规范小写域名、数值端口和稳定 originPriority |
 | UI-APP-018 | 配置 AnyAccess | 可选全部/指定 relay 网关、round_robin/ip_hash/primary_backup；主备通过上下移动明确优先顺序 | relay 只能选网关且不能与 origin 重合；移除部署/网关后无效项被清理 | payload 仅在启用且选择指定时包含 relayServerIds |
 | UI-APP-019 | 新增或编辑代理 path | 打开既有 path 时必须完整回显 path、gzip、请求体上限、连接/读/写超时、buffering、WebSocket mode、自定义请求/响应头；WebSocket 只提供 auto/on/off 单一选择器，编辑副本与父规则隔离 | 数值非负；空 header 行过滤；payload 不得出现旧 `webSocket` 布尔字段；不得直接用浏览器深拷贝 API 复制 Vue reactive Proxy；取消子弹窗返回代理弹窗且不写主草稿 | 选择 auto/on/off 后 payload 仅含 `options.webSocketMode`；保存回父弹窗后 path 摘要可见，最终保存才标主草稿脏 |
 | UI-APP-020 | 管理应用文件 | 统一 AssetFileManager；文本/普通/归档变更写入**本地 pending**；文本「保存」只更新 pending；下载已提交文件走正式 content API，pending 文本从内存读 | 文件名拒绝 `/`、`\\`、`..`、控制字符；替换必须保留原 name；编辑期不得调用 session 文件 API | 列表=已提交基线⊕pending；页面保存时才 flush |
-| UI-APP-021 | （已并入保存）原 Preview | 不再提供独立 Preview 主按钮 | — | 诊断由保存流水线在 preview 步展示 |
-| UI-APP-022 | 点击保存 | 本地校验→begin（编辑无客户端草稿/创建带初始草稿）→patch→flush pending 文件→preview→无 blocking diagnostic 才 commit→清理会话；保存期间整编辑器阻塞且不可离开 | 冲突/失败 discard 临时会话、保留本地草稿并 toast；不重复提交 | 成功按 applyRequested 区分提示，选中新应用回列表 |
+| UI-APP-021 | 保存前检查 | 不再有常驻“保存前检查/检查结果”面板；preview 仅作为保存流水线内部步骤取 token。blocking diagnostic 时打开检查结果 Dialog（说明 + 诊断列表 + 关闭），关闭后停留编辑器 | 不得恢复右侧摘要/诊断常驻面板；不得把检查结果仅写 toast | 正常保存无检查面板；有问题时只弹窗，用户修正后可再次保存 |
+| UI-APP-022 | 点击保存 | 本地校验→begin（编辑无客户端草稿/创建带初始草稿）→patch→flush pending 文件→preview→无 blocking diagnostic 才 commit→清理会话；blocking diagnostic 打开 Dialog 并停留；保存期间整编辑器阻塞且不可离开 | 冲突/失败 discard 临时会话、保留本地草稿并 toast；不重复提交 | 成功按 applyRequested 区分提示，选中新应用回列表 |
 | UI-APP-023 | 取消、返回、路由跳转或关页 | 任意脏字段/本地 pending 触发放弃确认和 beforeunload；明确放弃后才离开；保存中拒绝离开；footer 取消与页头返回均明确 `push` 到 `/applications/apps`（编辑时带 `application` 选中） | 返回目标必须明确为 apps 列表，不得使用 `router.back()` 或不稳定历史栈 | 确认后丢弃本地草稿；无进入时创建的 session 需 discard |
 
 ## 11. 设施目录与入口代理

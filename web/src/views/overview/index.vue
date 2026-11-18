@@ -237,10 +237,10 @@ onMounted(() => {
 <template>
   <ConsolePage :title="t('routes.overview.title')" :description="t('routes.overview.description')">
     <template #actions>
-      <div class="flex min-w-0 items-center gap-1.5">
+      <div class="flex min-w-0 items-center gap-1.5 max-sm:w-full">
         <span class="shrink-0 text-caption text-muted-foreground">{{ t('overviewPage.probeSource') }}</span>
         <Select
-          class="min-w-36"
+          class="min-w-0 flex-1 sm:min-w-36 sm:flex-none"
           :model-value="probeSourceId"
           :options="probeSourceOptions"
           :disabled="probeSourceOptions.length === 0"
@@ -250,7 +250,7 @@ onMounted(() => {
         />
       </div>
       <DataRefreshControl />
-      <Button :loading="refreshing" @click="manualRefresh">
+      <Button class="max-sm:w-full" :loading="refreshing" @click="manualRefresh">
         <RefreshCcw />
         {{ t('common.refresh') }}
       </Button>
@@ -299,7 +299,7 @@ onMounted(() => {
             {{ applicationSummary.available ? applicationSummary.total : '—' }}
           </Badge>
         </div>
-        <div class="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-0 sm:divide-x sm:divide-divider">
+        <div class="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-4 sm:gap-0 sm:divide-x sm:divide-divider">
           <div class="min-w-0 sm:pr-3">
             <span class="block text-caption text-muted-foreground">{{ t('overviewPage.totalApplications') }}</span>
             <strong class="mt-1 block text-title font-semibold leading-none text-foreground">{{ applicationSummary.total ?? '—' }}</strong>

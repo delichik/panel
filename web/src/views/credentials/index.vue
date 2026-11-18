@@ -351,8 +351,10 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
                 <SearchInput v-model="search" clearable :placeholder="t('credentialsPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
               </template>
               <template #actions>
-                <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
-                <Button size="sm" variant="primary" @click="openCreate"><Plus />{{ t('common.add') }}</Button>
+                <div class="flex w-full flex-nowrap items-center gap-2 overflow-x-auto sm:w-auto sm:flex-wrap sm:justify-end">
+                  <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
+                  <Button size="sm" variant="primary" @click="openCreate"><Plus />{{ t('common.add') }}</Button>
+                </div>
               </template>
             </ListCommandBar>
           </template>
@@ -494,8 +496,10 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
       <InfoBar v-if="actionError" tone="danger">{{ actionError }}</InfoBar>
     </div>
     <template #footer>
+      <div class="flex w-full flex-col-reverse gap-2 sm:flex-row sm:justify-end">
       <Button variant="secondary" @click="dialogOpen = false">{{ t('common.cancel') }}</Button>
       <Button variant="primary" :loading="saving" :disabled="Boolean(Object.keys(validation).length)" @click="saveCredential">{{ editing ? t('common.save') : t('common.create') }}</Button>
+    </div>
     </template>
   </Dialog>
 
@@ -521,8 +525,10 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
       </div>
     </div>
     <template #footer>
+      <div class="flex w-full flex-col-reverse gap-2 sm:flex-row sm:justify-end">
       <Button variant="secondary" @click="testOpen = false">{{ t('common.cancel') }}</Button>
       <Button variant="primary" :disabled="!testTargetId" :loading="testing" @click="testTarget && testCredential(testTarget, testTargetId)"><Cable />{{ t('credentialsPage.test') }}</Button>
+    </div>
     </template>
   </Dialog>
 

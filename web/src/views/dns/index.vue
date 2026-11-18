@@ -380,8 +380,10 @@ watch(page, (value) => {
                 <SearchInput v-model="search" clearable :placeholder="t('dnsPage.searchDomains')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
               </template>
               <template #actions>
-                <Button size="sm" :loading="loadingDomains" @click="loadDomains"><RefreshCcw />{{ t('common.refresh') }}</Button>
-                <Button size="sm" variant="primary" @click="openCreateDomain"><Plus />{{ t('common.add') }}</Button>
+                <div class="flex w-full flex-nowrap items-center gap-2 overflow-x-auto sm:w-auto sm:flex-wrap sm:justify-end">
+                  <Button size="sm" :loading="loadingDomains" @click="loadDomains"><RefreshCcw />{{ t('common.refresh') }}</Button>
+                  <Button size="sm" variant="primary" @click="openCreateDomain"><Plus />{{ t('common.add') }}</Button>
+                </div>
               </template>
             </ListCommandBar>
           </template>
@@ -541,8 +543,10 @@ watch(page, (value) => {
       </FormField>
     </div>
     <template #footer>
+      <div class="flex w-full flex-col-reverse gap-2 sm:flex-row sm:justify-end">
       <Button @click="domainDialog = false">{{ t('common.cancel') }}</Button>
       <Button variant="primary" :loading="saving" :disabled="!domainFormValid" @click="saveDomain">{{ t('common.save') }}</Button>
+    </div>
     </template>
   </Dialog>
 
@@ -577,8 +581,10 @@ watch(page, (value) => {
       </FormField>
     </div>
     <template #footer>
+      <div class="flex w-full flex-col-reverse gap-2 sm:flex-row sm:justify-end">
       <Button @click="recordDialog = false">{{ t('common.cancel') }}</Button>
       <Button variant="primary" :loading="saving" :disabled="!recordFormValid" @click="saveRecord">{{ t('common.save') }}</Button>
+    </div>
     </template>
   </Dialog>
 
