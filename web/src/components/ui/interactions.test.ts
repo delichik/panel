@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { flushPromises, mount } from '@vue/test-utils';
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
 import { defineComponent, nextTick, ref } from 'vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import Dialog from './Dialog.vue';
@@ -8,6 +8,11 @@ import DropdownItem from './DropdownItem.vue';
 import LoadingOverlay from './LoadingOverlay.vue';
 import Select from './Select.vue';
 import Tabs from './Tabs.vue';
+
+// Unmount every wrapper between tests: several cases mount with attachTo body,
+// and leaving them alive lets async Vue updates touch the cleared body and
+// reject with "insertBefore of null" on later tests.
+enableAutoUnmount(afterEach);
 
 afterEach(() => {
   document.body.innerHTML = '';
