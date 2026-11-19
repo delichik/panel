@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	modevents "panel/internal/modules/events"
 	"panel/internal/platform/config"
@@ -16,6 +17,7 @@ import (
 	"panel/internal/platform/events"
 	httpx "panel/internal/platform/http"
 	"panel/internal/platform/logging"
+	"panel/internal/platform/notifications"
 )
 
 func openTestHandler(t *testing.T) (*modevents.Handler, *events.Store, string) {
@@ -171,6 +173,179 @@ func TestHandlerRoutesRegistered(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
+
+	notifyReq := httptest.NewRequest(http.MethodGet, "/api/v1/notifications?after=0&wait=0", nil)
+	notifyRec := httptest.NewRecorder()
+	mux.ServeHTTP(notifyRec, notifyReq)
+	if notifyRec.Code != http.StatusOK {
+		t.Fatalf("notifications status=%d body=%s", notifyRec.Code, notifyRec.Body.String())
+	}
+}
+
+func TestHandlerNotificationsLongPoll(t *testing.T) {
+	notifications.ResetForTest()
+	t.Cleanup(notifications.ResetForTest)
+	h, _, _ := openTestHandler(t)
+
+	items, cursor := getNotifications(t, h, "/api/v1/notifications?after=0&wait=0")
+	if len(items) != 0 || cursor != 0 {
+		t.Fatalf("empty hub baseline: items=%v cursor=%d, want empty/0", items, cursor)
+	}
+
+	notifications.PublishProcess(notifications.ProcessEvent{
+		EventID: "evt-a", Module: "deploy", Title: "Deploy app", Summary: "started", State: "running", Level: "info", Origin: "user",
+	})
+	notifications.PublishProcess(notifications.ProcessEvent{
+		EventID: "evt-b", Module: "deploy", Title: "Deploy db", Summary: "started", State: "running", Level: "info", Origin: "user",
+	})
+	items, cursor = getNotifications(t, h, "/api/v1/notifications?after=0&wait=0")
+	if len(items) != 0 || cursor != 2 {
+		t.Fatalf("baseline after publish: items=%v cursor=%d, want empty/2", items, cursor)
+	}
+	items, cursor = getNotifications(t, h, "/api/v1/notifications?after=1&wait=0")
+	if len(items) != 1 || cursor != 2 {
+		t.Fatalf("increment: items=%v cursor=%d, want one item/2", items, cursor)
+	}
+	if items[0]["eventId"] != "evt-b" || items[0]["module"] != "deploy" || items[0]["state"] != "running" {
+		t.Fatalf("increment item = %#v", items[0])
+	}
+
+	notifications.PublishProcess(notifications.ProcessEvent{
+		EventID: "evt-a", Module: "deploy", Title: "Deploy app", Summary: "finished", State: "succeeded", Level: "info", Origin: "user",
+	})
+	items, cursor = getNotifications(t, h, "/api/v1/notifications?after=2&wait=0")
+	if len(items) != 1 || items[0]["seq"].(float64) != 3 || items[0]["state"] != "succeeded" || cursor != 3 {
+		t.Fatalf("terminal: items=%v cursor=%d", items, cursor)
+	}
+
+	// A publication that happened before the poll returns immediately.
+	notifications.PublishProcess(notifications.ProcessEvent{
+		EventID: "evt-c", Module: "deploy", Title: "Deploy api", State: "running", Level: "info",
+	})
+	startedAt := time.Now()
+	items, cursor = getNotifications(t, h, "/api/v1/notifications?after=3&wait=5")
+	if elapsed := time.Since(startedAt); elapsed > 2*time.Second || len(items) != 1 || cursor != 4 {
+		t.Fatalf("immediate poll: items=%v cursor=%d after %s", items, cursor, elapsed)
+	}
+
+	// A pending long poll wakes as soon as a notification is published.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		notifications.PublishProcess(notifications.ProcessEvent{
+			EventID: "evt-d", Module: "deploy", Title: "Deploy api", State: "running", Level: "info",
+		})
+	}()
+	startedAt = time.Now()
+	items, cursor = getNotifications(t, h, "/api/v1/notifications?after=4&wait=5")
+	if elapsed := time.Since(startedAt); elapsed > 3*time.Second || len(items) != 1 || cursor != 5 || items[0]["eventId"] != "evt-d" {
+		t.Fatalf("wakeup poll: items=%v cursor=%d after %s", items, cursor, elapsed)
+	}
+
+	// A poll with nothing new holds for wait seconds, then returns the cursor.
+	startedAt = time.Now()
+	items, cursor = getNotifications(t, h, "/api/v1/notifications?after=5&wait=1")
+	if elapsed := time.Since(startedAt); elapsed < 900*time.Millisecond {
+		t.Fatalf("timeout poll returned after %s, want ~1s", elapsed)
+	}
+	if len(items) != 0 || cursor != 5 {
+		t.Fatalf("timeout poll: items=%v cursor=%d, want empty/5", items, cursor)
+	}
+
+	// A cursor beyond the server's latest is a baseline (e.g. Panel restarted).
+	items, cursor = getNotifications(t, h, "/api/v1/notifications?after=99&wait=0")
+	if len(items) != 0 || cursor != 5 {
+		t.Fatalf("ahead-of-server poll: items=%v cursor=%d, want empty/5", items, cursor)
+	}
+}
+
+func TestHandlerNotificationsRespectsRequestContext(t *testing.T) {
+	notifications.ResetForTest()
+	t.Cleanup(notifications.ResetForTest)
+	h, _, _ := openTestHandler(t)
+	notifications.PublishProcess(notifications.ProcessEvent{EventID: "evt-ctx", Module: "deploy", State: "running"})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/notifications?after=1&wait=30", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	time.AfterFunc(50*time.Millisecond, cancel)
+	startedAt := time.Now()
+	h.Notifications(rec, req)
+	if elapsed := time.Since(startedAt); elapsed > 2*time.Second {
+		t.Fatalf("cancelled request waited %s, want immediate", elapsed)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	_, cursor := getNotifications(t, h, "/api/v1/notifications?after=0&wait=0")
+	if cursor != 1 {
+		t.Fatalf("cursor = %d, want 1", cursor)
+	}
+}
+
+func TestHandlerNotificationsQueryValidation(t *testing.T) {
+	notifications.ResetForTest()
+	t.Cleanup(notifications.ResetForTest)
+	h, _, _ := openTestHandler(t)
+
+	cases := []struct {
+		name string
+		path string
+		code string
+	}{
+		{"unknown parameter", "/api/v1/notifications?cursor=1", "notifications_query_invalid"},
+		{"repeated after", "/api/v1/notifications?after=1&after=2", "notifications_query_invalid"},
+		{"repeated wait", "/api/v1/notifications?wait=0&wait=0", "notifications_query_invalid"},
+		{"after not a number", "/api/v1/notifications?after=abc", "notifications_after_invalid"},
+		{"after negative", "/api/v1/notifications?after=-1", "notifications_after_invalid"},
+		{"wait not a number", "/api/v1/notifications?wait=abc", "notifications_wait_invalid"},
+		{"wait negative", "/api/v1/notifications?wait=-1", "notifications_wait_invalid"},
+		{"wait too large", "/api/v1/notifications?wait=31", "notifications_wait_invalid"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			rec := httptest.NewRecorder()
+			h.Notifications(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			var envelope httpx.Envelope
+			if err := json.NewDecoder(rec.Body).Decode(&envelope); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if envelope.Error == nil || envelope.Error.Code != tc.code {
+				t.Fatalf("error = %#v, want code %q", envelope.Error, tc.code)
+			}
+		})
+	}
+}
+
+func getNotifications(t *testing.T, h *modevents.Handler, target string) ([]map[string]any, uint64) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	rec := httptest.NewRecorder()
+	h.Notifications(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("notifications status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	data := decodeData(t, rec)
+	rawItems, ok := data["items"].([]any)
+	if !ok {
+		t.Fatalf("items = %#v", data["items"])
+	}
+	items := make([]map[string]any, 0, len(rawItems))
+	for _, raw := range rawItems {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("item = %#v", raw)
+		}
+		items = append(items, item)
+	}
+	cursor, ok := data["cursor"].(float64)
+	if !ok {
+		t.Fatalf("cursor = %#v", data["cursor"])
+	}
+	return items, uint64(cursor)
 }
 
 func TestHandlerClearEventsAndLogs(t *testing.T) {

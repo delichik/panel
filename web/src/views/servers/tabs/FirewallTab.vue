@@ -15,7 +15,8 @@ import Input from '@/components/ui/Input.vue';
 import NumberBox from '@/components/ui/NumberBox.vue';
 import Select from '@/components/ui/Select.vue';
 import Table from '@/components/ui/Table.vue';
-import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
+import { useErrorDialog } from '@/components/ui/errorDialog';
+import { useSuccessToast } from '@/components/ui/toast';
 import FormField from '@/components/patterns/FormField.vue';
 import { useI18n } from '@/i18n';
 import type { Fail2BanJail, Fail2BanState, UfwRule, UfwState } from '@/types/security';
@@ -27,7 +28,7 @@ import { fail2BanPreset, fail2BanTone, hasAdvancedJailConfig, jailsToYaml, parse
 
 const props = defineProps<{ server: ServerDto; view: FirewallView }>();
 const { t } = useI18n();
-const notifyError = useErrorToast();
+const notifyError = useErrorDialog();
 const notifySuccess = useSuccessToast();
 const isDev = import.meta.env.DEV;
 
@@ -99,7 +100,6 @@ async function loadUfw() {
   } catch (err) {
     if (isAbortError(err)) return;
     ufwError.value = err instanceof Error ? err.message : t('securityPage.loadPanelFailed');
-    notifyError(err instanceof Error ? err.message : t('securityPage.loadPanelFailed'), err);
   } finally {
     if (ufwGuard.isCurrent(requestId)) ufwLoading.value = false;
   }
@@ -123,7 +123,6 @@ async function loadFail2Ban() {
   } catch (err) {
     if (isAbortError(err)) return;
     fail2banError.value = err instanceof Error ? err.message : t('securityPage.loadPanelFailed');
-    notifyError(err instanceof Error ? err.message : t('securityPage.loadPanelFailed'), err);
   } finally {
     if (fail2banGuard.isCurrent(requestId)) fail2banLoading.value = false;
   }

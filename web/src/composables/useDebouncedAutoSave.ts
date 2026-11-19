@@ -29,7 +29,7 @@ export interface DebouncedAutoSaveOptions<P, R> {
   save: (payload: P) => Promise<R>;
   /** 保存成功回调；`meta.queued` 表示请求期间又有新修改在等待补发。 */
   onSaved?: (result: R, payload: P, meta: { queued: boolean }) => void;
-  /** 保存失败回调；保留用户输入，由页面决定 toast/回填策略。 */
+  /** 保存失败回调；保留用户输入，由页面决定就地状态/回填策略（自动保存失败不 toast、不弹窗）。 */
   onFailed?: (error: unknown) => void;
   /** 防抖延迟，默认 500ms。 */
   delayMs?: number;

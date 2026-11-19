@@ -49,24 +49,51 @@ func TestHTTPMiddlewareLogsSuccessfulRequestsAtDebug(t *testing.T) {
 	}
 }
 
-func TestHTTPMiddlewareKeepsClientErrorsAtWarn(t *testing.T) {
-	core, logs := observer.New(zap.DebugLevel)
-	prev := stdoutLogger
-	stdoutLogger = zap.New(core)
-	defer func() { stdoutLogger = prev }()
-
-	handler := HTTPMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.NotFound(w, r)
-	}))
-
-	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/missing", nil))
-
-	entries := logs.FilterMessage("http request completed").All()
-	if len(entries) != 1 {
-		t.Fatalf("entries = %#v", entries)
+// TestHTTPMiddlewareLogsAllStatusesAtDebug verifies ENG-LOG-009: every
+// "http request completed" line is debug, even for 4xx/5xx responses, so the
+// default log filter and the event notification channel stay free of HTTP noise.
+func TestHTTPMiddlewareLogsAllStatusesAtDebug(t *testing.T) {
+	prevLevel := Level()
+	t.Cleanup(func() { _ = SetLevel(prevLevel) })
+	if err := SetLevel("debug"); err != nil {
+		t.Fatal(err)
 	}
-	if entries[0].Level != zapcore.WarnLevel {
-		t.Fatalf("level = %s, want warn", entries[0].Level)
+
+	cases := []struct {
+		name    string
+		status  int
+		handler http.HandlerFunc
+	}{
+		{"ok", http.StatusOK, func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) }},
+		{"client error", http.StatusNotFound, func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) }},
+		{"server error", http.StatusInternalServerError, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			core, logs := observer.New(zap.DebugLevel)
+			prev := stdoutLogger
+			stdoutLogger = zap.New(core)
+			defer func() { stdoutLogger = prev }()
+
+			HTTPMiddleware(tc.handler).ServeHTTP(
+				httptest.NewRecorder(),
+				httptest.NewRequest(http.MethodGet, "/x", nil),
+			)
+
+			entries := logs.FilterMessage("http request completed").All()
+			if len(entries) != 1 {
+				t.Fatalf("entries = %#v", entries)
+			}
+			if entries[0].Level != zapcore.DebugLevel {
+				t.Fatalf("level = %s, want debug", entries[0].Level)
+			}
+			status, ok := entries[0].ContextMap()["status"].(int64)
+			if !ok || int(status) != tc.status {
+				t.Fatalf("status = %#v, want %d", entries[0].ContextMap()["status"], tc.status)
+			}
+		})
 	}
 }
 

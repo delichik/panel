@@ -84,8 +84,10 @@ func TestAPIRouteManifest(t *testing.T) {
 	//   POST /api/v1/settings/runtime/auto-update/run（SET-RUN-023）
 	// 镜像仓库源设置（2026-11-19，201 → 202）：
 	//   PUT /api/v1/settings/runtime/image-registry（SET-RUN-024）
-	const wantCount = 202
-	const wantHash = "316f4fb1bd1f31689a665dfe2cd20744bb368c874c6729e8462c75aa0efe5e94"
+	// 内存事件通知长轮询（ENG-EVT-011，2026-11-19，202 → 203）：
+	//   GET /api/v1/notifications（auth；after/wait 长轮询，只读内存 hub，不读写数据库）
+	const wantCount = 203
+	const wantHash = "82079c044beaca07e85fe29f4a40597149dff6d29c338ed45ccac9a40b366e91"
 	manifest := strings.Join(patterns, "\n") + "\n"
 	gotHash := fmt.Sprintf("%x", sha256.Sum256([]byte(manifest)))
 	if len(patterns) != wantCount || gotHash != wantHash {

@@ -18,7 +18,8 @@ import PaginationBar from '@/components/ui/PaginationBar.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
 import Select from '@/components/ui/Select.vue';
 import Table from '@/components/ui/Table.vue';
-import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
+import { useErrorDialog } from '@/components/ui/errorDialog';
+import { useSuccessToast } from '@/components/ui/toast';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import DetailSection from '@/components/patterns/DetailSection.vue';
 import FormField from '@/components/patterns/FormField.vue';
@@ -38,7 +39,7 @@ import { normalizeRecordName, validateDnsDomainForm, validateDnsRecordForm, type
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
-const notifyError = useErrorToast();
+const notifyError = useErrorDialog();
 const notifySuccess = useSuccessToast();
 
 const pageSize = 50;
@@ -189,7 +190,6 @@ async function loadDomains() {
   } catch (err) {
     if (isAbortError(err)) return;
     error.value = err instanceof Error ? err.message : t('dnsPage.loadFailed');
-    notifyError(err instanceof Error ? err.message : t('dnsPage.loadFailed'), err);
   } finally {
     if (listGuard.isCurrent(requestId)) {
       loadingDomains.value = false;
@@ -219,7 +219,6 @@ async function loadRecords(domainId = selectedId.value, signal?: AbortSignal) {
   } catch (err) {
     if (signal?.aborted || requestId !== recordsRequestId) return;
     recordsError.value = err instanceof Error ? err.message : t('dnsPage.recordsLoadFailed');
-    notifyError(err instanceof Error ? err.message : t('dnsPage.recordsLoadFailed'), err);
   } finally {
     if (requestId === recordsRequestId) loadingRecords.value = false;
   }

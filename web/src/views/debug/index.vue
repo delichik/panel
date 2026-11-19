@@ -10,7 +10,8 @@ import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import Switch from '@/components/ui/Switch.vue';
 import Table from '@/components/ui/Table.vue';
 import Tabs from '@/components/ui/Tabs.vue';
-import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
+import { useErrorDialog } from '@/components/ui/errorDialog';
+import { useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import { useI18n } from '@/i18n';
 import type { DebugDatabase, DebugDatabaseSnapshots, DebugPprofStatus, DebugRuntimeSnapshot, DebugTaskDefinition, DebugTaskSnapshot } from '@/types/debug';
@@ -18,7 +19,7 @@ import { formatDateTime } from '@/utils/datetime';
 import { useRuntimeCleanup } from './useRuntimeCleanup';
 
 const { t } = useI18n();
-const notifyError = useErrorToast();
+const notifyError = useErrorDialog();
 const notifySuccess = useSuccessToast();
 
 const runtimeSnapshot = ref<DebugRuntimeSnapshot | null>(null);
@@ -37,6 +38,7 @@ let runtimeRequestId = 0;
 let tasksRequestId = 0;
 let databasesRequestId = 0;
 const pprof = ref<DebugPprofStatus | null>(null);
+const pprofError = ref('');
 const pprofPending = ref(false);
 const clearOpen = ref(false);
 const {
@@ -184,10 +186,12 @@ function formatTaskActions(definition: DebugTaskDefinition) {
 }
 
 async function loadPprof() {
+  pprofError.value = '';
   try {
     pprof.value = await debugApi.pprofStatus();
   } catch (err) {
-    notifyError(err instanceof Error ? err.message : t('debugPage.pprofLoadFailed'), err);
+    // 区块加载失败只做就地错误态 + 重试，不弹浮层。
+    pprofError.value = err instanceof Error ? err.message : t('debugPage.pprofLoadFailed');
   }
 }
 
@@ -221,7 +225,6 @@ async function loadRuntime() {
   } catch (err) {
     if (requestId !== runtimeRequestId) return;
     runtimeError.value = err instanceof Error ? err.message : t('debugPage.loadFailed');
-    notifyError(err instanceof Error ? err.message : t('debugPage.loadFailed'), err);
   } finally {
     if (requestId === runtimeRequestId) runtimeLoading.value = false;
   }
@@ -239,7 +242,6 @@ async function loadTasks() {
   } catch (err) {
     if (requestId !== tasksRequestId) return;
     tasksError.value = err instanceof Error ? err.message : t('debugPage.loadFailed');
-    notifyError(err instanceof Error ? err.message : t('debugPage.loadFailed'), err);
   } finally {
     if (requestId === tasksRequestId) tasksLoading.value = false;
   }
@@ -257,7 +259,6 @@ async function loadDatabases() {
   } catch (err) {
     if (requestId !== databasesRequestId) return;
     databasesError.value = err instanceof Error ? err.message : t('debugPage.loadFailed');
-    notifyError(err instanceof Error ? err.message : t('debugPage.loadFailed'), err);
   } finally {
     if (requestId === databasesRequestId) databasesLoading.value = false;
   }
@@ -337,6 +338,10 @@ onBeforeUnmount(() => window.clearInterval(timer));
               <a v-if="pprofUrl" class="min-w-0 break-all text-xs text-muted-foreground transition-colors hover:text-foreground" :href="pprofUrl" target="_blank" rel="noreferrer">{{ pprofUrl }}</a>
               <Switch :model-value="pprof?.enabled ?? false" :disabled="pprofPending" :label="t('debugPage.pprof')" @update:model-value="togglePprof" />
             </div>
+          </div>
+          <div v-if="pprofError" class="mt-3 flex min-w-0 flex-wrap items-center gap-2 rounded-control border border-danger-border bg-danger-bg p-3 text-sm text-danger" role="alert">
+            <span class="min-w-0 break-words">{{ pprofError }}</span>
+            <Button size="sm" variant="secondary" @click="loadPprof"><RefreshCcw />{{ t('common.retry') }}</Button>
           </div>
         </section>
 

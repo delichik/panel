@@ -9,7 +9,8 @@ import Button from '@/components/ui/Button.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import StatusBadge from '@/components/ui/StatusBadge.vue';
-import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
+import { useErrorDialog } from '@/components/ui/errorDialog';
+import { useSuccessToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import type { ServerDto } from '@/types/servers';
 import type { TaskDto, TaskLog } from '@/types/tasks';
@@ -27,7 +28,7 @@ import {
 
 const props = defineProps<{ server: ServerDto; active: boolean }>();
 const { t } = useI18n();
-const notifyError = useErrorToast();
+const notifyError = useErrorDialog();
 const notifySuccess = useSuccessToast();
 
 const agentTask = ref<TaskDto | null>(null);

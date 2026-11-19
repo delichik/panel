@@ -7,6 +7,7 @@ import CertificatesView from './index.vue';
 import { certificatesApi } from '@/api/certificates';
 import { dnsApi } from '@/api/dns';
 import { keyAssetsApi } from '@/api/keyAssets';
+import { errorDialogKey } from '@/components/ui/errorDialog';
 import { toastKey } from '@/components/ui/toast';
 import Table from '@/components/ui/Table.vue';
 import { useI18n } from '@/i18n';
@@ -31,6 +32,7 @@ const certificate: DomainCertificateDto = {
 
 let wrapper: VueWrapper | undefined;
 let router: Router;
+const errorDialogPush = vi.fn();
 
 function createStorage(): Storage {
   let store = new Map<string, string>();
@@ -71,7 +73,10 @@ async function render(path: string) {
   wrapper = mount(CertificatesView, {
     global: {
       plugins: [createPinia(), router],
-      provide: { [toastKey as symbol]: { push: vi.fn(), remove: vi.fn() } },
+      provide: {
+        [toastKey as symbol]: { push: vi.fn(), remove: vi.fn() },
+        [errorDialogKey as symbol]: { push: errorDialogPush, dismiss: vi.fn() },
+      },
     },
   });
   await flushPromises();
@@ -80,6 +85,7 @@ async function render(path: string) {
 
 beforeEach(() => {
   useI18n().setLocale('en');
+  errorDialogPush.mockClear();
   vi.spyOn(dnsApi, 'listDomains').mockResolvedValue([]);
   vi.spyOn(certificatesApi, 'list').mockResolvedValue({ items: [certificate], total: 1, page: 1, pageSize: 50 });
   vi.spyOn(certificatesApi, 'listSelfSignedPage').mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 50 });
@@ -208,5 +214,25 @@ describe('certificates detail migration', () => {
     expect(certificatesApi.list).toHaveBeenCalledTimes(1);
     expect(dnsApi.listDomains).toHaveBeenCalledTimes(1);
     expect(certificatesApi.listSelfSignedPage).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a certificate list load failure inline and never raises a dialog', async () => {
+    vi.spyOn(certificatesApi, 'list').mockRejectedValue(new Error('certs down'));
+    const view = await render('/certificates/domains');
+
+    expect(view.text()).toContain(useI18n().t('common.loadFailed'));
+    expect(view.text()).toContain('certs down');
+    expect(errorDialogPush).not.toHaveBeenCalled();
+  });
+
+  it('opens the blocking error dialog when an explicit certificate renewal fails', async () => {
+    vi.spyOn(certificatesApi, 'renew').mockRejectedValue(new Error('renew down'));
+    const view = await render('/certificates/domains');
+
+    const renewButton = view.findAll('button').find((item) => item.text() === useI18n().t('certificatesPage.renew'))!;
+    await renewButton.trigger('click');
+    await flushPromises();
+
+    expect(errorDialogPush).toHaveBeenCalledWith(expect.objectContaining({ title: 'renew down' }));
   });
 });

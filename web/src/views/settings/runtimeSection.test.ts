@@ -8,6 +8,7 @@ import Select from '@/components/ui/Select.vue';
 import { keyAssetsApi } from '@/api/keyAssets';
 import { settingsApi } from '@/api/settings';
 import { systemApi } from '@/api/system';
+import { errorDialogKey } from '@/components/ui/errorDialog';
 import { toastKey } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import type { RuntimeSettings } from '@/types/settings';
@@ -34,6 +35,7 @@ function runtimeSettings(overrides: Partial<RuntimeSettings> = {}): RuntimeSetti
 }
 
 const toastPush = vi.fn();
+const errorDialogPush = vi.fn();
 let wrapper: VueWrapper | undefined;
 let router: Router;
 
@@ -82,7 +84,10 @@ async function render(path = '/settings/general') {
   wrapper = mount(SettingsView, {
     global: {
       plugins: [createPinia(), router],
-      provide: { [toastKey as symbol]: { push: toastPush, remove: vi.fn() } },
+      provide: {
+        [toastKey as symbol]: { push: toastPush, remove: vi.fn() },
+        [errorDialogKey as symbol]: { push: errorDialogPush, dismiss: vi.fn() },
+      },
     },
   });
   await flushPromises();
@@ -91,6 +96,7 @@ async function render(path = '/settings/general') {
 
 beforeEach(() => {
   toastPush.mockReset();
+  errorDialogPush.mockReset();
   useI18n().setLocale('en');
   vi.spyOn(settingsApi, 'runtime').mockResolvedValue(runtimeSettings());
   vi.spyOn(settingsApi, 'serverVariables').mockResolvedValue([]);
@@ -247,10 +253,12 @@ describe('settings runtime section', () => {
 
     expect(locale.value).toBe('en');
     expect(view.find('[data-autosave-status]').attributes('data-autosave-state')).toBe('error');
-    expect(toastPush).toHaveBeenCalledWith(expect.objectContaining({ tone: 'danger' }));
+    // 自动保存失败只改状态，不 toast、不弹全局错误弹窗。
+    expect(toastPush).not.toHaveBeenCalledWith(expect.objectContaining({ tone: 'danger' }));
+    expect(errorDialogPush).not.toHaveBeenCalled();
   });
 
-  it('shows a danger toast on failure and retries with the same payload', async () => {
+  it('keeps an auto-save failure in AutoSaveStatus and retries with the same payload', async () => {
     const view = await render();
     enableAutoSaveTimers();
     vi.mocked(settingsApi.updateGeneral)
@@ -262,7 +270,9 @@ describe('settings runtime section', () => {
     await interval.trigger('change');
     await advanceAutoSave();
 
-    expect(toastPush).toHaveBeenCalledWith(expect.objectContaining({ tone: 'danger', title: 'conflict' }));
+    // 报错不进右上角，也不弹阻塞弹窗；只由 AutoSaveStatus 呈现 error + 重试。
+    expect(toastPush).not.toHaveBeenCalledWith(expect.objectContaining({ tone: 'danger' }));
+    expect(errorDialogPush).not.toHaveBeenCalled();
     const status = view.find('[data-autosave-status]');
     expect(status.attributes('data-autosave-state')).toBe('error');
     // 表单保留用户输入。

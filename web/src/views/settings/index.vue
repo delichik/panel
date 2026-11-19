@@ -21,7 +21,8 @@ import Table from '@/components/ui/Table.vue';
 import Tabs from '@/components/ui/Tabs.vue';
 import Textarea from '@/components/ui/Textarea.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
-import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
+import { useErrorDialog } from '@/components/ui/errorDialog';
+import { useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import AutoSaveStatus from '@/components/patterns/AutoSaveStatus.vue';
 import SettingsCard from '@/components/patterns/SettingsCard.vue';
@@ -81,7 +82,7 @@ const AppearanceSection = defineAsyncComponent({
   suspensible: false,
 });
 const session = useSessionStore();
-const notifyError = useErrorToast();
+const notifyError = useErrorDialog();
 const notifySuccess = useSuccessToast();
 
 const runtime = ref<RuntimeSettings | null>(null);
@@ -392,13 +393,6 @@ function withProgrammatic(apply: () => void) {
   }
 }
 
-function notifyAutoSaveError(errorValue: unknown) {
-  const message = errorValue instanceof Error && errorValue.message
-    ? errorValue.message
-    : t('settingsPage.autoSave.failed');
-  notifyError(message, errorValue);
-}
-
 const autoSaveLabels = computed<AutoSaveStatusLabels>(() => ({
   saving: t('settingsPage.autoSave.saving'),
   saved: t('settingsPage.autoSave.saved'),
@@ -552,8 +546,8 @@ function partitionAutoSave<P>(
       if (!meta.queued) withProgrammatic(() => refill(result));
     },
     onFailed(errorValue) {
+      // 自动保存失败只在 AutoSaveStatus 中进入 error + 重试，不 toast、不弹窗。
       onFailed?.(errorValue);
-      notifyAutoSaveError(errorValue);
     },
   });
 }
@@ -593,7 +587,7 @@ const variablesAutoSave = useDebouncedAutoSave<ServerVariableDefinition[], Serve
     serverVariables.value = result;
     if (!meta.queued) withProgrammatic(() => refillVariables(result));
   },
-  onFailed: notifyAutoSaveError,
+  // 自动保存失败只在 AutoSaveStatus 中进入 error + 重试，不 toast、不弹窗。
 });
 
 const generalStatus = generalAutoSave.status;
@@ -721,12 +715,11 @@ async function load() {
       hydrate(settingsResult.value, variablesResult.value);
     }
     if (firstError) {
+      // 加载失败：EmptyState 就地展示并提供重试，不进弹窗/toast。
       error.value = firstError;
-      notifyError(firstError);
     }
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('settingsPage.loadFailed');
-    notifyError(err instanceof Error ? err.message : t('settingsPage.loadFailed'), err);
   } finally {
     if (listRequests.isCurrent(requestId)) loading.value = false;
   }

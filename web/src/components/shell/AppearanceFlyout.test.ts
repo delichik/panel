@@ -3,7 +3,7 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { createMemoryHistory, createRouter, type Router } from 'vue-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { appearanceApi } from '@/api/appearance';
-import { toastKey } from '@/components/ui/toast';
+import { errorDialogKey } from '@/components/ui/errorDialog';
 import { useAppearance } from '@/design/appearance';
 import { useI18n } from '@/i18n';
 import type { Appearance } from '@/types/appearance';
@@ -35,7 +35,7 @@ function createStorage(): Storage {
 vi.stubGlobal('localStorage', createStorage());
 
 const mounts: VueWrapper[] = [];
-const toastPush = vi.fn();
+const errorDialogPush = vi.fn();
 
 function appearanceFixture(overrides: Partial<Appearance> = {}): Appearance {
   return {
@@ -67,7 +67,7 @@ async function mountFlyout(router: Router) {
     attachTo: document.body,
     global: {
       plugins: [router],
-      provide: { [toastKey as symbol]: { push: toastPush, remove: vi.fn() } },
+      provide: { [errorDialogKey as symbol]: { push: errorDialogPush, dismiss: vi.fn() } },
     },
   });
   mounts.push(wrapper);
@@ -89,7 +89,7 @@ async function openFlyout(wrapper: VueWrapper) {
 }
 
 beforeEach(() => {
-  toastPush.mockReset();
+  errorDialogPush.mockReset();
   useI18n().setLocale('en');
   // Seed the shared store with a loaded server appearance so the flyout has
   // concrete values without racing the authenticated load.
@@ -218,7 +218,7 @@ describe('AppearanceFlyout', () => {
     expect(document.querySelector('[role="dialog"][aria-label="Appearance"]')).toBeNull();
   });
 
-  it('rolls back and toasts when the save fails', async () => {
+  it('rolls back and reports a blocking error dialog when the save fails', async () => {
     vi.mocked(appearanceApi.update).mockRejectedValue(new Error('offline'));
     const wrapper = await mountFlyout(makeRouter());
     const { panel } = await openFlyout(wrapper);
@@ -228,11 +228,11 @@ describe('AppearanceFlyout', () => {
     dark!.click();
     await flushPromises();
 
-    // The store rolled the optimistic theme back; the flyout reports the failure.
+    // The store rolled the optimistic theme back; the flyout reports the failure
+    // through the global blocking-error dialog (never the top-right toast).
     expect(useAppearance().appearance.value?.themeMode).toBe('system');
-    expect(toastPush).toHaveBeenCalledWith(expect.objectContaining({
+    expect(errorDialogPush).toHaveBeenCalledWith(expect.objectContaining({
       title: 'Unable to save appearance settings.',
-      tone: 'danger',
     }));
   });
 

@@ -54,12 +54,14 @@
 | DNS、ACME、自签名证书、密钥资产 | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
 | 备份、恢复、维护模式、调试与诊断；清理数据进度/恢复/写入暂停 `DIAG-CLR-001..008`、`UI-DBG-007/008`；指标磁盘当前值/磁盘 IO `OBS-MET-007/008`、指标补报 `OBS-MET-009`、概览卡片数据 `OBS-OVW-005..007` | [备份、恢复与诊断](backup-restore-diagnostics.md)、[逐页面验收](ui-pages.md) |
 | ORM、数据库模型、迁移与兼容 | [架构、数据与 API](architecture-data-api.md) |
-| 测试入口、构建、容器和发布；Panel 进程日志 `ENG-LOG-001..007` 与产品读 API `ENG-EVT-001`、清空 `ENG-EVT-002`（`/api/v1/events*`、`/api/v1/logs`；legacy `/api/v1/log-contexts*`） | [工程质量与发布](engineering-release.md) |
+| 测试入口、构建、容器和发布；Panel 进程日志 `ENG-LOG-001..009` 与产品读 API `ENG-EVT-001`、清空 `ENG-EVT-002`、事件通知长轮询 `ENG-EVT-011`（`/api/v1/events*`、`/api/v1/logs`、`/api/v1/notifications`；legacy `/api/v1/log-contexts*`） | [工程质量与发布](engineering-release.md) |
 | 检查是否遗漏路由、API、表、后台行为或产物 | [项目覆盖基线](coverage-matrix.md) |
 | 逐项核对全部主 Panel HTTP method/path | [API 路由逐项清单](api-route-inventory.md) |
 | 核对当前实现尚未达到的合同，或修改触及实现/合同不一致 | [已知实现与验收差距](known-gaps.md) |
 
 ## 5. 变更影响矩阵
+
+右上角通知改为事件通知 + 阻塞错误 Dialog + HTTP 请求日志 debug（2026-11-19）：右上角 toast 只保留两类内容——后端过程事件的开始/成功/失败通知（长轮询 `GET /api/v1/notifications`、进程内内存通道、不读写数据库、`module=http` 的 HTTP 请求永不进入）与用户操作成功提示；用户当前阻塞操作失败改为全局错误 Dialog；页面/区块加载失败与后台自动刷新、自动保存失败改为就地状态；所有 `http request completed` 完成行统一 `debug`（含 4xx/5xx）。新增 `GET /api/v1/notifications` 路由，主 Panel `method/path` 202 → **203**，ORM 表 49、前端路由声明 31 均不变；无新后台任务类型、无新表/列/迁移。见 [界面外壳与交互约定](ui-shell-and-conventions.md) `UI-SHELL-065` 与 `UI-SHELL-020/022/031/032/056`、[工程质量与发布](engineering-release.md) `ENG-EVT-011`/`ENG-LOG-009`、[API 路由清单](api-route-inventory.md)、[覆盖基线](coverage-matrix.md)、[交互模型](../specifications/frontend/interaction-model.md) §5、[多语言翻译状态](../i18n-translation-status.md)。
 
 下线早期新增的外部网络互联能力（2026-11-19）：删除 3 条路由（2 条服务器/设置侧收敛入口与 1 条设置分区写入），主 Panel `method/path` 计数 197 → **194**；服务器创建/更新/详情不再携带互联意图字段，详情删除对应子视图与表单开关，设置页删除该分区及其认证密钥/标签/应用重连/清除确认；`panel-init` 删除对应进程监管与控制面路由，容器不再要求额外的网络能力与设备，但仍以 root 作为 PID 1 降权运行 Panel 子进程；数据库删除 `servers` 三个旧列并由一次性迁移清理 `runtime_settings`/`servers.traits` 中的废弃键。见 [覆盖基线](coverage-matrix.md) §2 最新条目、[ARCH-API-009](architecture-data-api.md)、[API 路由清单](api-route-inventory.md)、[服务器、安全与软件包](servers-security-packages.md)、[身份、设置与系统](identity-settings-system.md)、[工程质量与发布](engineering-release.md)、[多语言翻译状态](../i18n-translation-status.md)。
 

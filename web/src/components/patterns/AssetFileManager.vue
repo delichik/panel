@@ -12,12 +12,12 @@ import Input from '@/components/ui/Input.vue';
 import Select from '@/components/ui/Select.vue';
 import Tabs from '@/components/ui/Tabs.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
-import { useErrorToast } from '@/components/ui/toast';
+import { useErrorDialog } from '@/components/ui/errorDialog';
 import type { CodeEditorLanguage } from '@/components/ui/codeEditorLanguage';
 import type { AssetFileAdapter, AssetFileItem, AssetFileKind, AssetFileManagerLabels, SaveTextAssetInput, UploadAssetInput } from './assetFileManager';
 
 const archiveAccept = '.zip,.tar,.tar.gz,.tgz,application/zip,application/x-tar,application/gzip';
-const notifyError = useErrorToast();
+const notifyError = useErrorDialog();
 
 const props = withDefaults(defineProps<{
   items: AssetFileItem[];

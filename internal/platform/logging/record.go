@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
+
+	"panel/internal/platform/notifications"
 )
 
 // ContextMeta is optional event metadata upserted into events.
@@ -23,14 +25,15 @@ type ContextMeta struct {
 }
 
 // RecordContext upserts events for the event on ctx using meta fields.
-// Missing event/module or store is a no-op.
+// Missing event/module or store is a no-op for events rows.
+//
+// The process notification channel (ENG-EVT-011) is fed after the row is built
+// and before it is upserted, so event notifications do not depend on the events
+// store and are delivered even when it is unavailable. Ordinary log lines and
+// Touch calls never publish notifications.
 func RecordContext(ctx context.Context, meta ContextMeta) error {
 	logCtx, ok := Lookup(ctx)
 	if !ok {
-		return nil
-	}
-	store := getContextStore()
-	if store == nil {
 		return nil
 	}
 	origin := strings.TrimSpace(meta.Origin)
@@ -73,6 +76,24 @@ func RecordContext(ctx context.Context, meta ContextMeta) error {
 				rec.State = "succeeded"
 			}
 		}
+	}
+	// Publish before Upsert: the notification channel must not wait on (or
+	// require) the events database, and a later Upsert failure must not swallow
+	// the user-visible lifecycle notification.
+	notifications.PublishProcess(notifications.ProcessEvent{
+		EventID:   rec.EventID,
+		Module:    rec.Module,
+		Title:     rec.Title,
+		Summary:   rec.Summary,
+		State:     rec.State,
+		Level:     rec.Level,
+		Origin:    rec.Origin,
+		HadError:  rec.HadError,
+		UpdatedAt: rec.UpdatedAt,
+	})
+	store := getContextStore()
+	if store == nil {
+		return nil
 	}
 	return store.Upsert(ctx, rec)
 }

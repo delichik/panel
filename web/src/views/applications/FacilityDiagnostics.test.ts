@@ -1,9 +1,8 @@
-﻿// @vitest-environment jsdom
+// @vitest-environment jsdom
 import { mount, flushPromises } from '@vue/test-utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import FacilityDiagnostics from './FacilityDiagnostics.vue';
 import { reverseProxyFacilityApi } from '@/api/facilityApps';
-import { toastKey } from '@/components/ui/toast';
 import type { ProxyPlaneState, ProxyDiagnostics } from '@/types/facilityApps';
 
 const plane = {
@@ -12,7 +11,7 @@ const plane = {
     { serverId: 'b', serverName: 'Phoenix', observedState: 'running', operation: { id: 'job-b', status: 'succeeded' } },
   ],
 } as ProxyPlaneState;
-function render() { return mount(FacilityDiagnostics, { props: { state: plane }, global: { provide: { [toastKey as symbol]: { push: vi.fn() } }, stubs: { ActivityLink: true, StatusBadge: { props: ['status'], template: '<span>{{ status }}</span>' } } } }); }
+function render() { return mount(FacilityDiagnostics, { props: { state: plane }, global: { stubs: { ActivityLink: true, StatusBadge: { props: ['status'], template: '<span>{{ status }}</span>' } } } }); }
 
 /** Expander header 也是 button；显式按文案定位每个节点的“检查”按钮。 */
 function checkButton(wrapper: ReturnType<typeof render>) {
@@ -50,9 +49,22 @@ describe('facility diagnostics', () => {
           ],
         } as ProxyPlaneState,
       },
-      global: { provide: { [toastKey as symbol]: { push: vi.fn() } }, stubs: { ActivityLink: true, StatusBadge: { props: ['status'], template: '<span>{{ status }}</span>' } } },
+      global: { stubs: { ActivityLink: true, StatusBadge: { props: ['status'], template: '<span>{{ status }}</span>' } } },
     });
     expect(wrapper.text()).toContain('This failure has no containerLogs snapshot');
+    wrapper.unmount();
+  });
+
+  it('shows a check failure inline with a retry action instead of a floating overlay', async () => {
+    vi.spyOn(reverseProxyFacilityApi, 'getDiagnostics').mockRejectedValueOnce(new Error('agent offline')).mockResolvedValueOnce({ serverId: 'a', status: 'sampled', checkedAt: '2026-09-15T06:00:00Z', truncated: false, issues: [] });
+    const wrapper = render();
+    await checkButton(wrapper).trigger('click');
+    await flushPromises();
+    expect(wrapper.text()).toContain('agent offline');
+    expect(document.querySelector('[data-testid="error-dialog"]')).toBeNull();
+    await wrapper.findAll('button').find((button) => button.text() === 'Retry')!.trigger('click');
+    await flushPromises();
+    expect(wrapper.text()).toContain('No request errors found in this log sample.');
     wrapper.unmount();
   });
 

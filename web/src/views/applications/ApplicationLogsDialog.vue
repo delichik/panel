@@ -8,13 +8,11 @@ import Button from '@/components/ui/Button.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import FormField from '@/components/patterns/FormField.vue';
 import InfoBar from '@/components/patterns/InfoBar.vue';
-import { useErrorToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 
 const props = defineProps<{ open: boolean; applicationId: string; applicationName: string }>();
 const emit = defineEmits<{ 'update:open': [value: boolean] }>();
 const { t } = useI18n();
-const notifyError = useErrorToast();
 const instances = ref<ApplicationRuntimeInstance[]>([]);
 const selected = ref('');
 const text = ref('');
@@ -55,8 +53,8 @@ async function readLogs() {
     text.value = result.logs;
   } catch (cause) {
     if (controller.signal.aborted || logRequest !== controller) return;
+    // 日志读取失败属于区块加载失败：InfoBar 就地展示并提供重试，不进弹窗/toast。
     error.value = cause instanceof Error ? cause.message : t('applicationsPage.logsFailed');
-    notifyError(error.value, cause);
   } finally { if (logRequest === controller) { logRequest = undefined; logsLoading.value = false; } }
 }
 
@@ -78,8 +76,8 @@ async function loadInstances() {
     if (selectable.value.length === 1) selected.value = selectable.value[0].value;
   } catch (cause) {
     if (controller.signal.aborted || instancesRequest !== controller) return;
+    // 实例列表加载失败属于区块加载失败：InfoBar 就地展示并提供重试，不进弹窗/toast。
     error.value = cause instanceof Error ? cause.message : t('applicationLogs.instancesFailed');
-    notifyError(error.value, cause);
   } finally { if (instancesRequest === controller) { instancesRequest = undefined; instancesLoading.value = false; } }
 }
 

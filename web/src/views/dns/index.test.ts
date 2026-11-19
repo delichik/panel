@@ -5,6 +5,7 @@ import { createMemoryHistory, createRouter, type Router } from 'vue-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import DnsView from './index.vue';
 import { dnsApi } from '@/api/dns';
+import { errorDialogKey } from '@/components/ui/errorDialog';
 import { toastKey } from '@/components/ui/toast';
 import Table from '@/components/ui/Table.vue';
 import { useI18n } from '@/i18n';
@@ -20,6 +21,7 @@ const domain: DnsDomainDto = {
 
 let wrapper: VueWrapper | undefined;
 let router: Router;
+const errorDialogPush = vi.fn();
 
 function createStorage(): Storage {
   let store = new Map<string, string>();
@@ -53,7 +55,10 @@ async function render(path: string) {
   wrapper = mount(DnsView, {
     global: {
       plugins: [createPinia(), router],
-      provide: { [toastKey as symbol]: { push: vi.fn(), remove: vi.fn() } },
+      provide: {
+        [toastKey as symbol]: { push: vi.fn(), remove: vi.fn() },
+        [errorDialogKey as symbol]: { push: errorDialogPush, dismiss: vi.fn() },
+      },
     },
   });
   await flushPromises();
@@ -62,6 +67,7 @@ async function render(path: string) {
 
 beforeEach(() => {
   useI18n().setLocale('en');
+  errorDialogPush.mockClear();
   vi.spyOn(dnsApi, 'listDomainPage').mockResolvedValue({ items: [domain], total: 1, page: 1, pageSize: 50 });
   vi.spyOn(dnsApi, 'listRecords').mockResolvedValue({ items: [], stale: false, refreshing: false });
 });
@@ -147,5 +153,25 @@ describe('dns detail migration', () => {
     expect(listLink.text()).toBe(t('routes.dns.title'));
     expect(listLink.attributes('href')).toBe('/dns/domains');
     expect(breadcrumb.find('[aria-current="page"]').text()).toBe('example.com');
+  });
+
+  it('keeps a domain load failure inline with a retry and never raises a dialog', async () => {
+    vi.spyOn(dnsApi, 'listDomainPage').mockRejectedValue(new Error('dns down'));
+    const view = await render('/dns/domains');
+
+    expect(view.text()).toContain(useI18n().t('common.loadFailed'));
+    expect(view.text()).toContain('dns down');
+    expect(errorDialogPush).not.toHaveBeenCalled();
+  });
+
+  it('opens the blocking error dialog when an explicit DNS refresh fails', async () => {
+    vi.spyOn(dnsApi, 'refreshRecords').mockRejectedValue(new Error('sync down'));
+    const view = await render('/dns/domains');
+
+    const syncButton = view.findAll('button').find((item) => item.text() === useI18n().t('dnsPage.syncRecords'))!;
+    await syncButton.trigger('click');
+    await flushPromises();
+
+    expect(errorDialogPush).toHaveBeenCalledWith(expect.objectContaining({ title: 'sync down' }));
   });
 });

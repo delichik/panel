@@ -6,7 +6,7 @@ import Button from '@/components/ui/Button.vue';
 import Input from '@/components/ui/Input.vue';
 import InfoBar from '@/components/patterns/InfoBar.vue';
 import FormField from '@/components/patterns/FormField.vue';
-import { useErrorToast } from '@/components/ui/toast';
+import { useErrorDialog } from '@/components/ui/errorDialog';
 import { useI18n } from '@/i18n';
 import { useSessionStore } from '@/stores/session';
 
@@ -14,7 +14,7 @@ const router = useRouter();
 const route = useRoute();
 const session = useSessionStore();
 const { t } = useI18n();
-const notifyError = useErrorToast();
+const notifyError = useErrorDialog();
 const username = ref('');
 const password = ref('');
 const accountUsername = ref('');

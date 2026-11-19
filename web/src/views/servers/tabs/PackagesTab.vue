@@ -10,7 +10,8 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
 import Table from '@/components/ui/Table.vue';
-import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
+import { useErrorDialog } from '@/components/ui/errorDialog';
+import { useSuccessToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import type { PackageUpdateList } from '@/types/resources';
 import type { ServerDto } from '@/types/servers';
@@ -20,7 +21,7 @@ import { canMaintainPackages, filterPackages, packageBlockReason, selectedPackag
 
 const props = defineProps<{ server: ServerDto }>();
 const { t } = useI18n();
-const notifyError = useErrorToast();
+const notifyError = useErrorDialog();
 const notifySuccess = useSuccessToast();
 
 const packageList = ref<PackageUpdateList | null>(null);
@@ -72,7 +73,6 @@ async function load() {
   } catch (err) {
     if (isAbortError(err)) return;
     error.value = err instanceof Error ? err.message : t('resourcesPage.loadResourceFailed');
-    notifyError(err instanceof Error ? err.message : t('resourcesPage.loadResourceFailed'), err);
   } finally {
     if (listGuard.isCurrent(requestId)) loading.value = false;
   }

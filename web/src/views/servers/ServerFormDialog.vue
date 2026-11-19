@@ -9,7 +9,8 @@ import Input from '@/components/ui/Input.vue';
 import NumberBox from '@/components/ui/NumberBox.vue';
 import Select from '@/components/ui/Select.vue';
 import Textarea from '@/components/ui/Textarea.vue';
-import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
+import { useErrorDialog } from '@/components/ui/errorDialog';
+import { useSuccessToast } from '@/components/ui/toast';
 import CredentialFormFields from '@/components/patterns/CredentialFormFields.vue';
 import FormField from '@/components/patterns/FormField.vue';
 import { emptyCredentialInput, secretPayload, validateCredentialInput, type CredentialFormLabels } from '@/components/patterns/credentialForm';
@@ -47,7 +48,7 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
-const notifyError = useErrorToast();
+const notifyError = useErrorDialog();
 const notifySuccess = useSuccessToast();
 
 const form = reactive({

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import CredentialsView from './index.vue';
 import { credentialsApi } from '@/api/credentials';
 import { serversApi } from '@/api/servers';
+import { errorDialogKey } from '@/components/ui/errorDialog';
 import { toastKey } from '@/components/ui/toast';
 import Table from '@/components/ui/Table.vue';
 import { useI18n } from '@/i18n';
@@ -32,6 +33,7 @@ function server(id: string, name: string, host: string): ServerDto {
 
 let wrapper: VueWrapper | undefined;
 let router: Router;
+const errorDialogPush = vi.fn();
 
 // jsdom in this vitest environment has no localStorage; stub it like the other page tests.
 function createStorage(): Storage {
@@ -66,7 +68,10 @@ async function render(path = '/credentials') {
   wrapper = mount(CredentialsView, {
     global: {
       plugins: [createPinia(), router],
-      provide: { [toastKey as symbol]: { push: vi.fn(), remove: vi.fn() } },
+      provide: {
+        [toastKey as symbol]: { push: vi.fn(), remove: vi.fn() },
+        [errorDialogKey as symbol]: { push: errorDialogPush, dismiss: vi.fn() },
+      },
     },
   });
   await flushPromises();
@@ -75,6 +80,7 @@ async function render(path = '/credentials') {
 
 beforeEach(() => {
   useI18n().setLocale('en');
+  errorDialogPush.mockClear();
   vi.spyOn(credentialsApi, 'listPage').mockResolvedValue({ items: [credential], total: 1, page: 1, pageSize: 50 });
   vi.spyOn(credentialsApi, 'get').mockResolvedValue(detail);
   vi.spyOn(serversApi, 'list').mockResolvedValue([
@@ -182,5 +188,29 @@ describe('credentials detail migration', () => {
     expect(radios[1]!.getAttribute('aria-checked')).toBe('true');
     expect(radios[1]!.closest('.bg-accent-selected')).not.toBeNull();
     expect(radios[0]!.getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('keeps a credentials list load failure inline and never raises a dialog', async () => {
+    vi.mocked(credentialsApi.listPage).mockRejectedValue(new Error('credentials down'));
+    const view = await render();
+
+    expect(view.text()).toContain(useI18n().t('common.loadFailed'));
+    expect(view.text()).toContain('credentials down');
+    expect(errorDialogPush).not.toHaveBeenCalled();
+  });
+
+  it('opens the blocking error dialog when the explicit connection test fails', async () => {
+    vi.spyOn(serversApi, 'test').mockRejectedValue(new Error('ssh down'));
+    const view = await render();
+
+    const testButton = view.findAll('button').find((item) => item.text() === useI18n().t('credentialsPage.test'))!;
+    await testButton.trigger('click');
+    await flushPromises();
+    const confirm = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'))
+      .find((item) => item.textContent?.trim() === useI18n().t('credentialsPage.test'))!;
+    confirm.click();
+    await flushPromises();
+
+    expect(errorDialogPush).toHaveBeenCalledWith(expect.objectContaining({ title: 'ssh down' }));
   });
 });

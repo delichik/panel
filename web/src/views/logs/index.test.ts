@@ -34,6 +34,7 @@ const eventMeta: Event = {
 };
 let wrapper: VueWrapper | undefined;
 let router: Router;
+const toastPush = vi.fn();
 
 async function render(url = '/logs?eventId=first&from=2026-09-14T00:00:00Z&level=info,warning,error') {
   router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/logs', component: LogsPage }] });
@@ -42,10 +43,13 @@ async function render(url = '/logs?eventId=first&from=2026-09-14T00:00:00Z&level
   wrapper = mount(LogsPage, {
     global: {
       plugins: [router],
-      provide: { [toastKey as symbol]: { push: vi.fn() } },
+      provide: { [toastKey as symbol]: { push: toastPush } },
       stubs: {
         ConsolePage: { template: '<section><header><slot name="actions" /></header><slot /></section>' },
-        ListPage: { template: '<div><slot name="toolbar" /><slot /><slot name="pagination" /></div>' },
+        ListPage: {
+          props: ['state'],
+          template: '<div><slot name="toolbar" /><slot v-if="state === \'error\'" name="error" /><slot v-else /><slot name="pagination" /></div>',
+        },
         Table: {
           props: ['rows'],
           template: '<div><div v-for="(row, index) in rows" :key="index">{{ row.msg }}</div><slot name="empty" /></div>',
@@ -64,6 +68,7 @@ function button(text: string) {
 
 beforeEach(() => {
   useI18n().setLocale('en');
+  toastPush.mockClear();
   vi.spyOn(logsApi, 'list').mockResolvedValue(page());
   vi.spyOn(eventsApi, 'get').mockResolvedValue(eventMeta);
   vi.spyOn(eventsApi, 'list').mockResolvedValue({ items: [eventMeta], hasMore: false });
@@ -121,5 +126,13 @@ describe('logs line list', () => {
     await flushPromises();
     expect(eventsApi.list).toHaveBeenCalledWith(expect.objectContaining({ operationId: 'op-demo-deploy' }));
     expect(logsApi.list).toHaveBeenCalledWith(expect.objectContaining({ eventId: 'first' }));
+  });
+
+  it('keeps load failures inline with a retry and never raises a toast', async () => {
+    vi.mocked(logsApi.list).mockRejectedValue(new Error('logs down'));
+    const view = await render();
+    expect(view.text()).toContain(useI18n().t('common.loadFailed'));
+    expect(view.text()).toContain('logs down');
+    expect(toastPush).not.toHaveBeenCalled();
   });
 });

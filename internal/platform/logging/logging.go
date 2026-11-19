@@ -92,14 +92,11 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 			zap.String("user_agent", r.UserAgent()),
 		}
 		logger := From(ctx)
-		switch {
-		case status >= http.StatusInternalServerError:
-			logger.Error("http request completed", fields...)
-		case status >= http.StatusBadRequest:
-			logger.Warn("http request completed", fields...)
-		default:
-			logger.Debug("http request completed", fields...)
-		}
+		// All completed requests log at debug regardless of status: the default
+		// info/warn/error filter and the event notification channel must stay free
+		// of HTTP request noise (ENG-LOG-009). Failed requests still surface
+		// through the "api error response" warn/error line.
+		logger.Debug("http request completed", fields...)
 	})
 }
 

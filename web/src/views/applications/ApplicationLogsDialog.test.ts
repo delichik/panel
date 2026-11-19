@@ -3,7 +3,6 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ApplicationLogsDialog from './ApplicationLogsDialog.vue';
 import { applicationsApi } from '@/api/applications';
-import { toastKey } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import type { ApplicationRuntime, ApplicationRuntimeInstance, LogResult } from '@/types/applications';
 
@@ -11,10 +10,8 @@ const nodeA: ApplicationRuntimeInstance = { instanceId: 'instance-a', serverId: 
 const nodeB: ApplicationRuntimeInstance = { instanceId: 'instance-b', serverId: 'server-b', serverName: 'Phoenix', containerName: 'panel-app', containerId: 'container-b', status: 'stopped' };
 const runtime = (instances = [nodeA, nodeB]): ApplicationRuntime => ({ applicationId: 'app', runtimeId: '', status: 'running', instances, observedAt: '' });
 let wrapper: VueWrapper | undefined;
-const toast = vi.fn();
 async function render(open = true) {
   wrapper = mount(ApplicationLogsDialog, { props: { open, applicationId: 'app', applicationName: 'My app' }, global: {
-    provide: { [toastKey as symbol]: { push: toast } },
     stubs: {
       Dialog: { props: ['open'], template: '<div v-if="open"><slot /></div>' },
       Select: { props: ['modelValue', 'options', 'disabled'], emits: ['update:modelValue'], template: '<select :value="modelValue" :disabled="disabled" @change="$emit(\'update:modelValue\', $event.target.value)"><option value=""></option><option v-for="option in options" :key="option.value" :value="option.value" :disabled="option.disabled">{{ option.label }}</option></select>' },
@@ -25,7 +22,6 @@ async function render(open = true) {
 }
 beforeEach(() => {
   useI18n().setLocale('en');
-  toast.mockClear();
   vi.spyOn(applicationsApi, 'runtime').mockResolvedValue(runtime());
   vi.spyOn(applicationsApi, 'logs').mockImplementation(async (_app, { instanceId }) => ({ instanceId, logs: `logs for ${instanceId}` }));
 });
@@ -86,7 +82,8 @@ describe('application container logs', () => {
     vi.mocked(applicationsApi.logs).mockRejectedValueOnce(new Error('Agent unavailable')).mockResolvedValueOnce({ instanceId: 'instance-a', logs: '' });
     await render();
     expect(wrapper!.find('[role="alert"]').text()).toContain('Agent unavailable');
-    expect(toast).toHaveBeenCalledTimes(1);
+    // 日志读取失败是区块加载失败：只在弹窗内就地展示，不弹全局错误弹窗。
+    expect(document.querySelector('[data-testid="error-dialog"]')).toBeNull();
     await wrapper!.findAll('button').find(button => button.text() === 'Retry')!.trigger('click');
     await flushPromises();
     expect(wrapper!.text()).toContain('This container has no log output');

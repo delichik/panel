@@ -11,6 +11,7 @@ import Select from '@/components/ui/Select.vue';
 import { keyAssetsApi } from '@/api/keyAssets';
 import { settingsApi } from '@/api/settings';
 import { systemApi } from '@/api/system';
+import { errorDialogKey } from '@/components/ui/errorDialog';
 import { toastKey } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import type { RuntimeSettings } from '@/types/settings';
@@ -46,6 +47,7 @@ function runtimeSettings(): RuntimeSettings {
 }
 
 const toastPush = vi.fn();
+const errorDialogPush = vi.fn();
 let wrapper: VueWrapper | undefined;
 let router: Router;
 
@@ -96,7 +98,10 @@ async function render(path: string) {
   wrapper = mount(SettingsView, {
     global: {
       plugins: [createPinia(), router],
-      provide: { [toastKey as symbol]: { push: toastPush, remove: vi.fn() } },
+      provide: {
+        [toastKey as symbol]: { push: toastPush, remove: vi.fn() },
+        [errorDialogKey as symbol]: { push: errorDialogPush, dismiss: vi.fn() },
+      },
     },
   });
   await flushPromises();
@@ -105,6 +110,7 @@ async function render(path: string) {
 
 beforeEach(() => {
   toastPush.mockReset();
+  errorDialogPush.mockReset();
   useI18n().setLocale('en');
   vi.spyOn(settingsApi, 'runtime').mockResolvedValue(runtimeSettings());
   vi.spyOn(settingsApi, 'serverVariables').mockResolvedValue([]);
@@ -430,6 +436,26 @@ describe('settings auto-update partition', () => {
       title: expect.stringContaining('task-auto-update-manual-1'),
       tone: 'success',
     }));
+  });
+
+  it('uses the blocking error dialog when the explicit run action fails', async () => {
+    const { t } = useI18n();
+    vi.mocked(settingsApi.runAutoUpdate).mockRejectedValueOnce(new Error('auto update failed'));
+    const view = await render('/settings/auto-update');
+    const runButton = view.findAll('button').find((item) => item.text() === t('settingsPage.autoUpdate.runNow'));
+    await runButton!.trigger('click');
+    await flushPromises();
+    const confirmButton = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'))
+      .find((button) => button.textContent?.trim() === t('settingsPage.autoUpdate.runNow'));
+    confirmButton!.click();
+    await flushPromises();
+
+    // 用户显式动作失败：全局阻塞错误弹窗，不进右上角 toast。
+    expect(errorDialogPush).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'auto update failed',
+      reference: expect.any(Error),
+    }));
+    expect(toastPush).not.toHaveBeenCalledWith(expect.objectContaining({ tone: 'danger' }));
   });
 
   it('disables the manual run button when both switches are off', async () => {

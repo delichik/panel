@@ -9,6 +9,7 @@ import { keyAssetsApi } from '@/api/keyAssets';
 import { settingsApi } from '@/api/settings';
 import { systemApi } from '@/api/system';
 import Select from '@/components/ui/Select.vue';
+import { errorDialogKey } from '@/components/ui/errorDialog';
 import { toastKey } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import type {
@@ -109,6 +110,7 @@ function runtimeSettings(): RuntimeSettings {
 }
 
 const toastPush = vi.fn();
+const errorDialogPush = vi.fn();
 let wrapper: VueWrapper | undefined;
 let router: Router;
 
@@ -172,7 +174,10 @@ async function render() {
   wrapper = mount(SettingsView, {
     global: {
       plugins: [createPinia(), router],
-      provide: { [toastKey as symbol]: { push: toastPush, remove: vi.fn() } },
+      provide: {
+        [toastKey as symbol]: { push: toastPush, remove: vi.fn() },
+        [errorDialogKey as symbol]: { push: errorDialogPush, dismiss: vi.fn() },
+      },
     },
   });
   // AppearanceSection is an async component: wait until its dynamic import and
@@ -201,6 +206,7 @@ function buttonByText(text: string) {
 
 beforeEach(() => {
   toastPush.mockReset();
+  errorDialogPush.mockReset();
   useI18n().setLocale('en');
   storeMock.current = buildStore();
   vi.spyOn(settingsApi, 'runtime').mockResolvedValue(runtimeSettings());
@@ -436,7 +442,7 @@ describe('settings appearance section', () => {
     expect(storeMock.current.load).toHaveBeenCalledTimes(1);
   });
 
-  it('toasts a save failure instead of leaving an unhandled rejection', async () => {
+  it('uses the blocking error dialog for a save failure instead of a toast', async () => {
     const view = await render();
     const failure = new Error('appearance save failed');
     storeMock.current.setThemeMode.mockRejectedValueOnce(failure);
@@ -444,6 +450,11 @@ describe('settings appearance section', () => {
     view.findComponent(Select).vm.$emit('update:modelValue', 'light');
     await flushPromises();
 
-    expect(toastPush).toHaveBeenCalledWith(expect.objectContaining({ tone: 'danger', title: useI18n().t('appearance.errors.save') }));
+    // 外观保存是显式用户动作：失败走全局错误弹窗，不进右上角 toast。
+    expect(errorDialogPush).toHaveBeenCalledWith(expect.objectContaining({
+      title: useI18n().t('appearance.errors.save'),
+      reference: failure,
+    }));
+    expect(toastPush).not.toHaveBeenCalledWith(expect.objectContaining({ tone: 'danger' }));
   });
 });

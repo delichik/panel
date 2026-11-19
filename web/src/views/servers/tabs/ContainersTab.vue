@@ -12,7 +12,8 @@ import EmptyState from '@/components/ui/EmptyState.vue';
 import IconButton from '@/components/ui/IconButton.vue';
 import Table from '@/components/ui/Table.vue';
 import Tooltip from '@/components/ui/Tooltip.vue';
-import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
+import { useErrorDialog } from '@/components/ui/errorDialog';
+import { useSuccessToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import type { ContainerDto } from '@/types/resources';
 import type { ServerDto } from '@/types/servers';
@@ -22,7 +23,7 @@ import { containerActionDisabled, containerTone } from './resourceModel';
 
 const props = defineProps<{ server: ServerDto }>();
 const { t } = useI18n();
-const notifyError = useErrorToast();
+const notifyError = useErrorDialog();
 const notifySuccess = useSuccessToast();
 
 const containers = ref<ContainerDto[]>([]);
@@ -74,7 +75,6 @@ async function load() {
   } catch (err) {
     if (isAbortError(err)) return;
     error.value = err instanceof Error ? err.message : t('resourcesPage.loadResourceFailed');
-    notifyError(err instanceof Error ? err.message : t('resourcesPage.loadResourceFailed'), err);
   } finally {
     if (listGuard.isCurrent(requestId)) loading.value = false;
   }

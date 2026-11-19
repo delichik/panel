@@ -119,6 +119,20 @@ describe('domain mock routes', () => {
     expect(detailEnvelope.data.id).toBe('srv-edge-sgp');
   });
 
+  it('serves the notifications long-poll baseline as an empty page', async () => {
+    const response = await fetch('/api/v1/notifications?after=7&wait=20');
+    const envelope = await response.json();
+    expect(response.status).toBe(200);
+    expect(envelope.data).toMatchObject({ items: [], cursor: 7 });
+  });
+
+  it('aborts the notifications mock long poll with AbortError', async () => {
+    const controller = new AbortController();
+    const pending = fetch('/api/v1/notifications?after=7', { signal: controller.signal });
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
   it('serves expanded demo application and certificate inventory', async () => {
     const apps = await fetch('/api/v1/applications?pageSize=200');
     const appsEnvelope = await apps.json();

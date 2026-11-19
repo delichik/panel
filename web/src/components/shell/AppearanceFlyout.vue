@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId } from 'vue'
 import { useRouter } from 'vue-router';
 import { Check, ChevronRight, Image as ImageIcon, Moon, Sun } from '@/icons';
 import Switch from '@/components/ui/Switch.vue';
-import { useErrorToast } from '@/components/ui/toast';
+import { useErrorDialog } from '@/components/ui/errorDialog';
 import { useI18n } from '@/i18n';
 import { ACCENT_PRESETS, THEME_MODES, useAppearance } from '@/design/appearance';
 import { focusWithoutScroll } from '@/utils/focus';
@@ -18,12 +18,12 @@ import type { AccentId, ThemeMode } from '@/types/appearance';
  * manager. The flyout is a non-modal popup: it is anchored to its trigger,
  * closes on Escape / outside click / route change, keeps Tab inside while open
  * and returns focus to the trigger. All persistence goes through
- * `useAppearance()`; failures roll back and are toasted here (the store never
- * toasts).
+ * `useAppearance()`; failures roll back and are reported through the global
+ * blocking-error dialog (the store never toasts).
  */
 const { t } = useI18n();
 const router = useRouter();
-const notifyError = useErrorToast();
+const notifyError = useErrorDialog();
 const { appearance, resolvedTheme, setThemeMode, setMica, setAccent } = useAppearance();
 
 const open = ref(false);

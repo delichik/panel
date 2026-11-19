@@ -18,7 +18,8 @@ import Table from '@/components/ui/Table.vue';
 import Tabs from '@/components/ui/Tabs.vue';
 import Select from '@/components/ui/Select.vue';
 import Tooltip from '@/components/ui/Tooltip.vue';
-import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
+import { useErrorDialog } from '@/components/ui/errorDialog';
+import { useSuccessToast } from '@/components/ui/toast';
 import TableDetailName from '@/components/patterns/TableDetailName.vue';
 import ListCommandBar from '@/components/patterns/ListCommandBar.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
@@ -68,7 +69,7 @@ import {
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
-const notifyError = useErrorToast();
+const notifyError = useErrorDialog();
 const notifySuccess = useSuccessToast();
 const isDev = import.meta.env.DEV;
 
@@ -356,7 +357,6 @@ async function loadServerDetail() {
     if (requestId === detailRequestId) {
       const message = err instanceof Error ? err.message : t('serversPage.loadFailed');
       detailError.value = message;
-      notifyError(message, err);
     }
   } finally {
     if (requestId === detailRequestId) detailLoading.value = false;
@@ -392,14 +392,12 @@ async function load() {
       }
     } else {
       error.value = serversResult.reason instanceof Error ? serversResult.reason.message : t('serversPage.loadFailed');
-      notifyError(serversResult.reason instanceof Error ? serversResult.reason.message : t('serversPage.loadFailed'));
     }
     if (credentialsResult.status === 'fulfilled') {
       credentials.value = credentialsResult.value;
     } else {
       credentials.value = [];
       credentialError.value = credentialsResult.reason instanceof Error ? credentialsResult.reason.message : t('serversPage.credentialsLoadFailed');
-      notifyError(credentialsResult.reason instanceof Error ? credentialsResult.reason.message : t('serversPage.credentialsLoadFailed'));
     }
     if (selectedId.value) invalidateServerDetail(selectedId.value);
   } finally {
@@ -424,7 +422,6 @@ async function loadServers() {
   } catch (err) {
     if (isAbortError(err)) return;
     error.value = err instanceof Error ? err.message : t('serversPage.loadFailed');
-    notifyError(err instanceof Error ? err.message : t('serversPage.loadFailed'), err);
   } finally {
     if (listGuard.isCurrent(requestId)) loading.value = false;
   }
@@ -480,7 +477,6 @@ async function loadCredentials() {
   } catch (err) {
     credentials.value = [];
     credentialError.value = err instanceof Error ? err.message : t('serversPage.credentialsLoadFailed');
-    notifyError(err instanceof Error ? err.message : t('serversPage.credentialsLoadFailed'), err);
   }
 }
 

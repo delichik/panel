@@ -72,7 +72,7 @@ async function copyValue(item: PropertyListItem, index: number) {
     copiedKey.value = rowKey(item, index);
     emit('copy', text);
   } catch {
-    // 剪贴板不可用：保持原文案，由页面决定是否用 toast 提示，不在组件内造文案。
+    // 剪贴板不可用：保持原文案，由页面决定失败反馈（就地/弹窗），不在组件内造文案。
   }
 }
 </script>

@@ -7,7 +7,7 @@
 | GAP-001 | 前端自动化 | 页面级 Playwright E2E、axe、多断点视觉/滚动回归未系统恢复；URL 恢复、脏状态离开、两阶段任务、上传下载、维护 token 隔离主要依赖人工检查 | 为关键页面族补浏览器级证据并关联 UI 验收编号 |
 | GAP-002 | URL 状态 | ~~servers、applications、dns 等页面的页码/选择没有完整从 URL 初始化并双向同步~~（已关闭） | 表格化一轮已修复：servers/applications/dns 的 `page`/`search`/选中与服务器详情 `tab` 均从 URL 初始化并双向同步，深链与前进/后退可恢复（`UI-SHELL-035/059/062`、`UI-SRV-001`、`UI-APP-001`、`UI-DNS-001`）；页面级 e2e 证据仍归入 GAP-001 |
 | GAP-003 | 应用编辑返回 | ~~编辑器 footer 取消使用 `router.back()`~~（已关闭） | 取消/返回明确 `push` 到 `/applications/apps`（编辑时带 `application` 选中）；与页头 `@back` 一致，不依赖历史栈（`UI-APP-023`） |
-| GAP-004 | 页面错误态 | ~~应用详情/runtime/files 加载失败主要用 toast~~（已关闭） | 详情加载失败设 `detailError` + toast + EmptyState 重试；runtime 失败设 `runtimeError` + toast + Runtime tab 内 EmptyState 重试（`UI-APP-002/003`）；页面级 e2e 仍归入 GAP-001 |
+| GAP-004 | 页面错误态 | ~~应用详情/runtime/files 加载失败主要用 toast~~（已关闭） | 详情加载失败设 `detailError` + EmptyState 重试；runtime 失败设 `runtimeError` + Runtime tab 内 EmptyState 重试（不再走 toast，`UI-APP-002/003`、`UI-SHELL-031/032`）；页面级 e2e 仍归入 GAP-001 |
 | GAP-005 | 证书页面入口 | ~~domains/self-signed 模式可能显示“生成 SSH”入口~~（已关闭） | 表格化一轮已修复：生成 SSH/CA/TLS 入口只出现在 keys 模式页头（`UI-CERT-009`），列表结构测试可覆盖 |
 | GAP-006 | 危险确认 | ~~settings 导出/恢复/重置确认仍为手写 Dialog~~（已关闭） | settings 已迁移到统一 `ConfirmDialog`（impact、危险项 `requireCheckbox`、loading 锁）；各主列表页此前已统一；新增危险动作不得再手写 |
 | GAP-007 | ~~前端/后端证书类型~~（已关闭） | ~~`web/src/types/certificates.ts` 仍声明后端明确不输出的 `certificatePath/privateKeyPath`~~ | 前端类型与 mocks 已删除路径字段；后端 DTO 保持 `json:"-"`，不向客户端暴露私钥路径 |

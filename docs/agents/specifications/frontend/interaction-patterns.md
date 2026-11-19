@@ -13,7 +13,8 @@
 - `Select`：用于单选下拉。交付形态必须是 Panel 自有 combobox + listbox 浮层，使用 popover 表面、统一 hover/selected/focus/motion 状态和暗色主题 token；不得把浏览器原生 `<option>` 展开菜单作为用户可见交互形态。必须把页面传入的 `aria-label` / `aria-invalid` 等 ARIA 属性绑定到 combobox 控件（组件 `inheritAttrs: false`，不得丢弃），并支持方向键、Home/End、Escape 与 `Tab` 关闭。可选搜索模式由 `searchable` 启用，配套 `searchPlaceholder`（下拉内搜索框占位与无障碍名称）和 `searchEmptyText`（输入非空且无匹配时的空态文案）两个文案 props；输入变化触发 `search(query)` 事件，原样携带当前搜索词，空串表示清空。默认搜索只过滤下拉可见选项，不清空、不改变已选标签：当前值不在过滤结果中时，触发器仍展示已选中的标签。搜索框内支持 ArrowUp/ArrowDown 移动、Enter 选择、Escape/Tab 关闭下拉；非搜索模式行为完全不变。父级可监听 `search` 做远程搜索并把结果按稳定 id 合并回 `options`（搜索词应防抖，空串时清理远程候选），加载/失败/无匹配文案由父级传入并在下拉外就地提示；组件不得内置业务 API 或路由。页面级搜索仍使用 `SearchInput`，不得手写放大镜 + Input 组合；下拉内部的候选项过滤与远程搜索才使用本搜索模式。
 - `Dropdown`：菜单 Teleport 到 `body`，使用 fixed 定位、视口边界收敛和上下碰撞选择，不能留在业务容器内被 `overflow` 裁切；菜单宽度按内容收缩并保持紧凑，禁止 fixed 后按视口宽度拉伸；继续支持方向键、Home/End、Escape 和焦点恢复；`Tab` 离开菜单时必须关闭并同步 `aria-expanded`。
 - `Dialog`：不响应遮罩点击关闭，只能通过关闭按钮、取消操作或 Escape 关闭；普通和 large 尺寸的 body 都必须有可靠的内部纵向滚动，页脚保持在弹窗网格底部；业务正文不能依赖外层页面滚动才能到达。
-- `ToastProvider`：支持可选 `action={label,to}` 路由动作，带动作保留 15 秒；`useSuccessToast(title, receipt)` / `useErrorToast(title, error)` 从本次返回的真实关联生成「查看日志」（默认 `/logs?...&level=info,warning,error`），禁止用全局最近请求或解析提示文本关联。全局顶部 toast；页面和组件内 catch 到的异常统一以 danger toast 展示，字段校验与结构化诊断仍就地展示。
+- `ToastProvider`：右上角 toast **只承载事件通知与用户操作成功提示**（反馈分层见 [interaction-model.md](interaction-model.md) §5、`UI-SHELL-065`）。成功提示用 `useSuccessToast(title, receipt)`，支持可选 `action={label,to}` 路由动作，带动作保留 15 秒；事件通知由 `EventNotificationBridge.vue` 经 `GET /api/v1/notifications` 长轮询推送，按事件状态映射 tone 并提供「查看日志」深链（`/events?eventId=…`），禁止用全局最近请求或解析提示文本关联。`useErrorToast` 已删除，业务代码不得再把异常送回右上角：用户当前阻塞操作失败改用全局错误 Dialog，加载/后台/自动保存失败改为就地状态。
+- `ErrorDialogHost` / `useErrorDialog`（`web/src/components/ui/{errorDialog.ts,ErrorDialogHost.vue}`）：全局阻塞错误 Dialog，挂载在应用根节点；只承载用户显式阻塞动作的失败（保存/提交/删除/确认/登录改密/显式导入导出与清理/外观或语言持久化等），一次只呈现一个、队列有上限，含关闭按钮与可选「查看日志」深链；复用 Dialog 的焦点圈定、Escape 与背景滚动锁语义，不改变遮罩点击不关闭的既有约定。不得用它承载页面/区块加载失败、自动刷新失败或自动保存失败。
 - `LoadingOverlay`：用于对话框正文、文本编辑区、卡片或区块等待网络响应时的统一加载覆盖；不得用裸文字代替加载效果。
 - `Table`：WinUI ListView 语义。行高 40px（`h-10`）、数据单元格单行（`whitespace-nowrap` + `align-middle`）；首次加载且没有旧数据时传 `loading` 与本地化 `loadingLabel`，由组件渲染表格骨架行；已有数据刷新时保留当前 rows，只让刷新入口或分页入口显示 loading。表格行由组件统一加 `motion-table-row` 交错入场（`--panel-stagger`，仅首屏/新增行播放）。表头单元格必须输出 `scope="col"`，sticky 表头用不透明 card 底。表格嵌入已有边框的卡片时传 `framed=false`，由卡片承担边框（同一区域只保留一层卡片框）。单元格插槽按列 key 命名（`#<key>`），表头插槽 `#head-<key>`（如全选复选框），`#empty` 插槽负责真实无数据空态且必须用 `variant="inset"`；行操作列每行固定「详情」入口，高频操作直接平铺为行内按钮，只有低频/危险操作收进行内「更多」菜单；`active-key` 标记覆盖详情当前对象（`aria-current` + accent-selected 表面），表格行本身不可点击。
 - `TableDetailName`（`web/src/components/patterns/TableDetailName.vue`）：实体工作台名称列的详情入口；点击打开与操作列「详情」相同的覆盖式详情；必须传入本地化 `label`（`common.openDetails`）；不得用整行 click 替代。
@@ -55,10 +56,10 @@
 
 - 触发与合并：任一表单控件修改后重置 500ms 计时器；连续修改只发最后一次；同一分区同一时刻只允许一个请求在飞，请求期间的新修改不立即补发，而是在本次响应返回后重新开始 500ms 防抖（继续输入会继续取消并顺延，停止输入满 500ms 才补发）。每个分区一个控制器，不同分区互不阻塞。
 - 负载与回填：只提交本分区子资源（`PUT /api/v1/settings/runtime/{general|security|certificates|agent|branding}`、`PUT /api/v1/settings/server-variables`），成功响应返回完整 `RuntimeSettings`，用其回填规范化值；回填必须抑制 watcher，防循环保存。
-- 状态机：`idle | pending | saving | saved | invalid | error`；`saved` 约 2s 后回 idle；成功不弹 success toast，仅状态指示；失败 danger toast + `error` + 重试；`invalid` 只表示本地校验未通过，不发请求。
+- 状态机：`idle | pending | saving | saved | invalid | error`；`saved` 约 2s 后回 idle；成功不弹 success toast，仅状态指示；失败显示 `AutoSaveStatus` 的 `error` 状态 + 就地重试，表单保留用户输入，**不弹 toast、不弹错误 Dialog**；`invalid` 只表示本地校验未通过，不发请求。
 - 与动作按钮边界：JWT 重置、系统证书重置、清空事件与日志、备份导出/还原、外观上传/移除/恢复默认仍是显式动作按钮（确认/loading/两阶段反馈沿用 [interaction-model.md](interaction-model.md)），不得改造成自动保存；外观分区保持乐观即时保存（`UI-SET-013`），不纳入 500ms 防抖。
 - 生命周期：刷新按钮取消所有待发计时器并整体重载；切 tab 不卸载页面、允许在途请求完成；页面卸载时若有待发修改立即 fire-and-forget 发送一次；卸载后不得再改状态；迟到响应不得覆盖更新的本地输入。
-- 语言：语言下拉改变时立即 `setLocale` 并进入 general 防抖保存；持久化失败回滚界面语言到服务端已持久化的 `runtime.language`，不得产生循环保存。
+- 语言：语言下拉改变时立即 `setLocale` 并进入 general 防抖保存；持久化失败回滚界面语言到服务端已持久化的 `runtime.language` 并弹全局错误 Dialog（`UI-SHELL-022`/`UI-SHELL-065`），不得产生循环保存。
 - 可访问性：`AutoSaveStatus` 的保存中/已保存/失败/待修正文本经 `role=status` / `aria-live="polite"` 播报；错误状态的重试按钮必须有本地化可访问名称；不得只靠颜色表达保存状态。
 
 ## 使用规则

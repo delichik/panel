@@ -137,6 +137,7 @@ import {
 import { acceptedAgentDeployment, completedTask, mockTasks, mockTaskLogs, mockTaskSteps, retryTask, runTaskNow } from './tasks';
 import { resolveMockExecution } from './activity';
 import { mockEventsRoute } from './events';
+import { isNotificationsRoute, mockNotificationsRoute } from './notifications';
 import { confirmRestore, MockImageRegistryError, mockRuntimeSettings, mockServerVariables, restorePreflight, runRuntimeAutoUpdate, saveRuntimeAgent, saveRuntimeAutoUpdate, saveRuntimeBranding, saveRuntimeCertificates, saveRuntimeGeneral, saveRuntimeImageRegistry, saveRuntimeSecurity, saveServerVariables, startExport } from './settings';
 import {
   mockAppearance,
@@ -999,6 +1000,11 @@ export function installMockApi() {
       eventsMethod === 'POST' ? await body<Record<string, unknown>>(init) : undefined,
     );
     if (eventsResponse) return eventsResponse;
+
+    // 事件通知长轮询：mock 异步挂起约 1s 后返回空页（模拟长轮询，避免高频忙轮询）。
+    if (isNotificationsRoute(url, eventsMethod)) {
+      return mockNotificationsRoute(url, init);
+    }
 
     if (url.pathname === '/api/v1/executions' && method(init) === 'GET') {
       const status = url.searchParams.get('status') || '';

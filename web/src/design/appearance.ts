@@ -282,7 +282,8 @@ function optimistic(current: Appearance, input: AppearanceUpdate): Appearance {
 /**
  * Persist theme/mica/accent. `background` is optional: omitting it keeps the
  * current background (including an uploaded image). Optimistically applies the
- * change, rolls back on failure and rethrows so the caller can toast.
+ * change, rolls back on failure and rethrows so the caller can raise the
+ * blocking-error dialog (never the top-right toast).
  */
 export async function saveAppearance(input: AppearanceUpdate): Promise<void> {
   const current = appearance.value;

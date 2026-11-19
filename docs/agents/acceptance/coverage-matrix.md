@@ -12,6 +12,13 @@
 
 ## 2. 前端路由基线
 
+- 右上角通知改为事件通知 + 阻塞错误 Dialog + HTTP 请求日志 debug（2026-11-19，跨前后端契约，无数据库变更）：
+  - **路由**：新增 `GET /api/v1/notifications`（events 模块注册，该模块注册路由 11 → 12；事件通知走内存通道长轮询），主 Panel `method/path` 计数 **202 → 203**（`TestAPIRouteManifest` 的 `wantCount=203`，`wantHash` 由同轮测试输出维护；`api-route-inventory.md` 同为 203 条）。**前端路由声明仍 31 条**：无新增页面路由，通知桥挂在 AppShell，全局错误 Dialog 挂在应用根节点。
+  - **后台与数据**：不新增表、列、迁移或后台任务类型；通知中心是进程内环形缓冲（最多 256 条、`seq` 单调递增），由既有 `RecordContext` 在写库前同步发布，长轮询等待是请求作用域，不引入 ticker/队列/持久队列；**不读不写数据库**，进程重启后历史通知不回放；ORM 表数保持 **49**（`facility_proxy_image_states` 为前序轮次既有表，本轮不改）。
+  - **行为**：右上角 toast 只保留后端过程事件的开始/成功/失败通知与用户操作成功提示；HTTP 请求（`module=http`）永不成为事件通知；用户当前阻塞操作失败改为全局错误 Dialog；页面/区块加载失败、后台自动刷新与自动保存失败改为就地状态；`http request completed` 完成行统一 `debug`。对应 `UI-SHELL-065`（新）、`UI-SHELL-020/022/031/032/056`、`UI-AUTH-002`、`UI-EVT-005/006`、`UI-APP-002/004/007/022/024`、`UI-SRV-002/005/018`、`UI-STO-004`、`UI-CERT-007/013`、`UI-DBG-002/006`、`UI-SET-001/002/003/005/007/010/012/013/014/015/016`、`UI-FAC-019`、`ENG-LOG-009`/`ENG-EVT-011`；前端反馈分层规范见 [交互模型](../specifications/frontend/interaction-model.md) §5。
+  - **迁移事实（T3 已完成部分）**：applications / settings / appearance 共 39 处 `useErrorToast` 调用迁到全局错误 Dialog（含设施配置保存、镜像动作、提交应用、文件动作、存储共享、指标与探测配置保存、settings 显式动作与外观保存/上传/移除/重置），另有 14 处校验/冲突/被阻止类 warning toast 改为全局错误 Dialog；应用列表/设施数据/详情/runtime/编辑器首载、日志与实例列表、指标与探测配置加载、存储共享页面加载失败改为就地错误态+重试（FacilityDiagnostics「检查」失败补节点级 InfoBar）；设置 8 个分区自动保存失败只保留 `AutoSaveStatus` error + 重试。服务端仍无业务变更。
+  - **i18n**：无新增前端词条（复用既有 `common.close`、`eventsPage.viewLogs` 与 `activity.state.*`）；后端新增的查询参数校验错误码 `notifications_query_invalid`/`notifications_after_invalid`/`notifications_wait_invalid` 与既有 `events_query_invalid`/`logs_query_invalid` 同口径，本轮未新增中文映射；若后续要求本地化须在同一改动补 `internal/platform/i18n` 与测试（见 [多语言翻译状态](../i18n-translation-status.md)）。本轮不删除既有词条。
+  - **验证证据（同轮收口）**：`go test ./internal/platform/notifications/... ./internal/platform/logging/... ./internal/modules/events/... ./internal/bootstrap/panel/... -count=1`；前端 `EventNotificationBridge.test.ts`、`errorDialog.test.ts`、`toastPolicy.test.ts`、`api/notifications.test.ts`、`AppShell.test.ts` 与 `task test:web`、`task build:web`；`TestAPIRouteManifest` 的 `wantCount=203` 与新哈希；并确认 `/api/v1/events` 无 `module=http` 行、默认日志级别（`info,warning,error`）不返回 `http request completed` 行。
 - 下线早期新增的外部网络互联能力（2026-11-19，跨前后端 + 数据库）：删除 3 条路由（2 条服务器/设置侧收敛入口与 1 条设置分区写入），主 Panel `method/path` 计数 197 → **194**（`TestAPIRouteManifest` 的 `wantCount=194`，哈希由同轮测试输出维护；`api-route-inventory.md` 同为 194 条），**ORM 表数仍 48**。服务器创建/更新/详情不再携带互联意图字段、列表不再携带摘要字段，详情删除对应子视图与表单开关；设置页删除该分区及其认证密钥/标签/应用重连/清除确认，分区写入收敛为 general/security/certificates/agent/branding 与服务器变量；Agent 侧删除相关 RPC、可选上报字段与能力声明（`AgentReport` 字段号保留）；`panel-init` 删除对应进程监管与控制面路由，容器不再要求额外的网络能力与设备，但**仍以 root 作为 PID 1 把 Panel 子进程降权到非 root `panel` 用户**。数据库：破坏性 ORM 同步删除 `servers` 上的三个旧意图列；一次性迁移删除 `runtime_settings` 中已废弃的互联设置键并从 `servers.traits` 剥离已废弃的互联观测键与 `agent.certificate.hosts` 键（`DATA-MIG-004/005/008`）。前端路由声明保持 31 条（设置分区由动态段承载）；对应 `SET-RUN-001/005/021/022`、`ID-EVD-004`、`SRV-EVD-001`、`UI-SRV-001/002/017`、`UI-SET-014`、`UI-SHELL-062`、`ARCH-API-009`；i18n 删除 `settingsPage.*`/`serversPage.*` 的相关词条与后端稳定错误码，见 [多语言翻译状态](../i18n-translation-status.md)。验证证据：后端 `go test ./internal/bootstrap/panel/... -count=1`（`wantCount=194` 与新哈希）、`task build:backend`；前端全量测试与 `vue-tsc`/`vite build` 由同轮收口。
 
 - 入口代理自动更新 + 每域名传输开关 + 自定义 nginx 指令（2026-11-19，跨前后端/Agent/数据库）：
@@ -112,12 +119,12 @@
 
 ## 3. HTTP API 基线
 
-主 Panel `/api/v1` method/path 组合数与路由清单 SHA-256 以 `internal/bootstrap/panel/routes_manifest_test.go` 中 `TestAPIRouteManifest` 的 `wantCount` / `wantHash` 为准（events/logs 重命名后须重跑测试并更新期望值；本文不硬编码哈希）。本轮新增产品读路由 `/api/v1/events*`（含 export、`{eventId}/logs|lines`、`POST /events/clear`）与 `/api/v1/logs`，保留 legacy `/api/v1/log-contexts*` 别名，对应 `ENG-EVT-001`/`ENG-EVT-002`。来源计数如下（注册模块名，非产品表名）：
+主 Panel `/api/v1` method/path 组合数与路由清单 SHA-256 以 `internal/bootstrap/panel/routes_manifest_test.go` 中 `TestAPIRouteManifest` 的 `wantCount` / `wantHash` 为准（events/logs 重命名后须重跑测试并更新期望值；本文不硬编码哈希）。产品读路由为 `/api/v1/events*`（含 export、`{eventId}/logs|lines`、`POST /events/clear`）与 `/api/v1/logs`，保留 legacy `/api/v1/log-contexts*` 别名，对应 `ENG-EVT-001`/`ENG-EVT-002`；事件通知长轮询 `GET /api/v1/notifications` 同由 events 模块注册（`ENG-EVT-011`，2026-11-19 加入）。来源计数如下（注册模块名，非产品表名）：
 
 | 注册来源 | 数量 | 验收领域 |
 | --- | ---: | --- |
 | bootstrap auth | 5 | 身份、设置与系统 |
-| events | 11 | 工程质量与发布（`ENG-EVT-001`/`ENG-EVT-002`；含 7 条主路由含 clear + 4 条 legacy `log-contexts` 别名，路由解析去重后计入清单） |
+| events | 12 | 工程质量与发布（`ENG-EVT-001`/`ENG-EVT-002`/`ENG-EVT-011`；含 7 条主路由含 clear、新增 `GET /api/v1/notifications` 长轮询与 4 条 legacy `log-contexts` 别名，路由解析去重后计入清单） |
 | applications | 26 | 应用与设施应用；协调、任务与运行事件 |
 | appearance | 6 | 身份、设置与系统（`SET-APP-001..012`；外观/背景图上传与公开外观） |
 | backups | 3 | 备份、恢复与诊断 |
@@ -137,12 +144,12 @@
 | settings | 12 | 身份、设置与系统（`GET/PUT /settings/runtime` 的 7 条分区写入含 `auto-update`/`image-registry`、`POST auto-update/run`、`server-variables`、公开品牌；整体 PUT 已删除，`SET-RUN-022/023/024`） |
 | systeminfo | 1 | 身份、设置与系统 |
 | tasks（HTTP：`/executions`；AppDB：`event_runs`/`event_run_steps`） | 7 | 协调、任务与运行事件 |
-| **合计** | **202** | 与 `TestAPIRouteManifest` 的 `wantCount=202` 一致（`COV-API-003`） |
+| **合计** | **203** | 与 `TestAPIRouteManifest` 的 `wantCount=203` 一致（`COV-API-003`） |
 
 - RunEngine 不新增 method/path。`/api/v1/executions*` 是 Run API；Run 存储是 `event_runs`/`event_run_steps`（部署行 `type='application_deploy'`）。`/api/v1/events*` 与 `/api/v1/logs` 仍是诊断读面。对应 `ENG-RUN-001..005`、`ENG-RET-001`、`TASK-DISPATCH-001..003`（`GAP-030` 已关）。
 
-- 网络探测设施（`internal/modules/networkprobe/routes.go`）由独立模块注册 4 条路由（见上表 `networkprobe` 行）；它与 `facilityapps` 模块的设施路由共享 `/facility-apps/*` 前缀但分属不同注册来源。逐项映射见 [主 Panel API 路由逐项清单](api-route-inventory.md) 的序号 55/56/84/181（指标设施两行插入后整体顺延）。
-- 指标设施（`internal/modules/observability/metricsfacility/routes.go`）由独立模块注册 2 条路由（`GET/PUT /api/v1/facility-apps/metrics`，见上表 `metricsfacility` 行）；它与 `networkprobe` 一样共享 `/facility-apps/*` 前缀但分属不同注册来源，读取配置不触发 Agent/指标查询。逐项映射见 [主 Panel API 路由逐项清单](api-route-inventory.md) 的序号 54（GET）与 180（PUT）。主 Panel 计数以 `TestAPIRouteManifest` 的 `wantCount=202` 与同轮更新的 `wantHash` 为准；`api-route-inventory.md` 条目数必须同为 202（`COV-API-003`）。
+- 网络探测设施（`internal/modules/networkprobe/routes.go`）由独立模块注册 4 条路由（见上表 `networkprobe` 行）；它与 `facilityapps` 模块的设施路由共享 `/facility-apps/*` 前缀但分属不同注册来源。逐项映射见 [主 Panel API 路由逐项清单](api-route-inventory.md) 的序号 55/56/85/182（新增 notifications 行与更早的指标设施两行插入后整体顺延）。
+- 指标设施（`internal/modules/observability/metricsfacility/routes.go`）由独立模块注册 2 条路由（`GET/PUT /api/v1/facility-apps/metrics`，见上表 `metricsfacility` 行）；它与 `networkprobe` 一样共享 `/facility-apps/*` 前缀但分属不同注册来源，读取配置不触发 Agent/指标查询。逐项映射见 [主 Panel API 路由逐项清单](api-route-inventory.md) 的序号 54（GET）与 181（PUT）。主 Panel 计数以 `TestAPIRouteManifest` 的 `wantCount=203` 与同轮更新的 `wantHash` 为准；`api-route-inventory.md` 条目数必须同为 203（`COV-API-003`）。
 
 - `COV-API-001`：路由清单测试失败时必须先确定是哪一个 method/path 改变，再更新消费者、Mock、验收项和期望哈希；不得只替换哈希让测试通过。
 
@@ -150,7 +157,7 @@
 - 概览卡片数据 `GET /api/v1/overview/cards/{cardId}/data` 响应增加 `bucketSeconds`，指标卡只物化对应 kind 的序列并按 range/服务器数量服务端降采样，`since` 改为按桶向下对齐重算；前端改为数据落地时一次性派生视图并按桶后缀替换。不新增 method/path、表或后台任务；对应 `OBS-OVW-005/006/007/008`。
 - 既有 GET/POST `/api/v1/debug/clear-runtime-data` 响应补齐 `runId/stage/failedStage/startedAt/finishedAt`，明确 `cleared` 与终态、并发请求语义；清理期间业务写入返回 `runtime_data_maintenance`，不增加接口；对应 `DIAG-CLR-001/005/006/007`。
 
-- `COV-API-002`：维护导出/恢复的独立最小应用路由不计入上述主 Panel 202 条，但必须由备份恢复文档覆盖其认证、状态、密码、下载、重试、退出和清除 pending 操作。
+- `COV-API-002`：维护导出/恢复的独立最小应用路由不计入上述主 Panel 203 条，但必须由备份恢复文档覆盖其认证、状态、密码、下载、重试、退出和清除 pending 操作。
 
 - `COV-API-003`：method/path 逐项映射见 [主 Panel API 路由逐项清单](api-route-inventory.md)；条目数须与 `routes_manifest_test` 一致，表格与测试必须同步变化。
 
@@ -178,11 +185,11 @@
 
 ## 4. 持久化基线
 
-当前 ORM 模型有 48 个数据库内表声明；`application_revisions` 在 app 与 log 库分别存在，含义不同。coordination 库当前 0 个业务模型。
+当前 ORM 模型有 49 个数据库内表声明；`application_revisions` 在 app 与 log 库分别存在，含义不同。coordination 库当前 0 个业务模型。
 
 | 数据库 | 在管表 |
 | --- | --- |
-| app | `credentials`、`servers`、`package_updates`、`package_refreshes`、`fail2ban_configs`、`image_updates`、`image_refreshes`、`applications`、`application_persistent_locations`、`application_reconcile_states`、`container_observations`、`docker_resource_snapshots`、`application_revisions`、`dns_domains`、`dns_record_snapshots`、`application_edit_sessions`、`application_edit_session_files`、`application_edit_session_operations`、`application_files`、`application_instances`、`facility_app_configs`、`facility_static_assets`、`reverse_proxy_routes`、`facility_edit_sessions`、`facility_edit_session_assets`、`facility_edit_session_operations`、`storage_share_configs`、`storage_share_partitions`、`network_probe_configs`、`network_probe_results`、`metrics_facility_configs`、`appearance_settings`、`certificates`、`self_signed_certificates`、`key_assets`、`overview_card_configurations`、`runtime_settings`、`auth_state`、`auth_accounts`、`events`、`event_runs`、`event_run_steps` |
+| app | `credentials`、`servers`、`package_updates`、`package_refreshes`、`fail2ban_configs`、`image_updates`、`image_refreshes`、`applications`、`application_persistent_locations`、`application_reconcile_states`、`container_observations`、`docker_resource_snapshots`、`application_revisions`、`dns_domains`、`dns_record_snapshots`、`application_edit_sessions`、`application_edit_session_files`、`application_edit_session_operations`、`application_files`、`application_instances`、`facility_app_configs`、`facility_static_assets`、`reverse_proxy_routes`、`facility_proxy_image_states`、`facility_edit_sessions`、`facility_edit_session_assets`、`facility_edit_session_operations`、`storage_share_configs`、`storage_share_partitions`、`network_probe_configs`、`network_probe_results`、`metrics_facility_configs`、`appearance_settings`、`certificates`、`self_signed_certificates`、`key_assets`、`overview_card_configurations`、`runtime_settings`、`auth_state`、`auth_accounts`、`events`、`event_runs`、`event_run_steps` |
 | log | `application_revisions`、`runtime_events`、`runtime_event_details`、`key_asset_exports` |
 | coordination | 无业务表 |
 | metrics | `metrics_snapshots` |
@@ -227,7 +234,8 @@
 - 每日未使用镜像清理（`image_unused_cleanup`）由 containers `StartPeriodic` 自有 `StartDailyAtLoop` 驱动：Panel 主机本地时区每天 03:00 触发，重启后等待下一次 03:00（不补跑）；仅对 reachable+compatible 节点经 `CollectInputs` 创建 parallel event run；删除当前未被容器引用且 `Created` 早于 7 天的镜像（未知 Created 保留）；成功后尽力触发 `image_refresh`；与手动 `images/delete-unused` 共享 server queue 与 live usage 门禁，但不共享年龄过滤；无新增 API/设置/表；对应 `IMG-DEL-003`、`COV-BG-001/002`、`TASK-PER-001`。
 - 应用协调仍由 containers `StartPeriodic` 每 5 秒调用 `application_reconcile` CollectInputs，以及业务侧 `TriggerApplicationReconcile`。两者都直接请求 Planner 写 `event_runs`（`type='application_deploy'`），不经 Manager 创建通用 event run。已删除任务类型 `application_reconcile_batch`（noop Execute）。无新增 API 或 ticker；存量非终态监控壳由 `cancel_application_reconcile_monitoring_shells` 取消。对应 `TASK-PER-003`、`ORCH-DRIFT-001`、`ENG-RUN-001`。
 - 自动更新调度（`autoupdate.StartPeriodic`，30s ticker）与入口代理镜像检查（`facilityapps.StartPeriodic`，6h SchedulerLoop，`facility_reverse_proxy_image_check`）：两者均由模块自有 goroutine 启动/停止，随 App `periodicCtx` 取消；autoupdate 每 tick 热读 `settings.Runtime()`，只在计划时间窗口（`HH:MM` 起 2 分钟）且当日无运行记录时创建全局互斥的 `auto_update_run`，错过不补跑，lastRun 持久化在 `runtime_settings`，进程重启后去重仍生效；facility 检查任务经 `CollectInputs` 创建 event run 并写镜像状态/投影，不直接触发滚动更新（自动更新统一由 `AutoUpdateReverseProxyImage` 调用，避免双重触发）。均不新增进程内持久队列，符合 `COV-BG-001/002`。
-- Panel 进程日志统一经 `platform/logging`（context 带 `eventId`+`module`+等级，默认 JSONL 文件 + stdout）；`events` 仅由显式过程登记（`RecordContext` / `EmitProcess` / `TouchProcess`）索引，日志行最多 Touch 已有过程；过程行内容合同 `ENG-EVT-010`；产品读 API 为 `/api/v1/events*` 与 `/api/v1/logs`（`eventId` 可选）；对应 `ENG-LOG-001..007` 与 `ENG-EVT-001`/`ENG-EVT-010`。
+- Panel 进程日志统一经 `platform/logging`（context 带 `eventId`+`module`+等级，默认 JSONL 文件 + stdout）；`events` 仅由显式过程登记（`RecordContext` / `EmitProcess` / `TouchProcess`）索引，日志行最多 Touch 已有过程；过程行内容合同 `ENG-EVT-010`；产品读 API 为 `/api/v1/events*` 与 `/api/v1/logs`（`eventId` 可选）；对应 `ENG-LOG-001..007`/`ENG-LOG-009` 与 `ENG-EVT-001`/`ENG-EVT-010`。
+- 事件通知不新增后台任务类型（2026-11-19）：内存通知中心只是进程内环形缓冲，发布发生在 `RecordContext` 同步路径；`GET /api/v1/notifications` 的等待由请求 goroutine 承担（最多 `wait` 秒、受请求 context 约束），无 ticker/queue consumer、无重启恢复的持久队列、不读写数据库（`ENG-EVT-011`、`UI-SHELL-065`）；进程重启后仅保留新发布通知，历史不回放。
 - 进程日志文件落在 `<dataRoot>/logs/panel-YYYYMMDD.jsonl`（随 dataRoot 进入全量备份）；对应 `ENG-LOG-006`、`BKP-API-005`。
 - Debug 清理使用可恢复暂停门拒绝新 writer 并有界等待在途工作，保护节点报告、活动投影、任务收集及编辑会话清理；清理完成或失败都释放暂停门并恢复原运行状态，对应 `DIAG-CLR-006/008`。
 
@@ -271,4 +279,6 @@
 - P2 入口代理版本展示与软件包安全标记（2026-11-19，无新增路由/表）：Go 新增 `internal/agent/docker/runtime_status_version_test.go`（版本解析/命令失败为空/无命令不 exec/ctx 取消有界/parseImageVersion）与 `internal/modules/facilityapps/proxy_image_version_test.go`（检查任务持久化版本/旧 Agent 或失败为空），facilityapps Agent 接口与 fake 补 `RuntimeStatusWithVersion`；软件包新增 `internal/modules/packages/security_upgrade_test.go` 的安全分类/List 派生/与任务判定一致性用例。`task test:agent`、`go test ./internal/modules/facilityapps ./internal/modules/packages` 全绿；contract hash 更新为 `ca5b28fa…`（Agent 需重部署）。前端新增 `applicationsPage.facilityImage.nginxVersion` 与 `resourcesPage.securityUpdate` 文案、镜像卡片/逐网关版本展示、软件包安全徽标；`task test:web` 130 文件/754 测试通过、`task build:web` exit 0。对应 `FAC-RP-014`（版本展示段）、`PKG-API-012`、`UI-FAC-020`、`UI-SRV-018`。
 - 入口代理自动更新/每域名开关/自定义指令（2026-11-19）：Go 新增/扩展 `internal/modules/facilityapps/proxy_policy_test.go`（指令解析/禁项/上限、同名覆盖、每域名 HTTPS×H2×H3 渲染矩阵、80 redirect、无证书/证书文件不下发、settings 默认/CAS/往返、镜像状态持久化与投影、digest 工具、identity recreate）、`internal/modules/facilityapps/proxy_p1_test.go`（回滚/恢复自动更新/pinned、失败退避计数与阈值、P1 server_tokens/client_max_body_size/tlsMinVersion 渲染与非法值、GET 投影）、`internal/modules/settings/auto_update_test.go`（默认/播种、false 落库、省略保留、422 错误码、旧库脏值、lastRun 只读跨重启、handler 分区、手动 run 202/422/幂等）、`internal/modules/autoupdate/autoupdate_test.go`（窗口边界/当日去重/跨重启/错过不补跑/双关 no-op、阶段串行与单台失败继续、对象开关过滤、lastRun 状态、manual 触发与临时覆盖）、`internal/modules/packages/security_upgrade_test.go`（安全分类大小写/只升安全包/空集不退化/维护互斥）、`internal/modules/applications/{auto_update_enabled_test.go,reverse_proxy_transport_test.go,runtime_reconciler_facility_test.go,facility_image_version_guard_test.go}`（默认 true/显式 false/缺省保留/落库、三开关与自定义指令归一化、整应用 replace 不丢字段、reconciler 非空 current 与镜像/端口变化回落 recreate、nginx -v 版本线守卫）、`internal/agent/docker/{runtime_test.go,image_preflight_test.go}`（pull 在 stop/remove 之前的请求顺序、pull 失败保留旧容器、首装、ObservedImageDigest 上报、临时容器预检成功/失败/清理/保旧容器/版本回传）、`internal/modules/servers/agent_firewall_test.go`（443/udp 放行与脚本）、`internal/platform/i18n/i18n_test.go`（新错误码中文）。`TestAPIRouteManifest` 期望 `wantCount=201`、`wantHash=902be741…`；ORM 表 49（`models_test` 通过）。全量 `task test:backend`：本次改动的 facilityapps/applications/settings/autoupdate/packages/agent.docker/servers/bootstrap.panel/i18n/models 全部 ok（servers 包已因上述边界测试修正而全绿）；剩余失败仅为改动前基线已有的 Windows 环境用例（`cmd/panel-init` unix socket 5 项、`internal/platform/database` 的 backfill 用例、`internal/platform/ssh` host-key 用例），少于改动前基线；另修复一处既有的 `TestApplyReportStabilityPrunesOutsideOneHour` 边界断言自相矛盾（仅测试修正，实现保持 1h 边界包含）。前端 `task test:web` 实跑 **130 文件 / 754 测试通过**、`task build:web`（vue-tsc + vite build）exit 0；新增 `TimeOfDayInput.vue`、`CustomDirectiveEditor.vue`、`facilityP1Ui.test.ts` 与设置页第 9 分区，扩展 settings/applications/model/Mock/i18n 测试。对应 `FAC-RP-014..017`、`APP-IMG-003`、`SET-RUN-023`、`TASK-PER-004`、`PKG-API-011`、`UI-FAC-020/021/022`、`UI-APP-024`、`UI-SET-015`、`AGT-FW-003`。
 
+
+- 事件通知 + 阻塞错误 Dialog + HTTP 请求日志 debug（2026-11-19）：后端新增 `internal/platform/notifications`（环形缓冲 256、`seq` 单调、`RecordContext` 写库前发布、跳过 `module=http`、无 store 也发布、不读写数据库）与 `GET /api/v1/notifications` 长轮询（`after`/`wait`、基线不回放、400 三类参数错误码），`http request completed` 统一 `debug`；`TestAPIRouteManifest` 期望 `wantCount=203` 与新哈希（`api-route-inventory.md` 同为 203 行），ORM 表数 49、前端路由声明 31 不变。前端新增 `EventNotificationBridge.vue`、`useErrorDialog`/`ErrorDialogHost.vue`、`notifications` API/类型/Mock 并删除 `useErrorToast`，业务页面把阻塞操作失败迁到错误 Dialog、加载/自动刷新/自动保存失败迁到就地状态；新增守卫与组件测试 `toastPolicy.test.ts`、`EventNotificationBridge.test.ts`、`errorDialog.test.ts`、`api/notifications.test.ts`、`ui/toast.test.ts`，更新页面族测试与 `AppShell.test.ts`；`task test:web`、`task build:web` 由同轮收口。对应 `UI-SHELL-065`、`ENG-LOG-009`、`ENG-EVT-011`、`ENG-LOG-001..007`。
 - CPU 指标图统计改为同时展示平均/最大/最小（2026-11-19）：扩展 `web/src/utils/metrics.test.ts`（平均/峰值/最小值/当前值，忽略 null 与 NaN）与 `web/src/views/servers/tabs/metricsModel.test.ts`（`statsFor` 返回最小值）；新增 `web/src/views/servers/tabs/MetricsPanel.test.ts`（CPU 卡片 footer 同时展示平均/最大/最小、非 CPU 卡片保持平均/峰值、CPU 无样本时显示占位而非 0），`i18n.test.ts` 校验 en/zh 新增键集合一致。`task test:web` 实跑 **136 文件 / 810 测试通过**，`task build:web`（`vue-tsc --noEmit` + `vite build`）exit 0；不新增/删除主 Panel 路由、表或后台任务。对应 `UI-SRV-026`、`UI-SRV-008`。

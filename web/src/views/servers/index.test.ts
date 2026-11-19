@@ -3,11 +3,13 @@ import { flushPromises, mount, enableAutoUnmount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import Badge from '@/components/ui/Badge.vue';
+import { errorDialogKey } from '@/components/ui/errorDialog';
 import { toastKey } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import type { ServerDto } from '@/types/servers';
 import ServersPage from './index.vue';
 import PackagesTab from './tabs/PackagesTab.vue';
+import { serversApi } from '@/api/servers';
 
 enableAutoUnmount(afterEach);
 
@@ -17,6 +19,8 @@ const metrics = vi.fn();
 const metricsBucketed = vi.fn();
 const containers = vi.fn();
 const list = vi.fn();
+const toastPush = vi.fn();
+const errorDialogPush = vi.fn();
 
 // jsdom 无 canvas：图表本体只验证挂载契约，具体选项由 metricsModel 单测覆盖。
 vi.mock('@/components/patterns/MetricChart.vue', () => ({
@@ -129,7 +133,10 @@ async function mountPage() {
   const wrapper = mount(ServersPage, {
     global: {
       plugins: [router],
-      provide: { [toastKey as symbol]: { push: vi.fn(), remove: vi.fn() } },
+      provide: {
+        [toastKey as symbol]: { push: toastPush, remove: vi.fn() },
+        [errorDialogKey as symbol]: { push: errorDialogPush, dismiss: vi.fn() },
+      },
     },
     attachTo: document.body,
   });
@@ -144,7 +151,10 @@ async function mountAtQuery(query: Record<string, string>) {
   const wrapper = mount(ServersPage, {
     global: {
       plugins: [router],
-      provide: { [toastKey as symbol]: { push: vi.fn(), remove: vi.fn() } },
+      provide: {
+        [toastKey as symbol]: { push: toastPush, remove: vi.fn() },
+        [errorDialogKey as symbol]: { push: errorDialogPush, dismiss: vi.fn() },
+      },
     },
     attachTo: document.body,
   });
@@ -155,6 +165,8 @@ async function mountAtQuery(query: Record<string, string>) {
 beforeEach(() => {
   useI18n().setLocale('en');
   vi.clearAllMocks();
+  toastPush.mockClear();
+  errorDialogPush.mockClear();
   listPage.mockResolvedValue({ items: [server], total: 1, page: 1, pageSize: 50 });
   list.mockResolvedValue([]);
   get.mockResolvedValue(server);
@@ -325,7 +337,12 @@ describe('servers page table and covered detail', () => {
   it('hides package version columns below their responsive breakpoints', async () => {
     const wrapper = mount(PackagesTab, {
       props: { server: server as unknown as ServerDto },
-      global: { provide: { [toastKey as symbol]: { push: vi.fn(), remove: vi.fn() } } },
+      global: {
+        provide: {
+          [toastKey as symbol]: { push: toastPush, remove: vi.fn() },
+          [errorDialogKey as symbol]: { push: errorDialogPush, dismiss: vi.fn() },
+        },
+      },
     });
     await flushPromises();
 
@@ -370,7 +387,10 @@ describe('servers page table and covered detail', () => {
     const wrapper = mount(ServersPage, {
       global: {
         plugins: [router],
-        provide: { [toastKey as symbol]: { push: vi.fn(), remove: vi.fn() } },
+        provide: {
+        [toastKey as symbol]: { push: toastPush, remove: vi.fn() },
+        [errorDialogKey as symbol]: { push: errorDialogPush, dismiss: vi.fn() },
+      },
       },
       attachTo: document.body,
     });
@@ -474,5 +494,28 @@ describe('servers page table and covered detail', () => {
     option!.click();
     await flushPromises();
     expect(document.querySelector<HTMLElement>('#server-form-tunnel-server')!.textContent).toContain('far-away · 10.9.9.9');
+  });
+
+  it('keeps a list load failure inline and never raises a toast or dialog', async () => {
+    listPage.mockRejectedValue(new Error('servers down'));
+    const { wrapper } = await mountPage();
+
+    expect(wrapper.text()).toContain(useI18n().t('common.loadFailed'));
+    expect(wrapper.text()).toContain('servers down');
+    expect(wrapper.findAll('button').some((button) => button.text() === 'Retry')).toBe(true);
+    expect(toastPush).not.toHaveBeenCalled();
+    expect(errorDialogPush).not.toHaveBeenCalled();
+  });
+
+  it('opens the blocking error dialog when an explicit server action fails', async () => {
+    vi.mocked(serversApi.test).mockRejectedValue(new Error('test boom'));
+    const { wrapper } = await mountPage();
+
+    const testButton = wrapper.findAll('button').find((button) => button.text() === 'Test connection')!;
+    await testButton.trigger('click');
+    await flushPromises();
+
+    expect(errorDialogPush).toHaveBeenCalledWith(expect.objectContaining({ title: 'test boom' }));
+    expect(toastPush).not.toHaveBeenCalled();
   });
 });

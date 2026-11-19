@@ -6,7 +6,6 @@ import Expander from '@/components/ui/Expander.vue';
 import StatusBadge from '@/components/ui/StatusBadge.vue';
 import InfoBar from '@/components/patterns/InfoBar.vue';
 import ActivityLink from '@/components/activity/ActivityLink.vue';
-import { useErrorToast } from '@/components/ui/toast';
 import { reverseProxyFacilityApi } from '@/api/facilityApps';
 import type { ProxyDiagnostics, ProxyPlaneState } from '@/types/facilityApps';
 import { useI18n } from '@/i18n';
@@ -20,8 +19,8 @@ import { uncertaintyNeedsAttention } from './model';
  */
 const props = defineProps<{ state: ProxyPlaneState }>();
 const { t } = useI18n();
-const notifyError = useErrorToast();
 const results = reactive<Record<string, ProxyDiagnostics>>({});
+const checkErrors = reactive<Record<string, string>>({});
 const pending = reactive<Record<string, boolean>>({});
 const requests = new Map<string, AbortController>();
 const knownCodes = new Set(['upstream_name_resolution_failed', 'upstream_tls_untrusted', 'upstream_connect_failed', 'upstream_timeout', 'proxy_request_error']);
@@ -31,7 +30,7 @@ function operationNeedsAttention(op: { errorClass?: string; stage?: string; stat
   return uncertaintyNeedsAttention(op.errorClass, op.stage);
 }
 function cancelRequests() { for (const controller of requests.values()) controller.abort(); requests.clear(); }
-watch(() => [props.state.updatedAt, ...(props.state.deploymentServers ?? [])], () => { cancelRequests(); for (const id of Object.keys(results)) delete results[id]; for (const id of Object.keys(pending)) delete pending[id]; });
+watch(() => [props.state.updatedAt, ...(props.state.deploymentServers ?? [])], () => { cancelRequests(); for (const id of Object.keys(results)) delete results[id]; for (const id of Object.keys(checkErrors)) delete checkErrors[id]; for (const id of Object.keys(pending)) delete pending[id]; });
 onBeforeUnmount(cancelRequests);
 async function check(serverId: string) {
   if (pending[serverId]) return;
@@ -39,11 +38,13 @@ async function check(serverId: string) {
   requests.set(serverId, controller);
   pending[serverId] = true;
   delete results[serverId];
+  delete checkErrors[serverId];
   try {
     const result = await reverseProxyFacilityApi.getDiagnostics(serverId, { signal: controller.signal });
     if (!controller.signal.aborted && requests.get(serverId) === controller) results[serverId] = result;
   } catch (error) {
-    if (!controller.signal.aborted) notifyError(t('facilityDiagnostics.loadFailed'), error);
+    // 诊断读取属于区块手动加载：失败就地提示并保留检查按钮作为重试，不进弹窗/toast。
+    if (!controller.signal.aborted) checkErrors[serverId] = error instanceof Error && error.message ? error.message : t('facilityDiagnostics.loadFailed');
   } finally {
     if (requests.get(serverId) === controller) { pending[serverId] = false; requests.delete(serverId); }
   }
@@ -91,6 +92,12 @@ async function check(serverId: string) {
       </template>
       <p v-else class="m-0 text-caption text-muted-foreground">{{ t('facilityDiagnostics.noDeployment') }}</p>
       <Button size="sm" :loading="pending[node.serverId]" :disabled="pending[node.serverId]" @click="check(node.serverId)">{{ t('facilityDiagnostics.check') }}</Button>
+      <InfoBar v-if="checkErrors[node.serverId]" tone="danger" :title="t('common.loadFailed')">
+        <p class="m-0 whitespace-pre-wrap break-words">{{ checkErrors[node.serverId] }}</p>
+        <div class="mt-2">
+          <Button size="sm" :loading="pending[node.serverId]" @click="check(node.serverId)">{{ t('common.retry') }}</Button>
+        </div>
+      </InfoBar>
       <div v-if="results[node.serverId]" class="grid gap-2">
         <span class="text-caption text-muted-foreground">{{ t('facilityDiagnostics.checkedAt') }}: {{ formatDateTime(results[node.serverId].checkedAt) }}</span>
         <p v-if="results[node.serverId].status === 'unavailable'" class="m-0 text-caption font-semibold text-warning">{{ t('facilityDiagnostics.unavailable') }}</p>

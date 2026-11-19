@@ -11,13 +11,14 @@ import Button from '@/components/ui/Button.vue';
 import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import Switch from '@/components/ui/Switch.vue';
-import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
+import { useErrorDialog } from '@/components/ui/errorDialog';
+import { useSuccessToast } from '@/components/ui/toast';
 import { useAppearance } from '@/design/appearance';
 import { useI18n } from '@/i18n';
 import type { AccentId, PresetBackgroundId, ThemeMode } from '@/types/appearance';
 
 const { t } = useI18n();
-const notifyError = useErrorToast();
+const notifyError = useErrorDialog();
 const notifySuccess = useSuccessToast();
 
 /**
@@ -87,7 +88,7 @@ async function reload() {
 }
 
 /**
- * 统一失败反馈：store 回滚并抛异常，由这里给出 danger toast（带日志入口）。
+ * 统一失败反馈：store 回滚并抛异常，由这里给出全局阻塞错误 Dialog（带日志入口）。
  * 成功时界面因乐观更新已即时变化，只有上传/移除/恢复默认这类有明确结果的动作补 success toast。
  */
 async function runAction(

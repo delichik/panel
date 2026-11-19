@@ -12,6 +12,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, auth func(http.Handler) htt
 	mux.Handle("GET /api/v1/events/{eventId}/logs", auth(http.HandlerFunc(h.EventLogs)))
 	mux.Handle("GET /api/v1/events/{eventId}/lines", auth(http.HandlerFunc(h.EventLogs))) // alias
 	mux.Handle("GET /api/v1/logs", auth(http.HandlerFunc(h.Logs)))
+	// In-memory process event notification long poll (ENG-EVT-011); no AppDB access.
+	mux.Handle("GET /api/v1/notifications", auth(http.HandlerFunc(h.Notifications)))
 
 	mux.Handle("GET /api/v1/log-contexts", auth(http.HandlerFunc(h.List)))
 	mux.Handle("GET /api/v1/log-contexts/export", auth(http.HandlerFunc(h.Export)))

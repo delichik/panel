@@ -9,7 +9,6 @@ import Select from '@/components/ui/Select.vue';
 import DataRefreshControl from '@/components/patterns/DataRefreshControl.vue';
 import ChartCard from '@/components/patterns/ChartCard.vue';
 import { useAutoRefresh } from '@/composables/useAutoRefresh';
-import { useErrorToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import type { ServerDto } from '@/types/servers';
 import { formatDateTime } from '@/utils/datetime';
@@ -34,7 +33,6 @@ import {
 const props = defineProps<{ server: ServerDto; active?: boolean }>();
 const emit = defineEmits<{ 'metrics-loaded': [series: ServerMetricsSeries] }>();
 const { t } = useI18n();
-const notifyError = useErrorToast();
 const autoRefresh = useAutoRefresh();
 const MetricChart = defineAsyncComponent(() => import('@/components/patterns/MetricChart.vue'));
 
@@ -196,7 +194,6 @@ async function load(force = false) {
     if (isAbortError(err)) return;
     if (!metricsGuard.isCurrent(requestId)) return;
     error.value = err instanceof Error ? err.message : t('serversPage.metricsFailed');
-    notifyError(err instanceof Error ? err.message : t('serversPage.metricsFailed'), err);
   } finally {
     if (metricsGuard.isCurrent(requestId)) {
       loading.value = false;

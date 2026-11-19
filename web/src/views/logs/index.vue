@@ -12,7 +12,6 @@ import PaginationBar from '@/components/ui/PaginationBar.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
 import Select from '@/components/ui/Select.vue';
 import Table from '@/components/ui/Table.vue';
-import { useErrorToast } from '@/components/ui/toast';
 import ListCommandBar from '@/components/patterns/ListCommandBar.vue';
 import PropertyList, { type PropertyListItem } from '@/components/patterns/PropertyList.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
@@ -26,7 +25,6 @@ import { eventTone } from '@/views/activity/model';
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
-const notifyError = useErrorToast();
 const read = (key: string) => typeof route.query[key] === 'string' ? route.query[key] as string : '';
 const eventId = computed(() => read('eventId') || read('streamId'));
 const lineLevel = computed(() => read('level') || 'info,warning,error');
@@ -165,7 +163,6 @@ async function loadLines() {
     if (!linesGuard.isCurrent(request)) return;
     lines.value = [];
     error.value = err instanceof Error ? err.message : t('common.loadFailed');
-    notifyError(error.value, err);
   } finally {
     if (linesGuard.isCurrent(request)) loading.value = false;
   }

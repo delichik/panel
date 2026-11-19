@@ -11,8 +11,8 @@ import Button from '@/components/ui/Button.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
-import { useErrorToast } from '@/components/ui/toast';
 import DataRefreshControl from '@/components/patterns/DataRefreshControl.vue';
+import InfoBar from '@/components/patterns/InfoBar.vue';
 import RatioRing from '@/components/patterns/RatioRing.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import { useAutoRefresh } from '@/composables/useAutoRefresh';
@@ -39,7 +39,6 @@ import {
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
-const notifyError = useErrorToast();
 const autoRefresh = useAutoRefresh();
 
 const servers = ref<ServerDto[]>([]);
@@ -190,6 +189,7 @@ async function load(options: { initial?: boolean; includeUpdates?: boolean } = {
     ]);
     if (seq !== loadSeq) return;
     if (serversResult.status === 'rejected') throw serversResult.reason;
+    pageError.value = '';
     // 自动刷新偶发拿到空列表时保留现有服务器，避免整页瞬间变成“暂无服务器”。
     if (serversResult.value.length > 0 || servers.value.length === 0) {
       servers.value = serversResult.value;
@@ -221,9 +221,9 @@ async function load(options: { initial?: boolean; includeUpdates?: boolean } = {
     ]);
   } catch (err) {
     if (isAbortError(err) || seq !== loadSeq) return;
-    const message = err instanceof Error ? err.message : t('common.loadFailed');
-    if (initial) pageError.value = message;
-    else notifyError(message, err);
+    // 首次加载失败走页级错误空态；刷新失败（手动/自动）保留旧数据并在页面内标记陈旧，
+    // 不再弹 toast/弹窗。
+    pageError.value = err instanceof Error ? err.message : t('common.loadFailed');
   } finally {
     loadInFlight = false;
     if (seq === loadSeq) {
@@ -485,6 +485,13 @@ onMounted(() => {
             </div>
           </section>
         </section>
+
+        <InfoBar v-if="pageError && servers.length > 0" tone="warning" data-testid="overview-stale">
+          <div class="flex min-w-0 flex-wrap items-center gap-2">
+            <span class="min-w-0 break-words">{{ pageError }}</span>
+            <Button size="sm" variant="secondary" :loading="refreshing" @click="manualRefresh">{{ t('common.retry') }}</Button>
+          </div>
+        </InfoBar>
 
         <EmptyState v-if="pageError && servers.length === 0" :title="t('common.loadFailed')" :description="pageError">
           <template #actions>

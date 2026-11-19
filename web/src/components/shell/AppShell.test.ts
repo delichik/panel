@@ -6,10 +6,16 @@ import { createMemoryHistory, createRouter, type Router } from 'vue-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { appearanceApi } from '@/api/appearance';
 import { settingsApi } from '@/api/settings';
-import { toastKey } from '@/components/ui/toast';
+import { errorDialogKey } from '@/components/ui/errorDialog';
 import { useI18n } from '@/i18n';
 import type { Appearance } from '@/types/appearance';
 import type { RuntimeSettings } from '@/types/settings';
+
+// The event-notification bridge owns its own long-poll tests; the shell test only
+// asserts that it is mounted inside the authenticated shell.
+vi.mock('./EventNotificationBridge.vue', () => ({
+  default: { name: 'EventNotificationBridgeStub', render: () => null },
+}));
 
 // This vitest jsdom environment does not provide localStorage; stub it like
 // other tests stub fetch so AppShell / appearance can read persistence keys.
@@ -74,7 +80,7 @@ function makeRouter(): Router {
 // unmount every mounted shell after each test so no stale teleported DOM leaks
 // into the next test.
 const mountedWrappers: VueWrapper[] = [];
-const toastPush = vi.fn();
+const errorDialogPush = vi.fn();
 
 function runtimeSettings(language = 'en'): RuntimeSettings {
   return {
@@ -118,7 +124,7 @@ async function mountShell() {
     attachTo: document.body,
     global: {
       plugins: [createPinia(), router],
-      provide: { [toastKey as symbol]: { push: toastPush, remove: vi.fn() } },
+      provide: { [errorDialogKey as symbol]: { push: errorDialogPush, dismiss: vi.fn() } },
     },
   });
   mountedWrappers.push(wrapper);
@@ -148,7 +154,7 @@ function stubMatchMedia() {
 }
 
 beforeEach(() => {
-  toastPush.mockReset();
+  errorDialogPush.mockReset();
   pageMounts = 0;
   vi.spyOn(settingsApi, 'runtime').mockResolvedValue(runtimeSettings());
   vi.spyOn(settingsApi, 'updateLanguage').mockImplementation(async (language) => runtimeSettings(language));
@@ -199,9 +205,8 @@ describe('AppShell mobile nav drawer', () => {
     expect(useI18n().locale.value).toBe('en');
     expect(document.documentElement.lang).toBe('en');
     expect(localStorage.getItem('panel.locale')).toBe('en');
-    expect(toastPush).toHaveBeenCalledWith(expect.objectContaining({
+    expect(errorDialogPush).toHaveBeenCalledWith(expect.objectContaining({
       title: 'Unable to save language. Your previous language has been restored.',
-      tone: 'danger',
     }));
   });
 
@@ -232,6 +237,9 @@ describe('AppShell mobile nav drawer', () => {
     expect(wrapper.find('header [aria-live]').exists()).toBe(false);
     expect(wrapper.find('header [role="progressbar"]').exists()).toBe(false);
     expect(wrapper.get('header').text()).not.toContain('alpha');
+    // The event-notification long-poll bridge lives in the authenticated shell
+    // (the login page has no AppShell), so notifications never poll there.
+    expect(wrapper.findComponent({ name: 'EventNotificationBridgeStub' }).exists()).toBe(true);
     const activeLink = wrapper.get('aside nav a[href="/servers"]');
     expect(activeLink.attributes('aria-current')).toBe('page');
     expect(activeLink.classes()).toContain('bg-control');

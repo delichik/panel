@@ -1,5 +1,7 @@
 package events
 
+import "panel/internal/platform/notifications"
+
 // EventDTO is the product JSON shape for one events row.
 type EventDTO struct {
 	ID          string `json:"id"`
@@ -30,4 +32,11 @@ type LinesPage struct {
 	Items      []map[string]any `json:"items"`
 	NextCursor string           `json:"nextCursor,omitempty"`
 	HasMore    bool             `json:"hasMore"`
+}
+
+// NotificationsPage is the long-poll response for GET /api/v1/notifications
+// (ENG-EVT-011). Items is never null.
+type NotificationsPage struct {
+	Items  []notifications.Notification `json:"items"`
+	Cursor uint64                       `json:"cursor"`
 }

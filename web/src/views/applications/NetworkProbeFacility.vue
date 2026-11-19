@@ -16,7 +16,8 @@ import InfoBar from '@/components/patterns/InfoBar.vue';
 import ProbeHistoryCharts from '@/components/patterns/ProbeHistoryCharts.vue';
 import ServerMultiPicker from '@/components/patterns/ServerMultiPicker.vue';
 import { useAutoRefresh } from '@/composables/useAutoRefresh';
-import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
+import { useErrorDialog } from '@/components/ui/errorDialog';
+import { useSuccessToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import type { NetworkProbeConfig, NetworkProbeMode, NetworkProbeTargetMatrix, NetworkProbeTargetResult } from '@/types/networkProbe';
 import type { ServerDto } from '@/types/servers';
@@ -41,7 +42,7 @@ const props = defineProps<{
 }>();
 
 const { t } = useI18n();
-const notifyError = useErrorToast();
+const notifyError = useErrorDialog();
 const notifySuccess = useSuccessToast();
 const autoRefresh = useAutoRefresh();
 
@@ -179,8 +180,8 @@ async function load() {
   } catch (err) {
     if (isAbortError(err)) return;
     if (!guard.isCurrent(requestId)) return;
+    // 配置加载失败：EmptyState 就地展示并提供重试，不进弹窗/toast。
     error.value = err instanceof Error ? err.message : t('applicationsPage.networkProbeLoadFailed');
-    notifyError(error.value, err);
   } finally {
     if (guard.isCurrent(requestId)) loading.value = false;
   }
@@ -201,8 +202,8 @@ async function loadTargets() {
   } catch (err) {
     if (isAbortError(err)) return;
     if (!resultsGuard.isCurrent(requestId)) return;
+    // 结果区失败：首载用 EmptyState 就地展示+重试；后台自动刷新保留旧数据并显示陈旧标记。
     resultsError.value = err instanceof Error ? err.message : t('applicationsPage.networkProbeLoadFailed');
-    notifyError(resultsError.value, err);
   } finally {
     if (resultsGuard.isCurrent(requestId)) resultsLoading.value = false;
   }

@@ -19,7 +19,8 @@ import SearchInput from '@/components/ui/SearchInput.vue';
 import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import Table from '@/components/ui/Table.vue';
-import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
+import { useErrorDialog } from '@/components/ui/errorDialog';
+import { useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import ListPage from '@/components/templates/ListPage.vue';
 import TableDetailLayout from '@/components/templates/TableDetailLayout.vue';
@@ -40,7 +41,7 @@ import { createLatestRequestGuard, isAbortError, normalizePage } from '@/views/_
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
-const notifyError = useErrorToast();
+const notifyError = useErrorDialog();
 const notifySuccess = useSuccessToast();
 
 const pageSize = 50;
@@ -194,11 +195,9 @@ async function load() {
     }
     if (firstError) {
       error.value = firstError;
-      notifyError(firstError);
     }
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('credentialsPage.loadFailed');
-    notifyError(err instanceof Error ? err.message : t('credentialsPage.loadFailed'), err);
   } finally {
     if (listGuard.isCurrent(requestId)) {
       loading.value = false;

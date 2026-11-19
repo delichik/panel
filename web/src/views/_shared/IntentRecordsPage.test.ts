@@ -6,6 +6,7 @@ import { createMemoryHistory, createRouter, type Router } from 'vue-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import IntentRecordsPage from './IntentRecordsPage.vue';
 import { eventsApi } from '@/api/events';
+import { errorDialogKey } from '@/components/ui/errorDialog';
 import { toastKey } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import type { Event, EventPage as Page } from '@/types/events';
@@ -29,6 +30,7 @@ const page = (id = 'stream-1'): Page => ({
 });
 let wrapper: VueWrapper | undefined;
 let router: Router;
+const errorDialogPush = vi.fn();
 
 async function render(url = '/events?from=2026-09-14T00:00:00Z') {
   router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/events', component: IntentRecordsPage }] });
@@ -37,10 +39,16 @@ async function render(url = '/events?from=2026-09-14T00:00:00Z') {
   wrapper = mount(IntentRecordsPage, {
     global: {
       plugins: [router],
-      provide: { [toastKey as symbol]: { push: vi.fn() } },
+      provide: {
+        [toastKey as symbol]: { push: vi.fn() },
+        [errorDialogKey as symbol]: { push: errorDialogPush, dismiss: vi.fn() },
+      },
       stubs: {
         ConsolePage: { template: '<section><header><slot name="actions" /></header><slot /></section>' },
-        ListPage: { template: '<div><slot name="toolbar" /><slot /><slot name="pagination" /></div>' },
+        ListPage: {
+          props: ['state'],
+          template: '<div><slot name="toolbar" /><slot v-if="state === \'error\'" name="error" /><slot v-else /><slot name="pagination" /></div>',
+        },
         Dialog: {
           props: ['open', 'title'],
           template: '<div v-if="open" role="dialog"><h2>{{ title }}</h2><slot /><footer><slot name="footer" /></footer></div>',
@@ -64,6 +72,7 @@ function button(text: string) {
 
 beforeEach(() => {
   useI18n().setLocale('en');
+  errorDialogPush.mockClear();
   vi.spyOn(eventsApi, 'list').mockResolvedValue(page());
   vi.spyOn(eventsApi, 'get').mockResolvedValue(event('stream-1'));
 });
@@ -113,6 +122,22 @@ describe('Events list contract', () => {
   it('accepts legacy streamId query as eventId', async () => {
     await render('/events?from=2026-09-14T00:00:00Z&streamId=stream-1');
     expect(eventsApi.get).toHaveBeenCalledWith('stream-1');
+  });
+
+  it('shows an inline error with retry instead of a dialog when the list fails to load', async () => {
+    vi.spyOn(eventsApi, 'list').mockRejectedValue(new Error('list down'));
+    const view = await render();
+    expect(view.text()).toContain(useI18n().t('common.loadFailed'));
+    expect(view.text()).toContain('list down');
+    expect(errorDialogPush).not.toHaveBeenCalled();
+  });
+
+  it('opens the blocking error dialog when the explicit log export fails', async () => {
+    vi.spyOn(eventsApi, 'export').mockRejectedValue(new Error('export down'));
+    await render();
+    await button('Export logs').trigger('click');
+    await flushPromises();
+    expect(errorDialogPush).toHaveBeenCalledWith(expect.objectContaining({ title: 'export down' }));
   });
 
   it('shows paired coordination and execution log deep links', async () => {

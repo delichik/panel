@@ -11,7 +11,8 @@ import FacilityField from '@/components/patterns/FacilityField.vue';
 import FacilitySection from '@/components/patterns/FacilitySection.vue';
 import InfoBar from '@/components/patterns/InfoBar.vue';
 import ServerMultiPicker from '@/components/patterns/ServerMultiPicker.vue';
-import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
+import { useErrorDialog } from '@/components/ui/errorDialog';
+import { useSuccessToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import type { MetricsCleanupSchedule, MetricsFacilityConfig, MetricsFacilityMode } from '@/types/metricsFacility';
 import type { ServerDto } from '@/types/servers';
@@ -31,7 +32,7 @@ const props = defineProps<{
 }>();
 
 const { t } = useI18n();
-const notifyError = useErrorToast();
+const notifyError = useErrorDialog();
 const notifySuccess = useSuccessToast();
 
 const config = ref<MetricsFacilityConfig | null>(null);
@@ -122,8 +123,8 @@ async function load() {
   } catch (err) {
     if (isAbortError(err)) return;
     if (!guard.isCurrent(requestId)) return;
+    // 配置加载失败：EmptyState 就地展示并提供重试，不进弹窗/toast。
     error.value = err instanceof Error ? err.message : t('applicationsPage.metricsLoadFailed');
-    notifyError(error.value, err);
   } finally {
     if (guard.isCurrent(requestId)) loading.value = false;
   }

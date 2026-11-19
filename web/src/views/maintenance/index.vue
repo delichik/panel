@@ -9,7 +9,8 @@ import Button from '@/components/ui/Button.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import DownloadButton from '@/components/ui/DownloadButton.vue';
 import Input from '@/components/ui/Input.vue';
-import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
+import { useErrorDialog } from '@/components/ui/errorDialog';
+import { useSuccessToast } from '@/components/ui/toast';
 import FormField from '@/components/patterns/FormField.vue';
 import InfoBar from '@/components/patterns/InfoBar.vue';
 import ProgressBar from '@/components/patterns/ProgressBar.vue';
@@ -20,7 +21,7 @@ import type { MaintenanceStatus } from '@/types/maintenance';
 import { formatDateTime } from '@/utils/datetime';
 
 const { t } = useI18n();
-const notifyError = useErrorToast();
+const notifyError = useErrorDialog();
 const notifySuccess = useSuccessToast();
 
 const status = ref<MaintenanceStatus | null>(null);
@@ -75,7 +76,6 @@ async function load() {
       return;
     }
     const message = err instanceof Error ? err.message : t('maintenancePage.loadFailed');
-    notifyError(message, err);
     if (mode.value === 'export') {
       mode.value = 'restore';
       try {

@@ -20,7 +20,7 @@ import SearchInput from '@/components/ui/SearchInput.vue';
 import Select from '@/components/ui/Select.vue';
 import Table from '@/components/ui/Table.vue';
 import ToggleButton from '@/components/ui/ToggleButton.vue';
-import { useErrorToast } from '@/components/ui/toast';
+import { useErrorDialog } from '@/components/ui/errorDialog';
 import InfoBar from '@/components/patterns/InfoBar.vue';
 import ListCommandBar from '@/components/patterns/ListCommandBar.vue';
 import PropertyList, { type PropertyListItem } from '@/components/patterns/PropertyList.vue';
@@ -36,7 +36,7 @@ import { eventTone, operationTone } from '@/views/activity/model';
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
-const notifyError = useErrorToast();
+const notifyError = useErrorDialog();
 
 const read = (key: string) => typeof route.query[key] === 'string' ? route.query[key] as string : '';
 const initialFrom = new Date(Date.now() - 86400000).toISOString();
@@ -206,7 +206,6 @@ async function load() {
     if (!listGuard.isCurrent(request)) return;
     events.value = [];
     error.value = err instanceof Error ? err.message : t('common.loadFailed');
-    notifyError(error.value, err);
   } finally {
     if (listGuard.isCurrent(request)) loading.value = false;
   }

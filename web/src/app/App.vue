@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted } from 'vue';
 import ToastProvider from '@/components/ui/ToastProvider.vue';
+import ErrorDialogHost from '@/components/ui/ErrorDialogHost.vue';
 import { bootstrapAppearance } from '@/design/appearance';
 
 // Load the server-persisted appearance as soon as the app mounts: authenticated
@@ -12,6 +13,7 @@ onMounted(() => {
 
 <template>
   <ToastProvider>
+    <ErrorDialogHost />
     <RouterView />
   </ToastProvider>
 </template>

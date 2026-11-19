@@ -15,7 +15,8 @@ import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import StatusBadge from '@/components/ui/StatusBadge.vue';
 import Tabs from '@/components/ui/Tabs.vue';
-import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
+import { useErrorDialog } from '@/components/ui/errorDialog';
+import { useSuccessToast } from '@/components/ui/toast';
 import FacilityStat from '@/components/patterns/FacilityStat.vue';
 import { useI18n } from '@/i18n';
 import { formatDateTime } from '@/utils/datetime';
@@ -27,7 +28,7 @@ const props = defineProps<{
 
 const { t } = useI18n();
 const router = useRouter();
-const notifyError = useErrorToast();
+const notifyError = useErrorDialog();
 const notifySuccess = useSuccessToast();
 
 type DetailView = 'health' | 'partitions';
@@ -119,7 +120,7 @@ async function load() {
   try {
     config.value = await storageShareFacilityApi.get();
   } catch (err) {
-    notifyError(errorText(err), err);
+    // 页面加载失败：error 空态就地展示并提供重试，不进弹窗/toast。
     error.value = errorText(err);
   } finally {
     loading.value = false;
@@ -198,7 +199,7 @@ async function save() {
     });
     resetDraft();
     notifySuccess(t('applicationsPage.storageShareConfigSaved'), config.value);
-    if (config.value.lastError) notifyError(`${t('applicationsPage.storageShareLastError')}: ${config.value.lastError}`);
+    // lastError 由详情摘要就地展示，不再进入 toast/弹窗。
     allowLeave = true;
     await router.replace('/applications/facility-apps/storage-share');
   } catch (err) {
@@ -231,7 +232,7 @@ async function uninstall() {
     config.value = result;
     status.value = null;
     notifySuccess(t('applicationsPage.storageShareUninstalled'), result);
-    if (result.lastError) notifyError(`${t('applicationsPage.storageShareLastError')}: ${result.lastError}`);
+    // lastError 由详情摘要就地展示，不再进入 toast/弹窗。
   } catch (err) {
     notifyError(errorText(err), err);
   } finally {

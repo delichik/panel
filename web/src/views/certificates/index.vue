@@ -29,7 +29,8 @@ import StatusBadge from '@/components/ui/StatusBadge.vue';
 import DownloadButton from '@/components/ui/DownloadButton.vue';
 import NumberBox from '@/components/ui/NumberBox.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
-import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
+import { useErrorDialog } from '@/components/ui/errorDialog';
+import { useSuccessToast } from '@/components/ui/toast';
 import DetailSection from '@/components/patterns/DetailSection.vue';
 import FormField from '@/components/patterns/FormField.vue';
 import InfoBar from '@/components/patterns/InfoBar.vue';
@@ -60,7 +61,7 @@ import { formatDateTime } from '@/utils/datetime';
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
-const notifyError = useErrorToast();
+const notifyError = useErrorDialog();
 const notifySuccess = useSuccessToast();
 
 const domains = ref<DnsDomainDto[]>([]);
@@ -367,11 +368,9 @@ async function loadMode(target: CertificateMode = mode.value) {
     }
     if (firstError) {
       modeErrors[target] = firstError;
-      notifyError(firstError);
     }
   } catch (err) {
     modeErrors[target] = err instanceof Error ? err.message : t('certificatesPage.loadFailed');
-    notifyError(err instanceof Error ? err.message : t('certificatesPage.loadFailed'), err);
   } finally {
     if (listRequests.isCurrent(requestId)) loading.value = false;
   }

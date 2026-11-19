@@ -18,6 +18,7 @@ const updates = vi.fn();
 const images = vi.fn();
 const config = vi.fn();
 const applicationsList = vi.fn();
+const toastPush = vi.fn();
 
 vi.mock('@/api/applications', () => ({
   applicationsApi: { list: (...args: unknown[]) => applicationsList(...args) },
@@ -125,7 +126,7 @@ async function mountPage(initial = '/overview') {
   const wrapper = mount(OverviewPage, {
     global: {
       plugins: [router],
-      provide: { [toastKey as symbol]: { push: vi.fn(), remove: vi.fn() } },
+      provide: { [toastKey as symbol]: { push: toastPush, remove: vi.fn() } },
     },
     attachTo: document.body,
   });
@@ -137,6 +138,7 @@ async function mountPage(initial = '/overview') {
 beforeEach(() => {
   useI18n().setLocale('en');
   vi.clearAllMocks();
+  toastPush.mockClear();
   list.mockResolvedValue([
     server({ id: 'srv-1', name: 'edge', host: '10.0.0.1' }),
     server({ id: 'srv-2', name: 'core', host: '10.0.0.2' }),
@@ -319,6 +321,33 @@ describe('overview status page', () => {
 
     expect(wrapper.text()).toContain('No servers connected');
     expect(wrapper.text()).toContain('Add');
+  });
+
+  it('keeps an initial load failure inline with a retry and never raises a toast', async () => {
+    list.mockRejectedValue(new Error('overview down'));
+    const { wrapper } = await mountPage();
+
+    expect(wrapper.text()).toContain('Unable to load data.');
+    expect(wrapper.text()).toContain('overview down');
+    expect(wrapper.findAll('button').some((button) => button.text() === 'Retry')).toBe(true);
+    expect(toastPush).not.toHaveBeenCalled();
+  });
+
+  it('keeps old data with an inline stale marker when a background refresh fails', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const { wrapper } = await mountPage();
+    expect(wrapper.findAll('[data-testid="server-card"]')).toHaveLength(2);
+
+    list.mockRejectedValue(new Error('refresh down'));
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+    await flushPromises();
+    await flushPromises();
+
+    // 旧数据保留，页面内标记陈旧并提供重试；不弹 toast。
+    expect(wrapper.findAll('[data-testid="server-card"]')).toHaveLength(2);
+    expect(wrapper.get('[data-testid="overview-stale"]').text()).toContain('refresh down');
+    expect(toastPush).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 });
 

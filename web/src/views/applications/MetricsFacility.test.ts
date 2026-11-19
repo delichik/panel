@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { enableAutoUnmount, flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { errorDialogKey } from '@/components/ui/errorDialog';
 import { toastKey } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import type { ServerDto } from '@/types/servers';
@@ -51,11 +52,17 @@ const defaultConfig = {
 };
 
 const toastPush = vi.fn();
+const errorDialogPush = vi.fn();
 
 async function mountFacility() {
   const wrapper = mount(MetricsFacility, {
     props: { mode: 'facilityConfig', servers },
-    global: { provide: { [toastKey as symbol]: { push: toastPush, remove: vi.fn() } } },
+    global: {
+      provide: {
+        [toastKey as symbol]: { push: toastPush, remove: vi.fn() },
+        [errorDialogKey as symbol]: { push: errorDialogPush, dismiss: vi.fn() },
+      },
+    },
     attachTo: document.body,
   });
   await flushPromises();
@@ -80,6 +87,7 @@ function saveButton(wrapper: VueWrapper) {
 beforeEach(() => {
   vi.clearAllMocks();
   toastPush.mockReset();
+  errorDialogPush.mockReset();
   useI18n().setLocale('en');
   config.mockResolvedValue({ ...defaultConfig });
   saveConfig.mockImplementation(async (input: typeof defaultConfig) => ({
@@ -172,6 +180,8 @@ describe('metrics facility', () => {
     const wrapper = await mountFacility();
 
     expect(wrapper.text()).toContain('network down');
+    // 首次加载失败只在区块内就地重试，不弹全局错误弹窗。
+    expect(errorDialogPush).not.toHaveBeenCalled();
     config.mockResolvedValueOnce({ ...defaultConfig });
     const retry = wrapper.findAll('button').find((button) => button.text() === 'Retry')!;
     await retry.trigger('click');
@@ -179,5 +189,21 @@ describe('metrics facility', () => {
 
     expect(wrapper.find('[data-testid="metrics-config-form"]').exists()).toBe(true);
     expect((wrapper.find('[data-testid="metrics-retention"]').element as HTMLInputElement).value).toBe('7');
+  });
+
+  it('uses the blocking error dialog when saving the configuration fails', async () => {
+    const wrapper = await mountFacility();
+    saveConfig.mockRejectedValueOnce(new Error('conflict'));
+    const interval = wrapper.find<HTMLInputElement>('[data-testid="metrics-interval"]');
+    interval.element.value = '120';
+    await interval.trigger('input');
+    await interval.trigger('change');
+    await flushPromises();
+
+    await saveButton(wrapper).trigger('click');
+    await flushPromises();
+
+    expect(errorDialogPush).toHaveBeenCalledWith(expect.objectContaining({ title: 'conflict', reference: expect.any(Error) }));
+    expect(toastPush).not.toHaveBeenCalledWith(expect.objectContaining({ tone: 'danger' }));
   });
 });

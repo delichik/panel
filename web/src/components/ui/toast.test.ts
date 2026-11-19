@@ -4,8 +4,7 @@ import { defineComponent } from 'vue';
 import { createRouter, createMemoryHistory } from 'vue-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ToastProvider from './ToastProvider.vue';
-import { useErrorToast, useSuccessToast } from './toast';
-import { ApiError } from '@/api/client';
+import { useSuccessToast, useToast } from './toast';
 import { useI18n } from '@/i18n';
 
 afterEach(() => { document.body.innerHTML = ''; vi.useRealTimers(); });
@@ -15,11 +14,13 @@ async function mountToastHost() {
   const Sender = defineComponent({
     setup() {
       const success = useSuccessToast();
-      const error = useErrorToast();
+      // useToast is the infrastructure entry point (event notifications / shared
+      // providers only); business code must use useSuccessToast or useErrorDialog.
+      const toast = useToast();
       return {
         send() {
           success('Accepted', { operationId: 'op-one' });
-          error('Remote failure', new ApiError('failed', 409, 'failed', { taskId: 'task-two' }));
+          toast.push({ title: 'Background sync', tone: 'info' });
         },
       };
     },
@@ -34,7 +35,6 @@ async function mountToastHost() {
     routes: [
       { path: '/', component: Sender },
       { path: '/events', component: { template: '<div />' } },
-      { path: '/logs', component: { template: '<div />' } },
     ],
   });
   await router.push('/');
@@ -43,20 +43,14 @@ async function mountToastHost() {
 }
 
 describe('toast process actions', () => {
-  it('keeps success and failure correlated to their own operation and navigates to the selected process', async () => {
-    vi.useFakeTimers();
+  it('keeps the success action correlated to its own operation and navigates to the selected process', async () => {
     const { wrapper, router } = await mountToastHost();
     await wrapper.get('#send').trigger('click');
     const links = [...document.querySelectorAll<HTMLAnchorElement>('a')];
-    expect(links.map((link) => link.getAttribute('href'))).toEqual([
-      '/events?operationId=op-one',
-      '/events?executionId=task-two',
-    ]);
-    await vi.advanceTimersByTimeAsync(4500);
-    expect(document.querySelectorAll('a')).toHaveLength(2);
-    links[1]!.click();
+    expect(links.map((link) => link.getAttribute('href'))).toEqual(['/events?operationId=op-one']);
+    links[0]!.click();
     await flushPromises();
-    expect(router.currentRoute.value.query.executionId).toBe('task-two');
+    expect(router.currentRoute.value.query.operationId).toBe('op-one');
     wrapper.unmount();
   });
 
@@ -64,7 +58,8 @@ describe('toast process actions', () => {
     const { wrapper } = await mountToastHost();
     await wrapper.get('#send').trigger('click');
     const bubbles = [...document.querySelectorAll<HTMLElement>('section[role="status"], section[role="alert"]')];
-    expect(bubbles.length).toBeGreaterThan(0);
+    expect(bubbles.length).toBe(2);
+    expect(bubbles.map((bubble) => bubble.dataset.tone)).toEqual(['success', 'info']);
     for (const bubble of bubbles) {
       expect(bubble.className).toContain('rounded-control');
       expect(bubble.className).not.toContain('rounded-overlay');

@@ -10,9 +10,15 @@ import (
 
 	panelerr "panel/internal/platform/errors"
 	httpx "panel/internal/platform/http"
+	"panel/internal/platform/notifications"
 )
 
-const clearEventsConfirmation = "CLEAR EVENTS AND LOGS"
+const (
+	clearEventsConfirmation = "CLEAR EVENTS AND LOGS"
+
+	defaultNotificationsWaitSeconds = 20
+	maxNotificationsWaitSeconds     = 30
+)
 
 // Handler serves product HTTP routes for events and logs.
 type Handler struct{ service *Service }
@@ -76,6 +82,24 @@ func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
 	}
 	page, err := h.service.Lines(r.Context(), f.EventID, f)
 	respond(w, page, err)
+}
+
+// Notifications serves GET /api/v1/notifications long polling (ENG-EVT-011).
+// It reads only the in-memory notification hub: no AppDB access and no writes.
+// after==0 (or after beyond the server cursor) returns a baseline cursor without
+// replaying history; otherwise the request waits up to wait seconds for the next
+// process event and respects the request context.
+func (h *Handler) Notifications(w http.ResponseWriter, r *http.Request) {
+	after, waitSeconds, err := notificationsQuery(r)
+	if err != nil {
+		respond(w, nil, err)
+		return
+	}
+	items, cursor := notifications.Wait(r.Context(), after, time.Duration(waitSeconds)*time.Second)
+	if items == nil {
+		items = []notifications.Notification{}
+	}
+	httpx.JSON(w, http.StatusOK, NotificationsPage{Items: items, Cursor: cursor})
 }
 
 func (h *Handler) Clear(w http.ResponseWriter, r *http.Request) {
@@ -235,6 +259,37 @@ func logsQuery(r *http.Request) (LinesFilter, error) {
 	}
 	f.Limit = limit
 	return f, nil
+}
+
+// notificationsQuery parses after/wait for the notification long poll.
+// Unknown or repeated parameters are rejected so clients cannot silently send
+// unsupported cursors.
+func notificationsQuery(r *http.Request) (uint64, int, error) {
+	q := r.URL.Query()
+	for key, values := range q {
+		if (key != "after" && key != "wait") || len(values) != 1 {
+			return 0, 0, panelerr.BadRequest("notifications_query_invalid", "Unknown or repeated notifications query parameter: "+key)
+		}
+	}
+
+	var after uint64
+	if raw := strings.TrimSpace(q.Get("after")); raw != "" {
+		value, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			return 0, 0, panelerr.BadRequest("notifications_after_invalid", "after must be a non-negative integer")
+		}
+		after = value
+	}
+
+	waitSeconds := defaultNotificationsWaitSeconds
+	if raw := strings.TrimSpace(q.Get("wait")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 || value > maxNotificationsWaitSeconds {
+			return 0, 0, panelerr.BadRequest("notifications_wait_invalid", "wait must be between 0 and 30 seconds")
+		}
+		waitSeconds = value
+	}
+	return after, waitSeconds, nil
 }
 
 func parseInt(s string, def int) (int, error) {

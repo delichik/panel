@@ -8,7 +8,7 @@ import Dropdown from '@/components/ui/Dropdown.vue';
 import DropdownItem from '@/components/ui/DropdownItem.vue';
 import IconButton from '@/components/ui/IconButton.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
-import { useErrorToast } from '@/components/ui/toast';
+import { useErrorDialog } from '@/components/ui/errorDialog';
 import { useI18n } from '@/i18n';
 import { useAppearance } from '@/design/appearance';
 import { settingsApi } from '@/api/settings';
@@ -17,13 +17,14 @@ import { focusWithoutScroll } from '@/utils/focus';
 import { prefetchShellPages } from '@/router/pageLoaders';
 import { activeNavKey } from './navModel';
 import AppearanceFlyout from './AppearanceFlyout.vue';
+import EventNotificationBridge from './EventNotificationBridge.vue';
 import NavList from './NavList.vue';
 
 const route = useRoute();
 const router = useRouter();
 const session = useSessionStore();
 const { t, locale, setLocale } = useI18n();
-const notifyError = useErrorToast();
+const notifyError = useErrorDialog();
 const { load: loadAppearance } = useAppearance();
 const collapsed = ref(localStorage.getItem('panel.nav.collapsed') === 'true');
 const drawerId = useId();
@@ -158,6 +159,8 @@ onBeforeUnmount(() => {
     -->
     <a href="#main-content" class="panel-shadow-overlay sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-skip focus:rounded-overlay focus:border focus:border-border-strong focus:bg-popover focus:px-3 focus:py-2 focus:text-sm focus:text-popover-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-inset">{{ t('layout.skipToContent') }}</a>
     <LoadingOverlay v-if="signingOut" :label="t('layout.signingOut')" />
+    <!-- Event notifications only exist inside the authenticated shell: the login page has no AppShell. -->
+    <EventNotificationBridge />
 
     <!-- Title bar: full window width (both grid columns); no page-title duplication.
          Mobile (360–430px): the bar keeps only the app identity + global commands,

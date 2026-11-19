@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { errorDialogKey } from '@/components/ui/errorDialog';
 import { toastKey } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import type { NetworkProbeTargetMatrix } from '@/types/networkProbe';
@@ -86,10 +87,17 @@ const defaultNodes = [
   targetNode({ serverId: 'srv-3', name: 'worker', address: '10.0.0.3', sourceCount: 0, latencyMs: null, packetLossPercent: null, worstPacketLossPercent: null, sampledAt: null, stale: true, history: [] }),
 ];
 
+const errorDialogPush = vi.fn();
+
 async function mountFacility() {
   const wrapper = mount(NetworkProbeFacility, {
     props: { mode: 'facilityDetail', servers },
-    global: { provide: { [toastKey as symbol]: { push: vi.fn(), remove: vi.fn() } } },
+    global: {
+      provide: {
+        [toastKey as symbol]: { push: vi.fn(), remove: vi.fn() },
+        [errorDialogKey as symbol]: { push: errorDialogPush, dismiss: vi.fn() },
+      },
+    },
     attachTo: document.body,
   });
   await flushPromises();
@@ -115,6 +123,7 @@ async function selectOption(comboboxIndex: number, label: string) {
 beforeEach(() => {
   useI18n().setLocale('en');
   vi.clearAllMocks();
+  errorDialogPush.mockReset();
   config.mockResolvedValue({ mode: 'all', serverIds: [], intervalSeconds: 60, pingCount: 3, pingTimeoutSeconds: 2, version: 1, updatedAt: new Date().toISOString() });
   saveConfig.mockImplementation(async (input: Record<string, unknown>) => ({ ...input, version: 2, updatedAt: new Date().toISOString() }));
   targets.mockResolvedValue(targetMatrix(defaultNodes));
@@ -173,6 +182,24 @@ describe('network probe facility', () => {
     expect(wrapper.text()).toContain('Refresh failed. Showing the last successful results.');
     expect(targetCards(wrapper)).toHaveLength(servers.length);
     expect(targetCards(wrapper)[1]!.text()).toContain('145 ms');
+    // 后台/手动刷新失败走就地陈旧标记，不弹全局错误弹窗。
+    expect(errorDialogPush).not.toHaveBeenCalled();
+  });
+
+  it('uses the blocking error dialog when saving the probe configuration fails', async () => {
+    const wrapper = await mountFacility();
+    saveConfig.mockRejectedValueOnce(new Error('probe save failed'));
+    const interval = wrapper.find<HTMLInputElement>('[data-testid="network-probe-interval-minutes"]');
+    interval.element.value = '2';
+    await interval.trigger('input');
+    await interval.trigger('change');
+    await flushPromises();
+
+    const save = wrapper.findAll('button').find((button) => button.text() === 'Save configuration')!;
+    await save.trigger('click');
+    await flushPromises();
+
+    expect(errorDialogPush).toHaveBeenCalledWith(expect.objectContaining({ title: 'probe save failed', reference: expect.any(Error) }));
   });
 
   it('scrolls the result list vertically inside the card without a horizontal table', async () => {

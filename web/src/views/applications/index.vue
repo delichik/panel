@@ -27,7 +27,8 @@ import Switch from '@/components/ui/Switch.vue';
 import Table from '@/components/ui/Table.vue';
 import Tabs from '@/components/ui/Tabs.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
-import { useErrorToast, useSuccessToast, useToast } from '@/components/ui/toast';
+import { useErrorDialog } from '@/components/ui/errorDialog';
+import { useSuccessToast } from '@/components/ui/toast';
 import ServerMultiPicker from '@/components/patterns/ServerMultiPicker.vue';
 import TemplateVariableInput from '@/components/patterns/TemplateVariableInput.vue';
 import type { TemplateVariableOption } from '@/components/patterns/templateVariable';
@@ -137,9 +138,8 @@ import { normalizePage } from '@/views/_shared/requestState';
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
-const notifyError = useErrorToast();
+const notifyError = useErrorDialog();
 const notifySuccess = useSuccessToast();
-const notify = useToast();
 
 let pageLoadController: AbortController | null = null;
 let runtimeController: AbortController | null = null;
@@ -1529,8 +1529,8 @@ async function runLoadApplications(options: { loadSelectedRuntime?: boolean } = 
     }
   } catch (err) {
     if (isAbortError(err)) return;
+    // 列表加载失败：error 空态就地展示并提供重试，不进弹窗/toast。
     error.value = err instanceof Error ? err.message : t('applicationsPage.loadFailed');
-    notifyError(err instanceof Error ? err.message : t('applicationsPage.loadFailed'), err);
   } finally {
     if (requestId === pageLoadRequestId) loading.value = false;
   }
@@ -1557,8 +1557,8 @@ async function loadFacilityData() {
     if (primaryResult.status === 'fulfilled') {
       facility.value = primaryResult.value;
     } else if (!isAbortError(primaryResult.reason)) {
+      // 设施数据加载失败：error 空态就地展示并提供重试，不进弹窗/toast。
       error.value = errorMessage(primaryResult.reason, t('applicationsPage.loadFailed'));
-      notifyError(error.value, primaryResult.reason);
     }
     storageShareConfig.value = storageShareResult.status === 'fulfilled' ? storageShareResult.value : null;
     networkProbeConfig.value = networkProbeResult.status === 'fulfilled' ? networkProbeResult.value : null;
@@ -1566,8 +1566,8 @@ async function loadFacilityData() {
     facilitiesLoaded.value = true;
   } catch (err) {
     if (isAbortError(err)) return;
+    // 设施数据加载失败：error 空态就地展示并提供重试，不进弹窗/toast。
     error.value = errorMessage(err, t('applicationsPage.loadFailed'));
-    notifyError(error.value, err);
   } finally {
     if (requestId === pageLoadRequestId) loading.value = false;
   }
@@ -1732,8 +1732,8 @@ async function loadFacilityDetailData() {
       facility.value = configResult.value;
       applyFacilitySettingsForm(configResult.value.settings);
     } else if (!isAbortError(configResult.reason)) {
+      // 详情加载失败：error 空态就地展示并提供重试，不进弹窗/toast。
       error.value = errorMessage(configResult.reason, t('applicationsPage.loadFailed'));
-      notifyError(error.value, configResult.reason);
     }
     if (planeResult.status === 'fulfilled') {
       proxyPlane.value = planeResult.value;
@@ -1795,8 +1795,8 @@ async function loadApplicationDetail(applicationId: string) {
     if (isAbortError(err)) return;
     if (applicationId === selectedId.value) {
       const message = err instanceof Error ? err.message : t('applicationsPage.loadFailed');
+      // 应用详情加载失败：detailError 就地展示并提供重试，不进弹窗/toast。
       detailError.value = message;
-      notifyError(message, err);
     }
   } finally {
     if (requestId === applicationDetailRequestId) detailLoading.value = false;
@@ -1895,8 +1895,8 @@ async function loadRuntime(applicationId: string, options: { poll?: boolean } = 
     if (isAbortError(err)) return;
     if (!options.poll && applicationId === selectedId.value) {
       const message = err instanceof Error ? err.message : t('applicationsPage.runtimeUnavailable');
+      // runtime 加载失败：runtimeError 就地展示并提供重试，不进弹窗/toast。
       runtimeError.value = message;
-      notifyError(message, err);
     }
     if (options.poll && runtimePollApplicationId === applicationId) scheduleRuntimePoll(applicationId);
   } finally {
@@ -1929,7 +1929,7 @@ async function runOperation(name: string, action: () => Promise<unknown>, succes
   } catch (err) {
     notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
     // Planning can fail before a Job exists. Reload the durable diagnostic so
-    // the reason remains visible after the error toast disappears.
+    // the reason remains visible after the blocking error dialog is dismissed.
     await load();
   } finally {
     pending.value = '';
@@ -2079,9 +2079,9 @@ async function startApplicationEditorCore() {
   } catch (err) {
     if (isAbortError(err)) return;
     const message = err instanceof Error ? err.message : t('applicationsPage.editorStartFailed');
+    // 编辑器首次加载失败：actionError 就地展示并可重新进入，不进弹窗/toast。
     actionError.value = message;
     editorReady.value = false;
-    notifyError(message, err);
   }
 }
 
@@ -2257,8 +2257,8 @@ async function startFacilityRecordEditorCore() {
     editorReady.value = true;
   } catch (err) {
     if (isAbortError(err)) return;
+    // 设施记录编辑器首次加载失败：actionError 就地展示，不进弹窗/toast。
     actionError.value = errorMessage(err, t('applicationsPage.editorStartFailed'));
-    notifyError(actionError.value, err);
   }
 }
 
@@ -2352,7 +2352,8 @@ async function reloadFacilityEditor() {
     actionError.value = '';
     await startFacilityEditor();
   } catch (err) {
-    notifyError(errorMessage(err, t('common.operationFailed')), err);
+    // 手动重新加载编辑器失败：actionError 就地展示，不进弹窗/toast。
+    actionError.value = errorMessage(err, t('common.operationFailed'));
   } finally {
     pending.value = '';
   }
@@ -2500,11 +2501,8 @@ async function commitFacilityRecord() {
         await reverseProxyFacilityApi.applyConfigRecord(result.record.recordId);
       } catch (err) {
         applyFailed = true;
-        notify.push({
-          title: t('applicationsPage.facilityRecordCommittedApplyFailed'),
-          description: errorMessage(err, ''),
-          tone: 'warning',
-        });
+        // 记录已提交，但后续应用请求失败：属于用户保存操作的失败结果，用阻塞错误弹窗告知。
+        notifyError(t('applicationsPage.facilityRecordCommittedApplyFailed'), err);
       }
     }
     if (!applyFailed) {
@@ -2528,7 +2526,7 @@ async function commitFacilityRecord() {
     if (isConflictError(err)) {
       await discardFacilitySaveSession();
       actionError.value = t('applicationsPage.facilityRecordConflictHint');
-      notify.push({ title: t('applicationsPage.facilityRecordConflict'), tone: 'warning' });
+      notifyError(t('applicationsPage.facilityRecordConflict'), err);
       return;
     }
     notifyError(errorMessage(err, t('common.operationFailed')), err);
@@ -2836,7 +2834,7 @@ function removeAt<T>(items: T[], index: number) {
 async function saveProxyPlaneDraft() {
   if (proxyPlaneSaving.value || !proxyPlaneDirty.value) return;
   if (proxyPlaneBlockedReferences.value.length) {
-    notify.push({ title: t('applicationsPage.gatewayRemovalBlocked'), tone: 'warning' });
+    notifyError(t('applicationsPage.gatewayRemovalBlocked'));
     return;
   }
   proxyPlaneSaving.value = true;
@@ -2853,7 +2851,7 @@ async function saveProxyPlaneDraft() {
     const blocked = proxyPlaneConflictDomains(err);
     if (blocked.length) {
       proxyPlaneBlockedError.value = blocked.join(', ');
-      notify.push({ title: t('applicationsPage.gatewayRemovalBlocked'), tone: 'warning' });
+      notifyError(t('applicationsPage.gatewayRemovalBlocked'), err);
       return;
     }
     proxyPlaneError.value = errorMessage(err, t('common.operationFailed'));
@@ -2909,7 +2907,7 @@ async function confirmDeleteFacilityRecord() {
     await loadFacilityDetailData();
   } catch (err) {
     if (isConflictError(err)) {
-      notify.push({ title: t('applicationsPage.configRecordDeleteConflict'), tone: 'warning' });
+      notifyError(t('applicationsPage.configRecordDeleteConflict'), err);
       deleteRecordOpen.value = false;
       deleteRecordTarget.value = null;
       await loadFacilityDetailData();

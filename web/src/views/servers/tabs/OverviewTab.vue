@@ -8,7 +8,8 @@ import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import StatusBadge from '@/components/ui/StatusBadge.vue';
-import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
+import { useErrorDialog } from '@/components/ui/errorDialog';
+import { useSuccessToast } from '@/components/ui/toast';
 import DetailSection from '@/components/patterns/DetailSection.vue';
 import PropertyList, { type PropertyListItem } from '@/components/patterns/PropertyList.vue';
 import { useI18n } from '@/i18n';
@@ -31,7 +32,7 @@ import {
 const props = defineProps<{ server: ServerDto; credentials: CredentialDto[]; active: boolean }>();
 const emit = defineEmits<{ refresh: [] }>();
 const { t } = useI18n();
-const notifyError = useErrorToast();
+const notifyError = useErrorDialog();
 const notifySuccess = useSuccessToast();
 
 const initialTask = ref<TaskDto | null>(null);
