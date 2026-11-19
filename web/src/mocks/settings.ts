@@ -8,9 +8,6 @@ import type {
   RuntimeGeneralUpdate,
   RuntimeSecurityUpdate,
   RuntimeSettings,
-  RuntimeTailscaleContainerState,
-  RuntimeTailscaleSettings,
-  RuntimeTailscaleUpdate,
   ServerVariableDefinition,
 } from '@/types/settings';
 
@@ -28,22 +25,6 @@ export let mockRuntimeSettings: RuntimeSettings = {
   certificates: { email: 'ops.com', dnsPropagationDelaySeconds: 30 },
   panel: { domain: 'localhost', tlsCertificateId: '' },
   agent: { downloadBaseUrl: '', downloadVerifyTls: false, transferTimeoutSeconds: 120 },
-  tailscale: {
-    authKeyConfigured: true,
-    tags: ['tag:server', 'tag:panel'],
-    container: {
-      available: true,
-      running: true,
-      loggedIn: true,
-      hostname: 'seamark-panel',
-      ipv4: '100.101.102.103',
-      ipv6: 'fd7a:115c:a1e0::1',
-      version: '1.78.1',
-      backendState: 'Running',
-      lastError: '',
-      updatedAt: '2026-08-01T07:55:00.000Z',
-    },
-  },
   reconcileTraceEnabled: false,
   jwtSecretConfigured: true,
 };
@@ -91,54 +72,6 @@ export function saveRuntimeAgent(input: RuntimeAgentUpdate) {
 export function saveRuntimeBranding(input: RuntimeBrandingUpdate) {
   mockRuntimeSettings = { ...mockRuntimeSettings, branding: { ...mockRuntimeSettings.branding, ...input } };
   return mockRuntimeSettings;
-}
-
-/**
- * tailscale 只写密钥语义：authKey 非空即替换；clearAuthKey=true 删除并停止容器；
- * tags 省略时保留既有标签，显式 [] 才清空。
- */
-export function saveRuntimeTailscale(input: RuntimeTailscaleUpdate) {
-  const nextTailscale: RuntimeTailscaleSettings = {
-    ...mockRuntimeSettings.tailscale,
-    container: { ...mockRuntimeSettings.tailscale.container },
-  };
-  if (input.tags !== undefined) nextTailscale.tags = [...input.tags];
-  if (input.authKey) {
-    nextTailscale.authKeyConfigured = true;
-  } else if (input.clearAuthKey) {
-    nextTailscale.authKeyConfigured = false;
-    nextTailscale.container = { ...nextTailscale.container, running: false, loggedIn: false, backendState: 'Stopped', lastError: '', updatedAt: new Date().toISOString() };
-  }
-  mockRuntimeSettings = { ...mockRuntimeSettings, tailscale: nextTailscale };
-  return mockRuntimeSettings;
-}
-
-/** 协调请求的模拟结果：按当前密钥配置给出真实可达的状态组合，而不是永远成功。 */
-export function applyContainerTailscale(): RuntimeTailscaleContainerState {
-  const current = mockRuntimeSettings.tailscale;
-  const container: RuntimeTailscaleContainerState = current.authKeyConfigured
-    ? {
-      ...current.container,
-      running: true,
-      loggedIn: true,
-      hostname: current.container.hostname || 'seamark-panel',
-      ipv4: current.container.ipv4 || '100.101.102.103',
-      ipv6: current.container.ipv6 || 'fd7a:115c:a1e0::1',
-      version: current.container.version || '1.78.1',
-      backendState: 'Running',
-      lastError: '',
-      updatedAt: new Date().toISOString(),
-    }
-    : {
-      ...current.container,
-      running: false,
-      loggedIn: false,
-      backendState: 'NeedsLogin',
-      lastError: 'tailscale auth key is not configured',
-      updatedAt: new Date().toISOString(),
-    };
-  mockRuntimeSettings = { ...mockRuntimeSettings, tailscale: { ...current, container } };
-  return container;
 }
 
 export function saveServerVariables(definitions: ServerVariableDefinition[]) {

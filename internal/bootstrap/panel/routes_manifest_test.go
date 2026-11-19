@@ -32,7 +32,8 @@ func TestAPIRouteManifest(t *testing.T) {
 	}
 
 	patterns := routePatterns(t, files)
-	// 上一轮新增两条 tailscale 收敛入口：
+	// Tailscale 功能整体移除，删除 3 条相关路由（197 → 194）：
+	//   PUT /api/v1/settings/tailscale
 	//   POST /api/v1/settings/tailscale/apply
 	//   POST /api/v1/servers/{id}/tailscale/apply
 	// 已删除两条手动防火墙入口（改用 Agent 部署时自动接管，见 AGT-FW-*）：
@@ -42,7 +43,7 @@ func TestAPIRouteManifest(t *testing.T) {
 	//   GET/POST /api/v1/servers/{id}/nat-ports
 	//   PUT/DELETE /api/v1/servers/{id}/nat-ports/{mappingID}
 	// 消费者（web/src/api/settings.ts、web/src/api/servers.ts、Mock 与验收条目
-	// TS-*、UFW-API-*）必须与本清单同步变化（COV-API-001）。
+	// UFW-API-*）必须与本清单同步变化（COV-API-001）。
 	// Events + logs product surface: /api/v1/events* + /api/v1/logs, with
 	// short-lived /api/v1/log-contexts* aliases. See UI-EVT / UI-LOG / ENG-EVT.
 	// 入口网关双平面：代理平面与配置记录。
@@ -63,16 +64,15 @@ func TestAPIRouteManifest(t *testing.T) {
 	//   GET /api/v1/settings/public-appearance（skipAuth，仍计入 /api manifest）
 	// 设置写入按分区拆分为子资源（SET-RUN-022，192 → 197）：删除整体
 	//   PUT /api/v1/settings/runtime
-	// 新增 6 条分区 PUT（自动保存只提交当前分区）：
+	// 新增 5 条分区 PUT（自动保存只提交当前分区）：
 	//   PUT /api/v1/settings/runtime/general
 	//   PUT /api/v1/settings/runtime/security
 	//   PUT /api/v1/settings/runtime/certificates
 	//   PUT /api/v1/settings/runtime/agent
 	//   PUT /api/v1/settings/runtime/branding
-	//   PUT /api/v1/settings/tailscale
 	// GET /api/v1/settings/runtime 不变。
-	const wantCount = 197
-	const wantHash = "ab4d1a219baf5b2644b1597312e2155b5254575a38a5e6d51d86d3a0d5dc04cc"
+	const wantCount = 194
+	const wantHash = "72c4f69d6f34494766c91bd7450465587fe11320c63b9118c1bb209bf1d68f0f"
 	manifest := strings.Join(patterns, "\n") + "\n"
 	gotHash := fmt.Sprintf("%x", sha256.Sum256([]byte(manifest)))
 	if len(patterns) != wantCount || gotHash != wantHash {

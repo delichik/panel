@@ -26,7 +26,6 @@ import (
 	"panel/internal/platform/logging"
 	"panel/internal/platform/paneltls"
 	"panel/internal/platform/reconciletrace"
-	"panel/internal/platform/tailscale"
 
 	"go.uber.org/zap"
 )
@@ -88,7 +87,6 @@ type RuntimeUpdate struct {
 	Certificates                   *RuntimeCertificateSettings `json:"certificates"`
 	Panel                          *RuntimePanelSettings       `json:"panel"`
 	Agent                          *RuntimeAgentSettings       `json:"agent"`
-	Tailscale                      *RuntimeTailscaleUpdate     `json:"tailscale"`
 }
 
 // RuntimeGeneralUpdate 是 PUT /api/v1/settings/runtime/general 的写入负载。
@@ -129,7 +127,6 @@ type RuntimeSettings struct {
 	Certificates                   RuntimeCertificateSettings `json:"certificates"`
 	Panel                          RuntimePanelSettings       `json:"panel"`
 	Agent                          RuntimeAgentSettings       `json:"agent"`
-	Tailscale                      RuntimeTailscaleSettings   `json:"tailscale"`
 	JWTSecret                      string                     `json:"-"`
 	JWTSecretConfigured            bool                       `json:"jwtSecretConfigured"`
 }
@@ -150,8 +147,6 @@ const (
 	RuntimeSettingAgentDownloadBaseURL                 = "agent.downloadBaseUrl"
 	RuntimeSettingAgentDownloadVerifyTLS               = "agent.downloadVerifyTls"
 	RuntimeSettingAgentTransferTimeoutSeconds          = "agent.transferTimeoutSeconds"
-	RuntimeSettingTailscaleAuthKey                     = "tailscale.authKey"
-	RuntimeSettingTailscaleTags                        = "tailscale.tags"
 
 	// DefaultAgentTransferTimeoutSeconds bounds one agent bundle transfer on
 	// both sides. It is deliberately larger than the shared remote command
@@ -180,9 +175,6 @@ type Service struct {
 	mu        sync.RWMutex
 	rt        RuntimeSettings
 	tlsAssets TLSAssetProvider
-	// tailscaleControl 是 panel-init 的 tailscale 控制面。未经 panel-init 监管
-	// 时它的 Supported 为 false，容器内 tailscale 对外表现为“不可管理”。
-	tailscaleControl tailscale.InitController
 }
 
 type Option func(*Service)
@@ -191,13 +183,8 @@ func WithTLSAssetProvider(provider TLSAssetProvider) Option {
 	return func(s *Service) { s.tlsAssets = provider }
 }
 
-// WithTailscaleController 替换容器内 tailscale 控制面，供测试注入替身。
-func WithTailscaleController(controller tailscale.InitController) Option {
-	return func(s *Service) { s.tailscaleControl = controller }
-}
-
 func NewService(db *sql.DB, cfg config.Config, options ...Option) (*Service, error) {
-	s := &Service{db: db, cfg: cfg, rt: defaultRuntimeSettings(cfg), tailscaleControl: tailscale.NewInitController()}
+	s := &Service{db: db, cfg: cfg, rt: defaultRuntimeSettings(cfg)}
 	for _, option := range options {
 		option(s)
 	}
@@ -212,12 +199,6 @@ func NewService(db *sql.DB, cfg config.Config, options ...Option) (*Service, err
 			logging.From(logging.Background("settings")).Warn("failed to synchronize Panel TLS certificate", zap.Error(err))
 		}
 	}
-	// 由 Panel 负责生成期望态配置：容器重启后 panel-init 依赖该文件在 Panel
-	// 进程启动前拉起 tailscaled。
-	if err := s.ensureTailscaleConfig(); err != nil {
-		logging.From(logging.Background("settings")).Warn("failed to write container tailscale configuration", zap.Error(err))
-	}
-	s.RefreshTailscaleContainer(context.Background())
 	return s, nil
 }
 
@@ -314,22 +295,11 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 		Certificates:                   certSettings,
 		Panel:                          panelSettings,
 		Agent:                          agentSettings,
-		// Tailscale 分组与 Agent 分组一样遵循“缺省即保持”：请求省略该分组时
-		// 必须保留标签、密钥状态与容器实际态。漏掉这一行会把它清零，既清空
-		// 持久化的标签，也让响应出现 tags=null。
-		Tailscale:           current.Tailscale,
-		JWTSecret:           current.JWTSecret,
-		JWTSecretConfigured: current.JWTSecretConfigured,
+		JWTSecret:                      current.JWTSecret,
+		JWTSecretConfigured:            current.JWTSecretConfigured,
 	}
 	if input.ReconcileTraceEnabled != nil {
 		next.ReconcileTraceEnabled = *input.ReconcileTraceEnabled
-	}
-	if input.Tailscale != nil {
-		if err := s.applyTailscaleUpdate(*input.Tailscale); err != nil {
-			return RuntimeSettings{}, err
-		}
-		current = s.Runtime()
-		next.Tailscale = current.Tailscale
 	}
 	if err := validateRuntimeSettings(next); err != nil {
 		return RuntimeSettings{}, err
@@ -367,18 +337,11 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 	s.rt.Certificates = next.Certificates
 	s.rt.Panel = next.Panel
 	s.rt.Agent = next.Agent
-	s.rt.Tailscale = next.Tailscale
 	out := s.rt
 	s.mu.Unlock()
 	i18n.SetDefaultLocale(out.Language)
 	_ = logging.SetLevel(out.LogLevel)
 	reconciletrace.SetEnabled(out.ReconcileTraceEnabled)
-	if input.Tailscale != nil {
-		// 设置已经持久化，下发容器内 tailscaled 属于独立收敛：失败只反映在
-		// 实际态与 lastError 上，不回滚用户已确认的配置。
-		s.syncTailscaleConfig(ctx)
-		out = s.Runtime()
-	}
 	return out, nil
 }
 
@@ -418,12 +381,6 @@ func (s *Service) UpdateAgent(ctx context.Context, input RuntimeAgentSettings) (
 // UpdateBranding 只更新品牌分区（登录页标题与副标题）。
 func (s *Service) UpdateBranding(ctx context.Context, input RuntimeBrandingSettings) (RuntimeSettings, error) {
 	return s.Update(ctx, RuntimeUpdate{Branding: &input})
-}
-
-// UpdateTailscale 只更新 Tailscale 分区。密钥与标签的写入语义见
-// applyTailscaleUpdate；保存成功后仍由 Update 触发容器期望态收敛。
-func (s *Service) UpdateTailscale(ctx context.Context, input RuntimeTailscaleUpdate) (RuntimeSettings, error) {
-	return s.Update(ctx, RuntimeUpdate{Tailscale: &input})
 }
 
 func (s *Service) syncPanelTLS(ctx context.Context, panel RuntimePanelSettings) error {
@@ -619,11 +576,6 @@ func (s *Service) load(ctx context.Context) error {
 			if n, err := strconv.Atoi(value); err == nil {
 				next.Agent.TransferTimeoutSeconds = n
 			}
-		case RuntimeSettingTailscaleAuthKey:
-			next.Tailscale.authKey = strings.TrimSpace(value)
-			next.Tailscale.AuthKeyConfigured = next.Tailscale.authKey != ""
-		case RuntimeSettingTailscaleTags:
-			next.Tailscale.Tags = decodeStringList(value)
 		}
 	}
 	if err := validateRuntimeSettings(next); err != nil {
@@ -670,10 +622,6 @@ func defaultRuntimeSettings(cfg config.Config) RuntimeSettings {
 		Agent: RuntimeAgentSettings{
 			TransferTimeoutSeconds: DefaultAgentTransferTimeoutSeconds,
 		},
-		Tailscale: RuntimeTailscaleSettings{
-			Tags:      []string{},
-			Container: RuntimeTailscaleContainerState{},
-		},
 		JWTSecret:           jwtSecret,
 		JWTSecretConfigured: jwtSecret != "",
 	}
@@ -696,7 +644,6 @@ func runtimeValues(settings RuntimeSettings, includeJWT bool) map[string]string 
 		RuntimeSettingAgentDownloadBaseURL:                 settings.Agent.DownloadBaseURL,
 		RuntimeSettingAgentDownloadVerifyTLS:               strconv.FormatBool(settings.Agent.DownloadVerifyTLS),
 		RuntimeSettingAgentTransferTimeoutSeconds:          strconv.Itoa(settings.Agent.TransferTimeoutSeconds),
-		RuntimeSettingTailscaleTags:                        encodeStringList(settings.Tailscale.Tags),
 	}
 	if includeJWT {
 		values[RuntimeSettingJWTSecret] = settings.JWTSecret
@@ -738,9 +685,6 @@ func validateRuntimeSettings(settings RuntimeSettings) error {
 		return err
 	}
 	if err := validateAgentSettings(settings.Agent); err != nil {
-		return err
-	}
-	if _, err := normalizeTailscaleTags(settings.Tailscale.Tags); err != nil {
 		return err
 	}
 	return ValidateJWTSecret(settings.JWTSecret)

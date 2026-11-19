@@ -182,9 +182,8 @@ func reportReadyServer(id, endpoint string) server.Server {
 }
 
 type fakeReportServerProvider struct {
-	servers          []server.Server
-	reportRecords    []fakeReportRecord
-	tailscaleRecords []fakeTailscaleRecord
+	servers       []server.Server
+	reportRecords []fakeReportRecord
 }
 
 type fakeReportRecord struct {
@@ -194,24 +193,12 @@ type fakeReportRecord struct {
 	message       string
 }
 
-type fakeTailscaleRecord struct {
-	serverID string
-	status   agentcontract.TailscaleStatus
-}
-
 func (f *fakeReportServerProvider) List(context.Context) ([]server.Server, error) {
 	return append([]server.Server(nil), f.servers...), nil
 }
 
 func (f *fakeReportServerProvider) RecordAgentReportStream(_ context.Context, serverID string, connected bool, lastMessageAt time.Time, message string) error {
 	f.reportRecords = append(f.reportRecords, fakeReportRecord{serverID: serverID, connected: connected, lastMessageAt: lastMessageAt, message: message})
-	return nil
-}
-
-// ApplyTailscaleReport 记录上报的 tailscale 观测态，使测试可以断言只有携带该
-// 字段的报告才会写入观测。
-func (f *fakeReportServerProvider) ApplyTailscaleReport(_ context.Context, serverID string, status agentcontract.TailscaleStatus) error {
-	f.tailscaleRecords = append(f.tailscaleRecords, fakeTailscaleRecord{serverID: serverID, status: status})
 	return nil
 }
 

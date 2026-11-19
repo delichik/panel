@@ -457,7 +457,7 @@ func isVirtualNetworkInterface(name string) bool {
 	if name == "" || name == "lo" {
 		return true
 	}
-	for _, prefix := range []string{"docker", "veth", "br-", "virbr", "cni", "flannel", "cali", "tun", "tap", "wg", "tailscale", "zt"} {
+	for _, prefix := range []string{"docker", "veth", "br-", "virbr", "cni", "flannel", "cali", "tun", "tap", "wg", "zt"} {
 		if strings.HasPrefix(name, prefix) {
 			return true
 		}

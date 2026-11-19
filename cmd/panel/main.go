@@ -31,7 +31,7 @@ type tlsApplication interface {
 }
 
 func main() {
-	// 监督参数合同与 panel-init 共用 panelsupervision，两侧必须成对（TS-INIT-005）。
+	// 监督参数合同与 panel-init 共用 panelsupervision，两侧必须成对（ENG-BUILD-009）。
 	supervision := panelsupervision.Config{MaintenanceMode: backups.MaintenanceModeNormal}
 	panelsupervision.Register(flag.CommandLine, &supervision)
 	flag.Parse()

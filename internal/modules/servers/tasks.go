@@ -105,12 +105,6 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 			Execute:     s.RunAgentDeployTask,
 		},
 		{
-			Type:        tailscaleApplyTaskType,
-			AllowRunNow: true,
-			AllowRetry:  true,
-			Execute:     s.RunTailscaleApplyTask,
-		},
-		{
 			Type:    agentCertificateResetTaskType,
 			Execute: s.RunSystemCertificateResetTask,
 		},

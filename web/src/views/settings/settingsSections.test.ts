@@ -12,20 +12,7 @@ import { settingsApi } from '@/api/settings';
 import { systemApi } from '@/api/system';
 import { toastKey } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
-import type { RuntimeSettings, RuntimeTailscaleContainerState } from '@/types/settings';
-
-const container: RuntimeTailscaleContainerState = {
-  available: true,
-  running: true,
-  loggedIn: true,
-  hostname: 'seamark-panel',
-  ipv4: '100.101.102.103',
-  ipv6: 'fd7a:115c:a1e0::1',
-  version: '1.78.1',
-  backendState: 'Running',
-  lastError: '',
-  updatedAt: '2026-08-01T07:55:00.000Z',
-};
+import type { RuntimeSettings } from '@/types/settings';
 
 function runtimeSettings(): RuntimeSettings {
   return {
@@ -43,7 +30,6 @@ function runtimeSettings(): RuntimeSettings {
     certificates: { email: '', dnsPropagationDelaySeconds: 30 },
     panel: { domain: 'localhost', tlsCertificateId: '' },
     agent: { downloadBaseUrl: '', downloadVerifyTls: false, transferTimeoutSeconds: 120 },
-    tailscale: { authKeyConfigured: true, tags: ['tag:server'], container },
     jwtSecretConfigured: true,
   };
 }
@@ -116,7 +102,6 @@ beforeEach(() => {
   vi.spyOn(settingsApi, 'updateCertificates').mockImplementation(async () => runtimeSettings());
   vi.spyOn(settingsApi, 'updateAgent').mockImplementation(async () => runtimeSettings());
   vi.spyOn(settingsApi, 'updateBranding').mockImplementation(async () => runtimeSettings());
-  vi.spyOn(settingsApi, 'updateTailscale').mockImplementation(async () => runtimeSettings());
   vi.spyOn(settingsApi, 'updateServerVariables').mockImplementation(async () => []);
   vi.spyOn(systemApi, 'version').mockResolvedValue({ version: '0.2.0-dev', channel: 'dev', latestVersion: '', updateAvailable: false });
   vi.spyOn(keyAssetsApi, 'systemCertificates').mockResolvedValue([]);
@@ -210,7 +195,6 @@ describe('settings page sections use the shared WinUI SettingsCard shell', () =>
     { path: '/settings/security', heading: 'settingsPage.section.security', rows: 5 },
     { path: '/settings/certificates', heading: 'settingsPage.section.certificates', rows: 4 },
     { path: '/settings/agent', heading: 'settingsPage.section.agent', rows: 3 },
-    { path: '/settings/tailscale', heading: 'settingsPage.section.tailscale', rows: 6 },
     { path: '/settings/system-certificates', heading: 'settingsPage.section.systemCertificates', rows: 0 },
     { path: '/settings/system', heading: 'settingsPage.section.system', rows: 4 },
   ];
@@ -256,21 +240,6 @@ describe('settings page sections use the shared WinUI SettingsCard shell', () =>
     const exportButton = view.findAll('button').find((item) => item.text() === t('settingsPage.startExport'));
     expect(exportButton?.classes()).toContain('max-sm:w-full');
     expect(restoreButton!.classes()).toContain('max-sm:w-full');
-  });
-
-  it('uses an inset empty state inside the Tailscale card instead of nesting a second card', async () => {
-    const { t } = useI18n();
-    const unavailable = runtimeSettings();
-    unavailable.tailscale.container = { ...container, available: false };
-    vi.mocked(settingsApi.runtime).mockResolvedValue(unavailable);
-    const view = await render('/settings/tailscale');
-
-    expect(view.text()).toContain(t('settingsPage.tailscale.unavailableTitle'));
-    expect(view.find('.surface-card .surface-card').exists()).toBe(false);
-    // inset empty state 不渲染自己的卡片描边。
-    const emptyCard = view.find('[data-settings-card]');
-    expect(emptyCard.exists()).toBe(true);
-    expect(emptyCard.find('.rounded-overlay').exists()).toBe(false);
   });
 
   it('keeps the danger confirmation wired from the runtime card row', async () => {
@@ -399,7 +368,7 @@ describe('settings page section navigation', () => {
     expect(tablist.classes()).toContain('overflow-y-hidden');
 
     const tabs = view.findAll('[role="tab"]');
-    expect(tabs).toHaveLength(9);
+    expect(tabs).toHaveLength(8);
     const selected = view.find('[role="tab"][aria-selected="true"]');
     expect(selected.text()).toBe(t('settingsPage.section.security'));
   });

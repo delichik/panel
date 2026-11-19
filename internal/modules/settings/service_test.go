@@ -414,8 +414,8 @@ func TestRuntimeSettingsRejectOutOfRangeAgentTransferTimeout(t *testing.T) {
 }
 
 // newSeededRuntimeService 构造一个各分区均为非默认值的设置服务，供分区写入测试
-// 断言“只改本分区、其余保持”。基线同时覆盖常规、安全、证书、Agent、品牌与
-// Tailscale，避免零值让断言失去区分度。
+// 断言“只改本分区、其余保持”。基线同时覆盖常规、安全、证书、Agent 与品牌，
+// 避免零值让断言失去区分度。
 func newSeededRuntimeService(t *testing.T) (*Service, RuntimeSettings) {
 	t.Helper()
 	svc := newTestService(t)
@@ -430,7 +430,6 @@ func newSeededRuntimeService(t *testing.T) (*Service, RuntimeSettings) {
 		Branding:                       &RuntimeBrandingSettings{LoginTitle: "Operations", LoginSubtitle: "Manage infrastructure"},
 		Certificates:                   &RuntimeCertificateSettings{Email: "admin@example.test", DNSPropagationDelaySeconds: 15},
 		Agent:                          &RuntimeAgentSettings{DownloadBaseURL: "https://agent.example.test", DownloadVerifyTLS: true, TransferTimeoutSeconds: 600},
-		Tailscale:                      &RuntimeTailscaleUpdate{AuthKey: "tskey-auth-baseline", Tags: []string{"tag:web"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -513,16 +512,6 @@ func TestRuntimePartitionUpdatesOnlyTouchTheirSection(t *testing.T) {
 			},
 			expect: func(base RuntimeSettings) RuntimeSettings {
 				base.Branding = RuntimeBrandingSettings{LoginTitle: "Seamark Ops", LoginSubtitle: "Infrastructure control"}
-				return base
-			},
-		},
-		{
-			name: "tailscale",
-			apply: func(ctx context.Context, svc *Service) (RuntimeSettings, error) {
-				return svc.UpdateTailscale(ctx, RuntimeTailscaleUpdate{Tags: []string{"tag:db"}})
-			},
-			expect: func(base RuntimeSettings) RuntimeSettings {
-				base.Tailscale.Tags = []string{"tag:db"}
 				return base
 			},
 		},
@@ -637,13 +626,6 @@ func TestRuntimePartitionUpdateValidationErrorsAreStable(t *testing.T) {
 				return svc.UpdateBranding(ctx, RuntimeBrandingSettings{LoginTitle: strings.Repeat("a", 81)})
 			},
 			code: "invalid_branding_login_title",
-		},
-		{
-			name: "tailscale",
-			apply: func(ctx context.Context, svc *Service) (RuntimeSettings, error) {
-				return svc.UpdateTailscale(ctx, RuntimeTailscaleUpdate{Tags: []string{"web"}})
-			},
-			code: "invalid_tailscale_tag",
 		},
 	}
 	for _, tc := range cases {

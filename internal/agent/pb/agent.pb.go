@@ -128,8 +128,6 @@ type AgentReport struct {
 	Reason         string                    `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
 	PackageUpdates *PackageUpdatesResponse   `protobuf:"bytes,5,opt,name=package_updates,json=packageUpdates,proto3" json:"package_updates,omitempty"`
 	Images         *DockerImagesResponse     `protobuf:"bytes,6,opt,name=images,proto3" json:"images,omitempty"`
-	// Tailscale 状态为节点本机事实；旧 Agent 不填该字段，Panel 必须按未知处理。
-	Tailscale *TailscaleStatusResponse `protobuf:"bytes,7,opt,name=tailscale,proto3" json:"tailscale,omitempty"`
 	// 网络探测结果。旧 Agent 不填该字段，Panel 必须按未知处理。
 	Probes *AgentProbeReport `protobuf:"bytes,8,opt,name=probes,proto3" json:"probes,omitempty"`
 	// replayed 表示该指标样本是从本地补报缓冲重放的旧样本；Panel 跳过整点对齐
@@ -207,13 +205,6 @@ func (x *AgentReport) GetPackageUpdates() *PackageUpdatesResponse {
 func (x *AgentReport) GetImages() *DockerImagesResponse {
 	if x != nil {
 		return x.Images
-	}
-	return nil
-}
-
-func (x *AgentReport) GetTailscale() *TailscaleStatusResponse {
-	if x != nil {
-		return x.Tailscale
 	}
 	return nil
 }
@@ -6517,178 +6508,6 @@ func (x *ExecutionResolutionRequest) GetActorName() string {
 	return ""
 }
 
-// Tailscale 节点侧状态。installed/running/logged_in 是节点本机事实，
-// ipv4/ipv6 只在成功加入 tailnet 后才有值；Panel 不得把它们当作对公网可达地址。
-type TailscaleStatusResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Installed     bool                   `protobuf:"varint,1,opt,name=installed,proto3" json:"installed,omitempty"`
-	Running       bool                   `protobuf:"varint,2,opt,name=running,proto3" json:"running,omitempty"`
-	LoggedIn      bool                   `protobuf:"varint,3,opt,name=logged_in,json=loggedIn,proto3" json:"logged_in,omitempty"`
-	Hostname      string                 `protobuf:"bytes,4,opt,name=hostname,proto3" json:"hostname,omitempty"`
-	Ipv4          string                 `protobuf:"bytes,5,opt,name=ipv4,proto3" json:"ipv4,omitempty"`
-	Ipv6          string                 `protobuf:"bytes,6,opt,name=ipv6,proto3" json:"ipv6,omitempty"`
-	Version       string                 `protobuf:"bytes,7,opt,name=version,proto3" json:"version,omitempty"`
-	BackendState  string                 `protobuf:"bytes,8,opt,name=backend_state,json=backendState,proto3" json:"backend_state,omitempty"`
-	LastError     string                 `protobuf:"bytes,9,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *TailscaleStatusResponse) Reset() {
-	*x = TailscaleStatusResponse{}
-	mi := &file_agent_proto_msgTypes[93]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *TailscaleStatusResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*TailscaleStatusResponse) ProtoMessage() {}
-
-func (x *TailscaleStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[93]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use TailscaleStatusResponse.ProtoReflect.Descriptor instead.
-func (*TailscaleStatusResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{93}
-}
-
-func (x *TailscaleStatusResponse) GetInstalled() bool {
-	if x != nil {
-		return x.Installed
-	}
-	return false
-}
-
-func (x *TailscaleStatusResponse) GetRunning() bool {
-	if x != nil {
-		return x.Running
-	}
-	return false
-}
-
-func (x *TailscaleStatusResponse) GetLoggedIn() bool {
-	if x != nil {
-		return x.LoggedIn
-	}
-	return false
-}
-
-func (x *TailscaleStatusResponse) GetHostname() string {
-	if x != nil {
-		return x.Hostname
-	}
-	return ""
-}
-
-func (x *TailscaleStatusResponse) GetIpv4() string {
-	if x != nil {
-		return x.Ipv4
-	}
-	return ""
-}
-
-func (x *TailscaleStatusResponse) GetIpv6() string {
-	if x != nil {
-		return x.Ipv6
-	}
-	return ""
-}
-
-func (x *TailscaleStatusResponse) GetVersion() string {
-	if x != nil {
-		return x.Version
-	}
-	return ""
-}
-
-func (x *TailscaleStatusResponse) GetBackendState() string {
-	if x != nil {
-		return x.BackendState
-	}
-	return ""
-}
-
-func (x *TailscaleStatusResponse) GetLastError() string {
-	if x != nil {
-		return x.LastError
-	}
-	return ""
-}
-
-// TailscaleConfigureRequest 只在节点尚未登录时使用 auth_key；已在 tailnet 中的
-// 节点重新下发配置不得要求再次提供 key。
-type TailscaleConfigureRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	AuthKey       string                 `protobuf:"bytes,1,opt,name=auth_key,json=authKey,proto3" json:"auth_key,omitempty"`
-	Tags          []string               `protobuf:"bytes,2,rep,name=tags,proto3" json:"tags,omitempty"`
-	Hostname      string                 `protobuf:"bytes,3,opt,name=hostname,proto3" json:"hostname,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *TailscaleConfigureRequest) Reset() {
-	*x = TailscaleConfigureRequest{}
-	mi := &file_agent_proto_msgTypes[94]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *TailscaleConfigureRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*TailscaleConfigureRequest) ProtoMessage() {}
-
-func (x *TailscaleConfigureRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[94]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use TailscaleConfigureRequest.ProtoReflect.Descriptor instead.
-func (*TailscaleConfigureRequest) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{94}
-}
-
-func (x *TailscaleConfigureRequest) GetAuthKey() string {
-	if x != nil {
-		return x.AuthKey
-	}
-	return ""
-}
-
-func (x *TailscaleConfigureRequest) GetTags() []string {
-	if x != nil {
-		return x.Tags
-	}
-	return nil
-}
-
-func (x *TailscaleConfigureRequest) GetHostname() string {
-	if x != nil {
-		return x.Hostname
-	}
-	return ""
-}
-
 var File_agent_proto protoreflect.FileDescriptor
 
 const file_agent_proto_rawDesc = "" +
@@ -6698,7 +6517,7 @@ const file_agent_proto_rawDesc = "" +
 	"\x12AgentReportControl\x12\x1b\n" +
 	"\tserver_id\x18\x01 \x01(\tR\bserverId\x129\n" +
 	"\x06config\x18\x02 \x01(\v2!.panel.agent.v1.AgentReportConfigR\x06config\x126\n" +
-	"\x05probe\x18\x03 \x01(\v2 .panel.agent.v1.AgentProbeConfigR\x05probe\"\x97\x04\n" +
+	"\x05probe\x18\x03 \x01(\v2 .panel.agent.v1.AgentProbeConfigR\x05probe\"\xd6\x03\n" +
 	"\vAgentReport\x127\n" +
 	"\tsample_at\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\bsampleAt\x12A\n" +
 	"\ametrics\x18\x02 \x01(\v2'.panel.agent.v1.MetricsSnapshotResponseR\ametrics\x12H\n" +
@@ -6707,10 +6526,9 @@ const file_agent_proto_rawDesc = "" +
 	"containers\x12\x16\n" +
 	"\x06reason\x18\x04 \x01(\tR\x06reason\x12O\n" +
 	"\x0fpackage_updates\x18\x05 \x01(\v2&.panel.agent.v1.PackageUpdatesResponseR\x0epackageUpdates\x12<\n" +
-	"\x06images\x18\x06 \x01(\v2$.panel.agent.v1.DockerImagesResponseR\x06images\x12E\n" +
-	"\ttailscale\x18\a \x01(\v2'.panel.agent.v1.TailscaleStatusResponseR\ttailscale\x128\n" +
+	"\x06images\x18\x06 \x01(\v2$.panel.agent.v1.DockerImagesResponseR\x06images\x128\n" +
 	"\x06probes\x18\b \x01(\v2 .panel.agent.v1.AgentProbeReportR\x06probes\x12\x1a\n" +
-	"\breplayed\x18\t \x01(\bR\breplayed\"\x8d\x01\n" +
+	"\breplayed\x18\t \x01(\bR\breplayedJ\x04\b\a\x10\b\"\x8d\x01\n" +
 	"\x11AgentReportConfig\x128\n" +
 	"\x18metrics_interval_seconds\x18\x01 \x01(\x05R\x16metricsIntervalSeconds\x12>\n" +
 	"\x1bcontainers_interval_seconds\x18\x02 \x01(\x05R\x19containersIntervalSeconds\"\xe4\x01\n" +
@@ -7259,22 +7077,7 @@ const file_agent_proto_rawDesc = "" +
 	"\x06reason\x18\x03 \x01(\tR\x06reason\x12\x19\n" +
 	"\bactor_id\x18\x04 \x01(\tR\aactorId\x12\x1d\n" +
 	"\n" +
-	"actor_name\x18\x05 \x01(\tR\tactorName\"\x90\x02\n" +
-	"\x17TailscaleStatusResponse\x12\x1c\n" +
-	"\tinstalled\x18\x01 \x01(\bR\tinstalled\x12\x18\n" +
-	"\arunning\x18\x02 \x01(\bR\arunning\x12\x1b\n" +
-	"\tlogged_in\x18\x03 \x01(\bR\bloggedIn\x12\x1a\n" +
-	"\bhostname\x18\x04 \x01(\tR\bhostname\x12\x12\n" +
-	"\x04ipv4\x18\x05 \x01(\tR\x04ipv4\x12\x12\n" +
-	"\x04ipv6\x18\x06 \x01(\tR\x04ipv6\x12\x18\n" +
-	"\aversion\x18\a \x01(\tR\aversion\x12#\n" +
-	"\rbackend_state\x18\b \x01(\tR\fbackendState\x12\x1d\n" +
-	"\n" +
-	"last_error\x18\t \x01(\tR\tlastError\"f\n" +
-	"\x19TailscaleConfigureRequest\x12\x19\n" +
-	"\bauth_key\x18\x01 \x01(\tR\aauthKey\x12\x12\n" +
-	"\x04tags\x18\x02 \x03(\tR\x04tags\x12\x1a\n" +
-	"\bhostname\x18\x03 \x01(\tR\bhostname2\x8a$\n" +
+	"actor_name\x18\x05 \x01(\tR\tactorName2\xf9!\n" +
 	"\fAgentService\x12?\n" +
 	"\x06Health\x12\x15.panel.agent.v1.Empty\x1a\x1e.panel.agent.v1.HealthResponse\x12E\n" +
 	"\tOSRelease\x12\x15.panel.agent.v1.Empty\x1a!.panel.agent.v1.OSReleaseResponse\x12K\n" +
@@ -7323,10 +7126,7 @@ const file_agent_proto_rawDesc = "" +
 	"\x16StorageDeleteDirectory\x12-.panel.agent.v1.StorageDeleteDirectoryRequest\x1a\x1a.panel.agent.v1.OKResponse\x12\\\n" +
 	"\rStorageStatus\x12$.panel.agent.v1.StorageStatusRequest\x1a%.panel.agent.v1.StorageStatusResponse\x12k\n" +
 	"\x12StorageMountStatus\x12).panel.agent.v1.StorageMountStatusRequest\x1a*.panel.agent.v1.StorageMountStatusResponse\x12c\n" +
-	"\x16StorageEnsureDirectory\x12-.panel.agent.v1.StorageEnsureDirectoryRequest\x1a\x1a.panel.agent.v1.OKResponse\x12Q\n" +
-	"\x0fTailscaleStatus\x12\x15.panel.agent.v1.Empty\x1a'.panel.agent.v1.TailscaleStatusResponse\x12h\n" +
-	"\x12TailscaleConfigure\x12).panel.agent.v1.TailscaleConfigureRequest\x1a'.panel.agent.v1.TailscaleStatusResponse\x12R\n" +
-	"\x10TailscaleDisable\x12\x15.panel.agent.v1.Empty\x1a'.panel.agent.v1.TailscaleStatusResponse2c\n" +
+	"\x16StorageEnsureDirectory\x12-.panel.agent.v1.StorageEnsureDirectoryRequest\x1a\x1a.panel.agent.v1.OKResponse2c\n" +
 	"\x12AgentReportService\x12M\n" +
 	"\x06Report\x12\".panel.agent.v1.AgentReportControl\x1a\x1b.panel.agent.v1.AgentReport(\x010\x01B!Z\x1fpanel/internal/agent/pb;agentpbb\x06proto3"
 
@@ -7342,7 +7142,7 @@ func file_agent_proto_rawDescGZIP() []byte {
 	return file_agent_proto_rawDescData
 }
 
-var file_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 101)
+var file_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 99)
 var file_agent_proto_goTypes = []any{
 	(*Empty)(nil),                            // 0: panel.agent.v1.Empty
 	(*AgentReportControl)(nil),               // 1: panel.agent.v1.AgentReportControl
@@ -7437,187 +7237,178 @@ var file_agent_proto_goTypes = []any{
 	(*ExecutionResultRequest)(nil),           // 90: panel.agent.v1.ExecutionResultRequest
 	(*ExecutionResultResponse)(nil),          // 91: panel.agent.v1.ExecutionResultResponse
 	(*ExecutionResolutionRequest)(nil),       // 92: panel.agent.v1.ExecutionResolutionRequest
-	(*TailscaleStatusResponse)(nil),          // 93: panel.agent.v1.TailscaleStatusResponse
-	(*TailscaleConfigureRequest)(nil),        // 94: panel.agent.v1.TailscaleConfigureRequest
-	nil,                                      // 95: panel.agent.v1.SystemTraitsResponse.TraitsEntry
-	nil,                                      // 96: panel.agent.v1.Fail2BanJail.OptionsEntry
-	nil,                                      // 97: panel.agent.v1.RuntimeSpec.EnvEntry
-	nil,                                      // 98: panel.agent.v1.DockerContainer.LabelsEntry
-	nil,                                      // 99: panel.agent.v1.DockerNetwork.LabelsEntry
-	nil,                                      // 100: panel.agent.v1.DockerVolume.LabelsEntry
-	(*timestamppb.Timestamp)(nil),            // 101: google.protobuf.Timestamp
-	(*wrapperspb.BoolValue)(nil),             // 102: google.protobuf.BoolValue
-	(*wrapperspb.Int32Value)(nil),            // 103: google.protobuf.Int32Value
+	nil,                                      // 93: panel.agent.v1.SystemTraitsResponse.TraitsEntry
+	nil,                                      // 94: panel.agent.v1.Fail2BanJail.OptionsEntry
+	nil,                                      // 95: panel.agent.v1.RuntimeSpec.EnvEntry
+	nil,                                      // 96: panel.agent.v1.DockerContainer.LabelsEntry
+	nil,                                      // 97: panel.agent.v1.DockerNetwork.LabelsEntry
+	nil,                                      // 98: panel.agent.v1.DockerVolume.LabelsEntry
+	(*timestamppb.Timestamp)(nil),            // 99: google.protobuf.Timestamp
+	(*wrapperspb.BoolValue)(nil),             // 100: google.protobuf.BoolValue
+	(*wrapperspb.Int32Value)(nil),            // 101: google.protobuf.Int32Value
 }
 var file_agent_proto_depIdxs = []int32{
 	3,   // 0: panel.agent.v1.AgentReportControl.config:type_name -> panel.agent.v1.AgentReportConfig
 	4,   // 1: panel.agent.v1.AgentReportControl.probe:type_name -> panel.agent.v1.AgentProbeConfig
-	101, // 2: panel.agent.v1.AgentReport.sample_at:type_name -> google.protobuf.Timestamp
+	99,  // 2: panel.agent.v1.AgentReport.sample_at:type_name -> google.protobuf.Timestamp
 	14,  // 3: panel.agent.v1.AgentReport.metrics:type_name -> panel.agent.v1.MetricsSnapshotResponse
 	71,  // 4: panel.agent.v1.AgentReport.containers:type_name -> panel.agent.v1.DockerContainersResponse
 	17,  // 5: panel.agent.v1.AgentReport.package_updates:type_name -> panel.agent.v1.PackageUpdatesResponse
 	77,  // 6: panel.agent.v1.AgentReport.images:type_name -> panel.agent.v1.DockerImagesResponse
-	93,  // 7: panel.agent.v1.AgentReport.tailscale:type_name -> panel.agent.v1.TailscaleStatusResponse
-	6,   // 8: panel.agent.v1.AgentReport.probes:type_name -> panel.agent.v1.AgentProbeReport
-	5,   // 9: panel.agent.v1.AgentProbeConfig.targets:type_name -> panel.agent.v1.AgentProbeTarget
-	7,   // 10: panel.agent.v1.AgentProbeReport.items:type_name -> panel.agent.v1.AgentProbeResult
-	10,  // 11: panel.agent.v1.HealthResponse.docker:type_name -> panel.agent.v1.DockerHealth
-	95,  // 12: panel.agent.v1.SystemTraitsResponse.traits:type_name -> panel.agent.v1.SystemTraitsResponse.TraitsEntry
-	101, // 13: panel.agent.v1.MetricsSnapshotResponse.time:type_name -> google.protobuf.Timestamp
-	15,  // 14: panel.agent.v1.MetricsSnapshotResponse.status:type_name -> panel.agent.v1.SystemStatus
-	102, // 15: panel.agent.v1.MetricsSnapshotResponse.disk_usage_sampled:type_name -> google.protobuf.BoolValue
-	102, // 16: panel.agent.v1.MetricsSnapshotResponse.disk_io_available:type_name -> google.protobuf.BoolValue
-	101, // 17: panel.agent.v1.SystemStatus.server_time:type_name -> google.protobuf.Timestamp
-	16,  // 18: panel.agent.v1.PackageUpdatesResponse.items:type_name -> panel.agent.v1.PackageUpdate
-	22,  // 19: panel.agent.v1.UFWStatusResponse.rules:type_name -> panel.agent.v1.UFWRuleStatus
-	21,  // 20: panel.agent.v1.UFWInstallRequest.rules:type_name -> panel.agent.v1.UFWRule
-	21,  // 21: panel.agent.v1.UFWAllowRequest.rule:type_name -> panel.agent.v1.UFWRule
-	96,  // 22: panel.agent.v1.Fail2BanJail.options:type_name -> panel.agent.v1.Fail2BanJail.OptionsEntry
-	28,  // 23: panel.agent.v1.Fail2BanConfig.jails:type_name -> panel.agent.v1.Fail2BanJail
-	29,  // 24: panel.agent.v1.Fail2BanApplyRequest.config:type_name -> panel.agent.v1.Fail2BanConfig
-	97,  // 25: panel.agent.v1.RuntimeSpec.env:type_name -> panel.agent.v1.RuntimeSpec.EnvEntry
-	33,  // 26: panel.agent.v1.RuntimeSpec.ports:type_name -> panel.agent.v1.RuntimePort
-	34,  // 27: panel.agent.v1.RuntimeSpec.resources:type_name -> panel.agent.v1.RuntimeResources
-	35,  // 28: panel.agent.v1.RuntimeSpec.mounts:type_name -> panel.agent.v1.RuntimeMount
-	36,  // 29: panel.agent.v1.RuntimeSpec.files:type_name -> panel.agent.v1.RuntimeManagedFile
-	37,  // 30: panel.agent.v1.RuntimeSpec.restart:type_name -> panel.agent.v1.RuntimeRestart
-	38,  // 31: panel.agent.v1.RuntimeSpec.services:type_name -> panel.agent.v1.RuntimeService
-	39,  // 32: panel.agent.v1.RuntimeSpec.checks:type_name -> panel.agent.v1.RuntimeCheck
-	103, // 33: panel.agent.v1.RuntimeMount.uid:type_name -> google.protobuf.Int32Value
-	103, // 34: panel.agent.v1.RuntimeMount.gid:type_name -> google.protobuf.Int32Value
-	103, // 35: panel.agent.v1.RuntimeManagedFile.uid:type_name -> google.protobuf.Int32Value
-	103, // 36: panel.agent.v1.RuntimeManagedFile.gid:type_name -> google.protobuf.Int32Value
-	32,  // 37: panel.agent.v1.RuntimeWriteFilesRequest.spec:type_name -> panel.agent.v1.RuntimeSpec
-	32,  // 38: panel.agent.v1.RuntimeReconcileRequest.spec:type_name -> panel.agent.v1.RuntimeSpec
-	101, // 39: panel.agent.v1.RuntimeReconcileStep.started_at:type_name -> google.protobuf.Timestamp
-	101, // 40: panel.agent.v1.RuntimeReconcileStep.finished_at:type_name -> google.protobuf.Timestamp
-	101, // 41: panel.agent.v1.RuntimeReconcileResponse.observed_at:type_name -> google.protobuf.Timestamp
-	42,  // 42: panel.agent.v1.RuntimeReconcileResponse.steps:type_name -> panel.agent.v1.RuntimeReconcileStep
-	101, // 43: panel.agent.v1.RuntimeReconcileResponse.verified_at:type_name -> google.protobuf.Timestamp
-	32,  // 44: panel.agent.v1.RuntimeReloadRequest.spec:type_name -> panel.agent.v1.RuntimeSpec
-	32,  // 45: panel.agent.v1.RuntimeCreateContainerRequest.spec:type_name -> panel.agent.v1.RuntimeSpec
-	101, // 46: panel.agent.v1.RuntimeInstanceResponse.observed_at:type_name -> google.protobuf.Timestamp
-	101, // 47: panel.agent.v1.RuntimeStatusResponse.observed_at:type_name -> google.protobuf.Timestamp
-	68,  // 48: panel.agent.v1.DockerContainer.ports:type_name -> panel.agent.v1.DockerPort
-	98,  // 49: panel.agent.v1.DockerContainer.labels:type_name -> panel.agent.v1.DockerContainer.LabelsEntry
-	69,  // 50: panel.agent.v1.DockerContainer.mounts:type_name -> panel.agent.v1.DockerMount
-	70,  // 51: panel.agent.v1.DockerContainersResponse.items:type_name -> panel.agent.v1.DockerContainer
-	76,  // 52: panel.agent.v1.DockerImagesResponse.items:type_name -> panel.agent.v1.DockerImage
-	99,  // 53: panel.agent.v1.DockerNetwork.labels:type_name -> panel.agent.v1.DockerNetwork.LabelsEntry
-	80,  // 54: panel.agent.v1.DockerNetworksResponse.items:type_name -> panel.agent.v1.DockerNetwork
-	100, // 55: panel.agent.v1.DockerVolume.labels:type_name -> panel.agent.v1.DockerVolume.LabelsEntry
-	82,  // 56: panel.agent.v1.DockerVolume.usage_data:type_name -> panel.agent.v1.DockerVolumeUsage
-	83,  // 57: panel.agent.v1.DockerVolumesResponse.items:type_name -> panel.agent.v1.DockerVolume
-	101, // 58: panel.agent.v1.ExecutionEvent.occurred_at:type_name -> google.protobuf.Timestamp
-	86,  // 59: panel.agent.v1.ExecutionEventsResponse.events:type_name -> panel.agent.v1.ExecutionEvent
-	43,  // 60: panel.agent.v1.ExecutionResultResponse.result:type_name -> panel.agent.v1.RuntimeReconcileResponse
-	0,   // 61: panel.agent.v1.AgentService.Health:input_type -> panel.agent.v1.Empty
-	0,   // 62: panel.agent.v1.AgentService.OSRelease:input_type -> panel.agent.v1.Empty
-	0,   // 63: panel.agent.v1.AgentService.SystemTraits:input_type -> panel.agent.v1.Empty
-	13,  // 64: panel.agent.v1.AgentService.MetricsSnapshot:input_type -> panel.agent.v1.MetricsSnapshotRequest
-	0,   // 65: panel.agent.v1.AgentService.PackageUpdates:input_type -> panel.agent.v1.Empty
-	18,  // 66: panel.agent.v1.AgentService.UpgradePackages:input_type -> panel.agent.v1.PackageUpgradeRequest
-	0,   // 67: panel.agent.v1.AgentService.PrepareRestart:input_type -> panel.agent.v1.Empty
-	0,   // 68: panel.agent.v1.AgentService.UFWStatus:input_type -> panel.agent.v1.Empty
-	24,  // 69: panel.agent.v1.AgentService.UFWInstall:input_type -> panel.agent.v1.UFWInstallRequest
-	25,  // 70: panel.agent.v1.AgentService.UFWEnable:input_type -> panel.agent.v1.UFWEnableRequest
-	26,  // 71: panel.agent.v1.AgentService.UFWAllow:input_type -> panel.agent.v1.UFWAllowRequest
-	27,  // 72: panel.agent.v1.AgentService.UFWDelete:input_type -> panel.agent.v1.UFWDeleteRequest
-	0,   // 73: panel.agent.v1.AgentService.UFWConfirmPending:input_type -> panel.agent.v1.Empty
-	0,   // 74: panel.agent.v1.AgentService.Fail2BanStatus:input_type -> panel.agent.v1.Empty
-	31,  // 75: panel.agent.v1.AgentService.ApplyFail2Ban:input_type -> panel.agent.v1.Fail2BanApplyRequest
-	0,   // 76: panel.agent.v1.AgentService.ReleaseFail2Ban:input_type -> panel.agent.v1.Empty
-	0,   // 77: panel.agent.v1.AgentService.RestartSystem:input_type -> panel.agent.v1.Empty
-	0,   // 78: panel.agent.v1.AgentService.DockerContainers:input_type -> panel.agent.v1.Empty
-	72,  // 79: panel.agent.v1.AgentService.DockerContainerLogs:input_type -> panel.agent.v1.DockerContainerLogsRequest
-	74,  // 80: panel.agent.v1.AgentService.DockerContainerAction:input_type -> panel.agent.v1.DockerContainerActionRequest
-	75,  // 81: panel.agent.v1.AgentService.DockerContainerDelete:input_type -> panel.agent.v1.DockerContainerDeleteRequest
-	0,   // 82: panel.agent.v1.AgentService.DockerImages:input_type -> panel.agent.v1.Empty
-	78,  // 83: panel.agent.v1.AgentService.DockerImagePull:input_type -> panel.agent.v1.DockerImagePullRequest
-	79,  // 84: panel.agent.v1.AgentService.DockerImageDelete:input_type -> panel.agent.v1.DockerImageDeleteRequest
-	0,   // 85: panel.agent.v1.AgentService.DockerNetworks:input_type -> panel.agent.v1.Empty
-	0,   // 86: panel.agent.v1.AgentService.DockerVolumes:input_type -> panel.agent.v1.Empty
-	85,  // 87: panel.agent.v1.AgentService.DockerVolumeDelete:input_type -> panel.agent.v1.DockerVolumeDeleteRequest
-	40,  // 88: panel.agent.v1.AgentService.RuntimeWriteFiles:input_type -> panel.agent.v1.RuntimeWriteFilesRequest
-	41,  // 89: panel.agent.v1.AgentService.RuntimeReconcile:input_type -> panel.agent.v1.RuntimeReconcileRequest
-	87,  // 90: panel.agent.v1.AgentService.ReadExecutionEvents:input_type -> panel.agent.v1.ExecutionEventsRequest
-	89,  // 91: panel.agent.v1.AgentService.AckExecutionEvents:input_type -> panel.agent.v1.ExecutionEventsAck
-	90,  // 92: panel.agent.v1.AgentService.GetExecutionResult:input_type -> panel.agent.v1.ExecutionResultRequest
-	92,  // 93: panel.agent.v1.AgentService.ResolveExecution:input_type -> panel.agent.v1.ExecutionResolutionRequest
-	44,  // 94: panel.agent.v1.AgentService.RuntimeReload:input_type -> panel.agent.v1.RuntimeReloadRequest
-	46,  // 95: panel.agent.v1.AgentService.RuntimeCreateContainer:input_type -> panel.agent.v1.RuntimeCreateContainerRequest
-	48,  // 96: panel.agent.v1.AgentService.RuntimeStop:input_type -> panel.agent.v1.RuntimeStopRequest
-	49,  // 97: panel.agent.v1.AgentService.RuntimeRestart:input_type -> panel.agent.v1.RuntimeRestartRequest
-	51,  // 98: panel.agent.v1.AgentService.RuntimeStatus:input_type -> panel.agent.v1.RuntimeStatusRequest
-	53,  // 99: panel.agent.v1.AgentService.RuntimeLogs:input_type -> panel.agent.v1.RuntimeLogsRequest
-	55,  // 100: panel.agent.v1.AgentService.RuntimePersistentArchive:input_type -> panel.agent.v1.RuntimePersistentArchiveRequest
-	57,  // 101: panel.agent.v1.AgentService.RuntimePersistentRestore:input_type -> panel.agent.v1.RuntimePersistentRestoreRequest
-	59,  // 102: panel.agent.v1.AgentService.StorageConfigureExport:input_type -> panel.agent.v1.StorageConfigureExportRequest
-	60,  // 103: panel.agent.v1.AgentService.StorageArchiveDirectory:input_type -> panel.agent.v1.StorageArchiveDirectoryRequest
-	62,  // 104: panel.agent.v1.AgentService.StorageDeleteDirectory:input_type -> panel.agent.v1.StorageDeleteDirectoryRequest
-	63,  // 105: panel.agent.v1.AgentService.StorageStatus:input_type -> panel.agent.v1.StorageStatusRequest
-	65,  // 106: panel.agent.v1.AgentService.StorageMountStatus:input_type -> panel.agent.v1.StorageMountStatusRequest
-	67,  // 107: panel.agent.v1.AgentService.StorageEnsureDirectory:input_type -> panel.agent.v1.StorageEnsureDirectoryRequest
-	0,   // 108: panel.agent.v1.AgentService.TailscaleStatus:input_type -> panel.agent.v1.Empty
-	94,  // 109: panel.agent.v1.AgentService.TailscaleConfigure:input_type -> panel.agent.v1.TailscaleConfigureRequest
-	0,   // 110: panel.agent.v1.AgentService.TailscaleDisable:input_type -> panel.agent.v1.Empty
-	1,   // 111: panel.agent.v1.AgentReportService.Report:input_type -> panel.agent.v1.AgentReportControl
-	9,   // 112: panel.agent.v1.AgentService.Health:output_type -> panel.agent.v1.HealthResponse
-	11,  // 113: panel.agent.v1.AgentService.OSRelease:output_type -> panel.agent.v1.OSReleaseResponse
-	12,  // 114: panel.agent.v1.AgentService.SystemTraits:output_type -> panel.agent.v1.SystemTraitsResponse
-	14,  // 115: panel.agent.v1.AgentService.MetricsSnapshot:output_type -> panel.agent.v1.MetricsSnapshotResponse
-	17,  // 116: panel.agent.v1.AgentService.PackageUpdates:output_type -> panel.agent.v1.PackageUpdatesResponse
-	19,  // 117: panel.agent.v1.AgentService.UpgradePackages:output_type -> panel.agent.v1.CommandResponse
-	20,  // 118: panel.agent.v1.AgentService.PrepareRestart:output_type -> panel.agent.v1.PrepareRestartResponse
-	23,  // 119: panel.agent.v1.AgentService.UFWStatus:output_type -> panel.agent.v1.UFWStatusResponse
-	23,  // 120: panel.agent.v1.AgentService.UFWInstall:output_type -> panel.agent.v1.UFWStatusResponse
-	23,  // 121: panel.agent.v1.AgentService.UFWEnable:output_type -> panel.agent.v1.UFWStatusResponse
-	23,  // 122: panel.agent.v1.AgentService.UFWAllow:output_type -> panel.agent.v1.UFWStatusResponse
-	23,  // 123: panel.agent.v1.AgentService.UFWDelete:output_type -> panel.agent.v1.UFWStatusResponse
-	8,   // 124: panel.agent.v1.AgentService.UFWConfirmPending:output_type -> panel.agent.v1.OKResponse
-	30,  // 125: panel.agent.v1.AgentService.Fail2BanStatus:output_type -> panel.agent.v1.Fail2BanStatusResponse
-	30,  // 126: panel.agent.v1.AgentService.ApplyFail2Ban:output_type -> panel.agent.v1.Fail2BanStatusResponse
-	30,  // 127: panel.agent.v1.AgentService.ReleaseFail2Ban:output_type -> panel.agent.v1.Fail2BanStatusResponse
-	8,   // 128: panel.agent.v1.AgentService.RestartSystem:output_type -> panel.agent.v1.OKResponse
-	71,  // 129: panel.agent.v1.AgentService.DockerContainers:output_type -> panel.agent.v1.DockerContainersResponse
-	73,  // 130: panel.agent.v1.AgentService.DockerContainerLogs:output_type -> panel.agent.v1.DockerContainerLogsResponse
-	8,   // 131: panel.agent.v1.AgentService.DockerContainerAction:output_type -> panel.agent.v1.OKResponse
-	8,   // 132: panel.agent.v1.AgentService.DockerContainerDelete:output_type -> panel.agent.v1.OKResponse
-	77,  // 133: panel.agent.v1.AgentService.DockerImages:output_type -> panel.agent.v1.DockerImagesResponse
-	8,   // 134: panel.agent.v1.AgentService.DockerImagePull:output_type -> panel.agent.v1.OKResponse
-	8,   // 135: panel.agent.v1.AgentService.DockerImageDelete:output_type -> panel.agent.v1.OKResponse
-	81,  // 136: panel.agent.v1.AgentService.DockerNetworks:output_type -> panel.agent.v1.DockerNetworksResponse
-	84,  // 137: panel.agent.v1.AgentService.DockerVolumes:output_type -> panel.agent.v1.DockerVolumesResponse
-	8,   // 138: panel.agent.v1.AgentService.DockerVolumeDelete:output_type -> panel.agent.v1.OKResponse
-	8,   // 139: panel.agent.v1.AgentService.RuntimeWriteFiles:output_type -> panel.agent.v1.OKResponse
-	43,  // 140: panel.agent.v1.AgentService.RuntimeReconcile:output_type -> panel.agent.v1.RuntimeReconcileResponse
-	88,  // 141: panel.agent.v1.AgentService.ReadExecutionEvents:output_type -> panel.agent.v1.ExecutionEventsResponse
-	8,   // 142: panel.agent.v1.AgentService.AckExecutionEvents:output_type -> panel.agent.v1.OKResponse
-	91,  // 143: panel.agent.v1.AgentService.GetExecutionResult:output_type -> panel.agent.v1.ExecutionResultResponse
-	91,  // 144: panel.agent.v1.AgentService.ResolveExecution:output_type -> panel.agent.v1.ExecutionResultResponse
-	45,  // 145: panel.agent.v1.AgentService.RuntimeReload:output_type -> panel.agent.v1.RuntimeReloadResponse
-	47,  // 146: panel.agent.v1.AgentService.RuntimeCreateContainer:output_type -> panel.agent.v1.RuntimeCreateContainerResponse
-	50,  // 147: panel.agent.v1.AgentService.RuntimeStop:output_type -> panel.agent.v1.RuntimeInstanceResponse
-	50,  // 148: panel.agent.v1.AgentService.RuntimeRestart:output_type -> panel.agent.v1.RuntimeInstanceResponse
-	52,  // 149: panel.agent.v1.AgentService.RuntimeStatus:output_type -> panel.agent.v1.RuntimeStatusResponse
-	54,  // 150: panel.agent.v1.AgentService.RuntimeLogs:output_type -> panel.agent.v1.RuntimeLogsResponse
-	56,  // 151: panel.agent.v1.AgentService.RuntimePersistentArchive:output_type -> panel.agent.v1.RuntimePersistentArchiveResponse
-	58,  // 152: panel.agent.v1.AgentService.RuntimePersistentRestore:output_type -> panel.agent.v1.RuntimePersistentRestoreResponse
-	8,   // 153: panel.agent.v1.AgentService.StorageConfigureExport:output_type -> panel.agent.v1.OKResponse
-	61,  // 154: panel.agent.v1.AgentService.StorageArchiveDirectory:output_type -> panel.agent.v1.StorageArchiveDirectoryResponse
-	8,   // 155: panel.agent.v1.AgentService.StorageDeleteDirectory:output_type -> panel.agent.v1.OKResponse
-	64,  // 156: panel.agent.v1.AgentService.StorageStatus:output_type -> panel.agent.v1.StorageStatusResponse
-	66,  // 157: panel.agent.v1.AgentService.StorageMountStatus:output_type -> panel.agent.v1.StorageMountStatusResponse
-	8,   // 158: panel.agent.v1.AgentService.StorageEnsureDirectory:output_type -> panel.agent.v1.OKResponse
-	93,  // 159: panel.agent.v1.AgentService.TailscaleStatus:output_type -> panel.agent.v1.TailscaleStatusResponse
-	93,  // 160: panel.agent.v1.AgentService.TailscaleConfigure:output_type -> panel.agent.v1.TailscaleStatusResponse
-	93,  // 161: panel.agent.v1.AgentService.TailscaleDisable:output_type -> panel.agent.v1.TailscaleStatusResponse
-	2,   // 162: panel.agent.v1.AgentReportService.Report:output_type -> panel.agent.v1.AgentReport
-	112, // [112:163] is the sub-list for method output_type
-	61,  // [61:112] is the sub-list for method input_type
-	61,  // [61:61] is the sub-list for extension type_name
-	61,  // [61:61] is the sub-list for extension extendee
-	0,   // [0:61] is the sub-list for field type_name
+	6,   // 7: panel.agent.v1.AgentReport.probes:type_name -> panel.agent.v1.AgentProbeReport
+	5,   // 8: panel.agent.v1.AgentProbeConfig.targets:type_name -> panel.agent.v1.AgentProbeTarget
+	7,   // 9: panel.agent.v1.AgentProbeReport.items:type_name -> panel.agent.v1.AgentProbeResult
+	10,  // 10: panel.agent.v1.HealthResponse.docker:type_name -> panel.agent.v1.DockerHealth
+	93,  // 11: panel.agent.v1.SystemTraitsResponse.traits:type_name -> panel.agent.v1.SystemTraitsResponse.TraitsEntry
+	99,  // 12: panel.agent.v1.MetricsSnapshotResponse.time:type_name -> google.protobuf.Timestamp
+	15,  // 13: panel.agent.v1.MetricsSnapshotResponse.status:type_name -> panel.agent.v1.SystemStatus
+	100, // 14: panel.agent.v1.MetricsSnapshotResponse.disk_usage_sampled:type_name -> google.protobuf.BoolValue
+	100, // 15: panel.agent.v1.MetricsSnapshotResponse.disk_io_available:type_name -> google.protobuf.BoolValue
+	99,  // 16: panel.agent.v1.SystemStatus.server_time:type_name -> google.protobuf.Timestamp
+	16,  // 17: panel.agent.v1.PackageUpdatesResponse.items:type_name -> panel.agent.v1.PackageUpdate
+	22,  // 18: panel.agent.v1.UFWStatusResponse.rules:type_name -> panel.agent.v1.UFWRuleStatus
+	21,  // 19: panel.agent.v1.UFWInstallRequest.rules:type_name -> panel.agent.v1.UFWRule
+	21,  // 20: panel.agent.v1.UFWAllowRequest.rule:type_name -> panel.agent.v1.UFWRule
+	94,  // 21: panel.agent.v1.Fail2BanJail.options:type_name -> panel.agent.v1.Fail2BanJail.OptionsEntry
+	28,  // 22: panel.agent.v1.Fail2BanConfig.jails:type_name -> panel.agent.v1.Fail2BanJail
+	29,  // 23: panel.agent.v1.Fail2BanApplyRequest.config:type_name -> panel.agent.v1.Fail2BanConfig
+	95,  // 24: panel.agent.v1.RuntimeSpec.env:type_name -> panel.agent.v1.RuntimeSpec.EnvEntry
+	33,  // 25: panel.agent.v1.RuntimeSpec.ports:type_name -> panel.agent.v1.RuntimePort
+	34,  // 26: panel.agent.v1.RuntimeSpec.resources:type_name -> panel.agent.v1.RuntimeResources
+	35,  // 27: panel.agent.v1.RuntimeSpec.mounts:type_name -> panel.agent.v1.RuntimeMount
+	36,  // 28: panel.agent.v1.RuntimeSpec.files:type_name -> panel.agent.v1.RuntimeManagedFile
+	37,  // 29: panel.agent.v1.RuntimeSpec.restart:type_name -> panel.agent.v1.RuntimeRestart
+	38,  // 30: panel.agent.v1.RuntimeSpec.services:type_name -> panel.agent.v1.RuntimeService
+	39,  // 31: panel.agent.v1.RuntimeSpec.checks:type_name -> panel.agent.v1.RuntimeCheck
+	101, // 32: panel.agent.v1.RuntimeMount.uid:type_name -> google.protobuf.Int32Value
+	101, // 33: panel.agent.v1.RuntimeMount.gid:type_name -> google.protobuf.Int32Value
+	101, // 34: panel.agent.v1.RuntimeManagedFile.uid:type_name -> google.protobuf.Int32Value
+	101, // 35: panel.agent.v1.RuntimeManagedFile.gid:type_name -> google.protobuf.Int32Value
+	32,  // 36: panel.agent.v1.RuntimeWriteFilesRequest.spec:type_name -> panel.agent.v1.RuntimeSpec
+	32,  // 37: panel.agent.v1.RuntimeReconcileRequest.spec:type_name -> panel.agent.v1.RuntimeSpec
+	99,  // 38: panel.agent.v1.RuntimeReconcileStep.started_at:type_name -> google.protobuf.Timestamp
+	99,  // 39: panel.agent.v1.RuntimeReconcileStep.finished_at:type_name -> google.protobuf.Timestamp
+	99,  // 40: panel.agent.v1.RuntimeReconcileResponse.observed_at:type_name -> google.protobuf.Timestamp
+	42,  // 41: panel.agent.v1.RuntimeReconcileResponse.steps:type_name -> panel.agent.v1.RuntimeReconcileStep
+	99,  // 42: panel.agent.v1.RuntimeReconcileResponse.verified_at:type_name -> google.protobuf.Timestamp
+	32,  // 43: panel.agent.v1.RuntimeReloadRequest.spec:type_name -> panel.agent.v1.RuntimeSpec
+	32,  // 44: panel.agent.v1.RuntimeCreateContainerRequest.spec:type_name -> panel.agent.v1.RuntimeSpec
+	99,  // 45: panel.agent.v1.RuntimeInstanceResponse.observed_at:type_name -> google.protobuf.Timestamp
+	99,  // 46: panel.agent.v1.RuntimeStatusResponse.observed_at:type_name -> google.protobuf.Timestamp
+	68,  // 47: panel.agent.v1.DockerContainer.ports:type_name -> panel.agent.v1.DockerPort
+	96,  // 48: panel.agent.v1.DockerContainer.labels:type_name -> panel.agent.v1.DockerContainer.LabelsEntry
+	69,  // 49: panel.agent.v1.DockerContainer.mounts:type_name -> panel.agent.v1.DockerMount
+	70,  // 50: panel.agent.v1.DockerContainersResponse.items:type_name -> panel.agent.v1.DockerContainer
+	76,  // 51: panel.agent.v1.DockerImagesResponse.items:type_name -> panel.agent.v1.DockerImage
+	97,  // 52: panel.agent.v1.DockerNetwork.labels:type_name -> panel.agent.v1.DockerNetwork.LabelsEntry
+	80,  // 53: panel.agent.v1.DockerNetworksResponse.items:type_name -> panel.agent.v1.DockerNetwork
+	98,  // 54: panel.agent.v1.DockerVolume.labels:type_name -> panel.agent.v1.DockerVolume.LabelsEntry
+	82,  // 55: panel.agent.v1.DockerVolume.usage_data:type_name -> panel.agent.v1.DockerVolumeUsage
+	83,  // 56: panel.agent.v1.DockerVolumesResponse.items:type_name -> panel.agent.v1.DockerVolume
+	99,  // 57: panel.agent.v1.ExecutionEvent.occurred_at:type_name -> google.protobuf.Timestamp
+	86,  // 58: panel.agent.v1.ExecutionEventsResponse.events:type_name -> panel.agent.v1.ExecutionEvent
+	43,  // 59: panel.agent.v1.ExecutionResultResponse.result:type_name -> panel.agent.v1.RuntimeReconcileResponse
+	0,   // 60: panel.agent.v1.AgentService.Health:input_type -> panel.agent.v1.Empty
+	0,   // 61: panel.agent.v1.AgentService.OSRelease:input_type -> panel.agent.v1.Empty
+	0,   // 62: panel.agent.v1.AgentService.SystemTraits:input_type -> panel.agent.v1.Empty
+	13,  // 63: panel.agent.v1.AgentService.MetricsSnapshot:input_type -> panel.agent.v1.MetricsSnapshotRequest
+	0,   // 64: panel.agent.v1.AgentService.PackageUpdates:input_type -> panel.agent.v1.Empty
+	18,  // 65: panel.agent.v1.AgentService.UpgradePackages:input_type -> panel.agent.v1.PackageUpgradeRequest
+	0,   // 66: panel.agent.v1.AgentService.PrepareRestart:input_type -> panel.agent.v1.Empty
+	0,   // 67: panel.agent.v1.AgentService.UFWStatus:input_type -> panel.agent.v1.Empty
+	24,  // 68: panel.agent.v1.AgentService.UFWInstall:input_type -> panel.agent.v1.UFWInstallRequest
+	25,  // 69: panel.agent.v1.AgentService.UFWEnable:input_type -> panel.agent.v1.UFWEnableRequest
+	26,  // 70: panel.agent.v1.AgentService.UFWAllow:input_type -> panel.agent.v1.UFWAllowRequest
+	27,  // 71: panel.agent.v1.AgentService.UFWDelete:input_type -> panel.agent.v1.UFWDeleteRequest
+	0,   // 72: panel.agent.v1.AgentService.UFWConfirmPending:input_type -> panel.agent.v1.Empty
+	0,   // 73: panel.agent.v1.AgentService.Fail2BanStatus:input_type -> panel.agent.v1.Empty
+	31,  // 74: panel.agent.v1.AgentService.ApplyFail2Ban:input_type -> panel.agent.v1.Fail2BanApplyRequest
+	0,   // 75: panel.agent.v1.AgentService.ReleaseFail2Ban:input_type -> panel.agent.v1.Empty
+	0,   // 76: panel.agent.v1.AgentService.RestartSystem:input_type -> panel.agent.v1.Empty
+	0,   // 77: panel.agent.v1.AgentService.DockerContainers:input_type -> panel.agent.v1.Empty
+	72,  // 78: panel.agent.v1.AgentService.DockerContainerLogs:input_type -> panel.agent.v1.DockerContainerLogsRequest
+	74,  // 79: panel.agent.v1.AgentService.DockerContainerAction:input_type -> panel.agent.v1.DockerContainerActionRequest
+	75,  // 80: panel.agent.v1.AgentService.DockerContainerDelete:input_type -> panel.agent.v1.DockerContainerDeleteRequest
+	0,   // 81: panel.agent.v1.AgentService.DockerImages:input_type -> panel.agent.v1.Empty
+	78,  // 82: panel.agent.v1.AgentService.DockerImagePull:input_type -> panel.agent.v1.DockerImagePullRequest
+	79,  // 83: panel.agent.v1.AgentService.DockerImageDelete:input_type -> panel.agent.v1.DockerImageDeleteRequest
+	0,   // 84: panel.agent.v1.AgentService.DockerNetworks:input_type -> panel.agent.v1.Empty
+	0,   // 85: panel.agent.v1.AgentService.DockerVolumes:input_type -> panel.agent.v1.Empty
+	85,  // 86: panel.agent.v1.AgentService.DockerVolumeDelete:input_type -> panel.agent.v1.DockerVolumeDeleteRequest
+	40,  // 87: panel.agent.v1.AgentService.RuntimeWriteFiles:input_type -> panel.agent.v1.RuntimeWriteFilesRequest
+	41,  // 88: panel.agent.v1.AgentService.RuntimeReconcile:input_type -> panel.agent.v1.RuntimeReconcileRequest
+	87,  // 89: panel.agent.v1.AgentService.ReadExecutionEvents:input_type -> panel.agent.v1.ExecutionEventsRequest
+	89,  // 90: panel.agent.v1.AgentService.AckExecutionEvents:input_type -> panel.agent.v1.ExecutionEventsAck
+	90,  // 91: panel.agent.v1.AgentService.GetExecutionResult:input_type -> panel.agent.v1.ExecutionResultRequest
+	92,  // 92: panel.agent.v1.AgentService.ResolveExecution:input_type -> panel.agent.v1.ExecutionResolutionRequest
+	44,  // 93: panel.agent.v1.AgentService.RuntimeReload:input_type -> panel.agent.v1.RuntimeReloadRequest
+	46,  // 94: panel.agent.v1.AgentService.RuntimeCreateContainer:input_type -> panel.agent.v1.RuntimeCreateContainerRequest
+	48,  // 95: panel.agent.v1.AgentService.RuntimeStop:input_type -> panel.agent.v1.RuntimeStopRequest
+	49,  // 96: panel.agent.v1.AgentService.RuntimeRestart:input_type -> panel.agent.v1.RuntimeRestartRequest
+	51,  // 97: panel.agent.v1.AgentService.RuntimeStatus:input_type -> panel.agent.v1.RuntimeStatusRequest
+	53,  // 98: panel.agent.v1.AgentService.RuntimeLogs:input_type -> panel.agent.v1.RuntimeLogsRequest
+	55,  // 99: panel.agent.v1.AgentService.RuntimePersistentArchive:input_type -> panel.agent.v1.RuntimePersistentArchiveRequest
+	57,  // 100: panel.agent.v1.AgentService.RuntimePersistentRestore:input_type -> panel.agent.v1.RuntimePersistentRestoreRequest
+	59,  // 101: panel.agent.v1.AgentService.StorageConfigureExport:input_type -> panel.agent.v1.StorageConfigureExportRequest
+	60,  // 102: panel.agent.v1.AgentService.StorageArchiveDirectory:input_type -> panel.agent.v1.StorageArchiveDirectoryRequest
+	62,  // 103: panel.agent.v1.AgentService.StorageDeleteDirectory:input_type -> panel.agent.v1.StorageDeleteDirectoryRequest
+	63,  // 104: panel.agent.v1.AgentService.StorageStatus:input_type -> panel.agent.v1.StorageStatusRequest
+	65,  // 105: panel.agent.v1.AgentService.StorageMountStatus:input_type -> panel.agent.v1.StorageMountStatusRequest
+	67,  // 106: panel.agent.v1.AgentService.StorageEnsureDirectory:input_type -> panel.agent.v1.StorageEnsureDirectoryRequest
+	1,   // 107: panel.agent.v1.AgentReportService.Report:input_type -> panel.agent.v1.AgentReportControl
+	9,   // 108: panel.agent.v1.AgentService.Health:output_type -> panel.agent.v1.HealthResponse
+	11,  // 109: panel.agent.v1.AgentService.OSRelease:output_type -> panel.agent.v1.OSReleaseResponse
+	12,  // 110: panel.agent.v1.AgentService.SystemTraits:output_type -> panel.agent.v1.SystemTraitsResponse
+	14,  // 111: panel.agent.v1.AgentService.MetricsSnapshot:output_type -> panel.agent.v1.MetricsSnapshotResponse
+	17,  // 112: panel.agent.v1.AgentService.PackageUpdates:output_type -> panel.agent.v1.PackageUpdatesResponse
+	19,  // 113: panel.agent.v1.AgentService.UpgradePackages:output_type -> panel.agent.v1.CommandResponse
+	20,  // 114: panel.agent.v1.AgentService.PrepareRestart:output_type -> panel.agent.v1.PrepareRestartResponse
+	23,  // 115: panel.agent.v1.AgentService.UFWStatus:output_type -> panel.agent.v1.UFWStatusResponse
+	23,  // 116: panel.agent.v1.AgentService.UFWInstall:output_type -> panel.agent.v1.UFWStatusResponse
+	23,  // 117: panel.agent.v1.AgentService.UFWEnable:output_type -> panel.agent.v1.UFWStatusResponse
+	23,  // 118: panel.agent.v1.AgentService.UFWAllow:output_type -> panel.agent.v1.UFWStatusResponse
+	23,  // 119: panel.agent.v1.AgentService.UFWDelete:output_type -> panel.agent.v1.UFWStatusResponse
+	8,   // 120: panel.agent.v1.AgentService.UFWConfirmPending:output_type -> panel.agent.v1.OKResponse
+	30,  // 121: panel.agent.v1.AgentService.Fail2BanStatus:output_type -> panel.agent.v1.Fail2BanStatusResponse
+	30,  // 122: panel.agent.v1.AgentService.ApplyFail2Ban:output_type -> panel.agent.v1.Fail2BanStatusResponse
+	30,  // 123: panel.agent.v1.AgentService.ReleaseFail2Ban:output_type -> panel.agent.v1.Fail2BanStatusResponse
+	8,   // 124: panel.agent.v1.AgentService.RestartSystem:output_type -> panel.agent.v1.OKResponse
+	71,  // 125: panel.agent.v1.AgentService.DockerContainers:output_type -> panel.agent.v1.DockerContainersResponse
+	73,  // 126: panel.agent.v1.AgentService.DockerContainerLogs:output_type -> panel.agent.v1.DockerContainerLogsResponse
+	8,   // 127: panel.agent.v1.AgentService.DockerContainerAction:output_type -> panel.agent.v1.OKResponse
+	8,   // 128: panel.agent.v1.AgentService.DockerContainerDelete:output_type -> panel.agent.v1.OKResponse
+	77,  // 129: panel.agent.v1.AgentService.DockerImages:output_type -> panel.agent.v1.DockerImagesResponse
+	8,   // 130: panel.agent.v1.AgentService.DockerImagePull:output_type -> panel.agent.v1.OKResponse
+	8,   // 131: panel.agent.v1.AgentService.DockerImageDelete:output_type -> panel.agent.v1.OKResponse
+	81,  // 132: panel.agent.v1.AgentService.DockerNetworks:output_type -> panel.agent.v1.DockerNetworksResponse
+	84,  // 133: panel.agent.v1.AgentService.DockerVolumes:output_type -> panel.agent.v1.DockerVolumesResponse
+	8,   // 134: panel.agent.v1.AgentService.DockerVolumeDelete:output_type -> panel.agent.v1.OKResponse
+	8,   // 135: panel.agent.v1.AgentService.RuntimeWriteFiles:output_type -> panel.agent.v1.OKResponse
+	43,  // 136: panel.agent.v1.AgentService.RuntimeReconcile:output_type -> panel.agent.v1.RuntimeReconcileResponse
+	88,  // 137: panel.agent.v1.AgentService.ReadExecutionEvents:output_type -> panel.agent.v1.ExecutionEventsResponse
+	8,   // 138: panel.agent.v1.AgentService.AckExecutionEvents:output_type -> panel.agent.v1.OKResponse
+	91,  // 139: panel.agent.v1.AgentService.GetExecutionResult:output_type -> panel.agent.v1.ExecutionResultResponse
+	91,  // 140: panel.agent.v1.AgentService.ResolveExecution:output_type -> panel.agent.v1.ExecutionResultResponse
+	45,  // 141: panel.agent.v1.AgentService.RuntimeReload:output_type -> panel.agent.v1.RuntimeReloadResponse
+	47,  // 142: panel.agent.v1.AgentService.RuntimeCreateContainer:output_type -> panel.agent.v1.RuntimeCreateContainerResponse
+	50,  // 143: panel.agent.v1.AgentService.RuntimeStop:output_type -> panel.agent.v1.RuntimeInstanceResponse
+	50,  // 144: panel.agent.v1.AgentService.RuntimeRestart:output_type -> panel.agent.v1.RuntimeInstanceResponse
+	52,  // 145: panel.agent.v1.AgentService.RuntimeStatus:output_type -> panel.agent.v1.RuntimeStatusResponse
+	54,  // 146: panel.agent.v1.AgentService.RuntimeLogs:output_type -> panel.agent.v1.RuntimeLogsResponse
+	56,  // 147: panel.agent.v1.AgentService.RuntimePersistentArchive:output_type -> panel.agent.v1.RuntimePersistentArchiveResponse
+	58,  // 148: panel.agent.v1.AgentService.RuntimePersistentRestore:output_type -> panel.agent.v1.RuntimePersistentRestoreResponse
+	8,   // 149: panel.agent.v1.AgentService.StorageConfigureExport:output_type -> panel.agent.v1.OKResponse
+	61,  // 150: panel.agent.v1.AgentService.StorageArchiveDirectory:output_type -> panel.agent.v1.StorageArchiveDirectoryResponse
+	8,   // 151: panel.agent.v1.AgentService.StorageDeleteDirectory:output_type -> panel.agent.v1.OKResponse
+	64,  // 152: panel.agent.v1.AgentService.StorageStatus:output_type -> panel.agent.v1.StorageStatusResponse
+	66,  // 153: panel.agent.v1.AgentService.StorageMountStatus:output_type -> panel.agent.v1.StorageMountStatusResponse
+	8,   // 154: panel.agent.v1.AgentService.StorageEnsureDirectory:output_type -> panel.agent.v1.OKResponse
+	2,   // 155: panel.agent.v1.AgentReportService.Report:output_type -> panel.agent.v1.AgentReport
+	108, // [108:156] is the sub-list for method output_type
+	60,  // [60:108] is the sub-list for method input_type
+	60,  // [60:60] is the sub-list for extension type_name
+	60,  // [60:60] is the sub-list for extension extendee
+	0,   // [0:60] is the sub-list for field type_name
 }
 
 func init() { file_agent_proto_init() }
@@ -7631,7 +7422,7 @@ func file_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_proto_rawDesc), len(file_agent_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   101,
+			NumMessages:   99,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

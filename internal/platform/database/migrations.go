@@ -147,7 +147,96 @@ func preAppMigrationSteps() []orm.Step {
 		{ID: "migrate_application_edit_session_file_blob_dir", Run: func(ctx context.Context, tx *sql.Tx) error {
 			return migrateApplicationEditSessionFileBlobDirOn(ctx, tx)
 		}},
+		{ID: "purge_removed_tailscale_state", Run: func(ctx context.Context, tx *sql.Tx) error {
+			return purgeRemovedTailscaleStateOn(ctx, tx)
+		}},
 	}
+}
+
+// purgeRemovedTailscaleStateOn 清理 Tailscale 功能移除后遗留的持久化状态。
+//
+// 一次性：runtime_settings 里的 tailscale.authKey / tailscale.tags 已无消费者，
+// 其中认证密钥属于机密，必须随功能移除一起从数据库删除；servers.traits 里的
+// tailscale.* 观测键与 agent.certificate.hosts（只为 tailnet 地址维护的 SAN
+// 记录）同样不再有写入方，保留只会让界面与诊断看到已不存在的功能状态。
+//
+// 三个 tailscale_* 意图列不在此处理：紧随本步骤的破坏性 AutoMigrate 会按模型
+// 定义自动删除它们。本步骤必须排在破坏性 schema 同步之前，因此放在
+// preAppMigrationSteps 中；对新库而言两张表都还不存在，清理退化为 no-op。
+func purgeRemovedTailscaleStateOn(ctx context.Context, q migrationExecutor) error {
+	if exists, err := tableExistsOn(ctx, q, "runtime_settings"); err != nil {
+		return err
+	} else if exists {
+		if _, err := q.ExecContext(ctx, `DELETE FROM runtime_settings WHERE key IN (?,?)`, "tailscale.authKey", "tailscale.tags"); err != nil {
+			return err
+		}
+	}
+	exists, err := tableExistsOn(ctx, q, "servers")
+	if err != nil || !exists {
+		return err
+	}
+	columns, err := databaseTableColumnsOn(ctx, q, "servers")
+	if err != nil {
+		return err
+	}
+	if !columns["id"] || !columns["traits"] {
+		return nil
+	}
+	rows, err := q.QueryContext(ctx, `SELECT id, COALESCE(traits, '') FROM servers`)
+	if err != nil {
+		return err
+	}
+	type traitsUpdate struct{ id, traits string }
+	updates := []traitsUpdate{}
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if cleaned, changed := stripRemovedTailscaleTraits(raw); changed {
+			updates = append(updates, traitsUpdate{id: id, traits: cleaned})
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, item := range updates {
+		if _, err := q.ExecContext(ctx, `UPDATE servers SET traits=? WHERE id=?`, item.traits, item.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// stripRemovedTailscaleTraits 从 traits JSON 对象中移除已随功能删除的键。
+// 空值或非法 JSON 原样保留：本迁移只清理已知键，不修复其它数据问题。
+func stripRemovedTailscaleTraits(raw string) (string, bool) {
+	if strings.TrimSpace(raw) == "" {
+		return raw, false
+	}
+	var traits map[string]any
+	if err := json.Unmarshal([]byte(raw), &traits); err != nil {
+		return raw, false
+	}
+	changed := false
+	for key := range traits {
+		if strings.HasPrefix(key, "tailscale.") || key == "agent.certificate.hosts" {
+			delete(traits, key)
+			changed = true
+		}
+	}
+	if !changed {
+		return raw, false
+	}
+	encoded, err := json.Marshal(traits)
+	if err != nil {
+		return raw, false
+	}
+	return string(encoded), true
 }
 
 // migrateApplicationEditSessionFileBlobDirOn renames blob_path → blob_dir and

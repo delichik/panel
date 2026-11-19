@@ -71,7 +71,6 @@ type reportCollector interface {
 	NetworkTotals(ctx context.Context) (rx, tx int64, err error)
 	SystemStatus(ctx context.Context) (linux.SystemStatus, error)
 	PackageUpdates(ctx context.Context) ([]linux.PackageUpdate, error)
-	TailscaleStatus(ctx context.Context) (agentcontract.TailscaleStatus, error)
 }
 
 type reportHub struct {
@@ -431,7 +430,7 @@ drain:
 		if !reportSampleFresh(report, now) {
 			continue
 		}
-		// 补报只重放指标样本：同一报告里可能夹带容器/Tailscale 等观测，
+		// 补报只重放指标样本：同一报告里可能夹带容器等观测，
 		// 重放陈旧观测会覆盖 Panel 更新的状态，因此这里裁剪成纯指标报告。
 		kept = append(kept, &agentpb.AgentReport{
 			SampleAt: report.SampleAt,
@@ -1095,17 +1094,6 @@ func (h *reportHub) collectAndBroadcast(sampleAt time.Time, forceContainers bool
 		}
 	}
 
-	// Tailscale 状态变化很慢，跟随容器上报节拍采集即可；采集失败时保持 nil，
-	// Panel 不会用空结果覆盖已有观测（与容器快照同一约定）。
-	var tailscale *agentpb.TailscaleStatusResponse
-	if collectContainers {
-		if status, err := h.collector.TailscaleStatus(ctx); err == nil {
-			tailscale = pbTailscaleStatus(status)
-		} else {
-			logging.From(ctx).Warn("agent report tailscale collection failed", zap.Error(err))
-		}
-	}
-
 	for _, target := range targets {
 		report := &agentpb.AgentReport{SampleAt: timestamppb.New(sampleAt), Reason: reason}
 		if !forceContainers && reportIntervalDue(sampleAt, target.cfg.metricsInterval) {
@@ -1113,7 +1101,6 @@ func (h *reportHub) collectAndBroadcast(sampleAt time.Time, forceContainers bool
 		}
 		if (forceContainers && target.cfg.containerInterval > 0) || (!forceContainers && reportIntervalDue(sampleAt, target.cfg.containerInterval)) {
 			report.Containers = containers
-			report.Tailscale = tailscale
 		}
 		if report.Metrics == nil && report.Containers == nil {
 			continue

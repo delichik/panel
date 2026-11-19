@@ -10,20 +10,7 @@ import { settingsApi } from '@/api/settings';
 import { systemApi } from '@/api/system';
 import { toastKey } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
-import type { RuntimeSettings, RuntimeTailscaleContainerState } from '@/types/settings';
-
-const container: RuntimeTailscaleContainerState = {
-  available: true,
-  running: true,
-  loggedIn: true,
-  hostname: 'seamark-panel',
-  ipv4: '100.101.102.103',
-  ipv6: 'fd7a:115c:a1e0::1',
-  version: '1.78.1',
-  backendState: 'Running',
-  lastError: '',
-  updatedAt: '2026-08-01T07:55:00.000Z',
-};
+import type { RuntimeSettings } from '@/types/settings';
 
 function runtimeSettings(overrides: Partial<RuntimeSettings> = {}): RuntimeSettings {
   return {
@@ -41,7 +28,6 @@ function runtimeSettings(overrides: Partial<RuntimeSettings> = {}): RuntimeSetti
     certificates: { email: '', dnsPropagationDelaySeconds: 30 },
     panel: { domain: 'localhost', tlsCertificateId: '' },
     agent: { downloadBaseUrl: '', downloadVerifyTls: false, transferTimeoutSeconds: 120 },
-    tailscale: { authKeyConfigured: true, tags: ['tag:server'], container },
     jwtSecretConfigured: true,
     ...overrides,
   };
@@ -113,7 +99,6 @@ beforeEach(() => {
   vi.spyOn(settingsApi, 'updateCertificates').mockImplementation(async () => runtimeSettings());
   vi.spyOn(settingsApi, 'updateAgent').mockImplementation(async () => runtimeSettings());
   vi.spyOn(settingsApi, 'updateBranding').mockImplementation(async () => runtimeSettings());
-  vi.spyOn(settingsApi, 'updateTailscale').mockImplementation(async () => runtimeSettings());
   vi.spyOn(settingsApi, 'updateServerVariables').mockImplementation(async () => []);
   vi.spyOn(systemApi, 'version').mockResolvedValue({ version: '0.2.0-dev', channel: 'dev', latestVersion: '', updateAvailable: false });
   vi.spyOn(keyAssetsApi, 'systemCertificates').mockResolvedValue([]);

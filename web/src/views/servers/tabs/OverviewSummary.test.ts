@@ -29,9 +29,6 @@ function server(overrides: Partial<ServerDto> = {}): ServerDto {
       'agent.report.disconnect_count_1h': '0',
     },
     reachable: true,
-    tailscaleEnabled: false,
-    tailscalePreferAgent: false,
-    tailscalePreferInterconnect: false,
     proxyMode: 'direct',
     tunnelServerId: '',
     tunnelServerName: '',
@@ -79,13 +76,12 @@ describe('OverviewSummary', () => {
   it('renders the status summary as labelled tiles instead of a text run', () => {
     const wrapper = mount(OverviewSummary, { props: { server: server(), metrics: metrics() } });
 
-    for (const label of ['Report stream', 'Link stability', 'Connection proxy', 'Tailscale', 'Agent']) {
+    for (const label of ['Report stream', 'Link stability', 'Connection proxy', 'Agent']) {
       expect(wrapper.text()).toContain(label);
     }
     expect(wrapper.text()).toContain('Connected');
     expect(wrapper.text()).toContain('Excellent');
     expect(wrapper.text()).toContain('Direct');
-    expect(wrapper.text()).toContain('Tailscale disabled');
     expect(wrapper.text()).toContain('0.2.0');
   });
 

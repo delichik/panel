@@ -51,12 +51,12 @@
 
 ## 设置页自动保存模式
 
-设置页 general/security/certificates/agent/system（品牌+服务器变量）/tailscale 分区不再提供保存按钮，统一复用 `web/src/composables/useDebouncedAutoSave.ts`（延迟常量 `AUTO_SAVE_DELAY_MS = 500`）与 `AutoSaveStatus.vue`（`UI-SET-014`）：
+设置页 general/security/certificates/agent/system（品牌+服务器变量）分区不再提供保存按钮，统一复用 `web/src/composables/useDebouncedAutoSave.ts`（延迟常量 `AUTO_SAVE_DELAY_MS = 500`）与 `AutoSaveStatus.vue`（`UI-SET-014`）：
 
 - 触发与合并：任一表单控件修改后重置 500ms 计时器；连续修改只发最后一次；同一分区同一时刻只允许一个请求在飞，请求期间的新修改不立即补发，而是在本次响应返回后重新开始 500ms 防抖（继续输入会继续取消并顺延，停止输入满 500ms 才补发）。每个分区一个控制器，不同分区互不阻塞。
-- 负载与回填：只提交本分区子资源（`PUT /api/v1/settings/runtime/{general|security|certificates|agent|branding}`、`PUT /api/v1/settings/tailscale`、`PUT /api/v1/settings/server-variables`），成功响应返回完整 `RuntimeSettings`，用其回填规范化值；回填必须抑制 watcher，防循环保存。
+- 负载与回填：只提交本分区子资源（`PUT /api/v1/settings/runtime/{general|security|certificates|agent|branding}`、`PUT /api/v1/settings/server-variables`），成功响应返回完整 `RuntimeSettings`，用其回填规范化值；回填必须抑制 watcher，防循环保存。
 - 状态机：`idle | pending | saving | saved | invalid | error`；`saved` 约 2s 后回 idle；成功不弹 success toast，仅状态指示；失败 danger toast + `error` + 重试；`invalid` 只表示本地校验未通过，不发请求。
-- 与动作按钮边界：JWT 重置、清除 Tailscale 认证密钥、应用/重连、系统证书重置、清空事件与日志、备份导出/还原、外观上传/移除/恢复默认仍是显式动作按钮（确认/loading/两阶段反馈沿用 [interaction-model.md](interaction-model.md)），不得改造成自动保存；外观分区保持乐观即时保存（`UI-SET-013`），不纳入 500ms 防抖。
+- 与动作按钮边界：JWT 重置、系统证书重置、清空事件与日志、备份导出/还原、外观上传/移除/恢复默认仍是显式动作按钮（确认/loading/两阶段反馈沿用 [interaction-model.md](interaction-model.md)），不得改造成自动保存；外观分区保持乐观即时保存（`UI-SET-013`），不纳入 500ms 防抖。
 - 生命周期：刷新按钮取消所有待发计时器并整体重载；切 tab 不卸载页面、允许在途请求完成；页面卸载时若有待发修改立即 fire-and-forget 发送一次；卸载后不得再改状态；迟到响应不得覆盖更新的本地输入。
 - 语言：语言下拉改变时立即 `setLocale` 并进入 general 防抖保存；持久化失败回滚界面语言到服务端已持久化的 `runtime.language`，不得产生循环保存。
 - 可访问性：`AutoSaveStatus` 的保存中/已保存/失败/待修正文本经 `role=status` / `aria-live="polite"` 播报；错误状态的重试按钮必须有本地化可访问名称；不得只靠颜色表达保存状态。
@@ -80,7 +80,7 @@
 - `web/src/views/applications/ApplicationLogsDialog.vue`：业务容器日志弹窗复用 Dialog/Select/Button/LoadingOverlay；按服务器与容器展示实例，日志在固定弹窗正文内滚动，切换/关闭取消旧请求，不使用活动日志替代容器输出。
 
 - `web/src/views/applications/index.vue`：应用搜索、状态、应用/设施连续纵向配置流、部署/网关/源站服务器多选、持久化数据下载/恢复，以及应用文件和设施静态资产共用的 `AssetFileManager` 已接入统一 primitives/patterns。 未保存修改的离开/取消保护已接入 `ConfirmDialog`。应用列表为表格 + 覆盖式详情，行操作区承载 详情/编辑/同步/停用/更新镜像/日志/删除，详情页头含编辑与 `ActivityLink`，详情内保留 runtime/routes/files tabs 与持久化数据上下文面板。
-- `web/src/views/servers/index.vue` 与 `tabs/`：服务器列表为表格 + 覆盖式详情；详情页头含编辑与重启等运维操作；详情**只有一层 tab**，一级 tab 为 概览/系统/资源/网络与安全，概览合并状态条与 `MetricChart` 指标区；概览摘要卡用 `OsMark`/`ArchitectureMark` 标识发行版与架构（相邻文本保留 `prettyName` 与 `amd64 (x86_64)`）、`DiskUsageChart` 展示磁盘当前值，状态摘要为图标化紧凑瓦片，<640px 单列并恢复页面级滚动、≥1024px 仍由详情正文内部滚动；**CPU/内存/磁盘 IO/网络与延迟/丢包的当前值与历史只由下方指标与探测面板展示，摘要卡不重复这些文字摘要**；系统内 Agent/Tailscale/软件包、资源内 容器/镜像/网络/存储卷、网络与安全内 防火墙/Fail2Ban 均用 tab 内的**下拉选择器**切换（不再嵌套 Tabs）；网络探测子视图已移除，探测结果只出现在设施页与概览面板；tab/子视图懒加载并在详情存活期内缓存，旧一级 tab 名映射到新 tab + subtab；资源页与安全页的独立实现已删除。凭据/DNS 域名覆盖式详情页头同样提供编辑入口（与行内编辑同一表单）。
+- `web/src/views/servers/index.vue` 与 `tabs/`：服务器列表为表格 + 覆盖式详情；详情页头含编辑与重启等运维操作；详情**只有一层 tab**，一级 tab 为 概览/系统/资源/网络与安全，概览合并状态条与 `MetricChart` 指标区；概览摘要卡用 `OsMark`/`ArchitectureMark` 标识发行版与架构（相邻文本保留 `prettyName` 与 `amd64 (x86_64)`）、`DiskUsageChart` 展示磁盘当前值，状态摘要为图标化紧凑瓦片，<640px 单列并恢复页面级滚动、≥1024px 仍由详情正文内部滚动；**CPU/内存/磁盘 IO/网络与延迟/丢包的当前值与历史只由下方指标与探测面板展示，摘要卡不重复这些文字摘要**；系统内 Agent/软件包、资源内 容器/镜像/网络/存储卷、网络与安全内 防火墙/Fail2Ban 均用 tab 内的**下拉选择器**切换（不再嵌套 Tabs）；网络探测子视图已移除，探测结果只出现在设施页与概览面板；tab/子视图懒加载并在详情存活期内缓存，旧一级 tab 名映射到新 tab + subtab；资源页与安全页的独立实现已删除。凭据/DNS 域名覆盖式详情页头同样提供编辑入口（与行内编辑同一表单）。
 - `web/src/views/overview/index.vue`：概览顶部为**开放状态总览头**（不套 `surface-card`，直接位于页面层）：节点情况组用 `RatioRing` + 胶囊 `StatChip` 展示在线率与节点计数；应用组用总数 + 胶囊 KPI + 互斥启用/停用分布条；容量组用三个 `sm` 尺寸 `RatioRing` 展示在线节点 CPU 均值/内存/磁盘比例（无样本 `—` + 空环）。三组以留白和非对称栅格组织（`wide` 两列且容量组整行、`wider` 三列、`<wide` 单列），不画通长分隔线；服务器卡片网格保持既有卡片语言，`UI-OVR-016/017` 不变。
 - `web/src/components/templates/TableDetailLayout.vue`：servers、credentials、dns、certificates、applications、operations、tasks 通过 `detail-swap` 接入覆盖式详情进场；列表在详情打开时 `inert` + `aria-hidden`，关闭后保留滚动位置与筛选。`/logs` 使用 `ListPage` + Dialog，不走覆盖式详情。
 
@@ -88,4 +88,4 @@
 
 - `ActivityLink` 与 Toast 统一进入 `/logs?...&level=info,warning,error`；应用/设施协调入口进入 `/tasks`；用户意图列表为 `/operations`。
 
-- `web/src/views/settings/index.vue`：分区表单统一接入 `useDebouncedAutoSave` + `AutoSaveStatus`；general/security/certificates/agent/system/tailscale 修改后 500ms 自动保存且只提交本分区；保留 JWT 重置、清除 Tailscale 认证密钥、应用/重连、系统证书重置、清空事件与日志、备份导出/还原等动作按钮；外观分区仍用乐观即时保存。
+- `web/src/views/settings/index.vue`：分区表单统一接入 `useDebouncedAutoSave` + `AutoSaveStatus`；general/security/certificates/agent/system 修改后 500ms 自动保存且只提交本分区；保留 JWT 重置、系统证书重置、清空事件与日志、备份导出/还原等动作按钮；外观分区仍用乐观即时保存。

@@ -71,23 +71,6 @@ func runtimeSettingsJSONRoundTrip(t *testing.T, settings RuntimeSettings) Runtim
 	return projected
 }
 
-// assertTailscaleCredentials 比较节点凭据。空标签既可能是 nil 也可能是空切片，
-// 对凭据而言等价，因此按长度与元素比较。
-func assertTailscaleCredentials(t *testing.T, key string, tags []string, wantKey string, wantTags []string) {
-	t.Helper()
-	if key != wantKey {
-		t.Fatalf("auth key = %q, want %q", key, wantKey)
-	}
-	if len(tags) != len(wantTags) {
-		t.Fatalf("tags = %#v, want %#v", tags, wantTags)
-	}
-	for index := range wantTags {
-		if tags[index] != wantTags[index] {
-			t.Fatalf("tags = %#v, want %#v", tags, wantTags)
-		}
-	}
-}
-
 // assertCompleteRuntimeSettings 断言分区写入的响应仍是完整的 RuntimeSettings，
 // 而不是只回显本分区（SET-RUN-022）。
 func assertCompleteRuntimeSettings(t *testing.T, settings RuntimeSettings) {
@@ -115,7 +98,6 @@ func assertCompleteRuntimeSettings(t *testing.T, settings RuntimeSettings) {
 		"certificates",
 		"panel",
 		"agent",
-		"tailscale",
 		"jwtSecretConfigured",
 	} {
 		if _, ok := decoded[key]; !ok {
@@ -124,7 +106,7 @@ func assertCompleteRuntimeSettings(t *testing.T, settings RuntimeSettings) {
 	}
 }
 
-// TestRuntimePartitionHandlersApplyOnlyTheirSection 验证六个分区端点各自只改变
+// TestRuntimePartitionHandlersApplyOnlyTheirSection 验证五个分区端点各自只改变
 // 本分区字段、返回完整 RuntimeSettings，且回填后的内存快照与持久化一致。
 func TestRuntimePartitionHandlersApplyOnlyTheirSection(t *testing.T) {
 	cases := []struct {
@@ -186,16 +168,6 @@ func TestRuntimePartitionHandlersApplyOnlyTheirSection(t *testing.T) {
 			handler: (*Handler).UpdateBranding,
 			expect: func(base RuntimeSettings) RuntimeSettings {
 				base.Branding = RuntimeBrandingSettings{LoginTitle: "Seamark Ops", LoginSubtitle: "Infrastructure control"}
-				return base
-			},
-		},
-		{
-			name:    "tailscale",
-			path:    "/api/v1/settings/tailscale",
-			body:    `{"tags":["tag:db"]}`,
-			handler: (*Handler).UpdateTailscale,
-			expect: func(base RuntimeSettings) RuntimeSettings {
-				base.Tailscale.Tags = []string{"tag:db"}
 				return base
 			},
 		},
@@ -297,13 +269,6 @@ func TestRuntimePartitionHandlersRejectInvalidValues(t *testing.T) {
 			handler: (*Handler).UpdateBranding,
 			code:    "invalid_branding_login_title",
 		},
-		{
-			name:    "tailscale invalid tag",
-			path:    "/api/v1/settings/tailscale",
-			body:    `{"tags":["web"]}`,
-			handler: (*Handler).UpdateTailscale,
-			code:    "invalid_tailscale_tag",
-		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -333,73 +298,7 @@ func TestRuntimePartitionHandlersRejectInvalidValues(t *testing.T) {
 	}
 }
 
-// TestRuntimePartitionTailscaleJSONSemantics 验证子资源仅凭 JSON 的“字段缺失”
-// 与“显式空数组”区分语义：省略 tags 保留既有标签，clearAuthKey 不误清标签。
-func TestRuntimePartitionTailscaleJSONSemantics(t *testing.T) {
-	cases := []struct {
-		name     string
-		body     string
-		wantKeys []string
-		wantKey  string
-		cleared  bool
-	}{
-		{
-			name:     "omitted tags keeps existing tags and key",
-			body:     `{}`,
-			wantKeys: []string{"tag:web"},
-			wantKey:  "tskey-auth-baseline",
-		},
-		{
-			name:     "clearAuthKey keeps tags",
-			body:     `{"clearAuthKey":true}`,
-			wantKeys: []string{"tag:web"},
-			wantKey:  "",
-			cleared:  true,
-		},
-		{
-			name:     "explicit empty tags clears tags but keeps key",
-			body:     `{"tags":[]}`,
-			wantKeys: []string{},
-			wantKey:  "tskey-auth-baseline",
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			svc, _ := newSeededRuntimeService(t)
-			rec := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/tailscale", strings.NewReader(tc.body))
-			NewHandler(svc).UpdateTailscale(rec, req)
-
-			if rec.Code != http.StatusOK {
-				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
-			}
-			envelope := decodeRuntimeEnvelope(t, rec)
-			if !reflect.DeepEqual(envelope.Data.Tailscale.Tags, tc.wantKeys) {
-				t.Fatalf("tags = %#v, want %#v", envelope.Data.Tailscale.Tags, tc.wantKeys)
-			}
-			if envelope.Data.Tailscale.AuthKeyConfigured != !tc.cleared {
-				t.Fatalf("authKeyConfigured = %v, want %v", envelope.Data.Tailscale.AuthKeyConfigured, !tc.cleared)
-			}
-			raw, err := json.Marshal(envelope.Data.Tailscale)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if strings.Contains(string(raw), `"tags":null`) {
-				t.Fatalf("tailscale tags must be an array, got %s", raw)
-			}
-			key, tags := svc.TailscaleNodeCredentials()
-			assertTailscaleCredentials(t, key, tags, tc.wantKey, tc.wantKeys)
-			reloaded, err := NewService(svc.db, svc.cfg)
-			if err != nil {
-				t.Fatal(err)
-			}
-			key, tags = reloaded.TailscaleNodeCredentials()
-			assertTailscaleCredentials(t, key, tags, tc.wantKey, tc.wantKeys)
-		})
-	}
-}
-
-// TestRuntimePartitionRoutesRegistered 验证六条分区 PUT 与既有 GET 均已注册，
+// TestRuntimePartitionRoutesRegistered 验证五条分区 PUT 与既有 GET 均已注册，
 // 且整体 PUT /api/v1/settings/runtime 已删除（同路径只剩 GET，PUT 返回 405）。
 func TestRuntimePartitionRoutesRegistered(t *testing.T) {
 	svc := newTestService(t)
@@ -413,7 +312,6 @@ func TestRuntimePartitionRoutesRegistered(t *testing.T) {
 		"/api/v1/settings/runtime/certificates",
 		"/api/v1/settings/runtime/agent",
 		"/api/v1/settings/runtime/branding",
-		"/api/v1/settings/tailscale",
 	} {
 		method := http.MethodPut
 		var body io.Reader = strings.NewReader(`{}`)

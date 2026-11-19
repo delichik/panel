@@ -38,7 +38,6 @@ import ImagesTab from './tabs/ImagesTab.vue';
 import NetworksTab from './tabs/NetworksTab.vue';
 import OverviewTab from './tabs/OverviewTab.vue';
 import PackagesTab from './tabs/PackagesTab.vue';
-import TailscaleTab from './tabs/TailscaleTab.vue';
 import VolumesTab from './tabs/VolumesTab.vue';
 import {
   isLegacyNetworkTab,
@@ -96,7 +95,6 @@ const editing = ref<ServerDto | null>(null);
 const confirmTarget = ref<ServerDto | null>(null);
 const deleting = ref(false);
 const rowBusy = ref<{ id: string; kind: 'test' | 'edit' } | null>(null);
-const tailscaleApplying = ref(false);
 const restartOpen = ref(false);
 const restarting = ref(false);
 const detailRoot = ref<HTMLElement | null>(null);
@@ -526,21 +524,6 @@ async function restartHost() {
   }
 }
 
-async function applyTailscale() {
-  const server = selectedServer.value;
-  if (!server?.tailscaleEnabled || tailscaleApplying.value) return;
-  tailscaleApplying.value = true;
-  try {
-    const accepted = await serversApi.applyTailscale(server.id);
-    notifySuccess(t('serversPage.tailscale.applyAccepted', { taskId: accepted.taskId }), accepted);
-    refreshDetail();
-  } catch (err) {
-    notifyError(err instanceof Error ? err.message : t('common.operationFailed'), err);
-  } finally {
-    tailscaleApplying.value = false;
-  }
-}
-
 onMounted(() => {
   void load();
 });
@@ -656,7 +639,6 @@ onBeforeUnmount(() => {
         <template v-if="selectedServer" #actions>
           <Button class="max-sm:w-full" variant="secondary" :disabled="rowBusy?.id === selectedServer.id" :loading="rowBusy?.id === selectedServer.id && rowBusy?.kind === 'edit'" @click="openEdit(selectedServer)"><Wrench />{{ t('common.edit') }}</Button>
           <Button class="max-sm:w-full" variant="danger" :disabled="!canRunPrivilegedOperation(selectedServer)" :loading="restarting" @click="restartOpen = true"><PlayCircle />{{ t('serversPage.restart') }}</Button>
-          <Button v-if="activeTab === 'system' && systemSubtab === 'tailscale'" class="max-sm:w-full" variant="primary" :disabled="!selectedServer.tailscaleEnabled" :loading="tailscaleApplying" @click="applyTailscale"><RefreshCcw />{{ t('serversPage.tailscale.apply') }}</Button>
         </template>
         <div ref="detailRoot" data-testid="server-detail" class="h-full min-h-0 outline-none" tabindex="-1" @keydown="onDetailKeydown">
           <EmptyState v-if="detailError && !serverDetails[selectedId]" variant="page" :title="t('common.loadFailed')" :description="detailError">
@@ -681,7 +663,6 @@ onBeforeUnmount(() => {
                 </div>
                 <div class="min-h-0 flex-1">
                   <AgentTab v-if="visitedSystem.agent" v-show="systemSubtab === 'agent'" :active="activeTab === 'system' && systemSubtab === 'agent'" :server="selectedServer" />
-                  <TailscaleTab v-if="visitedSystem.tailscale" v-show="systemSubtab === 'tailscale'" :server="selectedServer" />
                   <PackagesTab v-if="visitedSystem.packages" v-show="systemSubtab === 'packages'" :server="selectedServer" />
                 </div>
               </div>

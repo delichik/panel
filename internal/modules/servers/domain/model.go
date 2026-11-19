@@ -32,24 +32,16 @@ type Server struct {
 	CreatedAt       time.Time         `json:"createdAt"`
 	UpdatedAt       time.Time         `json:"updatedAt"`
 
-	// TailscaleEnabled 是该节点加入 tailnet 的用户意图；
-	// TailscalePreferAgent 决定 Panel 连接该节点时是否优先使用 tailnet 地址；
-	// TailscalePreferInterconnect 决定涉及该节点的互联链接是否优先使用 tailnet
-	// 地址（需要链接两端都启用且有有效地址）。
-	TailscaleEnabled            bool `json:"tailscaleEnabled"`
-	TailscalePreferAgent        bool `json:"tailscalePreferAgent"`
-	TailscalePreferInterconnect bool `json:"tailscalePreferInterconnect"`
-
 	// 连接代理配置。proxyMode 为 direct 时其余字段为空。socks5PasswordSet 只
 	// 表示是否已存密码，密码本身永不出 API。
-	ProxyMode          string `json:"proxyMode"`
-	TunnelServerID     string `json:"tunnelServerId"`
-	TunnelServerName   string `json:"tunnelServerName,omitempty"`
-	Socks5Address      string `json:"socks5Address,omitempty"`
-	Socks5Username     string `json:"socks5Username,omitempty"`
-	Socks5PasswordSet  bool   `json:"socks5PasswordSet,omitempty"`
-	ProxyInvalid       bool   `json:"proxyInvalid,omitempty"`
-	ProxyError         string `json:"proxyError,omitempty"`
+	ProxyMode         string `json:"proxyMode"`
+	TunnelServerID    string `json:"tunnelServerId"`
+	TunnelServerName  string `json:"tunnelServerName,omitempty"`
+	Socks5Address     string `json:"socks5Address,omitempty"`
+	Socks5Username    string `json:"socks5Username,omitempty"`
+	Socks5PasswordSet bool   `json:"socks5PasswordSet,omitempty"`
+	ProxyInvalid      bool   `json:"proxyInvalid,omitempty"`
+	ProxyError        string `json:"proxyError,omitempty"`
 	// Socks5PasswordCiphertext 只在模块内部解析代理链时使用，永不序列化。
 	Socks5PasswordCiphertext string `json:"-"`
 }
@@ -68,8 +60,6 @@ type ServerSummary struct {
 	LastError       string            `json:"lastError,omitempty"`
 	HostKeyMismatch bool              `json:"hostKeyMismatch,omitempty"`
 	UpdatedAt       time.Time         `json:"updatedAt"`
-
-	TailscaleEnabled bool `json:"tailscaleEnabled"`
 
 	// 连接方式摘要：列表页只需展示模式与隧道/代理地址，不暴露密码。
 	ProxyMode        string `json:"proxyMode"`
@@ -112,12 +102,6 @@ type SaveRequest struct {
 	Traits       map[string]string `json:"traits"`
 	Variables    map[string]string `json:"variables"`
 	Notes        string            `json:"notes"`
-
-	// 三个 tailscale 开关都是用户意图。启用未开启时两个优先开关必须保存为
-	// false：没有 tailnet 身份就无从选择 tailnet 地址。
-	TailscaleEnabled            bool `json:"tailscaleEnabled"`
-	TailscalePreferAgent        bool `json:"tailscalePreferAgent"`
-	TailscalePreferInterconnect bool `json:"tailscalePreferInterconnect"`
 
 	// 连接代理配置。direct 为默认；ssh_tunnel 使用隧道服务器；socks5 使用
 	// 手填地址与可选用户名/密码。socks5Password 只写，留空表示更新时保留

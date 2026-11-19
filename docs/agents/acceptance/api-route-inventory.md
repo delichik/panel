@@ -7,7 +7,7 @@
 - `API-COV-003`：同一路径的不同 method 是不同操作，必须分别验证；动态参数名变化也视为合同变化。
 - `API-COV-004`：本清单覆盖主 Panel 路由；备份导出/恢复最小维护应用的额外路由由备份恢复文档独立逐项约束。
 - `API-COV-006`：本清单与 `COV-API-003` 的计数只覆盖 `/api/...` 路由，公开产物路由 `GET /agent/{version}/{platform}/panel-agent.gz` 与 `/agent/` 前缀的 404 兜底不在其中——这是有意为之，不是遗漏。它属于认证之外、由 CDN 缓存的产物面，验收合同见 [服务器、安全与软件包](servers-security-packages.md) 的 `AGT-DL-001..011`，路由清单断言见 `SRV-EVD-005` 与 `internal/bootstrap/panel/routes_manifest_test.go` 中的公开路由清单测试。
-- `API-COV-005`：排序后清单的条目数与 SHA-256 以 `internal/bootstrap/panel/routes_manifest_test.go` 中 `TestAPIRouteManifest` 的 `wantCount` / `wantHash` 为准；events/logs 重命名后须在同一改动中重跑该测试并更新期望值。本文表格只作逐项映射，不得在此硬编码与测试不一致的哈希。
+- `API-COV-005`：排序后清单的条目数与 SHA-256 以 `internal/bootstrap/panel/routes_manifest_test.go` 中 `TestAPIRouteManifest` 的 `wantCount` / `wantHash` 为准；当前主 Panel 基线为 **194** 条（本表同为 194 行）。events/logs 重命名后须在同一改动中重跑该测试并更新期望值。本文表格只作逐项映射，不得在此硬编码与测试不一致的哈希。
 - `API-COV-007`：服务器连接代理模式（`SRV-PROXY-001..014`）不新增 method/path：探测仍是既有 `POST /api/v1/servers/probe`（表中序号 152），只是请求/响应增加 `proxyMode`、`tunnelServerId`、`socks5Address`、`socks5Username`、`socks5Password`、探测专用可选 `serverId`（保存接口忽略）与派生 `proxyInvalid`/`proxyError` 等字段；`GET/POST/PUT /servers` 同路径增加字段。因此本清单条目数与路由清单哈希保持不变，任何“为代理新增路由”的实现都属于偏离合同。
 
 | # | Method | Path | 验收文档 |
@@ -107,7 +107,7 @@
 | 93 | `GET` | `/api/v1/settings/appearance/background/content` | [身份、设置与系统](identity-settings-system.md) |
 | 94 | `GET` | `/api/v1/settings/public-appearance` | [身份、设置与系统](identity-settings-system.md) |
 | 95 | `GET` | `/api/v1/settings/public-branding` | [身份、设置与系统](identity-settings-system.md) |
-| 96 | `GET` | `/api/v1/settings/runtime` | [身份、设置与系统](identity-settings-system.md) `TS-SET-001..005` |
+| 96 | `GET` | `/api/v1/settings/runtime` | [身份、设置与系统](identity-settings-system.md) `SET-RUN-001/022` |
 | 97 | `GET` | `/api/v1/settings/server-variables` | [身份、设置与系统](identity-settings-system.md) |
 | 98 | `GET` | `/api/v1/system/version` | [身份、设置与系统](identity-settings-system.md) |
 | 99 | `PATCH` | `/api/v1/application-edit-sessions/{id}/draft` | [应用与设施应用](applications-and-facilities.md) |
@@ -173,39 +173,36 @@
 | 159 | `POST` | `/api/v1/servers/{id}/packages/upgrade-all` | [服务器、安全与软件包](servers-security-packages.md) |
 | 160 | `POST` | `/api/v1/servers/{id}/packages/upgrade-selected` | [服务器、安全与软件包](servers-security-packages.md) |
 | 161 | `POST` | `/api/v1/servers/{id}/restart` | [服务器、安全与软件包](servers-security-packages.md) |
-| 162 | `POST` | `/api/v1/servers/{id}/tailscale/apply` | [服务器、安全与软件包](servers-security-packages.md) |
-| 163 | `POST` | `/api/v1/servers/{id}/test` | [服务器、安全与软件包](servers-security-packages.md) |
-| 164 | `POST` | `/api/v1/servers/{id}/trust-host-key` | [服务器、安全与软件包](servers-security-packages.md) |
-| 165 | `POST` | `/api/v1/servers/{id}/ufw/rules` | [服务器、安全与软件包](servers-security-packages.md) |
-| 166 | `POST` | `/api/v1/servers/{serverId}/containers/{resourceId}/{action}` | [容器与资源](containers-and-resources.md) |
-| 167 | `POST` | `/api/v1/servers/{serverId}/images/delete-unused` | [容器与资源](containers-and-resources.md) |
-| 168 | `POST` | `/api/v1/servers/{serverId}/images/pull` | [容器与资源](containers-and-resources.md) |
-| 169 | `POST` | `/api/v1/servers/{serverId}/images/refresh` | [容器与资源](containers-and-resources.md) |
-| 170 | `POST` | `/api/v1/servers/{serverId}/networks/refresh` | [容器与资源](containers-and-resources.md) |
-| 171 | `POST` | `/api/v1/servers/{serverId}/volumes/delete-unused` | [容器与资源](containers-and-resources.md) |
-| 172 | `POST` | `/api/v1/servers/{serverId}/volumes/refresh` | [容器与资源](containers-and-resources.md) |
-| 173 | `POST` | `/api/v1/settings/appearance/background` | [身份、设置与系统](identity-settings-system.md) |
-| 174 | `POST` | `/api/v1/settings/tailscale/apply` | [Tailscale](tailscale.md) `TS-SET-005`；领域入口见 [身份、设置与系统](identity-settings-system.md) |
-| 175 | `PUT` | `/api/v1/application-edit-sessions/{id}/files/{name}` | [应用与设施应用](applications-and-facilities.md) |
-| 176 | `PUT` | `/api/v1/application-edit-sessions/{id}/uploads/{name}` | [应用与设施应用](applications-and-facilities.md) |
-| 177 | `PUT` | `/api/v1/certificates/{id}` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 178 | `PUT` | `/api/v1/credentials/{id}` | [服务器、安全与软件包](servers-security-packages.md) |
-| 179 | `PUT` | `/api/v1/debug/pprof` | [备份、恢复与诊断](backup-restore-diagnostics.md) |
-| 180 | `PUT` | `/api/v1/dns/domains/{domainId}` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 181 | `PUT` | `/api/v1/dns/domains/{domainId}/records/{recordId}` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 182 | `PUT` | `/api/v1/facility-apps/metrics` | [应用与设施应用](applications-and-facilities.md) `FAC-MET-003`；保存指标设施配置 |
-| 183 | `PUT` | `/api/v1/facility-apps/network-probe` | [应用与设施应用](applications-and-facilities.md) `FAC-PRB-003`；保存网络探测配置 |
-| 184 | `PUT` | `/api/v1/facility-apps/reverse-proxy/edit-sessions/{id}/assets/{assetName}` | [应用与设施应用](applications-and-facilities.md) |
-| 185 | `PUT` | `/api/v1/facility-apps/reverse-proxy/proxy-plane` | [应用与设施应用](applications-and-facilities.md) |
-| 186 | `PUT` | `/api/v1/facility-apps/storage-share` | [应用与设施应用](applications-and-facilities.md) |
-| 187 | `PUT` | `/api/v1/overview/cards` | [身份、设置与系统](identity-settings-system.md) |
-| 188 | `PUT` | `/api/v1/servers/{id}` | [服务器、安全与软件包](servers-security-packages.md) |
-| 189 | `PUT` | `/api/v1/servers/{id}/fail2ban` | [服务器、安全与软件包](servers-security-packages.md) |
-| 190 | `PUT` | `/api/v1/settings/appearance` | [身份、设置与系统](identity-settings-system.md) |
-| 191 | `PUT` | `/api/v1/settings/runtime/agent` | [身份、设置与系统](identity-settings-system.md) `SET-RUN-022` |
-| 192 | `PUT` | `/api/v1/settings/runtime/branding` | [身份、设置与系统](identity-settings-system.md) `SET-RUN-022` |
-| 193 | `PUT` | `/api/v1/settings/runtime/certificates` | [身份、设置与系统](identity-settings-system.md) `SET-RUN-022` |
-| 194 | `PUT` | `/api/v1/settings/runtime/general` | [身份、设置与系统](identity-settings-system.md) `SET-RUN-022` |
-| 195 | `PUT` | `/api/v1/settings/runtime/security` | [身份、设置与系统](identity-settings-system.md) `SET-RUN-022` |
-| 196 | `PUT` | `/api/v1/settings/server-variables` | [身份、设置与系统](identity-settings-system.md) |
-| 197 | `PUT` | `/api/v1/settings/tailscale` | [Tailscale](tailscale.md) `TS-SET-002/003/004`；领域入口见 [身份、设置与系统](identity-settings-system.md) `SET-RUN-019/022` |
+| 162 | `POST` | `/api/v1/servers/{id}/test` | [服务器、安全与软件包](servers-security-packages.md) |
+| 163 | `POST` | `/api/v1/servers/{id}/trust-host-key` | [服务器、安全与软件包](servers-security-packages.md) |
+| 164 | `POST` | `/api/v1/servers/{id}/ufw/rules` | [服务器、安全与软件包](servers-security-packages.md) |
+| 165 | `POST` | `/api/v1/servers/{serverId}/containers/{resourceId}/{action}` | [容器与资源](containers-and-resources.md) |
+| 166 | `POST` | `/api/v1/servers/{serverId}/images/delete-unused` | [容器与资源](containers-and-resources.md) |
+| 167 | `POST` | `/api/v1/servers/{serverId}/images/pull` | [容器与资源](containers-and-resources.md) |
+| 168 | `POST` | `/api/v1/servers/{serverId}/images/refresh` | [容器与资源](containers-and-resources.md) |
+| 169 | `POST` | `/api/v1/servers/{serverId}/networks/refresh` | [容器与资源](containers-and-resources.md) |
+| 170 | `POST` | `/api/v1/servers/{serverId}/volumes/delete-unused` | [容器与资源](containers-and-resources.md) |
+| 171 | `POST` | `/api/v1/servers/{serverId}/volumes/refresh` | [容器与资源](containers-and-resources.md) |
+| 172 | `POST` | `/api/v1/settings/appearance/background` | [身份、设置与系统](identity-settings-system.md) |
+| 173 | `PUT` | `/api/v1/application-edit-sessions/{id}/files/{name}` | [应用与设施应用](applications-and-facilities.md) |
+| 174 | `PUT` | `/api/v1/application-edit-sessions/{id}/uploads/{name}` | [应用与设施应用](applications-and-facilities.md) |
+| 175 | `PUT` | `/api/v1/certificates/{id}` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 176 | `PUT` | `/api/v1/credentials/{id}` | [服务器、安全与软件包](servers-security-packages.md) |
+| 177 | `PUT` | `/api/v1/debug/pprof` | [备份、恢复与诊断](backup-restore-diagnostics.md) |
+| 178 | `PUT` | `/api/v1/dns/domains/{domainId}` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 179 | `PUT` | `/api/v1/dns/domains/{domainId}/records/{recordId}` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
+| 180 | `PUT` | `/api/v1/facility-apps/metrics` | [应用与设施应用](applications-and-facilities.md) `FAC-MET-003`；保存指标设施配置 |
+| 181 | `PUT` | `/api/v1/facility-apps/network-probe` | [应用与设施应用](applications-and-facilities.md) `FAC-PRB-003`；保存网络探测配置 |
+| 182 | `PUT` | `/api/v1/facility-apps/reverse-proxy/edit-sessions/{id}/assets/{assetName}` | [应用与设施应用](applications-and-facilities.md) |
+| 183 | `PUT` | `/api/v1/facility-apps/reverse-proxy/proxy-plane` | [应用与设施应用](applications-and-facilities.md) |
+| 184 | `PUT` | `/api/v1/facility-apps/storage-share` | [应用与设施应用](applications-and-facilities.md) |
+| 185 | `PUT` | `/api/v1/overview/cards` | [身份、设置与系统](identity-settings-system.md) |
+| 186 | `PUT` | `/api/v1/servers/{id}` | [服务器、安全与软件包](servers-security-packages.md) |
+| 187 | `PUT` | `/api/v1/servers/{id}/fail2ban` | [服务器、安全与软件包](servers-security-packages.md) |
+| 188 | `PUT` | `/api/v1/settings/appearance` | [身份、设置与系统](identity-settings-system.md) |
+| 189 | `PUT` | `/api/v1/settings/runtime/agent` | [身份、设置与系统](identity-settings-system.md) `SET-RUN-022` |
+| 190 | `PUT` | `/api/v1/settings/runtime/branding` | [身份、设置与系统](identity-settings-system.md) `SET-RUN-022` |
+| 191 | `PUT` | `/api/v1/settings/runtime/certificates` | [身份、设置与系统](identity-settings-system.md) `SET-RUN-022` |
+| 192 | `PUT` | `/api/v1/settings/runtime/general` | [身份、设置与系统](identity-settings-system.md) `SET-RUN-022` |
+| 193 | `PUT` | `/api/v1/settings/runtime/security` | [身份、设置与系统](identity-settings-system.md) `SET-RUN-022` |
+| 194 | `PUT` | `/api/v1/settings/server-variables` | [身份、设置与系统](identity-settings-system.md) |

@@ -8,7 +8,6 @@ import Dialog from '@/components/ui/Dialog.vue';
 import Input from '@/components/ui/Input.vue';
 import NumberBox from '@/components/ui/NumberBox.vue';
 import Select from '@/components/ui/Select.vue';
-import Switch from '@/components/ui/Switch.vue';
 import Textarea from '@/components/ui/Textarea.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import CredentialFormFields from '@/components/patterns/CredentialFormFields.vue';
@@ -24,7 +23,6 @@ import {
   parsePairs,
   proxySavePayload,
   stringifyPairs,
-  tailscalePreferences,
   validateProbeInput,
   validateServerInput,
 } from './model';
@@ -65,9 +63,6 @@ const form = reactive({
   socks5Address: '',
   socks5Username: '',
   socks5Password: '',
-  tailscaleEnabled: false,
-  tailscalePreferAgent: false,
-  tailscalePreferInterconnect: false,
   variables: '',
   notes: '',
 });
@@ -114,11 +109,6 @@ const tunnelServerOptions = computed(() => {
   return options;
 });
 const socks5PasswordStored = computed(() => Boolean(props.editing?.socks5PasswordSet));
-const tailscalePayload = computed(() => tailscalePreferences({
-  tailscaleEnabled: form.tailscaleEnabled,
-  tailscalePreferAgent: form.tailscalePreferAgent,
-  tailscalePreferInterconnect: form.tailscalePreferInterconnect,
-}));
 const proxyPayload = computed(() => proxySavePayload({
   proxyMode: form.proxyMode,
   tunnelServerId: form.tunnelServerId,
@@ -135,9 +125,6 @@ const formPayload = computed<ServerSaveInput>(() => ({
   credentialId: form.credentialId,
   dockerHost: form.dockerHost,
   ...proxyPayload.value,
-  tailscaleEnabled: form.tailscaleEnabled,
-  tailscalePreferAgent: tailscalePayload.value.tailscalePreferAgent,
-  tailscalePreferInterconnect: tailscalePayload.value.tailscalePreferInterconnect,
   variables: parsePairs(form.variables).pairs,
   notes: form.notes,
 }));
@@ -289,9 +276,6 @@ watch(() => props.open, (open) => {
       socks5Address: props.editing.socks5Address ?? '',
       socks5Username: props.editing.socks5Username ?? '',
       socks5Password: '',
-      tailscaleEnabled: props.editing.tailscaleEnabled,
-      tailscalePreferAgent: props.editing.tailscalePreferAgent,
-      tailscalePreferInterconnect: props.editing.tailscalePreferInterconnect,
       variables: stringifyPairs(props.editing.variables),
       notes: props.editing.notes ?? '',
     });
@@ -309,9 +293,6 @@ watch(() => props.open, (open) => {
       socks5Address: '',
       socks5Username: '',
       socks5Password: '',
-      tailscaleEnabled: false,
-      tailscalePreferAgent: false,
-      tailscalePreferInterconnect: false,
       variables: '',
       notes: '',
     });
@@ -540,24 +521,6 @@ async function saveQuickCredential() {
           <FormField id="server-form-notes" v-slot="{ id, describedBy }" :label="t('serversPage.notes')">
             <Textarea :id="id" v-model="form.notes" :aria-describedby="describedBy" />
           </FormField>
-
-          <div class="grid gap-2 rounded-control border border-divider bg-muted p-3">
-            <h4 class="m-0 text-caption font-semibold text-foreground">{{ t('serversPage.tailscale.title') }}</h4>
-            <label class="flex items-center justify-between gap-3 text-body">
-              {{ t('serversPage.tailscale.enabled') }}
-              <Switch id="server-form-tailscale-enabled" v-model="form.tailscaleEnabled" :label="t('serversPage.tailscale.enabled')" />
-            </label>
-            <p class="m-0 text-xs text-muted-foreground">{{ t('serversPage.tailscale.enabledHint') }}</p>
-            <label class="flex items-center justify-between gap-3 text-body">
-              {{ t('serversPage.tailscale.preferAgent') }}
-              <Switch id="server-form-tailscale-prefer-agent" v-model="form.tailscalePreferAgent" :disabled="!form.tailscaleEnabled" :label="t('serversPage.tailscale.preferAgent')" />
-            </label>
-            <label class="flex items-center justify-between gap-3 text-body">
-              {{ t('serversPage.tailscale.preferInterconnect') }}
-              <Switch id="server-form-tailscale-prefer-interconnect" v-model="form.tailscalePreferInterconnect" :disabled="!form.tailscaleEnabled" :label="t('serversPage.tailscale.preferInterconnect')" />
-            </label>
-            <p v-if="!form.tailscaleEnabled" class="m-0 text-xs text-muted-foreground">{{ t('serversPage.tailscale.preferDisabledHint') }}</p>
-          </div>
         </div>
       </section>
 

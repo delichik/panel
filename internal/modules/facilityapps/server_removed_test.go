@@ -2,13 +2,56 @@ package facilityapps
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
+
+	agentcontract "panel/internal/agent/contract"
+	server "panel/internal/modules/servers"
+	"panel/internal/modules/tasks"
+	"panel/internal/platform/config"
+	storage "panel/internal/platform/database"
 )
+
+// recordingReconcileTrigger 记录反向代理协调触发次数。
+type recordingReconcileTrigger struct{ calls int }
+
+func (r *recordingReconcileTrigger) TriggerApplicationReconcile(context.Context, tasks.PeriodicTrigger) (tasks.Task, bool, error) {
+	r.calls++
+	return tasks.Task{}, false, nil
+}
+
+// newReconcileTestService 构造带替身节点提供者与协调触发器的设施服务。
+func newReconcileTestService(t *testing.T) (*Service, *recordingReconcileTrigger, *tasks.Service) {
+	t.Helper()
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	servers := facilityTestServers{items: map[string]server.Server{
+		"srv-a": {ID: "srv-a", Name: "storage-a", Host: "10.0.0.5", Port: 22, SSHUsername: "root", CredentialID: "cred-a",
+			Traits: map[string]string{agentcontract.TraitEnabled: "true", agentcontract.TraitURL: "https://10.0.0.5:9786"}},
+		"srv-b": {ID: "srv-b", Name: "app-b", Host: "10.0.0.6", Port: 22, SSHUsername: "root", CredentialID: "cred-b",
+			Traits: map[string]string{agentcontract.TraitEnabled: "true", agentcontract.TraitURL: "https://10.0.0.6:9786"}},
+	}}
+	taskSvc := tasks.NewService(store.AppDB())
+	svc := NewService(store.AppDB(), nil, servers, &fakeAppsProvider{}, WithDataRoot(cfg.DataRoot), WithTaskService(taskSvc))
+	trigger := &recordingReconcileTrigger{}
+	svc.reconciler = trigger
+	return svc, trigger, taskSvc
+}
 
 // SRV-DEL-008: 节点删除事务已经修剪了入口代理的网关列表，设施必须按修剪后的
 // 配置重新收敛，否则伪应用会继续把代理部署到已删除的节点上。
 func TestReconcileAfterServerRemovedUsesPrunedGatewayList(t *testing.T) {
-	svc, trigger, _ := newInterconnectSyncTestService(t)
+	svc, trigger, _ := newReconcileTestService(t)
 	ctx := context.Background()
 	if _, err := svc.SaveReverseProxy(ctx, ReverseProxySaveInput{DeploymentServers: []string{"srv-a", "srv-b"}}); err != nil {
 		t.Fatal(err)
@@ -39,7 +82,7 @@ func TestReconcileAfterServerRemovedUsesPrunedGatewayList(t *testing.T) {
 
 // SRV-DEL-008: 网关全部删除后入口代理必须停用，不能继续指向空节点列表。
 func TestReconcileAfterServerRemovedDisablesProxyWithoutGateway(t *testing.T) {
-	svc, trigger, _ := newInterconnectSyncTestService(t)
+	svc, trigger, _ := newReconcileTestService(t)
 	ctx := context.Background()
 	if _, err := svc.SaveReverseProxy(ctx, ReverseProxySaveInput{DeploymentServers: []string{"srv-a"}}); err != nil {
 		t.Fatal(err)

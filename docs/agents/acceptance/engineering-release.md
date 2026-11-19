@@ -40,7 +40,6 @@
 - `ENG-GEN-002`：protobuf 源是 RPC 字段的事实来源；生成文件和根目录兼容副本必须与源一致，手工修改生成文件不得作为合同变更。
 - `ENG-GEN-003`：新增 RPC 字段应保持旧 Agent 的可解析性；破坏性协议变化必须有明确版本拒绝和用户可诊断错误。本轮指标/探测字段均为追加式可选字段：`AgentReportControl.probe`、`AgentReport.probes`/`replayed`、`AgentProbeConfig`/`AgentProbeTarget`/`AgentProbeReport`/`AgentProbeResult` 与 `MetricsSnapshotResponse.disk_usage_sampled`/`disk_read_bytes_rate`/`disk_write_bytes_rate`/`disk_io_available`；旧 Agent 忽略未知字段并按既有语义上报（缺省 = 每次样本携带磁盘值、无探测结果），不得用“缺字段”推断设备为空或探测结果为 0。追加字段后必须执行 `task generate:agent-proto` 与 `task generate:agent-contract-hash`，生成文件与根目录兼容副本、契约 hash 必须在同一改动中更新（`ENG-GEN-002`、`ARCH-BOOT-001`），旧 Agent 的健康检查与新 Panel 的 report stream 仍需可工作。
 - `ENG-GEN-004`：Agent 的部署兼容检查以 Panel 规定的版本策略为准；Panel 不得向已知不兼容 Agent 发送会导致未知破坏的写操作。
-- `ENG-GEN-005`：Tailscale 相关的 `TailscaleStatus`、`TailscaleConfigure`、`TailscaleDisable` RPC 与 `AgentReport.tailscale` 可选字段必须保持旧 Agent 的可解析性，并随本次修改更新契约 hash；缺省字段不得被解释为“已关闭”，缺少能力只让具体操作失败，不得作为通用兼容门槛。详见 `TS-AGT-001`、`TS-NODE-005`。
 
 ## 3. 本地与容器构建
 
@@ -48,11 +47,10 @@
 - `ENG-BUILD-002`：生产镜像包含 `/app/panel`、`/app/panel-init`、`/app/web/dist` 和完整 `/app/panel-agents/linux-amd64`、`linux-arm64` bundle。每个平台的 bundle 必须是构建期产出的 `panel-agent.gz` 与 `panel-agent.sha256`（解压后二进制的 sha256）；`.gz` 必须用 `gzip -9 -n` 生成，构建期还必须回验「解压后哈希等于 `.sha256` 内容」。镜像内不得保留裸二进制，Panel 运行时不压缩也不计算哈希。
 - `ENG-BUILD-003`：目标镜像的 Panel/panel-init 必须匹配目标 CPU 架构；Agent bundle 同时包含 amd64 与 arm64，并验证 ELF machine，禁止靠文件名假定架构。
 - `ENG-BUILD-004`：Panel、panel-init、Agent 注入相同 version、channel、repository、commit 元数据；前端和后端来自同一源码触发提交。
-- `ENG-BUILD-005`：运行容器以 root 的 `/app/panel-init` 为 PID 1，由它把 Panel 子进程降权到非 root 的 `panel` 用户（`-panel-user`、`PANEL_INIT_PANEL_USER` 可覆盖），容器内 `tailscaled` 由 root 的 panel-init 管理，并声明 `/app/data` volume；数据目录必须对 Panel 子进程可读写，`<dataRoot>/tailscale` 目录必须允许 Panel 写入期望态配置。运行容器需要 `--cap-add=NET_ADMIN`、`--cap-add=NET_RAW` 与 `--device=/dev/net/tun`，宿主需加载 `tun` 模块；缺少任一项时容器仍须正常启动与提供 Panel，但容器内 Tailscale 必须明确报告为不可用（见 `TS-INIT-001`），不得静默失败。运行身份不允许降级：容器被强制为非 root（compose `user:`、`docker run --user`，或设置了 `USER` 的旧镜像）时 `panel-init` 必须拒绝启动并以非零码退出，错误文本给出原因与修法；不得以非 root 身份继续运行，也不得静默把 Panel 子进程跑成 root（只有显式 `-panel-user=""` 才表示有意同身份运行）。该权限模型取代此前“容器整体以非 root panel 用户运行”的表述。
+- `ENG-BUILD-005`：运行容器以 root 的 `/app/panel-init` 为 PID 1，由它把 Panel 子进程降权到非 root 的 `panel` 用户（`-panel-user`、`PANEL_INIT_PANEL_USER` 可覆盖），并声明 `/app/data` volume；数据目录必须对 Panel 子进程可读写（含控制面 Unix socket 所在目录）。运行身份不允许降级：容器被强制为非 root（compose `user:`、`docker run --user`，或设置了 `USER` 的旧镜像）时 `panel-init` 必须拒绝启动并以非零码退出，错误文本给出原因与修法；不得以非 root 身份继续运行，也不得静默把 Panel 子进程跑成 root（只有显式 `-panel-user=""` 才表示有意同身份运行）。该权限模型取代此前“容器整体以非 root panel 用户运行”的表述。
 - `ENG-BUILD-006`：容器服务监听 `0.0.0.0:8443`，只暴露 8443；健康检查访问 `https://127.0.0.1:8443/`，允许内置自签名证书但不得退回 8080。
 - `ENG-BUILD-007`：从源码构建的默认 `runtime` target 与 CI 使用预构建 artifact 的 `runtime-from-artifacts` target 产物布局和运行行为一致。
-- `ENG-BUILD-008`：镜像必须包含 Alpine `tailscale` 包提供的 `tailscale` 与 `tailscaled` 可执行文件，并位于 panel-init 的默认探测路径（`PANEL_INIT_TAILSCALE_PATH`、`PANEL_INIT_TAILSCALED_PATH` 可覆盖，显式置空表示有意关闭容器内 Tailscale 管理）。镜像不得内置 tailnet 认证密钥、已登录的节点身份或状态文件；`panel-init` 不得把认证密钥写入镜像、命令行参数或日志。容器内 tailscaled 生命周期见 `TS-INIT-001..007`。
-- `ENG-BUILD-009`：镜像构建必须用 `panel-init` 下发的完整监督参数集（`--maintenance-mode`、`--init-control-socket`、`--init-control-token`，附加 `--help` 只触发参数解析）对目标架构 Panel 二进制执行冒烟；任一参数未被接受时构建必须失败，不得产出镜像。源码构建的 `runtime` 与 CI 的 `runtime-from-artifacts` 两个 target 必须一致执行，见 `TS-INIT-005`。
+- `ENG-BUILD-009`：镜像构建必须用 `panel-init` 下发的完整监督参数集（`--maintenance-mode`、`--init-control-socket`、`--init-control-token`，附加 `--help` 只触发参数解析）对目标架构 Panel 二进制执行冒烟；任一参数未被接受时构建必须失败，不得产出镜像。源码构建的 `runtime` 与 CI 的 `runtime-from-artifacts` 两个 target 必须一致执行。
 - `ENG-BUILD-010`：`go.mod` 必须声明 `godebug multipathtcp=0`，使 Panel、panel-init、panel-agent 在 Linux 上默认不以 MPTCP 监听（应对 CVE-2026-98432；本产品不使用 MPTCP）。托管节点上的主机级 sysctl 缓解由 Agent 部署动作安装（见 `AGT-DEP-007`），不由 `panel-init` 改写宿主/容器 sysctl。该应用层缓解不替代宿主内核安全更新。
 
 ## 4. 版本生成

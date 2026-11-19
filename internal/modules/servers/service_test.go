@@ -80,8 +80,7 @@ type fakeAgentTLSProvider struct {
 	issuedHosts      []fakeAgentCertificateIssue
 }
 
-// fakeAgentCertificateIssue 记录一次节点证书签发请求的 SAN 集合，供断言
-// tailscale 地址是否被纳入证书。
+// fakeAgentCertificateIssue 记录一次节点证书签发请求的 SAN 集合。
 type fakeAgentCertificateIssue struct {
 	ServerID   string
 	ServerName string
@@ -2135,7 +2134,7 @@ func (f agentArchFakeExec) Download(context.Context, sshx.Target, sshx.DownloadS
 }
 
 func TestVirtualNetworkInterfaceDetection(t *testing.T) {
-	for _, name := range []string{"lo", "docker0", "veth123", "br-abcd", "virbr0", "cni0", "flannel.1", "cali123", "tun0", "tap0", "wg0", "tailscale0", "ztabc"} {
+	for _, name := range []string{"lo", "docker0", "veth123", "br-abcd", "virbr0", "cni0", "flannel.1", "cali123", "tun0", "tap0", "wg0", "ztabc"} {
 		if !isVirtualNetworkInterface(name) {
 			t.Fatalf("expected %q to be treated as virtual", name)
 		}
@@ -2362,8 +2361,6 @@ type serverFakeAgentClient struct {
 	prepareRestartErr    error
 	prepareRestartCalls  int
 	prepareRestartStates []string
-	tailscaleConfigure   agentcontract.TailscaleConfigureRequest
-	tailscaleStatus      agentcontract.TailscaleStatus
 }
 
 func agentHealth(version string) agentcontract.HealthResponse {
@@ -2445,31 +2442,6 @@ func (f *serverFakeAgentClient) PrepareRestartWithProgress(_ context.Context, _ 
 		}
 	}
 	return f.prepareRestartErr
-}
-
-func (f *serverFakeAgentClient) TailscaleStatus(context.Context, string) (agentcontract.TailscaleStatus, error) {
-	return f.tailscaleStatus, f.err
-}
-
-func (f *serverFakeAgentClient) TailscaleConfigure(_ context.Context, _ string, req agentcontract.TailscaleConfigureRequest) (agentcontract.TailscaleStatus, error) {
-	f.tailscaleConfigure = req
-	if f.tailscaleStatus.Installed || f.tailscaleStatus.LoggedIn || f.tailscaleStatus.Hostname != "" {
-		return f.tailscaleStatus, f.err
-	}
-	status := agentcontract.TailscaleStatus{
-		Installed: true,
-		Running:   true,
-		LoggedIn:  true,
-		Hostname:  req.Hostname,
-		IPv4:      "100.64.0.7",
-		Version:   "1.80.0",
-	}
-	f.tailscaleStatus = status
-	return status, f.err
-}
-
-func (f *serverFakeAgentClient) TailscaleDisable(context.Context, string) (agentcontract.TailscaleStatus, error) {
-	return agentcontract.TailscaleStatus{Installed: true, Running: false, LoggedIn: false}, f.err
 }
 
 type failingConnectivityExec struct{}

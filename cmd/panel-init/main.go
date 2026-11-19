@@ -22,7 +22,6 @@ import (
 
 	"panel/internal/modules/backups"
 	"panel/internal/platform/panelsupervision"
-	"panel/internal/platform/tailscale"
 )
 
 type restartRequest struct {
@@ -39,9 +38,7 @@ type panelLaunch struct {
 
 func main() {
 	panelPath := flag.String("panel", defaultPanelPath(), "panel binary path")
-	dataRoot := flag.String("data-root", defaultDataRoot(), "panel data root used for tailscale state")
-	tailscalePath := flag.String("tailscale", defaultTailscalePath(), "tailscale CLI path (empty disables container tailscale)")
-	tailscaledPath := flag.String("tailscaled", defaultTailscaledPath(), "tailscaled daemon path (empty disables container tailscale)")
+	dataRoot := flag.String("data-root", defaultDataRoot(), "panel data root used for the control socket")
 	panelUser := flag.String("panel-user", defaultPanelUser(), "user the panel child process runs as")
 	flag.Parse()
 
@@ -51,24 +48,19 @@ func main() {
 		log.Fatalf("generate control token failed: %v", err)
 	}
 
-	// 运行身份不允许降级：非 root 既不能把 Panel 子进程降权，也不能以内核 TUN
-	// 模式启动容器内 tailscaled。这里直接拒绝启动，避免容器带着一个悄悄失效的
-	// 能力运行。
+	// 运行身份不允许降级：非 root 无法把 Panel 子进程降权到 panel 用户。这里
+	// 直接拒绝启动，避免容器带着一个悄悄失效的能力运行。
 	if err := ensurePrivileges(*panelUser, resolvePanelUser(*panelUser)); err != nil {
 		log.Fatalf("%v", err)
 	}
-
-	supervisor := newTailscaleSupervisor(*dataRoot, *tailscalePath, *tailscaledPath, log.Default())
-	supervisor.Start(context.Background())
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)
 
 	socketPath := panelsupervision.ControlSocketPath(*dataRoot)
-	server, err := startControlListener(socketPath, restarts, token, supervisor)
+	server, err := startControlListener(socketPath, restarts, token)
 	if err != nil {
-		supervisor.Stop()
 		log.Fatalf("start control listener failed: %v", err)
 	}
 	log.Printf("control socket listening on %s", socketPath)
@@ -85,28 +77,26 @@ func main() {
 		code, restartMode, err := runPanel(next, restarts, signals)
 		if err != nil {
 			log.Printf("panel failed: %v", err)
-			shutdown(supervisor, socketPath, 1)
+			shutdown(socketPath, 1)
 		}
 		if restartMode == "" {
-			shutdown(supervisor, socketPath, code)
+			shutdown(socketPath, code)
 		}
 		mode = restartMode
 	}
 }
 
-// shutdown 在结束进程前显式停止受管子进程并清理控制面 socket。os.Exit 不会执行
-// defer，因此这里必须自行收敛 tailscaled，避免把子进程留给容器运行时强制清理；
-// socket 文件也一并删除，避免在持久卷上留下无人监听的死 socket。
-func shutdown(supervisor *tailscaleSupervisor, socketPath string, code int) {
-	supervisor.Stop()
+// shutdown 在结束进程前清理控制面 socket。os.Exit 不会执行 defer，因此这里
+// 必须自行删除 socket 文件，避免在持久卷上留下无人监听的死 socket。
+func shutdown(socketPath string, code int) {
 	_ = os.Remove(socketPath)
 	os.Exit(code)
 }
 
-// startControlListener 在同一 Unix domain socket 上同时提供维护重启与 tailscale
-// 控制面。两条路径共用同一个进程令牌；socket 固定位于持久卷的 <dataRoot>/run/
-// 下，只允许 root 与降权后的 Panel 进程访问，进程不监听任何 TCP 端口。
-func startControlListener(socketPath string, restarts chan<- string, token string, supervisor *tailscaleSupervisor) (*http.Server, error) {
+// startControlListener 在 Unix domain socket 上提供维护重启控制面。socket 固定
+// 位于持久卷的 <dataRoot>/run/ 下，只允许 root 与降权后的 Panel 进程访问，进程
+// 不监听任何 TCP 端口。
+func startControlListener(socketPath string, restarts chan<- string, token string) (*http.Server, error) {
 	dir := filepath.Dir(socketPath)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("prepare control socket directory: %w", err)
@@ -149,23 +139,6 @@ func startControlListener(socketPath string, restarts chan<- string, token strin
 		}
 		w.WriteHeader(http.StatusAccepted)
 	})
-	mux.HandleFunc("POST "+tailscale.InitPathPrefix+tailscale.InitApplyPath, func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get(panelsupervision.ControlTokenHeader) != token {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		// 收敛在后台进行：控制面只确认“已接受请求”，真实状态由 /status 反映。
-		supervisor.RequestReconcile()
-		w.WriteHeader(http.StatusAccepted)
-		writeTailscaleStatus(w, supervisor.Status())
-	})
-	mux.HandleFunc("GET "+tailscale.InitPathPrefix+tailscale.InitStatusPath, func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get(panelsupervision.ControlTokenHeader) != token {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		writeTailscaleStatus(w, supervisor.Status())
-	})
 	server := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -176,11 +149,6 @@ func startControlListener(socketPath string, restarts chan<- string, token strin
 		}
 	}()
 	return server, nil
-}
-
-func writeTailscaleStatus(w http.ResponseWriter, status tailscale.Status) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(status)
 }
 
 // runPanel 启动 Panel 子进程，并在重启请求或终止信号到达时返回。restartMode
@@ -314,7 +282,7 @@ func defaultPanelPath() string {
 }
 
 // defaultDataRoot 与镜像中的 PANEL_DATA_ROOT 默认值保持一致，使 panel-init 在
-// 没有额外参数时也能找到 Panel 写入的 tailscale 期望态配置。
+// 没有额外参数时也能与 Panel 使用同一个 data root。
 func defaultDataRoot() string {
 	if value := strings.TrimSpace(os.Getenv("PANEL_DATA_ROOT")); value != "" {
 		return value
@@ -327,24 +295,4 @@ func defaultPanelUser() string {
 		return value
 	}
 	return "panel"
-}
-
-func defaultTailscalePath() string {
-	return lookupInitBinary("PANEL_INIT_TAILSCALE_PATH", "tailscale")
-}
-
-func defaultTailscaledPath() string {
-	return lookupInitBinary("PANEL_INIT_TAILSCALED_PATH", "tailscaled")
-}
-
-// lookupInitBinary 解析容器内 tailscale 可执行文件。找不到时返回空串，
-// panel-init 会把“不可用”写入状态，而不是让容器启动失败。
-func lookupInitBinary(envVar, name string) string {
-	if value := strings.TrimSpace(os.Getenv(envVar)); value != "" {
-		return value
-	}
-	if path, err := exec.LookPath(name); err == nil {
-		return path
-	}
-	return ""
 }

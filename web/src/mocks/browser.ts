@@ -39,7 +39,6 @@ import {
 } from './metricsFacility';
 import {
   accepted,
-  applyServerTailscale,
   createCredential,
   createServer,
   deleteCredential,
@@ -133,7 +132,7 @@ import {
 import { acceptedAgentDeployment, completedTask, mockTasks, mockTaskLogs, mockTaskSteps, retryTask, runTaskNow } from './tasks';
 import { resolveMockExecution } from './activity';
 import { mockEventsRoute } from './events';
-import { applyContainerTailscale, confirmRestore, mockRuntimeSettings, mockServerVariables, restorePreflight, saveRuntimeAgent, saveRuntimeBranding, saveRuntimeCertificates, saveRuntimeGeneral, saveRuntimeSecurity, saveRuntimeTailscale, saveServerVariables, startExport } from './settings';
+import { confirmRestore, mockRuntimeSettings, mockServerVariables, restorePreflight, saveRuntimeAgent, saveRuntimeBranding, saveRuntimeCertificates, saveRuntimeGeneral, saveRuntimeSecurity, saveServerVariables, startExport } from './settings';
 import {
   mockAppearance,
   mockBackgroundBlob,
@@ -143,7 +142,7 @@ import {
   uploadMockBackground,
 } from './appearance';
 import type { AppearanceUpdate } from '@/types/appearance';
-import type { RuntimeAgentUpdate, RuntimeBrandingUpdate, RuntimeCertificatesUpdate, RuntimeGeneralUpdate, RuntimeSecurityUpdate, RuntimeTailscaleUpdate } from '@/types/settings';
+import type { RuntimeAgentUpdate, RuntimeBrandingUpdate, RuntimeCertificatesUpdate, RuntimeGeneralUpdate, RuntimeSecurityUpdate } from '@/types/settings';
 import { advanceExport, exportStatus, resetExport, restoreStatus } from './maintenance';
 import { debugClearRuntimeDataStatus, debugDatabases, debugPprofStatus, debugRuntime, debugTasks, setDebugPprof, startDebugClearRuntimeData } from './debug';
 
@@ -359,12 +358,6 @@ export function installMockApi() {
       }
       return mockServers.some((item) => item.id === id) ? json(accepted(op.replace('/', '-')), 202) : error('server_not_found', 'Server was not found.', 404);
     }
-    const serverTailscaleApplyMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)\/tailscale\/apply$/);
-    if (serverTailscaleApplyMatch && method(init) === 'POST') {
-      const acceptedTask = applyServerTailscale(decodeURIComponent(serverTailscaleApplyMatch[1]));
-      return acceptedTask ? json(acceptedTask, 202) : error('server_not_found', 'Server was not found.', 404);
-    }
-
     const ufwMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)\/ufw$/);
     if (ufwMatch && method(init) === 'GET') {
       try {
@@ -1028,8 +1021,6 @@ export function installMockApi() {
     if (url.pathname === '/api/v1/settings/runtime/certificates' && method(init) === 'PUT') return json(saveRuntimeCertificates(await body<RuntimeCertificatesUpdate>(init)));
     if (url.pathname === '/api/v1/settings/runtime/agent' && method(init) === 'PUT') return json(saveRuntimeAgent(await body<RuntimeAgentUpdate>(init)));
     if (url.pathname === '/api/v1/settings/runtime/branding' && method(init) === 'PUT') return json(saveRuntimeBranding(await body<RuntimeBrandingUpdate>(init)));
-    if (url.pathname === '/api/v1/settings/tailscale' && method(init) === 'PUT') return json(saveRuntimeTailscale(await body<RuntimeTailscaleUpdate>(init)));
-    if (url.pathname === '/api/v1/settings/tailscale/apply' && method(init) === 'POST') return json(applyContainerTailscale(), 202);
     if (url.pathname === '/api/v1/settings/server-variables' && method(init) === 'GET') return json(mockServerVariables);
     if (url.pathname === '/api/v1/settings/server-variables' && method(init) === 'PUT') {
       try {

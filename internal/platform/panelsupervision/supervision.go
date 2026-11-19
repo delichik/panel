@@ -1,10 +1,10 @@
 // Package panelsupervision 定义 panel-init 与 Panel 子进程之间的控制面合同。
 //
-// panel-init 在 <dataRoot>/run/ 下监听一个 Unix domain socket，同时提供维护重启
-// 与容器内 tailscale 控制面；它用 Args 生成子进程命令行的全部监督参数，Panel 侧
-// 用 Register 注册同一组 flag，并用 NewControlClient 通过 socket 访问控制面。
-// 两侧必须始终成对，任何一侧漏接参数都会让 Panel 以
-// "flag provided but not defined" 拒绝启动（TS-INIT-005）。
+// panel-init 在 <dataRoot>/run/ 下监听一个 Unix domain socket，提供维护重启控制面；
+// 它用 Args 生成子进程命令行的全部监督参数，Panel 侧用 Register 注册同一组 flag，
+// 并用 NewControlClient 通过 socket 访问控制面。两侧必须始终成对，任何一侧漏接
+// 参数都会让 Panel 以 "flag provided but not defined" 拒绝启动（ENG-BUILD-009
+// 的镜像构建冒烟覆盖该参数集）。
 package panelsupervision
 
 import (
@@ -25,7 +25,7 @@ const (
 	ControlSocketEnv = "PANEL_INIT_CONTROL_SOCKET"
 	// ControlTokenEnv 是 panel-init 生成的本次进程控制令牌。
 	ControlTokenEnv = "PANEL_INIT_CONTROL_TOKEN"
-	// ControlTokenHeader 是控制面鉴权头，重启与 tailscale 两条路径共用。
+	// ControlTokenHeader 是控制面鉴权头。
 	ControlTokenHeader = "X-Panel-Init-Token"
 
 	controlDirName        = "run"

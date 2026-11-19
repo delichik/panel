@@ -184,10 +184,6 @@ func New(cfg config.Config) (*App, error) {
 				TransferTimeout: time.Duration(runtime.Agent.TransferTimeoutSeconds) * time.Second,
 			}
 		}),
-		server.WithTailscaleSettings(func() server.TailscaleSettings {
-			authKey, tags := settingsSvc.TailscaleNodeCredentials()
-			return server.TailscaleSettings{AuthKey: authKey, Tags: tags}
-		}),
 	)
 	// 服务器代理链（SSH 隧道 / SOCKS5）同时作用于 SSH 执行器与 agent gRPC
 	// 连接；解析器依赖 servers 服务本身，因此必须在构造完成后注入。
@@ -249,8 +245,6 @@ func New(cfg config.Config) (*App, error) {
 		facilityapps.WithSSHExecutor(executor),
 	)
 	serverSvc.SetDNSSyncTrigger(facilitySvc.SyncServersDNSEntries)
-	// 节点 tailnet 地址或互联意图变化后，两个设施内嵌的对端地址必须重算。
-	serverSvc.SetInterconnectTrigger(facilitySvc.SyncInterconnectServers)
 	// 节点删除后入口代理与存储共享必须按修剪后的配置重新渲染。
 	serverSvc.SetServerReferenceReconciler(facilitySvc)
 	containerBridge.facility = facilitySvc
@@ -318,11 +312,6 @@ func New(cfg config.Config) (*App, error) {
 	a.checkDone = checkDone
 	go func() {
 		defer close(checkDone)
-		// 容器内 tailscale 的实际态是“是否改用 tailnet 地址”的前置条件，
-		// 因此跟随既有的 Agent 检查周期一起刷新，不额外引入后台循环。
-		if state := settingsSvc.RefreshTailscaleContainer(checkCtx); state.Available && !state.LoggedIn && state.LastError != "" {
-			logging.From(logging.With(checkCtx, logging.Context{StreamID: logging.NewStreamID(), Module: "panel"})).Warn("container tailscale is not ready", zap.String("error", state.LastError))
-		}
 		serverSvc.CheckConfiguredAgents(checkCtx)
 	}()
 	// RunEngine: unified worker owns deploy due/wake; claim/Execute goes

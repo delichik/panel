@@ -40,7 +40,6 @@ vi.mock('@/api/servers', () => ({
     deployAgent: vi.fn(),
     restart: vi.fn(),
     trustHostKey: vi.fn(),
-    applyTailscale: vi.fn(),
   },
 }));
 vi.mock('@/api/credentials', () => ({
@@ -109,9 +108,6 @@ const server = {
   port: 22,
   credentialId: 'cred-1',
   reachable: true,
-  tailscaleEnabled: false,
-  tailscalePreferAgent: false,
-  tailscalePreferInterconnect: false,
   proxyMode: 'direct',
   tunnelServerId: '',
   tunnelServerName: '',

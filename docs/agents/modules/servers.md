@@ -6,7 +6,7 @@
 ## List API Contract
 
 - `GET /api/v1/servers` returns `ListPage<ServerSummary>` and accepts only `page`, `pageSize`, and `q`.
-- List rows include only the `credentialId` reference (never credential secret content) and exclude notes, variables, full traits, operating-system detail, and metrics; the only trait signals returned are `agent.enabled`, `agent.url`, `agent.status`, and UFW flags. `tailscaleEnabled` is a summary column of its own; the two Tailscale preference switches and the observed `tailscale.*` traits only appear in the full detail. `GET /api/v1/servers/{id}` owns the complete view.
+- List rows include only the `credentialId` reference (never credential secret content) and exclude notes, variables, full traits, operating-system detail, and metrics; the only trait signals returned are `agent.enabled`, `agent.url`, `agent.status`, and UFW flags. `GET /api/v1/servers/{id}` owns the complete view.
 - `GET /api/v1/credentials` follows the same `ListPage` and strict `page`/`pageSize`/`q` contract and never selects encrypted secret columns.
 
 ## 适用场景
@@ -38,7 +38,7 @@
 ## 前端入口
 
 - 服务器页面位于 `web/src/views/servers/index.vue`（列表表格 + 覆盖式详情 + `tabs/` 资源与安全能力），SSH 凭据独立页面位于 `web/src/views/credentials/index.vue`；分别通过 `/servers` 与 `/credentials` 进入，不共享页面内 tab。
-- 服务器列表为表格 + 覆盖式详情：搜索/分页/选中与 `tab` 同步 URL；行操作提供详情/编辑/测试连接/删除，Agent 部署与重启在 Agent tab，Tailscale 应用在 Tailscale tab。
+- 服务器列表为表格 + 覆盖式详情：搜索/分页/选中与 `tab` 同步 URL；行操作提供详情/编辑/测试连接/删除，Agent 部署与重启在 Agent tab。
 - 服务器添加/编辑由 `web/src/views/servers/index.vue` 内的表单对话框承载（含 `POST /servers/probe`）；凭据添加/编辑由 `web/src/views/credentials/index.vue` 内的表单对话框承载。凭据按 password/private_key 类型裁剪字段，编辑时 secret 留空 = 不更新；私钥类型使用 large Dialog 和共享 plain CodeMirror，password 类型仍使用普通输入与默认 Dialog。
 - 凭据页面：`web/src/views/credentials/index.vue`（表格 + 覆盖式详情）；列表引用计数、详情引用列表与删除前引用预检都基于已加载服务器摘要中的 `credentialId` 客户端匹配，后端 409 `credential_in_use` 兜底；详情展示密钥摘要（私钥的算法、长度、SHA256 指纹与密钥注释/名称）和引用服务器列表，不再展示“密钥策略”卡片。
 - 纯函数逻辑：`serverTraits.ts`（traits/网卡解析、Agent/UFW 状态判定）、`serverProbe.ts`（probe 结果映射）、`serverInitPolling.ts`（创建后初始化轮询状态机）、`credentialReferences`（引用预检，位于 `web/src/views/servers/model.ts`）、`useTaskMessage.ts`（任务反馈 + "查看任务"跳转）。
@@ -61,7 +61,7 @@
 - 服务器：`GET/POST /api/v1/servers`，`POST /api/v1/servers/probe`，`PUT/DELETE /api/v1/servers/{id}`
 - Agent 部署：`POST /api/v1/servers/{id}/agent/deploy`，Agent 证书包：`POST /api/v1/servers/{id}/agent/certificate`
 - Agent 与 Panel HTTPS 系统证书：`GET /api/v1/key-assets/system`，重置：`POST /api/v1/key-assets/system/{id}/reset`
-- 服务器操作：同步连通性检查 `POST /api/v1/servers/{id}/test`，信任新主机密钥 `POST /api/v1/servers/{id}/trust-host-key`，任务型重启 `POST /api/v1/servers/{id}/restart`，任务型 Tailscale 收敛 `POST /api/v1/servers/{id}/tailscale/apply`（防火墙不再有手动安装入口，见防火墙前提条目）
+- 服务器操作：同步连通性检查 `POST /api/v1/servers/{id}/test`，信任新主机密钥 `POST /api/v1/servers/{id}/trust-host-key`，任务型重启 `POST /api/v1/servers/{id}/restart`（防火墙不再有手动安装入口，见防火墙前提条目）
 - UFW：`GET /api/v1/servers/{id}/ufw`，`POST /api/v1/servers/{id}/ufw/rules`，`DELETE /api/v1/servers/{id}/ufw/rules/{number}`（`/ufw/install` 与 `/ufw/enable` 已删除）
 - fail2ban：`GET /api/v1/servers/{id}/fail2ban`，`PUT /api/v1/servers/{id}/fail2ban`，`POST /api/v1/servers/{id}/fail2ban/enable`，`POST /api/v1/servers/{id}/fail2ban/release`，`POST /api/v1/servers/{id}/fail2ban/install`
 - 指标：`GET /api/v1/servers/{id}/metrics?range=1h|6h|1d|7d`（默认 `1h`）。服务器详情指标区默认用折线图展示最近 1 小时数据（CPU、内存、磁盘、网络 RX/TX 四个图表），支持范围选择，页头提供共享自动刷新控件 `AutoRefreshControl`；刷新/切范围时保留旧数据避免闪跳。折线图 tooltip 单位按图表类型区分：CPU/内存/磁盘为百分比，网络为 B/s 自适应速率。
@@ -161,17 +161,11 @@
 - 手动重装只能复用**非 running** 的既有任务：`running` 的任务无法重启，返回成功会让界面弹出「已受理」而实际没有任何新执行。因此这种情况下必须返回冲突 `agent_deploy_in_progress` 并带上 taskId 与 stage，`stage=uncertain`（状态同为 running）时指向 `/executions`（消息含 taskId）。远端步骤超时关闭 SSH 会话后，等待会话 goroutine 必须有界，否则执行器不返回会让任务永远停在 `running`，进而让之后每次手动部署都变成静默无操作。
 - `POST /api/v1/servers/{id}/agent/certificate` 签发目标机 `panel-agent` 的 mTLS server 证书包；响应包含 CA、server certificate、server private key、建议监听地址、agent URL 和 Docker host，只作为高级手动安装兜底，不会落库。
 
-## 节点 Tailscale
+## 节点连接地址
 
-- `servers` 新增三列持久化用户意图：`tailscale_enabled`、`tailscale_prefer_agent`、`tailscale_prefer_interconnect`，由自动 ORM 增列迁移补齐、默认 0（旧库升级后即为未启用、不偏好）。未启用时两个偏好列被强制写为 false。列表摘要只暴露 `tailscaleEnabled`，详情、创建与更新携带全部三个字段。
-- 节点观测态保存在 `servers.traits` 的 `tailscale.status`（`disabled|pending|installing|running|degraded|unsupported|error`）、`tailscale.ipv4`、`tailscale.ipv6`、`tailscale.hostname`、`tailscale.version`、`tailscale.last_error`、`tailscale.updated_at`。写入是“读改写”合并，不会清空 `agent.*` 等既有系统 trait；用户提交的 traits 继续被忽略。关闭启用开关会在同一保存事务内清除这些观测键。
-- `POST /api/v1/servers/{id}/tailscale/apply` 是手动重试与首次加入入口：创建或复用 `server_tailscale_apply` 任务并返回 taskId，先置 running 再返回；未启用返回 `tailscale_not_enabled`。保存开关成功后由服务端自动排队同一任务。
-- 节点侧收敛必须要求 Agent 能力 `agent.tailscale`；缺少能力的旧 Agent 只让该任务失败并返回 `tailscale_agent_unsupported`（提示升级 Agent），不触发整节点重装、不回退 SSH。旧 Agent 上报中缺少 `AgentReport.tailscale` 字段时，既有观测态保持不变。
-- 节点侧语义位于 `internal/agent/system/tailscale.go`：发行版仓库优先安装 `tailscale`，否则添加供应商 keyring 与 apt 源后安装（不使用远程脚本管道）；通过 systemd 启用并启动 `tailscaled`，仅在节点尚未登录时才加入：密钥经仅 root 可读的 0600 临时文件以 `--auth-key=file:` 引用（CLI 不读取 `TS_AUTHKEY`），命令结束后立即删除；`up`/`set` 固定 `--hostname=<servers.id 合法化>`（`_`→`-`，不得用 OS 主机名）与 `--accept-dns=false --accept-routes=false`，并上报本机 tailnet 地址。`TailscaleDisable` 执行 `tailscale logout`（从 tailnet 移除并清本机登录态）与 `systemctl disable --now tailscaled`，保留软件包但不保留可复用登录身份，与删除服务器节点语义不同。
-- 连接地址解析位于 `internal/agent/endpoint`：Panel→Agent 仅当节点启用、要求 `tailscalePreferAgent`、已上报位于 `100.64.0.0/10` 或 `fd7a:115c:a1e0::/48` 的地址且 Panel 容器自身已登录 tailnet 时才改用 `https://<tailnet 地址>:<agent 端口>`，否则使用 `agent.url` 原值；`agent.url` 不会被改写，因此不触发“URL 非默认地址需要重部署”的自动重装判定。互联链接（存储挂载源、导出白名单、入口代理上游）只在两端都启用、两端都有有效地址且至少一端要求互联优先时替换。
-- 开启 `tailscalePreferAgent` 或 tailnet 地址变化时，节点证书 SAN 集合必须包含该地址；不一致时标记节点需要证书刷新并复用既有 Agent 部署通道（只重写证书与配置，不重传二进制）。
-- 地址或互联偏好变化会触发互联设施重同步（存储导出协调任务与受影响时的入口代理重新渲染）。**限制**：UFW 只支持端口/协议/来源规则，Panel 不自动放行 `tailscale0` 接口，需要操作者自行配置。
-- 完整合同、边界与验证点见 [Tailscale 验收规范](../acceptance/tailscale.md)。
+- Panel→Agent 连接、节点互联（存储挂载源、导出白名单、入口代理上游）、健康检查、部署、上报流、指标、容器资源、软件包与代理诊断统一使用规范地址：Panel→Agent 使用 `agent.url`，节点互联使用各节点的规范 host；不存在地址替换、地址偏好、证书 SAN 刷新或设施重同步的额外分支。
+- `agent.url` 不会被改写，因此也不存在“因地址偏好触发重部署”的判定分支。
+- 旧版本数据库中的废弃组网列由破坏性 ORM 同步删除；启动时的一次性迁移清理 `runtime_settings` 中已废弃的组网设置键，并从 `servers.traits` 中剥离已废弃的组网观测键与 `agent.certificate.hosts` 键，避免旧地址继续参与连接或界面展示。
 
 ## Agent 重启就绪检查（PrepareRestart）
 

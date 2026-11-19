@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, type Component } from 'vue';
-import { Activity, CalendarDays, History, KeyRound, Network, Router, ServerCog, ShieldCheck, UnlockKeyhole } from '@/icons';
+import { Activity, CalendarDays, History, KeyRound, Router, ServerCog, ShieldCheck, UnlockKeyhole } from '@/icons';
 import type { ServerMetricsSeries } from '@/api/servers';
 import ArchitectureMark from '@/components/patterns/ArchitectureMark.vue';
 import DiskUsageChart from '@/components/patterns/DiskUsageChart.vue';
@@ -24,8 +24,6 @@ import {
   serverProxyMode,
   serverSummaryStatusKey,
   serverSummaryTone,
-  tailscaleStatusKey,
-  tailscaleTone,
 } from '../model';
 
 const props = defineProps<{ server: ServerDto; metrics: ServerMetricsSeries | null }>();
@@ -75,13 +73,11 @@ const proxyInvalid = computed(() => Boolean(props.server.proxyInvalid));
 const reportDisconnectCount = computed(() => reportDisconnectCount1h(props.server));
 const hasReportStability = computed(() => Boolean(reportStabilityGrade(props.server)));
 const agentVersion = computed(() => props.server.traits?.['agent.version'] ?? '');
-const hasTailscale = computed(() => props.server.tailscaleEnabled);
 
 /** Status summary as compact tiles: icon + label + tone value, never a bare text row. */
 const statusItems = computed<StatusItem[]>(() => {
   const streamTone = reportStreamTone(props.server);
   const stabilityTone = reportStabilityTone(props.server);
-  const tailscaleStateTone = tailscaleTone(props.server);
   const stabilityText = [
     t(reportStabilityStatusKey(props.server)),
     hasReportStability.value && reportDisconnectCount.value != null
@@ -114,14 +110,6 @@ const statusItems = computed<StatusItem[]>(() => {
       tone: proxyInvalid.value ? 'warning' : 'neutral',
       muted: !proxyInvalid.value,
       icon: Router,
-    },
-    {
-      key: 'tailscale',
-      label: t('serversPage.tailscale.title'),
-      value: hasTailscale.value ? t(tailscaleStatusKey(props.server)) : t('serversPage.tailscale.notEnabled'),
-      tone: hasTailscale.value ? tailscaleStateTone : 'neutral',
-      muted: !hasTailscale.value || tailscaleStateTone === 'neutral',
-      icon: Network,
     },
     {
       key: 'agent',

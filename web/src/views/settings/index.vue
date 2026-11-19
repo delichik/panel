@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { DatabaseBackup, KeyRound, Network, RefreshCcw, Trash2, UploadCloud } from '@/icons';
+import { DatabaseBackup, KeyRound, RefreshCcw, Trash2, UploadCloud } from '@/icons';
 import { eventsApi } from '@/api/events';
 import { keyAssetsApi } from '@/api/keyAssets';
-import { settingsApi, tailscaleUpdate } from '@/api/settings';
+import { settingsApi } from '@/api/settings';
 import { systemApi, type VersionInfo } from '@/api/system';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
@@ -37,20 +37,18 @@ import type {
   RuntimeGeneralUpdate,
   RuntimeSecurityUpdate,
   RuntimeSettings,
-  RuntimeTailscaleUpdate,
   ServerVariableDefinition,
 } from '@/types/settings';
 import { createLatestRequestGuard } from '@/views/_shared/requestState';
 import { formatDateTime } from '@/utils/datetime';
 import AppearanceSectionSkeleton from './AppearanceSectionSkeleton.vue';
-import { parseTailscaleTags, tailscaleFormState } from './tailscale';
 
 const { t, locale, setLocale } = useI18n();
 const route = useRoute();
 const router = useRouter();
 
-/** 9 个设置分区；顺序即顶部 Tabs 顺序（默认落点 general 必须在第一位）。 */
-const sectionKeys = ['general', 'appearance', 'security', 'certificates', 'agent', 'tailscale', 'system-certificates', 'system', 'backups'] as const;
+/** 8 个设置分区；顺序即顶部 Tabs 顺序（默认落点 general 必须在第一位）。 */
+const sectionKeys = ['general', 'appearance', 'security', 'certificates', 'agent', 'system-certificates', 'system', 'backups'] as const;
 type SectionKey = (typeof sectionKeys)[number];
 
 function isSectionKey(value: string): value is SectionKey {
@@ -100,7 +98,7 @@ const pending = ref('');
 const error = ref('');
 const actionError = ref('');
 const confirmOpen = ref(false);
-const confirmKind = ref<'export' | 'restore' | 'system' | 'system-certificate' | 'jwt-secret' | 'tailscale-auth-key' | 'clear-events-logs'>('export');
+const confirmKind = ref<'export' | 'restore' | 'system' | 'system-certificate' | 'jwt-secret' | 'clear-events-logs'>('export');
 const selectedSystemCertificate = ref<SystemCertificateDto | null>(null);
 const preflight = ref<RestorePreflightResponse | null>(null);
 const restoreFile = ref<File | null>(null);
@@ -114,8 +112,6 @@ const agentTransferTimeoutMin = 60;
 const agentTransferTimeoutMax = 3600;
 const loginTitleMaxLength = 80;
 const loginSubtitleMaxLength = 240;
-/** 认证密钥只写字段的本地形态校验；不匹配时不发请求。 */
-const tailscaleAuthKeyPattern = /^tskey-[A-Za-z0-9_-]+$/;
 
 const form = reactive({
   containerReportIntervalSeconds: '30',
@@ -125,8 +121,6 @@ const form = reactive({
   remoteCommandTimeoutSeconds: '45',
   reconcileTraceEnabled: false,
   jwtSecret: '',
-  tailscaleAuthKey: '',
-  tailscaleTags: '',
   loginTitle: '',
   loginSubtitle: '',
   certificateEmail: '',
@@ -149,7 +143,6 @@ const sections = computed<Array<{ key: SectionKey; label: string }>>(() => [
   { key: 'security', label: t('settingsPage.section.security') },
   { key: 'certificates', label: t('settingsPage.section.certificates') },
   { key: 'agent', label: t('settingsPage.section.agent') },
-  { key: 'tailscale', label: t('settingsPage.section.tailscale') },
   { key: 'system-certificates', label: t('settingsPage.section.systemCertificates') },
   { key: 'system', label: t('settingsPage.section.system') },
   { key: 'backups', label: t('settingsPage.section.backups') },
@@ -307,14 +300,7 @@ const fieldErrors = computed<Record<string, string>>(() => {
   if ([...form.loginSubtitle.trim()].length > loginSubtitleMaxLength) errors.loginSubtitle = 'settingsPage.validationMaxLength';
   return errors;
 });
-const tailscaleTagResult = computed(() => parseTailscaleTags(form.tailscaleTags));
-const invalidTailscaleTags = computed(() => tailscaleTagResult.value.invalid);
-const tailscaleAuthKeyInvalid = computed(() => {
-  const value = form.tailscaleAuthKey.trim();
-  return value !== '' && !tailscaleAuthKeyPattern.test(value);
-});
 const parsedServerVariables = computed(() => parseServerVariables(form.variablesText));
-const tailscaleContainer = computed(() => runtime.value?.tailscale.container ?? null);
 
 // 单条 settings/:section? 路由：只监听 section 参数，切分区不重挂载页面。
 watch(() => route.params.section, (raw) => {
@@ -415,15 +401,6 @@ function collectVariablesPayload(): ServerVariableDefinition[] | null {
   return parsed.invalid ? null : parsed.definitions;
 }
 
-function collectTailscalePayload(): RuntimeTailscaleUpdate | null {
-  const parsed = tailscaleTagResult.value;
-  if (parsed.invalid.length) return null;
-  const authKey = form.tailscaleAuthKey.trim();
-  if (authKey && !tailscaleAuthKeyPattern.test(authKey)) return null;
-  // tags 总是整体提交（省略=保留，[]=清空由后端区分；这里给出当前完整列表）。
-  return tailscaleUpdate({ authKey, tags: parsed.tags });
-}
-
 function refillGeneral(settings: RuntimeSettings) {
   form.containerReportIntervalSeconds = String(settings.containerReportIntervalSeconds);
   form.language = settings.language === 'zh-CN' ? 'zh-CN' : 'en';
@@ -453,11 +430,6 @@ function refillAgent(settings: RuntimeSettings) {
 function refillBranding(settings: RuntimeSettings) {
   form.loginTitle = settings.branding.loginTitle;
   form.loginSubtitle = settings.branding.loginSubtitle;
-}
-
-function refillTailscale(settings: RuntimeSettings) {
-  // 认证密钥只写不读：保存成功后清空输入；标签以响应为准。
-  Object.assign(form, tailscaleFormState(settings));
 }
 
 function refillVariables(definitions: ServerVariableDefinition[]) {
@@ -511,10 +483,6 @@ const brandingAutoSave = partitionAutoSave<RuntimeBrandingUpdate>(
   (payload) => settingsApi.updateBranding(payload),
   refillBranding,
 );
-const tailscaleAutoSave = partitionAutoSave<RuntimeTailscaleUpdate>(
-  (payload) => settingsApi.updateTailscale(payload),
-  refillTailscale,
-);
 const variablesAutoSave = useDebouncedAutoSave<ServerVariableDefinition[], ServerVariableDefinition[]>({
   save: (definitions) => settingsApi.updateServerVariables(definitions),
   onSaved(result, _payload, meta) {
@@ -529,7 +497,6 @@ const securityStatus = securityAutoSave.status;
 const certificatesStatus = certificatesAutoSave.status;
 const agentStatus = agentAutoSave.status;
 const brandingStatus = brandingAutoSave.status;
-const tailscaleStatus = tailscaleAutoSave.status;
 const variablesStatus = variablesAutoSave.status;
 
 const autoSaveControllers = [
@@ -538,7 +505,6 @@ const autoSaveControllers = [
   certificatesAutoSave,
   agentAutoSave,
   brandingAutoSave,
-  tailscaleAutoSave,
   variablesAutoSave,
 ];
 
@@ -580,8 +546,6 @@ watch(() => form.agentTransferTimeoutSeconds, () => scheduleAutoSave(agentAutoSa
 watch(() => form.loginTitle, () => scheduleAutoSave(brandingAutoSave, collectBrandingPayload), syncWatch);
 watch(() => form.loginSubtitle, () => scheduleAutoSave(brandingAutoSave, collectBrandingPayload), syncWatch);
 watch(() => form.variablesText, () => scheduleAutoSave(variablesAutoSave, collectVariablesPayload), syncWatch);
-watch(() => form.tailscaleAuthKey, () => scheduleAutoSave(tailscaleAutoSave, collectTailscalePayload), syncWatch);
-watch(() => form.tailscaleTags, () => scheduleAutoSave(tailscaleAutoSave, collectTailscalePayload), syncWatch);
 
 /**
  * 界面语言被其它入口（顶栏语言切换）改变时同步表单与 runtime，
@@ -673,8 +637,6 @@ function hydrate(settings: RuntimeSettings, variables: ServerVariableDefinition[
       agentDownloadBaseUrl: settings.agent.downloadBaseUrl,
       agentDownloadVerifyTls: settings.agent.downloadVerifyTls,
       agentTransferTimeoutSeconds: String(settings.agent.transferTimeoutSeconds),
-      // 认证密钥只写不读：表单永远以空值开始，服务端响应里没有密钥可回填。
-      ...tailscaleFormState(settings),
       variablesText: formatServerVariables(variables),
     });
   });
@@ -709,38 +671,11 @@ async function resetSystemCertificate() {
   });
 }
 
-/** 清空认证密钥是危险操作：只经确认对话框触发，且不携带新的 authKey。 */
-async function confirmClearTailscaleAuthKey() {
-  if (!runtime.value) return;
-  await run('clear-tailscale-auth-key', async () => {
-    const result = await settingsApi.updateTailscale({ clearAuthKey: true });
-    // 清除成功后丢弃 tailscale 待发自动保存，避免旧输入在清除后覆盖服务端状态。
-    tailscaleAutoSave.cancel();
-    runtime.value = result;
-    withProgrammatic(() => refillTailscale(result));
-    confirmOpen.value = false;
-    notifySuccess(t('settingsPage.tailscale.authKeyCleared'), result);
-  });
-}
-
 async function confirmClearEventsAndLogs() {
   await run('clear-events-logs', async () => {
     await eventsApi.clear();
     confirmOpen.value = false;
     notifySuccess(t('settingsPage.clearEventsLogsSucceeded'));
-  });
-}
-
-/** 202 语义：只表示协调请求已受理，状态以本次返回和后续刷新为准。 */
-async function applyTailscale() {
-  const current = runtime.value;
-  if (!current?.tailscale.container.available) return;
-  await run('apply-tailscale', async () => {
-    const container = await settingsApi.applyTailscale();
-    // 协调结果已返回：丢弃待发的 tailscale 表单保存，避免旧输入覆盖新状态。
-    tailscaleAutoSave.cancel();
-    runtime.value = { ...current, tailscale: { ...current.tailscale, container } };
-    notifySuccess(t('settingsPage.tailscale.applyAccepted'), container);
   });
 }
 
@@ -758,7 +693,6 @@ function confirmAction() {
   if (confirmKind.value === 'restore') return confirmRestore();
   if (confirmKind.value === 'system-certificate') return resetSystemCertificate();
   if (confirmKind.value === 'jwt-secret') return confirmResetJwtSecret();
-  if (confirmKind.value === 'tailscale-auth-key') return confirmClearTailscaleAuthKey();
   if (confirmKind.value === 'clear-events-logs') return confirmClearEventsAndLogs();
   return startBackup();
 }
@@ -834,7 +768,6 @@ const confirmIsDanger = computed(() => (
   confirmKind.value === 'restore'
   || confirmKind.value === 'system-certificate'
   || confirmKind.value === 'jwt-secret'
-  || confirmKind.value === 'tailscale-auth-key'
   || confirmKind.value === 'clear-events-logs'
 ));
 
@@ -1112,103 +1045,6 @@ onBeforeUnmount(() => {
               <template #control>
                 <Switch v-model="form.agentDownloadVerifyTls" :label="t('settingsPage.agentDownloadVerifyTls')" />
               </template>
-            </SettingsCard>
-          </SettingsSection>
-
-          <SettingsSection v-else-if="activeSection === 'tailscale'" :description="t('settingsPage.tailscale.hint')">
-            <template #actions>
-              <AutoSaveStatus :status="tailscaleStatus" :labels="autoSaveLabels" @retry="tailscaleAutoSave.flush()" />
-            </template>
-
-            <SettingsCard v-if="!runtime?.tailscale.authKeyConfigured">
-              <div class="rounded-control border border-warning-border bg-warning-bg px-3 py-2 text-sm text-warning">{{ t('settingsPage.tailscale.authKeyMissing') }}</div>
-            </SettingsCard>
-
-            <SettingsCard :title="t('settingsPage.tailscale.authKeyConfigured')">
-              <template #control>
-                <Badge :tone="runtime?.tailscale.authKeyConfigured ? 'success' : 'warning'">{{ runtime?.tailscale.authKeyConfigured ? t('state.healthy') : t('state.warning') }}</Badge>
-              </template>
-            </SettingsCard>
-
-            <SettingsCard
-              :title="t('settingsPage.tailscale.authKey')"
-              :description="t('settingsPage.tailscale.authKeyHint')"
-              :invalid="tailscaleAuthKeyInvalid"
-            >
-              <template #control>
-                <Input
-                  v-model="form.tailscaleAuthKey"
-                  :aria-label="t('settingsPage.tailscale.authKey')"
-                  :aria-describedby="tailscaleAuthKeyInvalid ? 'settings-tailscale-auth-key-error' : undefined"
-                  class="w-full sm:w-64"
-                  type="password"
-                  :invalid="tailscaleAuthKeyInvalid"
-                  :placeholder="t('settingsPage.tailscale.authKeyPlaceholder')"
-                />
-              </template>
-              <template v-if="tailscaleAuthKeyInvalid" #hint>
-                <span id="settings-tailscale-auth-key-error" class="text-danger">{{ t('settingsPage.tailscale.authKeyInvalid') }}</span>
-              </template>
-            </SettingsCard>
-
-            <SettingsCard>
-              <template #control>
-                <Button variant="danger" :disabled="!runtime?.tailscale.authKeyConfigured" :loading="pending === 'clear-tailscale-auth-key'" @click="openConfirm('tailscale-auth-key')">
-                  <KeyRound />{{ t('settingsPage.tailscale.clearAuthKey') }}
-                </Button>
-              </template>
-            </SettingsCard>
-
-            <SettingsCard :title="t('settingsPage.tailscale.tags')" :invalid="invalidTailscaleTags.length > 0">
-              <template #control>
-                <Input
-                  v-model="form.tailscaleTags"
-                  :aria-label="t('settingsPage.tailscale.tags')"
-                  class="w-full sm:w-72"
-                  :invalid="invalidTailscaleTags.length > 0"
-                  :placeholder="t('settingsPage.tailscale.tagsPlaceholder')"
-                />
-              </template>
-              <template #description>
-                <span :class="invalidTailscaleTags.length ? 'text-xs leading-4 text-danger' : 'text-xs leading-4 text-muted-foreground'">
-                  {{ invalidTailscaleTags.length ? t('settingsPage.tailscale.tagsInvalid', { tags: invalidTailscaleTags.join(', ') }) : t('settingsPage.tailscale.tagsHint') }}
-                </span>
-              </template>
-            </SettingsCard>
-
-            <SettingsCard :title="t('settingsPage.tailscale.containerTitle')" :description="t('settingsPage.tailscale.containerHint')">
-              <template #control>
-                <Button size="sm" variant="secondary" :disabled="!tailscaleContainer?.available" :loading="pending === 'apply-tailscale'" @click="applyTailscale">
-                  <Network />{{ t('settingsPage.tailscale.apply') }}
-                </Button>
-              </template>
-            </SettingsCard>
-
-            <SettingsCard v-if="tailscaleContainer?.available">
-              <div class="grid gap-3">
-                <div class="flex flex-wrap items-center gap-2">
-                  <Badge tone="info">{{ t('settingsPage.tailscale.available') }}</Badge>
-                  <Badge :tone="tailscaleContainer.running ? 'success' : 'neutral'">{{ tailscaleContainer.running ? t('settingsPage.tailscale.running') : t('settingsPage.tailscale.stopped') }}</Badge>
-                  <Badge :tone="tailscaleContainer.loggedIn ? 'success' : 'warning'">{{ tailscaleContainer.loggedIn ? t('settingsPage.tailscale.loggedIn') : t('settingsPage.tailscale.loggedOut') }}</Badge>
-                </div>
-                <div class="grid gap-3 text-sm lg:grid-cols-2-safe">
-                  <div class="min-w-0"><span class="text-muted-foreground">{{ t('settingsPage.tailscale.hostname') }}</span><strong class="block truncate text-foreground">{{ tailscaleContainer.hostname || t('common.notAvailable') }}</strong></div>
-                  <div class="min-w-0"><span class="text-muted-foreground">{{ t('settingsPage.tailscale.version') }}</span><strong class="block truncate text-foreground">{{ tailscaleContainer.version || t('common.notAvailable') }}</strong></div>
-                  <div class="min-w-0"><span class="text-muted-foreground">{{ t('settingsPage.tailscale.ipv4') }}</span><strong class="block truncate font-mono text-xs text-foreground">{{ tailscaleContainer.ipv4 || t('common.notAvailable') }}</strong></div>
-                  <div class="min-w-0"><span class="text-muted-foreground">{{ t('settingsPage.tailscale.ipv6') }}</span><strong class="block truncate font-mono text-xs text-foreground">{{ tailscaleContainer.ipv6 || t('common.notAvailable') }}</strong></div>
-                  <div class="min-w-0"><span class="text-muted-foreground">{{ t('settingsPage.tailscale.backendState') }}</span><strong class="block truncate text-foreground">{{ tailscaleContainer.backendState || t('common.notAvailable') }}</strong></div>
-                  <div class="min-w-0"><span class="text-muted-foreground">{{ t('settingsPage.tailscale.updatedAt') }}</span><strong class="block text-foreground">{{ formatDateTime(tailscaleContainer.updatedAt, t('common.never')) }}</strong></div>
-                </div>
-                <div v-if="tailscaleContainer.lastError" class="grid gap-1 rounded-control border border-danger-border bg-danger-bg px-3 py-2 text-sm text-danger">
-                  <strong>{{ t('settingsPage.tailscale.lastError') }}</strong>
-                  <span class="break-words">{{ tailscaleContainer.lastError }}</span>
-                </div>
-                <p class="m-0 text-xs text-muted-foreground">{{ t('settingsPage.tailscale.applyHint') }}</p>
-              </div>
-            </SettingsCard>
-
-            <SettingsCard v-else>
-              <EmptyState variant="inset" :title="t('settingsPage.tailscale.unavailableTitle')" :description="t('settingsPage.tailscale.unavailableHint')" />
             </SettingsCard>
           </SettingsSection>
 

@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// TS-INIT-005 参数合同回归：panel-init 用 Args 下发的每个参数都必须能被 Panel
+// ENG-BUILD-009 参数合同回归：panel-init 用 Args 下发的每个参数都必须能被 Panel
 // 侧 Register 注册的 flag 解析。历史事故是 panel 漏注册参数，容器以
 // "flag provided but not defined" 启动失败。
 func TestArgsParseWithRegisteredFlags(t *testing.T) {

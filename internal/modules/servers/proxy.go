@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	agentendpoint "panel/internal/agent/endpoint"
+	agentcontract "panel/internal/agent/contract"
 	panelerr "panel/internal/platform/errors"
 	sshx "panel/internal/platform/ssh"
 )
@@ -494,8 +494,8 @@ func (s *Service) noteProxyConfigured(mode string) {
 	}
 }
 
-// agentServerForAddress 按 agent 连接地址反查服务器。agent 地址由 traits 派生，
-// 因此这里与 agentendpoint.AgentURL 使用同一套地址选择规则（含 tailnet 优先）。
+// agentServerForAddress 按 agent 连接地址反查服务器。agent 地址由 traits 里的
+// agent.url 决定，因此这里按同一地址匹配。
 func (s *Service) agentServerForAddress(ctx context.Context, address string) (Server, bool) {
 	normalized := normalizeDialAddress(address)
 	servers, err := s.repo.List(ctx)
@@ -503,10 +503,7 @@ func (s *Service) agentServerForAddress(ctx context.Context, address string) (Se
 		return Server{}, false
 	}
 	for _, srv := range servers {
-		endpoint := agentendpoint.AgentURL(srv.Traits, agentendpoint.Preferences{
-			Enabled: srv.TailscaleEnabled,
-			Prefer:  srv.TailscalePreferAgent,
-		})
+		endpoint := strings.TrimSpace(srv.Traits[agentcontract.TraitURL])
 		if endpoint == "" {
 			continue
 		}

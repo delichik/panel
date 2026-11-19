@@ -51,7 +51,6 @@
 | 容器、镜像、网络、卷、资源缓存与操作队列 | [容器与资源](containers-and-resources.md) |
 | 登录、账号、运行时设置（分区写入 `SET-RUN-022`；指标保留/采集间隔/清理计划已移出，见 `SET-RUN-021`）、概览、系统版本 | [身份、设置与系统](identity-settings-system.md) |
 | 凭据、服务器、Agent、SSH、UFW、Fail2ban、APT；Agent report 补报 `AGT-RPT-007`、网络探测上报 `AGT-RPT-008` | [服务器、安全与软件包](servers-security-packages.md) |
-| Tailscale：容器内 tailscaled 生命周期、全局设置与只写认证密钥、节点加入意图与观测态、节点收敛任务、tailnet 地址优先 | [Tailscale](tailscale.md) |
 | DNS、ACME、自签名证书、密钥资产 | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
 | 备份、恢复、维护模式、调试与诊断；清理数据进度/恢复/写入暂停 `DIAG-CLR-001..008`、`UI-DBG-007/008`；指标磁盘当前值/磁盘 IO `OBS-MET-007/008`、指标补报 `OBS-MET-009`、概览卡片数据 `OBS-OVW-005..007` | [备份、恢复与诊断](backup-restore-diagnostics.md)、[逐页面验收](ui-pages.md) |
 | ORM、数据库模型、迁移与兼容 | [架构、数据与 API](architecture-data-api.md) |
@@ -61,6 +60,8 @@
 | 核对当前实现尚未达到的合同，或修改触及实现/合同不一致 | [已知实现与验收差距](known-gaps.md) |
 
 ## 5. 变更影响矩阵
+
+下线早期新增的外部网络互联能力（2026-11-19）：删除 3 条路由（2 条服务器/设置侧收敛入口与 1 条设置分区写入），主 Panel `method/path` 计数 197 → **194**；服务器创建/更新/详情不再携带互联意图字段，详情删除对应子视图与表单开关，设置页删除该分区及其认证密钥/标签/应用重连/清除确认；`panel-init` 删除对应进程监管与控制面路由，容器不再要求额外的网络能力与设备，但仍以 root 作为 PID 1 降权运行 Panel 子进程；数据库删除 `servers` 三个旧列并由一次性迁移清理 `runtime_settings`/`servers.traits` 中的废弃键。见 [覆盖基线](coverage-matrix.md) §2 最新条目、[ARCH-API-009](architecture-data-api.md)、[API 路由清单](api-route-inventory.md)、[服务器、安全与软件包](servers-security-packages.md)、[身份、设置与系统](identity-settings-system.md)、[工程质量与发布](engineering-release.md)、[多语言翻译状态](../i18n-translation-status.md)。
 
 应用页“容器日志”的实例选择、手动读取及请求隔离见 [APP-RUN-002](applications-and-facilities.md) 和 [UI-APP-007](ui-pages.md)。
 
@@ -72,11 +73,11 @@
 
 磁盘使用率改为 5 分钟低频采样且只展示当前值、磁盘 IO 读写速率与指标弱网补报见 [OBS-MET-007..009](backup-restore-diagnostics.md)、[AGT-RPT-004/007](servers-security-packages.md)；首页概览已改为固定只读状态页（节点情况摘要 + 带 24h 历史条与上下行速率的服务器卡片，并行多接口取数，不再消费 `/overview` 卡片接口），见 [UI-OVR-001/013..019](ui-pages.md) 与 [GAP-031](known-gaps.md)；旧 `UI-OVR-002..012` 卡片条目已废弃。指标 bucket/latest 见 [OBS-MET-003](backup-restore-diagnostics.md)，探测 24h 历史见 [FAC-PRB-009](applications-and-facilities.md)。设施网络探测（`network-probe`）的配置、周期/包数/超时参数（`FAC-PRB-010`）、按目标聚合读取视图（`FAC-PRB-006` 的 `view=targets&history=1`）、结果与删除清理见 [FAC-PRB-001..010](applications-and-facilities.md)，设施详情与服务器概览的“所有服务器按目标聚合 + 24h 折线图”（无探测源/目标选择器）见 [UI-FAC-014..018](ui-pages.md)、[UI-SRV-025/027](ui-pages.md)（横向矩阵与选择器 UI 均已废弃，`UI-FAC-016`）；表结构与可空磁盘 IO 列、`network_probe_configs` 三参数列见 [架构、数据与 API](architecture-data-api.md)。
 
-服务器详情一级 tab 收敛为 概览/系统/资源/网络与安全；概览合并原「概况」与「监控」，状态条与指标仪表盘同屏，系统内为 Agent/Tailscale/软件包，网络与安全内为 防火墙/Fail2Ban（网络探测子视图已移除，探测结果只在设施页与概览面板），子视图用 tab 内的下拉选择器切换，页面只保留一层 tab；旧一级 tab 深链保留别名，`tab=probes` 回落到防火墙。指标改按范围请求后端既有 `bucket` 桶聚合并展示坐标轴/图例/平均峰值/阈值/空档断线。见 [UI-SRV-002/008/009/016/017/018/019/020/025/026](ui-pages.md)、[UI-SHELL-062](ui-shell-and-conventions.md)；不新增后端 API、数据库表或后台任务。
+服务器详情一级 tab 收敛为 概览/系统/资源/网络与安全；概览合并原「概况」与「监控」，状态条与指标仪表盘同屏，系统内为 Agent/软件包，网络与安全内为 防火墙/Fail2Ban（网络探测子视图已移除，探测结果只在设施页与概览面板），子视图用 tab 内的下拉选择器切换，页面只保留一层 tab；旧一级 tab 深链保留别名，`tab=probes` 回落到防火墙。指标改按范围请求后端既有 `bucket` 桶聚合并展示坐标轴/图例/平均峰值/阈值/空档断线。见 [UI-SRV-002/008/009/017/018/019/020/025/026](ui-pages.md)、[UI-SHELL-062](ui-shell-and-conventions.md)；不新增后端 API、数据库表或后台任务。
 
 服务器详情概览图标化与窄屏重排（2026-11-18）：概览摘要卡新增发行版标识（Ubuntu/Debian/Arch 等本地 vendored 图形 + 品牌色底）与架构标识（芯片图形 + 可读架构文案），磁盘当前值由进度条改为环形图（百分比 + 已用/可用/总量 + 采样时间），状态摘要改为图标化紧凑瓦片并重排手机宽度（<640px）布局；CPU/内存/磁盘 IO/网络与延迟/丢包的当前值与历史只保留在下方指标/探测面板，摘要卡不再重复文字摘要；仅消费详情响应既有 `os`/`architecture` 与指标响应既有 `diskCurrent`/`latest`，**不新增后端 API、数据库表、前端路由或后台任务**，标识为纯识别用途、不表达受支持或健康。见 [UI-SRV-002/008/028/029/030](ui-pages.md)、[UI-SHELL-013/018/062](ui-shell-and-conventions.md)、[OBS-MET-003/004](backup-restore-diagnostics.md)、[前端交互模式规范](../specifications/frontend/interaction-patterns.md)、[覆盖基线](coverage-matrix.md)。
 
-概览顶部摘要区去方化（2026-11-18）：`/overview` 服务器卡片以上的两张摘要卡改为**开放状态总览头**（不套卡片表面、直接位于页面层），拆为节点情况/应用/容量三组，以留白与非对称栅格组织；节点在线率改为语义色环形占比 + 胶囊 KPI，应用改为总数 + 状态胶囊 + 互斥的启用/停用分布条，新增容量组（仅聚合在线且有样本节点：CPU 均值、内存/磁盘合计比例，无样本显示 `—` 与空环不伪造 0）；`DiskUsageChart` 抽取通用 `RatioRing` 薄包装并新增概览本地 `StatChip`；服务器卡片、页头操作行、请求批次、滚动逻辑与 `UI-OVR-016/017` 均不变，**不新增后端 API、数据库表、前端路由或后台任务**（197/48/31 不变）。见 [UI-OVR-014/020/021](ui-pages.md)、[UI-SHELL-026/048/064](ui-shell-and-conventions.md)、[前端交互模式规范](../specifications/frontend/interaction-patterns.md)、[布局体系规范](../specifications/frontend/layout-system.md)、[覆盖基线](coverage-matrix.md)。
+概览顶部摘要区去方化（2026-11-18）：`/overview` 服务器卡片以上的两张摘要卡改为**开放状态总览头**（不套卡片表面、直接位于页面层），拆为节点情况/应用/容量三组，以留白与非对称栅格组织；节点在线率改为语义色环形占比 + 胶囊 KPI，应用改为总数 + 状态胶囊 + 互斥的启用/停用分布条，新增容量组（仅聚合在线且有样本节点：CPU 均值、内存/磁盘合计比例，无样本显示 `—` 与空环不伪造 0）；`DiskUsageChart` 抽取通用 `RatioRing` 薄包装并新增概览本地 `StatChip`；服务器卡片、页头操作行、请求批次、滚动逻辑与 `UI-OVR-016/017` 均不变，**不新增后端 API、数据库表、前端路由或后台任务**（194/48/31 不变）。见 [UI-OVR-014/020/021](ui-pages.md)、[UI-SHELL-026/048/064](ui-shell-and-conventions.md)、[前端交互模式规范](../specifications/frontend/interaction-patterns.md)、[布局体系规范](../specifications/frontend/layout-system.md)、[覆盖基线](coverage-matrix.md)。
 
 失败运行日志与有界降级见 [ORCH-CTRL-008](orchestration-and-tasks.md)；设施逐节点部署、按需请求错误诊断见 [FAC-RP-012/013](applications-and-facilities.md)。
 
@@ -88,7 +89,7 @@
 
 WinUI 3 风格改版与服务器持久化外观（2026-11-17）：前端 token/动效/外壳/控件/模板改为 WinUI 3 观感（中性灰阶、Mica、4/8px 圆角、32px 控件、83/167/250/333ms 无上浮/无缩放动效、Page refresh 路由切换）；外观（明暗/Mica/9 强调色/背景图上传）改为服务器持久化：新增 `appearance_settings` 表（表 47→48）、6 条 `settings/appearance*` 路由（186→192）与 `<dataRoot>/appearance/` 文件目录，登录页走公开外观接口（仅模糊缩略图），localStorage 仅首屏缓存，旧 lighthouse/ocean 偏好首次登录一次性迁移；外观设置新增分区 `/settings/appearance`（路由声明 34→35）。P2 又把 14 个页面族的页面/分区表面统一为 WinUI 3 token（卡片 `rounded-overlay` + `border-card-stroke`、行内元素 `rounded-control` + `border-divider`，清除 `rounded-2xl/xl/lg`、`bg-background`、静态阴影与 hover 位移；无新增 API/表/路由）。P3 统一图标与加载指示：本地 vendored Fluent System Icons 兼容层 `@/icons`（52 文件迁移，MIT，见 `web/src/icons/README.md`）、WinUI `ProgressRing` 与 `Checkbox` primitive；仍无新增 API/表/路由。见 [SET-APP-001..012](identity-settings-system.md)、[UI-SHELL-017/020/021(已废弃)/026/047/048/049/052/063](ui-shell-and-conventions.md)、[UI-SET-013](ui-pages.md)、[视觉 Token 规范](../specifications/frontend/visual-tokens.md)、[布局体系规范](../specifications/frontend/layout-system.md)、[覆盖基线](coverage-matrix.md)。
 
-设置写入拆分与设置页自动保存（2026-11-18）：运行时设置写入由整体 `PUT /api/v1/settings/runtime` 拆成 6 条分区子资源端点（`PUT /settings/runtime/general|security|certificates|agent|branding` 与 `PUT /settings/tailscale`），`GET /settings/runtime` 与完整 `RuntimeSettings` 响应不变，整体 PUT 删除；主 Panel `method/path` 计数 192 → 197，无数据库表/后台任务变更。设置页 general/security/certificates/agent/tailscale/system（品牌+服务器变量）移除保存按钮，改为 500ms 防抖自动保存（分区串行、本地校验失败不发请求、成功仅状态指示、失败 toast+重试、语言即时切换与失败回滚、切 tab 不卸载、刷新取消待发），保留 JWT 重置、清除 Tailscale 认证密钥、应用/重连、系统证书重置、清空事件与日志、备份导出/还原、外观上传/移除/恢复默认等动作按钮，外观分区仍走乐观即时保存。见 [SET-RUN-022](identity-settings-system.md)、[TS-SET-002/003/004](tailscale.md)、[UI-SET-002/003/005/007/010/011/014](ui-pages.md)、[UI-SHELL-022](ui-shell-and-conventions.md)、[ARCH-API-009](architecture-data-api.md)、[AutoSaveStatus 模式](../specifications/frontend/interaction-patterns.md)、[覆盖基线](coverage-matrix.md)、[API 路由清单](api-route-inventory.md)。
+设置写入拆分与设置页自动保存（2026-11-18）：运行时设置写入由整体 `PUT /api/v1/settings/runtime` 拆成 6 条分区子资源端点（含 `PUT /settings/runtime/general|security|certificates|agent|branding`），`GET /settings/runtime` 与完整 `RuntimeSettings` 响应不变，整体 PUT 删除；主 Panel `method/path` 计数 192 → 197（该口径包含其后整体下线的 3 条互联路由，当前基线 194，见 [覆盖基线](coverage-matrix.md) 与 [ARCH-API-009](architecture-data-api.md)），无数据库表/后台任务变更。设置页 general/security/certificates/agent/system（品牌+服务器变量）移除保存按钮，改为 500ms 防抖自动保存（分区串行、本地校验失败不发请求、成功仅状态指示、失败 toast+重试、语言即时切换与失败回滚、切 tab 不卸载、刷新取消待发），保留 JWT 重置、系统证书重置、清空事件与日志、备份导出/还原、外观上传/移除/恢复默认等动作按钮，外观分区仍走乐观即时保存。见 [SET-RUN-022](identity-settings-system.md)、[UI-SET-002/003/005/007/010/014](ui-pages.md)、[UI-SHELL-022](ui-shell-and-conventions.md)、[ARCH-API-009](architecture-data-api.md)、[AutoSaveStatus 模式](../specifications/frontend/interaction-patterns.md)、[覆盖基线](coverage-matrix.md)、[API 路由清单](api-route-inventory.md)。
 
 修改下列对象时，至少检查对应消费者：
 
@@ -98,7 +99,6 @@ WinUI 3 风格改版与服务器持久化外观（2026-11-17）：前端 token/�
 | 状态/错误枚举 | 状态徽标与筛选、重试/禁用按钮、i18n、任务和事件投影、旧数据解析 |
 | 应用期望态或运行态 | orchestrator、Agent contract、容器观察、应用操作记录、`/events` 进程行、设施应用协调 |
 | Server/Agent 能力 | 探测、部署、证书、指标、容器、软件包、应用调度、离线降级 |
-| Tailscale 意图、观测地址或容器期望态 | 地址解析优先级与回落、节点证书 SAN、存储导出白名单、入口代理上游、设施重同步、节点收敛任务、设置页与服务器页、容器内 tailscaled 生命周期 |
 | DNS 或证书 | 反向代理、应用内置变量、密钥资产引用、续签任务、删除引用检查 |
 | 数据库模型 | 四库归属、迁移顺序、索引/约束、备份恢复、保留清理、旧版本升级 |
 | 指标设施配置（采集范围/间隔/保留天数/清理计划） | Agent report stream 按节点下发、指标整点对齐与禁用节点跳过落库、metrics cleanup worker、指标查询与概览、设置页迁移播种、服务器删除修剪、i18n 与设施目录/详情页 |

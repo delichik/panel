@@ -59,7 +59,7 @@ func (s *Service) EnsureAgentTLSAssets(ctx context.Context) (*agentsecurity.TLSA
 }
 
 // IssueAgentServerCertificate 为节点签发 Agent 服务端证书。hosts 必须覆盖
-// Panel 可能拨号的全部地址：规范连接地址，以及启用优先时使用的 tailnet 地址。
+// Panel 可能拨号的全部地址：规范连接地址。
 // gRPC 客户端按拨号目标校验主机名，缺少任一地址都会让 mTLS 校验失败。
 func (s *Service) IssueAgentServerCertificate(ctx context.Context, serverID, serverName string, hosts []string) (agentsecurity.ServerCertificate, []byte, error) {
 	assets, err := s.EnsureAgentTLSAssets(ctx)

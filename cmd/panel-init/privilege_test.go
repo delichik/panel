@@ -11,9 +11,9 @@ import (
 
 // TestPrivilegeProblemRequiresRoot 固定“不允许降级”的运行身份判据。
 //
-// 非 root 的 panel-init 既无法把 Panel 子进程降权（内核以 EPERM 拒绝 setuid，
-// 表现为 "fork/exec /app/panel: operation not permitted"），也无法以内核 TUN
-// 模式启动容器内 tailscaled；因此启动阶段必须直接拒绝，而不是降级运行。
+// 非 root 的 panel-init 无法把 Panel 子进程降权（内核以 EPERM 拒绝 setuid，
+// 表现为 "fork/exec /app/panel: operation not permitted"）；因此启动阶段必须
+// 直接拒绝，而不是降级运行。
 func TestPrivilegeProblemRequiresRoot(t *testing.T) {
 	err := privilegeProblem(1000, "panel", 1000, nil)
 	if err == nil {

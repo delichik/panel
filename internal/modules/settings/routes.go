@@ -20,8 +20,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, auth httpx.Middleware) {
 	mux.Handle("PUT /api/v1/settings/runtime/certificates", auth(http.HandlerFunc(h.UpdateCertificates)))
 	mux.Handle("PUT /api/v1/settings/runtime/agent", auth(http.HandlerFunc(h.UpdateAgent)))
 	mux.Handle("PUT /api/v1/settings/runtime/branding", auth(http.HandlerFunc(h.UpdateBranding)))
-	mux.Handle("PUT /api/v1/settings/tailscale", auth(http.HandlerFunc(h.UpdateTailscale)))
 	mux.Handle("GET /api/v1/settings/server-variables", auth(http.HandlerFunc(h.ServerVariableDefinitions)))
 	mux.Handle("PUT /api/v1/settings/server-variables", auth(http.HandlerFunc(h.UpdateServerVariableDefinitions)))
-	mux.Handle("POST /api/v1/settings/tailscale/apply", auth(http.HandlerFunc(h.ApplyTailscale)))
 }

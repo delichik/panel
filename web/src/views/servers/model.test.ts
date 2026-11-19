@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentTone, architectureLabel, connectionHost, connectionSignature, credentialReferences, hasBlockingPairIssues, isLegacyNetworkTab, isLegacyResourceTab, isLegacySystemTab, mergeServerCandidates, normalizeServerDetailTab, normalizeServerNetworkSubtab, normalizeServerResourceSubtab, normalizeServerSystemSubtab, parsePairs, probeOutcome, probeOutcomeStatusKey, probeOutcomeTone, proxyErrorKey, proxyListHintKey, proxyModeLabelKey, proxySavePayload, proxyShortLabelKey, proxyTunnelDisplayName, reportDisconnectCount1h, reportStabilityGrade, reportStabilityStatusKey, reportStabilityTone, reportStreamStatus, reportStreamStatusKey, serverDetailTabs, serverNetworkSubtabs, serverProxyMode, serverResourceSubtabs, serverSummaryKind, serverSummaryStatusKey, serverSummaryTone, serverSystemSubtabs, shouldShowListReportStability, tailscaleObservedStatus, tailscalePreferences, tailscaleStatusKey, tailscaleTone, tailscaleTrait, validateProbeInput, validateProxyInput, validateServerInput } from './model';
+import { agentTone, architectureLabel, connectionHost, connectionSignature, credentialReferences, hasBlockingPairIssues, isLegacyNetworkTab, isLegacyResourceTab, isLegacySystemTab, mergeServerCandidates, normalizeServerDetailTab, normalizeServerNetworkSubtab, normalizeServerResourceSubtab, normalizeServerSystemSubtab, parsePairs, probeOutcome, probeOutcomeStatusKey, probeOutcomeTone, proxyErrorKey, proxyListHintKey, proxyModeLabelKey, proxySavePayload, proxyShortLabelKey, proxyTunnelDisplayName, reportDisconnectCount1h, reportStabilityGrade, reportStabilityStatusKey, reportStabilityTone, reportStreamStatus, reportStreamStatusKey, serverDetailTabs, serverNetworkSubtabs, serverProxyMode, serverResourceSubtabs, serverSummaryKind, serverSummaryStatusKey, serverSummaryTone, serverSystemSubtabs, shouldShowListReportStability, validateProbeInput, validateProxyInput, validateServerInput } from './model';
 import type { ServerDto, ServerProxyMode, ServerSaveInput } from '@/types/servers';
 
 const server: ServerDto = {
@@ -9,9 +9,6 @@ const server: ServerDto = {
   port: 22,
   credentialId: 'cred-1',
   reachable: true,
-  tailscaleEnabled: false,
-  tailscalePreferAgent: false,
-  tailscalePreferInterconnect: false,
   proxyMode: 'direct',
   tunnelServerId: '',
   tunnelServerName: '',
@@ -35,7 +32,7 @@ const proxy: { proxyMode: ServerProxyMode; tunnelServerId: string; socks5Address
 describe('server model', () => {
   it('merges short detail tabs and aliases legacy tab names onto subtabs', () => {
     expect(serverDetailTabs).toEqual(['overview', 'system', 'resources', 'network-security']);
-    expect(serverSystemSubtabs).toEqual(['agent', 'tailscale', 'packages']);
+    expect(serverSystemSubtabs).toEqual(['agent', 'packages']);
     expect(serverResourceSubtabs).toEqual(['containers', 'images', 'networks', 'volumes']);
     expect(serverNetworkSubtabs).toEqual(['firewall', 'fail2ban']);
 
@@ -43,7 +40,6 @@ describe('server model', () => {
     expect(normalizeServerDetailTab('overview')).toBe('overview');
     expect(normalizeServerDetailTab('system')).toBe('system');
     expect(normalizeServerDetailTab('agent')).toBe('system');
-    expect(normalizeServerDetailTab('tailscale')).toBe('system');
     expect(normalizeServerDetailTab('packages')).toBe('system');
     expect(normalizeServerDetailTab('resources')).toBe('resources');
     expect(normalizeServerDetailTab('containers')).toBe('resources');
@@ -55,11 +51,9 @@ describe('server model', () => {
     expect(normalizeServerDetailTab('network-security')).toBe('network-security');
     expect(normalizeServerDetailTab('unknown')).toBe('overview');
 
-    expect(isLegacySystemTab('tailscale')).toBe(true);
     expect(isLegacyResourceTab('containers')).toBe(true);
     expect(isLegacyNetworkTab('probes')).toBe(true);
     expect(normalizeServerSystemSubtab(undefined, 'packages')).toBe('packages');
-    expect(normalizeServerSystemSubtab('tailscale')).toBe('tailscale');
     expect(normalizeServerSystemSubtab(undefined)).toBe('agent');
     expect(normalizeServerResourceSubtab(undefined, 'images')).toBe('images');
     expect(normalizeServerResourceSubtab('volumes')).toBe('volumes');
@@ -138,7 +132,7 @@ describe('server model', () => {
   });
 
   it('validates server forms before API calls', () => {
-    expect(validateServerInput({ ...proxy, name: '', ipv4: '', ipv6: '', port: 70000, credentialId: '', sshUsername: '', dockerHost: '', tailscaleEnabled: false, tailscalePreferAgent: false, tailscalePreferInterconnect: false, traits: {}, variables: {}, notes: '' })).toMatchObject({
+    expect(validateServerInput({ ...proxy, name: '', ipv4: '', ipv6: '', port: 70000, credentialId: '', sshUsername: '', dockerHost: '', traits: {}, variables: {}, notes: '' })).toMatchObject({
       name: 'serversPage.validationName',
       ipv4: 'serversPage.validationAddressRequired',
       port: 'serversPage.validationPort',
@@ -148,7 +142,7 @@ describe('server model', () => {
   });
 
   it('validates ipv4 and ipv6 literals and derives the connection host', () => {
-    const base = { ...proxy, name: 'edge', sshUsername: '', traits: {}, variables: {}, notes: '', tailscaleEnabled: false, tailscalePreferAgent: false, tailscalePreferInterconnect: false };
+    const base = { ...proxy, name: 'edge', sshUsername: '', traits: {}, variables: {}, notes: '' };
     expect(validateServerInput({ ...base, ipv4: '999.0.0.1', ipv6: '', port: 22, credentialId: 'cred-1', dockerHost: 'unix:///var/run/docker.sock' }).ipv4).toBe('serversPage.validationIpv4');
     expect(validateServerInput({ ...base, ipv4: '', ipv6: '2001:db8::1', port: 22, credentialId: 'cred-1', dockerHost: 'unix:///var/run/docker.sock' })).toEqual({});
     expect(connectionHost({ ipv4: '203.0.113.5', ipv6: '2001:db8::5' })).toBe('203.0.113.5');
@@ -177,7 +171,7 @@ describe('server model', () => {
     expect(validateProbeInput({ ...base, credentialId: '' })).toEqual({ credentialId: 'serversPage.validationCredential' });
     expect(validateProbeInput({ ...base, port: 0 })).toEqual({ port: 'serversPage.validationPort' });
     // 名称与 Docker Host 错误不影响探测
-    const full = { ...proxy, ...base, name: '', dockerHost: '', variables: {}, notes: '', tailscaleEnabled: false, tailscalePreferAgent: false, tailscalePreferInterconnect: false };
+    const full = { ...proxy, ...base, name: '', dockerHost: '', variables: {}, notes: '' };
     expect(Object.keys(validateServerInput(full))).toEqual(['name', 'dockerHost']);
   });
 
@@ -216,7 +210,7 @@ describe('server model', () => {
     };
     expect(validateServerInput({
       ...draft, name: 'edge', ipv4: '10.0.0.1', ipv6: '', port: 22, credentialId: 'cred-1', sshUsername: '',
-      dockerHost: 'unix:///var/run/docker.sock', tailscaleEnabled: false, tailscalePreferAgent: false, tailscalePreferInterconnect: false,
+      dockerHost: 'unix:///var/run/docker.sock',
       variables: {}, notes: '',
     }, { selfId: 'srv-1' }).tunnelServerId).toBe('serversPage.proxy.validationTunnelSelf');
     const probeBase = { ipv4: '203.0.113.10', ipv6: '', port: 22, sshUsername: '', credentialId: 'cred-1' };
@@ -256,31 +250,6 @@ describe('server model', () => {
     expect(proxyErrorKey({ proxyError: 'socks5_address_invalid' })).toBe('serversPage.proxy.error.socks5_address_invalid');
     expect(proxyListHintKey({ proxyInvalid: false, proxyError: '' })).toBe('serversPage.proxy.listHint');
     expect(proxyListHintKey({ proxyInvalid: true, proxyError: 'tunnel_missing' })).toBe('serversPage.proxy.error.tunnel_missing');
-  });
-
-  it('forces the tailscale preferences off when the node does not join the tailnet', () => {
-    expect(tailscalePreferences({ tailscaleEnabled: false, tailscalePreferAgent: true, tailscalePreferInterconnect: true })).toEqual({ tailscalePreferAgent: false, tailscalePreferInterconnect: false });
-    expect(tailscalePreferences({ tailscaleEnabled: true, tailscalePreferAgent: true, tailscalePreferInterconnect: false })).toEqual({ tailscalePreferAgent: true, tailscalePreferInterconnect: false });
-  });
-
-  it('reads the observed tailscale state from traits only and never invents one', () => {
-    expect(tailscaleObservedStatus(server)).toBe('');
-    expect(tailscaleStatusKey(server)).toBe('serversPage.tailscale.noStatus');
-    expect(tailscaleTone(server)).toBe('neutral');
-
-    const running = { ...server, tailscaleEnabled: true, traits: { ...server.traits, 'tailscale.status': 'running', 'tailscale.ipv4': '100.64.0.11', 'tailscale.lastError': '', 'tailscale.updatedAt': '2026-08-01T07:52:00.000Z' } };
-    expect(tailscaleObservedStatus(running)).toBe('running');
-    expect(tailscaleStatusKey(running)).toBe('serversPage.tailscale.status.running');
-    expect(tailscaleTone(running)).toBe('success');
-    expect(tailscaleTrait(running, 'ipv4')).toBe('100.64.0.11');
-    expect(tailscaleTrait(running, 'lastError')).toBe('');
-
-    const unknown = { ...server, tailscaleEnabled: true, traits: { ...server.traits, 'tailscale.status': 'reconciling' } };
-    expect(tailscaleObservedStatus(unknown)).toBe('');
-    expect(tailscaleTone(unknown)).toBe('neutral');
-    expect(tailscaleTone({ ...server, tailscaleEnabled: true, traits: { 'tailscale.status': 'error' } })).toBe('danger');
-    expect(tailscaleTone({ ...server, tailscaleEnabled: true, traits: { 'tailscale.status': 'installing' } })).toBe('warning');
-    expect(tailscaleTone({ ...server, tailscaleEnabled: true, traits: { 'tailscale.status': 'unsupported' } })).toBe('info');
   });
 
   it('derives network probe outcomes from result fields, with failures outranking staleness', () => {

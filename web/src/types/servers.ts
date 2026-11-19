@@ -63,12 +63,6 @@ export interface ServerDto {
   architecture?: ServerArchitecture;
   sudo?: ServerSudoState;
   privilege?: ServerPrivilegeState;
-  /** 用户意图：该节点是否加入 tailnet。 */
-  tailscaleEnabled: boolean;
-  /** 该节点的 agent 连接是否优先使用 tailscale 地址。 */
-  tailscalePreferAgent: boolean;
-  /** 该节点参与的节点互联是否优先使用 tailscale 地址。 */
-  tailscalePreferInterconnect: boolean;
   /** 连接目标服务器使用的代理模式；恒有值。 */
   proxyMode: ServerProxyMode;
   /** ssh_tunnel 时选中的隧道服务器 id；允许指向已删除服务器以表达悬空。 */
@@ -103,9 +97,6 @@ export interface ServerSaveInput extends ServerProxyConfig {
   sshUsername: string;
   credentialId: string;
   dockerHost: string;
-  tailscaleEnabled: boolean;
-  tailscalePreferAgent: boolean;
-  tailscalePreferInterconnect: boolean;
   traits?: Record<string, string>;
   variables: Record<string, string>;
   notes: string;

@@ -119,63 +119,6 @@ describe('domain mock routes', () => {
     expect(detailEnvelope.data.id).toBe('srv-edge-sgp');
   });
 
-  it('serves tailscale settings and per-node reconciliation on the real routes', async () => {
-    const settings = await (await fetch('/api/v1/settings/runtime')).json();
-    expect(settings.data.tailscale).toMatchObject({ authKeyConfigured: true, tags: expect.any(Array) });
-    expect(settings.data.tailscale.container).toMatchObject({ available: true, running: true, loggedIn: true });
-    // 密钥只写不读：响应里不得出现密钥字段。
-    expect(settings.data.tailscale).not.toHaveProperty('authKey');
-
-    const apply = await fetch('/api/v1/settings/tailscale/apply', { method: 'POST' });
-    const applied = await apply.json();
-    expect(apply.status).toBe(202);
-    expect(applied.data).toMatchObject({ available: true, running: true, loggedIn: true, lastError: '' });
-
-    const saved = await (await fetch('/api/v1/settings/tailscale', {
-      method: 'PUT',
-      body: JSON.stringify({ authKey: 'tskey-auth-mock', tags: ['tag:panel'] }),
-    })).json();
-    expect(saved.data.tailscale.tags).toEqual(['tag:panel']);
-    expect(saved.data.tailscale.authKeyConfigured).toBe(true);
-    expect(saved.data.tailscale).not.toHaveProperty('authKey');
-    // 保存 general 分区不提交 tailscale，分组必须原样保留。
-    const scalarSave = await (await fetch('/api/v1/settings/runtime/general', {
-      method: 'PUT',
-      body: JSON.stringify({ containerReportIntervalSeconds: 30, language: 'zh-CN', logLevel: 'warn', reconcileTraceEnabled: false }),
-    })).json();
-    expect(scalarSave.data.logLevel).toBe('warn');
-    expect(scalarSave.data.tailscale.tags).toEqual(['tag:panel']);
-    // 省略 tags 时保留既有标签（只替换密钥）。
-    const keyOnly = await (await fetch('/api/v1/settings/tailscale', {
-      method: 'PUT',
-      body: JSON.stringify({ authKey: 'tskey-auth-mock-2' }),
-    })).json();
-    expect(keyOnly.data.tailscale.tags).toEqual(['tag:panel']);
-    // 显式 [] 才清空标签。
-    const tagsCleared = await (await fetch('/api/v1/settings/tailscale', {
-      method: 'PUT',
-      body: JSON.stringify({ tags: [] }),
-    })).json();
-    expect(tagsCleared.data.tailscale.tags).toEqual([]);
-
-    const cleared = await (await fetch('/api/v1/settings/tailscale', {
-      method: 'PUT',
-      body: JSON.stringify({ clearAuthKey: true }),
-    })).json();
-    expect(cleared.data.tailscale.authKeyConfigured).toBe(false);
-    expect(cleared.data.tailscale.container).toMatchObject({ running: false, loggedIn: false, backendState: 'Stopped' });
-
-    const serverApply = await fetch('/api/v1/servers/srv-edge-sgp/tailscale/apply', { method: 'POST' });
-    const serverApplied = await serverApply.json();
-    expect(serverApply.status).toBe(202);
-    expect(serverApplied.data.taskId).toContain('task-tailscale-apply-');
-    const missing = await fetch('/api/v1/servers/srv-missing/tailscale/apply', { method: 'POST' });
-    expect(missing.status).toBe(404);
-    const updated = await (await fetch('/api/v1/servers/srv-edge-sgp')).json();
-    expect(updated.data.tailscaleEnabled).toBe(true);
-    expect(updated.data.traits['tailscale.status']).toBe('installing');
-  });
-
   it('serves expanded demo application and certificate inventory', async () => {
     const apps = await fetch('/api/v1/applications?pageSize=200');
     const appsEnvelope = await apps.json();

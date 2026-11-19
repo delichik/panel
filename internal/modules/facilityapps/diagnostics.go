@@ -10,7 +10,6 @@ import (
 	"time"
 
 	agentcontract "panel/internal/agent/contract"
-	agentendpoint "panel/internal/agent/endpoint"
 	"panel/internal/modules/applications"
 	controlplane "panel/internal/orchestrator"
 	"panel/internal/platform/activitylog"
@@ -155,10 +154,7 @@ func (s *Service) DiagnoseReverseProxy(ctx context.Context, serverID string) (Pr
 	if err != nil {
 		return out, err
 	}
-	endpoint := agentendpoint.AgentURL(srv.Traits, agentendpoint.Preferences{
-		Enabled: srv.TailscaleEnabled,
-		Prefer:  srv.TailscalePreferAgent,
-	})
+	endpoint := strings.TrimSpace(srv.Traits[agentcontract.TraitURL])
 	if endpoint == "" || srv.Traits[agentcontract.TraitStatus] != agentcontract.StatusCompatible {
 		return out, nil
 	}

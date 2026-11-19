@@ -11,7 +11,6 @@ import (
 	"time"
 
 	agentcontract "panel/internal/agent/contract"
-	agentendpoint "panel/internal/agent/endpoint"
 	"panel/internal/modules/servers"
 	"panel/internal/modules/tasks"
 	"panel/internal/platform/database/models"
@@ -462,10 +461,7 @@ func packageAgentURL(srv server.Server) (string, error) {
 	if srv.Traits[agentcontract.TraitStatus] != agentcontract.StatusCompatible {
 		return "", panelerr.Validation("agent_incompatible", "Agent is not compatible with package maintenance")
 	}
-	baseURL := agentendpoint.AgentURL(srv.Traits, agentendpoint.Preferences{
-		Enabled: srv.TailscaleEnabled,
-		Prefer:  srv.TailscalePreferAgent,
-	})
+	baseURL := strings.TrimSpace(srv.Traits[agentcontract.TraitURL])
 	if baseURL == "" {
 		return "", panelerr.Validation("agent_required", "Agent is required for package maintenance")
 	}

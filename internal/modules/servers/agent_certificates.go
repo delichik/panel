@@ -20,7 +20,7 @@ func (s *Service) IssueAgentCertificate(ctx context.Context, serverID string) (A
 		return AgentCertificateBundle{}, err
 	}
 	agentURL := agentDefaultURLFor(srv)
-	hosts := agentCertificateHosts(srv)
+	hosts := []string{strings.TrimSpace(srv.Host)}
 	var cert agentsecurity.ServerCertificate
 	var caPEM []byte
 	if s.agentKeys != nil {
@@ -34,9 +34,6 @@ func (s *Service) IssueAgentCertificate(ctx context.Context, serverID string) (A
 			return AgentCertificateBundle{}, err
 		}
 		caPEM = s.agentTLS.CACertificatePEM()
-	}
-	if err := s.recordAgentCertificateHosts(ctx, srv, hosts); err != nil {
-		return AgentCertificateBundle{}, err
 	}
 	return AgentCertificateBundle{
 		CA:            string(caPEM),
