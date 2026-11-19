@@ -2,7 +2,7 @@
 import { computed, defineAsyncComponent } from 'vue';
 import { useI18n } from '@/i18n';
 import type { MetricSeriesData } from '@/utils/metrics';
-import { formatLatency, formatPercent } from '@/utils/metrics';
+import { formatLatency, formatPercent, seriesStats, type SeriesStats } from '@/utils/metrics';
 import ChartCard from './ChartCard.vue';
 
 const MetricChart = defineAsyncComponent(() => import('@/components/patterns/MetricChart.vue'));
@@ -19,29 +19,51 @@ const { t } = useI18n();
 const hasLatency = computed(() => props.latency.points.some((point) => point.value !== null));
 const hasLoss = computed(() => props.loss.points.some((point) => point.value !== null));
 
+/** 统计项：标签 + 格式化值；无有效样本显示统一占位，不伪造 0。 */
+function statText(label: string, value: number | null, formatter: (value: number) => string): string {
+  return `${label} ${value === null ? t('common.notAvailable') : formatter(value)}`;
+}
+
+function statsText(
+  stats: SeriesStats,
+  formatter: (value: number) => string,
+): string {
+  return [
+    statText(t('serversPage.metrics.average'), stats.average, formatter),
+    statText(t('serversPage.metrics.maximum'), stats.peak, formatter),
+    statText(t('serversPage.metrics.minimum'), stats.minimum, formatter),
+  ].join(' · ');
+}
+
 /**
  * 卡片始终渲染：使用共享 ChartCard（唯一 surface-card 表面）承载标题/当前值，
  * 没有历史时在图表高度盒子里展示空态，而不是整块消失；不再自带卡片，
  * 避免服务器概览里出现 card-in-card。
  */
-const cards = computed(() => [
-  {
-    key: 'latency',
-    title: t('serversPage.probe.latencyHistory'),
-    current: formatLatency(props.latencyCurrent),
-    series: [props.latency],
-    valueKind: 'latency' as const,
-    hasData: hasLatency.value,
-  },
-  {
-    key: 'loss',
-    title: t('serversPage.probe.packetLossHistory'),
-    current: formatPercent(props.lossCurrent, 0),
-    series: [props.loss],
-    valueKind: 'percent' as const,
-    hasData: hasLoss.value,
-  },
-]);
+const cards = computed(() => {
+  const latencyStats = seriesStats(props.latency.points.map((point) => point.value));
+  const lossStats = seriesStats(props.loss.points.map((point) => point.value));
+  return [
+    {
+      key: 'latency',
+      title: t('serversPage.probe.latencyHistory'),
+      current: formatLatency(props.latencyCurrent),
+      series: [props.latency],
+      valueKind: 'latency' as const,
+      hasData: hasLatency.value,
+      stats: statsText(latencyStats, formatLatency),
+    },
+    {
+      key: 'loss',
+      title: t('serversPage.probe.packetLossHistory'),
+      current: formatPercent(props.lossCurrent, 0),
+      series: [props.loss],
+      valueKind: 'percent' as const,
+      hasData: hasLoss.value,
+      stats: statsText(lossStats, formatPercent),
+    },
+  ];
+});
 </script>
 
 <template>
@@ -58,6 +80,9 @@ const cards = computed(() => [
           {{ t('serversPage.probe.noHistory') }}
         </div>
       </div>
+      <template #footer>
+        <div class="text-caption tabular-nums text-muted-foreground">{{ card.stats }}</div>
+      </template>
     </ChartCard>
   </div>
 </template>

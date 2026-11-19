@@ -12,7 +12,7 @@ import { useAutoRefresh } from '@/composables/useAutoRefresh';
 import { useI18n } from '@/i18n';
 import type { ServerDto } from '@/types/servers';
 import { formatDateTime } from '@/utils/datetime';
-import { formatBytes, formatPercent, formatRate, type MetricSeriesData, type MetricThreshold } from '@/utils/metrics';
+import { formatBytes, formatPercent, formatRate, type MetricSeriesData, type MetricThreshold, type SeriesStats } from '@/utils/metrics';
 import { createLatestRequestGuard, isAbortError } from '@/views/_shared/requestState';
 import {
   bucketSecondsForRange,
@@ -71,20 +71,16 @@ function percentStat(label: string, value: number | null): string {
   return `${label} ${value === null ? t('common.notAvailable') : formatPercent(value, 1)}`;
 }
 
-function pairedAverage(series: MetricSeriesData[], formatter: (value: number) => string): string {
-  const parts = series.map((item) => {
-    const stats = statsFor(item.points);
-    return stats.average === null ? t('common.notAvailable') : formatter(stats.average);
-  });
-  return parts.join(' / ');
-}
-
-function pairedPeak(series: MetricSeriesData[], formatter: (value: number) => string): string {
-  const parts = series.map((item) => {
-    const stats = statsFor(item.points);
-    return stats.peak === null ? t('common.notAvailable') : formatter(stats.peak);
-  });
-  return parts.join(' / ');
+/** 双序列统计项：读/写序列各自取同一种统计值，按 ` / ` 连接。 */
+function pairedStat(
+  series: MetricSeriesData[],
+  pick: (stats: SeriesStats) => number | null,
+  formatter: (value: number) => string,
+): string {
+  return series.map((item) => {
+    const value = pick(statsFor(item.points));
+    return value === null ? t('common.notAvailable') : formatter(value);
+  }).join(' / ');
 }
 
 const panels = computed<PanelView[]>(() => {
@@ -127,7 +123,8 @@ const panels = computed<PanelView[]>(() => {
       currentHint: memoryNow ? `${formatBytes(memoryNow.usedBytes)} / ${formatBytes(memoryNow.totalBytes)}` : undefined,
       stats: [
         percentStat(t('serversPage.metrics.average'), memoryStats.average),
-        percentStat(t('serversPage.metrics.peak'), memoryStats.peak),
+        percentStat(t('serversPage.metrics.maximum'), memoryStats.peak),
+        percentStat(t('serversPage.metrics.minimum'), memoryStats.minimum),
       ].join(' · '),
       legend: [],
       thresholds: [{ value: 90, label: t('serversPage.metrics.threshold', { value: '90%' }) }],
@@ -141,8 +138,9 @@ const panels = computed<PanelView[]>(() => {
       series: diskIo,
       current: diskNow ? `${formatRate(diskNow.read)} / ${formatRate(diskNow.write)}` : t('common.notAvailable'),
       stats: [
-        `${t('serversPage.metrics.average')} ${pairedAverage(diskIo, (value) => formatRate(value))}`,
-        `${t('serversPage.metrics.peak')} ${pairedPeak(diskIo, (value) => formatRate(value))}`,
+        `${t('serversPage.metrics.average')} ${pairedStat(diskIo, (stats) => stats.average, formatRate)}`,
+        `${t('serversPage.metrics.maximum')} ${pairedStat(diskIo, (stats) => stats.peak, formatRate)}`,
+        `${t('serversPage.metrics.minimum')} ${pairedStat(diskIo, (stats) => stats.minimum, formatRate)}`,
       ].join(' · '),
       legend: [
         { name: t('serversPage.diskIoRead'), colorClass: 'bg-primary' },
@@ -159,8 +157,9 @@ const panels = computed<PanelView[]>(() => {
       series: network,
       current: networkNow ? `${formatRate(networkNow.rx)} / ${formatRate(networkNow.tx)}` : t('common.notAvailable'),
       stats: [
-        `${t('serversPage.metrics.average')} ${pairedAverage(network, (value) => formatRate(value))}`,
-        `${t('serversPage.metrics.peak')} ${pairedPeak(network, (value) => formatRate(value))}`,
+        `${t('serversPage.metrics.average')} ${pairedStat(network, (stats) => stats.average, formatRate)}`,
+        `${t('serversPage.metrics.maximum')} ${pairedStat(network, (stats) => stats.peak, formatRate)}`,
+        `${t('serversPage.metrics.minimum')} ${pairedStat(network, (stats) => stats.minimum, formatRate)}`,
       ].join(' · '),
       legend: [
         { name: t('serversPage.networkRx'), colorClass: 'bg-primary' },

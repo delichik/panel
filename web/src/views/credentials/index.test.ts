@@ -8,7 +8,6 @@ import { credentialsApi } from '@/api/credentials';
 import { serversApi } from '@/api/servers';
 import { errorDialogKey } from '@/components/ui/errorDialog';
 import { toastKey } from '@/components/ui/toast';
-import Table from '@/components/ui/Table.vue';
 import { useI18n } from '@/i18n';
 import type { CredentialDetailDto, CredentialDto } from '@/types/credentials';
 import type { ServerDto } from '@/types/servers';
@@ -118,7 +117,7 @@ describe('credentials detail migration', () => {
     expect(view.find('header nav').exists()).toBe(false);
 
     // 次级列按优先级隐藏；行内 Test 在 <wide 收进 More（More 中保留）。
-    const listColumns = (view.findComponent(Table).vm.$props as unknown as { columns: Array<{ key: string; hideBelow?: string }> }).columns;
+    const listColumns = (view.findComponent({ name: 'Table' }).vm.$props as unknown as { columns: Array<{ key: string; hideBelow?: string }> }).columns;
     expect(listColumns.find((column) => column.key === 'summary')?.hideBelow).toBe('wide');
     expect(listColumns.find((column) => column.key === 'references')?.hideBelow).toBe('lg');
     expect(listColumns.find((column) => column.key === 'updatedAt')?.hideBelow).toBe('wide');

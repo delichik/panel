@@ -61,12 +61,19 @@ function metrics(overrides: Partial<ServerMetricsSeries> = {}): ServerMetricsSer
       { time: at(2), usagePercent: 20 },
     ],
     memory: [
-      { time: at(0), usedBytes: 5 * GIB, totalBytes: 10 * GIB },
-      { time: at(1), usedBytes: 5 * GIB, totalBytes: 10 * GIB },
+      { time: at(0), usedBytes: 4 * GIB, totalBytes: 10 * GIB },
+      { time: at(1), usedBytes: 6 * GIB, totalBytes: 10 * GIB },
+      { time: at(2), usedBytes: 5 * GIB, totalBytes: 10 * GIB },
     ],
     diskCurrent: null,
-    diskIo: [],
-    network: [],
+    diskIo: [
+      { time: at(0), readBytesPerSecond: 1024, writeBytesPerSecond: 512 },
+      { time: at(1), readBytesPerSecond: 2048, writeBytesPerSecond: 1536 },
+    ],
+    network: [
+      { time: at(0), rxBytesPerSecond: 2048, txBytesPerSecond: 1024 },
+      { time: at(1), rxBytesPerSecond: 4096, txBytesPerSecond: 3072 },
+    ],
     load: [],
     ...overrides,
   };
@@ -90,18 +97,15 @@ beforeEach(() => {
 });
 
 describe('server metrics panel statistics', () => {
-  it('shows average, maximum and minimum together for the CPU chart', async () => {
+  it('shows average, maximum and minimum together for every chart', async () => {
     const wrapper = await mountPanel();
 
     expect(metricsBucketed).toHaveBeenCalledWith('srv-1', '1h', 60, expect.anything());
     expect(cardText(wrapper, 0)).toContain('Avg 23.3% · Max 40.0% · Min 10.0%');
-    expect(cardText(wrapper, 0)).not.toContain('Peak');
-  });
-
-  it('keeps the average/peak summary for the non-CPU charts', async () => {
-    const wrapper = await mountPanel();
-
-    expect(cardText(wrapper, 1)).toContain('Avg 50.0% · Peak 50.0%');
+    expect(cardText(wrapper, 1)).toContain('Avg 50.0% · Max 60.0% · Min 40.0%');
+    expect(cardText(wrapper, 2)).toContain('Avg 1.5 KB/s / 1.0 KB/s · Max 2.0 KB/s / 1.5 KB/s · Min 1.0 KB/s / 512 B/s');
+    expect(cardText(wrapper, 3)).toContain('Avg 3.0 KB/s / 2.0 KB/s · Max 4.0 KB/s / 3.0 KB/s · Min 2.0 KB/s / 1.0 KB/s');
+    expect(wrapper.text()).not.toContain('Peak');
   });
 
   it('renders placeholders instead of faking CPU extrema when the range has no CPU samples', async () => {

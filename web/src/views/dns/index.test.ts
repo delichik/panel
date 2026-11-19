@@ -7,7 +7,6 @@ import DnsView from './index.vue';
 import { dnsApi } from '@/api/dns';
 import { errorDialogKey } from '@/components/ui/errorDialog';
 import { toastKey } from '@/components/ui/toast';
-import Table from '@/components/ui/Table.vue';
 import { useI18n } from '@/i18n';
 import type { DnsDomainDto } from '@/types/dns';
 
@@ -99,7 +98,7 @@ describe('dns detail migration', () => {
     expect(view.find('header nav').exists()).toBe(false);
 
     // 次级时间列 <wide 隐藏；行内 Sync 在 <wide 收进 More（More 中保留）。
-    const listColumns = (view.findComponent(Table).vm.$props as unknown as { columns: Array<{ key: string; hideBelow?: string }> }).columns;
+    const listColumns = (view.findComponent({ name: 'Table' }).vm.$props as unknown as { columns: Array<{ key: string; hideBelow?: string }> }).columns;
     expect(listColumns.find((column) => column.key === 'updatedAt')?.hideBelow).toBe('wide');
     const updatedHeader = view.findAll('table thead th').find((item) => item.text() === useI18n().t('dnsPage.updatedAt'));
     expect(updatedHeader?.classes()).toContain('max-wide:hidden');

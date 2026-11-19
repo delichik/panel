@@ -54,4 +54,27 @@ describe('ProbeHistoryCharts', () => {
     expect(wrapper.find('[data-chart-card-empty]').exists()).toBe(false);
     expect(wrapper.findAll('.surface-card')).toHaveLength(2);
   });
+
+  it('shows average, maximum and minimum for latency and packet loss', async () => {
+    const wrapper = mount(ProbeHistoryCharts, {
+      props: {
+        latency: series('latency', [
+          { time: '2026-08-01T00:00:00.000Z', value: 10 },
+          { time: '2026-08-01T00:30:00.000Z', value: 30 },
+          { time: '2026-08-01T01:00:00.000Z', value: 20 },
+        ]),
+        loss: series('loss', [
+          { time: '2026-08-01T00:00:00.000Z', value: 0 },
+          { time: '2026-08-01T00:30:00.000Z', value: 2 },
+          { time: '2026-08-01T01:00:00.000Z', value: 1 },
+        ]),
+        latencyCurrent: 20,
+        lossCurrent: 1,
+      },
+    });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('Avg 20.0 ms · Max 30.0 ms · Min 10.0 ms');
+    expect(wrapper.text()).toContain('Avg 1.0% · Max 2.0% · Min 0.0%');
+  });
 });

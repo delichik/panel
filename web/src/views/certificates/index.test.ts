@@ -9,7 +9,6 @@ import { dnsApi } from '@/api/dns';
 import { keyAssetsApi } from '@/api/keyAssets';
 import { errorDialogKey } from '@/components/ui/errorDialog';
 import { toastKey } from '@/components/ui/toast';
-import Table from '@/components/ui/Table.vue';
 import { useI18n } from '@/i18n';
 import type { DomainCertificateDto } from '@/types/certificates';
 
@@ -134,7 +133,7 @@ describe('certificates detail migration', () => {
     ]);
 
     // 二级列在 <wide 隐藏；行内续签在 <wide 只保留详情+更多。
-    const listColumns = (view.findComponent(Table).vm.$props as unknown as { columns: Array<{ key: string; hideBelow?: string }> }).columns;
+    const listColumns = (view.findComponent({ name: 'Table' }).vm.$props as unknown as { columns: Array<{ key: string; hideBelow?: string }> }).columns;
     expect(listColumns.find((column) => column.key === 'expiresAt')?.hideBelow).toBe('wide');
     expect(listColumns.some((column) => column.key === 'actions')).toBe(true);
     const expiresHeader = view.findAll('table thead th').find((item) => item.text() === useI18n().t('certificatesPage.expiresAt'));
