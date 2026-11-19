@@ -22,6 +22,9 @@ func TestMain(m *testing.M) {
 	if os.Getenv(aptHelperEnv) == "1" {
 		runAptHelper()
 	}
+	if os.Getenv(unattendedHelperEnv) == "1" {
+		runUnattendedUpgradeHelper()
+	}
 	os.Exit(m.Run())
 }
 

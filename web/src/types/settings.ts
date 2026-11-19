@@ -19,6 +19,58 @@ export interface RuntimeAgentSettings {
   transferTimeoutSeconds: number;
 }
 
+/** Scheme used by Panel when it resolves image digests against a registry host. */
+export type ImageRegistryScheme = 'https' | 'http';
+
+/**
+ * Runtime settings for the "Image registry" partition (SET-RUN-024).
+ * `endpoint` is a bare `host[:port]`; an empty value means the official registry.
+ */
+export interface RuntimeImageRegistrySettings {
+  endpoint: string;
+  scheme: ImageRegistryScheme;
+}
+
+/**
+ * PUT /settings/runtime/image-registry：指针语义，省略字段保留当前值，
+ * 显式空串 `endpoint: ""` 表示恢复官方仓库。
+ */
+export interface RuntimeImageRegistryUpdate {
+  endpoint?: string;
+  scheme?: ImageRegistryScheme;
+}
+
+/** Packaging scope for software package updates. */
+export type AutoUpdatePackagesMode = 'security' | 'all';
+
+/**
+ * Runtime settings for the "Automatic updates" partition (SET-RUN-023).
+ * `appsEnabled` covers both user application images and the entrance-proxy nginx
+ * image; the last three `lastRun*` fields are the read-only projection written by
+ * the coordinator task and must never be submitted back in the PUT payload.
+ */
+export interface RuntimeAutoUpdateSettings {
+  appsEnabled: boolean;
+  packagesEnabled: boolean;
+  packagesMode: AutoUpdatePackagesMode;
+  /** Daily execution time in the Panel local time zone (`HH:MM`, 24h). */
+  scheduleTime: string;
+  lastRunAt?: string;
+  lastRunStatus?: string;
+  lastRunTaskId?: string;
+}
+
+/** PUT /settings/runtime/auto-update：只提交本分区四个可编辑字段。 */
+export type RuntimeAutoUpdateUpdate = Pick<RuntimeAutoUpdateSettings, 'appsEnabled' | 'packagesEnabled' | 'packagesMode' | 'scheduleTime'>;
+
+/**
+ * POST /settings/runtime/auto-update/run 的 202 响应。
+ * 后端在已有活跃运行任务时幂等返回该任务 id；没有 id 时 UI 只提示已受理。
+ */
+export interface RuntimeAutoUpdateRunResponse {
+  taskId?: string;
+}
+
 /** PUT /settings/runtime/general：运行时/常规分区。 */
 export interface RuntimeGeneralUpdate {
   containerReportIntervalSeconds: number;
@@ -60,6 +112,10 @@ export interface RuntimeSettings {
   certificates: RuntimeCertificateSettings;
   panel: RuntimePanelSettings;
   agent: RuntimeAgentSettings;
+  /** Automatic updates partition; optional so older payloads/tests stay valid. */
+  autoUpdate?: RuntimeAutoUpdateSettings;
+  /** Image registry partition; optional so older payloads/tests stay valid. */
+  imageRegistry?: RuntimeImageRegistrySettings;
   jwtSecretConfigured: boolean;
 }
 

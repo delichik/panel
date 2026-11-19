@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"sync"
@@ -22,6 +23,33 @@ import (
 
 // Matches apt/remoteops package name whitelist (PKG-API-005).
 var packageNamePattern = regexp.MustCompile(`^[A-Za-z0-9+_.:-]+$`)
+
+const (
+	// TaskPackageUpgradeSecurity 实时读取可升级列表后只升级安全更新
+	// （PKG-API-011）。它不允许在安全包为空时退化为全部升级。
+	TaskPackageUpgradeSecurity = "package_upgrade_security"
+	// packageSecuritySourceMarker 是 P0 安全更新判定依据：apt 的 archive/suite
+	// 命名包含 security（如 Debian stable-security、Ubuntu jammy-security）。
+	packageSecuritySourceMarker = "security"
+)
+
+// IsSecuritySource 是安全更新判定的回退启发式（忽略大小写包含 security）。
+// Agent 能给出权威判定（package_updates.security_known）时优先使用权威值；
+// 旧 Agent/命令不可判定时才回退到这里。已知局限：ESM/第三方源可能漏判，
+// 漏判只会少升级，不会误升级全部。
+func IsSecuritySource(source string) bool {
+	return strings.Contains(strings.ToLower(source), packageSecuritySourceMarker)
+}
+
+// securityValue 统一列表展示与安全升级任务包选择的安全判定语义：权威值已知
+// 时使用 Agent 判定，未知时回退到 source 启发式（PKG-API-013）。未知绝不
+// 能被当成“非安全”，否则会漏升。
+func securityValue(known, security bool, source string) bool {
+	if known {
+		return security
+	}
+	return IsSecuritySource(source)
+}
 
 type Service struct {
 	db         *sql.DB
@@ -69,7 +97,10 @@ func (s *Service) List(ctx context.Context, serverID string) (UpdateList, error)
 	out := UpdateList{ServerID: serverID, Updates: []linux.PackageUpdate{}}
 	for _, row := range rows {
 		out.Updates = append(out.Updates, linux.PackageUpdate{
-			Name: row.Name, InstalledVersion: row.InstalledVersion, CandidateVersion: row.CandidateVersion, Source: row.Source,
+			Name: row.Name, InstalledVersion: row.InstalledVersion, CandidateVersion: row.CandidateVersion,
+			Source:        row.Source,
+			Security:      securityValue(row.SecurityKnown, row.Security, row.Source),
+			SecurityKnown: row.SecurityKnown,
 		})
 	}
 	var refresh models.PackageRefresh
@@ -84,8 +115,8 @@ func (s *Service) List(ctx context.Context, serverID string) (UpdateList, error)
 	return out, nil
 }
 
-func (s *Service) Refresh(ctx context.Context, serverID string) (RefreshResult, error) {
-	return s.refresh(ctx, serverID, "user", false, "")
+func (s *Service) Refresh(ctx context.Context, serverID string, triggerType ...string) (RefreshResult, error) {
+	return s.refresh(ctx, serverID, upgradeTriggerType(triggerType), false, "")
 }
 
 // SaveReportedUpdates persists package update snapshots pushed by the agent
@@ -206,22 +237,10 @@ func (s *Service) UpgradeSelected(ctx context.Context, serverID string, names []
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	task, _, err := tasks.NewManager(s.tasks).CreateAndRun(ctx, tasks.CreateInput{
-		Type:         "package_upgrade_selected",
-		ServerID:     serverID,
-		ResourceType: "server",
-		ResourceID:   serverID,
-		TriggerType:  "user",
-		Summary:      "Upgrading selected packages",
-		ParamsJSON:   string(params),
-	}, tasks.Trigger{Type: "user", Manual: true})
-	if err != nil {
-		return tasks.Task{}, err
-	}
-	return task, nil
+	return s.createUpgradeTask(ctx, "package_upgrade_selected", "Upgrading selected packages", serverID, string(params), "user")
 }
 
-func (s *Service) UpgradeAll(ctx context.Context, serverID string) (tasks.Task, error) {
+func (s *Service) UpgradeAll(ctx context.Context, serverID string, triggerType ...string) (tasks.Task, error) {
 	srv, err := s.ensurePackageAllowed(ctx, serverID, true)
 	if err != nil {
 		return tasks.Task{}, err
@@ -229,18 +248,46 @@ func (s *Service) UpgradeAll(ctx context.Context, serverID string) (tasks.Task, 
 	if _, err := s.adapterFor(srv); err != nil {
 		return tasks.Task{}, err
 	}
+	return s.createUpgradeTask(ctx, "package_upgrade_all", "Upgrading all packages", serverID, "", upgradeTriggerType(triggerType))
+}
+
+// UpgradeSecurity 创建并运行安全包升级任务（PKG-API-011）。安全分类在任务
+// 执行时实时读取，因此这里不检查当前是否存在安全更新：任务在空集合上会直接
+// 完成，绝不退化为全部升级。
+func (s *Service) UpgradeSecurity(ctx context.Context, serverID string, triggerType ...string) (tasks.Task, error) {
+	srv, err := s.ensurePackageAllowed(ctx, serverID, true)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	if _, err := s.adapterFor(srv); err != nil {
+		return tasks.Task{}, err
+	}
+	return s.createUpgradeTask(ctx, TaskPackageUpgradeSecurity, "Upgrading security packages", serverID, "", upgradeTriggerType(triggerType))
+}
+
+func (s *Service) createUpgradeTask(ctx context.Context, taskType, summary, serverID, paramsJSON, triggerType string) (tasks.Task, error) {
 	task, _, err := tasks.NewManager(s.tasks).CreateAndRun(ctx, tasks.CreateInput{
-		Type:         "package_upgrade_all",
+		Type:         taskType,
 		ServerID:     serverID,
 		ResourceType: "server",
 		ResourceID:   serverID,
-		TriggerType:  "user",
-		Summary:      "Upgrading all packages",
-	}, tasks.Trigger{Type: "user", Manual: true})
+		TriggerType:  triggerType,
+		Summary:      summary,
+		ParamsJSON:   paramsJSON,
+	}, tasks.Trigger{Type: triggerType, Manual: triggerType == "user"})
 	if err != nil {
 		return tasks.Task{}, err
 	}
 	return task, nil
+}
+
+// upgradeTriggerType 归一自动/手动触发类型：自动更新协调任务传 scheduler，
+// 既有手动入口默认 user。
+func upgradeTriggerType(values []string) string {
+	if len(values) > 0 && strings.TrimSpace(values[0]) != "" {
+		return strings.TrimSpace(values[0])
+	}
+	return "user"
 }
 
 func (s *Service) ensurePackageAllowed(ctx context.Context, serverID string, requireSudo bool) (server.Server, error) {
@@ -396,6 +443,94 @@ func (s *Service) runUpgradeTask(tc tasks.TaskContext, all bool) error {
 	return s.runUpgradeSelected(ctx, task.ID, srv, adapter, names)
 }
 
+// RunUpgradeSecurityTask 是 package_upgrade_security 的注册 executor：复用
+// per-server 维护互斥，执行时实时读取可升级列表并按 Source 命中 security 过滤，
+// 只走 names 升级路径（PKG-API-011）。安全包为空时直接完成，绝不升级全部。
+func (s *Service) RunUpgradeSecurityTask(tc tasks.TaskContext) error {
+	ctx, task := tc.Context, tc.Task
+	if s.tasks == nil {
+		return panelerr.Validation("package_task_service_unavailable", "Package task service is unavailable")
+	}
+	serverID := firstNonEmpty(task.ServerID, task.ResourceID)
+	srv, err := s.ensurePackageAllowed(ctx, serverID, true)
+	if err != nil {
+		if isNotFoundError(err) {
+			_ = s.tasks.Cancel(ctx, task.ID, "Task cancelled because the server was removed")
+		}
+		return err
+	}
+	adapter, err := s.adapterFor(srv)
+	if err != nil {
+		return err
+	}
+	if task.Status == tasks.StatusRunning && s.tasks.HasRunningExecution(task.ID) {
+		return nil
+	}
+	// 与刷新/其它升级共用 per-server 维护互斥。
+	if !s.markRefreshing(serverID) {
+		return panelerr.Conflict("package_maintenance_in_progress", "Package maintenance is already running for this server")
+	}
+	defer s.clearRefreshing(serverID)
+	return s.runUpgradeSecurity(ctx, task.ID, srv, adapter)
+}
+
+func (s *Service) runUpgradeSecurity(ctx context.Context, taskID string, srv server.Server, adapter packageAdapter) error {
+	defer s.tasks.FinishExecution(taskID)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := s.tasks.Start(ctx, taskID); err != nil {
+		return err
+	}
+	_ = s.tasks.Advance(ctx, taskID, "running", "listing security package updates")
+	updates, err := s.listUpgradeable(ctx, srv, adapter)
+	if err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return err
+	}
+	names := securityPackageNames(updates)
+	if len(names) == 0 {
+		// 没有安全更新也要刷新缓存：实时列表可能已清空旧记录。
+		if err := s.replaceUpdates(ctx, srv.ID, updates); err != nil {
+			_ = s.tasks.Fail(ctx, taskID, err)
+			return err
+		}
+		return s.tasks.Complete(ctx, taskID, "No security updates available")
+	}
+	_ = s.tasks.AppendLog(ctx, taskID, "system", fmt.Sprintf("Upgrading %d security package(s)", len(names)))
+	if err := s.upgradePackages(ctx, taskID, srv, adapter, names, false); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return err
+	}
+	_ = s.tasks.Advance(ctx, taskID, "verifying", "refreshing package cache after upgrade")
+	remaining, err := s.listUpgradeable(ctx, srv, adapter)
+	if err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return err
+	}
+	if err := s.replaceUpdates(ctx, srv.ID, remaining); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return err
+	}
+	return s.tasks.Complete(ctx, taskID, "Security packages upgraded")
+}
+
+// securityPackageNames 选择安全更新包：权威判定已知时用 Agent 值，未知时
+// 回退到 apt archive/suite 命名启发式（Source 忽略大小写包含 security），与
+// 列表 API 的 Security 字段共用 securityValue，避免两处判定漂移。
+func securityPackageNames(updates []linux.PackageUpdate) []string {
+	names := make([]string, 0, len(updates))
+	for _, update := range updates {
+		if !securityValue(update.SecurityKnown, update.Security, update.Source) {
+			continue
+		}
+		if name := strings.TrimSpace(update.Name); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
 func upgradeNames(task tasks.Task) ([]string, error) {
 	raw := strings.TrimSpace(task.ParamsJSON)
 	if raw == "" || raw == "{}" {
@@ -479,6 +614,9 @@ func (s *Service) replaceUpdates(ctx context.Context, serverID string, updates [
 			records = append(records, models.PackageUpdate{
 				ServerID: serverID, Name: u.Name, InstalledVersion: u.InstalledVersion,
 				CandidateVersion: u.CandidateVersion, Source: u.Source, RefreshedAt: now,
+				// 持久化 Agent 权威判定；SecurityKnown=false 时 Security 不参与
+				// 展示与包选择，List/securityPackageNames 会回退启发式。
+				Security: u.Security, SecurityKnown: u.SecurityKnown,
 			})
 		}
 		if err := orm.New(tx).InsertBatch(ctx, records); err != nil {

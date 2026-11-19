@@ -38,11 +38,14 @@ const (
 )
 
 type Application struct {
-	ID                   string                   `json:"id"`
-	Version              int                      `json:"version"`
-	Kind                 string                   `json:"kind"`
-	Name                 string                   `json:"name"`
-	Enabled              bool                     `json:"enabled"`
+	ID      string `json:"id"`
+	Version int    `json:"version"`
+	Kind    string `json:"kind"`
+	Name    string `json:"name"`
+	Enabled bool   `json:"enabled"`
+	// AutoUpdateEnabled 是对象级“允许自动更新”开关（默认开）。它只决定
+	// 定时自动更新任务是否纳入本应用，不影响手动检查/立即更新/批量升级。
+	AutoUpdateEnabled    bool                     `json:"autoUpdateEnabled"`
 	ReconcileStopped     bool                     `json:"reconcileStopped,omitempty"`
 	DeletionRequested    bool                     `json:"deletionRequested,omitempty"`
 	SpecYAML             string                   `json:"specYaml"`
@@ -76,6 +79,7 @@ type ApplicationSummary struct {
 	ID                     string                   `json:"id"`
 	Name                   string                   `json:"name"`
 	Enabled                bool                     `json:"enabled"`
+	AutoUpdateEnabled      bool                     `json:"autoUpdateEnabled"`
 	ReconcileStopped       bool                     `json:"reconcileStopped,omitempty"`
 	ImageReference         string                   `json:"imageReference,omitempty"`
 	InstanceCount          int                      `json:"instanceCount"`
@@ -108,6 +112,23 @@ type ReverseProxyRule struct {
 	OriginServerIDs []string           `json:"originServerIds"`
 	AnyAccess       AnyAccessConfig    `json:"anyAccess"`
 	Paths           []ReverseProxyPath `json:"paths"`
+	// 每域名传输开关（FAC-RP-017）。nil 表示客户端未提交，服务端归一化为
+	// 默认值：HTTPS/HTTP2 开、HTTP3 关。
+	HTTPSEnabled *bool `json:"httpsEnabled,omitempty"`
+	HTTP2Enabled *bool `json:"http2Enabled,omitempty"`
+	HTTP3Enabled *bool `json:"http3Enabled,omitempty"`
+	// CustomServerDirectives 是该域名 server 块的自定义 nginx 单行指令
+	// （FAC-RP-017）；同名指令覆盖面板生成项，其余追加。
+	CustomServerDirectives []string `json:"customServerDirectives,omitempty"`
+	// HTTPPortMode 是该域名的 80 端口策略覆盖：nil/空=继承设施全局设置，
+	// serve=80 直接服务，redirect=有证书且 HTTPS 开启时跳转 443。
+	HTTPPortMode *string `json:"httpPortMode,omitempty"`
+	// HSTSEnabled 是该域名的 HSTS 覆盖：nil=继承设施全局 HSTS，true=启用，
+	// false=关闭；maxAge/includeSubDomains 仍取设施全局设置。
+	HSTSEnabled *bool `json:"hstsEnabled,omitempty"`
+	// ClientMaxBodySize 是该域名的请求体上限覆盖（nginx size 语法，1k..1024m）；
+	// nil/空=继承设施全局 clientMaxBodySize。
+	ClientMaxBodySize *string `json:"clientMaxBodySize,omitempty"`
 }
 
 type AnyAccessConfig struct {
@@ -160,6 +181,17 @@ type ReverseProxyRoute struct {
 	OriginServerIDs []string           `json:"originServerIds"`
 	AnyAccess       AnyAccessConfig    `json:"anyAccess"`
 	Paths           []ReverseProxyPath `json:"paths"`
+	// 解析后的每域名传输开关与自定义 server 指令（FAC-RP-017/FAC-RP-018）。
+	// 渲染/跨模块消费方直接使用这些已解析值，不再区分“未提交”。
+	HTTPSEnabled           bool     `json:"httpsEnabled"`
+	HTTP2Enabled           bool     `json:"http2Enabled"`
+	HTTP3Enabled           bool     `json:"http3Enabled"`
+	CustomServerDirectives []string `json:"customServerDirectives,omitempty"`
+	// 解析后的 80 端口策略覆盖（空=继承设施全局）。
+	HTTPPortMode string `json:"httpPortMode,omitempty"`
+	// 解析后的 HSTS 覆盖（nil=继承设施全局）与请求体上限覆盖（空=继承）。
+	HSTSEnabled       *bool  `json:"hstsEnabled,omitempty"`
+	ClientMaxBodySize string `json:"clientMaxBodySize,omitempty"`
 }
 
 type ApplicationFile struct {
@@ -456,6 +488,9 @@ type SaveInput struct {
 	DeploymentMode    string             `json:"deploymentMode"`
 	DeploymentServers []string           `json:"deploymentServers"`
 	ReverseProxy      []ReverseProxyRule `json:"reverseProxy"`
+	// AutoUpdateEnabled 的对象级开关默认开；nil 表示调用方未提交（创建默认
+	// true、更新保留当前值），避免旧客户端整笔保存时把开关静默关掉。
+	AutoUpdateEnabled *bool `json:"autoUpdateEnabled,omitempty"`
 }
 
 type OperationResult struct {

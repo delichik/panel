@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import SettingsView from './index.vue';
 import SettingsCard from '@/components/patterns/SettingsCard.vue';
 import SettingsSection from '@/components/patterns/SettingsSection.vue';
+import Select from '@/components/ui/Select.vue';
 import { keyAssetsApi } from '@/api/keyAssets';
 import { settingsApi } from '@/api/settings';
 import { systemApi } from '@/api/system';
@@ -30,6 +31,16 @@ function runtimeSettings(): RuntimeSettings {
     certificates: { email: '', dnsPropagationDelaySeconds: 30 },
     panel: { domain: 'localhost', tlsCertificateId: '' },
     agent: { downloadBaseUrl: '', downloadVerifyTls: false, transferTimeoutSeconds: 120 },
+    autoUpdate: {
+      appsEnabled: true,
+      packagesEnabled: false,
+      packagesMode: 'security',
+      scheduleTime: '04:00',
+      lastRunAt: '2026-08-01T00:00:00.000Z',
+      lastRunStatus: 'completed',
+      lastRunTaskId: 'task-auto-update-1',
+    },
+    imageRegistry: { endpoint: '', scheme: 'https' },
     jwtSecretConfigured: true,
   };
 }
@@ -102,6 +113,9 @@ beforeEach(() => {
   vi.spyOn(settingsApi, 'updateCertificates').mockImplementation(async () => runtimeSettings());
   vi.spyOn(settingsApi, 'updateAgent').mockImplementation(async () => runtimeSettings());
   vi.spyOn(settingsApi, 'updateBranding').mockImplementation(async () => runtimeSettings());
+  vi.spyOn(settingsApi, 'updateAutoUpdate').mockImplementation(async () => runtimeSettings());
+  vi.spyOn(settingsApi, 'updateImageRegistry').mockImplementation(async () => runtimeSettings());
+  vi.spyOn(settingsApi, 'runAutoUpdate').mockResolvedValue({ taskId: 'task-auto-update-manual-1' });
   vi.spyOn(settingsApi, 'updateServerVariables').mockImplementation(async () => []);
   vi.spyOn(systemApi, 'version').mockResolvedValue({ version: '0.2.0-dev', channel: 'dev', latestVersion: '', updateAvailable: false });
   vi.spyOn(keyAssetsApi, 'systemCertificates').mockResolvedValue([]);
@@ -195,8 +209,10 @@ describe('settings page sections use the shared WinUI SettingsCard shell', () =>
     { path: '/settings/security', heading: 'settingsPage.section.security', rows: 5 },
     { path: '/settings/certificates', heading: 'settingsPage.section.certificates', rows: 4 },
     { path: '/settings/agent', heading: 'settingsPage.section.agent', rows: 3 },
+    { path: '/settings/auto-update', heading: 'settingsPage.section.autoUpdate', rows: 5 },
     { path: '/settings/system-certificates', heading: 'settingsPage.section.systemCertificates', rows: 0 },
     { path: '/settings/system', heading: 'settingsPage.section.system', rows: 4 },
+    { path: '/settings/image-registry', heading: 'settingsPage.section.imageRegistry', rows: 2 },
   ];
 
   it('renders every non-appearance section with a heading and a single surface card of rows', async () => {
@@ -355,6 +371,159 @@ describe('settings partition auto-save', () => {
   });
 });
 
+describe('settings auto-update partition', () => {
+  it('autosaves only the four editable auto-update fields after toggling application updates', async () => {
+    const view = await render('/settings/auto-update');
+    enableAutoSaveTimers();
+
+    const appSwitch = view.findAll('[role="switch"]')[0]!;
+    expect(appSwitch.attributes('aria-checked')).toBe('true');
+    await appSwitch.trigger('click');
+    await advanceAutoSave();
+
+    expect(vi.mocked(settingsApi.updateAutoUpdate).mock.calls[0][0]).toEqual({
+      appsEnabled: false,
+      packagesEnabled: false,
+      packagesMode: 'security',
+      scheduleTime: '04:00',
+    });
+    expect(settingsApi.updateGeneral).not.toHaveBeenCalled();
+    // 只读的 lastRun 投影不得进入自动保存载荷。
+    expect(vi.mocked(settingsApi.updateAutoUpdate).mock.calls[0][0]).not.toHaveProperty('lastRunAt');
+    expect(view.find('[data-autosave-status]').attributes('data-autosave-state')).toBe('saved');
+  });
+
+  it('blocks an invalid HH:MM schedule time locally without sending a request', async () => {
+    const { t } = useI18n();
+    const view = await render('/settings/auto-update');
+    enableAutoSaveTimers();
+
+    await view.find('input[aria-label="Hour"]').setValue('25');
+    await advanceAutoSave();
+
+    expect(settingsApi.updateAutoUpdate).not.toHaveBeenCalled();
+    expect(view.find('[data-autosave-status]').attributes('data-autosave-state')).toBe('invalid');
+    expect(view.text()).toContain(t('settingsPage.validationAutoUpdateScheduleTime'));
+  });
+
+  it('runs the coordinator only after explicit confirmation without changing autosave fields', async () => {
+    const { t } = useI18n();
+    const view = await render('/settings/auto-update');
+    const runButton = view.findAll('button').find((item) => item.text() === t('settingsPage.autoUpdate.runNow'));
+    expect(runButton).toBeTruthy();
+    expect(runButton!.attributes('disabled')).toBeUndefined();
+
+    await runButton!.trigger('click');
+    await flushPromises();
+    expect(settingsApi.runAutoUpdate).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+
+    const confirmButton = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'))
+      .find((button) => button.textContent?.trim() === t('settingsPage.autoUpdate.runNow'));
+    expect(confirmButton).toBeTruthy();
+    confirmButton!.click();
+    await flushPromises();
+
+    expect(settingsApi.runAutoUpdate).toHaveBeenCalledTimes(1);
+    expect(settingsApi.updateAutoUpdate).not.toHaveBeenCalled();
+    expect(toastPush).toHaveBeenCalledWith(expect.objectContaining({
+      title: expect.stringContaining('task-auto-update-manual-1'),
+      tone: 'success',
+    }));
+  });
+
+  it('disables the manual run button when both switches are off', async () => {
+    const { t } = useI18n();
+    vi.mocked(settingsApi.runtime).mockResolvedValue({
+      ...runtimeSettings(),
+      autoUpdate: { appsEnabled: false, packagesEnabled: false, packagesMode: 'security', scheduleTime: '04:00' },
+    });
+    const view = await render('/settings/auto-update');
+    const runButton = view.findAll('button').find((item) => item.text() === t('settingsPage.autoUpdate.runNow'));
+    expect(runButton).toBeTruthy();
+    expect(runButton!.attributes('disabled')).toBeDefined();
+  });
+
+  it('disables the manual run button while a run is already active', async () => {
+    const { t } = useI18n();
+    vi.mocked(settingsApi.runtime).mockResolvedValue({
+      ...runtimeSettings(),
+      autoUpdate: {
+        appsEnabled: true,
+        packagesEnabled: false,
+        packagesMode: 'security',
+        scheduleTime: '04:00',
+        lastRunAt: '2026-08-01T04:00:00.000Z',
+        lastRunStatus: 'running',
+        lastRunTaskId: 'task-auto-update-active',
+      },
+    });
+    const view = await render('/settings/auto-update');
+    const runButton = view.findAll('button').find((item) => item.text() === t('settingsPage.autoUpdate.runNow'));
+    expect(runButton).toBeTruthy();
+    expect(runButton!.attributes('disabled')).toBeDefined();
+  });
+});
+
+describe('settings image registry partition', () => {
+  it('backfills the registry endpoint and scheme from the runtime GET payload', async () => {
+    const { t } = useI18n();
+    vi.mocked(settingsApi.runtime).mockResolvedValue({
+      ...runtimeSettings(),
+      imageRegistry: { endpoint: 'registry.example.com:5000', scheme: 'http' },
+    });
+    const view = await render('/settings/image-registry');
+
+    const endpoint = view.find<HTMLInputElement>(`input[aria-label="${t('settingsPage.imageRegistry.endpoint')}"]`);
+    expect(endpoint.element.value).toBe('registry.example.com:5000');
+    expect(view.findComponent(Select).props('modelValue')).toBe('http');
+  });
+
+  it('autosaves only the image registry payload after normalizing a bare host:port', async () => {
+    const { t } = useI18n();
+    const view = await render('/settings/image-registry');
+    enableAutoSaveTimers();
+
+    const endpoint = view.find<HTMLInputElement>(`input[aria-label="${t('settingsPage.imageRegistry.endpoint')}"]`);
+    await endpoint.setValue(' Registry.Example.COM:5000 ');
+    view.findComponent(Select).vm.$emit('update:modelValue', 'http');
+    await advanceAutoSave();
+
+    expect(vi.mocked(settingsApi.updateImageRegistry).mock.calls[0]![0]).toEqual({
+      endpoint: 'registry.example.com:5000',
+      scheme: 'http',
+    });
+    expect(settingsApi.updateGeneral).not.toHaveBeenCalled();
+    expect(view.find('[data-autosave-status]').attributes('data-autosave-state')).toBe('saved');
+  });
+
+  it('blocks an endpoint with a scheme, path, query, userinfo, whitespace, quote, backslash or invalid port locally', async () => {
+    const { t } = useI18n();
+    const view = await render('/settings/image-registry');
+    enableAutoSaveTimers();
+
+    const endpoint = view.find<HTMLInputElement>(`input[aria-label="${t('settingsPage.imageRegistry.endpoint')}"]`);
+    const invalidEndpoints = [
+      'https://registry.example.com',
+      'registry.example.com/v2',
+      'registry.example.com?x=1',
+      'user@registry.example.com',
+      'registry example.com',
+      '"registry.example.com"',
+      'registry\\example.com',
+      'registry.example.com:0',
+      'registry.example.com:65536',
+    ];
+    for (const invalid of invalidEndpoints) {
+      await endpoint.setValue(invalid);
+      await advanceAutoSave();
+      expect(settingsApi.updateImageRegistry, invalid).not.toHaveBeenCalled();
+      expect(view.find('[data-autosave-status]').attributes('data-autosave-state')).toBe('invalid');
+    }
+    expect(view.text()).toContain(t('settingsPage.validationImageRegistryEndpoint'));
+  });
+});
+
 describe('settings page section navigation', () => {
   it('uses one horizontal WinUI tab strip instead of a second sidebar', async () => {
     const { t } = useI18n();
@@ -368,7 +537,10 @@ describe('settings page section navigation', () => {
     expect(tablist.classes()).toContain('overflow-y-hidden');
 
     const tabs = view.findAll('[role="tab"]');
-    expect(tabs).toHaveLength(8);
+    expect(tabs).toHaveLength(10);
+    expect(tabs.map((tab) => tab.text())).toContain(t('settingsPage.section.imageRegistry'));
+    // 镜像仓库是第 10 个分区。
+    expect(tabs[9]!.text()).toBe(t('settingsPage.section.imageRegistry'));
     const selected = view.find('[role="tab"][aria-selected="true"]');
     expect(selected.text()).toBe(t('settingsPage.section.security'));
   });

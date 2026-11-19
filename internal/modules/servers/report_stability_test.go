@@ -60,9 +60,12 @@ func TestApplyReportStabilityRecordsOnlyConnectedToDisconnected(t *testing.T) {
 
 func TestApplyReportStabilityPrunesOutsideOneHour(t *testing.T) {
 	base := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
+	// 70 分钟后滚动窗口边界为 base+10m；这里把最晚事件放在 base+9m（年龄 61 分钟），
+	// 明确落在窗口外。边界值 base+10m 本身按“包含”语义保留（AGT-RPT-005 未规定
+	// 排他边界，实现用 !at.Before(cutoff) 含边界）。
 	traits := map[string]string{
 		agentcontract.TraitReportStatus:           agentcontract.ReportStatusConnected,
-		agentcontract.TraitReportDisconnectEvents: serializeDisconnectEvents([]time.Time{base, base.Add(10 * time.Minute)}),
+		agentcontract.TraitReportDisconnectEvents: serializeDisconnectEvents([]time.Time{base, base.Add(9 * time.Minute)}),
 	}
 
 	applyReportStability(traits, base.Add(70*time.Minute), false)

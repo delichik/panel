@@ -73,7 +73,9 @@ func (r *LocalRuntime) VerifyExecution(ctx context.Context, req contract.Runtime
 	}
 	result.ContainerID = inspect.ID
 	result.ObservedState = dockerStateToRuntime(inspect.State.Status, inspect.State.Running, inspect.State.ExitCode)
-	result.ObservedImageDigest = imageDigestFromReference(inspect.Config.Image)
+	// Report the digest of the image actually running, resolved from the
+	// container's immutable image ID when the reference carries only a tag.
+	result.ObservedImageDigest = r.imageDigestFromInspect(ctx, inspect)
 	if req.Action == "stop" {
 		return result, !inspect.State.Running, nil
 	}

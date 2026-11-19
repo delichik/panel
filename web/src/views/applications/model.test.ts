@@ -14,22 +14,41 @@ import {
   diffApplications,
   diffFacility,
   diffFacilityRecord,
+  domainClientMaxBodySize,
+  domainHstsMode,
+  domainHttpPortMode,
+  domainTransportSwitches,
   draftFromApplication,
+  effectiveDomainTransport,
   facilityDraftFromConfig,
+  facilityDomainSaveInput,
   facilityRecordDraftFromRecord,
   facilitySaveInputFromDraft,
+  formatCustomDirectives,
+  hstsEnabledFromMode,
   instanceOperationStatus,
+  isValidDomainClientMaxBodySize,
+  isValidDomainHstsMode,
+  isValidDomainHttpPortMode,
+  isValidImageUpdateIntervalSeconds,
+  isValidNginxClientMaxBodySize,
   makeFacilityDomain,
   makeFacilityPath,
   makeKeyValueRow,
   makeNewFacilityDomainRecord,
   makePortRow,
+  makeProxyRule,
+  normalizeImageUpdateIntervalSeconds,
+  normalizedCustomDirectives,
   panelFileMountOptions,
+  parseCustomDirectivesText,
   saveInputFromDraft,
   shouldPollApplicationRuntime,
   specYamlFromDraft,
   statusTone,
   validateApplicationDraft,
+  validateCustomDirectives,
+  validateCustomDirectiveLine,
   validateFileName,
   validateFacilityDraft,
   validateFacilityDomainFields,
@@ -692,5 +711,228 @@ describe('facility single config record model', () => {
 
     expect(diffFacilityRecord(null, base)).toEqual({ added: 2, changed: 0, removed: 0, warnings: 0 });
     expect(diffFacilityRecord(base, null)).toEqual({ added: 0, changed: 0, removed: 0, warnings: 0 });
+  });
+});
+
+describe('per-domain transport switches and custom nginx directives', () => {
+  it('defaults to HTTPS on, HTTP/2 on, HTTP/3 off and preserves explicit values when cloning', () => {
+    expect(domainTransportSwitches({})).toEqual({ httpsEnabled: true, http2Enabled: true, http3Enabled: false });
+
+    const domain = cloneFacilityDomain({ domain: 'a.example.test', originServerIds: ['srv-1'], anyAccess: { enabled: false }, paths: [], httpsEnabled: false, http2Enabled: true, http3Enabled: true, customServerDirectives: ['client_max_body_size 100m;'] });
+    expect(domain.httpsEnabled).toBe(false);
+    expect(domain.http3Enabled).toBe(true);
+    expect(domain.customServerDirectives).toEqual(['client_max_body_size 100m;']);
+
+    const rule = cloneProxyRules([{ domain: 'api.example.test', targetPort: 8080, originServerIds: ['srv-1'], anyAccess: { enabled: false }, paths: [], httpsEnabled: false, customServerDirectives: ['add_header X-Test "1";'] }])[0];
+    expect(rule.httpsEnabled).toBe(false);
+    expect(rule.customServerDirectives).toEqual(['add_header X-Test "1";']);
+
+    expect(makeFacilityDomain()).toMatchObject({ httpsEnabled: true, http2Enabled: true, http3Enabled: false, customServerDirectives: [] });
+  });
+
+  it('normalizes H2/H3 to false when HTTPS is disabled at save time', () => {
+    expect(effectiveDomainTransport({ httpsEnabled: false, http2Enabled: true, http3Enabled: true })).toEqual({ httpsEnabled: false, http2Enabled: false, http3Enabled: false });
+    const saved = facilityDomainSaveInput({ domain: 'a.example.test', originServerIds: ['srv-1'], anyAccess: { enabled: false }, paths: [], httpsEnabled: false, http2Enabled: true, http3Enabled: true });
+    expect(saved).toMatchObject({ httpsEnabled: false, http2Enabled: false, http3Enabled: false });
+  });
+
+  it('treats transport switch and custom directive edits as a changed record', () => {
+    const base = facilityRecordDraftFromRecord({ recordId: 'a.example.test', kind: 'facility_domain', version: 1, domain: { domain: 'a.example.test', originServerIds: ['srv-1'], anyAccess: { enabled: false }, paths: [{ path: '/', ruleType: 'static', sourceType: 'uploaded_file', assetName: 'index.html' }] }, updatedAt: '' });
+    const changed = cloneFacilityDomain(base);
+    changed.http3Enabled = true;
+    expect(diffFacilityRecord(base, changed)).toEqual({ added: 0, changed: 1, removed: 0, warnings: 0 });
+
+    const directives = cloneFacilityDomain(base);
+    directives.customServerDirectives = ['client_max_body_size 200m'];
+    expect(diffFacilityRecord(base, directives)).toEqual({ added: 0, changed: 1, removed: 0, warnings: 0 });
+  });
+
+  it('normalizes the per-domain port 80 policy through defaults, cloning, saving, and diffing', () => {
+    expect(makeProxyRule().httpPortMode).toBe('');
+    expect(makeFacilityDomain().httpPortMode).toBe('');
+    expect(domainHttpPortMode(undefined)).toBe('');
+    expect(domainHttpPortMode({ httpPortMode: 'serve' })).toBe('serve');
+    expect(domainHttpPortMode({ httpPortMode: 'redirect' })).toBe('redirect');
+    expect(domainHttpPortMode({ httpPortMode: 'every' })).toBe('');
+
+    const rule = cloneProxyRules([{ domain: 'api.example.test', targetPort: 8080, originServerIds: ['srv-1'], anyAccess: { enabled: false }, paths: [], httpPortMode: 'redirect' }])[0];
+    expect(rule.httpPortMode).toBe('redirect');
+    const domain = cloneFacilityDomain({ domain: 'a.example.test', originServerIds: ['srv-1'], anyAccess: { enabled: false }, paths: [], httpPortMode: 'serve' });
+    expect(domain.httpPortMode).toBe('serve');
+    expect(facilityDomainSaveInput({ ...domain, httpPortMode: 'redirect' }).httpPortMode).toBe('redirect');
+    expect(facilityDomainSaveInput({ ...domain, httpPortMode: undefined }).httpPortMode).toBe('');
+    const config = {
+      id: 'reverse-proxy',
+      version: 1,
+      deploymentServers: ['srv-1'],
+      domains: [domain],
+      staticAssets: [],
+      routeSummaries: [],
+      applicationRoutes: [],
+      updatedAt: '',
+      routes: 1,
+      enabledServers: ['srv-1'],
+    } satisfies ReverseProxyConfig;
+    expect(facilitySaveInputFromDraft(facilityDraftFromConfig(config)).domains[0].httpPortMode).toBe('serve');
+
+    const appDraft = draftFromApplication({ ...app, reverseProxy: [{ ...app.reverseProxy[0], httpPortMode: 'redirect' }] });
+    expect(appDraft.reverseProxy[0].httpPortMode).toBe('redirect');
+    expect(saveInputFromDraft(appDraft).reverseProxy[0].httpPortMode).toBe('redirect');
+    expect(saveInputFromDraft(draftFromApplication(app)).reverseProxy[0].httpPortMode).toBe('');
+
+    const base = facilityRecordDraftFromRecord({ recordId: 'a.example.test', kind: 'facility_domain', version: 1, domain: { domain: 'a.example.test', originServerIds: ['srv-1'], anyAccess: { enabled: false }, paths: [{ path: '/', ruleType: 'static', sourceType: 'uploaded_file', assetName: 'index.html' }] }, updatedAt: '' });
+    const changed = cloneFacilityDomain(base);
+    changed.httpPortMode = 'redirect';
+    expect(diffFacilityRecord(base, changed)).toEqual({ added: 0, changed: 1, removed: 0, warnings: 0 });
+  });
+
+  it('rejects an unknown per-domain port 80 policy', () => {
+    expect(isValidDomainHttpPortMode('')).toBe(true);
+    expect(isValidDomainHttpPortMode('serve')).toBe(true);
+    expect(isValidDomainHttpPortMode('redirect')).toBe(true);
+    expect(isValidDomainHttpPortMode('every')).toBe(false);
+    const base = facilityRecordDraftFromRecord({ recordId: 'a.example.test', kind: 'facility_domain', version: 1, domain: { domain: 'a.example.test', originServerIds: ['srv-1'], anyAccess: { enabled: false }, paths: [{ path: '/', ruleType: 'static', sourceType: 'uploaded_file', assetName: 'index.html' }] }, updatedAt: '' });
+    expect(validateFacilityRecordDraft({ ...base, httpPortMode: 'every' as never }, ['srv-1']).httpPortMode).toBe('applicationsPage.validationHttpPortMode');
+    const applicationDraft = draftFromApplication(app);
+    applicationDraft.reverseProxy = [{ ...app.reverseProxy[0], httpPortMode: 'every' as never }];
+    expect(validateApplicationDraft(applicationDraft).httpPortMode).toBe('applicationsPage.validationHttpPortMode');
+  });
+
+  it('normalizes per-domain HSTS and request body limits through defaults, cloning, saving, and diffing', () => {
+    expect(makeProxyRule()).not.toHaveProperty('hstsEnabled');
+    expect(makeFacilityDomain()).not.toHaveProperty('hstsEnabled');
+    expect(makeProxyRule().clientMaxBodySize).toBe('');
+    expect(makeFacilityDomain().clientMaxBodySize).toBe('');
+    expect(domainHstsMode(undefined)).toBe('');
+    expect(domainHstsMode({ hstsEnabled: true })).toBe('on');
+    expect(domainHstsMode({ hstsEnabled: false })).toBe('off');
+    expect(hstsEnabledFromMode('on')).toBe(true);
+    expect(hstsEnabledFromMode('off')).toBe(false);
+    expect(hstsEnabledFromMode('')).toBeUndefined();
+    expect(isValidDomainHstsMode('on')).toBe(true);
+    expect(isValidDomainHstsMode('every')).toBe(false);
+
+    const domain = cloneFacilityDomain({ domain: 'a.example.test', originServerIds: ['srv-1'], anyAccess: { enabled: false }, paths: [], hstsEnabled: false, clientMaxBodySize: '128m' });
+    expect(domain.hstsEnabled).toBe(false);
+    expect(domain.clientMaxBodySize).toBe('128m');
+    expect(facilityDomainSaveInput(domain)).toMatchObject({ hstsEnabled: false, clientMaxBodySize: '128m' });
+
+    const inherited = cloneFacilityDomain({ domain: 'a.example.test', originServerIds: ['srv-1'], anyAccess: { enabled: false }, paths: [] });
+    expect(inherited).not.toHaveProperty('hstsEnabled');
+    expect(inherited.clientMaxBodySize).toBe('');
+    const inheritedPayload = facilityDomainSaveInput(inherited);
+    expect(inheritedPayload).not.toHaveProperty('hstsEnabled');
+    expect(inheritedPayload.clientMaxBodySize).toBe('');
+
+    const rule = cloneProxyRules([{ domain: 'api.example.test', targetPort: 8080, originServerIds: ['srv-1'], anyAccess: { enabled: false }, paths: [], hstsEnabled: true, clientMaxBodySize: '2m' }])[0];
+    expect(rule).toMatchObject({ hstsEnabled: true, clientMaxBodySize: '2m' });
+    const inheritedRule = cloneProxyRules([{ domain: 'api.example.test', targetPort: 8080, originServerIds: ['srv-1'], anyAccess: { enabled: false }, paths: [] }])[0];
+    expect(inheritedRule).not.toHaveProperty('hstsEnabled');
+    expect(inheritedRule.clientMaxBodySize).toBe('');
+
+    const appDraft = draftFromApplication({ ...app, reverseProxy: [{ ...app.reverseProxy[0], hstsEnabled: true, clientMaxBodySize: '16m' }] });
+    expect(saveInputFromDraft(appDraft).reverseProxy[0]).toMatchObject({ hstsEnabled: true, clientMaxBodySize: '16m' });
+    expect(saveInputFromDraft(draftFromApplication(app)).reverseProxy[0]).not.toHaveProperty('hstsEnabled');
+
+    const base = facilityRecordDraftFromRecord({ recordId: 'a.example.test', kind: 'facility_domain', version: 1, domain: { domain: 'a.example.test', originServerIds: ['srv-1'], anyAccess: { enabled: false }, paths: [{ path: '/', ruleType: 'static', sourceType: 'uploaded_file', assetName: 'index.html' }] }, updatedAt: '' });
+    const changedHsts = cloneFacilityDomain(base);
+    changedHsts.hstsEnabled = false;
+    expect(diffFacilityRecord(base, changedHsts)).toEqual({ added: 0, changed: 1, removed: 0, warnings: 0 });
+
+    const changedBody = cloneFacilityDomain(base);
+    changedBody.clientMaxBodySize = '64m';
+    expect(diffFacilityRecord(base, changedBody)).toEqual({ added: 0, changed: 1, removed: 0, warnings: 0 });
+  });
+
+  it('validates per-domain request body limits locally and allows inheritance', () => {
+    expect(isValidDomainClientMaxBodySize('')).toBe(true);
+    expect(isValidDomainClientMaxBodySize(undefined)).toBe(true);
+    expect(isValidDomainClientMaxBodySize('   ')).toBe(true);
+    expect(isValidDomainClientMaxBodySize('1k')).toBe(true);
+    expect(isValidDomainClientMaxBodySize('1024m')).toBe(true);
+    expect(isValidDomainClientMaxBodySize('1g')).toBe(true);
+    expect(isValidDomainClientMaxBodySize('1')).toBe(false);
+    expect(isValidDomainClientMaxBodySize('1025m')).toBe(false);
+    expect(isValidDomainClientMaxBodySize('50mb')).toBe(false);
+    expect(isValidDomainClientMaxBodySize('1.5m')).toBe(false);
+    expect(domainClientMaxBodySize({ clientMaxBodySize: ' 8m ' })).toBe('8m');
+
+    const applicationDraft = draftFromApplication(app);
+    applicationDraft.reverseProxy[0].clientMaxBodySize = '50mb';
+    expect(validateApplicationDraft(applicationDraft).clientMaxBodySize).toBe('applicationsPage.transport.clientMaxBodySizeInvalid');
+
+    const facilityDraft = facilityRecordDraftFromRecord({ recordId: 'a.example.test', kind: 'facility_domain', version: 1, domain: { domain: 'a.example.test', originServerIds: ['srv-1'], anyAccess: { enabled: false }, paths: [{ path: '/', ruleType: 'static', sourceType: 'uploaded_file', assetName: 'index.html' }] }, updatedAt: '' });
+    facilityDraft.clientMaxBodySize = '2g';
+    expect(validateFacilityRecordDraft(facilityDraft, ['srv-1']).clientMaxBodySize).toBe('applicationsPage.transport.clientMaxBodySizeInvalid');
+
+    const aggregate = facilityDraftFromConfig({
+      id: 'reverse-proxy',
+      version: 1,
+      deploymentServers: ['srv-1'],
+      domains: [{ domain: 'a.example.test', originServerIds: ['srv-1'], anyAccess: { enabled: false }, paths: [{ path: '/', ruleType: 'static', sourceType: 'uploaded_file', assetName: 'index.html' }] }],
+      staticAssets: [],
+      routeSummaries: [],
+      applicationRoutes: [],
+      updatedAt: '',
+      routes: 1,
+      enabledServers: ['srv-1'],
+    });
+    aggregate.domains[0].clientMaxBodySize = '0';
+    expect(validateFacilityDraft(aggregate).clientMaxBodySize).toBe('applicationsPage.transport.clientMaxBodySizeInvalid');
+  });
+
+  it('normalizes the image rolling-update node interval to an integer between 0 and 600', () => {
+    expect(normalizeImageUpdateIntervalSeconds(0)).toBe(0);
+    expect(normalizeImageUpdateIntervalSeconds(45)).toBe(45);
+    expect(normalizeImageUpdateIntervalSeconds(600)).toBe(600);
+    expect(normalizeImageUpdateIntervalSeconds(601)).toBe(0);
+    expect(normalizeImageUpdateIntervalSeconds(-1)).toBe(0);
+    expect(normalizeImageUpdateIntervalSeconds(1.5)).toBe(0);
+    expect(normalizeImageUpdateIntervalSeconds('30')).toBe(0);
+    expect(normalizeImageUpdateIntervalSeconds(undefined)).toBe(0);
+    expect(isValidImageUpdateIntervalSeconds(0)).toBe(true);
+    expect(isValidImageUpdateIntervalSeconds(600)).toBe(true);
+    expect(isValidImageUpdateIntervalSeconds(600.5)).toBe(false);
+    expect(isValidImageUpdateIntervalSeconds(undefined)).toBe(false);
+  });
+
+  it('accepts single-line directives and rejects blocks, comments, and reserved names', () => {
+    expect(validateCustomDirectiveLine('client_max_body_size 100m;', 'server')).toBeNull();
+    expect(validateCustomDirectiveLine('add_header X-Test "1"', 'http')).toBeNull();
+    expect(validateCustomDirectiveLine('location / {', 'server')).toBe('applicationsPage.customDirectives.invalidSyntax');
+    expect(validateCustomDirectiveLine('# comment', 'server')).toBe('applicationsPage.customDirectives.invalidSyntax');
+    expect(validateCustomDirectiveLine('listen 443 ssl;', 'server')).toBe('applicationsPage.customDirectives.forbiddenServer');
+    expect(validateCustomDirectiveLine('proxy_pass http://127.0.0.1:8080;', 'server')).toBe('applicationsPage.customDirectives.forbiddenServer');
+    expect(validateCustomDirectiveLine('resolver 8.8.8.8;', 'http')).toBe('applicationsPage.customDirectives.forbiddenHttp');
+  });
+
+  it('normalizes directives by appending semicolons and keeping the last same-name line', () => {
+    const lines = parseCustomDirectivesText('client_max_body_size 100m\n\nclient_max_body_size 200m;\nadd_header X-Test "1"');
+    const result = validateCustomDirectives(lines, 'server');
+    expect(result.errors).toEqual([]);
+    expect(result.normalized).toEqual(['client_max_body_size 200m;', 'add_header X-Test "1";']);
+    expect(formatCustomDirectives(result.normalized)).toBe('client_max_body_size 200m;\nadd_header X-Test "1";');
+    expect(normalizedCustomDirectives(['location /foo {'], 'server')).toBeNull();
+  });
+
+  it('blocks saving when a custom directive line is invalid', () => {
+    const draft = facilityRecordDraftFromRecord({ recordId: 'a.example.test', kind: 'facility_domain', version: 1, domain: { domain: 'a.example.test', originServerIds: ['srv-1'], anyAccess: { enabled: false }, paths: [{ path: '/', ruleType: 'static', sourceType: 'uploaded_file', assetName: 'index.html' }], customServerDirectives: ['listen 80;'] }, updatedAt: '' });
+    expect(validateFacilityRecordDraft(draft, ['srv-1']).customDirectives).toBe('applicationsPage.customDirectives.forbiddenServer');
+  });
+
+  it('validates the entrance client_max_body_size nginx size range locally', () => {
+    expect(isValidNginxClientMaxBodySize('50m')).toBe(true);
+    expect(isValidNginxClientMaxBodySize('512K')).toBe(true);
+    expect(isValidNginxClientMaxBodySize('1024k')).toBe(true);
+    expect(isValidNginxClientMaxBodySize('1g')).toBe(true);
+    expect(isValidNginxClientMaxBodySize('1024m')).toBe(true);
+    // Below 1k, above 1024m, bad units, fractions, and whitespace-only are rejected.
+    expect(isValidNginxClientMaxBodySize('1')).toBe(false);
+    expect(isValidNginxClientMaxBodySize('0')).toBe(false);
+    expect(isValidNginxClientMaxBodySize('1025m')).toBe(false);
+    expect(isValidNginxClientMaxBodySize('2g')).toBe(false);
+    expect(isValidNginxClientMaxBodySize('50mb')).toBe(false);
+    expect(isValidNginxClientMaxBodySize('1.5m')).toBe(false);
+    expect(isValidNginxClientMaxBodySize('')).toBe(false);
   });
 });

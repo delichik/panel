@@ -215,6 +215,17 @@ func WithRuntimeEvents(events runtimeevents.EventWriter) Option {
 	return func(s *Service) { s.events = events }
 }
 
+// WithImageDigestResolver replaces the default registry-backed image digest
+// resolver. A nil resolver keeps the default so optional wiring cannot disable
+// image resolution by accident.
+func WithImageDigestResolver(resolver ImageDigestResolver) Option {
+	return func(s *Service) {
+		if resolver != nil {
+			s.imageResolver = resolver
+		}
+	}
+}
+
 func (s *Service) SetReverseProxyReconciler(reconciler ReverseProxyReconciler) {
 	s.proxyReconciler = reconciler
 }
@@ -464,7 +475,7 @@ func (s *Service) ListSummaries(ctx context.Context, page, pageSize int, query s
 	}
 	total := int(total64)
 	var rows []models.Application
-	err = base.Select("id", "name", "enabled", "reconcile_stopped", "image_reference", "image_update_available", "job_id", "namespace", "last_error", "planning_error_json", "updated_at").
+	err = base.Select("id", "name", "enabled", "auto_update_enabled", "reconcile_stopped", "image_reference", "image_update_available", "job_id", "namespace", "last_error", "planning_error_json", "updated_at").
 		OrderBy("name ASC", "id ASC").Limit(pageSize).Offset((page-1)*pageSize).All(ctx, &rows)
 	if err != nil {
 		return httpx.ListPage[ApplicationSummary]{}, err
@@ -477,6 +488,7 @@ func (s *Service) ListSummaries(ctx context.Context, page, pageSize int, query s
 			ID:                   m.ID,
 			Name:                 m.Name,
 			Enabled:              m.Enabled,
+			AutoUpdateEnabled:    m.AutoUpdateEnabled,
 			ReconcileStopped:     m.ReconcileStopped,
 			ImageReference:       m.ImageReference,
 			ImageUpdateAvailable: m.ImageUpdateAvailable,
@@ -674,6 +686,7 @@ func (s *Service) createWithFilesID(ctx context.Context, appID string, in SaveIn
 		Kind:              ApplicationKindUser,
 		Name:              in.Name,
 		Enabled:           in.Enabled,
+		AutoUpdateEnabled: resolveAutoUpdateEnabled(in.AutoUpdateEnabled, true),
 		SpecYAML:          in.SpecYAML,
 		PersistentPath:    prepared.persistentPath,
 		DeploymentMode:    prepared.deploymentMode,
@@ -793,6 +806,7 @@ func (s *Service) updateWithFilesVersioned(ctx context.Context, appID string, ex
 		app.Name = prepared.spec.Name
 	}
 	app.Enabled = in.Enabled
+	app.AutoUpdateEnabled = resolveAutoUpdateEnabled(in.AutoUpdateEnabled, current.AutoUpdateEnabled)
 	app.SpecYAML = in.SpecYAML
 	app.PersistentPath = prepared.persistentPath
 	app.DeploymentMode = prepared.deploymentMode
@@ -2226,6 +2240,7 @@ func replaceApplicationReverseProxyRoutes(ctx context.Context, exec orm.Executor
 }
 
 func reverseProxyRuleToModel(appID string, rule ReverseProxyRule) models.ReverseProxyRoute {
+	rule = resolveReverseProxyRule(rule)
 	anyAccessRaw, _ := json.Marshal(rule.AnyAccess)
 	var anyAccess map[string]any
 	_ = json.Unmarshal(anyAccessRaw, &anyAccess)
@@ -2242,6 +2257,15 @@ func reverseProxyRuleToModel(appID string, rule ReverseProxyRule) models.Reverse
 		PathsJSON:       paths,
 		CreatedAt:       now,
 		UpdatedAt:       now,
+		// 整应用保存是 delete+insert：四个新列必须显式写入，依赖 DB 默认值会
+		// 把用户配置的三开关与自定义指令静默清成默认。
+		HTTPSEnabled:           *rule.HTTPSEnabled,
+		HTTP2Enabled:           *rule.HTTP2Enabled,
+		HTTP3Enabled:           *rule.HTTP3Enabled,
+		CustomServerDirectives: normalizeReverseProxyServerDirectives(rule.CustomServerDirectives),
+		HTTPPortMode:           derefReverseProxyHTTPPortMode(rule.HTTPPortMode),
+		HSTSEnabled:            storedReverseProxyHSTS(rule.HSTSEnabled),
+		ClientMaxBodySize:      derefReverseProxyClientMaxBodySize(rule.ClientMaxBodySize),
 	}
 }
 
@@ -2252,12 +2276,22 @@ func reverseProxyRouteFromModel(m models.ReverseProxyRoute) ReverseProxyRule {
 	pathsRaw, _ := json.Marshal(m.PathsJSON)
 	var paths []ReverseProxyPath
 	_ = json.Unmarshal(pathsRaw, &paths)
+	// 响应回填已解析值：读取路径一律返回显式指针，保存往返不会因 nil/默认值
+	// 差异触发无意义的配置变更。
+	https, http2, http3 := m.HTTPSEnabled, m.HTTP2Enabled, m.HTTP3Enabled
 	return ReverseProxyRule{
-		Domain:          m.Domain,
-		TargetPort:      m.TargetPort,
-		OriginServerIDs: append([]string(nil), m.OriginServerIDs...),
-		AnyAccess:       anyAccess,
-		Paths:           paths,
+		Domain:                 m.Domain,
+		TargetPort:             m.TargetPort,
+		OriginServerIDs:        append([]string(nil), m.OriginServerIDs...),
+		AnyAccess:              anyAccess,
+		Paths:                  paths,
+		HTTPSEnabled:           boolPtr(https),
+		HTTP2Enabled:           boolPtr(http2),
+		HTTP3Enabled:           boolPtr(http3),
+		CustomServerDirectives: normalizeReverseProxyServerDirectives(m.CustomServerDirectives),
+		HTTPPortMode:           reverseProxyHTTPPortModePtr(strings.ToLower(strings.TrimSpace(m.HTTPPortMode))),
+		HSTSEnabled:            reverseProxyHSTSOverridePtr(m.HSTSEnabled),
+		ClientMaxBodySize:      reverseProxyClientMaxBodySizePtr(m.ClientMaxBodySize),
 	}
 }
 func (s *Service) insertApplicationWithRoutes(ctx context.Context, app Application) error {
@@ -2329,8 +2363,8 @@ func (s *Service) updateApplication(ctx context.Context, app Application) error 
 		return err
 	}
 
-	_, err = orm.RawExec(ctx, s.db, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,deletion_requested=?,spec_yaml=?,deployment_mode=?,deployment_server_ids_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=?`,
-		applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, app.DeploymentMode, string(deploymentServers), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID)
+	_, err = orm.RawExec(ctx, s.db, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,auto_update_enabled=?,deletion_requested=?,spec_yaml=?,deployment_mode=?,deployment_server_ids_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=?`,
+		applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.AutoUpdateEnabled), boolInt(app.DeletionRequested), app.SpecYAML, app.DeploymentMode, string(deploymentServers), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID)
 	return err
 }
 
@@ -2464,8 +2498,8 @@ func (s *Service) updateApplicationWithExecIfVersion(ctx context.Context, exec *
 		return err
 	}
 
-	result, err := orm.RawExec(ctx, exec, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,deletion_requested=?,spec_yaml=?,deployment_mode=?,deployment_server_ids_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=? AND version=?`,
-		applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, app.DeploymentMode, string(deploymentServers), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID, expectedVersion)
+	result, err := orm.RawExec(ctx, exec, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,auto_update_enabled=?,deletion_requested=?,spec_yaml=?,deployment_mode=?,deployment_server_ids_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=? AND version=?`,
+		applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.AutoUpdateEnabled), boolInt(app.DeletionRequested), app.SpecYAML, app.DeploymentMode, string(deploymentServers), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID, expectedVersion)
 	if err != nil {
 		return err
 	}
@@ -2495,8 +2529,8 @@ func (s *Service) updateApplicationWithExec(ctx context.Context, exec orm.Execut
 		return err
 	}
 
-	_, err = orm.RawExec(ctx, exec, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,deletion_requested=?,spec_yaml=?,deployment_mode=?,deployment_server_ids_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=?`,
-		applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, app.DeploymentMode, string(deploymentServers), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID)
+	_, err = orm.RawExec(ctx, exec, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,auto_update_enabled=?,deletion_requested=?,spec_yaml=?,deployment_mode=?,deployment_server_ids_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=?`,
+		applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.AutoUpdateEnabled), boolInt(app.DeletionRequested), app.SpecYAML, app.DeploymentMode, string(deploymentServers), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID)
 	return err
 }
 
@@ -3787,6 +3821,14 @@ func normalizeReverseProxyRules(rules []ReverseProxyRule) ([]ReverseProxyRule, e
 		if rule.TargetPort <= 0 || rule.TargetPort > 65535 {
 			return nil, panelerr.Validation("application_reverse_proxy_target_port_invalid", "reverse proxy target port must be between 1 and 65535")
 		}
+		httpPortMode, modeOK := normalizeReverseProxyHTTPPortMode(rule.HTTPPortMode)
+		if !modeOK {
+			return nil, panelerr.Validation("application_reverse_proxy_http_port_mode_invalid", "reverse proxy HTTP port mode must be serve or redirect")
+		}
+		clientMaxBodySize, sizeOK := normalizedReverseProxyClientMaxBodySize(rule.ClientMaxBodySize)
+		if !sizeOK {
+			return nil, panelerr.Validation("application_reverse_proxy_client_max_body_size_invalid", "reverse proxy client max body size must be an nginx size between 1k and 1024m")
+		}
 		// Origin membership and the primary origin are resolved by the facility
 		// reverse-proxy policy from the global gateway nodes and the deployment
 		// targets; any client-provided values are ignored.
@@ -3816,13 +3858,20 @@ func normalizeReverseProxyRules(rules []ReverseProxyRule) ([]ReverseProxyRule, e
 			options, _ := NormalizeHTTPRouteOptions(HTTPRouteOptions{}, true, true, HTTPRouteModeOff)
 			paths = append(paths, ReverseProxyPath{Path: "/", Options: options})
 		}
-		out = append(out, ReverseProxyRule{
-			Domain:          domain,
-			TargetPort:      rule.TargetPort,
-			OriginServerIDs: nil,
-			AnyAccess:       anyAccess,
-			Paths:           paths,
-		})
+		out = append(out, resolveReverseProxyRule(ReverseProxyRule{
+			Domain:                 domain,
+			TargetPort:             rule.TargetPort,
+			OriginServerIDs:        nil,
+			AnyAccess:              anyAccess,
+			Paths:                  paths,
+			HTTPSEnabled:           rule.HTTPSEnabled,
+			HTTP2Enabled:           rule.HTTP2Enabled,
+			HTTP3Enabled:           rule.HTTP3Enabled,
+			CustomServerDirectives: rule.CustomServerDirectives,
+			HTTPPortMode:           reverseProxyHTTPPortModePtr(httpPortMode),
+			HSTSEnabled:            cloneReverseProxyHSTS(rule.HSTSEnabled),
+			ClientMaxBodySize:      reverseProxyClientMaxBodySizePtr(clientMaxBodySize),
+		}))
 	}
 	return out, nil
 }
@@ -3840,6 +3889,14 @@ func (s *Service) renderReverseProxyRules(ctx context.Context, rules []ReversePr
 		}
 		if !validReverseProxyDomain(domain) {
 			return nil, panelerr.Validation("application_reverse_proxy_domain_invalid", "reverse proxy domain is invalid")
+		}
+		httpPortMode, modeOK := normalizeReverseProxyHTTPPortMode(rule.HTTPPortMode)
+		if !modeOK {
+			return nil, panelerr.Validation("application_reverse_proxy_http_port_mode_invalid", "reverse proxy HTTP port mode must be serve or redirect")
+		}
+		clientMaxBodySize, sizeOK := normalizedReverseProxyClientMaxBodySize(rule.ClientMaxBodySize)
+		if !sizeOK {
+			return nil, panelerr.Validation("application_reverse_proxy_client_max_body_size_invalid", "reverse proxy client max body size must be an nginx size between 1k and 1024m")
 		}
 		originServerIDs := uniqueSortedStrings(rule.OriginServerIDs)
 		anyAccess, err := NormalizeAnyAccessConfig(rule.AnyAccess, originServerIDs)
@@ -3874,7 +3931,20 @@ func (s *Service) renderReverseProxyRules(ctx context.Context, rules []ReversePr
 			options, _ := NormalizeHTTPRouteOptions(HTTPRouteOptions{}, true, true, HTTPRouteModeOff)
 			paths = append(paths, ReverseProxyPath{Path: "/", Options: options})
 		}
-		out = append(out, ReverseProxyRule{Domain: domain, TargetPort: rule.TargetPort, OriginServerIDs: originServerIDs, AnyAccess: anyAccess, Paths: paths})
+		out = append(out, resolveReverseProxyRule(ReverseProxyRule{
+			Domain:                 domain,
+			TargetPort:             rule.TargetPort,
+			OriginServerIDs:        originServerIDs,
+			AnyAccess:              anyAccess,
+			Paths:                  paths,
+			HTTPSEnabled:           rule.HTTPSEnabled,
+			HTTP2Enabled:           rule.HTTP2Enabled,
+			HTTP3Enabled:           rule.HTTP3Enabled,
+			CustomServerDirectives: rule.CustomServerDirectives,
+			HTTPPortMode:           reverseProxyHTTPPortModePtr(httpPortMode),
+			HSTSEnabled:            cloneReverseProxyHSTS(rule.HSTSEnabled),
+			ClientMaxBodySize:      reverseProxyClientMaxBodySizePtr(clientMaxBodySize),
+		}))
 	}
 	return out, nil
 }
@@ -3978,11 +4048,7 @@ func (s *Service) ApplicationReverseProxyConfigs(ctx context.Context) ([]Applica
 				}
 				routes := make([]ReverseProxyRoute, 0, len(rules))
 				for _, rule := range rules {
-					paths := make([]ReverseProxyPath, 0, len(rule.Paths))
-					for _, item := range rule.Paths {
-						paths = append(paths, ReverseProxyPath{Path: item.Path, Options: item.Options})
-					}
-					routes = append(routes, ReverseProxyRoute{Domain: rule.Domain, TargetPort: rule.TargetPort, TargetContainer: runtimeContainerName(app), OriginServerIDs: append([]string(nil), rule.OriginServerIDs...), AnyAccess: rule.AnyAccess, Paths: paths})
+					routes = append(routes, reverseProxyRouteFromRule(rule, runtimeContainerName(app)))
 				}
 				results[idx].cfg = ApplicationReverseProxyConfig{
 					ApplicationID:     app.ID,

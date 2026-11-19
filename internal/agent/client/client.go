@@ -409,8 +409,14 @@ func (c *GRPCClient) RuntimeRestart(ctx context.Context, endpoint string, req ag
 }
 
 func (c *GRPCClient) RuntimeStatus(ctx context.Context, endpoint, instanceID, containerName string) (agentcontract.RuntimeStatusResponse, error) {
+	return c.RuntimeStatusWithVersion(ctx, endpoint, instanceID, containerName, nil)
+}
+
+// RuntimeStatusWithVersion 在查询运行状态的同时请求 Agent 在容器内执行
+// versionCommand（例如 `nginx -v`），并把解析出的实际版本回传。
+func (c *GRPCClient) RuntimeStatusWithVersion(ctx context.Context, endpoint, instanceID, containerName string, versionCommand []string) (agentcontract.RuntimeStatusResponse, error) {
 	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.RuntimeStatusResponse, error) {
-		return client.RuntimeStatus(ctx, &agentpb.RuntimeStatusRequest{InstanceId: instanceID, ContainerName: containerName})
+		return client.RuntimeStatus(ctx, &agentpb.RuntimeStatusRequest{InstanceId: instanceID, ContainerName: containerName, VersionCommand: append([]string(nil), versionCommand...)})
 	})
 	return agentrpc.GoRuntimeStatus(out), err
 }

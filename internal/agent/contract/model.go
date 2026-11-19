@@ -265,6 +265,13 @@ type RuntimeReconcileRequest struct {
 	PreviousContainerName string          `json:"previousContainerName,omitempty"`
 	SSHPort               int             `json:"sshPort,omitempty"`
 	AgentPort             int             `json:"agentPort,omitempty"`
+	// ImagePreflightCommand 非空时，Agent 在拉取镜像后、停止旧容器前用同一
+	// spec 的 mounts/network 创建一次性临时容器执行该命令；失败则中止并保留
+	// 旧容器。为空时行为与旧版完全一致。
+	ImagePreflightCommand []string `json:"imagePreflightCommand,omitempty"`
+	// ImageVersionCommand 非空时，Agent 在预检成功后于一次性临时容器中执行，
+	// 输出写入 RuntimeReconcileResponse.ImageVersion 供 Panel 做版本线校验。
+	ImageVersionCommand []string `json:"imageVersionCommand,omitempty"`
 }
 
 type RuntimeReconcileStep struct {
@@ -296,6 +303,11 @@ type RuntimeReconcileResponse struct {
 	ErrorDetail         string                 `json:"errorDetail,omitempty"`
 	Retryable           bool                   `json:"retryable"`
 	RetryAfter          time.Duration          `json:"retryAfter"`
+	// ImageVersion 是版本命令在一次性临时容器中的输出（已 trim/脱敏/限长）；
+	// 未请求、未执行或执行失败时为空。
+	ImageVersion string `json:"imageVersion,omitempty"`
+	// PreflightOutput 是预检命令的输出（成功与失败都回传），已脱敏/限长。
+	PreflightOutput string `json:"preflightOutput,omitempty"`
 }
 
 type RuntimeReloadRequest struct {
@@ -346,6 +358,9 @@ type RuntimeInstanceResponse struct {
 
 type RuntimeStatusResponse struct {
 	appruntime.InstanceStatus
+	// ImageVersion 是 version_command 在运行容器内执行后的解析结果（如
+	// 1.28.3）。未请求、容器未运行或执行失败时为空。
+	ImageVersion string `json:"imageVersion,omitempty"`
 }
 
 type RuntimeLogsResponse struct {
@@ -464,6 +479,10 @@ type DockerImagePullRequest struct {
 type RuntimeStatusRequest struct {
 	InstanceID    string `json:"instanceId"`
 	ContainerName string `json:"containerName,omitempty"`
+	// VersionCommand 非空且容器 running 时，Agent 用 docker exec 在运行容器
+	// 内执行该命令并把解析出的版本写入响应 ImageVersion；失败为空，不影响
+	// 状态查询本身。
+	VersionCommand []string `json:"versionCommand,omitempty"`
 }
 
 type RuntimeLogsRequest struct {

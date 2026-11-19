@@ -3,13 +3,26 @@ import type {
   RestoreConfirmResponse,
   RestorePreflightResponse,
   RuntimeAgentUpdate,
+  RuntimeAutoUpdateRunResponse,
+  RuntimeAutoUpdateSettings,
+  RuntimeAutoUpdateUpdate,
   RuntimeBrandingUpdate,
   RuntimeCertificatesUpdate,
   RuntimeGeneralUpdate,
+  RuntimeImageRegistryUpdate,
   RuntimeSecurityUpdate,
   RuntimeSettings,
   ServerVariableDefinition,
 } from '@/types/settings';
+import { isImageRegistryScheme, normalizeImageRegistryEndpoint } from '@/utils/imageRegistry';
+
+/** 镜像仓库 mock 校验失败：由 browser.ts 转换成契约错误码响应。 */
+export class MockImageRegistryError extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message);
+    this.name = 'MockImageRegistryError';
+  }
+}
 
 export let mockRuntimeSettings: RuntimeSettings = {
   listenAddress: '0.0.0.0:8080',
@@ -25,6 +38,16 @@ export let mockRuntimeSettings: RuntimeSettings = {
   certificates: { email: 'ops.com', dnsPropagationDelaySeconds: 30 },
   panel: { domain: 'localhost', tlsCertificateId: '' },
   agent: { downloadBaseUrl: '', downloadVerifyTls: false, transferTimeoutSeconds: 120 },
+  autoUpdate: {
+    appsEnabled: false,
+    packagesEnabled: false,
+    packagesMode: 'security',
+    scheduleTime: '04:00',
+    lastRunAt: '2026-08-01T04:00:00.000Z',
+    lastRunStatus: 'completed',
+    lastRunTaskId: 'task-auto-update-1',
+  },
+  imageRegistry: { endpoint: '', scheme: 'https' },
   reconcileTraceEnabled: false,
   jwtSecretConfigured: true,
 };
@@ -72,6 +95,70 @@ export function saveRuntimeAgent(input: RuntimeAgentUpdate) {
 export function saveRuntimeBranding(input: RuntimeBrandingUpdate) {
   mockRuntimeSettings = { ...mockRuntimeSettings, branding: { ...mockRuntimeSettings.branding, ...input } };
   return mockRuntimeSettings;
+}
+
+/** 自动更新分区：只合入四个可编辑字段，保留只读 lastRun 投影。 */
+export function saveRuntimeAutoUpdate(input: RuntimeAutoUpdateUpdate): RuntimeSettings {
+  const current: RuntimeAutoUpdateSettings = mockRuntimeSettings.autoUpdate ?? {
+    appsEnabled: false,
+    packagesEnabled: false,
+    packagesMode: 'security',
+    scheduleTime: '04:00',
+  };
+  mockRuntimeSettings = { ...mockRuntimeSettings, autoUpdate: { ...current, ...input } };
+  return mockRuntimeSettings;
+}
+
+/**
+ * 镜像仓库分区：指针语义，省略字段保留当前值，显式空串 endpoint 表示官方仓库。
+ * endpoint 必须是裸 host[:port]，scheme 只能是 http/https；失败整笔不生效。
+ */
+export function saveRuntimeImageRegistry(input: RuntimeImageRegistryUpdate): RuntimeSettings {
+  const current = mockRuntimeSettings.imageRegistry ?? { endpoint: '', scheme: 'https' };
+  let endpoint = current.endpoint;
+  let scheme = current.scheme;
+  if (input.endpoint !== undefined) {
+    const normalized = normalizeImageRegistryEndpoint(input.endpoint);
+    if (normalized === null) {
+      throw new MockImageRegistryError('invalid_image_registry_endpoint', 'Image registry endpoint must be a bare host or host:port with port 1-65535.');
+    }
+    endpoint = normalized;
+  }
+  if (input.scheme !== undefined) {
+    if (!isImageRegistryScheme(input.scheme)) {
+      throw new MockImageRegistryError('invalid_image_registry_scheme', 'Image registry scheme must be http or https.');
+    }
+    scheme = input.scheme;
+  }
+  mockRuntimeSettings = { ...mockRuntimeSettings, imageRegistry: { endpoint, scheme } };
+  return mockRuntimeSettings;
+}
+
+/**
+ * POST /settings/runtime/auto-update/run：已有 running 任务时幂等返回其 taskId，
+ * 否则标记 running 并返回新的 taskId（真实任务由协调器异步结束）。
+ */
+export function runRuntimeAutoUpdate(): RuntimeAutoUpdateRunResponse {
+  const current: RuntimeAutoUpdateSettings = mockRuntimeSettings.autoUpdate ?? {
+    appsEnabled: false,
+    packagesEnabled: false,
+    packagesMode: 'security',
+    scheduleTime: '04:00',
+  };
+  if (current.lastRunStatus === 'running' && current.lastRunTaskId) {
+    return { taskId: current.lastRunTaskId };
+  }
+  const taskId = `task-auto-update-manual-${Date.now()}`;
+  mockRuntimeSettings = {
+    ...mockRuntimeSettings,
+    autoUpdate: {
+      ...current,
+      lastRunAt: new Date().toISOString(),
+      lastRunStatus: 'running',
+      lastRunTaskId: taskId,
+    },
+  };
+  return { taskId };
 }
 
 export function saveServerVariables(definitions: ServerVariableDefinition[]) {

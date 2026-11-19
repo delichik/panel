@@ -150,7 +150,15 @@ func goSnapshot(in *agentpb.MetricsSnapshotResponse) linux.MetricsSnapshot {
 func pbPackageUpdates(items []linux.PackageUpdate) []*agentpb.PackageUpdate {
 	out := make([]*agentpb.PackageUpdate, 0, len(items))
 	for _, item := range items {
-		out = append(out, &agentpb.PackageUpdate{Name: item.Name, InstalledVersion: item.InstalledVersion, CandidateVersion: item.CandidateVersion, Source: item.Source})
+		security := item.Security
+		securityKnown := item.SecurityKnown
+		out = append(out, &agentpb.PackageUpdate{
+			Name: item.Name, InstalledVersion: item.InstalledVersion, CandidateVersion: item.CandidateVersion, Source: item.Source,
+			// security/security_known 是 proto3 optional，新 Agent 总是显式
+			// 发送判定状态；旧 Agent 不填时 Panel 收到 nil，按未知处理。
+			Security:      &security,
+			SecurityKnown: &securityKnown,
+		})
 	}
 	return out
 }
@@ -161,7 +169,12 @@ func goPackageUpdates(items []*agentpb.PackageUpdate) []linux.PackageUpdate {
 		if item == nil {
 			continue
 		}
-		out = append(out, linux.PackageUpdate{Name: item.Name, InstalledVersion: item.InstalledVersion, CandidateVersion: item.CandidateVersion, Source: item.Source})
+		// 旧 Agent 不填 security/security_known：Get* 返回零值 false，
+		// SecurityKnown=false 让 Panel 回退到 source 启发式。
+		out = append(out, linux.PackageUpdate{
+			Name: item.Name, InstalledVersion: item.InstalledVersion, CandidateVersion: item.CandidateVersion, Source: item.Source,
+			Security: item.GetSecurity(), SecurityKnown: item.GetSecurityKnown(),
+		})
 	}
 	return out
 }
@@ -385,6 +398,7 @@ func pbRuntimeStatus(in agentcontract.RuntimeStatusResponse) *agentpb.RuntimeSta
 		InstanceId: status.InstanceID, ServerId: status.ServerID, ServerName: status.ServerName, ContainerName: status.ContainerName,
 		ContainerId: status.ContainerID, Status: status.Status, DesiredState: status.DesiredState, Stage: status.Stage, Image: status.Image,
 		StartedAt: status.StartedAt, FinishedAt: status.FinishedAt, ExitCode: int32(status.ExitCode), LastError: status.LastError, ObservedAt: pbTime(status.ObservedAt),
+		ImageVersion: in.ImageVersion,
 	}
 }
 
@@ -396,7 +410,7 @@ func goRuntimeStatus(in *agentpb.RuntimeStatusResponse) agentcontract.RuntimeSta
 		InstanceID: in.InstanceId, ServerID: in.ServerId, ServerName: in.ServerName, ContainerName: in.ContainerName, ContainerID: in.ContainerId,
 		Status: in.Status, DesiredState: in.DesiredState, Stage: in.Stage, Image: in.Image, StartedAt: in.StartedAt, FinishedAt: in.FinishedAt,
 		ExitCode: int(in.ExitCode), LastError: in.LastError, ObservedAt: goTime(in.ObservedAt),
-	}}
+	}, ImageVersion: in.ImageVersion}
 }
 
 func pbDockerContainer(in agentcontract.DockerContainer) *agentpb.DockerContainer {
@@ -534,6 +548,8 @@ func PBRuntimeReconcileRequest(in agentcontract.RuntimeReconcileRequest) *agentp
 		JobId: in.JobID, ExecutionId: in.ExecutionID, ApplicationId: in.ApplicationID, InstanceId: in.InstanceID,
 		ServerId: in.ServerID, Action: in.Action, DesiredGeneration: int32(in.DesiredGeneration), DesiredSpecHash: in.DesiredSpecHash,
 		DesiredRevisionId: in.DesiredRevisionID, Spec: pbSpec(in.Spec), RemoveData: in.RemoveData, PreviousContainerName: in.PreviousContainerName, SshPort: int32(in.SSHPort), AgentPort: int32(in.AgentPort),
+		ImagePreflightCommand: append([]string(nil), in.ImagePreflightCommand...),
+		ImageVersionCommand:   append([]string(nil), in.ImageVersionCommand...),
 	}
 }
 
@@ -545,6 +561,8 @@ func GoRuntimeReconcileRequest(in *agentpb.RuntimeReconcileRequest) agentcontrac
 		OperationID: in.OperationId, RunID: in.RunId, JobID: in.JobId, ExecutionID: in.ExecutionId, ApplicationID: in.ApplicationId, InstanceID: in.InstanceId,
 		ServerID: in.ServerId, Action: in.Action, DesiredGeneration: int(in.DesiredGeneration), DesiredSpecHash: in.DesiredSpecHash,
 		DesiredRevisionID: in.DesiredRevisionId, Spec: goSpec(in.Spec), RemoveData: in.RemoveData, PreviousContainerName: in.PreviousContainerName, SSHPort: int(in.SshPort), AgentPort: int(in.AgentPort),
+		ImagePreflightCommand: append([]string(nil), in.ImagePreflightCommand...),
+		ImageVersionCommand:   append([]string(nil), in.ImageVersionCommand...),
 	}
 }
 
@@ -558,6 +576,7 @@ func GoRuntimeReconcileResponse(in *agentpb.RuntimeReconcileResponse) agentcontr
 		ObservedGeneration: int(in.ObservedGeneration), ObservedSpecHash: in.ObservedSpecHash, ObservedImageDigest: in.ObservedImageDigest,
 		ObservedAt: goTime(in.ObservedAt), ErrorCode: in.ErrorCode, ErrorClass: in.ErrorClass, ErrorMessage: in.ErrorMessage,
 		ErrorDetail: in.ErrorDetail, Retryable: in.Retryable, RetryAfter: time.Duration(in.RetryAfterSeconds) * time.Second,
+		ImageVersion: in.ImageVersion, PreflightOutput: in.PreflightOutput,
 	}
 	if len(in.Steps) > 0 {
 		out.Steps = make([]agentcontract.RuntimeReconcileStep, 0, len(in.Steps))
@@ -582,6 +601,7 @@ func PBRuntimeReconcileResponse(in agentcontract.RuntimeReconcileResponse) *agen
 		ObservedGeneration: int32(in.ObservedGeneration), ObservedSpecHash: in.ObservedSpecHash, ObservedImageDigest: in.ObservedImageDigest,
 		ObservedAt: pbTime(in.ObservedAt), Steps: steps, ErrorCode: in.ErrorCode, ErrorClass: in.ErrorClass,
 		ErrorMessage: in.ErrorMessage, ErrorDetail: in.ErrorDetail, Retryable: in.Retryable, RetryAfterSeconds: int32(in.RetryAfter / time.Second),
+		ImageVersion: in.ImageVersion, PreflightOutput: in.PreflightOutput,
 	}
 }
 func GoRuntimeInstance(in *agentpb.RuntimeInstanceResponse) agentcontract.RuntimeInstanceResponse {

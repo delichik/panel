@@ -69,6 +69,7 @@ const defaultAgentPort = 9786
 const agentRemoteBinaryPath = "/usr/local/bin/panel-agent"
 const agentRemoteConfigDir = "/etc/panel-agent"
 const agentRemoteServicePath = "/etc/systemd/system/panel-agent.service"
+
 // agentRemoteMPTCPSysctlPath persists CVE-2026-98432 mitigations across reboot.
 const agentRemoteMPTCPSysctlPath = "/etc/sysctl.d/99-panel-mptcp-mitigation.conf"
 
@@ -76,7 +77,12 @@ const agentRemoteMPTCPSysctlPath = "/etc/sysctl.d/99-panel-mptcp-mitigation.conf
 // so tests can point it at a temporary directory; it is not configurable.
 var agentBundleRoot = "/app/panel-agents"
 
+// reverseProxyTCPPorts and reverseProxyUDPPorts are the host ports the reverse
+// proxy facility publishes: HTTP/HTTPS over TCP and HTTP/3 over UDP 443. The
+// UDP rule is required for HTTP/3 (QUIC); clients fall back to HTTP/2 when it is
+// filtered, so opening it is a prerequisite rather than a hard dependency.
 var reverseProxyTCPPorts = []int{80, 443}
+var reverseProxyUDPPorts = []int{443}
 
 type Service struct {
 	db                   *sql.DB

@@ -8,6 +8,11 @@ import type {
   FacilityEditPreviewResult,
   FacilityEditSession,
   FacilityRouteDomain,
+  FacilitySettingsSaveInput,
+  ProxyImageActionResponse,
+  ProxyImageRollbackInput,
+  ProxyImageState,
+  ProxyImageUpdateInput,
   ReverseProxyConfig,
   ProxyDiagnostics,
   ProxyPlaneSaveInput,
@@ -53,6 +58,44 @@ export const reverseProxyFacilityApi = {
 	},
   getConfig(options?: ApiRequestOptions) {
     return apiClient.get<ReverseProxyConfig>('/facility-apps/reverse-proxy', options);
+  },
+  /** Global entrance parameters (80 policy, HSTS, custom http directives, image auto-update). */
+  saveSettings(input: FacilitySettingsSaveInput) {
+    return apiClient.put<ReverseProxyConfig>('/facility-apps/reverse-proxy/settings', input);
+  },
+  /** Manual image check; the backend enqueues a task and projects new state through GET. */
+  checkImage() {
+    return apiClient.post<ProxyImageActionResponse>('/facility-apps/reverse-proxy/image/check', {});
+  },
+  /** Manual rolling image update; `confirm` must be explicitly true. */
+  updateImage(input: ProxyImageUpdateInput) {
+    return apiClient.post<ProxyImageActionResponse>('/facility-apps/reverse-proxy/image/update', {
+      serverIds: [...input.serverIds],
+      confirm: true,
+    });
+  },
+  /**
+   * P1 rollback/resume contract (FAC-RP-014):
+   *   POST /facility-apps/reverse-proxy/image/rollback {serverIds?, digest?, confirm:true}
+   *   POST /facility-apps/reverse-proxy/image/resume   {serverIds?}
+   * `digest` is omitted so the backend rolls each selected gateway back to its own
+   * previous digest. Rollback returns 202 + taskId, or 200 + skipped for an
+   * idempotent no-op. Resume returns the refreshed image projection synchronously.
+   * If the final backend contract exposes "resume" as an update payload flag
+   * (clearPinned) instead of this route, only this API block and its callers in
+   * the facilities settings tab need to change.
+   */
+  rollbackImage(input: ProxyImageRollbackInput) {
+    return apiClient.post<ProxyImageActionResponse>('/facility-apps/reverse-proxy/image/rollback', {
+      ...(input.serverIds?.length ? { serverIds: [...input.serverIds] } : {}),
+      ...(input.digest ? { digest: input.digest } : {}),
+      confirm: true,
+    });
+  },
+  resumeImage(serverIds: string[] = []) {
+    return apiClient.post<ProxyImageState>('/facility-apps/reverse-proxy/image/resume', {
+      ...(serverIds.length ? { serverIds: [...serverIds] } : {}),
+    });
   },
   // Proxy plane: gateway membership / container deployments. Saving it never
   // touches individual config-record versions.

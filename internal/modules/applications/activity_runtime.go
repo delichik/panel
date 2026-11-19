@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -443,11 +444,62 @@ func (r *serviceRuntimeReconciler) callTracked(ctx context.Context, endpoint str
 		return out, errors.New("execution output stream is not closed")
 	}
 	out := reconcileResponseFromAgent(response)
+	out = applyFacilityProxyImageVersionGuard(out, input, response)
 	if len(out.Steps) == 0 && len(progress.Steps) > 0 {
 		out.Steps = progress.Steps
 	}
 	return out, callErr
 }
+
+// applyFacilityProxyImageVersionGuard 校验入口代理镜像版本线：Agent 用新镜像
+// 执行 `nginx -v` 回传版本，若 major.minor 与期望标签线不符则让本次 Job 失败
+// （保留旧容器已由 Agent 预检阶段保证）。旧 Agent 不返回版本时只记录告警，
+// 不阻断升级，避免升级窗口内兼容 Agent 被误拒。
+func applyFacilityProxyImageVersionGuard(out controlplane.ReconcileResponse, input agentcontract.RuntimeReconcileRequest, response agentcontract.RuntimeReconcileResponse) controlplane.ReconcileResponse {
+	if len(input.ImageVersionCommand) == 0 {
+		return out
+	}
+	expected := proxyImageMinorFromReference(input.Spec.Image)
+	actual := proxyImageMinorFromVersionOutput(response.ImageVersion)
+	if expected == "" {
+		return out
+	}
+	if actual == "" {
+		logging.From(logging.Background("applications")).Warn("entrance proxy image version was not reported by agent",
+			zap.String("container_name", input.Spec.ContainerName),
+			zap.String("expected_minor", expected))
+		return out
+	}
+	if actual != expected {
+		out.ErrorCode = "image_version_line_invalid"
+		out.ErrorClass = "image_preflight"
+		out.ErrorMessage = "entrance proxy image version line " + actual + " does not match expected " + expected
+		out.Retryable = false
+	}
+	return out
+}
+
+var (
+	proxyImageTagMinorPattern = regexp.MustCompile(`:(\d+\.\d+)(?:\.\d+)?-`)
+	proxyImageVersionPattern    = regexp.MustCompile(`nginx/(\d+\.\d+)`)
+)
+
+func proxyImageMinorFromReference(reference string) string {
+	match := proxyImageTagMinorPattern.FindStringSubmatch(reference)
+	if len(match) == 2 {
+		return match[1]
+	}
+	return ""
+}
+
+func proxyImageMinorFromVersionOutput(output string) string {
+	match := proxyImageVersionPattern.FindStringSubmatch(output)
+	if len(match) == 2 {
+		return match[1]
+	}
+	return ""
+}
+
 
 func (r *serviceRuntimeReconciler) recordExecutionGap(ctx context.Context, req controlplane.ReconcileRequestRPC, operationID string, resources []activitylog.Resource, epoch string, from, to int64) error {
 	logCtx := logging.Ensure(ctx, logging.Context{

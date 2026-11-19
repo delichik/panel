@@ -11,6 +11,8 @@ export interface PackageUpdate {
   installedVersion: string;
   candidateVersion: string;
   source: string;
+  /** Derived by Panel from the apt suite/source: security update. */
+  security?: boolean;
 }
 
 export interface RefreshResult extends ActivityReceipt {

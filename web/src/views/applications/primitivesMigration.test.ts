@@ -28,8 +28,8 @@ describe('applications NumberBox migration', () => {
   });
 
   it('uses NumberBox for numeric fields with FormField aria wiring', () => {
-    // 弹窗高级选项 8 处 + 指标 2 处 + 探测 2 个模板节点（间隔 + 参数 v-for，运行时渲染 3 个 NumberBox）。
-    expect(indexSource.match(/<NumberBox/g)?.length ?? 0).toBe(8);
+    // 弹窗高级选项 8 处 + 设施设置 HSTS max-age 1 处 + 镜像更新节点间隔 1 处 + 指标 2 处 + 探测 2 个模板节点（间隔 + 参数 v-for，运行时渲染 3 个 NumberBox）。
+    expect(indexSource.match(/<NumberBox/g)?.length ?? 0).toBe(10);
     expect(metricsSource.match(/<NumberBox/g)?.length ?? 0).toBe(2);
     expect(probeSource.match(/<NumberBox/g)?.length ?? 0).toBe(2);
     // FormField 插槽属性接到 NumberBox 的 id/aria-describedby/invalid。

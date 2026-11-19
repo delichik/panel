@@ -231,6 +231,163 @@ describe('domain mock routes', () => {
     expect(commitEnvelope.error.code).toBe('resource_version_conflict');
   });
 
+  it('serves the auto-update partition and the entrance-proxy settings/image routes', async () => {
+    const autoUpdate = await fetch('/api/v1/settings/runtime/auto-update', {
+      method: 'PUT',
+      body: JSON.stringify({ appsEnabled: true, packagesEnabled: false, packagesMode: 'all', scheduleTime: '05:30' }),
+    });
+    const autoUpdateEnvelope = await autoUpdate.json();
+    expect(autoUpdate.status).toBe(200);
+    expect(autoUpdateEnvelope.data.autoUpdate).toMatchObject({ appsEnabled: true, packagesEnabled: false, packagesMode: 'all', scheduleTime: '05:30' });
+    // 只读的 lastRun 投影必须保留。
+    expect(autoUpdateEnvelope.data.autoUpdate.lastRunAt).toBeTruthy();
+
+    const run = await fetch('/api/v1/settings/runtime/auto-update/run', { method: 'POST', body: '{}' });
+    expect(run.status).toBe(202);
+    expect((await run.json()).data.taskId).toContain('task-auto-update-manual');
+
+    const config = await (await fetch('/api/v1/facility-apps/reverse-proxy')).json();
+    expect(config.data.settings).toMatchObject({ httpPortMode: 'serve', imageAutoUpdateEnabled: true, imageUpdateIntervalSeconds: 0, customHttpDirectives: [] });
+    expect(config.data.image).toMatchObject({ reference: 'nginx:1.28-alpine' });
+    // 每域名 80 端口覆盖随记录投影，未显式设置的域名归一化为继承（空串）。
+    expect(config.data.domains.find((domain: { domain: string }) => domain.domain === 'shop.example.test').httpPortMode).toBe('redirect');
+    expect(config.data.domains.find((domain: { domain: string }) => domain.domain === 'downloads.example.test').httpPortMode).toBe('serve');
+    expect(config.data.domains.find((domain: { domain: string }) => domain.domain === 'static.example.test').httpPortMode).toBe('');
+
+    const saved = await fetch('/api/v1/facility-apps/reverse-proxy/settings', {
+      method: 'PUT',
+      body: JSON.stringify({
+        httpPortMode: 'redirect',
+        imageAutoUpdateEnabled: false,
+        imageUpdateIntervalSeconds: 120,
+        customHttpDirectives: ['client_max_body_size 100m;'],
+        hsts: { enabled: true, maxAgeSeconds: 3600, includeSubDomains: true },
+        serverTokens: 'on',
+        clientMaxBodySize: '128m',
+        tlsMinVersion: '1.3',
+      }),
+    });
+    const savedEnvelope = await saved.json();
+    expect(saved.status).toBe(200);
+    expect(savedEnvelope.data.settings).toMatchObject({
+      httpPortMode: 'redirect',
+      imageAutoUpdateEnabled: false,
+      imageUpdateIntervalSeconds: 120,
+      customHttpDirectives: ['client_max_body_size 100m;'],
+      hsts: { enabled: true, maxAgeSeconds: 3600, includeSubDomains: true },
+      serverTokens: 'on',
+      clientMaxBodySize: '128m',
+      tlsMinVersion: '1.3',
+    });
+
+    const invalidMode = await fetch('/api/v1/facility-apps/reverse-proxy/settings', {
+      method: 'PUT',
+      body: JSON.stringify({ httpPortMode: 'every' }),
+    });
+    expect(invalidMode.status).toBe(422);
+    expect((await invalidMode.json()).error.code).toBe('facility_http_port_mode_invalid');
+
+    for (const imageUpdateIntervalSeconds of [601, -1, 1.5]) {
+      const invalidInterval = await fetch('/api/v1/facility-apps/reverse-proxy/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ httpPortMode: 'serve', imageUpdateIntervalSeconds }),
+      });
+      expect(invalidInterval.status).toBe(422);
+      expect((await invalidInterval.json()).error.code).toBe('facility_image_update_interval_invalid');
+    }
+
+    const denied = await fetch('/api/v1/facility-apps/reverse-proxy/image/update', { method: 'POST', body: JSON.stringify({ serverIds: [], confirm: false }) });
+    expect(denied.status).toBe(422);
+    expect((await denied.json()).error.code).toBe('facility_proxy_image_update_confirmation_required');
+
+    // 首次更新前没有 previous_digest：回滚为幂等空操作 200 + skipped。
+    const skippedRollback = await fetch('/api/v1/facility-apps/reverse-proxy/image/rollback', { method: 'POST', body: JSON.stringify({ confirm: true }) });
+    expect(skippedRollback.status).toBe(200);
+    expect((await skippedRollback.json()).data).toMatchObject({ skipped: true });
+
+    const check = await fetch('/api/v1/facility-apps/reverse-proxy/image/check', { method: 'POST' });
+    expect(check.status).toBe(202);
+    expect((await check.json()).data.taskId).toContain('task-facility-image-check');
+
+    const update = await fetch('/api/v1/facility-apps/reverse-proxy/image/update', { method: 'POST', body: JSON.stringify({ serverIds: [], confirm: true }) });
+    expect(update.status).toBe(202);
+    expect((await update.json()).data.taskId).toContain('task-facility-image-update');
+    const updatedImage = (await (await fetch('/api/v1/facility-apps/reverse-proxy')).json()).data.image;
+    expect(updatedImage).toMatchObject({ status: 'up_to_date', updateAvailable: false });
+    expect(updatedImage.previousDigest).toBeTruthy();
+
+    const deniedRollback = await fetch('/api/v1/facility-apps/reverse-proxy/image/rollback', { method: 'POST', body: JSON.stringify({ confirm: false }) });
+    expect(deniedRollback.status).toBe(422);
+    expect((await deniedRollback.json()).error.code).toBe('facility_proxy_image_rollback_confirmation_required');
+    const rollback = await fetch('/api/v1/facility-apps/reverse-proxy/image/rollback', { method: 'POST', body: JSON.stringify({ confirm: true }) });
+    expect(rollback.status).toBe(202);
+    expect((await rollback.json()).data.taskId).toContain('task-facility-image-rollback');
+    expect((await (await fetch('/api/v1/facility-apps/reverse-proxy')).json()).data.image).toMatchObject({ status: 'pinned', pinned: true });
+
+    const resume = await fetch('/api/v1/facility-apps/reverse-proxy/image/resume', { method: 'POST', body: '{}' });
+    expect(resume.status).toBe(200);
+    expect((await resume.json()).data).toMatchObject({ pinned: false, status: 'up_to_date' });
+    expect((await (await fetch('/api/v1/facility-apps/reverse-proxy')).json()).data.image).toMatchObject({ status: 'up_to_date', pinned: false });
+  });
+
+  it('serves image registry settings with pointer semantics and validation', async () => {
+    const initial = await (await fetch('/api/v1/settings/runtime')).json();
+    expect(initial.data.imageRegistry).toEqual({ endpoint: '', scheme: 'https' });
+
+    const endpointOnly = await fetch('/api/v1/settings/runtime/image-registry', {
+      method: 'PUT',
+      body: JSON.stringify({ endpoint: 'Registry.Example.COM:5000' }),
+    });
+    const endpointEnvelope = await endpointOnly.json();
+    expect(endpointOnly.status).toBe(200);
+    // 省略 scheme = 保留当前值；endpoint 规范化为主机小写 + 端口。
+    expect(endpointEnvelope.data.imageRegistry).toEqual({ endpoint: 'registry.example.com:5000', scheme: 'https' });
+
+    const schemeOnly = await (await fetch('/api/v1/settings/runtime/image-registry', {
+      method: 'PUT',
+      body: JSON.stringify({ scheme: 'http' }),
+    })).json();
+    expect(schemeOnly.data.imageRegistry).toEqual({ endpoint: 'registry.example.com:5000', scheme: 'http' });
+
+    // 显式空串 endpoint = 恢复官方仓库，且不省略字段。
+    const official = await (await fetch('/api/v1/settings/runtime/image-registry', {
+      method: 'PUT',
+      body: JSON.stringify({ endpoint: '' }),
+    })).json();
+    expect(official.data.imageRegistry).toEqual({ endpoint: '', scheme: 'http' });
+
+    const invalidEndpoints = [
+      'https://registry.example.com',
+      'registry.example.com/v2',
+      'registry.example.com?x=1',
+      'user@registry.example.com',
+      'registry example.com',
+      '"registry.example.com"',
+      'registry\\example.com',
+      'registry.example.com:0',
+      'registry.example.com:65536',
+    ];
+    for (const endpoint of invalidEndpoints) {
+      const response = await fetch('/api/v1/settings/runtime/image-registry', {
+        method: 'PUT',
+        body: JSON.stringify({ endpoint }),
+      });
+      expect(response.status, endpoint).toBe(422);
+      expect((await response.json()).error.code, endpoint).toBe('invalid_image_registry_endpoint');
+    }
+
+    const invalidScheme = await fetch('/api/v1/settings/runtime/image-registry', {
+      method: 'PUT',
+      body: JSON.stringify({ scheme: 'ftp' }),
+    });
+    expect(invalidScheme.status).toBe(422);
+    expect((await invalidScheme.json()).error.code).toBe('invalid_image_registry_scheme');
+
+    // 失败整笔不生效：仍是上一次成功的显式官方仓库 + http。
+    const persisted = await (await fetch('/api/v1/settings/runtime')).json();
+    expect(persisted.data.imageRegistry).toEqual({ endpoint: '', scheme: 'http' });
+  });
+
   it('serves facility reverse proxy edit session preview on real routes', async () => {
     const created = await fetch('/api/v1/facility-apps/reverse-proxy/edit-sessions', { method: 'POST', body: JSON.stringify({ recordId: 'static.example.test' }) });
     const createdEnvelope = await created.json();
@@ -242,6 +399,110 @@ describe('domain mock routes', () => {
 
     expect(preview.status).toBe(200);
     expect(previewEnvelope.data.token.action).toBe('facility.reverse_proxy.commit');
+  });
+
+  it('round-trips a per-domain port 80 override through a config-record commit', async () => {
+    const record = (await (await fetch('/api/v1/facility-apps/reverse-proxy/config-records/status.example.test')).json()).data;
+    expect(record.domain.httpPortMode).toBe('');
+    const created = await fetch('/api/v1/facility-apps/reverse-proxy/edit-sessions', { method: 'POST', body: JSON.stringify({ recordId: 'status.example.test' }) });
+    const session = (await created.json()).data;
+    const patched = await fetch(`/api/v1/facility-apps/reverse-proxy/edit-sessions/${session.id}/draft`, {
+      method: 'PATCH',
+      body: JSON.stringify({ draft: { ...record.domain, httpPortMode: 'redirect' } }),
+    });
+    const patchedSession = (await patched.json()).data;
+    expect(patchedSession.draft.httpPortMode).toBe('redirect');
+    const preview = await fetch(`/api/v1/facility-apps/reverse-proxy/edit-sessions/${session.id}/preview`, {
+      method: 'POST',
+      body: JSON.stringify({ revision: patchedSession.revision }),
+    });
+    const previewToken = (await preview.json()).data.token.value;
+    const commit = await fetch(`/api/v1/facility-apps/reverse-proxy/edit-sessions/${session.id}/commit`, {
+      method: 'POST',
+      body: JSON.stringify({ revision: patchedSession.revision, baseResourceVersion: session.baseResourceVersion.value, previewToken }),
+    });
+    const committed = (await commit.json()).data;
+    expect(commit.status).toBe(200);
+    expect(committed.record.domain.httpPortMode).toBe('redirect');
+    const aggregate = (await (await fetch('/api/v1/facility-apps/reverse-proxy')).json()).data;
+    expect(aggregate.domains.find((domain: { domain: string }) => domain.domain === 'status.example.test').httpPortMode).toBe('redirect');
+  });
+
+  it('round-trips per-domain HSTS and body-limit overrides and rejects invalid sizes', async () => {
+    const record = (await (await fetch('/api/v1/facility-apps/reverse-proxy/config-records/downloads.example.test')).json()).data;
+    const created = await fetch('/api/v1/facility-apps/reverse-proxy/edit-sessions', { method: 'POST', body: JSON.stringify({ recordId: 'downloads.example.test' }) });
+    const session = (await created.json()).data;
+
+    const invalidDraft = { ...record.domain, hstsEnabled: true, clientMaxBodySize: '50mb' };
+    const patchedInvalid = await fetch(`/api/v1/facility-apps/reverse-proxy/edit-sessions/${session.id}/draft`, {
+      method: 'PATCH',
+      body: JSON.stringify({ draft: invalidDraft }),
+    });
+    const invalidSession = (await patchedInvalid.json()).data;
+    const invalidValidation = await fetch(`/api/v1/facility-apps/reverse-proxy/edit-sessions/${session.id}/validate`, {
+      method: 'POST',
+      body: JSON.stringify({ revision: invalidSession.revision }),
+    });
+    const invalidResult = (await invalidValidation.json()).data;
+    expect(invalidResult.valid).toBe(false);
+    expect(invalidResult.diagnostics.some((item: { code: string }) => item.code === 'facility_client_max_body_size_invalid')).toBe(true);
+
+    const invalidCommit = await fetch(`/api/v1/facility-apps/reverse-proxy/edit-sessions/${session.id}/commit`, {
+      method: 'POST',
+      body: JSON.stringify({ revision: invalidSession.revision, baseResourceVersion: session.baseResourceVersion.value }),
+    });
+    expect(invalidCommit.status).toBe(422);
+    expect((await invalidCommit.json()).error.code).toBe('facility_client_max_body_size_invalid');
+    const unchanged = (await (await fetch('/api/v1/facility-apps/reverse-proxy/config-records/downloads.example.test')).json()).data;
+    expect(unchanged.domain.clientMaxBodySize).toBe('');
+
+    const validDraft = { ...record.domain, hstsEnabled: true, clientMaxBodySize: '256m' };
+    const patched = await fetch(`/api/v1/facility-apps/reverse-proxy/edit-sessions/${session.id}/draft`, {
+      method: 'PATCH',
+      body: JSON.stringify({ draft: validDraft }),
+    });
+    const patchedSession = (await patched.json()).data;
+    const preview = await fetch(`/api/v1/facility-apps/reverse-proxy/edit-sessions/${session.id}/preview`, {
+      method: 'POST',
+      body: JSON.stringify({ revision: patchedSession.revision }),
+    });
+    const previewToken = (await preview.json()).data.token.value;
+    const commit = await fetch(`/api/v1/facility-apps/reverse-proxy/edit-sessions/${session.id}/commit`, {
+      method: 'POST',
+      body: JSON.stringify({ revision: patchedSession.revision, baseResourceVersion: session.baseResourceVersion.value, previewToken }),
+    });
+    expect(commit.status).toBe(200);
+    expect((await commit.json()).data.record.domain).toMatchObject({ hstsEnabled: true, clientMaxBodySize: '256m' });
+
+    const committedRecord = (await (await fetch('/api/v1/facility-apps/reverse-proxy/config-records/downloads.example.test')).json()).data;
+    expect(committedRecord.domain).toMatchObject({ hstsEnabled: true, clientMaxBodySize: '256m' });
+    const aggregate = (await (await fetch('/api/v1/facility-apps/reverse-proxy')).json()).data;
+    expect(aggregate.domains.find((domain: { domain: string }) => domain.domain === 'downloads.example.test')).toMatchObject({ hstsEnabled: true, clientMaxBodySize: '256m' });
+
+    const appSession = (await (await fetch('/api/v1/application-edit-sessions', { method: 'POST', body: JSON.stringify({ applicationId: 'app-storefront' }) })).json()).data;
+    const invalidRuleDraft = {
+      ...appSession.draft,
+      reverseProxy: [{ ...appSession.draft.reverseProxy[0], clientMaxBodySize: '2g' }],
+    };
+    const patchedAppInvalid = await fetch(`/api/v1/application-edit-sessions/${appSession.id}/draft`, {
+      method: 'PATCH',
+      body: JSON.stringify({ draft: invalidRuleDraft }),
+    });
+    const invalidAppSession = (await patchedAppInvalid.json()).data;
+    const appValidation = await fetch(`/api/v1/application-edit-sessions/${appSession.id}/validate`, {
+      method: 'POST',
+      body: JSON.stringify({ revision: invalidAppSession.revision }),
+    });
+    const appValidationResult = (await appValidation.json()).data;
+    expect(appValidationResult.valid).toBe(false);
+    expect(appValidationResult.diagnostics.some((item: { code: string }) => item.code === 'application_reverse_proxy_client_max_body_size_invalid')).toBe(true);
+
+    const invalidAppCommit = await fetch(`/api/v1/application-edit-sessions/${appSession.id}/commit`, {
+      method: 'POST',
+      body: JSON.stringify({ revision: invalidAppSession.revision }),
+    });
+    expect(invalidAppCommit.status).toBe(422);
+    expect((await invalidAppCommit.json()).error.code).toBe('application_reverse_proxy_client_max_body_size_invalid');
   });
 
   it('serves DNS records and exposes provider failures on real routes', async () => {

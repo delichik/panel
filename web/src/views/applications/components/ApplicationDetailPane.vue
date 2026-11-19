@@ -141,6 +141,7 @@ function selectTab(value: string) {
                   { label: t('applicationsPage.nodeBucketAbnormalLabel'), value: nodeCounts.abnormal },
                   { label: t('applicationsPage.nodeBucketDeployingLabel'), value: nodeCounts.deploying },
                   { label: t('applicationsPage.imageUpdate'), value: application.imageUpdateAvailable ? t('applicationsPage.imageUpdate') : t('applicationsPage.imageCurrent') },
+                  { label: t('applicationsPage.allowAutoUpdate'), value: application.autoUpdateEnabled !== false ? t('applicationsPage.autoUpdateAllowed') : t('applicationsPage.autoUpdateBlocked') },
                 ]"
               />
             </DetailSection>
@@ -153,7 +154,12 @@ function selectTab(value: string) {
           <div v-for="rule in application.reverseProxy" :key="rule.domain" class="grid gap-2 p-4">
             <div class="flex flex-wrap items-center justify-between gap-2">
               <strong class="min-w-0 break-all text-body-strong font-semibold text-foreground">{{ rule.domain }}</strong>
-              <Badge tone="info">{{ rule.targetPort }}</Badge>
+              <div class="flex flex-wrap items-center gap-1">
+                <Badge :tone="rule.httpsEnabled === false ? 'neutral' : 'success'">{{ t('applicationsPage.transport.httpsShort') }}</Badge>
+                <Badge :tone="rule.httpsEnabled !== false && rule.http2Enabled !== false ? 'info' : 'neutral'">{{ t('applicationsPage.transport.http2Short') }}</Badge>
+                <Badge :tone="rule.httpsEnabled !== false && rule.http3Enabled === true ? 'info' : 'neutral'">{{ t('applicationsPage.transport.http3Short') }}</Badge>
+                <Badge tone="info">{{ rule.targetPort }}</Badge>
+              </div>
             </div>
             <p class="m-0 text-caption text-muted-foreground">{{ t('applicationsPage.originServers', { count: rule.originServerIds.length }) }} · {{ rule.originServerIds.map((id) => serverName(id)).join(', ') || t('common.notAvailable') }}</p>
             <div class="flex flex-wrap gap-2"><Badge v-for="path in rule.paths" :key="path.path" tone="neutral">{{ path.path }}</Badge></div>

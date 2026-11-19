@@ -2,6 +2,7 @@ package applications
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -13,6 +14,7 @@ import (
 	appruntime "panel/internal/modules/applications/runtime"
 	server "panel/internal/modules/servers"
 	controlplane "panel/internal/orchestrator"
+	"panel/internal/platform/database/orm"
 	"panel/internal/platform/logging"
 
 	"go.uber.org/zap"
@@ -109,13 +111,20 @@ func (r *serviceRuntimeReconciler) Reconcile(ctx context.Context, req controlpla
 		if reloadResp, ok, reloadErr := r.tryFacilityConfigReload(queuedCtx, endpoint, req, spec); ok {
 			return reloadResp, reloadErr
 		}
-		return r.callTracked(queuedCtx, endpoint, req, client, agentcontract.RuntimeReconcileRequest{
+		reconcileReq := agentcontract.RuntimeReconcileRequest{
 			OperationID: req.OperationID, RunID: req.RunID,
 			JobID: req.JobID, ExecutionID: req.ExecutionID, ApplicationID: req.ApplicationID, InstanceID: req.InstanceID,
 			ServerID: req.ServerID, Action: req.Action, DesiredGeneration: req.DesiredGeneration, DesiredSpecHash: req.DesiredSpecHash,
 			DesiredRevisionID: req.DesiredRevisionID, Spec: spec, RemoveData: req.RemoveData, PreviousContainerName: req.PreviousContainerName,
 			SSHPort: sshPort, AgentPort: agentPort,
-		})
+		}
+		// 入口代理重建前用新镜像做 nginx -t 预检并回传 nginx -v；只在该设施的
+		// apply 路径设置，其他应用保持原行为。旧 Agent 会忽略新字段（回传空版本）。
+		if req.ApplicationID == FacilityProxyApplicationID && req.Action == controlplane.ActionApply {
+			reconcileReq.ImagePreflightCommand = []string{"nginx", "-t", "-c", "/etc/panel-nginx/nginx.conf"}
+			reconcileReq.ImageVersionCommand = []string{"nginx", "-v"}
+		}
+		return r.callTracked(queuedCtx, endpoint, req, client, reconcileReq)
 	})
 	var postflightErr error
 	if checksChannels {
@@ -168,7 +177,11 @@ func (r *serviceRuntimeReconciler) tryFacilityConfigReload(ctx context.Context, 
 	if req.Action != controlplane.ActionApply {
 		return controlplane.ReconcileResponse{}, false, nil
 	}
-	plan := r.service.facilityRuntime.PlanRuntimeUpdate(ctx, Application{ID: req.ApplicationID}, server.Server{ID: req.ServerID}, appruntime.Spec{}, spec)
+	// FAC-RP-009：把该实例上一次成功应用的 runtime spec 作为 current 传入，
+	// 设施才能按身份字段（镜像/命令/端口/mount 结构/restart）判定 recreate，
+	// 只按配置内容变化判定 reload。缺失 current 的语义是首装 → recreate。
+	current := r.storedRuntimeSpec(ctx, req)
+	plan := r.service.facilityRuntime.PlanRuntimeUpdate(ctx, Application{ID: req.ApplicationID}, server.Server{ID: req.ServerID}, current, spec)
 	if plan.Mode != appruntime.UpdateModeReload || plan.Strategy == nil {
 		return controlplane.ReconcileResponse{}, false, nil
 	}
@@ -199,6 +212,49 @@ func (r *serviceRuntimeReconciler) tryFacilityConfigReload(ctx context.Context, 
 		}, true, nil
 	}
 	return controlplane.ReconcileResponse{ObservedState: "running"}, true, nil
+}
+
+// storedRuntimeSpec 读取 application_instances.runtime_spec_json 中该实例最近
+// 一次成功应用的 runtime spec。它只用于设施反向代理的 reload/recreate 身份比较：
+// 读失败或空 spec 时返回零值（设施按“无 current = 首装”规划 recreate），绝不阻塞
+// 协调本身。
+func (r *serviceRuntimeReconciler) storedRuntimeSpec(ctx context.Context, req controlplane.ReconcileRequestRPC) appruntime.Spec {
+	if r == nil || r.service == nil || r.service.db == nil {
+		return appruntime.Spec{}
+	}
+	query := orm.New(r.service.db).From("application_instances").Select("runtime_spec_json")
+	if instanceID := strings.TrimSpace(req.InstanceID); instanceID != "" {
+		query = query.Where("id=?", instanceID)
+	} else {
+		query = query.Where("application_id=?", req.ApplicationID).And("server_id=?", req.ServerID)
+	}
+	var raw string
+	if err := query.ScanValue(ctx, &raw); err != nil {
+		if err != sql.ErrNoRows {
+			logging.From(ctx).Warn("read stored runtime spec failed; facility plan will treat it as first install",
+				zap.String("serverId", req.ServerID),
+				zap.String("applicationId", req.ApplicationID),
+				zap.String("instanceId", req.InstanceID),
+				zap.Error(err),
+			)
+		}
+		return appruntime.Spec{}
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "null" || raw == "{}" {
+		return appruntime.Spec{}
+	}
+	var spec appruntime.Spec
+	if err := json.Unmarshal([]byte(raw), &spec); err != nil {
+		logging.From(ctx).Warn("stored runtime spec is not valid JSON; facility plan will treat it as first install",
+			zap.String("serverId", req.ServerID),
+			zap.String("applicationId", req.ApplicationID),
+			zap.String("instanceId", req.InstanceID),
+			zap.Error(err),
+		)
+		return appruntime.Spec{}
+	}
+	return spec
 }
 
 // withServerQueue serializes Docker-mutating reconcile work through the shared

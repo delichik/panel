@@ -178,6 +178,8 @@ func TestRenderAnyAccessRelayTLSUsesPublicCABundleNotLeaf(t *testing.T) {
 		OriginServerIDs: []string{"srv-origin"},
 		AnyAccess:       applications.AnyAccessConfig{Enabled: true, Strategy: applications.AnyAccessStrategyRoundRobin},
 		Paths:           []applications.ReverseProxyPath{{Path: "/"}},
+		HTTPSEnabled:    true,
+		HTTP2Enabled:    true,
 	}
 	app := applications.ApplicationReverseProxyConfig{ApplicationID: "app-1", ApplicationName: "app", Routes: []applications.ReverseProxyRoute{route}}
 	cfg := ReverseProxyConfig{DeploymentServers: []string{"srv-origin", "srv-relay"}}
@@ -311,6 +313,7 @@ func TestProxySpecUsesFixedSupportedImage(t *testing.T) {
 	wantPorts := []appruntime.Port{
 		{Label: "http", ContainerPort: 80, HostPort: 80, Protocol: "tcp"},
 		{Label: "https", ContainerPort: 443, HostPort: 443, Protocol: "tcp"},
+		{Label: "https-quic", ContainerPort: 443, HostPort: 443, Protocol: "udp"},
 	}
 	if !reflect.DeepEqual(spec.Ports, wantPorts) {
 		t.Fatalf("ports = %#v, want %#v", spec.Ports, wantPorts)
@@ -543,7 +546,22 @@ func TestContainerProxyTargetDefersUpstreamResolution(t *testing.T) {
 
 func TestReverseProxyFacilityPlansReload(t *testing.T) {
 	svc := &Service{}
-	plan := svc.PlanRuntimeUpdate(context.Background(), applications.Application{ID: proxyApplicationID}, server.Server{}, appruntime.Spec{}, appruntime.Spec{})
+	current := appruntime.Spec{
+		ID:            proxyApplicationID,
+		ApplicationID: proxyApplicationID,
+		Image:         supportedProxyImage,
+		ImageDigest:   "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Command:       []string{"nginx", "-c", "/etc/panel-nginx/nginx.conf", "-g", "daemon off;"},
+		Ports: []appruntime.Port{
+			{Label: "http", ContainerPort: 80, HostPort: 80, Protocol: "tcp"},
+			{Label: "https", ContainerPort: 443, HostPort: 443, Protocol: "tcp"},
+			{Label: "https-quic", ContainerPort: 443, HostPort: 443, Protocol: "udp"},
+		},
+		Restart: appruntime.Restart{Policy: "no"},
+	}
+	desired := current
+	desired.SpecHash = "new-nginx-content-hash"
+	plan := svc.PlanRuntimeUpdate(context.Background(), applications.Application{ID: proxyApplicationID}, server.Server{}, current, desired)
 	if plan.Mode != appruntime.UpdateModeReload || plan.Strategy == nil || len(plan.Strategy.ValidateCommand) == 0 || len(plan.Strategy.ReloadCommand) == 0 {
 		t.Fatalf("reload plan = %#v", plan)
 	}
@@ -554,6 +572,37 @@ func TestReverseProxyFacilityPlansReload(t *testing.T) {
 	}
 	if !reflect.DeepEqual(plan.Strategy.ReloadCommand, wantReload) {
 		t.Fatalf("reload command = %#v, want %#v", plan.Strategy.ReloadCommand, wantReload)
+	}
+}
+
+// FAC-RP-009: 镜像 digest 或端口布局变化属于运行时身份变化，必须 recreate。
+func TestReverseProxyFacilityRecreatesOnIdentityChange(t *testing.T) {
+	svc := &Service{}
+	base := appruntime.Spec{
+		ID:            proxyApplicationID,
+		ApplicationID: proxyApplicationID,
+		Image:         supportedProxyImage,
+		ImageDigest:   "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Command:       []string{"nginx", "-c", "/etc/panel-nginx/nginx.conf", "-g", "daemon off;"},
+		Ports:         []appruntime.Port{{Label: "http", ContainerPort: 80, HostPort: 80, Protocol: "tcp"}},
+		Restart:       appruntime.Restart{Policy: "no"},
+	}
+	app := applications.Application{ID: proxyApplicationID}
+
+	imageChanged := base
+	imageChanged.ImageDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if plan := svc.PlanRuntimeUpdate(context.Background(), app, server.Server{}, base, imageChanged); plan.Mode != appruntime.UpdateModeRecreate {
+		t.Fatalf("image digest change plan = %#v, want recreate", plan)
+	}
+
+	portChanged := base
+	portChanged.Ports = append(append([]appruntime.Port{}, base.Ports...), appruntime.Port{Label: "https-quic", ContainerPort: 443, HostPort: 443, Protocol: "udp"})
+	if plan := svc.PlanRuntimeUpdate(context.Background(), app, server.Server{}, base, portChanged); plan.Mode != appruntime.UpdateModeRecreate {
+		t.Fatalf("port change plan = %#v, want recreate", plan)
+	}
+
+	if plan := svc.PlanRuntimeUpdate(context.Background(), app, server.Server{}, appruntime.Spec{}, base); plan.Mode != appruntime.UpdateModeRecreate {
+		t.Fatalf("missing current spec plan = %#v, want recreate", plan)
 	}
 }
 

@@ -4,6 +4,7 @@ import { Package, RefreshCcw } from '@/icons';
 import { packagesApi } from '@/api/packages';
 import { waitForTask } from '@/api/taskWait';
 import Button from '@/components/ui/Button.vue';
+import Badge from '@/components/ui/Badge.vue';
 import Checkbox from '@/components/ui/Checkbox.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
@@ -44,6 +45,7 @@ const columns = computed(() => [
   { key: 'name', label: t('common.name') },
   { key: 'installed', label: t('resourcesPage.installedVersion'), nowrap: true, width: 'w-40', hideBelow: 'wide' as const },
   { key: 'candidate', label: t('resourcesPage.candidateVersion'), nowrap: true, width: 'w-40', hideBelow: 'sm' as const },
+  { key: 'security', label: t('resourcesPage.securityUpdate'), nowrap: true, width: 'w-28', hideBelow: 'wide' as const },
 ]);
 
 function clearSelection() {
@@ -178,6 +180,9 @@ onBeforeUnmount(() => {
       </template>
       <template #candidate="{ row }">
         <strong class="whitespace-nowrap text-foreground">{{ row.candidateVersion }}</strong>
+      </template>
+      <template #security="{ row }">
+        <Badge v-if="row.security" tone="warning">{{ t('resourcesPage.securityUpdate') }}</Badge>
       </template>
       <template #empty>
         <EmptyState variant="inset" :title="t('resourcesPage.noPackages')" :description="t('resourcesPage.noPackagesHint')" />

@@ -14,6 +14,7 @@ import (
 	"panel/internal/modules/activity"
 	"panel/internal/modules/appearance"
 	"panel/internal/modules/applications"
+	"panel/internal/modules/autoupdate"
 	"panel/internal/modules/backups"
 	"panel/internal/modules/certificates/certs"
 	"panel/internal/modules/certificates/dns"
@@ -189,6 +190,12 @@ func New(cfg config.Config) (*App, error) {
 	// 连接；解析器依赖 servers 服务本身，因此必须在构造完成后注入。
 	executor.SetProxyResolver(serverSvc)
 	agentClient.SetDialFunc(serverSvc.DialContext)
+	// Panel 侧的镜像 digest 解析器：读取设置页「镜像仓库源」的 endpoint/scheme，
+	// 支持受限网络下经镜像/私有仓库解析；provider 每次解析读取热更新设置。
+	imageResolver := applications.NewRegistryImageResolverWithConfig(func() applications.ImageRegistryConfig {
+		registry := settingsSvc.Runtime().ImageRegistry
+		return applications.ImageRegistryConfig{Endpoint: registry.Endpoint, Scheme: registry.Scheme}
+	})
 	applicationSvc := applications.NewServiceWithOptions(store.AppDB(), agentClient, taskSvc, applications.Config{
 		SaveSessionDir: applicationSaveSessionDir(cfg),
 		DataRoot:       cfg.DataRoot,
@@ -198,6 +205,7 @@ func New(cfg config.Config) (*App, error) {
 		applications.WithInternalFileProvider(internalFileRegistry),
 		applications.WithContainerOperationQueue(containerBridge),
 		applications.WithRuntimeEvents(eventWriter),
+		applications.WithImageDigestResolver(imageResolver),
 	)
 	if err := applicationSvc.BackfillApplicationFileBlobs(context.Background()); err != nil {
 		_ = store.Close()
@@ -207,6 +215,7 @@ func New(cfg config.Config) (*App, error) {
 	containerBridge.apps = applicationSvc
 	containerSvc := containerization.NewService(store.AppDB(), serverSvc, agentClient, taskSvc,
 		containerization.WithApplicationUpdater(containerBridge),
+		containerization.WithImageDigestResolver(imageResolver),
 	)
 	containerBridge.containers = containerSvc
 	applicationSvc.SetApplicationReconcileTrigger(containerSvc)
@@ -243,10 +252,24 @@ func New(cfg config.Config) (*App, error) {
 		facilityapps.WithDNSProvider(dnsSvc),
 		facilityapps.WithTaskService(taskSvc),
 		facilityapps.WithSSHExecutor(executor),
+		facilityapps.WithImageResolver(imageResolver),
 	)
 	serverSvc.SetDNSSyncTrigger(facilitySvc.SyncServersDNSEntries)
 	// 节点删除后入口代理与存储共享必须按修剪后的配置重新渲染。
 	serverSvc.SetServerReferenceReconciler(facilitySvc)
+	// 自动更新协调器：设置页「自动更新」驱动；各能力均通过本包接口注入。
+	autoUpdateSvc := autoupdate.NewService(taskSvc, settingsSvc,
+		autoupdate.WithServerLister(serverSvc),
+		autoupdate.WithApplicationLister(applicationSvc),
+		autoupdate.WithApplicationUpgrader(containerSvc),
+		autoupdate.WithImageRefresher(containerSvc),
+		autoupdate.WithPackageMaintainer(packageSvc),
+		autoupdate.WithReverseProxyImageUpdater(facilitySvc),
+	)
+	autoUpdateSvc.RegisterTasks(taskSvc)
+	// 设置页“立即运行一次”通过 settings 服务转发到 autoupdate，避免 settings
+	// 反向依赖 autoupdate 包。
+	settingsSvc.SetAutoUpdateRunner(autoUpdateSvc)
 	containerBridge.facility = facilitySvc
 	applicationSvc.SetReverseProxyReconciler(facilitySvc)
 	applicationSvc.SetReverseProxyPolicyProvider(facilitySvc)
@@ -332,6 +355,8 @@ func New(cfg config.Config) (*App, error) {
 	packageSvc.StartPeriodic(periodicCtx, taskSvc)
 	certSvc.StartPeriodic(periodicCtx, taskSvc)
 	keyAssetSvc.StartPeriodic(periodicCtx, taskSvc)
+	facilitySvc.StartPeriodic(periodicCtx, taskSvc)
+	autoUpdateSvc.StartPeriodic(periodicCtx)
 	appearanceSvc.StartPeriodic(periodicCtx)
 	metricsCleanup.Start(context.Background())
 	eventWriter.Start(context.Background())

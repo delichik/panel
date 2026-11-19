@@ -352,19 +352,34 @@ func (s *Service) listApplicationRouteRecords(ctx context.Context) ([]ConfigReco
 			row, err := s.loadRouteRow(ctx, domain)
 			version := 1
 			updated := time.Time{}
+			var directives []string
 			if err == nil {
 				version = row.Version
 				updated = row.UpdatedAt
+				directives = append([]string{}, row.CustomServerDirectives...)
 			}
+			// applications 的映射结果已归一化，优先使用它；行缺失时保持空。
+			if len(route.CustomServerDirectives) > 0 {
+				directives = append([]string{}, route.CustomServerDirectives...)
+			}
+			transport := applicationRouteTransport(route)
+			httpsEnabled, http2Enabled, http3Enabled := proxyTransportPointers(transport)
 			out = append(out, ConfigRecord{
 				RecordID: domain,
 				Kind:     configRecordKindApplicationRoute,
 				Version:  version,
 				Domain: FacilityRouteDomain{
-					Domain:          domain,
-					Version:         version,
-					OriginServerIDs: append([]string{}, route.OriginServerIDs...),
-					AnyAccess:       route.AnyAccess,
+					Domain:                 domain,
+					Version:                version,
+					OriginServerIDs:        append([]string{}, route.OriginServerIDs...),
+					AnyAccess:              route.AnyAccess,
+					HTTPSEnabled:           httpsEnabled,
+					HTTP2Enabled:           http2Enabled,
+					HTTP3Enabled:           http3Enabled,
+					HTTPPortMode:           httpPortModeOverridePtr(route.HTTPPortMode),
+					HSTSEnabled:            cloneHSTSEnabledOverride(route.HSTSEnabled),
+					ClientMaxBodySize:      clientMaxBodySizeOverridePtr(route.ClientMaxBodySize),
+					CustomServerDirectives: directives,
 				},
 				ApplicationID:   app.ApplicationID,
 				ApplicationName: app.ApplicationName,
@@ -393,12 +408,20 @@ func (s *Service) routeRowToDomain(ctx context.Context, row models.ReverseProxyR
 	var paths []FacilityRoutePath
 	pathsRaw, _ := json.Marshal(row.PathsJSON)
 	_ = json.Unmarshal(pathsRaw, &paths)
+	httpsEnabled, http2Enabled, http3Enabled := row.HTTPSEnabled, row.HTTP2Enabled, row.HTTP3Enabled
 	domain := FacilityRouteDomain{
-		Domain:          strings.ToLower(strings.TrimSpace(row.Domain)),
-		Version:         row.Version,
-		OriginServerIDs: uniqueSorted(row.OriginServerIDs),
-		AnyAccess:       anyAccess,
-		Paths:           paths,
+		Domain:                 strings.ToLower(strings.TrimSpace(row.Domain)),
+		Version:                row.Version,
+		OriginServerIDs:        uniqueSorted(row.OriginServerIDs),
+		AnyAccess:              anyAccess,
+		Paths:                  paths,
+		HTTPSEnabled:           &httpsEnabled,
+		HTTP2Enabled:           &http2Enabled,
+		HTTP3Enabled:           &http3Enabled,
+		HTTPPortMode:           httpPortModeOverridePtr(row.HTTPPortMode),
+		HSTSEnabled:            hstsEnabledOverridePtr(row.HSTSEnabled),
+		ClientMaxBodySize:      clientMaxBodySizeOverridePtr(row.ClientMaxBodySize),
+		CustomServerDirectives: append([]string{}, row.CustomServerDirectives...),
 	}
 	for i := range domain.Paths {
 		s.normalizeStoredRouteAsset(ctx, &domain.Paths[i])

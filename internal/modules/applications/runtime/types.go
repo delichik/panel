@@ -39,7 +39,11 @@ type Spec struct {
 	ContainerName string            `json:"containerName,omitempty"`
 	Name          string            `json:"name"`
 	Image         string            `json:"image"`
-	Command       []string          `json:"command,omitempty"`
+	// ImageDigest 是该节点目标镜像的内容 digest（可为空=未解析）。它参与
+	// 代理身份哈希与 spec hash，用于区分"镜像 digest 变化须 recreate"与
+	// "纯配置变化只 reload"；Agent protobuf 不传输该字段（面板侧决策用）。
+	ImageDigest string            `json:"imageDigest,omitempty"`
+	Command     []string          `json:"command,omitempty"`
 	Env           map[string]string `json:"env,omitempty"`
 	Ports         []Port            `json:"ports,omitempty"`
 	Resources     Resources         `json:"resources"`

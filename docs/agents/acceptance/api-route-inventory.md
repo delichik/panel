@@ -7,7 +7,7 @@
 - `API-COV-003`：同一路径的不同 method 是不同操作，必须分别验证；动态参数名变化也视为合同变化。
 - `API-COV-004`：本清单覆盖主 Panel 路由；备份导出/恢复最小维护应用的额外路由由备份恢复文档独立逐项约束。
 - `API-COV-006`：本清单与 `COV-API-003` 的计数只覆盖 `/api/...` 路由，公开产物路由 `GET /agent/{version}/{platform}/panel-agent.gz` 与 `/agent/` 前缀的 404 兜底不在其中——这是有意为之，不是遗漏。它属于认证之外、由 CDN 缓存的产物面，验收合同见 [服务器、安全与软件包](servers-security-packages.md) 的 `AGT-DL-001..011`，路由清单断言见 `SRV-EVD-005` 与 `internal/bootstrap/panel/routes_manifest_test.go` 中的公开路由清单测试。
-- `API-COV-005`：排序后清单的条目数与 SHA-256 以 `internal/bootstrap/panel/routes_manifest_test.go` 中 `TestAPIRouteManifest` 的 `wantCount` / `wantHash` 为准；当前主 Panel 基线为 **194** 条（本表同为 194 行）。events/logs 重命名后须在同一改动中重跑该测试并更新期望值。本文表格只作逐项映射，不得在此硬编码与测试不一致的哈希。
+- `API-COV-005`：排序后清单的条目数与 SHA-256 以 `internal/bootstrap/panel/routes_manifest_test.go` 中 `TestAPIRouteManifest` 的 `wantCount` / `wantHash` 为准；当前主 Panel 基线为 **202** 条（本表同为 202 行）。events/logs 重命名后须在同一改动中重跑该测试并更新期望值。本文表格只作逐项映射，不得在此硬编码与测试不一致的哈希。
 - `API-COV-007`：服务器连接代理模式（`SRV-PROXY-001..014`）不新增 method/path：探测仍是既有 `POST /api/v1/servers/probe`（表中序号 152），只是请求/响应增加 `proxyMode`、`tunnelServerId`、`socks5Address`、`socks5Username`、`socks5Password`、探测专用可选 `serverId`（保存接口忽略）与派生 `proxyInvalid`/`proxyError` 等字段；`GET/POST/PUT /servers` 同路径增加字段。因此本清单条目数与路由清单哈希保持不变，任何“为代理新增路由”的实现都属于偏离合同。
 
 | # | Method | Path | 验收文档 |
@@ -206,3 +206,11 @@
 | 192 | `PUT` | `/api/v1/settings/runtime/general` | [身份、设置与系统](identity-settings-system.md) `SET-RUN-022` |
 | 193 | `PUT` | `/api/v1/settings/runtime/security` | [身份、设置与系统](identity-settings-system.md) `SET-RUN-022` |
 | 194 | `PUT` | `/api/v1/settings/server-variables` | [身份、设置与系统](identity-settings-system.md) |
+| 195 | `POST` | `/api/v1/facility-apps/reverse-proxy/image/check` | [应用与设施应用](applications-and-facilities.md) `FAC-RP-014` |
+| 196 | `POST` | `/api/v1/facility-apps/reverse-proxy/image/update` | [应用与设施应用](applications-and-facilities.md) `FAC-RP-014` |
+| 197 | `PUT` | `/api/v1/facility-apps/reverse-proxy/settings` | [应用与设施应用](applications-and-facilities.md) `FAC-RP-015` |
+| 198 | `PUT` | `/api/v1/settings/runtime/auto-update` | [身份、设置与系统](identity-settings-system.md) `SET-RUN-023` |
+| 199 | `POST` | `/api/v1/facility-apps/reverse-proxy/image/rollback` | [应用与设施应用](applications-and-facilities.md) `FAC-RP-014` |
+| 200 | `POST` | `/api/v1/facility-apps/reverse-proxy/image/resume` | [应用与设施应用](applications-and-facilities.md) `FAC-RP-014` |
+| 201 | `POST` | `/api/v1/settings/runtime/auto-update/run` | [身份、设置与系统](identity-settings-system.md) `SET-RUN-023` |
+| 202 | `PUT` | `/api/v1/settings/runtime/image-registry` | [身份、设置与系统](identity-settings-system.md) `SET-RUN-024` |

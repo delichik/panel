@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"net/http"
 	"net/mail"
 	"net/url"
 	"regexp"
@@ -31,6 +32,9 @@ import (
 )
 
 var serverVariableKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// autoUpdateScheduleTimePattern 校验每日自动更新执行时间：24 小时制 HH:MM。
+var autoUpdateScheduleTimePattern = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
 
 type RuntimeCertificateSettings struct {
 	Email                      string `json:"email"`
@@ -56,6 +60,69 @@ type RuntimeAgentSettings struct {
 	TransferTimeoutSeconds int    `json:"transferTimeoutSeconds"`
 }
 
+// RuntimeImageRegistrySettings 是「镜像仓库源」分区：拉取镜像时使用的仓库
+// 地址与协议。Endpoint 为空表示官方默认仓库；非空时必须是不带 scheme 的裸
+// host[:port]，协议由 Scheme 单独表达，避免把 "https://" 混进地址参与拼接。
+type RuntimeImageRegistrySettings struct {
+	Endpoint string `json:"endpoint"`
+	Scheme   string `json:"scheme"`
+}
+
+// RuntimeImageRegistryUpdate 是 PUT /api/v1/settings/runtime/image-registry 的
+// 写入负载。字段用指针区分「省略 = 保留现值」与「显式清空」：endpoint 显式
+// 空串表示回到官方仓库。
+type RuntimeImageRegistryUpdate struct {
+	Endpoint *string `json:"endpoint"`
+	Scheme   *string `json:"scheme"`
+}
+
+// RuntimeAutoUpdateSettings 是设置页「自动更新」分区（SET-RUN-023）。前四个字段
+// 由用户编辑；lastRun* 是只读运行态，由 autoupdate 协调任务写入，分区 PUT 不接受。
+type RuntimeAutoUpdateSettings struct {
+	AppsEnabled     bool   `json:"appsEnabled"`
+	PackagesEnabled bool   `json:"packagesEnabled"`
+	PackagesMode    string `json:"packagesMode"`
+	ScheduleTime    string `json:"scheduleTime"`
+	// LastRunAt 是最近一次自动更新开始时间（RFC3339，UTC）。它是跨重启的当日
+	// 去重依据：任务历史只保留 24 小时，不能只靠任务查询。
+	LastRunAt     string `json:"lastRunAt,omitempty"`
+	LastRunStatus string `json:"lastRunStatus,omitempty"`
+	LastRunTaskID string `json:"lastRunTaskId,omitempty"`
+}
+
+// RuntimeAutoUpdateUpdate 是 PUT /api/v1/settings/runtime/auto-update 的写入负载。
+// 四个字段都用指针表达「省略 = 保留现值」：布尔值若用值类型，关闭开关会被
+// Update 的「零值 = 保留」规则吞掉，导致自动更新永远无法关闭。
+type RuntimeAutoUpdateUpdate struct {
+	AppsEnabled     *bool   `json:"appsEnabled"`
+	PackagesEnabled *bool   `json:"packagesEnabled"`
+	PackagesMode    *string `json:"packagesMode"`
+	ScheduleTime    *string `json:"scheduleTime"`
+}
+
+// RuntimeAutoUpdateRunRequest 是 POST /api/v1/settings/runtime/auto-update/run
+// 的可选临时覆盖：省略（或空串）字段沿用当前设置，覆盖只在本次运行生效，
+// 不写回 runtime_settings。
+type RuntimeAutoUpdateRunRequest struct {
+	AppsEnabled     *bool   `json:"appsEnabled"`
+	PackagesEnabled *bool   `json:"packagesEnabled"`
+	PackagesMode    *string `json:"packagesMode"`
+}
+
+// RuntimeAutoUpdateRunState 是协调任务写入的只读运行态快照。
+type RuntimeAutoUpdateRunState struct {
+	LastRunAt     time.Time
+	LastRunStatus string
+	LastRunTaskID string
+}
+
+// AutoUpdateManualRunner 是手动「立即运行一次」的委托目标，由 autoupdate 模块
+// 实现。装配顺序上 autoupdate 服务在 settings 之后创建，因此通过
+// SetAutoUpdateRunner 注入，避免 settings 反向依赖 autoupdate。
+type AutoUpdateManualRunner interface {
+	RunAutoUpdateNow(context.Context, RuntimeAutoUpdateSettings) (string, error)
+}
+
 type TLSAssetProvider interface {
 	AssetType(context.Context, string) (string, error)
 	ReadFile(context.Context, string, string) ([]byte, string, error)
@@ -77,16 +144,18 @@ type ServerVariableDefinitionsUpdate struct {
 // 复用校验、原子持久化、热更新与 Panel TLS 临界区；identity 等模块仍可直接
 // 使用 Update 做跨分区的小范围更新。
 type RuntimeUpdate struct {
-	ContainerReportIntervalSeconds int                         `json:"containerReportIntervalSeconds"`
-	TokenExpiration                string                      `json:"tokenExpiration"`
-	Language                       string                      `json:"language"`
-	LogLevel                       string                      `json:"logLevel"`
-	RemoteCommandTimeoutSeconds    int                         `json:"remoteCommandTimeoutSeconds"`
-	ReconcileTraceEnabled          *bool                       `json:"reconcileTraceEnabled"`
-	Branding                       *RuntimeBrandingSettings    `json:"branding"`
-	Certificates                   *RuntimeCertificateSettings `json:"certificates"`
-	Panel                          *RuntimePanelSettings       `json:"panel"`
-	Agent                          *RuntimeAgentSettings       `json:"agent"`
+	ContainerReportIntervalSeconds int                           `json:"containerReportIntervalSeconds"`
+	TokenExpiration                string                        `json:"tokenExpiration"`
+	Language                       string                        `json:"language"`
+	LogLevel                       string                        `json:"logLevel"`
+	RemoteCommandTimeoutSeconds    int                           `json:"remoteCommandTimeoutSeconds"`
+	ReconcileTraceEnabled          *bool                         `json:"reconcileTraceEnabled"`
+	Branding                       *RuntimeBrandingSettings      `json:"branding"`
+	Certificates                   *RuntimeCertificateSettings   `json:"certificates"`
+	Panel                          *RuntimePanelSettings         `json:"panel"`
+	Agent                          *RuntimeAgentSettings         `json:"agent"`
+	ImageRegistry                  *RuntimeImageRegistrySettings `json:"imageRegistry"`
+	AutoUpdate                     *RuntimeAutoUpdateSettings    `json:"autoUpdate"`
 }
 
 // RuntimeGeneralUpdate 是 PUT /api/v1/settings/runtime/general 的写入负载。
@@ -113,22 +182,24 @@ type RuntimeCertificatesUpdate struct {
 }
 
 type RuntimeSettings struct {
-	ListenAddress                  string                     `json:"listenAddress"`
-	AppDatabase                    string                     `json:"appDatabase"`
-	MetricsDatabase                string                     `json:"metricsDatabase"`
-	DataRoot                       string                     `json:"dataRoot"`
-	ContainerReportIntervalSeconds int                        `json:"containerReportIntervalSeconds"`
-	TokenExpiration                string                     `json:"tokenExpiration"`
-	Language                       string                     `json:"language"`
-	LogLevel                       string                     `json:"logLevel"`
-	RemoteCommandTimeoutSeconds    int                        `json:"remoteCommandTimeoutSeconds"`
-	ReconcileTraceEnabled          bool                       `json:"reconcileTraceEnabled"`
-	Branding                       RuntimeBrandingSettings    `json:"branding"`
-	Certificates                   RuntimeCertificateSettings `json:"certificates"`
-	Panel                          RuntimePanelSettings       `json:"panel"`
-	Agent                          RuntimeAgentSettings       `json:"agent"`
-	JWTSecret                      string                     `json:"-"`
-	JWTSecretConfigured            bool                       `json:"jwtSecretConfigured"`
+	ListenAddress                  string                       `json:"listenAddress"`
+	AppDatabase                    string                       `json:"appDatabase"`
+	MetricsDatabase                string                       `json:"metricsDatabase"`
+	DataRoot                       string                       `json:"dataRoot"`
+	ContainerReportIntervalSeconds int                          `json:"containerReportIntervalSeconds"`
+	TokenExpiration                string                       `json:"tokenExpiration"`
+	Language                       string                       `json:"language"`
+	LogLevel                       string                       `json:"logLevel"`
+	RemoteCommandTimeoutSeconds    int                          `json:"remoteCommandTimeoutSeconds"`
+	ReconcileTraceEnabled          bool                         `json:"reconcileTraceEnabled"`
+	Branding                       RuntimeBrandingSettings      `json:"branding"`
+	Certificates                   RuntimeCertificateSettings   `json:"certificates"`
+	Panel                          RuntimePanelSettings         `json:"panel"`
+	Agent                          RuntimeAgentSettings         `json:"agent"`
+	ImageRegistry                  RuntimeImageRegistrySettings `json:"imageRegistry"`
+	AutoUpdate                     RuntimeAutoUpdateSettings    `json:"autoUpdate"`
+	JWTSecret                      string                       `json:"-"`
+	JWTSecretConfigured            bool                         `json:"jwtSecretConfigured"`
 }
 
 const (
@@ -147,6 +218,31 @@ const (
 	RuntimeSettingAgentDownloadBaseURL                 = "agent.downloadBaseUrl"
 	RuntimeSettingAgentDownloadVerifyTLS               = "agent.downloadVerifyTls"
 	RuntimeSettingAgentTransferTimeoutSeconds          = "agent.transferTimeoutSeconds"
+	RuntimeSettingAutoUpdateAppsEnabled                = "autoUpdate.appsEnabled"
+	RuntimeSettingAutoUpdatePackagesEnabled            = "autoUpdate.packagesEnabled"
+	RuntimeSettingAutoUpdatePackagesMode               = "autoUpdate.packagesMode"
+	RuntimeSettingAutoUpdateScheduleTime               = "autoUpdate.scheduleTime"
+	RuntimeSettingAutoUpdateLastRunAt                  = "autoUpdate.lastRunAt"
+	RuntimeSettingAutoUpdateLastRunStatus              = "autoUpdate.lastRunStatus"
+	RuntimeSettingAutoUpdateLastRunTaskID              = "autoUpdate.lastRunTaskId"
+	RuntimeSettingImageRegistryEndpoint                = "imageRegistry.endpoint"
+	RuntimeSettingImageRegistryScheme                  = "imageRegistry.scheme"
+
+	// 镜像仓库源协议（SET-RUN-024）。Endpoint 是裸 host[:port]，协议只允许
+	// http/https；默认 https，endpoint 为空表示官方默认仓库。
+	ImageRegistrySchemeHTTP  = "http"
+	ImageRegistrySchemeHTTPS = "https"
+
+	DefaultImageRegistryScheme = ImageRegistrySchemeHTTPS
+
+	// 自动更新软件包范围（SET-RUN-023）。仅安全范围只升级 Source 命中
+	// security 的软件包（PKG-API-011），绝不隐式退化为全部升级。
+	AutoUpdatePackagesModeSecurity = "security"
+	AutoUpdatePackagesModeAll      = "all"
+
+	// DefaultAutoUpdateScheduleTime 是每日自动更新的默认执行时间（Panel 本地
+	// 时区，24 小时制 HH:MM）。
+	DefaultAutoUpdateScheduleTime = "04:00"
 
 	// DefaultAgentTransferTimeoutSeconds bounds one agent bundle transfer on
 	// both sides. It is deliberately larger than the shared remote command
@@ -175,6 +271,8 @@ type Service struct {
 	mu        sync.RWMutex
 	rt        RuntimeSettings
 	tlsAssets TLSAssetProvider
+	// autoUpdateRunner 由 autoupdate 模块在装配后注入（见 SetAutoUpdateRunner）。
+	autoUpdateRunner AutoUpdateManualRunner
 }
 
 type Option func(*Service)
@@ -280,6 +378,44 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 			TransferTimeoutSeconds: transferTimeout,
 		}
 	}
+	// 镜像仓库源分区：endpoint 归一为小写裸 host[:port]，显式空串合法
+	// （官方仓库）；scheme 省略或空串沿用现值，其余必须是 http/https。
+	imageRegistrySettings := current.ImageRegistry
+	if input.ImageRegistry != nil {
+		endpoint, err := normalizeImageRegistryEndpoint(input.ImageRegistry.Endpoint)
+		if err != nil {
+			return RuntimeSettings{}, err
+		}
+		scheme := strings.ToLower(strings.TrimSpace(input.ImageRegistry.Scheme))
+		if scheme == "" {
+			scheme = current.ImageRegistry.Scheme
+		}
+		imageRegistrySettings = RuntimeImageRegistrySettings{Endpoint: endpoint, Scheme: scheme}
+	}
+	// 自动更新分区的写入负载是整组替换；lastRun* 只读态始终沿用内存快照，
+	// 由 RecordAutoUpdateLastRun 单独写入（不进 runtimeValues）。
+	autoUpdateSettings := current.AutoUpdate
+	if input.AutoUpdate != nil {
+		packagesMode := strings.TrimSpace(input.AutoUpdate.PackagesMode)
+		if packagesMode == "" {
+			packagesMode = current.AutoUpdate.PackagesMode
+		} else if normalized := normalizeAutoUpdatePackagesMode(packagesMode); normalized != "" {
+			packagesMode = normalized
+		}
+		scheduleTime := strings.TrimSpace(input.AutoUpdate.ScheduleTime)
+		if scheduleTime == "" {
+			scheduleTime = current.AutoUpdate.ScheduleTime
+		}
+		autoUpdateSettings = RuntimeAutoUpdateSettings{
+			AppsEnabled:     input.AutoUpdate.AppsEnabled,
+			PackagesEnabled: input.AutoUpdate.PackagesEnabled,
+			PackagesMode:    packagesMode,
+			ScheduleTime:    scheduleTime,
+			LastRunAt:       current.AutoUpdate.LastRunAt,
+			LastRunStatus:   current.AutoUpdate.LastRunStatus,
+			LastRunTaskID:   current.AutoUpdate.LastRunTaskID,
+		}
+	}
 	next := RuntimeSettings{
 		ListenAddress:                  current.ListenAddress,
 		AppDatabase:                    current.AppDatabase,
@@ -295,6 +431,8 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 		Certificates:                   certSettings,
 		Panel:                          panelSettings,
 		Agent:                          agentSettings,
+		ImageRegistry:                  imageRegistrySettings,
+		AutoUpdate:                     autoUpdateSettings,
 		JWTSecret:                      current.JWTSecret,
 		JWTSecretConfigured:            current.JWTSecretConfigured,
 	}
@@ -337,6 +475,13 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 	s.rt.Certificates = next.Certificates
 	s.rt.Panel = next.Panel
 	s.rt.Agent = next.Agent
+	s.rt.ImageRegistry = next.ImageRegistry
+	// 只覆盖可编辑字段：并发的 RecordAutoUpdateLastRun 可能已写入更新的
+	// lastRun*，整组赋值会把运行态回退到本候选快照的旧值。
+	s.rt.AutoUpdate.AppsEnabled = next.AutoUpdate.AppsEnabled
+	s.rt.AutoUpdate.PackagesEnabled = next.AutoUpdate.PackagesEnabled
+	s.rt.AutoUpdate.PackagesMode = next.AutoUpdate.PackagesMode
+	s.rt.AutoUpdate.ScheduleTime = next.AutoUpdate.ScheduleTime
 	out := s.rt
 	s.mu.Unlock()
 	i18n.SetDefaultLocale(out.Language)
@@ -378,9 +523,137 @@ func (s *Service) UpdateAgent(ctx context.Context, input RuntimeAgentSettings) (
 	return s.Update(ctx, RuntimeUpdate{Agent: &input})
 }
 
+// UpdateImageRegistry 只更新镜像仓库源分区。省略的字段沿用当前快照；endpoint
+// 显式空串表示回到官方仓库（合法），scheme 显式空串视为省略。
+func (s *Service) UpdateImageRegistry(ctx context.Context, input RuntimeImageRegistryUpdate) (RuntimeSettings, error) {
+	next := s.Runtime().ImageRegistry
+	if input.Endpoint != nil {
+		next.Endpoint = *input.Endpoint
+	}
+	if input.Scheme != nil {
+		if scheme := strings.TrimSpace(*input.Scheme); scheme != "" {
+			next.Scheme = scheme
+		}
+	}
+	return s.Update(ctx, RuntimeUpdate{ImageRegistry: &next})
+}
+
 // UpdateBranding 只更新品牌分区（登录页标题与副标题）。
 func (s *Service) UpdateBranding(ctx context.Context, input RuntimeBrandingSettings) (RuntimeSettings, error) {
 	return s.Update(ctx, RuntimeUpdate{Branding: &input})
+}
+
+// UpdateAutoUpdate 只更新自动更新分区（SET-RUN-023）。省略的字段沿用当前
+// 快照；布尔值用指针负载，关闭开关才能真正落库。
+func (s *Service) UpdateAutoUpdate(ctx context.Context, input RuntimeAutoUpdateUpdate) (RuntimeSettings, error) {
+	current := s.Runtime().AutoUpdate
+	next := RuntimeAutoUpdateSettings{
+		AppsEnabled:     current.AppsEnabled,
+		PackagesEnabled: current.PackagesEnabled,
+		PackagesMode:    current.PackagesMode,
+		ScheduleTime:    current.ScheduleTime,
+		LastRunAt:       current.LastRunAt,
+		LastRunStatus:   current.LastRunStatus,
+		LastRunTaskID:   current.LastRunTaskID,
+	}
+	if input.AppsEnabled != nil {
+		next.AppsEnabled = *input.AppsEnabled
+	}
+	if input.PackagesEnabled != nil {
+		next.PackagesEnabled = *input.PackagesEnabled
+	}
+	if input.PackagesMode != nil {
+		next.PackagesMode = strings.TrimSpace(*input.PackagesMode)
+	}
+	if input.ScheduleTime != nil {
+		next.ScheduleTime = strings.TrimSpace(*input.ScheduleTime)
+	}
+	return s.Update(ctx, RuntimeUpdate{AutoUpdate: &next})
+}
+
+// SetAutoUpdateRunner 注入手动「立即运行一次」的任务创建入口。装配顺序上
+// autoupdate 服务在 settings 之后创建，因此用 setter 而不是构造 Option。
+func (s *Service) SetAutoUpdateRunner(runner AutoUpdateManualRunner) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.autoUpdateRunner = runner
+}
+
+// RunAutoUpdateNow 手动「立即运行一次」（SET-RUN-023）：在当前设置上叠加可选
+// 临时覆盖后校验，再委托 autoupdate 模块创建 auto_update_run 任务（TriggerType
+// 为 user，跳过计划时间窗口与当日去重）。临时覆盖不落库；两开关（含覆盖后）
+// 都关时返回 422 auto_update_disabled。
+func (s *Service) RunAutoUpdateNow(ctx context.Context, input RuntimeAutoUpdateRunRequest) (string, error) {
+	s.mu.RLock()
+	runner := s.autoUpdateRunner
+	s.mu.RUnlock()
+	if runner == nil {
+		return "", panelerr.New(http.StatusServiceUnavailable, "auto_update_unavailable", "Automatic update runner is unavailable")
+	}
+	current := s.Runtime().AutoUpdate
+	effective := RuntimeAutoUpdateSettings{
+		AppsEnabled:     current.AppsEnabled,
+		PackagesEnabled: current.PackagesEnabled,
+		PackagesMode:    current.PackagesMode,
+		ScheduleTime:    current.ScheduleTime,
+	}
+	if input.AppsEnabled != nil {
+		effective.AppsEnabled = *input.AppsEnabled
+	}
+	if input.PackagesEnabled != nil {
+		effective.PackagesEnabled = *input.PackagesEnabled
+	}
+	if input.PackagesMode != nil {
+		// 与分区 PUT 一致：显式空串视为省略，保留当前范围。
+		if mode := strings.TrimSpace(*input.PackagesMode); mode != "" {
+			normalized := normalizeAutoUpdatePackagesMode(mode)
+			if normalized == "" {
+				return "", panelerr.Validation("invalid_auto_update_packages_mode", "Package update mode must be security or all")
+			}
+			effective.PackagesMode = normalized
+		}
+	}
+	if !effective.AppsEnabled && !effective.PackagesEnabled {
+		return "", panelerr.Validation("auto_update_disabled", "Automatic updates are disabled")
+	}
+	return runner.RunAutoUpdateNow(ctx, effective)
+}
+
+// AutoUpdateLastRun 返回自动更新协调任务持久化的只读运行态。调度器用它做
+// 当日去重（任务历史只保留 24 小时，不能依赖任务查询）。
+func (s *Service) AutoUpdateLastRun() RuntimeAutoUpdateRunState {
+	rt := s.Runtime().AutoUpdate
+	state := RuntimeAutoUpdateRunState{
+		LastRunStatus: rt.LastRunStatus,
+		LastRunTaskID: rt.LastRunTaskID,
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, rt.LastRunAt); err == nil {
+		state.LastRunAt = parsed
+	}
+	return state
+}
+
+// RecordAutoUpdateLastRun 写入只读运行态键并同步内存快照。这些键刻意不进入
+// runtimeValues：普通分区保存不得覆盖调度器刚写入的运行态。
+func (s *Service) RecordAutoUpdateLastRun(ctx context.Context, state RuntimeAutoUpdateRunState) error {
+	at := state.LastRunAt
+	if at.IsZero() {
+		at = time.Now()
+	}
+	values := map[string]string{
+		RuntimeSettingAutoUpdateLastRunAt:     at.UTC().Format(time.RFC3339Nano),
+		RuntimeSettingAutoUpdateLastRunStatus: strings.TrimSpace(state.LastRunStatus),
+		RuntimeSettingAutoUpdateLastRunTaskID: strings.TrimSpace(state.LastRunTaskID),
+	}
+	if err := s.saveValues(ctx, values); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.rt.AutoUpdate.LastRunAt = values[RuntimeSettingAutoUpdateLastRunAt]
+	s.rt.AutoUpdate.LastRunStatus = values[RuntimeSettingAutoUpdateLastRunStatus]
+	s.rt.AutoUpdate.LastRunTaskID = values[RuntimeSettingAutoUpdateLastRunTaskID]
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *Service) syncPanelTLS(ctx context.Context, panel RuntimePanelSettings) error {
@@ -576,6 +849,34 @@ func (s *Service) load(ctx context.Context) error {
 			if n, err := strconv.Atoi(value); err == nil {
 				next.Agent.TransferTimeoutSeconds = n
 			}
+		case RuntimeSettingImageRegistryEndpoint:
+			// 旧库/手工改库的非法值静默回退到官方仓库，启动不失败。
+			if endpoint, err := normalizeImageRegistryEndpoint(value); err == nil {
+				next.ImageRegistry.Endpoint = endpoint
+			}
+		case RuntimeSettingImageRegistryScheme:
+			if scheme := normalizeImageRegistryScheme(value); scheme != "" {
+				next.ImageRegistry.Scheme = scheme
+			}
+		case RuntimeSettingAutoUpdateAppsEnabled:
+			next.AutoUpdate.AppsEnabled = strings.TrimSpace(value) == "true"
+		case RuntimeSettingAutoUpdatePackagesEnabled:
+			next.AutoUpdate.PackagesEnabled = strings.TrimSpace(value) == "true"
+		case RuntimeSettingAutoUpdatePackagesMode:
+			// 旧库/手工改库的非法值静默归一：保留默认 security，启动不失败。
+			if mode := normalizeAutoUpdatePackagesMode(value); mode != "" {
+				next.AutoUpdate.PackagesMode = mode
+			}
+		case RuntimeSettingAutoUpdateScheduleTime:
+			if schedule := strings.TrimSpace(value); autoUpdateScheduleTimePattern.MatchString(schedule) {
+				next.AutoUpdate.ScheduleTime = schedule
+			}
+		case RuntimeSettingAutoUpdateLastRunAt:
+			next.AutoUpdate.LastRunAt = strings.TrimSpace(value)
+		case RuntimeSettingAutoUpdateLastRunStatus:
+			next.AutoUpdate.LastRunStatus = strings.TrimSpace(value)
+		case RuntimeSettingAutoUpdateLastRunTaskID:
+			next.AutoUpdate.LastRunTaskID = strings.TrimSpace(value)
 		}
 	}
 	if err := validateRuntimeSettings(next); err != nil {
@@ -622,6 +923,13 @@ func defaultRuntimeSettings(cfg config.Config) RuntimeSettings {
 		Agent: RuntimeAgentSettings{
 			TransferTimeoutSeconds: DefaultAgentTransferTimeoutSeconds,
 		},
+		ImageRegistry: RuntimeImageRegistrySettings{
+			Scheme: DefaultImageRegistryScheme,
+		},
+		AutoUpdate: RuntimeAutoUpdateSettings{
+			PackagesMode: AutoUpdatePackagesModeSecurity,
+			ScheduleTime: DefaultAutoUpdateScheduleTime,
+		},
 		JWTSecret:           jwtSecret,
 		JWTSecretConfigured: jwtSecret != "",
 	}
@@ -644,6 +952,12 @@ func runtimeValues(settings RuntimeSettings, includeJWT bool) map[string]string 
 		RuntimeSettingAgentDownloadBaseURL:                 settings.Agent.DownloadBaseURL,
 		RuntimeSettingAgentDownloadVerifyTLS:               strconv.FormatBool(settings.Agent.DownloadVerifyTLS),
 		RuntimeSettingAgentTransferTimeoutSeconds:          strconv.Itoa(settings.Agent.TransferTimeoutSeconds),
+		RuntimeSettingImageRegistryEndpoint:                settings.ImageRegistry.Endpoint,
+		RuntimeSettingImageRegistryScheme:                  settings.ImageRegistry.Scheme,
+		RuntimeSettingAutoUpdateAppsEnabled:                strconv.FormatBool(settings.AutoUpdate.AppsEnabled),
+		RuntimeSettingAutoUpdatePackagesEnabled:            strconv.FormatBool(settings.AutoUpdate.PackagesEnabled),
+		RuntimeSettingAutoUpdatePackagesMode:               settings.AutoUpdate.PackagesMode,
+		RuntimeSettingAutoUpdateScheduleTime:               settings.AutoUpdate.ScheduleTime,
 	}
 	if includeJWT {
 		values[RuntimeSettingJWTSecret] = settings.JWTSecret
@@ -687,7 +1001,52 @@ func validateRuntimeSettings(settings RuntimeSettings) error {
 	if err := validateAgentSettings(settings.Agent); err != nil {
 		return err
 	}
+	if err := validateImageRegistrySettings(settings.ImageRegistry); err != nil {
+		return err
+	}
+	if err := validateAutoUpdateSettings(settings.AutoUpdate); err != nil {
+		return err
+	}
 	return ValidateJWTSecret(settings.JWTSecret)
+}
+
+// validateAutoUpdateSettings 校验自动更新分区的枚举与时间格式（SET-RUN-023）。
+// 运行态 lastRun* 只由协调任务写入，不在这里校验。
+func validateAutoUpdateSettings(settings RuntimeAutoUpdateSettings) error {
+	switch settings.PackagesMode {
+	case AutoUpdatePackagesModeSecurity, AutoUpdatePackagesModeAll:
+	default:
+		return panelerr.Validation("invalid_auto_update_packages_mode", "Package update mode must be security or all")
+	}
+	if !autoUpdateScheduleTimePattern.MatchString(strings.TrimSpace(settings.ScheduleTime)) {
+		return panelerr.Validation("invalid_auto_update_schedule_time", "Automatic update schedule time must be in HH:MM format")
+	}
+	return nil
+}
+
+// normalizeAutoUpdatePackagesMode 把合法模式归一为稳定小写枚举；非法值返回空串，
+// 调用方据此决定是保留默认值（load）还是交给校验报错（Update）。
+func normalizeAutoUpdatePackagesMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case AutoUpdatePackagesModeSecurity:
+		return AutoUpdatePackagesModeSecurity
+	case AutoUpdatePackagesModeAll:
+		return AutoUpdatePackagesModeAll
+	default:
+		return ""
+	}
+}
+
+// ParseAutoUpdateScheduleTime 解析每日自动更新执行时间 HH:MM（24 小时制）。
+// 调度器与设置校验共用同一份格式判定，避免两处漂移。
+func ParseAutoUpdateScheduleTime(value string) (hour, minute int, ok bool) {
+	trimmed := strings.TrimSpace(value)
+	if !autoUpdateScheduleTimePattern.MatchString(trimmed) {
+		return 0, 0, false
+	}
+	hour, _ = strconv.Atoi(trimmed[0:2])
+	minute, _ = strconv.Atoi(trimmed[3:5])
+	return hour, minute, true
 }
 
 func validateAgentSettings(settings RuntimeAgentSettings) error {
@@ -727,6 +1086,141 @@ func normalizeAgentDownloadBaseURL(value string) (string, error) {
 		return "", panelerr.Validation("invalid_agent_download_base_url", "Agent download base URL must be a bare origin without a path, query, fragment or credentials")
 	}
 	return parsed.Scheme + "://" + parsed.Host, nil
+}
+
+// validateImageRegistrySettings 校验镜像仓库源分区：endpoint 为空或裸
+// host[:port]，scheme 仅 http/https。
+func validateImageRegistrySettings(settings RuntimeImageRegistrySettings) error {
+	if _, err := normalizeImageRegistryEndpoint(settings.Endpoint); err != nil {
+		return err
+	}
+	if normalizeImageRegistryScheme(settings.Scheme) == "" {
+		return panelerr.Validation("invalid_image_registry_scheme", "Image registry scheme must be http or https")
+	}
+	return nil
+}
+
+// normalizeImageRegistryScheme 把合法协议归一为稳定小写枚举；非法值返回空串，
+// 调用方据此决定是保留默认值（load）还是交给校验报错（Update）。
+func normalizeImageRegistryScheme(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case ImageRegistrySchemeHTTP:
+		return ImageRegistrySchemeHTTP
+	case ImageRegistrySchemeHTTPS:
+		return ImageRegistrySchemeHTTPS
+	default:
+		return ""
+	}
+}
+
+// normalizeImageRegistryEndpoint 校验并归一化镜像仓库地址。空串合法，表示使用
+// 官方默认仓库；非空值必须是裸 host[:port]：不允许携带 scheme、path、query、
+// userinfo、空白、引号或反斜杠，端口范围为 1..65535。带端口的 IPv6 字面量必须
+// 加方括号，避免与 host:port 产生歧义。
+func normalizeImageRegistryEndpoint(value string) (string, error) {
+	trimmed := strings.ToLower(strings.TrimSpace(value))
+	if trimmed == "" {
+		return "", nil
+	}
+	if strings.ContainsAny(trimmed, " \t\r\n\"'`\\/?#@") {
+		return "", invalidImageRegistryEndpoint()
+	}
+	if strings.HasPrefix(trimmed, "[") {
+		return normalizeBracketedImageRegistryEndpoint(trimmed)
+	}
+	if strings.Count(trimmed, ":") > 1 {
+		return "", invalidImageRegistryEndpoint()
+	}
+	host, port := trimmed, ""
+	hasPort := false
+	if index := strings.Index(trimmed, ":"); index >= 0 {
+		host, port, hasPort = trimmed[:index], trimmed[index+1:], true
+	}
+	if err := validateImageRegistryHost(host); err != nil {
+		return "", err
+	}
+	if !hasPort {
+		return host, nil
+	}
+	normalizedPort, err := normalizeImageRegistryPort(port)
+	if err != nil {
+		return "", err
+	}
+	return host + ":" + normalizedPort, nil
+}
+
+func normalizeBracketedImageRegistryEndpoint(value string) (string, error) {
+	closing := strings.Index(value, "]")
+	if closing < 0 {
+		return "", invalidImageRegistryEndpoint()
+	}
+	host := value[1:closing]
+	rest := value[closing+1:]
+	if net.ParseIP(host) == nil || !strings.Contains(host, ":") {
+		return "", invalidImageRegistryEndpoint()
+	}
+	normalized := "[" + host + "]"
+	if rest == "" {
+		return normalized, nil
+	}
+	if !strings.HasPrefix(rest, ":") {
+		return "", invalidImageRegistryEndpoint()
+	}
+	port, err := normalizeImageRegistryPort(rest[1:])
+	if err != nil {
+		return "", err
+	}
+	return normalized + ":" + port, nil
+}
+
+func validateImageRegistryHost(host string) error {
+	if host == "" || len(host) > 253 {
+		return invalidImageRegistryEndpoint()
+	}
+	if net.ParseIP(host) != nil {
+		return nil
+	}
+	// 解析失败的纯数字/点串（如 999.999.999.999）既不是 IP 也不是合法主机名。
+	if isNumericHost(host) {
+		return invalidImageRegistryEndpoint()
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return invalidImageRegistryEndpoint()
+		}
+		for i := 0; i < len(label); i++ {
+			ch := label[i]
+			if (ch < 'a' || ch > 'z') && (ch < '0' || ch > '9') && ch != '-' {
+				return invalidImageRegistryEndpoint()
+			}
+		}
+	}
+	return nil
+}
+
+func isNumericHost(host string) bool {
+	if host == "" {
+		return false
+	}
+	for i := 0; i < len(host); i++ {
+		ch := host[i]
+		if (ch < '0' || ch > '9') && ch != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+func normalizeImageRegistryPort(value string) (string, error) {
+	port, err := strconv.Atoi(value)
+	if err != nil || port < 1 || port > 65535 {
+		return "", invalidImageRegistryEndpoint()
+	}
+	return strconv.Itoa(port), nil
+}
+
+func invalidImageRegistryEndpoint() error {
+	return panelerr.Validation("invalid_image_registry_endpoint", "Image registry endpoint must be a bare host or host:port without a scheme, path, query, credentials or whitespace")
 }
 
 func (s *Service) validatePanelTLS(settings RuntimeSettings) error {

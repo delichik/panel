@@ -165,8 +165,16 @@ func (r *LocalRuntime) Restart(ctx context.Context, req agentcontract.RuntimeRes
 }
 
 func (r *LocalRuntime) Status(ctx context.Context, instanceID, containerName, serverID string) (appruntime.InstanceStatus, error) {
+	status, _, err := r.StatusWithVersion(ctx, instanceID, containerName, serverID, nil)
+	return status, err
+}
+
+// StatusWithVersion 在运行状态之外可选地执行 versionCommand（例如 `nginx -v`）
+// 并解析容器内实际版本。版本采集是观测行为：命令缺失、容器未运行、exec 失败
+// 或超时都只返回空版本，绝不改变状态查询本身的成功/失败语义。
+func (r *LocalRuntime) StatusWithVersion(ctx context.Context, instanceID, containerName, serverID string, versionCommand []string) (appruntime.InstanceStatus, string, error) {
 	if r == nil || r.client == nil {
-		return appruntime.InstanceStatus{}, errors.New("runtime is not configured")
+		return appruntime.InstanceStatus{}, "", errors.New("runtime is not configured")
 	}
 	if containerName == "" {
 		containerName = containerNameForInstance(instanceID)
@@ -182,11 +190,15 @@ func (r *LocalRuntime) Status(ctx context.Context, instanceID, containerName, se
 				Status:        appruntime.StatusMissing,
 				DesiredState:  appruntime.DesiredRunning,
 				ObservedAt:    now,
-			}, nil
+			}, "", nil
 		}
-		return appruntime.InstanceStatus{}, err
+		return appruntime.InstanceStatus{}, "", err
 	}
 	status := dockerStateToRuntime(inspect.State.Status, inspect.State.Running, inspect.State.ExitCode)
+	imageVersion := ""
+	if status == appruntime.StatusRunning && len(versionCommand) > 0 {
+		imageVersion = r.runningContainerImageVersion(ctx, firstNonEmpty(strings.TrimPrefix(inspect.Name, "/"), containerName), versionCommand)
+	}
 	return appruntime.InstanceStatus{
 		InstanceID:    instanceID,
 		ServerID:      serverID,
@@ -200,7 +212,7 @@ func (r *LocalRuntime) Status(ctx context.Context, instanceID, containerName, se
 		ExitCode:      inspect.State.ExitCode,
 		LastError:     inspect.State.Error,
 		ObservedAt:    now,
-	}, nil
+	}, imageVersion, nil
 }
 
 func (r *LocalRuntime) Logs(ctx context.Context, instanceID, containerName string, tail int) (string, error) {
@@ -662,6 +674,17 @@ func (r *LocalRuntime) CreateContainer(ctx context.Context, spec appruntime.Spec
 func (r *LocalRuntime) Reconcile(ctx context.Context, req agentcontract.RuntimeReconcileRequest) (response agentcontract.RuntimeReconcileResponse, runErr error) {
 	recorder := &reconcileRecorder{ctx: ctx, executionID: req.ExecutionID}
 	defer func() { response.Steps = append([]agentcontract.RuntimeReconcileStep(nil), recorder.steps...) }()
+	// Probe observations decorate every response after the disposable-container
+	// step ran, including failure responses: Panel needs the exact `nginx -t`
+	// error text to explain why an image was rejected.
+	var preflightOutput, imageVersion string
+	preflightRequested := len(req.ImagePreflightCommand) > 0
+	defer func() {
+		if preflightRequested {
+			response.PreflightOutput = preflightOutput
+			response.ImageVersion = imageVersion
+		}
+	}()
 	fail := func(code, class string, err error) (agentcontract.RuntimeReconcileResponse, error) {
 		if errors.Is(err, errReconcileOwnership) {
 			return agentcontract.RuntimeReconcileResponse{ErrorCode: "non_managed_conflict", ErrorClass: "non_managed_conflict", ErrorMessage: err.Error()}, nil
@@ -747,8 +770,16 @@ func (r *LocalRuntime) Reconcile(ctx context.Context, req agentcontract.RuntimeR
 		err := recorder.do("verify_running", func(stepctx context.Context) error {
 			var err error
 			status, err = r.verifyContainerStartup(stepctx, req, spec, containerID, !started)
-			result = reconcileStatusResponse(req, status)
-			return err
+			if err != nil {
+				result = reconcileStatusResponse(req, status, "")
+				return err
+			}
+			// Report the digest of the image the container actually runs, not the
+			// digest embedded in a reference (a tag reference carries none). The
+			// lookup is best effort: an unreadable image must not fail an
+			// otherwise healthy reconcile.
+			result = reconcileStatusResponse(req, status, r.observedImageDigest(stepctx, spec.ContainerName))
+			return nil
 		})
 		if err != nil {
 			result.ErrorCode = "container_not_running"
@@ -793,6 +824,54 @@ func (r *LocalRuntime) Reconcile(ctx context.Context, req agentcontract.RuntimeR
 			}
 			return verify(inspect.ID, !inspect.State.Running)
 		}
+	}
+	// Pull the desired image before touching an existing container. A failed pull
+	// must leave the previous container running and serving traffic; only once the
+	// new image is available locally may the replace path stop/remove it. First
+	// installs (no container yet) naturally pull before create, and stop/purge
+	// requests never reach this point.
+	if err := recorder.do("ensure_image", func(stepctx context.Context) error { return r.client.pullImage(stepctx, spec.Image) }); err != nil {
+		return fail("image_pull_failed", "registry_unavailable", err)
+	}
+	// Optional image preflight: validate the freshly pulled image against the
+	// exact mounts/network it will receive, before the serving container is
+	// stopped. A failure leaves the previous container untouched and retryable.
+	if preflightRequested {
+		preflightErr := recorder.do("image_preflight", func(stepctx context.Context) error {
+			probe, err := r.runImageProbe(stepctx, spec, imageProbePurposePreflight, req.ImagePreflightCommand)
+			// Keep the output even on failure so the response can explain it.
+			preflightOutput = probe.Output
+			if err != nil {
+				return err
+			}
+			if probe.ExitCode != 0 {
+				return fmt.Errorf("image preflight command exited with code %d", probe.ExitCode)
+			}
+			return nil
+		})
+		if preflightErr != nil {
+			result, runErr := fail("image_preflight_failed", "image_preflight", preflightErr)
+			result.ErrorDetail = boundedDiagnostic(preflightOutput)
+			return result, runErr
+		}
+		if len(req.ImageVersionCommand) > 0 {
+			// Version reporting feeds the Panel-side version-line check. It is an
+			// observation, so a failed version command is recorded as a failed
+			// step but must not block an image whose preflight already passed.
+			_ = recorder.do("image_version", func(stepctx context.Context) error {
+				probe, err := r.runImageProbe(stepctx, spec, imageProbePurposeVersion, req.ImageVersionCommand)
+				imageVersion = probe.Output
+				if err != nil {
+					return err
+				}
+				if probe.ExitCode != 0 {
+					return fmt.Errorf("image version command exited with code %d", probe.ExitCode)
+				}
+				return nil
+			})
+		}
+	}
+	if inspectErr == nil {
 		if err := recorder.do("replace_stop", func(stepctx context.Context) error {
 			err := r.client.stopContainer(stepctx, spec.ContainerName, 10)
 			if isDockerNotFound(err) {
@@ -812,9 +891,6 @@ func (r *LocalRuntime) Reconcile(ctx context.Context, req agentcontract.RuntimeR
 			return fail("replace_remove_failed", "runtime", err)
 		}
 	}
-	if err := recorder.do("ensure_image", func(stepctx context.Context) error { return r.client.pullImage(stepctx, spec.Image) }); err != nil {
-		return fail("image_pull_failed", "registry_unavailable", err)
-	}
 	var containerID string
 	if err := recorder.do("create_container", func(stepctx context.Context) error {
 		var err error
@@ -833,14 +909,17 @@ func (r *LocalRuntime) Reconcile(ctx context.Context, req agentcontract.RuntimeR
 	return verify(containerID, true)
 }
 
-func reconcileStatusResponse(req agentcontract.RuntimeReconcileRequest, status appruntime.InstanceStatus) agentcontract.RuntimeReconcileResponse {
+func reconcileStatusResponse(req agentcontract.RuntimeReconcileRequest, status appruntime.InstanceStatus, observedImageDigest string) agentcontract.RuntimeReconcileResponse {
 	if status.ObservedAt.IsZero() {
 		return agentcontract.RuntimeReconcileResponse{}
+	}
+	if strings.TrimSpace(observedImageDigest) == "" {
+		observedImageDigest = imageDigestFromReference(status.Image)
 	}
 	return agentcontract.RuntimeReconcileResponse{
 		ObservedState: status.Status, ContainerName: status.ContainerName, ContainerID: status.ContainerID,
 		ObservedGeneration: req.DesiredGeneration, ObservedSpecHash: req.DesiredSpecHash,
-		ObservedImageDigest: imageDigestFromReference(status.Image), ObservedAt: status.ObservedAt,
+		ObservedImageDigest: observedImageDigest, ObservedAt: status.ObservedAt,
 		ErrorDetail: containerStatusDiagnostic(status),
 	}
 }
@@ -893,6 +972,44 @@ func boundedDiagnostic(value string) string {
 func imageDigestFromReference(reference string) string {
 	if index := strings.Index(reference, "@sha256:"); index >= 0 {
 		return reference[index+1:]
+	}
+	return ""
+}
+
+// observedImageDigest resolves the digest of the image a running container uses.
+// It inspects the container first because the runtime spec only carries a tag
+// (for example "nginx:1.28-alpine"), then asks Docker for the image metadata and
+// reports a registry RepoDigest. The caller treats an empty result as "unknown"
+// rather than a failure: digest reporting is an observation, not a requirement.
+func (r *LocalRuntime) observedImageDigest(ctx context.Context, containerName string) string {
+	if r == nil || r.client == nil || strings.TrimSpace(containerName) == "" {
+		return ""
+	}
+	inspect, err := r.client.inspectContainer(ctx, containerName)
+	if err != nil {
+		return ""
+	}
+	return r.imageDigestFromInspect(ctx, inspect)
+}
+
+// imageDigestFromInspect prefers an explicit digest reference and otherwise
+// resolves the container's immutable image ID through the Docker image API.
+func (r *LocalRuntime) imageDigestFromInspect(ctx context.Context, inspect dockerInspectResponse) string {
+	if digest := imageDigestFromReference(inspect.Config.Image); digest != "" {
+		return digest
+	}
+	imageID := strings.TrimSpace(inspect.Image)
+	if imageID == "" || r == nil || r.client == nil {
+		return ""
+	}
+	image, err := r.client.inspectImage(ctx, imageID)
+	if err != nil {
+		return ""
+	}
+	for _, repoDigest := range image.RepoDigests {
+		if digest := imageDigestFromReference(repoDigest); digest != "" {
+			return digest
+		}
 	}
 	return ""
 }
@@ -2858,6 +2975,22 @@ func (c *dockerAPIClient) listImages(ctx context.Context) ([]agentcontract.Docke
 	return out, nil
 }
 
+type dockerImageInspectResponse struct {
+	ID          string   `json:"Id"`
+	RepoTags    []string `json:"RepoTags"`
+	RepoDigests []string `json:"RepoDigests"`
+}
+
+// inspectImage reads image metadata, including the registry RepoDigests that
+// carry the digest actually observed for the running image.
+func (c *dockerAPIClient) inspectImage(ctx context.Context, id string) (dockerImageInspectResponse, error) {
+	var out dockerImageInspectResponse
+	if err := c.getJSON(ctx, "/images/"+url.PathEscape(id)+"/json", "inspect image", &out); err != nil {
+		return dockerImageInspectResponse{}, err
+	}
+	return out, nil
+}
+
 func (c *dockerAPIClient) removeImage(ctx context.Context, id string) error {
 	query := url.Values{}
 	query.Set("force", "false")
@@ -3077,7 +3210,10 @@ type dockerInspectResponse struct {
 	ID      string `json:"Id"`
 	Name    string `json:"Name"`
 	Created string `json:"Created"`
-	Config  struct {
+	// Image is the immutable ID (sha256:...) of the image the container was
+	// created from; Config.Image is the reference/tag that was requested.
+	Image  string `json:"Image"`
+	Config struct {
 		Image  string            `json:"Image"`
 		Labels map[string]string `json:"Labels"`
 	} `json:"Config"`

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
-import { Activity, AlertTriangle, ClipboardList, Eye, Globe2, HardDrive, History, MoreHorizontal, Plus, Radar, RefreshCcw, Rocket, Save, Square, Trash2, UploadCloud, Wrench } from '@/icons';
+import { Activity, AlertTriangle, ClipboardList, Eye, Globe2, HardDrive, History, MoreHorizontal, Play, Plus, Radar, RefreshCcw, Rocket, Save, Square, Trash2, UploadCloud, Wrench } from '@/icons';
 import { applicationsApi } from '@/api/applications';
 import { ApiError } from '@/api/client';
 import { serversApi } from '@/api/servers';
@@ -39,6 +39,7 @@ import FacilityDiagnostics from './FacilityDiagnostics.vue';
 import ApplicationLogsDialog from './ApplicationLogsDialog.vue';
 import ApplicationDetailPane from './components/ApplicationDetailPane.vue';
 import ApplicationDiagnosticsList from './components/ApplicationDiagnosticsList.vue';
+import CustomDirectiveEditor from './components/CustomDirectiveEditor.vue';
 import { applicationDetailTrail, applicationEditorTrail, facilityTrail } from './breadcrumbs';
 import AssetFileManager from '@/components/patterns/AssetFileManager.vue';
 import DetailSection from '@/components/patterns/DetailSection.vue';
@@ -54,7 +55,7 @@ import TableDetailLayout from '@/components/templates/TableDetailLayout.vue';
 import ActivityLink from '@/components/activity/ActivityLink.vue';
 import { useI18n } from '@/i18n';
 import type { ApplicationDto, ApplicationEditPreviewResult, ApplicationEditSession, ApplicationFile, ApplicationRuntime, ApplicationSummaryDto, Diagnostic, PanelFileDefinition, ReverseProxyRule, TemplateVariableDefinition } from '@/types/applications';
-import type { ConfigRecord, FacilityEditPreviewResult, FacilityEditSession, FacilityRouteDomain, FacilityRoutePath, ProxyPlaneState, ReverseProxyConfig, StaticAsset, StorageShareConfig } from '@/types/facilityApps';
+import type { ConfigRecord, FacilityEditPreviewResult, FacilityEditSession, FacilityRouteDomain, FacilityRoutePath, FacilitySettings, FacilitySettingsSaveInput, ProxyImageState, ProxyPlaneState, ReverseProxyConfig, StaticAsset, StorageShareConfig } from '@/types/facilityApps';
 import type { MetricsFacilityConfig } from '@/types/metricsFacility';
 import type { NetworkProbeConfig } from '@/types/networkProbe';
 import type { ServerDto } from '@/types/servers';
@@ -70,9 +71,19 @@ import {
   cloneProxyPath,
   cloneProxyRules,
   defaultRouteOptions,
+  domainClientMaxBodySize,
+  domainHstsMode,
+  domainHttpPortMode,
   draftFromApplication,
+  facilityDomainSaveInput,
   facilityRecordDraftFromRecord,
+  formatCustomDirectives,
   hasBlockingDiagnostic,
+  hstsEnabledFromMode,
+  IMAGE_UPDATE_INTERVAL_MAX_SECONDS,
+  isValidDomainClientMaxBodySize,
+  isValidImageUpdateIntervalSeconds,
+  isValidNginxClientMaxBodySize,
   makeFacilityPath,
   makeKeyValueRow,
   makeMountRow,
@@ -80,18 +91,23 @@ import {
   makePortRow,
   makeProxyPath,
   makeProxyRule,
+  normalizeImageUpdateIntervalSeconds,
   panelFileMountOptions as makePanelFileMountOptions,
+  parseCustomDirectivesText,
   routeMode,
   routeSummary,
   saveInputFromDraft,
   shouldPollApplicationRuntime,
   statusTone,
   validateApplicationDraft,
+  validateCustomDirectives,
   validateFacilityPathFields,
   validateFacilityRecordDraft,
   validateFileName,
   type ApplicationDraftUi,
   type AppDetailTab,
+  type DomainHstsMode,
+  type DomainHttpPortMode,
   type FacilityDetailTab,
   type FieldErrors,
   type KeyValueRow,
@@ -229,7 +245,7 @@ function normalizeAppDetailTab(value: unknown): AppDetailTab {
   return 'runtime';
 }
 function normalizeFacilityDetailTab(value: unknown): FacilityDetailTab {
-  if (value === 'configs' || value === 'dns') return value;
+  if (value === 'configs' || value === 'dns' || value === 'settings') return value;
   return 'proxy';
 }
 const appTab = ref<AppDetailTab>(normalizeAppDetailTab(route.query.tab));
@@ -252,6 +268,7 @@ const facilityDetailTabs = computed(() => [
   { label: t('applicationsPage.facilityTabProxy'), value: 'proxy' },
   { label: t('applicationsPage.facilityTabConfigs'), value: 'configs' },
   { label: t('applicationsPage.facilityTabDns'), value: 'dns' },
+  { label: t('applicationsPage.facilityTabSettings'), value: 'settings' },
 ]);
 const fileActionErrors = ref<Record<string, string>>({});
 const fileActionPending = ref('');
@@ -290,6 +307,39 @@ const facilityRequestHeaders = ref<KeyValueRow[]>([]);
 const facilityResponseHeaders = ref<KeyValueRow[]>([]);
 const proxyRequestHeaders = ref<KeyValueRow[]>([]);
 const proxyResponseHeaders = ref<KeyValueRow[]>([]);
+/** Advanced per-domain `server {}` directives (raw textarea content, one directive per line). */
+const proxyCustomDirectivesText = ref('');
+const facilityCustomDirectivesText = ref('');
+/** Global entrance-proxy parameters (settings tab). */
+const facilitySettingsForm = reactive<FacilitySettingsSaveInput>({
+  httpPortMode: 'serve',
+  imageAutoUpdateEnabled: true,
+  imageUpdateIntervalSeconds: 0,
+  customHttpDirectives: [],
+  hsts: { enabled: false, maxAgeSeconds: 31536000, includeSubDomains: false },
+  serverTokens: 'off',
+  clientMaxBodySize: '50m',
+  tlsMinVersion: '1.2',
+});
+const facilityHttpDirectivesText = ref('');
+const facilitySettingsSaving = ref(false);
+const facilitySettingsErrors = computed<Record<string, string>>(() => {
+  const errors: Record<string, string> = {};
+  if (!isValidNginxClientMaxBodySize(facilitySettingsForm.clientMaxBodySize)) {
+    errors.clientMaxBodySize = 'applicationsPage.facilitySettings.clientMaxBodySizeInvalid';
+  }
+  if (!isValidImageUpdateIntervalSeconds(facilitySettingsForm.imageUpdateIntervalSeconds)) {
+    errors.imageUpdateIntervalSeconds = 'applicationsPage.facilitySettings.imageUpdateIntervalSecondsInvalid';
+  }
+  return errors;
+});
+const facilityImageChecking = ref(false);
+const facilityImageUpdating = ref(false);
+const facilityImageRollingBack = ref(false);
+const facilityImageResuming = ref(false);
+const facilityImageUpdateOpen = ref(false);
+const facilityImageRollbackOpen = ref(false);
+const facilityImageBusy = computed(() => facilityImageChecking.value || facilityImageUpdating.value || facilityImageRollingBack.value || facilityImageResuming.value);
 
 const mode = computed(() => routeMode(route.path, route.params));
 const facilityKind = computed(() => String(route.params.facilityKind ?? ''));
@@ -567,6 +617,8 @@ const facilityGatewayIdSet = computed(() => new Set(facilityGatewayIds.value));
 const facilityGatewayServers = computed(() => serverOptions.value.filter((item) => facilityGatewayIdSet.value.has(item.id)));
 const facilityRecordErrors = computed(() => {
   const errors = validateFacilityRecordDraft(facilityRecordDraft, facilityGatewayIds.value);
+  const directiveValidation = validateCustomDirectives(parseCustomDirectivesText(facilityCustomDirectivesText.value), 'server');
+  if (directiveValidation.errors.length) errors.customDirectives = directiveValidation.errors[0].key;
   if (facilityRecordIsNew.value && !errors.domain) {
     const value = (facilityRecordDraft.domain ?? '').trim().toLowerCase();
     if (value && configRecords.value.some((record) => record.recordId === value)) {
@@ -604,6 +656,224 @@ const facilityRecordAnyAccessModel = computed({
   },
 });
 const facilityRecordPrimaryOptions = computed(() => facilityRecordDraft.originServerIds.map((id) => ({ label: serverDisplayName(id), value: id })));
+
+/* Per-domain transport switches (HTTPS / HTTP2 / HTTP3) shared by the facility
+   domain editor and the application reverse-proxy dialog. Turning HTTPS off
+   clears H2/H3 locally: they only take effect on an HTTPS server, and keeping
+   them true would contradict the saved payload. */
+const proxyHttpsEnabledModel = computed<boolean>({
+  get: () => proxyDraft.httpsEnabled !== false,
+  set: (value: boolean) => {
+    proxyDraft.httpsEnabled = value;
+    if (!value) {
+      proxyDraft.http2Enabled = false;
+      proxyDraft.http3Enabled = false;
+    }
+  },
+});
+const proxyHttp2EnabledModel = computed<boolean>({
+  get: () => proxyDraft.httpsEnabled !== false && proxyDraft.http2Enabled !== false,
+  set: (value: boolean) => { proxyDraft.http2Enabled = value; },
+});
+const proxyHttp3EnabledModel = computed<boolean>({
+  get: () => proxyDraft.httpsEnabled !== false && proxyDraft.http3Enabled === true,
+  set: (value: boolean) => { proxyDraft.http3Enabled = value; },
+});
+/** Per-domain port 80 policy options shared by the facility record editor and the proxy dialog. */
+const domainHttpPortModeOptions = computed(() => [
+  { label: t('applicationsPage.transport.httpPortModeInherit'), value: '' },
+  { label: t('applicationsPage.transport.httpPortModeServe'), value: 'serve' },
+  { label: t('applicationsPage.transport.httpPortModeRedirect'), value: 'redirect' },
+]);
+const proxyHttpPortModeModel = computed<DomainHttpPortMode>({
+  get: () => domainHttpPortMode(proxyDraft),
+  set: (value: DomainHttpPortMode) => { proxyDraft.httpPortMode = value; },
+});
+/** Tri-state HSTS override writes back the optional boolean payload field. */
+function setDomainHstsEnabled(domain: { hstsEnabled?: boolean }, mode: DomainHstsMode) {
+  const hsts = hstsEnabledFromMode(mode);
+  if (hsts === undefined) delete domain.hstsEnabled;
+  else domain.hstsEnabled = hsts;
+}
+/** Per-domain HSTS options shared by the facility record editor and the proxy dialog. */
+const domainHstsOptions = computed(() => [
+  { label: t('applicationsPage.transport.hstsInherit'), value: '' },
+  { label: t('applicationsPage.transport.hstsEnabled'), value: 'on' },
+  { label: t('applicationsPage.transport.hstsDisabled'), value: 'off' },
+]);
+const proxyHstsModeModel = computed<DomainHstsMode>({
+  get: () => domainHstsMode(proxyDraft),
+  set: (value: DomainHstsMode) => { setDomainHstsEnabled(proxyDraft, value); },
+});
+const facilityRecordHstsModel = computed<DomainHstsMode>({
+  get: () => domainHstsMode(facilityRecordDraft),
+  set: (value: DomainHstsMode) => { setDomainHstsEnabled(facilityRecordDraft, value); markDirty(); },
+});
+/** Empty body limit means inherit; the input keeps the raw text so users can type freely. */
+const proxyClientMaxBodySizeModel = computed<string>({
+  get: () => proxyDraft.clientMaxBodySize ?? '',
+  set: (value: string) => { proxyDraft.clientMaxBodySize = value; },
+});
+const facilityRecordClientMaxBodySizeModel = computed<string>({
+  get: () => facilityRecordDraft.clientMaxBodySize ?? '',
+  set: (value: string) => { facilityRecordDraft.clientMaxBodySize = value; markDirty(); },
+});
+const proxyClientMaxBodySizeError = computed(() => (
+  isValidDomainClientMaxBodySize(proxyDraft.clientMaxBodySize)
+    ? ''
+    : t('applicationsPage.transport.clientMaxBodySizeInvalid')
+));
+const facilityRecordClientMaxBodySizeError = computed(() => (
+  isValidDomainClientMaxBodySize(facilityRecordDraft.clientMaxBodySize)
+    ? ''
+    : t('applicationsPage.transport.clientMaxBodySizeInvalid')
+));
+const facilityRecordHttpsModel = computed<boolean>({
+  get: () => facilityRecordDraft.httpsEnabled !== false,
+  set: (value: boolean) => {
+    facilityRecordDraft.httpsEnabled = value;
+    if (!value) {
+      facilityRecordDraft.http2Enabled = false;
+      facilityRecordDraft.http3Enabled = false;
+    } else if (facilityRecordDraft.http2Enabled === false && facilityRecordDraft.http3Enabled !== true) {
+      // 重新开启 HTTPS 时恢复 HTTP/2 默认（HTTP/3 保持默认关闭）。
+      facilityRecordDraft.http2Enabled = true;
+    }
+    markDirty();
+  },
+});
+const facilityRecordHttp2Model = computed<boolean>({
+  get: () => facilityRecordDraft.httpsEnabled !== false && facilityRecordDraft.http2Enabled !== false,
+  set: (value: boolean) => { facilityRecordDraft.http2Enabled = value; markDirty(); },
+});
+const facilityRecordHttp3Model = computed<boolean>({
+  get: () => facilityRecordDraft.httpsEnabled !== false && facilityRecordDraft.http3Enabled === true,
+  set: (value: boolean) => { facilityRecordDraft.http3Enabled = value; markDirty(); },
+});
+const facilityRecordHttpPortModeModel = computed<DomainHttpPortMode>({
+  get: () => domainHttpPortMode(facilityRecordDraft),
+  set: (value: DomainHttpPortMode) => { facilityRecordDraft.httpPortMode = value; markDirty(); },
+});
+/** 当前域名的证书/生效状态：来自服务端 routeSummaries（无证书时提示 443 不会生效）。 */
+const facilityRecordRouteSummary = computed(() => {
+  const value = (facilityRecordDraft.domain ?? '').trim().toLowerCase();
+  return (facility.value?.routeSummaries ?? []).find((summary) => summary.domain === value) ?? null;
+});
+const facilityRecordCertificateHint = computed(() => {
+  const summary = facilityRecordRouteSummary.value;
+  if (!summary) return '';
+  if (!facilityRecordHttpsModel.value) {
+    return summary.certificateName
+      ? t('applicationsPage.transport.httpsDisabledWithCertificate', { name: summary.certificateName })
+      : t('applicationsPage.transport.httpsDisabled');
+  }
+  if (summary.httpsStatus === 'missing' || summary.effectiveHTTPS === false) {
+    return t('applicationsPage.transport.noCertificate');
+  }
+  return '';
+});
+/** Certificate/HTTPS state of the domain currently edited in the application proxy dialog. */
+const proxyRouteSummary = computed(() => {
+  const value = (proxyDraft.domain ?? '').trim().toLowerCase();
+  return (facility.value?.routeSummaries ?? []).find((summary) => summary.domain === value) ?? null;
+});
+const facilityRecordHttpPortModeHint = computed(() => {
+  const summary = facilityRecordRouteSummary.value;
+  // 新域名尚未投影证书状态；此时只在 HTTPS 关闭时提示，避免误报缺证书。
+  const httpsEffective = facilityRecordHttpsModel.value
+    && (!summary || (summary.httpsStatus !== 'missing' && summary.effectiveHTTPS !== false));
+  return facilityRecordHttpPortModeModel.value === 'redirect' && !httpsEffective
+    ? t('applicationsPage.transport.httpPortModeRedirectNeedsHttps')
+    : t('applicationsPage.transport.httpPortModeHint');
+});
+const proxyHttpPortModeHint = computed(() => {
+  const summary = proxyRouteSummary.value;
+  const httpsEffective = proxyHttpsEnabledModel.value
+    && (!summary || (summary.httpsStatus !== 'missing' && summary.effectiveHTTPS !== false));
+  return proxyHttpPortModeModel.value === 'redirect' && !httpsEffective
+    ? t('applicationsPage.transport.httpPortModeRedirectNeedsHttps')
+    : t('applicationsPage.transport.httpPortModeHint');
+});
+/** HSTS is only emitted for an HTTPS server with a usable certificate. */
+function domainHttpsEffective(enabled: boolean, summary: typeof facilityRecordRouteSummary.value) {
+  return enabled && (!summary || (summary.httpsStatus !== 'missing' && summary.effectiveHTTPS !== false));
+}
+const facilityRecordHstsHint = computed(() => (
+  facilityRecordHstsModel.value === 'on' && !domainHttpsEffective(facilityRecordHttpsModel.value, facilityRecordRouteSummary.value)
+    ? `${t('applicationsPage.transport.hstsHint')} ${t('applicationsPage.transport.hstsNeedsHttps')}`
+    : t('applicationsPage.transport.hstsHint')
+));
+const proxyHstsHint = computed(() => (
+  proxyHstsModeModel.value === 'on' && !domainHttpsEffective(proxyHttpsEnabledModel.value, proxyRouteSummary.value)
+    ? `${t('applicationsPage.transport.hstsHint')} ${t('applicationsPage.transport.hstsNeedsHttps')}`
+    : t('applicationsPage.transport.hstsHint')
+));
+/** Entrance-proxy image state projection + read helpers. */
+const facilityImage = computed<ProxyImageState | null>(() => facility.value?.image ?? null);
+
+/** P1 failure backoff projection: accept aggregate or per-gateway values. */
+const facilityImageFailures = computed(() => {
+  const image = facilityImage.value;
+  if (!image) return 0;
+  const aggregate = Number(image.autoUpdateFailures ?? 0) || 0;
+  const perServer = Math.max(0, ...image.servers.map((server) => Number(server.autoUpdateFailures ?? 0) || 0));
+  return Math.max(aggregate, perServer);
+});
+const facilityImageFailedDigest = computed(() => {
+  const image = facilityImage.value;
+  if (!image) return '';
+  return image.failedDigest || image.servers.find((server) => server.failedDigest)?.failedDigest || '';
+});
+const facilityImagePinned = computed(() => {
+  const image = facilityImage.value;
+  if (!image) return false;
+  return Boolean(image.pinned) || image.status === 'pinned' || image.servers.some((server) => Boolean(server.pinned) || server.status === 'pinned');
+});
+/** Pinned rollback and failure backoff both pause automatic updates. */
+const facilityImageAutoUpdatePaused = computed(() => {
+  const image = facilityImage.value;
+  if (!image) return false;
+  return facilityImagePinned.value
+    || Boolean(image.autoUpdatePaused)
+    || image.servers.some((server) => Boolean(server.autoUpdatePaused))
+    || facilityImageFailures.value >= 3;
+});
+const facilityImagePauseReason = computed(() => {
+  const image = facilityImage.value;
+  if (!image) return '';
+  return image.autoUpdateSkipReason || image.servers.find((server) => server.autoUpdateSkipReason)?.autoUpdateSkipReason || '';
+});
+const facilityImageCanRollback = computed(() => {
+  const image = facilityImage.value;
+  if (!image || image.status === 'updating') return false;
+  return Boolean(image.previousDigest) || image.servers.some((server) => Boolean(server.previousDigest));
+});
+const facilityImageServerIds = computed(() => {
+  const image = facilityImage.value;
+  const imageServerIds = (image?.servers ?? []).map((server) => server.serverId).filter(Boolean);
+  return imageServerIds.length ? imageServerIds : [...(facility.value?.deploymentServers ?? [])];
+});
+
+function facilityImageStatusLabel(status?: string): string {
+  if (!status) return t('state.unknown');
+  const key = `applicationsPage.facilityImage.status.${status}`;
+  const translated = t(key);
+  return translated === key ? status : translated;
+}
+
+function facilityImageStatusTone(status?: string): 'neutral' | 'success' | 'warning' | 'danger' | 'info' {
+  if (status === 'up_to_date') return 'success';
+  if (status === 'update_available' || status === 'updating') return 'warning';
+  if (status === 'failed') return 'danger';
+  return 'neutral';
+}
+
+function shortDigest(value?: string | null): string {
+  const digest = (value ?? '').trim();
+  if (!digest) return t('common.notAvailable');
+  const hex = digest.includes(':') ? digest.slice(digest.indexOf(':') + 1) : digest;
+  return hex.length > 16 ? `${digest.slice(0, digest.indexOf(':') + 1)}${hex.slice(0, 12)}…` : digest;
+}
 
 // Proxy plane draft: members are edited locally and saved with PUT proxy-plane.
 const proxyPlaneDraftModel = computed({
@@ -643,6 +913,7 @@ const configRecordColumns = computed(() => [
   { key: 'domain', label: t('applicationsPage.domain') },
   // 设施记录表同样按优先级隐藏次级列：来源/版本 <lg 隐藏，DNS/更新时间仅 >=wide 显示。
   { key: 'source', label: t('applicationsPage.configRecordSource'), hideBelow: 'lg' as const },
+  { key: 'tls', label: t('applicationsPage.configRecordTransport'), nowrap: true, hideBelow: 'wide' as const },
   { key: 'version', label: t('applicationsPage.configRecordVersion'), nowrap: true, hideBelow: 'lg' as const },
   { key: 'dns', label: t('applicationsPage.configRecordDns'), nowrap: true, hideBelow: 'wide' as const },
   { key: 'updatedAt', label: t('applicationsPage.configRecordUpdatedAt'), nowrap: true, hideBelow: 'wide' as const },
@@ -653,6 +924,24 @@ function configRecordSourceLabel(record: ConfigRecord) {
   return record.applicationName
     ? t('applicationsPage.configRecordSourceApplicationNamed', { name: record.applicationName })
     : t('applicationsPage.configRecordSourceApplication');
+}
+
+/** Transport badges for one config record (HTTPS/H2/H3, normalized by HTTPS). */
+function configRecordTransport(record: ConfigRecord) {
+  const https = record.domain.httpsEnabled !== false;
+  return {
+    https,
+    http2: https && record.domain.http2Enabled !== false,
+    http3: https && record.domain.http3Enabled === true,
+  };
+}
+
+function configRecordHttpsTone(record: ConfigRecord): 'success' | 'warning' | 'neutral' {
+  const summary = (facility.value?.routeSummaries ?? []).find((item) => item.domain === record.domain.domain);
+  if (record.domain.httpsEnabled === false) return 'neutral';
+  if (!summary) return 'neutral';
+  if (summary.httpsStatus === 'missing' || summary.effectiveHTTPS === false) return 'warning';
+  return 'success';
 }
 function openFacilityRecord(record: ConfigRecord) {
   void router.push({ path: `/applications/facility-apps/${facilityKind.value || 'reverse-proxy'}/config`, query: { recordId: record.recordId } });
@@ -1285,6 +1574,142 @@ async function loadFacilityData() {
 }
 
 /** Detail page: aggregate snapshot (DNS), proxy plane and the independent config records. */
+/** Seeds the global entrance settings form from the aggregate config (never saves automatically). */
+function applyFacilitySettingsForm(settings?: FacilitySettings) {
+  const maxAgeSeconds = Number(settings?.hsts?.maxAgeSeconds);
+  facilitySettingsForm.version = typeof settings?.version === 'number' ? settings.version : undefined;
+  facilitySettingsForm.httpPortMode = settings?.httpPortMode === 'redirect' ? 'redirect' : 'serve';
+  facilitySettingsForm.imageAutoUpdateEnabled = settings?.imageAutoUpdateEnabled !== false;
+  facilitySettingsForm.imageUpdateIntervalSeconds = normalizeImageUpdateIntervalSeconds(settings?.imageUpdateIntervalSeconds);
+  facilitySettingsForm.hsts.enabled = Boolean(settings?.hsts?.enabled);
+  facilitySettingsForm.hsts.maxAgeSeconds = maxAgeSeconds > 0 ? maxAgeSeconds : 31536000;
+  facilitySettingsForm.hsts.includeSubDomains = Boolean(settings?.hsts?.includeSubDomains);
+  facilitySettingsForm.serverTokens = settings?.serverTokens === 'on' ? 'on' : 'off';
+  facilitySettingsForm.clientMaxBodySize = (settings?.clientMaxBodySize ?? '').trim() || '50m';
+  facilitySettingsForm.tlsMinVersion = settings?.tlsMinVersion === '1.3' ? '1.3' : '1.2';
+  facilityHttpDirectivesText.value = formatCustomDirectives(settings?.customHttpDirectives);
+}
+
+async function saveFacilitySettings() {
+  if (facilitySettingsSaving.value) return;
+  const directives = parseCustomDirectivesText(facilityHttpDirectivesText.value);
+  const validation = validateCustomDirectives(directives, 'http');
+  if (validation.errors.length) {
+    notifyError(t(validation.errors[0].key));
+    return;
+  }
+  if (facilitySettingsErrors.value.clientMaxBodySize) {
+    notifyError(t(facilitySettingsErrors.value.clientMaxBodySize));
+    return;
+  }
+  if (facilitySettingsErrors.value.imageUpdateIntervalSeconds) {
+    notifyError(t(facilitySettingsErrors.value.imageUpdateIntervalSeconds));
+    return;
+  }
+  facilitySettingsSaving.value = true;
+  try {
+    const saved = await reverseProxyFacilityApi.saveSettings({
+      ...(typeof facilitySettingsForm.version === 'number' ? { version: facilitySettingsForm.version } : {}),
+      httpPortMode: facilitySettingsForm.httpPortMode,
+      imageAutoUpdateEnabled: facilitySettingsForm.imageAutoUpdateEnabled !== false,
+      imageUpdateIntervalSeconds: facilitySettingsForm.imageUpdateIntervalSeconds,
+      hsts: { ...facilitySettingsForm.hsts },
+      customHttpDirectives: validation.normalized,
+      serverTokens: facilitySettingsForm.serverTokens,
+      clientMaxBodySize: facilitySettingsForm.clientMaxBodySize.trim(),
+      tlsMinVersion: facilitySettingsForm.tlsMinVersion,
+    });
+    facility.value = saved;
+    applyFacilitySettingsForm(saved.settings);
+    notifySuccess(t('applicationsPage.facilitySettingsSaved'));
+  } catch (err) {
+    notifyError(errorMessage(err, t('common.operationFailed')), err);
+  } finally {
+    facilitySettingsSaving.value = false;
+  }
+}
+
+async function checkFacilityImage() {
+  if (facilityImageBusy.value) return;
+  facilityImageChecking.value = true;
+  try {
+    const result = await reverseProxyFacilityApi.checkImage();
+    notifySuccess(result.taskId ? t('applicationsPage.facilityImage.checkAccepted', { taskId: result.taskId }) : t('applicationsPage.facilityImage.checkAcceptedWithoutId'), result);
+    await loadFacilityDetailData();
+  } catch (err) {
+    notifyError(errorMessage(err, t('common.operationFailed')), err);
+  } finally {
+    facilityImageChecking.value = false;
+  }
+}
+
+function promptFacilityImageUpdate() {
+  if (!facilityImage.value?.updateAvailable || facilityImageBusy.value) return;
+  facilityImageUpdateOpen.value = true;
+}
+
+async function confirmFacilityImageUpdate() {
+  const image = facilityImage.value;
+  if (!image) return;
+  facilityImageUpdating.value = true;
+  try {
+    const result = await reverseProxyFacilityApi.updateImage({
+      serverIds: [...facilityImageServerIds.value],
+      confirm: true,
+    });
+    facilityImageUpdateOpen.value = false;
+    notifySuccess(result.taskId ? t('applicationsPage.facilityImage.updateAccepted', { taskId: result.taskId }) : t('applicationsPage.facilityImage.updateAcceptedWithoutId'), result);
+    await loadFacilityDetailData();
+  } catch (err) {
+    facilityImageUpdateOpen.value = false;
+    notifyError(errorMessage(err, t('common.operationFailed')), err);
+  } finally {
+    facilityImageUpdating.value = false;
+  }
+}
+
+function promptFacilityImageRollback() {
+  if (!facilityImageCanRollback.value || facilityImageBusy.value) return;
+  facilityImageRollbackOpen.value = true;
+}
+
+async function confirmFacilityImageRollback() {
+  if (!facilityImageCanRollback.value) return;
+  facilityImageRollingBack.value = true;
+  try {
+    const result = await reverseProxyFacilityApi.rollbackImage({
+      serverIds: [...facilityImageServerIds.value],
+      confirm: true,
+    });
+    facilityImageRollbackOpen.value = false;
+    if (result.skipped) {
+      notifySuccess(t('applicationsPage.facilityImage.rollbackSkipped'), result);
+    } else {
+      notifySuccess(result.taskId ? t('applicationsPage.facilityImage.rollbackAccepted', { taskId: result.taskId }) : t('applicationsPage.facilityImage.rollbackAcceptedWithoutId'), result);
+    }
+    await loadFacilityDetailData();
+  } catch (err) {
+    facilityImageRollbackOpen.value = false;
+    notifyError(errorMessage(err, t('common.operationFailed')), err);
+  } finally {
+    facilityImageRollingBack.value = false;
+  }
+}
+
+async function resumeFacilityImageAutoUpdate() {
+  if (facilityImageResuming.value || facilityImageBusy.value) return;
+  facilityImageResuming.value = true;
+  try {
+    const result = await reverseProxyFacilityApi.resumeImage([...facilityImageServerIds.value]);
+    notifySuccess(t('applicationsPage.facilityImage.resumeAccepted'), result);
+    await loadFacilityDetailData();
+  } catch (err) {
+    notifyError(errorMessage(err, t('common.operationFailed')), err);
+  } finally {
+    facilityImageResuming.value = false;
+  }
+}
+
 async function loadFacilityDetailData() {
   pageLoadController?.abort();
   if (dnsPollTimer) clearTimeout(dnsPollTimer);
@@ -1305,6 +1730,7 @@ async function loadFacilityDetailData() {
   try {
     if (configResult.status === 'fulfilled') {
       facility.value = configResult.value;
+      applyFacilitySettingsForm(configResult.value.settings);
     } else if (!isAbortError(configResult.reason)) {
       error.value = errorMessage(configResult.reason, t('applicationsPage.loadFailed'));
       notifyError(error.value, configResult.reason);
@@ -1804,6 +2230,9 @@ async function startFacilityRecordEditorCore() {
         // Fall through: the save pipeline re-checks uniqueness before begin.
       }
       Object.assign(facilityRecordDraft, makeNewFacilityDomainRecord());
+      // Object.assign keeps stale keys: drop an HSTS override left over from a previous record.
+      delete facilityRecordDraft.hstsEnabled;
+      facilityCustomDirectivesText.value = '';
       facilityRecordRelayScope.value = 'all';
       resetLocalAssetState(facilityLocalAssets, []);
     } else {
@@ -1815,6 +2244,9 @@ async function startFacilityRecordEditorCore() {
       }
       facilityRecord.value = record;
       Object.assign(facilityRecordDraft, facilityRecordDraftFromRecord(record));
+      // Records without an override must inherit instead of keeping the previous draft value.
+      if (typeof record.domain.hstsEnabled !== 'boolean') delete facilityRecordDraft.hstsEnabled;
+      facilityCustomDirectivesText.value = formatCustomDirectives(record.domain.customServerDirectives);
       facilityRecordRelayScope.value = (record.domain.anyAccess?.relayServerIds ?? []).length ? 'selected' : 'all';
       resetLocalAssetState(facilityLocalAssets, facilityAssetBaseline(record.staticAssets ?? []));
     }
@@ -1973,7 +2405,12 @@ async function flushFacilityLocalAssets() {
 
 /** Normalized payload for this one record: relays/primary are pruned to the current gateways. */
 function facilityRecordSaveDraft(): FacilityRouteDomain {
-  const draft = cloneFacilityDomain(facilityRecordDraft);
+  const directives = parseCustomDirectivesText(facilityCustomDirectivesText.value);
+  const validation = validateCustomDirectives(directives, 'server');
+  const draft = facilityDomainSaveInput({
+    ...facilityRecordDraft,
+    customServerDirectives: validation.errors.length ? directives : validation.normalized,
+  });
   draft.domain = (facilityRecordIsNew.value ? draft.domain : facilityRecordId.value).trim().toLowerCase();
   draft.originServerIds = (draft.originServerIds ?? []).filter((serverId) => facilityGatewayIdSet.value.has(serverId));
   const enabled = Boolean(draft.anyAccess?.enabled);
@@ -2205,6 +2642,15 @@ function mountSourceLabel(mount: MountRow) {
   return mount.source || t('applicationsPage.panelManagedSource');
 }
 
+// 自定义指令文本是编辑器里的实际输入源：与已载入的草稿不同步时才算 dirty，
+// 程序性回填（打开编辑器）不会把记录误标为已修改。
+watch(facilityCustomDirectivesText, (value) => {
+  const current = formatCustomDirectives(facilityRecordDraft.customServerDirectives);
+  if (value === current) return;
+  facilityRecordDraft.customServerDirectives = parseCustomDirectivesText(value);
+  markDirty();
+}, { flush: 'sync' });
+
 watch(() => mountDraft.type, (type) => {
   if (type === 'storage_share') void loadStorageShareOptions();
 });
@@ -2242,6 +2688,9 @@ function openProxyDialog(index = -1) {
   dialogIndex.value = index;
   const base = index >= 0 ? cloneProxyRules([appDraft.reverseProxy[index]])[0] : makeProxyRule();
   Object.assign(proxyDraft, { ...base });
+  // Inherited HSTS is omitted from the clone; clear any override from the previous dialog edit.
+  if (typeof base.hstsEnabled !== 'boolean') delete proxyDraft.hstsEnabled;
+  proxyCustomDirectivesText.value = formatCustomDirectives(base.customServerDirectives);
   proxyRelayScope.value = base.anyAccess?.relayServerIds?.length ? 'selected' : 'all';
   dialogOpen.value = true;
 }
@@ -2261,6 +2710,17 @@ function removeCommandRow(id: string) {
 
 function saveProxyDialog() {
   const port = Number(proxyDraft.targetPort);
+  const directives = parseCustomDirectivesText(proxyCustomDirectivesText.value);
+  const directiveValidation = validateCustomDirectives(directives, 'server');
+  if (directiveValidation.errors.length) {
+    notifyError(t(directiveValidation.errors[0].key));
+    return;
+  }
+  if (!isValidDomainClientMaxBodySize(proxyDraft.clientMaxBodySize)) {
+    notifyError(t('applicationsPage.transport.clientMaxBodySizeInvalid'));
+    return;
+  }
+  const httpsEnabled = proxyDraft.httpsEnabled !== false;
   const next: ReverseProxyRule = {
     domain: proxyDraft.domain.trim().toLowerCase(),
     targetPort: Number.isFinite(port) && port > 0 ? port : 0,
@@ -2278,7 +2738,16 @@ function saveProxyDialog() {
         ...(path.options ?? {}),
       },
     })),
+    httpsEnabled,
+    // H2/H3 仅在 HTTPS 开启时生效；关闭 HTTPS 时归一化为 false。
+    http2Enabled: httpsEnabled && proxyDraft.http2Enabled !== false,
+    http3Enabled: httpsEnabled && proxyDraft.http3Enabled === true,
+    httpPortMode: proxyHttpPortModeModel.value,
+    clientMaxBodySize: domainClientMaxBodySize(proxyDraft),
+    customServerDirectives: directiveValidation.normalized,
   };
+  const hsts = hstsEnabledFromMode(proxyHstsModeModel.value);
+  if (hsts !== undefined) next.hstsEnabled = hsts;
   if (dialogIndex.value >= 0) appDraft.reverseProxy[dialogIndex.value] = next;
   else appDraft.reverseProxy.push(next);
   dialogOpen.value = false;
@@ -2871,6 +3340,56 @@ onBeforeUnmount(() => {
               </div>
             </DetailSection>
 
+            <DetailSection :title="t('applicationsPage.transport.title')" :description="t('applicationsPage.transport.hint')">
+              <div class="grid gap-3 p-4">
+                <FormField :label="t('applicationsPage.transport.https')">
+                  <template #default="{ id }"><Switch :id="id" v-model="facilityRecordHttpsModel" :label="t('applicationsPage.transport.https')" /></template>
+                </FormField>
+                <FormField :label="t('applicationsPage.transport.http2')" :disabled="!facilityRecordHttpsModel">
+                  <template #default="{ id }"><Switch :id="id" v-model="facilityRecordHttp2Model" :label="t('applicationsPage.transport.http2')" :disabled="!facilityRecordHttpsModel" /></template>
+                </FormField>
+                <FormField :label="t('applicationsPage.transport.http3')" :disabled="!facilityRecordHttpsModel" :hint="t('applicationsPage.transport.http3Hint')">
+                  <template #default="{ id }"><Switch :id="id" v-model="facilityRecordHttp3Model" :label="t('applicationsPage.transport.http3')" :disabled="!facilityRecordHttpsModel" /></template>
+                </FormField>
+                <FormField :label="t('applicationsPage.transport.httpPortMode')" :hint="facilityRecordHttpPortModeHint">
+                  <template #default="{ id }">
+                    <Select :id="id" v-model="facilityRecordHttpPortModeModel" class="w-full sm:w-64" :options="domainHttpPortModeOptions" />
+                  </template>
+                </FormField>
+                <FormField :label="t('applicationsPage.transport.hsts')" :hint="facilityRecordHstsHint">
+                  <template #default="{ id }">
+                    <Select :id="id" v-model="facilityRecordHstsModel" class="w-full sm:w-64" :options="domainHstsOptions" />
+                  </template>
+                </FormField>
+                <FormField
+                  :label="t('applicationsPage.transport.clientMaxBodySize')"
+                  :hint="t('applicationsPage.transport.clientMaxBodySizeHint')"
+                  :error="facilityRecordClientMaxBodySizeError"
+                >
+                  <template #default="{ id, describedBy, invalid }">
+                    <Input
+                      :id="id"
+                      v-model="facilityRecordClientMaxBodySizeModel"
+                      :aria-describedby="describedBy"
+                      :invalid="invalid"
+                      class="w-full sm:w-64"
+                      :placeholder="t('applicationsPage.transport.clientMaxBodySizePlaceholder')"
+                    />
+                  </template>
+                </FormField>
+                <InfoBar v-if="facilityRecordCertificateHint" :tone="facilityRecordHttpsModel && facilityRecordRouteSummary?.httpsStatus === 'missing' ? 'warning' : 'info'">
+                  {{ facilityRecordCertificateHint }}
+                </InfoBar>
+                <CustomDirectiveEditor
+                  v-model="facilityCustomDirectivesText"
+                  scope="server"
+                  :title="t('applicationsPage.customDirectives.serverTitle')"
+                  :description="t('applicationsPage.customDirectives.serverDescription')"
+                />
+                <p v-if="facilityRecordErrors.customDirectives" class="m-0 text-caption font-semibold text-danger">{{ t(facilityRecordErrors.customDirectives) }}</p>
+              </div>
+            </DetailSection>
+
             <DetailSection :title="t('applicationsPage.anyAccess')" :description="t('applicationsPage.anyAccessHint')">
               <div class="grid gap-3 p-4">
                 <FormField :label="t('applicationsPage.anyAccess')">
@@ -3014,6 +3533,13 @@ onBeforeUnmount(() => {
           >
             <template #domain="{ row }"><strong class="break-all">{{ row.recordId }}</strong></template>
             <template #source="{ row }"><Badge :tone="row.kind === 'facility_domain' ? 'neutral' : 'info'">{{ configRecordSourceLabel(row) }}</Badge></template>
+            <template #tls="{ row }">
+              <div class="flex flex-nowrap items-center gap-1">
+                <Badge :tone="configRecordHttpsTone(row)">{{ t('applicationsPage.transport.httpsShort') }}</Badge>
+                <Badge :tone="configRecordTransport(row).http2 ? 'info' : 'neutral'">{{ t('applicationsPage.transport.http2Short') }}</Badge>
+                <Badge :tone="configRecordTransport(row).http3 ? 'info' : 'neutral'">{{ t('applicationsPage.transport.http3Short') }}</Badge>
+              </div>
+            </template>
             <template #version="{ row }"><Badge tone="neutral">{{ row.version }}</Badge></template>
             <template #dns="{ row }"><Badge :tone="facilityDnsTone(facilityDnsStatus(row.recordId))" :title="facilityDnsError(row.recordId) || undefined">{{ t(`applicationsPage.dnsSync.${facilityDnsStatus(row.recordId) || 'unknown'}`) }}</Badge></template>
             <template #updatedAt="{ row }"><span class="text-muted-foreground">{{ formatDateTime(row.updatedAt, t('common.never')) }}</span></template>
@@ -3043,6 +3569,222 @@ onBeforeUnmount(() => {
               <EmptyState variant="inset" :title="t('applicationsPage.configRecordEmpty')" :description="t('applicationsPage.configRecordEmptyHint')" />
             </template>
           </Table>
+        </section>
+
+        <section v-else-if="facilityTab === 'settings'" class="grid h-full min-h-0 content-start gap-4 overflow-y-auto pr-1">
+          <DetailSection :title="t('applicationsPage.facilityImage.title')" :description="t('applicationsPage.facilityImage.hint')">
+            <template #actions>
+              <Button size="sm" variant="secondary" :loading="facilityImageChecking" :disabled="facilityImageBusy" @click="checkFacilityImage"><RefreshCcw />{{ t('applicationsPage.facilityImage.check') }}</Button>
+              <Button size="sm" variant="primary" :disabled="!facilityImage?.updateAvailable || facilityImageBusy" :loading="facilityImageUpdating" @click="promptFacilityImageUpdate"><UploadCloud />{{ t('applicationsPage.facilityImage.update') }}</Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                :loading="facilityImageRollingBack"
+                :disabled="!facilityImageCanRollback || facilityImageBusy"
+                :title="!facilityImageCanRollback ? t('applicationsPage.facilityImage.rollbackUnavailable') : undefined"
+                @click="promptFacilityImageRollback"
+              ><History />{{ t('applicationsPage.facilityImage.rollback') }}</Button>
+              <Button
+                v-if="facilityImageAutoUpdatePaused"
+                size="sm"
+                variant="secondary"
+                :loading="facilityImageResuming"
+                :disabled="facilityImageBusy"
+                :title="t('applicationsPage.facilityImage.resumeHint')"
+                @click="resumeFacilityImageAutoUpdate"
+              ><Play />{{ t('applicationsPage.facilityImage.resume') }}</Button>
+            </template>
+            <div v-if="!facilityImage" class="p-4">
+              <InfoBar tone="info">{{ t('applicationsPage.facilityImage.unavailable') }}</InfoBar>
+            </div>
+            <div v-else class="grid gap-3 p-4">
+              <div class="grid gap-3 sm:grid-cols-2">
+                <div class="min-w-0">
+                  <span class="block text-caption text-muted-foreground">{{ t('applicationsPage.facilityImage.reference') }}</span>
+                  <span class="panel-mono block break-all text-body text-foreground">{{ facilityImage.reference || t('common.notAvailable') }}</span>
+                </div>
+                <div>
+                  <span class="block text-caption text-muted-foreground">{{ t('applicationsPage.facilityImage.statusLabel') }}</span>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <Badge :tone="facilityImageStatusTone(facilityImage.status)">{{ facilityImageStatusLabel(facilityImage.status) }}</Badge>
+                    <Badge v-if="facilityImage.pinned && facilityImage.status !== 'pinned'" tone="warning">{{ t('applicationsPage.facilityImage.status.pinned') }}</Badge>
+                  </div>
+                </div>
+                <div class="min-w-0">
+                  <span class="block text-caption text-muted-foreground">{{ t('applicationsPage.facilityImage.runningDigest') }}</span>
+                  <span class="panel-mono block break-all text-caption text-secondary-foreground">{{ shortDigest(facilityImage.observedDigest) }}</span>
+                </div>
+                <div class="min-w-0">
+                  <span class="block text-caption text-muted-foreground">{{ t('applicationsPage.facilityImage.nginxVersion') }}</span>
+                  <span class="panel-mono block break-all text-body text-foreground">{{ facilityImage.imageVersion || t('common.notAvailable') }}</span>
+                </div>
+                <div class="min-w-0">
+                  <span class="block text-caption text-muted-foreground">{{ t('applicationsPage.facilityImage.targetDigest') }}</span>
+                  <span class="panel-mono block break-all text-caption text-secondary-foreground">{{ shortDigest(facilityImage.targetDigest) }}</span>
+                </div>
+                <div v-if="facilityImage.previousDigest" class="min-w-0">
+                  <span class="block text-caption text-muted-foreground">{{ t('applicationsPage.facilityImage.previousDigest') }}</span>
+                  <span class="panel-mono block break-all text-caption text-secondary-foreground">{{ shortDigest(facilityImage.previousDigest) }}</span>
+                </div>
+                <div>
+                  <span class="block text-caption text-muted-foreground">{{ t('applicationsPage.facilityImage.checkedAt') }}</span>
+                  <span class="text-caption text-secondary-foreground">{{ formatDateTime(facilityImage.checkedAt, t('common.never')) }}</span>
+                </div>
+                <div>
+                  <span class="block text-caption text-muted-foreground">{{ t('applicationsPage.facilityImage.updateAvailable') }}</span>
+                  <Badge :tone="facilityImage.updateAvailable ? 'warning' : 'success'">{{ facilityImage.updateAvailable ? t('applicationsPage.facilityImage.updateAvailableYes') : t('applicationsPage.facilityImage.updateAvailableNo') }}</Badge>
+                </div>
+                <div v-if="facilityImageFailures > 0">
+                  <span class="block text-caption text-muted-foreground">{{ t('applicationsPage.facilityImage.failureCount', { count: facilityImageFailures }) }}</span>
+                  <span class="panel-mono block break-all text-caption text-danger">{{ shortDigest(facilityImageFailedDigest) }}</span>
+                </div>
+              </div>
+              <p v-if="facilityImage.lastError" class="m-0 text-caption font-semibold text-danger">{{ facilityImage.lastError }}</p>
+              <InfoBar v-if="facilityImagePinned" tone="warning">{{ t('applicationsPage.facilityImage.pinnedHint') }}</InfoBar>
+              <InfoBar v-else-if="facilityImageAutoUpdatePaused" tone="warning">
+                <template v-if="facilityImageFailures >= 3">
+                  {{ facilityImageFailedDigest ? t('applicationsPage.facilityImage.failureBackoff', { count: facilityImageFailures, digest: shortDigest(facilityImageFailedDigest) }) : t('applicationsPage.facilityImage.failureBackoffNoDigest', { count: facilityImageFailures }) }}
+                </template>
+                <template v-else>{{ t('applicationsPage.facilityImage.autoUpdatePausedHint') }}</template>
+              </InfoBar>
+              <FormField :label="t('applicationsPage.facilityImage.autoUpdate')" :hint="t('applicationsPage.facilityImage.autoUpdateHint')">
+                <template #default="{ id }">
+                  <Switch :id="id" v-model="facilitySettingsForm.imageAutoUpdateEnabled" :label="t('applicationsPage.facilityImage.autoUpdate')" />
+                </template>
+              </FormField>
+              <div v-if="facilityImage.servers.length" class="grid gap-2 rounded-control border border-divider">
+                <div v-for="server in facilityImage.servers" :key="server.serverId" class="flex flex-wrap items-center justify-between gap-2 border-b border-divider px-3 py-2 last:border-b-0">
+                  <div class="min-w-0">
+                    <strong class="block break-all text-body text-foreground">{{ server.serverName || serverDisplayName(server.serverId) }}</strong>
+                    <span class="panel-mono block break-all text-caption text-muted-foreground">{{ shortDigest(server.observedDigest) }}</span>
+                    <span v-if="server.imageVersion" class="block text-caption text-secondary-foreground">{{ t('applicationsPage.facilityImage.nginxVersion') }}: {{ server.imageVersion }}</span>
+                    <span v-if="server.autoUpdateFailures" class="block text-caption text-danger">{{ t('applicationsPage.facilityImage.failureCount', { count: server.autoUpdateFailures }) }}<template v-if="server.failedDigest"> · {{ shortDigest(server.failedDigest) }}</template></span>
+                  </div>
+                  <div class="flex flex-wrap items-center justify-end gap-2">
+                    <Badge v-if="server.pinned" tone="warning">{{ t('applicationsPage.facilityImage.status.pinned') }}</Badge>
+                    <Badge v-else-if="server.autoUpdatePaused" tone="warning" :title="server.autoUpdateSkipReason || undefined">{{ t('applicationsPage.facilityImage.autoUpdatePausedShort') }}</Badge>
+                    <Badge :tone="facilityImageStatusTone(server.status)">{{ facilityImageStatusLabel(server.status) }}</Badge>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </DetailSection>
+
+          <DetailSection :title="t('applicationsPage.facilitySettings.title')" :description="t('applicationsPage.facilitySettings.hint')">
+            <template #actions>
+              <Button size="sm" variant="primary" :loading="facilitySettingsSaving" :disabled="facilitySettingsSaving" @click="saveFacilitySettings"><Save />{{ t('common.save') }}</Button>
+            </template>
+            <div class="grid gap-3 p-4">
+              <FormField :label="t('applicationsPage.facilitySettings.httpPortMode')" :hint="t('applicationsPage.facilitySettings.httpPortModeHint')">
+                <template #default="{ id }">
+                  <Select
+                    :id="id"
+                    v-model="facilitySettingsForm.httpPortMode"
+                    class="w-full sm:w-64"
+                    :options="[{ label: t('applicationsPage.facilitySettings.httpPortModeServe'), value: 'serve' }, { label: t('applicationsPage.facilitySettings.httpPortModeRedirect'), value: 'redirect' }]"
+                  />
+                </template>
+              </FormField>
+              <FormField
+                :label="t('applicationsPage.facilitySettings.imageUpdateIntervalSeconds')"
+                :hint="t('applicationsPage.facilitySettings.imageUpdateIntervalSecondsHint')"
+                :error="facilitySettingsErrors.imageUpdateIntervalSeconds ? t(facilitySettingsErrors.imageUpdateIntervalSeconds) : ''"
+              >
+                <template #default="{ id, describedBy, invalid }">
+                  <NumberBox
+                    :id="id"
+                    :aria-describedby="describedBy"
+                    :invalid="invalid"
+                    class="w-full sm:w-44"
+                    :min="0"
+                    :max="IMAGE_UPDATE_INTERVAL_MAX_SECONDS"
+                    :step="1"
+                    :model-value="facilitySettingsForm.imageUpdateIntervalSeconds"
+                    @update:model-value="facilitySettingsForm.imageUpdateIntervalSeconds = $event ?? 0"
+                  />
+                </template>
+              </FormField>
+              <FormField :label="t('applicationsPage.facilitySettings.hsts')" :hint="t('applicationsPage.facilitySettings.hstsHint')">
+                <template #default="{ id }">
+                  <Switch :id="id" v-model="facilitySettingsForm.hsts.enabled" :label="t('applicationsPage.facilitySettings.hsts')" />
+                </template>
+              </FormField>
+              <div v-if="facilitySettingsForm.hsts.enabled" class="grid gap-3 sm:grid-cols-2">
+                <FormField :label="t('applicationsPage.facilitySettings.hstsMaxAge')">
+                  <template #default="{ id, describedBy, invalid }">
+                    <NumberBox
+                      :id="id"
+                      :aria-describedby="describedBy"
+                      :invalid="invalid"
+                      class="w-full sm:w-44"
+                      :min="0"
+                      :step="1"
+                      :model-value="facilitySettingsForm.hsts.maxAgeSeconds"
+                      @update:model-value="facilitySettingsForm.hsts.maxAgeSeconds = $event ?? 0"
+                    />
+                  </template>
+                </FormField>
+                <FormField :label="t('applicationsPage.facilitySettings.hstsIncludeSubDomains')">
+                  <template #default="{ id }">
+                    <Switch :id="id" v-model="facilitySettingsForm.hsts.includeSubDomains" :label="t('applicationsPage.facilitySettings.hstsIncludeSubDomains')" />
+                  </template>
+                </FormField>
+              </div>
+              <div class="grid gap-3 sm:grid-cols-2">
+                <FormField :label="t('applicationsPage.facilitySettings.serverTokens')" :hint="t('applicationsPage.facilitySettings.serverTokensHint')">
+                  <template #default="{ id }">
+                    <Select
+                      :id="id"
+                      v-model="facilitySettingsForm.serverTokens"
+                      class="w-full sm:w-56"
+                      :options="[
+                        { label: t('applicationsPage.facilitySettings.serverTokensOff'), value: 'off' },
+                        { label: t('applicationsPage.facilitySettings.serverTokensOn'), value: 'on' },
+                      ]"
+                    />
+                  </template>
+                </FormField>
+                <FormField :label="t('applicationsPage.facilitySettings.tlsMinVersion')" :hint="t('applicationsPage.facilitySettings.tlsMinVersionHint')">
+                  <template #default="{ id }">
+                    <Select
+                      :id="id"
+                      v-model="facilitySettingsForm.tlsMinVersion"
+                      class="w-full sm:w-56"
+                      :options="[
+                        { label: t('applicationsPage.facilitySettings.tlsMinVersion12'), value: '1.2' },
+                        { label: t('applicationsPage.facilitySettings.tlsMinVersion13'), value: '1.3' },
+                      ]"
+                    />
+                  </template>
+                </FormField>
+              </div>
+              <FormField
+                :label="t('applicationsPage.facilitySettings.clientMaxBodySize')"
+                :hint="t('applicationsPage.facilitySettings.clientMaxBodySizeHint')"
+                :invalid="Boolean(facilitySettingsErrors.clientMaxBodySize)"
+              >
+                <template #default="{ id, describedBy, invalid }">
+                  <Input
+                    :id="id"
+                    v-model="facilitySettingsForm.clientMaxBodySize"
+                    :aria-describedby="describedBy"
+                    :invalid="invalid"
+                    class="w-full sm:w-56"
+                    :placeholder="t('applicationsPage.facilitySettings.clientMaxBodySizePlaceholder')"
+                  />
+                </template>
+                <template v-if="facilitySettingsErrors.clientMaxBodySize" #hint>
+                  <span class="text-danger">{{ t(facilitySettingsErrors.clientMaxBodySize) }}</span>
+                </template>
+              </FormField>
+              <CustomDirectiveEditor
+                v-model="facilityHttpDirectivesText"
+                scope="http"
+                :title="t('applicationsPage.customDirectives.httpTitle')"
+                :description="t('applicationsPage.customDirectives.httpDescription')"
+              />
+            </div>
+          </DetailSection>
         </section>
 
         <section v-else class="grid h-full min-h-0 content-start gap-4 overflow-y-auto pr-1">
@@ -3124,6 +3866,11 @@ onBeforeUnmount(() => {
               <FormField :label="t('applicationsPage.enabled')">
                 <template #default="{ id }">
                   <Switch :id="id" v-model="appDraft.enabled" :label="t('applicationsPage.enabled')" @click="markAppStructuredDirty" />
+                </template>
+              </FormField>
+              <FormField :label="t('applicationsPage.allowAutoUpdate')" :hint="t('applicationsPage.allowAutoUpdateHint')">
+                <template #default="{ id }">
+                  <Switch :id="id" v-model="appDraft.autoUpdateEnabled" :label="t('applicationsPage.allowAutoUpdate')" @click="markAppStructuredDirty" />
                 </template>
               </FormField>
             </div>
@@ -3349,6 +4096,53 @@ onBeforeUnmount(() => {
       <FormField :label="t('applicationsPage.targetPort')">
         <template #default="{ id }"><Input :id="id" v-model="proxyDraft.targetPort" /></template>
       </FormField>
+      <div class="grid gap-3 rounded-control border border-divider bg-control p-3">
+        <div class="grid gap-0.5">
+          <h3 class="m-0 text-body-strong font-semibold text-foreground">{{ t('applicationsPage.transport.title') }}</h3>
+          <p class="m-0 text-caption text-muted-foreground">{{ t('applicationsPage.transport.hint') }}</p>
+        </div>
+        <FormField :label="t('applicationsPage.transport.https')">
+          <template #default="{ id }"><Switch :id="id" v-model="proxyHttpsEnabledModel" :label="t('applicationsPage.transport.https')" /></template>
+        </FormField>
+        <FormField :label="t('applicationsPage.transport.http2')" :disabled="!proxyHttpsEnabledModel">
+          <template #default="{ id }"><Switch :id="id" v-model="proxyHttp2EnabledModel" :label="t('applicationsPage.transport.http2')" :disabled="!proxyHttpsEnabledModel" /></template>
+        </FormField>
+        <FormField :label="t('applicationsPage.transport.http3')" :disabled="!proxyHttpsEnabledModel" :hint="t('applicationsPage.transport.http3Hint')">
+          <template #default="{ id }"><Switch :id="id" v-model="proxyHttp3EnabledModel" :label="t('applicationsPage.transport.http3')" :disabled="!proxyHttpsEnabledModel" /></template>
+        </FormField>
+        <FormField :label="t('applicationsPage.transport.httpPortMode')" :hint="proxyHttpPortModeHint">
+          <template #default="{ id }">
+            <Select :id="id" v-model="proxyHttpPortModeModel" :options="domainHttpPortModeOptions" />
+          </template>
+        </FormField>
+        <FormField :label="t('applicationsPage.transport.hsts')" :hint="proxyHstsHint">
+          <template #default="{ id }">
+            <Select :id="id" v-model="proxyHstsModeModel" :options="domainHstsOptions" />
+          </template>
+        </FormField>
+        <FormField
+          :label="t('applicationsPage.transport.clientMaxBodySize')"
+          :hint="t('applicationsPage.transport.clientMaxBodySizeHint')"
+          :error="proxyClientMaxBodySizeError"
+        >
+          <template #default="{ id, describedBy, invalid }">
+            <Input
+              :id="id"
+              v-model="proxyClientMaxBodySizeModel"
+              :aria-describedby="describedBy"
+              :invalid="invalid"
+              :placeholder="t('applicationsPage.transport.clientMaxBodySizePlaceholder')"
+            />
+          </template>
+        </FormField>
+        <p v-if="!proxyHttpsEnabledModel" class="m-0 text-caption text-muted-foreground">{{ t('applicationsPage.transport.httpsRequiredForHttp') }}</p>
+      </div>
+      <CustomDirectiveEditor
+        v-model="proxyCustomDirectivesText"
+        scope="server"
+        :title="t('applicationsPage.customDirectives.serverTitle')"
+        :description="t('applicationsPage.customDirectives.serverDescription')"
+      />
       <div class="grid gap-3 rounded-control border border-divider bg-control p-3">
         <div class="grid gap-0.5">
           <h3 class="m-0 text-body-strong font-semibold text-foreground">{{ t('applicationsPage.anyAccess') }}</h3>
@@ -3624,6 +4418,36 @@ onBeforeUnmount(() => {
     checkbox-label=""
     @confirm="confirmDeleteFacilityRecord"
     @update:open="(open: boolean) => { deleteRecordOpen = open; if (!open) deleteRecordTarget = null; }"
+  />
+
+  <ConfirmDialog
+    :open="facilityImageUpdateOpen"
+    :title="t('applicationsPage.facilityImage.updateConfirmTitle')"
+    :description="t('applicationsPage.facilityImage.updateConfirmDescription', { reference: facilityImage?.reference || '' })"
+    :impact="t('applicationsPage.facilityImage.updateConfirmImpact')"
+    tone="warning"
+    :loading="facilityImageUpdating"
+    :confirm-label="t('applicationsPage.facilityImage.update')"
+    :cancel-label="t('common.cancel')"
+    :require-checkbox="true"
+    :checkbox-label="t('applicationsPage.facilityImage.updateConfirmCheckbox')"
+    @confirm="confirmFacilityImageUpdate"
+    @update:open="(open: boolean) => { facilityImageUpdateOpen = open }"
+  />
+
+  <ConfirmDialog
+    :open="facilityImageRollbackOpen"
+    :title="t('applicationsPage.facilityImage.rollbackConfirmTitle')"
+    :description="t('applicationsPage.facilityImage.rollbackConfirmDescription', { reference: facilityImage?.reference || '' })"
+    :impact="t('applicationsPage.facilityImage.rollbackConfirmImpact')"
+    tone="warning"
+    :loading="facilityImageRollingBack"
+    :confirm-label="t('applicationsPage.facilityImage.rollback')"
+    :cancel-label="t('common.cancel')"
+    :require-checkbox="true"
+    :checkbox-label="t('applicationsPage.facilityImage.rollbackConfirmCheckbox')"
+    @confirm="confirmFacilityImageRollback"
+    @update:open="(open: boolean) => { facilityImageRollbackOpen = open }"
   />
 
   <ConfirmDialog

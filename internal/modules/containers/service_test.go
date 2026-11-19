@@ -75,6 +75,56 @@ func TestImageRefreshDoesNotHoldDatabaseWriteLockWhileResolvingDigests(t *testin
 	}
 }
 
+func TestWithImageDigestResolverOptionIsUsedByImageRefresh(t *testing.T) {
+	injected := &staticImageDigestResolver{digest: "sha256:injected"}
+	svc, taskSvc, fakeAgent, store := newContainerizationTestServiceWithOptions(t, WithImageDigestResolver(injected))
+	if _, err := store.AppDB().Exec(`
+		INSERT INTO credentials(id,name,type,username,created_at,updated_at)
+		VALUES('credential-1','credential','password','root','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`
+		INSERT INTO servers(id,name,host,port,credential_id,docker_host,traits,created_at,updated_at)
+		VALUES('server-1','server','127.0.0.1',22,'credential-1','unix:///var/run/docker.sock','{}','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	fakeAgent.images = []agentcontract.DockerImage{{
+		RepoTags:    []string{"example.com/app:latest"},
+		RepoDigests: []string{"example.com/app@sha256:local"},
+	}}
+	task, err := taskSvc.Create(context.Background(), tasks.CreateInput{
+		Type:         TaskImageRefresh,
+		ServerID:     "server-1",
+		ResourceType: "server",
+		ResourceID:   "server-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := taskSvc.Start(context.Background(), task.ID); err != nil {
+		t.Fatal(err)
+	}
+	svc.runImageRefresh(taskSvc.ExecutionContext(task.ID), task, "server-1")
+	waitTaskStatus(t, taskSvc, task.ID, tasks.StatusCompleted)
+	if injected.calls != 1 {
+		t.Fatalf("injected resolver calls = %d, want 1", injected.calls)
+	}
+	var latestDigest, lastError string
+	if err := store.AppDB().QueryRow(`SELECT latest_digest,last_error FROM image_updates WHERE server_id=? AND reference=?`, "server-1", "example.com/app:latest").Scan(&latestDigest, &lastError); err != nil {
+		t.Fatal(err)
+	}
+	if latestDigest != "sha256:injected" || lastError != "" {
+		t.Fatalf("latest digest = %q last error = %q", latestDigest, lastError)
+	}
+}
+
+func TestWithImageDigestResolverOptionIgnoresNil(t *testing.T) {
+	svc, _, _, _ := newContainerizationTestServiceWithOptions(t, WithImageDigestResolver(nil))
+	if _, ok := svc.resolver.(*applications.RegistryImageResolver); !ok {
+		t.Fatalf("nil option must keep the default resolver, got %#v", svc.resolver)
+	}
+}
+
 func TestManagedLabelsOnlyAcceptsApplicationLabels(t *testing.T) {
 	appID, instanceID, managed := managedLabels(map[string]string{
 		"panel.application.managed":     "true",
@@ -1167,6 +1217,11 @@ func TestApplicationReconcileCollectorDoesNotCreateEventRuns(t *testing.T) {
 
 func newContainerizationTestService(t *testing.T) (*Service, *tasks.Service, *fakeContainerizationAgent, *storage.Store) {
 	t.Helper()
+	return newContainerizationTestServiceWithOptions(t)
+}
+
+func newContainerizationTestServiceWithOptions(t *testing.T, opts ...Option) (*Service, *tasks.Service, *fakeContainerizationAgent, *storage.Store) {
+	t.Helper()
 	dir := t.TempDir()
 	cfg := config.Default()
 	cfg.DataRoot = filepath.Join(dir, "data")
@@ -1188,7 +1243,7 @@ func newContainerizationTestService(t *testing.T) (*Service, *tasks.Service, *fa
 			agentcontract.TraitURL:    "http://agent",
 			agentcontract.TraitStatus: agentcontract.StatusCompatible,
 		},
-	}}, fakeAgent, taskSvc)
+	}}, fakeAgent, taskSvc, opts...)
 	svc.RegisterTasks(taskSvc)
 	return svc, taskSvc, fakeAgent, store
 }
@@ -1289,6 +1344,17 @@ type blockingImageResolver struct {
 	entered chan struct{}
 	release chan struct{}
 	once    sync.Once
+}
+
+// staticImageDigestResolver records calls and always returns one digest.
+type staticImageDigestResolver struct {
+	digest string
+	calls  int
+}
+
+func (r *staticImageDigestResolver) Resolve(context.Context, string) (applications.ImageDigestResult, error) {
+	r.calls++
+	return applications.ImageDigestResult{Digest: r.digest}, nil
 }
 
 type fakeApplicationUpdater struct {

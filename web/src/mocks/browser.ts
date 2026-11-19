@@ -88,6 +88,11 @@ import {
   mockFacility,
   mockProxyPlane,
   mockStorageShare,
+  mockCheckFacilityImage,
+  mockResumeFacilityImage,
+  mockRollbackFacilityImage,
+  mockUpdateFacilityImage,
+  saveMockFacilitySettings,
   patchAppSession,
   patchFacilitySession,
   putAppFile,
@@ -100,7 +105,7 @@ import {
   uploadAppFile,
 } from './applications';
 import type { ApplicationEditSession } from '@/types/applications';
-import type { FacilityRouteDomain, ProxyPlaneSaveInput } from '@/types/facilityApps';
+import type { FacilityRouteDomain, FacilitySettingsSaveInput, ProxyImageRollbackInput, ProxyImageUpdateInput, ProxyPlaneSaveInput } from '@/types/facilityApps';
 import type { KeyAssetDto, SystemCertificateDto } from '@/types/keyAssets';
 import type { UfwAllowInput } from '@/types/security';
 import {
@@ -132,7 +137,7 @@ import {
 import { acceptedAgentDeployment, completedTask, mockTasks, mockTaskLogs, mockTaskSteps, retryTask, runTaskNow } from './tasks';
 import { resolveMockExecution } from './activity';
 import { mockEventsRoute } from './events';
-import { confirmRestore, mockRuntimeSettings, mockServerVariables, restorePreflight, saveRuntimeAgent, saveRuntimeBranding, saveRuntimeCertificates, saveRuntimeGeneral, saveRuntimeSecurity, saveServerVariables, startExport } from './settings';
+import { confirmRestore, MockImageRegistryError, mockRuntimeSettings, mockServerVariables, restorePreflight, runRuntimeAutoUpdate, saveRuntimeAgent, saveRuntimeAutoUpdate, saveRuntimeBranding, saveRuntimeCertificates, saveRuntimeGeneral, saveRuntimeImageRegistry, saveRuntimeSecurity, saveServerVariables, startExport } from './settings';
 import {
   mockAppearance,
   mockBackgroundBlob,
@@ -142,7 +147,7 @@ import {
   uploadMockBackground,
 } from './appearance';
 import type { AppearanceUpdate } from '@/types/appearance';
-import type { RuntimeAgentUpdate, RuntimeBrandingUpdate, RuntimeCertificatesUpdate, RuntimeGeneralUpdate, RuntimeSecurityUpdate } from '@/types/settings';
+import type { RuntimeAgentUpdate, RuntimeAutoUpdateUpdate, RuntimeBrandingUpdate, RuntimeCertificatesUpdate, RuntimeGeneralUpdate, RuntimeImageRegistryUpdate, RuntimeSecurityUpdate } from '@/types/settings';
 import { advanceExport, exportStatus, resetExport, restoreStatus } from './maintenance';
 import { debugClearRuntimeDataStatus, debugDatabases, debugPprofStatus, debugRuntime, debugTasks, setDebugPprof, startDebugClearRuntimeData } from './debug';
 
@@ -775,8 +780,13 @@ export function installMockApi() {
     }
     const appSessionCommitMatch = url.pathname.match(/^\/api\/v1\/application-edit-sessions\/([^/]+)\/commit$/);
     if (appSessionCommitMatch && method(init) === 'POST') {
+      const sessionId = decodeURIComponent(appSessionCommitMatch[1]);
+      const session = appSession(sessionId);
+      if (session && appDiagnostics(session).some((item) => item.code === 'application_reverse_proxy_client_max_body_size_invalid')) {
+        return error('application_reverse_proxy_client_max_body_size_invalid', 'A reverse-proxy request body limit must use nginx size syntax between 1k and 1024m.', 422);
+      }
       try {
-        const result = commitAppSession(decodeURIComponent(appSessionCommitMatch[1]));
+        const result = commitAppSession(sessionId);
         return result ? json(result) : error('application_edit_session_not_found', 'Application edit session was not found.', 404);
       } catch (err) {
         return error('resource_version_conflict', err instanceof Error ? err.message : 'Application changed while editing.', 409);
@@ -784,6 +794,42 @@ export function installMockApi() {
     }
 
     if (url.pathname === '/api/v1/facility-apps/reverse-proxy' && method(init) === 'GET') return json(mockFacility);
+    if (url.pathname === '/api/v1/facility-apps/reverse-proxy/settings' && method(init) === 'PUT') {
+      const input = await body<FacilitySettingsSaveInput>(init);
+      if (input.httpPortMode !== 'serve' && input.httpPortMode !== 'redirect') {
+        return error('facility_http_port_mode_invalid', 'httpPortMode must be serve or redirect.', 422);
+      }
+      const directives = input.customHttpDirectives ?? [];
+      const invalidLine = directives.findIndex((line) => /[{}#\r\n\0]/.test(line) || line.includes(';') && !line.trim().endsWith(';'));
+      if (invalidLine >= 0) return error('facility_custom_directives_invalid', 'A custom http directive is invalid.', 422, { line: invalidLine + 1 });
+      // 兼容旧客户端缺省：缺省按 0 处理；显式传入时必须为 0..600 的整数。
+      const interval = input.imageUpdateIntervalSeconds === undefined || input.imageUpdateIntervalSeconds === null ? 0 : input.imageUpdateIntervalSeconds;
+      if (typeof interval !== 'number' || !Number.isInteger(interval) || interval < 0 || interval > 600) {
+        return error('facility_image_update_interval_invalid', 'imageUpdateIntervalSeconds must be an integer between 0 and 600.', 422);
+      }
+      input.imageUpdateIntervalSeconds = interval;
+      return json(saveMockFacilitySettings(input));
+    }
+    if (url.pathname === '/api/v1/facility-apps/reverse-proxy/image/check' && method(init) === 'POST') {
+      return json(mockCheckFacilityImage(), 202);
+    }
+    if (url.pathname === '/api/v1/facility-apps/reverse-proxy/image/update' && method(init) === 'POST') {
+      const input = await body<ProxyImageUpdateInput>(init);
+      if (!input?.confirm) return error('facility_proxy_image_update_confirmation_required', 'Explicit confirmation is required before updating the entrance proxy image.', 422);
+      if (!mockFacility.image) return error('facility_proxy_image_unavailable', 'Entrance proxy image state is unavailable.', 503);
+      return json(mockUpdateFacilityImage(), 202);
+    }
+    if (url.pathname === '/api/v1/facility-apps/reverse-proxy/image/rollback' && method(init) === 'POST') {
+      const input = await body<ProxyImageRollbackInput>(init);
+      if (!input?.confirm) return error('facility_proxy_image_rollback_confirmation_required', 'Explicit confirmation is required before rolling back the entrance proxy image.', 422);
+      if (!mockFacility.image) return error('facility_proxy_image_unavailable', 'Entrance proxy image state is unavailable.', 503);
+      const result = mockRollbackFacilityImage(input);
+      return result.skipped ? json(result) : json(result, 202);
+    }
+    if (url.pathname === '/api/v1/facility-apps/reverse-proxy/image/resume' && method(init) === 'POST') {
+      if (!mockFacility.image) return error('facility_proxy_image_unavailable', 'Entrance proxy image state is unavailable.', 503);
+      return json(mockResumeFacilityImage());
+    }
     if (url.pathname === '/api/v1/facility-apps/reverse-proxy/proxy-plane' && method(init) === 'GET') return json(mockProxyPlane);
     if (url.pathname === '/api/v1/facility-apps/reverse-proxy/proxy-plane' && method(init) === 'PUT') {
       const input = await body<ProxyPlaneSaveInput>(init);
@@ -933,8 +979,13 @@ export function installMockApi() {
     }
     const facilityCommitMatch = url.pathname.match(/^\/api\/v1\/facility-apps\/reverse-proxy\/edit-sessions\/([^/]+)\/commit$/);
     if (facilityCommitMatch && method(init) === 'POST') {
+      const sessionId = decodeURIComponent(facilityCommitMatch[1]);
+      const session = facilitySession(sessionId);
+      if (session && facilityDiagnostics(session).some((item) => item.code === 'facility_client_max_body_size_invalid')) {
+        return error('facility_client_max_body_size_invalid', 'The request body limit must use nginx size syntax between 1k and 1024m.', 422);
+      }
       try {
-        const result = commitFacilitySession(decodeURIComponent(facilityCommitMatch[1]));
+        const result = commitFacilitySession(sessionId);
         return result ? json(result) : error('facility_edit_session_not_found', 'Facility edit session was not found.', 404);
       } catch (err) {
         return error('facility_commit_failed', err instanceof Error ? err.message : 'Gateway commit failed after preview.', 409);
@@ -1021,6 +1072,22 @@ export function installMockApi() {
     if (url.pathname === '/api/v1/settings/runtime/certificates' && method(init) === 'PUT') return json(saveRuntimeCertificates(await body<RuntimeCertificatesUpdate>(init)));
     if (url.pathname === '/api/v1/settings/runtime/agent' && method(init) === 'PUT') return json(saveRuntimeAgent(await body<RuntimeAgentUpdate>(init)));
     if (url.pathname === '/api/v1/settings/runtime/branding' && method(init) === 'PUT') return json(saveRuntimeBranding(await body<RuntimeBrandingUpdate>(init)));
+    if (url.pathname === '/api/v1/settings/runtime/auto-update' && method(init) === 'PUT') return json(saveRuntimeAutoUpdate(await body<RuntimeAutoUpdateUpdate>(init)));
+    if (url.pathname === '/api/v1/settings/runtime/image-registry' && method(init) === 'PUT') {
+      try {
+        return json(saveRuntimeImageRegistry(await body<RuntimeImageRegistryUpdate>(init)));
+      } catch (err) {
+        if (err instanceof MockImageRegistryError) return error(err.code, err.message, 422);
+        throw err;
+      }
+    }
+    if (url.pathname === '/api/v1/settings/runtime/auto-update/run' && method(init) === 'POST') {
+      const current = mockRuntimeSettings.autoUpdate;
+      if (!current?.appsEnabled && !current?.packagesEnabled) {
+        return error('auto_update_disabled', 'Enable applications or package updates before running the coordinator.', 422);
+      }
+      return json(runRuntimeAutoUpdate(), 202);
+    }
     if (url.pathname === '/api/v1/settings/server-variables' && method(init) === 'GET') return json(mockServerVariables);
     if (url.pathname === '/api/v1/settings/server-variables' && method(init) === 'PUT') {
       try {

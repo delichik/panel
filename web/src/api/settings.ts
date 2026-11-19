@@ -4,9 +4,12 @@ import type {
   RestoreConfirmResponse,
   RestorePreflightResponse,
   RuntimeAgentUpdate,
+  RuntimeAutoUpdateRunResponse,
+  RuntimeAutoUpdateUpdate,
   RuntimeBrandingUpdate,
   RuntimeCertificatesUpdate,
   RuntimeGeneralUpdate,
+  RuntimeImageRegistryUpdate,
   RuntimeSecurityUpdate,
   RuntimeSettings,
   ServerVariableDefinition,
@@ -42,6 +45,21 @@ export const settingsApi = {
   /** 登录品牌分区：PUT /settings/runtime/branding。 */
   updateBranding(input: RuntimeBrandingUpdate) {
     return apiClient.put<RuntimeSettings>('/settings/runtime/branding', input);
+  },
+  /** 自动更新分区：PUT /settings/runtime/auto-update（只提交四个可编辑字段）。 */
+  updateAutoUpdate(input: RuntimeAutoUpdateUpdate) {
+    return apiClient.put<RuntimeSettings>('/settings/runtime/auto-update', input);
+  },
+  /** 镜像仓库分区：PUT /settings/runtime/image-registry（指针语义，省略=保留）。 */
+  updateImageRegistry(input: RuntimeImageRegistryUpdate) {
+    return apiClient.put<RuntimeSettings>('/settings/runtime/image-registry', input);
+  },
+  /**
+   * 手动立即运行一次自动更新：POST /settings/runtime/auto-update/run。
+   * 返回 202 {taskId}；省略输入时后端使用当前已保存设置。
+   */
+  runAutoUpdate(input?: Partial<RuntimeAutoUpdateUpdate>) {
+    return apiClient.post<RuntimeAutoUpdateRunResponse>('/settings/runtime/auto-update/run', input ?? {});
   },
   /**
    * 顶栏语言切换：先读取完整 runtime，再只提交 general 分区字段。

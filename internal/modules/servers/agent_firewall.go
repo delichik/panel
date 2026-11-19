@@ -35,6 +35,11 @@ func agentFirewallRules(srv Server) []remoteops.UFWRule {
 		for _, port := range reverseProxyTCPPorts {
 			rules = append(rules, remoteops.UFWRule{Port: port, Protocol: "tcp"})
 		}
+		// HTTP/3 is served over UDP 443 (QUIC). The rule joins the base set only
+		// when the node is marked for the reverse proxy, same as the TCP ports.
+		for _, port := range reverseProxyUDPPorts {
+			rules = append(rules, remoteops.UFWRule{Port: port, Protocol: "udp"})
+		}
 	}
 	return uniqueUFWRules(rules)
 }

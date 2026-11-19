@@ -56,9 +56,58 @@ func TestAgentFirewallRulesCoverEveryManagedPort(t *testing.T) {
 			t.Fatalf("expected port %d in %#v", port, agentFirewallRules(proxy))
 		}
 	}
+	hasReverseProxyUDP := false
+	for _, rule := range agentFirewallRules(proxy) {
+		if rule.Protocol == "udp" {
+			if rule.Port != 443 {
+				t.Fatalf("unexpected reverse proxy UDP rule %#v", rule)
+			}
+			hasReverseProxyUDP = true
+		}
+	}
+	if !hasReverseProxyUDP {
+		t.Fatalf("expected UDP 443 (HTTP/3) in %#v", agentFirewallRules(proxy))
+	}
 	// A quiet node must not get the reverse proxy ports.
 	if len(agentFirewallRules(base)) != 2 {
 		t.Fatalf("expected only the SSH and agent rules without the facility trait, got %#v", agentFirewallRules(base))
+	}
+	for _, rule := range agentFirewallRules(base) {
+		if rule.Protocol != "tcp" {
+			t.Fatalf("quiet node must not receive non-TCP rules: %#v", agentFirewallRules(base))
+		}
+	}
+}
+
+func TestAgentFirewallRulesOpenUDP443ForHTTP3(t *testing.T) {
+	srv := Server{
+		ID: "srv_1", Host: "10.0.0.1", Port: 22022,
+		Traits: map[string]string{reverseProxyEnabledTrait: "true"},
+	}
+	want := remoteops.UFWRule{Port: 443, Protocol: "udp"}
+	found := false
+	for _, rule := range agentFirewallRules(srv) {
+		if rule == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected %#v in %#v", want, agentFirewallRules(srv))
+	}
+	// The rendered remote script must actually open QUIC traffic, not merely
+	// model it in the rule set.
+	adapter, ok := linux.AdapterFor(linux.OSRelease{ID: "debian", VersionID: "13"})
+	if !ok {
+		t.Fatal("expected the debian adapter")
+	}
+	script, err := agentFirewallScript(adapter, srv, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, wantLine := range []string{"ufw allow 80/tcp", "ufw allow 443/tcp", "ufw allow 443/udp"} {
+		if !strings.Contains(script, wantLine) {
+			t.Fatalf("expected %q in firewall script:\n%s", wantLine, script)
+		}
 	}
 }
 

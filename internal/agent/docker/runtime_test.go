@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1026,5 +1027,298 @@ func TestReconcileReportsBoundedExitedContainerDiagnostic(t *testing.T) {
 	}
 	if strings.Contains(result.ErrorDetail, "top-secret") || !strings.Contains(result.ErrorDetail, "token=[REDACTED]") {
 		t.Fatalf("diagnostic secret was not redacted: %q", result.ErrorDetail)
+	}
+}
+
+func dockerRequestIndex(t *testing.T, calls []string, want string) int {
+	t.Helper()
+	for index, call := range calls {
+		if call == want {
+			return index
+		}
+	}
+	t.Fatalf("expected Docker request %q in %#v", want, calls)
+	return -1
+}
+
+func reconcileStepIndex(t *testing.T, steps []agentcontract.RuntimeReconcileStep, name string) int {
+	t.Helper()
+	for index, step := range steps {
+		if step.Name == name {
+			return index
+		}
+	}
+	t.Fatalf("expected reconcile step %q in %#v", name, steps)
+	return -1
+}
+
+// TestReconcilePullsImageBeforeReplacingMismatchedContainer pins the deploy
+// safety order: an identity/tag mismatch must pull the desired image before the
+// old container is stopped or removed, so a pull failure cannot take the
+// previous version offline.
+func TestReconcilePullsImageBeforeReplacingMismatchedContainer(t *testing.T) {
+	var mu sync.Mutex
+	var calls []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/containers/panel-web/json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"Id":"container-old","Name":"/panel-web","Config":{"Image":"example/web:0","Labels":{"panel.application.managed":"true","panel.application.id":"app-1","panel.application.instance.id":"inst-1","panel.application.generation":"1","panel.application.spec.hash":"old-hash"}},"HostConfig":{"NetworkMode":"panel-apps"},"State":{"Status":"running","Running":true,"StartedAt":"2026-01-01T00:00:00Z"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/images/create":
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost && r.URL.Path == "/containers/panel-web/stop":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && r.URL.Path == "/containers/panel-web":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/networks/"+managedBridgeNetwork:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"Name":"panel-apps"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/containers/create":
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"message":"create refused"}`)
+		default:
+			t.Errorf("unexpected Docker request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	httpClient := server.Client()
+	rt := &LocalRuntime{root: t.TempDir(), client: &dockerAPIClient{host: server.URL, client: httpClient, pullClient: httpClient}}
+	result, err := rt.Reconcile(context.Background(), agentcontract.RuntimeReconcileRequest{
+		ExecutionID: "exec-order-1", ApplicationID: "app-1", InstanceID: "inst-1", Action: "apply", DesiredGeneration: 2, DesiredSpecHash: "new-hash",
+		Spec: appruntime.Spec{ApplicationID: "app-1", InstanceID: "inst-1", ContainerName: "panel-web", Image: "example/web:1", Generation: 2, SpecHash: "new-hash"},
+	})
+	if err == nil {
+		t.Fatal("Reconcile() error = nil, want the create failure to stop the apply")
+	}
+	if result.ErrorCode != "create_container_failed" {
+		t.Fatalf("ErrorCode = %q, want create_container_failed", result.ErrorCode)
+	}
+
+	mu.Lock()
+	snapshot := append([]string(nil), calls...)
+	mu.Unlock()
+	pull := dockerRequestIndex(t, snapshot, "POST /images/create")
+	stop := dockerRequestIndex(t, snapshot, "POST /containers/panel-web/stop")
+	remove := dockerRequestIndex(t, snapshot, "DELETE /containers/panel-web")
+	create := dockerRequestIndex(t, snapshot, "POST /containers/create")
+	if !(pull < stop && stop < remove && remove < create) {
+		t.Fatalf("expected pull before stop/remove/create, got %#v", snapshot)
+	}
+	if stepPull, stepStop := reconcileStepIndex(t, result.Steps, "ensure_image"), reconcileStepIndex(t, result.Steps, "replace_stop"); stepPull > stepStop {
+		t.Fatalf("ensure_image step must precede replace_stop: %#v", result.Steps)
+	}
+}
+
+// TestReconcilePullFailureKeepsExistingContainer verifies the failure side of
+// the same contract: when the pull fails the previous container must not be
+// stopped, removed or replaced.
+func TestReconcilePullFailureKeepsExistingContainer(t *testing.T) {
+	var mu sync.Mutex
+	var calls []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/containers/panel-web/json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"Id":"container-old","Name":"/panel-web","Config":{"Image":"example/web:0","Labels":{"panel.application.managed":"true","panel.application.id":"app-1","panel.application.instance.id":"inst-1","panel.application.generation":"1","panel.application.spec.hash":"old-hash"}},"HostConfig":{"NetworkMode":"panel-apps"},"State":{"Status":"running","Running":true,"StartedAt":"2026-01-01T00:00:00Z"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/images/create":
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"message":"pull access denied"}`)
+		default:
+			t.Errorf("unexpected Docker request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	httpClient := server.Client()
+	rt := &LocalRuntime{root: t.TempDir(), client: &dockerAPIClient{host: server.URL, client: httpClient, pullClient: httpClient}}
+	result, err := rt.Reconcile(context.Background(), agentcontract.RuntimeReconcileRequest{
+		ExecutionID: "exec-pull-fail-1", ApplicationID: "app-1", InstanceID: "inst-1", Action: "apply", DesiredGeneration: 2, DesiredSpecHash: "new-hash",
+		Spec: appruntime.Spec{ApplicationID: "app-1", InstanceID: "inst-1", ContainerName: "panel-web", Image: "example/web:1", Generation: 2, SpecHash: "new-hash"},
+	})
+	if err == nil {
+		t.Fatal("Reconcile() error = nil, want the pull failure")
+	}
+	if result.ErrorCode != "image_pull_failed" || result.ErrorClass != "registry_unavailable" {
+		t.Fatalf("result = %#v, want image_pull_failed/registry_unavailable", result)
+	}
+	mu.Lock()
+	snapshot := append([]string(nil), calls...)
+	mu.Unlock()
+	for _, call := range snapshot {
+		if strings.Contains(call, "/stop") || strings.HasPrefix(call, "DELETE /containers/") ||
+			strings.Contains(call, "/containers/create") || strings.Contains(call, "/start") {
+			t.Fatalf("old container must not be touched after a failed pull, got %#v", snapshot)
+		}
+	}
+	if reconcileStepIndex(t, result.Steps, "ensure_image") < 0 {
+		t.Fatalf("steps = %#v, want a recorded ensure_image attempt", result.Steps)
+	}
+	for _, step := range result.Steps {
+		if step.Name == "replace_stop" || step.Name == "replace_remove" {
+			t.Fatalf("failed pull must not record replace steps: %#v", result.Steps)
+		}
+	}
+}
+
+// TestReconcileFirstInstallPullsBeforeCreate keeps the no-container path intact:
+// there is nothing to stop or remove, and the image is still pulled first.
+func TestReconcileFirstInstallPullsBeforeCreate(t *testing.T) {
+	var mu sync.Mutex
+	var calls []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/containers/panel-web/json":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"message":"No such container"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/images/create":
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodGet && r.URL.Path == "/networks/"+managedBridgeNetwork:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"Name":"panel-apps"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/containers/create":
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"message":"create refused"}`)
+		default:
+			t.Errorf("unexpected Docker request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	httpClient := server.Client()
+	rt := &LocalRuntime{root: t.TempDir(), client: &dockerAPIClient{host: server.URL, client: httpClient, pullClient: httpClient}}
+	result, err := rt.Reconcile(context.Background(), agentcontract.RuntimeReconcileRequest{
+		ExecutionID: "exec-first-1", ApplicationID: "app-1", InstanceID: "inst-1", Action: "apply", DesiredGeneration: 1, DesiredSpecHash: "hash",
+		Spec: appruntime.Spec{ApplicationID: "app-1", InstanceID: "inst-1", ContainerName: "panel-web", Image: "example/web:1", Generation: 1, SpecHash: "hash"},
+	})
+	if err == nil {
+		t.Fatal("Reconcile() error = nil, want the create failure to stop the apply")
+	}
+	if result.ErrorCode != "create_container_failed" {
+		t.Fatalf("ErrorCode = %q, want create_container_failed", result.ErrorCode)
+	}
+	mu.Lock()
+	snapshot := append([]string(nil), calls...)
+	mu.Unlock()
+	pull := dockerRequestIndex(t, snapshot, "POST /images/create")
+	create := dockerRequestIndex(t, snapshot, "POST /containers/create")
+	if pull > create {
+		t.Fatalf("first install must pull before create, got %#v", snapshot)
+	}
+	for _, call := range snapshot {
+		if strings.Contains(call, "/stop") || strings.HasPrefix(call, "DELETE /containers/") {
+			t.Fatalf("first install has no old container to stop/remove, got %#v", snapshot)
+		}
+	}
+}
+
+func TestReconcileReportsObservedImageDigestFromContainerImageID(t *testing.T) {
+	startedAt := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339Nano)
+	for _, tc := range []struct {
+		name          string
+		imageResponse string
+		imageStatus   int
+		wantDigest    string
+	}{
+		{
+			name:          "resolved from RepoDigests",
+			imageStatus:   http.StatusOK,
+			imageResponse: `{"Id":"sha256:image-1","RepoTags":["example/web:1"],"RepoDigests":["example/web@sha256:feedface"]}`,
+			wantDigest:    "sha256:feedface",
+		},
+		{
+			name:          "unreadable image metadata is best effort",
+			imageStatus:   http.StatusNotFound,
+			imageResponse: `{"message":"No such image"}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var imageInspects int
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/containers/panel-web/json":
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"Id": "container-1", "Name": "/panel-web", "Image": "sha256:image-1",
+						"Config":     map[string]any{"Image": "example/web:1", "Labels": map[string]string{"panel.application.managed": "true", "panel.application.id": "app-1", "panel.application.instance.id": "inst-1", "panel.application.generation": "2", "panel.application.spec.hash": "hash"}},
+						"HostConfig": map[string]any{"NetworkMode": "panel-apps"},
+						"State":      map[string]any{"Status": "running", "Running": true, "StartedAt": startedAt},
+					})
+				case r.Method == http.MethodGet && r.URL.Path == "/images/sha256:image-1/json":
+					imageInspects++
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(tc.imageStatus)
+					_, _ = io.WriteString(w, tc.imageResponse)
+				default:
+					t.Errorf("unexpected Docker request: %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer server.Close()
+
+			rt := &LocalRuntime{root: t.TempDir(), client: &dockerAPIClient{host: server.URL, client: server.Client()}}
+			result, err := rt.Reconcile(context.Background(), agentcontract.RuntimeReconcileRequest{
+				ExecutionID: "exec-digest-1", ApplicationID: "app-1", InstanceID: "inst-1", Action: "apply", DesiredGeneration: 2, DesiredSpecHash: "hash",
+				Spec: appruntime.Spec{ApplicationID: "app-1", InstanceID: "inst-1", ContainerName: "panel-web", Image: "example/web:1", Generation: 2, SpecHash: "hash"},
+			})
+			if err != nil {
+				t.Fatalf("Reconcile() error = %v", err)
+			}
+			if imageInspects != 1 {
+				t.Fatalf("image inspect calls = %d, want 1", imageInspects)
+			}
+			if result.ObservedImageDigest != tc.wantDigest {
+				t.Fatalf("ObservedImageDigest = %q, want %q", result.ObservedImageDigest, tc.wantDigest)
+			}
+		})
+	}
+}
+
+func TestVerifyExecutionReportsObservedImageDigestFromContainerImageID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/containers/panel-web/json":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"Id": "container-1", "Name": "/panel-web", "Image": "sha256:image-1",
+				"Config":     map[string]any{"Image": "example/web:1", "Labels": map[string]string{"panel.application.managed": "true", "panel.application.id": "app-1", "panel.application.instance.id": "inst-1", "panel.application.generation": "2", "panel.application.spec.hash": "hash", "panel.application.managed_files.hash": ""}},
+				"HostConfig": map[string]any{"NetworkMode": "panel-apps"},
+				"State":      map[string]any{"Status": "running", "Running": true, "StartedAt": "2026-01-01T00:00:00Z"},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/images/sha256:image-1/json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"Id":"sha256:image-1","RepoDigests":["example/web@sha256:cafebabe"]}`)
+		default:
+			t.Errorf("unexpected Docker request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	rt := &LocalRuntime{root: t.TempDir(), client: &dockerAPIClient{host: server.URL, client: server.Client()}}
+	result, matched, err := rt.VerifyExecution(context.Background(), agentcontract.RuntimeReconcileRequest{
+		ExecutionID: "exec-verify-1", ApplicationID: "app-1", InstanceID: "inst-1", Action: "apply", DesiredGeneration: 2, DesiredSpecHash: "hash",
+		Spec: appruntime.Spec{ApplicationID: "app-1", InstanceID: "inst-1", ContainerName: "panel-web", Image: "example/web:1", Generation: 2, SpecHash: "hash"},
+	})
+	if err != nil {
+		t.Fatalf("VerifyExecution() error = %v", err)
+	}
+	if !matched {
+		t.Fatalf("VerifyExecution() matched = false; result=%#v", result)
+	}
+	if result.ObservedImageDigest != "sha256:cafebabe" {
+		t.Fatalf("ObservedImageDigest = %q, want sha256:cafebabe", result.ObservedImageDigest)
 	}
 }

@@ -25,6 +25,9 @@ func toDomainApplication(m models.Application) Application {
 		Enabled:           m.Enabled,
 		DeletionRequested: m.DeletionRequested,
 		ReconcileStopped:  m.ReconcileStopped,
+		// 旧库由 AutoMigrate 以 DEFAULT 1 回填 auto_update_enabled；模型层读出
+		// 的是解析后的 bool，缺省语义由列默认值保证。
+		AutoUpdateEnabled: m.AutoUpdateEnabled,
 		SpecYAML:          m.SpecYAML,
 		DeploymentMode:    m.DeploymentMode,
 		DeploymentServers: m.DeploymentServerIDsJSON,
@@ -68,6 +71,7 @@ func fromDomainApplication(app Application) *models.Application {
 		Enabled:                 app.Enabled,
 		DeletionRequested:       app.DeletionRequested,
 		ReconcileStopped:        app.ReconcileStopped,
+		AutoUpdateEnabled:       app.AutoUpdateEnabled,
 		SpecYAML:                app.SpecYAML,
 		DeploymentMode:          app.DeploymentMode,
 		DeploymentServerIDsJSON: app.DeploymentServers,

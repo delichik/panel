@@ -1955,6 +1955,54 @@ func TestImageCheckTaskExecutorUpdatesApplicationAndCompletesTask(t *testing.T) 
 	}
 }
 
+func TestWithImageDigestResolverOptionReplacesDefault(t *testing.T) {
+	injected := fakeImageResolver{result: ImageDigestResult{
+		Reference: "registry.example.com/team/web:latest",
+		Digest:    "sha256:injected",
+	}}
+	svc, _, _, closeStore := newTestServiceWithOptions(t, WithImageDigestResolver(injected))
+	defer closeStore()
+	if got, ok := svc.imageResolver.(fakeImageResolver); !ok || got.result.Digest != "sha256:injected" {
+		t.Fatalf("image resolver = %#v", svc.imageResolver)
+	}
+	ctx := context.Background()
+	app, err := svc.Create(ctx, SaveInput{Name: "web", SpecYAML: "name: web\nimage: registry.example.com/team/web:latest\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := svc.tasks.Create(ctx, tasks.CreateInput{
+		Type:         TaskTypeImageCheck,
+		ResourceType: "application",
+		ResourceID:   app.ID,
+		Summary:      "Checking image for " + app.Name,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	def, ok := svc.tasks.Registry().Definition(TaskTypeImageCheck)
+	if !ok || def.Execute == nil {
+		t.Fatal("expected application image check executor")
+	}
+	if err := def.Execute(tasks.TaskContext{Context: ctx, Task: task, Service: svc.tasks}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ImageLatestDigest != "sha256:injected" || got.ImageLastError != "" {
+		t.Fatalf("image state = %#v", got)
+	}
+}
+
+func TestWithImageDigestResolverOptionIgnoresNil(t *testing.T) {
+	svc, _, _, closeStore := newTestServiceWithOptions(t, WithImageDigestResolver(nil))
+	defer closeStore()
+	if _, ok := svc.imageResolver.(*RegistryImageResolver); !ok {
+		t.Fatalf("nil option must keep the default resolver, got %#v", svc.imageResolver)
+	}
+}
+
 func TestImageUpdateTaskExecutorUpdatesImageDeploysRuntimeAndCompletesTask(t *testing.T) {
 	svc, runtime, _, closeStore := newTestService(t)
 	defer closeStore()
@@ -2242,6 +2290,11 @@ func TestGetApplicationOperationRecordHandlesEmptyStageTimes(t *testing.T) {
 
 func newTestService(t *testing.T) (*Service, *fakeRuntimeClient, *fakeServerProvider, func()) {
 	t.Helper()
+	return newTestServiceWithOptions(t)
+}
+
+func newTestServiceWithOptions(t *testing.T, opts ...Option) (*Service, *fakeRuntimeClient, *fakeServerProvider, func()) {
+	t.Helper()
 	dir := t.TempDir()
 	cfg := config.Default()
 	cfg.DataRoot = filepath.Join(dir, "data")
@@ -2278,7 +2331,7 @@ func newTestService(t *testing.T) (*Service, *fakeRuntimeClient, *fakeServerProv
 		Datacenter:     "dc1",
 		SaveSessionDir: filepath.Join(dir, "sessions"),
 		DataRoot:       cfg.DataRoot,
-	})
+	}, opts...)
 	svc.RegisterTasks(taskSvc)
 	svc.SetServerProvider(servers)
 	svc.SetApplicationReconcileTrigger(&fakeApplicationReconcileTrigger{svc: svc, tasks: taskSvc})

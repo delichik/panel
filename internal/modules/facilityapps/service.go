@@ -43,6 +43,7 @@ type facilityConfigRow struct {
 	Version                 int
 	DeploymentServerIDsJSON string `orm:"column:deployment_server_ids_json"`
 	DNSSyncJSON             string `orm:"column:dns_sync_json"`
+	SettingsJSON            string `orm:"column:settings_json"`
 	LastError               string
 	UpdatedAt               string
 }
@@ -60,6 +61,20 @@ type AgentRuntimeClient interface {
 	RuntimeStop(ctx context.Context, baseURL string, req agentcontract.RuntimeStopRequest) (agentcontract.RuntimeInstanceResponse, error)
 	DockerImagePull(ctx context.Context, baseURL, reference string) error
 	DockerContainerAction(ctx context.Context, baseURL, id, action string) error
+	// DockerContainers/DockerImages/RuntimeStatus 用于入口代理镜像状态检查、
+	// 更新前实际 digest 采集与滚动更新后的运行态校验。
+	DockerContainers(ctx context.Context, baseURL string) ([]agentcontract.DockerContainer, error)
+	DockerImages(ctx context.Context, baseURL string) ([]agentcontract.DockerImage, error)
+	RuntimeStatus(ctx context.Context, baseURL, instanceID, containerName string) (agentcontract.RuntimeStatusResponse, error)
+	// RuntimeStatusWithVersion 在状态查询同时请求运行容器内执行版本命令
+	// （例如 `nginx -v`），用于采集网关实际运行的 nginx 版本。
+	RuntimeStatusWithVersion(ctx context.Context, baseURL, instanceID, containerName string, versionCommand []string) (agentcontract.RuntimeStatusResponse, error)
+}
+
+// ProxyImageResolver 解析受管镜像标签在 registry 上的权威 digest。
+// 由 applications.NewRegistryImageResolver() 提供默认实现，测试可注入假实现。
+type ProxyImageResolver interface {
+	Resolve(ctx context.Context, image string) (applications.ImageDigestResult, error)
 }
 
 type ApplicationProvider interface {
@@ -99,16 +114,26 @@ type Service struct {
 	reconciler      ApplicationReconcileTrigger
 	dns             DNSProxySyncer
 	tasks           *tasks.Service
+	imageResolver   ProxyImageResolver
+	proxyImageMu    sync.Mutex
 	editCleanupOnce sync.Once
 	editSessionDir  string
 	editCommitMu    sync.Mutex
 	storageMu       sync.Mutex
 	ssh             sshx.RemoteExecutor
+	// updateIntervalSleeper 注入滚动更新相邻网关之间的等待实现；默认是
+	// context-aware timer，测试可替换为即时记录实现。
+	updateIntervalSleeper updateIntervalSleeper
 	// beforeFacilityEditRevisionBump is a deterministic test synchronization point.
 	beforeFacilityEditRevisionBump func()
 }
 
 type Option func(*Service)
+
+// WithImageResolver 注入入口代理镜像 digest 解析器（默认 RegistryImageResolver）。
+func WithImageResolver(resolver ProxyImageResolver) Option {
+	return func(s *Service) { s.imageResolver = resolver }
+}
 
 func WithContainerOperationQueue(queue ContainerOperationQueue) Option {
 	return func(s *Service) { s.queue = queue }
@@ -150,13 +175,26 @@ func WithTaskService(taskSvc *tasks.Service) Option {
 	return func(s *Service) { s.tasks = taskSvc }
 }
 
+// WithImageUpdateIntervalSleeper 注入入口代理滚动更新的间隔等待实现（测试用）。
+// 默认实现按 ctx 取消中断等待。
+func WithImageUpdateIntervalSleeper(sleeper func(ctx context.Context, d time.Duration) error) Option {
+	return func(s *Service) {
+		if sleeper != nil {
+			s.updateIntervalSleeper = updateIntervalSleeper(sleeper)
+		}
+	}
+}
+
 func NewService(db *sql.DB, agent AgentRuntimeClient, servers ServerProvider, apps ApplicationProvider, opts ...Option) *Service {
-	s := &Service{db: db, agent: agent, servers: servers, apps: apps}
+	s := &Service{db: db, agent: agent, servers: servers, apps: apps, updateIntervalSleeper: sleepUpdateInterval}
 	if handler, ok := servers.(AgentErrorHandler); ok {
 		s.agentErrors = handler
 	}
 	for _, opt := range opts {
 		opt(s)
+	}
+	if s.imageResolver == nil {
+		s.imageResolver = applications.NewRegistryImageResolver()
 	}
 	s.editSessionDir = filepath.Join(s.dataRoot, "tmp", "facility-reverse-proxy-edit-sessions")
 	if s.tasks != nil {
@@ -175,6 +213,7 @@ func NewService(db *sql.DB, agent AgentRuntimeClient, servers ServerProvider, ap
 			AllowRetry:  true,
 			Execute:     s.runStorageShareReconcileTask,
 		})
+		s.registerProxyImageTasks()
 	}
 	s.recoverFacilityEditSessions(context.Background())
 	s.backfillFacilityAssetBlobs(context.Background())
@@ -183,11 +222,22 @@ func NewService(db *sql.DB, agent AgentRuntimeClient, servers ServerProvider, ap
 	return s
 }
 
+// StartPeriodic starts the module-owned scheduler loops. The image check task is
+// periodic (6h); the update task is only triggered manually or by the automatic
+// update coordinator, so it has no scheduler loop here.
+func (s *Service) StartPeriodic(ctx context.Context, taskSvc *tasks.Service) {
+	if s == nil || taskSvc == nil {
+		return
+	}
+	tasks.StartSchedulerLoop(ctx, taskSvc, proxyImageCheckTaskType, proxyImageCheckInterval, "facilityapps")
+}
+
 func (s *Service) GetReverseProxy(ctx context.Context) (ReverseProxyConfig, error) {
 	cfg, err := s.loadConfig(ctx)
 	if err != nil {
 		return ReverseProxyConfig{}, err
 	}
+	cfg.Settings = cfg.Settings.resolved()
 	var warnings []string
 	recordSubqueryError := func(component string, err error) {
 		if err == nil {
@@ -195,6 +245,11 @@ func (s *Service) GetReverseProxy(ctx context.Context) (ReverseProxyConfig, erro
 		}
 		logging.From(logging.With(ctx, logging.Context{Module: "facilityapps"})).Warn("facility reverse proxy subquery failed", zap.String("component", component), zap.Error(err))
 		warnings = append(warnings, component+": "+err.Error())
+	}
+	if image, imageErr := s.proxyImageStatus(ctx, cfg.DeploymentServers); imageErr == nil {
+		cfg.Image = image
+	} else {
+		recordSubqueryError("image", imageErr)
 	}
 	// 一次取回全部 Application 反向代理配置，在 routeCount / routeSummaries /
 	// cfg.ApplicationRoutes 三处复用，避免一次请求多次全表查询。
@@ -307,6 +362,9 @@ func (s *Service) syncReverseProxyTraits(ctx context.Context, previous, next []s
 		}
 		traits := map[string]string{}
 		_ = json.Unmarshal([]byte(raw), &traits)
+		if traits == nil {
+			traits = map[string]string{}
+		}
 		if _, ok := enabled[serverID]; ok {
 			traits[reverseProxyEnabledTrait] = "true"
 		} else {
@@ -519,7 +577,11 @@ func (s *Service) RuntimeSpecForServer(ctx context.Context, app applications.App
 	return spec, true, nil
 }
 
-func (s *Service) PlanRuntimeUpdate(_ context.Context, app applications.Application, _ server.Server, _, desired appruntime.Spec) appruntime.UpdatePlan {
+// PlanRuntimeUpdate decides reload vs recreate for the facility reverse proxy.
+// Identity fields (image reference/digest, command, ports, mount layout, env,
+// restart) require recreate; pure nginx/managed-file content changes reload.
+// FAC-RP-009: image or port layout changes must recreate the container.
+func (s *Service) PlanRuntimeUpdate(ctx context.Context, app applications.Application, srv server.Server, current, desired appruntime.Spec) appruntime.UpdatePlan {
 	if app.ID != proxyApplicationID {
 		return appruntime.UpdatePlan{Mode: appruntime.UpdateModeRecreate, Reason: "facility does not support reload"}
 	}
@@ -527,6 +589,18 @@ func (s *Service) PlanRuntimeUpdate(_ context.Context, app applications.Applicat
 		if strings.TrimSpace(file.Kind) == appruntime.ManagedFileKindArchive {
 			return appruntime.UpdatePlan{Mode: appruntime.UpdateModeRecreate, Reason: "managed archive requires recreation"}
 		}
+	}
+	// Callers (including older planning paths) may pass an empty current spec;
+	// fall back to the persisted runtime spec so a missing argument cannot turn
+	// every reconcile into a recreate (or hide an identity change).
+	if isEmptyRuntimeSpec(current) {
+		current = s.persistedRuntimeSpec(ctx, app.ID, srv.ID)
+	}
+	if isEmptyRuntimeSpec(current) {
+		return appruntime.UpdatePlan{Mode: appruntime.UpdateModeRecreate, Reason: "no current runtime spec; first deployment"}
+	}
+	if proxyIdentityHash(current) != proxyIdentityHash(desired) {
+		return appruntime.UpdatePlan{Mode: appruntime.UpdateModeRecreate, Reason: "runtime identity changed (image/command/ports/mounts)"}
 	}
 	return appruntime.UpdatePlan{
 		Mode:   appruntime.UpdateModeReload,
@@ -536,6 +610,32 @@ func (s *Service) PlanRuntimeUpdate(_ context.Context, app applications.Applicat
 			ReloadCommand:   []string{"nginx", "-s", "reload", "-c", proxyContainerRoot + "/nginx.conf"},
 		},
 	}
+}
+
+func isEmptyRuntimeSpec(spec appruntime.Spec) bool {
+	return strings.TrimSpace(spec.ID) == "" && strings.TrimSpace(spec.Image) == "" && len(spec.Command) == 0
+}
+
+// persistedRuntimeSpec loads the last observed runtime spec for a facility
+// instance (application_instances.runtime_spec_json). A missing row/spec yields
+// the zero spec, which PlanRuntimeUpdate treats as first deployment.
+func (s *Service) persistedRuntimeSpec(ctx context.Context, applicationID, serverID string) appruntime.Spec {
+	if s == nil || s.db == nil || strings.TrimSpace(serverID) == "" {
+		return appruntime.Spec{}
+	}
+	var raw string
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(runtime_spec_json,'') FROM application_instances WHERE application_id=? AND server_id=?`, applicationID, serverID).Scan(&raw); err != nil {
+		return appruntime.Spec{}
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "null" || raw == "{}" {
+		return appruntime.Spec{}
+	}
+	var spec appruntime.Spec
+	if err := json.Unmarshal([]byte(raw), &spec); err != nil {
+		return appruntime.Spec{}
+	}
+	return spec
 }
 
 func (s *Service) triggerReverseProxyReconcile(ctx context.Context, triggerType string, stopServers, serverIDs []string) error {
@@ -649,10 +749,14 @@ func (s *Service) proxySpec(ctx context.Context, serverID string, cfg ReversePro
 	if err != nil {
 		return appruntime.Spec{}, err
 	}
-	hash := specHash(serverID, cfg, routes, nginx, files)
+	image := s.proxySpecImage(ctx, serverID)
+	hash := specHash(serverID, image.reference, image.digest, nginx, files)
 	ports := []appruntime.Port{
 		{Label: "http", ContainerPort: 80, HostPort: 80, Protocol: "tcp"},
 		{Label: "https", ContainerPort: 443, HostPort: 443, Protocol: "tcp"},
+		// HTTP/3 需要 UDP 443；端口布局变化属于 identity 变化，存量网关会在
+		// 功能上线后的首次协调时重建一次（预期迁移，见 FAC-RP-017）。
+		{Label: "https-quic", ContainerPort: 443, HostPort: 443, Protocol: "udp"},
 	}
 	if managedFilesContainPrefix(files, "certs/") {
 		mounts = append(mounts, appruntime.Mount{Type: "managed_file", Source: "certs", Target: proxyTLSMountRoot, ReadOnly: true})
@@ -665,7 +769,8 @@ func (s *Service) proxySpec(ctx context.Context, serverID string, cfg ReversePro
 		InstanceID:    instanceID(serverID),
 		ContainerName: proxyContainerName,
 		Name:          "reverse-proxy",
-		Image:         supportedProxyImage,
+		Image:         image.reference,
+		ImageDigest:   image.digest,
 		Command:       []string{"nginx", "-c", proxyContainerRoot + "/nginx.conf", "-g", "daemon off;"},
 		Ports:         ports,
 		Mounts:        mounts,
@@ -674,6 +779,26 @@ func (s *Service) proxySpec(ctx context.Context, serverID string, cfg ReversePro
 		Generation:    1,
 		SpecHash:      hash,
 	}, nil
+}
+
+type proxySpecImageIdentity struct {
+	reference string
+	digest    string
+}
+
+// proxySpecImage 返回该网关的目标镜像身份：标签引用 + 该节点 target digest。
+// target digest 进入 spec hash，因此逐节点更新只影响该节点。
+func (s *Service) proxySpecImage(ctx context.Context, serverID string) proxySpecImageIdentity {
+	identity := proxySpecImageIdentity{reference: supportedProxyImage}
+	state, err := s.loadProxyImageState(ctx, serverID)
+	if err != nil {
+		return identity
+	}
+	if reference := strings.TrimSpace(state.Reference); reference != "" {
+		identity.reference = reference
+	}
+	identity.digest = strings.TrimSpace(state.TargetDigest)
+	return identity
 }
 
 func managedFilesContainPrefix(files []appruntime.ManagedFile, prefix string) bool {
@@ -686,7 +811,8 @@ func managedFilesContainPrefix(files []appruntime.ManagedFile, prefix string) bo
 }
 
 func (s *Service) renderNginxConfig(ctx context.Context, serverID string, cfg ReverseProxyConfig, apps []applications.ApplicationReverseProxyConfig, certificates []proxycert.Certificate) (string, []appruntime.Mount, []appruntime.ManagedFile, error) {
-	mainConfig := renderMainNginxConfig()
+	settings := cfg.Settings.resolved()
+	mainConfig := renderMainNginxConfig(settings)
 	mounts := []appruntime.Mount{}
 	files := []appruntime.ManagedFile{}
 	certFiles := map[string]struct{}{}
@@ -702,7 +828,9 @@ func (s *Service) renderNginxConfig(ctx context.Context, serverID string, cfg Re
 		if err != nil {
 			return "", nil, nil, err
 		}
-		hostForDomain(hosts, domain.Domain).Relay = relay
+		host := hostForDomain(hosts, domain.Domain)
+		host.configure(domain.Transport(), domain.CustomServerDirectives, resolvedHTTPPortMode(storedHTTPPortMode(domain.HTTPPortMode), settings.HTTPPortMode), domain.HSTSEnabled, domain.ClientMaxBodySize)
+		host.Relay = relay
 	}
 	mountIndex := 0
 	for _, domainConfig := range cfg.Domains {
@@ -713,9 +841,10 @@ func (s *Service) renderNginxConfig(ctx context.Context, serverID string, cfg Re
 		if domain == "" {
 			continue
 		}
+		host := hostForDomain(hosts, domain)
+		host.configure(domainConfig.Transport(), domainConfig.CustomServerDirectives, resolvedHTTPPortMode(storedHTTPPortMode(domainConfig.HTTPPortMode), settings.HTTPPortMode), domainConfig.HSTSEnabled, domainConfig.ClientMaxBodySize)
 		for _, pathConfig := range domainConfig.Paths {
 			pathValue := sanitizeNginxPath(firstNonEmpty(pathConfig.Path, "/"))
-			host := hostForDomain(hosts, domain)
 			route := proxyFacilityRoute{
 				Path:            pathValue,
 				RuleType:        normalizedStaticRuleType(pathConfig.RuleType),
@@ -748,6 +877,7 @@ func (s *Service) renderNginxConfig(ctx context.Context, serverID string, cfg Re
 				continue
 			}
 			host := hostForDomain(hosts, domain)
+			host.configure(applicationRouteTransport(route), route.CustomServerDirectives, resolvedHTTPPortMode(route.HTTPPortMode, settings.HTTPPortMode), route.HSTSEnabled, clientMaxBodySizeOverridePtr(route.ClientMaxBodySize))
 			if containsString(route.OriginServerIDs, serverID) {
 				host.Proxy = append(host.Proxy, route)
 				continue
@@ -769,17 +899,21 @@ func (s *Service) renderNginxConfig(ctx context.Context, serverID string, cfg Re
 	for _, domain := range domains {
 		host := hosts[domain]
 		cert := bestCertificate(domain, certificates)
-		appendCertificateFiles(cert, &files, certFiles)
-		if host.Relay != nil && cert != nil {
-			appendRelayTrustFiles(cert, &files, certFiles)
+		transport := host.Transport
+		effective := effectiveHTTPS(transport, cert != nil)
+		if effective {
+			appendCertificateFiles(cert, &files, certFiles)
+			if host.Relay != nil {
+				appendRelayTrustFiles(cert, &files, certFiles)
+			}
 		}
 		var domainConfig strings.Builder
 		if host.Relay != nil {
-			writeRelayUpstream(&domainConfig, host.Relay, cert != nil)
+			writeRelayUpstream(&domainConfig, host.Relay, effective)
 		}
-		writeProxyServer(&domainConfig, domain, host, nil, cert, false)
-		if cert != nil {
-			writeProxyServer(&domainConfig, domain, host, cert, cert, true)
+		writeProxyServer(&domainConfig, domain, host, nil, cert, effective, settings)
+		if effective {
+			writeProxyServer(&domainConfig, domain, host, cert, cert, effective, settings)
 		}
 		appendManagedFile(&files, appruntime.ManagedFile{Path: nginxDomainConfigPath(domain), Content: []byte(domainConfig.String()), Mode: "0644"})
 	}
@@ -787,8 +921,43 @@ func (s *Service) renderNginxConfig(ctx context.Context, serverID string, cfg Re
 	return mainConfig, mounts, files, nil
 }
 
-func renderMainNginxConfig() string {
-	return `user nginx;
+// applicationRouteTransport 把应用反代规则上已解析的三开关转成渲染用的传输
+// 结构。应用反代规则的字段由 applications 模块归一化（nil 默认开/开/关）。
+func applicationRouteTransport(route applications.ReverseProxyRoute) proxyTransport {
+	return proxyTransport{HTTPS: route.HTTPSEnabled, HTTP2: route.HTTP2Enabled, HTTP3: route.HTTP3Enabled}
+}
+
+// renderMainNginxConfig 生成主配置。http 块顶层指令结构化输出，以便
+// customHttpDirectives 做"同名覆盖、其余追加"；http2/http3/quic_retry/
+// ssl_early_data 不再全局写死，全部下沉到每域名 443 server。
+func renderMainNginxConfig(settings FacilityProxySettings) string {
+	settings = settings.resolved()
+	directives := []nginxDirective{
+		{Name: "server_tokens", Args: settings.ServerTokens},
+		{Name: "access_log", Args: "/dev/stdout main"},
+		{Name: "sendfile", Args: "on"},
+		{Name: "tcp_nopush", Args: "on"},
+		{Name: "tcp_nodelay", Args: "on"},
+		{Name: "keepalive_timeout", Args: "65"},
+		{Name: "types_hash_max_size", Args: "4096"},
+		{Name: "client_max_body_size", Args: settings.ClientMaxBodySize},
+		{Name: "client_header_buffer_size", Args: "32k"},
+		{Name: "large_client_header_buffers", Args: "4 32k"},
+		{Name: "resolver", Args: "127.0.0.11 valid=10s ipv6=off"},
+		{Name: "include", Args: "/etc/nginx/mime.types"},
+		{Name: "default_type", Args: "application/octet-stream"},
+		{Name: "ssl_session_cache", Args: "shared:SSL:50m"},
+		{Name: "ssl_session_timeout", Args: "1h"},
+		{Name: "ssl_ciphers", Args: "EECDH+CHACHA20:EECDH+CHACHA20-draft:EECDH+AES128:RSA+AES128:EECDH+AES256:RSA+AES256"},
+		{Name: "ssl_protocols", Args: nginxTLSProtocols(settings.TLSMinVersion)},
+		{Name: "ssl_prefer_server_ciphers", Args: "on"},
+		{Name: "ssl_buffer_size", Args: "4k"},
+	}
+	custom, _ := parseCustomDirectives(directiveScopeHTTP, settings.CustomHTTPDirectives)
+	directives = mergeNginxDirectives(directives, custom)
+
+	var b strings.Builder
+	b.WriteString(`user nginx;
 worker_processes auto;
 error_log /dev/stderr;
 pid /run/nginx.pid;
@@ -804,34 +973,9 @@ http {
                     '$status $body_bytes_sent "$http_referer" '
                     '"$http_user_agent" "$http_x_forwarded_for"';
 
-    access_log /dev/stdout main;
-
-    sendfile on;
-    tcp_nopush on;
-    tcp_nodelay on;
-    keepalive_timeout 65;
-    types_hash_max_size 4096;
-    client_max_body_size 50m;
-    client_header_buffer_size 32k;
-    large_client_header_buffers 4 32k;
-
-    resolver 127.0.0.11 valid=10s ipv6=off;
-
-    include /etc/nginx/mime.types;
-    default_type application/octet-stream;
-
-    http2 on;
-    http3 on;
-    ssl_early_data on;
-    quic_retry on;
-
-    ssl_session_cache shared:SSL:50m;
-    ssl_session_timeout 1h;
-    ssl_ciphers EECDH+CHACHA20:EECDH+CHACHA20-draft:EECDH+AES128:RSA+AES128:EECDH+AES256:RSA+AES256;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_prefer_server_ciphers on;
-    ssl_buffer_size 4k;
-
+`)
+	writeNginxDirectives(&b, "    ", directives)
+	b.WriteString(`
     map $http_upgrade $connection_upgrade {
         default upgrade;
         '' "";
@@ -839,7 +983,8 @@ http {
 
     include /etc/panel-nginx/conf.d/*.conf;
 }
-`
+`)
+	return b.String()
 }
 
 func nginxDomainConfigPath(domain string) string {
@@ -867,6 +1012,30 @@ type proxyHost struct {
 	Facility []proxyFacilityRoute
 	Proxy    []applications.ReverseProxyRoute
 	Relay    *proxyRelay
+	// Transport/CustomDirectives 来自该域名的设施记录或应用反代规则（后者由
+	// applications 归一化），先到先得：设施域名与应用的同域名不会共存。
+	Transport        proxyTransport
+	CustomDirectives []nginxDirective
+	// HTTPPortMode 是该域名继承解析后的 80 端口策略（serve|redirect），渲染时
+	// 仍会按 effectiveHTTPS 决定 redirect 是否真正生效。
+	HTTPPortMode string
+	// HSTSEnabled/ClientMaxBodySize 是该域名的原始覆盖值（nil/空=继承设施
+	// 全局），渲染时再结合当前全局设置解析。
+	HSTSEnabled       *bool
+	ClientMaxBodySize *string
+	configured        bool
+}
+
+func (h *proxyHost) configure(transport proxyTransport, directives []string, httpPortMode string, hstsEnabled *bool, clientMaxBodySize *string) {
+	if h == nil || h.configured {
+		return
+	}
+	h.configured = true
+	h.Transport = transport
+	h.HTTPPortMode = resolvedHTTPPortMode(httpPortMode, HTTPPortModeServe)
+	h.HSTSEnabled = hstsEnabled
+	h.ClientMaxBodySize = clientMaxBodySize
+	h.CustomDirectives = canonicalCustomDirectiveLines(directives)
 }
 
 type proxyFacilityRoute struct {
@@ -944,23 +1113,80 @@ func appendManagedFile(files *[]appruntime.ManagedFile, file appruntime.ManagedF
 	*files = append(*files, file)
 }
 
-func writeProxyServer(b *strings.Builder, domain string, host *proxyHost, serverCert, relayCert *proxycert.Certificate, https bool) {
-	b.WriteString("\n    server {\n")
+func writeProxyServer(b *strings.Builder, domain string, host *proxyHost, serverCert, relayCert *proxycert.Certificate, effectiveHTTPS bool, settings FacilityProxySettings) {
+	https := serverCert != nil
+	transport := host.Transport
+	if !host.configured {
+		transport = defaultProxyTransport()
+	}
+	// 每域名有效 HSTS：域名覆盖优先，否则设施全局；maxAge/includeSubDomains
+	// 仍取全局设置。只有真正生成 443 server 时才输出响应头。
+	hstsEnabled := settings.HSTS.Enabled
+	if host.HSTSEnabled != nil {
+		hstsEnabled = *host.HSTSEnabled
+	}
+	directives := []nginxDirective{}
 	if https {
-		b.WriteString("        listen 443 ssl;\n")
-		b.WriteString("        listen 443 quic;\n")
+		directives = append(directives, nginxDirective{Name: "listen", Args: "443 ssl"})
+		if transport.HTTP3 {
+			directives = append(directives, nginxDirective{Name: "listen", Args: "443 quic"})
+		}
+		directives = append(directives,
+			nginxDirective{Name: "server_name", Args: domain},
+			nginxDirective{Name: "ssl_certificate", Args: certPath(serverCert.ID, "certificate")},
+			nginxDirective{Name: "ssl_certificate_key", Args: certPath(serverCert.ID, "private-key")},
+			// 按域名显式输出 HTTP/2 开关（不再有全局 http2 on）。
+			nginxDirective{Name: "http2", Args: onOff(transport.HTTP2)},
+		)
+		if transport.HTTP3 {
+			directives = append(directives,
+				nginxDirective{Name: "http3", Args: "on"},
+				nginxDirective{Name: "quic_retry", Args: "on"},
+				nginxDirective{Name: "add_header", Args: `Alt-Svc 'h3=":443"; ma=86400' always`},
+			)
+		}
+		// ssl_early_data 不再输出：nginx 1.28 无法用于 QUIC 0-RTT，TLS1.3
+		// 早发数据只有重放风险。
+		if hstsEnabled {
+			hsts := "max-age=" + strconv.Itoa(settings.HSTS.MaxAgeSeconds)
+			if settings.HSTS.IncludeSubDomains {
+				hsts += "; includeSubDomains"
+			}
+			directives = append(directives, nginxDirective{Name: "add_header", Args: `Strict-Transport-Security "` + hsts + `" always`})
+		}
 	} else {
-		b.WriteString("        listen 80;\n")
+		directives = append(directives,
+			nginxDirective{Name: "listen", Args: "80"},
+			nginxDirective{Name: "server_name", Args: domain},
+		)
 	}
-	b.WriteString("        server_name " + domain + ";\n")
-	if serverCert != nil {
-		b.WriteString("        ssl_certificate " + certPath(serverCert.ID, "certificate") + ";\n")
-		b.WriteString("        ssl_certificate_key " + certPath(serverCert.ID, "private-key") + ";\n")
-		b.WriteString("        add_header Alt-Svc 'h3=\":443\"; ma=86400' always;\n")
+	// 每域名请求体上限在 server 块输出，覆盖 http 层全局值；自定义 server
+	// 指令仍按同名覆盖规则优先。
+	directives = append(directives, nginxDirective{Name: "client_max_body_size", Args: resolvedClientMaxBodySize(host.ClientMaxBodySize, settings.ClientMaxBodySize)})
+	// 80 端口策略按域名解析（域名覆盖优先，否则设施全局），并且 redirect 仅
+	// 在该域名真的生成 443 server 时生效；否则保持直接服务内容。
+	httpPortMode := HTTPPortModeServe
+	if host.configured {
+		httpPortMode = host.HTTPPortMode
 	}
-	b.WriteString("    error_page 502 504 @panel_upstream_unavailable;\n")
+	redirectToHTTPS := !https && effectiveHTTPS && httpPortMode == HTTPPortModeRedirect
+	if !redirectToHTTPS {
+		directives = append(directives, nginxDirective{Name: "error_page", Args: "502 504 @panel_upstream_unavailable"})
+	}
+	directives = mergeNginxDirectives(directives, host.CustomDirectives)
+
+	b.WriteString("\n    server {\n")
+	writeNginxDirectives(b, "        ", directives)
+	if redirectToHTTPS {
+		// 80 端口不再输出 http2 on（明文仅 HTTP/1.1，h2c 取消属预期变化）。
+		b.WriteString("        location / {\n")
+		b.WriteString("            return 301 https://$host$request_uri;\n")
+		b.WriteString("        }\n")
+		b.WriteString("    }\n")
+		return
+	}
 	if host.Relay != nil {
-		writeRelayLocation(b, domain, host.Relay, relayCert)
+		writeRelayLocation(b, domain, host.Relay, effectiveHTTPS, relayCert)
 		writeProxyErrorLocation(b)
 		b.WriteString("    }\n")
 		return
@@ -981,6 +1207,13 @@ func writeProxyServer(b *strings.Builder, domain string, host *proxyHost, server
 	}
 	writeProxyErrorLocation(b)
 	b.WriteString("    }\n")
+}
+
+func onOff(value bool) string {
+	if value {
+		return "on"
+	}
+	return "off"
 }
 
 func writeProxyErrorLocation(b *strings.Builder) {
@@ -1123,9 +1356,9 @@ func writeRelayUpstream(b *strings.Builder, relay *proxyRelay, tls bool) {
 	b.WriteString("    }\n")
 }
 
-func writeRelayLocation(b *strings.Builder, domain string, relay *proxyRelay, cert *proxycert.Certificate) {
+func writeRelayLocation(b *strings.Builder, domain string, relay *proxyRelay, tls bool, cert *proxycert.Certificate) {
 	scheme := "http"
-	if cert != nil {
+	if tls {
 		scheme = "https"
 	}
 	b.WriteString("        location / {\n")
@@ -1138,7 +1371,7 @@ func writeRelayLocation(b *strings.Builder, domain string, relay *proxyRelay, ce
 	options, _ := applications.NormalizeHTTPRouteOptions(applications.HTTPRouteOptions{}, true, true, applications.HTTPRouteWebSocketAuto)
 	applications.WriteNginxHTTPRouteOptions(b, options, "            ", true)
 	applications.WriteNginxWebSocketOptions(b, options.WebSocketMode, "            ")
-	if cert != nil {
+	if tls && cert != nil {
 		b.WriteString("            proxy_ssl_server_name on;\n")
 		b.WriteString("            proxy_ssl_name " + domain + ";\n")
 		// Use a CA trust store — never the leaf used for ssl_certificate.
@@ -1159,8 +1392,9 @@ func nginxUpstreamAddress(host string, port int) string {
 
 func (s *Service) loadConfig(ctx context.Context) (ReverseProxyConfig, error) {
 	cfg := ReverseProxyConfig{ID: ReverseProxyID, DeploymentServers: []string{}, Domains: []FacilityRouteDomain{}}
+	cfg.Settings = defaultFacilityProxySettings()
 	var row facilityConfigRow
-	if err := orm.New(s.db).From("facility_app_configs").Select("version", "deployment_server_ids_json", "dns_sync_json", "last_error", "updated_at").Where("id=?", ReverseProxyID).First(ctx, &row); err != nil {
+	if err := orm.New(s.db).From("facility_app_configs").Select("version", "deployment_server_ids_json", "dns_sync_json", "settings_json", "last_error", "updated_at").Where("id=?", ReverseProxyID).First(ctx, &row); err != nil {
 		if err == sql.ErrNoRows {
 			return cfg, nil
 		}
@@ -1168,6 +1402,7 @@ func (s *Service) loadConfig(ctx context.Context) (ReverseProxyConfig, error) {
 	}
 	cfg.Version = row.Version
 	cfg.LastError = row.LastError
+	cfg.Settings = parseFacilityProxySettings(row.SettingsJSON)
 	_ = json.Unmarshal([]byte(row.DeploymentServerIDsJSON), &cfg.DeploymentServers)
 	domains, err := s.loadFacilityRouteDomains(ctx)
 	if err != nil {
@@ -1241,12 +1476,20 @@ func (s *Service) loadFacilityRouteDomains(ctx context.Context) ([]FacilityRoute
 		var paths []FacilityRoutePath
 		pathsRaw, _ := json.Marshal(row.PathsJSON)
 		_ = json.Unmarshal(pathsRaw, &paths)
+		httpsEnabled, http2Enabled, http3Enabled := row.HTTPSEnabled, row.HTTP2Enabled, row.HTTP3Enabled
 		out = append(out, FacilityRouteDomain{
-			Domain:          row.Domain,
-			Version:         row.Version,
-			OriginServerIDs: append([]string(nil), row.OriginServerIDs...),
-			AnyAccess:       anyAccess,
-			Paths:           paths,
+			Domain:                 row.Domain,
+			Version:                row.Version,
+			OriginServerIDs:        append([]string(nil), row.OriginServerIDs...),
+			AnyAccess:              anyAccess,
+			Paths:                  paths,
+			HTTPSEnabled:           &httpsEnabled,
+			HTTP2Enabled:           &http2Enabled,
+			HTTP3Enabled:           &http3Enabled,
+			HTTPPortMode:           httpPortModeOverridePtr(row.HTTPPortMode),
+			HSTSEnabled:            hstsEnabledOverridePtr(row.HSTSEnabled),
+			ClientMaxBodySize:      clientMaxBodySizeOverridePtr(row.ClientMaxBodySize),
+			CustomServerDirectives: append([]string{}, row.CustomServerDirectives...),
 		})
 	}
 	return out, nil
@@ -1278,6 +1521,14 @@ func replaceFacilityRouteDomains(ctx context.Context, exec orm.Executor, domains
 			CreatedAt:       now,
 			UpdatedAt:       now,
 		}
+		transport := domain.Transport()
+		route.HTTPSEnabled = transport.HTTPS
+		route.HTTP2Enabled = transport.HTTP2
+		route.HTTP3Enabled = transport.HTTP3
+		route.HTTPPortMode = storedHTTPPortMode(domain.HTTPPortMode)
+		route.HSTSEnabled = storedHSTSEnabled(domain.HSTSEnabled)
+		route.ClientMaxBodySize = storedClientMaxBodySize(domain.ClientMaxBodySize)
+		route.CustomServerDirectives = append([]string{}, domain.CustomServerDirectives...)
 		items = append(items, &route)
 	}
 	return orm.New(exec).From("reverse_proxy_routes").InsertBatch(ctx, items)
@@ -1295,15 +1546,19 @@ func (s *Service) saveConfig(ctx context.Context, cfg ReverseProxyConfig) error 
 		dnsSyncRaw = []byte("{}")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	settingsJSON, err := facilityProxySettingsJSON(cfg.Settings)
+	if err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,dns_sync_json,last_error,updated_at)
-		VALUES(?,1,?,?,?,?)
+	if _, err := tx.ExecContext(ctx, `INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,dns_sync_json,settings_json,last_error,updated_at)
+		VALUES(?,1,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET version=facility_app_configs.version+1,deployment_server_ids_json=excluded.deployment_server_ids_json,dns_sync_json=excluded.dns_sync_json,last_error=excluded.last_error,updated_at=excluded.updated_at`,
-		ReverseProxyID, string(serversRaw), string(dnsSyncRaw), cfg.LastError, now); err != nil {
+		ReverseProxyID, string(serversRaw), string(dnsSyncRaw), settingsJSON, cfg.LastError, now); err != nil {
 		return err
 	}
 	if err := replaceFacilityRouteDomains(ctx, tx, cfg.Domains); err != nil {
@@ -1423,6 +1678,19 @@ func normalizeInput(in ReverseProxySaveInput) (ReverseProxyConfig, error) {
 		if len(item.Paths) == 0 {
 			return ReverseProxyConfig{}, panelerr.Validation("facility_domain_without_routes", "Reverse proxy domain requires at least one route")
 		}
+		transport := item.Transport()
+		httpPortMode, err := normalizeHTTPPortModeOverride(domain, item.HTTPPortMode)
+		if err != nil {
+			return ReverseProxyConfig{}, err
+		}
+		clientMaxBodySize, err := normalizeClientMaxBodySizeOverride(domain, item.ClientMaxBodySize)
+		if err != nil {
+			return ReverseProxyConfig{}, err
+		}
+		directives, _, err := normalizeCustomDirectiveLines(directiveScopeServer, item.CustomServerDirectives)
+		if err != nil {
+			return ReverseProxyConfig{}, err
+		}
 		paths := make([]FacilityRoutePath, 0, len(item.Paths))
 		seenPaths := map[string]struct{}{}
 		for _, pathInput := range item.Paths {
@@ -1436,7 +1704,20 @@ func normalizeInput(in ReverseProxySaveInput) (ReverseProxyConfig, error) {
 			seenPaths[path.Path] = struct{}{}
 			paths = append(paths, path)
 		}
-		domains = append(domains, FacilityRouteDomain{Domain: domain, OriginServerIDs: origins, AnyAccess: anyAccess, Paths: paths})
+		httpsEnabled, http2Enabled, http3Enabled := proxyTransportPointers(transport)
+		domains = append(domains, FacilityRouteDomain{
+			Domain:                 domain,
+			OriginServerIDs:        origins,
+			AnyAccess:              anyAccess,
+			Paths:                  paths,
+			HTTPSEnabled:           httpsEnabled,
+			HTTP2Enabled:           http2Enabled,
+			HTTP3Enabled:           http3Enabled,
+			HTTPPortMode:           httpPortMode,
+			HSTSEnabled:            cloneHSTSEnabledOverride(item.HSTSEnabled),
+			ClientMaxBodySize:      clientMaxBodySize,
+			CustomServerDirectives: directives,
+		})
 	}
 	sort.Slice(domains, func(i, j int) bool { return domains[i].Domain < domains[j].Domain })
 	return ReverseProxyConfig{ID: ReverseProxyID, DeploymentServers: servers, Domains: domains}, nil
@@ -1786,15 +2067,18 @@ func facilityDomainUsesStaticAsset(domain FacilityRouteDomain) bool {
 	return false
 }
 
-func specHash(serverID string, _ ReverseProxyConfig, _ []applications.ApplicationReverseProxyConfig, nginx string, files []appruntime.ManagedFile) string {
-	// ConfigContentHash: only rendered nginx + managed file bytes for this node.
-	// Never include whole ReverseProxyConfig (version/unrelated domains) or the
-	// node will look unsatisfied on every unrelated record save.
+func specHash(serverID, imageReference, imageDigest, nginx string, files []appruntime.ManagedFile) string {
+	// ConfigContentHash: rendered nginx + managed file bytes for this node, plus
+	// this node's target image identity (reference + digest). Never include the
+	// whole ReverseProxyConfig (version/unrelated domains) or the node will look
+	// unsatisfied on every unrelated record save.
 	raw, _ := json.Marshal(map[string]any{
-		"server":     serverID,
-		"nginx":      nginx,
-		"nginxFiles": nginxConfigFileContents(files),
-		"files":      managedFileFingerprint(files),
+		"server":      serverID,
+		"image":       imageReference,
+		"imageDigest": imageDigest,
+		"nginx":       nginx,
+		"nginxFiles":  nginxConfigFileContents(files),
+		"files":       managedFileFingerprint(files),
 	})
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
@@ -1819,12 +2103,13 @@ func proxyIdentityHash(spec appruntime.Spec) string {
 		mounts = append(mounts, mount{Type: m.Type, Source: m.Source, Target: m.Target, Mode: m.Mode, ReadOnly: m.ReadOnly})
 	}
 	raw, _ := json.Marshal(map[string]any{
-		"image":   spec.Image,
-		"command": spec.Command,
-		"ports":   spec.Ports,
-		"mounts":  mounts,
-		"restart": spec.Restart,
-		"env":     spec.Env,
+		"image":       spec.Image,
+		"imageDigest": spec.ImageDigest,
+		"command":     spec.Command,
+		"ports":       spec.Ports,
+		"mounts":      mounts,
+		"restart":     spec.Restart,
+		"env":         spec.Env,
 	})
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
@@ -1994,6 +2279,8 @@ func (s *Service) routeSummaries(ctx context.Context, cfg ReverseProxyConfig, ap
 		return nil, err
 	}
 	routes := routesByServerConfigs(appRoutes, cfg.DeploymentServers)
+	settings := cfg.Settings.resolved()
+	globalHTTPPortMode := settings.HTTPPortMode
 	out := []RouteSummary{}
 	seenRoutes := map[string]struct{}{}
 	for _, routeDomain := range cfg.Domains {
@@ -2002,19 +2289,27 @@ func (s *Service) routeSummaries(ctx context.Context, cfg ReverseProxyConfig, ap
 			continue
 		}
 		serverIDs := anyAccessRouteServerIDs(routeDomain.AnyAccess, routeDomain.OriginServerIDs, cfg.DeploymentServers)
+		transport := routeDomain.Transport()
+		httpPortMode := resolvedHTTPPortMode(storedHTTPPortMode(routeDomain.HTTPPortMode), globalHTTPPortMode)
+		hstsEnabled := resolvedHSTSEnabled(routeDomain.HSTSEnabled, settings.HSTS.Enabled)
+		clientMaxBodySize := resolvedClientMaxBodySize(routeDomain.ClientMaxBodySize, settings.ClientMaxBodySize)
 		for _, path := range routeDomain.Paths {
-			out = append(out, routeSummary(domain, firstNonEmpty(path.Path, "/"), "facility", serverIDs, certificates))
+			out = append(out, routeSummary(domain, firstNonEmpty(path.Path, "/"), "facility", serverIDs, certificates, transport, httpPortMode, hstsEnabled, clientMaxBodySize))
 		}
 	}
 	for _, apps := range routes {
 		for _, app := range apps {
 			for _, route := range app.Routes {
+				transport := applicationRouteTransport(route)
+				httpPortMode := resolvedHTTPPortMode(route.HTTPPortMode, globalHTTPPortMode)
+				hstsEnabled := resolvedHSTSEnabled(route.HSTSEnabled, settings.HSTS.Enabled)
+				clientMaxBodySize := resolvedClientMaxBodySizeValue(route.ClientMaxBodySize, settings.ClientMaxBodySize)
 				for _, routePath := range route.Paths {
 					serverIDs := anyAccessRouteServerIDs(route.AnyAccess, route.OriginServerIDs, cfg.DeploymentServers)
-					summary := routeSummary(route.Domain, firstNonEmpty(routePath.Path, "/"), "application", serverIDs, certificates)
+					summary := routeSummary(route.Domain, firstNonEmpty(routePath.Path, "/"), "application", serverIDs, certificates, transport, httpPortMode, hstsEnabled, clientMaxBodySize)
 					summary.ApplicationID = app.ApplicationID
 					summary.ApplicationName = app.ApplicationName
-					key := summary.Source + "|" + summary.ApplicationID + "|" + summary.Domain + "|" + summary.Path
+					key := summary.Source + "|" + summary.ApplicationID + "|" + summary.Domain + "|" + summary.Path + "|" + transport.signature() + "|" + httpPortMode + "|" + strconv.FormatBool(hstsEnabled) + "|" + clientMaxBodySize
 					if _, seen := seenRoutes[key]; !seen {
 						seenRoutes[key] = struct{}{}
 						out = append(out, summary)
@@ -2035,21 +2330,33 @@ func (s *Service) routeSummaries(ctx context.Context, cfg ReverseProxyConfig, ap
 	return out, nil
 }
 
-func routeSummary(domain, pathValue, source string, serverIDs []string, certificates []proxycert.Certificate) RouteSummary {
+func routeSummary(domain, pathValue, source string, serverIDs []string, certificates []proxycert.Certificate, transport proxyTransport, httpPortMode string, hstsEnabled bool, clientMaxBodySize string) RouteSummary {
 	serverIDs = uniqueSorted(serverIDs)
 	summary := RouteSummary{
-		Domain:      domain,
-		Path:        pathValue,
-		Source:      source,
-		ServerIDs:   serverIDs,
-		HTTPSStatus: HTTPSDisabled,
+		Domain:            domain,
+		Path:              pathValue,
+		Source:            source,
+		ServerIDs:         serverIDs,
+		HTTPSStatus:       HTTPSDisabled,
+		HTTPSEnabled:      transport.HTTPS,
+		HTTP2Enabled:      transport.HTTP2,
+		HTTP3Enabled:      transport.HTTP3,
+		HSTSEnabled:       hstsEnabled,
+		ClientMaxBodySize: clientMaxBodySize,
 	}
-	if cert := bestCertificate(domain, certificates); cert != nil {
-		summary.HTTPSStatus = cert.Source
+	cert := bestCertificate(domain, certificates)
+	if cert != nil {
 		summary.CertificateID = cert.ID
 		summary.CertificateName = firstNonEmpty(cert.Name, cert.ID)
 		summary.MatchedDomains = append([]string(nil), cert.Domains...)
+		summary.EffectiveHTTPS = effectiveHTTPS(transport, true)
+		if summary.EffectiveHTTPS {
+			summary.HTTPSStatus = cert.Source
+		}
 	}
+	// 摘要报告实际生效的 80 策略：继承解析后再按 effectiveHTTPS 回退，与
+	// nginx 渲染保持同一语义。
+	summary.HTTPPortMode = effectiveHTTPPortMode(httpPortMode, HTTPPortModeServe, summary.EffectiveHTTPS)
 	return summary
 }
 
@@ -2065,6 +2372,7 @@ func facilityConfigHash(cfg ReverseProxyConfig) string {
 		"deploymentServers": cfg.DeploymentServers,
 		"domains":           cfg.Domains,
 		"applicationRoutes": cfg.ApplicationRoutes,
+		"settings":          cfg.Settings.resolved(),
 	})
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])

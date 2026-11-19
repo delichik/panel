@@ -19,7 +19,12 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, auth httpx.Middleware) {
 	mux.Handle("PUT /api/v1/settings/runtime/security", auth(http.HandlerFunc(h.UpdateSecurity)))
 	mux.Handle("PUT /api/v1/settings/runtime/certificates", auth(http.HandlerFunc(h.UpdateCertificates)))
 	mux.Handle("PUT /api/v1/settings/runtime/agent", auth(http.HandlerFunc(h.UpdateAgent)))
+	mux.Handle("PUT /api/v1/settings/runtime/image-registry", auth(http.HandlerFunc(h.UpdateImageRegistry)))
 	mux.Handle("PUT /api/v1/settings/runtime/branding", auth(http.HandlerFunc(h.UpdateBranding)))
+	mux.Handle("PUT /api/v1/settings/runtime/auto-update", auth(http.HandlerFunc(h.UpdateAutoUpdate)))
+	// 手动「立即运行一次」：跳过计划时间窗口与当日去重，但仍走全局互斥的
+	// auto_update_run 任务（已有活跃任务时幂等返回其 taskId）。
+	mux.Handle("POST /api/v1/settings/runtime/auto-update/run", auth(http.HandlerFunc(h.RunAutoUpdateNow)))
 	mux.Handle("GET /api/v1/settings/server-variables", auth(http.HandlerFunc(h.ServerVariableDefinitions)))
 	mux.Handle("PUT /api/v1/settings/server-variables", auth(http.HandlerFunc(h.UpdateServerVariableDefinitions)))
 }

@@ -158,6 +158,17 @@ func WithApplicationUpdater(updater ApplicationUpdater) Option {
 	return func(s *Service) { s.apps = updater }
 }
 
+// WithImageDigestResolver replaces the default registry-backed image digest
+// resolver. A nil resolver keeps the default so optional wiring cannot disable
+// image update checks by accident.
+func WithImageDigestResolver(resolver applications.ImageDigestResolver) Option {
+	return func(s *Service) {
+		if resolver != nil {
+			s.resolver = resolver
+		}
+	}
+}
+
 func NewService(db *sql.DB, servers ServerProvider, agentClient AgentClient, taskSvc *tasks.Service, opts ...Option) *Service {
 	s := &Service{
 		db: db, servers: servers, agent: agentClient, tasks: taskSvc,

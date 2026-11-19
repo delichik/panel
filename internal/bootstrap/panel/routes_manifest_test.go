@@ -71,8 +71,21 @@ func TestAPIRouteManifest(t *testing.T) {
 	//   PUT /api/v1/settings/runtime/agent
 	//   PUT /api/v1/settings/runtime/branding
 	// GET /api/v1/settings/runtime 不变。
-	const wantCount = 194
-	const wantHash = "72c4f69d6f34494766c91bd7450465587fe11320c63b9118c1bb209bf1d68f0f"
+	// 入口代理自动更新/每域名开关/自定义指令（2026-11-19，194 → 198）：
+	//   PUT /api/v1/settings/runtime/auto-update（SET-RUN-023）
+	//   PUT /api/v1/facility-apps/reverse-proxy/settings（FAC-RP-015）
+	//   POST /api/v1/facility-apps/reverse-proxy/image/check（FAC-RP-014）
+	//   POST /api/v1/facility-apps/reverse-proxy/image/update（FAC-RP-014）
+	// 消费者（web/src/api/settings.ts、web/src/api/facilityApps.ts、Mock 与验收条目
+	// SET-RUN-023/FAC-RP-014/015）必须与本清单同步（COV-API-001）。
+	// 入口代理 P1（2026-11-19，198 → 201）：
+	//   POST /api/v1/facility-apps/reverse-proxy/image/rollback（FAC-RP-014）
+	//   POST /api/v1/facility-apps/reverse-proxy/image/resume（FAC-RP-014）
+	//   POST /api/v1/settings/runtime/auto-update/run（SET-RUN-023）
+	// 镜像仓库源设置（2026-11-19，201 → 202）：
+	//   PUT /api/v1/settings/runtime/image-registry（SET-RUN-024）
+	const wantCount = 202
+	const wantHash = "316f4fb1bd1f31689a665dfe2cd20744bb368c874c6729e8462c75aa0efe5e94"
 	manifest := strings.Join(patterns, "\n") + "\n"
 	gotHash := fmt.Sprintf("%x", sha256.Sum256([]byte(manifest)))
 	if len(patterns) != wantCount || gotHash != wantHash {

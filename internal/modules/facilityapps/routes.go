@@ -8,6 +8,11 @@ import (
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, auth httpx.Middleware) {
 	mux.Handle("GET /api/v1/facility-apps/reverse-proxy", auth(http.HandlerFunc(h.ReverseProxy)))
+	mux.Handle("PUT /api/v1/facility-apps/reverse-proxy/settings", auth(http.HandlerFunc(h.SaveReverseProxySettings)))
+	mux.Handle("POST /api/v1/facility-apps/reverse-proxy/image/check", auth(http.HandlerFunc(h.CheckReverseProxyImage)))
+	mux.Handle("POST /api/v1/facility-apps/reverse-proxy/image/update", auth(http.HandlerFunc(h.UpdateReverseProxyImage)))
+	mux.Handle("POST /api/v1/facility-apps/reverse-proxy/image/rollback", auth(http.HandlerFunc(h.RollbackReverseProxyImage)))
+	mux.Handle("POST /api/v1/facility-apps/reverse-proxy/image/resume", auth(http.HandlerFunc(h.ResumeReverseProxyImage)))
 	mux.Handle("GET /api/v1/facility-apps/reverse-proxy/proxy-plane", auth(http.HandlerFunc(h.ProxyPlane)))
 	mux.Handle("PUT /api/v1/facility-apps/reverse-proxy/proxy-plane", auth(http.HandlerFunc(h.SaveProxyPlane)))
 	mux.Handle("GET /api/v1/facility-apps/reverse-proxy/config-records", auth(http.HandlerFunc(h.ConfigRecords)))

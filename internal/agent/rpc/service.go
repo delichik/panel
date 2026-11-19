@@ -362,6 +362,10 @@ func (h *Handler) RuntimeReconcile(ctx context.Context, req *agentpb.RuntimeReco
 	})
 	result.ErrorMessage = session.Redact(result.ErrorMessage)
 	result.ErrorDetail = session.Redact(result.ErrorDetail)
+	// Probe output may quote image config or command output that carries a
+	// credential echoed by the image itself; it leaves the agent only redacted.
+	result.PreflightOutput = session.Redact(result.PreflightOutput)
+	result.ImageVersion = session.Redact(result.ImageVersion)
 	for i := range result.Steps {
 		result.Steps[i].Detail = session.Redact(result.Steps[i].Detail)
 	}
@@ -531,8 +535,8 @@ func (h *Handler) RuntimeStatus(ctx context.Context, req *agentpb.RuntimeStatusR
 	if err := h.requireRuntime(); err != nil {
 		return nil, err
 	}
-	status, err := h.runtime.Status(ctx, req.InstanceId, req.ContainerName, "")
-	return pbRuntimeStatus(agentcontract.RuntimeStatusResponse{InstanceStatus: status}), remoteError(err)
+	status, imageVersion, err := h.runtime.StatusWithVersion(ctx, req.InstanceId, req.ContainerName, "", append([]string(nil), req.VersionCommand...))
+	return pbRuntimeStatus(agentcontract.RuntimeStatusResponse{InstanceStatus: status, ImageVersion: imageVersion}), remoteError(err)
 }
 
 func (h *Handler) RuntimeLogs(ctx context.Context, req *agentpb.RuntimeLogsRequest) (*agentpb.RuntimeLogsResponse, error) {

@@ -365,6 +365,15 @@
 - **不变量**：与 stop/restart/refresh 共用应用 lifecycle 并发 key。
 - **验证**：image update executor/cache-current/redeploy tests。
 
+### APP-IMG-003 应用对象级"允许自动更新"开关
+
+- **前置**：应用存在镜像检查缓存；全局设置页「自动更新 → 应用更新」可能开启或关闭。
+- **动作**：应用编辑保存 `autoUpdateEnabled`，或设置页自动更新任务规划应用镜像更新。
+- **结果**：`applications.auto_update_enabled` 默认 1（旧数据/旧客户端缺省为开）；保存/详情/列表读回同一值；只有 `Enabled && AutoUpdateEnabled && ImageUpdateAvailable` 的应用会被自动更新任务纳入并规划 `UpdateImage`；关闭后手动「检查更新/立即更新/批量升级」仍可用。
+- **失败**：非法/缺省不得被解释为关闭；保存失败保留原值；不得把关闭状态当作停用应用或禁止部署。
+- **不变量**：对象开关只影响自动更新调度，不改变应用生命周期、镜像检查缓存或手动升级语义。
+- **验证**：默认值/保存往返/自动更新过滤/关闭后手动更新可用测试；`UI-APP-019` 前端开关测试。
+
 ## 6. 应用反向代理规则
 
 ### APP-PROXY-001 域名、路径与所有权
@@ -477,21 +486,21 @@
 
 - **前置**：域名可能匹配域名证书、自签用户域证书或无证书。
 - **动作**：构建每节点 Nginx runtime spec（拼装所有相关配置记录）。
-- **结果**：固定镜像 `nginx:1.28-alpine`；主配置目录只读挂载 `/etc/panel-nginx`，证书独立 `/etc/panel-certs`；域名证书优先，其次匹配自签，无匹配仅生成 80。AnyAccess 中继回源 HTTPS 时 `proxy_ssl_verify on`，公共/ACME 信任锚只读绑定宿主 `/etc/ssl/certs/ca-certificates.crt`（`mount.type=host`），不得把 CA 包写入仓库或 managed files；自签中继用独立 `trusted.pem`。静态内容来自各记录私有 managed files。
-- **失败**：不得覆盖镜像 `/etc/nginx` 或单文件 bind 主配置。
-- **不变量**：主配置显式 `nginx -c /etc/panel-nginx/nginx.conf`；父目录 0755、上传文件 0644；中继 TLS 校验不得关闭；公共 CA 仅来自宿主系统信任库。
-- **验证**：proxy spec mounts/TLS/static serving tests；`TestRenderAnyAccessRelayTLSUsesPublicCABundleNotLeaf`；`TestRelayTrustedCertificatePathUsesHostCABundleForDomainCerts`。
+- **结果**：入口网关镜像由 Panel 受管：固定标签线 `nginx:1.28-alpine`（补丁版本按 `FAC-RP-014` 自动更新，minor/major 仅随 Panel 发布显式改线），用户不可配置镜像；主配置目录只读挂载 `/etc/panel-nginx`，证书独立 `/etc/panel-certs`。每域名按自身 HTTPS 开关与证书匹配决定是否生成 443：域名证书优先，其次匹配自签，`httpsEnabled=false` 或无证书时仅生成 80；证书 managed files 只为实际启用 HTTPS 的域名下发。HTTP/2、HTTP/3 为每域名开关（默认 H2 开、H3 关），HTTP/3 生成 `listen 443 quic`/`http3 on`/`quic_retry on`/`Alt-Svc`，依赖容器发布 UDP 443 与 UFW 放行；`ssl_early_data` 不再输出。80 与 443 顶层指令支持每域名 `custom_server_directives`、http 块支持 `customHttpDirectives`（同名覆盖、其余追加，见 `FAC-RP-017`）。AnyAccess 中继回源 HTTPS 时 `proxy_ssl_verify on`，公共/ACME 信任锚只读绑定宿主 `/etc/ssl/certs/ca-certificates.crt`（`mount.type=host`），不得把 CA 包写入仓库或 managed files；自签中继用独立 `trusted.pem`。静态内容来自各记录私有 managed files。
+- **失败**：不得覆盖镜像 `/etc/nginx` 或单文件 bind 主配置；HTTPS 关闭的域名不得残留其 443 server/证书文件；HTTP/3 未发布 UDP 443 时不得宣告 Alt-Svc。
+- **不变量**：主配置显式 `nginx -c /etc/panel-nginx/nginx.conf`；父目录 0755、上传文件 0644；中继 TLS 校验不得关闭；公共 CA 仅来自宿主系统信任库；证书匹配规则与 `routeSummaries` 同源。
+- **验证**：proxy spec mounts/TLS/static serving tests；`TestRenderAnyAccessRelayTLSUsesPublicCABundleNotLeaf`；`TestRelayTrustedCertificatePathUsesHostCABundleForDomainCerts`；每域名传输开关渲染矩阵与证书文件 gating 测试。
 
 ### FAC-RP-009 代理平面 recreate 与配置平面 reload
 
 - **前置**：网关上已有或尚无 nginx 容器；代理身份或配置内容发生变化。
 - **动作**：规划并执行。
 - **结果**：
-  - **配置平面**：记录内容变化 → 仅对受影响网关 `WriteManagedFiles` + `nginx -t` + `nginx -s reload`（`RuntimeReload`）。成功路径**不得** stop/remove/create 容器。
-  - **代理平面**：网关加入、镜像/命令/端口/mount 布局变化、或节点尚无容器 → `RuntimeReconcile` create/recreate；网关移除 → stop/purge。
-- **失败**：配置 validate 失败回滚该节点文件并保留原 worker，**不**自动 recreate；代理平面失败保留诊断。
-- **不变量**：`ProxyIdentityHash` 与 `ConfigContentHash` 分离；满足判定禁止把无关记录 version 打进其他节点 hash。
-- **验证**：reload-not-recreate、identity-change-recreate、per-record hash isolation tests。
+  - **配置平面**：记录内容变化（路由、upstream、Header、证书、每域名传输开关、设施全局参数、自定义 http/server 指令）→ 仅对受影响网关 `WriteManagedFiles` + `nginx -t` + `nginx -s reload`（`RuntimeReload`）。成功路径**不得** stop/remove/create 容器。
+  - **代理平面**：网关加入、镜像引用/digest、命令、端口布局（含新增 UDP 443）、mount 结构变化、或节点尚无容器 → `RuntimeReconcile` create/recreate；网关移除 → stop/purge。判定必须比较 current/desired 的代理身份（镜像引用、镜像 digest、命令、端口、env、mount 结构、restart），不得只比较配置内容哈希。
+- **失败**：配置 validate 失败回滚该节点文件并保留原 worker，**不**自动 recreate；代理平面失败保留诊断；`nginx -t` 失败不得留下半生效配置。
+- **不变量**：`ProxyIdentityHash`（含镜像引用/digest）与 `ConfigContentHash` 分离并都参与满足判定；满足判定禁止把无关记录 version 打进其他节点 hash；每节点目标镜像 digest 只影响该节点。
+- **验证**：reload-not-recreate、identity-change-recreate（含镜像 digest/端口变化）、per-record hash isolation、自定义指令变化 reload tests。
 
 ### FAC-RP-010 单条配置提交后的协调
 
@@ -528,6 +537,67 @@
 - **失败**：无实例拒绝；不兼容/离线/容器缺失/5秒超时为 unavailable；空样本不能宣称所有路由健康。未知错误不臆造根因，TLS 建议不得关闭校验；access log 和请求/UA 文本不能伪造错误。
 - **不变量**：仅人工点击，无轮询/自动重试/持久化/活动追加，不修改 Job、观测或退避。尾样本不保证固定时间覆盖，历史错误不等于当前仍故障。保留分析输入最多128 KiB；证据限长，移除请求 URL/query、客户端地址和上游用户信息。配置变化/离页取消并丢弃迟到结果。
 - **验证**：分类、去重、未知回退、请求隐私、范围拒绝测试；前端按需调用、双语解释和取消测试。
+
+### FAC-RP-014 入口代理镜像检查与补丁自动更新
+
+- **前置**：入口代理设施已配置至少一个网关；Panel 可访问 registry（解析受管标签 digest）；全局设置页「自动更新 → 应用更新」与设施 `imageAutoUpdateEnabled` 可能开启或关闭。
+- **动作**：周期检查任务（默认 6h）、手动 `POST /api/v1/facility-apps/reverse-proxy/image/check`、手动 `POST /api/v1/facility-apps/reverse-proxy/image/update`、或自动更新协调任务调用。
+- **结果**：
+  - 检查任务解析受管标签（`nginx:1.28-alpine`）的 registry digest，逐网关对比容器实际运行镜像 digest（Agent 容器/镜像事实），状态持久化于 `facility_proxy_image_states`（每网关一行：reference/target/observed/previous digest、status、lastError、checkedAt、pinned、autoUpdateFailures/failedDigest）并投影到隐藏应用 `image_*` 列与 `image_updates` 缓存。
+  - 有可用更新且两处开关均开启时逐节点滚动：预拉取 → 写入该节点 target digest（仅该节点 spec hash 变化）→ 触发该节点代理平面 recreate（先拉后建）→ 等待 Job 终态 → 复核运行 digest → 继续下一节点；单节点失败中止滚动，其余节点保持旧版本继续服务。
+  - 小版本自动：受管标签线内 digest 变化即自动更新；跨 minor/major 不自动（仅 Panel 发布显式改线）；P1 预检 `nginx -v` 版本线不符时拒绝。
+  - **回滚/pinned（P1）**：`POST .../image/rollback`（`{serverIds?,confirm:true,digest?}`，digest 缺省取该节点 previous_digest）走同一预拉取→切换→校验流程；成功后节点 `pinned=true`、自动更新暂停；`POST .../image/resume` 清除 pinned 并恢复自动更新；无 previous digest/非网关/缺确认返回稳定错误。
+  - **失败退避（P1）**：同一目标 digest 自动更新连续失败达 3 次后暂停该节点自动更新（状态投影含失败次数与失败 digest），手动检查/更新/回滚成功后清零并可再次自动更新。
+  - **实际版本展示（P2）**：检查任务通过 Agent 在运行容器内执行 `nginx -v`（RuntimeStatus 可选版本命令）采集实际 nginx 版本并持久化到 `facility_proxy_image_states.image_version`；GET 的 `image` 投影按网关返回 `imageVersion`（聚合取首个非空），前端在镜像卡片与逐网关行展示；采集失败/旧 Agent 为空显示不可用，不得伪造版本。
+- **失败**：registry 不可达/超时软失败（保留旧状态与错误，不伪造最新）；节点离线/Agent 不兼容/容器缺失为 unknown 并带原因；拉取失败旧容器继续服务；更新失败保留错误与节点容器证据，不把失败显示为最新；不得在 GET 中触发远端调用。Panel 的 digest 解析可按 `SET-RUN-024` 配置仓库/镜像主机（仍走 `/v2/<repo>/manifests/<tag>`，Bearer 流程不变）；该配置只影响 Panel 出口检查，不改写镜像引用，也不改变节点 Docker 拉取。
+- **不变量**：每节点 target digest 只影响该节点 spec hash；不得引入用户可编辑镜像；手动更新不受对象开关限制；自动更新必须同时满足全局设置开关、计划时间与 `imageAutoUpdateEnabled`；成功路径不得形成自我触发循环。
+- **边界**：无网关、无证书/离线、并发检查/更新（互斥或去重）、重复触发幂等、旧库无状态行（首次检查补齐）、P1 回滚到 previous digest 后 pinned 暂停自动更新。
+- **验证**：registry 失败/节点离线/更新可用计算、逐节点滚动与失败中止、幂等 no-op、状态投影、手动检查/更新 API、自动更新联动测试。
+
+### FAC-RP-015 入口代理全局运行参数
+
+- **前置**：管理员在设施「设置」页修改入口代理全局参数（80 端口策略、HSTS、`imageAutoUpdateEnabled`、自定义 http 指令等）。
+- **动作**：`GET /api/v1/facility-apps/reverse-proxy` 返回 `settings`；`PUT /api/v1/facility-apps/reverse-proxy/settings` 保存。
+- **结果**：`httpPortMode` 取 `serve`（默认，80 直接服务）或 `redirect`（仅对 HTTPS 开关开且有证书的域名生成 301 跳转）；`imageUpdateIntervalSeconds`（0..600，默认 0）控制逐网关镜像滚动更新相邻节点间的等待秒数（0=不等待，便于观察/回滚），超时/取消会中断滚动并保留已完成节点；`imageAutoUpdateEnabled` 默认 true；HSTS（P1）默认关且只在 443 server 输出；`serverTokens`（on/off，默认 off）、`clientMaxBodySize`（默认 50m，nginx size 语法）、`tlsMinVersion`（1.2/1.3，默认 1.2）渲染到 http 块（`server_tokens`/`client_max_body_size`/`ssl_protocols`）；保存以 `facility_app_configs.version` CAS，成功后 bump version、重算配置哈希并触发配置平面协调（reload）；旧库空 `settings_json` 归一化为默认值。
+- **失败**：非法值结构化拒绝（稳定错误码 + 字段 details）；version 冲突返 409；保存成功但 apply 失败仍保留已保存配置并给出 reload 失败诊断（不自动 recreate）。
+- **不变量**：全局参数不改变每域名开关语义；`redirect` 不得把无证书/HTTPS 关闭的域名跳转到不存在的 443；GET 只读本地投影。
+- **验证**：默认值/归一化/CAS/非法值、80 策略 × 证书有无 × HTTPS 开关渲染矩阵、reload 失败保留旧 worker 测试。
+
+### FAC-RP-016 每域名 HTTPS / HTTP2 / HTTP3 开关
+
+- **前置**：设施域名记录或应用反代规则保存/编辑；域名证书匹配结果可能不同。
+- **动作**：保存域名级 `httpsEnabled/http2Enabled/http3Enabled`（默认 on/on/off）；构建每节点 Nginx spec 与 `routeSummaries`。
+- **结果**：`reverse_proxy_routes` 三列持久化，设施域名与应用反代共用；设施 `normalizeInput`、edit-session commit、配置记录读取、应用 normalize/render/映射全链路带出；旧数据/旧 draft/旧 API 缺省按 on/on/off；`httpsEnabled=false` 时不生成该域名 443 server、不下发其证书文件；`http2Enabled` 仅在有效 HTTPS 下输出 `http2 on`；`http3Enabled` 仅在有效 HTTPS 下输出 `listen 443 quic`/`http3 on`/`quic_retry on`/`Alt-Svc`（依赖 FAC-RP-014/§HTTP3 的 UDP 443 发布与 UFW 放行）；80 端口不再输出 `http2 on`；`routeSummaries` 返回三开关与 effectiveHTTPS（开关关闭时 `httpsStatus=disabled`）。
+- **失败**：开关关闭时不得残留 443/证书/Alt-Svc；HTTPS 关闭的域名中继回源必须改用 80/http（按同一有效 HTTPS helper）；H2/H3 在 HTTPS 关闭时忽略而非报错。
+- **不变量**：证书匹配规则在渲染/摘要/中继三处同源；配置变化只 reload，不因开关本身 recreate；`ssl_early_data` 不输出；HTTPS 关闭仅"不生成 443 配置"，不做默认 443 硬拒绝（已知边界写入说明）。
+- **验证**：三开关 × 证书有无 × HTTP/2/3 组合渲染、设施/应用保存往返、旧 draft 缺键默认、routeSummaries、单测覆盖 80/443/quic/证书文件 gating。
+
+### FAC-RP-017 自定义 nginx 指令覆盖（http / server）
+
+- **前置**：管理员填写设施全局 `customHttpDirectives` 或域名级 `customServerDirectives`（每行一条单行指令）。
+- **动作**：保存（随域名记录/应用规则或设施设置），渲染每节点 Nginx 配置并 reload。
+- **结果**：只允许 `http` 与 `server` 顶层单行指令（`directive args;`）；同名指令覆盖面板生成的同名指令（作用域优先级 server > http > 面板默认），不同名追加；禁止块级/多行/注释与 `listen`、`server_name`、`ssl_certificate*`、`include`、`load_module`、`root`、`alias`、`proxy_pass`、`upstream`、`map`、`if`、`location` 等；每作用域最多 64 行、单行 ≤2 KiB、总量 ≤16 KiB；归一化去空行、重复同名取最后一条；空列表等价未配置（旧数据默认空）。
+- **失败**：语法/禁项/超限保存时返回结构化错误（稳定错误码含行号），不落库；合法但语义冲突的指令由节点 `nginx -t` 兜底——该节点 reload 失败、回滚文件并保留旧 worker，错误可见且可修改重试，不得全站切换。
+- **不变量**：自定义指令不进入 location/嵌套块；不影响证书/监听/域名身份由面板负责的边界；变更进入该节点配置哈希并触发 reload；设施与应用两来源统一存储与校验。
+- **验证**：解析/禁项/行号/上限、同名覆盖与追加、多值指令顺序、渲染哈希变化、edit-session/应用保存往返不丢、reload 失败保留旧容器测试。
+
+### FAC-RP-018 每域名 HTTP 80 端口策略覆盖
+
+- **前置**：设施全局 80 策略为 serve/redirect；单条设施域名记录或应用反代规则需要不同策略。
+- **动作**：域名记录/应用反代规则保存 `httpPortMode`（`''`=继承全局、`serve`、`redirect`），编辑会话与配置记录读写、渲染、摘要。
+- **结果**：`reverse_proxy_routes.http_port_mode` 持久化（继承写空串）；有效策略=域名覆盖优先，否则设施全局；redirect 仅在 effectiveHTTPS（HTTPS 开关开且有匹配证书）时生成 301，否则按 serve 服务；设施域名与应用反代规则共用同一解析；`routeSummaries[].httpPortMode` 返回实际生效值（无证书时 redirect 投影为 serve）；旧数据/旧客户端缺省为继承。
+- **失败**：非 `serve|redirect` 返回 `facility_http_port_mode_invalid`（设施侧）或 `application_reverse_proxy_http_port_mode_invalid`（应用保存侧），不落库；无证书/HTTPS 关闭时 redirect 不得生成跳转。
+- **不变量**：域名级覆盖不改变全局设置本身；应用反代与设施域名同表同语义；80 端口策略变化只触发配置 reload。
+- **验证**：继承/覆盖/回退/非法值、summary、edit-session 与记录往返、应用保存校验测试。
+
+### FAC-RP-019 每域名 HSTS 与请求体上限覆盖
+
+- **前置**：设施全局 HSTS（默认关）与 clientMaxBodySize（默认 50m）已配置；单条设施域名记录或应用反代规则需要不同值。
+- **动作**：域名记录/应用反代规则保存 `hstsEnabled`（nil=继承、true=启用、false=关闭）与 `clientMaxBodySize`（空=继承，nginx size 语法）；编辑会话、配置记录、渲染、summary。
+- **结果**：`reverse_proxy_routes.hsts_enabled`（''/on/off）与 `client_max_body_size` 持久化；有效值=域名覆盖优先，否则全局；HSTS 仅在该域名 effectiveHTTPS（HTTPS 开关开且有证书）时输出 `Strict-Transport-Security`（maxAge/includeSubDomains 取全局），body size 在 server 块输出覆盖 http 层；设施域名与应用反代规则共用同一解析；`routeSummaries` 返回有效值；旧数据/旧客户端缺省继承。
+- **失败**：非法 body size 返回 `facility_client_max_body_size_invalid` / `application_reverse_proxy_client_max_body_size_invalid`，不落库；无证书/HTTPS 关闭时不得输出 HSTS；继承语义不得被空串意外覆盖成默认值。
+- **不变量**：域名覆盖不改变全局设置；HSTS/body size 变化只触发配置 reload；自定义 server 指令仍按同名覆盖规则优先于生成项。
+- **验证**：设施/应用两侧继承/覆盖/非法/往返、渲染（含无证书不输出 HSTS、body size 覆盖 http 层）、summary、edit-session 测试。
 
 ## 8. 存储共享设施
 

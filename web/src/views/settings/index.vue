@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { DatabaseBackup, KeyRound, RefreshCcw, Trash2, UploadCloud } from '@/icons';
+import { DatabaseBackup, KeyRound, Play, RefreshCcw, Trash2, UploadCloud } from '@/icons';
 import { eventsApi } from '@/api/events';
 import { keyAssetsApi } from '@/api/keyAssets';
 import { settingsApi } from '@/api/settings';
@@ -16,6 +16,7 @@ import Input from '@/components/ui/Input.vue';
 import NumberBox from '@/components/ui/NumberBox.vue';
 import Select from '@/components/ui/Select.vue';
 import Switch from '@/components/ui/Switch.vue';
+import TimeOfDayInput from '@/components/ui/TimeOfDayInput.vue';
 import Table from '@/components/ui/Table.vue';
 import Tabs from '@/components/ui/Tabs.vue';
 import Textarea from '@/components/ui/Textarea.vue';
@@ -30,25 +31,29 @@ import { useI18n } from '@/i18n';
 import { useSessionStore } from '@/stores/session';
 import type { KeyAssetDto, SystemCertificateDto } from '@/types/keyAssets';
 import type {
+  ImageRegistryScheme,
   RestorePreflightResponse,
   RuntimeAgentUpdate,
+  RuntimeAutoUpdateUpdate,
   RuntimeBrandingUpdate,
   RuntimeCertificatesUpdate,
   RuntimeGeneralUpdate,
+  RuntimeImageRegistryUpdate,
   RuntimeSecurityUpdate,
   RuntimeSettings,
   ServerVariableDefinition,
 } from '@/types/settings';
 import { createLatestRequestGuard } from '@/views/_shared/requestState';
 import { formatDateTime } from '@/utils/datetime';
+import { normalizeImageRegistryEndpoint, normalizeImageRegistryScheme } from '@/utils/imageRegistry';
 import AppearanceSectionSkeleton from './AppearanceSectionSkeleton.vue';
 
 const { t, locale, setLocale } = useI18n();
 const route = useRoute();
 const router = useRouter();
 
-/** 8 个设置分区；顺序即顶部 Tabs 顺序（默认落点 general 必须在第一位）。 */
-const sectionKeys = ['general', 'appearance', 'security', 'certificates', 'agent', 'system-certificates', 'system', 'backups'] as const;
+/** 10 个设置分区；顺序即顶部 Tabs 顺序（默认落点 general 必须在第一位）。 */
+const sectionKeys = ['general', 'appearance', 'security', 'certificates', 'agent', 'auto-update', 'system-certificates', 'system', 'backups', 'image-registry'] as const;
 type SectionKey = (typeof sectionKeys)[number];
 
 function isSectionKey(value: string): value is SectionKey {
@@ -98,7 +103,7 @@ const pending = ref('');
 const error = ref('');
 const actionError = ref('');
 const confirmOpen = ref(false);
-const confirmKind = ref<'export' | 'restore' | 'system' | 'system-certificate' | 'jwt-secret' | 'clear-events-logs'>('export');
+const confirmKind = ref<'export' | 'restore' | 'system' | 'system-certificate' | 'jwt-secret' | 'clear-events-logs' | 'auto-update-run'>('export');
 const selectedSystemCertificate = ref<SystemCertificateDto | null>(null);
 const preflight = ref<RestorePreflightResponse | null>(null);
 const restoreFile = ref<File | null>(null);
@@ -130,6 +135,12 @@ const form = reactive({
   agentDownloadBaseUrl: '',
   agentDownloadVerifyTls: false,
   agentTransferTimeoutSeconds: '120',
+  autoUpdateAppsEnabled: false,
+  autoUpdatePackagesEnabled: false,
+  autoUpdatePackagesMode: 'security',
+  autoUpdateScheduleTime: '04:00',
+  imageRegistryEndpoint: '',
+  imageRegistryScheme: 'https' as ImageRegistryScheme,
   variablesText: '',
   exportEncrypt: true,
   exportPassword: '',
@@ -143,9 +154,11 @@ const sections = computed<Array<{ key: SectionKey; label: string }>>(() => [
   { key: 'security', label: t('settingsPage.section.security') },
   { key: 'certificates', label: t('settingsPage.section.certificates') },
   { key: 'agent', label: t('settingsPage.section.agent') },
+  { key: 'auto-update', label: t('settingsPage.section.autoUpdate') },
   { key: 'system-certificates', label: t('settingsPage.section.systemCertificates') },
   { key: 'system', label: t('settingsPage.section.system') },
   { key: 'backups', label: t('settingsPage.section.backups') },
+  { key: 'image-registry', label: t('settingsPage.section.imageRegistry') },
 ]);
 
 /**
@@ -236,6 +249,13 @@ function normalizeAgentDownloadBaseUrl(raw: string): string | null {
   return parsed.origin;
 }
 
+/** 每日执行时间：24 小时制 `HH:MM`（Panel 本地时区；与后端同一正则）。 */
+const scheduleTimePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+function isValidScheduleTime(raw: string): boolean {
+  return scheduleTimePattern.test(raw.trim());
+}
+
 interface ParsedServerVariables {
   definitions: ServerVariableDefinition[];
   invalid: boolean;
@@ -275,6 +295,44 @@ function formatServerVariables(definitions: ServerVariableDefinition[]): string 
 const tokenOptions = computed(() => ['10m', '1h', '1d', '5d', '30d', 'never'].map((value) => ({ label: t(`settingsPage.token.${value}`), value })));
 const languageOptions = computed(() => [{ label: t('settingsPage.language.en'), value: 'en' }, { label: t('settingsPage.language.zh'), value: 'zh-CN' }]);
 const logOptions = computed(() => ['debug', 'info', 'warn', 'error'].map((value) => ({ label: value, value })));
+const autoUpdatePackagesModeOptions = computed(() => [
+  { label: t('settingsPage.autoUpdate.packagesMode.security'), value: 'security' },
+  { label: t('settingsPage.autoUpdate.packagesMode.all'), value: 'all' },
+]);
+const imageRegistrySchemeOptions = computed(() => [
+  { label: t('settingsPage.imageRegistry.scheme.https'), value: 'https' },
+  { label: t('settingsPage.imageRegistry.scheme.http'), value: 'http' },
+]);
+/** 最近一次自动更新只读投影（来自 `autoUpdate.lastRun*`，不进入自动保存载荷）。 */
+const autoUpdateLastRun = computed(() => runtime.value?.autoUpdate ?? null);
+const autoUpdateRunPending = computed(() => pending.value === 'auto-update-run');
+/** 手动运行与后端活跃任务共用同一互斥；运行中禁用按钮。 */
+const autoUpdateRunning = computed(() => autoUpdateRunPending.value || autoUpdateLastRun.value?.lastRunStatus === 'running');
+/**
+ * 两个开关都关时后端返回 422 auto_update_disabled，按钮提前禁用。
+ * 以已持久化快照为准：手动运行由后端读取当前设置，避免把尚未防抖保存的
+ * 本地开关误当成运行参数。
+ */
+const autoUpdateCanRun = computed(() => Boolean(runtime.value?.autoUpdate?.appsEnabled || runtime.value?.autoUpdate?.packagesEnabled));
+const autoUpdateRunHint = computed(() => {
+  if (!autoUpdateCanRun.value) return t('settingsPage.autoUpdate.runNowDisabled');
+  if (autoUpdateRunning.value) return t('settingsPage.autoUpdate.runNowRunning');
+  return t('settingsPage.autoUpdate.runNowHint');
+});
+
+function autoUpdateRunStatusLabel(status?: string): string {
+  if (!status) return t('settingsPage.autoUpdate.lastRunNever');
+  const key = `settingsPage.autoUpdate.runStatus.${status}`;
+  const translated = t(key);
+  return translated === key ? status : translated;
+}
+
+function autoUpdateRunStatusTone(status?: string): 'neutral' | 'success' | 'warning' | 'danger' | 'info' {
+  if (status === 'completed' || status === 'succeeded') return 'success';
+  if (status === 'failed') return 'danger';
+  if (status === 'running' || status === 'skipped' || status === 'disabled') return 'warning';
+  return 'neutral';
+}
 const panelTlsOptions = computed(() => tlsCertificates.value.map((certificate) => ({ label: certificate.name, value: certificate.id })));
 const jwtSecretValid = computed(() => form.jwtSecret.trim().length >= 16);
 /** NumberBox 使用 number|null；设置表单仍是字符串，保留原校验/保存负载逻辑。 */
@@ -298,6 +356,8 @@ const fieldErrors = computed<Record<string, string>>(() => {
   if (normalizeAgentDownloadBaseUrl(form.agentDownloadBaseUrl) === null) errors.agentDownloadBaseUrl = 'settingsPage.validationAgentDownloadBaseUrl';
   if ([...form.loginTitle.trim()].length > loginTitleMaxLength) errors.loginTitle = 'settingsPage.validationMaxLength';
   if ([...form.loginSubtitle.trim()].length > loginSubtitleMaxLength) errors.loginSubtitle = 'settingsPage.validationMaxLength';
+  if (!isValidScheduleTime(form.autoUpdateScheduleTime)) errors.autoUpdateScheduleTime = 'settingsPage.validationAutoUpdateScheduleTime';
+  if (normalizeImageRegistryEndpoint(form.imageRegistryEndpoint) === null) errors.imageRegistryEndpoint = 'settingsPage.validationImageRegistryEndpoint';
   return errors;
 });
 const parsedServerVariables = computed(() => parseServerVariables(form.variablesText));
@@ -396,6 +456,28 @@ function collectBrandingPayload(): RuntimeBrandingUpdate | null {
   return { loginTitle, loginSubtitle };
 }
 
+function collectAutoUpdatePayload(): RuntimeAutoUpdateUpdate | null {
+  const scheduleTime = form.autoUpdateScheduleTime.trim();
+  if (!isValidScheduleTime(scheduleTime)) return null;
+  const packagesMode = form.autoUpdatePackagesMode === 'all' ? 'all' : 'security';
+  return {
+    appsEnabled: form.autoUpdateAppsEnabled,
+    packagesEnabled: form.autoUpdatePackagesEnabled,
+    packagesMode,
+    scheduleTime,
+  };
+}
+
+/**
+ * 镜像仓库分区：只提交本分区两个字段；endpoint 空串是合法值（官方仓库），
+ * 不能被指针省略语义吃掉，所以始终显式提交。
+ */
+function collectImageRegistryPayload(): RuntimeImageRegistryUpdate | null {
+  const endpoint = normalizeImageRegistryEndpoint(form.imageRegistryEndpoint);
+  if (endpoint === null) return null;
+  return { endpoint, scheme: normalizeImageRegistryScheme(form.imageRegistryScheme) };
+}
+
 function collectVariablesPayload(): ServerVariableDefinition[] | null {
   const parsed = parsedServerVariables.value;
   return parsed.invalid ? null : parsed.definitions;
@@ -430,6 +512,20 @@ function refillAgent(settings: RuntimeSettings) {
 function refillBranding(settings: RuntimeSettings) {
   form.loginTitle = settings.branding.loginTitle;
   form.loginSubtitle = settings.branding.loginSubtitle;
+}
+
+function refillAutoUpdate(settings: RuntimeSettings) {
+  const autoUpdate = settings.autoUpdate;
+  form.autoUpdateAppsEnabled = autoUpdate?.appsEnabled ?? false;
+  form.autoUpdatePackagesEnabled = autoUpdate?.packagesEnabled ?? false;
+  form.autoUpdatePackagesMode = autoUpdate?.packagesMode === 'all' ? 'all' : 'security';
+  form.autoUpdateScheduleTime = autoUpdate?.scheduleTime || '04:00';
+}
+
+function refillImageRegistry(settings: RuntimeSettings) {
+  const imageRegistry = settings.imageRegistry;
+  form.imageRegistryEndpoint = imageRegistry?.endpoint ?? '';
+  form.imageRegistryScheme = normalizeImageRegistryScheme(imageRegistry?.scheme);
 }
 
 function refillVariables(definitions: ServerVariableDefinition[]) {
@@ -483,6 +579,14 @@ const brandingAutoSave = partitionAutoSave<RuntimeBrandingUpdate>(
   (payload) => settingsApi.updateBranding(payload),
   refillBranding,
 );
+const autoUpdateAutoSave = partitionAutoSave<RuntimeAutoUpdateUpdate>(
+  (payload) => settingsApi.updateAutoUpdate(payload),
+  refillAutoUpdate,
+);
+const imageRegistryAutoSave = partitionAutoSave<RuntimeImageRegistryUpdate>(
+  (payload) => settingsApi.updateImageRegistry(payload),
+  refillImageRegistry,
+);
 const variablesAutoSave = useDebouncedAutoSave<ServerVariableDefinition[], ServerVariableDefinition[]>({
   save: (definitions) => settingsApi.updateServerVariables(definitions),
   onSaved(result, _payload, meta) {
@@ -497,6 +601,8 @@ const securityStatus = securityAutoSave.status;
 const certificatesStatus = certificatesAutoSave.status;
 const agentStatus = agentAutoSave.status;
 const brandingStatus = brandingAutoSave.status;
+const autoUpdateStatus = autoUpdateAutoSave.status;
+const imageRegistryStatus = imageRegistryAutoSave.status;
 const variablesStatus = variablesAutoSave.status;
 
 const autoSaveControllers = [
@@ -505,6 +611,8 @@ const autoSaveControllers = [
   certificatesAutoSave,
   agentAutoSave,
   brandingAutoSave,
+  autoUpdateAutoSave,
+  imageRegistryAutoSave,
   variablesAutoSave,
 ];
 
@@ -545,6 +653,12 @@ watch(() => form.agentDownloadVerifyTls, () => scheduleAutoSave(agentAutoSave, c
 watch(() => form.agentTransferTimeoutSeconds, () => scheduleAutoSave(agentAutoSave, collectAgentPayload), syncWatch);
 watch(() => form.loginTitle, () => scheduleAutoSave(brandingAutoSave, collectBrandingPayload), syncWatch);
 watch(() => form.loginSubtitle, () => scheduleAutoSave(brandingAutoSave, collectBrandingPayload), syncWatch);
+watch(() => form.autoUpdateAppsEnabled, () => scheduleAutoSave(autoUpdateAutoSave, collectAutoUpdatePayload), syncWatch);
+watch(() => form.autoUpdatePackagesEnabled, () => scheduleAutoSave(autoUpdateAutoSave, collectAutoUpdatePayload), syncWatch);
+watch(() => form.autoUpdatePackagesMode, () => scheduleAutoSave(autoUpdateAutoSave, collectAutoUpdatePayload), syncWatch);
+watch(() => form.autoUpdateScheduleTime, () => scheduleAutoSave(autoUpdateAutoSave, collectAutoUpdatePayload), syncWatch);
+watch(() => form.imageRegistryEndpoint, () => scheduleAutoSave(imageRegistryAutoSave, collectImageRegistryPayload), syncWatch);
+watch(() => form.imageRegistryScheme, () => scheduleAutoSave(imageRegistryAutoSave, collectImageRegistryPayload), syncWatch);
 watch(() => form.variablesText, () => scheduleAutoSave(variablesAutoSave, collectVariablesPayload), syncWatch);
 
 /**
@@ -637,6 +751,12 @@ function hydrate(settings: RuntimeSettings, variables: ServerVariableDefinition[
       agentDownloadBaseUrl: settings.agent.downloadBaseUrl,
       agentDownloadVerifyTls: settings.agent.downloadVerifyTls,
       agentTransferTimeoutSeconds: String(settings.agent.transferTimeoutSeconds),
+      autoUpdateAppsEnabled: settings.autoUpdate?.appsEnabled ?? false,
+      autoUpdatePackagesEnabled: settings.autoUpdate?.packagesEnabled ?? false,
+      autoUpdatePackagesMode: settings.autoUpdate?.packagesMode === 'all' ? 'all' : 'security',
+      autoUpdateScheduleTime: settings.autoUpdate?.scheduleTime || '04:00',
+      imageRegistryEndpoint: settings.imageRegistry?.endpoint ?? '',
+      imageRegistryScheme: normalizeImageRegistryScheme(settings.imageRegistry?.scheme),
       variablesText: formatServerVariables(variables),
     });
   });
@@ -694,7 +814,27 @@ function confirmAction() {
   if (confirmKind.value === 'system-certificate') return resetSystemCertificate();
   if (confirmKind.value === 'jwt-secret') return confirmResetJwtSecret();
   if (confirmKind.value === 'clear-events-logs') return confirmClearEventsAndLogs();
+  if (confirmKind.value === 'auto-update-run') return confirmAutoUpdateRun();
   return startBackup();
+}
+
+/**
+ * 手动立即运行一次：不进入自动保存，不修改四个可写字段；成功后只刷新只读
+ * lastRun 投影，避免覆盖用户尚未完成的表单输入。
+ */
+async function confirmAutoUpdateRun() {
+  await run('auto-update-run', async () => {
+    const result = await settingsApi.runAutoUpdate();
+    notifySuccess(result.taskId
+      ? t('settingsPage.autoUpdate.runAccepted', { taskId: result.taskId })
+      : t('settingsPage.autoUpdate.runAcceptedWithoutId'), result);
+    confirmOpen.value = false;
+    try {
+      runtime.value = await settingsApi.runtime();
+    } catch {
+      // 运行已受理；刷新只读投影失败不改变本次操作结果。
+    }
+  });
 }
 
 function handleConfirmOpenChange(open: boolean) {
@@ -770,6 +910,16 @@ const confirmIsDanger = computed(() => (
   || confirmKind.value === 'jwt-secret'
   || confirmKind.value === 'clear-events-logs'
 ));
+const confirmImpact = computed(() => {
+  if (confirmKind.value === 'clear-events-logs') return t('settingsPage.confirm.clear-events-logs.impact');
+  if (confirmKind.value === 'auto-update-run') return t('settingsPage.confirm.auto-update-run.impact');
+  return t('settingsPage.confirmDanger');
+});
+const confirmLabel = computed(() => {
+  if (confirmKind.value === 'clear-events-logs') return t('settingsPage.clearEventsLogs');
+  if (confirmKind.value === 'auto-update-run') return t('settingsPage.autoUpdate.runNow');
+  return t('common.apply');
+});
 
 onMounted(load);
 
@@ -788,7 +938,7 @@ onBeforeUnmount(() => {
 
     <!--
       WinUI 3 Settings 页：TabView header 固定在内容区顶部，只有分区内容滚动；
-      9 个分区共用 SettingsSection/SettingsCard。表单控件 500ms 自动保存，
+      10 个分区共用 SettingsSection/SettingsCard。表单控件 500ms 自动保存，
       分区 actions 只承载 AutoSaveStatus 与保留的动作按钮。
     -->
     <Tabs
@@ -1048,6 +1198,87 @@ onBeforeUnmount(() => {
             </SettingsCard>
           </SettingsSection>
 
+          <SettingsSection v-else-if="activeSection === 'auto-update'" :description="t('settingsPage.autoUpdateHint')">
+            <template #actions>
+              <AutoSaveStatus :status="autoUpdateStatus" :labels="autoSaveLabels" @retry="autoUpdateAutoSave.flush()" />
+              <Button
+                size="sm"
+                variant="secondary"
+                :loading="autoUpdateRunPending"
+                :disabled="autoUpdateRunning || !autoUpdateCanRun"
+                :title="autoUpdateRunHint"
+                @click="openConfirm('auto-update-run')"
+              ><Play />{{ t('settingsPage.autoUpdate.runNow') }}</Button>
+            </template>
+
+            <SettingsCard :title="t('settingsPage.autoUpdate.appsEnabled')" :description="t('settingsPage.autoUpdate.appsEnabledHint')">
+              <template #control>
+                <Switch v-model="form.autoUpdateAppsEnabled" :label="t('settingsPage.autoUpdate.appsEnabled')" />
+              </template>
+            </SettingsCard>
+
+            <SettingsCard :title="t('settingsPage.autoUpdate.packagesEnabled')" :description="t('settingsPage.autoUpdate.packagesEnabledHint')">
+              <template #control>
+                <Switch v-model="form.autoUpdatePackagesEnabled" :label="t('settingsPage.autoUpdate.packagesEnabled')" />
+              </template>
+            </SettingsCard>
+
+            <SettingsCard
+              :title="t('settingsPage.autoUpdate.packagesMode')"
+              :description="form.autoUpdatePackagesMode === 'security' ? t('settingsPage.autoUpdate.packagesModeSecurityHint') : t('settingsPage.autoUpdate.packagesModeAllHint')"
+              :disabled="!form.autoUpdatePackagesEnabled"
+            >
+              <template #control>
+                <Select
+                  v-model="form.autoUpdatePackagesMode"
+                  :aria-label="t('settingsPage.autoUpdate.packagesMode')"
+                  class="w-full sm:w-64"
+                  :options="autoUpdatePackagesModeOptions"
+                  :disabled="!form.autoUpdatePackagesEnabled"
+                />
+              </template>
+            </SettingsCard>
+
+            <SettingsCard
+              :title="t('settingsPage.autoUpdate.scheduleTime')"
+              :description="t('settingsPage.autoUpdate.scheduleTimeHint')"
+              :invalid="Boolean(fieldErrors.autoUpdateScheduleTime)"
+            >
+              <template #control>
+                <div class="grid gap-1">
+                  <TimeOfDayInput
+                    v-model="form.autoUpdateScheduleTime"
+                    :label="t('settingsPage.autoUpdate.scheduleTime')"
+                    :hour-label="t('settingsPage.autoUpdate.hourLabel')"
+                    :minute-label="t('settingsPage.autoUpdate.minuteLabel')"
+                    :invalid="Boolean(fieldErrors.autoUpdateScheduleTime)"
+                  />
+                  <span class="text-caption text-muted-foreground">{{ t('settingsPage.autoUpdate.localTimeHint') }}</span>
+                </div>
+              </template>
+              <template v-if="fieldErrors.autoUpdateScheduleTime" #hint>
+                <span class="text-danger">{{ t(fieldErrors.autoUpdateScheduleTime) }}</span>
+              </template>
+            </SettingsCard>
+
+            <SettingsCard :title="t('settingsPage.autoUpdate.lastRun')" :description="t('settingsPage.autoUpdate.lastRunHint')">
+              <div class="grid gap-3 text-sm sm:grid-cols-2">
+                <div>
+                  <span class="block text-muted-foreground">{{ t('settingsPage.autoUpdate.lastRunAt') }}</span>
+                  <strong class="block text-foreground">{{ formatDateTime(autoUpdateLastRun?.lastRunAt, t('settingsPage.autoUpdate.lastRunNever')) }}</strong>
+                </div>
+                <div>
+                  <span class="block text-muted-foreground">{{ t('settingsPage.autoUpdate.lastRunStatus') }}</span>
+                  <Badge :tone="autoUpdateRunStatusTone(autoUpdateLastRun?.lastRunStatus)">{{ autoUpdateRunStatusLabel(autoUpdateLastRun?.lastRunStatus) }}</Badge>
+                </div>
+                <div class="sm:col-span-2">
+                  <span class="block text-muted-foreground">{{ t('settingsPage.autoUpdate.lastRunTask') }}</span>
+                  <span class="panel-mono block break-all text-caption text-secondary-foreground">{{ autoUpdateLastRun?.lastRunTaskId || t('common.notAvailable') }}</span>
+                </div>
+              </div>
+            </SettingsCard>
+          </SettingsSection>
+
           <SettingsSection v-else-if="activeSection === 'system-certificates'" :description="t('settingsPage.systemCertificatesHint')">
             <EmptyState v-if="!systemCertificates.length" variant="inset" :title="t('settingsPage.systemCertificatesEmpty')" :description="t('settingsPage.systemCertificatesEmptyHint')" />
             <div v-else class="p-3">
@@ -1143,6 +1374,44 @@ onBeforeUnmount(() => {
             </SettingsCard>
           </SettingsSection>
 
+          <SettingsSection v-else-if="activeSection === 'image-registry'" :description="t('settingsPage.imageRegistry.hint')">
+            <template #actions>
+              <AutoSaveStatus :status="imageRegistryStatus" :labels="autoSaveLabels" @retry="imageRegistryAutoSave.flush()" />
+            </template>
+
+            <SettingsCard
+              :title="t('settingsPage.imageRegistry.endpoint')"
+              :description="t('settingsPage.imageRegistry.endpointHint')"
+              :invalid="Boolean(fieldErrors.imageRegistryEndpoint)"
+            >
+              <template #control>
+                <Input
+                  id="settings-image-registry-endpoint"
+                  v-model="form.imageRegistryEndpoint"
+                  :aria-label="t('settingsPage.imageRegistry.endpoint')"
+                  :aria-describedby="fieldErrors.imageRegistryEndpoint ? 'settings-image-registry-endpoint-error' : undefined"
+                  class="w-full sm:w-72"
+                  :invalid="Boolean(fieldErrors.imageRegistryEndpoint)"
+                  :placeholder="t('settingsPage.imageRegistry.endpointPlaceholder')"
+                />
+              </template>
+              <template v-if="fieldErrors.imageRegistryEndpoint" #hint>
+                <span id="settings-image-registry-endpoint-error" class="text-danger">{{ t(fieldErrors.imageRegistryEndpoint) }}</span>
+              </template>
+            </SettingsCard>
+
+            <SettingsCard :title="t('settingsPage.imageRegistry.scheme')">
+              <template #control>
+                <Select
+                  v-model="form.imageRegistryScheme"
+                  :aria-label="t('settingsPage.imageRegistry.scheme')"
+                  class="w-full sm:w-64"
+                  :options="imageRegistrySchemeOptions"
+                />
+              </template>
+            </SettingsCard>
+          </SettingsSection>
+
           <template v-else>
             <SettingsSection :title="t('settingsPage.backupExport')">
               <SettingsCard :title="t('settingsPage.encryptExport')">
@@ -1227,12 +1496,12 @@ onBeforeUnmount(() => {
       :open="confirmOpen"
       :title="t(`settingsPage.confirm.${confirmKind}.title`)"
       :description="t(`settingsPage.confirm.${confirmKind}.description`)"
-      :impact="confirmKind === 'clear-events-logs' ? t('settingsPage.confirm.clear-events-logs.impact') : t('settingsPage.confirmDanger')"
+      :impact="confirmImpact"
       :tone="confirmIsDanger ? 'danger' : 'warning'"
       :loading="Boolean(pending)"
       :require-checkbox="confirmIsDanger"
       :checkbox-label="confirmKind === 'clear-events-logs' ? t('settingsPage.confirm.clear-events-logs.checkbox') : t('serversPage.confirmCheckbox')"
-      :confirm-label="confirmKind === 'clear-events-logs' ? t('settingsPage.clearEventsLogs') : t('common.apply')"
+      :confirm-label="confirmLabel"
       :cancel-label="t('common.cancel')"
       @update:open="handleConfirmOpenChange"
       @confirm="confirmAction"

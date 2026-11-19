@@ -78,6 +78,10 @@ type PackageUpdate struct {
 	CandidateVersion string    `orm:"not_null"`
 	Source           string    `orm:"not_null;default:''"`
 	RefreshedAt      time.Time `orm:"not_null"`
+	// Security/SecurityKnown 是 Agent 侧权威安全判定（unattended-upgrade
+	// dry-run 等）；Known=false 时 Panel 回退到 Source 启发式。
+	Security      bool `orm:"not_null;default:0"`
+	SecurityKnown bool `orm:"not_null;default:0"`
 }
 
 func (*PackageUpdate) TableName() string { return "package_updates" }
@@ -242,6 +246,9 @@ type Application struct {
 	PlanningErrorJSON    string    `orm:"not_null;default:''"`
 	CreatedAt            time.Time `orm:"not_null"`
 	UpdatedAt            time.Time `orm:"not_null"`
+	// AutoUpdateEnabled 是对象级"允许自动更新"开关（默认开）。它只影响自动
+	// 更新任务是否纳入本应用，不限制手动检查/更新/批量升级。
+	AutoUpdateEnabled bool `orm:"not_null;default:1"`
 }
 
 func (*Application) TableName() string { return "applications" }
@@ -445,6 +452,9 @@ type FacilityAppConfig struct {
 	DNSSyncJSON map[string]any `orm:"json;not_null;default:'{}';column:dns_sync_json"`
 	LastError   string         `orm:"not_null;default:''"`
 	UpdatedAt   time.Time      `orm:"not_null"`
+	// SettingsJSON 保存入口代理全局运行参数（80 端口策略、HSTS、P1 安全参数、
+	// imageAutoUpdateEnabled、customHttpDirectives 等）。空对象表示全部默认值。
+	SettingsJSON map[string]any `orm:"json;not_null;default:'{}';column:settings_json"`
 }
 
 func (*FacilityAppConfig) TableName() string { return "facility_app_configs" }
@@ -464,9 +474,49 @@ type ReverseProxyRoute struct {
 	// Version 必须保持在结构体末尾：该列由 AutoMigrate 追加到 preAppMigration
 	// 创建的 legacy 表末尾，字段顺序需与升级后的列顺序一致（见 models 测试）。
 	Version int `orm:"not_null;default:1"`
+	// 每域名传输开关（追加在 Version 之后，保证 legacy 表 AutoMigrate 追加列序
+	// 与模型字段序一致）。旧行由 DEFAULT 回填为 HTTPS/H2 开、H3 关。
+	HTTPSEnabled bool `orm:"not_null;default:1;column:https_enabled"`
+	HTTP2Enabled bool `orm:"not_null;default:1;column:http2_enabled"`
+	HTTP3Enabled bool `orm:"not_null;default:0;column:http3_enabled"`
+	// CustomServerDirectives 是该域名 server 块的自定义 nginx 单行指令列表；
+	// 同名指令覆盖面板生成项，其余追加，见 FAC-RP-017。
+	CustomServerDirectives []string `orm:"json;not_null;default:'[]';column:custom_server_directives"`
+	// HTTPPortMode 是该域名的 80 端口策略覆盖：空=继承设施全局设置，
+	// serve=80 直接服务，redirect=有证书且 HTTPS 开启时跳转 443。
+	HTTPPortMode string `orm:"not_null;default:'';column:http_port_mode"`
+	// HSTSEnabled 是该域名 HSTS 覆盖：空=继承设施全局 HSTS，on/off 显式覆盖。
+	HSTSEnabled string `orm:"not_null;default:'';column:hsts_enabled"`
+	// ClientMaxBodySize 是该域名请求体上限覆盖（nginx size 语法）；空=继承全局。
+	ClientMaxBodySize string `orm:"not_null;default:'';column:client_max_body_size"`
 }
 
 func (*ReverseProxyRoute) TableName() string { return "reverse_proxy_routes" }
+
+// FacilityProxyImageState 对应 facility_proxy_image_states：每个入口代理网关
+// 一行，记录镜像目标/观察 digest、回滚目标与更新状态。reference/target_digest
+// 参与该节点运行时 spec hash；observed_digest 来自 Agent 对运行容器的实际镜像。
+type FacilityProxyImageState struct {
+	ServerID       string    `orm:"primary_key;references:servers(id);on_delete:CASCADE"`
+	Reference      string    `orm:"not_null;default:''"`
+	TargetDigest   string    `orm:"not_null;default:''"`
+	ObservedDigest string    `orm:"not_null;default:''"`
+	PreviousDigest string    `orm:"not_null;default:''"`
+	Status         string    `orm:"not_null;default:'unknown'"`
+	Pinned         bool      `orm:"not_null;default:0"`
+	LastError      string    `orm:"not_null;default:''"`
+	CheckedAt      time.Time `orm:"not_null"`
+	UpdatedAt      time.Time `orm:"not_null"`
+	// 自动更新失败退避：同一目标 digest 连续失败计数与失败 digest。达到阈值后
+	// 自动更新暂停该节点，直到手动更新/回滚或成功一次后清零。
+	AutoUpdateFailures int    `orm:"not_null;default:0;column:auto_update_failures"`
+	FailedDigest       string `orm:"not_null;default:'';column:failed_digest"`
+	// ImageVersion 是运行中 nginx 的实际版本（如 1.28.3），由 Agent 执行
+	// `nginx -v` 回传后持久化；空表示尚未采集。
+	ImageVersion string `orm:"not_null;default:'';column:image_version"`
+}
+
+func (*FacilityProxyImageState) TableName() string { return "facility_proxy_image_states" }
 
 // ExtraIndexDDL 返回 reverse_proxy_routes 无法用 orm tag 表达的索引。
 func (*ReverseProxyRoute) ExtraIndexDDL() map[string][]string {

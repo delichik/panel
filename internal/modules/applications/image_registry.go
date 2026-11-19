@@ -25,15 +25,112 @@ type ImageDigestResult struct {
 	Pinned     bool   `json:"pinned"`
 }
 
+// ImageRegistryConfig is the dynamically supplied registry override. Endpoint
+// is a host[:port] (an optional "http://"/"https://" prefix is tolerated) that
+// replaces only the host of the manifest request; Scheme is "http" or "https".
+// Empty fields keep the resolver's static defaults.
+type ImageRegistryConfig struct {
+	Endpoint string
+	Scheme   string
+}
+
+// RegistryImageResolver resolves an image tag to its manifest digest through
+// the Docker Registry HTTP API.
+//
+// Host overrides the registry host (host[:port]) taken from the image
+// reference; when empty the reference's own registry is used. Overriding only
+// swaps the host: the /v2/<repository>/manifests/<tag> path, repository and tag
+// stay unchanged. Scheme selects http or https (default https). The bearer
+// challenge flow is unaffected by either override.
+//
+// When constructed with NewRegistryImageResolverWithConfig, every Resolve call
+// re-reads the provider, so callers may hot-reload the endpoint. The single
+// http.Client is cached for the resolver's lifetime: changing the endpoint must
+// not rebuild it or in-flight keep-alive connections leak. Fields must not be
+// mutated after the resolver is first used; use the provider for changes.
 type RegistryImageResolver struct {
 	Client *http.Client
 	Scheme string
+	Host   string
+	// configProvider, when non-nil, supplies per-call Endpoint/Scheme values.
+	configProvider func() ImageRegistryConfig
 }
 
 func NewRegistryImageResolver() *RegistryImageResolver {
 	return &RegistryImageResolver{
 		Client: &http.Client{Timeout: 12 * time.Second},
 		Scheme: "https",
+	}
+}
+
+// NewRegistryImageResolverWithConfig builds a resolver whose endpoint and
+// scheme are read from provider on every Resolve. A nil provider keeps the
+// default behavior (image reference registry, https).
+func NewRegistryImageResolverWithConfig(provider func() ImageRegistryConfig) *RegistryImageResolver {
+	resolver := NewRegistryImageResolver()
+	resolver.configProvider = provider
+	return resolver
+}
+
+// manifestEndpoint returns the scheme and host to use for one manifest request.
+// The provider value wins over the static fields; an empty provider value falls
+// back to the static field so partial configuration stays usable.
+func (r *RegistryImageResolver) manifestEndpoint(ref ImageDigestResult) (string, string) {
+	scheme, host := r.Scheme, r.Host
+	if hostValue, hostScheme := normalizeRegistryEndpoint(host); hostValue != "" {
+		host = hostValue
+		if hostScheme != "" {
+			scheme = hostScheme
+		}
+	}
+	if r.configProvider != nil {
+		config := r.configProvider()
+		if endpointHost, endpointScheme := normalizeRegistryEndpoint(config.Endpoint); endpointHost != "" {
+			host = endpointHost
+			if endpointScheme != "" {
+				scheme = endpointScheme
+			}
+		}
+		if configScheme := strings.TrimSpace(config.Scheme); configScheme != "" {
+			scheme = configScheme
+		}
+	}
+	host = strings.TrimSpace(host)
+	if host == "" {
+		host = ref.Registry
+	}
+	return normalizeRegistryScheme(scheme), host
+}
+
+func (r *RegistryImageResolver) manifestURL(ref ImageDigestResult) string {
+	scheme, host := r.manifestEndpoint(ref)
+	return fmt.Sprintf("%s://%s/v2/%s/manifests/%s", scheme, host, ref.Repository, url.PathEscape(ref.Tag))
+}
+
+// normalizeRegistryEndpoint splits an optional scheme prefix and any path
+// suffix off a configured endpoint, returning host[:port] and the scheme.
+func normalizeRegistryEndpoint(endpoint string) (string, string) {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return "", ""
+	}
+	scheme := ""
+	if index := strings.Index(endpoint, "://"); index >= 0 {
+		scheme = strings.ToLower(strings.TrimSpace(endpoint[:index]))
+		endpoint = endpoint[index+3:]
+	}
+	if index := strings.IndexByte(endpoint, '/'); index >= 0 {
+		endpoint = endpoint[:index]
+	}
+	return strings.TrimSpace(endpoint), scheme
+}
+
+func normalizeRegistryScheme(scheme string) string {
+	switch strings.ToLower(strings.TrimSpace(scheme)) {
+	case "http":
+		return "http"
+	default:
+		return "https"
 	}
 }
 
@@ -58,11 +155,7 @@ func (r *RegistryImageResolver) manifestDigest(ctx context.Context, ref ImageDig
 	if client == nil {
 		client = http.DefaultClient
 	}
-	scheme := strings.TrimSpace(r.Scheme)
-	if scheme == "" {
-		scheme = "https"
-	}
-	manifestURL := fmt.Sprintf("%s://%s/v2/%s/manifests/%s", scheme, ref.Registry, ref.Repository, url.PathEscape(ref.Tag))
+	manifestURL := r.manifestURL(ref)
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, manifestURL, nil)
 	if err != nil {
 		return "", err
@@ -97,11 +190,7 @@ func (r *RegistryImageResolver) manifestDigestWithGet(ctx context.Context, ref I
 	if client == nil {
 		client = http.DefaultClient
 	}
-	scheme := strings.TrimSpace(r.Scheme)
-	if scheme == "" {
-		scheme = "https"
-	}
-	manifestURL := fmt.Sprintf("%s://%s/v2/%s/manifests/%s", scheme, ref.Registry, ref.Repository, url.PathEscape(ref.Tag))
+	manifestURL := r.manifestURL(ref)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, manifestURL, nil)
 	if err != nil {
 		return "", err

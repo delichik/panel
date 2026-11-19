@@ -18,7 +18,7 @@ func AppModels() []any {
 		&DNSDomain{}, &DNSRecordSnapshot{}, &ApplicationEditSession{},
 		&ApplicationEditSessionFile{}, &ApplicationEditSessionOperation{},
 		&ApplicationFile{}, &ApplicationInstance{}, &FacilityAppConfig{},
-		&FacilityStaticAsset{}, &ReverseProxyRoute{}, &FacilityEditSession{}, &FacilityEditSessionAsset{},
+		&FacilityStaticAsset{}, &ReverseProxyRoute{}, &FacilityProxyImageState{}, &FacilityEditSession{}, &FacilityEditSessionAsset{},
 		&FacilityEditSessionOperation{}, &StorageShareConfig{}, &StorageSharePartition{}, &NetworkProbeConfig{}, &NetworkProbeResult{}, &MetricsFacilityConfig{}, &Certificate{}, &SelfSignedCertificate{},
 		&KeyAsset{}, &OverviewCardConfiguration{}, &RuntimeSetting{}, &AppearanceSetting{}, &AuthState{},
 		&AuthAccount{}, &Task{}, &TaskStep{}, &Event{},

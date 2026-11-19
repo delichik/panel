@@ -386,6 +386,7 @@ func applicationSummaryFromApplication(app Application) ApplicationSummary {
 		ID:                   app.ID,
 		Name:                 app.Name,
 		Enabled:              app.Enabled,
+		AutoUpdateEnabled:    app.AutoUpdateEnabled,
 		ImageReference:       app.ImageReference,
 		JobID:                app.JobID,
 		Namespace:            app.Namespace,

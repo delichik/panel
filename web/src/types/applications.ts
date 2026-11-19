@@ -38,6 +38,18 @@ export interface ReverseProxyRule {
   originServerIds: string[];
   anyAccess: AnyAccessConfig;
   paths: ReverseProxyPath[];
+  /** Per-domain transport switches; omitted means the backend defaults (HTTPS/H2 on, H3 off). */
+  httpsEnabled?: boolean;
+  http2Enabled?: boolean;
+  http3Enabled?: boolean;
+  /** Port 80 override for this domain; '' or omitted inherits the facility settings. */
+  httpPortMode?: '' | 'serve' | 'redirect';
+  /** Per-domain HSTS switch; nil/omitted inherits the facility HSTS setting. */
+  hstsEnabled?: boolean;
+  /** Per-domain `client_max_body_size`; '' or omitted inherits the facility-wide limit. */
+  clientMaxBodySize?: string;
+  /** Advanced single-line nginx directives appended to this domain's `server {}` block. */
+  customServerDirectives?: string[];
 }
 
 export interface ImageUpdateTarget {
@@ -68,6 +80,8 @@ export interface ApplicationDto {
   kind: string;
   name: string;
   enabled: boolean;
+  /** Object-level auto-update opt-out (default true). Manual update is never blocked. */
+  autoUpdateEnabled?: boolean;
   deletionRequested?: boolean;
   reconcileStopped?: boolean;
   specYaml: string;
@@ -119,6 +133,8 @@ export interface ApplicationSummaryDto {
 export interface ApplicationSaveInput {
   name: string;
   enabled: boolean;
+  /** Object-level auto-update opt-out (default true in the backend too). */
+  autoUpdateEnabled?: boolean;
   specYaml: string;
   deploymentMode: DeploymentMode;
   deploymentServers: string[];

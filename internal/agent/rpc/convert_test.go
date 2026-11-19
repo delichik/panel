@@ -6,6 +6,7 @@ import (
 	"time"
 
 	agentcontract "panel/internal/agent/contract"
+	agentpb "panel/internal/agent/pb"
 	appruntime "panel/internal/modules/applications/runtime"
 	"panel/internal/platform/linux"
 	"panel/internal/platform/linux/remoteops"
@@ -219,6 +220,37 @@ func TestRuntimeReconcileRequestRoundTripIncludesSSHPortAndFirewallPorts(t *test
 	assertDeepEqual(t, got.Spec.Ports, in.Spec.Ports)
 }
 
+func TestRuntimeReconcileImageProbeRoundTrip(t *testing.T) {
+	in := agentcontract.RuntimeReconcileRequest{
+		OperationID: "operation-1", ExecutionID: "execution-1", ApplicationID: "app-1", InstanceID: "instance-1",
+		Action: "apply", DesiredGeneration: 2, DesiredSpecHash: "hash-2",
+		ImagePreflightCommand: []string{"nginx", "-t", "-c", "/etc/panel-nginx/nginx.conf"},
+		ImageVersionCommand:   []string{"nginx", "-v"},
+	}
+	pb := PBRuntimeReconcileRequest(in)
+	if len(pb.ImagePreflightCommand) != 4 || pb.ImagePreflightCommand[0] != "nginx" || len(pb.ImageVersionCommand) != 2 || pb.ImageVersionCommand[1] != "-v" {
+		t.Fatalf("protobuf request lost image probe commands: %#v", pb)
+	}
+	got := GoRuntimeReconcileRequest(pb)
+	if !reflect.DeepEqual(got.ImagePreflightCommand, in.ImagePreflightCommand) || !reflect.DeepEqual(got.ImageVersionCommand, in.ImageVersionCommand) {
+		t.Fatalf("image probe commands lost in round trip: %#v", got)
+	}
+	if got.OperationID != in.OperationID || got.ExecutionID != in.ExecutionID || got.DesiredSpecHash != in.DesiredSpecHash {
+		t.Fatalf("request identity mismatch: got %#v want %#v", got, in)
+	}
+
+	response := agentcontract.RuntimeReconcileResponse{
+		ObservedState:   "running",
+		ImageVersion:    "nginx version: nginx/1.28.0",
+		PreflightOutput: "nginx: configuration file test is successful",
+	}
+	responsePB := PBRuntimeReconcileResponse(response)
+	if responsePB.ImageVersion != response.ImageVersion || responsePB.PreflightOutput != response.PreflightOutput {
+		t.Fatalf("protobuf response lost image probe output: %#v", responsePB)
+	}
+	assertDeepEqual(t, GoRuntimeReconcileResponse(responsePB), response)
+}
+
 func TestDockerResourcesRoundTrip(t *testing.T) {
 	container := agentcontract.DockerContainer{
 		ID:      "container-1",
@@ -297,6 +329,48 @@ func TestDockerContainerSlimCarriesImageID(t *testing.T) {
 		t.Fatalf("goDockerContainer(slim) imageId = %q, want %q", got.ImageID, in.ImageID)
 	}
 }
+
+// TestPackageUpdatesRoundTripSecurityAuthority 覆盖 Agent 权威安全判定的 proto
+// 往返：已知安全、已知非安全（即使 source 像安全源）与未知三种状态都必须原样
+// 保留，且 security/security_known 在线上是显式 optional 字段。
+func TestPackageUpdatesRoundTripSecurityAuthority(t *testing.T) {
+	in := []linux.PackageUpdate{
+		{Name: "openssl", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-updates", Security: true, SecurityKnown: true},
+		{Name: "curl", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-security", Security: false, SecurityKnown: true},
+		{Name: "bash", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-security", Security: false, SecurityKnown: false},
+	}
+	pb := pbPackageUpdates(in)
+	if len(pb) != len(in) {
+		t.Fatalf("pb updates = %d, want %d", len(pb), len(in))
+	}
+	if pb[0].Security == nil || !*pb[0].Security || pb[0].SecurityKnown == nil || !*pb[0].SecurityKnown {
+		t.Fatalf("authoritative security update was not encoded: %#v", pb[0])
+	}
+	if pb[1].Security == nil || *pb[1].Security || pb[1].SecurityKnown == nil || !*pb[1].SecurityKnown {
+		t.Fatalf("authoritative non-security update was not encoded: %#v", pb[1])
+	}
+	if pb[2].Security == nil || *pb[2].Security || pb[2].SecurityKnown == nil || *pb[2].SecurityKnown {
+		t.Fatalf("unknown security state was not encoded explicitly: %#v", pb[2])
+	}
+	assertDeepEqual(t, goPackageUpdates(pb), in)
+}
+
+// TestPackageUpdatesFromLegacyAgentIsUnknown 模拟旧 Agent：proto 消息不带
+// security/security_known 时 Panel 必须得到 SecurityKnown=false，从而回退到
+// source 启发式，而不是把包当成“已知非安全”。
+func TestPackageUpdatesFromLegacyAgentIsUnknown(t *testing.T) {
+	legacy := []*agentpb.PackageUpdate{{
+		Name: "openssl", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-security",
+	}}
+	got := goPackageUpdates(legacy)
+	if len(got) != 1 {
+		t.Fatalf("legacy updates = %#v", got)
+	}
+	if got[0].Security || got[0].SecurityKnown {
+		t.Fatalf("legacy Agent message must decode as unknown security: %#v", got[0])
+	}
+}
+
 func assertDeepEqual[T any](t *testing.T, got, want T) {
 	t.Helper()
 	if !reflect.DeepEqual(got, want) {

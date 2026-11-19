@@ -32,7 +32,7 @@
 
 容器、镜像、网络、卷与软件包不再是独立路由页面，而是服务器详情的一级 tab（`UI-SRV-017/018`、`UI-SHELL-062`）。每个 tab 保持独立的信息架构与操作闭环，不得退回同质通用列表；服务器上下文由详情固定，不再有独立的服务器选择器。所有控件使用 Panel 自有 primitives，禁止引入 Naive UI / Vuetify。
 
-- 设施页面是 `/applications/facility-apps` 独立入口，必须先呈现设施目录；内置反向代理、存储共享、网络探测与指标四个设施项（后两者为纯观测设施，不创建容器/隐藏应用）。`facilityKind=reverse-proxy` 的只读详情展示路由与部署状态；独立配置页保存 Nginx 镜像、全局网关节点、Panel 入口、域名策略、Path 规则和静态资产草稿。指定的全局网关节点即视为开启反向代理能力。`facilityKind=storage-share` 由独立组件 `web/src/views/applications/StorageShareFacility.vue` 渲染健康、分区与设置，详见下文“存储共享设施”。`facilityKind=network-probe`/`metrics` 分别由 `NetworkProbeFacility.vue`/`MetricsFacility.vue` 渲染配置（`FAC-PRB-*`、`FAC-MET-*`）；两者把范围选择与参数配置拆成两个独立区域并使用紧凑服务器网格，探测间隔按分钟输入（1..60、默认 1，保存换算为秒）。
+- 设施页面是 `/applications/facility-apps` 独立入口，必须先呈现设施目录；内置反向代理、存储共享、网络探测与指标四个设施项（后两者为纯观测设施，不创建容器/隐藏应用）。`facilityKind=reverse-proxy` 的只读详情展示路由、部署状态与「设置」tab（镜像状态/手动检查更新、全局入口参数、自定义 http 指令）；独立配置页保存全局网关节点、Panel 入口、域名策略（含每域名 HTTPS/HTTP2/HTTP3 开关与自定义 server 指令）、Path 规则和静态资产草稿。镜像由 Panel 受管并在标签线内自动更新，不提供用户镜像设置（`FAC-RP-014/015/016/017`）。指定的全局网关节点即视为开启反向代理能力。`facilityKind=storage-share` 由独立组件 `web/src/views/applications/StorageShareFacility.vue` 渲染健康、分区与设置，详见下文“存储共享设施”。`facilityKind=network-probe`/`metrics` 分别由 `NetworkProbeFacility.vue`/`MetricsFacility.vue` 渲染配置（`FAC-PRB-*`、`FAC-MET-*`）；两者把范围选择与参数配置拆成两个独立区域并使用紧凑服务器网格，探测间隔按分钟输入（1..60、默认 1，保存换算为秒）。
 - 容器支持查询、查看日志、启动、停止、重启、删除；日志入口与其他行操作使用带图标的小型操作，托管 Application 容器的直接停止、重启和删除入口必须禁用并提示改走 Application 生命周期。
 - 容器卡片端口行在没有发布端口时显示「无端口映射」，不使用「不可用」，避免与容器故障状态混淆。
 - 镜像支持查询、拉取、删除、删除未使用镜像、刷新更新状态、升级选中 Application 和全部升级；批量危险操作必须通过确认对话框触发。
@@ -142,7 +142,7 @@ Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并
 ## 设施应用反向代理静态站点与 TLS
 
 - `facility_app_configs` 只持久化部署节点、DNS 同步状态和设施级错误；域名路由统一存 `reverse_proxy_routes`。旧字段在启动预迁移中转换后删除。
-- 设施入口网关镜像固定为 `nginx:1.28-alpine`，API 和前端不提供镜像设置。
+- 设施入口网关镜像由 Panel 受管：固定标签线 `nginx:1.28-alpine`，补丁版本自动更新（`FAC-RP-014`），minor/major 仅随 Panel 发布改线；API 和前端不提供用户编辑镜像。每域名 HTTPS/HTTP2/HTTP3 开关与自定义 http/server 指令分别见 `FAC-RP-016`、`FAC-RP-017`；HTTP/3 依赖容器发布 UDP 443 与 UFW 放行，`ssl_early_data` 不输出，80 端口仅 HTTP/1.1。
 - 每个设施域名至少选择一个源站节点，且源站必须属于全局网关节点。AnyAccess 关闭时只有源站节点开放域名；开启时其他全局网关作为转发节点（`relayServerIds` 为空表示全部非源站网关节点，非空表示指定子集），按轮询、主备或客户端 IP 哈希连接源站入口网关。转发节点必须属于全局网关节点且不能是源站节点。
 - 设施路由、应用路由和 Panel 入口的规范化域名全局唯一。旧库迁移发现跨所有者冲突时必须中止并列出冲突，不得静默合并。
 - 手工代理、应用代理、Panel 入口和 AnyAccess 转发均明确生成 `proxy_cache off;`；Panel 不管理客户端缓存 Header。

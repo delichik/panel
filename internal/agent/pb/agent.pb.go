@@ -1162,8 +1162,14 @@ type PackageUpdate struct {
 	InstalledVersion string                 `protobuf:"bytes,2,opt,name=installed_version,json=installedVersion,proto3" json:"installed_version,omitempty"`
 	CandidateVersion string                 `protobuf:"bytes,3,opt,name=candidate_version,json=candidateVersion,proto3" json:"candidate_version,omitempty"`
 	Source           string                 `protobuf:"bytes,4,opt,name=source,proto3" json:"source,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// security 是 Agent 的权威安全更新判定（例如 unattended-upgrade --dry-run
+	// 是否会把该包作为安全更新升级）。security_known 为 false 时 security 没有
+	// 意义：旧 Agent 不填这两个字段，Panel 必须回退到 source 启发式，绝不能把
+	// 未知当成“非安全”。
+	Security      *bool `protobuf:"varint,5,opt,name=security,proto3,oneof" json:"security,omitempty"`
+	SecurityKnown *bool `protobuf:"varint,6,opt,name=security_known,json=securityKnown,proto3,oneof" json:"security_known,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PackageUpdate) Reset() {
@@ -1222,6 +1228,20 @@ func (x *PackageUpdate) GetSource() string {
 		return x.Source
 	}
 	return ""
+}
+
+func (x *PackageUpdate) GetSecurity() bool {
+	if x != nil && x.Security != nil {
+		return *x.Security
+	}
+	return false
+}
+
+func (x *PackageUpdate) GetSecurityKnown() bool {
+	if x != nil && x.SecurityKnown != nil {
+		return *x.SecurityKnown
+	}
+	return false
 }
 
 type PackageUpdatesResponse struct {
@@ -2922,8 +2942,18 @@ type RuntimeReconcileRequest struct {
 	RunId                 string                 `protobuf:"bytes,14,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
 	SshPort               int32                  `protobuf:"varint,15,opt,name=ssh_port,json=sshPort,proto3" json:"ssh_port,omitempty"`
 	AgentPort             int32                  `protobuf:"varint,16,opt,name=agent_port,json=agentPort,proto3" json:"agent_port,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	// image_preflight_command 是可选的一次性预检命令（例如
+	// `nginx -t -c /etc/panel-nginx/nginx.conf`）。非空时 Agent 在镜像拉取成功
+	// 之后、停止/删除旧容器之前，用同一 spec 的 mounts/network 创建一个不发布
+	// 端口的临时容器执行该命令；失败则中止 apply 并保留旧容器继续服务。
+	// 旧 Agent 忽略该字段：Panel 必须先确认 Agent 版本/契约一致再依赖预检结果。
+	ImagePreflightCommand []string `protobuf:"bytes,17,rep,name=image_preflight_command,json=imagePreflightCommand,proto3" json:"image_preflight_command,omitempty"`
+	// image_version_command 是可选的版本上报命令（例如 `nginx -v`），在预检成功
+	// 后于另一个一次性临时容器中执行，输出通过 image_version 回传；Panel 用它做
+	// 版本线（major.minor）校验。它属于观测信息，执行失败不阻断 apply。
+	ImageVersionCommand []string `protobuf:"bytes,18,rep,name=image_version_command,json=imageVersionCommand,proto3" json:"image_version_command,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *RuntimeReconcileRequest) Reset() {
@@ -3068,6 +3098,20 @@ func (x *RuntimeReconcileRequest) GetAgentPort() int32 {
 	return 0
 }
 
+func (x *RuntimeReconcileRequest) GetImagePreflightCommand() []string {
+	if x != nil {
+		return x.ImagePreflightCommand
+	}
+	return nil
+}
+
+func (x *RuntimeReconcileRequest) GetImageVersionCommand() []string {
+	if x != nil {
+		return x.ImageVersionCommand
+	}
+	return nil
+}
+
 type RuntimeReconcileStep struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -3173,8 +3217,14 @@ type RuntimeReconcileResponse struct {
 	VerifiedBy          string                  `protobuf:"bytes,17,opt,name=verified_by,json=verifiedBy,proto3" json:"verified_by,omitempty"`
 	VerifiedByName      string                  `protobuf:"bytes,18,opt,name=verified_by_name,json=verifiedByName,proto3" json:"verified_by_name,omitempty"`
 	VerifiedAt          *timestamppb.Timestamp  `protobuf:"bytes,19,opt,name=verified_at,json=verifiedAt,proto3" json:"verified_at,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// image_version 是一次性临时容器中版本命令（image_version_command）的输出，
+	// 已 trim 并做长度上限；未执行或执行失败时为空。
+	ImageVersion string `protobuf:"bytes,20,opt,name=image_version,json=imageVersion,proto3" json:"image_version,omitempty"`
+	// preflight_output 是预检命令（image_preflight_command）的输出，成功和失败
+	// 都回传，便于 Panel 把 `nginx -t` 的原始报错写进任务日志；已脱敏并限长。
+	PreflightOutput string `protobuf:"bytes,21,opt,name=preflight_output,json=preflightOutput,proto3" json:"preflight_output,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RuntimeReconcileResponse) Reset() {
@@ -3338,6 +3388,20 @@ func (x *RuntimeReconcileResponse) GetVerifiedAt() *timestamppb.Timestamp {
 		return x.VerifiedAt
 	}
 	return nil
+}
+
+func (x *RuntimeReconcileResponse) GetImageVersion() string {
+	if x != nil {
+		return x.ImageVersion
+	}
+	return ""
+}
+
+func (x *RuntimeReconcileResponse) GetPreflightOutput() string {
+	if x != nil {
+		return x.PreflightOutput
+	}
+	return ""
 }
 
 type RuntimeReloadRequest struct {
@@ -3796,8 +3860,13 @@ type RuntimeStatusRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	InstanceId    string                 `protobuf:"bytes,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
 	ContainerName string                 `protobuf:"bytes,2,opt,name=container_name,json=containerName,proto3" json:"container_name,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// version_command 是可选的版本采集命令（例如 `nginx -v`）。非空且容器
+	// running 时，Agent 用 docker exec 在运行中的容器内执行该命令，并从输出
+	// （stdout+stderr）解析 nginx/x.y.z 写入 image_version；失败为空，不影响
+	// 状态查询本身。旧 Agent 忽略该字段，Panel 必须把空版本按未知处理。
+	VersionCommand []string `protobuf:"bytes,3,rep,name=version_command,json=versionCommand,proto3" json:"version_command,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *RuntimeStatusRequest) Reset() {
@@ -3844,6 +3913,13 @@ func (x *RuntimeStatusRequest) GetContainerName() string {
 	return ""
 }
 
+func (x *RuntimeStatusRequest) GetVersionCommand() []string {
+	if x != nil {
+		return x.VersionCommand
+	}
+	return nil
+}
+
 type RuntimeStatusResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	InstanceId    string                 `protobuf:"bytes,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
@@ -3860,6 +3936,9 @@ type RuntimeStatusResponse struct {
 	ExitCode      int32                  `protobuf:"varint,12,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
 	LastError     string                 `protobuf:"bytes,13,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
 	ObservedAt    *timestamppb.Timestamp `protobuf:"bytes,14,opt,name=observed_at,json=observedAt,proto3" json:"observed_at,omitempty"`
+	// image_version 是 version_command 在运行容器内执行后的解析结果（例如
+	// 1.28.3）；未请求、容器未运行或执行失败时为空。旧 Agent 不填该字段。
+	ImageVersion  string `protobuf:"bytes,15,opt,name=image_version,json=imageVersion,proto3" json:"image_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3990,6 +4069,13 @@ func (x *RuntimeStatusResponse) GetObservedAt() *timestamppb.Timestamp {
 		return x.ObservedAt
 	}
 	return nil
+}
+
+func (x *RuntimeStatusResponse) GetImageVersion() string {
+	if x != nil {
+		return x.ImageVersion
+	}
+	return ""
 }
 
 type RuntimeLogsRequest struct {
@@ -6609,12 +6695,16 @@ const file_agent_proto_rawDesc = "" +
 	"\fload_average\x18\x06 \x01(\tR\vloadAverage\x12\x14\n" +
 	"\x05load1\x18\a \x01(\x01R\x05load1\x12\x14\n" +
 	"\x05load5\x18\b \x01(\x01R\x05load5\x12\x16\n" +
-	"\x06load15\x18\t \x01(\x01R\x06load15\"\x95\x01\n" +
+	"\x06load15\x18\t \x01(\x01R\x06load15\"\x82\x02\n" +
 	"\rPackageUpdate\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12+\n" +
 	"\x11installed_version\x18\x02 \x01(\tR\x10installedVersion\x12+\n" +
 	"\x11candidate_version\x18\x03 \x01(\tR\x10candidateVersion\x12\x16\n" +
-	"\x06source\x18\x04 \x01(\tR\x06source\"M\n" +
+	"\x06source\x18\x04 \x01(\tR\x06source\x12\x1f\n" +
+	"\bsecurity\x18\x05 \x01(\bH\x00R\bsecurity\x88\x01\x01\x12*\n" +
+	"\x0esecurity_known\x18\x06 \x01(\bH\x01R\rsecurityKnown\x88\x01\x01B\v\n" +
+	"\t_securityB\x11\n" +
+	"\x0f_security_known\"M\n" +
 	"\x16PackageUpdatesResponse\x123\n" +
 	"\x05items\x18\x01 \x03(\v2\x1d.panel.agent.v1.PackageUpdateR\x05items\"?\n" +
 	"\x15PackageUpgradeRequest\x12\x14\n" +
@@ -6756,7 +6846,7 @@ const file_agent_proto_rawDesc = "" +
 	"\x0ftimeout_seconds\x18\x06 \x01(\x05R\x0etimeoutSeconds\x12\x18\n" +
 	"\acommand\x18\a \x01(\tR\acommand\"K\n" +
 	"\x18RuntimeWriteFilesRequest\x12/\n" +
-	"\x04spec\x18\x01 \x01(\v2\x1b.panel.agent.v1.RuntimeSpecR\x04spec\"\xd9\x04\n" +
+	"\x04spec\x18\x01 \x01(\v2\x1b.panel.agent.v1.RuntimeSpecR\x04spec\"\xc5\x05\n" +
 	"\x17RuntimeReconcileRequest\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12!\n" +
 	"\fexecution_id\x18\x02 \x01(\tR\vexecutionId\x12%\n" +
@@ -6777,7 +6867,9 @@ const file_agent_proto_rawDesc = "" +
 	"\x06run_id\x18\x0e \x01(\tR\x05runId\x12\x19\n" +
 	"\bssh_port\x18\x0f \x01(\x05R\asshPort\x12\x1d\n" +
 	"\n" +
-	"agent_port\x18\x10 \x01(\x05R\tagentPort\"\xeb\x01\n" +
+	"agent_port\x18\x10 \x01(\x05R\tagentPort\x126\n" +
+	"\x17image_preflight_command\x18\x11 \x03(\tR\x15imagePreflightCommand\x122\n" +
+	"\x15image_version_command\x18\x12 \x03(\tR\x13imageVersionCommand\"\xeb\x01\n" +
 	"\x14RuntimeReconcileStep\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x16\n" +
@@ -6786,7 +6878,7 @@ const file_agent_proto_rawDesc = "" +
 	"\n" +
 	"started_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12;\n" +
 	"\vfinished_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"finishedAt\"\xd7\x06\n" +
+	"finishedAt\"\xa7\a\n" +
 	"\x18RuntimeReconcileResponse\x12%\n" +
 	"\x0eobserved_state\x18\x01 \x01(\tR\robservedState\x12%\n" +
 	"\x0econtainer_name\x18\x02 \x01(\tR\rcontainerName\x12!\n" +
@@ -6812,7 +6904,9 @@ const file_agent_proto_rawDesc = "" +
 	"verifiedBy\x12(\n" +
 	"\x10verified_by_name\x18\x12 \x01(\tR\x0everifiedByName\x12;\n" +
 	"\vverified_at\x18\x13 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"verifiedAt\"\xc0\x01\n" +
+	"verifiedAt\x12#\n" +
+	"\rimage_version\x18\x14 \x01(\tR\fimageVersion\x12)\n" +
+	"\x10preflight_output\x18\x15 \x01(\tR\x0fpreflightOutput\"\xc0\x01\n" +
 	"\x14RuntimeReloadRequest\x12/\n" +
 	"\x04spec\x18\x01 \x01(\v2\x1b.panel.agent.v1.RuntimeSpecR\x04spec\x12%\n" +
 	"\x0econtainer_name\x18\x02 \x01(\tR\rcontainerName\x12)\n" +
@@ -6848,11 +6942,12 @@ const file_agent_proto_rawDesc = "" +
 	"\x06status\x18\x04 \x01(\tR\x06status\x12\x14\n" +
 	"\x05error\x18\x05 \x01(\tR\x05error\x12;\n" +
 	"\vobserved_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"observedAt\"^\n" +
+	"observedAt\"\x87\x01\n" +
 	"\x14RuntimeStatusRequest\x12\x1f\n" +
 	"\vinstance_id\x18\x01 \x01(\tR\n" +
 	"instanceId\x12%\n" +
-	"\x0econtainer_name\x18\x02 \x01(\tR\rcontainerName\"\xe2\x03\n" +
+	"\x0econtainer_name\x18\x02 \x01(\tR\rcontainerName\x12'\n" +
+	"\x0fversion_command\x18\x03 \x03(\tR\x0eversionCommand\"\x87\x04\n" +
 	"\x15RuntimeStatusResponse\x12\x1f\n" +
 	"\vinstance_id\x18\x01 \x01(\tR\n" +
 	"instanceId\x12\x1b\n" +
@@ -6874,7 +6969,8 @@ const file_agent_proto_rawDesc = "" +
 	"\n" +
 	"last_error\x18\r \x01(\tR\tlastError\x12;\n" +
 	"\vobserved_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"observedAt\"p\n" +
+	"observedAt\x12#\n" +
+	"\rimage_version\x18\x0f \x01(\tR\fimageVersion\"p\n" +
 	"\x12RuntimeLogsRequest\x12\x1f\n" +
 	"\vinstance_id\x18\x01 \x01(\tR\n" +
 	"instanceId\x12%\n" +
@@ -7416,6 +7512,7 @@ func file_agent_proto_init() {
 	if File_agent_proto != nil {
 		return
 	}
+	file_agent_proto_msgTypes[16].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

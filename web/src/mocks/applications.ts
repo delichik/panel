@@ -1,8 +1,23 @@
 import type { ApiEnvelope } from '@/api/client';
 import type { ApplicationDto, ApplicationEditSession, ApplicationFile, ApplicationRuntime, ApplicationSummaryDto, Diagnostic, LogResult, OperationResult } from '@/types/applications';
-import type { ConfigRecord, FacilityEditSession, FacilityRouteDomain, FacilityRoutePath, ProxyPlaneSaveInput, ProxyPlaneState, ReverseProxyConfig, RouteSummary, StaticAsset, StorageShareConfig, StorageShareSaveInput } from '@/types/facilityApps';
+import type { ConfigRecord, FacilityEditSession, FacilityRouteDomain, FacilityRoutePath, FacilitySettings, FacilitySettingsSaveInput, ProxyImageActionResponse, ProxyImageRollbackInput, ProxyImageState, ProxyPlaneSaveInput, ProxyPlaneState, ReverseProxyConfig, RouteSummary, StaticAsset, StorageShareConfig, StorageShareSaveInput } from '@/types/facilityApps';
 
 const now = '2026-08-01T08:00:00.000Z';
+
+/** Mirror of the per-domain nginx size check in `views/applications/model.ts`. */
+const MOCK_NGINX_SIZE_PATTERN = /^\d+[kKmMgG]?$/;
+function isValidMockClientMaxBodySize(value: string | undefined): boolean {
+  const raw = (value ?? '').trim();
+  if (raw === '') return true;
+  if (!MOCK_NGINX_SIZE_PATTERN.test(raw)) return false;
+  const match = /^(\d+)([kKmMgG]?)$/.exec(raw);
+  if (!match) return false;
+  const amount = Number(match[1]);
+  const unit = (match[2] ?? '').toLowerCase();
+  const multiplier = unit === 'k' ? 1024 : unit === 'm' ? 1024 ** 2 : unit === 'g' ? 1024 ** 3 : 1;
+  const bytes = amount * multiplier;
+  return Number.isFinite(bytes) && bytes >= 1024 && bytes <= 1024 ** 3;
+}
 
 export const mockApplications: ApplicationDto[] = [
   {
@@ -452,18 +467,46 @@ export let mockFacility: ReverseProxyConfig = {
       originServerIds: ['srv-edge-sgp', 'srv-api-hkg'],
       anyAccess: { enabled: true, strategy: 'round_robin' },
       paths: [{ path: '/', ruleType: 'static', sourceType: 'uploaded_bundle', assetName: 'docs bundle' }],
+      httpsEnabled: true,
+      http2Enabled: true,
+      http3Enabled: false,
+      httpPortMode: '',
+      customServerDirectives: [],
+    },
+    {
+      domain: 'shop.example.test',
+      originServerIds: ['srv-edge-sgp', 'srv-api-hkg'],
+      anyAccess: { enabled: true, strategy: 'round_robin' },
+      paths: [{ path: '/', ruleType: 'proxy_pass', sourceType: '', proxyUrl: 'http://127.0.0.1:8080' }],
+      httpsEnabled: true,
+      http2Enabled: true,
+      http3Enabled: false,
+      httpPortMode: 'redirect',
+      hstsEnabled: true,
+      clientMaxBodySize: '100m',
+      customServerDirectives: [],
     },
     {
       domain: 'downloads.example.test',
       originServerIds: ['srv-api-hkg-02'],
       anyAccess: { enabled: false },
       paths: [{ path: '/releases', ruleType: 'static', sourceType: 'uploaded_file', assetName: 'release index' }],
+      httpsEnabled: false,
+      http2Enabled: false,
+      http3Enabled: false,
+      httpPortMode: 'serve',
+      customServerDirectives: [],
     },
     {
       domain: 'status.example.test',
       originServerIds: ['srv-edge-sgp-02'],
       anyAccess: { enabled: true, strategy: 'first' },
       paths: [{ path: '/', ruleType: 'static', sourceType: 'uploaded_file', assetName: 'status page' }],
+      httpsEnabled: true,
+      http2Enabled: true,
+      http3Enabled: true,
+      httpPortMode: '',
+      customServerDirectives: [],
     },
   ],
   staticAssets: [
@@ -472,14 +515,14 @@ export let mockFacility: ReverseProxyConfig = {
     { name: 'status page', kind: 'uploaded_file', contentMode: 'text', filename: 'status.html', size: 8192, sha256: 'sha-status', createdAt: now, updatedAt: now },
   ],
   routeSummaries: [
-    { domain: 'panel.example.test', path: '/', source: 'system_panel', serverIds: ['srv-edge-sgp'], httpsStatus: 'domain_certificate', certificateName: 'panel.example.test' },
-    { domain: 'shop.example.test', path: '/', source: 'application', serverIds: ['srv-edge-sgp', 'srv-api-hkg'], httpsStatus: 'domain_certificate', applicationId: 'app-storefront', applicationName: 'storefront' },
-    { domain: 'api.example.test', path: '/v1', source: 'application', serverIds: ['srv-api-hkg', 'srv-api-hkg-02'], httpsStatus: 'domain_certificate', applicationId: 'app-api', applicationName: 'public-api' },
-    { domain: 'billing.example.test', path: '/', source: 'application', serverIds: ['srv-api-hkg', 'srv-edge-sgp'], httpsStatus: 'domain_certificate', applicationId: 'app-billing', applicationName: 'billing-portal' },
-    { domain: 'hooks.example.test', path: '/v1/hooks', source: 'application', serverIds: ['srv-edge-sgp', 'srv-edge-lax'], httpsStatus: 'domain_certificate', applicationId: 'app-webhook', applicationName: 'webhook-ingress' },
-    { domain: 'static.example.test', path: '/', source: 'static_asset', serverIds: ['srv-edge-sgp', 'srv-api-hkg'], httpsStatus: 'self_signed_certificate' },
-    { domain: 'downloads.example.test', path: '/releases', source: 'static_asset', serverIds: ['srv-api-hkg-02'], httpsStatus: 'missing' },
-    { domain: 'status.example.test', path: '/', source: 'static_asset', serverIds: ['srv-edge-sgp-02'], httpsStatus: 'domain_certificate', certificateName: 'status.example.test' },
+    { domain: 'panel.example.test', path: '/', source: 'system_panel', serverIds: ['srv-edge-sgp'], httpsStatus: 'domain_certificate', httpsEnabled: true, http2Enabled: true, http3Enabled: false, effectiveHTTPS: true, certificateName: 'panel.example.test' },
+    { domain: 'shop.example.test', path: '/', source: 'application', serverIds: ['srv-edge-sgp', 'srv-api-hkg'], httpsStatus: 'domain_certificate', httpsEnabled: true, http2Enabled: true, http3Enabled: true, effectiveHTTPS: true, applicationId: 'app-storefront', applicationName: 'storefront' },
+    { domain: 'api.example.test', path: '/v1', source: 'application', serverIds: ['srv-api-hkg', 'srv-api-hkg-02'], httpsStatus: 'domain_certificate', httpsEnabled: true, http2Enabled: true, http3Enabled: false, effectiveHTTPS: true, applicationId: 'app-api', applicationName: 'public-api' },
+    { domain: 'billing.example.test', path: '/', source: 'application', serverIds: ['srv-api-hkg', 'srv-edge-sgp'], httpsStatus: 'domain_certificate', httpsEnabled: true, http2Enabled: true, http3Enabled: false, effectiveHTTPS: true, applicationId: 'app-billing', applicationName: 'billing-portal' },
+    { domain: 'hooks.example.test', path: '/v1/hooks', source: 'application', serverIds: ['srv-edge-sgp', 'srv-edge-lax'], httpsStatus: 'domain_certificate', httpsEnabled: true, http2Enabled: false, http3Enabled: false, effectiveHTTPS: true, applicationId: 'app-webhook', applicationName: 'webhook-ingress' },
+    { domain: 'static.example.test', path: '/', source: 'static_asset', serverIds: ['srv-edge-sgp', 'srv-api-hkg'], httpsStatus: 'self_signed_certificate', httpsEnabled: true, http2Enabled: true, http3Enabled: false, effectiveHTTPS: true },
+    { domain: 'downloads.example.test', path: '/releases', source: 'static_asset', serverIds: ['srv-api-hkg-02'], httpsStatus: 'missing', httpsEnabled: false, http2Enabled: false, http3Enabled: false, effectiveHTTPS: false },
+    { domain: 'status.example.test', path: '/', source: 'static_asset', serverIds: ['srv-edge-sgp-02'], httpsStatus: 'domain_certificate', httpsEnabled: true, http2Enabled: true, http3Enabled: false, effectiveHTTPS: true, certificateName: 'status.example.test' },
   ],
   applicationRoutes: [
     { applicationId: 'app-storefront', applicationName: 'storefront', deploymentMode: 'selected', deploymentServers: ['srv-edge-sgp', 'srv-api-hkg'], routes: [{ domain: 'shop.example.test', targetPort: 8080, originServerIds: ['srv-edge-sgp', 'srv-api-hkg'], paths: [{ path: '/' }] }] },
@@ -488,6 +531,35 @@ export let mockFacility: ReverseProxyConfig = {
     { applicationId: 'app-webhook', applicationName: 'webhook-ingress', deploymentMode: 'selected', deploymentServers: ['srv-edge-sgp', 'srv-edge-lax'], routes: [{ domain: 'hooks.example.test', targetPort: 8091, originServerIds: ['srv-edge-sgp', 'srv-edge-lax'], paths: [{ path: '/v1/hooks' }] }] },
     { applicationId: 'app-internal-docs', applicationName: 'internal-docs', deploymentMode: 'selected', deploymentServers: ['srv-observability-ams'], routes: [{ domain: 'docs.example.test', targetPort: 8080, originServerIds: ['srv-observability-ams'], paths: [{ path: '/' }] }] },
   ],
+  settings: {
+    httpPortMode: 'serve',
+    imageAutoUpdateEnabled: true,
+    imageUpdateIntervalSeconds: 0,
+    customHttpDirectives: [],
+    hsts: { enabled: false, maxAgeSeconds: 31536000, includeSubDomains: false },
+    serverTokens: 'off',
+    clientMaxBodySize: '50m',
+    tlsMinVersion: '1.2',
+  },
+  image: {
+    reference: 'nginx:1.28-alpine',
+    targetDigest: 'sha256:nginx-current',
+    observedDigest: 'sha256:nginx-current',
+    previousDigest: '',
+    status: 'update_available',
+    updateAvailable: true,
+    pinned: false,
+    imageVersion: '1.28.0',
+    autoUpdateFailures: 0,
+    failedDigest: '',
+    checkedAt: now,
+    updatedAt: now,
+    lastError: '',
+    servers: [
+      { serverId: 'srv-edge-sgp', serverName: 'Singapore', reference: 'nginx:1.28-alpine', targetDigest: 'sha256:nginx-current', observedDigest: 'sha256:nginx-current', previousDigest: '', status: 'update_available', pinned: false, imageVersion: '1.28.0', autoUpdateFailures: 0, failedDigest: '', checkedAt: now, lastError: '' },
+      { serverId: 'srv-api-hkg', serverName: 'Hong Kong', reference: 'nginx:1.28-alpine', targetDigest: 'sha256:nginx-current', observedDigest: 'sha256:nginx-stale', previousDigest: '', status: 'update_available', pinned: false, imageVersion: '1.27.5', autoUpdateFailures: 0, failedDigest: '', checkedAt: now, lastError: '' },
+    ],
+  },
   operation: { id: 'op-facility', applicationId: 'facility-reverse-proxy', type: 'deploy', status: 'deployed', generation: 8, createdAt: now, updatedAt: now },
   updatedAt: now,
   routes: 12,
@@ -512,7 +584,14 @@ function cloneFacilityDomainValue(domain: FacilityRouteDomain): FacilityRouteDom
         responseHeaders: (path.options.responseHeaders ?? []).map((header) => ({ ...header })),
       } : undefined,
     })),
+    httpsEnabled: domain.httpsEnabled !== false,
+    http2Enabled: domain.http2Enabled !== false,
+    http3Enabled: domain.http3Enabled === true,
+    httpPortMode: domain.httpPortMode === 'serve' || domain.httpPortMode === 'redirect' ? domain.httpPortMode : '',
+    clientMaxBodySize: (domain.clientMaxBodySize ?? '').trim(),
+    customServerDirectives: [...(domain.customServerDirectives ?? [])],
   };
+  if (typeof domain.hstsEnabled === 'boolean') cloned.hstsEnabled = domain.hstsEnabled;
   if (domain.anyAccess?.originPriority) cloned.anyAccess.originPriority = [...domain.anyAccess.originPriority];
   if (typeof domain.version === 'number') cloned.version = domain.version;
   return cloned;
@@ -563,6 +642,11 @@ function initialFacilityRecords(): ConfigRecord[] {
           originServerIds: [...(route.originServerIds ?? [])],
           anyAccess: { enabled: false, strategy: 'round_robin', relayServerIds: [] },
           paths,
+          httpsEnabled: true,
+          http2Enabled: true,
+          http3Enabled: false,
+          clientMaxBodySize: '',
+          customServerDirectives: [],
         },
         applicationId: application.applicationId,
         applicationName: application.applicationName,
@@ -591,12 +675,19 @@ function syncMockFacilityFromRecords() {
   const domains = facilityRecords.map((record) => ({ ...cloneFacilityDomainValue(record.domain), version: record.version }));
   const routeSummaries: RouteSummary[] = mockConfigRecords.flatMap((record) => (record.domain.paths ?? []).map((path) => {
     const legacy = legacyRouteStatus.get(`${record.domain.domain}${path.path}`);
+    const httpsEnabled = record.domain.httpsEnabled !== false;
+    const http2Enabled = record.domain.http2Enabled !== false && httpsEnabled;
+    const http3Enabled = record.domain.http3Enabled === true && httpsEnabled;
     return {
       domain: record.domain.domain,
       path: path.path,
       source: record.kind === 'application_route' ? 'application' : 'static_asset',
       serverIds: [...(record.domain.originServerIds ?? [])],
-      httpsStatus: legacy?.httpsStatus ?? 'missing',
+      httpsStatus: httpsEnabled ? (legacy?.httpsStatus === 'missing' ? 'missing' : legacy?.httpsStatus ?? 'missing') : 'disabled',
+      httpsEnabled,
+      http2Enabled,
+      http3Enabled,
+      effectiveHTTPS: httpsEnabled && legacy?.httpsStatus !== 'missing',
       ...(legacy?.certificateId ? { certificateId: legacy.certificateId } : {}),
       ...(legacy?.certificateName ? { certificateName: legacy.certificateName } : {}),
       ...(record.applicationId ? { applicationId: record.applicationId } : {}),
@@ -662,9 +753,162 @@ export function saveMockProxyPlane(input: ProxyPlaneSaveInput): ProxyPlaneState 
   return mockProxyPlane;
 }
 
+function normalizeMockImageUpdateIntervalSeconds(value: unknown): number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 600 ? value : 0;
+}
+
+const defaultFacilitySettings: FacilitySettings = {
+  httpPortMode: 'serve',
+  imageAutoUpdateEnabled: true,
+  imageUpdateIntervalSeconds: 0,
+  customHttpDirectives: [],
+  hsts: { enabled: false, maxAgeSeconds: 31536000, includeSubDomains: false },
+  serverTokens: 'off',
+  clientMaxBodySize: '50m',
+  tlsMinVersion: '1.2',
+};
+
+/** PUT /facility-apps/reverse-proxy/settings：CAS（可选 version）后返回完整配置。 */
+export function saveMockFacilitySettings(input: FacilitySettingsSaveInput): ReverseProxyConfig {
+  const current = mockFacility.settings ?? defaultFacilitySettings;
+  mockFacility = {
+    ...mockFacility,
+    version: mockFacility.version + 1,
+    settings: {
+      httpPortMode: input.httpPortMode === 'redirect' ? 'redirect' : 'serve',
+      imageAutoUpdateEnabled: input.imageAutoUpdateEnabled !== false,
+      imageUpdateIntervalSeconds: normalizeMockImageUpdateIntervalSeconds(input.imageUpdateIntervalSeconds),
+      customHttpDirectives: [...(input.customHttpDirectives ?? [])],
+      hsts: { ...current.hsts, ...(input.hsts ?? {}) },
+      serverTokens: input.serverTokens === 'on' ? 'on' : 'off',
+      clientMaxBodySize: (input.clientMaxBodySize ?? '').trim() || '50m',
+      tlsMinVersion: input.tlsMinVersion === '1.3' ? '1.3' : '1.2',
+    },
+    updatedAt: now,
+  };
+  return mockFacility;
+}
+
+/** POST /facility-apps/reverse-proxy/image/check → 202 {taskId}，并刷新投影状态。 */
+export function mockCheckFacilityImage(): ProxyImageActionResponse {
+  const image = mockFacility.image;
+  if (image) {
+    mockFacility = {
+      ...mockFacility,
+      image: {
+        ...image,
+        checkedAt: now,
+        updatedAt: now,
+        status: image.updateAvailable ? 'update_available' : 'up_to_date',
+        servers: image.servers.map((server) => ({ ...server, checkedAt: now })),
+      },
+      updatedAt: now,
+    };
+  }
+  return { taskId: `task-facility-image-check-${Date.now()}` };
+}
+
+/** POST /facility-apps/reverse-proxy/image/update（confirm 必须为 true）。 */
+export function mockUpdateFacilityImage(): ProxyImageActionResponse {
+  const image = mockFacility.image;
+  if (image) {
+    mockFacility = {
+      ...mockFacility,
+      image: {
+        ...image,
+        previousDigest: image.observedDigest,
+        observedDigest: image.targetDigest,
+        status: 'up_to_date',
+        updateAvailable: false,
+        autoUpdateFailures: 0,
+        failedDigest: '',
+        lastError: '',
+        updatedAt: now,
+        servers: image.servers.map((server) => ({
+          ...server,
+          previousDigest: server.observedDigest,
+          observedDigest: server.targetDigest,
+          status: 'up_to_date',
+          autoUpdateFailures: 0,
+          failedDigest: '',
+          lastError: '',
+        })),
+      },
+      updatedAt: now,
+    };
+  }
+  return { taskId: `task-facility-image-update-${Date.now()}` };
+}
+
+/** POST /facility-apps/reverse-proxy/image/rollback：回到上一 digest 并固定（pinned）。 */
+export function mockRollbackFacilityImage(input: ProxyImageRollbackInput): ProxyImageActionResponse {
+  const image = mockFacility.image;
+  if (!image) return { skipped: true };
+  const target = (input.digest ?? '').trim() || image.previousDigest || '';
+  if (!target) {
+    // 与后端一致：没有可回滚目标时是幂等空操作（200 + skipped）。
+    return { skipped: true, pinned: Boolean(image.pinned), status: image.status };
+  }
+  const previousObserved = image.observedDigest;
+  mockFacility = {
+    ...mockFacility,
+    image: {
+      ...image,
+      targetDigest: target,
+      observedDigest: target,
+      previousDigest: previousObserved,
+      status: 'pinned',
+      updateAvailable: false,
+      pinned: true,
+      lastError: '',
+      updatedAt: now,
+      servers: image.servers.map((server) => ({
+        ...server,
+        previousDigest: server.observedDigest,
+        targetDigest: target,
+        observedDigest: target,
+        status: 'pinned',
+        pinned: true,
+        lastError: '',
+      })),
+    },
+    updatedAt: now,
+  };
+  return { taskId: `task-facility-image-rollback-${Date.now()}` };
+}
+
+/** POST /facility-apps/reverse-proxy/image/resume：清除 pinned，恢复自动更新。 */
+export function mockResumeFacilityImage(): ProxyImageState {
+  const image = mockFacility.image;
+  if (!image) return { reference: '', status: 'unknown', servers: [] };
+  const resumed: ProxyImageState = {
+    ...image,
+    status: 'up_to_date',
+    pinned: false,
+    autoUpdatePaused: false,
+    autoUpdateFailures: 0,
+    failedDigest: '',
+    lastError: '',
+    updatedAt: now,
+    servers: image.servers.map((server) => ({
+      ...server,
+      status: 'up_to_date',
+      pinned: false,
+      autoUpdatePaused: false,
+      autoUpdateFailures: 0,
+      failedDigest: '',
+      lastError: '',
+    })),
+  };
+  mockFacility = { ...mockFacility, image: resumed, updatedAt: now };
+  return resumed;
+}
+
 for (const app of mockApplications) {
   app.persistentServers = app.persistentPath ? [...app.deploymentServers] : [];
   app.hasPersistentData = Boolean(app.persistentPath || app.persistentServers.length);
+  // Object-level auto-update开关默认开；旧数据缺字段时归一化为 true。
+  app.autoUpdateEnabled = app.autoUpdateEnabled !== false;
 }
 
 export function mockApplicationSummaries(): ApplicationSummaryDto[] {
@@ -818,6 +1062,7 @@ export function beginAppSession(applicationId?: string): ApplicationEditSession 
     draft: {
       name: app?.name ?? '',
       enabled: app?.enabled ?? true,
+      autoUpdateEnabled: app?.autoUpdateEnabled !== false,
       specYaml: app?.specYaml ?? '',
       deploymentMode: app?.deploymentMode === 'selected' ? 'selected' : 'all',
       deploymentServers: app?.deploymentServers ?? [],
@@ -928,6 +1173,9 @@ export function appDiagnostics(session: ApplicationEditSession): Diagnostic[] {
   if (!session.draft.name.trim()) issues.push({ code: 'application_name_required', severity: 'error', field: 'name', message: 'Application name is required.' });
   if (session.draft.name.includes('conflict')) issues.push({ code: 'resource_version_conflict', severity: 'error', message: 'Application changed while editing.' });
   if (session.draft.specYaml.length > 800) issues.push({ code: 'application_long_config', severity: 'warning', field: 'specYaml', message: 'Configuration is long; preview before committing.' });
+  if ((session.draft.reverseProxy ?? []).some((rule) => !isValidMockClientMaxBodySize(rule.clientMaxBodySize))) {
+    issues.push({ code: 'application_reverse_proxy_client_max_body_size_invalid', severity: 'error', field: 'reverseProxy', message: 'A reverse-proxy request body limit must use nginx size syntax between 1k and 1024m.' });
+  }
   return issues;
 }
 
@@ -942,6 +1190,7 @@ export function commitAppSession(id: string) {
     kind: 'application',
     name: session.draft.name,
     enabled: session.draft.enabled,
+    autoUpdateEnabled: session.draft.autoUpdateEnabled !== false,
     specYaml: session.draft.specYaml,
     deploymentMode: session.draft.deploymentMode,
     deploymentServers: session.draft.deploymentServers,
@@ -1074,6 +1323,9 @@ export function facilityDiagnostics(session: FacilityEditSession): Diagnostic[] 
   if (!(session.draft.domain ?? '').trim()) issues.push({ code: 'facility_domain_required', severity: 'error', field: 'domain', message: 'Domain is required.' });
   if ((session.draft.domain ?? '').includes('conflict')) issues.push({ code: 'facility_domain_owner_conflict', severity: 'error', message: 'Domain is already used by another route.' });
   if (!(session.draft.originServerIds ?? []).length) issues.push({ code: 'facility_origin_servers_required', severity: 'error', field: 'originServerIds', message: 'At least one origin server is required.' });
+  if (!isValidMockClientMaxBodySize(session.draft.clientMaxBodySize)) {
+    issues.push({ code: 'facility_client_max_body_size_invalid', severity: 'error', field: 'clientMaxBodySize', message: 'The request body limit must use nginx size syntax between 1k and 1024m.' });
+  }
   if (JSON.stringify(session.draft).length > 1200) issues.push({ code: 'facility_long_config', severity: 'warning', message: 'Gateway configuration is long.' });
   return issues;
 }

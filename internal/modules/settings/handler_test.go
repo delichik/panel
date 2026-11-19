@@ -98,6 +98,8 @@ func assertCompleteRuntimeSettings(t *testing.T, settings RuntimeSettings) {
 		"certificates",
 		"panel",
 		"agent",
+		"imageRegistry",
+		"autoUpdate",
 		"jwtSecretConfigured",
 	} {
 		if _, ok := decoded[key]; !ok {
@@ -106,7 +108,7 @@ func assertCompleteRuntimeSettings(t *testing.T, settings RuntimeSettings) {
 	}
 }
 
-// TestRuntimePartitionHandlersApplyOnlyTheirSection 验证五个分区端点各自只改变
+// TestRuntimePartitionHandlersApplyOnlyTheirSection 验证各分区端点各自只改变
 // 本分区字段、返回完整 RuntimeSettings，且回填后的内存快照与持久化一致。
 func TestRuntimePartitionHandlersApplyOnlyTheirSection(t *testing.T) {
 	cases := []struct {
@@ -298,10 +300,13 @@ func TestRuntimePartitionHandlersRejectInvalidValues(t *testing.T) {
 	}
 }
 
-// TestRuntimePartitionRoutesRegistered 验证五条分区 PUT 与既有 GET 均已注册，
+// TestRuntimePartitionRoutesRegistered 验证各分区 PUT 与既有 GET 均已注册，
 // 且整体 PUT /api/v1/settings/runtime 已删除（同路径只剩 GET，PUT 返回 405）。
 func TestRuntimePartitionRoutesRegistered(t *testing.T) {
 	svc := newTestService(t)
+	// 手动「立即运行一次」需要一个可注入的 runner；路由注册测试只关心 202/405
+	// 语义，用返回固定 taskId 的假实现。
+	svc.SetAutoUpdateRunner(&fakeAutoUpdateRunner{taskID: "task-route-manual"})
 	mux := http.NewServeMux()
 	NewHandler(svc).RegisterRoutes(mux, func(next http.Handler) http.Handler { return next })
 
@@ -311,7 +316,9 @@ func TestRuntimePartitionRoutesRegistered(t *testing.T) {
 		"/api/v1/settings/runtime/security",
 		"/api/v1/settings/runtime/certificates",
 		"/api/v1/settings/runtime/agent",
+		"/api/v1/settings/runtime/image-registry",
 		"/api/v1/settings/runtime/branding",
+		"/api/v1/settings/runtime/auto-update",
 	} {
 		method := http.MethodPut
 		var body io.Reader = strings.NewReader(`{}`)
@@ -325,8 +332,24 @@ func TestRuntimePartitionRoutesRegistered(t *testing.T) {
 		}
 	}
 
-	// 整体 PUT 已随分区拆分删除：不得再接受整套 runtime 写入。
+	// 手动「立即运行一次」：POST，无请求体时沿用当前设置；两开关默认关会返回
+	// 422，因此这里显式打开覆盖以断言路由真的挂载并返回 202。
 	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/settings/runtime/auto-update/run",
+		strings.NewReader(`{"appsEnabled":true}`)))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("POST /api/v1/settings/runtime/auto-update/run status = %d, want 202; body = %s", rec.Code, rec.Body.String())
+	}
+
+	// 手动立即运行端点只接受 POST：GET 必须返回 405。
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/settings/runtime/auto-update/run", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET /api/v1/settings/runtime/auto-update/run status = %d, want 405", rec.Code)
+	}
+
+	// 整体 PUT 已随分区拆分删除：不得再接受整套 runtime 写入。
+	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/settings/runtime", strings.NewReader(`{}`)))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("PUT /api/v1/settings/runtime status = %d, want 405 (route removed)", rec.Code)

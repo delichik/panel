@@ -972,6 +972,18 @@ func (s *Service) commitFacilityManifestDB(ctx context.Context, manifest facilit
 	if err != nil {
 		return err
 	}
+	transport := normalized.Transport()
+	httpPortMode := storedHTTPPortMode(normalized.HTTPPortMode)
+	hstsEnabled := storedHSTSEnabled(normalized.HSTSEnabled)
+	clientMaxBodySize := storedClientMaxBodySize(normalized.ClientMaxBodySize)
+	customDirectives := normalized.CustomServerDirectives
+	if customDirectives == nil {
+		customDirectives = []string{}
+	}
+	directivesRaw, err := json.Marshal(customDirectives)
+	if err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -996,11 +1008,13 @@ func (s *Service) commitFacilityManifestDB(ctx context.Context, manifest facilit
 		if manifest.BaseVersion != 0 {
 			return panelerr.WithDetails(panelerr.Conflict("resource_version_conflict", "facility configuration changed while editing"), map[string]any{"expectedVersion": manifest.BaseVersion, "currentVersion": 0})
 		}
-		result, err = tx.ExecContext(ctx, `INSERT INTO reverse_proxy_routes(domain,app_id,version,origin_server_ids,any_access_json,target_port,paths_json,created_at,updated_at) VALUES(?,?,1,?,?,0,?,?,?)`, manifest.RecordID, proxyApplicationID, string(originsRaw), string(anyRaw), string(pathsRaw), now, now)
+		result, err = tx.ExecContext(ctx, `INSERT INTO reverse_proxy_routes(domain,app_id,version,origin_server_ids,any_access_json,target_port,paths_json,https_enabled,http2_enabled,http3_enabled,custom_server_directives,http_port_mode,hsts_enabled,client_max_body_size,created_at,updated_at) VALUES(?,?,1,?,?,0,?,?,?,?,?,?,?,?,?,?)`,
+			manifest.RecordID, proxyApplicationID, string(originsRaw), string(anyRaw), string(pathsRaw), boolInt(transport.HTTPS), boolInt(transport.HTTP2), boolInt(transport.HTTP3), string(directivesRaw), httpPortMode, hstsEnabled, clientMaxBodySize, now, now)
 	} else if currentVersion != manifest.BaseVersion {
 		return panelerr.WithDetails(panelerr.Conflict("resource_version_conflict", "facility configuration changed while editing"), map[string]any{"expectedVersion": manifest.BaseVersion, "currentVersion": currentVersion})
 	} else {
-		result, err = tx.ExecContext(ctx, `UPDATE reverse_proxy_routes SET version=version+1,origin_server_ids=?,any_access_json=?,paths_json=?,updated_at=? WHERE domain=? AND version=? AND app_id IN (?,?)`, string(originsRaw), string(anyRaw), string(pathsRaw), now, manifest.RecordID, manifest.BaseVersion, proxyApplicationID, "facility_reverse_proxy")
+		result, err = tx.ExecContext(ctx, `UPDATE reverse_proxy_routes SET version=version+1,origin_server_ids=?,any_access_json=?,paths_json=?,https_enabled=?,http2_enabled=?,http3_enabled=?,custom_server_directives=?,http_port_mode=?,hsts_enabled=?,client_max_body_size=?,updated_at=? WHERE domain=? AND version=? AND app_id IN (?,?)`,
+			string(originsRaw), string(anyRaw), string(pathsRaw), boolInt(transport.HTTPS), boolInt(transport.HTTP2), boolInt(transport.HTTP3), string(directivesRaw), httpPortMode, hstsEnabled, clientMaxBodySize, now, manifest.RecordID, manifest.BaseVersion, proxyApplicationID, "facility_reverse_proxy")
 	}
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {

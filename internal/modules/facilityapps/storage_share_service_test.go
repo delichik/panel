@@ -69,15 +69,15 @@ type fakeStorageAgent struct {
 	configureEnabled      []bool
 	configureAllowedHosts [][]string
 	configureErr          error
-	ensureCalls      int
-	ensureErr        error
-	archiveErr       error
-	deleteErr        error
-	archiveContent   []byte
-	storageStatus    agentcontract.StorageExportStatus
-	storageStatusErr error
-	mountStatus      agentcontract.StorageMountStatus
-	mountStatusErr   error
+	ensureCalls           int
+	ensureErr             error
+	archiveErr            error
+	deleteErr             error
+	archiveContent        []byte
+	storageStatus         agentcontract.StorageExportStatus
+	storageStatusErr      error
+	mountStatus           agentcontract.StorageMountStatus
+	mountStatusErr        error
 }
 
 func (f *fakeStorageAgent) StorageEnsureDirectory(context.Context, string, string) error {
@@ -117,6 +117,18 @@ func (f *fakeStorageAgent) RuntimeStop(context.Context, string, agentcontract.Ru
 func (f *fakeStorageAgent) DockerImagePull(context.Context, string, string) error { return nil }
 func (f *fakeStorageAgent) DockerContainerAction(context.Context, string, string, string) error {
 	return nil
+}
+func (f *fakeStorageAgent) DockerContainers(context.Context, string) ([]agentcontract.DockerContainer, error) {
+	return nil, nil
+}
+func (f *fakeStorageAgent) DockerImages(context.Context, string) ([]agentcontract.DockerImage, error) {
+	return nil, nil
+}
+func (f *fakeStorageAgent) RuntimeStatus(context.Context, string, string, string) (agentcontract.RuntimeStatusResponse, error) {
+	return agentcontract.RuntimeStatusResponse{}, nil
+}
+func (f *fakeStorageAgent) RuntimeStatusWithVersion(context.Context, string, string, string, []string) (agentcontract.RuntimeStatusResponse, error) {
+	return agentcontract.RuntimeStatusResponse{}, nil
 }
 
 type recordingOperationQueue struct {

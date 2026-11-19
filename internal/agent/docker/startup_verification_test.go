@@ -120,6 +120,12 @@ func TestReconcileRequiresStableStartup(t *testing.T) {
 					case req.Method == http.MethodPost && strings.HasSuffix(req.URL.Path, "/start"):
 						startCalls++
 						code = http.StatusNoContent
+					case req.Method == http.MethodGet && req.URL.Path == "/containers/container-1/json":
+						// Failure evidence re-inspects the immutable container ID when
+						// the last verify sample is non-terminal (startup_logs). The
+						// empty object mirrors "no additional evidence"; the request is
+						// expected and must not be treated as a contract violation.
+						body = `{}`
 					case req.Method == http.MethodPost && req.URL.Path == "/containers/create":
 						body = `{"Id":"container-1"}`
 					case req.Method == http.MethodGet && req.URL.Path == "/networks/panel-apps":

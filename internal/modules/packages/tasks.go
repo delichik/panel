@@ -46,6 +46,17 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 		ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed,
 		Execute:           s.RunUpgradeAllTask,
 	})
+	// PKG-API-011：仅安全升级任务。与全部/选中升级一样不可取消且可重试，
+	// 执行时实时分类，空集合直接完成。
+	taskSvc.MustRegister(tasks.Definition{
+		Type:              TaskPackageUpgradeSecurity,
+		Summary:           "Upgrading security packages",
+		AllowRunNow:       true,
+		AllowRetry:        true,
+		DisallowCancel:    true,
+		ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed,
+		Execute:           s.RunUpgradeSecurityTask,
+	})
 }
 
 // StartPeriodic starts the module-owned package refresh scheduler loop.
@@ -55,7 +66,6 @@ func (s *Service) StartPeriodic(ctx context.Context, taskSvc *tasks.Service) {
 	}
 	tasks.StartSchedulerLoop(ctx, taskSvc, "package_refresh", packageRefreshInterval, "packages")
 }
-
 
 func (s *Service) CollectScheduledPackageRefreshInputs(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
 	if s == nil || s.servers == nil {

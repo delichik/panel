@@ -13,6 +13,11 @@ import (
 
 type service interface {
 	GetReverseProxy(ctx context.Context) (ReverseProxyConfig, error)
+	SaveProxySettings(ctx context.Context, in ProxySettingsSaveInput) (ReverseProxyConfig, error)
+	CheckReverseProxyImage(ctx context.Context) (ProxyImageAction, error)
+	UpdateReverseProxyImage(ctx context.Context, in ProxyImageUpdateInput) (ProxyImageAction, error)
+	RollbackReverseProxyImage(ctx context.Context, in ProxyImageRollbackInput) (ProxyImageAction, error)
+	ResumeReverseProxyImage(ctx context.Context, in ProxyImageResumeInput) (ProxyImageStatus, error)
 	GetProxyPlane(ctx context.Context) (ProxyPlaneState, error)
 	SaveProxyPlane(ctx context.Context, in ProxyPlaneSaveInput) (ProxyPlaneState, error)
 	ListConfigRecords(ctx context.Context) ([]ConfigRecord, error)
@@ -177,6 +182,80 @@ func NewHandler(service service) *Handler {
 
 func (h *Handler) ReverseProxy(w http.ResponseWriter, r *http.Request) {
 	result, err := h.service.GetReverseProxy(r.Context())
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) SaveReverseProxySettings(w http.ResponseWriter, r *http.Request) {
+	var in ProxySettingsSaveInput
+	if !httpx.Decode(w, r, &in) {
+		return
+	}
+	result, err := h.service.SaveProxySettings(r.Context(), in)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) CheckReverseProxyImage(w http.ResponseWriter, r *http.Request) {
+	result, err := h.service.CheckReverseProxyImage(r.Context())
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, result)
+}
+
+func (h *Handler) UpdateReverseProxyImage(w http.ResponseWriter, r *http.Request) {
+	var in ProxyImageUpdateInput
+	if r.Body != nil && r.ContentLength != 0 {
+		if !httpx.Decode(w, r, &in) {
+			return
+		}
+	}
+	result, err := h.service.UpdateReverseProxyImage(r.Context(), in)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, result)
+}
+
+// RollbackReverseProxyImage 手动回滚入口代理镜像到 previous digest（或显式
+// digest）并固定版本。幂等空操作返回 200 + skipped，创建任务返回 202。
+func (h *Handler) RollbackReverseProxyImage(w http.ResponseWriter, r *http.Request) {
+	var in ProxyImageRollbackInput
+	if r.Body != nil && r.ContentLength != 0 {
+		if !httpx.Decode(w, r, &in) {
+			return
+		}
+	}
+	result, err := h.service.RollbackReverseProxyImage(r.Context(), in)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	if result.Skipped {
+		httpx.JSON(w, http.StatusOK, result)
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, result)
+}
+
+// ResumeReverseProxyImage 清除 pinned 与自动更新失败退避，恢复自动更新。
+func (h *Handler) ResumeReverseProxyImage(w http.ResponseWriter, r *http.Request) {
+	var in ProxyImageResumeInput
+	if r.Body != nil && r.ContentLength != 0 {
+		if !httpx.Decode(w, r, &in) {
+			return
+		}
+	}
+	result, err := h.service.ResumeReverseProxyImage(r.Context(), in)
 	if err != nil {
 		httpx.Error(w, err)
 		return
