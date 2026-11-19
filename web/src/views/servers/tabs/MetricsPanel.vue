@@ -68,6 +68,11 @@ function seriesHasData(series: MetricSeriesData[]): boolean {
   return series.some((item) => item.points.some((point) => point.value !== null));
 }
 
+/** 百分比统计项：标签 + 值；无有效样本显示统一占位，不伪造 0。 */
+function percentStat(label: string, value: number | null): string {
+  return `${label} ${value === null ? t('common.notAvailable') : formatPercent(value, 1)}`;
+}
+
 function pairedAverage(series: MetricSeriesData[], formatter: (value: number) => string): string {
   const parts = series.map((item) => {
     const stats = statsFor(item.points);
@@ -105,7 +110,11 @@ const panels = computed<PanelView[]>(() => {
       valueKind: 'percent',
       series: cpu,
       current: cpuCurrent(series) === null ? t('common.notAvailable') : formatPercent(cpuCurrent(series), 1),
-      stats: `${t('serversPage.metrics.average')} ${cpuStats.average === null ? t('common.notAvailable') : formatPercent(cpuStats.average, 1)} · ${t('serversPage.metrics.peak')} ${cpuStats.peak === null ? t('common.notAvailable') : formatPercent(cpuStats.peak, 1)}`,
+      stats: [
+        percentStat(t('serversPage.metrics.average'), cpuStats.average),
+        percentStat(t('serversPage.metrics.maximum'), cpuStats.peak),
+        percentStat(t('serversPage.metrics.minimum'), cpuStats.minimum),
+      ].join(' · '),
       legend: [],
       thresholds: [{ value: 80, label: t('serversPage.metrics.threshold', { value: '80%' }) }],
       hasData: seriesHasData(cpu),
@@ -118,7 +127,10 @@ const panels = computed<PanelView[]>(() => {
       series: memory,
       current: memoryNow?.percent === null || memoryNow?.percent === undefined ? t('common.notAvailable') : formatPercent(memoryNow.percent, 1),
       currentHint: memoryNow ? `${formatBytes(memoryNow.usedBytes)} / ${formatBytes(memoryNow.totalBytes)}` : undefined,
-      stats: `${t('serversPage.metrics.average')} ${memoryStats.average === null ? t('common.notAvailable') : formatPercent(memoryStats.average, 1)} · ${t('serversPage.metrics.peak')} ${memoryStats.peak === null ? t('common.notAvailable') : formatPercent(memoryStats.peak, 1)}`,
+      stats: [
+        percentStat(t('serversPage.metrics.average'), memoryStats.average),
+        percentStat(t('serversPage.metrics.peak'), memoryStats.peak),
+      ].join(' · '),
       legend: [],
       thresholds: [{ value: 90, label: t('serversPage.metrics.threshold', { value: '90%' }) }],
       hasData: seriesHasData(memory),

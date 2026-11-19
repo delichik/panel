@@ -64,7 +64,7 @@ describe('server metrics model', () => {
     expect(networkCurrent(sample)).toEqual({ rx: 2048, tx: 1024 });
     expect(latestSampleTime(sample)).toBe(base);
     expect(hasSamples(sample)).toBe(true);
-    expect(statsFor(cpuSeries(sample)[0]!.points)).toEqual({ average: 42.5, peak: 42.5, current: 42.5 });
+    expect(statsFor(cpuSeries(sample)[0]!.points)).toEqual({ average: 42.5, peak: 42.5, minimum: 42.5, current: 42.5 });
   });
 
   it('prefers the latest raw sample for current values when bucketing', () => {

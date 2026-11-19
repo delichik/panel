@@ -22,9 +22,9 @@ describe('metrics formatting and stats', () => {
     expect(formatRate(null)).toBe('—');
   });
 
-  it('computes average, peak and current while ignoring null samples', () => {
-    expect(seriesStats([10, null, 30, undefined, 20])).toEqual({ average: 20, peak: 30, current: 20 });
-    expect(seriesStats([null, undefined])).toEqual({ average: null, peak: null, current: null });
+  it('computes average, peak, minimum and current while ignoring null samples', () => {
+    expect(seriesStats([10, null, 30, undefined, 20])).toEqual({ average: 20, peak: 30, minimum: 10, current: 20 });
+    expect(seriesStats([null, undefined])).toEqual({ average: null, peak: null, minimum: null, current: null });
   });
 
   it('derives percentages without inventing values for missing totals', () => {

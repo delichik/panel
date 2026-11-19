@@ -4,7 +4,10 @@ const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
 
 export interface SeriesStats {
   average: number | null;
+  /** 序列最大值（峰值）；无有效值时 null。 */
   peak: number | null;
+  /** 序列最小值；无有效值时 null。 */
+  minimum: number | null;
   current: number | null;
 }
 
@@ -63,22 +66,25 @@ export function percentOf(used: number | null | undefined, total: number | null 
   return Math.min(100, Math.max(0, (used / total) * 100));
 }
 
-/** 忽略 null/NaN 后的平均、峰值与最后一个有效值；无有效值时全为 null。 */
+/** 忽略 null/NaN 后的平均、峰值、最小值与最后一个有效值；无有效值时全为 null。 */
 export function seriesStats(values: Array<number | null | undefined>): SeriesStats {
   let sum = 0;
   let count = 0;
   let peak: number | null = null;
+  let minimum: number | null = null;
   let current: number | null = null;
   for (const value of values) {
     if (typeof value !== 'number' || !Number.isFinite(value)) continue;
     sum += value;
     count += 1;
     peak = peak === null ? value : Math.max(peak, value);
+    minimum = minimum === null ? value : Math.min(minimum, value);
     current = value;
   }
   return {
     average: count ? sum / count : null,
     peak,
+    minimum,
     current,
   };
 }
