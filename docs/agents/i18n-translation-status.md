@@ -4,6 +4,7 @@
 
 ## 当前状态
 
+- 本轮例行任务通知降噪（2026-11-20）：**无新增/删除前端词条**，en / zh-CN 键集合保持不变（`i18n.test.ts` 校验）；本轮只调整后端过程事件级别与通知过滤（`Quiet` 任务生命周期记 `debug`、通知忽略 debug 事件），不产生用户可见文案，后端也未新增错误码。
 - 本轮指标/探测警告阈值（2026-11-20）：前端新增 `applicationsPage.metricsThresholdsTitle/Hint`、`metricsThresholdCpu/Memory/DiskRead/DiskWrite/NetworkRx/NetworkTx/Invalid`、`networkProbeThresholdsTitle/Hint/Latency/Loss/Invalid`，图表标记新增 `serversPage.metrics.warningThreshold/thresholdHint`；en / zh-CN 同键且值非空。后端新增稳定错误码中文映射 `metrics_facility_threshold_invalid`、`network_probe_threshold_invalid`（`i18n_test.go` 覆盖）。未删除既有词条。
 - 本轮指标图最小~最大阴影带（2026-11-20）：前端新增 `serversPage.metrics.bandHint`（`Shaded band: min–max range` / `阴影为最小~最大范围`），用于指标卡与延迟/丢包卡 footer 说明阴影含义；tooltip 复用既有 `average`/`minimum`/`maximum`。en / zh-CN 同键且值非空（`i18n.test.ts`）；未删除既有词条。
 - 本轮右上角事件通知 / 阻塞错误 Dialog / HTTP 请求日志 debug（2026-11-19）：**前端无新增词条**。事件通知的状态文案复用既有 `activity.state.*`（running/succeeded/failed/cancelled 等），「查看日志」复用既有 `eventsPage.viewLogs`；全局错误 Dialog 复用既有 `common.close`（关闭）与 `eventsPage.viewLogs`（可选深链）；未删除既有词条，en / zh-CN 键集合保持不变（`i18n.test.ts` 校验）。后端新增 3 个查询参数校验错误码 `notifications_query_invalid`（未知或重复查询参数）、`notifications_after_invalid`（`after` 非法）、`notifications_wait_invalid`（`wait` 非法），与既有 `events_query_invalid`/`logs_query_invalid` 同口径（客户端契约错误，当前未新增中文映射）；若后续要求本地化，须在同一改动补 `internal/platform/i18n` 与 `i18n_test.go`；HTTP 请求完成日志统一 `debug` 属日志级别调整，不产生用户可见文案。若前端实现确需超出上述复用范围的新 key，必须在同一改动中补 en / zh-CN 并更新本条与 `i18n.test.ts`。

@@ -436,12 +436,12 @@ Run HTTP 面是 `/api/v1/executions*`；诊断读面是 `/api/v1/events*` 与 `/
 
 ### TASK-REG-003 内部例行任务的活动日志级别
 
-- **前置**：任务定义声明 `Quiet: true`（例如每 5 分钟的周期 Agent 健康检查），任务行持久化该标记。
-- **动作**：创建、启动、推进、完成该任务并追加标准输出，或让它进入失败/可重试失败/blocked 终态。
-- **结果**：创建事实（`operation.requested`）、成功流转（`execution.started`/`execution.progress`/`execution.finished`）、步骤事实与标准输出事实的级别为 `debug`；失败、可重试失败、blocked 与 stderr 输出仍为 `error`，丢失来源时 `evidence.gap_detected` 仍为 `warning`，因此故障与不确定执行保持默认可见。
+- **前置**：任务定义声明 `Quiet: true`（例如周期 Agent 健康检查、定时软件包/镜像刷新、Panel TLS 协调、存储共享导出同步），任务行持久化该标记。
+- **动作**：创建、启动、推进、完成该任务，或让它进入失败/可重试失败/blocked 终态；对同类非 Quiet 任务重复同一动作。
+- **结果**：Quiet 任务的创建事实（`task.created`）、成功流转（`task.started`/`task.completed`/`task.retried`）与远端标准输出事实在统一 `events`/JSONL 日志中记为 `debug`，默认级别筛选 `info,warning,error` 不展示；`level=debug` 的过程事件永不进入右上角通知（`ENG-EVT-011`/`UI-SHELL-065`），因此每 5 分钟的 Agent 巡检、每 30 分钟的软件包/镜像刷新等不会刷屏。Panel 自写的 `system` 里程碑（如权限不可用、阶段推进）保持 `info` 以便在任务日志中排障；失败、可重试失败与 blocked 仍以 `error` 记录并照常通知；stderr 输出与 `evidence.gap_detected` 保持原有 `error`/`warning`。非 Quiet 任务事实保持 `info` 并照常通知。
 - **失败**：降噪不得实现为“不写事实”或删除既有事实，也不得让 `Quiet` 影响执行、周期、并发、去重和保留；tasks 内核与 Activity 触发器不得按 task type 字符串另立清单。
-- **不变量**：级别唯一来源是注册定义持久化到任务行的 `quiet`；页面默认级别筛选 `info,warning,error` 下巡检事实不出现在事件与操作视图，显式选择 `debug` 或“全部级别”仍可查到同一批不可变事实。
-- **验证**：`TestQuietTaskActivityFactsAreDebugUnlessFailed`、`TestRoutineTaskActivityFactsStayInfo`。
+- **不变量**：级别唯一来源是注册定义持久化到任务行的 `quiet`；页面默认级别筛选下巡检事实不出现在事件与操作视图，显式选择 `debug` 或“全部级别”仍可查到同一批不可变事实；周期任务的失败仍保持默认可见并触发通知。
+- **验证**：`TestClassifyTaskEventLevel`、`TestQuietTaskLifecycleEventsAreDebugAndNeverNotify`、`TestNonQuietTaskLifecycleEventsStayInfoAndNotify`；`internal/platform/notifications/hub_test.go` 的 `TestPublishProcessIgnoresDebugLevelEvents`。
 
 ### TASK-CREATE-001 单任务创建
 

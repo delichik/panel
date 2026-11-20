@@ -93,15 +93,22 @@ func NewHub() *Hub {
 
 // PublishProcess records one process event transition.
 //
-// eventId-less and module=="http" events are ignored. Per eventId at most one
-// "start" notification (the first non-terminal transition) and one terminal
-// notification (succeeded/success/failed/failure/cancelled/superseded/partial/
-// partial_success) are published; repeating or trailing updates are skipped.
-// Publishing never blocks on readers.
+// eventId-less, module=="http" and debug-level events are ignored. Per eventId
+// at most one "start" notification (the first non-terminal transition) and one
+// terminal notification (succeeded/success/failed/failure/cancelled/superseded/
+// partial/partial_success) are published; repeating or trailing updates are
+// skipped. Publishing never blocks on readers.
 func (h *Hub) PublishProcess(ev ProcessEvent) {
 	eventID := strings.TrimSpace(ev.EventID)
 	module := strings.TrimSpace(ev.Module)
 	if eventID == "" || module == "http" {
+		return
+	}
+	// Debug-level process events are routine background facts (periodic health
+	// checks, scheduled refreshes, quiet task lifecycles). They stay in the
+	// events/logs index but must never reach the user-visible notification
+	// channel.
+	if strings.EqualFold(strings.TrimSpace(ev.Level), "debug") {
 		return
 	}
 	state := strings.TrimSpace(ev.State)

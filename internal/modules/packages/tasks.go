@@ -19,6 +19,7 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 	taskSvc.MustRegister(tasks.Definition{
 		Type:        "package_refresh",
 		Summary:     "Refreshing scheduled packages",
+		Quiet:       true,
 		AllowRunNow: true,
 		AllowRetry:  true,
 		Execute:     s.RunRefreshTask,

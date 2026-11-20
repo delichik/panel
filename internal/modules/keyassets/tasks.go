@@ -32,6 +32,7 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 			Type:              TaskTypePanelTLSReconcile,
 			Summary:           "Reconciling Panel TLS assets",
 			Hidden:            true,
+			Quiet:             true,
 			AllowRetry:        true,
 			ConcurrencyPolicy: tasks.ConcurrencyResourceExclusive,
 			ConcurrencyKey: func(in tasks.CreateInput) string {

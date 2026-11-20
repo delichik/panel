@@ -72,6 +72,10 @@ function localizedState(state?: string) {
 
 function deliver(notification: EventNotification) {
   if (!notification || typeof notification.seq !== 'number') return;
+  // Defensive: debug-level process events are routine background facts (periodic
+  // health checks, scheduled refreshes) and must never surface as notifications,
+  // even if an older Panel build still publishes them.
+  if ((notification.level ?? '').toLowerCase() === 'debug') return;
   if (seenSeqs.has(notification.seq)) return;
   seenSeqs.add(notification.seq);
   if (seenSeqs.size > 1024) {

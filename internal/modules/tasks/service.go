@@ -1319,6 +1319,7 @@ func (s *Service) writeTaskEvent(ctx context.Context, eventType string, task Tas
 		resources = append(resources, logging.ResourceRef("server", id, "", "executor"))
 	}
 	opID := firstNonEmpty(task.OperationID, task.ID)
+	level := classifyTaskEventLevel(eventType, severity, s.isQuietTaskType(task.Type))
 	_ = logging.EmitProcess(ctx, logging.ProcessSpec{
 		EventID:     eventRunLogID(task.ID),
 		Module:      "tasks",
@@ -1328,6 +1329,7 @@ func (s *Service) writeTaskEvent(ctx context.Context, eventType string, task Tas
 		Title:       title,
 		Summary:     sum,
 		State:       state,
+		Level:       level,
 		HadError:    hadError,
 		Finished:    finished,
 		EventType:   eventType,

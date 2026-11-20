@@ -61,7 +61,7 @@
 - `AGT-STATE-002`：Agent enabled 后读取和写入能力不得回退 SSH；恢复 Agent 本身的部署、证书同步和 bootstrap SSH 是唯一例外。
 - `AGT-STATE-003`：健康检查必须验证 Panel/Agent 构建版本相同、Docker健康且报告的 Docker host 与服务器配置一致；版本不一致为 incompatible，网络/远端/Docker不可用为 unavailable。
 - `AGT-STATE-004`：capabilities 和 gRPC contract hash 不作为通用兼容门槛；具体操作缺少必需 capability 时仅该操作失败或重试，不得因此无条件重装 Agent。
-- `AGT-STATE-005`：周期 Agent 检查由 `server_agent_check` 任务承载（每 5 分钟一轮，按服务器各一个子任务，定义同时声明 `Hidden` 与 `Quiet`）。检查成功只写回服务器 traits（状态、版本、证书、检查时间），其执行事实按 `TASK-REG-003` 记为 `debug`，默认级别筛选下不进入事件与操作视图；检查失败（含证书时间错误导致的自动修复判定）仍记 `error`。降噪不得跳过状态写回、自动部署判定或失败可见性。
+- `AGT-STATE-005`：周期 Agent 检查由 `server_agent_check` 任务承载（每 5 分钟一轮，按服务器各一个子任务，定义同时声明 `Hidden` 与 `Quiet`）。检查成功只写回服务器 traits（状态、版本、证书、检查时间），其执行事实按 `TASK-REG-003` 记为 `debug`，默认级别筛选下不进入事件与操作视图，也不产生右上角事件通知；检查失败（含证书时间错误导致的自动修复判定）仍记 `error` 并照常通知。降噪不得跳过状态写回、自动部署判定或失败可见性。
 - `AGT-AUTO-001`：无 URL、URL 非默认地址、incompatible、版本不一致、证书过期/未生效/7天内到期或证书时间握手错误时，系统检查必须创建或复用 `server_agent_deploy`；普通 unavailable、连接拒绝、服务器失联或 Docker失败不得触发重装。
 - `AGT-AUTO-002`：证书进入 7 天窗口时保持 compatible且不写错误，只静默刷新；系统自动复用任务必须尊重 `next_run_at` 和指数退避，不能借复用绕过。
 - `AGT-AUTO-003`：同一服务器系统自动部署连续失败 2 次必须置 undeployable并停止周期自动尝试；手动部署解除阻止并重置退避基准；失败计数仅在连续 5 次健康检查成功后清零。手动部署失败不得计入自动部署失败次数（按任务的 `trigger_type=user` 判定；`triggered_by` 保存的是操作者名，不能作为判定依据），只有系统触发的失败才推进到 undeployable。

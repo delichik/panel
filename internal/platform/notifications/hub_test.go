@@ -191,6 +191,26 @@ func TestPublishProcessIgnoresHTTPAndEmptyEventID(t *testing.T) {
 	}
 }
 
+func TestPublishProcessIgnoresDebugLevelEvents(t *testing.T) {
+	h := NewHub()
+	// Routine background facts recorded at debug level must stay in the events
+	// index but never become user-visible notifications.
+	h.PublishProcess(ProcessEvent{EventID: "evt-quiet-start", Module: "tasks", State: "queued", Level: "debug"})
+	h.PublishProcess(ProcessEvent{EventID: "evt-quiet-start", Module: "tasks", State: "succeeded", Level: "DEBUG"})
+	h.PublishProcess(ProcessEvent{EventID: "evt-quiet-other", Module: "server_agent_check", State: "running", Level: " debug "})
+	if got := latestSeq(t, h); got != 0 {
+		t.Fatalf("debug-level notifications must be ignored: latest = %d", got)
+	}
+
+	// Info/warn/error events still publish.
+	h.PublishProcess(ProcessEvent{EventID: "evt-info", Module: "tasks", State: "running", Level: "info"})
+	h.PublishProcess(ProcessEvent{EventID: "evt-warn", Module: "tasks", State: "failed", Level: "warn"})
+	h.PublishProcess(ProcessEvent{EventID: "evt-error", Module: "tasks", State: "failed", Level: "error"})
+	if got := latestSeq(t, h); got != 3 {
+		t.Fatalf("visible notifications latest = %d, want 3", got)
+	}
+}
+
 func TestHubRingBufferKeepsNewestNotifications(t *testing.T) {
 	h := NewHub()
 	total := BufferSize + 44

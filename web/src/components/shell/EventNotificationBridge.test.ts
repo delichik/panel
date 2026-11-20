@@ -186,6 +186,31 @@ describe('EventNotificationBridge', () => {
     ]);
   });
 
+  it('never renders debug-level event notifications', async () => {
+    // Routine background facts are recorded at debug level (periodic agent
+    // checks, scheduled package/image refreshes); the top-right channel keeps
+    // only info/warn/error events.
+    const pages = [
+      page([], 0),
+      page([
+        notification({ seq: 31, eventId: 'evt-quiet', title: 'Checking agent for srv_1', level: 'debug' }),
+        notification({ seq: 32, eventId: 'evt-visible', title: 'Deploy failed', state: 'failed', level: 'error' }),
+        notification({ seq: 33, eventId: 'evt-quiet-mixed', title: 'Refreshing scheduled packages', level: 'DEBUG' }),
+      ], 33),
+      pending(),
+    ];
+    waitMock.mockImplementation(() => Promise.resolve(pages.shift()!));
+
+    await mountBridge();
+    await tick(0);
+    await tick(1000);
+    await tick(1);
+
+    const rendered = bubbles();
+    expect(rendered).toHaveLength(1);
+    expect(rendered[0]?.textContent).toContain('Deploy failed');
+  });
+
   it('pauses polling while the page is hidden and resumes when visible again', async () => {
     const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
     const pages = [page([], 4), pending()];

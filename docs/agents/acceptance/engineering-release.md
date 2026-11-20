@@ -34,11 +34,11 @@
   机器码（`eventType`、`error_code`、`monitorReasonCode`）进 JSONL / Job 字段，不得单独充当用户 title。验证：logging 助手单测、部署 monitor/settle 过程行测试、既有 RecordContext 调用点文案回归。
 - `ENG-EVT-011`：**事件通知渠道（内存通知中心 + 长轮询）**。右上角事件通知不得依赖数据库或短间隔轮询，必须同时满足：
   1. **内存通道**：过程事件在 `internal/platform/notifications` 的进程内 Hub 发布（环形缓冲最多 256 条、`seq` 单调递增），`RecordContext` 构造过程行后、`store.Upsert` 之前发布；即使 `getContextStore()==nil` 也发布（通知不依赖数据库）；不得为通知读/写任何数据库，不得新建通知表或持久队列；进程重启后历史通知不回放。
-  2. **发布去重**：每个 `eventId` 只发布一次“开始”（首次见到，state 为空或非终态视为 running）和一次“终态”（`succeeded/success/failed/failure/cancelled/superseded/partial/partial_success`）；同一 eventId 的重复 running 更新与 `Touch` 不发布；终态后不再发布；`eventId==""` 或 `module=="http"` 直接忽略，HTTP 请求永不成为事件通知。跟踪表必须有上限（如 1024）防泄漏。
+  2. **发布去重**：每个 `eventId` 只发布一次“开始”（首次见到，state 为空或非终态视为 running）和一次“终态”（`succeeded/success/failed/failure/cancelled/superseded/partial/partial_success`）；同一 eventId 的重复 running 更新与 `Touch` 不发布；终态后不再发布；`eventId==""` 或 `module=="http"` 直接忽略，HTTP 请求永不成为事件通知。`level=="debug"` 的过程事件同样直接忽略：周期巡检、计划刷新等例行 `Quiet` 任务的生命周期与输出以 debug 记录在 `events`/日志索引中，供排障查询，但永不进入用户可见通知。跟踪表必须有上限（如 1024）防泄漏。
   3. **长轮询 API**：`GET /api/v1/notifications`，注册在 events 模块并走与 `/api/v1/events` 相同的认证中间件。查询参数 `after`（uint64，缺省 0）与 `wait`（秒，缺省 20、范围 0..30）；未知或重复参数 400 `notifications_query_invalid`，非法 `after` 400 `notifications_after_invalid`，非法 `wait` 400 `notifications_wait_invalid`。响应 200 `{"items":[Notification...],"cursor":<uint64>}`，`Notification` 至少含 `seq`/`eventId`/`module`/`level`/`title`/`updatedAt`，可含 `summary`/`state`/`origin`/`hadError`；无数据时 `items: []`。
   4. **游标与基线**：`after==0` 或 `after>latestSeq` 立即返回空 items + 当前 cursor（基线，不回放历史）；存在 `Seq>after` 立即返回这些条并把 cursor 置为最后一条 `Seq`；否则最多挂起 `wait` 秒并尊重请求 context；超时返回空 items + 原 `after`。服务端不得设置会截断长轮询的 `WriteTimeout`，也不得无限挂起。
   5. **路由基线**：主 Panel `method/path` 计数 202 → 203，`TestAPIRouteManifest` 的 `wantCount`/`wantHash` 与 [API 路由逐项清单](api-route-inventory.md)、[覆盖基线](coverage-matrix.md) 同步更新。
-  验证：`internal/platform/notifications/hub_test.go` 覆盖基线、增量唤醒、超时、去重、`module=http` 忽略、缓冲上限；logging 测试覆盖首次发布开始/终态只发一次/无 store 也发布；events handler 测试覆盖基线、超时、发布后立即返回、三类参数错误；`routes_manifest_test` 期望 203。
+  验证：`internal/platform/notifications/hub_test.go` 覆盖基线、增量唤醒、超时、去重、`module=http` 与 `level=debug` 忽略、缓冲上限；logging 测试覆盖首次发布开始/终态只发一次/无 store 也发布；events handler 测试覆盖基线、超时、发布后立即返回、三类参数错误；`routes_manifest_test` 期望 203。
 - `LOG-CTX-001`：**已废弃**，由 `ENG-EVT-001` 替代（AppDB 进程索引表为 `events`，非 `log_contexts`）。
 - `LOG-CTX-002`：**已废弃**，由 `ENG-EVT-001` 与 `TASK-LOG-001` 替代：event executor 输出 `AppendLog` 写入统一 JSONL（带 `eventId`）；`GET /api/v1/executions/{id}/logs` 读 JSONL 行，不得再查 `activity_events`。
 

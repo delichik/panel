@@ -209,6 +209,7 @@ func NewService(db *sql.DB, agent AgentRuntimeClient, servers ServerProvider, ap
 		s.tasks.MustRegister(tasks.Definition{
 			Type:        storageReconcileTaskType,
 			Summary:     "Syncing storage share exports",
+			Quiet:       true,
 			AllowRunNow: true,
 			AllowRetry:  true,
 			Execute:     s.runStorageShareReconcileTask,

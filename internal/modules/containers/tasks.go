@@ -29,6 +29,7 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 	for _, def := range []tasks.Definition{
 		{
 			Type:       TaskImageRefresh,
+			Quiet:      true,
 			AllowRetry: true,
 			Execute:    s.RunImageRefreshTask,
 			Periodic: &tasks.Periodic{
@@ -39,6 +40,7 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 		},
 		{
 			Type:       TaskImageUnusedCleanup,
+			Quiet:      true,
 			AllowRetry: true,
 			Execute:    s.RunImageUnusedCleanupTask,
 			Periodic: &tasks.Periodic{

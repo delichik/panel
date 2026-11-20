@@ -12,6 +12,13 @@
 
 ## 2. 前端路由基线
 
+- 例行周期任务通知降噪 + debug 事件不进入通知（2026-11-20，跨后端/前端/验收契约，无 API/表/路由/后台任务变化）：
+  - **后端**：统一 `events` 级别按任务定义的 `Quiet` 落地——Quiet 任务的创建/启动/完成/重试事实记 `debug`，失败/可重试失败/blocked 保持 `error`；把 `package_refresh`、`image_refresh`、`image_unused_cleanup`、`panel_tls_reconcile`、`storage_share_reconcile` 声明为 `Quiet`（`server_agent_check` 原有；按小时的 `server_info_collect` 保持非 Quiet，避免掩盖初始系统信息采集的排障日志）。通知 Hub 忽略 `level=="debug"` 的过程事件，右上角只保留 info/warn/error 事件。
+  - **前端**：`EventNotificationBridge` 对 `level=="debug"` 通知做防御性丢弃。
+  - **不变**：主 Panel `method/path` 保持 **203**、ORM 表数 **49**、前端路由声明 **31** 均不变；无新后台任务类型、无新表/列/迁移；无 i18n 词条变化。
+  - 对应 `TASK-REG-003`（更新）、`ENG-EVT-011`（更新）、`UI-SHELL-065`（更新）、[交互模型](../specifications/frontend/interaction-model.md) §5；见 [多语言翻译状态](../i18n-translation-status.md)。
+  - **验证证据**：`go test ./internal/platform/notifications/... ./internal/modules/tasks/... ./internal/platform/logging/... -count=1`（含 `TestPublishProcessIgnoresDebugLevelEvents`、`TestClassifyTaskEventLevel`、`TestQuietTaskLifecycleEventsAreDebugAndNeverNotify`、`TestNonQuietTaskLifecycleEventsStayInfoAndNotify`）、`task build:backend`；前端 `EventNotificationBridge.test.ts`、`task test:web`、`task build:web`。
+
 - 清理 Tailscale 时代遗留的 root+降权运行模型（2026-11-20，构建/启动链路，无 API/表/路由/后台任务变化）：
   - **代码**：删除 `cmd/panel-init/privilege_{unix,windows}.go` 及其测试；`panel-init` 不再接受 `-panel-user`/`PANEL_INIT_PANEL_USER`、不再 setuid/setgid，也不再有“非 root 必须拒绝启动”的判据；`-data-root` 随控制面 socket 迁出数据卷一并删除。
   - **控制面**：维护重启 socket 从 `<dataRoot>/run/panel-control.sock` 改为 panel-init 进程私有临时目录下的 `panel-control.sock`（0700 目录 + 0600 socket，仅同一用户可访问），不再在持久卷留下死 socket，也不再要求数据卷中存在可写 socket 目录；删除 `panelsupervision.ControlSocketPath`，改为 `ControlSocketFileName`；`ENG-BUILD-009` 的参数合同不变。
