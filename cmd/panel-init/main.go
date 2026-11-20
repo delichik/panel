@@ -16,7 +16,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"syscall"
 	"time"
 
@@ -38,8 +37,6 @@ type panelLaunch struct {
 
 func main() {
 	panelPath := flag.String("panel", defaultPanelPath(), "panel binary path")
-	dataRoot := flag.String("data-root", defaultDataRoot(), "panel data root used for the control socket")
-	panelUser := flag.String("panel-user", defaultPanelUser(), "user the panel child process runs as")
 	flag.Parse()
 
 	restarts := make(chan string, 1)
@@ -48,25 +45,28 @@ func main() {
 		log.Fatalf("generate control token failed: %v", err)
 	}
 
-	// 运行身份不允许降级：非 root 无法把 Panel 子进程降权到 panel 用户。这里
-	// 直接拒绝启动，避免容器带着一个悄悄失效的能力运行。
-	if err := ensurePrivileges(*panelUser, resolvePanelUser(*panelUser)); err != nil {
-		log.Fatalf("%v", err)
-	}
-
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)
 
-	socketPath := panelsupervision.ControlSocketPath(*dataRoot)
+	// 控制面 socket 只服务于本次 panel-init 生命周期：维护重启由同一个父进程
+	// 完成，子进程拿到的路径也是本次运行分发的，因此不需要落到持久数据卷。
+	// 放在进程私有临时目录可以避免旧版本以 root 创建的 <dataRoot>/run 阻塞
+	// 非 root 启动，也不会在数据卷上留下无人监听的死 socket。
+	socketDir, err := os.MkdirTemp("", "panel-init-")
+	if err != nil {
+		log.Fatalf("prepare control socket directory failed: %v", err)
+	}
+	socketPath := filepath.Join(socketDir, panelsupervision.ControlSocketFileName)
 	server, err := startControlListener(socketPath, restarts, token)
 	if err != nil {
+		_ = os.RemoveAll(socketDir)
 		log.Fatalf("start control listener failed: %v", err)
 	}
 	log.Printf("control socket listening on %s", socketPath)
 	defer func() {
 		_ = server.Close()
-		_ = os.Remove(socketPath)
+		_ = os.RemoveAll(socketDir)
 	}()
 
 	launch := panelLaunch{path: *panelPath, socket: socketPath, token: token}
@@ -87,22 +87,21 @@ func main() {
 }
 
 // shutdown 在结束进程前清理控制面 socket。os.Exit 不会执行 defer，因此这里
-// 必须自行删除 socket 文件，避免在持久卷上留下无人监听的死 socket。
+// 必须自行删除 socket 文件，避免在运行目录里留下无人监听的死 socket。
 func shutdown(socketPath string, code int) {
 	_ = os.Remove(socketPath)
 	os.Exit(code)
 }
 
-// startControlListener 在 Unix domain socket 上提供维护重启控制面。socket 固定
-// 位于持久卷的 <dataRoot>/run/ 下，只允许 root 与降权后的 Panel 进程访问，进程
-// 不监听任何 TCP 端口。
+// startControlListener 在进程私有运行目录的 Unix domain socket 上提供维护重启
+// 控制面。socket 只允许运行 Panel 的同一用户访问，进程不监听任何 TCP 端口。
 func startControlListener(socketPath string, restarts chan<- string, token string) (*http.Server, error) {
 	dir := filepath.Dir(socketPath)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("prepare control socket directory: %w", err)
 	}
-	// 上一次容器运行可能在持久卷上留下同路径的 socket 文件，残留会让 Listen
-	// 直接失败：先清理再绑定。
+	// 复用目录或测试场景可能在同路径留下 socket 文件，残留会让 Listen 直接
+	// 失败：先清理再绑定。
 	if err := os.Remove(socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("remove stale control socket: %w", err)
 	}
@@ -110,15 +109,11 @@ func startControlListener(socketPath string, restarts chan<- string, token strin
 	if err != nil {
 		return nil, err
 	}
-	// 控制面唯一的使用者是降权后的 Panel 子进程：目录对 panel 组开放 r-x，
-	// socket 对 panel 组开放 rw，其他用户无权访问。
-	_ = os.Chmod(dir, 0o750)
-	_ = os.Chmod(socketPath, 0o660)
-	if panelGID >= 0 {
-		_ = os.Chown(dir, -1, panelGID)
-		if err := os.Chown(socketPath, -1, panelGID); err != nil {
-			log.Printf("chown control socket failed: %v", err)
-		}
+	// 控制面唯一的使用者是同一用户的 Panel 子进程：socket 只对所有者开放
+	// 读写，组与其他用户无权访问。
+	if err := os.Chmod(socketPath, 0o600); err != nil {
+		_ = listener.Close()
+		return nil, fmt.Errorf("secure control socket: %w", err)
 	}
 
 	mux := http.NewServeMux()
@@ -167,7 +162,6 @@ func runPanel(launch panelLaunch, restarts <-chan string, signals <-chan os.Sign
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
 	cmd.Env = os.Environ()
-	applyPanelCredential(cmd)
 	if err := cmd.Start(); err != nil {
 		return 1, "", err
 	}
@@ -279,20 +273,4 @@ func defaultPanelPath() string {
 		return filepath.Join(filepath.Dir(exe), name)
 	}
 	return name
-}
-
-// defaultDataRoot 与镜像中的 PANEL_DATA_ROOT 默认值保持一致，使 panel-init 在
-// 没有额外参数时也能与 Panel 使用同一个 data root。
-func defaultDataRoot() string {
-	if value := strings.TrimSpace(os.Getenv("PANEL_DATA_ROOT")); value != "" {
-		return value
-	}
-	return "/app/data"
-}
-
-func defaultPanelUser() string {
-	if value := strings.TrimSpace(os.Getenv("PANEL_INIT_PANEL_USER")); value != "" {
-		return value
-	}
-	return "panel"
 }

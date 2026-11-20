@@ -1,10 +1,11 @@
 // Package panelsupervision 定义 panel-init 与 Panel 子进程之间的控制面合同。
 //
-// panel-init 在 <dataRoot>/run/ 下监听一个 Unix domain socket，提供维护重启控制面；
-// 它用 Args 生成子进程命令行的全部监督参数，Panel 侧用 Register 注册同一组 flag，
-// 并用 NewControlClient 通过 socket 访问控制面。两侧必须始终成对，任何一侧漏接
-// 参数都会让 Panel 以 "flag provided but not defined" 拒绝启动（ENG-BUILD-009
-// 的镜像构建冒烟覆盖该参数集）。
+// panel-init 在一个进程私有运行目录里监听 Unix domain socket，提供维护重启
+// 控制面；它用 Args 生成子进程命令行的全部监督参数，Panel 侧用 Register 注册
+// 同一组 flag，并用 NewControlClient 通过 socket 访问控制面。两侧必须始终成对，
+// 任何一侧漏接参数都会让 Panel 以 "flag provided but not defined" 拒绝启动
+// （ENG-BUILD-009 的镜像构建冒烟覆盖该参数集）。socket 路径由 panel-init 每次
+// 启动时选择并通过参数下发，不落在持久数据卷上，也不跨容器重启复用。
 package panelsupervision
 
 import (
@@ -14,7 +15,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -28,15 +28,9 @@ const (
 	// ControlTokenHeader 是控制面鉴权头。
 	ControlTokenHeader = "X-Panel-Init-Token"
 
-	controlDirName        = "run"
-	controlSocketFileName = "panel-control.sock"
+	// ControlSocketFileName 是控制面 socket 在私有运行目录中的文件名。
+	ControlSocketFileName = "panel-control.sock"
 )
-
-// ControlSocketPath 返回 panel-init 控制面 socket 的固定路径。socket 位于持久
-// 卷上，容器重启后沿用同一路径；旧的 socket 文件由 panel-init 启动时清理。
-func ControlSocketPath(dataRoot string) string {
-	return filepath.Join(strings.TrimSpace(dataRoot), controlDirName, controlSocketFileName)
-}
 
 // Config 保存 panel-init 随子进程命令行下发的全部监督参数。
 type Config struct {

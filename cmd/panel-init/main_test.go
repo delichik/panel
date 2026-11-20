@@ -65,11 +65,18 @@ func TestRestartModeContractAllowsOnlyMaintenanceModes(t *testing.T) {
 	}
 }
 
-// newTestControlSocket 为控制面用例返回一个临时 socket 路径：真实部署的 socket
-// 位于持久卷的固定路径上，测试必须各自使用独立路径避免互相干扰。
+// newTestControlSocket 为控制面用例返回一个临时 socket 路径。socket 路径不受
+// 部署目录影响，但 Windows 的 AF_UNIX 对 sun_path 长度有上限（108 字节），
+// t.TempDir 会带上完整测试名，长用例名会直接 bind 失败；这里与生产一致，用
+// 短的进程私有目录承载 socket。
 func newTestControlSocket(t *testing.T) string {
 	t.Helper()
-	return filepath.Join(t.TempDir(), "panel-control.sock")
+	dir, err := os.MkdirTemp("", "panel-init-test-")
+	if err != nil {
+		t.Fatalf("create control socket dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return filepath.Join(dir, panelsupervision.ControlSocketFileName)
 }
 
 func TestPanelInitRestartListenerRequiresValidToken(t *testing.T) {

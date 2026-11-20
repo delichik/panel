@@ -105,8 +105,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM --platform=$TARGETPLATFORM alpine:3.22 AS runtime-base
 WORKDIR /app
 
-# 运行容器需要 Panel 二进制、panel-init 监督进程与 Web 静态资源。Panel 子进程
-# 由 panel-init 降权到非 root 的 panel 用户运行（见 cmd/panel-init/privilege_unix.go）。
+# 运行容器需要 Panel 二进制、panel-init 监督进程与 Web 静态资源。容器整体以
+# 非 root 的 panel 用户运行（两个 runtime target 末尾的 USER），panel-init 不再
+# 切换身份；`/app/data` 卷的内容必须由该用户读写。
 RUN apk add --no-cache ca-certificates tzdata wget \
   && addgroup -S panel \
   && adduser -S -G panel -h /app panel \
@@ -143,8 +144,9 @@ RUN /app/panel \
       --init-control-token smoke \
       --help >/dev/null 2>&1
 
-# panel-init 是 PID 1 且以 root 运行：它需要把 Panel 子进程降权到 panel 用户运行
-# （cmd/panel-init/privilege_unix.go）。Panel 服务本身仍然是非 root 进程。
+# 容器整体以非 root 的 panel 用户运行：panel-init 作为 PID 1 不再切换身份，
+# 只为维护模式重启监管 Panel 子进程（ENG-BUILD-005）。
+USER panel
 ENTRYPOINT ["/app/panel-init"]
 
 FROM runtime-base AS runtime
@@ -161,5 +163,6 @@ RUN /app/panel \
       --init-control-token smoke \
       --help >/dev/null 2>&1
 
-# 与 runtime-from-artifacts 相同：panel-init 以 root 运行并自行降权 Panel 子进程。
+# 与 runtime-from-artifacts 一致：非 root 的 panel 用户运行，panel-init 不降权。
+USER panel
 ENTRYPOINT ["/app/panel-init"]

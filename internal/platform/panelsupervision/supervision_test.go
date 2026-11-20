@@ -2,7 +2,6 @@ package panelsupervision
 
 import (
 	"flag"
-	"path/filepath"
 	"slices"
 	"testing"
 )
@@ -13,7 +12,7 @@ import (
 func TestArgsParseWithRegisteredFlags(t *testing.T) {
 	cfg := Config{
 		MaintenanceMode: "restore",
-		ControlSocket:   "/app/data/run/panel-control.sock",
+		ControlSocket:   "/tmp/panel-init-test/panel-control.sock",
 		ControlToken:    "opaque-token",
 	}
 
@@ -47,12 +46,8 @@ func TestArgsShape(t *testing.T) {
 	}
 }
 
-func TestControlSocketPathShape(t *testing.T) {
-	got := ControlSocketPath("/app/data")
-	if filepath.Base(got) != "panel-control.sock" {
-		t.Fatalf("ControlSocketPath() = %q, want a panel-control.sock leaf", got)
-	}
-	if filepath.Base(filepath.Dir(got)) != "run" {
-		t.Fatalf("ControlSocketPath() = %q, want the run directory under the data root", got)
+func TestControlSocketFileNameShape(t *testing.T) {
+	if ControlSocketFileName != "panel-control.sock" {
+		t.Fatalf("ControlSocketFileName = %q, want panel-control.sock", ControlSocketFileName)
 	}
 }

@@ -12,6 +12,13 @@
 
 ## 2. 前端路由基线
 
+- 清理 Tailscale 时代遗留的 root+降权运行模型（2026-11-20，构建/启动链路，无 API/表/路由/后台任务变化）：
+  - **代码**：删除 `cmd/panel-init/privilege_{unix,windows}.go` 及其测试；`panel-init` 不再接受 `-panel-user`/`PANEL_INIT_PANEL_USER`、不再 setuid/setgid，也不再有“非 root 必须拒绝启动”的判据；`-data-root` 随控制面 socket 迁出数据卷一并删除。
+  - **控制面**：维护重启 socket 从 `<dataRoot>/run/panel-control.sock` 改为 panel-init 进程私有临时目录下的 `panel-control.sock`（0700 目录 + 0600 socket，仅同一用户可访问），不再在持久卷留下死 socket，也不再要求数据卷中存在可写 socket 目录；删除 `panelsupervision.ControlSocketPath`，改为 `ControlSocketFileName`；`ENG-BUILD-009` 的参数合同不变。
+  - **镜像**：`runtime` 与 `runtime-from-artifacts` 末尾 `USER panel`，容器整体以非 root 运行；`panel-init` 仅作为 PID 1 监督进程存在。
+  - 主 Panel `method/path` 保持 **194**、ORM 表数 49、前端路由声明 31 均不变；无新增/删除后台任务类型。
+  - 对应 `ENG-BUILD-005`（重写）、`ENG-BUILD-009`；部署文档与 `backend-core.md`、`backup-restore.md` 同步。验证证据：`task test:backend`（`cmd/panel-init`、`internal/platform/panelsupervision`、`internal/modules/backups` 等包通过）与 `task build:backend` exit 0。
+
 - 右上角通知改为事件通知 + 阻塞错误 Dialog + HTTP 请求日志 debug（2026-11-19，跨前后端契约，无数据库变更）：
   - **路由**：新增 `GET /api/v1/notifications`（events 模块注册，该模块注册路由 11 → 12；事件通知走内存通道长轮询），主 Panel `method/path` 计数 **202 → 203**（`TestAPIRouteManifest` 的 `wantCount=203`，`wantHash` 由同轮测试输出维护；`api-route-inventory.md` 同为 203 条）。**前端路由声明仍 31 条**：无新增页面路由，通知桥挂在 AppShell，全局错误 Dialog 挂在应用根节点。
   - **后台与数据**：不新增表、列、迁移或后台任务类型；通知中心是进程内环形缓冲（最多 256 条、`seq` 单调递增），由既有 `RecordContext` 在写库前同步发布，长轮询等待是请求作用域，不引入 ticker/队列/持久队列；**不读不写数据库**，进程重启后历史通知不回放；ORM 表数保持 **49**（`facility_proxy_image_states` 为前序轮次既有表，本轮不改）。
@@ -246,7 +253,7 @@
 | --- | --- |
 | Web bundle | 懒加载页面 chunk、指纹化静态资源、生产 API client |
 | `panel` | HTTPS API、静态托管、全部主模块和后台服务 |
-| `panel-init` | 容器启动/维护恢复所需初始化行为；以 root 作为 PID 1、把 panel 子进程降权到非 root 用户，并负责维护重启控制面（`<dataRoot>/run/panel-control.sock` Unix socket、SIGTERM/SIGINT 关停顺序） |
+| `panel-init` | 容器启动/维护恢复所需初始化行为；作为 PID 1 以镜像内的非 root `panel` 用户监管 Panel 子进程，并负责维护重启控制面（进程私有运行目录中的 `panel-control.sock` Unix socket、SIGTERM/SIGINT 关停顺序） |
 | `panel-agent` amd64/arm64 | 同一 RPC contract 与版本元数据、Docker/系统能力、无 server 子层的节点应用工作区及旧布局升级 |
 | linux/amd64 image | amd64 Panel/init + 两架构 Agent bundle + Web |
 | linux/arm64 image | arm64 Panel/init + 两架构 Agent bundle + Web |

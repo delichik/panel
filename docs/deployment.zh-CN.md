@@ -42,7 +42,7 @@ volumes:
     name: panel-data
 ```
 
-容器以 root 运行 `/app/panel-init` 作为 PID 1；`panel-init` 把 Panel 子进程降权到非 root 的 `panel` 用户，并声明 `/app/data` 卷。**不要**把容器强制为非 root 用户（compose 的 `user:`、`docker run --user`，或设置了 `USER` 的旧镜像）：此时 `panel-init` 会立即以说明性错误退出，因为它无法把 Panel 子进程降权到 `panel` 用户。确实需要让 Panel 子进程以 root 运行时，必须显式传 `-panel-user=""`。
+镜像整体以非 root 的 `panel` 用户运行（`USER panel`）；`/app/panel-init` 作为 PID 1 使用同一身份，不切换用户。`/app/data` 卷必须属于该用户。如果用 compose 的 `user:`、`docker run --user` 覆盖运行用户，或复用了由其他 uid 写入的数据卷（旧镜像或手工创建的目录），必须先修正数据卷归属，否则 Panel 会以权限错误退出。
 
 拉取镜像并启动 Seamark：
 
@@ -86,7 +86,7 @@ docker run -d \
   ghcr.io/delichik/panel:latest
 ```
 
-不要用 `--user` 把容器强制为非 root 用户；`panel-init` 需要以 root 运行才能把 Panel 子进程降权到 `panel` 用户（见上方运行身份说明）。
+不要用 `--user` 覆盖运行用户，除非同时把 `panel-data` 卷的归属改成镜像内 `panel` 的 uid/gid（见上方运行身份说明）。
 
 检查状态和日志：
 

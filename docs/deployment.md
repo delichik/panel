@@ -42,7 +42,7 @@ volumes:
     name: panel-data
 ```
 
-The container runs `/app/panel-init` as PID 1 **as root**; `panel-init` drops the Panel process to the non-root `panel` user and declares the `/app/data` volume. Do **not** force the container to a non-root user (Compose `user:`, `docker run --user`, or an older image with `USER`). `panel-init` then exits immediately with an explanatory error, because it cannot drop the Panel process to the `panel` user. Running the Panel child as root on purpose requires the explicit `-panel-user=""`.
+The image runs as the non-root `panel` user (`USER panel`); `/app/panel-init` is PID 1 with that same identity and never switches users. The `/app/data` volume must be owned by that user. If you override the runtime user (Compose `user:`, `docker run --user`) or reuse a data volume written by a different uid (an older image or a hand-created directory), fix the volume ownership first — otherwise Panel exits with a permission error.
 
 Pull the image and start Seamark:
 
@@ -86,7 +86,7 @@ docker run -d \
   ghcr.io/delichik/panel:latest
 ```
 
-Do not add `--user` to force a non-root container user; `panel-init` keeps running as root so it can drop the Panel process to the `panel` user (see the running-identity note above).
+Do not add `--user` unless you also fix the `panel-data` volume ownership to the image's `panel` uid/gid (see the running-identity note above).
 
 Check its status and logs:
 
