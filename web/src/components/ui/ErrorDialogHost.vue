@@ -40,6 +40,7 @@ function onOpenChange(open: boolean) {
 </script>
 
 <template>
+  <slot />
   <Dialog
     v-if="current"
     :open="true"

@@ -13,7 +13,10 @@ onMounted(() => {
 
 <template>
   <ToastProvider>
-    <ErrorDialogHost />
-    <RouterView />
+    <!-- provide 只对后代生效：宿主必须包裹 RouterView，否则路由视图内的
+         useErrorDialog() 拿不到注入会直接抛错。 -->
+    <ErrorDialogHost>
+      <RouterView />
+    </ErrorDialogHost>
   </ToastProvider>
 </template>
