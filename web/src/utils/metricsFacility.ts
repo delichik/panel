@@ -1,4 +1,4 @@
-import type { MetricsCleanupSchedule, MetricsFacilityMode } from '@/types/metricsFacility';
+import type { MetricsCleanupSchedule, MetricsFacilityMode, MetricsWarningThresholds } from '@/types/metricsFacility';
 
 /**
  * 指标设施契约：默认值、模式/清理计划枚举与数字校验在页面、Mock 和测试间共用，
@@ -10,6 +10,7 @@ export const metricsFacilityDefaults = {
   retentionDays: 7,
   collectionIntervalSeconds: 60,
   cleanupSchedule: 'daily' as MetricsCleanupSchedule,
+  thresholds: {} as MetricsWarningThresholds,
 };
 
 export const metricsRetentionMin = 1;

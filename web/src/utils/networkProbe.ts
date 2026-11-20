@@ -1,9 +1,10 @@
 import type { NetworkProbeHistoryPoint, NetworkProbeSettings, NetworkProbeTargetResult } from '@/types/networkProbe';
-import type { MetricSeriesData, MetricSeriesPoint } from './metrics';
+import type { MetricSeriesBand, MetricSeriesData, MetricSeriesPoint } from './metrics';
 
 /**
  * 把探测历史桶转成 MetricChart 折线数据。延迟为 0/缺测时用 null 断线，
- * 丢包始终是 0..100 的有效百分比；没有历史时返回空点集，由调用方展示空态。
+ * 丢包始终是 0..100 的有效百分比；同一桶的最大/最小值转成阴影带。
+ * 没有历史时返回空点集，由调用方展示空态。
  */
 export function probeHistorySeries(
   history: NetworkProbeHistoryPoint[] | undefined,
@@ -11,15 +12,42 @@ export function probeHistorySeries(
   id: string,
   name: string,
 ): MetricSeriesData {
-  const points: MetricSeriesPoint[] = (history ?? [])
-    .filter((point) => point && typeof point.time === 'string' && point.time !== '')
-    .map((point) => ({
-      time: point.time,
-      value: field === 'latency'
-        ? (point.latencyMs > 0 ? point.latencyMs : null)
-        : point.packetLossPercent,
-    }));
-  return { id, name, points };
+  const source = (history ?? []).filter((point) => point && typeof point.time === 'string' && point.time !== '');
+  const points: MetricSeriesPoint[] = source.map((point) => ({
+    time: point.time,
+    value: field === 'latency'
+      ? (point.latencyMs > 0 ? point.latencyMs : null)
+      : point.packetLossPercent,
+  }));
+  const minimum: MetricSeriesPoint[] = [];
+  const maximum: MetricSeriesPoint[] = [];
+  let hasRange = false;
+  for (const point of source) {
+    const average = field === 'latency'
+      ? (point.latencyMs > 0 ? point.latencyMs : null)
+      : point.packetLossPercent;
+    if (field === 'latency' && average === null) {
+      minimum.push({ time: point.time, value: null });
+      maximum.push({ time: point.time, value: null });
+      continue;
+    }
+    const low = field === 'latency' ? (point.latencyMsMin ?? point.latencyMs) : (point.packetLossPercentMin ?? point.packetLossPercent);
+    const high = field === 'latency' ? (point.latencyMsMax ?? point.latencyMs) : (point.packetLossPercentMax ?? point.packetLossPercent);
+    // 延迟 0 表示失败/缺测而不是真实最小值，不进入区间；丢包 0 是有效值。
+    const validRange = field === 'latency'
+      ? typeof low === 'number' && low > 0 && typeof high === 'number' && high > 0
+      : typeof low === 'number' && Number.isFinite(low) && typeof high === 'number' && Number.isFinite(high);
+    if (validRange) {
+      minimum.push({ time: point.time, value: Math.min(low, high) });
+      maximum.push({ time: point.time, value: Math.max(low, high) });
+      hasRange = true;
+    } else {
+      minimum.push({ time: point.time, value: null });
+      maximum.push({ time: point.time, value: null });
+    }
+  }
+  const band: MetricSeriesBand | undefined = hasRange ? { min: minimum, max: maximum } : undefined;
+  return { id, name, points, band };
 }
 
 /** 按目标聚合结果的用户可见状态：无源/无结果为 noData，失败语义并入 stale/degraded。 */

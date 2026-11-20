@@ -124,7 +124,7 @@ beforeEach(() => {
   useI18n().setLocale('en');
   vi.clearAllMocks();
   errorDialogPush.mockReset();
-  config.mockResolvedValue({ mode: 'all', serverIds: [], intervalSeconds: 60, pingCount: 3, pingTimeoutSeconds: 2, version: 1, updatedAt: new Date().toISOString() });
+  config.mockResolvedValue({ mode: 'all', serverIds: [], intervalSeconds: 60, pingCount: 3, pingTimeoutSeconds: 2, thresholds: {}, version: 1, updatedAt: new Date().toISOString() });
   saveConfig.mockImplementation(async (input: Record<string, unknown>) => ({ ...input, version: 2, updatedAt: new Date().toISOString() }));
   targets.mockResolvedValue(targetMatrix(defaultNodes));
 });
@@ -202,14 +202,20 @@ describe('network probe facility', () => {
     expect(errorDialogPush).toHaveBeenCalledWith(expect.objectContaining({ title: 'probe save failed', reference: expect.any(Error) }));
   });
 
-  it('scrolls the result list vertically inside the card without a horizontal table', async () => {
+  it('uses page scrolling for results instead of an independent scroll container', async () => {
     const wrapper = await mountFacility();
 
     const list = wrapper.find('[data-testid="probe-target-cards"]');
     expect(list.exists()).toBe(true);
-    expect(list.classes()).toContain('overflow-y-auto');
-    expect(list.classes()).toContain('overflow-x-hidden');
+    expect(list.classes()).not.toContain('overflow-y-auto');
+    expect(list.classes()).not.toContain('overflow-x-hidden');
+    expect(list.classes()).not.toContain('min-h-0');
     expect(list.element.tagName).toBe('UL');
+
+    const section = wrapper.find('[data-testid="network-probe-results-section"]');
+    expect(section.classes()).not.toContain('min-h-0');
+    expect(section.classes()).not.toContain('grid-rows-page-top');
+    expect(wrapper.find('[data-testid="network-probe-facility"]').classes()).not.toContain('h-full');
   });
 
   it('splits probe scope, probe configuration, and results into independent sections', async () => {
@@ -246,11 +252,13 @@ describe('network probe facility', () => {
   it('renders probe parameters as NumberBox spinbuttons with min/max clamping and inline validation', async () => {
     const wrapper = await mountFacility();
     const inputs = wrapper.findAll<HTMLInputElement>('input[role="spinbutton"]');
-    expect(inputs).toHaveLength(3);
+    expect(inputs).toHaveLength(5);
     // 默认配置 intervalSeconds=60 → 1 分钟。
     expect(inputs[0]!.element.value).toBe('1');
     expect(inputs[1]!.element.value).toBe('3');
     expect(inputs[2]!.element.value).toBe('2');
+    expect(inputs[3]!.element.value).toBe('');
+    expect(inputs[4]!.element.value).toBe('');
     expect(wrapper.text()).toContain('Range 1–60 minutes, default 1.');
 
     // NumberBox 在 commit 时按 min/max 夹取：61 → 60。
@@ -292,11 +300,12 @@ describe('network probe facility', () => {
       intervalSeconds: 120,
       pingCount: 3,
       pingTimeoutSeconds: 2,
+      thresholds: {},
     });
   });
 
   it('loads a legacy interval in seconds as whole minutes', async () => {
-    config.mockResolvedValueOnce({ mode: 'all', serverIds: [], intervalSeconds: 90, pingCount: 3, pingTimeoutSeconds: 2, version: 1, updatedAt: new Date().toISOString() });
+    config.mockResolvedValueOnce({ mode: 'all', serverIds: [], intervalSeconds: 90, pingCount: 3, pingTimeoutSeconds: 2, thresholds: {}, version: 1, updatedAt: new Date().toISOString() });
     const wrapper = await mountFacility();
 
     const interval = wrapper.find<HTMLInputElement>('[data-testid="network-probe-interval-minutes"]');

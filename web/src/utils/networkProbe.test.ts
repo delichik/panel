@@ -134,8 +134,8 @@ describe('network probe target aggregation helpers', () => {
 
   it('maps aggregated 24h history into chart series; zero latency breaks the line', () => {
     const historyPoints = [
-      { time: '2026-11-17T10:00:00.000Z', latencyMs: 42, packetLossPercent: 0 },
-      { time: '2026-11-17T10:30:00.000Z', latencyMs: 0, packetLossPercent: 100 },
+      { time: '2026-11-17T10:00:00.000Z', latencyMs: 42, latencyMsMin: 30, latencyMsMax: 55, packetLossPercent: 0, packetLossPercentMin: 0, packetLossPercentMax: 1 },
+      { time: '2026-11-17T10:30:00.000Z', latencyMs: 0, latencyMsMin: 0, latencyMsMax: 0, packetLossPercent: 100, packetLossPercentMin: 100, packetLossPercentMax: 100 },
       { time: '', latencyMs: 30, packetLossPercent: 0 },
     ];
     const latency = probeHistorySeries(historyPoints, 'latency', 'latency', 'Latency');
@@ -148,6 +148,26 @@ describe('network probe target aggregation helpers', () => {
       { time: '2026-11-17T10:00:00.000Z', value: 0 },
       { time: '2026-11-17T10:30:00.000Z', value: 100 },
     ]);
+    expect(latency.band).toEqual({
+      min: [
+        { time: '2026-11-17T10:00:00.000Z', value: 30 },
+        { time: '2026-11-17T10:30:00.000Z', value: null },
+      ],
+      max: [
+        { time: '2026-11-17T10:00:00.000Z', value: 55 },
+        { time: '2026-11-17T10:30:00.000Z', value: null },
+      ],
+    });
+    expect(loss.band).toEqual({
+      min: [
+        { time: '2026-11-17T10:00:00.000Z', value: 0 },
+        { time: '2026-11-17T10:30:00.000Z', value: 100 },
+      ],
+      max: [
+        { time: '2026-11-17T10:00:00.000Z', value: 1 },
+        { time: '2026-11-17T10:30:00.000Z', value: 100 },
+      ],
+    });
     expect(probeHistorySeries(undefined, 'latency', 'latency', 'Latency').points).toEqual([]);
   });
 });

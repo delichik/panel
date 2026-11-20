@@ -47,6 +47,7 @@ const defaultConfig = {
   retentionDays: 7,
   collectionIntervalSeconds: 60,
   cleanupSchedule: 'daily' as const,
+  thresholds: {},
   version: 0,
   updatedAt: '',
 };
@@ -170,6 +171,7 @@ describe('metrics facility', () => {
       retentionDays: 7,
       collectionIntervalSeconds: 120,
       cleanupSchedule: 'daily',
+      thresholds: {},
     });
     expect(config).toHaveBeenCalledTimes(2);
     expect(toastPush).toHaveBeenCalledWith(expect.objectContaining({ tone: 'success' }));

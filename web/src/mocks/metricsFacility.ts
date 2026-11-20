@@ -30,11 +30,28 @@ let config: MetricsFacilityConfig = {
 };
 
 function cloneConfig(): MetricsFacilityConfig {
-  return { ...config, serverIds: [...config.serverIds] };
+  return { ...config, serverIds: [...config.serverIds], thresholds: { ...config.thresholds } };
 }
 
 export function getMetricsFacilityConfig(): MetricsFacilityConfig {
   return cloneConfig();
+}
+
+function validateThresholds(input: MetricsFacilitySaveInput['thresholds']): void {
+  const percent = [input.cpuUsagePercent, input.memoryUsagePercent];
+  for (const value of percent) {
+    if (value === undefined) continue;
+    if (!Number.isFinite(value) || value <= 0 || value > 100) {
+      throw new MockMetricsFacilityError('metrics_facility_threshold_invalid', 'Percentage threshold must be greater than 0 and at most 100.');
+    }
+  }
+  const rates = [input.diskReadBytesPerSecond, input.diskWriteBytesPerSecond, input.networkRxBytesPerSecond, input.networkTxBytesPerSecond];
+  for (const value of rates) {
+    if (value === undefined) continue;
+    if (!Number.isFinite(value) || value <= 0) {
+      throw new MockMetricsFacilityError('metrics_facility_threshold_invalid', 'Rate threshold must be greater than 0.');
+    }
+  }
 }
 
 export function saveMetricsFacilityConfig(input: MetricsFacilitySaveInput): MetricsFacilityConfig {
@@ -51,6 +68,7 @@ export function saveMetricsFacilityConfig(input: MetricsFacilitySaveInput): Metr
   if (!isMetricsCleanupSchedule(input.cleanupSchedule)) {
     throw new MockMetricsFacilityError('metrics_facility_cleanup_schedule_invalid', 'Cleanup schedule must be hourly, daily or weekly.');
   }
+  validateThresholds(input.thresholds ?? {});
   let serverIds: string[] = [];
   if (input.mode === 'selected') {
     const known = new Set(mockServers.map((server) => server.id));
@@ -70,6 +88,7 @@ export function saveMetricsFacilityConfig(input: MetricsFacilitySaveInput): Metr
     retentionDays: input.retentionDays,
     collectionIntervalSeconds: input.collectionIntervalSeconds,
     cleanupSchedule: input.cleanupSchedule,
+    thresholds: { ...(input.thresholds ?? {}) },
     version: config.version + 1,
     updatedAt: new Date().toISOString(),
   };

@@ -77,4 +77,35 @@ describe('ProbeHistoryCharts', () => {
     expect(wrapper.text()).toContain('Avg 20.0 ms · Max 30.0 ms · Min 10.0 ms');
     expect(wrapper.text()).toContain('Avg 1.0% · Max 2.0% · Min 0.0%');
   });
+
+  it('renders the shaded min–max band hint when history carries ranges', async () => {
+    const wrapper = mount(ProbeHistoryCharts, {
+      props: {
+        latency: {
+          id: 'latency',
+          name: 'latency',
+          points: [{ time: '2026-08-01T00:00:00.000Z', value: 12 }],
+          band: {
+            min: [{ time: '2026-08-01T00:00:00.000Z', value: 10 }],
+            max: [{ time: '2026-08-01T00:00:00.000Z', value: 15 }],
+          },
+        },
+        loss: {
+          id: 'loss',
+          name: 'loss',
+          points: [{ time: '2026-08-01T00:00:00.000Z', value: 1 }],
+          band: {
+            min: [{ time: '2026-08-01T00:00:00.000Z', value: 0 }],
+            max: [{ time: '2026-08-01T00:00:00.000Z', value: 2 }],
+          },
+        },
+        latencyCurrent: 12,
+        lossCurrent: 1,
+      },
+    });
+    await flushPromises();
+
+    const { t } = useI18n();
+    expect(wrapper.text()).toContain(t('serversPage.metrics.bandHint'));
+  });
 });

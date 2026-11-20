@@ -11,6 +11,11 @@ export interface NetworkProbeHistoryPoint {
   time: string;
   latencyMs: number;
   packetLossPercent: number;
+  /** 同一 30 分钟桶内采样的最小值/最大值；旧数据缺省时等于平均值。 */
+  latencyMsMin?: number;
+  latencyMsMax?: number;
+  packetLossPercentMin?: number;
+  packetLossPercentMax?: number;
 }
 
 export interface NetworkProbeResult {
@@ -35,6 +40,7 @@ export interface NetworkProbeResult {
 export interface NetworkProbeConfig extends NetworkProbeSettings {
   mode: NetworkProbeMode;
   serverIds: string[];
+  thresholds: NetworkProbeThresholds;
   version: number;
   updatedAt: string;
 }
@@ -52,6 +58,12 @@ export interface NetworkProbeSettings {
   pingTimeoutSeconds: number;
 }
 
+/** 网络探测图表警告阈值；缺省表示不启用。 */
+export interface NetworkProbeThresholds {
+  latencyMs?: number;
+  packetLossPercent?: number;
+}
+
 export interface NetworkProbeSaveInput {
   mode: NetworkProbeMode;
   serverIds: string[];
@@ -59,6 +71,7 @@ export interface NetworkProbeSaveInput {
   intervalSeconds?: number;
   pingCount?: number;
   pingTimeoutSeconds?: number;
+  thresholds?: NetworkProbeThresholds;
 }
 
 export interface NetworkProbeMatrix {

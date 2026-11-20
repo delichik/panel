@@ -55,6 +55,24 @@ describe('server metrics model', () => {
     expect(networkSeries(sparse).map((item) => item.points.length)).toEqual([1, 1]);
   });
 
+  it('maps per-bucket min/max onto chart bands and keeps them absent without a range', () => {
+    const sample = series({
+      cpu: [{ time: base, usagePercent: 42.5, usagePercentMin: 30, usagePercentMax: 55 }],
+      network: [{ time: base, rxBytesPerSecond: 2048, rxBytesPerSecondMin: 1024, rxBytesPerSecondMax: 4096, txBytesPerSecond: 1024, txBytesPerSecondMin: 512, txBytesPerSecondMax: 2048 }],
+    });
+    expect(cpuSeries(sample)[0]?.band).toEqual({
+      min: [{ time: base, value: 30 }],
+      max: [{ time: base, value: 55 }],
+    });
+    expect(networkSeries(sample)[0]?.band).toEqual({
+      min: [{ time: base, value: 1024 }],
+      max: [{ time: base, value: 4096 }],
+    });
+    // 没有 min/max 的老响应不生成区间。
+    expect(diskIoSeries(series())[0]?.band).toBeUndefined();
+    expect(memorySeries(series())[0]?.band).toBeUndefined();
+  });
+
   it('derives current values, usage percentages and stats from the returned series', () => {
     const sample = series();
     expect(cpuCurrent(sample)).toBe(42.5);

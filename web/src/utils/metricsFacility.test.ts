@@ -16,6 +16,7 @@ describe('metrics facility contract helpers', () => {
       retentionDays: 7,
       collectionIntervalSeconds: 60,
       cleanupSchedule: 'daily',
+      thresholds: {},
     });
   });
 

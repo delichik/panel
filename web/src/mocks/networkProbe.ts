@@ -33,12 +33,13 @@ let config: NetworkProbeConfig = {
   intervalSeconds: networkProbeSettingRules.intervalSeconds.defaultValue,
   pingCount: networkProbeSettingRules.pingCount.defaultValue,
   pingTimeoutSeconds: networkProbeSettingRules.pingTimeoutSeconds.defaultValue,
+  thresholds: {},
   version: 1,
   updatedAt: '2026-11-16T05:00:00.000Z',
 };
 
 function cloneConfig(): NetworkProbeConfig {
-  return { ...config, serverIds: [...config.serverIds] };
+  return { ...config, serverIds: [...config.serverIds], thresholds: { ...config.thresholds } };
 }
 
 function toNode(server: ServerDto): NetworkProbeNode {
@@ -127,10 +128,18 @@ export function saveNetworkProbeConfig(input: NetworkProbeSaveInput): NetworkPro
     throw new MockNetworkProbeError(settingsError.code, `Probe setting ${settingsError.field} is out of range.`);
   }
   const settings = normalizeNetworkProbeSettings(input);
+  const thresholds = input.thresholds ?? {};
+  if (thresholds.latencyMs !== undefined && (!Number.isFinite(thresholds.latencyMs) || thresholds.latencyMs <= 0)) {
+    throw new MockNetworkProbeError('network_probe_threshold_invalid', 'Latency threshold must be greater than 0.');
+  }
+  if (thresholds.packetLossPercent !== undefined && (!Number.isFinite(thresholds.packetLossPercent) || thresholds.packetLossPercent <= 0 || thresholds.packetLossPercent > 100)) {
+    throw new MockNetworkProbeError('network_probe_threshold_invalid', 'Packet loss threshold must be greater than 0 and at most 100.');
+  }
   config = {
     mode: input.mode,
     serverIds,
     ...settings,
+    thresholds: { ...thresholds },
     version: config.version + 1,
     updatedAt: new Date().toISOString(),
   };
@@ -168,10 +177,19 @@ function historyFor(source: ServerDto, result: NetworkProbeResult, now: number):
   return Array.from({ length: 48 }, (_, index) => {
     const offset = hash + index * 7;
     const failed = offset % 23 === 0;
+    const latency = failed ? 0 : Math.round((result.latencyMs + ((offset % 9) - 4) * 4) * 10) / 10;
+    const loss = failed ? 100 : Math.max(0, Math.round((result.packetLossPercent + (offset % 5) - 2) * 10) / 10);
+    // 同一 30 分钟桶内的采样区间：平均保持不变，min/max 用于图表阴影带。
+    const latencySpread = failed ? 0 : 1 + (offset % 4);
+    const lossSpread = failed ? 0 : (offset % 3);
     return {
       time: new Date(currentBucket - (47 - index) * bucketMs).toISOString(),
-      latencyMs: failed ? 0 : Math.round((result.latencyMs + ((offset % 9) - 4) * 4) * 10) / 10,
-      packetLossPercent: failed ? 100 : Math.max(0, Math.round((result.packetLossPercent + (offset % 5) - 2) * 10) / 10),
+      latencyMs: latency,
+      latencyMsMin: Math.max(0, Math.round((latency - latencySpread) * 10) / 10),
+      latencyMsMax: Math.round((latency + latencySpread) * 10) / 10,
+      packetLossPercent: loss,
+      packetLossPercentMin: Math.max(0, Math.round((loss - lossSpread) * 10) / 10),
+      packetLossPercentMax: Math.min(100, Math.round((loss + lossSpread) * 10) / 10),
     };
   });
 }
@@ -188,7 +206,7 @@ function roundTenth(value: number): number {
   return Math.round(value * 10) / 10;
 }
 
-/** 跨源聚合 24h 历史：时间桶按当前时间对齐，延迟取有效均值、丢包取均值。 */
+/** 跨源聚合 24h 历史：时间桶按当前时间对齐，延迟/丢包取有效均值，区间取所有源的最小/最大值。 */
 function aggregateTargetHistory(histories: NetworkProbeHistoryPoint[][]): NetworkProbeHistoryPoint[] {
   if (!histories.length) return [];
   const length = Math.max(...histories.map((history) => history.length));
@@ -196,12 +214,21 @@ function aggregateTargetHistory(histories: NetworkProbeHistoryPoint[][]): Networ
     const points = histories
       .map((history) => history[index])
       .filter((point): point is NetworkProbeHistoryPoint => Boolean(point));
-    const latencies = points.map((point) => point.latencyMs).filter((value) => value > 0);
+    const validLatencyPoints = points.filter((point) => point.latencyMs > 0);
+    const latencies = validLatencyPoints.map((point) => point.latencyMs);
     const losses = points.map((point) => point.packetLossPercent);
+    const latencyMins = validLatencyPoints.map((point) => point.latencyMsMin ?? point.latencyMs);
+    const latencyMaxes = validLatencyPoints.map((point) => point.latencyMsMax ?? point.latencyMs);
+    const lossMins = points.map((point) => point.packetLossPercentMin ?? point.packetLossPercent);
+    const lossMaxes = points.map((point) => point.packetLossPercentMax ?? point.packetLossPercent);
     return {
       time: points[0]?.time ?? new Date().toISOString(),
       latencyMs: latencies.length ? roundTenth(latencies.reduce((sum, value) => sum + value, 0) / latencies.length) : 0,
+      latencyMsMin: latencyMins.length ? roundTenth(Math.min(...latencyMins)) : 0,
+      latencyMsMax: latencyMaxes.length ? roundTenth(Math.max(...latencyMaxes)) : 0,
       packetLossPercent: losses.length ? roundTenth(losses.reduce((sum, value) => sum + value, 0) / losses.length) : 0,
+      packetLossPercentMin: lossMins.length ? roundTenth(Math.min(...lossMins)) : 0,
+      packetLossPercentMax: lossMaxes.length ? roundTenth(Math.max(...lossMaxes)) : 0,
     };
   });
 }

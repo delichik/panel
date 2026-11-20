@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -52,25 +53,38 @@ const (
 	cleanupScheduleInvalidMsg = "cleanupSchedule must be hourly, daily or weekly"
 )
 
+// Thresholds 是图表警告阈值；nil/缺省表示该项未启用。百分比类字段上限 100，
+// 其余字段必须为正数。
+type Thresholds struct {
+	CPUUsagePercent        *float64 `json:"cpuUsagePercent,omitempty"`
+	MemoryUsagePercent     *float64 `json:"memoryUsagePercent,omitempty"`
+	DiskReadBytesPerSecond *float64 `json:"diskReadBytesPerSecond,omitempty"`
+	DiskWriteBytesPerSecond *float64 `json:"diskWriteBytesPerSecond,omitempty"`
+	NetworkRxBytesPerSecond *float64 `json:"networkRxBytesPerSecond,omitempty"`
+	NetworkTxBytesPerSecond *float64 `json:"networkTxBytesPerSecond,omitempty"`
+}
+
 // Config 是指标设施的对外配置。从未保存过时 mode=all、version=0、
 // updatedAt 为零值。
 type Config struct {
-	Mode                      string    `json:"mode"`
-	ServerIDs                 []string  `json:"serverIds"`
-	RetentionDays             int       `json:"retentionDays"`
-	CollectionIntervalSeconds int       `json:"collectionIntervalSeconds"`
-	CleanupSchedule           string    `json:"cleanupSchedule"`
-	Version                   int       `json:"version"`
-	UpdatedAt                 time.Time `json:"updatedAt"`
+	Mode                      string     `json:"mode"`
+	ServerIDs                 []string   `json:"serverIds"`
+	RetentionDays             int        `json:"retentionDays"`
+	CollectionIntervalSeconds int        `json:"collectionIntervalSeconds"`
+	CleanupSchedule           string     `json:"cleanupSchedule"`
+	Thresholds                Thresholds `json:"thresholds"`
+	Version                   int        `json:"version"`
+	UpdatedAt                 time.Time  `json:"updatedAt"`
 }
 
 // SaveInput 是保存指标设施的输入；不含 version/updatedAt。
 type SaveInput struct {
-	Mode                      string   `json:"mode"`
-	ServerIDs                 []string `json:"serverIds"`
-	RetentionDays             int      `json:"retentionDays"`
-	CollectionIntervalSeconds int      `json:"collectionIntervalSeconds"`
-	CleanupSchedule           string   `json:"cleanupSchedule"`
+	Mode                      string     `json:"mode"`
+	ServerIDs                 []string   `json:"serverIds"`
+	RetentionDays             int        `json:"retentionDays"`
+	CollectionIntervalSeconds int        `json:"collectionIntervalSeconds"`
+	CleanupSchedule           string     `json:"cleanupSchedule"`
+	Thresholds                Thresholds `json:"thresholds"`
 }
 
 // ReportConfig 是下发给单个节点的指标上报配置。Enabled 为 false 时 Agent 停止
@@ -149,10 +163,14 @@ func (s *Service) EnsureMigrated(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if _, err := orm.RawExec(ctx, s.db, `INSERT INTO metrics_facility_configs(id,mode,server_ids_json,retention_days,collection_interval_seconds,cleanup_schedule,version,updated_at)
-VALUES(?,?,?,?,?,?,?,?)
+	encodedThresholds, err := json.Marshal(cfg.Thresholds)
+	if err != nil {
+		return err
+	}
+	if _, err := orm.RawExec(ctx, s.db, `INSERT INTO metrics_facility_configs(id,mode,server_ids_json,retention_days,collection_interval_seconds,cleanup_schedule,thresholds_json,version,updated_at)
+VALUES(?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO NOTHING`,
-		configID, cfg.Mode, string(encoded), cfg.RetentionDays, cfg.CollectionIntervalSeconds, cfg.CleanupSchedule, cfg.Version, formatTime(cfg.UpdatedAt)); err != nil {
+		configID, cfg.Mode, string(encoded), cfg.RetentionDays, cfg.CollectionIntervalSeconds, cfg.CleanupSchedule, string(encodedThresholds), cfg.Version, formatTime(cfg.UpdatedAt)); err != nil {
 		return err
 	}
 	s.invalidate()
@@ -182,6 +200,10 @@ func (s *Service) Save(ctx context.Context, in SaveInput) (Config, error) {
 	schedule := normalizeCleanupSchedule(in.CleanupSchedule)
 	if schedule == "" {
 		return Config{}, panelerr.Validation("metrics_facility_cleanup_schedule_invalid", cleanupScheduleInvalidMsg)
+	}
+	thresholds, err := validateThresholds(in.Thresholds)
+	if err != nil {
+		return Config{}, err
 	}
 	ids := []string{}
 	if mode == ModeSelected {
@@ -214,6 +236,7 @@ func (s *Service) Save(ctx context.Context, in SaveInput) (Config, error) {
 		RetentionDays:             in.RetentionDays,
 		CollectionIntervalSeconds: in.CollectionIntervalSeconds,
 		CleanupSchedule:           schedule,
+		Thresholds:                thresholds,
 		Version:                   previous.Version + 1,
 		UpdatedAt:                 now,
 	}
@@ -221,10 +244,14 @@ func (s *Service) Save(ctx context.Context, in SaveInput) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	if _, err := orm.RawExec(ctx, s.db, `INSERT INTO metrics_facility_configs(id,mode,server_ids_json,retention_days,collection_interval_seconds,cleanup_schedule,version,updated_at)
-VALUES(?,?,?,?,?,?,?,?)
-ON CONFLICT(id) DO UPDATE SET mode=excluded.mode,server_ids_json=excluded.server_ids_json,retention_days=excluded.retention_days,collection_interval_seconds=excluded.collection_interval_seconds,cleanup_schedule=excluded.cleanup_schedule,version=excluded.version,updated_at=excluded.updated_at`,
-		configID, cfg.Mode, string(encoded), cfg.RetentionDays, cfg.CollectionIntervalSeconds, cfg.CleanupSchedule, cfg.Version, formatTime(cfg.UpdatedAt)); err != nil {
+	encodedThresholds, err := json.Marshal(cfg.Thresholds)
+	if err != nil {
+		return Config{}, err
+	}
+	if _, err := orm.RawExec(ctx, s.db, `INSERT INTO metrics_facility_configs(id,mode,server_ids_json,retention_days,collection_interval_seconds,cleanup_schedule,thresholds_json,version,updated_at)
+VALUES(?,?,?,?,?,?,?,?,?)
+ON CONFLICT(id) DO UPDATE SET mode=excluded.mode,server_ids_json=excluded.server_ids_json,retention_days=excluded.retention_days,collection_interval_seconds=excluded.collection_interval_seconds,cleanup_schedule=excluded.cleanup_schedule,thresholds_json=excluded.thresholds_json,version=excluded.version,updated_at=excluded.updated_at`,
+		configID, cfg.Mode, string(encoded), cfg.RetentionDays, cfg.CollectionIntervalSeconds, cfg.CleanupSchedule, string(encodedThresholds), cfg.Version, formatTime(cfg.UpdatedAt)); err != nil {
 		return Config{}, err
 	}
 	s.invalidate()
@@ -324,9 +351,9 @@ func (s *Service) cachedServers(ctx context.Context) ([]server.Server, error) {
 
 func (s *Service) loadConfig(ctx context.Context) (Config, error) {
 	cfg := defaultConfig()
-	var mode, rawIDs, cleanupSchedule, updatedAt string
-	err := s.db.QueryRowContext(ctx, `SELECT mode,server_ids_json,retention_days,collection_interval_seconds,cleanup_schedule,version,updated_at FROM metrics_facility_configs WHERE id=?`, configID).
-		Scan(&mode, &rawIDs, &cfg.RetentionDays, &cfg.CollectionIntervalSeconds, &cleanupSchedule, &cfg.Version, &updatedAt)
+	var mode, rawIDs, cleanupSchedule, rawThresholds, updatedAt string
+	err := s.db.QueryRowContext(ctx, `SELECT mode,server_ids_json,retention_days,collection_interval_seconds,cleanup_schedule,thresholds_json,version,updated_at FROM metrics_facility_configs WHERE id=?`, configID).
+		Scan(&mode, &rawIDs, &cfg.RetentionDays, &cfg.CollectionIntervalSeconds, &cleanupSchedule, &rawThresholds, &cfg.Version, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return cfg, nil
 	}
@@ -344,6 +371,7 @@ func (s *Service) loadConfig(ctx context.Context) (Config, error) {
 	cfg.RetentionDays = normalizeRetentionDays(cfg.RetentionDays)
 	cfg.CollectionIntervalSeconds = normalizeIntervalSeconds(cfg.CollectionIntervalSeconds)
 	cfg.CleanupSchedule = normalizeCleanupScheduleOr(cleanupSchedule)
+	cfg.Thresholds = decodeThresholds(rawThresholds)
 	cfg.UpdatedAt = parseTime(updatedAt)
 	return cfg, nil
 }
@@ -473,6 +501,72 @@ func decodeIDs(raw string) []string {
 		return []string{}
 	}
 	return normalizeIDs(ids)
+}
+
+// validateThresholds 校验八项阈值中本设施负责的六项：百分比 0..100（不含 0），
+// 速率必须为正数；未设置的 nil 保持禁用。
+func validateThresholds(in Thresholds) (Thresholds, error) {
+	percent := []struct {
+		name  string
+		value *float64
+	}{
+		{"cpuUsagePercent", in.CPUUsagePercent},
+		{"memoryUsagePercent", in.MemoryUsagePercent},
+	}
+	for _, item := range percent {
+		if item.value == nil {
+			continue
+		}
+		if math.IsNaN(*item.value) || math.IsInf(*item.value, 0) || *item.value <= 0 || *item.value > 100 {
+			return Thresholds{}, panelerr.Validation("metrics_facility_threshold_invalid", item.name+" must be greater than 0 and at most 100")
+		}
+	}
+	rates := []struct {
+		name  string
+		value *float64
+	}{
+		{"diskReadBytesPerSecond", in.DiskReadBytesPerSecond},
+		{"diskWriteBytesPerSecond", in.DiskWriteBytesPerSecond},
+		{"networkRxBytesPerSecond", in.NetworkRxBytesPerSecond},
+		{"networkTxBytesPerSecond", in.NetworkTxBytesPerSecond},
+	}
+	for _, item := range rates {
+		if item.value == nil {
+			continue
+		}
+		if math.IsNaN(*item.value) || math.IsInf(*item.value, 0) || *item.value <= 0 {
+			return Thresholds{}, panelerr.Validation("metrics_facility_threshold_invalid", item.name+" must be greater than 0")
+		}
+	}
+	return in, nil
+}
+
+// decodeThresholds 宽松读取持久化阈值：坏 JSON 或越界字段按未设置处理，避免
+// 旧库/手工数据让指标设施读取失败。
+func decodeThresholds(raw string) Thresholds {
+	var out Thresholds
+	if strings.TrimSpace(raw) == "" || json.Unmarshal([]byte(raw), &out) != nil {
+		return Thresholds{}
+	}
+	validPercent := func(value *float64) *float64 {
+		if value == nil || math.IsNaN(*value) || math.IsInf(*value, 0) || *value <= 0 || *value > 100 {
+			return nil
+		}
+		return value
+	}
+	validRate := func(value *float64) *float64 {
+		if value == nil || math.IsNaN(*value) || math.IsInf(*value, 0) || *value <= 0 {
+			return nil
+		}
+		return value
+	}
+	out.CPUUsagePercent = validPercent(out.CPUUsagePercent)
+	out.MemoryUsagePercent = validPercent(out.MemoryUsagePercent)
+	out.DiskReadBytesPerSecond = validRate(out.DiskReadBytesPerSecond)
+	out.DiskWriteBytesPerSecond = validRate(out.DiskWriteBytesPerSecond)
+	out.NetworkRxBytesPerSecond = validRate(out.NetworkRxBytesPerSecond)
+	out.NetworkTxBytesPerSecond = validRate(out.NetworkTxBytesPerSecond)
+	return out
 }
 
 func serverByID(all []server.Server) map[string]server.Server {

@@ -24,6 +24,7 @@ CREATE TABLE metrics_facility_configs (
 	retention_days INTEGER NOT NULL DEFAULT 7,
 	collection_interval_seconds INTEGER NOT NULL DEFAULT 60,
 	cleanup_schedule TEXT NOT NULL DEFAULT 'daily' CHECK(cleanup_schedule IN ('hourly','daily','weekly')),
+	thresholds_json TEXT NOT NULL DEFAULT '{}',
 	version INTEGER NOT NULL DEFAULT 1,
 	updated_at TEXT NOT NULL
 );
@@ -217,6 +218,44 @@ func TestEnsureMigratedIsOneTime(t *testing.T) {
 
 // TestSaveAllModeClearsServerIDsAndBumpsVersion covers mode=all normalization
 // (ignored + cleared serverIds) and the monotonic version.
+// TestSaveThresholdsRoundTrip covers the warning-threshold fields: save/read
+// round-trip, percent/rate validation, and disabled (nil) values.
+func TestSaveThresholdsRoundTrip(t *testing.T) {
+	svc, _, _ := newTestService(t)
+	ctx := context.Background()
+	cpu := 80.0
+	read := 10 * 1024 * 1024.0
+	saved, err := svc.Save(ctx, SaveInput{Mode: ModeAll, RetentionDays: 7, CollectionIntervalSeconds: 60, CleanupSchedule: "daily",
+		Thresholds: Thresholds{CPUUsagePercent: &cpu, DiskReadBytesPerSecond: &read}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Thresholds.CPUUsagePercent == nil || *saved.Thresholds.CPUUsagePercent != 80 || saved.Thresholds.MemoryUsagePercent != nil {
+		t.Fatalf("saved thresholds = %#v", saved.Thresholds)
+	}
+	stored, err := svc.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Thresholds.CPUUsagePercent == nil || *stored.Thresholds.CPUUsagePercent != 80 || stored.Thresholds.DiskReadBytesPerSecond == nil || *stored.Thresholds.DiskReadBytesPerSecond != read {
+		t.Fatalf("stored thresholds = %#v", stored.Thresholds)
+	}
+	invalidPercent := 101.0
+	if _, err := svc.Save(ctx, SaveInput{Mode: ModeAll, RetentionDays: 7, CollectionIntervalSeconds: 60, CleanupSchedule: "daily",
+		Thresholds: Thresholds{CPUUsagePercent: &invalidPercent}}); err == nil {
+		t.Fatal("expected invalid percent threshold error")
+	} else {
+		requirePanelCode(t, err, "metrics_facility_threshold_invalid")
+	}
+	zeroRate := 0.0
+	if _, err := svc.Save(ctx, SaveInput{Mode: ModeAll, RetentionDays: 7, CollectionIntervalSeconds: 60, CleanupSchedule: "daily",
+		Thresholds: Thresholds{NetworkRxBytesPerSecond: &zeroRate}}); err == nil {
+		t.Fatal("expected invalid rate threshold error")
+	} else {
+		requirePanelCode(t, err, "metrics_facility_threshold_invalid")
+	}
+}
+
 func TestSaveAllModeClearsServerIDsAndBumpsVersion(t *testing.T) {
 	svc, _, _ := newTestService(t)
 	ctx := context.Background()

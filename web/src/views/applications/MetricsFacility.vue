@@ -14,7 +14,7 @@ import ServerMultiPicker from '@/components/patterns/ServerMultiPicker.vue';
 import { useErrorDialog } from '@/components/ui/errorDialog';
 import { useSuccessToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
-import type { MetricsCleanupSchedule, MetricsFacilityConfig, MetricsFacilityMode } from '@/types/metricsFacility';
+import type { MetricsCleanupSchedule, MetricsFacilityConfig, MetricsFacilityMode, MetricsWarningThresholds } from '@/types/metricsFacility';
 import type { ServerDto } from '@/types/servers';
 import {
   isMetricsCleanupSchedule,
@@ -76,6 +76,31 @@ const cleanupOptions = computed(() => [
 
 const retentionValue = computed(() => parseMetricsPositiveInteger(draft.retentionDays));
 const intervalValue = computed(() => parseMetricsPositiveInteger(draft.collectionIntervalSeconds));
+
+type ThresholdKey = keyof MetricsWarningThresholds;
+const thresholdFields: Array<{ key: ThresholdKey; labelKey: string; percent: boolean }> = [
+  { key: 'cpuUsagePercent', labelKey: 'applicationsPage.metricsThresholdCpu', percent: true },
+  { key: 'memoryUsagePercent', labelKey: 'applicationsPage.metricsThresholdMemory', percent: true },
+  { key: 'diskReadBytesPerSecond', labelKey: 'applicationsPage.metricsThresholdDiskRead', percent: false },
+  { key: 'diskWriteBytesPerSecond', labelKey: 'applicationsPage.metricsThresholdDiskWrite', percent: false },
+  { key: 'networkRxBytesPerSecond', labelKey: 'applicationsPage.metricsThresholdNetworkRx', percent: false },
+  { key: 'networkTxBytesPerSecond', labelKey: 'applicationsPage.metricsThresholdNetworkTx', percent: false },
+];
+const thresholdDraft = reactive<Record<ThresholdKey, number | null>>({
+  cpuUsagePercent: null,
+  memoryUsagePercent: null,
+  diskReadBytesPerSecond: null,
+  diskWriteBytesPerSecond: null,
+  networkRxBytesPerSecond: null,
+  networkTxBytesPerSecond: null,
+});
+function thresholdInvalid(key: ThresholdKey): boolean {
+  const value = thresholdDraft[key];
+  if (value === null) return false;
+  if (!Number.isFinite(value) || value <= 0) return true;
+  return thresholdFields.find((item) => item.key === key)?.percent === true && value > 100;
+}
+const thresholdsInvalid = computed(() => thresholdFields.some((item) => thresholdInvalid(item.key)));
 /** NumberBox 适配：draft 仍是字符串（校验/保存沿用 parse），空值映射为 null。 */
 const retentionNumber = computed<number | null>({
   get: () => retentionValue.value,
@@ -94,6 +119,7 @@ const dirty = computed(() => {
   if (draft.mode !== current.mode) return true;
   if (JSON.stringify([...draft.serverIds].sort()) !== JSON.stringify([...current.serverIds].sort())) return true;
   if (draft.cleanupSchedule !== current.cleanupSchedule) return true;
+  if (thresholdFields.some((item) => (current.thresholds?.[item.key] ?? null) !== thresholdDraft[item.key])) return true;
   return retentionValue.value !== current.retentionDays
     || intervalValue.value !== current.collectionIntervalSeconds;
 });
@@ -105,6 +131,9 @@ function resetDraft() {
   draft.retentionDays = String(current?.retentionDays ?? metricsFacilityDefaults.retentionDays);
   draft.collectionIntervalSeconds = String(current?.collectionIntervalSeconds ?? metricsFacilityDefaults.collectionIntervalSeconds);
   draft.cleanupSchedule = current?.cleanupSchedule ?? metricsFacilityDefaults.cleanupSchedule;
+  for (const field of thresholdFields) {
+    thresholdDraft[field.key] = current?.thresholds?.[field.key] ?? null;
+  }
   formError.value = '';
 }
 
@@ -146,6 +175,15 @@ async function save() {
     return;
   }
   if (!isMetricsCleanupSchedule(draft.cleanupSchedule)) return;
+  if (thresholdsInvalid.value) {
+    formError.value = t('applicationsPage.metricsThresholdInvalid');
+    return;
+  }
+  const thresholds: MetricsWarningThresholds = {};
+  for (const field of thresholdFields) {
+    const value = thresholdDraft[field.key];
+    if (value !== null) thresholds[field.key] = value;
+  }
   saving.value = true;
   try {
     const saved = await metricsFacilityApi.saveConfig({
@@ -154,6 +192,7 @@ async function save() {
       retentionDays: retentionValue.value ?? metricsFacilityDefaults.retentionDays,
       collectionIntervalSeconds: intervalValue.value ?? metricsFacilityDefaults.collectionIntervalSeconds,
       cleanupSchedule: draft.cleanupSchedule,
+      thresholds,
     });
     config.value = saved;
     resetDraft();
@@ -243,6 +282,29 @@ onBeforeUnmount(() => {
                 data-testid="metrics-interval"
               />
             </FacilityField>
+          </div>
+          <div class="grid gap-3 border-t border-divider pt-3">
+            <div class="grid gap-1">
+              <h4 class="m-0 text-body-strong text-foreground">{{ t('applicationsPage.metricsThresholdsTitle') }}</h4>
+              <p class="m-0 text-caption leading-5 text-muted-foreground">{{ t('applicationsPage.metricsThresholdsHint') }}</p>
+            </div>
+            <div class="grid gap-3 sm:grid-cols-2">
+              <FacilityField
+                v-for="field in thresholdFields"
+                :key="field.key"
+                :label="t(field.labelKey)"
+                :hint="field.percent ? '%' : 'B/s'"
+                :error="thresholdInvalid(field.key) ? t('applicationsPage.metricsThresholdInvalid') : ''"
+              >
+                <NumberBox
+                  v-model="thresholdDraft[field.key]"
+                  :min="0"
+                  :step="1"
+                  :invalid="thresholdInvalid(field.key)"
+                  :disabled="saving"
+                />
+              </FacilityField>
+            </div>
           </div>
           <InfoBar v-if="formError" tone="danger">{{ formError }}</InfoBar>
         </div>

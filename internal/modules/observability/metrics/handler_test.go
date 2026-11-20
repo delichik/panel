@@ -94,6 +94,9 @@ func TestMetricsQueryHandlerBucketValidationAndPassthrough(t *testing.T) {
 	if !ok || point["usagePercent"] != 15.0 {
 		t.Fatalf("bucketed cpu point = %#v, want the bucket average", cpu[0])
 	}
+	if point["usagePercentMin"] != 10.0 || point["usagePercentMax"] != 20.0 {
+		t.Fatalf("bucketed cpu point range = %#v, want min 10 / max 20", point)
+	}
 	if at, err := time.Parse(time.RFC3339Nano, point["time"].(string)); err != nil || !at.Equal(bucketStart) {
 		t.Fatalf("bucketed point time = %#v, want %s", point["time"], bucketStart)
 	}

@@ -3258,7 +3258,7 @@ onBeforeUnmount(() => {
     :title="facilityPageTitle"
     :description="facilityPageDescription"
     :breadcrumbs="facilityBreadcrumbs"
-    :body-scroll="isStorageShareFacility || isMetricsFacility"
+    :body-scroll="isStorageShareFacility || isMetricsFacility || isNetworkProbeFacility"
     width="content"
   >
     <template #actions>

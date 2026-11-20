@@ -2,6 +2,7 @@
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { RefreshCcw } from '@/icons';
 import { serversApi, type ServerMetricsRange, type ServerMetricsSeries } from '@/api/servers';
+import { metricsFacilityApi } from '@/api/metricsFacility';
 import Button from '@/components/ui/Button.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
@@ -11,6 +12,7 @@ import ChartCard from '@/components/patterns/ChartCard.vue';
 import { useAutoRefresh } from '@/composables/useAutoRefresh';
 import { useI18n } from '@/i18n';
 import type { ServerDto } from '@/types/servers';
+import type { MetricsWarningThresholds } from '@/types/metricsFacility';
 import { formatDateTime } from '@/utils/datetime';
 import { formatBytes, formatPercent, formatRate, type MetricSeriesData, type MetricThreshold, type SeriesStats } from '@/utils/metrics';
 import { createLatestRequestGuard, isAbortError } from '@/views/_shared/requestState';
@@ -37,6 +39,7 @@ const autoRefresh = useAutoRefresh();
 const MetricChart = defineAsyncComponent(() => import('@/components/patterns/MetricChart.vue'));
 
 const metrics = ref<ServerMetricsSeries | null>(null);
+const warningThresholds = ref<MetricsWarningThresholds>({});
 const loading = ref(false);
 const error = ref('');
 const range = ref<ServerMetricsRange>('1h');
@@ -57,8 +60,9 @@ interface PanelView {
   currentHint?: string;
   stats: string;
   legend: Array<{ name: string; colorClass: string }>;
-  thresholds: MetricThreshold[];
+  threshold?: MetricThreshold;
   hasData: boolean;
+  hasBand: boolean;
   emptyKey: string;
 }
 
@@ -71,16 +75,47 @@ function percentStat(label: string, value: number | null): string {
   return `${label} ${value === null ? t('common.notAvailable') : formatPercent(value, 1)}`;
 }
 
-/** 双序列统计项：读/写序列各自取同一种统计值，按 ` / ` 连接。 */
-function pairedStat(
-  series: MetricSeriesData[],
-  pick: (stats: SeriesStats) => number | null,
-  formatter: (value: number) => string,
-): string {
-  return series.map((item) => {
-    const value = pick(statsFor(item.points));
-    return value === null ? t('common.notAvailable') : formatter(value);
-  }).join(' / ');
+/**
+ * 单体序列的整体统计：平均取桶平均序列，最大/最小优先取阴影带的真实极值，
+ * 没有 band 时回退到平均序列（内存等不提供区间）。
+ */
+function statsForMetric(item: MetricSeriesData): SeriesStats {
+  const base = statsFor(item.points);
+  if (!item.band) return base;
+  let minimum: number | null = null;
+  let peak: number | null = null;
+  for (const point of item.band.min) {
+    if (typeof point.value === 'number' && Number.isFinite(point.value)) {
+      minimum = minimum === null ? point.value : Math.min(minimum, point.value);
+    }
+  }
+  for (const point of item.band.max) {
+    if (typeof point.value === 'number' && Number.isFinite(point.value)) {
+      peak = peak === null ? point.value : Math.max(peak, point.value);
+    }
+  }
+  return {
+    ...base,
+    minimum: minimum ?? base.minimum,
+    peak: peak ?? base.peak,
+  };
+}
+
+/** 字节速率统计行：平均 / 最大 / 最小。 */
+function rateStatLine(item: MetricSeriesData): string {
+  const stats = statsForMetric(item);
+  const fallback = t('common.notAvailable');
+  return [
+    `${t('serversPage.metrics.average')} ${stats.average === null ? fallback : formatRate(stats.average)}`,
+    `${t('serversPage.metrics.maximum')} ${stats.peak === null ? fallback : formatRate(stats.peak)}`,
+    `${t('serversPage.metrics.minimum')} ${stats.minimum === null ? fallback : formatRate(stats.minimum)}`,
+  ].join(' · ');
+}
+
+/** 阈值为空/非法时不启用；标签按图表单位格式化。 */
+function thresholdFor(value: number | undefined, formatter: (value: number) => string): MetricThreshold | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return undefined;
+  return { value, label: t('serversPage.metrics.warningThreshold', { value: formatter(value) }) };
 }
 
 const panels = computed<PanelView[]>(() => {
@@ -88,13 +123,17 @@ const panels = computed<PanelView[]>(() => {
   if (!series) return [];
   const cpu = cpuSeries(series);
   const memory = memorySeries(series).map((item) => ({ ...item, name: t('serversPage.memory') }));
-  const diskIo = diskIoSeries(series).map((item, index) => ({ ...item, name: index === 0 ? t('serversPage.diskIoRead') : t('serversPage.diskIoWrite') }));
-  const network = networkSeries(series).map((item, index) => ({ ...item, name: index === 0 ? t('serversPage.networkRx') : t('serversPage.networkTx') }));
+  const diskIo = diskIoSeries(series);
+  const diskRead = { ...diskIo[0]!, name: t('serversPage.diskIoRead') };
+  const diskWrite = { ...diskIo[1]!, name: t('serversPage.diskIoWrite') };
+  const network = networkSeries(series);
+  const networkRx = { ...network[0]!, name: t('serversPage.networkRx') };
+  const networkTx = { ...network[1]!, name: t('serversPage.networkTx') };
   const memoryNow = memoryCurrent(series);
   const diskNow = diskIoCurrent(series);
   const networkNow = networkCurrent(series);
 
-  const cpuStats = statsFor(cpu[0]?.points ?? []);
+  const cpuStats = statsForMetric(cpu[0]!);
   const memoryStats = statsFor(memory[0]?.points ?? []);
 
   return [
@@ -110,8 +149,9 @@ const panels = computed<PanelView[]>(() => {
         percentStat(t('serversPage.metrics.minimum'), cpuStats.minimum),
       ].join(' · '),
       legend: [],
-      thresholds: [{ value: 80, label: t('serversPage.metrics.threshold', { value: '80%' }) }],
+      threshold: thresholdFor(warningThresholds.value.cpuUsagePercent, (value) => formatPercent(value, 1)),
       hasData: seriesHasData(cpu),
+      hasBand: Boolean(cpu[0]?.band),
       emptyKey: 'serversPage.metrics.notReported',
     },
     {
@@ -127,46 +167,61 @@ const panels = computed<PanelView[]>(() => {
         percentStat(t('serversPage.metrics.minimum'), memoryStats.minimum),
       ].join(' · '),
       legend: [],
-      thresholds: [{ value: 90, label: t('serversPage.metrics.threshold', { value: '90%' }) }],
+      threshold: thresholdFor(warningThresholds.value.memoryUsagePercent, (value) => formatPercent(value, 1)),
       hasData: seriesHasData(memory),
+      hasBand: false,
       emptyKey: 'serversPage.metrics.notReported',
     },
     {
-      key: 'diskIo',
-      title: t('serversPage.diskIo'),
+      key: 'disk-read',
+      title: t('serversPage.diskIoRead'),
       valueKind: 'bytes',
-      series: diskIo,
-      current: diskNow ? `${formatRate(diskNow.read)} / ${formatRate(diskNow.write)}` : t('common.notAvailable'),
-      stats: [
-        `${t('serversPage.metrics.average')} ${pairedStat(diskIo, (stats) => stats.average, formatRate)}`,
-        `${t('serversPage.metrics.maximum')} ${pairedStat(diskIo, (stats) => stats.peak, formatRate)}`,
-        `${t('serversPage.metrics.minimum')} ${pairedStat(diskIo, (stats) => stats.minimum, formatRate)}`,
-      ].join(' · '),
-      legend: [
-        { name: t('serversPage.diskIoRead'), colorClass: 'bg-primary' },
-        { name: t('serversPage.diskIoWrite'), colorClass: 'bg-info' },
-      ],
-      thresholds: [],
-      hasData: seriesHasData(diskIo),
+      series: [diskRead],
+      current: diskNow ? formatRate(diskNow.read) : t('common.notAvailable'),
+      stats: rateStatLine(diskRead),
+      legend: [],
+      threshold: thresholdFor(warningThresholds.value.diskReadBytesPerSecond, formatRate),
+      hasData: seriesHasData([diskRead]),
+      hasBand: Boolean(diskRead.band),
       emptyKey: 'serversPage.metrics.diskIoNotReported',
     },
     {
-      key: 'network',
-      title: t('serversPage.network'),
+      key: 'disk-write',
+      title: t('serversPage.diskIoWrite'),
       valueKind: 'bytes',
-      series: network,
-      current: networkNow ? `${formatRate(networkNow.rx)} / ${formatRate(networkNow.tx)}` : t('common.notAvailable'),
-      stats: [
-        `${t('serversPage.metrics.average')} ${pairedStat(network, (stats) => stats.average, formatRate)}`,
-        `${t('serversPage.metrics.maximum')} ${pairedStat(network, (stats) => stats.peak, formatRate)}`,
-        `${t('serversPage.metrics.minimum')} ${pairedStat(network, (stats) => stats.minimum, formatRate)}`,
-      ].join(' · '),
-      legend: [
-        { name: t('serversPage.networkRx'), colorClass: 'bg-primary' },
-        { name: t('serversPage.networkTx'), colorClass: 'bg-info' },
-      ],
-      thresholds: [],
-      hasData: seriesHasData(network),
+      series: [diskWrite],
+      current: diskNow ? formatRate(diskNow.write) : t('common.notAvailable'),
+      stats: rateStatLine(diskWrite),
+      legend: [],
+      threshold: thresholdFor(warningThresholds.value.diskWriteBytesPerSecond, formatRate),
+      hasData: seriesHasData([diskWrite]),
+      hasBand: Boolean(diskWrite.band),
+      emptyKey: 'serversPage.metrics.diskIoNotReported',
+    },
+    {
+      key: 'network-rx',
+      title: t('serversPage.networkRx'),
+      valueKind: 'bytes',
+      series: [networkRx],
+      current: networkNow ? formatRate(networkNow.rx) : t('common.notAvailable'),
+      stats: rateStatLine(networkRx),
+      legend: [],
+      threshold: thresholdFor(warningThresholds.value.networkRxBytesPerSecond, formatRate),
+      hasData: seriesHasData([networkRx]),
+      hasBand: Boolean(networkRx.band),
+      emptyKey: 'serversPage.metrics.notReported',
+    },
+    {
+      key: 'network-tx',
+      title: t('serversPage.networkTx'),
+      valueKind: 'bytes',
+      series: [networkTx],
+      current: networkNow ? formatRate(networkNow.tx) : t('common.notAvailable'),
+      stats: rateStatLine(networkTx),
+      legend: [],
+      threshold: thresholdFor(warningThresholds.value.networkTxBytesPerSecond, formatRate),
+      hasData: seriesHasData([networkTx]),
+      hasBand: Boolean(networkTx.band),
       emptyKey: 'serversPage.metrics.notReported',
     },
   ];
@@ -201,10 +256,21 @@ async function load(force = false) {
   }
 }
 
+async function loadWarningThresholds() {
+  try {
+    const facility = await metricsFacilityApi.config();
+    warningThresholds.value = facility.thresholds ?? {};
+  } catch {
+    // 阈值是展示增强：读取失败时不画阈值线，不影响指标加载。
+    warningThresholds.value = {};
+  }
+}
+
 watch(range, () => { void load(true); });
 
 onMounted(() => {
   void load(true);
+  void loadWarningThresholds();
   // 指标展示页复用全局自动刷新档位；非当前 tab / 加载中时跳过这一拍。
   autoRefresh.start(() => {
     if (props.active === false || inFlight) return;
@@ -251,14 +317,21 @@ onBeforeUnmount(() => {
                 v-if="panel.hasData"
                 :series="panel.series"
                 :value-kind="panel.valueKind"
-                :thresholds="panel.thresholds"
                 :label="panel.title"
+                :threshold="panel.threshold"
+                :band-labels="{
+                  average: t('serversPage.metrics.average'),
+                  minimum: t('serversPage.metrics.minimum'),
+                  maximum: t('serversPage.metrics.maximum'),
+                }"
               />
               <div v-else class="grid h-full place-items-center rounded-control border border-dashed border-stroke px-3 text-center text-caption text-muted-foreground">{{ t(panel.emptyKey) }}</div>
             </div>
             <template #footer>
               <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-caption text-muted-foreground">
                 <span>{{ panel.stats }}</span>
+                <span v-if="panel.hasBand">{{ t('serversPage.metrics.bandHint') }}</span>
+                <span v-if="panel.threshold">{{ t('serversPage.metrics.thresholdHint') }}</span>
                 <span v-for="item in panel.legend" :key="item.name" class="inline-flex items-center gap-1.5">
                   <i class="size-2 rounded-micro" :class="item.colorClass" aria-hidden="true" />{{ item.name }}
                 </span>

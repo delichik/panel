@@ -903,6 +903,7 @@ type NetworkProbeConfig struct {
 	IntervalSeconds    int       `orm:"not_null;default:60"`
 	PingCount          int       `orm:"not_null;default:3"`
 	PingTimeoutSeconds int       `orm:"not_null;default:2"`
+	ThresholdsJSON     string    `orm:"not_null;default:'{}';column:thresholds_json"`
 	Version            int       `orm:"not_null;default:1"`
 	UpdatedAt          time.Time `orm:"not_null"`
 }
@@ -955,6 +956,7 @@ type MetricsFacilityConfig struct {
 	RetentionDays             int       `orm:"not_null;default:7"`
 	CollectionIntervalSeconds int       `orm:"not_null;default:60"`
 	CleanupSchedule           string    `orm:"not_null;default:'daily'"`
+	ThresholdsJSON            string    `orm:"not_null;default:'{}';column:thresholds_json"`
 	Version                   int       `orm:"not_null;default:1"`
 	UpdatedAt                 time.Time `orm:"not_null"`
 }

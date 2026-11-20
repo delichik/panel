@@ -81,6 +81,10 @@ type QueryManyOptions struct {
 type CPUPoint struct {
 	Time         time.Time `json:"time"`
 	UsagePercent float64   `json:"usagePercent"`
+	// UsagePercentMin/Max 是同一时间桶内原始采样的最小值/最大值；仅 bucket
+	// 查询填充，原始查询保持 nil（响应不出现该字段）。
+	UsagePercentMin *float64 `json:"usagePercentMin,omitempty"`
+	UsagePercentMax *float64 `json:"usagePercentMax,omitempty"`
 }
 type MemoryPoint struct {
 	Time       time.Time `json:"time"`
@@ -91,11 +95,22 @@ type NetPoint struct {
 	Time             time.Time `json:"time"`
 	RxBytesPerSecond float64   `json:"rxBytesPerSecond"`
 	TxBytesPerSecond float64   `json:"txBytesPerSecond"`
+	// RxBytesPerSecondMin/Max、TxBytesPerSecondMin/Max 是桶内原始采样的
+	// 最小值/最大值；仅 bucket 查询填充。
+	RxBytesPerSecondMin *float64 `json:"rxBytesPerSecondMin,omitempty"`
+	RxBytesPerSecondMax *float64 `json:"rxBytesPerSecondMax,omitempty"`
+	TxBytesPerSecondMin *float64 `json:"txBytesPerSecondMin,omitempty"`
+	TxBytesPerSecondMax *float64 `json:"txBytesPerSecondMax,omitempty"`
 }
 type DiskIOPoint struct {
 	Time                time.Time `json:"time"`
 	ReadBytesPerSecond  float64   `json:"readBytesPerSecond"`
 	WriteBytesPerSecond float64   `json:"writeBytesPerSecond"`
+	// Min/Max 是桶内原始采样的最小值/最大值；未知侧保持 nil（JSON 省略）。
+	ReadBytesPerSecondMin  *float64 `json:"readBytesPerSecondMin,omitempty"`
+	ReadBytesPerSecondMax  *float64 `json:"readBytesPerSecondMax,omitempty"`
+	WriteBytesPerSecondMin *float64 `json:"writeBytesPerSecondMin,omitempty"`
+	WriteBytesPerSecondMax *float64 `json:"writeBytesPerSecondMax,omitempty"`
 }
 type LoadPoint struct {
 	Time   time.Time `json:"time"`
@@ -415,16 +430,31 @@ func (s *Service) QueryMany(ctx context.Context, serverIDs []string, rng string,
 	}
 	selectArgs := []any{opts.BucketSeconds, opts.BucketSeconds}
 	if opts.Fields.CPU {
-		selects = append(selects, "AVG(cpu_usage_percent) AS cpu_usage_percent")
+		selects = append(selects,
+			"AVG(cpu_usage_percent) AS cpu_usage_percent",
+			"MIN(cpu_usage_percent) AS cpu_usage_percent_min",
+			"MAX(cpu_usage_percent) AS cpu_usage_percent_max")
 	}
 	if opts.Fields.Memory {
 		selects = append(selects, "CAST(ROUND(AVG(memory_used_bytes)) AS INTEGER) AS memory_used_bytes", "CAST(ROUND(AVG(memory_total_bytes)) AS INTEGER) AS memory_total_bytes")
 	}
 	if opts.Fields.DiskIO {
-		selects = append(selects, "AVG(disk_read_bytes_rate) AS disk_read_bytes_rate", "AVG(disk_write_bytes_rate) AS disk_write_bytes_rate")
+		selects = append(selects,
+			"AVG(disk_read_bytes_rate) AS disk_read_bytes_rate",
+			"MIN(disk_read_bytes_rate) AS disk_read_bytes_rate_min",
+			"MAX(disk_read_bytes_rate) AS disk_read_bytes_rate_max",
+			"AVG(disk_write_bytes_rate) AS disk_write_bytes_rate",
+			"MIN(disk_write_bytes_rate) AS disk_write_bytes_rate_min",
+			"MAX(disk_write_bytes_rate) AS disk_write_bytes_rate_max")
 	}
 	if opts.Fields.Network {
-		selects = append(selects, "AVG(network_rx_bps) AS network_rx_bps", "AVG(network_tx_bps) AS network_tx_bps")
+		selects = append(selects,
+			"AVG(network_rx_bps) AS network_rx_bps",
+			"MIN(network_rx_bps) AS network_rx_bps_min",
+			"MAX(network_rx_bps) AS network_rx_bps_max",
+			"AVG(network_tx_bps) AS network_tx_bps",
+			"MIN(network_tx_bps) AS network_tx_bps_min",
+			"MAX(network_tx_bps) AS network_tx_bps_max")
 	}
 	if opts.Fields.Load {
 		selects = append(selects, "AVG(load_1) AS load_1", "AVG(load_5) AS load_5", "AVG(load_15) AS load_15")
@@ -504,20 +534,20 @@ func (s *Service) scanBucketedSeries(ctx context.Context, query string, args []a
 		var serverID string
 		var bucket int64
 		dest := []any{&serverID, &bucket}
-		var cpu, rx, tx, load1, load5, load15 float64
+		var cpu, cpuMin, cpuMax, rx, rxMin, rxMax, tx, txMin, txMax, load1, load5, load15 float64
 		var memUsed, memTotal int64
-		var diskRead, diskWrite sql.NullFloat64
+		var diskRead, diskReadMin, diskReadMax, diskWrite, diskWriteMin, diskWriteMax sql.NullFloat64
 		if fields.CPU {
-			dest = append(dest, &cpu)
+			dest = append(dest, &cpu, &cpuMin, &cpuMax)
 		}
 		if fields.Memory {
 			dest = append(dest, &memUsed, &memTotal)
 		}
 		if fields.DiskIO {
-			dest = append(dest, &diskRead, &diskWrite)
+			dest = append(dest, &diskRead, &diskReadMin, &diskReadMax, &diskWrite, &diskWriteMin, &diskWriteMax)
 		}
 		if fields.Network {
-			dest = append(dest, &rx, &tx)
+			dest = append(dest, &rx, &rxMin, &rxMax, &tx, &txMin, &txMax)
 		}
 		if fields.Load {
 			dest = append(dest, &load1, &load5, &load15)
@@ -531,7 +561,12 @@ func (s *Service) scanBucketedSeries(ctx context.Context, query string, args []a
 		}
 		at := time.Unix(bucket, 0).UTC()
 		if fields.CPU {
-			series.CPU = append(series.CPU, CPUPoint{Time: at, UsagePercent: cpu})
+			series.CPU = append(series.CPU, CPUPoint{
+				Time:            at,
+				UsagePercent:    cpu,
+				UsagePercentMin: floatPtr(cpuMin),
+				UsagePercentMax: floatPtr(cpuMax),
+			})
 		}
 		if fields.Memory {
 			series.Memory = append(series.Memory, MemoryPoint{Time: at, UsedBytes: memUsed, TotalBytes: memTotal})
@@ -542,13 +577,33 @@ func (s *Service) scanBucketedSeries(ctx context.Context, query string, args []a
 			if diskRead.Valid {
 				point.ReadBytesPerSecond = diskRead.Float64
 			}
+			if diskReadMin.Valid {
+				point.ReadBytesPerSecondMin = floatPtr(diskReadMin.Float64)
+			}
+			if diskReadMax.Valid {
+				point.ReadBytesPerSecondMax = floatPtr(diskReadMax.Float64)
+			}
 			if diskWrite.Valid {
 				point.WriteBytesPerSecond = diskWrite.Float64
+			}
+			if diskWriteMin.Valid {
+				point.WriteBytesPerSecondMin = floatPtr(diskWriteMin.Float64)
+			}
+			if diskWriteMax.Valid {
+				point.WriteBytesPerSecondMax = floatPtr(diskWriteMax.Float64)
 			}
 			series.DiskIO = append(series.DiskIO, point)
 		}
 		if fields.Network {
-			series.Network = append(series.Network, NetPoint{Time: at, RxBytesPerSecond: rx, TxBytesPerSecond: tx})
+			series.Network = append(series.Network, NetPoint{
+				Time:                at,
+				RxBytesPerSecond:    rx,
+				RxBytesPerSecondMin: floatPtr(rxMin),
+				RxBytesPerSecondMax: floatPtr(rxMax),
+				TxBytesPerSecond:    tx,
+				TxBytesPerSecondMin: floatPtr(txMin),
+				TxBytesPerSecondMax: floatPtr(txMax),
+			})
 		}
 		if fields.Load {
 			series.Load = append(series.Load, LoadPoint{Time: at, Load1: load1, Load5: load5, Load15: load15})
@@ -556,6 +611,11 @@ func (s *Service) scanBucketedSeries(ctx context.Context, query string, args []a
 		out[serverID] = series
 	}
 	return rows.Err()
+}
+
+// floatPtr 返回值的指针，供可空 JSON 字段区分“未计算”和真实 0。
+func floatPtr(value float64) *float64 {
+	return &value
 }
 
 func emptySeries(rng string) Series {

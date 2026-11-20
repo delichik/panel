@@ -19,7 +19,7 @@ import { useAutoRefresh } from '@/composables/useAutoRefresh';
 import { useErrorDialog } from '@/components/ui/errorDialog';
 import { useSuccessToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
-import type { NetworkProbeConfig, NetworkProbeMode, NetworkProbeTargetMatrix, NetworkProbeTargetResult } from '@/types/networkProbe';
+import type { NetworkProbeConfig, NetworkProbeMode, NetworkProbeTargetMatrix, NetworkProbeTargetResult, NetworkProbeThresholds } from '@/types/networkProbe';
 import type { ServerDto } from '@/types/servers';
 import { formatDateTime } from '@/utils/datetime';
 import { probeHistorySeries, probeAggregateOutcomeStatusKey, probeAggregateOutcomeTone, probeTargetOutcome, type NetworkProbeAggregateOutcome } from '@/utils/networkProbe';
@@ -65,12 +65,16 @@ const draft = reactive<{
   intervalMinutes: string;
   pingCount: string;
   pingTimeoutSeconds: string;
+  latencyThreshold: number | null;
+  packetLossThreshold: number | null;
 }>({
   mode: 'all',
   serverIds: [],
   intervalMinutes: String(networkProbeIntervalMinutes.defaultValue),
   pingCount: String(networkProbeSettingRules.pingCount.defaultValue),
   pingTimeoutSeconds: String(networkProbeSettingRules.pingTimeoutSeconds.defaultValue),
+  latencyThreshold: null,
+  packetLossThreshold: null,
 });
 const guard = createLatestRequestGuard();
 let controller: AbortController | null = null;
@@ -107,6 +111,9 @@ const parameterValues = computed<Record<ParameterField, number | null>>(() => ({
 
 const intervalMinutesValue = computed(() => parseNetworkProbeIntervalMinutes(draft.intervalMinutes));
 const intervalInvalid = computed(() => intervalMinutesValue.value === null);
+const latencyThresholdInvalid = computed(() => draft.latencyThreshold !== null && (!Number.isFinite(draft.latencyThreshold) || draft.latencyThreshold <= 0));
+const lossThresholdInvalid = computed(() => draft.packetLossThreshold !== null && (!Number.isFinite(draft.packetLossThreshold) || draft.packetLossThreshold <= 0 || draft.packetLossThreshold > 100));
+const thresholdsInvalid = computed(() => latencyThresholdInvalid.value || lossThresholdInvalid.value);
 /** NumberBox 适配：draft 仍是字符串（换算/校验/保存沿用 parse），空值映射为 null。 */
 const intervalNumber = computed<number | null>({
   get: () => intervalMinutesValue.value,
@@ -129,6 +136,8 @@ const dirty = computed(() => {
   if (JSON.stringify([...draft.serverIds].sort()) !== JSON.stringify([...current.serverIds].sort())) return true;
   // 秒为单位保存/加载，比较时把分钟草稿换算回秒，避免出现“1 分钟 vs 60 秒”的伪脏状态。
   if (intervalMinutesValue.value !== networkProbeIntervalMinutesFromSeconds(current.intervalSeconds)) return true;
+  if (draft.latencyThreshold !== (current.thresholds?.latencyMs ?? null)) return true;
+  if (draft.packetLossThreshold !== (current.thresholds?.packetLossPercent ?? null)) return true;
   return parameterFields.some((item) => parameterValues.value[item.field] !== current[item.field]);
 });
 
@@ -160,6 +169,8 @@ function resetDraft() {
   draft.intervalMinutes = String(networkProbeIntervalMinutesFromSeconds(current?.intervalSeconds));
   draft.pingCount = String(current?.pingCount ?? networkProbeSettingRules.pingCount.defaultValue);
   draft.pingTimeoutSeconds = String(current?.pingTimeoutSeconds ?? networkProbeSettingRules.pingTimeoutSeconds.defaultValue);
+  draft.latencyThreshold = current?.thresholds?.latencyMs ?? null;
+  draft.packetLossThreshold = current?.thresholds?.packetLossPercent ?? null;
   formError.value = '';
 }
 
@@ -221,8 +232,15 @@ async function save() {
     return;
   }
   if (parameterFields.some((item) => parameterInvalid(item.field))) return;
+  if (thresholdsInvalid.value) {
+    formError.value = t('applicationsPage.networkProbeThresholdInvalid');
+    return;
+  }
   const settings = parameterValues.value;
   const intervalMinutes = intervalMinutesValue.value ?? networkProbeIntervalMinutes.defaultValue;
+  const thresholds: NetworkProbeThresholds = {};
+  if (draft.latencyThreshold !== null) thresholds.latencyMs = draft.latencyThreshold;
+  if (draft.packetLossThreshold !== null) thresholds.packetLossPercent = draft.packetLossThreshold;
   saving.value = true;
   try {
     const saved = await networkProbeFacilityApi.saveConfig({
@@ -231,6 +249,7 @@ async function save() {
       intervalSeconds: networkProbeIntervalSecondsFromMinutes(intervalMinutes),
       pingCount: settings.pingCount ?? networkProbeSettingRules.pingCount.defaultValue,
       pingTimeoutSeconds: settings.pingTimeoutSeconds ?? networkProbeSettingRules.pingTimeoutSeconds.defaultValue,
+      thresholds,
     });
     config.value = saved;
     resetDraft();
@@ -261,7 +280,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div
-    class="relative grid h-full min-h-0 grid-rows-page gap-4 max-lg:h-auto max-lg:grid-rows-none"
+    class="relative grid content-start gap-4"
     data-testid="network-probe-facility"
   >
     <LoadingOverlay v-if="loading && !config" :label="t('applicationsPage.networkProbeLoading')" />
@@ -335,6 +354,20 @@ onBeforeUnmount(() => {
               />
             </FacilityField>
           </div>
+          <div class="grid gap-3 border-t border-divider pt-3">
+            <div class="grid gap-1">
+              <h4 class="m-0 text-body-strong text-foreground">{{ t('applicationsPage.networkProbeThresholdsTitle') }}</h4>
+              <p class="m-0 text-caption leading-5 text-muted-foreground">{{ t('applicationsPage.networkProbeThresholdsHint') }}</p>
+            </div>
+            <div class="grid gap-3 sm:grid-cols-2">
+              <FacilityField :label="t('applicationsPage.networkProbeThresholdLatency')" hint="ms" :error="latencyThresholdInvalid ? t('applicationsPage.networkProbeThresholdInvalid') : ''">
+                <NumberBox v-model="draft.latencyThreshold" :min="0" :step="1" :invalid="latencyThresholdInvalid" :disabled="saving" />
+              </FacilityField>
+              <FacilityField :label="t('applicationsPage.networkProbeThresholdLoss')" hint="%" :error="lossThresholdInvalid ? t('applicationsPage.networkProbeThresholdInvalid') : ''">
+                <NumberBox v-model="draft.packetLossThreshold" :min="0" :max="100" :step="1" :invalid="lossThresholdInvalid" :disabled="saving" />
+              </FacilityField>
+            </div>
+          </div>
 
           <InfoBar v-if="formError" tone="danger">{{ formError }}</InfoBar>
           <div class="flex justify-end">
@@ -344,9 +377,10 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- 区域三：全部服务器结果（每台服务器直接展示聚合值与两张 24h 折线图）。
-           结果区不再画第二层卡片：图表自身是 ChartCard 语义的 surface-card，外层只负责分区与滚动。 -->
+           结果区不再画第二层卡片：图表自身是 ChartCard 语义的 surface-card；配置与图表
+           共用页面滚动，不再给结果区单独设置滚动容器。 -->
       <section
-        class="relative grid min-h-0 gap-3 p-4 max-lg:grid-rows-none lg:grid-rows-page-top"
+        class="relative grid gap-3 p-4"
         data-testid="network-probe-results-section"
       >
         <FacilitySectionHeader
@@ -383,7 +417,7 @@ onBeforeUnmount(() => {
           />
           <ul
             v-else
-            class="m-0 grid min-h-0 list-none gap-3 overflow-x-hidden overflow-y-auto p-0 lg:pr-1"
+            class="m-0 grid list-none gap-3 p-0"
             data-testid="probe-target-cards"
           >
             <li
@@ -424,6 +458,7 @@ onBeforeUnmount(() => {
                 :loss="card.lossSeries"
                 :latency-current="card.node.latencyMs"
                 :loss-current="card.node.packetLossPercent"
+                :thresholds="config?.thresholds"
               />
             </li>
           </ul>

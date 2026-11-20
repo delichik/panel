@@ -21,8 +21,19 @@ export interface MetricSeriesData {
   id: string;
   name: string;
   points: MetricSeriesPoint[];
+  /**
+   * 同一时间桶内原始采样的最小/最大值（与 points 同时间轴）。存在时由
+   * MetricChart 画成平均线 + 最小~最大阴影带；缺失时间点保持 null。
+   */
+  band?: MetricSeriesBand;
 }
 
+export interface MetricSeriesBand {
+  min: MetricSeriesPoint[];
+  max: MetricSeriesPoint[];
+}
+
+/** 图表警告阈值：达到/超过该值的平均线与区间显示为红色。 */
 export interface MetricThreshold {
   value: number;
   label: string;

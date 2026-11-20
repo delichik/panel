@@ -56,9 +56,9 @@ function metrics(overrides: Partial<ServerMetricsSeries> = {}): ServerMetricsSer
   return {
     range: '1h',
     cpu: [
-      { time: at(0), usagePercent: 10 },
-      { time: at(1), usagePercent: 40 },
-      { time: at(2), usagePercent: 20 },
+      { time: at(0), usagePercent: 10, usagePercentMin: 5, usagePercentMax: 15 },
+      { time: at(1), usagePercent: 40, usagePercentMin: 35, usagePercentMax: 45 },
+      { time: at(2), usagePercent: 20, usagePercentMin: 15, usagePercentMax: 25 },
     ],
     memory: [
       { time: at(0), usedBytes: 4 * GIB, totalBytes: 10 * GIB },
@@ -67,12 +67,12 @@ function metrics(overrides: Partial<ServerMetricsSeries> = {}): ServerMetricsSer
     ],
     diskCurrent: null,
     diskIo: [
-      { time: at(0), readBytesPerSecond: 1024, writeBytesPerSecond: 512 },
-      { time: at(1), readBytesPerSecond: 2048, writeBytesPerSecond: 1536 },
+      { time: at(0), readBytesPerSecond: 1024, readBytesPerSecondMin: 512, readBytesPerSecondMax: 1536, writeBytesPerSecond: 512, writeBytesPerSecondMin: 256, writeBytesPerSecondMax: 768 },
+      { time: at(1), readBytesPerSecond: 2048, readBytesPerSecondMin: 1024, readBytesPerSecondMax: 3072, writeBytesPerSecond: 1536, writeBytesPerSecondMin: 768, writeBytesPerSecondMax: 2048 },
     ],
     network: [
-      { time: at(0), rxBytesPerSecond: 2048, txBytesPerSecond: 1024 },
-      { time: at(1), rxBytesPerSecond: 4096, txBytesPerSecond: 3072 },
+      { time: at(0), rxBytesPerSecond: 2048, rxBytesPerSecondMin: 1024, rxBytesPerSecondMax: 3072, txBytesPerSecond: 1024, txBytesPerSecondMin: 512, txBytesPerSecondMax: 2048 },
+      { time: at(1), rxBytesPerSecond: 4096, rxBytesPerSecondMin: 2048, rxBytesPerSecondMax: 8192, txBytesPerSecond: 3072, txBytesPerSecondMin: 1024, txBytesPerSecondMax: 4096 },
     ],
     load: [],
     ...overrides,
@@ -97,14 +97,17 @@ beforeEach(() => {
 });
 
 describe('server metrics panel statistics', () => {
-  it('shows average, maximum and minimum together for every chart', async () => {
+  it('splits disk/network directions and shows band extrema for every chart', async () => {
     const wrapper = await mountPanel();
 
     expect(metricsBucketed).toHaveBeenCalledWith('srv-1', '1h', 60, expect.anything());
-    expect(cardText(wrapper, 0)).toContain('Avg 23.3% · Max 40.0% · Min 10.0%');
+    expect(wrapper.findAll('[data-chart-card]')).toHaveLength(6);
+    expect(cardText(wrapper, 0)).toContain('Avg 23.3% · Max 45.0% · Min 5.0%');
     expect(cardText(wrapper, 1)).toContain('Avg 50.0% · Max 60.0% · Min 40.0%');
-    expect(cardText(wrapper, 2)).toContain('Avg 1.5 KB/s / 1.0 KB/s · Max 2.0 KB/s / 1.5 KB/s · Min 1.0 KB/s / 512 B/s');
-    expect(cardText(wrapper, 3)).toContain('Avg 3.0 KB/s / 2.0 KB/s · Max 4.0 KB/s / 3.0 KB/s · Min 2.0 KB/s / 1.0 KB/s');
+    expect(cardText(wrapper, 2)).toContain('Avg 1.5 KB/s · Max 3.0 KB/s · Min 512 B/s');
+    expect(cardText(wrapper, 3)).toContain('Avg 1.0 KB/s · Max 2.0 KB/s · Min 256 B/s');
+    expect(cardText(wrapper, 4)).toContain('Avg 3.0 KB/s · Max 8.0 KB/s · Min 1.0 KB/s');
+    expect(cardText(wrapper, 5)).toContain('Avg 2.0 KB/s · Max 4.0 KB/s · Min 512 B/s');
     expect(wrapper.text()).not.toContain('Peak');
   });
 

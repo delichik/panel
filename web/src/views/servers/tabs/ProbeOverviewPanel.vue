@@ -10,7 +10,7 @@ import DataRefreshControl from '@/components/patterns/DataRefreshControl.vue';
 import ProbeHistoryCharts from '@/components/patterns/ProbeHistoryCharts.vue';
 import { useAutoRefresh } from '@/composables/useAutoRefresh';
 import { useI18n } from '@/i18n';
-import type { NetworkProbeTargetMatrix } from '@/types/networkProbe';
+import type { NetworkProbeTargetMatrix, NetworkProbeThresholds } from '@/types/networkProbe';
 import type { ServerDto } from '@/types/servers';
 import { formatDateTime } from '@/utils/datetime';
 import { probeHistorySeries, probeAggregateOutcomeStatusKey, probeAggregateOutcomeTone, probeTargetOutcome } from '@/utils/networkProbe';
@@ -23,6 +23,7 @@ const { t } = useI18n();
 const autoRefresh = useAutoRefresh();
 
 const matrix = ref<NetworkProbeTargetMatrix | null>(null);
+const probeThresholds = ref<NetworkProbeThresholds>({});
 const loading = ref(false);
 const error = ref('');
 const guard = createLatestRequestGuard();
@@ -35,6 +36,16 @@ const outcome = computed(() => (target.value ? probeTargetOutcome(target.value) 
 const latencySeries = computed(() => probeHistorySeries(target.value?.history, 'latency', 'latency', t('serversPage.probe.latency')));
 const lossSeries = computed(() => probeHistorySeries(target.value?.history, 'packetLoss', 'loss', t('serversPage.probe.packetLoss')));
 const hasResult = computed(() => Boolean(target.value && target.value.sourceCount > 0));
+
+async function loadThresholds() {
+  try {
+    const config = await networkProbeFacilityApi.config();
+    probeThresholds.value = config.thresholds ?? {};
+  } catch {
+    // 阈值是展示增强：读取失败时不画阈值线，不影响探测结果加载。
+    probeThresholds.value = {};
+  }
+}
 
 async function load() {
   if (inFlight) return;
@@ -70,6 +81,7 @@ watch(() => props.server.id, () => {
 
 onMounted(() => {
   void load();
+  void loadThresholds();
   autoRefresh.start(() => {
     if (props.active === false || inFlight) return;
     void load();
@@ -115,6 +127,7 @@ onBeforeUnmount(() => {
         :loss="lossSeries"
         :latency-current="target?.latencyMs ?? null"
         :loss-current="target?.packetLossPercent ?? null"
+        :thresholds="probeThresholds"
       />
     </template>
   </section>

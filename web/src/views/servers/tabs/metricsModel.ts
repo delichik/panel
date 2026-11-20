@@ -1,5 +1,5 @@
 import type { ServerMetricsLatest, ServerMetricsRange, ServerMetricsSeries } from '@/api/servers';
-import { percentOf, seriesStats, type MetricSeriesData, type MetricSeriesPoint, type MetricThreshold, type SeriesStats } from '@/utils/metrics';
+import { percentOf, seriesStats, type MetricSeriesBand, type MetricSeriesData, type MetricSeriesPoint, type SeriesStats } from '@/utils/metrics';
 
 /** 服务器指标范围与降采样桶；点数上限约 60/180/288/336，避免 7d 全量原始点。 */
 export const metricsRangeOptions: Array<{ value: ServerMetricsRange; label: string }> = [
@@ -28,7 +28,6 @@ export function rangeSpanMs(range: ServerMetricsRange): number {
 }
 
 export type MetricChartSeriesData = MetricSeriesData;
-export type MetricChartThreshold = MetricThreshold;
 export type MetricChartPoint = MetricSeriesPoint;
 
 function toPoints<T extends { time: string }>(points: T[], value: (point: T) => number | null | undefined): MetricChartSeriesData['points'] {
@@ -38,8 +37,40 @@ function toPoints<T extends { time: string }>(points: T[], value: (point: T) => 
   });
 }
 
+/**
+ * 把同一时间桶的最小/最大值转成 chart band；两侧都有效才形成区间，否则该点
+ * 为 null（断带），不补 0。没有任一点存在区间时返回 undefined。
+ */
+function toBand<T extends { time: string }>(
+  points: T[],
+  minimum: (point: T) => number | null | undefined,
+  maximum: (point: T) => number | null | undefined,
+): MetricSeriesBand | undefined {
+  let hasRange = false;
+  const min: MetricSeriesPoint[] = [];
+  const max: MetricSeriesPoint[] = [];
+  for (const point of points) {
+    const low = minimum(point);
+    const high = maximum(point);
+    if (typeof low === 'number' && Number.isFinite(low) && typeof high === 'number' && Number.isFinite(high)) {
+      min.push({ time: point.time, value: Math.min(low, high) });
+      max.push({ time: point.time, value: Math.max(low, high) });
+      hasRange = true;
+    } else {
+      min.push({ time: point.time, value: null });
+      max.push({ time: point.time, value: null });
+    }
+  }
+  return hasRange ? { min, max } : undefined;
+}
+
 export function cpuSeries(series: ServerMetricsSeries): MetricChartSeriesData[] {
-  return [{ id: 'cpu', name: 'CPU', points: toPoints(series.cpu, (point) => point.usagePercent) }];
+  return [{
+    id: 'cpu',
+    name: 'CPU',
+    points: toPoints(series.cpu, (point) => point.usagePercent),
+    band: toBand(series.cpu, (point) => point.usagePercentMin, (point) => point.usagePercentMax),
+  }];
 }
 
 export function memorySeries(series: ServerMetricsSeries): MetricChartSeriesData[] {
@@ -52,15 +83,35 @@ export function memorySeries(series: ServerMetricsSeries): MetricChartSeriesData
 
 export function diskIoSeries(series: ServerMetricsSeries): MetricChartSeriesData[] {
   return [
-    { id: 'disk-read', name: 'read', points: toPoints(series.diskIo, (point) => point.readBytesPerSecond ?? 0) },
-    { id: 'disk-write', name: 'write', points: toPoints(series.diskIo, (point) => point.writeBytesPerSecond ?? 0) },
+    {
+      id: 'disk-read',
+      name: 'read',
+      points: toPoints(series.diskIo, (point) => point.readBytesPerSecond ?? 0),
+      band: toBand(series.diskIo, (point) => point.readBytesPerSecondMin, (point) => point.readBytesPerSecondMax),
+    },
+    {
+      id: 'disk-write',
+      name: 'write',
+      points: toPoints(series.diskIo, (point) => point.writeBytesPerSecond ?? 0),
+      band: toBand(series.diskIo, (point) => point.writeBytesPerSecondMin, (point) => point.writeBytesPerSecondMax),
+    },
   ];
 }
 
 export function networkSeries(series: ServerMetricsSeries): MetricChartSeriesData[] {
   return [
-    { id: 'network-rx', name: 'rx', points: toPoints(series.network, (point) => point.rxBytesPerSecond) },
-    { id: 'network-tx', name: 'tx', points: toPoints(series.network, (point) => point.txBytesPerSecond) },
+    {
+      id: 'network-rx',
+      name: 'rx',
+      points: toPoints(series.network, (point) => point.rxBytesPerSecond),
+      band: toBand(series.network, (point) => point.rxBytesPerSecondMin, (point) => point.rxBytesPerSecondMax),
+    },
+    {
+      id: 'network-tx',
+      name: 'tx',
+      points: toPoints(series.network, (point) => point.txBytesPerSecond),
+      band: toBand(series.network, (point) => point.txBytesPerSecondMin, (point) => point.txBytesPerSecondMax),
+    },
   ];
 }
 

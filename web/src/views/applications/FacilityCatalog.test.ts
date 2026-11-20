@@ -33,7 +33,7 @@ function mountCatalog() {
       pending: '',
       facility: null,
       storageShareConfig: null,
-      networkProbeConfig: { mode: 'all', serverIds: [], intervalSeconds: 60, pingCount: 3, pingTimeoutSeconds: 2, version: 0, updatedAt: '' },
+      networkProbeConfig: { mode: 'all', serverIds: [], intervalSeconds: 60, pingCount: 3, pingTimeoutSeconds: 2, thresholds: {}, version: 0, updatedAt: '' },
       metricsConfig: null,
       serverTotal: 3,
     },

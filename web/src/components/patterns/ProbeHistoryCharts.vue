@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent } from 'vue';
 import { useI18n } from '@/i18n';
-import type { MetricSeriesData } from '@/utils/metrics';
+import type { MetricSeriesData, MetricThreshold } from '@/utils/metrics';
 import { formatLatency, formatPercent, seriesStats, type SeriesStats } from '@/utils/metrics';
+import type { NetworkProbeThresholds } from '@/types/networkProbe';
 import ChartCard from './ChartCard.vue';
 
 const MetricChart = defineAsyncComponent(() => import('@/components/patterns/MetricChart.vue'));
@@ -12,6 +13,7 @@ const props = defineProps<{
   loss: MetricSeriesData;
   latencyCurrent?: number | null;
   lossCurrent?: number | null;
+  thresholds?: NetworkProbeThresholds;
 }>();
 
 const { t } = useI18n();
@@ -22,6 +24,25 @@ const hasLoss = computed(() => props.loss.points.some((point) => point.value !==
 /** 统计项：标签 + 格式化值；无有效样本显示统一占位，不伪造 0。 */
 function statText(label: string, value: number | null, formatter: (value: number) => string): string {
   return `${label} ${value === null ? t('common.notAvailable') : formatter(value)}`;
+}
+
+/** 整体统计：最大/最小优先取阴影带极值，没有区间时回退平均序列。 */
+function statsFor(item: MetricSeriesData): SeriesStats {
+  const base = seriesStats(item.points.map((point) => point.value));
+  if (!item.band) return base;
+  let minimum: number | null = null;
+  let peak: number | null = null;
+  for (const point of item.band.min) {
+    if (typeof point.value === 'number' && Number.isFinite(point.value)) {
+      minimum = minimum === null ? point.value : Math.min(minimum, point.value);
+    }
+  }
+  for (const point of item.band.max) {
+    if (typeof point.value === 'number' && Number.isFinite(point.value)) {
+      peak = peak === null ? point.value : Math.max(peak, point.value);
+    }
+  }
+  return { ...base, minimum: minimum ?? base.minimum, peak: peak ?? base.peak };
 }
 
 function statsText(
@@ -40,9 +61,14 @@ function statsText(
  * 没有历史时在图表高度盒子里展示空态，而不是整块消失；不再自带卡片，
  * 避免服务器概览里出现 card-in-card。
  */
+function thresholdFor(value: number | undefined, formatter: (value: number) => string): MetricThreshold | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return undefined;
+  return { value, label: t('serversPage.metrics.warningThreshold', { value: formatter(value) }) };
+}
+
 const cards = computed(() => {
-  const latencyStats = seriesStats(props.latency.points.map((point) => point.value));
-  const lossStats = seriesStats(props.loss.points.map((point) => point.value));
+  const latencyStats = statsFor(props.latency);
+  const lossStats = statsFor(props.loss);
   return [
     {
       key: 'latency',
@@ -51,6 +77,8 @@ const cards = computed(() => {
       series: [props.latency],
       valueKind: 'latency' as const,
       hasData: hasLatency.value,
+      hasBand: Boolean(props.latency.band),
+      threshold: thresholdFor(props.thresholds?.latencyMs, formatLatency),
       stats: statsText(latencyStats, formatLatency),
     },
     {
@@ -60,6 +88,8 @@ const cards = computed(() => {
       series: [props.loss],
       valueKind: 'percent' as const,
       hasData: hasLoss.value,
+      hasBand: Boolean(props.loss.band),
+      threshold: thresholdFor(props.thresholds?.packetLossPercent, formatPercent),
       stats: statsText(lossStats, formatPercent),
     },
   ];
@@ -75,13 +105,23 @@ const cards = computed(() => {
           :series="card.series"
           :value-kind="card.valueKind"
           :label="card.title"
+          :threshold="card.threshold"
+          :band-labels="{
+            average: t('serversPage.metrics.average'),
+            minimum: t('serversPage.metrics.minimum'),
+            maximum: t('serversPage.metrics.maximum'),
+          }"
         />
         <div v-else class="grid h-full place-items-center rounded-control border border-dashed border-stroke px-3 text-center text-caption text-muted-foreground">
           {{ t('serversPage.probe.noHistory') }}
         </div>
       </div>
       <template #footer>
-        <div class="text-caption tabular-nums text-muted-foreground">{{ card.stats }}</div>
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-caption tabular-nums text-muted-foreground">
+          <span>{{ card.stats }}</span>
+          <span v-if="card.hasBand">{{ t('serversPage.metrics.bandHint') }}</span>
+          <span v-if="card.threshold">{{ t('serversPage.metrics.thresholdHint') }}</span>
+        </div>
       </template>
     </ChartCard>
   </div>

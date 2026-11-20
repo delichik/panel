@@ -24,6 +24,7 @@ CREATE TABLE network_probe_configs (
 	interval_seconds INTEGER NOT NULL DEFAULT 60,
 	ping_count INTEGER NOT NULL DEFAULT 3,
 	ping_timeout_seconds INTEGER NOT NULL DEFAULT 2,
+	thresholds_json TEXT NOT NULL DEFAULT '{}',
 	version INTEGER NOT NULL DEFAULT 1,
 	updated_at TEXT NOT NULL
 );
@@ -425,8 +426,8 @@ func historyFor(results []Result, target string) []HistoryPoint {
 }
 
 // TestSaveReportedMergesThirtyMinuteHistoryBuckets covers the probe history merge
-// contract: samples inside one 30-minute bucket replace each other, later buckets
-// append, and the stored history is exposed ascending with RFC3339 times.
+// contract: samples inside one 30-minute bucket aggregate into avg/min/max, later
+// buckets append, and the stored history is exposed ascending with RFC3339 times.
 func TestSaveReportedMergesThirtyMinuteHistoryBuckets(t *testing.T) {
 	svc, _, now := newTestService(t, testServers()...)
 	ctx := context.Background()
@@ -442,15 +443,17 @@ func TestSaveReportedMergesThirtyMinuteHistoryBuckets(t *testing.T) {
 	}
 	history := historyFor(got.Results, "srv-b")
 	if len(history) != 2 {
-		t.Fatalf("history = %#v, want 2 buckets (same-bucket replacement, cross-bucket append)", history)
+		t.Fatalf("history = %#v, want 2 buckets (same-bucket aggregation, cross-bucket append)", history)
 	}
-	if !history[0].Time.Equal(bucket0) || history[0].LatencyMS != 6 || history[0].PacketLossPercent != 2 {
-		t.Fatalf("first bucket = %#v, want the replacement sample of the 12:00 bucket", history[0])
+	first := history[0]
+	if !first.Time.Equal(bucket0) || first.LatencyMS != 5 || first.LatencyMSMin != 4 || first.LatencyMSMax != 6 ||
+		first.PacketLossPercent != 1.5 || first.PacketLossPercentMin != 1 || first.PacketLossPercentMax != 2 {
+		t.Fatalf("first bucket = %#v, want avg/min/max of the 12:00 bucket samples", first)
 	}
 	if !history[1].Time.Equal(bucket0.Add(30*time.Minute)) || history[1].LatencyMS != 8 || history[1].PacketLossPercent != 0 {
 		t.Fatalf("second bucket = %#v", history[1])
 	}
-	// 持久化格式使用紧凑键名。
+	// 持久化格式使用紧凑键名，并记录桶内样本数 n 与 min/max。
 	var raw string
 	if err := svc.db.QueryRow(`SELECT history_json FROM network_probe_results WHERE source_server_id='srv-a' AND target_server_id='srv-b'`).Scan(&raw); err != nil {
 		t.Fatal(err)
@@ -461,6 +464,9 @@ func TestSaveReportedMergesThirtyMinuteHistoryBuckets(t *testing.T) {
 	}
 	if len(stored) != 2 || stored[0].Time != bucket0.Unix() || stored[1].Time != bucket0.Add(30*time.Minute).Unix() {
 		t.Fatalf("stored history = %#v (raw %q)", stored, raw)
+	}
+	if stored[0].Count != 2 || stored[0].LatencyMSMin != 4 || stored[0].LatencyMSMax != 6 {
+		t.Fatalf("stored first bucket = %#v, want count/min/max persisted", stored[0])
 	}
 }
 
@@ -606,6 +612,44 @@ func TestServerResultsHistoryMissingServer(t *testing.T) {
 // values are normalized to the documented defaults, boundary values are
 // accepted, and out-of-range values return the stable error codes without writing
 // the configuration.
+// TestThresholdsRoundTrip covers latency/loss warning thresholds: save/read
+// round-trip and stable validation for out-of-range values.
+func TestThresholdsRoundTrip(t *testing.T) {
+	svc, _, _ := newTestService(t, testServers()...)
+	ctx := context.Background()
+	latency := 120.0
+	loss := 5.0
+	saved, err := svc.Save(ctx, SaveInput{Mode: ModeAll, IntervalSeconds: 60, PingCount: 3, PingTimeoutSeconds: 2,
+		Thresholds: Thresholds{LatencyMS: &latency, PacketLossPercent: &loss}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Thresholds.LatencyMS == nil || *saved.Thresholds.LatencyMS != 120 || saved.Thresholds.PacketLossPercent == nil || *saved.Thresholds.PacketLossPercent != 5 {
+		t.Fatalf("saved thresholds = %#v", saved.Thresholds)
+	}
+	stored, err := svc.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Thresholds.LatencyMS == nil || *stored.Thresholds.LatencyMS != 120 {
+		t.Fatalf("stored thresholds = %#v", stored.Thresholds)
+	}
+	invalidLoss := 101.0
+	if _, err := svc.Save(ctx, SaveInput{Mode: ModeAll, IntervalSeconds: 60, PingCount: 3, PingTimeoutSeconds: 2,
+		Thresholds: Thresholds{PacketLossPercent: &invalidLoss}}); err == nil {
+		t.Fatal("expected invalid packet-loss threshold error")
+	} else {
+		requirePanelCode(t, err, "network_probe_threshold_invalid")
+	}
+	zeroLatency := 0.0
+	if _, err := svc.Save(ctx, SaveInput{Mode: ModeAll, IntervalSeconds: 60, PingCount: 3, PingTimeoutSeconds: 2,
+		Thresholds: Thresholds{LatencyMS: &zeroLatency}}); err == nil {
+		t.Fatal("expected invalid latency threshold error")
+	} else {
+		requirePanelCode(t, err, "network_probe_threshold_invalid")
+	}
+}
+
 func TestSaveProbeParameterDefaultsAndBounds(t *testing.T) {
 	svc, _, _ := newTestService(t, testServers()...)
 	ctx := context.Background()
@@ -1010,8 +1054,14 @@ func TestTargetResultsHistoryAggregatesAcrossSources(t *testing.T) {
 	if history[0].LatencyMS != 40 || history[0].PacketLossPercent != 10 {
 		t.Fatalf("earlier bucket = %#v", history[0])
 	}
+	if history[0].LatencyMSMin != 40 || history[0].LatencyMSMax != 40 || history[0].PacketLossPercentMin != 10 || history[0].PacketLossPercentMax != 10 {
+		t.Fatalf("earlier bucket range = %#v, want min=max for a single source", history[0])
+	}
 	if history[1].LatencyMS != 20 || history[1].PacketLossPercent != 10 {
 		t.Fatalf("cross-source bucket = %#v, want latency (10+30)/2=20 loss (0+20)/2=10", history[1])
+	}
+	if history[1].LatencyMSMin != 10 || history[1].LatencyMSMax != 30 || history[1].PacketLossPercentMin != 0 || history[1].PacketLossPercentMax != 20 {
+		t.Fatalf("cross-source bucket range = %#v, want min/max across sources", history[1])
 	}
 }
 

@@ -110,6 +110,74 @@ describe('MetricChart series differentiation', () => {
     expect(option.series[0].emphasis.focus).toBe('none');
     wrapper.unmount();
   });
+
+  it('colors the average line and band portions above the warning threshold red', async () => {
+    document.documentElement.style.setProperty('--panel-danger', '#cc0000');
+    const time = '2026-08-01T00:00:00.000Z';
+    const banded: MetricSeriesData = {
+      id: 'cpu',
+      name: 'CPU',
+      points: [{ time, value: 20 }],
+      band: { min: [{ time, value: 10 }], max: [{ time, value: 30 }] },
+    };
+    const wrapper = mount(MetricChart, {
+      props: {
+        series: [banded],
+        valueKind: 'percent',
+        label: 'CPU usage',
+        threshold: { value: 15, label: 'Warning 15%' },
+      },
+    });
+    await nextTick();
+    const option = latestOption();
+
+    // 阈值把阴影带拆成正常段和超阈值段，并把平均线拆成正常/超阈值两条。
+    expect(option.series.map((item: { id: string }) => item.id)).toEqual([
+      'cpu-band-min', 'cpu-band-normal', 'cpu-band-over', 'cpu', 'cpu-over',
+    ]);
+    expect(option.series[2].areaStyle.color).toBeTruthy();
+    expect(option.series[4].markLine.data[0].yAxis).toBe(15);
+    expect(option.series[4].lineStyle.color).toBeTruthy();
+    expect(option.visualMap).toBeUndefined();
+    wrapper.unmount();
+    document.documentElement.style.removeProperty('--panel-danger');
+  });
+
+  it('renders a min–max band behind the average line and reports all three values in the tooltip', async () => {
+    const time = '2026-08-01T00:00:00.000Z';
+    const banded: MetricSeriesData = {
+      id: 'cpu',
+      name: 'CPU',
+      points: [{ time, value: 20 }],
+      band: { min: [{ time, value: 10 }], max: [{ time, value: 30 }] },
+    };
+    const wrapper = mount(MetricChart, {
+      props: {
+        series: [banded],
+        valueKind: 'percent',
+        label: 'CPU usage',
+        bandLabels: { average: 'Avg', minimum: 'Min', maximum: 'Max' },
+      },
+    });
+    await nextTick();
+    const option = latestOption();
+
+    // 两条透明堆叠线组成阴影带，第三条是平均值线。
+    expect(option.series).toHaveLength(3);
+    expect(option.series[0].stack).toBe(option.series[1].stack);
+    expect(option.series[1].areaStyle.opacity).toBeGreaterThan(0);
+    expect(option.series[1].data).toEqual([[new Date(time).getTime(), 20]]);
+    expect(option.series[2].id).toBe('cpu');
+
+    const html = option.tooltip.formatter([{
+      seriesId: 'cpu',
+      value: [new Date(time).getTime(), 20],
+      marker: '<span class="marker"></span>',
+    }]);
+    expect(html).toContain('Avg 20.0%');
+    expect(html).toContain('Min 10.0% – Max 30.0%');
+    wrapper.unmount();
+  });
 });
 
 describe('MetricChart high contrast', () => {

@@ -64,7 +64,7 @@
 - 服务器操作：同步连通性检查 `POST /api/v1/servers/{id}/test`，信任新主机密钥 `POST /api/v1/servers/{id}/trust-host-key`，任务型重启 `POST /api/v1/servers/{id}/restart`（防火墙不再有手动安装入口，见防火墙前提条目）
 - UFW：`GET /api/v1/servers/{id}/ufw`，`POST /api/v1/servers/{id}/ufw/rules`，`DELETE /api/v1/servers/{id}/ufw/rules/{number}`（`/ufw/install` 与 `/ufw/enable` 已删除）
 - fail2ban：`GET /api/v1/servers/{id}/fail2ban`，`PUT /api/v1/servers/{id}/fail2ban`，`POST /api/v1/servers/{id}/fail2ban/enable`，`POST /api/v1/servers/{id}/fail2ban/release`，`POST /api/v1/servers/{id}/fail2ban/install`
-- 指标：`GET /api/v1/servers/{id}/metrics?range=1h|6h|1d|7d`（默认 `1h`）。服务器详情指标区默认用折线图展示最近 1 小时数据（CPU、内存、磁盘、网络 RX/TX 四个图表），支持范围选择，页头提供共享自动刷新控件 `AutoRefreshControl`；刷新/切范围时保留旧数据避免闪跳。图表下方展示统计摘要：四张图均同时展示平均/最大/最小（磁盘 IO 按读/写、网络按 RX/TX 分别给出）；统计基于当前展示序列（1d/7d 为桶平均后的统计），无有效样本时显示占位而不补 0。折线图 tooltip 单位按图表类型区分：CPU/内存/磁盘为百分比，网络为 B/s 自适应速率。
+- 指标：`GET /api/v1/servers/{id}/metrics?range=1h|6h|1d|7d`（默认 `1h`）。服务器详情指标区默认用折线图展示最近 1 小时数据（CPU、内存、磁盘读取、磁盘写入、网络接收、网络发送六张图，磁盘与网络按方向拆分），支持范围选择，页头提供共享自动刷新控件 `AutoRefreshControl`；刷新/切范围时保留旧数据避免闪跳。CPU、磁盘读写、网络 RX/TX 的图以平均线 + 最小~最大阴影带展示当前时间桶内原始采样的区间（桶查询返回 min/max），内存仅平均线；悬停 tooltip 同时给出平均/最小/最大。图下统计摘要使用区间真实极值，统计基于当前展示序列（1d/7d 为桶平均后的统计），无有效样本时显示占位而不补 0。警告阈值由“设施 → 指标”配置（CPU/内存/磁盘读写/网络 RX/TX），达到或超过阈值的平均线与区间显示红色并保留阈值虚线；阈值读取失败不影响指标展示。折线图 tooltip 单位按图表类型区分：CPU/内存/磁盘为百分比，网络为 B/s 自适应速率。
 - 软件包：`GET /api/v1/servers/{id}/packages/updates`，`POST /api/v1/servers/{id}/packages/refresh`，`POST /api/v1/servers/{id}/packages/upgrade-selected`，`POST /api/v1/servers/{id}/packages/upgrade-all`
 - 概览：`GET /api/v1/overview`
 - 概览卡片布局：`GET/PUT /api/v1/overview/cards`

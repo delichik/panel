@@ -34,6 +34,7 @@ describe('metricsFacilityApi', () => {
       retentionDays: 30,
       collectionIntervalSeconds: 30,
       cleanupSchedule: 'weekly' as const,
+      thresholds: {},
     };
     const saved = { ...input, version: 3, updatedAt: '2026-11-17T00:05:00.000Z' };
     const fetchMock = vi.fn(async () => jsonResponse(saved));
@@ -63,6 +64,7 @@ describe('metricsFacilityApi', () => {
         retentionDays: 7,
         collectionIntervalSeconds: 60,
         cleanupSchedule: 'daily',
+        thresholds: {},
       })).rejects.toMatchObject({ code, status: 422 });
     }
   });

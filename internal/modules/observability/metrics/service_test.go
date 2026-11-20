@@ -186,6 +186,9 @@ func TestQueryManyReturnsBucketedSeriesPerServer(t *testing.T) {
 	if a.CPU[0].UsagePercent != 15 || !a.CPU[0].Time.Equal(bucketStart) || a.CPU[1].UsagePercent != 30 {
 		t.Fatalf("unexpected srv_a CPU buckets: %#v", a.CPU)
 	}
+	if a.CPU[0].UsagePercentMin == nil || *a.CPU[0].UsagePercentMin != 10 || a.CPU[0].UsagePercentMax == nil || *a.CPU[0].UsagePercentMax != 20 {
+		t.Fatalf("srv_a CPU bucket range = %#v, want min 10 / max 20", a.CPU[0])
+	}
 	if len(a.Memory) != 2 || a.Memory[0].UsedBytes != 200 || a.Memory[0].TotalBytes != 300 || a.Memory[1].UsedBytes != 500 || a.Memory[1].TotalBytes != 600 {
 		t.Fatalf("unexpected srv_a memory buckets: %#v", a.Memory)
 	}
@@ -485,17 +488,31 @@ func TestQueryBucketedAggregatesSeriesAndLatest(t *testing.T) {
 	if len(series.CPU) != 1 || series.CPU[0].UsagePercent != 15 || !series.CPU[0].Time.Equal(bucketStart) {
 		t.Fatalf("bucketed CPU = %#v", series.CPU)
 	}
+	cpuPoint := series.CPU[0]
+	if cpuPoint.UsagePercentMin == nil || *cpuPoint.UsagePercentMin != 10 || cpuPoint.UsagePercentMax == nil || *cpuPoint.UsagePercentMax != 20 {
+		t.Fatalf("bucketed CPU range = %#v, want min 10 / max 20", cpuPoint)
+	}
 	if len(series.Memory) != 1 || series.Memory[0].UsedBytes != 200 || series.Memory[0].TotalBytes != 300 {
 		t.Fatalf("bucketed memory = %#v", series.Memory)
 	}
 	if len(series.Network) != 1 || series.Network[0].RxBytesPerSecond != 2 || series.Network[0].TxBytesPerSecond != 3 {
 		t.Fatalf("bucketed network = %#v", series.Network)
 	}
+	networkPoint := series.Network[0]
+	if networkPoint.RxBytesPerSecondMin == nil || *networkPoint.RxBytesPerSecondMin != 1 || networkPoint.RxBytesPerSecondMax == nil || *networkPoint.RxBytesPerSecondMax != 3 ||
+		networkPoint.TxBytesPerSecondMin == nil || *networkPoint.TxBytesPerSecondMin != 2 || networkPoint.TxBytesPerSecondMax == nil || *networkPoint.TxBytesPerSecondMax != 4 {
+		t.Fatalf("bucketed network range = %#v", networkPoint)
+	}
 	if len(series.Load) != 1 || series.Load[0].Load1 != 1 || series.Load[0].Load5 != 0.75 || series.Load[0].Load15 != 1 {
 		t.Fatalf("bucketed load = %#v", series.Load)
 	}
 	if len(series.DiskIO) != 1 || series.DiskIO[0].ReadBytesPerSecond != 6 || series.DiskIO[0].WriteBytesPerSecond != 7 {
 		t.Fatalf("bucketed diskIo = %#v", series.DiskIO)
+	}
+	diskPoint := series.DiskIO[0]
+	if diskPoint.ReadBytesPerSecondMin == nil || *diskPoint.ReadBytesPerSecondMin != 5 || diskPoint.ReadBytesPerSecondMax == nil || *diskPoint.ReadBytesPerSecondMax != 7 ||
+		diskPoint.WriteBytesPerSecondMin == nil || *diskPoint.WriteBytesPerSecondMin != 6 || diskPoint.WriteBytesPerSecondMax == nil || *diskPoint.WriteBytesPerSecondMax != 8 {
+		t.Fatalf("bucketed diskIo range = %#v", diskPoint)
 	}
 	if series.DiskCurrent == nil || !series.DiskCurrent.Time.Equal(t2) || series.DiskCurrent.UsedBytes != 50 || series.DiskCurrent.TotalBytes != 120 {
 		t.Fatalf("diskCurrent = %#v, want the latest valid disk sample", series.DiskCurrent)

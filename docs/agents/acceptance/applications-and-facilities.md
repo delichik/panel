@@ -697,13 +697,13 @@
 
 ### FAC-PRB-003 配置保存与校验
 
-- **前置**：认证用户提交 `PUT /api/v1/facility-apps/network-probe`，body 为 `{mode, serverIds, intervalSeconds?, pingCount?, pingTimeoutSeconds?}`；旧客户端可省略后三个参数。设施页表单以**分钟**输入探测间隔（1..60 分钟、默认 1 分钟，见 `UI-FAC-015`），保存时换算为 `intervalSeconds = 分钟 × 60`；设施 API 仍以秒存储和下发。
+- **前置**：认证用户提交 `PUT /api/v1/facility-apps/network-probe`，body 为 `{mode, serverIds, intervalSeconds?, pingCount?, pingTimeoutSeconds?, thresholds?}`；旧客户端可省略后四个参数。设施页表单以**分钟**输入探测间隔（1..60 分钟、默认 1 分钟，见 `UI-FAC-015`），保存时换算为 `intervalSeconds = 分钟 × 60`；设施 API 仍以秒存储和下发。
 - **动作**：校验、归一化、去重并保存配置。
-- **结果**：`mode` 只允许 `all|selected`（`networkprobe.ModeAll/ModeSelected`）。探测参数按以下规则归一化后写入同一单行（列 `interval_seconds`/`ping_count`/`ping_timeout_seconds`）：`intervalSeconds` 为 0 或缺省时取默认 60（1 分钟），否则必须在 60..3600（即 1..60 分钟）；`pingCount` 为 0 或缺省时取默认 3，否则必须在 1..10；`pingTimeoutSeconds` 为 0 或缺省时取默认 2，否则必须在 1..10。`selected` 时 `serverIds` 必须非空且每个 ID 当前存在，保存前去空、去重、按稳定服务器 ID 保留。成功写单行配置并 `version` 递增、更新 `updated_at`，返回保存后的完整配置（含归一化后的 mode/serverIds/intervalSeconds/pingCount/pingTimeoutSeconds/version/updatedAt）。
-- **失败**：非法 mode 返回 `network_probe_mode_invalid`；参数越界（含负数）返回 `network_probe_interval_invalid`、`network_probe_ping_count_invalid`、`network_probe_ping_timeout_invalid`；`selected` 空集合返回 `network_probe_servers_required`；不存在的服务器 ID 返回 `network_probe_server_not_found`。任一校验失败不得写入或 bump version，也不得部分保存；参数校验顺序固定为 mode → 三个参数 → selected 集合，便于稳定断言。
+- **结果**：`mode` 只允许 `all|selected`（`networkprobe.ModeAll/ModeSelected`）。探测参数按以下规则归一化后写入同一单行（列 `interval_seconds`/`ping_count`/`ping_timeout_seconds`）：`intervalSeconds` 为 0 或缺省时取默认 60（1 分钟），否则必须在 60..3600（即 1..60 分钟）；`pingCount` 为 0 或缺省时取默认 3，否则必须在 1..10；`pingTimeoutSeconds` 为 0 或缺省时取默认 2，否则必须在 1..10。`thresholds` 可含 `latencyMs`/`packetLossPercent`：延迟必须 >0 毫秒，丢包必须 >0 且 ≤100；缺省表示不启用。`selected` 时 `serverIds` 必须非空且每个 ID 当前存在，保存前去空、去重、按稳定服务器 ID 保留。成功写单行配置并 `version` 递增、更新 `updated_at`，返回保存后的完整配置（含归一化后的 mode/serverIds/intervalSeconds/pingCount/pingTimeoutSeconds/thresholds/version/updatedAt）。
+- **失败**：非法 mode 返回 `network_probe_mode_invalid`；参数越界（含负数）返回 `network_probe_interval_invalid`、`network_probe_ping_count_invalid`、`network_probe_ping_timeout_invalid`；阈值非法返回 `network_probe_threshold_invalid`；`selected` 空集合返回 `network_probe_servers_required`；不存在的服务器 ID 返回 `network_probe_server_not_found`。任一校验失败不得写入或 bump version，也不得部分保存；参数校验顺序固定为 mode → 三个参数 → selected 集合，便于稳定断言。
 - **边界**：0/缺省表示“使用默认值”而不是“显式 0”（旧客户端兼容）；负数与越界在保存路径必须拒绝而不是静默夹紧。读取侧对旧 alpha 行、手工数据或越界值做防御性归一化（`loadConfig` 回落到默认 60/3/2），旧版本可能保存的 10..59 秒 `interval` 同样回落默认 60 秒（1 分钟），不得因旧数据把非法探测节奏下发给 Agent，也不得让读取失败。`all` 模式忽略并保存空 `serverIds`（归一化后为空数组），但切到 `selected` 时仍需重新提供非空集合；重复 ID 静默去重而不是报错；删除服务器后的配置修剪见 `FAC-PRB-007`。
 - **不变量**：配置是单行 upsert，不存在同一设施多行；保存成功不要求探测目标立即重算（目标仍在下一次配置快照/下发时生效，见 `FAC-PRB-004`）；参数值不参与权限或目标选择语义。
-- **验证**：handler/service 校验与归一化测试（三参数 0/缺省→默认、边界值 60/3600/1/10、旧数据 10..59 秒回落默认 60、越界与负数错误码、失败不写库、版本递增、旧客户端省略字段）、读取侧坏数据归一化测试、i18n 错误码测试。
+- **验证**：handler/service 校验与归一化测试（三参数 0/缺省→默认、边界值 60/3600/1/10、旧数据 10..59 秒回落默认 60、越界与负数错误码、阈值往返与越界、失败不写库、版本递增、旧客户端省略字段）、读取侧坏数据归一化测试、i18n 错误码测试。
 
 ### FAC-PRB-004 配置下发与周期探测
 
@@ -757,10 +757,10 @@
 
 - **前置**：探测节点按设施配置的探测周期上报结果（默认 60 秒即 1 分钟，可配置 1..60 分钟即 60..3600 秒，见 `FAC-PRB-004/010`；**不再写死 60 秒**）；读取方请求 `GET /api/v1/servers/{id}/network-probes?history=1`（也接受 `history=true`）。
 - **动作**：Panel 落库最新观测的同时维护该 `(source,target)` 的 24 小时桶历史。
-- **结果**：`network_probe_results.history_json` 保存 `[{"t":<unix 秒桶起点>,"l":<延迟毫秒>,"p":<丢包百分比>}]`，按 30 分钟桶（`1800s`）聚合：同一桶内后一次上报替换该桶，跨桶追加；只保留距本次 `sampleAt` 最近 24 小时内、最多 48 项，时间升序。`history=1` 时每个 `results[]` 附带 `history: [{time,latencyMs,packetLossPercent}]`（RFC3339 时间、延迟毫秒、丢包百分比）；不带该参数时响应与改造前一致，`Matrix`/`CardData` 永不返回 `history`。失败样本（`error` 非空或 `received=0`）在桶历史中记延迟 0、丢包 100；成功样本按本次上报的延迟与丢包值记录。
+- **结果**：`network_probe_results.history_json` 保存 `[{"t":<unix 秒桶起点>,"l":<延迟毫秒平均>,"lmin":<最小延迟>,"lmax":<最大延迟>,"p":<丢包百分比平均>,"pmin":<最小丢包>,"pmax":<最大丢包>,"n":<参与聚合的采样数>}]`，按 30 分钟桶（`1800s`）聚合：同一桶内多次上报累计为平均/最小/最大值（不再替换），跨桶追加；只保留距本次 `sampleAt` 最近 24 小时内、最多 48 项，时间升序。旧数据缺少 `n/min/max` 时按单采样处理，最小/最大值回退为平均值。`history=1` 时每个 `results[]` 附带 `history: [{time,latencyMs,latencyMsMin,latencyMsMax,packetLossPercent,packetLossPercentMin,packetLossPercentMax}]`（RFC3339 时间、延迟毫秒、丢包百分比；跨源聚合时平均取各源桶平均，最小/最大取所有源桶的极值）；不带该参数时响应与改造前一致，`Matrix`/`CardData` 永不返回 `history`。失败样本（`error` 非空或 `received=0`）在桶历史中记延迟 0、丢包 100，失败样本的丢包 100 参与丢包 max；延迟 0 不构成有效延迟区间（前端不把 0 当作最小延迟）。
 - **失败**：旧数据或旧 Agent 没有历史时 `history=[]` 或字段缺省，读取不得报错；非法 `history` 值按未请求处理；历史合并失败只影响该 source 的历史（记录日志），不得阻断最新结果落库或指标上报。
-- **不变量**：历史只由服务端从已上报观测派生，不由前端拼接；桶宽固定 30 分钟，与探测周期无关（周期大于 30 分钟时每桶最多一次上报，周期小于 30 分钟时同桶替换）；不新增表，`history_json` 为同表列；服务器删除随结果行一并清理历史。
-- **验证**：`networkprobe` 服务测试（同桶替换、跨桶追加、24h 剪枝、48 上限、失败样本语义、默认不带 history、探测周期 60s/3600s 下历史桶行为不变、跨源聚合桶平均）、handler 测试（`history=1` 传参、`view=targets` 时返回聚合历史）、`models`/迁移测试、前端设施详情与服务器概览折线图测试（`UI-FAC-018`、`UI-SRV-027`）。
+- **不变量**：历史只由服务端从已上报观测派生，不由前端拼接；桶宽固定 30 分钟，与探测周期无关（周期大于 30 分钟时每桶最多一次上报，周期小于 30 分钟时同桶累计平均/最小/最大值）；不新增表，`history_json` 为同表列；服务器删除随结果行一并清理历史。
+- **验证**：`networkprobe` 服务测试（同桶累计平均/最小/最大、跨桶追加、24h 剪枝、48 上限、旧数据 min=max=平均回退、失败样本语义、默认不带 history、探测周期 60s/3600s 下历史桶行为不变、跨源聚合桶平均与极值）、handler 测试（`history=1` 传参、`view=targets` 时返回聚合历史）、`models`/迁移测试、前端设施详情与服务器概览折线图测试（`UI-FAC-018`、`UI-SRV-027`）。
 
 ### FAC-PRB-010 探测参数配置（周期/包数/超时）
 
@@ -797,13 +797,13 @@
 
 ### FAC-MET-003 配置保存与校验
 
-- **触发入口**：认证用户在指标设施配置页点击「保存」，或直接 `PUT /api/v1/facility-apps/metrics`，body 为 `{mode, serverIds, retentionDays, collectionIntervalSeconds, cleanupSchedule}`（无 `version`/`updatedAt`）。
+- **触发入口**：认证用户在指标设施配置页点击「保存」，或直接 `PUT /api/v1/facility-apps/metrics`，body 为 `{mode, serverIds, retentionDays, collectionIntervalSeconds, cleanupSchedule, thresholds}`（无 `version`/`updatedAt`；`thresholds` 可缺省为 `{}`）。
 - **前置**：AppDB 可写；服务器列表可读；请求与当前已保存配置不同（页面仅在脏状态启用保存，但服务端不依赖前端校验）。
-- **成功**：`mode` 只允许 `all|selected`；`mode=selected` 时 `serverIds` 必须非空、每项当前存在，保存前去空白、去重、按稳定服务器 ID 升序；`retentionDays` 必须 ≥1；`collectionIntervalSeconds` 必须 ≥1；`cleanupSchedule` 只允许 `hourly|daily|weekly`。`mode=all` 忽略并保存空 `serverIds`（归一化为 `[]`）。校验通过后单行 upsert，`version = 上次 version + 1`、更新 `updated_at`，返回保存后的完整配置。
-- **失败**：非法 mode 返回 `metrics_facility_mode_invalid`；`selected` 空集合返回 `metrics_facility_servers_required`；不存在的服务器 ID 返回 `metrics_facility_server_not_found`；`retentionDays < 1` 返回 `metrics_facility_retention_invalid`；`collectionIntervalSeconds < 1` 返回 `metrics_facility_interval_invalid`；`cleanupSchedule` 非法返回 `metrics_facility_cleanup_schedule_invalid`。任一校验失败不得写库、不得 bump `version`、不得部分保存。
+- **成功**：`mode` 只允许 `all|selected`；`mode=selected` 时 `serverIds` 必须非空、每项当前存在，保存前去空白、去重、按稳定服务器 ID 升序；`retentionDays` 必须 ≥1；`collectionIntervalSeconds` 必须 ≥1；`cleanupSchedule` 只允许 `hourly|daily|weekly`。`mode=all` 忽略并保存空 `serverIds`（归一化为 `[]`）。`thresholds` 可含 `cpuUsagePercent`/`memoryUsagePercent`/`diskReadBytesPerSecond`/`diskWriteBytesPerSecond`/`networkRxBytesPerSecond`/`networkTxBytesPerSecond`：百分比必须 >0 且 ≤100，速率必须 >0；缺省/字段缺失表示该项不启用。校验通过后单行 upsert，`version = 上次 version + 1`、更新 `updated_at`，返回保存后的完整配置（含归一化后的 `thresholds`）。
+- **失败**：非法 mode 返回 `metrics_facility_mode_invalid`；`selected` 空集合返回 `metrics_facility_servers_required`；不存在的服务器 ID 返回 `metrics_facility_server_not_found`；`retentionDays < 1` 返回 `metrics_facility_retention_invalid`；`collectionIntervalSeconds < 1` 返回 `metrics_facility_interval_invalid`；`cleanupSchedule` 非法返回 `metrics_facility_cleanup_schedule_invalid`；阈值非法返回 `metrics_facility_threshold_invalid`。任一校验失败不得写库、不得 bump `version`、不得部分保存。
 - **边界**：与网络探测不同，保存路径中的 `0` 不是“使用默认值”而是非法值（默认值只用于从未保存的读取与迁移播种，见 `FAC-MET-001/006`）；重复服务器 ID 静默去重而不是报错；`mode=all` 时即使提交了 `serverIds` 也归一化为空数组；读取侧对旧行/手工数据的非法值做防御性归一化，不得让读取失败或把非法节奏下发给 Agent。
 - **不变量**：配置恒为单行 upsert；保存成功不要求立即重算指标历史（间隔在对齐落库路径生效，见 `FAC-MET-004`）；保存成功后使服务端 3 秒 TTL 配置快照失效，下一次 stream 读取到新值。设施页把「采集范围」与「采集配置」上下堆叠为两个独立区域（范围在上、配置在下）、节点选择器改为紧凑网格（`UI-FAC-019`，不改变本条字段、校验、payload 与归一化语义）。
-- **验证点**：`metricsfacility` handler/service 的归一化与错误码测试（`TestSaveValidationErrors`、`TestSaveAllModeClearsServerIDsAndBumpsVersion`、`TestSaveSelectedModeNormalizesServerIDs`、`TestHandlerMapsValidationErrors`、`TestValidationErrorCodesHaveChineseTranslations`；覆盖六类错误码、失败不写库、`version` 递增、`all` 忽略 serverIds、`selected` 空集合、重复 ID 去重、读取侧坏数据归一化）。
+- **验证点**：`metricsfacility` handler/service 的归一化与错误码测试（`TestSaveValidationErrors`、`TestSaveThresholdsRoundTrip`、`TestSaveAllModeClearsServerIDsAndBumpsVersion`、`TestSaveSelectedModeNormalizesServerIDs`、`TestHandlerMapsValidationErrors`、`TestValidationErrorCodesHaveChineseTranslations`；覆盖七类错误码、失败不写库、`version` 递增、阈值往返与越界、`all` 忽略 serverIds、`selected` 空集合、重复 ID 去重、读取侧坏数据归一化）。
 
 ### FAC-MET-004 采集间隔与对齐生效
 

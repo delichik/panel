@@ -61,25 +61,34 @@ const (
 	historyMaxPoints = 48
 )
 
+// Thresholds 是延迟/丢包图表警告阈值；nil 表示未启用。延迟必须为正毫秒，
+// 丢包为 0..100 百分比（不含 0）。
+type Thresholds struct {
+	LatencyMS         *float64 `json:"latencyMs,omitempty"`
+	PacketLossPercent *float64 `json:"packetLossPercent,omitempty"`
+}
+
 // Config 是网络探测设施的对外配置。
 type Config struct {
-	Mode               string    `json:"mode"`
-	ServerIDs          []string  `json:"serverIds"`
-	IntervalSeconds    int       `json:"intervalSeconds"`
-	PingCount          int       `json:"pingCount"`
-	PingTimeoutSeconds int       `json:"pingTimeoutSeconds"`
-	Version            int       `json:"version"`
-	UpdatedAt          time.Time `json:"updatedAt"`
+	Mode               string     `json:"mode"`
+	ServerIDs          []string   `json:"serverIds"`
+	IntervalSeconds    int        `json:"intervalSeconds"`
+	PingCount          int        `json:"pingCount"`
+	PingTimeoutSeconds int        `json:"pingTimeoutSeconds"`
+	Thresholds         Thresholds `json:"thresholds"`
+	Version            int        `json:"version"`
+	UpdatedAt          time.Time  `json:"updatedAt"`
 }
 
 // SaveInput 是保存网络探测设施的输入。参数为 0/缺省时按默认值归一化（兼容
 // 旧客户端）。
 type SaveInput struct {
-	Mode               string   `json:"mode"`
-	ServerIDs          []string `json:"serverIds"`
-	IntervalSeconds    int      `json:"intervalSeconds"`
-	PingCount          int      `json:"pingCount"`
-	PingTimeoutSeconds int      `json:"pingTimeoutSeconds"`
+	Mode               string     `json:"mode"`
+	ServerIDs          []string   `json:"serverIds"`
+	IntervalSeconds    int        `json:"intervalSeconds"`
+	PingCount          int        `json:"pingCount"`
+	PingTimeoutSeconds int        `json:"pingTimeoutSeconds"`
+	Thresholds         Thresholds `json:"thresholds"`
 }
 
 // Node 是一个探测节点（同时也是其它探测节点的目标）。
@@ -107,19 +116,31 @@ type Result struct {
 	History []HistoryPoint `json:"history,omitempty"`
 }
 
-// HistoryPoint 是探测历史曲线上的一个采样桶。
+// HistoryPoint 是探测历史曲线上的一个采样桶。同一 30 分钟桶内可能有多次探测
+// 上报，LatencyMS/PacketLossPercent 是这些采样的平均值，Min/Max 是同一桶内的
+// 最小/最大值（旧数据没有 min/max 时按 min=max=平均回退）。
 type HistoryPoint struct {
-	Time              time.Time `json:"time"`
-	LatencyMS         float64   `json:"latencyMs"`
-	PacketLossPercent float64   `json:"packetLossPercent"`
+	Time                 time.Time `json:"time"`
+	LatencyMS            float64   `json:"latencyMs"`
+	LatencyMSMin         float64   `json:"latencyMsMin"`
+	LatencyMSMax         float64   `json:"latencyMsMax"`
+	PacketLossPercent    float64   `json:"packetLossPercent"`
+	PacketLossPercentMin float64   `json:"packetLossPercentMin"`
+	PacketLossPercentMax float64   `json:"packetLossPercentMax"`
 }
 
 // storedHistoryPoint 是 history_json 的持久化紧凑格式，避免每个 (source,target)
-// 保存重复的键名。t 是 30 分钟桶起点的 unix 秒，l 是延迟毫秒平均值，p 是丢包百分比。
+// 保存重复的键名。t 是 30 分钟桶起点的 unix 秒，l/p 是桶内平均值，
+// lmin/lmax/pmin/pmax 是桶内最小/最大值，n 是参与聚合的采样数（旧数据缺省为 1）。
 type storedHistoryPoint struct {
-	Time              int64   `json:"t"`
-	LatencyMS         float64 `json:"l"`
-	PacketLossPercent float64 `json:"p"`
+	Time                 int64   `json:"t"`
+	LatencyMS            float64 `json:"l"`
+	LatencyMSMin         float64 `json:"lmin,omitempty"`
+	LatencyMSMax         float64 `json:"lmax,omitempty"`
+	PacketLossPercent    float64 `json:"p"`
+	PacketLossPercentMin float64 `json:"pmin,omitempty"`
+	PacketLossPercentMax float64 `json:"pmax,omitempty"`
+	Count                int     `json:"n,omitempty"`
 }
 
 // Matrix 是设施页的探测矩阵：节点列表 + 每个探测节点到每个目标的最近结果。
@@ -257,6 +278,10 @@ func (s *Service) Save(ctx context.Context, in SaveInput) (Config, error) {
 	if !ok {
 		return Config{}, panelerr.Validation("network_probe_ping_timeout_invalid", "pingTimeoutSeconds must be between 1 and 10")
 	}
+	thresholds, err := normalizeThresholds(in.Thresholds)
+	if err != nil {
+		return Config{}, err
+	}
 	ids := normalizeIDs(in.ServerIDs)
 	all, err := s.servers.List(ctx)
 	if err != nil {
@@ -291,6 +316,7 @@ func (s *Service) Save(ctx context.Context, in SaveInput) (Config, error) {
 		IntervalSeconds:    intervalSeconds,
 		PingCount:          pingCount,
 		PingTimeoutSeconds: pingTimeoutSeconds,
+		Thresholds:         thresholds,
 		Version:            previous.Version + 1,
 		UpdatedAt:          now,
 	}
@@ -298,10 +324,14 @@ func (s *Service) Save(ctx context.Context, in SaveInput) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	if _, err := orm.RawExec(ctx, s.db, `INSERT INTO network_probe_configs(id,mode,server_ids_json,interval_seconds,ping_count,ping_timeout_seconds,version,updated_at)
-VALUES(?,?,?,?,?,?,?,?)
-ON CONFLICT(id) DO UPDATE SET mode=excluded.mode,server_ids_json=excluded.server_ids_json,interval_seconds=excluded.interval_seconds,ping_count=excluded.ping_count,ping_timeout_seconds=excluded.ping_timeout_seconds,version=excluded.version,updated_at=excluded.updated_at`,
-		configID, cfg.Mode, string(encoded), cfg.IntervalSeconds, cfg.PingCount, cfg.PingTimeoutSeconds, cfg.Version, formatTime(cfg.UpdatedAt)); err != nil {
+	encodedThresholds, err := json.Marshal(cfg.Thresholds)
+	if err != nil {
+		return Config{}, err
+	}
+	if _, err := orm.RawExec(ctx, s.db, `INSERT INTO network_probe_configs(id,mode,server_ids_json,interval_seconds,ping_count,ping_timeout_seconds,thresholds_json,version,updated_at)
+VALUES(?,?,?,?,?,?,?,?,?)
+ON CONFLICT(id) DO UPDATE SET mode=excluded.mode,server_ids_json=excluded.server_ids_json,interval_seconds=excluded.interval_seconds,ping_count=excluded.ping_count,ping_timeout_seconds=excluded.ping_timeout_seconds,thresholds_json=excluded.thresholds_json,version=excluded.version,updated_at=excluded.updated_at`,
+		configID, cfg.Mode, string(encoded), cfg.IntervalSeconds, cfg.PingCount, cfg.PingTimeoutSeconds, string(encodedThresholds), cfg.Version, formatTime(cfg.UpdatedAt)); err != nil {
 		return Config{}, err
 	}
 	s.invalidate()
@@ -463,10 +493,17 @@ type targetAggregate struct {
 	history      []HistoryPoint
 }
 
-// historyBucketAggregate 是一个 (目标 × 30 分钟桶) 的跨源累计值。
+// historyBucketAggregate 是一个 (目标 × 30 分钟桶) 的跨源累计值。平均值沿用
+// 各源桶平均值的算术平均；最大/最小取所有源桶的 max/min。
 type historyBucketAggregate struct {
 	latencySum float64
 	lossSum    float64
+	latencyMin float64
+	latencyMax float64
+	lossMin    float64
+	lossMax    float64
+	hasLatency bool
+	hasLoss    bool
 	count      int
 }
 
@@ -586,6 +623,31 @@ func (s *Service) aggregateTargets(ctx context.Context, sources, targets map[str
 			}
 			bucket.latencySum += sanitizeFloat(point.LatencyMS)
 			bucket.lossSum += sanitizeFloat(point.PacketLossPercent)
+			if !bucket.hasLatency {
+				bucket.latencyMin = sanitizeFloat(point.LatencyMSMin)
+				bucket.latencyMax = sanitizeFloat(point.LatencyMSMax)
+				bucket.lossMin = sanitizeFloat(point.PacketLossPercentMin)
+				bucket.lossMax = sanitizeFloat(point.PacketLossPercentMax)
+				bucket.hasLatency = true
+				bucket.hasLoss = true
+			} else {
+				latencyMin := sanitizeFloat(point.LatencyMSMin)
+				latencyMax := sanitizeFloat(point.LatencyMSMax)
+				lossMin := sanitizeFloat(point.PacketLossPercentMin)
+				lossMax := sanitizeFloat(point.PacketLossPercentMax)
+				if latencyMin < bucket.latencyMin {
+					bucket.latencyMin = latencyMin
+				}
+				if latencyMax > bucket.latencyMax {
+					bucket.latencyMax = latencyMax
+				}
+				if lossMin < bucket.lossMin {
+					bucket.lossMin = lossMin
+				}
+				if lossMax > bucket.lossMax {
+					bucket.lossMax = lossMax
+				}
+			}
 			bucket.count++
 		}
 	}
@@ -620,9 +682,13 @@ func aggregateHistoryPoints(buckets map[int64]*historyBucketAggregate) []History
 	for _, key := range keys {
 		bucket := buckets[key]
 		out = append(out, HistoryPoint{
-			Time:              time.Unix(key, 0).UTC(),
-			LatencyMS:         bucket.latencySum / float64(bucket.count),
-			PacketLossPercent: bucket.lossSum / float64(bucket.count),
+			Time:                 time.Unix(key, 0).UTC(),
+			LatencyMS:            bucket.latencySum / float64(bucket.count),
+			LatencyMSMin:         bucket.latencyMin,
+			LatencyMSMax:         bucket.latencyMax,
+			PacketLossPercent:    bucket.lossSum / float64(bucket.count),
+			PacketLossPercentMin: bucket.lossMin,
+			PacketLossPercentMax: bucket.lossMax,
 		})
 	}
 	return out
@@ -683,10 +749,10 @@ func (s *Service) loadConfig(ctx context.Context) (Config, error) {
 		PingCount:          DefaultPingCount,
 		PingTimeoutSeconds: DefaultPingTimeoutSeconds,
 	}
-	var mode, rawIDs, updatedAt string
+	var mode, rawIDs, rawThresholds, updatedAt string
 	var version int
-	err := s.db.QueryRowContext(ctx, `SELECT mode,server_ids_json,interval_seconds,ping_count,ping_timeout_seconds,version,updated_at FROM network_probe_configs WHERE id=?`, configID).
-		Scan(&mode, &rawIDs, &cfg.IntervalSeconds, &cfg.PingCount, &cfg.PingTimeoutSeconds, &version, &updatedAt)
+	err := s.db.QueryRowContext(ctx, `SELECT mode,server_ids_json,interval_seconds,ping_count,ping_timeout_seconds,thresholds_json,version,updated_at FROM network_probe_configs WHERE id=?`, configID).
+		Scan(&mode, &rawIDs, &cfg.IntervalSeconds, &cfg.PingCount, &cfg.PingTimeoutSeconds, &rawThresholds, &version, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return cfg, nil
 	}
@@ -700,6 +766,7 @@ func (s *Service) loadConfig(ctx context.Context) (Config, error) {
 	cfg.IntervalSeconds = normalizeProbeIntervalSeconds(cfg.IntervalSeconds)
 	cfg.PingCount = normalizePingCount(cfg.PingCount)
 	cfg.PingTimeoutSeconds = normalizePingTimeoutSeconds(cfg.PingTimeoutSeconds)
+	cfg.Thresholds = decodeThresholds(rawThresholds)
 	cfg.Version = version
 	cfg.UpdatedAt = parseTime(updatedAt)
 	return cfg, nil
@@ -789,25 +856,56 @@ func loadHistories(ctx context.Context, tx *sql.Tx, source string) (map[string][
 	return histories, rows.Err()
 }
 
-// appendHistory 把一条新采样并入历史：同一 30 分钟桶替换最后一点，否则追加；
-// 随后剪掉距 sampledAt 超过 24 小时的桶并只保留最近 48 项。失败样本（error 或
-// received<=0）记为 l=0、p=100；成功样本使用上报的延迟与丢包百分比。
+// appendHistory 把一条新采样并入历史：同一 30 分钟桶累计为平均/最小/最大值，
+// 否则追加；随后剪掉距 sampledAt 超过 24 小时的桶并只保留最近 48 项。失败样本
+// （error 或 received<=0）记为 l=0、p=100；成功样本使用上报的延迟与丢包百分比。
 func appendHistory(existing []storedHistoryPoint, bucket, sampledAtUnix int64, result ReportedResult) []storedHistoryPoint {
-	point := storedHistoryPoint{Time: bucket}
+	latency := 0.0
+	loss := 100.0
 	if strings.TrimSpace(result.Error) == "" && result.Received > 0 {
-		point.LatencyMS = sanitizeFloat(result.LatencyMS)
-		point.PacketLossPercent = sanitizeFloat(result.PacketLossPercent)
-	} else {
-		point.LatencyMS = 0
-		point.PacketLossPercent = 100
+		latency = sanitizeFloat(result.LatencyMS)
+		loss = sanitizeFloat(result.PacketLossPercent)
+	}
+	point := storedHistoryPoint{
+		Time:                 bucket,
+		LatencyMS:            latency,
+		LatencyMSMin:         latency,
+		LatencyMSMax:         latency,
+		PacketLossPercent:    loss,
+		PacketLossPercentMin: loss,
+		PacketLossPercentMax: loss,
+		Count:                1,
 	}
 	history := append([]storedHistoryPoint(nil), existing...)
 	if n := len(history); n > 0 && history[n-1].Time == bucket {
+		previous := normalizeStoredHistoryPoint(history[n-1])
+		count := previous.Count + 1
+		point.Count = count
+		point.LatencyMS = (previous.LatencyMS*float64(previous.Count) + latency) / float64(count)
+		point.LatencyMSMin = math.Min(previous.LatencyMSMin, latency)
+		point.LatencyMSMax = math.Max(previous.LatencyMSMax, latency)
+		point.PacketLossPercent = (previous.PacketLossPercent*float64(previous.Count) + loss) / float64(count)
+		point.PacketLossPercentMin = math.Min(previous.PacketLossPercentMin, loss)
+		point.PacketLossPercentMax = math.Max(previous.PacketLossPercentMax, loss)
 		history[n-1] = point
 	} else {
 		history = append(history, point)
 	}
 	return pruneHistory(history, sampledAtUnix)
+}
+
+// normalizeStoredHistoryPoint 兼容旧 history_json（缺少 n/min/max）：视为单采样，
+// 最小/最大值回退为平均值，避免旧历史在图表里出现 0 范围。
+func normalizeStoredHistoryPoint(point storedHistoryPoint) storedHistoryPoint {
+	if point.Count > 0 {
+		return point
+	}
+	point.Count = 1
+	point.LatencyMSMin = point.LatencyMS
+	point.LatencyMSMax = point.LatencyMS
+	point.PacketLossPercentMin = point.PacketLossPercent
+	point.PacketLossPercentMax = point.PacketLossPercent
+	return point
 }
 
 // pruneHistory 丢弃距 sampledAt 超过 24h 的桶，并只保留最后 historyMaxPoints 项。
@@ -857,7 +955,7 @@ func decodeStoredHistory(raw string) []storedHistoryPoint {
 		if point.Time <= 0 {
 			continue
 		}
-		out = append(out, point)
+		out = append(out, normalizeStoredHistoryPoint(point))
 	}
 	return out
 }
@@ -872,9 +970,13 @@ func decodeHistoryPoints(raw string) []HistoryPoint {
 	out := make([]HistoryPoint, 0, len(stored))
 	for _, point := range stored {
 		out = append(out, HistoryPoint{
-			Time:              time.Unix(point.Time, 0).UTC(),
-			LatencyMS:         sanitizeFloat(point.LatencyMS),
-			PacketLossPercent: sanitizeFloat(point.PacketLossPercent),
+			Time:                 time.Unix(point.Time, 0).UTC(),
+			LatencyMS:            sanitizeFloat(point.LatencyMS),
+			LatencyMSMin:         sanitizeFloat(point.LatencyMSMin),
+			LatencyMSMax:         sanitizeFloat(point.LatencyMSMax),
+			PacketLossPercent:    sanitizeFloat(point.PacketLossPercent),
+			PacketLossPercentMin: sanitizeFloat(point.PacketLossPercentMin),
+			PacketLossPercentMax: sanitizeFloat(point.PacketLossPercentMax),
 		})
 	}
 	return out
@@ -1115,6 +1217,34 @@ func sanitizeFloat(value float64) float64 {
 		return 0
 	}
 	return value
+}
+
+func normalizeThresholds(in Thresholds) (Thresholds, error) {
+	if in.LatencyMS != nil {
+		if math.IsNaN(*in.LatencyMS) || math.IsInf(*in.LatencyMS, 0) || *in.LatencyMS <= 0 {
+			return Thresholds{}, panelerr.Validation("network_probe_threshold_invalid", "latencyMs must be greater than 0")
+		}
+	}
+	if in.PacketLossPercent != nil {
+		if math.IsNaN(*in.PacketLossPercent) || math.IsInf(*in.PacketLossPercent, 0) || *in.PacketLossPercent <= 0 || *in.PacketLossPercent > 100 {
+			return Thresholds{}, panelerr.Validation("network_probe_threshold_invalid", "packetLossPercent must be greater than 0 and at most 100")
+		}
+	}
+	return in, nil
+}
+
+func decodeThresholds(raw string) Thresholds {
+	var out Thresholds
+	if strings.TrimSpace(raw) == "" || json.Unmarshal([]byte(raw), &out) != nil {
+		return Thresholds{}
+	}
+	if out.LatencyMS != nil && (math.IsNaN(*out.LatencyMS) || math.IsInf(*out.LatencyMS, 0) || *out.LatencyMS <= 0) {
+		out.LatencyMS = nil
+	}
+	if out.PacketLossPercent != nil && (math.IsNaN(*out.PacketLossPercent) || math.IsInf(*out.PacketLossPercent, 0) || *out.PacketLossPercent <= 0 || *out.PacketLossPercent > 100) {
+		out.PacketLossPercent = nil
+	}
+	return out
 }
 
 func formatTime(value time.Time) string {

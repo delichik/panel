@@ -9,6 +9,9 @@ export interface MetricsPoint {
 
 export interface CpuMetricPoint extends MetricsPoint {
   usagePercent: number;
+  /** 同一时间桶内原始采样的最小值/最大值；仅桶查询返回。 */
+  usagePercentMin?: number;
+  usagePercentMax?: number;
 }
 
 export interface MemoryMetricPoint extends MetricsPoint {
@@ -19,11 +22,21 @@ export interface MemoryMetricPoint extends MetricsPoint {
 export interface NetworkMetricPoint extends MetricsPoint {
   rxBytesPerSecond: number;
   txBytesPerSecond: number;
+  /** 同一时间桶内原始采样的最小值/最大值；仅桶查询返回。 */
+  rxBytesPerSecondMin?: number;
+  rxBytesPerSecondMax?: number;
+  txBytesPerSecondMin?: number;
+  txBytesPerSecondMax?: number;
 }
 
 export interface DiskIOMetricPoint extends MetricsPoint {
   readBytesPerSecond: number;
   writeBytesPerSecond: number;
+  /** 同一时间桶内原始采样的最小值/最大值；未知侧省略。 */
+  readBytesPerSecondMin?: number;
+  readBytesPerSecondMax?: number;
+  writeBytesPerSecondMin?: number;
+  writeBytesPerSecondMax?: number;
 }
 
 export interface LoadMetricPoint extends MetricsPoint {

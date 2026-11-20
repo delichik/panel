@@ -385,7 +385,15 @@ export function mockServerMetrics(id: string, range: string = '1h', bucketSecond
   const cpu = points.map((time, index) => {
     const wave = 26 + Math.sin(index / 6 + phase) * 13 + Math.sin(index / 17 + phase) * 6;
     const spike = index % 41 > 36 ? (index % 41) * 1.6 : 0;
-    return { time, usagePercent: clampNumber(wave + spike + seededNoise(index, seed) * 5, 2, 98) };
+    const value = clampNumber(wave + spike + seededNoise(index, seed) * 5, 2, 98);
+    // 同一时间桶内多次采样：给图表提供真实的最小/最大区间，而不是一条平线。
+    const spread = 2.5 + Math.abs(seededNoise(index + 17, seed)) * 6;
+    return {
+      time,
+      usagePercent: value,
+      usagePercentMin: clampNumber(value - spread, 1, 99),
+      usagePercentMax: clampNumber(value + spread, 1, 99),
+    };
   });
   const memoryUsedAt = (index: number) => clampNumber(memoryTotalBytes * (0.42 + Math.sin(index / 11 + phase) * 0.05 + index * 0.0012), memoryTotalBytes * 0.2, memoryTotalBytes * 0.95);
   const memory = points.map((time, index) => ({ time, usedBytes: Math.round(memoryUsedAt(index)), totalBytes: memoryTotalBytes }));
@@ -395,17 +403,35 @@ export function mockServerMetrics(id: string, range: string = '1h', bucketSecond
     // 每隔一段缺测：图表应按时间轴断线，而不是把缺测补成 0。
     if (index > 0 && index % 29 === 0) return [];
     const burst = index % 23 < 3 ? 4_200_000 : 0;
+    const read = Math.max(0, 760_000 + seed * 120_000 + Math.sin(index / 5 + phase) * 420_000 + burst + seededNoise(index + 7, seed) * 140_000);
+    const write = Math.max(0, 320_000 + seed * 80_000 + Math.sin(index / 8 + phase) * 220_000 + seededNoise(index + 3, seed) * 90_000);
+    const readSpread = 120_000 + Math.abs(seededNoise(index + 21, seed)) * 260_000;
+    const writeSpread = 60_000 + Math.abs(seededNoise(index + 23, seed)) * 140_000;
     return [{
       time,
-      readBytesPerSecond: Math.max(0, 760_000 + seed * 120_000 + Math.sin(index / 5 + phase) * 420_000 + burst + seededNoise(index + 7, seed) * 140_000),
-      writeBytesPerSecond: Math.max(0, 320_000 + seed * 80_000 + Math.sin(index / 8 + phase) * 220_000 + seededNoise(index + 3, seed) * 90_000),
+      readBytesPerSecond: read,
+      readBytesPerSecondMin: Math.max(0, read - readSpread),
+      readBytesPerSecondMax: read + readSpread,
+      writeBytesPerSecond: write,
+      writeBytesPerSecondMin: Math.max(0, write - writeSpread),
+      writeBytesPerSecondMax: write + writeSpread,
     }];
   });
-  const network = points.map((time, index) => ({
-    time,
-    rxBytesPerSecond: Math.max(0, 92_000 + seed * 16_000 + Math.sin(index / 7 + phase) * 64_000 + (index % 37 < 2 ? 1_100_000 : 0) + seededNoise(index + 11, seed) * 32_000),
-    txBytesPerSecond: Math.max(0, 48_000 + seed * 9_000 + Math.sin(index / 12 + phase) * 28_000 + seededNoise(index + 5, seed) * 16_000),
-  }));
+  const network = points.map((time, index) => {
+    const rx = Math.max(0, 92_000 + seed * 16_000 + Math.sin(index / 7 + phase) * 64_000 + (index % 37 < 2 ? 1_100_000 : 0) + seededNoise(index + 11, seed) * 32_000);
+    const tx = Math.max(0, 48_000 + seed * 9_000 + Math.sin(index / 12 + phase) * 28_000 + seededNoise(index + 5, seed) * 16_000);
+    const rxSpread = 20_000 + Math.abs(seededNoise(index + 31, seed)) * 80_000;
+    const txSpread = 8_000 + Math.abs(seededNoise(index + 33, seed)) * 30_000;
+    return {
+      time,
+      rxBytesPerSecond: rx,
+      rxBytesPerSecondMin: Math.max(0, rx - rxSpread),
+      rxBytesPerSecondMax: rx + rxSpread,
+      txBytesPerSecond: tx,
+      txBytesPerSecondMin: Math.max(0, tx - txSpread),
+      txBytesPerSecondMax: tx + txSpread,
+    };
+  });
   const load = points.map((time, index) => ({
     time,
     load1: Math.max(0, 0.35 + seed * 0.08 + Math.sin(index / 9 + phase) * 0.18),
