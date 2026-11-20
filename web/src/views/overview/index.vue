@@ -1,1082 +1,525 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-import { useRouter } from 'vue-router';
-import { useTheme } from 'vuetify';
-import VChart from 'vue-echarts';
-import { use } from 'echarts/core';
-import { CanvasRenderer } from 'echarts/renderers';
-import { LineChart } from 'echarts/charts';
-import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components';
-import { useI18n } from '@/i18n';
-import { overviewApi } from '@/api/overview';
+import { computed, onMounted, ref } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { CheckCircle2, History, RefreshCcw, Server as ServerIcon, XCircle } from '@/icons';
 import { applicationsApi } from '@/api/applications';
-import type { ApplicationDto, MetricsRange, MetricsSeriesDto, OverviewDto, OverviewServerDto } from '@/types/api';
-import PageLoadingState from '@/components/PageLoadingState.vue';
+import { containersApi } from '@/api/containers';
+import { metricsFacilityApi } from '@/api/metricsFacility';
+import { networkProbeFacilityApi } from '@/api/networkProbe';
+import { packagesApi } from '@/api/packages';
+import { serversApi, type ServerMetricsSeries } from '@/api/servers';
+import Button from '@/components/ui/Button.vue';
+import EmptyState from '@/components/ui/EmptyState.vue';
+import Select from '@/components/ui/Select.vue';
+import Skeleton from '@/components/ui/Skeleton.vue';
+import DataRefreshControl from '@/components/patterns/DataRefreshControl.vue';
+import InfoBar from '@/components/patterns/InfoBar.vue';
+import RatioRing from '@/components/patterns/RatioRing.vue';
+import ConsolePage from '@/components/templates/ConsolePage.vue';
+import { useAutoRefresh } from '@/composables/useAutoRefresh';
+import { useI18n } from '@/i18n';
+import type { NetworkProbeConfig, NetworkProbeServerResults } from '@/types/networkProbe';
+import type { MetricsFacilityConfig } from '@/types/metricsFacility';
+import type { ApplicationSummaryDto } from '@/types/applications';
+import type { ServerDto } from '@/types/servers';
+import { isAbortError } from '@/views/_shared/requestState';
+import ServerCard from './ServerCard.vue';
+import StatChip from './StatChip.vue';
+import {
+  applicationRatio,
+  buildServerCards,
+  emptyApplicationSummary,
+  formatBytes,
+  formatPercent,
+  onlineRateTone,
+  percentTone,
+  summarizeApplications,
+  summarizeCapacity,
+  summarizeNodeCards,
+} from './model';
 
-use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, LegendComponent]);
-
-type CardKind = 'cpu' | 'memory' | 'disk' | 'network' | 'packageUpdates' | 'containerUpdates' | 'placeholder';
-type NetworkDirection = 'rx' | 'tx' | 'both';
-
-interface OverviewCardConfig {
-  id: string;
-  kind: CardKind;
-  width: number;
-  height: number;
-  range: MetricsRange;
-  networkDirection: NetworkDirection;
-  serverIds: string[];
-}
-
-interface CardPreset {
-  kind: CardKind;
-  icon: string;
-  color: string;
-  category: 'metric' | 'message';
-  width: number;
-  height: number;
-}
-
-type StoredOverviewCard = Partial<OverviewCardConfig> & {
-  title?: string;
-};
-
-const STORAGE_KEY = 'linux-panel-overview-cards';
+const { t } = useI18n();
+const route = useRoute();
 const router = useRouter();
-const theme = useTheme();
-const { t, formatDateTime } = useI18n();
-const isDark = computed(() => theme.global.current.value.dark);
+const autoRefresh = useAutoRefresh();
 
-const cardPresets: CardPreset[] = [
-  { kind: 'cpu', icon: 'mdi-cpu-64-bit', color: 'primary', category: 'metric', width: 3, height: 2 },
-  { kind: 'memory', icon: 'mdi-memory', color: 'success', category: 'metric', width: 3, height: 2 },
-  { kind: 'disk', icon: 'mdi-harddisk', color: 'warning', category: 'metric', width: 3, height: 2 },
-  { kind: 'network', icon: 'mdi-lan', color: 'info', category: 'metric', width: 3, height: 2 },
-  { kind: 'packageUpdates', icon: 'mdi-package-variant-plus', color: 'warning', category: 'message', width: 3, height: 2 },
-  { kind: 'containerUpdates', icon: 'mdi-docker', color: 'primary', category: 'message', width: 3, height: 2 },
-  { kind: 'placeholder', icon: 'mdi-border-none-variant', color: 'secondary', category: 'message', width: 3, height: 2 },
-];
+const servers = ref<ServerDto[]>([]);
+const metricsById = ref<Record<string, ServerMetricsSeries | undefined>>({});
+const metricsErrorIds = ref<Set<string>>(new Set());
+const packageUpdatesById = ref<Record<string, number | null>>({});
+const imageUpdatesById = ref<Record<string, number | null>>({});
+const probeConfig = ref<NetworkProbeConfig | null>(null);
+const metricsConfig = ref<MetricsFacilityConfig | null>(null);
+const warningThresholds = computed(() => ({
+  cpu: metricsConfig.value?.thresholds.cpuUsagePercent ?? null,
+  latency: probeConfig.value?.thresholds.latencyMs ?? null,
+  packetLoss: probeConfig.value?.thresholds.packetLossPercent ?? null,
+}));
+const probeSourceId = ref('');
+const probeResults = ref<NetworkProbeServerResults | null>(null);
+const applications = ref<ApplicationSummaryDto[]>([]);
+const applicationsTotal = ref(0);
+const applicationsError = ref(false);
+const pageLoading = ref(true);
+const refreshing = ref(false);
+const pageError = ref('');
 
-const rangeItems = computed<Array<{ title: string; value: MetricsRange }>>(() => [
-  { title: '1h', value: '1h' },
-  { title: '6h', value: '6h' },
-  { title: '1d', value: '1d' },
-  { title: '7d', value: '7d' },
-]);
+let loadSeq = 0;
+let probeSeq = 0;
+let loadInFlight = false;
+let controller: AbortController | null = null;
 
-const networkDirectionItems = computed<Array<{ title: string; value: NetworkDirection }>>(() => [
-  { title: t('overviewPage.rxTx'), value: 'both' },
-  { title: t('overviewPage.rx'), value: 'rx' },
-  { title: t('overviewPage.tx'), value: 'tx' },
-]);
-
-const overview = ref<OverviewDto>({ servers: [] });
-const applications = ref<ApplicationDto[]>([]);
-const cards = ref<OverviewCardConfig[]>(loadCards());
-const metricsByKey = ref<Record<string, MetricsSeriesDto | null>>({});
-const loading = ref(false);
-const error = ref('');
-const dialog = ref(false);
-const editingCardId = ref('');
-const editMode = ref(false);
-const draggingCardId = ref('');
-const dragOverCardId = ref('');
-let refreshTimer: number | undefined;
-
-const form = reactive({
-  kind: 'cpu' as CardKind,
-  width: 3,
-  height: 2,
-  range: '1h' as MetricsRange,
-  networkDirection: 'both' as NetworkDirection,
-  serverIds: [] as string[],
-});
-
-const palette = computed(() => ({
-  text: isDark.value ? '#b3beb6' : '#5f6f68',
-  grid: isDark.value ? 'rgba(179, 190, 182, 0.16)' : 'rgba(95, 111, 104, 0.16)',
-  tooltipBackground: isDark.value ? '#151a17' : '#ffffff',
-  tooltipBorder: isDark.value ? 'rgba(179, 190, 182, 0.22)' : 'rgba(95, 111, 104, 0.18)',
-  tooltipText: isDark.value ? '#e7ece6' : '#1f2724',
-  series: isDark.value
-    ? ['#2dd4bf', '#4ade80', '#f59e0b', '#60a5fa', '#fb7185', '#a78bfa']
-    : ['#0f766e', '#16a34a', '#b45309', '#2563eb', '#dc2626', '#7c3aed'],
+const candidateIds = computed(() => probeCandidateIds(probeConfig.value, servers.value));
+const probeSourceOptions = computed(() => candidateIds.value.map((id) => {
+  const server = servers.value.find((item) => item.id === id);
+  return { value: id, label: server ? `${server.name} · ${server.host}` : id };
 }));
 
-const serverOptions = computed(() => overview.value.servers.map((server) => ({
-  title: `${server.name} (${server.host})`,
-  value: server.id,
-})));
+const cards = computed(() => buildServerCards({
+  servers: servers.value,
+  metricsById: metricsById.value,
+  metricsErrorIds: metricsErrorIds.value,
+  probeSourceId: probeSourceId.value,
+  probeResults: probeResults.value?.results ?? [],
+  packageUpdatesById: packageUpdatesById.value,
+  imageUpdatesById: imageUpdatesById.value,
+}));
+const nodeSummary = computed(() => summarizeNodeCards(cards.value));
+const onlinePercent = computed(() => (nodeSummary.value.total ? Math.round((nodeSummary.value.online / nodeSummary.value.total) * 100) : 0));
+const applicationSummary = computed(() => (
+  applicationsError.value ? emptyApplicationSummary() : summarizeApplications(applications.value, applicationsTotal.value || applications.value.length)
+));
+const capacity = computed(() => summarizeCapacity(cards.value));
+const applicationRatioView = computed(() => applicationRatio(applicationSummary.value));
 
-const configuredServerIds = computed(() => new Set(cards.value.flatMap((card) => resolveCardServerIds(card))));
-const onlineCount = computed(() => overview.value.servers.filter((server) => server.reachable).length);
-const issueCount = computed(() => packageRowsForServers(overview.value.servers).length + containerRowsForServers(overview.value.servers.map((server) => server.id)).length);
-const overviewSignals = computed(() => [
-  {
-    key: 'online',
-    icon: 'mdi-server-network',
-    color: 'success',
-    value: `${onlineCount.value}/${overview.value.servers.length}`,
-    label: t('overviewPage.onlineSummary', { online: onlineCount.value, total: overview.value.servers.length }),
-  },
-  {
-    key: 'dashboard',
-    icon: 'mdi-view-dashboard-outline',
-    color: 'primary',
-    value: configuredServerIds.value.size || overview.value.servers.length,
-    label: t('overviewPage.dashboardSummary', { count: configuredServerIds.value.size || overview.value.servers.length }),
-  },
-  {
-    key: 'issues',
-    icon: 'mdi-alert-circle-outline',
-    color: issueCount.value > 0 ? 'warning' : 'success',
-    value: issueCount.value,
-    label: t('overviewPage.issueSummary', { count: issueCount.value }),
-  },
-]);
-const presetItems = computed(() => cardPresets.map((preset) => ({
-  ...preset,
-  title: cardTitle(preset.kind),
-})));
+type RingTone = 'accent' | 'success' | 'warning' | 'danger' | 'info';
 
-watch(cards, () => {
-  saveCards();
-  void loadCardMetrics();
-}, { deep: true });
-
-function loadCards(): OverviewCardConfig[] {
-  if (typeof window === 'undefined') return defaultCards();
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return defaultCards();
-    const parsed = JSON.parse(raw) as StoredOverviewCard[];
-    return Array.isArray(parsed) && parsed.length ? parsed.map(normalizeCard).filter(Boolean) as OverviewCardConfig[] : defaultCards();
-  } catch {
-    return defaultCards();
-  }
+interface CapacityRingItem {
+  key: string;
+  label: string;
+  percent: number | null;
+  text: string;
+  hint: string;
+  tone: RingTone;
+  labelText: string;
 }
 
-function saveCards() {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(cards.value));
+function capacityTone(percent: number | null): RingTone {
+  return percent === null ? 'accent' : percentTone(percent) ?? 'accent';
 }
 
-function defaultCards(): OverviewCardConfig[] {
-  return [
-    createCard('cpu', 3, 2, '1h'),
-    createCard('memory', 3, 2, '1h'),
-    createCard('disk', 3, 2, '6h'),
-    createCard('network', 3, 2, '1h'),
-    createCard('packageUpdates', 3, 2, '1d'),
-    createCard('containerUpdates', 3, 2, '1d'),
+const capacityItems = computed<CapacityRingItem[]>(() => {
+  const value = capacity.value;
+  const memoryHint = value.memoryUsedBytes !== null && value.memoryTotalBytes !== null
+    ? `${formatBytes(value.memoryUsedBytes)} / ${formatBytes(value.memoryTotalBytes)}`
+    : t('overviewPage.metricsUnavailable');
+  const diskHint = value.diskUsedBytes !== null && value.diskTotalBytes !== null
+    ? `${formatBytes(value.diskUsedBytes)} / ${formatBytes(value.diskTotalBytes)}`
+    : t('overviewPage.metricsUnavailable');
+  const rows: Array<Omit<CapacityRingItem, 'labelText'>> = [
+    {
+      key: 'cpu',
+      label: t('overviewPage.metricCpu'),
+      percent: value.cpuPercent,
+      text: value.cpuPercent === null ? '—' : formatPercent(value.cpuPercent, 0),
+      hint: '',
+      tone: capacityTone(value.cpuPercent),
+    },
+    {
+      key: 'memory',
+      label: t('overviewPage.metricMemory'),
+      percent: value.memoryPercent,
+      text: value.memoryPercent === null ? '—' : formatPercent(value.memoryPercent, 0),
+      hint: memoryHint,
+      tone: capacityTone(value.memoryPercent),
+    },
+    {
+      key: 'disk',
+      label: t('overviewPage.metricDisk'),
+      percent: value.diskPercent,
+      text: value.diskPercent === null ? '—' : formatPercent(value.diskPercent, 0),
+      hint: diskHint,
+      tone: capacityTone(value.diskPercent),
+    },
   ];
-}
-
-function normalizeCard(card: StoredOverviewCard): OverviewCardConfig | null {
-  if (!card.kind) return null;
-  const preset = presetFor(card.kind);
-  const range: MetricsRange = rangeItems.value.some((item) => item.value === card.range) ? card.range as MetricsRange : '1h';
-  const networkDirection = normalizeNetworkDirection(card.networkDirection);
-  return {
-    id: card.id || newId(),
-    kind: preset.kind,
-    width: clamp(Number(card.width) || preset.width, 1, 6),
-    height: clamp(Number(card.height) || preset.height, 1, 4),
-    range,
-    networkDirection,
-    serverIds: Array.isArray(card.serverIds) ? card.serverIds : [],
-  };
-}
-
-function createCard(kind: CardKind, width?: number, height?: number, range: MetricsRange = '1h'): OverviewCardConfig {
-  const preset = presetFor(kind);
-  return {
-    id: newId(),
-    kind,
-    width: width ?? preset.width,
-    height: height ?? preset.height,
-    range,
-    networkDirection: 'both',
-    serverIds: [],
-  };
-}
-
-function newId() {
-  return `card-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function presetFor(kind: CardKind) {
-  return cardPresets.find((preset) => preset.kind === kind) ?? cardPresets[0];
-}
-
-function cardTitle(kind: CardKind) {
-  return t(`overviewPage.${kind}`);
-}
-
-function isMetricCard(card: OverviewCardConfig) {
-  return presetFor(card.kind).category === 'metric';
-}
-
-function normalizeNetworkDirection(value: unknown): NetworkDirection {
-  return value === 'rx' || value === 'tx' || value === 'both' ? value : 'both';
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function resolveCardServers(card: OverviewCardConfig) {
-  const selected = new Set(card.serverIds);
-  return overview.value.servers.filter((server) => selected.size === 0 || selected.has(server.id));
-}
-
-function resolveCardServerIds(card: OverviewCardConfig) {
-  return resolveCardServers(card).map((server) => server.id);
-}
-
-function metricKey(serverId: string, range: MetricsRange) {
-  return `${serverId}:${range}`;
-}
-
-async function loadData() {
-  loading.value = true;
-  try {
-    const [nextOverview, nextApplications] = await Promise.all([
-      overviewApi.getOverview(),
-      applicationsApi.list(),
-    ]);
-    overview.value = nextOverview;
-    applications.value = nextApplications;
-    error.value = '';
-    await loadCardMetrics();
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : t('overviewPage.loadFailed');
-  } finally {
-    loading.value = false;
-  }
-}
-
-async function loadCardMetrics() {
-  const pairs = new Map<string, { serverId: string; range: MetricsRange }>();
-  for (const card of cards.value) {
-    if (!isMetricCard(card)) continue;
-    for (const serverId of resolveCardServerIds(card)) {
-      pairs.set(metricKey(serverId, card.range), { serverId, range: card.range });
-    }
-  }
-  await Promise.all([...pairs.entries()].map(async ([key, pair]) => {
-    try {
-      metricsByKey.value[key] = await overviewApi.getMetrics(pair.serverId, pair.range);
-    } catch {
-      metricsByKey.value[key] = null;
-    }
+  return rows.map((row) => ({
+    ...row,
+    labelText: t('overviewPage.capacityStatLabel', { label: row.label, value: row.text }),
   }));
-}
-
-function chartOption(card: OverviewCardConfig) {
-  const servers = resolveCardServers(card);
-  const series = servers.flatMap((server, index) => metricSeriesForCard(card, server, index));
-  return {
-    color: palette.value.series,
-    tooltip: {
-      trigger: 'axis',
-      appendToBody: true,
-      backgroundColor: palette.value.tooltipBackground,
-      borderColor: palette.value.tooltipBorder,
-      textStyle: { color: palette.value.tooltipText },
-      valueFormatter: (value: number) => formatMetricValue(card.kind, value),
-    },
-    legend: {
-      top: 0,
-      type: 'scroll',
-      textStyle: { color: palette.value.text, fontSize: 11 },
-    },
-    grid: { left: 46, right: 20, top: 36, bottom: 28 },
-    xAxis: {
-      type: 'time',
-      axisLabel: {
-        color: palette.value.text,
-        fontSize: 11,
-        hideOverlap: true,
-        showMinLabel: false,
-        showMaxLabel: false,
-      },
-      axisLine: { lineStyle: { color: palette.value.grid } },
-    },
-    yAxis: {
-      type: 'value',
-      axisLabel: {
-        color: palette.value.text,
-        fontSize: 11,
-        formatter: (value: number) => formatAxisValue(card.kind, value),
-      },
-      splitLine: { lineStyle: { color: palette.value.grid } },
-    },
-    series,
-  };
-}
-
-function metricSeriesForCard(card: OverviewCardConfig, server: OverviewServerDto, index: number) {
-  const series = metricsByKey.value[metricKey(server.id, card.range)];
-  const color = palette.value.series[index % palette.value.series.length];
-  if (!series) return [];
-  if (card.kind === 'cpu') return [lineSeries(server.name, color, series.cpu.map((point) => [point.time, point.usagePercent]))];
-  if (card.kind === 'memory') return [lineSeries(server.name, color, series.memory.map((point) => [point.time, percent(point.usedBytes, point.totalBytes)]))];
-  if (card.kind === 'disk') return [lineSeries(server.name, color, series.disk.map((point) => [point.time, percent(point.usedBytes, point.totalBytes)]))];
-  if (card.kind === 'network') {
-    const items = [];
-    if (card.networkDirection === 'rx' || card.networkDirection === 'both') {
-      items.push(lineSeries(`${server.name} RX`, color, series.network.map((point) => [point.time, point.rxBytesPerSecond])));
-    }
-    if (card.networkDirection === 'tx' || card.networkDirection === 'both') {
-      items.push(lineSeries(`${server.name} TX`, color, series.network.map((point) => [point.time, point.txBytesPerSecond]), card.networkDirection === 'both' ? 'dashed' : 'solid'));
-    }
-    return items;
-  }
-  return [];
-}
-
-function lineSeries(name: string, color: string, data: Array<[string, number]>, type: 'solid' | 'dashed' = 'solid') {
-  return {
-    name,
-    type: 'line',
-    smooth: true,
-    symbol: 'none',
-    data,
-    lineStyle: { color, type, width: 2 },
-  };
-}
-
-function percent(used: number, total: number) {
-  return total > 0 ? Math.round((used / total) * 1000) / 10 : 0;
-}
-
-function formatAxisValue(kind: CardKind, value: number) {
-  return kind === 'network' ? formatBytesPerSecond(value) : `${Number(value).toFixed(0)}%`;
-}
-
-function formatMetricValue(kind: CardKind, value: number) {
-  return kind === 'network' ? formatBytesPerSecond(value) : `${Number(value).toFixed(1)}%`;
-}
-
-function formatBytesPerSecond(bytesPerSecond: number): string {
-  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond === 0) return '0 B/s';
-  const sizes = ['B/s', 'KB/s', 'MB/s', 'GB/s', 'TB/s'];
-  const index = Math.min(Math.floor(Math.log(bytesPerSecond) / Math.log(1024)), sizes.length - 1);
-  return `${(bytesPerSecond / Math.pow(1024, index)).toFixed(1)} ${sizes[index]}`;
-}
-
-function packageRows(card: OverviewCardConfig) {
-  return packageRowsForServers(resolveCardServers(card));
-}
-
-function packageRowsForServers(servers: OverviewServerDto[]) {
-  return servers
-    .filter((server) => server.packageUpdateCount > 0)
-    .sort((a, b) => b.packageUpdateCount - a.packageUpdateCount);
-}
-
-function containerRows(card: OverviewCardConfig) {
-  return containerRowsForServers(resolveCardServerIds(card));
-}
-
-function containerRowsForServers(serverIds: string[]) {
-  const selected = new Set(serverIds);
-  return applications.value.filter((app) => {
-  if (!app.imageUpdateAvailable && !app.imageLastError) return false;
-    const targets = applicationServerIds(app);
-    return selected.size === 0 || targets.some((serverId) => selected.has(serverId));
-  });
-}
-
-function applicationServerIds(app: ApplicationDto) {
-  if (app.deploymentMode === 'selected') return app.deploymentServers ?? [];
-  return overview.value.servers.map((server) => server.id);
-}
-
-function targetLabel(app: ApplicationDto) {
-  if (app.deploymentMode !== 'selected') return t('overviewPage.allServers');
-  const ids = new Set(app.deploymentServers ?? []);
-  const names = overview.value.servers.filter((server) => ids.has(server.id)).map((server) => server.name);
-  return names.length ? names.join(', ') : t('overviewPage.noSelectedServers');
-}
-
-function cardServerLabel(card: OverviewCardConfig) {
-  const servers = resolveCardServers(card);
-  if (card.serverIds.length === 0) return t('overviewPage.allServers');
-  if (servers.length === 0) return t('overviewPage.noServers');
-  return t('overviewPage.serverCount', { count: servers.length });
-}
-
-function metricCardLabel(card: OverviewCardConfig) {
-  if (card.kind !== 'network') return card.range;
-  const direction = networkDirectionItems.value.find((item) => item.value === card.networkDirection)?.title ?? t('overviewPage.rxTx');
-  return `${card.range} / ${direction}`;
-}
-
-function openAddDialog(kind?: CardKind) {
-  const preset = presetFor(kind ?? 'cpu');
-  editingCardId.value = '';
-  Object.assign(form, {
-    kind: preset.kind,
-    width: preset.width,
-    height: preset.height,
-    range: '1h' as MetricsRange,
-    networkDirection: 'both' as NetworkDirection,
-    serverIds: [],
-  });
-  dialog.value = true;
-}
-
-function openEditDialog(card: OverviewCardConfig) {
-  editingCardId.value = card.id;
-  Object.assign(form, {
-    kind: card.kind,
-    width: card.width,
-    height: card.height,
-    range: card.range,
-    networkDirection: normalizeNetworkDirection(card.networkDirection),
-    serverIds: [...card.serverIds],
-  });
-  dialog.value = true;
-}
-
-function saveCard() {
-  const next: OverviewCardConfig = {
-    id: editingCardId.value || newId(),
-    kind: form.kind,
-    width: clamp(form.width, 1, 6),
-    height: clamp(form.height, 1, 4),
-    range: form.range,
-    networkDirection: normalizeNetworkDirection(form.networkDirection),
-    serverIds: [...form.serverIds],
-  };
-  if (editingCardId.value) {
-    cards.value = cards.value.map((card) => card.id === editingCardId.value ? next : card);
-  } else {
-    cards.value = [...cards.value, next];
-  }
-  dialog.value = false;
-}
-
-function removeCard(cardId: string) {
-  cards.value = cards.value.filter((card) => card.id !== cardId);
-}
-
-function resetCards() {
-  cards.value = defaultCards();
-}
-
-function toggleEditMode() {
-  editMode.value = !editMode.value;
-  if (!editMode.value) {
-    draggingCardId.value = '';
-    dragOverCardId.value = '';
-  }
-}
-
-function startCardDrag(cardId: string, event: DragEvent) {
-  if (!editMode.value) return;
-  draggingCardId.value = cardId;
-  if (event.dataTransfer) {
-    event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.setData('text/plain', cardId);
-  }
-}
-
-function handleCardDragOver(cardId: string, event: DragEvent) {
-  if (!editMode.value || !draggingCardId.value || draggingCardId.value === cardId) return;
-  event.preventDefault();
-  dragOverCardId.value = cardId;
-  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
-  reorderCard(draggingCardId.value, cardId, shouldInsertAfter(event));
-}
-
-function dropCard(cardId: string, event: DragEvent) {
-  if (!editMode.value) return;
-  event.preventDefault();
-  const sourceId = draggingCardId.value || event.dataTransfer?.getData('text/plain') || '';
-  reorderCard(sourceId, cardId, shouldInsertAfter(event));
-  endCardDrag();
-}
-
-function endCardDrag() {
-  draggingCardId.value = '';
-  dragOverCardId.value = '';
-}
-
-function shouldInsertAfter(event: DragEvent) {
-  const element = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
-  if (!element) return false;
-  const rect = element.getBoundingClientRect();
-  const xRatio = (event.clientX - rect.left) / rect.width;
-  const yRatio = (event.clientY - rect.top) / rect.height;
-  if (yRatio < 0.35) return false;
-  if (yRatio > 0.65) return true;
-  return xRatio > 0.5;
-}
-
-function reorderCard(sourceId: string, targetId: string, insertAfter = false) {
-  if (!sourceId || sourceId === targetId) return;
-  const next = [...cards.value];
-  const sourceIndex = next.findIndex((card) => card.id === sourceId);
-  const targetIndex = next.findIndex((card) => card.id === targetId);
-  if (sourceIndex < 0 || targetIndex < 0) return;
-  const [movingCard] = next.splice(sourceIndex, 1);
-  const nextTargetIndex = next.findIndex((card) => card.id === targetId);
-  const insertIndex = nextTargetIndex + (insertAfter ? 1 : 0);
-  next.splice(insertIndex, 0, movingCard);
-  cards.value = next;
-}
-
-function cardStyle(card: OverviewCardConfig) {
-  return {
-    gridColumn: `span ${clamp(card.width, 1, 6)}`,
-    gridRow: `span ${clamp(card.height, 1, 4)}`,
-  };
-}
-
-onMounted(async () => {
-  await loadData();
-  refreshTimer = window.setInterval(loadData, 15000);
 });
 
-onBeforeUnmount(() => {
-  if (refreshTimer) window.clearInterval(refreshTimer);
+const onlineRateLabel = computed(() => t('overviewPage.onlineRateChart', { percent: `${onlinePercent.value}%` }));
+const applicationRatioLabel = computed(() => t('overviewPage.applicationRatioChart', {
+  enabled: applicationSummary.value.enabled,
+  disabled: applicationSummary.value.disabled,
+}));
+
+function probeCandidateIds(config: NetworkProbeConfig | null, items: ServerDto[]): string[] {
+  if (!config || config.mode === 'all') return items.map((item) => item.id);
+  const selected = new Set(config.serverIds);
+  return items.filter((item) => selected.has(item.id)).map((item) => item.id);
+}
+
+function syncProbeQuery(value: string) {
+  const current = route.query.probe === undefined ? '' : String(route.query.probe);
+  if (value && current !== value) {
+    void router.replace({ query: { ...route.query, probe: value } });
+    return;
+  }
+  if (!value && route.query.probe !== undefined) {
+    const query = { ...route.query };
+    delete query.probe;
+    void router.replace({ query });
+  }
+}
+
+async function load(options: { initial?: boolean; includeUpdates?: boolean } = {}) {
+  // 自动刷新/手动刷新不得与在途加载并发：并发会互相 abort，导致长时间
+  // 只有被中止的请求，页面像“全部消失”。在途时直接跳过下一拍。
+  if (loadInFlight) return;
+  loadInFlight = true;
+  const seq = ++loadSeq;
+  controller?.abort();
+  const request = new AbortController();
+  controller = request;
+  const initial = Boolean(options.initial) || servers.value.length === 0;
+  if (initial) {
+    pageLoading.value = true;
+    pageError.value = '';
+  } else {
+    refreshing.value = true;
+  }
+  try {
+    const [serversResult, configResult, applicationsResult, metricsConfigResult] = await Promise.allSettled([
+      serversApi.list({ signal: request.signal }),
+      networkProbeFacilityApi.config({ signal: request.signal }),
+      applicationsApi.list({ pageSize: 200 }, { signal: request.signal }),
+      metricsFacilityApi.config({ signal: request.signal }),
+    ]);
+    if (seq !== loadSeq) return;
+    if (serversResult.status === 'rejected') throw serversResult.reason;
+    pageError.value = '';
+    // 自动刷新偶发拿到空列表时保留现有服务器，避免整页瞬间变成“暂无服务器”。
+    if (serversResult.value.length > 0 || servers.value.length === 0) {
+      servers.value = serversResult.value;
+    }
+    probeConfig.value = configResult.status === 'fulfilled' ? configResult.value : null;
+    metricsConfig.value = metricsConfigResult.status === 'fulfilled' ? metricsConfigResult.value : null;
+    // 应用总览是独立摘要：失败只让卡片显示不可用，不能拖垮服务器/指标区域。
+    if (applicationsResult.status === 'fulfilled') {
+      applications.value = applicationsResult.value.items;
+      applicationsTotal.value = applicationsResult.value.total;
+      applicationsError.value = false;
+    } else if (applications.value.length === 0) {
+      applicationsError.value = true;
+    }
+
+    const candidates = probeCandidateIds(probeConfig.value, servers.value);
+    const requested = route.query.probe === undefined ? '' : String(route.query.probe);
+    const nextSource = candidates.includes(probeSourceId.value)
+      ? probeSourceId.value
+      : candidates.includes(requested)
+        ? requested
+        : candidates[0] ?? '';
+    probeSourceId.value = nextSource;
+    syncProbeQuery(nextSource);
+
+    // 探测与指标相互独立：探测失败/无数据不得影响指标渲染。
+    await Promise.allSettled([
+      loadProbeResults(nextSource, request.signal),
+      loadServerDetails(servers.value, { signal: request.signal, includeUpdates: Boolean(options.includeUpdates) }),
+    ]);
+  } catch (err) {
+    if (isAbortError(err) || seq !== loadSeq) return;
+    // 首次加载失败走页级错误空态；刷新失败（手动/自动）保留旧数据并在页面内标记陈旧，
+    // 不再弹 toast/弹窗。
+    pageError.value = err instanceof Error ? err.message : t('common.loadFailed');
+  } finally {
+    loadInFlight = false;
+    if (seq === loadSeq) {
+      pageLoading.value = false;
+      refreshing.value = false;
+    }
+  }
+}
+
+async function loadProbeResults(sourceId: string, signal: AbortSignal) {
+  const seq = ++probeSeq;
+  if (!sourceId) {
+    probeResults.value = null;
+    return;
+  }
+  try {
+    const result = await serversApi.networkProbes(sourceId, { signal }, true);
+    if (seq !== probeSeq) return;
+    probeResults.value = result;
+  } catch (err) {
+    // 探测结果失败只让相关卡片显示占位，不阻断页面其它数据。
+    if (isAbortError(err) || seq !== probeSeq) return;
+  }
+}
+
+async function loadServerDetails(items: ServerDto[], options: { signal: AbortSignal; includeUpdates: boolean }) {
+  // 以旧数据为基线：单台指标请求失败时保留上一次的值，而不是把该卡片清空。
+  const nextMetrics: Record<string, ServerMetricsSeries | undefined> = { ...metricsById.value };
+  const nextErrors = new Set<string>();
+  const nextPackages = { ...packageUpdatesById.value };
+  const nextImages = { ...imageUpdatesById.value };
+  await forEachWithConcurrency(items, 6, async (server) => {
+    if (options.signal.aborted) return;
+    const jobs: Promise<unknown>[] = [
+      serversApi.metricsBucketed(server.id, '1d', 1800, { signal: options.signal })
+        .then((series) => { nextMetrics[server.id] = series; })
+        .catch((err) => { if (!isAbortError(err)) nextErrors.add(server.id); }),
+    ];
+    if (options.includeUpdates) {
+      jobs.push(packagesApi.updates(server.id, { signal: options.signal })
+        .then((list) => { nextPackages[server.id] = list.updates.length; })
+        .catch((err) => { if (!isAbortError(err)) nextPackages[server.id] = null; }));
+      jobs.push(containersApi.images(server.id, { signal: options.signal })
+        .then((list) => { nextImages[server.id] = list.items.filter((item) => item.updateAvailable).length; })
+        .catch((err) => { if (!isAbortError(err)) nextImages[server.id] = null; }));
+    }
+    await Promise.all(jobs);
+  });
+  if (options.signal.aborted) return;
+  metricsById.value = nextMetrics;
+  metricsErrorIds.value = nextErrors;
+  if (options.includeUpdates) {
+    packageUpdatesById.value = nextPackages;
+    imageUpdatesById.value = nextImages;
+  }
+}
+
+async function forEachWithConcurrency<T>(items: T[], limit: number, worker: (item: T) => Promise<void>) {
+  const queue = [...items];
+  const runners = Array.from({ length: Math.min(limit, queue.length) }, async () => {
+    for (;;) {
+      const item = queue.shift();
+      if (item === undefined) return;
+      await worker(item);
+    }
+  });
+  await Promise.all(runners);
+}
+
+function changeProbeSource(value: string) {
+  probeSourceId.value = value;
+  syncProbeQuery(value);
+  const request = new AbortController();
+  void loadProbeResults(value, request.signal);
+}
+
+function manualRefresh() {
+  void load({ includeUpdates: true });
+}
+
+onMounted(() => {
+  void load({ initial: true, includeUpdates: true });
+  autoRefresh.start(() => load({ includeUpdates: false }));
 });
 </script>
 
 <template>
-  <div class="overview-workspace page-shell">
-    <div class="overview-actions-row page-toolbar">
-      <div class="overview-signals">
-        <div v-for="signal in overviewSignals" :key="signal.key" class="overview-signal">
-          <span class="overview-signal__icon" :class="`surface-${signal.color}`">
-            <v-icon size="18">{{ signal.icon }}</v-icon>
-          </span>
-          <span class="min-width-0">
-            <span class="overview-signal__value font-tabular">{{ signal.value }}</span>
-            <span class="overview-signal__label text-truncate">{{ signal.label }}</span>
-          </span>
-        </div>
+  <ConsolePage :title="t('routes.overview.title')" :description="t('routes.overview.description')">
+    <template #actions>
+      <div class="flex min-w-0 items-center gap-1.5 max-sm:w-full sm:flex-none">
+        <span class="shrink-0 text-caption text-muted-foreground">{{ t('overviewPage.probeSource') }}</span>
+        <Select
+          class="min-w-0 flex-1 sm:w-44 sm:flex-none"
+          :model-value="probeSourceId"
+          :options="probeSourceOptions"
+          :disabled="probeSourceOptions.length === 0"
+          :placeholder="t('overviewPage.probeSourcePlaceholder')"
+          :aria-label="t('overviewPage.probeSource')"
+          @update:model-value="changeProbeSource"
+        />
       </div>
-      <div class="overview-actions">
-        <template v-if="editMode">
-          <v-btn variant="outlined" prepend-icon="mdi-restore" class="text-none" @click="resetCards">{{ t('overviewPage.reset') }}</v-btn>
-          <v-btn color="primary" variant="flat" prepend-icon="mdi-view-grid-plus" class="text-none font-weight-bold" @click="openAddDialog()">{{ t('overviewPage.addCard') }}</v-btn>
-        </template>
-        <v-btn
-          :color="editMode ? 'primary' : undefined"
-          :variant="editMode ? 'flat' : 'outlined'"
-          :prepend-icon="editMode ? 'mdi-check' : 'mdi-pencil'"
-          class="text-none font-weight-bold"
-          @click="toggleEditMode"
+      <DataRefreshControl />
+      <Button class="max-sm:w-full" :loading="refreshing" @click="manualRefresh">
+        <RefreshCcw />
+        {{ t('common.refresh') }}
+      </Button>
+    </template>
+
+    <div class="grid min-w-0 gap-4">
+      <template v-if="pageLoading && servers.length === 0">
+        <div
+          class="grid min-w-0 gap-6 wide:grid-cols-2 wider:grid-cols-3 wide:items-start"
+          data-testid="overview-summary-skeleton"
+          aria-hidden="true"
         >
-          {{ editMode ? t('common.done') : t('common.edit') }}
-        </v-btn>
-      </div>
-    </div>
-
-    <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
-
-    <PageLoadingState v-if="loading && overview.servers.length === 0" min-height="360px" />
-
-    <div v-else-if="overview.servers.length === 0" class="empty-state">
-      <v-icon size="44" color="primary">mdi-server-network-off</v-icon>
-      <div>
-        <div class="text-subtitle-1 font-weight-bold">{{ t('overviewPage.noServersConnected') }}</div>
-        <div class="text-body-2 text-medium-emphasis">{{ t('overviewPage.addServerHint') }}</div>
-      </div>
-      <v-btn color="primary" variant="flat" prepend-icon="mdi-plus" class="text-none" @click="router.push('/servers')">{{ t('common.addServer') }}</v-btn>
-    </div>
-
-    <div v-else class="dashboard-grid">
-      <v-card
-        v-for="card in cards"
-        :key="card.id"
-        class="dashboard-card"
-        :class="{
-          'dashboard-card--placeholder': card.kind === 'placeholder',
-          'dashboard-card--editing': editMode,
-          'dashboard-card--dragging': draggingCardId === card.id,
-          'dashboard-card--drag-over': dragOverCardId === card.id,
-        }"
-        variant="outlined"
-        :style="cardStyle(card)"
-        @dragover="handleCardDragOver(card.id, $event)"
-        @drop="dropCard(card.id, $event)"
-      >
-        <span v-if="card.kind !== 'placeholder'" class="card-accent" :class="`card-accent--${presetFor(card.kind).color}`" />
-        <div v-if="card.kind !== 'placeholder'" class="card-header">
-          <div class="card-title">
-            <span class="card-icon" :class="`surface-${presetFor(card.kind).color}`">
-              <v-icon size="18">{{ presetFor(card.kind).icon }}</v-icon>
-            </span>
-            <div class="min-width-0">
-              <div class="text-subtitle-2 font-weight-bold text-truncate">{{ cardTitle(card.kind) }}</div>
-              <div class="text-caption text-medium-emphasis text-truncate">
-                {{ cardServerLabel(card) }}<template v-if="isMetricCard(card)"> / {{ metricCardLabel(card) }}</template>
+          <div class="grid content-start gap-3">
+            <Skeleton class="h-3 w-20" />
+            <div class="flex items-center gap-4">
+              <Skeleton class="size-24 rounded-pill" />
+              <div class="flex flex-wrap gap-2">
+                <Skeleton v-for="item in 4" :key="item" class="h-7 w-24 rounded-pill" />
               </div>
             </div>
           </div>
-          <div v-if="editMode" class="card-tools">
-            <v-btn
-              class="card-drag-handle"
-              icon="mdi-drag"
-              variant="text"
-              size="small"
-              draggable="true"
-              @dragstart="startCardDrag(card.id, $event)"
-              @dragend="endCardDrag"
-            />
-            <v-menu location="bottom end">
-              <template #activator="{ props }">
-                <v-btn v-bind="props" icon="mdi-dots-vertical" variant="text" size="small" />
-              </template>
-              <v-list density="compact">
-                <v-list-item prepend-icon="mdi-pencil" :title="t('common.edit')" @click="openEditDialog(card)" />
-                <v-list-item prepend-icon="mdi-delete" :title="t('common.remove')" class="text-error" @click="removeCard(card.id)" />
-              </v-list>
-            </v-menu>
-          </div>
-        </div>
-
-          <div v-else-if="editMode" class="placeholder-tools">
-            <v-btn
-              class="card-drag-handle"
-              icon="mdi-drag"
-              variant="text"
-              size="small"
-              draggable="true"
-              @dragstart="startCardDrag(card.id, $event)"
-              @dragend="endCardDrag"
-            />
-            <v-menu location="bottom end">
-              <template #activator="{ props }">
-                <v-btn v-bind="props" icon="mdi-dots-vertical" variant="text" size="small" />
-              </template>
-              <v-list density="compact">
-                <v-list-item prepend-icon="mdi-pencil" :title="t('common.edit')" @click="openEditDialog(card)" />
-                <v-list-item prepend-icon="mdi-delete" :title="t('common.remove')" class="text-error" @click="removeCard(card.id)" />
-              </v-list>
-            </v-menu>
-          </div>
-
-        <div v-if="isMetricCard(card)" class="card-body chart-body">
-          <VChart class="chart" :option="chartOption(card)" autoresize />
-        </div>
-
-        <div v-else-if="card.kind === 'packageUpdates'" class="card-body message-list">
-          <div
-            v-for="server in packageRows(card)"
-            :key="server.id"
-            class="message-row"
-            @click="router.push('/servers/packages')"
-          >
-            <div>
-              <div class="font-weight-bold text-body-2">{{ server.name }}</div>
-              <div class="text-caption text-medium-emphasis">{{ t('overviewPage.lastChecked', { value: server.lastPackageRefreshAt ? formatDateTime(server.lastPackageRefreshAt) : t('common.never') }) }}</div>
+          <div class="grid content-start gap-3">
+            <Skeleton class="h-3 w-16" />
+            <div class="flex items-end gap-4">
+              <Skeleton class="h-7 w-12" />
+              <div class="flex flex-wrap gap-2">
+                <Skeleton v-for="item in 4" :key="item" class="h-7 w-24 rounded-pill" />
+              </div>
             </div>
-            <v-chip color="warning" size="small" variant="tonal" label>{{ server.packageUpdateCount }}</v-chip>
+            <Skeleton class="h-2 w-full rounded-pill" />
           </div>
-          <div v-if="packageRows(card).length === 0" class="empty-card-text">{{ t('overviewPage.noPackageUpdates') }}</div>
-        </div>
-
-        <div v-else-if="card.kind === 'containerUpdates'" class="card-body message-list">
-          <div
-            v-for="app in containerRows(card)"
-            :key="app.id"
-            class="message-row"
-            @click="router.push({ path: '/applications', query: { application: app.id } })"
-          >
-            <div class="min-width-0">
-              <div class="font-weight-bold text-body-2 text-truncate">{{ app.name }}</div>
-              <div class="text-caption text-medium-emphasis text-truncate">{{ targetLabel(app) }}</div>
+          <div class="grid content-start gap-3">
+            <Skeleton class="h-3 w-24" />
+            <div class="flex gap-4">
+              <Skeleton v-for="item in 3" :key="item" class="size-14 rounded-pill" />
             </div>
-            <v-chip :color="app.imageLastError ? 'error' : 'warning'" size="small" variant="tonal" label>
-              {{ app.imageLastError ? t('overviewPage.errorBadge') : t('overviewPage.updateBadge') }}
-            </v-chip>
           </div>
-          <div v-if="containerRows(card).length === 0" class="empty-card-text">{{ t('overviewPage.noContainerUpdates') }}</div>
         </div>
+        <div class="grid gap-3 sm:grid-cols-2 wide:grid-cols-3">
+          <Skeleton v-for="item in 8" :key="item" class="h-52" />
+        </div>
+      </template>
 
-        <div v-else class="placeholder-card-body"></div>
-      </v-card>
+      <template v-else>
+        <!--
+          状态总览头：不套 surface-card，直接位于页面层（Mica 透出）。
+          用环形占比 + 胶囊 KPI + 胶囊分布条降低“方块感”；三组之间只用留白，
+          不画通长分隔线。服务器卡片网格保持既有卡片语言。
+        -->
+        <section
+          class="motion-reveal grid min-w-0 gap-6 wide:grid-cols-2 wider:grid-cols-3 wide:items-start"
+          data-testid="overview-summary"
+        >
+          <section data-testid="node-summary" class="grid min-w-0 content-start gap-3">
+            <h2 class="m-0 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+              {{ t('overviewPage.nodeStatus') }}
+            </h2>
+            <div class="flex min-w-0 flex-wrap items-center gap-4">
+              <div class="grid justify-items-center gap-1">
+                <RatioRing
+                  :percent="nodeSummary.total ? onlinePercent : null"
+                  :value-text="nodeSummary.total ? `${onlinePercent}%` : '—'"
+                  :label="onlineRateLabel"
+                  :tone="onlineRateTone(nodeSummary)"
+                  size="lg"
+                  test-id="online-rate-ring"
+                />
+                <span class="text-caption text-muted-foreground">{{ t('overviewPage.onlineRate') }}</span>
+              </div>
+              <div class="flex min-w-0 flex-wrap gap-2">
+                <StatChip :label="t('overviewPage.totalNodes')" :value="nodeSummary.total" :icon="ServerIcon" />
+                <StatChip :label="t('overviewPage.onlineNodes')" :value="nodeSummary.online" tone="success" :icon="CheckCircle2" />
+                <StatChip
+                  :label="t('overviewPage.offlineNodes')"
+                  :value="nodeSummary.offline"
+                  :tone="nodeSummary.offline ? 'danger' : 'neutral'"
+                  :icon="XCircle"
+                />
+                <StatChip
+                  :label="t('overviewPage.freshMetrics')"
+                  :value="`${nodeSummary.fresh}/${nodeSummary.total}`"
+                  :tone="nodeSummary.total === 0 ? 'neutral' : nodeSummary.fresh < nodeSummary.total ? 'warning' : 'success'"
+                  :icon="History"
+                />
+              </div>
+            </div>
+          </section>
+
+          <section data-testid="application-summary" class="grid min-w-0 content-start gap-3">
+            <h2 class="m-0 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+              {{ t('overviewPage.applications') }}
+            </h2>
+            <div class="flex min-w-0 flex-wrap items-end gap-4">
+              <div class="grid content-start gap-0.5">
+                <strong class="block text-title font-semibold leading-none tabular-nums text-foreground">
+                  {{ applicationSummary.available ? applicationSummary.total : '—' }}
+                </strong>
+                <span class="text-caption text-muted-foreground">{{ t('overviewPage.totalApplications') }}</span>
+              </div>
+              <div class="flex min-w-0 flex-wrap gap-2">
+                <StatChip
+                  :label="t('applicationsPage.status.enabled')"
+                  :value="applicationSummary.available ? applicationSummary.enabled : '—'"
+                  tone="success"
+                />
+                <StatChip
+                  :label="t('applicationsPage.status.deploying')"
+                  :value="applicationSummary.available ? applicationSummary.deploying : '—'"
+                  tone="info"
+                />
+                <StatChip
+                  :label="t('applicationsPage.status.attention')"
+                  :value="applicationSummary.available ? applicationSummary.attention : '—'"
+                  :tone="applicationSummary.attention ? 'warning' : 'neutral'"
+                />
+                <StatChip
+                  :label="t('applicationsPage.status.disabled')"
+                  :value="applicationSummary.available ? applicationSummary.disabled : '—'"
+                />
+              </div>
+            </div>
+            <div
+              v-if="applicationSummary.available && applicationRatioView.enabledPercent !== null"
+              class="flex h-2 w-full min-w-0 overflow-hidden rounded-pill bg-muted"
+              role="img"
+              :aria-label="applicationRatioLabel"
+              data-testid="application-ratio-bar"
+            >
+              <span class="h-full bg-success" :style="{ width: `${applicationRatioView.enabledPercent}%` }" />
+            </div>
+            <p v-if="!applicationSummary.available" class="m-0 text-caption text-muted-foreground">
+              {{ t('overviewPage.applicationsUnavailable') }}
+            </p>
+          </section>
+
+          <section data-testid="capacity-summary" class="grid min-w-0 content-start gap-3 wide:col-span-2 wider:col-span-1">
+            <h2 class="m-0 flex min-w-0 flex-wrap items-baseline gap-1.5 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+              <span>{{ t('overviewPage.capacity') }}</span>
+              <span class="font-normal normal-case tracking-normal">
+                {{ t('overviewPage.capacityScope', { count: nodeSummary.online }) }}
+              </span>
+            </h2>
+            <div class="flex min-w-0 flex-wrap items-start gap-4">
+              <div v-for="item in capacityItems" :key="item.key" class="grid justify-items-center gap-0.5">
+                <RatioRing
+                  :percent="item.percent"
+                  :value-text="item.text"
+                  :label="item.labelText"
+                  :tone="item.tone"
+                  size="sm"
+                  :test-id="`capacity-${item.key}`"
+                />
+                <span class="text-caption text-muted-foreground">{{ item.label }}</span>
+                <span v-if="item.hint" class="text-caption text-muted-foreground">{{ item.hint }}</span>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <InfoBar v-if="pageError && servers.length > 0" tone="warning" data-testid="overview-stale">
+          <div class="flex min-w-0 flex-wrap items-center gap-2">
+            <span class="min-w-0 break-words">{{ pageError }}</span>
+            <Button size="sm" variant="secondary" :loading="refreshing" @click="manualRefresh">{{ t('common.retry') }}</Button>
+          </div>
+        </InfoBar>
+
+        <EmptyState v-if="pageError && servers.length === 0" :title="t('common.loadFailed')" :description="pageError">
+          <template #actions>
+            <Button size="sm" :loading="pageLoading" @click="load({ initial: true, includeUpdates: true })">{{ t('common.retry') }}</Button>
+          </template>
+        </EmptyState>
+        <EmptyState v-else-if="servers.length === 0" :title="t('overviewPage.noServersConnected')" :description="t('overviewPage.addServerHint')">
+          <template #actions>
+            <Button variant="primary" @click="router.push('/servers')">
+              <ServerIcon />
+              {{ t('common.add') }}
+            </Button>
+          </template>
+        </EmptyState>
+        <div v-else class="grid gap-3 sm:grid-cols-2 wide:grid-cols-3">
+          <ServerCard v-for="card in cards" :key="card.server.id" :card="card" :thresholds="warningThresholds" />
+        </div>
+      </template>
     </div>
-
-    <v-dialog v-model="dialog" width="640">
-      <v-card class="app-dialog-card">
-        <v-card-title class="app-dialog-title">
-          <span class="app-dialog-title-text">{{ editingCardId ? t('overviewPage.editCard') : t('overviewPage.createCard') }}</span>
-          <v-btn icon="mdi-close" variant="text" @click="dialog = false" />
-        </v-card-title>
-        <v-divider />
-        <v-card-text class="app-dialog-body">
-          <v-select
-            v-model="form.kind"
-            :items="presetItems"
-            item-title="title"
-            item-value="kind"
-            :label="t('common.preset')"
-            variant="outlined"
-            density="comfortable"
-            class="mb-3"
-          />
-          <div class="size-grid mb-3">
-            <v-text-field v-model.number="form.width" type="number" :label="t('common.width')" min="1" max="6" variant="outlined" density="comfortable" hide-details />
-            <v-text-field v-model.number="form.height" type="number" :label="t('common.height')" min="1" max="4" variant="outlined" density="comfortable" hide-details />
-          </div>
-          <v-select
-            v-if="presetFor(form.kind).category === 'metric'"
-            v-model="form.range"
-            :items="rangeItems"
-            :label="t('common.range')"
-            variant="outlined"
-            density="comfortable"
-            class="mb-3"
-          />
-          <div v-if="form.kind === 'network'" class="mb-3">
-            <div class="text-caption text-medium-emphasis mb-2">{{ t('common.traffic') }}</div>
-            <v-btn-toggle v-model="form.networkDirection" mandatory divided density="comfortable" class="traffic-toggle">
-              <v-btn
-                v-for="item in networkDirectionItems"
-                :key="item.value"
-                :value="item.value"
-                class="text-none"
-              >
-                {{ item.title }}
-              </v-btn>
-            </v-btn-toggle>
-          </div>
-          <v-select
-            v-if="form.kind !== 'placeholder'"
-            v-model="form.serverIds"
-            :items="serverOptions"
-            :label="t('serversPage.servers')"
-            :placeholder="t('overviewPage.allServers')"
-            variant="outlined"
-            density="comfortable"
-            multiple
-            chips
-            closable-chips
-            clearable
-            :hint="t('overviewPage.leaveEmptyServers')"
-            persistent-hint
-          />
-        </v-card-text>
-        <v-divider />
-        <v-card-actions class="app-dialog-actions">
-          <v-btn variant="text" class="text-none" @click="dialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="primary" variant="flat" class="text-none" @click="saveCard">{{ t('common.save') }}</v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
-  </div>
+  </ConsolePage>
 </template>
-
-<style scoped>
-.overview-workspace { flex: 1 1 auto; min-height: 0; }
-
-.overview-actions-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 14px;
-  align-items: start;
-}
-
-.overview-signals {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(160px, 1fr));
-  gap: 10px;
-  min-width: 0;
-}
-
-.overview-signal {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  min-height: 58px;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--lp-border), transparent 10%);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--lp-surface), transparent 10%);
-  box-shadow: var(--lp-shadow-sm);
-}
-
-.overview-signal__icon {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
-  flex: 0 0 auto;
-}
-
-.overview-signal__value,
-.overview-signal__label {
-  display: block;
-}
-
-.overview-signal__value {
-  color: var(--lp-text);
-  font-size: 1.05rem;
-  font-weight: 760;
-  line-height: 1.1;
-}
-
-.overview-signal__label {
-  margin-top: 3px;
-  color: var(--lp-text-muted);
-  font-size: 0.78rem;
-}
-
-.overview-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.dashboard-grid {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  grid-auto-rows: 132px;
-  grid-auto-flow: dense;
-  flex: 1 1 auto;
-  gap: 16px;
-  min-height: 0;
-  align-items: stretch;
-  align-content: start;
-  overflow: auto;
-  padding-right: 4px;
-}
-
-.dashboard-card {
-  position: relative;
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  flex-direction: column;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--lp-surface-container), transparent 36%), var(--lp-surface) 70%) !important;
-  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease !important;
-}
-
-.dashboard-card:hover {
-  transform: translateY(-1px);
-}
-
-.card-accent {
-  position: absolute;
-  inset: 0 0 auto;
-  height: 3px;
-  opacity: 0.82;
-}
-
-.card-accent--primary { background: rgb(var(--v-theme-primary)); }
-.card-accent--success { background: rgb(var(--v-theme-success)); }
-.card-accent--warning { background: rgb(var(--v-theme-warning)); }
-.card-accent--info { background: rgb(var(--v-theme-info)); }
-.card-accent--secondary { background: rgb(var(--v-theme-secondary)); }
-
-.dashboard-card--placeholder {
-  background: transparent !important;
-  border-color: transparent !important;
-  box-shadow: none !important;
-}
-
-.dashboard-card--editing {
-  border: 1px dashed rgba(var(--v-theme-primary), 0.55) !important;
-  background: color-mix(in srgb, var(--lp-surface), transparent 18%);
-}
-
-.dashboard-card--placeholder.dashboard-card--editing {
-  background: transparent !important;
-}
-
-.dashboard-card--dragging {
-  opacity: 0.48;
-  transform: scale(0.99);
-}
-
-.dashboard-card--drag-over {
-  border-color: rgb(var(--v-theme-primary)) !important;
-  background: rgba(var(--v-theme-primary), 0.06);
-}
-
-.card-tools,
-.placeholder-tools {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.placeholder-tools {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-}
-
-.card-drag-handle {
-  cursor: grab;
-}
-
-.card-drag-handle:active {
-  cursor: grabbing;
-}
-
-.placeholder-card-body {
-  flex: 1 1 auto;
-}
-
-.card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 12px 14px 8px;
-  flex: 0 0 auto;
-}
-
-.card-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.card-icon {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
-  flex: 0 0 auto;
-  transition: transform 0.18s ease;
-}
-
-.dashboard-card:hover .card-icon {
-  transform: translateY(-1px);
-}
-
-.surface-primary { color: rgb(var(--v-theme-primary)); background: rgba(var(--v-theme-primary), 0.1); }
-.surface-success { color: rgb(var(--v-theme-success)); background: rgba(var(--v-theme-success), 0.1); }
-.surface-warning { color: rgb(var(--v-theme-warning)); background: rgba(var(--v-theme-warning), 0.12); }
-.surface-info { color: rgb(var(--v-theme-info)); background: rgba(var(--v-theme-info), 0.1); }
-
-.card-body {
-  min-height: 0;
-  flex: 1 1 auto;
-  padding: 0 14px 14px;
-  overflow: auto;
-}
-
-.chart-body {
-  display: flex;
-  flex-direction: column;
-}
-
-.chart {
-  width: 100%;
-  min-height: 0;
-  flex: 1 1 auto;
-}
-
-.message-list {
-  display: grid;
-  align-content: start;
-  gap: 8px;
-}
-
-.message-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: center;
-  padding: 10px;
-  border: 1px solid var(--lp-border);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--lp-surface-container), transparent 30%);
-  cursor: pointer;
-  transition: background-color 0.16s ease, border-color 0.16s ease, transform 0.16s ease;
-}
-
-.message-row:hover {
-  border-color: rgba(var(--v-theme-primary), 0.24);
-  background: rgba(var(--v-theme-primary), 0.05);
-  transform: translateX(2px);
-}
-
-.empty-card-text {
-  display: grid;
-  place-items: center;
-  min-height: 84px;
-  color: var(--lp-text-muted);
-  font-size: 0.88rem;
-}
-
-.empty-state {
-  flex: 1 1 auto;
-  min-height: 360px;
-  border: 1px solid var(--lp-border);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--lp-surface-container), transparent 24%), var(--lp-surface));
-  box-shadow: var(--lp-shadow-sm);
-}
-
-.size-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.traffic-toggle {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  width: 100%;
-}
-
-.min-width-0 {
-  min-width: 0;
-}
-
-@media (max-width: 1180px) {
-  .overview-actions-row {
-    grid-template-columns: 1fr;
-  }
-
-  .dashboard-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .dashboard-card {
-    grid-column: span 3 !important;
-  }
-}
-
-@media (max-width: 760px) {
-  .overview-signals {
-    grid-template-columns: 1fr;
-  }
-
-  .overview-actions,
-  .overview-actions .v-btn {
-    width: 100%;
-  }
-
-  .dashboard-grid {
-    grid-template-columns: 1fr;
-    grid-auto-rows: 150px;
-  }
-
-  .dashboard-card {
-    grid-column: span 1 !important;
-  }
-
-  .size-grid {
-    grid-template-columns: 1fr;
-  }
-}
-</style>

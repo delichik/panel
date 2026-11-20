@@ -1,0 +1,972 @@
+package models
+
+import "time"
+
+// App 库存量表模型。列名/类型/默认值/约束与
+// internal/platform/database/migrations.go 的 app 段 CREATE TABLE 逐一对应；
+// 复合/部分索引与 CHECK 约束无法用 orm tag 表达，见 models_test.go 与模块文档。
+
+// Credential 对应 credentials。
+type Credential struct {
+	ID               string    `orm:"primary_key"`
+	Name             string    `orm:"not_null"`
+	Type             string    `orm:"not_null"`
+	Username         string    `orm:"not_null"`
+	SecretCiphertext string    `orm:"not_null;default:''"`
+	PasswordSecret   string    `orm:"not_null;default:''"`
+	PrivateKeyPath   string    `orm:"not_null;default:''"`
+	PassphraseSecret string    `orm:"not_null;default:''"`
+	CreatedAt        time.Time `orm:"not_null"`
+	UpdatedAt        time.Time `orm:"not_null"`
+}
+
+func (*Credential) TableName() string { return "credentials" }
+
+// TableConstraints 返回 credentials 表无法用 orm tag 表达的原始约束。
+func (*Credential) TableConstraints() []string {
+	return []string{"CHECK(type IN ('password','private_key'))"}
+}
+
+// Server 对应 servers。
+type Server struct {
+	ID                     string         `orm:"primary_key"`
+	Name                   string         `orm:"not_null"`
+	Host                   string         `orm:"not_null"`
+	IPv4                   string         `orm:"not_null;default:'';column:ipv4"`
+	IPv6                   string         `orm:"not_null;default:'';column:ipv6"`
+	Port                   int            `orm:"not_null"`
+	SSHUsername            string         `orm:"not_null;default:''"`
+	CredentialID           string         `orm:"not_null;references:credentials(id)"`
+	DockerHost             string         `orm:"not_null;default:'unix:///var/run/docker.sock'"`
+	Traits                 map[string]any `orm:"json;not_null;default:'{}'"`
+	VariablesJSON          map[string]any `orm:"json;not_null;default:'{}'"`
+	Notes                  string         `orm:"not_null;default:''"`
+	OSID                   string         `orm:"not_null;default:'';column:os_id"`
+	OSVersionID            string         `orm:"not_null;default:''"`
+	OSPrettyName           string         `orm:"not_null;default:''"`
+	OSSupported            bool           `orm:"not_null;default:0"`
+	ArchitectureOS         string         `orm:"not_null;default:''"`
+	ArchitectureArch       string         `orm:"not_null;default:''"`
+	ArchitectureMachine    string         `orm:"not_null;default:''"`
+	Reachable              bool           `orm:"not_null;default:0"`
+	HostKeyMismatch        bool           `orm:"not_null;default:0;column:host_key_mismatch"`
+	SudoPasswordless       bool           `orm:"not_null;default:0"`
+	SudoLastCheckedAt      *time.Time
+	PrivilegeMode          string `orm:"not_null;default:''"`
+	PrivilegeLastCheckedAt *time.Time
+	LastCheckedAt          *time.Time
+	LastError              string    `orm:"not_null;default:''"`
+	CreatedAt              time.Time `orm:"not_null"`
+	UpdatedAt              time.Time `orm:"not_null"`
+
+	// 连接代理意图列。proxy_mode 为 direct 时其余列必须为空；socks5 密码只存
+	// secretstore 密文（SRV-PROXY-*），明文永不落库。
+	ProxyMode                string `orm:"not_null;default:'direct';column:proxy_mode"`
+	TunnelServerID           string `orm:"not_null;default:'';column:tunnel_server_id"`
+	Socks5Address            string `orm:"not_null;default:'';column:socks5_address"`
+	Socks5Username           string `orm:"not_null;default:'';column:socks5_username"`
+	Socks5PasswordCiphertext string `orm:"not_null;default:'';column:socks5_password_ciphertext"`
+}
+
+func (*Server) TableName() string { return "servers" }
+
+// PackageUpdate 对应 package_updates。
+type PackageUpdate struct {
+	ServerID         string    `orm:"primary_key;not_null;references:servers(id);on_delete:CASCADE"`
+	Name             string    `orm:"primary_key;not_null"`
+	InstalledVersion string    `orm:"not_null"`
+	CandidateVersion string    `orm:"not_null"`
+	Source           string    `orm:"not_null;default:''"`
+	RefreshedAt      time.Time `orm:"not_null"`
+	// Security/SecurityKnown 是 Agent 侧权威安全判定（unattended-upgrade
+	// dry-run 等）；Known=false 时 Panel 回退到 Source 启发式。
+	Security      bool `orm:"not_null;default:0"`
+	SecurityKnown bool `orm:"not_null;default:0"`
+}
+
+func (*PackageUpdate) TableName() string { return "package_updates" }
+
+// PackageRefresh 对应 package_refreshes。
+type PackageRefresh struct {
+	ServerID    string    `orm:"primary_key;references:servers(id);on_delete:CASCADE"`
+	RefreshedAt time.Time `orm:"not_null"`
+}
+
+func (*PackageRefresh) TableName() string { return "package_refreshes" }
+
+// Fail2banConfig 对应 fail2ban_configs。
+type Fail2banConfig struct {
+	ServerID   string    `orm:"primary_key;references:servers(id);on_delete:CASCADE"`
+	ConfigYAML string    `orm:"not_null"`
+	Managed    bool      `orm:"not_null;default:0"`
+	UpdatedAt  time.Time `orm:"not_null"`
+}
+
+func (*Fail2banConfig) TableName() string { return "fail2ban_configs" }
+
+// ImageUpdate 对应 image_updates。
+type ImageUpdate struct {
+	ServerID        string    `orm:"primary_key;not_null;references:servers(id);on_delete:CASCADE"`
+	Reference       string    `orm:"primary_key;not_null"`
+	LocalDigest     string    `orm:"not_null;default:''"`
+	LatestDigest    string    `orm:"not_null;default:''"`
+	UpdateAvailable bool      `orm:"not_null;default:0"`
+	LastError       string    `orm:"not_null;default:''"`
+	CheckedAt       time.Time `orm:"not_null"`
+}
+
+func (*ImageUpdate) TableName() string { return "image_updates" }
+
+// ImageRefresh 对应 image_refreshes。
+type ImageRefresh struct {
+	ServerID    string    `orm:"primary_key;references:servers(id);on_delete:CASCADE"`
+	RefreshedAt time.Time `orm:"not_null"`
+}
+
+func (*ImageRefresh) TableName() string { return "image_refreshes" }
+
+// ApplicationReconcileState 对应 application_reconcile_states。
+type ApplicationReconcileState struct {
+	InstanceID             string    `orm:"primary_key"`
+	ApplicationID          string    `orm:"not_null;references:applications(id);on_delete:CASCADE"`
+	ServerID               string    `orm:"not_null;references:servers(id);on_delete:CASCADE"`
+	ObservedAt             time.Time `orm:"not_null"`
+	ReconcileFailures      int       `orm:"not_null;default:0"`
+	ReconcileNextRunAt     *time.Time
+	ReconcileSuccessStreak int `orm:"not_null;default:0"`
+}
+
+func (*ApplicationReconcileState) TableName() string { return "application_reconcile_states" }
+
+// ExtraIndexDDL returns the application_reconcile_states index that orm tags cannot express.
+func (*ApplicationReconcileState) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"application_reconcile_states": {
+			"CREATE INDEX IF NOT EXISTS idx_application_reconcile_states_application ON application_reconcile_states(application_id)",
+		},
+	}
+}
+
+// ApplicationRevisionV3 对应 AppDB 中不可变的应用运行时修订。
+//
+// application_revisions 曾经位于 LogDB。新的控制面必须在同一个数据库
+// 边界内保存 revision 与 desired state，worker 执行时只读取这份不可变快照。
+// 旧 LogDB 表暂时由兼容迁移保留，但新写入统一落到 AppDB。
+type ApplicationRevisionV3 struct {
+	ID string `orm:"primary_key"`
+	// The legacy LogDB compatibility model uses the same table name without a
+	// cross-database foreign key. Keep the revision row self-contained here;
+	// application deletion is finalized by the orchestrator rather than by a
+	// database cascade.
+	ApplicationID       string           `orm:"not_null"`
+	Generation          int              `orm:"not_null"`
+	SpecHash            string           `orm:"not_null"`
+	RenderedRuntimeSpec map[string]any   `orm:"json;not_null;default:'{}'"`
+	ManagedFileManifest []map[string]any `orm:"json;not_null;default:'[]'"`
+	ImageReference      string           `orm:"not_null;default:''"`
+	ResolvedImageDigest string           `orm:"not_null;default:''"`
+	SpecYAML            string           `orm:"not_null;default:''"`
+	JobJSON             map[string]any   `orm:"json;not_null;default:'{}'"`
+	CreatedAt           time.Time        `orm:"not_null"`
+}
+
+func (*ApplicationRevisionV3) TableName() string { return "application_revisions" }
+
+// ExtraIndexDDL 返回 revision 表无法用 orm tag 表达的复合索引与唯一约束。
+func (*ApplicationRevisionV3) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"application_revisions": {
+			"CREATE INDEX IF NOT EXISTS idx_application_revisions_app_created ON application_revisions(application_id, created_at)",
+			"CREATE UNIQUE INDEX IF NOT EXISTS uq_application_revisions_application_generation ON application_revisions(application_id, generation)",
+		},
+	}
+}
+
+// ContainerObservation 对应 container_observations。
+type ContainerObservation struct {
+	ServerID      string         `orm:"primary_key;not_null;references:servers(id);on_delete:CASCADE"`
+	ContainerID   string         `orm:"primary_key;not_null"`
+	SampleAt      time.Time      `orm:"not_null"`
+	ContainerJSON map[string]any `orm:"json;not_null"`
+	SummaryJSON   map[string]any `orm:"json;not_null;default:'{}'"`
+	Managed       bool           `orm:"not_null;default:0"`
+	ApplicationID string         `orm:"not_null;default:''"`
+	InstanceID    string         `orm:"not_null;default:''"`
+	UpdatedAt     time.Time      `orm:"not_null"`
+}
+
+func (*ContainerObservation) TableName() string { return "container_observations" }
+
+// DockerResourceSnapshot 对应 docker_resource_snapshots。
+type DockerResourceSnapshot struct {
+	ServerID     string           `orm:"primary_key;not_null;references:servers(id);on_delete:CASCADE"`
+	ResourceType string           `orm:"primary_key;not_null"`
+	ItemsJSON    []map[string]any `orm:"json;not_null;default:'[]'"`
+	ObservedAt   time.Time        `orm:"not_null"`
+}
+
+func (*DockerResourceSnapshot) TableName() string { return "docker_resource_snapshots" }
+
+// DNSRecordSnapshot 对应 dns_record_snapshots。
+type DNSRecordSnapshot struct {
+	DomainID    string           `orm:"primary_key;references:dns_domains(id);on_delete:CASCADE"`
+	RecordsJSON []map[string]any `orm:"json;not_null;default:'[]'"`
+	ObservedAt  time.Time        `orm:"not_null"`
+	LastError   string           `orm:"not_null;default:''"`
+}
+
+func (*DNSRecordSnapshot) TableName() string { return "dns_record_snapshots" }
+
+// Application 对应 applications。
+type Application struct {
+	ID                      string   `orm:"primary_key"`
+	Version                 int      `orm:"not_null;default:1"`
+	Kind                    string   `orm:"not_null;default:'application'"`
+	Name                    string   `orm:"not_null;unique"`
+	Enabled                 bool     `orm:"not_null;default:0"`
+	DeletionRequested       bool     `orm:"not_null;default:0"`
+	ReconcileStopped        bool     `orm:"not_null;default:0"`
+	SpecYAML                string   `orm:"not_null"`
+	DeploymentMode          string   `orm:"not_null;default:'all'"`
+	DeploymentServerIDsJSON []string `orm:"json;not_null;default:'[]';column:deployment_server_ids_json"`
+
+	Generation           int    `orm:"not_null;default:1"`
+	SpecHash             string `orm:"not_null;default:''"`
+	ImageReference       string `orm:"not_null;default:''"`
+	ImageDigest          string `orm:"not_null;default:''"`
+	ImageLatestDigest    string `orm:"not_null;default:''"`
+	ImageCheckedAt       *time.Time
+	ImageUpdateAvailable bool      `orm:"not_null;default:0"`
+	ImageLastError       string    `orm:"not_null;default:''"`
+	JobID                string    `orm:"not_null"`
+	Namespace            string    `orm:"not_null;default:'default'"`
+	LastEvalID           string    `orm:"not_null;default:''"`
+	LastDeploymentID     string    `orm:"not_null;default:''"`
+	LastError            string    `orm:"not_null;default:''"`
+	PlanningErrorJSON    string    `orm:"not_null;default:''"`
+	CreatedAt            time.Time `orm:"not_null"`
+	UpdatedAt            time.Time `orm:"not_null"`
+	// AutoUpdateEnabled 是对象级"允许自动更新"开关（默认开）。它只影响自动
+	// 更新任务是否纳入本应用，不限制手动检查/更新/批量升级。
+	AutoUpdateEnabled bool `orm:"not_null;default:1"`
+}
+
+func (*Application) TableName() string { return "applications" }
+
+// ApplicationPersistentLocation records every node that may contain an
+// application's managed persistent directory. Rows are intentionally kept
+// when deployment targets change and are removed only with the application.
+type ApplicationPersistentLocation struct {
+	ApplicationID string    `orm:"primary_key;references:applications(id);on_delete:CASCADE"`
+	ServerID      string    `orm:"primary_key;not_null"`
+	CreatedAt     time.Time `orm:"not_null"`
+}
+
+func (*ApplicationPersistentLocation) TableName() string {
+	return "application_persistent_locations"
+}
+
+// ApplicationEditSession 对应 application_edit_sessions。
+type ApplicationEditSession struct {
+	ID                    string `orm:"primary_key"`
+	ApplicationID         string `orm:"not_null;default:''"`
+	OwnerID               string `orm:"not_null"`
+	ClientDraftKey        string `orm:"not_null;default:''"`
+	State                 string `orm:"not_null"`
+	BaseResourceVersion   int    `orm:"not_null;default:0"`
+	BaseResourceUpdatedAt *time.Time
+	DraftJSON             map[string]any `orm:"json;not_null;default:'{}'"`
+	Revision              int            `orm:"not_null;default:1"`
+	PreviewToken          string         `orm:"not_null;default:''"`
+	PreviewRevision       int            `orm:"not_null;default:0"`
+	PreviewExpiresAt      *time.Time
+	CommitLeaseOwner      string `orm:"not_null;default:''"`
+	CommitLeaseExpiresAt  *time.Time
+	CommitIdempotencyKey  string         `orm:"not_null;default:''"`
+	CommitApplicationID   string         `orm:"not_null;default:''"`
+	CommitResultJSON      map[string]any `orm:"json;not_null;default:''"`
+	ConflictJSON          map[string]any `orm:"json;not_null;default:''"`
+	IdleExpiresAt         time.Time      `orm:"not_null"`
+	AbsoluteExpiresAt     time.Time      `orm:"not_null"`
+	CreatedAt             time.Time      `orm:"not_null"`
+	UpdatedAt             time.Time      `orm:"not_null"`
+	CommittedAt           *time.Time
+}
+
+func (*ApplicationEditSession) TableName() string { return "application_edit_sessions" }
+
+// ExtraIndexDDL 返回 application_edit_sessions 表无法用 orm tag 表达的复合索引。
+func (*ApplicationEditSession) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"application_edit_sessions": {
+			"CREATE INDEX IF NOT EXISTS idx_application_edit_sessions_expiry ON application_edit_sessions(state, idle_expires_at, absolute_expires_at)",
+		},
+	}
+}
+
+// ApplicationEditSessionFile 对应 application_edit_session_files。
+// 未改写的文件只保留 SourceFileID（BlobDir 为空）；会话写入落在 BlobDir/content/。
+type ApplicationEditSessionFile struct {
+	SessionID    string    `orm:"primary_key;not_null;references:application_edit_sessions(id);on_delete:CASCADE"`
+	FileKey      string    `orm:"primary_key;not_null"`
+	SourceFileID string    `orm:"not_null;default:''"`
+	Name         string    `orm:"not_null"`
+	Kind         string    `orm:"not_null"`
+	ContentType  string    `orm:"not_null;default:''"`
+	Filename     string    `orm:"not_null;default:''"`
+	Size         int       `orm:"not_null;default:0"`
+	SHA256       string    `orm:"not_null;default:''"`
+	BlobDir      string    `orm:"not_null;default:''"`
+	State        string    `orm:"not_null;default:'ready'"`
+	CreatedAt    time.Time `orm:"not_null"`
+	UpdatedAt    time.Time `orm:"not_null"`
+}
+
+func (*ApplicationEditSessionFile) TableName() string { return "application_edit_session_files" }
+
+// TableConstraints 返回 application_edit_session_files 表无法用 orm tag 表达的原始约束。
+func (*ApplicationEditSessionFile) TableConstraints() []string {
+	return []string{"CHECK(kind IN ('binary','template','archive'))"}
+}
+
+// ExtraIndexDDL 返回 application_edit_session_files 表无法用 orm tag 表达的复合 UNIQUE。
+func (*ApplicationEditSessionFile) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"application_edit_session_files": {
+			"CREATE UNIQUE INDEX IF NOT EXISTS uq_application_edit_session_files_session_name ON application_edit_session_files(session_id, name)",
+		},
+	}
+}
+
+// ApplicationEditSessionOperation 对应 application_edit_session_operations。
+type ApplicationEditSessionOperation struct {
+	SessionID         string         `orm:"primary_key;not_null;references:application_edit_sessions(id);on_delete:CASCADE"`
+	ClientOperationID string         `orm:"primary_key;not_null"`
+	IdempotencyKey    string         `orm:"not_null"`
+	RequestHash       string         `orm:"not_null"`
+	ResultJSON        map[string]any `orm:"json;not_null;default:''"`
+	CreatedAt         time.Time      `orm:"not_null"`
+}
+
+func (*ApplicationEditSessionOperation) TableName() string {
+	return "application_edit_session_operations"
+}
+
+// ExtraIndexDDL 返回 application_edit_session_operations 表无法用 orm tag 表达的复合 UNIQUE。
+func (*ApplicationEditSessionOperation) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"application_edit_session_operations": {
+			"CREATE UNIQUE INDEX IF NOT EXISTS uq_application_edit_session_operations_session_idempotency ON application_edit_session_operations(session_id, idempotency_key)",
+		},
+	}
+}
+
+// ApplicationFile 对应 application_files。
+// 正式正文落在 dataRoot/applications/files/{appId}/{fileId}/content/{filename}；
+// BlobPath 仅作 alpha 迁移期 dual-read（旧绝对路径 / .blob），新写入留空并由 id+filename 推导。
+// Content 仅保留作更早 BLOB 行的 dual-read 回落，新写入不再填充。
+type ApplicationFile struct {
+	ID            string `orm:"primary_key"`
+	ApplicationID string `orm:"not_null;references:applications(id);on_delete:CASCADE"`
+	Name          string `orm:"not_null"`
+	Kind          string `orm:"not_null"`
+	ContentType   string `orm:"not_null;default:''"`
+	Filename      string `orm:"not_null;default:''"`
+	Size          int    `orm:"not_null;default:0"`
+	SHA256        string `orm:"not_null;default:''"`
+	BlobPath      string `orm:"not_null;default:''"`
+	Content       []byte
+	CreatedAt     time.Time `orm:"not_null"`
+	UpdatedAt     time.Time `orm:"not_null"`
+}
+
+func (*ApplicationFile) TableName() string { return "application_files" }
+
+// TableConstraints 返回 application_files 表无法用 orm tag 表达的原始约束。
+func (*ApplicationFile) TableConstraints() []string {
+	return []string{"CHECK(kind IN ('binary','template','archive'))"}
+}
+
+// ExtraIndexDDL 返回 application_files 表无法用 orm tag 表达的复合 UNIQUE。
+func (*ApplicationFile) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"application_files": {
+			"CREATE UNIQUE INDEX IF NOT EXISTS uq_application_files_application_name ON application_files(application_id, name)",
+		},
+	}
+}
+
+// ApplicationInstance 对应 application_instances。
+type ApplicationInstance struct {
+	ID                     string         `orm:"primary_key"`
+	ApplicationID          string         `orm:"not_null;references:applications(id);on_delete:CASCADE"`
+	ServerID               string         `orm:"not_null;references:servers(id);on_delete:CASCADE"`
+	ContainerName          string         `orm:"not_null"`
+	ContainerID            string         `orm:"not_null;default:''"`
+	DesiredState           string         `orm:"not_null;default:'running'"`
+	DesiredGeneration      int            `orm:"not_null;default:0"`
+	DesiredSpecHash        string         `orm:"not_null;default:''"`
+	DesiredRevisionID      string         `orm:"not_null;default:''"`
+	DesiredSpecJSON        map[string]any `orm:"json;not_null;default:'{}'"`
+	Status                 string         `orm:"not_null;default:'pending'"`
+	RuntimeSpecJSON        map[string]any `orm:"json;not_null;default:'{}'"`
+	LastDeployedGeneration int            `orm:"not_null;default:0"`
+	ObservedState          string         `orm:"not_null;default:'unknown'"`
+	ObservedContainerName  string         `orm:"not_null;default:''"`
+	ObservedContainerID    string         `orm:"not_null;default:''"`
+	ObservedGeneration     int            `orm:"not_null;default:0"`
+	ObservedSpecHash       string         `orm:"not_null;default:''"`
+	ObservedImageDigest    string         `orm:"not_null;default:''"`
+	ObservedAt             *time.Time
+	ObservedSequence       int64  `orm:"not_null;default:0"`
+	ObservedSource         string `orm:"not_null;default:''"`
+	LastReconcileJobID     string `orm:"not_null;default:''"`
+	LastErrorCode          string `orm:"not_null;default:''"`
+	LastErrorClass         string `orm:"not_null;default:''"`
+	LastErrorMessage       string `orm:"not_null;default:''"`
+	LastErrorDetail        string `orm:"not_null;default:''"`
+	LastErrorAt            *time.Time
+	LastError              string    `orm:"not_null;default:''"`
+	CreatedAt              time.Time `orm:"not_null"`
+	UpdatedAt              time.Time `orm:"not_null"`
+}
+
+func (*ApplicationInstance) TableName() string { return "application_instances" }
+
+// ExtraIndexDDL 返回 application_instances 表无法用 orm tag 表达的复合 UNIQUE。
+func (*ApplicationInstance) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"application_instances": {
+			"CREATE UNIQUE INDEX IF NOT EXISTS uq_application_instances_application_server ON application_instances(application_id, server_id)",
+			"CREATE INDEX IF NOT EXISTS idx_application_instances_server_desired ON application_instances(server_id, desired_state)",
+		},
+	}
+}
+
+// FacilityAppConfig 对应 facility_app_configs。
+type FacilityAppConfig struct {
+	ID                      string   `orm:"primary_key"`
+	Version                 int      `orm:"not_null;default:1"`
+	DeploymentServerIDsJSON []string `orm:"json;not_null;default:'[]';column:deployment_server_ids_json"`
+
+	DNSSyncJSON map[string]any `orm:"json;not_null;default:'{}';column:dns_sync_json"`
+	LastError   string         `orm:"not_null;default:''"`
+	UpdatedAt   time.Time      `orm:"not_null"`
+	// SettingsJSON 保存入口代理全局运行参数（80 端口策略、HSTS、P1 安全参数、
+	// imageAutoUpdateEnabled、customHttpDirectives 等）。空对象表示全部默认值。
+	SettingsJSON map[string]any `orm:"json;not_null;default:'{}';column:settings_json"`
+}
+
+func (*FacilityAppConfig) TableName() string { return "facility_app_configs" }
+
+// ReverseProxyRoute 对应 reverse_proxy_routes。domain 全局唯一，app_id 为所属
+// 应用 id；设施代理自身的路由使用 facility-reverse-proxy 作为 app_id。
+// Version 是该配置记录的独立乐观锁，与 facility_app_configs.version（代理平面）无关。
+type ReverseProxyRoute struct {
+	Domain          string           `orm:"primary_key;not_null"`
+	AppID           string           `orm:"not_null;column:app_id"`
+	OriginServerIDs []string         `orm:"json;not_null;default:'[]';column:origin_server_ids"`
+	AnyAccessJSON   map[string]any   `orm:"json;not_null;default:'{}';column:any_access_json"`
+	TargetPort      int              `orm:"not_null;default:0;column:target_port"`
+	PathsJSON       []map[string]any `orm:"json;not_null;default:'[]';column:paths_json"`
+	CreatedAt       time.Time        `orm:"not_null"`
+	UpdatedAt       time.Time        `orm:"not_null"`
+	// Version 必须保持在结构体末尾：该列由 AutoMigrate 追加到 preAppMigration
+	// 创建的 legacy 表末尾，字段顺序需与升级后的列顺序一致（见 models 测试）。
+	Version int `orm:"not_null;default:1"`
+	// 每域名传输开关（追加在 Version 之后，保证 legacy 表 AutoMigrate 追加列序
+	// 与模型字段序一致）。旧行由 DEFAULT 回填为 HTTPS/H2 开、H3 关。
+	HTTPSEnabled bool `orm:"not_null;default:1;column:https_enabled"`
+	HTTP2Enabled bool `orm:"not_null;default:1;column:http2_enabled"`
+	HTTP3Enabled bool `orm:"not_null;default:0;column:http3_enabled"`
+	// CustomServerDirectives 是该域名 server 块的自定义 nginx 单行指令列表；
+	// 同名指令覆盖面板生成项，其余追加，见 FAC-RP-017。
+	CustomServerDirectives []string `orm:"json;not_null;default:'[]';column:custom_server_directives"`
+	// HTTPPortMode 是该域名的 80 端口策略覆盖：空=继承设施全局设置，
+	// serve=80 直接服务，redirect=有证书且 HTTPS 开启时跳转 443。
+	HTTPPortMode string `orm:"not_null;default:'';column:http_port_mode"`
+	// HSTSEnabled 是该域名 HSTS 覆盖：空=继承设施全局 HSTS，on/off 显式覆盖。
+	HSTSEnabled string `orm:"not_null;default:'';column:hsts_enabled"`
+	// ClientMaxBodySize 是该域名请求体上限覆盖（nginx size 语法）；空=继承全局。
+	ClientMaxBodySize string `orm:"not_null;default:'';column:client_max_body_size"`
+}
+
+func (*ReverseProxyRoute) TableName() string { return "reverse_proxy_routes" }
+
+// FacilityProxyImageState 对应 facility_proxy_image_states：每个入口代理网关
+// 一行，记录镜像目标/观察 digest、回滚目标与更新状态。reference/target_digest
+// 参与该节点运行时 spec hash；observed_digest 来自 Agent 对运行容器的实际镜像。
+type FacilityProxyImageState struct {
+	ServerID       string    `orm:"primary_key;references:servers(id);on_delete:CASCADE"`
+	Reference      string    `orm:"not_null;default:''"`
+	TargetDigest   string    `orm:"not_null;default:''"`
+	ObservedDigest string    `orm:"not_null;default:''"`
+	PreviousDigest string    `orm:"not_null;default:''"`
+	Status         string    `orm:"not_null;default:'unknown'"`
+	Pinned         bool      `orm:"not_null;default:0"`
+	LastError      string    `orm:"not_null;default:''"`
+	CheckedAt      time.Time `orm:"not_null"`
+	UpdatedAt      time.Time `orm:"not_null"`
+	// 自动更新失败退避：同一目标 digest 连续失败计数与失败 digest。达到阈值后
+	// 自动更新暂停该节点，直到手动更新/回滚或成功一次后清零。
+	AutoUpdateFailures int    `orm:"not_null;default:0;column:auto_update_failures"`
+	FailedDigest       string `orm:"not_null;default:'';column:failed_digest"`
+	// ImageVersion 是运行中 nginx 的实际版本（如 1.28.3），由 Agent 执行
+	// `nginx -v` 回传后持久化；空表示尚未采集。
+	ImageVersion string `orm:"not_null;default:'';column:image_version"`
+}
+
+func (*FacilityProxyImageState) TableName() string { return "facility_proxy_image_states" }
+
+// ExtraIndexDDL 返回 reverse_proxy_routes 无法用 orm tag 表达的索引。
+func (*ReverseProxyRoute) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"reverse_proxy_routes": {
+			"CREATE INDEX IF NOT EXISTS idx_reverse_proxy_routes_app_id ON reverse_proxy_routes(app_id)",
+		},
+	}
+}
+
+// FacilityStaticAsset 对应 facility_static_assets。RecordID 为所属配置记录
+// （设施域名为 domain）；资产在记录内按 name 唯一，跨记录互不覆盖。
+type FacilityStaticAsset struct {
+	ID          string    `orm:"primary_key"`
+	RecordID    string    `orm:"not_null;default:'';column:record_id"`
+	Name        string    `orm:"not_null"`
+	Kind        string    `orm:"not_null"`
+	ContentMode string    `orm:"not_null;default:'binary'"`
+	Filename    string    `orm:"not_null;default:''"`
+	Size        int       `orm:"not_null;default:0"`
+	SHA256      string    `orm:"not_null;default:''"`
+	CreatedAt   time.Time `orm:"not_null"`
+	UpdatedAt   time.Time `orm:"not_null"`
+}
+
+func (*FacilityStaticAsset) TableName() string { return "facility_static_assets" }
+
+// TableConstraints 返回 facility_static_assets 表无法用 orm tag 表达的原始约束。
+func (*FacilityStaticAsset) TableConstraints() []string {
+	return []string{
+		"CHECK(kind IN ('uploaded_file','uploaded_bundle'))",
+		"CHECK(content_mode IN ('text','binary'))",
+	}
+}
+
+// ExtraIndexDDL 返回设施资产按配置记录隔离的唯一名约束。
+func (*FacilityStaticAsset) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"facility_static_assets": {
+			"CREATE UNIQUE INDEX IF NOT EXISTS idx_facility_static_assets_record_name ON facility_static_assets(record_id, name)",
+		},
+	}
+}
+
+// FacilityEditSession 对应 facility_edit_sessions。RecordID 绑定单条配置记录。
+type FacilityEditSession struct {
+	ID                   string         `orm:"primary_key"`
+	OwnerID              string         `orm:"not_null"`
+	RecordID             string         `orm:"not_null;default:'';column:record_id"`
+	ClientDraftKey       string         `orm:"not_null;default:''"`
+	State                string         `orm:"not_null"`
+	BaseResourceVersion  int            `orm:"not_null;default:0"`
+	DraftJSON            map[string]any `orm:"json;not_null;default:'{}'"`
+	Revision             int            `orm:"not_null;default:1"`
+	PreviewToken         string         `orm:"not_null;default:''"`
+	PreviewRevision      int            `orm:"not_null;default:0"`
+	PreviewExpiresAt     *time.Time
+	CommitLeaseOwner     string `orm:"not_null;default:''"`
+	CommitLeaseExpiresAt *time.Time
+	CommitIdempotencyKey string         `orm:"not_null;default:''"`
+	CommitResultJSON     map[string]any `orm:"json;not_null;default:''"`
+	ManifestPath         string         `orm:"not_null;default:''"`
+	ConflictJSON         map[string]any `orm:"json;not_null;default:''"`
+	IdleExpiresAt        time.Time      `orm:"not_null"`
+	AbsoluteExpiresAt    time.Time      `orm:"not_null"`
+	CreatedAt            time.Time      `orm:"not_null"`
+	UpdatedAt            time.Time      `orm:"not_null"`
+	CommittedAt          *time.Time
+}
+
+func (*FacilityEditSession) TableName() string { return "facility_edit_sessions" }
+
+// ExtraIndexDDL 返回 facility_edit_sessions 表无法用 orm tag 表达的复合索引。
+func (*FacilityEditSession) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"facility_edit_sessions": {
+			"CREATE INDEX IF NOT EXISTS idx_facility_edit_sessions_expiry ON facility_edit_sessions(state, idle_expires_at, absolute_expires_at)",
+		},
+	}
+}
+
+// FacilityEditSessionAsset 对应 facility_edit_session_assets。
+type FacilityEditSessionAsset struct {
+	SessionID     string    `orm:"primary_key;not_null;references:facility_edit_sessions(id);on_delete:CASCADE"`
+	AssetKey      string    `orm:"primary_key;not_null"`
+	SourceAssetID string    `orm:"not_null;default:''"`
+	Name          string    `orm:"not_null"`
+	Kind          string    `orm:"not_null"`
+	ContentMode   string    `orm:"not_null;default:'binary'"`
+	Filename      string    `orm:"not_null;default:''"`
+	Size          int       `orm:"not_null;default:0"`
+	SHA256        string    `orm:"not_null;default:''"`
+	ContentSHA256 string    `orm:"not_null;default:''"`
+	BlobDir       string    `orm:"not_null;default:''"`
+	State         string    `orm:"not_null;default:'ready'"`
+	CreatedAt     time.Time `orm:"not_null"`
+	UpdatedAt     time.Time `orm:"not_null"`
+}
+
+func (*FacilityEditSessionAsset) TableName() string { return "facility_edit_session_assets" }
+
+// TableConstraints 返回 facility_edit_session_assets 表无法用 orm tag 表达的原始约束。
+func (*FacilityEditSessionAsset) TableConstraints() []string {
+	return []string{
+		"CHECK(kind IN ('uploaded_file','uploaded_bundle'))",
+		"CHECK(content_mode IN ('text','binary'))",
+	}
+}
+
+// ExtraIndexDDL 返回 facility_edit_session_assets 表无法用 orm tag 表达的复合 UNIQUE 索引。
+func (*FacilityEditSessionAsset) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"facility_edit_session_assets": {
+			"CREATE UNIQUE INDEX IF NOT EXISTS idx_facility_edit_session_assets_name ON facility_edit_session_assets(session_id, name)",
+		},
+	}
+}
+
+// FacilityEditSessionOperation 对应 facility_edit_session_operations。
+type FacilityEditSessionOperation struct {
+	SessionID         string         `orm:"primary_key;not_null;references:facility_edit_sessions(id);on_delete:CASCADE"`
+	ClientOperationID string         `orm:"primary_key;not_null"`
+	IdempotencyKey    string         `orm:"not_null"`
+	RequestHash       string         `orm:"not_null"`
+	ResultJSON        map[string]any `orm:"json;not_null;default:''"`
+	CreatedAt         time.Time      `orm:"not_null"`
+}
+
+func (*FacilityEditSessionOperation) TableName() string { return "facility_edit_session_operations" }
+
+// ExtraIndexDDL 返回 facility_edit_session_operations 表无法用 orm tag 表达的复合 UNIQUE。
+func (*FacilityEditSessionOperation) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"facility_edit_session_operations": {
+			"CREATE UNIQUE INDEX IF NOT EXISTS uq_facility_edit_session_operations_session_idempotency ON facility_edit_session_operations(session_id, idempotency_key)",
+		},
+	}
+}
+
+// DNSDomain 对应 dns_domains。
+type DNSDomain struct {
+	ID                       string         `orm:"primary_key"`
+	Name                     string         `orm:"not_null;unique"`
+	Provider                 string         `orm:"not_null"`
+	ProviderConfigJSON       map[string]any `orm:"json;not_null;default:'{}'"`
+	ProviderSecretCiphertext string         `orm:"not_null;default:''"`
+	CreatedAt                time.Time      `orm:"not_null"`
+	UpdatedAt                time.Time      `orm:"not_null"`
+}
+
+func (*DNSDomain) TableName() string { return "dns_domains" }
+
+// TableConstraints 返回 dns_domains 表无法用 orm tag 表达的原始约束。
+func (*DNSDomain) TableConstraints() []string {
+	return []string{"CHECK(provider IN ('cloudflare'))"}
+}
+
+// Certificate 保存 ACME 生命周期元数据，并通过 AssetID 关联 key_assets 中的
+// 统一证书材料。pending/failed 记录可以在签发前没有 AssetID。
+type Certificate struct {
+	ID           string   `orm:"primary_key"`
+	AssetID      string   `orm:"not_null;default:'';index"`
+	Name         string   `orm:"not_null"`
+	DomainID     string   `orm:"not_null;default:'';references:dns_domains(id)"`
+	Domain       string   `orm:"not_null"`
+	Prefix       string   `orm:"not_null;default:'@'"`
+	Scope        string   `orm:"not_null"`
+	DomainsJSON  []string `orm:"json;not_null;default:'[]'"`
+	VariableName string   `orm:"not_null;unique"`
+	// Deprecated legacy migration fields. New records keep both fields empty.
+	CertificatePath string `orm:"not_null"`
+	PrivateKeyPath  string `orm:"not_null"`
+	Issuer          string `orm:"not_null;default:''"`
+	Status          string `orm:"not_null;default:'pending'"`
+	LastError       string `orm:"not_null;default:''"`
+	AutoRenew       bool   `orm:"not_null;default:1"`
+	NextRenewAt     *time.Time
+	NotBefore       *time.Time
+	NotAfter        *time.Time
+	CreatedAt       time.Time `orm:"not_null"`
+	UpdatedAt       time.Time `orm:"not_null"`
+}
+
+func (*Certificate) TableName() string { return "certificates" }
+
+// ExtraIndexDDL 保证一个证书材料最多被一个 ACME 生命周期记录拥有；
+// 空 asset_id 允许 pending/failed 记录在尚未签发时存在。
+func (*Certificate) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"certificates": {
+			"CREATE UNIQUE INDEX IF NOT EXISTS uq_certificates_asset_id ON certificates(asset_id) WHERE asset_id <> ''",
+		},
+	}
+}
+
+// TableConstraints 返回 certificates 表无法用 orm tag 表达的原始约束。
+func (*Certificate) TableConstraints() []string {
+	return []string{"CHECK(scope IN ('single','wildcard','prefixes'))"}
+}
+
+// SelfSignedCertificate 对应 self_signed_certificates。
+type SelfSignedCertificate struct {
+	ID              string   `orm:"primary_key"`
+	ParentCAID      string   `orm:"not_null;default:'';column:parent_ca_id"`
+	Kind            string   `orm:"not_null"`
+	Name            string   `orm:"not_null"`
+	CommonName      string   `orm:"not_null"`
+	DNSNamesJSON    []string `orm:"json;not_null;default:'[]'"`
+	IPAddressesJSON []string `orm:"json;not_null;default:'[]'"`
+	CertificatePath string   `orm:"not_null"`
+	PrivateKeyPath  string   `orm:"not_null"`
+	PublicKeyPath   string   `orm:"not_null"`
+	Fingerprint     string   `orm:"not_null;default:''"`
+	NotBefore       *time.Time
+	NotAfter        *time.Time
+	CreatedAt       time.Time `orm:"not_null"`
+	UpdatedAt       time.Time `orm:"not_null"`
+}
+
+func (*SelfSignedCertificate) TableName() string { return "self_signed_certificates" }
+
+// TableConstraints 返回 self_signed_certificates 表无法用 orm tag 表达的原始约束。
+func (*SelfSignedCertificate) TableConstraints() []string {
+	return []string{"CHECK(kind IN ('ca','leaf'))"}
+}
+
+// KeyAsset 对应 key_assets。
+type KeyAsset struct {
+	ID                    string         `orm:"primary_key"`
+	Type                  string         `orm:"not_null;index"`
+	Name                  string         `orm:"not_null;unique"`
+	ParentAssetID         string         `orm:"not_null;default:'';index"`
+	Algorithm             string         `orm:"not_null;default:''"`
+	KeySize               int            `orm:"not_null;default:0"`
+	CommonName            string         `orm:"not_null;default:''"`
+	DNSNamesJSON          []string       `orm:"json;not_null;default:'[]'"`
+	IPAddressesJSON       []string       `orm:"json;not_null;default:'[]'"`
+	Fingerprint           string         `orm:"not_null;default:''"`
+	CertificateCiphertext string         `orm:"not_null;default:''"`
+	PrivateKeyCiphertext  string         `orm:"not_null;default:''"`
+	PublicKey             string         `orm:"not_null;default:''"`
+	MetadataJSON          map[string]any `orm:"json;not_null;default:'{}'"`
+	NotBefore             *time.Time
+	NotAfter              *time.Time
+	CreatedAt             time.Time `orm:"not_null"`
+	UpdatedAt             time.Time `orm:"not_null"`
+}
+
+func (*KeyAsset) TableName() string { return "key_assets" }
+
+// TableConstraints 返回 key_assets 表无法用 orm tag 表达的原始约束。
+func (*KeyAsset) TableConstraints() []string {
+	return []string{"CHECK(type IN ('ca_certificate','tls_certificate','ssh_key_pair'))"}
+}
+
+// OverviewCardConfiguration 对应 overview_card_configurations。
+type OverviewCardConfiguration struct {
+	ID        string           `orm:"primary_key"`
+	CardsJSON []map[string]any `orm:"json;not_null;default:'[]'"`
+	UpdatedAt time.Time        `orm:"not_null"`
+}
+
+func (*OverviewCardConfiguration) TableName() string { return "overview_card_configurations" }
+
+// TableConstraints 返回 overview_card_configurations 表无法用 orm tag 表达的原始约束。
+func (*OverviewCardConfiguration) TableConstraints() []string {
+	return []string{"CHECK(id = 'default')"}
+}
+
+// AppearanceSetting 对应 appearance_settings。单行全局面板外观（单管理员面板，
+// id 固定 appearance）：主题/深色模式、Mica、强调色与背景。背景图片字节不落库，
+// 只保存 <dataRoot>/appearance/<BackgroundAssetID>/ 资产目录元数据（MIME、归一化
+// 尺寸/字节数与递增 revision）；文件由 appearance 模块负责原子写入与孤儿清理。
+// 所有列由 AutoMigrate 建表，旧 alpha 库升级即为空表并由服务首次启动幂等 seed。
+type AppearanceSetting struct {
+	ID        string `orm:"primary_key"`
+	ThemeMode string `orm:"not_null;default:'system'"`
+	Mica      bool   `orm:"not_null;default:1"`
+	Accent    string `orm:"not_null;default:'blue'"`
+	// BackgroundKind 为 none|preset|image；切到 none/preset 时保留资产元数据，
+	// 便于重新启用已上传图片（hasImage 由 BackgroundAssetID 是否为空决定）。
+	BackgroundKind     string `orm:"not_null;default:'none'"`
+	BackgroundPreset   string `orm:"not_null;default:''"`
+	BackgroundAssetID  string `orm:"not_null;default:''"`
+	BackgroundMime     string `orm:"not_null;default:''"`
+	BackgroundWidth    int    `orm:"not_null;default:0"`
+	BackgroundHeight   int    `orm:"not_null;default:0"`
+	BackgroundBytes    int    `orm:"not_null;default:0"`
+	BackgroundRevision int    `orm:"not_null;default:0"`
+	// Initialized 表示外观是否已被显式保存过，用于旧 localStorage 偏好一次性迁移。
+	Initialized bool      `orm:"not_null;default:0"`
+	UpdatedAt   time.Time `orm:"not_null"`
+}
+
+func (*AppearanceSetting) TableName() string { return "appearance_settings" }
+
+// TableConstraints 返回 appearance_settings 表无法用 orm tag 表达的原始约束。
+func (*AppearanceSetting) TableConstraints() []string {
+	return []string{"CHECK(id = 'appearance')"}
+}
+
+// RuntimeSetting 对应 runtime_settings。
+type RuntimeSetting struct {
+	Key       string    `orm:"primary_key"`
+	Value     string    `orm:"not_null"`
+	UpdatedAt time.Time `orm:"not_null"`
+}
+
+func (*RuntimeSetting) TableName() string { return "runtime_settings" }
+
+// AuthState 对应 auth_state。
+type AuthState struct {
+	Key       string    `orm:"primary_key"`
+	Value     string    `orm:"not_null"`
+	UpdatedAt time.Time `orm:"not_null"`
+}
+
+func (*AuthState) TableName() string { return "auth_state" }
+
+// AuthAccount 对应 auth_accounts。
+type AuthAccount struct {
+	ID                     string    `orm:"primary_key"`
+	Username               string    `orm:"not_null"`
+	PasswordHash           string    `orm:"not_null"`
+	PasswordChangeRequired bool      `orm:"not_null;default:1"`
+	CreatedAt              time.Time `orm:"not_null"`
+	UpdatedAt              time.Time `orm:"not_null"`
+}
+
+func (*AuthAccount) TableName() string { return "auth_accounts" }
+
+// TableConstraints 返回 auth_accounts 表无法用 orm tag 表达的原始约束。
+func (*AuthAccount) TableConstraints() []string {
+	return []string{"CHECK(id = 'admin')"}
+}
+
+// StorageShareConfig 对应 storage_share_configs（存储共享设施配置）。
+// 每台存储服务器各自保存自己的根目录（servers_json）。
+type StorageShareConfig struct {
+	ID          string           `orm:"primary_key"`
+	Version     int              `orm:"not_null;default:1"`
+	ServersJSON []map[string]any `orm:"json;not_null;default:'[]';column:servers_json"`
+	LastError   string           `orm:"not_null;default:''"`
+	UpdatedAt   time.Time        `orm:"not_null"`
+}
+
+func (*StorageShareConfig) TableName() string { return "storage_share_configs" }
+
+// StorageSharePartition 对应 storage_share_partitions（存储共享按应用/服务器分配的分区记录）。
+type StorageSharePartition struct {
+	ID                string    `orm:"primary_key"`
+	ApplicationID     string    `orm:"not_null"`
+	ApplicationName   string    `orm:"not_null;default:''"`
+	ServerID          string    `orm:"not_null"`
+	ServerName        string    `orm:"not_null;default:''"`
+	StorageServerID   string    `orm:"not_null;default:''"`
+	StorageServerName string    `orm:"not_null;default:''"`
+	Path              string    `orm:"not_null"`
+	Target            string    `orm:"not_null;default:''"`
+	VolumeName        string    `orm:"not_null;default:''"`
+	CreatedAt         time.Time `orm:"not_null"`
+	UpdatedAt         time.Time `orm:"not_null"`
+}
+
+func (*StorageSharePartition) TableName() string { return "storage_share_partitions" }
+
+// ExtraIndexDDL 返回 storage_share_partitions 表无法用 orm tag 表达的复合 UNIQUE。
+func (*StorageSharePartition) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"storage_share_partitions": {
+			"CREATE UNIQUE INDEX IF NOT EXISTS uq_storage_share_partitions_storage_application_server_target ON storage_share_partitions(storage_server_id, application_id, server_id, target)",
+		},
+	}
+}
+
+// NetworkProbeConfig 是“网络探测”设施的单行配置。ID 固定为 network_probe；
+// Mode=all 表示所有节点都作为探测节点，selected 时仅 ServerIDs 内节点探测。
+// IntervalSeconds/PingCount/PingTimeoutSeconds 是 Panel 下发给 Agent 的探测节奏
+// 与单次 ping 参数；旧库升级时由 AutoMigrate 以默认值补齐。
+type NetworkProbeConfig struct {
+	ID                 string    `orm:"primary_key"`
+	Mode               string    `orm:"not_null;default:'all'"`
+	ServerIDs          []string  `orm:"json;not_null;default:'[]';column:server_ids_json"`
+	IntervalSeconds    int       `orm:"not_null;default:60"`
+	PingCount          int       `orm:"not_null;default:3"`
+	PingTimeoutSeconds int       `orm:"not_null;default:2"`
+	ThresholdsJSON     string    `orm:"not_null;default:'{}';column:thresholds_json"`
+	Version            int       `orm:"not_null;default:1"`
+	UpdatedAt          time.Time `orm:"not_null"`
+}
+
+func (*NetworkProbeConfig) TableName() string { return "network_probe_configs" }
+
+// TableConstraints 返回 network_probe_configs 表无法用 orm tag 表达的原始约束。
+func (*NetworkProbeConfig) TableConstraints() []string {
+	return []string{"CHECK(mode IN ('all','selected'))"}
+}
+
+// NetworkProbeResult 是探测节点到目标节点的最新一次 ping 观测。每个
+// (source,target) 只有一行；服务器删除或探测配置变化时由协调方修剪。
+type NetworkProbeResult struct {
+	SourceServerID    string    `orm:"primary_key;not_null"`
+	TargetServerID    string    `orm:"primary_key;not_null"`
+	TargetAddress     string    `orm:"not_null;default:''"`
+	SampledAt         time.Time `orm:"not_null"`
+	LatencyMS         float64   `orm:"not_null;default:0"`
+	PacketLossPercent float64   `orm:"not_null;default:0"`
+	Sent              int       `orm:"not_null;default:0"`
+	Received          int       `orm:"not_null;default:0"`
+	Error             string    `orm:"not_null;default:''"`
+	// HistoryJSON 保存该 (source,target) 最近 24 小时的 30 分钟桶采样，
+	// 格式为 [{"t":<unix 秒桶起点>,"l":<延迟平均值>,"p":<丢包百分比>}]。
+	// 旧数据为 '[]'，读取方必须容忍空值/非法 JSON。
+	HistoryJSON string `orm:"not_null;default:'[]'"`
+}
+
+func (*NetworkProbeResult) TableName() string { return "network_probe_results" }
+
+// ExtraIndexDDL 返回网络探测结果按目标查询的索引。
+func (*NetworkProbeResult) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"network_probe_results": {
+			"CREATE INDEX IF NOT EXISTS idx_network_probe_results_target ON network_probe_results(target_server_id)",
+		},
+	}
+}
+
+// MetricsFacilityConfig 是“指标采集/保留”设施的单行配置。ID 固定为 metrics；
+// Mode=all 表示所有节点采集指标，selected 时仅 ServerIDs 内节点采集。
+// RetentionDays/CollectionIntervalSeconds/CleanupSchedule 取代旧 runtime_settings
+// 中的三项指标设置；旧库升级时由 AutoMigrate 以默认值补齐，首次启动由设施
+// EnsureMigrated 播种。
+type MetricsFacilityConfig struct {
+	ID                        string    `orm:"primary_key"`
+	Mode                      string    `orm:"not_null;default:'all'"`
+	ServerIDs                 []string  `orm:"json;not_null;default:'[]';column:server_ids_json"`
+	RetentionDays             int       `orm:"not_null;default:7"`
+	CollectionIntervalSeconds int       `orm:"not_null;default:60"`
+	CleanupSchedule           string    `orm:"not_null;default:'daily'"`
+	ThresholdsJSON            string    `orm:"not_null;default:'{}';column:thresholds_json"`
+	Version                   int       `orm:"not_null;default:1"`
+	UpdatedAt                 time.Time `orm:"not_null"`
+}
+
+func (*MetricsFacilityConfig) TableName() string { return "metrics_facility_configs" }
+
+// TableConstraints 返回 metrics_facility_configs 表无法用 orm tag 表达的原始约束。
+func (*MetricsFacilityConfig) TableConstraints() []string {
+	return []string{
+		"CHECK(mode IN ('all','selected'))",
+		"CHECK(cleanup_schedule IN ('hourly','daily','weekly'))",
+	}
+}

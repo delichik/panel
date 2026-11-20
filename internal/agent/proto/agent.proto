@@ -1,0 +1,780 @@
+syntax = "proto3";
+
+package panel.agent.v1;
+
+option go_package = "panel/internal/agent/pb;agentpb";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/wrappers.proto";
+
+service AgentService {
+  rpc Health(Empty) returns (HealthResponse);
+  rpc OSRelease(Empty) returns (OSReleaseResponse);
+  rpc SystemTraits(Empty) returns (SystemTraitsResponse);
+  rpc MetricsSnapshot(MetricsSnapshotRequest) returns (MetricsSnapshotResponse);
+  rpc PackageUpdates(Empty) returns (PackageUpdatesResponse);
+  rpc UpgradePackages(PackageUpgradeRequest) returns (CommandResponse);
+  rpc PrepareRestart(Empty) returns (stream PrepareRestartResponse);
+  rpc UFWStatus(Empty) returns (UFWStatusResponse);
+  rpc UFWInstall(UFWInstallRequest) returns (UFWStatusResponse);
+  rpc UFWEnable(UFWEnableRequest) returns (UFWStatusResponse);
+  rpc UFWAllow(UFWAllowRequest) returns (UFWStatusResponse);
+  rpc UFWDelete(UFWDeleteRequest) returns (UFWStatusResponse);
+  // UFWConfirmPending cancels the agent-side firewall rollback timer after
+  // Panel verifies fresh SSH and Agent connectivity. Without this call the
+  // agent rolls the last mutation back when the timer expires or the process exits.
+  rpc UFWConfirmPending(Empty) returns (OKResponse);
+  rpc Fail2BanStatus(Empty) returns (Fail2BanStatusResponse);
+  rpc ApplyFail2Ban(Fail2BanApplyRequest) returns (Fail2BanStatusResponse);
+  rpc ReleaseFail2Ban(Empty) returns (Fail2BanStatusResponse);
+  rpc RestartSystem(Empty) returns (OKResponse);
+  rpc DockerContainers(Empty) returns (DockerContainersResponse);
+  rpc DockerContainerLogs(DockerContainerLogsRequest) returns (DockerContainerLogsResponse);
+  rpc DockerContainerAction(DockerContainerActionRequest) returns (OKResponse);
+  rpc DockerContainerDelete(DockerContainerDeleteRequest) returns (OKResponse);
+  rpc DockerImages(Empty) returns (DockerImagesResponse);
+  rpc DockerImagePull(DockerImagePullRequest) returns (OKResponse);
+  rpc DockerImageDelete(DockerImageDeleteRequest) returns (OKResponse);
+  rpc DockerNetworks(Empty) returns (DockerNetworksResponse);
+  rpc DockerVolumes(Empty) returns (DockerVolumesResponse);
+  rpc DockerVolumeDelete(DockerVolumeDeleteRequest) returns (OKResponse);
+  rpc RuntimeWriteFiles(RuntimeWriteFilesRequest) returns (OKResponse);
+  rpc RuntimeReconcile(RuntimeReconcileRequest) returns (RuntimeReconcileResponse);
+  rpc ReadExecutionEvents(ExecutionEventsRequest) returns (ExecutionEventsResponse);
+  rpc AckExecutionEvents(ExecutionEventsAck) returns (OKResponse);
+  rpc GetExecutionResult(ExecutionResultRequest) returns (ExecutionResultResponse);
+  rpc ResolveExecution(ExecutionResolutionRequest) returns (ExecutionResultResponse);
+  rpc RuntimeReload(RuntimeReloadRequest) returns (RuntimeReloadResponse);
+  rpc RuntimeCreateContainer(RuntimeCreateContainerRequest) returns (RuntimeCreateContainerResponse);
+  rpc RuntimeStop(RuntimeStopRequest) returns (RuntimeInstanceResponse);
+  rpc RuntimeRestart(RuntimeRestartRequest) returns (RuntimeInstanceResponse);
+  rpc RuntimeStatus(RuntimeStatusRequest) returns (RuntimeStatusResponse);
+  rpc RuntimeLogs(RuntimeLogsRequest) returns (RuntimeLogsResponse);
+  rpc RuntimePersistentArchive(RuntimePersistentArchiveRequest) returns (RuntimePersistentArchiveResponse);
+  rpc RuntimePersistentRestore(RuntimePersistentRestoreRequest) returns (RuntimePersistentRestoreResponse);
+  rpc StorageConfigureExport(StorageConfigureExportRequest) returns (OKResponse);
+  rpc StorageArchiveDirectory(StorageArchiveDirectoryRequest) returns (StorageArchiveDirectoryResponse);
+  rpc StorageDeleteDirectory(StorageDeleteDirectoryRequest) returns (OKResponse);
+  rpc StorageStatus(StorageStatusRequest) returns (StorageStatusResponse);
+  rpc StorageMountStatus(StorageMountStatusRequest) returns (StorageMountStatusResponse);
+  rpc StorageEnsureDirectory(StorageEnsureDirectoryRequest) returns (OKResponse);
+}
+
+service AgentReportService {
+  rpc Report(stream AgentReportControl) returns (stream AgentReport);
+}
+
+message Empty {}
+
+message AgentReportControl {
+  string server_id = 1;
+  AgentReportConfig config = 2;
+  // 网络探测配置：设施网络探测节点列表变化时由 Panel 下发。旧 Agent 忽略该字段。
+  AgentProbeConfig probe = 3;
+}
+
+message AgentReport {
+  reserved 7;
+  google.protobuf.Timestamp sample_at = 1;
+  MetricsSnapshotResponse metrics = 2;
+  DockerContainersResponse containers = 3;
+  string reason = 4;
+  PackageUpdatesResponse package_updates = 5;
+  DockerImagesResponse images = 6;
+  // 网络探测结果。旧 Agent 不填该字段，Panel 必须按未知处理。
+  AgentProbeReport probes = 8;
+  // replayed 表示该指标样本是从本地补报缓冲重放的旧样本；Panel 跳过整点对齐
+  // 校验并按 (server_id, sample_at) 幂等落库。
+  bool replayed = 9;
+}
+
+message AgentReportConfig {
+  int32 metrics_interval_seconds = 1;
+  int32 containers_interval_seconds = 2;
+}
+
+message AgentProbeConfig {
+  bool enabled = 1;
+  int32 interval_seconds = 2;
+  repeated AgentProbeTarget targets = 3;
+  // ping_count/ping_timeout_seconds 是每次探测的发包数与单包等待秒数，来自
+  // 探测设施配置。旧 Panel 不填这两个字段：Agent 必须回退到默认 3 包/2 秒，
+  // 不得把 0 当成有效配置。
+  int32 ping_count = 4;
+  int32 ping_timeout_seconds = 5;
+}
+
+message AgentProbeTarget {
+  string server_id = 1;
+  string address = 2;
+  string name = 3;
+}
+
+message AgentProbeReport {
+  repeated AgentProbeResult items = 1;
+}
+
+message AgentProbeResult {
+  string target_server_id = 1;
+  string target_address = 2;
+  double latency_ms = 3;
+  double packet_loss_percent = 4;
+  int32 sent = 5;
+  int32 received = 6;
+  string error = 7;
+}
+
+message OKResponse {
+  bool ok = 1;
+}
+
+message HealthResponse {
+  string status = 1;
+  string time = 2;
+  string version = 3;
+  repeated string capabilities = 4;
+  string contract_hash = 5;
+  DockerHealth docker = 6;
+}
+
+message DockerHealth {
+  string host = 1;
+  string status = 2;
+  string error = 3;
+}
+
+message OSReleaseResponse {
+  string id = 1;
+  string version_id = 2;
+  string pretty_name = 3;
+  bool supported = 4;
+}
+
+message SystemTraitsResponse {
+  map<string, string> traits = 1;
+}
+
+message MetricsSnapshotRequest {
+  string server_id = 1;
+}
+
+message MetricsSnapshotResponse {
+  string server_id = 1;
+  google.protobuf.Timestamp time = 2;
+  double cpu_usage_percent = 3;
+  int64 memory_used_bytes = 4;
+  int64 memory_total_bytes = 5;
+  int64 disk_used_bytes = 6;
+  int64 disk_total_bytes = 7;
+  double network_rx_bytes_rate = 8;
+  double network_tx_bytes_rate = 9;
+  SystemStatus status = 10;
+  // disk_usage_sampled 标记本次样本是否刷新了磁盘使用率（新 Agent 每 5 分钟
+  // 采样一次，其余样本值为 0）。旧 Agent 不填该字段：nil 表示“每次样本都带
+  // 磁盘值”，Panel 必须保留其磁盘字段。
+  google.protobuf.BoolValue disk_usage_sampled = 11;
+  // 磁盘 IO 读写速率（字节/秒），与网络速率使用同一采样窗口口径。
+  // disk_io_available 为 nil（旧 Agent）或 false 时两项速率视为未知，Panel
+  // 不得把它们当作 0 写入历史序列。
+  google.protobuf.BoolValue disk_io_available = 14;
+  double disk_read_bytes_rate = 12;
+  double disk_write_bytes_rate = 13;
+}
+
+message SystemStatus {
+  string hostname = 1;
+  string kernel_version = 2;
+  string os_version = 3;
+  google.protobuf.Timestamp server_time = 4;
+  int64 uptime_seconds = 5;
+  string load_average = 6;
+  double load1 = 7;
+  double load5 = 8;
+  double load15 = 9;
+}
+
+message PackageUpdate {
+  string name = 1;
+  string installed_version = 2;
+  string candidate_version = 3;
+  string source = 4;
+  // security 是 Agent 的权威安全更新判定（例如 unattended-upgrade --dry-run
+  // 是否会把该包作为安全更新升级）。security_known 为 false 时 security 没有
+  // 意义：旧 Agent 不填这两个字段，Panel 必须回退到 source 启发式，绝不能把
+  // 未知当成“非安全”。
+  optional bool security = 5;
+  optional bool security_known = 6;
+}
+
+message PackageUpdatesResponse {
+  repeated PackageUpdate items = 1;
+}
+
+message PackageUpgradeRequest {
+  repeated string names = 1;
+  bool all = 2;
+}
+
+message CommandResponse {
+  string output = 1;
+}
+
+message PrepareRestartResponse {
+  string state = 1;
+}
+
+message UFWRule {
+  int32 port = 1;
+  string protocol = 2;
+  string from = 3;
+}
+
+message UFWRuleStatus {
+  int32 number = 1;
+  string to = 2;
+  string action = 3;
+  string from = 4;
+}
+
+message UFWStatusResponse {
+  bool installed = 1;
+  bool active = 2;
+  string status = 3;
+  string default = 4;
+  repeated UFWRuleStatus rules = 5;
+  string raw = 6;
+}
+
+message UFWInstallRequest {
+  repeated UFWRule rules = 1;
+}
+
+message UFWEnableRequest {
+  int32 ssh_port = 1;
+  int32 agent_port = 2;
+}
+
+message UFWAllowRequest {
+  UFWRule rule = 1;
+  int32 ssh_port = 2;
+  int32 agent_port = 3;
+}
+
+message UFWDeleteRequest {
+  int32 number = 1;
+  int32 ssh_port = 2;
+  int32 agent_port = 3;
+}
+
+message Fail2BanJail {
+  string name = 1;
+  bool enabled = 2;
+  string preset = 3;
+  string filter = 4;
+  string log_path = 5;
+  string backend = 6;
+  string port = 7;
+  string protocol = 8;
+  string action = 9;
+  int32 max_retry = 10;
+  string find_time = 11;
+  string ban_time = 12;
+  repeated string ignore_ip = 13;
+  map<string, string> options = 14;
+}
+
+message Fail2BanConfig {
+  repeated Fail2BanJail jails = 1;
+}
+
+message Fail2BanStatusResponse {
+  bool installed = 1;
+  bool active = 2;
+  bool panel_config_present = 3;
+  repeated string jails = 4;
+  string raw = 5;
+}
+
+message Fail2BanApplyRequest {
+  Fail2BanConfig config = 1;
+}
+
+message RuntimeSpec {
+  string id = 1;
+  string application_id = 2;
+  string instance_id = 3;
+  string container_name = 4;
+  string name = 5;
+  string image = 6;
+  repeated string command = 7;
+  reserved 8;
+  reserved "args";
+  map<string, string> env = 9;
+  repeated RuntimePort ports = 10;
+  reserved 11;
+  reserved "network_mode";
+  RuntimeResources resources = 12;
+  bool privileged = 13;
+  repeated RuntimeMount mounts = 14;
+  repeated RuntimeManagedFile files = 15;
+  RuntimeRestart restart = 16;
+  repeated RuntimeService services = 17;
+  repeated RuntimeCheck checks = 18;
+  int32 generation = 19;
+  string spec_hash = 20;
+  repeated string cap_add = 21;
+}
+
+message RuntimePort {
+  string label = 1;
+  int32 container_port = 2;
+  int32 host_port = 3;
+  string protocol = 4;
+  bool open_firewall = 5;
+}
+
+message RuntimeResources {
+  int32 cpu = 1;
+  int32 memory_mb = 2;
+}
+
+message RuntimeMount {
+  string type = 1;
+  string source = 2;
+  string target = 3;
+  bool read_only = 4;
+  google.protobuf.Int32Value uid = 5;
+  google.protobuf.Int32Value gid = 6;
+  string mode = 7;
+}
+
+message RuntimeManagedFile {
+  string path = 1;
+  bytes content = 2;
+  string mode = 3;
+  google.protobuf.Int32Value uid = 4;
+  google.protobuf.Int32Value gid = 5;
+}
+
+message RuntimeRestart {
+  string policy = 1;
+  int32 attempts = 2;
+  int32 interval_seconds = 3;
+  int32 delay_seconds = 4;
+  string mode = 5;
+}
+
+message RuntimeService {
+  string name = 1;
+  string port = 2;
+  repeated string tags = 3;
+}
+
+message RuntimeCheck {
+  string name = 1;
+  string type = 2;
+  string port = 3;
+  string path = 4;
+  int32 interval_seconds = 5;
+  int32 timeout_seconds = 6;
+  string command = 7;
+}
+
+message RuntimeWriteFilesRequest {
+  RuntimeSpec spec = 1;
+}
+
+message RuntimeReconcileRequest {
+  string job_id = 1;
+  string execution_id = 2;
+  string application_id = 3;
+  string instance_id = 4;
+  string server_id = 5;
+  string action = 6;
+  int32 desired_generation = 7;
+  string desired_spec_hash = 8;
+  string desired_revision_id = 9;
+  RuntimeSpec spec = 10;
+  bool remove_data = 11;
+  string previous_container_name = 12;
+  string operation_id = 13;
+  string run_id = 14;
+  int32 ssh_port = 15;
+  int32 agent_port = 16;
+  // image_preflight_command 是可选的一次性预检命令（例如
+  // `nginx -t -c /etc/panel-nginx/nginx.conf`）。非空时 Agent 在镜像拉取成功
+  // 之后、停止/删除旧容器之前，用同一 spec 的 mounts/network 创建一个不发布
+  // 端口的临时容器执行该命令；失败则中止 apply 并保留旧容器继续服务。
+  // 旧 Agent 忽略该字段：Panel 必须先确认 Agent 版本/契约一致再依赖预检结果。
+  repeated string image_preflight_command = 17;
+  // image_version_command 是可选的版本上报命令（例如 `nginx -v`），在预检成功
+  // 后于另一个一次性临时容器中执行，输出通过 image_version 回传；Panel 用它做
+  // 版本线（major.minor）校验。它属于观测信息，执行失败不阻断 apply。
+  repeated string image_version_command = 18;
+}
+
+message RuntimeReconcileStep {
+  string name = 1;
+  string status = 2;
+  string detail = 3;
+  string step_id = 4;
+  google.protobuf.Timestamp started_at = 5;
+  google.protobuf.Timestamp finished_at = 6;
+}
+
+message RuntimeReconcileResponse {
+  string observed_state = 1;
+  string container_name = 2;
+  string container_id = 3;
+  int32 observed_generation = 4;
+  string observed_spec_hash = 5;
+  string observed_image_digest = 6;
+  google.protobuf.Timestamp observed_at = 7;
+  repeated RuntimeReconcileStep steps = 8;
+  string error_code = 9;
+  string error_class = 10;
+  string error_message = 11;
+  string error_detail = 12;
+  bool retryable = 13;
+  int32 retry_after_seconds = 14;
+  string verification_source = 15;
+  string verification_reason = 16;
+  string verified_by = 17;
+  string verified_by_name = 18;
+  google.protobuf.Timestamp verified_at = 19;
+  // image_version 是一次性临时容器中版本命令（image_version_command）的输出，
+  // 已 trim 并做长度上限；未执行或执行失败时为空。
+  string image_version = 20;
+  // preflight_output 是预检命令（image_preflight_command）的输出，成功和失败
+  // 都回传，便于 Panel 把 `nginx -t` 的原始报错写进任务日志；已脱敏并限长。
+  string preflight_output = 21;
+}
+
+message RuntimeReloadRequest {
+  RuntimeSpec spec = 1;
+  string container_name = 2;
+  repeated string validate_command = 3;
+  repeated string reload_command = 4;
+}
+
+message RuntimeReloadResponse {
+  bool reloaded = 1;
+  string phase = 2;
+  int32 exit_code = 3;
+  string output = 4;
+  string error = 5;
+}
+
+message RuntimeCreateContainerRequest {
+  string server_id = 1;
+  RuntimeSpec spec = 2;
+}
+
+message RuntimeCreateContainerResponse {
+  string container_id = 1;
+}
+
+message RuntimeStopRequest {
+  string application_id = 1;
+  string instance_id = 2;
+  string container_name = 3;
+  bool purge = 4;
+  bool remove_application_data = 5;
+}
+
+message RuntimeRestartRequest {
+  string instance_id = 1;
+  string container_name = 2;
+}
+
+message RuntimeInstanceResponse {
+  string instance_id = 1;
+  string container_name = 2;
+  string container_id = 3;
+  string status = 4;
+  string error = 5;
+  google.protobuf.Timestamp observed_at = 6;
+}
+
+message RuntimeStatusRequest {
+  string instance_id = 1;
+  string container_name = 2;
+  // version_command 是可选的版本采集命令（例如 `nginx -v`）。非空且容器
+  // running 时，Agent 用 docker exec 在运行中的容器内执行该命令，并从输出
+  // （stdout+stderr）解析 nginx/x.y.z 写入 image_version；失败为空，不影响
+  // 状态查询本身。旧 Agent 忽略该字段，Panel 必须把空版本按未知处理。
+  repeated string version_command = 3;
+}
+
+message RuntimeStatusResponse {
+  string instance_id = 1;
+  string server_id = 2;
+  string server_name = 3;
+  string container_name = 4;
+  string container_id = 5;
+  string status = 6;
+  string desired_state = 7;
+  string stage = 8;
+  string image = 9;
+  string started_at = 10;
+  string finished_at = 11;
+  int32 exit_code = 12;
+  string last_error = 13;
+  google.protobuf.Timestamp observed_at = 14;
+  // image_version 是 version_command 在运行容器内执行后的解析结果（例如
+  // 1.28.3）；未请求、容器未运行或执行失败时为空。旧 Agent 不填该字段。
+  string image_version = 15;
+}
+
+message RuntimeLogsRequest {
+  string instance_id = 1;
+  string container_name = 2;
+  int32 tail = 3;
+}
+
+message RuntimeLogsResponse {
+  string instance_id = 1;
+  string logs = 2;
+}
+
+message RuntimePersistentArchiveRequest {
+  string application_id = 1;
+}
+
+message RuntimePersistentArchiveResponse {
+  string application_id = 1;
+  string filename = 2;
+  bytes content = 3;
+}
+
+message RuntimePersistentRestoreRequest {
+  string application_id = 1;
+  bytes content = 2;
+}
+
+message RuntimePersistentRestoreResponse {
+  string application_id = 1;
+  bool restored = 2;
+}
+
+message StorageConfigureExportRequest {
+  string root = 1;
+  repeated string allowed_hosts = 2;
+  bool enabled = 3;
+}
+
+message StorageArchiveDirectoryRequest {
+  string path = 1;
+}
+
+message StorageArchiveDirectoryResponse {
+  string filename = 1;
+  bytes content = 2;
+}
+
+message StorageDeleteDirectoryRequest {
+  string path = 1;
+}
+
+message StorageStatusRequest {
+  string root = 1;
+}
+
+message StorageStatusResponse {
+  bool server_installed = 1;
+  bool root_exists = 2;
+  bool export_live = 3;
+  string detail = 4;
+}
+
+message StorageMountStatusRequest {
+  string source = 1;
+  string target = 2;
+}
+
+message StorageMountStatusResponse {
+  bool volume_exists = 1;
+  string mountpoint = 2;
+  bool mounted = 3;
+  bool writable = 4;
+  string detail = 5;
+}
+
+message StorageEnsureDirectoryRequest {
+  string path = 1;
+}
+
+message DockerPort {
+  string ip = 1;
+  int32 private_port = 2;
+  int32 public_port = 3;
+  string type = 4;
+}
+
+message DockerMount {
+  string type = 1;
+  string name = 2;
+  string source = 3;
+  string destination = 4;
+  string driver = 5;
+  string mode = 6;
+  bool rw = 7;
+}
+
+message DockerContainer {
+  string id = 1;
+  repeated string names = 2;
+  string image = 3;
+  string image_id = 4;
+  string command = 5;
+  int64 created = 6;
+  string state = 7;
+  string status = 8;
+  repeated DockerPort ports = 9;
+  map<string, string> labels = 10;
+  repeated DockerMount mounts = 11;
+}
+
+message DockerContainersResponse {
+  repeated DockerContainer items = 1;
+}
+
+message DockerContainerLogsRequest {
+  string id = 1;
+  int32 tail = 2;
+}
+
+message DockerContainerLogsResponse {
+  string container_id = 1;
+  string logs = 2;
+}
+
+message DockerContainerActionRequest {
+  string id = 1;
+  string action = 2;
+}
+
+message DockerContainerDeleteRequest {
+  string id = 1;
+}
+
+message DockerImage {
+  string id = 1;
+  string parent_id = 2;
+  repeated string repo_tags = 3;
+  repeated string repo_digests = 4;
+  int64 created = 5;
+  int64 size = 6;
+  int32 containers = 7;
+}
+
+message DockerImagesResponse {
+  repeated DockerImage items = 1;
+}
+
+message DockerImagePullRequest {
+  string reference = 1;
+}
+
+message DockerImageDeleteRequest {
+  string id = 1;
+}
+
+message DockerNetwork {
+  string id = 1;
+  string name = 2;
+  string driver = 3;
+  string scope = 4;
+  string created = 5;
+  bool internal = 6;
+  map<string, string> labels = 7;
+}
+
+message DockerNetworksResponse {
+  repeated DockerNetwork items = 1;
+}
+
+message DockerVolumeUsage {
+  int64 size = 1;
+  int64 ref_count = 2;
+}
+
+message DockerVolume {
+  string name = 1;
+  string driver = 2;
+  string mountpoint = 3;
+  string created_at = 4;
+  map<string, string> labels = 5;
+  DockerVolumeUsage usage_data = 6;
+  bool in_use = 7;
+  int32 container_count = 8;
+}
+
+message DockerVolumesResponse {
+  repeated DockerVolume items = 1;
+}
+
+message DockerVolumeDeleteRequest {
+  string name = 1;
+}
+
+
+// One sequence domain per actual executor invocation. Channels such as stderr
+// are event attributes and must never partition this sequence for ACK purposes.
+message ExecutionEvent {
+  string event_id = 1;
+  int64 source_seq = 2;
+  google.protobuf.Timestamp occurred_at = 3;
+  string event_type = 4;
+  string operation_id = 5;
+  string run_id = 6;
+  string execution_id = 7;
+  string step_id = 8;
+  string step_name = 9;
+  string status = 10;
+  string stream = 11;
+  string text = 12;
+  string data_json = 13;
+}
+message ExecutionEventsRequest {
+  string execution_id = 1;
+  string source_epoch = 2;
+  string source_stream_id = 3;
+  int64 after_source_seq = 4;
+  int32 limit = 5;
+}
+message ExecutionEventsResponse {
+  string source_id = 1;
+  string source_epoch = 2;
+  string source_stream_id = 3;
+  repeated ExecutionEvent events = 4;
+  int64 head_seq = 5;
+  int64 end_seq = 6;
+  bool has_more = 7;
+  int64 acked_through_seq = 8;
+}
+message ExecutionEventsAck {
+  string execution_id = 1;
+  string source_id = 2;
+  string source_epoch = 3;
+  string source_stream_id = 4;
+  int64 through_source_seq = 5;
+}
+message ExecutionResultRequest { string execution_id = 1; }
+message ExecutionResultResponse {
+  string state = 1;
+  RuntimeReconcileResponse result = 2;
+  string error = 3;
+  int64 end_seq = 4;
+}
+
+
+// Only the authenticated Panel may submit a human declaration for an unknown
+// execution. It cannot modify earlier source facts or resolve a running action.
+message ExecutionResolutionRequest {
+  string execution_id = 1;
+  string outcome = 2;
+  string reason = 3;
+  string actor_id = 4;
+  string actor_name = 5;
+}
