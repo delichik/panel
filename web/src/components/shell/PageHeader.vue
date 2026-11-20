@@ -29,7 +29,7 @@ const breadcrumbNavLabel = computed(() => props.breadcrumbLabel ?? t('common.bre
 </script>
 
 <template>
-  <header class="flex shrink-0 items-center justify-between gap-4 max-lg:flex-col max-lg:items-stretch">
+  <header class="flex shrink-0 items-center justify-between gap-4 max-wide:flex-col max-wide:items-stretch max-lg:flex-col max-lg:items-stretch">
     <!--
       WinUI 3 page header as a pure structural block: no page padding here
       (ConsolePage owns the single page padding) so the header and the body

@@ -36,6 +36,8 @@ describe('responsive shared layout', () => {
     });
 
     expect(wrapper.classes()).toContain('max-lg:flex-col');
+    // 中尺寸下 actions 已整行，header 必须同步纵向堆叠，避免标题/说明被压成竖排。
+    expect(wrapper.classes()).toContain('max-wide:flex-col');
     const actions = wrapper.get('header > div:last-child');
     expect(actions.classes()).toContain('flex-wrap');
     expect(actions.classes()).toContain('max-wide:w-full');

@@ -1,11 +1,22 @@
 // @vitest-environment jsdom
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ProbeHistoryCharts from './ProbeHistoryCharts.vue';
 import { useI18n } from '@/i18n';
 import type { MetricSeriesData } from '@/utils/metrics';
 
 enableAutoUnmount(afterEach);
+
+// 图表本体由 MetricChart 单测覆盖；这里只验证卡片/footer 结构，避免异步加载 ECharts
+// 在测试环境销毁后继续执行造成未处理异常。
+vi.mock('@/components/patterns/MetricChart.vue', () => ({
+  __esModule: true,
+  default: {
+    name: 'MetricChart',
+    props: ['series', 'valueKind', 'label', 'threshold', 'bandLabels'],
+    template: '<div data-testid="metric-chart" />',
+  },
+}));
 
 const emptySeries = (id: string): MetricSeriesData => ({ id, name: id, points: [] });
 const series = (id: string, points: Array<{ time: string; value: number | null }>): MetricSeriesData => ({ id, name: id, points });

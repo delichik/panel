@@ -17,6 +17,7 @@ const networkProbes = vi.fn();
 const updates = vi.fn();
 const images = vi.fn();
 const config = vi.fn();
+const metricsConfig = vi.fn();
 const applicationsList = vi.fn();
 const toastPush = vi.fn();
 
@@ -39,6 +40,9 @@ vi.mock('@/api/containers', () => ({
 }));
 vi.mock('@/api/networkProbe', () => ({
   networkProbeFacilityApi: { config: (...args: unknown[]) => config(...args) },
+}));
+vi.mock('@/api/metricsFacility', () => ({
+  metricsFacilityApi: { config: (...args: unknown[]) => metricsConfig(...args) },
 }));
 
 function server(overrides: Partial<ServerDto> = {}): ServerDto {
@@ -153,7 +157,8 @@ beforeEach(() => {
   });
   updates.mockResolvedValue({ lastRefreshedAt: null, refreshing: false, updates: [{}, {}, {}] });
   images.mockResolvedValue({ items: [{ id: 'img-1', updateAvailable: true }], observedAt: null, stale: false, refreshing: false });
-  config.mockResolvedValue({ mode: 'all', serverIds: [], version: 1, updatedAt: new Date().toISOString() });
+  config.mockResolvedValue({ mode: 'all', serverIds: [], intervalSeconds: 60, pingCount: 3, pingTimeoutSeconds: 2, thresholds: {}, version: 1, updatedAt: new Date().toISOString() });
+  metricsConfig.mockResolvedValue({ mode: 'all', serverIds: [], retentionDays: 7, collectionIntervalSeconds: 60, cleanupSchedule: 'daily', thresholds: {}, version: 1, updatedAt: new Date().toISOString() });
   applicationsList.mockResolvedValue({
     items: [
       { id: 'app-1', enabled: true, deployingInstanceCount: 0, abnormalInstanceCount: 0 },

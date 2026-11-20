@@ -25,7 +25,7 @@ AppShell
 - padding owner：`ConsolePage` 根是唯一页面 padding owner（桌面 16、窄屏 <1024 为 12）；`PageHeader` 是无 padding 结构件，返回入口在标题上方独立行（保证 h1 与正文左缘对齐）；`EditorPage` footer 全出血、仅垂直间距；`RoutePageFallback` 使用与目标页相同的列宽/padding。
 - 登录/首次改密是独立聚焦面（居中卡片），是内容列左对齐规则的显式例外；维护页使用 1200 列居中。
 - 移动端（<640px）：页面单列；PropertyList 强制 1 列；SettingsCard/FormField/ListCommandBar 纵向堆叠；PageHeader actions 纵向全宽；Dialog footer 2 列整行；表格列隐藏规则用 `hideBelow:'sm'` 再降级（<sm 仅名称+操作，状态/时间折入名称副行或隐藏）；操作仅保留详情+More；Tabs 横向滚动、不压缩标签；服务器详情概览摘要卡改为「发行版/架构标识 + 状态瓦片（2 列）」纵向分行、磁盘当前值为环形图 + 图例，连接信息与最近操作单列；CPU/延迟等当前值只在下方指标与探测面板展示，摘要卡不重复。
-- 概览类仪表页：摘要区与下方卡片区共享同一个 ConsolePage body 滚动 owner，不得用 `h-full grid-rows-page` + 卡片区独立 `overflow-y-auto`；否则内部滚动条会让上下区域宽度不一致。PageHeader actions 在 `<wide` 整行换行，避免选择器/刷新按钮挤压重叠。
+- 概览类仪表页：摘要区与下方卡片区共享同一个 ConsolePage body 滚动 owner，不得用 `h-full grid-rows-page` + 卡片区独立 `overflow-y-auto`；否则内部滚动条会让上下区域宽度不一致。PageHeader actions 在 `<wide` 整行换行，且页头在 `<wide` 同步纵向堆叠（标题/说明在上、actions 在下），避免标题列被整行 actions 挤压成竖排、产生大片空白。
 - 详情卡片列表：需要“每项一张卡”时给 `DetailSection` 传 `surface=false`（只保留标题/说明），由子项 `surface-card` 形成唯一表面，避免 card-in-card。
 - 桌面 `>=1024px`：`h-dvh`、`overflow-hidden`，左侧导航固定，顶部条固定，路由内容区 `overflow-hidden`。
 - Mica 分层（WinUI 3）：页面底是服务器下发的用户背景（Mica 缩略图/预设渐变），AppShell 主区与侧栏用

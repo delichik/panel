@@ -120,6 +120,29 @@ describe('overview model', () => {
     expect(percentTone(96)).toBe('danger');
   });
 
+  it('derives green/yellow/red ranges from configured warning thresholds', () => {
+    // CPU 阈值 80：红色起点 80，黄色起点按默认 70/90 比例自动缩放为 ~62.2。
+    expect(valueTone('cpu', 60, 80)).toBe('success');
+    expect(valueTone('cpu', 70, 80)).toBe('warning');
+    expect(valueTone('cpu', 80, 80)).toBe('danger');
+    // 阈值等于默认红色起点时复现默认区间。
+    expect(valueTone('cpu', 69.9, 90)).toBe('success');
+    expect(valueTone('cpu', 70, 90)).toBe('warning');
+    expect(valueTone('cpu', 90, 90)).toBe('danger');
+    // 延迟阈值 120：黄色起点按默认 80/150 比例缩放为 64。
+    expect(valueTone('latency', 60, 120)).toBe('success');
+    expect(valueTone('latency', 80, 120)).toBe('warning');
+    expect(valueTone('latency', 120, 120)).toBe('danger');
+    // 丢包阈值 5：黄色起点按默认 2/5 比例缩放为 2。
+    expect(valueTone('packetLoss', 1, 5)).toBe('success');
+    expect(valueTone('packetLoss', 3, 5)).toBe('warning');
+    expect(valueTone('packetLoss', 5, 5)).toBe('danger');
+    // 未配置/非法阈值回退固定色阶。
+    expect(valueTone('cpu', 95, null)).toBe('danger');
+    expect(valueTone('cpu', 95, 0)).toBe('danger');
+    expect(valueTone('cpu', 95, Number.NaN)).toBe('danger');
+  });
+
   it('derives node status from reachability only, independent of metric freshness', () => {
     const now = Date.parse('2026-11-16T07:10:00Z');
     expect(nodeStatusKind(server({ reachable: false }))).toBe('offline');

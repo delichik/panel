@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { CheckCircle2, History, RefreshCcw, Server as ServerIcon, XCircle } from '@/icons';
 import { applicationsApi } from '@/api/applications';
 import { containersApi } from '@/api/containers';
+import { metricsFacilityApi } from '@/api/metricsFacility';
 import { networkProbeFacilityApi } from '@/api/networkProbe';
 import { packagesApi } from '@/api/packages';
 import { serversApi, type ServerMetricsSeries } from '@/api/servers';
@@ -18,6 +19,7 @@ import ConsolePage from '@/components/templates/ConsolePage.vue';
 import { useAutoRefresh } from '@/composables/useAutoRefresh';
 import { useI18n } from '@/i18n';
 import type { NetworkProbeConfig, NetworkProbeServerResults } from '@/types/networkProbe';
+import type { MetricsFacilityConfig } from '@/types/metricsFacility';
 import type { ApplicationSummaryDto } from '@/types/applications';
 import type { ServerDto } from '@/types/servers';
 import { isAbortError } from '@/views/_shared/requestState';
@@ -47,6 +49,12 @@ const metricsErrorIds = ref<Set<string>>(new Set());
 const packageUpdatesById = ref<Record<string, number | null>>({});
 const imageUpdatesById = ref<Record<string, number | null>>({});
 const probeConfig = ref<NetworkProbeConfig | null>(null);
+const metricsConfig = ref<MetricsFacilityConfig | null>(null);
+const warningThresholds = computed(() => ({
+  cpu: metricsConfig.value?.thresholds.cpuUsagePercent ?? null,
+  latency: probeConfig.value?.thresholds.latencyMs ?? null,
+  packetLoss: probeConfig.value?.thresholds.packetLossPercent ?? null,
+}));
 const probeSourceId = ref('');
 const probeResults = ref<NetworkProbeServerResults | null>(null);
 const applications = ref<ApplicationSummaryDto[]>([]);
@@ -182,10 +190,11 @@ async function load(options: { initial?: boolean; includeUpdates?: boolean } = {
     refreshing.value = true;
   }
   try {
-    const [serversResult, configResult, applicationsResult] = await Promise.allSettled([
+    const [serversResult, configResult, applicationsResult, metricsConfigResult] = await Promise.allSettled([
       serversApi.list({ signal: request.signal }),
       networkProbeFacilityApi.config({ signal: request.signal }),
       applicationsApi.list({ pageSize: 200 }, { signal: request.signal }),
+      metricsFacilityApi.config({ signal: request.signal }),
     ]);
     if (seq !== loadSeq) return;
     if (serversResult.status === 'rejected') throw serversResult.reason;
@@ -195,6 +204,7 @@ async function load(options: { initial?: boolean; includeUpdates?: boolean } = {
       servers.value = serversResult.value;
     }
     probeConfig.value = configResult.status === 'fulfilled' ? configResult.value : null;
+    metricsConfig.value = metricsConfigResult.status === 'fulfilled' ? metricsConfigResult.value : null;
     // 应用总览是独立摘要：失败只让卡片显示不可用，不能拖垮服务器/指标区域。
     if (applicationsResult.status === 'fulfilled') {
       applications.value = applicationsResult.value.items;
@@ -507,7 +517,7 @@ onMounted(() => {
           </template>
         </EmptyState>
         <div v-else class="grid gap-3 sm:grid-cols-2 wide:grid-cols-3">
-          <ServerCard v-for="card in cards" :key="card.server.id" :card="card" />
+          <ServerCard v-for="card in cards" :key="card.server.id" :card="card" :thresholds="warningThresholds" />
         </div>
       </template>
     </div>

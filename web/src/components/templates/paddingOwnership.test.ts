@@ -44,6 +44,7 @@ describe('page padding ownership', () => {
     }
     // Layout and action wrapping stay in the shell contract.
     expect(header.classes()).toContain('max-lg:flex-col');
+    expect(header.classes()).toContain('max-wide:flex-col');
     const actions = wrapper.get('header > div:last-child');
     expect(actions.classes()).toContain('flex-wrap');
     expect(actions.classes()).toContain('max-wide:w-full');

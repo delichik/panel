@@ -6,12 +6,14 @@ const props = defineProps<{
   kind: HistoryKind;
   values: Array<number | null>;
   label: string;
+  /** 配置的警告阈值；缺省时使用固定色阶。 */
+  threshold?: number | null;
 }>();
 
 // 24 个小时桶直接映射为 24 段（不再两两合并），趋势更细；条高降低避免压过字段名。
 const displayValues = computed<Array<number | null>>(() => props.values);
 
-const tones = computed<Array<MetricTone | null>>(() => displayValues.value.map((value) => valueTone(props.kind, value)));
+const tones = computed<Array<MetricTone | null>>(() => displayValues.value.map((value) => valueTone(props.kind, value, props.threshold)));
 
 const segmentClass: Record<MetricTone, string> = {
   success: 'bg-success',

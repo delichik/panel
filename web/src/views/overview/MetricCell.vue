@@ -17,6 +17,8 @@ defineProps<{
   ariaLabel: string;
   kind?: HistoryKind;
   history?: Array<number | null>;
+  /** 配置的警告阈值；仅历史条使用。 */
+  threshold?: number | null;
   percent?: number | null;
 }>();
 </script>
@@ -38,7 +40,7 @@ defineProps<{
         :aria-label="ariaLabel"
         data-testid="metric-placeholder"
       />
-      <HistoryStrip v-else-if="kind" :kind="kind" :values="history ?? []" :label="ariaLabel" />
+      <HistoryStrip v-else-if="kind" :kind="kind" :values="history ?? []" :label="ariaLabel" :threshold="threshold" />
       <ProgressBar v-else :value="percent ?? 0" :label="ariaLabel" :tone="percentTone(percent ?? null) ?? 'accent'" />
     </template>
   </div>

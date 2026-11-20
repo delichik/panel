@@ -81,8 +81,21 @@ export const toneZones = {
 
 export type HistoryKind = keyof typeof toneZones;
 
-export function valueTone(kind: HistoryKind, value: number | null | undefined): MetricTone | null {
+/**
+ * 历史条/当前值的语义色。配置了警告阈值时，以阈值为红色起点，并按默认
+ * 绿/黄/红区间比例自动推导黄色起点（阈值=默认红色起点时恰好复现默认区间）；
+ * 未配置阈值时沿用固定 `toneZones`。
+ */
+export function valueTone(kind: HistoryKind, value: number | null | undefined, threshold?: number | null): MetricTone | null {
   if (value === null || value === undefined || !Number.isFinite(value)) return null;
+  if (typeof threshold === 'number' && Number.isFinite(threshold) && threshold > 0) {
+    const defaultWarning = toneZones[kind][0].to;
+    const defaultDanger = toneZones[kind][1].to;
+    const warningStart = defaultDanger > 0 ? threshold * (defaultWarning / defaultDanger) : threshold;
+    if (value >= threshold) return 'danger';
+    if (value >= warningStart) return 'warning';
+    return 'success';
+  }
   const zone = toneZones[kind].find((item) => value <= item.to);
   return zone?.tone ?? 'danger';
 }

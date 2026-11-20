@@ -22,7 +22,11 @@ import {
   type MetricTone,
 } from './model';
 
-const props = defineProps<{ card: ServerCardView }>();
+const props = defineProps<{
+  card: ServerCardView;
+  /** 由设施配置派生的警告阈值；缺省时沿用固定色阶。 */
+  thresholds?: { cpu?: number | null; latency?: number | null; packetLoss?: number | null };
+}>();
 
 const { t } = useI18n();
 const router = useRouter();
@@ -62,11 +66,12 @@ interface CellView {
   ariaLabel: string;
   kind?: HistoryKind;
   history?: Array<number | null>;
+  threshold?: number | null;
   percent?: number | null;
 }
 
-function historyCell(icon: Component, kind: HistoryKind, label: string, value: number | null, text: string, history: Array<number | null>, muted: boolean): CellView {
-  const tone = muted || value === null ? null : valueTone(kind, value);
+function historyCell(icon: Component, kind: HistoryKind, label: string, value: number | null, text: string, history: Array<number | null>, muted: boolean, threshold?: number | null): CellView {
+  const tone = muted || value === null ? null : valueTone(kind, value, threshold);
   return {
     label,
     icon,
@@ -75,6 +80,7 @@ function historyCell(icon: Component, kind: HistoryKind, label: string, value: n
     ariaLabel: `${label} · ${t('overviewPage.last24Hours')}`,
     kind,
     history,
+    threshold,
     valueClass: tone ? textToneClass[tone] : 'text-muted-foreground',
   };
 }
@@ -114,6 +120,7 @@ const cpuCell = computed<CellView>(() => historyCell(
   metricsUsable.value ? formatPercent(props.card.metrics.cpuPercent, 1) : '—',
   props.card.cpuHistory,
   !metricsUsable.value,
+  props.thresholds?.cpu,
 ));
 
 const loadCell = computed<CellView>(() => plainCell(
@@ -144,6 +151,7 @@ const latencyCell = computed<CellView>(() => (
       probeMissing.value ? '—' : formatLatency(props.card.probeLatencyMs),
       props.card.latencyHistory,
       probeStale.value,
+      props.thresholds?.latency,
     )
 ));
 
@@ -166,6 +174,7 @@ const lossCell = computed<CellView>(() => (
       probeMissing.value ? '—' : formatPacketLoss(props.card.probePacketLossPercent),
       props.card.lossHistory,
       probeStale.value,
+      props.thresholds?.packetLoss,
     )
 ));
 
