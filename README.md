@@ -1,186 +1,177 @@
-﻿# Seamark
+<div align="center">
 
-English | [简体中文](README.zh-CN.md)
+<h1>Seamark</h1>
 
-Seamark is an alpha-stage server operations panel for small Linux fleets. It helps you connect Debian and Ubuntu servers over SSH, see their health at a glance, run package maintenance, deploy container applications through panel-agent and Docker Engine API, and manage DNS and ACME certificates from one web UI.
+<p><strong>A self-hosted operations panel for a handful of Linux servers.</strong></p>
 
-The project is built for people who run their own servers and for humans sharing code with each other. It aims to stay understandable: a Go backend, a Vue frontend, local SQLite data, and task commands that are easy to run.
+<p>
+  <img alt="Status: alpha" src="https://img.shields.io/badge/status-alpha-orange?style=flat-square">
+  <img alt="Go 1.25" src="https://img.shields.io/badge/Go-1.25-00ADD8?style=flat-square&amp;logo=go&amp;logoColor=white">
+  <img alt="Vue 3" src="https://img.shields.io/badge/Vue-3-4FC08D?style=flat-square&amp;logo=vuedotjs&amp;logoColor=white">
+  <img alt="Container image" src="https://img.shields.io/badge/ghcr.io-delichik%2Fpanel-2496ED?style=flat-square&amp;logo=docker&amp;logoColor=white">
+  <img alt="Platforms" src="https://img.shields.io/badge/linux-amd64%20%7C%20arm64-lightgrey?style=flat-square">
+</p>
 
-## What Seamark Can Do
+<p>English | <a href="README.zh-CN.md">简体中文</a></p>
 
-- Add SSH credentials and register servers.
-- Probe server reachability, OS details, system traits, and passwordless sudo support.
-- Collect overview metrics for CPU, memory, disk, network, uptime, kernel, and load.
-- Refresh APT package updates and run selected or full upgrades.
-- Install UFW where supported.
-- Deploy panel-agent to servers with mTLS, installing and starting Docker from the distribution packages when the default local socket is missing.
-- Check agent compatibility, Docker health, and runtime status.
-- Deploy Docker-based applications through panel-agent using Docker Engine API.
-- Inspect Panel-managed containers from a node with the read-only panel-agent CLI (`panel-agent --cli apps list|inspect|where`).
-- Configure application files, mounts, ports, placement, runtime actions, logs, and reverse proxy routes.
-- Manage Cloudflare domains and issue ACME certificates.
-- Track background tasks and task logs.
-- Switch the UI between English and Simplified Chinese.
+</div>
 
-## Status
+<img src="docs/images/overview-en.png" alt="Seamark overview: node status, capacity, and per-server cards" width="100%">
 
-Seamark is currently alpha software. It already has useful workflows, but you should expect changes in configuration, database migrations, and UI behavior as the project grows. Use it first on development or non-critical servers, and keep backups of the Seamark data volume if you run it for real work.
+<p align="center"><sub>The Overview page with demo data. The UI ships in English and Simplified Chinese.</sub></p>
 
-## Supported Target Systems
+Seamark brings SSH access, health metrics, APT maintenance, container application delivery, an Nginx entry gateway, DNS, ACME certificates, and encrypted backups into a single web UI. It is built for people who run their own Debian and Ubuntu machines, not for platform teams operating a cluster.
 
-Seamark support is intentionally explicit and will expand over time.
+It runs as one container backed by local SQLite storage, with a small mTLS agent on each managed server. No external database, no Kubernetes, and no Docker socket mounted into Panel.
 
-Current supported systems:
+> **Alpha status.** Seamark is usable, but configuration, database migrations, and UI behavior can still change between releases. Back up the data volume before every upgrade and try significant changes on non-critical servers first.
 
-- Debian 12
-- Debian 13
-- Ubuntu 20.04 LTS
-- Ubuntu 22.04 LTS
-- Ubuntu 24.04 LTS
-- Ubuntu 24.10
-- Ubuntu 25.04
-- Ubuntu 25.10
-- Ubuntu 26.04 LTS
+## Features
 
-Notes:
+- **Fleet management.** Add servers with password or key SSH credentials, confirm host keys on first contact, and route connections through another managed server or a SOCKS5 proxy.
+- **Health and maintenance.** 24-hour metrics on the overview, node-to-node latency and packet loss, APT refreshes and upgrades, scheduled security updates, and UFW rules.
+- **Container applications.** Describe an application once — image, files, mounts, ports, health checks, and proxy routes — then validate it, save an immutable revision, and roll it out to one or more servers.
+- **Edge and certificates.** A managed Nginx gateway with per-domain HTTPS, HTTP/2, HTTP/3, HSTS, custom directives, and rolling updates. Cloudflare DNS, DNS-01 ACME certificates, self-signed CAs, and a key asset list.
+- **Facilities.** NFS storage shares, network probes, and configurable metrics collection with retention and warning thresholds.
+- **Operations and access.** Event stream and JSONL logs, in-app notifications, backup and restore, automatic updates, multi-user roles, scoped access tokens, and an English/Chinese UI.
 
-- Servers are managed over SSH.
-- Password or private-key SSH credentials are supported.
-- Many maintenance actions require root or passwordless sudo.
-- Package maintenance uses APT.
-- Application runtime requires panel-agent on target servers and a reachable Docker Engine endpoint. The default Docker host is `unix:///var/run/docker.sock`.
+## Quick start
 
-## Get Started
+You need a Linux host with Docker Engine and the Compose plugin. Panel is separate from the servers it manages.
 
-Seamark deployment is container-only for end users:
+```yaml
+services:
+  panel:
+    image: ghcr.io/delichik/panel:latest
+    container_name: panel
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8443:8443"
+    volumes:
+      - panel-data:/app/data
 
-- [Deploy Seamark with Docker Compose or Docker](docs/deployment.md)
-- [Follow the first-use and application deployment guide](docs/user-guide.md)
+volumes:
+  panel-data:
+    name: panel-data
+```
 
-The deployment guide covers persistent storage, first login, HTTPS, backup, upgrades, and troubleshooting. The user guide walks through credentials, servers, panel-agent, Docker health, the first application, domains, certificates, tasks, and daily maintenance.
+```bash
+docker compose up -d
+```
+
+Open `https://127.0.0.1:8443`. On first start, create the initial administrator (defaults: `admin` / `admin`) and choose a new password. The built-in TLS certificate is self-signed.
+
+The example binds to loopback. Use `8443:8443` or a TLS-terminating reverse proxy for remote access. Keep `/app/data` on the same volume across upgrades, and make sure it is owned by the image's `panel` user if you reuse a volume from another setup.
+
+## Documentation
+
+- [Deployment guide](docs/deployment.md) — Compose and Docker, HTTPS, persistent data, backups, upgrades, troubleshooting.
+- [User guide](docs/user-guide.md) — first login, credentials, servers, agents, the first application, domains, certificates, and daily work.
+- [Acceptance specifications](docs/agents/acceptance/README.md) — behavior contracts and the change-impact matrix for contributors.
+- [i18n guide](docs/agents/i18n-guide.md) — rules for user-visible copy and translations.
+
+## Architecture
+
+```text
+Browser
+  │ HTTPS 8443
+  ▼
+Seamark Panel ── SSH ─────────────────► managed servers
+  │ Go + Vue                          ├─ panel-agent :9786 (gRPC, mTLS)
+  │                                   │    ├─ Docker Engine API
+  │                                   │    ├─ APT / systemd / UFW
+  │                                   │    └─ Nginx gateway, NFS exports
+  └─ SQLite ×4 + dataRoot
+```
+
+Panel keeps control-plane state in four SQLite databases under one data directory, serves the built frontend, and talks to servers over SSH or the mTLS agent. The agent reports metrics, applies container desired state, and runs privileged node operations under its own mTLS identity; Panel never mounts the host's Docker socket.
+
+## Supported systems
+
+`Debian 12` · `Debian 13` · `Ubuntu 20.04` · `Ubuntu 22.04` · `Ubuntu 24.04` · `Ubuntu 24.10` · `Ubuntu 25.04` · `Ubuntu 25.10` · `Ubuntu 26.04`
+
+Targets must be `amd64` or `arm64`, reachable over SSH, with root or passwordless sudo for maintenance. Other distributions can be probed, but APT/systemd/UFW writes are refused. See the [deployment guide](docs/deployment.md) for agent prerequisites.
 
 ## Development
 
-The commands below are for working on Seamark from source. They are not required for a normal deployment.
-
-### Requirements
-
-- Go 1.25+
-- Node.js 22+
-- npm
-- [Task](https://taskfile.dev/)
-
-Docker is only required when building or testing the production container image.
-
-### Run From Source
-
-Install web dependencies:
+Go 1.25+, Node.js 22+, npm, and [Task](https://taskfile.dev/). Docker is only needed to build the image; `protoc` only to regenerate the agent protocol.
 
 ```bash
 npm --prefix web ci
-```
-
-Copy the example configuration:
-
-```bash
 cp config.example.json config.json
 export PANEL_CONFIG=./config.json
-```
 
-PowerShell:
-
-```powershell
-Copy-Item config.example.json config.json
-$env:PANEL_CONFIG = ".\config.json"
-```
-
-Start the backend:
-
-```bash
+# terminal 1
 task run:backend
-```
 
-Open another terminal and start the web development server:
-
-```bash
+# terminal 2
 task run:web
 ```
 
-Open `http://127.0.0.1:5173`. Vite proxies `/api` requests to the backend.
+Open `http://127.0.0.1:5173` and complete setup with `admin` / `admin`. The development backend listens on `127.0.0.1:8080`; Vite proxies `/api` to it.
 
-The local development login is `admin/admin`. Seamark requires a password change on first use.
+<details>
+<summary><strong>Configuration, tasks, and project layout</strong></summary>
 
-### Development Configuration
+### Configuration
 
-Seamark loads configuration in this order:
-
-1. Built-in defaults.
-2. The JSON file pointed to by `PANEL_CONFIG`.
-3. Environment variables.
-
-Common config values:
+Configuration loads from built-in defaults, then the JSON file named by `PANEL_CONFIG`, then environment variables. Relative paths resolve from the config file's directory.
 
 | Key | Purpose | Default |
 | --- | --- | --- |
-| `listenAddress` | Backend listen address | `127.0.0.1:8080` |
+| `listenAddress` | Backend listen address | `127.0.0.1:8443` |
 | `dataRoot` | Root directory for Seamark data | `data` |
-| `appDatabase` | Main SQLite database | `data/db/app.db` |
-| `metricsDatabase` | Metrics SQLite database | `data/db/metrics.db` |
+| `appDatabase` | Application SQLite database | `data/db/app.db` |
+| `logDatabase` | Log and event-index SQLite database | `data/db/log.db` |
+| `coordinationDatabase` | Coordination SQLite database | `data/db/coordination.db` |
+| `metricsDatabase` | Metrics time-series SQLite database | `data/db/metrics.db` |
 | `certificates.acmeDirectoryUrl` | ACME directory URL | Let's Encrypt production |
 
-Supported environment variables:
+Environment overrides: `PANEL_CONFIG`, `PANEL_LISTEN_ADDRESS`, `PANEL_ADMIN_USERNAME`, `PANEL_ADMIN_DISPLAY_NAME`, `PANEL_ADMIN_PASSWORD`, `PANEL_ADMIN_PASSWORD_HASH`, `PANEL_DATA_ROOT`, `PANEL_APP_DATABASE`, `PANEL_LOG_DATABASE` (legacy alias `PANEL_TASK_DATABASE`), `PANEL_COORDINATION_DATABASE`, `PANEL_METRICS_DATABASE`, `PANEL_CERT_ACME_DIRECTORY_URL`, and `PANEL_WEB_PROXY_TARGET` for the Vite proxy.
 
-- `PANEL_CONFIG`
-- `PANEL_LISTEN_ADDRESS`
-- `PANEL_DATA_ROOT`
-- `PANEL_APP_DATABASE`
-- `PANEL_METRICS_DATABASE`
-- `PANEL_CERT_ACME_DIRECTORY_URL`
-- `PANEL_WEB_PROXY_TARGET` for the development web proxy
+Runtime settings such as token lifetime, command timeout, appearance, agent download, automatic updates, image registry, and backup options are stored in the application database and managed from **Settings**.
 
-Administrator credentials, the JWT secret, command timeout, certificate email, language, token expiration, metrics retention, security settings, and certificate defaults are stored in the application database and managed from **Settings**.
-
-### Commands
+### Tasks
 
 ```bash
-task run:backend
-task run:web
-task test:backend
-task test:web
-task build:backend
-task build:web
-task build
+task run:backend          # Panel backend
+task run:web              # Vite dev server
+task run:web:test         # frontend against the mock API
+task test:backend         # Go tests
+task test:web             # frontend unit tests
+task test:agent           # agent tests
+task test:appdeploy       # application deployment integration tests
+task build:backend        # compile Go packages
+task build:web            # type-check and build the frontend
+task build                # both sides
 ```
 
-### Project Layout
+`task generate:agent-contract-hash` refreshes the agent gRPC contract hash. `task generate:agent-proto` regenerates protobuf bindings.
+
+### Project layout
 
 ```text
-cmd/panel              backend entry point
-internal/              backend services, handlers, storage, integrations
-web/                   Vue 3 frontend
-web/src/i18n/          frontend translations
-docs/agents/           repository collaboration and i18n notes
-tmp/                   temporary test and build files
-Taskfile.yml           common task entry points
-config.example.json    example runtime config
-Dockerfile             production container build
+cmd/panel/                      Panel server and web host
+cmd/panel-init/                 container PID 1 supervisor
+cmd/panel-agent/                agent installed on managed servers
+internal/agent/                 agent runtime: gRPC, Docker, NFS, probes
+internal/orchestrator/          application desired/observed reconciliation
+internal/modules/               domain modules
+internal/platform/              config, SQLite/ORM, logging, SSH, Linux adapters
+web/                            Vue 3 + TypeScript frontend
+docs/                           deployment, user guide, acceptance specs
 ```
 
-Useful entry points:
+</details>
 
-- Backend startup: `cmd/panel/main.go`
-- Route wiring and static UI serving: `internal/bootstrap/panel/app.go`
-- Database migrations: `internal/platform/database/migrations.go`
-- Target OS adapters: `internal/platform/linux/`
-- Agent runtime and Docker API logic: `internal/agent/`, `internal/modules/applications/runtime/`
-- Application deployment logic: `internal/modules/applications/`
-- Frontend routes: `web/src/router/index.ts`
-- Frontend i18n setup: `web/src/i18n/index.ts`
+### Releases
 
-## Working With Text
+`version.json` holds the major and minor version. Pushes to `main` produce semver tags, `latest`, and commit-tagged images plus a GitHub Release; pushes to `dev` publish only the `dev` tag. Images are multi-architecture and include agent bundles for both supported architectures.
 
-Seamark has English and Simplified Chinese UI strings. When changing user-visible text in the application, follow the i18n guide in `docs/agents/i18n-guide.md` and keep `docs/agents/i18n-translation-status.md` up to date.
+## Contributing
+
+Read [AGENTS.md](AGENTS.md) and the [acceptance specification index](docs/agents/acceptance/README.md) before changing behavior. Frontend work follows the [design specification index](docs/agents/specifications/frontend/INDEX.md); user-visible copy follows the [i18n guide](docs/agents/i18n-guide.md). Run only the checks relevant to your change.
 
 ## License
 
-No license file is currently included. If you plan to reuse or redistribute the project, check with the project owner first.
+No license file is included yet. Treat the repository as all rights reserved and ask the project owner before reusing or redistributing it.
