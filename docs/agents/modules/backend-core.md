@@ -36,6 +36,7 @@
 - 配置：`internal/platform/config/config.go`
 - 进程日志：`internal/platform/logging/`
 - 数据库连接和迁移：`internal/platform/database/store.go`、`internal/platform/database/migrations.go`、`internal/platform/database/orm/`、`internal/platform/database/models/`
+- 进程内短时缓存：`internal/platform/cache/`（标准库依赖；短 TTL、分片 LRU、单飞；不感知数据库/ORM，使用方自行 `GetOrLoad` 与写后 `Delete`）；认证/权限模块用其缓存 2s 的密钥代数与会话投影（用户 + 角色 + 权限，不含密码哈希），身份/角色/权限/代数/密钥写成功后清空。
 - 应用部署控制面：`internal/orchestrator/`（Planner、Job lease、ObservationWriter、RuntimeReconcile worker）
 - 认证：`internal/modules/identity/`
 - 运行时设置：`internal/modules/settings/`

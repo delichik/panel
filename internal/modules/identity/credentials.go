@@ -161,14 +161,11 @@ func (s *Service) validateCredential(ctx context.Context, token string) (Session
 	if credential.RevokedAt != nil || !now.Before(credential.ExpiresAt) {
 		return Session{}, false
 	}
-	user, err := s.accountByID(ctx, credential.UserID)
-	if err != nil || user.Status != "active" || credential.UserGeneration != user.Generation {
+	entry, err := s.resolveSession(ctx, credential.UserID)
+	if err != nil || entry.Status != "active" || credential.UserGeneration != entry.Generation {
 		return Session{}, false
 	}
-	roles, permissions, err := s.rolesAndPermissions(ctx, user)
-	if err != nil {
-		return Session{}, false
-	}
+	roles, permissions := entry.Roles, entry.Permissions
 	if credential.Scope == "readonly" {
 		permissions = permissioncatalog.FilterReadOnly(permissions)
 	}
@@ -179,8 +176,8 @@ func (s *Service) validateCredential(ctx context.Context, token string) (Session
 		`, now.Format(time.RFC3339Nano), credential.ID, now.Add(-time.Minute).Format(time.RFC3339Nano))
 	}
 	return Session{
-		UserID: user.ID, Username: user.Username, DisplayName: user.DisplayName,
-		IsBuiltinAdmin: user.Builtin, Roles: roles, Permissions: permissions,
+		UserID: entry.UserID, Username: entry.Username, DisplayName: entry.DisplayName,
+		IsBuiltinAdmin: entry.Builtin, Roles: roles, Permissions: permissions,
 		ExpiresAt: credential.ExpiresAt, AuthKind: "credential",
 		CredentialID: credential.ID, CredentialScope: credential.Scope,
 		AllowManagement: credential.AllowManagement,

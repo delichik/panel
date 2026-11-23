@@ -10,6 +10,14 @@
 - `COV-004`：已存在但暂未在 UI 暴露的 API 或开发模式能力仍需服务端验收项，并在文档中标明可达条件。
 - `COV-005`：历史兼容入口在移除前必须有迁移/拒绝策略；清单移除不代表可直接删除旧数据或远端资源。
 
+- 独立进程内短时缓存模块（2026-11-23，纯后端平台模块，无 API/表/路由/配置/后台任务变化）：
+  - **模块**：新增 `internal/platform/cache`，只依赖标准库；提供 `Get/Set/Delete/DeletePrefix/Incr/GetOrLoad/Flush/Stats/Close` 与 JSON 泛型 helper；默认 TTL 2s、硬上限 60s、分片 LRU、单飞、容量/单值上限。
+  - **边界**：不集成 ORM/SQLite、不做自动失效、不持久化、不跨进程；使用方自行负责 key、TTL、写后失效与不缓存秘密。
+  - **接入**：认证/权限模块已使用该缓存——`Validate` 的密钥代数和会话投影（用户 + 角色 + 权限，不含密码哈希）以 2s TTL 读取；访问凭证复用同一会话投影；用户/角色/权限/用户代数/密钥代数写成功后立即清空，保证下一请求生效。
+  - **不变**：主 Panel `method/path` 保持 **221**、ORM 表数 **53**、前端路由声明 **36** 均不变；无新表/列/迁移、无新后台任务、无 i18n 词条变化。
+  - 对应 `DATA-CACHE-001..011`、`ARCH-CON-006`、`ID-PERM-003`、`ID-USR-004/006/007`、`ID-SES-004/006`、`ID-CRED-003/004`；设计见 `tmp/sqlite-memory-cache-design.md`。
+  - **验证证据**：`go test ./internal/platform/cache/... -count=1`、`go test ./internal/modules/identity/... -count=1`、`go test ./internal/bootstrap/panel/... -count=1`、`go vet ./internal/platform/cache/...`、`task build:backend`；竞态测试需在具备 CGO 的环境执行 `go test -race ./internal/platform/cache/...`。
+
 - 多用户 / 角色 / 权限 / 访问凭证 / 初始化界面（2026-11-23，跨前后端 + 数据库 + 认证协议）：
   - **路由**：新增 18 条（`GET /setup/status`、`POST /setup`、`GET /permissions`、7 条 `/users*`、5 条 `/roles*`、3 条 `/access-credentials*`），主 Panel `method/path` 计数 **203 → 221**（`TestAPIRouteManifest` 的 `wantCount=221`；`api-route-inventory.md` 同为 221 条）；前端路由声明 **31 → 36**（`/setup`、`/account`、`/access/:section?`、`/forbidden`）。
   - **数据库**：`auth_accounts` 迁移为 `users`（`builtin`、`generation`、`must_change_password`），新增 `roles`、`role_permissions`、`user_roles`、`access_credentials`；ORM 表数 **49 → 53**；新增 pre-migration Step `migrate_auth_accounts_to_users`。

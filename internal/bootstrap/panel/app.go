@@ -34,6 +34,7 @@ import (
 	"panel/internal/modules/settings"
 	"panel/internal/modules/systeminfo"
 	"panel/internal/modules/tasks"
+	"panel/internal/platform/cache"
 	"panel/internal/platform/config"
 	"panel/internal/platform/database"
 	"panel/internal/platform/events"
@@ -59,6 +60,7 @@ const (
 type App struct {
 	cfg            config.Config
 	store          *database.Store
+	cache          *cache.Cache
 	mux            *http.ServeMux
 	auth           *auth.Service
 	tasks          *tasks.Worker
@@ -151,7 +153,18 @@ func New(cfg config.Config) (*App, error) {
 	if err := appearanceSvc.CleanupOrphans(initCtx, time.Now().UTC()); err != nil {
 		logging.From(initCtx).Warn("appearance orphan cleanup failed", zap.Error(err))
 	}
-	authSvc, err := auth.NewService(store.AppDB(), cfg, settingsSvc)
+	cacheSvc, err := cache.New(cache.Config{})
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	keepCache := false
+	defer func() {
+		if !keepCache {
+			_ = cacheSvc.Close()
+		}
+	}()
+	authSvc, err := auth.NewService(store.AppDB(), cfg, settingsSvc, auth.WithCache(cacheSvc))
 	if err != nil {
 		_ = store.Close()
 		return nil, err
@@ -316,6 +329,7 @@ func New(cfg config.Config) (*App, error) {
 	a := &App{
 		cfg:            cfg,
 		store:          store,
+		cache:          cacheSvc,
 		mux:            http.NewServeMux(),
 		auth:           authSvc,
 		tasks:          taskWorker,
@@ -368,6 +382,7 @@ func New(cfg config.Config) (*App, error) {
 	eventsSvc := modevents.NewService(store.AppDB(), filepath.Join(cfg.DataRoot, "logs"))
 	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), taskHandler, metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), modevents.NewHandler(eventsSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), facilityapps.NewHandler(facilitySvc), networkprobe.NewHandler(probeSvc), metricsfacility.NewHandler(metricsFacility), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), appearance.NewHandler(appearanceSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc), backups.NewHandler(backupSvc))
 	logging.From(initCtx).Info("application initialized")
+	keepCache = true
 	return a, nil
 }
 
@@ -381,7 +396,14 @@ func (a *App) Close() error {
 		a.checkDone = nil
 	}
 	a.stopBackgroundServices()
-	return a.store.Close()
+	var err error
+	if a.cache != nil {
+		err = a.cache.Close()
+	}
+	if closeErr := a.store.Close(); err == nil {
+		err = closeErr
+	}
+	return err
 }
 
 // stopBackgroundServices stops every started background worker in dependency

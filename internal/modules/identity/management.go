@@ -154,6 +154,7 @@ func (s *Service) CreateUser(ctx context.Context, input UserCreateInput) (UserVi
 	}); err != nil {
 		return UserView{}, err
 	}
+	s.invalidateIdentityCaches()
 	return s.GetUser(ctx, user.ID)
 }
 
@@ -219,6 +220,7 @@ func (s *Service) UpdateUser(ctx context.Context, actorID, userID string, input 
 	}); err != nil {
 		return UserView{}, err
 	}
+	s.invalidateIdentityCaches()
 	return s.GetUser(ctx, userID)
 }
 
@@ -236,7 +238,7 @@ func (s *Service) DeleteUser(ctx context.Context, actorID, userID string) error 
 	if userID == actorID {
 		return panelerr.Validation("cannot_delete_self", "You cannot delete your own account")
 	}
-	return orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+	if err := orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		if _, err := orm.RawExec(ctx, tx, `DELETE FROM access_credentials WHERE user_id = ?`, userID); err != nil {
 			return err
 		}
@@ -244,7 +246,11 @@ func (s *Service) DeleteUser(ctx context.Context, actorID, userID string) error 
 			return err
 		}
 		return orm.New(tx).From("users").Where("id = ?", userID).Delete(ctx)
-	})
+	}); err != nil {
+		return err
+	}
+	s.invalidateIdentityCaches()
+	return nil
 }
 
 func (s *Service) ResetUserPassword(ctx context.Context, userID, password string) error {
@@ -265,12 +271,17 @@ func (s *Service) ResetUserPassword(ctx context.Context, userID, password string
 	if err != nil {
 		return err
 	}
-	return orm.New(s.db).From("users").Where("id = ?", userID).UpdateColumns(ctx, map[string]any{
+	err = orm.New(s.db).From("users").Where("id = ?", userID).UpdateColumns(ctx, map[string]any{
 		"password_hash":        string(hash),
 		"must_change_password": 1,
 		"generation":           user.Generation + 1,
 		"updated_at":           time.Now().UTC().Format(time.RFC3339Nano),
 	})
+	if err != nil {
+		return err
+	}
+	s.invalidateIdentityCaches()
+	return nil
 }
 
 func (s *Service) ListRoles(ctx context.Context) ([]RoleView, error) {
@@ -333,6 +344,7 @@ func (s *Service) CreateRole(ctx context.Context, input RoleSaveInput) (RoleView
 	}); err != nil {
 		return RoleView{}, err
 	}
+	s.invalidateIdentityCaches()
 	return s.GetRole(ctx, role.ID)
 }
 
@@ -365,6 +377,7 @@ func (s *Service) UpdateRole(ctx context.Context, roleID string, input RoleSaveI
 	}); err != nil {
 		return RoleView{}, err
 	}
+	s.invalidateIdentityCaches()
 	return s.GetRole(ctx, roleID)
 }
 
@@ -386,12 +399,16 @@ func (s *Service) DeleteRole(ctx context.Context, roleID string) error {
 	if count > 0 {
 		return panelerr.Conflict("role_in_use", "Role is still assigned to users")
 	}
-	return orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+	if err := orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		if err := orm.New(tx).From("role_permissions").Where("role_id = ?", roleID).Delete(ctx); err != nil {
 			return err
 		}
 		return orm.New(tx).From("roles").Where("id = ?", roleID).Delete(ctx)
-	})
+	}); err != nil {
+		return err
+	}
+	s.invalidateIdentityCaches()
+	return nil
 }
 
 func (s *Service) normalizeRoleIDs(ctx context.Context, ids []string) ([]string, error) {

@@ -18,6 +18,7 @@ import (
 
 	"panel/internal/modules/identity/permissioncatalog"
 	"panel/internal/modules/settings"
+	"panel/internal/platform/cache"
 	"panel/internal/platform/config"
 	"panel/internal/platform/database/models"
 	"panel/internal/platform/database/orm"
@@ -33,6 +34,10 @@ const (
 	maxPasswordBytes       = 72
 	minUsernameLength      = 3
 	maxUsernameLength      = 64
+
+	identityCacheTTL         = 2 * time.Second
+	identityKeyGenerationKey = "identity:key-generation"
+	identitySessionKeyPrefix = "identity:session:"
 )
 
 var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
@@ -42,8 +47,18 @@ type Service struct {
 	cfg       config.Config
 	db        *sql.DB
 	runtime   *settings.Service
+	cache     *cache.Cache
 	limiter   *loginRateLimiter
 	dummyHash string
+}
+
+// Option 调整 Service 的可选依赖。
+type Option func(*Service)
+
+// WithCache enables the short-TTL cache for session and key-generation reads.
+// A nil cache (the default) disables caching.
+func WithCache(c *cache.Cache) Option {
+	return func(s *Service) { s.cache = c }
 }
 
 // Session 是认证后的调用者上下文。权限为实时解析结果。
@@ -95,8 +110,68 @@ type account struct {
 	CreatedAt          time.Time
 }
 
-func NewService(db *sql.DB, cfg config.Config, runtime *settings.Service) (*Service, error) {
+// sessionCacheEntry 是会话解析的可缓存投影，刻意不包含 password_hash。
+type sessionCacheEntry struct {
+	UserID             string    `json:"userId"`
+	Username           string    `json:"username"`
+	DisplayName        string    `json:"displayName"`
+	Status             string    `json:"status"`
+	Builtin            bool      `json:"builtin"`
+	Generation         int64     `json:"generation"`
+	MustChangePassword bool      `json:"mustChangePassword"`
+	Roles              []RoleRef `json:"roles"`
+	Permissions        []string  `json:"permissions"`
+}
+
+func identitySessionKey(userID string) string {
+	return identitySessionKeyPrefix + userID
+}
+
+// invalidateIdentityCaches 清除密钥代数与全部会话投影。身份/角色/权限写成功后调用。
+func (s *Service) invalidateIdentityCaches() {
+	if s.cache == nil {
+		return
+	}
+	s.cache.Delete(identityKeyGenerationKey)
+	s.cache.DeletePrefix(identitySessionKeyPrefix)
+}
+
+func (s *Service) loadSessionCacheEntry(ctx context.Context, userID string) (sessionCacheEntry, error) {
+	user, err := s.accountByID(ctx, userID)
+	if err != nil {
+		return sessionCacheEntry{}, err
+	}
+	roles, permissions, err := s.rolesAndPermissions(ctx, user)
+	if err != nil {
+		return sessionCacheEntry{}, err
+	}
+	return sessionCacheEntry{
+		UserID:             user.ID,
+		Username:           user.Username,
+		DisplayName:        user.DisplayName,
+		Status:             user.Status,
+		Builtin:            user.Builtin,
+		Generation:         user.Generation,
+		MustChangePassword: user.MustChangePassword,
+		Roles:              roles,
+		Permissions:        permissions,
+	}, nil
+}
+
+func (s *Service) resolveSession(ctx context.Context, userID string) (sessionCacheEntry, error) {
+	if s.cache == nil {
+		return s.loadSessionCacheEntry(ctx, userID)
+	}
+	return cache.GetOrLoadJSON(ctx, s.cache, identitySessionKey(userID), identityCacheTTL, func(ctx context.Context) (sessionCacheEntry, error) {
+		return s.loadSessionCacheEntry(ctx, userID)
+	})
+}
+
+func NewService(db *sql.DB, cfg config.Config, runtime *settings.Service, options ...Option) (*Service, error) {
 	s := &Service{cfg: cfg, db: db, runtime: runtime, limiter: newLoginRateLimiter()}
+	for _, option := range options {
+		option(s)
+	}
 	hash, err := bcrypt.GenerateFromPassword([]byte("panel-no-such-user"), bcrypt.DefaultCost)
 	if err != nil {
 		return nil, err
@@ -245,6 +320,7 @@ func (s *Service) createBuiltinAdmin(ctx context.Context, username, displayName,
 	}); err != nil {
 		return account{}, err
 	}
+	s.invalidateIdentityCaches()
 	return account{
 		ID: user.ID, Username: user.Username, DisplayName: user.DisplayName,
 		PasswordHash: user.PasswordHash, Status: user.Status, Builtin: true,
@@ -330,12 +406,8 @@ func (s *Service) Validate(ctx context.Context, token string) (Session, bool) {
 	if err != nil || claims.KeyGeneration != keyGen {
 		return Session{}, false
 	}
-	user, err := s.accountByID(ctx, claims.Subject)
-	if err != nil || user.Status != "active" || user.Generation != claims.UserGeneration {
-		return Session{}, false
-	}
-	roles, permissions, err := s.rolesAndPermissions(ctx, user)
-	if err != nil {
+	entry, err := s.resolveSession(ctx, claims.Subject)
+	if err != nil || entry.Status != "active" || entry.Generation != claims.UserGeneration {
 		return Session{}, false
 	}
 	var expiresAt time.Time
@@ -343,15 +415,15 @@ func (s *Service) Validate(ctx context.Context, token string) (Session, bool) {
 		expiresAt = time.Unix(claims.ExpiresAt, 0).UTC()
 	}
 	return Session{
-		UserID:             user.ID,
-		Username:           user.Username,
-		DisplayName:        user.DisplayName,
-		IsBuiltinAdmin:     user.Builtin,
-		Roles:              roles,
-		Permissions:        permissions,
+		UserID:             entry.UserID,
+		Username:           entry.Username,
+		DisplayName:        entry.DisplayName,
+		IsBuiltinAdmin:     entry.Builtin,
+		Roles:              entry.Roles,
+		Permissions:        entry.Permissions,
 		Token:              token,
 		ExpiresAt:          expiresAt,
-		MustChangePassword: user.MustChangePassword,
+		MustChangePassword: entry.MustChangePassword,
 		AuthKind:           "session",
 	}, true
 }
@@ -420,6 +492,7 @@ func (s *Service) UpdateAccount(ctx context.Context, userID string, input Accoun
 	}); err != nil {
 		return AccountResult{}, err
 	}
+	s.invalidateIdentityCaches()
 	return AccountResult{MustRelogin: true}, nil
 }
 
@@ -438,6 +511,7 @@ func (s *Service) UpdateJWTSecret(ctx context.Context, secret string) error {
 		return err
 	}
 	s.runtime.ApplyJWTSecret(secret)
+	s.invalidateIdentityCaches()
 	return nil
 }
 
@@ -446,7 +520,11 @@ func (s *Service) BumpUserGeneration(ctx context.Context, userID string) error {
 	_, err := orm.RawExec(ctx, s.db,
 		`UPDATE users SET generation = generation + 1, updated_at = ? WHERE id = ?`,
 		time.Now().UTC().Format(time.RFC3339Nano), userID)
-	return err
+	if err != nil {
+		return err
+	}
+	s.invalidateIdentityCaches()
+	return nil
 }
 
 func (s *Service) issueSession(ctx context.Context, user account) (Session, error) {
@@ -632,6 +710,13 @@ func (s *Service) rolesForUser(ctx context.Context, userID string) ([]RoleRef, e
 }
 
 func (s *Service) keyGeneration(ctx context.Context) (int64, error) {
+	if s.cache == nil {
+		return s.loadKeyGeneration(ctx)
+	}
+	return cache.GetOrLoadJSON(ctx, s.cache, identityKeyGenerationKey, identityCacheTTL, s.loadKeyGeneration)
+}
+
+func (s *Service) loadKeyGeneration(ctx context.Context) (int64, error) {
 	var value string
 	if err := orm.New(s.db).From("auth_state").Where("key = ?", authStateKeyGeneration).Select("value").ScanValue(ctx, &value); err != nil {
 		return 0, err
