@@ -27,7 +27,9 @@ type runSummary struct {
 
 // RunAutoUpdateTask 是 auto_update_run 的执行入口（TASK-PER-003）：
 //  1. 执行时重新读取设置（以最新快照为准；两开关都关直接完成 disabled）。
-//  2. 有界刷新镜像/软件包缓存（最佳努力，超时或部分失败只记日志）。
+//  2. 有界刷新应用镜像 digest、节点镜像与软件包缓存（最佳努力，超时或部分
+//     失败只记日志）。应用镜像刷新不可省略，否则应用的 ImageUpdateAvailable
+//     永远停留在上次检查结果，应用阶段筛不到任何更新。
 //  3. 应用更新阶段（appsEnabled）：用户应用镜像（按对象开关过滤）+ 入口代理镜像
 //     逐节点滚动；入口代理失败不阻断后续软件包阶段。
 //  4. 软件包更新阶段（packagesEnabled）：逐服务器串行执行 security/all。
@@ -47,27 +49,33 @@ func (s *Service) RunAutoUpdateTask(tc tasks.TaskContext) error {
 	rt, manual := s.resolveRunSettings(task)
 	if manual {
 		_ = s.tasks.AppendLog(ctx, task.ID, "system", "Automatic updates started manually (trigger: manual)")
+	} else {
+		// 只有调度触发的运行才写 lastAutoRunAt（当日去重依据）；手动触发只写
+		// lastRunAt（展示），否则用户手动测试一次会吞掉当天的计划运行。
+		s.recordAutoRun(ctx, task.ID, runAt)
 	}
 	if !rt.AppsEnabled && !rt.PackagesEnabled {
-		s.recordLastRun(ctx, task.ID, runAt, RunStatusDisabled)
+		s.recordLastRun(ctx, task.ID, runAt, RunStatusDisabled, "Automatic updates are disabled; both switches are off")
 		_ = s.tasks.AppendLog(ctx, task.ID, "system", "Automatic updates are disabled")
 		return s.tasks.Complete(ctx, task.ID, "Automatic updates are disabled")
 	}
 	// 开始即写运行态：即使进程在长任务中途重启，当日去重与"最近一次运行"
 	// 也仍然可见（任务历史只保留 24 小时）。
-	s.recordLastRun(ctx, task.ID, runAt, RunStatusRunning)
+	s.recordLastRun(ctx, task.ID, runAt, RunStatusRunning, "")
 	summary := s.runPhases(ctx, task, rt)
 	finalStatus := RunStatusCompleted
+	text := summaryText(summary, rt)
 	if len(summary.failures) > 0 {
 		finalStatus = RunStatusFailed
+		text = failureSummaryText(summary)
 	}
-	s.recordLastRun(ctx, task.ID, runAt, finalStatus)
+	s.recordLastRun(ctx, task.ID, runAt, finalStatus, text)
 	if len(summary.failures) > 0 {
 		err := fmt.Errorf("automatic updates finished with %d failure(s): %s", len(summary.failures), strings.Join(summary.failures, "; "))
 		_ = s.tasks.Fail(ctx, task.ID, err)
 		return err
 	}
-	return s.tasks.Complete(ctx, task.ID, summaryText(summary, rt))
+	return s.tasks.Complete(ctx, task.ID, text)
 }
 
 // resolveRunSettings 解析本次运行使用的有效设置。调度触发以执行时的 DB 快照
@@ -103,8 +111,19 @@ func summaryText(summary runSummary, rt settings.RuntimeAutoUpdateSettings) stri
 		parts = append(parts, fmt.Sprintf("%d application(s) skipped by their auto-update switch", summary.appsDisabled))
 	}
 	text := strings.Join(parts, "; ")
+	return truncateSummary(text)
+}
+
+// failureSummaryText 生成失败的只读摘要（lastRunSummary），与任务错误信息同源，
+// 但裁剪到 240 字符以适配设置页展示。
+func failureSummaryText(summary runSummary) string {
+	text := fmt.Sprintf("Automatic updates failed with %d failure(s): %s", len(summary.failures), strings.Join(summary.failures, "; "))
+	return truncateSummary(text)
+}
+
+func truncateSummary(text string) string {
 	if runes := []rune(text); len(runes) > 240 {
-		text = string(runes[:240])
+		return string(runes[:240])
 	}
 	return text
 }
@@ -112,7 +131,7 @@ func summaryText(summary runSummary, rt settings.RuntimeAutoUpdateSettings) stri
 func (s *Service) runPhases(ctx context.Context, task tasks.Task, rt settings.RuntimeAutoUpdateSettings) runSummary {
 	var summary runSummary
 	_ = s.tasks.Advance(ctx, task.ID, "refreshing", "refreshing image and package update caches")
-	s.runRefreshPhase(ctx, task)
+	s.runRefreshPhase(ctx, task, rt)
 	if rt.AppsEnabled {
 		_ = s.tasks.Advance(ctx, task.ID, "updating-applications", "updating application images")
 		s.runApplicationPhase(ctx, task, &summary)
@@ -129,11 +148,29 @@ func (s *Service) runPhases(ctx context.Context, task tasks.Task, rt settings.Ru
 	return summary
 }
 
-// runRefreshPhase 触发所有可用节点的镜像与软件包刷新，并做有界等待。刷新只是
-// 最佳努力：任一节点失败或整体超时都只记日志，后续阶段使用缓存数据继续。
-func (s *Service) runRefreshPhase(ctx context.Context, task tasks.Task) {
+// runRefreshPhase 触发应用镜像 digest 与所有可用节点的镜像/软件包刷新，并做
+// 有界等待。刷新只是最佳努力：任一对象失败或整体超时都只记日志，后续阶段使用
+// 缓存数据继续。
+//
+// 应用镜像刷新不可省略：applications.ImageUpdateAvailable 只由
+// application_image_check 任务更新，不先刷新的话应用阶段永远筛不到可用更新。
+func (s *Service) runRefreshPhase(ctx context.Context, task tasks.Task, rt settings.RuntimeAutoUpdateSettings) {
+	taskIDs := make([]string, 0, 4)
+	// 应用镜像 digest 刷新放在最前面：只依赖应用清单，不依赖节点遍历；仅在
+	// 应用自动更新开启时需要（关闭时创建检查任务纯属浪费）。
+	if rt.AppsEnabled && s.applicationImages != nil {
+		refreshed, err := s.applicationImages.RefreshImageUpdates(ctx)
+		if err != nil {
+			s.logTask(ctx, task.ID, "Application image update check skipped: "+err.Error())
+		} else {
+			for _, taskID := range refreshed {
+				if trimmed := strings.TrimSpace(taskID); trimmed != "" {
+					taskIDs = append(taskIDs, trimmed)
+				}
+			}
+		}
+	}
 	servers := s.candidateServers(ctx, task)
-	taskIDs := make([]string, 0, len(servers)*2)
 	for _, srv := range servers {
 		if s.imageRefresh != nil && srv.Reachable && agentCompatible(srv) {
 			refreshTask, err := s.imageRefresh.RefreshImages(ctx, srv.ID, triggerTypeScheduler, "")
@@ -357,18 +394,30 @@ func taskFinished(status string) bool {
 	}
 }
 
-func (s *Service) recordLastRun(ctx context.Context, taskID string, runAt time.Time, status string) {
+func (s *Service) recordLastRun(ctx context.Context, taskID string, runAt time.Time, status, summary string) {
 	if s.settings == nil {
 		return
 	}
 	err := s.settings.RecordAutoUpdateLastRun(context.WithoutCancel(ctx), settings.RuntimeAutoUpdateRunState{
-		LastRunAt:     runAt,
-		LastRunStatus: status,
-		LastRunTaskID: taskID,
+		LastRunAt:      runAt,
+		LastRunStatus:  status,
+		LastRunTaskID:  taskID,
+		LastRunSummary: summary,
 	})
 	if err != nil {
 		// 运行态写失败不影响自动更新主流程（已执行的更新不可回滚）。
 		logging.From(ctx).Warn("failed to persist automatic update run state", zap.String("task_id", taskID), zap.Error(err))
+	}
+}
+
+// recordAutoRun 记录「调度自动运行」时间，作为跨重启的当日去重依据。手动运行
+// 绝不调用本方法；写失败同样只记日志，不阻断更新本身。
+func (s *Service) recordAutoRun(ctx context.Context, taskID string, at time.Time) {
+	if s.settings == nil {
+		return
+	}
+	if err := s.settings.RecordAutoUpdateAutoRun(context.WithoutCancel(ctx), at); err != nil {
+		logging.From(ctx).Warn("failed to persist automatic update auto-run time", zap.String("task_id", taskID), zap.Error(err))
 	}
 }
 

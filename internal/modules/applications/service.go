@@ -1047,6 +1047,54 @@ func (s *Service) RunImageCheckTask(tc tasks.TaskContext) error {
 	return s.tasks.Complete(ctx, task.ID, "Checked image for "+app.Name)
 }
 
+// RefreshImageUpdates 为所有已部署的用户应用创建 application_image_check 任务并
+// 异步派发，供自动更新协调任务在“刷新阶段”更新 ImageUpdateAvailable 后决定
+// 哪些应用需要升级。入口代理设施镜像由 facilityapps 自己的检查任务处理，这里
+// 跳过，避免同一镜像被两条链路重复检查。返回本次关联的任务 ID（含已存在的
+// 并发去重任务），调用方用于有界等待。
+func (s *Service) RefreshImageUpdates(ctx context.Context) ([]string, error) {
+	if s == nil || s.tasks == nil {
+		return nil, nil
+	}
+	apps, err := s.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(apps))
+	for _, app := range apps {
+		if !app.Enabled || app.ID == FacilityProxyApplicationID {
+			continue
+		}
+		if strings.TrimSpace(app.ImageReference) == "" {
+			continue
+		}
+		task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
+			Type:         TaskTypeImageCheck,
+			ResourceType: "application",
+			ResourceID:   app.ID,
+			TriggerType:  "scheduler",
+			Summary:      "Checking image for " + app.Name,
+		}, tasks.Trigger{Type: "scheduler", Periodic: true})
+		if err != nil {
+			logging.From(ctx).Warn("application image check could not be created",
+				zap.String("app_id", app.ID), zap.Error(err))
+			continue
+		}
+		ids = append(ids, task.ID)
+		if !created {
+			continue
+		}
+		go func(t tasks.Task) {
+			defer s.tasks.FinishExecution(t.ID)
+			if err := tasks.NewManager(s.tasks).Run(context.Background(), t); err != nil {
+				logging.From(logging.Background("applications")).Warn("application image check failed to run",
+					zap.String("task_id", t.ID), zap.Error(err))
+			}
+		}(task)
+	}
+	return ids, nil
+}
+
 func (s *Service) checkImageUpdate(ctx context.Context, appID string) (Application, error) {
 	app, err := s.Get(ctx, appID)
 	if err != nil {

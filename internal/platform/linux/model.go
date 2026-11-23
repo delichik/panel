@@ -48,11 +48,12 @@ type PackageUpdate struct {
 	InstalledVersion string `json:"installedVersion"`
 	CandidateVersion string `json:"candidateVersion"`
 	Source           string `json:"source"`
-	// Security 是 Agent 的权威安全更新判定（例如 unattended-upgrade --dry-run
-	// 是否会把该包作为安全更新升级），经由 Agent proto 传输并持久化在
-	// package_updates.security。SecurityKnown 为 false 时 Security 没有意义
-	// （旧 Agent 不填这两个字段、命令缺失/失败/超时时不可判定），Panel 必须
-	// 回退到 IsSecuritySource 启发式，绝不能把未知当成“非安全”。
+	// Security 是 Agent 基于系统 apt 元数据与 unattended-upgrades 策略得到的
+	// 权威安全更新判定（apt-cache policy 的 Candidate 来源 + Allowed-Origins），
+	// 经由 Agent proto 传输并持久化在 package_updates.security。
+	// SecurityKnown 为 false 时 Security 没有意义（旧 Agent 不填这两个字段、
+	// apt-cache policy 失败/超时、Candidate 来源不可解析），Panel 必须保持
+	// unknown 并跳过，绝不能用 Source 字符串等启发式猜测。
 	Security bool `json:"security"`
 	// SecurityKnown 标记 Security 是否来自 Agent 的权威判定。
 	SecurityKnown bool `json:"securityKnown"`

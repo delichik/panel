@@ -77,17 +77,24 @@ type RuntimeImageRegistryUpdate struct {
 }
 
 // RuntimeAutoUpdateSettings 是设置页「自动更新」分区（SET-RUN-023）。前四个字段
-// 由用户编辑；lastRun* 是只读运行态，由 autoupdate 协调任务写入，分区 PUT 不接受。
+// 由用户编辑；lastRun*/lastAutoRun* 是只读运行态，由 autoupdate 协调任务写入，
+// 分区 PUT 不接受。
 type RuntimeAutoUpdateSettings struct {
 	AppsEnabled     bool   `json:"appsEnabled"`
 	PackagesEnabled bool   `json:"packagesEnabled"`
 	PackagesMode    string `json:"packagesMode"`
 	ScheduleTime    string `json:"scheduleTime"`
-	// LastRunAt 是最近一次自动更新开始时间（RFC3339，UTC）。它是跨重启的当日
-	// 去重依据：任务历史只保留 24 小时，不能只靠任务查询。
+	// LastRunAt 是最近一次自动更新开始时间（RFC3339，UTC），手动与调度触发都写，
+	// 仅用于展示。它刻意不参与当日去重：用户手动测试一次不应抑制当天的计划运行。
 	LastRunAt     string `json:"lastRunAt,omitempty"`
 	LastRunStatus string `json:"lastRunStatus,omitempty"`
 	LastRunTaskID string `json:"lastRunTaskId,omitempty"`
+	// LastAutoRunAt 是最近一次「调度自动运行」的开始时间（RFC3339，UTC），只有
+	// 调度触发的运行会写。它是跨重启的当日去重依据（任务历史只保留 24 小时），
+	// 手动触发不得更新它。
+	LastAutoRunAt string `json:"lastAutoRunAt,omitempty"`
+	// LastRunSummary 是最近一次运行结束时的摘要或失败原因，用于设置页展示。
+	LastRunSummary string `json:"lastRunSummary,omitempty"`
 }
 
 // RuntimeAutoUpdateUpdate 是 PUT /api/v1/settings/runtime/auto-update 的写入负载。
@@ -114,6 +121,11 @@ type RuntimeAutoUpdateRunState struct {
 	LastRunAt     time.Time
 	LastRunStatus string
 	LastRunTaskID string
+	// LastAutoRunAt 只由 RecordAutoUpdateAutoRun 写入（仅调度触发），零值表示
+	// 本次调用不更新该键。
+	LastAutoRunAt time.Time
+	// LastRunSummary 非空时随 RecordAutoUpdateLastRun 一起持久化。
+	LastRunSummary string
 }
 
 // AutoUpdateManualRunner 是手动「立即运行一次」的委托目标，由 autoupdate 模块
@@ -225,6 +237,8 @@ const (
 	RuntimeSettingAutoUpdateLastRunAt                  = "autoUpdate.lastRunAt"
 	RuntimeSettingAutoUpdateLastRunStatus              = "autoUpdate.lastRunStatus"
 	RuntimeSettingAutoUpdateLastRunTaskID              = "autoUpdate.lastRunTaskId"
+	RuntimeSettingAutoUpdateLastAutoRunAt              = "autoUpdate.lastAutoRunAt"
+	RuntimeSettingAutoUpdateLastRunSummary             = "autoUpdate.lastRunSummary"
 	RuntimeSettingImageRegistryEndpoint                = "imageRegistry.endpoint"
 	RuntimeSettingImageRegistryScheme                  = "imageRegistry.scheme"
 
@@ -414,6 +428,8 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 			LastRunAt:       current.AutoUpdate.LastRunAt,
 			LastRunStatus:   current.AutoUpdate.LastRunStatus,
 			LastRunTaskID:   current.AutoUpdate.LastRunTaskID,
+			LastAutoRunAt:   current.AutoUpdate.LastAutoRunAt,
+			LastRunSummary:  current.AutoUpdate.LastRunSummary,
 		}
 	}
 	next := RuntimeSettings{
@@ -555,6 +571,8 @@ func (s *Service) UpdateAutoUpdate(ctx context.Context, input RuntimeAutoUpdateU
 		LastRunAt:       current.LastRunAt,
 		LastRunStatus:   current.LastRunStatus,
 		LastRunTaskID:   current.LastRunTaskID,
+		LastAutoRunAt:   current.LastAutoRunAt,
+		LastRunSummary:  current.LastRunSummary,
 	}
 	if input.AppsEnabled != nil {
 		next.AppsEnabled = *input.AppsEnabled
@@ -620,30 +638,40 @@ func (s *Service) RunAutoUpdateNow(ctx context.Context, input RuntimeAutoUpdateR
 }
 
 // AutoUpdateLastRun 返回自动更新协调任务持久化的只读运行态。调度器用它做
-// 当日去重（任务历史只保留 24 小时，不能依赖任务查询）。
+// 当日去重（任务历史只保留 24 小时，不能依赖任务查询），因此同时返回
+// LastAutoRunAt：只有调度触发会写该值，手动运行不会抑制当天的计划运行。
 func (s *Service) AutoUpdateLastRun() RuntimeAutoUpdateRunState {
 	rt := s.Runtime().AutoUpdate
 	state := RuntimeAutoUpdateRunState{
-		LastRunStatus: rt.LastRunStatus,
-		LastRunTaskID: rt.LastRunTaskID,
+		LastRunStatus:  rt.LastRunStatus,
+		LastRunTaskID:  rt.LastRunTaskID,
+		LastRunSummary: rt.LastRunSummary,
 	}
 	if parsed, err := time.Parse(time.RFC3339Nano, rt.LastRunAt); err == nil {
 		state.LastRunAt = parsed
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, rt.LastAutoRunAt); err == nil {
+		state.LastAutoRunAt = parsed
 	}
 	return state
 }
 
 // RecordAutoUpdateLastRun 写入只读运行态键并同步内存快照。这些键刻意不进入
-// runtimeValues：普通分区保存不得覆盖调度器刚写入的运行态。
+// runtimeValues：普通分区保存不得覆盖调度器刚写入的运行态。LastRunSummary 只在
+// 非空时写入，避免开始执行（running）时清空上一次结束摘要。
 func (s *Service) RecordAutoUpdateLastRun(ctx context.Context, state RuntimeAutoUpdateRunState) error {
 	at := state.LastRunAt
 	if at.IsZero() {
 		at = time.Now()
 	}
+	summary := strings.TrimSpace(state.LastRunSummary)
 	values := map[string]string{
 		RuntimeSettingAutoUpdateLastRunAt:     at.UTC().Format(time.RFC3339Nano),
 		RuntimeSettingAutoUpdateLastRunStatus: strings.TrimSpace(state.LastRunStatus),
 		RuntimeSettingAutoUpdateLastRunTaskID: strings.TrimSpace(state.LastRunTaskID),
+	}
+	if summary != "" {
+		values[RuntimeSettingAutoUpdateLastRunSummary] = summary
 	}
 	if err := s.saveValues(ctx, values); err != nil {
 		return err
@@ -652,6 +680,26 @@ func (s *Service) RecordAutoUpdateLastRun(ctx context.Context, state RuntimeAuto
 	s.rt.AutoUpdate.LastRunAt = values[RuntimeSettingAutoUpdateLastRunAt]
 	s.rt.AutoUpdate.LastRunStatus = values[RuntimeSettingAutoUpdateLastRunStatus]
 	s.rt.AutoUpdate.LastRunTaskID = values[RuntimeSettingAutoUpdateLastRunTaskID]
+	if summary != "" {
+		s.rt.AutoUpdate.LastRunSummary = summary
+	}
+	s.mu.Unlock()
+	return nil
+}
+
+// RecordAutoUpdateAutoRun 只写「最近一次调度自动运行」时间。它由调度触发的运行
+// 独占写入，是当日去重的唯一依据；手动「立即运行一次」只写 lastRunAt，不得调用
+// 本方法，否则用户手动测试会把当天的计划运行吞掉。
+func (s *Service) RecordAutoUpdateAutoRun(ctx context.Context, at time.Time) error {
+	if at.IsZero() {
+		at = time.Now()
+	}
+	value := at.UTC().Format(time.RFC3339Nano)
+	if err := s.saveValues(ctx, map[string]string{RuntimeSettingAutoUpdateLastAutoRunAt: value}); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.rt.AutoUpdate.LastAutoRunAt = value
 	s.mu.Unlock()
 	return nil
 }
@@ -877,6 +925,10 @@ func (s *Service) load(ctx context.Context) error {
 			next.AutoUpdate.LastRunStatus = strings.TrimSpace(value)
 		case RuntimeSettingAutoUpdateLastRunTaskID:
 			next.AutoUpdate.LastRunTaskID = strings.TrimSpace(value)
+		case RuntimeSettingAutoUpdateLastAutoRunAt:
+			next.AutoUpdate.LastAutoRunAt = strings.TrimSpace(value)
+		case RuntimeSettingAutoUpdateLastRunSummary:
+			next.AutoUpdate.LastRunSummary = strings.TrimSpace(value)
 		}
 	}
 	if err := validateRuntimeSettings(next); err != nil {

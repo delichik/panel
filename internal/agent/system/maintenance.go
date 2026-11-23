@@ -24,17 +24,6 @@ var fail2banNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
 const fail2banPanelConfigPath = "/etc/fail2ban/jail.d/panel.local"
 
-const (
-	// unattendedUpgradeDryRunTimeout 限制只读安全判定探测的耗时；超时按
-	// “不可判定”处理，不能拖慢或失败 PackageUpdates。
-	unattendedUpgradeDryRunTimeout = 10 * time.Second
-	// unattended-upgrade 在 dry-run 中输出的安全升级包列表标记；不同版本可能
-	// 把包名放在同一行或后随缩进行。
-	unattendedUpgradeMarker = "packages that will be upgraded:"
-	// 没有任何包会被 unattended-upgrades 升级时的固定提示。
-	unattendedUpgradeNoPackagesMarker = "no packages found that can be upgraded"
-)
-
 func (LocalCollector) PackageUpdates(ctx context.Context) ([]linux.PackageUpdate, error) {
 	if _, err := runCommand(ctx, 15*time.Minute, "apt-get", "update"); err != nil {
 		return nil, err
@@ -44,96 +33,11 @@ func (LocalCollector) PackageUpdates(ctx context.Context) ([]linux.PackageUpdate
 		return nil, err
 	}
 	updates := linux.ParseAptListUpgradable(out)
-	// 安全判定是尽力而为的附加信息：它失败时只是回退到 Panel 的 source
-	// 启发式，绝不能影响可升级列表本身。
-	security, known := unattendedUpgradeSecurityPackages(ctx)
-	classifyPackageSecurity(updates, security, known)
+	// 安全判定是尽力而为的附加信息：基于 apt-cache policy 的 Candidate 来源与
+	// unattended-upgrades Allowed-Origins 策略（见 apt_security.go）。判定失败时
+	// 只是 SecurityKnown=false，绝不影响可升级列表本身。
+	applyAptSecurity(ctx, updates)
 	return updates, nil
-}
-
-// unattendedUpgradeSecurityPackages 执行只读的
-// `unattended-upgrade --dry-run` 并解析它即将作为安全更新升级的包集合。
-// 命令不存在、退出失败或 10 秒内未完成时返回 ok=false（不可判定）。
-func unattendedUpgradeSecurityPackages(ctx context.Context) (map[string]struct{}, bool) {
-	out, err := runCommand(ctx, unattendedUpgradeDryRunTimeout, "unattended-upgrade", "--dry-run")
-	return parseUnattendedUpgradeDryRun(out, err)
-}
-
-// parseUnattendedUpgradeDryRun 从 dry-run 输出中提取安全包集合。返回的
-// ok=false 表示输出无法判定（命令失败或缺少可识别标记），调用方必须把
-// SecurityKnown 置为 false 而不是“非安全”。
-func parseUnattendedUpgradeDryRun(out string, err error) (map[string]struct{}, bool) {
-	if err != nil {
-		return nil, false
-	}
-	lines := strings.Split(strings.ReplaceAll(out, "\r\n", "\n"), "\n")
-	for index, line := range lines {
-		lower := strings.ToLower(line)
-		if marker := strings.Index(lower, unattendedUpgradeMarker); marker >= 0 {
-			security := map[string]struct{}{}
-			addUnattendedUpgradePackageNames(security, line[marker+len(unattendedUpgradeMarker):])
-			// 包名也可能跟在标记行之后：缩进行按段解析，未缩进的行只在整行
-			// 看起来像包名时接受。遇到空行或日志行即认为列表结束。
-			for _, next := range lines[index+1:] {
-				trimmed := strings.TrimSpace(next)
-				if trimmed == "" {
-					break
-				}
-				indented := strings.HasPrefix(next, " ") || strings.HasPrefix(next, "\t")
-				if !indented && !looksLikePackageName(trimmed) {
-					break
-				}
-				addUnattendedUpgradePackageNames(security, trimmed)
-			}
-			return security, true
-		}
-		if strings.Contains(lower, unattendedUpgradeNoPackagesMarker) {
-			return map[string]struct{}{}, true
-		}
-	}
-	return nil, false
-}
-
-// looksLikePackageName 判断整行是否是单个包名（允许 `name:arch` 限定），
-// 用来识别未缩进的包名列表并排除日志行。
-func looksLikePackageName(value string) bool {
-	if strings.ContainsAny(value, " \t") {
-		return false
-	}
-	if base, _, ok := strings.Cut(value, ":"); ok {
-		value = base
-	}
-	return packageNamePattern.MatchString(value)
-}
-
-// addUnattendedUpgradePackageNames 把一行/一段包名拆开写入集合，去掉
-// `name:arch` 的架构限定并过滤明显不是包名的片段。
-func addUnattendedUpgradePackageNames(set map[string]struct{}, raw string) {
-	raw = strings.ReplaceAll(raw, ",", " ")
-	for _, field := range strings.Fields(raw) {
-		name := field
-		if base, _, ok := strings.Cut(name, ":"); ok {
-			name = base
-		}
-		if !packageNamePattern.MatchString(name) {
-			continue
-		}
-		set[name] = struct{}{}
-	}
-}
-
-// classifyPackageSecurity 把 Agent 权威判定写入可升级列表。known=false 时保持
-// 零值（SecurityKnown=false），Panel 会回退到 source 启发式；known=true 时
-// 即使集合为空也标记已知，表示“确定没有安全更新”。
-func classifyPackageSecurity(updates []linux.PackageUpdate, security map[string]struct{}, known bool) {
-	if !known {
-		return
-	}
-	for index := range updates {
-		_, isSecurity := security[updates[index].Name]
-		updates[index].Security = isSecurity
-		updates[index].SecurityKnown = true
-	}
 }
 
 func (LocalCollector) UpgradePackages(ctx context.Context, req agentcontract.PackageUpgradeRequest) (string, error) {

@@ -9,9 +9,9 @@ const packages: Record<string, PackageUpdateList> = {
     lastRefreshedAt: now,
     refreshing: false,
     updates: [
-      { name: 'openssl', installedVersion: '3.0.13-1', candidateVersion: '3.0.14-1', source: 'debian-security', security: true },
-      { name: 'docker-ce', installedVersion: '26.1.2', candidateVersion: '27.0.3', source: 'download.docker.com', security: false },
-      { name: 'linux-image-amd64', installedVersion: '6.1.0-21', candidateVersion: '6.1.0-23', source: 'debian', security: false },
+      { name: 'openssl', installedVersion: '3.0.13-1', candidateVersion: '3.0.14-1', source: 'debian-security', security: true, securityKnown: true },
+      { name: 'docker-ce', installedVersion: '26.1.2', candidateVersion: '27.0.3', source: 'download.docker.com', security: false, securityKnown: true },
+      { name: 'linux-image-amd64', installedVersion: '6.1.0-21', candidateVersion: '6.1.0-23', source: 'debian', security: false, securityKnown: true },
     ],
   },
   'srv-core-fra': { serverId: 'srv-core-fra', lastRefreshedAt: now, refreshing: false, updates: [] },
@@ -20,22 +20,23 @@ const packages: Record<string, PackageUpdateList> = {
     lastRefreshedAt: now,
     refreshing: false,
     updates: [
-      { name: 'curl', installedVersion: '8.5.0-2', candidateVersion: '8.5.0-2+deb12u1', source: 'debian-security', security: true },
-      { name: 'containerd.io', installedVersion: '1.6.31', candidateVersion: '1.7.18', source: 'download.docker.com', security: false },
-      { name: 'libssl3', installedVersion: '3.0.13-1', candidateVersion: '3.0.14-1', source: 'debian-security', security: true },
+      { name: 'curl', installedVersion: '8.5.0-2', candidateVersion: '8.5.0-2+deb12u1', source: 'debian-security', security: true, securityKnown: true },
+      { name: 'containerd.io', installedVersion: '1.6.31', candidateVersion: '1.7.18', source: 'download.docker.com', security: false, securityKnown: true },
+      // 旧 Agent 不回报权威 apt 元数据：security 不可信，UI 必须显示“未验证”。
+      { name: 'libssl3', installedVersion: '3.0.13-1', candidateVersion: '3.0.14-1', source: 'debian-security', security: true, securityKnown: false },
     ],
   },
   'srv-api-hkg-02': {
     serverId: 'srv-api-hkg-02',
     lastRefreshedAt: now,
     refreshing: false,
-    updates: [{ name: 'ca-certificates', installedVersion: '20230311', candidateVersion: '20240203', source: 'debian' }],
+    updates: [{ name: 'ca-certificates', installedVersion: '20230311', candidateVersion: '20240203', source: 'debian', securityKnown: false }],
   },
   'srv-worker-nrt': {
     serverId: 'srv-worker-nrt',
     lastRefreshedAt: now,
     refreshing: false,
-    updates: Array.from({ length: 12 }, (_, index) => ({ name: `worker-runtime-lib-${index + 1}`, installedVersion: `1.${index}.0`, candidateVersion: `1.${index}.1`, source: index % 2 ? 'debian' : 'debian-security', security: index % 2 === 0 })),
+    updates: Array.from({ length: 12 }, (_, index) => ({ name: `worker-runtime-lib-${index + 1}`, installedVersion: `1.${index}.0`, candidateVersion: `1.${index}.1`, source: index % 2 ? 'debian' : 'debian-security', security: index % 2 === 0, securityKnown: true })),
   },
   'srv-db-fra': { serverId: 'srv-db-fra', lastRefreshedAt: now, refreshing: false, updates: [] },
   'srv-cache-sfo': {
@@ -43,8 +44,8 @@ const packages: Record<string, PackageUpdateList> = {
     lastRefreshedAt: now,
     refreshing: false,
     updates: [
-      { name: 'redis-server', installedVersion: '7.0.15', candidateVersion: '7.2.5', source: 'packages.redis.io' },
-      { name: 'ufw', installedVersion: '0.36.2', candidateVersion: '0.36.2-2', source: 'debian' },
+      { name: 'redis-server', installedVersion: '7.0.15', candidateVersion: '7.2.5', source: 'packages.redis.io', securityKnown: false },
+      { name: 'ufw', installedVersion: '0.36.2', candidateVersion: '0.36.2-2', source: 'debian', securityKnown: false },
     ],
   },
 };
@@ -348,6 +349,7 @@ function defaultPackages(serverId: string): PackageUpdateList {
       candidateVersion: `1.${index + 1}.0`,
       source: index % 2 ? 'debian' : 'debian-security',
       security: index % 2 === 0,
+      securityKnown: true,
     })),
   };
 }

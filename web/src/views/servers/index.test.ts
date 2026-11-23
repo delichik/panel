@@ -3,6 +3,7 @@ import { flushPromises, mount, enableAutoUnmount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import Badge from '@/components/ui/Badge.vue';
+import Tooltip from '@/components/ui/Tooltip.vue';
 import { errorDialogKey } from '@/components/ui/errorDialog';
 import { toastKey } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
@@ -10,6 +11,7 @@ import type { ServerDto } from '@/types/servers';
 import ServersPage from './index.vue';
 import PackagesTab from './tabs/PackagesTab.vue';
 import { serversApi } from '@/api/servers';
+import { packagesApi } from '@/api/packages';
 
 enableAutoUnmount(afterEach);
 
@@ -352,6 +354,44 @@ describe('servers page table and covered detail', () => {
     // Installed 在 <wide 隐藏；Candidate（版本）在 <sm 再隐藏，手机只保留名称。
     expect(installed.classes()).toContain('max-wide:hidden');
     expect(candidate.classes()).toContain('max-sm:hidden');
+  });
+
+  it('shows unverified instead of a security badge when the Agent security metadata is unknown', async () => {
+    const { t } = useI18n();
+    vi.mocked(packagesApi.updates).mockResolvedValueOnce({
+      serverId: 'srv-1',
+      lastRefreshedAt: null,
+      refreshing: false,
+      updates: [
+        { name: 'openssl', installedVersion: '1', candidateVersion: '2', source: 'jammy-security', security: true, securityKnown: true },
+        // 旧 Agent 未回报权威元数据：security 不可信，必须显示“未验证”。
+        { name: 'libssl3', installedVersion: '1', candidateVersion: '2', source: 'jammy-security', security: true, securityKnown: false },
+        // 兼容旧响应：字段缺失时不按 unknown 处理，仍显示安全徽标。
+        { name: 'curl', installedVersion: '1', candidateVersion: '2', source: 'jammy-security', security: true },
+        { name: 'bash', installedVersion: '1', candidateVersion: '2', source: 'jammy', security: false, securityKnown: true },
+      ],
+    });
+    const wrapper = mount(PackagesTab, {
+      props: { server: server as unknown as ServerDto },
+      global: {
+        provide: {
+          [toastKey as symbol]: { push: toastPush, remove: vi.fn() },
+          [errorDialogKey as symbol]: { push: errorDialogPush, dismiss: vi.fn() },
+        },
+      },
+    });
+    await flushPromises();
+
+    const rows = wrapper.findAll('tbody tr');
+    expect(rows).toHaveLength(4);
+    expect(rows[0]!.text()).toContain(t('resourcesPage.securityUpdate'));
+    expect(rows[1]!.text()).toContain(t('resourcesPage.securityUnknown'));
+    expect(rows[1]!.text()).not.toContain(t('resourcesPage.securityUpdate'));
+    expect(rows[2]!.text()).toContain(t('resourcesPage.securityUpdate'));
+    expect(rows[3]!.text()).not.toContain(t('resourcesPage.securityUpdate'));
+    // 未验证徽标带 tooltip 说明（需要 Agent 权威 apt 元数据或升级 Agent）。
+    expect(wrapper.findAllComponents(Tooltip)).toHaveLength(1);
+    expect(wrapper.findComponent(Tooltip).props('text')).toBe(t('resourcesPage.securityUnknownHint'));
   });
 
   it('uses a bounded NumberBox for the UFW rule port', async () => {

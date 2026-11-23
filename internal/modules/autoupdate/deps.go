@@ -2,6 +2,7 @@ package autoupdate
 
 import (
 	"context"
+	"time"
 
 	"panel/internal/modules/applications"
 	"panel/internal/modules/packages"
@@ -18,6 +19,17 @@ import (
 type SettingsStore interface {
 	Runtime() settings.RuntimeSettings
 	RecordAutoUpdateLastRun(context.Context, settings.RuntimeAutoUpdateRunState) error
+	// RecordAutoUpdateAutoRun 只记录「调度自动运行」时间，是当日去重的唯一依据。
+	// 手动触发不得调用它。
+	RecordAutoUpdateAutoRun(context.Context, time.Time) error
+}
+
+// ApplicationImageRefresher 触发所有参与自动更新的应用刷新镜像 digest
+// （application_image_check 任务），返回创建并派发的任务 ID 列表。
+// 应用阶段读取的 ImageUpdateAvailable 只由该检查任务更新，因此刷新阶段必须先
+// 请求它，否则自动更新永远筛不到可用更新。
+type ApplicationImageRefresher interface {
+	RefreshImageUpdates(context.Context) ([]string, error)
 }
 
 // ServerLister 提供节点清单（应用/软件包阶段按节点遍历）。

@@ -262,6 +262,7 @@ func New(cfg config.Config) (*App, error) {
 		autoupdate.WithServerLister(serverSvc),
 		autoupdate.WithApplicationLister(applicationSvc),
 		autoupdate.WithApplicationUpgrader(containerSvc),
+		autoupdate.WithApplicationImageRefresher(applicationSvc),
 		autoupdate.WithImageRefresher(containerSvc),
 		autoupdate.WithPackageMaintainer(packageSvc),
 		autoupdate.WithReverseProxyImageUpdater(facilitySvc),

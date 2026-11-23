@@ -46,8 +46,8 @@ export type AutoUpdatePackagesMode = 'security' | 'all';
 /**
  * Runtime settings for the "Automatic updates" partition (SET-RUN-023).
  * `appsEnabled` covers both user application images and the entrance-proxy nginx
- * image; the last three `lastRun*` fields are the read-only projection written by
- * the coordinator task and must never be submitted back in the PUT payload.
+ * image; the read-only `lastRun*`/`lastAutoRunAt` fields are written by the
+ * coordinator task and must never be submitted back in the PUT payload.
  */
 export interface RuntimeAutoUpdateSettings {
   appsEnabled: boolean;
@@ -55,9 +55,14 @@ export interface RuntimeAutoUpdateSettings {
   packagesMode: AutoUpdatePackagesMode;
   /** Daily execution time in the Panel local time zone (`HH:MM`, 24h). */
   scheduleTime: string;
+  /** Start time of the most recent run; may be a manual "Run now" run. */
   lastRunAt?: string;
   lastRunStatus?: string;
   lastRunTaskId?: string;
+  /** Human-readable summary written when the most recent run finishes. */
+  lastRunSummary?: string;
+  /** Start time of the most recent *scheduled* automatic run (never manual). */
+  lastAutoRunAt?: string;
 }
 
 /** PUT /settings/runtime/auto-update：只提交本分区四个可编辑字段。 */

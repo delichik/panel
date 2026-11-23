@@ -432,10 +432,118 @@ describe('settings auto-update partition', () => {
 
     expect(settingsApi.runAutoUpdate).toHaveBeenCalledTimes(1);
     expect(settingsApi.updateAutoUpdate).not.toHaveBeenCalled();
+    // 202 后提示保留 taskId，并建议到事件页查看进度（toast action 由 taskId 生成链接）。
     expect(toastPush).toHaveBeenCalledWith(expect.objectContaining({
-      title: expect.stringContaining('task-auto-update-manual-1'),
+      title: t('settingsPage.autoUpdate.runAccepted', { taskId: 'task-auto-update-manual-1' }),
       tone: 'success',
+      action: expect.objectContaining({ to: expect.stringContaining('/events?executionId=task-auto-update-manual-1') }),
     }));
+  });
+
+  it('shows the stored run summary and separates scheduled from manual run times', async () => {
+    const { t } = useI18n();
+    vi.mocked(settingsApi.runtime).mockResolvedValue({
+      ...runtimeSettings(),
+      autoUpdate: {
+        ...runtimeSettings().autoUpdate!,
+        lastRunAt: '2026-08-02T06:05:00.000Z',
+        lastAutoRunAt: '2026-08-01T04:00:00.000Z',
+        lastRunSummary: 'Updated 2 applications and 3 software packages.',
+      },
+    });
+    const view = await render('/settings/auto-update');
+
+    expect(view.text()).toContain(t('settingsPage.autoUpdate.lastAutoRunAt'));
+    expect(view.text()).toContain(t('settingsPage.autoUpdate.lastRunAt'));
+    expect(view.text()).toContain(t('settingsPage.autoUpdate.lastRunSummary'));
+    expect(view.text()).toContain('Updated 2 applications and 3 software packages.');
+    expect(view.text()).not.toContain(t('settingsPage.autoUpdate.lastRunSummaryEmpty'));
+  });
+
+  it('falls back to the empty summary copy when the payload has no lastRunSummary', async () => {
+    const { t } = useI18n();
+    const view = await render('/settings/auto-update');
+
+    expect(view.text()).toContain(t('settingsPage.autoUpdate.lastRunSummaryEmpty'));
+  });
+
+  it('polls the runtime while a run is active and shows the summary once it completes', async () => {
+    const { t } = useI18n();
+    enableAutoSaveTimers();
+    const running = {
+      ...runtimeSettings(),
+      autoUpdate: {
+        ...runtimeSettings().autoUpdate!,
+        lastRunStatus: 'running',
+        lastRunSummary: '',
+      },
+    };
+    const finished = {
+      ...runtimeSettings(),
+      autoUpdate: {
+        ...runtimeSettings().autoUpdate!,
+        lastRunStatus: 'completed',
+        lastRunSummary: 'Coordinator finished: 1 software package upgraded.',
+      },
+    };
+    vi.mocked(settingsApi.runtime).mockResolvedValueOnce(running).mockResolvedValue(finished);
+    const view = await render('/settings/auto-update');
+
+    // 运行中：状态展示 running，摘要位置也用 running 文案而不是旧摘要。
+    expect(view.text()).toContain(t('settingsPage.autoUpdate.runStatus.running'));
+    expect(view.text()).not.toContain('Coordinator finished');
+
+    await vi.advanceTimersByTimeAsync(5000);
+    await flushPromises();
+
+    // 一次轮询拿到的完成响应即包含最终摘要；离开 running 后停止轮询。
+    expect(settingsApi.runtime).toHaveBeenCalledTimes(2);
+    expect(view.text()).toContain('Coordinator finished: 1 software package upgraded.');
+    expect(view.text()).not.toContain(t('settingsPage.autoUpdate.runStatus.running'));
+
+    await vi.advanceTimersByTimeAsync(15000);
+    await flushPromises();
+    expect(settingsApi.runtime).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps following a manual run after 202 even before running is written back', async () => {
+    const { t } = useI18n();
+    enableAutoSaveTimers();
+    const oldRun = {
+      ...runtimeSettings().autoUpdate!,
+      lastRunStatus: 'completed',
+      lastRunTaskId: 'task-auto-update-old',
+      lastRunSummary: 'Previous run summary.',
+    };
+    const newRun = {
+      ...oldRun,
+      lastRunTaskId: 'task-auto-update-manual-1',
+      lastRunSummary: 'Manual run finished: 2 software packages upgraded.',
+    };
+    vi.mocked(settingsApi.runtime).mockResolvedValue({ ...runtimeSettings(), autoUpdate: oldRun });
+    const view = await render('/settings/auto-update');
+    expect(view.text()).toContain('Previous run summary.');
+
+    const runButton = view.findAll('button').find((item) => item.text() === t('settingsPage.autoUpdate.runNow'));
+    await runButton!.trigger('click');
+    await flushPromises();
+    const confirmButton = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'))
+      .find((button) => button.textContent?.trim() === t('settingsPage.autoUpdate.runNow'));
+    confirmButton!.click();
+    await flushPromises();
+    expect(settingsApi.runAutoUpdate).toHaveBeenCalledTimes(1);
+    // 202 后立即刷新仍可能是旧终态；轮询继续等待本次 taskId 写回结束状态。
+    expect(view.text()).not.toContain('Manual run finished');
+
+    vi.mocked(settingsApi.runtime).mockResolvedValue({ ...runtimeSettings(), autoUpdate: newRun });
+    await vi.advanceTimersByTimeAsync(5000);
+    await flushPromises();
+    expect(view.text()).toContain('Manual run finished: 2 software packages upgraded.');
+
+    const runtimeCalls = vi.mocked(settingsApi.runtime).mock.calls.length;
+    await vi.advanceTimersByTimeAsync(15000);
+    await flushPromises();
+    expect(vi.mocked(settingsApi.runtime).mock.calls.length).toBe(runtimeCalls);
   });
 
   it('uses the blocking error dialog when the explicit run action fails', async () => {

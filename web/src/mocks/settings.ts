@@ -44,7 +44,9 @@ export let mockRuntimeSettings: RuntimeSettings = {
     packagesMode: 'security',
     scheduleTime: '04:00',
     lastRunAt: '2026-08-01T04:00:00.000Z',
+    lastAutoRunAt: '2026-08-01T04:00:00.000Z',
     lastRunStatus: 'completed',
+    lastRunSummary: 'Mock coordinator completed: 1 application updated, 0 software packages upgraded.',
     lastRunTaskId: 'task-auto-update-1',
   },
   imageRegistry: { endpoint: '', scheme: 'https' },
@@ -155,10 +157,33 @@ export function runRuntimeAutoUpdate(): RuntimeAutoUpdateRunResponse {
       ...current,
       lastRunAt: new Date().toISOString(),
       lastRunStatus: 'running',
+      lastRunSummary: '',
       lastRunTaskId: taskId,
     },
   };
   return { taskId };
+}
+
+/**
+ * Mock 没有真实协调器：手动运行启动约 8 秒后写回完成状态与摘要，
+ * 让本地 Mock 模式也能验证“运行中 → 完成 → 显示摘要”的刷新链路。
+ */
+const mockAutoUpdateRunDurationMs = 8000;
+
+export function settleMockRuntimeAutoUpdate(now = Date.now()) {
+  const current = mockRuntimeSettings.autoUpdate;
+  if (!current || current.lastRunStatus !== 'running') return mockRuntimeSettings;
+  const startedAt = current.lastRunAt ? Date.parse(current.lastRunAt) : Number.NaN;
+  if (Number.isNaN(startedAt) || now - startedAt < mockAutoUpdateRunDurationMs) return mockRuntimeSettings;
+  mockRuntimeSettings = {
+    ...mockRuntimeSettings,
+    autoUpdate: {
+      ...current,
+      lastRunStatus: 'completed',
+      lastRunSummary: 'Mock coordinator completed: checked 2 applications and upgraded 1 software package.',
+    },
+  };
+  return mockRuntimeSettings;
 }
 
 export function saveServerVariables(definitions: ServerVariableDefinition[]) {

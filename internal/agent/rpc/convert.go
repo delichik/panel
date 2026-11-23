@@ -170,7 +170,7 @@ func goPackageUpdates(items []*agentpb.PackageUpdate) []linux.PackageUpdate {
 			continue
 		}
 		// 旧 Agent 不填 security/security_known：Get* 返回零值 false，
-		// SecurityKnown=false 让 Panel 回退到 source 启发式。
+		// SecurityKnown=false 表示 Panel 不可判定（跳过而不是启发式猜测）。
 		out = append(out, linux.PackageUpdate{
 			Name: item.Name, InstalledVersion: item.InstalledVersion, CandidateVersion: item.CandidateVersion, Source: item.Source,
 			Security: item.GetSecurity(), SecurityKnown: item.GetSecurityKnown(),

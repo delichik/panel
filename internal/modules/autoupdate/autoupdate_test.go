@@ -23,11 +23,13 @@ import (
 )
 
 // fakeSettingsStore 在内存中模拟 runtime_settings：Runtime() 返回热设置，
-// RecordAutoUpdateLastRun 记录每次运行态写入并更新快照（等价 settings 服务）。
+// RecordAutoUpdateLastRun/RecordAutoUpdateAutoRun 记录每次运行态写入并更新快照
+// （等价 settings 服务）。
 type fakeSettingsStore struct {
-	mu     sync.Mutex
-	rt     settings.RuntimeSettings
-	states []settings.RuntimeAutoUpdateRunState
+	mu       sync.Mutex
+	rt       settings.RuntimeSettings
+	states   []settings.RuntimeAutoUpdateRunState
+	autoRuns []time.Time
 }
 
 func (f *fakeSettingsStore) Runtime() settings.RuntimeSettings {
@@ -43,6 +45,17 @@ func (f *fakeSettingsStore) RecordAutoUpdateLastRun(_ context.Context, state set
 	f.rt.AutoUpdate.LastRunAt = state.LastRunAt.UTC().Format(time.RFC3339Nano)
 	f.rt.AutoUpdate.LastRunStatus = state.LastRunStatus
 	f.rt.AutoUpdate.LastRunTaskID = state.LastRunTaskID
+	if summary := strings.TrimSpace(state.LastRunSummary); summary != "" {
+		f.rt.AutoUpdate.LastRunSummary = summary
+	}
+	return nil
+}
+
+func (f *fakeSettingsStore) RecordAutoUpdateAutoRun(_ context.Context, at time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.autoRuns = append(f.autoRuns, at)
+	f.rt.AutoUpdate.LastAutoRunAt = at.UTC().Format(time.RFC3339Nano)
 	return nil
 }
 
@@ -69,6 +82,18 @@ func (f *fakeSettingsStore) stateStatuses() []string {
 		out = append(out, state.LastRunStatus)
 	}
 	return out
+}
+
+func (f *fakeSettingsStore) autoRunTimes() []time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]time.Time{}, f.autoRuns...)
+}
+
+func (f *fakeSettingsStore) lastAutoRunAt() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.rt.AutoUpdate.LastAutoRunAt
 }
 
 func newTaskService(t *testing.T) (*tasks.Service, *sql.DB) {
@@ -129,10 +154,31 @@ type fakeServerLister struct{ servers []server.Server }
 
 func (f fakeServerLister) List(context.Context) ([]server.Server, error) { return f.servers, nil }
 
-type fakeApplicationLister struct{ apps []applications.Application }
+// fakeApplicationLister 是可变的应用清单：应用镜像刷新阶段会写回最新
+// ImageUpdateAvailable，后续应用阶段必须读到刷新后的值。
+type fakeApplicationLister struct {
+	mu   sync.Mutex
+	apps []applications.Application
+}
 
-func (f fakeApplicationLister) List(context.Context) ([]applications.Application, error) {
-	return f.apps, nil
+func (f *fakeApplicationLister) List(context.Context) ([]applications.Application, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]applications.Application{}, f.apps...), nil
+}
+
+func (f *fakeApplicationLister) markUpdateAvailable(ids ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	wanted := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		wanted[id] = struct{}{}
+	}
+	for i := range f.apps {
+		if _, ok := wanted[f.apps[i].ID]; ok {
+			f.apps[i].ImageUpdateAvailable = true
+		}
+	}
 }
 
 type fakeApplicationUpgrader struct {
@@ -156,6 +202,31 @@ type fakeImageRefresher struct {
 func (f *fakeImageRefresher) RefreshImages(_ context.Context, serverID, _, _ string) (tasks.Task, error) {
 	f.servers = append(f.servers, serverID)
 	return createFinishedTask(f.t, f.taskSvc, "image_refresh", tasks.StatusCompleted), nil
+}
+
+// fakeApplicationImageRefresher 模拟 applications.Service.RefreshImageUpdates：
+// 刷新时把应用标记为「有可用镜像更新」，并返回 application_image_check 任务 ID。
+type fakeApplicationImageRefresher struct {
+	t       *testing.T
+	taskSvc *tasks.Service
+	lister  *fakeApplicationLister
+	ids     []string
+	err     error
+	calls   int
+}
+
+func (f *fakeApplicationImageRefresher) RefreshImageUpdates(context.Context) ([]string, error) {
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.lister.markUpdateAvailable(f.ids...)
+	taskIDs := make([]string, 0, len(f.ids))
+	for range f.ids {
+		task := createFinishedTask(f.t, f.taskSvc, "application_image_check", tasks.StatusCompleted)
+		taskIDs = append(taskIDs, task.ID)
+	}
+	return taskIDs, nil
 }
 
 type fakePackageMaintainer struct {
@@ -220,9 +291,9 @@ func at(hour, minute, second int, loc *time.Location) time.Time {
 	return time.Date(2026, 11, 19, hour, minute, second, 0, loc)
 }
 
-// TestShouldTriggerScheduleWindow 验证计划时间窗口：只在计划 HH:MM 之后 2 分钟内
-// 触发；错过窗口（含凌晨后的任意更晚时间）当天不补跑。
-func TestShouldTriggerScheduleWindow(t *testing.T) {
+// TestShouldTriggerTriggersAfterScheduleTime 验证触发条件：计划 HH:MM 之前的
+// tick 不触发；到达计划时刻后当天任意时间（不再有 2 分钟窗口）都触发一次。
+func TestShouldTriggerTriggersAfterScheduleTime(t *testing.T) {
 	loc := fixedZone()
 	rt := settings.RuntimeAutoUpdateSettings{
 		AppsEnabled:  true,
@@ -236,70 +307,78 @@ func TestShouldTriggerScheduleWindow(t *testing.T) {
 	}{
 		{name: "before schedule", now: at(3, 59, 59, loc), want: false},
 		{name: "at schedule", now: at(4, 0, 0, loc), want: true},
-		{name: "inside window", now: at(4, 1, 59, loc), want: true},
-		{name: "window end", now: at(4, 2, 0, loc), want: true},
-		{name: "after window", now: at(4, 2, 1, loc), want: false},
-		{name: "much later same day", now: at(10, 0, 0, loc), want: false},
+		{name: "just after schedule", now: at(4, 0, 30, loc), want: true},
+		{name: "long after schedule", now: at(10, 0, 0, loc), want: true},
+		{name: "late night same day", now: at(23, 59, 0, loc), want: true},
 	}
 	for _, tc := range cases {
-		if got := shouldTrigger(rt, tc.now, DefaultScheduleWindow); got != tc.want {
+		if got := shouldTrigger(rt, tc.now); got != tc.want {
 			t.Fatalf("%s: shouldTrigger(%s) = %v, want %v", tc.name, tc.now.Format(time.RFC3339), got, tc.want)
 		}
+	}
+	// 非法计划时间不得触发（旧库脏数据不阻塞启动，但也不自动运行）。
+	rt.ScheduleTime = "99:99"
+	if shouldTrigger(rt, at(10, 0, 0, loc)) {
+		t.Fatal("an invalid schedule time must not trigger")
 	}
 }
 
 func TestShouldTriggerRequiresEnabledSwitch(t *testing.T) {
 	now := at(4, 0, 30, fixedZone())
 	rt := settings.RuntimeAutoUpdateSettings{PackagesMode: settings.AutoUpdatePackagesModeSecurity, ScheduleTime: "04:00"}
-	if shouldTrigger(rt, now, DefaultScheduleWindow) {
+	if shouldTrigger(rt, now) {
 		t.Fatal("both switches off must not trigger")
 	}
 	rt.PackagesEnabled = true
-	if !shouldTrigger(rt, now, DefaultScheduleWindow) {
-		t.Fatal("packages switch on must trigger inside the window")
+	if !shouldTrigger(rt, now) {
+		t.Fatal("packages switch on must trigger after the schedule time")
 	}
 	rt.PackagesEnabled = false
 	rt.AppsEnabled = true
-	if !shouldTrigger(rt, now, DefaultScheduleWindow) {
-		t.Fatal("apps switch on must trigger inside the window")
+	if !shouldTrigger(rt, now) {
+		t.Fatal("apps switch on must trigger after the schedule time")
 	}
 }
 
-// TestShouldTriggerDeduplicatesLocalDay 验证当日去重以 Panel 本地日期为准，
-// 并覆盖跨重启（持久化 lastRunAt）与脏数据的宽容语义。
-func TestShouldTriggerDeduplicatesLocalDay(t *testing.T) {
+// TestShouldTriggerDeduplicatesAutoRunNotManualRun 验证当日去重只认
+// lastAutoRunAt（调度自动运行），手动运行写入的 lastRunAt 不抑制当天计划。
+func TestShouldTriggerDeduplicatesAutoRunNotManualRun(t *testing.T) {
 	loc := fixedZone()
-	now := at(4, 1, 0, loc)
+	now := at(10, 0, 0, loc)
 	rt := settings.RuntimeAutoUpdateSettings{
 		AppsEnabled:  true,
 		PackagesMode: settings.AutoUpdatePackagesModeSecurity,
 		ScheduleTime: "04:00",
 	}
-	// 同一本地日期（尽管 UTC 日期是前一天）已运行过 → 不重复。
-	sameLocalDay := time.Date(2026, 11, 19, 1, 0, 0, 0, loc)
-	rt.LastRunAt = sameLocalDay.UTC().Format(time.RFC3339Nano)
-	if shouldTrigger(rt, now, DefaultScheduleWindow) {
-		t.Fatal("a run already recorded for the local day must not trigger again")
+	// 手动运行（同一天、只写 lastRunAt）不得抑制当天的计划自动运行。
+	rt.LastRunAt = at(2, 0, 0, loc).UTC().Format(time.RFC3339Nano)
+	if !shouldTrigger(rt, now) {
+		t.Fatal("a manual run recorded in lastRunAt must not suppress the scheduled run")
+	}
+	// 调度自动运行已记录（本地同日）→ 不重复。
+	rt.LastAutoRunAt = at(4, 0, 0, loc).UTC().Format(time.RFC3339Nano)
+	if shouldTrigger(rt, now) {
+		t.Fatal("an automatic run already recorded for the local day must not trigger again")
 	}
 	// 前一个本地日期 → 允许运行。
-	previousDay := time.Date(2026, 11, 18, 4, 0, 0, 0, loc)
-	rt.LastRunAt = previousDay.UTC().Format(time.RFC3339Nano)
-	if !shouldTrigger(rt, now, DefaultScheduleWindow) {
-		t.Fatal("a previous-day run must not block today's run")
+	rt.LastAutoRunAt = time.Date(2026, 11, 18, 4, 0, 0, 0, loc).UTC().Format(time.RFC3339Nano)
+	if !shouldTrigger(rt, now) {
+		t.Fatal("a previous-day automatic run must not block today's run")
 	}
 	// 脏数据视为没有记录（宁可多跑一次也不永久跳过）。
-	rt.LastRunAt = "not-a-timestamp"
-	if !shouldTrigger(rt, now, DefaultScheduleWindow) {
-		t.Fatal("invalid lastRunAt must be treated as no record")
+	rt.LastAutoRunAt = "not-a-timestamp"
+	if !shouldTrigger(rt, now) {
+		t.Fatal("invalid lastAutoRunAt must be treated as no record")
 	}
-	rt.LastRunAt = ""
-	if !shouldTrigger(rt, now, DefaultScheduleWindow) {
-		t.Fatal("empty lastRunAt must be treated as no record")
+	rt.LastAutoRunAt = ""
+	if !shouldTrigger(rt, now) {
+		t.Fatal("empty lastAutoRunAt must be treated as no record")
 	}
 }
 
-// TestTickCreatesOncePerDayAndSurvivesRestart 覆盖调度器：命中窗口创建一次任务、
-// 同一本地日期第二次 tick 去重、重启后仍按持久化 lastRunAt 去重。
+// TestTickCreatesOncePerDayAndSurvivesRestart 覆盖调度器：命中计划时间创建一次
+// 任务并写 lastAutoRunAt、同一本地日期第二次 tick 去重、重启后仍按持久化
+// lastAutoRunAt 去重。
 func TestTickCreatesOncePerDayAndSurvivesRestart(t *testing.T) {
 	taskSvc, db := newTaskService(t)
 	loc := fixedZone()
@@ -328,6 +407,10 @@ func TestTickCreatesOncePerDayAndSurvivesRestart(t *testing.T) {
 	}
 	waitForTaskTerminal(t, taskSvc, task.ID)
 	waitForLastRunStatus(t, store, RunStatusCompleted)
+	waitForAutoRunRecorded(t, store)
+	if runs := store.autoRunTimes(); len(runs) != 1 || !runs[0].Equal(now) {
+		t.Fatalf("recorded automatic run times = %#v, want exactly [%s]", runs, now)
+	}
 	if count := countAutoUpdateRuns(t, db); count != 1 {
 		t.Fatalf("auto_update_run rows = %d, want 1", count)
 	}
@@ -345,24 +428,43 @@ func TestTickCreatesOncePerDayAndSurvivesRestart(t *testing.T) {
 	restarted := NewService(restartedTaskSvc, store, options()...)
 	restarted.RegisterTasks(restartedTaskSvc)
 	if _, created, err := restarted.tick(context.Background()); err != nil || created {
-		t.Fatalf("restart tick must dedupe using persisted lastRunAt (created=%v err=%v)", created, err)
+		t.Fatalf("restart tick must dedupe using persisted lastAutoRunAt (created=%v err=%v)", created, err)
 	}
 	if count := countAutoUpdateRuns(t, db); count != 1 {
 		t.Fatalf("auto_update_run rows after restart tick = %d, want 1", count)
 	}
+}
 
-	// 错过窗口不补跑：同一天更晚的时间即使 lastRunAt 为空也不触发。
-	laterStore := &fakeSettingsStore{rt: settings.RuntimeSettings{AutoUpdate: store.Runtime().AutoUpdate}}
-	laterStore.rt.AutoUpdate.LastRunAt = ""
-	laterTaskSvc := tasks.NewService(db)
-	laterNow := at(10, 0, 0, loc)
-	later := NewService(laterTaskSvc, laterStore,
-		WithClock(func() time.Time { return laterNow }),
+// TestTickBackfillsMissedWindowSameDay 验证错过计划时刻（面板重启/休眠/刚设置
+// 时间）后，当天剩余时间仍会补跑一次，而不是直接等到次日。
+func TestTickBackfillsMissedWindowSameDay(t *testing.T) {
+	taskSvc, db := newTaskService(t)
+	loc := fixedZone()
+	store := &fakeSettingsStore{rt: settings.RuntimeSettings{AutoUpdate: settings.RuntimeAutoUpdateSettings{
+		AppsEnabled:  true,
+		PackagesMode: settings.AutoUpdatePackagesModeSecurity,
+		ScheduleTime: "04:00",
+	}}}
+	svc := NewService(taskSvc, store,
+		WithClock(func() time.Time { return at(10, 0, 0, loc) }),
 		WithPhaseTimeouts(time.Second, time.Second, time.Second, time.Second),
 		WithWaitPollInterval(5*time.Millisecond))
-	later.RegisterTasks(laterTaskSvc)
-	if _, created, err := later.tick(context.Background()); err != nil || created {
-		t.Fatalf("a missed window must not be backfilled (created=%v err=%v)", created, err)
+	svc.RegisterTasks(taskSvc)
+
+	task, created, err := svc.tick(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created {
+		t.Fatal("a missed schedule window must still be backfilled later the same day")
+	}
+	waitForTaskTerminal(t, taskSvc, task.ID)
+	if count := countAutoUpdateRuns(t, db); count != 1 {
+		t.Fatalf("auto_update_run rows = %d, want 1", count)
+	}
+	// 当天已自动运行过 → 当天剩余时间不再重复。
+	if _, created, err := svc.tick(context.Background()); err != nil || created {
+		t.Fatalf("same-day tick after backfill must dedupe (created=%v err=%v)", created, err)
 	}
 }
 
@@ -383,8 +485,343 @@ func TestTickDoesNotCreateWhenSwitchesOff(t *testing.T) {
 	}
 }
 
+// TestTickDispatchesExistingFailedRetryableTask 验证调度 tick 命中已有
+// failed_retryable 协调任务（并发键去重、created=false）时补派发一次，
+// 避免失败任务永久卡住当天的自动更新。
+func TestTickDispatchesExistingFailedRetryableTask(t *testing.T) {
+	taskSvc, db := newTaskService(t)
+	registerTestTaskTypes(t, taskSvc, "package_refresh", "package_upgrade_security")
+	loc := fixedZone()
+	now := at(4, 0, 30, loc)
+	store := &fakeSettingsStore{rt: settings.RuntimeSettings{AutoUpdate: settings.RuntimeAutoUpdateSettings{
+		PackagesEnabled: true,
+		PackagesMode:    settings.AutoUpdatePackagesModeSecurity,
+		ScheduleTime:    "04:00",
+	}}}
+	packageMaintainer := &fakePackageMaintainer{t: t, taskSvc: taskSvc}
+	svc := NewService(taskSvc, store,
+		WithServerLister(fakeServerLister{servers: []server.Server{testServer("srv-a", "a")}}),
+		WithPackageMaintainer(packageMaintainer),
+		WithClock(func() time.Time { return now }),
+		WithPhaseTimeouts(time.Second, time.Second, time.Second, time.Second),
+		WithWaitPollInterval(5*time.Millisecond),
+	)
+	svc.RegisterTasks(taskSvc)
+
+	existing, _, err := tasks.NewManager(taskSvc).Create(context.Background(), tasks.CreateInput{
+		Type:        TaskTypeAutoUpdateRun,
+		Status:      tasks.StatusFailedRetryable,
+		TriggerType: triggerTypeScheduler,
+		Summary:     "Automatic updates",
+		ParamsJSON:  paramsFor(store.Runtime().AutoUpdate, triggerTypeScheduler),
+	}, tasks.Trigger{Type: triggerTypeScheduler, Periodic: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if existing.Status != tasks.StatusFailedRetryable {
+		t.Fatalf("created existing task status = %q, want failed_retryable", existing.Status)
+	}
+
+	task, created, err := svc.tick(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created {
+		t.Fatal("tick must reuse the existing active task instead of creating a new one")
+	}
+	if task.ID != existing.ID {
+		t.Fatalf("tick task id = %q, want existing id %q", task.ID, existing.ID)
+	}
+	latest := waitForTaskTerminal(t, taskSvc, existing.ID)
+	if latest.Status != tasks.StatusCompleted {
+		t.Fatalf("redriven task status = %q, want completed; error=%q", latest.Status, latest.Error)
+	}
+	waitForAutoRunRecorded(t, store)
+	if count := countAutoUpdateRuns(t, db); count != 1 {
+		t.Fatalf("auto_update_run rows = %d, want 1", count)
+	}
+	if calls := packageMaintainer.upgradeCalls(); len(calls) != 1 || calls[0] != "security:srv-a" {
+		t.Fatalf("package upgrade calls = %#v, want [security:srv-a]", calls)
+	}
+}
+
+// TestManualRunDoesNotSuppressScheduledRun 覆盖核心缺陷修复：手动「立即运行一次」
+// 只写 lastRunAt，不得写 lastAutoRunAt；当天稍后的计划自动运行仍必须触发。
+func TestManualRunDoesNotSuppressScheduledRun(t *testing.T) {
+	taskSvc, db := newTaskService(t)
+	registerTestTaskTypes(t, taskSvc, "package_refresh", "package_upgrade_security")
+	loc := fixedZone()
+	now := at(2, 0, 0, loc)
+	store := &fakeSettingsStore{rt: settings.RuntimeSettings{AutoUpdate: settings.RuntimeAutoUpdateSettings{
+		PackagesEnabled: true,
+		PackagesMode:    settings.AutoUpdatePackagesModeSecurity,
+		ScheduleTime:    "04:00",
+	}}}
+	packageMaintainer := &fakePackageMaintainer{t: t, taskSvc: taskSvc}
+	svc := NewService(taskSvc, store,
+		WithServerLister(fakeServerLister{servers: []server.Server{testServer("srv-a", "a")}}),
+		WithPackageMaintainer(packageMaintainer),
+		WithClock(func() time.Time { return now }),
+		WithPhaseTimeouts(time.Second, time.Second, time.Second, time.Second),
+		WithWaitPollInterval(5*time.Millisecond),
+	)
+	svc.RegisterTasks(taskSvc)
+
+	taskID, err := svc.RunAutoUpdateNow(context.Background(), store.Runtime().AutoUpdate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if taskID == "" {
+		t.Fatal("manual run must return the created task id")
+	}
+	waitForTaskTerminal(t, taskSvc, taskID)
+	waitForLastRunStatus(t, store, RunStatusCompleted)
+	if runs := store.autoRunTimes(); len(runs) != 0 {
+		t.Fatalf("manual run must not record lastAutoRunAt, got %#v", runs)
+	}
+	if last, _ := store.lastState(); last.LastRunSummary == "" {
+		t.Fatal("manual run must record an end-of-run summary")
+	}
+
+	// 当天计划时间到达：手动运行不抑制计划自动运行。
+	svc.now = func() time.Time { return at(4, 0, 30, loc) }
+	task, created, err := svc.tick(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created {
+		t.Fatal("a manual run must not suppress the scheduled run later the same day")
+	}
+	waitForTaskTerminal(t, taskSvc, task.ID)
+	waitForAutoRunRecorded(t, store)
+	if count := countAutoUpdateRuns(t, db); count != 2 {
+		t.Fatalf("auto_update_run rows = %d, want 2 (manual + scheduled)", count)
+	}
+	// 计划运行之后同一天不再重复。
+	if _, created, err := svc.tick(context.Background()); err != nil || created {
+		t.Fatalf("same-day scheduled tick must dedupe (created=%v err=%v)", created, err)
+	}
+}
+
+// TestRunAutoUpdateNowDispatchesExistingQueuedTask 验证手动运行遇到已存在但未
+// 运行中的任务（queued）时补派发，而不是静默返回一个永远不会执行的 taskId。
+func TestRunAutoUpdateNowDispatchesExistingQueuedTask(t *testing.T) {
+	taskSvc, db := newTaskService(t)
+	registerTestTaskTypes(t, taskSvc, "package_refresh", "package_upgrade_security")
+	loc := fixedZone()
+	store := &fakeSettingsStore{rt: settings.RuntimeSettings{AutoUpdate: settings.RuntimeAutoUpdateSettings{
+		PackagesEnabled: true,
+		PackagesMode:    settings.AutoUpdatePackagesModeSecurity,
+		ScheduleTime:    "04:00",
+	}}}
+	packageMaintainer := &fakePackageMaintainer{t: t, taskSvc: taskSvc}
+	svc := NewService(taskSvc, store,
+		WithServerLister(fakeServerLister{servers: []server.Server{testServer("srv-a", "a")}}),
+		WithPackageMaintainer(packageMaintainer),
+		WithClock(func() time.Time { return at(10, 0, 0, loc) }),
+		WithPhaseTimeouts(time.Second, time.Second, time.Second, time.Second),
+		WithWaitPollInterval(5*time.Millisecond),
+	)
+	svc.RegisterTasks(taskSvc)
+
+	// 模拟调度刚创建、尚未派发的 queued 任务：与手动运行共享并发键。
+	existing, err := taskSvc.Create(context.Background(), tasks.CreateInput{
+		Type:        TaskTypeAutoUpdateRun,
+		TriggerType: triggerTypeScheduler,
+		Summary:     "Automatic updates",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskID, err := svc.RunAutoUpdateNow(context.Background(), settings.RuntimeAutoUpdateSettings{
+		PackagesEnabled: true,
+		PackagesMode:    settings.AutoUpdatePackagesModeSecurity,
+		ScheduleTime:    "04:00",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if taskID != existing.ID {
+		t.Fatalf("manual run task id = %q, want existing task id %q", taskID, existing.ID)
+	}
+	latest := waitForTaskTerminal(t, taskSvc, existing.ID)
+	if latest.Status != tasks.StatusCompleted {
+		t.Fatalf("queued existing task status = %q, want completed; error=%q", latest.Status, latest.Error)
+	}
+	if count := countAutoUpdateRuns(t, db); count != 1 {
+		t.Fatalf("auto_update_run rows = %d, want 1 (no duplicate task)", count)
+	}
+	if calls := packageMaintainer.upgradeCalls(); len(calls) != 1 {
+		t.Fatalf("package upgrade calls = %#v, want exactly 1 dispatch", calls)
+	}
+}
+
+// TestRunAutoUpdateNowReturnsRunningTaskID 验证已有运行中的协调任务时手动运行
+// 幂等返回其 ID，不重复派发。
+func TestRunAutoUpdateNowReturnsRunningTaskID(t *testing.T) {
+	taskSvc, db := newTaskService(t)
+	loc := fixedZone()
+	store := &fakeSettingsStore{rt: settings.RuntimeSettings{AutoUpdate: settings.RuntimeAutoUpdateSettings{
+		AppsEnabled:  true,
+		PackagesMode: settings.AutoUpdatePackagesModeSecurity,
+		ScheduleTime: "04:00",
+	}}}
+	svc := NewService(taskSvc, store, WithClock(func() time.Time { return at(10, 0, 0, loc) }))
+	svc.RegisterTasks(taskSvc)
+
+	running, err := taskSvc.Create(context.Background(), tasks.CreateInput{
+		Type:        TaskTypeAutoUpdateRun,
+		Status:      tasks.StatusRunning,
+		TriggerType: triggerTypeScheduler,
+		Summary:     "Automatic updates",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskID, err := svc.RunAutoUpdateNow(context.Background(), settings.RuntimeAutoUpdateSettings{
+		AppsEnabled:  true,
+		PackagesMode: settings.AutoUpdatePackagesModeSecurity,
+		ScheduleTime: "04:00",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if taskID != running.ID {
+		t.Fatalf("manual run task id = %q, want running task id %q", taskID, running.ID)
+	}
+	if count := countAutoUpdateRuns(t, db); count != 1 {
+		t.Fatalf("auto_update_run rows = %d, want 1 (idempotent)", count)
+	}
+	latest, err := taskSvc.Get(context.Background(), running.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest.Status != tasks.StatusRunning {
+		t.Fatalf("idempotent call must not restart the running task, status = %q", latest.Status)
+	}
+}
+
+// TestRunAutoUpdateTaskRefreshesApplicationImagesBeforeAppPhase 覆盖核心缺陷修复：
+// 刷新阶段必须请求应用镜像 digest 刷新，应用阶段才能使用刷新后的
+// ImageUpdateAvailable 筛到应用。
+func TestRunAutoUpdateTaskRefreshesApplicationImagesBeforeAppPhase(t *testing.T) {
+	taskSvc, _ := newTaskService(t)
+	registerTestTaskTypes(t, taskSvc, "application_image_check", "application_image_upgrade_all")
+	store := &fakeSettingsStore{rt: settings.RuntimeSettings{AutoUpdate: settings.RuntimeAutoUpdateSettings{
+		AppsEnabled:  true,
+		PackagesMode: settings.AutoUpdatePackagesModeSecurity,
+		ScheduleTime: "04:00",
+	}}}
+	appLister := &fakeApplicationLister{apps: []applications.Application{
+		{ID: "app-1", Name: "one", Enabled: true, AutoUpdateEnabled: true, ImageUpdateAvailable: false},
+		{ID: "app-2", Name: "two", Enabled: true, AutoUpdateEnabled: true, ImageUpdateAvailable: false},
+	}}
+	appRefresher := &fakeApplicationImageRefresher{
+		t: t, taskSvc: taskSvc, lister: appLister,
+		ids: []string{"app-1", "app-2"},
+	}
+	appUpgrader := &fakeApplicationUpgrader{t: t, taskSvc: taskSvc, taskStatus: tasks.StatusCompleted}
+	svc := NewService(taskSvc, store,
+		WithApplicationLister(appLister),
+		WithApplicationUpgrader(appUpgrader),
+		WithApplicationImageRefresher(appRefresher),
+		WithClock(func() time.Time { return at(4, 0, 30, fixedZone()) }),
+		WithPhaseTimeouts(time.Second, time.Second, time.Second, time.Second),
+		WithWaitPollInterval(5*time.Millisecond),
+	)
+	svc.RegisterTasks(taskSvc)
+
+	task, err := taskSvc.Create(context.Background(), tasks.CreateInput{Type: TaskTypeAutoUpdateRun, Summary: "Automatic updates"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RunAutoUpdateTask(tasks.TaskContext{Context: context.Background(), Task: task, Service: taskSvc}); err != nil {
+		t.Fatal(err)
+	}
+	latest, err := taskSvc.Get(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest.Status != tasks.StatusCompleted {
+		t.Fatalf("task status = %q, want completed; error=%q", latest.Status, latest.Error)
+	}
+	if appRefresher.calls != 1 {
+		t.Fatalf("application image refresh calls = %d, want 1", appRefresher.calls)
+	}
+	// 刷新后 ImageUpdateAvailable 才为 true，应用阶段因此筛到两个应用。
+	if len(appUpgrader.ids) != 2 || appUpgrader.ids[0] != "app-1" || appUpgrader.ids[1] != "app-2" {
+		t.Fatalf("application ids passed to upgrader = %#v, want [app-1 app-2]", appUpgrader.ids)
+	}
+	state, ok := store.lastState()
+	if !ok || state.LastRunStatus != RunStatusCompleted {
+		t.Fatalf("last run state = %#v, want completed", state)
+	}
+	if !strings.Contains(state.LastRunSummary, "2 application image update(s) planned") {
+		t.Fatalf("last run summary = %q, want planned application count", state.LastRunSummary)
+	}
+}
+
+// TestRunAutoUpdateTaskApplicationRefreshFailureDoesNotBlock 验证应用镜像刷新失败
+// 只记日志：任务仍完成，应用阶段使用未刷新的缓存（筛不到更新），不阻断软件包阶段。
+func TestRunAutoUpdateTaskApplicationRefreshFailureDoesNotBlock(t *testing.T) {
+	taskSvc, _ := newTaskService(t)
+	registerTestTaskTypes(t, taskSvc, "application_image_upgrade_all", "package_refresh", "package_upgrade_security")
+	store := &fakeSettingsStore{rt: settings.RuntimeSettings{AutoUpdate: settings.RuntimeAutoUpdateSettings{
+		AppsEnabled:     true,
+		PackagesEnabled: true,
+		PackagesMode:    settings.AutoUpdatePackagesModeSecurity,
+		ScheduleTime:    "04:00",
+	}}}
+	appLister := &fakeApplicationLister{apps: []applications.Application{
+		{ID: "app-1", Name: "one", Enabled: true, AutoUpdateEnabled: true, ImageUpdateAvailable: false},
+	}}
+	appRefresher := &fakeApplicationImageRefresher{
+		t: t, taskSvc: taskSvc, lister: appLister,
+		ids: []string{"app-1"},
+		err: errors.New("registry unreachable"),
+	}
+	appUpgrader := &fakeApplicationUpgrader{t: t, taskSvc: taskSvc, taskStatus: tasks.StatusCompleted}
+	packageMaintainer := &fakePackageMaintainer{t: t, taskSvc: taskSvc}
+	svc := NewService(taskSvc, store,
+		WithServerLister(fakeServerLister{servers: []server.Server{testServer("srv-a", "a")}}),
+		WithApplicationLister(appLister),
+		WithApplicationUpgrader(appUpgrader),
+		WithApplicationImageRefresher(appRefresher),
+		WithPackageMaintainer(packageMaintainer),
+		WithClock(func() time.Time { return at(4, 0, 30, fixedZone()) }),
+		WithPhaseTimeouts(time.Second, time.Second, time.Second, time.Second),
+		WithWaitPollInterval(5*time.Millisecond),
+	)
+	svc.RegisterTasks(taskSvc)
+
+	task, err := taskSvc.Create(context.Background(), tasks.CreateInput{Type: TaskTypeAutoUpdateRun, Summary: "Automatic updates"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RunAutoUpdateTask(tasks.TaskContext{Context: context.Background(), Task: task, Service: taskSvc}); err != nil {
+		t.Fatal(err)
+	}
+	latest, err := taskSvc.Get(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest.Status != tasks.StatusCompleted {
+		t.Fatalf("task status = %q, want completed despite refresh failure; error=%q", latest.Status, latest.Error)
+	}
+	if len(appUpgrader.ids) != 0 {
+		t.Fatalf("stale cache must not plan upgrades, got %#v", appUpgrader.ids)
+	}
+	if calls := packageMaintainer.upgradeCalls(); len(calls) != 1 || calls[0] != "security:srv-a" {
+		t.Fatalf("package phase must continue after refresh failure, calls = %#v", calls)
+	}
+	state, _ := store.lastState()
+	if !strings.Contains(state.LastRunSummary, "0 application image update(s) planned") {
+		t.Fatalf("last run summary = %q, want zero planned applications", state.LastRunSummary)
+	}
+}
+
 // TestRunAutoUpdateTaskDisabledCompletes 验证执行时重新读取设置：两开关都关时
-// 任务直接完成并写 disabled 运行态。
+// 任务直接完成并写 disabled 运行态与摘要。
 func TestRunAutoUpdateTaskDisabledCompletes(t *testing.T) {
 	taskSvc, _ := newTaskService(t)
 	store := &fakeSettingsStore{rt: settings.RuntimeSettings{AutoUpdate: settings.RuntimeAutoUpdateSettings{
@@ -412,10 +849,14 @@ func TestRunAutoUpdateTaskDisabledCompletes(t *testing.T) {
 	if !ok || state.LastRunStatus != RunStatusDisabled {
 		t.Fatalf("last run state = %#v, want disabled", state)
 	}
+	if state.LastRunSummary == "" {
+		t.Fatal("disabled run must record a summary")
+	}
 }
 
 // TestRunAutoUpdateTaskSerialPhasesContinueOnFailure 覆盖：对象级开关过滤、
-// 阶段失败继续、软件包逐服务器串行且单台失败不跳过其余、运行态 running→failed。
+// 阶段失败继续、软件包逐服务器串行且单台失败不跳过其余、运行态 running→failed
+// 与失败摘要。
 func TestRunAutoUpdateTaskSerialPhasesContinueOnFailure(t *testing.T) {
 	taskSvc, _ := newTaskService(t)
 	registerTestTaskTypes(t, taskSvc,
@@ -426,7 +867,7 @@ func TestRunAutoUpdateTaskSerialPhasesContinueOnFailure(t *testing.T) {
 		PackagesMode:    settings.AutoUpdatePackagesModeSecurity,
 		ScheduleTime:    "04:00",
 	}}}
-	appLister := fakeApplicationLister{apps: []applications.Application{
+	appLister := &fakeApplicationLister{apps: []applications.Application{
 		{ID: "app-1", Name: "one", Enabled: true, AutoUpdateEnabled: true, ImageUpdateAvailable: true},
 		{ID: "app-2", Name: "two", Enabled: true, AutoUpdateEnabled: false, ImageUpdateAvailable: true},
 		{ID: "app-3", Name: "three", Enabled: true, AutoUpdateEnabled: true, ImageUpdateAvailable: false},
@@ -495,6 +936,13 @@ func TestRunAutoUpdateTaskSerialPhasesContinueOnFailure(t *testing.T) {
 	if !state.LastRunAt.Equal(at(4, 0, 30, loc)) {
 		t.Fatalf("last run time = %s, want the run start time", state.LastRunAt)
 	}
+	if !strings.Contains(state.LastRunSummary, "failed") {
+		t.Fatalf("failed run summary = %q, want a failure description", state.LastRunSummary)
+	}
+	// 该任务由调度链路创建（Test 直接建任务，无 manual 参数）→ 记 lastAutoRunAt。
+	if runs := store.autoRunTimes(); len(runs) != 1 || !runs[0].Equal(at(4, 0, 30, loc)) {
+		t.Fatalf("scheduled run must record lastAutoRunAt once, got %#v", runs)
+	}
 }
 
 // TestRunAutoUpdateTaskPackagesModeAll 验证 all 模式使用 package_upgrade_all。
@@ -533,23 +981,28 @@ func TestRunAutoUpdateTaskPackagesModeAll(t *testing.T) {
 	if calls := packageMaintainer.upgradeCalls(); len(calls) != 1 || calls[0] != "all:srv-a" {
 		t.Fatalf("package upgrade calls = %#v, want [all:srv-a]", calls)
 	}
-	if state, _ := store.lastState(); state.LastRunStatus != RunStatusCompleted {
+	state, _ := store.lastState()
+	if state.LastRunStatus != RunStatusCompleted {
 		t.Fatalf("last run status = %q, want completed", state.LastRunStatus)
+	}
+	if !strings.Contains(state.LastRunSummary, "1 server(s) processed (all)") {
+		t.Fatalf("last run summary = %q, want package processing summary", state.LastRunSummary)
 	}
 }
 
 // TestRunAutoUpdateNowUsesManualTriggerAndTemporaryOverrides 覆盖手动「立即运行
 // 一次」：跳过计划时间窗口与当日去重（当前设置已关且当日已运行过仍创建任务）、
 // 任务 TriggerType=user、ParamsJSON.trigger=manual、执行阶段使用任务参数中的
-// 有效设置（全量升级），并仍写 lastRun（running→completed）。
+// 有效设置（全量升级），写 lastRun（running→completed）但不写 lastAutoRunAt。
 func TestRunAutoUpdateNowUsesManualTriggerAndTemporaryOverrides(t *testing.T) {
 	taskSvc, db := newTaskService(t)
 	registerTestTaskTypes(t, taskSvc, "package_refresh", "package_upgrade_security", "package_upgrade_all")
 	loc := fixedZone()
 	store := &fakeSettingsStore{rt: settings.RuntimeSettings{AutoUpdate: settings.RuntimeAutoUpdateSettings{
-		PackagesMode: settings.AutoUpdatePackagesModeSecurity,
-		ScheduleTime: "04:00",
-		LastRunAt:    at(2, 0, 0, loc).UTC().Format(time.RFC3339Nano),
+		PackagesMode:  settings.AutoUpdatePackagesModeSecurity,
+		ScheduleTime:  "04:00",
+		LastRunAt:     at(2, 0, 0, loc).UTC().Format(time.RFC3339Nano),
+		LastAutoRunAt: at(3, 0, 0, loc).UTC().Format(time.RFC3339Nano),
 	}}}
 	packageMaintainer := &fakePackageMaintainer{t: t, taskSvc: taskSvc}
 	svc := NewService(taskSvc, store,
@@ -603,54 +1056,12 @@ func TestRunAutoUpdateNowUsesManualTriggerAndTemporaryOverrides(t *testing.T) {
 	if statuses := store.stateStatuses(); len(statuses) != 2 || statuses[0] != RunStatusRunning || statuses[1] != RunStatusCompleted {
 		t.Fatalf("last run statuses = %#v, want [running completed]", statuses)
 	}
+	// 手动运行不得写 lastAutoRunAt（不能吞掉当天的计划运行）。
+	if runs := store.autoRunTimes(); len(runs) != 0 {
+		t.Fatalf("manual run must not record lastAutoRunAt, got %#v", runs)
+	}
 	if count := countAutoUpdateRuns(t, db); count != 1 {
 		t.Fatalf("auto_update_run rows = %d, want 1", count)
-	}
-}
-
-// TestRunAutoUpdateNowReturnsActiveTaskID 验证与调度触发共用全局互斥：已有活跃
-// auto_update_run（例如调度刚创建、尚未执行完）时手动立即运行幂等返回其 taskId，
-// 不创建新任务、也不重复派发。
-func TestRunAutoUpdateNowReturnsActiveTaskID(t *testing.T) {
-	taskSvc, db := newTaskService(t)
-	loc := fixedZone()
-	store := &fakeSettingsStore{rt: settings.RuntimeSettings{AutoUpdate: settings.RuntimeAutoUpdateSettings{
-		AppsEnabled:  true,
-		PackagesMode: settings.AutoUpdatePackagesModeSecurity,
-		ScheduleTime: "04:00",
-	}}}
-	svc := NewService(taskSvc, store, WithClock(func() time.Time { return at(10, 0, 0, loc) }))
-	svc.RegisterTasks(taskSvc)
-
-	// 模拟已有活跃任务（queued）：它与手动运行共享 type:auto_update_run 并发键。
-	existing, err := taskSvc.Create(context.Background(), tasks.CreateInput{
-		Type:        TaskTypeAutoUpdateRun,
-		TriggerType: triggerTypeScheduler,
-		Summary:     "Automatic updates",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	taskID, err := svc.RunAutoUpdateNow(context.Background(), settings.RuntimeAutoUpdateSettings{
-		AppsEnabled:  true,
-		PackagesMode: settings.AutoUpdatePackagesModeSecurity,
-		ScheduleTime: "04:00",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if taskID != existing.ID {
-		t.Fatalf("manual run task id = %q, want active task id %q", taskID, existing.ID)
-	}
-	if count := countAutoUpdateRuns(t, db); count != 1 {
-		t.Fatalf("auto_update_run rows = %d, want 1 (idempotent)", count)
-	}
-	latest, err := taskSvc.Get(context.Background(), existing.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if latest.Status != tasks.StatusQueued {
-		t.Fatalf("idempotent call must not dispatch the active task, status = %q", latest.Status)
 	}
 }
 
@@ -659,7 +1070,9 @@ func waitForTaskTerminal(t *testing.T, taskSvc *tasks.Service, taskID string) ta
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		task, err := taskSvc.Get(context.Background(), taskID)
-		if err == nil && taskFinished(task.Status) {
+		// failed_retryable 是「等待重试」而非终态：补派发的任务会从该状态重新
+		// 进入 running，因此必须等到 completed/failed/blocked/cancelled 再断言。
+		if err == nil && settledStatus(task.Status) {
 			return task
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -667,6 +1080,15 @@ func waitForTaskTerminal(t *testing.T, taskSvc *tasks.Service, taskID string) ta
 	task, _ := taskSvc.Get(context.Background(), taskID)
 	t.Fatalf("task %s did not reach a terminal status, got %#v", taskID, task)
 	return task
+}
+
+func settledStatus(status string) bool {
+	switch status {
+	case tasks.StatusCompleted, tasks.StatusFailed, tasks.StatusBlocked, tasks.StatusCancelled:
+		return true
+	default:
+		return false
+	}
 }
 
 func waitForLastRunStatus(t *testing.T, store *fakeSettingsStore, status string) {
@@ -680,6 +1102,18 @@ func waitForLastRunStatus(t *testing.T, store *fakeSettingsStore, status string)
 	}
 	state, _ := store.lastState()
 	t.Fatalf("last run status did not become %q, got %#v", status, state)
+}
+
+func waitForAutoRunRecorded(t *testing.T, store *fakeSettingsStore) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if store.lastAutoRunAt() != "" {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("lastAutoRunAt was not recorded for a scheduled run")
 }
 
 func countAutoUpdateRuns(t *testing.T, db *sql.DB) int {

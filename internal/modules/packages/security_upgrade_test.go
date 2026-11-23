@@ -95,61 +95,44 @@ func (a *securityTestAdapter) UpgradeAll(context.Context, sshx.RemoteExecutor, s
 	return nil
 }
 
-func TestSecurityPackageNamesClassification(t *testing.T) {
+// TestSecurityPackageSelectionOnlyKnownSecurity 锁定选择语义：只有 Agent 权威
+// 判定 SecurityKnown 且 Security 的包才升级；未知包（哪怕 Source 像安全源）
+// 一律跳过，绝不启发式猜测。
+func TestSecurityPackageSelectionOnlyKnownSecurity(t *testing.T) {
 	updates := []linux.PackageUpdate{
-		{Name: "openssl", Source: "jammy-security"},
-		{Name: "curl", Source: "Debian-Security"},
-		{Name: "libc6", Source: "jammy-updates"},
-		{Name: "bash", Source: ""},
-		{Name: "nginx", Source: "stable-security"},
+		{Name: "openssl", Source: "jammy-updates", Security: true, SecurityKnown: true},
+		{Name: "curl", Source: "jammy-security", Security: false, SecurityKnown: true},
+		{Name: "libc6", Source: "jammy-security"}, // 未知，source 看起来像安全源
+		{Name: "bash", Source: "jammy-updates"},   // 未知
 	}
-	got := securityPackageNames(updates)
-	want := []string{"openssl", "curl", "nginx"}
-	if len(got) != len(want) {
-		t.Fatalf("security packages = %#v, want %#v", got, want)
+	names, unknown := securityPackageSelection(updates)
+	wantNames := []string{"openssl"}
+	if len(names) != len(wantNames) || names[0] != wantNames[0] {
+		t.Fatalf("security names = %#v, want %#v", names, wantNames)
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("security packages = %#v, want %#v", got, want)
-		}
+	wantUnknown := []string{"libc6", "bash"}
+	if len(unknown) != len(wantUnknown) || unknown[0] != wantUnknown[0] || unknown[1] != wantUnknown[1] {
+		t.Fatalf("unknown names = %#v, want %#v", unknown, wantUnknown)
 	}
-	if names := securityPackageNames(nil); len(names) != 0 {
+	if names, _ := securityPackageSelection(nil); len(names) != 0 {
 		t.Fatalf("empty input must yield no names, got %#v", names)
 	}
-}
-
-// TestIsSecuritySourceClassification 锁定列表 API 与安全升级任务共用的安全源
-// 判定：security 标记忽略大小写，空 source 与非安全源不命中。
-func TestIsSecuritySourceClassification(t *testing.T) {
-	cases := []struct {
-		name   string
-		source string
-		want   bool
-	}{
-		{"debian security suite", "stable-security", true},
-		{"ubuntu security suite", "jammy-security", true},
-		{"mixed case", "Debian-Security", true},
-		{"upper case", "SECURITY", true},
-		{"regular updates suite", "jammy-updates", false},
-		{"empty source", "", false},
-		{"unrelated source", "bookworm", false},
-	}
-	for _, tc := range cases {
-		if got := IsSecuritySource(tc.source); got != tc.want {
-			t.Fatalf("IsSecuritySource(%q) = %v, want %v (%s)", tc.source, got, tc.want, tc.name)
-		}
+	if names, _ := securityPackageSelection([]linux.PackageUpdate{{Name: "openssl", Source: "jammy-security"}}); len(names) != 0 {
+		t.Fatalf("unknown packages must not be selected, got %#v", names)
 	}
 }
 
-// TestListMarksSecurityUpdates 验证 List 读取 DB 缓存时用与安全升级任务相同的
-// 判定填充 Security，并且 JSON 响应中每个更新都带 security 布尔字段。
-func TestListMarksSecurityUpdates(t *testing.T) {
+// TestListUsesPersistedSecurityAuthority 验证 List 原样透传持久化的权威判定：
+// 已知非安全的安全源包展示为非安全，未知包既不是安全也不猜测。
+func TestListUsesPersistedSecurityAuthority(t *testing.T) {
 	svc, _, _ := newSecurityUpgradeTestService(t)
 	updates := []linux.PackageUpdate{
-		{Name: "openssl", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-security"},
-		{Name: "curl", InstalledVersion: "1", CandidateVersion: "2", Source: "Debian-Security"},
-		{Name: "libc6", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-updates"},
-		{Name: "bash", InstalledVersion: "1", CandidateVersion: "2", Source: ""},
+		{Name: "authoritative_secure", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-updates", Security: true, SecurityKnown: true},
+		{Name: "authoritative_plain", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-security", Security: false, SecurityKnown: true},
+		{Name: "unknown_security_source", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-security"},
+		{Name: "unknown_plain", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-updates"},
+		// 防御历史脏行：未知状态下即便残留 security=1 也不得展示为安全。
+		{Name: "stale_security_bit", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-security", Security: true},
 	}
 	if err := svc.replaceUpdates(context.Background(), "srv", updates); err != nil {
 		t.Fatal(err)
@@ -158,17 +141,24 @@ func TestListMarksSecurityUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]bool{"openssl": true, "curl": true, "libc6": false, "bash": false}
+	want := map[string]struct{ security, known bool }{
+		"authoritative_secure":    {security: true, known: true},
+		"authoritative_plain":     {security: false, known: true},
+		"unknown_security_source": {security: false, known: false},
+		"unknown_plain":           {security: false, known: false},
+		"stale_security_bit":      {security: false, known: false},
+	}
 	if len(list.Updates) != len(want) {
 		t.Fatalf("updates = %#v, want %d rows", list.Updates, len(want))
 	}
 	for _, update := range list.Updates {
-		security, ok := want[update.Name]
+		expected, ok := want[update.Name]
 		if !ok {
 			t.Fatalf("unexpected package %q in list", update.Name)
 		}
-		if update.Security != security {
-			t.Fatalf("update %q Security = %v, want %v (source %q)", update.Name, update.Security, security, update.Source)
+		if update.Security != expected.security || update.SecurityKnown != expected.known {
+			t.Fatalf("update %q security=%v known=%v, want %v/%v (source %q)",
+				update.Name, update.Security, update.SecurityKnown, expected.security, expected.known, update.Source)
 		}
 		delete(want, update.Name)
 	}
@@ -176,7 +166,7 @@ func TestListMarksSecurityUpdates(t *testing.T) {
 		t.Fatalf("missing packages in list: %#v", want)
 	}
 
-	// API 字段形状：每个更新对象都必须显式带 security 布尔字段。
+	// API 字段形状：每个更新对象都必须显式带 security 与 securityKnown 布尔字段。
 	raw, err := json.Marshal(list)
 	if err != nil {
 		t.Fatal(err)
@@ -191,12 +181,14 @@ func TestListMarksSecurityUpdates(t *testing.T) {
 		t.Fatalf("json updates = %#v, want %d items", payload.Updates, len(updates))
 	}
 	for _, item := range payload.Updates {
-		value, ok := item["security"]
-		if !ok {
-			t.Fatalf("json update %v is missing security field: %s", item["name"], raw)
-		}
-		if _, ok := value.(bool); !ok {
-			t.Fatalf("json update %v security = %#v, want bool", item["name"], value)
+		for _, key := range []string{"security", "securityKnown"} {
+			value, ok := item[key]
+			if !ok {
+				t.Fatalf("json update %v is missing %s field: %s", item["name"], key, raw)
+			}
+			if _, ok := value.(bool); !ok {
+				t.Fatalf("json update %v %s = %#v, want bool", item["name"], key, value)
+			}
 		}
 	}
 }
@@ -206,11 +198,11 @@ func TestListMarksSecurityUpdates(t *testing.T) {
 func TestSecurityTaskAndListShareClassification(t *testing.T) {
 	svc, _, _ := newSecurityUpgradeTestService(t)
 	updates := []linux.PackageUpdate{
-		{Name: "openssl", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-security"},
-		{Name: "curl", InstalledVersion: "1", CandidateVersion: "2", Source: "Debian-Security"},
-		{Name: "nginx", InstalledVersion: "1", CandidateVersion: "2", Source: "STABLE-SECURITY"},
-		{Name: "libc6", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-updates"},
-		{Name: "bash", InstalledVersion: "1", CandidateVersion: "2", Source: ""},
+		{Name: "openssl", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-updates", Security: true, SecurityKnown: true},
+		{Name: "curl", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-security", Security: true, SecurityKnown: true},
+		{Name: "nginx", InstalledVersion: "1", CandidateVersion: "2", Source: "stable-security", Security: false, SecurityKnown: true},
+		{Name: "libc6", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-updates", Security: false, SecurityKnown: true},
+		{Name: "bash", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-security"},
 	}
 	if err := svc.replaceUpdates(context.Background(), "srv", updates); err != nil {
 		t.Fatal(err)
@@ -225,7 +217,7 @@ func TestSecurityTaskAndListShareClassification(t *testing.T) {
 			fromList = append(fromList, update.Name)
 		}
 	}
-	fromTask := securityPackageNames(updates)
+	fromTask, _ := securityPackageSelection(updates)
 	sort.Strings(fromList)
 	sort.Strings(fromTask)
 	if len(fromList) != len(fromTask) {
@@ -238,20 +230,19 @@ func TestSecurityTaskAndListShareClassification(t *testing.T) {
 	}
 }
 
-// TestUpgradeSecurityUpgradesOnlySecurityPackages 验证实时分类 + names 升级路径：
-// 只有 Source 命中 security 的包被传给 UpgradeSelected，全部升级入口不被调用，
-// 升级后缓存刷新为最新剩余列表。
-func TestUpgradeSecurityUpgradesOnlySecurityPackages(t *testing.T) {
+// TestUpgradeSecurityUpgradesOnlyKnownSecurityPackages 验证只升级 Agent 明确
+// 判定为安全的包；未知包跳过，任务继续完成。
+func TestUpgradeSecurityUpgradesOnlyKnownSecurityPackages(t *testing.T) {
 	svc, taskSvc, db := newSecurityUpgradeTestService(t)
 	adapter := &securityTestAdapter{
 		initial: []linux.PackageUpdate{
-			{Name: "openssl", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-security"},
-			{Name: "libc6", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-updates"},
-			{Name: "curl", InstalledVersion: "1", CandidateVersion: "2", Source: ""},
-			{Name: "nginx", InstalledVersion: "1", CandidateVersion: "2", Source: "stable-security"},
+			{Name: "openssl", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-updates", Security: true, SecurityKnown: true},
+			{Name: "libc6", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-security"},
+			{Name: "curl", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-security", Security: false, SecurityKnown: true},
+			{Name: "nginx", InstalledVersion: "1", CandidateVersion: "2", Source: "stable-security", Security: true, SecurityKnown: true},
 		},
 		remaining: []linux.PackageUpdate{
-			{Name: "libc6", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-updates"},
+			{Name: "libc6", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-security"},
 		},
 	}
 	svc.adapter = adapter
@@ -274,7 +265,7 @@ func TestUpgradeSecurityUpgradesOnlySecurityPackages(t *testing.T) {
 		t.Fatalf("upgraded names = %#v, want %#v", selectedNames, wantNames)
 	}
 
-	// 升级后缓存刷新为剩余（非安全）更新。
+	// 升级后缓存刷新为剩余（未知）更新。
 	var cached []string
 	rows, err := db.Query(`SELECT name FROM package_updates WHERE server_id='srv' ORDER BY name`)
 	if err != nil {
@@ -293,18 +284,18 @@ func TestUpgradeSecurityUpgradesOnlySecurityPackages(t *testing.T) {
 	}
 }
 
-// TestUpgradeSecurityNoSecurityUpdatesDoesNotUpgradeAll 验证空安全集合直接完成，
-// 绝不退化为全部升级。
+// TestUpgradeSecurityNoSecurityUpdatesDoesNotUpgradeAll 验证没有已知安全更新时
+// 直接完成，绝不退化为全部升级（未知包同样不升级）。
 func TestUpgradeSecurityNoSecurityUpdatesDoesNotUpgradeAll(t *testing.T) {
 	svc, taskSvc, db := newSecurityUpgradeTestService(t)
 	adapter := &securityTestAdapter{
 		initial: []linux.PackageUpdate{
-			{Name: "libc6", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-updates"},
-			{Name: "bash", InstalledVersion: "1", CandidateVersion: "2", Source: ""},
+			{Name: "libc6", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-updates", Security: false, SecurityKnown: true},
+			{Name: "bash", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-security"},
 		},
 		remaining: []linux.PackageUpdate{
-			{Name: "libc6", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-updates"},
-			{Name: "bash", InstalledVersion: "1", CandidateVersion: "2", Source: ""},
+			{Name: "libc6", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-updates", Security: false, SecurityKnown: true},
+			{Name: "bash", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-security"},
 		},
 	}
 	svc.adapter = adapter
@@ -343,7 +334,7 @@ func TestUpgradeSecuritySharesMaintenanceMutex(t *testing.T) {
 	svc, taskSvc, _ := newSecurityUpgradeTestService(t)
 	adapter := &securityTestAdapter{
 		initial: []linux.PackageUpdate{
-			{Name: "openssl", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-security"},
+			{Name: "openssl", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-security", Security: true, SecurityKnown: true},
 		},
 		remaining: []linux.PackageUpdate{},
 		block:     true,
@@ -383,89 +374,10 @@ func TestUpgradeSecuritySharesMaintenanceMutex(t *testing.T) {
 	waitForTaskStatus(t, taskSvc, first.ID, tasks.StatusCompleted)
 }
 
-// TestListPrefersAuthoritativeSecurityAndPersists 验证 PKG-API-013 的持久化与
-// 展示回退语义：security/security_known 写入缓存；权威值已知时优先于 source
-// 启发式（包括权威判定为“非安全”的安全源包），未知时回退启发式。
-func TestListPrefersAuthoritativeSecurityAndPersists(t *testing.T) {
-	svc, _, db := newSecurityUpgradeTestService(t)
-	updates := []linux.PackageUpdate{
-		{Name: "authoritative_secure", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-updates", Security: true, SecurityKnown: true},
-		{Name: "authoritative_plain", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-security", Security: false, SecurityKnown: true},
-		{Name: "heuristic_secure", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-security"},
-		{Name: "heuristic_plain", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-updates"},
-	}
-	if err := svc.replaceUpdates(context.Background(), "srv", updates); err != nil {
-		t.Fatal(err)
-	}
-
-	list, err := svc.List(context.Background(), "srv")
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := map[string]struct{ security, known bool }{
-		"authoritative_secure": {security: true, known: true},
-		"authoritative_plain":  {security: false, known: true},
-		"heuristic_secure":     {security: true, known: false},
-		"heuristic_plain":      {security: false, known: false},
-	}
-	if len(list.Updates) != len(want) {
-		t.Fatalf("updates = %#v, want %d rows", list.Updates, len(want))
-	}
-	for _, update := range list.Updates {
-		expected, ok := want[update.Name]
-		if !ok {
-			t.Fatalf("unexpected package %q in list", update.Name)
-		}
-		if update.Security != expected.security || update.SecurityKnown != expected.known {
-			t.Fatalf("update %q security=%v known=%v, want %v/%v (source %q)",
-				update.Name, update.Security, update.SecurityKnown, expected.security, expected.known, update.Source)
-		}
-		delete(want, update.Name)
-	}
-	if len(want) != 0 {
-		t.Fatalf("missing packages in list: %#v", want)
-	}
-
-	// 权威判定必须落库，而不仅是响应层派生。
-	rows, err := db.Query(`SELECT name, security, security_known FROM package_updates WHERE server_id='srv'`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	persisted := map[string]struct{ security, known int }{}
-	for rows.Next() {
-		var name string
-		var security, known int
-		if err := rows.Scan(&name, &security, &known); err != nil {
-			t.Fatal(err)
-		}
-		persisted[name] = struct{ security, known int }{security: security, known: known}
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	for _, update := range updates {
-		row, ok := persisted[update.Name]
-		if !ok {
-			t.Fatalf("package %q was not persisted", update.Name)
-		}
-		wantSecurity, wantKnown := 0, 0
-		if update.Security {
-			wantSecurity = 1
-		}
-		if update.SecurityKnown {
-			wantKnown = 1
-		}
-		if row.security != wantSecurity || row.known != wantKnown {
-			t.Fatalf("persisted %q security=%d known=%d, want %d/%d", update.Name, row.security, row.known, wantSecurity, wantKnown)
-		}
-	}
-}
-
-// TestSaveReportedUpdatesFromLegacyAgentFallsBackToHeuristic 模拟旧 Agent 推送的
-// 包快照（不带 security/security_known 字段）：缓存里 security_known=0，列表
-// 与安全升级任务都回退到 source 启发式。
-func TestSaveReportedUpdatesFromLegacyAgentFallsBackToHeuristic(t *testing.T) {
+// TestSaveReportedUpdatesFromLegacyAgentStaysUnknown 模拟旧 Agent 推送的包快照
+// （不带 security/security_known 字段）：缓存 security_known=0，列表与安全升级
+// 任务都保持 unknown，不按 source 猜测升级。
+func TestSaveReportedUpdatesFromLegacyAgentStaysUnknown(t *testing.T) {
 	svc, _, db := newSecurityUpgradeTestService(t)
 	legacy := []linux.PackageUpdate{
 		{Name: "openssl", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-security"},
@@ -486,27 +398,23 @@ func TestSaveReportedUpdatesFromLegacyAgentFallsBackToHeuristic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := map[string]bool{}
 	for _, update := range list.Updates {
 		if update.SecurityKnown {
 			t.Fatalf("legacy agent update %q must be unknown, got known=true", update.Name)
 		}
-		got[update.Name] = update.Security
-	}
-	if !got["openssl"] || got["libc6"] {
-		t.Fatalf("legacy agent list security fallback = %#v, want openssl=true libc6=false", got)
+		if update.Security {
+			t.Fatalf("legacy agent update %q must not be guessed as security", update.Name)
+		}
 	}
 
-	names := securityPackageNames(legacy)
-	if len(names) != 1 || names[0] != "openssl" {
-		t.Fatalf("legacy agent task selection = %#v, want [openssl]", names)
+	if names, _ := securityPackageSelection(legacy); len(names) != 0 {
+		t.Fatalf("legacy agent task selection must stay empty, got %#v", names)
 	}
 }
 
-// TestUpgradeSecurityMixesAuthoritativeAndHeuristic 验证安全升级任务的选择
-// 规则：权威值已知时用 Agent 判定（权威非安全的安全源包不得升级），未知时
-// 回退 source 启发式（安全源的包照常升级），空集合仍不退化。
-func TestUpgradeSecurityMixesAuthoritativeAndHeuristic(t *testing.T) {
+// TestUpgradeSecuritySkipsUnknownPackages 验证未知判定不被启发式升级，已知安全
+// 包照常升级，任务不因未知包失败。
+func TestUpgradeSecuritySkipsUnknownPackages(t *testing.T) {
 	svc, taskSvc, _ := newSecurityUpgradeTestService(t)
 	adapter := &securityTestAdapter{
 		initial: []linux.PackageUpdate{
@@ -514,9 +422,9 @@ func TestUpgradeSecurityMixesAuthoritativeAndHeuristic(t *testing.T) {
 			{Name: "openssl", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-updates", Security: true, SecurityKnown: true},
 			// 权威判定为非安全，即使 source 看起来像安全源也不得升级。
 			{Name: "curl", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-security", Security: false, SecurityKnown: true},
-			// 未知：回退启发式，source 命中 security。
+			// 未知：source 命中 security 也不得启发式升级。
 			{Name: "libc6", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-security"},
-			// 未知：回退启发式，非安全源。
+			// 未知：非安全源同样跳过。
 			{Name: "bash", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-updates"},
 		},
 		remaining: []linux.PackageUpdate{},
@@ -536,15 +444,14 @@ func TestUpgradeSecurityMixesAuthoritativeAndHeuristic(t *testing.T) {
 	if selectedCalls != 1 || allCalls != 0 {
 		t.Fatalf("expected one names upgrade and no upgrade-all, got selected=%d all=%d", selectedCalls, allCalls)
 	}
-	sort.Strings(selectedNames)
-	want := []string{"libc6", "openssl"}
-	if len(selectedNames) != len(want) || selectedNames[0] != want[0] || selectedNames[1] != want[1] {
+	want := []string{"openssl"}
+	if len(selectedNames) != len(want) || selectedNames[0] != want[0] {
 		t.Fatalf("upgraded names = %#v, want %#v", selectedNames, want)
 	}
 }
 
 // TestUpgradeSecurityAuthoritativeEmptySetDoesNotUpgradeAll 验证权威判定为
-// “已知没有安全更新”（即使 source 启发式认为有）时任务直接完成，绝不升级。
+// “已知没有安全更新”（即使 source 启发式会认为有）时任务直接完成，绝不升级。
 func TestUpgradeSecurityAuthoritativeEmptySetDoesNotUpgradeAll(t *testing.T) {
 	svc, taskSvc, _ := newSecurityUpgradeTestService(t)
 	adapter := &securityTestAdapter{

@@ -10,6 +10,7 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
 import Table from '@/components/ui/Table.vue';
+import Tooltip from '@/components/ui/Tooltip.vue';
 import { useErrorDialog } from '@/components/ui/errorDialog';
 import { useSuccessToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
@@ -182,7 +183,10 @@ onBeforeUnmount(() => {
         <strong class="whitespace-nowrap text-foreground">{{ row.candidateVersion }}</strong>
       </template>
       <template #security="{ row }">
-        <Badge v-if="row.security" tone="warning">{{ t('resourcesPage.securityUpdate') }}</Badge>
+        <Tooltip v-if="row.securityKnown === false" :text="t('resourcesPage.securityUnknownHint')">
+          <Badge tone="neutral">{{ t('resourcesPage.securityUnknown') }}</Badge>
+        </Tooltip>
+        <Badge v-else-if="row.security" tone="warning">{{ t('resourcesPage.securityUpdate') }}</Badge>
       </template>
       <template #empty>
         <EmptyState variant="inset" :title="t('resourcesPage.noPackages')" :description="t('resourcesPage.noPackagesHint')" />

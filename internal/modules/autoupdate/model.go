@@ -31,9 +31,6 @@ const (
 	// tasks.StartDailyAtLoop：它的 hour/minute 在构造时冻结，无法热更新用户
 	// 可编辑的执行时间；30 秒 tick 读取热设置即可，重启后也最多延迟一个 tick。
 	DefaultTickInterval = 30 * time.Second
-	// DefaultScheduleWindow 是计划时间后的触发容忍窗口。错过整个窗口（例如
-	// Panel 当天未运行）不补跑，等次日计划时间；窗口内重启仍会补触发一次。
-	DefaultScheduleWindow = 2 * time.Minute
 
 	defaultRefreshTimeout      = 10 * time.Minute
 	defaultAppsTimeout         = 15 * time.Minute

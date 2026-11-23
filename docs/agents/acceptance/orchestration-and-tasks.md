@@ -651,10 +651,10 @@ Run HTTP 面是 `/api/v1/executions*`；诊断读面是 `/api/v1/events*` 与 `/
 
 ### TASK-PER-004 自动更新调度（auto_update_run）
 
-- **前置**：设置页自动更新配置至少一个开关开启；Panel 本地时间到达 `autoUpdate.scheduleTime`。
-- **动作**：autoupdate 模块每 30 秒 tick 读取热更新设置；命中计划时间窗口（计划 `HH:MM` 起 2 分钟内）且当日尚无运行记录时创建 `auto_update_run` 任务。
-- **结果**：`auto_update_run` 为可见长任务，`ConcurrencyGlobalExclusive`、`DisallowCancel`、`AllowRetry`、`TriggerType=scheduler`；执行阶段串行：有界刷新镜像/软件包缓存（超时使用缓存继续）→ 应用更新（按 `Application.AutoUpdateEnabled`、`ImageUpdateAvailable`、入口代理 `imageAutoUpdateEnabled` 过滤，入口代理逐节点滚动）→ 软件包更新（逐服务器串行；`security` 用 `package_upgrade_security`，`all` 用 `package_upgrade_all`）。每次开始/结束写 `autoUpdate.lastRunAt/lastRunStatus/lastRunTaskId`。单服务器/单节点失败记录后继续其余；有失败则任务 failed 并附摘要，全部成功 completed。
-- **失败**：错过计划时间**不补跑**（当天跳过，次日再触发）；不得重复创建同一次运行（当日去重 + 全局互斥）；任务取消不中断正在进行的 apt/入口代理重建；缓存刷新失败不得阻塞后续阶段（记录并继续）。手动触发（`POST /api/v1/settings/runtime/auto-update/run`，P1）跳过计划窗口与当日去重，但必须走同一任务/互斥、以 `TriggerType=user` 与 `ParamsJSON.trigger=manual` 记录，并用本次临时覆盖的设置执行（不写回设置）；两个开关都关时返回 422 `auto_update_disabled`。
+- **前置**：设置页自动更新配置至少一个开关开启；Panel 本地时间到达或已超过 `autoUpdate.scheduleTime`。
+- **动作**：autoupdate 模块每 30 秒 tick 读取热更新设置；只要至少一个开关开启、本地当日尚无计划自动运行记录（`lastAutoRunAt`）、且当前本地时间 ≥ 计划 `HH:MM`，即创建 `auto_update_run` 任务（当天错过窗口可在剩余时间补跑一次，次日重新；不限制 2 分钟窗口）。
+- **结果**：`auto_update_run` 为可见长任务，`ConcurrencyGlobalExclusive`、`DisallowCancel`、`AllowRetry`、`TriggerType=scheduler`；执行阶段串行：有界刷新缓存（容器镜像 + 应用镜像 digest 检查任务 `application_image_check` + 软件包；超时使用缓存继续）→ 应用更新（按 `Application.AutoUpdateEnabled`、刷新后的 `ImageUpdateAvailable`、入口代理 `imageAutoUpdateEnabled` 过滤，入口代理逐节点滚动）→ 软件包更新（逐服务器串行；`security` 用 `package_upgrade_security`，`all` 用 `package_upgrade_all`）。计划自动运行开始时写 `autoUpdate.lastAutoRunAt`，开始/结束写 `lastRunAt/lastRunStatus/lastRunTaskId`，结束时写 `lastRunSummary`（完成/失败/禁用均写）。单服务器/单节点失败记录后继续其余；有失败则任务 failed 并附摘要，全部成功 completed。
+- **失败**：当天错过窗口可在当天剩余时间补跑一次，但**不得同一天重复自动运行**（以 `lastAutoRunAt` 本地日期去重 + 全局互斥）；手动运行只写 `lastRunAt`，不得写入 `lastAutoRunAt`，因此不得抑制当天计划运行；已有 queued/scheduled/failed_retryable 任务未运行时，手动运行与调度 tick 都必须补派发同一任务，不得静默返回。任务取消不中断正在进行的 apt/入口代理重建；缓存刷新失败不得阻塞后续阶段（记录并继续）。手动触发（`POST /api/v1/settings/runtime/auto-update/run`）跳过计划触发条件与当日自动去重，但必须走同一任务/互斥、以 `TriggerType=user` 与 `ParamsJSON.trigger=manual` 记录，并用本次临时覆盖的设置执行（不写回设置）；两个开关都关时返回 422 `auto_update_disabled`。
 - **不变量**：调度器只读设置快照，不修改设置；执行必须走任务框架（不得裸 goroutine 直接执行升级）；不新增事件类型，沿用任务/活动与部署 Job 事件。
 - **验证**：tick 窗口内只触发一次、窗口外/跨日不触发、跨重启去重、阶段串行与失败继续、任务参数恢复、对象级开关过滤、lastRun 持久化。
 

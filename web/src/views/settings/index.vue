@@ -334,6 +334,89 @@ function autoUpdateRunStatusTone(status?: string): 'neutral' | 'success' | 'warn
   if (status === 'running' || status === 'skipped' || status === 'disabled') return 'warning';
   return 'neutral';
 }
+/** 运行中无摘要：直接显示 running 文案；否则显示后端摘要，缺失时用占位文案。 */
+const autoUpdateSummary = computed(() => {
+  if (autoUpdateLastRun.value?.lastRunStatus === 'running') return t('settingsPage.autoUpdate.runStatus.running');
+  const summary = autoUpdateLastRun.value?.lastRunSummary?.trim();
+  return summary || t('settingsPage.autoUpdate.lastRunSummaryEmpty');
+});
+/**
+ * 后端由协调任务异步写回 lastRunStatus/lastRunSummary。运行中按固定间隔刷新
+ * runtime 只读投影，发现 lastRunStatus 离开 running 时由 watcher 停止轮询；这次
+ * 刷新拿到的响应即包含最终摘要，无需再额外请求。
+ */
+const autoUpdatePollIntervalMs = 5000;
+/** 手动运行受理后，running 状态异步写回前的宽限轮询窗口。 */
+const autoUpdateAwaitingWindowMs = 60000;
+let autoUpdatePollTimer: ReturnType<typeof setTimeout> | null = null;
+let autoUpdateRefreshPending = false;
+let autoUpdateAwaitingTaskId = '';
+let autoUpdateAwaitingSince = 0;
+
+function stopAutoUpdatePolling() {
+  if (autoUpdatePollTimer === null) return;
+  clearTimeout(autoUpdatePollTimer);
+  autoUpdatePollTimer = null;
+}
+
+/** 只刷新 runtime 快照，不回填表单，避免覆盖用户尚未完成的输入。 */
+async function refreshAutoUpdateRuntimeSnapshot() {
+  if (autoUpdateRefreshPending) return;
+  autoUpdateRefreshPending = true;
+  try {
+    runtime.value = await settingsApi.runtime();
+  } catch {
+    // 轮询失败不改变已展示的运行状态；下一次轮询继续重试。
+  } finally {
+    autoUpdateRefreshPending = false;
+  }
+}
+
+function scheduleAutoUpdatePoll() {
+  stopAutoUpdatePolling();
+  autoUpdatePollTimer = setTimeout(async () => {
+    autoUpdatePollTimer = null;
+    await refreshAutoUpdateRuntimeSnapshot();
+    const run = autoUpdateLastRun.value;
+    if (run?.lastRunStatus === 'running') {
+      // 已观察到运行中：后续持续轮询到结束。
+      if (run.lastRunTaskId === autoUpdateAwaitingTaskId) autoUpdateAwaitingTaskId = '';
+      scheduleAutoUpdatePoll();
+      return;
+    }
+    // 手动运行受理后 running 可能还没写回：宽限期内继续按 taskId 等待，避免
+    // 首次刷新仍拿到旧结果就停止轮询。
+    if (autoUpdateAwaitingTaskId) {
+      const matched = run?.lastRunTaskId === autoUpdateAwaitingTaskId;
+      if (!matched && Date.now() - autoUpdateAwaitingSince < autoUpdateAwaitingWindowMs) {
+        scheduleAutoUpdatePoll();
+        return;
+      }
+      autoUpdateAwaitingTaskId = '';
+    }
+  }, autoUpdatePollIntervalMs);
+}
+
+/**
+ * 手动运行返回 202 后调用：即使立即刷新时 lastRunStatus 仍是上一次的终态，
+ * 也继续轮询到本次 taskId 写回 running/终态，完成后显示摘要。
+ */
+function followUpAutoUpdateRun(taskId?: string) {
+  if (!taskId) return;
+  autoUpdateAwaitingTaskId = taskId;
+  autoUpdateAwaitingSince = Date.now();
+  scheduleAutoUpdatePoll();
+}
+
+// 运行期间轮询，运行结束（running 变化）后停止：完成响应已带最终摘要。
+watch(() => autoUpdateLastRun.value?.lastRunStatus, (status) => {
+  if (status === 'running') {
+    scheduleAutoUpdatePoll();
+    return;
+  }
+  stopAutoUpdatePolling();
+}, { immediate: true });
+
 const panelTlsOptions = computed(() => tlsCertificates.value.map((certificate) => ({ label: certificate.name, value: certificate.id })));
 const jwtSecretValid = computed(() => form.jwtSecret.trim().length >= 16);
 /** NumberBox 使用 number|null；设置表单仍是字符串，保留原校验/保存负载逻辑。 */
@@ -827,6 +910,8 @@ async function confirmAutoUpdateRun() {
     } catch {
       // 运行已受理；刷新只读投影失败不改变本次操作结果。
     }
+    // 202 只代表任务已创建：继续按 taskId 轮询到 running/终态并展示摘要。
+    followUpAutoUpdateRun(result.taskId);
   });
 }
 
@@ -917,7 +1002,8 @@ const confirmLabel = computed(() => {
 onMounted(load);
 
 onBeforeUnmount(() => {
-  // 卸载时把待保存修改 fire-and-forget 发出，并清理所有计时器。
+  // 卸载时把待保存修改 fire-and-forget 发出，并清理所有计时器与运行轮询。
+  stopAutoUpdatePolling();
   disposeAllAutoSaves();
 });
 </script>
@@ -1257,6 +1343,10 @@ onBeforeUnmount(() => {
             <SettingsCard :title="t('settingsPage.autoUpdate.lastRun')" :description="t('settingsPage.autoUpdate.lastRunHint')">
               <div class="grid gap-3 text-sm sm:grid-cols-2">
                 <div>
+                  <span class="block text-muted-foreground">{{ t('settingsPage.autoUpdate.lastAutoRunAt') }}</span>
+                  <strong class="block text-foreground">{{ formatDateTime(autoUpdateLastRun?.lastAutoRunAt, t('settingsPage.autoUpdate.lastRunNever')) }}</strong>
+                </div>
+                <div>
                   <span class="block text-muted-foreground">{{ t('settingsPage.autoUpdate.lastRunAt') }}</span>
                   <strong class="block text-foreground">{{ formatDateTime(autoUpdateLastRun?.lastRunAt, t('settingsPage.autoUpdate.lastRunNever')) }}</strong>
                 </div>
@@ -1264,9 +1354,13 @@ onBeforeUnmount(() => {
                   <span class="block text-muted-foreground">{{ t('settingsPage.autoUpdate.lastRunStatus') }}</span>
                   <Badge :tone="autoUpdateRunStatusTone(autoUpdateLastRun?.lastRunStatus)">{{ autoUpdateRunStatusLabel(autoUpdateLastRun?.lastRunStatus) }}</Badge>
                 </div>
-                <div class="sm:col-span-2">
+                <div>
                   <span class="block text-muted-foreground">{{ t('settingsPage.autoUpdate.lastRunTask') }}</span>
                   <span class="panel-mono block break-all text-caption text-secondary-foreground">{{ autoUpdateLastRun?.lastRunTaskId || t('common.notAvailable') }}</span>
+                </div>
+                <div class="sm:col-span-2">
+                  <span class="block text-muted-foreground">{{ t('settingsPage.autoUpdate.lastRunSummary') }}</span>
+                  <span class="block break-words text-secondary-foreground">{{ autoUpdateSummary }}</span>
                 </div>
               </div>
             </SettingsCard>

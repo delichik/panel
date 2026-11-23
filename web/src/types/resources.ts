@@ -11,8 +11,18 @@ export interface PackageUpdate {
   installedVersion: string;
   candidateVersion: string;
   source: string;
-  /** Derived by Panel from the apt suite/source: security update. */
+  /**
+   * Authoritative security classification from the system package metadata
+   * (unattended-upgrade origins). Only meaningful when `securityKnown` is not
+   * explicitly false; legacy Agents report no metadata so it stays unknown.
+   */
   security?: boolean;
+  /**
+   * Whether Panel could determine `security` from authoritative system apt
+   * metadata. Missing/false (`!== false` check in UI) means the update must be
+   * shown as unverified instead of assuming a non-security update.
+   */
+  securityKnown?: boolean;
 }
 
 export interface RefreshResult extends ActivityReceipt {

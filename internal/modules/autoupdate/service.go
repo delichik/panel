@@ -23,18 +23,18 @@ type Service struct {
 	servers           ServerLister
 	applications      ApplicationLister
 	applicationUpdate ApplicationUpgrader
+	applicationImages ApplicationImageRefresher
 	imageRefresh      ImageRefresher
 	packages          PackageMaintainer
 	reverseProxy      ReverseProxyImageUpdater
 
-	now            func() time.Time
-	tickInterval   time.Duration
-	scheduleWindow time.Duration
-	waitPoll       time.Duration
-	refreshWait    time.Duration
-	appsWait       time.Duration
-	proxyWait      time.Duration
-	packagesWait   time.Duration
+	now          func() time.Time
+	tickInterval time.Duration
+	waitPoll     time.Duration
+	refreshWait  time.Duration
+	appsWait     time.Duration
+	proxyWait    time.Duration
+	packagesWait time.Duration
 }
 
 type Option func(*Service)
@@ -53,6 +53,12 @@ func WithApplicationUpgrader(upgrader ApplicationUpgrader) Option {
 
 func WithImageRefresher(refresher ImageRefresher) Option {
 	return func(s *Service) { s.imageRefresh = refresher }
+}
+
+// WithApplicationImageRefresher 注入应用镜像 digest 刷新能力。刷新阶段必须调用
+// 它，否则应用阶段读到的 ImageUpdateAvailable 永远停留在上次检查结果。
+func WithApplicationImageRefresher(refresher ApplicationImageRefresher) Option {
+	return func(s *Service) { s.applicationImages = refresher }
 }
 
 func WithPackageMaintainer(maintainer PackageMaintainer) Option {
@@ -77,11 +83,6 @@ func WithTickInterval(interval time.Duration) Option {
 	return func(s *Service) { s.tickInterval = interval }
 }
 
-// WithScheduleWindow 注入计划时间后的容忍窗口。
-func WithScheduleWindow(window time.Duration) Option {
-	return func(s *Service) { s.scheduleWindow = window }
-}
-
 // WithPhaseTimeouts 调整各阶段的等待上限（测试用）。
 func WithPhaseTimeouts(refresh, apps, reverseProxy, packages time.Duration) Option {
 	return func(s *Service) {
@@ -99,16 +100,15 @@ func WithWaitPollInterval(interval time.Duration) Option {
 
 func NewService(taskSvc *tasks.Service, settingsStore SettingsStore, options ...Option) *Service {
 	s := &Service{
-		tasks:          taskSvc,
-		settings:       settingsStore,
-		now:            time.Now,
-		tickInterval:   DefaultTickInterval,
-		scheduleWindow: DefaultScheduleWindow,
-		waitPoll:       defaultWaitPollInterval,
-		refreshWait:    defaultRefreshTimeout,
-		appsWait:       defaultAppsTimeout,
-		proxyWait:      defaultReverseProxyTimeout,
-		packagesWait:   defaultPackagesTimeout,
+		tasks:        taskSvc,
+		settings:     settingsStore,
+		now:          time.Now,
+		tickInterval: DefaultTickInterval,
+		waitPoll:     defaultWaitPollInterval,
+		refreshWait:  defaultRefreshTimeout,
+		appsWait:     defaultAppsTimeout,
+		proxyWait:    defaultReverseProxyTimeout,
+		packagesWait: defaultPackagesTimeout,
 	}
 	for _, option := range options {
 		option(s)
@@ -118,9 +118,6 @@ func NewService(taskSvc *tasks.Service, settingsStore SettingsStore, options ...
 	}
 	if s.tickInterval <= 0 {
 		s.tickInterval = DefaultTickInterval
-	}
-	if s.scheduleWindow <= 0 {
-		s.scheduleWindow = DefaultScheduleWindow
 	}
 	if s.waitPoll <= 0 {
 		s.waitPoll = defaultWaitPollInterval
@@ -205,11 +202,17 @@ func (l *Loop) run(ctx context.Context) {
 }
 
 // tick 采样一次设置并决定是否创建协调任务。返回创建的任务与是否新建（false
-// 表示已存在运行中的协调任务而被并发键去重）。
+// 表示已存在活跃的协调任务而被并发键去重）。
+//
+// 去重语义：至少一个开关开启 && 本地当日没有「调度自动运行」记录 &&
+// 当前本地时间已到计划 HH:MM。不再限制计划时间后的固定窗口：错过计划时刻
+// （例如设置后立即生效、面板重启、机器休眠）当天仍可在剩余时间补跑一次，
+// 次日重新开始。手动运行只写 lastRunAt，不写 lastAutoRunAt，因此不会抑制
+// 当天的计划运行。
 func (s *Service) tick(ctx context.Context) (tasks.Task, bool, error) {
 	rt := s.settings.Runtime().AutoUpdate
 	now := s.now()
-	if !shouldTrigger(rt, now, s.scheduleWindow) {
+	if !shouldTrigger(rt, now) {
 		return tasks.Task{}, false, nil
 	}
 	task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
@@ -220,17 +223,25 @@ func (s *Service) tick(ctx context.Context) (tasks.Task, bool, error) {
 		Summary:      "Automatic updates",
 		ParamsJSON:   paramsFor(rt, triggerTypeScheduler),
 	}, tasks.Trigger{Type: triggerTypeScheduler, Periodic: true})
-	if err != nil || !created {
-		return task, created, err
+	if err != nil {
+		return task, false, err
 	}
-	s.dispatch(task)
-	return task, true, nil
+	if created {
+		s.dispatch(task)
+		return task, true, nil
+	}
+	// 并发键命中了已有活跃任务（queued/scheduled/running/failed_retryable）。
+	// 运行中的任务幂等返回；其余状态派发一次，避免上次 tick 创建后未派发或
+	// failed_retryable 的协调任务永久卡住当天的自动更新。
+	s.dispatchUnlessRunning(task)
+	return task, false, nil
 }
 
 // RunAutoUpdateNow 手动「立即运行一次」（SET-RUN-023）：跳过计划时间窗口与当日
 // 去重，但仍走同一个全局互斥的 auto_update_run 任务。已有活跃任务（含调度触发
-// 的运行）时幂等返回其 taskId，不重复派发。rt 是设置服务解析后的本次有效设置
-// （可含临时覆盖），写入 ParamsJSON 供执行阶段使用而不落库。
+// 的运行）时返回其 taskId：运行中幂等返回，queued/scheduled/failed_retryable 等
+// 未运行中的则补派发一次，避免「点击运行一次却什么都不执行」。rt 是设置服务
+// 解析后的本次有效设置（可含临时覆盖），写入 ParamsJSON 供执行阶段使用而不落库。
 func (s *Service) RunAutoUpdateNow(ctx context.Context, rt settings.RuntimeAutoUpdateSettings) (string, error) {
 	if s == nil || s.tasks == nil {
 		return "", panelerr.Validation("task_service_unavailable", "Task service is unavailable")
@@ -248,8 +259,24 @@ func (s *Service) RunAutoUpdateNow(ctx context.Context, rt settings.RuntimeAutoU
 	}
 	if created {
 		s.dispatch(task)
+		return task.ID, nil
 	}
+	s.dispatchUnlessRunning(task)
 	return task.ID, nil
+}
+
+// dispatchUnlessRunning 对已有活跃任务做「非运行中即补派发」：运行中的任务保持
+// 幂等返回；其余可运行状态（queued/scheduled/failed_retryable）派发一次。
+// 真正的并发安全由任务框架的运行执行锁与全局互斥并发键保证：重复 dispatch 的
+// goroutine 在 claim 阶段会被判为已有执行而直接退出。
+func (s *Service) dispatchUnlessRunning(task tasks.Task) {
+	if s.tasks == nil || strings.TrimSpace(task.ID) == "" {
+		return
+	}
+	if task.Status == tasks.StatusRunning || s.tasks.HasRunningExecution(task.ID) {
+		return
+	}
+	s.dispatch(task)
 }
 
 // dispatch 在后台运行任务；与各模块 CreateAndRun 的调度方式一致，任务创建
@@ -266,34 +293,28 @@ func (s *Service) dispatch(task tasks.Task) {
 	}()
 }
 
-// shouldTrigger 实现触发条件：至少一个开关开启 && 本地时间处于计划时间窗口
-// （错过不补跑）&& 当日（Panel 本地日期）尚无运行记录。
-func shouldTrigger(rt settings.RuntimeAutoUpdateSettings, now time.Time, window time.Duration) bool {
+// shouldTrigger 实现触发条件：至少一个开关开启 && 本地当日尚无「调度自动运行」
+// 记录 && 当前本地时间已到（或已过）计划 HH:MM。计划时刻之后当天的任意时间都
+// 会补触发一次；同一天只触发一次，次日计划时刻重新开始。
+func shouldTrigger(rt settings.RuntimeAutoUpdateSettings, now time.Time) bool {
 	if !rt.AppsEnabled && !rt.PackagesEnabled {
 		return false
 	}
-	if ranOnLocalDay(rt.LastRunAt, now) {
+	if autoRanOnLocalDay(rt.LastAutoRunAt, now) {
 		return false
 	}
-	return inScheduleWindow(rt.ScheduleTime, now, window)
-}
-
-// inScheduleWindow 判断 now 是否落在计划 HH:MM 之后 window 长度的窗口内。
-// 只看当日，不回看前一天：计划时间错过整个窗口后当天不再补跑。
-func inScheduleWindow(scheduleTime string, now time.Time, window time.Duration) bool {
-	hour, minute, ok := settings.ParseAutoUpdateScheduleTime(scheduleTime)
+	hour, minute, ok := settings.ParseAutoUpdateScheduleTime(rt.ScheduleTime)
 	if !ok {
 		return false
 	}
 	target := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, now.Location())
-	delta := now.Sub(target)
-	return delta >= 0 && delta <= window
+	return !now.Before(target)
 }
 
-// ranOnLocalDay 报告 lastRunAt 是否落在 now 的本地日期。解析失败的旧值视为
-// 没有记录（宁可多跑一次，也不因脏数据永久跳过）。
-func ranOnLocalDay(lastRunAt string, now time.Time) bool {
-	trimmed := strings.TrimSpace(lastRunAt)
+// autoRanOnLocalDay 报告 lastAutoRunAt 是否落在 now 的本地日期。解析失败的旧值
+// 视为没有记录（宁可多跑一次，也不因脏数据永久跳过）。
+func autoRanOnLocalDay(lastAutoRunAt string, now time.Time) bool {
+	trimmed := strings.TrimSpace(lastAutoRunAt)
 	if trimmed == "" {
 		return false
 	}

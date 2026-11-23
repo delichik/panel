@@ -28,28 +28,7 @@ const (
 	// TaskPackageUpgradeSecurity 实时读取可升级列表后只升级安全更新
 	// （PKG-API-011）。它不允许在安全包为空时退化为全部升级。
 	TaskPackageUpgradeSecurity = "package_upgrade_security"
-	// packageSecuritySourceMarker 是 P0 安全更新判定依据：apt 的 archive/suite
-	// 命名包含 security（如 Debian stable-security、Ubuntu jammy-security）。
-	packageSecuritySourceMarker = "security"
 )
-
-// IsSecuritySource 是安全更新判定的回退启发式（忽略大小写包含 security）。
-// Agent 能给出权威判定（package_updates.security_known）时优先使用权威值；
-// 旧 Agent/命令不可判定时才回退到这里。已知局限：ESM/第三方源可能漏判，
-// 漏判只会少升级，不会误升级全部。
-func IsSecuritySource(source string) bool {
-	return strings.Contains(strings.ToLower(source), packageSecuritySourceMarker)
-}
-
-// securityValue 统一列表展示与安全升级任务包选择的安全判定语义：权威值已知
-// 时使用 Agent 判定，未知时回退到 source 启发式（PKG-API-013）。未知绝不
-// 能被当成“非安全”，否则会漏升。
-func securityValue(known, security bool, source string) bool {
-	if known {
-		return security
-	}
-	return IsSecuritySource(source)
-}
 
 type Service struct {
 	db         *sql.DB
@@ -98,8 +77,11 @@ func (s *Service) List(ctx context.Context, serverID string) (UpdateList, error)
 	for _, row := range rows {
 		out.Updates = append(out.Updates, linux.PackageUpdate{
 			Name: row.Name, InstalledVersion: row.InstalledVersion, CandidateVersion: row.CandidateVersion,
-			Source:        row.Source,
-			Security:      securityValue(row.SecurityKnown, row.Security, row.Source),
+			Source: row.Source,
+			// 安全判定完全使用 Agent 的权威结果（apt 元数据 + Allowed-Origins）；
+			// SecurityKnown=false 时 Security 恒为 false，绝不用 Source 字符串等
+			// 启发式猜测（也防御历史脏行 security=1/security_known=0）。
+			Security:      row.Security && row.SecurityKnown,
 			SecurityKnown: row.SecurityKnown,
 		})
 	}
@@ -444,8 +426,9 @@ func (s *Service) runUpgradeTask(tc tasks.TaskContext, all bool) error {
 }
 
 // RunUpgradeSecurityTask 是 package_upgrade_security 的注册 executor：复用
-// per-server 维护互斥，执行时实时读取可升级列表并按 Source 命中 security 过滤，
-// 只走 names 升级路径（PKG-API-011）。安全包为空时直接完成，绝不升级全部。
+// per-server 维护互斥，执行时实时读取可升级列表并按 Agent 权威安全判定过滤，
+// 只走 names 升级路径（PKG-API-011）。未知判定不会被猜测升级；安全包为空时
+// 直接完成，绝不升级全部。
 func (s *Service) RunUpgradeSecurityTask(tc tasks.TaskContext) error {
 	ctx, task := tc.Context, tc.Task
 	if s.tasks == nil {
@@ -488,7 +471,14 @@ func (s *Service) runUpgradeSecurity(ctx context.Context, taskID string, srv ser
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return err
 	}
-	names := securityPackageNames(updates)
+	names, unknown := securityPackageSelection(updates)
+	if len(unknown) > 0 {
+		// 未知判定绝不启发式猜测升级：跳过并记录 warning，任务继续处理已知安全包。
+		_ = s.tasks.AppendLog(ctx, taskID, "warning", fmt.Sprintf(
+			"Skipping %d package(s) with unknown security status: %s",
+			len(unknown), strings.Join(unknown, ", "),
+		))
+	}
 	if len(names) == 0 {
 		// 没有安全更新也要刷新缓存：实时列表可能已清空旧记录。
 		if err := s.replaceUpdates(ctx, srv.ID, updates); err != nil {
@@ -515,20 +505,24 @@ func (s *Service) runUpgradeSecurity(ctx context.Context, taskID string, srv ser
 	return s.tasks.Complete(ctx, taskID, "Security packages upgraded")
 }
 
-// securityPackageNames 选择安全更新包：权威判定已知时用 Agent 值，未知时
-// 回退到 apt archive/suite 命名启发式（Source 忽略大小写包含 security），与
-// 列表 API 的 Security 字段共用 securityValue，避免两处判定漂移。
-func securityPackageNames(updates []linux.PackageUpdate) []string {
-	names := make([]string, 0, len(updates))
+// securityPackageSelection 选择安全更新包：只有 Agent 权威判定
+// （SecurityKnown=true 且 Security=true）的包才升级。未知包单独返回，供调用方
+// 记录 warning 后跳过；未知绝不能用 Source 等启发式猜测。
+func securityPackageSelection(updates []linux.PackageUpdate) (names, unknown []string) {
+	names = make([]string, 0, len(updates))
 	for _, update := range updates {
-		if !securityValue(update.SecurityKnown, update.Security, update.Source) {
+		name := strings.TrimSpace(update.Name)
+		if name == "" {
 			continue
 		}
-		if name := strings.TrimSpace(update.Name); name != "" {
+		switch {
+		case !update.SecurityKnown:
+			unknown = append(unknown, name)
+		case update.Security:
 			names = append(names, name)
 		}
 	}
-	return names
+	return names, unknown
 }
 
 func upgradeNames(task tasks.Task) ([]string, error) {
@@ -614,8 +608,8 @@ func (s *Service) replaceUpdates(ctx context.Context, serverID string, updates [
 			records = append(records, models.PackageUpdate{
 				ServerID: serverID, Name: u.Name, InstalledVersion: u.InstalledVersion,
 				CandidateVersion: u.CandidateVersion, Source: u.Source, RefreshedAt: now,
-				// 持久化 Agent 权威判定；SecurityKnown=false 时 Security 不参与
-				// 展示与包选择，List/securityPackageNames 会回退启发式。
+				// 持久化 Agent 权威判定；SecurityKnown=false 表示不可判定，List 与
+				// 安全升级任务都会保持 unknown（跳过），绝不回退启发式。
 				Security: u.Security, SecurityKnown: u.SecurityKnown,
 			})
 		}

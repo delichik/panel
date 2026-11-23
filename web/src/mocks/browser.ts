@@ -138,7 +138,7 @@ import { acceptedAgentDeployment, completedTask, mockTasks, mockTaskLogs, mockTa
 import { resolveMockExecution } from './activity';
 import { mockEventsRoute } from './events';
 import { isNotificationsRoute, mockNotificationsRoute } from './notifications';
-import { confirmRestore, MockImageRegistryError, mockRuntimeSettings, mockServerVariables, restorePreflight, runRuntimeAutoUpdate, saveRuntimeAgent, saveRuntimeAutoUpdate, saveRuntimeBranding, saveRuntimeCertificates, saveRuntimeGeneral, saveRuntimeImageRegistry, saveRuntimeSecurity, saveServerVariables, startExport } from './settings';
+import { confirmRestore, MockImageRegistryError, mockRuntimeSettings, mockServerVariables, restorePreflight, runRuntimeAutoUpdate, saveRuntimeAgent, saveRuntimeAutoUpdate, saveRuntimeBranding, saveRuntimeCertificates, saveRuntimeGeneral, saveRuntimeImageRegistry, saveRuntimeSecurity, saveServerVariables, settleMockRuntimeAutoUpdate, startExport } from './settings';
 import {
   mockAppearance,
   mockBackgroundBlob,
@@ -1047,7 +1047,8 @@ export function installMockApi() {
     }
 
     if (url.pathname === '/api/v1/settings/runtime' && method(init) === 'GET') {
-      return json(mockRuntimeSettings);
+      // Mock 协调器没有后台 worker：运行满 8 秒的 GET 视为完成，便于演示摘要刷新。
+      return json(settleMockRuntimeAutoUpdate());
     }
     if (url.pathname === '/api/v1/settings/public-branding' && method(init) === 'GET') return json(mockRuntimeSettings.branding);
     if (url.pathname === '/api/v1/settings/appearance' && method(init) === 'GET') return json(mockAppearance);

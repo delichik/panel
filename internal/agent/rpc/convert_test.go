@@ -356,8 +356,8 @@ func TestPackageUpdatesRoundTripSecurityAuthority(t *testing.T) {
 }
 
 // TestPackageUpdatesFromLegacyAgentIsUnknown 模拟旧 Agent：proto 消息不带
-// security/security_known 时 Panel 必须得到 SecurityKnown=false，从而回退到
-// source 启发式，而不是把包当成“已知非安全”。
+// security/security_known 时 Panel 必须得到 SecurityKnown=false（不可判定），
+// 而不是把包当成“已知非安全”。
 func TestPackageUpdatesFromLegacyAgentIsUnknown(t *testing.T) {
 	legacy := []*agentpb.PackageUpdate{{
 		Name: "openssl", InstalledVersion: "1", CandidateVersion: "2", Source: "jammy-security",

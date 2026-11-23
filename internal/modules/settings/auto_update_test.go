@@ -219,18 +219,25 @@ func TestRuntimeAutoUpdateNormalizesValues(t *testing.T) {
 	}
 }
 
-// TestRuntimeAutoUpdateLastRunIsReadOnlyAndSurvivesPartitionSaves 验证 lastRun*
-// 只读运行态：RecordAutoUpdateLastRun 可跨重启读回，普通分区保存/自动更新分区
-// 保存都不能覆盖它。
+// TestRuntimeAutoUpdateLastRunIsReadOnlyAndSurvivesPartitionSaves 验证 lastRun*/
+// lastAutoRun*/lastRunSummary 只读运行态：RecordAutoUpdateLastRun 与
+// RecordAutoUpdateAutoRun 可跨重启读回，普通分区保存/自动更新分区保存都不能
+// 覆盖它们。
 func TestRuntimeAutoUpdateLastRunIsReadOnlyAndSurvivesPartitionSaves(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t)
 	runAt := time.Date(2026, 11, 19, 4, 0, 0, 0, time.UTC)
+	summary := "3 application image update(s) planned; 5 server(s) processed (security)"
 	if err := svc.RecordAutoUpdateLastRun(ctx, RuntimeAutoUpdateRunState{
-		LastRunAt:     runAt,
-		LastRunStatus: "completed",
-		LastRunTaskID: "task-auto-1",
+		LastRunAt:      runAt,
+		LastRunStatus:  "completed",
+		LastRunTaskID:  "task-auto-1",
+		LastRunSummary: summary,
 	}); err != nil {
+		t.Fatal(err)
+	}
+	autoRunAt := time.Date(2026, 11, 19, 4, 0, 1, 0, time.UTC)
+	if err := svc.RecordAutoUpdateAutoRun(ctx, autoRunAt); err != nil {
 		t.Fatal(err)
 	}
 
@@ -244,6 +251,9 @@ func TestRuntimeAutoUpdateLastRunIsReadOnlyAndSurvivesPartitionSaves(t *testing.
 	if !got.LastRunAt.Equal(runAt) || got.LastRunStatus != "completed" || got.LastRunTaskID != "task-auto-1" {
 		t.Fatalf("last run state was clobbered in memory: %#v", got)
 	}
+	if !got.LastAutoRunAt.Equal(autoRunAt) || got.LastRunSummary != summary {
+		t.Fatalf("read-only auto-run state was clobbered in memory: %#v", got)
+	}
 
 	reloaded, err := NewService(svc.db, svc.cfg)
 	if err != nil {
@@ -253,9 +263,101 @@ func TestRuntimeAutoUpdateLastRunIsReadOnlyAndSurvivesPartitionSaves(t *testing.
 	if !persisted.LastRunAt.Equal(runAt) || persisted.LastRunStatus != "completed" || persisted.LastRunTaskID != "task-auto-1" {
 		t.Fatalf("last run state was clobbered in persistence: %#v", persisted)
 	}
+	if !persisted.LastAutoRunAt.Equal(autoRunAt) || persisted.LastRunSummary != summary {
+		t.Fatalf("read-only auto-run state was clobbered in persistence: %#v", persisted)
+	}
 	// 消费端读 RuntimeSettings 也应看到同样的只读运行态。
-	if runtime := reloaded.Runtime().AutoUpdate; runtime.LastRunStatus != "completed" || runtime.LastRunTaskID != "task-auto-1" {
-		t.Fatalf("runtime snapshot is missing last run state: %#v", runtime)
+	runtime := reloaded.Runtime().AutoUpdate
+	if runtime.LastRunStatus != "completed" || runtime.LastRunTaskID != "task-auto-1" ||
+		runtime.LastAutoRunAt == "" || runtime.LastRunSummary != summary {
+		t.Fatalf("runtime snapshot is missing run state: %#v", runtime)
+	}
+}
+
+// TestRuntimeAutoUpdateRunningWriteKeepsPreviousSummary 验证开始执行（running）
+// 时不会清空上一次结束摘要：摘要只在非空时覆盖。
+func TestRuntimeAutoUpdateRunningWriteKeepsPreviousSummary(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	runAt := time.Date(2026, 11, 19, 4, 0, 0, 0, time.UTC)
+	if err := svc.RecordAutoUpdateLastRun(ctx, RuntimeAutoUpdateRunState{
+		LastRunAt:      runAt,
+		LastRunStatus:  "completed",
+		LastRunTaskID:  "task-auto-1",
+		LastRunSummary: "Automatic updates completed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RecordAutoUpdateLastRun(ctx, RuntimeAutoUpdateRunState{
+		LastRunAt:     runAt.Add(time.Hour),
+		LastRunStatus: "running",
+		LastRunTaskID: "task-auto-2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := svc.Runtime().AutoUpdate
+	if got.LastRunStatus != "running" || got.LastRunTaskID != "task-auto-2" {
+		t.Fatalf("running state was not persisted: %#v", got)
+	}
+	if got.LastRunSummary != "Automatic updates completed" {
+		t.Fatalf("running write must keep the previous summary, got %q", got.LastRunSummary)
+	}
+}
+
+// TestRuntimeAutoUpdateManualRunDoesNotWriteLastAutoRunAt 锁定语义边界：只有
+// RecordAutoUpdateAutoRun 会写 lastAutoRunAt，RecordAutoUpdateLastRun（手动运行
+// 也调用）绝不写该键。
+func TestRuntimeAutoUpdateManualRunDoesNotWriteLastAutoRunAt(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	runAt := time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)
+	if err := svc.RecordAutoUpdateLastRun(ctx, RuntimeAutoUpdateRunState{
+		LastRunAt:     runAt,
+		LastRunStatus: "completed",
+		LastRunTaskID: "task-manual-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := svc.Runtime().AutoUpdate.LastAutoRunAt; got != "" {
+		t.Fatalf("manual lastRun write must not set lastAutoRunAt, got %q", got)
+	}
+	if got := svc.AutoUpdateLastRun().LastRunAt; !got.Equal(runAt) {
+		t.Fatalf("lastRunAt = %s, want %s", got, runAt)
+	}
+}
+
+// TestRuntimeAutoUpdateReadOnlyJSONShape 锁定 GET 响应里新增只读运行态字段，
+// 供设置页展示「最近一次自动运行」与「最近一次运行摘要」。
+func TestRuntimeAutoUpdateReadOnlyJSONShape(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	if err := svc.RecordAutoUpdateLastRun(ctx, RuntimeAutoUpdateRunState{
+		LastRunAt:      time.Date(2026, 11, 19, 4, 0, 0, 0, time.UTC),
+		LastRunStatus:  "completed",
+		LastRunTaskID:  "task-auto-1",
+		LastRunSummary: "Automatic updates completed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RecordAutoUpdateAutoRun(ctx, time.Date(2026, 11, 19, 4, 0, 1, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(svc.Runtime())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(decoded["autoUpdate"], &fields); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"lastRunAt", "lastRunStatus", "lastRunTaskId", "lastAutoRunAt", "lastRunSummary"} {
+		if _, ok := fields[key]; !ok {
+			t.Fatalf("autoUpdate JSON is missing read-only field %q: %s", key, decoded["autoUpdate"])
+		}
 	}
 }
 
