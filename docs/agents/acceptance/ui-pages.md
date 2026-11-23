@@ -20,6 +20,7 @@
 | DNS / 证书 | `/dns/domains`、`/certificates/domains`、`/certificates/self-signed`、`/certificates/keys` | — |
 | 进程事件 / 诊断日志 | `/events`、`/logs` | `/operations`、`/tasks`、`/activity` 兼容重定向 |
 | 设置 / 诊断 | `/settings/general`、`security`、`certificates`、`agent`、`system-certificates`、`system`、`backups` | `/settings` 重定向；`/debug` 隐藏直达 |
+| 初始化 / 账户 / 访问控制 | `/setup`、`/account`、`/access/users`、`/access/roles`、`/forbidden` | `/setup` 仅无用户时可用；`/access/:section?` 默认 users |
 | 未找到 | AppShell 内 catch-all | 保留导航 |
 
 ## 3. 登录与强制改密
@@ -28,8 +29,20 @@
 | --- | --- | --- | --- | --- |
 | UI-AUTH-001 | 未认证进入 `/login` | 显示公共 branding 的标题/副标题，失败则回退 Seamark 本地文案；用户名自动聚焦，表单可回车提交 | branding 加载失败不得阻止登录；用户名或密码为空只显示本地校验，不发请求 | 表单 label/autocomplete 正确，空提交无 `/auth/login` 请求 |
 | UI-AUTH-002 | 输入用户名和密码并登录 | 请求期间锁定提交；成功保存 session，并安全跳回 redirect 或 `/overview` | 登录失败弹全局错误 Dialog（标题 + 可选「查看日志」+ 关闭，`UI-SHELL-065`）并清空密码，但保留用户名；不得触发全局 401 跳转循环 | 失败后密码框为空；成功后受保护请求带新 token |
-| UI-AUTH-003 | 登录/session 返回 `passwordChangeRequired` | 同页切换为用户名、当前密码、新密码、确认密码表单；完成前所有受保护路由继续回登录页 | 必填缺失、新密码少于 8 位或两次不一致时就地报错且不请求 | 合法提交 `/auth/account` 后按安全 redirect 进入控制台 |
+| UI-AUTH-003 | 登录/session 返回 `mustChangePassword=true` | 同页切换为用户名、当前密码、新密码、确认密码表单（用户名允许修改，内置管理员仅首登可改）；完成前所有受保护路由继续回登录页 | 必填缺失、新密码少于 8 位或两次不一致时就地报错且不请求 | 合法提交 `/auth/account` 后返回 `mustRelogin`，清除本地 token 并跳转 `/login?changed=1`，不得自动登录 |
 | UI-AUTH-004 | 登录或改密页面渲染 | 使用独立全视口布局，底部显示 Seamark 图标与英文产品名 | 不得加载 AppShell 导航，也不得因窄屏遮住提交按钮 | 1024px 两侧均可完成表单，footer 不覆盖内容 |
+| UI-AUTH-005 | 无用户且未提供管理员环境变量，访问任意页面 | 守卫统一跳转 `/setup`；页面显示品牌标题、用户名/密码/确认密码（默认 `admin/admin`，可修改） | 创建失败就地显示错误；初始化接口已完成后访问 `/setup` 跳登录页 | 提交成功后跳转 `/login?setup=1` 并显示“管理员已创建”提示；已有用户后 `/setup` 不再可用 |
+| UI-AUTH-006 | 登录页收到 `?setup=1` 或 `?changed=1` | 显示对应成功提示（管理员已创建 / 密码已更新请重新登录） | 提示不得阻止登录表单提交 | 提示文案来自 `auth.setupComplete` / `auth.passwordChangedRelogin` |
+
+## 3.1 我的账户 `/account` 与访问控制 `/access`
+
+| 编号 | 触发 / 前置 | 必须行为 | 失败 / 边界 | 可验证结果 |
+| --- | --- | --- | --- | --- |
+| UI-ACC-001 | 打开 `/account` | 显示只读用户名/显示名/角色、修改密码表单与访问凭证列表；改密成功后清除会话并跳转 `/login?changed=1` | 当前密码错误、新密码过短或两次不一致就地提示；加载凭证失败就地错误 | 页面不进入 403；凭证列表只显示本人凭证 |
+| UI-ACC-002 | 创建访问凭证 | 对话框包含名称、有效期（1..30 分钟，默认 15）、范围（只读/读写，默认只读）与高风险管理开关；管理开关默认关闭且每次打开对话框都重置，只读范围下禁用 | 创建失败显示全局错误 Dialog；token 只显示一次，关闭后无法再次查看 | 创建成功后展示 `pac_` token、复制按钮与到期时间；列表出现新凭证 |
+| UI-ACC-003 | 撤销访问凭证 | 二次确认后调用删除接口，列表状态立即变为已撤销 | 失败保留原状态并显示错误 | 撤销后使用该 token 的请求返回 401 |
+| UI-ACC-004 | 打开 `/access/users`（需 `access.users.manage`） | 列出用户、角色、状态、最近登录；内置管理员标记“内置”且无操作按钮；支持新建用户与禁用/启用/删除 | 无权限路由守卫跳 `/forbidden`；创建失败就地显示错误；删除需确认 | 新建用户默认首登改密；禁用后该用户会话失效 |
+| UI-ACC-005 | 打开 `/access/roles` | 列出内置与自定义角色；内置 administrator 只读；自定义角色可新建/编辑，权限按分组勾选并显示权限名称 | 仍被用户使用的角色删除返回 `role_in_use` 并提示；`access.*` 不出现为可勾选项 | 保存后角色权限数更新；依赖权限由服务端补齐 |
 
 ## 4. 概览 `/overview`
 

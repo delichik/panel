@@ -26,8 +26,13 @@ const error = ref('');
 const branding = ref({ loginTitle: '', loginSubtitle: '' });
 const title = computed(() => branding.value.loginTitle || t('app.name'));
 const subtitle = computed(() => branding.value.loginSubtitle || t('app.subtitle'));
-const changingPassword = computed(() => session.authenticated && session.passwordChangeRequired);
+const changingPassword = computed(() => session.authenticated && session.mustChangePassword);
 const pageTitle = computed(() => changingPassword.value ? t('routes.changePassword.title') : t('routes.login.title'));
+const notice = computed(() => {
+  if (route.query.setup === '1') return t('auth.setupComplete');
+  if (route.query.changed === '1') return t('auth.passwordChangedRelogin');
+  return '';
+});
 
 watch(changingPassword, (required) => {
   if (required && !accountUsername.value) accountUsername.value = session.username || username.value;
@@ -56,7 +61,7 @@ async function submit() {
   loading.value = true;
   try {
     await session.signIn(username.value, password.value);
-    if (session.passwordChangeRequired) {
+    if (session.mustChangePassword) {
       accountUsername.value = session.username || username.value;
       currentPassword.value = password.value;
       newPassword.value = '';
@@ -93,7 +98,7 @@ async function updateAccount() {
       currentPassword: currentPassword.value,
       newPassword: newPassword.value,
     });
-    await router.push(safeRedirect(route.query.redirect));
+    await router.push({ path: '/login', query: { changed: '1' } });
   } catch (err) {
     notifyError(err instanceof Error ? err.message : t('auth.changePasswordFailed'), err);
   } finally {
@@ -119,6 +124,7 @@ async function updateAccount() {
       </div>
       <h1 class="m-0 text-title font-semibold tracking-tight text-foreground">{{ pageTitle }}</h1>
       <p v-if="changingPassword" class="m-0 mt-2 text-sm text-muted-foreground">{{ t('auth.passwordChangeRequired') }}</p>
+      <InfoBar v-if="notice" class="mt-4" tone="success">{{ notice }}</InfoBar>
       <form v-if="!changingPassword" class="mt-6 grid gap-4" @submit.prevent="submit">
         <FormField :label="t('auth.username')">
           <template #default="{ id, describedBy, invalid }">

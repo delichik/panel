@@ -381,7 +381,7 @@ watch(page, (value) => {
               <template #actions>
                 <div class="flex w-full flex-nowrap items-center gap-2 overflow-x-auto sm:w-auto sm:flex-wrap sm:justify-end">
                   <Button size="sm" :loading="loadingDomains" @click="loadDomains"><RefreshCcw />{{ t('common.refresh') }}</Button>
-                  <Button size="sm" variant="primary" @click="openCreateDomain"><Plus />{{ t('common.add') }}</Button>
+                  <Button v-permission="'dns.manage'" size="sm" variant="primary" @click="openCreateDomain"><Plus />{{ t('common.add') }}</Button>
                 </div>
               </template>
             </ListCommandBar>
@@ -430,8 +430,8 @@ watch(page, (value) => {
                     <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
                   </template>
                   <DropdownItem :disabled="syncingId === row.id" @click="syncRecords(row)"><Cloud />{{ t('dnsPage.syncRecords') }}</DropdownItem>
-                  <DropdownItem @click="openEditDomain(row)"><Wrench />{{ t('common.edit') }}</DropdownItem>
-                  <DropdownItem tone="danger" @click="deleteTarget = row"><Trash2 />{{ t('common.delete') }}</DropdownItem>
+                  <DropdownItem v-permission="'dns.manage'" @click="openEditDomain(row)"><Wrench />{{ t('common.edit') }}</DropdownItem>
+                  <DropdownItem v-permission="'dns.manage'" tone="danger" @click="deleteTarget = row"><Trash2 />{{ t('common.delete') }}</DropdownItem>
                 </Dropdown>
               </div>
             </template>
@@ -454,7 +454,7 @@ watch(page, (value) => {
     <template #detail>
       <ConsolePage width="content" :title="selectedDomain?.name ?? t('common.loading')" :breadcrumbs="breadcrumbs" :back-label="t('common.backToList')" :body-scroll="false" @back="closeDetail">
         <template v-if="selectedDomain" #actions>
-          <Button size="sm" variant="secondary" @click="openEditDomain(selectedDomain)"><Wrench />{{ t('common.edit') }}</Button>
+          <Button v-permission="'dns.manage'" size="sm" variant="secondary" @click="openEditDomain(selectedDomain)"><Wrench />{{ t('common.edit') }}</Button>
         </template>
         <div class="grid h-full min-h-0 content-start gap-4 overflow-y-auto pr-1">
           <DetailSection :title="t('common.details')">
@@ -473,7 +473,7 @@ watch(page, (value) => {
                   <template v-if="recordsStale"> · {{ t('dnsPage.staleSnapshot') }}</template>
                 </span>
                 <Button size="sm" :loading="loadingRecords || syncingId === selectedId" @click="selectedDomain && syncRecords(selectedDomain)"><Cloud />{{ t('dnsPage.syncRecords') }}</Button>
-                <Button size="sm" variant="primary" @click="openCreateRecord"><Plus />{{ t('dnsPage.addRecord') }}</Button>
+                <Button v-permission="'dns.manage'" data-perm-anchor="dns.manage.recordCreate" size="sm" variant="primary" @click="openCreateRecord"><Plus />{{ t('dnsPage.addRecord') }}</Button>
               </div>
             </div>
 
@@ -507,8 +507,8 @@ watch(page, (value) => {
             </template>
             <template #actions="{ row }">
               <div class="flex items-center justify-end gap-1">
-                <Button size="sm" variant="ghost" @click="openEditRecord(row)"><Wrench />{{ t('common.edit') }}</Button>
-                <Button size="sm" variant="ghost" @click="recordDeleteTarget = row"><Trash2 />{{ t('common.delete') }}</Button>
+                <Button v-permission="'dns.manage'" size="sm" variant="ghost" @click="openEditRecord(row)"><Wrench />{{ t('common.edit') }}</Button>
+                <Button v-permission="'dns.manage'" size="sm" variant="ghost" @click="recordDeleteTarget = row"><Trash2 />{{ t('common.delete') }}</Button>
               </div>
             </template>
             <template #empty>

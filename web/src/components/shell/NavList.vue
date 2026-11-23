@@ -1,9 +1,23 @@
 <script setup lang="ts">
 import { RouterLink } from 'vue-router';
+import { computed } from 'vue';
 import { useI18n } from '@/i18n';
 import { prefetchPage } from '@/router/lazyPage';
 import { pageLoaderForPath } from '@/router/pageLoaders';
-import { navGroups } from './navModel';
+import { useSessionStore } from '@/stores/session';
+import { visibleNavGroups, navGroups } from './navModel';
+
+/**
+ * Resolve the session when a Pinia instance exists. Unit tests mount the list
+ * in isolation; without Pinia we fall back to the full navigation definition.
+ */
+function currentSession() {
+  try {
+    return useSessionStore();
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Shared NavigationView list used by the desktop pane and the mobile drawer.
@@ -29,6 +43,8 @@ withDefaults(defineProps<{
 
 const emit = defineEmits<{ navigate: [] }>();
 const { t } = useI18n();
+const session = currentSession();
+const groups = computed(() => (session && session.ready ? visibleNavGroups((permission) => session.can(permission)) : navGroups));
 
 function warmTarget(path: string) {
   const loader = pageLoaderForPath(path);
@@ -38,7 +54,7 @@ function warmTarget(path: string) {
 
 <template>
   <nav class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden py-2" :class="collapsed ? 'px-1' : 'px-2'" :aria-label="label">
-    <section v-for="(group, groupIndex) in navGroups" :key="group.key" :class="collapsed ? 'mb-1.5 last:mb-0' : 'mb-2 last:mb-0'">
+    <section v-for="(group, groupIndex) in groups" :key="group.key" :class="collapsed ? 'mb-1.5 last:mb-0' : 'mb-2 last:mb-0'">
       <div v-if="collapsed && groupIndex > 0" class="mx-2 my-1.5 h-px bg-divider" aria-hidden="true" />
       <span v-if="collapsed" class="sr-only">{{ t(group.titleKey) }}</span>
       <div v-else class="mb-0.5 h-7 overflow-hidden px-3">

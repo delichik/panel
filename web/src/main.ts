@@ -2,6 +2,7 @@ import { createApp } from 'vue';
 import { createPinia } from 'pinia';
 import { setAuthTokenProvider } from './api/client';
 import App from './app/App.vue';
+import { vPermission } from './directives/permission';
 import { router } from './router';
 import { useSessionStore } from './stores/session';
 import './styles/main.css';
@@ -18,6 +19,7 @@ async function bootstrap() {
     const pinia = createPinia();
     const app = createApp(App);
     app.use(pinia);
+    app.directive('permission', vPermission);
 
     const session = useSessionStore(pinia);
     setAuthTokenProvider(() => session.token);

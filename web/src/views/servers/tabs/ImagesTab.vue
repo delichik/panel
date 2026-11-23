@@ -150,7 +150,7 @@ onBeforeUnmount(() => listController?.abort());
       <div class="flex flex-wrap items-center justify-between gap-2">
         <span class="text-xs text-muted-foreground">{{ formatDateTime(images?.observedAt) || t('common.never') }}</span>
         <div class="flex flex-wrap items-center gap-2">
-          <Button size="sm" variant="primary" :disabled="blocked" @click="pullDialog = true"><DownloadCloud />{{ t('resourcesPage.pullImage') }}</Button>
+          <Button v-permission="'containers.manage'" size="sm" variant="primary" :disabled="blocked" @click="pullDialog = true"><DownloadCloud />{{ t('resourcesPage.pullImage') }}</Button>
           <Button size="sm" :loading="loading" :disabled="blocked" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
           <Dropdown align="right">
             <template #trigger>

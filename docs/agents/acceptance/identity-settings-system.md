@@ -100,4 +100,46 @@
 - `ID-EVD-001`：除登录、会话、公开品牌与公开外观外，上述 API 未认证均返回 401；强制改密状态的权限矩阵必须由后端集成测试覆盖。
 - `ID-EVD-002`：账户、nonce、JWT secret和 runtime settings 位于 AppDB；进程重启后账户、设置和主动注销效果必须保持，登录失败计数可重置。
 - `ID-EVD-003`：账户修改、JWT secret 更新和设置更新的失败用例必须验证旧值仍可读取；成功用例必须验证旧 token 失效或继续有效的精确边界。
-- `ID-EVD-004`：路由验收必须覆盖 `POST /auth/login|logout|account|jwt-secret`、`GET /auth/session`、`GET /settings/runtime`、`PUT /settings/runtime/general|security|certificates|agent|branding|auto-update|image-registry`、`POST /settings/runtime/auto-update/run`、`GET/PUT /settings/server-variables`、`GET/PUT /settings/appearance`、`POST/DELETE /settings/appearance/background`、`GET /settings/appearance/background/content`、`GET /settings/public-branding`、`GET /settings/public-appearance` 和 `GET /system/version`，且与路由清单（`routes_manifest_test.go` 的 `wantCount=203` 基线）及前端 typed client 一致。
+- `ID-EVD-004`：路由验收必须覆盖 `POST /auth/login|logout|account|jwt-secret`、`GET /auth/session`、`GET /setup/status`、`POST /setup`、`GET /permissions`、`GET/POST /users`、`GET/PATCH/DELETE /users/{id}`、`POST /users/{id}/password|logout`、`GET/POST /roles`、`GET/PATCH/DELETE /roles/{id}`、`GET/POST /access-credentials`、`DELETE /access-credentials/{id}`、`GET /settings/runtime`、`PUT /settings/runtime/general|security|certificates|agent|branding|auto-update|image-registry`、`POST /settings/runtime/auto-update/run`、`GET/PUT /settings/server-variables`、`GET/PUT /settings/appearance`、`POST/DELETE /settings/appearance/background`、`GET /settings/appearance/background/content`、`GET /settings/public-branding`、`GET /settings/public-appearance` 和 `GET /system/version`，且与路由清单（`routes_manifest_test.go` 的 `wantCount=221` 基线）及前端 typed client 一致。
+
+## 9. 多用户、角色与权限
+
+- `ID-USR-001`：`GET /api/v1/users` 仅 `access.users.manage` 可调用；返回分页用户列表（id、username、displayName、status、builtin、mustChangePassword、roles、lastLoginAt、createdAt），按创建时间升序；不返回密码哈希、代数或会话凭证。
+- `ID-USR-002`：`POST /api/v1/users` 创建自定义用户；用户名 3..64 字符且大小写不敏感唯一；密码 8..72 字节；新用户 `mustChangePassword=true`，首次登录必须改密；内置 administrator 角色不可分配。
+- `ID-USR-003`：`GET /api/v1/users/{id}` 返回单个用户投影，不存在返回 404。
+- `ID-USR-004`：`PATCH /api/v1/users/{id}` 可改显示名、状态与角色；禁用时递增该用户代数使全部 JWT 与访问凭证立即失效；内置管理员不可修改；不能禁用自己。
+- `ID-USR-005`：`DELETE /api/v1/users/{id}` 删除用户及其角色关联与访问凭证；内置管理员、自己不可删除。
+- `ID-USR-006`：`POST /api/v1/users/{id}/password` 由管理员重置密码：新密码满足 8..72 字节，写新哈希、置 `mustChangePassword=true`、递增目标用户代数；内置管理员只能本人改密。
+- `ID-USR-007`：`POST /api/v1/users/{id}/logout` 递增目标用户代数，撤销其全部 JWT 与访问凭证。
+- `ID-USR-008`：内置管理员由初始化创建，`builtin=1`，不可被改名、改角色、禁用、删除或由他人重置密码；用户名仅允许本人在首次登录改密时修改一次，之后锁定。
+
+- `ID-ROLE-001`：`GET /api/v1/roles` 返回内置 administrator 与自定义角色；内置角色 `builtin=true` 且拥有全部权限；响应包含 permissionKeys、用户数、创建时间。
+- `ID-ROLE-002`：`POST /api/v1/roles` 创建自定义角色；至少选择一项权限；未知权限返回 `unknown_permission`，`access.*` 返回 `permission_not_grantable`；服务端按权限目录补齐 `requires` 依赖闭包后落库。
+- `ID-ROLE-003`：`GET /api/v1/roles/{id}` 返回单个角色投影。
+- `ID-ROLE-004`：`PATCH /api/v1/roles/{id}` 更新名称/说明/权限集合并重新计算依赖闭包；内置 administrator 不可修改；保存失败不得留下部分权限。
+- `ID-ROLE-005`：`DELETE /api/v1/roles/{id}` 删除自定义角色；仍被用户引用返回 `409 role_in_use`；内置角色不可删除。
+- `ID-PERM-001`：`GET /api/v1/permissions` 登录即可读取，返回权限目录（groups + permissions），包含 key/group/labelKey/descriptionKey/risk/mode/requires/grantable；不包含用户或角色数据。
+- `ID-PERM-002`：每个受保护 API 必须且只能映射到一个权限；未映射路由 fail-closed 返回 `403 permission_denied`；目录测试枚举全部已注册 `/api` 路由并断言覆盖。
+- `ID-PERM-003`：权限按请求实时解析（用户角色并集 + 依赖闭包）；角色变更/删除后下一次请求立即生效，无需重新登录；JWT 不携带角色或权限。
+- `ID-PERM-004`：内置管理员隐式拥有目录全部权限；自定义用户只拥有角色并集；权限目录新增权限时内置管理员自动获得。
+- `ID-PERM-005`：每个权限在目录中至少声明一条 UI 映射（page/kind/target/effect），可交互类型（button/menu/field/column/tab/dialog/mask）必须声明稳定 `anchor`；Vue 源码中的 `data-perm-anchor` 与目录 anchor 必须双向一致，由 `internal/modules/identity/catalog_ui_test.go` 强制。
+
+## 10. 访问凭证
+
+- `ID-CRED-001`：`GET /api/v1/access-credentials` 返回当前用户的凭证列表（不含 token 明文），状态为 active/expired/revoked。
+- `ID-CRED-002`：`POST /api/v1/access-credentials` 仅接受交互式会话（拒绝访问凭证自身调用）；`expiresInSeconds` 60..1800，默认 900；`scope` 只能 readonly/readwrite，默认 readonly；readonly 时拒绝 `allowManagement=true`；每人最多 10 个有效凭证；响应 201 且只返回一次明文 token，`Cache-Control: no-store`。
+- `ID-CRED-003`：`DELETE /api/v1/access-credentials/{id}` 撤销本人凭证；持有 `access.credentials.manage` 可撤销他人凭证；撤销后立即失效。
+- `ID-CRED-004`：凭证使用不透明 `pac_` token，服务端只保存 SHA-256 与展示前缀；校验 token、未撤销、未过期、用户 active、用户代数一致；失败统一 401。
+- `ID-CRED-005`：凭证有效权限为用户当前权限（readonly 再与目录 `mode=read` 求交），实时生效；用户降权后凭证下一请求即按新权限。
+- `ID-CRED-006`：凭证硬禁止：创建/续期凭证、修改密码/用户名、修改 JWT secret、登录/登出；`allowManagement=false` 时另禁止用户/角色管理端点并返回 `403 credential_scope_restricted`；只读凭证调用写权限接口返回 `403 credential_read_only`。
+- `ID-CRED-007`：到期或撤销后 JWT/凭证均不可再用；用户登出、改密、重置密码、禁用等递增用户代数后，该用户已签发凭证一并失效。
+
+## 11. 初始化与首登改密
+
+- `ID-SETUP-001`：`GET /api/v1/setup/status` 公开；`required=true` 仅当 `users` 表为空，已有用户后恒为 false。
+- `ID-SETUP-002`：`POST /api/v1/setup` 公开但仅无用户时可用；创建唯一内置管理员（`builtin=1`、`mustChangePassword=true`）并分配 administrator 角色；不签发 token；重复调用返回 `409 setup_completed`，不得覆盖现有用户；用户名/密码默认 `admin/admin`（不随机生成），支持请求覆盖。
+- `ID-SETUP-003`：无环境变量且无用户时系统进入初始化模式，登录/业务接口仍要求认证；环境变量存在时启动直接创建内置管理员并跳过初始化界面；只要库中已有任何用户，环境变量全部忽略（包括非法值）。
+- `ID-ACC-013`：首次登录（`mustChangePassword=true`）只允许 `GET /auth/session`、`POST /auth/logout`、`POST /auth/account`；访问其它端点返回 `403 password_change_required`。
+- `ID-ACC-014`：`POST /auth/account` 在首登状态必须提供新密码；可同时修改用户名（内置管理员仅限首登）；成功后清 `mustChangePassword`、递增用户代数、返回 `{authenticated:false,mustRelogin:true}`，旧 JWT 立即失效；必须重新登录。
+- `ID-SES-009`：JWT claims 携带 `kg`（密钥代数）与 `ug`（用户代数）；任一与当前持久值不一致返回 401；登出只递增该用户代数，JWT secret 轮换递增全局密钥代数使全部 JWT 失效。
+- `ID-SES-010`：JWT 不含角色/权限；角色调整不递增代数、不强制重新登录，下一次请求按最新权限解析。

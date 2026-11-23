@@ -14,7 +14,9 @@
 | --- | --- | --- | --- | --- |
 | UI-SHELL-001 | 浏览器进入任意路由，session 尚未恢复 | 挂载业务页面前调用会话恢复；守卫不得默认已登录 | 恢复中的网络错误若本地仍有 token，可保留 token 并乐观进入；明确 401/`unauthorized` 必须清空 session | 首次导航不会先闪出受保护数据；401 后 `panel.auth.token` 被移除并转到登录页 |
 | UI-SHELL-002 | 未认证且没有可复用 token 访问受保护路由 | 跳转 `/login?redirect=<原始完整路径>`，保留 path 与 query | `/login` 和 `/maintenance/backup` 是公开路由；不得造成重定向循环 | 地址栏含安全编码的原目标，登录后可返回该目标 |
-| UI-SHELL-003 | 已认证且无需强制改密访问 `/login` | 自动转到 `/overview` | `passwordChangeRequired=true` 时必须停留登录页并显示改密流程 | 普通已登录用户看不到登录表单；强制改密用户不能进入控制台 |
+| UI-SHELL-003 | 已认证且无需首登改密访问 `/login` | 自动转到 `/overview` | `mustChangePassword=true` 时必须停留登录页并显示改密流程 | 普通已登录用户看不到登录表单；强制改密用户不能进入控制台 |
+| UI-SHELL-066 | 无用户（初始化模式）或会话权限不足 | 未认证且 `setup/status.required=true` 时统一重定向 `/setup`；已登录但缺少路由 `meta.permission` 时进入 `/forbidden`；导航只渲染当前 `permissions` 覆盖的项 | 初始化完成后 `/setup` 跳登录页；公开路由与登录页不得被权限守卫拦截 | 无用户时任意业务 URL 到 `/setup`；只读用户导航不显示无权限页面，直接深链到无权限页面显示 403 而非空白 |
+| UI-SHELL-067 | 页面按钮/菜单/字段声明 `v-permission` | 会话缺少权限时默认隐藏元素；`v-permission.disable` 保留元素但禁用并设置 `aria-disabled`；权限集合变化后下一次渲染生效 | 不得用前端隐藏替代后端 403；无权限元素不得仍可聚焦或提交 | 隐藏元素 `hidden` 生效；禁用元素不可点击且读屏可感知；源码 anchor 与权限目录一致 |
 | UI-SHELL-004 | 登录成功或 session 恢复返回 Bearer token | 保存 token、用户名、认证态和强制改密标志；受保护请求统一注入 `Authorization: Bearer` | 公共登录与公共 branding 请求不得注入旧 token | 刷新后 session 可恢复；抓取请求可区分受保护和 `skipAuth` 请求 |
 | UI-SHELL-005 | 任一受保护 API 返回 401（含非 JSON 401） | 统一归一化为未授权，清空 session，并把当前完整路由作为 redirect 转到登录页 | 登录请求自身的 401 不得触发全局跳转；并发 401 不得形成循环 | token 被清除，当前页面退出，登录失败仍留在登录表单 |
 | UI-SHELL-006 | 用户执行退出 | 显示全局阻塞加载，尝试后端 logout；无论后端结果如何都清除本地 session，再进入 `/login` | 请求失败不能把用户困在已认证 UI，也不能遗留 token | 退出按钮防重复触发，完成后受保护页面不可继续访问 |

@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"panel/internal/platform/http"
+	httpx "panel/internal/platform/http"
 )
 
 func TestSessionReturnsUnauthenticatedWithoutToken(t *testing.T) {
@@ -65,8 +65,16 @@ func TestSessionReturnsAuthenticatedWithValidToken(t *testing.T) {
 	if data["username"] != "admin" {
 		t.Fatalf("username = %v, want admin", data["username"])
 	}
-	if data["passwordChangeRequired"] != true {
-		t.Fatalf("passwordChangeRequired = %v, want true", data["passwordChangeRequired"])
+	if data["mustChangePassword"] != true {
+		t.Fatalf("mustChangePassword = %v, want true", data["mustChangePassword"])
+	}
+	permissions, ok := data["permissions"].([]any)
+	if !ok || len(permissions) == 0 {
+		t.Fatalf("built-in administrator must expose all permissions: %#v", data["permissions"])
+	}
+	user, ok := data["user"].(map[string]any)
+	if !ok || user["isBuiltinAdmin"] != true {
+		t.Fatalf("user payload = %#v", data["user"])
 	}
 }
 
@@ -94,8 +102,8 @@ func TestLoginReturnsSessionResponse(t *testing.T) {
 	if data["username"] != "admin" {
 		t.Fatalf("username = %v, want admin", data["username"])
 	}
-	if data["passwordChangeRequired"] != true {
-		t.Fatalf("passwordChangeRequired = %v, want true", data["passwordChangeRequired"])
+	if data["mustChangePassword"] != true {
+		t.Fatalf("mustChangePassword = %v, want true", data["mustChangePassword"])
 	}
 }
 
@@ -129,11 +137,13 @@ func TestLogoutInvalidatesAuthenticatedSession(t *testing.T) {
 		t.Fatalf("login: %v", err)
 	}
 	handler := NewHandler(service)
+	mux := http.NewServeMux()
+	mux.Handle("POST /api/v1/auth/logout", service.RequireAuthAllowPasswordChange(http.HandlerFunc(handler.Logout)))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
 	req.Header.Set("Authorization", "Bearer "+sess.Token)
 	rec := httptest.NewRecorder()
 
-	handler.Logout(rec, req)
+	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)

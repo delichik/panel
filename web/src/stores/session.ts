@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { ApiError } from '@/api/client';
-import { authApi, type AuthSession, type AccountUpdateInput } from '@/api/auth';
+import { authApi, setupApi, type AuthRole, type AuthSession, type AuthUser, type AccountUpdateInput } from '@/api/auth';
 
 const tokenStorageKey = 'panel.auth.token';
 
@@ -11,26 +11,59 @@ function storedToken() {
 export const useSessionStore = defineStore('session', {
   state: () => ({
     username: '',
+    displayName: '',
     token: storedToken(),
     authenticated: false,
-    passwordChangeRequired: false,
+    mustChangePassword: false,
+    user: null as AuthUser | null,
+    roles: [] as AuthRole[],
+    permissions: [] as string[],
+    setupRequired: null as boolean | null,
     ready: false,
   }),
   actions: {
     applySession(session: AuthSession) {
       this.authenticated = Boolean(session.authenticated && session.token);
-      this.username = session.username ?? '';
+      this.username = session.user?.username ?? session.username ?? '';
+      this.displayName = session.user?.displayName ?? '';
+      this.user = session.user ?? null;
+      this.roles = session.roles ?? [];
+      this.permissions = session.permissions ?? [];
+      this.mustChangePassword = Boolean(session.mustChangePassword);
       this.token = session.token ?? '';
-      this.passwordChangeRequired = Boolean(session.passwordChangeRequired);
       if (this.token) localStorage.setItem(tokenStorageKey, this.token);
       else localStorage.removeItem(tokenStorageKey);
     },
     clearSession() {
       this.username = '';
+      this.displayName = '';
       this.token = '';
       this.authenticated = false;
-      this.passwordChangeRequired = false;
+      this.mustChangePassword = false;
+      this.user = null;
+      this.roles = [];
+      this.permissions = [];
       localStorage.removeItem(tokenStorageKey);
+    },
+    can(key: string) {
+      return this.permissions.includes(key);
+    },
+    canAny(keys: string[]) {
+      return keys.some((key) => this.permissions.includes(key));
+    },
+    async ensureSetupStatus() {
+      if (this.setupRequired !== null) return this.setupRequired;
+      try {
+        this.setupRequired = (await setupApi.status()).required;
+      } catch {
+        // Do not trap the user on the setup page when the status probe fails;
+        // login will surface the real error.
+        this.setupRequired = false;
+      }
+      return this.setupRequired;
+    },
+    markSetupComplete() {
+      this.setupRequired = false;
     },
     async restore() {
       try {
@@ -68,10 +101,14 @@ export const useSessionStore = defineStore('session', {
       this.clearSession();
     },
     async updateAccount(input: AccountUpdateInput) {
-      this.applySession(await authApi.updateAccount(input));
+      const result = await authApi.updateAccount(input);
+      this.clearSession();
+      return result;
     },
     async updateJwtSecret(jwtSecret: string) {
-      this.applySession(await authApi.updateJwtSecret(jwtSecret));
+      const result = await authApi.updateJwtSecret(jwtSecret);
+      this.clearSession();
+      return result;
     },
   },
 });

@@ -810,16 +810,16 @@ function onFileChange(value: File | File[]) {
                   <div class="flex w-full flex-nowrap items-center gap-2 overflow-x-auto sm:w-auto sm:flex-wrap sm:justify-end">
                   <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
                   <template v-if="mode === 'domains'">
-                    <Button size="sm" variant="primary" @click="openIssue"><Plus />{{ t('certificatesPage.issue') }}</Button>
+                    <Button v-permission="'certificates.manage'" data-perm-anchor="certificates.manage.issue" size="sm" variant="primary" @click="openIssue"><Plus />{{ t('certificatesPage.issue') }}</Button>
                   </template>
                   <template v-else-if="mode === 'self'">
-                    <Button size="sm" variant="primary" @click="openSelf('self-ca')"><Plus />{{ t('certificatesPage.generateCa') }}</Button>
+                    <Button v-permission="'certificates.manage'" size="sm" variant="primary" @click="openSelf('self-ca')"><Plus />{{ t('certificatesPage.generateCa') }}</Button>
                   </template>
                   <template v-else>
-                    <Button size="sm" variant="primary" @click="openAsset('asset-ssh')"><KeyRound />{{ t('certificatesPage.generateSsh') }}</Button>
+                    <Button v-permission="'keyassets.manage'" data-perm-anchor="keyassets.manage.generate" size="sm" variant="primary" @click="openAsset('asset-ssh')"><KeyRound />{{ t('certificatesPage.generateSsh') }}</Button>
                     <Dropdown align="right">
                       <template #trigger>
-                        <Button size="sm"><Plus />{{ t('certificatesPage.new') }}<ChevronDown /></Button>
+                        <Button v-permission="'keyassets.manage'" size="sm"><Plus />{{ t('certificatesPage.new') }}<ChevronDown /></Button>
                       </template>
                       <DropdownItem @click="openAsset('asset-ca')"><Plus />{{ t('certificatesPage.generateCa') }}</DropdownItem>
                       <DropdownItem @click="openAsset('asset-tls')"><Plus />{{ t('certificatesPage.generateTls') }}</DropdownItem>
@@ -879,9 +879,9 @@ function onFileChange(value: File | File[]) {
                     <template #trigger>
                       <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
                     </template>
-                    <DropdownItem @click="renewDomainRow(row)"><RotateCcw />{{ t('certificatesPage.renew') }}</DropdownItem>
-                    <DropdownItem @click="openReissue(row)"><Wrench />{{ t('certificatesPage.adjustReissue') }}</DropdownItem>
-                    <DropdownItem tone="danger" @click="askDelete('domains', row.id, row.name)"><Trash2 />{{ t('common.delete') }}</DropdownItem>
+                    <DropdownItem v-permission="'certificates.manage'" @click="renewDomainRow(row)"><RotateCcw />{{ t('certificatesPage.renew') }}</DropdownItem>
+                    <DropdownItem v-permission="'certificates.manage'" @click="openReissue(row)"><Wrench />{{ t('certificatesPage.adjustReissue') }}</DropdownItem>
+                    <DropdownItem v-permission="'certificates.manage'" tone="danger" @click="askDelete('domains', row.id, row.name)"><Trash2 />{{ t('common.delete') }}</DropdownItem>
                   </Dropdown>
                 </div>
               </template>
@@ -967,10 +967,10 @@ function onFileChange(value: File | File[]) {
                     <template #trigger>
                       <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
                     </template>
-                    <DropdownItem :disabled="(!row.canReissue && !row.canRegenerate) || Boolean(rowPending)" @click="reissueAssetRow(row)"><RotateCcw />{{ row.type === 'ssh_key_pair' ? t('certificatesPage.regenerate') : t('certificatesPage.reissue') }}</DropdownItem>
-                    <DropdownItem @click="openExport(row)"><FileArchive />{{ t('certificatesPage.exportAsset') }}</DropdownItem>
-                    <DropdownItem @click="openAsset('asset-import')"><KeyRound />{{ t('certificatesPage.importAsset') }}</DropdownItem>
-                    <DropdownItem tone="danger" :disabled="!row.canDelete" @click="askDelete('keys', row.id, row.name, row.canDelete)"><Trash2 />{{ t('common.delete') }}</DropdownItem>
+                    <DropdownItem v-permission="'keyassets.manage'" :disabled="(!row.canReissue && !row.canRegenerate) || Boolean(rowPending)" @click="reissueAssetRow(row)"><RotateCcw />{{ row.type === 'ssh_key_pair' ? t('certificatesPage.regenerate') : t('certificatesPage.reissue') }}</DropdownItem>
+                    <DropdownItem v-permission="'keyassets.export'" data-perm-anchor="keyassets.export.download" @click="openExport(row)"><FileArchive />{{ t('certificatesPage.exportAsset') }}</DropdownItem>
+                    <DropdownItem v-permission="'keyassets.manage'" @click="openAsset('asset-import')"><KeyRound />{{ t('certificatesPage.importAsset') }}</DropdownItem>
+                    <DropdownItem v-permission="'keyassets.manage'" tone="danger" :disabled="!row.canDelete" @click="askDelete('keys', row.id, row.name, row.canDelete)"><Trash2 />{{ t('common.delete') }}</DropdownItem>
                   </Dropdown>
                 </div>
               </template>

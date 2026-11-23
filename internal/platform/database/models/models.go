@@ -21,7 +21,7 @@ func AppModels() []any {
 		&FacilityStaticAsset{}, &ReverseProxyRoute{}, &FacilityProxyImageState{}, &FacilityEditSession{}, &FacilityEditSessionAsset{},
 		&FacilityEditSessionOperation{}, &StorageShareConfig{}, &StorageSharePartition{}, &NetworkProbeConfig{}, &NetworkProbeResult{}, &MetricsFacilityConfig{}, &Certificate{}, &SelfSignedCertificate{},
 		&KeyAsset{}, &OverviewCardConfiguration{}, &RuntimeSetting{}, &AppearanceSetting{}, &AuthState{},
-		&AuthAccount{}, &Task{}, &TaskStep{}, &Event{},
+		&User{}, &Role{}, &RolePermission{}, &UserRole{}, &AccessCredential{}, &Task{}, &TaskStep{}, &Event{},
 	}
 }
 

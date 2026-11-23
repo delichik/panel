@@ -3058,7 +3058,7 @@ onBeforeUnmount(() => {
       <ConsolePage :title="t('routes.applications.title')" :description="t('routes.applications.description')">
         <template #actions>
           <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
-          <Button size="sm" variant="primary" @click="router.push('/applications/apps/create')"><Plus />{{ t('common.create') }}</Button>
+          <Button v-permission="'applications.edit'" data-perm-anchor="applications.edit.create" size="sm" variant="primary" @click="router.push('/applications/apps/create')"><Plus />{{ t('common.create') }}</Button>
         </template>
 
         <ListPage :state="applicationListState">
@@ -3144,20 +3144,20 @@ onBeforeUnmount(() => {
                 <Button size="sm" variant="secondary" @click="openApplicationDetail(row.app)"><Eye />{{ t('common.details') }}</Button>
                 <!-- <wide：行内编辑/同步收进行内 More 菜单，只保留详情 + 更多。 -->
                 <div class="hidden items-center gap-1 wide:flex">
-                  <Button size="sm" variant="ghost" @click="router.push(`/applications/apps/${encodeURIComponent(row.app.id)}/edit`)"><Wrench />{{ t('common.edit') }}</Button>
-                  <Button size="sm" variant="ghost" :loading="rowActionKey === `deploy:${row.app.id}`" :disabled="Boolean(rowActionKey)" @click="deployFor(row.app)"><Rocket />{{ t('applicationsPage.sync') }}</Button>
+                  <Button v-permission="'applications.edit'" size="sm" variant="ghost" @click="router.push(`/applications/apps/${encodeURIComponent(row.app.id)}/edit`)"><Wrench />{{ t('common.edit') }}</Button>
+                  <Button v-permission="'applications.deploy'" data-perm-anchor="applications.deploy.sync" size="sm" variant="ghost" :loading="rowActionKey === `deploy:${row.app.id}`" :disabled="Boolean(rowActionKey)" @click="deployFor(row.app)"><Rocket />{{ t('applicationsPage.sync') }}</Button>
                 </div>
                 <Dropdown align="right">
                   <template #trigger>
                     <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
                   </template>
                   <!-- More 必须始终包含窄屏被隐藏的行内主操作。 -->
-                  <DropdownItem @click="router.push(`/applications/apps/${encodeURIComponent(row.app.id)}/edit`)"><Wrench />{{ t('common.edit') }}</DropdownItem>
-                  <DropdownItem :disabled="Boolean(rowActionKey)" @click="deployFor(row.app)"><Rocket />{{ t('applicationsPage.sync') }}</DropdownItem>
-                  <DropdownItem :disabled="!row.app.enabled" @click="ask('stop', row.app.id)"><Square />{{ t('applicationsPage.disable') }}</DropdownItem>
-                  <DropdownItem :disabled="!row.app.imageUpdateAvailable || Boolean(rowActionKey)" @click="updateImageFor(row.app)"><UploadCloud />{{ t('applicationsPage.updateImage') }}</DropdownItem>
+                  <DropdownItem v-permission="'applications.edit'" @click="router.push(`/applications/apps/${encodeURIComponent(row.app.id)}/edit`)"><Wrench />{{ t('common.edit') }}</DropdownItem>
+                  <DropdownItem v-permission="'applications.deploy'" :disabled="Boolean(rowActionKey)" @click="deployFor(row.app)"><Rocket />{{ t('applicationsPage.sync') }}</DropdownItem>
+                  <DropdownItem v-permission="'applications.deploy'" :disabled="!row.app.enabled" @click="ask('stop', row.app.id)"><Square />{{ t('applicationsPage.disable') }}</DropdownItem>
+                  <DropdownItem v-permission="'applications.deploy'" :disabled="!row.app.imageUpdateAvailable || Boolean(rowActionKey)" @click="updateImageFor(row.app)"><UploadCloud />{{ t('applicationsPage.updateImage') }}</DropdownItem>
                   <DropdownItem @click="openLogsFor(row.app)"><History />{{ t('applicationsPage.logs') }}</DropdownItem>
-                  <DropdownItem tone="danger" :disabled="rowPendingId === row.app.id" @click="askDelete(row.app)"><Trash2 />{{ t('common.delete') }}</DropdownItem>
+                  <DropdownItem v-permission="'applications.edit'" tone="danger" :disabled="rowPendingId === row.app.id" @click="askDelete(row.app)"><Trash2 />{{ t('common.delete') }}</DropdownItem>
                 </Dropdown>
               </div>
             </template>
@@ -3187,7 +3187,7 @@ onBeforeUnmount(() => {
         @back="backToApplicationList"
       >
         <template #actions>
-          <Button size="sm" variant="secondary" @click="router.push(`/applications/apps/${encodeURIComponent(selectedApplication.id)}/edit`)"><Wrench />{{ t('common.edit') }}</Button>
+          <Button v-permission="'applications.edit'" size="sm" variant="secondary" @click="router.push(`/applications/apps/${encodeURIComponent(selectedApplication.id)}/edit`)"><Wrench />{{ t('common.edit') }}</Button>
           <ActivityLink resource-type="application" :resource-id="selectedApplication.id" />
         </template>
 
@@ -3419,7 +3419,7 @@ onBeforeUnmount(() => {
 
             <DetailSection :title="t('applicationsPage.facilityRecordPaths')" :description="t('applicationsPage.facilityRecordPathsHint')">
               <template #actions>
-                <Button size="sm" @click="openFacilityPathDialog()"><Plus />{{ t('common.addPath') }}</Button>
+                <Button v-permission="'facilities.manage'" data-perm-anchor="facilities.manage.pathAdd" size="sm" @click="openFacilityPathDialog()"><Plus />{{ t('common.addPath') }}</Button>
               </template>
               <div v-for="(path, pathIndex) in facilityRecordDraft.paths" :key="`${path.path}-${pathIndex}`" class="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
                 <div class="min-w-0">
@@ -3430,8 +3430,8 @@ onBeforeUnmount(() => {
                   <span class="mt-1 block text-caption text-muted-foreground">{{ facilityPathTargetLabel(path) }}</span>
                 </div>
                 <div class="flex flex-wrap justify-start gap-2 sm:justify-end">
-                  <Button size="sm" @click="openFacilityPathDialog(pathIndex)">{{ t('common.edit') }}</Button>
-                  <Button size="sm" variant="danger" @click="removeFacilityRecordPath(pathIndex)">{{ t('common.delete') }}</Button>
+                  <Button v-permission="'facilities.manage'" size="sm" @click="openFacilityPathDialog(pathIndex)">{{ t('common.edit') }}</Button>
+                  <Button v-permission="'facilities.manage'" size="sm" variant="danger" @click="removeFacilityRecordPath(pathIndex)">{{ t('common.delete') }}</Button>
                 </div>
               </div>
               <EmptyState v-if="!facilityRecordDraft.paths.length" variant="inset" :title="t('applicationsPage.facilityRecordNoPaths')" :description="t('applicationsPage.noPathsHint')" />
@@ -3456,7 +3456,7 @@ onBeforeUnmount(() => {
             <div class="text-caption text-muted-foreground">{{ editorDirty ? t('applicationsPage.unsavedChanges') : t('applicationsPage.readyToCommit') }}</div>
             <div class="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
               <Button variant="secondary" class="w-full sm:w-auto" :disabled="saving" @click="cancelFacilityRecordEdit">{{ t('common.cancel') }}</Button>
-              <Button variant="primary" class="w-full sm:w-auto" :loading="pending === 'commit'" :disabled="!editorReady || saving || !editorDirty" @click="commitFacilityRecord"><Save />{{ t('applicationsPage.facilityRecordSave') }}</Button>
+              <Button v-permission="'facilities.manage'" variant="primary" class="w-full sm:w-auto" :loading="pending === 'commit'" :disabled="!editorReady || saving || !editorDirty" @click="commitFacilityRecord"><Save />{{ t('applicationsPage.facilityRecordSave') }}</Button>
             </div>
           </div>
         </template>

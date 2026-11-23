@@ -149,18 +149,19 @@ const form = reactive({
   restoreConfirm: false,
 });
 
-const sections = computed<Array<{ key: SectionKey; label: string }>>(() => [
+const allSections: Array<{ key: SectionKey; label: string; permission?: string }> = [
   { key: 'general', label: t('settingsPage.section.runtime') },
-  { key: 'appearance', label: t('settingsPage.section.appearance') },
-  { key: 'security', label: t('settingsPage.section.security') },
-  { key: 'certificates', label: t('settingsPage.section.certificates') },
-  { key: 'agent', label: t('settingsPage.section.agent') },
-  { key: 'auto-update', label: t('settingsPage.section.autoUpdate') },
-  { key: 'system-certificates', label: t('settingsPage.section.systemCertificates') },
-  { key: 'system', label: t('settingsPage.section.system') },
-  { key: 'backups', label: t('settingsPage.section.backups') },
-  { key: 'image-registry', label: t('settingsPage.section.imageRegistry') },
-]);
+  { key: 'appearance', label: t('settingsPage.section.appearance'), permission: 'settings.appearance' },
+  { key: 'security', label: t('settingsPage.section.security'), permission: 'settings.security' },
+  { key: 'certificates', label: t('settingsPage.section.certificates'), permission: 'settings.security' },
+  { key: 'agent', label: t('settingsPage.section.agent'), permission: 'settings.manage' },
+  { key: 'auto-update', label: t('settingsPage.section.autoUpdate'), permission: 'settings.manage' },
+  { key: 'system-certificates', label: t('settingsPage.section.systemCertificates'), permission: 'settings.security' },
+  { key: 'system', label: t('settingsPage.section.system'), permission: 'settings.manage' },
+  { key: 'backups', label: t('settingsPage.section.backups'), permission: 'backups.export' },
+  { key: 'image-registry', label: t('settingsPage.section.imageRegistry'), permission: 'settings.manage' },
+];
+const sections = computed(() => allSections.filter((section) => !section.permission || !session.ready || session.can(section.permission)));
 
 /**
  * 设置分区用共享 WinUI Tabs 作为顶部横向选择器（不再有第二条左侧导航）；
@@ -454,6 +455,10 @@ watch(() => route.params.section, (raw) => {
     return;
   }
   const nextKey: SectionKey = isSectionKey(value) ? value : 'general';
+  if (!sections.value.some((section) => section.key === nextKey)) {
+    void router.replace({ name: 'settings', params: { section: 'general' } });
+    return;
+  }
   if (activeSection.value !== nextKey) {
     activeSection.value = nextKey;
     resetSectionScroll();
@@ -853,6 +858,7 @@ async function confirmResetJwtSecret() {
     form.jwtSecret = '';
     confirmOpen.value = false;
     notifySuccess(t('settingsPage.jwtSecretReset'));
+    await router.push({ path: '/login', query: { changed: '1' } });
   });
 }
 
@@ -1096,7 +1102,7 @@ onBeforeUnmount(() => {
                   <h3 class="m-0 text-sm font-medium leading-5 text-danger">{{ t('settingsPage.clearEventsLogs') }}</h3>
                   <p class="m-0 text-xs leading-4 text-muted-foreground">{{ t('settingsPage.clearEventsLogsHint') }}</p>
                 </div>
-                <Button variant="danger" :loading="pending === 'clear-events-logs'" @click="openConfirm('clear-events-logs')">
+                <Button v-permission="'events.manage'" data-perm-anchor="events.manage.clear" variant="danger" :loading="pending === 'clear-events-logs'" @click="openConfirm('clear-events-logs')">
                   <Trash2 />{{ t('settingsPage.clearEventsLogs') }}
                 </Button>
               </div>
@@ -1121,6 +1127,8 @@ onBeforeUnmount(() => {
               <template #control>
                 <NumberBox
                   id="settings-remote-timeout"
+                  v-permission="{ permission: 'settings.manage', effect: 'disable' }"
+                  data-perm-anchor="settings.manage.remoteTimeout"
                   :aria-label="t('settingsPage.remoteTimeout')"
                   :aria-describedby="fieldErrors.remoteCommandTimeoutSeconds ? 'settings-remote-timeout-error' : undefined"
                   class="w-full sm:w-44"
@@ -1144,13 +1152,13 @@ onBeforeUnmount(() => {
 
             <SettingsCard :title="t('settingsPage.jwtSecret')">
               <template #control>
-                <Input v-model="form.jwtSecret" :aria-label="t('settingsPage.jwtSecret')" class="w-full sm:w-64" type="password" :placeholder="t('settingsPage.jwtSecretHint')" />
+                <Input v-model="form.jwtSecret" v-permission="'settings.security'" :aria-label="t('settingsPage.jwtSecret')" class="w-full sm:w-64" type="password" :placeholder="t('settingsPage.jwtSecretHint')" />
               </template>
             </SettingsCard>
 
             <SettingsCard>
               <template #control>
-                <Button :disabled="!form.jwtSecret.trim()" :loading="pending === 'jwt-secret'" @click="resetJwtSecret">
+                <Button v-permission="'settings.security'" data-perm-anchor="settings.security.jwtReset" :disabled="!form.jwtSecret.trim()" :loading="pending === 'jwt-secret'" @click="resetJwtSecret">
                   <KeyRound />{{ t('settingsPage.resetJwtSecret') }}
                 </Button>
               </template>

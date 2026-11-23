@@ -387,10 +387,12 @@ func writeMaintenanceAdmin(t *testing.T, appDatabase string) {
 	}
 	defer db.Close()
 	if _, err := db.ExecContext(context.Background(), `
-		CREATE TABLE auth_accounts (
+		CREATE TABLE users (
 			id TEXT PRIMARY KEY,
 			username TEXT NOT NULL,
-			password_hash TEXT NOT NULL
+			password_hash TEXT NOT NULL,
+			builtin INTEGER NOT NULL DEFAULT 0,
+			status TEXT NOT NULL DEFAULT 'active'
 		)
 	`); err != nil {
 		t.Fatal(err)
@@ -400,8 +402,8 @@ func writeMaintenanceAdmin(t *testing.T, appDatabase string) {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(context.Background(), `
-		INSERT INTO auth_accounts (id, username, password_hash)
-		VALUES ('admin', 'admin', ?)
+		INSERT INTO users (id, username, password_hash, builtin, status)
+		VALUES ('admin', 'admin', ?, 1, 'active')
 	`, string(hash)); err != nil {
 		t.Fatal(err)
 	}

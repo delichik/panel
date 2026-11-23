@@ -150,7 +150,87 @@ func preAppMigrationSteps() []orm.Step {
 		{ID: "purge_removed_tailscale_state", Run: func(ctx context.Context, tx *sql.Tx) error {
 			return purgeRemovedTailscaleStateOn(ctx, tx)
 		}},
+		{ID: "migrate_auth_accounts_to_users", Run: func(ctx context.Context, tx *sql.Tx) error {
+			return migrateAuthAccountsToUsersOn(ctx, tx)
+		}},
 	}
+}
+
+// migrateAuthAccountsToUsersOn 把旧版单管理员账户复制到 users，并创建内置
+// administrator 角色与其关联。必须运行在破坏性 AutoMigrate 之前，否则旧
+// auth_accounts 会先被删除。重复执行是 no-op。
+func migrateAuthAccountsToUsersOn(ctx context.Context, q migrationExecutor) error {
+	exists, err := tableExistsOn(ctx, q, "auth_accounts")
+	if err != nil || !exists {
+		return err
+	}
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS users (
+			id TEXT PRIMARY KEY,
+			username TEXT NOT NULL,
+			display_name TEXT NOT NULL DEFAULT '',
+			password_hash TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'active',
+			builtin INTEGER NOT NULL DEFAULT 0,
+			generation INTEGER NOT NULL DEFAULT 1,
+			must_change_password INTEGER NOT NULL DEFAULT 0,
+			last_login_at DATETIME,
+			created_at DATETIME NOT NULL,
+			updated_at DATETIME NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS roles (
+			id TEXT PRIMARY KEY,
+			key TEXT NOT NULL DEFAULT '',
+			name TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			builtin INTEGER NOT NULL DEFAULT 0,
+			created_at DATETIME NOT NULL,
+			updated_at DATETIME NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS role_permissions (
+			role_id TEXT NOT NULL,
+			permission_key TEXT NOT NULL,
+			PRIMARY KEY(role_id, permission_key)
+		)`,
+		`CREATE TABLE IF NOT EXISTS user_roles (
+			user_id TEXT NOT NULL,
+			role_id TEXT NOT NULL,
+			PRIMARY KEY(user_id, role_id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS access_credentials (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			name TEXT NOT NULL,
+			token_hash TEXT NOT NULL,
+			token_prefix TEXT NOT NULL,
+			scope TEXT NOT NULL DEFAULT 'readwrite',
+			allow_management INTEGER NOT NULL DEFAULT 0,
+			user_generation INTEGER NOT NULL DEFAULT 1,
+			expires_at DATETIME NOT NULL,
+			revoked_at DATETIME,
+			revoked_by TEXT NOT NULL DEFAULT '',
+			last_used_at DATETIME,
+			created_at DATETIME NOT NULL
+		)`,
+		`INSERT INTO users (id, username, display_name, password_hash, status, builtin, generation, must_change_password, last_login_at, created_at, updated_at)
+		 SELECT id, username, 'Administrator', password_hash, 'active', 1, 1, COALESCE(password_change_required, 0), NULL, created_at, updated_at
+		 FROM auth_accounts
+		 WHERE id NOT IN (SELECT id FROM users)
+		 LIMIT 1`,
+		`INSERT INTO roles (id, key, name, description, builtin, created_at, updated_at)
+		 SELECT 'role_administrator', 'administrator', 'Administrator', 'Built-in administrator with all permissions', 1, COALESCE((SELECT created_at FROM users LIMIT 1), CURRENT_TIMESTAMP), COALESCE((SELECT updated_at FROM users LIMIT 1), CURRENT_TIMESTAMP)
+		 WHERE NOT EXISTS (SELECT 1 FROM roles WHERE key = 'administrator')`,
+		`INSERT INTO user_roles (user_id, role_id)
+		 SELECT u.id, 'role_administrator'
+		 FROM users u
+		 WHERE u.builtin = 1 AND NOT EXISTS (SELECT 1 FROM user_roles ur WHERE ur.user_id = u.id)`,
+	}
+	for _, stmt := range statements {
+		if _, err := q.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // purgeRemovedTailscaleStateOn 清理 Tailscale 功能移除后遗留的持久化状态。

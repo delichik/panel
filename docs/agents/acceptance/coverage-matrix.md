@@ -10,6 +10,18 @@
 - `COV-004`：已存在但暂未在 UI 暴露的 API 或开发模式能力仍需服务端验收项，并在文档中标明可达条件。
 - `COV-005`：历史兼容入口在移除前必须有迁移/拒绝策略；清单移除不代表可直接删除旧数据或远端资源。
 
+- 多用户 / 角色 / 权限 / 访问凭证 / 初始化界面（2026-11-23，跨前后端 + 数据库 + 认证协议）：
+  - **路由**：新增 18 条（`GET /setup/status`、`POST /setup`、`GET /permissions`、7 条 `/users*`、5 条 `/roles*`、3 条 `/access-credentials*`），主 Panel `method/path` 计数 **203 → 221**（`TestAPIRouteManifest` 的 `wantCount=221`；`api-route-inventory.md` 同为 221 条）；前端路由声明 **31 → 36**（`/setup`、`/account`、`/access/:section?`、`/forbidden`）。
+  - **数据库**：`auth_accounts` 迁移为 `users`（`builtin`、`generation`、`must_change_password`），新增 `roles`、`role_permissions`、`user_roles`、`access_credentials`；ORM 表数 **49 → 53**；新增 pre-migration Step `migrate_auth_accounts_to_users`。
+  - **认证**：JWT claims 改为 `sub`（用户 ID）+ `kg`（密钥代数）+ `ug`（用户代数），任一不匹配即 401；登出/改密/禁用/重置密码递增用户代数，JWT secret 轮换递增密钥代数；JWT 不携带角色/权限。
+  - **初始化**：无用户时进入 `/setup` 初始化界面（默认 `admin/admin`，不随机），或由 `PANEL_ADMIN_*` 环境变量在启动时创建；已有用户时两者均忽略；首登必须改密并可改用户名，改密后递增代数并要求重新登录。
+  - **权限**：后端统一 PermissionGate 按 method/path 映射到目录权限，未映射 fail-closed；权限目录含 `mode`（read/write）与 `requires` 依赖闭包；内置 administrator 隐式全量，`access.*` 仅内置管理员可持有。
+  - **访问凭证**：不透明 `pac_` token、最长 30 分钟、只显示一次、只存哈希、可撤销、不可续期；支持只读/读写范围与逐次勾选的管理端点风险开关，且始终不超过所属用户权限。
+  - **i18n**：新增 `auth.setup*`、`account.*`、`access.*`、`forbidden.*`、`permissions.group.*` 与 30 个 `permissions.<key>.label`，en / zh-CN 同键。
+  - 对应 `ID-SETUP-001..003`、`ID-USR-001..008`、`ID-ROLE-001..005`、`ID-PERM-001..004`、`ID-CRED-001..007`、`ID-ACC-013/014`、`ID-SES-009/010`、`ARCH-API-005/009`、`ARCH-SEC-006/007`、`ARCH-CFG-003/005`。
+  - **前端权限**：新增全局 `v-permission` 指令（hide/disable）、路由 `meta.permission` 守卫、导航过滤、`/forbidden`；服务器/凭据/DNS/证书/应用/设施/设置-安全/调试等主要高危按钮已接入；权限目录新增 `ui`（page/kind/target/anchor/effect）并由 `catalog_ui_test.go` 与 Vue 源码 `data-perm-anchor` 双向校验；角色编辑器展示只读/读写、依赖与 UI 元素数量。剩余列表列/字段的细粒度接入留待后续批次。
+  - **验证证据**：`go test ./internal/modules/identity/... ./internal/bootstrap/panel/... ./internal/modules/backups/... ./internal/platform/database/models/...`、`task build:backend`、`go test ./internal/modules/...`；前端 `task test:web`（139 文件 / 829 测试）、`task build:web`。
+
 ## 2. 前端路由基线
 
 - 例行周期任务通知降噪 + debug 事件不进入通知（2026-11-20，跨后端/前端/验收契约，无 API/表/路由/后台任务变化）：

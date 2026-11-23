@@ -252,7 +252,7 @@ onBeforeUnmount(() => {
           <span class="hidden wide:inline">{{ t('securityPage.managedAutomatically') }}</span>
         </div>
         <div class="flex flex-wrap gap-2">
-          <Button size="sm" variant="primary" :disabled="!ufwState?.supported" @click="openRuleDialog"><Plus />{{ t('securityPage.addRule') }}</Button>
+          <Button v-permission="'servers.execute'" size="sm" variant="primary" :disabled="!ufwState?.supported" @click="openRuleDialog"><Plus />{{ t('securityPage.addRule') }}</Button>
           <Button size="sm" :loading="ufwLoading" @click="loadUfw"><RefreshCcw />{{ t('common.refresh') }}</Button>
         </div>
       </div>
@@ -311,7 +311,7 @@ onBeforeUnmount(() => {
           <span>{{ t('securityPage.updatedAt') }}: {{ formatDateTime(fail2banState?.updatedAt) || t('common.never') }}</span>
         </div>
         <div class="flex flex-wrap items-center gap-2">
-          <Button size="sm" variant="primary" :loading="pending === 'enable-fail2ban'" @click="confirmTarget = { kind: 'enable-fail2ban' }"><ShieldCheck />{{ t('securityPage.enableFail2Ban') }}</Button>
+          <Button v-permission="'servers.execute'" size="sm" variant="primary" :loading="pending === 'enable-fail2ban'" @click="confirmTarget = { kind: 'enable-fail2ban' }"><ShieldCheck />{{ t('securityPage.enableFail2Ban') }}</Button>
           <Button size="sm" :loading="fail2banLoading" @click="loadFail2Ban"><RefreshCcw />{{ t('common.refresh') }}</Button>
           <Dropdown align="right">
             <template #trigger>

@@ -1,15 +1,37 @@
 import { apiClient } from './client';
 
+export interface AuthRole {
+  id: string;
+  key?: string;
+  name: string;
+}
+
+export interface AuthUser {
+  id: string;
+  username: string;
+  displayName: string;
+  isBuiltinAdmin: boolean;
+}
+
 export interface AuthSession {
   authenticated: boolean;
   token?: string;
   username?: string;
-  passwordChangeRequired?: boolean;
+  expiresAt?: string;
+  authKind?: 'session' | 'credential';
+  mustChangePassword?: boolean;
+  mustRelogin?: boolean;
+  user?: AuthUser;
+  roles?: AuthRole[];
+  permissions?: string[];
+  credentialScope?: 'readonly' | 'readwrite';
+  allowManagement?: boolean;
 }
 
 export interface AccountUpdateInput {
   currentPassword: string;
-  username: string;
+  username?: string;
+  displayName?: string;
   newPassword?: string;
 }
 
@@ -31,3 +53,15 @@ export const authApi = {
   },
 };
 
+export interface SetupStatus {
+  required: boolean;
+}
+
+export const setupApi = {
+  status() {
+    return apiClient.get<SetupStatus>('/setup/status', { skipAuth: true });
+  },
+  create(username: string, password: string) {
+    return apiClient.post<{ created: boolean }>('/setup', { username, password }, { skipAuth: true });
+  },
+};

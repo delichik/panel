@@ -153,7 +153,7 @@ onBeforeUnmount(() => {
         <p class="m-0 text-sm text-muted-foreground">{{ t('resourcesPage.volumeSafety') }}</p>
         <div class="flex flex-wrap items-center gap-2">
           <span class="text-xs text-muted-foreground">{{ formatDateTime(observedAt) || t('common.never') }}</span>
-          <Button size="sm" variant="danger" :disabled="blocked" @click="confirmTarget = { kind: 'prune' }"><Trash2 />{{ t('resourcesPage.pruneUnusedVolumes') }}</Button>
+          <Button v-permission="'containers.manage'" size="sm" variant="danger" :disabled="blocked" @click="confirmTarget = { kind: 'prune' }"><Trash2 />{{ t('resourcesPage.pruneUnusedVolumes') }}</Button>
           <Button size="sm" :loading="loading || pending === 'refresh'" :disabled="blocked" @click="refresh"><RefreshCcw />{{ t('common.refresh') }}</Button>
         </div>
       </div>

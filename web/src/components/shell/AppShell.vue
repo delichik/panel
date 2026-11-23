@@ -191,7 +191,8 @@ onBeforeUnmount(() => {
               <UserCircle />
             </IconButton>
           </template>
-          <div class="px-3 py-2 text-xs text-muted-foreground">{{ session.username }}</div>
+          <div class="px-3 py-2 text-xs text-muted-foreground">{{ session.displayName || session.username }}</div>
+          <DropdownItem @click="router.push('/account')">{{ t('routes.account.title') }}</DropdownItem>
           <DropdownItem @click="signOut">{{ t('layout.logout') }}</DropdownItem>
         </Dropdown>
       </div>

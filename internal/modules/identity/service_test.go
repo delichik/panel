@@ -9,6 +9,11 @@ import (
 	"panel/internal/modules/settings"
 	"panel/internal/platform/config"
 	storage "panel/internal/platform/database"
+	"panel/internal/platform/database/models"
+	"panel/internal/platform/database/orm"
+	id "panel/internal/platform/identity"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestLoginValidate(t *testing.T) {
@@ -21,15 +26,21 @@ func TestLoginValidate(t *testing.T) {
 	if sess.Token == "" {
 		t.Fatal("expected jwt token")
 	}
-	if !sess.PasswordChangeRequired {
+	if !sess.MustChangePassword {
 		t.Fatal("seeded admin account should require a password change")
+	}
+	if !sess.IsBuiltinAdmin {
+		t.Fatal("seeded admin should be the built-in administrator")
 	}
 	claims, ok := svc.verifyJWT(sess.Token)
 	if !ok {
 		t.Fatal("token should verify")
 	}
 	if claims.Subject == "admin" {
-		t.Fatal("token subject should not expose configured admin username")
+		t.Fatal("token subject should not expose the username")
+	}
+	if claims.KeyGeneration == 0 || claims.UserGeneration == 0 {
+		t.Fatal("token should carry both generations")
 	}
 	if _, ok := svc.Validate(ctx, sess.Token); !ok {
 		t.Fatal("token should validate")
@@ -57,28 +68,103 @@ func TestLoginRejectsBadUsernameWithSameMessage(t *testing.T) {
 	}
 }
 
-func TestLogoutInvalidatesExistingTokens(t *testing.T) {
+func TestLogoutInvalidatesOnlyThatUsersTokens(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t)
 	first, err := svc.Login(ctx, "admin", "admin")
 	if err != nil {
-		t.Fatalf("login first token: %v", err)
+		t.Fatalf("login: %v", err)
 	}
-	if err := svc.Logout(ctx); err != nil {
+	userID := createTestUser(t, svc, "operator", "operator-password", "servers.view")
+	other, err := svc.Login(ctx, "operator", "operator-password")
+	if err != nil {
+		t.Fatalf("login second user: %v", err)
+	}
+	if err := svc.Logout(ctx, first.UserID); err != nil {
 		t.Fatalf("logout: %v", err)
 	}
 	if _, ok := svc.Validate(ctx, first.Token); ok {
 		t.Fatal("token issued before logout should not validate")
 	}
-	second, err := svc.Login(ctx, "admin", "admin")
+	if _, ok := svc.Validate(ctx, other.Token); !ok {
+		t.Fatal("other user's token must stay valid")
+	}
+	if other.UserID == "" || userID == "" {
+		t.Fatal("expected user ids")
+	}
+}
+
+func TestJWTGenerationsBothMustMatch(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	sess, err := svc.Login(ctx, "admin", "admin")
 	if err != nil {
-		t.Fatalf("login second token: %v", err)
+		t.Fatalf("login: %v", err)
 	}
-	if second.Token == first.Token {
-		t.Fatal("token should change after logout rotates nonce")
+	user, err := svc.accountByID(ctx, sess.UserID)
+	if err != nil {
+		t.Fatalf("account: %v", err)
 	}
-	if _, ok := svc.Validate(ctx, second.Token); !ok {
-		t.Fatal("token issued after logout should validate")
+	keyGen, err := svc.keyGeneration(ctx)
+	if err != nil {
+		t.Fatalf("key generation: %v", err)
+	}
+
+	wrongKey, err := svc.signJWT(user.ID, keyGen+1, user.Generation, time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	if _, ok := svc.Validate(ctx, wrongKey); ok {
+		t.Fatal("token with wrong key generation must not validate")
+	}
+	wrongUser, err := svc.signJWT(user.ID, keyGen, user.Generation+1, time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	if _, ok := svc.Validate(ctx, wrongUser); ok {
+		t.Fatal("token with wrong user generation must not validate")
+	}
+}
+
+func TestBumpKeyGenerationInvalidatesAllTokens(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	sess, err := svc.Login(ctx, "admin", "admin")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	if err := svc.UpdateJWTSecret(ctx, "replacement-jwt-secret-32b"); err != nil {
+		t.Fatalf("update jwt secret: %v", err)
+	}
+	if _, ok := svc.Validate(ctx, sess.Token); ok {
+		t.Fatal("old token must be invalidated by key generation")
+	}
+	again, err := svc.Login(ctx, "admin", "admin")
+	if err != nil {
+		t.Fatalf("login after rotation: %v", err)
+	}
+	if _, ok := svc.Validate(ctx, again.Token); !ok {
+		t.Fatal("new session should validate")
+	}
+}
+
+func TestPermissionResolutionExpandsDependencies(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	createTestUser(t, svc, "app-reader", "reader-password", "applications.view")
+	sess, err := svc.Login(ctx, "app-reader", "reader-password")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	got := map[string]bool{}
+	for _, key := range sess.Permissions {
+		got[key] = true
+	}
+	if !got["applications.view"] || !got["servers.view"] {
+		t.Fatalf("expected dependency-closed permissions, got %v", sess.Permissions)
+	}
+	if got["applications.edit"] {
+		t.Fatalf("unexpected write permission: %v", sess.Permissions)
 	}
 }
 
@@ -112,19 +198,14 @@ func TestLoginUsesRuntimeTokenExpiration(t *testing.T) {
 	}
 }
 
-func TestUpdateAccountClearsPasswordChangeAndRotatesJWTSecret(t *testing.T) {
+func TestUpdateAccountClearsFirstLoginAndRequiresRelogin(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t)
 	first, err := svc.Login(ctx, "admin", "admin")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
-	oldSecret := svc.runtime.JWTSecret()
-	oldNonce, err := svc.currentTokenNonce(ctx)
-	if err != nil {
-		t.Fatalf("current nonce: %v", err)
-	}
-	updated, err := svc.UpdateAccount(ctx, AccountUpdate{
+	result, err := svc.UpdateAccount(ctx, first.UserID, AccountUpdate{
 		CurrentPassword: "admin",
 		Username:        "root",
 		NewPassword:     "new-admin-password",
@@ -132,70 +213,88 @@ func TestUpdateAccountClearsPasswordChangeAndRotatesJWTSecret(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update account: %v", err)
 	}
-	if updated.Username != "root" || updated.PasswordChangeRequired {
-		t.Fatalf("unexpected updated session: %#v", updated)
-	}
-	if svc.runtime.JWTSecret() == oldSecret {
-		t.Fatal("password change should rotate jwt secret")
-	}
-	newNonce, err := svc.currentTokenNonce(ctx)
-	if err != nil {
-		t.Fatalf("nonce after update: %v", err)
-	}
-	if newNonce == "" || newNonce == oldNonce {
-		t.Fatal("password change should rotate token nonce in the same commit")
+	if !result.MustRelogin {
+		t.Fatal("account update must require a re-login")
 	}
 	if _, ok := svc.Validate(ctx, first.Token); ok {
-		t.Fatal("token signed with previous secret should not validate")
+		t.Fatal("token issued before password change should not validate")
 	}
-	if _, ok := svc.Validate(ctx, updated.Token); !ok {
-		t.Fatal("new token should validate")
+	updated, err := svc.Login(ctx, "root", "new-admin-password")
+	if err != nil {
+		t.Fatalf("login with new credentials: %v", err)
+	}
+	if updated.MustChangePassword {
+		t.Fatal("first-login flag should be cleared")
+	}
+	if updated.Username != "root" {
+		t.Fatalf("username = %q", updated.Username)
 	}
 }
 
-func TestUpdateJWTSecretRotatesNonceAtomically(t *testing.T) {
+func TestUpdateJWTSecretRequiresRelogin(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t)
 	first, err := svc.Login(ctx, "admin", "admin")
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
-	oldNonce, err := svc.currentTokenNonce(ctx)
-	if err != nil {
-		t.Fatalf("current nonce: %v", err)
-	}
-	updated, err := svc.UpdateJWTSecret(ctx, "replacement-jwt-secret-32b")
-	if err != nil {
+	if err := svc.UpdateJWTSecret(ctx, "replacement-jwt-secret-32b"); err != nil {
 		t.Fatalf("update jwt secret: %v", err)
-	}
-	newNonce, err := svc.currentTokenNonce(ctx)
-	if err != nil {
-		t.Fatalf("nonce after jwt update: %v", err)
-	}
-	if newNonce == "" || newNonce == oldNonce {
-		t.Fatal("jwt secret update must rotate nonce in the same transaction")
 	}
 	if _, ok := svc.Validate(ctx, first.Token); ok {
 		t.Fatal("old token must be invalidated")
 	}
-	if _, ok := svc.Validate(ctx, updated.Token); !ok {
-		t.Fatal("new session token must validate")
+	if _, err := svc.Login(ctx, "admin", "admin"); err != nil {
+		t.Fatalf("login after rotation: %v", err)
 	}
 }
 
 func TestValidateRejectsExpiredToken(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t)
-	nonce, err := svc.currentTokenNonce(ctx)
+	user, err := svc.accountByUsername(ctx, "admin")
 	if err != nil {
-		t.Fatalf("current token nonce: %v", err)
+		t.Fatalf("account: %v", err)
 	}
-	token, err := svc.signJWT(tokenSubject, nonce, time.Now().UTC().Add(-time.Minute))
+	keyGen, err := svc.keyGeneration(ctx)
+	if err != nil {
+		t.Fatalf("key generation: %v", err)
+	}
+	token, err := svc.signJWT(user.ID, keyGen, user.Generation, time.Now().UTC().Add(-time.Minute))
 	if err != nil {
 		t.Fatalf("sign expired token: %v", err)
 	}
 	if _, ok := svc.Validate(ctx, token); ok {
 		t.Fatal("expired token should not validate")
+	}
+}
+
+func TestSetupRequiredUntilInitialAdminExists(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestServiceWithoutAdmin(t)
+	required, err := svc.SetupRequired(ctx)
+	if err != nil || !required {
+		t.Fatalf("setup required = %v, err = %v", required, err)
+	}
+	if _, err := svc.Login(ctx, "admin", "admin"); err == nil {
+		t.Fatal("login must fail before initialization")
+	}
+	if _, err := svc.CreateInitialAdmin(ctx, "admin", "admin"); err != nil {
+		t.Fatalf("create initial admin: %v", err)
+	}
+	required, err = svc.SetupRequired(ctx)
+	if err != nil || required {
+		t.Fatalf("setup required after create = %v, err = %v", required, err)
+	}
+	if _, err := svc.CreateInitialAdmin(ctx, "other", "other-password"); err == nil || err.Error() != "Panel is already initialized" {
+		t.Fatalf("expected setup_completed, got %v", err)
+	}
+	sess, err := svc.Login(ctx, "admin", "admin")
+	if err != nil {
+		t.Fatalf("login after setup: %v", err)
+	}
+	if !sess.MustChangePassword {
+		t.Fatal("initial admin must change password on first login")
 	}
 }
 
@@ -247,7 +346,23 @@ func TestLoginRateLimitResetsAfterSuccess(t *testing.T) {
 		t.Fatalf("login should still succeed below threshold: %v", err)
 	}
 }
+
 func newTestService(t *testing.T) *Service {
+	t.Helper()
+	return newTestServiceWithConfig(t, func(cfg *config.Config) {
+		cfg.AdminPassword = "admin"
+	})
+}
+
+func newTestServiceWithoutAdmin(t *testing.T) *Service {
+	t.Helper()
+	return newTestServiceWithConfig(t, func(cfg *config.Config) {
+		cfg.AdminPassword = ""
+		cfg.AdminPasswordHash = ""
+	})
+}
+
+func newTestServiceWithConfig(t *testing.T, mutate func(*config.Config)) *Service {
 	t.Helper()
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -256,6 +371,7 @@ func newTestService(t *testing.T) *Service {
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
 	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	mutate(&cfg)
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -270,4 +386,36 @@ func newTestService(t *testing.T) *Service {
 		t.Fatalf("new auth service: %v", err)
 	}
 	return svc
+}
+
+func createTestUser(t *testing.T, svc *Service, username, password string, permissionKeys ...string) string {
+	t.Helper()
+	ctx := context.Background()
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	roleID := id.New("role")
+	now := time.Now().UTC()
+	if err := orm.New(svc.db).Insert(ctx, &models.Role{
+		ID: roleID, Name: "Test role", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("insert role: %v", err)
+	}
+	for _, key := range permissionKeys {
+		if err := orm.New(svc.db).Insert(ctx, &models.RolePermission{RoleID: roleID, PermissionKey: key}); err != nil {
+			t.Fatalf("insert permission: %v", err)
+		}
+	}
+	userID := id.New("usr")
+	if err := orm.New(svc.db).Insert(ctx, &models.User{
+		ID: userID, Username: username, DisplayName: username, PasswordHash: string(hash),
+		Status: "active", Generation: 1, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	if err := orm.New(svc.db).Insert(ctx, &models.UserRole{UserID: userID, RoleID: roleID}); err != nil {
+		t.Fatalf("insert user role: %v", err)
+	}
+	return userID
 }

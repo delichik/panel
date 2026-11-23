@@ -137,9 +137,9 @@ onBeforeUnmount(() => {
       <div class="flex flex-wrap items-center justify-between gap-2">
         <SearchInput v-model="search" class="w-full max-w-sm" clearable :label="t('common.search')" :placeholder="t('resourcesPage.searchPackages')" :clear-label="t('common.clearSearch')" />
         <div class="flex flex-wrap gap-2">
-          <Button size="sm" :disabled="!canMaintain" :loading="pending === 'refresh' || loading" @click="refreshMetadata"><RefreshCcw />{{ t('resourcesPage.refreshMetadata') }}</Button>
-          <Button v-if="selectedNames.length" size="sm" variant="primary" :disabled="!canMaintain" :loading="pending === 'upgrade-selected'" @click="upgradeSelected"><Package />{{ t('resourcesPage.upgradeSelected') }}</Button>
-          <Button size="sm" variant="danger" :disabled="!canMaintain || !packageList?.updates.length" :loading="pending === 'upgrade-all'" @click="confirmUpgradeAll = true"><Package />{{ t('resourcesPage.upgradeAll') }}</Button>
+          <Button v-permission="'servers.execute'" size="sm" :disabled="!canMaintain" :loading="pending === 'refresh' || loading" @click="refreshMetadata"><RefreshCcw />{{ t('resourcesPage.refreshMetadata') }}</Button>
+          <Button v-permission="'servers.execute'" v-if="selectedNames.length" size="sm" variant="primary" :disabled="!canMaintain" :loading="pending === 'upgrade-selected'" @click="upgradeSelected"><Package />{{ t('resourcesPage.upgradeSelected') }}</Button>
+          <Button v-permission="'servers.execute'" size="sm" variant="danger" :disabled="!canMaintain || !packageList?.updates.length" :loading="pending === 'upgrade-all'" @click="confirmUpgradeAll = true"><Package />{{ t('resourcesPage.upgradeAll') }}</Button>
         </div>
       </div>
     </div>

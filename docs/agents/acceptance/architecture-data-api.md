@@ -16,9 +16,9 @@
 
 - `ARCH-CFG-001`：配置优先级必须是内置默认值 < JSON 配置文件 < 环境变量；相对路径以配置文件目录为基准，无配置文件时以当前工作目录为基准。
 - `ARCH-CFG-002`：JSON 配置必须拒绝未知字段，避免拼写错误被静默忽略；历史 `taskDatabase` 仅作为 `logDatabase` 未设置时的兼容输入。
-- `ARCH-CFG-003`：`listenAddress`、管理员用户名/密码哈希、至少 16 字符 JWT secret、数据根目录和四个数据库路径均为必需；远程命令超时必须为正数，DNS 传播延迟不得为负。
+- `ARCH-CFG-003`：`listenAddress`、至少 16 字符 JWT secret、数据根目录和四个数据库路径均为必需；管理员用户名可省略（默认 `admin`），管理员密码/哈希可选：仅在库中没有任何用户时用于初始化，密码缺失时进入初始化界面；远程命令超时必须为正数，DNS 传播延迟不得为负。
 - `ARCH-CFG-004`：app、log、coordination、metrics 四个数据库必须使用互不相同的路径；配置冲突时启动失败，不得合并数据到同一文件。
-- `ARCH-CFG-005`：环境变量至少保持 `PANEL_LISTEN_ADDRESS`、`PANEL_DATA_ROOT`、`PANEL_APP_DATABASE`、`PANEL_LOG_DATABASE`、兼容的 `PANEL_TASK_DATABASE`、`PANEL_COORDINATION_DATABASE`、`PANEL_METRICS_DATABASE`、`PANEL_CERT_ACME_DIRECTORY_URL` 语义。
+- `ARCH-CFG-005`：环境变量至少保持 `PANEL_LISTEN_ADDRESS`、`PANEL_ADMIN_USERNAME`、`PANEL_ADMIN_DISPLAY_NAME`、`PANEL_ADMIN_PASSWORD`、`PANEL_ADMIN_PASSWORD_HASH`、`PANEL_DATA_ROOT`、`PANEL_APP_DATABASE`、`PANEL_LOG_DATABASE`、兼容的 `PANEL_TASK_DATABASE`、`PANEL_COORDINATION_DATABASE`、`PANEL_METRICS_DATABASE`、`PANEL_CERT_ACME_DIRECTORY_URL` 语义；管理员变量只在无用户时生效。
 - `ARCH-CFG-006`：运行时设置只热更新规范明确支持的字段；需要重启或 TLS 重载的字段必须返回准确状态，不得在 UI 显示已生效而实际仍使用旧值。
 
 ## 3. HTTP 通用协议
@@ -31,7 +31,7 @@
 - `ARCH-API-006`：列表接口必须对分页参数、排序字段、方向、搜索和筛选做白名单校验；空结果返回空集合和合法分页元数据，不得用 404 表示列表为空。
 - `ARCH-API-007`：时间通过 RFC3339/RFC3339Nano 表达并以 UTC 持久化；前端负责按当前 locale/timezone 展示，禁止传递无时区的歧义时间。
 - `ARCH-API-008`：DELETE 的成功语义在各域明确规定为 204 或带操作结果的 2xx；异步删除只表示任务已可靠创建，不得假称远端资源已删除。
-- `ARCH-API-009`：当前 Panel API 路由集合由 `internal/bootstrap/panel/routes_manifest_test.go` 固定；增加、删除或改名路由时必须同时更新域验收项、前端消费者/Mock（如有）和清单计数/哈希。外观设置（`GET/PUT /api/v1/settings/appearance`、`POST/DELETE /api/v1/settings/appearance/background`、`GET /api/v1/settings/appearance/background/content`、`GET /api/v1/settings/public-appearance`）新增 6 条后主 API 基线由 186 变为 192；设置写入拆分（删除整体 `PUT /api/v1/settings/runtime`，新增 `PUT /api/v1/settings/runtime/general|security|certificates|agent|branding` 等分区写入端点，`SET-RUN-022`）后基线由 192 变为 197；随后整体下线 3 条已废弃的辅助收敛/设置路由，主 Panel 基线变为 **194**；入口代理自动更新/每域名开关/自定义指令新增 4 条路由（`PUT /settings/runtime/auto-update`、`PUT /facility-apps/reverse-proxy/settings`、`POST /facility-apps/reverse-proxy/image/check|update`）后基线变为 198；P1 再新增 `POST /facility-apps/reverse-proxy/image/rollback|resume` 与 `POST /settings/runtime/auto-update/run` 后基线变为 201；P2 新增 `PUT /settings/runtime/image-registry` 后基线变为 202；事件通知长轮询新增 `GET /api/v1/notifications`（`ENG-EVT-011`）后基线变为 **203**（当前值）；公开外观走 `RegisterPublicRoutes` 但仍以 `/api/` 前缀计入主清单，不改变 2 条非 `/api` 公开产物路由。
+- `ARCH-API-009`：当前 Panel API 路由集合由 `internal/bootstrap/panel/routes_manifest_test.go` 固定；增加、删除或改名路由时必须同时更新域验收项、前端消费者/Mock（如有）和清单计数/哈希。外观设置新增 6 条后主 API 基线由 186 变为 192；设置写入拆分后 192 → 197；下线 3 条互联路由后 197 → 194；入口代理与自动更新新增 4 条后 194 → 198；P1 三条后 198 → 201；镜像仓库源 201 → 202；通知长轮询 202 → 203；多用户/权限/初始化新增 18 条（2 条 setup、1 条权限目录、7 条用户、5 条角色、3 条访问凭证）后基线为 **221**（当前值）。公开外观走 `RegisterPublicRoutes` 但仍以 `/api/` 前缀计入主清单，不改变 2 条非 `/api` 公开产物路由。
 - `ARCH-API-010`：前端静态托管对 HTML 使用 `no-cache`，指纹化 `assets/` 使用一年 immutable cache，其他静态资源使用日级缓存；未知前端路径回退 `index.html`，未构建前端时返回明确的纯文本运行状态。
 
 ## 4. 模块责任与调用边界
@@ -80,6 +80,11 @@
 - `DATA-MIG-007`：可空时间无值统一为 NULL；历史空字符串在读取、更新和启动归一化时按未设置处理，不得导致升级失败。
 - `DATA-MIG-008`：迁移必须保留 alpha 旧版本升级路径，包括旧数据库名、旧秘密字段、旧证书/密钥资产和已下线协调表的明确处理；不得只验证全新数据库。
 - `DATA-MIG-009`：备份/恢复清单必须覆盖四库及规范声明的数据文件；新增持久化位置时必须同步更新备份合同。`dataRoot` 内的持久化数据（含 `<dataRoot>/appearance/` 外观背景资产目录与 `<dataRoot>/logs`）随整目录归档自动纳入，存储于 dataRoot 之外的文件必须显式声明。
+
+多用户与权限模型占用 app 库：`users`（内置管理员 `builtin=1`、`generation` 用户代数、`must_change_password`）、`roles`（唯一内置 `administrator`，`key` 部分唯一索引）、`role_permissions`、`user_roles`、`access_credentials`（`token_hash`、`scope`、`allow_management`、`user_generation`、`revoked_at`、`last_used_at`）。旧 `auth_accounts` 由 pre-migration Step 在破坏性 AutoMigrate 前复制为唯一内置管理员并删除旧表；旧 `token_nonce` 不再使用，`auth_state.jwt_key_generation` 保存全局密钥代数。ORM 表数 49 → **53**。`users` 用户名大小写不敏感唯一索引、`access_credentials.token_hash` 唯一索引与 `(user_id, expires_at)` 查询索引由 `ExtraIndexDDL` 创建。备份/恢复仍整库覆盖，无 manifest 变更。
+
+- `ARCH-SEC-006`：登录 JWT 必须携带密钥代数与用户代数，任一与持久值不一致即拒绝；递增对应代数即可吊销该范围全部 JWT。访问凭证只保存哈希、明文只返回一次、最长 30 分钟、不可续期，并随用户代数递增失效。
+- `ARCH-SEC-007`：权限门禁必须在后端统一执行（未映射路由 fail-closed），前端隐藏/禁用只是体验层；敏感 handler（私钥下载、他人凭证撤销）必须二次校验权限或归属。
 
 ## 7. ORM 行为合同
 

@@ -295,7 +295,7 @@ onBeforeUnmount(() => {
   <ConsolePage :title="t('routes.events.title')" :description="t('routes.events.description')">
         <template #actions>
           <Button size="sm" :loading="loading" @click="refresh"><RefreshCcw />{{ t('common.refresh') }}</Button>
-          <DownloadButton size="sm" :loading="exporting" :label="t('activity.export')" @click="download" />
+          <DownloadButton v-permission="'events.export'" data-perm-anchor="events.export.download" size="sm" :loading="exporting" :label="t('activity.export')" @click="download" />
         </template>
         <ListPage :state="recordsListState">
           <template #toolbar>

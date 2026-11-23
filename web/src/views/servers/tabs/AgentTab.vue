@@ -183,7 +183,7 @@ onBeforeUnmount(() => {
       <div class="flex flex-wrap gap-2">
         <Button size="sm" :loading="loading" @click="load(true)"><RefreshCcw />{{ t('common.refresh') }}</Button>
         <Button size="sm" :loading="pending === 'agent'" @click="deploy"><ServerCog />{{ t('serversPage.deployAgent') }}</Button>
-        <Button size="sm" variant="danger" :disabled="!canRunPrivilegedOperation(server)" :loading="pending === 'restart'" @click="restartOpen = true"><PlayCircle />{{ t('serversPage.restart') }}</Button>
+        <Button v-permission="'servers.execute'" size="sm" variant="danger" :disabled="!canRunPrivilegedOperation(server)" :loading="pending === 'restart'" @click="restartOpen = true"><PlayCircle />{{ t('serversPage.restart') }}</Button>
       </div>
     </div>
 

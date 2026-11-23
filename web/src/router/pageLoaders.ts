@@ -4,6 +4,7 @@
  */
 export const pageLoaders = {
   login: () => import('@/views/auth/LoginPage.vue'),
+  setup: () => import('@/views/auth/SetupPage.vue'),
   maintenance: () => import('@/views/maintenance/index.vue'),
   appShell: () => import('@/components/shell/AppShell.vue'),
   overview: () => import('@/views/overview/index.vue'),
@@ -16,6 +17,9 @@ export const pageLoaders = {
   logs: () => import('@/views/logs/index.vue'),
   settings: () => import('@/views/settings/index.vue'),
   debug: () => import('@/views/debug/index.vue'),
+  account: () => import('@/views/account/index.vue'),
+  access: () => import('@/views/access/index.vue'),
+  forbidden: () => import('@/views/forbidden/index.vue'),
   notFound: () => import('@/components/templates/NotFoundPage.vue'),
 } as const;
 
@@ -34,6 +38,8 @@ export function prefetchShellPages(): void {
     'logs',
     'settings',
     'debug',
+    'account',
+    'access',
     'notFound',
   ];
   for (const key of keys) {
@@ -56,7 +62,11 @@ export function pageLoaderForPath(path: string): (() => Promise<unknown>) | unde
   if (normalized.startsWith('/logs')) return pageLoaders.logs;
   if (normalized.startsWith('/settings')) return pageLoaders.settings;
   if (normalized.startsWith('/debug')) return pageLoaders.debug;
+  if (normalized.startsWith('/account')) return pageLoaders.account;
+  if (normalized.startsWith('/access')) return pageLoaders.access;
+  if (normalized.startsWith('/forbidden')) return pageLoaders.forbidden;
   if (normalized.startsWith('/login')) return pageLoaders.login;
+  if (normalized.startsWith('/setup')) return pageLoaders.setup;
   if (normalized.startsWith('/maintenance')) return pageLoaders.maintenance;
   return undefined;
 }

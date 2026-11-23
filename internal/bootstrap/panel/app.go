@@ -442,13 +442,16 @@ func applicationSaveSessionDir(cfg config.Config) string {
 }
 
 func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, eventsH *modevents.Handler, applicationH *applications.Handler, containerH *containerization.Handler, facilityH *facilityapps.Handler, probeH *networkprobe.Handler, metricsFacilityH *metricsfacility.Handler, overviewH *overview.Handler, settingsH *settings.Handler, appearanceH *appearance.Handler, systemH *systeminfo.Handler, diagnosticsH *diagnostics.Handler, backupH *backups.Handler) {
+	a.mux.HandleFunc("GET /api/v1/setup/status", authH.SetupStatus)
+	a.mux.HandleFunc("POST /api/v1/setup", authH.Setup)
 	a.mux.HandleFunc("POST /api/v1/auth/login", authH.Login)
 	a.mux.Handle("POST /api/v1/auth/logout", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.Logout)))
 	a.mux.Handle("POST /api/v1/auth/account", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.UpdateAccount)))
-	a.mux.Handle("POST /api/v1/auth/jwt-secret", a.auth.RequireAuth(http.HandlerFunc(authH.UpdateJWTSecret)))
+	a.mux.Handle("POST /api/v1/auth/jwt-secret", a.auth.RequireAuth(a.auth.RequirePermission("settings.security", http.HandlerFunc(authH.UpdateJWTSecret))))
 	a.mux.HandleFunc("GET /api/v1/auth/session", authH.Session)
 
 	authenticated := a.activityAuth
+	authH.RegisterRoutes(a.mux, authenticated)
 	settingsH.RegisterPublicRoutes(a.mux)
 	appearanceH.RegisterPublicRoutes(a.mux)
 	backupH.RegisterRoutes(a.mux, authenticated)

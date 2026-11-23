@@ -4,6 +4,7 @@
 
 ## 当前状态
 
+- 本轮多用户/权限/初始化/访问凭证（2026-11-23）：前端新增 `routes.setup|account|access|forbidden.title`、`auth.setup*`、`auth.passwordChangedRelogin`、`account.*`、`access.*`、`forbidden.*`、`permissions.group.*`（14 组）与 `permissions.<key>.label`（30 项）、`access.roles.readOnly/readWrite/uiTargets/dependsOn`，以及 `common.copy/copied`；en / zh-CN 同键且值非空（`i18n.test.ts` 校验）。未删除既有词条。后端未新增稳定错误码中文映射：本轮新增错误码（`setup_completed`、`username_taken`、`builtin_admin_immutable`、`builtin_role_immutable`、`role_in_use`、`permission_not_grantable`、`unknown_permission`、`credential_*` 等）当前走英文 fallback，若需本地化须在同一改动补 `internal/platform/i18n` 与 `i18n_test.go`。
 - 本轮例行任务通知降噪（2026-11-20）：**无新增/删除前端词条**，en / zh-CN 键集合保持不变（`i18n.test.ts` 校验）；本轮只调整后端过程事件级别与通知过滤（`Quiet` 任务生命周期记 `debug`、通知忽略 debug 事件），不产生用户可见文案，后端也未新增错误码。
 - 本轮指标/探测警告阈值（2026-11-20）：前端新增 `applicationsPage.metricsThresholdsTitle/Hint`、`metricsThresholdCpu/Memory/DiskRead/DiskWrite/NetworkRx/NetworkTx/Invalid`、`networkProbeThresholdsTitle/Hint/Latency/Loss/Invalid`，图表标记新增 `serversPage.metrics.warningThreshold/thresholdHint`；en / zh-CN 同键且值非空。后端新增稳定错误码中文映射 `metrics_facility_threshold_invalid`、`network_probe_threshold_invalid`（`i18n_test.go` 覆盖）。未删除既有词条。
 - 本轮指标图最小~最大阴影带（2026-11-20）：前端新增 `serversPage.metrics.bandHint`（`Shaded band: min–max range` / `阴影为最小~最大范围`），用于指标卡与延迟/丢包卡 footer 说明阴影含义；tooltip 复用既有 `average`/`minimum`/`maximum`。en / zh-CN 同键且值非空（`i18n.test.ts`）；未删除既有词条。

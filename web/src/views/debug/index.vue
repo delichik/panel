@@ -351,7 +351,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
               <h3 class="m-0 flex items-center gap-2 text-body-strong font-semibold text-danger"><Trash2 class="size-4" />{{ t('debugPage.clearRuntimeData') }}</h3>
               <p class="m-0 text-sm text-danger">{{ t('debugPage.clearRuntimeDataHint') }}</p>
             </div>
-            <Button class="max-sm:w-full" variant="danger" :loading="clearSubmitting" :disabled="!canClear" @click="clearOpen = true"><Trash2 />{{ t('debugPage.clearRuntimeData') }}</Button>
+            <Button v-permission="'debug.manage'" data-perm-anchor="debug.manage.clear" class="max-sm:w-full" variant="danger" :loading="clearSubmitting" :disabled="!canClear" @click="clearOpen = true"><Trash2 />{{ t('debugPage.clearRuntimeData') }}</Button>
           </div>
           <div class="mt-4 grid gap-3 rounded-control border border-divider bg-control p-4 text-sm" aria-live="polite" aria-atomic="true">
             <div class="flex flex-wrap items-center justify-between gap-2">

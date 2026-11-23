@@ -663,12 +663,12 @@ describe('domain mock routes', () => {
     });
     const accountEnvelope = await account.json();
     expect(account.status).toBe(200);
-    expect(accountEnvelope.data.passwordChangeRequired).toBe(false);
+    expect(accountEnvelope.data.mustRelogin).toBe(true);
 
     const jwtSecret = await fetch('/api/v1/auth/jwt-secret', { method: 'POST', body: JSON.stringify({ jwtSecret: 'a-secure-demo-secret' }) });
     const jwtSecretEnvelope = await jwtSecret.json();
     expect(jwtSecret.status).toBe(200);
-    expect(jwtSecretEnvelope.data.authenticated).toBe(true);
+    expect(jwtSecretEnvelope.data.mustRelogin).toBe(true);
 
     const systemCertificates = await fetch('/api/v1/key-assets/system');
     const systemCertificatesEnvelope = await systemCertificates.json();

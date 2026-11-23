@@ -7,15 +7,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
-
-	"golang.org/x/crypto/bcrypt"
 )
 
 type Config struct {
 	ListenAddress               string     `json:"listenAddress"`
 	AdminUsername               string     `json:"adminUsername"`
+	AdminDisplayName            string     `json:"adminDisplayName"`
+	AdminPassword               string     `json:"-"`
 	AdminPasswordHash           string     `json:"adminPasswordHash"`
 	JWTSecret                   string     `json:"jwtSecret"`
 	DataRoot                    string     `json:"dataRoot"`
@@ -30,6 +29,7 @@ type Config struct {
 type rawConfig struct {
 	ListenAddress               string      `json:"listenAddress"`
 	AdminUsername               string      `json:"adminUsername"`
+	AdminDisplayName            string      `json:"adminDisplayName"`
 	AdminPasswordHash           string      `json:"adminPasswordHash"`
 	JWTSecret                   string      `json:"jwtSecret"`
 	DataRoot                    string      `json:"dataRoot"`
@@ -48,32 +48,31 @@ type CertConfig struct {
 	DNSPropagationDelaySeconds int    `json:"dnsPropagationDelaySeconds"`
 }
 
-const defaultAdminPassword = "admin"
-
-var (
-	defaultAdminHashOnce   sync.Once
-	defaultAdminHashCached string
-)
-
-func defaultAdminHash() string {
-	// bcrypt is deliberately expensive; cache the well-known default hash so
-	// repeated Default()/Load() calls do not re-run it on every configuration
-	// load.
-	defaultAdminHashOnce.Do(func() {
-		hash, err := bcrypt.GenerateFromPassword([]byte(defaultAdminPassword), bcrypt.DefaultCost)
-		if err != nil {
-			panic(err)
+func applyEnv(cfg *Config) {
+	setString := func(key string, target *string) {
+		if v := os.Getenv(key); v != "" {
+			*target = v
 		}
-		defaultAdminHashCached = string(hash)
-	})
-	return defaultAdminHashCached
+	}
+	setString("PANEL_LISTEN_ADDRESS", &cfg.ListenAddress)
+	setString("PANEL_ADMIN_USERNAME", &cfg.AdminUsername)
+	setString("PANEL_ADMIN_DISPLAY_NAME", &cfg.AdminDisplayName)
+	setString("PANEL_ADMIN_PASSWORD", &cfg.AdminPassword)
+	setString("PANEL_ADMIN_PASSWORD_HASH", &cfg.AdminPasswordHash)
+	setString("PANEL_DATA_ROOT", &cfg.DataRoot)
+	setString("PANEL_APP_DATABASE", &cfg.AppDatabase)
+	setString("PANEL_LOG_DATABASE", &cfg.LogDatabase)
+	setString("PANEL_TASK_DATABASE", &cfg.LogDatabase)
+	setString("PANEL_COORDINATION_DATABASE", &cfg.CoordinationDatabase)
+	setString("PANEL_METRICS_DATABASE", &cfg.MetricsDatabase)
+	setString("PANEL_CERT_ACME_DIRECTORY_URL", &cfg.Certificates.ACMEDirectoryURL)
 }
 
 func Default() Config {
 	return Config{
 		ListenAddress:               "127.0.0.1:8443",
 		AdminUsername:               "admin",
-		AdminPasswordHash:           defaultAdminHash(),
+		AdminDisplayName:            "Administrator",
 		JWTSecret:                   "change-me-panel-jwt-secret",
 		DataRoot:                    "data",
 		AppDatabase:                 filepath.Join("data", "db", "app.db"),
@@ -151,28 +150,15 @@ func applyCertificateDefaults(cfg *Config) {
 	}
 }
 
-func applyEnv(cfg *Config) {
-	setString := func(key string, target *string) {
-		if v := os.Getenv(key); v != "" {
-			*target = v
-		}
-	}
-	setString("PANEL_LISTEN_ADDRESS", &cfg.ListenAddress)
-	setString("PANEL_DATA_ROOT", &cfg.DataRoot)
-	setString("PANEL_APP_DATABASE", &cfg.AppDatabase)
-	setString("PANEL_LOG_DATABASE", &cfg.LogDatabase)
-	setString("PANEL_TASK_DATABASE", &cfg.LogDatabase)
-	setString("PANEL_COORDINATION_DATABASE", &cfg.CoordinationDatabase)
-	setString("PANEL_METRICS_DATABASE", &cfg.MetricsDatabase)
-	setString("PANEL_CERT_ACME_DIRECTORY_URL", &cfg.Certificates.ACMEDirectoryURL)
-}
-
 func applyRawConfig(cfg *Config, raw rawConfig) {
 	if raw.ListenAddress != "" {
 		cfg.ListenAddress = raw.ListenAddress
 	}
 	if raw.AdminUsername != "" {
 		cfg.AdminUsername = raw.AdminUsername
+	}
+	if raw.AdminDisplayName != "" {
+		cfg.AdminDisplayName = raw.AdminDisplayName
 	}
 	if raw.AdminPasswordHash != "" {
 		cfg.AdminPasswordHash = raw.AdminPasswordHash
@@ -211,9 +197,6 @@ func (c Config) Validate() error {
 	}
 	if c.AdminUsername == "" {
 		return errors.New("admin username is required")
-	}
-	if c.AdminPasswordHash == "" {
-		return errors.New("admin password hash is required")
 	}
 	if len(c.JWTSecret) < 16 {
 		return errors.New("jwt secret must be at least 16 characters")

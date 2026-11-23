@@ -352,7 +352,7 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
               <template #actions>
                 <div class="flex w-full flex-nowrap items-center gap-2 overflow-x-auto sm:w-auto sm:flex-wrap sm:justify-end">
                   <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
-                  <Button size="sm" variant="primary" @click="openCreate"><Plus />{{ t('common.add') }}</Button>
+                  <Button v-permission="'servers.credentials.manage'" data-perm-anchor="credentials.manage.create" size="sm" variant="primary" @click="openCreate"><Plus />{{ t('common.add') }}</Button>
                 </div>
               </template>
             </ListCommandBar>
@@ -406,9 +406,9 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
                   <template #trigger>
                     <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
                   </template>
-                  <DropdownItem @click="openEdit(row)"><Wrench />{{ t('common.edit') }}</DropdownItem>
+                  <DropdownItem v-permission="'servers.credentials.manage'" @click="openEdit(row)"><Wrench />{{ t('common.edit') }}</DropdownItem>
                   <DropdownItem :disabled="credentialReferences(row.id, servers).length === 0" @click="openTest(row)"><Cable />{{ t('credentialsPage.test') }}</DropdownItem>
-                  <DropdownItem tone="danger" @click="askDelete(row)"><Trash2 />{{ t('common.delete') }}</DropdownItem>
+                  <DropdownItem v-permission="'servers.credentials.manage'" tone="danger" @click="askDelete(row)"><Trash2 />{{ t('common.delete') }}</DropdownItem>
                 </Dropdown>
               </div>
             </template>
@@ -431,7 +431,7 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
     <template #detail>
       <ConsolePage width="content" :title="detailTitle" :description="selectedCredential?.username || ''" :breadcrumbs="breadcrumbs" :back-label="t('common.backToList')" :body-scroll="false" @back="closeDetail">
         <template v-if="selectedCredential" #actions>
-          <Button size="sm" variant="secondary" @click="openEdit(selectedCredential)"><Wrench />{{ t('common.edit') }}</Button>
+          <Button v-permission="'servers.credentials.manage'" size="sm" variant="secondary" @click="openEdit(selectedCredential)"><Wrench />{{ t('common.edit') }}</Button>
         </template>
         <div class="grid h-full min-h-0 content-start gap-4 overflow-y-auto pr-1 lg:grid-cols-2">
           <DetailSection :title="t('credentialsPage.keySummary')">

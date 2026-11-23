@@ -836,21 +836,103 @@ type AuthState struct {
 
 func (*AuthState) TableName() string { return "auth_state" }
 
-// AuthAccount 对应 auth_accounts。
-type AuthAccount struct {
-	ID                     string    `orm:"primary_key"`
-	Username               string    `orm:"not_null"`
-	PasswordHash           string    `orm:"not_null"`
-	PasswordChangeRequired bool      `orm:"not_null;default:1"`
-	CreatedAt              time.Time `orm:"not_null"`
-	UpdatedAt              time.Time `orm:"not_null"`
+// User 对应 users。内置管理员 builtin=1，不可删除/禁用/改角色。
+type User struct {
+	ID                 string     `orm:"primary_key"`
+	Username           string     `orm:"not_null"`
+	DisplayName        string     `orm:"not_null;default:''"`
+	PasswordHash       string     `orm:"not_null"`
+	Status             string     `orm:"not_null;default:'active'"`
+	Builtin            bool       `orm:"not_null;default:0"`
+	Generation         int64      `orm:"not_null;default:1"`
+	MustChangePassword bool       `orm:"not_null;default:0"`
+	LastLoginAt        *time.Time `orm:"column:last_login_at"`
+	CreatedAt          time.Time  `orm:"not_null"`
+	UpdatedAt          time.Time  `orm:"not_null"`
 }
 
-func (*AuthAccount) TableName() string { return "auth_accounts" }
+func (*User) TableName() string { return "users" }
 
-// TableConstraints 返回 auth_accounts 表无法用 orm tag 表达的原始约束。
-func (*AuthAccount) TableConstraints() []string {
-	return []string{"CHECK(id = 'admin')"}
+// TableConstraints 返回 users 表无法用 orm tag 表达的原始约束。
+func (*User) TableConstraints() []string {
+	return []string{"CHECK(status IN ('active','disabled'))"}
+}
+
+// ExtraIndexDDL 返回用户名大小写不敏感唯一索引。
+func (*User) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"users": {"CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_nocase ON users(username COLLATE NOCASE)"},
+	}
+}
+
+// Role 对应 roles。key='administrator' 为唯一内置角色，builtin=1。
+type Role struct {
+	ID          string    `orm:"primary_key"`
+	Key         string    `orm:"not_null;default:''"`
+	Name        string    `orm:"not_null"`
+	Description string    `orm:"not_null;default:''"`
+	Builtin     bool      `orm:"not_null;default:0"`
+	CreatedAt   time.Time `orm:"not_null"`
+	UpdatedAt   time.Time `orm:"not_null"`
+}
+
+func (*Role) TableName() string { return "roles" }
+
+// ExtraIndexDDL 返回内置角色 key 的部分唯一索引（自定义角色 key 为空）。
+func (*Role) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"roles": {"CREATE UNIQUE INDEX IF NOT EXISTS idx_roles_key ON roles(key) WHERE key <> ''"},
+	}
+}
+
+// RolePermission 对应 role_permissions。
+type RolePermission struct {
+	RoleID        string `orm:"primary_key;references:roles(id)"`
+	PermissionKey string `orm:"primary_key"`
+}
+
+func (*RolePermission) TableName() string { return "role_permissions" }
+
+// UserRole 对应 user_roles。
+type UserRole struct {
+	UserID string `orm:"primary_key;references:users(id)"`
+	RoleID string `orm:"primary_key;references:roles(id)"`
+}
+
+func (*UserRole) TableName() string { return "user_roles" }
+
+// AccessCredential 对应 access_credentials。
+type AccessCredential struct {
+	ID              string     `orm:"primary_key"`
+	UserID          string     `orm:"not_null;references:users(id)"`
+	Name            string     `orm:"not_null"`
+	TokenHash       string     `orm:"not_null"`
+	TokenPrefix     string     `orm:"not_null"`
+	Scope           string     `orm:"not_null;default:'readwrite'"`
+	AllowManagement bool       `orm:"not_null;default:0"`
+	UserGeneration  int64      `orm:"not_null;default:1"`
+	ExpiresAt       time.Time  `orm:"not_null"`
+	RevokedAt       *time.Time `orm:"column:revoked_at"`
+	RevokedBy       string     `orm:"not_null;default:''"`
+	LastUsedAt      *time.Time `orm:"column:last_used_at"`
+	CreatedAt       time.Time  `orm:"not_null"`
+}
+
+func (*AccessCredential) TableName() string { return "access_credentials" }
+
+// TableConstraints 返回 access_credentials 表无法用 orm tag 表达的原始约束。
+func (*AccessCredential) TableConstraints() []string {
+	return []string{"CHECK(scope IN ('readonly','readwrite'))"}
+}
+
+// ExtraIndexDDL 返回访问凭证按用户与到期时间查询的索引。
+func (*AccessCredential) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"access_credentials": {
+			"CREATE UNIQUE INDEX IF NOT EXISTS idx_access_credentials_token_hash ON access_credentials(token_hash)",
+			"CREATE INDEX IF NOT EXISTS idx_access_credentials_user_expires ON access_credentials(user_id, expires_at)",
+		},
+	}
 }
 
 // StorageShareConfig 对应 storage_share_configs（存储共享设施配置）。

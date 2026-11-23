@@ -17,7 +17,9 @@ import (
 	auth "panel/internal/modules/identity"
 	"panel/internal/modules/runtimeevents"
 	"panel/internal/platform/activitylog"
+	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/events"
+	httpx "panel/internal/platform/http"
 	"panel/internal/platform/logging"
 	"panel/internal/platform/maintenance"
 )
@@ -120,11 +122,29 @@ func (w *systemEventWriter) Stop() {
 func (a *App) activityAuth(next http.Handler) http.Handler {
 	return a.auth.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sess := auth.FromContext(r.Context())
+		required, known := auth.RequiredPermission(r.Method, r.URL.Path)
+		if !known {
+			httpx.Error(w, panelerr.Forbidden("permission_denied", "Permission denied"))
+			return
+		}
+		if required != "" && !auth.HasPermission(sess.Permissions, required) {
+			httpx.Error(w, panelerr.Forbidden("permission_denied", "Permission denied"))
+			return
+		}
+		if code, blocked := auth.CredentialRequestBlocked(sess, r.Method, r.URL.Path); blocked {
+			httpx.Error(w, panelerr.Forbidden(code, "Access credential cannot perform this action"))
+			return
+		}
+		if sess.AuthKind == "credential" && sess.CredentialScope == "readonly" &&
+			required != "" && !auth.PermissionIsReadOnly(required) {
+			httpx.Error(w, panelerr.Forbidden("credential_read_only", "Access credential is read-only"))
+			return
+		}
 		streamID := logging.NewStreamID()
 		if existing, ok := logging.Lookup(r.Context()); ok && existing.StreamID != "" {
 			streamID = existing.StreamID
 		}
-		ctx := activitylog.WithReceipt(activitylog.WithActor(r.Context(), activitylog.Actor{Kind: "user", ID: "admin", Name: sess.Username}))
+		ctx := activitylog.WithReceipt(activitylog.WithActor(r.Context(), activitylog.Actor{Kind: "user", ID: sess.UserID, Name: sess.Username}))
 		ctx = logging.With(ctx, logging.Context{
 			StreamID:  streamID,
 			Module:    "http",

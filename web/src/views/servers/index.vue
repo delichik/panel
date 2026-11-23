@@ -542,7 +542,7 @@ onBeforeUnmount(() => {
               </template>
               <template #actions>
                 <Button class="max-sm:w-full" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
-                <Button class="max-sm:w-full" variant="primary" @click="openCreate"><Plus />{{ t('common.add') }}</Button>
+                <Button v-permission="'servers.manage'" data-perm-anchor="servers.manage.create" class="max-sm:w-full" variant="primary" @click="openCreate"><Plus />{{ t('common.add') }}</Button>
               </template>
             </ListCommandBar>
           </template>
@@ -567,7 +567,7 @@ onBeforeUnmount(() => {
             <div class="grid h-full min-h-0 place-items-center">
               <EmptyState variant="page" :title="t('serversPage.noServers')" :description="t('serversPage.noServersHint')">
                 <template #actions>
-                  <Button size="sm" variant="primary" @click="openCreate"><Plus />{{ t('common.add') }}</Button>
+                  <Button v-permission="'servers.manage'" size="sm" variant="primary" @click="openCreate"><Plus />{{ t('common.add') }}</Button>
                 </template>
               </EmptyState>
             </div>
@@ -609,7 +609,7 @@ onBeforeUnmount(() => {
                     <IconButton size="sm" :label="t('common.moreActions')"><MoreHorizontal /></IconButton>
                   </template>
                   <DropdownItem class="wide:hidden" :disabled="rowBusy?.id === row.id" @click="testConnection(row)"><Cable />{{ t('serversPage.testConnection') }}</DropdownItem>
-                  <DropdownItem :disabled="rowBusy?.id === row.id" @click="openEdit(row)"><Wrench />{{ t('common.edit') }}</DropdownItem>
+                  <DropdownItem v-permission="'servers.manage'" :disabled="rowBusy?.id === row.id" @click="openEdit(row)"><Wrench />{{ t('common.edit') }}</DropdownItem>
                   <DropdownItem tone="danger" @click="confirmTarget = row"><Trash2 />{{ t('common.delete') }}</DropdownItem>
                 </Dropdown>
               </div>
@@ -633,8 +633,8 @@ onBeforeUnmount(() => {
     <template #detail>
       <ConsolePage :title="detailTitle" :description="detailDescription" :breadcrumbs="detailBreadcrumbs" :back-label="t('common.backToList')" :body-scroll="false" @back="closeDetail">
         <template v-if="selectedServer" #actions>
-          <Button class="max-sm:w-full" variant="secondary" :disabled="rowBusy?.id === selectedServer.id" :loading="rowBusy?.id === selectedServer.id && rowBusy?.kind === 'edit'" @click="openEdit(selectedServer)"><Wrench />{{ t('common.edit') }}</Button>
-          <Button class="max-sm:w-full" variant="danger" :disabled="!canRunPrivilegedOperation(selectedServer)" :loading="restarting" @click="restartOpen = true"><PlayCircle />{{ t('serversPage.restart') }}</Button>
+          <Button v-permission="'servers.manage'" class="max-sm:w-full" variant="secondary" :disabled="rowBusy?.id === selectedServer.id" :loading="rowBusy?.id === selectedServer.id && rowBusy?.kind === 'edit'" @click="openEdit(selectedServer)"><Wrench />{{ t('common.edit') }}</Button>
+          <Button v-permission="'servers.execute'" data-perm-anchor="servers.execute.restart" class="max-sm:w-full" variant="danger" :disabled="!canRunPrivilegedOperation(selectedServer)" :loading="restarting" @click="restartOpen = true"><PlayCircle />{{ t('serversPage.restart') }}</Button>
         </template>
         <div ref="detailRoot" data-testid="server-detail" class="h-full min-h-0 outline-none" tabindex="-1" @keydown="onDetailKeydown">
           <EmptyState v-if="detailError && !serverDetails[selectedId]" variant="page" :title="t('common.loadFailed')" :description="detailError">

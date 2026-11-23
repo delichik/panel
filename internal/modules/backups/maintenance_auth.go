@@ -79,7 +79,7 @@ func readMaintenanceCredential(ctx context.Context, appDatabase string) (mainten
 	defer db.Close()
 
 	var credential maintenanceCredential
-	if err := orm.New(db).From("auth_accounts").Select("username", "password_hash").Where("id=?", "admin").First(ctx, &credential); err != nil {
+	if err := orm.New(db).From("users").Select("username", "password_hash").Where("builtin = 1").Where("status = 'active'").First(ctx, &credential); err != nil {
 		return maintenanceCredential{}, err
 	}
 	return credential, nil

@@ -154,22 +154,41 @@ import { debugClearRuntimeDataStatus, debugDatabases, debugPprofStatus, debugRun
 
 const nativeFetch = window.fetch.bind(window);
 const mockAuthToken = 'panel_mock_admin_token';
+const mockPermissions = [
+  'overview.view', 'servers.view', 'servers.manage', 'servers.execute', 'servers.credentials.manage',
+  'containers.view', 'containers.manage', 'applications.view', 'applications.edit', 'applications.deploy',
+  'facilities.view', 'facilities.manage', 'dns.view', 'dns.manage', 'certificates.view', 'certificates.manage',
+  'keyassets.view', 'keyassets.manage', 'keyassets.export', 'events.view', 'events.export', 'events.manage',
+  'tasks.view', 'tasks.manage', 'backups.export', 'backups.restore', 'settings.view', 'settings.manage',
+  'settings.security', 'settings.appearance', 'debug.view', 'debug.manage',
+  'access.users.manage', 'access.roles.manage', 'access.credentials.manage',
+];
 const mockAuthSession = {
   authenticated: true,
   token: mockAuthToken,
   username: 'admin',
-  passwordChangeRequired: false,
+  mustChangePassword: false,
+  authKind: 'session',
+  user: { id: 'usr_admin', username: 'admin', displayName: 'Administrator', isBuiltinAdmin: true },
+  roles: [{ id: 'role_administrator', key: 'administrator', name: 'Administrator' }],
+  permissions: mockPermissions,
 };
 let mockPassword = 'admin';
 let mockUsername = 'admin';
 let mockPasswordChangeRequired = true;
+let mockAccessCredentials: Array<Record<string, unknown>> = [];
 
 function authValidationEnabled() {
   return import.meta.env.VITE_PANEL_TEST_AUTH === 'true';
 }
 
 function authSession() {
-  return { ...mockAuthSession, username: mockUsername, passwordChangeRequired: authValidationEnabled() ? mockPasswordChangeRequired : false };
+  return {
+    ...mockAuthSession,
+    username: mockUsername,
+    user: { ...mockAuthSession.user, username: mockUsername },
+    mustChangePassword: authValidationEnabled() ? mockPasswordChangeRequired : false,
+  };
 }
 
 function systemCertificates(): SystemCertificateDto[] {
@@ -1129,7 +1148,7 @@ export function installMockApi() {
       if (!authValidationEnabled()) {
         mockUsername = input.username?.trim() || mockUsername;
         mockPasswordChangeRequired = false;
-        return json(authSession());
+        return json({ authenticated: false, mustRelogin: true });
       }
       if (input.currentPassword !== mockPassword) return error('unauthorized', 'Authentication failed.', 401);
       if (!input.username?.trim()) return error('admin_username_required', 'Username is required.', 422);
@@ -1139,13 +1158,74 @@ export function installMockApi() {
       mockPassword = newPassword;
       mockUsername = input.username.trim();
       mockPasswordChangeRequired = false;
-      return json(authSession());
+      return json({ authenticated: false, mustRelogin: true });
     }
     if (url.pathname === '/api/v1/auth/jwt-secret' && method(init) === 'POST') {
       const input = await body<{ jwtSecret?: string }>(init);
-      if (!authValidationEnabled()) return json(authSession());
+      if (!authValidationEnabled()) return json({ authenticated: false, mustRelogin: true });
       if ((input.jwtSecret || '').trim().length < 16) return error('invalid_jwt_secret', 'JWT secret must be at least 16 characters.', 422);
-      return json(authSession());
+      return json({ authenticated: false, mustRelogin: true });
+    }
+    if (url.pathname === '/api/v1/setup/status' && method(init) === 'GET') return json({ required: false });
+    if (url.pathname === '/api/v1/setup' && method(init) === 'POST') return json({ created: true }, 201);
+    if (url.pathname === '/api/v1/permissions' && method(init) === 'GET') {
+      return json({
+        groups: [
+          { key: 'overview', labelKey: 'permissions.group.overview', order: 10 },
+          { key: 'servers', labelKey: 'permissions.group.servers', order: 20 },
+          { key: 'containers', labelKey: 'permissions.group.containers', order: 30 },
+          { key: 'applications', labelKey: 'permissions.group.applications', order: 40 },
+          { key: 'facilities', labelKey: 'permissions.group.facilities', order: 50 },
+          { key: 'dns', labelKey: 'permissions.group.dns', order: 60 },
+          { key: 'certificates', labelKey: 'permissions.group.certificates', order: 70 },
+          { key: 'keyassets', labelKey: 'permissions.group.keyassets', order: 80 },
+          { key: 'events', labelKey: 'permissions.group.events', order: 90 },
+          { key: 'tasks', labelKey: 'permissions.group.tasks', order: 100 },
+          { key: 'backups', labelKey: 'permissions.group.backups', order: 110 },
+          { key: 'settings', labelKey: 'permissions.group.settings', order: 120 },
+          { key: 'debug', labelKey: 'permissions.group.debug', order: 130 },
+          { key: 'access', labelKey: 'permissions.group.access', order: 140 },
+        ],
+        permissions: mockPermissions.map((key) => ({
+          key,
+          group: key.split('.')[0],
+          labelKey: `permissions.${key}.label`,
+          descriptionKey: `permissions.${key}.description`,
+          risk: 'normal',
+          mode: key.endsWith('.view') || key.endsWith('.export') ? 'read' : 'write',
+          grantable: !key.startsWith('access.'),
+          ui: [],
+        })),
+      });
+    }
+    if (url.pathname === '/api/v1/users' && method(init) === 'GET') {
+      return json({ items: [{ id: 'usr_admin', username: mockUsername, displayName: 'Administrator', status: 'active', builtin: true, mustChangePassword: false, roles: [{ id: 'role_administrator', key: 'administrator', name: 'Administrator' }], createdAt: '2026-01-01T00:00:00Z' }], total: 1, page: 1, pageSize: 50 });
+    }
+    if (url.pathname === '/api/v1/roles' && method(init) === 'GET') {
+      return json({ items: [{ id: 'role_administrator', key: 'administrator', name: 'Administrator', description: 'Built-in administrator', builtin: true, permissionKeys: mockPermissions, userCount: 1, createdAt: '2026-01-01T00:00:00Z' }] });
+    }
+    if (url.pathname === '/api/v1/access-credentials' && method(init) === 'GET') return json({ items: mockAccessCredentials });
+    if (url.pathname === '/api/v1/access-credentials' && method(init) === 'POST') {
+      const input = await body<{ name?: string; expiresInSeconds?: number; scope?: 'readonly' | 'readwrite'; allowManagement?: boolean }>(init);
+      const created = {
+        id: `acr_${mockAccessCredentials.length + 1}`,
+        name: input.name || 'credential',
+        tokenPrefix: 'pac_mock',
+        scope: input.scope || 'readonly',
+        allowManagement: Boolean(input.allowManagement),
+        status: 'active' as const,
+        expiresAt: new Date(Date.now() + (input.expiresInSeconds || 900) * 1000).toISOString(),
+        createdAt: new Date().toISOString(),
+        token: 'pac_mock_token_value',
+      };
+      const { token: _token, ...rest } = created;
+      mockAccessCredentials.unshift(rest);
+      return json(created, 201);
+    }
+    const credentialDelete = url.pathname.match(/^\/api\/v1\/access-credentials\/([^/]+)$/);
+    if (credentialDelete && method(init) === 'DELETE') {
+      mockAccessCredentials = mockAccessCredentials.filter((item) => item.id !== credentialDelete[1]);
+      return new Response(null, { status: 204 });
     }
     if (url.pathname === '/api/v1/backups/export/current' && method(init) === 'GET') return json(exportStatus());
     if (url.pathname === '/api/v1/backups/export/start' && method(init) === 'POST') return json(advanceExport(), 202);

@@ -86,8 +86,14 @@ func TestAPIRouteManifest(t *testing.T) {
 	//   PUT /api/v1/settings/runtime/image-registry（SET-RUN-024）
 	// 内存事件通知长轮询（ENG-EVT-011，2026-11-19，202 → 203）：
 	//   GET /api/v1/notifications（auth；after/wait 长轮询，只读内存 hub，不读写数据库）
-	const wantCount = 203
-	const wantHash = "82079c044beaca07e85fe29f4a40597149dff6d29c338ed45ccac9a40b366e91"
+	// 用户/角色/权限/访问凭证（2026-11-23，205 → 221）：
+	//   GET /api/v1/permissions
+	//   GET/POST /api/v1/users；GET/PATCH/DELETE /api/v1/users/{id}
+	//   POST /api/v1/users/{id}/password|logout
+	//   GET/POST /api/v1/roles；GET/PATCH/DELETE /api/v1/roles/{id}
+	//   GET/POST /api/v1/access-credentials；DELETE /api/v1/access-credentials/{id}
+	const wantCount = 221
+	const wantHash = "0f6074a10f5d2b2987059a8d3455b82295c65a72e0d91e036f2d75c839726d75"
 	manifest := strings.Join(patterns, "\n") + "\n"
 	gotHash := fmt.Sprintf("%x", sha256.Sum256([]byte(manifest)))
 	if len(patterns) != wantCount || gotHash != wantHash {

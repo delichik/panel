@@ -19,7 +19,7 @@ describe('mock auth mode', () => {
     const session = await fetch('/api/v1/auth/session');
     const sessionEnvelope = await session.json();
     expect(sessionEnvelope.data.authenticated).toBe(true);
-    expect(sessionEnvelope.data.passwordChangeRequired).toBe(false);
+    expect(sessionEnvelope.data.mustChangePassword).toBe(false);
 
     const jwtSecret = await fetch('/api/v1/auth/jwt-secret', {
       method: 'POST',
