@@ -10,6 +10,15 @@
 - `COV-004`：已存在但暂未在 UI 暴露的 API 或开发模式能力仍需服务端验收项，并在文档中标明可达条件。
 - `COV-005`：历史兼容入口在移除前必须有迁移/拒绝策略；清单移除不代表可直接删除旧数据或远端资源。
 
+- SSH 访问记录（2026-11-23，新增第五库与服务器详情子视图）：
+  - **入口**：主 Panel 新增两条只读 API `GET /api/v1/servers/{id}/ssh-access/sessions`、`GET /api/v1/servers/{id}/ssh-access/attempts`，`method/path` **221 → 223**（`routes_manifest_test.go` 的 `wantCount=223` 与哈希已更新）；前端仍为 **36** 条路由（子视图走 `subtab`，不新增路由）。
+  - **持久化**：新增独立安全库 `security.db`（第五库，`config.SecurityDatabase` / `PANEL_SECURITY_DATABASE`，空值派生 app 库同目录），新增 `ssh_access_sessions`、`ssh_access_attempts` 两表，ORM 表 **53 → 55**；无跨库外键，服务器删除后孤儿行每小时清扫；备份归档新增 `databases/security.db`。
+  - **后台任务**：无新增任务类型；新增每小时清理（保留期 + 每服务器失败行上限 20 万）由 SSH 访问服务内部周期执行。
+  - **运行时设置**：`RuntimeSettings.sshAccess` 两个保留天数（成功 30 / 失败 3，1..3650），复用 `PUT /api/v1/settings/runtime/security`，不改路由数。
+  - **Agent 协议**：`AgentReport` 新增字段 10/11/12 与 `ssh_sessions_since_unix` 控制字段；能力位 `ssh-sessions` 只进健康能力、不进 `RequiredCapabilities`，旧 Agent 不重装。
+  - **验收**：`AGT-RPT-009`、`SRV-SESS-001..009`、`SET-RUN-025`、`DATA-DB-005`、`DATA-MIG-010`、`UI-SRV-031..034`。
+  - **验证证据**：后端定向 `go test` 覆盖 `internal/agent/sshsessions`、`internal/agent/rpc`、`internal/agent/contract`、`internal/modules/sshaccess`、`internal/modules/settings`、`internal/platform/config`、`internal/platform/database`、`internal/modules/backups`、`internal/bootstrap/panel`；前端 `vue-tsc --noEmit`、相关 `vitest run` 与 `task build:web`。数据库全量测试中 `TestBackfillApplicationImageReferenceOn` 为改动前既有失败（`internal/platform/database/store_test.go:1236`），与本变更无关。
+
 - 独立进程内短时缓存模块（2026-11-23，纯后端平台模块，无 API/表/路由/配置/后台任务变化）：
   - **模块**：新增 `internal/platform/cache`，只依赖标准库；提供 `Get/Set/Delete/DeletePrefix/Incr/GetOrLoad/Flush/Stats/Close` 与 JSON 泛型 helper；默认 TTL 2s、硬上限 60s、分片 LRU、单飞、容量/单值上限。
   - **边界**：不集成 ORM/SQLite、不做自动失效、不持久化、不跨进程；使用方自行负责 key、TTL、写后失效与不缓存秘密。

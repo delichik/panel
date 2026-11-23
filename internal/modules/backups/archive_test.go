@@ -54,6 +54,37 @@ func TestBackupArchiveRoundTrip(t *testing.T) {
 	}
 }
 
+func TestBackupArchiveIncludesSecurityDatabase(t *testing.T) {
+	dir := t.TempDir()
+	dataRoot := filepath.Join(dir, "data")
+	securityDB := filepath.Join(dataRoot, "db", "security.db")
+	if err := os.MkdirAll(filepath.Dir(securityDB), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(securityDB, []byte("security"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	raw, _, err := buildArchive(ArchiveConfig{
+		DataRoot:         dataRoot,
+		SecurityDatabase: securityDB,
+		PanelVersion:     "test",
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, plain, err := readManifest(raw, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	staging := filepath.Join(dir, "staging")
+	if err := extractArchive(plain, staging, got); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(staging, "databases", "security.db")); err != nil {
+		t.Fatalf("security database missing from archive: %v", err)
+	}
+}
+
 func TestExtractArchiveRejectsTamperedMemberHash(t *testing.T) {
 	dir := t.TempDir()
 	dataRoot := filepath.Join(dir, "data")

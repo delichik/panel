@@ -17,8 +17,8 @@
 - `ARCH-CFG-001`：配置优先级必须是内置默认值 < JSON 配置文件 < 环境变量；相对路径以配置文件目录为基准，无配置文件时以当前工作目录为基准。
 - `ARCH-CFG-002`：JSON 配置必须拒绝未知字段，避免拼写错误被静默忽略；历史 `taskDatabase` 仅作为 `logDatabase` 未设置时的兼容输入。
 - `ARCH-CFG-003`：`listenAddress`、至少 16 字符 JWT secret、数据根目录和四个数据库路径均为必需；管理员用户名可省略（默认 `admin`），管理员密码/哈希可选：仅在库中没有任何用户时用于初始化，密码缺失时进入初始化界面；远程命令超时必须为正数，DNS 传播延迟不得为负。
-- `ARCH-CFG-004`：app、log、coordination、metrics 四个数据库必须使用互不相同的路径；配置冲突时启动失败，不得合并数据到同一文件。
-- `ARCH-CFG-005`：环境变量至少保持 `PANEL_LISTEN_ADDRESS`、`PANEL_ADMIN_USERNAME`、`PANEL_ADMIN_DISPLAY_NAME`、`PANEL_ADMIN_PASSWORD`、`PANEL_ADMIN_PASSWORD_HASH`、`PANEL_DATA_ROOT`、`PANEL_APP_DATABASE`、`PANEL_LOG_DATABASE`、兼容的 `PANEL_TASK_DATABASE`、`PANEL_COORDINATION_DATABASE`、`PANEL_METRICS_DATABASE`、`PANEL_CERT_ACME_DIRECTORY_URL` 语义；管理员变量只在无用户时生效。
+- `ARCH-CFG-004`：app、log、coordination、metrics、security 五个数据库必须使用互不相同的路径；配置冲突时启动失败，不得合并数据到同一文件。`securityDatabase` 可留空，此时解析为 app 库同目录的 `security.db`；显式值不得与其他库路径相同。
+- `ARCH-CFG-005`：环境变量至少保持 `PANEL_LISTEN_ADDRESS`、`PANEL_ADMIN_USERNAME`、`PANEL_ADMIN_DISPLAY_NAME`、`PANEL_ADMIN_PASSWORD`、`PANEL_ADMIN_PASSWORD_HASH`、`PANEL_DATA_ROOT`、`PANEL_APP_DATABASE`、`PANEL_LOG_DATABASE`、兼容的 `PANEL_TASK_DATABASE`、`PANEL_COORDINATION_DATABASE`、`PANEL_METRICS_DATABASE`、`PANEL_SECURITY_DATABASE`、`PANEL_CERT_ACME_DIRECTORY_URL` 语义；管理员变量只在无用户时生效。
 - `ARCH-CFG-006`：运行时设置只热更新规范明确支持的字段；需要重启或 TLS 重载的字段必须返回准确状态，不得在 UI 显示已生效而实际仍使用旧值。
 
 ## 3. HTTP 通用协议
@@ -52,10 +52,10 @@
 | coordination | 当前不注册业务模型，保留路径只为兼容和备份拓扑 | 不重新引入旧 lifecycle 表作为第二事实源 |
 | metrics | 指标快照时间序列（含可空磁盘 IO 速率列 `disk_read_bytes_rate`/`disk_write_bytes_rate`，NULL=未测得） | 不存资源配置或身份数据 |
 
-- `DATA-DB-001`：四库连接均启用 WAL、foreign keys、5 秒 busy timeout，并维持有界连接池；调用方不得依赖 SQLite 默认 pragma。
+- `DATA-DB-001`：五库连接均启用 WAL、foreign keys、5 秒 busy timeout，并维持有界连接池；调用方不得依赖 SQLite 默认 pragma。
 - `DATA-DB-002`：数据库目录和 `dataRoot/tmp` 以仅所有者可访问的权限创建；内存 DSN 不创建目录，`file:` DSN 必须剥离查询串后再解析路径。
 - `DATA-DB-003`：历史 `tasks.db` 迁移到 `log.db` 时不得覆盖已存在的 `log.db` 或其 WAL/SHM；冲突 sidecar 必须保留并记录警告。
-- `DATA-DB-004`：关闭四库时即使前一个 close 失败也要尝试关闭后续数据库，并返回首个错误。
+- `DATA-DB-004`：关闭五库时即使前一个 close 失败也要尝试关闭后续数据库，并返回首个错误。
 
 ## 6. 持久化模型与迁移
 
@@ -79,7 +79,11 @@
 - `DATA-MIG-006`：ORM 只允许自动删除已接管快照中的对象；外部列、表、索引不得被自动删除。破坏性同步必须显式开启，非破坏模式只报告差异。
 - `DATA-MIG-007`：可空时间无值统一为 NULL；历史空字符串在读取、更新和启动归一化时按未设置处理，不得导致升级失败。
 - `DATA-MIG-008`：迁移必须保留 alpha 旧版本升级路径，包括旧数据库名、旧秘密字段、旧证书/密钥资产和已下线协调表的明确处理；不得只验证全新数据库。
-- `DATA-MIG-009`：备份/恢复清单必须覆盖四库及规范声明的数据文件；新增持久化位置时必须同步更新备份合同。`dataRoot` 内的持久化数据（含 `<dataRoot>/appearance/` 外观背景资产目录与 `<dataRoot>/logs`）随整目录归档自动纳入，存储于 dataRoot 之外的文件必须显式声明。
+- `DATA-MIG-009`：备份/恢复清单必须覆盖五库及规范声明的数据文件；新增持久化位置时必须同步更新备份合同。`dataRoot` 内的持久化数据（含 `<dataRoot>/appearance/` 外观背景资产目录与 `<dataRoot>/logs`）随整目录归档自动纳入，存储于 dataRoot 之外的文件必须显式声明。
+
+`DATA-DB-005`：安全日志库（`security.db`）独立于 app/log/coordination/metrics，承载 `ssh_access_sessions` 与 `ssh_access_attempts`；两表由 ORM AutoMigrate 创建，无跨库外键，服务器删除后的孤儿行由 SSH 访问服务每小时清扫；备份归档新增 `databases/security.db`，恢复时缺失该文件（旧归档）自动跳过。
+
+`DATA-MIG-010`：新增第五库的 alpha 升级只通过 AutoMigrate 建表，旧库升级后两表为空；不得要求重建 app 库或改写既有四库路径；`securityDatabase` 缺省派生不得覆盖同目录既有 `security.db`。
 
 多用户与权限模型占用 app 库：`users`（内置管理员 `builtin=1`、`generation` 用户代数、`must_change_password`）、`roles`（唯一内置 `administrator`，`key` 部分唯一索引）、`role_permissions`、`user_roles`、`access_credentials`（`token_hash`、`scope`、`allow_management`、`user_generation`、`revoked_at`、`last_used_at`）。旧 `auth_accounts` 由 pre-migration Step 在破坏性 AutoMigrate 前复制为唯一内置管理员并删除旧表；旧 `token_nonce` 不再使用，`auth_state.jwt_key_generation` 保存全局密钥代数。ORM 表数 49 → **53**。`users` 用户名大小写不敏感唯一索引、`access_credentials.token_hash` 唯一索引与 `(user_id, expires_at)` 查询索引由 `ExtraIndexDDL` 创建。备份/恢复仍整库覆盖，无 manifest 变更。
 

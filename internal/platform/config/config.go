@@ -22,6 +22,7 @@ type Config struct {
 	LogDatabase                 string     `json:"logDatabase"`
 	CoordinationDatabase        string     `json:"coordinationDatabase"`
 	MetricsDatabase             string     `json:"metricsDatabase"`
+	SecurityDatabase            string     `json:"securityDatabase"`
 	RemoteCommandTimeoutSeconds int        `json:"remoteCommandTimeoutSeconds"`
 	Certificates                CertConfig `json:"certificates"`
 }
@@ -38,6 +39,7 @@ type rawConfig struct {
 	CoordinationDatabase        string      `json:"coordinationDatabase"`
 	LegacyTaskDatabase          string      `json:"taskDatabase"`
 	MetricsDatabase             string      `json:"metricsDatabase"`
+	SecurityDatabase            string      `json:"securityDatabase"`
 	RemoteCommandTimeoutSeconds *int        `json:"remoteCommandTimeoutSeconds"`
 	Certificates                *CertConfig `json:"certificates"`
 }
@@ -65,6 +67,7 @@ func applyEnv(cfg *Config) {
 	setString("PANEL_TASK_DATABASE", &cfg.LogDatabase)
 	setString("PANEL_COORDINATION_DATABASE", &cfg.CoordinationDatabase)
 	setString("PANEL_METRICS_DATABASE", &cfg.MetricsDatabase)
+	setString("PANEL_SECURITY_DATABASE", &cfg.SecurityDatabase)
 	setString("PANEL_CERT_ACME_DIRECTORY_URL", &cfg.Certificates.ACMEDirectoryURL)
 }
 
@@ -128,6 +131,9 @@ func applyPathBase(cfg *Config, baseDir string) {
 	cfg.LogDatabase = absolutizePath(baseDir, cfg.LogDatabase)
 	cfg.CoordinationDatabase = absolutizePath(baseDir, cfg.CoordinationDatabase)
 	cfg.MetricsDatabase = absolutizePath(baseDir, cfg.MetricsDatabase)
+	if cfg.SecurityDatabase != "" {
+		cfg.SecurityDatabase = absolutizePath(baseDir, cfg.SecurityDatabase)
+	}
 }
 
 func absolutizePath(baseDir, value string) string {
@@ -183,12 +189,39 @@ func applyRawConfig(cfg *Config, raw rawConfig) {
 	if raw.MetricsDatabase != "" {
 		cfg.MetricsDatabase = raw.MetricsDatabase
 	}
+	if raw.SecurityDatabase != "" {
+		cfg.SecurityDatabase = raw.SecurityDatabase
+	}
 	if raw.RemoteCommandTimeoutSeconds != nil {
 		cfg.RemoteCommandTimeoutSeconds = *raw.RemoteCommandTimeoutSeconds
 	}
 	if raw.Certificates != nil {
 		cfg.Certificates = *raw.Certificates
 	}
+}
+
+// SecurityDatabasePath 返回安全日志库路径。未显式配置时使用 app 库同目录的
+// security.db，保证旧配置升级后自动落到数据目录；app 为 file: DSN 时先剥离
+// 前缀与查询串再取目录。
+func (c Config) SecurityDatabasePath() string {
+	if c.SecurityDatabase != "" {
+		return c.SecurityDatabase
+	}
+	normalized := filepath.ToSlash(c.AppDatabase)
+	if strings.HasPrefix(normalized, "file:") {
+		normalized = strings.TrimPrefix(normalized, "file:")
+		if idx := strings.IndexByte(normalized, '?'); idx >= 0 {
+			normalized = normalized[:idx]
+		}
+	}
+	if normalized == "" || strings.HasPrefix(normalized, ":memory:") {
+		return "security.db"
+	}
+	dir := normalized
+	if filepath.Ext(normalized) != "" {
+		dir = filepath.Dir(normalized)
+	}
+	return filepath.Join(dir, "security.db")
 }
 
 func (c Config) Validate() error {
@@ -206,6 +239,10 @@ func (c Config) Validate() error {
 	}
 	if c.AppDatabase == c.MetricsDatabase {
 		return errors.New("app database and metrics database must be different")
+	}
+	securityDatabase := c.SecurityDatabasePath()
+	if securityDatabase == c.AppDatabase || securityDatabase == c.LogDatabase || securityDatabase == c.MetricsDatabase || securityDatabase == c.CoordinationDatabase {
+		return errors.New("security database must be different from app, log, metrics and coordination databases")
 	}
 	if c.AppDatabase == c.LogDatabase {
 		return errors.New("app database and log database must be different")

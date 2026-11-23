@@ -92,8 +92,11 @@ func TestAPIRouteManifest(t *testing.T) {
 	//   POST /api/v1/users/{id}/password|logout
 	//   GET/POST /api/v1/roles；GET/PATCH/DELETE /api/v1/roles/{id}
 	//   GET/POST /api/v1/access-credentials；DELETE /api/v1/access-credentials/{id}
-	const wantCount = 221
-	const wantHash = "0f6074a10f5d2b2987059a8d3455b82295c65a72e0d91e036f2d75c839726d75"
+	// SSH 访问记录（SRV-SESS-004，221 → 223）：
+	//   GET /api/v1/servers/{id}/ssh-access/sessions
+	//   GET /api/v1/servers/{id}/ssh-access/attempts
+	const wantCount = 223
+	const wantHash = "073de3f9e92f95cc7dd86bd5e118552fb3347156038dfb4b3774086a4269ca1a"
 	manifest := strings.Join(patterns, "\n") + "\n"
 	gotHash := fmt.Sprintf("%x", sha256.Sum256([]byte(manifest)))
 	if len(patterns) != wantCount || gotHash != wantHash {

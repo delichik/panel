@@ -125,9 +125,10 @@ Configuration loads from built-in defaults, then the JSON file named by `PANEL_C
 | `logDatabase` | Log and event-index SQLite database | `data/db/log.db` |
 | `coordinationDatabase` | Coordination SQLite database | `data/db/coordination.db` |
 | `metricsDatabase` | Metrics time-series SQLite database | `data/db/metrics.db` |
+| `securityDatabase` | SSH access audit SQLite database | `security.db` next to the app database |
 | `certificates.acmeDirectoryUrl` | ACME directory URL | Let's Encrypt production |
 
-Environment overrides: `PANEL_CONFIG`, `PANEL_LISTEN_ADDRESS`, `PANEL_ADMIN_USERNAME`, `PANEL_ADMIN_DISPLAY_NAME`, `PANEL_ADMIN_PASSWORD`, `PANEL_ADMIN_PASSWORD_HASH`, `PANEL_DATA_ROOT`, `PANEL_APP_DATABASE`, `PANEL_LOG_DATABASE` (legacy alias `PANEL_TASK_DATABASE`), `PANEL_COORDINATION_DATABASE`, `PANEL_METRICS_DATABASE`, `PANEL_CERT_ACME_DIRECTORY_URL`, and `PANEL_WEB_PROXY_TARGET` for the Vite proxy.
+Environment overrides: `PANEL_CONFIG`, `PANEL_LISTEN_ADDRESS`, `PANEL_ADMIN_USERNAME`, `PANEL_ADMIN_DISPLAY_NAME`, `PANEL_ADMIN_PASSWORD`, `PANEL_ADMIN_PASSWORD_HASH`, `PANEL_DATA_ROOT`, `PANEL_APP_DATABASE`, `PANEL_LOG_DATABASE` (legacy alias `PANEL_TASK_DATABASE`), `PANEL_COORDINATION_DATABASE`, `PANEL_METRICS_DATABASE`, `PANEL_SECURITY_DATABASE`, `PANEL_CERT_ACME_DIRECTORY_URL`, and `PANEL_WEB_PROXY_TARGET` for the Vite proxy.
 
 Runtime settings such as token lifetime, command timeout, appearance, agent download, automatic updates, image registry, and backup options are stored in the application database and managed from **Settings**.
 

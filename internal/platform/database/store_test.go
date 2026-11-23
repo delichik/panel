@@ -125,6 +125,60 @@ func TestOpenCreatesSeparateSchemas(t *testing.T) {
 	}
 }
 
+func TestOpenCreatesSeparateSecuritySchema(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	cfg.SecurityDatabase = filepath.Join(dir, "security.db")
+	store, err := Open(cfg)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	tables := []string{"ssh_access_sessions", "ssh_access_attempts"}
+	for _, table := range tables {
+		if _, err := store.SecurityDB().Exec(`SELECT COUNT(*) FROM ` + table); err != nil {
+			t.Fatalf("security schema missing %s table: %v", table, err)
+		}
+		if _, err := store.AppDB().Exec(`SELECT COUNT(*) FROM ` + table); err == nil {
+			t.Fatalf("%s table must not exist in app database", table)
+		}
+		if _, err := store.LogDB().Exec(`SELECT COUNT(*) FROM ` + table); err == nil {
+			t.Fatalf("%s table must not exist in log database", table)
+		}
+	}
+	if got := store.SecurityDB().Stats().MaxOpenConnections; got != 4 {
+		t.Fatalf("security database max open connections = %d, want 4", got)
+	}
+}
+
+func TestOpenDerivesSecurityDatabaseFromAppDatabase(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	cfg.SecurityDatabase = ""
+	store, err := Open(cfg)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+	if _, err := os.Stat(filepath.Join(dir, "security.db")); err != nil {
+		t.Fatalf("derived security database not created: %v", err)
+	}
+	if _, err := store.SecurityDB().Exec(`SELECT COUNT(*) FROM ssh_access_sessions`); err != nil {
+		t.Fatalf("derived security schema missing sessions table: %v", err)
+	}
+}
+
 func TestOpenUsesSmallSQLiteConnectionPool(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()

@@ -1,9 +1,9 @@
 package models
 
-// AllModels 返回四库全部存量表对应的模型注册清单，
+// AllModels 返回五库全部存量表对应的模型注册清单，
 // 父表先于子表排列，保证跨库建表时外键目标已存在。
 func AllModels() []any {
-	return append(append(append(append([]any{}, AppModels()...), LogModels()...), CoordinationModels()...), MetricsModels()...)
+	return append(append(append(append(append([]any{}, AppModels()...), LogModels()...), CoordinationModels()...), MetricsModels()...), SecurityModels()...)
 }
 
 // AppModels 返回 app 库模型注册清单。
@@ -42,6 +42,11 @@ func CoordinationModels() []any {
 // MetricsModels 返回 metrics 库 1 张表的模型注册清单。
 func MetricsModels() []any {
 	return []any{&MetricsSnapshot{}}
+}
+
+// SecurityModels 返回 security 库的模型注册清单（SSH 成功会话与失败尝试）。
+func SecurityModels() []any {
+	return []any{&SSHAccessSession{}, &SSHAccessAttempt{}}
 }
 
 // ExtraIndexDDLFor 汇总给定模型清单通过 ExtraIndexDDL() 声明的复合/部分/

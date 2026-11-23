@@ -35,6 +35,7 @@ import ServerFormDialog from './ServerFormDialog.vue';
 import AgentTab from './tabs/AgentTab.vue';
 import ContainersTab from './tabs/ContainersTab.vue';
 import FirewallTab from './tabs/FirewallTab.vue';
+import SshAccessTab from './tabs/SshAccessTab.vue';
 import ImagesTab from './tabs/ImagesTab.vue';
 import NetworksTab from './tabs/NetworksTab.vue';
 import OverviewTab from './tabs/OverviewTab.vue';
@@ -128,7 +129,7 @@ const networkSubtabItems = computed(() => serverNetworkSubtabs
   .filter((tab) => isDev || tab !== 'fail2ban')
   .map((tab) => ({
     value: tab,
-    label: tab === 'fail2ban' ? t('routes.fail2ban.title') : t('serversPage.tab.firewall'),
+    label: tab === 'fail2ban' ? t('routes.fail2ban.title') : tab === 'ssh-access' ? t('serversPage.tab.sshAccess') : t('serversPage.tab.firewall'),
   })));
 const detailTitle = computed(() => selectedServer.value?.name ?? t('common.loading'));
 const detailDescription = computed(() => selectedServer.value ? `${selectedServer.value.host}:${selectedServer.value.port} / ${selectedServer.value.os?.prettyName || t('common.notAvailable')}` : '');
@@ -680,7 +681,8 @@ onBeforeUnmount(() => {
                   <Select class="w-44" :model-value="networkSubtab" :options="networkSubtabItems" :aria-label="t('serversPage.tab.networkSecurity')" @update:model-value="selectNetworkSubtab" />
                 </div>
                 <div class="min-h-0 flex-1">
-                  <FirewallTab v-if="visitedNetwork.firewall || visitedNetwork.fail2ban" :server="selectedServer" :view="networkSubtab === 'fail2ban' ? 'fail2ban' : 'ufw'" />
+                  <FirewallTab v-if="visitedNetwork.firewall || visitedNetwork.fail2ban" v-show="networkSubtab === 'firewall' || networkSubtab === 'fail2ban'" :server="selectedServer" :view="networkSubtab === 'fail2ban' ? 'fail2ban' : 'ufw'" />
+                  <SshAccessTab v-if="visitedNetwork['ssh-access']" v-show="networkSubtab === 'ssh-access'" :server="selectedServer" :active="activeTab === 'network-security' && networkSubtab === 'ssh-access'" />
                 </div>
               </div>
             </div>

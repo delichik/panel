@@ -98,7 +98,7 @@ func (h *Handler) Health(ctx context.Context, _ *agentpb.Empty) (*agentpb.Health
 	if h.runtime != nil {
 		docker = h.runtime.DockerHealth(ctx)
 	}
-	capabilities := append(append([]string(nil), agentcontract.RequiredCapabilities...), agentcontract.CapabilityPrepareRestart, agentcontract.CapabilityStorageShare, agentcontract.CapabilityNetworkProbe)
+	capabilities := append(append([]string(nil), agentcontract.RequiredCapabilities...), agentcontract.CapabilityPrepareRestart, agentcontract.CapabilityStorageShare, agentcontract.CapabilityNetworkProbe, agentcontract.CapabilitySshSessions)
 	return pbHealth(agentcontract.HealthResponse{Status: "ok", Time: time.Now().UTC().Format(time.RFC3339Nano), Version: agentcontract.Version, Capabilities: capabilities, ContractHash: agentcontract.CurrentHash(), Docker: docker}), nil
 }
 

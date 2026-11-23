@@ -5,6 +5,7 @@
   "logDatabase": "data/db/log.db",
   "coordinationDatabase": "data/db/coordination.db",
   "metricsDatabase": "data/db/metrics.db",
+  "securityDatabase": "data/db/security.db",
   "certificates": {
     "acmeDirectoryUrl": "https://acme-v02.api.letsencrypt.org/directory"
   }

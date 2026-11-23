@@ -322,7 +322,7 @@ func (a *ExportApp) run(ctx context.Context, password string) {
 		return
 	}
 	a.setExportID(marker.ExportID)
-	if err := checkpointSQLiteFiles(ctx, a.cfg.AppDatabase, a.cfg.LogDatabase, a.cfg.CoordinationDatabase, a.cfg.MetricsDatabase); err != nil {
+	if err := checkpointSQLiteFiles(ctx, a.cfg.AppDatabase, a.cfg.LogDatabase, a.cfg.CoordinationDatabase, a.cfg.MetricsDatabase, a.cfg.SecurityDatabasePath()); err != nil {
 		a.fail("backup_checkpoint_failed", "Unable to checkpoint databases", false)
 		return
 	}
@@ -333,6 +333,7 @@ func (a *ExportApp) run(ctx context.Context, password string) {
 		LogDatabase:          a.cfg.LogDatabase,
 		CoordinationDatabase: a.cfg.CoordinationDatabase,
 		MetricsDatabase:      a.cfg.MetricsDatabase,
+		SecurityDatabase:     a.cfg.SecurityDatabasePath(),
 		PanelVersion:         buildinfo.Version,
 	}, marker.Encrypt)
 	if err != nil {

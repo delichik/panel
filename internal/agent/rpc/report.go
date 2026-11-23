@@ -17,6 +17,7 @@ import (
 	agentdocker "panel/internal/agent/docker"
 	agentpb "panel/internal/agent/pb"
 	agentprobe "panel/internal/agent/probe"
+	agentsshsessions "panel/internal/agent/sshsessions"
 	"panel/internal/platform/linux"
 	"panel/internal/platform/logging"
 
@@ -37,6 +38,14 @@ const (
 	// 少量指标样本且不超过 10 分钟，避免长时间离线后重放过于陈旧的数据。
 	metricsSpoolCapacity = 12
 	metricsSpoolMaxAge   = 10 * time.Minute
+
+	// SSH 访问记录的采集节奏：utmp 每 2 秒读一次，指纹变化或 30 秒心跳时
+	// 上报；wtmp/btmp 回填单次最多 2000 条、按 500 条分批，最早回看 7 天。
+	sessionPollInterval      = 2 * time.Second
+	sessionHeartbeatInterval = 30 * time.Second
+	backfillLimit            = 2000
+	backfillMaxAge           = 7 * 24 * time.Hour
+	backfillBatch            = 500
 )
 
 type reportConfig struct {
@@ -47,6 +56,9 @@ type reportConfig struct {
 	// “显式关闭/清空目标”，只有携带时才整体替换当前配置。
 	probe    probeConfig
 	probeSet bool
+	// sshSince 是 Panel 下发的 wtmp/btmp 回填起点（Unix 秒）；0 表示旧 Panel
+	// 未下发，由采样协程回退到 now-7d。
+	sshSince int64
 }
 
 // probeConfig 是当前生效的网络探测任务快照。
@@ -90,6 +102,11 @@ type reportHub struct {
 	probe       probeConfig
 	probeWake   chan struct{}
 	probeRunner agentprobe.Runner
+	// sshSince/sshWake 是 SSH 访问记录的回填游标与唤醒信号；sshOptions 允许
+	// 测试注入 utmp/wtmp/btmp 路径。
+	sshSince   int64
+	sshWake    chan struct{}
+	sshOptions agentsshsessions.Options
 	// spoolMu/spool 是弱网补报缓冲：stream.Send 失败时收集的指标样本，重连后
 	// 按样本时间升序补发并标记 replayed。
 	spoolMu sync.Mutex
@@ -344,6 +361,7 @@ func newReportHub(collector reportCollector, runtime *agentdocker.LocalRuntime) 
 		watchers:  map[int]*reportWatcher{},
 		wake:      make(chan struct{}, 1),
 		probeWake: make(chan struct{}, 1),
+		sshWake:   make(chan struct{}, 1),
 	}
 }
 
@@ -511,6 +529,10 @@ func (h *reportHub) add(cfg reportConfig) *reportWatcher {
 	if cfg.probeSet {
 		h.notifyProbeLocked()
 	}
+	if cfg.sshSince > 0 && cfg.sshSince != h.sshSince {
+		h.sshSince = cfg.sshSince
+		h.notifySSHLocked()
+	}
 	if !h.running {
 		h.running = true
 		go h.run()
@@ -541,6 +563,10 @@ func (h *reportHub) update(id int, cfg reportConfig) {
 		watcher.cfg.probeSet = true
 		h.probe = cfg.probe
 		h.notifyProbeLocked()
+	}
+	if cfg.sshSince > 0 && cfg.sshSince != h.sshSince {
+		h.sshSince = cfg.sshSince
+		h.notifySSHLocked()
 	}
 	h.notifyLocked()
 }
@@ -587,6 +613,8 @@ func (h *reportHub) run() {
 	go h.watchPackageEvents(eventCtx)
 	go h.runMetricsSamplers(eventCtx)
 	go h.runProbeSampler(eventCtx)
+	go h.runSSHSessionSampler(eventCtx)
+	go h.runSSHBackfill(eventCtx)
 	for {
 		watchers := h.snapshot()
 		if len(watchers) == 0 {
@@ -1126,6 +1154,9 @@ func normalizeReportConfig(msg *agentpb.AgentReportControl) reportConfig {
 		return reportConfig{}
 	}
 	out := reportConfig{serverID: msg.ServerId}
+	if msg.SshSessionsSinceUnix > 0 {
+		out.sshSince = msg.SshSessionsSinceUnix
+	}
 	if msg.Config != nil {
 		out.metricsInterval = time.Duration(msg.Config.MetricsIntervalSeconds) * time.Second
 		out.containerInterval = time.Duration(msg.Config.ContainersIntervalSeconds) * time.Second

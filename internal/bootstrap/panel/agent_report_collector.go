@@ -38,6 +38,15 @@ type metricsFacilityReporter interface {
 	IntervalSeconds() int
 }
 
+// sshAccessReporter 是安全库 SSH 访问记录在 Agent 上报链路中的最小接口。
+// 回填游标由安全库持久化，Panel 重启或 Agent 重连后继续从上次位置补。
+type sshAccessReporter interface {
+	BackfillSince(ctx context.Context, serverID string) (time.Time, error)
+	ApplyLive(ctx context.Context, serverID string, snapshot agentcontract.SSHSnapshot) error
+	ApplyHistory(ctx context.Context, serverID string, history agentcontract.SSHSessionHistory) error
+	ApplyFailures(ctx context.Context, serverID string, failures agentcontract.SSHFailures) error
+}
+
 type agentReportCollector struct {
 	writers maintenance.Gate
 	servers interface {
@@ -57,6 +66,8 @@ type agentReportCollector struct {
 		SaveReportedUpdates(context.Context, string, []linux.PackageUpdate) error
 	}
 	probes networkProbeReporter
+	// sshAccess 落库 SSH 会话/失败尝试；nil 表示未启用（测试或降级）。
+	sshAccess sshAccessReporter
 	// metricsFacility 决定每台服务器是否采集指标以及采集间隔；未注入时按
 	// enabled=true、默认 60s 处理（仅测试/降级）。
 	metricsFacility metricsFacilityReporter
@@ -104,6 +115,15 @@ func newAgentReportCollector(serverSvc interface {
 		c.reportStreams = recorder
 	}
 	return c
+}
+
+// SetSSHAccess 注入 SSH 访问记录仓储。未注入时上报中的 SSH 字段被忽略，
+// 既不影响指标/容器链路，也保持既有测试的零值可用性。
+func (c *agentReportCollector) SetSSHAccess(reporter sshAccessReporter) {
+	if c == nil {
+		return
+	}
+	c.sshAccess = reporter
 }
 
 func (c *agentReportCollector) Start(ctx context.Context) {
@@ -381,7 +401,25 @@ func (c *agentReportCollector) reportStreamConfig(ctx context.Context, srv serve
 		MetricsIntervalSeconds:    metricsInterval,
 		ContainersIntervalSeconds: c.settings.Runtime().ContainerReportIntervalSeconds,
 		Probe:                     c.reportProbeConfig(ctx, srv.ID),
+		SshSessionsSince:          c.sshBackfillSince(ctx, srv.ID),
 	}
+}
+
+// sshBackfillSince 读取安全库游标；失败时返回 0，让 Agent 回退到 now-7d，
+// 不让一次游标查询失败阻断整个上报流。
+func (c *agentReportCollector) sshBackfillSince(ctx context.Context, serverID string) int64 {
+	if c.sshAccess == nil {
+		return 0
+	}
+	since, err := c.sshAccess.BackfillSince(ctx, serverID)
+	if err != nil {
+		logging.From(ctx).Warn("agent SSH backfill cursor read failed", zap.String("server_id", serverID), zap.Error(err))
+		return 0
+	}
+	if since.IsZero() {
+		return 0
+	}
+	return since.Unix()
 }
 
 func (c *agentReportCollector) logStreamStatus(entry *agentReportStream, connected bool, msg string) {
@@ -626,6 +664,23 @@ func (c *agentReportCollector) handleReport(ctx context.Context, serverID string
 	// 结果不会被空报告清空。
 	if report.HasProbes {
 		c.saveProbeResults(ctx, serverID, report.SampleAt, report.Probes)
+	}
+	if c.sshAccess != nil {
+		if report.SSHSessions != nil {
+			if err := c.sshAccess.ApplyLive(ctx, serverID, *report.SSHSessions); err != nil {
+				logging.From(ctx).Warn("agent SSH session report save failed", zap.String("server_id", serverID), zap.Error(err))
+			}
+		}
+		if report.SSHHistory != nil {
+			if err := c.sshAccess.ApplyHistory(ctx, serverID, *report.SSHHistory); err != nil {
+				logging.From(ctx).Warn("agent SSH history report save failed", zap.String("server_id", serverID), zap.Error(err))
+			}
+		}
+		if report.SSHFailures != nil {
+			if err := c.sshAccess.ApplyFailures(ctx, serverID, *report.SSHFailures); err != nil {
+				logging.From(ctx).Warn("agent SSH failure report save failed", zap.String("server_id", serverID), zap.Error(err))
+			}
+		}
 	}
 	return nil
 }

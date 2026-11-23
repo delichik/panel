@@ -85,9 +85,16 @@ export interface RuntimeGeneralUpdate {
 }
 
 /** PUT /settings/runtime/security：安全分区。 */
+export interface RuntimeSSHAccessSettings {
+  successRetentionDays: number;
+  failureRetentionDays: number;
+}
+
 export interface RuntimeSecurityUpdate {
   tokenExpiration: string;
   remoteCommandTimeoutSeconds: number;
+  /** Optional so older payloads/tests stay valid. */
+  sshAccess?: RuntimeSSHAccessSettings;
 }
 
 /** PUT /settings/runtime/certificates：证书/Panel HTTPS 分区。 */
@@ -112,6 +119,8 @@ export interface RuntimeSettings {
   language: string;
   logLevel: string;
   remoteCommandTimeoutSeconds: number;
+  /** SSH access retention; optional so older payloads/tests stay valid. */
+  sshAccess?: RuntimeSSHAccessSettings;
   reconcileTraceEnabled: boolean;
   branding: RuntimeBrandingSettings;
   certificates: RuntimeCertificateSettings;

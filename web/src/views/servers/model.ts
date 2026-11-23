@@ -18,8 +18,8 @@ export const serverSystemSubtabs = ['agent', 'packages'] as const;
 
 export type ServerSystemSubtab = (typeof serverSystemSubtabs)[number];
 
-/** 网络与安全 tab 内的子视图；探测结果已移到设施页/概览，这里只保留防火墙与 Fail2Ban。 */
-export const serverNetworkSubtabs = ['firewall', 'fail2ban'] as const;
+/** 网络与安全 tab 内的子视图；探测结果已移到设施页/概览，这里保留防火墙、SSH 访问与 Fail2Ban。 */
+export const serverNetworkSubtabs = ['firewall', 'ssh-access', 'fail2ban'] as const;
 
 export type ServerNetworkSubtab = (typeof serverNetworkSubtabs)[number];
 
@@ -75,7 +75,7 @@ export function normalizeServerNetworkSubtab(value: unknown, legacyTab?: unknown
   if (fromSubtab === 'probes') return 'firewall';
   if ((serverNetworkSubtabs as readonly string[]).includes(fromSubtab)) return fromSubtab as ServerNetworkSubtab;
   if (String(legacyTab ?? '') === 'probes') return 'firewall';
-  if (legacyTab === 'firewall' || legacyTab === 'fail2ban') return legacyTab;
+  if (legacyTab === 'firewall' || legacyTab === 'ssh-access' || legacyTab === 'fail2ban') return legacyTab;
   return 'firewall';
 }
 

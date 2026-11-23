@@ -39,6 +39,8 @@ var coordTables = []string{}
 
 var metricsTables = []string{"metrics_snapshots"}
 
+var securityTables = []string{"ssh_access_sessions", "ssh_access_attempts"}
+
 func openMigratedStore(t *testing.T) *database.Store {
 	t.Helper()
 	dir := t.TempDir()
@@ -198,6 +200,7 @@ func TestTakeoverAllLegacyTables(t *testing.T) {
 		{"log", store.LogDB(), logTables},
 		{"coord", store.CoordDB(), coordTables},
 		{"metrics", store.MetricsDB(), metricsTables},
+		{"security", store.SecurityDB(), securityTables},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -297,6 +300,7 @@ func TestExtraIndexDDLCoversInexpressibleIndexes(t *testing.T) {
 		{"log", store.LogDB(), logTables},
 		{"coord", store.CoordDB(), coordTables},
 		{"metrics", store.MetricsDB(), metricsTables},
+		{"security", store.SecurityDB(), securityTables},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -404,6 +408,9 @@ func TestModelDDLMatchesLegacyColumns(t *testing.T) {
 	}
 	for _, tb := range metricsTables {
 		tableDB[tb] = store.MetricsDB()
+	}
+	for _, tb := range securityTables {
+		tableDB[tb] = store.SecurityDB()
 	}
 	for _, table := range sortedStrings(allModelTables()) {
 		legacy := tableInfo(tableDB[table], table)

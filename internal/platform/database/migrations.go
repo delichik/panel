@@ -38,6 +38,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 		{s.logDB, models.LogModels()},
 		{s.coordDB, models.CoordinationModels()},
 		{s.metricsDB, models.MetricsModels()},
+		{s.securityDB, models.SecurityModels()},
 	}
 	for _, pass := range dbs {
 		if _, err := orm.AutoMigrateModels(ctx, pass.db, pass.models, orm.WithDestructive(true)); err != nil {

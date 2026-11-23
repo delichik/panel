@@ -469,11 +469,13 @@ func TestRuntimePartitionUpdatesOnlyTouchTheirSection(t *testing.T) {
 				return svc.UpdateSecurity(ctx, RuntimeSecurityUpdate{
 					TokenExpiration:             TokenExpiration30Days,
 					RemoteCommandTimeoutSeconds: 90,
+					SSHAccess:                   &RuntimeSSHAccessSettings{SuccessRetentionDays: 90, FailureRetentionDays: 7},
 				})
 			},
 			expect: func(base RuntimeSettings) RuntimeSettings {
 				base.TokenExpiration = TokenExpiration30Days
 				base.RemoteCommandTimeoutSeconds = 90
+				base.SSHAccess = RuntimeSSHAccessSettings{SuccessRetentionDays: 90, FailureRetentionDays: 7}
 				return base
 			},
 		},
@@ -653,5 +655,41 @@ func TestRuntimePartitionUpdateValidationErrorsAreStable(t *testing.T) {
 				t.Fatalf("rejected update changed persistent settings: %#v, want %#v", reloaded.Runtime(), baseline)
 			}
 		})
+	}
+}
+
+// TestRuntimeSSHAccessRetention 覆盖 SSH 访问记录保留期的合法范围与持久化读取。
+func TestRuntimeSSHAccessRetention(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	got, err := svc.UpdateSecurity(ctx, RuntimeSecurityUpdate{
+		TokenExpiration:             TokenExpiration1Hour,
+		RemoteCommandTimeoutSeconds: 30,
+		SSHAccess:                   &RuntimeSSHAccessSettings{SuccessRetentionDays: 3650, FailureRetentionDays: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SSHAccess.SuccessRetentionDays != 3650 || got.SSHAccess.FailureRetentionDays != 1 {
+		t.Fatalf("ssh access = %+v", got.SSHAccess)
+	}
+	if success, failure := svc.SSHAccessRetention(); success != 3650 || failure != 1 {
+		t.Fatalf("retention = %d/%d", success, failure)
+	}
+	for _, input := range []RuntimeSSHAccessSettings{
+		{SuccessRetentionDays: 0, FailureRetentionDays: 3},
+		{SuccessRetentionDays: 30, FailureRetentionDays: 0},
+		{SuccessRetentionDays: 3651, FailureRetentionDays: 3},
+		{SuccessRetentionDays: 30, FailureRetentionDays: 3651},
+	} {
+		_, err := svc.UpdateSecurity(ctx, RuntimeSecurityUpdate{
+			TokenExpiration:             TokenExpiration1Hour,
+			RemoteCommandTimeoutSeconds: 30,
+			SSHAccess:                   &input,
+		})
+		var panelErr *panelerr.Error
+		if !errors.As(err, &panelErr) || panelErr.Code != "invalid_ssh_access_retention" {
+			t.Fatalf("input %+v err = %v", input, err)
+		}
 	}
 }

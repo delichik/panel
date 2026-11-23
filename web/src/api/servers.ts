@@ -1,6 +1,7 @@
 import { apiClient, type ApiRequestOptions } from './client';
 import type { OperationAccepted, ServerDto, ServerProbeInput, ServerProbeResult, ServerSaveInput } from '@/types/servers';
 import type { NetworkProbeServerResults } from '@/types/networkProbe';
+import type { SshAccessAttemptPage, SshAccessQuery, SshAccessSessionPage } from '@/types/sshAccess';
 import type { ListPage } from '@/types/pagination';
 
 export interface MetricsPoint {
@@ -116,6 +117,18 @@ export const serversApi = {
   /** 24h 历史桶查询：服务端按 bucketSeconds 聚合，并返回最新原始样本 latest。 */
   metricsBucketed(id: string, range: ServerMetricsRange, bucketSeconds: number, options?: ApiRequestOptions) {
     return apiClient.get<ServerMetricsSeries>(`/servers/${encodeURIComponent(id)}/metrics?range=${encodeURIComponent(range)}&bucket=${bucketSeconds}`, options);
+  },
+  /** 该服务器上成功登录的 SSH 会话；state=open 只看在线会话。 */
+  sshAccessSessions(id: string, query: SshAccessQuery & { state?: 'open' | 'closed' | 'all' } = {}, options?: ApiRequestOptions) {
+    const params = new URLSearchParams();
+    Object.entries(query).forEach(([name, value]) => { if (value !== undefined && value !== '') params.set(name, String(value)); });
+    return apiClient.get<SshAccessSessionPage>(`/servers/${encodeURIComponent(id)}/ssh-access/sessions${params.size ? `?${params}` : ''}`, options);
+  },
+  /** 该服务器上的 SSH 失败登录尝试，逐条保留精确时间。 */
+  sshAccessAttempts(id: string, query: SshAccessQuery = {}, options?: ApiRequestOptions) {
+    const params = new URLSearchParams();
+    Object.entries(query).forEach(([name, value]) => { if (value !== undefined && value !== '') params.set(name, String(value)); });
+    return apiClient.get<SshAccessAttemptPage>(`/servers/${encodeURIComponent(id)}/ssh-access/attempts${params.size ? `?${params}` : ''}`, options);
   },
   /** 该节点作为探测源的最新结果与目标表；includeHistory 时附带最近 24h 历史。 */
   networkProbes(id: string, options?: ApiRequestOptions, includeHistory = false) {

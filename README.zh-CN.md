@@ -125,9 +125,10 @@ task run:web
 | `logDatabase` | 日志与事件索引 SQLite 数据库 | `data/db/log.db` |
 | `coordinationDatabase` | 协调 SQLite 数据库 | `data/db/coordination.db` |
 | `metricsDatabase` | 指标时间序列 SQLite 数据库 | `data/db/metrics.db` |
+| `securityDatabase` | SSH 访问审计 SQLite 数据库 | app 库同目录 `security.db` |
 | `certificates.acmeDirectoryUrl` | ACME 目录地址 | Let's Encrypt 正式环境 |
 
-环境变量：`PANEL_CONFIG`、`PANEL_LISTEN_ADDRESS`、`PANEL_ADMIN_USERNAME`、`PANEL_ADMIN_DISPLAY_NAME`、`PANEL_ADMIN_PASSWORD`、`PANEL_ADMIN_PASSWORD_HASH`、`PANEL_DATA_ROOT`、`PANEL_APP_DATABASE`、`PANEL_LOG_DATABASE`（兼容旧名 `PANEL_TASK_DATABASE`）、`PANEL_COORDINATION_DATABASE`、`PANEL_METRICS_DATABASE`、`PANEL_CERT_ACME_DIRECTORY_URL`，以及用于 Vite 代理的 `PANEL_WEB_PROXY_TARGET`。
+环境变量：`PANEL_CONFIG`、`PANEL_LISTEN_ADDRESS`、`PANEL_ADMIN_USERNAME`、`PANEL_ADMIN_DISPLAY_NAME`、`PANEL_ADMIN_PASSWORD`、`PANEL_ADMIN_PASSWORD_HASH`、`PANEL_DATA_ROOT`、`PANEL_APP_DATABASE`、`PANEL_LOG_DATABASE`（兼容旧名 `PANEL_TASK_DATABASE`）、`PANEL_COORDINATION_DATABASE`、`PANEL_METRICS_DATABASE`、`PANEL_SECURITY_DATABASE`、`PANEL_CERT_ACME_DIRECTORY_URL`，以及用于 Vite 代理的 `PANEL_WEB_PROXY_TARGET`。
 
 Token 有效期、命令超时、外观、Agent 下载、自动更新、镜像仓库和备份选项等运行时设置保存在应用数据库中，通过界面的 **设置** 管理。
 

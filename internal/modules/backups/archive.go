@@ -61,6 +61,7 @@ func buildArchive(cfg ArchiveConfig, encrypted bool) ([]byte, Manifest, error) {
 		{cfg.LogDatabase, "databases/log.db"},
 		{cfg.CoordinationDatabase, "databases/coordination.db"},
 		{cfg.MetricsDatabase, "databases/metrics.db"},
+		{cfg.SecurityDatabase, "databases/security.db"},
 	} {
 		if item.path == "" {
 			continue
@@ -283,5 +284,6 @@ type ArchiveConfig struct {
 	LogDatabase          string
 	CoordinationDatabase string
 	MetricsDatabase      string
+	SecurityDatabase     string
 	PanelVersion         string
 }

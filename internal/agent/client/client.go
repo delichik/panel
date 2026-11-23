@@ -57,6 +57,9 @@ type ReportConfig struct {
 	MetricsIntervalSeconds    int
 	ContainersIntervalSeconds int
 	Probe                     ProbeReportConfig
+	// SshSessionsSince 是 wtmp/btmp 回填起点（Unix 秒），来自安全库游标；
+	// 0 表示不下发，由 Agent 回退到 now-7d。
+	SshSessionsSince int64
 }
 
 // ProbeReportConfig 是 Panel 下发给单个探测节点的网络探测任务。Enabled 为
@@ -103,6 +106,11 @@ type AgentReport struct {
 	// Probes 只在 HasProbes 为真时可信；旧 Agent 不上报探测结果。
 	Probes    []ProbeResult
 	HasProbes bool
+	// SSH 访问记录：nil 表示本次上报没有对应字段（旧 Agent），不能当成空集
+	// 覆盖已有数据。
+	SSHSessions *agentcontract.SSHSnapshot
+	SSHHistory  *agentcontract.SSHSessionHistory
+	SSHFailures *agentcontract.SSHFailures
 	// Replayed 表示该指标样本来自 Agent 本地补报缓冲，Panel 跳过整点对齐校验。
 	Replayed bool
 }
@@ -645,7 +653,8 @@ func (c *GRPCClient) StreamReports(ctx context.Context, endpoint string, config 
 				MetricsIntervalSeconds:    int32(cfg.MetricsIntervalSeconds),
 				ContainersIntervalSeconds: int32(cfg.ContainersIntervalSeconds),
 			},
-			Probe: probe,
+			Probe:                probe,
+			SshSessionsSinceUnix: cfg.SshSessionsSince,
 		})
 	}
 	go func() {
@@ -726,6 +735,18 @@ func (c *GRPCClient) StreamReports(ctx context.Context, endpoint string, config 
 					Error:             item.Error,
 				})
 			}
+		}
+		if msg.SshSessions != nil {
+			snapshot := agentrpc.GoSSHSnapshot(msg.SshSessions)
+			report.SSHSessions = &snapshot
+		}
+		if msg.SshSessionHistory != nil {
+			history := agentrpc.GoSSHHistory(msg.SshSessionHistory)
+			report.SSHHistory = &history
+		}
+		if msg.SshFailedAttempts != nil {
+			failures := agentrpc.GoSSHFailures(msg.SshFailedAttempts)
+			report.SSHFailures = &failures
 		}
 		if handle != nil {
 			if err := handle(ctx, report); err != nil {

@@ -17,17 +17,19 @@ import (
 )
 
 type Store struct {
-	appDB     *sql.DB
-	logDB     *sql.DB
-	coordDB   *sql.DB
-	metricsDB *sql.DB
+	appDB      *sql.DB
+	logDB      *sql.DB
+	coordDB    *sql.DB
+	metricsDB  *sql.DB
+	securityDB *sql.DB
 }
 
 func Open(cfg config.Config) (*Store, error) {
 	if err := migrateLegacyLogDatabasePath(cfg.LogDatabase); err != nil {
 		return nil, err
 	}
-	for _, p := range []string{cfg.AppDatabase, cfg.LogDatabase, cfg.CoordinationDatabase, cfg.MetricsDatabase} {
+	securityPath := cfg.SecurityDatabasePath()
+	for _, p := range []string{cfg.AppDatabase, cfg.LogDatabase, cfg.CoordinationDatabase, cfg.MetricsDatabase, securityPath} {
 		if dir := databaseDir(p); dir != "" {
 			if err := os.MkdirAll(dir, 0700); err != nil {
 				return nil, err
@@ -59,11 +61,20 @@ func Open(cfg config.Config) (*Store, error) {
 		_ = appDB.Close()
 		return nil, err
 	}
+	securityDB, err := sql.Open("sqlite", sqliteDSN(securityPath))
+	if err != nil {
+		_ = metricsDB.Close()
+		_ = coordDB.Close()
+		_ = logDB.Close()
+		_ = appDB.Close()
+		return nil, err
+	}
 	configureDB(appDB)
 	configureDB(logDB)
 	configureDB(coordDB)
 	configureDB(metricsDB)
-	s := &Store{appDB: appDB, logDB: logDB, coordDB: coordDB, metricsDB: metricsDB}
+	configureDB(securityDB)
+	s := &Store{appDB: appDB, logDB: logDB, coordDB: coordDB, metricsDB: metricsDB, securityDB: securityDB}
 	if err := s.Migrate(context.Background()); err != nil {
 		_ = s.Close()
 		return nil, err
@@ -187,6 +198,9 @@ func (s *Store) LogDB() *sql.DB     { return s.logDB }
 func (s *Store) CoordDB() *sql.DB   { return s.coordDB }
 func (s *Store) MetricsDB() *sql.DB { return s.metricsDB }
 
+// SecurityDB 返回安全日志库（SSH 访问记录）。
+func (s *Store) SecurityDB() *sql.DB { return s.securityDB }
+
 func (s *Store) Close() error {
 	if s == nil {
 		return nil
@@ -207,6 +221,11 @@ func (s *Store) Close() error {
 	}
 	if s.metricsDB != nil {
 		if e := s.metricsDB.Close(); err == nil {
+			err = e
+		}
+	}
+	if s.securityDB != nil {
+		if e := s.securityDB.Close(); err == nil {
 			err = e
 		}
 	}

@@ -58,6 +58,10 @@ const (
 	// ping 目标并在 report stream 回报延迟/丢包。它是可选能力，旧 Agent 缺失
 	// 只影响网络探测本身，不影响兼容性判定。
 	CapabilityNetworkProbe = "network-probe"
+	// CapabilitySshSessions 表示 Agent 支持上报 SSH 登录会话、wtmp 回填与
+	// btmp 失败尝试。它与网络探测一样是可选能力：旧 Agent 缺失只影响 SSH
+	// 访问记录，不影响兼容性判定与 RequiredCapabilities。
+	CapabilitySshSessions = "ssh-sessions"
 
 	PrepareRestartStateHoldOn = "holdon"
 	PrepareRestartStateReady  = "ready"
@@ -539,4 +543,50 @@ type StorageMountStatus struct {
 	Mounted      bool
 	Writable     bool
 	Detail       string
+}
+
+// SSHSession 是一条当前在线登录会话（来自 utmp）。Kind 为 ssh/local。
+type SSHSession struct {
+	UserName      string    `json:"userName"`
+	TTY           string    `json:"tty"`
+	SourceHost    string    `json:"sourceHost,omitempty"`
+	SourceAddress string    `json:"sourceAddress,omitempty"`
+	LoginAt       time.Time `json:"loginAt"`
+	PID           int       `json:"pid"`
+	Kind          string    `json:"kind"`
+}
+
+// SSHSessionHistoryItem 是一条 wtmp 历史会话；LogoutAt 为零表示未配对。
+type SSHSessionHistoryItem struct {
+	SSHSession
+	LogoutAt time.Time `json:"logoutAt,omitempty"`
+}
+
+// SSHFailure 是一条 btmp 失败登录尝试，逐条保留精确时间与来源。
+type SSHFailure struct {
+	UserName      string    `json:"userName"`
+	SourceHost    string    `json:"sourceHost,omitempty"`
+	SourceAddress string    `json:"sourceAddress,omitempty"`
+	AttemptAt     time.Time `json:"attemptAt"`
+	PID           int       `json:"pid"`
+}
+
+// SSHSnapshot 是一次 utmp 在线会话快照。
+type SSHSnapshot struct {
+	Items     []SSHSession `json:"items"`
+	SampledAt time.Time    `json:"sampledAt"`
+}
+
+// SSHSessionHistory 是一次 wtmp 回填结果；Truncated 表示达到单批上限。
+type SSHSessionHistory struct {
+	Items     []SSHSessionHistoryItem `json:"items"`
+	Since     time.Time               `json:"since"`
+	Truncated bool                    `json:"truncated"`
+}
+
+// SSHFailures 是一次 btmp 回填结果；Truncated 表示达到单批上限。
+type SSHFailures struct {
+	Items     []SSHFailure `json:"items"`
+	Since     time.Time    `json:"since"`
+	Truncated bool         `json:"truncated"`
 }

@@ -35,20 +35,20 @@ func TestTranslateLocalePreservesCloudflareAPIErrorDetails(t *testing.T) {
 
 func TestTranslateLocaleCoversReverseProxyFacilityValidation(t *testing.T) {
 	tests := map[string]string{
-		"facility_domain_servers_required":              "每个域名必须至少选择一个入口节点",
-		"facility_upstream_domain_application_conflict": "上游模式域名由反向代理设施独占，不能与普通应用共用",
-		"facility_reverse_proxy_config_changed":         "反向代理设施配置已被其他操作修改，请重新加载后再保存",
-		"reverse_proxy_header_name_invalid":             "自定义 Header 名称无效",
-		"facility_custom_directives_invalid":            "自定义 Nginx 指令无效",
-		"facility_http_port_mode_invalid":               "80 端口策略必须为保留服务或跳转到 HTTPS",
-		"facility_proxy_image_unavailable":              "入口代理镜像状态不可用",
-		"facility_proxy_image_update_in_progress":       "入口代理镜像更新正在进行",
-		"facility_proxy_image_rollback_failed":           "入口代理镜像回滚失败",
-		"facility_server_tokens_invalid":                 "server_tokens 必须为 on 或 off",
-		"facility_client_max_body_size_invalid":          "client_max_body_size 格式或范围无效",
-		"facility_tls_min_version_invalid":               "TLS 最低版本必须为 1.2 或 1.3",
-		"facility_image_update_interval_invalid":         "镜像更新节点间隔必须在 0 到 600 秒之间",
-		"application_reverse_proxy_http_port_mode_invalid": "反向代理 80 端口策略必须为 serve 或 redirect",
+		"facility_domain_servers_required":                       "每个域名必须至少选择一个入口节点",
+		"facility_upstream_domain_application_conflict":          "上游模式域名由反向代理设施独占，不能与普通应用共用",
+		"facility_reverse_proxy_config_changed":                  "反向代理设施配置已被其他操作修改，请重新加载后再保存",
+		"reverse_proxy_header_name_invalid":                      "自定义 Header 名称无效",
+		"facility_custom_directives_invalid":                     "自定义 Nginx 指令无效",
+		"facility_http_port_mode_invalid":                        "80 端口策略必须为保留服务或跳转到 HTTPS",
+		"facility_proxy_image_unavailable":                       "入口代理镜像状态不可用",
+		"facility_proxy_image_update_in_progress":                "入口代理镜像更新正在进行",
+		"facility_proxy_image_rollback_failed":                   "入口代理镜像回滚失败",
+		"facility_server_tokens_invalid":                         "server_tokens 必须为 on 或 off",
+		"facility_client_max_body_size_invalid":                  "client_max_body_size 格式或范围无效",
+		"facility_tls_min_version_invalid":                       "TLS 最低版本必须为 1.2 或 1.3",
+		"facility_image_update_interval_invalid":                 "镜像更新节点间隔必须在 0 到 600 秒之间",
+		"application_reverse_proxy_http_port_mode_invalid":       "反向代理 80 端口策略必须为 serve 或 redirect",
 		"application_reverse_proxy_client_max_body_size_invalid": "反向代理请求体上限格式或范围无效",
 	}
 	for code, want := range tests {
@@ -65,6 +65,10 @@ func TestTranslateLocaleCoversAutoUpdateValidation(t *testing.T) {
 		"auto_update_disabled":              "自动更新已关闭",
 		"auto_update_unavailable":           "自动更新服务不可用",
 		"invalid_image_registry_endpoint":   "镜像仓库地址必须为不带协议/路径/凭据的 host 或 host:port",
+		"invalid_ssh_access_retention":      "SSH 访问保留天数必须在 1 到 3650 之间",
+		"ssh_access_state_invalid":          "SSH 访问状态必须为 open、closed 或 all",
+		"ssh_access_page_invalid":           "SSH 访问分页参数无效",
+		"ssh_access_time_invalid":           "SSH 访问时间参数无效",
 		"invalid_image_registry_scheme":     "镜像仓库协议必须为 http 或 https",
 	}
 	for code, want := range tests {

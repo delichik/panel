@@ -621,3 +621,162 @@ func GoDockerNetwork(in *agentpb.DockerNetwork) agentcontract.DockerNetwork {
 	return goDockerNetwork(in)
 }
 func GoDockerVolume(in *agentpb.DockerVolume) agentcontract.DockerVolume { return goDockerVolume(in) }
+
+// pbSSHSession 把采集包的一条在线会话转换为协议消息。
+func pbSSHSession(in agentcontract.SSHSession) *agentpb.AgentSshSession {
+	return &agentpb.AgentSshSession{
+		UserName:      in.UserName,
+		Tty:           in.TTY,
+		SourceHost:    in.SourceHost,
+		SourceAddress: in.SourceAddress,
+		LoginUnix:     in.LoginAt.Unix(),
+		Pid:           int32(in.PID),
+		Kind:          in.Kind,
+	}
+}
+
+// pbSSHSnapshot 转换在线会话快照；sampled_at 由 Agent 采样时刻决定。
+func pbSSHSnapshot(in agentcontract.SSHSnapshot) *agentpb.AgentSshSnapshot {
+	out := &agentpb.AgentSshSnapshot{SampledUnix: in.SampledAt.Unix()}
+	out.Items = make([]*agentpb.AgentSshSession, 0, len(in.Items))
+	for _, item := range in.Items {
+		out.Items = append(out.Items, pbSSHSession(item))
+	}
+	return out
+}
+
+// pbSSHHistory 转换 wtmp 回填结果。logout_unix 为零表示未配对。
+func pbSSHHistory(in agentcontract.SSHSessionHistory) *agentpb.AgentSshHistory {
+	out := &agentpb.AgentSshHistory{
+		SinceUnix: in.Since.Unix(),
+		Truncated: in.Truncated,
+		Items:     make([]*agentpb.AgentSshHistoryItem, 0, len(in.Items)),
+	}
+	for _, item := range in.Items {
+		out.Items = append(out.Items, &agentpb.AgentSshHistoryItem{
+			UserName:      item.UserName,
+			Tty:           item.TTY,
+			SourceHost:    item.SourceHost,
+			SourceAddress: item.SourceAddress,
+			LoginUnix:     item.LoginAt.Unix(),
+			LogoutUnix:    logoutUnix(item.LogoutAt),
+			Pid:           int32(item.PID),
+			Kind:          item.Kind,
+		})
+	}
+	return out
+}
+
+// pbSSHFailures 转换 btmp 失败尝试；每条尝试独立保留 pid 与精确时间。
+func pbSSHFailures(in agentcontract.SSHFailures) *agentpb.AgentSshFailures {
+	out := &agentpb.AgentSshFailures{
+		SinceUnix: in.Since.Unix(),
+		Truncated: in.Truncated,
+		Items:     make([]*agentpb.AgentSshFailure, 0, len(in.Items)),
+	}
+	for _, item := range in.Items {
+		out.Items = append(out.Items, &agentpb.AgentSshFailure{
+			UserName:      item.UserName,
+			SourceHost:    item.SourceHost,
+			SourceAddress: item.SourceAddress,
+			AttemptUnix:   item.AttemptAt.Unix(),
+			Pid:           int32(item.PID),
+		})
+	}
+	return out
+}
+
+func logoutUnix(at time.Time) int64 {
+	if at.IsZero() {
+		return 0
+	}
+	return at.Unix()
+}
+
+func unixOrZero(sec int64) time.Time {
+	if sec <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(sec, 0)
+}
+
+// GoSSHSnapshot 把协议中的在线会话快照还原为共享模型；nil 输入返回零值。
+func GoSSHSnapshot(in *agentpb.AgentSshSnapshot) agentcontract.SSHSnapshot {
+	if in == nil {
+		return agentcontract.SSHSnapshot{}
+	}
+	out := agentcontract.SSHSnapshot{
+		Items:     make([]agentcontract.SSHSession, 0, len(in.Items)),
+		SampledAt: unixOrZero(in.SampledUnix),
+	}
+	for _, item := range in.Items {
+		if item == nil {
+			continue
+		}
+		out.Items = append(out.Items, agentcontract.SSHSession{
+			UserName:      item.UserName,
+			TTY:           item.Tty,
+			SourceHost:    item.SourceHost,
+			SourceAddress: item.SourceAddress,
+			LoginAt:       time.Unix(item.LoginUnix, 0),
+			PID:           int(item.Pid),
+			Kind:          item.Kind,
+		})
+	}
+	return out
+}
+
+// GoSSHHistory 把协议中的 wtmp 回填结果还原为共享模型。
+func GoSSHHistory(in *agentpb.AgentSshHistory) agentcontract.SSHSessionHistory {
+	if in == nil {
+		return agentcontract.SSHSessionHistory{}
+	}
+	out := agentcontract.SSHSessionHistory{
+		Items:     make([]agentcontract.SSHSessionHistoryItem, 0, len(in.Items)),
+		Since:     unixOrZero(in.SinceUnix),
+		Truncated: in.Truncated,
+	}
+	for _, item := range in.Items {
+		if item == nil {
+			continue
+		}
+		out.Items = append(out.Items, agentcontract.SSHSessionHistoryItem{
+			SSHSession: agentcontract.SSHSession{
+				UserName:      item.UserName,
+				TTY:           item.Tty,
+				SourceHost:    item.SourceHost,
+				SourceAddress: item.SourceAddress,
+				LoginAt:       unixOrZero(item.LoginUnix),
+				PID:           int(item.Pid),
+				Kind:          item.Kind,
+			},
+			LogoutAt: unixOrZero(item.LogoutUnix),
+		})
+	}
+	return out
+}
+
+// GoSSHFailures 把协议中的 btmp 失败尝试还原为共享模型。
+func GoSSHFailures(in *agentpb.AgentSshFailures) agentcontract.SSHFailures {
+	if in == nil {
+		return agentcontract.SSHFailures{}
+	}
+	out := agentcontract.SSHFailures{
+		Items:     make([]agentcontract.SSHFailure, 0, len(in.Items)),
+		Since:     unixOrZero(in.SinceUnix),
+		Truncated: in.Truncated,
+	}
+	for _, item := range in.Items {
+		if item == nil {
+			continue
+		}
+		out.Items = append(out.Items, agentcontract.SSHFailure{
+			UserName:      item.UserName,
+			SourceHost:    item.SourceHost,
+			SourceAddress: item.SourceAddress,
+			AttemptAt:     time.Unix(item.AttemptUnix, 0),
+			PID:           int(item.Pid),
+		})
+	}
+	return out
+}

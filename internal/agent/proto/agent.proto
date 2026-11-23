@@ -71,6 +71,9 @@ message AgentReportControl {
   AgentReportConfig config = 2;
   // 网络探测配置：设施网络探测节点列表变化时由 Panel 下发。旧 Agent 忽略该字段。
   AgentProbeConfig probe = 3;
+  // ssh_sessions_since_unix 是 wtmp/btmp 回填起点（Unix 秒）。Panel 按安全库
+  // 游标下发；旧 Agent 忽略该字段，新 Agent 缺省回退到 now-7d。
+  int64 ssh_sessions_since_unix = 4;
 }
 
 message AgentReport {
@@ -86,6 +89,59 @@ message AgentReport {
   // replayed 表示该指标样本是从本地补报缓冲重放的旧样本；Panel 跳过整点对齐
   // 校验并按 (server_id, sample_at) 幂等落库。
   bool replayed = 9;
+  // SSH 在线会话快照、wtmp 历史回填与 btmp 失败尝试。旧 Agent 不填这些字段，
+  // Panel 必须按“未知”处理，不能把缺席当成“没有会话”。
+  AgentSshSnapshot ssh_sessions = 10;
+  AgentSshHistory ssh_session_history = 11;
+  AgentSshFailures ssh_failed_attempts = 12;
+}
+
+message AgentSshSession {
+  string user_name = 1;
+  string tty = 2;
+  string source_host = 3;
+  string source_address = 4;
+  int64 login_unix = 5;
+  int32 pid = 6;
+  // kind: ssh（来源地址非空）| local（本机终端）| unknown。
+  string kind = 7;
+}
+
+message AgentSshSnapshot {
+  repeated AgentSshSession items = 1;
+  int64 sampled_unix = 2;
+}
+
+message AgentSshHistoryItem {
+  string user_name = 1;
+  string tty = 2;
+  string source_host = 3;
+  string source_address = 4;
+  int64 login_unix = 5;
+  // logout_unix 为 0 表示尚未配对到退出记录（仍在线或断线未记录）。
+  int64 logout_unix = 6;
+  int32 pid = 7;
+  string kind = 8;
+}
+
+message AgentSshHistory {
+  repeated AgentSshHistoryItem items = 1;
+  int64 since_unix = 2;
+  bool truncated = 3;
+}
+
+message AgentSshFailure {
+  string user_name = 1;
+  string source_host = 2;
+  string source_address = 3;
+  int64 attempt_unix = 4;
+  int32 pid = 5;
+}
+
+message AgentSshFailures {
+  repeated AgentSshFailure items = 1;
+  int64 since_unix = 2;
+  bool truncated = 3;
 }
 
 message AgentReportConfig {

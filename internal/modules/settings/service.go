@@ -168,6 +168,7 @@ type RuntimeUpdate struct {
 	Agent                          *RuntimeAgentSettings         `json:"agent"`
 	ImageRegistry                  *RuntimeImageRegistrySettings `json:"imageRegistry"`
 	AutoUpdate                     *RuntimeAutoUpdateSettings    `json:"autoUpdate"`
+	SSHAccess                      *RuntimeSSHAccessSettings     `json:"sshAccess"`
 }
 
 // RuntimeGeneralUpdate 是 PUT /api/v1/settings/runtime/general 的写入负载。
@@ -181,8 +182,15 @@ type RuntimeGeneralUpdate struct {
 
 // RuntimeSecurityUpdate 是 PUT /api/v1/settings/runtime/security 的写入负载。
 type RuntimeSecurityUpdate struct {
-	TokenExpiration             string `json:"tokenExpiration"`
-	RemoteCommandTimeoutSeconds int    `json:"remoteCommandTimeoutSeconds"`
+	TokenExpiration             string                    `json:"tokenExpiration"`
+	RemoteCommandTimeoutSeconds int                       `json:"remoteCommandTimeoutSeconds"`
+	SSHAccess                   *RuntimeSSHAccessSettings `json:"sshAccess,omitempty"`
+}
+
+// RuntimeSSHAccessSettings 是 SSH 访问记录的保留期（天）。
+type RuntimeSSHAccessSettings struct {
+	SuccessRetentionDays int `json:"successRetentionDays"`
+	FailureRetentionDays int `json:"failureRetentionDays"`
 }
 
 // RuntimeCertificatesUpdate 是 PUT /api/v1/settings/runtime/certificates 的
@@ -210,6 +218,7 @@ type RuntimeSettings struct {
 	Agent                          RuntimeAgentSettings         `json:"agent"`
 	ImageRegistry                  RuntimeImageRegistrySettings `json:"imageRegistry"`
 	AutoUpdate                     RuntimeAutoUpdateSettings    `json:"autoUpdate"`
+	SSHAccess                      RuntimeSSHAccessSettings     `json:"sshAccess"`
 	JWTSecret                      string                       `json:"-"`
 	JWTSecretConfigured            bool                         `json:"jwtSecretConfigured"`
 }
@@ -219,6 +228,8 @@ const (
 	RuntimeSettingLogLevel                             = "log.level"
 	RuntimeSettingJWTSecret                            = "jwtSecret"
 	RuntimeSettingRemoteCommandTimeoutSeconds          = "remoteCommandTimeoutSeconds"
+	RuntimeSettingSSHAccessSuccessRetentionDays        = "sshAccess.successRetentionDays"
+	RuntimeSettingSSHAccessFailureRetentionDays        = "sshAccess.failureRetentionDays"
 	RuntimeSettingReconcileTrace                       = "reconcile.trace"
 	RuntimeSettingBrandingLoginTitle                   = "branding.loginTitle"
 	RuntimeSettingBrandingLoginSubtitle                = "branding.loginSubtitle"
@@ -312,6 +323,12 @@ func NewService(db *sql.DB, cfg config.Config, options ...Option) (*Service, err
 		}
 	}
 	return s, nil
+}
+
+// SSHAccessRetention 返回 SSH 访问记录保留期，供 sshaccess 服务清理时读取。
+func (s *Service) SSHAccessRetention() (successDays, failureDays int) {
+	rt := s.Runtime()
+	return rt.SSHAccess.SuccessRetentionDays, rt.SSHAccess.FailureRetentionDays
 }
 
 func (s *Service) Runtime() RuntimeSettings {
@@ -432,6 +449,10 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 			LastRunSummary:  current.AutoUpdate.LastRunSummary,
 		}
 	}
+	sshAccessSettings := current.SSHAccess
+	if input.SSHAccess != nil {
+		sshAccessSettings = *input.SSHAccess
+	}
 	next := RuntimeSettings{
 		ListenAddress:                  current.ListenAddress,
 		AppDatabase:                    current.AppDatabase,
@@ -449,6 +470,7 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 		Agent:                          agentSettings,
 		ImageRegistry:                  imageRegistrySettings,
 		AutoUpdate:                     autoUpdateSettings,
+		SSHAccess:                      sshAccessSettings,
 		JWTSecret:                      current.JWTSecret,
 		JWTSecretConfigured:            current.JWTSecretConfigured,
 	}
@@ -492,6 +514,7 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 	s.rt.Panel = next.Panel
 	s.rt.Agent = next.Agent
 	s.rt.ImageRegistry = next.ImageRegistry
+	s.rt.SSHAccess = next.SSHAccess
 	// 只覆盖可编辑字段：并发的 RecordAutoUpdateLastRun 可能已写入更新的
 	// lastRun*，整组赋值会把运行态回退到本候选快照的旧值。
 	s.rt.AutoUpdate.AppsEnabled = next.AutoUpdate.AppsEnabled
@@ -522,6 +545,7 @@ func (s *Service) UpdateSecurity(ctx context.Context, input RuntimeSecurityUpdat
 	return s.Update(ctx, RuntimeUpdate{
 		TokenExpiration:             input.TokenExpiration,
 		RemoteCommandTimeoutSeconds: input.RemoteCommandTimeoutSeconds,
+		SSHAccess:                   input.SSHAccess,
 	})
 }
 
@@ -871,6 +895,14 @@ func (s *Service) load(ctx context.Context) error {
 			if n, err := strconv.Atoi(value); err == nil {
 				next.RemoteCommandTimeoutSeconds = n
 			}
+		case RuntimeSettingSSHAccessSuccessRetentionDays:
+			if n, err := strconv.Atoi(value); err == nil {
+				next.SSHAccess.SuccessRetentionDays = n
+			}
+		case RuntimeSettingSSHAccessFailureRetentionDays:
+			if n, err := strconv.Atoi(value); err == nil {
+				next.SSHAccess.FailureRetentionDays = n
+			}
 		case RuntimeSettingReconcileTrace:
 			next.ReconcileTraceEnabled = strings.TrimSpace(value) == "true"
 		case RuntimeSettingBrandingLoginTitle:
@@ -982,6 +1014,10 @@ func defaultRuntimeSettings(cfg config.Config) RuntimeSettings {
 			PackagesMode: AutoUpdatePackagesModeSecurity,
 			ScheduleTime: DefaultAutoUpdateScheduleTime,
 		},
+		SSHAccess: RuntimeSSHAccessSettings{
+			SuccessRetentionDays: 30,
+			FailureRetentionDays: 3,
+		},
 		JWTSecret:           jwtSecret,
 		JWTSecretConfigured: jwtSecret != "",
 	}
@@ -1010,6 +1046,8 @@ func runtimeValues(settings RuntimeSettings, includeJWT bool) map[string]string 
 		RuntimeSettingAutoUpdatePackagesEnabled:            strconv.FormatBool(settings.AutoUpdate.PackagesEnabled),
 		RuntimeSettingAutoUpdatePackagesMode:               settings.AutoUpdate.PackagesMode,
 		RuntimeSettingAutoUpdateScheduleTime:               settings.AutoUpdate.ScheduleTime,
+		RuntimeSettingSSHAccessSuccessRetentionDays:        strconv.Itoa(settings.SSHAccess.SuccessRetentionDays),
+		RuntimeSettingSSHAccessFailureRetentionDays:        strconv.Itoa(settings.SSHAccess.FailureRetentionDays),
 	}
 	if includeJWT {
 		values[RuntimeSettingJWTSecret] = settings.JWTSecret
@@ -1032,6 +1070,12 @@ func validateRuntimeSettings(settings RuntimeSettings) error {
 	}
 	if settings.RemoteCommandTimeoutSeconds < 1 {
 		return panelerr.Validation("invalid_remote_command_timeout", "Remote command timeout must be at least 1 second")
+	}
+	if settings.SSHAccess.SuccessRetentionDays < 1 || settings.SSHAccess.SuccessRetentionDays > 3650 {
+		return panelerr.Validation("invalid_ssh_access_retention", "SSH access success retention must be between 1 and 3650 days")
+	}
+	if settings.SSHAccess.FailureRetentionDays < 1 || settings.SSHAccess.FailureRetentionDays > 3650 {
+		return panelerr.Validation("invalid_ssh_access_retention", "SSH access failure retention must be between 1 and 3650 days")
 	}
 	if utf8.RuneCountInString(settings.Branding.LoginTitle) > 80 {
 		return panelerr.Validation("invalid_branding_login_title", "Login title must be 80 characters or fewer")

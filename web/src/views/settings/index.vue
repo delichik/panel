@@ -125,6 +125,8 @@ const form = reactive({
   language: 'zh-CN',
   logLevel: 'info',
   remoteCommandTimeoutSeconds: '45',
+  sshAccessSuccessRetentionDays: '30',
+  sshAccessFailureRetentionDays: '3',
   reconcileTraceEnabled: false,
   jwtSecret: '',
   loginTitle: '',
@@ -434,6 +436,8 @@ const fieldErrors = computed<Record<string, string>>(() => {
   const errors: Record<string, string> = {};
   if (integerField(form.containerReportIntervalSeconds, 1) === null) errors.containerReportIntervalSeconds = 'settingsPage.validationPositiveNumber';
   if (integerField(form.remoteCommandTimeoutSeconds, 1) === null) errors.remoteCommandTimeoutSeconds = 'settingsPage.validationPositiveNumber';
+  if (integerInRange(form.sshAccessSuccessRetentionDays, 1, 3650) === null) errors.sshAccessSuccessRetentionDays = 'settingsPage.validationSshAccessRetention';
+  if (integerInRange(form.sshAccessFailureRetentionDays, 1, 3650) === null) errors.sshAccessFailureRetentionDays = 'settingsPage.validationSshAccessRetention';
   if (integerField(form.dnsPropagationDelaySeconds, 0) === null) errors.dnsPropagationDelaySeconds = 'settingsPage.validationNonNegativeNumber';
   if (integerInRange(form.agentTransferTimeoutSeconds, agentTransferTimeoutMin, agentTransferTimeoutMax) === null) errors.agentTransferTimeoutSeconds = 'settingsPage.validationAgentTransferTimeout';
   if (normalizePanelDomain(form.panelDomain) === null) errors.panelDomain = 'settingsPage.validationPanelDomain';
@@ -503,7 +507,14 @@ function collectGeneralPayload(): RuntimeGeneralUpdate | null {
 function collectSecurityPayload(): RuntimeSecurityUpdate | null {
   const timeout = integerField(form.remoteCommandTimeoutSeconds, 1);
   if (timeout === null) return null;
-  return { tokenExpiration: form.tokenExpiration, remoteCommandTimeoutSeconds: timeout };
+  const successRetentionDays = integerInRange(form.sshAccessSuccessRetentionDays, 1, 3650);
+  const failureRetentionDays = integerInRange(form.sshAccessFailureRetentionDays, 1, 3650);
+  if (successRetentionDays === null || failureRetentionDays === null) return null;
+  return {
+    tokenExpiration: form.tokenExpiration,
+    remoteCommandTimeoutSeconds: timeout,
+    sshAccess: { successRetentionDays, failureRetentionDays },
+  };
 }
 
 function collectCertificatesPayload(): RuntimeCertificatesUpdate | null {
@@ -576,6 +587,8 @@ function refillGeneral(settings: RuntimeSettings) {
 function refillSecurity(settings: RuntimeSettings) {
   form.tokenExpiration = settings.tokenExpiration;
   form.remoteCommandTimeoutSeconds = String(settings.remoteCommandTimeoutSeconds);
+  form.sshAccessSuccessRetentionDays = String(settings.sshAccess?.successRetentionDays ?? 30);
+  form.sshAccessFailureRetentionDays = String(settings.sshAccess?.failureRetentionDays ?? 3);
 }
 
 function refillCertificates(settings: RuntimeSettings) {
@@ -726,6 +739,8 @@ watch(() => form.language, (value) => {
 }, syncWatch);
 watch(() => form.tokenExpiration, () => scheduleAutoSave(securityAutoSave, collectSecurityPayload), syncWatch);
 watch(() => form.remoteCommandTimeoutSeconds, () => scheduleAutoSave(securityAutoSave, collectSecurityPayload), syncWatch);
+watch(() => form.sshAccessSuccessRetentionDays, () => scheduleAutoSave(securityAutoSave, collectSecurityPayload), syncWatch);
+watch(() => form.sshAccessFailureRetentionDays, () => scheduleAutoSave(securityAutoSave, collectSecurityPayload), syncWatch);
 watch(() => form.panelDomain, () => scheduleAutoSave(certificatesAutoSave, collectCertificatesPayload), syncWatch);
 watch(() => form.panelTlsCertificateId, () => scheduleAutoSave(certificatesAutoSave, collectCertificatesPayload), syncWatch);
 watch(() => form.certificateEmail, () => scheduleAutoSave(certificatesAutoSave, collectCertificatesPayload), syncWatch);
@@ -821,6 +836,8 @@ function hydrate(settings: RuntimeSettings, variables: ServerVariableDefinition[
       language: settings.language,
       logLevel: settings.logLevel,
       remoteCommandTimeoutSeconds: String(settings.remoteCommandTimeoutSeconds),
+      sshAccessSuccessRetentionDays: String(settings.sshAccess?.successRetentionDays ?? 30),
+      sshAccessFailureRetentionDays: String(settings.sshAccess?.failureRetentionDays ?? 3),
       reconcileTraceEnabled: settings.reconcileTraceEnabled,
       jwtSecret: '',
       loginTitle: settings.branding.loginTitle,
@@ -1141,6 +1158,55 @@ onBeforeUnmount(() => {
               </template>
               <template v-if="fieldErrors.remoteCommandTimeoutSeconds" #hint>
                 <span id="settings-remote-timeout-error" class="text-danger">{{ t(fieldErrors.remoteCommandTimeoutSeconds) }}</span>
+              </template>
+            </SettingsCard>
+
+            <SettingsCard
+              :title="t('settingsPage.sshAccessSuccessRetention')"
+              :description="t('settingsPage.sshAccessRetentionHint')"
+              :invalid="Boolean(fieldErrors.sshAccessSuccessRetentionDays)"
+            >
+              <template #control>
+                <NumberBox
+                  id="settings-ssh-access-success-retention"
+                  v-permission="{ permission: 'settings.manage', effect: 'disable' }"
+                  :aria-label="t('settingsPage.sshAccessSuccessRetention')"
+                  :aria-describedby="fieldErrors.sshAccessSuccessRetentionDays ? 'settings-ssh-access-success-retention-error' : undefined"
+                  class="w-full sm:w-44"
+                  :min="1"
+                  :max="3650"
+                  :step="1"
+                  :invalid="Boolean(fieldErrors.sshAccessSuccessRetentionDays)"
+                  :model-value="toNumber(form.sshAccessSuccessRetentionDays)"
+                  @update:model-value="form.sshAccessSuccessRetentionDays = fromNumber($event)"
+                />
+              </template>
+              <template v-if="fieldErrors.sshAccessSuccessRetentionDays" #hint>
+                <span id="settings-ssh-access-success-retention-error" class="text-danger">{{ t(fieldErrors.sshAccessSuccessRetentionDays) }}</span>
+              </template>
+            </SettingsCard>
+
+            <SettingsCard
+              :title="t('settingsPage.sshAccessFailureRetention')"
+              :invalid="Boolean(fieldErrors.sshAccessFailureRetentionDays)"
+            >
+              <template #control>
+                <NumberBox
+                  id="settings-ssh-access-failure-retention"
+                  v-permission="{ permission: 'settings.manage', effect: 'disable' }"
+                  :aria-label="t('settingsPage.sshAccessFailureRetention')"
+                  :aria-describedby="fieldErrors.sshAccessFailureRetentionDays ? 'settings-ssh-access-failure-retention-error' : undefined"
+                  class="w-full sm:w-44"
+                  :min="1"
+                  :max="3650"
+                  :step="1"
+                  :invalid="Boolean(fieldErrors.sshAccessFailureRetentionDays)"
+                  :model-value="toNumber(form.sshAccessFailureRetentionDays)"
+                  @update:model-value="form.sshAccessFailureRetentionDays = fromNumber($event)"
+                />
+              </template>
+              <template v-if="fieldErrors.sshAccessFailureRetentionDays" #hint>
+                <span id="settings-ssh-access-failure-retention-error" class="text-danger">{{ t(fieldErrors.sshAccessFailureRetentionDays) }}</span>
               </template>
             </SettingsCard>
 

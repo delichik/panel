@@ -32,6 +32,7 @@ import (
 	"panel/internal/modules/servers"
 	"panel/internal/modules/servers/credential"
 	"panel/internal/modules/settings"
+	"panel/internal/modules/sshaccess"
 	"panel/internal/modules/systeminfo"
 	"panel/internal/modules/tasks"
 	"panel/internal/platform/cache"
@@ -302,6 +303,7 @@ func New(cfg config.Config) (*App, error) {
 		diagnostics.DatabaseSource{Name: "log", DB: store.LogDB(), Path: cfg.LogDatabase},
 		diagnostics.DatabaseSource{Name: "coord", DB: store.CoordDB(), Path: cfg.CoordinationDatabase},
 		diagnostics.DatabaseSource{Name: "metrics", DB: store.MetricsDB(), Path: cfg.MetricsDatabase},
+		diagnostics.DatabaseSource{Name: "security", DB: store.SecurityDB(), Path: cfg.SecurityDatabasePath()},
 	)
 
 	metricsCleanup := metrics.NewCleanupWorker(metricsSvc, func() metrics.CleanupSettings {
@@ -319,11 +321,14 @@ func New(cfg config.Config) (*App, error) {
 		LogDatabase:          cfg.LogDatabase,
 		CoordinationDatabase: cfg.CoordinationDatabase,
 		MetricsDatabase:      cfg.MetricsDatabase,
+		SecurityDatabase:     cfg.SecurityDatabasePath(),
 		PanelVersion:         systemSvc.Version().Version,
 	})
 	reportCollector := newAgentReportCollector(serverSvc, agentClient, settingsSvc, metricsSvc, containerSvc, packageSvc)
 	reportCollector.SetSystemLogs(eventWriter)
 	reportCollector.SetNetworkProbe(probeSvc)
+	sshAccessSvc := sshaccess.NewService(store.SecurityDB(), serverSvc, settingsSvc)
+	reportCollector.SetSSHAccess(sshAccessSvc)
 	// 指标采集范围与间隔由设施按服务器下发；未注入时采集链路回退 enabled/60s。
 	reportCollector.SetMetricsFacility(metricsFacility)
 	a := &App{
@@ -374,13 +379,14 @@ func New(cfg config.Config) (*App, error) {
 	autoUpdateSvc.StartPeriodic(periodicCtx)
 	appearanceSvc.StartPeriodic(periodicCtx)
 	metricsCleanup.Start(context.Background())
+	sshAccessSvc.Start(periodicCtx)
 	eventWriter.Start(context.Background())
 	reportCollector.Start(context.Background())
 	logging.From(initCtx).Info("background services started")
 	taskHandler := tasks.NewHandler(taskSvc, taskWorker)
 	taskHandler.SetExternalResolver(applicationSvc.ResolveExecutionManually)
 	eventsSvc := modevents.NewService(store.AppDB(), filepath.Join(cfg.DataRoot, "logs"))
-	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), taskHandler, metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), modevents.NewHandler(eventsSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), facilityapps.NewHandler(facilitySvc), networkprobe.NewHandler(probeSvc), metricsfacility.NewHandler(metricsFacility), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), appearance.NewHandler(appearanceSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc), backups.NewHandler(backupSvc))
+	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), taskHandler, metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), modevents.NewHandler(eventsSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), facilityapps.NewHandler(facilitySvc), networkprobe.NewHandler(probeSvc), metricsfacility.NewHandler(metricsFacility), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), appearance.NewHandler(appearanceSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc), backups.NewHandler(backupSvc), sshaccess.NewHandler(sshAccessSvc))
 	logging.From(initCtx).Info("application initialized")
 	keepCache = true
 	return a, nil
@@ -463,7 +469,7 @@ func applicationSaveSessionDir(cfg config.Config) string {
 	return filepath.Join(cfg.DataRoot, "tmp", "application-save-sessions")
 }
 
-func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, eventsH *modevents.Handler, applicationH *applications.Handler, containerH *containerization.Handler, facilityH *facilityapps.Handler, probeH *networkprobe.Handler, metricsFacilityH *metricsfacility.Handler, overviewH *overview.Handler, settingsH *settings.Handler, appearanceH *appearance.Handler, systemH *systeminfo.Handler, diagnosticsH *diagnostics.Handler, backupH *backups.Handler) {
+func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, eventsH *modevents.Handler, applicationH *applications.Handler, containerH *containerization.Handler, facilityH *facilityapps.Handler, probeH *networkprobe.Handler, metricsFacilityH *metricsfacility.Handler, overviewH *overview.Handler, settingsH *settings.Handler, appearanceH *appearance.Handler, systemH *systeminfo.Handler, diagnosticsH *diagnostics.Handler, backupH *backups.Handler, sshAccessH *sshaccess.Handler) {
 	a.mux.HandleFunc("GET /api/v1/setup/status", authH.SetupStatus)
 	a.mux.HandleFunc("POST /api/v1/setup", authH.Setup)
 	a.mux.HandleFunc("POST /api/v1/auth/login", authH.Login)
@@ -495,6 +501,7 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 	containerH.RegisterRoutes(a.mux, authenticated)
 	facilityH.RegisterRoutes(a.mux, authenticated)
 	probeH.RegisterRoutes(a.mux, authenticated)
+	sshAccessH.RegisterRoutes(a.mux, authenticated)
 	metricsFacilityH.RegisterRoutes(a.mux, authenticated)
 	applicationH.RegisterRoutes(a.mux, authenticated)
 	taskH.RegisterRoutes(a.mux, authenticated)
