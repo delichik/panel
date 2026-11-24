@@ -1,9 +1,12 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -27,8 +30,11 @@ const (
 	ExportsPath = "/etc/exports"
 	// RootsStatePath 记录当前已配置的存储根目录，用于限制删除/归档/建目录范围。
 	RootsStatePath = "/etc/panel-storage-roots.json"
+	// NFSHostsStatePath 记录当前已通过 UFW 放行 2049 端口的受管节点 IP 列表。
+	NFSHostsStatePath = "/etc/panel-storage-nfs-hosts.json"
 
-	archiveTimeout = 10 * time.Minute
+	archiveTimeout  = 10 * time.Minute
+	archiveMaxBytes = 512 << 20
 )
 var (
 	rootPattern = regexp.MustCompile(`^/[A-Za-z0-9._/-]+$`)
@@ -78,7 +84,7 @@ func ConfigureExport(ctx context.Context, root string, allowedHosts []string, en
 	if err := registerRoot(ctx, root); err != nil {
 		return err
 	}
-	return ensureNFSPortsAllowed(ctx)
+	return ensureNFSPortsAllowed(ctx, hosts)
 }
 
 // EnsureDirectory 创建存储分区目录（幂等），仅允许在已注册根目录之下。
@@ -86,8 +92,8 @@ func EnsureDirectory(ctx context.Context, pathValue string) error {
 	if !validPath(pathValue) {
 		return fmt.Errorf("invalid storage directory %q", pathValue)
 	}
-	if !underRegisteredRoot(pathValue) {
-		return fmt.Errorf("directory %q is not under a registered storage root", pathValue)
+	if _, err := resolveUnderRegisteredRoot(pathValue, false); err != nil {
+		return err
 	}
 	if err := run(ctx, "mkdir", "-p", pathValue); err != nil {
 		return fmt.Errorf("create storage directory %s: %w", pathValue, err)
@@ -100,17 +106,34 @@ func ArchiveDirectory(ctx context.Context, pathValue string) ([]byte, error) {
 	if !validPath(pathValue) {
 		return nil, fmt.Errorf("invalid storage directory %q", pathValue)
 	}
-	if !underRegisteredRoot(pathValue) {
-		return nil, fmt.Errorf("directory %q is not under a registered storage root", pathValue)
+	resolved, err := resolveUnderRegisteredRoot(pathValue, true)
+	if err != nil {
+		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, archiveTimeout)
 	defer cancel()
-	parent := filepath.Dir(pathValue)
-	base := filepath.Base(pathValue)
+	parent := filepath.Dir(resolved)
+	base := filepath.Base(resolved)
 	cmd := exec.CommandContext(ctx, "tar", "-czf", "-", "-C", parent, base)
-	out, err := cmd.CombinedOutput()
+	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("archive %s: %w: %s", pathValue, err, strings.TrimSpace(string(out)))
+		return nil, fmt.Errorf("archive %s: %w", pathValue, err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("archive %s: %w", pathValue, err)
+	}
+	out, readErr := io.ReadAll(io.LimitReader(stdoutPipe, archiveMaxBytes+1))
+	waitErr := cmd.Wait()
+	if readErr != nil {
+		return nil, fmt.Errorf("archive %s: %w", pathValue, readErr)
+	}
+	if int64(len(out)) > archiveMaxBytes {
+		return nil, fmt.Errorf("archive %s exceeds maximum size limit", pathValue)
+	}
+	if waitErr != nil {
+		return nil, fmt.Errorf("archive %s: %w: %s", pathValue, waitErr, strings.TrimSpace(stderr.String()))
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("archive %s is empty", pathValue)
@@ -123,10 +146,14 @@ func DeleteDirectory(ctx context.Context, pathValue string) error {
 	if !validPath(pathValue) {
 		return fmt.Errorf("invalid storage directory %q", pathValue)
 	}
-	if !underRegisteredRoot(pathValue) {
-		return fmt.Errorf("directory %q is not under a registered storage root", pathValue)
+	resolved, err := resolveUnderRegisteredRoot(pathValue, false)
+	if err != nil {
+		return err
 	}
-	if err := run(ctx, "rm", "-rf", "--", pathValue); err != nil {
+	if _, statErr := os.Lstat(resolved); errors.Is(statErr, os.ErrNotExist) {
+		return nil
+	}
+	if err := run(ctx, "rm", "-rf", "--", resolved); err != nil {
 		return fmt.Errorf("delete %s: %w", pathValue, err)
 	}
 	return nil
@@ -266,45 +293,139 @@ func ensureNFSServerRunning(ctx context.Context) error {
 	return fmt.Errorf("start nfs-kernel-server service: systemctl and service both failed")
 }
 
-// ensureNFSPortsAllowed 在 UFW 已安装时放行 NFS 端口（2049/tcp 与 2049/udp，
-// 幂等：规则已存在时 ufw allow 直接更新）。客户端挂载固定使用 NFSv4
-// （nfsvers=4），只需 2049/tcp，2049/udp 一并放行以兼容旧客户端。未安装
-// UFW 时跳过（无本地防火墙即视为放行）；云厂商安全组等 UFW 之外的防火墙
-// 需用户自行放行 2049。Panel 的导出同步周期会反复调用本函数，规则被删除
-// 后会自动加回。
-func ensureNFSPortsAllowed(ctx context.Context) error {
+// ensureNFSPortsAllowed 在 UFW 已安装时仅对允许的受管节点 IP 放行 NFS 端口
+// （2049/tcp 与 2049/udp），并清理旧版全局 2049 规则与已移除节点的规则。
+// 未安装 UFW 时跳过；云厂商安全组等 UFW 之外的防火墙需用户自行按节点 IP 放行 2049。
+func ensureNFSPortsAllowed(ctx context.Context, hosts []string) error {
 	if _, err := exec.LookPath("ufw"); err != nil {
 		return nil
 	}
+	targetIPs := resolveFirewallIPs(hosts)
 	return agentfirewall.WithMutationLock(func() error {
-		for _, spec := range []string{"2049/tcp", "2049/udp"} {
-			if _, err := exec.CommandContext(ctx, "ufw", "allow", spec).CombinedOutput(); err != nil {
-				return fmt.Errorf("allow nfs port %s: %w", spec, err)
+		// 尽力清理旧版全局放行规则，避免 2049 对公网开放。
+		removeLegacyGlobalNFSPortRules(ctx)
+
+		prevIPs := readNFSHosts()
+		targetSet := make(map[string]struct{}, len(targetIPs))
+		for _, ip := range targetIPs {
+			targetSet[ip] = struct{}{}
+		}
+		for _, oldIP := range prevIPs {
+			if _, keep := targetSet[oldIP]; keep {
+				continue
+			}
+			deleteNFSPortRulesForIP(ctx, oldIP)
+		}
+		for _, ip := range targetIPs {
+			for _, proto := range []string{"tcp", "udp"} {
+				if out, err := exec.CommandContext(ctx, "ufw", "allow", "from", ip, "to", "any", "port", "2049", "proto", proto).CombinedOutput(); err != nil {
+					return fmt.Errorf("allow nfs port 2049/%s for %s: %w: %s", proto, ip, err, strings.TrimSpace(string(out)))
+				}
 			}
 		}
-		return nil
+		return writeNFSHosts(targetIPs)
 	})
 }
 
-// removeNFSPortRules 尽力移除 NFS 端口放行规则。规则不存在时 ufw delete 会
-// 报 "Invalid update" 类错误，这里容忍该情况，与卸载"尽力清理"语义一致。
+// removeNFSPortRules 尽力移除所有托管的 NFS 端口放行规则（含旧版全局规则）。
 func removeNFSPortRules(ctx context.Context) error {
 	if _, err := exec.LookPath("ufw"); err != nil {
 		return nil
 	}
 	return agentfirewall.WithMutationLock(func() error {
-		for _, spec := range []string{"2049/tcp", "2049/udp"} {
-			out, err := exec.CommandContext(ctx, "ufw", "delete", "allow", spec).CombinedOutput()
-			if err != nil {
-				msg := strings.ToLower(string(out))
-				if strings.Contains(msg, "invalid update") || strings.Contains(msg, "couldn't") {
-					continue
-				}
-				return fmt.Errorf("remove nfs port rule %s: %w: %s", spec, err, strings.TrimSpace(string(out)))
-			}
+		removeLegacyGlobalNFSPortRules(ctx)
+		for _, ip := range readNFSHosts() {
+			deleteNFSPortRulesForIP(ctx, ip)
 		}
+		_ = writeNFSHosts(nil)
 		return nil
 	})
+}
+
+func removeLegacyGlobalNFSPortRules(ctx context.Context) {
+	for _, spec := range []string{"2049/tcp", "2049/udp"} {
+		_, _ = exec.CommandContext(ctx, "ufw", "delete", "allow", spec).CombinedOutput()
+	}
+}
+
+func deleteNFSPortRulesForIP(ctx context.Context, ip string) {
+	if net.ParseIP(ip) == nil {
+		return
+	}
+	for _, proto := range []string{"tcp", "udp"} {
+		_, _ = exec.CommandContext(ctx, "ufw", "delete", "allow", "from", ip, "to", "any", "port", "2049", "proto", proto).CombinedOutput()
+	}
+}
+
+func resolveFirewallIPs(hosts []string) []string {
+	seen := map[string]struct{}{}
+	out := []string{}
+	add := func(ip net.IP) {
+		if ip == nil {
+			return
+		}
+		text := ip.String()
+		if _, ok := seen[text]; ok {
+			return
+		}
+		seen[text] = struct{}{}
+		out = append(out, text)
+	}
+	for _, host := range hosts {
+		host = strings.TrimSpace(host)
+		if host == "" {
+			continue
+		}
+		if ip := net.ParseIP(host); ip != nil {
+			add(ip)
+			continue
+		}
+		if resolved, err := net.LookupIP(host); err == nil {
+			for _, ip := range resolved {
+				add(ip)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func readNFSHosts() []string {
+	content, err := os.ReadFile(NFSHostsStatePath)
+	if err != nil {
+		return nil
+	}
+	var hosts []string
+	if err := json.Unmarshal(content, &hosts); err != nil {
+		return nil
+	}
+	return hosts
+}
+
+func writeNFSHosts(hosts []string) error {
+	if hosts == nil {
+		hosts = []string{}
+	}
+	sort.Strings(hosts)
+	content, _ := json.Marshal(hosts)
+	tmp, err := os.CreateTemp(filepath.Dir(NFSHostsStatePath), ".panel-nfs-hosts-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(content); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, NFSHostsStatePath)
 }
 
 func cleanHosts(hosts []string) []string {
@@ -413,16 +534,64 @@ func unregisterRoot(_ context.Context, root string) error {
 }
 
 func underRegisteredRoot(pathValue string) bool {
-	roots := readRoots()
+	_, err := resolveUnderRegisteredRoot(pathValue, false)
+	return err == nil
+}
+
+// resolveUnderRegisteredRoot 校验 pathValue 位于已注册的存储根目录之下，
+// 且从根目录到目标路径（或其最近已存在祖先）不经过任何符号链接，防止
+// 容器/NFS 客户端通过软链读写或删除根目录外的宿主机路径。
+func resolveUnderRegisteredRoot(pathValue string, mustExist bool) (string, error) {
+	return resolveUnderRoots(readRoots(), pathValue, mustExist)
+}
+
+func resolveUnderRoots(roots []string, pathValue string, mustExist bool) (string, error) {
+	cleanPath := filepath.Clean(pathValue)
 	for _, root := range roots {
-		if root == "" || pathValue == root {
+		cleanRoot := filepath.Clean(root)
+		if cleanRoot == "" || cleanPath == cleanRoot {
 			continue
 		}
-		if strings.HasPrefix(pathValue, root+"/") {
-			return true
+		prefix := cleanRoot + string(os.PathSeparator)
+		if !strings.HasPrefix(cleanPath, prefix) {
+			continue
 		}
+		realRoot, err := filepath.EvalSymlinks(cleanRoot)
+		if err != nil {
+			return "", fmt.Errorf("resolve storage root %q: %w", cleanRoot, err)
+		}
+		rel, err := filepath.Rel(cleanRoot, cleanPath)
+		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+			return "", fmt.Errorf("directory %q escapes storage root %q", pathValue, cleanRoot)
+		}
+		parts := strings.Split(rel, string(os.PathSeparator))
+		cur := realRoot
+		for i, part := range parts {
+			cur = filepath.Join(cur, part)
+			info, statErr := os.Lstat(cur)
+			if statErr != nil {
+				if errors.Is(statErr, os.ErrNotExist) {
+					if mustExist {
+						return "", fmt.Errorf("storage directory %q does not exist", pathValue)
+					}
+					for _, rest := range parts[i+1:] {
+						cur = filepath.Join(cur, rest)
+					}
+					break
+				}
+				return "", fmt.Errorf("stat storage path %q: %w", cur, statErr)
+			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				return "", fmt.Errorf("storage path %q traverses symbolic link", pathValue)
+			}
+		}
+		realPrefix := realRoot + string(os.PathSeparator)
+		if !strings.HasPrefix(cur, realPrefix) {
+			return "", fmt.Errorf("directory %q escapes storage root %q", pathValue, cleanRoot)
+		}
+		return cur, nil
 	}
-	return false
+	return "", fmt.Errorf("directory %q is not under a registered storage root", pathValue)
 }
 
 func run(ctx context.Context, name string, args ...string) error {
