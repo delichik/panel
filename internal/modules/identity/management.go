@@ -73,7 +73,7 @@ func (s *Service) ListUsers(ctx context.Context, page, pageSize int, query, stat
 	q := orm.New(s.db).From("users")
 	if term := strings.TrimSpace(query); term != "" {
 		like := orm.LikeEscaped(term)
-		q.AndLike("username", like).OrLike("display_name", like)
+		q.And(`(username LIKE ? ESCAPE '\' OR display_name LIKE ? ESCAPE '\')`, like, like)
 	}
 	if value := strings.TrimSpace(status); value != "" {
 		q.And("status = ?", value)
@@ -199,12 +199,14 @@ func (s *Service) UpdateUser(ctx context.Context, actorID, userID string, input 
 		if input.Status != nil {
 			status := strings.TrimSpace(*input.Status)
 			updates["status"] = status
-			if status == "disabled" {
-				updates["generation"] = user.Generation + 1
-			}
 		}
 		if err := orm.New(tx).From("users").Where("id = ?", userID).UpdateColumns(ctx, updates); err != nil {
 			return err
+		}
+		if input.Status != nil && strings.TrimSpace(*input.Status) == "disabled" {
+			if _, err := orm.RawExec(ctx, tx, `UPDATE users SET generation = generation + 1 WHERE id = ?`, userID); err != nil {
+				return err
+			}
 		}
 		if input.RoleIDs != nil {
 			if err := orm.New(tx).From("user_roles").Where("user_id = ?", userID).Delete(ctx); err != nil {
@@ -271,14 +273,31 @@ func (s *Service) ResetUserPassword(ctx context.Context, userID, password string
 	if err != nil {
 		return err
 	}
-	err = orm.New(s.db).From("users").Where("id = ?", userID).UpdateColumns(ctx, map[string]any{
-		"password_hash":        string(hash),
-		"must_change_password": 1,
-		"generation":           user.Generation + 1,
-		"updated_at":           time.Now().UTC().Format(time.RFC3339Nano),
-	})
+	_, err = orm.RawExec(ctx, s.db, `
+		UPDATE users
+		SET password_hash = ?, must_change_password = 1, generation = generation + 1, updated_at = ?
+		WHERE id = ?
+	`, string(hash), time.Now().UTC().Format(time.RFC3339Nano), userID)
 	if err != nil {
 		return err
+	}
+	s.invalidateIdentityCaches()
+	return nil
+}
+
+func (s *Service) ForceUserLogout(ctx context.Context, userID string) error {
+	res, err := orm.RawExec(ctx, s.db,
+		`UPDATE users SET generation = generation + 1, updated_at = ? WHERE id = ?`,
+		time.Now().UTC().Format(time.RFC3339Nano), userID)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return panelerr.NotFound("user")
 	}
 	s.invalidateIdentityCaches()
 	return nil
@@ -299,9 +318,15 @@ func (s *Service) ListRoles(ctx context.Context) ([]RoleView, error) {
 	}
 	out := make([]RoleView, 0, len(rows))
 	for _, row := range rows {
+		keys := perms[row.ID]
+		if row.Builtin {
+			keys = permissioncatalog.AllKeys()
+		} else if keys == nil {
+			keys = []string{}
+		}
 		out = append(out, RoleView{
 			ID: row.ID, Key: row.Key, Name: row.Name, Description: row.Description,
-			Builtin: row.Builtin, PermissionKeys: perms[row.ID], UserCount: counts[row.ID], CreatedAt: row.CreatedAt,
+			Builtin: row.Builtin, PermissionKeys: keys, UserCount: counts[row.ID], CreatedAt: row.CreatedAt,
 		})
 	}
 	return out, nil
@@ -323,9 +348,15 @@ func (s *Service) GetRole(ctx context.Context, roleID string) (RoleView, error) 
 	if err != nil {
 		return RoleView{}, err
 	}
+	keys := perms[row.ID]
+	if row.Builtin {
+		keys = permissioncatalog.AllKeys()
+	} else if keys == nil {
+		keys = []string{}
+	}
 	return RoleView{
 		ID: row.ID, Key: row.Key, Name: row.Name, Description: row.Description,
-		Builtin: row.Builtin, PermissionKeys: perms[row.ID], UserCount: counts[row.ID], CreatedAt: row.CreatedAt,
+		Builtin: row.Builtin, PermissionKeys: keys, UserCount: counts[row.ID], CreatedAt: row.CreatedAt,
 	}, nil
 }
 
@@ -335,7 +366,7 @@ func (s *Service) CreateRole(ctx context.Context, input RoleSaveInput) (RoleView
 		return RoleView{}, err
 	}
 	now := time.Now().UTC()
-	role := &models.Role{ID: id.New("role"), Name: name, CreatedAt: now, UpdatedAt: now}
+	role := &models.Role{ID: id.New("role"), Name: name, Description: strings.TrimSpace(input.Description), CreatedAt: now, UpdatedAt: now}
 	if err := orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		if err := orm.New(tx).Insert(ctx, role); err != nil {
 			return err
@@ -484,6 +515,9 @@ func ensureUsernameAvailable(ctx context.Context, db orm.Executor, username, exc
 }
 
 func userView(row models.User, roles []RoleRef) UserView {
+	if roles == nil {
+		roles = []RoleRef{}
+	}
 	return UserView{
 		ID: row.ID, Username: row.Username, DisplayName: row.DisplayName,
 		Status: row.Status, Builtin: row.Builtin, MustChangePassword: row.MustChangePassword,
@@ -507,17 +541,29 @@ func roleIDs(rows []models.Role) []string {
 	return out
 }
 
+func inPlaceholders(ids []string) (string, []any) {
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, value := range ids {
+		placeholders[i] = "?"
+		args[i] = value
+	}
+	return strings.Join(placeholders, ","), args
+}
+
 func (s *Service) rolesByUserIDs(ctx context.Context, ids []string) (map[string][]RoleRef, error) {
 	out := map[string][]RoleRef{}
 	if len(ids) == 0 {
 		return out, nil
 	}
+	ph, args := inPlaceholders(ids)
 	rows, err := orm.Raw(ctx, s.db, `
 		SELECT ur.user_id, r.id, r.key, r.name
 		FROM user_roles ur
 		JOIN roles r ON r.id = ur.role_id
+		WHERE ur.user_id IN (`+ph+`)
 		ORDER BY r.name
-	`)
+	`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -538,7 +584,8 @@ func (s *Service) permissionsByRoleIDs(ctx context.Context, ids []string) (map[s
 	if len(ids) == 0 {
 		return out, nil
 	}
-	rows, err := orm.Raw(ctx, s.db, `SELECT role_id, permission_key FROM role_permissions ORDER BY permission_key`)
+	ph, args := inPlaceholders(ids)
+	rows, err := orm.Raw(ctx, s.db, `SELECT role_id, permission_key FROM role_permissions WHERE role_id IN (`+ph+`) ORDER BY permission_key`, args...)
 	if err != nil {
 		return nil, err
 	}

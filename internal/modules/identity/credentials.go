@@ -55,13 +55,17 @@ type AccessCredentialCreateInput struct {
 }
 
 func (s *Service) ListAccessCredentials(ctx context.Context, userID string) ([]AccessCredentialView, error) {
+	user, err := s.accountByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
 	var rows []models.AccessCredential
 	if err := orm.New(s.db).From("access_credentials").Where("user_id = ?", userID).OrderBy("created_at DESC").All(ctx, &rows); err != nil {
 		return nil, err
 	}
 	out := make([]AccessCredentialView, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, accessCredentialView(row))
+		out = append(out, accessCredentialView(row, user.Generation))
 	}
 	return out, nil
 }
@@ -92,40 +96,48 @@ func (s *Service) CreateAccessCredential(ctx context.Context, userID string, inp
 	if err != nil {
 		return AccessCredentialCreated{}, err
 	}
-	active, err := orm.New(s.db).From("access_credentials").
-		Where("user_id = ?", userID).
-		Where("revoked_at IS NULL").
-		Where("expires_at > ?", time.Now().UTC().Format(time.RFC3339Nano)).
-		Count(ctx)
-	if err != nil {
-		return AccessCredentialCreated{}, err
-	}
-	if active >= credentialMaxActivePerUser {
-		return AccessCredentialCreated{}, panelerr.Validation("credential_limit_reached", "Too many active access credentials")
-	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return AccessCredentialCreated{}, err
 	}
 	token := credentialTokenPrefix + base64.RawURLEncoding.EncodeToString(raw)
 	hash := sha256Hex(token)
-	now := time.Now().UTC()
-	credential := &models.AccessCredential{
-		ID:              id.New("acr"),
-		UserID:          user.ID,
-		Name:            name,
-		TokenHash:       hash,
-		TokenPrefix:     token[:12],
-		Scope:           scope,
-		AllowManagement: input.AllowManagement,
-		UserGeneration:  user.Generation,
-		ExpiresAt:       now.Add(time.Duration(ttl) * time.Second),
-		CreatedAt:       now,
-	}
-	if err := orm.New(s.db).Insert(ctx, credential); err != nil {
+	var credential *models.AccessCredential
+	if err := orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		var currentGen int64
+		if err := orm.New(tx).From("users").Where("id = ?", user.ID).Select("generation").ScanValue(ctx, &currentGen); err != nil {
+			return err
+		}
+		now := time.Now().UTC()
+		active, err := orm.New(tx).From("access_credentials").
+			Where("user_id = ?", userID).
+			Where("user_generation = ?", currentGen).
+			Where("revoked_at IS NULL").
+			Where("expires_at > ?", now.Format(time.RFC3339Nano)).
+			Count(ctx)
+		if err != nil {
+			return err
+		}
+		if active >= credentialMaxActivePerUser {
+			return panelerr.Validation("credential_limit_reached", "Too many active access credentials")
+		}
+		credential = &models.AccessCredential{
+			ID:              id.New("acr"),
+			UserID:          user.ID,
+			Name:            name,
+			TokenHash:       hash,
+			TokenPrefix:     token[:12],
+			Scope:           scope,
+			AllowManagement: input.AllowManagement,
+			UserGeneration:  currentGen,
+			ExpiresAt:       now.Add(time.Duration(ttl) * time.Second),
+			CreatedAt:       now,
+		}
+		return orm.New(tx).Insert(ctx, credential)
+	}); err != nil {
 		return AccessCredentialCreated{}, err
 	}
-	return AccessCredentialCreated{AccessCredentialView: accessCredentialView(*credential), Token: token}, nil
+	return AccessCredentialCreated{AccessCredentialView: accessCredentialView(*credential, credential.UserGeneration), Token: token}, nil
 }
 
 func (s *Service) RevokeAccessCredential(ctx context.Context, userID string, canManageOthers bool, credentialID string) error {
@@ -184,10 +196,10 @@ func (s *Service) validateCredential(ctx context.Context, token string) (Session
 	}, true
 }
 
-func accessCredentialView(row models.AccessCredential) AccessCredentialView {
+func accessCredentialView(row models.AccessCredential, currentUserGeneration int64) AccessCredentialView {
 	status := "active"
 	now := time.Now().UTC()
-	if row.RevokedAt != nil {
+	if row.RevokedAt != nil || row.UserGeneration != currentUserGeneration {
 		status = "revoked"
 	} else if !now.Before(row.ExpiresAt) {
 		status = "expired"

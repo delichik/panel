@@ -242,3 +242,92 @@ func contains(values []string, want string) bool {
 	}
 	return false
 }
+
+func TestUserRoleAndCredentialBugfixes(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	admin, err := svc.Login(ctx, "admin", "admin")
+	if err != nil {
+		t.Fatalf("login admin: %v", err)
+	}
+
+	// 1. CreateRole preserves description and ListRoles/GetRole populate builtin permissionKeys.
+	role, err := svc.CreateRole(ctx, RoleSaveInput{
+		Name:           "Auditor",
+		Description:    "Read-only audit role",
+		PermissionKeys: []string{"events.view"},
+	})
+	if err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+	if role.Description != "Read-only audit role" {
+		t.Fatalf("role description = %q, want %q", role.Description, "Read-only audit role")
+	}
+	roles, err := svc.ListRoles(ctx)
+	if err != nil {
+		t.Fatalf("list roles: %v", err)
+	}
+	foundBuiltin := false
+	for _, item := range roles {
+		if item.Builtin {
+			foundBuiltin = true
+			if len(item.PermissionKeys) != len(permissioncatalog.AllKeys()) {
+				t.Fatalf("builtin role permissionKeys len = %d, want %d", len(item.PermissionKeys), len(permissioncatalog.AllKeys()))
+			}
+		}
+	}
+	if !foundBuiltin {
+		t.Fatal("expected built-in administrator role")
+	}
+
+	// 2. User without roles serializes non-nil empty slice and ListUsers respects query + status precedence.
+	u1, err := svc.CreateUser(ctx, UserCreateInput{Username: "alpha_user", DisplayName: "Alpha", Password: "password-1234"})
+	if err != nil {
+		t.Fatalf("create u1: %v", err)
+	}
+	if u1.Roles == nil || len(u1.Roles) != 0 {
+		t.Fatalf("expected non-nil empty roles slice, got %#v", u1.Roles)
+	}
+	disabled := "disabled"
+	if _, err := svc.UpdateUser(ctx, admin.UserID, u1.ID, UserUpdateInput{Status: &disabled}); err != nil {
+		t.Fatalf("disable u1: %v", err)
+	}
+	page, err := svc.ListUsers(ctx, 1, 20, "alpha", "active")
+	if err != nil {
+		t.Fatalf("list users: %v", err)
+	}
+	if len(page.Items) != 0 {
+		t.Fatalf("disabled user matched query+active filter: %#v", page.Items)
+	}
+
+	// 3. ForceUserLogout returns 404 for unknown user.
+	if err := svc.ForceUserLogout(ctx, "usr_nonexistent"); err == nil {
+		t.Fatal("expected not found for unknown user")
+	}
+
+	// 4. Generation bump marks previous credentials revoked in list and frees active quota.
+	for i := 0; i < credentialMaxActivePerUser; i++ {
+		if _, err := svc.CreateAccessCredential(ctx, admin.UserID, AccessCredentialCreateInput{
+			Name: "batch", ExpiresInSeconds: 600, Scope: "readonly",
+		}); err != nil {
+			t.Fatalf("create cred %d: %v", i, err)
+		}
+	}
+	if err := svc.BumpUserGeneration(ctx, admin.UserID); err != nil {
+		t.Fatalf("bump generation: %v", err)
+	}
+	creds, err := svc.ListAccessCredentials(ctx, admin.UserID)
+	if err != nil {
+		t.Fatalf("list credentials: %v", err)
+	}
+	for _, c := range creds {
+		if c.Status != "revoked" {
+			t.Fatalf("credential %s status = %q after generation bump, want revoked", c.ID, c.Status)
+		}
+	}
+	if _, err := svc.CreateAccessCredential(ctx, admin.UserID, AccessCredentialCreateInput{
+		Name: "after-bump", ExpiresInSeconds: 600, Scope: "readonly",
+	}); err != nil {
+		t.Fatalf("create credential after generation bump should succeed: %v", err)
+	}
+}

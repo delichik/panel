@@ -86,7 +86,7 @@ func (h *Handler) ResetUserPassword(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ForceUserLogout(w http.ResponseWriter, r *http.Request) {
 	userID := strings.TrimSpace(r.PathValue("id"))
-	if err := h.service.BumpUserGeneration(r.Context(), userID); err != nil {
+	if err := h.service.ForceUserLogout(r.Context(), userID); err != nil {
 		httpx.Error(w, err)
 		return
 	}
