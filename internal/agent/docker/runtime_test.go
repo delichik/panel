@@ -99,6 +99,48 @@ func TestManagedTarRejectsIgnoredHeaderFlood(t *testing.T) {
 	}
 }
 
+func TestPersistentArchiveSkipsSymlinks(t *testing.T) {
+	root := t.TempDir()
+	secretFile := filepath.Join(t.TempDir(), "host-secret.txt")
+	if err := os.WriteFile(secretFile, []byte("top-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rt := &LocalRuntime{root: root}
+	persistDir := filepath.Join(root, "app-1", "persistent")
+	if err := os.MkdirAll(persistDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(persistDir, "ok.txt"), []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secretFile, filepath.Join(persistDir, "leak.txt")); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("symlink creation unavailable on Windows without privilege: %v", err)
+		}
+		t.Fatal(err)
+	}
+	archiveBytes, err := rt.PersistentArchive(context.Background(), "app-1")
+	if err != nil {
+		t.Fatalf("PersistentArchive failed: %v", err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(archiveBytes), int64(len(archiveBytes)))
+	if err != nil {
+		t.Fatalf("zip.NewReader failed: %v", err)
+	}
+	foundOK := false
+	for _, f := range zr.File {
+		if f.Name == "leak.txt" {
+			t.Fatal("symlink leak.txt must not be archived")
+		}
+		if f.Name == "ok.txt" {
+			foundOK = true
+		}
+	}
+	if !foundOK {
+		t.Fatal("expected ok.txt in archive")
+	}
+}
+
 func TestDockerAPIClientPullImagePassesExplicitLatestTag(t *testing.T) {
 	latest := "latest"
 	v1 := "v1"

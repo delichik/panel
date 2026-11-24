@@ -298,9 +298,17 @@ func (r *LocalRuntime) ContainerLogs(ctx context.Context, id string, tail int) (
 	}
 	return r.client.containerLogs(ctx, id, normalizeLogTail(tail))
 }
+const (
+	persistentArchiveMaxBytes int64 = 512 << 20
+	persistentArchiveMaxFiles       = 50000
+)
+
 func (r *LocalRuntime) PersistentArchive(ctx context.Context, applicationID string) ([]byte, error) {
 	if r == nil {
 		return nil, errors.New("runtime is not configured")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	if err := r.migrateLegacyPersistentWorkspace(applicationID); err != nil {
 		return nil, err
@@ -312,13 +320,30 @@ func (r *LocalRuntime) PersistentArchive(ctx context.Context, applicationID stri
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
+	rootDir, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer rootDir.Close()
+
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
+	var totalBytes int64
+	entries := 0
 	err = filepath.WalkDir(dir, func(filePath string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if filePath == dir {
+			return nil
+		}
+		// Never follow symlinks or read non-regular files (FIFOs, devices, sockets)
+		// from container-writable persistent volumes.
+		entryType := entry.Type()
+		if entryType&os.ModeSymlink != 0 {
 			return nil
 		}
 		rel, err := filepath.Rel(dir, filePath)
@@ -327,38 +352,70 @@ func (r *LocalRuntime) PersistentArchive(ctx context.Context, applicationID stri
 		}
 		name := filepath.ToSlash(rel)
 		if entry.IsDir() {
+			entries++
+			if entries > persistentArchiveMaxFiles {
+				return errors.New("persistent archive exceeds file count limit")
+			}
 			_, err := zw.Create(name + "/")
 			return err
 		}
-		info, err := entry.Info()
+		if !entryType.IsRegular() {
+			return nil
+		}
+		entries++
+		if entries > persistentArchiveMaxFiles {
+			return errors.New("persistent archive exceeds file count limit")
+		}
+		file, err := rootDir.Open(rel)
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
 			return err
+		}
+		info, err := file.Stat()
+		if err != nil {
+			_ = file.Close()
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			_ = file.Close()
+			return nil
 		}
 		header, err := zip.FileInfoHeader(info)
 		if err != nil {
+			_ = file.Close()
 			return err
 		}
 		header.Name = name
 		header.Method = zip.Deflate
 		writer, err := zw.CreateHeader(header)
 		if err != nil {
+			_ = file.Close()
 			return err
 		}
-		file, err := os.Open(filePath)
-		if err != nil {
-			return err
+		remaining := persistentArchiveMaxBytes - totalBytes
+		if remaining < 0 {
+			_ = file.Close()
+			return errors.New("persistent archive exceeds size limit")
 		}
-		_, copyErr := io.Copy(writer, file)
+		written, copyErr := io.Copy(writer, io.LimitReader(file, remaining+1))
 		closeErr := file.Close()
 		if copyErr != nil {
 			return copyErr
 		}
-		return closeErr
+		if closeErr != nil {
+			return closeErr
+		}
+		totalBytes += written
+		if totalBytes > persistentArchiveMaxBytes {
+			return errors.New("persistent archive exceeds size limit")
+		}
+		return nil
 	})
 	if closeErr := zw.Close(); err == nil {
 		err = closeErr
 	}
-	_ = ctx
 	if err != nil {
 		return nil, err
 	}
@@ -383,9 +440,15 @@ func (r *LocalRuntime) RestorePersistentArchive(ctx context.Context, application
 	if err != nil {
 		return err
 	}
+	if len(reader.File) > persistentArchiveMaxFiles {
+		return errors.New("persistent archive exceeds file count limit")
+	}
 	for _, file := range reader.File {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if file.Mode()&os.ModeSymlink != 0 {
+			return errors.New("persistent archive must not contain symbolic links")
 		}
 		if _, err := safeArchiveTarget(dir, file.Name); err != nil {
 			return err
@@ -407,6 +470,7 @@ func (r *LocalRuntime) RestorePersistentArchive(ctx context.Context, application
 			_ = os.RemoveAll(tmp)
 		}
 	}()
+	var restoredBytes int64
 	for _, file := range reader.File {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -437,7 +501,13 @@ func (r *LocalRuntime) RestorePersistentArchive(ctx context.Context, application
 			_ = src.Close()
 			return err
 		}
-		_, copyErr := io.Copy(dst, src)
+		remaining := persistentArchiveMaxBytes - restoredBytes
+		if remaining < 0 {
+			_ = src.Close()
+			_ = dst.Close()
+			return errors.New("persistent archive exceeds size limit")
+		}
+		written, copyErr := io.Copy(dst, io.LimitReader(src, remaining+1))
 		closeSrcErr := src.Close()
 		closeDstErr := dst.Close()
 		if copyErr != nil {
@@ -448,6 +518,10 @@ func (r *LocalRuntime) RestorePersistentArchive(ctx context.Context, application
 		}
 		if closeDstErr != nil {
 			return closeDstErr
+		}
+		restoredBytes += written
+		if restoredBytes > persistentArchiveMaxBytes {
+			return errors.New("persistent archive exceeds size limit")
 		}
 	}
 	if err := ctx.Err(); err != nil {
