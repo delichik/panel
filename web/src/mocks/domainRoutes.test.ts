@@ -156,11 +156,6 @@ describe('domain mock routes', () => {
     expect(ufw.status).toBe(200);
     expect(ufwEnvelope.data.rules.length).toBeGreaterThan(0);
 
-    const fail2ban = await fetch('/api/v1/servers/srv-db-fra/fail2ban');
-    const fail2banEnvelope = await fail2ban.json();
-    expect(fail2ban.status).toBe(200);
-    expect(fail2banEnvelope.data.jails.length).toBeGreaterThan(0);
-
     const packages = await fetch('/api/v1/servers/srv-staging-mad/packages/updates');
     const packagesEnvelope = await packages.json();
     expect(packages.status).toBe(200);

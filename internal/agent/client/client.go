@@ -330,27 +330,6 @@ func (c *GRPCClient) UFWConfirmPending(ctx context.Context, endpoint string) err
 	return err
 }
 
-func (c *GRPCClient) Fail2BanStatus(ctx context.Context, endpoint string) (agentcontract.Fail2BanStatusResponse, error) {
-	out, err := callRPC(c, ctx, endpoint, maintenanceTimeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.Fail2BanStatusResponse, error) {
-		return client.Fail2BanStatus(ctx, &agentpb.Empty{})
-	})
-	return agentrpc.GoFail2BanStatus(out), err
-}
-
-func (c *GRPCClient) ApplyFail2Ban(ctx context.Context, endpoint string, req agentcontract.Fail2BanApplyRequest) (agentcontract.Fail2BanStatusResponse, error) {
-	out, err := callRPC(c, ctx, endpoint, maintenanceTimeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.Fail2BanStatusResponse, error) {
-		return client.ApplyFail2Ban(ctx, &agentpb.Fail2BanApplyRequest{Config: agentrpc.PBFail2BanConfig(req.Config)})
-	})
-	return agentrpc.GoFail2BanStatus(out), err
-}
-
-func (c *GRPCClient) ReleaseFail2Ban(ctx context.Context, endpoint string) (agentcontract.Fail2BanStatusResponse, error) {
-	out, err := callRPC(c, ctx, endpoint, maintenanceTimeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.Fail2BanStatusResponse, error) {
-		return client.ReleaseFail2Ban(ctx, &agentpb.Empty{})
-	})
-	return agentrpc.GoFail2BanStatus(out), err
-}
-
 func (c *GRPCClient) RestartSystem(ctx context.Context, endpoint string) error {
 	_, err := callRPC(c, ctx, endpoint, maintenanceTimeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.OKResponse, error) {
 		return client.RestartSystem(ctx, &agentpb.Empty{})

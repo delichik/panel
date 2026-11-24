@@ -95,8 +95,10 @@ func TestAPIRouteManifest(t *testing.T) {
 	// SSH 访问记录（SRV-SESS-004，221 → 223）：
 	//   GET /api/v1/servers/{id}/ssh-access/sessions
 	//   GET /api/v1/servers/{id}/ssh-access/attempts
-	const wantCount = 223
-	const wantHash = "073de3f9e92f95cc7dd86bd5e118552fb3347156038dfb4b3774086a4269ca1a"
+	// 移除 Fail2ban 管理能力（223 → 218）：
+	//   移除 GET/PUT /api/v1/servers/{id}/fail2ban 与 POST /api/v1/servers/{id}/fail2ban/{enable,install,release}
+	const wantCount = 218
+	const wantHash = "35ec6d1052bf61c46862b733153c7edaa70bf1e7b940db216419268bda65900e"
 	manifest := strings.Join(patterns, "\n") + "\n"
 	gotHash := fmt.Sprintf("%x", sha256.Sum256([]byte(manifest)))
 	if len(patterns) != wantCount || gotHash != wantHash {

@@ -175,21 +175,6 @@ func (h *Handler) UFWConfirmPending(_ context.Context, _ *agentpb.Empty) (*agent
 	return &agentpb.OKResponse{Ok: true}, nil
 }
 
-func (h *Handler) Fail2BanStatus(ctx context.Context, _ *agentpb.Empty) (*agentpb.Fail2BanStatusResponse, error) {
-	status, err := h.collector.Fail2BanStatus(ctx)
-	return pbFail2BanStatus(status), remoteError(err)
-}
-
-func (h *Handler) ApplyFail2Ban(ctx context.Context, req *agentpb.Fail2BanApplyRequest) (*agentpb.Fail2BanStatusResponse, error) {
-	status, err := h.collector.ApplyFail2Ban(ctx, agentcontract.Fail2BanApplyRequest{Config: goFail2BanConfig(req.Config)})
-	return pbFail2BanStatus(status), remoteError(err)
-}
-
-func (h *Handler) ReleaseFail2Ban(ctx context.Context, _ *agentpb.Empty) (*agentpb.Fail2BanStatusResponse, error) {
-	status, err := h.collector.ReleaseFail2Ban(ctx)
-	return pbFail2BanStatus(status), remoteError(err)
-}
-
 func (h *Handler) RestartSystem(ctx context.Context, _ *agentpb.Empty) (*agentpb.OKResponse, error) {
 	err := h.collector.RestartSystem(ctx)
 	return &agentpb.OKResponse{Ok: err == nil}, remoteError(err)

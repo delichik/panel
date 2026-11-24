@@ -18,7 +18,6 @@ export const mockTasks: TaskDto[] = [
   task('task-canary-3', 'op-canary-failed', 'application_deploy', 'failed', 'app-canary-broken', 'Canary deploy failed readiness checks', 90, true, false, 'Canary probe failed: /ready returned 503'),
   task('task-billing-image', 'op-billing-image', 'application_image_update', 'completed', 'app-billing', 'billing-portal image update finished', 100, false, false),
   task('task-webhook-sync', 'op-webhook-sync', 'application_sync', 'running', 'app-webhook', 'Sync webhook-ingress across edge nodes', 62, false, false),
-  task('task-fail2ban-lax', 'op-fail2ban-lax', 'server_fail2ban_apply', 'queued', 'srv-edge-lax', 'Apply fail2ban config on edge-lax-01', 0, false, false),
   ...Array.from({ length: 96 }, (_, index) => {
     const statuses = ['queued', 'running', 'completed', 'failed_retryable', 'scheduled', 'failed'];
     const status = statuses[index % statuses.length];

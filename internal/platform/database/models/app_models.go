@@ -94,16 +94,6 @@ type PackageRefresh struct {
 
 func (*PackageRefresh) TableName() string { return "package_refreshes" }
 
-// Fail2banConfig 对应 fail2ban_configs。
-type Fail2banConfig struct {
-	ServerID   string    `orm:"primary_key;references:servers(id);on_delete:CASCADE"`
-	ConfigYAML string    `orm:"not_null"`
-	Managed    bool      `orm:"not_null;default:0"`
-	UpdatedAt  time.Time `orm:"not_null"`
-}
-
-func (*Fail2banConfig) TableName() string { return "fail2ban_configs" }
-
 // ImageUpdate 对应 image_updates。
 type ImageUpdate struct {
 	ServerID        string    `orm:"primary_key;not_null;references:servers(id);on_delete:CASCADE"`

@@ -111,10 +111,6 @@ import type { UfwAllowInput } from '@/types/security';
 import {
   mockAddUfwRule,
   mockDeleteUfwRule,
-  mockEnableFail2Ban,
-  mockFail2BanState,
-  mockReleaseFail2Ban,
-  mockSaveFail2Ban,
   mockUfwState,
 } from './security';
 import {
@@ -405,36 +401,6 @@ export function installMockApi() {
     if (ufwDeleteMatch && method(init) === 'DELETE') {
       const state = mockDeleteUfwRule(decodeURIComponent(ufwDeleteMatch[1]), Number(ufwDeleteMatch[2]));
       return state ? json(state) : error('server_not_found', 'Server was not found.', 404);
-    }
-
-    const fail2banMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)\/fail2ban$/);
-    if (fail2banMatch && method(init) === 'GET') {
-      try {
-        const state = mockFail2BanState(decodeURIComponent(fail2banMatch[1]));
-        return state ? json(state) : error('server_not_found', 'Server was not found.', 404);
-      } catch (err) {
-        return error('server_not_reachable', err instanceof Error ? err.message : 'Server is unreachable.', 422);
-      }
-    }
-    if (fail2banMatch && method(init) === 'PUT') {
-      try {
-        const input = await body<{ configYaml: string }>(init);
-        const state = mockSaveFail2Ban(decodeURIComponent(fail2banMatch[1]), input.configYaml);
-        return state ? json(state) : error('server_not_found', 'Server was not found.', 404);
-      } catch (err) {
-        return error('fail2ban_config_invalid', err instanceof Error ? err.message : 'Fail2Ban YAML is invalid.', 422);
-      }
-    }
-    const fail2banOperationMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)\/fail2ban\/(enable|release|install)$/);
-    if (fail2banOperationMatch && method(init) === 'POST') {
-      const serverId = decodeURIComponent(fail2banOperationMatch[1]);
-      const op = fail2banOperationMatch[2];
-      if (op === 'release') return mockReleaseFail2Ban(serverId) ? json(accepted('server-fail2ban-release'), 202) : error('server_not_found', 'Server was not found.', 404);
-      if (op === 'install') return mockEnableFail2Ban(serverId, true) === 'accepted' ? json(accepted('server-fail2ban-install'), 202) : error('server_not_found', 'Server was not found.', 404);
-      const input = await body<{ confirmTakeover?: boolean }>(init);
-      const result = mockEnableFail2Ban(serverId, Boolean(input.confirmTakeover));
-      if (result === 'takeover') return error('fail2ban_takeover_confirmation_required', 'Taking over an installed fail2ban service requires confirmation.', 422);
-      return result === 'accepted' ? json(accepted('server-fail2ban-apply'), 202) : error('server_not_found', 'Server was not found.', 404);
     }
 
     if (url.pathname === '/api/v1/credentials' && method(init) === 'GET') {
@@ -1161,9 +1127,6 @@ export function installMockApi() {
       return json({ authenticated: false, mustRelogin: true });
     }
     if (url.pathname === '/api/v1/auth/jwt-secret' && method(init) === 'POST') {
-      const input = await body<{ jwtSecret?: string }>(init);
-      if (!authValidationEnabled()) return json({ authenticated: false, mustRelogin: true });
-      if ((input.jwtSecret || '').trim().length < 16) return error('invalid_jwt_secret', 'JWT secret must be at least 16 characters.', 422);
       return json({ authenticated: false, mustRelogin: true });
     }
     if (url.pathname === '/api/v1/setup/status' && method(init) === 'GET') return json({ required: false });

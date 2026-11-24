@@ -18,8 +18,8 @@ export const serverSystemSubtabs = ['agent', 'packages'] as const;
 
 export type ServerSystemSubtab = (typeof serverSystemSubtabs)[number];
 
-/** 网络与安全 tab 内的子视图；探测结果已移到设施页/概览，这里保留防火墙、SSH 访问与 Fail2Ban。 */
-export const serverNetworkSubtabs = ['firewall', 'ssh-access', 'fail2ban'] as const;
+/** 网络与安全 tab 内的子视图；探测结果已移到设施页/概览，这里保留防火墙与 SSH 访问。 */
+export const serverNetworkSubtabs = ['firewall', 'ssh-access'] as const;
 
 export type ServerNetworkSubtab = (typeof serverNetworkSubtabs)[number];
 
@@ -30,8 +30,8 @@ export type ServerResourceSubtab = (typeof serverResourceSubtabs)[number];
 
 const legacyResourceTabSet = new Set<string>(serverResourceSubtabs);
 const legacySystemTabSet = new Set<string>(serverSystemSubtabs);
-/** 旧深链 `tab=probes` 仍识别为网络与安全，但子视图回落到防火墙。 */
-const legacyNetworkTabSet = new Set<string>([...serverNetworkSubtabs, 'probes']);
+/** 旧深链 `tab=probes` / `tab=fail2ban` 仍识别为网络与安全，但子视图回落到防火墙。 */
+const legacyNetworkTabSet = new Set<string>([...serverNetworkSubtabs, 'probes', 'fail2ban']);
 
 export function isLegacyResourceTab(value: unknown): value is ServerResourceSubtab {
   return legacyResourceTabSet.has(String(value ?? ''));
@@ -41,7 +41,7 @@ export function isLegacySystemTab(value: unknown): value is ServerSystemSubtab {
   return legacySystemTabSet.has(String(value ?? ''));
 }
 
-export function isLegacyNetworkTab(value: unknown): value is ServerNetworkSubtab | 'probes' {
+export function isLegacyNetworkTab(value: unknown): value is ServerNetworkSubtab | 'probes' | 'fail2ban' {
   return legacyNetworkTabSet.has(String(value ?? ''));
 }
 
@@ -69,13 +69,13 @@ export function normalizeServerResourceSubtab(value: unknown, legacyTab?: unknow
   return 'containers';
 }
 
-/** `subtab=fail2ban` 直接表示 Fail2Ban 视图；旧 `probes` 深链回落到防火墙。 */
+/** 旧 `probes` / `fail2ban` 深链统一回落到防火墙。 */
 export function normalizeServerNetworkSubtab(value: unknown, legacyTab?: unknown): ServerNetworkSubtab {
   const fromSubtab = String(value ?? '');
-  if (fromSubtab === 'probes') return 'firewall';
+  if (fromSubtab === 'probes' || fromSubtab === 'fail2ban') return 'firewall';
   if ((serverNetworkSubtabs as readonly string[]).includes(fromSubtab)) return fromSubtab as ServerNetworkSubtab;
-  if (String(legacyTab ?? '') === 'probes') return 'firewall';
-  if (legacyTab === 'firewall' || legacyTab === 'ssh-access' || legacyTab === 'fail2ban') return legacyTab;
+  if (String(legacyTab ?? '') === 'probes' || String(legacyTab ?? '') === 'fail2ban') return 'firewall';
+  if (legacyTab === 'firewall' || legacyTab === 'ssh-access') return legacyTab;
   return 'firewall';
 }
 
@@ -85,13 +85,6 @@ export function architectureLabel(architecture?: ServerArchitecture): string {
   const raw = architecture?.rawMachine?.trim() ?? '';
   if (arch && raw && arch !== raw) return `${arch} (${raw})`;
   return arch || raw;
-}
-
-/** 防火墙 tab 内部的 UFW / Fail2Ban 分段（Fail2Ban 仅 dev 构建可见）。 */
-export type FirewallView = 'ufw' | 'fail2ban';
-
-export function normalizeFirewallView(value: unknown): FirewallView {
-  return String(value ?? '') === 'fail2ban' ? 'fail2ban' : 'ufw';
 }
 
 /**

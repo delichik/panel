@@ -73,7 +73,7 @@ const (
 
 var (
 	Version              = buildinfo.NormalizedVersion()
-	RequiredCapabilities = []string{CapabilityExecutionEvents, CapabilityExecutionResolution, "health", "os-release", "system-traits", "metrics-snapshot", "packages-list", "packages-upgrade", "ufw-status", "ufw-write", "fail2ban-status", "fail2ban-write", "fail2ban-release", "system-restart", "runtime-write-files", "runtime-reconcile", "runtime-reload", "runtime-create-container", "runtime-status", "runtime-logs", "runtime-persistent-archive", "runtime-stop", "runtime-restart", "runtime-container-name", "docker-containers", "docker-container-logs", "docker-images", "docker-networks", "docker-volumes"}
+	RequiredCapabilities = []string{CapabilityExecutionEvents, CapabilityExecutionResolution, "health", "os-release", "system-traits", "metrics-snapshot", "packages-list", "packages-upgrade", "ufw-status", "ufw-write", "system-restart", "runtime-write-files", "runtime-reconcile", "runtime-reload", "runtime-create-container", "runtime-status", "runtime-logs", "runtime-persistent-archive", "runtime-stop", "runtime-restart", "runtime-container-name", "docker-containers", "docker-container-logs", "docker-images", "docker-networks", "docker-volumes"}
 )
 
 type Client interface {
@@ -112,9 +112,6 @@ type MaintenanceClient interface {
 	UFWAllow(ctx context.Context, url string, req UFWAllowRequest) (remoteops.UFWStatus, error)
 	UFWDelete(ctx context.Context, url string, req UFWDeleteRequest) (remoteops.UFWStatus, error)
 	UFWConfirmPending(ctx context.Context, url string) error
-	Fail2BanStatus(ctx context.Context, url string) (Fail2BanStatusResponse, error)
-	ApplyFail2Ban(ctx context.Context, url string, req Fail2BanApplyRequest) (Fail2BanStatusResponse, error)
-	ReleaseFail2Ban(ctx context.Context, url string) (Fail2BanStatusResponse, error)
 	RestartSystem(ctx context.Context, url string) error
 }
 
@@ -218,39 +215,6 @@ type UFWDeleteRequest struct {
 	Number    int `json:"number"`
 	SSHPort   int `json:"sshPort"`
 	AgentPort int `json:"agentPort"`
-}
-
-type Fail2BanConfig struct {
-	Jails []Fail2BanJail `json:"jails" yaml:"jails"`
-}
-
-type Fail2BanJail struct {
-	Name     string            `json:"name" yaml:"name"`
-	Enabled  bool              `json:"enabled" yaml:"enabled"`
-	Preset   string            `json:"preset,omitempty" yaml:"preset,omitempty"`
-	Filter   string            `json:"filter,omitempty" yaml:"filter,omitempty"`
-	LogPath  string            `json:"logpath,omitempty" yaml:"logpath,omitempty"`
-	Backend  string            `json:"backend,omitempty" yaml:"backend,omitempty"`
-	Port     string            `json:"port,omitempty" yaml:"port,omitempty"`
-	Protocol string            `json:"protocol,omitempty" yaml:"protocol,omitempty"`
-	Action   string            `json:"action,omitempty" yaml:"action,omitempty"`
-	MaxRetry int               `json:"maxretry,omitempty" yaml:"maxretry,omitempty"`
-	FindTime string            `json:"findtime,omitempty" yaml:"findtime,omitempty"`
-	BanTime  string            `json:"bantime,omitempty" yaml:"bantime,omitempty"`
-	IgnoreIP []string          `json:"ignoreip,omitempty" yaml:"ignoreip,omitempty"`
-	Options  map[string]string `json:"options,omitempty" yaml:"options,omitempty"`
-}
-
-type Fail2BanStatusResponse struct {
-	Installed          bool     `json:"installed"`
-	Active             bool     `json:"active"`
-	PanelConfigPresent bool     `json:"panelConfigPresent"`
-	Jails              []string `json:"jails"`
-	Raw                string   `json:"raw"`
-}
-
-type Fail2BanApplyRequest struct {
-	Config Fail2BanConfig `json:"config"`
 }
 
 type RuntimeWriteFilesRequest struct {

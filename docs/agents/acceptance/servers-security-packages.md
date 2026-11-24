@@ -121,16 +121,9 @@
 - `UFW-API-008`：经兼容 Agent 的规则增删成功后，Agent 必须登记有界回滚定时器（默认 90s，持久化 pending）；Panel 必须用**新的** SSH 与 Agent 连接做事后通道核验，核验通过后调用 `UFWConfirmPending` 取消回滚；核验失败不得 Confirm，由定时器或 Agent 退出前回滚。Confirm/回滚/事后核验相关错误只记日志，不得阻断无关业务流程。无 Agent 的 SSH 删除路径在事后核验失败时必须尽力恢复刚删除的规则。
 - `AGT-FW-007`：Agent 在 Allow/Delete/应用受管规则 Ensure（新增）与 Cleanup（删除）成功后必须 `ArmPending`；定时器到期、进程收到退出信号、或启动时发现未确认且已过期的 pending 文件时必须执行回滚；`UFWConfirmPending` 清空 pending。回滚失败只记日志。
 
-## 6. fail2ban
+## 6. fail2ban（已废弃）
 
-- `F2B-API-001`：状态读取必须要求受支持、可达和特权节点；有兼容 Agent 时合并远端 installed/active/panelConfigPresent/jails/raw 与 AppDB 草稿、managed和更新时间。
-- `F2B-API-002`：没有保存记录时必须返回稳定默认 jail草稿且 `managed=false`；远端不可查询时不得伪造 installed/active成功状态。
-- `F2B-API-003`：`PUT /fail2ban` 只解析、规范化并保存 Panel YAML草稿，不写目标机、不自动启用；保存前必须通过与状态读取相同的服务器存在/可达/特权门禁，成功后返回状态。
-- `F2B-VAL-001`：YAML必须拒绝未知字段、空 jail集合、非法/重复 jail名、负 maxretry、含换行的标量与非法 option key/value；失败不得覆盖旧草稿。
-- `F2B-API-004`：启用时可使用请求 YAML或已存草稿；远端已安装但尚未接管时必须要求 `confirmTakeover=true`，否则返回 `fail2ban_takeover_confirmation_required`。
-- `F2B-API-005`：apply必须由 `server_fail2ban_apply` 任务经 Agent写 `/etc/fail2ban/jail.d/panel.local`，远端配置测试通过并reload/restart成功后才把 managed置true；失败保留原 managed状态；任务必须注册 Execute，并把规范化 YAML 持久化到 ParamsJSON，以便进程重启后可从 queued/running 恢复。
-- `F2B-API-006`：release必须使用独立 `server_fail2ban_release` 任务（注册 Execute），仅删除 Panel生成配置并在成功后置 managed=false；不得删除、导入或恢复用户自建配置。
-- `F2B-API-007`：install等价于经确认的 apply并可安装缺失软件；apply与release的任务去重域必须分离，重复同操作可复用但相反操作不得误复用。
+- `F2B-API-001`..`F2B-API-007`、`F2B-VAL-001`：**已废弃（2026-11-24）**。为消除受管节点 Fail2ban 配置注入导致的 Root 命令执行面，Fail2ban 管理能力已从 Agent、Panel 后端（5 条 `/fail2ban*` 路由与 `server_fail2ban_apply`/`server_fail2ban_release` 任务、`fail2ban_configs` 表）及前端彻底移除；旧库启动时通过一次性迁移 `drop_legacy_fail2ban_configs` 清理 `fail2ban_configs` 表，遗留 `/servers/{id}?tab=fail2ban` 或 `subtab=fail2ban` 深链自动回落到防火墙视图。
 
 ## 7. APT 软件包
 

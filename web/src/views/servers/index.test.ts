@@ -99,11 +99,6 @@ vi.mock('@/api/security', () => ({
     ufwState: vi.fn().mockResolvedValue({ serverId: 'srv-1', supported: true, installed: true, active: true, status: 'active', defaultPolicy: 'deny', rules: [] }),
     addUfwRule: vi.fn(),
     deleteUfwRule: vi.fn(),
-    fail2BanState: vi.fn(),
-    saveFail2Ban: vi.fn(),
-    enableFail2Ban: vi.fn(),
-    releaseFail2Ban: vi.fn(),
-    installFail2Ban: vi.fn(),
   },
 }));
 

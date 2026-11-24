@@ -71,13 +71,6 @@ func RequiredPermission(method, path string) (string, bool) {
 				return "servers.view", true
 			}
 			return "servers.execute", true
-		case strings.HasSuffix(path, "/fail2ban"):
-			if method == "GET" {
-				return "servers.view", true
-			}
-			return "servers.execute", true
-		case strings.Contains(path, "/fail2ban/"):
-			return "servers.execute", true
 		case strings.Contains(path, "/packages/"):
 			if method == "GET" {
 				return "servers.view", true

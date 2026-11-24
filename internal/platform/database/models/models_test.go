@@ -17,7 +17,7 @@ import (
 // 各库存量表清单，与 migrations.go 中 app/task/metrics 三段一一对应。
 var appTables = []string{
 	"credentials", "servers", "package_updates", "package_refreshes",
-	"fail2ban_configs", "image_updates", "image_refreshes", "application_reconcile_states",
+	"image_updates", "image_refreshes", "application_reconcile_states",
 	"container_observations", "docker_resource_snapshots", "dns_record_snapshots",
 	"applications", "application_persistent_locations", "application_revisions", "application_edit_sessions", "application_edit_session_files",
 	"application_edit_session_operations", "application_files", "application_instances",

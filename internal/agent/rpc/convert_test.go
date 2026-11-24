@@ -104,42 +104,6 @@ func TestUFWMutationRequestsRoundTripSSHPort(t *testing.T) {
 	assertDeepEqual(t, GoUFWDeleteRequest(PBUFWDeleteRequest(deleteRequest)), deleteRequest)
 }
 
-func TestFail2BanRoundTrip(t *testing.T) {
-	config := agentcontract.Fail2BanConfig{
-		Jails: []agentcontract.Fail2BanJail{
-			{
-				Name:     "sshd",
-				Enabled:  true,
-				Preset:   "ssh",
-				Filter:   "sshd",
-				LogPath:  "/var/log/auth.log",
-				Backend:  "systemd",
-				Port:     "ssh",
-				Protocol: "tcp",
-				Action:   "iptables-multiport",
-				MaxRetry: 5,
-				FindTime: "10m",
-				BanTime:  "1h",
-				IgnoreIP: []string{"127.0.0.1/8", "10.0.0.0/8"},
-				Options:  map[string]string{"mode": "aggressive"},
-			},
-		},
-	}
-	status := agentcontract.Fail2BanStatusResponse{
-		Installed:          true,
-		Active:             true,
-		PanelConfigPresent: true,
-		Jails:              []string{"sshd", "nginx-http-auth"},
-		Raw:                "fail2ban-client status",
-	}
-
-	gotConfig := goFail2BanConfig(pbFail2BanConfig(config))
-	assertDeepEqual(t, gotConfig, config)
-
-	gotStatus := goFail2BanStatus(pbFail2BanStatus(status))
-	assertDeepEqual(t, gotStatus, status)
-}
-
 func TestRuntimeSpecRoundTripIncludesWrappersFilesCapsAndRestart(t *testing.T) {
 	uid := 1001
 	gid := 1002

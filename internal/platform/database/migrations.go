@@ -617,6 +617,10 @@ func appMigrationSteps() []orm.Step {
 		{ID: "backfill_application_image_reference", Run: func(ctx context.Context, tx *sql.Tx) error {
 			return backfillApplicationImageReferenceOn(ctx, tx)
 		}},
+		{ID: "drop_legacy_fail2ban_configs", Run: func(ctx context.Context, tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS fail2ban_configs`)
+			return err
+		}},
 	}
 }
 

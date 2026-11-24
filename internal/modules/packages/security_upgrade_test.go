@@ -510,15 +510,6 @@ func (*fakeSecurityAgent) UFWDelete(context.Context, string, agentcontract.UFWDe
 	return remoteops.UFWStatus{}, nil
 }
 func (*fakeSecurityAgent) UFWConfirmPending(context.Context, string) error { return nil }
-func (*fakeSecurityAgent) Fail2BanStatus(context.Context, string) (agentcontract.Fail2BanStatusResponse, error) {
-	return agentcontract.Fail2BanStatusResponse{}, nil
-}
-func (*fakeSecurityAgent) ApplyFail2Ban(context.Context, string, agentcontract.Fail2BanApplyRequest) (agentcontract.Fail2BanStatusResponse, error) {
-	return agentcontract.Fail2BanStatusResponse{}, nil
-}
-func (*fakeSecurityAgent) ReleaseFail2Ban(context.Context, string) (agentcontract.Fail2BanStatusResponse, error) {
-	return agentcontract.Fail2BanStatusResponse{}, nil
-}
 func (*fakeSecurityAgent) RestartSystem(context.Context, string) error { return nil }
 
 // TestUpgradeSecurityWithAgentDelegatesToNativeSecurityOnly 验证生产 Agent 路径下

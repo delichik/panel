@@ -542,15 +542,6 @@ func (fakePackageAgent) UFWDelete(context.Context, string, agentcontract.UFWDele
 	return remoteops.UFWStatus{}, nil
 }
 func (fakePackageAgent) UFWConfirmPending(context.Context, string) error { return nil }
-func (fakePackageAgent) Fail2BanStatus(context.Context, string) (agentcontract.Fail2BanStatusResponse, error) {
-	return agentcontract.Fail2BanStatusResponse{}, nil
-}
-func (fakePackageAgent) ApplyFail2Ban(context.Context, string, agentcontract.Fail2BanApplyRequest) (agentcontract.Fail2BanStatusResponse, error) {
-	return agentcontract.Fail2BanStatusResponse{}, nil
-}
-func (fakePackageAgent) ReleaseFail2Ban(context.Context, string) (agentcontract.Fail2BanStatusResponse, error) {
-	return agentcontract.Fail2BanStatusResponse{}, nil
-}
 func (fakePackageAgent) RestartSystem(context.Context, string) error { return nil }
 
 func TestUpgradeSelectedRejectsInvalidPackageNamesBeforeCreatingTask(t *testing.T) {

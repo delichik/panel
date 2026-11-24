@@ -212,48 +212,9 @@ func goUFWStatus(in *agentpb.UFWStatusResponse) remoteops.UFWStatus {
 	return remoteops.UFWStatus{Installed: in.Installed, Active: in.Active, Status: in.Status, Default: in.Default, Rules: rules, Raw: in.Raw}
 }
 
-func pbFail2BanConfig(in agentcontract.Fail2BanConfig) *agentpb.Fail2BanConfig {
-	jails := make([]*agentpb.Fail2BanJail, 0, len(in.Jails))
-	for _, jail := range in.Jails {
-		jails = append(jails, &agentpb.Fail2BanJail{
-			Name: jail.Name, Enabled: jail.Enabled, Preset: jail.Preset, Filter: jail.Filter,
-			LogPath: jail.LogPath, Backend: jail.Backend, Port: jail.Port, Protocol: jail.Protocol,
-			Action: jail.Action, MaxRetry: int32(jail.MaxRetry), FindTime: jail.FindTime, BanTime: jail.BanTime,
-			IgnoreIp: append([]string(nil), jail.IgnoreIP...), Options: cloneMap(jail.Options),
-		})
-	}
-	return &agentpb.Fail2BanConfig{Jails: jails}
-}
 
-func goFail2BanConfig(in *agentpb.Fail2BanConfig) agentcontract.Fail2BanConfig {
-	if in == nil {
-		return agentcontract.Fail2BanConfig{}
-	}
-	jails := make([]agentcontract.Fail2BanJail, 0, len(in.Jails))
-	for _, jail := range in.Jails {
-		if jail == nil {
-			continue
-		}
-		jails = append(jails, agentcontract.Fail2BanJail{
-			Name: jail.Name, Enabled: jail.Enabled, Preset: jail.Preset, Filter: jail.Filter,
-			LogPath: jail.LogPath, Backend: jail.Backend, Port: jail.Port, Protocol: jail.Protocol,
-			Action: jail.Action, MaxRetry: int(jail.MaxRetry), FindTime: jail.FindTime, BanTime: jail.BanTime,
-			IgnoreIP: append([]string(nil), jail.IgnoreIp...), Options: cloneMap(jail.Options),
-		})
-	}
-	return agentcontract.Fail2BanConfig{Jails: jails}
-}
 
-func pbFail2BanStatus(in agentcontract.Fail2BanStatusResponse) *agentpb.Fail2BanStatusResponse {
-	return &agentpb.Fail2BanStatusResponse{Installed: in.Installed, Active: in.Active, PanelConfigPresent: in.PanelConfigPresent, Jails: append([]string(nil), in.Jails...), Raw: in.Raw}
-}
 
-func goFail2BanStatus(in *agentpb.Fail2BanStatusResponse) agentcontract.Fail2BanStatusResponse {
-	if in == nil {
-		return agentcontract.Fail2BanStatusResponse{}
-	}
-	return agentcontract.Fail2BanStatusResponse{Installed: in.Installed, Active: in.Active, PanelConfigPresent: in.PanelConfigPresent, Jails: append([]string(nil), in.Jails...), Raw: in.Raw}
-}
 
 func pbSpec(in appruntime.Spec) *agentpb.RuntimeSpec {
 	ports := make([]*agentpb.RuntimePort, 0, len(in.Ports))
@@ -535,12 +496,6 @@ func GoUFWDeleteRequest(in *agentpb.UFWDeleteRequest) agentcontract.UFWDeleteReq
 	return agentcontract.UFWDeleteRequest{Number: int(in.Number), SSHPort: int(in.SshPort), AgentPort: int(in.AgentPort)}
 }
 func GoUFWStatus(in *agentpb.UFWStatusResponse) remoteops.UFWStatus { return goUFWStatus(in) }
-func PBFail2BanConfig(in agentcontract.Fail2BanConfig) *agentpb.Fail2BanConfig {
-	return pbFail2BanConfig(in)
-}
-func GoFail2BanStatus(in *agentpb.Fail2BanStatusResponse) agentcontract.Fail2BanStatusResponse {
-	return goFail2BanStatus(in)
-}
 func PBSpec(in appruntime.Spec) *agentpb.RuntimeSpec { return pbSpec(in) }
 func PBRuntimeReconcileRequest(in agentcontract.RuntimeReconcileRequest) *agentpb.RuntimeReconcileRequest {
 	return &agentpb.RuntimeReconcileRequest{

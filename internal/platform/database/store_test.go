@@ -432,10 +432,6 @@ func TestFreshSchemaUsesApplicationTables(t *testing.T) {
 	if !credentialColumns["secret_ciphertext"] {
 		t.Fatal("fresh credentials schema is missing secret_ciphertext")
 	}
-	fail2banColumns := tableColumns(t, store.AppDB(), "fail2ban_configs")
-	if !fail2banColumns["managed"] {
-		t.Fatal("fresh fail2ban schema is missing managed")
-	}
 	serverColumns := tableColumns(t, store.AppDB(), "servers")
 	for _, required := range []string{"privilege_mode", "privilege_last_checked_at"} {
 		if !serverColumns[required] {
@@ -618,7 +614,7 @@ func TestMigrateFacilityAssetNamesAddsScopedUniqueIndexes(t *testing.T) {
 	}
 }
 
-func TestMigrateAddsFail2BanManagedColumn(t *testing.T) {
+func TestMigrateDropsLegacyFail2BanTable(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
 	cfg.DataRoot = filepath.Join(dir, "data")
@@ -626,7 +622,6 @@ func TestMigrateAddsFail2BanManagedColumn(t *testing.T) {
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
 	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
-	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 
 	db, err := sql.Open("sqlite", sqliteDSN(cfg.AppDatabase))
 	if err != nil {
@@ -649,9 +644,12 @@ func TestMigrateAddsFail2BanManagedColumn(t *testing.T) {
 	}
 	defer store.Close()
 
-	columns := tableColumns(t, store.AppDB(), "fail2ban_configs")
-	if !columns["managed"] {
-		t.Fatal("migrated fail2ban schema is missing managed")
+	var count int
+	if err := store.AppDB().QueryRow(`SELECT COUNT(1) FROM sqlite_master WHERE type='table' AND name='fail2ban_configs'`).Scan(&count); err != nil {
+		t.Fatalf("check fail2ban_configs: %v", err)
+	}
+	if count != 0 {
+		t.Fatal("legacy fail2ban_configs table should be dropped during migration")
 	}
 }
 

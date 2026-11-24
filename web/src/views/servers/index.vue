@@ -72,8 +72,6 @@ const route = useRoute();
 const router = useRouter();
 const notifyError = useErrorDialog();
 const notifySuccess = useSuccessToast();
-const isDev = import.meta.env.DEV;
-
 const pageSize = 50;
 const servers = ref<ServerDto[]>([]);
 const serverDetails = ref<Record<string, ServerDto>>({});
@@ -83,7 +81,6 @@ const selectedTab = ref<ServerDetailTab>(normalizeServerDetailTab(route.query.ta
 const systemSubtab = ref<ServerSystemSubtab>(normalizeServerSystemSubtab(route.query.subtab, route.query.tab));
 const resourceSubtab = ref<ServerResourceSubtab>(normalizeServerResourceSubtab(route.query.subtab, route.query.tab));
 const networkSubtab = ref<ServerNetworkSubtab>(normalizeServerNetworkSubtab(route.query.subtab, route.query.tab));
-if (!isDev && networkSubtab.value === 'fail2ban') networkSubtab.value = 'firewall';
 const search = ref(String(route.query.search ?? ''));
 const page = ref(normalizePage(route.query.page));
 const totalServers = ref(0);
@@ -126,10 +123,9 @@ const tabItems = computed(() => serverDetailTabs.map((tab) => ({ value: tab, lab
 const systemSubtabItems = computed(() => serverSystemSubtabs.map((tab) => ({ value: tab, label: t(`serversPage.tab.${tab}`) })));
 const resourceSubtabItems = computed(() => serverResourceSubtabs.map((tab) => ({ value: tab, label: t(`serversPage.tab.${tab}`) })));
 const networkSubtabItems = computed(() => serverNetworkSubtabs
-  .filter((tab) => isDev || tab !== 'fail2ban')
   .map((tab) => ({
     value: tab,
-    label: tab === 'fail2ban' ? t('routes.fail2ban.title') : tab === 'ssh-access' ? t('serversPage.tab.sshAccess') : t('serversPage.tab.firewall'),
+    label: tab === 'ssh-access' ? t('serversPage.tab.sshAccess') : t('serversPage.tab.firewall'),
   })));
 const detailTitle = computed(() => selectedServer.value?.name ?? t('common.loading'));
 const detailDescription = computed(() => selectedServer.value ? `${selectedServer.value.host}:${selectedServer.value.port} / ${selectedServer.value.os?.prettyName || t('common.notAvailable')}` : '');
@@ -252,7 +248,6 @@ function selectResourceSubtab(value: string) {
 
 function selectNetworkSubtab(value: string) {
   const next = value as ServerNetworkSubtab;
-  if (!isDev && next === 'fail2ban') return;
   networkSubtab.value = next;
   visitedNetwork[next] = true;
   if (selectedId.value) void router.replace({ query: detailQuery() });
@@ -312,8 +307,7 @@ watch(() => route.query.subtab, (value) => {
     return;
   }
   if (selectedTab.value === 'network-security' || isLegacyNetworkTab(route.query.tab)) {
-    const normalized = normalizeServerNetworkSubtab(value, route.query.tab);
-    const next = isDev || normalized !== 'fail2ban' ? normalized : 'firewall';
+    const next = normalizeServerNetworkSubtab(value, route.query.tab);
     if (next !== networkSubtab.value) networkSubtab.value = next;
   }
 });
@@ -681,7 +675,7 @@ onBeforeUnmount(() => {
                   <Select class="w-44" :model-value="networkSubtab" :options="networkSubtabItems" :aria-label="t('serversPage.tab.networkSecurity')" @update:model-value="selectNetworkSubtab" />
                 </div>
                 <div class="min-h-0 flex-1">
-                  <FirewallTab v-if="visitedNetwork.firewall || visitedNetwork.fail2ban" v-show="networkSubtab === 'firewall' || networkSubtab === 'fail2ban'" :server="selectedServer" :view="networkSubtab === 'fail2ban' ? 'fail2ban' : 'ufw'" />
+                  <FirewallTab v-if="visitedNetwork.firewall" v-show="networkSubtab === 'firewall'" :server="selectedServer" />
                   <SshAccessTab v-if="visitedNetwork['ssh-access']" v-show="networkSubtab === 'ssh-access'" :server="selectedServer" :active="activeTab === 'network-security' && networkSubtab === 'ssh-access'" />
                 </div>
               </div>
