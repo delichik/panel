@@ -697,7 +697,7 @@ func unixOrZero(sec int64) time.Time {
 	if sec <= 0 {
 		return time.Time{}
 	}
-	return time.Unix(sec, 0)
+	return time.Unix(sec, 0).UTC()
 }
 
 // GoSSHSnapshot 把协议中的在线会话快照还原为共享模型；nil 输入返回零值。
@@ -718,7 +718,7 @@ func GoSSHSnapshot(in *agentpb.AgentSshSnapshot) agentcontract.SSHSnapshot {
 			TTY:           item.Tty,
 			SourceHost:    item.SourceHost,
 			SourceAddress: item.SourceAddress,
-			LoginAt:       time.Unix(item.LoginUnix, 0),
+			LoginAt:       time.Unix(item.LoginUnix, 0).UTC(),
 			PID:           int(item.Pid),
 			Kind:          item.Kind,
 		})
@@ -774,7 +774,7 @@ func GoSSHFailures(in *agentpb.AgentSshFailures) agentcontract.SSHFailures {
 			UserName:      item.UserName,
 			SourceHost:    item.SourceHost,
 			SourceAddress: item.SourceAddress,
-			AttemptAt:     time.Unix(item.AttemptUnix, 0),
+			AttemptAt:     time.Unix(item.AttemptUnix, 0).UTC(),
 			PID:           int(item.Pid),
 		})
 	}

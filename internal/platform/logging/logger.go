@@ -3,6 +3,7 @@ package logging
 import (
 	"context"
 	"os"
+	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -44,8 +45,10 @@ func buildLogger(outputs, errOutputs []string) (*zap.Logger, error) {
 			MessageKey:     "msg",
 			StacktraceKey:  "stacktrace",
 			LineEnding:     zapcore.DefaultLineEnding,
-			EncodeLevel:    zapcore.LowercaseLevelEncoder,
-			EncodeTime:     zapcore.ISO8601TimeEncoder,
+			EncodeLevel: zapcore.LowercaseLevelEncoder,
+			EncodeTime: func(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
+				enc.AppendString(t.UTC().Format(time.RFC3339Nano))
+			},
 			EncodeDuration: zapcore.MillisDurationEncoder,
 			EncodeCaller:   zapcore.ShortCallerEncoder,
 		},

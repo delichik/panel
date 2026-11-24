@@ -83,13 +83,13 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 // StartPeriodic starts module-owned scheduler loops for image refresh, unused
 // image cleanup, and application reconcile. Loops cancel with the shared
 // periodic context. Interval loops delay the first tick by one full interval;
-// unused-image cleanup waits until the next local 03:00 wall clock.
+// unused-image cleanup waits until the next UTC 03:00 wall clock.
 func (s *Service) StartPeriodic(ctx context.Context, taskSvc *tasks.Service) {
 	if s == nil || taskSvc == nil {
 		return
 	}
 	tasks.StartSchedulerLoop(ctx, taskSvc, TaskImageRefresh, imageRefreshInterval, "containers")
-	tasks.StartDailyAtLoop(ctx, taskSvc, TaskImageUnusedCleanup, imageUnusedCleanupHour, imageUnusedCleanupMinute, time.Local, "containers")
+	tasks.StartDailyAtLoop(ctx, taskSvc, TaskImageUnusedCleanup, imageUnusedCleanupHour, imageUnusedCleanupMinute, time.UTC, "containers")
 	tasks.StartSchedulerLoop(ctx, taskSvc, TaskApplicationReconcile, applicationReconcileInterval, "containers")
 }
 

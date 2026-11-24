@@ -188,22 +188,28 @@ func listQuery(r *http.Request) (ListFilter, error) {
 		return f, panelerr.BadRequest("events_limit_invalid", "limit must be between 1 and 500")
 	}
 	f.Limit = limit
+	var fromTime, toTime time.Time
 	for _, v := range []struct {
-		k  string
-		to *string
-	}{{"from", &f.From}, {"to", &f.To}} {
+		k      string
+		to     *string
+		parsed *time.Time
+	}{{"from", &f.From, &fromTime}, {"to", &f.To, &toTime}} {
 		raw := q.Get(v.k)
 		if raw == "" {
 			continue
 		}
-		if _, e := time.Parse(time.RFC3339Nano, raw); e != nil {
-			if _, e2 := time.Parse(time.RFC3339, raw); e2 != nil {
+		parsed, e := time.Parse(time.RFC3339Nano, raw)
+		if e != nil {
+			parsed, e = time.Parse(time.RFC3339, raw)
+			if e != nil {
 				return f, panelerr.BadRequest("events_time_invalid", "Time must use RFC3339")
 			}
 		}
-		*v.to = raw
+		utc := parsed.UTC()
+		*v.parsed = utc
+		*v.to = utc.Format(time.RFC3339Nano)
 	}
-	if f.From != "" && f.To != "" && f.From > f.To {
+	if !fromTime.IsZero() && !toTime.IsZero() && fromTime.After(toTime) {
 		return f, panelerr.BadRequest("events_time_range_invalid", "from must not be after to")
 	}
 	if raw := q.Get("hadError"); raw != "" {

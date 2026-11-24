@@ -50,9 +50,7 @@ const columns = computed(() => [
 
 /** 优先展示最近一次镜像检查时间，未检查时回落到镜像创建时间（Docker created 为 Unix 秒）。 */
 function imageTime(row: ImageDto) {
-  if (row.checkedAt) return formatDateTime(row.checkedAt, t('common.never'));
-  if (!row.created) return t('common.never');
-  return formatDateTime(new Date(row.created * 1000).toISOString(), t('common.never'));
+  return formatDateTime(row.checkedAt || row.created, t('common.never'));
 }
 
 async function load() {

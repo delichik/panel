@@ -4,6 +4,7 @@
 
 ## 当前状态
 
+- 本轮全链路 UTC 与前端浏览器时区统一展示（2026-11-24）：**无新增/删除词条键**，同步更新 `settingsPage.autoUpdate.scheduleTimeHint` 与 `settingsPage.autoUpdate.localTimeHint`（带 `{tz}` 浏览器时区参数）的 en / zh-CN 文案，说明前端按浏览器时区显示并与 UTC 自动换算；后端未新增错误码。
 - 本轮多用户/权限/初始化/访问凭证（2026-11-23）：前端新增 `routes.setup|account|access|forbidden.title`、`auth.setup*`、`auth.passwordChangedRelogin`、`account.*`、`access.*`、`forbidden.*`、`permissions.group.*`（14 组）与 `permissions.<key>.label`（30 项）、`access.roles.readOnly/readWrite/uiTargets/dependsOn`，以及 `common.copy/copied`；en / zh-CN 同键且值非空（`i18n.test.ts` 校验）。未删除既有词条。后端未新增稳定错误码中文映射：本轮新增错误码（`setup_completed`、`username_taken`、`builtin_admin_immutable`、`builtin_role_immutable`、`role_in_use`、`permission_not_grantable`、`unknown_permission`、`credential_*` 等）当前走英文 fallback，若需本地化须在同一改动补 `internal/platform/i18n` 与 `i18n_test.go`。
 - 本轮例行任务通知降噪（2026-11-20）：**无新增/删除前端词条**，en / zh-CN 键集合保持不变（`i18n.test.ts` 校验）；本轮只调整后端过程事件级别与通知过滤（`Quiet` 任务生命周期记 `debug`、通知忽略 debug 事件），不产生用户可见文案，后端也未新增错误码。
 - 本轮 SSH 访问记录（2026-11-23）：新增 `settingsPage.sshAccessSuccessRetention`、`sshAccessFailureRetention`、`sshAccessRetentionHint`、`validationSshAccessRetention`；`serversPage.tab.sshAccess` 与 `serversPage.sshAccess.*`（view/sessions/attempts/range 快捷项/筛选/列名/在线状态/coverage 三态与提示/空态/错误重试等，实际键以 `web/src/i18n/index.ts` 为准）；en / zh-CN 同键且值非空。后端新增稳定错误码 `invalid_ssh_access_retention`、`ssh_access_state_invalid`、`ssh_access_page_invalid`、`ssh_access_time_invalid` 的中文映射由 `i18n_test.go` 覆盖；未删除既有词条。

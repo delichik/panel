@@ -285,7 +285,7 @@ func (f *fakeReverseProxyUpdater) AutoUpdateReverseProxyImage(context.Context) e
 	return f.err
 }
 
-func fixedZone() *time.Location { return time.FixedZone("UTC+8", 8*3600) }
+func fixedZone() *time.Location { return time.UTC }
 
 func at(hour, minute, second int, loc *time.Location) time.Time {
 	return time.Date(2026, 11, 19, hour, minute, second, 0, loc)
@@ -320,6 +320,15 @@ func TestShouldTriggerTriggersAfterScheduleTime(t *testing.T) {
 	rt.ScheduleTime = "99:99"
 	if shouldTrigger(rt, at(10, 0, 0, loc)) {
 		t.Fatal("an invalid schedule time must not trigger")
+	}
+	// 非 UTC 时区的 time.Time 也必须按 UTC 时刻判定（例如 UTC+8 的 11:59 = UTC 03:59，未到 04:00 UTC）。
+	rt.ScheduleTime = "04:00"
+	utcPlus8 := time.FixedZone("UTC+8", 8*3600)
+	if shouldTrigger(rt, time.Date(2026, 11, 19, 11, 59, 59, 0, utcPlus8)) {
+		t.Fatal("11:59:59+08:00 (03:59:59Z) must not trigger a 04:00 UTC schedule")
+	}
+	if !shouldTrigger(rt, time.Date(2026, 11, 19, 12, 0, 0, 0, utcPlus8)) {
+		t.Fatal("12:00:00+08:00 (04:00:00Z) must trigger a 04:00 UTC schedule")
 	}
 }
 

@@ -84,7 +84,7 @@ const lineProperties = computed<PropertyListItem[]>(() => {
   const line = selectedLine.value;
   if (!line) return [];
   const items: PropertyListItem[] = [
-    { key: 'time', label: t('logsPage.time'), value: formatDateTime(typeof line.ts === 'string' ? line.ts : undefined) },
+    { key: 'time', label: t('logsPage.time'), value: formatDateTime(typeof line.ts === 'string' || typeof line.ts === 'number' ? line.ts : undefined) },
   ];
   if (line.level) items.push({ key: 'level', label: t('activity.level'), value: levelLabel(String(line.level)) });
   if (line.eventId || eventId.value) items.push({ key: 'eventId', label: t('logsPage.eventId'), value: line.eventId || eventId.value, mono: true });
@@ -286,7 +286,7 @@ onBeforeUnmount(() => {
       >
         <template #ts="{ row }">
           <div class="flex min-w-0 flex-col items-start gap-1">
-            <span class="whitespace-nowrap text-muted-foreground">{{ formatDateTime(typeof row.ts === 'string' ? row.ts : undefined) }}</span>
+            <span class="whitespace-nowrap text-muted-foreground">{{ formatDateTime(typeof row.ts === 'string' || typeof row.ts === 'number' ? row.ts : undefined) }}</span>
             <Badge v-if="row.level" :tone="eventTone(String(row.level))">{{ levelLabel(String(row.level)) }}</Badge>
           </div>
         </template>

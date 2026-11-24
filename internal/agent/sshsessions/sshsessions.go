@@ -126,7 +126,7 @@ func ReadSessions(opts Options) ([]Session, error) {
 		if rec.typ != userProcess || rec.tty == "" {
 			continue
 		}
-		login := time.Unix(int64(rec.sec), 0)
+		login := time.Unix(int64(rec.sec), 0).UTC()
 		if login.Unix() <= 0 {
 			continue
 		}
@@ -210,7 +210,7 @@ func ReadHistory(opts Options, since time.Time) (History, error) {
 			continue
 		}
 		for _, rec := range records {
-			at := time.Unix(int64(rec.sec), 0)
+			at := time.Unix(int64(rec.sec), 0).UTC()
 			if at.Unix() <= 0 {
 				continue
 			}
@@ -317,7 +317,7 @@ func ReadFailures(opts Options, since time.Time) (Failures, error) {
 			if rec.typ != userProcess && rec.typ != loginProcess {
 				continue
 			}
-			at := time.Unix(int64(rec.sec), 0)
+			at := time.Unix(int64(rec.sec), 0).UTC()
 			if at.Unix() <= 0 || (!since.IsZero() && at.Before(since)) {
 				continue
 			}

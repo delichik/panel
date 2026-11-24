@@ -100,20 +100,22 @@ export function seriesStats(values: Array<number | null | undefined>): SeriesSta
   };
 }
 
+import { formatDateTime, parseDateTime } from './datetime';
+
 const pad = (value: number) => String(value).padStart(2, '0');
 
 /** 图表轴标签使用的本地时间短格式。 */
 export function formatMetricAxisTime(value: number | string, spanMs: number): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
+  const date = parseDateTime(value);
+  if (!date) return '';
   if (spanMs >= 2 * 24 * 60 * 60 * 1000) return `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
   return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-/** Tooltip / 采样时间使用的本地完整时间。 */
+/** Tooltip / 采样时间使用的本地完整时间（统一复用 formatDateTime）。 */
 export function formatMetricDateTime(value?: string | number | null): string {
   if (value === null || value === undefined || value === '') return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  const date = parseDateTime(value);
+  if (!date) return '';
+  return formatDateTime(date, '');
 }

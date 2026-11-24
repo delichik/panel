@@ -102,7 +102,7 @@ func NewService(taskSvc *tasks.Service, settingsStore SettingsStore, options ...
 	s := &Service{
 		tasks:        taskSvc,
 		settings:     settingsStore,
-		now:          time.Now,
+		now:          func() time.Time { return time.Now().UTC() },
 		tickInterval: DefaultTickInterval,
 		waitPoll:     defaultWaitPollInterval,
 		refreshWait:  defaultRefreshTimeout,
@@ -114,7 +114,7 @@ func NewService(taskSvc *tasks.Service, settingsStore SettingsStore, options ...
 		option(s)
 	}
 	if s.now == nil {
-		s.now = time.Now
+		s.now = func() time.Time { return time.Now().UTC() }
 	}
 	if s.tickInterval <= 0 {
 		s.tickInterval = DefaultTickInterval
@@ -293,27 +293,28 @@ func (s *Service) dispatch(task tasks.Task) {
 	}()
 }
 
-// shouldTrigger 实现触发条件：至少一个开关开启 && 本地当日尚无「调度自动运行」
-// 记录 && 当前本地时间已到（或已过）计划 HH:MM。计划时刻之后当天的任意时间都
-// 会补触发一次；同一天只触发一次，次日计划时刻重新开始。
+// shouldTrigger 实现触发条件：至少一个开关开启 && UTC 当日尚无「调度自动运行」
+// 记录 && 当前 UTC 时间已到（或已过）计划 HH:MM。计划时刻之后当天的任意时间都
+// 会补触发一次；同一 UTC 日只触发一次，次日计划时刻重新开始。
 func shouldTrigger(rt settings.RuntimeAutoUpdateSettings, now time.Time) bool {
 	if !rt.AppsEnabled && !rt.PackagesEnabled {
 		return false
 	}
-	if autoRanOnLocalDay(rt.LastAutoRunAt, now) {
+	nowUTC := now.UTC()
+	if autoRanOnUTCDay(rt.LastAutoRunAt, nowUTC) {
 		return false
 	}
 	hour, minute, ok := settings.ParseAutoUpdateScheduleTime(rt.ScheduleTime)
 	if !ok {
 		return false
 	}
-	target := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, now.Location())
-	return !now.Before(target)
+	target := time.Date(nowUTC.Year(), nowUTC.Month(), nowUTC.Day(), hour, minute, 0, 0, time.UTC)
+	return !nowUTC.Before(target)
 }
 
-// autoRanOnLocalDay 报告 lastAutoRunAt 是否落在 now 的本地日期。解析失败的旧值
+// autoRanOnUTCDay 报告 lastAutoRunAt 是否落在 now 的 UTC 日期。解析失败的旧值
 // 视为没有记录（宁可多跑一次，也不因脏数据永久跳过）。
-func autoRanOnLocalDay(lastAutoRunAt string, now time.Time) bool {
+func autoRanOnUTCDay(lastAutoRunAt string, now time.Time) bool {
 	trimmed := strings.TrimSpace(lastAutoRunAt)
 	if trimmed == "" {
 		return false
@@ -324,6 +325,7 @@ func autoRanOnLocalDay(lastAutoRunAt string, now time.Time) bool {
 			return false
 		}
 	}
-	local := parsed.In(now.Location())
-	return local.Year() == now.Year() && local.YearDay() == now.YearDay()
+	nowUTC := now.UTC()
+	ranUTC := parsed.UTC()
+	return ranUTC.Year() == nowUTC.Year() && ranUTC.YearDay() == nowUTC.YearDay()
 }

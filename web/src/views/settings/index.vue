@@ -45,7 +45,7 @@ import type {
   ServerVariableDefinition,
 } from '@/types/settings';
 import { createLatestRequestGuard } from '@/views/_shared/requestState';
-import { formatDateTime } from '@/utils/datetime';
+import { browserTimeZoneLabel, formatDateTime, localTimeOfDayToUtc, utcTimeOfDayToLocal } from '@/utils/datetime';
 import { normalizeImageRegistryEndpoint, normalizeImageRegistryScheme } from '@/utils/imageRegistry';
 import AppearanceSectionSkeleton from './AppearanceSectionSkeleton.vue';
 
@@ -253,7 +253,7 @@ function normalizeAgentDownloadBaseUrl(raw: string): string | null {
   return parsed.origin;
 }
 
-/** 每日执行时间：24 小时制 `HH:MM`（Panel 本地时区；与后端同一正则）。 */
+/** 每日执行时间：24 小时制 `HH:MM`（前端按浏览器时区显示与编辑，提交时自动转为 UTC）。 */
 const scheduleTimePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 function isValidScheduleTime(raw: string): boolean {
@@ -550,14 +550,14 @@ function collectBrandingPayload(): RuntimeBrandingUpdate | null {
 }
 
 function collectAutoUpdatePayload(): RuntimeAutoUpdateUpdate | null {
-  const scheduleTime = form.autoUpdateScheduleTime.trim();
-  if (!isValidScheduleTime(scheduleTime)) return null;
+  const localScheduleTime = form.autoUpdateScheduleTime.trim();
+  if (!isValidScheduleTime(localScheduleTime)) return null;
   const packagesMode = form.autoUpdatePackagesMode === 'all' ? 'all' : 'security';
   return {
     appsEnabled: form.autoUpdateAppsEnabled,
     packagesEnabled: form.autoUpdatePackagesEnabled,
     packagesMode,
-    scheduleTime,
+    scheduleTime: localTimeOfDayToUtc(localScheduleTime),
   };
 }
 
@@ -614,7 +614,7 @@ function refillAutoUpdate(settings: RuntimeSettings) {
   form.autoUpdateAppsEnabled = autoUpdate?.appsEnabled ?? false;
   form.autoUpdatePackagesEnabled = autoUpdate?.packagesEnabled ?? false;
   form.autoUpdatePackagesMode = autoUpdate?.packagesMode === 'all' ? 'all' : 'security';
-  form.autoUpdateScheduleTime = autoUpdate?.scheduleTime || '04:00';
+  form.autoUpdateScheduleTime = utcTimeOfDayToLocal(autoUpdate?.scheduleTime || '04:00');
 }
 
 function refillImageRegistry(settings: RuntimeSettings) {
@@ -852,7 +852,7 @@ function hydrate(settings: RuntimeSettings, variables: ServerVariableDefinition[
       autoUpdateAppsEnabled: settings.autoUpdate?.appsEnabled ?? false,
       autoUpdatePackagesEnabled: settings.autoUpdate?.packagesEnabled ?? false,
       autoUpdatePackagesMode: settings.autoUpdate?.packagesMode === 'all' ? 'all' : 'security',
-      autoUpdateScheduleTime: settings.autoUpdate?.scheduleTime || '04:00',
+      autoUpdateScheduleTime: utcTimeOfDayToLocal(settings.autoUpdate?.scheduleTime || '04:00'),
       imageRegistryEndpoint: settings.imageRegistry?.endpoint ?? '',
       imageRegistryScheme: normalizeImageRegistryScheme(settings.imageRegistry?.scheme),
       variablesText: formatServerVariables(variables),
@@ -1406,7 +1406,7 @@ onBeforeUnmount(() => {
                     :minute-label="t('settingsPage.autoUpdate.minuteLabel')"
                     :invalid="Boolean(fieldErrors.autoUpdateScheduleTime)"
                   />
-                  <span class="text-caption text-muted-foreground">{{ t('settingsPage.autoUpdate.localTimeHint') }}</span>
+                  <span class="text-caption text-muted-foreground">{{ t('settingsPage.autoUpdate.localTimeHint', { tz: browserTimeZoneLabel() }) }}</span>
                 </div>
               </template>
               <template v-if="fieldErrors.autoUpdateScheduleTime" #hint>

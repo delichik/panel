@@ -284,17 +284,20 @@ func asBool(raw any) (bool, error) {
 func asTime(raw any) (time.Time, error) {
 	switch v := raw.(type) {
 	case time.Time:
-		return v, nil
+		return v.UTC(), nil
 	case int64:
-		return time.Unix(v, 0), nil
+		return time.Unix(v, 0).UTC(), nil
 	case float64:
-		return time.Unix(int64(v), 0), nil
+		return time.Unix(int64(v), 0).UTC(), nil
 	case string:
 		if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
-			return t, nil
+			return t.UTC(), nil
 		}
 		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			return t, nil
+			return t.UTC(), nil
+		}
+		if t, err := time.Parse("2006-01-02 15:04:05", v); err == nil {
+			return t.UTC(), nil
 		}
 		return time.Time{}, fmt.Errorf("orm: cannot parse time %q", v)
 	case []byte:

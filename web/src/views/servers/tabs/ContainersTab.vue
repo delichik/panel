@@ -51,10 +51,9 @@ function containerName(container: ContainerDto) {
   return (container.names[0] || container.id).replace(/^\//, '');
 }
 
-/** Docker `created` 为 Unix 秒；列内统一显示本地时间。 */
+/** Docker `created` 为 Unix 秒；列内统一显示浏览器本地时间。 */
 function createdText(value: number) {
-  if (!value) return t('common.never');
-  return formatDateTime(new Date(value * 1000).toISOString(), t('common.never'));
+  return formatDateTime(value, t('common.never'));
 }
 
 function portsText(container: ContainerDto) {

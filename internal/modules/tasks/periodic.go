@@ -80,14 +80,14 @@ type DailyAtLoop struct {
 
 // StartDailyAtLoop starts a wall-clock daily loop for taskType.
 // The first trigger waits until the next occurrence of hour:minute in loc
-// (nil loc uses time.Local); restart never fires immediately. After each run
+// (nil loc uses time.UTC); restart never fires immediately. After each run
 // the next occurrence is recomputed so DST shifts do not accumulate drift.
 func StartDailyAtLoop(ctx context.Context, service *Service, taskType string, hour, minute int, loc *time.Location, module string) *DailyAtLoop {
 	if service == nil || taskType == "" || hour < 0 || hour > 23 || minute < 0 || minute > 59 {
 		return nil
 	}
 	if loc == nil {
-		loc = time.Local
+		loc = time.UTC
 	}
 	loop := &DailyAtLoop{service: service, taskType: taskType, hour: hour, minute: minute, loc: loc, module: module}
 	loop.wg.Add(1)
@@ -108,7 +108,7 @@ func (l *DailyAtLoop) Wait() {
 func (l *DailyAtLoop) run(ctx context.Context) {
 	manager := NewManager(l.service)
 	for {
-		delay := time.Until(nextDailyAt(time.Now(), l.hour, l.minute, l.loc))
+		delay := time.Until(nextDailyAt(time.Now().UTC(), l.hour, l.minute, l.loc))
 		if delay < 0 {
 			delay = 0
 		}
@@ -136,7 +136,7 @@ func (l *DailyAtLoop) run(ctx context.Context) {
 // is strictly after now. If now is exactly the target time, the result is tomorrow.
 func nextDailyAt(now time.Time, hour, minute int, loc *time.Location) time.Time {
 	if loc == nil {
-		loc = time.Local
+		loc = time.UTC
 	}
 	now = now.In(loc)
 	next := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, loc)

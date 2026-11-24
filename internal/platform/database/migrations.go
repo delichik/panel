@@ -219,7 +219,7 @@ func migrateAuthAccountsToUsersOn(ctx context.Context, q migrationExecutor) erro
 		 WHERE id NOT IN (SELECT id FROM users)
 		 LIMIT 1`,
 		`INSERT INTO roles (id, key, name, description, builtin, created_at, updated_at)
-		 SELECT 'role_administrator', 'administrator', 'Administrator', 'Built-in administrator with all permissions', 1, COALESCE((SELECT created_at FROM users LIMIT 1), CURRENT_TIMESTAMP), COALESCE((SELECT updated_at FROM users LIMIT 1), CURRENT_TIMESTAMP)
+		 SELECT 'role_administrator', 'administrator', 'Administrator', 'Built-in administrator with all permissions', 1, COALESCE((SELECT created_at FROM users LIMIT 1), strftime('%Y-%m-%dT%H:%M:%SZ','now')), COALESCE((SELECT updated_at FROM users LIMIT 1), strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 		 WHERE NOT EXISTS (SELECT 1 FROM roles WHERE key = 'administrator')`,
 		`INSERT INTO user_roles (user_id, role_id)
 		 SELECT u.id, 'role_administrator'

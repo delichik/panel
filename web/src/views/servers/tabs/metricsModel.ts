@@ -1,4 +1,5 @@
 import type { ServerMetricsLatest, ServerMetricsRange, ServerMetricsSeries } from '@/api/servers';
+import { parseDateTime } from '@/utils/datetime';
 import { percentOf, seriesStats, type MetricSeriesBand, type MetricSeriesData, type MetricSeriesPoint, type SeriesStats } from '@/utils/metrics';
 
 /** 服务器指标范围与降采样桶；点数上限约 60/180/288/336，避免 7d 全量原始点。 */
@@ -134,7 +135,16 @@ export function latestSampleTime(series: ServerMetricsSeries | null | undefined)
     series.network.at(-1)?.time,
     series.diskCurrent?.time,
   ].filter((value): value is string => Boolean(value));
-  return candidates.sort().at(-1) ?? '';
+  let latest = '';
+  let latestMs = -Infinity;
+  for (const candidate of candidates) {
+    const ms = parseDateTime(candidate)?.getTime();
+    if (ms !== undefined && ms > latestMs) {
+      latestMs = ms;
+      latest = candidate;
+    }
+  }
+  return latest || (candidates.at(-1) ?? '');
 }
 
 export function diskUsagePercent(series: ServerMetricsSeries | null | undefined): number | null {

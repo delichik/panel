@@ -503,7 +503,7 @@ func formatCreated(ts int64) string {
 	if ts <= 0 {
 		return ""
 	}
-	return time.Unix(ts, 0).Local().Format("2006-01-02 15:04:05")
+	return time.Unix(ts, 0).UTC().Format(time.RFC3339)
 }
 
 func printUsage(w io.Writer) {

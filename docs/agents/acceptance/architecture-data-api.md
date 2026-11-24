@@ -29,7 +29,7 @@
 - `ARCH-API-004`：通过通用 JSON decoder 处理的请求 body 最大 10 MiB；超限返回 `request_body_too_large`，无效 JSON 返回 `bad_request`，不得执行部分业务写入。
 - `ARCH-API-005`：除登录、会话查询、公开品牌、公开外观（`GET /api/v1/settings/public-appearance`）和明确的维护模式入口外，`/api/v1` 路由必须经过认证；“必须修改初始密码”状态仅允许会话、登出和账号修改相关动作。
 - `ARCH-API-006`：列表接口必须对分页参数、排序字段、方向、搜索和筛选做白名单校验；空结果返回空集合和合法分页元数据，不得用 404 表示列表为空。
-- `ARCH-API-007`：时间通过 RFC3339/RFC3339Nano 表达并以 UTC 持久化；前端负责按当前 locale/timezone 展示，禁止传递无时区的歧义时间。
+- `ARCH-API-007`：时间通过 RFC3339/RFC3339Nano 表达并以 UTC 持久化，后台调度（含每日定时清理与自动更新计划）和进程日志均统一使用 UTC；前端统一通过 `formatDateTime`（`yyyy-MM-dd HH:mm:ss`）按用户浏览器时区自动换算展示，严禁直接向用户展示原始 Unix 时间戳或无时区的歧义时间。
 - `ARCH-API-008`：DELETE 的成功语义在各域明确规定为 204 或带操作结果的 2xx；异步删除只表示任务已可靠创建，不得假称远端资源已删除。
 - `ARCH-API-009`：当前 Panel API 路由集合由 `internal/bootstrap/panel/routes_manifest_test.go` 固定；增加、删除或改名路由时必须同时更新域验收项、前端消费者/Mock（如有）和清单计数/哈希。外观设置新增 6 条后主 API 基线由 186 变为 192；设置写入拆分后 192 → 197；下线 3 条互联路由后 197 → 194；入口代理与自动更新新增 4 条后 194 → 198；P1 三条后 198 → 201；镜像仓库源 201 → 202；通知长轮询 202 → 203；多用户/权限/初始化新增 18 条（2 条 setup、1 条权限目录、7 条用户、5 条角色、3 条访问凭证）后基线为 **221**（当前值）。公开外观走 `RegisterPublicRoutes` 但仍以 `/api/` 前缀计入主清单，不改变 2 条非 `/api` 公开产物路由。
 - `ARCH-API-010`：前端静态托管对 HTML 使用 `no-cache`，指纹化 `assets/` 使用一年 immutable cache，其他静态资源使用日级缓存；未知前端路径回退 `index.html`，未构建前端时返回明确的纯文本运行状态。

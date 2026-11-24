@@ -4,12 +4,13 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId } from 'vue'
 import Button from './Button.vue';
 import TimeSegmentInput from './TimeSegmentInput.vue';
 import { useI18n } from '@/i18n';
+import { formatDateTime } from '@/utils/datetime';
 import { focusRing, zIndex } from './states';
 import type { DateTimeRangeValue } from './dateTimeRange';
 
 const props = defineProps<{ modelValue: DateTimeRangeValue }>();
 const emit = defineEmits<{ 'update:modelValue': [value: DateTimeRangeValue] }>();
-const { t } = useI18n();
+const { t, locale } = useI18n();
 
 const open = ref(false);
 const root = ref<HTMLElement | null>(null);
@@ -23,14 +24,14 @@ const toDraft = ref<Date | null>(null);
 const viewMonth = ref<Date>(startOfMonth(new Date()));
 const hoverDay = ref<Date | null>(null);
 
-const weekdayFormatter = new Intl.DateTimeFormat(undefined, { weekday: 'narrow' });
-const monthFormatter = new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'long' });
-const weekdayLabels = Array.from({ length: 7 }, (_, index) => weekdayFormatter.format(new Date(2024, 0, index + 1)));
+const weekdayFormatter = computed(() => new Intl.DateTimeFormat(locale.value, { weekday: 'narrow' }));
+const monthFormatter = computed(() => new Intl.DateTimeFormat(locale.value, { year: 'numeric', month: 'long' }));
+const weekdayLabels = computed(() => Array.from({ length: 7 }, (_, index) => weekdayFormatter.value.format(new Date(2024, 0, index + 1))));
 
 const emptyLabel = computed(() => t('components.dateTimeRange.empty'));
 const triggerText = computed(() => {
-  const from = props.modelValue.from ? formatShort(props.modelValue.from) : emptyLabel.value;
-  const to = props.modelValue.to ? formatShort(props.modelValue.to) : emptyLabel.value;
+  const from = props.modelValue.from ? formatDateTime(props.modelValue.from) : emptyLabel.value;
+  const to = props.modelValue.to ? formatDateTime(props.modelValue.to) : emptyLabel.value;
   return `${from} – ${to}`;
 });
 
@@ -70,13 +71,6 @@ function monthCells(month: Date): Array<Date | null> {
 function sameDay(left: Date | null, right: Date | null): boolean {
   if (!left || !right) return false;
   return left.getFullYear() === right.getFullYear() && left.getMonth() === right.getMonth() && left.getDate() === right.getDate();
-}
-
-function formatShort(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  const pad = (value: number) => String(value).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
 // 选完起止日期后，开始时间自动归零、结束时间自动到当天最后一秒；用户可再手动调时间。

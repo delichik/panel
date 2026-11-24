@@ -438,7 +438,7 @@ func (q *Query) Update(ctx context.Context, model any) error {
 		return fmt.Errorf("orm: %s has no primary key; use UpdateColumns", meta.table)
 	}
 	table := q.tableOr(meta.table)
-	now := time.Now()
+	now := time.Now().UTC()
 	var sets []string
 	var args []any
 	for _, f := range meta.fields {
@@ -557,7 +557,7 @@ func (q *Query) whereClauseSQL() string {
 }
 
 func buildInsertValues(meta *modelInfo, rv reflect.Value) (cols []string, vals []any, autoInc *fieldInfo, err error) {
-	now := time.Now()
+	now := time.Now().UTC()
 	for _, f := range meta.fields {
 		if f.autoIncrement {
 			autoInc = f

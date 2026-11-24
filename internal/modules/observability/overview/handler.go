@@ -67,7 +67,8 @@ func sinceFromRequest(w http.ResponseWriter, r *http.Request) (*time.Time, bool)
 		httpx.Error(w, panelerr.Validation("since_invalid", "since must be an RFC3339 timestamp"))
 		return nil, false
 	}
-	return &parsed, true
+	utc := parsed.UTC()
+	return &utc, true
 }
 
 func cardDataIDFromRequest(r *http.Request) string {

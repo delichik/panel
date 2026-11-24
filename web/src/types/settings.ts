@@ -53,7 +53,7 @@ export interface RuntimeAutoUpdateSettings {
   appsEnabled: boolean;
   packagesEnabled: boolean;
   packagesMode: AutoUpdatePackagesMode;
-  /** Daily execution time in the Panel local time zone (`HH:MM`, 24h). */
+  /** Daily execution time in UTC (`HH:MM`, 24h); displayed in browser timezone on the frontend. */
   scheduleTime: string;
   /** Start time of the most recent run; may be a manual "Run now" run. */
   lastRunAt?: string;

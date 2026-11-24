@@ -65,5 +65,6 @@ func parseQueryTime(value string) (*time.Time, error) {
 	if err != nil {
 		return nil, panelerr.BadRequest("time_invalid", "from and to must use RFC3339 format")
 	}
-	return &t, nil
+	utc := t.UTC()
+	return &utc, nil
 }

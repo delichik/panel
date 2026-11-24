@@ -28,6 +28,14 @@ func TestNextDailyAtWaitsForNextWallClock(t *testing.T) {
 	if !got.Equal(want) {
 		t.Fatalf("after target: got %v want %v", got, want)
 	}
+
+	// nil location defaults to UTC.
+	nowUTC := time.Date(2026, 11, 4, 2, 30, 0, 0, time.UTC)
+	got = nextDailyAt(nowUTC, 3, 0, nil)
+	want = time.Date(2026, 11, 4, 3, 0, 0, 0, time.UTC)
+	if !got.Equal(want) || got.Location() != time.UTC {
+		t.Fatalf("nil loc must default to UTC: got %v (%v) want %v", got, got.Location(), want)
+	}
 }
 
 func TestStartDailyAtLoopRejectsInvalidClock(t *testing.T) {
