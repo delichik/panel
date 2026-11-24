@@ -13,9 +13,11 @@ import (
 
 	"panel/internal/modules/servers"
 	"panel/internal/modules/tasks"
+	agentcontract "panel/internal/agent/contract"
 	"panel/internal/platform/config"
 	storage "panel/internal/platform/database"
 	"panel/internal/platform/linux"
+	"panel/internal/platform/linux/remoteops"
 	"panel/internal/platform/ssh"
 )
 
@@ -476,5 +478,83 @@ func TestUpgradeSecurityAuthoritativeEmptySetDoesNotUpgradeAll(t *testing.T) {
 	adapter.mu.Unlock()
 	if selectedCalls != 0 || allCalls != 0 {
 		t.Fatalf("authoritative empty security set must not upgrade anything, got selected=%d all=%d", selectedCalls, allCalls)
+	}
+}
+
+type fakeSecurityAgent struct {
+	mu           sync.Mutex
+	requests     []agentcontract.PackageUpgradeRequest
+	upgradeOut   string
+	remaining    []linux.PackageUpdate
+	listCalls    int
+}
+
+func (f *fakeSecurityAgent) PackageUpdates(context.Context, string) ([]linux.PackageUpdate, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.listCalls++
+	return append([]linux.PackageUpdate(nil), f.remaining...), nil
+}
+
+func (f *fakeSecurityAgent) UpgradePackages(_ context.Context, _ string, req agentcontract.PackageUpgradeRequest) (agentcontract.CommandResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.requests = append(f.requests, req)
+	return agentcontract.CommandResponse{Output: f.upgradeOut}, nil
+}
+
+func (*fakeSecurityAgent) UFWAllow(context.Context, string, agentcontract.UFWAllowRequest) (remoteops.UFWStatus, error) {
+	return remoteops.UFWStatus{}, nil
+}
+func (*fakeSecurityAgent) UFWDelete(context.Context, string, agentcontract.UFWDeleteRequest) (remoteops.UFWStatus, error) {
+	return remoteops.UFWStatus{}, nil
+}
+func (*fakeSecurityAgent) UFWConfirmPending(context.Context, string) error { return nil }
+func (*fakeSecurityAgent) Fail2BanStatus(context.Context, string) (agentcontract.Fail2BanStatusResponse, error) {
+	return agentcontract.Fail2BanStatusResponse{}, nil
+}
+func (*fakeSecurityAgent) ApplyFail2Ban(context.Context, string, agentcontract.Fail2BanApplyRequest) (agentcontract.Fail2BanStatusResponse, error) {
+	return agentcontract.Fail2BanStatusResponse{}, nil
+}
+func (*fakeSecurityAgent) ReleaseFail2Ban(context.Context, string) (agentcontract.Fail2BanStatusResponse, error) {
+	return agentcontract.Fail2BanStatusResponse{}, nil
+}
+func (*fakeSecurityAgent) RestartSystem(context.Context, string) error { return nil }
+
+// TestUpgradeSecurityWithAgentDelegatesToNativeSecurityOnly 验证生产 Agent 路径下
+// package_upgrade_security 直接发送 SecurityOnly=true（不传包名列表、不设 All=true），
+// 并在完成后刷新包缓存。
+func TestUpgradeSecurityWithAgentDelegatesToNativeSecurityOnly(t *testing.T) {
+	svc, taskSvc, db := newSecurityUpgradeTestService(t)
+	traitsJSON := `{"agent.status":"compatible","agent.url":"https://127.0.0.1:9786"}`
+	if _, err := db.Exec(`UPDATE servers SET traits = ? WHERE id = 'srv'`, traitsJSON); err != nil {
+		t.Fatal(err)
+	}
+	fakeAgent := &fakeSecurityAgent{
+		upgradeOut: "Upgrading openssl...\n",
+		remaining: []linux.PackageUpdate{
+			{Name: "curl", InstalledVersion: "1", CandidateVersion: "2", Source: "bookworm-updates", Security: false, SecurityKnown: true},
+		},
+	}
+	svc.agent = fakeAgent
+
+	task, err := svc.UpgradeSecurity(context.Background(), "srv", "scheduler")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForTaskStatus(t, taskSvc, task.ID, tasks.StatusCompleted)
+
+	fakeAgent.mu.Lock()
+	reqs := append([]agentcontract.PackageUpgradeRequest(nil), fakeAgent.requests...)
+	listCalls := fakeAgent.listCalls
+	fakeAgent.mu.Unlock()
+	if len(reqs) != 1 {
+		t.Fatalf("expected 1 UpgradePackages call, got %d", len(reqs))
+	}
+	if !reqs[0].SecurityOnly || reqs[0].All || len(reqs[0].Names) != 0 {
+		t.Fatalf("expected {SecurityOnly:true, All:false, Names:nil}, got %#v", reqs[0])
+	}
+	if listCalls != 1 {
+		t.Fatalf("expected 1 post-upgrade cache refresh, got %d", listCalls)
 	}
 }

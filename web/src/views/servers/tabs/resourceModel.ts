@@ -29,10 +29,21 @@ export function dockerBlockReason(server: ServerDto | null) {
   return '';
 }
 
-export function filterPackages(items: PackageUpdate[], term: string) {
+export type PackageUpdateKind = 'security' | 'regular' | 'unknown';
+export type PackageUpdateFilter = 'all' | PackageUpdateKind;
+
+export function packageUpdateKind(item: PackageUpdate): PackageUpdateKind {
+  if (item.securityKnown === false) return 'unknown';
+  return item.security ? 'security' : 'regular';
+}
+
+export function filterPackages(items: PackageUpdate[], term: string, kind: PackageUpdateFilter = 'all') {
   const needle = term.trim().toLowerCase();
-  if (!needle) return items;
-  return items.filter((item) => [item.name, item.installedVersion, item.candidateVersion, item.source].some((value) => String(value ?? '').toLowerCase().includes(needle)));
+  return items.filter((item) => {
+    if (kind !== 'all' && packageUpdateKind(item) !== kind) return false;
+    if (!needle) return true;
+    return [item.name, item.installedVersion, item.candidateVersion, item.source].some((value) => String(value ?? '').toLowerCase().includes(needle));
+  });
 }
 
 export function containerTone(container: ContainerDto): Tone {

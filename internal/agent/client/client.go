@@ -221,7 +221,11 @@ func (c *GRPCClient) PackageUpdates(ctx context.Context, endpoint string) ([]lin
 
 func (c *GRPCClient) UpgradePackages(ctx context.Context, endpoint string, req agentcontract.PackageUpgradeRequest) (agentcontract.CommandResponse, error) {
 	out, err := callRPC(c, ctx, endpoint, maintenanceTimeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.CommandResponse, error) {
-		return client.UpgradePackages(ctx, &agentpb.PackageUpgradeRequest{Names: append([]string(nil), req.Names...), All: req.All})
+		return client.UpgradePackages(ctx, &agentpb.PackageUpgradeRequest{
+			Names:        append([]string(nil), req.Names...),
+			All:          req.All,
+			SecurityOnly: req.SecurityOnly,
+		})
 	})
 	if out == nil {
 		out = &agentpb.CommandResponse{}

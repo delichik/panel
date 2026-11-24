@@ -254,10 +254,9 @@ message PackageUpdate {
   string installed_version = 2;
   string candidate_version = 3;
   string source = 4;
-  // security 是 Agent 的权威安全更新判定（例如 unattended-upgrade --dry-run
-  // 是否会把该包作为安全更新升级）。security_known 为 false 时 security 没有
-  // 意义：旧 Agent 不填这两个字段，Panel 必须回退到 source 启发式，绝不能把
-  // 未知当成“非安全”。
+  // security 是 Agent 基于临时安全 APT Pinning 模拟升级得到的权威安全更新判定。
+  // security_known 为 false 时 security 没有意义（例如旧 Agent 未填或模拟失败），
+  // Panel 不得用 source 字符串启发式回填。
   optional bool security = 5;
   optional bool security_known = 6;
 }
@@ -269,6 +268,9 @@ message PackageUpdatesResponse {
 message PackageUpgradeRequest {
   repeated string names = 1;
   bool all = 2;
+  // security_only 为 true 时，Agent 通过临时安全 APT Pinning 仅从安全源执行
+  // apt-get upgrade --with-new-pkgs，不依赖 Panel 传入的包名列表。
+  bool security_only = 3;
 }
 
 message CommandResponse {

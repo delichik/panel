@@ -62,6 +62,10 @@ const (
 	// btmp 失败尝试。它与网络探测一样是可选能力：旧 Agent 缺失只影响 SSH
 	// 访问记录，不影响兼容性判定与 RequiredCapabilities。
 	CapabilitySshSessions = "ssh-sessions"
+	// CapabilityPackageUpgradeSecurity 表示 Agent 支持通过临时 APT Pinning
+	// 原生执行仅安全更新（PackageUpgradeRequest.SecurityOnly）。可选能力，
+	// 不进入 RequiredCapabilities。
+	CapabilityPackageUpgradeSecurity = "packages-upgrade-security"
 
 	PrepareRestartStateHoldOn = "holdon"
 	PrepareRestartStateReady  = "ready"
@@ -186,8 +190,9 @@ type PackageUpdatesResponse struct {
 }
 
 type PackageUpgradeRequest struct {
-	Names []string `json:"names,omitempty"`
-	All   bool     `json:"all"`
+	Names        []string `json:"names,omitempty"`
+	All          bool     `json:"all"`
+	SecurityOnly bool     `json:"securityOnly,omitempty"`
 }
 
 type CommandResponse struct {

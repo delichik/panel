@@ -1640,10 +1640,9 @@ type PackageUpdate struct {
 	InstalledVersion string                 `protobuf:"bytes,2,opt,name=installed_version,json=installedVersion,proto3" json:"installed_version,omitempty"`
 	CandidateVersion string                 `protobuf:"bytes,3,opt,name=candidate_version,json=candidateVersion,proto3" json:"candidate_version,omitempty"`
 	Source           string                 `protobuf:"bytes,4,opt,name=source,proto3" json:"source,omitempty"`
-	// security 是 Agent 的权威安全更新判定（例如 unattended-upgrade --dry-run
-	// 是否会把该包作为安全更新升级）。security_known 为 false 时 security 没有
-	// 意义：旧 Agent 不填这两个字段，Panel 必须回退到 source 启发式，绝不能把
-	// 未知当成“非安全”。
+	// security 是 Agent 基于临时安全 APT Pinning 模拟升级得到的权威安全更新判定。
+	// security_known 为 false 时 security 没有意义（例如旧 Agent 未填或模拟失败），
+	// Panel 不得用 source 字符串启发式回填。
 	Security      *bool `protobuf:"varint,5,opt,name=security,proto3,oneof" json:"security,omitempty"`
 	SecurityKnown *bool `protobuf:"varint,6,opt,name=security_known,json=securityKnown,proto3,oneof" json:"security_known,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -1767,9 +1766,12 @@ func (x *PackageUpdatesResponse) GetItems() []*PackageUpdate {
 }
 
 type PackageUpgradeRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Names         []string               `protobuf:"bytes,1,rep,name=names,proto3" json:"names,omitempty"`
-	All           bool                   `protobuf:"varint,2,opt,name=all,proto3" json:"all,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Names []string               `protobuf:"bytes,1,rep,name=names,proto3" json:"names,omitempty"`
+	All   bool                   `protobuf:"varint,2,opt,name=all,proto3" json:"all,omitempty"`
+	// security_only 为 true 时，Agent 通过临时安全 APT Pinning 仅从安全源执行
+	// apt-get upgrade --with-new-pkgs，不依赖 Panel 传入的包名列表。
+	SecurityOnly  bool `protobuf:"varint,3,opt,name=security_only,json=securityOnly,proto3" json:"security_only,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1814,6 +1816,13 @@ func (x *PackageUpgradeRequest) GetNames() []string {
 func (x *PackageUpgradeRequest) GetAll() bool {
 	if x != nil {
 		return x.All
+	}
+	return false
+}
+
+func (x *PackageUpgradeRequest) GetSecurityOnly() bool {
+	if x != nil {
+		return x.SecurityOnly
 	}
 	return false
 }
@@ -7231,10 +7240,11 @@ const file_agent_proto_rawDesc = "" +
 	"\t_securityB\x11\n" +
 	"\x0f_security_known\"M\n" +
 	"\x16PackageUpdatesResponse\x123\n" +
-	"\x05items\x18\x01 \x03(\v2\x1d.panel.agent.v1.PackageUpdateR\x05items\"?\n" +
+	"\x05items\x18\x01 \x03(\v2\x1d.panel.agent.v1.PackageUpdateR\x05items\"d\n" +
 	"\x15PackageUpgradeRequest\x12\x14\n" +
 	"\x05names\x18\x01 \x03(\tR\x05names\x12\x10\n" +
-	"\x03all\x18\x02 \x01(\bR\x03all\")\n" +
+	"\x03all\x18\x02 \x01(\bR\x03all\x12#\n" +
+	"\rsecurity_only\x18\x03 \x01(\bR\fsecurityOnly\")\n" +
 	"\x0fCommandResponse\x12\x16\n" +
 	"\x06output\x18\x01 \x01(\tR\x06output\".\n" +
 	"\x16PrepareRestartResponse\x12\x14\n" +

@@ -33,14 +33,19 @@ func (LocalCollector) PackageUpdates(ctx context.Context) ([]linux.PackageUpdate
 		return nil, err
 	}
 	updates := linux.ParseAptListUpgradable(out)
-	// 安全判定是尽力而为的附加信息：基于 apt-cache policy 的 Candidate 来源与
-	// unattended-upgrades Allowed-Origins 策略（见 apt_security.go）。判定失败时
-	// 只是 SecurityKnown=false，绝不影响可升级列表本身。
+	// 安全判定基于临时安全 APT Pinning 模拟 `apt-get -s upgrade --with-new-pkgs`
+	// （见 apt_security.go）。判定失败时保持 SecurityKnown=false，绝不影响列表本身。
 	applyAptSecurity(ctx, updates)
 	return updates, nil
 }
 
 func (LocalCollector) UpgradePackages(ctx context.Context, req agentcontract.PackageUpgradeRequest) (string, error) {
+	// Package upgrades must survive Panel disconnects; killing apt mid-transaction
+	// can leave dpkg/Docker in an inconsistent state.
+	execCtx := context.WithoutCancel(ctx)
+	if req.SecurityOnly && !req.All {
+		return upgradeSecurityPackages(execCtx)
+	}
 	args := []string{"-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold"}
 	if req.All {
 		args = append(args, "dist-upgrade", "-y")
@@ -56,9 +61,36 @@ func (LocalCollector) UpgradePackages(ctx context.Context, req agentcontract.Pac
 			args = append(args, name)
 		}
 	}
-	// Package upgrades must survive Panel disconnects; killing apt mid-transaction
-	// can leave dpkg/Docker in an inconsistent state.
-	return runCommand(context.WithoutCancel(ctx), time.Hour, "apt-get", args...)
+	return runCommand(execCtx, time.Hour, "apt-get", args...)
+}
+
+// upgradeSecurityPackages 通过临时安全 APT Pinning 执行仅安全更新（PKG-API-011）：
+// 先刷新索引，再在隔离安全 Pin 视图下预检是否有安全更新；为空时直接返回，
+// 非空时执行 `apt-get upgrade --with-new-pkgs -y`，不修改系统 `/etc/apt/`。
+func upgradeSecurityPackages(ctx context.Context) (string, error) {
+	if out, err := runCommand(ctx, 15*time.Minute, "apt-get", "update"); err != nil {
+		return out, err
+	}
+	prefPath, cleanup, err := writeSecurityPreferencesFile(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer cleanup()
+
+	inst, err := simulateSecurityUpgrade(ctx, prefPath)
+	if err != nil {
+		return "", err
+	}
+	if len(inst) == 0 {
+		return "No security updates available\n", nil
+	}
+	args := securityAptPreferencesArgs(prefPath)
+	args = append(args,
+		"-o", "Dpkg::Options::=--force-confdef",
+		"-o", "Dpkg::Options::=--force-confold",
+		"upgrade", "--with-new-pkgs", "-y",
+	)
+	return runCommand(ctx, time.Hour, "apt-get", args...)
 }
 
 func (c LocalCollector) InstallUFW(ctx context.Context, req agentcontract.UFWInstallRequest) (remoteops.UFWStatus, error) {

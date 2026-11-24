@@ -465,6 +465,37 @@ func (s *Service) runUpgradeSecurity(ctx context.Context, taskID string, srv ser
 	if err := s.tasks.Start(ctx, taskID); err != nil {
 		return err
 	}
+	if s.agent != nil {
+		_ = s.tasks.Advance(ctx, taskID, "running", "upgrading security packages")
+		baseURL, err := packageAgentURL(srv)
+		if err != nil {
+			_ = s.tasks.Fail(ctx, taskID, err)
+			return err
+		}
+		result, err := s.agent.UpgradePackages(ctx, baseURL, agentcontract.PackageUpgradeRequest{SecurityOnly: true})
+		if strings.TrimSpace(result.Output) != "" {
+			_ = taskLogSink{s.tasks, taskID}.AppendLog(ctx, "stdout", result.Output)
+		}
+		if err != nil {
+			_ = s.tasks.Fail(ctx, taskID, err)
+			return err
+		}
+		_ = s.tasks.Advance(ctx, taskID, "verifying", "refreshing package cache after upgrade")
+		remaining, err := s.listUpgradeable(ctx, srv, adapter)
+		if err != nil {
+			_ = s.tasks.Fail(ctx, taskID, err)
+			return err
+		}
+		if err := s.replaceUpdates(ctx, srv.ID, remaining); err != nil {
+			_ = s.tasks.Fail(ctx, taskID, err)
+			return err
+		}
+		if strings.Contains(result.Output, "No security updates available") {
+			return s.tasks.Complete(ctx, taskID, "No security updates available")
+		}
+		return s.tasks.Complete(ctx, taskID, "Security packages upgraded")
+	}
+
 	_ = s.tasks.Advance(ctx, taskID, "running", "listing security package updates")
 	updates, err := s.listUpgradeable(ctx, srv, adapter)
 	if err != nil {

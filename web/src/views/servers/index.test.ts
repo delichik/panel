@@ -389,9 +389,12 @@ describe('servers page table and covered detail', () => {
     expect(rows[1]!.text()).not.toContain(t('resourcesPage.securityUpdate'));
     expect(rows[2]!.text()).toContain(t('resourcesPage.securityUpdate'));
     expect(rows[3]!.text()).not.toContain(t('resourcesPage.securityUpdate'));
+    expect(rows[3]!.text()).toContain(t('resourcesPage.regularUpdate'));
     // 未验证徽标带 tooltip 说明（需要 Agent 权威 apt 元数据或升级 Agent）。
     expect(wrapper.findAllComponents(Tooltip)).toHaveLength(1);
     expect(wrapper.findComponent(Tooltip).props('text')).toBe(t('resourcesPage.securityUnknownHint'));
+    // 页脚汇总展示安全与普通更新数量。
+    expect(wrapper.text()).toContain(t('resourcesPage.packageSummary', { total: 4, security: 2, regular: 1 }));
   });
 
   it('uses a bounded NumberBox for the UFW rule port', async () => {

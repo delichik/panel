@@ -9,6 +9,7 @@ import Checkbox from '@/components/ui/Checkbox.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
+import Select from '@/components/ui/Select.vue';
 import Table from '@/components/ui/Table.vue';
 import Tooltip from '@/components/ui/Tooltip.vue';
 import { useErrorDialog } from '@/components/ui/errorDialog';
@@ -18,7 +19,14 @@ import type { PackageUpdateList } from '@/types/resources';
 import type { ServerDto } from '@/types/servers';
 import { formatDateTime } from '@/utils/datetime';
 import { createLatestRequestGuard, isAbortError } from '@/views/_shared/requestState';
-import { canMaintainPackages, filterPackages, packageBlockReason, selectedPackageNames } from './resourceModel';
+import {
+  canMaintainPackages,
+  filterPackages,
+  packageBlockReason,
+  packageUpdateKind,
+  selectedPackageNames,
+  type PackageUpdateFilter,
+} from './resourceModel';
 
 const props = defineProps<{ server: ServerDto }>();
 const { t } = useI18n();
@@ -28,13 +36,38 @@ const notifySuccess = useSuccessToast();
 const packageList = ref<PackageUpdateList | null>(null);
 const selection = reactive<Record<string, boolean>>({});
 const search = ref('');
+const updateFilter = ref<PackageUpdateFilter>('all');
 const loading = ref(false);
 const error = ref('');
 const pending = ref('');
 const confirmUpgradeAll = ref(false);
 const canMaintain = computed(() => canMaintainPackages(props.server));
 const blockReason = computed(() => packageBlockReason(props.server));
-const rows = computed(() => filterPackages(packageList.value?.updates ?? [], search.value));
+const allUpdates = computed(() => packageList.value?.updates ?? []);
+const updateCounts = computed(() => {
+  let security = 0;
+  let regular = 0;
+  let unknown = 0;
+  for (const item of allUpdates.value) {
+    const kind = packageUpdateKind(item);
+    if (kind === 'security') security += 1;
+    else if (kind === 'unknown') unknown += 1;
+    else regular += 1;
+  }
+  return { total: allUpdates.value.length, security, regular, unknown };
+});
+const filterOptions = computed(() => {
+  const options = [
+    { value: 'all', label: t('resourcesPage.filterAllUpdates', { count: updateCounts.value.total }) },
+    { value: 'security', label: t('resourcesPage.filterSecurityUpdates', { count: updateCounts.value.security }) },
+    { value: 'regular', label: t('resourcesPage.filterRegularUpdates', { count: updateCounts.value.regular }) },
+  ];
+  if (updateCounts.value.unknown > 0) {
+    options.push({ value: 'unknown', label: t('resourcesPage.filterUnknownUpdates', { count: updateCounts.value.unknown }) });
+  }
+  return options;
+});
+const rows = computed(() => filterPackages(allUpdates.value, search.value, updateFilter.value));
 const selectedNames = computed(() => selectedPackageNames(selection));
 const allVisibleSelected = computed(() => rows.value.length > 0 && rows.value.every((item) => selection[item.name]));
 
@@ -47,7 +80,7 @@ const columns = computed(() => [
   { key: 'name', label: t('common.name') },
   { key: 'installed', label: t('resourcesPage.installedVersion'), nowrap: true, width: 'w-40', hideBelow: 'wide' as const },
   { key: 'candidate', label: t('resourcesPage.candidateVersion'), nowrap: true, width: 'w-40', hideBelow: 'sm' as const },
-  { key: 'security', label: t('resourcesPage.securityUpdate'), nowrap: true, width: 'w-28', hideBelow: 'wide' as const },
+  { key: 'security', label: t('resourcesPage.updateType'), nowrap: true, width: 'w-28', hideBelow: 'sm' as const },
 ]);
 
 function clearSelection() {
@@ -135,7 +168,15 @@ onBeforeUnmount(() => {
     <div class="grid gap-3">
       <div v-if="blockReason" class="rounded-control border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t(blockReason) }}</div>
       <div class="flex flex-wrap items-center justify-between gap-2">
-        <SearchInput v-model="search" class="w-full max-w-sm" clearable :label="t('common.search')" :placeholder="t('resourcesPage.searchPackages')" :clear-label="t('common.clearSearch')" />
+        <div class="flex flex-1 flex-wrap items-center gap-2">
+          <SearchInput v-model="search" class="w-full max-w-sm" clearable :label="t('common.search')" :placeholder="t('resourcesPage.searchPackages')" :clear-label="t('common.clearSearch')" />
+          <Select
+            v-model="updateFilter"
+            class="w-44"
+            :options="filterOptions"
+            :aria-label="t('resourcesPage.updateType')"
+          />
+        </div>
         <div class="flex flex-wrap gap-2">
           <Button v-permission="'servers.execute'" size="sm" :disabled="!canMaintain" :loading="pending === 'refresh' || loading" @click="refreshMetadata"><RefreshCcw />{{ t('resourcesPage.refreshMetadata') }}</Button>
           <Button v-permission="'servers.execute'" v-if="selectedNames.length" size="sm" variant="primary" :disabled="!canMaintain" :loading="pending === 'upgrade-selected'" @click="upgradeSelected"><Package />{{ t('resourcesPage.upgradeSelected') }}</Button>
@@ -187,14 +228,20 @@ onBeforeUnmount(() => {
           <Badge tone="neutral">{{ t('resourcesPage.securityUnknown') }}</Badge>
         </Tooltip>
         <Badge v-else-if="row.security" tone="warning">{{ t('resourcesPage.securityUpdate') }}</Badge>
+        <Badge v-else tone="info">{{ t('resourcesPage.regularUpdate') }}</Badge>
       </template>
       <template #empty>
         <EmptyState variant="inset" :title="t('resourcesPage.noPackages')" :description="t('resourcesPage.noPackagesHint')" />
       </template>
     </Table>
 
-    <footer class="flex items-center justify-between border-t border-divider pt-3 text-sm text-muted-foreground">
-      <span>{{ t('resourcesPage.lastRefresh') }}: {{ formatDateTime(packageList?.lastRefreshedAt) || t('common.never') }}</span>
+    <footer class="flex flex-wrap items-center justify-between gap-2 border-t border-divider pt-3 text-sm text-muted-foreground">
+      <div class="flex flex-wrap items-center gap-3">
+        <span>{{ t('resourcesPage.lastRefresh') }}: {{ formatDateTime(packageList?.lastRefreshedAt) || t('common.never') }}</span>
+        <span v-if="updateCounts.total > 0">
+          {{ t('resourcesPage.packageSummary', { total: updateCounts.total, security: updateCounts.security, regular: updateCounts.regular }) }}
+        </span>
+      </div>
       <span v-if="selectedNames.length">{{ selectedNames.length }} {{ t('resourcesPage.selectedCount') }}</span>
     </footer>
 
