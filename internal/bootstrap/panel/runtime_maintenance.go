@@ -15,6 +15,29 @@ import (
 
 type runtimeClearAuditContextKey struct{}
 
+type statusCapturingResponseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusCapturingResponseWriter) WriteHeader(code int) {
+	if w.status == 0 {
+		w.status = code
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *statusCapturingResponseWriter) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *statusCapturingResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
 // Cleanup status and duplicate receipts remain available during maintenance.
 // The first request's audit is drained before deletion, like other writers.
 func (a *App) runtimeMaintenanceMiddleware(next http.Handler) http.Handler {
@@ -29,7 +52,12 @@ func (a *App) runtimeMaintenanceMiddleware(next http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			next.ServeHTTP(w, r)
+			capture := &statusCapturingResponseWriter{ResponseWriter: w}
+			next.ServeHTTP(capture, r)
+			if capture.status != http.StatusAccepted {
+				done()
+				return
+			}
 			// Reject new writers before releasing this request's Enter token so
 			// there is no window between 202 and clearRuntimeData's PauseContext
 			// where ordinary mutations could still write (DIAG-CLR-006).

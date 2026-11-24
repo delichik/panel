@@ -90,3 +90,39 @@ func TestClearRequestAuditFinishesBeforeWriterDrain(t *testing.T) {
 	}
 	a.runtimeWriters.Resume()
 }
+
+func TestClearRequestRejectedDoesNotPauseMaintenance(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusBadRequest, http.StatusInternalServerError} {
+		a := &App{}
+		h := a.runtimeMaintenanceMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(status)
+		}))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/debug/clear-runtime-data", nil))
+		if w.Code != status {
+			t.Fatalf("status %d: got %d", status, w.Code)
+		}
+		if a.runtimeWriters.Paused() {
+			t.Fatalf("status %d: rejected clear-runtime-data request must not pause maintenance gate", status)
+		}
+		mut := httptest.NewRecorder()
+		h.ServeHTTP(mut, httptest.NewRequest(http.MethodPost, "/api/v1/applications", nil))
+		if mut.Code == http.StatusServiceUnavailable {
+			t.Fatalf("status %d: mutations were unexpectedly blocked with 503", status)
+		}
+	}
+
+	a := &App{}
+	h := a.runtimeMaintenanceMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/debug/clear-runtime-data", nil))
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", w.Code)
+	}
+	if !a.runtimeWriters.Paused() {
+		t.Fatal("accepted clear-runtime-data request must pause maintenance gate")
+	}
+	a.runtimeWriters.Resume()
+}
