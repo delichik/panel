@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import { setUnauthorizedHandler } from '@/api/client';
 import { resolveActivityRedirect } from '@/api/activityRedirect';
+import { defaultLandingPath } from '@/components/shell/navModel';
 import { useSessionStore } from '@/stores/session';
 import { lazyPage } from './lazyPage';
 import { pageLoaders } from './pageLoaders';
@@ -29,10 +30,10 @@ export const router = createRouter({
       path: '/',
       component: lazyPage(pageLoaders.appShell),
       children: [
-        { path: '', redirect: '/overview' },
+        { path: '', redirect: () => defaultLandingPath((permission) => useSessionStore().can(permission)) },
         { path: 'overview', component: lazyPage(pageLoaders.overview), meta: { titleKey: 'routes.overview.title', permission: 'overview.view' } },
         { path: 'servers', component: lazyPage(pageLoaders.servers), meta: { titleKey: 'routes.servers.title', permission: 'servers.view' } },
-        { path: 'credentials', component: lazyPage(pageLoaders.credentials), meta: { titleKey: 'routes.credentials.title', permission: 'servers.credentials.manage' } },
+        { path: 'credentials', component: lazyPage(pageLoaders.credentials), meta: { titleKey: 'routes.credentials.title', permission: 'servers.view' } },
         { path: 'applications', redirect: '/applications/apps' },
         { path: 'applications/apps', component: lazyPage(pageLoaders.applications), meta: { titleKey: 'routes.applications.title', permission: 'applications.view' } },
         { path: 'applications/apps/create', component: lazyPage(pageLoaders.applications), meta: { titleKey: 'routes.applications.title', permission: 'applications.edit' } },
@@ -116,12 +117,14 @@ router.beforeEach(async (to) => {
   const setupRequired = await session.ensureSetupStatus();
 
   if (to.path === '/setup') {
-    if (!setupRequired) return session.authenticated ? '/overview' : '/login';
+    if (!setupRequired) return session.authenticated ? defaultLandingPath((permission) => session.can(permission)) : '/login';
     return true;
   }
   if (to.meta.public) {
     if (setupRequired) return '/setup';
-    if (to.path === '/login' && session.authenticated && !session.mustChangePassword) return '/overview';
+    if (to.path === '/login' && session.authenticated && !session.mustChangePassword) {
+      return defaultLandingPath((permission) => session.can(permission));
+    }
     return true;
   }
   if (setupRequired) return '/setup';

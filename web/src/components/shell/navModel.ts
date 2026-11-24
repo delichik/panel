@@ -34,7 +34,7 @@ export const navGroups: NavGroup[] = [
     titleKey: 'layout.nav.assets',
     items: [
       { key: 'servers', titleKey: 'routes.servers.title', to: '/servers', icon: Server, permission: 'servers.view' },
-      { key: 'credentials', titleKey: 'routes.credentials.title', to: '/credentials', icon: KeyRound, permission: 'servers.credentials.manage' },
+      { key: 'credentials', titleKey: 'routes.credentials.title', to: '/credentials', icon: KeyRound, permission: 'servers.view' },
       { key: 'certificates', titleKey: 'routes.certificates.title', to: '/certificates/domains', icon: ShieldCheck, permission: 'certificates.view' },
       { key: 'dns', titleKey: 'routes.dns.title', to: '/dns/domains', icon: Globe, permission: 'dns.view' },
     ],
@@ -64,6 +64,12 @@ export function visibleNavGroups(can: (permission: string) => boolean): NavGroup
   return navGroups
     .map((group) => ({ ...group, items: group.items.filter((item) => !item.permission || can(item.permission)) }))
     .filter((group) => group.items.length > 0);
+}
+
+/** First accessible landing path for a signed-in session, falling back to /account. */
+export function defaultLandingPath(can: (permission: string) => boolean): string {
+  const first = visibleNavGroups(can)[0]?.items[0];
+  return first ? first.to : '/account';
 }
 
 export function activeNavKey(path: string) {

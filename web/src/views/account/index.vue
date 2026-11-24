@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { ClipboardList, Plus, Trash2 } from '@/icons';
 import { accessCredentialsApi, type AccessCredential, type AccessCredentialCreated as CreatedCredential } from '@/api/access';
 import Button from '@/components/ui/Button.vue';
@@ -44,6 +44,12 @@ const minutes = ref(15);
 const scope = ref<'readonly' | 'readwrite'>('readonly');
 const allowManagement = ref(false);
 const revokeTarget = ref<AccessCredential | null>(null);
+
+const canManageAccess = computed(() => session.canAny(['access.users.manage', 'access.roles.manage', 'access.credentials.manage']));
+
+watch(createOpen, (open) => {
+  if (!open) created.value = null;
+});
 
 const credentialColumns = computed(() => [
   { key: 'name', label: t('account.credentials.name') },
@@ -223,8 +229,10 @@ onMounted(loadCredentials);
             <RadioButton v-model="scope" value="readonly" :label="t('account.credentials.scopeValue.readonly')" />
             <RadioButton v-model="scope" value="readwrite" :label="t('account.credentials.scopeValue.readwrite')" />
           </div>
-          <Checkbox v-model="allowManagement" :disabled="scope !== 'readwrite'" :label="t('account.credentials.allowManagement')" />
-          <InfoBar tone="warning">{{ t('account.credentials.allowManagementHint') }}</InfoBar>
+          <template v-if="canManageAccess">
+            <Checkbox v-model="allowManagement" :disabled="scope !== 'readwrite'" :label="t('account.credentials.allowManagement')" />
+            <InfoBar tone="warning">{{ t('account.credentials.allowManagementHint') }}</InfoBar>
+          </template>
         </template>
         <template v-else>
           <InfoBar tone="warning">{{ t('account.credentials.tokenOnce') }}</InfoBar>

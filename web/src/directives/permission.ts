@@ -6,18 +6,22 @@ type PermissionValue = string | string[] | {
   effect?: 'hide' | 'disable';
 };
 
-function allowed(value: PermissionValue): { keys: string[]; effect: 'hide' | 'disable' } {
-  if (typeof value === 'string') return { keys: [value], effect: 'hide' };
-  if (Array.isArray(value)) return { keys: value, effect: 'hide' };
+function allowed(
+  value: PermissionValue,
+  modifiers?: Partial<Record<string, boolean>>,
+): { keys: string[]; effect: 'hide' | 'disable' } {
+  const defaultEffect: 'hide' | 'disable' = modifiers?.disable ? 'disable' : 'hide';
+  if (typeof value === 'string') return { keys: [value], effect: defaultEffect };
+  if (Array.isArray(value)) return { keys: value, effect: defaultEffect };
   return {
     keys: Array.isArray(value.permission) ? value.permission : [value.permission],
-    effect: value.effect ?? 'hide',
+    effect: value.effect ?? defaultEffect,
   };
 }
 
 function apply(el: HTMLElement, binding: DirectiveBinding<PermissionValue>) {
   if (!binding.value) return;
-  const { keys, effect } = allowed(binding.value);
+  const { keys, effect } = allowed(binding.value, binding.modifiers);
   const session = useSessionStore();
   const granted = keys.some((key) => session.can(key));
   if (effect === 'disable') {

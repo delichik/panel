@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { Plus, Trash2 } from '@/icons';
 import {
@@ -49,10 +49,25 @@ const roles = ref<AccessRole[]>([]);
 const loading = ref(false);
 
 const userDialogOpen = ref(false);
+const editingUser = ref<AccessUser | null>(null);
 const userForm = ref({ username: '', displayName: '', password: '', roleIds: [] as string[] });
 const userError = ref('');
 const savingUser = ref(false);
 const deleteUserTarget = ref<AccessUser | null>(null);
+const forceLogoutTarget = ref<AccessUser | null>(null);
+
+const resetPasswordTarget = ref<AccessUser | null>(null);
+const resetPasswordValue = ref('');
+const resetPasswordError = ref('');
+const resettingPassword = ref(false);
+
+const userSearch = ref('');
+const userStatusFilter = ref('');
+const statusOptions = computed(() => [
+  { label: t('access.users.allStatuses'), value: '' },
+  { label: t('access.users.statusActive'), value: 'active' },
+  { label: t('access.users.statusDisabled'), value: 'disabled' },
+]);
 
 const roleDialogOpen = ref(false);
 const editingRole = ref<AccessRole | null>(null);
@@ -83,15 +98,23 @@ const groupedPermissions = computed(() => catalog.value.groups.map((group) => ({
   items: catalog.value.permissions.filter((permission) => permission.group === group.key && permission.grantable),
 })).filter((entry) => entry.items.length > 0));
 
+async function loadUsers() {
+  const userPage = await usersApi.list({
+    pageSize: 200,
+    q: userSearch.value.trim() || undefined,
+    status: userStatusFilter.value || undefined,
+  });
+  users.value = userPage.items;
+}
+
 async function load() {
   loading.value = true;
   try {
-    const [userPage, roleResult, catalogResult] = await Promise.all([
-      usersApi.list({ pageSize: 200 }),
-      rolesApi.list(),
+    const [, roleResult, catalogResult] = await Promise.all([
+      loadUsers(),
+      canRoles.value ? rolesApi.list() : Promise.resolve({ items: [] as AccessRole[] }),
       permissionsApi.catalog(),
     ]);
-    users.value = userPage.items;
     roles.value = roleResult.items;
     catalog.value = catalogResult;
   } catch (err) {
@@ -106,28 +129,91 @@ function switchSection(value: string) {
 }
 
 function openCreateUser() {
+  editingUser.value = null;
   userForm.value = { username: '', displayName: '', password: '', roleIds: [] };
   userError.value = '';
   userDialogOpen.value = true;
 }
 
-async function createUser() {
+function openEditUser(user: AccessUser) {
+  editingUser.value = user;
+  userForm.value = {
+    username: user.username,
+    displayName: user.displayName,
+    password: '',
+    roleIds: (user.roles ?? []).map((role) => role.id),
+  };
+  userError.value = '';
+  userDialogOpen.value = true;
+}
+
+async function saveUser() {
   userError.value = '';
   savingUser.value = true;
   try {
-    await usersApi.create({
-      username: userForm.value.username.trim(),
-      displayName: userForm.value.displayName.trim(),
-      password: userForm.value.password,
-      roleIds: userForm.value.roleIds,
-    });
-    userDialogOpen.value = false;
-    notifySuccess(t('access.users.created'));
+    if (editingUser.value) {
+      await usersApi.update(editingUser.value.id, {
+        displayName: userForm.value.displayName.trim(),
+        roleIds: userForm.value.roleIds,
+      });
+      userDialogOpen.value = false;
+      notifySuccess(t('access.users.updated'));
+    } else {
+      await usersApi.create({
+        username: userForm.value.username.trim(),
+        displayName: userForm.value.displayName.trim(),
+        password: userForm.value.password,
+        roleIds: userForm.value.roleIds,
+      });
+      userDialogOpen.value = false;
+      notifySuccess(t('access.users.created'));
+    }
     await load();
   } catch (err) {
-    userError.value = err instanceof Error ? err.message : t('access.users.createFailed');
+    userError.value = err instanceof Error
+      ? err.message
+      : t(editingUser.value ? 'access.users.updateFailed' : 'access.users.createFailed');
   } finally {
     savingUser.value = false;
+  }
+}
+
+function openResetPassword(user: AccessUser) {
+  resetPasswordTarget.value = user;
+  resetPasswordValue.value = '';
+  resetPasswordError.value = '';
+}
+
+async function submitResetPassword() {
+  if (!resetPasswordTarget.value) return;
+  resetPasswordError.value = '';
+  if (resetPasswordValue.value.length < 8) {
+    resetPasswordError.value = t('auth.newPasswordTooShort');
+    return;
+  }
+  resettingPassword.value = true;
+  try {
+    await usersApi.resetPassword(resetPasswordTarget.value.id, resetPasswordValue.value);
+    resetPasswordTarget.value = null;
+    resetPasswordValue.value = '';
+    notifySuccess(t('access.users.passwordReset'));
+    await load();
+  } catch (err) {
+    resetPasswordError.value = err instanceof Error ? err.message : t('access.users.resetPasswordFailed');
+  } finally {
+    resettingPassword.value = false;
+  }
+}
+
+async function confirmForceLogout() {
+  if (!forceLogoutTarget.value) return;
+  try {
+    await usersApi.forceLogout(forceLogoutTarget.value.id);
+    notifySuccess(t('access.users.forcedLogout'));
+  } catch (err) {
+    notifyError(err instanceof Error ? err.message : t('access.users.forceLogoutFailed'), err);
+  } finally {
+    forceLogoutTarget.value = null;
   }
 }
 
@@ -229,6 +315,16 @@ async function deleteRole() {
   }
 }
 
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
+watch([userSearch, userStatusFilter], () => {
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    void loadUsers().catch((err) => {
+      notifyError(err instanceof Error ? err.message : t('access.loadFailed'), err);
+    });
+  }, 200);
+});
+
 onMounted(load);
 </script>
 
@@ -236,7 +332,20 @@ onMounted(load);
   <ConsolePage :title="t('routes.access.title')" :description="t('access.description')">
     <div class="grid min-h-0 gap-3 overflow-auto">
       <Tabs :tabs="tabs" :model-value="section" @update:model-value="switchSection" />
-      <div class="flex justify-end">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div v-if="section === 'users'" class="flex flex-wrap items-center gap-2">
+          <Input
+            v-model="userSearch"
+            class="w-60"
+            :placeholder="t('access.users.searchPlaceholder')"
+          />
+          <Select
+            v-model="userStatusFilter"
+            class="w-36"
+            :options="statusOptions"
+          />
+        </div>
+        <div v-else />
         <Button v-if="section === 'users'" variant="primary" @click="openCreateUser"><Plus />{{ t('access.users.create') }}</Button>
         <Button v-else variant="primary" @click="openCreateRole"><Plus />{{ t('access.roles.create') }}</Button>
       </div>
@@ -247,17 +356,22 @@ onMounted(load);
             <span class="font-medium">{{ row.username }}</span>
             <span v-if="row.builtin" class="ml-2 text-xs text-muted-foreground">{{ t('access.users.builtin') }}</span>
           </template>
-          <template #roles="{ row }">{{ row.roles.map((role) => role.name).join(', ') || '—' }}</template>
+          <template #roles="{ row }">{{ (row.roles ?? []).map((role) => role.name).join(', ') || '—' }}</template>
           <template #status="{ row }">{{
             row.status === 'active' ? t('access.users.statusActive') : t('access.users.statusDisabled')
           }}</template>
           <template #lastLoginAt="{ row }">{{ row.lastLoginAt ? formatDateTime(row.lastLoginAt) : '—' }}</template>
           <template #actions="{ row }">
             <div class="flex justify-end gap-1">
-              <Button v-if="!row.builtin" size="sm" @click="toggleUserStatus(row)">
+              <Button v-if="!row.builtin" size="sm" @click="openEditUser(row)">{{ t('common.edit') }}</Button>
+              <Button v-if="!row.builtin" size="sm" @click="openResetPassword(row)">{{ t('access.users.resetPassword') }}</Button>
+              <Button v-if="!row.builtin && row.id !== session.user?.id" size="sm" @click="forceLogoutTarget = row">
+                {{ t('access.users.forceLogout') }}
+              </Button>
+              <Button v-if="!row.builtin && row.id !== session.user?.id" size="sm" @click="toggleUserStatus(row)">
                 {{ row.status === 'active' ? t('access.users.disable') : t('access.users.enable') }}
               </Button>
-              <IconButton v-if="!row.builtin" :label="t('common.delete')" @click="deleteUserTarget = row"><Trash2 /></IconButton>
+              <IconButton v-if="!row.builtin && row.id !== session.user?.id" :label="t('common.delete')" @click="deleteUserTarget = row"><Trash2 /></IconButton>
             </div>
           </template>
         </Table>
@@ -270,7 +384,7 @@ onMounted(load);
             <span class="font-medium">{{ row.name }}</span>
             <span v-if="row.builtin" class="ml-2 text-xs text-muted-foreground">{{ t('access.roles.builtin') }}</span>
           </template>
-          <template #permissions="{ row }">{{ row.builtin ? t('access.roles.allPermissions') : row.permissionKeys.length }}</template>
+          <template #permissions="{ row }">{{ row.builtin ? t('access.roles.allPermissions') : (row.permissionKeys ?? []).length }}</template>
           <template #users="{ row }">{{ row.userCount }}</template>
           <template #actions="{ row }">
             <div class="flex justify-end gap-1">
@@ -283,15 +397,15 @@ onMounted(load);
       </template>
     </div>
 
-    <Dialog v-model:open="userDialogOpen" :title="t('access.users.createTitle')" width="wide">
+    <Dialog v-model:open="userDialogOpen" :title="editingUser ? t('access.users.editTitle') : t('access.users.createTitle')" width="wide">
       <div class="grid gap-4">
         <FormField :label="t('access.users.username')">
-          <template #default="{ id }"><Input :id="id" v-model="userForm.username" autocomplete="off" /></template>
+          <template #default="{ id }"><Input :id="id" v-model="userForm.username" :disabled="Boolean(editingUser)" autocomplete="off" /></template>
         </FormField>
         <FormField :label="t('access.users.displayName')">
           <template #default="{ id }"><Input :id="id" v-model="userForm.displayName" autocomplete="off" /></template>
         </FormField>
-        <FormField :label="t('access.users.initialPassword')">
+        <FormField v-if="!editingUser" :label="t('access.users.initialPassword')">
           <template #default="{ id }"><Input :id="id" v-model="userForm.password" type="password" autocomplete="new-password" /></template>
         </FormField>
         <div class="grid gap-2">
@@ -314,7 +428,26 @@ onMounted(load);
       </div>
       <template #footer>
         <Button @click="userDialogOpen = false">{{ t('common.cancel') }}</Button>
-        <Button variant="primary" :loading="savingUser" @click="createUser">{{ t('common.create') }}</Button>
+        <Button variant="primary" :loading="savingUser" @click="saveUser">{{ editingUser ? t('common.save') : t('common.create') }}</Button>
+      </template>
+    </Dialog>
+
+    <Dialog
+      :open="Boolean(resetPasswordTarget)"
+      :title="t('access.users.resetPasswordTitle')"
+      @update:open="(open) => { if (!open) resetPasswordTarget = null; }"
+    >
+      <div class="grid gap-4">
+        <FormField :label="t('auth.newPassword')">
+          <template #default="{ id }">
+            <Input :id="id" v-model="resetPasswordValue" type="password" autocomplete="new-password" />
+          </template>
+        </FormField>
+        <InfoBar v-if="resetPasswordError" tone="danger">{{ resetPasswordError }}</InfoBar>
+      </div>
+      <template #footer>
+        <Button @click="resetPasswordTarget = null">{{ t('common.cancel') }}</Button>
+        <Button variant="primary" :loading="resettingPassword" @click="submitResetPassword">{{ t('common.save') }}</Button>
       </template>
     </Dialog>
 
@@ -353,6 +486,16 @@ onMounted(load);
       </template>
     </Dialog>
 
+    <ConfirmDialog
+      :open="Boolean(forceLogoutTarget)"
+      :title="t('access.users.forceLogoutTitle')"
+      :description="forceLogoutTarget ? t('access.users.forceLogoutConfirm', { name: forceLogoutTarget.username }) : ''"
+      :confirm-label="t('access.users.forceLogout')"
+      :cancel-label="t('common.cancel')"
+      checkbox-label=""
+      @update:open="(open) => { if (!open) forceLogoutTarget = null; }"
+      @confirm="confirmForceLogout"
+    />
     <ConfirmDialog
       :open="Boolean(deleteUserTarget)"
       :title="t('access.users.deleteTitle')"

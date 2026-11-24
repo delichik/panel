@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { settingsApi } from '@/api/settings';
+import { defaultLandingPath } from '@/components/shell/navModel';
 import Button from '@/components/ui/Button.vue';
 import Input from '@/components/ui/Input.vue';
 import InfoBar from '@/components/patterns/InfoBar.vue';
@@ -47,9 +48,24 @@ onMounted(async () => {
 });
 
 function safeRedirect(value: unknown): string {
-  if (typeof value !== 'string') return '/overview';
-  if (!value.startsWith('/') || value.startsWith('//')) return '/overview';
+  const fallback = defaultLandingPath((permission) => session.can(permission));
+  if (typeof value !== 'string') return fallback;
+  if (!value.startsWith('/') || value.startsWith('//')) return fallback;
   return value;
+}
+
+async function signOut() {
+  loading.value = true;
+  try {
+    await session.logout();
+    password.value = '';
+    currentPassword.value = '';
+    newPassword.value = '';
+    confirmPassword.value = '';
+    error.value = '';
+  } finally {
+    loading.value = false;
+  }
 }
 
 async function submit() {
@@ -161,7 +177,10 @@ async function updateAccount() {
           </template>
         </FormField>
         <InfoBar v-if="error" tone="danger">{{ error }}</InfoBar>
-        <Button type="submit" variant="primary" :loading="loading">{{ t('auth.updatePassword') }}</Button>
+        <div class="grid gap-2">
+          <Button type="submit" variant="primary" :loading="loading">{{ t('auth.updatePassword') }}</Button>
+          <Button type="button" variant="ghost" :disabled="loading" @click="signOut">{{ t('layout.logout') }}</Button>
+        </div>
       </form>
     </section>
     <footer class="fixed bottom-5 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2">
