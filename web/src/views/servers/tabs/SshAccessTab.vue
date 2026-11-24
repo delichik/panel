@@ -97,7 +97,8 @@ function formatDuration(seconds: number | undefined): string {
   const minutes = Math.floor((total % 3600) / 60);
   if (days > 0) return `${days}d ${hours}h`;
   if (hours > 0) return `${hours}h ${minutes}m`;
-  return `${minutes}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return `${total}s`;
 }
 
 function sourceLabel(item: SshAccessSession | SshAccessAttempt): string {
@@ -160,7 +161,7 @@ function restartPolling() {
   if (timer) clearInterval(timer);
   timer = null;
   if (!props.active || document.hidden) return;
-  timer = setInterval(() => { void load(); }, mode.value === 'sessions' ? 5000 : 30000);
+  timer = setInterval(() => { void load(); }, 5000);
 }
 
 function onVisibilityChange() {
@@ -232,7 +233,7 @@ onBeforeUnmount(() => {
         <template #source="{ row }">
           <div class="flex min-w-0 flex-col">
             <span class="truncate">{{ sourceLabel(row) }}</span>
-            <span v-if="row.sourceHost && row.sourceAddress" class="text-caption text-muted-foreground">{{ row.sourceAddress }}</span>
+            <span v-if="row.sourceHost && row.sourceAddress && row.sourceHost !== row.sourceAddress" class="text-caption text-muted-foreground">{{ row.sourceAddress }}</span>
           </div>
         </template>
         <template #tty="{ row }">{{ row.tty || '-' }}</template>

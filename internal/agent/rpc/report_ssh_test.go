@@ -5,10 +5,12 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	agentpb "panel/internal/agent/pb"
+	agentsshsessions "panel/internal/agent/sshsessions"
 )
 
 func writeSSHRecords(t *testing.T, name string, records ...[]byte) string {
@@ -113,6 +115,70 @@ func TestNormalizeReportConfigCarriesSSHSince(t *testing.T) {
 	cfg := normalizeReportConfig(&agentpb.AgentReportControl{SshSessionsSinceUnix: 12345})
 	if cfg.sshSince != 12345 {
 		t.Fatalf("sshSince = %d", cfg.sshSince)
+	}
+}
+
+func TestSSHSessionSamplerImmediateBroadcastOnLiveWake(t *testing.T) {
+	utmp := writeSSHRecords(t, "utmp", sshUTMPRecord(7, 100, "pts/0", "root", "203.0.113.9", 1000))
+	hub := newReportHub(okReportCollector{}, nil)
+	hub.sshOptions.UTMPPath = utmp
+	ch := make(chan *agentpb.AgentReport, 16)
+	hub.watchers[1] = &reportWatcher{id: 1, cfg: reportConfig{serverID: "srv-1"}, ch: ch}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go hub.runSSHSessionSampler(ctx)
+
+	_ = receiveSSHReport(t, ch)
+	// 指纹未变，但新 watcher 接入触发 sshLiveWake 时应立即收到一次快照。
+	hub.notifySSHLiveLocked()
+	second := receiveSSHReport(t, ch)
+	if second.SshSessions == nil || len(second.SshSessions.Items) != 1 {
+		t.Fatalf("wake report = %+v", second)
+	}
+}
+
+func TestSSHFailureSamplerPushesNewFailuresContinuously(t *testing.T) {
+	hub := newReportHub(okReportCollector{}, nil)
+	var mu sync.Mutex
+	var current []agentsshsessions.Failure
+	hub.sshOptions = agentsshsessions.Options{
+		BTMPPath: filepath.Join(t.TempDir(), "missing-btmp"),
+		JournalReader: func(ctx context.Context, since time.Time) ([]agentsshsessions.Failure, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			out := make([]agentsshsessions.Failure, 0, len(current))
+			for _, item := range current {
+				if !item.AttemptAt.Before(since) {
+					out = append(out, item)
+				}
+			}
+			return out, nil
+		},
+	}
+	ch := make(chan *agentpb.AgentReport, 16)
+	hub.watchers[1] = &reportWatcher{id: 1, cfg: reportConfig{serverID: "srv-1"}, ch: ch}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go hub.runSSHFailureSampler(ctx)
+
+	mu.Lock()
+	current = append(current, agentsshsessions.Failure{
+		UserName:      "root",
+		SourceHost:    "198.51.100.77",
+		SourceAddress: "198.51.100.77",
+		AttemptAt:     time.Now().UTC().Truncate(time.Second),
+		PID:           777,
+	})
+	mu.Unlock()
+
+	report := receiveSSHReport(t, ch)
+	if report.SshFailedAttempts == nil || len(report.SshFailedAttempts.Items) != 1 {
+		t.Fatalf("failure report = %+v", report)
+	}
+	if got := report.SshFailedAttempts.Items[0]; got.UserName != "root" || got.SourceAddress != "198.51.100.77" || got.Pid != 777 {
+		t.Fatalf("failure item = %+v", got)
 	}
 }
 

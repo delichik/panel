@@ -40,9 +40,12 @@ const (
 	metricsSpoolMaxAge   = 10 * time.Minute
 
 	// SSH 访问记录的采集节奏：utmp 每 2 秒读一次，指纹变化或 30 秒心跳时
-	// 上报；wtmp/btmp 回填单次最多 2000 条、按 500 条分批，最早回看 7 天。
+	// 上报；失败登录每 3 秒增量轮询一次（合并 btmp + sshd 日志）；wtmp/btmp
+	// 首次回填单次最多 2000 条、按 500 条分批，最早回看 7 天。
 	sessionPollInterval      = 2 * time.Second
 	sessionHeartbeatInterval = 30 * time.Second
+	failurePollInterval      = 3 * time.Second
+	failurePollOverlap       = 2 * time.Second
 	backfillLimit            = 2000
 	backfillMaxAge           = 7 * 24 * time.Hour
 	backfillBatch            = 500
@@ -102,11 +105,12 @@ type reportHub struct {
 	probe       probeConfig
 	probeWake   chan struct{}
 	probeRunner agentprobe.Runner
-	// sshSince/sshWake 是 SSH 访问记录的回填游标与唤醒信号；sshOptions 允许
-	// 测试注入 utmp/wtmp/btmp 路径。
-	sshSince   int64
-	sshWake    chan struct{}
-	sshOptions agentsshsessions.Options
+	// sshSince/sshWake/sshLiveWake 是 SSH 访问记录的回填游标与唤醒信号；sshOptions
+	// 允许测试注入 utmp/wtmp/btmp/auth.log/journal 读取器。
+	sshSince    int64
+	sshWake     chan struct{}
+	sshLiveWake chan struct{}
+	sshOptions  agentsshsessions.Options
 	// spoolMu/spool 是弱网补报缓冲：stream.Send 失败时收集的指标样本，重连后
 	// 按样本时间升序补发并标记 replayed。
 	spoolMu sync.Mutex
@@ -359,9 +363,10 @@ func newReportHub(collector reportCollector, runtime *agentdocker.LocalRuntime) 
 		runtime:   runtime,
 		metrics:   &metricCache{},
 		watchers:  map[int]*reportWatcher{},
-		wake:      make(chan struct{}, 1),
-		probeWake: make(chan struct{}, 1),
-		sshWake:   make(chan struct{}, 1),
+		wake:        make(chan struct{}, 1),
+		probeWake:   make(chan struct{}, 1),
+		sshWake:     make(chan struct{}, 1),
+		sshLiveWake: make(chan struct{}, 1),
 	}
 }
 
@@ -521,7 +526,7 @@ func (h *reportHub) add(cfg reportConfig) *reportWatcher {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.nextWatcherID++
-	watcher := &reportWatcher{id: h.nextWatcherID, cfg: cfg, ch: make(chan *agentpb.AgentReport, 16)}
+	watcher := &reportWatcher{id: h.nextWatcherID, cfg: cfg, ch: make(chan *agentpb.AgentReport, 64)}
 	h.watchers[watcher.id] = watcher
 	// 新连接的首个控制消息决定探测任务：旧 Panel 不携带 probe 时这里清空，
 	// 避免上一个连接遗留的探测配置继续工作。
@@ -533,6 +538,8 @@ func (h *reportHub) add(cfg reportConfig) *reportWatcher {
 		h.sshSince = cfg.sshSince
 		h.notifySSHLocked()
 	}
+	// 新 watcher 接入时立即唤醒在线会话采样器，避免重连后等待 30 秒心跳。
+	h.notifySSHLiveLocked()
 	if !h.running {
 		h.running = true
 		go h.run()
@@ -615,6 +622,7 @@ func (h *reportHub) run() {
 	go h.runProbeSampler(eventCtx)
 	go h.runSSHSessionSampler(eventCtx)
 	go h.runSSHBackfill(eventCtx)
+	go h.runSSHFailureSampler(eventCtx)
 	for {
 		watchers := h.snapshot()
 		if len(watchers) == 0 {

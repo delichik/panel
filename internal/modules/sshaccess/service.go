@@ -115,16 +115,29 @@ func (s *Service) ApplyFailures(ctx context.Context, serverID string, failures a
 	return err
 }
 
-// BackfillSince 返回增量回填游标：最近登录时间减一小时；首次回填最近 7 天。
+// BackfillSince 返回增量回填游标：取最近会话与最近失败尝试时间的较早者减一小时
+// （任一为空则取另一侧，两者都为空则首次回填最近 7 天），避免重连后漏掉任一侧增量。
 func (s *Service) BackfillSince(ctx context.Context, serverID string) (time.Time, error) {
-	latest, err := s.repo.LatestSessionSince(ctx, serverID)
+	latestSession, err := s.repo.LatestSessionSince(ctx, serverID)
 	if err != nil {
 		return time.Time{}, err
 	}
-	if latest.IsZero() {
-		return s.now().Add(-7 * 24 * time.Hour), nil
+	latestAttempt, err := s.repo.LatestAttemptSince(ctx, serverID)
+	if err != nil {
+		return time.Time{}, err
 	}
-	return latest.Add(-time.Hour), nil
+	switch {
+	case latestSession.IsZero() && latestAttempt.IsZero():
+		return s.now().Add(-7 * 24 * time.Hour), nil
+	case latestSession.IsZero():
+		return latestAttempt.Add(-time.Hour), nil
+	case latestAttempt.IsZero():
+		return latestSession.Add(-time.Hour), nil
+	case latestAttempt.Before(latestSession):
+		return latestAttempt.Add(-time.Hour), nil
+	default:
+		return latestSession.Add(-time.Hour), nil
+	}
 }
 
 // ListSessions 返回分页会话列表。

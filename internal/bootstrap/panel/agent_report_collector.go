@@ -392,6 +392,10 @@ func (c *agentReportCollector) metricsTargeting(ctx context.Context, serverID st
 // 服务器的指标设施归属计算：禁用节点下发 0（Agent 停止采集），启用节点下发设施
 // 配置的间隔；容器上报间隔仍取 runtime settings，不受指标设施影响。
 func (c *agentReportCollector) reportStreamConfig(ctx context.Context, srv server.Server) agentclient.ReportConfig {
+	return c.reportStreamConfigWithSSHSince(ctx, srv, c.sshBackfillSince(ctx, srv.ID))
+}
+
+func (c *agentReportCollector) reportStreamConfigWithSSHSince(ctx context.Context, srv server.Server, sshSince int64) agentclient.ReportConfig {
 	metricsEnabled, metricsInterval := c.metricsTargeting(ctx, srv.ID, false)
 	if !metricsEnabled {
 		metricsInterval = 0
@@ -401,7 +405,7 @@ func (c *agentReportCollector) reportStreamConfig(ctx context.Context, srv serve
 		MetricsIntervalSeconds:    metricsInterval,
 		ContainersIntervalSeconds: c.settings.Runtime().ContainerReportIntervalSeconds,
 		Probe:                     c.reportProbeConfig(ctx, srv.ID),
-		SshSessionsSince:          c.sshBackfillSince(ctx, srv.ID),
+		SshSessionsSince:          sshSince,
 	}
 }
 
@@ -476,8 +480,11 @@ func (c *agentReportCollector) runServerStream(ctx context.Context, srv server.S
 		entry.streaming = true
 		entry.delivered = false
 		c.mu.Unlock()
+		// 每次建立流连接时固定计算一次 SSH 回填游标，避免每秒轮询 config() 时
+		// 在空库下因 now-7d 逐秒推进而反复触发全量回填并挤占实时会话上报。
+		sshSince := c.sshBackfillSince(ctx, srv.ID)
 		err := c.client.StreamReports(ctx, entry.endpoint, func() agentclient.ReportConfig {
-			return c.reportStreamConfig(ctx, srv)
+			return c.reportStreamConfigWithSSHSince(ctx, srv, sshSince)
 		}, func(ctx context.Context, report agentclient.AgentReport) error {
 			c.markConnected(entry, report.SampleAt)
 			return c.handleReport(ctx, srv.ID, report)
