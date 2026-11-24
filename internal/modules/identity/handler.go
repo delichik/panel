@@ -89,13 +89,7 @@ func (h *Handler) UpdateJWTSecret(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, panelErrCredentialRestricted())
 		return
 	}
-	var req struct {
-		JWTSecret string `json:"jwtSecret"`
-	}
-	if !httpx.Decode(w, r, &req) {
-		return
-	}
-	if err := h.service.UpdateJWTSecret(r.Context(), req.JWTSecret); err != nil {
+	if err := h.service.UpdateJWTSecret(r.Context()); err != nil {
 		httpx.Error(w, err)
 		return
 	}

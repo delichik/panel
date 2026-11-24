@@ -133,7 +133,7 @@ func TestBumpKeyGenerationInvalidatesAllTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
-	if err := svc.UpdateJWTSecret(ctx, "replacement-jwt-secret-32b"); err != nil {
+	if err := svc.UpdateJWTSecret(ctx); err != nil {
 		t.Fatalf("update jwt secret: %v", err)
 	}
 	if _, ok := svc.Validate(ctx, sess.Token); ok {
@@ -238,7 +238,7 @@ func TestUpdateJWTSecretRequiresRelogin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
-	if err := svc.UpdateJWTSecret(ctx, "replacement-jwt-secret-32b"); err != nil {
+	if err := svc.UpdateJWTSecret(ctx); err != nil {
 		t.Fatalf("update jwt secret: %v", err)
 	}
 	if _, ok := svc.Validate(ctx, first.Token); ok {

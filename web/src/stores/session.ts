@@ -105,8 +105,8 @@ export const useSessionStore = defineStore('session', {
       this.clearSession();
       return result;
     },
-    async updateJwtSecret(jwtSecret: string) {
-      const result = await authApi.updateJwtSecret(jwtSecret);
+    async updateJwtSecret() {
+      const result = await authApi.updateJwtSecret();
       this.clearSession();
       return result;
     },

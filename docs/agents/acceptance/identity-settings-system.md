@@ -24,8 +24,8 @@
 - `ID-SES-003`：前置为有效 token；会话查询必须返回当前数据库中的管理员用户名和强制改密状态，而不是只信任 token 内旧用户名。
 - `ID-SES-004`：前置为有效 token；`POST /api/v1/auth/logout` 必须轮换持久化 nonce，使此前签发的全部普通运行态 token 立即失效，并返回 `authenticated=false`；重复登出需认证且不得恢复旧 token。
 - `ID-SES-005`：前置为 token expiration 设置为 `10m`、`1h`、`1d`、`5d` 或 `30d`；新 token 的过期时间必须按对应时长签发并在到期后拒绝；设置为 `never` 时 token 可无 `exp`，但仍受 nonce 和 JWT secret 撤销。
-- `ID-SES-006`：前置为认证用户提交至少 16 字符的新 secret；`POST /api/v1/auth/jwt-secret` 必须在同一 AppDB 事务内持久化 secret 并轮换 nonce，提交成功后再更新内存快照并返回新会话；旧 token 必须失效，响应不得回显 secret。
-- `ID-SES-007`：前置为 secret 少于 16 字符或仅空白；更新必须返回 `invalid_jwt_secret`，旧 secret、nonce和现有会话必须保持可用。
+- `ID-SES-006`：前置为具备 `settings.security` 权限的会话用户（拒绝访问凭证）；`POST /api/v1/auth/jwt-secret` 必须在服务端通过 `crypto/rand` 随机生成新的 32 字节密钥（不接受客户端自定义密钥，防止非内置管理员借已知密钥伪造任意会话），在同一 AppDB 事务内持久化新密钥并递增全局密钥代数，提交成功后再更新内存快照并失效认证缓存，返回 `authenticated=false` 与 `mustRelogin=true`；旧 token 必须立即失效，响应不得回显密钥。
+- `ID-SES-007`：**已废弃（2026-11-24）**。因 `POST /api/v1/auth/jwt-secret` 不再接受客户端传入密钥（见 `ID-SES-006`），前端不再提供密钥输入框，不再因客户端输入长度触发 `invalid_jwt_secret`。
 - `ID-SES-008`：普通运行态 token、备份导出维护 token、恢复维护 token 三种上下文必须互不通用；任何跨上下文使用均不得获得业务或维护权限。
 
 ## 3. 运行时设置读取与写入

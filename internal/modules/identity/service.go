@@ -502,10 +502,11 @@ func (s *Service) UpdateAccount(ctx context.Context, userID string, input Accoun
 	return AccountResult{MustRelogin: true}, nil
 }
 
-// UpdateJWTSecret 轮换签名密钥并递增全局密钥代数。
-func (s *Service) UpdateJWTSecret(ctx context.Context, secret string) error {
-	secret = strings.TrimSpace(secret)
-	if err := settings.ValidateJWTSecret(secret); err != nil {
+// UpdateJWTSecret 在服务端随机生成新的签名密钥并递增全局密钥代数，
+// 不接受调用方传入自定义密钥，避免具备 settings.security 的非内置管理员借已知密钥伪造任意会话。
+func (s *Service) UpdateJWTSecret(ctx context.Context) error {
+	secret, err := settings.GenerateJWTSecret()
+	if err != nil {
 		return err
 	}
 	if err := orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {

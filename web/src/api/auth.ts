@@ -48,8 +48,8 @@ export const authApi = {
   updateAccount(input: AccountUpdateInput) {
     return apiClient.post<AuthSession>('/auth/account', input);
   },
-  updateJwtSecret(jwtSecret: string) {
-    return apiClient.post<AuthSession>('/auth/jwt-secret', { jwtSecret });
+  updateJwtSecret() {
+    return apiClient.post<AuthSession>('/auth/jwt-secret', {});
   },
 };
 

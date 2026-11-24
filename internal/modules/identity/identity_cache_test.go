@@ -134,7 +134,7 @@ func TestJWTSecretRotationInvalidatesCachedKeyGeneration(t *testing.T) {
 	if _, ok := svc.Validate(ctx, sess.Token); !ok {
 		t.Fatal("token should validate before rotation")
 	}
-	if err := svc.UpdateJWTSecret(ctx, "replacement-jwt-secret-32b"); err != nil {
+	if err := svc.UpdateJWTSecret(ctx); err != nil {
 		t.Fatalf("rotate secret: %v", err)
 	}
 	if _, ok := svc.Validate(ctx, sess.Token); ok {

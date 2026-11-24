@@ -212,7 +212,7 @@ describe('WinUI settings section primitives', () => {
 describe('settings page sections use the shared WinUI SettingsCard shell', () => {
   const cases: Array<{ path: string; heading: string; rows: number }> = [
     { path: '/settings/general', heading: 'settingsPage.section.runtime', rows: 5 },
-    { path: '/settings/security', heading: 'settingsPage.section.security', rows: 7 },
+    { path: '/settings/security', heading: 'settingsPage.section.security', rows: 5 },
     { path: '/settings/certificates', heading: 'settingsPage.section.certificates', rows: 4 },
     { path: '/settings/agent', heading: 'settingsPage.section.agent', rows: 3 },
     { path: '/settings/auto-update', heading: 'settingsPage.section.autoUpdate', rows: 5 },

@@ -128,7 +128,6 @@ const form = reactive({
   sshAccessSuccessRetentionDays: '30',
   sshAccessFailureRetentionDays: '3',
   reconcileTraceEnabled: false,
-  jwtSecret: '',
   loginTitle: '',
   loginSubtitle: '',
   certificateEmail: '',
@@ -421,7 +420,6 @@ watch(() => autoUpdateLastRun.value?.lastRunStatus, (status) => {
 }, { immediate: true });
 
 const panelTlsOptions = computed(() => tlsCertificates.value.map((certificate) => ({ label: certificate.name, value: certificate.id })));
-const jwtSecretValid = computed(() => form.jwtSecret.trim().length >= 16);
 /** NumberBox 使用 number|null；设置表单仍是字符串，保留原校验/保存负载逻辑。 */
 function toNumber(value: string): number | null {
   const raw = value.trim();
@@ -839,7 +837,6 @@ function hydrate(settings: RuntimeSettings, variables: ServerVariableDefinition[
       sshAccessSuccessRetentionDays: String(settings.sshAccess?.successRetentionDays ?? 30),
       sshAccessFailureRetentionDays: String(settings.sshAccess?.failureRetentionDays ?? 3),
       reconcileTraceEnabled: settings.reconcileTraceEnabled,
-      jwtSecret: '',
       loginTitle: settings.branding.loginTitle,
       loginSubtitle: settings.branding.loginSubtitle,
       certificateEmail: settings.certificates.email,
@@ -861,18 +858,13 @@ function hydrate(settings: RuntimeSettings, variables: ServerVariableDefinition[
 }
 
 function resetJwtSecret() {
-  if (!jwtSecretValid.value) {
-    actionError.value = t('settingsPage.jwtSecretValidation');
-    return;
-  }
   openConfirm('jwt-secret');
 }
 
 async function confirmResetJwtSecret() {
   await run('jwt-secret', async () => {
-    await session.updateJwtSecret(form.jwtSecret.trim());
+    await session.updateJwtSecret();
     if (runtime.value) runtime.value.jwtSecretConfigured = true;
-    form.jwtSecret = '';
     confirmOpen.value = false;
     notifySuccess(t('settingsPage.jwtSecretReset'));
     await router.push({ path: '/login', query: { changed: '1' } });
@@ -1210,23 +1202,14 @@ onBeforeUnmount(() => {
               </template>
             </SettingsCard>
 
-            <SettingsCard :title="t('settingsPage.jwtSecretConfigured')">
+            <SettingsCard :title="t('settingsPage.jwtSecretConfigured')" :description="t('settingsPage.jwtSecretHint')">
               <template #control>
-                <Badge :tone="runtime?.jwtSecretConfigured ? 'success' : 'warning'">{{ runtime?.jwtSecretConfigured ? t('state.healthy') : t('state.warning') }}</Badge>
-              </template>
-            </SettingsCard>
-
-            <SettingsCard :title="t('settingsPage.jwtSecret')">
-              <template #control>
-                <Input v-model="form.jwtSecret" v-permission="'settings.security'" :aria-label="t('settingsPage.jwtSecret')" class="w-full sm:w-64" type="password" :placeholder="t('settingsPage.jwtSecretHint')" />
-              </template>
-            </SettingsCard>
-
-            <SettingsCard>
-              <template #control>
-                <Button v-permission="'settings.security'" data-perm-anchor="settings.security.jwtReset" :disabled="!form.jwtSecret.trim()" :loading="pending === 'jwt-secret'" @click="resetJwtSecret">
-                  <KeyRound />{{ t('settingsPage.resetJwtSecret') }}
-                </Button>
+                <div class="flex items-center gap-2">
+                  <Badge :tone="runtime?.jwtSecretConfigured ? 'success' : 'warning'">{{ runtime?.jwtSecretConfigured ? t('state.healthy') : t('state.warning') }}</Badge>
+                  <Button v-permission="'settings.security'" data-perm-anchor="settings.security.jwtReset" :loading="pending === 'jwt-secret'" @click="resetJwtSecret">
+                    <KeyRound />{{ t('settingsPage.resetJwtSecret') }}
+                  </Button>
+                </div>
               </template>
             </SettingsCard>
           </SettingsSection>

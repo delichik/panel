@@ -808,6 +808,11 @@ func (s *Service) UpdateServerVariableDefinitions(ctx context.Context, input Ser
 	return defs, nil
 }
 
+// GenerateJWTSecret 生成服务端随机 HS256 JWT 签名密钥（32 字节 hex）。
+func GenerateJWTSecret() (string, error) {
+	return randomJWTSecret()
+}
+
 func (s *Service) ensureDefaultRuntimeSettings(ctx context.Context) error {
 	defaults := defaultRuntimeSettings(s.cfg)
 	if !s.hasConfiguredJWTSecret() {
