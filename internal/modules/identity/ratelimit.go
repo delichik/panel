@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
@@ -82,12 +83,13 @@ func (l *loginRateLimiter) recordSuccess(key string) {
 
 func (l *loginRateLimiter) pruneLocked(now time.Time) {
 	for key, attempt := range l.attempts {
-		if !now.Before(attempt.lockedUntil) || now.Sub(attempt.lastSeen) > loginRetentionWindow {
+		lockedExpired := !attempt.lockedUntil.IsZero() && !now.Before(attempt.lockedUntil)
+		if lockedExpired || now.Sub(attempt.lastSeen) > loginRetentionWindow {
 			delete(l.attempts, key)
 		}
 	}
 }
 
 func loginRateLimitKey(clientIP, username string) string {
-	return clientIP + "|" + username
+	return strings.TrimSpace(clientIP) + "|" + strings.ToLower(strings.TrimSpace(username))
 }

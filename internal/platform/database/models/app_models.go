@@ -858,10 +858,13 @@ func (*User) TableConstraints() []string {
 	return []string{"CHECK(status IN ('active','disabled'))"}
 }
 
-// ExtraIndexDDL 返回用户名大小写不敏感唯一索引。
+// ExtraIndexDDL 返回用户名大小写不敏感唯一索引与唯一内置管理员约束。
 func (*User) ExtraIndexDDL() map[string][]string {
 	return map[string][]string{
-		"users": {"CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_nocase ON users(username COLLATE NOCASE)"},
+		"users": {
+			"CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_nocase ON users(username COLLATE NOCASE)",
+			"CREATE UNIQUE INDEX IF NOT EXISTS idx_users_single_builtin ON users(builtin) WHERE builtin = 1",
+		},
 	}
 }
 

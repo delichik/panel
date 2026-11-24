@@ -419,3 +419,59 @@ func createTestUser(t *testing.T, svc *Service, username, password string, permi
 	}
 	return userID
 }
+
+func TestLoginRateLimitNormalizesUsernameCaseAndWhitespace(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	variants := []string{"admin", "Admin", "ADMIN", " admin ", "\tAdMiN"}
+	for i, variant := range variants {
+		if _, err := svc.LoginFrom(ctx, variant, "wrong-password", "10.0.0.9"); err == nil {
+			t.Fatalf("attempt %d (%q): expected failure", i, variant)
+		}
+	}
+	if _, err := svc.LoginFrom(ctx, "admin", "admin", "10.0.0.9"); err == nil || err.Error() != "Too many login attempts; try again later" {
+		t.Fatalf("expected rate limit after case/whitespace variants, got %v", err)
+	}
+}
+
+func TestLoginRateLimiterPruneKeepsActiveUnlockedAttempts(t *testing.T) {
+	limiter := newLoginRateLimiter()
+	now := time.Now().UTC()
+	key := loginRateLimitKey("10.0.0.1", "admin")
+	for i := 0; i < 4; i++ {
+		limiter.recordFailure(key, now)
+	}
+	limiter.mu.Lock()
+	limiter.pruneLocked(now.Add(time.Minute))
+	remaining := limiter.attempts[key]
+	limiter.mu.Unlock()
+	if remaining == nil || remaining.failures != 4 {
+		t.Fatalf("active unlocked attempt was pruned: %#v", remaining)
+	}
+}
+
+func TestRolesAndPermissionsExpandsKnownKeysWhenUnknownKeyPresent(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	createTestUser(t, svc, "legacy", "legacy-password", "legacy.removed.permission", "applications.edit")
+	sess, err := svc.Login(ctx, "legacy", "legacy-password")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	for _, want := range []string{"applications.edit", "applications.view", "servers.manage", "servers.view"} {
+		if !HasPermission(sess.Permissions, want) {
+			t.Fatalf("permissions %v missing expanded dependency %q", sess.Permissions, want)
+		}
+	}
+}
+
+func TestCreateInitialAdminRejectsSecondSetup(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestServiceWithoutAdmin(t)
+	if _, err := svc.CreateInitialAdmin(ctx, "admin", "admin"); err != nil {
+		t.Fatalf("first setup: %v", err)
+	}
+	if _, err := svc.CreateInitialAdmin(ctx, "admin2", "admin2"); err == nil {
+		t.Fatal("second setup must fail with setup_completed")
+	}
+}

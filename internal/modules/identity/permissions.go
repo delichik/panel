@@ -70,7 +70,7 @@ func RequiredPermission(method, path string) (string, bool) {
 			if method == "GET" {
 				return "servers.view", true
 			}
-			return "servers.view", true
+			return "servers.execute", true
 		case strings.HasSuffix(path, "/fail2ban"):
 			if method == "GET" {
 				return "servers.view", true
@@ -122,9 +122,6 @@ func RequiredPermission(method, path string) (string, bool) {
 	}
 
 	if strings.HasPrefix(path, "/api/v1/facility-apps") {
-		if method == "GET" && !strings.Contains(path, "/diagnostics") {
-			return "facilities.view", true
-		}
 		if method == "GET" {
 			return "facilities.view", true
 		}
@@ -132,6 +129,9 @@ func RequiredPermission(method, path string) (string, bool) {
 	}
 
 	if path == "/api/v1/credentials" || strings.HasPrefix(path, "/api/v1/credentials/") {
+		if method == "GET" {
+			return "servers.view", true
+		}
 		return "servers.credentials.manage", true
 	}
 

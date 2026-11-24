@@ -42,6 +42,19 @@ func (s *Service) requireAuth(next http.Handler, allowPasswordChange bool) http.
 	})
 }
 
+// RejectCredentials blocks access credentials from calling session-only
+// endpoints such as account update, logout, and JWT secret rotation.
+func (s *Service) RejectCredentials(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sess := FromContext(r.Context())
+		if sess.AuthKind == "credential" {
+			httpx.Error(w, panelErrCredentialRestricted())
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // FromContext returns the authenticated session without exposing the token to
 // consumers.
 func FromContext(ctx context.Context) Session {

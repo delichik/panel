@@ -473,9 +473,9 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 	a.mux.HandleFunc("GET /api/v1/setup/status", authH.SetupStatus)
 	a.mux.HandleFunc("POST /api/v1/setup", authH.Setup)
 	a.mux.HandleFunc("POST /api/v1/auth/login", authH.Login)
-	a.mux.Handle("POST /api/v1/auth/logout", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.Logout)))
-	a.mux.Handle("POST /api/v1/auth/account", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.UpdateAccount)))
-	a.mux.Handle("POST /api/v1/auth/jwt-secret", a.auth.RequireAuth(a.auth.RequirePermission("settings.security", http.HandlerFunc(authH.UpdateJWTSecret))))
+	a.mux.Handle("POST /api/v1/auth/logout", a.auth.RequireAuthAllowPasswordChange(a.auth.RejectCredentials(http.HandlerFunc(authH.Logout))))
+	a.mux.Handle("POST /api/v1/auth/account", a.auth.RequireAuthAllowPasswordChange(a.auth.RejectCredentials(http.HandlerFunc(authH.UpdateAccount))))
+	a.mux.Handle("POST /api/v1/auth/jwt-secret", a.auth.RequireAuth(a.auth.RejectCredentials(a.auth.RequirePermission("settings.security", http.HandlerFunc(authH.UpdateJWTSecret)))))
 	a.mux.HandleFunc("GET /api/v1/auth/session", authH.Session)
 
 	authenticated := a.activityAuth

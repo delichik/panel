@@ -127,17 +127,18 @@ func (a *App) activityAuth(next http.Handler) http.Handler {
 			httpx.Error(w, panelerr.Forbidden("permission_denied", "Permission denied"))
 			return
 		}
-		if required != "" && !auth.HasPermission(sess.Permissions, required) {
-			httpx.Error(w, panelerr.Forbidden("permission_denied", "Permission denied"))
-			return
-		}
 		if code, blocked := auth.CredentialRequestBlocked(sess, r.Method, r.URL.Path); blocked {
 			httpx.Error(w, panelerr.Forbidden(code, "Access credential cannot perform this action"))
 			return
 		}
+		mutation := r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch || r.Method == http.MethodDelete
 		if sess.AuthKind == "credential" && sess.CredentialScope == "readonly" &&
-			required != "" && !auth.PermissionIsReadOnly(required) {
+			((required != "" && !auth.PermissionIsReadOnly(required)) || (required == "" && mutation)) {
 			httpx.Error(w, panelerr.Forbidden("credential_read_only", "Access credential is read-only"))
+			return
+		}
+		if required != "" && !auth.HasPermission(sess.Permissions, required) {
+			httpx.Error(w, panelerr.Forbidden("permission_denied", "Permission denied"))
 			return
 		}
 		streamID := logging.NewStreamID()
@@ -150,7 +151,6 @@ func (a *App) activityAuth(next http.Handler) http.Handler {
 			Module:    "http",
 			RequestID: streamID,
 		})
-		mutation := r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch || r.Method == http.MethodDelete
 		receivedID := ""
 		if mutation && ctx.Value(runtimeClearAuditContextKey{}) != true {
 			receivedID = streamID
@@ -161,7 +161,7 @@ func (a *App) activityAuth(next http.Handler) http.Handler {
 				Summary:   "HTTP request accepted",
 				State:     logging.ProcessRunning,
 				EventType: "request.received",
-				Actor:     map[string]string{"kind": "user", "id": "admin", "name": sess.Username},
+				Actor:     map[string]string{"kind": "user", "id": sess.UserID, "name": sess.Username},
 				Fields: []zap.Field{
 					zap.String("method", r.Method),
 					zap.String("path", r.URL.Path),

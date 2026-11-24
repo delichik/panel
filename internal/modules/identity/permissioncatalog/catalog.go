@@ -102,7 +102,7 @@ var permissions = []Permission{
 
 	p("keyassets.view", "keyassets", ModeRead, "normal"),
 	p("keyassets.manage", "keyassets", ModeWrite, "critical", "keyassets.view"),
-	p("keyassets.export", "keyassets", ModeRead, "critical", "keyassets.view"),
+	p("keyassets.export", "keyassets", ModeWrite, "critical", "keyassets.view"),
 
 	p("events.view", "events", ModeRead, "normal"),
 	p("events.export", "events", ModeRead, "sensitive", "events.view"),
@@ -111,7 +111,7 @@ var permissions = []Permission{
 	p("tasks.view", "tasks", ModeRead, "normal"),
 	p("tasks.manage", "tasks", ModeWrite, "sensitive", "tasks.view"),
 
-	p("backups.export", "backups", ModeRead, "critical"),
+	p("backups.export", "backups", ModeWrite, "critical"),
 	p("backups.restore", "backups", ModeWrite, "critical", "backups.export"),
 
 	p("settings.view", "settings", ModeRead, "normal"),

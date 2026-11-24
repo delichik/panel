@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -12,11 +13,14 @@ import (
 
 	_ "modernc.org/sqlite"
 	"panel/internal/modules/activity"
+	auth "panel/internal/modules/identity"
 	"panel/internal/modules/runtimeevents"
+	"panel/internal/modules/settings"
 	"panel/internal/platform/activitylog"
 	"panel/internal/platform/config"
 	"panel/internal/platform/database"
 	platformevents "panel/internal/platform/events"
+	httpx "panel/internal/platform/http"
 	"panel/internal/platform/logging"
 )
 
@@ -134,4 +138,82 @@ func TestActivityResponseDoesNotBufferDownloads(t *testing.T) {
 	if recorder.Body.String() != data || response.buffer.Len() != 0 {
 		t.Fatal("download content changed or remained buffered")
 	}
+}
+
+func TestActivityAuthCredentialErrorCodes(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	cfg.AdminPassword = "admin"
+	store, err := database.Open(cfg)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	settingsSvc, err := settings.NewService(store.AppDB(), cfg)
+	if err != nil {
+		t.Fatalf("settings: %v", err)
+	}
+	authSvc, err := auth.NewService(store.AppDB(), cfg, settingsSvc)
+	if err != nil {
+		t.Fatalf("auth: %v", err)
+	}
+	admin, err := authSvc.Login(ctx, "admin", "admin")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	if _, err := authSvc.UpdateAccount(ctx, admin.UserID, auth.AccountUpdate{
+		CurrentPassword: "admin", Username: "admin", NewPassword: "new-admin-password",
+	}); err != nil {
+		t.Fatalf("update account: %v", err)
+	}
+	admin, err = authSvc.Login(ctx, "admin", "new-admin-password")
+	if err != nil {
+		t.Fatalf("relogin: %v", err)
+	}
+	roCred, err := authSvc.CreateAccessCredential(ctx, admin.UserID, auth.AccessCredentialCreateInput{
+		Name: "ro", ExpiresInSeconds: 900, Scope: "readonly",
+	})
+	if err != nil {
+		t.Fatalf("create readonly cred: %v", err)
+	}
+	rwCred, err := authSvc.CreateAccessCredential(ctx, admin.UserID, auth.AccessCredentialCreateInput{
+		Name: "rw", ExpiresInSeconds: 900, Scope: "readwrite", AllowManagement: false,
+	})
+	if err != nil {
+		t.Fatalf("create readwrite cred: %v", err)
+	}
+
+	app := &App{auth: authSvc}
+	handler := app.activityAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	assertCode := func(method, path, token, wantCode string) {
+		t.Helper()
+		req := httptest.NewRequest(method, path, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s %s: status = %d, want 403, body=%s", method, path, rec.Code, rec.Body.String())
+		}
+		var env httpx.Envelope
+		if err := json.NewDecoder(rec.Body).Decode(&env); err != nil {
+			t.Fatalf("%s %s: decode: %v", method, path, err)
+		}
+		if env.Error == nil || env.Error.Code != wantCode {
+			t.Fatalf("%s %s: code = %#v, want %q", method, path, env.Error, wantCode)
+		}
+	}
+
+	assertCode(http.MethodPost, "/api/v1/servers", roCred.Token, "credential_read_only")
+	assertCode(http.MethodDelete, "/api/v1/access-credentials/acr_1", roCred.Token, "credential_read_only")
+	assertCode(http.MethodGet, "/api/v1/users", rwCred.Token, "credential_scope_restricted")
+	assertCode(http.MethodPost, "/api/v1/backups/export", roCred.Token, "credential_read_only")
 }

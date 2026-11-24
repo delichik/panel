@@ -313,6 +313,13 @@ func (s *Service) createBuiltinAdmin(ctx context.Context, username, displayName,
 		UpdatedAt:          now,
 	}
 	if err := orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		count, err := orm.New(tx).From("users").Count(ctx)
+		if err != nil {
+			return err
+		}
+		if count > 0 {
+			return panelerr.Conflict("setup_completed", "Panel is already initialized")
+		}
 		if err := orm.New(tx).Insert(ctx, user); err != nil {
 			return err
 		}
@@ -481,14 +488,13 @@ func (s *Service) UpdateAccount(ctx context.Context, userID string, input Accoun
 	}
 	now := time.Now().UTC()
 	if err := orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		return orm.New(tx).From("users").Where("id = ?", user.ID).UpdateColumns(ctx, map[string]any{
-			"username":             normalized,
-			"display_name":         displayName,
-			"password_hash":        nextHash,
-			"must_change_password": 0,
-			"generation":           user.Generation + 1,
-			"updated_at":           now.Format(time.RFC3339Nano),
-		})
+		_, err := orm.RawExec(ctx, tx, `
+			UPDATE users
+			SET username = ?, display_name = ?, password_hash = ?, must_change_password = 0,
+			    generation = generation + 1, updated_at = ?
+			WHERE id = ?
+		`, normalized, displayName, nextHash, now.Format(time.RFC3339Nano), user.ID)
+		return err
 	}); err != nil {
 		return AccountResult{}, err
 	}
@@ -679,9 +685,15 @@ func (s *Service) rolesAndPermissions(ctx context.Context, user account) ([]Role
 	}
 	expanded, ok := permissioncatalog.Expand(keys)
 	if !ok {
-		// Defensive: a role may reference a removed permission. Keep the known
-		// subset instead of locking the user out entirely.
-		expanded = keys
+		// Defensive: a role may reference a removed permission. Filter to known
+		// keys and still expand their required dependencies.
+		known := make([]string, 0, len(keys))
+		for _, key := range keys {
+			if _, exists := permissioncatalog.Lookup(key); exists {
+				known = append(known, key)
+			}
+		}
+		expanded, _ = permissioncatalog.Expand(known)
 	}
 	return roles, expanded, nil
 }

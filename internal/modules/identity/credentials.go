@@ -178,8 +178,8 @@ func (s *Service) validateCredential(ctx context.Context, token string) (Session
 	return Session{
 		UserID: entry.UserID, Username: entry.Username, DisplayName: entry.DisplayName,
 		IsBuiltinAdmin: entry.Builtin, Roles: roles, Permissions: permissions,
-		ExpiresAt: credential.ExpiresAt, AuthKind: "credential",
-		CredentialID: credential.ID, CredentialScope: credential.Scope,
+		ExpiresAt: credential.ExpiresAt, MustChangePassword: entry.MustChangePassword,
+		AuthKind: "credential", CredentialID: credential.ID, CredentialScope: credential.Scope,
 		AllowManagement: credential.AllowManagement,
 	}, true
 }

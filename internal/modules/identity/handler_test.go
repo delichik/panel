@@ -152,3 +152,63 @@ func TestLogoutInvalidatesAuthenticatedSession(t *testing.T) {
 		t.Fatal("token should be invalid after logout")
 	}
 }
+
+func TestAccessCredentialBlockedOnSessionOnlyAuthEndpoints(t *testing.T) {
+	ctx := context.Background()
+	service := newTestService(t)
+	admin, err := service.Login(ctx, "admin", "admin")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	if _, err := service.UpdateAccount(ctx, admin.UserID, AccountUpdate{
+		CurrentPassword: "admin",
+		Username:        "admin",
+		NewPassword:     "new-admin-pass-123",
+	}); err != nil {
+		t.Fatalf("update account: %v", err)
+	}
+	admin, err = service.Login(ctx, "admin", "new-admin-pass-123")
+	if err != nil {
+		t.Fatalf("relogin: %v", err)
+	}
+	cred, err := service.CreateAccessCredential(ctx, admin.UserID, AccessCredentialCreateInput{
+		Name:            "rw",
+		ExpiresInSeconds: 900,
+		Scope:           "readwrite",
+		AllowManagement: true,
+	})
+	if err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+
+	handler := NewHandler(service)
+	mux := http.NewServeMux()
+	mux.Handle("POST /api/v1/auth/logout", service.RequireAuthAllowPasswordChange(service.RejectCredentials(http.HandlerFunc(handler.Logout))))
+	mux.Handle("POST /api/v1/auth/account", service.RequireAuthAllowPasswordChange(service.RejectCredentials(http.HandlerFunc(handler.UpdateAccount))))
+	mux.Handle("POST /api/v1/auth/jwt-secret", service.RequireAuth(service.RejectCredentials(service.RequirePermission("settings.security", http.HandlerFunc(handler.UpdateJWTSecret)))))
+
+	cases := []struct {
+		path string
+		body string
+	}{
+		{"/api/v1/auth/logout", ``},
+		{"/api/v1/auth/account", `{"currentPassword":"new-admin-pass-123","newPassword":"another-pass-123"}`},
+		{"/api/v1/auth/jwt-secret", `{"jwtSecret":"0123456789abcdef0123456789abcdef"}`},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(http.MethodPost, tc.path, bytes.NewBufferString(tc.body))
+		req.Header.Set("Authorization", "Bearer "+cred.Token)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s: status = %d, want 403, body=%s", tc.path, rec.Code, rec.Body.String())
+		}
+		var env httpx.Envelope
+		if err := json.NewDecoder(rec.Body).Decode(&env); err != nil {
+			t.Fatalf("%s: decode: %v", tc.path, err)
+		}
+		if env.Error == nil || env.Error.Code != "credential_scope_restricted" {
+			t.Fatalf("%s: error = %#v, want credential_scope_restricted", tc.path, env.Error)
+		}
+	}
+}

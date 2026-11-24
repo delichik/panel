@@ -37,6 +37,10 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	sess := FromContext(r.Context())
+	if sess.AuthKind == "credential" {
+		httpx.Error(w, panelErrCredentialRestricted())
+		return
+	}
 	if err := h.service.Logout(r.Context(), sess.UserID); err != nil {
 		httpx.Error(w, err)
 		return
@@ -59,11 +63,15 @@ func (h *Handler) Session(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) UpdateAccount(w http.ResponseWriter, r *http.Request) {
+	sess := FromContext(r.Context())
+	if sess.AuthKind == "credential" {
+		httpx.Error(w, panelErrCredentialRestricted())
+		return
+	}
 	var req AccountUpdate
 	if !httpx.Decode(w, r, &req) {
 		return
 	}
-	sess := FromContext(r.Context())
 	result, err := h.service.UpdateAccount(r.Context(), sess.UserID, req)
 	if err != nil {
 		httpx.Error(w, err)
@@ -76,6 +84,11 @@ func (h *Handler) UpdateAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) UpdateJWTSecret(w http.ResponseWriter, r *http.Request) {
+	sess := FromContext(r.Context())
+	if sess.AuthKind == "credential" {
+		httpx.Error(w, panelErrCredentialRestricted())
+		return
+	}
 	var req struct {
 		JWTSecret string `json:"jwtSecret"`
 	}
