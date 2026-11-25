@@ -178,16 +178,16 @@ func proxyDNSDomainEntries(cfg ReverseProxyConfig) map[string]FacilityRouteDomai
 	return domainEntries
 }
 
-func (s *Service) attachApplicationRoutes(ctx context.Context, cfg ReverseProxyConfig) ReverseProxyConfig {
+func (s *Service) attachApplicationRoutes(ctx context.Context, cfg ReverseProxyConfig) (ReverseProxyConfig, error) {
 	if s.apps == nil {
-		return cfg
+		return cfg, nil
 	}
 	routes, err := s.apps.ApplicationReverseProxyConfigs(ctx)
 	if err != nil {
-		return cfg
+		return cfg, err
 	}
 	cfg.ApplicationRoutes = routes
-	return cfg
+	return cfg, nil
 }
 
 func (s *Service) currentProxyDNSDomains(ctx context.Context) ([]string, error) {
@@ -195,7 +195,10 @@ func (s *Service) currentProxyDNSDomains(ctx context.Context) ([]string, error) 
 	if err != nil {
 		return nil, err
 	}
-	cfg = s.attachApplicationRoutes(ctx, cfg)
+	cfg, err = s.attachApplicationRoutes(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
 	names := map[string]struct{}{}
 	for name := range proxyDNSDomainEntries(cfg) {
 		names[name] = struct{}{}
@@ -218,7 +221,10 @@ func (s *Service) SyncServersDNSEntries(ctx context.Context, serverIDs []string)
 	if err != nil {
 		return err
 	}
-	cfg = s.attachApplicationRoutes(ctx, cfg)
+	cfg, err = s.attachApplicationRoutes(ctx, cfg)
+	if err != nil {
+		return err
+	}
 	changed := map[string]struct{}{}
 	for _, id := range serverIDs {
 		changed[id] = struct{}{}
@@ -364,7 +370,12 @@ func (s *Service) runDNSSyncOnce(ctx context.Context, domains []string, takeover
 	if err != nil {
 		return err
 	}
-	cfg = s.attachApplicationRoutes(ctx, cfg)
+	cfg, err = s.attachApplicationRoutes(ctx, cfg)
+	if err != nil {
+		// 应用反代路由读取失败时必须 fail-closed，绝不能把“读不到应用路由”
+		// 当成“所有应用域名已删除”而批量清理托管 DNS 记录。
+		return err
+	}
 	servers := map[string]server.Server{}
 	if s.servers == nil {
 		// Mis-wiring must fail closed like List errors: an empty map would treat

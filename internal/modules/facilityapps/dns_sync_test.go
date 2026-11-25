@@ -352,10 +352,58 @@ func TestRunDNSSyncMergesPendingDomains(t *testing.T) {
 
 type facilityTestAppsWithRoutes struct {
 	routes []applications.ApplicationReverseProxyConfig
+	err    error
 }
 
 func (p facilityTestAppsWithRoutes) ApplicationReverseProxyConfigs(context.Context) ([]applications.ApplicationReverseProxyConfig, error) {
+	if p.err != nil {
+		return nil, p.err
+	}
 	return p.routes, nil
+}
+
+func TestRunDNSSyncFailsClosedWhenApplicationRoutesError(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	svc := NewService(store.AppDB(), nil, facilityTestServers{items: map[string]server.Server{
+		"srv-a": {ID: "srv-a", IPv4: "203.0.113.10"},
+	}}, nil, WithDataRoot(cfg.DataRoot))
+	svc.apps = facilityTestAppsWithRoutes{err: errors.New("broken app template")}
+	syncer := &fakeDNSProxySyncer{zones: []dns.Domain{{Name: "example.test"}}}
+	svc.dns = syncer
+	ctx := context.Background()
+	if err := svc.saveConfig(ctx, ReverseProxyConfig{
+		DeploymentServers: []string{"srv-a"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := formatTime(time.Now().UTC())
+	if err := svc.setDNSSyncStates(ctx, map[string]DNSSyncState{"prod.example.test": {State: DNSSyncPending, UpdatedAt: now}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.runDNSSync(ctx, []string{"prod.example.test"}, false); err == nil {
+		t.Fatal("expected application routes error to fail-closed DNS sync")
+	}
+	if len(syncer.targets) != 0 {
+		t.Fatalf("no DNS provider call should happen when application routes fail, got %#v", syncer.targets)
+	}
+	loaded, err := svc.loadConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.DNSSync["prod.example.test"].State != DNSSyncPending {
+		t.Fatalf("dns sync must remain pending after application routes error, got %#v", loaded.DNSSync["prod.example.test"])
+	}
 }
 
 func TestRunDNSSyncTaskDrainsPendingMarkedDuringSync(t *testing.T) {

@@ -337,9 +337,11 @@ func (s *Service) SaveReverseProxy(ctx context.Context, in ReverseProxySaveInput
 	if err := s.triggerReverseProxyReconcile(ctx, "facility_app", stopIDs, applyIDs); err != nil {
 		_ = s.setLastError(ctx, err.Error())
 	}
-	previous = s.attachApplicationRoutes(ctx, previous)
-	saved = s.attachApplicationRoutes(ctx, saved)
-	if affected := dnsSyncDomainsOnSave(previous, saved); len(affected) > 0 {
+	if prevWithRoutes, routeErr := s.attachApplicationRoutes(ctx, previous); routeErr != nil {
+		_ = s.setLastError(ctx, routeErr.Error())
+	} else if savedWithRoutes, routeErr := s.attachApplicationRoutes(ctx, saved); routeErr != nil {
+		_ = s.setLastError(ctx, routeErr.Error())
+	} else if affected := dnsSyncDomainsOnSave(prevWithRoutes, savedWithRoutes); len(affected) > 0 {
 		if _, err := s.triggerDNSSync(ctx, affected, "facility_app", false); err != nil {
 			_ = s.setLastError(ctx, err.Error())
 		}
