@@ -59,8 +59,9 @@ func NormalizeBlankTimeColumns(ctx context.Context, ex Executor, models []any) e
 		sets := make([]string, len(target))
 		conds := make([]string, len(target))
 		for i, c := range target {
-			sets[i] = quoteIdent(c) + " = NULL"
-			conds[i] = quoteIdent(c) + " = ''"
+			q := quoteIdent(c)
+			sets[i] = q + " = CASE WHEN " + q + " = '' THEN NULL ELSE " + q + " END"
+			conds[i] = q + " = ''"
 		}
 		stmt := "UPDATE " + quoteIdent(info.table) + " SET " + strings.Join(sets, ", ") +
 			" WHERE " + strings.Join(conds, " OR ")

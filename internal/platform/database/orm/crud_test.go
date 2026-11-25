@@ -680,6 +680,25 @@ func TestCRUDTimeColumnBlankStringNormalized(t *testing.T) {
 	if row.StartedAt != nil || row.FinishedAt != nil {
 		t.Fatalf("after NormalizeBlankTimeColumns: started_at=%v finished_at=%v, want both nil", row.StartedAt, row.FinishedAt)
 	}
+
+	// 同行中仅部分列为空字符串时，绝不能抹除其他列的合法时间戳。
+	validTS := "2026-01-02T03:04:05Z"
+	if _, err := db.Exec(`INSERT INTO crud_events(id, started_at, finished_at) VALUES('e3', ?, '')`, validTS); err != nil {
+		t.Fatal(err)
+	}
+	if err := NormalizeBlankTimeColumns(ctx, db, []any{&crudEvent{}}); err != nil {
+		t.Fatal(err)
+	}
+	var mixed crudEvent
+	if err := New(db).From("crud_events").Where("id = ?", "e3").First(ctx, &mixed); err != nil {
+		t.Fatal(err)
+	}
+	if mixed.StartedAt == nil || mixed.StartedAt.UTC().Format(time.RFC3339) != validTS {
+		t.Fatalf("after NormalizeBlankTimeColumns: started_at=%v, want %s", mixed.StartedAt, validTS)
+	}
+	if mixed.FinishedAt != nil {
+		t.Fatalf("after NormalizeBlankTimeColumns: finished_at=%v, want nil", mixed.FinishedAt)
+	}
 }
 
 func TestCRUDTimeColumnZeroPointerWrittenAsNull(t *testing.T) {
