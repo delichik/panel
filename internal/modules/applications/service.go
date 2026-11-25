@@ -3410,6 +3410,16 @@ func (s *Service) deleteRuntimeInstanceForServer(ctx context.Context, appID, ser
 }
 
 func (s *Service) deleteApplicationIfRuntimeGone(ctx context.Context, appID string) error {
+	var deletionRequested int
+	if err := orm.RawRow(ctx, s.db, `SELECT deletion_requested FROM applications WHERE id=?`, appID).Scan(&deletionRequested); err != nil {
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		return err
+	}
+	if deletionRequested == 0 {
+		return nil
+	}
 	instances, err := s.runtimeInstances(ctx, appID)
 	if err != nil {
 		return err
@@ -3428,8 +3438,16 @@ func (s *Service) deleteApplicationIfRuntimeGone(ctx context.Context, appID stri
 	if active > 0 {
 		return nil
 	}
-	if err := orm.New(s.db).From("applications").Where("id=?", appID).And("deletion_requested=1").Delete(ctx); err != nil {
+	res, err := orm.RawExec(ctx, s.db, `DELETE FROM applications WHERE id=? AND deletion_requested=1`, appID)
+	if err != nil {
 		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return nil
 	}
 	s.removeApplicationFileBlobs(appID)
 	return orm.New(s.db).From("reverse_proxy_routes").Where("app_id=?", appID).Delete(ctx)

@@ -161,6 +161,42 @@ func TestDeleteApplicationRemovesFileBlobs(t *testing.T) {
 	}
 }
 
+func TestDeleteApplicationIfRuntimeGonePreservesLiveAppFilesAndRoutes(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: false, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if _, err := svc.replaceApplicationFiles(ctx, svc.db, app.ID, []ApplicationFile{{
+		Name: "keep.txt", Kind: ApplicationFileKindTemplate, Content: []byte("keep-me"), Size: 7, SHA256: sha256Hex([]byte("keep-me")),
+		CreatedAt: now, UpdatedAt: now,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.Exec(`INSERT INTO reverse_proxy_routes(domain, app_id, target_port, created_at, updated_at) VALUES(?,?,?,?,?)`,
+		"keep.example.test", app.ID, 8080, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	dir := svc.applicationFilesDir(app.ID)
+	if err := svc.deleteApplicationIfRuntimeGone(ctx, app.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("live application file dir must be preserved after purge, err=%v", err)
+	}
+	var routeCount int
+	if err := svc.db.QueryRow(`SELECT COUNT(*) FROM reverse_proxy_routes WHERE app_id=?`, app.ID).Scan(&routeCount); err != nil {
+		t.Fatal(err)
+	}
+	if routeCount != 1 {
+		t.Fatalf("live application reverse_proxy_routes count = %d, want 1", routeCount)
+	}
+}
+
 func TestBeginEditSessionDoesNotCopyCommittedContent(t *testing.T) {
 	svc, _, _, closeStore := newTestService(t)
 	defer closeStore()
