@@ -15,8 +15,14 @@ withDefaults(defineProps<{
 
 <template>
   <div class="grid min-w-0 gap-0.5">
-    <span v-if="loading" class="motion-skeleton h-5 w-10 rounded bg-muted animate-pulse" aria-hidden="true" />
-    <strong v-else class="block truncate text-subtitle font-semibold text-foreground">{{ value ?? '—' }}</strong>
+    <span v-if="loading" class="motion-skeleton h-7 w-12 rounded-control bg-pressed animate-pulse" aria-hidden="true" />
+    <strong
+      v-else
+      class="block truncate text-subtitle font-semibold tabular-nums text-foreground"
+      :title="value !== null && value !== undefined ? String(value) : undefined"
+    >
+      {{ value ?? '—' }}
+    </strong>
     <span class="truncate text-caption text-muted-foreground">{{ label }}</span>
   </div>
 </template>

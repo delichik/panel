@@ -74,7 +74,8 @@ describe('applications mobile editor and dialog footers', () => {
 });
 
 describe('applications mobile facility catalog', () => {
-  it('stacks facility stat tiles into a single column below sm', () => {
-    expect(catalogSource).toContain('grid grid-cols-1 gap-3 border-t border-divider pt-3 sm:grid-cols-3');
+  it('stacks facility stat tiles into a single column and stacks footer actions below sm', () => {
+    expect(catalogSource).toContain('grid grid-cols-1 gap-3 rounded-control bg-muted px-4 py-3 sm:grid-cols-3');
+    expect(catalogSource).toContain('max-sm:flex-col max-sm:items-stretch');
   });
 });

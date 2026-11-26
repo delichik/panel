@@ -4,6 +4,7 @@
 
 ## 当前状态
 
+- 本轮设施目录视觉重构（2026-11-26）：**无新增/删除词条键**，同步更新 `applicationsPage.entranceProxyFacility` 为更简洁的 `Entrance proxy` / `入口代理`（原 `Entrance proxy facility` / `入口代理设施`），`i18n.test.ts` 校验 en / zh-CN 键集合一致；既有 `applicationsPage.facilityCategory*` 与 `applicationsPage.facilityStatus.*` 键保留在词条表中以维持键集兼容，但设施目录卡片不再渲染它们；后端未新增错误码。
 - 本轮仅安全软件包更新（临时 APT Pinning）与前端类型区分（2026-11-24）：前端新增 `resourcesPage.updateType`、`resourcesPage.regularUpdate`、`resourcesPage.filterAllUpdates`、`resourcesPage.filterSecurityUpdates`、`resourcesPage.filterRegularUpdates`、`resourcesPage.filterUnknownUpdates`、`resourcesPage.packageSummary`，并同步更新 `resourcesPage.securityUnknownHint` 的 en / zh-CN 文案（`i18n.test.ts` 校验）；后端未新增错误码。
 - 本轮全链路 UTC 与前端浏览器时区统一展示（2026-11-24）：**无新增/删除词条键**，同步更新 `settingsPage.autoUpdate.scheduleTimeHint` 与 `settingsPage.autoUpdate.localTimeHint`（带 `{tz}` 浏览器时区参数）的 en / zh-CN 文案，说明前端按浏览器时区显示并与 UTC 自动换算；后端未新增错误码。
 - 本轮多用户/权限/初始化/访问凭证（2026-11-23）：前端新增 `routes.setup|account|access|forbidden.title`、`auth.setup*`、`auth.passwordChangedRelogin`、`account.*`、`access.*`、`forbidden.*`、`permissions.group.*`（14 组）与 `permissions.<key>.label`（30 项）、`access.roles.readOnly/readWrite/uiTargets/dependsOn`，以及 `common.copy/copied`；en / zh-CN 同键且值非空（`i18n.test.ts` 校验）。未删除既有词条。后端未新增稳定错误码中文映射：本轮新增错误码（`setup_completed`、`username_taken`、`builtin_admin_immutable`、`builtin_role_immutable`、`role_in_use`、`permission_not_grantable`、`unknown_permission`、`credential_*` 等）当前走英文 fallback，若需本地化须在同一改动补 `internal/platform/i18n` 与 `i18n_test.go`。

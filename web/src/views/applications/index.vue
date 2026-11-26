@@ -219,10 +219,10 @@ const runtimeError = ref('');
 const editorLoading = ref(false);
 const facilitiesLoaded = ref(true);
 const facilities = [
-  { kind: 'reverse-proxy', icon: Globe2, titleKey: 'applicationsPage.entranceProxyFacility', descriptionKey: 'applicationsPage.entranceProxyFacilityDescription', categoryKey: 'applicationsPage.facilityCategoryTraffic', status: 'available' },
-  { kind: 'storage-share', icon: HardDrive, titleKey: 'applicationsPage.storageShareFacility', descriptionKey: 'applicationsPage.storageShareFacilityDescription', categoryKey: 'applicationsPage.facilityCategoryStorage', status: 'available' },
-  { kind: 'network-probe', icon: Radar, titleKey: 'applicationsPage.networkProbeFacility', descriptionKey: 'applicationsPage.networkProbeFacilityDescription', categoryKey: 'applicationsPage.facilityCategoryNetwork', status: 'available' },
-  { kind: 'metrics', icon: Activity, titleKey: 'applicationsPage.metricsFacility', descriptionKey: 'applicationsPage.metricsFacilityDescription', categoryKey: 'applicationsPage.facilityCategoryObservability', status: 'available' },
+  { kind: 'reverse-proxy', icon: Globe2, titleKey: 'applicationsPage.entranceProxyFacility', descriptionKey: 'applicationsPage.entranceProxyFacilityDescription' },
+  { kind: 'storage-share', icon: HardDrive, titleKey: 'applicationsPage.storageShareFacility', descriptionKey: 'applicationsPage.storageShareFacilityDescription' },
+  { kind: 'network-probe', icon: Radar, titleKey: 'applicationsPage.networkProbeFacility', descriptionKey: 'applicationsPage.networkProbeFacilityDescription' },
+  { kind: 'metrics', icon: Activity, titleKey: 'applicationsPage.metricsFacility', descriptionKey: 'applicationsPage.metricsFacilityDescription' },
 ];
 const error = ref('');
 const actionError = ref('');
@@ -3240,14 +3240,12 @@ onBeforeUnmount(() => {
     <FacilityCatalog
       :facilities="facilities"
       :loading="loading"
-      :pending="pending"
       :facility="facility"
       :storage-share-config="storageShareConfig"
       :network-probe-config="networkProbeConfig"
       :metrics-config="metricsConfig"
       :server-total="servers.length"
       @open="(kind) => router.push(`/applications/facility-apps/${kind}`)"
-      @reconcile="(kind) => runOperation(`facility-reconcile-${kind}`, () => kind === 'storage-share' ? storageShareFacilityApi.reconcile() : reverseProxyFacilityApi.reconcile(), kind === 'storage-share' ? 'applicationsPage.storageShareReconcileAccepted' : 'applicationsPage.gatewayReconcileAccepted', 'applicationsPage.gatewayReconcileAcceptedWithoutId')"
     />
   </ConsolePage>
 
