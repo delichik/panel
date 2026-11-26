@@ -50,4 +50,15 @@ func TestOptions(t *testing.T) {
 	if _, err := Options("10.0.0.5,ro:/srv/data", false); err == nil {
 		t.Fatal("expected invalid host to be rejected")
 	}
+	for _, bad := range []string{
+		"[10.0.0.1,rw,suid,exec]:/export",
+		"[10.0.0.1]:/export",
+		"[2001:db8::1]:",
+		"[2001:db8::1]:relative/path",
+		"10.0.0.5:relative/path",
+	} {
+		if _, err := Options(bad, true); err == nil {
+			t.Fatalf("expected invalid nfs source %q to be rejected", bad)
+		}
+	}
 }

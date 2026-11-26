@@ -27,17 +27,27 @@ func SplitSource(source string) (string, string, error) {
 		if end < 0 || end+1 >= len(source) || source[end+1] != ':' {
 			return "", "", fmt.Errorf("invalid nfs source %q", source)
 		}
-		return source[1:end], source[end+2:], nil
+		host := source[1:end]
+		export := source[end+2:]
+		ip := net.ParseIP(host)
+		if ip == nil || ip.To4() != nil || export == "" || !strings.HasPrefix(export, "/") {
+			return "", "", fmt.Errorf("invalid nfs source %q", source)
+		}
+		return host, export, nil
 	}
 	idx := strings.Index(source, ":")
 	if idx <= 0 || idx == len(source)-1 {
 		return "", "", fmt.Errorf("invalid nfs source %q", source)
 	}
 	host := source[:idx]
+	export := source[idx+1:]
 	if net.ParseIP(host) == nil && !hostPattern.MatchString(host) {
 		return "", "", fmt.Errorf("invalid nfs host %q", host)
 	}
-	return host, source[idx+1:], nil
+	if !strings.HasPrefix(export, "/") {
+		return "", "", fmt.Errorf("invalid nfs export path %q", export)
+	}
+	return host, export, nil
 }
 
 // Options 返回创建 Docker local 卷时使用的 NFS driver 参数。
