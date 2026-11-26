@@ -282,3 +282,42 @@ func TestLatestSinceAndCleanupAndSweepOrphans(t *testing.T) {
 		t.Fatalf("orphan sessions remain = %d", page.Total)
 	}
 }
+
+func TestCleanupBatchedAndAttemptCapExactOrder(t *testing.T) {
+	repo := newTestRepository(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	items := make([]agentcontract.SSHFailure, 0, 1150)
+	for i := 0; i < 1150; i++ {
+		items = append(items, agentcontract.SSHFailure{
+			UserName:  "brute",
+			AttemptAt: now.Add(-time.Duration(i) * time.Second),
+			PID:       i + 1,
+		})
+	}
+	if _, err := repo.InsertAttempts(ctx, "srv-cap", items); err != nil {
+		t.Fatal(err)
+	}
+	_, deleted, err := repo.Cleanup(ctx, 30, 30, 100)
+	if err != nil {
+		t.Fatalf("Cleanup cap: %v", err)
+	}
+	if deleted != 1050 {
+		t.Fatalf("deleted = %d, want 1050", deleted)
+	}
+	page, err := repo.ListAttempts(ctx, "srv-cap", AttemptFilter{PageSize: 200})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 100 {
+		t.Fatalf("remaining attempts = %d, want 100", page.Total)
+	}
+	// Newest item (i=0 -> now) must be retained, oldest retained must be i=99.
+	if !page.Items[0].AttemptAt.Equal(now) {
+		t.Fatalf("newest attempt = %v, want %v", page.Items[0].AttemptAt, now)
+	}
+	if !page.Items[len(page.Items)-1].AttemptAt.Equal(now.Add(-99 * time.Second)) {
+		t.Fatalf("oldest retained = %v, want %v", page.Items[len(page.Items)-1].AttemptAt, now.Add(-99*time.Second))
+	}
+}

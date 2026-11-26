@@ -108,11 +108,7 @@ func (s *Service) SaveReportedUpdates(ctx context.Context, serverID string, upda
 	if s == nil || s.db == nil {
 		return nil
 	}
-	if err := s.replaceUpdates(ctx, serverID, updates); err != nil {
-		return err
-	}
-	_, err := orm.RawExec(ctx, s.db, `INSERT INTO package_refreshes(server_id,refreshed_at) VALUES(?,?) ON CONFLICT(server_id) DO UPDATE SET refreshed_at=excluded.refreshed_at`, serverID, time.Now().UTC().Format(time.RFC3339Nano))
-	return err
+	return s.replaceUpdates(ctx, serverID, updates)
 }
 
 func (s *Service) refresh(ctx context.Context, serverID string, triggerType string, skipRecentFailure bool, operationID string) (RefreshResult, error) {

@@ -779,11 +779,22 @@ func (s *Service) results(ctx context.Context, sources, targets map[string]struc
 	if len(sources) == 0 {
 		return []Result{}, nil
 	}
+	sourceIDs := make([]string, 0, len(sources))
+	for id := range sources {
+		sourceIDs = append(sourceIDs, id)
+	}
+	sort.Strings(sourceIDs)
+	placeholders := strings.Repeat("?,", len(sourceIDs))
+	placeholders = placeholders[:len(placeholders)-1]
+	args := make([]any, len(sourceIDs))
+	for i, id := range sourceIDs {
+		args[i] = id
+	}
 	columns := `source_server_id,target_server_id,target_address,sampled_at,latency_ms,packet_loss_percent,sent,received,error`
 	if withHistory {
 		columns += `,history_json`
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+columns+` FROM network_probe_results`)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+columns+` FROM network_probe_results WHERE source_server_id IN (`+placeholders+`)`, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -45,6 +45,7 @@ func (*SSHAccessSession) ExtraIndexDDL() map[string][]string {
 			"CREATE INDEX IF NOT EXISTS idx_ssh_access_sessions_server_login ON ssh_access_sessions(server_id, login_at)",
 			"CREATE INDEX IF NOT EXISTS idx_ssh_access_sessions_open_login ON ssh_access_sessions(server_id, login_at) WHERE logout_at IS NULL",
 			"CREATE INDEX IF NOT EXISTS idx_ssh_access_sessions_server_logout ON ssh_access_sessions(server_id, logout_at)",
+			"CREATE INDEX IF NOT EXISTS idx_ssh_access_sessions_logout ON ssh_access_sessions(logout_at)",
 		},
 	}
 }
@@ -71,6 +72,7 @@ func (*SSHAccessAttempt) ExtraIndexDDL() map[string][]string {
 		"ssh_access_attempts": {
 			"CREATE INDEX IF NOT EXISTS idx_ssh_access_attempts_server_time ON ssh_access_attempts(server_id, attempt_at)",
 			"CREATE INDEX IF NOT EXISTS idx_ssh_access_attempts_server_addr ON ssh_access_attempts(server_id, source_address, attempt_at)",
+			"CREATE INDEX IF NOT EXISTS idx_ssh_access_attempts_time ON ssh_access_attempts(attempt_at)",
 		},
 	}
 }

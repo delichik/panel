@@ -568,3 +568,46 @@ func TestQueryBucketedAggregatesSeriesAndLatest(t *testing.T) {
 		t.Fatal("expected invalid range error")
 	}
 }
+
+func TestMetricsCleanupDeletesMoreThanOneBatch(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	svc := NewService(store.MetricsDB(), nil)
+	ctx := context.Background()
+	oldStart := time.Now().UTC().Add(-72 * time.Hour).Truncate(time.Second)
+	tx, err := store.MetricsDB().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 1250; i++ {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO metrics_snapshots(server_id,time,cpu_usage_percent,memory_used_bytes,memory_total_bytes,disk_used_bytes,disk_total_bytes,network_rx_bps,network_tx_bps) VALUES('srv',?,1,2,3,4,5,6,7)`,
+			oldStart.Add(time.Duration(i)*time.Second).Format(time.RFC3339Nano)); err != nil {
+			_ = tx.Rollback()
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Save(ctx, linux.MetricsSnapshot{ServerID: "srv", Time: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := svc.Cleanup(ctx, 1)
+	if err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+	if deleted != 1250 {
+		t.Fatalf("deleted = %d, want 1250", deleted)
+	}
+}

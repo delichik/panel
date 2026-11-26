@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -302,33 +303,71 @@ func (r *Repository) Cleanup(ctx context.Context, successDays, failureDays, maxR
 	}
 	successCutoff := now.Add(-time.Duration(successDays) * 24 * time.Hour).Format(time.RFC3339Nano)
 	failureCutoff := now.Add(-time.Duration(failureDays) * 24 * time.Hour).Format(time.RFC3339Nano)
-	res, err := orm.RawExec(ctx, r.db, `DELETE FROM ssh_access_sessions WHERE logout_at IS NOT NULL AND logout_at < ?`, successCutoff)
-	if err != nil {
-		return 0, 0, err
-	}
-	deletedSessions, _ := res.RowsAffected()
-	res, err = orm.RawExec(ctx, r.db, `DELETE FROM ssh_access_attempts WHERE attempt_at < ?`, failureCutoff)
+	deletedSessions, err := r.deleteBatched(ctx, "ssh_access_sessions", `logout_at IS NOT NULL AND logout_at < ?`, successCutoff)
 	if err != nil {
 		return deletedSessions, 0, err
 	}
-	deletedAttempts, _ := res.RowsAffected()
+	deletedAttempts, err := r.deleteBatched(ctx, "ssh_access_attempts", `attempt_at < ?`, failureCutoff)
+	if err != nil {
+		return deletedSessions, deletedAttempts, err
+	}
 	if maxRowsPerServer > 0 {
 		overflow, err := r.serversOverAttemptLimit(ctx, maxRowsPerServer)
 		if err != nil {
 			return deletedSessions, deletedAttempts, err
 		}
 		for _, serverID := range overflow {
-			res, err := orm.RawExec(ctx, r.db, `DELETE FROM ssh_access_attempts WHERE server_id=? AND id NOT IN (
- SELECT id FROM ssh_access_attempts WHERE server_id=? ORDER BY attempt_at DESC, id DESC LIMIT ?)`,
-				serverID, serverID, maxRowsPerServer)
+			var cutoffAttemptAt, cutoffID string
+			err := r.db.QueryRowContext(ctx, `SELECT attempt_at, id FROM ssh_access_attempts WHERE server_id=? ORDER BY attempt_at DESC, id DESC LIMIT 1 OFFSET ?`,
+				serverID, maxRowsPerServer-1).Scan(&cutoffAttemptAt, &cutoffID)
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
 			if err != nil {
 				return deletedSessions, deletedAttempts, err
 			}
-			n, _ := res.RowsAffected()
+			n, err := r.deleteBatched(ctx, "ssh_access_attempts", `server_id=? AND (attempt_at < ? OR (attempt_at = ? AND id < ?))`,
+				serverID, cutoffAttemptAt, cutoffAttemptAt, cutoffID)
 			deletedAttempts += n
+			if err != nil {
+				return deletedSessions, deletedAttempts, err
+			}
 		}
 	}
 	return deletedSessions, deletedAttempts, nil
+}
+
+func (r *Repository) deleteBatched(ctx context.Context, table, whereClause string, args ...any) (int64, error) {
+	const batchSize int64 = 1000
+	query := `DELETE FROM ` + table + ` WHERE rowid IN (SELECT rowid FROM ` + table
+	if whereClause != "" {
+		query += ` WHERE ` + whereClause
+	}
+	query += ` LIMIT ?)`
+	queryArgs := append(append([]any{}, args...), batchSize)
+	var totalDeleted int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return totalDeleted, err
+		}
+		res, err := orm.RawExec(ctx, r.db, query, queryArgs...)
+		if err != nil {
+			return totalDeleted, err
+		}
+		deleted, err := res.RowsAffected()
+		if err != nil {
+			return totalDeleted, err
+		}
+		totalDeleted += deleted
+		if deleted < batchSize {
+			return totalDeleted, nil
+		}
+		select {
+		case <-ctx.Done():
+			return totalDeleted, ctx.Err()
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
 }
 
 func (r *Repository) serversOverAttemptLimit(ctx context.Context, limit int) ([]string, error) {
@@ -351,21 +390,20 @@ func (r *Repository) serversOverAttemptLimit(ctx context.Context, limit int) ([]
 // SweepOrphans 删除已不在服务器列表中的访问记录。
 func (r *Repository) SweepOrphans(ctx context.Context, serverIDs []string) (int64, error) {
 	var deleted int64
-	for _, table := range []string{"ssh_access_sessions", "ssh_access_attempts"} {
-		query := `DELETE FROM ` + table
-		var args []any
-		if len(serverIDs) > 0 {
-			query += ` WHERE server_id NOT IN (` + placeholders(len(serverIDs)) + `)`
-			for _, id := range serverIDs {
-				args = append(args, id)
-			}
+	whereClause := ""
+	var args []any
+	if len(serverIDs) > 0 {
+		whereClause = `server_id NOT IN (` + placeholders(len(serverIDs)) + `)`
+		for _, id := range serverIDs {
+			args = append(args, id)
 		}
-		res, err := orm.RawExec(ctx, r.db, query, args...)
+	}
+	for _, table := range []string{"ssh_access_sessions", "ssh_access_attempts"} {
+		n, err := r.deleteBatched(ctx, table, whereClause, args...)
+		deleted += n
 		if err != nil {
 			return deleted, err
 		}
-		n, _ := res.RowsAffected()
-		deleted += n
 	}
 	return deleted, nil
 }

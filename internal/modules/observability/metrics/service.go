@@ -343,12 +343,31 @@ func (s *Service) Cleanup(ctx context.Context, retentionDays int) (int64, error)
 		// provider，错误码与设施校验保持一致，避免设置页移除后仍出现旧错误码。
 		return 0, panelerr.Validation("metrics_facility_retention_invalid", "Metrics retention must be at least 1 day")
 	}
+	const batchSize int64 = 1000
 	cutoff := time.Now().UTC().Add(-time.Duration(retentionDays) * 24 * time.Hour).Format(time.RFC3339Nano)
-	res, err := orm.RawExec(ctx, s.db, `DELETE FROM metrics_snapshots WHERE time < ?`, cutoff)
-	if err != nil {
-		return 0, err
+	var totalDeleted int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return totalDeleted, err
+		}
+		res, err := orm.RawExec(ctx, s.db, `DELETE FROM metrics_snapshots WHERE id IN (SELECT id FROM metrics_snapshots WHERE time < ? LIMIT ?)`, cutoff, batchSize)
+		if err != nil {
+			return totalDeleted, err
+		}
+		deleted, err := res.RowsAffected()
+		if err != nil {
+			return totalDeleted, err
+		}
+		totalDeleted += deleted
+		if deleted < batchSize {
+			return totalDeleted, nil
+		}
+		select {
+		case <-ctx.Done():
+			return totalDeleted, ctx.Err()
+		case <-time.After(5 * time.Millisecond):
+		}
 	}
-	return res.RowsAffected()
 }
 
 // LatestAtMany 批量返回多个服务器的最新指标时间，避免概览页逐服务器 N+1 查询。

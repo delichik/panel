@@ -39,6 +39,7 @@ func (*MetricsSnapshot) ExtraIndexDDL() map[string][]string {
 	return map[string][]string{
 		"metrics_snapshots": {
 			"CREATE INDEX IF NOT EXISTS idx_metrics_snapshots_server_time ON metrics_snapshots(server_id, time)",
+			"CREATE INDEX IF NOT EXISTS idx_metrics_snapshots_time ON metrics_snapshots(time)",
 		},
 	}
 }

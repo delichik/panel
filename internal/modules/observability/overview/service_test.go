@@ -627,3 +627,38 @@ func newCardDataTestService(t *testing.T) (*Service, []string, func()) {
 		}
 	}
 }
+
+func TestGetCardsDoesNotWriteWhenAlreadySeeded(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	svc := NewService(store.AppDB(), nil, nil, nil)
+	if _, err := svc.GetCards(context.Background()); err != nil {
+		t.Fatalf("seed get cards: %v", err)
+	}
+
+	// Switch connection to read-only; subsequent GetCards must not execute an INSERT.
+	store.AppDB().SetMaxOpenConns(1)
+	if _, err := store.AppDB().Exec(`PRAGMA query_only = ON`); err != nil {
+		t.Fatalf("enable query_only: %v", err)
+	}
+	defer func() { _, _ = store.AppDB().Exec(`PRAGMA query_only = OFF`) }()
+
+	got, err := svc.GetCards(context.Background())
+	if err != nil {
+		t.Fatalf("read-only GetCards failed (performed unnecessary write): %v", err)
+	}
+	if len(got.Cards) != 6 {
+		t.Fatalf("card count = %d, want 6", len(got.Cards))
+	}
+}

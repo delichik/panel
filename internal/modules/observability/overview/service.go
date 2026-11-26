@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -136,21 +137,29 @@ func (s *Service) Get(ctx context.Context) (Overview, error) {
 }
 
 func (s *Service) GetCards(ctx context.Context) (CardConfigurationSet, error) {
-	defaults, err := json.Marshal(defaultCards())
-	if err != nil {
-		return CardConfigurationSet{}, err
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	if _, err := orm.RawExec(ctx, s.db, `
-		INSERT INTO overview_card_configurations(id, cards_json, updated_at)
-		VALUES(?, ?, ?)
-		ON CONFLICT(id) DO NOTHING
-	`, cardConfigurationID, string(defaults), now); err != nil {
-		return CardConfigurationSet{}, err
-	}
-
 	var raw string
-	if err := orm.New(s.db).From("overview_card_configurations").Where("id = ?", cardConfigurationID).Select("cards_json").ScanValue(ctx, &raw); err != nil {
+	err := orm.New(s.db).From("overview_card_configurations").Where("id = ?", cardConfigurationID).Select("cards_json").ScanValue(ctx, &raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		cards := defaultCards()
+		defaults, marshalErr := json.Marshal(cards)
+		if marshalErr != nil {
+			return CardConfigurationSet{}, marshalErr
+		}
+		now := time.Now().UTC().Format(time.RFC3339)
+		if _, execErr := orm.RawExec(ctx, s.db, `
+			INSERT INTO overview_card_configurations(id, cards_json, updated_at)
+			VALUES(?, ?, ?)
+			ON CONFLICT(id) DO NOTHING
+		`, cardConfigurationID, string(defaults), now); execErr != nil {
+			return CardConfigurationSet{}, execErr
+		}
+		if err := orm.New(s.db).From("overview_card_configurations").Where("id = ?", cardConfigurationID).Select("cards_json").ScanValue(ctx, &raw); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return CardConfigurationSet{Cards: cards}, nil
+			}
+			return CardConfigurationSet{}, err
+		}
+	} else if err != nil {
 		return CardConfigurationSet{}, err
 	}
 	var cards []CardConfiguration
