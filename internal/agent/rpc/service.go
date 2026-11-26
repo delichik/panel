@@ -48,7 +48,7 @@ func (h *Handler) withDockerWrite(fn func() error) error {
 }
 
 type runtimeFirewall interface {
-	EnsureApplicationRules(context.Context, string, int, int, []agentfirewall.Rule) error
+	EnsureApplicationRules(context.Context, string, int, int, []agentfirewall.Rule) ([]agentfirewall.Rule, error)
 	CleanupApplicationRules(context.Context, string, int, int, []agentfirewall.Rule) error
 }
 
@@ -397,8 +397,11 @@ func (h *Handler) reconcileRuntimeAndFirewall(ctx context.Context, input agentco
 	}
 	desired := applicationFirewallRules(input.Spec)
 	ensured := false
+	var previousOwned []agentfirewall.Rule
 	if input.Action == "apply" {
-		if err := manager.EnsureApplicationRules(ctx, input.ApplicationID, input.SSHPort, input.AgentPort, desired); err != nil {
+		var err error
+		previousOwned, err = manager.EnsureApplicationRules(ctx, input.ApplicationID, input.SSHPort, input.AgentPort, desired)
+		if err != nil {
 			return firewallReconcileFailure("ensure_firewall", err)
 		}
 		ensured = true
@@ -407,9 +410,9 @@ func (h *Handler) reconcileRuntimeAndFirewall(ctx context.Context, input agentco
 	result, runErr := reconcile(ctx, input)
 	if runErr != nil || result.ErrorCode != "" {
 		if ensured {
-			// Fail closed: do not leave newly ensured ports open after a failed
-			// apply. Retry will Ensure again before the next reconcile attempt.
-			if cleanErr := manager.CleanupApplicationRules(ctx, input.ApplicationID, input.SSHPort, input.AgentPort, nil); cleanErr != nil && result.ErrorCode == "" {
+			// Roll back only newly added ports while preserving rules that were
+			// already owned by this application before the failed update.
+			if cleanErr := manager.CleanupApplicationRules(ctx, input.ApplicationID, input.SSHPort, input.AgentPort, previousOwned); cleanErr != nil && result.ErrorCode == "" {
 				return mergeFirewallFailure(result, "cleanup_firewall", cleanErr)
 			}
 		}

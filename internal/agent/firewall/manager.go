@@ -78,28 +78,36 @@ func WithMutationLock(fn func() error) error {
 	return fn()
 }
 
-// EnsureApplicationRules creates only missing application-owned rules. A
-// matching manual rule is respected but never adopted or rewritten.
-func (m *Manager) EnsureApplicationRules(ctx context.Context, applicationID string, sshPort, agentPort int, desired []Rule) error {
+// EnsureApplicationRules creates only missing application-owned rules and
+// returns the application's owned rules that existed before this call so a
+// failed update can roll back only newly added ports without dropping live
+// traffic. A matching manual rule is respected but never adopted or rewritten.
+func (m *Manager) EnsureApplicationRules(ctx context.Context, applicationID string, sshPort, agentPort int, desired []Rule) ([]Rule, error) {
 	owner := OwnerComment(applicationID)
 	if owner == ownerPrefix {
-		return errors.New("application id is required for managed firewall rules")
+		return nil, errors.New("application id is required for managed firewall rules")
 	}
 	wanted, err := normalizeRules(desired, sshPort, agentPort)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(wanted) == 0 {
-		return nil
+		return nil, nil
 	}
 	mutationMu.Lock()
 	defer mutationMu.Unlock()
 	if err := m.requireInstalled(); err != nil {
-		return err
+		return nil, err
 	}
 	existing, err := m.addedRules(ctx)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	var previousOwned []Rule
+	for _, current := range existing {
+		if current.Comment == owner {
+			previousOwned = append(previousOwned, current.Rule)
+		}
 	}
 	for _, want := range wanted {
 		for _, current := range existing {
@@ -107,28 +115,28 @@ func (m *Manager) EnsureApplicationRules(ctx context.Context, applicationID stri
 				continue
 			}
 			if IsManagedComment(current.Comment) {
-				return fmt.Errorf("firewall port %d/%s is managed by another Panel application", want.Port, want.Protocol)
+				return previousOwned, fmt.Errorf("firewall port %d/%s is managed by another Panel application", want.Port, want.Protocol)
 			}
 		}
 		if containsRule(existing, want) {
 			continue
 		}
 		if _, err := m.runner.Run(ctx, "ufw", "allow", ruleTarget(want), "comment", owner); err != nil {
-			return err
+			return previousOwned, err
 		}
 		existing = append(existing, addedRule{Rule: want, Comment: owner})
 		ArmPending(InverseOp{Action: InverseDeleteAllow, Port: want.Port, Protocol: want.Protocol, Comment: owner})
 	}
 	verified, err := m.addedRules(ctx)
 	if err != nil {
-		return err
+		return previousOwned, err
 	}
 	for _, want := range wanted {
 		if !containsRule(verified, want) {
-			return fmt.Errorf("firewall rule %d/%s was not present after UFW update", want.Port, want.Protocol)
+			return previousOwned, fmt.Errorf("firewall rule %d/%s was not present after UFW update", want.Port, want.Protocol)
 		}
 	}
-	return nil
+	return previousOwned, nil
 }
 
 // CleanupApplicationRules removes only rules carrying this application's

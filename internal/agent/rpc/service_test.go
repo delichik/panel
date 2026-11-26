@@ -49,24 +49,49 @@ func TestApplicationFirewallRulesSelectsOnlyFixedOpenMappings(t *testing.T) {
 }
 
 type orderedFirewall struct {
-	calls *[]string
-	errOn string
+	calls          *[]string
+	errOn          string
+	previousOwned  []agentfirewall.Rule
+	cleanupRetains *[]agentfirewall.Rule
 }
 
-func (f orderedFirewall) EnsureApplicationRules(context.Context, string, int, int, []agentfirewall.Rule) error {
+func (f orderedFirewall) EnsureApplicationRules(context.Context, string, int, int, []agentfirewall.Rule) ([]agentfirewall.Rule, error) {
 	*f.calls = append(*f.calls, "ensure")
 	if f.errOn == "ensure" {
-		return errors.New("ensure failed")
+		return f.previousOwned, errors.New("ensure failed")
 	}
-	return nil
+	return f.previousOwned, nil
 }
 
-func (f orderedFirewall) CleanupApplicationRules(context.Context, string, int, int, []agentfirewall.Rule) error {
+func (f orderedFirewall) CleanupApplicationRules(_ context.Context, _ string, _, _ int, desired []agentfirewall.Rule) error {
 	*f.calls = append(*f.calls, "cleanup")
+	if f.cleanupRetains != nil {
+		*f.cleanupRetains = append([]agentfirewall.Rule(nil), desired...)
+	}
 	if f.errOn == "cleanup" {
 		return errors.New("cleanup failed")
 	}
 	return nil
+}
+
+func TestReconcileRuntimeAndFirewallFailurePreservesPreviouslyOwnedRules(t *testing.T) {
+	calls := []string{}
+	retained := []agentfirewall.Rule{}
+	existing := []agentfirewall.Rule{{Port: 80, Protocol: "tcp"}, {Port: 443, Protocol: "tcp"}}
+	handler := &Handler{
+		firewall: orderedFirewall{calls: &calls, previousOwned: existing, cleanupRetains: &retained},
+		runtimeReconcile: func(context.Context, agentcontract.RuntimeReconcileRequest) (agentcontract.RuntimeReconcileResponse, error) {
+			calls = append(calls, "runtime")
+			return agentcontract.RuntimeReconcileResponse{ErrorCode: "image_pull_failed"}, nil
+		},
+	}
+	_, _ = handler.reconcileRuntimeAndFirewall(context.Background(), agentcontract.RuntimeReconcileRequest{
+		ApplicationID: "app-a", Action: "apply", SSHPort: 22,
+		Spec: appruntime.Spec{Ports: []appruntime.Port{{HostPort: 80, OpenFirewall: true}, {HostPort: 443, OpenFirewall: true}, {HostPort: 8443, OpenFirewall: true}}},
+	})
+	if !reflect.DeepEqual(retained, existing) {
+		t.Fatalf("cleanup retained = %#v, want previously owned %#v", retained, existing)
+	}
 }
 
 func TestReconcileRuntimeAndFirewallOrdering(t *testing.T) {

@@ -61,8 +61,12 @@ func (r *fakeRunner) Run(_ context.Context, name string, args ...string) (string
 func TestEnsureApplicationRulesVerifiesCreatedRule(t *testing.T) {
 	runner := &fakeRunner{installed: true}
 	manager := newWithRunner(runner)
-	if err := manager.EnsureApplicationRules(context.Background(), "app-a", 22, 9786, []Rule{{Port: 5353, Protocol: "udp"}}); err != nil {
+	previous, err := manager.EnsureApplicationRules(context.Background(), "app-a", 22, 9786, []Rule{{Port: 5353, Protocol: "udp"}})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if len(previous) != 0 {
+		t.Fatalf("previous = %#v, want empty", previous)
 	}
 	showCalls := 0
 	for _, call := range runner.calls {
@@ -75,10 +79,22 @@ func TestEnsureApplicationRulesVerifiesCreatedRule(t *testing.T) {
 	}
 }
 
+func TestEnsureApplicationRulesReturnsPreviouslyOwnedRules(t *testing.T) {
+	runner := &fakeRunner{installed: true, added: "ufw allow 8080/tcp comment 'panel:application:app-a'\n"}
+	manager := newWithRunner(runner)
+	previous, err := manager.EnsureApplicationRules(context.Background(), "app-a", 22, 9786, []Rule{{Port: 8080, Protocol: "tcp"}, {Port: 9090, Protocol: "tcp"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(previous) != 1 || previous[0].Port != 8080 || previous[0].Protocol != "tcp" {
+		t.Fatalf("previous = %#v, want [8080/tcp]", previous)
+	}
+}
+
 func TestEnsureApplicationRulesRespectsManualAndRejectsOtherOwner(t *testing.T) {
 	runner := &fakeRunner{installed: true, added: "ufw allow 8080/tcp\nufw allow 5353/udp comment 'panel:application:other'\n"}
 	manager := newWithRunner(runner)
-	if err := manager.EnsureApplicationRules(context.Background(), "app-a", 22, 9786, []Rule{{Port: 8080}, {Port: 5353, Protocol: "udp"}}); err == nil || !strings.Contains(err.Error(), "another Panel application") {
+	if _, err := manager.EnsureApplicationRules(context.Background(), "app-a", 22, 9786, []Rule{{Port: 8080}, {Port: 5353, Protocol: "udp"}}); err == nil || !strings.Contains(err.Error(), "another Panel application") {
 		t.Fatalf("expected ownership conflict, got %v", err)
 	}
 	for _, call := range runner.calls {
@@ -90,14 +106,14 @@ func TestEnsureApplicationRulesRespectsManualAndRejectsOtherOwner(t *testing.T) 
 
 func TestEnsureApplicationRulesRequiresInstalledAndProtectsSSH(t *testing.T) {
 	manager := newWithRunner(&fakeRunner{})
-	if err := manager.EnsureApplicationRules(context.Background(), "app-a", 22, 9786, []Rule{{Port: 8080}}); !errors.Is(err, ErrNotInstalled) {
+	if _, err := manager.EnsureApplicationRules(context.Background(), "app-a", 22, 9786, []Rule{{Port: 8080}}); !errors.Is(err, ErrNotInstalled) {
 		t.Fatalf("expected not installed, got %v", err)
 	}
 	manager = newWithRunner(&fakeRunner{installed: true})
-	if err := manager.EnsureApplicationRules(context.Background(), "app-a", 22022, 9786, []Rule{{Port: 22022}}); err == nil || !strings.Contains(err.Error(), "SSH") {
+	if _, err := manager.EnsureApplicationRules(context.Background(), "app-a", 22022, 9786, []Rule{{Port: 22022}}); err == nil || !strings.Contains(err.Error(), "SSH") {
 		t.Fatalf("expected SSH protection, got %v", err)
 	}
-	if err := manager.EnsureApplicationRules(context.Background(), "app-a", 22, 10986, []Rule{{Port: 10986}}); err == nil || !strings.Contains(err.Error(), "Agent") {
+	if _, err := manager.EnsureApplicationRules(context.Background(), "app-a", 22, 10986, []Rule{{Port: 10986}}); err == nil || !strings.Contains(err.Error(), "Agent") {
 		t.Fatalf("expected Agent protection, got %v", err)
 	}
 }
