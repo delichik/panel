@@ -1407,3 +1407,33 @@ func TestRoutineTaskActivityFactsStayInfo(t *testing.T) {
 		t.Fatalf("non-quiet task facts must stay info, got %#v", levels)
 	}
 }
+
+func TestResolveUncertainWithContextStoreNoDeadlock(t *testing.T) {
+	svc := newTestService(t)
+	ctx := activitylog.WithActor(context.Background(), activitylog.Actor{Kind: "user", ID: "usr_1", Name: "Admin"})
+	task, err := svc.Create(ctx, CreateInput{Type: "server_restart", Status: StatusRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.Exec(`UPDATE event_runs SET stage='uncertain' WHERE id=?`, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	resolved, err := svc.ResolveUncertain(ctx, task.ID, "succeeded", "confirmed manually")
+	if err != nil {
+		t.Fatalf("ResolveUncertain: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("ResolveUncertain took %v (possible self-deadlock)", elapsed)
+	}
+	if resolved.Status != StatusCompleted || resolved.Stage != "verified" {
+		t.Fatalf("unexpected resolved task: %#v", resolved)
+	}
+	ev, err := events.NewStore(svc.db).Get(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("expected execution.verified event row: %v", err)
+	}
+	if ev.State != "succeeded" {
+		t.Fatalf("event state = %q, want succeeded", ev.State)
+	}
+}

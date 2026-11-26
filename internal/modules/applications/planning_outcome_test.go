@@ -5,9 +5,12 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	appruntime "panel/internal/modules/applications/runtime"
 	panelerr "panel/internal/platform/errors"
+	"panel/internal/platform/events"
+	"panel/internal/platform/logging"
 )
 
 // APP-PLAN-001: a failure before any Job exists is durable, attributed and
@@ -249,5 +252,43 @@ func TestMonitoringJobWithProgressStageShowsDeploying(t *testing.T) {
 	page, err := svc.ListSummaries(ctx, 1, 20, "")
 	if err != nil || page.Items[0].DeployingInstanceCount < 1 {
 		t.Fatalf("list should count monitor progress as deploying: %#v %v", page, err)
+	}
+}
+
+func TestPlanFailureWithContextStorePersistsErrorWithoutDeadlock(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	eventsStore := events.NewStore(svc.db)
+	logging.SetContextStore(eventsStore)
+	t.Cleanup(func() { logging.SetContextStore(nil) })
+
+	ctx := context.Background()
+	app, err := svc.Create(ctx, SaveInput{Name: "web-events", Enabled: false, SpecYAML: "name: web-events\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalid := "name: web-events\nimage: nginx\nmounts:\n  - type: file\n    source: config/app.conf\n    target: /etc/app.conf\n"
+	if _, err := svc.db.Exec(`UPDATE applications SET enabled=1,spec_yaml=? WHERE id=?`, invalid, app.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	if _, err := svc.Deploy(ctx, app.ID); err == nil {
+		t.Fatal("invalid deployment accepted")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("Deploy with ContextStore took %v (possible self-deadlock)", elapsed)
+	}
+
+	current, err := svc.Get(ctx, app.ID)
+	if err != nil || current.PlanningError == nil || current.PlanningError.OperationID == "" {
+		t.Fatalf("planning_error_json lost under ContextStore: %#v err=%v", current.PlanningError, err)
+	}
+	ev, err := eventsStore.Get(ctx, current.PlanningError.OperationID)
+	if err != nil {
+		t.Fatalf("expected events row %q: %v", current.PlanningError.OperationID, err)
+	}
+	if !ev.HadError || ev.State != logging.ProcessFailed {
+		t.Fatalf("unexpected events row: %#v", ev)
 	}
 }

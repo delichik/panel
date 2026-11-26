@@ -144,10 +144,12 @@ func (s *Service) Delete(ctx context.Context, serverID string) error {
 			return err
 		}
 	}
+	var disabledApps []disabledAppNotice
 	if err := orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		// 引用修剪必须与删除同事务：留下悬空引用会让应用删除、设施渲染等后续
 		// 操作永久失败，而 jobs 的 RESTRICT 外键会直接让删除本身失败。
-		if err := s.cleanupServerReferences(ctx, tx, serverID); err != nil {
+		notices, err := s.cleanupServerReferences(ctx, tx, serverID)
+		if err != nil {
 			return err
 		}
 		res, err := orm.RawExec(ctx, tx, `DELETE FROM servers WHERE id=?`, serverID)
@@ -158,10 +160,12 @@ func (s *Service) Delete(ctx context.Context, serverID string) error {
 		if affected == 0 {
 			return panelerr.NotFound("server")
 		}
+		disabledApps = notices
 		return nil
 	}); err != nil {
 		return err
 	}
+	emitDisabledAppNotices(ctx, serverID, disabledApps)
 	if s.serverReferenceReconciler != nil {
 		// 引用已随删除事务修剪，设施侧只需重新渲染，避免继续使用旧配置。
 		if err := s.serverReferenceReconciler.ReconcileAfterServerRemoved(ctx, serverID); err != nil {
@@ -169,8 +173,27 @@ func (s *Service) Delete(ctx context.Context, serverID string) error {
 		}
 	}
 	if s.metricsDB != nil {
-		if err := orm.New(s.metricsDB).From("metrics_snapshots").Where("server_id=?", serverID).Delete(ctx); err != nil {
-			return err
+		const batchSize int64 = 1000
+		for {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			res, err := orm.RawExec(ctx, s.metricsDB, `DELETE FROM metrics_snapshots WHERE id IN (SELECT id FROM metrics_snapshots WHERE server_id=? LIMIT ?)`, serverID, batchSize)
+			if err != nil {
+				return err
+			}
+			deleted, err := res.RowsAffected()
+			if err != nil {
+				return err
+			}
+			if deleted < batchSize {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(5 * time.Millisecond):
+			}
 		}
 	}
 	if s.agentKeys != nil {

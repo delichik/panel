@@ -78,19 +78,22 @@ func (p *Planner) EnsureRevisionAndPlanBatch(ctx context.Context, revisionInput 
 		return Revision{}, nil, err
 	}
 	results := make([]PlanResult, 0, len(inputs))
+	var effects planEffects
 	for _, in := range inputs {
 		if in.DesiredRevisionID == "" {
 			in.DesiredRevisionID = revision.ID
 		}
-		result, err := p.planTx(ctx, tx, in)
+		result, ev, err := p.planTx(ctx, tx, in)
 		if err != nil {
 			return Revision{}, nil, err
 		}
 		results = append(results, result)
+		effects.merge(ev)
 	}
 	if err := tx.Commit(); err != nil {
 		return Revision{}, nil, err
 	}
+	effects.emit(ctx)
 	return revision, results, nil
 }
 
@@ -143,26 +146,59 @@ func (p *Planner) PlanBatch(ctx context.Context, inputs []PlanInput) ([]PlanResu
 	}
 	defer func() { _ = tx.Rollback() }()
 	results := make([]PlanResult, 0, len(inputs))
+	var effects planEffects
 	for _, in := range inputs {
-		result, err := p.planTx(ctx, tx, in)
+		result, ev, err := p.planTx(ctx, tx, in)
 		if err != nil {
 			return nil, err
 		}
 		results = append(results, result)
+		effects.merge(ev)
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
+	effects.emit(ctx)
 	return results, nil
 }
 
-func (p *Planner) planTx(ctx context.Context, tx *sql.Tx, in PlanInput) (PlanResult, error) {
+type pendingTraceEvent struct {
+	event  string
+	job    Job
+	fields []zap.Field
+}
+
+type planEffects struct {
+	processes []logging.ProcessSpec
+	traces    []pendingTraceEvent
+}
+
+func (e *planEffects) merge(other planEffects) {
+	e.processes = append(e.processes, other.processes...)
+	e.traces = append(e.traces, other.traces...)
+}
+
+func (e planEffects) emit(ctx context.Context) {
+	for _, spec := range e.processes {
+		_ = logging.EmitProcess(ctx, spec)
+	}
+	for _, tr := range e.traces {
+		traceJobEvent(ctx, tr.event, tr.job, tr.fields...)
+	}
+}
+
+func (p *Planner) planTx(ctx context.Context, tx *sql.Tx, in PlanInput) (PlanResult, planEffects, error) {
+	var effects planEffects
 	if in.IdempotencyKey != "" {
 		if existing, found, err := scanExistingJob(ctx, tx, in.ApplicationID, in.IdempotencyKey); err != nil {
-			return PlanResult{}, err
+			return PlanResult{}, effects, err
 		} else if found {
-			traceJobEvent(ctx, "job_merged", existing, zap.String("reason", "idempotency_key_replay"))
-			return PlanResult{Job: existing, Merged: true}, nil
+			effects.traces = append(effects.traces, pendingTraceEvent{
+				event:  "job_merged",
+				job:    existing,
+				fields: []zap.Field{zap.String("reason", "idempotency_key_replay")},
+			})
+			return PlanResult{Job: existing, Merged: true}, effects, nil
 		}
 	}
 	if in.IntentID == "" {
@@ -190,11 +226,11 @@ func (p *Planner) planTx(ctx context.Context, tx *sql.Tx, in PlanInput) (PlanRes
 			desired_revision_id=excluded.desired_revision_id,desired_spec_json=excluded.desired_spec_json,updated_at=excluded.updated_at`,
 		in.InstanceID, in.ApplicationID, in.ServerID, in.ContainerName, "", in.DesiredState, in.DesiredGeneration, in.DesiredSpecHash,
 		in.DesiredRevisionID, string(in.DesiredSpecJSON), now, now); err != nil {
-		return PlanResult{}, err
+		return PlanResult{}, effects, err
 	}
 	active, found, err := scanActiveJob(ctx, tx, in.ApplicationID, in.ServerID)
 	if err != nil {
-		return PlanResult{}, err
+		return PlanResult{}, effects, err
 	}
 	// Periodic/report reconciliation may observe the same drift many times
 	// while its single durable Job is pending, running, or backing off. Reuse
@@ -202,28 +238,28 @@ func (p *Planner) planTx(ctx context.Context, tx *sql.Tx, in PlanInput) (PlanRes
 	// here defeats its backoff/max-attempt boundary and floods the immutable
 	// activity stream with linked/superseded relations.
 	if found && in.Automatic && samePlannedWork(active, in) {
-		return PlanResult{Job: active, Merged: true}, nil
+		return PlanResult{Job: active, Merged: true}, effects, nil
 	}
-	if err := appendPlanRequest(ctx, tx, in); err != nil {
-		return PlanResult{}, err
-	}
+	effects.processes = append(effects.processes, buildPlanRequestEvent(ctx, tx, in))
 	if found {
 		if active.State == JobRunning && active.IntentID != in.IntentID {
-			if err := appendRunningIntent(ctx, tx, active, in); err != nil {
-				return PlanResult{}, err
-			}
+			effects.processes = append(effects.processes, buildRunningIntentEvent(ctx, tx, active, in))
 		}
 		if active.State == JobPending || active.State == JobFailedRetryable {
 			if _, err := tx.ExecContext(ctx, `UPDATE event_runs SET instance_id=?,action=?,desired_generation=?,desired_spec_hash=?,desired_revision_id=?,desired_spec_json=?,remove_data=?,force_nonce=?,priority=?,next_run_at=NULL,intent_id=?,operation_id=CASE WHEN TRIM(?)<>'' THEN ? ELSE id END,trigger_type=?,trigger_resource_type=?,trigger_resource_id=?,reason=?,summary=?,error='',error_code='',error_class='',error_message='',error_detail='',finished_at=NULL,updated_at=? WHERE type=? AND id=? AND status IN ('queued','failed_retryable')`,
 				in.InstanceID, in.Action, in.DesiredGeneration, in.DesiredSpecHash, in.DesiredRevisionID, string(in.DesiredSpecJSON), boolInt(in.RemoveData), in.ForceNonce,
 				in.Priority, in.IntentID, in.IntentID, in.IntentID, in.TriggerType, in.TriggerResourceType, in.TriggerResourceID, in.Reason, in.Reason, now, deployRunType, active.ID); err != nil {
-				return PlanResult{}, err
+				return PlanResult{}, effects, err
 			}
 			active, err = scanJobTx(ctx, tx, active.ID)
 			if err != nil {
-				return PlanResult{}, err
+				return PlanResult{}, effects, err
 			}
-			traceJobEvent(ctx, "job_merged", active, zap.String("reason", "active_pending_or_retryable_reused"))
+			effects.traces = append(effects.traces, pendingTraceEvent{
+				event:  "job_merged",
+				job:    active,
+				fields: []zap.Field{zap.String("reason", "active_pending_or_retryable_reused")},
+			})
 		} else if active.State == JobRunning && (in.ForceNonce > active.ForceNonce || active.IntentID != in.IntentID) {
 			// Keep the in-flight execution fenced by its original snapshot/lease,
 			// but adopt the newer intent (and force nonce) on the same conflict-
@@ -234,13 +270,17 @@ func (p *Planner) planTx(ctx context.Context, tx *sql.Tx, in PlanInput) (PlanRes
 				forceNonce = in.ForceNonce
 			}
 			if _, err := tx.ExecContext(ctx, `UPDATE event_runs SET intent_id=?,operation_id=CASE WHEN TRIM(?)<>'' THEN ? ELSE id END,force_nonce=?,updated_at=? WHERE type=? AND id=? AND status='running'`, in.IntentID, in.IntentID, in.IntentID, forceNonce, now, deployRunType, active.ID); err != nil {
-				return PlanResult{}, err
+				return PlanResult{}, effects, err
 			}
 			active.IntentID = in.IntentID
 			active.ForceNonce = forceNonce
-			traceJobEvent(ctx, "job_merged", active, zap.String("reason", "running_intent_adopted"))
+			effects.traces = append(effects.traces, pendingTraceEvent{
+				event:  "job_merged",
+				job:    active,
+				fields: []zap.Field{zap.String("reason", "running_intent_adopted")},
+			})
 		}
-		return PlanResult{Job: active, Merged: true}, nil
+		return PlanResult{Job: active, Merged: true}, effects, nil
 	}
 	job := Job{ID: id.New("job"), ApplicationID: in.ApplicationID, ServerID: in.ServerID, InstanceID: in.InstanceID,
 		Action: in.Action, DesiredGeneration: in.DesiredGeneration, DesiredSpecHash: in.DesiredSpecHash, DesiredRevisionID: in.DesiredRevisionID,
@@ -285,10 +325,14 @@ func (p *Planner) planTx(ctx context.Context, tx *sql.Tx, in PlanInput) (PlanRes
 		job.DesiredGeneration, job.DesiredSpecHash, job.DesiredRevisionID, string(job.DesiredSpecJSON),
 		boolInt(job.RemoveData), job.ForceNonce, job.Priority,
 		job.IntentID, job.Reason, job.IdempotencyKey, now); err != nil {
-		return PlanResult{}, err
+		return PlanResult{}, effects, err
 	}
-	traceJobEvent(ctx, "job_created", job, zap.String("reason", "no_active_job"))
-	return PlanResult{Job: job, Created: true}, nil
+	effects.traces = append(effects.traces, pendingTraceEvent{
+		event:  "job_created",
+		job:    job,
+		fields: []zap.Field{zap.String("reason", "no_active_job")},
+	})
+	return PlanResult{Job: job, Created: true}, effects, nil
 }
 
 func samePlannedWork(job Job, in PlanInput) bool {
@@ -375,7 +419,7 @@ func (e *ValidationError) Error() string { return e.Message }
 
 // An in-flight row keeps its original intent/execution fencing. New requests
 // nevertheless get immutable identities and a relation to the shared work.
-func appendRunningIntent(ctx context.Context, tx *sql.Tx, active Job, in PlanInput) error {
+func buildRunningIntentEvent(ctx context.Context, tx *sql.Tx, active Job, in PlanInput) logging.ProcessSpec {
 	resources := []activitylog.Resource{{Type: "application", ID: in.ApplicationID, Role: "target", RevisionID: in.DesiredRevisionID, Generation: in.DesiredGeneration}, {Type: "server", ID: in.ServerID, Role: "executor"}}
 	for i := range resources {
 		table := "applications"
@@ -415,7 +459,7 @@ func appendRunningIntent(ctx context.Context, tx *sql.Tx, active Job, in PlanInp
 		state = logging.ProcessCancelled
 		finished = true
 	}
-	_ = logging.EmitProcess(ctx, logging.ProcessSpec{
+	return logging.ProcessSpec{
 		EventID:     operationID,
 		Module:      "orchestrator",
 		Origin:      events.OriginProcess,
@@ -433,11 +477,10 @@ func appendRunningIntent(ctx context.Context, tx *sql.Tx, active Job, in PlanInp
 			zap.String("phase", phase),
 			zap.String("result", result),
 		},
-	})
-	return nil
+	}
 }
 
-func appendPlanRequest(ctx context.Context, tx *sql.Tx, in PlanInput) error {
+func buildPlanRequestEvent(ctx context.Context, tx *sql.Tx, in PlanInput) logging.ProcessSpec {
 	resources := []activitylog.Resource{{Type: "application", ID: in.ApplicationID, Role: "target", RevisionID: in.DesiredRevisionID, Generation: in.DesiredGeneration}, {Type: "server", ID: in.ServerID, Role: "executor"}}
 	for i := range resources {
 		table := "applications"
@@ -463,7 +506,7 @@ func appendPlanRequest(ctx context.Context, tx *sql.Tx, in PlanInput) error {
 	if summary == "" {
 		summary = fmt.Sprintf("Deploy requested (trigger %s, generation %d)", firstNonEmpty(in.TriggerType, "manual"), in.DesiredGeneration)
 	}
-	_ = logging.EmitProcess(ctx, logging.ProcessSpec{
+	return logging.ProcessSpec{
 		EventID:     in.IntentID,
 		Module:      "orchestrator",
 		Origin:      events.OriginProcess,
@@ -480,6 +523,5 @@ func appendPlanRequest(ctx context.Context, tx *sql.Tx, in PlanInput) error {
 			zap.Int("desiredGeneration", in.DesiredGeneration),
 			zap.String("desiredRevisionId", in.DesiredRevisionID),
 		},
-	})
-	return nil
+	}
 }

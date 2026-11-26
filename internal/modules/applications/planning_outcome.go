@@ -86,12 +86,7 @@ func (s *Service) recordPlanningOutcome(ctx context.Context, app Application, re
 	} else if previous == "" {
 		return nil
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	changed, err := tx.ExecContext(ctx, `UPDATE applications SET planning_error_json=? WHERE id=? AND version=? AND planning_error_json=?`, next, app.ID, app.Version, previous)
+	changed, err := s.db.ExecContext(ctx, `UPDATE applications SET planning_error_json=? WHERE id=? AND version=? AND planning_error_json=?`, next, app.ID, app.Version, previous)
 	if err != nil {
 		return err
 	}
@@ -158,5 +153,5 @@ func (s *Service) recordPlanningOutcome(ctx context.Context, app Application, re
 		Resources:   resources,
 		Fields:      fields,
 	})
-	return tx.Commit()
+	return nil
 }

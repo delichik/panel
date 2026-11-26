@@ -3128,3 +3128,40 @@ func TestRecordAgentReportStreamTracksStabilityWindow(t *testing.T) {
 		t.Fatalf("summary must omit disconnect_events, got %#v", summary)
 	}
 }
+
+func TestDeleteServerDisablingAppsWithContextStoreNoDeadlock(t *testing.T) {
+	svc, _, store := testServerService(t, nil)
+	eventsStore := events.NewStore(store.AppDB())
+	ctx := context.Background()
+	srv, err := svc.Create(ctx, SaveRequest{Name: "sole-node", IPv4: "127.0.0.1", Port: 22, SSHUsername: "root", CredentialID: "cred_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := store.AppDB().ExecContext(ctx, `INSERT INTO applications(id,name,enabled,spec_yaml,deployment_mode,deployment_server_ids_json,generation,spec_hash,job_id,namespace,created_at,updated_at)
+		VALUES('app_orphan','OrphanApp',1,'name: orphan\nimage: nginx\n','selected',?,1,'h','','',?,?)`, `["`+srv.ID+`"]`, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	if err := svc.Delete(ctx, srv.ID); err != nil {
+		t.Fatalf("Delete server: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("Delete server disabling app took %v (possible self-deadlock)", elapsed)
+	}
+	var enabled int
+	if err := store.AppDB().QueryRow(`SELECT enabled FROM applications WHERE id='app_orphan'`).Scan(&enabled); err != nil {
+		t.Fatal(err)
+	}
+	if enabled != 0 {
+		t.Fatalf("expected app_orphan to be disabled, enabled=%d", enabled)
+	}
+	rows, err := eventsStore.List(ctx, events.ListFilter{Module: "servers", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) == 0 {
+		t.Fatalf("expected application.disabled event row in events table")
+	}
+}

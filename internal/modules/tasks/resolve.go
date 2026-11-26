@@ -53,6 +53,20 @@ func (s *Service) ResolveUncertain(ctx context.Context, taskID, outcome, reason 
 		result = "succeeded"
 	}
 	reason = activitylog.Redact(reason)
+	resultSQL, err := tx.ExecContext(ctx, `UPDATE event_runs SET status=?,stage='verified',error=CASE WHEN ?='completed' THEN '' ELSE ? END,finished_at=?,next_run_at=NULL WHERE id=? AND status='running' AND stage='uncertain'`, status, status, reason, time.Now().UTC().Format(time.RFC3339Nano), taskID)
+	if err != nil {
+		return Task{}, err
+	}
+	n, err := resultSQL.RowsAffected()
+	if err != nil {
+		return Task{}, err
+	}
+	if n != 1 {
+		return Task{}, panelerr.Conflict("execution_not_uncertain", "Only an execution awaiting verification can be resolved")
+	}
+	if err := tx.Commit(); err != nil {
+		return Task{}, err
+	}
 	logCtx := logging.Ensure(ctx, logging.Context{
 		Module:      "tasks",
 		OperationID: row.OperationID,
@@ -82,20 +96,6 @@ func (s *Service) ResolveUncertain(ctx context.Context, taskID, outcome, reason 
 			zap.String("actorId", actor.ID),
 		},
 	})
-	resultSQL, err := tx.ExecContext(ctx, `UPDATE event_runs SET status=?,stage='verified',error=CASE WHEN ?='completed' THEN '' ELSE ? END,finished_at=?,next_run_at=NULL WHERE id=? AND status='running' AND stage='uncertain'`, status, status, reason, time.Now().UTC().Format(time.RFC3339Nano), taskID)
-	if err != nil {
-		return Task{}, err
-	}
-	n, err := resultSQL.RowsAffected()
-	if err != nil {
-		return Task{}, err
-	}
-	if n != 1 {
-		return Task{}, panelerr.Conflict("execution_not_uncertain", "Only an execution awaiting verification can be resolved")
-	}
-	if err := tx.Commit(); err != nil {
-		return Task{}, err
-	}
 	s.invalidateFirstActiveByKey(row.ConcurrencyKey)
 	return s.Get(ctx, taskID)
 }

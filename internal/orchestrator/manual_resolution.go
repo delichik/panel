@@ -48,6 +48,26 @@ func (s *Store) ResolveUncertainManually(ctx context.Context, job Job, outcome, 
 	}
 	reason = activitylog.Redact(reason)
 	resources := []activitylog.Resource{{Type: "application", ID: job.ApplicationID, Role: "subject", RevisionID: job.DesiredRevisionID, Generation: job.DesiredGeneration}, {Type: "server", ID: job.ServerID, Role: "target"}}
+	message := ""
+	code := ""
+	class := ""
+	if outcome == "failed" {
+		message = reason
+		code = "manually_verified_failed"
+		class = "manual_verification"
+	}
+	status := statusForJobState(outcome)
+	percentage := any(nil)
+	if status == "completed" {
+		percentage = 100
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE event_runs SET status=?,stage='manually_verified',percentage=?,last_stage='manually_verified',error=?,error_code=?,error_class=?,error_message=?,error_detail=?,lease_owner='',lease_token='',lease_expires_at=NULL,next_run_at=NULL,finished_at=?,updated_at=? WHERE type=? AND id=?`, status, percentage, message, code, class, message, reason, s.now().UTC().Format(time.RFC3339Nano), s.now().UTC().Format(time.RFC3339Nano), deployRunType, job.ID)
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
 	logCtx := logging.Ensure(ctx, logging.Context{Module: "orchestrator", OperationID: job.IntentID, ExecutionID: job.ExecutionID})
 	_ = logging.EmitProcess(logCtx, logging.ProcessSpec{
 		EventID:     firstNonEmpty(job.IntentID, job.ID),
@@ -71,25 +91,5 @@ func (s *Store) ResolveUncertainManually(ctx context.Context, job Job, outcome, 
 			zap.String("actorId", actor.ID),
 		},
 	})
-	message := ""
-	code := ""
-	class := ""
-	if outcome == "failed" {
-		message = reason
-		code = "manually_verified_failed"
-		class = "manual_verification"
-	}
-	status := statusForJobState(outcome)
-	percentage := any(nil)
-	if status == "completed" {
-		percentage = 100
-	}
-	_, err = tx.ExecContext(ctx, `UPDATE event_runs SET status=?,stage='manually_verified',percentage=?,last_stage='manually_verified',error=?,error_code=?,error_class=?,error_message=?,error_detail=?,lease_owner='',lease_token='',lease_expires_at=NULL,next_run_at=NULL,finished_at=?,updated_at=? WHERE type=? AND id=?`, status, percentage, message, code, class, message, reason, s.now().UTC().Format(time.RFC3339Nano), s.now().UTC().Format(time.RFC3339Nano), deployRunType, job.ID)
-	if err != nil {
-		return false, err
-	}
-	if err := tx.Commit(); err != nil {
-		return false, err
-	}
 	return true, nil
 }

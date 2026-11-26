@@ -37,34 +37,40 @@ const deploymentModeSelected = "selected"
 //   - 指标设施 selected 模式的采集节点列表同样引用节点 ID，悬空后设施页仍会把
 //     已删除节点算作采集节点（其指标历史行由删除提交后的 metrics DB 清理负责，
 //     见 OBS-MET-006）。
-func (s *Service) cleanupServerReferences(ctx context.Context, tx *sql.Tx, serverID string) error {
+type disabledAppNotice struct {
+	ID   string
+	Name string
+	Mode string
+}
+
+func (s *Service) cleanupServerReferences(ctx context.Context, tx *sql.Tx, serverID string) ([]disabledAppNotice, error) {
 	if err := cancelAndDeleteServerJobs(ctx, tx, serverID); err != nil {
-		return err
+		return nil, err
 	}
 	affected, err := s.removeServerFromApplicationTargets(ctx, tx, serverID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := s.removeServerFromOverviewCards(ctx, tx, serverID); err != nil {
-		return err
+		return nil, err
 	}
 	if err := removeServerPersistentLocations(ctx, tx, serverID); err != nil {
-		return err
+		return nil, err
 	}
 	if err := removeServerFromProxyRoutes(ctx, tx, serverID); err != nil {
-		return err
+		return nil, err
 	}
 	if err := removeServerFromFacilityGateways(ctx, tx, serverID); err != nil {
-		return err
+		return nil, err
 	}
 	if err := removeServerFromStorageShare(ctx, tx, serverID); err != nil {
-		return err
+		return nil, err
 	}
 	if err := removeServerFromNetworkProbe(ctx, tx, serverID); err != nil {
-		return err
+		return nil, err
 	}
 	if err := removeServerFromMetricsFacility(ctx, tx, serverID); err != nil {
-		return err
+		return nil, err
 	}
 	return disableApplicationsWithoutDeploymentTarget(ctx, tx, serverID, affected)
 }
@@ -81,38 +87,39 @@ func (s *Service) cleanupServerReferences(ctx context.Context, tx *sql.Tx, serve
 //
 // 只处理确实把被删节点当作部署目标的应用：显式列出该节点，或在该节点上仍有
 // 实例。实例随节点级联删除，之后应用在该节点上不再有任何运行态。
-func disableApplicationsWithoutDeploymentTarget(ctx context.Context, tx *sql.Tx, serverID string, listed []string) error {
+func disableApplicationsWithoutDeploymentTarget(ctx context.Context, tx *sql.Tx, serverID string, listed []string) ([]disabledAppNotice, error) {
 	affected := map[string]struct{}{}
 	for _, id := range listed {
 		affected[id] = struct{}{}
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT application_id FROM application_instances WHERE server_id=?`, serverID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
 			_ = rows.Close()
-			return err
+			return nil, err
 		}
 		affected[id] = struct{}{}
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		return err
+		return nil, err
 	}
 	if err := rows.Close(); err != nil {
-		return err
+		return nil, err
 	}
 	if len(affected) == 0 {
-		return nil
+		return nil, nil
 	}
 	otherServers := 0
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM servers WHERE id<>?`, serverID).Scan(&otherServers); err != nil {
-		return err
+		return nil, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	var notices []disabledAppNotice
 	for id := range affected {
 		var mode string
 		var selected string
@@ -122,7 +129,7 @@ func disableApplicationsWithoutDeploymentTarget(ctx context.Context, tx *sql.Tx,
 			if errors.Is(err, sql.ErrNoRows) {
 				continue
 			}
-			return err
+			return nil, err
 		}
 		if enabled == 0 {
 			continue
@@ -131,7 +138,7 @@ func disableApplicationsWithoutDeploymentTarget(ctx context.Context, tx *sql.Tx,
 		if strings.TrimSpace(mode) == deploymentModeSelected {
 			ids := []string{}
 			if err := json.Unmarshal([]byte(selected), &ids); err != nil {
-				return err
+				return nil, err
 			}
 			hasTarget = len(ids) > 0
 		}
@@ -139,21 +146,28 @@ func disableApplicationsWithoutDeploymentTarget(ctx context.Context, tx *sql.Tx,
 			continue
 		}
 		if _, err := orm.RawExec(ctx, tx, `UPDATE applications SET enabled=0,version=version+1,updated_at=? WHERE id=?`, now, id); err != nil {
-			return err
+			return nil, err
 		}
+		notices = append(notices, disabledAppNotice{ID: id, Name: name, Mode: mode})
+	}
+	return notices, nil
+}
+
+func emitDisabledAppNotices(ctx context.Context, serverID string, notices []disabledAppNotice) {
+	const msg = "Application disabled because it lost its last deployment node"
+	for _, n := range notices {
 		// 停用是系统代替操作者做出的决定，必须经统一日志留痕。
-		msg := "Application disabled because it lost its last deployment node"
 		_ = logging.EmitProcess(ctx, logging.ProcessSpec{
 			Module:    "servers",
 			Origin:    events.OriginSystem,
-			Title:     fmt.Sprintf("Disabled %s", firstNonEmpty(name, id)),
+			Title:     fmt.Sprintf("Disabled %s", firstNonEmpty(n.Name, n.ID)),
 			Summary:   msg,
 			State:     logging.ProcessSucceeded,
 			Level:     "warn",
 			Finished:  true,
 			EventType: "application.disabled",
 			Resources: []logging.Resource{
-				logging.ResourceRef("application", id, name, "target"),
+				logging.ResourceRef("application", n.ID, n.Name, "target"),
 				logging.ResourceRef("server", serverID, "", "executor"),
 			},
 			Fields: []zap.Field{
@@ -161,13 +175,12 @@ func disableApplicationsWithoutDeploymentTarget(ctx context.Context, tx *sql.Tx,
 				zap.String("trigger", "server_removed"),
 				zap.String("reason", "server_removed"),
 				zap.String("serverId", serverID),
-				zap.String("applicationId", id),
-				zap.String("deploymentMode", mode),
-				zap.String("applicationName", name),
+				zap.String("applicationId", n.ID),
+				zap.String("deploymentMode", n.Mode),
+				zap.String("applicationName", n.Name),
 			},
 		})
 	}
-	return nil
 }
 
 // cancelAndDeleteServerJobs 终结并删除引用该服务器的部署 Run。

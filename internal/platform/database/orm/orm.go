@@ -34,17 +34,26 @@ func WithLogger(fn func(format string, args ...any)) Option {
 }
 
 // WithTx runs fn inside a transaction, committing on success and rolling
-// back on error.
+// back on error or panic.
 func WithTx(ctx context.Context, db *sql.DB, fn func(tx *sql.Tx) error) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
 	if err := fn(tx); err != nil {
-		_ = tx.Rollback()
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 // LikeEscaped escapes \, % and _ and wraps the term with %...% for use

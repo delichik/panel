@@ -57,12 +57,7 @@ func (w *ObservationWriter) Write(ctx context.Context, in Observation) (WriteRes
 		query += ` AND EXISTS (SELECT 1 FROM event_runs WHERE event_runs.type='application_deploy' AND event_runs.id=? AND event_runs.status='running' AND event_runs.lease_token=?)`
 		queryArgs = append(queryArgs, in.JobID, in.LeaseToken)
 	}
-	tx, err := w.db.BeginTx(ctx, nil)
-	if err != nil {
-		return WriteResult{}, err
-	}
-	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, query, queryArgs...)
+	result, err := w.db.ExecContext(ctx, query, queryArgs...)
 	if err != nil {
 		return WriteResult{}, err
 	}
@@ -70,39 +65,34 @@ func (w *ObservationWriter) Write(ctx context.Context, in Observation) (WriteRes
 	if err != nil {
 		return WriteResult{}, err
 	}
-	if affected == 0 {
+	if affected == 0 && strings.TrimSpace(in.JobID) != "" {
 		// Cache/report observations are advisory and routinely lose this CAS to a
 		// newer reconcile result. They have no durable Job/operation to which a
 		// user-visible warning could be attached, so quietly discard them.
-		if strings.TrimSpace(in.JobID) != "" {
-			rejection, rejectErr := w.describeRejection(ctx, tx, in, state, observedAt)
-			if rejectErr != nil {
-				return WriteResult{}, rejectErr
-			}
-			logCtx := logging.Ensure(ctx, logging.Context{
-				Module:      "orchestrator",
-				OperationID: rejection.operationID,
-				ExecutionID: rejection.executionID,
-			})
-			_ = logging.EmitProcess(logCtx, logging.ProcessSpec{
-				EventID:     firstNonEmpty(rejection.operationID, rejection.executionID, logging.NewEventID()),
-				Module:      "orchestrator",
-				Origin:      events.OriginProcess,
-				OperationID: rejection.operationID,
-				ExecutionID: rejection.executionID,
-				Title:       "Observation rejected",
-				Summary:     "Runtime observation was discarded (stale ownership or conflicting write)",
-				State:       logging.ProcessFailed,
-				HadError:    true,
-				Finished:    true,
-				EventType:   "observation.rejected",
-				Resources:   rejection.resources,
-				Fields:      []zap.Field{zap.Any("data", rejection.data)},
-			})
+		rejection, rejectErr := w.describeRejection(ctx, in, state, observedAt)
+		if rejectErr != nil {
+			return WriteResult{}, rejectErr
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return WriteResult{}, err
+		logCtx := logging.Ensure(ctx, logging.Context{
+			Module:      "orchestrator",
+			OperationID: rejection.operationID,
+			ExecutionID: rejection.executionID,
+		})
+		_ = logging.EmitProcess(logCtx, logging.ProcessSpec{
+			EventID:     firstNonEmpty(rejection.operationID, rejection.executionID, logging.NewEventID()),
+			Module:      "orchestrator",
+			Origin:      events.OriginProcess,
+			OperationID: rejection.operationID,
+			ExecutionID: rejection.executionID,
+			Title:       "Observation rejected",
+			Summary:     "Runtime observation was discarded (stale ownership or conflicting write)",
+			State:       logging.ProcessFailed,
+			HadError:    true,
+			Finished:    true,
+			EventType:   "observation.rejected",
+			Resources:   rejection.resources,
+			Fields:      []zap.Field{zap.Any("data", rejection.data)},
+		})
 	}
 	return WriteResult{Accepted: affected == 1}, nil
 }
@@ -114,7 +104,7 @@ type observationRejection struct {
 	data        map[string]any
 }
 
-func (w *ObservationWriter) describeRejection(ctx context.Context, tx *sql.Tx, in Observation, state string, observedAt time.Time) (observationRejection, error) {
+func (w *ObservationWriter) describeRejection(ctx context.Context, in Observation, state string, observedAt time.Time) (observationRejection, error) {
 	type currentInstance struct {
 		applicationID, serverID, observedState, observedSpecHash, observedAt, observedSource, lastJobID string
 		observedGeneration                                                                              int
@@ -126,14 +116,14 @@ func (w *ObservationWriter) describeRejection(ctx context.Context, tx *sql.Tx, i
 	}
 
 	var instance currentInstance
-	instanceErr := tx.QueryRowContext(ctx, `SELECT application_id,server_id,observed_state,observed_generation,observed_spec_hash,COALESCE(observed_at,''),observed_sequence,observed_source,last_reconcile_job_id FROM application_instances WHERE id=?`, in.InstanceID).
+	instanceErr := w.db.QueryRowContext(ctx, `SELECT application_id,server_id,observed_state,observed_generation,observed_spec_hash,COALESCE(observed_at,''),observed_sequence,observed_source,last_reconcile_job_id FROM application_instances WHERE id=?`, in.InstanceID).
 		Scan(&instance.applicationID, &instance.serverID, &instance.observedState, &instance.observedGeneration, &instance.observedSpecHash, &instance.observedAt, &instance.observedSequence, &instance.observedSource, &instance.lastJobID)
 	if instanceErr != nil && !errors.Is(instanceErr, sql.ErrNoRows) {
 		return observationRejection{}, instanceErr
 	}
 
 	var job currentJob
-	jobErr := tx.QueryRowContext(ctx, `SELECT application_id,server_id,instance_id,CASE status WHEN 'queued' THEN 'pending' WHEN 'completed' THEN 'succeeded' ELSE status END,lease_owner,lease_token,intent_id,execution_id,desired_revision_id,desired_generation FROM event_runs WHERE type='application_deploy' AND id=?`, in.JobID).
+	jobErr := w.db.QueryRowContext(ctx, `SELECT application_id,server_id,instance_id,CASE status WHEN 'queued' THEN 'pending' WHEN 'completed' THEN 'succeeded' ELSE status END,lease_owner,lease_token,intent_id,execution_id,desired_revision_id,desired_generation FROM event_runs WHERE type='application_deploy' AND id=?`, in.JobID).
 		Scan(&job.applicationID, &job.serverID, &job.instanceID, &job.state, &job.leaseOwner, &job.leaseToken, &job.operationID, &job.executionID, &job.revisionID, &job.desiredGeneration)
 	if jobErr != nil && !errors.Is(jobErr, sql.ErrNoRows) {
 		return observationRejection{}, jobErr
@@ -162,12 +152,12 @@ func (w *ObservationWriter) describeRejection(ctx context.Context, tx *sql.Tx, i
 	resources := make([]activitylog.Resource, 0, 2)
 	if applicationID != "" {
 		var name string
-		_ = tx.QueryRowContext(ctx, `SELECT name FROM applications WHERE id=?`, applicationID).Scan(&name)
+		_ = w.db.QueryRowContext(ctx, `SELECT name FROM applications WHERE id=?`, applicationID).Scan(&name)
 		resources = append(resources, activitylog.Resource{Type: "application", ID: applicationID, Name: name, Role: "target", RevisionID: job.revisionID, Generation: job.desiredGeneration})
 	}
 	if serverID != "" {
 		var name string
-		_ = tx.QueryRowContext(ctx, `SELECT name FROM servers WHERE id=?`, serverID).Scan(&name)
+		_ = w.db.QueryRowContext(ctx, `SELECT name FROM servers WHERE id=?`, serverID).Scan(&name)
 		resources = append(resources, activitylog.Resource{Type: "server", ID: serverID, Name: name, Role: "executor"})
 	}
 
