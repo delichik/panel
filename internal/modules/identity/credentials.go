@@ -182,10 +182,7 @@ func (s *Service) validateCredential(ctx context.Context, token string) (Session
 		permissions = permissioncatalog.FilterReadOnly(permissions)
 	}
 	if credential.LastUsedAt == nil || now.Sub(*credential.LastUsedAt) > time.Minute {
-		_, _ = orm.RawExec(ctx, s.db, `
-			UPDATE access_credentials SET last_used_at = ?
-			WHERE id = ? AND (last_used_at IS NULL OR last_used_at < ?)
-		`, now.Format(time.RFC3339Nano), credential.ID, now.Add(-time.Minute).Format(time.RFC3339Nano))
+		s.scheduleCredentialLastUsed(credential.ID, now)
 	}
 	return Session{
 		UserID: entry.UserID, Username: entry.Username, DisplayName: entry.DisplayName,
@@ -194,6 +191,69 @@ func (s *Service) validateCredential(ctx context.Context, token string) (Session
 		AuthKind: "credential", CredentialID: credential.ID, CredentialScope: credential.Scope,
 		AllowManagement: credential.AllowManagement,
 	}, true
+}
+
+func (s *Service) scheduleCredentialLastUsed(credentialID string, now time.Time) {
+	if s == nil || s.db == nil || credentialID == "" {
+		return
+	}
+	s.lastUsedMu.Lock()
+	if s.lastUsedSeen == nil {
+		s.lastUsedSeen = make(map[string]time.Time, 16)
+	}
+	if last, ok := s.lastUsedSeen[credentialID]; ok && now.Sub(last) < time.Minute {
+		s.lastUsedMu.Unlock()
+		return
+	}
+	if len(s.lastUsedSeen) >= 1024 {
+		for k, v := range s.lastUsedSeen {
+			if now.Sub(v) >= time.Minute {
+				delete(s.lastUsedSeen, k)
+			}
+		}
+	}
+	s.lastUsedSeen[credentialID] = now
+	if s.lastUsedPending == nil {
+		s.lastUsedPending = make(map[string]time.Time, 16)
+	}
+	s.lastUsedPending[credentialID] = now
+	startWorker := !s.lastUsedRunning
+	if startWorker {
+		s.lastUsedRunning = true
+	}
+	s.lastUsedMu.Unlock()
+
+	if startWorker {
+		go s.flushCredentialLastUsed()
+	}
+}
+
+func (s *Service) flushCredentialLastUsed() {
+	for {
+		s.lastUsedMu.Lock()
+		if len(s.lastUsedPending) == 0 {
+			s.lastUsedRunning = false
+			s.lastUsedMu.Unlock()
+			return
+		}
+		batch := s.lastUsedPending
+		s.lastUsedPending = make(map[string]time.Time, 16)
+		s.lastUsedMu.Unlock()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		_ = orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+			for credID, usedAt := range batch {
+				ts := usedAt.UTC().Format(time.RFC3339Nano)
+				cutoff := usedAt.UTC().Add(-time.Minute).Format(time.RFC3339Nano)
+				_, _ = orm.RawExec(ctx, tx, `
+					UPDATE access_credentials SET last_used_at = ?
+					WHERE id = ? AND (last_used_at IS NULL OR last_used_at < ?)
+				`, ts, credID, cutoff)
+			}
+			return nil
+		})
+		cancel()
+	}
 }
 
 func accessCredentialView(row models.AccessCredential, currentUserGeneration int64) AccessCredentialView {

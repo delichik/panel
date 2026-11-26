@@ -123,6 +123,7 @@ func (r *serviceRuntimeReconciler) collectExecutionProgress(ctx context.Context,
 			return executionProgress{}, errors.New("agent event batch exceeds requested limit")
 		}
 		closed := false
+		pageStartAfter := after
 		for _, remote := range page.Events {
 			wantSeq := after + 1
 			switch {
@@ -244,10 +245,12 @@ func (r *serviceRuntimeReconciler) collectExecutionProgress(ctx context.Context,
 					Resources:   resources,
 				})
 			}
-			if err = ctxStore.SetLastSourceSeq(logCtx, req.ExecutionID, remote.SourceSeq); err != nil {
+			after = remote.SourceSeq
+		}
+		if after > pageStartAfter {
+			if err = ctxStore.SetLastSourceSeq(logCtx, req.ExecutionID, after); err != nil {
 				return executionProgress{}, err
 			}
-			after = remote.SourceSeq
 		}
 		if after > 0 {
 			if err = client.AckExecutionEvents(ctx, endpoint, agentcontract.ExecutionEventsAck{ExecutionID: req.ExecutionID, SourceID: page.SourceID, SourceEpoch: epoch, SourceStreamID: stream, ThroughSourceSeq: after}); err != nil {

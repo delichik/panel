@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -44,12 +45,16 @@ var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // Service 负责账户、会话与权限解析。
 type Service struct {
-	cfg       config.Config
-	db        *sql.DB
-	runtime   *settings.Service
-	cache     *cache.Cache
-	limiter   *loginRateLimiter
-	dummyHash string
+	cfg             config.Config
+	db              *sql.DB
+	runtime         *settings.Service
+	cache           *cache.Cache
+	limiter         *loginRateLimiter
+	dummyHash       string
+	lastUsedMu      sync.Mutex
+	lastUsedPending map[string]time.Time
+	lastUsedSeen    map[string]time.Time
+	lastUsedRunning bool
 }
 
 // Option 调整 Service 的可选依赖。

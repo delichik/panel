@@ -74,6 +74,7 @@ type App struct {
 	system         *systeminfo.Service
 	agentReports   *agentReportCollector
 	diagnostics    *diagnostics.Service
+	asyncEvents    *events.AsyncStore
 	checkCancel    context.CancelFunc
 	checkDone      chan struct{}
 	periodicCancel context.CancelFunc
@@ -92,7 +93,15 @@ func New(cfg config.Config) (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	logging.SetContextStore(events.NewStore(store.AppDB()))
+	asyncEvents := events.NewAsyncStore(events.NewStore(store.AppDB()))
+	logging.SetContextStore(asyncEvents)
+	keepAsyncEvents := false
+	defer func() {
+		if !keepAsyncEvents {
+			_ = asyncEvents.Close()
+			logging.SetContextStore(nil)
+		}
+	}()
 	secretStore, err := secretstore.Open(cfg, store.AppDB())
 	if err != nil {
 		_ = store.Close()
@@ -344,6 +353,7 @@ func New(cfg config.Config) (*App, error) {
 		system:         systemSvc,
 		agentReports:   reportCollector,
 		diagnostics:    diagnosticsSvc,
+		asyncEvents:    asyncEvents,
 		applicationSvc: applicationSvc,
 		settings:       settingsSvc,
 		keyAssets:      keyAssetSvc,
@@ -386,8 +396,13 @@ func New(cfg config.Config) (*App, error) {
 	taskHandler := tasks.NewHandler(taskSvc, taskWorker)
 	taskHandler.SetExternalResolver(applicationSvc.ResolveExecutionManually)
 	eventsSvc := modevents.NewService(store.AppDB(), filepath.Join(cfg.DataRoot, "logs"))
+	eventsSvc.SetBeforeClear(func(clearCtx context.Context) {
+		_ = asyncEvents.Flush(clearCtx)
+		asyncEvents.ResetKnownIDs()
+	})
 	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), taskHandler, metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), modevents.NewHandler(eventsSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), facilityapps.NewHandler(facilitySvc), networkprobe.NewHandler(probeSvc), metricsfacility.NewHandler(metricsFacility), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), appearance.NewHandler(appearanceSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc), backups.NewHandler(backupSvc), sshaccess.NewHandler(sshAccessSvc))
 	logging.From(initCtx).Info("application initialized")
+	keepAsyncEvents = true
 	keepCache = true
 	return a, nil
 }
@@ -403,8 +418,16 @@ func (a *App) Close() error {
 	}
 	a.stopBackgroundServices()
 	var err error
+	if a.asyncEvents != nil {
+		if closeErr := a.asyncEvents.Close(); err == nil {
+			err = closeErr
+		}
+		logging.SetContextStore(nil)
+	}
 	if a.cache != nil {
-		err = a.cache.Close()
+		if closeErr := a.cache.Close(); err == nil {
+			err = closeErr
+		}
 	}
 	if closeErr := a.store.Close(); err == nil {
 		err = closeErr

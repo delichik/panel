@@ -21,6 +21,10 @@ func NewStore(db *sql.DB) *Store {
 
 var _ logging.ContextStore = (*Store)(nil)
 
+type execContext interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
 // Upsert inserts or merges a diagnostic events row by id (ENG-RUN-003).
 // It only writes the AppDB `events` index — never `jobs` / `event_runs` lease,
 // status, attempts, or fence execution_id. events.execution_id is a correlation
@@ -30,9 +34,17 @@ func (s *Store) Upsert(ctx context.Context, row logging.ContextRecord) error {
 	if s == nil || s.db == nil {
 		return nil
 	}
+	rec, ok := prepareUpsertRecord(row)
+	if !ok {
+		return nil
+	}
+	return execUpsert(ctx, s.db, rec)
+}
+
+func prepareUpsertRecord(row logging.ContextRecord) (Record, bool) {
 	rec := fromLoggingRecord(row)
 	if strings.TrimSpace(rec.ID) == "" || strings.TrimSpace(rec.Module) == "" {
-		return nil
+		return Record{}, false
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if rec.Origin == "" {
@@ -54,11 +66,18 @@ func (s *Store) Upsert(ctx context.Context, row logging.ContextRecord) error {
 	if rec.UpdatedAt == "" {
 		rec.UpdatedAt = now
 	}
+	if rec.LastSourceSeq < 0 {
+		rec.LastSourceSeq = 0
+	}
+	return rec, true
+}
+
+func execUpsert(ctx context.Context, exec execContext, rec Record) error {
 	seq := rec.LastSourceSeq
 	if seq < 0 {
 		seq = 0
 	}
-	_, err := s.db.ExecContext(ctx, `
+	_, err := exec.ExecContext(ctx, `
 INSERT INTO events (
 	id, module, level, origin, operation_id, execution_id, request_id,
 	title, summary, state, had_error, actor_json, resources_json,
@@ -97,11 +116,26 @@ func (s *Store) Touch(ctx context.Context, eventID string, level string, msg str
 	if s == nil || s.db == nil {
 		return nil
 	}
-	eventID = strings.TrimSpace(eventID)
-	if eventID == "" {
+	touch, ok := prepareTouch(eventID, level, msg)
+	if !ok {
 		return nil
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	return execTouch(ctx, s.db, touch)
+}
+
+type touchOp struct {
+	eventID   string
+	level     string
+	hadError  int
+	summary   string
+	updatedAt string
+}
+
+func prepareTouch(eventID, level, msg string) (touchOp, bool) {
+	eventID = strings.TrimSpace(eventID)
+	if eventID == "" {
+		return touchOp{}, false
+	}
 	hadError := 0
 	lvl := strings.ToLower(strings.TrimSpace(level))
 	switch lvl {
@@ -112,14 +146,24 @@ func (s *Store) Touch(ctx context.Context, eventID string, level string, msg str
 	if len(summary) > 512 {
 		summary = summary[:512]
 	}
-	_, err := s.db.ExecContext(ctx, `
+	return touchOp{
+		eventID:   eventID,
+		level:     lvl,
+		hadError:  hadError,
+		summary:   summary,
+		updatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}, true
+}
+
+func execTouch(ctx context.Context, exec execContext, op touchOp) error {
+	_, err := exec.ExecContext(ctx, `
 UPDATE events SET
 	updated_at = ?,
 	level = CASE WHEN ? != '' THEN ? ELSE level END,
 	had_error = CASE WHEN ? != 0 THEN 1 ELSE had_error END,
 	summary = CASE WHEN ? != '' THEN ? ELSE summary END
 WHERE id = ?
-`, now, lvl, lvl, hadError, summary, summary, eventID)
+`, op.updatedAt, op.level, op.level, op.hadError, op.summary, op.summary, op.eventID)
 	return err
 }
 
@@ -355,6 +399,11 @@ func (s *Store) ClearBatched(ctx context.Context) error {
 		}
 		if deleted < int64(clearBatchSize) {
 			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Millisecond):
 		}
 	}
 }

@@ -14,13 +14,22 @@ import (
 
 // Service exposes product reads over AppDB events and the JSONL log directory.
 type Service struct {
-	store  *platformevents.Store
-	logDir string
+	store       *platformevents.Store
+	logDir      string
+	beforeClear func(context.Context)
 }
 
 // NewService wraps a store and the panel logs directory (<dataRoot>/logs).
 func NewService(db *sql.DB, logDir string) *Service {
 	return &Service{store: platformevents.NewStore(db), logDir: strings.TrimSpace(logDir)}
+}
+
+// SetBeforeClear installs a hook invoked before Clear empties AppDB events.
+func (s *Service) SetBeforeClear(fn func(context.Context)) {
+	if s == nil {
+		return
+	}
+	s.beforeClear = fn
 }
 
 // ListFilter is the product event list query.
@@ -88,6 +97,9 @@ func (s *Service) List(ctx context.Context, filter ListFilter) (ListPage, error)
 func (s *Service) Clear(ctx context.Context) error {
 	if s == nil || s.store == nil {
 		return nil
+	}
+	if s.beforeClear != nil {
+		s.beforeClear(ctx)
 	}
 	if err := s.store.ClearBatched(ctx); err != nil {
 		return err

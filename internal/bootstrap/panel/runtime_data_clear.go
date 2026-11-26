@@ -131,6 +131,10 @@ func (a *App) clearRuntimeData(ctx context.Context) (result diagnostics.ClearRun
 		return result, err
 	}
 	// Product diagnostics: AppDB process index + JSONL sink (DIAG-CLR-002).
+	if a.asyncEvents != nil {
+		_ = a.asyncEvents.Flush(ctx)
+		a.asyncEvents.ResetKnownIDs()
+	}
 	if err := platformevents.NewStore(a.store.AppDB()).ClearBatched(ctx); err != nil {
 		return result, err
 	}
