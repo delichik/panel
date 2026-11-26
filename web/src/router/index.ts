@@ -129,7 +129,6 @@ router.beforeEach(async (to) => {
   }
   if (setupRequired) return '/setup';
   if (!session.authenticated) {
-    if (session.token) return true;
     return { path: '/login', query: { redirect: to.fullPath } };
   }
   if (session.mustChangePassword) {

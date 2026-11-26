@@ -68,17 +68,19 @@ export const useSessionStore = defineStore('session', {
     async restore() {
       try {
         this.applySession(await authApi.session());
+        this.ready = true;
       } catch (error) {
         // Only an explicit 401/unauthorized invalidates the stored token.
-        // Network errors and request timeouts keep the token so a later
-        // restore (or optimistic navigation) can still reuse it; the router
-        // guard decides how to proceed.
+        // Transient network/5xx errors keep the token and leave ready=false
+        // so the next navigation retries session restoration instead of
+        // trapping the SPA in an unauthenticated state.
         const apiError = error instanceof ApiError ? error : null;
         if (apiError?.status === 401 || apiError?.code === 'unauthorized') {
           this.clearSession();
+          this.ready = true;
+        } else if (!this.token) {
+          this.ready = true;
         }
-      } finally {
-        this.ready = true;
       }
     },
     async signIn(username: string, password: string) {
