@@ -117,4 +117,22 @@ describe('server metrics panel statistics', () => {
 
     expect(cardText(wrapper, 0)).toContain('Avg Not available · Max Not available · Min Not available');
   });
+
+  it('renders the six fixed chart card titles while initial metrics load', async () => {
+    let resolveMetrics: ((value: ServerMetricsSeries) => void) | undefined;
+    metricsBucketed.mockReturnValueOnce(new Promise((resolve) => { resolveMetrics = resolve; }));
+
+    const wrapper = mount(MetricsPanel, { props: { server: server(), active: true }, attachTo: document.body });
+    await flushPromises();
+
+    const cards = wrapper.findAll('[data-chart-card]');
+    expect(cards).toHaveLength(6);
+    expect(cards.every((card) => card.attributes('aria-busy') === 'true')).toBe(true);
+    expect(cards[0]!.get('h3').text()).toBe('CPU usage');
+    expect(cards[1]!.get('h3').text()).toBe('Memory usage');
+
+    resolveMetrics?.(metrics());
+    await flushPromises();
+    expect(wrapper.findAll('[data-chart-card]')[0]!.attributes('aria-busy')).toBeUndefined();
+  });
 });

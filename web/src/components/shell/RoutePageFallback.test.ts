@@ -58,4 +58,20 @@ describe('RoutePageFallback mobile geometry', () => {
     // The description line carries the phone full-width fallback.
     expect(wrapper.element.innerHTML).toContain('max-sm:w-full');
   });
+
+  it('renders the real route title and description immediately when route meta provides titleKey', async () => {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/servers', component: { template: '<div />' }, meta: { titleKey: 'routes.servers.title' } },
+      ],
+    });
+    await router.push('/servers');
+    await router.isReady();
+    const wrapper = mount(RoutePageFallback, { global: { plugins: [router] } });
+    await flushPromises();
+
+    expect(wrapper.get('h1').text()).toBe(useI18n().t('routes.servers.title'));
+    expect(wrapper.text()).toContain(useI18n().t('routes.servers.description'));
+  });
 });

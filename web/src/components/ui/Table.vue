@@ -91,7 +91,7 @@ function hideClass(column: TableColumn): string | undefined {
 
 function skeletonClass(rowIndex: number, columnIndex: number, align?: 'left' | 'right') {
   return [
-    'motion-skeleton h-4 rounded-control bg-hover animate-pulse',
+    'motion-skeleton h-4 max-w-full rounded-control bg-hover animate-pulse',
     skeletonWidths[(rowIndex + columnIndex) % skeletonWidths.length],
     align === 'right' ? 'ml-auto' : '',
   ];

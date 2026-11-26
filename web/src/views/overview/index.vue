@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { CheckCircle2, History, RefreshCcw, Server as ServerIcon, XCircle } from '@/icons';
+import { Activity, CheckCircle2, ChevronRight, CircleGauge, Download, HardDrive, History, Network, Radar, RefreshCcw, Server as ServerIcon, UploadCloud, XCircle } from '@/icons';
 import { applicationsApi } from '@/api/applications';
 import { containersApi } from '@/api/containers';
 import { metricsFacilityApi } from '@/api/metricsFacility';
@@ -91,6 +91,30 @@ const applicationSummary = computed(() => (
 ));
 const capacity = computed(() => summarizeCapacity(cards.value));
 const applicationRatioView = computed(() => applicationRatio(applicationSummary.value));
+const initialLoading = computed(() => pageLoading.value && servers.value.length === 0);
+
+const skeletonMetricPairs = computed(() => [
+  [
+    { label: t('overviewPage.metricCpu'), icon: CircleGauge, hasTrack: true },
+    { label: t('overviewPage.metricLoad'), icon: Activity, hasTrack: false },
+  ],
+  [
+    { label: t('overviewPage.metricMemory'), icon: ServerIcon, hasTrack: true },
+    { label: t('overviewPage.metricDisk'), icon: HardDrive, hasTrack: true },
+  ],
+  [
+    { label: t('overviewPage.metricDiskRead'), icon: Download, hasTrack: false },
+    { label: t('overviewPage.metricDiskWrite'), icon: UploadCloud, hasTrack: false },
+  ],
+  [
+    { label: t('overviewPage.metricNetworkDown'), icon: Download, hasTrack: false },
+    { label: t('overviewPage.metricNetworkUp'), icon: UploadCloud, hasTrack: false },
+  ],
+  [
+    { label: t('overviewPage.metricLatency'), icon: Radar, hasTrack: true },
+    { label: t('overviewPage.metricPacketLoss'), icon: Network, hasTrack: true },
+  ],
+]);
 
 type RingTone = 'accent' | 'success' | 'warning' | 'danger' | 'info';
 
@@ -343,159 +367,173 @@ onMounted(() => {
     </template>
 
     <div class="grid min-w-0 gap-4">
-      <template v-if="pageLoading && servers.length === 0">
-        <div
-          class="grid min-w-0 gap-6 wide:grid-cols-2 wider:grid-cols-3 wide:items-start"
-          data-testid="overview-summary-skeleton"
-          aria-hidden="true"
-        >
-          <div class="grid content-start gap-3">
-            <Skeleton class="h-3 w-20" />
-            <div class="flex items-center gap-4">
-              <Skeleton class="size-24 rounded-pill" />
-              <div class="flex flex-wrap gap-2">
-                <Skeleton v-for="item in 4" :key="item" class="h-7 w-24 rounded-pill" />
-              </div>
+      <!--
+        状态总览头：不套 surface-card，直接位于页面层（Mica 透出）。
+        首次加载时保留全部固定分组标题、标签、图标与中性环/胶囊框架，仅动态数值占位。
+      -->
+      <section
+        class="motion-reveal grid min-w-0 gap-6 wide:grid-cols-2 wider:grid-cols-3 wide:items-start"
+        data-testid="overview-summary"
+        :aria-busy="initialLoading || undefined"
+      >
+        <section data-testid="node-summary" class="grid min-w-0 content-start gap-3">
+          <h2 class="m-0 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+            {{ t('overviewPage.nodeStatus') }}
+          </h2>
+          <div class="flex min-w-0 flex-wrap items-center gap-4">
+            <div class="grid justify-items-center gap-1">
+              <RatioRing
+                :percent="nodeSummary.total ? onlinePercent : null"
+                :value-text="nodeSummary.total ? `${onlinePercent}%` : '—'"
+                :label="onlineRateLabel"
+                :tone="onlineRateTone(nodeSummary)"
+                :loading="initialLoading"
+                size="lg"
+                test-id="online-rate-ring"
+              />
+              <span class="text-caption text-muted-foreground">{{ t('overviewPage.onlineRate') }}</span>
+            </div>
+            <div class="flex min-w-0 flex-wrap gap-2">
+              <StatChip :loading="initialLoading" :label="t('overviewPage.totalNodes')" :value="nodeSummary.total" :icon="ServerIcon" />
+              <StatChip :loading="initialLoading" :label="t('overviewPage.onlineNodes')" :value="nodeSummary.online" tone="success" :icon="CheckCircle2" />
+              <StatChip
+                :loading="initialLoading"
+                :label="t('overviewPage.offlineNodes')"
+                :value="nodeSummary.offline"
+                :tone="nodeSummary.offline ? 'danger' : 'neutral'"
+                :icon="XCircle"
+              />
+              <StatChip
+                :loading="initialLoading"
+                :label="t('overviewPage.freshMetrics')"
+                :value="`${nodeSummary.fresh}/${nodeSummary.total}`"
+                :tone="nodeSummary.total === 0 ? 'neutral' : nodeSummary.fresh < nodeSummary.total ? 'warning' : 'success'"
+                :icon="History"
+              />
             </div>
           </div>
-          <div class="grid content-start gap-3">
-            <Skeleton class="h-3 w-16" />
-            <div class="flex items-end gap-4">
-              <Skeleton class="h-7 w-12" />
-              <div class="flex flex-wrap gap-2">
-                <Skeleton v-for="item in 4" :key="item" class="h-7 w-24 rounded-pill" />
-              </div>
-            </div>
-            <Skeleton class="h-2 w-full rounded-pill" />
-          </div>
-          <div class="grid content-start gap-3">
-            <Skeleton class="h-3 w-24" />
-            <div class="flex gap-4">
-              <Skeleton v-for="item in 3" :key="item" class="size-14 rounded-pill" />
-            </div>
-          </div>
-        </div>
-        <div class="grid gap-3 sm:grid-cols-2 wide:grid-cols-3">
-          <Skeleton v-for="item in 8" :key="item" class="h-52" />
-        </div>
-      </template>
-
-      <template v-else>
-        <!--
-          状态总览头：不套 surface-card，直接位于页面层（Mica 透出）。
-          用环形占比 + 胶囊 KPI + 胶囊分布条降低“方块感”；三组之间只用留白，
-          不画通长分隔线。服务器卡片网格保持既有卡片语言。
-        -->
-        <section
-          class="motion-reveal grid min-w-0 gap-6 wide:grid-cols-2 wider:grid-cols-3 wide:items-start"
-          data-testid="overview-summary"
-        >
-          <section data-testid="node-summary" class="grid min-w-0 content-start gap-3">
-            <h2 class="m-0 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
-              {{ t('overviewPage.nodeStatus') }}
-            </h2>
-            <div class="flex min-w-0 flex-wrap items-center gap-4">
-              <div class="grid justify-items-center gap-1">
-                <RatioRing
-                  :percent="nodeSummary.total ? onlinePercent : null"
-                  :value-text="nodeSummary.total ? `${onlinePercent}%` : '—'"
-                  :label="onlineRateLabel"
-                  :tone="onlineRateTone(nodeSummary)"
-                  size="lg"
-                  test-id="online-rate-ring"
-                />
-                <span class="text-caption text-muted-foreground">{{ t('overviewPage.onlineRate') }}</span>
-              </div>
-              <div class="flex min-w-0 flex-wrap gap-2">
-                <StatChip :label="t('overviewPage.totalNodes')" :value="nodeSummary.total" :icon="ServerIcon" />
-                <StatChip :label="t('overviewPage.onlineNodes')" :value="nodeSummary.online" tone="success" :icon="CheckCircle2" />
-                <StatChip
-                  :label="t('overviewPage.offlineNodes')"
-                  :value="nodeSummary.offline"
-                  :tone="nodeSummary.offline ? 'danger' : 'neutral'"
-                  :icon="XCircle"
-                />
-                <StatChip
-                  :label="t('overviewPage.freshMetrics')"
-                  :value="`${nodeSummary.fresh}/${nodeSummary.total}`"
-                  :tone="nodeSummary.total === 0 ? 'neutral' : nodeSummary.fresh < nodeSummary.total ? 'warning' : 'success'"
-                  :icon="History"
-                />
-              </div>
-            </div>
-          </section>
-
-          <section data-testid="application-summary" class="grid min-w-0 content-start gap-3">
-            <h2 class="m-0 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
-              {{ t('overviewPage.applications') }}
-            </h2>
-            <div class="flex min-w-0 flex-wrap items-end gap-4">
-              <div class="grid content-start gap-0.5">
-                <strong class="block text-title font-semibold leading-none tabular-nums text-foreground">
-                  {{ applicationSummary.available ? applicationSummary.total : '—' }}
-                </strong>
-                <span class="text-caption text-muted-foreground">{{ t('overviewPage.totalApplications') }}</span>
-              </div>
-              <div class="flex min-w-0 flex-wrap gap-2">
-                <StatChip
-                  :label="t('applicationsPage.status.enabled')"
-                  :value="applicationSummary.available ? applicationSummary.enabled : '—'"
-                  tone="success"
-                />
-                <StatChip
-                  :label="t('applicationsPage.status.deploying')"
-                  :value="applicationSummary.available ? applicationSummary.deploying : '—'"
-                  tone="info"
-                />
-                <StatChip
-                  :label="t('applicationsPage.status.attention')"
-                  :value="applicationSummary.available ? applicationSummary.attention : '—'"
-                  :tone="applicationSummary.attention ? 'warning' : 'neutral'"
-                />
-                <StatChip
-                  :label="t('applicationsPage.status.disabled')"
-                  :value="applicationSummary.available ? applicationSummary.disabled : '—'"
-                />
-              </div>
-            </div>
-            <div
-              v-if="applicationSummary.available && applicationRatioView.enabledPercent !== null"
-              class="flex h-2 w-full min-w-0 overflow-hidden rounded-pill bg-muted"
-              role="img"
-              :aria-label="applicationRatioLabel"
-              data-testid="application-ratio-bar"
-            >
-              <span class="h-full bg-success" :style="{ width: `${applicationRatioView.enabledPercent}%` }" />
-            </div>
-            <p v-if="!applicationSummary.available" class="m-0 text-caption text-muted-foreground">
-              {{ t('overviewPage.applicationsUnavailable') }}
-            </p>
-          </section>
-
-          <section data-testid="capacity-summary" class="grid min-w-0 content-start gap-3 wide:col-span-2 wider:col-span-1">
-            <h2 class="m-0 flex min-w-0 flex-wrap items-baseline gap-1.5 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
-              <span>{{ t('overviewPage.capacity') }}</span>
-              <span class="font-normal normal-case tracking-normal">
-                {{ t('overviewPage.capacityScope', { count: nodeSummary.online }) }}
-              </span>
-            </h2>
-            <div class="flex min-w-0 flex-wrap items-start gap-4">
-              <div v-for="item in capacityItems" :key="item.key" class="grid justify-items-center gap-0.5">
-                <RatioRing
-                  :percent="item.percent"
-                  :value-text="item.text"
-                  :label="item.labelText"
-                  :tone="item.tone"
-                  size="sm"
-                  :test-id="`capacity-${item.key}`"
-                />
-                <span class="text-caption text-muted-foreground">{{ item.label }}</span>
-                <span v-if="item.hint" class="text-caption text-muted-foreground">{{ item.hint }}</span>
-              </div>
-            </div>
-          </section>
         </section>
 
+        <section data-testid="application-summary" class="grid min-w-0 content-start gap-3">
+          <h2 class="m-0 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+            {{ t('overviewPage.applications') }}
+          </h2>
+          <div class="flex min-w-0 flex-wrap items-end gap-4">
+            <div class="grid content-start gap-0.5">
+              <Skeleton v-if="initialLoading" class="h-7 w-10" />
+              <strong v-else class="block text-title font-semibold leading-none tabular-nums text-foreground">
+                {{ applicationSummary.available ? applicationSummary.total : '—' }}
+              </strong>
+              <span class="text-caption text-muted-foreground">{{ t('overviewPage.totalApplications') }}</span>
+            </div>
+            <div class="flex min-w-0 flex-wrap gap-2">
+              <StatChip
+                :loading="initialLoading"
+                :label="t('applicationsPage.status.enabled')"
+                :value="applicationSummary.available ? applicationSummary.enabled : '—'"
+                tone="success"
+              />
+              <StatChip
+                :loading="initialLoading"
+                :label="t('applicationsPage.status.deploying')"
+                :value="applicationSummary.available ? applicationSummary.deploying : '—'"
+                tone="info"
+              />
+              <StatChip
+                :loading="initialLoading"
+                :label="t('applicationsPage.status.attention')"
+                :value="applicationSummary.available ? applicationSummary.attention : '—'"
+                :tone="applicationSummary.attention ? 'warning' : 'neutral'"
+              />
+              <StatChip
+                :loading="initialLoading"
+                :label="t('applicationsPage.status.disabled')"
+                :value="applicationSummary.available ? applicationSummary.disabled : '—'"
+              />
+            </div>
+          </div>
+          <Skeleton v-if="initialLoading" class="h-2 w-full rounded-pill" />
+          <div
+            v-else-if="applicationSummary.available && applicationRatioView.enabledPercent !== null"
+            class="flex h-2 w-full min-w-0 overflow-hidden rounded-pill bg-muted"
+            role="img"
+            :aria-label="applicationRatioLabel"
+            data-testid="application-ratio-bar"
+          >
+            <span class="h-full bg-success" :style="{ width: `${applicationRatioView.enabledPercent}%` }" />
+          </div>
+          <p v-else-if="!applicationSummary.available" class="m-0 text-caption text-muted-foreground">
+            {{ t('overviewPage.applicationsUnavailable') }}
+          </p>
+        </section>
+
+        <section data-testid="capacity-summary" class="grid min-w-0 content-start gap-3 wide:col-span-2 wider:col-span-1">
+          <h2 class="m-0 flex min-w-0 flex-wrap items-baseline gap-1.5 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+            <span>{{ t('overviewPage.capacity') }}</span>
+            <Skeleton v-if="initialLoading" class="inline-block h-3.5 w-20 align-middle" />
+            <span v-else class="font-normal normal-case tracking-normal">
+              {{ t('overviewPage.capacityScope', { count: nodeSummary.online }) }}
+            </span>
+          </h2>
+          <div class="flex min-w-0 flex-wrap items-start gap-4">
+            <div v-for="item in capacityItems" :key="item.key" class="grid justify-items-center gap-0.5">
+              <RatioRing
+                :percent="item.percent"
+                :value-text="item.text"
+                :label="item.labelText"
+                :tone="item.tone"
+                :loading="initialLoading"
+                size="sm"
+                :test-id="`capacity-${item.key}`"
+              />
+              <span class="text-caption text-muted-foreground">{{ item.label }}</span>
+              <Skeleton v-if="initialLoading && item.key !== 'cpu'" class="h-3 w-16" />
+              <span v-else-if="item.hint" class="text-caption text-muted-foreground">{{ item.hint }}</span>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <div
+        v-if="initialLoading"
+        class="grid gap-3 sm:grid-cols-2 wide:grid-cols-3"
+        data-testid="overview-cards-skeleton"
+        aria-busy="true"
+      >
+        <article
+          v-for="cardIndex in 3"
+          :key="cardIndex"
+          class="grid min-w-0 content-start gap-3 surface-card p-4"
+        >
+          <header class="flex min-w-0 items-start justify-between gap-2">
+            <div class="flex min-w-0 items-center gap-2">
+              <Skeleton class="size-2 shrink-0 rounded-full" />
+              <Skeleton class="h-5 w-28" />
+            </div>
+            <ChevronRight class="size-4 shrink-0 text-muted-foreground opacity-40" aria-hidden="true" />
+          </header>
+          <div class="grid min-w-0 gap-3">
+            <div
+              v-for="(pair, pairIndex) in skeletonMetricPairs"
+              :key="pairIndex"
+              class="grid min-w-0 grid-cols-2 gap-x-4 gap-y-2 max-sm:grid-cols-1 sm:gap-x-5"
+            >
+              <div v-for="cell in pair" :key="cell.label" class="grid min-w-0 gap-1.5">
+                <div class="flex min-w-0 items-center justify-between gap-2">
+                  <span class="flex min-w-0 items-center gap-1.5 text-body text-muted-foreground">
+                    <component :is="cell.icon" class="size-3.5 shrink-0" aria-hidden="true" />
+                    <span class="truncate">{{ cell.label }}</span>
+                  </span>
+                  <Skeleton class="h-3.5 w-12 shrink-0" />
+                </div>
+                <Skeleton v-if="cell.hasTrack" class="h-1.5 w-full rounded-sm" />
+              </div>
+            </div>
+          </div>
+        </article>
+      </div>
+
+      <template v-else>
         <InfoBar v-if="pageError && servers.length > 0" tone="warning" data-testid="overview-stale">
           <div class="flex min-w-0 flex-wrap items-center gap-2">
             <span class="min-w-0 break-words">{{ pageError }}</span>

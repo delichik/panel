@@ -17,7 +17,6 @@ import PaginationBar from '@/components/ui/PaginationBar.vue';
 import RadioButton from '@/components/ui/RadioButton.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
 import Select from '@/components/ui/Select.vue';
-import Skeleton from '@/components/ui/Skeleton.vue';
 import Table from '@/components/ui/Table.vue';
 import { useErrorDialog } from '@/components/ui/errorDialog';
 import { useSuccessToast } from '@/components/ui/toast';
@@ -78,6 +77,11 @@ const detailOpen = computed(() => Boolean(selectedId.value));
 const references = computed(() => selectedCredential.value ? credentialReferences(selectedCredential.value.id, servers.value) : []);
 const testReferences = computed(() => testTarget.value ? credentialReferences(testTarget.value.id, servers.value) : []);
 const deleteReferences = computed(() => deleteTarget.value ? credentialReferences(deleteTarget.value.id, servers.value) : []);
+const keySummarySkeletonItems = computed(() => [
+  { key: 'keyName', label: t('credentialsPage.keyName'), skeletonWidth: 'w-32' },
+  { key: 'algorithm', label: t('credentialsPage.algorithm'), skeletonWidth: 'w-24' },
+  { key: 'fingerprint', label: t('credentialsPage.fingerprint'), skeletonWidth: 'w-56' },
+]);
 const keySummaryItems = computed(() => {
   const summary = credentialDetail.value?.keySummary;
   if (!summary) return [];
@@ -359,9 +363,13 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
           </template>
 
           <template #loading>
-            <div class="grid gap-2" aria-busy="true">
-              <Skeleton v-for="row in 6" :key="row" class="h-10 w-full" />
-            </div>
+            <Table
+              class="h-full max-lg:max-h-list"
+              :columns="columns"
+              :rows="[]"
+              :loading="true"
+              :loading-label="t('common.loading')"
+            />
           </template>
 
           <template #error>
@@ -435,9 +443,7 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
         </template>
         <div class="grid h-full min-h-0 content-start gap-4 overflow-y-auto pr-1 lg:grid-cols-2">
           <DetailSection :title="t('credentialsPage.keySummary')">
-            <div v-if="detailLoading" class="grid gap-2 px-4 py-3">
-              <Skeleton v-for="item in 3" :key="item" class="h-10" />
-            </div>
+            <PropertyList v-if="detailLoading" :items="keySummarySkeletonItems" :columns="1" loading />
             <EmptyState v-else-if="detailError" variant="inset" :title="t('common.loadFailed')" :description="detailError">
               <template #actions>
                 <Button size="sm" :loading="detailLoading" @click="loadDetail(selectedId)"><RefreshCcw />{{ t('common.retry') }}</Button>

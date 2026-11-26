@@ -48,6 +48,7 @@ import { createLatestRequestGuard } from '@/views/_shared/requestState';
 import { browserTimeZoneLabel, formatDateTime, localTimeOfDayToUtc, utcTimeOfDayToLocal } from '@/utils/datetime';
 import { normalizeImageRegistryEndpoint, normalizeImageRegistryScheme } from '@/utils/imageRegistry';
 import AppearanceSectionSkeleton from './AppearanceSectionSkeleton.vue';
+import RuntimeSectionSkeleton from './RuntimeSectionSkeleton.vue';
 
 const { t, locale, setLocale } = useI18n();
 const route = useRoute();
@@ -1050,9 +1051,11 @@ onBeforeUnmount(() => {
 
           <AppearanceSection v-if="activeSection === 'appearance'" ref="appearanceSectionRef" />
 
-          <div v-else-if="loading && !runtime" class="relative min-h-48" aria-busy="true">
-            <LoadingOverlay :label="t('common.loading')" />
-          </div>
+          <RuntimeSectionSkeleton
+            v-else-if="loading && !runtime"
+            :section="activeSection"
+            :system-certificate-columns="systemCertificateColumns"
+          />
 
           <EmptyState v-else-if="error && !runtime" variant="inset" :title="t('common.loadFailed')" :description="error">
             <template #actions>

@@ -113,4 +113,17 @@ describe('OverviewSummary', () => {
     expect(wrapper.text()).toContain('Waiting for the next disk sample');
     expect(wrapper.text()).not.toContain('0.0%');
   });
+
+  it('keeps fixed disk labels and skeletons values while metrics are loading', () => {
+    const wrapper = mount(OverviewSummary, { props: { server: server(), metrics: null, metricsLoading: true } });
+
+    const chart = wrapper.get('[data-testid="disk-usage-chart"]');
+    expect(chart.attributes('aria-busy')).toBe('true');
+    expect(wrapper.text()).toContain('Disk');
+    expect(wrapper.text()).toContain('Used');
+    expect(wrapper.text()).toContain('Free');
+    expect(wrapper.text()).toContain('Total');
+    expect(wrapper.text()).not.toContain('Waiting for the next disk sample');
+    expect(wrapper.findAll('.motion-skeleton').length).toBeGreaterThanOrEqual(4);
+  });
 });

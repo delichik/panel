@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, type Component } from 'vue';
+import Skeleton from '@/components/ui/Skeleton.vue';
 
 /**
  * 概览摘要区的胶囊 KPI（label + value + 可选语义图标）。
@@ -11,10 +12,11 @@ export type StatChipTone = 'neutral' | 'success' | 'warning' | 'danger' | 'info'
 
 const props = withDefaults(defineProps<{
   label: string;
-  value: string | number;
+  value?: string | number;
   tone?: StatChipTone;
   icon?: Component;
-}>(), { tone: 'neutral', icon: undefined });
+  loading?: boolean;
+}>(), { value: '—', tone: 'neutral', icon: undefined, loading: false });
 
 const toneClass = computed(() => ({
   neutral: 'text-foreground',
@@ -29,6 +31,7 @@ const toneClass = computed(() => ({
   <span class="inline-flex min-h-7 min-w-0 items-center gap-1.5 rounded-pill bg-muted px-3 py-1">
     <component :is="icon" v-if="icon" class="size-3.5 shrink-0 text-secondary-foreground" aria-hidden="true" />
     <span class="truncate text-caption text-muted-foreground">{{ label }}</span>
-    <strong class="shrink-0 text-body-strong tabular-nums" :class="toneClass">{{ value }}</strong>
+    <Skeleton v-if="loading" class="h-4 w-7 bg-pressed" />
+    <strong v-else class="shrink-0 text-body-strong tabular-nums" :class="toneClass">{{ value }}</strong>
   </span>
 </template>

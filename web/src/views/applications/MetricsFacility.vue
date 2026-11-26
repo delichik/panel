@@ -4,9 +4,9 @@ import { RefreshCcw, Save } from '@/icons';
 import { metricsFacilityApi } from '@/api/metricsFacility';
 import Button from '@/components/ui/Button.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
-import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import NumberBox from '@/components/ui/NumberBox.vue';
 import Select from '@/components/ui/Select.vue';
+import Skeleton from '@/components/ui/Skeleton.vue';
 import FacilityField from '@/components/patterns/FacilityField.vue';
 import FacilitySection from '@/components/patterns/FacilitySection.vue';
 import InfoBar from '@/components/patterns/InfoBar.vue';
@@ -37,6 +37,7 @@ const notifySuccess = useSuccessToast();
 
 const config = ref<MetricsFacilityConfig | null>(null);
 const loading = ref(false);
+const initialLoading = computed(() => loading.value && !config.value);
 const saving = ref(false);
 const error = ref('');
 const formError = ref('');
@@ -213,9 +214,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="relative grid content-start gap-4" data-testid="metrics-facility">
-    <LoadingOverlay v-if="loading && !config" :label="t('applicationsPage.metricsLoading')" />
-
+  <div class="relative grid content-start gap-4" data-testid="metrics-facility" :aria-busy="initialLoading || undefined">
     <EmptyState v-if="error && !config" variant="page" :title="t('common.loadFailed')" :description="error">
       <template #actions>
         <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
@@ -231,10 +230,11 @@ onBeforeUnmount(() => {
       >
         <div class="grid content-start gap-3">
           <FacilityField class="sm:max-w-xs" :label="t('applicationsPage.metricsMode')">
-            <Select v-model="draft.mode" :options="modeOptions" :disabled="saving" />
+            <Skeleton v-if="initialLoading" class="h-8 w-full" />
+            <Select v-else v-model="draft.mode" :options="modeOptions" :disabled="saving" />
           </FacilityField>
 
-          <div v-if="draft.mode === 'selected'" class="grid gap-2">
+          <div v-if="!initialLoading && draft.mode === 'selected'" class="grid gap-2">
             <FacilityField :label="t('applicationsPage.metricsSelectServers')" :hint="t('applicationsPage.metricsSelectServersHint')">
               <div class="max-h-64 overflow-y-auto pr-1">
                 <ServerMultiPicker v-model="draft.serverIds" variant="compact" :servers="serverOptions" :label="t('applicationsPage.metricsSelectServers')" />
@@ -253,13 +253,16 @@ onBeforeUnmount(() => {
         <div class="grid content-start gap-3">
           <div class="grid gap-3 sm:grid-cols-2">
             <FacilityField :label="t('applicationsPage.metricsCleanupSchedule')">
-              <Select v-model="draft.cleanupSchedule" :options="cleanupOptions" :disabled="saving" />
+              <Skeleton v-if="initialLoading" class="h-8 w-full" />
+              <Select v-else v-model="draft.cleanupSchedule" :options="cleanupOptions" :disabled="saving" />
             </FacilityField>
             <FacilityField
               :label="t('applicationsPage.metricsRetention')"
-              :error="retentionInvalid ? t('applicationsPage.metricsRetentionInvalid') : ''"
+              :error="!initialLoading && retentionInvalid ? t('applicationsPage.metricsRetentionInvalid') : ''"
             >
+              <Skeleton v-if="initialLoading" class="h-8 w-full" />
               <NumberBox
+                v-else
                 v-model="retentionNumber"
                 :min="1"
                 :step="1"
@@ -271,9 +274,11 @@ onBeforeUnmount(() => {
             <FacilityField
               :label="t('applicationsPage.metricsInterval')"
               :hint="t('applicationsPage.metricsIntervalHint', { min: metricsCollectionIntervalMin, default: metricsFacilityDefaults.collectionIntervalSeconds })"
-              :error="intervalInvalid ? t('applicationsPage.metricsIntervalInvalid') : ''"
+              :error="!initialLoading && intervalInvalid ? t('applicationsPage.metricsIntervalInvalid') : ''"
             >
+              <Skeleton v-if="initialLoading" class="h-8 w-full" />
               <NumberBox
+                v-else
                 v-model="intervalNumber"
                 :min="metricsCollectionIntervalMin"
                 :step="1"
@@ -294,9 +299,11 @@ onBeforeUnmount(() => {
                 :key="field.key"
                 :label="t(field.labelKey)"
                 :hint="field.percent ? '%' : 'B/s'"
-                :error="thresholdInvalid(field.key) ? t('applicationsPage.metricsThresholdInvalid') : ''"
+                :error="!initialLoading && thresholdInvalid(field.key) ? t('applicationsPage.metricsThresholdInvalid') : ''"
               >
+                <Skeleton v-if="initialLoading" class="h-8 w-full" />
                 <NumberBox
+                  v-else
                   v-model="thresholdDraft[field.key]"
                   :min="0"
                   :step="1"
@@ -310,7 +317,7 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="flex justify-end">
-          <Button size="sm" variant="primary" :loading="saving" :disabled="!dirty" @click="save"><Save />{{ t('applicationsPage.metricsSave') }}</Button>
+          <Button size="sm" variant="primary" :loading="saving" :disabled="initialLoading || !dirty" @click="save"><Save />{{ t('applicationsPage.metricsSave') }}</Button>
         </div>
       </FacilitySection>
     </template>

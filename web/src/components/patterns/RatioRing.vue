@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import Skeleton from '@/components/ui/Skeleton.vue';
 
 /**
  * 通用占比环：WinUI 3 中性 chrome，4px token 描边环 + 中心数值。
@@ -23,13 +24,15 @@ const props = withDefaults(defineProps<{
   size?: 'sm' | 'md' | 'lg';
   /** 根节点 data-testid，便于页面/测试定位具体环。 */
   testId?: string;
-}>(), { tone: 'accent', size: 'md', testId: 'ratio-ring' });
+  /** 加载中：外环保持中性轨道，中心数值位置显示骨架。 */
+  loading?: boolean;
+}>(), { tone: 'accent', size: 'md', testId: 'ratio-ring', loading: false });
 
 const clamped = computed(() => {
-  if (props.percent === null || !Number.isFinite(props.percent)) return null;
+  if (props.loading || props.percent === null || !Number.isFinite(props.percent)) return null;
   return Math.min(100, Math.max(0, props.percent));
 });
-const hasData = computed(() => clamped.value !== null);
+const hasData = computed(() => !props.loading && clamped.value !== null);
 const dashArray = computed(() => (hasData.value ? `${clamped.value} 100` : '0 100'));
 
 const toneClass = computed(() => ({
@@ -46,6 +49,11 @@ const valueTextClass = computed(() => ({
   md: 'text-body-strong',
   lg: 'text-subtitle',
 }[props.size]));
+const skeletonSizeClass = computed(() => ({
+  sm: 'h-3 w-7',
+  md: 'h-4 w-10',
+  lg: 'h-5 w-12',
+}[props.size]));
 </script>
 
 <template>
@@ -53,6 +61,7 @@ const valueTextClass = computed(() => ({
     :data-testid="testId"
     :data-empty="hasData ? undefined : 'true'"
     :data-tone="tone"
+    :aria-busy="loading ? 'true' : undefined"
     role="img"
     :aria-label="label"
     class="relative inline-grid shrink-0 place-items-center"
@@ -72,6 +81,9 @@ const valueTextClass = computed(() => ({
         :stroke-dasharray="dashArray"
       />
     </svg>
-    <span class="absolute inset-0 grid place-items-center tabular-nums" :class="[valueTextClass, valueClass]">{{ valueText }}</span>
+    <span v-if="loading" class="absolute inset-0 grid place-items-center">
+      <Skeleton :class="skeletonSizeClass" />
+    </span>
+    <span v-else class="absolute inset-0 grid place-items-center tabular-nums" :class="[valueTextClass, valueClass]">{{ valueText }}</span>
   </div>
 </template>

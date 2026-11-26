@@ -4,6 +4,7 @@ import Button from '@/components/ui/Button.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import Expander from '@/components/ui/Expander.vue';
 import InfoBar from '@/components/patterns/InfoBar.vue';
+import Skeleton from '@/components/ui/Skeleton.vue';
 import StatusBadge from '@/components/ui/StatusBadge.vue';
 import { useI18n } from '@/i18n';
 import { formatDateTime } from '@/utils/datetime';
@@ -167,20 +168,36 @@ function instanceUpdatedAt(instance: ApplicationRuntimeInstance) {
         v-for="item in 2"
         :key="`instance-skeleton-${item}`"
         data-instance-skeleton
-        class="grid min-w-0 content-start gap-3 surface-card p-4"
-        aria-hidden="true"
+        aria-busy="true"
+        class="relative grid min-w-0 content-start gap-3 overflow-hidden surface-card p-4"
       >
-        <div class="flex items-center gap-2">
-          <div class="motion-skeleton size-4 rounded bg-muted animate-pulse" />
-          <div class="motion-skeleton h-4 w-32 max-w-full rounded bg-muted animate-pulse" />
-        </div>
-        <div class="grid grid-cols-2 gap-3">
-          <div class="motion-skeleton h-3 w-20 rounded bg-muted animate-pulse" />
-          <div class="motion-skeleton h-3 w-16 rounded bg-muted animate-pulse" />
-          <div class="motion-skeleton h-3 w-24 rounded bg-muted animate-pulse" />
-          <div class="motion-skeleton h-3 w-20 rounded bg-muted animate-pulse" />
-        </div>
-        <div class="motion-skeleton h-3 w-28 rounded bg-muted animate-pulse" />
+        <span class="absolute inset-y-0 left-0 w-0.5 bg-divider" aria-hidden="true" />
+        <header class="flex min-w-0 items-start justify-between gap-3 pl-1">
+          <div class="flex min-w-0 items-start gap-2">
+            <Server class="mt-0.5 size-4 shrink-0 text-secondary-foreground" aria-hidden="true" />
+            <div class="grid min-w-0 gap-1">
+              <Skeleton class="h-4 w-28" />
+              <Skeleton class="h-3 w-36 max-w-full" />
+            </div>
+          </div>
+          <Skeleton class="h-5 w-14 shrink-0 rounded-pill" />
+        </header>
+        <dl class="m-0 grid min-w-0 grid-cols-2 gap-3 pl-1">
+          <div class="grid min-w-0 content-start gap-1">
+            <dt class="text-caption text-muted-foreground">{{ t('common.status') }}</dt>
+            <dd class="m-0"><Skeleton class="h-4 w-16" /></dd>
+          </div>
+          <div class="grid min-w-0 content-start gap-1">
+            <dt class="text-caption text-muted-foreground">{{ t('applicationsPage.updatedAtColumn') }}</dt>
+            <dd class="m-0"><Skeleton class="h-4 w-24 max-w-full" /></dd>
+          </div>
+        </dl>
+        <footer class="flex flex-wrap items-center justify-between gap-2 pl-1">
+          <span class="inline-flex items-center gap-1.5 text-caption text-muted-foreground">
+            <span>{{ t('applicationsPage.updatedAtColumn') }}:</span>
+            <Skeleton class="inline-block h-3.5 w-28" />
+          </span>
+        </footer>
       </div>
     </template>
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Cable, Eye, MoreHorizontal, PlayCircle, Plus, RefreshCcw, Trash2, Wrench } from '@/icons';
+import { Activity, Cable, Eye, History, MoreHorizontal, PlayCircle, Plus, RefreshCcw, Router, ServerCog, Trash2, Wrench } from '@/icons';
 import { credentialsApi } from '@/api/credentials';
 import { serversApi } from '@/api/servers';
 import Badge from '@/components/ui/Badge.vue';
@@ -21,6 +21,9 @@ import Select from '@/components/ui/Select.vue';
 import Tooltip from '@/components/ui/Tooltip.vue';
 import { useErrorDialog } from '@/components/ui/errorDialog';
 import { useSuccessToast } from '@/components/ui/toast';
+import DetailSection from '@/components/patterns/DetailSection.vue';
+import DiskUsageChart from '@/components/patterns/DiskUsageChart.vue';
+import PropertyList from '@/components/patterns/PropertyList.vue';
 import TableDetailName from '@/components/patterns/TableDetailName.vue';
 import ListCommandBar from '@/components/patterns/ListCommandBar.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
@@ -129,6 +132,26 @@ const networkSubtabItems = computed(() => serverNetworkSubtabs
     value: tab,
     label: tab === 'ssh-access' ? t('serversPage.tab.sshAccess') : t('serversPage.tab.firewall'),
   })));
+const statusTileSkeletonItems = computed(() => [
+  { key: 'stream', label: t('serversPage.reportStream.label'), icon: Activity },
+  { key: 'stability', label: t('serversPage.reportStability.label'), icon: History },
+  { key: 'proxy', label: t('serversPage.proxy.label'), icon: Router },
+  { key: 'agent', label: t('serversPage.agent'), icon: ServerCog },
+]);
+const diskStatSkeletonItems = computed(() => [
+  { key: 'used', label: t('serversPage.diskUsed') },
+  { key: 'free', label: t('serversPage.diskFree') },
+  { key: 'total', label: t('serversPage.diskTotal') },
+]);
+const connectionSkeletonItems = computed(() => [
+  { key: 'host', label: t('serversPage.host'), skeletonWidth: 'w-28' },
+  { key: 'port', label: t('serversPage.port'), skeletonWidth: 'w-14' },
+  { key: 'credential', label: t('serversPage.credential'), skeletonWidth: 'w-28' },
+  { key: 'dockerHost', label: t('serversPage.dockerHost'), skeletonWidth: 'w-36' },
+  { key: 'ipv4', label: t('serversPage.ipv4'), skeletonWidth: 'w-28' },
+  { key: 'ipv6', label: t('serversPage.ipv6'), skeletonWidth: 'w-32' },
+  { key: 'proxy', label: t('serversPage.proxy.label'), skeletonWidth: 'w-24' },
+]);
 const detailTitle = computed(() => selectedServer.value?.name ?? t('common.loading'));
 const detailDescription = computed(() => selectedServer.value ? `${selectedServer.value.host}:${selectedServer.value.port} / ${selectedServer.value.os?.prettyName || t('common.notAvailable')}` : '');
 /** 覆盖式详情从服务器列表入口建立面包屑；末项（当前服务器名）无 to，由 BreadcrumbBar 标记 aria-current。 */
@@ -562,9 +585,14 @@ onBeforeUnmount(() => {
           </template>
 
           <template #loading>
-            <div class="grid content-start gap-2 rounded-overlay border border-card-stroke bg-card p-3" aria-busy="true">
-              <Skeleton v-for="item in 6" :key="item" class="h-9" />
-            </div>
+            <Table
+              class="h-full max-lg:max-h-list"
+              row-height="auto"
+              :columns="columns"
+              :rows="[]"
+              :loading="true"
+              :loading-label="t('common.loading')"
+            />
           </template>
 
           <template #error>
@@ -656,15 +684,106 @@ onBeforeUnmount(() => {
               <Button size="sm" :loading="detailLoading" @click="invalidateServerDetail()"><RefreshCcw />{{ t('common.retry') }}</Button>
             </template>
           </EmptyState>
-          <div v-else-if="!selectedServer" class="grid content-start gap-4">
-            <Skeleton class="h-7 w-48" />
-            <Skeleton class="h-4 w-72 max-w-full" />
-            <div class="mt-4 grid gap-3">
-              <Skeleton v-for="item in 3" :key="item" class="h-32" />
-            </div>
-          </div>
           <Tabs v-else v-model="activeTab" class="h-full min-h-0" :tabs="tabItems" keep-panels>
-            <div :key="selectedId" class="h-full min-h-0">
+            <div v-if="!selectedServer" class="h-full min-h-0 overflow-y-auto pr-1 max-lg:h-auto max-lg:overflow-visible max-lg:pr-0" aria-busy="true">
+              <div v-if="activeTab === 'overview'" class="grid content-start gap-4">
+                <section class="surface-card">
+                  <div class="grid gap-4 p-3 sm:p-4 wide:grid-cols-[minmax(0,1fr)_minmax(0,34rem)] wide:items-start">
+                    <div class="flex min-w-0 items-start gap-3">
+                      <Skeleton class="size-10 shrink-0 rounded-control" />
+                      <div class="grid min-w-0 flex-1 content-start gap-1.5">
+                        <div class="flex min-w-0 flex-wrap items-center gap-2">
+                          <Skeleton class="h-6 w-44 max-w-full" />
+                          <Skeleton class="h-5 w-16 rounded-pill" />
+                        </div>
+                        <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 text-caption text-muted-foreground">
+                          <Skeleton class="h-4 w-20" />
+                          <Skeleton class="h-4 w-16" />
+                          <span class="inline-flex min-w-0 items-center gap-1">
+                            {{ t('serversPage.lastChecked') }}
+                            <Skeleton class="inline-block h-3.5 w-28" />
+                          </span>
+                          <span class="inline-flex min-w-0 items-center gap-1">
+                            {{ t('serversPage.updatedAt') }}
+                            <Skeleton class="inline-block h-3.5 w-28" />
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <dl class="grid min-w-0 content-start grid-cols-2 gap-2 sm:grid-cols-3">
+                      <div
+                        v-for="item in statusTileSkeletonItems"
+                        :key="item.key"
+                        class="grid min-w-0 content-start gap-0.5 rounded-control border border-divider bg-muted px-2 py-1.5"
+                        :class="item.key === 'proxy' ? 'max-sm:col-span-2' : undefined"
+                      >
+                        <dt class="flex min-w-0 items-center gap-1 text-caption text-muted-foreground">
+                          <component :is="item.icon" class="size-3.5 shrink-0" aria-hidden="true" />
+                          <span class="truncate">{{ item.label }}</span>
+                        </dt>
+                        <dd class="m-0 pt-0.5">
+                          <Skeleton class="h-4 w-20 bg-pressed" />
+                        </dd>
+                      </div>
+                    </dl>
+                  </div>
+
+                  <div class="border-t border-divider p-3 sm:p-4">
+                    <div class="flex min-w-0 flex-wrap items-center gap-4">
+                      <DiskUsageChart
+                        :percent="null"
+                        value-text="—"
+                        :label="t('serversPage.disk')"
+                        size="lg"
+                        loading
+                      />
+                      <div class="grid min-w-0 flex-1 content-start gap-2">
+                        <div class="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+                          <span class="text-body-strong text-foreground">{{ t('serversPage.disk') }}</span>
+                          <Skeleton class="h-4 w-12" />
+                        </div>
+                        <dl class="grid min-w-0 grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3">
+                          <div v-for="stat in diskStatSkeletonItems" :key="stat.key" class="grid min-w-0 gap-0.5">
+                            <dt class="text-caption text-muted-foreground">{{ stat.label }}</dt>
+                            <dd class="m-0"><Skeleton class="h-5 w-16" /></dd>
+                          </div>
+                        </dl>
+                        <Skeleton class="h-3.5 w-36 max-w-full" />
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                <div class="grid content-start gap-4 wide:grid-cols-2">
+                  <DetailSection :title="t('serversPage.connection')">
+                    <PropertyList :items="connectionSkeletonItems" :columns="2" loading />
+                  </DetailSection>
+
+                  <DetailSection :title="t('serversPage.recentOperations')">
+                    <div class="grid gap-2 p-4 text-body text-muted-foreground">
+                      <span class="inline-flex items-center gap-2">
+                        <span>{{ t('serversPage.updatedAt') }}:</span>
+                        <Skeleton class="h-4 w-32" />
+                      </span>
+                      <Skeleton class="h-4 w-48 max-w-full" />
+                    </div>
+                  </DetailSection>
+                </div>
+              </div>
+
+              <div v-else class="flex flex-col gap-3">
+                <div class="flex shrink-0 items-center gap-2">
+                  <span class="text-caption text-muted-foreground" aria-hidden="true">{{ t(detailTabLabelKeys[activeTab]) }}</span>
+                  <Skeleton class="h-8 w-44" />
+                </div>
+                <div class="grid gap-2 surface-card p-4">
+                  <Skeleton v-for="row in 4" :key="row" class="h-8 w-full" />
+                </div>
+              </div>
+            </div>
+
+            <div v-else :key="selectedId" class="h-full min-h-0">
               <OverviewTab v-if="visited.overview" v-show="activeTab === 'overview'" :active="activeTab === 'overview'" :server="selectedServer" :credentials="credentials" @refresh="refreshDetail" />
               <div v-if="visited.system" v-show="activeTab === 'system'" class="flex h-full min-h-0 flex-col gap-3">
                 <div class="flex shrink-0 items-center gap-2">

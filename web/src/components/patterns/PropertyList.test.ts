@@ -120,4 +120,28 @@ describe('PropertyList', () => {
     });
     expect(wrapper.get('.custom-value').text()).toBe('running');
   });
+
+  it('keeps fixed labels and skeletons only values when loading', () => {
+    const wrapper = mount(PropertyList, {
+      props: {
+        items: [
+          { key: 'fp', label: 'Fingerprint', value: 'SHA256:abc', copyable: true, skeletonWidth: 'w-52' },
+          { key: 'state', label: 'State', value: 'running' },
+        ],
+        copyLabel: 'Copy',
+        loading: true,
+      },
+    });
+
+    const list = wrapper.get('[data-property-list]');
+    expect(list.attributes('aria-busy')).toBe('true');
+    const rows = wrapper.findAll('[data-property-row]');
+    expect(rows[0]!.get('dt').text()).toBe('Fingerprint');
+    expect(rows[0]!.find('dd .motion-skeleton').exists()).toBe(true);
+    expect(rows[0]!.find('dd .motion-skeleton').classes()).toContain('w-52');
+    expect(rows[0]!.text()).not.toContain('SHA256:abc');
+    expect(rows[0]!.find('button').exists()).toBe(false);
+    expect(rows[1]!.get('dt').text()).toBe('State');
+    expect(rows[1]!.find('dd .motion-skeleton').exists()).toBe(true);
+  });
 });

@@ -63,4 +63,17 @@ describe('RatioRing', () => {
     expect(large.get('[data-testid="ratio-ring"]').classes()).toContain('size-24');
     expect(large.get('[data-testid="ratio-ring"]').find('span').classes()).toContain('text-subtitle');
   });
+
+  it('keeps the neutral track and skeletons only the center value while loading', () => {
+    const wrapper = mount(RatioRing, {
+      props: { percent: 80, valueText: '80%', label: 'Online rate: 80%', loading: true, size: 'lg' },
+    });
+
+    const ring = wrapper.get('[data-testid="ratio-ring"]');
+    expect(ring.attributes('aria-busy')).toBe('true');
+    expect(ring.attributes('data-empty')).toBe('true');
+    expect(ring.find('circle:last-child').attributes('stroke-dasharray')).toBe('0 100');
+    expect(ring.find('.motion-skeleton').exists()).toBe(true);
+    expect(ring.text()).not.toContain('80%');
+  });
 });

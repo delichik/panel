@@ -351,7 +351,7 @@ onMounted(load);
       </div>
 
       <template v-if="section === 'users'">
-        <Table v-if="users.length" :columns="userColumns" :rows="users" row-key="id">
+        <Table v-if="users.length || loading" :columns="userColumns" :rows="users" row-key="id" :loading="loading && !users.length" :loading-label="t('common.loading')">
           <template #username="{ row }">
             <span class="font-medium">{{ row.username }}</span>
             <span v-if="row.builtin" class="ml-2 text-xs text-muted-foreground">{{ t('access.users.builtin') }}</span>
@@ -379,7 +379,7 @@ onMounted(load);
       </template>
 
       <template v-else>
-        <Table v-if="roles.length" :columns="roleColumns" :rows="roles" row-key="id">
+        <Table v-if="roles.length || loading" :columns="roleColumns" :rows="roles" row-key="id" :loading="loading && !roles.length" :loading-label="t('common.loading')">
           <template #name="{ row }">
             <span class="font-medium">{{ row.name }}</span>
             <span v-if="row.builtin" class="ml-2 text-xs text-muted-foreground">{{ t('access.roles.builtin') }}</span>

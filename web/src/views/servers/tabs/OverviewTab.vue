@@ -39,6 +39,7 @@ const initialTask = ref<TaskDto | null>(null);
 const initialTaskLoading = ref(false);
 const initialTaskError = ref('');
 const metricsSnapshot = ref<ServerMetricsSeries | null>(null);
+const metricsLoading = ref(true);
 const trustHostKeyOpen = ref(false);
 const trusting = ref(false);
 
@@ -161,7 +162,7 @@ onBeforeUnmount(() => {
         <div v-if="server.lastError" class="rounded-control border border-warning-border bg-warning-bg p-3 text-body text-warning">{{ server.lastError }}</div>
       </div>
 
-      <OverviewSummary :server="server" :metrics="metricsSnapshot" />
+      <OverviewSummary :server="server" :metrics="metricsSnapshot" :metrics-loading="metricsLoading" />
 
       <!-- 摘要卡之后：连接信息与最近操作并排（宽屏）。指标/探测的当前值与历史统一由下方图表面板承担，摘要卡不再重复。 -->
       <div class="grid content-start gap-4 wide:grid-cols-2">
@@ -204,7 +205,12 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- 指标/探测的当前值与历史由下方图表面板展示（含当前值、时间轴、阈值与空态），摘要卡不再重复。 -->
-      <MetricsPanel :server="server" :active="active" @metrics-loaded="metricsSnapshot = $event" />
+      <MetricsPanel
+        :server="server"
+        :active="active"
+        @metrics-loaded="metricsSnapshot = $event"
+        @loading-change="metricsLoading = $event"
+      />
 
       <ProbeOverviewPanel :server="server" :active="active" />
     </div>

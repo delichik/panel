@@ -195,7 +195,7 @@ onMounted(loadCredentials);
               <Plus />{{ t('account.credentials.create') }}
             </Button>
           </div>
-          <Table v-if="credentials.length" :columns="credentialColumns" :rows="credentials" row-key="id">
+          <Table v-if="credentials.length || credentialsLoading" :columns="credentialColumns" :rows="credentials" row-key="id" :loading="credentialsLoading && !credentials.length" :loading-label="t('common.loading')">
             <template #name="{ row }">{{ row.name }}</template>
             <template #scope="{ row }">{{ t(`account.credentials.scopeValue.${row.scope}`) }}</template>
             <template #status="{ row }">{{ t(`account.credentials.statusValue.${row.status}`) }}</template>

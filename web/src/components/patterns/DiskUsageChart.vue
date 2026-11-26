@@ -20,7 +20,9 @@ withDefaults(defineProps<{
   tone?: DiskUsageTone;
   /** 环直径：80（紧凑）或 96（摘要主视觉）。 */
   size?: 'md' | 'lg';
-}>(), { tone: 'accent', size: 'md' });
+  /** 加载中：仅中心数值位置渲染骨架。 */
+  loading?: boolean;
+}>(), { tone: 'accent', size: 'md', loading: false });
 </script>
 
 <template>
@@ -30,6 +32,7 @@ withDefaults(defineProps<{
     :label="label"
     :tone="tone"
     :size="size"
+    :loading="loading"
     test-id="disk-usage-chart"
   />
 </template>

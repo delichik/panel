@@ -20,7 +20,6 @@ import Select from '@/components/ui/Select.vue';
 import Table from '@/components/ui/Table.vue';
 import { useErrorDialog } from '@/components/ui/errorDialog';
 import { useSuccessToast } from '@/components/ui/toast';
-import Skeleton from '@/components/ui/Skeleton.vue';
 import DetailSection from '@/components/patterns/DetailSection.vue';
 import FormField from '@/components/patterns/FormField.vue';
 import InfoBar from '@/components/patterns/InfoBar.vue';
@@ -123,11 +122,10 @@ const recordColumns = computed(() => [
 /** 详情摘要：provider / 记录数 / 更新时间（短属性 ≥wide 两列并排）。 */
 const domainSummaryItems = computed(() => {
   const domain = selectedDomain.value;
-  if (!domain) return [];
   return [
-    { key: 'provider', label: t('dnsPage.provider'), value: domain.provider },
-    { key: 'records', label: t('dnsPage.records'), value: records.value.length },
-    { key: 'updatedAt', label: t('dnsPage.updatedAt'), value: formatDateTime(domain.updatedAt, t('common.never')) },
+    { key: 'provider', label: t('dnsPage.provider'), value: domain?.provider ?? '', skeletonWidth: 'w-24' },
+    { key: 'records', label: t('dnsPage.records'), value: domain ? records.value.length : '', skeletonWidth: 'w-12' },
+    { key: 'updatedAt', label: t('dnsPage.updatedAt'), value: domain ? formatDateTime(domain.updatedAt, t('common.never')) : '', skeletonWidth: 'w-36' },
   ];
 });
 /** ListPage 页级状态槽：首屏 loading / 页级 error / 真·空态走槽；筛选无结果仍由 Table #empty（inset）承担。 */
@@ -388,9 +386,13 @@ watch(page, (value) => {
           </template>
 
           <template #loading>
-            <div class="grid gap-2" aria-busy="true">
-              <Skeleton v-for="row in 6" :key="row" class="h-10 w-full" />
-            </div>
+            <Table
+              class="h-full max-lg:max-h-list"
+              :columns="domainColumns"
+              :rows="[]"
+              :loading="true"
+              :loading-label="t('common.loading')"
+            />
           </template>
 
           <template #error>
@@ -458,7 +460,7 @@ watch(page, (value) => {
         </template>
         <div class="grid h-full min-h-0 content-start gap-4 overflow-y-auto pr-1">
           <DetailSection :title="t('common.details')">
-            <PropertyList :items="domainSummaryItems" :columns="2" />
+            <PropertyList :items="domainSummaryItems" :columns="2" :loading="!selectedDomain && loadingDomains" />
           </DetailSection>
 
           <div class="grid gap-3">

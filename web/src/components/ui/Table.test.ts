@@ -179,6 +179,7 @@ describe('Table', () => {
     expect(skeletonCells[0]!.classes()).toContain('max-sm:hidden');
     expect(skeletonCells[1]!.classes()).toContain('max-wide:hidden');
     expect(skeletonCells[0]!.find('.motion-skeleton').exists()).toBe(true);
+    expect(skeletonCells[0]!.find('.motion-skeleton').classes()).toContain('max-w-full');
   });
 
   it('keeps every hideBelow class as a static literal so Tailwind can generate it', () => {

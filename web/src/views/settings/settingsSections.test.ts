@@ -789,6 +789,9 @@ describe('settings page section navigation', () => {
     const view = await render('/settings/general');
     expect(view.find('[role="tablist"]').exists()).toBe(true);
     expect(view.find('[data-settings-scroll] [aria-busy="true"]').exists()).toBe(true);
+    expect(view.text()).toContain(useI18n().t('settingsPage.containerInterval'));
+    expect(view.text()).toContain(useI18n().t('settingsPage.language'));
+    expect(view.text()).toContain(useI18n().t('settingsPage.logLevel'));
 
     resolveRuntime?.(runtimeSettings());
     await flushPromises();

@@ -5,8 +5,8 @@ import { serversApi, type ServerMetricsRange, type ServerMetricsSeries } from '@
 import { metricsFacilityApi } from '@/api/metricsFacility';
 import Button from '@/components/ui/Button.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
-import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import Select from '@/components/ui/Select.vue';
+import Skeleton from '@/components/ui/Skeleton.vue';
 import DataRefreshControl from '@/components/patterns/DataRefreshControl.vue';
 import ChartCard from '@/components/patterns/ChartCard.vue';
 import { useAutoRefresh } from '@/composables/useAutoRefresh';
@@ -33,7 +33,10 @@ import {
 } from './metricsModel';
 
 const props = defineProps<{ server: ServerDto; active?: boolean }>();
-const emit = defineEmits<{ 'metrics-loaded': [series: ServerMetricsSeries] }>();
+const emit = defineEmits<{
+  'metrics-loaded': [series: ServerMetricsSeries];
+  'loading-change': [loading: boolean];
+}>();
 const { t } = useI18n();
 const autoRefresh = useAutoRefresh();
 const MetricChart = defineAsyncComponent(() => import('@/components/patterns/MetricChart.vue'));
@@ -44,6 +47,14 @@ const loading = ref(false);
 const error = ref('');
 const range = ref<ServerMetricsRange>('1h');
 const rangeOptions = metricsRangeOptions;
+const skeletonCards = computed(() => [
+  { key: 'cpu', title: t('serversPage.metrics.cpuUsage') },
+  { key: 'memory', title: t('serversPage.metrics.memoryUsage') },
+  { key: 'disk-read', title: t('serversPage.diskIoRead') },
+  { key: 'disk-write', title: t('serversPage.diskIoWrite') },
+  { key: 'network-rx', title: t('serversPage.networkRx') },
+  { key: 'network-tx', title: t('serversPage.networkTx') },
+]);
 
 const metricsGuard = createLatestRequestGuard();
 let metricsController: AbortController | null = null;
@@ -266,6 +277,7 @@ async function loadWarningThresholds() {
   }
 }
 
+watch(loading, (value) => { emit('loading-change', value); });
 watch(range, () => { void load(true); });
 
 onMounted(() => {
@@ -286,7 +298,11 @@ onBeforeUnmount(() => {
 <template>
   <div class="grid gap-3">
     <div class="flex flex-wrap items-center justify-between gap-2">
-      <span class="text-caption text-muted-foreground">{{ t('serversPage.metricsSampledAt') }}: {{ formatDateTime(sampledAt, t('common.never')) }}</span>
+      <span class="text-caption text-muted-foreground">
+        {{ t('serversPage.metricsSampledAt') }}:
+        <Skeleton v-if="loading && !metrics" class="inline-block h-3.5 w-28 align-middle" />
+        <template v-else>{{ formatDateTime(sampledAt, t('common.never')) }}</template>
+      </span>
       <div class="flex flex-wrap items-center gap-2">
         <Select v-model="range" :options="rangeOptions" class="w-24" />
         <DataRefreshControl />
@@ -295,7 +311,14 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="relative grid min-h-60 gap-3">
-      <LoadingOverlay v-if="loading && !metrics" :label="t('common.loading')" />
+      <div v-if="loading && !metrics" class="grid gap-3 wide:grid-cols-2" aria-busy="true">
+        <ChartCard v-for="card in skeletonCards" :key="card.key" :title="card.title" loading>
+          <Skeleton class="h-48 w-full sm:h-55" />
+          <template #footer>
+            <Skeleton class="h-4 w-48 max-w-full" />
+          </template>
+        </ChartCard>
+      </div>
       <EmptyState v-else-if="error && !metrics" variant="inset" :title="t('common.loadFailed')" :description="error">
         <template #actions>
           <Button size="sm" :loading="loading" @click="load(true)"><RefreshCcw />{{ t('common.retry') }}</Button>

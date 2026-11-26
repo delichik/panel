@@ -28,7 +28,6 @@ import Tabs from '@/components/ui/Tabs.vue';
 import StatusBadge from '@/components/ui/StatusBadge.vue';
 import DownloadButton from '@/components/ui/DownloadButton.vue';
 import NumberBox from '@/components/ui/NumberBox.vue';
-import Skeleton from '@/components/ui/Skeleton.vue';
 import { useErrorDialog } from '@/components/ui/errorDialog';
 import { useSuccessToast } from '@/components/ui/toast';
 import DetailSection from '@/components/patterns/DetailSection.vue';
@@ -264,6 +263,29 @@ const assetColumns = computed(() => [
   { key: 'type', label: t('common.type'), nowrap: true, hideBelow: 'sm' as const },
   { key: 'expiresAt', label: t('certificatesPage.expiresAt'), nowrap: true, width: 'w-36', hideBelow: 'wide' as const },
   { key: 'actions', label: t('common.actions'), align: 'right' as const, nowrap: true },
+]);
+const activeColumns = computed(() => (mode.value === 'self' ? selfColumns.value : mode.value === 'keys' ? assetColumns.value : domainColumns.value));
+const domainSkeletonItems = computed(() => [
+  { key: 'status', label: t('common.status'), skeletonWidth: 'w-20' },
+  { key: 'expiresAt', label: t('certificatesPage.expiresAt'), skeletonWidth: 'w-36' },
+  { key: 'issuer', label: t('certificatesPage.issuer'), skeletonWidth: 'w-32' },
+]);
+const selfIdentitySkeletonItems = computed(() => [
+  { key: 'type', label: t('common.type'), skeletonWidth: 'w-24' },
+  { key: 'fingerprint', label: t('certificatesPage.fingerprint'), skeletonWidth: 'w-52' },
+  { key: 'expiresAt', label: t('certificatesPage.expiresAt'), skeletonWidth: 'w-36' },
+]);
+const selfNameSkeletonItems = computed(() => [
+  { key: 'dnsNames', label: t('certificatesPage.dnsNames'), skeletonWidth: 'w-40' },
+  { key: 'ipAddresses', label: t('certificatesPage.ipAddresses'), skeletonWidth: 'w-32' },
+]);
+const assetSkeletonItems = computed(() => [
+  { key: 'type', label: t('common.type'), skeletonWidth: 'w-24' },
+  { key: 'algorithm', label: t('certificatesPage.algorithm'), skeletonWidth: 'w-24' },
+  { key: 'fingerprint', label: t('certificatesPage.fingerprint'), skeletonWidth: 'w-52' },
+  { key: 'references', label: t('certificatesPage.references'), skeletonWidth: 'w-12' },
+  { key: 'children', label: t('certificatesPage.children'), skeletonWidth: 'w-12' },
+  { key: 'expiresAt', label: t('certificatesPage.expiresAt'), skeletonWidth: 'w-36' },
 ]);
 
 onMounted(() => { void ensureModeLoaded(); });
@@ -832,9 +854,13 @@ function onFileChange(value: File | File[]) {
             </template>
 
             <template #loading>
-              <div class="grid gap-2" aria-busy="true">
-                <Skeleton v-for="row in 6" :key="row" class="h-10 w-full" />
-              </div>
+              <Table
+                class="h-full max-lg:max-h-list"
+                :columns="activeColumns"
+                :rows="[]"
+                :loading="true"
+                :loading-label="t('common.loading')"
+              />
             </template>
 
             <template #error>
@@ -994,7 +1020,15 @@ function onFileChange(value: File | File[]) {
     <template #detail>
       <ConsolePage width="content" :title="detailTitle" :description="detailDescription" :breadcrumbs="breadcrumbs" :back-label="t('common.backToList')" :body-scroll="false" @back="closeDetail">
         <div class="grid h-full min-h-0 content-start gap-4 overflow-y-auto pr-1">
-          <div v-if="mode === 'domains' && selectedCert" class="grid content-start gap-4 lg:grid-cols-2">
+          <div v-if="mode === 'domains' && !selectedCert && loading" class="grid content-start gap-4 lg:grid-cols-2">
+            <DetailSection :title="t('certificatesPage.coverage')">
+              <PropertyList :items="[{ key: 'coverage', label: t('certificatesPage.coverage'), skeletonWidth: 'w-48' }]" :columns="1" loading />
+            </DetailSection>
+            <DetailSection :title="t('common.details')">
+              <PropertyList :items="domainSkeletonItems" :columns="1" loading />
+            </DetailSection>
+          </div>
+          <div v-else-if="mode === 'domains' && selectedCert" class="grid content-start gap-4 lg:grid-cols-2">
             <DetailSection :title="t('certificatesPage.coverage')">
               <template #actions>
                 <ActivityLink resource-type="certificate" :resource-id="selectedCert.id" />
@@ -1019,6 +1053,14 @@ function onFileChange(value: File | File[]) {
             </DetailSection>
           </div>
 
+          <div v-else-if="mode === 'self' && !selectedSelf && loading" class="grid content-start gap-4 lg:grid-cols-2">
+            <DetailSection :title="t('common.details')">
+              <PropertyList :items="selfIdentitySkeletonItems" :columns="1" loading />
+            </DetailSection>
+            <DetailSection :title="t('certificatesPage.dnsNames')">
+              <PropertyList :items="selfNameSkeletonItems" :columns="1" loading />
+            </DetailSection>
+          </div>
           <div v-else-if="mode === 'self' && selectedSelf" class="grid content-start gap-4 lg:grid-cols-2">
             <DetailSection :title="t('common.details')">
               <template #actions>
@@ -1031,6 +1073,14 @@ function onFileChange(value: File | File[]) {
             </DetailSection>
           </div>
 
+          <div v-else-if="mode === 'keys' && !selectedAsset && loading" class="grid content-start gap-4 lg:grid-cols-2">
+            <DetailSection :title="t('common.details')">
+              <PropertyList :items="assetSkeletonItems" :columns="1" loading />
+            </DetailSection>
+            <DetailSection :title="t('certificatesPage.downloads')">
+              <div class="px-4 py-3 text-caption text-muted-foreground">{{ t('common.loading') }}</div>
+            </DetailSection>
+          </div>
           <div v-else-if="mode === 'keys' && selectedAsset" class="grid content-start gap-4 lg:grid-cols-2">
             <DetailSection :title="t('common.details')">
               <template #actions>

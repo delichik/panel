@@ -414,6 +414,47 @@ describe('settings appearance section', () => {
     expect(view.find('img[src="blob:preview"]').exists()).toBe(true);
   });
 
+  it('renders the four fixed appearance card labels while appearance is loading', async () => {
+    storeMock.current = buildStore();
+    storeMock.current.appearance.value = null;
+    storeMock.current.ready.value = false;
+    let resolveLoad: (() => void) | undefined;
+    storeMock.current.load.mockImplementation(() => new Promise<void>((resolve) => {
+      resolveLoad = () => {
+        storeMock.current.appearance.value = fakeAppearance();
+        storeMock.current.ready.value = true;
+        resolve();
+      };
+    }));
+
+    router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/settings/:section', component: SettingsView }] });
+    await router.push('/settings/appearance');
+    await router.isReady();
+    wrapper = mount(SettingsView, {
+      global: {
+        plugins: [createPinia(), router],
+        provide: {
+          [toastKey as symbol]: { push: toastPush, remove: vi.fn() },
+          [errorDialogKey as symbol]: { push: errorDialogPush, dismiss: vi.fn() },
+        },
+      },
+    });
+    await flushPromises();
+    await nextTick();
+
+    const section = wrapper.get('[data-settings-section]');
+    expect(section.attributes('aria-busy')).toBe('true');
+    expect(section.find('h2').exists()).toBe(false);
+    expect(section.findAll('[data-settings-card]')).toHaveLength(4);
+    expect(section.text()).toContain(useI18n().t('appearance.theme.label'));
+    expect(section.text()).toContain(useI18n().t('appearance.mica.label'));
+    expect(section.text()).toContain(useI18n().t('appearance.accent.label'));
+    expect(section.text()).toContain(useI18n().t('appearance.background.label'));
+
+    resolveLoad?.();
+    await flushPromises();
+  });
+
   it('loads appearance when the shared store is not ready yet', async () => {
     storeMock.current = buildStore();
     storeMock.current.appearance.value = null;

@@ -9,8 +9,8 @@ import SettingsCard from '@/components/patterns/SettingsCard.vue';
 import SettingsSection from '@/components/patterns/SettingsSection.vue';
 import Button from '@/components/ui/Button.vue';
 import Select from '@/components/ui/Select.vue';
-import Skeleton from '@/components/ui/Skeleton.vue';
 import Switch from '@/components/ui/Switch.vue';
+import AppearanceSectionSkeleton from '@/views/settings/AppearanceSectionSkeleton.vue';
 import { useErrorDialog } from '@/components/ui/errorDialog';
 import { useSuccessToast } from '@/components/ui/toast';
 import { useAppearance } from '@/design/appearance';
@@ -183,7 +183,9 @@ defineExpose({ reload });
 </script>
 
 <template>
-  <SettingsSection :description="t('appearance.description')">
+  <AppearanceSectionSkeleton v-if="!loadFailed && !appearance" />
+
+  <SettingsSection v-else :description="t('appearance.description')">
     <template #description>
       <span v-if="busy" class="inline-flex items-center gap-1.5 text-xs text-muted-foreground" aria-live="polite">
         <ProgressRing :size="14" aria-hidden="true" />
@@ -202,13 +204,7 @@ defineExpose({ reload });
       </InfoBar>
     </SettingsCard>
 
-    <template v-else-if="!appearance">
-      <SettingsCard><Skeleton class="h-6 w-full" /></SettingsCard>
-      <SettingsCard><Skeleton class="h-6 w-full" /></SettingsCard>
-      <SettingsCard><Skeleton class="h-32 w-full" /></SettingsCard>
-    </template>
-
-    <template v-else>
+    <template v-else-if="appearance">
       <!-- 主题：自动 / 浅色 / 深色 -->
       <SettingsCard :title="t('appearance.theme.label')">
         <template #control>

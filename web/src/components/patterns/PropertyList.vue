@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue';
 import { Check } from '@/icons';
 import Button from '@/components/ui/Button.vue';
+import Skeleton from '@/components/ui/Skeleton.vue';
 
 /**
  * WinUI 3 只读属性列表：Caption label（12，muted）+ Body value（14，foreground）。
@@ -27,6 +28,8 @@ export type PropertyListItem = {
   title?: string;
   /** 渲染复制按钮（需同时提供 copyLabel）。 */
   copyable?: boolean;
+  /** 加载骨架宽度类名（缺省 w-36）。 */
+  skeletonWidth?: string;
 }
 
 const props = withDefaults(defineProps<{
@@ -39,11 +42,14 @@ const props = withDefaults(defineProps<{
   copyLabel?: string;
   /** 复制成功后的按钮文案。 */
   copiedLabel?: string;
+  /** 仅对动态值位置渲染骨架，保留固定 label。 */
+  loading?: boolean;
 }>(), {
   columns: 2,
   emptyText: '—',
   copyLabel: '',
   copiedLabel: '',
+  loading: false,
 });
 
 const emit = defineEmits<{ copy: [value: string] }>();
@@ -78,7 +84,7 @@ async function copyValue(item: PropertyListItem, index: number) {
 </script>
 
 <template>
-  <dl v-if="items.length" data-property-list :data-columns="columns" class="m-0 grid min-w-0" :class="columnsClass">
+  <dl v-if="items.length" data-property-list :data-columns="columns" :aria-busy="loading ? 'true' : undefined" class="m-0 grid min-w-0" :class="columnsClass">
     <div
       v-for="(item, index) in items"
       :key="rowKey(item, index)"
@@ -87,33 +93,36 @@ async function copyValue(item: PropertyListItem, index: number) {
     >
       <dt class="m-0 min-w-0 break-words text-caption text-muted-foreground">{{ item.label }}</dt>
       <dd class="m-0 flex min-w-0 flex-wrap items-center gap-2 break-words text-body text-foreground">
-        <slot name="value" :item="item" :index="index" :text="displayValue(item)">
-          <a
-            v-if="item.href"
-            :href="item.href"
-            :target="item.external ? '_blank' : undefined"
-            :rel="item.external ? 'noreferrer' : undefined"
-            class="min-w-0 break-all text-accent-text hover:underline"
-            :title="item.title"
-          >{{ displayValue(item) }}</a>
-          <span
-            v-else
-            class="min-w-0 break-all"
-            :class="item.mono ? 'panel-mono' : undefined"
-            :title="item.title ?? (typeof item.value === 'string' ? item.value : undefined)"
-          >{{ displayValue(item) }}</span>
-        </slot>
-        <Button
-          v-if="item.copyable && copyLabel"
-          size="sm"
-          variant="ghost"
-          class="shrink-0"
-          :title="copyLabel"
-          @click="copyValue(item, index)"
-        >
-          <Check v-if="copiedKey === rowKey(item, index)" />
-          {{ copiedKey === rowKey(item, index) && copiedLabel ? copiedLabel : copyLabel }}
-        </Button>
+        <Skeleton v-if="loading" :class="['h-5 max-w-full', item.skeletonWidth || 'w-36']" />
+        <template v-else>
+          <slot name="value" :item="item" :index="index" :text="displayValue(item)">
+            <a
+              v-if="item.href"
+              :href="item.href"
+              :target="item.external ? '_blank' : undefined"
+              :rel="item.external ? 'noreferrer' : undefined"
+              class="min-w-0 break-all text-accent-text hover:underline"
+              :title="item.title"
+            >{{ displayValue(item) }}</a>
+            <span
+              v-else
+              class="min-w-0 break-all"
+              :class="item.mono ? 'panel-mono' : undefined"
+              :title="item.title ?? (typeof item.value === 'string' ? item.value : undefined)"
+            >{{ displayValue(item) }}</span>
+          </slot>
+          <Button
+            v-if="item.copyable && copyLabel"
+            size="sm"
+            variant="ghost"
+            class="shrink-0"
+            :title="copyLabel"
+            @click="copyValue(item, index)"
+          >
+            <Check v-if="copiedKey === rowKey(item, index)" />
+            {{ copiedKey === rowKey(item, index) && copiedLabel ? copiedLabel : copyLabel }}
+          </Button>
+        </template>
       </dd>
     </div>
   </dl>

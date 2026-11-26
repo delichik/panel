@@ -5,7 +5,8 @@ import { networkProbeFacilityApi } from '@/api/networkProbe';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
-import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
+import Skeleton from '@/components/ui/Skeleton.vue';
+import ChartCard from '@/components/patterns/ChartCard.vue';
 import DataRefreshControl from '@/components/patterns/DataRefreshControl.vue';
 import ProbeHistoryCharts from '@/components/patterns/ProbeHistoryCharts.vue';
 import { useAutoRefresh } from '@/composables/useAutoRefresh';
@@ -106,7 +107,31 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <LoadingOverlay v-if="loading && !matrix" :label="t('common.loading')" />
+    <template v-if="loading && !matrix">
+      <div class="flex flex-wrap items-center justify-between gap-2 text-caption text-muted-foreground" aria-busy="true">
+        <span class="inline-flex flex-wrap items-center gap-2">
+          <Skeleton class="h-5 w-16 rounded-pill" />
+          <span>
+            {{ t('serversPage.probe.lastSample') }}:
+            <Skeleton class="inline-block h-3.5 w-28 align-middle" />
+          </span>
+        </span>
+      </div>
+      <div class="grid min-w-0 gap-3 xl:grid-cols-2" aria-busy="true">
+        <ChartCard :title="t('serversPage.probe.latencyHistory')" loading>
+          <Skeleton class="h-44 w-full sm:h-48" />
+          <template #footer>
+            <Skeleton class="h-4 w-48 max-w-full" />
+          </template>
+        </ChartCard>
+        <ChartCard :title="t('serversPage.probe.packetLossHistory')" loading>
+          <Skeleton class="h-44 w-full sm:h-48" />
+          <template #footer>
+            <Skeleton class="h-4 w-48 max-w-full" />
+          </template>
+        </ChartCard>
+      </div>
+    </template>
     <EmptyState v-else-if="error && !matrix" variant="page" :title="t('common.loadFailed')" :description="error">
       <template #actions>
         <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>

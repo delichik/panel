@@ -61,6 +61,8 @@
 
 ## 5. 变更影响矩阵
 
+页面加载占位一致性与数据级粒度重构（2026-11-26，纯前端 + 文档）：统一所有页面/区块的首次加载占位为「固定框架、标题、页签、表头与字段 label 先行渲染，仅对动态数据占位，且骨架结构与当前真实 UI 严格对齐」。扩展 `PropertyList`/`RatioRing`/`DiskUsageChart`/`ChartCard`/`StatChip` 的 `loading` props 与 `Table` 骨架 `max-w-full`；重构概览、服务器/凭据/DNS/证书/应用列表与详情、权限与账号表格、应用实例卡、存储共享/指标/网络探测设施、设置页（新增 `RuntimeSectionSkeleton.vue` 并对齐 `AppearanceSectionSkeleton.vue`）、调试页及 `RoutePageFallback.vue`，消除过时大块骨架与遮盖固定结构的 `LoadingOverlay`；无后端 API、数据库表、路由、后台任务或 i18n 文案变化（218/52/36 不变）。见 [界面外壳与交互约定](ui-shell-and-conventions.md) `UI-SHELL-027`、[交互模型](../specifications/frontend/interaction-model.md) §6 与 [交互模式规范](../specifications/frontend/interaction-patterns.md)。
+
 设施目录页卡片视觉重构与去冗余徽标/操作（2026-11-26，纯前端 + 文档）：重构 `FacilityCatalog.vue` 与 `FacilityStat.vue` 为更简洁的 WinUI 3 卡片布局（强调色图标块、标题与说明、内嵌 `bg-muted` 三列统计井道与底栏「管理设施」右对齐入口），移除每张卡片标题旁不再需要的类别（`xx设施`）、静态可用状态（`可用`）徽标以及目录级「同步网关 / 同步导出」按钮（`UI-FAC-002` 已废弃），并将入口代理卡片标题由「入口代理设施 / Entrance proxy facility」精简为「入口代理 / Entrance proxy」；无后端 API、数据库表、路由或后台任务变化（218/52/36 不变）。见 [逐页面验收](ui-pages.md) `UI-FAC-001`、`UI-FAC-002`、`UI-FAC-014` 与 [多语言翻译状态](../i18n-translation-status.md)。
 
 右上角任务/事件通知气泡紧凑化（2026-11-26，纯前端，无 API/表/路由/后台任务/i18n 变化）：缩小 `ToastProvider` 宽度（360px → 280px）、内边距与字号（`text-caption`）、改为单行截断标题 + 内联状态/「查看日志」动作、容器间隙 `pointer-events-none` 减少遮挡、可见堆叠上限 4 → 3、停留时长收紧（4.2s/15s → 3.5s/6s）；`EventNotificationBridge` 仅展示标题与本地化状态（不再拼接冗长 `summary`），并按 `eventId` 原地更新同事件生命周期通知。见 [界面外壳与交互约定](ui-shell-and-conventions.md) `UI-SHELL-056`/`UI-SHELL-065`、[交互模式规范](../specifications/frontend/interaction-patterns.md)、[覆盖基线](coverage-matrix.md)。

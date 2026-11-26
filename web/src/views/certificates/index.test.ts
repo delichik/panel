@@ -165,8 +165,14 @@ describe('certificates detail migration', () => {
     expect(commandBar.exists()).toBe(true);
     expect(commandBar.text()).toContain(useI18n().t('common.refresh'));
     expect(commandBar.text()).toContain(useI18n().t('certificatesPage.issue'));
-    // 首屏 loading 走 ListPage #loading 槽（共享 Skeleton），不是 Table 自带 loading 分支。
+    // 首屏 loading 走 ListPage #loading 槽内的真实 Table 骨架（保留固定表头，仅行数据占位）。
     expect(view.find('[aria-busy="true"]').exists()).toBe(true);
+    expect(view.findAll('table thead th').map((cell) => cell.text())).toEqual([
+      useI18n().t('common.name'),
+      useI18n().t('common.status'),
+      useI18n().t('certificatesPage.expiresAt'),
+      useI18n().t('common.actions'),
+    ]);
 
     resolveList?.({ items: [certificate], total: 1, page: 1, pageSize: 50 });
     await flushPromises();

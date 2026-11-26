@@ -148,4 +148,25 @@ describe('server overview probe panel', () => {
 
     expect(wrapper.find('[data-testid="probe-history-charts"]').exists()).toBe(true);
   });
+
+  it('renders the two fixed probe chart card titles while initial results load', async () => {
+    let resolveTargets: ((value: NetworkProbeTargetMatrix) => void) | undefined;
+    targets.mockReturnValueOnce(new Promise((resolve) => { resolveTargets = resolve; }));
+
+    const wrapper = mount(ProbeOverviewPanel, {
+      props: { server: servers[1]!, active: true },
+      attachTo: document.body,
+    });
+    await flushPromises();
+
+    const cards = wrapper.findAll('[data-chart-card]');
+    expect(cards).toHaveLength(2);
+    expect(cards.every((card) => card.attributes('aria-busy') === 'true')).toBe(true);
+    expect(wrapper.text()).toContain(useI18n().t('serversPage.probe.latencyHistory'));
+    expect(wrapper.text()).toContain(useI18n().t('serversPage.probe.packetLossHistory'));
+
+    resolveTargets?.(targetMatrix([targetNode()]));
+    await flushPromises();
+    expect(wrapper.find('[data-testid="probe-history-charts"]').exists()).toBe(true);
+  });
 });

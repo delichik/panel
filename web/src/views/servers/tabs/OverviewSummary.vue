@@ -5,6 +5,7 @@ import type { ServerMetricsSeries } from '@/api/servers';
 import ArchitectureMark from '@/components/patterns/ArchitectureMark.vue';
 import DiskUsageChart from '@/components/patterns/DiskUsageChart.vue';
 import OsMark from '@/components/patterns/OsMark.vue';
+import Skeleton from '@/components/ui/Skeleton.vue';
 import { useI18n } from '@/i18n';
 import type { ServerDto } from '@/types/servers';
 import { formatDateTime } from '@/utils/datetime';
@@ -26,8 +27,17 @@ import {
   serverSummaryTone,
 } from '../model';
 
-const props = defineProps<{ server: ServerDto; metrics: ServerMetricsSeries | null }>();
+const props = withDefaults(defineProps<{
+  server: ServerDto;
+  metrics: ServerMetricsSeries | null;
+  metricsLoading?: boolean;
+}>(), { metricsLoading: false });
 const { t } = useI18n();
+const diskStatSkeletonItems = computed(() => [
+  { key: 'used', label: t('serversPage.diskUsed') },
+  { key: 'free', label: t('serversPage.diskFree') },
+  { key: 'total', label: t('serversPage.diskTotal') },
+]);
 
 type StatusTone = 'neutral' | 'success' | 'info' | 'warning' | 'danger';
 
@@ -217,20 +227,29 @@ function toneClass(item: StatusItem) {
           :value-text="diskChartValueText"
           :label="diskChartLabel"
           :tone="diskChartTone"
+          :loading="metricsLoading && !metrics"
           size="lg"
         />
         <div class="grid min-w-0 flex-1 content-start gap-2">
           <div class="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
             <span class="text-body-strong text-foreground">{{ t('serversPage.disk') }}</span>
-            <strong class="text-body font-semibold tabular-nums" :class="diskToneText">{{ diskPercentText }}</strong>
+            <Skeleton v-if="metricsLoading && !metrics" class="h-4 w-12" />
+            <strong v-else class="text-body font-semibold tabular-nums" :class="diskToneText">{{ diskPercentText }}</strong>
           </div>
-          <dl v-if="diskStats.length" class="grid min-w-0 grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3">
+          <dl v-if="metricsLoading && !metrics" class="grid min-w-0 grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3">
+            <div v-for="stat in diskStatSkeletonItems" :key="stat.key" class="grid min-w-0 gap-0.5">
+              <dt class="text-caption text-muted-foreground">{{ stat.label }}</dt>
+              <dd class="m-0"><Skeleton class="h-5 w-16" /></dd>
+            </div>
+          </dl>
+          <dl v-else-if="diskStats.length" class="grid min-w-0 grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3">
             <div v-for="stat in diskStats" :key="stat.key" class="grid min-w-0 gap-0.5">
               <dt class="text-caption text-muted-foreground">{{ stat.label }}</dt>
               <dd class="m-0 truncate text-body tabular-nums text-foreground" :title="stat.value">{{ stat.value }}</dd>
             </div>
           </dl>
-          <p class="m-0 text-caption text-muted-foreground">{{ diskSampledText }}</p>
+          <Skeleton v-if="metricsLoading && !metrics" class="h-3.5 w-36 max-w-full" />
+          <p v-else class="m-0 text-caption text-muted-foreground">{{ diskSampledText }}</p>
         </div>
       </div>
     </div>

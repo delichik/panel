@@ -5,9 +5,10 @@ import { networkProbeFacilityApi } from '@/api/networkProbe';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
-import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import NumberBox from '@/components/ui/NumberBox.vue';
 import Select from '@/components/ui/Select.vue';
+import Skeleton from '@/components/ui/Skeleton.vue';
+import ChartCard from '@/components/patterns/ChartCard.vue';
 import DataRefreshControl from '@/components/patterns/DataRefreshControl.vue';
 import FacilityField from '@/components/patterns/FacilityField.vue';
 import FacilitySection from '@/components/patterns/FacilitySection.vue';
@@ -83,6 +84,8 @@ let controller: AbortController | null = null;
 const targetMatrix = ref<NetworkProbeTargetMatrix | null>(null);
 const resultsLoading = ref(false);
 const resultsError = ref('');
+const initialLoading = computed(() => loading.value && !config.value);
+const resultsInitialLoading = computed(() => (initialLoading.value || resultsLoading.value) && !targetMatrix.value);
 const resultsGuard = createLatestRequestGuard();
 let resultsController: AbortController | null = null;
 
@@ -282,9 +285,8 @@ onBeforeUnmount(() => {
   <div
     class="relative grid content-start gap-4"
     data-testid="network-probe-facility"
+    :aria-busy="initialLoading || undefined"
   >
-    <LoadingOverlay v-if="loading && !config" :label="t('applicationsPage.networkProbeLoading')" />
-
     <EmptyState v-if="error && !config" variant="page" :title="t('common.loadFailed')" :description="error">
       <template #actions>
         <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
@@ -301,10 +303,11 @@ onBeforeUnmount(() => {
         >
           <div class="grid content-start gap-3">
             <FacilityField class="sm:max-w-xs" :label="t('applicationsPage.networkProbeMode')">
-              <Select v-model="draft.mode" :options="modeOptions" :disabled="saving" />
+              <Skeleton v-if="initialLoading" class="h-8 w-full" />
+              <Select v-else v-model="draft.mode" :options="modeOptions" :disabled="saving" />
             </FacilityField>
 
-            <div v-if="draft.mode === 'selected'" class="grid gap-2">
+            <div v-if="!initialLoading && draft.mode === 'selected'" class="grid gap-2">
               <FacilityField :label="t('applicationsPage.networkProbeSelectServers')" :hint="t('applicationsPage.networkProbeSelectServersHint')">
                 <div class="max-h-64 overflow-y-auto pr-1">
                   <ServerMultiPicker v-model="draft.serverIds" variant="compact" :servers="serverOptions" :label="t('applicationsPage.networkProbeSelectServers')" />
@@ -324,9 +327,11 @@ onBeforeUnmount(() => {
             <FacilityField
               :label="t('applicationsPage.networkProbeInterval')"
               :hint="t('applicationsPage.networkProbeIntervalHint', { min: networkProbeIntervalMinutes.min, max: networkProbeIntervalMinutes.max, default: networkProbeIntervalMinutes.defaultValue })"
-              :error="intervalInvalid ? t('applicationsPage.networkProbeIntervalInvalid', { min: networkProbeIntervalMinutes.min, max: networkProbeIntervalMinutes.max }) : ''"
+              :error="!initialLoading && intervalInvalid ? t('applicationsPage.networkProbeIntervalInvalid', { min: networkProbeIntervalMinutes.min, max: networkProbeIntervalMinutes.max }) : ''"
             >
+              <Skeleton v-if="initialLoading" class="h-8 w-full" />
               <NumberBox
+                v-else
                 v-model="intervalNumber"
                 :min="networkProbeIntervalMinutes.min"
                 :max="networkProbeIntervalMinutes.max"
@@ -341,9 +346,11 @@ onBeforeUnmount(() => {
               :key="item.field"
               :label="t(item.labelKey)"
               :hint="t(item.hintKey, { min: item.rule.min, max: item.rule.max, default: item.rule.defaultValue })"
-              :error="parameterInvalid(item.field) ? t(item.invalidKey, { min: item.rule.min, max: item.rule.max }) : ''"
+              :error="!initialLoading && parameterInvalid(item.field) ? t(item.invalidKey, { min: item.rule.min, max: item.rule.max }) : ''"
             >
+              <Skeleton v-if="initialLoading" class="h-8 w-full" />
               <NumberBox
+                v-else
                 :model-value="parameterValues[item.field]"
                 :min="item.rule.min"
                 :max="item.rule.max"
@@ -360,18 +367,20 @@ onBeforeUnmount(() => {
               <p class="m-0 text-caption leading-5 text-muted-foreground">{{ t('applicationsPage.networkProbeThresholdsHint') }}</p>
             </div>
             <div class="grid gap-3 sm:grid-cols-2">
-              <FacilityField :label="t('applicationsPage.networkProbeThresholdLatency')" hint="ms" :error="latencyThresholdInvalid ? t('applicationsPage.networkProbeThresholdInvalid') : ''">
-                <NumberBox v-model="draft.latencyThreshold" :min="0" :step="1" :invalid="latencyThresholdInvalid" :disabled="saving" />
+              <FacilityField :label="t('applicationsPage.networkProbeThresholdLatency')" hint="ms" :error="!initialLoading && latencyThresholdInvalid ? t('applicationsPage.networkProbeThresholdInvalid') : ''">
+                <Skeleton v-if="initialLoading" class="h-8 w-full" />
+                <NumberBox v-else v-model="draft.latencyThreshold" :min="0" :step="1" :invalid="latencyThresholdInvalid" :disabled="saving" />
               </FacilityField>
-              <FacilityField :label="t('applicationsPage.networkProbeThresholdLoss')" hint="%" :error="lossThresholdInvalid ? t('applicationsPage.networkProbeThresholdInvalid') : ''">
-                <NumberBox v-model="draft.packetLossThreshold" :min="0" :max="100" :step="1" :invalid="lossThresholdInvalid" :disabled="saving" />
+              <FacilityField :label="t('applicationsPage.networkProbeThresholdLoss')" hint="%" :error="!initialLoading && lossThresholdInvalid ? t('applicationsPage.networkProbeThresholdInvalid') : ''">
+                <Skeleton v-if="initialLoading" class="h-8 w-full" />
+                <NumberBox v-else v-model="draft.packetLossThreshold" :min="0" :max="100" :step="1" :invalid="lossThresholdInvalid" :disabled="saving" />
               </FacilityField>
             </div>
           </div>
 
           <InfoBar v-if="formError" tone="danger">{{ formError }}</InfoBar>
           <div class="flex justify-end">
-            <Button size="sm" variant="primary" :loading="saving" :disabled="!dirty" @click="save"><Save />{{ t('applicationsPage.networkProbeSave') }}</Button>
+            <Button size="sm" variant="primary" :loading="saving" :disabled="initialLoading || !dirty" @click="save"><Save />{{ t('applicationsPage.networkProbeSave') }}</Button>
           </div>
         </FacilitySection>
       </div>
@@ -393,7 +402,56 @@ onBeforeUnmount(() => {
           </template>
         </FacilitySectionHeader>
 
-        <LoadingOverlay v-if="resultsLoading && !targetMatrix" :label="t('applicationsPage.networkProbeLoading')" />
+        <div v-if="resultsInitialLoading" class="grid gap-3" aria-busy="true">
+          <div class="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+            <Skeleton class="h-3.5 w-40" />
+            <span class="inline-flex items-center gap-1.5">
+              <span>{{ t('serversPage.probe.lastSample') }}:</span>
+              <Skeleton class="h-3.5 w-28" />
+            </span>
+          </div>
+          <div class="grid min-w-0 content-start gap-3">
+            <div class="flex min-w-0 flex-wrap items-start justify-between gap-2">
+              <div class="grid min-w-0 gap-1">
+                <Skeleton class="h-4 w-28" />
+                <Skeleton class="h-3.5 w-36" />
+              </div>
+              <Skeleton class="h-5 w-16 rounded-pill" />
+            </div>
+            <dl class="m-0 grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-4">
+              <div class="min-w-0">
+                <dt class="truncate text-xs text-muted-foreground">{{ t('applicationsPage.networkProbeSourceCountLabel') }}</dt>
+                <dd class="m-0 mt-1"><Skeleton class="h-5 w-10" /></dd>
+              </div>
+              <div class="min-w-0">
+                <dt class="truncate text-xs text-muted-foreground">{{ t('serversPage.probe.latency') }}</dt>
+                <dd class="m-0 mt-1"><Skeleton class="h-5 w-14" /></dd>
+              </div>
+              <div class="min-w-0">
+                <dt class="truncate text-xs text-muted-foreground">{{ t('serversPage.probe.packetLoss') }}</dt>
+                <dd class="m-0 mt-1"><Skeleton class="h-5 w-14" /></dd>
+              </div>
+              <div class="min-w-0">
+                <dt class="truncate text-xs text-muted-foreground">{{ t('serversPage.probe.sampledAt') }}</dt>
+                <dd class="m-0 mt-1"><Skeleton class="h-4 w-28" /></dd>
+              </div>
+            </dl>
+            <div class="grid min-w-0 gap-3 xl:grid-cols-2">
+              <ChartCard :title="t('serversPage.probe.latencyHistory')" loading>
+                <Skeleton class="h-44 w-full sm:h-48" />
+                <template #footer>
+                  <Skeleton class="h-4 w-48 max-w-full" />
+                </template>
+              </ChartCard>
+              <ChartCard :title="t('serversPage.probe.packetLossHistory')" loading>
+                <Skeleton class="h-44 w-full sm:h-48" />
+                <template #footer>
+                  <Skeleton class="h-4 w-48 max-w-full" />
+                </template>
+              </ChartCard>
+            </div>
+          </div>
+        </div>
         <EmptyState v-else-if="resultsError && !targetMatrix" variant="page" :title="t('common.loadFailed')" :description="resultsError">
           <template #actions>
             <Button size="sm" :loading="resultsLoading" @click="loadTargets"><RefreshCcw />{{ t('common.retry') }}</Button>

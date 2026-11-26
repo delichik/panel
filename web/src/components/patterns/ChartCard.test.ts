@@ -81,4 +81,16 @@ describe('ChartCard', () => {
     expect(wrapper.get('.custom-empty').text()).toBe('custom empty');
     expect(wrapper.get('.custom-footer').text()).toBe('footer');
   });
+
+  it('keeps the fixed title and skeletons the header value while loading', () => {
+    const wrapper = mount(ChartCard, {
+      props: { title: 'CPU usage', value: '12%', loading: true },
+    });
+
+    const card = wrapper.get('[data-chart-card]');
+    expect(card.attributes('aria-busy')).toBe('true');
+    expect(card.get('h3').text()).toBe('CPU usage');
+    expect(card.find('[data-chart-value]').exists()).toBe(false);
+    expect(card.find('.motion-skeleton').exists()).toBe(true);
+  });
 });

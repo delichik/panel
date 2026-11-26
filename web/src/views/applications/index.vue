@@ -22,6 +22,7 @@ import NumberBox from '@/components/ui/NumberBox.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
 import PaginationBar from '@/components/ui/PaginationBar.vue';
 import Select from '@/components/ui/Select.vue';
+import Skeleton from '@/components/ui/Skeleton.vue';
 import StatusBadge from '@/components/ui/StatusBadge.vue';
 import Switch from '@/components/ui/Switch.vue';
 import Table from '@/components/ui/Table.vue';
@@ -39,6 +40,7 @@ import FacilityCatalog from './FacilityCatalog.vue';
 import FacilityDiagnostics from './FacilityDiagnostics.vue';
 import ApplicationLogsDialog from './ApplicationLogsDialog.vue';
 import ApplicationDetailPane from './components/ApplicationDetailPane.vue';
+import ApplicationInstanceList from './components/ApplicationInstanceList.vue';
 import ApplicationDiagnosticsList from './components/ApplicationDiagnosticsList.vue';
 import CustomDirectiveEditor from './components/CustomDirectiveEditor.vue';
 import { applicationDetailTrail, applicationEditorTrail, facilityTrail } from './breadcrumbs';
@@ -269,6 +271,13 @@ const facilityDetailTabs = computed(() => [
   { label: t('applicationsPage.facilityTabConfigs'), value: 'configs' },
   { label: t('applicationsPage.facilityTabDns'), value: 'dns' },
   { label: t('applicationsPage.facilityTabSettings'), value: 'settings' },
+]);
+const runtimeSummarySkeletonItems = computed(() => [
+  { key: 'healthy', label: t('applicationsPage.nodeBucketHealthyLabel'), skeletonWidth: 'w-10' },
+  { key: 'abnormal', label: t('applicationsPage.nodeBucketAbnormalLabel'), skeletonWidth: 'w-10' },
+  { key: 'deploying', label: t('applicationsPage.nodeBucketDeployingLabel'), skeletonWidth: 'w-10' },
+  { key: 'imageUpdate', label: t('applicationsPage.imageUpdate'), skeletonWidth: 'w-20' },
+  { key: 'autoUpdate', label: t('applicationsPage.allowAutoUpdate'), skeletonWidth: 'w-20' },
 ]);
 const fileActionErrors = ref<Record<string, string>>({});
 const fileActionPending = ref('');
@@ -3110,7 +3119,7 @@ onBeforeUnmount(() => {
                   <span v-if="row.app.namespace" class="shrink-0">{{ row.app.namespace }}</span>
                   <span v-if="row.app.namespace" class="shrink-0" aria-hidden="true">·</span>
                   <span v-if="!loading && !(rowImageLoading[row.app.id] && !rowImageReference(row.app))" class="min-w-0 truncate">{{ rowImageReference(row.app) || t('common.notAvailable') }}</span>
-                  <span v-else class="motion-skeleton h-3 w-32 rounded bg-muted animate-pulse" aria-hidden="true" />
+                  <Skeleton v-else class="inline-block h-3 w-32" />
                 </span>
                 <!-- <sm：状态/实例列被隐藏，折入名称副行的紧凑摘要，避免移动端丢信息。 -->
                 <div class="flex flex-wrap items-center gap-1 sm:hidden">
@@ -3204,13 +3213,75 @@ onBeforeUnmount(() => {
             <Button size="sm" :loading="detailLoading" @click="retryApplicationDetail"><RefreshCcw />{{ t('common.retry') }}</Button>
           </template>
         </EmptyState>
-        <div v-else-if="!currentApplicationSummary && !currentApplication" class="grid content-start gap-4">
-          <div class="motion-skeleton h-7 w-48 rounded bg-muted animate-pulse" />
-          <div class="motion-skeleton h-4 w-80 max-w-full rounded bg-muted animate-pulse" />
-          <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <div v-for="item in 3" :key="item" class="motion-skeleton h-24 rounded-overlay bg-muted animate-pulse" />
+        <div v-else-if="!currentApplicationSummary && !currentApplication" class="grid h-full min-h-0 min-w-0 grid-rows-page gap-3" aria-busy="true">
+          <div class="flex flex-wrap items-center gap-2">
+            <Skeleton class="h-5 w-16 rounded-pill" />
           </div>
-          <div class="motion-skeleton h-72 rounded-overlay bg-muted animate-pulse" />
+          <Tabs
+            :model-value="appTab"
+            :tabs="appDetailTabs"
+            class="h-full min-h-0"
+            @update:model-value="selectAppTab($event as AppDetailTab)"
+          >
+            <section v-if="appTab === 'runtime'" class="grid h-full min-h-0 content-start gap-4 overflow-y-auto pr-1">
+              <div class="grid min-w-0 content-start gap-4 wide:grid-cols-[minmax(0,1fr)_320px] wide:items-start">
+                <DetailSection :title="t('applicationsPage.nodeInstances')" class="min-w-0" :surface="false">
+                  <ApplicationInstanceList :instances="[]" :loading="true" />
+                </DetailSection>
+                <DetailSection :title="t('applicationsPage.runtime')" class="min-w-0 wide:sticky wide:top-0">
+                  <dl data-property-list data-columns="2" aria-busy="true" class="m-0 grid min-w-0 grid-cols-1 gap-x-4 sm:grid-cols-2 max-sm:grid-cols-1">
+                    <div
+                      v-for="item in runtimeSummarySkeletonItems"
+                      :key="item.key"
+                      data-property-row
+                      class="grid min-w-0 gap-1 px-4 py-3"
+                    >
+                      <dt class="m-0 min-w-0 break-words text-caption text-muted-foreground">{{ item.label }}</dt>
+                      <dd class="m-0 flex min-w-0 items-center">
+                        <Skeleton :class="['h-5 max-w-full', item.skeletonWidth]" />
+                      </dd>
+                    </div>
+                  </dl>
+                </DetailSection>
+              </div>
+            </section>
+            <section v-else-if="appTab === 'routes'" class="grid h-full min-h-0 content-start gap-4 overflow-y-auto pr-1">
+              <DetailSection :title="t('applicationsPage.routes')">
+                <div v-for="item in 2" :key="item" class="grid gap-2 p-4">
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <Skeleton class="h-4 w-44" />
+                    <div class="flex gap-1">
+                      <Skeleton class="h-5 w-12 rounded-pill" />
+                      <Skeleton class="h-5 w-12 rounded-pill" />
+                    </div>
+                  </div>
+                  <Skeleton class="h-3.5 w-56 max-w-full" />
+                </div>
+              </DetailSection>
+            </section>
+            <section v-else-if="appTab === 'files'" class="grid h-full min-h-0 content-start gap-4 overflow-y-auto pr-1">
+              <DetailSection :title="t('applicationsPage.files')">
+                <div v-for="item in 3" :key="item" class="flex flex-wrap items-center justify-between gap-3 p-4">
+                  <div class="grid gap-1">
+                    <Skeleton class="h-4 w-40" />
+                    <Skeleton class="h-3 w-20" />
+                  </div>
+                  <Skeleton class="h-8 w-20" />
+                </div>
+              </DetailSection>
+            </section>
+            <section v-else class="grid h-full min-h-0 content-start gap-4 overflow-y-auto pr-1">
+              <DetailSection :title="t('applicationsPage.persistentData')">
+                <div class="grid gap-3 p-4">
+                  <Skeleton class="h-8 w-full sm:w-64" />
+                  <div class="flex flex-wrap gap-2">
+                    <Skeleton class="h-8 w-28" />
+                    <Skeleton class="h-8 w-28" />
+                  </div>
+                </div>
+              </DetailSection>
+            </section>
+          </Tabs>
         </div>
         <ApplicationDetailPane
           v-else
@@ -3476,15 +3547,12 @@ onBeforeUnmount(() => {
           <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
         </template>
       </EmptyState>
-      <div v-else-if="loading && !facility" class="relative grid h-full min-h-64 place-items-center">
-        <LoadingOverlay />
-      </div>
-      <Tabs v-else-if="facility" v-model="activeFacilityTab" :tabs="facilityDetailTabs" class="h-full min-h-0">
+      <Tabs v-else-if="facility || loading" v-model="activeFacilityTab" :tabs="facilityDetailTabs" class="h-full min-h-0">
         <section v-if="facilityTab === 'proxy'" class="grid h-full min-h-0 content-start gap-4 overflow-y-auto pr-1">
           <DetailSection :title="t('applicationsPage.proxyPlaneTitle')" :description="t('applicationsPage.proxyPlaneHint')">
             <template #actions>
-              <Button size="sm" variant="secondary" :loading="pending === 'facility-reconcile'" :disabled="Boolean(pending)" @click="ensureProxyRunning"><Rocket />{{ t('applicationsPage.ensureProxyRunning') }}</Button>
-              <Button size="sm" variant="primary" :loading="proxyPlaneSaving" :disabled="proxyPlaneSaving || !proxyPlaneDirty || Boolean(proxyPlaneBlockedReferences.length)" @click="saveProxyPlaneDraft"><Save />{{ t('applicationsPage.gatewaySave') }}</Button>
+              <Button size="sm" variant="secondary" :loading="pending === 'facility-reconcile'" :disabled="Boolean(pending) || !facility" @click="ensureProxyRunning"><Rocket />{{ t('applicationsPage.ensureProxyRunning') }}</Button>
+              <Button size="sm" variant="primary" :loading="proxyPlaneSaving" :disabled="proxyPlaneSaving || !proxyPlaneDirty || Boolean(proxyPlaneBlockedReferences.length) || !proxyPlane" @click="saveProxyPlaneDraft"><Save />{{ t('applicationsPage.gatewaySave') }}</Button>
             </template>
             <div class="grid gap-3 p-4">
               <p class="m-0 text-caption text-muted-foreground">{{ t('applicationsPage.gatewayEditorFlowHint') }}</p>
@@ -3493,7 +3561,13 @@ onBeforeUnmount(() => {
                   <Button size="sm" :loading="loading" @click="loadFacilityDetailData"><RefreshCcw />{{ t('common.retry') }}</Button>
                 </template>
               </EmptyState>
-              <div v-else-if="!proxyPlane" class="relative grid min-h-32 place-items-center"><LoadingOverlay /></div>
+              <div v-else-if="!proxyPlane" class="grid gap-2" aria-busy="true">
+                <span class="text-caption text-muted-foreground">{{ t('applicationsPage.gatewayNodes') }}</span>
+                <div class="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                  <Skeleton v-for="item in 3" :key="item" class="h-10 w-full" />
+                </div>
+                <p class="m-0 text-caption text-secondary-foreground">{{ t('applicationsPage.gatewayNodesHint') }}</p>
+              </div>
               <template v-else>
                 <div class="grid gap-1">
                   <span class="text-caption text-muted-foreground">{{ t('applicationsPage.gatewayNodes') }}</span>
@@ -3510,7 +3584,10 @@ onBeforeUnmount(() => {
 
           <div class="surface-card p-4">
             <FacilityDiagnostics v-if="proxyPlane" :state="proxyPlane" />
-            <div v-else class="relative grid min-h-32 place-items-center"><LoadingOverlay /></div>
+            <div v-else class="grid gap-2" aria-busy="true">
+              <Skeleton class="h-5 w-36" />
+              <Skeleton v-for="item in 2" :key="item" class="h-12 w-full" />
+            </div>
           </div>
         </section>
 
@@ -3576,6 +3653,45 @@ onBeforeUnmount(() => {
         </section>
 
         <section v-else-if="facilityTab === 'settings'" class="grid h-full min-h-0 content-start gap-4 overflow-y-auto pr-1">
+          <template v-if="loading && !facility">
+            <DetailSection :title="t('applicationsPage.facilityImage.title')" :description="t('applicationsPage.facilityImage.hint')">
+              <div class="grid gap-3 p-4 sm:grid-cols-2" aria-busy="true">
+                <div class="grid gap-1">
+                  <span class="text-caption text-muted-foreground">{{ t('applicationsPage.facilityImage.reference') }}</span>
+                  <Skeleton class="h-4 w-48 max-w-full" />
+                </div>
+                <div class="grid gap-1">
+                  <span class="text-caption text-muted-foreground">{{ t('applicationsPage.facilityImage.statusLabel') }}</span>
+                  <Skeleton class="h-5 w-20 rounded-pill" />
+                </div>
+                <div class="grid gap-1">
+                  <span class="text-caption text-muted-foreground">{{ t('applicationsPage.facilityImage.runningDigest') }}</span>
+                  <Skeleton class="h-4 w-36" />
+                </div>
+                <div class="grid gap-1">
+                  <span class="text-caption text-muted-foreground">{{ t('applicationsPage.facilityImage.nginxVersion') }}</span>
+                  <Skeleton class="h-4 w-24" />
+                </div>
+              </div>
+            </DetailSection>
+            <DetailSection :title="t('applicationsPage.facilitySettings.title')" :description="t('applicationsPage.facilitySettings.hint')">
+              <div class="grid gap-3 p-4" aria-busy="true">
+                <FormField :label="t('applicationsPage.facilitySettings.httpPortMode')" :hint="t('applicationsPage.facilitySettings.httpPortModeHint')">
+                  <Skeleton class="h-8 w-full sm:w-64" />
+                </FormField>
+                <FormField :label="t('applicationsPage.facilitySettings.imageUpdateIntervalSeconds')" :hint="t('applicationsPage.facilitySettings.imageUpdateIntervalSecondsHint')">
+                  <Skeleton class="h-8 w-full sm:w-44" />
+                </FormField>
+                <FormField :label="t('applicationsPage.facilitySettings.hsts')" :hint="t('applicationsPage.facilitySettings.hstsHint')">
+                  <Skeleton class="h-5 w-10 rounded-pill" />
+                </FormField>
+                <FormField :label="t('applicationsPage.facilitySettings.clientMaxBodySize')" :hint="t('applicationsPage.facilitySettings.clientMaxBodySizeHint')">
+                  <Skeleton class="h-8 w-full sm:w-56" />
+                </FormField>
+              </div>
+            </DetailSection>
+          </template>
+          <template v-else>
           <DetailSection :title="t('applicationsPage.facilityImage.title')" :description="t('applicationsPage.facilityImage.hint')">
             <template #actions>
               <Button size="sm" variant="secondary" :loading="facilityImageChecking" :disabled="facilityImageBusy" @click="checkFacilityImage"><RefreshCcw />{{ t('applicationsPage.facilityImage.check') }}</Button>
@@ -3789,10 +3905,21 @@ onBeforeUnmount(() => {
               />
             </div>
           </DetailSection>
+          </template>
         </section>
 
         <section v-else class="grid h-full min-h-0 content-start gap-4 overflow-y-auto pr-1">
           <DetailSection :title="t('applicationsPage.dnsSyncTitle')" :description="t('applicationsPage.dnsTabHint')">
+            <div v-if="loading && !facility" class="grid gap-2 p-4" aria-busy="true">
+              <div v-for="item in 3" :key="item" class="flex flex-wrap items-center justify-between gap-3 py-2">
+                <div class="grid gap-1">
+                  <Skeleton class="h-4 w-44" />
+                  <Skeleton class="h-3 w-24" />
+                </div>
+                <Skeleton class="h-5 w-16 rounded-pill" />
+              </div>
+            </div>
+            <template v-else>
             <div v-for="row in facilityDnsDomains" :key="`dns-${row.domain}`" class="grid gap-2 p-4">
               <div class="flex flex-wrap items-center justify-between gap-3">
                 <div class="grid gap-0.5">
@@ -3822,6 +3949,7 @@ onBeforeUnmount(() => {
               <p v-if="facilityDnsError(row.domain)" class="m-0 text-caption font-semibold text-danger">{{ facilityDnsError(row.domain) }}</p>
             </div>
             <EmptyState v-if="!facilityDnsDomains.length" variant="inset" :title="t('applicationsPage.configRecordEmpty')" :description="t('applicationsPage.configRecordEmptyHint')" />
+            </template>
           </DetailSection>
         </section>
       </Tabs>

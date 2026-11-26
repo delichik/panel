@@ -6,7 +6,7 @@ import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
-import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
+import Skeleton from '@/components/ui/Skeleton.vue';
 import Switch from '@/components/ui/Switch.vue';
 import Table from '@/components/ui/Table.vue';
 import Tabs from '@/components/ui/Tabs.vue';
@@ -374,7 +374,31 @@ onBeforeUnmount(() => window.clearInterval(timer));
 
       <Tabs v-model="activeTab" class="min-h-0" :tabs="tabs">
         <section v-if="activeTab === 'runtime'" class="grid gap-4 wide:grid-cols-2">
-          <div v-if="runtimeLoading && !runtimeSnapshot" class="relative grid min-h-96 place-items-center wide:col-span-2"><LoadingOverlay /></div>
+          <template v-if="runtimeLoading && !runtimeSnapshot">
+            <div class="grid grid-cols-1 gap-4 wide:grid-cols-3" aria-busy="true">
+              <div class="surface-card p-4">
+                <span class="block text-caption text-muted-foreground">{{ t('debugPage.uptime') }}</span>
+                <Skeleton class="mt-1 h-5 w-16" />
+              </div>
+              <div class="surface-card p-4">
+                <span class="block text-caption text-muted-foreground">{{ t('debugPage.goroutines') }}</span>
+                <Skeleton class="mt-1 h-5 w-12" />
+              </div>
+              <div class="surface-card p-4">
+                <span class="block text-caption text-muted-foreground">{{ t('debugPage.heap') }}</span>
+                <Skeleton class="mt-1 h-5 w-20" />
+              </div>
+            </div>
+            <section class="surface-card p-4" aria-busy="true">
+              <h3 class="m-0 flex items-center gap-2 text-body-strong font-semibold text-foreground"><Activity class="size-4" />{{ t('debugPage.process') }}</h3>
+              <dl class="mt-4 grid grid-cols-1 gap-3 wide:grid-cols-2">
+                <div><dt class="text-caption text-muted-foreground">PID</dt><dd class="m-0 mt-1"><Skeleton class="h-4 w-16" /></dd></div>
+                <div><dt class="text-caption text-muted-foreground">{{ t('debugPage.goVersion') }}</dt><dd class="m-0 mt-1"><Skeleton class="h-4 w-24" /></dd></div>
+                <div><dt class="text-caption text-muted-foreground">{{ t('debugPage.platform') }}</dt><dd class="m-0 mt-1"><Skeleton class="h-4 w-28" /></dd></div>
+                <div><dt class="text-caption text-muted-foreground">{{ t('debugPage.cpu') }}</dt><dd class="m-0 mt-1"><Skeleton class="h-4 w-10" /></dd></div>
+              </dl>
+            </section>
+          </template>
           <EmptyState v-else-if="runtimeError && !runtimeSnapshot" class="wide:col-span-2" :title="t('common.loadFailed')" :description="runtimeError">
             <template #actions><Button size="sm" :loading="runtimeLoading" @click="loadRuntime"><RefreshCcw />{{ t('common.retry') }}</Button></template>
           </EmptyState>
@@ -398,7 +422,27 @@ onBeforeUnmount(() => window.clearInterval(timer));
         </section>
 
         <section v-else-if="activeTab === 'tasks'" class="grid gap-4">
-          <div v-if="tasksLoading && !taskSnapshot" class="relative grid min-h-96 place-items-center"><LoadingOverlay /></div>
+          <template v-if="tasksLoading && !taskSnapshot">
+            <div class="grid gap-4 wide:grid-cols-2" aria-busy="true">
+              <div class="min-w-0 surface-card p-4">
+                <h3 class="m-0 flex items-center gap-2 text-body-strong font-semibold text-foreground">{{ t('debugPage.taskRuntime') }}</h3>
+                <div class="mt-4 grid grid-cols-1 gap-3 wide:grid-cols-2">
+                  <div v-for="item in 4" :key="item" class="rounded-control bg-muted p-3">
+                    <Skeleton class="h-3.5 w-24 bg-pressed" />
+                    <Skeleton class="mt-2 h-4 w-14 bg-pressed" />
+                  </div>
+                </div>
+              </div>
+              <aside class="surface-card p-4">
+                <h3 class="m-0 flex items-center gap-2 text-body-strong font-semibold text-foreground">{{ t('debugPage.polling') }}</h3>
+                <p class="text-sm text-muted-foreground">{{ paused ? t('debugPage.pausedHint') : t('debugPage.runningHint') }}</p>
+              </aside>
+            </div>
+            <section class="min-w-0 surface-card p-4" aria-busy="true">
+              <h3 class="m-0 flex items-center gap-2 text-body-strong font-semibold text-foreground">{{ t('debugPage.taskDefinitions') }}</h3>
+              <Table class="mt-4 max-h-96" row-height="auto" :framed="false" :columns="taskDefinitionColumns" :rows="[]" :loading="true" :loading-label="t('common.loading')" />
+            </section>
+          </template>
           <EmptyState v-else-if="tasksError && !taskSnapshot" :title="t('common.loadFailed')" :description="tasksError">
             <template #actions><Button size="sm" :loading="tasksLoading" @click="loadTasks"><RefreshCcw />{{ t('common.retry') }}</Button></template>
           </EmptyState>
@@ -427,7 +471,27 @@ onBeforeUnmount(() => window.clearInterval(timer));
         </section>
 
         <section v-else class="grid gap-4">
-          <div v-if="databasesLoading && !databaseSnapshots" class="relative grid min-h-96 place-items-center"><LoadingOverlay /></div>
+          <template v-if="databasesLoading && !databaseSnapshots">
+            <aside class="surface-card p-4" aria-busy="true">
+              <h3 class="m-0 flex items-center gap-2 text-body-strong font-semibold text-foreground">{{ t('debugPage.databaseSummary') }}</h3>
+              <div class="mt-4 grid grid-cols-1 gap-3 wide:grid-cols-2">
+                <div><span class="block text-caption text-muted-foreground">{{ t('debugPage.healthyDatabases') }}</span><Skeleton class="mt-1 h-4 w-14" /></div>
+                <div><span class="block text-caption text-muted-foreground">{{ t('debugPage.used') }}</span><Skeleton class="mt-1 h-4 w-20" /></div>
+              </div>
+            </aside>
+            <article class="grid gap-3 surface-card p-4" aria-busy="true">
+              <div class="flex flex-wrap items-center justify-between gap-3">
+                <Skeleton class="h-5 w-32" />
+                <Skeleton class="h-5 w-16 rounded-pill" />
+              </div>
+              <div class="grid grid-cols-1 gap-3 wide:grid-cols-3">
+                <div><span class="block text-caption text-muted-foreground">{{ t('debugPage.fileSize') }}</span><Skeleton class="mt-1 h-4 w-20" /></div>
+                <div><span class="block text-caption text-muted-foreground">{{ t('debugPage.used') }}</span><Skeleton class="mt-1 h-4 w-20" /></div>
+                <div><span class="block text-caption text-muted-foreground">{{ t('debugPage.free') }}</span><Skeleton class="mt-1 h-4 w-20" /></div>
+              </div>
+              <Table class="max-h-56" row-height="auto" :framed="false" :columns="databaseTableColumns" :rows="[]" :loading="true" :loading-label="t('common.loading')" />
+            </article>
+          </template>
           <EmptyState v-else-if="databasesError && !databaseSnapshots" :title="t('common.loadFailed')" :description="databasesError">
             <template #actions><Button size="sm" :loading="databasesLoading" @click="loadDatabases"><RefreshCcw />{{ t('common.retry') }}</Button></template>
           </EmptyState>

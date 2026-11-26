@@ -47,6 +47,8 @@ describe('ApplicationInstanceList', () => {
     const skeletons = wrapper.findAll('[data-instance-skeleton]');
     expect(skeletons).toHaveLength(2);
     expect(skeletons[0]!.classes()).toContain('surface-card');
+    expect(skeletons[0]!.text()).toContain(useI18n().t('common.status'));
+    expect(skeletons[0]!.text()).toContain(useI18n().t('applicationsPage.updatedAtColumn'));
     expect(wrapper.text()).not.toContain(useI18n().t('applicationsPage.noRuntime'));
     expect(wrapper.find('[role="status"]').exists()).toBe(false);
   });

@@ -328,6 +328,46 @@ describe('overview status page', () => {
     expect(wrapper.text()).toContain('Add');
   });
 
+  it('renders fixed summary labels and card metric labels while initial data loads', async () => {
+    let resolveServers: ((value: ServerDto[]) => void) | undefined;
+    list.mockReturnValueOnce(new Promise((resolve) => { resolveServers = resolve; }));
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/overview', component: OverviewPage }],
+    });
+    await router.push('/overview');
+    await router.isReady();
+    const wrapper = mount(OverviewPage, {
+      global: {
+        plugins: [router],
+        provide: { [toastKey as symbol]: { push: toastPush, remove: vi.fn() } },
+      },
+    });
+    await flushPromises();
+
+    const summary = wrapper.get('[data-testid="overview-summary"]');
+    expect(summary.attributes('aria-busy')).toBe('true');
+    expect(summary.text()).toContain('Node status');
+    expect(summary.text()).toContain('Online rate');
+    expect(summary.text()).toContain('Applications');
+    expect(summary.text()).toContain('Capacity');
+    expect(summary.findAll('.motion-skeleton').length).toBeGreaterThan(0);
+
+    const cardSkeletons = wrapper.get('[data-testid="overview-cards-skeleton"]');
+    expect(cardSkeletons.attributes('aria-busy')).toBe('true');
+    expect(cardSkeletons.findAll('article')).toHaveLength(3);
+    expect(cardSkeletons.text()).toContain('CPU');
+    expect(cardSkeletons.text()).toContain('Memory');
+    expect(cardSkeletons.text()).toContain('Latency');
+
+    resolveServers?.([server()]);
+    await flushPromises();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="overview-cards-skeleton"]').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="overview-summary"]').attributes('aria-busy')).toBeUndefined();
+  });
+
   it('keeps an initial load failure inline with a retry and never raises a toast', async () => {
     list.mockRejectedValue(new Error('overview down'));
     const { wrapper } = await mountPage();
