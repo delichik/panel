@@ -1990,21 +1990,25 @@ func extractManagedZip(reader *zip.Reader, targetDir string, compressedSize int6
 		if file.UncompressedSize64 > uint64(managedArchiveMaxExtracted) {
 			return nil, managedArchiveLimitError()
 		}
-		extracted += int64(file.UncompressedSize64)
-		if err := validateManagedArchiveLimits(name, entries, extracted, compressedSize); err != nil {
-			return nil, err
+		remaining := managedArchiveMaxExtracted - extracted
+		if remaining < 0 {
+			return nil, managedArchiveLimitError()
 		}
 		rc, err := file.Open()
 		if err != nil {
 			return nil, err
 		}
-		entry, writeErr := writeManagedArchiveEntry(targetDir, name, archiveEntryMode(info.Mode(), false), rc, owner)
+		entry, written, writeErr := writeManagedArchiveEntry(targetDir, name, archiveEntryMode(info.Mode(), false), rc, remaining, owner)
 		closeErr := rc.Close()
 		if writeErr != nil {
 			return nil, writeErr
 		}
 		if closeErr != nil {
 			return nil, closeErr
+		}
+		extracted += written
+		if err := validateManagedArchiveLimits(name, entries, extracted, compressedSize); err != nil {
+			return nil, err
 		}
 		out = append(out, entry)
 	}
@@ -2044,15 +2048,16 @@ func extractManagedTar(reader *tar.Reader, targetDir string, compressedSize int6
 			}
 			out = append(out, managedArchiveEntry{Name: name, Dir: true, Mode: archiveEntryMode(header.FileInfo().Mode(), true)})
 		case tar.TypeReg, tar.TypeRegA:
-			if header.Size < 0 {
+			if header.Size < 0 || header.Size > managedArchiveMaxExtracted-extracted {
 				return nil, managedArchiveLimitError()
 			}
-			extracted += header.Size
-			if err := validateManagedArchiveLimits(name, entries, extracted, compressedSize); err != nil {
+			remaining := managedArchiveMaxExtracted - extracted
+			entry, written, err := writeManagedArchiveEntry(targetDir, name, archiveEntryMode(header.FileInfo().Mode(), false), reader, remaining, owner)
+			if err != nil {
 				return nil, err
 			}
-			entry, err := writeManagedArchiveEntry(targetDir, name, archiveEntryMode(header.FileInfo().Mode(), false), reader, owner)
-			if err != nil {
+			extracted += written
+			if err := validateManagedArchiveLimits(name, entries, extracted, compressedSize); err != nil {
 				return nil, err
 			}
 			out = append(out, entry)
@@ -2074,34 +2079,41 @@ func makeManagedArchiveDir(targetDir, name string, mode os.FileMode, owner manag
 	return applyOwnership(dir, owner.UID, owner.GID)
 }
 
-func writeManagedArchiveEntry(targetDir, name string, mode os.FileMode, content io.Reader, owner managedArchiveOwner) (managedArchiveEntry, error) {
+func writeManagedArchiveEntry(targetDir, name string, mode os.FileMode, content io.Reader, maxBytes int64, owner managedArchiveOwner) (managedArchiveEntry, int64, error) {
 	target, err := safeArchiveTarget(targetDir, name)
 	if err != nil {
-		return managedArchiveEntry{}, err
+		return managedArchiveEntry{}, 0, err
 	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-		return managedArchiveEntry{}, err
+		return managedArchiveEntry{}, 0, err
 	}
 	file, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
 	if err != nil {
-		return managedArchiveEntry{}, err
+		return managedArchiveEntry{}, 0, err
 	}
 	hasher := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(file, hasher), content); err != nil {
+	written, err := io.Copy(io.MultiWriter(file, hasher), io.LimitReader(content, maxBytes+1))
+	if err != nil {
 		_ = file.Close()
-		return managedArchiveEntry{}, err
+		_ = os.Remove(target)
+		return managedArchiveEntry{}, 0, err
+	}
+	if written > maxBytes {
+		_ = file.Close()
+		_ = os.Remove(target)
+		return managedArchiveEntry{}, 0, managedArchiveLimitError()
 	}
 	if err := file.Chmod(mode); err != nil {
 		_ = file.Close()
-		return managedArchiveEntry{}, err
+		return managedArchiveEntry{}, 0, err
 	}
 	if err := file.Close(); err != nil {
-		return managedArchiveEntry{}, err
+		return managedArchiveEntry{}, 0, err
 	}
 	if err := applyOwnership(target, owner.UID, owner.GID); err != nil {
-		return managedArchiveEntry{}, err
+		return managedArchiveEntry{}, 0, err
 	}
-	return managedArchiveEntry{Name: name, Mode: mode, SHA256: hex.EncodeToString(hasher.Sum(nil))}, nil
+	return managedArchiveEntry{Name: name, Mode: mode, SHA256: hex.EncodeToString(hasher.Sum(nil))}, written, nil
 }
 
 func validateManagedArchiveLimits(name string, count int, extracted, compressed int64) error {
@@ -2700,6 +2712,10 @@ func dockerPullImageParts(image string) (string, string) {
 }
 
 func (c *dockerAPIClient) createContainer(ctx context.Context, spec appruntime.Spec) (string, error) {
+	binds, err := dockerBinds(defaultRuntimeRoot, spec)
+	if err != nil {
+		return "", err
+	}
 	payload := dockerCreateRequest{
 		Image:        spec.Image,
 		Env:          dockerEnv(spec.Env),
@@ -2713,7 +2729,7 @@ func (c *dockerAPIClient) createContainer(ctx context.Context, spec appruntime.S
 			"panel.application.spec.hash":   spec.SpecHash,
 		},
 		HostConfig: dockerHostConfig{
-			Binds:        dockerBinds(defaultRuntimeRoot, spec),
+			Binds:        binds,
 			PortBindings: dockerPortBindings(spec.Ports),
 			NetworkMode:  managedBridgeNetwork,
 			Privileged:   spec.Privileged,
@@ -3349,7 +3365,7 @@ func dockerPortKey(port appruntime.Port) string {
 	return strconv.Itoa(port.ContainerPort) + "/" + proto
 }
 
-func dockerBinds(root string, spec appruntime.Spec) []string {
+func dockerBinds(root string, spec appruntime.Spec) ([]string, error) {
 	binds := []string{}
 	for _, mount := range spec.Mounts {
 		if strings.TrimSpace(mount.Target) == "" || strings.TrimSpace(mount.Source) == "" {
@@ -3358,7 +3374,23 @@ func dockerBinds(root string, spec appruntime.Spec) []string {
 		source := mount.Source
 		switch mount.Type {
 		case "managed_file":
-			source = filepath.Join(root, spec.ApplicationID, "files", filepath.FromSlash(path.Clean(strings.TrimPrefix(mount.Source, "/"))))
+			base, err := safeApplicationRuntimeDir(root, spec.ApplicationID, "files")
+			if err != nil {
+				return nil, err
+			}
+			rel := path.Clean(strings.TrimPrefix(mount.Source, "/"))
+			if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
+				return nil, errors.New("managed_file mount source must stay inside the application workspace")
+			}
+			target := filepath.Join(base, filepath.FromSlash(rel))
+			cleanTarget, err := filepath.Abs(target)
+			if err != nil {
+				return nil, err
+			}
+			if cleanTarget != base && !strings.HasPrefix(cleanTarget, base+string(os.PathSeparator)) {
+				return nil, errors.New("managed_file mount source escapes the application workspace")
+			}
+			source = cleanTarget
 		case "host", "persistent":
 			source = mount.Source
 		case "nfs":
@@ -3370,7 +3402,7 @@ func dockerBinds(root string, spec appruntime.Spec) []string {
 		}
 		binds = append(binds, source+":"+mount.Target+":"+mode)
 	}
-	return binds
+	return binds, nil
 }
 
 func dockerStateToRuntime(status string, running bool, exitCode int) string {

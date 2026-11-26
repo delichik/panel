@@ -168,6 +168,10 @@ func boundImageProbeOutput(text string) string {
 // command. Ports are deliberately neither exposed nor published: a preflight
 // must never take over a host port from the serving container.
 func (c *dockerAPIClient) createProbeContainer(ctx context.Context, spec appruntime.Spec, name, purpose string, command []string) (string, error) {
+	binds, err := dockerBinds(defaultRuntimeRoot, spec)
+	if err != nil {
+		return "", err
+	}
 	payload := dockerCreateRequest{
 		Image: spec.Image,
 		Env:   dockerEnv(spec.Env),
@@ -176,7 +180,7 @@ func (c *dockerAPIClient) createProbeContainer(ctx context.Context, spec apprunt
 			labelImageProbe: purpose,
 		},
 		HostConfig: dockerHostConfig{
-			Binds:       dockerBinds(defaultRuntimeRoot, spec),
+			Binds:       binds,
 			NetworkMode: managedBridgeNetwork,
 			Privileged:  spec.Privileged,
 			CapAdd:      append([]string(nil), spec.CapAdd...),

@@ -1364,3 +1364,31 @@ func TestVerifyExecutionReportsObservedImageDigestFromContainerImageID(t *testin
 		t.Fatalf("ObservedImageDigest = %q, want sha256:cafebabe", result.ObservedImageDigest)
 	}
 }
+
+func TestDockerBindsRejectsManagedFilePathTraversal(t *testing.T) {
+	root := t.TempDir()
+	for _, badSource := range []string{"../../../etc", "/../../etc/passwd", ".."} {
+		_, err := dockerBinds(root, appruntime.Spec{
+			ApplicationID: "app-1",
+			Mounts: []appruntime.Mount{{
+				Type:   "managed_file",
+				Source: badSource,
+				Target: "/etc/leak",
+			}},
+		})
+		if err == nil {
+			t.Fatalf("dockerBinds(%q) succeeded, want path traversal error", badSource)
+		}
+	}
+}
+
+func TestWriteManagedArchiveEntryEnforcesMaxBytes(t *testing.T) {
+	targetDir := t.TempDir()
+	_, _, err := writeManagedArchiveEntry(targetDir, "bomb.txt", 0o600, strings.NewReader("0123456789abcdef"), 8, managedArchiveOwner{})
+	if err == nil {
+		t.Fatal("expected writeManagedArchiveEntry to reject payload exceeding maxBytes")
+	}
+	if _, statErr := os.Stat(filepath.Join(targetDir, "bomb.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("oversized archive entry should be removed, statErr=%v", statErr)
+	}
+}
