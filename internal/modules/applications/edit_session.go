@@ -111,7 +111,7 @@ func (s *Service) BeginEditSession(ctx context.Context, owner string, in BeginEd
 	if applicationID != "" {
 		// Begin is metadata-only: point at committed content via source_file_id
 		// with an empty blob_dir (no full-file copy), matching facility assets.
-		files, err := s.listFiles(ctx, applicationID, false)
+		files, err := s.listFilesExec(ctx, tx, applicationID, false)
 		if err != nil {
 			return ApplicationEditSession{}, err
 		}
@@ -596,7 +596,7 @@ func (s *Service) bumpEditRevision(ctx context.Context, tx *sql.Tx, owner, sessi
 		return err
 	}
 	if err := expectEditMutation(res); err != nil {
-		return s.editMutationConflict(ctx, owner, sessionID, revision)
+		return s.editMutationConflictExec(ctx, tx, owner, sessionID, revision)
 	}
 	return nil
 }
@@ -1125,8 +1125,12 @@ func (s *Service) storeEditOperationResult(ctx context.Context, sessionID, opera
 }
 
 func (s *Service) editMutationConflict(ctx context.Context, owner, sessionID string, expected int) error {
+	return s.editMutationConflictExec(ctx, s.db, owner, sessionID, expected)
+}
+
+func (s *Service) editMutationConflictExec(ctx context.Context, exec orm.Executor, owner, sessionID string, expected int) error {
 	var conflictRow editSessionConflictRow
-	err := orm.New(s.db).From("application_edit_sessions").Select("revision", "state").Where("id=?", sessionID).And("owner_id=?", normalizeEditOwner(owner)).First(ctx, &conflictRow)
+	err := orm.New(exec).From("application_edit_sessions").Select("revision", "state").Where("id=?", sessionID).And("owner_id=?", normalizeEditOwner(owner)).First(ctx, &conflictRow)
 	if err == sql.ErrNoRows {
 		return panelerr.NotFound("application_edit_session")
 	}

@@ -33,8 +33,12 @@ func (s *Service) GetFile(ctx context.Context, appID, fileRef string) (Applicati
 }
 
 func (s *Service) listFiles(ctx context.Context, appID string, includeContent bool) ([]ApplicationFile, error) {
+	return s.listFilesExec(ctx, s.db, appID, includeContent)
+}
+
+func (s *Service) listFilesExec(ctx context.Context, exec orm.Executor, appID string, includeContent bool) ([]ApplicationFile, error) {
 	var files []models.ApplicationFile
-	if err := orm.New(s.db).From("application_files").Select(fileQueryColumns(includeContent)...).Where("application_id=?", appID).OrderBy("name ASC").All(ctx, &files); err != nil {
+	if err := orm.New(exec).From("application_files").Select(fileQueryColumns(includeContent)...).Where("application_id=?", appID).OrderBy("name ASC").All(ctx, &files); err != nil {
 		return nil, err
 	}
 	out := make([]ApplicationFile, 0, len(files))

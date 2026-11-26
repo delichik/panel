@@ -1066,3 +1066,51 @@ func metaExpiresAt(t *testing.T, raw string) string {
 	}
 	return rest[:end]
 }
+
+func TestAssetReferencesAndListTLSSucceedWithSingleConnectionPool(t *testing.T) {
+	svc, store, closeFn := newTestService(t)
+	defer closeFn()
+	ctx := context.Background()
+
+	ca, err := svc.CreateCA(ctx, CreateCARequest{Name: "CA", CommonName: "ca.internal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateTLS(ctx, CreateTLSRequest{
+		Name:          "Leaf",
+		ParentAssetID: ca.ID,
+		CommonName:    "leaf.internal",
+		DNSNames:      []string{"leaf.internal"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,deployment_mode,deployment_server_ids_json,generation,spec_hash,job_id,namespace,created_at,updated_at) VALUES('app_pool','web',0,'name: web\nimage: nginx\n','all','[]',1,'h','','','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO reverse_proxy_routes(domain,app_id,paths_json,created_at,updated_at) VALUES('leaf.internal','app_pool','[]','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+
+	// Restrict pool to 1 connection: any nested query while rows is still open deadlocks immediately.
+	store.AppDB().SetMaxOpenConns(1)
+	done := make(chan error, 1)
+	go func() {
+		if _, err := svc.assetReferences(ctx); err != nil {
+			done <- err
+			return
+		}
+		if _, err := svc.ListTLSCertificates(ctx); err != nil {
+			done <- err
+			return
+		}
+		done <- nil
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("single-connection query failed: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("assetReferences or ListTLSCertificates deadlocked on 1-connection pool")
+	}
+}

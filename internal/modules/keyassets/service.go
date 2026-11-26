@@ -419,12 +419,23 @@ func (s *Service) ListTLSCertificates(ctx context.Context) ([]Asset, error) {
 	}
 	defer rows.Close()
 
-	assets := make([]Asset, 0)
+	var storedAssets []storedAsset
 	for rows.Next() {
 		stored, err := scanStoredAsset(rows)
 		if err != nil {
 			return nil, err
 		}
+		storedAssets = append(storedAssets, stored)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+
+	assets := make([]Asset, 0, len(storedAssets))
+	for _, stored := range storedAssets {
 		certificatePEM, err := s.panelTLSCertificateChain(ctx, stored)
 		if err != nil {
 			continue
@@ -438,9 +449,6 @@ func (s *Service) ListTLSCertificates(ctx context.Context) ([]Asset, error) {
 			continue
 		}
 		assets = append(assets, stored.Asset)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
 	}
 	return assets, nil
 }
@@ -1601,9 +1609,9 @@ func (s *Service) executeImportPlan(ctx context.Context, plan *importPlan, strat
 		}
 	}
 	imported := []Asset{}
-	commitImport := func() error {
+	commitAssetChunk := func(chunk []storedAsset) error {
 		return orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-			for _, asset := range assets {
+			for _, asset := range chunk {
 				if strategy == "skip_existing" {
 					if _, err := s.getStoredAssetTx(ctx, tx, asset.ID); err == nil {
 						skipped++
@@ -1640,37 +1648,66 @@ func (s *Service) executeImportPlan(ctx context.Context, plan *importPlan, strat
 			return nil
 		})
 	}
-	err := paneltls.WithUpdate(func() error {
-		panelDomain, panelAssetID, err := s.panelTLSSelection(ctx)
+	const importBatchSize = 50
+	var panelAssetToActivate *storedAsset
+	var nonPanelAssets []storedAsset
+	if strategy == "overwrite_existing" {
+		_, panelAssetID, err := s.panelTLSSelection(ctx)
 		if err != nil {
 			return err
 		}
-		if strategy != "overwrite_existing" || panelAssetID == "" {
-			return commitImport()
-		}
-		for _, asset := range assets {
-			if asset.ID != panelAssetID {
-				continue
+		if panelAssetID != "" {
+			for i := range assets {
+				if assets[i].ID == panelAssetID {
+					if _, getErr := s.getStoredAsset(ctx, assets[i].ID); getErr == nil {
+						candidate := assets[i]
+						panelAssetToActivate = &candidate
+						continue
+					}
+				}
+				nonPanelAssets = append(nonPanelAssets, assets[i])
 			}
-			if _, err := s.getStoredAsset(ctx, asset.ID); err != nil {
-				continue
+		} else {
+			nonPanelAssets = assets
+		}
+	} else {
+		nonPanelAssets = assets
+	}
+	for start := 0; start < len(nonPanelAssets); start += importBatchSize {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		end := start + importBatchSize
+		if end > len(nonPanelAssets) {
+			end = len(nonPanelAssets)
+		}
+		if err := commitAssetChunk(nonPanelAssets[start:end]); err != nil {
+			return err
+		}
+	}
+	if panelAssetToActivate != nil {
+		if err := paneltls.WithUpdate(func() error {
+			panelDomain, panelAssetID, err := s.panelTLSSelection(ctx)
+			if err != nil {
+				return err
+			}
+			if panelAssetID != panelAssetToActivate.ID {
+				return commitAssetChunk([]storedAsset{*panelAssetToActivate})
 			}
 			snapshot, err := paneltls.SnapshotFixedPair(s.cfg.DataRoot)
 			if err != nil {
 				return err
 			}
-			if err := s.activatePanelTLSAsset(ctx, panelDomain, asset); err != nil {
+			if err := s.activatePanelTLSAsset(ctx, panelDomain, *panelAssetToActivate); err != nil {
 				return errors.Join(err, paneltls.RestoreFixedPair(s.cfg.DataRoot, snapshot))
 			}
-			if err := commitImport(); err != nil {
+			if err := commitAssetChunk([]storedAsset{*panelAssetToActivate}); err != nil {
 				return errors.Join(err, paneltls.RestoreFixedPair(s.cfg.DataRoot, snapshot))
 			}
 			return nil
+		}); err != nil {
+			return err
 		}
-		return commitImport()
-	})
-	if err != nil {
-		return err
 	}
 	if err := s.refreshApplications(ctx); err != nil {
 		return err
@@ -1913,6 +1950,11 @@ func (s *Service) insertAssetTx(ctx context.Context, tx *sql.Tx, asset storedAss
 }
 
 func (s *Service) updateAsset(ctx context.Context, asset storedAsset) error {
+	if asset.Type != TypeTLSCertificate {
+		return orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+			return s.updateAssetTx(ctx, tx, asset)
+		})
+	}
 	return paneltls.WithUpdate(func() error {
 		panelDomain, panelAssetID, err := s.panelTLSSelection(ctx)
 		if err != nil {
@@ -1984,27 +2026,51 @@ func (s *Service) assetReferences(ctx context.Context) (map[string][]AssetRefere
 	if err != nil {
 		return nil, err
 	}
+	type appRow struct {
+		id, name, specYAML string
+	}
 	rows, err := orm.Raw(ctx, s.db, `SELECT id,name,spec_yaml FROM applications`)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	var apps []appRow
+	for rows.Next() {
+		var item appRow
+		if err := rows.Scan(&item.id, &item.name, &item.specYAML); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		apps = append(apps, item)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+
 	routeRows, err := orm.Raw(ctx, s.db, `SELECT app_id, domain FROM reverse_proxy_routes WHERE app_id <> 'facility-reverse-proxy'`)
 	if err != nil {
 		return nil, err
 	}
-	defer routeRows.Close()
 	routesByApp := map[string][]struct{ Domain string }{}
 	for routeRows.Next() {
 		var appID, domain string
 		if err := routeRows.Scan(&appID, &domain); err != nil {
+			_ = routeRows.Close()
 			return nil, err
 		}
 		routesByApp[appID] = append(routesByApp[appID], struct{ Domain string }{Domain: domain})
 	}
 	if err := routeRows.Err(); err != nil {
+		_ = routeRows.Close()
 		return nil, err
 	}
+	if err := routeRows.Close(); err != nil {
+		return nil, err
+	}
+
 	references := map[string][]AssetReference{}
 	var panelTLSAssetID string
 	if err := orm.New(s.db).From("runtime_settings").Where("key = ?", "panel.tlsCertificateId").Select("value").ScanValue(ctx, &panelTLSAssetID); err != nil && err != sql.ErrNoRows {
@@ -2018,20 +2084,16 @@ func (s *Service) assetReferences(ctx context.Context) (map[string][]AssetRefere
 			Relation:     "panel_tls",
 		})
 	}
-	for rows.Next() {
-		var applicationID, applicationName, specYAML string
-		if err := rows.Scan(&applicationID, &applicationName, &specYAML); err != nil {
-			return nil, err
-		}
-		for _, assetID := range extractAssetIDsFromSpec(specYAML, "key_asset:") {
+	for _, app := range apps {
+		for _, assetID := range extractAssetIDsFromSpec(app.specYAML, "key_asset:") {
 			references[assetID] = appendAssetReference(references[assetID], AssetReference{
 				ResourceType: "application",
-				ResourceID:   applicationID,
-				ResourceName: applicationName,
+				ResourceID:   app.id,
+				ResourceName: app.name,
 				Relation:     "panel_file",
 			})
 		}
-		rules := routesByApp[applicationID]
+		rules := routesByApp[app.id]
 		if len(rules) == 0 {
 			continue
 		}
@@ -2042,8 +2104,8 @@ func (s *Service) assetReferences(ctx context.Context) (map[string][]AssetRefere
 					if certificateDomainMatches(domain, rule.Domain) {
 						references[asset.ID] = appendAssetReference(references[asset.ID], AssetReference{
 							ResourceType: "application",
-							ResourceID:   applicationID,
-							ResourceName: applicationName,
+							ResourceID:   app.id,
+							ResourceName: app.name,
 							Relation:     "reverse_proxy",
 						})
 					}
@@ -2051,7 +2113,7 @@ func (s *Service) assetReferences(ctx context.Context) (map[string][]AssetRefere
 			}
 		}
 	}
-	return references, rows.Err()
+	return references, nil
 }
 
 func (s *Service) assetInUse(ctx context.Context, assetID string) (bool, error) {

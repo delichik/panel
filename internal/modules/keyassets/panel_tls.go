@@ -43,20 +43,15 @@ func (s *Service) EnsurePanelTLSAssets(ctx context.Context, domain string) (Asse
 		if err != nil {
 			return Asset{}, err
 		}
-		var leaf storedAsset
+		leaf, err := s.newPanelLeafAsset(SystemPanelTLSAssetID, ca, domain)
+		if err != nil {
+			return Asset{}, err
+		}
 		if err := orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 			if err := s.deletePanelSystemAssetsTx(ctx, tx); err != nil {
 				return err
 			}
 			if err := s.insertAssetTx(ctx, tx, ca); err != nil {
-				return err
-			}
-			storedCA, err := s.getStoredAssetTx(ctx, tx, SystemPanelCAAssetID)
-			if err != nil {
-				return err
-			}
-			leaf, err = s.newPanelLeafAsset(SystemPanelTLSAssetID, storedCA, domain)
-			if err != nil {
 				return err
 			}
 			return s.insertAssetTx(ctx, tx, leaf)

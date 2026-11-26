@@ -236,58 +236,76 @@ func (s *Service) SaveReportedContainers(ctx context.Context, serverID string, s
 	if err != nil {
 		return err
 	}
+	type unknownManagedContainer struct {
+		appID      string
+		instanceID string
+	}
+	type reconcileRegistration struct {
+		instanceID string
+		appID      string
+	}
+	observations := make([]models.ContainerObservation, 0, len(items))
+	reconcileItems := make([]reconcileRegistration, 0, len(items))
+	currentManaged := make(map[string]struct{}, len(items))
+	var unknownManaged []unknownManagedContainer
+	for _, item := range items {
+		if strings.TrimSpace(item.ID) == "" {
+			continue
+		}
+		appID, instanceID, managed := managedLabels(item.Labels)
+		raw, err := json.Marshal(item)
+		if err != nil {
+			return err
+		}
+		summaryRaw, err := json.Marshal(ContainerSummary{ID: item.ID, Names: item.Names, Image: item.Image, State: item.State, Status: item.Status, Ports: item.Ports, Managed: managed, ApplicationID: appID, InstanceID: instanceID})
+		if err != nil {
+			return err
+		}
+		var containerJSON, summaryJSON map[string]any
+		if err := json.Unmarshal(raw, &containerJSON); err != nil {
+			return err
+		}
+		if err := json.Unmarshal(summaryRaw, &summaryJSON); err != nil {
+			return err
+		}
+		observations = append(observations, models.ContainerObservation{
+			ServerID:      serverID,
+			ContainerID:   item.ID,
+			SampleAt:      sampleAt,
+			ContainerJSON: containerJSON,
+			SummaryJSON:   summaryJSON,
+			Managed:       managed,
+			ApplicationID: appID,
+			InstanceID:    instanceID,
+			UpdatedAt:     now,
+		})
+		if !managed {
+			continue
+		}
+		if _, ok := knownApps[appID]; !ok {
+			// 未知应用的托管容器（如应用已删除但容器残留）不登记协调状态：
+			// 外键约束失败会回滚整笔事务；不加入 currentManaged 会让下方清理
+			// 删除它可能残留的旧状态行。告警延后到事务外执行，避免日志触库自死锁。
+			unknownManaged = append(unknownManaged, unknownManagedContainer{appID: appID, instanceID: instanceID})
+			continue
+		}
+		currentManaged[instanceID] = struct{}{}
+		reconcileItems = append(reconcileItems, reconcileRegistration{instanceID: instanceID, appID: appID})
+	}
+	sampleAtText := sampleAt.Format(time.RFC3339Nano)
 	if err := orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		if err := orm.New(tx).From("container_observations").Where("server_id = ?", serverID).Delete(ctx); err != nil {
 			return err
 		}
-		currentManaged := map[string]struct{}{}
-		for _, item := range items {
-			if strings.TrimSpace(item.ID) == "" {
-				continue
-			}
-			appID, instanceID, managed := managedLabels(item.Labels)
-			raw, err := json.Marshal(item)
-			if err != nil {
+		if len(observations) > 0 {
+			if err := orm.New(tx).InsertBatch(ctx, observations); err != nil {
 				return err
 			}
-			summaryRaw, err := json.Marshal(ContainerSummary{ID: item.ID, Names: item.Names, Image: item.Image, State: item.State, Status: item.Status, Ports: item.Ports, Managed: managed, ApplicationID: appID, InstanceID: instanceID})
-			if err != nil {
-				return err
-			}
-			var containerJSON, summaryJSON map[string]any
-			if err := json.Unmarshal(raw, &containerJSON); err != nil {
-				return err
-			}
-			if err := json.Unmarshal(summaryRaw, &summaryJSON); err != nil {
-				return err
-			}
-			if err := orm.New(tx).Insert(ctx, &models.ContainerObservation{
-				ServerID:      serverID,
-				ContainerID:   item.ID,
-				SampleAt:      sampleAt,
-				ContainerJSON: containerJSON,
-				SummaryJSON:   summaryJSON,
-				Managed:       managed,
-				ApplicationID: appID,
-				InstanceID:    instanceID,
-				UpdatedAt:     now,
-			}); err != nil {
-				return err
-			}
-			if !managed {
-				continue
-			}
-			if _, ok := knownApps[appID]; !ok {
-				// 未知应用的托管容器（如应用已删除但容器残留）不登记协调状态：
-				// 外键约束失败会回滚整笔事务；不加入 currentManaged 会让下方清理
-				// 删除它可能残留的旧状态行。
-				s.warnUnknownManagedContainer(serverID, appID, instanceID)
-				continue
-			}
-			currentManaged[instanceID] = struct{}{}
+		}
+		for _, reg := range reconcileItems {
 			if _, err := orm.RawExec(ctx, tx, `INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at)
 				VALUES(?,?,?,?) ON CONFLICT(instance_id) DO UPDATE SET application_id=excluded.application_id,server_id=excluded.server_id,observed_at=excluded.observed_at`,
-				instanceID, appID, serverID, sampleAt.Format(time.RFC3339Nano)); err != nil {
+				reg.instanceID, reg.appID, serverID, sampleAtText); err != nil {
 				return err
 			}
 		}
@@ -321,6 +339,9 @@ func (s *Service) SaveReportedContainers(ctx context.Context, serverID string, s
 		return nil
 	}); err != nil {
 		return err
+	}
+	for _, u := range unknownManaged {
+		s.warnUnknownManagedContainer(serverID, u.appID, u.instanceID)
 	}
 	return s.writeInstanceObservations(ctx, serverID, sampleAt, items, knownApps, "agent_report")
 }
@@ -360,22 +381,33 @@ func (s *Service) writeInstanceObservations(ctx context.Context, serverID string
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	var missingIDs []string
 	for rows.Next() {
 		var instanceID string
 		if err := rows.Scan(&instanceID); err != nil {
+			_ = rows.Close()
 			return err
 		}
 		if _, ok := seen[instanceID]; ok {
 			continue
 		}
+		missingIDs = append(missingIDs, instanceID)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, instanceID := range missingIDs {
 		if _, err := s.observations.Write(ctx, controlplane.Observation{
 			InstanceID: instanceID, Source: source, ObservedAt: sampleAt, ObservedState: controlplane.ObservedMissing,
 		}); err != nil {
 			return err
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 // applicationIDRow 是 knownApplicationIDs 的扫描行；ORM 元数据解析要求具名
@@ -405,8 +437,8 @@ func (s *Service) warnUnknownManagedContainer(serverID, appID, instanceID string
 	key := serverID + "\x00" + appID
 	now := time.Now()
 	s.orphanWarnMu.Lock()
-	defer s.orphanWarnMu.Unlock()
 	if last, ok := s.orphanWarned[key]; ok && now.Sub(last) < 15*time.Minute {
+		s.orphanWarnMu.Unlock()
 		return
 	}
 	s.orphanWarned[key] = now
@@ -417,6 +449,7 @@ func (s *Service) warnUnknownManagedContainer(serverID, appID, instanceID string
 			}
 		}
 	}
+	s.orphanWarnMu.Unlock()
 	logging.From(logging.Background("containers")).Warn("managed container references unknown application; reconcile state registration skipped",
 		zap.String("server_id", serverID),
 		zap.String("application_id", appID),

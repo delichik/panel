@@ -406,7 +406,7 @@ func (s *Service) DeleteFacilityEditAsset(ctx context.Context, sessionID, assetR
 			var currentState string
 			loadErr := tx.QueryRowContext(ctx, `SELECT revision,state FROM facility_edit_sessions WHERE id=? AND owner_id=?`, sessionID, facilityEditOwner).Scan(&currentRevision, &currentState)
 			if loadErr != nil || currentRevision != in.Revision || currentState != FacilityEditSessionActive {
-				return FacilityEditSession{}, s.facilityEditConflict(ctx, sessionID, in.Revision)
+				return FacilityEditSession{}, s.facilityEditConflictOn(ctx, tx, sessionID, in.Revision)
 			}
 			if err := insertFacilityEditOperation(ctx, tx, sessionID, in.ClientOperationID, facilityIdempotencyKey(idempotencyKey), requestHash); err != nil {
 				return FacilityEditSession{}, err
@@ -829,9 +829,15 @@ func bumpFacilityEditRevision(ctx context.Context, tx *sql.Tx, sessionID string,
 }
 
 func (s *Service) facilityEditConflict(ctx context.Context, sessionID string, expected int) error {
+	return s.facilityEditConflictOn(ctx, s.db, sessionID, expected)
+}
+
+func (s *Service) facilityEditConflictOn(ctx context.Context, exec interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, sessionID string, expected int) error {
 	var current int
 	var state string
-	if err := s.db.QueryRowContext(ctx, `SELECT revision,state FROM facility_edit_sessions WHERE id=? AND owner_id=?`, sessionID, facilityEditOwner).Scan(&current, &state); err != nil {
+	if err := exec.QueryRowContext(ctx, `SELECT revision,state FROM facility_edit_sessions WHERE id=? AND owner_id=?`, sessionID, facilityEditOwner).Scan(&current, &state); err != nil {
 		if err == sql.ErrNoRows {
 			return panelerr.NotFound("facility_edit_session")
 		}
@@ -857,6 +863,12 @@ func (s *Service) prepareFacilityCommitManifest(record facilityEditRecord) (faci
 			item.FinalID = id.New("facility_static")
 		}
 		assets = append(assets, item)
+	}
+	if err := rows.Err(); err != nil {
+		return facilityCommitManifest{}, err
+	}
+	if err := rows.Close(); err != nil {
+		return facilityCommitManifest{}, err
 	}
 	draft := cloneFacilityRouteDomain(record.Draft)
 	draft.Domain = record.RecordID
@@ -1181,6 +1193,12 @@ func (s *Service) facilityManifestDBCommitted(ctx context.Context, manifest faci
 		}
 		persisted[assetID] = sha
 	}
+	if rows.Err() != nil {
+		return false
+	}
+	if err := rows.Close(); err != nil {
+		return false
+	}
 	if len(persisted) != len(manifest.Assets) {
 		return false
 	}
@@ -1238,7 +1256,10 @@ func (s *Service) cleanupFacilityEditSessions(now time.Time) {
 		}
 		rows.Close()
 		for _, sessionID := range ids {
-			res, _ := s.db.Exec(`UPDATE facility_edit_sessions SET state=?,updated_at=? WHERE id=? AND state<>?`, FacilityEditSessionExpired, formatTime(now), sessionID, FacilityEditSessionCommitting)
+			res, execErr := s.db.Exec(`UPDATE facility_edit_sessions SET state=?,updated_at=? WHERE id=? AND state<>?`, FacilityEditSessionExpired, formatTime(now), sessionID, FacilityEditSessionCommitting)
+			if execErr != nil {
+				continue
+			}
 			if affected, _ := res.RowsAffected(); affected == 1 {
 				_ = os.RemoveAll(s.facilityEditPath(sessionID))
 			}
