@@ -5,6 +5,7 @@ import { activityPath } from '@/api/activityReference';
 export type ToastTone = 'success' | 'info' | 'warning' | 'danger';
 
 export interface ToastPayload {
+  key?: string;
   title: string;
   description?: string;
   tone?: ToastTone;

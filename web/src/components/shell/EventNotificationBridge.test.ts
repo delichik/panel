@@ -147,15 +147,41 @@ describe('EventNotificationBridge', () => {
     expect(rendered[0]?.textContent).toContain('Running');
     expect(rendered[1]?.dataset.tone).toBe('danger');
     expect(rendered[1]?.textContent).toContain('evt-fail');
-    expect(rendered[1]?.textContent).toContain('Failed · Gateway verification failed');
+    expect(rendered[1]?.textContent).toContain('Failed');
+    expect(rendered[1]?.textContent).not.toContain('Gateway verification failed');
     expect(rendered[2]?.dataset.tone).toBe('warning');
-    expect(rendered[2]?.textContent).toContain('Partially succeeded · Two of three targets updated');
+    expect(rendered[2]?.textContent).toContain('Deploy partially succeeded');
+    expect(rendered[2]?.textContent).toContain('Partially succeeded');
+    expect(rendered[2]?.textContent).not.toContain('Two of three targets updated');
     const links = rendered.map((bubble) => bubble.querySelector('a')?.getAttribute('href'));
     expect(links).toEqual([
       '/events?eventId=evt-run',
       '/events?eventId=evt-fail',
       '/events?eventId=evt-partial',
     ]);
+  });
+
+  it('replaces the same eventId notification in place when transitioning to terminal state', async () => {
+    const pages = [
+      page([], 0),
+      page([notification({ seq: 41, eventId: 'evt-lifecycle', title: 'Deploy app', state: 'running' })], 41),
+      page([notification({ seq: 42, eventId: 'evt-lifecycle', title: 'Deploy app', state: 'succeeded', summary: 'All targets healthy' })], 42),
+      pending(),
+    ];
+    waitMock.mockImplementation(() => Promise.resolve(pages.shift()!));
+
+    await mountBridge();
+    await tick(0);
+    await tick(1000);
+    expect(bubbles()).toHaveLength(1);
+    expect(bubbles()[0]?.dataset.tone).toBe('info');
+    expect(bubbles()[0]?.textContent).toContain('Running');
+
+    await tick(1);
+    expect(bubbles()).toHaveLength(1);
+    expect(bubbles()[0]?.dataset.tone).toBe('success');
+    expect(bubbles()[0]?.textContent).toContain('Succeeded');
+    expect(bubbles()[0]?.textContent).not.toContain('All targets healthy');
   });
 
   it('maps success and empty states to the documented tones and de-duplicates by seq', async () => {

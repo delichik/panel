@@ -86,12 +86,11 @@ function deliver(notification: EventNotification) {
   const title = notification.title?.trim() || notification.eventId;
   if (!title) return;
   const stateLabel = localizedState(notification.state);
-  const summary = notification.summary && notification.summary !== title ? notification.summary : '';
-  const description = [stateLabel, summary].filter(Boolean).join(' · ');
 
   toast.push({
+    key: notification.eventId || undefined,
     title,
-    description: description || undefined,
+    description: stateLabel || undefined,
     tone: notification.state ? (STATE_TONES[notification.state] ?? 'info') : 'info',
     action: notification.eventId
       ? { label: t('eventsPage.viewLogs'), to: eventsPath({ eventId: notification.eventId }) }

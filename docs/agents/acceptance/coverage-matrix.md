@@ -41,6 +41,13 @@
 
 ## 2. 前端路由基线
 
+- 右上角任务/事件通知气泡紧凑化（2026-11-26，纯前端，无 API/表/路由/后台任务/i18n 变更）：
+  - **组件**：`ToastProvider` 宽度由 360px 缩至 280px、字号改为 `text-caption`、内边距收紧并采用单行截断标题 + 内联描述/「查看日志」动作、容器 `pointer-events-none` 减少遮挡；堆叠上限 `4 → 3`、自动消失时长 `4.2s/15s → 3.5s/6s`，并支持按 `key` 原地替换。
+  - **通知桥**：`EventNotificationBridge` 仅展示事件标题、本地化状态与「查看日志」深链（省略冗长 `summary`），以 `eventId` 为 `key` 原地替换同事件从运行到终态的更新。
+  - **不变**：后端 API、数据库表、前端路由、后台任务类型与 i18n 词条均无变化。
+  - **验收**：`UI-SHELL-056`、`UI-SHELL-065`、[交互模式规范](../specifications/frontend/interaction-patterns.md)。
+  - **验证证据**：`toast.test.ts`、`EventNotificationBridge.test.ts`、`toastPolicy.test.ts`、`tokenGuard.test.ts`、`layout-i18n.test.ts`、`task test:web`、`task build:web`。
+
 - 例行周期任务通知降噪 + debug 事件不进入通知（2026-11-20，跨后端/前端/验收契约，无 API/表/路由/后台任务变化）：
   - **后端**：统一 `events` 级别按任务定义的 `Quiet` 落地——Quiet 任务的创建/启动/完成/重试事实记 `debug`，失败/可重试失败/blocked 保持 `error`；把 `package_refresh`、`image_refresh`、`image_unused_cleanup`、`panel_tls_reconcile`、`storage_share_reconcile` 声明为 `Quiet`（`server_agent_check` 原有；按小时的 `server_info_collect` 保持非 Quiet，避免掩盖初始系统信息采集的排障日志）。通知 Hub 忽略 `level=="debug"` 的过程事件，右上角只保留 info/warn/error 事件。
   - **前端**：`EventNotificationBridge` 对 `level=="debug"` 通知做防御性丢弃。

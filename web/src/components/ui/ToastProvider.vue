@@ -9,9 +9,9 @@ import { toastKey, type ToastPayload, type ToastRecord, type ToastTone } from '.
 
 const { t } = useI18n();
 /** Visible stack cap: older toasts are dismissed so the newest stays reachable. */
-const MAX_VISIBLE = 4;
-const TOAST_DURATION = 4200;
-const TOAST_ACTION_DURATION = 15000;
+const MAX_VISIBLE = 3;
+const TOAST_DURATION = 3500;
+const TOAST_ACTION_DURATION = 6000;
 
 let nextId = 1;
 const toasts = ref<ToastRecord[]>([]);
@@ -48,9 +48,33 @@ function resume(id: number) {
 }
 
 function push(payload: ToastPayload) {
+  const duration = payload.action ? TOAST_ACTION_DURATION : TOAST_DURATION;
+  if (payload.key) {
+    const index = toasts.value.findIndex((item) => item.key === payload.key);
+    if (index !== -1) {
+      const existing = toasts.value[index]!;
+      const updated: ToastRecord = {
+        ...existing,
+        key: payload.key,
+        title: payload.title,
+        description: payload.description ?? '',
+        tone: payload.tone ?? 'info',
+        action: payload.action,
+      };
+      toasts.value = toasts.value.map((item, i) => (i === index ? updated : item));
+      const timer = timers.get(existing.id);
+      if (timer && timer.handle === 0) {
+        timers.set(existing.id, { handle: 0, remaining: duration, startedAt: Date.now() });
+      } else {
+        schedule(existing.id, duration);
+      }
+      return;
+    }
+  }
   const id = nextId++;
   const record: ToastRecord = {
     id,
+    key: payload.key,
     title: payload.title,
     description: payload.description ?? '',
     tone: payload.tone ?? 'info',
@@ -62,7 +86,7 @@ function push(payload: ToastPayload) {
     if (dropped) clearTimer(dropped.id);
   }
   toasts.value = next;
-  schedule(id, payload.action ? TOAST_ACTION_DURATION : TOAST_DURATION);
+  schedule(id, duration);
 }
 
 function remove(id: number) {
@@ -99,7 +123,7 @@ const bubbleClasses: Record<ToastTone, string> = {
   danger: 'border-danger-border bg-danger-bg text-danger',
 };
 
-const stackClasses = 'fixed right-4 top-4 grid w-[min(360px,calc(100vw-32px))] gap-2 lg:top-17';
+const stackClasses = 'pointer-events-none fixed right-3 top-3 grid w-[min(280px,calc(100vw-24px))] gap-1.5 lg:top-15';
 </script>
 
 <template>
@@ -109,7 +133,7 @@ const stackClasses = 'fixed right-4 top-4 grid w-[min(360px,calc(100vw-32px))] g
       <section
         v-for="toast in toasts"
         :key="toast.id"
-        class="flex min-w-0 items-start gap-2 rounded-control border p-3 text-body"
+        class="pointer-events-auto flex min-w-0 items-center gap-2 rounded-control border px-2.5 py-1.5 text-caption"
         :class="bubbleClasses[toast.tone]"
         :data-tone="toast.tone"
         :role="toast.tone === 'danger' ? 'alert' : 'status'"
@@ -118,13 +142,20 @@ const stackClasses = 'fixed right-4 top-4 grid w-[min(360px,calc(100vw-32px))] g
         @focusin="pause(toast.id)"
         @focusout="resume(toast.id)"
       >
-        <component :is="toneIcons[toast.tone]" class="mt-0.5 size-4 shrink-0" :class="toneClasses[toast.tone]" aria-hidden="true" />
+        <component :is="toneIcons[toast.tone]" class="size-4 shrink-0" :class="toneClasses[toast.tone]" aria-hidden="true" />
         <div class="min-w-0 flex-1">
-          <strong class="block text-body-strong">{{ toast.title }}</strong>
-          <RouterLink v-if="toast.action" :to="toast.action.to" class="mt-2 inline-flex items-center rounded-control text-body font-medium underline underline-offset-4 text-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @click="remove(toast.id)">{{ toast.action.label }}</RouterLink>
-          <p v-if="toast.description" class="m-0 mt-1">{{ toast.description }}</p>
+          <strong class="block truncate text-caption font-semibold" :title="toast.title">{{ toast.title }}</strong>
+          <div v-if="toast.description || toast.action" class="mt-0.5 flex min-w-0 items-center gap-2 text-caption">
+            <span v-if="toast.description" class="min-w-0 truncate opacity-85" :title="toast.description">{{ toast.description }}</span>
+            <RouterLink
+              v-if="toast.action"
+              :to="toast.action.to"
+              class="shrink-0 rounded-control font-medium underline underline-offset-2 text-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              @click="remove(toast.id)"
+            >{{ toast.action.label }}</RouterLink>
+          </div>
         </div>
-        <IconButton size="sm" class="shrink-0 text-current" :label="t('common.close')" @click="remove(toast.id)">
+        <IconButton size="sm" class="-mr-1 shrink-0 text-current" :label="t('common.close')" @click="remove(toast.id)">
           <X />
         </IconButton>
       </section>
