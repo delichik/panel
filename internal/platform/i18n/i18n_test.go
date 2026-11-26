@@ -166,3 +166,17 @@ func TestTranslateLocaleCoversAppearanceErrors(t *testing.T) {
 		}
 	}
 }
+
+
+func TestTranslateLocaleCoversServerCleanupDelete(t *testing.T) {
+	tests := map[string]string{
+		"server_delete_invalid":             "删除服务器参数无效",
+		"server_cleanup_delete_in_progress": "该服务器的数据清理与移除任务正在执行中",
+		"server_cleanup_failed":             "清理服务器数据失败，服务器尚未从系统移除",
+	}
+	for code, want := range tests {
+		if got := TranslateLocale(LocaleSimplifiedChinese, code, "fallback"); got != want {
+			t.Fatalf("translation for %s = %q, want %q", code, got, want)
+		}
+	}
+}

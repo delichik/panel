@@ -132,6 +132,40 @@ func TestCancelByServerSkipsNonCancellableTasks(t *testing.T) {
 	}
 }
 
+func TestCancelByServerExceptPreservesExcludedTask(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	kept, err := svc.Create(ctx, CreateInput{Type: "package_refresh", ServerID: "srv_1", ResourceType: "server", ResourceID: "srv_1", Status: StatusRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := svc.Create(ctx, CreateInput{Type: "package_refresh", ServerID: "srv_1", ResourceType: "server", ResourceID: "srv_1", Status: StatusRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	count, err := svc.CancelByServerExcept(ctx, "srv_1", kept.ID, "cleanup started")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 other task cancelled, got %d", count)
+	}
+	gotKept, err := svc.Get(ctx, kept.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotKept.Status != StatusRunning {
+		t.Fatalf("expected excluded task %s to remain running, got %s", kept.ID, gotKept.Status)
+	}
+	gotOther, err := svc.Get(ctx, other.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotOther.Status != StatusCancelled {
+		t.Fatalf("expected sibling task %s to be cancelled, got %s", other.ID, gotOther.Status)
+	}
+}
+
 func TestTaskLifecycleAndLogs(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()

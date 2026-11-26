@@ -139,8 +139,12 @@ func (s *Service) Update(ctx context.Context, serverID string, req SaveRequest) 
 }
 
 func (s *Service) Delete(ctx context.Context, serverID string) error {
+	return s.deleteLocal(ctx, serverID, "")
+}
+
+func (s *Service) deleteLocal(ctx context.Context, serverID, exceptTaskID string) error {
 	if s.tasks != nil {
-		if _, err := s.tasks.CancelByServer(ctx, serverID, "Task cancelled because the server was removed"); err != nil {
+		if _, err := s.tasks.CancelByServerExcept(ctx, serverID, exceptTaskID, "Task cancelled because the server was removed"); err != nil {
 			return err
 		}
 	}
@@ -207,7 +211,7 @@ func (s *Service) Delete(ctx context.Context, serverID string) error {
 		// Post-commit cancel is best-effort: the first CancelByServer already ran
 		// before the AppDB delete. A second failure must not report delete as
 		// failed after the server row is gone (SRV-DEL-004/005 retry → 404).
-		if _, err := s.tasks.CancelByServer(ctx, serverID, "Task cancelled because the server was removed"); err != nil {
+		if _, err := s.tasks.CancelByServerExcept(ctx, serverID, exceptTaskID, "Task cancelled because the server was removed"); err != nil {
 			logging.From(ctx).Warn("post-delete task cancel failed", zap.String("server_id", serverID), zap.Error(err))
 		}
 	}

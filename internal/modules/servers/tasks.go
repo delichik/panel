@@ -100,6 +100,13 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 			Type:    agentCertificateResetTaskType,
 			Execute: s.RunSystemCertificateResetTask,
 		},
+		{
+			Type:              serverCleanupDeleteTaskType,
+			AllowRetry:        true,
+			ConcurrencyPolicy: tasks.ConcurrencyCustomKey,
+			ConcurrencyKey:    serverCleanupDeleteConcurrencyKey,
+			Execute:           s.RunServerCleanupDeleteTask,
+		},
 	} {
 		if _, exists := taskSvc.Registry().Definition(def.Type); exists {
 			taskSvc.Registry().Replace(def)

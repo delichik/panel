@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/http"
 )
 
@@ -79,11 +80,36 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
+	cleanData, err := parseCleanDataParam(r.URL.Query().Get("cleanData"))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	if cleanData {
+		task, err := h.service.DeleteWithCleanup(r.Context(), serverIDFromRequest(r))
+		if err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
+		return
+	}
 	if err := h.service.Delete(r.Context(), serverIDFromRequest(r)); err != nil {
 		httpx.Error(w, err)
 		return
 	}
 	httpx.NoContent(w)
+}
+
+func parseCleanDataParam(raw string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "false", "0":
+		return false, nil
+	case "true", "1":
+		return true, nil
+	default:
+		return false, panelerr.BadRequest("server_delete_invalid", "cleanData must be a boolean")
+	}
 }
 
 func (h *Handler) Test(w http.ResponseWriter, r *http.Request) {

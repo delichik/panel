@@ -230,17 +230,17 @@
 
 - **前置**：存在兼容/不兼容 Agent 与 `all/selected` 部署模式。
 - **动作**：部署或保存后 follow-up apply；或周期漂移巡检发现 selected 目标缺少实例行。
-- **结果**：all 对所有健康兼容 Agent 节点各规划一实例；selected 仅规划所选节点，并对被移除旧目标规划 purge；**仅改部署节点时不得因 force 重部署已满足节点**。无整应用删除意图的 purge 只删除该节点应用目录内的 managed workspace，保留同节点应用级 persistent 和其它节点各自的数据。selected 目标若尚无 `application_instances` 行，保存后的 apply 与周期巡检都必须为其创建实例与 apply Job，不得因 SpecHash 未变或仅扫描已有实例而永久遗漏。
-- **失败**：selected 空目标、不可用 Agent 或不合法目标返回稳定校验；持 persistent 的应用必须且只能选择一个节点。
+- **结果**：all 对所有健康兼容 Agent 节点各规划一实例；selected 仅规划所选节点，并对被移除旧目标规划 purge；**仅改部署节点时不得因 force 重部署已满足节点**。无整应用删除意图的 purge 只删除该节点应用目录内的 managed workspace，保留同节点应用级 persistent 和其它节点各自的数据。selected 目标若尚无 `application_instances` 行，保存后的 apply 与周期巡检都必须为其创建实例与 apply Job，不得因 SpecHash 未变或仅扫描已有实例而永久遗漏。普通应用在 `selected` 模式下选中节点数为 0 时允许创建或保存草稿，但后端与前端必须同步强制将 `enabled` 设为 `false`（并规划停用/清理已有实例）。
+- **失败**：selected 空目标启用部署返回稳定校验；不可用 Agent 或不合法目标返回稳定校验；持 persistent 的应用在 `all` 模式或选定 >1 个节点时返回校验错误，在 `selected` 模式下选 0 个节点仅允许以禁用状态保存。
 - **不变量**：单节点失败不阻断其它节点收敛；目标集合在单次 batch 事务中可见，不暴露部分计划。
-- **验证**：selected/all、removed target purge、node-workspace-only purge、persistent target、missing selected instance re-save / drift、delta add-server tests。
+- **验证**：selected/all、removed target purge、node-workspace-only purge、persistent target、zero-node selected save disabled、missing selected instance re-save / drift、delta add-server tests。
 
 ### APP-LIFE-003 显式部署/同步
 
 - **前置**：应用可部署，可能处于 disabled 或 `reconcile_stopped`。
 - **动作**：`POST /applications/{id}/deploy` 或显式同步（含保存后的 follow-up deploy）。
 - **结果**：必要时以 version CAS 启用，清除人工停止协调状态，并以 `Manual=true`、默认 `force=false` 直接请求 Planner；实际规划时保存 desired/revision/Job，返回 Job `deploymentId` 且响应附本次 `operationId`，全部目标已满足时返回 `noChange=true`。若应用含反向代理规则，仅对受影响网关触发入口代理局部协调。
-- **失败**：人工 deploy 不得被自动协调 `reconcile_next_run_at` 静默跳过；并发配置变化时不得整行覆盖；planner 失败原样报告，不合成 target task/log anchor。
+- **失败**：若普通应用在 `selected` 模式下选中节点数为 0，手动 `deploy` 与 `restart` 必须先强制将其置为禁用（若仍启用）并拒绝执行，返回 `application_deployment_servers_required`；镜像更新（`image/update`）同样强制禁用后返回 `application_disabled`。人工 deploy 不得被自动协调 `reconcile_next_run_at` 静默跳过；并发配置变化时不得整行覆盖；planner 失败原样报告，不合成 target task/log anchor。
 - **不变量**：人工操作绕过应用级退避但仍执行满足态过滤；force 才同时绕过满足态，不绕过 app/server active Job 唯一性。满足态以实例内容 SpecHash 为准，generation-only 上浮不得逼迫内容未变的节点重部署。
 - **验证**：enable CAS、manual bypass backoff、explicit no-change、skip satisfied、force planning tests。
 
@@ -307,6 +307,15 @@
 - **失败**：新旧布局同一 area 同时存在时停止迁移并保留两侧数据；旧 bind 容器不得执行 reload 后伪报成功，必须降级为 recreate；迁移失败不得删除 persistent。
 - **不变量**：`instanceId/serverId` 仍是控制面和容器身份，不再进入节点文件路径；同一节点同一应用只能有一个 Instance，因此不得重新引入 server 目录层。
 - **验证**：flat workspace path、legacy migration/conflict、pre-apply legacy persistent archive、legacy bind recreate/reload fallback、workspace-only/full purge tests。
+
+### APP-LIFE-010 选中节点数为 0 强制禁用不变量
+
+- **前置**：任意普通应用（`kind<>'facility_application'`）处于 `deploymentMode=selected` 且去重后的 `deploymentServers` 为空集合（无论因创建、编辑保存、edit-session 草稿/提交、手动部署/重启/更新镜像、编排器规划、删除服务器修剪或历史遗留数据库恢复）。
+- **动作**：创建/更新应用、edit-session draft 更新与提交、触发 deploy/restart/image-update/plan、删除最后一个目标服务器，或 Panel 启动装配执行 `EnforceZeroSelectedNodesDisabled`。
+- **结果**：后端在持久化、编辑会话提交与所有入口守卫上强制将其 `enabled` 设为 `false`（递增 `version` 并写入系统过程事件 `application.disabled`），前端编辑页同时禁用启停开关并自动回落为关闭。设施应用（如无网关时的 `facility-reverse-proxy`）不适用本规则。
+- **失败**：任何入口均不得保留 `enabled=true && deploymentMode='selected' && len(deploymentServers)==0` 的普通应用状态；无目标节点时的显式部署/重启不得假成功。
+- **不变量**：零目标普通应用始终停留在禁用状态，待用户重新选定至少一个部署节点并启用后方可恢复部署。
+- **验证**：`TestCreateAndUpdateZeroSelectedNodesForceDisabled`、`TestZeroSelectedNodesOperationsForceDisableAndReject`、`TestEditSessionZeroSelectedNodesForcesDisabledOnUpdateAndCommit`、服务器删除清理测试及前端 `model.test.ts`。
 
 ### APP-RUN-001 runtime 状态与刷新写回
 

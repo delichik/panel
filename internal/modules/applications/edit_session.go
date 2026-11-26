@@ -1002,7 +1002,7 @@ func (s *Service) persistedEditCommitResult(ctx context.Context, record editSess
 		diagnostics = append(diagnostics, Diagnostic{Code: "application_apply_request_failed", Severity: "warning", Message: i18n.Translate("application_apply_request_failed", "Configuration was committed, but applying it could not be requested"), Details: map[string]any{"error": applyErr.Error()}})
 	}
 	hint := ApplyHint{}
-	if record.Draft.Enabled {
+	if app.Enabled {
 		hint = ApplyHint{Needed: true, Action: ApplyActionDeploy}
 	} else if applyErr == nil {
 		hint = ApplyHint{Needed: true, Action: ApplyActionStop}
@@ -1281,6 +1281,9 @@ func normalizeEditDraft(in SaveInput) SaveInput {
 	}
 	if in.DeploymentServers == nil {
 		in.DeploymentServers = []string{}
+	}
+	if deploymentTargetsEmpty(in.DeploymentMode, in.DeploymentServers) {
+		in.Enabled = false
 	}
 	if in.ReverseProxy == nil {
 		in.ReverseProxy = []ReverseProxyRule{}

@@ -234,6 +234,10 @@ func New(cfg config.Config) (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
+	if _, err := applicationSvc.EnforceZeroSelectedNodesDisabled(context.Background()); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
 	certBridge.apps = applicationSvc
 	containerBridge.apps = applicationSvc
 	containerSvc := containerization.NewService(store.AppDB(), serverSvc, agentClient, taskSvc,

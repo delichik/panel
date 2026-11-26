@@ -4,6 +4,7 @@
 
 ## 当前状态
 
+- 本轮零节点应用强制禁用与删除服务器可选清除远端数据（2026-11-26）：前端新增 `applicationsPage.enabledDisabledNoNodesHint`、`applicationsPage.zeroSelectedNodesAutoDisableHint`、`serversPage.deleteServerCleanDataOption`、`serversPage.deleteServerCleanDataImpact`、`serversPage.confirmCleanDataCheckbox`、`serversPage.cleanupDeleteAccepted` 以及 `taskSummaryTranslations` 中服务器清理移除任务文案；en / zh-CN 同键且值非空（`i18n.test.ts` 校验）。后端新增稳定错误码中文翻译：`server_delete_invalid`、`server_cleanup_delete_in_progress`、`server_cleanup_failed`（`internal/platform/i18n/i18n_test.go` 覆盖）。未删除既有词条。
 - 本轮设施目录视觉重构（2026-11-26）：**无新增/删除词条键**，同步更新 `applicationsPage.entranceProxyFacility` 为更简洁的 `Entrance proxy` / `入口代理`（原 `Entrance proxy facility` / `入口代理设施`），`i18n.test.ts` 校验 en / zh-CN 键集合一致；既有 `applicationsPage.facilityCategory*` 与 `applicationsPage.facilityStatus.*` 键保留在词条表中以维持键集兼容，但设施目录卡片不再渲染它们；后端未新增错误码。
 - 本轮仅安全软件包更新（临时 APT Pinning）与前端类型区分（2026-11-24）：前端新增 `resourcesPage.updateType`、`resourcesPage.regularUpdate`、`resourcesPage.filterAllUpdates`、`resourcesPage.filterSecurityUpdates`、`resourcesPage.filterRegularUpdates`、`resourcesPage.filterUnknownUpdates`、`resourcesPage.packageSummary`，并同步更新 `resourcesPage.securityUnknownHint` 的 en / zh-CN 文案（`i18n.test.ts` 校验）；后端未新增错误码。
 - 本轮全链路 UTC 与前端浏览器时区统一展示（2026-11-24）：**无新增/删除词条键**，同步更新 `settingsPage.autoUpdate.scheduleTimeHint` 与 `settingsPage.autoUpdate.localTimeHint`（带 `{tz}` 浏览器时区参数）的 en / zh-CN 文案，说明前端按浏览器时区显示并与 UTC 自动换算；后端未新增错误码。

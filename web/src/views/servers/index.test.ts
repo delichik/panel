@@ -556,4 +556,59 @@ describe('servers page table and covered detail', () => {
     expect(errorDialogPush).toHaveBeenCalledWith(expect.objectContaining({ title: 'test boom' }));
     expect(toastPush).not.toHaveBeenCalled();
   });
+
+  it('supports deleting a server without cleanData and gates cleanData deletion behind confirmation checkbox', async () => {
+    vi.mocked(serversApi.delete).mockResolvedValueOnce(undefined);
+    const { wrapper } = await mountPage();
+
+    const moreTrigger = wrapper.find('tbody tr button[aria-label="More actions"]');
+    await moreTrigger.trigger('click');
+    await flushPromises();
+    const deleteItem = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find((item) => item.textContent?.includes('Delete'))!;
+    deleteItem.click();
+    await flushPromises();
+
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(dialog).not.toBeNull();
+    const checkboxes = Array.from(dialog.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'));
+    expect(checkboxes).toHaveLength(1);
+    expect(checkboxes[0]!.checked).toBe(false);
+    const confirmButton = Array.from(dialog.querySelectorAll<HTMLButtonElement>('button')).find((b) => b.textContent?.trim() === 'Delete')!;
+    expect(confirmButton.disabled).toBe(false);
+    confirmButton.click();
+    await flushPromises();
+
+    expect(serversApi.delete).toHaveBeenCalledWith('srv-1', undefined);
+
+    vi.mocked(serversApi.delete).mockResolvedValueOnce({ taskId: 'task-clean-1' });
+    await wrapper.find('tbody tr button[aria-label="More actions"]').trigger('click');
+    await flushPromises();
+    Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find((item) => item.textContent?.includes('Delete'))!.click();
+    await flushPromises();
+
+    const dialog2 = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    const cleanCheckbox = dialog2.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    cleanCheckbox.checked = true;
+    cleanCheckbox.dispatchEvent(new Event('change'));
+    await flushPromises();
+
+    const twoCheckboxes = Array.from(dialog2.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'));
+    expect(twoCheckboxes).toHaveLength(2);
+    const confirmButton2 = Array.from(dialog2.querySelectorAll<HTMLButtonElement>('button')).find((b) => b.textContent?.trim() === 'Delete')!;
+    expect(confirmButton2.disabled).toBe(true);
+
+    twoCheckboxes[1]!.checked = true;
+    twoCheckboxes[1]!.dispatchEvent(new Event('change'));
+    await flushPromises();
+    expect(confirmButton2.disabled).toBe(false);
+
+    confirmButton2.click();
+    await flushPromises();
+
+    expect(serversApi.delete).toHaveBeenLastCalledWith('srv-1', { cleanData: true });
+    expect(toastPush).toHaveBeenCalledWith(expect.objectContaining({
+      tone: 'success',
+      title: expect.stringContaining('task-clean-1'),
+    }));
+  });
 });

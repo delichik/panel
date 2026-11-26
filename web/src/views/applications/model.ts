@@ -217,7 +217,7 @@ export function draftFromApplication(app?: ApplicationDto | null): ApplicationDr
   const command = arrayValue(parsed.command).map((item) => String(item)).filter((item) => item.trim() !== '');
   return {
     name: app?.name || stringValue(parsed.name) || '',
-    enabled: app?.enabled ?? true,
+    enabled: app?.deploymentMode === 'selected' && !(app?.deploymentServers?.length) ? false : (app?.enabled ?? true),
     autoUpdateEnabled: app?.autoUpdateEnabled !== false,
     image: stringValue(parsed.image),
     commandRows: command.map((value) => ({ id: makeId('cmd'), value })),
@@ -274,13 +274,15 @@ export function specYamlFromDraft(draft: ApplicationDraftUi) {
 
 export function saveInputFromDraft(draft: ApplicationDraftUi): ApplicationSaveInput {
   const specYaml = specYamlFromDraft(draft);
+  const deploymentServers = draft.deploymentMode === 'selected' ? [...draft.deploymentServers] : [];
+  const enabled = draft.deploymentMode === 'selected' && !deploymentServers.length ? false : draft.enabled;
   return {
     name: draft.name.trim(),
-    enabled: draft.enabled,
+    enabled,
     autoUpdateEnabled: draft.autoUpdateEnabled !== false,
     specYaml,
     deploymentMode: draft.deploymentMode,
-    deploymentServers: draft.deploymentMode === 'selected' ? [...draft.deploymentServers] : [],
+    deploymentServers,
     // Origin servers and the primary origin are resolved by the backend from
     // the global gateway nodes and the deployment targets. The client only
     // sends the user-arranged priority order for primary_backup.
@@ -299,7 +301,6 @@ export function validateApplicationDraft(draft: ApplicationDraftUi): FieldErrors
   if (!draft.image.trim()) errors.image = 'applicationsPage.validationImage';
   if (draft.cpu.trim() && !Number.isFinite(Number(draft.cpu))) errors.cpu = 'applicationsPage.validationNumber';
   if (draft.memoryMb.trim() && !Number.isFinite(Number(draft.memoryMb))) errors.memoryMb = 'applicationsPage.validationNumber';
-  if (draft.deploymentMode === 'selected' && !draft.deploymentServers.length) errors.deploymentServers = 'applicationsPage.validationDeploymentServers';
   if (draft.env.some((row) => !row.key.trim())) errors.env = 'applicationsPage.validationEnv';
   if (draft.ports.some((row) => !row.to.trim())) errors.ports = 'applicationsPage.validationPorts';
   if (draft.ports.some((row) => row.openFirewall && !row.staticPort.trim())) errors.ports = 'applicationsPage.validationFirewallStaticPort';

@@ -1176,6 +1176,14 @@ const appDeploymentServersModel = computed({
   },
 });
 
+const appZeroSelectedNodes = computed(() => appDraft.deploymentMode === 'selected' && appDraft.deploymentServers.length === 0);
+
+watch(appZeroSelectedNodes, (empty) => {
+  if (empty && appDraft.enabled) {
+    appDraft.enabled = false;
+  }
+}, { immediate: true });
+
 watch(search, (value) => {
   void router.replace({ query: { ...route.query, search: value || undefined } });
   if (searchTimer) clearTimeout(searchTimer);
@@ -3859,9 +3867,9 @@ onBeforeUnmount(() => {
                   <Input :id="id" :aria-describedby="describedBy" v-model="appDraft.name" :invalid="invalid" @input="markAppStructuredDirty" />
                 </template>
               </FormField>
-              <FormField :label="t('applicationsPage.enabled')">
+              <FormField :label="t('applicationsPage.enabled')" :hint="appZeroSelectedNodes ? t('applicationsPage.enabledDisabledNoNodesHint') : undefined">
                 <template #default="{ id }">
-                  <Switch :id="id" v-model="appDraft.enabled" :label="t('applicationsPage.enabled')" @click="markAppStructuredDirty" />
+                  <Switch :id="id" v-model="appDraft.enabled" :disabled="appZeroSelectedNodes" :label="t('applicationsPage.enabled')" @click="markAppStructuredDirty" />
                 </template>
               </FormField>
               <FormField :label="t('applicationsPage.allowAutoUpdate')" :hint="t('applicationsPage.allowAutoUpdateHint')">
@@ -3980,6 +3988,7 @@ onBeforeUnmount(() => {
               </FormField>
               <div v-if="appDraft.deploymentMode === 'selected'">
                 <ServerMultiPicker v-model="appDeploymentServersModel" :servers="serverOptions" :disabled-ids="deploymentDisabledIds" :disabled-reasons="deploymentDisabledReasons" :label="t('applicationsPage.deploymentServers')" />
+                <p v-if="appZeroSelectedNodes" class="mt-2 mb-0 text-caption text-muted-foreground">{{ t('applicationsPage.zeroSelectedNodesAutoDisableHint') }}</p>
               </div>
             </div>
           </DetailSection>

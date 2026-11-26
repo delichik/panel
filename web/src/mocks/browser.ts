@@ -95,6 +95,7 @@ import {
   saveMockFacilitySettings,
   patchAppSession,
   patchFacilitySession,
+  pruneServerFromMockApplications,
   putAppFile,
   putFacilityAsset,
   restorePersistentData,
@@ -360,7 +361,18 @@ export function installMockApi() {
       }
     }
     if (serverMatch && method(init) === 'DELETE') {
-      return deleteServer(decodeURIComponent(serverMatch[1])) ? json(null, 200) : error('server_not_found', 'Server was not found.', 404);
+      const serverId = decodeURIComponent(serverMatch[1]);
+      const cleanData = url.searchParams.get('cleanData');
+      if (cleanData !== null && cleanData !== '' && cleanData !== 'false' && cleanData !== '0' && cleanData !== 'true' && cleanData !== '1') {
+        return error('server_delete_invalid', 'cleanData must be true or false.', 400);
+      }
+      const deleted = deleteServer(serverId);
+      if (!deleted) return error('server_not_found', 'Server was not found.', 404);
+      pruneServerFromMockApplications(serverId);
+      if (cleanData === 'true' || cleanData === '1') {
+        return json(accepted('task-server-cleanup-delete'), 202);
+      }
+      return json(null, 200);
     }
     const serverOperationMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)\/(test|restart|agent\/deploy)$/);
     if (serverOperationMatch && method(init) === 'POST') {
@@ -691,8 +703,13 @@ export function installMockApi() {
         const app = mockApplications.find((item) => item.id === appId);
         return app ? json(app) : error('application_not_found', 'Application was not found.', 404);
       }
-      const result = appOperation(appId, appOperationMatch[2]);
-      return result ? json(result, 202) : error('application_not_found', 'Application was not found.', 404);
+      try {
+        const result = appOperation(appId, appOperationMatch[2]);
+        return result ? json(result, 202) : error('application_not_found', 'Application was not found.', 404);
+      } catch (err) {
+        const code = err instanceof Error ? err.message : 'application_operation_invalid';
+        return error(code, 'Select at least one deployment server before deploying.', 422);
+      }
     }
 
     if (url.pathname === '/api/v1/application-edit-sessions' && method(init) === 'POST') {

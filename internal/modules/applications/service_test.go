@@ -2934,3 +2934,172 @@ func TestRefreshApplicationSnapshotDoesNotChurnFacilityApplication(t *testing.T)
 		t.Fatalf("facility refresh must stay stable across calls, got generation=%d specHash=%q", again.Generation, again.SpecHash)
 	}
 }
+
+func TestCreateAndUpdateZeroSelectedNodesForceDisabled(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	// Creating with selected mode and 0 servers forces enabled=false and skips deploy Jobs.
+	created, err := svc.Create(ctx, SaveInput{
+		Name:              "empty-selected-create",
+		Enabled:           true,
+		SpecYAML:          "name: empty-selected-create\nimage: nginx\n",
+		DeploymentMode:    DeploymentModeSelected,
+		DeploymentServers: nil,
+	})
+	if err != nil {
+		t.Fatalf("create with zero selected servers must succeed disabled, got %v", err)
+	}
+	if created.Enabled {
+		t.Fatal("expected created application with 0 selected servers to be disabled")
+	}
+	if jobs := jobsForApplication(t, svc, created.ID); len(jobs) != 0 {
+		t.Fatalf("expected no deploy jobs for zero-node created app, got %#v", jobs)
+	}
+
+	// Persistent app with 0 selected servers can also be created in disabled state, while all/multi-node remain rejected.
+	persistentZero, err := svc.Create(ctx, SaveInput{
+		Name:              "persistent-zero",
+		Enabled:           true,
+		SpecYAML:          "name: persistent-zero\nimage: postgres\nmounts:\n  - type: persistent\n    source: data\n    target: /var/lib/postgresql/data\n",
+		DeploymentMode:    DeploymentModeSelected,
+		DeploymentServers: []string{},
+	})
+	if err != nil {
+		t.Fatalf("expected zero-node persistent app to save disabled, got %v", err)
+	}
+	if persistentZero.Enabled {
+		t.Fatal("expected zero-node persistent app to be forced disabled")
+	}
+	if _, err := svc.Create(ctx, SaveInput{
+		Name:              "persistent-multi",
+		Enabled:           false,
+		SpecYAML:          "name: persistent-multi\nimage: postgres\nmounts:\n  - type: persistent\n    source: data\n    target: /var/lib/postgresql/data\n",
+		DeploymentMode:    DeploymentModeSelected,
+		DeploymentServers: []string{"srv-a", "srv-b"},
+	}); err == nil {
+		t.Fatal("expected persistent app with multiple selected servers to be rejected")
+	}
+
+	// Updating an enabled app to 0 selected servers forces enabled=false and schedules stop/purge convergence.
+	active, err := svc.Create(ctx, SaveInput{
+		Name:              "active-selected",
+		Enabled:           true,
+		SpecYAML:          "name: active-selected\nimage: nginx\n",
+		DeploymentMode:    DeploymentModeSelected,
+		DeploymentServers: []string{"srv-a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := svc.Update(ctx, active.ID, SaveInput{
+		Name:              active.Name,
+		Enabled:           true,
+		SpecYAML:          active.SpecYAML,
+		DeploymentMode:    DeploymentModeSelected,
+		DeploymentServers: []string{},
+	})
+	if err != nil {
+		t.Fatalf("update to zero selected servers must succeed disabled, got %v", err)
+	}
+	if updated.Enabled {
+		t.Fatal("expected updated application with 0 selected servers to be forced disabled")
+	}
+	foundStopOrPurge := false
+	for _, job := range jobsForApplication(t, svc, active.ID) {
+		if job.Action == "stop" || job.Action == "purge" {
+			foundStopOrPurge = true
+		}
+	}
+	if !foundStopOrPurge {
+		t.Fatalf("expected stop/purge job after clearing deployment servers, got %#v", jobsForApplication(t, svc, active.ID))
+	}
+}
+
+func TestZeroSelectedNodesOperationsForceDisableAndReject(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{
+		Name:              "stale-zero",
+		Enabled:           false,
+		SpecYAML:          "name: stale-zero\nimage: nginx\n",
+		DeploymentMode:    DeploymentModeSelected,
+		DeploymentServers: nil,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	forceEnableRaw := func() {
+		t.Helper()
+		if _, err := svc.db.ExecContext(ctx, `UPDATE applications SET enabled=1 WHERE id=?`, app.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertDisabledInDB := func(contextLabel string) {
+		t.Helper()
+		reloaded, err := svc.Get(ctx, app.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reloaded.Enabled {
+			t.Fatalf("%s: expected application to be forced disabled in DB", contextLabel)
+		}
+	}
+
+	forceEnableRaw()
+	_, err = svc.Deploy(ctx, app.ID)
+	assertPanelErrorCode(t, err, "application_deployment_servers_required")
+	assertDisabledInDB("Deploy")
+
+	forceEnableRaw()
+	_, err = svc.Restart(ctx, app.ID)
+	assertPanelErrorCode(t, err, "application_deployment_servers_required")
+	assertDisabledInDB("Restart")
+
+	forceEnableRaw()
+	_, err = svc.UpdateImage(ctx, app.ID)
+	assertPanelErrorCode(t, err, "application_disabled")
+	assertDisabledInDB("UpdateImage")
+
+	forceEnableRaw()
+	if _, err := svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{
+		ApplicationID: app.ID,
+		Manual:        true,
+		TriggerType:   "manual",
+		Reason:        "manual",
+	}); err != nil {
+		t.Fatalf("PlanApplicationDeployment returned unexpected error: %v", err)
+	}
+	assertDisabledInDB("PlanApplicationDeployment")
+
+	// Startup sweep must disable user zero-node apps while leaving facility apps alone.
+	forceEnableRaw()
+	now := time.Now().UTC()
+	if _, err := svc.db.ExecContext(ctx, `INSERT INTO applications(id,name,kind,enabled,spec_yaml,deployment_mode,deployment_server_ids_json,generation,spec_hash,job_id,namespace,created_at,updated_at)
+		VALUES(?,?,?,1,?,?,?,?,?,?,?,?,?)`,
+		FacilityProxyApplicationID, "facility", ApplicationKindFacility,
+		"kind: facility/reverse-proxy\nname: entrance-gateway\nimage: nginx\n",
+		DeploymentModeSelected, `[]`, 1, "fac-hash", FacilityProxyApplicationID, "facility",
+		formatTime(now), formatTime(now)); err != nil {
+		t.Fatal(err)
+	}
+	count, err := svc.EnforceZeroSelectedNodesDisabled(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("EnforceZeroSelectedNodesDisabled count = %d, want 1", count)
+	}
+	assertDisabledInDB("EnforceZeroSelectedNodesDisabled")
+	facilityApp, err := svc.Get(ctx, FacilityProxyApplicationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !facilityApp.Enabled {
+		t.Fatal("facility application with 0 selected servers must remain enabled")
+	}
+}

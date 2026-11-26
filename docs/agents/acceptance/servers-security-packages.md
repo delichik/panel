@@ -31,7 +31,7 @@
 - `SRV-NAT-004`：**已废弃**。`GET/POST /servers/{id}/nat-ports` 与 `PUT/DELETE /servers/{id}/nat-ports/{mappingID}` 已删除，`nat_port_mappings` 表（含两个复合唯一索引与外键级联）与 `nat_port_*` 错误码一并删除。
 - `SRV-NAT-005`：**已废弃**。面板不再记录任何 NAT 端口映射，因此也不存在“需开放端口”清单。
 - `SRV-SAVE-009`：保存 IP 变化或删除服务器时必须异步触发引用该服务器的入口代理 DNS 同步；同步失败不回滚本地保存，且必须可由任务状态诊断。
-- `SRV-DEL-001`：删除服务器是纯本地控制面操作，不连接目标机；目标机失联不得阻止删除。
+- `SRV-DEL-001`：默认删除服务器（`DELETE /api/v1/servers/{id}`，未传 `cleanData` 或 `cleanData=false`/`0`）是纯本地控制面操作，不连接目标机并返回 `204`；目标机失联不得阻止本地删除。当用户显式传入 `?cleanData=true`（或 `1`）时走远端清理删除流程（见 `SRV-DEL-010`）。
 - `SRV-DEL-002`：删除必须取消该服务器 queued、scheduled、failed_retryable 和可取消的 running 任务；已取消任务不得被迟到 worker 覆盖终态，正在执行的不可取消软件包升级不得被取消。
 - `SRV-DEL-003`：同一 AppDB 事务内必须删除服务器、修剪应用 deployment server IDs、递增受影响应用 version并更新时间、移除概览卡片 serverIds；外键级联负责包/镜像缓存、实例和协调状态。
 - `SRV-DEL-004`：AppDB 删除完成后必须清理 MetricsDB 的服务器指标；任一步失败必须返回错误，不得假称完整删除成功；再次删除不存在 ID 返回 404。
@@ -39,7 +39,8 @@
 - `SRV-DEL-006`：删除服务器必须在同一事务内终结并删除该服务器的全部协调 Job。`jobs.server_id` 对 `servers(id)` 是 RESTRICT 外键，任何存活的 Job 行（包括永不清理的终态 Job）都会让删除失败，且失败必须表现为可识别的错误而不是未分类的 500 `internal_error`。活跃 Job（`pending`、`running`、`failed_retryable`）必须先置为 `cancelled` 并释放租约与冲突域锁，使活动日志留下一条取消结果；被删除 Job 对应的 `applications.job_id` 必须清空，不得留下悬空引用。删除不得因为目标机失联或存在 Job 历史而拒绝。
 - `SRV-DEL-007`：同一事务内必须清理没有外键保护、却会让后续操作永久失败的服务器引用：删除该服务器在 `application_persistent_locations` 的记录（否则应用删除会因取不到节点而永远失败）、修剪入口代理设施的全局网关列表（`facility_app_configs.deployment_server_ids_json` 并递增 `version`）、修剪入口代理路由的源站与 AnyAccess 中继节点（`reverse_proxy_routes`）、修剪存储共享的存储节点（`storage_share_configs.servers_json`）并删除相关分区（`storage_share_partitions`）。修剪后源站为空的路由必须整条删除，不得留下没有后端的 upstream。
 - `SRV-DEL-008`：服务器删除提交后，入口代理与存储共享必须按修剪后的配置重新收敛：重新渲染 nginx 配置、按剩余网关重算入口代理伪应用的启用状态与部署目标、重新下发存储导出。收敛失败只记录告警，不得把已提交的删除报为失败；也不得为已删除的节点创建协调 Job。
-- `SRV-DEL-009`：因节点删除而失去全部部署目标的应用必须由系统自动停用，不得停留在“需要选择部署节点”的校验错误上。判定规则：`selected` 模式修剪后部署节点为空；`all` 模式面板内已无其他节点。只处理确实把被删节点当作部署目标的应用（显式列出该节点，或在该节点上仍有实例）。停用必须递增应用 `version` 与 `updated_at`，并在统一活动日志留下 `application.disabled` 事件（含被删节点与应用 ID）。停用后编排器按停用语义收敛该应用，用户重新选定节点并启用后恢复。仍有其他部署目标的应用不得被停用。
+- `SRV-DEL-009`：因节点删除而失去全部部署目标的应用必须由系统自动停用，不得停留在“需要选择部署节点”的校验错误上。判定规则：`selected` 模式修剪后部署节点为空（同时清扫库内既有 0 节点仍启用的 `selected` 普通应用，排除设施应用）；`all` 模式面板内已无其他节点。只处理确实把被删节点当作部署目标的应用（显式列出该节点，或在该节点上仍有实例，以及库内残留的 `selected` 0 节点启用普通应用）。停用必须递增应用 `version` 与 `updated_at`，并在统一活动日志留下 `application.disabled` 事件（含被删节点与应用 ID）。停用后编排器按停用语义收敛该应用，用户重新选定节点并启用后恢复。仍有其他部署目标的应用不得被停用。
+- `SRV-DEL-010`：删除服务器可选清除目标机数据（`DELETE /api/v1/servers/{id}?cleanData=true`）。查询参数 `cleanData` 仅接受 `""|false|0|true|1`，非法值返回 `400 server_delete_invalid`。为 `true`/`1` 时返回 `202 Accepted {"taskId"}`，异步执行 `server_cleanup_delete`（单服务器互斥冲突返回 `409 server_cleanup_delete_in_progress`）：先校验目标机 SSH 连通性与 root/免密 sudo 权限，并取消除自身外该服务器其他可取消任务与活跃 `application_deploy` 作业；随后经特权 SSH 在目标机仅清理 Panel 来源数据与 Agent——停止并移除 `panel-agent.service` 与 `/usr/local/bin/panel-agent`、删除带 `panel.application.managed=true` 标签的 Panel 托管容器与 `panel-apps` 网络、剥离 `/etc/exports` 中 `# panel-storage-share:managed` 段落（保持系统 `nfs-kernel-server` 运行）与清理已校验存储分区目录、删除 `/etc/panel-agent`（含证书）/ `/opt/panel` / `/var/lib/panel-agent` / `/tmp/panel-agent-*` / MPTCP sysctl 与 chrony drop-in 及存储配置 JSON。**不卸载** Docker、UFW、Chrony、NFS 等系统软件包，也**不停止**上述系统服务。远端特权检查或清理失败必须 fail-closed（`server_cleanup_failed`），**保留控制面服务器记录**以便排障或重试；远端清理成功后才执行 `SRV-DEL-002..009` 本地删除与凭据/指标/证书收敛（任务取消阶段排除当前清理任务自身），目标机若已提前外部删除则按幂等完成。
 
 ## 3. 连通性、特权与主机密钥
 

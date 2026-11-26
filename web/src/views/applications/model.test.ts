@@ -255,10 +255,25 @@ describe('application editor model', () => {
     expect(diffApplications(app, draft).changed).toBe(1);
   });
 
-  it('reports a change when a deployment server is removed', () => {
+  it('reports changes including forced disable when the last deployment server is removed', () => {
+    const multiApp = { ...app, deploymentServers: ['srv-1', 'srv-2'] };
+    const multiDraft = draftFromApplication(multiApp);
+    multiDraft.deploymentServers = ['srv-1'];
+    expect(diffApplications(multiApp, multiDraft).changed).toBe(1);
+
     const draft = draftFromApplication(app);
     draft.deploymentServers = [];
+    // Removing the last deployment node reports a diff change and forces enabled -> false.
     expect(diffApplications(app, draft).changed).toBe(1);
+    expect(saveInputFromDraft(draft).enabled).toBe(false);
+    expect(validateApplicationDraft(draft).deploymentServers).toBeUndefined();
+  });
+
+  it('forces enabled to false when loading a zero-node selected application', () => {
+    const zeroNodeApp = { ...app, enabled: true, deploymentMode: 'selected' as const, deploymentServers: [] };
+    const draft = draftFromApplication(zeroNodeApp);
+    expect(draft.enabled).toBe(false);
+    expect(saveInputFromDraft(draft).enabled).toBe(false);
   });
 
   it('preserves uncovered spec fields like capAdd through structured edits', () => {
@@ -349,7 +364,8 @@ describe('application editor model', () => {
 
     expect(errors.name).toBe('applicationsPage.validationName');
     expect(errors.image).toBe('applicationsPage.validationImage');
-    expect(errors.deploymentServers).toBe('applicationsPage.validationDeploymentServers');
+    // Zero selected servers is permitted so users can save the application in disabled state.
+    expect(errors.deploymentServers).toBeUndefined();
   });
 
   it('serializes facility config and reports preview diff', () => {

@@ -1004,9 +1004,39 @@ export function appOperation(id: string, operation: string): OperationResult | n
   const app = mockApplications.find((item) => item.id === id);
   if (!app) return null;
   if (operation === 'stop') app.enabled = false;
-  if (operation === 'image/update') app.imageUpdateAvailable = false;
+  if (operation === 'deploy' || operation === 'restart') {
+    if (app.deploymentMode === 'selected' && !(app.deploymentServers?.length)) {
+      app.enabled = false;
+      app.runtimeStatus = 'stopped';
+      throw new Error('application_deployment_servers_required');
+    }
+    app.enabled = true;
+  }
+  if (operation === 'image/update') {
+    if (app.deploymentMode === 'selected' && !(app.deploymentServers?.length)) {
+      app.enabled = false;
+      app.runtimeStatus = 'stopped';
+      throw new Error('application_disabled');
+    }
+    app.imageUpdateAvailable = false;
+  }
   app.runtimeStatus = operation === 'deploy' ? 'deploying' : app.runtimeStatus;
   return { taskId: `task-${operation.replace('/', '-')}-${Date.now()}`, application: app, runtime: runtimes[id] };
+}
+
+export function pruneServerFromMockApplications(serverId: string) {
+  for (const app of mockApplications) {
+    if (app.deploymentMode !== 'selected' || !app.deploymentServers?.length) continue;
+    const filtered = app.deploymentServers.filter((id) => id !== serverId);
+    if (filtered.length !== app.deploymentServers.length) {
+      app.deploymentServers = filtered;
+      if (filtered.length === 0) {
+        app.enabled = false;
+        app.runtimeStatus = 'stopped';
+      }
+      app.updatedAt = now;
+    }
+  }
 }
 
 export function deleteApp(id: string) {
@@ -1053,6 +1083,9 @@ export function deployedAppFileContent(applicationId: string, fileName: string):
 
 export function beginAppSession(applicationId?: string): ApplicationEditSession {
   const app = mockApplications.find((item) => item.id === applicationId);
+  const deploymentMode = app?.deploymentMode === 'selected' ? 'selected' : 'all';
+  const deploymentServers = app?.deploymentServers ?? [];
+  const enabled = deploymentMode === 'selected' && deploymentServers.length === 0 ? false : (app?.enabled ?? true);
   const session: ApplicationEditSession = {
     id: `aedit-${Date.now()}`,
     applicationId,
@@ -1061,11 +1094,11 @@ export function beginAppSession(applicationId?: string): ApplicationEditSession 
     baseResourceVersion: { value: String(app?.version ?? 0), updatedAt: now },
     draft: {
       name: app?.name ?? '',
-      enabled: app?.enabled ?? true,
+      enabled,
       autoUpdateEnabled: app?.autoUpdateEnabled !== false,
       specYaml: app?.specYaml ?? '',
-      deploymentMode: app?.deploymentMode === 'selected' ? 'selected' : 'all',
-      deploymentServers: app?.deploymentServers ?? [],
+      deploymentMode,
+      deploymentServers,
       reverseProxy: app?.reverseProxy ?? [],
     },
     revision: 1,
@@ -1086,7 +1119,13 @@ export function appSession(id: string) {
 export function patchAppSession(id: string, draft: ApplicationEditSession['draft']) {
   const session = appSessions.get(id);
   if (!session) return null;
-  session.draft = draft;
+  const deploymentServers = draft.deploymentMode === 'selected' ? [...(draft.deploymentServers ?? [])] : [];
+  const enabled = draft.deploymentMode === 'selected' && deploymentServers.length === 0 ? false : draft.enabled;
+  session.draft = {
+    ...draft,
+    deploymentServers,
+    enabled,
+  };
   session.revision += 1;
   session.updatedAt = now;
   return session;
@@ -1184,16 +1223,19 @@ export function commitAppSession(id: string) {
   if (!session) return null;
   if (session.draft.name.includes('conflict')) throw new Error('Application changed while editing.');
   if (session.draft.name.includes('commit-fail')) throw new Error('Commit failed after preview.');
+  const deploymentMode = session.draft.deploymentMode === 'selected' ? 'selected' : 'all';
+  const deploymentServers = deploymentMode === 'selected' ? [...(session.draft.deploymentServers ?? [])] : [];
+  const enabled = deploymentMode === 'selected' && deploymentServers.length === 0 ? false : session.draft.enabled;
   const app: ApplicationDto = {
     id: session.applicationId || `app-${Date.now()}`,
     version: Number(session.baseResourceVersion.value || 0) + 1,
     kind: 'application',
     name: session.draft.name,
-    enabled: session.draft.enabled,
+    enabled,
     autoUpdateEnabled: session.draft.autoUpdateEnabled !== false,
     specYaml: session.draft.specYaml,
-    deploymentMode: session.draft.deploymentMode,
-    deploymentServers: session.draft.deploymentServers,
+    deploymentMode,
+    deploymentServers,
     reverseProxy: session.draft.reverseProxy,
     generation: 1,
     specHash: `sha-${Date.now()}`,
@@ -1201,7 +1243,7 @@ export function commitAppSession(id: string) {
     imageUpdateAvailable: false,
     jobId: `panel-${session.draft.name}`,
     namespace: 'default',
-    runtimeStatus: session.draft.enabled ? 'deploying' : 'stopped',
+    runtimeStatus: enabled ? 'deploying' : 'stopped',
     createdAt: now,
     updatedAt: now,
   };

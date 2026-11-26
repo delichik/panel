@@ -27,6 +27,7 @@ import (
 	"panel/internal/platform/database/models"
 	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
+	"panel/internal/platform/events"
 	"panel/internal/platform/filestorage"
 	httpx "panel/internal/platform/http"
 	id "panel/internal/platform/identity"
@@ -681,11 +682,15 @@ func (s *Service) createWithFilesID(ctx context.Context, appID string, in SaveIn
 		return Application{}, ApplyHint{}, err
 	}
 	now := time.Now().UTC()
+	enabled := in.Enabled
+	if deploymentTargetsEmpty(prepared.deploymentMode, prepared.deploymentServers) {
+		enabled = false
+	}
 	app := Application{
 		ID:                appID,
 		Kind:              ApplicationKindUser,
 		Name:              in.Name,
-		Enabled:           in.Enabled,
+		Enabled:           enabled,
 		AutoUpdateEnabled: resolveAutoUpdateEnabled(in.AutoUpdateEnabled, true),
 		SpecYAML:          in.SpecYAML,
 		PersistentPath:    prepared.persistentPath,
@@ -805,7 +810,11 @@ func (s *Service) updateWithFilesVersioned(ctx context.Context, appID string, ex
 	if app.Name == "" {
 		app.Name = prepared.spec.Name
 	}
-	app.Enabled = in.Enabled
+	enabled := in.Enabled
+	if deploymentTargetsEmpty(prepared.deploymentMode, prepared.deploymentServers) {
+		enabled = false
+	}
+	app.Enabled = enabled
 	app.AutoUpdateEnabled = resolveAutoUpdateEnabled(in.AutoUpdateEnabled, current.AutoUpdateEnabled)
 	app.SpecYAML = in.SpecYAML
 	app.PersistentPath = prepared.persistentPath
@@ -1186,6 +1195,12 @@ func (s *Service) prepareImageUpdate(ctx context.Context, appID string) (Applica
 	if err != nil {
 		return Application{}, appruntime.Spec{}, err
 	}
+	if deploymentTargetsEmpty(app.DeploymentMode, app.DeploymentServers) && app.Enabled {
+		if disableErr := s.forceDisableApplication(ctx, app, "zero_deployment_servers"); disableErr != nil {
+			return Application{}, appruntime.Spec{}, disableErr
+		}
+		app.Enabled = false
+	}
 	if !app.Enabled {
 		return Application{}, appruntime.Spec{}, panelerr.Conflict("application_disabled", "enable the application before updating its image")
 	}
@@ -1269,6 +1284,12 @@ func (s *Service) Deploy(ctx context.Context, appID string) (OperationResult, er
 	if err != nil {
 		return OperationResult{}, err
 	}
+	if deploymentTargetsEmpty(app.DeploymentMode, app.DeploymentServers) {
+		if app.Enabled {
+			_ = s.forceDisableApplication(ctx, app, "zero_deployment_servers")
+		}
+		return OperationResult{}, panelerr.Validation("application_deployment_servers_required", "select at least one deployment server")
+	}
 	app, err = s.enableApplicationForDeploy(ctx, app)
 	if err != nil {
 		return OperationResult{}, err
@@ -1332,6 +1353,12 @@ func (s *Service) prepareDeploy(ctx context.Context, appID string) (Application,
 }
 
 func (s *Service) enableApplicationForDeploy(ctx context.Context, app Application) (Application, error) {
+	if deploymentTargetsEmpty(app.DeploymentMode, app.DeploymentServers) {
+		if app.Enabled {
+			_ = s.forceDisableApplication(ctx, app, "zero_deployment_servers")
+		}
+		return app, panelerr.Validation("application_deployment_servers_required", "select at least one deployment server")
+	}
 	if app.Enabled {
 		return app, nil
 	}
@@ -1561,6 +1588,12 @@ func (s *Service) Restart(ctx context.Context, appID string) (OperationResult, e
 	app, err := s.Get(ctx, appID)
 	if err != nil {
 		return OperationResult{}, err
+	}
+	if deploymentTargetsEmpty(app.DeploymentMode, app.DeploymentServers) {
+		if app.Enabled {
+			_ = s.forceDisableApplication(ctx, app, "zero_deployment_servers")
+		}
+		return OperationResult{}, panelerr.Validation("application_deployment_servers_required", "select at least one deployment server")
 	}
 	plan, err := s.PlanApplicationDeployment(ctx, DeploymentPlanRequest{
 		ApplicationID: app.ID,
@@ -2720,6 +2753,12 @@ func (s *Service) planApplicationDeploymentV3(ctx context.Context, req Deploymen
 	targetIDs := uniqueStringItems(req.ServerIDs)
 	stopRequestIDs := uniqueStringItems(append(append([]string{}, req.StopServers...), req.ServerIDs...))
 
+	if !app.DeletionRequested && app.Enabled && app.Kind != ApplicationKindFacility && deploymentTargetsEmpty(app.DeploymentMode, app.DeploymentServers) {
+		if err := s.forceDisableApplication(ctx, app, "zero_deployment_servers"); err != nil {
+			return DeploymentPlanResult{}, err
+		}
+		app.Enabled = false
+	}
 	if app.DeletionRequested || !app.Enabled {
 		stopTargets, err := s.reconcileStopTargets(ctx, app, stopRequestIDs)
 		if err != nil {
@@ -3191,9 +3230,11 @@ func stopTaskOptions(task tasks.Task) (stopTaskRunOptions, error) {
 }
 
 func applyDeploymentTargets(job appruntime.Spec, app Application) (appruntime.Spec, error) {
-	_, _, err := normalizeDeploymentTargets(app.DeploymentMode, app.DeploymentServers, app.PersistentPath)
-	if err != nil {
+	if _, _, err := normalizeDeploymentTargets(app.DeploymentMode, app.DeploymentServers, app.PersistentPath); err != nil {
 		return appruntime.Spec{}, err
+	}
+	if app.Enabled && deploymentTargetsEmpty(app.DeploymentMode, app.DeploymentServers) {
+		return appruntime.Spec{}, panelerr.Validation("application_deployment_servers_required", "select at least one deployment server")
 	}
 	return job, nil
 }
@@ -3779,6 +3820,10 @@ func imageReferenceWithLatest(reference string) string {
 	return reference + ":latest"
 }
 
+func deploymentTargetsEmpty(mode string, servers []string) bool {
+	return normalizeDeploymentMode(mode) == DeploymentModeSelected && len(uniqueSortedDeploymentServers(servers)) == 0
+}
+
 func normalizeDeploymentTargets(mode string, servers []string, persistentPath string) (string, []string, error) {
 	mode = strings.TrimSpace(mode)
 	if mode == "" {
@@ -3791,13 +3836,79 @@ func normalizeDeploymentTargets(mode string, servers []string, persistentPath st
 	if mode == DeploymentModeAll {
 		out = nil
 	}
-	if mode == DeploymentModeSelected && len(out) == 0 {
-		return "", nil, panelerr.Validation("application_deployment_servers_required", "select at least one deployment server")
-	}
-	if strings.TrimSpace(persistentPath) != "" && (mode != DeploymentModeSelected || len(out) != 1) {
+	if strings.TrimSpace(persistentPath) != "" && (mode != DeploymentModeSelected || len(out) > 1) {
 		return "", nil, panelerr.Validation("application_persistent_single_target_required", "persistent applications must target exactly one server")
 	}
 	return mode, out, nil
+}
+
+// forceDisableApplication atomically disables an enabled application when it has
+// zero selected deployment targets and emits a system process event.
+func (s *Service) forceDisableApplication(ctx context.Context, app Application, reason string) error {
+	if s == nil || s.db == nil || !app.Enabled {
+		return nil
+	}
+	now := formatTime(time.Now().UTC())
+	res, err := orm.RawExec(ctx, s.db, `UPDATE applications SET enabled=0,version=version+1,updated_at=? WHERE id=? AND enabled=1`, now, app.ID)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil || affected == 0 {
+		return err
+	}
+	_ = logging.EmitProcess(ctx, logging.ProcessSpec{
+		Module:    "applications",
+		Origin:    events.OriginSystem,
+		Title:     fmt.Sprintf("Disabled %s", firstNonEmpty(app.Name, app.ID)),
+		Summary:   "Application disabled because selected deployment servers is empty",
+		State:     logging.ProcessSucceeded,
+		Level:     "warn",
+		Finished:  true,
+		EventType: "application.disabled",
+		Resources: []logging.Resource{
+			logging.ResourceRef("application", app.ID, app.Name, "target"),
+		},
+		Fields: []zap.Field{
+			zap.String("action", "disable"),
+			zap.String("trigger", reason),
+			zap.String("reason", reason),
+			zap.String("applicationId", app.ID),
+			zap.String("deploymentMode", normalizeDeploymentMode(app.DeploymentMode)),
+			zap.String("applicationName", app.Name),
+		},
+	})
+	return nil
+}
+
+// EnforceZeroSelectedNodesDisabled disables any enabled user application in
+// selected mode whose deployment server list is empty (e.g. legacy or restored DBs).
+func (s *Service) EnforceZeroSelectedNodesDisabled(ctx context.Context) (int, error) {
+	if s == nil || s.db == nil {
+		return 0, nil
+	}
+	var rows []models.Application
+	if err := orm.New(s.db).From("applications").
+		Select("id", "name", "enabled", "deployment_mode", "deployment_server_ids_json").
+		Where("kind<>?", ApplicationKindFacility).
+		And("deletion_requested=0").
+		And("enabled=1").
+		And("deployment_mode=?", DeploymentModeSelected).
+		All(ctx, &rows); err != nil {
+		return 0, err
+	}
+	disabled := 0
+	for _, row := range rows {
+		app := toDomainApplication(row)
+		if !deploymentTargetsEmpty(app.DeploymentMode, app.DeploymentServers) {
+			continue
+		}
+		if err := s.forceDisableApplication(ctx, app, "zero_deployment_servers"); err != nil {
+			return disabled, err
+		}
+		disabled++
+	}
+	return disabled, nil
 }
 
 func uniqueSortedDeploymentServers(servers []string) []string {

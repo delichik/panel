@@ -111,6 +111,26 @@ func disableApplicationsWithoutDeploymentTarget(ctx context.Context, tx *sql.Tx,
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
+	// 兜底纳入所有已启用的 selected 模式应用，确保即使此前存在 0 节点启用或并发漏网，也会在此统一禁用。
+	selectedRows, err := tx.QueryContext(ctx, `SELECT id FROM applications WHERE kind<>'facility_application' AND deletion_requested=0 AND enabled=1 AND deployment_mode=?`, deploymentModeSelected)
+	if err != nil {
+		return nil, err
+	}
+	for selectedRows.Next() {
+		var id string
+		if err := selectedRows.Scan(&id); err != nil {
+			_ = selectedRows.Close()
+			return nil, err
+		}
+		affected[id] = struct{}{}
+	}
+	if err := selectedRows.Err(); err != nil {
+		_ = selectedRows.Close()
+		return nil, err
+	}
+	if err := selectedRows.Close(); err != nil {
+		return nil, err
+	}
 	if len(affected) == 0 {
 		return nil, nil
 	}

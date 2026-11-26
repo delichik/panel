@@ -846,3 +846,50 @@ func TestApplicationEditSessionSameNamedNewFileAcrossApplications(t *testing.T) 
 		t.Fatalf("expected distinct non-empty global file ids: %q vs %q", filesA[0].ID, filesB[0].ID)
 	}
 }
+
+func TestEditSessionZeroSelectedNodesForcesDisabledOnUpdateAndCommit(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	session, err := svc.BeginEditSession(ctx, "admin", BeginEditSessionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft := session.Draft
+	draft.Name = "zero-node-session"
+	draft.Enabled = true
+	draft.SpecYAML = "name: zero-node-session\nimage: nginx\n"
+	draft.DeploymentMode = DeploymentModeSelected
+	draft.DeploymentServers = nil
+
+	updated, err := svc.PatchEditSession(ctx, "admin", session.ID, PatchEditSessionInput{
+		Revision: session.Revision,
+		Draft:    draft,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Draft.Enabled {
+		t.Fatal("expected draft with zero selected servers to force enabled=false")
+	}
+
+	preview, err := svc.PreviewEditSession(ctx, "admin", session.ID, updated.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.CommitEditSession(ctx, "admin", session.ID, "commit-zero-node", CommitEditSessionInput{
+		Revision:            updated.Revision,
+		BaseResourceVersion: "0",
+		PreviewToken:        preview.Token.Value,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Application.Enabled {
+		t.Fatal("expected committed zero-node application to be disabled")
+	}
+	if result.ApplyNeeded {
+		t.Fatalf("expected committed zero-node application not to request apply, got action=%q", result.ApplyAction)
+	}
+}

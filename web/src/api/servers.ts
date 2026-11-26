@@ -93,8 +93,9 @@ export const serversApi = {
   update(id: string, input: ServerSaveInput) {
     return apiClient.put<ServerDto>(`/servers/${encodeURIComponent(id)}`, input);
   },
-  delete(id: string) {
-    return apiClient.delete<void>(`/servers/${encodeURIComponent(id)}`);
+  delete(id: string, options?: { cleanData?: boolean }) {
+    const query = options?.cleanData ? '?cleanData=true' : '';
+    return apiClient.delete<OperationAccepted | void>(`/servers/${encodeURIComponent(id)}${query}`);
   },
   probe(input: ServerProbeInput) {
     return apiClient.post<ServerProbeResult>('/servers/probe', input);

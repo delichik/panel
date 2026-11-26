@@ -584,6 +584,10 @@ func TestDeleteServerDisablesAllModeApplicationWithoutAnyNode(t *testing.T) {
 		"app_all", "all", 1, "name: all\nimage: nginx\n", "all", "[]", 1, "job_all", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,deployment_mode,deployment_server_ids_json,generation,job_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		"app_empty_selected", "empty_selected", 1, "name: empty\nimage: nginx\n", "selected", "[]", 1, "job_empty_selected", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.AppDB().Exec(`INSERT INTO application_instances(id,application_id,server_id,container_name,desired_state,desired_generation,desired_spec_hash,desired_spec_json,status,runtime_spec_json,last_deployed_generation,last_error,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		"app_all-"+srv.ID, "app_all", srv.ID, "panel-app-all", "running", 1, "hash", "{}", "running", "{}", 1, "", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
 		t.Fatal(err)
@@ -598,6 +602,13 @@ func TestDeleteServerDisablesAllModeApplicationWithoutAnyNode(t *testing.T) {
 	}
 	if enabled != 0 {
 		t.Fatal("expected the all-mode application to be disabled once no node is left")
+	}
+	var emptySelectedEnabled int
+	if err := store.AppDB().QueryRow(`SELECT enabled FROM applications WHERE id='app_empty_selected'`).Scan(&emptySelectedEnabled); err != nil {
+		t.Fatal(err)
+	}
+	if emptySelectedEnabled != 0 {
+		t.Fatal("expected the zero-node selected application to be disabled during server delete")
 	}
 }
 

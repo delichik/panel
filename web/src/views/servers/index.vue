@@ -6,6 +6,7 @@ import { credentialsApi } from '@/api/credentials';
 import { serversApi } from '@/api/servers';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
+import Checkbox from '@/components/ui/Checkbox.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import Dropdown from '@/components/ui/Dropdown.vue';
 import DropdownItem from '@/components/ui/DropdownItem.vue';
@@ -92,6 +93,7 @@ const credentialError = ref('');
 const serverDialog = ref(false);
 const editing = ref<ServerDto | null>(null);
 const confirmTarget = ref<ServerDto | null>(null);
+const deleteCleanData = ref(false);
 const deleting = ref(false);
 const rowBusy = ref<{ id: string; kind: 'test' | 'edit' } | null>(null);
 const restartOpen = ref(false);
@@ -475,17 +477,34 @@ async function loadCredentials() {
   }
 }
 
+function openDeleteConfirm(server: ServerDto) {
+  deleteCleanData.value = false;
+  confirmTarget.value = server;
+}
+
+function closeDeleteConfirm() {
+  confirmTarget.value = null;
+  deleteCleanData.value = false;
+}
+
 async function deleteSelected() {
   const target = confirmTarget.value;
   if (!target) return;
+  const cleanData = deleteCleanData.value;
   deleting.value = true;
   try {
-    const result = await serversApi.delete(target.id);
+    const result = await serversApi.delete(target.id, cleanData ? { cleanData: true } : undefined);
+    if (cleanData && result && 'taskId' in result) {
+      notifySuccess(t('serversPage.cleanupDeleteAccepted', { name: target.name, taskId: result.taskId }), result);
+      closeDeleteConfirm();
+      await load();
+      return;
+    }
     const next = { ...serverDetails.value };
     delete next[target.id];
     serverDetails.value = next;
     notifySuccess(t('serversPage.deleted', { name: target.name }), result);
-    confirmTarget.value = null;
+    closeDeleteConfirm();
     closeDetail();
     await load();
   } catch (err) {
@@ -605,7 +624,7 @@ onBeforeUnmount(() => {
                   </template>
                   <DropdownItem class="wide:hidden" :disabled="rowBusy?.id === row.id" @click="testConnection(row)"><Cable />{{ t('serversPage.testConnection') }}</DropdownItem>
                   <DropdownItem v-permission="'servers.manage'" :disabled="rowBusy?.id === row.id" @click="openEdit(row)"><Wrench />{{ t('common.edit') }}</DropdownItem>
-                  <DropdownItem tone="danger" @click="confirmTarget = row"><Trash2 />{{ t('common.delete') }}</DropdownItem>
+                  <DropdownItem tone="danger" @click="openDeleteConfirm(row)"><Trash2 />{{ t('common.delete') }}</DropdownItem>
                 </Dropdown>
               </div>
             </template>
@@ -700,16 +719,21 @@ onBeforeUnmount(() => {
     :open="Boolean(confirmTarget)"
     :title="t('serversPage.deleteServer')"
     :description="confirmTarget ? t('serversPage.deleteServerDescription', { name: confirmTarget.name }) : ''"
-    :impact="t('serversPage.deleteServerImpact')"
+    :impact="deleteCleanData ? t('serversPage.deleteServerCleanDataImpact') : t('serversPage.deleteServerImpact')"
     tone="danger"
     :loading="deleting"
     :confirm-label="t('common.delete')"
     :cancel-label="t('common.cancel')"
-    :checkbox-label="t('serversPage.confirmCheckbox')"
-    @update:open="(value) => { if (!value) confirmTarget = null; }"
+    :require-checkbox="deleteCleanData"
+    :checkbox-label="t('serversPage.confirmCleanDataCheckbox')"
+    @update:open="(value) => { if (!value) closeDeleteConfirm(); }"
     @confirm="deleteSelected"
-    @cancel="confirmTarget = null"
-  />
+    @cancel="closeDeleteConfirm"
+  >
+    <div class="surface-control-line bg-layer p-3 text-body text-foreground">
+      <Checkbox v-model="deleteCleanData" :disabled="deleting" :label="t('serversPage.deleteServerCleanDataOption')" />
+    </div>
+  </ConfirmDialog>
 
   <ConfirmDialog
     :open="restartOpen"

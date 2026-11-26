@@ -582,6 +582,10 @@ func (s *Service) FirstActiveByConcurrencyKey(ctx context.Context, concurrencyKe
 }
 
 func (s *Service) CancelByServer(ctx context.Context, serverID, message string) (int, error) {
+	return s.CancelByServerExcept(ctx, serverID, "", message)
+}
+
+func (s *Service) CancelByServerExcept(ctx context.Context, serverID, exceptTaskID, message string) (int, error) {
 	activeStatuses := []string{StatusQueued, StatusScheduled, StatusRunning, StatusFailedRetryable}
 	rows := []string{}
 	if err := orm.New(s.db).From("event_runs").Where("server_id = ?", serverID).
@@ -590,7 +594,11 @@ func (s *Service) CancelByServer(ctx context.Context, serverID, message string) 
 	}
 	taskIDs := []string{}
 	keys := []string{}
+	exceptTaskID = strings.TrimSpace(exceptTaskID)
 	for _, taskID := range rows {
+		if exceptTaskID != "" && taskID == exceptTaskID {
+			continue
+		}
 		task, getErr := s.Get(ctx, taskID)
 		if getErr == nil && (s.isCancellationBlocked(task.Type) || task.Stage == "uncertain") {
 			continue

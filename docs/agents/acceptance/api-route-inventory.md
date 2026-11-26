@@ -26,7 +26,7 @@
 | 12 | `DELETE` | `/api/v1/facility-apps/storage-share/partitions/{id}` | [应用与设施应用](applications-and-facilities.md) |
 | 13 | `DELETE` | `/api/v1/key-assets/{id}` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
 | 14 | `DELETE` | `/api/v1/self-signed-certificates/{id}` | [DNS、证书与密钥资产](dns-certificates-key-assets.md) |
-| 15 | `DELETE` | `/api/v1/servers/{id}` | [服务器、安全与软件包](servers-security-packages.md) `SRV-DEL-007`（含网络探测清理） |
+| 15 | `DELETE` | `/api/v1/servers/{id}` | [服务器、安全与软件包](servers-security-packages.md) `SRV-DEL-001/007/010`（含网络探测清理；可选 `?cleanData=true` 触发远端清理 `202` 任务） |
 | 16 | `DELETE` | `/api/v1/servers/{id}/ufw/rules/{number}` | [服务器、安全与软件包](servers-security-packages.md) |
 | 17 | `DELETE` | `/api/v1/servers/{serverId}/containers/{resourceId}` | [容器与资源](containers-and-resources.md) |
 | 18 | `DELETE` | `/api/v1/servers/{serverId}/images/{resourceId}` | [容器与资源](containers-and-resources.md) |

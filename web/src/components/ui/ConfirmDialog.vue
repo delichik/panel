@@ -54,6 +54,7 @@ function handleOpenChange(value: boolean) {
   <Dialog :open="open" :title="title" :description="description" @update:open="handleOpenChange">
     <div class="grid gap-4">
       <InfoBar v-if="impact" :tone="infoBarTone">{{ impact }}</InfoBar>
+      <slot />
       <div v-if="requireCheckbox" class="flex items-start gap-3 surface-control-line bg-layer p-3 text-body text-foreground">
         <Checkbox v-model="checked" :disabled="loading" :label="checkboxLabel" />
       </div>
