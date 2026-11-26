@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -415,6 +416,31 @@ func TestMetricCacheSkipsDiskIOCounterReset(t *testing.T) {
 	// 3 秒窗口累计读 3000、写 1500 字节。
 	if !ok || read != 1000 || write != 500 {
 		t.Fatalf("consume disk IO = (%v, %v, %v), want (1000, 500, true)", read, write, ok)
+	}
+}
+
+func TestSendReportConcurrentFullChannelDoesNotBlock(t *testing.T) {
+	ch := make(chan *agentpb.AgentReport, 1)
+	ch <- &agentpb.AgentReport{Reason: "initial"}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		var wg sync.WaitGroup
+		for i := 0; i < 16; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for j := 0; j < 200; j++ {
+					sendReport(ch, &agentpb.AgentReport{Reason: "burst"})
+				}
+			}()
+		}
+		wg.Wait()
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("sendReport blocked on a full channel under concurrent writers")
 	}
 }
 

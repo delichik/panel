@@ -1153,7 +1153,10 @@ func sendReport(ch chan *agentpb.AgentReport, report *agentpb.AgentReport) {
 		case <-ch:
 		default:
 		}
-		ch <- report
+		select {
+		case ch <- report:
+		default:
+		}
 	}
 }
 
