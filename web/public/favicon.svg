@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Seamark">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#16202B"/>
+      <stop offset="100%" stop-color="#0E151C"/>
+    </linearGradient>
+
+    <linearGradient id="tower" x1="0" x2="1">
+      <stop offset="0%" stop-color="#EEF3F7"/>
+      <stop offset="100%" stop-color="#D8E2EA"/>
+    </linearGradient>
+
+    <linearGradient id="sea" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2F6E99"/>
+      <stop offset="100%" stop-color="#173449"/>
+    </linearGradient>
+
+    <radialGradient id="light">
+      <stop offset="0%" stop-color="#54F0A3" stop-opacity=".85"/>
+      <stop offset="100%" stop-color="#54F0A3" stop-opacity="0"/>
+    </radialGradient>
+
+    <clipPath id="clip">
+      <rect x="12" y="12" width="488" height="488" rx="110"/>
+    </clipPath>
+  </defs>
+
+  <rect x="12" y="12" width="488" height="488" rx="110"
+        fill="url(#bg)"
+        stroke="#273541"
+        stroke-width="3"/>
+
+  <circle cx="256" cy="72" r="54" fill="url(#light)"/>
+
+  <polygon points="238,92 274,92 268,112 244,112"
+           fill="#F4F7FA"/>
+
+  <rect x="246" y="70" width="20" height="22" rx="4"
+        fill="#46E89C"/>
+
+  <path d="
+      M226 112
+      L286 112
+      L314 318
+      Q316 334 302 334
+      L210 334
+      Q196 334 198 318
+      Z"
+      fill="url(#tower)"/>
+
+  <rect x="186" y="318" width="140" height="30" rx="14" fill="url(#tower)"/>
+
+  <rect x="236" y="148" width="40" height="8" rx="4" fill="#C7D4DE"/>
+  <rect x="232" y="188" width="48" height="8" rx="4" fill="#C7D4DE"/>
+  <rect x="228" y="228" width="56" height="8" rx="4" fill="#C7D4DE"/>
+  <rect x="224" y="268" width="64" height="8" rx="4" fill="#C7D4DE"/>
+
+  <circle cx="242" cy="152" r="2.5" fill="#3FD68B"/>
+  <circle cx="242" cy="192" r="2.5" fill="#3FD68B"/>
+  <circle cx="242" cy="232" r="2.5" fill="#3FD68B"/>
+  <circle cx="242" cy="272" r="2.5" fill="#3FD68B"/>
+
+  <g clip-path="url(#clip)">
+    <path d="
+      M0 336
+      C90 324 170 348 256 336
+      C342 324 422 348 512 336
+      L512 512
+      L0 512Z"
+      fill="url(#sea)"/>
+
+    <path d="
+      M0 336
+      C90 324 170 348 256 336
+      C342 324 422 348 512 336"
+      fill="none"
+      stroke="#5A9DCC"
+      stroke-width="3"
+      stroke-linecap="round"
+      opacity=".75"/>
+
+    <path d="
+      M120 320
+      Q170 308 220 320
+      T320 320
+      T420 320"
+      fill="none"
+      stroke="#5A9DCC"
+      stroke-width="2"
+      opacity=".45"
+      stroke-linecap="round"/>
+  </g>
+</svg>

@@ -1,0 +1,1274 @@
+// Package networkprobe implements the network-probe facility: its persisted
+// configuration, the probe targets handed to agents over the report stream, the
+// reported ping results and the read models used by the facility page, the
+// server detail tab and the overview card.
+package networkprobe
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	server "panel/internal/modules/servers"
+	"panel/internal/platform/database/orm"
+	panelerr "panel/internal/platform/errors"
+)
+
+const (
+	// ModeAll 表示所有节点都是探测节点。
+	ModeAll = "all"
+	// ModeSelected 表示只有配置列表内的节点是探测节点。
+	ModeSelected = "selected"
+	// DefaultProbeIntervalSeconds 是探测周期的默认值（秒）。
+	DefaultProbeIntervalSeconds = 60
+	// DefaultPingCount 是每次探测默认发送的 ping 包数。
+	DefaultPingCount = 3
+	// DefaultPingTimeoutSeconds 是单个 ping 包默认等待秒数。
+	DefaultPingTimeoutSeconds = 2
+	// MinProbeIntervalSeconds/MaxProbeIntervalSeconds 是探测周期允许范围：
+	// 1..60 分钟（按秒存储并下发给 Agent）。
+	MinProbeIntervalSeconds = 60
+	MaxProbeIntervalSeconds = 3600
+	// MinPingCount/MaxPingCount 是每次探测的 ping 包数允许范围。
+	MinPingCount = 1
+	MaxPingCount = 10
+	// MinPingTimeoutSeconds/MaxPingTimeoutSeconds 是单包超时允许范围。
+	MinPingTimeoutSeconds = 1
+	MaxPingTimeoutSeconds = 10
+	// ProbeIntervalSeconds 是默认探测周期的旧名称，保留下发给旧调用方。
+	ProbeIntervalSeconds = DefaultProbeIntervalSeconds
+	// ResultFreshFor 是探测结果被视为新鲜的最小阈值；实际阈值还会随探测间隔
+	// 放大（max(ResultFreshFor, 3*intervalSeconds)）。
+	ResultFreshFor = 5 * time.Minute
+
+	configID = "network_probe"
+	// snapshotTTL 是 ReportConfig 的配置+服务器列表快照有效期。上报流每秒都会
+	// 重建 config，不能每次都查库。
+	snapshotTTL = 3 * time.Second
+	// historyBucketSeconds 是探测历史曲线的桶宽（30 分钟）。
+	historyBucketSeconds = 30 * 60
+	// historyWindow 是探测历史曲线保留的最近时长（24 小时）。
+	historyWindow = 24 * time.Hour
+	// historyMaxPoints 是每个 (source,target) 最多保留的历史桶数
+	// （24h / 30min = 48）。
+	historyMaxPoints = 48
+)
+
+// Thresholds 是延迟/丢包图表警告阈值；nil 表示未启用。延迟必须为正毫秒，
+// 丢包为 0..100 百分比（不含 0）。
+type Thresholds struct {
+	LatencyMS         *float64 `json:"latencyMs,omitempty"`
+	PacketLossPercent *float64 `json:"packetLossPercent,omitempty"`
+}
+
+// Config 是网络探测设施的对外配置。
+type Config struct {
+	Mode               string     `json:"mode"`
+	ServerIDs          []string   `json:"serverIds"`
+	IntervalSeconds    int        `json:"intervalSeconds"`
+	PingCount          int        `json:"pingCount"`
+	PingTimeoutSeconds int        `json:"pingTimeoutSeconds"`
+	Thresholds         Thresholds `json:"thresholds"`
+	Version            int        `json:"version"`
+	UpdatedAt          time.Time  `json:"updatedAt"`
+}
+
+// SaveInput 是保存网络探测设施的输入。参数为 0/缺省时按默认值归一化（兼容
+// 旧客户端）。
+type SaveInput struct {
+	Mode               string     `json:"mode"`
+	ServerIDs          []string   `json:"serverIds"`
+	IntervalSeconds    int        `json:"intervalSeconds"`
+	PingCount          int        `json:"pingCount"`
+	PingTimeoutSeconds int        `json:"pingTimeoutSeconds"`
+	Thresholds         Thresholds `json:"thresholds"`
+}
+
+// Node 是一个探测节点（同时也是其它探测节点的目标）。
+type Node struct {
+	ServerID string `json:"serverId"`
+	Name     string `json:"name"`
+	Address  string `json:"address"`
+}
+
+// Result 是某探测节点到某目标的最新一次 ping 观测。
+type Result struct {
+	SourceServerID    string    `json:"sourceServerId"`
+	TargetServerID    string    `json:"targetServerId"`
+	TargetAddress     string    `json:"targetAddress"`
+	LatencyMS         float64   `json:"latencyMs"`
+	PacketLossPercent float64   `json:"packetLossPercent"`
+	Sent              int       `json:"sent"`
+	Received          int       `json:"received"`
+	SampledAt         time.Time `json:"sampledAt"`
+	Error             string    `json:"error,omitempty"`
+	Stale             bool      `json:"stale"`
+	// History 是最近 24 小时的 30 分钟桶历史采样。仅
+	// ServerResultsHistory（服务器详情页 history=1 请求）填充；设施矩阵、
+	// 概览卡片和默认的服务器详情响应不返回该字段。
+	History []HistoryPoint `json:"history,omitempty"`
+}
+
+// HistoryPoint 是探测历史曲线上的一个采样桶。同一 30 分钟桶内可能有多次探测
+// 上报，LatencyMS/PacketLossPercent 是这些采样的平均值，Min/Max 是同一桶内的
+// 最小/最大值（旧数据没有 min/max 时按 min=max=平均回退）。
+type HistoryPoint struct {
+	Time                 time.Time `json:"time"`
+	LatencyMS            float64   `json:"latencyMs"`
+	LatencyMSMin         float64   `json:"latencyMsMin"`
+	LatencyMSMax         float64   `json:"latencyMsMax"`
+	PacketLossPercent    float64   `json:"packetLossPercent"`
+	PacketLossPercentMin float64   `json:"packetLossPercentMin"`
+	PacketLossPercentMax float64   `json:"packetLossPercentMax"`
+}
+
+// storedHistoryPoint 是 history_json 的持久化紧凑格式，避免每个 (source,target)
+// 保存重复的键名。t 是 30 分钟桶起点的 unix 秒，l/p 是桶内平均值，
+// lmin/lmax/pmin/pmax 是桶内最小/最大值，n 是参与聚合的采样数（旧数据缺省为 1）。
+type storedHistoryPoint struct {
+	Time                 int64   `json:"t"`
+	LatencyMS            float64 `json:"l"`
+	LatencyMSMin         float64 `json:"lmin,omitempty"`
+	LatencyMSMax         float64 `json:"lmax,omitempty"`
+	PacketLossPercent    float64 `json:"p"`
+	PacketLossPercentMin float64 `json:"pmin,omitempty"`
+	PacketLossPercentMax float64 `json:"pmax,omitempty"`
+	Count                int     `json:"n,omitempty"`
+}
+
+// Matrix 是设施页的探测矩阵：节点列表 + 每个探测节点到每个目标的最近结果。
+type Matrix struct {
+	Mode      string     `json:"mode"`
+	Nodes     []Node     `json:"nodes"`
+	Results   []Result   `json:"results"`
+	UpdatedAt *time.Time `json:"updatedAt"`
+}
+
+// ServerResults 是单台服务器的探测页签数据。
+type ServerResults struct {
+	ServerID  string     `json:"serverId"`
+	Enabled   bool       `json:"enabled"`
+	Nodes     []Node     `json:"nodes"`
+	Results   []Result   `json:"results"`
+	UpdatedAt *time.Time `json:"updatedAt"`
+}
+
+// CardData 是概览 networkProbe 卡片的数据。
+type CardData struct {
+	Nodes     []Node     `json:"nodes"`
+	Results   []Result   `json:"results"`
+	UpdatedAt *time.Time `json:"updatedAt"`
+}
+
+// TargetResult 是按目标聚合的探测摘要：所有当前探测源对该服务器的最近结果，
+// 供设施详情页直接展示全部服务器，不再要求用户选择探测源/目标。
+type TargetResult struct {
+	ServerID  string `json:"serverId"`
+	Name      string `json:"name"`
+	Address   string `json:"address"`
+	SourceCount int  `json:"sourceCount"`
+	// LatencyMS 是所有探测源有效延迟（received>0 且 error 为空）的平均值；
+	// 没有有效样本时为 null。
+	LatencyMS *float64 `json:"latencyMs"`
+	// PacketLossPercent 是所有有结果源的丢包百分比平均值；没有结果时 null。
+	PacketLossPercent *float64 `json:"packetLossPercent"`
+	// WorstPacketLossPercent 是所有有结果源中的最大丢包百分比；没有结果时 null。
+	WorstPacketLossPercent *float64 `json:"worstPacketLossPercent"`
+	// SampledAt 是该目标所有结果中的最新采样时间；没有结果时 null。
+	SampledAt *time.Time `json:"sampledAt"`
+	Stale     bool       `json:"stale"`
+	// History 是按目标跨源聚合后的最近 24 小时 30 分钟桶历史；仅
+	// TargetResults(withHistory=true) 填充。
+	History []HistoryPoint `json:"history,omitempty"`
+}
+
+// TargetMatrix 是设施详情页的按目标聚合视图：所有服务器各一行。
+type TargetMatrix struct {
+	Nodes     []TargetResult `json:"nodes"`
+	UpdatedAt *time.Time     `json:"updatedAt"`
+}
+
+// ProbeTarget 是下发给 Agent 的一个 ping 目标。
+type ProbeTarget struct {
+	ServerID string
+	Address  string
+	Name     string
+}
+
+// ProbeReport 是下发给单个探测节点的探测配置。Enabled 为 false 时 Agent 停止
+// 探测；Targets 已排除探测节点自身。
+type ProbeReport struct {
+	Enabled            bool
+	IntervalSeconds    int
+	PingCount          int
+	PingTimeoutSeconds int
+	Targets            []ProbeTarget
+}
+
+// ReportedResult 是 Agent 上报的一条探测结果。
+type ReportedResult struct {
+	TargetServerID    string
+	TargetAddress     string
+	LatencyMS         float64
+	PacketLossPercent float64
+	Sent              int
+	Received          int
+	Error             string
+}
+
+// serverProvider 是探测设施读取服务器清单所需的最小接口，*server.Service 满足。
+type serverProvider interface {
+	List(ctx context.Context) ([]server.Server, error)
+}
+
+// snapshot 是 ReportConfig 使用的短 TTL 配置 + 服务器列表快照。
+type snapshot struct {
+	loadedAt time.Time
+	config   Config
+	servers  []server.Server
+}
+
+// Service 是网络探测设施服务。
+type Service struct {
+	db      *sql.DB
+	servers serverProvider
+	now     func() time.Time
+
+	mu    sync.Mutex
+	cache *snapshot
+}
+
+// NewService 创建网络探测设施服务。
+func NewService(db *sql.DB, servers serverProvider) *Service {
+	return &Service{
+		db:      db,
+		servers: servers,
+		now:     func() time.Time { return time.Now().UTC() },
+	}
+}
+
+// Get 返回当前设施配置。从未保存过时返回 mode=all 的空配置。
+func (s *Service) Get(ctx context.Context) (Config, error) {
+	return s.loadConfig(ctx)
+}
+
+// Save 保存设施配置：mode 只能是 all/selected；selected 模式必须至少选择一个
+// 已存在的节点；版本单调加一。
+func (s *Service) Save(ctx context.Context, in SaveInput) (Config, error) {
+	mode := strings.TrimSpace(in.Mode)
+	if mode != ModeAll && mode != ModeSelected {
+		return Config{}, panelerr.Validation("network_probe_mode_invalid", "mode must be all or selected")
+	}
+	intervalSeconds, ok := resolveProbeIntervalSeconds(in.IntervalSeconds)
+	if !ok {
+		return Config{}, panelerr.Validation("network_probe_interval_invalid", "intervalSeconds must be between 60 and 3600")
+	}
+	pingCount, ok := resolvePingCount(in.PingCount)
+	if !ok {
+		return Config{}, panelerr.Validation("network_probe_ping_count_invalid", "pingCount must be between 1 and 10")
+	}
+	pingTimeoutSeconds, ok := resolvePingTimeoutSeconds(in.PingTimeoutSeconds)
+	if !ok {
+		return Config{}, panelerr.Validation("network_probe_ping_timeout_invalid", "pingTimeoutSeconds must be between 1 and 10")
+	}
+	thresholds, err := normalizeThresholds(in.Thresholds)
+	if err != nil {
+		return Config{}, err
+	}
+	ids := normalizeIDs(in.ServerIDs)
+	all, err := s.servers.List(ctx)
+	if err != nil {
+		return Config{}, err
+	}
+	if mode == ModeSelected {
+		if len(ids) == 0 {
+			return Config{}, panelerr.Validation("network_probe_servers_required", "at least one probe server is required when mode is selected")
+		}
+		known := make(map[string]struct{}, len(all))
+		for _, srv := range all {
+			known[srv.ID] = struct{}{}
+		}
+		for _, id := range ids {
+			if _, ok := known[id]; !ok {
+				return Config{}, panelerr.Validation("network_probe_server_not_found", "probe server not found: "+id)
+			}
+		}
+	} else {
+		// all 模式按现存节点探测，持久化列表没有意义；清空避免删除节点后留下
+		// 过期的 selected 残留。
+		ids = []string{}
+	}
+	previous, err := s.loadConfig(ctx)
+	if err != nil {
+		return Config{}, err
+	}
+	now := s.now().UTC()
+	cfg := Config{
+		Mode:               mode,
+		ServerIDs:          ids,
+		IntervalSeconds:    intervalSeconds,
+		PingCount:          pingCount,
+		PingTimeoutSeconds: pingTimeoutSeconds,
+		Thresholds:         thresholds,
+		Version:            previous.Version + 1,
+		UpdatedAt:          now,
+	}
+	encoded, err := json.Marshal(ids)
+	if err != nil {
+		return Config{}, err
+	}
+	encodedThresholds, err := json.Marshal(cfg.Thresholds)
+	if err != nil {
+		return Config{}, err
+	}
+	if _, err := orm.RawExec(ctx, s.db, `INSERT INTO network_probe_configs(id,mode,server_ids_json,interval_seconds,ping_count,ping_timeout_seconds,thresholds_json,version,updated_at)
+VALUES(?,?,?,?,?,?,?,?,?)
+ON CONFLICT(id) DO UPDATE SET mode=excluded.mode,server_ids_json=excluded.server_ids_json,interval_seconds=excluded.interval_seconds,ping_count=excluded.ping_count,ping_timeout_seconds=excluded.ping_timeout_seconds,thresholds_json=excluded.thresholds_json,version=excluded.version,updated_at=excluded.updated_at`,
+		configID, cfg.Mode, string(encoded), cfg.IntervalSeconds, cfg.PingCount, cfg.PingTimeoutSeconds, string(encodedThresholds), cfg.Version, formatTime(cfg.UpdatedAt)); err != nil {
+		return Config{}, err
+	}
+	s.invalidate()
+	return cfg, nil
+}
+
+// ReportConfig 返回下发给指定探测节点的探测配置。配置与服务器列表使用 3 秒
+// TTL 快照，避免上报流每个 tick 都查库。
+func (s *Service) ReportConfig(ctx context.Context, serverID string) (ProbeReport, error) {
+	cfg, all, err := s.snapshot(ctx)
+	if err != nil {
+		return ProbeReport{}, err
+	}
+	report := ProbeReport{
+		Enabled:            isProbeNode(cfg, serverID),
+		IntervalSeconds:    cfg.IntervalSeconds,
+		PingCount:          cfg.PingCount,
+		PingTimeoutSeconds: cfg.PingTimeoutSeconds,
+	}
+	if !report.Enabled {
+		return report, nil
+	}
+	// 已从 Panel 删除的节点不应再收到探测目标；上报流会在下一次 sync 回收。
+	if _, ok := serverByID(all)[strings.TrimSpace(serverID)]; !ok {
+		report.Enabled = false
+		return report, nil
+	}
+	report.Targets = targetsForServer(serverID, all)
+	return report, nil
+}
+
+// SaveReported 用一次上报替换该探测节点的全部结果。事务内先删除旧行再批量插入，
+// 保证“每个 (source,target) 只保留最新一行”；sampleAt 统一 UTC 截断到秒。
+// 删除前会读出旧行的 history_json，并把本次采样合并进 30 分钟桶历史（最近 24h，
+// 最多 48 个点），随新行一起写回。
+func (s *Service) SaveReported(ctx context.Context, sourceServerID string, sampleAt time.Time, results []ReportedResult) error {
+	source := strings.TrimSpace(sourceServerID)
+	if source == "" {
+		return fmt.Errorf("network probe source server is required")
+	}
+	at := sampleAt.UTC().Truncate(time.Second)
+	if at.IsZero() {
+		at = s.now().UTC().Truncate(time.Second)
+	}
+	bucket := historyBucketStart(at)
+	return orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		histories, err := loadHistories(ctx, tx, source)
+		if err != nil {
+			return err
+		}
+		if _, err := orm.RawExec(ctx, tx, `DELETE FROM network_probe_results WHERE source_server_id=?`, source); err != nil {
+			return err
+		}
+		for _, result := range results {
+			target := strings.TrimSpace(result.TargetServerID)
+			if target == "" || target == source {
+				continue
+			}
+			history := appendHistory(histories[target], bucket, at.Unix(), result)
+			encoded, err := encodeHistory(history)
+			if err != nil {
+				return err
+			}
+			if _, err := orm.RawExec(ctx, tx, `INSERT INTO network_probe_results(source_server_id,target_server_id,target_address,sampled_at,latency_ms,packet_loss_percent,sent,received,error,history_json)
+VALUES(?,?,?,?,?,?,?,?,?,?)
+ON CONFLICT(source_server_id,target_server_id) DO UPDATE SET target_address=excluded.target_address,sampled_at=excluded.sampled_at,latency_ms=excluded.latency_ms,packet_loss_percent=excluded.packet_loss_percent,sent=excluded.sent,received=excluded.received,error=excluded.error,history_json=excluded.history_json`,
+				source, target, strings.TrimSpace(result.TargetAddress), formatTime(at),
+				sanitizeFloat(result.LatencyMS), sanitizeFloat(result.PacketLossPercent),
+				result.Sent, result.Received, strings.TrimSpace(result.Error), encoded); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// Matrix 返回设施页矩阵：nodes 为探测节点（可选按 filterServerIDs 过滤），
+// results 只包含 source 属于 nodes 且 target 仍存在的行。
+func (s *Service) Matrix(ctx context.Context, filterServerIDs []string) (Matrix, error) {
+	cfg, all, err := s.snapshot(ctx)
+	if err != nil {
+		return Matrix{}, err
+	}
+	nodes := probeNodes(cfg, all)
+	if filter := normalizeIDs(filterServerIDs); len(filter) > 0 {
+		nodes = filterNodes(nodes, filter)
+	}
+	results, err := s.results(ctx, nodeIDSet(nodes), serverIDSet(all), false, freshnessFor(cfg))
+	if err != nil {
+		return Matrix{}, err
+	}
+	return Matrix{Mode: cfg.Mode, Nodes: nodes, Results: results, UpdatedAt: latestSample(results)}, nil
+}
+
+// ServerResults 返回指定服务器的探测页签数据：是否为探测节点、目标节点表和该
+// 节点作为 source 的结果（target 仍需存在）。响应不包含历史曲线，供设施矩阵、
+// 详情页默认视图等既有调用方保持原有契约。
+func (s *Service) ServerResults(ctx context.Context, serverID string) (ServerResults, error) {
+	return s.serverResults(ctx, serverID, false)
+}
+
+// ServerResultsHistory 返回与 ServerResults 相同的数据，并额外为每个结果填充
+// 最近 24 小时的 30 分钟桶历史（history_json）。仅服务器详情页带 history=1 的
+// 请求使用该路径。
+func (s *Service) ServerResultsHistory(ctx context.Context, serverID string) (ServerResults, error) {
+	return s.serverResults(ctx, serverID, true)
+}
+
+func (s *Service) serverResults(ctx context.Context, serverID string, withHistory bool) (ServerResults, error) {
+	id := strings.TrimSpace(serverID)
+	cfg, all, err := s.snapshot(ctx)
+	if err != nil {
+		return ServerResults{}, err
+	}
+	if _, ok := serverByID(all)[id]; !ok {
+		return ServerResults{}, panelerr.NotFound("server")
+	}
+	results, err := s.results(ctx, map[string]struct{}{id: {}}, serverIDSet(all), withHistory, freshnessFor(cfg))
+	if err != nil {
+		return ServerResults{}, err
+	}
+	return ServerResults{
+		ServerID:  id,
+		Enabled:   isProbeNode(cfg, id),
+		Nodes:     targetNodes(id, all),
+		Results:   results,
+		UpdatedAt: latestSample(results),
+	}, nil
+}
+
+// CardData 返回概览卡片数据。serverIDs 为空表示不按卡片选择过滤；非空时只保留
+// 该集合内、且当前确实是探测节点的 source 结果。
+func (s *Service) CardData(ctx context.Context, serverIDs []string) (CardData, error) {
+	cfg, all, err := s.snapshot(ctx)
+	if err != nil {
+		return CardData{}, err
+	}
+	nodes := probeNodes(cfg, all)
+	if filter := normalizeIDs(serverIDs); len(filter) > 0 {
+		nodes = filterNodes(nodes, filter)
+	}
+	results, err := s.results(ctx, nodeIDSet(nodes), serverIDSet(all), false, freshnessFor(cfg))
+	if err != nil {
+		return CardData{}, err
+	}
+	return CardData{Nodes: nodes, Results: results, UpdatedAt: latestSample(results)}, nil
+}
+
+// targetAggregate 是单个目标服务器在内存中的跨源汇总。
+type targetAggregate struct {
+	sourceCount  int
+	latencySum   float64
+	latencyCount int
+	lossSum      float64
+	lossCount    int
+	worstLoss    float64
+	hasLoss      bool
+	latest       time.Time
+	history      []HistoryPoint
+}
+
+// historyBucketAggregate 是一个 (目标 × 30 分钟桶) 的跨源累计值。平均值沿用
+// 各源桶平均值的算术平均；最大/最小取所有源桶的 max/min。
+type historyBucketAggregate struct {
+	latencySum float64
+	lossSum    float64
+	latencyMin float64
+	latencyMax float64
+	lossMin    float64
+	lossMax    float64
+	hasLatency bool
+	hasLoss    bool
+	count      int
+}
+
+// TargetResults 返回按目标聚合的探测摘要。nodes 覆盖服务器表中的全部服务器
+// （没有结果也保留一条空摘要），只聚合当前确实作为探测节点的 source 的结果，
+// target 已不存在的结果被忽略。
+func (s *Service) TargetResults(ctx context.Context, withHistory bool) (TargetMatrix, error) {
+	cfg, all, err := s.snapshot(ctx)
+	if err != nil {
+		return TargetMatrix{}, err
+	}
+	probeSources := nodeIDSet(probeNodes(cfg, all))
+	aggregates, err := s.aggregateTargets(ctx, probeSources, serverIDSet(all), withHistory)
+	if err != nil {
+		return TargetMatrix{}, err
+	}
+	now := s.now()
+	threshold := freshnessFor(cfg)
+	servers := sortedServers(all)
+	nodes := make([]TargetResult, 0, len(servers))
+	var updatedAt *time.Time
+	for _, srv := range servers {
+		node := TargetResult{ServerID: srv.ID, Name: srv.Name, Address: addressFor(srv), Stale: true}
+		if aggregate := aggregates[srv.ID]; aggregate != nil {
+			node.SourceCount = aggregate.sourceCount
+			node.LatencyMS = averageOrNil(aggregate.latencySum, aggregate.latencyCount)
+			node.PacketLossPercent = averageOrNil(aggregate.lossSum, aggregate.lossCount)
+			if aggregate.hasLoss {
+				worst := aggregate.worstLoss
+				node.WorstPacketLossPercent = &worst
+			}
+			if !aggregate.latest.IsZero() {
+				sampledAt := aggregate.latest
+				node.SampledAt = &sampledAt
+				node.Stale = now.Sub(sampledAt) > threshold
+				if updatedAt == nil || sampledAt.After(*updatedAt) {
+					latest := sampledAt
+					updatedAt = &latest
+				}
+			}
+			if withHistory {
+				node.History = aggregate.history
+			}
+		}
+		nodes = append(nodes, node)
+	}
+	return TargetMatrix{Nodes: nodes, UpdatedAt: updatedAt}, nil
+}
+
+func (s *Service) aggregateTargets(ctx context.Context, sources, targets map[string]struct{}, withHistory bool) (map[string]*targetAggregate, error) {
+	columns := `source_server_id,target_server_id,sampled_at,latency_ms,packet_loss_percent,received,error`
+	if withHistory {
+		columns += `,history_json`
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+columns+` FROM network_probe_results`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	now := s.now()
+	historyCutoff := now.Unix() - int64(historyWindow/time.Second)
+	aggregates := map[string]*targetAggregate{}
+	historyBuckets := map[string]map[int64]*historyBucketAggregate{}
+	for rows.Next() {
+		var source, target, sampledAt, reportError, rawHistory string
+		var latency, loss float64
+		var received int
+		dest := []any{&source, &target, &sampledAt, &latency, &loss, &received, &reportError}
+		if withHistory {
+			dest = append(dest, &rawHistory)
+		}
+		if err := rows.Scan(dest...); err != nil {
+			return nil, err
+		}
+		if _, ok := sources[source]; !ok {
+			continue
+		}
+		if _, ok := targets[target]; !ok {
+			continue
+		}
+		aggregate := aggregates[target]
+		if aggregate == nil {
+			aggregate = &targetAggregate{}
+			aggregates[target] = aggregate
+		}
+		aggregate.sourceCount++
+		lossValue := sanitizeFloat(loss)
+		aggregate.lossSum += lossValue
+		aggregate.lossCount++
+		if !aggregate.hasLoss || lossValue > aggregate.worstLoss {
+			aggregate.worstLoss = lossValue
+			aggregate.hasLoss = true
+		}
+		if received > 0 && strings.TrimSpace(reportError) == "" {
+			aggregate.latencySum += sanitizeFloat(latency)
+			aggregate.latencyCount++
+		}
+		if at := parseTime(sampledAt); at.After(aggregate.latest) {
+			aggregate.latest = at
+		}
+		if !withHistory {
+			continue
+		}
+		buckets := historyBuckets[target]
+		if buckets == nil {
+			buckets = map[int64]*historyBucketAggregate{}
+			historyBuckets[target] = buckets
+		}
+		for _, point := range decodeStoredHistory(rawHistory) {
+			if point.Time < historyCutoff {
+				continue
+			}
+			bucket := buckets[point.Time]
+			if bucket == nil {
+				bucket = &historyBucketAggregate{}
+				buckets[point.Time] = bucket
+			}
+			bucket.latencySum += sanitizeFloat(point.LatencyMS)
+			bucket.lossSum += sanitizeFloat(point.PacketLossPercent)
+			if !bucket.hasLatency {
+				bucket.latencyMin = sanitizeFloat(point.LatencyMSMin)
+				bucket.latencyMax = sanitizeFloat(point.LatencyMSMax)
+				bucket.lossMin = sanitizeFloat(point.PacketLossPercentMin)
+				bucket.lossMax = sanitizeFloat(point.PacketLossPercentMax)
+				bucket.hasLatency = true
+				bucket.hasLoss = true
+			} else {
+				latencyMin := sanitizeFloat(point.LatencyMSMin)
+				latencyMax := sanitizeFloat(point.LatencyMSMax)
+				lossMin := sanitizeFloat(point.PacketLossPercentMin)
+				lossMax := sanitizeFloat(point.PacketLossPercentMax)
+				if latencyMin < bucket.latencyMin {
+					bucket.latencyMin = latencyMin
+				}
+				if latencyMax > bucket.latencyMax {
+					bucket.latencyMax = latencyMax
+				}
+				if lossMin < bucket.lossMin {
+					bucket.lossMin = lossMin
+				}
+				if lossMax > bucket.lossMax {
+					bucket.lossMax = lossMax
+				}
+			}
+			bucket.count++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if withHistory {
+		for target, buckets := range historyBuckets {
+			aggregate := aggregates[target]
+			if aggregate == nil {
+				aggregate = &targetAggregate{}
+				aggregates[target] = aggregate
+			}
+			aggregate.history = aggregateHistoryPoints(buckets)
+		}
+	}
+	return aggregates, nil
+}
+
+// aggregateHistoryPoints 把跨源同桶累计值换算成升序的对外历史点；延迟与丢包都
+// 取所有源点的算术平均。
+func aggregateHistoryPoints(buckets map[int64]*historyBucketAggregate) []HistoryPoint {
+	if len(buckets) == 0 {
+		return nil
+	}
+	keys := make([]int64, 0, len(buckets))
+	for bucket := range buckets {
+		keys = append(keys, bucket)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	out := make([]HistoryPoint, 0, len(keys))
+	for _, key := range keys {
+		bucket := buckets[key]
+		out = append(out, HistoryPoint{
+			Time:                 time.Unix(key, 0).UTC(),
+			LatencyMS:            bucket.latencySum / float64(bucket.count),
+			LatencyMSMin:         bucket.latencyMin,
+			LatencyMSMax:         bucket.latencyMax,
+			PacketLossPercent:    bucket.lossSum / float64(bucket.count),
+			PacketLossPercentMin: bucket.lossMin,
+			PacketLossPercentMax: bucket.lossMax,
+		})
+	}
+	return out
+}
+
+// averageOrNil 返回平均值；没有样本时返回 nil（JSON null）。
+func averageOrNil(sum float64, count int) *float64 {
+	if count == 0 {
+		return nil
+	}
+	value := sum / float64(count)
+	return &value
+}
+
+// sortedServers 返回按 serverID 升序的服务器副本，保证 TargetMatrix 顺序稳定。
+func sortedServers(all []server.Server) []server.Server {
+	out := append([]server.Server(nil), all...)
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+func (s *Service) invalidate() {
+	s.mu.Lock()
+	s.cache = nil
+	s.mu.Unlock()
+}
+
+func (s *Service) snapshot(ctx context.Context) (Config, []server.Server, error) {
+	now := s.now()
+	s.mu.Lock()
+	if cached := s.cache; cached != nil && now.Sub(cached.loadedAt) < snapshotTTL {
+		out := append([]server.Server(nil), cached.servers...)
+		cfg := cached.config
+		s.mu.Unlock()
+		return cfg, out, nil
+	}
+	s.mu.Unlock()
+	cfg, err := s.loadConfig(ctx)
+	if err != nil {
+		return Config{}, nil, err
+	}
+	all, err := s.servers.List(ctx)
+	if err != nil {
+		return Config{}, nil, err
+	}
+	snapshotServers := append([]server.Server(nil), all...)
+	s.mu.Lock()
+	s.cache = &snapshot{loadedAt: now, config: cfg, servers: snapshotServers}
+	s.mu.Unlock()
+	return cfg, snapshotServers, nil
+}
+
+func (s *Service) loadConfig(ctx context.Context) (Config, error) {
+	cfg := Config{
+		Mode:               ModeAll,
+		ServerIDs:          []string{},
+		IntervalSeconds:    DefaultProbeIntervalSeconds,
+		PingCount:          DefaultPingCount,
+		PingTimeoutSeconds: DefaultPingTimeoutSeconds,
+	}
+	var mode, rawIDs, rawThresholds, updatedAt string
+	var version int
+	err := s.db.QueryRowContext(ctx, `SELECT mode,server_ids_json,interval_seconds,ping_count,ping_timeout_seconds,thresholds_json,version,updated_at FROM network_probe_configs WHERE id=?`, configID).
+		Scan(&mode, &rawIDs, &cfg.IntervalSeconds, &cfg.PingCount, &cfg.PingTimeoutSeconds, &rawThresholds, &version, &updatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return cfg, nil
+	}
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Mode = normalizeMode(mode)
+	cfg.ServerIDs = decodeIDs(rawIDs)
+	// 防御性归一化：旧 alpha 行、手工数据或越界值都回落到默认参数，避免把
+	// 非法探测节奏下发给 Agent。
+	cfg.IntervalSeconds = normalizeProbeIntervalSeconds(cfg.IntervalSeconds)
+	cfg.PingCount = normalizePingCount(cfg.PingCount)
+	cfg.PingTimeoutSeconds = normalizePingTimeoutSeconds(cfg.PingTimeoutSeconds)
+	cfg.Thresholds = decodeThresholds(rawThresholds)
+	cfg.Version = version
+	cfg.UpdatedAt = parseTime(updatedAt)
+	return cfg, nil
+}
+
+// results 读取探测结果。withHistory 为 true 时额外读取并解码 history_json，
+// 供 detail 页 history=1 请求使用；其它调用方不付出该列的解码与序列化成本。
+// staleAfter 是本次配置下的新鲜度阈值。
+func (s *Service) results(ctx context.Context, sources, targets map[string]struct{}, withHistory bool, staleAfter time.Duration) ([]Result, error) {
+	if len(sources) == 0 {
+		return []Result{}, nil
+	}
+	sourceIDs := make([]string, 0, len(sources))
+	for id := range sources {
+		sourceIDs = append(sourceIDs, id)
+	}
+	sort.Strings(sourceIDs)
+	placeholders := strings.Repeat("?,", len(sourceIDs))
+	placeholders = placeholders[:len(placeholders)-1]
+	args := make([]any, len(sourceIDs))
+	for i, id := range sourceIDs {
+		args[i] = id
+	}
+	columns := `source_server_id,target_server_id,target_address,sampled_at,latency_ms,packet_loss_percent,sent,received,error`
+	if withHistory {
+		columns += `,history_json`
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+columns+` FROM network_probe_results WHERE source_server_id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	now := s.now()
+	out := []Result{}
+	for rows.Next() {
+		var item Result
+		var sampledAt string
+		var rawHistory string
+		dest := []any{&item.SourceServerID, &item.TargetServerID, &item.TargetAddress, &sampledAt, &item.LatencyMS, &item.PacketLossPercent, &item.Sent, &item.Received, &item.Error}
+		if withHistory {
+			dest = append(dest, &rawHistory)
+		}
+		if err := rows.Scan(dest...); err != nil {
+			return nil, err
+		}
+		if _, ok := sources[item.SourceServerID]; !ok {
+			continue
+		}
+		if _, ok := targets[item.TargetServerID]; !ok {
+			continue
+		}
+		item.SampledAt = parseTime(sampledAt)
+		item.Stale = item.SampledAt.IsZero() || now.Sub(item.SampledAt) > staleAfter
+		if withHistory {
+			item.History = decodeHistoryPoints(rawHistory)
+		}
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].SourceServerID != out[j].SourceServerID {
+			return out[i].SourceServerID < out[j].SourceServerID
+		}
+		return out[i].TargetServerID < out[j].TargetServerID
+	})
+	return out, nil
+}
+
+// historyBucketStart 把时间向下对齐到 30 分钟桶起点（Unix 纪元对齐）。
+func historyBucketStart(at time.Time) int64 {
+	seconds := at.UTC().Unix()
+	bucket := int64(historyBucketSeconds)
+	remainder := seconds % bucket
+	if remainder < 0 {
+		remainder += bucket
+	}
+	return seconds - remainder
+}
+
+// loadHistories 读取某个 source 现有每 target 的 history_json。坏数据（非法 JSON
+// 或旧格式缺失）按空历史处理，保证上报路径永不因历史列失败。
+func loadHistories(ctx context.Context, tx *sql.Tx, source string) (map[string][]storedHistoryPoint, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT target_server_id,history_json FROM network_probe_results WHERE source_server_id=?`, source)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	histories := map[string][]storedHistoryPoint{}
+	for rows.Next() {
+		var target, raw string
+		if err := rows.Scan(&target, &raw); err != nil {
+			return nil, err
+		}
+		histories[target] = decodeStoredHistory(raw)
+	}
+	return histories, rows.Err()
+}
+
+// appendHistory 把一条新采样并入历史：同一 30 分钟桶累计为平均/最小/最大值，
+// 否则追加；随后剪掉距 sampledAt 超过 24 小时的桶并只保留最近 48 项。失败样本
+// （error 或 received<=0）记为 l=0、p=100；成功样本使用上报的延迟与丢包百分比。
+func appendHistory(existing []storedHistoryPoint, bucket, sampledAtUnix int64, result ReportedResult) []storedHistoryPoint {
+	latency := 0.0
+	loss := 100.0
+	if strings.TrimSpace(result.Error) == "" && result.Received > 0 {
+		latency = sanitizeFloat(result.LatencyMS)
+		loss = sanitizeFloat(result.PacketLossPercent)
+	}
+	point := storedHistoryPoint{
+		Time:                 bucket,
+		LatencyMS:            latency,
+		LatencyMSMin:         latency,
+		LatencyMSMax:         latency,
+		PacketLossPercent:    loss,
+		PacketLossPercentMin: loss,
+		PacketLossPercentMax: loss,
+		Count:                1,
+	}
+	history := append([]storedHistoryPoint(nil), existing...)
+	if n := len(history); n > 0 && history[n-1].Time == bucket {
+		previous := normalizeStoredHistoryPoint(history[n-1])
+		count := previous.Count + 1
+		point.Count = count
+		point.LatencyMS = (previous.LatencyMS*float64(previous.Count) + latency) / float64(count)
+		point.LatencyMSMin = math.Min(previous.LatencyMSMin, latency)
+		point.LatencyMSMax = math.Max(previous.LatencyMSMax, latency)
+		point.PacketLossPercent = (previous.PacketLossPercent*float64(previous.Count) + loss) / float64(count)
+		point.PacketLossPercentMin = math.Min(previous.PacketLossPercentMin, loss)
+		point.PacketLossPercentMax = math.Max(previous.PacketLossPercentMax, loss)
+		history[n-1] = point
+	} else {
+		history = append(history, point)
+	}
+	return pruneHistory(history, sampledAtUnix)
+}
+
+// normalizeStoredHistoryPoint 兼容旧 history_json（缺少 n/min/max）：视为单采样，
+// 最小/最大值回退为平均值，避免旧历史在图表里出现 0 范围。
+func normalizeStoredHistoryPoint(point storedHistoryPoint) storedHistoryPoint {
+	if point.Count > 0 {
+		return point
+	}
+	point.Count = 1
+	point.LatencyMSMin = point.LatencyMS
+	point.LatencyMSMax = point.LatencyMS
+	point.PacketLossPercentMin = point.PacketLossPercent
+	point.PacketLossPercentMax = point.PacketLossPercent
+	return point
+}
+
+// pruneHistory 丢弃距 sampledAt 超过 24h 的桶，并只保留最后 historyMaxPoints 项。
+// 结果按桶起点升序；同一桶重复时保留最后一条（调用方保证按时间追加）。
+func pruneHistory(points []storedHistoryPoint, sampledAtUnix int64) []storedHistoryPoint {
+	sort.SliceStable(points, func(i, j int) bool { return points[i].Time < points[j].Time })
+	cutoff := sampledAtUnix - int64(historyWindow/time.Second)
+	out := make([]storedHistoryPoint, 0, len(points))
+	for _, point := range points {
+		if point.Time < cutoff {
+			continue
+		}
+		if n := len(out); n > 0 && out[n-1].Time == point.Time {
+			out[n-1] = point
+			continue
+		}
+		out = append(out, point)
+	}
+	if len(out) > historyMaxPoints {
+		out = out[len(out)-historyMaxPoints:]
+	}
+	return out
+}
+
+func encodeHistory(points []storedHistoryPoint) (string, error) {
+	if len(points) == 0 {
+		return "[]", nil
+	}
+	encoded, err := json.Marshal(points)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func decodeStoredHistory(raw string) []storedHistoryPoint {
+	points := []storedHistoryPoint{}
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "null" {
+		return points
+	}
+	if err := json.Unmarshal([]byte(raw), &points); err != nil {
+		return []storedHistoryPoint{}
+	}
+	out := make([]storedHistoryPoint, 0, len(points))
+	for _, point := range points {
+		if point.Time <= 0 {
+			continue
+		}
+		out = append(out, normalizeStoredHistoryPoint(point))
+	}
+	return out
+}
+
+// decodeHistoryPoints 把持久化的紧凑历史转换为对外 UTF 时间格式，时间升序。
+func decodeHistoryPoints(raw string) []HistoryPoint {
+	stored := decodeStoredHistory(raw)
+	if len(stored) == 0 {
+		return nil
+	}
+	sort.Slice(stored, func(i, j int) bool { return stored[i].Time < stored[j].Time })
+	out := make([]HistoryPoint, 0, len(stored))
+	for _, point := range stored {
+		out = append(out, HistoryPoint{
+			Time:                 time.Unix(point.Time, 0).UTC(),
+			LatencyMS:            sanitizeFloat(point.LatencyMS),
+			LatencyMSMin:         sanitizeFloat(point.LatencyMSMin),
+			LatencyMSMax:         sanitizeFloat(point.LatencyMSMax),
+			PacketLossPercent:    sanitizeFloat(point.PacketLossPercent),
+			PacketLossPercentMin: sanitizeFloat(point.PacketLossPercentMin),
+			PacketLossPercentMax: sanitizeFloat(point.PacketLossPercentMax),
+		})
+	}
+	return out
+}
+
+func probeNodes(cfg Config, all []server.Server) []Node {
+	selected := make(map[string]struct{}, len(cfg.ServerIDs))
+	for _, id := range cfg.ServerIDs {
+		selected[id] = struct{}{}
+	}
+	nodes := []Node{}
+	for _, srv := range all {
+		if cfg.Mode == ModeSelected {
+			if _, ok := selected[srv.ID]; !ok {
+				continue
+			}
+		}
+		nodes = append(nodes, Node{ServerID: srv.ID, Name: srv.Name, Address: addressFor(srv)})
+	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ServerID < nodes[j].ServerID })
+	return nodes
+}
+
+func targetNodes(serverID string, all []server.Server) []Node {
+	nodes := make([]Node, 0, len(all))
+	for _, target := range targetsForServer(serverID, all) {
+		nodes = append(nodes, Node{ServerID: target.ServerID, Address: target.Address, Name: target.Name})
+	}
+	return nodes
+}
+
+func targetsForServer(serverID string, all []server.Server) []ProbeTarget {
+	targets := make([]ProbeTarget, 0, len(all))
+	seen := make(map[string]struct{}, len(all))
+	for _, srv := range all {
+		if srv.ID == serverID {
+			continue
+		}
+		if _, ok := seen[srv.ID]; ok {
+			continue
+		}
+		address := addressFor(srv)
+		if address == "" {
+			continue
+		}
+		seen[srv.ID] = struct{}{}
+		targets = append(targets, ProbeTarget{ServerID: srv.ID, Address: address, Name: srv.Name})
+	}
+	sort.Slice(targets, func(i, j int) bool { return targets[i].ServerID < targets[j].ServerID })
+	return targets
+}
+
+func isProbeNode(cfg Config, serverID string) bool {
+	id := strings.TrimSpace(serverID)
+	if id == "" {
+		return false
+	}
+	if cfg.Mode != ModeSelected {
+		return true
+	}
+	for _, candidate := range cfg.ServerIDs {
+		if candidate == id {
+			return true
+		}
+	}
+	return false
+}
+
+func filterNodes(nodes []Node, filter []string) []Node {
+	allowed := make(map[string]struct{}, len(filter))
+	for _, id := range filter {
+		allowed[id] = struct{}{}
+	}
+	out := make([]Node, 0, len(nodes))
+	for _, node := range nodes {
+		if _, ok := allowed[node.ServerID]; ok {
+			out = append(out, node)
+		}
+	}
+	return out
+}
+
+func nodeIDSet(nodes []Node) map[string]struct{} {
+	out := make(map[string]struct{}, len(nodes))
+	for _, node := range nodes {
+		out[node.ServerID] = struct{}{}
+	}
+	return out
+}
+
+func serverIDSet(all []server.Server) map[string]struct{} {
+	out := make(map[string]struct{}, len(all))
+	for _, srv := range all {
+		out[srv.ID] = struct{}{}
+	}
+	return out
+}
+
+func serverByID(all []server.Server) map[string]server.Server {
+	out := make(map[string]server.Server, len(all))
+	for _, srv := range all {
+		out[srv.ID] = srv
+	}
+	return out
+}
+
+// addressFor 返回 Agent 探测目标应使用的地址：IPv4 优先，缺失时取 IPv6，最后
+// 回落到服务器连接地址。
+func addressFor(srv server.Server) string {
+	for _, value := range []string{srv.IPv4, srv.IPv6, srv.Host} {
+		if address := strings.TrimSpace(value); address != "" {
+			return address
+		}
+	}
+	return ""
+}
+
+func latestSample(results []Result) *time.Time {
+	var latest time.Time
+	for _, result := range results {
+		if result.SampledAt.After(latest) {
+			latest = result.SampledAt
+		}
+	}
+	if latest.IsZero() {
+		return nil
+	}
+	return &latest
+}
+
+func normalizeMode(mode string) string {
+	switch strings.TrimSpace(mode) {
+	case "", ModeAll:
+		return ModeAll
+	case ModeSelected:
+		return ModeSelected
+	default:
+		return strings.TrimSpace(mode)
+	}
+}
+
+// resolveProbeIntervalSeconds 把保存输入归一化为合法探测周期：0/缺省表示使用
+// 默认值（旧客户端），其余必须落在允许范围内。
+func resolveProbeIntervalSeconds(raw int) (int, bool) {
+	if raw == 0 {
+		return DefaultProbeIntervalSeconds, true
+	}
+	if raw < MinProbeIntervalSeconds || raw > MaxProbeIntervalSeconds {
+		return 0, false
+	}
+	return raw, true
+}
+
+func resolvePingCount(raw int) (int, bool) {
+	if raw == 0 {
+		return DefaultPingCount, true
+	}
+	if raw < MinPingCount || raw > MaxPingCount {
+		return 0, false
+	}
+	return raw, true
+}
+
+func resolvePingTimeoutSeconds(raw int) (int, bool) {
+	if raw == 0 {
+		return DefaultPingTimeoutSeconds, true
+	}
+	if raw < MinPingTimeoutSeconds || raw > MaxPingTimeoutSeconds {
+		return 0, false
+	}
+	return raw, true
+}
+
+// normalizeProbeIntervalSeconds 是读取侧的防御性归一化：0、负数、越界值以及旧版本
+// 允许的亚分钟值（<60 秒）都回落默认值，保证下发给 Agent 的参数总是合法——探测
+// 间隔在面板侧以分钟为单位，最小 1 分钟。
+func normalizeProbeIntervalSeconds(raw int) int {
+	if raw < MinProbeIntervalSeconds || raw > MaxProbeIntervalSeconds {
+		return DefaultProbeIntervalSeconds
+	}
+	return raw
+}
+
+func normalizePingCount(raw int) int {
+	if raw < MinPingCount || raw > MaxPingCount {
+		return DefaultPingCount
+	}
+	return raw
+}
+
+func normalizePingTimeoutSeconds(raw int) int {
+	if raw < MinPingTimeoutSeconds || raw > MaxPingTimeoutSeconds {
+		return DefaultPingTimeoutSeconds
+	}
+	return raw
+}
+
+// freshnessFor 返回当前探测间隔下的结果新鲜度阈值。间隔调大后 3 个周期可能超过
+// 固定的 5 分钟，此时必须跟着放大，否则结果会一直显示为 stale。
+func freshnessFor(cfg Config) time.Duration {
+	interval := normalizeProbeIntervalSeconds(cfg.IntervalSeconds)
+	threshold := 3 * time.Duration(interval) * time.Second
+	if threshold < ResultFreshFor {
+		return ResultFreshFor
+	}
+	return threshold
+}
+
+// normalizeIDs 去空白、去重并按 serverID 升序排列。
+func normalizeIDs(ids []string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func decodeIDs(raw string) []string {
+	ids := []string{}
+	if err := json.Unmarshal([]byte(raw), &ids); err != nil {
+		return []string{}
+	}
+	return normalizeIDs(ids)
+}
+
+func sanitizeFloat(value float64) float64 {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0
+	}
+	return value
+}
+
+func normalizeThresholds(in Thresholds) (Thresholds, error) {
+	if in.LatencyMS != nil {
+		if math.IsNaN(*in.LatencyMS) || math.IsInf(*in.LatencyMS, 0) || *in.LatencyMS <= 0 {
+			return Thresholds{}, panelerr.Validation("network_probe_threshold_invalid", "latencyMs must be greater than 0")
+		}
+	}
+	if in.PacketLossPercent != nil {
+		if math.IsNaN(*in.PacketLossPercent) || math.IsInf(*in.PacketLossPercent, 0) || *in.PacketLossPercent <= 0 || *in.PacketLossPercent > 100 {
+			return Thresholds{}, panelerr.Validation("network_probe_threshold_invalid", "packetLossPercent must be greater than 0 and at most 100")
+		}
+	}
+	return in, nil
+}
+
+func decodeThresholds(raw string) Thresholds {
+	var out Thresholds
+	if strings.TrimSpace(raw) == "" || json.Unmarshal([]byte(raw), &out) != nil {
+		return Thresholds{}
+	}
+	if out.LatencyMS != nil && (math.IsNaN(*out.LatencyMS) || math.IsInf(*out.LatencyMS, 0) || *out.LatencyMS <= 0) {
+		out.LatencyMS = nil
+	}
+	if out.PacketLossPercent != nil && (math.IsNaN(*out.PacketLossPercent) || math.IsInf(*out.PacketLossPercent, 0) || *out.PacketLossPercent <= 0 || *out.PacketLossPercent > 100) {
+		out.PacketLossPercent = nil
+	}
+	return out
+}
+
+func formatTime(value time.Time) string {
+	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func parseTime(value string) time.Time {
+	if strings.TrimSpace(value) == "" {
+		return time.Time{}
+	}
+	parsed, _ := time.Parse(time.RFC3339Nano, value)
+	if parsed.IsZero() {
+		parsed, _ = time.Parse(time.RFC3339, value)
+	}
+	return parsed.UTC()
+}

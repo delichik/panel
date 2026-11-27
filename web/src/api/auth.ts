@@ -1,48 +1,70 @@
 import { apiClient } from './client';
 
-export interface LoginRequest {
-  username: string;
-  password: string;
+export interface AuthRole {
+  id: string;
+  key?: string;
+  name: string;
 }
 
-export interface LoginResponse {
-  authenticated: boolean;
-  token: string;
+export interface AuthUser {
+  id: string;
   username: string;
-  passwordChangeRequired: boolean;
+  displayName: string;
+  isBuiltinAdmin: boolean;
 }
 
-export interface SessionResponse {
+export interface AuthSession {
   authenticated: boolean;
   token?: string;
   username?: string;
-  passwordChangeRequired?: boolean;
+  expiresAt?: string;
+  authKind?: 'session' | 'credential';
+  mustChangePassword?: boolean;
+  mustRelogin?: boolean;
+  user?: AuthUser;
+  roles?: AuthRole[];
+  permissions?: string[];
+  credentialScope?: 'readonly' | 'readwrite';
+  allowManagement?: boolean;
 }
 
-export interface AccountUpdateRequest {
+export interface AccountUpdateInput {
   currentPassword: string;
-  username: string;
-  newPassword: string;
-}
-
-export interface JwtSecretUpdateRequest {
-  jwtSecret: string;
+  username?: string;
+  displayName?: string;
+  newPassword?: string;
 }
 
 export const authApi = {
-  login(input: LoginRequest) {
-    return apiClient.post<LoginResponse>('/auth/login', input);
+  login(username: string, password: string) {
+    return apiClient.post<AuthSession>('/auth/login', { username, password }, { skipAuth: true });
+  },
+  loginWithCredential(credential: string) {
+    return apiClient.post<AuthSession>('/auth/login', { credential }, { skipAuth: true });
   },
   logout() {
-    return apiClient.post<SessionResponse>('/auth/logout');
+    return apiClient.post<AuthSession>('/auth/logout');
   },
   session() {
-    return apiClient.get<SessionResponse>('/auth/session');
+    return apiClient.get<AuthSession>('/auth/session');
   },
-  updateAccount(input: AccountUpdateRequest) {
-    return apiClient.post<LoginResponse>('/auth/account', input);
+  updateAccount(input: AccountUpdateInput) {
+    return apiClient.post<AuthSession>('/auth/account', input);
   },
-  updateJwtSecret(input: JwtSecretUpdateRequest) {
-    return apiClient.post<LoginResponse>('/auth/jwt-secret', input);
+  updateJwtSecret() {
+    return apiClient.post<AuthSession>('/auth/jwt-secret', {});
+  },
+};
+
+export interface SetupStatus {
+  required: boolean;
+}
+
+export const setupApi = {
+  status() {
+    return apiClient.get<SetupStatus>('/setup/status', { skipAuth: true });
+  },
+  create(username: string, password: string) {
+    return apiClient.post<{ created: boolean }>('/setup', { username, password }, { skipAuth: true });
   },
 };

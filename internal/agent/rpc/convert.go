@@ -1,0 +1,737 @@
+package rpc
+
+import (
+	"strings"
+	"time"
+
+	agentcontract "panel/internal/agent/contract"
+	agentpb "panel/internal/agent/pb"
+	appruntime "panel/internal/modules/applications/runtime"
+	"panel/internal/platform/linux"
+	"panel/internal/platform/linux/remoteops"
+
+	"google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
+)
+
+const runtimeManagedArchiveModeSentinel = "__panel_archive__"
+
+func pbTime(t time.Time) *timestamppb.Timestamp {
+	if t.IsZero() {
+		return nil
+	}
+	return timestamppb.New(t)
+}
+
+func goTime(t *timestamppb.Timestamp) time.Time {
+	if t == nil {
+		return time.Time{}
+	}
+	return t.AsTime()
+}
+
+func pbHealth(in agentcontract.HealthResponse) *agentpb.HealthResponse {
+	return &agentpb.HealthResponse{
+		Status:       in.Status,
+		Time:         in.Time,
+		Version:      in.Version,
+		Capabilities: append([]string(nil), in.Capabilities...),
+		ContractHash: in.ContractHash,
+		Docker:       pbDockerHealth(in.Docker),
+	}
+}
+
+func contractHealth(in *agentpb.HealthResponse) agentcontract.HealthResponse {
+	if in == nil {
+		return agentcontract.HealthResponse{}
+	}
+	return agentcontract.HealthResponse{
+		Status:       in.Status,
+		Time:         in.Time,
+		Version:      in.Version,
+		Capabilities: append([]string(nil), in.Capabilities...),
+		ContractHash: in.ContractHash,
+		Docker:       contractDockerHealth(in.Docker),
+	}
+}
+
+func pbDockerHealth(in agentcontract.DockerHealth) *agentpb.DockerHealth {
+	return &agentpb.DockerHealth{Host: in.Host, Status: in.Status, Error: in.Error}
+}
+
+func contractDockerHealth(in *agentpb.DockerHealth) agentcontract.DockerHealth {
+	if in == nil {
+		return agentcontract.DockerHealth{}
+	}
+	return agentcontract.DockerHealth{Host: in.Host, Status: in.Status, Error: in.Error}
+}
+
+func pbOSRelease(in linux.OSRelease) *agentpb.OSReleaseResponse {
+	return &agentpb.OSReleaseResponse{Id: in.ID, VersionId: in.VersionID, PrettyName: in.PrettyName, Supported: in.Supported}
+}
+
+func goOSRelease(in *agentpb.OSReleaseResponse) linux.OSRelease {
+	if in == nil {
+		return linux.OSRelease{}
+	}
+	return linux.OSRelease{ID: in.Id, VersionID: in.VersionId, PrettyName: in.PrettyName, Supported: in.Supported}
+}
+
+func pbSnapshot(in linux.MetricsSnapshot) *agentpb.MetricsSnapshotResponse {
+	sampled := in.DiskUsageSampled
+	ioAvailable := in.DiskIOAvailable
+	return &agentpb.MetricsSnapshotResponse{
+		ServerId:           in.ServerID,
+		Time:               pbTime(in.Time),
+		CpuUsagePercent:    in.CPUUsagePercent,
+		MemoryUsedBytes:    in.MemoryUsedBytes,
+		MemoryTotalBytes:   in.MemoryTotalBytes,
+		DiskUsedBytes:      in.DiskUsedBytes,
+		DiskTotalBytes:     in.DiskTotalBytes,
+		NetworkRxBytesRate: in.NetworkRxBytesRate,
+		NetworkTxBytesRate: in.NetworkTxBytesRate,
+		DiskUsageSampled:   wrapperspb.Bool(sampled),
+		DiskIoAvailable:    wrapperspb.Bool(ioAvailable),
+		DiskReadBytesRate:  in.DiskReadBytesRate,
+		DiskWriteBytesRate: in.DiskWriteBytesRate,
+		Status: &agentpb.SystemStatus{
+			Hostname:      in.Status.Hostname,
+			KernelVersion: in.Status.KernelVersion,
+			OsVersion:     in.Status.OSVersion,
+			ServerTime:    pbTime(in.Status.ServerTime),
+			UptimeSeconds: in.Status.UptimeSeconds,
+			LoadAverage:   in.Status.LoadAverage,
+			Load1:         in.Status.Load1,
+			Load5:         in.Status.Load5,
+			Load15:        in.Status.Load15,
+		},
+	}
+}
+
+func goSnapshot(in *agentpb.MetricsSnapshotResponse) linux.MetricsSnapshot {
+	if in == nil {
+		return linux.MetricsSnapshot{}
+	}
+	out := linux.MetricsSnapshot{
+		ServerID:           in.ServerId,
+		Time:               goTime(in.Time),
+		CPUUsagePercent:    in.CpuUsagePercent,
+		MemoryUsedBytes:    in.MemoryUsedBytes,
+		MemoryTotalBytes:   in.MemoryTotalBytes,
+		DiskUsedBytes:      in.DiskUsedBytes,
+		DiskTotalBytes:     in.DiskTotalBytes,
+		NetworkRxBytesRate: in.NetworkRxBytesRate,
+		NetworkTxBytesRate: in.NetworkTxBytesRate,
+		DiskReadBytesRate:  in.DiskReadBytesRate,
+		DiskWriteBytesRate: in.DiskWriteBytesRate,
+	}
+	if in.DiskUsageSampled != nil {
+		out.DiskUsageSampled = in.DiskUsageSampled.Value
+	}
+	if in.DiskIoAvailable != nil {
+		out.DiskIOAvailable = in.DiskIoAvailable.Value
+	}
+	if in.Status != nil {
+		out.Status = linux.SystemStatus{
+			Hostname:      in.Status.Hostname,
+			KernelVersion: in.Status.KernelVersion,
+			OSVersion:     in.Status.OsVersion,
+			ServerTime:    goTime(in.Status.ServerTime),
+			UptimeSeconds: in.Status.UptimeSeconds,
+			LoadAverage:   in.Status.LoadAverage,
+			Load1:         in.Status.Load1,
+			Load5:         in.Status.Load5,
+			Load15:        in.Status.Load15,
+		}
+	}
+	return out
+}
+
+func pbPackageUpdates(items []linux.PackageUpdate) []*agentpb.PackageUpdate {
+	out := make([]*agentpb.PackageUpdate, 0, len(items))
+	for _, item := range items {
+		security := item.Security
+		securityKnown := item.SecurityKnown
+		out = append(out, &agentpb.PackageUpdate{
+			Name: item.Name, InstalledVersion: item.InstalledVersion, CandidateVersion: item.CandidateVersion, Source: item.Source,
+			// security/security_known 是 proto3 optional，新 Agent 总是显式
+			// 发送判定状态；旧 Agent 不填时 Panel 收到 nil，按未知处理。
+			Security:      &security,
+			SecurityKnown: &securityKnown,
+		})
+	}
+	return out
+}
+
+func goPackageUpdates(items []*agentpb.PackageUpdate) []linux.PackageUpdate {
+	out := make([]linux.PackageUpdate, 0, len(items))
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		// 旧 Agent 不填 security/security_known：Get* 返回零值 false，
+		// SecurityKnown=false 表示 Panel 不可判定（跳过而不是启发式猜测）。
+		out = append(out, linux.PackageUpdate{
+			Name: item.Name, InstalledVersion: item.InstalledVersion, CandidateVersion: item.CandidateVersion, Source: item.Source,
+			Security: item.GetSecurity(), SecurityKnown: item.GetSecurityKnown(),
+		})
+	}
+	return out
+}
+
+func pbUFWRule(in remoteops.UFWRule) *agentpb.UFWRule {
+	return &agentpb.UFWRule{Port: int32(in.Port), Protocol: in.Protocol, From: in.From}
+}
+
+func goUFWRule(in *agentpb.UFWRule) remoteops.UFWRule {
+	if in == nil {
+		return remoteops.UFWRule{}
+	}
+	return remoteops.UFWRule{Port: int(in.Port), Protocol: in.Protocol, From: in.From}
+}
+
+func pbUFWStatus(in remoteops.UFWStatus) *agentpb.UFWStatusResponse {
+	rules := make([]*agentpb.UFWRuleStatus, 0, len(in.Rules))
+	for _, rule := range in.Rules {
+		rules = append(rules, &agentpb.UFWRuleStatus{Number: int32(rule.Number), To: rule.To, Action: rule.Action, From: rule.From})
+	}
+	return &agentpb.UFWStatusResponse{Installed: in.Installed, Active: in.Active, Status: in.Status, Default: in.Default, Rules: rules, Raw: in.Raw}
+}
+
+func goUFWStatus(in *agentpb.UFWStatusResponse) remoteops.UFWStatus {
+	if in == nil {
+		return remoteops.UFWStatus{}
+	}
+	rules := make([]remoteops.UFWRuleStatus, 0, len(in.Rules))
+	for _, rule := range in.Rules {
+		if rule == nil {
+			continue
+		}
+		rules = append(rules, remoteops.UFWRuleStatus{Number: int(rule.Number), To: rule.To, Action: rule.Action, From: rule.From})
+	}
+	return remoteops.UFWStatus{Installed: in.Installed, Active: in.Active, Status: in.Status, Default: in.Default, Rules: rules, Raw: in.Raw}
+}
+
+
+
+
+
+func pbSpec(in appruntime.Spec) *agentpb.RuntimeSpec {
+	ports := make([]*agentpb.RuntimePort, 0, len(in.Ports))
+	for _, item := range in.Ports {
+		ports = append(ports, &agentpb.RuntimePort{Label: item.Label, ContainerPort: int32(item.ContainerPort), HostPort: int32(item.HostPort), Protocol: item.Protocol, OpenFirewall: item.OpenFirewall})
+	}
+	mounts := make([]*agentpb.RuntimeMount, 0, len(in.Mounts))
+	for _, item := range in.Mounts {
+		mount := &agentpb.RuntimeMount{Type: item.Type, Source: item.Source, Target: item.Target, ReadOnly: item.ReadOnly, Mode: item.Mode}
+		if item.UID != nil {
+			mount.Uid = wrapperspb.Int32(int32(*item.UID))
+		}
+		if item.GID != nil {
+			mount.Gid = wrapperspb.Int32(int32(*item.GID))
+		}
+		mounts = append(mounts, mount)
+	}
+	files := make([]*agentpb.RuntimeManagedFile, 0, len(in.Files))
+	for _, item := range in.Files {
+		mode := item.Mode
+		if strings.TrimSpace(item.Kind) == appruntime.ManagedFileKindArchive {
+			mode = runtimeManagedArchiveModeSentinel
+		}
+		file := &agentpb.RuntimeManagedFile{Path: item.Path, Content: append([]byte(nil), item.Content...), Mode: mode}
+		if item.UID != nil {
+			file.Uid = wrapperspb.Int32(int32(*item.UID))
+		}
+		if item.GID != nil {
+			file.Gid = wrapperspb.Int32(int32(*item.GID))
+		}
+		files = append(files, file)
+	}
+	services := make([]*agentpb.RuntimeService, 0, len(in.Services))
+	for _, item := range in.Services {
+		services = append(services, &agentpb.RuntimeService{Name: item.Name, Port: item.Port, Tags: append([]string(nil), item.Tags...)})
+	}
+	checks := make([]*agentpb.RuntimeCheck, 0, len(in.Checks))
+	for _, item := range in.Checks {
+		checks = append(checks, &agentpb.RuntimeCheck{Name: item.Name, Type: item.Type, Port: item.Port, Path: item.Path, IntervalSeconds: int32(item.IntervalSeconds), TimeoutSeconds: int32(item.TimeoutSeconds), Command: item.Command})
+	}
+	return &agentpb.RuntimeSpec{
+		Id: in.ID, ApplicationId: in.ApplicationID, InstanceId: in.InstanceID, ContainerName: in.ContainerName,
+		Name: in.Name, Image: in.Image, Command: append([]string(nil), in.Command...),
+		Env: cloneMap(in.Env), Ports: ports,
+		Resources:  &agentpb.RuntimeResources{Cpu: int32(in.Resources.CPU), MemoryMb: int32(in.Resources.MemoryMB)},
+		Privileged: in.Privileged, CapAdd: append([]string(nil), in.CapAdd...), Mounts: mounts, Files: files,
+		Restart:  &agentpb.RuntimeRestart{Policy: in.Restart.Policy, Attempts: int32(in.Restart.Attempts), IntervalSeconds: int32(in.Restart.IntervalSeconds), DelaySeconds: int32(in.Restart.DelaySeconds), Mode: in.Restart.Mode},
+		Services: services, Checks: checks, Generation: int32(in.Generation), SpecHash: in.SpecHash,
+	}
+}
+
+func goSpec(in *agentpb.RuntimeSpec) appruntime.Spec {
+	if in == nil {
+		return appruntime.Spec{}
+	}
+	ports := make([]appruntime.Port, 0, len(in.Ports))
+	for _, item := range in.Ports {
+		if item == nil {
+			continue
+		}
+		ports = append(ports, appruntime.Port{Label: item.Label, ContainerPort: int(item.ContainerPort), HostPort: int(item.HostPort), Protocol: item.Protocol, OpenFirewall: item.OpenFirewall})
+	}
+	mounts := make([]appruntime.Mount, 0, len(in.Mounts))
+	for _, item := range in.Mounts {
+		if item == nil {
+			continue
+		}
+		mount := appruntime.Mount{Type: item.Type, Source: item.Source, Target: item.Target, ReadOnly: item.ReadOnly, Mode: item.Mode}
+		if item.Uid != nil {
+			value := int(item.Uid.Value)
+			mount.UID = &value
+		}
+		if item.Gid != nil {
+			value := int(item.Gid.Value)
+			mount.GID = &value
+		}
+		mounts = append(mounts, mount)
+	}
+	files := make([]appruntime.ManagedFile, 0, len(in.Files))
+	for _, item := range in.Files {
+		if item == nil {
+			continue
+		}
+		file := appruntime.ManagedFile{Path: item.Path, Content: append([]byte(nil), item.Content...), Mode: item.Mode}
+		if strings.TrimSpace(item.Mode) == runtimeManagedArchiveModeSentinel {
+			file.Kind = appruntime.ManagedFileKindArchive
+			file.Mode = ""
+		}
+		if item.Uid != nil {
+			value := int(item.Uid.Value)
+			file.UID = &value
+		}
+		if item.Gid != nil {
+			value := int(item.Gid.Value)
+			file.GID = &value
+		}
+		files = append(files, file)
+	}
+	services := make([]appruntime.Service, 0, len(in.Services))
+	for _, item := range in.Services {
+		if item == nil {
+			continue
+		}
+		services = append(services, appruntime.Service{Name: item.Name, Port: item.Port, Tags: append([]string(nil), item.Tags...)})
+	}
+	checks := make([]appruntime.Check, 0, len(in.Checks))
+	for _, item := range in.Checks {
+		if item == nil {
+			continue
+		}
+		checks = append(checks, appruntime.Check{Name: item.Name, Type: item.Type, Port: item.Port, Path: item.Path, IntervalSeconds: int(item.IntervalSeconds), TimeoutSeconds: int(item.TimeoutSeconds), Command: item.Command})
+	}
+	out := appruntime.Spec{
+		ID: in.Id, ApplicationID: in.ApplicationId, InstanceID: in.InstanceId, ContainerName: in.ContainerName,
+		Name: in.Name, Image: in.Image, Command: append([]string(nil), in.Command...),
+		Env: cloneMap(in.Env), Ports: ports, Privileged: in.Privileged, CapAdd: append([]string(nil), in.CapAdd...),
+		Mounts: mounts, Files: files, Services: services, Checks: checks, Generation: int(in.Generation), SpecHash: in.SpecHash,
+	}
+	if in.Resources != nil {
+		out.Resources = appruntime.Resources{CPU: int(in.Resources.Cpu), MemoryMB: int(in.Resources.MemoryMb)}
+	}
+	if in.Restart != nil {
+		out.Restart = appruntime.Restart{Policy: in.Restart.Policy, Attempts: int(in.Restart.Attempts), IntervalSeconds: int(in.Restart.IntervalSeconds), DelaySeconds: int(in.Restart.DelaySeconds), Mode: in.Restart.Mode}
+	}
+	return out
+}
+
+func pbRuntimeInstance(in agentcontract.RuntimeInstanceResponse) *agentpb.RuntimeInstanceResponse {
+	return &agentpb.RuntimeInstanceResponse{InstanceId: in.InstanceID, ContainerName: in.ContainerName, ContainerId: in.ContainerID, Status: in.Status, Error: in.Error, ObservedAt: pbTime(in.ObservedAt)}
+}
+
+func goRuntimeInstance(in *agentpb.RuntimeInstanceResponse) agentcontract.RuntimeInstanceResponse {
+	if in == nil {
+		return agentcontract.RuntimeInstanceResponse{}
+	}
+	return agentcontract.RuntimeInstanceResponse{InstanceID: in.InstanceId, ContainerName: in.ContainerName, ContainerID: in.ContainerId, Status: in.Status, Error: in.Error, ObservedAt: goTime(in.ObservedAt)}
+}
+
+func pbRuntimeStatus(in agentcontract.RuntimeStatusResponse) *agentpb.RuntimeStatusResponse {
+	status := in.InstanceStatus
+	return &agentpb.RuntimeStatusResponse{
+		InstanceId: status.InstanceID, ServerId: status.ServerID, ServerName: status.ServerName, ContainerName: status.ContainerName,
+		ContainerId: status.ContainerID, Status: status.Status, DesiredState: status.DesiredState, Stage: status.Stage, Image: status.Image,
+		StartedAt: status.StartedAt, FinishedAt: status.FinishedAt, ExitCode: int32(status.ExitCode), LastError: status.LastError, ObservedAt: pbTime(status.ObservedAt),
+		ImageVersion: in.ImageVersion,
+	}
+}
+
+func goRuntimeStatus(in *agentpb.RuntimeStatusResponse) agentcontract.RuntimeStatusResponse {
+	if in == nil {
+		return agentcontract.RuntimeStatusResponse{}
+	}
+	return agentcontract.RuntimeStatusResponse{InstanceStatus: appruntime.InstanceStatus{
+		InstanceID: in.InstanceId, ServerID: in.ServerId, ServerName: in.ServerName, ContainerName: in.ContainerName, ContainerID: in.ContainerId,
+		Status: in.Status, DesiredState: in.DesiredState, Stage: in.Stage, Image: in.Image, StartedAt: in.StartedAt, FinishedAt: in.FinishedAt,
+		ExitCode: int(in.ExitCode), LastError: in.LastError, ObservedAt: goTime(in.ObservedAt),
+	}, ImageVersion: in.ImageVersion}
+}
+
+func pbDockerContainer(in agentcontract.DockerContainer) *agentpb.DockerContainer {
+	ports := make([]*agentpb.DockerPort, 0, len(in.Ports))
+	for _, item := range in.Ports {
+		ports = append(ports, &agentpb.DockerPort{Ip: item.IP, PrivatePort: int32(item.PrivatePort), PublicPort: int32(item.PublicPort), Type: item.Type})
+	}
+	mounts := make([]*agentpb.DockerMount, 0, len(in.Mounts))
+	for _, item := range in.Mounts {
+		mounts = append(mounts, &agentpb.DockerMount{Type: item.Type, Name: item.Name, Source: item.Source, Destination: item.Destination, Driver: item.Driver, Mode: item.Mode, Rw: item.RW})
+	}
+	return &agentpb.DockerContainer{Id: in.ID, Names: append([]string(nil), in.Names...), Image: in.Image, ImageId: in.ImageID, Command: in.Command, Created: in.Created, State: in.State, Status: in.Status, Ports: ports, Labels: cloneMap(in.Labels), Mounts: mounts}
+}
+
+func pbDockerContainerSlim(in agentcontract.DockerContainer) *agentpb.DockerContainer {
+	ports := make([]*agentpb.DockerPort, 0, len(in.Ports))
+	for _, item := range in.Ports {
+		ports = append(ports, &agentpb.DockerPort{Ip: item.IP, PrivatePort: int32(item.PrivatePort), PublicPort: int32(item.PublicPort), Type: item.Type})
+	}
+	return &agentpb.DockerContainer{Id: in.ID, Names: append([]string(nil), in.Names...), Image: in.Image, ImageId: in.ImageID, State: in.State, Status: in.Status, Ports: ports, Labels: cloneMap(in.Labels)}
+}
+
+func goDockerContainer(in *agentpb.DockerContainer) agentcontract.DockerContainer {
+	if in == nil {
+		return agentcontract.DockerContainer{}
+	}
+	ports := make([]agentcontract.DockerPort, 0, len(in.Ports))
+	for _, item := range in.Ports {
+		if item == nil {
+			continue
+		}
+		ports = append(ports, agentcontract.DockerPort{IP: item.Ip, PrivatePort: int(item.PrivatePort), PublicPort: int(item.PublicPort), Type: item.Type})
+	}
+	mounts := make([]agentcontract.DockerMount, 0, len(in.Mounts))
+	for _, item := range in.Mounts {
+		if item == nil {
+			continue
+		}
+		mounts = append(mounts, agentcontract.DockerMount{Type: item.Type, Name: item.Name, Source: item.Source, Destination: item.Destination, Driver: item.Driver, Mode: item.Mode, RW: item.Rw})
+	}
+	return agentcontract.DockerContainer{ID: in.Id, Names: append([]string(nil), in.Names...), Image: in.Image, ImageID: in.ImageId, Command: in.Command, Created: in.Created, State: in.State, Status: in.Status, Ports: ports, Labels: cloneMap(in.Labels), Mounts: mounts}
+}
+
+func pbDockerImage(in agentcontract.DockerImage) *agentpb.DockerImage {
+	return &agentpb.DockerImage{Id: in.ID, ParentId: in.ParentID, RepoTags: append([]string(nil), in.RepoTags...), RepoDigests: append([]string(nil), in.RepoDigests...), Created: in.Created, Size: in.Size, Containers: int32(in.Containers)}
+}
+
+func goDockerImage(in *agentpb.DockerImage) agentcontract.DockerImage {
+	if in == nil {
+		return agentcontract.DockerImage{}
+	}
+	return agentcontract.DockerImage{ID: in.Id, ParentID: in.ParentId, RepoTags: append([]string(nil), in.RepoTags...), RepoDigests: append([]string(nil), in.RepoDigests...), Created: in.Created, Size: in.Size, Containers: int(in.Containers)}
+}
+
+func pbDockerNetwork(in agentcontract.DockerNetwork) *agentpb.DockerNetwork {
+	return &agentpb.DockerNetwork{Id: in.ID, Name: in.Name, Driver: in.Driver, Scope: in.Scope, Created: in.Created, Internal: in.Internal, Labels: cloneMap(in.Labels)}
+}
+
+func goDockerNetwork(in *agentpb.DockerNetwork) agentcontract.DockerNetwork {
+	if in == nil {
+		return agentcontract.DockerNetwork{}
+	}
+	return agentcontract.DockerNetwork{ID: in.Id, Name: in.Name, Driver: in.Driver, Scope: in.Scope, Created: in.Created, Internal: in.Internal, Labels: cloneMap(in.Labels)}
+}
+
+func pbDockerVolume(in agentcontract.DockerVolume) *agentpb.DockerVolume {
+	out := &agentpb.DockerVolume{Name: in.Name, Driver: in.Driver, Mountpoint: in.Mountpoint, CreatedAt: in.CreatedAt, Labels: cloneMap(in.Labels), InUse: in.InUse, ContainerCount: int32(in.ContainerCount)}
+	if in.UsageData != nil {
+		out.UsageData = &agentpb.DockerVolumeUsage{Size: in.UsageData.Size, RefCount: in.UsageData.RefCount}
+	}
+	return out
+}
+
+func goDockerVolume(in *agentpb.DockerVolume) agentcontract.DockerVolume {
+	if in == nil {
+		return agentcontract.DockerVolume{}
+	}
+	out := agentcontract.DockerVolume{Name: in.Name, Driver: in.Driver, Mountpoint: in.Mountpoint, CreatedAt: in.CreatedAt, Labels: cloneMap(in.Labels), InUse: in.InUse, ContainerCount: int(in.ContainerCount)}
+	if in.UsageData != nil {
+		out.UsageData = &agentcontract.DockerVolumeUsage{Size: in.UsageData.Size, RefCount: in.UsageData.RefCount}
+	}
+	return out
+}
+
+func cloneMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func ContractHealth(in *agentpb.HealthResponse) agentcontract.HealthResponse {
+	return contractHealth(in)
+}
+func GoOSRelease(in *agentpb.OSReleaseResponse) linux.OSRelease            { return goOSRelease(in) }
+func GoSnapshot(in *agentpb.MetricsSnapshotResponse) linux.MetricsSnapshot { return goSnapshot(in) }
+func PBSnapshot(in linux.MetricsSnapshot) *agentpb.MetricsSnapshotResponse { return pbSnapshot(in) }
+func GoPackageUpdates(items []*agentpb.PackageUpdate) []linux.PackageUpdate {
+	return goPackageUpdates(items)
+}
+func PBUFWRule(in remoteops.UFWRule) *agentpb.UFWRule { return pbUFWRule(in) }
+func PBUFWAllowRequest(in agentcontract.UFWAllowRequest) *agentpb.UFWAllowRequest {
+	return &agentpb.UFWAllowRequest{Rule: pbUFWRule(in.Rule), SshPort: int32(in.SSHPort), AgentPort: int32(in.AgentPort)}
+}
+func GoUFWAllowRequest(in *agentpb.UFWAllowRequest) agentcontract.UFWAllowRequest {
+	if in == nil {
+		return agentcontract.UFWAllowRequest{}
+	}
+	return agentcontract.UFWAllowRequest{Rule: goUFWRule(in.Rule), SSHPort: int(in.SshPort), AgentPort: int(in.AgentPort)}
+}
+func PBUFWDeleteRequest(in agentcontract.UFWDeleteRequest) *agentpb.UFWDeleteRequest {
+	return &agentpb.UFWDeleteRequest{Number: int32(in.Number), SshPort: int32(in.SSHPort), AgentPort: int32(in.AgentPort)}
+}
+func GoUFWDeleteRequest(in *agentpb.UFWDeleteRequest) agentcontract.UFWDeleteRequest {
+	if in == nil {
+		return agentcontract.UFWDeleteRequest{}
+	}
+	return agentcontract.UFWDeleteRequest{Number: int(in.Number), SSHPort: int(in.SshPort), AgentPort: int(in.AgentPort)}
+}
+func GoUFWStatus(in *agentpb.UFWStatusResponse) remoteops.UFWStatus { return goUFWStatus(in) }
+func PBSpec(in appruntime.Spec) *agentpb.RuntimeSpec { return pbSpec(in) }
+func PBRuntimeReconcileRequest(in agentcontract.RuntimeReconcileRequest) *agentpb.RuntimeReconcileRequest {
+	return &agentpb.RuntimeReconcileRequest{
+		OperationId: in.OperationID, RunId: in.RunID,
+		JobId: in.JobID, ExecutionId: in.ExecutionID, ApplicationId: in.ApplicationID, InstanceId: in.InstanceID,
+		ServerId: in.ServerID, Action: in.Action, DesiredGeneration: int32(in.DesiredGeneration), DesiredSpecHash: in.DesiredSpecHash,
+		DesiredRevisionId: in.DesiredRevisionID, Spec: pbSpec(in.Spec), RemoveData: in.RemoveData, PreviousContainerName: in.PreviousContainerName, SshPort: int32(in.SSHPort), AgentPort: int32(in.AgentPort),
+		ImagePreflightCommand: append([]string(nil), in.ImagePreflightCommand...),
+		ImageVersionCommand:   append([]string(nil), in.ImageVersionCommand...),
+	}
+}
+
+func GoRuntimeReconcileRequest(in *agentpb.RuntimeReconcileRequest) agentcontract.RuntimeReconcileRequest {
+	if in == nil {
+		return agentcontract.RuntimeReconcileRequest{}
+	}
+	return agentcontract.RuntimeReconcileRequest{
+		OperationID: in.OperationId, RunID: in.RunId, JobID: in.JobId, ExecutionID: in.ExecutionId, ApplicationID: in.ApplicationId, InstanceID: in.InstanceId,
+		ServerID: in.ServerId, Action: in.Action, DesiredGeneration: int(in.DesiredGeneration), DesiredSpecHash: in.DesiredSpecHash,
+		DesiredRevisionID: in.DesiredRevisionId, Spec: goSpec(in.Spec), RemoveData: in.RemoveData, PreviousContainerName: in.PreviousContainerName, SSHPort: int(in.SshPort), AgentPort: int(in.AgentPort),
+		ImagePreflightCommand: append([]string(nil), in.ImagePreflightCommand...),
+		ImageVersionCommand:   append([]string(nil), in.ImageVersionCommand...),
+	}
+}
+
+func GoRuntimeReconcileResponse(in *agentpb.RuntimeReconcileResponse) agentcontract.RuntimeReconcileResponse {
+	if in == nil {
+		return agentcontract.RuntimeReconcileResponse{}
+	}
+	out := agentcontract.RuntimeReconcileResponse{
+		VerificationSource: in.VerificationSource, VerificationReason: in.VerificationReason, VerifiedBy: in.VerifiedBy, VerifiedByName: in.VerifiedByName, VerifiedAt: optionalGoTime(in.VerifiedAt),
+		ObservedState: in.ObservedState, ContainerName: in.ContainerName, ContainerID: in.ContainerId,
+		ObservedGeneration: int(in.ObservedGeneration), ObservedSpecHash: in.ObservedSpecHash, ObservedImageDigest: in.ObservedImageDigest,
+		ObservedAt: goTime(in.ObservedAt), ErrorCode: in.ErrorCode, ErrorClass: in.ErrorClass, ErrorMessage: in.ErrorMessage,
+		ErrorDetail: in.ErrorDetail, Retryable: in.Retryable, RetryAfter: time.Duration(in.RetryAfterSeconds) * time.Second,
+		ImageVersion: in.ImageVersion, PreflightOutput: in.PreflightOutput,
+	}
+	if len(in.Steps) > 0 {
+		out.Steps = make([]agentcontract.RuntimeReconcileStep, 0, len(in.Steps))
+		for _, step := range in.Steps {
+			if step == nil {
+				continue
+			}
+			out.Steps = append(out.Steps, agentcontract.RuntimeReconcileStep{Name: step.Name, Status: step.Status, Detail: step.Detail, StepID: step.StepId, StartedAt: optionalGoTime(step.StartedAt), FinishedAt: optionalGoTime(step.FinishedAt)})
+		}
+	}
+	return out
+}
+
+func PBRuntimeReconcileResponse(in agentcontract.RuntimeReconcileResponse) *agentpb.RuntimeReconcileResponse {
+	steps := make([]*agentpb.RuntimeReconcileStep, 0, len(in.Steps))
+	for _, step := range in.Steps {
+		steps = append(steps, &agentpb.RuntimeReconcileStep{Name: step.Name, Status: step.Status, Detail: step.Detail, StepId: step.StepID, StartedAt: optionalPBTime(step.StartedAt), FinishedAt: optionalPBTime(step.FinishedAt)})
+	}
+	return &agentpb.RuntimeReconcileResponse{
+		VerificationSource: in.VerificationSource, VerificationReason: in.VerificationReason, VerifiedBy: in.VerifiedBy, VerifiedByName: in.VerifiedByName, VerifiedAt: optionalPBTime(in.VerifiedAt),
+		ObservedState: in.ObservedState, ContainerName: in.ContainerName, ContainerId: in.ContainerID,
+		ObservedGeneration: int32(in.ObservedGeneration), ObservedSpecHash: in.ObservedSpecHash, ObservedImageDigest: in.ObservedImageDigest,
+		ObservedAt: pbTime(in.ObservedAt), Steps: steps, ErrorCode: in.ErrorCode, ErrorClass: in.ErrorClass,
+		ErrorMessage: in.ErrorMessage, ErrorDetail: in.ErrorDetail, Retryable: in.Retryable, RetryAfterSeconds: int32(in.RetryAfter / time.Second),
+		ImageVersion: in.ImageVersion, PreflightOutput: in.PreflightOutput,
+	}
+}
+func GoRuntimeInstance(in *agentpb.RuntimeInstanceResponse) agentcontract.RuntimeInstanceResponse {
+	return goRuntimeInstance(in)
+}
+func GoRuntimeStatus(in *agentpb.RuntimeStatusResponse) agentcontract.RuntimeStatusResponse {
+	return goRuntimeStatus(in)
+}
+func GoDockerContainer(in *agentpb.DockerContainer) agentcontract.DockerContainer {
+	return goDockerContainer(in)
+}
+func PBDockerContainer(in agentcontract.DockerContainer) *agentpb.DockerContainer {
+	return pbDockerContainer(in)
+}
+func GoDockerImage(in *agentpb.DockerImage) agentcontract.DockerImage { return goDockerImage(in) }
+func GoDockerNetwork(in *agentpb.DockerNetwork) agentcontract.DockerNetwork {
+	return goDockerNetwork(in)
+}
+func GoDockerVolume(in *agentpb.DockerVolume) agentcontract.DockerVolume { return goDockerVolume(in) }
+
+// pbSSHSession 把采集包的一条在线会话转换为协议消息。
+func pbSSHSession(in agentcontract.SSHSession) *agentpb.AgentSshSession {
+	return &agentpb.AgentSshSession{
+		UserName:      in.UserName,
+		Tty:           in.TTY,
+		SourceHost:    in.SourceHost,
+		SourceAddress: in.SourceAddress,
+		LoginUnix:     in.LoginAt.Unix(),
+		Pid:           int32(in.PID),
+		Kind:          in.Kind,
+	}
+}
+
+// pbSSHSnapshot 转换在线会话快照；sampled_at 由 Agent 采样时刻决定。
+func pbSSHSnapshot(in agentcontract.SSHSnapshot) *agentpb.AgentSshSnapshot {
+	out := &agentpb.AgentSshSnapshot{SampledUnix: in.SampledAt.Unix()}
+	out.Items = make([]*agentpb.AgentSshSession, 0, len(in.Items))
+	for _, item := range in.Items {
+		out.Items = append(out.Items, pbSSHSession(item))
+	}
+	return out
+}
+
+// pbSSHHistory 转换 wtmp 回填结果。logout_unix 为零表示未配对。
+func pbSSHHistory(in agentcontract.SSHSessionHistory) *agentpb.AgentSshHistory {
+	out := &agentpb.AgentSshHistory{
+		SinceUnix: in.Since.Unix(),
+		Truncated: in.Truncated,
+		Items:     make([]*agentpb.AgentSshHistoryItem, 0, len(in.Items)),
+	}
+	for _, item := range in.Items {
+		out.Items = append(out.Items, &agentpb.AgentSshHistoryItem{
+			UserName:      item.UserName,
+			Tty:           item.TTY,
+			SourceHost:    item.SourceHost,
+			SourceAddress: item.SourceAddress,
+			LoginUnix:     item.LoginAt.Unix(),
+			LogoutUnix:    logoutUnix(item.LogoutAt),
+			Pid:           int32(item.PID),
+			Kind:          item.Kind,
+		})
+	}
+	return out
+}
+
+// pbSSHFailures 转换 btmp 失败尝试；每条尝试独立保留 pid 与精确时间。
+func pbSSHFailures(in agentcontract.SSHFailures) *agentpb.AgentSshFailures {
+	out := &agentpb.AgentSshFailures{
+		SinceUnix: in.Since.Unix(),
+		Truncated: in.Truncated,
+		Items:     make([]*agentpb.AgentSshFailure, 0, len(in.Items)),
+	}
+	for _, item := range in.Items {
+		out.Items = append(out.Items, &agentpb.AgentSshFailure{
+			UserName:      item.UserName,
+			SourceHost:    item.SourceHost,
+			SourceAddress: item.SourceAddress,
+			AttemptUnix:   item.AttemptAt.Unix(),
+			Pid:           int32(item.PID),
+		})
+	}
+	return out
+}
+
+func logoutUnix(at time.Time) int64 {
+	if at.IsZero() {
+		return 0
+	}
+	return at.Unix()
+}
+
+func unixOrZero(sec int64) time.Time {
+	if sec <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(sec, 0).UTC()
+}
+
+// GoSSHSnapshot 把协议中的在线会话快照还原为共享模型；nil 输入返回零值。
+func GoSSHSnapshot(in *agentpb.AgentSshSnapshot) agentcontract.SSHSnapshot {
+	if in == nil {
+		return agentcontract.SSHSnapshot{}
+	}
+	out := agentcontract.SSHSnapshot{
+		Items:     make([]agentcontract.SSHSession, 0, len(in.Items)),
+		SampledAt: unixOrZero(in.SampledUnix),
+	}
+	for _, item := range in.Items {
+		if item == nil {
+			continue
+		}
+		out.Items = append(out.Items, agentcontract.SSHSession{
+			UserName:      item.UserName,
+			TTY:           item.Tty,
+			SourceHost:    item.SourceHost,
+			SourceAddress: item.SourceAddress,
+			LoginAt:       time.Unix(item.LoginUnix, 0).UTC(),
+			PID:           int(item.Pid),
+			Kind:          item.Kind,
+		})
+	}
+	return out
+}
+
+// GoSSHHistory 把协议中的 wtmp 回填结果还原为共享模型。
+func GoSSHHistory(in *agentpb.AgentSshHistory) agentcontract.SSHSessionHistory {
+	if in == nil {
+		return agentcontract.SSHSessionHistory{}
+	}
+	out := agentcontract.SSHSessionHistory{
+		Items:     make([]agentcontract.SSHSessionHistoryItem, 0, len(in.Items)),
+		Since:     unixOrZero(in.SinceUnix),
+		Truncated: in.Truncated,
+	}
+	for _, item := range in.Items {
+		if item == nil {
+			continue
+		}
+		out.Items = append(out.Items, agentcontract.SSHSessionHistoryItem{
+			SSHSession: agentcontract.SSHSession{
+				UserName:      item.UserName,
+				TTY:           item.Tty,
+				SourceHost:    item.SourceHost,
+				SourceAddress: item.SourceAddress,
+				LoginAt:       unixOrZero(item.LoginUnix),
+				PID:           int(item.Pid),
+				Kind:          item.Kind,
+			},
+			LogoutAt: unixOrZero(item.LogoutUnix),
+		})
+	}
+	return out
+}
+
+// GoSSHFailures 把协议中的 btmp 失败尝试还原为共享模型。
+func GoSSHFailures(in *agentpb.AgentSshFailures) agentcontract.SSHFailures {
+	if in == nil {
+		return agentcontract.SSHFailures{}
+	}
+	out := agentcontract.SSHFailures{
+		Items:     make([]agentcontract.SSHFailure, 0, len(in.Items)),
+		Since:     unixOrZero(in.SinceUnix),
+		Truncated: in.Truncated,
+	}
+	for _, item := range in.Items {
+		if item == nil {
+			continue
+		}
+		out.Items = append(out.Items, agentcontract.SSHFailure{
+			UserName:      item.UserName,
+			SourceHost:    item.SourceHost,
+			SourceAddress: item.SourceAddress,
+			AttemptAt:     time.Unix(item.AttemptUnix, 0).UTC(),
+			PID:           int(item.Pid),
+		})
+	}
+	return out
+}
