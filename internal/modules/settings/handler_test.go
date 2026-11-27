@@ -251,6 +251,20 @@ func TestRuntimePartitionHandlersRejectInvalidValues(t *testing.T) {
 			code:    "invalid_remote_command_timeout",
 		},
 		{
+			name:    "security invalid login max failures zero",
+			path:    "/api/v1/settings/runtime/security",
+			body:    `{"loginMaxFailuresPerHour":0}`,
+			handler: (*Handler).UpdateSecurity,
+			code:    "invalid_login_max_failures_per_hour",
+		},
+		{
+			name:    "security invalid login max failures too large",
+			path:    "/api/v1/settings/runtime/security",
+			body:    `{"loginMaxFailuresPerHour":101}`,
+			handler: (*Handler).UpdateSecurity,
+			code:    "invalid_login_max_failures_per_hour",
+		},
+		{
 			name:    "certificates invalid panel domain",
 			path:    "/api/v1/settings/runtime/certificates",
 			body:    `{"panel":{"domain":"panel.example.test/path"}}`,

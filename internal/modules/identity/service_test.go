@@ -301,7 +301,7 @@ func TestSetupRequiredUntilInitialAdminExists(t *testing.T) {
 func TestLoginRateLimitLocksAfterRepeatedFailures(t *testing.T) {
 	svc := newTestService(t)
 	ip := "10.0.0.1"
-	for i := 0; i < loginMaxFailures; i++ {
+	for i := 0; i < settings.DefaultLoginMaxFailuresPerHour; i++ {
 		if _, err := svc.LoginFrom(context.Background(), "admin", "wrong", ip); err == nil || err.Error() != "Authentication failed" {
 			t.Fatalf("attempt %d: expected unauthorized, got %v", i+1, err)
 		}
@@ -311,9 +311,9 @@ func TestLoginRateLimitLocksAfterRepeatedFailures(t *testing.T) {
 	}
 }
 
-func TestLoginRateLimitIsPerIPAndUsername(t *testing.T) {
+func TestLoginRateLimitIsPerIPAcrossUsernames(t *testing.T) {
 	svc := newTestService(t)
-	for i := 0; i < loginMaxFailures; i++ {
+	for i := 0; i < settings.DefaultLoginMaxFailuresPerHour; i++ {
 		if _, err := svc.LoginFrom(context.Background(), "admin", "wrong", "10.0.0.2"); err == nil {
 			t.Fatal("expected unauthorized")
 		}
@@ -321,15 +321,15 @@ func TestLoginRateLimitIsPerIPAndUsername(t *testing.T) {
 	if _, err := svc.LoginFrom(context.Background(), "admin", "admin", "10.0.0.3"); err != nil {
 		t.Fatalf("different IP should not be blocked: %v", err)
 	}
-	if _, err := svc.LoginFrom(context.Background(), "not-admin", "admin", "10.0.0.2"); err == nil || err.Error() != "Authentication failed" {
-		t.Fatalf("different username should still reach auth check: %v", err)
+	if _, err := svc.LoginFrom(context.Background(), "not-admin", "admin", "10.0.0.2"); err == nil || err.Error() != "Too many login attempts; try again later" {
+		t.Fatalf("same IP with different username must still be rate-limited, got %v", err)
 	}
 }
 
 func TestLoginRateLimitResetsAfterSuccess(t *testing.T) {
 	svc := newTestService(t)
 	ip := "10.0.0.4"
-	for i := 0; i < loginMaxFailures-1; i++ {
+	for i := 0; i < settings.DefaultLoginMaxFailuresPerHour-1; i++ {
 		if _, err := svc.LoginFrom(context.Background(), "admin", "wrong", ip); err == nil {
 			t.Fatal("expected unauthorized")
 		}
@@ -337,7 +337,7 @@ func TestLoginRateLimitResetsAfterSuccess(t *testing.T) {
 	if _, err := svc.LoginFrom(context.Background(), "admin", "admin", ip); err != nil {
 		t.Fatalf("login after failures should succeed: %v", err)
 	}
-	for i := 0; i < loginMaxFailures-1; i++ {
+	for i := 0; i < settings.DefaultLoginMaxFailuresPerHour-1; i++ {
 		if _, err := svc.LoginFrom(context.Background(), "admin", "wrong", ip); err == nil {
 			t.Fatal("expected unauthorized")
 		}
@@ -420,33 +420,42 @@ func createTestUser(t *testing.T, svc *Service, username, password string, permi
 	return userID
 }
 
-func TestLoginRateLimitNormalizesUsernameCaseAndWhitespace(t *testing.T) {
+func TestLoginRateLimitHonorsConfiguredHourlyLimit(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t)
-	variants := []string{"admin", "Admin", "ADMIN", " admin ", "\tAdMiN"}
-	for i, variant := range variants {
-		if _, err := svc.LoginFrom(ctx, variant, "wrong-password", "10.0.0.9"); err == nil {
-			t.Fatalf("attempt %d (%q): expected failure", i, variant)
+	limit := 5
+	if _, err := svc.runtime.UpdateSecurity(ctx, settings.RuntimeSecurityUpdate{
+		LoginMaxFailuresPerHour: &limit,
+	}); err != nil {
+		t.Fatalf("update security setting: %v", err)
+	}
+	ip := "10.0.0.9"
+	for i := 0; i < limit; i++ {
+		if _, err := svc.LoginFrom(ctx, "admin", "wrong-password", ip); err == nil || err.Error() != "Authentication failed" {
+			t.Fatalf("attempt %d: expected unauthorized, got %v", i+1, err)
 		}
 	}
-	if _, err := svc.LoginFrom(ctx, "admin", "admin", "10.0.0.9"); err == nil || err.Error() != "Too many login attempts; try again later" {
-		t.Fatalf("expected rate limit after case/whitespace variants, got %v", err)
+	if _, err := svc.LoginFrom(ctx, "admin", "admin", ip); err == nil || err.Error() != "Too many login attempts; try again later" {
+		t.Fatalf("expected rate limit after %d failures, got %v", limit, err)
 	}
 }
 
-func TestLoginRateLimiterPruneKeepsActiveUnlockedAttempts(t *testing.T) {
+func TestLoginRateLimiterPruneKeepsActiveHourlyAttempts(t *testing.T) {
 	limiter := newLoginRateLimiter()
 	now := time.Now().UTC()
-	key := loginRateLimitKey("10.0.0.1", "admin")
-	for i := 0; i < 4; i++ {
+	key := loginRateLimitKey("10.0.0.1")
+	for i := 0; i < 2; i++ {
 		limiter.recordFailure(key, now)
 	}
 	limiter.mu.Lock()
-	limiter.pruneLocked(now.Add(time.Minute))
+	limiter.pruneLocked(now.Add(10 * time.Minute))
 	remaining := limiter.attempts[key]
 	limiter.mu.Unlock()
-	if remaining == nil || remaining.failures != 4 {
-		t.Fatalf("active unlocked attempt was pruned: %#v", remaining)
+	if remaining == nil || len(remaining.failures) != 2 {
+		t.Fatalf("active hourly attempt was pruned: %#v", remaining)
+	}
+	if !limiter.allow(key, now.Add(time.Hour+time.Second), 2) {
+		t.Fatal("attempts older than 1 hour must expire")
 	}
 }
 

@@ -126,6 +126,7 @@ const form = reactive({
   language: 'zh-CN',
   logLevel: 'info',
   remoteCommandTimeoutSeconds: '45',
+  loginMaxFailuresPerHour: '3',
   sshAccessSuccessRetentionDays: '30',
   sshAccessFailureRetentionDays: '3',
   reconcileTraceEnabled: false,
@@ -435,6 +436,7 @@ const fieldErrors = computed<Record<string, string>>(() => {
   const errors: Record<string, string> = {};
   if (integerField(form.containerReportIntervalSeconds, 1) === null) errors.containerReportIntervalSeconds = 'settingsPage.validationPositiveNumber';
   if (integerField(form.remoteCommandTimeoutSeconds, 1) === null) errors.remoteCommandTimeoutSeconds = 'settingsPage.validationPositiveNumber';
+  if (integerInRange(form.loginMaxFailuresPerHour, 1, 100) === null) errors.loginMaxFailuresPerHour = 'settingsPage.validationLoginMaxFailuresPerHour';
   if (integerInRange(form.sshAccessSuccessRetentionDays, 1, 3650) === null) errors.sshAccessSuccessRetentionDays = 'settingsPage.validationSshAccessRetention';
   if (integerInRange(form.sshAccessFailureRetentionDays, 1, 3650) === null) errors.sshAccessFailureRetentionDays = 'settingsPage.validationSshAccessRetention';
   if (integerField(form.dnsPropagationDelaySeconds, 0) === null) errors.dnsPropagationDelaySeconds = 'settingsPage.validationNonNegativeNumber';
@@ -506,12 +508,15 @@ function collectGeneralPayload(): RuntimeGeneralUpdate | null {
 function collectSecurityPayload(): RuntimeSecurityUpdate | null {
   const timeout = integerField(form.remoteCommandTimeoutSeconds, 1);
   if (timeout === null) return null;
+  const loginMaxFailuresPerHour = integerInRange(form.loginMaxFailuresPerHour, 1, 100);
+  if (loginMaxFailuresPerHour === null) return null;
   const successRetentionDays = integerInRange(form.sshAccessSuccessRetentionDays, 1, 3650);
   const failureRetentionDays = integerInRange(form.sshAccessFailureRetentionDays, 1, 3650);
   if (successRetentionDays === null || failureRetentionDays === null) return null;
   return {
     tokenExpiration: form.tokenExpiration,
     remoteCommandTimeoutSeconds: timeout,
+    loginMaxFailuresPerHour,
     sshAccess: { successRetentionDays, failureRetentionDays },
   };
 }
@@ -586,6 +591,7 @@ function refillGeneral(settings: RuntimeSettings) {
 function refillSecurity(settings: RuntimeSettings) {
   form.tokenExpiration = settings.tokenExpiration;
   form.remoteCommandTimeoutSeconds = String(settings.remoteCommandTimeoutSeconds);
+  form.loginMaxFailuresPerHour = String(settings.loginMaxFailuresPerHour ?? 3);
   form.sshAccessSuccessRetentionDays = String(settings.sshAccess?.successRetentionDays ?? 30);
   form.sshAccessFailureRetentionDays = String(settings.sshAccess?.failureRetentionDays ?? 3);
 }
@@ -738,6 +744,7 @@ watch(() => form.language, (value) => {
 }, syncWatch);
 watch(() => form.tokenExpiration, () => scheduleAutoSave(securityAutoSave, collectSecurityPayload), syncWatch);
 watch(() => form.remoteCommandTimeoutSeconds, () => scheduleAutoSave(securityAutoSave, collectSecurityPayload), syncWatch);
+watch(() => form.loginMaxFailuresPerHour, () => scheduleAutoSave(securityAutoSave, collectSecurityPayload), syncWatch);
 watch(() => form.sshAccessSuccessRetentionDays, () => scheduleAutoSave(securityAutoSave, collectSecurityPayload), syncWatch);
 watch(() => form.sshAccessFailureRetentionDays, () => scheduleAutoSave(securityAutoSave, collectSecurityPayload), syncWatch);
 watch(() => form.panelDomain, () => scheduleAutoSave(certificatesAutoSave, collectCertificatesPayload), syncWatch);
@@ -835,6 +842,7 @@ function hydrate(settings: RuntimeSettings, variables: ServerVariableDefinition[
       language: settings.language,
       logLevel: settings.logLevel,
       remoteCommandTimeoutSeconds: String(settings.remoteCommandTimeoutSeconds),
+      loginMaxFailuresPerHour: String(settings.loginMaxFailuresPerHour ?? 3),
       sshAccessSuccessRetentionDays: String(settings.sshAccess?.successRetentionDays ?? 30),
       sshAccessFailureRetentionDays: String(settings.sshAccess?.failureRetentionDays ?? 3),
       reconcileTraceEnabled: settings.reconcileTraceEnabled,
@@ -1153,6 +1161,31 @@ onBeforeUnmount(() => {
               </template>
               <template v-if="fieldErrors.remoteCommandTimeoutSeconds" #hint>
                 <span id="settings-remote-timeout-error" class="text-danger">{{ t(fieldErrors.remoteCommandTimeoutSeconds) }}</span>
+              </template>
+            </SettingsCard>
+
+            <SettingsCard
+              :title="t('settingsPage.loginMaxFailuresPerHour')"
+              :description="t('settingsPage.loginMaxFailuresPerHourHint')"
+              :invalid="Boolean(fieldErrors.loginMaxFailuresPerHour)"
+            >
+              <template #control>
+                <NumberBox
+                  id="settings-login-max-failures-per-hour"
+                  v-permission="{ permission: 'settings.security', effect: 'disable' }"
+                  :aria-label="t('settingsPage.loginMaxFailuresPerHour')"
+                  :aria-describedby="fieldErrors.loginMaxFailuresPerHour ? 'settings-login-max-failures-per-hour-error' : undefined"
+                  class="w-full sm:w-44"
+                  :min="1"
+                  :max="100"
+                  :step="1"
+                  :invalid="Boolean(fieldErrors.loginMaxFailuresPerHour)"
+                  :model-value="toNumber(form.loginMaxFailuresPerHour)"
+                  @update:model-value="form.loginMaxFailuresPerHour = fromNumber($event)"
+                />
+              </template>
+              <template v-if="fieldErrors.loginMaxFailuresPerHour" #hint>
+                <span id="settings-login-max-failures-per-hour-error" class="text-danger">{{ t(fieldErrors.loginMaxFailuresPerHour) }}</span>
               </template>
             </SettingsCard>
 

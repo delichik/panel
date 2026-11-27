@@ -93,6 +93,8 @@ export interface RuntimeSSHAccessSettings {
 export interface RuntimeSecurityUpdate {
   tokenExpiration: string;
   remoteCommandTimeoutSeconds: number;
+  /** Maximum failed sign-in attempts per IP per rolling hour (1..100, default 3). */
+  loginMaxFailuresPerHour?: number;
   /** Optional so older payloads/tests stay valid. */
   sshAccess?: RuntimeSSHAccessSettings;
 }
@@ -119,6 +121,8 @@ export interface RuntimeSettings {
   language: string;
   logLevel: string;
   remoteCommandTimeoutSeconds: number;
+  /** Maximum failed sign-in attempts per IP per rolling hour (1..100, default 3). */
+  loginMaxFailuresPerHour?: number;
   /** SSH access retention; optional so older payloads/tests stay valid. */
   sshAccess?: RuntimeSSHAccessSettings;
   reconcileTraceEnabled: boolean;

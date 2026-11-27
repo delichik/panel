@@ -37,6 +37,7 @@ var (
 			"invalid_language":                                       "语言必须为 English 或简体中文",
 			"invalid_log_level":                                      "日志等级必须为 debug、info、warn 或 error",
 			"invalid_remote_command_timeout":                         "远程命令超时时间至少为 1 秒",
+			"invalid_login_max_failures_per_hour":                    "每小时每 IP 最多登录失败次数必须在 1 到 100 之间",
 			"invalid_branding_login_title":                           "登录页标题不能超过 80 个字符",
 			"invalid_branding_login_subtitle":                        "登录页说明不能超过 240 个字符",
 			"invalid_certificate_dns_delay":                          "证书 DNS 生效等待时间不能为负数",

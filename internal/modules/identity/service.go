@@ -368,10 +368,19 @@ func (s *Service) LoginFrom(ctx context.Context, username, password, clientIP st
 	return s.login(ctx, username, password, clientIP)
 }
 
+func (s *Service) loginMaxFailuresPerHour() int {
+	if s.runtime != nil {
+		if n := s.runtime.Runtime().LoginMaxFailuresPerHour; n >= settings.MinLoginMaxFailuresPerHour && n <= settings.MaxLoginMaxFailuresPerHour {
+			return n
+		}
+	}
+	return settings.DefaultLoginMaxFailuresPerHour
+}
+
 func (s *Service) login(ctx context.Context, username, password, clientIP string) (Session, error) {
-	key := loginRateLimitKey(clientIP, username)
+	key := loginRateLimitKey(clientIP)
 	now := time.Now().UTC()
-	if !s.limiter.allow(key, now) {
+	if !s.limiter.allow(key, now, s.loginMaxFailuresPerHour()) {
 		return Session{}, panelerr.New(http.StatusTooManyRequests, "login_rate_limited", "Too many login attempts; try again later")
 	}
 	username = strings.TrimSpace(username)

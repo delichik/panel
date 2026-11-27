@@ -161,6 +161,7 @@ type RuntimeUpdate struct {
 	Language                       string                        `json:"language"`
 	LogLevel                       string                        `json:"logLevel"`
 	RemoteCommandTimeoutSeconds    int                           `json:"remoteCommandTimeoutSeconds"`
+	LoginMaxFailuresPerHour        *int                          `json:"loginMaxFailuresPerHour,omitempty"`
 	ReconcileTraceEnabled          *bool                         `json:"reconcileTraceEnabled"`
 	Branding                       *RuntimeBrandingSettings      `json:"branding"`
 	Certificates                   *RuntimeCertificateSettings   `json:"certificates"`
@@ -184,6 +185,7 @@ type RuntimeGeneralUpdate struct {
 type RuntimeSecurityUpdate struct {
 	TokenExpiration             string                    `json:"tokenExpiration"`
 	RemoteCommandTimeoutSeconds int                       `json:"remoteCommandTimeoutSeconds"`
+	LoginMaxFailuresPerHour     *int                      `json:"loginMaxFailuresPerHour,omitempty"`
 	SSHAccess                   *RuntimeSSHAccessSettings `json:"sshAccess,omitempty"`
 }
 
@@ -211,6 +213,7 @@ type RuntimeSettings struct {
 	Language                       string                       `json:"language"`
 	LogLevel                       string                       `json:"logLevel"`
 	RemoteCommandTimeoutSeconds    int                          `json:"remoteCommandTimeoutSeconds"`
+	LoginMaxFailuresPerHour        int                          `json:"loginMaxFailuresPerHour"`
 	ReconcileTraceEnabled          bool                         `json:"reconcileTraceEnabled"`
 	Branding                       RuntimeBrandingSettings      `json:"branding"`
 	Certificates                   RuntimeCertificateSettings   `json:"certificates"`
@@ -228,6 +231,7 @@ const (
 	RuntimeSettingLogLevel                             = "log.level"
 	RuntimeSettingJWTSecret                            = "jwtSecret"
 	RuntimeSettingRemoteCommandTimeoutSeconds          = "remoteCommandTimeoutSeconds"
+	RuntimeSettingLoginMaxFailuresPerHour              = "security.loginMaxFailuresPerHour"
 	RuntimeSettingSSHAccessSuccessRetentionDays        = "sshAccess.successRetentionDays"
 	RuntimeSettingSSHAccessFailureRetentionDays        = "sshAccess.failureRetentionDays"
 	RuntimeSettingReconcileTrace                       = "reconcile.trace"
@@ -287,6 +291,10 @@ const (
 	TokenExpirationNever     = "never"
 
 	DefaultTokenExpiration = TokenExpiration1Day
+
+	DefaultLoginMaxFailuresPerHour = 3
+	MinLoginMaxFailuresPerHour     = 1
+	MaxLoginMaxFailuresPerHour     = 100
 	DefaultJWTSecret       = "change-me-panel-jwt-secret"
 )
 
@@ -453,6 +461,10 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 	if input.SSHAccess != nil {
 		sshAccessSettings = *input.SSHAccess
 	}
+	loginMaxFailures := current.LoginMaxFailuresPerHour
+	if input.LoginMaxFailuresPerHour != nil {
+		loginMaxFailures = *input.LoginMaxFailuresPerHour
+	}
 	next := RuntimeSettings{
 		ListenAddress:                  current.ListenAddress,
 		AppDatabase:                    current.AppDatabase,
@@ -463,6 +475,7 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 		Language:                       i18n.NormalizeLocale(input.Language),
 		LogLevel:                       logging.NormalizeLevel(input.LogLevel),
 		RemoteCommandTimeoutSeconds:    input.RemoteCommandTimeoutSeconds,
+		LoginMaxFailuresPerHour:        loginMaxFailures,
 		ReconcileTraceEnabled:          current.ReconcileTraceEnabled,
 		Branding:                       brandingSettings,
 		Certificates:                   certSettings,
@@ -508,6 +521,7 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 	s.rt.Language = next.Language
 	s.rt.LogLevel = next.LogLevel
 	s.rt.RemoteCommandTimeoutSeconds = next.RemoteCommandTimeoutSeconds
+	s.rt.LoginMaxFailuresPerHour = next.LoginMaxFailuresPerHour
 	s.rt.ReconcileTraceEnabled = next.ReconcileTraceEnabled
 	s.rt.Branding = next.Branding
 	s.rt.Certificates = next.Certificates
@@ -540,11 +554,12 @@ func (s *Service) UpdateGeneral(ctx context.Context, input RuntimeGeneralUpdate)
 	})
 }
 
-// UpdateSecurity 只更新安全分区：令牌有效期与远程命令超时。
+// UpdateSecurity 只更新安全分区：令牌有效期、远程命令超时、每小时每 IP 登录失败上限与 SSH 访问保留期。
 func (s *Service) UpdateSecurity(ctx context.Context, input RuntimeSecurityUpdate) (RuntimeSettings, error) {
 	return s.Update(ctx, RuntimeUpdate{
 		TokenExpiration:             input.TokenExpiration,
 		RemoteCommandTimeoutSeconds: input.RemoteCommandTimeoutSeconds,
+		LoginMaxFailuresPerHour:     input.LoginMaxFailuresPerHour,
 		SSHAccess:                   input.SSHAccess,
 	})
 }
@@ -900,6 +915,10 @@ func (s *Service) load(ctx context.Context) error {
 			if n, err := strconv.Atoi(value); err == nil {
 				next.RemoteCommandTimeoutSeconds = n
 			}
+		case RuntimeSettingLoginMaxFailuresPerHour:
+			if n, err := strconv.Atoi(value); err == nil && n >= MinLoginMaxFailuresPerHour && n <= MaxLoginMaxFailuresPerHour {
+				next.LoginMaxFailuresPerHour = n
+			}
 		case RuntimeSettingSSHAccessSuccessRetentionDays:
 			if n, err := strconv.Atoi(value); err == nil {
 				next.SSHAccess.SuccessRetentionDays = n
@@ -1003,6 +1022,7 @@ func defaultRuntimeSettings(cfg config.Config) RuntimeSettings {
 		Language:                       i18n.DefaultLocale(),
 		LogLevel:                       logging.DefaultLevel,
 		RemoteCommandTimeoutSeconds:    remoteTimeout,
+		LoginMaxFailuresPerHour:        DefaultLoginMaxFailuresPerHour,
 		Branding:                       RuntimeBrandingSettings{},
 		Certificates: RuntimeCertificateSettings{
 			Email:                      strings.TrimSpace(cfg.Certificates.Email),
@@ -1035,6 +1055,7 @@ func runtimeValues(settings RuntimeSettings, includeJWT bool) map[string]string 
 		"language":                                         settings.Language,
 		RuntimeSettingLogLevel:                             settings.LogLevel,
 		RuntimeSettingRemoteCommandTimeoutSeconds:          strconv.Itoa(settings.RemoteCommandTimeoutSeconds),
+		RuntimeSettingLoginMaxFailuresPerHour:              strconv.Itoa(settings.LoginMaxFailuresPerHour),
 		RuntimeSettingReconcileTrace:                       strconv.FormatBool(settings.ReconcileTraceEnabled),
 		RuntimeSettingBrandingLoginTitle:                   settings.Branding.LoginTitle,
 		RuntimeSettingBrandingLoginSubtitle:                settings.Branding.LoginSubtitle,
@@ -1075,6 +1096,9 @@ func validateRuntimeSettings(settings RuntimeSettings) error {
 	}
 	if settings.RemoteCommandTimeoutSeconds < 1 {
 		return panelerr.Validation("invalid_remote_command_timeout", "Remote command timeout must be at least 1 second")
+	}
+	if settings.LoginMaxFailuresPerHour < MinLoginMaxFailuresPerHour || settings.LoginMaxFailuresPerHour > MaxLoginMaxFailuresPerHour {
+		return panelerr.Validation("invalid_login_max_failures_per_hour", "Maximum failed login attempts per hour must be between 1 and 100")
 	}
 	if settings.SSHAccess.SuccessRetentionDays < 1 || settings.SSHAccess.SuccessRetentionDays > 3650 {
 		return panelerr.Validation("invalid_ssh_access_retention", "SSH access success retention must be between 1 and 3650 days")

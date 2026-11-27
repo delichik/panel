@@ -27,7 +27,6 @@ const (
 	credentialMaxActivePerUser  = 10
 	credentialNameMaxLength     = 64
 	credentialCleanupInterval   = 5 * time.Minute
-	credentialRateLimitUserKey  = ":credential:"
 )
 
 // AccessCredentialView 是临时访问凭据的列表投影（不含 token）。
@@ -89,9 +88,9 @@ func (s *Service) StartPeriodic(ctx context.Context) {
 
 // LoginWithCredentialFrom authenticates a browser/API login request using a temporary access credential.
 func (s *Service) LoginWithCredentialFrom(ctx context.Context, rawToken, clientIP string) (Session, error) {
-	key := loginRateLimitKey(clientIP, credentialRateLimitUserKey)
+	key := loginRateLimitKey(clientIP)
 	now := time.Now().UTC()
-	if !s.limiter.allow(key, now) {
+	if !s.limiter.allow(key, now, s.loginMaxFailuresPerHour()) {
 		return Session{}, panelerr.New(http.StatusTooManyRequests, "login_rate_limited", "Too many login attempts; try again later")
 	}
 	token := strings.TrimSpace(rawToken)
