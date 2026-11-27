@@ -996,11 +996,13 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string
 			observed[instanceID] = container
 		}
 		type expected struct {
-			ID            string
-			ApplicationID string
+			ID                string
+			ApplicationID     string
+			DesiredGeneration int
+			DesiredSpecHash   string
 		}
 		var expectedItems []expected
-		if err := orm.New(s.db).From("application_instances").Select("id", "application_id").
+		if err := orm.New(s.db).From("application_instances").Select("id", "application_id", "desired_generation", "desired_spec_hash").
 			Where("server_id = ?", srv.ID).And("desired_state = 'running'").
 			All(ctx, &expectedItems); err != nil {
 			return nil, fmt.Errorf("query desired application instances for server %s: %w", srv.ID, err)
@@ -1016,15 +1018,16 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string
 				continue
 			}
 			container, found := observed[item.ID]
+			expectedGeneration, expectedSpecHash := expectedInstanceRuntimeIdentity(app, item.DesiredGeneration, item.DesiredSpecHash)
 			driftReason := ""
 			switch {
 			case !found:
 				driftReason = "missing"
 			case container.State != "running":
 				driftReason = "stopped"
-			case container.Labels["panel.application.generation"] != strconv.Itoa(app.Generation):
+			case container.Labels["panel.application.generation"] != strconv.Itoa(expectedGeneration):
 				driftReason = "generation"
-			case container.Labels["panel.application.spec.hash"] != app.SpecHash:
+			case container.Labels["panel.application.spec.hash"] != expectedSpecHash:
 				driftReason = "spec_hash"
 			case container.Labels["panel.application.managed_files.drift"] == "true":
 				driftReason = "managed_files"
@@ -1036,8 +1039,8 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string
 					zap.String("server_id", srv.ID),
 					zap.String("instance_id", item.ID),
 					zap.String("reason", driftReason),
-					zap.Int("expected_generation", app.Generation),
-					zap.String("expected_spec_hash", app.SpecHash))
+					zap.Int("expected_generation", expectedGeneration),
+					zap.String("expected_spec_hash", expectedSpecHash))
 			}
 			observation := observations[app.ID]
 			observation.app = app
@@ -1117,6 +1120,34 @@ func applicationWantsServer(app applications.Application, serverID string) bool 
 		}
 	}
 	return false
+}
+
+// expectedInstanceRuntimeIdentity computes the expected generation and spec hash
+// for a running instance during drift detection.
+func expectedInstanceRuntimeIdentity(app applications.Application, desiredGeneration int, desiredSpecHash string) (int, string) {
+	desiredSpecHash = strings.TrimSpace(desiredSpecHash)
+	// 设施应用（如入口代理）按节点维护独立的 desired_generation 与 desired_spec_hash：
+	// 单节点配置变更抬升应用全局 generation 时，未受影响网关保持原节点 desired，
+	// 巡检不得把节点级 hash 与应用级 spec_hash 或全局 generation 比对而误判漂移。
+	if app.Kind == applications.ApplicationKindFacility {
+		expectedGen := app.Generation
+		if desiredGeneration > 0 {
+			expectedGen = desiredGeneration
+		}
+		expectedHash := app.SpecHash
+		if desiredSpecHash != "" {
+			expectedHash = desiredSpecHash
+		}
+		return expectedGen, expectedHash
+	}
+	// 普通应用以应用级 generation 为基准（配置已提交但尚未规划的节点仍能被巡检发现）；
+	// 节点已按当前 generation 规划出实例级 desired_spec_hash（如 storage_share 挂载）时，
+	// 必须以实例级 hash 判漂移，避免与 app.SpecHash 永久失配。
+	expectedHash := app.SpecHash
+	if desiredSpecHash != "" && (desiredGeneration == app.Generation || app.Generation <= 0) {
+		expectedHash = desiredSpecHash
+	}
+	return app.Generation, expectedHash
 }
 
 func (s *Service) appendMissingSelectedDeploymentDrift(ctx context.Context, appByID map[string]applications.Application, wantedApps map[string]bool, observations map[string]reconcileObservation) error {

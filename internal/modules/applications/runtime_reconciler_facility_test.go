@@ -197,6 +197,121 @@ func TestFacilityConfigReloadPassesStoredCurrentSpecAndReloads(t *testing.T) {
 	}
 }
 
+// FAC-RP-009: successful RuntimeReload must populate observation metadata
+// (ObservedGeneration, ObservedSpecHash, ContainerName, ContainerID,
+// ObservedImageDigest) so ObservationWriter does not clear container identity
+// or leave healthy gateways in abnormal state.
+func TestFacilityConfigReloadPopulatesObservationMetadataAndKeepsInstanceHealthy(t *testing.T) {
+	t.Run("preserves instance identity and writes healthy observation", func(t *testing.T) {
+		svc, base, _, closeStore := newTestService(t)
+		defer closeStore()
+		ctx := context.Background()
+
+		stored := facilityStoredSpec()
+		seedStoredRuntimeSpec(t, svc, stored)
+		if _, err := svc.db.Exec(`UPDATE application_instances SET container_id=?,observed_container_id=?,observed_image_digest=?,desired_generation=?,desired_spec_hash=? WHERE id=?`,
+			"cid-live-1", "cid-live-1", "sha256:abc123", 2, "new-hash", stored.InstanceID); err != nil {
+			t.Fatalf("seed instance identity: %v", err)
+		}
+		desired := stored
+		desired.SpecHash = "new-hash"
+		desired.Generation = 2
+
+		client := &facilityReloadRecorder{fakeRuntimeClient: base, resp: agentcontract.RuntimeReloadResponse{Reloaded: true, Phase: "complete"}}
+		svc.runtimeClient = client
+		svc.SetFacilityRuntimeProvider(&fakeFacilityRuntimeProvider{})
+
+		reconciler := &serviceRuntimeReconciler{service: svc}
+		response, ok, err := reconciler.tryFacilityConfigReload(ctx, "https://srv-a.agent", facilityApplyRequest(t, desired), desired)
+		if err != nil {
+			t.Fatalf("facility config reload: %v", err)
+		}
+		if !ok {
+			t.Fatal("expected reload to handle config-only change")
+		}
+		if response.ObservedState != appruntime.StatusRunning ||
+			response.ObservedGeneration != 2 ||
+			response.ObservedSpecHash != "new-hash" ||
+			response.ContainerName != "panel-facility-reverse-proxy" ||
+			response.ContainerID != "cid-live-1" ||
+			response.ObservedImageDigest != "sha256:abc123" ||
+			response.ObservedAt.IsZero() {
+			t.Fatalf("reload response missing observation metadata: %#v", response)
+		}
+
+		writer := controlplane.NewObservationWriter(svc.db)
+		written, err := writer.Write(ctx, controlplane.Observation{
+			InstanceID:          stored.InstanceID,
+			Source:              "reconcile",
+			ObservedAt:          response.ObservedAt,
+			ObservedState:       response.ObservedState,
+			ContainerName:       response.ContainerName,
+			ContainerID:         response.ContainerID,
+			ObservedGeneration:  response.ObservedGeneration,
+			ObservedSpecHash:    response.ObservedSpecHash,
+			ObservedImageDigest: response.ObservedImageDigest,
+		})
+		if err != nil || !written.Accepted {
+			t.Fatalf("observation write failed: written=%+v err=%v", written, err)
+		}
+
+		var observedState, observedCID, observedHash, observedDigest string
+		var observedGen, desiredGen int
+		var desiredHash string
+		if err := svc.db.QueryRow(`SELECT observed_state,observed_container_id,observed_generation,observed_spec_hash,observed_image_digest,desired_generation,desired_spec_hash FROM application_instances WHERE id=?`,
+			stored.InstanceID).Scan(&observedState, &observedCID, &observedGen, &observedHash, &observedDigest, &desiredGen, &desiredHash); err != nil {
+			t.Fatalf("query updated instance: %v", err)
+		}
+		if observedCID != "cid-live-1" || observedGen != 2 || observedHash != "new-hash" || observedDigest != "sha256:abc123" {
+			t.Fatalf("instance observation corrupted: state=%q cid=%q gen=%d hash=%q digest=%q", observedState, observedCID, observedGen, observedHash, observedDigest)
+		}
+		bucket := classifyInstanceBucket(instanceClassifyInput{
+			DesiredState:       appruntime.DesiredRunning,
+			ObservedStatus:     observedState,
+			DesiredGeneration:  desiredGen,
+			ObservedGeneration: observedGen,
+			DesiredSpecHash:    desiredHash,
+			ObservedSpecHash:   observedHash,
+			ApplicationEnabled: true,
+		})
+		if bucket != InstanceBucketHealthy {
+			t.Fatalf("instance bucket = %q, want %q", bucket, InstanceBucketHealthy)
+		}
+	})
+
+	t.Run("falls back to container_observations when instance container_id is empty", func(t *testing.T) {
+		svc, base, _, closeStore := newTestService(t)
+		defer closeStore()
+		ctx := context.Background()
+
+		stored := facilityStoredSpec()
+		seedStoredRuntimeSpec(t, svc, stored)
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		if _, err := svc.db.Exec(`INSERT INTO container_observations(server_id,container_id,sample_at,container_json,summary_json,managed,application_id,instance_id,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
+			"srv-a", "cid-from-obs", now, `{}`, `{}`, 1, stored.ApplicationID, stored.InstanceID, now); err != nil {
+			t.Fatalf("seed container_observations: %v", err)
+		}
+		desired := stored
+		desired.SpecHash = "new-hash"
+		desired.Generation = 2
+
+		svc.runtimeClient = &facilityReloadRecorder{fakeRuntimeClient: base, resp: agentcontract.RuntimeReloadResponse{Reloaded: true, Phase: "complete"}}
+		svc.SetFacilityRuntimeProvider(&fakeFacilityRuntimeProvider{})
+
+		reconciler := &serviceRuntimeReconciler{service: svc}
+		response, ok, err := reconciler.tryFacilityConfigReload(ctx, "https://srv-a.agent", facilityApplyRequest(t, desired), desired)
+		if err != nil {
+			t.Fatalf("facility config reload: %v", err)
+		}
+		if !ok {
+			t.Fatal("expected reload to handle config-only change")
+		}
+		if response.ContainerID != "cid-from-obs" {
+			t.Fatalf("fallback ContainerID = %q, want %q", response.ContainerID, "cid-from-obs")
+		}
+	})
+}
+
 // 镜像变化 → 设施判 recreate；reconciler 不得走 reload，应回落到 RuntimeReconcile。
 func TestFacilityConfigReloadFallsThroughOnImageChange(t *testing.T) {
 	svc, base, _, closeStore := newTestService(t)

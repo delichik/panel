@@ -508,8 +508,8 @@
   - **配置平面**：记录内容变化（路由、upstream、Header、证书、每域名传输开关、设施全局参数、自定义 http/server 指令）→ 仅对受影响网关 `WriteManagedFiles` + `nginx -t` + `nginx -s reload`（`RuntimeReload`）。成功路径**不得** stop/remove/create 容器。
   - **代理平面**：网关加入、镜像引用/digest、命令、端口布局（含新增 UDP 443）、mount 结构变化、或节点尚无容器 → `RuntimeReconcile` create/recreate；网关移除 → stop/purge。判定必须比较 current/desired 的代理身份（镜像引用、镜像 digest、命令、端口、env、mount 结构、restart），不得只比较配置内容哈希。
 - **失败**：配置 validate 失败回滚该节点文件并保留原 worker，**不**自动 recreate；代理平面失败保留诊断；`nginx -t` 失败不得留下半生效配置。
-- **不变量**：`ProxyIdentityHash`（含镜像引用/digest）与 `ConfigContentHash` 分离并都参与满足判定；满足判定禁止把无关记录 version 打进其他节点 hash；每节点目标镜像 digest 只影响该节点。
-- **验证**：reload-not-recreate、identity-change-recreate（含镜像 digest/端口变化）、per-record hash isolation、自定义指令变化 reload tests。
+- **不变量**：`ProxyIdentityHash`（含镜像引用/digest）与 `ConfigContentHash` 分离并都参与满足判定；满足判定禁止把无关记录 version 打进其他节点 hash；每节点目标镜像 digest 只影响该节点。`RuntimeReload` 成功返回时必须回填 `ObservedGeneration`、`ObservedSpecHash`、`ContainerName` 并保留已有容器身份（`ContainerID`、`ObservedImageDigest`，必要时回落最近 `container_observations`），不得因返回空观测元数据而在 `ObservationWriter` 写回后清空实例观测并把健康网关标为异常。
+- **验证**：reload-not-recreate、identity-change-recreate（含镜像 digest/端口变化）、per-record hash isolation、自定义指令变化 reload tests、`TestFacilityConfigReloadPopulatesObservationMetadataAndKeepsInstanceHealthy`。
 
 ### FAC-RP-010 单条配置提交后的协调
 

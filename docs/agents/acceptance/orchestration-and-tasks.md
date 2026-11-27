@@ -346,8 +346,8 @@ Run HTTP 面是 `/api/v1/executions*`；诊断读面是 `/api/v1/events*` 与 `/
 - **动作**：5 秒 `application_reconcile` collector 直接请求 Planner。
 - **结果**：只把明确 drift 的 app/server 交给 Planner 创建/复用 Job；健康目标保持不动。该轮不写 `event_runs`。
 - **失败**：collector 不直接访问远端、不创建 `application_reconcile_batch` 监控壳或 `application_target_*` 任务、不以日志推断漂移。
-- **不变量**：nil 容器快照不表示空；明确空 full snapshot 才可清空观测。
-- **验证**：container drift/missing/nil-vs-empty tests。
+- **不变量**：nil 容器快照不表示空；明确空 full snapshot 才可清空观测。漂移比对必须以实例级 `desired_spec_hash` 为期望哈希（普通应用在 `desired_generation == app.Generation` 时优先采用实例级 hash；设施应用同时按节点 `desired_generation` 与 `desired_spec_hash` 比对），不得把按节点差异化的哈希（如入口代理或 `storage_share` 挂载）直接拿来与 `applications.spec_hash` 比对而触发死循环重部署。
+- **验证**：container drift/missing/nil-vs-empty tests、`TestApplicationReconcileUsesInstanceDesiredSpecHashAndGeneration`。
 
 ### ORCH-DRIFT-002 应用级熔断与恢复
 

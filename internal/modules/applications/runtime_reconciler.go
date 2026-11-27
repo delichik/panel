@@ -189,9 +189,10 @@ func (r *serviceRuntimeReconciler) tryFacilityConfigReload(ctx context.Context, 
 	if !ok {
 		return controlplane.ReconcileResponse{}, false, nil
 	}
+	containerName := firstNonEmpty(spec.ContainerName, req.PreviousContainerName)
 	result, err := reloadClient.RuntimeReload(ctx, endpoint, agentcontract.RuntimeReloadRequest{
 		Spec:            spec,
-		ContainerName:   firstNonEmpty(spec.ContainerName, req.PreviousContainerName),
+		ContainerName:   containerName,
 		ValidateCommand: plan.Strategy.ValidateCommand,
 		ReloadCommand:   plan.Strategy.ReloadCommand,
 	})
@@ -211,7 +212,68 @@ func (r *serviceRuntimeReconciler) tryFacilityConfigReload(ctx context.Context, 
 			ErrorMessage: msg, Retryable: true,
 		}, true, nil
 	}
-	return controlplane.ReconcileResponse{ObservedState: "running"}, true, nil
+	identity := r.storedInstanceIdentity(ctx, req)
+	observedGeneration := req.DesiredGeneration
+	if observedGeneration <= 0 {
+		observedGeneration = spec.Generation
+	}
+	observedSpecHash := firstNonEmpty(req.DesiredSpecHash, spec.SpecHash)
+	return controlplane.ReconcileResponse{
+		ObservedState:       appruntime.StatusRunning,
+		ContainerName:       firstNonEmpty(containerName, identity.containerName),
+		ContainerID:         identity.containerID,
+		ObservedGeneration:  observedGeneration,
+		ObservedSpecHash:    observedSpecHash,
+		ObservedImageDigest: identity.imageDigest,
+		ObservedAt:          time.Now().UTC(),
+	}, true, nil
+}
+
+type storedReloadIdentity struct {
+	containerName string
+	containerID   string
+	imageDigest   string
+}
+
+// storedInstanceIdentity retrieves existing container identity fields for an
+// instance so config reloads do not clear them when ObservationWriter runs.
+func (r *serviceRuntimeReconciler) storedInstanceIdentity(ctx context.Context, req controlplane.ReconcileRequestRPC) storedReloadIdentity {
+	if r == nil || r.service == nil || r.service.db == nil {
+		return storedReloadIdentity{}
+	}
+	var rowQuery string
+	var rowArgs []any
+	if instanceID := strings.TrimSpace(req.InstanceID); instanceID != "" {
+		rowQuery = `SELECT COALESCE(observed_container_name,''), COALESCE(container_name,''), COALESCE(observed_container_id,''), COALESCE(container_id,''), COALESCE(observed_image_digest,'') FROM application_instances WHERE id=?`
+		rowArgs = []any{instanceID}
+	} else {
+		rowQuery = `SELECT COALESCE(observed_container_name,''), COALESCE(container_name,''), COALESCE(observed_container_id,''), COALESCE(container_id,''), COALESCE(observed_image_digest,'') FROM application_instances WHERE application_id=? AND server_id=?`
+		rowArgs = []any{req.ApplicationID, req.ServerID}
+	}
+	var observedName, containerName, observedID, containerID, observedDigest string
+	if err := r.service.db.QueryRowContext(ctx, rowQuery, rowArgs...).Scan(&observedName, &containerName, &observedID, &containerID, &observedDigest); err != nil && err != sql.ErrNoRows {
+		logging.From(ctx).Warn("read stored instance identity failed during facility reload",
+			zap.String("serverId", req.ServerID),
+			zap.String("applicationId", req.ApplicationID),
+			zap.String("instanceId", req.InstanceID),
+			zap.Error(err),
+		)
+	}
+	out := storedReloadIdentity{
+		containerName: firstNonEmpty(observedName, containerName),
+		containerID:   firstNonEmpty(observedID, containerID),
+		imageDigest:   strings.TrimSpace(observedDigest),
+	}
+	if out.containerID == "" && strings.TrimSpace(req.ServerID) != "" && strings.TrimSpace(req.InstanceID) != "" {
+		var obsCID string
+		if err := r.service.db.QueryRowContext(ctx,
+			`SELECT COALESCE(container_id,'') FROM container_observations WHERE server_id=? AND instance_id=? ORDER BY sample_at DESC LIMIT 1`,
+			req.ServerID, req.InstanceID,
+		).Scan(&obsCID); err == nil && strings.TrimSpace(obsCID) != "" {
+			out.containerID = strings.TrimSpace(obsCID)
+		}
+	}
+	return out
 }
 
 // storedRuntimeSpec 读取 application_instances.runtime_spec_json 中该实例最近

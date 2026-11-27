@@ -664,6 +664,115 @@ func TestApplicationReconcileDoesNotPlanHealthyContainerWithoutReconcileState(t 
 	}
 }
 
+// ORCH-DRIFT-001: drift detection must compare per-instance desired_spec_hash (and
+// per-node desired_generation for facility applications) rather than mismatching
+// node-specific hashes against app-level applications.spec_hash.
+func TestApplicationReconcileUsesInstanceDesiredSpecHashAndGeneration(t *testing.T) {
+	t.Run("facility app compares against per-node desired generation and spec hash", func(t *testing.T) {
+		svc, _, fakeAgent, store := newContainerizationTestService(t)
+		ctx := context.Background()
+		app := applications.Application{
+			ID:                applications.FacilityProxyApplicationID,
+			Kind:              applications.ApplicationKindFacility,
+			Name:              "__panel_facility_reverse_proxy__",
+			Enabled:           true,
+			Generation:        10,
+			SpecHash:          "app-level-hash",
+			DeploymentMode:    applications.DeploymentModeSelected,
+			DeploymentServers: []string{"server-1"},
+		}
+		insertReconcileFixtureRows(t, store, app)
+		if _, err := store.AppDB().Exec(`UPDATE applications SET kind=?,deployment_mode=?,deployment_server_ids_json=? WHERE id=?`,
+			applications.ApplicationKindFacility, applications.DeploymentModeSelected, `["server-1"]`, app.ID); err != nil {
+			t.Fatal(err)
+		}
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		if _, err := store.AppDB().Exec(`UPDATE application_instances SET desired_generation=9,desired_spec_hash='node-specific-hash',created_at=?,updated_at=? WHERE application_id=? AND server_id='server-1'`, now, now, app.ID); err != nil {
+			t.Fatal(err)
+		}
+		updater := &fakeApplicationUpdater{apps: []applications.Application{app}}
+		svc.apps = updater
+
+		// Matching node-level desired_generation and desired_spec_hash must not trigger drift.
+		fakeAgent.containers = []agentcontract.DockerContainer{{
+			ID:    "container-1",
+			State: "running",
+			Labels: map[string]string{
+				"panel.application.managed":     "true",
+				"panel.application.id":          app.ID,
+				"panel.application.instance.id": app.ID + "-server-1",
+				"panel.application.generation":  "9",
+				"panel.application.spec.hash":   "node-specific-hash",
+			},
+		}}
+		saveReportedContainers(t, svc, "server-1", fakeAgent.containers)
+		if _, err := svc.CollectApplicationReconcileTasks(ctx, "op-1", tasks.PeriodicTrigger{Type: "scheduler"}); err != nil {
+			t.Fatal(err)
+		}
+		if len(updater.plans) != 0 {
+			t.Fatalf("facility app with matching node desired_spec_hash should not plan drift, got %#v", updater.plans)
+		}
+
+		// Stale node-level hash must still be detected as drift.
+		fakeAgent.containers[0].Labels["panel.application.spec.hash"] = "stale-node-hash"
+		saveReportedContainers(t, svc, "server-1", fakeAgent.containers)
+		if _, err := svc.CollectApplicationReconcileTasks(ctx, "op-2", tasks.PeriodicTrigger{Type: "scheduler"}); err != nil {
+			t.Fatal(err)
+		}
+		if len(updater.plans) != 1 || updater.plans[0].ApplicationID != app.ID || !updater.plans[0].ObservedRuntimeDrift {
+			t.Fatalf("stale node-level hash should trigger drift plan, got %#v", updater.plans)
+		}
+	})
+
+	t.Run("normal app uses per-instance desired_spec_hash at current generation and catches unplanned updates", func(t *testing.T) {
+		svc, _, fakeAgent, store := newContainerizationTestService(t)
+		ctx := context.Background()
+		app := applications.Application{
+			ID:         "app-1",
+			Kind:       applications.ApplicationKindUser,
+			Name:       "web",
+			Enabled:    true,
+			Generation: 4,
+			SpecHash:   "app-hash",
+		}
+		insertReconcileFixtureRows(t, store, app)
+		if _, err := store.AppDB().Exec(`UPDATE application_instances SET desired_generation=4,desired_spec_hash='node-mount-hash' WHERE application_id=? AND server_id='server-1'`, app.ID); err != nil {
+			t.Fatal(err)
+		}
+		updater := &fakeApplicationUpdater{apps: []applications.Application{app}}
+		svc.apps = updater
+
+		fakeAgent.containers = []agentcontract.DockerContainer{{
+			ID:    "container-1",
+			State: "running",
+			Labels: map[string]string{
+				"panel.application.managed":     "true",
+				"panel.application.id":          app.ID,
+				"panel.application.instance.id": app.ID + "-server-1",
+				"panel.application.generation":  "4",
+				"panel.application.spec.hash":   "node-mount-hash",
+			},
+		}}
+		saveReportedContainers(t, svc, "server-1", fakeAgent.containers)
+		if _, err := svc.CollectApplicationReconcileTasks(ctx, "op-1", tasks.PeriodicTrigger{Type: "scheduler"}); err != nil {
+			t.Fatal(err)
+		}
+		if len(updater.plans) != 0 {
+			t.Fatalf("normal app with matching per-instance desired_spec_hash should not plan drift, got %#v", updater.plans)
+		}
+
+		// When app advances to generation 5 while instance desired_generation is still 4, drift must trigger.
+		updater.apps[0].Generation = 5
+		updater.apps[0].SpecHash = "app-hash-5"
+		if _, err := svc.CollectApplicationReconcileTasks(ctx, "op-2", tasks.PeriodicTrigger{Type: "scheduler"}); err != nil {
+			t.Fatal(err)
+		}
+		if len(updater.plans) != 1 || updater.plans[0].ApplicationID != app.ID || !updater.plans[0].ObservedRuntimeDrift {
+			t.Fatalf("unplanned generation update should trigger drift plan, got %#v", updater.plans)
+		}
+	})
+}
+
 // ORCH-ACT-002: scanning cached reports must not replay observations or create rejection noise.
 func TestApplicationReconcileScanDoesNotRewriteCachedInstanceObservation(t *testing.T) {
 	svc, _, fakeAgent, store := newContainerizationTestService(t)
