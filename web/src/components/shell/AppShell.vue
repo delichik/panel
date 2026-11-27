@@ -13,6 +13,7 @@ import { useI18n } from '@/i18n';
 import { useAppearance } from '@/design/appearance';
 import { settingsApi } from '@/api/settings';
 import { useSessionStore } from '@/stores/session';
+import { formatCountdown, remainingSeconds } from '@/utils/datetime';
 import { focusWithoutScroll } from '@/utils/focus';
 import { prefetchShellPages } from '@/router/pageLoaders';
 import { activeNavKey } from './navModel';
@@ -48,6 +49,32 @@ const signingOut = ref(false);
 const languageSaving = ref(false);
 let languageRequestId = 0;
 const activeKey = computed(() => activeNavKey(route.path));
+const nowMs = ref(Date.now());
+let credentialClock: number | undefined;
+const isTempCredential = computed(() => session.authKind === 'credential');
+const tempCredentialActingUser = computed(() => {
+  const display = session.displayName.trim();
+  const username = session.username.trim();
+  if (display && username && display !== username) return `${display} (${username})`;
+  return display || username || '—';
+});
+const tempCredentialRemainingSeconds = computed(() => remainingSeconds(session.expiresAt, nowMs.value));
+const tempCredentialRemainingLabel = computed(() => (
+  tempCredentialRemainingSeconds.value > 0
+    ? t('layout.tempCredential.remaining', { time: formatCountdown(tempCredentialRemainingSeconds.value) })
+    : t('account.credentials.statusValue.expired')
+));
+
+function syncCredentialClock() {
+  window.clearInterval(credentialClock);
+  credentialClock = undefined;
+  if (!isTempCredential.value) return;
+  nowMs.value = Date.now();
+  credentialClock = window.setInterval(() => {
+    nowMs.value = Date.now();
+  }, 1000);
+}
+watch(isTempCredential, syncCredentialClock, { immediate: true });
 
 /**
  * WinUI NavigationView pane widths. The token layer (Lead) owns the numbers;
@@ -143,6 +170,7 @@ async function signOut() {
 onBeforeUnmount(() => {
   lgQuery?.removeEventListener('change', closeDrawerOnDesktop);
   window.clearTimeout(routeFocusTimer);
+  window.clearInterval(credentialClock);
 });
 </script>
 
@@ -180,6 +208,15 @@ onBeforeUnmount(() => {
       </div>
       <!-- WinUI command strip: borderless icon controls, fill-only hover feedback. -->
       <div class="flex shrink-0 items-center gap-0.5 max-sm:gap-0">
+        <button
+          v-if="isTempCredential"
+          type="button"
+          class="mr-1.5 inline-flex max-w-80 items-center gap-1.5 truncate rounded-control border border-warning-border bg-warning-bg px-2.5 py-1 text-xs font-medium text-warning transition-control duration-fast hover:bg-warning-bg/80 max-md:max-w-44"
+          :title="t('layout.tempCredential.banner', { user: tempCredentialActingUser, remaining: tempCredentialRemainingLabel })"
+          @click="router.push('/account')"
+        >
+          <span class="truncate">{{ t('layout.tempCredential.banner', { user: tempCredentialActingUser, remaining: tempCredentialRemainingLabel }) }}</span>
+        </button>
         <AppearanceFlyout />
         <IconButton :label="t(languageSaving ? 'layout.language.saving' : 'layout.language')" :disabled="languageSaving" :aria-busy="languageSaving ? 'true' : undefined" @click="toggleLanguage">
           <ProgressRing v-if="languageSaving" :size="16" aria-hidden="true" />
@@ -191,7 +228,12 @@ onBeforeUnmount(() => {
               <UserCircle />
             </IconButton>
           </template>
-          <div class="px-3 py-2 text-xs text-muted-foreground">{{ session.displayName || session.username }}</div>
+          <div class="px-3 py-2 text-xs text-muted-foreground">
+            <div>{{ session.displayName || session.username }}</div>
+            <div v-if="isTempCredential" class="mt-0.5 text-warning">
+              {{ t('layout.tempCredential.banner', { user: tempCredentialActingUser, remaining: tempCredentialRemainingLabel }) }}
+            </div>
+          </div>
           <DropdownItem @click="router.push('/account')">{{ t('routes.account.title') }}</DropdownItem>
           <DropdownItem @click="signOut">{{ t('layout.logout') }}</DropdownItem>
         </Dropdown>

@@ -331,3 +331,56 @@ func TestUserRoleAndCredentialBugfixes(t *testing.T) {
 		t.Fatalf("create credential after generation bump should succeed: %v", err)
 	}
 }
+
+func TestExpiredAccessCredentialsAreAutomaticallyDeleted(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	admin, err := svc.Login(ctx, "admin", "admin")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	created, err := svc.CreateAccessCredential(ctx, admin.UserID, AccessCredentialCreateInput{
+		Name: "short", ExpiresInSeconds: 60, Scope: "readonly",
+	})
+	if err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+	// Backdate expiry into the past.
+	if _, err := svc.db.ExecContext(ctx,
+		`UPDATE access_credentials SET expires_at = ? WHERE id = ?`,
+		"2020-01-01T00:00:00Z", created.ID); err != nil {
+		t.Fatalf("backdate expires_at: %v", err)
+	}
+	// Listing should automatically delete expired credentials.
+	list, err := svc.ListAccessCredentials(ctx, admin.UserID)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("expected expired credential to be deleted on list, got %#v", list)
+	}
+	var remaining int
+	if err := svc.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM access_credentials WHERE id = ?`, created.ID).Scan(&remaining); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if remaining != 0 {
+		t.Fatalf("expired credential row still in database: %d", remaining)
+	}
+
+	// CleanupExpiredCredentials also removes expired rows globally.
+	second, err := svc.CreateAccessCredential(ctx, admin.UserID, AccessCredentialCreateInput{
+		Name: "short2", ExpiresInSeconds: 60, Scope: "readonly",
+	})
+	if err != nil {
+		t.Fatalf("create second: %v", err)
+	}
+	if _, err := svc.db.ExecContext(ctx,
+		`UPDATE access_credentials SET expires_at = ? WHERE id = ?`,
+		"2020-01-01T00:00:00Z", second.ID); err != nil {
+		t.Fatalf("backdate second: %v", err)
+	}
+	deleted, err := svc.CleanupExpiredCredentials(ctx)
+	if err != nil || deleted != 1 {
+		t.Fatalf("CleanupExpiredCredentials = (%d, %v), want (1, nil)", deleted, err)
+	}
+}

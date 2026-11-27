@@ -15,6 +15,10 @@ export const useSessionStore = defineStore('session', {
     token: storedToken(),
     authenticated: false,
     mustChangePassword: false,
+    authKind: '' as '' | 'session' | 'credential',
+    credentialScope: '' as '' | 'readonly' | 'readwrite',
+    allowManagement: false,
+    expiresAt: '',
     user: null as AuthUser | null,
     roles: [] as AuthRole[],
     permissions: [] as string[],
@@ -26,6 +30,10 @@ export const useSessionStore = defineStore('session', {
       this.authenticated = Boolean(session.authenticated && session.token);
       this.username = session.user?.username ?? session.username ?? '';
       this.displayName = session.user?.displayName ?? '';
+      this.authKind = this.authenticated ? (session.authKind ?? 'session') : '';
+      this.credentialScope = this.authenticated ? (session.credentialScope ?? '') : '';
+      this.allowManagement = Boolean(this.authenticated && session.allowManagement);
+      this.expiresAt = this.authenticated ? (session.expiresAt ?? '') : '';
       this.user = session.user ?? null;
       this.roles = session.roles ?? [];
       this.permissions = session.permissions ?? [];
@@ -40,6 +48,10 @@ export const useSessionStore = defineStore('session', {
       this.token = '';
       this.authenticated = false;
       this.mustChangePassword = false;
+      this.authKind = '';
+      this.credentialScope = '';
+      this.allowManagement = false;
+      this.expiresAt = '';
       this.user = null;
       this.roles = [];
       this.permissions = [];
@@ -87,12 +99,16 @@ export const useSessionStore = defineStore('session', {
       this.applySession(await authApi.login(username, password));
       this.ready = true;
     },
+    async signInWithCredential(credential: string) {
+      this.applySession(await authApi.loginWithCredential(credential));
+      this.ready = true;
+    },
     signOut() {
       this.clearSession();
     },
     async logout() {
       try {
-        if (this.token) await authApi.logout();
+        if (this.token && this.authKind !== 'credential') await authApi.logout();
       } finally {
         this.clearSession();
         this.ready = true;

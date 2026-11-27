@@ -59,6 +59,8 @@ export interface AccessUser {
 export interface AccessCredential {
   id: string;
   name: string;
+  username?: string;
+  displayName?: string;
   tokenPrefix: string;
   scope: 'readonly' | 'readwrite';
   allowManagement: boolean;

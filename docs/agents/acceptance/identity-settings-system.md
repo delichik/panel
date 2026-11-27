@@ -126,15 +126,16 @@
 - `ID-PERM-004`：内置管理员隐式拥有目录全部权限；自定义用户只拥有角色并集；权限目录新增权限时内置管理员自动获得。
 - `ID-PERM-005`：每个权限在目录中至少声明一条 UI 映射（page/kind/target/effect），可交互类型（button/menu/field/column/tab/dialog/mask）必须声明稳定 `anchor`；Vue 源码中的 `data-perm-anchor` 与目录 anchor 必须双向一致，由 `internal/modules/identity/catalog_ui_test.go` 强制。
 
-## 10. 访问凭证
+## 10. 临时访问凭据
 
-- `ID-CRED-001`：`GET /api/v1/access-credentials` 返回当前用户的凭证列表（不含 token 明文），状态为 active/expired/revoked。
-- `ID-CRED-002`：`POST /api/v1/access-credentials` 仅接受交互式会话（拒绝访问凭证自身调用）；`expiresInSeconds` 60..1800，默认 900；`scope` 只能 readonly/readwrite，默认 readonly；readonly 时拒绝 `allowManagement=true`；每人最多 10 个有效凭证；响应 201 且只返回一次明文 token，`Cache-Control: no-store`。
-- `ID-CRED-003`：`DELETE /api/v1/access-credentials/{id}` 撤销本人凭证；持有 `access.credentials.manage` 可撤销他人凭证；撤销后立即失效。
-- `ID-CRED-004`：凭证使用不透明 `pac_` token，服务端只保存 SHA-256 与展示前缀；校验 token、未撤销、未过期、用户 active、用户代数一致；失败统一 401。
-- `ID-CRED-005`：凭证有效权限为用户当前权限（readonly 再与目录 `mode=read` 求交），实时生效；用户降权后凭证下一请求即按新权限。
-- `ID-CRED-006`：凭证硬禁止：创建/续期凭证、修改密码/用户名、修改 JWT secret、登录/登出；`allowManagement=false` 时另禁止用户/角色管理端点并返回 `403 credential_scope_restricted`；只读凭证调用写权限接口返回 `403 credential_read_only`。
-- `ID-CRED-007`：到期或撤销后 JWT/凭证均不可再用；用户登出、改密、重置密码、禁用等递增用户代数后，该用户已签发凭证一并失效。
+- `ID-CRED-001`：`GET /api/v1/access-credentials` 返回当前用户的临时访问凭据列表（不含 token 明文，含所属/代替用户 `username`/`displayName`、到期时间与状态 active/revoked）；查询时自动删除已过期记录。
+- `ID-CRED-002`：`POST /api/v1/access-credentials` 仅接受交互式会话（拒绝临时访问凭据自身调用）；`expiresInSeconds` 60..1800，默认 900；`scope` 只能 readonly/readwrite，默认 readonly；readonly 时拒绝 `allowManagement=true`；每人最多 10 个有效凭据；响应 201 且只返回一次明文 token，`Cache-Control: no-store`。
+- `ID-CRED-003`：`DELETE /api/v1/access-credentials/{id}` 撤销本人凭据；持有 `access.credentials.manage` 可撤销他人凭据；撤销后立即失效。
+- `ID-CRED-004`：临时访问凭据使用不透明 `pac_` token，服务端只保存 SHA-256 与展示前缀；校验 token、未撤销、未过期、用户 active、用户代数一致；失败统一 401；发现已过期时立即删除记录；后台定时清理任务周期性清理全表过期凭据。
+- `ID-CRED-005`：凭据有效权限为用户当前权限（readonly 再与目录 `mode=read` 求交，`allowManagement=false` 过滤 `access.users.manage`/`access.roles.manage`），实时生效；用户降权后凭据下一请求即按新权限。
+- `ID-CRED-006`：凭据硬禁止：创建/续期凭据、修改密码/用户名、修改 JWT secret、登出；`allowManagement=false` 时另禁止用户/角色管理端点并返回 `403 credential_scope_restricted`；只读凭据调用写权限接口返回 `403 credential_read_only`。
+- `ID-CRED-007`：到期或撤销后 JWT/凭据均不可再用；用户登出、改密、重置密码、禁用等递增用户代数后，该用户已签发凭据一并失效且不再占用有效配额。
+- `ID-CRED-008`：登录界面支持切换「临时访问凭据」登录，提交 `POST /api/v1/auth/login`（`{credential}`）验证并建立临时会话（受登录限流保护，强制改密用户拒绝凭据登录）；使用临时访问凭据登录期间，全局顶栏与个人账户页实时展示代替用户与剩余倒计时，账户页列表同步展示代替用户与剩余倒计时并在到期时自动刷新移除。
 
 ## 11. 初始化与首登改密
 

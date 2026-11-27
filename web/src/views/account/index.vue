@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ClipboardList, Plus, Trash2 } from '@/icons';
 import { accessCredentialsApi, type AccessCredential, type AccessCredentialCreated as CreatedCredential } from '@/api/access';
 import Button from '@/components/ui/Button.vue';
@@ -21,7 +21,7 @@ import SettingsCard from '@/components/patterns/SettingsCard.vue';
 import SettingsSection from '@/components/patterns/SettingsSection.vue';
 import { useI18n } from '@/i18n';
 import { useSessionStore } from '@/stores/session';
-import { formatDateTime } from '@/utils/datetime';
+import { formatCountdown, formatDateTime, remainingSeconds } from '@/utils/datetime';
 
 const { t } = useI18n();
 const session = useSessionStore();
@@ -46,6 +46,37 @@ const allowManagement = ref(false);
 const revokeTarget = ref<AccessCredential | null>(null);
 
 const canManageAccess = computed(() => session.canAny(['access.users.manage', 'access.roles.manage', 'access.credentials.manage']));
+const isTempCredential = computed(() => session.authKind === 'credential');
+const nowMs = ref(Date.now());
+let countdownTimer: number | undefined;
+let autoRefreshingExpired = false;
+
+const actingUserLabel = computed(() => {
+  const display = session.displayName.trim();
+  const username = session.username.trim();
+  if (display && username && display !== username) return `${display} (${username})`;
+  return display || username || '—';
+});
+const sessionRemainingLabel = computed(() => {
+  const secs = remainingSeconds(session.expiresAt, nowMs.value);
+  return secs > 0
+    ? t('layout.tempCredential.remaining', { time: formatCountdown(secs) })
+    : t('account.credentials.statusValue.expired');
+});
+
+function formatCredentialOwner(row: AccessCredential) {
+  const display = (row.displayName ?? '').trim();
+  const username = (row.username ?? '').trim();
+  if (display && username && display !== username) return `${display} (${username})`;
+  return display || username || actingUserLabel.value;
+}
+
+function formatCredentialRemaining(row: AccessCredential) {
+  if (row.status !== 'active') return '—';
+  const secs = remainingSeconds(row.expiresAt, nowMs.value);
+  if (secs <= 0) return t('account.credentials.statusValue.expired');
+  return t('layout.tempCredential.remaining', { time: formatCountdown(secs) });
+}
 
 watch(createOpen, (open) => {
   if (!open) created.value = null;
@@ -53,8 +84,10 @@ watch(createOpen, (open) => {
 
 const credentialColumns = computed(() => [
   { key: 'name', label: t('account.credentials.name') },
+  { key: 'actingUser', label: t('account.credentials.actingUser') },
   { key: 'scope', label: t('account.credentials.scope') },
   { key: 'status', label: t('common.status') },
+  { key: 'remaining', label: t('account.credentials.remaining') },
   { key: 'expiresAt', label: t('account.credentials.expiresAt') },
   { key: 'actions', label: '', align: 'right' as const },
 ]);
@@ -146,12 +179,38 @@ async function revoke() {
   }
 }
 
-onMounted(loadCredentials);
+onMounted(() => {
+  void loadCredentials();
+  countdownTimer = window.setInterval(() => {
+    nowMs.value = Date.now();
+    const hasNewlyExpired = credentials.value.some(
+      (item) => item.status === 'active' && remainingSeconds(item.expiresAt, nowMs.value) === 0,
+    );
+    if (hasNewlyExpired && !autoRefreshingExpired && !credentialsLoading.value) {
+      autoRefreshingExpired = true;
+      void loadCredentials().finally(() => {
+        autoRefreshingExpired = false;
+      });
+    }
+  }, 1000);
+});
+
+onBeforeUnmount(() => {
+  window.clearInterval(countdownTimer);
+});
 </script>
 
 <template>
   <ConsolePage :title="t('routes.account.title')" :description="t('account.description')" width="narrow">
     <div class="grid min-h-0 gap-6 overflow-auto">
+      <InfoBar v-if="isTempCredential" tone="warning">
+        {{ t('account.credentialSession.notice', {
+          user: actingUserLabel,
+          scope: t(`account.credentials.scopeValue.${session.credentialScope || 'readonly'}`),
+          remaining: sessionRemainingLabel,
+        }) }}
+      </InfoBar>
+
       <SettingsSection :title="t('account.profile.title')" :description="t('account.profile.description')">
         <SettingsCard>
           <div class="grid gap-1">
@@ -162,7 +221,7 @@ onMounted(loadCredentials);
         </SettingsCard>
       </SettingsSection>
 
-      <SettingsSection :title="t('account.password.title')" :description="t('account.password.description')">
+      <SettingsSection v-if="!isTempCredential" :title="t('account.password.title')" :description="t('account.password.description')">
         <SettingsCard>
           <form class="grid gap-4" @submit.prevent="savePassword">
             <FormField :label="t('auth.currentPassword')">
@@ -190,18 +249,24 @@ onMounted(loadCredentials);
 
       <SettingsSection :title="t('account.credentials.title')" :description="t('account.credentials.description')">
         <div class="grid gap-3">
-          <div class="flex justify-end">
+          <div v-if="!isTempCredential" class="flex justify-end">
             <Button variant="primary" @click="openCreate">
               <Plus />{{ t('account.credentials.create') }}
             </Button>
           </div>
           <Table v-if="credentials.length || credentialsLoading" :columns="credentialColumns" :rows="credentials" row-key="id" :loading="credentialsLoading && !credentials.length" :loading-label="t('common.loading')">
             <template #name="{ row }">{{ row.name }}</template>
+            <template #actingUser="{ row }">{{ formatCredentialOwner(row) }}</template>
             <template #scope="{ row }">{{ t(`account.credentials.scopeValue.${row.scope}`) }}</template>
             <template #status="{ row }">{{ t(`account.credentials.statusValue.${row.status}`) }}</template>
+            <template #remaining="{ row }">{{ formatCredentialRemaining(row) }}</template>
             <template #expiresAt="{ row }">{{ formatDateTime(row.expiresAt) }}</template>
             <template #actions="{ row }">
-              <IconButton :label="t('account.credentials.revoke')" :disabled="row.status !== 'active'" @click="revokeTarget = row">
+              <IconButton
+                :label="t('account.credentials.revoke')"
+                :disabled="row.status !== 'active' || (isTempCredential && session.credentialScope === 'readonly')"
+                @click="revokeTarget = row"
+              >
                 <Trash2 />
               </IconButton>
             </template>

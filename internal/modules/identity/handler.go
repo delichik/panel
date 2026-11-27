@@ -21,13 +21,22 @@ func NewHandler(service *Service) *Handler {
 
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
+		Username   string `json:"username"`
+		Password   string `json:"password"`
+		Credential string `json:"credential"`
 	}
 	if !httpx.Decode(w, r, &req) {
 		return
 	}
-	sess, err := h.service.LoginFrom(r.Context(), req.Username, req.Password, clientIP(r))
+	var (
+		sess Session
+		err  error
+	)
+	if strings.TrimSpace(req.Credential) != "" {
+		sess, err = h.service.LoginWithCredentialFrom(r.Context(), req.Credential, clientIP(r))
+	} else {
+		sess, err = h.service.LoginFrom(r.Context(), req.Username, req.Password, clientIP(r))
+	}
 	if err != nil {
 		httpx.Error(w, err)
 		return

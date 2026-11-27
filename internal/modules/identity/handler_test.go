@@ -212,3 +212,63 @@ func TestAccessCredentialBlockedOnSessionOnlyAuthEndpoints(t *testing.T) {
 		}
 	}
 }
+
+func TestLoginWithTemporaryCredential(t *testing.T) {
+	ctx := context.Background()
+	service := newTestService(t)
+	admin, err := service.Login(ctx, "admin", "admin")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	if _, err := service.UpdateAccount(ctx, admin.UserID, AccountUpdate{
+		CurrentPassword: "admin", Username: "admin", NewPassword: "new-admin-pass-123",
+	}); err != nil {
+		t.Fatalf("update account: %v", err)
+	}
+	admin, err = service.Login(ctx, "admin", "new-admin-pass-123")
+	if err != nil {
+		t.Fatalf("relogin: %v", err)
+	}
+	cred, err := service.CreateAccessCredential(ctx, admin.UserID, AccessCredentialCreateInput{
+		Name: "temp", ExpiresInSeconds: 600, Scope: "readwrite", AllowManagement: false,
+	})
+	if err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+	if cred.Username != "admin" {
+		t.Fatalf("credential username = %q, want admin", cred.Username)
+	}
+
+	handler := NewHandler(service)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"credential":"`+cred.Token+`"}`))
+	rec := httptest.NewRecorder()
+	handler.Login(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	var env httpx.Envelope
+	if err := json.NewDecoder(rec.Body).Decode(&env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	data := env.Data.(map[string]any)
+	if data["authenticated"] != true || data["token"] != cred.Token || data["authKind"] != "credential" {
+		t.Fatalf("unexpected login payload: %#v", data)
+	}
+	if data["expiresAt"] == nil || data["expiresAt"] == "" {
+		t.Fatalf("expected expiresAt in credential login payload: %#v", data)
+	}
+	perms := data["permissions"].([]any)
+	for _, p := range perms {
+		if p == "access.users.manage" || p == "access.roles.manage" {
+			t.Fatalf("allowManagement=false credential should not expose %v", p)
+		}
+	}
+
+	// Invalid credential fails with generic 401.
+	badReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"credential":"pac_invalid"}`))
+	badRec := httptest.NewRecorder()
+	handler.Login(badRec, badReq)
+	if badRec.Code != http.StatusUnauthorized {
+		t.Fatalf("invalid credential status = %d, want 401", badRec.Code)
+	}
+}

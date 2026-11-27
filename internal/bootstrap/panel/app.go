@@ -392,6 +392,7 @@ func New(cfg config.Config) (*App, error) {
 	facilitySvc.StartPeriodic(periodicCtx, taskSvc)
 	autoUpdateSvc.StartPeriodic(periodicCtx)
 	appearanceSvc.StartPeriodic(periodicCtx)
+	authSvc.StartPeriodic(periodicCtx)
 	metricsCleanup.Start(context.Background())
 	sshAccessSvc.Start(periodicCtx)
 	eventWriter.Start(context.Background())

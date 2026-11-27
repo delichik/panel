@@ -5,6 +5,7 @@ import { settingsApi } from '@/api/settings';
 import { defaultLandingPath } from '@/components/shell/navModel';
 import Button from '@/components/ui/Button.vue';
 import Input from '@/components/ui/Input.vue';
+import Tabs from '@/components/ui/Tabs.vue';
 import InfoBar from '@/components/patterns/InfoBar.vue';
 import FormField from '@/components/patterns/FormField.vue';
 import { useErrorDialog } from '@/components/ui/errorDialog';
@@ -16,8 +17,14 @@ const route = useRoute();
 const session = useSessionStore();
 const { t } = useI18n();
 const notifyError = useErrorDialog();
+const loginMode = ref<'password' | 'credential'>('password');
+const loginTabs = computed(() => [
+  { label: t('auth.loginMode.password'), value: 'password' },
+  { label: t('auth.loginMode.credential'), value: 'credential' },
+]);
 const username = ref('');
 const password = ref('');
+const credentialToken = ref('');
 const accountUsername = ref('');
 const currentPassword = ref('');
 const newPassword = ref('');
@@ -63,6 +70,29 @@ async function signOut() {
     newPassword.value = '';
     confirmPassword.value = '';
     error.value = '';
+  } finally {
+    loading.value = false;
+  }
+}
+
+watch(loginMode, () => {
+  error.value = '';
+});
+
+async function submitCredential() {
+  error.value = '';
+  const token = credentialToken.value.trim();
+  if (!token) {
+    error.value = t('auth.credentialRequired');
+    return;
+  }
+  loading.value = true;
+  try {
+    await session.signInWithCredential(token);
+    await router.push(safeRedirect(route.query.redirect));
+  } catch (err) {
+    notifyError(err instanceof Error ? err.message : t('auth.signInFailed'), err);
+    credentialToken.value = '';
   } finally {
     loading.value = false;
   }
@@ -141,20 +171,45 @@ async function updateAccount() {
       <h1 class="m-0 text-title font-semibold tracking-tight text-foreground">{{ pageTitle }}</h1>
       <p v-if="changingPassword" class="m-0 mt-2 text-sm text-muted-foreground">{{ t('auth.passwordChangeRequired') }}</p>
       <InfoBar v-if="notice" class="mt-4" tone="success">{{ notice }}</InfoBar>
-      <form v-if="!changingPassword" class="mt-6 grid gap-4" @submit.prevent="submit">
-        <FormField :label="t('auth.username')">
-          <template #default="{ id, describedBy, invalid }">
-            <Input :id="id" v-model="username" autocomplete="username" autofocus :aria-describedby="describedBy" :invalid="invalid" />
-          </template>
-        </FormField>
-        <FormField :label="t('auth.password')">
-          <template #default="{ id, describedBy, invalid }">
-            <Input :id="id" v-model="password" type="password" autocomplete="current-password" :aria-describedby="describedBy" :invalid="invalid" />
-          </template>
-        </FormField>
-        <InfoBar v-if="error" tone="danger">{{ error }}</InfoBar>
-        <Button type="submit" variant="primary" :loading="loading">{{ t('auth.signIn') }}</Button>
-      </form>
+      <template v-if="!changingPassword">
+        <Tabs
+          class="mt-4"
+          :tabs="loginTabs"
+          :model-value="loginMode"
+          @update:model-value="(value) => { loginMode = value as 'password' | 'credential'; }"
+        />
+        <form v-if="loginMode === 'password'" class="mt-5 grid gap-4" @submit.prevent="submit">
+          <FormField :label="t('auth.username')">
+            <template #default="{ id, describedBy, invalid }">
+              <Input :id="id" v-model="username" autocomplete="username" autofocus :aria-describedby="describedBy" :invalid="invalid" />
+            </template>
+          </FormField>
+          <FormField :label="t('auth.password')">
+            <template #default="{ id, describedBy, invalid }">
+              <Input :id="id" v-model="password" type="password" autocomplete="current-password" :aria-describedby="describedBy" :invalid="invalid" />
+            </template>
+          </FormField>
+          <InfoBar v-if="error" tone="danger">{{ error }}</InfoBar>
+          <Button type="submit" variant="primary" :loading="loading">{{ t('auth.signIn') }}</Button>
+        </form>
+        <form v-else class="mt-5 grid gap-4" @submit.prevent="submitCredential">
+          <FormField :label="t('auth.credential')" :hint="t('auth.credentialHint')">
+            <template #default="{ id, describedBy, invalid }">
+              <Input
+                :id="id"
+                v-model="credentialToken"
+                type="password"
+                autocomplete="off"
+                :placeholder="t('auth.credentialPlaceholder')"
+                :aria-describedby="describedBy"
+                :invalid="invalid"
+              />
+            </template>
+          </FormField>
+          <InfoBar v-if="error" tone="danger">{{ error }}</InfoBar>
+          <Button type="submit" variant="primary" :loading="loading">{{ t('auth.signIn') }}</Button>
+        </form>
+      </template>
       <form v-else class="mt-6 grid gap-4" @submit.prevent="updateAccount">
         <FormField :label="t('auth.username')">
           <template #default="{ id, describedBy, invalid }">

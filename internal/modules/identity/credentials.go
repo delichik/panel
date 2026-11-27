@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"net/http"
 	"strings"
 	"time"
 
@@ -25,12 +26,16 @@ const (
 	credentialMaxTTLSeconds     = 1800
 	credentialMaxActivePerUser  = 10
 	credentialNameMaxLength     = 64
+	credentialCleanupInterval   = 5 * time.Minute
+	credentialRateLimitUserKey  = ":credential:"
 )
 
-// AccessCredentialView 是访问凭证的列表投影（不含 token）。
+// AccessCredentialView 是临时访问凭据的列表投影（不含 token）。
 type AccessCredentialView struct {
 	ID              string     `json:"id"`
 	Name            string     `json:"name"`
+	Username        string     `json:"username"`
+	DisplayName     string     `json:"displayName"`
 	TokenPrefix     string     `json:"tokenPrefix"`
 	Scope           string     `json:"scope"`
 	AllowManagement bool       `json:"allowManagement"`
@@ -54,18 +59,66 @@ type AccessCredentialCreateInput struct {
 	AllowManagement bool   `json:"allowManagement"`
 }
 
+// CleanupExpiredCredentials removes temporary access credentials that have expired.
+func (s *Service) CleanupExpiredCredentials(ctx context.Context) (int64, error) {
+	res, err := orm.RawExec(ctx, s.db,
+		`DELETE FROM access_credentials WHERE expires_at <= ?`,
+		time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// StartPeriodic cleans up expired temporary access credentials at startup and periodically.
+func (s *Service) StartPeriodic(ctx context.Context) {
+	_, _ = s.CleanupExpiredCredentials(ctx)
+	go func() {
+		ticker := time.NewTicker(credentialCleanupInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_, _ = s.CleanupExpiredCredentials(ctx)
+			}
+		}
+	}()
+}
+
+// LoginWithCredentialFrom authenticates a browser/API login request using a temporary access credential.
+func (s *Service) LoginWithCredentialFrom(ctx context.Context, rawToken, clientIP string) (Session, error) {
+	key := loginRateLimitKey(clientIP, credentialRateLimitUserKey)
+	now := time.Now().UTC()
+	if !s.limiter.allow(key, now) {
+		return Session{}, panelerr.New(http.StatusTooManyRequests, "login_rate_limited", "Too many login attempts; try again later")
+	}
+	token := strings.TrimSpace(rawToken)
+	sess, ok := s.validateCredential(ctx, token)
+	if !ok || sess.MustChangePassword {
+		s.limiter.recordFailure(key, time.Now().UTC())
+		return Session{}, panelerr.Unauthorized("Authentication failed")
+	}
+	s.limiter.recordSuccess(key)
+	return sess, nil
+}
+
 func (s *Service) ListAccessCredentials(ctx context.Context, userID string) ([]AccessCredentialView, error) {
 	user, err := s.accountByID(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
+	_, _ = orm.RawExec(ctx, s.db,
+		`DELETE FROM access_credentials WHERE user_id = ? AND expires_at <= ?`,
+		userID, time.Now().UTC().Format(time.RFC3339Nano))
 	var rows []models.AccessCredential
 	if err := orm.New(s.db).From("access_credentials").Where("user_id = ?", userID).OrderBy("created_at DESC").All(ctx, &rows); err != nil {
 		return nil, err
 	}
 	out := make([]AccessCredentialView, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, accessCredentialView(row, user.Generation))
+		out = append(out, accessCredentialView(row, user))
 	}
 	return out, nil
 }
@@ -109,6 +162,9 @@ func (s *Service) CreateAccessCredential(ctx context.Context, userID string, inp
 			return err
 		}
 		now := time.Now().UTC()
+		_, _ = orm.RawExec(ctx, tx,
+			`DELETE FROM access_credentials WHERE user_id = ? AND expires_at <= ?`,
+			userID, now.Format(time.RFC3339Nano))
 		active, err := orm.New(tx).From("access_credentials").
 			Where("user_id = ?", userID).
 			Where("user_generation = ?", currentGen).
@@ -137,7 +193,8 @@ func (s *Service) CreateAccessCredential(ctx context.Context, userID string, inp
 	}); err != nil {
 		return AccessCredentialCreated{}, err
 	}
-	return AccessCredentialCreated{AccessCredentialView: accessCredentialView(*credential, credential.UserGeneration), Token: token}, nil
+	user.Generation = credential.UserGeneration
+	return AccessCredentialCreated{AccessCredentialView: accessCredentialView(*credential, user), Token: token}, nil
 }
 
 func (s *Service) RevokeAccessCredential(ctx context.Context, userID string, canManageOthers bool, credentialID string) error {
@@ -170,7 +227,11 @@ func (s *Service) validateCredential(ctx context.Context, token string) (Session
 		return Session{}, false
 	}
 	now := time.Now().UTC()
-	if credential.RevokedAt != nil || !now.Before(credential.ExpiresAt) {
+	if !now.Before(credential.ExpiresAt) {
+		_, _ = orm.RawExec(ctx, s.db, `DELETE FROM access_credentials WHERE id = ?`, credential.ID)
+		return Session{}, false
+	}
+	if credential.RevokedAt != nil {
 		return Session{}, false
 	}
 	entry, err := s.resolveSession(ctx, credential.UserID)
@@ -181,16 +242,30 @@ func (s *Service) validateCredential(ctx context.Context, token string) (Session
 	if credential.Scope == "readonly" {
 		permissions = permissioncatalog.FilterReadOnly(permissions)
 	}
+	if !credential.AllowManagement {
+		permissions = filterOutManagementPermissions(permissions)
+	}
 	if credential.LastUsedAt == nil || now.Sub(*credential.LastUsedAt) > time.Minute {
 		s.scheduleCredentialLastUsed(credential.ID, now)
 	}
 	return Session{
 		UserID: entry.UserID, Username: entry.Username, DisplayName: entry.DisplayName,
 		IsBuiltinAdmin: entry.Builtin, Roles: roles, Permissions: permissions,
-		ExpiresAt: credential.ExpiresAt, MustChangePassword: entry.MustChangePassword,
+		Token: token, ExpiresAt: credential.ExpiresAt, MustChangePassword: entry.MustChangePassword,
 		AuthKind: "credential", CredentialID: credential.ID, CredentialScope: credential.Scope,
 		AllowManagement: credential.AllowManagement,
 	}, true
+}
+
+func filterOutManagementPermissions(permissions []string) []string {
+	out := make([]string, 0, len(permissions))
+	for _, key := range permissions {
+		if key == "access.users.manage" || key == "access.roles.manage" {
+			continue
+		}
+		out = append(out, key)
+	}
+	return out
 }
 
 func (s *Service) scheduleCredentialLastUsed(credentialID string, now time.Time) {
@@ -256,18 +331,19 @@ func (s *Service) flushCredentialLastUsed() {
 	}
 }
 
-func accessCredentialView(row models.AccessCredential, currentUserGeneration int64) AccessCredentialView {
+func accessCredentialView(row models.AccessCredential, owner account) AccessCredentialView {
 	status := "active"
 	now := time.Now().UTC()
-	if row.RevokedAt != nil || row.UserGeneration != currentUserGeneration {
+	if row.RevokedAt != nil || row.UserGeneration != owner.Generation {
 		status = "revoked"
 	} else if !now.Before(row.ExpiresAt) {
 		status = "expired"
 	}
 	return AccessCredentialView{
-		ID: row.ID, Name: row.Name, TokenPrefix: row.TokenPrefix,
-		Scope: row.Scope, AllowManagement: row.AllowManagement, Status: status,
-		ExpiresAt: row.ExpiresAt, RevokedAt: row.RevokedAt, LastUsedAt: row.LastUsedAt, CreatedAt: row.CreatedAt,
+		ID: row.ID, Name: row.Name, Username: owner.Username, DisplayName: owner.DisplayName,
+		TokenPrefix: row.TokenPrefix, Scope: row.Scope, AllowManagement: row.AllowManagement,
+		Status: status, ExpiresAt: row.ExpiresAt, RevokedAt: row.RevokedAt,
+		LastUsedAt: row.LastUsedAt, CreatedAt: row.CreatedAt,
 	}
 }
 

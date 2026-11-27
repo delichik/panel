@@ -97,3 +97,21 @@ export function browserTimeZoneLabel(referenceDate = new Date()): string {
   }
   return offset;
 }
+
+/** Return whole seconds remaining until `expiresAt` (0 when expired or invalid). */
+export function remainingSeconds(expiresAt?: string | number | Date | null, nowMs = Date.now()): number {
+  const target = parseDateTime(expiresAt);
+  if (!target) return 0;
+  const diff = Math.ceil((target.getTime() - nowMs) / 1000);
+  return diff > 0 ? diff : 0;
+}
+
+/** Format a remaining duration in seconds as `mm:ss` (or `HH:mm:ss` when >= 1 hour). */
+export function formatCountdown(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(total / 3600);
+  const mins = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hours > 0) return `${pad(hours)}:${pad(mins)}:${pad(secs)}`;
+  return `${pad(mins)}:${pad(secs)}`;
+}

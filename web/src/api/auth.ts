@@ -39,6 +39,9 @@ export const authApi = {
   login(username: string, password: string) {
     return apiClient.post<AuthSession>('/auth/login', { username, password }, { skipAuth: true });
   },
+  loginWithCredential(credential: string) {
+    return apiClient.post<AuthSession>('/auth/login', { credential }, { skipAuth: true });
+  },
   logout() {
     return apiClient.post<AuthSession>('/auth/logout');
   },
